@@ -58,6 +58,7 @@
 | 37 | `updates/a2cc9616/` | `a2cc9616` | `817f0853`（`updates/a2cc9616/_machine_ai/base_817f0853/`） | 數字跟文字比較的地方照 BCB6 的實際語意改（NB2 R89）：⚠ **回給測試機的 `CHKSETUP?` 會照 golden 濾掉 Yield＝0 的 bin**（之前照送）；Sort Arm 條碼結果碼 0 的 IC 盤圖照 golden 記一般 IC；EJ1N socket 的 port 寫成 `"05000"` 之類時不再一直重連；其餘是少見情況與註解。**要重建 wb_serve 才生效**。10 檔。**先套第 3～36 包** |
 | 38 | `updates/5c174f85/` | `5c174f85` | `a2cc9616`（`updates/5c174f85/_machine_ai/base_a2cc9616/`） | RS232 測試機介面的 client socket：port 寫成 `"05000"` 之類時不再一直重連（同第 37 包 EJ1N 那一處）；主畫面 Record 分頁的 CLEAR 接法整理（行為不變）；文件。**要重建 wb_serve 才生效**。8 檔。**先套第 3～37 包** |
 | 39 | `updates/a425a971/` | `a425a971` | `5c174f85`（`updates/a425a971/_machine_ai/base_5c174f85/`） | 只有測試（ctest `CpublicFoundation` 多 4 項，量第 37 包的測試時間佇列那一句）。程式沒變、不用重建。1 檔。**先套第 3～38 包** |
+| 40 | `updates/6e81ec60/` | `6e81ec60` | `a425a971`（`updates/6e81ec60/_machine_ai/base_a425a971/`） | 只有文件（INBOX 第 83 列補註）。程式沒變、不用重建。1 檔。**先套第 3～39 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
