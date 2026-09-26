@@ -39,6 +39,7 @@
 | 18 | `updates/5459651f/` | `5459651f` | `d4897dbd`（`updates/5459651f/_machine_ai/base_d4897dbd/`） | ⚠ 警報框照 golden 設暫停標記：用 START 答掉警報後，恢復運轉時手臂先回 Z 安全位、tester 逾時重算（NB2 R71 C1；筆電沒實跑，請機台驗）。3 檔。**先套第 3～17 包** |
 | 19 | `updates/04c72d84/` | `04c72d84` | `5459651f`（`updates/04c72d84/_machine_ai/base_5459651f/`） | 測試通訊（St02）：機台停著、測區沒有 IC 時，On/Off-Line、工單、GPIB 位址、bin 數的變化照 golden 同步給測試機橋接程式（P2f，以前從來沒送）；TCP/IP OS 測試機換工單送 WORKFILE；測試通訊頁 400 ms 內同一顆鈕只算一次（P7）。不會讓馬達動。9 檔。**先套第 3～18 包** |
 | 20 | `updates/df8d1f69/` | `df8d1f69` | `04c72d84`（`updates/df8d1f69/_machine_ai/base_04c72d84/`） | 🔴 **`USE_ATC_MODE=4` 的機台換配方／登入／HOME 會當，這一包修掉**（開機照 golden 先 InitialATC）；Jam 次數、UPH 表、one cycle 存 `system\Arm*.dat`、Index 時間平均、測試秒數照 golden 開始有數字。不會讓馬達多動；套之前加備 `system\Arm*.dat`／`ArmHis*`／`ArmByLot*`、`ATC.ini`。15 檔。**先套第 3～19 包** |
+| 21 | `updates/71eda9b5/` | `71eda9b5` | `df8d1f69`（`updates/71eda9b5/_machine_ai/base_df8d1f69/`） | St02 第三批：開機照 golden 建 log 物件、**開始寫 `D:\HT9045_Log\`**；On-Line 測試不再一送 SOT 就逾時；Qorvo 的 Tester Pause 等 MaxTestTime 才響；觀察頁 bin 歷史與 bin 顏色照 golden。不會讓馬達多動；套之前加備 `D:\HT9045_Log\`。32 檔。**先套第 3～20 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
