@@ -34,6 +34,7 @@
 | 13 | `updates/19844f8e/` | `19844f8e` | `dfe09efb`（`updates/19844f8e/_machine_ai/base_dfe09efb/`） | 多分頁的視窗總表不再互相蓋掉（WebCommand.connId 以前永遠是 0）；ctest 不寫真實 config.ini（正式程式不變）。7 檔，**要全量重編**。**先套第 3～12 包** |
 | 14 | `updates/21323505/` | `21323505` | `19844f8e`（`updates/21323505/_machine_ai/base_19844f8e/`） | ⚠ **UpdateMainOperateMode 整支照 golden 翻**（0922 裁決）：wb_serve 開機／讀配方／切模式時會切加熱器繼電器、送 ATC 命令、寫 lastdata 與 config.ini（照 golden）。10 檔，**要全量重編**，套之前確認機台周圍有沒有人。**先套第 3～13 包** |
 | 15 | `updates/c65ddd85/` | `c65ddd85` | `21323505`（`updates/c65ddd85/_machine_ai/base_21323505/`） | NB2 R70 覆核第 9 條的四件已修：**警報框開著時網頁 IO 輸出不再被執行**（以前約一半會動）、關框後 START／PAUSE 燈不再卡住、bAlarmReset 照 golden 清、是否框收 sim.di.set。3 檔。**先套第 3～14 包** |
+| 16 | `updates/39bd8f1e/` | `39bd8f1e` | `c65ddd85`（`updates/39bd8f1e/_machine_ai/base_c65ddd85/`） | ChangeATCSiteUse 接上另外兩處：三溫機 TriTemp 的 5 個呼叫點（原本是空樁）、Home（經 hook）；HT9050 不是三溫機、沒有 ATC 連線，實際效果很小。7 檔。**先套第 3～15 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
