@@ -56,6 +56,7 @@
 | 35 | `updates/01de94a0/` | `01de94a0` | `231fffa6`（`updates/01de94a0/_machine_ai/base_231fffa6/`） | 只有文件（夜間報告第 47 列：事件紀錄分析器的開機實測結果）。程式沒變、不用重建。1 檔。**先套第 3～34 包** |
 | 36 | `updates/817f0853/` | `817f0853` | `01de94a0`（`updates/817f0853/_machine_ai/base_01de94a0/`） | 主畫面 Record 分頁：網頁的 CLEAR 鈕與 AseRecordMemo 雙擊接到 C++（CLEAR 照 golden 只在開了 `bShowMainDebugRecord` 的機台做事）；事件紀錄分析器文件更正。另含上一包之後的 hook 修正（只在 repo 根的 `scripts/ops/`，不在更新包裡）。**要重建 wb_serve 才生效**。16 檔。**先套第 3～35 包** |
 | 37 | `updates/a2cc9616/` | `a2cc9616` | `817f0853`（`updates/a2cc9616/_machine_ai/base_817f0853/`） | 數字跟文字比較的地方照 BCB6 的實際語意改（NB2 R89）：⚠ **回給測試機的 `CHKSETUP?` 會照 golden 濾掉 Yield＝0 的 bin**（之前照送）；Sort Arm 條碼結果碼 0 的 IC 盤圖照 golden 記一般 IC；EJ1N socket 的 port 寫成 `"05000"` 之類時不再一直重連；其餘是少見情況與註解。**要重建 wb_serve 才生效**。10 檔。**先套第 3～36 包** |
+| 38 | `updates/5c174f85/` | `5c174f85` | `a2cc9616`（`updates/5c174f85/_machine_ai/base_a2cc9616/`） | RS232 測試機介面的 client socket：port 寫成 `"05000"` 之類時不再一直重連（同第 37 包 EJ1N 那一處）；主畫面 Record 分頁的 CLEAR 接法整理（行為不變）；文件。**要重建 wb_serve 才生效**。8 檔。**先套第 3～37 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
