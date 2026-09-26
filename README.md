@@ -50,6 +50,7 @@
 | 29 | `updates/3f166785/` | `3f166785` | `95c2c26a`（`updates/3f166785/_machine_ai/base_95c2c26a/`） | wb_serve 開機照 golden 呼叫 `InitialMemory()`（開機主控台不再印 `SiteData[] seeded` 那一行）、START 呼叫點普查更正成 34／30／4（活的路徑數沒變）＋新 ctest、觀察頁 mtRow 大小、St02 的 Event Log Analyzer 核心（新 library＋ctest，沒連進 wb_serve）。19 檔。**先套第 3～28 包** |
 | 30 | `updates/b635f32d/` | `b635f32d` | `3f166785`（`updates/b635f32d/_machine_ai/base_3f166785/`） | 良率計算兩支放進活的檔（PAT 沒連進 wb_serve，機台上沒差別）、三個解閘標記的註解行號、完成度普查工具修正、InitialMemory 測試多一節。wb_serve 行為不變。11 檔。**先套第 3～29 包** |
 | 31 | `updates/fe03a1e7/` | `fe03a1e7` | `b635f32d`（`updates/fe03a1e7/_machine_ai/base_b635f32d/`） | 還原被吃掉的反斜線（原始碼只動 cObserver.cpp 4 行註解，其餘是文件）。wb_serve 行為不變、可不重建。5 檔。**先套第 3～30 包** |
+| 32 | `updates/c7dc8145/` | `c7dc8145` | `fe03a1e7`（`updates/c7dc8145/_machine_ai/base_fe03a1e7/`） | RecordErrorLog 照 golden 寫日期 log 檔：開了 Site Use Manager 的機台，運轉時會在 `D:\HT9045_Log\SiteUseMgr\YYYY\MM\` 每小時產生一個檔（跟 BCB6 版一樣）；**要重建 wb_serve 才生效**。另 6 處註解／工具腳本裡被吃掉的反斜線。11 檔。**先套第 3～31 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
