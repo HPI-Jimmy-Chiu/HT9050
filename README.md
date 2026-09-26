@@ -52,6 +52,7 @@
 | 31 | `updates/fe03a1e7/` | `fe03a1e7` | `b635f32d`（`updates/fe03a1e7/_machine_ai/base_b635f32d/`） | 還原被吃掉的反斜線（原始碼只動 cObserver.cpp 4 行註解，其餘是文件）。wb_serve 行為不變、可不重建。5 檔。**先套第 3～30 包** |
 | 32 | `updates/c7dc8145/` | `c7dc8145` | `fe03a1e7`（`updates/c7dc8145/_machine_ai/base_fe03a1e7/`） | RecordErrorLog 照 golden 寫日期 log 檔：開了 Site Use Manager 的機台，運轉時會在 `D:\HT9045_Log\SiteUseMgr\YYYY\MM\` 每小時產生一個檔（跟 BCB6 版一樣）；**要重建 wb_serve 才生效**。另 6 處註解／工具腳本裡被吃掉的反斜線。11 檔。**先套第 3～31 包** |
 | 33 | `updates/f91f793e/` | `f91f793e` | `c7dc8145`（`updates/f91f793e/_machine_ai/base_c7dc8145/`） | St02 的事件紀錄分析器接進 wb_serve（網頁 `/api/ela`、工作列多 eventlog／testercomm 兩個視窗）。⚠ **開機會照 golden 寫真檔**：`config.ini` 缺的鍵、`Gerneral.ini` 缺的 Machine ID、查詢當天時 `D:\HT9045\Error\English\JAM0000.dat` 缺的碼；不要的話啟動前設 `HT9045_ELA=0`。ESD：wb_serve 每秒找一次 ESD_Monitor 視窗（只找、不啟動程式），ESD 程式開著的話會收到 START／STOP 等通知。**要重建 wb_serve 才生效**。20 檔。**先套第 3～32 包** |
+| 34 | `updates/231fffa6/` | `231fffa6` | `f91f793e`（`updates/231fffa6/_machine_ai/base_f91f793e/`） | 設定變更紀錄（ChangeLog）的輸入端照 golden 接上：開機完成後，每次存設定檔若值有變就記「群組_名稱 change Value／舊==>新」（目前最後一站還是只計數的替身，不會寫出檔案，要等 cMyDB P4）。Index 扭力模式開著時，改 Test Arm 的 Contact 偏移會照 golden 重學扭力標準值。**要重建 wb_serve 才生效**。11 檔。**先套第 3～33 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
