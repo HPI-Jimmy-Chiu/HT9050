@@ -1,0 +1,464 @@
+From a5454b95ba53b0ffa2edf9a9fdfb859277c89063 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 25 Sep 2026 22:58:01 +0800
+Subject: [PATCH 6/7] MT-FIX1 (web): review fixes -- jog stop can no longer
+ overtake the jog, window heartbeat survives alarm dialogs, Motor Power
+ carries its direction, formShow/formClose reconciled, MotorTest.ini write
+ safer
+
+From the adversarial review of 8336746 / ef20fb8 / b4c613e (20260925), web side:
+- HIGH: ht9045_recipe_client.js motorAccess sent motor.access only after the control.acquire ack while motorStop went
+  out at once, so a quick tap could put motor.stop on the wire BEFORE the jog (axis jogs, nothing stops it).
+  acquire + motor.access now go back to back (wire order = call order); the caller still gets control-held.
+  motor-access.js: a jog ack that arrives after the button was released sends one more stop (late-ack);
+  release() stops the motor that was jogged, not the one selected at release; releaseHeld() for hidden frames.
+- HIGH: HT9045Windows.put latched "unsupported" on ANY refusal, so the first heartbeat refused with modal-pending
+  during an alarm dialog stopped the registry for good -> after 15 s C++ saw Motor Test/Teach as open (MainProc
+  pause stuck). Only "unknown cmd" latches now.
+- not-operator clears haveToken (token forfeited after 10 min idle) so the next command re-acquires;
+  keepAlive() (control.acquire by the holder) every 60 s while Motor Test is shown and HOME/Loop/Light Scale runs.
+- Motor Power sends expectRelayOn with confirmOff; no second send while one is in flight; relay-changed refusal
+  is explained. (C++ must refuse when the live relay != expectRelayOn and never power ON on confirmOff:true.)
+- formShow/formClose are state, not one-shot events: retried with backoff until C++ acks ok, not sent before the
+  window state is known, formClose on an initial HT_WIN {open:false} (HMI reload) and on pagehide, gives up only
+  when C++ does not know the action; held jogs released on close.
+- MotorTest.ini: only cells loaded at FormShow are compared/written (a row shown later with '0' is never written),
+  snapshot cleared when a read starts, cells zeroed on a failed read, a refused write alerts and keeps the edit
+  for the next close.
+- IO page: a lost socket is no longer reported as "token refused / not sent".
+- cur.selectable (when C++ publishes it) decides selection, so the SIM build can select motors again.
+Tests (headless Edge, scratchpad webmt): new harness4 22/0 (page), new harness5 11/0 (wire order; the same
+harness on the previous commit shows control.acquire,motor.stop,motor.access and fails 7), regressions harness 40/0,
+harness2 66/0, harness3 9/0; HW.teach.html loads without JS errors.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ page/HW.MotorTest.html       | 132 +++++++++++++++++++++++++++++------
+ page/ht9045_io_do.js         |   7 ++
+ page/ht9045_recipe_client.js |  44 +++++++++---
+ page/motor-access.js         |  19 ++++-
+ 4 files changed, 170 insertions(+), 32 deletions(-)
+
+diff --git a/page/HW.MotorTest.html b/page/HW.MotorTest.html
+index a353147..b8e0e65 100644
+--- a/page/HW.MotorTest.html
++++ b/page/HW.MotorTest.html
+@@ -496,8 +496,12 @@ document.querySelectorAll('.traypos').forEach(function(ph){
+   // AI(W906-MT-E2) 20260925：golden lM00Click／lpA00Click 第一件事（:740-743／:768-771，非 SOFT_SIMULTE）
+   //   `if(MOT[Ptr->Tag].Motor->Enable==false) return;` —— 在抬起 LoopMove／HOME 之前，所以點了什麼都不發生。
+   //   Enable 取 C++ 的 cur.enable；cur 是 null（沒有驅動物件／離線 JSON）才看馬達表的 Enable 欄。
++  // AI(W906-MT-FIX1) 20260925：golden 那一行在 #ifndef SOFT_SIMULTE 裡 —— 模擬建置每一軸的 Motor->Enable 都被設成 false、
++  //   但每一軸都選得到。C++ 發布 cur.selectable（MotorGolden::selectable，與 golden 同一個 #ifdef）就用它；
++  //   舊的 C++ 沒有這個欄位時才退回 cur.enable（出貨建置兩者相同）。
+   function motorEnabled(motor){
+     var c=curOf(motor.motorId);
++    if(c && typeof c.selectable==='boolean') return c.selectable;
+     return c ? c.enable===true : motor.enabledByDefault===true;
+   }
+   // 告訴 C++ 頁面選了哪一軸（新 action selectMotor）；golden lM00Click 的 MOT.SetSpeed(1)（:756）由 C++ 那邊做
+@@ -593,18 +597,26 @@ document.querySelectorAll('.traypos').forEach(function(ph){
+   //   沒讀過檔就不知道哪些改過，寧可不寫也不整批覆蓋。原本的 motorApiBase() 擋頭拿掉：有沒有伺服器由 HT9045System 自己回答
+   //   （file:// 下 XHR 失敗 → 走 catch 講原因），測試架也才能換掉 HT9045System。
+   var formShown=false;
+-  var iniSnap=null;                                  // {secs:{<段名小寫>:{name:<檔案裡的段名>, vals:{'Position 1':'0',...}}}}
++  var iniSnap=null;                                  // {secs:{<段名小寫>:{name:<檔案裡的段名>, vals:{'Position 1':'0',...}}}, loaded:{'M03|Position 1':true}}
+   var iniReadSeq=0;
++  // AI(W906-MT-FIX1) 20260925：上一次關頁寫回失敗的修改 {'M03':{'Position 1':'1200'}} —— 下次開頁重讀檔案後再蓋回格子上，
++  //   下次關頁再寫（原本失敗訊息只出現在已經藏起來的 iframe 資訊列，下次 FormShow 重讀檔案就把修改蓋掉 ⇒ 靜悄悄遺失）。
++  var iniPendingEdits={};
++  // AI(W906-MT-FIX1) 20260925：讀檔失敗時照訊息說的「edPos 顯示 0」真的清成 0（原本格子留著上一次開頁的值，Loop Move 會拿去用）。
++  function zeroVisibleEdPos(){
++    [elEd1, elEd2].forEach(function(m){ Object.keys(m).forEach(function(k){ var el=m[k]; if(el && el.style.display!=='none') el.value='0'; }); });
++  }
+   function loadMotorTestIni(){
+     var my=++iniReadSeq;
++    iniSnap=null;                                    // AI(W906-MT-FIX1) 20260925：讀取進行中就關頁 ⇒ 不拿上一次開頁的快照去比
+     whenDomReady(function(){
+-      if(!window.HT9045System || !HT9045System.read) { iniSnap=null; setInfo('MotorTest.ini：沒有 HT9045System，edPos 顯示 0', 'warn'); return; }
++      if(!window.HT9045System || !HT9045System.read) { iniSnap=null; zeroVisibleEdPos(); setInfo('MotorTest.ini：沒有 HT9045System，edPos 顯示 0', 'warn'); return; }
+       HT9045System.read('motorTest').then(function(d){
+         if(my!==iniReadSeq) return;                  // 又開了一次頁：舊的回應不蓋新的
+         var secs=(d && d.sections)||{}, lower={};
+         Object.keys(secs).forEach(function(s){ lower[s.toLowerCase()]=secs[s]; });   // ini 的段名不分大小寫
+         function iv(sec, key){ var e=sec && sec[key]; return (e && e.type==='int') ? e.value : 0; }   // StrToIntDef(…, 0)
+-        var snap={secs:{}};
++        var snap={secs:{}, loaded:{}};
+         Object.keys(secs).forEach(function(s){
+           var vals={};
+           ['Position 1','Position 2'].forEach(function(key){ if(secs[s] && secs[s][key]) vals[key]=String(iv(secs[s], key)); });
+@@ -613,14 +625,22 @@ document.querySelectorAll('.traypos').forEach(function(ph){
+         [[elEd1,'Position 1'],[elEd2,'Position 2']].forEach(function(pr){
+           Object.keys(pr[0]).forEach(function(k){
+             var el=pr[0][k]; if(el.style.display==='none') return;          // golden 只讀 Visible 的列
+-            el.value=String(iv(lower[('M'+pad2(+k)).toLowerCase()], pr[1]));
++            var sec='M'+pad2(+k);
++            el.value=String(iv(lower[sec.toLowerCase()], pr[1]));
++            // AI(W906-MT-FIX1) 20260925：記下「這一格是這次開頁從檔案填的」。關頁只比對、只寫這些格子 ——
++            //   之後才變成顯示的列（Reload Motor Data 重排、新建的列值是 '0'）不會拿 0 去蓋掉檔案裡的點位。
++            snap.loaded[sec+'|'+pr[1]]=true;
++            var pe=iniPendingEdits[sec];                                    // 上一次沒寫進去的修改蓋回來
++            if(pe && pe[pr[1]]!=null) el.value=pe[pr[1]];
+           });
+         });
+         iniSnap=(d && d.available!==false) ? snap : null;
+         document.body.setAttribute('data-motortest-ini', d && d.available ? 'read' : 'missing');
++        if(Object.keys(iniPendingEdits).length) setInfo('MotorTest.ini：上一次關頁沒寫進去的點位已放回格子上，這次關頁會再寫', 'warn');
+       }).catch(function(e){
+         if(my!==iniReadSeq) return;
+         iniSnap=null;
++        zeroVisibleEdPos();
+         setInfo('MotorTest.ini 讀不到（'+(e&&e.message)+'），edPos 顯示 0', 'warn');
+       });
+     });
+@@ -641,6 +661,7 @@ document.querySelectorAll('.traypos').forEach(function(ph){
+       Object.keys(pr[0]).map(Number).sort(function(a,b){return a-b;}).forEach(function(idx){
+         var el=pr[0][idx]; if(!el || el.style.display==='none') return;    // golden：Visible==true 的列
+         var sec='M'+pad2(idx), ent=snap.secs[sec.toLowerCase()];
++        if(!snap.loaded || !snap.loaded[sec+'|'+pr[1]]) return;             // AI(W906-MT-FIX1) 20260925：開頁時沒從檔案填的格子不寫
+         var v=String(el.value==null?'':el.value).trim();
+         var old=ent ? ent.vals[pr[1]] : undefined;
+         if(old!==undefined && v===old) return;                             // 沒改過
+@@ -660,13 +681,18 @@ document.querySelectorAll('.traypos').forEach(function(ph){
+         if(!w || w.ok===false) throw new Error('寫入失敗：'+((w && w.error) || '沒有 ack'));
+         // 寫成功 ⇒ 快照跟著更新（同一次開頁內再關一次不重送）
+         Object.keys(edits).forEach(function(s){ var e=snap.secs[s.toLowerCase()]; if(e) Object.keys(edits[s]).forEach(function(k){ e.vals[k]=edits[s][k]; }); });
++        iniPendingEdits={};                                                  // AI(W906-MT-FIX1) 20260925
+         document.body.setAttribute('data-motortest-save', 'written');
+         setInfo('MotorTest.ini 已寫回 '+(w.changed!=null?w.changed:n)+' 個鍵'+(w.backup?'（備份 '+w.backup+'）':'')+skipTxt, 'ok');
+         return w;
+       });
+     }).catch(function(e){
+       document.body.setAttribute('data-motortest-save', 'error');
++      // AI(W906-MT-FIX1) 20260925：留住這次沒寫進去的修改（下次開頁蓋回、下次關頁再寫），並跳視窗 —— 關頁時這個 iframe 已經藏起來，
++      //   只寫在資訊列的話操作員看不到（審查：10 分鐘權杖被收回時存檔被拒 not-operator，修改靜悄悄遺失）。
++      Object.keys(edits).forEach(function(s){ var sk=s.toUpperCase(); iniPendingEdits[sk]=iniPendingEdits[sk]||{}; Object.keys(edits[s]).forEach(function(k){ iniPendingEdits[sk][k]=edits[s][k]; }); });
+       setInfo('MotorTest.ini 沒有寫回：'+(e&&e.message)+skipTxt, 'err');
++      try { window.alert('Motor Test：位置 1／2 沒有寫回 MotorTest.ini\n'+(e&&e.message)+'\n\n修改已保留，下次開關 Motor Test 會再寫一次。'); } catch (ae) {}
+     });
+   }
+   function whenDomReady(fn){
+@@ -923,25 +949,42 @@ document.querySelectorAll('.traypos').forEach(function(ph){
+     var t=err ? String(err.message||err) : (ack ? String(ack.message||'') : '');
+     return /needConfirm|Sure to turn off motor power/.test(t);
+   }
+-  function sendMotorPower(confirmOff){
++  // AI(W906-MT-FIX1) 20260925：命令帶上「按下時以為的繼電器狀態」expectRelayOn（審查 medium）。golden 是在同一條執行緒上
++  //   讀 OutValue → 問 → 照讀到的值切（:1623-1644），確認「關電」之後一定是關電；網頁的 relayOn 來自上一次 runtime，
++  //   問的期間繼電器可能被 IO 頁／EMG 改掉，只帶 confirmOff 的話 C++ 照現值切就會「確認關電、結果開電」。
++  //   C++ 看到現值 != expectRelayOn 要拒絕（頁面照 golden 重問），而且 confirmOff:true 絕不能開電。
++  //   送出後到回覆之前不再受理第二次按下（第二次會在舊的 runtime 上又問一次「要關嗎」，結果把電切回開）。
++  var mpInFlight=false;
++  function sendMotorPower(confirmOff, expectRelayOn){
+     if(!window.HTMotorAccess || !accessBound) return;
+-    HTMotorAccess.sendLater('btnMotorPower', {confirmOff:!!confirmOff}, [], 'motorPower');
++    mpInFlight=true;
++    var b=document.getElementById('btnMotorPower'); if(b) b.setAttribute('data-inflight','1');
++    HTMotorAccess.sendLater('btnMotorPower', {confirmOff:!!confirmOff, expectRelayOn:!!expectRelayOn}, [], 'motorPower');
+   }
+   function motorPowerClick(){
++    if(mpInFlight){ setInfo('Motor Power：上一次的切換還沒回覆，請稍候', 'warn'); return; }
+     var mp=rtTop('motorPower'), relayOn=!!(mp && mp.relayOn===true);   // golden :1623 在 AllBtnUp 之前讀
+     releaseJobsOnSelect();                                             // golden :1624 AllBtnUp()（在問之前；按 No 也已經抬起）
+     allBtnUp();                                                        //   沒選軸時 releaseJobsOnSelect 不做事；畫面照樣抬起
+     if(relayOn){
+       if(!confirm(MP_OFF_Q)) return;                                   // golden :1628-1629 mrNo → return
+-      sendMotorPower(true);
++      sendMotorPower(true, true);
+       return;
+     }
+-    sendMotorPower(false);                                             // 頁面以為是關的；C++ 看到其實是開的會回 needConfirm → onAck 再問一次
++    sendMotorPower(false, false);                                      // 頁面以為是關的；C++ 看到其實是開的會回 needConfirm → onAck 再問一次
+   }
+   function onMotorPowerAck(req, ack, err){
++    mpInFlight=false;
++    var b=document.getElementById('btnMotorPower'); if(b) b.removeAttribute('data-inflight');
+     var asked=!!(req.params && req.params.confirmOff);
+     if(!asked && isNeedConfirm(ack, err)){                             // C++ 的記憶體說繼電器是開的：照 golden 問，Yes 才帶 confirmOff 重送
+-      if(confirm(MP_OFF_Q)) sendMotorPower(true);
++      if(confirm(MP_OFF_Q)) sendMotorPower(true, true);
++      return;
++    }
++    if(err && /relay-changed|expectRelayOn/.test(String(err.message||err))){   // C++：按下之後繼電器狀態變了 —— 不切，請重新判斷
++      // motor-access 在 onAck 之後才把原始拒絕理由寫進資訊列 —— 排到它後面，這句才不會被蓋掉
++      setTimeout(function(){ setInfo('Motor Power：確認期間繼電器狀態已經改變，沒有切換；請看目前狀態再按一次', 'warn'); }, 0);
++      mpCaptionPending=true; mpRuntimeSkip=0;
+       return;
+     }
+     if(err || !ack) return;                                            // 其他拒絕：motor-access 已把理由顯示在資訊列
+@@ -955,19 +998,51 @@ document.querySelectorAll('.traypos').forEach(function(ph){
+   var winHosted=false;                               // 收過 HT_WIN（嵌在 background.html 裡）
+   var winShown=false;                                // golden fShow（頁面這一側）
+   var pageBound=false, showQueued=false;
+-  var cppQueue=[];                                   // 指令表還沒載入時要送給 C++ 的 formShow／formClose
+-  function sendCpp(button, key){
+-    if(window.HTMotorAccess && accessBound) HTMotorAccess.sendLater(button, {}, [], key);
+-    else cppQueue.push([button, key]);
++  // AI(W906-MT-FIX1) 20260925：formShow／formClose 當成「要讓 C++ 知道的狀態」，不是只送一次的事件（審查 medium）。
++  //   C++ 的 fShow 會讓 golden MainProc 暫停；只送一次的話，被拒（control-held／not-operator／告警框期間的 modal-pending）
++  //   或 HMI 重新整理就會讓 C++ 永遠停在錯的那一邊。現在：想要的狀態＝winShown；C++ 回 ok 才算數，否則 1.5 秒後重送，
++  //   直到兩邊一致。C++ 的 formShow／formClose 必須是冪等的（重送、或本來就關著時再收到 formClose 都無害）。
++  var cppFormAcked=null;                             // 'show'／'close'：C++ 最後一次回 ok 的狀態；null＝不知道
++  var cppFormInFlight=false, cppFormRetry=null, cppFormRetryMs=1500, cppFormGaveUp='';
++  function syncCppForm(){
++    if(cppFormRetry){ clearTimeout(cppFormRetry); cppFormRetry=null; }
++    if(cppFormGaveUp) return;                        // C++ 不認得這兩個動作（舊的 wb_serve）：不要一直送
++    // 視窗狀態還不知道（嵌在 background.html 裡、HT_WIN 還沒到）就不送 —— 不然頁面一載入就先送一個 formClose，
++    //   把 motor-access 的互斥鎖佔住，操作員最先按的那幾下全部排在它後面（測試架實測：選馬達沒送出去）。
++    //   頁面在視窗關著時重新載入的情況，由 background.html 補送的 HT_WIN {initial:true} 處理（onHtWin）。
++    if(!winHosted) return;
++    var want=winShown ? 'show' : 'close';
++    if(cppFormAcked===want || cppFormInFlight) return;
++    if(!(window.HTMotorAccess && accessBound)) return;   // 指令表載入後（bindAccessButtons 尾端）會再呼叫一次
++    cppFormInFlight=true;
++    HTMotorAccess.sendLater(want==='show' ? 'FormShow' : 'FormClose', {}, [], want==='show' ? 'formShow' : 'formClose');
++  }
++  function onCppFormAck(req, ack, err){
++    cppFormInFlight=false;
++    if(ack && !err){ cppFormAcked=(req.action==='formShow') ? 'show' : 'close'; cppFormRetryMs=1500; }
++    else if(err && /不認得的 action|unknown action/i.test(String(err.message||err))){
++      cppFormGaveUp=String(err.message||err);
++      setInfo('C++ 還不支援 '+req.action+'（'+cppFormGaveUp+'）—— 視窗開關不會通知 C++', 'warn');
++    } else {
++      cppFormRetry=setTimeout(syncCppForm, cppFormRetryMs);          // 被拒（權杖／告警框）或逾時：稍後再送，間隔最長 10 秒
++      cppFormRetryMs=Math.min(cppFormRetryMs*2, 10000);
++      return;
++    }
++    syncCppForm();                                   // 送出期間視窗又開／關了：立刻補上
+   }
+   function onHtWin(msg){
+     winHosted=true;
+     var open=!!(msg && msg.open);
++    if(!open && window.HTMotorAccess && HTMotorAccess.releaseHeld) HTMotorAccess.releaseHeld();   // AI(W906-MT-FIX1) 20260925
+     if(open && !winShown){
+       winShown=true;
+       if(pageBound) formShowPage(); else showQueued=true;
+     } else if(!open && winShown){
+       formClosePage('window');
++    } else if(!open && msg && msg.initial){
++      // AI(W906-MT-FIX1) 20260925：頁面在視窗關著時載入（例：Motor Test 開著時 HMI 被重新整理 —— 舊頁面沒機會送 formClose）。
++      //   不知道 C++ 以為怎樣 ⇒ 送一次 formClose（冪等），不讓 C++ 以為這一頁一直開著、MainProc 一直暫停。
++      cppFormAcked=null; syncCppForm();
+     }
+     document.body.setAttribute('data-win', winShown ? 'shown' : 'closed');
+   }
+@@ -991,17 +1066,31 @@ document.querySelectorAll('.traypos').forEach(function(ph){
+     // :1069-1074 tsMotorDatabase->TabVisible 只在 IO_CARD_TYPE 是 MN200／P64C64 時為 true（這台 IO_CARD_TYPE=4 會藏）——
+     //   偏離 golden：保留這個分頁（lead 決定；引擎的 sysGrid 在它上面讀寫 Mot_Table.csv）。
+     setPnlStop(false);                               // :1076 pnlStop->Color=0x00DFD9CC
+-    sendCpp('FormShow', 'formShow');
++    syncCppForm();                                   // AI(W906-MT-FIX1) 20260925：原本 sendCpp 只送一次
+     loadRuntimeOnly();
+   }
+   // golden FormClose（uMotorTest.cpp:1347-1362）：fShow=false（C++ formClose）→ 寫回 MotorTest.ini（頁面）。
+   function formClosePage(why){
+     if(!winShown) return;
+-    winShown=false;
++    winShown=false; showQueued=false;                // AI(W906-MT-FIX1) 20260925：綁定前就關掉 ⇒ bind() 不再補送 FormShow
++    if(window.HTMotorAccess && HTMotorAccess.releaseHeld) HTMotorAccess.releaseHeld();   // 藏起來的 iframe 收不到放開
+     document.body.setAttribute('data-win', 'closed');
+-    sendCpp('FormClose', 'formClose');
++    syncCppForm();
+     saveMotorTestIni();
+   }
++  // AI(W906-MT-FIX1) 20260925：頁面被卸載（HMI 重新整理、iframe 重載、瀏覽器關閉）＝放開所有 jog，並盡量讓 C++ 知道這一頁關了。
++  window.addEventListener('pagehide', function(){
++    if(window.HTMotorAccess && HTMotorAccess.releaseHeld) HTMotorAccess.releaseHeld();
++    if(winShown){ winShown=false; syncCppForm(); }
++  });
++  // AI(W906-MT-FIX1) 20260925：有工作在跑、而且這一頁開著時，每 60 秒續一次權杖（HT9045Recipe.keepAlive 的註解）。
++  setInterval(function(){
++    if(!winShown || !window.HT9045Recipe || !HT9045Recipe.keepAlive) return;
++    var hb=document.getElementById('btnHome'), lp=document.getElementById('btnLoopMove');
++    var ls=rtTop('lightScale');
++    var busy=(hb && hb.classList.contains('down')) || (lp && lp.classList.contains('down')) || !!(ls && ls.active===true);
++    if(busy) HT9045Recipe.keepAlive().catch(function(){});
++  }, 60000);
+ 
+   // ---- Light Scale（golden BitBtn2Click :2096、LightScale :1795-1978、Timer2Timer :2031、BitBtn3Click :2102、
+   //      btnSaveLogLightScaleDataClick :2051；使用者裁決 R7：完全照 golden，含 golden 停不下來的那些行為 —— 判斷全在 C++）----
+@@ -1525,8 +1614,9 @@ document.querySelectorAll('.traypos').forEach(function(ph){
+         // AI(W906-MT-E3) 20260925：Motor Power（needConfirm → 照 golden 問）、formShow 的 caption、Test Range／Rate 的 InitMotor 回覆、
+         //   Light Scale 存檔（golden ShowMessage）。err＝C++ 拒絕（reject 的 Error）。
+         if(req.action==='motorPowerToggle'){ onMotorPowerAck(req, ack, err); return; }
+-        if(req.action==='formShow'){
+-          if(ack && (typeof ack.motorPowerOn==='boolean' || typeof ack.caption==='string')){
++        if(req.action==='formShow' || req.action==='formClose'){
++          onCppFormAck(req, ack, err);                // AI(W906-MT-FIX1) 20260925：沒回 ok 就重送
++          if(req.action==='formShow' && ack && (typeof ack.motorPowerOn==='boolean' || typeof ack.caption==='string')){
+             mpCaptionPending=false; applyMotorPowerCaption(typeof ack.motorPowerOn==='boolean' ? ack.motorPowerOn : null, ack.caption);
+           }
+           return;
+@@ -1790,9 +1880,9 @@ document.querySelectorAll('.traypos').forEach(function(ph){
+ 
+     accessBound=true;                                // AI(W906-MT-E2) 20260925
+     if(selectedIndex!==-1) notifySelect();           // 指令表載入前就點了馬達：現在才告訴 C++
+-    // AI(W906-MT-E3) 20260925：指令表載入前就開／關了視窗 → 現在才把 formShow／formClose 送給 C++（照先後順序）
+-    var q=cppQueue; cppQueue=[];
+-    q.forEach(function(it){ HTMotorAccess.sendLater(it[0], {}, [], it[1]); });
++    // AI(W906-MT-E3) 20260925：指令表載入前就開／關了視窗 → 現在才把 formShow／formClose 送給 C++
++    // AI(W906-MT-FIX1) 20260925：改成把「目前的」狀態同步過去（syncCppForm），不再照先後重放整串
++    syncCppForm();
+   }
+ 
+   uiLang=currentLang();
+diff --git a/page/ht9045_io_do.js b/page/ht9045_io_do.js
+index cabe27d..41d0d7a 100644
+--- a/page/ht9045_io_do.js
++++ b/page/ht9045_io_do.js
+@@ -194,6 +194,9 @@
+       return acq.then(function (acqErr) {
+         if (!acqErr) throw e;                          // 權杖拿到了：按鈕自己的拒絕理由原樣顯示
+         var m = String(acqErr && acqErr.message || acqErr);
++        // AI(W906-MT-FIX1) 20260925：只有伺服器「真的拒絕」權杖時才把原因說成權杖。連線斷掉（socket closed／逾時）時兩個
++        //   pending 會一起被拒 —— 那時按鈕的訊框可能早已送出、伺服器也可能已經執行（線圈可能已經切了），不能說成「沒有送出」。
++        if (/socket closed|no ack within/i.test(m)) throw e;
+         throw new Error(m.indexOf('control-held') >= 0
+           ? '操作權杖在別的畫面手上（例如開著的 pci1203 監看頁或別的設定頁）——那邊關掉或閒置 10 分鐘後再試'
+           : '拿不到操作權杖：' + m);
+@@ -204,6 +207,10 @@
+     }, function (e) {
+       var m = String(e && e.message || e);
+       if (/no ack within/.test(m)) m = '沒有回應（逾時）——不代表沒有執行，看一下燈號與 wb_serve 主控台';
++      else if (/socket closed/i.test(m)) {             // AI(W906-MT-FIX1) 20260925
++        say('「' + a + '」連線中斷，不確定有沒有送出——看燈號\n' + m + '\n計時：按下到回應共 ' + Math.round(now() - t0) + ' ms', 'err', 12000);
++        return;
++      }
+       say('「' + a + '」沒有送出\n' + m + '\n計時：按下到回應共 ' + Math.round(now() - t0) + ' ms', 'err', 12000);
+     }).then(function () {
+       busy[a] = false;
+diff --git a/page/ht9045_recipe_client.js b/page/ht9045_recipe_client.js
+index a1d7e0c..744d3ad 100644
+--- a/page/ht9045_recipe_client.js
++++ b/page/ht9045_recipe_client.js
+@@ -164,6 +164,10 @@
+         try { m = JSON.parse(ev.data); } catch (e) { return; }
+         if (!m) return;
+         if (m.type === 'ack') {
++          // AI(W906-MT-FIX1) 20260925：伺服器說「你不是操作員」＝權杖已經不在我們手上（閒置 10 分鐘被收回
++          //   WebBridgeServer.cpp:1566-1569、或被別的連線拿走）。原本 haveToken 一直留 true，之後每一條
++          //   motor.access／存檔都不再 acquire、全部被拒，直到重新整理 HMI。清掉它，下一條指令會重新 acquire。
++          if (!m.ok && m.error === 'not-operator') haveToken = false;
+           if (pending[m.id]) {
+             var p = pending[m.id]; delete pending[m.id];
+             if (m.ok) p.resolve(m); else p.reject(new Error(m.error || 'command refused'));
+@@ -425,11 +429,31 @@
+     // AI(W906-W4-MOTOR) 20260925：HW.MotorTest／HW.teach 的馬達按鈕 → C++（WebMotorAccess.h）。
+     // req = motor-access.js 組好的 request；成功時 resolve 併好的 ack（{state, result, message, layer, ...}），
+     // C++ 拒絕時 reject(Error(理由)) —— 還沒接上的動作也是拒絕，不回假成功。
++    // AI(W906-MT-FIX1) 20260925：**線上順序＝呼叫順序**（審查 high：jog 的放開可能比 jog 先到 C++）。
++    //   原本沒有權杖時要先等 control.acquire 的 ack 才送 motor.access，而 motorStop 是立刻送 ——
++    //   手指一點就放開時，motor.stop 先上線、C++ 停一根沒在動的軸，接著才收到 jogP 開始 Acm_AxJog，
++    //   而頁面已經 finish('aborted')、不再理那個 ack：軸一路 jog 到極限，狀態列還顯示綠色 stopped。
++    //   現在 acquire 與 motor.access 背靠背送出（同一條 WS 依序處理；acquire 在 socket 執行緒當場回答，
++    //   WebBridgeServer.cpp:1386-1396，所以 motor.access 到的時候權杖已經在了 —— 同 LAT-1 的 ht9045_io_do.js）。
++    //   之後的 motorStop 一定排在 motor.access 後面上線；C++ 的輸出優先柵欄（wb_serve.cpp:5453-5457）
++    //   保證停止不會超車已經到達的 jog。acquire 被拒（control-held）時，回報 acquire 的理由（那才是原因）。
+     motorAccess: function (req) {
+-      return acquire().then(function () {
+-        return cmd('motor.access', { tag: (req && req.motors && req.motors[0]) || '', value: JSON.stringify(req) })
+-          .then(unwrapAck);
+-      });
++      var tag = (req && req.motors && req.motors[0]) || '';
++      var a = haveToken ? null : cmd('control.acquire').then(function () { haveToken = true; });
++      var m = cmd('motor.access', { tag: tag, value: JSON.stringify(req) }).then(unwrapAck);
++      if (!a) return m;
++      a.catch(function () {});                       // 結果在下面合併，這裡只防 unhandled rejection
++      // 兩個都有結果才回傳：haveToken 由 acquire 的回覆設定，先回傳的話下一條指令可能又送一次 acquire，
++      //   或晚到的 acquire 回覆把 not-operator 剛清掉的 haveToken 又設回 true（測試架 harness5 量到）。
++      return m.then(function (ack) { return a.then(function () { return ack; }, function () { return ack; }); },
++        function (e) { return a.then(function () { throw e; }, function (ae) { throw ae; }); });
++    },
++    // AI(W906-MT-FIX1) 20260925：有工作在跑（Loop Move／HOME／Light Scale）而且 Motor Test 開著時，定期續一次權杖。
++    //   權杖閒置 10 分鐘會被收回（WebBridgeServer.cpp:1566-1569），接著 MotorAccessTick 以「操作員連線消失」
++    //   取消工作 —— golden 的 Loop Move 會一直跑到按停止。持有人再 acquire 一次只會重設閒置計時（:1388-1390）；
++    //   別人持有時回 control-held，什麼都不改（呼叫端吞掉）。
++    keepAlive: function () {
++      return cmd('control.acquire').then(function () { haveToken = true; });
+     },
+     // 停止刻意不 acquire：伺服器讓 motor.stop 免操作權杖（權杖可能在別的分頁，停機不能被擋），
+     // 而 C++ 端把 motor.stop 鎖死在 action=="stop"。同 modalAnswer「警報一定要答得掉」的理由。
+@@ -798,11 +822,13 @@
+               function (e) {
+                 var msg = (e && e.message) || '';
+                 // 逾時／斷線不算「伺服器不支援」—— 那是連線問題，重試是對的。
+-                // 只有伺服器**明確回了一個拒絕**才停送。
+-                if (!/no ack within|socket closed/i.test(msg)) {
+-                  winSupported = false;
+-                  winRefusal = msg;
+-                }
++                // AI(W906-MT-FIX1) 20260925：只有「伺服器不認得這條指令」才算不支援、停送（審查 high）。
++                //   原本任何明確拒絕都停送：告警框等回答時 wb_serve 對幾乎所有指令回 modal-pending
++                //   （wb_serve.cpp:654），第一次心跳被拒就永遠不再送；15 秒後 WebWindowRegistry 把每張表單
++                //   當成 stale＝開著（WebWindowRegistry.cpp:231-232），golden MainProc 在 Motor Test／Teach
++                //   開著時暫停 ⇒ 生產停住。modal-pending、command queue full、not-operator 都是暫時的，照送。
++                winRefusal = msg;
++                if (/unknown cmd/i.test(msg)) winSupported = false;
+                 throw e;
+               });
+     }
+diff --git a/page/motor-access.js b/page/motor-access.js
+index 1d78771..c31d2e3 100644
+--- a/page/motor-access.js
++++ b/page/motor-access.js
+@@ -16,6 +16,8 @@
+   var later = [];                 // AI(W906-MT-E2) 20260925：pending 中又要送的請求（sendLater），pending 結束後依序送出
+   var held = {};                  // AI(W906-MT-E2) 20260925：button -> true＝這一次按下已送出 jog、還沒送過停止
+   var lastStopAt = {};            // AI(W906-MT-E2) 20260925：button -> ms，同一次放開會從好幾條路進來，只送一次停止
++  var heldMotors = {};            // AI(W906-MT-FIX1) 20260925：button -> 按下那一刻 jog 的馬達。放開要停「當時在 jog 的那一軸」，
++                                  //   不是放開時畫面上選的那一軸（按住時第二根手指點了別的馬達、或 FormShow 把選取清掉）
+ 
+   function nowIso() { return new Date().toISOString(); }
+ 
+@@ -247,6 +249,7 @@
+     //   visibilitychange(hidden) 都當放開；每一條都走 release → 送停止。C++ 的斷線停止照舊是最後一道。
+     if (c.release === 'stop') {
+       held[button] = true;
++      heldMotors[button] = motors.slice();          // AI(W906-MT-FIX1) 20260925
+       var evs = [[document, 'mouseup'], [document, 'pointerup'], [document, 'pointercancel'],
+                  [window, 'blur'], [document, 'visibilitychange']];
+       var up = function (ev) {
+@@ -264,6 +267,10 @@
+     }
+     toCpp(req).then(function (ack) {
+       if (cfg.onAck) cfg.onAck(req, ack, null);    // AI(W906-W4D) 20260925：頁面依伺服端的回覆（loopActive／homeActive）設按鈕狀態（NB2 R23 W4C-5）
++      // AI(W906-MT-FIX1) 20260925：保險絲（審查 high）。jog 被 C++ 接受了，但按鈕在 ack 回來之前就已經放開 ——
++      //   那次放開送出的停止有可能比 jog 先到 C++（線路重連、主執行緒卡頓）。再補送一次停止給「這個 jog 的馬達」；
++      //   軸若已經停了，多一次 StopDec 無害。寧可多送不可漏送（同 release() 的原則）。
++      if (c.release === 'stop' && !held[button]) sendStop(stopReq(button, req.motors, 'late-ack'));
+       if (pending !== req) return;                 // 已被 STOP／放開結束
+       var st = ack && ack.state;
+       finish(st === 'error' || st === 'aborted' ? st : 'done', (ack && (ack.message || ack.result)) || '');
+@@ -286,12 +293,20 @@
+     held[button] = false;
+     lastStopAt[button] = now;
+     var was = pending;
+-    var motors = (was && was.button === button) ? was.motors : (cfg.getMotors ? cfg.getMotors() : []);
++    var motors = heldMotors[button] ||             // AI(W906-MT-FIX1) 20260925：按下時記住的馬達優先
++      ((was && was.button === button) ? was.motors : (cfg.getMotors ? cfg.getMotors() : []));
+     if (was && was.button === button) finish('aborted', 'released ' + button);
+     var c = catalogOf(button);
+     if (c && c.release === 'stop') sendStop(stopReq(button, motors, 'release'));
+   }
+ 
++  // AI(W906-MT-FIX1) 20260925：把每一個還按著的 jog 都當成放開（送停止）。background.html 關視窗是 display:none，
++  //   iframe 的 visibilityState 跟著最上層頁面走、不會變 hidden，pointerup 也不保證送得到被藏起來的 frame ——
++  //   所以頁面在 FormClose／HT_WIN 關閉／pagehide 時要自己呼叫這一支。
++  function releaseHeld() {
++    for (var b in held) if (held.hasOwnProperty(b) && held[b]) release(b);
++  }
++
+   function init(options) {
+     cfg = options || {};
+     return loadJson('../JSON/motor-access.json').then(function (d) {
+@@ -305,7 +320,7 @@
+   }
+ 
+   global.HTMotorAccess = {
+-    init: init, send: send, sendLater: sendLater, release: release, loadJson: loadJson,
++    init: init, send: send, sendLater: sendLater, release: release, releaseHeld: releaseHeld, loadJson: loadJson,
+     isBusy: function () { return !!pending; },
+     queued: function () { return later.length; },   // AI(W906-MT-E2) 20260925
+     current: function () { return pending; },
+-- 
+2.55.0.windows.5
+

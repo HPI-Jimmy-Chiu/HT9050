@@ -1,0 +1,267 @@
+From 9fd97ff6a45accc621b0a30031512cd38cf10e7c Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 25 Sep 2026 17:24:16 +0800
+Subject: [PATCH 02/14] MT-E1b: Motor Test -- motor IO lamps, HOME/Loop button
+ state, loop count; Reload Motor Data drops HomeFlag
+
+From the read-only audit of every Motor Test control (20260925):
+- ALed1..10 were never wired. Runtime now carries state.led, decoded from the monitor's raw motionIO exactly as
+  golden TMyEtherCatMotor::ScanMotorStatus (Motor/myEthercatmotor.cpp:1166-1189): CW=LMT-, HOME=ORG, CCW=LMT+,
+  EMG, Alarm=ALM|ERROR_STOP, Soft CW/CCW=SLMT_P/N, Servo On=SVON; S Alarm / InPos stay false as golden shows them.
+  null when the row has no sample (lamp = unknown, not off).
+- SAFETY: reloadMotorData zeroed coordinates but left HomeFlag set, so Go/Loop interlocks passed on meaningless
+  coordinates. Golden runs InitialMotorParameter() first, which sets HomeFlag=0 for every motor
+  (cinitial.cpp:3615/:3773/:3989). New backend call GoldenClearAllHomeFlags(), called BEFORE zeroing.
+- HOME / Loop Move jobs are published per motor (motion.homeJob / loopJob / loopCount) so the page can pop the
+  buttons up when C++ ends the job (golden Timer1Timer :962-966) and show lblLoopCount (golden dwLoopCount).
+
+Tests: WebMotorAccess 196/0 (new: HomeFlag cleared before zeroing), MotorPoints_HT9050 passed (led decode,
+null led without sample, job fields); production_audit 0 changes.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ JsonBridge/ChanMotor.h          |  8 +++++++-
+ JsonBridge/ChanMotorPoints.cpp  | 32 ++++++++++++++++++++++++++++++++
+ WebMotorAccess.cpp              | 10 +++++++---
+ WebMotorAccess.h                |  9 +++++++++
+ WebMotorAccessLive.cpp          | 13 +++++++++++++
+ tests/test_motor_points.cpp     | 20 ++++++++++++++++++--
+ tests/test_web_motor_access.cpp |  5 +++++
+ 7 files changed, 91 insertions(+), 6 deletions(-)
+
+diff --git a/JsonBridge/ChanMotor.h b/JsonBridge/ChanMotor.h
+index fd01c4f..2d0063f 100644
+--- a/JsonBridge/ChanMotor.h
++++ b/JsonBridge/ChanMotor.h
+@@ -108,8 +108,14 @@ struct MotorRuntimeOverlay {
+     unsigned    state;            // Acm_AxGetState 原值（STA_AX_*）
+     std::string why;
+     std::string driveErr;         // 監看器的 driveErrText（廠商字串，不在本樹改寫）
++    bool          ioKnown;        // AI(W906-MT-E1) 20260925: motionIO 是這次監看器樣本讀到的（Motor Test 的 ALed1..10）
++    unsigned long motionIO;       // Acm_AxGetMotionIO 原值（AX_MOTION_IO_* 位元）
++    // AI(W906-MT-E1) 20260925: Motor Test 的跨拍工作（WebMotorAccess MotorAccessJobs）—— 按鈕的按下狀態跟著它
++    bool          homeJob, loopJob;
++    unsigned long loopCount;      // golden dwLoopCount（lblLoopCount）
+     MotorRuntimeOverlay() : posKnown(false), cmdPos(0), encPos(0), servoOn(false), alarm(false),
+-                            busy(false), inPos(false), state(0) {}
++                            busy(false), inPos(false), state(0), ioKnown(false), motionIO(0),
++                            homeJob(false), loopJob(false), loopCount(0) {}
+ };
+ typedef bool (*MotorRuntimeOverlayFn)(const std::string& alias, MotorRuntimeOverlay& out);
+ void SetMotorRuntimeOverlay(MotorRuntimeOverlayFn fn);   // 0 = 取消
+diff --git a/JsonBridge/ChanMotorPoints.cpp b/JsonBridge/ChanMotorPoints.cpp
+index 440d8eb..397c52c 100644
+--- a/JsonBridge/ChanMotorPoints.cpp
++++ b/JsonBridge/ChanMotorPoints.cpp
+@@ -271,6 +271,11 @@ std::string MotorRuntimeJson()
+         w.Key("decel").Null();
+         w.Key("busy"); if (hasOv) w.Bool(ov.busy); else w.Null();
+         w.Key("homeBusy"); if (hasOv) w.Bool((ov.state & 0xFFu) == 4u); else w.Null();   // STA_AX_HOMING
++        //AI(W906-MT-E1) 20260925: Motor Test cross-tick jobs (WebMotorAccess MotorAccessJobs) -- the page pops btnHome /
++        //  btnLoopMove up when the job is gone (golden Timer1Timer :962-966), and shows lblLoopCount (golden dwLoopCount).
++        w.Key("homeJob");   if (hasOv) w.Bool(ov.homeJob); else w.Null();
++        w.Key("loopJob");   if (hasOv) w.Bool(ov.loopJob); else w.Null();
++        w.Key("loopCount"); if (hasOv && ov.loopJob) w.Number((wb_int64)ov.loopCount); else w.Null();
+         w.EndObject();
+         w.Key("state").BeginObject();
+         w.Key("servoOn"); if (hasOv) w.Bool(ov.servoOn); else w.Null();
+@@ -279,6 +284,33 @@ std::string MotorRuntimeJson()
+         w.Key("inPos");   if (hasOv) w.Bool(ov.inPos);   else w.Null();
+         w.Key("isOn").Null();
+         w.Key("isOff").Null();
++        //AI(W906-MT-E1) 20260925: golden Motor Test ALed1..10 = MOT[i].Led[0..9] (uMotorTest.cpp:626-642 UpdateMotorLed),
++        //  decoded for a 1203 axis exactly as TMyEtherCatMotor::ScanMotorStatus does (Motor/myEthercatmotor.cpp:1166-1189):
++        //  CW = LMT- (bit3), HOME = ORG (bit4), CCW = LMT+ (bit2), EM Stop = EMG (bit6), Alarm = ALM (bit1) or ERROR_STOP,
++        //  Soft CW = SLMT_P (bit16), Soft CCW = SLMT_N (bit17), Servo On = SVON (bit14).
++        //  S Alarm (Led[7]) is never set by golden for a 1203 axis, and InPos (Led[8]) is commented out there
++        //  ("RogerYang 20250421 not work") -- so both stay false, as golden shows them. (state.inPos above is the raw
++        //  INP bit, a different thing.) ⚠ HOME: golden relies on CFG_AxOrgLogic set at init by SensorType
++        //  (myEthercatmotor.cpp:1174); here the axes are opened by the monitor, so this is the card's ORG bit as the
++        //  card's current OrgLogic reports it. null = no sample for this row (lamp shows "unknown", not "off").
++        w.Key("led");
++        if (hasOv && ov.ioKnown) {
++            const unsigned long io = ov.motionIO;
++            w.BeginObject();
++            w.Key("cw").Bool((io & 0x00000008ul) != 0);
++            w.Key("home").Bool((io & 0x00000010ul) != 0);
++            w.Key("ccw").Bool((io & 0x00000004ul) != 0);
++            w.Key("emg").Bool((io & 0x00000040ul) != 0);
++            w.Key("alarm").Bool((io & 0x00000002ul) != 0 || (ov.state & 0xFFu) == 3u);
++            w.Key("softCw").Bool((io & 0x00010000ul) != 0);
++            w.Key("softCcw").Bool((io & 0x00020000ul) != 0);
++            w.Key("sAlarm").Bool(false);
++            w.Key("inPos").Bool(false);
++            w.Key("servoOn").Bool((io & 0x00004000ul) != 0);
++            w.EndObject();
++        } else {
++            w.Null();
++        }
+         w.Key("updatedAt"); if (live) w.String(now); else w.Null();
+         w.Key("quality").String(hasOv ? (ov.posKnown ? "good" : "partial") : (live ? "good" : "nosource"));
+         w.EndObject();
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index 5da7865..fe99156 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -1131,6 +1131,9 @@ MotorAccessOutcome DoReloadMotorData(const MotorAccessReq& r, long long wireId,
+ {
+     std::string why;
+     if (!be.Pci1203Ready(why)) return Refuse(r.action + ": 1203 控制層不可用 —— " + why);
++    // AI(W906-MT-E1) 20260925: golden order -- InitialMotorParameter() (HomeFlag=0 for every motor) BEFORE SetPos(0).
++    //   Cleared first so a partial zeroing failure still leaves nothing marked homed. Every axis must be homed again.
++    be.GoldenClearAllHomeFlags();
+     int done = 0, failed = 0;
+     std::string firstFail;
+     const int n = be.Pci1203AxisCount();
+@@ -1149,8 +1152,8 @@ MotorAccessOutcome DoReloadMotorData(const MotorAccessReq& r, long long wireId,
+     webbridge::JsonWriter w;
+     w.BeginObject();
+     char b[200];
+-    std::snprintf(b, sizeof(b), "PCIL132_SetPos(0) on %d opened 1203 axis(es), %d failed%s", done + failed, failed,
+-                  " (golden InitialMotorParameter() not re-run -- gap)");
++    std::snprintf(b, sizeof(b), "HomeFlag=0 on every motor; PCIL132_SetPos(0) on %d opened 1203 axis(es), %d failed%s", done + failed, failed,
++                  " (rest of golden InitialMotorParameter() not re-run -- gap; home every axis again)");
+     AckHead(w, r, failed ? "partial" : "reloaded", "pci1203", std::string(b) + (firstFail.empty() ? "" : "; first failure " + firstFail));
+     w.Key("axesZeroed").Number((wb_int64)done);
+     w.Key("axesFailed").Number((wb_int64)failed);
+@@ -1349,7 +1352,8 @@ MotorAccessJobState MotorAccessJobs()
+ {
+     MotorAccessJobState j;
+     j.homesActive = 0;
+-    for (std::size_t i = 0; i < g_homes.size(); ++i) if (g_homes[i].active) ++j.homesActive;
++    for (std::size_t i = 0; i < g_homes.size(); ++i)
++        if (g_homes[i].active) { ++j.homesActive; j.homeMotors.push_back(g_homes[i].motorId); }   // AI(W906-MT-E1) 20260925
+     j.loopActive = g_loop.active;
+     j.loopMotor  = g_loop.motorId;
+     j.loopTask   = g_loop.task;
+diff --git a/WebMotorAccess.h b/WebMotorAccess.h
+index ffac18e..2b70270 100644
+--- a/WebMotorAccess.h
++++ b/WebMotorAccess.h
+@@ -188,6 +188,12 @@ public:
+     //   SERVOPACK, or the axis reads as a Yaskawa Sigma-X), 0 = another drive (a profile that is not 402),
+     //   -1 = unknown (station not in the scan, or no profile/name) -- the caller refuses, never guesses.
+     virtual int  Pci1203DriveKind(int axis) = 0;
++
++    // AI(W906-MT-E1) 20260925: golden btnReloadMotorDataClick runs InitialMotorParameter() first, and that sets
++    //   MOT[i].HomeFlag = 0 for every motor (golden cinitial.cpp:3615 / :3773 / :3989). Reload Motor Data zeroes the
++    //   coordinates, so the "homed" state must be dropped with them -- otherwise Go / Loop Move interlocks that test
++    //   HomeFlag would pass on coordinates that no longer mean anything.
++    virtual void GoldenClearAllHomeFlags() = 0;
+ };
+ 
+ struct MotorAccessOutcome {
+@@ -232,6 +238,9 @@ struct MotorAccessJobState {
+     unsigned long loopCount;       // golden dwLoopCount
+     std::string   lastNote;        // 最近一次工作結束的原因（給畫面與日誌）
+     int           jogsActive;      // W4B-4：正在 jog 的軸數
++    // AI(W906-MT-E1) 20260925: which motors (Alias) have a HOME job running -- the page's btnHome pops up when its
++    //   motor's job is gone (golden Timer1Timer :962-966 `else if(bSingleHome==false) btnHome->Down=false;`).
++    std::vector<std::string> homeMotors;
+ };
+ MotorAccessJobState MotorAccessJobs();
+ void MotorAccessResetJobs();       // 測試用
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index 393e7b5..2a9a43f 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -143,6 +143,12 @@ public:
+         return otherProfile ? 0 : -1;
+     }
+ 
++    void GoldenClearAllHomeFlags() override                                     // AI(W906-MT-E1) 20260925: golden InitialMotorParameter's HomeFlag=0 (cinitial.cpp:3615/:3773/:3989)
++    {
++        for (int i = 0; i < MAX_TRAY_MOTOR; ++i) MOT[i].HomeFlag = 0;
++        std::printf("motor.access: MOT[0..%d].HomeFlag = 0 (Reload Motor Data)\n", MAX_TRAY_MOTOR - 1);
++    }
++
+     Pci1203CmdResult Pci1203Execute(const Pci1203Cmd& c) override
+     {
+         TPci1203Control* ctl = Pci1203Control();
+@@ -436,6 +442,7 @@ void OverlaySnapshot()
+     std::map<std::string, ht9045::sjson::MotorRuntimeOverlay> v;
+     ht9045::TPci1203Monitor* m = ht9045::Pci1203Monitor();
+     ht9045::IMotorAccessBackend& be = ht9045::MotorAccessLiveBackend();
++    const ht9045::MotorAccessJobState js = ht9045::MotorAccessJobs();          // AI(W906-MT-E1) 20260925: btnHome / btnLoopMove state
+     for (std::size_t i = 0; m && i < HSys.MotTable.size(); ++i) {
+         const TMOTDATA* row = HSys.MotTable[i];
+         if (!row) continue;
+@@ -460,6 +467,12 @@ void OverlaySnapshot()
+         out.inPos   = (s.motionIO & 0x00002000ul) != 0;                         // AX_MOTION_IO_INP
+         out.busy    = (s.state & 0xFFu) != 1u;                                  // 不在 READY
+         out.driveErr = s.driveErrText;
++        out.ioKnown  = true;                                                    // AI(W906-MT-E1) 20260925: Motor Test ALed1..10
++        out.motionIO = s.motionIO;
++        const std::string alias = row->Alias.c_str();
++        for (std::size_t k = 0; k < js.homeMotors.size(); ++k) if (js.homeMotors[k] == alias) { out.homeJob = true; break; }
++        out.loopJob   = js.loopActive && js.loopMotor == alias;
++        out.loopCount = out.loopJob ? js.loopCount : 0;
+         v[row->Alias.c_str()] = out;
+     }
+     ::EnterCriticalSection(&g_ovCs);
+diff --git a/tests/test_motor_points.cpp b/tests/test_motor_points.cpp
+index c111e45..bf8b71f 100644
+--- a/tests/test_motor_points.cpp
++++ b/tests/test_motor_points.cpp
+@@ -222,9 +222,12 @@ int main(int argc, char** argv)
+         static bool Fn(const std::string& alias, MotorRuntimeOverlay& o)
+         {
+             if (alias == "MInArmX") { o.posKnown = true; o.cmdPos = 1000; o.encPos = 998; o.servoOn = true;
+-                                      o.busy = false; o.alarm = false; o.inPos = true; o.state = 1; return true; }
++                                      o.busy = false; o.alarm = false; o.inPos = true; o.state = 1;
++                                      // AI(W906-MT-E1) 20260925: LMT- | ORG | SVON | SLMT_P | INP
++                                      o.ioKnown = true; o.motionIO = 0x00000008ul | 0x00000010ul | 0x00004000ul | 0x00010000ul | 0x00002000ul;
++                                      o.homeJob = true; return true; }
+             if (alias == "MInArmY") { o.posKnown = false; o.why = "Direction=1 pending"; o.servoOn = false;
+-                                      o.busy = true; o.alarm = true; o.state = 3; o.driveErr = "Drive error"; return true; }
++                                      o.busy = true; o.alarm = true; o.state = 3; o.driveErr = "Drive error"; return true; }   // ioKnown=false
+             return false;
+         }
+     };
+@@ -237,7 +240,20 @@ int main(int argc, char** argv)
+         CHECK(x && Get(Get(x, "state"), "servoOn")->type == cJSON_True && Get(Get(x, "motion"), "busy")->type == cJSON_False);
+         CHECK(x && SOf(Get(x, "state"), "quality") == "good");
+         CHECK(x && IsNull(Get(Get(x, "state"), "homeDone")));          // MOT[0].Motor 為 NULL ⇒ 歸零旗標沒有來源，仍是 null
++        //AI(W906-MT-E1) 20260925: ALed1..10 decoded like golden TMyEtherCatMotor::ScanMotorStatus (myEthercatmotor.cpp:1166-1189)
++        cJSON* led = x ? Get(Get(x, "state"), "led") : 0;
++        CHECK(led && led->type == cJSON_Object);
++        if (led && led->type == cJSON_Object) {
++            CHECK(Get(led, "cw")->type == cJSON_True && Get(led, "home")->type == cJSON_True && Get(led, "ccw")->type == cJSON_False);
++            CHECK(Get(led, "emg")->type == cJSON_False && Get(led, "alarm")->type == cJSON_False);
++            CHECK(Get(led, "softCw")->type == cJSON_True && Get(led, "softCcw")->type == cJSON_False);
++            CHECK(Get(led, "servoOn")->type == cJSON_True);
++            CHECK(Get(led, "inPos")->type == cJSON_False && Get(led, "sAlarm")->type == cJSON_False);   // golden never lights them on a 1203 axis
++        }
++        CHECK(x && Get(Get(x, "motion"), "homeJob")->type == cJSON_True && Get(Get(x, "motion"), "loopJob")->type == cJSON_False &&
++              IsNull(Get(Get(x, "motion"), "loopCount")));                // AI(W906-MT-E1): no loop on this motor -> count null
+         cJSON* y = FindMotor(rt, "MInArmY");
++        CHECK(y && IsNull(Get(Get(y, "state"), "led")));                  // no motionIO in the sample -> unknown, not "off"
+         CHECK(y && IsNull(Get(Get(y, "position"), "cmdPos")) && SOf(Get(y, "state"), "quality") == "partial");
+         CHECK(y && Get(Get(y, "state"), "alarm")->type == cJSON_True);
+         CHECK(y && SOf(Get(y, "diag"), "errText").find("Direction=1") != std::string::npos &&
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index 8195fed..d233484 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -208,6 +208,9 @@ public:
+     bool GoldenSafeLockActive() override { return safeLock; }
+     int  driveKind = 1;                                                         // AI(W906-MT-E1) 20260925: 1 DS402, 0 other, -1 unknown
+     int  Pci1203DriveKind(int) override { return driveKind; }
++    int  clearAllHomeFlagsCalls = 0;                                            // AI(W906-MT-E1) 20260925
++    std::size_t clearAllAtExecuted = 0;                                         // executed.size() when it was called
++    void GoldenClearAllHomeFlags() override { ++clearAllHomeFlagsCalls; clearAllAtExecuted = executed.size(); }
+ };
+ 
+ static MotorAccessAxis Axis1203(int mi, int board, int port, int axisSlot, const char* why = "")
+@@ -1180,6 +1183,8 @@ int main(int argc, char** argv)
+             relOk = be.executed[i].kind == kCmdAxSetCmdPos && be.executed[i + 1].kind == kCmdAxSetActPos &&
+                     be.executed[i].axis == be.executed[i + 1].axis && be.executed[i].axis != 2;
+         CHECK(relOk, "reloadMotorData -> SetCommand(0) then SetPosition(0) on each of the 5 opened axes (slot 2 not opened)");
++        CHECK(be.clearAllHomeFlagsCalls == 1 && be.clearAllAtExecuted == r0,
++              "reloadMotorData clears every HomeFlag BEFORE zeroing (golden InitialMotorParameter, cinitial.cpp:3615) -- coordinates reset => not homed");
+         MotorAccessResetJobs();
+     }
+ 
+-- 
+2.55.0.windows.5
+

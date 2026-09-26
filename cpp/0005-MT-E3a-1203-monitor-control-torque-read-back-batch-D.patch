@@ -1,0 +1,1823 @@
+From b90b0caf4ecb67553f4e54b9d6337b041c5fbf73 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 25 Sep 2026 20:34:40 +0800
+Subject: [PATCH 05/14] MT-E3a: 1203 monitor/control -- torque read-back, batch
+ DI read with self-compare, 603Fh axis-B base, InitMotor config kinds
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203Control.cpp     | 178 +++++++-
+ EtherCAT/Pci1203Control.h       |  89 +++-
+ EtherCAT/Pci1203Monitor.cpp     | 718 +++++++++++++++++++++++++++++---
+ EtherCAT/Pci1203Monitor.h       |  69 ++-
+ JsonBridge/ChanIo.h             |   7 +
+ JsonBridge/ChanIoPoints.cpp     |  10 +-
+ WebBridgeTags.cpp               |   6 +-
+ tests/CMakeLists.txt            |  11 +
+ tests/test_io_points.cpp        |  31 ++
+ tests/test_pci1203_pure.cpp     | 324 ++++++++++++++
+ tests/test_wb_tags.cpp          |  18 +
+ tools/pci1203_readonly_gate.ps1 |  10 +-
+ 12 files changed, 1384 insertions(+), 87 deletions(-)
+ create mode 100644 tests/test_pci1203_pure.cpp
+
+diff --git a/EtherCAT/Pci1203Control.cpp b/EtherCAT/Pci1203Control.cpp
+index c7f8be1..5045b7e 100644
+--- a/EtherCAT/Pci1203Control.cpp
++++ b/EtherCAT/Pci1203Control.cpp
+@@ -209,12 +209,12 @@ U32 SpeedPropId(Pci1203SpeedParam p)
+         //AI(W906-1203CTL-44) 20260911: 速度類型 and its factor -- the last two
+         //  things the vendor's 設置參數 writes (PTP/Form1.cs:463).
+         case kSpeedJerk:       return PAR_AxJerk;
+-        case kSpeedJerkFactor: return PAR_AxJerkFactor;
++        case kSpeedJerkFactor: return PAR_AxJerkFactor;  case kSpeedMaxVel: return CFG_AxMaxVel;  case kSpeedMaxAcc: return CFG_AxMaxAcc;  case kSpeedMaxDec: return CFG_AxMaxDec;   //AI(W906-MT-E3a) 20260925: the three CEILINGS (golden InitMotor :363-382), the family the note above warns is NOT the working speed -- internal only, no wire name (Pci1203Control.h). Same line, no line below moves
+     }
+     return 0;
+ }
+ #endif
+-
++unsigned long InitCfgPropId(int which);   //AI(W906-MT-E3a) 20260925: golden InitMotor's closed property table (Pci1203InitCfgParam); defined at the end of this file, next to the helpers the header declares. On the old blank line, so no line below moves
+ /* The name in the audit line and in `wouldCall`. It is the VENDOR'S OWN
+    property spelling, not the panel label, so a log line can be checked against
+    the SDK header directly. */
+@@ -260,7 +260,7 @@ const char* SpeedName(Pci1203SpeedParam p)
+         case kSpeedJogAcc:  return "CFG_AxJogAcc";
+         case kSpeedJogDec:  return "CFG_AxJogDec";
+         case kSpeedJerk:       return "PAR_AxJerk";
+-        case kSpeedJerkFactor: return "PAR_AxJerkFactor";
++        case kSpeedJerkFactor: return "PAR_AxJerkFactor";  case kSpeedMaxVel: return "CFG_AxMaxVel";  case kSpeedMaxAcc: return "CFG_AxMaxAcc";  case kSpeedMaxDec: return "CFG_AxMaxDec";   //AI(W906-MT-E3a) 20260925
+     }
+     return "?";
+ }
+@@ -1428,7 +1428,7 @@ Pci1203CmdResult TPci1203Control::Run_(const Pci1203Cmd& c)
+                           c.axis, c.homeMode, WireDirToVendor(c.dir), c.dir,
+                           (c.dir < 0) ? "NEG" : "POS");
+             r.accepted = true;
+-            break;  case kCmdAxMoveHome: if (!ValidateAxis(c.axis, r.why)) break; if (c.homeMode < 0 || c.homeMode > 15) { r.why = "Acm_AxMoveHome 只收卡片的 16 種 home mode（0..15，golden 用 MODE12_AbsSearchReFind = 11）"; break; } if (c.dir != 1 && c.dir != -1) { r.why = "homing needs an explicit direction (+1 or -1)"; break; } std::snprintf(call, sizeof(call), "Acm_AxMoveHome(ax=%d, mode=%d, dir=%u)   [card-side home, golden EtherCatMotHome; wire %+d -> DIRECTION_%s]", c.axis, c.homeMode, WireDirToVendor(c.dir), c.dir, (c.dir < 0) ? "NEG" : "POS"); r.accepted = true; break;  case kCmdAxSetExtDrive: if (!ValidateAxis(c.axis, r.why)) break; if (c.value != 0.0 && c.value != 1.0) { r.why = "ExtDrive mode 只收 0（關）或 1（jog 模式）"; break; } std::snprintf(call, sizeof(call), "Acm_AxSetExtDrive(ax=%d, %d)   [golden jog: 1 before Acm_AxJog, 0 after the stop]", c.axis, (int)c.value); r.accepted = true; break;  case kCmdAxSetCmdPos: if (!ValidateAxis(c.axis, r.why)) break; std::snprintf(call, sizeof(call), "Acm_AxSetCmdPosition(ax=%d, %.3f)   [golden SetCommand]", c.axis, c.value); r.accepted = true; break;  case kCmdAxSetActPos: if (!ValidateAxis(c.axis, r.why)) break; std::snprintf(call, sizeof(call), "Acm_AxSetActualPosition(ax=%d, %.3f)   [golden SetPosition]", c.axis, c.value); r.accepted = true; break;   //AI(W906-MT-E1) 20260925: the four INTERNAL kinds (Pci1203Control.h allowlist entry, user ruling 20260925). Same line, no line below moves
++            break;  case kCmdAxMoveHome: if (!ValidateAxis(c.axis, r.why)) break; if (c.homeMode < 0 || c.homeMode > 15) { r.why = "Acm_AxMoveHome 只收卡片的 16 種 home mode（0..15，golden 用 MODE12_AbsSearchReFind = 11）"; break; } if (c.dir != 1 && c.dir != -1) { r.why = "homing needs an explicit direction (+1 or -1)"; break; } std::snprintf(call, sizeof(call), "Acm_AxMoveHome(ax=%d, mode=%d, dir=%u)   [card-side home, golden EtherCatMotHome; wire %+d -> DIRECTION_%s]", c.axis, c.homeMode, WireDirToVendor(c.dir), c.dir, (c.dir < 0) ? "NEG" : "POS"); r.accepted = true; break;  case kCmdAxSetExtDrive: if (!ValidateAxis(c.axis, r.why)) break; if (c.value != 0.0 && c.value != 1.0) { r.why = "ExtDrive mode 只收 0（關）或 1（jog 模式）"; break; } std::snprintf(call, sizeof(call), "Acm_AxSetExtDrive(ax=%d, %d)   [golden jog: 1 before Acm_AxJog, 0 after the stop]", c.axis, (int)c.value); r.accepted = true; break;  case kCmdAxSetCmdPos: if (!ValidateAxis(c.axis, r.why)) break; std::snprintf(call, sizeof(call), "Acm_AxSetCmdPosition(ax=%d, %.3f)   [golden SetCommand]", c.axis, c.value); r.accepted = true; break;  case kCmdAxSetActPos: if (!ValidateAxis(c.axis, r.why)) break; std::snprintf(call, sizeof(call), "Acm_AxSetActualPosition(ax=%d, %.3f)   [golden SetPosition]", c.axis, c.value); r.accepted = true; break;  case kCmdAxSetInitCfg: { if (!ValidateAxis(c.axis, r.why)) break; if (c.initCfg < 0 || c.initCfg >= kInitCfgCount) { r.why = "unknown golden-InitMotor property (a defect in the caller, not an operator mistake)"; break; } if (!Pci1203InitCfgValueOk(c.initCfg, c.value)) { char b[224]; std::snprintf(b, sizeof(b), "%s = %.3f is not a value golden InitMotor / SetEtherCatInType ever writes -- the table is closed, refused", Pci1203InitCfgName(c.initCfg), c.value); r.why = b; break; } std::snprintf(call, sizeof(call), "%s(ax=%d, %s) = %.0f   [golden InitMotor (internal)%s]", Pci1203InitCfgIsF64(c.initCfg) ? "Acm_SetF64Property" : "Acm_SetU32Property", c.axis, Pci1203InitCfgName(c.initCfg), c.value, Pci1203InitCfgNotSupportedOk(c.initCfg) ? "; property-not-supported counts as success, like golden" : ""); r.accepted = true; break; }   //AI(W906-MT-E1) 20260925: the four INTERNAL kinds (Pci1203Control.h allowlist entry, user ruling 20260925). Same line, no line below moves   //AI(W906-MT-E3a) 20260925: + kCmdAxSetInitCfg -- validated against golden InitMotor's CLOSED table (property AND value, Pci1203InitCfgValueOk). Not IsMotion(): it moves nothing (golden InitMotor's motion-free config writes)
+ 
+         case kCmdAxSetSpeed:
+             if (!ValidateAxis(c.axis, r.why)) break;
+@@ -1738,7 +1738,7 @@ Pci1203CmdResult TPci1203Control::Run_(const Pci1203Cmd& c)
+         case kCmdAxMoveAbs:
+             ret = Acm_AxMoveAbs(ax, (F64)c.value);
+             break;
+-        case kCmdAxMoveHome: ret = Acm_AxMoveHome(ax, (U32)c.homeMode, (U32)WireDirToVendor(c.dir)); if (ret == SUCCESS) mon->MarkCfgDue_(c.axis, TPci1203Monitor::kCfgHome); break;  case kCmdAxSetExtDrive: ret = Acm_AxSetExtDrive(ax, (U16)((c.value != 0.0) ? 1 : 0)); break;  case kCmdAxSetCmdPos: ret = Acm_AxSetCmdPosition(ax, (F64)c.value); break;  case kCmdAxSetActPos: ret = Acm_AxSetActualPosition(ax, (F64)c.value); break;  case kCmdAxHome:   //AI(W906-MT-E1) 20260925: the four INTERNAL kinds, issued only by WebMotorAccess. Same line, no line below moves
++        case kCmdAxMoveHome: ret = Acm_AxMoveHome(ax, (U32)c.homeMode, (U32)WireDirToVendor(c.dir)); if (ret == SUCCESS) mon->MarkCfgDue_(c.axis, TPci1203Monitor::kCfgHome); break;  case kCmdAxSetExtDrive: ret = Acm_AxSetExtDrive(ax, (U16)((c.value != 0.0) ? 1 : 0)); break;  case kCmdAxSetCmdPos: ret = Acm_AxSetCmdPosition(ax, (F64)c.value); break;  case kCmdAxSetActPos: ret = Acm_AxSetActualPosition(ax, (F64)c.value); break;  case kCmdAxSetInitCfg: { const U32 pid = (U32)InitCfgPropId(c.initCfg); if (Pci1203InitCfgIsF64(c.initCfg)) ret = Acm_SetF64Property(ax, pid, (F64)c.value); else ret = Acm_SetU32Property(ax, pid, (U32)c.value); bool notSup = false; if (ret == (U32)Dsp_PropertyIDNotSupport && Pci1203InitCfgNotSupportedOk(c.initCfg)) { notSup = true; char nb[224]; std::snprintf(nb, sizeof(nb), "NOTE     %s on ax%d -> 0x%08lX Dsp_PropertyIDNotSupport: counted as SUCCESS, as golden InitMotor does", Pci1203InitCfgName(c.initCfg), c.axis, (unsigned long)ret); impl_->note(nb); r.why = "property not supported here (Dsp_PropertyIDNotSupport) -- counted as success, like golden InitMotor"; ret = SUCCESS; } if (ret == SUCCESS && !notSup) { if (c.initCfg == kInitCfgElReact) mon->ExpectCfg_(c.axis, TPci1203Monitor::kExpLimit, kLimitElReact, (double)(U32)c.value); else if (c.initCfg == kInitCfgJerk) mon->ExpectCfg_(c.axis, TPci1203Monitor::kExpSpeed, kSpeedJerk, (double)c.value); else mon->MarkCfgDue_(c.axis, (unsigned)(TPci1203Monitor::kCfgSpeed | TPci1203Monitor::kCfgLimit | TPci1203Monitor::kCfgHome)); } break; }  case kCmdAxHome:   //AI(W906-MT-E1) 20260925: the four INTERNAL kinds, issued only by WebMotorAccess. Same line, no line below moves   //AI(W906-MT-E3a) 20260925: + kCmdAxSetInitCfg. The two entries the monitor reads back (ElReact = limitVal[3], PAR_AxJerk = speed[8]) are compared with what was written (ExpectCfg_); the rest have no read slot, so the axis's card groups are read once more (MarkCfgDue_) and the screen shows whatever the write changed. A not-supported property wrote nothing and arms nothing
+             ret = Acm_AxHome(ax, (U32)c.homeMode, (U32)WireDirToVendor(c.dir));
+             if (ret == SUCCESS) mon->MarkCfgDue_(c.axis, TPci1203Monitor::kCfgDrive);  break;   //AI(W906-IOWEB-P25) 20260925: the home call re-seeds the drive's 6099h:1/:2, 609Ah and 6098h (Pci1203Control.h:415-419), so that group is read once more
+         case kCmdAxSetSpeed:
+@@ -2231,7 +2231,7 @@ const char* Pci1203CmdName(Pci1203CmdKind k)
+         case kCmdAxSetOtAlloc:      return "pci1203.ax.setOt";
+         case kCmdAxGearSetAll:      return "pci1203.ax.gearSetAll";
+         case kCmdAxSetEncCompat:    return "pci1203.ax.setEncCompat";
+-        case kCmdAxSetDriveHome:    return "pci1203.ax.setDriveHome";  case kCmdAxSetExtDrive: return "pci1203.ax.setExtDrive (internal)";  case kCmdAxSetCmdPos: return "pci1203.ax.setCmdPos (internal)";  case kCmdAxSetActPos: return "pci1203.ax.setActPos (internal)";  case kCmdAxMoveHome: return "pci1203.ax.moveHome (internal)";   //AI(W906-MT-E1) 20260925: audit names only -- deliberately NOT in Pci1203CmdFromName
++        case kCmdAxSetDriveHome:    return "pci1203.ax.setDriveHome";  case kCmdAxSetExtDrive: return "pci1203.ax.setExtDrive (internal)";  case kCmdAxSetCmdPos: return "pci1203.ax.setCmdPos (internal)";  case kCmdAxSetActPos: return "pci1203.ax.setActPos (internal)";  case kCmdAxMoveHome: return "pci1203.ax.moveHome (internal)";  case kCmdAxSetInitCfg: return "pci1203.ax.setInitCfg (internal)";   //AI(W906-MT-E1) 20260925: audit names only -- deliberately NOT in Pci1203CmdFromName   //AI(W906-MT-E3a) 20260925: + setInitCfg, same rule
+         case kCmdNone:         break;
+     }
+     return "(none)";
+@@ -3019,4 +3019,170 @@ void Pci1203ControlDisable()
+     g_control = 0;
+ }
+ 
++// ===========================================================================
++//  AI(W906-MT-E3a) 20260925: GOLDEN InitMotor's CONFIGURATION TABLE -- the
++//  closed set kCmdAxSetInitCfg may write. See the banner at Pci1203InitCfgParam
++//  in the header for the golden lines each row repeats (golden
++//  Motor/myEthercatmotor.cpp :219-361 and SetEtherCatInType :1590-1690).
++//  EastSun ruling R4 20260925: Test Range = FULL golden InitMotor, on the
++//  monitor's handles. This table is the configuration half of that; the rest
++//  (ResetError, SvOn, SetCmdPos, SetActPos, the three CFG_AxMax* ceilings) are
++//  existing kinds, and the ORDER is the caller's (WebMotorAccess), which can use
++//  Pci1203GoldenInitCfgPlan() below to get golden's.
++// ===========================================================================
++namespace {
++
++//  One row per Pci1203InitCfgParam, IN ENUM ORDER (tests/test_pci1203_pure.cpp
++//  checks the order): vendor spelling, F64 or U32, whether golden excuses
++//  Dsp_PropertyIDNotSupport, and the closed set of values golden can write.
++struct InitCfgRow {
++    int         which;
++    const char* name;
++    bool        f64;
++    bool        notSupportedOk;
++    int         nValues;
++    double      values[3];
++};
++const InitCfgRow kInitCfgRows[kInitCfgCount] = {
++    { kInitCfgPPU,          "CFG_AxPPU",          false, true,  1, { 1.0,  0.0,  0.0  } },
++    { kInitCfgElReact,      "CFG_AxElReact",      false, true,  1, { 0.0,  0.0,  0.0  } },
++    { kInitCfgAlmEnable,    "CFG_AxAlmEnable",    false, true,  1, { 1.0,  0.0,  0.0  } },
++    { kInitCfgAlmReact,     "CFG_AxAlmReact",     false, true,  1, { 0.0,  0.0,  0.0  } },
++    { kInitCfgOrgLogic,     "CFG_AxOrgLogic",     false, true,  2, { 0.0,  1.0,  0.0  } },
++    //  golden :261-266 tests `Result!=SUCCESS` ONLY for the jerk -- no
++    //  not-supported excuse, so none here either.
++    { kInitCfgJerk,         "PAR_AxJerk",         true,  false, 1, { 0.0,  0.0,  0.0  } },
++    { kInitCfgInpEnable,    "CFG_AxInpEnable",    false, true,  1, { 1.0,  0.0,  0.0  } },
++    { kInitCfgInpLogic,     "CFG_AxInpLogic",     false, true,  1, { 0.0,  0.0,  0.0  } },
++    { kInitCfgAlmLogic,     "CFG_AxAlmLogic",     false, true,  2, { 0.0,  1.0,  0.0  } },
++    { kInitCfgEzLogic,      "CFG_AxEzLogic",      false, true,  1, { 1.0,  0.0,  0.0  } },
++    { kInitCfgErcLogic,     "CFG_AxErcLogic",     false, true,  1, { 1.0,  0.0,  0.0  } },
++    //  AB_4X = 2, I_CW_CCW = 3 (AdvMotDrv.h:489-490)
++    { kInitCfgPulseInMode,  "CFG_AxPulseInMode",  false, true,  2, { 2.0,  3.0,  0.0  } },
++    //  O_CW_CCW = 0x10, OUT_DIR_ALL_NEG = 0x08, OUT_DIR_DIR_NEG = 0x04 (AdvMotDrv.h:515-517)
++    { kInitCfgPulseOutMode, "CFG_AxPulseOutMode", false, true,  3, { 16.0, 8.0,  4.0  } }
++};
++
++#if HAVE_PCI1203
++//  The literals above against the vendor's own macros, at compile time: a
++//  pulse mode copied wrong would be accepted by the card and drive the axis
++//  with the wrong pulse scheme.
++typedef char InitCfgPulseModeCheck[(AB_4X == 2 && I_CW_CCW == 3 && O_CW_CCW == 0x10 &&
++                                    OUT_DIR_ALL_NEG == 0x08 && OUT_DIR_DIR_NEG == 0x04) ? 1 : -1];
++#endif
++
++const InitCfgRow* InitCfgRowOf(int which)
++{
++    if (which < 0 || which >= kInitCfgCount) return 0;
++    const InitCfgRow* r = &kInitCfgRows[which];
++    return (r->which == which) ? r : 0;     // a table out of enum order refuses rather than mis-maps
++}
++
++//  Declared near the top of this file; defined here beside its table. The
++//  property IDs are vendor spellings, so the !HAVE_PCI1203 arm has none -- and
++//  needs none: Execute() refuses before any vendor call in that arm.
++unsigned long InitCfgPropId(int which)
++{
++#if HAVE_PCI1203
++    switch (which) {
++        case kInitCfgPPU:          return CFG_AxPPU;
++        case kInitCfgElReact:      return CFG_AxElReact;
++        case kInitCfgAlmEnable:    return CFG_AxAlmEnable;
++        case kInitCfgAlmReact:     return CFG_AxAlmReact;
++        case kInitCfgOrgLogic:     return CFG_AxOrgLogic;
++        case kInitCfgJerk:         return PAR_AxJerk;
++        case kInitCfgInpEnable:    return CFG_AxInpEnable;
++        case kInitCfgInpLogic:     return CFG_AxInpLogic;
++        case kInitCfgAlmLogic:     return CFG_AxAlmLogic;
++        case kInitCfgEzLogic:      return CFG_AxEzLogic;
++        case kInitCfgErcLogic:     return CFG_AxErcLogic;
++        case kInitCfgPulseInMode:  return CFG_AxPulseInMode;
++        case kInitCfgPulseOutMode: return CFG_AxPulseOutMode;
++    }
++#else
++    (void)which;
++#endif
++    return 0;
++}
++
++void PlanAdd(Pci1203InitCfgStep* s, int& n, int which, double value)
++{
++    if (n >= (int)kInitCfgCount) return;
++    s[n].which = which;
++    s[n].value = value;
++    ++n;
++}
++
++}  // namespace
++
++const char* Pci1203InitCfgName(int which)
++{
++    const InitCfgRow* r = InitCfgRowOf(which);
++    return r ? r->name : "?";
++}
++
++bool Pci1203InitCfgIsF64(int which)
++{
++    const InitCfgRow* r = InitCfgRowOf(which);
++    return r != 0 && r->f64;
++}
++
++bool Pci1203InitCfgNotSupportedOk(int which)
++{
++    const InitCfgRow* r = InitCfgRowOf(which);
++    return r != 0 && r->notSupportedOk;
++}
++
++bool Pci1203InitCfgValueOk(int which, double value)
++{
++    const InitCfgRow* r = InitCfgRowOf(which);
++    if (r == 0) return false;
++    for (int k = 0; k < r->nValues && k < 3; ++k)
++        if (value == r->values[k]) return true;
++    return false;
++}
++
++int Pci1203GoldenInitCfgPlan(int motorClass, bool sensorType, bool in1Logic,
++                             Pci1203InitCfgStep* out, int max)
++{
++    if (motorClass != kInitCfgMotorServo && motorClass != kInitCfgMotorRotate &&
++        motorClass != kInitCfgMotorOther) return 0;
++    Pci1203InitCfgStep s[kInitCfgCount];
++    int n = 0;
++    //  golden InitMotor :219-266
++    PlanAdd(s, n, kInitCfgPPU,       1.0);
++    PlanAdd(s, n, kInitCfgElReact,   0.0);
++    PlanAdd(s, n, kInitCfgAlmEnable, 1.0);
++    PlanAdd(s, n, kInitCfgAlmReact,  0.0);
++    PlanAdd(s, n, kInitCfgOrgLogic,  sensorType ? 0.0 : 1.0);
++    PlanAdd(s, n, kInitCfgJerk,      0.0);
++    //  golden SetEtherCatInType :1595-1673 (called at :306)
++    if (motorClass == kInitCfgMotorServo) {
++        PlanAdd(s, n, kInitCfgInpEnable, 1.0);
++        PlanAdd(s, n, kInitCfgInpLogic,  0.0);
++        PlanAdd(s, n, kInitCfgAlmLogic,  in1Logic ? 0.0 : 1.0);
++    } else if (motorClass == kInitCfgMotorRotate) {
++        PlanAdd(s, n, kInitCfgInpEnable, 1.0);
++        PlanAdd(s, n, kInitCfgInpLogic,  0.0);
++        PlanAdd(s, n, kInitCfgAlmLogic,  0.0);          // golden :1639 -- not from bIn1Logic
++    } else {
++        PlanAdd(s, n, kInitCfgAlmLogic,  in1Logic ? 0.0 : 1.0);
++    }
++    PlanAdd(s, n, kInitCfgEzLogic,  1.0);               // :1675
++    PlanAdd(s, n, kInitCfgErcLogic, 1.0);               // :1683
++    //  golden InitMotor :308-361
++    if (motorClass == kInitCfgMotorServo) {
++        PlanAdd(s, n, kInitCfgPulseInMode,  2.0);       // AB_4X
++        PlanAdd(s, n, kInitCfgPulseOutMode, 16.0);      // O_CW_CCW
++    } else if (motorClass == kInitCfgMotorRotate) {
++        PlanAdd(s, n, kInitCfgPulseInMode,  3.0);       // I_CW_CCW
++        PlanAdd(s, n, kInitCfgPulseOutMode, 8.0);       // OUT_DIR_ALL_NEG
++    } else {
++        PlanAdd(s, n, kInitCfgPulseInMode,  3.0);       // I_CW_CCW
++        PlanAdd(s, n, kInitCfgPulseOutMode, 4.0);       // OUT_DIR_DIR_NEG
++    }
++    for (int i = 0; i < n && i < max && out != 0; ++i) out[i] = s[i];
++    return n;
++}
++
+ }  // namespace ht9045
+diff --git a/EtherCAT/Pci1203Control.h b/EtherCAT/Pci1203Control.h
+index 75cb963..47b6134 100644
+--- a/EtherCAT/Pci1203Control.h
++++ b/EtherCAT/Pci1203Control.h
+@@ -87,8 +87,8 @@
+ //      Acm_AxStopDec          controlled stop             (WRITE, motion)
+ //      Acm_AxStopEmg          emergency stop              (WRITE, motion)
+ //      Acm_SetF64Property     speed / accel / decel,      (WRITE, config)
+-//                             software limit POSITIONS
+-//      Acm_SetU32Property     limit ENABLES and reaction  (WRITE, config)
++//                             software limit POSITIONS    [AI(W906-MT-E3a) 20260925: + golden InitMotor's CFG_AxMaxVel/MaxAcc/MaxDec (kSpeedMaxVel..Dec, NO wire name) and its PAR_AxJerk=0 (kCmdAxSetInitCfg, internal)]
++//      Acm_SetU32Property     limit ENABLES and reaction  (WRITE, config)   [AI(W906-MT-E3a) 20260925: + the CLOSED U32 set golden TMyEtherCatMotor::InitMotor/SetEtherCatInType writes (kCmdAxSetInitCfg, internal, see Pci1203InitCfgParam at the end of this header) -- no new vendor call]
+ //          AI(W906-1203LIM-1) 20260915. The limit properties are split across
+ //          BOTH accessors and the split is not optional: CFG_AxElEnable /
+ //          PelEnable / MelEnable / ElReact / SwPelEnable / SwMelEnable are U32,
+@@ -182,7 +182,7 @@
+ //        The two are the same C type (AdvMotDrv.h:65, `#define HAND UINT_PTR`),
+ //        so passing the wrong one is not a compile error -- it is a runtime
+ //        return code on a good day.
+-//    Acm_AxSetExtDrive(HAND, U16 ExtDrvMode)   Acm_AxSetCmdPosition(HAND, F64)   Acm_AxSetActualPosition(HAND, F64)   Acm_AxMoveHome(HAND, U32 HomeMode, U32 Dir)   AI(W906-MT-E1) 20260925: ALLOWED on the user EastSun's ruling 20260925 (asked whether the three golden call families this header banned should stay banned for Motor Test: 「開放，照舊版做法」). Used ONLY as golden TMyEtherCatMotor does: jog = ExtDrive(1) then Acm_AxJog, stop = Acm_AxStopDec then ExtDrive(0); SetCommand/SetPosition = Reload Motor Data and the end of a card-side home; Acm_AxMoveHome(MODE12) = golden EtherCatMotHome, and ONLY for a drive that is NOT DS402 (DS402 servos home with Acm_AxHome 124/128 -- user 「歸原點要有分支...看驅動器」). INTERNAL kinds: they have NO wire name (Pci1203CmdFromName), so neither the pci1203 page nor any browser command can send them; only WebMotorAccess (the Motor Test golden handlers) issues them.
++//    Acm_AxSetExtDrive(HAND, U16 ExtDrvMode)   Acm_AxSetCmdPosition(HAND, F64)   Acm_AxSetActualPosition(HAND, F64)   Acm_AxMoveHome(HAND, U32 HomeMode, U32 Dir)   AI(W906-MT-E1) 20260925: ALLOWED on the user EastSun's ruling 20260925 (asked whether the three golden call families this header banned should stay banned for Motor Test: 「開放，照舊版做法」). Used ONLY as golden TMyEtherCatMotor does: jog = ExtDrive(1) then Acm_AxJog, stop = Acm_AxStopDec then ExtDrive(0); SetCommand/SetPosition = Reload Motor Data and the end of a card-side home; Acm_AxMoveHome(MODE12) = golden EtherCatMotHome, and ONLY for a drive that is NOT DS402 (DS402 servos home with Acm_AxHome 124/128 -- user 「歸原點要有分支...看驅動器」). INTERNAL kinds: they have NO wire name (Pci1203CmdFromName), so neither the pci1203 page nor any browser command can send them; only WebMotorAccess (the Motor Test golden handlers) issues them.   AI(W906-MT-E3a) 20260925: kCmdAxSetInitCfg joins them on EastSun ruling R4 20260925 (Test Range = FULL golden InitMotor, through this module on the monitor's handles, never a second axis open) -- same rules: no wire name, audit name "(internal)", and it adds NO vendor call (Acm_SetU32Property / Acm_SetF64Property, already listed above).
+ //  AI(W906-1203ALM-5) 20260912: ONE MORE, AND IT IS THE SHARPEST THING HERE.
+ //      Acm_DevWriteSDOData    CoE object 2710h ONLY -- Fn008              (WRITE)
+ //      Acm_DevReadSDOData     2710h sub2, the Status of the step just sent (read)
+@@ -420,7 +420,7 @@ enum Pci1203CmdKind {
+     //  607Ch is the exception: the card never writes it. The page must label
+     //  the difference, because a value about to be replaced and a value that
+     //  persists cannot be allowed to look the same.
+-    kCmdAxSetDriveHome, kCmdAxSetExtDrive, kCmdAxSetCmdPos, kCmdAxSetActPos, kCmdAxMoveHome   // kCmdAxSetDriveHome: axis, driveHome (which), value, value2 = confirm station.  //AI(W906-MT-E1) 20260925: INTERNAL (no wire name): axis+value 0/1 -> Acm_AxSetExtDrive; axis+value -> Acm_AxSetCmdPosition / Acm_AxSetActualPosition; axis+homeMode(0..15)+dir(+1/-1) -> Acm_AxMoveHome. Issued only by WebMotorAccess (golden Motor Test). See the allowlist entry.
++    kCmdAxSetDriveHome, kCmdAxSetExtDrive, kCmdAxSetCmdPos, kCmdAxSetActPos, kCmdAxMoveHome, kCmdAxSetInitCfg   //AI(W906-MT-E3a) 20260925: kCmdAxSetInitCfg = INTERNAL (no wire name): axis + initCfg (Pci1203InitCfgParam) + value -> ONE entry of golden InitMotor's closed configuration table; not motion, not output-first; Dsp_PropertyIDNotSupport counts as SUCCESS like golden.   // kCmdAxSetDriveHome: axis, driveHome (which), value, value2 = confirm station.  //AI(W906-MT-E1) 20260925: INTERNAL (no wire name): axis+value 0/1 -> Acm_AxSetExtDrive; axis+value -> Acm_AxSetCmdPosition / Acm_AxSetActualPosition; axis+homeMode(0..15)+dir(+1/-1) -> Acm_AxMoveHome. Issued only by WebMotorAccess (golden Motor Test). See the allowlist entry.
+ };
+ 
+ // ---------------------------------------------------------------------------
+@@ -466,7 +466,7 @@ enum Pci1203SpeedParam {
+     //  MEASURED on this card 20260911: PAR_AxJerk reads 0 and the Utility shows
+     //  梯形 selected -- the two agree.
+     kSpeedJerk,        // 速度類型     PAR_AxJerk        0 = 梯形, 1 = S形
+-    kSpeedJerkFactor   // Jeck Factor  PAR_AxJerkFactor  (reads 50 on this card)
++    kSpeedJerkFactor, kSpeedMaxVel, kSpeedMaxAcc, kSpeedMaxDec   // Jeck Factor  PAR_AxJerkFactor  (reads 50 on this card)   //AI(W906-MT-E3a) 20260925: + the three CFG_AxMax* CEILINGS, = 10/11/12 = the monitor's speed[10..12] (Pci1203AxisSample::speed), so the existing ExpectCfg_ read-back compares them. Golden TMyEtherCatMotor::InitMotor (golden Motor/myEthercatmotor.cpp:363-382) writes MaxVel=PJogHighSpeed, MaxAcc=dAcc, MaxDec=dDec. ⚠ NO WIRE NAME, deliberately: Pci1203ParseWire's exact-name table does not list them, so neither the pci1203 page nor a browser can raise or lower a ceiling -- only the golden Test Range path (WebMotorAccess) issues them. A ceiling set wrong makes the card refuse every speed above it.
+ };
+ 
+ /* ---------------------------------------------------------------------------
+@@ -668,7 +668,7 @@ struct Pci1203Cmd {
+     //  mix-up between these two would not look wrong on any screen; it would
+     //  just quietly write the one that does nothing, which is the exact defect
+     //  this command exists to fix.
+-    int              driveHome; // Pci1203DriveHomeParam, or -1
++    int              driveHome;  int initCfg = -1;   // driveHome: Pci1203DriveHomeParam, or -1.   //AI(W906-MT-E3a) 20260925: initCfg = which golden-InitMotor property kCmdAxSetInitCfg writes (Pci1203InitCfgParam), or -1. Its own field for the reason the four above are: it indexes yet another table. Default member initialiser so the constructor below is untouched; same line so no line below moves
+     //AI(W906-1203ONE-1) 20260916: the whole gear block for kCmdAxGearSetAll.
+     //  ⚠ `gearHas` is not decoration. An operator who wants to change only the
+     //  denominator leaves the other seven boxes empty, and a zero there would
+@@ -913,6 +913,83 @@ Pci1203CmdKind Pci1203CmdFromName(const std::string& name);
+ // The reverse, for the audit log and the ack.
+ const char* Pci1203CmdName(Pci1203CmdKind k);
+ 
++/* ---------------------------------------------------------------------------
++   AI(W906-MT-E3a) 20260925: GOLDEN InitMotor's CONFIGURATION TABLE -- what
++   kCmdAxSetInitCfg may write, and nothing else.
++
++   EastSun ruling R4 20260925: Motor Test's Test Range = the FULL golden
++   TMyEtherCatMotor::InitMotor, issued through this module on the monitor's
++   axis handles (never a second axis open). Read from golden
++   Motor/myEthercatmotor.cpp (Big5, read-only):
++       :219-258  CFG_AxPPU=1, CFG_AxElReact=0, CFG_AxAlmEnable=1,
++                 CFG_AxAlmReact=0, CFG_AxOrgLogic=(bSensorType ? 0 : 1)   U32
++       :260-266  PAR_AxJerk=0                                             F64
++       :306      SetEtherCatInType()  (:1590-1690)                        U32
++                   Servo_Motor   InpEnable=1, InpLogic=0, AlmLogic=(bIn1Logic ? 0 : 1)
++                   Rotate_Motor  InpEnable=1, InpLogic=0, AlmLogic=0
++                   otherwise     AlmLogic=(bIn1Logic ? 0 : 1)
++                   then always   EzLogic=1, ErcLogic=1
++       :308-361  Servo_Motor   PulseInMode=AB_4X,    PulseOutMode=O_CW_CCW    U32
++                 Rotate_Motor  PulseInMode=I_CW_CCW, PulseOutMode=OUT_DIR_ALL_NEG
++                 otherwise     PulseInMode=I_CW_CCW, PulseOutMode=OUT_DIR_DIR_NEG
++       :363-382  CFG_AxMaxVel/MaxAcc/MaxDec -- NOT here: kCmdAxSetSpeed with
++                 kSpeedMaxVel/MaxAcc/MaxDec (they share the monitor's
++                 speed[10..12] read-back)
++       :384-394  ResetError, SetServoOn(true), SetCommand(0), SetPosition(0) --
++                 kCmdAxResetError, kCmdAxSvOn, kCmdAxSetCmdPos, kCmdAxSetActPos
++   ⚠ The table is CLOSED IN BOTH DIRECTIONS: only these thirteen properties, and
++   for each only the values golden can write (Pci1203InitCfgValueOk). A value
++   golden never writes -- ElReact=1, PPU=2, a pulse mode golden does not use --
++   is REFUSED with the reason, never passed through: this table exists to repeat
++   golden, not to be a general property writer.
++   ⚠ Error handling follows golden per entry: the twelve U32 writes treat
++   Dsp_PropertyIDNotSupport (0x80005002) as success (golden
++   `(Result!=SUCCESS) && (Result!=Dsp_PropertyIDNotSupport)`), PAR_AxJerk does
++   NOT (golden tests `Result!=SUCCESS` only, :262).
++   ⓘ Values: AB_4X=2, I_CW_CCW=3 (AdvMotDrv.h:489-490), OUT_DIR_DIR_NEG=0x04,
++   OUT_DIR_ALL_NEG=0x08, O_CW_CCW=0x10 (:515-517); property IDs from
++   AdvMotPropID.h, byte-identical to the installed SDK 2.0.15.2 (BOM aside,
++   compared 20260925). The IDs live in the .cpp (vendor types); these helpers
++   compile in both build arms and are unit-tested (tests/test_pci1203_pure.cpp).
++   --------------------------------------------------------------------------- */
++enum Pci1203InitCfgParam {
++    kInitCfgPPU = 0,       // CFG_AxPPU           U32  {1}
++    kInitCfgElReact,       // CFG_AxElReact       U32  {0}    (= limitVal[3] read-back)
++    kInitCfgAlmEnable,     // CFG_AxAlmEnable     U32  {1}
++    kInitCfgAlmReact,      // CFG_AxAlmReact      U32  {0}
++    kInitCfgOrgLogic,      // CFG_AxOrgLogic      U32  {0,1}
++    kInitCfgJerk,          // PAR_AxJerk          F64  {0}    (= speed[8] read-back)
++    kInitCfgInpEnable,     // CFG_AxInpEnable     U32  {1}
++    kInitCfgInpLogic,      // CFG_AxInpLogic      U32  {0}
++    kInitCfgAlmLogic,      // CFG_AxAlmLogic      U32  {0,1}
++    kInitCfgEzLogic,       // CFG_AxEzLogic       U32  {1}
++    kInitCfgErcLogic,      // CFG_AxErcLogic      U32  {1}
++    kInitCfgPulseInMode,   // CFG_AxPulseInMode   U32  {AB_4X, I_CW_CCW}
++    kInitCfgPulseOutMode,  // CFG_AxPulseOutMode  U32  {O_CW_CCW, OUT_DIR_ALL_NEG, OUT_DIR_DIR_NEG}
++    kInitCfgCount
++};
++/* The vendor's own property spelling, for the audit line. "?" when out of range. */
++const char* Pci1203InitCfgName(int which);
++/* PAR_AxJerk is the one F64 entry; everything else is U32. */
++bool Pci1203InitCfgIsF64(int which);
++/* Golden excuses Dsp_PropertyIDNotSupport on the U32 entries, not on PAR_AxJerk. */
++bool Pci1203InitCfgNotSupportedOk(int which);
++/* True when `value` is one golden InitMotor / SetEtherCatInType can write to `which`. */
++bool Pci1203InitCfgValueOk(int which, double value);
++
++/* golden's three MotorType arms (Servo_Motor / Rotate_Motor / anything else).
++   The caller maps the golden object's MotorType; this header must not include
++   the machine model to learn the constants. */
++enum { kInitCfgMotorServo = 0, kInitCfgMotorRotate = 1, kInitCfgMotorOther = 2 };
++struct Pci1203InitCfgStep { int which; double value; };
++/* golden InitMotor's configuration writes, IN GOLDEN ORDER (:219 .. :361), for one
++   axis: PPU, ElReact, AlmEnable, AlmReact, OrgLogic, Jerk, then SetEtherCatInType's
++   arm, then the pulse modes. `sensorType` = golden bSensorType, `in1Logic` =
++   golden bIn1Logic. Fills at most `max` steps and returns how many golden writes
++   (11..13, depending on the arm); 0 for an unknown motorClass. Pure. */
++int Pci1203GoldenInitCfgPlan(int motorClass, bool sensorType, bool in1Logic,
++                             Pci1203InitCfgStep* out, int max);
++
+ }  // namespace ht9045
+ 
+ #endif  // ETHERCAT_PCI1203CONTROL_H
+diff --git a/EtherCAT/Pci1203Monitor.cpp b/EtherCAT/Pci1203Monitor.cpp
+index 124bad9..4f762a7 100644
+--- a/EtherCAT/Pci1203Monitor.cpp
++++ b/EtherCAT/Pci1203Monitor.cpp
+@@ -129,7 +129,7 @@ struct TPci1203Monitor::Impl {
+     //  unsigned values, which is wrap-correct, rather than as `now > last + N`,
+     //  which is not.
+     unsigned long lastScanTick;
+-
++    unsigned long diBatchTick = 0; bool diBatchEverChecked = false; int diBatchFailRun = 0; std::vector<unsigned char> diBatchBuf; unsigned long diBatchReattach = 0; int torqueFocus = -1; unsigned long torqueFocusTick = 0; int torqueFocusStation = -1; int torqueFocusSub = -1; unsigned long torqueSdoPollSeen = ~0ul;   //AI(W906-MT-E3a) 20260925: when the last DI batch compare ran (GetTickCount, compared by unsigned subtraction -- wrap-correct), whether one has run since Open(), the batch calls failing in a row, the batch buffer, the re-attach count that verification belonged to (a re-attach re-verifies); and the torque focus axis + the tick of its last SetTorqueFocusAxis() (it expires kPci1203TorqueFocusMs later) + the station / sub-axis it named (a re-scan that renumbers the axes drops it) + the pollCount of the last focus SDO read (at most one per Poll). On the old blank line, so no line below moves
+ #if HAVE_PCI1203
+     //AI(W906-1203MON-8) 20260907: `dev` is now EITHER our own handle (owned)
+     // or a copy of production's uiDevhand (attached). `ownsDev` is the whole
+@@ -1019,7 +1019,7 @@ bool TPci1203Monitor::Open(unsigned maxAxes, unsigned diPorts, std::string& why,
+             }
+         }
+     }
+-
++    DiBatchOpen_();   //AI(W906-MT-E3a) 20260925: the DI map is known now (the attribution above), so this is the first of the two batch-vs-per-byte compares (r1 plan step 2): one per-byte pass + one Acm_DaqDiGetBytes, compared port by port. It can only ever leave the monitor in PER-BYTE mode -- batch needs a second full match in a later Poll(). No output hook here: Open() is not a Poll and the control layer refuses while the monitor is not open yet. On the old blank line, so no line below moves
+     g_openPhase     = "open";
+     impl_->opened   = true;
+     impl_->disabled = false;
+@@ -1777,7 +1777,7 @@ void TPci1203Monitor::OpenAxes_()
+                     //  another series would pass a vendor check and still have a
+                     //  different alarm list. The narrower test is the correct one.
+                     s.driveModel    = sv.name;
+-                    s.driveIsSigmaX = (sv.name.find("SGDX") != std::string::npos);
++                    s.driveIsSigmaX = (sv.name.find("SGDX") != std::string::npos);  s.driveIs402 = (sv.profileValid && sv.profile == 402);   //AI(W906-MT-E3a) 20260925: the CiA profile the module itself reported in the scan (1000h) -- the torque SDO fallback reads 6077h only from a 402 drive
+                     break;
+                 }
+             }
+@@ -1919,7 +1919,7 @@ void TPci1203Monitor::Close()
+     impl_->cardS.slavesFound   = 0;
+     impl_->cardS.scanTruncated = false;
+     impl_->cardS.slaveValid    = false;
+-    impl_->cardS.vendorCalls   = 0;
++    impl_->cardS.vendorCalls   = 0;  impl_->cardS.diBatchOk = false; impl_->cardS.diBatchMatches = 0; impl_->cardS.diBatchWhy = "card closed"; impl_->diBatchEverChecked = false; impl_->diBatchFailRun = 0; impl_->torqueFocus = -1; impl_->cardS.torqueFocusAxis = -1; impl_->cardS.torqueFocusWhy.clear();   //AI(W906-MT-E3a) 20260925: batch DI mode and the torque focus are properties of THIS open -- a re-open starts per-byte and unverified again. The counters (checks/mismatches/fails/SDO reads) are kept, like pollErrors
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -2184,7 +2184,7 @@ bool TPci1203Monitor::Poll()
+     }
+     struct SegClock_ { const long long& y; long long y0; LARGE_INTEGER f, t; explicit SegClock_(const long long& yq) : y(yq), y0(yq) { if (!::QueryPerformanceFrequency(&f)) f.QuadPart = 0; ::QueryPerformanceCounter(&t); } double Lap() { LARGE_INTEGER n; ::QueryPerformanceCounter(&n); const long long d = (long long)(n.QuadPart - t.QuadPart) - (y - y0); t = n; y0 = y; if (f.QuadPart <= 0 || d <= 0) return 0.0; return (double)(long long)(d * 100000.0 / (double)f.QuadPart + 0.5) / 100.0; } } segClock_(impl_->yieldQpc);   //AI(W906-LAT-1) 20260925: SEGMENT TIMING (batchinput report step 1: 「先量，不要先改」). Lap() = ms since the previous lap, minus the yield hook's time in between, to 0.01 ms. GetTickCount (pollMs) ticks at ~15.6 ms here, too coarse for a 5-40 ms segment, hence QueryPerformanceCounter. NOT a vendor call; the zero-scan re-sweep above is deliberately outside every segment. On the old blank line, so no line below moves
+     unsigned long calls = 0;
+-
++    PollDi_(calls, anySuccess, anyFailure);  const double segDiFirstMs_ = segClock_.Lap();   //AI(W906-MT-E3a) 20260925: ★ THE DI READ IS FIRST NOW (batchinput report step 4), before the station states and the axes: an input no longer waits behind ~40 station reads and ~114 axis reads. One Acm_DaqDiGetBytes when the batch read has been verified against the per-byte one, the old per-byte loop otherwise (moved verbatim into DiReadPerByte_; the old block below is a pointer). Output-first yields are unchanged: per-byte still yields between bytes, and the batch is one call. Its segment time is taken here and stored as pollDiMs as before. On the old blank line, so no line below moves
+     // --- EtherCAT ring: re-read the state of every DISCOVERED station -------
+     //AI(W906-1203MON-11) 20260907: this used to be a single hard-coded
+     // Acm_DevGetSlaveStates(dev, 0, 0, ...) with a comment explaining that
+@@ -2433,7 +2433,7 @@ bool TPci1203Monitor::Poll()
+                 s.driveErrText = (le == SUCCESS) ? std::string() : DecodeError(le);
+             }
+         }
+-
++        PollTorque_(i, calls);   //AI(W906-MT-E3a) 20260925: ACTUAL TORQUE -- one Acm_AxGetActTorque per axis (latched off after PDONotAssign), plus the ONE focus axis's 6077h by SDO; converted with this axis's cached 2704h / 6076h. Deliberately OUTSIDE the all-five block above, like Acm_GetLastError: an unmapped torque must never blank a good position. On the old blank line, so no line below moves
+         //AI(W906-IOWEB-P25) 20260925: ⚠ THE 5 s SWEEP IS GONE (and the 30 s one below). User 20260925:
+         //  「讀馬達參數 不是一開始讀一次就好了嗎? ... 輸出一定是要0延遲」 / 「馬達寫入完之後 才需要一直讀取
+         //  並且資料一致之後 就可以不用一直讀了」. Measured the same day: a click waited 460 / 694 ms exactly
+@@ -2799,7 +2799,7 @@ bool TPci1203Monitor::Poll()
+                     U16 code = 0;
+                     const U32 rs = Acm_DevReadSDOData(
+                         impl_->dev, 0, static_cast<U16>(s.station),
+-                        0x603F, 0, kEcatTypeU16, 2, &code);
++                        (U16)(0x603F + Pci1203GearAxisBase(s.stationAxis)), 0, kEcatTypeU16, 2, &code);   //AI(W906-MT-E3a) 20260925: + the axis-B window. This read had NO base, so the B half of a two-axis SGDXW showed axis A's alarm code, with SUCCESS (SIEPC71081205 p.615 s14.7.1: Error Code A:603Fh, B:683Fh) -- the same class of bug Pci1203GearAxisBase exists to prevent everywhere else in this file (r4 finding 6)
+                     ++calls;
+                     if (rs == SUCCESS) {
+                         s.driveAlarm      = code;
+@@ -2883,61 +2883,61 @@ bool TPci1203Monitor::Poll()
+     //  the ceiling can bite on a very large rack, and a re-attach re-scans the
+     //  ring WITHOUT re-reading the width (see the re-attach branch in Poll()),
+     //  so a shrunk ring would otherwise be polled at the old width.
+-    const std::size_t diUsable =
+-        impl_->cardS.diMaxChanValid
+-            ? (std::size_t)(impl_->cardS.diMaxChan / 8)
+-            : impl_->dis.size();
+-    {
+-        for (std::size_t i = 0; i < impl_->dis.size(); ++i) {
+-            if (i >= diUsable) continue;
+-            Pci1203DiSample& s = impl_->dis[i];
+-            //AI(W906-1203MON-21) 20260910: s.station / s.stationChan are set
+-            // ONCE in Open() from the IO map and must survive every poll. They
+-            // are deliberately NOT touched here -- an earlier draft of this
+-            // loop reset the whole sample and silently erased the attribution
+-            // on the first tick, which renders as "the map stopped working"
+-            // three tenths of a second after it started.
+-            s.port = static_cast<int>(i);
+-
+-            //AI(W906-1203RING-1) 20260922: same correction as the output side --
+-            //  read by (ring, station, port) when the map supplied one. See the
+-            //  note on the DO read for the measurement.
+-            //  ⚠ `flat`, `ring` and `addr` describe HOW THIS BYTE WAS READ and
+-            //  are what the page prints; they must follow the branch actually
+-            //  taken, not be set before it. Setting flat=true unconditionally
+-            //  above the call was safe while there was only one path, and would
+-            //  be a lie the moment a second one existed.
+-            UCHAR byteData = 0;
+-            U32 r;
+-            if (s.ring >= 0 && s.station > 0 && s.stationChan >= 0) {
+-                s.flat = false;
+-                s.addr = s.station;
+-                r = Acm_DaqDiGetByteEx(impl_->dev,
+-                                       static_cast<U16>(s.ring),
+-                                       static_cast<U16>(s.station),
+-                                       static_cast<U16>(s.stationChan),
+-                                       &byteData);
+-            } else {
+-                s.flat = true;
+-                s.ring = -1;      // not meaningful under flat addressing, and
+-                s.addr = -1;      // publishing 0 here would look like ring 0
+-                r = Acm_DaqDiGetByte(impl_->dev,
+-                                     static_cast<U16>(i), &byteData);
+-            }
+-            ++calls;
+-            if (r == SUCCESS) {
+-                s.valid     = true;
+-                s.byteData  = byteData;
+-                s.lastError = 0;
+-                anySuccess  = true;
+-            } else {
+-                s.valid     = false;
+-                s.lastError = r;
+-                anyFailure  = true;
+-            }  Yield_();   //AI(W906-IOWEB-P25) 20260925: outputs first, between two DI bytes (after the store, never between the read and its store)
+-        }
+-    }
+-    const double segDiMs_ = segClock_.Lap();   //AI(W906-LAT-1) 20260925: end of the DI segment, start of the DO read-back segment. On the old blank line
++    //AI(W906-MT-E3a) 20260925: ⚠ THE DI LOOP THAT WAS HERE HAS MOVED, AND IT
++    //  MOVED FORWARD: it now runs FIRST in Poll() (see PollDi_ at the top of the
++    //  pass, right after the handle re-validation and the zero-scan retry),
++    //  before the station states and the axes. Batchinput report step 4: an
++    //  input used to wait behind ~40 station reads and ~114 axis reads (~28 ms,
++    //  estimated) before it was even sampled.
++    //
++    //  The loop itself is DiReadPerByte_() at the end of this file, moved
++    //  VERBATIM -- same Ex/flat branch, same `flat`/`ring`/`addr` rule, same
++    //  "never touch station/stationChan" rule (MON-21), same Yield_() after the
++    //  store (P25). The diUsable clamp above is DiUsable_(), unchanged. The
++    //  history comments above stay here because this is where anyone who
++    //  remembers the old code will look for them.
++    //
++    //  What is NEW around it (PollDi_, r1 plan steps 2-3):
++    //    * batch mode: when Acm_DaqDiGetBytes has been VERIFIED against these
++    //      per-byte reads -- two consecutive full port-by-port matches, the
++    //      first in Open(), the second in a real Poll() at least
++    //      kPci1203DiBatchGapMs later -- one call fills every DI sample;
++    //    * a batch call that fails falls back to per-byte FOR THAT POLL and is
++    //      counted (card().diBatchFails); kPci1203DiBatchFailDrop in a row drop
++    //      batch mode until the next verification;
++    //    * every kPci1203DiBatchReverifyMs (~5 min) the poll reads per-byte
++    //      again and compares once; any differing byte drops back to per-byte
++    //      and says which port (card().diBatchWhy / diBatchMismatches).
++    //
++    //  ⚠ `flat`, `ring` and `addr` ARE NOT CHANGED BY A BATCH FILL, and that is
++    //  a deliberate exception to the RING-1 rule quoted in DiReadPerByte_
++    //  ("they must follow the branch actually taken"). Batch mode exists only
++    //  after the compare PROVED that batch byte i equals the byte read at this
++    //  sample's (ring, station, stationChan) -- so the attribution those fields
++    //  carry is still true of the value. Rewriting them to flat=true / ring=-1
++    //  would detach the ring from the byte, and the engine's DI route treats a
++    //  ring-less byte as matching ANY ring (EtherCAT/Pci1203IoRoute.cpp, the
++    //  `s.ring >= 0 && s.ring != ring` test): station 1 is a SERVOPACK on ring
++    //  0 AND a 32DO on ring 1 here, so a machine read of ring-1 station 1 could
++    //  land on the ring-0 drive's PDO byte. The published pci1203.di.mode says
++    //  which read produced the bytes; the per-port fields keep saying whose
++    //  they are.
++    //
++    //  ⚠ WHY THE BATCH IS NOT TRUSTED ON ITS OWN, said once more because it is
++    //  the whole design: no vendor example calls Acm_DaqDiGetBytes (measured,
++    //  batchinput report), the port numbering of a flat range is exactly what
++    //  CTL-29 found wrong once, and a wrong order is a PERMUTATION OF REAL
++    //  BYTES -- it looks like correct data. Two equal passes at different times
++    //  are what separate "same bytes" from "same bytes in the same places".
++    //  ⓘ Even then, the operator should still cover one sensor once and watch
++    //  the right lamp move (CTL-29's lesson): a compare between two software
++    //  paths cannot prove either path matches the wiring.
++    //
++    //  ⓘ Nothing has run on the card yet (EastSun ruling R3 20260925: write the
++    //  code now, measure later). Until the first on-machine run, the only
++    //  evidence for this design is tests/test_pci1203_pure.cpp -- which proves
++    //  the COMPARE, not the vendor call.
++    const double segDiMs_ = segDiFirstMs_;  segClock_.Lap();   //AI(W906-LAT-1) 20260925: end of the DI segment, start of the DO read-back segment. On the old blank line   //AI(W906-MT-E3a) 20260925: the DI segment is now measured where DI is read, at the start of Poll (segDiFirstMs_); this Lap() only restarts the clock for the DO segment (the stretch it closes is this comment, ~0 ms)
+     // --- digital outputs, READ-BACK ONLY -----------------------------------
+     //AI(W906-1203MON-18) 20260910: Acm_DaqDoGetByte reads what the card says it
+     //  is currently driving. The Set family stays absent and
+@@ -3324,3 +3324,597 @@ void TPci1203Monitor::CheckCfg_(int axis, unsigned groupsRead)
+ }
+ 
+ }  // namespace ht9045
++
++// =============================================================================
++//  AI(W906-MT-E3a) 20260925: BATCH DI READ + ACTUAL TORQUE.
++//
++//  EastSun ruling R3 20260925: "write all the code now (batch DI read with
++//  self-compare, torque read, whitelist additions) so it is ready; nothing is
++//  run on the card now". So, said plainly and once: NOTHING IN THIS BLOCK HAS
++//  RUN ON A CARD. The pure decisions (the compare, the unit conversion, the
++//  PDO/SDO agreement test) are unit-tested in tests/test_pci1203_pure.cpp; the
++//  vendor calls around them are not, and cannot be on a desk. The first
++//  on-machine run is what turns the design below into a measurement, and the
++//  tags it publishes (pci1203.di.mode / di.batchWhy, pci1203.axN.torqueSrc,
++//  pci1203.torque.sdoMs) are there so that run answers its own questions.
++//
++//  BATCH DI (batchinput report r1, plan steps 2-4)
++//    * the DI read is the FIRST thing a Poll() does now (PollDi_), before the
++//      station states and the axes;
++//    * Acm_DaqDiGetBytes(dev, 0, n, buf) reads the whole flat DI range in one
++//      call -- but it is used ONLY after it has matched the per-byte reads port
++//      by port twice in a row, the first compare in Open(), the second in a
++//      real Poll() at least kPci1203DiBatchGapMs later (two readings at two
++//      moments: an equal pass can be a permutation of equal bytes, CTL-29);
++//    * while it is in use it is re-compared once every kPci1203DiBatchReverifyMs
++//      (~5 min); a compare that differs anywhere drops back to per-byte at once
++//      and says which port (card().diBatchWhy / diBatchFirstMismatch);
++//    * a batch CALL that fails is counted, that poll reads per-byte instead,
++//      and kPci1203DiBatchFailDrop in a row drop batch mode;
++//    * after a compare that did not match, the next attempt waits
++//      kPci1203DiBatchRetryMs (30 s): one extra call per 30 s on a card whose
++//      batch read is genuinely wrong.
++//  ⚠ A mismatch is not proof the batch is wrong: an input that changes between
++//  the two reads of one compare also differs (and outputs are served between
++//  the per-byte reads). That lands on the SAFE side -- per-byte, the proven
++//  path -- and the retry picks batch mode back up once two compares agree.
++//
++//  ACTUAL TORQUE (torque report r4, plan steps 1-3; EastSun R6: actual torque
++//  in % next to Real Speed for the selected axis)
++//    * PDO: Acm_AxGetActTorque, one call per opened axis per Poll, OUTSIDE the
++//      all-five validity rule (an unmapped torque must not blank a position);
++//      latched off per axis after PDONotAssign (0x8000009F, a configuration
++//      fact -- not retried until the axes are re-opened) or after
++//      kPci1203TorquePdoFailLatch consecutive failures (retried once per 30 s);
++//    * SDO: 6077h (6877h for a two-axis unit's B half), ECAT_TYPE_I16, for ONE
++//      focus axis (SetTorqueFocusAxis, which expires by itself
++//      kPci1203TorqueFocusMs after its last call), at most one read per Poll,
++//      timed by QueryPerformanceCounter, Yield_() after it;
++//    * the SDO value wins when both exist (its unit is the object's own, [Trq.
++//      unit] per 2704h); the PDO value's unit is undocumented in the headers, so
++//      a PDO-only value counts as unit-verified only after
++//      kPci1203TorqueAgreeNeeded PDO/SDO pairs on that axis agreed;
++//    * % and N.m are computed ONLY for a value whose unit is known, from this
++//      axis's LIVE 2704h (gearVal[6]/[7]) and 6076h (encVal[2]); anything
++//      unknown is not valid and publishes null -- never 0.
++//  ⚠ WB_PUMP_1203_START_RING is OFF in this tree (MachineType.h). If ring 0 is
++//  not exchanging, a PDO torque can read SUCCESS and be frozen; the SDO read of
++//  the same object still answers live, and the agreement test is what keeps a
++//  frozen PDO value from being called verified.
++// =============================================================================
++namespace ht9045 {
++
++// ---- the pure parts: both build arms, no vendor header --------------------
++Pci1203DiBatchCheck Pci1203DiBatchCompare(const unsigned char* batch,
++                                          const unsigned char* perByte,
++                                          const bool* perByteValid, int n)
++{
++    Pci1203DiBatchCheck k;
++    k.ports         = (n > 0) ? n : 0;
++    k.unreadable    = 0;
++    k.mismatches    = 0;
++    k.firstMismatch = -1;
++    k.firstBatch    = -1;
++    k.firstPerByte  = -1;
++    k.full          = false;
++    if (n <= 0 || batch == 0 || perByte == 0 || perByteValid == 0) return k;
++    for (int i = 0; i < n; ++i) {
++        //  A port whose per-byte read failed has no reference value. It is not
++        //  a mismatch -- but it is not a match either, so it blocks `full`.
++        if (!perByteValid[i]) { ++k.unreadable; continue; }
++        if (batch[i] != perByte[i]) {
++            if (k.firstMismatch < 0) {
++                k.firstMismatch = i;
++                k.firstBatch    = (int)batch[i];
++                k.firstPerByte  = (int)perByte[i];
++            }
++            ++k.mismatches;
++        }
++    }
++    k.full = (k.unreadable == 0 && k.mismatches == 0);
++    return k;
++}
++
++bool Pci1203TorquePercent(long raw, unsigned long trqNum, unsigned long trqDen, double& pct)
++{
++    //  2704h:1 / 2704h:2 are 1..1073741823 (SIEPC71081205 s14.6.6); 0 in either
++    //  half is outside the range, i.e. "not read", never "zero torque".
++    if (trqNum == 0 || trqDen == 0) return false;
++    pct = (double)raw * (double)trqNum / (double)trqDen;
++    return true;
++}
++
++bool Pci1203TorqueNewtonMetre(double pct, unsigned long ratedMilliNm, double& nm)
++{
++    //  6076h Motor Rated Torque, mN.m (measured 320..9800 on this machine).
++    if (ratedMilliNm == 0) return false;
++    nm = pct / 100.0 * (double)ratedMilliNm / 1000.0;
++    return true;
++}
++
++int Pci1203TorqueCompare(long pdoRaw, long sdoRaw)
++{
++    //  In double: the PDO value is an I32 and the SDO one an I16, so their
++    //  difference does not fit a 32-bit long in the worst case.
++    const double p  = (double)pdoRaw;
++    const double s  = (double)sdoRaw;
++    const double ap = (p < 0.0) ? -p : p;
++    const double as = (s < 0.0) ? -s : s;
++    if (ap < (double)kPci1203TorqueMinCompare && as < (double)kPci1203TorqueMinCompare)
++        return 0;                           // an idle axis: says nothing about the scale
++    const double d   = p - s;
++    const double ad  = (d < 0.0) ? -d : d;
++    const double big = (ap > as) ? ap : as;
++    return (ad <= 0.10 * big + 2.0) ? 1 : -1;
++}
++
++// ---- DI -------------------------------------------------------------------
++//  The diUsable clamp that sat right above the DI loop in Poll(), verbatim --
++//  see the CTL-26 / CTL-33 notes left at its old place for why it exists.
++std::size_t TPci1203Monitor::DiUsable_() const
++{
++    return impl_->cardS.diMaxChanValid
++               ? (std::size_t)(impl_->cardS.diMaxChan / 8)
++               : impl_->dis.size();
++}
++
++//  The per-byte DI loop, MOVED VERBATIM from Poll() (its history comments
++//  stayed there). Only two things differ, both parameters: the clamp arrives as
++//  `diUsable`, and the P25 output-first Yield_() is skipped when `yield` is
++//  false -- the Open()-time compare, where there is no Poll to yield from.
++void TPci1203Monitor::DiReadPerByte_(std::size_t diUsable, bool yield, unsigned long& calls,
++                                     bool& anySuccess, bool& anyFailure)
++{
++#if HAVE_PCI1203
++    {
++        for (std::size_t i = 0; i < impl_->dis.size(); ++i) {
++            if (i >= diUsable) continue;
++            Pci1203DiSample& s = impl_->dis[i];
++            //AI(W906-1203MON-21) 20260910: s.station / s.stationChan are set
++            // ONCE in Open() from the IO map and must survive every poll. They
++            // are deliberately NOT touched here -- an earlier draft of this
++            // loop reset the whole sample and silently erased the attribution
++            // on the first tick, which renders as "the map stopped working"
++            // three tenths of a second after it started.
++            s.port = static_cast<int>(i);
++
++            //AI(W906-1203RING-1) 20260922: same correction as the output side --
++            //  read by (ring, station, port) when the map supplied one. See the
++            //  note on the DO read for the measurement.
++            //  ⚠ `flat`, `ring` and `addr` describe HOW THIS BYTE WAS READ and
++            //  are what the page prints; they must follow the branch actually
++            //  taken, not be set before it. Setting flat=true unconditionally
++            //  above the call was safe while there was only one path, and would
++            //  be a lie the moment a second one existed.
++            UCHAR byteData = 0;
++            U32 r;
++            if (s.ring >= 0 && s.station > 0 && s.stationChan >= 0) {
++                s.flat = false;
++                s.addr = s.station;
++                r = Acm_DaqDiGetByteEx(impl_->dev,
++                                       static_cast<U16>(s.ring),
++                                       static_cast<U16>(s.station),
++                                       static_cast<U16>(s.stationChan),
++                                       &byteData);
++            } else {
++                s.flat = true;
++                s.ring = -1;      // not meaningful under flat addressing, and
++                s.addr = -1;      // publishing 0 here would look like ring 0
++                r = Acm_DaqDiGetByte(impl_->dev,
++                                     static_cast<U16>(i), &byteData);
++            }
++            ++calls;
++            if (r == SUCCESS) {
++                s.valid     = true;
++                s.byteData  = byteData;
++                s.lastError = 0;
++                anySuccess  = true;
++            } else {
++                s.valid     = false;
++                s.lastError = r;
++                anyFailure  = true;
++            }  if (yield) Yield_();   //AI(W906-IOWEB-P25) 20260925: outputs first, between two DI bytes (after the store, never between the read and its store)
++        }
++    }
++#else
++    (void)diUsable; (void)yield; (void)calls; (void)anySuccess; (void)anyFailure;
++#endif
++}
++
++//  ONE compare: the per-byte read (the reference, and this poll's DI data),
++//  then one Acm_DaqDiGetBytes over the same n ports, then Pci1203DiBatchCompare.
++//  It is the ONLY place batch mode can be switched on, and it switches it on
++//  only on the second consecutive full match.
++void TPci1203Monitor::DiBatchVerify_(std::size_t n, bool inPoll, unsigned long& calls,
++                                     bool& anySuccess, bool& anyFailure)
++{
++#if HAVE_PCI1203
++    if (n == 0) return;                 // callers never pass 0; &buf[0] below needs n > 0
++    Pci1203CardSample& c = impl_->cardS;
++    impl_->diBatchTick        = (unsigned long)::GetTickCount();
++    impl_->diBatchEverChecked = true;
++    impl_->diBatchReattach    = c.reattaches;
++    const bool wasBatch = c.diBatchOk;
++
++    //  (1) the reference. Yields between bytes inside a Poll (P25), so the
++    //      outputs are not held back by a compare.
++    DiReadPerByte_(n, inPoll, calls, anySuccess, anyFailure);
++    //  n <= dis.size() <= kPci1203MaxDiPorts (Open() clamps); bounded again
++    //  here only because the two arrays below are sized by that ceiling.
++    if (n > (std::size_t)kPci1203MaxDiPorts) n = (std::size_t)kPci1203MaxDiPorts;
++    unsigned char per[kPci1203MaxDiPorts];
++    bool          ok[kPci1203MaxDiPorts];
++    for (std::size_t i = 0; i < n; ++i) {
++        per[i] = impl_->dis[i].byteData;
++        ok[i]  = impl_->dis[i].valid;
++    }
++
++    //  (2) the candidate: the whole flat range, ports 0..n-1, in one call.
++    impl_->diBatchBuf.assign(n, 0);
++    const U32 r = Acm_DaqDiGetBytes(impl_->dev, 0, static_cast<U16>(n),
++                                    &impl_->diBatchBuf[0]);
++    ++calls;
++    ++c.diBatchChecks;
++    char b[320];
++    if (r != SUCCESS) {
++        ++c.diBatchFails;
++        c.diBatchLastErr = r;
++        c.diBatchOk      = false;
++        c.diBatchMatches = 0;
++        anyFailure       = true;
++        std::snprintf(b, sizeof(b),
++                      "per-byte: Acm_DaqDiGetBytes(port 0, %u ports) returned 0x%08lX (%s); "
++                      "retried in %d s%s",
++                      (unsigned)n, (unsigned long)r, DecodeError(r).c_str(),
++                      (int)(kPci1203DiBatchRetryMs / 1000),
++                      wasBatch ? " -- batch mode DROPPED" : "");
++        c.diBatchWhy = b;
++        if (inPoll) Yield_();
++        return;
++    }
++
++    //  (3) port by port.
++    const Pci1203DiBatchCheck k =
++        Pci1203DiBatchCompare(&impl_->diBatchBuf[0], per, ok, (int)n);
++    if (k.mismatches > 0) {
++        ++c.diBatchMismatches;
++        c.diBatchMismatchPorts = k.mismatches;
++        c.diBatchFirstMismatch = k.firstMismatch;
++    }
++    if (k.full) {
++        ++c.diBatchMatches;
++        if (c.diBatchMatches >= 2) {
++            c.diBatchOk          = true;
++            impl_->diBatchFailRun = 0;
++            std::snprintf(b, sizeof(b),
++                          "batch: one Acm_DaqDiGetBytes for %u ports, after %d consecutive "
++                          "port-by-port matches with the per-byte read; re-compared every %d s",
++                          (unsigned)n, c.diBatchMatches,
++                          (int)(kPci1203DiBatchReverifyMs / 1000));
++        } else {
++            std::snprintf(b, sizeof(b),
++                          "per-byte: 1 of the 2 matching compares so far (%u ports); "
++                          "the second runs >= %d ms later",
++                          (unsigned)n, (int)kPci1203DiBatchGapMs);
++        }
++    } else {
++        c.diBatchOk      = false;
++        c.diBatchMatches = 0;
++        if (k.mismatches > 0) {
++            std::snprintf(b, sizeof(b),
++                          "per-byte: %d of %d ports differ between the batch and the per-byte "
++                          "read (first: port %d, batch 0x%02X, per-byte 0x%02X) -- an input that "
++                          "changed between the two reads looks the same; retried in %d s%s",
++                          k.mismatches, k.ports, k.firstMismatch,
++                          (unsigned)k.firstBatch, (unsigned)k.firstPerByte,
++                          (int)(kPci1203DiBatchRetryMs / 1000),
++                          wasBatch ? " -- batch mode DROPPED" : "");
++        } else {
++            std::snprintf(b, sizeof(b),
++                          "per-byte: %d of %d ports could not be read per byte, so the batch "
++                          "read cannot be checked against them; retried in %d s%s",
++                          k.unreadable, k.ports, (int)(kPci1203DiBatchRetryMs / 1000),
++                          wasBatch ? " -- batch mode DROPPED" : "");
++        }
++    }
++    c.diBatchWhy = b;
++    if (inPoll) Yield_();
++#else
++    (void)n; (void)inPoll; (void)calls; (void)anySuccess; (void)anyFailure;
++#endif
++}
++
++//  The first compare, at the end of Open(): the DI map is known by then. It can
++//  only ever leave the monitor per-byte (one match of the two needed).
++void TPci1203Monitor::DiBatchOpen_()
++{
++#if HAVE_PCI1203
++    Pci1203CardSample& c = impl_->cardS;
++    c.diBatchOk            = false;
++    c.diBatchMatches       = 0;
++    impl_->diBatchFailRun  = 0;
++    impl_->diBatchReattach = c.reattaches;
++    std::size_t n = DiUsable_();
++    if (n > impl_->dis.size()) n = impl_->dis.size();
++    if (n == 0) {
++        impl_->diBatchEverChecked = true;
++        impl_->diBatchTick        = (unsigned long)::GetTickCount();
++        c.diBatchWhy = "per-byte: the card reports no DI ports, so there is nothing to read in one call";
++        std::printf("  DI batch: %s\n", c.diBatchWhy.c_str());
++        return;
++    }
++    g_openPhase = "comparing the one-call DI read with the per-byte DI read";
++    unsigned long calls = 0;
++    bool anyS = false, anyF = false;
++    DiBatchVerify_(n, false, calls, anyS, anyF);
++    std::printf("  DI batch: %s\n", c.diBatchWhy.c_str());
++#endif
++}
++
++//  The DI read, FIRST in every Poll(). See the block banner above.
++void TPci1203Monitor::PollDi_(unsigned long& calls, bool& anySuccess, bool& anyFailure)
++{
++#if HAVE_PCI1203
++    Pci1203CardSample& c = impl_->cardS;
++    std::size_t n = DiUsable_();
++    if (n > impl_->dis.size()) n = impl_->dis.size();
++    if (n == 0) return;                 // the old loop made zero iterations here too
++
++    //  Production re-opened the card underneath us (Poll's re-attach branch):
++    //  the verification belonged to the previous handle, so it is redone.
++    if (c.reattaches != impl_->diBatchReattach) {
++        impl_->diBatchReattach = c.reattaches;
++        if (c.diBatchOk || c.diBatchMatches > 0) {
++            c.diBatchOk      = false;
++            c.diBatchMatches = 0;
++            c.diBatchWhy     = "per-byte: production re-opened the card (re-attach); "
++                               "the one-call read is compared again from the start";
++        }
++        impl_->diBatchEverChecked = false;
++    }
++
++    const unsigned long now   = (unsigned long)::GetTickCount();
++    const unsigned long since = now - impl_->diBatchTick;     // wrap-correct
++
++    if (c.diBatchOk) {
++        if (since >= (unsigned long)kPci1203DiBatchReverifyMs) {
++            DiBatchVerify_(n, true, calls, anySuccess, anyFailure);
++            return;
++        }
++        impl_->diBatchBuf.resize(n);
++        const U32 r = Acm_DaqDiGetBytes(impl_->dev, 0, static_cast<U16>(n),
++                                        &impl_->diBatchBuf[0]);
++        ++calls;
++        if (r == SUCCESS) {
++            //  ⚠ flat / ring / addr are NOT rewritten -- see the note at the DI
++            //  block's old place in Poll(): the compare proved byte i IS the
++            //  byte at this sample's attribution, and the engine's DI route
++            //  keys on the ring.
++            for (std::size_t i = 0; i < n; ++i) {
++                Pci1203DiSample& s = impl_->dis[i];
++                s.port      = static_cast<int>(i);
++                s.valid     = true;
++                s.byteData  = impl_->diBatchBuf[i];
++                s.lastError = 0;
++            }
++            anySuccess            = true;
++            impl_->diBatchFailRun = 0;
++            Yield_();                   // after the store, like every other read here
++            return;
++        }
++        //  A failed batch call: counted, and this poll still gets its inputs.
++        ++c.diBatchFails;
++        c.diBatchLastErr = r;
++        anyFailure       = true;
++        if (++impl_->diBatchFailRun >= (int)kPci1203DiBatchFailDrop) {
++            c.diBatchOk        = false;
++            c.diBatchMatches   = 0;
++            impl_->diBatchTick = now;   // the retry waits kPci1203DiBatchRetryMs
++            char b[256];
++            std::snprintf(b, sizeof(b),
++                          "per-byte: %d one-call DI reads failed in a row (last 0x%08lX, %s); "
++                          "compared again in %d s",
++                          impl_->diBatchFailRun, (unsigned long)r, DecodeError(r).c_str(),
++                          (int)(kPci1203DiBatchRetryMs / 1000));
++            c.diBatchWhy = b;
++        }
++        DiReadPerByte_(n, true, calls, anySuccess, anyFailure);
++        return;
++    }
++
++    //  Per-byte mode. A compare costs ONE extra call here, because the compare's
++    //  own per-byte half is this poll's DI read.
++    const bool due =
++        !impl_->diBatchEverChecked ||
++        (c.diBatchMatches >= 1 && since >= (unsigned long)kPci1203DiBatchGapMs) ||
++        (c.diBatchMatches == 0 && since >= (unsigned long)kPci1203DiBatchRetryMs);
++    if (due) DiBatchVerify_(n, true, calls, anySuccess, anyFailure);
++    else     DiReadPerByte_(n, true, calls, anySuccess, anyFailure);
++#else
++    (void)calls; (void)anySuccess; (void)anyFailure;
++#endif
++}
++
++// ---- torque ---------------------------------------------------------------
++//  PDONotAssign, AdvMotErr.h:209 = FuncError (0x80000000) + 159. Spelled out
++//  like kEcSubDeviceIdConflicted above: the VALUE is what the driver returns.
++//  Its text in ADVMOT.dll is "Function PDO did not assign." (torque report r4).
++namespace { const unsigned long kPdoNotAssign = 0x8000009FuL; }
++
++void TPci1203Monitor::SetTorqueFocusAxis(int axis)
++{
++    if (!impl_) return;
++    Pci1203CardSample& c = impl_->cardS;
++    if (axis < 0) {
++        impl_->torqueFocus = -1;
++        c.torqueFocusAxis  = -1;
++        c.torqueFocusWhy.clear();
++        return;
++    }
++    //  Every refusal is a case where the read would answer for the WRONG drive
++    //  or for no drive: the same rules the station-keyed writes in
++    //  Pci1203Control follow (stationAmbiguous, sub-axis, station), plus the
++    //  object's own precondition -- 6077h is a CiA 402 object.
++    const char* why = 0;
++    if ((std::size_t)axis >= impl_->axes.size() || !impl_->axes[(std::size_t)axis].opened) {
++        why = "no open axis handle in that slot";
++    } else {
++        const Pci1203AxisSample& s = impl_->axes[(std::size_t)axis];
++        if (s.station < 0)
++            why = "the axis has no known station, and 6077h is read from a station";
++        else if (s.stationAmbiguous)
++            why = "the axis's station number is shared with another drive -- the SDO read "
++                  "would be answered by the twin (stationAmbiguous)";
++        else if (s.stationAxis != 0 && s.stationAxis != 1)
++            why = "the sub-axis is unknown, so 6077h (axis A) and 6877h (axis B) cannot be told apart";
++        else if (!s.driveIs402)
++            why = "the station did not report CiA profile 402 (CoE 1000h), so 6077h is not a "
++                  "known object on it";
++    }
++    if (why) {
++        char b[224];
++        std::snprintf(b, sizeof(b), "ax%d: %s", axis, why);
++        impl_->torqueFocus = -1;
++        c.torqueFocusAxis  = -1;
++        c.torqueFocusWhy   = b;
++        return;
++    }
++    const Pci1203AxisSample& s = impl_->axes[(std::size_t)axis];
++    impl_->torqueFocus        = axis;
++    impl_->torqueFocusTick    = (unsigned long)::GetTickCount();
++    impl_->torqueFocusStation = s.station;
++    impl_->torqueFocusSub     = s.stationAxis;
++    c.torqueFocusAxis = axis;
++    c.torqueFocusWhy.clear();
++}
++
++void TPci1203Monitor::PollTorque_(std::size_t i, unsigned long& calls)
++{
++#if HAVE_PCI1203
++    if (i >= impl_->axes.size() || i >= impl_->axHandles.size()) return;
++    Pci1203AxisSample& s = impl_->axes[i];
++    Pci1203CardSample& c = impl_->cardS;
++    const HAND ax = impl_->axHandles[i];
++
++    //  This poll's answer starts unknown -- a value not read THIS poll is not
++    //  republished as if it were (null, never a stale number).
++    s.torqueValid        = false;
++    s.torqueSrc          = 0;
++    s.torqueUnitVerified = false;
++    s.torquePctValid     = false;
++    s.torqueNmValid      = false;
++    s.torquePdoValid     = false;
++    s.torqueSdoValid     = false;
++
++    //  The focus expires by itself, checked on every polled axis so it also
++    //  expires when the focus axis's own slot is not polled.
++    if (impl_->torqueFocus >= 0 &&
++        ((unsigned long)::GetTickCount() - impl_->torqueFocusTick) >=
++            (unsigned long)kPci1203TorqueFocusMs) {
++        impl_->torqueFocus = -1;
++        c.torqueFocusAxis  = -1;
++    }
++
++    //  (1) PDO -- the cyclic image, every poll, unless latched off.
++    if (s.torquePdoOff && !s.torquePdoOffPerm && impl_->cfgRetryDue) {
++        s.torquePdoOff   = false;                           // one retry per 30 s:
++        s.torquePdoFails = (int)kPci1203TorquePdoFailLatch - 1;   // one failure re-latches
++    }
++    if (!s.torquePdoOff && ax != 0) {
++        I32 t = 0;
++        const U32 r = Acm_AxGetActTorque(ax, &t);
++        ++calls;
++        if (r == SUCCESS) {
++            s.torquePdoValid = true;
++            s.torquePdoRaw   = (long)t;
++            s.torquePdoFails = 0;
++            s.torqueErr      = 0;
++        } else {
++            s.torqueErr = r;
++            if ((unsigned long)r == kPdoNotAssign) {
++                s.torquePdoOff     = true;              // a configuration fact:
++                s.torquePdoOffPerm = true;              // not retried until re-open
++            } else if (++s.torquePdoFails >= (int)kPci1203TorquePdoFailLatch) {
++                s.torquePdoOff = true;
++            }
++        }
++    }
++
++    //  (2) SDO -- the ONE focus axis, at most one mailbox read per Poll.
++    if (impl_->torqueFocus == (int)i && impl_->torqueSdoPollSeen != c.pollCount) {
++        //  Re-checked here, not only in SetTorqueFocusAxis(): a re-scan or a
++        //  re-attach re-opens the axes and can put another motor in this slot.
++        if (s.station < 0 || s.station != impl_->torqueFocusStation ||
++            s.stationAxis != impl_->torqueFocusSub || s.stationAmbiguous || !s.driveIs402) {
++            char b[160];
++            std::snprintf(b, sizeof(b),
++                          "ax%d: the axis map changed since the focus was set (re-scan or "
++                          "re-attach) -- ask again", (int)i);
++            impl_->torqueFocus = -1;
++            c.torqueFocusAxis  = -1;
++            c.torqueFocusWhy   = b;
++        } else {
++            impl_->torqueSdoPollSeen = c.pollCount;
++            I16 v = 0;
++            LARGE_INTEGER f, q0, q1;
++            const bool haveQpf = ::QueryPerformanceFrequency(&f) != 0;
++            ::QueryPerformanceCounter(&q0);
++            const U32 rs = Acm_DevReadSDOData(
++                impl_->dev, 0, static_cast<U16>(s.station),
++                (U16)(0x6077 + Pci1203GearAxisBase(s.stationAxis)), 0,
++                3 /*ECAT_TYPE_I16*/, 2, &v);
++            ::QueryPerformanceCounter(&q1);
++            ++calls;
++            ++c.torqueSdoReads;
++            const double ms = (haveQpf && f.QuadPart > 0)
++                ? (double)(q1.QuadPart - q0.QuadPart) * 1000.0 / (double)f.QuadPart : 0.0;
++            s.torqueSdoMs = ms;
++            c.torqueSdoMs = ms;
++            if (ms > c.torqueSdoMaxMs) c.torqueSdoMaxMs = ms;
++            if (rs == SUCCESS) {
++                s.torqueSdoValid = true;
++                s.torqueSdoRaw   = (long)v;
++                s.torqueSdoErr   = 0;
++            } else {
++                s.torqueSdoErr = rs;
++                ++c.torqueSdoErrors;
++            }
++            Yield_();   // outputs first (IOWEB-P25): after the store of a mailbox read, never between the read and its store
++        }
++    }
++
++    //  (3) what unit is the PDO value in? Only a PDO/SDO pair of the same poll
++    //      can say, and only when the axis is loaded enough to tell scales apart.
++    if (s.torquePdoValid && s.torqueSdoValid) {
++        const int cmp = Pci1203TorqueCompare(s.torquePdoRaw, s.torqueSdoRaw);
++        if (cmp > 0) {
++            if (s.torqueAgree < (int)kPci1203TorqueAgreeNeeded) ++s.torqueAgree;
++            if (s.torqueAgree >= (int)kPci1203TorqueAgreeNeeded) s.torquePdoUnitOk = true;
++        } else if (cmp < 0) {
++            s.torqueAgree     = 0;              // one disagreement revokes it
++            s.torquePdoUnitOk = false;
++        }
++    }
++
++    //  (4) which value is published. SDO first: its unit is the object's own.
++    if (s.torqueSdoValid) {
++        s.torqueValid = true;  s.torqueRaw = s.torqueSdoRaw;  s.torqueSrc = 2;
++        s.torqueUnitVerified = true;
++    } else if (s.torquePdoValid) {
++        s.torqueValid = true;  s.torqueRaw = s.torquePdoRaw;  s.torqueSrc = 1;
++        s.torqueUnitVerified = s.torquePdoUnitOk;
++    }
++
++    //  (5) % and N.m -- ONLY for a value whose unit is known, from this axis's
++    //      live 2704h and 6076h. A raw value of unknown scale stays raw.
++    if (s.torqueValid && s.torqueUnitVerified && s.gearValid[6] && s.gearValid[7])
++        s.torquePctValid = Pci1203TorquePercent(s.torqueRaw, s.gearVal[6], s.gearVal[7],
++                                                s.torquePct);
++    if (s.torquePctValid && s.encValid[2])
++        s.torqueNmValid = Pci1203TorqueNewtonMetre(s.torquePct, s.encVal[2], s.torqueNm);
++#else
++    (void)i; (void)calls;
++#endif
++}
++
++}  // namespace ht9045
+diff --git a/EtherCAT/Pci1203Monitor.h b/EtherCAT/Pci1203Monitor.h
+index cc0bb51..04915bd 100644
+--- a/EtherCAT/Pci1203Monitor.h
++++ b/EtherCAT/Pci1203Monitor.h
+@@ -196,11 +196,11 @@
+ //  the gate's regex family still catches it. Reading back what the outputs are
+ //  currently driving is exactly what an operator panel must show, and it is the
+ //  only way to tell "the coil is off" from "nobody looked".
+-//
++//  AI(W906-MT-E3a) 20260925: TWO MORE, BOTH READS (EastSun ruling R3 20260925: "write the code now, measure on the machine later" -- nothing here has run on the card yet). ●Acm_DaqDiGetBytes  digital INPUT bytes, a FLAT RANGE of ports in ONE call (read) -- trusted only after Open()/Poll() have compared it port by port with the per-byte reads above: two consecutive full matches at least one poll apart before it is used, one re-compare every ~5 min after, and any mismatch drops back to per-byte (Pci1203DiBatchCompare, pure, unit-tested). Why so careful: no vendor example uses it, and CTL-29 showed that a wrong port order is a PERMUTATION of real bytes and looks exactly like correct data. ●Acm_AxGetActTorque  actual torque from the cyclic image (read) -- outside the all-five axis validity rule, and latched off per axis after PDONotAssign 0x8000009F (or 3 consecutive failures), because this ring's auto-generated PDO map may not carry 6077h at all (unmeasured, no ENI on this machine). ⚠ Their mutating twins -- the DO byte-ARRAY setter and the torque MOVE -- stay out: they are named in the DELIBERATELY ABSENT list just below (named THERE and not here, because this block is what the gate reads as permission), and the gate's regex refuses both anyway (Set / Move). ⓘ The torque SDO fallback -- 6077h / 6877h, ONE focus axis (SetTorqueFocusAxis, expires ~3 s after the last call), at most one read per Poll -- reuses Acm_DevReadSDOData, already on this list. On the old blank comment line, so no line below moves
+ //  ⚠ WHAT IS DELIBERATELY ABSENT, and must stay absent:
+-//      Acm_AxMoveAbs / MoveRel / MoveVel / AxJog / AxMoveHome / AxHome
++//      Acm_AxMoveAbs / MoveRel / MoveVel / AxJog / AxMoveHome / AxHome / AxMoveTorque   [AI(W906-MT-E3a) 20260925: + the torque move, twin of Acm_AxGetActTorque]
+ //      Acm_AxSetSvOn / AxSetCmdPosition / AxSetActualPosition / AxStopEmg
+-//      Acm_DaqDoSetBit* / DaqDoSetByte* / DaqAoSetCurrDataEx
++//      Acm_DaqDoSetBit* / DaqDoSetByte* / DaqDoSetBytes / DaqAoSetCurrDataEx   [AI(W906-MT-E3a) 20260925: + the byte-array setter, twin of Acm_DaqDiGetBytes]
+ //      Acm_Set*Property (any)   / Acm_DevWriteSDOData
+ //  A monitor that can command motion is not a monitor. If a future wave needs
+ //  any of those, it does NOT belong in this file -- add it where the machine's
+@@ -1038,7 +1038,7 @@ struct Pci1203AxisSample {
+     long           driveHomeMethod;     // 6098h, -1 until read
+     bool           driveHomeMethodValid;
+     unsigned long  lastError;   // first non-SUCCESS return this poll, else 0
+-
++    bool torqueValid = false; long torqueRaw = 0; int torqueSrc = 0; bool torqueUnitVerified = false; bool torquePctValid = false; double torquePct = 0.0; bool torqueNmValid = false; double torqueNm = 0.0; unsigned long torqueErr = 0; bool torquePdoValid = false; long torquePdoRaw = 0; bool torquePdoOff = false; bool torquePdoOffPerm = false; int torquePdoFails = 0; bool torquePdoUnitOk = false; int torqueAgree = 0; bool torqueSdoValid = false; long torqueSdoRaw = 0; unsigned long torqueSdoErr = 0; double torqueSdoMs = 0.0; bool driveIs402 = false;   //AI(W906-MT-E3a) 20260925: ACTUAL TORQUE (r4 plan steps 1-3; EastSun R3/R6 20260925). torqueRaw is in the drive's [Trq.unit] (6077h / 6877h); torqueSrc 0 = none, 1 = PDO (Acm_AxGetActTorque, every poll), 2 = SDO (6077h + Pci1203GearAxisBase, the focus axis only -- SDO wins when both were read this poll, because its unit is the object's own). torquePct = raw x 2704h num/den (the LIVE gearVal[6]/[7]), torqueNm = pct/100 x 6076h (encVal[2], mN.m)/1000 -- each with its own valid flag: an axis whose unit or rated torque was not read publishes null, never 0 -- and so does a PDO value whose unit is not verified yet (the raw number is still published, as torqueRaw with torqueUnitVerified=false). torqueUnitVerified = the unit of THIS value is known: always for SDO, for PDO only after torquePdoUnitOk (3 PDO/SDO pairs on the focus axis agreed, Pci1203TorqueCompare) -- the headers do not say what unit Acm_AxGetActTorque returns. torquePdoOff = the PDO read is latched off (torquePdoOffPerm: PDONotAssign 0x8000009F, a configuration fact, not retried until the axes are re-opened; otherwise after 3 consecutive failures, retried on the 30 s window). driveIs402 = the owning station answered CoE 1000h with profile 402 (joined in OpenAxes_); the SDO fallback refuses anything else. ⚠ NONE of these feed `valid` or `lastError`: an unmapped torque must not blank a good position. Default member initialisers so the constructor below is untouched. On the old blank line, so no line below moves
+     Pci1203AxisSample()
+         : valid(false), opened(false), byId(false)
+         , station(-1), stationAlias(-1), stationAxis(-1), poolIndex(-1)
+@@ -1328,7 +1328,7 @@ struct Pci1203CardSample {
+     //  fact about the hardware worth seeing before it turns into a failure.
+     int           openWaitSec;
+     int           openAttempts;
+-
++    bool diBatchOk = false; int diBatchMatches = 0; unsigned long diBatchChecks = 0; unsigned long diBatchMismatches = 0; int diBatchMismatchPorts = 0; int diBatchFirstMismatch = -1; unsigned long diBatchFails = 0; unsigned long diBatchLastErr = 0; std::string diBatchWhy; int torqueFocusAxis = -1; std::string torqueFocusWhy; unsigned long torqueSdoReads = 0; unsigned long torqueSdoErrors = 0; double torqueSdoMs = 0.0; double torqueSdoMaxMs = 0.0;   //AI(W906-MT-E3a) 20260925: BATCH DI (r1 plan steps 2-4) and the torque SDO focus, both PUBLISHED so the mode in force is on screen, never inferred. diBatchOk = Poll() reads the whole DI range with ONE Acm_DaqDiGetBytes -- true only after diBatchMatches reached 2 consecutive full port-by-port matches against the per-byte reads (the first in Open(), the second at least kPci1203DiBatchGapMs later in a real Poll()), re-checked every kPci1203DiBatchReverifyMs; diBatchChecks = compares run; diBatchMismatches = compares that found a differing byte (diBatchMismatchPorts / diBatchFirstMismatch = the last one's count and first port); diBatchFails = batch calls that returned an error (each falls back to per-byte for that poll; 3 in a row drop batch mode); diBatchWhy = the reason for the current mode, in words. torqueFocusAxis = the axis whose 6077h is being read by SDO right now (-1 none); torqueFocusWhy = why a requested focus is refused (ambiguous station, not CiA 402, no station); torqueSdoMs / torqueSdoMaxMs = the last / worst SDO read, by QueryPerformanceCounter, without the output hook's time. Default member initialisers so the constructor below is untouched. On the old blank line, so no line below moves
+     Pci1203CardSample()
+         : linked(false), enumerated(false), open(false)
+         , mode(Pci1203ModeNone), reattaches(0), detaches(0), devCount(0)
+@@ -1424,7 +1424,7 @@ public:
+     bool Open_() const;   // do we hold a device handle
+     bool Disabled() const;
+     const std::string& disabledReason() const;
+-
++    void SetTorqueFocusAxis(int axis);   //AI(W906-MT-E3a) 20260925: ask for axis `axis`'s torque by SDO (6077h, or 6877h for a two-axis unit's B half) -- the ONE axis a page is looking at, at most one mailbox read per Poll. It EXPIRES BY ITSELF kPci1203TorqueFocusMs after the last call, so a page that closes without saying so stops the traffic within 3 s; call it again on every refresh to keep it. axis < 0 clears it. Refused (card().torqueFocusWhy says why, nothing is read) for an axis with no open handle, no station, an ambiguous station or a station that is not CiA 402. NOT a vendor call: it sets two numbers the next Poll() reads. On the old blank line, so no line below moves
+     // One observation pass. False if not open, disabled, or every read failed.
+     bool Poll();
+     void SetYieldHook(void (*hook)());   enum { kCfgSpeed = 1u, kCfgLimit = 2u, kCfgHome = 4u, kCfgGear = 8u, kCfgDrive = 16u, kCfgAll = 31u };   enum { kExpSpeed = 0, kExpLimit, kExpHome, kExpGear, kExpEnc, kExpDriveDir, kExpDriveHome };   //AI(W906-IOWEB-P25) 20260925: OUTPUT FIRST (user 20260925: 「輸出一定要第一優先發出去」). The hook is called ONLY at iteration boundaries inside Poll() (each station / axis / DI byte / DO byte, and between two SDO reads); wb_serve installs one that runs queued OUTPUT commands there. The hook is the caller's code: this TU still makes no write call and the read-only gate still proves it. kCfg* = configuration read groups, kExp* = what a written value is compared with (see ExpectCfg_). On the old blank line, so no line below moves
+@@ -1499,7 +1499,7 @@ private:
+     //  ⚠ NOT a vendor call, like axisHandle_ above. The read-only property of
+     //  this TU is unchanged and the gate still proves it.
+     std::size_t devHandle_() const;
+-
++    void PollDi_(unsigned long& calls, bool& anySuccess, bool& anyFailure);  void DiReadPerByte_(std::size_t n, bool yield, unsigned long& calls, bool& anySuccess, bool& anyFailure);  void DiBatchVerify_(std::size_t n, bool inPoll, unsigned long& calls, bool& anySuccess, bool& anyFailure);  void DiBatchOpen_();  std::size_t DiUsable_() const;  void PollTorque_(std::size_t axis, unsigned long& calls);   //AI(W906-MT-E3a) 20260925: the DI read (now FIRST in Poll: batch when verified, per-byte otherwise -- the per-byte loop is the old Poll() loop moved verbatim), the batch-vs-per-byte self-compare, its Open()-time first run, and the per-axis torque read. Defined at the end of the .cpp. Private: only Open()/Poll() call them. On the old blank line, so no line below moves
+     //AI(W906-1203GEAR-1) 20260915: ask the next poll to re-read the electronic
+     //  gear instead of waiting out its 30 s window.
+     //  ⚠ NOT a vendor call and not a write -- it sets one bool. It exists
+@@ -1701,6 +1701,61 @@ enum { kPci1203TagAxes    = 32,
+ // unlabelled state next to its raw number is honest; an invented label is not.
+ const char* Pci1203AxisStateText(unsigned short state);
+ 
++// ---------------------------------------------------------------------------
++//  AI(W906-MT-E3a) 20260925: BATCH DI AND ACTUAL TORQUE -- the pure parts.
++//
++//  Available in BOTH build arms and needing no vendor header, so the decisions
++//  that gate what the monitor publishes can be unit-tested on a desk
++//  (tests/test_pci1203_pure.cpp) -- the vendor calls around them cannot be,
++//  and EastSun's ruling R3 20260925 is that the on-machine measurement comes
++//  later. Nothing here touches a card.
++// ---------------------------------------------------------------------------
++enum {
++    kPci1203DiBatchGapMs       = 200,      // 2nd confirming compare: >= one io tick after the 1st
++    kPci1203DiBatchReverifyMs  = 300000,   // ~5 min: one port-by-port re-compare while batch is in use
++    kPci1203DiBatchRetryMs     = 30000,    // per-byte mode after a compare that did NOT match (or a failed
++                                           // batch call): the next attempt waits this long, so a card whose
++                                           // batch read is genuinely wrong costs one extra call per 30 s
++    kPci1203DiBatchFailDrop    = 3,        // batch calls failing in a row before per-byte is resumed
++    kPci1203TorqueFocusMs      = 3000,     // SetTorqueFocusAxis expires this long after its last call
++    kPci1203TorquePdoFailLatch = 3,        // PDO torque failures in a row before the axis stops asking
++    kPci1203TorqueAgreeNeeded  = 3,        // agreeing PDO/SDO pairs before the PDO unit counts as known
++    kPci1203TorqueMinCompare   = 20        // [Trq.unit] (2 % of rated at the 1/10 default): below this
++                                           // a pair says nothing about the unit and is not counted
++};
++
++//  One port-by-port compare of a batch read against the per-byte reads of the
++//  same poll. `full` is the only answer that may switch batch mode ON: every
++//  port was readable per byte AND every byte is equal. A port whose per-byte
++//  read failed is `unreadable` -- not a mismatch, but it is not a match either.
++//  ⚠ A single equal pass is not proof (a permutation of equal bytes compares
++//  equal), which is why the caller needs TWO full matches at different times.
++struct Pci1203DiBatchCheck {
++    int  ports;          // n
++    int  unreadable;     // per-byte read failed -> not comparable
++    int  mismatches;     // ports whose two readings differ
++    int  firstMismatch;  // lowest differing port, -1 = none
++    int  firstBatch;     // batch byte at firstMismatch, -1 = none
++    int  firstPerByte;   // per-byte byte at firstMismatch, -1 = none
++    bool full;           // n > 0, unreadable == 0, mismatches == 0
++};
++Pci1203DiBatchCheck Pci1203DiBatchCompare(const unsigned char* batch,
++                                          const unsigned char* perByte,
++                                          const bool* perByteValid, int n);
++
++//  [Trq.unit] -> % of rated torque: raw x 2704h:1 / 2704h:2 (the drive's own
++//  Torque User Unit, s14.6.6; 1/10 on every axis here 20260915). FALSE when the
++//  unit is 0 in either half -- 0 is outside 2704h's range, so it means "not read",
++//  never "zero torque".
++bool Pci1203TorquePercent(long raw, unsigned long trqNum, unsigned long trqDen, double& pct);
++//  % of rated -> N.m: pct / 100 x 6076h (mN.m) / 1000. FALSE when 6076h is 0.
++bool Pci1203TorqueNewtonMetre(double pct, unsigned long ratedMilliNm, double& nm);
++//  A PDO reading (Acm_AxGetActTorque, unit undocumented) against an SDO reading
++//  of 6077h taken in the same poll: +1 agree (within 10 % + 2 units), -1
++//  disagree, 0 both below kPci1203TorqueMinCompare -- an idle axis reads ~0 in
++//  any unit, so it cannot tell a right scale from a wrong one.
++int  Pci1203TorqueCompare(long pdoRaw, long sdoRaw);
++
+ }  // namespace ht9045
+ 
+ #endif  // ETHERCAT_PCI1203MONITOR_H
+diff --git a/JsonBridge/ChanIo.h b/JsonBridge/ChanIo.h
+index b930394..dcdd45a 100644
+--- a/JsonBridge/ChanIo.h
++++ b/JsonBridge/ChanIo.h
+@@ -259,6 +259,13 @@ struct IoMonitorStatus {
+     //   Pci1203CardSample::pollSegValid）。預設值讓只填舊欄位的呼叫端（tests/test_io_points.cpp）照舊可用：segValid=false ⇒ 四個都發 null。
+     double        pollStationsMs = 0.0, pollAxesMs = 0.0, pollDiMs = 0.0, pollDoMs = 0.0;
+     bool          pollSegValid = false;
++    // AI(W906-MT-E3a) 20260925: 哪一種 DI 讀法產生這些值（Pci1203CardSample::diBatchOk／diBatchWhy）。
++    //   "batch" 只在一次讀完的 Acm_DaqDiGetBytes 與逐 byte 讀連續兩次逐 port 完全一致之後才會出現；
++    //   diBatchKnown=false（舊呼叫端沒填）⇒ monitor 區塊的四個 diBatch 欄位都發 null。
++    bool          diBatchKnown = false;
++    bool          diBatchOk = false;
++    unsigned long diBatchMismatches = 0, diBatchChecks = 0, diBatchFails = 0;
++    std::string   diBatchWhy;
+ };
+ // 帶監看器狀態的版本：st 為 0 時與上面完全相同。
+ std::string IoRuntimeJsonFrom(const std::vector<IoByteSample>& di,
+diff --git a/JsonBridge/ChanIoPoints.cpp b/JsonBridge/ChanIoPoints.cpp
+index dcd89c3..984bbea 100644
+--- a/JsonBridge/ChanIoPoints.cpp
++++ b/JsonBridge/ChanIoPoints.cpp
+@@ -27,7 +27,7 @@ namespace sjson {
+ namespace {
+ 
+ const int kIsaPci1203 = 3;          // MachineType.h eIOType：ePCI1203 = 3
+-const int kPollIntervalMs = 500;    // wb_serve 一個 tick
++const int kPollIntervalMs = 200;    // AI(W906-MT-E3a) 20260925: 500 -> 200 = 1203 監看器 Poll 的節拍（wb_serve kIoTickMs）。原本寫「wb_serve 一個 tick」的 500 是引擎的拍子不是卡片資料的更新頻率，頁面照它等就等於每 500 ms 才看一次每 200 ms 就更新的值（batchinput 報告）；網頁端已經照 pollIntervalMs 走（HW.IoSetView／IoLive，AI(W906-MT-E3)）
+ 
+ unsigned long long g_rtSeq = 0;
+ 
+@@ -332,6 +332,12 @@ std::string IoRuntimeJsonFrom(const std::vector<IoByteSample>& di,
+         w.Key("axesMs");     if (st->pollSegValid) w.Number(st->pollAxesMs);     else w.Null();
+         w.Key("diMs");       if (st->pollSegValid) w.Number(st->pollDiMs);       else w.Null();
+         w.Key("doMs");       if (st->pollSegValid) w.Number(st->pollDoMs);       else w.Null();
++        // AI(W906-MT-E3a) 20260925: DI 讀法（"batch"／"perByte"）、比對不一致的次數與原因 —— 讓畫面講出「這些值是哪一種讀法讀來的」，不要用猜的。
++        w.Key("diMode");            if (st->diBatchKnown) w.String(st->diBatchOk ? "batch" : "perByte"); else w.Null();
++        w.Key("diBatchMismatches"); if (st->diBatchKnown) w.Number((wb_int64)st->diBatchMismatches);    else w.Null();
++        w.Key("diBatchChecks");     if (st->diBatchKnown) w.Number((wb_int64)st->diBatchChecks);        else w.Null();
++        w.Key("diBatchFails");      if (st->diBatchKnown) w.Number((wb_int64)st->diBatchFails);         else w.Null();
++        w.Key("diBatchWhy");        if (st->diBatchKnown && !st->diBatchWhy.empty()) w.String(st->diBatchWhy); else w.Null();
+         w.EndObject();
+     }
+     if (!connected) {
+@@ -394,6 +400,8 @@ std::string IoRuntimeJson()
+         st.pollMs = c.pollMs;
+         st.pollSegValid = c.pollSegValid;   // AI(W906-LAT-1) 20260925
+         st.pollStationsMs = c.pollStationsMs; st.pollAxesMs = c.pollAxesMs; st.pollDiMs = c.pollDiMs; st.pollDoMs = c.pollDoMs;
++        st.diBatchKnown = c.open;   // AI(W906-MT-E3a) 20260925: 卡沒開就沒有「讀法」可言 -> null
++        st.diBatchOk = c.diBatchOk; st.diBatchMismatches = c.diBatchMismatches; st.diBatchChecks = c.diBatchChecks; st.diBatchFails = c.diBatchFails; st.diBatchWhy = c.diBatchWhy;
+     }
+     const bool connected = (mon != 0) && st.open && !st.disabled && (nDi > 0 || nDo > 0);
+     return IoRuntimeJsonFrom(di, dout, connected, NowIsoUtc(), &st);
+diff --git a/WebBridgeTags.cpp b/WebBridgeTags.cpp
+index 35f4b38..8ef802b 100644
+--- a/WebBridgeTags.cpp
++++ b/WebBridgeTags.cpp
+@@ -1455,7 +1455,7 @@ std::size_t PublishHandlerTags(webbridge::TagSnapshot& snap)
+             stageNull(snap, "pci1203.di.portsSampled");
+             stageNull(snap, "pci1203.do.portsSampled");
+             stageNull(snap, "pci1203.di.truncated");
+-            stageNull(snap, "pci1203.do.truncated");
++            stageNull(snap, "pci1203.do.truncated");  stageNull(snap, "pci1203.di.mode"); stageNull(snap, "pci1203.di.batchMatches"); stageNull(snap, "pci1203.di.batchChecks"); stageNull(snap, "pci1203.di.batchMismatches"); stageNull(snap, "pci1203.di.batchFirstMismatch"); stageNull(snap, "pci1203.di.batchFails"); stageNull(snap, "pci1203.di.batchWhy"); stageNull(snap, "pci1203.torque.focusAxis"); stageNull(snap, "pci1203.torque.focusWhy"); stageNull(snap, "pci1203.torque.sdoReads"); stageNull(snap, "pci1203.torque.sdoErrors"); stageNull(snap, "pci1203.torque.sdoMs"); stageNull(snap, "pci1203.torque.sdoMaxMs");   //AI(W906-MT-E3a) 20260925: batch DI mode + torque focus, present-and-null with no monitor (same rule as the truncation trio above). Same line, no line below moves
+         } else {
+             const Pci1203CardSample& c = mon->card();
+             const bool live = c.open;
+@@ -1528,7 +1528,7 @@ std::size_t PublishHandlerTags(webbridge::TagSnapshot& snap)
+             stageInt (snap, "pci1203.di.portsSampled",   mon != 0, diSampled);
+             stageInt (snap, "pci1203.do.portsSampled",   mon != 0, doSampled);
+             stageBool(snap, "pci1203.di.truncated", c.diMaxChanValid, diOnCard > diSampled);
+-            stageBool(snap, "pci1203.do.truncated", c.doMaxChanValid, doOnCard > doSampled);
++            stageBool(snap, "pci1203.do.truncated", c.doMaxChanValid, doOnCard > doSampled);  stageStr(snap, "pci1203.di.mode", live, AnsiString(c.diBatchOk ? "batch" : "perByte")); stageInt(snap, "pci1203.di.batchMatches", live, (long long)c.diBatchMatches); stageInt(snap, "pci1203.di.batchChecks", true, (long long)c.diBatchChecks); stageInt(snap, "pci1203.di.batchMismatches", true, (long long)c.diBatchMismatches); stageInt(snap, "pci1203.di.batchFirstMismatch", c.diBatchFirstMismatch >= 0, (long long)c.diBatchFirstMismatch); stageInt(snap, "pci1203.di.batchFails", true, (long long)c.diBatchFails); stageStr(snap, "pci1203.di.batchWhy", !c.diBatchWhy.empty(), AnsiString(c.diBatchWhy.c_str())); stageInt(snap, "pci1203.torque.focusAxis", c.torqueFocusAxis >= 0, (long long)c.torqueFocusAxis); stageStr(snap, "pci1203.torque.focusWhy", !c.torqueFocusWhy.empty(), AnsiString(c.torqueFocusWhy.c_str())); stageInt(snap, "pci1203.torque.sdoReads", true, (long long)c.torqueSdoReads); stageInt(snap, "pci1203.torque.sdoErrors", true, (long long)c.torqueSdoErrors); stageDouble(snap, "pci1203.torque.sdoMs", c.torqueSdoReads > 0, c.torqueSdoMs); stageDouble(snap, "pci1203.torque.sdoMaxMs", c.torqueSdoReads > 0, c.torqueSdoMaxMs);   //AI(W906-MT-E3a) 20260925: WHICH DI READ PRODUCED THE BYTES, said on the wire rather than inferred -- "batch" only after the one-call read matched the per-byte read twice (Pci1203CardSample::diBatchOk), and batchWhy says why in words; plus the torque SDO focus and what each 6077h mailbox read costs (the on-machine measurement EastSun ruled for later, R3). Same line, no line below moves
+             stageInt (snap, "pci1203.ring0Slaves", c.ringCountValid, (long long)c.ring0Slaves);
+             stageInt (snap, "pci1203.ring1Slaves", c.ringCountValid, (long long)c.ring1Slaves);
+             //AI(W906-1203MON-19) 20260910: open, but with conflicting
+@@ -1716,7 +1716,7 @@ std::size_t PublishHandlerTags(webbridge::TagSnapshot& snap)
+             //AI(W906-1203CTL-34) 20260911: +命令速度, matching the Utility's
+             // 當前狀態 block.
+             std::snprintf(tag, sizeof(tag), "pci1203.ax%d.cmdVel", i);
+-            stageDouble(snap, tag, ok, a ? a->cmdVel : 0.0);
++            stageDouble(snap, tag, ok, a ? a->cmdVel : 0.0);  { const bool tv = (a != 0 && a->torqueValid); std::snprintf(tag, sizeof(tag), "pci1203.ax%d.torque", i); stageDouble(snap, tag, tv, tv ? (double)a->torqueRaw : 0.0); std::snprintf(tag, sizeof(tag), "pci1203.ax%d.torquePct", i); stageDouble(snap, tag, (a != 0 && a->torquePctValid), (a != 0 && a->torquePctValid) ? a->torquePct : 0.0); std::snprintf(tag, sizeof(tag), "pci1203.ax%d.torqueNm", i); stageDouble(snap, tag, (a != 0 && a->torqueNmValid), (a != 0 && a->torqueNmValid) ? a->torqueNm : 0.0); std::snprintf(tag, sizeof(tag), "pci1203.ax%d.torqueSrc", i); stageStr(snap, tag, tv, AnsiString(tv ? (a->torqueSrc == 2 ? "sdo" : "pdo") : "")); std::snprintf(tag, sizeof(tag), "pci1203.ax%d.torqueUnitVerified", i); stageBool(snap, tag, tv, tv && a->torqueUnitVerified); std::snprintf(tag, sizeof(tag), "pci1203.ax%d.torqueErr", i); stageInt(snap, tag, (a != 0 && a->opened), (long long)(a ? a->torqueErr : 0)); }   //AI(W906-MT-E3a) 20260925: ACTUAL TORQUE (EastSun R6). torque = the raw reading in the drive's [Trq.unit] (6077h/6877h); torquePct / torqueNm only when its unit is KNOWN (SDO, or a PDO value that agreed with SDO -- torqueUnitVerified) and 2704h / 6076h were read; torqueSrc "pdo" (Acm_AxGetActTorque) | "sdo" (the focus axis); torqueErr = the PDO read's last return (0x8000009F = the ring's PDO map has no torque). All null when not read THIS poll -- never 0. Deliberately NOT gated on `ok`: an unmapped torque must not blank a position, and a position failure must not hide a torque. Same line, no line below moves
+ 
+             //AI(W906-1203CTL-34) 20260911: the DIAL NUMBER, beside the address.
+             // `station` is what Acm_AxOpenbyID takes; `stationAlias` is what is
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 948d9ee..27a3001 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -4027,3 +4027,14 @@ target_include_directories(test_web_motor_access PRIVATE ${CMAKE_SOURCE_DIR})
+ add_test(NAME WebMotorAccess
+          COMMAND test_web_motor_access "${CMAKE_SOURCE_DIR}/../web/JSON/motor-access.json")
+ set_tests_properties(WebMotorAccess PROPERTIES TIMEOUT 120)
++# --- test_pci1203_pure: MT-E3a 的純邏輯（1203 監看器／控制層）---
++#   AI(W906-MT-E3a) 20260925: 批量 DI 的逐 port 比對、扭力換算與 PDO/SDO 一致性判準、golden InitMotor 的封閉設定表與
++#   golden 順序、內部命令沒有網頁指令名稱。不帶 HAVE_PCI1203（廠商呼叫根本沒編進來），不讀寫任何檔案；放檔尾所以自己帶 TIMEOUT。
++add_executable(test_pci1203_pure
++    test_pci1203_pure.cpp
++    ../EtherCAT/Pci1203Monitor.cpp
++    ../EtherCAT/Pci1203Control.cpp)
++target_include_directories(test_pci1203_pure PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
++target_link_libraries(test_pci1203_pure PRIVATE vclcompat)
++add_test(NAME Pci1203Pure COMMAND test_pci1203_pure)
++set_tests_properties(Pci1203Pure PROPERTIES TIMEOUT 120)
+diff --git a/tests/test_io_points.cpp b/tests/test_io_points.cpp
+index 41a6b89..6dcb287 100644
+--- a/tests/test_io_points.cpp
++++ b/tests/test_io_points.cpp
+@@ -260,11 +260,42 @@ int main(int argc, char** argv)
+                     CHECK(cJSON_GetObjectItem(mon, "pollCount")->valueint == 42);
+                     CHECK(cJSON_GetObjectItem(mon, "disabledReason") != 0 &&
+                           !cJSON_IsNull(cJSON_GetObjectItem(mon, "disabledReason")));
++                    // AI(W906-MT-E3a) 20260925: 沒填 DI 讀法（diBatchKnown=false）⇒ diMode 等欄位是 null，不是 "perByte"
++                    CHECK(cJSON_GetObjectItem(mon, "diMode") != 0 && cJSON_IsNull(cJSON_GetObjectItem(mon, "diMode")));
++                    CHECK(cJSON_IsNull(cJSON_GetObjectItem(mon, "diBatchMismatches")));
+                 }
++                // AI(W906-MT-E3a) 20260925: pollIntervalMs = 200（1203 監看器 Poll 的節拍），頁面照它走
++                CHECK(cJSON_GetObjectItem(runtime, "pollIntervalMs") != 0 &&
++                      cJSON_GetObjectItem(runtime, "pollIntervalMs")->valueint == 200);
+                 cJSON* why = cJSON_GetObjectItem(runtime, "why");
+                 CHECK(why != 0 && why->valuestring != 0 && std::string(why->valuestring).find("停用") != std::string::npos);
+                 cJSON_Delete(r3);
+             }
++            // AI(W906-MT-E3a) 20260925: 填了 DI 讀法 ⇒ monitor 區塊原樣帶出（batch／不一致次數／原因）
++            {
++                IoMonitorStatus sb;
++                sb.present = true; sb.linked = true; sb.open = true; sb.disabled = false;
++                sb.pollCount = 7; sb.pollErrors = 0; sb.pollMs = 40;
++                sb.diBatchKnown = true; sb.diBatchOk = true; sb.diBatchMismatches = 2; sb.diBatchChecks = 5;
++                sb.diBatchFails = 1; sb.diBatchWhy = "batch: test";
++                cJSON* rb = cJSON_Parse(IoRuntimeJsonFrom(none, none, false, "2026-09-25T00:00:00.000Z", &sb).c_str());
++                CHECK(rb != 0);
++                if (rb) {
++                    cJSON* mb = cJSON_GetObjectItem(cJSON_GetObjectItem(rb, "runtime"), "monitor");
++                    CHECK(mb != 0 && std::string(SOf(mb, "diMode")) == "batch");
++                    CHECK(mb != 0 && cJSON_GetObjectItem(mb, "diBatchMismatches")->valueint == 2);
++                    CHECK(mb != 0 && cJSON_GetObjectItem(mb, "diBatchChecks")->valueint == 5);
++                    CHECK(mb != 0 && std::string(SOf(mb, "diBatchWhy")) == "batch: test");
++                    cJSON_Delete(rb);
++                }
++                sb.diBatchOk = false;
++                cJSON* rp = cJSON_Parse(IoRuntimeJsonFrom(none, none, false, "2026-09-25T00:00:00.000Z", &sb).c_str());
++                CHECK(rp != 0);
++                if (rp) {
++                    CHECK(std::string(SOf(cJSON_GetObjectItem(cJSON_GetObjectItem(rp, "runtime"), "monitor"), "diMode")) == "perByte");
++                    cJSON_Delete(rp);
++                }
++            }
+             cJSON* r4 = cJSON_Parse(IoRuntimeJsonFrom(none, none, false, "2026-09-25T00:00:00.000Z").c_str());
+             CHECK(r4 != 0);
+             if (r4) {
+diff --git a/tests/test_pci1203_pure.cpp b/tests/test_pci1203_pure.cpp
+new file mode 100644
+index 0000000..3d11401
+--- /dev/null
++++ b/tests/test_pci1203_pure.cpp
+@@ -0,0 +1,324 @@
++// =============================================================================
++//  test_pci1203_pure.cpp -- the pure decisions MT-E3a added to the 1203
++//  monitor and control modules.
++//
++//  AI(W906-MT-E3a) 20260925. EastSun ruling R3 20260925: "write all the code
++//  now (batch DI read with self-compare, torque read, whitelist additions) so
++//  it is ready; nothing is run on the card now". So this file is the ONLY
++//  evidence those additions have until the first on-machine run, and it says
++//  exactly what it proves:
++//
++//    * Pci1203DiBatchCompare -- the port-by-port compare that is the only thing
++//      allowed to switch the one-call DI read on;
++//    * Pci1203TorquePercent / NewtonMetre / Compare -- the unit conversion and
++//      the PDO/SDO agreement test (null-never-zero on a missing unit);
++//    * golden InitMotor's CLOSED configuration table (kCmdAxSetInitCfg) and the
++//      golden-order plan, against golden Motor/myEthercatmotor.cpp :219-361 and
++//      SetEtherCatInType :1590-1690, value by value;
++//    * the internal kinds have NO wire name (kSpeedMaxVel..Dec, setInitCfg);
++//    * the not-linked monitor refuses a torque focus and publishes nothing.
++//
++//  ⚠ WHAT IT DOES NOT PROVE: anything about the vendor calls. Built WITHOUT
++//  HAVE_PCI1203, like every ctest target here, so Acm_DaqDiGetBytes /
++//  Acm_AxGetActTorque / the 6077h SDO read are not even compiled in. Whether
++//  the batch read's port order matches the per-byte one, and what unit
++//  Acm_AxGetActTorque returns, are the questions the on-machine run answers.
++//  Reads and writes no file.
++// =============================================================================
++#include "EtherCAT/Pci1203Monitor.h"
++#include "EtherCAT/Pci1203Control.h"
++
++#include <cmath>
++#include <cstdio>
++#include <cstring>
++#include <string>
++
++using namespace ht9045;
++
++static int g_total = 0;
++static int g_fail  = 0;
++
++static void check(bool ok, const char* what)
++{
++    ++g_total;
++    std::printf("%s: %s\n", ok ? "PASS" : "FAIL", what);
++    if (!ok) ++g_fail;
++}
++
++static bool near(double a, double b) { return std::fabs(a - b) < 1e-9; }
++
++int main()
++{
++    std::setvbuf(stdout, 0, _IONBF, 0);
++
++    // --- 1. batch DI compare --------------------------------------------------
++    std::printf("-- 1. Pci1203DiBatchCompare\n");
++    {
++        const unsigned char a[4] = { 0x00, 0x5A, 0xFF, 0x01 };
++        const bool          v[4] = { true, true, true, true };
++        const Pci1203DiBatchCheck k = Pci1203DiBatchCompare(a, a, v, 4);
++        check(k.full && k.ports == 4 && k.mismatches == 0 && k.unreadable == 0 &&
++              k.firstMismatch == -1,
++              "identical reads of 4 readable ports are a FULL match");
++    }
++    {
++        const unsigned char b[4] = { 0x00, 0x5A, 0xFE, 0x01 };
++        const unsigned char p[4] = { 0x00, 0x5A, 0xFF, 0x01 };
++        const bool          v[4] = { true, true, true, true };
++        const Pci1203DiBatchCheck k = Pci1203DiBatchCompare(b, p, v, 4);
++        check(!k.full && k.mismatches == 1 && k.firstMismatch == 2 &&
++              k.firstBatch == 0xFE && k.firstPerByte == 0xFF,
++              "one differing byte: not full, and the report names port 2 with both values");
++    }
++    {
++        //  The CTL-29 shape: a PERMUTATION of real bytes. Distinct values are
++        //  caught port by port -- a multiset compare would have called it equal.
++        const unsigned char b[3] = { 0x22, 0x11, 0x33 };
++        const unsigned char p[3] = { 0x11, 0x22, 0x33 };
++        const bool          v[3] = { true, true, true };
++        const Pci1203DiBatchCheck k = Pci1203DiBatchCompare(b, p, v, 3);
++        check(!k.full && k.mismatches == 2 && k.firstMismatch == 0,
++              "two swapped ports with different values are 2 mismatches (compared by port, not by content)");
++    }
++    {
++        //  ...but a swap of two ports that happen to hold the SAME value is
++        //  invisible to any single compare. This is why batch mode needs TWO
++        //  full matches at two moments: once the inputs differ, it shows.
++        const unsigned char same[3]  = { 0x00, 0x00, 0x7F };
++        const bool          v[3]     = { true, true, true };
++        const Pci1203DiBatchCheck k1 = Pci1203DiBatchCompare(same, same, v, 3);
++        const unsigned char batch2[3] = { 0x00, 0x04, 0x7F };   // wiring swapped: port1 shows port0's input
++        const unsigned char per2[3]   = { 0x04, 0x00, 0x7F };   // the real image after one sensor changed
++        const Pci1203DiBatchCheck k2 = Pci1203DiBatchCompare(batch2, per2, v, 3);
++        check(k1.full && !k2.full && k2.mismatches == 2,
++              "a swap of equal bytes passes ONE compare and fails the next once an input changes "
++              "(the reason for two compares at different times)");
++    }
++    {
++        const unsigned char a[3] = { 1, 2, 3 };
++        const bool          v[3] = { true, false, true };
++        const Pci1203DiBatchCheck k = Pci1203DiBatchCompare(a, a, v, 3);
++        check(!k.full && k.unreadable == 1 && k.mismatches == 0,
++              "a port whose per-byte read failed is not a mismatch -- but it blocks FULL");
++    }
++    {
++        const unsigned char a[1] = { 1 };
++        const bool          v[1] = { true };
++        const Pci1203DiBatchCheck k0 = Pci1203DiBatchCompare(a, a, v, 0);
++        const Pci1203DiBatchCheck kn = Pci1203DiBatchCompare(0, a, v, 1);
++        check(!k0.full && k0.ports == 0 && !kn.full,
++              "zero ports, or a missing buffer, can never switch batch mode on");
++    }
++    check(kPci1203DiBatchGapMs >= 200,
++          "the 2nd compare is at least one io tick (wb_serve kIoTickMs = 200) after the 1st");
++    check(kPci1203DiBatchReverifyMs == 300000 && kPci1203DiBatchRetryMs == 30000 &&
++          kPci1203DiBatchFailDrop == 3,
++          "re-compare every 5 min, retry a failed compare after 30 s, 3 failed calls drop batch mode");
++
++    // --- 2. torque ------------------------------------------------------------
++    std::printf("-- 2. torque conversion and the PDO/SDO agreement test\n");
++    {
++        double pct = -1.0;
++        check(Pci1203TorquePercent(1000, 1, 10, pct) && near(pct, 100.0),
++              "1000 [Trq.unit] at 2704h = 1/10 is 100 % of rated (this machine's measured unit)");
++        check(Pci1203TorquePercent(-250, 1, 10, pct) && near(pct, -25.0),
++              "the sign is kept (6077h follows the motor direction)");
++        check(Pci1203TorquePercent(100, 1, 1, pct) && near(pct, 100.0),
++              "the unit is the LIVE 2704h, not a constant: 1/1 gives 1 unit = 1 %");
++        double untouched = 12345.0;
++        check(!Pci1203TorquePercent(1000, 0, 10, untouched) &&
++              !Pci1203TorquePercent(1000, 1, 0, untouched) && untouched == 12345.0,
++              "an unread 2704h (0 in either half) is NOT a percentage -- false, nothing written");
++    }
++    {
++        double nm = -1.0;
++        check(Pci1203TorqueNewtonMetre(100.0, 1270, nm) && near(nm, 1.27),
++              "100 % of a 1270 mN.m motor (6076h) is 1.27 N.m");
++        check(Pci1203TorqueNewtonMetre(50.0, 9800, nm) && near(nm, 4.9),
++              "50 % of 9800 mN.m is 4.9 N.m");
++        double untouched = 7.0;
++        check(!Pci1203TorqueNewtonMetre(50.0, 0, untouched) && untouched == 7.0,
++              "an unread 6076h gives no N.m");
++    }
++    {
++        check(Pci1203TorqueCompare(500, 500)  ==  1, "equal loaded readings agree");
++        check(Pci1203TorqueCompare(500, 540)  ==  1, "within 10 % + 2 units agree");
++        check(Pci1203TorqueCompare(500, 5000) == -1, "a x10 scale error disagrees");
++        check(Pci1203TorqueCompare(50, 500)   == -1, "a /10 scale error disagrees");
++        check(Pci1203TorqueCompare(300, -300) == -1, "opposite signs disagree");
++        check(Pci1203TorqueCompare(5, -3)     ==  0,
++              "an idle axis (both under kPci1203TorqueMinCompare) says nothing about the unit");
++        check(Pci1203TorqueCompare(2147483647L, -32768L) == -1,
++              "extreme values do not overflow the comparison");
++    }
++    check(kPci1203TorqueFocusMs == 3000 && kPci1203TorquePdoFailLatch == 3 &&
++          kPci1203TorqueAgreeNeeded == 3,
++          "focus expires 3 s after its last call; PDO latches after 3 failures; 3 agreeing pairs verify the PDO unit");
++
++    // --- 3. the not-linked monitor --------------------------------------------
++    std::printf("-- 3. the not-linked monitor (this ctest has no HAVE_PCI1203)\n");
++    {
++        TPci1203Monitor m;
++        m.SetTorqueFocusAxis(0);
++        check(m.card().torqueFocusAxis == -1 && !m.card().torqueFocusWhy.empty(),
++              "a focus on an axis that has no open handle is REFUSED and says why");
++        m.SetTorqueFocusAxis(-1);
++        check(m.card().torqueFocusAxis == -1 && m.card().torqueFocusWhy.empty(),
++              "SetTorqueFocusAxis(-1) clears the focus and the reason");
++        const Pci1203AxisSample& a = m.axis(0);
++        check(!a.torqueValid && a.torqueSrc == 0 && !a.torquePctValid && !a.torqueNmValid &&
++              !a.torqueUnitVerified,
++              "an axis nobody read publishes no torque -- invalid, source none (null, never 0)");
++        check(!m.card().diBatchOk && m.card().diBatchMatches == 0,
++              "a monitor that never opened is per-byte with no matches");
++        check(!m.Poll(), "Poll() on a monitor that is not open returns false (no read at all)");
++    }
++
++    // --- 4. speed ceilings: no wire name ---------------------------------------
++    std::printf("-- 4. Pci1203SpeedParam ceilings\n");
++    check(kSpeedMaxVel == 10 && kSpeedMaxAcc == 11 && kSpeedMaxDec == 12 &&
++          (int)kSpeedMaxDec == (int)Pci1203AxisSample::kSpeedCount - 1,
++          "MaxVel/MaxAcc/MaxDec are 10/11/12 = the monitor's speed[10..12] read-back slots");
++    {
++        const char* names[] = { "pci1203.ax.setSpeed.maxVel", "pci1203.ax.setSpeed.maxAcc",
++                                "pci1203.ax.setSpeed.maxDec", "pci1203.ax.setInitCfg",
++                                "pci1203.ax.setInitCfg.ppu" };
++        bool anyParsed = false;
++        for (std::size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
++            Pci1203WireCmd w;
++            w.name = names[i]; w.target = "pci1203.ax0"; w.hasNum = true; w.num = 1000.0;
++            Pci1203Cmd c; std::string why;
++            if (Pci1203ParseWire(w, c, why)) anyParsed = true;
++            if (Pci1203CmdFromName(names[i]) != kCmdNone) anyParsed = true;
++        }
++        check(!anyParsed,
++              "no wire name reaches a ceiling or the InitMotor table (neither the pci1203 page nor a browser can send them)");
++    }
++    check(std::strstr(Pci1203CmdName(kCmdAxSetInitCfg), "(internal)") != 0,
++          "the audit name of kCmdAxSetInitCfg says (internal)");
++    {
++        //  The other kinds golden InitMotor needs already exist (ResetError, SvOn,
++        //  SetCmdPos, SetActPos) -- pinned so the Test Range path cannot lose one.
++        check(std::strcmp(Pci1203CmdName(kCmdAxResetError), "pci1203.ax.resetError") == 0 &&
++              std::strcmp(Pci1203CmdName(kCmdAxSvOn), "pci1203.ax.svOn") == 0 &&
++              std::strstr(Pci1203CmdName(kCmdAxSetCmdPos), "(internal)") != 0 &&
++              std::strstr(Pci1203CmdName(kCmdAxSetActPos), "(internal)") != 0,
++              "ResetError / SvOn / SetCmdPos / SetActPos kinds exist for golden InitMotor's tail");
++    }
++
++    // --- 5. golden InitMotor's closed configuration table ----------------------
++    std::printf("-- 5. kCmdAxSetInitCfg table (golden Motor/myEthercatmotor.cpp)\n");
++    {
++        static const char* kExpect[kInitCfgCount] = {
++            "CFG_AxPPU", "CFG_AxElReact", "CFG_AxAlmEnable", "CFG_AxAlmReact",
++            "CFG_AxOrgLogic", "PAR_AxJerk", "CFG_AxInpEnable", "CFG_AxInpLogic",
++            "CFG_AxAlmLogic", "CFG_AxEzLogic", "CFG_AxErcLogic",
++            "CFG_AxPulseInMode", "CFG_AxPulseOutMode"
++        };
++        bool namesOk = true, typesOk = true;
++        for (int q = 0; q < kInitCfgCount; ++q) {
++            if (std::strcmp(Pci1203InitCfgName(q), kExpect[q]) != 0) namesOk = false;
++            if (Pci1203InitCfgIsF64(q) != (q == kInitCfgJerk)) typesOk = false;
++            if (Pci1203InitCfgNotSupportedOk(q) != (q != kInitCfgJerk)) typesOk = false;
++        }
++        check(namesOk, "the 13 rows are in enum order with the vendor spellings");
++        check(typesOk,
++              "only PAR_AxJerk is F64, and only PAR_AxJerk is NOT excused for Dsp_PropertyIDNotSupport (golden :262)");
++        check(std::strcmp(Pci1203InitCfgName(-1), "?") == 0 &&
++              std::strcmp(Pci1203InitCfgName(kInitCfgCount), "?") == 0 &&
++              !Pci1203InitCfgValueOk(kInitCfgCount, 0.0),
++              "an index outside the table has no name and no legal value");
++    }
++    {
++        check(Pci1203InitCfgValueOk(kInitCfgPPU, 1.0) && !Pci1203InitCfgValueOk(kInitCfgPPU, 2.0),
++              "PPU: golden writes 1, nothing else");
++        check(Pci1203InitCfgValueOk(kInitCfgElReact, 0.0) && !Pci1203InitCfgValueOk(kInitCfgElReact, 1.0),
++              "ElReact: golden writes 0 (immediate stop) -- 1 is refused here (the limit panel is a different command)");
++        check(Pci1203InitCfgValueOk(kInitCfgOrgLogic, 0.0) && Pci1203InitCfgValueOk(kInitCfgOrgLogic, 1.0) &&
++              !Pci1203InitCfgValueOk(kInitCfgOrgLogic, 2.0),
++              "OrgLogic: 0 or 1 (bSensorType)");
++        check(Pci1203InitCfgValueOk(kInitCfgPulseInMode, 2.0) && Pci1203InitCfgValueOk(kInitCfgPulseInMode, 3.0) &&
++              !Pci1203InitCfgValueOk(kInitCfgPulseInMode, 0.0),
++              "PulseInMode: AB_4X (2) or I_CW_CCW (3)");
++        check(Pci1203InitCfgValueOk(kInitCfgPulseOutMode, 16.0) && Pci1203InitCfgValueOk(kInitCfgPulseOutMode, 8.0) &&
++              Pci1203InitCfgValueOk(kInitCfgPulseOutMode, 4.0) && !Pci1203InitCfgValueOk(kInitCfgPulseOutMode, 1.0),
++              "PulseOutMode: O_CW_CCW (0x10), OUT_DIR_ALL_NEG (0x08) or OUT_DIR_DIR_NEG (0x04)");
++        check(Pci1203InitCfgValueOk(kInitCfgJerk, 0.0) && !Pci1203InitCfgValueOk(kInitCfgJerk, 1.0),
++              "PAR_AxJerk: golden writes 0 (T-curve) only");
++    }
++    {
++        //  golden InitMotor :219-361 + SetEtherCatInType :1590-1690, value by value.
++        struct Exp { int which; double v; };
++        Pci1203InitCfgStep s[kInitCfgCount + 2];
++
++        //  Servo_Motor, bSensorType = true (OrgLogic 0), bIn1Logic = false (AlmLogic 1)
++        const Exp servo[13] = {
++            { kInitCfgPPU, 1 }, { kInitCfgElReact, 0 }, { kInitCfgAlmEnable, 1 }, { kInitCfgAlmReact, 0 },
++            { kInitCfgOrgLogic, 0 }, { kInitCfgJerk, 0 },
++            { kInitCfgInpEnable, 1 }, { kInitCfgInpLogic, 0 }, { kInitCfgAlmLogic, 1 },
++            { kInitCfgEzLogic, 1 }, { kInitCfgErcLogic, 1 },
++            { kInitCfgPulseInMode, 2 }, { kInitCfgPulseOutMode, 16 }
++        };
++        int n = Pci1203GoldenInitCfgPlan(kInitCfgMotorServo, true, false, s, kInitCfgCount + 2);
++        bool same = (n == 13);
++        for (int i = 0; same && i < 13; ++i)
++            if (s[i].which != servo[i].which || s[i].value != servo[i].v) same = false;
++        check(same, "Servo_Motor: 13 writes in golden order, OrgLogic from bSensorType, AlmLogic from bIn1Logic, AB_4X + O_CW_CCW");
++
++        //  Rotate_Motor: AlmLogic is 0 whatever bIn1Logic says (golden :1639)
++        n = Pci1203GoldenInitCfgPlan(kInitCfgMotorRotate, false, false, s, kInitCfgCount + 2);
++        check(n == 13 && s[4].which == kInitCfgOrgLogic && s[4].value == 1.0 &&
++              s[8].which == kInitCfgAlmLogic && s[8].value == 0.0 &&
++              s[11].value == 3.0 && s[12].value == 8.0,
++              "Rotate_Motor: AlmLogic 0 regardless of bIn1Logic, I_CW_CCW + OUT_DIR_ALL_NEG");
++
++        //  anything else (stepper): no Inp pair, AlmLogic from bIn1Logic
++        n = Pci1203GoldenInitCfgPlan(kInitCfgMotorOther, true, true, s, kInitCfgCount + 2);
++        check(n == 11 && s[6].which == kInitCfgAlmLogic && s[6].value == 0.0 &&
++              s[7].which == kInitCfgEzLogic && s[9].which == kInitCfgPulseInMode &&
++              s[9].value == 3.0 && s[10].value == 4.0,
++              "other motor types: 11 writes, no InpEnable/InpLogic, I_CW_CCW + OUT_DIR_DIR_NEG");
++
++        check(Pci1203GoldenInitCfgPlan(7, true, true, s, kInitCfgCount) == 0,
++              "an unknown motor class plans nothing");
++
++        Pci1203InitCfgStep two[2];
++        two[0].which = -9; two[1].which = -9;
++        n = Pci1203GoldenInitCfgPlan(kInitCfgMotorServo, false, true, two, 2);
++        check(n == 13 && two[0].which == kInitCfgPPU && two[1].which == kInitCfgElReact,
++              "a short buffer is filled only up to its size, and the full count is still returned");
++
++        //  Closure: every value the plan produces is one the table accepts.
++        bool closed = true;
++        const int classes[3] = { kInitCfgMotorServo, kInitCfgMotorRotate, kInitCfgMotorOther };
++        for (int c = 0; c < 3; ++c)
++            for (int st = 0; st < 2; ++st)
++                for (int il = 0; il < 2; ++il) {
++                    const int m = Pci1203GoldenInitCfgPlan(classes[c], st != 0, il != 0, s, kInitCfgCount + 2);
++                    for (int i = 0; i < m; ++i)
++                        if (!Pci1203InitCfgValueOk(s[i].which, s[i].value)) closed = false;
++                }
++        check(closed, "every value golden's plan writes passes the closed-table check (12 combinations)");
++    }
++    //  Execute() compares ElReact against limitVal[kLimitElReact] and PAR_AxJerk
++    //  against speed[kSpeedJerk] (ExpectCfg_), so those two slots are pinned.
++    check(kLimitElReact == 3 && kSpeedJerk == 8,
++          "the two InitMotor entries the monitor reads back sit at limit slot 3 and speed slot 8");
++
++    // --- 6. control refuses when not open --------------------------------------
++    std::printf("-- 6. the not-linked control\n");
++    {
++        TPci1203Control ctl;
++        std::string why;
++        check(!ctl.Open(false, why) && why.find("not linked") != std::string::npos,
++              "this binary cannot command: Open() says not linked");
++        Pci1203Cmd c;
++        c.kind = kCmdAxSetInitCfg; c.axis = 0; c.initCfg = kInitCfgPPU; c.value = 1.0;
++        const Pci1203CmdResult r = ctl.Execute(c);
++        check(!r.accepted && !r.issued, "kCmdAxSetInitCfg on a closed control is refused, nothing issued");
++        check(Pci1203Cmd().initCfg == -1, "a default Pci1203Cmd names no InitMotor property");
++    }
++
++    std::printf("\ntest_pci1203_pure: %d checks, %d failure(s)\n", g_total, g_fail);
++    return g_fail == 0 ? 0 : 1;
++}
+diff --git a/tests/test_wb_tags.cpp b/tests/test_wb_tags.cpp
+index e06e8a9..523b7e5 100644
+--- a/tests/test_wb_tags.cpp
++++ b/tests/test_wb_tags.cpp
+@@ -144,6 +144,24 @@ int main()
+                   "-- the packing deliberately did not touch the wiring diagram");
+         }
+ 
++        //AI(W906-MT-E3a) 20260925: the batch-DI mode and the actual-torque tags
++        //  are STAGED (present) and NULL without a monitor -- a page binds them on
++        //  the first snapshot, and "no monitor" must never read as 0 % torque or
++        //  as a DI mode.
++        {
++            const char* mt[] = { "pci1203.di.mode", "pci1203.di.batchWhy", "pci1203.di.batchMismatches",
++                                 "pci1203.torque.focusAxis", "pci1203.torque.sdoMs",
++                                 "pci1203.ax0.torque", "pci1203.ax0.torquePct", "pci1203.ax0.torqueNm",
++                                 "pci1203.ax0.torqueSrc", "pci1203.ax0.torqueUnitVerified",
++                                 "pci1203.ax31.torquePct", "pci1203.ax31.torqueErr" };
++            bool allNull = true;
++            for (std::size_t q = 0; q < sizeof(mt) / sizeof(mt[0]); ++q) {
++                webbridge::TagMap::const_iterator it = v.tags.find(mt[q]);
++                if (it == v.tags.end() || !it->second.isNull()) { allNull = false; std::printf("   not present-and-null: %s\n", mt[q]); }
++            }
++            check(allNull, "MT-E3a: pci1203.di.mode / di.batch* / torque.* / axN.torque* are staged and null with no monitor");
++        }
++
+         check(v.tags.size() > 0, "PublishHandlerTags stages a non-empty snapshot");
+         check(leaked.empty(),
+               "every tag whose source is the data layer is null before it loads "
+diff --git a/tools/pci1203_readonly_gate.ps1 b/tools/pci1203_readonly_gate.ps1
+index 416bac3..68300b1 100644
+--- a/tools/pci1203_readonly_gate.ps1
++++ b/tools/pci1203_readonly_gate.ps1
+@@ -79,7 +79,10 @@ if (-not $NoSelfTest) {
+         '    Acm_AxResetError(ax);',
+         '    Acm_DevWriteSDOData(dev, 0, 0, 1, 1, 1, 2, &v);',
+         '    Acm_AxMoveHome(ax, 0, 0);',
+-        '    Acm_DevEnableEvent(dev, evt);'
++        '    Acm_DevEnableEvent(dev, evt);',
++        # AI(W906-MT-E3a) 20260925: the mutating twins of the two reads added in MT-E3a
++        '    Acm_DaqDoSetBytes(dev, 0, n, buf);',
++        '    r = Acm_AxMoveTorque(ax, 100, 0);'
+     )
+     $mustPass = @(
+         '    U32 r = Acm_AxGetState(ax, &state);',
+@@ -90,7 +93,10 @@ if (-not $NoSelfTest) {
+         '    ret = Acm_DevOpen(devNum, &dev);',
+         '    Acm_AxClose(&h);',
+         '    // Acm_AxMoveAbs is deliberately absent from this file',
+-        '    //      Acm_AxSetSvOn / Acm_AxMoveHome / Acm_AxResetError'
++        '    //      Acm_AxSetSvOn / Acm_AxMoveHome / Acm_AxResetError',
++        # AI(W906-MT-E3a) 20260925: the two reads MT-E3a adds must NOT be flagged
++        '    const U32 r = Acm_DaqDiGetBytes(impl_->dev, 0, static_cast<U16>(n),',
++        '        const U32 r = Acm_AxGetActTorque(ax, &t);'
+     )
+     $stFail = 0
+     foreach ($l in $mustFlag) {
+-- 
+2.55.0.windows.5
+

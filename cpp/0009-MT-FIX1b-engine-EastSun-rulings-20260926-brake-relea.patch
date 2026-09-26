@@ -1,0 +1,476 @@
+From 8929d13126d8987a12a0f6da5bc8d975e6b37f2b Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 26 Sep 2026 02:12:43 +0800
+Subject: [PATCH 09/14] MT-FIX1b: engine -- EastSun rulings 20260926: brake
+ releases only while the held axes are servo-ON, HT9050 out-of-power predicate
+ (G04/G05 open), automatic motor power-on (G31a open)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun rulings 20260926 on the three items MT-E3b left for him:
+- G16 "對應軸 Servo On 才放": every golden *BreakerON() release -- CountMotorPowerDelay (G16), DoSystem's idle pass (G05)
+  and HOME start (uhome.cpp) -- goes through W906_BrakeReleaseOK(group, site): no hook (ctest) -> golden; otherwise held
+  while bMotorPowerState is false (motor power just cut; SnMotorPower lags) or while W906_BrakeServoOnHook says a
+  PCI1203 axis of that group is not servo-ON (monitor SVON bit). A held group is released by the next G05 idle pass
+  once its drives are ON. Group -> axes on HT9050 (from the IO/Mot table names, to be confirmed on the machine):
+  Index -> MTestZ1(/Z2); InOutArmZ -> MInArmZ*/MOutArmZ*; Cassette -> MLoaderZ/MAuto1Z/MAuto2Z; Magazine and
+  LDCarRotArmZ have no axis here (outputs disabled/absent). Logged once per group on each change.
+- G04/G05: IsIndexMotorOutOfPower() on a PCI1203 Index row (R2) = IsEMGPressed() || SnMotorPower off (golden's Galil
+  servo LEDs are never written here, so golden's test was true forever); any other Index config keeps golden's test.
+  G04 (golden :4279-4294) and G05 (:4303-4313) opened; G34 iEMGPressDelay defined (golden :133) and its tick opened;
+  G15's iEMGPressDelay=8 opened (InitCarlibrationTask still has no port, stays gated).
+- G31a: golden automatic motor power-on ~100 DoSystem passes after start-up, opened verbatim (its brake hazard is
+  covered by the servo-ON guard above).
+- Test containment: TArm::ReadFile/WriteFile (cSocket.cpp) wrote D:\HT9045\system\<Name>.dat / _backup.dat / .ini
+  from ctest -- measured 20260926: ctest Automation (Part21 LotInfo_REQUEST -> fLotInfo SaveLotInfo :5308-5311,
+  opened by the laptop's W906-LOT-W1 20260919) rewrote ArmByLot0/1/2.dat + _backup.dat. Paths now go through
+  W906_MachineRecordRedirect (golden literal byte for byte when W906_MACHINERECORD_DIR is unset = wb_serve/F5;
+  every ctest has it set). Per EastSun 20260926 the six machine files are NOT restored.
+Tests: MT_E3b_Engine 79/0 (new PART H: guard with/without hook, power-off hold, both predicate arms, G16 releases only
+the allowed groups); mainproc_guard fixture now models a powered machine (Index servo LEDs on) -- with G04 open an
+unpowered fixture sets iHome=1 through golden's out-of-power lock, which says nothing about the SystemStart guard it
+tests; W6_6_Hub, W6_6_CSystemCycle, homeclass, WB_SimPump, WB_State, MachineMotors_HT9050, WebMotorAccess pass;
+production_audit 0 changes. Not yet run on the machine.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebMotorAccessLive.cpp        | 41 ++++++++++++++++
+ cSocket.cpp                   | 12 ++---
+ csystem.cpp                   | 89 ++++++++++++++++++++++++++---------
+ csystem.h                     | 13 +++++
+ tests/test_mainproc_guard.cpp |  9 ++++
+ tests/test_mt_e3b_engine.cpp  | 50 ++++++++++++++++++++
+ uhome.cpp                     | 13 +++--
+ 7 files changed, 195 insertions(+), 32 deletions(-)
+
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index fdcc1ad..2bc07f1 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -970,6 +970,46 @@ static int  W906_HookMoving(int motIndex) { return ht9045::MotorAccessMovingOf(h
+ static bool W906_HookHoming() { return ht9045::MotorAccessHomingActive(); }
+ static void W906_HookAllBtnUp(const char* why) { ht9045::MotorAccessAllBtnUp(ht9045::MotorAccessLiveBackend(), why ? why : ""); }
+ static void W906_HookStop1203All(const char* why) { ht9045::MotorAccessStop1203All(ht9045::MotorAccessLiveBackend(), why ? why : ""); }
++//AI(W906-MT-FIX1) 20260926: EastSun ruling 20260926 on G16 -- "對應軸 Servo On 才放" (csystem.h W906_BrakeServoOnHook).
++//  Which axes each golden brake group holds on HT9050 (from the output names in IO_Table.csv and Mot_Table.csv; to be
++//  confirmed by EastSun on the machine):
++//    Index        SwFMotorBreaker / SwBMotorBreaker                 -> MTestZ1 (M14), MTestZ2 (not fitted)
++//    InOutArmZ    SwInArmZBreaker / SwOutArmZBreaker                -> MInArmZ*, MOutArmZ* (M03 MInArmZA, M22 MOutArmZA)
++//    Cassette     SwCassetteLD/Auto1/Auto2MotBreaker                -> MLoaderZ (M35), MAuto1Z (M38), MAuto2Z (M39)
++//    Magazine     SwMagazineMotorBreaker (Enable=0 on HT9050)       -> no axis
++//    LDCarRotArmZ SwLoadCarRFIDZBreaker (not in IO_Table on HT9050) -> no axis
++//  Only enabled PCI1203 rows count; each must be opened by the monitor with a valid sample and its SVON bit on. A group with
++//  no such row answers true (nothing of this tree drives it; golden releases).
++static bool W906_BrakeGroupHasAlias(const char* group, const std::string& alias)
++{
++    const std::string g = group ? group : "";
++    if (g == "Index")     return alias == "MTestZ1" || alias == "MTestZ2";
++    if (g == "InOutArmZ") return alias.compare(0, 7, "MInArmZ") == 0 || alias.compare(0, 8, "MOutArmZ") == 0;
++    if (g == "Cassette")  return alias == "MLoaderZ" || alias == "MAuto1Z" || alias == "MAuto2Z";
++    return false;                                                               // Magazine / LDCarRotArmZ: no axis on HT9050
++}
++static bool W906_HookBrakeServoOn(const char* group, AnsiString* why)
++{
++    ht9045::IMotorAccessBackend& be = ht9045::MotorAccessLiveBackend();
++    std::string off;
++    int n = 0;
++    for (std::size_t i = 0; i < HSys.MotTable.size(); ++i) {
++        const TMOTDATA* row = HSys.MotTable[i];
++        if (!row || row->iEnable != 1) continue;
++        const std::string alias = row->Alias.c_str();
++        if (!W906_BrakeGroupHasAlias(group, alias)) continue;
++        ht9045::MotorAccessAxis a;
++        if (!be.Resolve(alias, a) || !a.Is1203()) continue;                     // not a 1203 row: not this tree's to judge
++        ++n;
++        bool known = false;
++        const bool on = (a.axis >= 0) && be.Pci1203ServoOn(a.axis, known);
++        if (!known || !on) off += (off.empty() ? "" : ", ") + alias + (a.axis < 0 ? "（監看器沒開這一軸）" : (!known ? "（讀不到狀態）" : "（沒激磁）"));
++    }
++    if (off.empty()) return true;
++    if (why) *why = AnsiString(("servo not ON: " + off + " -- 煞車維持鎖住，Servo On 之後下一拍才放（EastSun 裁決 20260926）").c_str());
++    (void)n;
++    return false;
++}
+ // Called by wb_serve once before the pump loop (tools/wb_serve.cpp, the "spine pump: ARMED" line) and again from both
+ //   ticks below (idempotent) -- so the hooks are in place before the first MainProc of the pump.
+ void W906_MotorAccessEngineHooks()
+@@ -981,6 +1021,7 @@ void W906_MotorAccessEngineHooks()
+     W906_FormFShowHook     = &W906_HookFShow;
+     W906_MotorHomingHook   = &W906_HookHoming;
+     W906_MotorAllBtnUpHook = &W906_HookAllBtnUp;
++    W906_BrakeServoOnHook  = &W906_HookBrakeServoOn;                            //AI(W906-MT-FIX1) 20260926
+     s_done = true;
+     std::printf("motor.access: engine hooks registered (Motor Test / Teach fShow, 1203 motion, HOME, AllBtnUp, Stop1203All)\n");
+ }
+diff --git a/cSocket.cpp b/cSocket.cpp
+index e99063d..3f23e5a 100644
+--- a/cSocket.cpp
++++ b/cSocket.cpp
+@@ -536,8 +536,8 @@ TArm::TArm(AnsiString FileName)
+ //------------------------------------------------------------------------------
+ void TArm::ReadFile()                                                           //Steven 20110801 : 改成初始化後讀檔
+ {
+-    AnsiString asFileName="D:\\HT9045\\system\\"+Name+".dat";
+-    AnsiString asBackFile="D:\\HT9045\\system\\"+Name+"_backup.dat";
++    extern AnsiString W906_MachineRecordRedirect(const AnsiString&); AnsiString asFileName=W906_MachineRecordRedirect("D:\\HT9045\\system\\"+Name+".dat");   //AI(W906-MT-FIX1) 20260926: test containment (ctest Automation wrote these), golden literal when W906_MACHINERECORD_DIR is unset
++    AnsiString asBackFile=W906_MachineRecordRedirect("D:\\HT9045\\system\\"+Name+"_backup.dat");   //AI(W906-MT-FIX1) 20260926
+     MyForceDirectories("D:\\HT9045\\system\\");
+     bHasFile=FileExists(asFileName);
+ 
+@@ -546,7 +546,7 @@ void TArm::ReadFile()
+     unsigned long tempMax[4][8][TEST_MAX_BIN]={0};                              //jou 2012-09-23 預設值為0
+     unsigned long tempMax4[4][8][TEST_MAX_BIN+4]={0};                           //jou 2014-04-22 因為RS232 100 BIN需要再加4
+     unsigned long tempMax5[4][8][104]={0};  //kevin 20140614
+-    AnsiString asIniFileName="D:\\HT9045\\system\\"+Name+".ini";
++    AnsiString asIniFileName=W906_MachineRecordRedirect("D:\\HT9045\\system\\"+Name+".ini");   //AI(W906-MT-FIX1) 20260926
+     AnsiString Str;
+ 
+     if(bHasFile)
+@@ -736,10 +736,10 @@ TArm::~TArm()
+ //------------------------------------------------------------------------------
+ void TArm::WriteFile()                                                          //Steven 20110801 : 改成初始化後讀檔
+ {
+-    AnsiString asFileName="D:\\HT9045\\system\\"+Name+".dat";
+-    AnsiString asBackFile="D:\\HT9045\\system\\"+Name+"_backup.dat";
++    extern AnsiString W906_MachineRecordRedirect(const AnsiString&); AnsiString asFileName=W906_MachineRecordRedirect("D:\\HT9045\\system\\"+Name+".dat");   //AI(W906-MT-FIX1) 20260926: test containment (ctest Automation wrote these), golden literal when W906_MACHINERECORD_DIR is unset
++    AnsiString asBackFile=W906_MachineRecordRedirect("D:\\HT9045\\system\\"+Name+"_backup.dat");   //AI(W906-MT-FIX1) 20260926
+ 
+-    AnsiString asIniFileName="D:\\HT9045\\system\\"+Name+".ini";
++    AnsiString asIniFileName=W906_MachineRecordRedirect("D:\\HT9045\\system\\"+Name+".ini");   //AI(W906-MT-FIX1) 20260926
+     AnsiString Str;
+     MyForceDirectories("D:\\HT9045\\system\\");
+     bHasFile=FileExists(asFileName);
+diff --git a/csystem.cpp b/csystem.cpp
+index 078ac13..7e6f1b1 100644
+--- a/csystem.cpp
++++ b/csystem.cpp
+@@ -16060,9 +16060,12 @@ void CheckMotorPowerShutDown()
+ //  can afford that because its start-up InitMotor has servo-ONed every axis; in this tree the golden motor
+ //  objects never open a 1203 axis (uiDevhand==0), so nothing here guarantees the Z drives are servo-ON when
+ //  the brakes open.  Whether EastSun's drives hold Z by themselves is exactly what needs his answer.
+-#if 0 // GATE G31a -- golden csystem.cpp:4116 VERBATIM below; see note above
++//AI(W906-MT-FIX1) 20260926: GATE G31a LIFTED -- golden :4116 verbatim.  EastSun ruling 20260926: "照舊版打開" (automatic
++//  motor power-on ~100 DoSystem passes after start-up, golden's 1 s busy loop included).  The hazard in the note above --
++//  CountMotorPowerDelay releasing the arm-Z / cassette brakes MotorPowerOnDelay seconds later with no drive servo-ON --
++//  is covered by the same ruling's servo-ON check on every release (W906_BrakeReleaseOK in G16 / G05 / HOME): a group
++//  whose 1203 axes are not servo-ON keeps its brake held.
+             DoMotorPowerOn();
+-#endif // GATE G31a
+             SW[SwServerON].On();
+             #ifdef SOFT_SIMULTE
+                 MotorPowerOnDelay=0;
+@@ -16258,6 +16261,9 @@ void DoIndexZ1Z2Free(int type)
+     }
+ }
+ //------------------------------------------------------------------------------
++//AI(W906-MT-FIX1) 20260926: GATE G34's missing global -- golden csystem.cpp:133 `int iEMGPressDelay=3;` (a csystem.cpp-private
++//  file-scope global in golden; declared extern nowhere).  Needed now that G04/G05 open (EastSun ruling 20260926).
++int iEMGPressDelay=3;
+ void DoSystem()
+ {
+     static int OldSecond=-1;
+@@ -16302,7 +16308,10 @@ void DoSystem()
+ //    brakes.  The HT9050 answer (e.g. EMG || motor-power-off || M14's servo state from the 1203 monitor) is a
+ //    safety-predicate decision for EastSun, not a translation -- reported, not invented.
+ //  ⚠ G05 below lives in this gate's `else` and stays gated with it (see G05).
+-#if 0 // GATE G04 -- golden csystem.cpp:4279-4294 VERBATIM below; see note above
++//AI(W906-MT-FIX1) 20260926: GATE G04 LIFTED -- golden :4279-4294 verbatim.  EastSun ruling 20260926 answers the predicate
++//  question above: on HT9050 "out of power" = SnMotorPower off or EMG.  IsIndexMotorOutOfPower() applies it when the Index Z
++//  axis is a PCI1203 row (R2; golden's Galil servo LEDs are never written here) and stays golden otherwise -- see its body.
++//  With motor power on and no EMG the predicate is false, so this arm no longer runs on every pass.
+     if(IsIndexMotorOutOfPower())
+     {
+         #ifndef SOFT_SIMULTE
+@@ -16318,8 +16327,7 @@ void DoSystem()
+         CassetteBreakerOFF();                                                   //Ifor 20251216 add:Boat Carrier
+         DoIndexZ1Z2Free(0);
+     }
+-    else
+-#endif // GATE G04
++    else                                                                        //AI(W906-MT-FIX1) 20260926: end of the lifted G04
+     {
+         if(OldSecond!=SystemSec)
+         {
+@@ -16332,10 +16340,10 @@ void DoSystem()
+ // other reader in this range is golden :4303, which GATE G05 already removes.
+ // UN-GATE together with G05 the moment the sibling block lands `int iEMGPressDelay=3;`
+ // ABOVE this block in this same file.
+-#if 0 // GATE G34 -- golden csystem.cpp:4299-4300 VERBATIM below; see note above
++//AI(W906-MT-FIX1) 20260926: GATE G34 LIFTED -- golden :4299-4300 verbatim (golden's indentation kept); the global is defined
++//  right above DoSystem() now.
+             if(iEMGPressDelay>0)
+             iEMGPressDelay--;
+-#endif // GATE G34
+         }
+         DoIndexZ1Z2Free(1);
+ //AI(W906-PT-csystem-g2) 20260809: GATE G05 -- golden csystem.cpp:4303-4313.  IndexMotorBreakerON / MagazineBreakerON /
+@@ -16358,19 +16366,23 @@ void DoSystem()
+ //  still has no definition here (G34/G15).  Opens together with G04 once EastSun rules the HT9050 predicate.
+ //  The golden release that does NOT depend on G04 -- CountMotorPowerDelay's release when motor power has
+ //  been on for MotorPowerOnDelay seconds (G16 + its caller G21) -- IS open.
+-#if 0 // GATE G05 -- golden csystem.cpp:4303-4313 VERBATIM below; see note above
++//AI(W906-MT-FIX1) 20260926: GATE G05 LIFTED together with G04 (EastSun ruling 20260926: out of power = SnMotorPower off or EMG).
++//  Golden :4303-4313 verbatim EXCEPT that every release goes through W906_BrakeReleaseOK (EastSun ruling 20260926 on G16:
++//  "對應軸 Servo On 才放" -- golden releases without checking the drives; here a brake group is released only while its 1203
++//  axes are servo-ON and motor power is on).  The hazard in the note above (Motor Power OFF -> SnMotorPower still reads ON for
++//  a few passes) is closed by that check: GaliMotorServoOff clears bMotorPowerState at once, and W906_BrakeReleaseOK refuses
++//  while it is false.  A refused group is simply retried on the next idle pass (this block runs every pass).
+         if(bFirstEnter==false && iEMGPressDelay<=0 && MotorPowerOnDelay<=0)
+         {
+             if(SystemStart==false || iHome!=1)
+             {
+-                IndexMotorBreakerON();
+-                MagazineBreakerON();                                            //JerryYang 20220909 : add magazine
+-                InOutArmZBreakerON();                                           //add One sucker with rotate
+-                LDCarRotArmZBreakerOn();                                        //RogerYang 20250828 add for Loader Rotate Arm
+-                CassetteBreakerON();                                            //Ifor 20251216 add:Boat Carrier
++                if(W906_BrakeReleaseOK("Index", "DoSystem G05"))        IndexMotorBreakerON();
++                if(W906_BrakeReleaseOK("Magazine", "DoSystem G05"))     MagazineBreakerON();         //JerryYang 20220909 : add magazine
++                if(W906_BrakeReleaseOK("InOutArmZ", "DoSystem G05"))    InOutArmZBreakerON();        //add One sucker with rotate
++                if(W906_BrakeReleaseOK("LDCarRotArmZ", "DoSystem G05")) LDCarRotArmZBreakerOn();     //RogerYang 20250828 add for Loader Rotate Arm
++                if(W906_BrakeReleaseOK("Cassette", "DoSystem G05"))     CassetteBreakerON();         //Ifor 20251216 add:Boat Carrier
+             }
+         }
+-#endif // GATE G05
+     }
+     bFirstEnter=false;
+ 
+@@ -19893,6 +19905,12 @@ bool IsIndexMotorOutOfPower()
+     #ifdef SOFT_SIMULTE                                                         //Ztex Add SOFT_SIMULTE Pass
+         return false;
+     #else
++        //AI(W906-MT-FIX1) 20260926: EastSun ruling 20260926 -- when the Index Z axis is a PCI1203 row (HT9050, R2), "out of
++        //  power" = SnMotorPower off or EMG.  golden's two Galil servo LEDs (MOT[MTestZ1/Z2].Led[iServoOn]) are written only by
++        //  the Galil scan (Gali_ScanMotStatus, INDEX_MOTION_CARD==0 with a Galil card) and M15 is not fitted here, so golden's
++        //  test was TRUE FOREVER on this machine (GATE G04 note).  Any other Index configuration keeps golden's test.
++        if(MOT[MTestZ1].CardType == "PCI1203")
++            return IsEMGPressed() || Sen[SnMotorPower].IsOff();
+         if(IsEMGPressed() || IsSystemPowerOff() ||
+            MOT[MTestZ1].Led[iServoOn]==false ||
+            MOT[MTestZ2].Led[iServoOn]==false)
+@@ -19941,11 +19959,12 @@ void LockIndexMotorAndDoHomeProcess()
+     //  DELTA : which is the same shape as the known JSI-Haoxing "calibration interrupted
+     //  DELTA : by PAUSE, CarlibrationTask!=1 blocks Exit" case.  NOT an alarm and NOT an
+     //  DELTA : interlock; it is a recovery-completeness loss.
+-    #if 0 // GATE G15 -- golden csystem.cpp:1532-1533 (text below is golden VERBATIM)
++    //AI(W906-MT-FIX1) 20260926: first half of G15 lifted -- golden :1532 verbatim: iEMGPressDelay now exists (defined above
++    //  DoSystem) and G04/G05 are open, so the EMG re-press debounce is armed as in golden.  :1533 InitCarlibrationTask still has
++    //  no port -- stays gated.
+     iEMGPressDelay=8;
++    #if 0 // GATE G15 (second half) -- golden csystem.cpp:1533 (text below is golden VERBATIM)
+     fContact->InitCarlibrationTask();
+-    #else
+-        // (no replacement -- the gated statement(s) simply do not happen)
+     #endif
+ //    MyDBIProcess("System", "LockIndexMotorAndDoHomeProcess");                 //kevin 20201106     //Steven 20210126 : Mark for一直存檔導致軟替異常
+ }
+@@ -19974,6 +19993,10 @@ bool CountMotorPowerDelay()
+ 
+             if(MotorPowerOnDelay<=0)
+             {
++                //AI(W906-MT-FIX1) 20260926: EastSun ruling 20260926 on G16 -- each release only while that group's 1203 axes are
++                //  servo-ON (W906_BrakeReleaseOK; golden releases unconditionally).  A group held here is released later by
++                //  DoSystem's G05 idle pass once its drives are servo-ON.
++                if(W906_BrakeReleaseOK("Index", "CountMotorPowerDelay G16"))
+                 IndexMotorBreakerON();
+                 //--------------------------------------------------------------------------
+                 //  GATE G16 -- golden csystem.cpp:1561-1564
+@@ -19998,10 +20021,10 @@ bool CountMotorPowerDelay()
+                 //  seconds, golden releases the arm Z / cassette brakes here.  ⚠ golden does not check that the
+                 //  drives are servo-ON first -- on HT9050 that is the 1203 drives' state, which only the monitor
+                 //  knows; recorded for EastSun, not changed.
+-                MagazineBreakerON();                                            //JerryYang 20220909 : add magazine
+-                InOutArmZBreakerON();                                           //add One sucker with rotate
+-                LDCarRotArmZBreakerOn();                                        //RogerYang 20250828 add for Loader Rotate Arm
+-                CassetteBreakerON();                                            //Ifor 20251216 add:Boat Carrier
++                if(W906_BrakeReleaseOK("Magazine", "CountMotorPowerDelay G16"))     MagazineBreakerON();     //JerryYang 20220909 : add magazine
++                if(W906_BrakeReleaseOK("InOutArmZ", "CountMotorPowerDelay G16"))    InOutArmZBreakerON();    //add One sucker with rotate
++                if(W906_BrakeReleaseOK("LDCarRotArmZ", "CountMotorPowerDelay G16")) LDCarRotArmZBreakerOn(); //RogerYang 20250828 add for Loader Rotate Arm
++                if(W906_BrakeReleaseOK("Cassette", "CountMotorPowerDelay G16"))     CassetteBreakerON();     //Ifor 20251216 add:Boat Carrier
+                 SW[SwManualZ1].Off();
+                 SW[SwManualZ2].Off();
+             }
+@@ -29977,12 +30000,36 @@ bool (*W906_FormFShowHook)(const char* goldenForm)   = 0;
+ bool (*W906_MotorHomingHook)()                       = 0;
+ int  (*W906_MotorMovingHook)(int motorIndex)         = 0;
+ void (*W906_MotorAllBtnUpHook)(const char* why)      = 0;
++bool (*W906_BrakeServoOnHook)(const char* group, AnsiString* why) = 0;   //AI(W906-MT-FIX1) 20260926: see csystem.h
+ 
+ bool W906_FormFShow(const char* goldenForm, bool member)
+ {
+     return member || (W906_FormFShowHook != 0 && W906_FormFShowHook(goldenForm));
+ }
+ 
++//AI(W906-MT-FIX1) 20260926: the servo-ON guard in front of golden's brake releases (EastSun ruling 20260926, csystem.h).
++//  Tick thread only (DoSystem / CountMotorPowerDelay / uhome all run there).  The log line is printed only when a group's
++//  answer changes, so the G05 idle pass (every DoSystem pass) does not flood the console.
++bool W906_BrakeReleaseOK(const char* group, const char* site)
++{
++    if (W906_BrakeServoOnHook == 0) return true;                                // ctest / no wb_serve side: golden
++    static const char* const kGroups[5] = { "Index", "Magazine", "InOutArmZ", "LDCarRotArmZ", "Cassette" };
++    static int s_last[6] = { -1, -1, -1, -1, -1, -1 };                          // 1 allowed / 0 held / -1 never asked; [5] = unknown name
++    int gi = 5;
++    for (int i = 0; i < 5; ++i) if (group && std::strcmp(group, kGroups[i]) == 0) { gi = i; break; }
++    AnsiString why;
++    bool ok = true;
++    if (bMotorPowerState == false) { ok = false; why = "bMotorPowerState=false (motor power off / just cut; SnMotorPower lags)"; }
++    else ok = W906_BrakeServoOnHook(group, &why);
++    const int now = ok ? 1 : 0;
++    if (s_last[gi] != now) {
++        std::printf("brake release %s: %s (%s)%s%s\n", ok ? "ALLOWED" : "HELD", group ? group : "?", site ? site : "",
++                    ok ? "" : " -- ", ok ? "" : why.c_str());
++        s_last[gi] = now;
++    }
++    return ok;
++}
++
+ static W906MotorLockState g_W906MotorLock;
+ const W906MotorLockState& W906_GetMotorLockState()
+ {
+diff --git a/csystem.h b/csystem.h
+index e53877c..81c7852 100644
+--- a/csystem.h
++++ b/csystem.h
+@@ -423,6 +423,19 @@ extern bool (*W906_MotorHomingHook)();
+ extern int  (*W906_MotorMovingHook)(int motorIndex);
+ extern void (*W906_MotorAllBtnUpHook)(const char* why);
+ 
++//AI(W906-MT-FIX1) 20260926: EastSun ruling 20260926 on G16 -- "對應軸 Servo On 才放" (release a brake group only while the
++//   axes it holds are servo-ON).  golden releases the Index / Magazine / In-Out-Arm Z / Loader-rotate Z / Cassette brakes
++//   without looking at the drives; golden could, because its start-up InitMotor servo-ONs every axis.  Here the 1203 axes
++//   belong to EastSun's monitor and nothing servo-ONs them by itself.
++//   W906_BrakeServoOnHook(group, why)  -- registered by the wb_serve side (WebMotorAccessLive.cpp): true = every enabled
++//        PCI1203 axis of that brake group is opened by the monitor and its SVON bit is on; false + why otherwise.
++//        group is one of "Index", "Magazine", "InOutArmZ", "LDCarRotArmZ", "Cassette".
++//   W906_BrakeReleaseOK(group, site)   -- guard in front of every golden *BreakerON() release (G16 CountMotorPowerDelay,
++//        G05 DoSystem idle pass, uhome HOME): hook NULL (ctest) -> true (golden); else false while bMotorPowerState is
++//        false (motor power just cut -- SnMotorPower lags) or the hook says no.  Prints once per group on each change.
++extern bool (*W906_BrakeServoOnHook)(const char* group, AnsiString* why);
++bool W906_BrakeReleaseOK(const char* group, const char* site);
++
+ // member || W906_FormFShowHook(goldenForm)  (same union as WebStart.cpp's W906_FShow)
+ bool W906_FormFShow(const char* goldenForm, bool member);
+ 
+diff --git a/tests/test_mainproc_guard.cpp b/tests/test_mainproc_guard.cpp
+index 2da49bb..7f96b43 100644
+--- a/tests/test_mainproc_guard.cpp
++++ b/tests/test_mainproc_guard.cpp
+@@ -57,6 +57,8 @@
+ #include "atester_shims.h"
+ #include "forms/fHome.h"
+ #include "w906_test_motors.h"  // AI(W906-T6-MAINPROC) 20260923: MOT[].Motor 的開機不變式（見該檔檔頭）
++#include "Motor/mymotor.h"     // AI(W906-MT-FIX1) 20260926: MOT[] (the powered-machine fixture in ArmRunState)
++#include "Motor/HTMotor.h"     //   iServoOn
+ 
+ extern bool bDestoryOnSht;
+ 
+@@ -88,6 +90,13 @@ static void ArmRunState()
+     bDestoryOnSht = false;
+     if (fContact) fContact->fShow = false;
+     iHome         = 0;
++    //AI(W906-MT-FIX1) 20260926: GATE G04 is open now (EastSun ruling 20260926). golden's out-of-power arm locks the index
++    //  motor and sets iHome=1 on EVERY pass while IsIndexMotorOutOfPower() -- which is golden's answer for an unpowered
++    //  machine, and it is exactly what this fixture was (no servo LED lit). This test is about the SystemStart guard, not
++    //  about power, so the fixture now models a powered machine: golden's Index servo LEDs on (the non-1203 arm of
++    //  IsIndexMotorOutOfPower). Without this, iHome==1 would come from G04 and say nothing about the guard.
++    MOT[MTestZ1].Led[iServoOn] = true;
++    MOT[MTestZ2].Led[iServoOn] = true;
+ }
+ 
+ int main()
+diff --git a/tests/test_mt_e3b_engine.cpp b/tests/test_mt_e3b_engine.cpp
+index ae6b6ff..d359409 100644
+--- a/tests/test_mt_e3b_engine.cpp
++++ b/tests/test_mt_e3b_engine.cpp
+@@ -102,6 +102,15 @@ static int         g_stopCalls = 0;
+ static std::string g_stopWhy;
+ static void FakeStop1203(const char* why) { ++g_stopCalls; g_stopWhy = why ? why : ""; }
+ 
++//AI(W906-MT-FIX1) 20260926: fake servo-ON answer per brake group (PART H) -- g_brakeHeld's drives are "not servo-ON".
++static std::string g_brakeHeld;
++static bool FakeBrakeServoOn(const char* group, AnsiString* why)
++{
++    const bool held = group && g_brakeHeld == group;
++    if (held && why) *why = "fake: not servo-ON";
++    return !held;
++}
++
+ static int         g_btnUpCalls = 0;
+ static std::string g_btnUpWhy;
+ static void FakeAllBtnUp(const char* why) { ++g_btnUpCalls; g_btnUpWhy = why ? why : ""; }
+@@ -383,6 +392,47 @@ int main(int argc, char** argv)
+         INDEX_MOTION_CARD = saveIndex;
+     }
+ 
++    // -----------------------------------------------------------------------
++    //  PART H -- AI(W906-MT-FIX1) 20260926: EastSun rulings 20260926
++    //    G16/G05/HOME: a brake group is released only while its 1203 axes are servo-ON (W906_BrakeReleaseOK)
++    //    G04: on a PCI1203 Index row, "out of power" = SnMotorPower off or EMG (IsIndexMotorOutOfPower)
++    // -----------------------------------------------------------------------
++    std::printf("\n-- PART H: brake-release servo-ON guard, HT9050 out-of-power predicate --\n");
++    W906_BrakeServoOnHook = 0;
++    bMotorPowerState = true;
++    CHECK(W906_BrakeReleaseOK("InOutArmZ", "test") == true);                   // no hook (ctest): golden
++    W906_BrakeServoOnHook = &FakeBrakeServoOn; g_brakeHeld = "InOutArmZ";
++    CHECK(W906_BrakeReleaseOK("InOutArmZ", "test") == false);                  // that group's drive not servo-ON: held
++    CHECK(W906_BrakeReleaseOK("Cassette", "test") == true);                    // another group whose drives are ON: released
++    bMotorPowerState = false;
++    CHECK(W906_BrakeReleaseOK("Cassette", "test") == false);                   // motor power just cut: never released
++    bMotorPowerState = true;
++#ifndef SOFT_SIMULTE
++    {
++        const AnsiString saveCard = MOT[MTestZ1].CardType;
++        const bool saveSenEnable = Sen[SnMotorPower].Enable;
++        Sen[SnMotorPower].Enable = false;                                     // a disabled sensor: IsOff() == false (motor power "on")
++        MOT[MTestZ1].CardType = "";                                           // not a 1203 row: golden test (Galil servo LEDs, never lit here)
++        MOT[MTestZ1].Led[iServoOn] = false;
++        CHECK(IsIndexMotorOutOfPower() == true);                              // golden: TRUE FOREVER on this machine (the G04 note)
++        MOT[MTestZ1].CardType = "PCI1203";                                    // HT9050 (R2)
++        CHECK(IsIndexMotorOutOfPower() == IsEMGPressed());                    // ruling: SnMotorPower off || EMG -- power is "on" here
++        // G16: the countdown reaches 0 -> only the allowed groups are released
++        W906_BrakeServoOnHook = &FakeBrakeServoOn; g_brakeHeld = "InOutArmZ";
++        SW[SwInArmZBreaker].Off(); SW[SwOutArmZBreaker].Off(); SW[SwCassetteLDMotBreaker].Off();
++        MotorPowerOnDelay = 1; SystemSec = (SystemSec + 7) % 60;             // a new second -> decrement to 0 -> the release block
++        CountMotorPowerDelay();
++        CHECK(MotorPowerOnDelay <= 0);
++        CHECK(SW[SwInArmZBreaker].OutValue == false && SW[SwOutArmZBreaker].OutValue == false);   // held: its axes not servo-ON
++        CHECK(SW[SwCassetteLDMotBreaker].OutValue == true);                                        // released: its axes are ON
++        W906_BrakeServoOnHook = 0;
++        MOT[MTestZ1].CardType = saveCard;
++        Sen[SnMotorPower].Enable = saveSenEnable;
++        SW[SwCassetteLDMotBreaker].Off();
++    }
++#endif
++    W906_BrakeServoOnHook = 0;
++
+     SystemStart = false; iHome = 0;
+     std::printf("\n=== %d checks, %d FAIL ===\n", g_checks, g_fail);
+     return g_fail ? 1 : 0;
+diff --git a/uhome.cpp b/uhome.cpp
+index 6b85fa9..86e03f4 100644
+--- a/uhome.cpp
++++ b/uhome.cpp
+@@ -2129,11 +2129,14 @@ bool ProcessMotorHome(bool Flag2)
+             for(int i=0; i<TOTAL_MOTOR; i++)
+                 fHome->ShowLed(i, 0);
+             fHome->Show();
+-            IndexMotorBreakerON();
+-            MagazineBreakerON();                                                //JerryYang 20220909 : add magazine
+-            InOutArmZBreakerON();                                               //add One sucker with rotate
+-            LDCarRotArmZBreakerOn();                                            //RogerYang 20250828 add for Loader Rotate Arm
+-            CassetteBreakerON();                                                //Ifor 20251216 add:Boat Carrier
++            //AI(W906-MT-FIX1) 20260926: EastSun ruling 20260926 -- a brake group is released only while its 1203 axes are servo-ON
++            //  (W906_BrakeReleaseOK, csystem.h); golden releases here unconditionally.  A held group is released later by
++            //  DoSystem's G05 idle pass once its drives are servo-ON (HOME cannot drive that axis before -- the safe direction).
++            if(W906_BrakeReleaseOK("Index", "HOME start"))        IndexMotorBreakerON();
++            if(W906_BrakeReleaseOK("Magazine", "HOME start"))     MagazineBreakerON();                                                //JerryYang 20220909 : add magazine
++            if(W906_BrakeReleaseOK("InOutArmZ", "HOME start"))    InOutArmZBreakerON();                                               //add One sucker with rotate
++            if(W906_BrakeReleaseOK("LDCarRotArmZ", "HOME start")) LDCarRotArmZBreakerOn();                                            //RogerYang 20250828 add for Loader Rotate Arm
++            if(W906_BrakeReleaseOK("Cassette", "HOME start"))     CassetteBreakerON();                                                //Ifor 20251216 add:Boat Carrier
+             for(int i=eAuto1; i<=iAutoRight; i++)
+             {
+                 SW[SwAutoCCW[i]].Off();
+-- 
+2.55.0.windows.5
+

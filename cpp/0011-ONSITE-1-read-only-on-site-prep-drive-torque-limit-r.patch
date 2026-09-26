@@ -1,0 +1,1609 @@
+From b1c9c257887cb348c3c8e4791ec0c15f40163a9f Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 26 Sep 2026 09:18:36 +0800
+Subject: [PATCH 11/14] ONSITE-1: read-only on-site prep -- drive torque-limit
+ read-back (60E0h/60E1h) and an ioweb_probe DI watch mode for mapping the
+ safety doors
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Weekend plan, machine share (laptop agreed 20260926): measure read-only whether the SGDXS/SGDXW drives support the torque-limit
+objects that kCmdAxTorqueLimitSet writes, and find which 1203 input each safety door is wired to (plan "20260924 下午新發現").
+Nothing here writes to the card; neither tool has been run on the card yet (that is the on-site session).
+- Monitor (EastSun's module, line counts unchanged): the kCfgDrive block also reads 60E0h/60E1h (U16, +0x800 for axis B) with the
+  already-allowed Acm_DevReadSDOData, Yield_() after each, same due/throttle rules; Pci1203AxisSample trqLimVal/Valid/Ret/RetText
+  (ok / readFailed + vendor code and text / notRead); a failed read is not retried and does not set cfgBad (like homeVal[4]/[5]).
+  Allowlist prose names the two objects; kCmdAxTorqueLimitSet now marks kCfgDrive due after it is issued so the read-back refreshes.
+- Tags: pci1203.axN.trqLim.pos/.neg (0.1 %, null unless read OK), .posRead/.negRead (status), .posRet/.negRet (vendor code).
+- tools/ioweb_probe: `ioweb_probe <outDir> <seconds> watch` prints every DI bit change with ring/station/chan/bit and every
+  IO_Table row the web page would read there (ISABase 3, IP=station, Port=chan*8+bit, Enable=0 rows included), "(no ePCI1203 row)"
+  otherwise, legacy "Port=byte, Bit=bit" rows separately as Bit-column candidates, and at start the door rows that are not on the
+  1203 table yet; appends watch_di_changes.csv. Both modes print the torque-limit answer right after the first successful Poll and
+  write card_axes.csv at once (+8 columns at the end); Ctrl+C / close only sets a flag, the main thread writes the outputs and
+  closes the monitor. Pure logic in tools/ioweb_watch.h.
+Tests: new IoWatch_HT9050 (row-by-row agreement with ChanIoPoints ResolveIoPoint on machines/HT9050/IO_Table.csv: 229 input rows;
+legacy rows; door rows off the 1203), WB_Tags pins the new tag names (null with no monitor), Pci1203Pure, IoPoints_HT9050 --
+pass on build_integ_ship_x86 (WinLibs) and build_integ_ora_ship_x86 (MinGW.org 6.3.0); production_audit 0 changes around every
+ctest; pci1203_readonly_gate PASS (30 calls, same set); control gate only the pre-existing START_RING; pe_truncation 174/174 in
+both dirs; macro_order_gate only the known 3 new / 3 stale. Two adversarial review rounds, all findings fixed.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203Control.cpp |   2 +-
+ EtherCAT/Pci1203Control.h   |   2 +-
+ EtherCAT/Pci1203Monitor.cpp |   6 +-
+ EtherCAT/Pci1203Monitor.h   |   6 +-
+ WebBridgeTags.cpp           |   2 +-
+ tests/CMakeLists.txt        |  21 ++
+ tests/test_ioweb_watch.cpp  | 393 ++++++++++++++++++++++++++
+ tests/test_wb_tags.cpp      |  16 ++
+ tools/ioweb_probe.cpp       | 541 ++++++++++++++++++++++++++++++++++--
+ tools/ioweb_watch.h         | 393 ++++++++++++++++++++++++++
+ 10 files changed, 1350 insertions(+), 32 deletions(-)
+ create mode 100644 tests/test_ioweb_watch.cpp
+ create mode 100644 tools/ioweb_watch.h
+
+diff --git a/EtherCAT/Pci1203Control.cpp b/EtherCAT/Pci1203Control.cpp
+index 5b1fff3..47dfa28 100644
+--- a/EtherCAT/Pci1203Control.cpp
++++ b/EtherCAT/Pci1203Control.cpp
+@@ -1741,7 +1741,7 @@ Pci1203CmdResult TPci1203Control::Run_(const Pci1203Cmd& c)
+         case kCmdAxMoveHome: ret = Acm_AxMoveHome(ax, (U32)c.homeMode, (U32)WireDirToVendor(c.dir)); if (ret == SUCCESS) mon->MarkCfgDue_(c.axis, TPci1203Monitor::kCfgHome); break;  case kCmdAxSetExtDrive: ret = Acm_AxSetExtDrive(ax, (U16)((c.value != 0.0) ? 1 : 0)); break;  case kCmdAxSetCmdPos: ret = Acm_AxSetCmdPosition(ax, (F64)c.value); break;  case kCmdAxSetActPos: ret = Acm_AxSetActualPosition(ax, (F64)c.value); break;  case kCmdAxSetInitCfg: { const U32 pid = (U32)InitCfgPropId(c.initCfg); if (Pci1203InitCfgIsF64(c.initCfg)) ret = Acm_SetF64Property(ax, pid, (F64)c.value); else ret = Acm_SetU32Property(ax, pid, (U32)c.value); bool notSup = false; if (ret == (U32)Dsp_PropertyIDNotSupport && Pci1203InitCfgNotSupportedOk(c.initCfg)) { notSup = true; char nb[224]; std::snprintf(nb, sizeof(nb), "NOTE     %s on ax%d -> 0x%08lX Dsp_PropertyIDNotSupport: counted as SUCCESS, as golden InitMotor does", Pci1203InitCfgName(c.initCfg), c.axis, (unsigned long)ret); impl_->note(nb); r.why = "property not supported here (Dsp_PropertyIDNotSupport) -- counted as success, like golden InitMotor"; ret = SUCCESS; } if (ret == SUCCESS && !notSup) { if (c.initCfg == kInitCfgElReact) mon->ExpectCfg_(c.axis, TPci1203Monitor::kExpLimit, kLimitElReact, (double)(U32)c.value); else if (c.initCfg == kInitCfgJerk) mon->ExpectCfg_(c.axis, TPci1203Monitor::kExpSpeed, kSpeedJerk, (double)c.value); else mon->MarkCfgDue_(c.axis, (unsigned)(TPci1203Monitor::kCfgSpeed | TPci1203Monitor::kCfgLimit | TPci1203Monitor::kCfgHome)); } break; }  case kCmdAxHome:   //AI(W906-MT-E1) 20260925: the four INTERNAL kinds, issued only by WebMotorAccess. Same line, no line below moves   //AI(W906-MT-E3a) 20260925: + kCmdAxSetInitCfg. The two entries the monitor reads back (ElReact = limitVal[3], PAR_AxJerk = speed[8]) are compared with what was written (ExpectCfg_); the rest have no read slot, so the axis's card groups are read once more (MarkCfgDue_) and the screen shows whatever the write changed. A not-supported property wrote nothing and arms nothing
+             ret = Acm_AxHome(ax, (U32)c.homeMode, (U32)WireDirToVendor(c.dir));
+             if (ret == SUCCESS) mon->MarkCfgDue_(c.axis, TPci1203Monitor::kCfgDrive);  break;   //AI(W906-IOWEB-P25) 20260925: the home call re-seeds the drive's 6099h:1/:2, 609Ah and 6098h (Pci1203Control.h:415-419), so that group is read once more
+-        case kCmdAxTorqueLimitSet: ret = (U32)TorqueLimitIssue_((std::size_t)dev, c, r); break;  case kCmdAxSetSpeed:   //AI(W906-MT-FIX1) 20260926: write 60E0h, write 60E1h, read both back, compare -- stops at the first failed call; r.ok / value / valueValid / failStep / why are filled there, ret = the failed call's return (SUCCESS when every call succeeded, including a read-back mismatch). Same line, no line below moves
++        case kCmdAxTorqueLimitSet: ret = (U32)TorqueLimitIssue_((std::size_t)dev, c, r); mon->MarkCfgDue_(c.axis, TPci1203Monitor::kCfgDrive); break;  case kCmdAxSetSpeed:   //AI(W906-MT-FIX1) 20260926: write 60E0h, write 60E1h, read both back, compare -- stops at the first failed call; r.ok / value / valueValid / failStep / why are filled there, ret = the failed call's return (SUCCESS when every call succeeded, including a read-back mismatch). Same line, no line below moves   //AI(W906-ONSITE-1) 20260926 (adversarial review, finding 8): + MarkCfgDue_(kCfgDrive) for THIS axis, so the monitor's own 60E0h / 60E1h read-back (Pci1203AxisSample::trqLim*, published as pci1203.axN.trqLim.*) is re-read by the next Poll instead of showing the value from before the write. After EVERY issued Execute, not only a successful one: the P25b rule of the drive writes below ("a failed write may still have been applied by the drive"), which the header's own ⚠ at kTorqueLimitPos says of this command too. One group re-read of one axis; the dry-run and refused paths never reach this switch. Same line, no line below moves
+             ret = Acm_SetF64Property(ax, SpeedPropId(c.speed), (F64)c.value);
+             if (ret == SUCCESS) mon->ExpectCfg_(c.axis, TPci1203Monitor::kExpSpeed, (int)c.speed, (double)c.value);  break;   //AI(W906-IOWEB-P25) 20260925: read back THIS property next Poll and compare (there was no re-read at all: the panel lagged up to 5 s)
+         //AI(W906-1203ALM-21) 20260915: limit parameter. The accessor follows
+diff --git a/EtherCAT/Pci1203Control.h b/EtherCAT/Pci1203Control.h
+index af74d0a..58c90a6 100644
+--- a/EtherCAT/Pci1203Control.h
++++ b/EtherCAT/Pci1203Control.h
+@@ -1025,7 +1025,7 @@ int Pci1203GoldenInitCfgPlan(int motorClass, bool sensorType, bool in1Logic,
+    ⚠ A FAILED WRITE MAY STILL HAVE BEEN APPLIED (an SDO answer can time out
+    after the drive took the value), and after a step-2 failure 60E0h already
+    holds the new value while 60E1h may not -- the two limits can differ until
+-   the next successful Execute. `why` says so for each step.
++   the next successful Execute. `why` says so for each step.   [AI(W906-ONSITE-1) 20260926: after every issued Execute the monitor re-reads this axis's kCfgDrive group once (MarkCfgDue_ in Run_), so pci1203.axN.trqLim.* shows what the drive holds afterwards. Same line]
+    ⚠ 0 IS A LEGAL VALUE AND MEANS NO TORQUE: an axis limited to 0 cannot hold
+    a load. The range check is the object's own (UINT16); what value is sane
+    for a given axis is the caller's decision, not this module's.
+diff --git a/EtherCAT/Pci1203Monitor.cpp b/EtherCAT/Pci1203Monitor.cpp
+index 76b0429..b7d3efd 100644
+--- a/EtherCAT/Pci1203Monitor.cpp
++++ b/EtherCAT/Pci1203Monitor.cpp
+@@ -2563,7 +2563,7 @@ bool TPci1203Monitor::Poll()
+             //  group is re-read (ExpectCfg_ / MarkCfgDue_), and every SDO read below is followed by a
+             //  Yield_() so a queued output does not wait behind a mailbox transaction.
+             //  kCfgGear = 2701h-2704h. kCfgDrive = everything else in the block below (Pn21D, Pn002,
+-            //  6076h, Pn50A/B, 1008h, Pn000, 6099h/609Ah/607Ch, 6098h) -- one group, because they
++            //  6076h, Pn50A/B, 1008h, Pn000, 6099h/609Ah/607Ch, 6098h, 60E0h/60E1h [AI(W906-ONSITE-1) 20260926: torque-limit read-back, not in cfgBad]) -- one group, because they
+             //  share one block and are written rarely.
+             //  ⓘ impl_->gearReadDue / gearReadForce are no longer consulted.
+             //  ⓘ Line count kept equal to the colleague's block, so every :NNNN below still points where it did.
+@@ -2693,7 +2693,7 @@ bool TPci1203Monitor::Poll()
+                         s.driveHomeValid[q] = (rr == SUCCESS);  if (rr != SUCCESS) cfgBad |= kCfgDrive;  Yield_();
+                     }
+                     calls += Pci1203AxisSample::kDriveHomeReadCount;
+-
++                    for (int k = 0; k < 2; ++k) { U16 tl = 0; const U32 tr = Acm_DevReadSDOData(impl_->dev, 0, st, (U16)((k == 0 ? 0x60E0 : 0x60E1) + base), 0, 4 /*ECAT_TYPE_U16*/, 2, &tl); s.trqLimValid[k] = (tr == SUCCESS); s.trqLimRet[k] = (unsigned long)tr; s.trqLimRetText[k] = DecodeError(tr); if (tr == SUCCESS) s.trqLimVal[k] = (unsigned short)tl; ++calls;  Yield_(); }   //AI(W906-ONSITE-1) 20260926 (adversarial review): + trqLimRetText = DecodeError(tr) -- the vendor's text for the code, "" on SUCCESS; a local decode (Acm_GetErrorMessage, already on the allowlist and already called through this same helper), no device transaction, and only here in the kCfgDrive block, not every Poll.   //AI(W906-ONSITE-1) 20260926: 60E0h / 60E1h (68E0h / 68E1h on axis B -- `base` is Pci1203GearAxisBase above) Positive / Negative Torque Limit Value, CiA 402 UNSIGNED16 in 0.1 % of rated torque, READ-BACK ONLY: EastSun 20260926 wants to measure on the machine whether the SGDXS / SGDXW drives support them. U16 with size 2, the same width as every Pn read in this block and as Pci1203Control's own read-back of these two. The call's return is kept (Pci1203AxisSample::trqLimRet), so "this drive has no such object" stays distinguishable from "not read yet". ⚠ Deliberately NOT fed into cfgBad: an object a drive does not have is not a read to retry, and a retry re-reads the WHOLE kCfgDrive group -- the same rule as homeVal[4] / [5] above. Acm_DevReadSDOData is already on THE ALLOWLIST (its prose now names these two objects); no new vendor call, no write. On the old blank line, so no line below moves
+                     //  6098h is SINT (one byte), not U32 -- asking with the
+                     //  wrong width is how a readable object reports itself as
+                     //  absent, the same trap as the 128-vs-131 string read.
+@@ -3560,7 +3560,7 @@ bool Pci1203DriveErrAccept(unsigned long le, unsigned long& ownProbe)
+     ownProbe = 0;                                            // someone else wrote it since
+     return true;
+ }
+-
++const char* Pci1203TorqueLimitReadText(bool valid, unsigned long ret) { return valid ? "ok" : (ret != 0ul ? "readFailed" : "notRead"); }   //AI(W906-ONSITE-1) 20260926: see the header (Pci1203AxisSample::trqLimRet for the three states). SUCCESS is 0, so "ok" is decided by `valid`, never by `ret`. On the old blank line, so no line below moves
+ void Pci1203TorqueClearPoll(Pci1203AxisSample& s)
+ {
+     s.torqueValid        = false;
+diff --git a/EtherCAT/Pci1203Monitor.h b/EtherCAT/Pci1203Monitor.h
+index 020a66b..06e0f38 100644
+--- a/EtherCAT/Pci1203Monitor.h
++++ b/EtherCAT/Pci1203Monitor.h
+@@ -132,7 +132,7 @@
+ //  list that is a MAILBOX TRANSACTION rather than a local or cyclic read:
+ //
+ //      Acm_DevReadSDOData        CoE object 603Fh -- the SERVOPACK's own
+-//                                alarm code, the A.xxx its LED shows  (read)
++//                                alarm code, the A.xxx its LED shows  (read)   [AI(W906-ONSITE-1) 20260926: + 60E0h / 60E1h Positive / Negative Torque Limit Value (CiA 402 UNSIGNED16, 0.1 % of rated torque; 68E0h / 68E1h for axis B of a two-axis SGDXW, Pci1203GearAxisBase) -- READ-BACK ONLY, EastSun 20260926: measure on the machine whether the SGDXS / SGDXW drives support them. Two reads per axis inside the kCfgDrive configuration block (so in the first Poll after open / rescan / re-attach and whenever that group is due -- not every Poll), Yield_() after each; a failed read is stored with its return code (Pci1203AxisSample::trqLimRet) and is NOT retried, because an object a drive does not have stays absent. Their setter is kCmdAxTorqueLimitSet in Pci1203Control.cpp and stays out of this file. Same line, no line below moves]
+ //
+ //  AI(W906-1203ALM-9) 20260914: one more read. It corrects an entry in the
+ //  prohibition list further down rather than adding something new.
+@@ -1038,7 +1038,7 @@ struct Pci1203AxisSample {
+     long           driveHomeMethod;     // 6098h, -1 until read
+     bool           driveHomeMethodValid;
+     unsigned long  lastError;   // first non-SUCCESS return this poll, else 0
+-    unsigned long driveErrProbe = 0;  bool torqueValid = false; long torqueRaw = 0; int torqueSrc = 0; bool torqueUnitVerified = false; bool torquePctValid = false; double torquePct = 0.0; bool torqueNmValid = false; double torqueNm = 0.0; unsigned long torqueErr = 0; bool torquePdoValid = false; long torquePdoRaw = 0; bool torquePdoOff = false; bool torquePdoOffPerm = false; int torquePdoFails = 0; bool torquePdoUnitOk = false; int torqueAgree = 0; bool torqueSdoValid = false; long torqueSdoRaw = 0; unsigned long torqueSdoErr = 0; double torqueSdoMs = 0.0; bool driveIs402 = false;   //AI(W906-MT-E3a) 20260925: ACTUAL TORQUE (r4 plan steps 1-3; EastSun R3/R6 20260925). torqueRaw is in the drive's [Trq.unit] (6077h / 6877h); torqueSrc 0 = none, 1 = PDO (Acm_AxGetActTorque, every poll), 2 = SDO (6077h + Pci1203GearAxisBase, the focus axis only -- SDO wins when both were read this poll, because its unit is the object's own). torquePct = raw x 2704h num/den (the LIVE gearVal[6]/[7]), torqueNm = pct/100 x 6076h (encVal[2], mN.m)/1000 -- each with its own valid flag: an axis whose unit or rated torque was not read publishes null, never 0 -- and so does a PDO value whose unit is not verified yet (the raw number is still published, as torqueRaw with torqueUnitVerified=false). torqueUnitVerified = the unit of THIS value is known: always for SDO, for PDO only after torquePdoUnitOk (3 PDO/SDO pairs on the focus axis agreed, Pci1203TorqueCompare) -- the headers do not say what unit Acm_AxGetActTorque returns. torquePdoOff = the PDO read is latched off (torquePdoOffPerm: PDONotAssign 0x8000009F, a configuration fact, not retried until the axes are re-opened; otherwise after 3 consecutive failures, retried on the 30 s window). driveIs402 = the owning station answered CoE 1000h with profile 402 (joined in OpenAxes_); the SDO fallback refuses anything else. ⚠ NONE of these feed `valid` or `lastError`: an unmapped torque must not blank a good position. Default member initialisers so the constructor below is untouched. On the old blank line, so no line below moves   //AI(W906-MT-FIX1) 20260926: + driveErrProbe (review 20260926, finding 3) = the return code THIS MONITOR's own failing Acm_AxGetActTorque left in the axis handle's Acm_GetLastError (0 = none). The next Poll's Acm_GetLastError that still reads exactly that code is the monitor's own probe, not the drive's reason for an ERROR_STOP, so driveErr/driveErrText keep what they showed before (Pci1203DriveErrAccept); any other value -- a refused command from Pci1203Control, which shares the handle -- is published and clears the probe. Internal, not published; same line, no line below moves
++    unsigned long driveErrProbe = 0;  bool torqueValid = false; long torqueRaw = 0; int torqueSrc = 0; bool torqueUnitVerified = false; bool torquePctValid = false; double torquePct = 0.0; bool torqueNmValid = false; double torqueNm = 0.0; unsigned long torqueErr = 0; bool torquePdoValid = false; long torquePdoRaw = 0; bool torquePdoOff = false; bool torquePdoOffPerm = false; int torquePdoFails = 0; bool torquePdoUnitOk = false; int torqueAgree = 0; bool torqueSdoValid = false; long torqueSdoRaw = 0; unsigned long torqueSdoErr = 0; double torqueSdoMs = 0.0; bool driveIs402 = false;  unsigned short trqLimVal[2] = {0, 0}; bool trqLimValid[2] = {false, false}; unsigned long trqLimRet[2] = {0ul, 0ul};  std::string trqLimRetText[2];   //AI(W906-MT-E3a) 20260925: ACTUAL TORQUE (r4 plan steps 1-3; EastSun R3/R6 20260925). torqueRaw is in the drive's [Trq.unit] (6077h / 6877h); torqueSrc 0 = none, 1 = PDO (Acm_AxGetActTorque, every poll), 2 = SDO (6077h + Pci1203GearAxisBase, the focus axis only -- SDO wins when both were read this poll, because its unit is the object's own). torquePct = raw x 2704h num/den (the LIVE gearVal[6]/[7]), torqueNm = pct/100 x 6076h (encVal[2], mN.m)/1000 -- each with its own valid flag: an axis whose unit or rated torque was not read publishes null, never 0 -- and so does a PDO value whose unit is not verified yet (the raw number is still published, as torqueRaw with torqueUnitVerified=false). torqueUnitVerified = the unit of THIS value is known: always for SDO, for PDO only after torquePdoUnitOk (3 PDO/SDO pairs on the focus axis agreed, Pci1203TorqueCompare) -- the headers do not say what unit Acm_AxGetActTorque returns. torquePdoOff = the PDO read is latched off (torquePdoOffPerm: PDONotAssign 0x8000009F, a configuration fact, not retried until the axes are re-opened; otherwise after 3 consecutive failures, retried on the 30 s window). driveIs402 = the owning station answered CoE 1000h with profile 402 (joined in OpenAxes_); the SDO fallback refuses anything else. ⚠ NONE of these feed `valid` or `lastError`: an unmapped torque must not blank a good position. Default member initialisers so the constructor below is untouched. On the old blank line, so no line below moves   //AI(W906-MT-FIX1) 20260926: + driveErrProbe (review 20260926, finding 3) = the return code THIS MONITOR's own failing Acm_AxGetActTorque left in the axis handle's Acm_GetLastError (0 = none). The next Poll's Acm_GetLastError that still reads exactly that code is the monitor's own probe, not the drive's reason for an ERROR_STOP, so driveErr/driveErrText keep what they showed before (Pci1203DriveErrAccept); any other value -- a refused command from Pci1203Control, which shares the handle -- is published and clears the probe. Internal, not published; same line, no line below moves   //AI(W906-ONSITE-1) 20260926: + trqLimVal / trqLimValid / trqLimRet (inserted after driveIs402 on this line) = THE DRIVE'S TORQUE LIMIT READ-BACK, [0] = 60E0h Positive Torque Limit Value, [1] = 60E1h Negative (68E0h / 68E1h for axis B, Pci1203GearAxisBase), CiA 402 UNSIGNED16 in 0.1 % of rated torque, raw as the drive answers. EastSun 20260926: measure, read-only, whether the SGDXS / SGDXW drives support them at all. Read in the kCfgDrive block of Poll(). THREE states, and ret alone cannot tell two of them apart because SUCCESS is 0: trqLimValid = true -> trqLimVal is what the drive holds; false with trqLimRet != 0 -> the read WAS made and failed with that code (an object this drive does not have lands here); false with trqLimRet == 0 -> never attempted (no station, or the group has not been read since open). Pci1203TorqueLimitReadText() names the three ("ok" / "readFailed" / "notRead") so the tag layer and tools/ioweb_probe print the same words. After a failure trqLimVal keeps the last good number but is not valid. ⚠ kCmdAxTorqueLimitSet does not write these fields (that command's own r.value is its read-back); it arms this axis's kCfgDrive group (MarkCfgDue_, review fix 20260926 below), so the NEXT Poll re-reads them from the drive. NOT in `valid` / `lastError`, and a failure does not feed the group's retry (cfgBad). Same line, no line below moves   //AI(W906-ONSITE-1) 20260926 (adversarial review): + trqLimRetText[k] = the VENDOR'S OWN WORDS for trqLimRet[k], set beside it in Poll() through DecodeError() -- the monitor's existing Acm_GetErrorMessage helper, the same one driveErrText uses (no new vendor function; Acm_GetErrorMessage is on THE ALLOWLIST above). "" for SUCCESS and before any read; "0x........ (undecoded)" when the vendor declines. So tools/ioweb_probe can print a failed read's reason without making a vendor call itself. Not published as a tag. Same line
+     Pci1203AxisSample()
+         : valid(false), opened(false), byId(false)
+         , station(-1), stationAlias(-1), stationAxis(-1), poolIndex(-1)
+@@ -1866,7 +1866,7 @@ struct Pci1203SdoBackoff {
+ //  clears before it reads). The latches (torquePdoOff, the PDO unit
+ //  verification) are properties of the open handle and stay.
+ void Pci1203TorqueClearPoll(Pci1203AxisSample& s);
+-
++const char* Pci1203TorqueLimitReadText(bool valid, unsigned long ret);   //AI(W906-ONSITE-1) 20260926: one of Pci1203AxisSample::trqLimValid[k] / trqLimRet[k] in words: "ok" (read, value valid) | "readFailed" (a read was made and returned `ret` != SUCCESS -- e.g. the drive has no such object) | "notRead" (never attempted). Pure, both build arms, no vendor call; unit-tested in tests/test_ioweb_watch.cpp. On the old blank line, so no line below moves
+ }  // namespace ht9045
+ 
+ #endif  // ETHERCAT_PCI1203MONITOR_H
+diff --git a/WebBridgeTags.cpp b/WebBridgeTags.cpp
+index 6e7cda9..53a99a3 100644
+--- a/WebBridgeTags.cpp
++++ b/WebBridgeTags.cpp
+@@ -1870,7 +1870,7 @@ std::size_t PublishHandlerTags(webbridge::TagSnapshot& snap)
+                 stageStr(snap, tag, (a != 0 && !a->driveModelCoE.empty()),
+                          AnsiString(a ? a->driveModelCoE.c_str() : ""));
+             }
+-
++            { static const char* kTrqLimTag[2] = { "pos", "neg" };  for (int k = 0; k < 2; ++k) { const bool tv = (a != 0 && a->trqLimValid[k]); const bool tried = (a != 0 && (a->trqLimValid[k] || a->trqLimRet[k] != 0ul)); std::snprintf(tag, sizeof(tag), "pci1203.ax%d.trqLim.%s", i, kTrqLimTag[k]); stageDouble(snap, tag, tv, tv ? (double)a->trqLimVal[k] : 0.0); std::snprintf(tag, sizeof(tag), "pci1203.ax%d.trqLim.%sRead", i, kTrqLimTag[k]); stageStr(snap, tag, a != 0, AnsiString(a != 0 ? Pci1203TorqueLimitReadText(a->trqLimValid[k], a->trqLimRet[k]) : "")); std::snprintf(tag, sizeof(tag), "pci1203.ax%d.trqLim.%sRet", i, kTrqLimTag[k]); stageInt(snap, tag, tried, (long long)(a != 0 ? a->trqLimRet[k] : 0ul)); } }   //AI(W906-ONSITE-1) 20260926: THE DRIVE'S TORQUE LIMIT READ-BACK, beside the other drive-configuration tags (EastSun 20260926: measure whether the SGDXS / SGDXW drives support 60E0h / 60E1h; read-only, nothing here or in the monitor writes them). Six tags per axis slot: trqLim.pos / trqLim.neg = 60E0h / 60E1h (68E0h / 68E1h on axis B) RAW in 0.1 % of rated torque (1000 = 100 %), null unless THIS read succeeded -- never 0 for "not read", because 0 is a legal limit that means "no torque"; trqLim.posRead / negRead = "ok" | "readFailed" | "notRead" (Pci1203TorqueLimitReadText), gated on the SLOT EXISTING (`a != 0`), not on an axis being opened there -- OpenAxes_ sizes the slot array to the monitor's maxAxes (axes.assign), and wb_serve / ioweb_probe enable it with kPci1203TagAxes, so once the card has opened all 32 slots publish a word and a slot with no opened axis reads "notRead" (true: nothing was read there); null only when there is no monitor or it never got as far as opening its axes. That is the convention of the status tags beside it (opened / byId / driveErr / driveErrText are gated the same way), while the MEASUREMENT (trqLim.pos / neg) stays null until read [AI(W906-ONSITE-1) 20260926, adversarial review: the old wording "null only when the slot has no axis" was wrong -- comment corrected, behaviour unchanged]; trqLim.posRet / negRet = the vendor return of the last attempt (0 = SUCCESS), null when no read was ever attempted, so a failed read of an unsupported object and "not read yet" are told apart on the wire. Same per-slot fixed shape as every tag here. On the old blank line, so no line below moves
+             //AI(W906-1203HOME-1) 20260915: THE HOMING PARAMETERS THE CARD HOLDS.
+             // User: "介面也可以寫入 回HOME的相關參數 ... 這些功能我都是確定要
+             // 可以寫入資料的".
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index ff85aa8..6b655a1 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -4077,3 +4077,24 @@ add_test(NAME MT_E3b_Engine
+          COMMAND test_mt_e3b_engine "${CMAKE_SOURCE_DIR}/../machines/HT9050/Mot_Table.csv")
+ set_tests_properties(MT_E3b_Engine PROPERTIES TIMEOUT 600 ENVIRONMENT
+     "W906_E84DATA_ROOT=${_ht9045_log_scratch}/E84DataTxt;W906_TCPDATA_ROOT=${_ht9045_log_scratch}/TCP_Data;W906_SUMMARYLOT_ROOT=${_ht9045_log_scratch}/Summary_Lot;W906_EVENTLOG_ROOT=${_ht9045_log_scratch}/EventLogTxt;W906_INIDATA_ROOT=${_ht9045_log_scratch}/IniData;W906_UNLOADERINFO_ROOT=${_ht9045_log_scratch}/UnloaderInfo;W906_AUTH_PATH=${_ht9045_config_scratch}/;W906_MACHINERECORD_DIR=${_ht9045_log_scratch}/machinerecord")
++# --- test_ioweb_watch: ONSITE-1 的純邏輯（ioweb_probe 的 watch 模式、60E0h/60E1h 讀回三態）---
++#   AI(W906-ONSITE-1) 20260926: tools/ioweb_watch.h 的 DI 位元差異（讀失敗那輪保留好值、改站號重取基準）與 IO_Table 反查
++#   （ISABase 3：Lane = ring、IP = station、Port = stationChan*8 + bit，含 Enable=0），並拿版控的 machines/HT9050/IO_Table.csv
++#   逐列對帳 JsonBridge/ChanIoPoints.cpp ResolveIoPoint；外加 Pci1203TorqueLimitReadText 的 ok/readFailed/notRead。
++#   不帶 HAVE_PCI1203（不開卡），只讀版控 CSV、不寫檔。連結形狀同 IoPoints_HT9050（:379）。放檔尾，所以自己帶 TIMEOUT 與
++#   :3852 那一條合併過的圍堵環境變數（全域區塊只套用在它之前登記的測試），同 MT_E3b_Engine。
++add_executable(test_ioweb_watch
++    test_ioweb_watch.cpp
++    ../JsonBridge/ChanIoPoints.cpp
++    ../EtherCAT/Pci1203Monitor.cpp)
++target_include_directories(test_ioweb_watch PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
++target_link_libraries(test_ioweb_watch PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++    ht9045_webbridge)
++if(WIN32)
++    target_link_libraries(test_ioweb_watch PRIVATE ws2_32)
++endif()
++add_test(NAME IoWatch_HT9050
++         COMMAND test_ioweb_watch "${CMAKE_SOURCE_DIR}/../machines/HT9050/IO_Table.csv")
++set_tests_properties(IoWatch_HT9050 PROPERTIES TIMEOUT 600 ENVIRONMENT
++    "W906_E84DATA_ROOT=${_ht9045_log_scratch}/E84DataTxt;W906_TCPDATA_ROOT=${_ht9045_log_scratch}/TCP_Data;W906_SUMMARYLOT_ROOT=${_ht9045_log_scratch}/Summary_Lot;W906_EVENTLOG_ROOT=${_ht9045_log_scratch}/EventLogTxt;W906_INIDATA_ROOT=${_ht9045_log_scratch}/IniData;W906_UNLOADERINFO_ROOT=${_ht9045_log_scratch}/UnloaderInfo;W906_AUTH_PATH=${_ht9045_config_scratch}/;W906_MACHINERECORD_DIR=${_ht9045_log_scratch}/machinerecord")
+diff --git a/tests/test_ioweb_watch.cpp b/tests/test_ioweb_watch.cpp
+new file mode 100644
+index 0000000..061efde
+--- /dev/null
++++ b/tests/test_ioweb_watch.cpp
+@@ -0,0 +1,393 @@
++// ===========================================================================
++//  tests/test_ioweb_watch.cpp
++//
++//  AI(W906-ONSITE-1) 20260926: ONSITE-1 的純邏輯測試 —— 兩件現場量測前要先在桌上驗的事：
++//    [1] tools/ioweb_watch.h DiffAndAdvance：`ioweb_probe <outDir> <seconds> watch`
++//        判斷「哪些 DI 位元變了」。讀失敗的那一輪不比、保留上一次的好值（中間讀失敗
++//        也不會漏掉開門）；卡片對應表改了站號的 slot 重新取基準、不報變化。
++//    [2] RowsForDiBit / AddressMatches / RowCaveat / 文字與 CSV 格式：哪些 IO_Table 列
++//        對到這個位元（ISABase 3：Lane = ring、IP = station、Port = stationChan*8 + bit），
++//        Enable=0 也列出；Lane 空白、輸出型別的列列出但附說明；另一個 ring 的列不列；
++//        沒有列時印 "(no ePCI1203 row)"（20260926 審查後改字：只查 ISABase 3 的列，
++//        而這張表的門有列、只是在 MotionNet 位址上）。
++//    [2b] 審查後新增：BitColumnCandidates（舊式「Port = byte、Bit = bit」讀法，另列、
++//        不混進主清單）、DoorRowsOffPci1203（名字含 door、不是 ISABase 3 的列）、
++//        CSV 新欄 bitColumnCandidates 與舊表頭判別、TorqueLimitLine 一行格式。
++//    [3] 與網頁本身的規則對帳：讀版控的 machines/HT9050/IO_Table.csv（argv[1]），每一個
++//        ISABase 3 的輸入列，用 JsonBridge/ChanIoPoints.cpp ResolveIoPoint 驗「網頁讀的就是
++//        這個位元」，再驗 RowsForDiBit 在這個位元找得到它、在同 byte 的其他 7 個位元找不到它。
++//    [4] Pci1203TorqueLimitReadText 與 Pci1203AxisSample 的 60E0h/60E1h 讀回欄位預設值：
++//        "ok" / "readFailed" / "notRead" 三態分得開（SUCCESS 是 0，只看 ret 分不出來）。
++//
++//  不開卡、不帶 HAVE_PCI1203（廠商呼叫根本沒編進來），只讀版控的 IO_Table.csv，不寫任何檔案。
++//  用法：test_ioweb_watch <IO_Table.csv>
++// ===========================================================================
++#include "vclcompat/vcl_compat.h"
++#include "MachineType.h"
++#include "JsonBridge/ChanIo.h"
++#include "database.h"
++#include "EtherCAT/Pci1203Monitor.h"
++#include "tools/ioweb_watch.h"
++
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <string>
++#include <vector>
++
++#if defined(__MINGW32__) && !defined(__MINGW64_VERSION_MAJOR)
++extern "C" int _putenv(const char*);
++#define HT9045_TEST_PUTENV _putenv
++#else
++#define HT9045_TEST_PUTENV putenv
++#endif
++
++using namespace ht9045::iowatch;
++
++static int g_fail = 0, g_total = 0;
++static void check(bool c, const char* e, int line) {
++    ++g_total;
++    if (!c) { ++g_fail; std::printf("FAIL [test_ioweb_watch.cpp:%d]  %s\n", line, e); }
++}
++#define CHECK(c) check((c), #c, __LINE__)
++
++static DiByte B(int slot, int ring, int station, int chan, unsigned char v, bool valid = true)
++{
++    DiByte b; b.valid = valid; b.ring = ring; b.station = station; b.stationChan = chan; b.slot = slot; b.byteData = v;
++    return b;
++}
++
++static IoRow R(int row, const char* alias, const char* type, int dir, int isa, int lane, int ip, int port,
++               int bitCol, int enable)
++{
++    IoRow r; r.row = row; r.alias = alias; r.type = type; r.dir = dir; r.isaBase = isa; r.lane = lane;
++    r.ip = ip; r.port = port; r.bitCol = bitCol; r.enable = enable; r.inType = 1;
++    return r;
++}
++
++static bool Has(const std::vector<int>& v, int x)
++{
++    for (std::size_t i = 0; i < v.size(); ++i) if (v[i] == x) return true;
++    return false;
++}
++
++static ht9045::sjson::IoByteSample S(int ring, int station, int chan, unsigned char b)
++{
++    ht9045::sjson::IoByteSample s; s.valid = true; s.ring = ring; s.station = station; s.stationChan = chan; s.byteData = b;
++    return s;
++}
++
++int main(int argc, char** argv)
++{
++    // ---------------------------------------------------------------- [1]
++    std::printf("[1] DiffAndAdvance\n");
++    {
++        std::vector<DiByte> base, cur;
++        DiffStats st;
++        cur.push_back(B(0, 1, 80, 0, 0x00));
++        cur.push_back(B(1, 1, 80, 1, 0x0F));
++        cur.push_back(B(2, 1, 81, 0, 0x00, false));   // not read on the first poll
++        std::vector<BitChange> ch = DiffAndAdvance(base, cur, &st);
++        CHECK(ch.empty());                             // the first poll is a baseline, never a change
++        CHECK(st.adopted == 2 && st.invalid == 1 && st.compared == 0 && st.readdressed == 0);
++        CHECK(base.size() == 3);
++
++        cur[0].byteData = 0x21;                        // bits 0 and 5 rise
++        cur[1].byteData = 0x0B;                        // bit 2 falls
++        ch = DiffAndAdvance(base, cur, &st);
++        CHECK(ch.size() == 3);
++        CHECK(st.compared == 2 && st.invalid == 1);
++        if (ch.size() == 3) {
++            CHECK(ch[0].slot == 0 && ch[0].bit == 0 && ch[0].oldV == 0 && ch[0].newV == 1);
++            CHECK(ch[1].slot == 0 && ch[1].bit == 5 && ch[1].oldV == 0 && ch[1].newV == 1);
++            CHECK(ch[2].slot == 1 && ch[2].bit == 2 && ch[2].oldV == 1 && ch[2].newV == 0);
++            CHECK(ch[0].ring == 1 && ch[0].station == 80 && ch[0].stationChan == 0);
++        }
++
++        ch = DiffAndAdvance(base, cur, &st);           // nothing changed
++        CHECK(ch.empty() && st.compared == 2);
++
++        // a door opened DURING a failed read is not lost: the baseline is the last GOOD value
++        cur[0].valid = false; cur[0].byteData = 0xFF;  // failed read, garbage byte
++        ch = DiffAndAdvance(base, cur, &st);
++        CHECK(ch.empty() && st.invalid == 2);
++        cur[0].valid = true; cur[0].byteData = 0x20;   // bit 0 fell while the read was failing
++        ch = DiffAndAdvance(base, cur, &st);
++        CHECK(ch.size() == 1 && ch[0].slot == 0 && ch[0].bit == 0 && ch[0].oldV == 1 && ch[0].newV == 0);
++
++        // the slot that was never valid becomes a baseline when it first reads -- not a change
++        cur[2].valid = true; cur[2].byteData = 0x80;
++        ch = DiffAndAdvance(base, cur, &st);
++        CHECK(ch.empty() && st.adopted == 1);
++        cur[2].byteData = 0x00;
++        ch = DiffAndAdvance(base, cur, &st);
++        CHECK(ch.size() == 1 && ch[0].slot == 2 && ch[0].bit == 7 && ch[0].newV == 0);
++
++        // re-attribution by the card map (station changed): re-based, never reported as a door
++        cur[1].station = 81; cur[1].byteData = 0xF0;
++        ch = DiffAndAdvance(base, cur, &st);
++        CHECK(ch.empty() && st.readdressed == 1);
++        cur[1].byteData = 0xF1;
++        ch = DiffAndAdvance(base, cur, &st);
++        CHECK(ch.size() == 1 && ch[0].station == 81 && ch[0].bit == 0);
++
++        // a ring change on the same slot is a re-address too
++        cur[1].ring = 0;
++        ch = DiffAndAdvance(base, cur, &st);
++        CHECK(ch.empty() && st.readdressed == 1);
++
++        // cur shrinks: the missing slots keep their baseline; growing back compares against it
++        std::vector<DiByte> shrunk(cur.begin(), cur.begin() + 1);   // not `small`: MinGW.org's rpcndr.h #defines it (oracle line)
++        ch = DiffAndAdvance(base, shrunk, &st);
++        CHECK(ch.empty() && base.size() == 3 && st.compared == 1);
++        cur[2].byteData = 0x01;
++        ch = DiffAndAdvance(base, cur, &st);
++        CHECK(ch.size() == 1 && ch[0].slot == 2 && ch[0].bit == 0);
++
++        CHECK(DiffAndAdvance(base, cur, 0).empty());   // stats pointer is optional
++    }
++
++    // ---------------------------------------------------------------- [2]
++    std::printf("[2] RowsForDiBit / text\n");
++    {
++        std::vector<IoRow> rows;
++        rows.push_back(R(10, "SnSafeDoor1",     "Sensor", kDirIn,  3, 1, 2, 25, 1, 1));   // 0: resolves
++        rows.push_back(R(11, "SnSafeDoorIndex", "Sensor", kDirIn,  3, 1, 2, 25, 1, 0));   // 1: same point, Enable=0
++        rows.push_back(R(12, "SwWrongType",     "Switch", kDirOut, 3, 1, 2, 25, 1, 1));   // 2: output-typed
++        rows.push_back(R(13, "SnNoLane",        "Sensor", kDirIn,  3, -1, 2, 25, 1, 1));  // 3: Lane empty
++        rows.push_back(R(14, "SnRing0",         "Sensor", kDirIn,  3, 0, 2, 25, 1, 1));   // 4: the other ring
++        rows.push_back(R(15, "SnMotionNet",     "Sensor", kDirIn,  0, 1, 2, 25, 1, 1));   // 5: not ePCI1203
++        rows.push_back(R(16, "SnNextBit",       "Sensor", kDirIn,  3, 1, 2, 26, 2, 1));   // 6: bit 2
++        rows.push_back(R(17, "SnBitColOff",     "Sensor", kDirIn,  3, 1, 2, 25, 3, 1));   // 7: Bit column disagrees
++        rows.push_back(R(18, "",                "Weird",  kDirUnknown, 3, 1, 2, 25, 1, 1)); // 8: unknown type
++        rows.push_back(R(19, "SnNoPort",        "Sensor", kDirIn,  3, 1, 2, -1, 1, 1));   // 9: no Port
++
++        const std::vector<int> h = RowsForDiBit(rows, 1, 2, 3, 1);          // Port 25 = chan 3, bit 1
++        CHECK(h.size() == 6);
++        CHECK(Has(h, 0) && Has(h, 1) && Has(h, 2) && Has(h, 3) && Has(h, 7) && Has(h, 8));
++        CHECK(!Has(h, 4) && !Has(h, 5) && !Has(h, 6) && !Has(h, 9));
++        CHECK(h.size() >= 2 && h[0] == 0 && h[1] == 1);                    // table order
++
++        const std::vector<int> r0 = RowsForDiBit(rows, 0, 2, 3, 1);         // ring 0: the ring-0 row and the laneless one
++        CHECK(Has(r0, 4) && Has(r0, 3) && !Has(r0, 0));
++        const std::vector<int> fl = RowsForDiBit(rows, -1, 2, 3, 1);        // flat read: lane not compared (ResolveIoPoint)
++        CHECK(Has(fl, 0) && Has(fl, 4));
++        CHECK(RowsForDiBit(rows, 1, 2, 3, 2) == std::vector<int>(1, 6));   // Port 26 = chan 3 bit 2
++        CHECK(RowsForDiBit(rows, 1, -1, 3, 1).empty());                     // unattributed byte: nothing
++        CHECK(RowsForDiBit(rows, 1, 2, -1, 1).empty());
++        CHECK(RowsForDiBit(rows, 1, 2, 3, 8).empty());
++        CHECK(RowsForDiBit(rows, 1, 9, 3, 1).empty());
++
++        CHECK(PageReadsHere(rows[0]) && PageReadsHere(rows[1]));
++        CHECK(!PageReadsHere(rows[2]) && !PageReadsHere(rows[3]) && !PageReadsHere(rows[8]));
++        CHECK(std::strcmp(RowCaveat(rows[0]), "") == 0);
++        CHECK(std::strstr(RowCaveat(rows[2]), "output-typed") != 0);
++        CHECK(std::strstr(RowCaveat(rows[3]), "Lane empty") != 0);
++        CHECK(std::strstr(RowCaveat(rows[8]), "neither input nor output") != 0);
++
++        CHECK(DescribeRow(rows[0]) == "row 10 SnSafeDoor1 [Sensor] Lane=1 IP=2 Port=25 Bit=1 Enable=1 InType=1");
++        CHECK(DescribeRow(rows[1]).find("Enable=0: the page shows it as disabled") != std::string::npos);
++        CHECK(DescribeRow(rows[7]).find("Bit column 3 differs from Port%8 = 1") != std::string::npos);
++        CHECK(DescribeRow(rows[8]).find("(no alias) [Weird]") != std::string::npos);
++
++        CHECK(RowsText(rows, std::vector<int>()) == "(no ePCI1203 row)");
++        CHECK(std::strcmp(NoRowText(), "(no ePCI1203 row)") == 0);
++        std::vector<int> two; two.push_back(0); two.push_back(6);
++        CHECK(RowsText(rows, two) == DescribeRow(rows[0]) + " | " + DescribeRow(rows[6]));
++
++        CHECK(CsvQuote("a\"b,c") == "\"a\"\"b,c\"");
++        BitChange c = { 25, 1, 2, 3, 1, 0, 1 };
++        CHECK(ChangeCsvLine("2026-09-26 10:00:00", 12.44, 62ul, c, "(no ePCI1203 row)", "") ==
++              "\"2026-09-26 10:00:00\",12.4,62,1,2,3,1,25,0,1,\"(no ePCI1203 row)\",\"\"\r\n");
++        CHECK(ChangeCsvLine("s", 1.0, 5ul, c, "a", "b,c") == "\"s\",1.0,5,1,2,3,1,25,0,1,\"a\",\"b,c\"\r\n");
++        CHECK(std::string(ChangeCsvHeader()) ==
++              "session,tSec,poll,ring,station,stationChan,bit,slot,old,new,ioTableRows,bitColumnCandidates\r\n");
++        CHECK(ChangeHeadline(12.44, c) == "[   12.4 s] DI ring 1 station 2 chan 3 bit 1 (slot 25): 0 -> 1");
++
++        // the log's header: this version's (with or without CR/LF) is accepted, the earlier build's is not
++        CHECK(IsChangeCsvHeader("session,tSec,poll,ring,station,stationChan,bit,slot,old,new,ioTableRows,bitColumnCandidates"));
++        CHECK(IsChangeCsvHeader("session,tSec,poll,ring,station,stationChan,bit,slot,old,new,ioTableRows,bitColumnCandidates\r"));
++        CHECK(IsChangeCsvHeader(ChangeCsvHeader()));
++        CHECK(!IsChangeCsvHeader("session,tSec,poll,ring,station,stationChan,bit,slot,old,new,ioTableRows\r"));
++        CHECK(!IsChangeCsvHeader(""));
++    }
++
++    // ---------------------------------------------------------------- [2b]
++    std::printf("[2b] Bit-column candidates / door rows off the 1203 / torque-limit line\n");
++    {
++        std::vector<IoRow> rows;
++        rows.push_back(R(20, "SnLegacy",      "Sensor", kDirIn,  3, 1, 32, 1, 2, 0));   // 0: legacy: byte 1, bit 2
++        rows.push_back(R(21, "SnPageRule",    "Sensor", kDirIn,  3, 1, 32, 10, 2, 1));  // 1: page rule: 10 = chan 1 bit 2
++        rows.push_back(R(22, "SnLegacyRing0", "Sensor", kDirIn,  3, 0, 32, 1, 2, 1));   // 2: legacy, the other ring
++        rows.push_back(R(23, "SnLegacyMN",    "Sensor", kDirIn,  0, 1, 32, 1, 2, 1));   // 3: legacy shape, not ePCI1203
++        rows.push_back(R(24, "SnNoBitCol",    "Sensor", kDirIn,  3, 1, 32, 1, -1, 1));  // 4: Bit column empty
++        rows.push_back(R(25, "SnZero",        "Sensor", kDirIn,  3, 1, 32, 0, 0, 1));   // 5: Port 0 Bit 0: both readings agree
++        rows.push_back(R(26, "SnLegacyNoLane","Sensor", kDirIn,  3, -1, 32, 1, 2, 1));  // 6: legacy, Lane empty
++
++        // ring 1 station 32 chan 1 bit 2: the page rule names row 1; the legacy reading names rows 0 and 6
++        const std::vector<int> prim = RowsForDiBit(rows, 1, 32, 1, 2);
++        const std::vector<int> cand = BitColumnCandidates(rows, 1, 32, 1, 2);
++        CHECK(prim == std::vector<int>(1, 1));
++        CHECK(cand.size() == 2 && Has(cand, 0) && Has(cand, 6));
++        CHECK(!Has(cand, 1) && !Has(cand, 2) && !Has(cand, 3) && !Has(cand, 4));
++        CHECK(LegacyAddressMatches(rows[0], 1, 32, 1, 2) && !AddressMatches(rows[0], 1, 32, 1, 2));
++        CHECK(LegacyAddressMatches(rows[2], 0, 32, 1, 2) && !LegacyAddressMatches(rows[2], 1, 32, 1, 2));
++        CHECK(LegacyAddressMatches(rows[0], -1, 32, 1, 2));                       // flat read: lane not compared
++        CHECK(!LegacyAddressMatches(rows[0], 1, 32, 1, 8) && !LegacyAddressMatches(rows[0], 1, -1, 1, 2));
++        // a row both readings put on the same bit is shown ONCE, in the primary list
++        CHECK(Has(RowsForDiBit(rows, 1, 32, 0, 0), 5) && !Has(BitColumnCandidates(rows, 1, 32, 0, 0), 5));
++        CHECK(!LegacyAddressMatches(rows[5], 1, 32, 0, 0));   //AI(W906-ONSITE-1) 20260926: Bit == Port%8 is a page-form row, never a legacy candidate
++        {   // a page-form row with Port 3 / Bit 3 (page: chan 0 bit 3) must NOT turn up at chan 3 bit 3 (review 20260926)
++            std::vector<IoRow> pr;
++            pr.push_back(R(27, "SnPagePort3", "Sensor", kDirIn, 3, 1, 32, 3, 3, 1));
++            CHECK(BitColumnCandidates(pr, 1, 32, 3, 3).empty());
++            CHECK(Has(RowsForDiBit(pr, 1, 32, 0, 3), 0));
++        }
++        CHECK(CandidatesText(rows, std::vector<int>()).empty());
++        CHECK(CandidatesText(rows, cand) == RowsText(rows, cand));
++        CHECK(std::strstr(BitColumnCandidatesLabel(), "Bit-column candidates") == BitColumnCandidatesLabel());
++        CHECK(std::strstr(BitColumnCandidatesLabel(), "NOT how the web page reads them") != 0);
++
++        // door rows that are not ISABase 3
++        CHECK(AliasHasDoor("SnSafeDoor1") && AliasHasDoor("SnHeaterDOOR") && AliasHasDoor("door") &&
++              AliasHasDoor("C_SafeDoorIndexLock"));
++        CHECK(!AliasHasDoor("SnDoo") && !AliasHasDoor("") && !AliasHasDoor("SnMotorPower"));
++        std::vector<IoRow> d;
++        d.push_back(R(30, "SnSafeDoor1",   "Sensor", kDirIn, 3, 1, 2, 25, 1, 1));   // 0: on the 1203 -> not listed
++        d.push_back(R(31, "SnSafeDoor2",   "Sensor", kDirIn, 0, 1, 4, 0, 1, 0));    // 1: MotionNet -> listed
++        d.push_back(R(32, "SnMotorPower",  "Sensor", kDirIn, 0, 1, 2, 30, 6, 1));   // 2: not a door
++        d.push_back(R(33, "SnHeaterdoor3", "Sensor", kDirIn, 1, -1, 32, 0, 2, 1));  // 3: other ISABase, lower-case -> listed
++        const std::vector<int> off = DoorRowsOffPci1203(d);
++        CHECK(off.size() == 2 && off[0] == 1 && off[1] == 3);
++        CHECK(DescribeOffRow(d[1]) == "row 31 SnSafeDoor2 [Sensor] ISABase=0 Lane=1 IP=4 Port=0 Bit=1 Enable=0");
++
++        // one axis's torque-limit line
++        TrqLimHalf h[2];
++        h[0].valid = true;  h[0].val = 3000; h[0].ret = 0ul; h[0].readText = "ok";
++        h[1].valid = false; h[1].val = 0;    h[1].ret = 0x80000009ul; h[1].readText = "readFailed"; h[1].retText = "SDO abort";
++        CHECK(TorqueLimitLine(3, 2, 0, 0x000u, h) ==
++              "ax3 station 2 axis A: 60E0h pos=3000 (300.0 %) ok ret=0x00000000 | 60E1h neg=- readFailed ret=0x80000009 \"SDO abort\"");
++        CHECK(TorqueLimitLine(4, 2, 1, 0x800u, h).find("68E0h pos=3000") != std::string::npos);
++        CHECK(TorqueLimitLine(4, 2, 1, 0x800u, h).find("axis B: ") != std::string::npos);
++        CHECK(TorqueLimitLine(4, 2, 1, 0x800u, h).find("68E1h neg=-") != std::string::npos);
++        TrqLimHalf n[2];
++        n[0].readText = "notRead"; n[1].readText = "notRead";
++        CHECK(TorqueLimitLine(0, -1, -1, 0x000u, n) ==
++              "ax0 station -1 axis ?: 60E0h pos=- notRead ret=- | 60E1h neg=- notRead ret=-");
++    }
++
++    // ---------------------------------------------------------------- [3]
++    if (argc < 2) { std::printf("usage: test_ioweb_watch <IO_Table.csv>\n"); return 2; }
++    std::printf("[3] agreement with ResolveIoPoint on %s\n", argv[1]);
++    {
++        const std::string env = std::string("W906_IOTABLE_PATH=") + argv[1];
++        HT9045_TEST_PUTENV(const_cast<char*>(env.c_str()));
++        HSys.LoadIoData();
++        std::printf("IO_Table rows loaded: %d\n", (int)HSys.IOTable.size());
++        CHECK(!HSys.IOTable.empty());
++
++        std::vector<IoRow> rows;   // the same copy the probe makes (tools/ioweb_probe.cpp CopyIoRows)
++        for (std::size_t i = 0; i < HSys.IOTable.size(); ++i) {
++            const TIODATA* t = HSys.IOTable[i];
++            if (!t) continue;
++            IoRow r;
++            r.row = (int)i; r.alias = t->Alias.c_str(); r.type = t->Type.c_str();
++            r.dir = (int)ht9045::sjson::IoDirectionOfType(r.type);
++            r.isaBase = t->iISABase; r.lane = t->iLane; r.ip = t->iIP; r.port = t->iPort;
++            r.bitCol = t->iBit; r.enable = t->iEnable; r.inType = t->iInType;
++            rows.push_back(r);
++        }
++
++        int nIn = 0, agreeOn = 0, agreeOff = 0, found = 0, strayHits = 0, nOut = 0, outListed = 0, outPageDi = 0;
++        const std::vector<ht9045::sjson::IoByteSample> none;
++        for (std::size_t i = 0; i < rows.size(); ++i) {
++            const IoRow& r = rows[i];
++            if (r.isaBase != kIsaPci1203 || r.lane < 0 || r.ip < 0 || r.port < 0) continue;
++            const int chan = r.port / 8, bit = r.port % 8;
++            if (r.dir == kDirIn) {
++                ++nIn;
++                std::vector<ht9045::sjson::IoByteSample> on, off;
++                on.push_back(S(r.lane, r.ip, chan, (unsigned char)(1u << bit)));
++                off.push_back(S(r.lane, r.ip, chan, (unsigned char)(0xFFu & ~(1u << bit))));
++                const ht9045::sjson::IoPointState a = ht9045::sjson::ResolveIoPoint(
++                    r.isaBase, r.lane, r.ip, r.port, 1, 1, ht9045::sjson::kIoDirIn, on, none);
++                const ht9045::sjson::IoPointState b = ht9045::sjson::ResolveIoPoint(
++                    r.isaBase, r.lane, r.ip, r.port, 1, 1, ht9045::sjson::kIoDirIn, off, none);
++                if (a.raw == 1) ++agreeOn;       // the page reads exactly this bit ...
++                if (b.raw == 0) ++agreeOff;      // ... and no other bit of the byte
++                if (Has(RowsForDiBit(rows, r.lane, r.ip, chan, bit), (int)i) && PageReadsHere(r)) ++found;
++                for (int ob = 0; ob < 8; ++ob)
++                    if (ob != bit && Has(RowsForDiBit(rows, r.lane, r.ip, chan, ob), (int)i)) ++strayHits;
++            } else if (r.dir == kDirOut) {
++                ++nOut;
++                if (Has(RowsForDiBit(rows, r.lane, r.ip, chan, bit), (int)i) && !PageReadsHere(r)) ++outListed;
++                std::vector<ht9045::sjson::IoByteSample> on;
++                on.push_back(S(r.lane, r.ip, chan, 0xFF));
++                const ht9045::sjson::IoPointState o = ht9045::sjson::ResolveIoPoint(
++                    r.isaBase, r.lane, r.ip, r.port, 1, 1, ht9045::sjson::kIoDirOut, on, none);
++                if (o.raw < 0) ++outPageDi;      // the page does NOT read an output row from DI
++            }
++        }
++        std::printf("ePCI1203 input rows %d: ResolveIoPoint on=%d off=%d, found by RowsForDiBit=%d, stray=%d | "
++                    "output rows %d: listed-with-caveat=%d, page-not-from-DI=%d\n",
++                    nIn, agreeOn, agreeOff, found, strayHits, nOut, outListed, outPageDi);
++        CHECK(nIn > 0 && nOut > 0);
++        CHECK(agreeOn == nIn && agreeOff == nIn && found == nIn && strayHits == 0);
++        CHECK(outListed == nOut && outPageDi == nOut);
++
++        // the pair the on-site session is about: two door rows on one input (IP 2 Port 25 = chan 3 bit 1)
++        const std::vector<int> door = RowsForDiBit(rows, 1, 2, 3, 1);
++        bool d1 = false, dIdx = false;
++        for (std::size_t k = 0; k < door.size(); ++k) {
++            if (rows[(std::size_t)door[k]].alias == "SnSafeDoor1") d1 = true;
++            if (rows[(std::size_t)door[k]].alias == "SnSafeDoorIndex") dIdx = true;
++        }
++        std::printf("ring 1 station 2 chan 3 bit 1 -> %s\n", RowsText(rows, door).c_str());
++        CHECK(d1 && dIdx);
++
++        //AI(W906-ONSITE-1) 20260926 (review): every legacy-form ISABase 3 row (Bit column != Port % 8)
++        //  is a Bit-column candidate at its legacy address, and never in the primary list there.
++        int nLegacy = 0, legacyFound = 0, legacyInPrimary = 0;
++        for (std::size_t i = 0; i < rows.size(); ++i) {
++            const IoRow& r = rows[i];
++            if (r.isaBase != kIsaPci1203 || r.ip < 0 || r.port < 0 || r.bitCol < 0 || r.bitCol > 7) continue;
++            if (r.bitCol == r.port % 8) continue;
++            ++nLegacy;
++            if (Has(BitColumnCandidates(rows, r.lane, r.ip, r.port, r.bitCol), (int)i)) ++legacyFound;
++            if (Has(RowsForDiBit(rows, r.lane, r.ip, r.port, r.bitCol), (int)i)) ++legacyInPrimary;
++        }
++        std::printf("legacy-form ISABase 3 rows %d: found as Bit-column candidates %d, in the primary list %d\n",
++                    nLegacy, legacyFound, legacyInPrimary);
++        CHECK(nLegacy > 0 && legacyFound == nLegacy && legacyInPrimary == 0);
++
++        //  door-named rows that are not ISABase 3: listed, none of them ISABase 3, the 1203 door rows not listed
++        const std::vector<int> offDoors = DoorRowsOffPci1203(rows);
++        bool sd2 = false, sd1Listed = false, any1203 = false;
++        for (std::size_t k = 0; k < offDoors.size(); ++k) {
++            const IoRow& r = rows[(std::size_t)offDoors[k]];
++            if (r.isaBase == kIsaPci1203) any1203 = true;
++            if (r.alias == "SnSafeDoor2") sd2 = true;
++            if (r.alias == "SnSafeDoor1") sd1Listed = true;
++        }
++        std::printf("door-named rows off the 1203: %d%s%s\n", (int)offDoors.size(),
++                    offDoors.empty() ? "" : ", first: ", offDoors.empty() ? "" : DescribeOffRow(rows[(std::size_t)offDoors[0]]).c_str());
++        CHECK(!offDoors.empty() && sd2 && !sd1Listed && !any1203);
++    }
++
++    // ---------------------------------------------------------------- [4]
++    std::printf("[4] torque-limit read-back states\n");
++    {
++        CHECK(std::strcmp(ht9045::Pci1203TorqueLimitReadText(true, 0ul), "ok") == 0);
++        CHECK(std::strcmp(ht9045::Pci1203TorqueLimitReadText(false, 0x80000009ul), "readFailed") == 0);
++        CHECK(std::strcmp(ht9045::Pci1203TorqueLimitReadText(false, 0ul), "notRead") == 0);
++        const ht9045::Pci1203AxisSample a;
++        for (int k = 0; k < 2; ++k) {
++            CHECK(!a.trqLimValid[k] && a.trqLimRet[k] == 0ul && a.trqLimVal[k] == 0);
++            CHECK(a.trqLimRetText[k].empty());   // AI(W906-ONSITE-1) 20260926: no vendor text before any read
++            CHECK(std::strcmp(ht9045::Pci1203TorqueLimitReadText(a.trqLimValid[k], a.trqLimRet[k]), "notRead") == 0);
++        }
++    }
++
++    std::printf("RESULT: %s (%d/%d)\n", g_fail ? "FAIL" : "ALL PASS", g_total - g_fail, g_total);
++    return g_fail ? 1 : 0;
++}
+diff --git a/tests/test_wb_tags.cpp b/tests/test_wb_tags.cpp
+index 523b7e5..81ef00d 100644
+--- a/tests/test_wb_tags.cpp
++++ b/tests/test_wb_tags.cpp
+@@ -162,6 +162,22 @@ int main()
+             check(allNull, "MT-E3a: pci1203.di.mode / di.batch* / torque.* / axN.torque* are staged and null with no monitor");
+         }
+ 
++        //AI(W906-ONSITE-1) 20260926: the drive's torque-limit read-back (60E0h / 60E1h) -- the
++        //  same pin as MT-E3a above: STAGED under these exact names on the first and last slot,
++        //  and NULL without a monitor (a limit of 0 means "no torque", so "no monitor" must
++        //  never read as 0; the Read word and the Ret code must not read as "ok" / SUCCESS).
++        {
++            const char* tl[] = { "pci1203.ax0.trqLim.pos", "pci1203.ax0.trqLim.posRead", "pci1203.ax0.trqLim.posRet",
++                                 "pci1203.ax0.trqLim.neg", "pci1203.ax0.trqLim.negRead", "pci1203.ax0.trqLim.negRet",
++                                 "pci1203.ax31.trqLim.pos", "pci1203.ax31.trqLim.negRet" };
++            bool allNull = true;
++            for (std::size_t q = 0; q < sizeof(tl) / sizeof(tl[0]); ++q) {
++                webbridge::TagMap::const_iterator it = v.tags.find(tl[q]);
++                if (it == v.tags.end() || !it->second.isNull()) { allNull = false; std::printf("   not present-and-null: %s\n", tl[q]); }
++            }
++            check(allNull, "ONSITE-1: pci1203.axN.trqLim.pos/neg + Read + Ret are staged and null with no monitor");
++        }
++
+         check(v.tags.size() > 0, "PublishHandlerTags stages a non-empty snapshot");
+         check(leaked.empty(),
+               "every tag whose source is the data layer is null before it loads "
+diff --git a/tools/ioweb_probe.cpp b/tools/ioweb_probe.cpp
+index c89f852..3667d96 100644
+--- a/tools/ioweb_probe.cpp
++++ b/tools/ioweb_probe.cpp
+@@ -26,6 +26,71 @@
+ //    * it writes only into the output directory given on the command line.
+ //
+ //  usage: ioweb_probe <outDir> [seconds=20]
++//
++//  AI(W906-ONSITE-1) 20260926: TWO ADDITIONS for EastSun's on-site measurement
++//  session. Both are READS; neither adds a vendor call to this binary, and the
++//  list above is unchanged -- in particular this binary STILL CANNOT WRITE THE
++//  CARD: the write surface (Pci1203Control.cpp, where kCmdAxTorqueLimitSet and
++//  every output / motion / SDO-write command live) is not linked in, and the
++//  monitor it does link is held read-only by tools/pci1203_readonly_gate.ps1.
++//
++//  (1) DOOR-MAPPING WATCH MODE
++//
++//      usage: ioweb_probe <outDir> <seconds> watch        (seconds 1..3600)
++//
++//      Same start-up as the default run (same refusals, same table loads, same
++//      card open). Then, instead of the 5-second count lines, it polls every
++//      200 ms exactly as the default loop does and prints EVERY DI BIT CHANGE
++//      it sees between consecutive polls:
++//          time since the watch started, ring, station, stationChan, bit,
++//          old -> new, and every IO_Table row that maps to that point by the
++//          IO page's own rule (ISABase 3 rows: Lane = ring, IP = station,
++//          Port = stationChan * 8 + bit -- JsonBridge/ChanIoPoints.cpp
++//          ResolveIoPoint), Enable=0 rows included, or "(no ePCI1203 row)".
++//      Purpose: EastSun opens each safety door one at a time; the output says
++//      which 1203 input each door is wired to, and which IO_Table rows (if any)
++//      name that input. The decisions (which bits changed, which rows match)
++//      are pure and unit-tested: tools/ioweb_watch.h, tests/test_ioweb_watch.cpp.
++//      A slot whose read failed is not compared (its last good value is kept),
++//      and a slot the card map re-attributed is re-based, so neither can print
++//      a door that did not open.
++//      Every change is also appended to <outDir>\watch_di_changes.csv (header
++//      written only when the file is new; a `session` column tells runs apart;
++//      flushed per line, so an interrupted run keeps what it saw). The usual
++//      outputs below are written at the end, as in the default run.
++//      Exit 3 when the card did not open (nothing could be watched).
++//
++//  (2) card_axes.csv gains columns at the END of each row (the existing
++//      columns keep their positions): the drive's torque-limit read-back
++//      60E0h / 60E1h (68E0h / 68E1h on axis B) in 0.1 % of rated torque, each
++//      with "ok" / "readFailed" / "notRead" and the vendor return code of the
++//      last attempt -- Pci1203AxisSample::trqLimVal / trqLimValid / trqLimRet,
++//      read by the monitor's kCfgDrive block in the first Poll after open --
++//      and, last, the vendor's own text for each return code.
++//
++//  AI(W906-ONSITE-1) 20260926 (adversarial review): what changed after review.
++//    * THE TORQUE-LIMIT ANSWER NO LONGER WAITS FOR THE END. Right after the
++//      first Poll that succeeds -- in BOTH modes -- one console line per opened
++//      axis (value, ok / readFailed / notRead, return code and the vendor's text
++//      for it, which the MONITOR decodes: trqLimRetText, via its existing
++//      DecodeError helper; this file still makes no vendor call) and
++//      card_axes.csv is written AT ONCE. A later change (a station found late, a
++//      group re-read) prints again and rewrites it. So the default run's console
++//      output gains that block; its other files are unchanged.
++//    * Ctrl+C / Ctrl+Break / closing the window ends the run CLEANLY: a console
++//      control handler only raises a flag, the loop stops at the next check, and
++//      every output is written and Pci1203MonitorDisable() runs exactly as when
++//      the time runs out.
++//    * watch mode, at start: every door-named IO_Table row that is NOT ISABase 3
++//      (on this machine: MotionNet rows), with its address and Enable -- those
++//      doors cannot be named by a 1203 watch until the table carries them.
++//    * watch mode, per change: "Bit-column candidates:" -- ISABase 3 rows that
++//      name the bit under the legacy "Port = byte, Bit = bit" reading, labelled
++//      as NOT how the web page reads them. The primary list is still the page's
++//      rule. The CSV carries them in its own last column (bitColumnCandidates);
++//      a log written by the earlier build (one column fewer) is not appended to
++//      -- the session logs to a new, time-stamped file instead.
++//    * `ioweb_probe <outDir> watch` (seconds missing) says the correct order.
+ // ===========================================================================
+ #include "vclcompat/vcl_compat.h"
+ #include "MachineType.h"
+@@ -33,14 +98,19 @@
+ #include "database.h"
+ #include "common.h"
+ #include "EtherCAT/Pci1203Monitor.h"
++#include "EtherCAT/Pci1203Gear.h"   // AI(W906-ONSITE-1) 20260926: Pci1203GearAxisBase, to name 60E0h vs 68E0h (header-only arithmetic, no vendor call)
+ #include "JsonBridge/ChanIo.h"
+ #include "JsonBridge/ChanMotor.h"
+ #include "Public/cJSON.h"
++#include "tools/ioweb_watch.h"   // AI(W906-ONSITE-1) 20260926: the pure half of the watch mode
+ 
+ #include <windows.h>
+ #include <cstdio>
+ #include <cstdlib>
++#include <cstring>
++#include <ctime>
+ #include <string>
++#include <vector>
+ 
+ namespace {
+ 
+@@ -70,14 +140,420 @@ void PrintCounts(const char* what, const std::string& json)
+     if (d) cJSON_Delete(d);
+ }
+ 
++//AI(W906-ONSITE-1) 20260926 (adversarial review, finding 1): A CLEAN STOP.
++//  Ctrl+C used to kill the process where it stood: card_axes.csv (the torque-
++//  limit answer) is written at the end, and Pci1203MonitorDisable() never ran.
++//  The handler only RAISES A FLAG. It runs on a thread the system creates, and
++//  the monitor is single-threaded by contract (Pci1203Monitor.h: "NOT
++//  THREAD-SAFE, on purpose"), so it must not touch the card itself. The main
++//  thread's loop stops at its next check, then writes every output and closes
++//  the card exactly as a run that reached its time limit.
++//  Precedent: tools/wb_serve.cpp W906_ConsoleCtrl (SetConsoleCtrlHandler).
++volatile LONG g_stopEvent = -1;   // -1 = keep running; otherwise the CTRL_* event that asked
++HANDLE g_wakeEvt = 0;             // set by the handler: the 200 ms wait ends at once
++HANDLE g_doneEvt = 0;             // set by main after Pci1203MonitorDisable()
++
++BOOL WINAPI OnConsoleCtrl(DWORD ev)
++{
++    ::InterlockedCompareExchange(&g_stopEvent, static_cast<LONG>(ev), -1L);   // the first request wins
++    if (g_wakeEvt) ::SetEvent(g_wakeEvt);
++    if (ev == CTRL_C_EVENT || ev == CTRL_BREAK_EVENT) return TRUE;   // handled: the probe ends itself
++    // Window closed / logoff / shutdown: Windows ends the process when this
++    // returns (and within about 5 s regardless), so hold it until main has
++    // written the outputs and closed the card -- bounded, never forever.
++    if (g_doneEvt) ::WaitForSingleObject(g_doneEvt, 4500);
++    return TRUE;
++}
++
++bool StopRequested() { return g_stopEvent != -1; }
++
++const char* StopText()
++{
++    switch (g_stopEvent) {
++        case CTRL_C_EVENT:        return "Ctrl+C";
++        case CTRL_BREAK_EVENT:    return "Ctrl+Break";
++        case CTRL_CLOSE_EVENT:    return "the console window closing";
++        case CTRL_LOGOFF_EVENT:   return "logoff";
++        case CTRL_SHUTDOWN_EVENT: return "shutdown";
++        default:                  return "a console control event";
++    }
++}
++
++// The loop's 200 ms pause; returns at once when a stop was asked for.
++void WaitTick()
++{
++    if (g_wakeEvt) ::WaitForSingleObject(g_wakeEvt, 200);
++    else ::Sleep(200);
++}
++
++bool EqualsNoCase(const char* a, const char* b)
++{
++    for (; *a && *b; ++a, ++b) {
++        char x = *a, y = *b;
++        if (x >= 'A' && x <= 'Z') x = static_cast<char>(x - 'A' + 'a');
++        if (y >= 'A' && y <= 'Z') y = static_cast<char>(y - 'A' + 'a');
++        if (x != y) return false;
++    }
++    return *a == *b;
++}
++
++//AI(W906-ONSITE-1) 20260926: the watch mode's glue -- everything that touches the
++//  monitor, HSys or a file is here; every decision is in tools/ioweb_watch.h.
++
++// The monitor's DI bytes as this poll left them. Ring -1 for a flat read, exactly
++// as JsonBridge/ChanIoPoints.cpp IoRuntimeJson passes it to ResolveIoPoint.
++std::vector<ht9045::iowatch::DiByte> SnapshotDi(ht9045::TPci1203Monitor* mon)
++{
++    std::vector<ht9045::iowatch::DiByte> v;
++    const int n = mon ? mon->diCount() : 0;
++    for (int i = 0; i < n; ++i) {
++        const ht9045::Pci1203DiSample& s = mon->di(i);
++        ht9045::iowatch::DiByte b;
++        b.valid       = s.valid;
++        b.ring        = s.flat ? -1 : s.ring;
++        b.station     = s.station;
++        b.stationChan = s.stationChan;
++        b.slot        = i;
++        b.byteData    = s.byteData;
++        v.push_back(b);
++    }
++    return v;
++}
++
++// Every IO_Table row, copied once into the lookup's shape. Direction by the IO
++// page's own rule (sjson::IoDirectionOfType), so "input-typed" means what the
++// page means by it.
++std::vector<ht9045::iowatch::IoRow> CopyIoRows()
++{
++    std::vector<ht9045::iowatch::IoRow> rows;
++    for (std::size_t i = 0; i < HSys.IOTable.size(); ++i) {
++        const TIODATA* t = HSys.IOTable[i];
++        if (!t) continue;
++        ht9045::iowatch::IoRow r;
++        r.row     = static_cast<int>(i);
++        r.alias   = t->Alias.c_str();
++        r.type    = t->Type.c_str();
++        r.dir     = static_cast<int>(ht9045::sjson::IoDirectionOfType(r.type));
++        r.isaBase = t->iISABase;
++        r.lane    = t->iLane;
++        r.ip      = t->iIP;
++        r.port    = t->iPort;
++        r.bitCol  = t->iBit;
++        r.enable  = t->iEnable;
++        r.inType  = t->iInType;
++        rows.push_back(r);
++    }
++    return rows;
++}
++
++std::string LocalStamp(const char* fmt = "%Y-%m-%d %H:%M:%S")
++{
++    std::time_t now = std::time(0);
++    std::tm* lt = std::localtime(&now);
++    char b[32];
++    if (!lt || std::strftime(b, sizeof(b), fmt, lt) == 0) return "unknown-time";
++    return b;
++}
++
++bool FileIsEmptyOrAbsent(const std::string& path)
++{
++    FILE* f = std::fopen(path.c_str(), "rb");
++    if (!f) return true;
++    const bool empty = (std::fgetc(f) == EOF);
++    std::fclose(f);
++    return empty;
++}
++
++// The file's first line, up to (not including) its LF; "" when unreadable.
++std::string ReadFirstLine(const std::string& path)
++{
++    std::string s;
++    FILE* f = std::fopen(path.c_str(), "rb");
++    if (!f) return s;
++    for (int c = std::fgetc(f); c != EOF && c != '\n' && s.size() < 4096; c = std::fgetc(f))
++        s += static_cast<char>(c);
++    std::fclose(f);
++    return s;
++}
++
++//AI(W906-ONSITE-1) 20260926 (adversarial review, finding 1): THE TORQUE-LIMIT
++//  ANSWER, AS SOON AS THERE IS ONE.
++
++// 0x000 for axis A, 0x800 for axis B (EtherCAT/Pci1203Gear.h -- the monitor's own
++// rule, not a copy). The using-directive finds it whichever namespace the
++// header's first inclusion put it in.
++unsigned AxisBase(int stationAxis)
++{
++    using namespace ht9045;
++    return static_cast<unsigned>(Pci1203GearAxisBase(stationAxis));
++}
++
++void TrqLimHalves(const ht9045::Pci1203AxisSample& a, ht9045::iowatch::TrqLimHalf h[2])
++{
++    for (int k = 0; k < 2; ++k) {
++        h[k].valid    = a.trqLimValid[k];
++        h[k].val      = a.trqLimVal[k];
++        h[k].ret      = a.trqLimRet[k];
++        h[k].readText = ht9045::Pci1203TorqueLimitReadText(a.trqLimValid[k], a.trqLimRet[k]);
++        h[k].retText  = a.trqLimRetText[k];   // decoded by the monitor (DecodeError), never here
++    }
++}
++
++// card_axes.csv. The first twelve columns are the original ones, unchanged;
++// then the six torque-limit columns (value empty unless that read succeeded; ret
++// empty when no read was attempted -- SUCCESS is 0, so "0x00000000" = read ok);
++// then the vendor's text for each ret, quoted (it can contain commas).
++std::string CardAxesCsv(ht9045::TPci1203Monitor* mon)
++{
++    std::string ax = "index,opened,valid,byId,station,stationAlias,stationAxis,ambiguous,state,stateText,actPos,cmdPos,"
++                     "trqLimPos,trqLimPosRead,trqLimPosRet,trqLimNeg,trqLimNegRead,trqLimNegRet,"
++                     "trqLimPosRetText,trqLimNegRetText\r\n";
++    char line[192];
++    if (mon) {
++        for (int i = 0; i < mon->axisCount(); ++i) {
++            const ht9045::Pci1203AxisSample& a = mon->axis(i);
++            std::snprintf(line, sizeof(line), "%d,%d,%d,%d,%d,%d,%d,%d,%u,%s,%.3f,%.3f", i,
++                          a.opened ? 1 : 0, a.valid ? 1 : 0, a.byId ? 1 : 0, a.station, a.stationAlias,
++                          a.stationAxis, a.stationAmbiguous ? 1 : 0, (unsigned)a.state,
++                          ht9045::Pci1203AxisStateText(a.state), a.actPos, a.cmdPos);
++            ax += line;
++            for (int k = 0; k < 2; ++k) {
++                char val[16] = "", ret[16] = "";
++                if (a.trqLimValid[k]) std::snprintf(val, sizeof(val), "%u", (unsigned)a.trqLimVal[k]);
++                if (a.trqLimValid[k] || a.trqLimRet[k] != 0ul)
++                    std::snprintf(ret, sizeof(ret), "0x%08lX", a.trqLimRet[k]);
++                std::snprintf(line, sizeof(line), ",%s,%s,%s", val,
++                              ht9045::Pci1203TorqueLimitReadText(a.trqLimValid[k], a.trqLimRet[k]), ret);
++                ax += line;
++            }
++            for (int k = 0; k < 2; ++k) ax += "," + ht9045::iowatch::CsvQuote(a.trqLimRetText[k]);
++            ax += "\r\n";
++        }
++    }
++    return ax;
++}
++
++// After the FIRST Poll that returned true: one line per opened axis and
++// card_axes.csv written at once, so an interrupted run still has the answer on
++// disk. After that only a CHANGE prints (an axis whose station was found later,
++// a group re-read) and rewrites the file. The write at the very end stays.
++class TrqLimReport {
++public:
++    explicit TrqLimReport(const std::string& outDir) : outDir_(outDir), first_(true) {}
++
++    void AfterPoll(ht9045::TPci1203Monitor* mon, bool pollOk, double tSec)
++    {
++        if (!mon || (first_ && !pollOk)) return;
++        std::vector<Key> now;
++        for (int i = 0; i < mon->axisCount(); ++i) now.push_back(KeyOf(mon->axis(i)));
++        if (!first_ && Same(now, last_)) return;
++
++        int nAx = 0, nOk = 0, nFail = 0, nNot = 0;
++        for (std::size_t i = 0; i < now.size(); ++i) {
++            if (!now[i].opened) continue;
++            ++nAx;
++            for (int k = 0; k < 2; ++k) {
++                if (now[i].valid[k]) ++nOk; else if (now[i].ret[k] != 0ul) ++nFail; else ++nNot;
++            }
++        }
++        const bool w = WriteText(outDir_ + "\\card_axes.csv", CardAxesCsv(mon));
++        std::printf("[%7.1f s] torque limit read-back%s (60E0h/60E1h, 68E0h/68E1h on axis B; raw, 0.1 %% of rated "
++                    "torque; READ-ONLY): %d opened axis/axes, %d ok / %d readFailed / %d notRead; card_axes.csv %s\n",
++                    tSec, first_ ? "" : " CHANGED", nAx, nOk, nFail, nNot, w ? "written" : "NOT written");
++        for (std::size_t i = 0; i < now.size(); ++i) {
++            if (!now[i].opened) continue;
++            if (!first_ && i < last_.size() && Same1(now[i], last_[i])) continue;
++            const ht9045::Pci1203AxisSample& a = mon->axis(static_cast<int>(i));
++            ht9045::iowatch::TrqLimHalf h[2];
++            TrqLimHalves(a, h);
++            std::printf("    %s\n", ht9045::iowatch::TorqueLimitLine(static_cast<int>(i), a.station, a.stationAxis,
++                                                                     AxisBase(a.stationAxis), h).c_str());
++        }
++        std::fflush(stdout);
++        first_ = false;
++        last_ = now;
++    }
++
++private:
++    struct Key {
++        bool opened; int station; int stationAxis;
++        bool valid[2]; unsigned short val[2]; unsigned long ret[2];
++    };
++    static Key KeyOf(const ht9045::Pci1203AxisSample& a)
++    {
++        Key k;
++        k.opened = a.opened; k.station = a.station; k.stationAxis = a.stationAxis;
++        for (int q = 0; q < 2; ++q) { k.valid[q] = a.trqLimValid[q]; k.val[q] = a.trqLimVal[q]; k.ret[q] = a.trqLimRet[q]; }
++        return k;
++    }
++    static bool Same1(const Key& x, const Key& y)
++    {
++        if (x.opened != y.opened || x.station != y.station || x.stationAxis != y.stationAxis) return false;
++        for (int q = 0; q < 2; ++q)
++            if (x.valid[q] != y.valid[q] || x.ret[q] != y.ret[q] || (x.valid[q] && x.val[q] != y.val[q])) return false;
++        return true;
++    }
++    static bool Same(const std::vector<Key>& x, const std::vector<Key>& y)
++    {
++        if (x.size() != y.size()) return false;
++        for (std::size_t i = 0; i < x.size(); ++i) if (!Same1(x[i], y[i])) return false;
++        return true;
++    }
++
++    std::string      outDir_;
++    bool             first_;
++    std::vector<Key> last_;
++};
++
++// The watch loop. Polls exactly like the default loop (Poll, then a 200 ms wait).
++// Returns the number of bit changes printed.
++unsigned long RunWatch(ht9045::TPci1203Monitor* mon, int seconds, const std::string& outDir, TrqLimReport& trq)
++{
++    using namespace ht9045::iowatch;
++    const std::vector<IoRow> rows = CopyIoRows();
++    int n1203 = 0, nIn = 0, nOut = 0, nOff = 0, nLegacy = 0;
++    for (std::size_t i = 0; i < rows.size(); ++i) {
++        if (rows[i].isaBase != kIsaPci1203) continue;
++        ++n1203;
++        if (rows[i].dir == kDirIn) ++nIn; else if (rows[i].dir == kDirOut) ++nOut;
++        if (rows[i].enable != 1) ++nOff;
++        if (rows[i].bitCol >= 0 && rows[i].port >= 0 && rows[i].bitCol != rows[i].port % 8) ++nLegacy;
++    }
++    std::printf("watch: %d IO_Table rows are ePCI1203 (ISABase 3): %d input-typed, %d output-typed, %d with Enable=0\n",
++                n1203, nIn, nOut, nOff);
++    //AI(W906-ONSITE-1) 20260926 (adversarial review, finding 3): say up front that a second reading exists.
++    std::printf("watch: %d of them have a Bit column that differs from Port%%8 (the legacy \"Port = byte, Bit = bit\" "
++                "form); a change also lists those as \"Bit-column candidates\" -- NOT how the web page reads them\n",
++                nLegacy);
++    //AI(W906-ONSITE-1) 20260926 (adversarial review, finding 2): the doors a 1203 watch cannot name.
++    const std::vector<int> doors = DoorRowsOffPci1203(rows);
++    if (doors.empty()) {
++        std::printf("watch: no door-named IO_Table row outside ePCI1203 (ISABase 3)\n");
++    } else {
++        std::printf("watch: %d door-named IO_Table row(s) are NOT ePCI1203 (ISABase != 3) -- the IO page does not read "
++                    "them from the 1203, so this watch cannot name them; they are not on the 1203 table yet:\n",
++                    (int)doors.size());
++        for (std::size_t d = 0; d < doors.size(); ++d)
++            std::printf("         %s\n", DescribeOffRow(rows[static_cast<std::size_t>(doors[d])]).c_str());
++    }
++
++    std::string csvPath = outDir + "\\watch_di_changes.csv";
++    bool fresh = FileIsEmptyOrAbsent(csvPath);
++    if (!fresh && !IsChangeCsvHeader(ReadFirstLine(csvPath))) {
++        //  An earlier build's log (one column fewer): never mix the two layouts in one file.
++        const std::string alt = outDir + "\\watch_di_changes_" + LocalStamp("%Y%m%d_%H%M%S") + ".csv";
++        std::printf("watch: %s has a different header (written by an earlier build) -- this session logs to %s\n",
++                    csvPath.c_str(), alt.c_str());
++        csvPath = alt;
++        fresh = FileIsEmptyOrAbsent(csvPath);
++    }
++    FILE* csv = std::fopen(csvPath.c_str(), "ab");
++    if (!csv) std::printf("watch: cannot open %s -- changes are printed only\n", csvPath.c_str());
++    else if (fresh) { std::fputs(ChangeCsvHeader(), csv); std::fflush(csv); }
++    const std::string session = LocalStamp();
++    std::printf("watch: session %s, polling every 200 ms for %d s; open one door at a time; Ctrl+C stops cleanly\n",
++                session.c_str(), seconds);
++    std::fflush(stdout);
++
++    std::vector<DiByte> base;
++    unsigned long changes = 0;
++    int lastInvalid = 0;
++    bool wasDisabled = false;
++    const DWORD t0 = ::GetTickCount();
++    for (int t = 0; t < seconds * 5; ++t) {
++        const bool pollOk = mon->Poll();
++        const double tSec = static_cast<double>(::GetTickCount() - t0) / 1000.0;
++        const std::vector<DiByte> cur = SnapshotDi(mon);
++        DiffStats st;
++        const std::vector<BitChange> ch = DiffAndAdvance(base, cur, &st);
++        if (t == 0) {
++            int attributed = 0;
++            for (std::size_t i = 0; i < cur.size(); ++i) if (cur[i].valid && cur[i].station >= 0) ++attributed;
++            std::printf("[%7.1f s] baseline: %d DI slots, %d valid, %d of them attributed to a station, %d not read\n",
++                        tSec, (int)cur.size(), st.adopted, attributed, st.invalid);
++        }
++        trq.AfterPoll(mon, pollOk, tSec);   // AI(W906-ONSITE-1) 20260926: the torque-limit lines + card_axes.csv, now
++        for (std::size_t k = 0; k < ch.size(); ++k) {
++            const BitChange& c = ch[k];
++            const std::vector<int> hit  = RowsForDiBit(rows, c.ring, c.station, c.stationChan, c.bit);
++            const std::vector<int> cand = BitColumnCandidates(rows, c.ring, c.station, c.stationChan, c.bit);
++            std::printf("%s\n", ChangeHeadline(tSec, c).c_str());
++            if (hit.empty()) std::printf("             %s\n", NoRowText());
++            for (std::size_t h = 0; h < hit.size(); ++h)
++                std::printf("             %s\n", DescribeRow(rows[static_cast<std::size_t>(hit[h])]).c_str());
++            if (!cand.empty()) {
++                std::printf("             %s\n", BitColumnCandidatesLabel());
++                for (std::size_t h = 0; h < cand.size(); ++h)
++                    std::printf("               %s\n", DescribeRow(rows[static_cast<std::size_t>(cand[h])]).c_str());
++            }
++            if (csv) {
++                const std::string line = ChangeCsvLine(session, tSec, static_cast<unsigned long>(t), c,
++                                                       RowsText(rows, hit), CandidatesText(rows, cand));
++                std::fwrite(line.data(), 1, line.size(), csv);
++                std::fflush(csv);
++            }
++            ++changes;
++        }
++        if (t > 0 && st.readdressed > 0)
++            std::printf("[%7.1f s] note: %d DI slot(s) re-attributed by the card map -- re-based, no change reported for them\n",
++                        tSec, st.readdressed);
++        if (t > 0 && st.invalid != lastInvalid)
++            std::printf("[%7.1f s] note: %d DI slot(s) did not read this poll (was %d) -- their last good value is kept\n",
++                        tSec, st.invalid, lastInvalid);
++        lastInvalid = st.invalid;
++        if (!wasDisabled && mon->Disabled()) {
++            std::printf("[%7.1f s] watch: the monitor DISABLED itself: %s -- no further change can be seen\n",
++                        tSec, mon->disabledReason().c_str());
++            wasDisabled = true;
++        }
++        if (t > 0 && t % 25 == 0) {
++            std::printf("[%7.1f s] watching: %lu change(s) so far, %d DI slot(s) compared, last poll %lu ms\n",
++                        tSec, changes, st.compared, (unsigned long)mon->card().pollMs);
++        }
++        std::fflush(stdout);
++        if (StopRequested()) break;   // AI(W906-ONSITE-1) 20260926: after this poll's changes are printed and logged
++        WaitTick();
++    }
++    const double elapsed = static_cast<double>(::GetTickCount() - t0) / 1000.0;
++    const bool logged = (csv != 0);
++    if (csv) std::fclose(csv);
++    if (StopRequested())
++        std::printf("watch: stopped by %s after %.1f s of %d\n", StopText(), elapsed, seconds);
++    std::printf("watch: %lu change(s) in %.1f s; log %s\n", changes, elapsed,
++                logged ? csvPath.c_str() : "(not written)");
++    return changes;
++}
++
+ }  // namespace
+ 
+ int main(int argc, char** argv)
+ {
+-    if (argc < 2) { std::printf("usage: ioweb_probe <outDir> [seconds=20]\n"); return 2; }
++    if (argc < 2) {
++        std::printf("usage: ioweb_probe <outDir> [seconds=20]\n");
++        std::printf("       ioweb_probe <outDir> <seconds> watch      (DI bit changes + IO_Table rows, seconds 1..3600)\n");   // AI(W906-ONSITE-1) 20260926
++        return 2;
++    }
+     const std::string outDir = argv[1];
++    //AI(W906-ONSITE-1) 20260926 (adversarial review, finding 4): `ioweb_probe <outDir> watch`
++    //  used to answer "seconds must be 1..600" (atoi("watch") == 0), which does not say
++    //  what is wrong. Say the order.
++    if (argc > 2 && EqualsNoCase(argv[2], "watch")) {
++        std::printf("refuse: the seconds come BEFORE `watch` -- the order is:\n"
++                    "       ioweb_probe <outDir> <seconds> watch      (seconds 1..3600)\n"
++                    "       e.g.  ioweb_probe %s 600 watch\n", outDir.c_str());
++        return 2;
++    }
+     const int seconds = (argc > 2) ? std::atoi(argv[2]) : 20;
+-    if (seconds <= 0 || seconds > 600) { std::printf("refuse: seconds must be 1..600\n"); return 2; }
++    //AI(W906-ONSITE-1) 20260926: the optional third argument. Anything else there
++    //  is refused rather than ignored: a typo must not silently run the default
++    //  mode during a door-mapping session.
++    const bool watch = (argc > 3) && std::strcmp(argv[3], "watch") == 0;
++    if (argc > 4 || (argc > 3 && !watch)) {
++        std::printf("refuse: the only optional third argument is `watch`\n");
++        return 2;
++    }
++    if (!watch && (seconds <= 0 || seconds > 600)) { std::printf("refuse: seconds must be 1..600\n"); return 2; }
++    if (watch && (seconds <= 0 || seconds > 3600)) { std::printf("refuse: watch seconds must be 1..3600\n"); return 2; }
+ 
+     const char* io  = std::getenv("W906_IOTABLE_PATH");
+     const char* mot = std::getenv("W906_MOTTABLE_PATH");
+@@ -94,6 +570,15 @@ int main(int argc, char** argv)
+     std::printf("Mot_Table %s  rows=%d\n", MotTablePath.c_str(), (int)HSys.MotTable.size());
+     if (HSys.IOTable.empty() || HSys.MotTable.empty()) { std::printf("refuse: a table did not load\n"); return 3; }
+ 
++    //AI(W906-ONSITE-1) 20260926 (adversarial review, finding 1): from here on every
++    //  path reaches Pci1203MonitorDisable() -- installed before the card opens, so a
++    //  Ctrl+C during the open is honoured after it instead of killing it half-way.
++    g_wakeEvt = ::CreateEventA(0, TRUE, FALSE, 0);
++    g_doneEvt = ::CreateEventA(0, TRUE, FALSE, 0);
++    if (!::SetConsoleCtrlHandler(OnConsoleCtrl, TRUE))
++        std::printf("note: SetConsoleCtrlHandler failed (%lu) -- Ctrl+C will end the probe WITHOUT writing the "
++                    "outputs or closing the card\n", (unsigned long)::GetLastError());
++
+     std::string why;
+     const bool opened = ht9045::Pci1203MonitorEnable(ht9045::kPci1203TagAxes,
+                                                      ht9045::kPci1203TagDiPorts, why,
+@@ -109,16 +594,32 @@ int main(int argc, char** argv)
+                     c.axByIdMode ? "yes" : "NO", c.idConflict ? "YES" : "no");
+     }
+ 
+-    for (int t = 0; t < seconds * 5; ++t) {
+-        if (mon) mon->Poll();
+-        if (t % 25 == 0) {
+-            std::printf("[%3d s] poll\n", t / 5);
+-            PrintCounts("io.runtime", ht9045::sjson::IoRuntimeJson());
+-            PrintCounts("motor.runtime", ht9045::sjson::MotorRuntimeJson());
+-            std::fflush(stdout);
++    TrqLimReport trq(outDir);   // AI(W906-ONSITE-1) 20260926: both modes
++    const bool watchable = opened && mon != 0;   // AI(W906-ONSITE-1) 20260926
++    if (watch) {
++        if (watchable) RunWatch(mon, seconds, outDir, trq);
++        else std::printf("watch: the card is not open -- nothing to watch; the usual outputs are still written\n");
++    } else {
++        // the default loop: unchanged apart from the torque-limit report after a
++        // successful Poll and the clean stop (AI(W906-ONSITE-1) 20260926)
++        const DWORD t0 = ::GetTickCount();
++        for (int t = 0; t < seconds * 5; ++t) {
++            const bool pollOk = mon ? mon->Poll() : false;
++            trq.AfterPoll(mon, pollOk, static_cast<double>(::GetTickCount() - t0) / 1000.0);
++            if (t % 25 == 0) {
++                std::printf("[%3d s] poll\n", t / 5);
++                PrintCounts("io.runtime", ht9045::sjson::IoRuntimeJson());
++                PrintCounts("motor.runtime", ht9045::sjson::MotorRuntimeJson());
++                std::fflush(stdout);
++            }
++            if (StopRequested()) break;
++            WaitTick();
+         }
+-        ::Sleep(200);
++        if (StopRequested())
++            std::printf("stopped by %s after %.1f s of %d\n", StopText(),
++                        static_cast<double>(::GetTickCount() - t0) / 1000.0, seconds);
+     }
++    if (StopRequested()) std::printf("writing the outputs and closing the card\n");
+ 
+     const std::string ioCfg = ht9045::sjson::IoConfigJson();
+     const std::string ioRt  = ht9045::sjson::IoRuntimeJson();
+@@ -154,21 +655,15 @@ int main(int argc, char** argv)
+     }
+     w &= WriteText(outDir + "\\card_io_map.csv", map);
+ 
+-    std::string ax = "index,opened,valid,byId,station,stationAlias,stationAxis,ambiguous,state,stateText,actPos,cmdPos\r\n";
+-    if (mon) {
+-        for (int i = 0; i < mon->axisCount(); ++i) {
+-            const ht9045::Pci1203AxisSample& a = mon->axis(i);
+-            std::snprintf(line, sizeof(line), "%d,%d,%d,%d,%d,%d,%d,%d,%u,%s,%.3f,%.3f\r\n", i,
+-                          a.opened ? 1 : 0, a.valid ? 1 : 0, a.byId ? 1 : 0, a.station, a.stationAlias,
+-                          a.stationAxis, a.stationAmbiguous ? 1 : 0, (unsigned)a.state,
+-                          ht9045::Pci1203AxisStateText(a.state), a.actPos, a.cmdPos);
+-            ax += line;
+-        }
+-    }
+-    w &= WriteText(outDir + "\\card_axes.csv", ax);
++    //AI(W906-ONSITE-1) 20260926: + the torque-limit columns at the END (existing
++    //  columns keep their positions) -- CardAxesCsv above, the same text the
++    //  report after the first successful Poll already wrote.
++    w &= WriteText(outDir + "\\card_axes.csv", CardAxesCsv(mon));
+     std::printf("outputs %s -> %s\n", w ? "written" : "NOT all written", outDir.c_str());
+ 
+     ht9045::Pci1203MonitorDisable();
+     std::printf("monitor closed\n");
+-    return 0;
++    std::fflush(stdout);
++    if (g_doneEvt) ::SetEvent(g_doneEvt);   // AI(W906-ONSITE-1) 20260926: a close / logoff / shutdown handler may now let the process end
++    return (watch && !watchable) ? 3 : 0;   // AI(W906-ONSITE-1) 20260926: a watch that could not watch is not a success
+ }
+diff --git a/tools/ioweb_watch.h b/tools/ioweb_watch.h
+new file mode 100644
+index 0000000..fd9e430
+--- /dev/null
++++ b/tools/ioweb_watch.h
+@@ -0,0 +1,393 @@
++// ===========================================================================
++//  tools/ioweb_watch.h -- the PURE half of `ioweb_probe <outDir> <seconds> watch`.
++//
++//  AI(W906-ONSITE-1) 20260926.  NOT in golden.  NOT part of the runtime.
++//
++//  WHY IT EXISTS.  EastSun opens the machine's safety doors one at a time and
++//  the probe has to say which PCIE-1203 input each door is wired to. That is two
++//  small decisions, and both are easy to get subtly wrong in a way that still
++//  prints plausible output:
++//    1. WHICH BITS CHANGED between two polls of the monitor's DI bytes -- a read
++//       that failed for one poll, or a byte the card map re-attributed to a
++//       different station, must not be reported as a door opening.
++//    2. WHICH IO_Table ROWS NAME THAT BIT -- by the SAME address rule the IO web
++//       page uses, JsonBridge/ChanIoPoints.cpp ResolveIoPoint():
++//           ISABase 3 (ePCI1203) rows:  Lane = ring, IP = station,
++//                                       Port = stationChan * 8 + bit
++//       (confirmed against ResolveIoPoint :119-:129 and IoConfigJson :198-:202,
++//       which publishes station = IP, stationChan = Port / 8, stationBit =
++//       Port % 8). The Bit COLUMN is not part of that rule; it is shown, and a
++//       row whose Bit column disagrees with Port % 8 says so.
++//  So both live here: no vendor call, no HSys, no file, no clock -- the probe
++//  feeds them and tests/test_ioweb_watch.cpp checks them, including against
++//  ResolveIoPoint itself on the versioned HT9050 IO_Table.
++//
++//  ⚠ ROWS ARE LISTED MORE GENEROUSLY THAN THE PAGE RESOLVES THEM, on purpose.
++//  Enable=0 rows are listed (a door row that is disabled is exactly what an
++//  on-site check should find). A row at the same IP/Port whose Lane is empty,
++//  or whose IOType is not an input, is listed WITH A CAVEAT saying the page
++//  does not read it from this DI bit -- a mistyped row is a finding, not noise.
++//  A row whose Lane names the OTHER ring is not listed: station numbers are
++//  unique only within a ring, so that row is a different device.
++//
++//  AI(W906-ONSITE-1) 20260926 (adversarial review): three more pure pieces.
++//    * NoRowText is "(no ePCI1203 row)", not "(no IO_Table row)": the lookup
++//      only ever considers ISABase 3 rows, and the HT9050 table HAS door rows --
++//      on MotionNet addresses (ISABase 0). DoorRowsOffPci1203 lists those at the
++//      start of a watch, so "no row" is never read as "no door in the table".
++//    * BitColumnCandidates: 97 of the versioned HT9050 table's 425 ISABase 3
++//      rows are written in the older "Port = byte, Bit = bit" form. The page
++//      does NOT read them that way; they are a SEPARATE, labelled list and are
++//      never mixed into the primary one (which stays = the page's rule).
++//    * TorqueLimitLine: one console line for one axis's 60E0h / 60E1h read-back.
++// ===========================================================================
++#ifndef TOOLS_IOWEB_WATCH_H
++#define TOOLS_IOWEB_WATCH_H
++
++#include <cstddef>
++#include <cstdio>
++#include <string>
++#include <vector>
++
++namespace ht9045 {
++namespace iowatch {
++
++enum { kIsaPci1203 = 3 };                               // MachineType.h eIOType: ePCI1203 = 3 (ChanIoPoints.cpp kIsaPci1203)
++enum { kDirUnknown = 0, kDirIn = 1, kDirOut = 2 };      // == sjson::IoPointDir (JsonBridge/ChanIo.h)
++
++// One DI byte as the monitor published it this poll.
++struct DiByte {
++    bool          valid;
++    int           ring;          // -1 = flat read: ring is not compared (same as IoRuntimeJson)
++    int           station;       // the card map's owner; -1 = the map had nothing for this port
++    int           stationChan;   // byte within that station; -1 = unknown
++    int           slot;          // the monitor's DI index (= its flat port)
++    unsigned char byteData;
++    DiByte() : valid(false), ring(-1), station(-1), stationChan(-1), slot(-1), byteData(0) {}
++};
++
++// One bit that differs between the baseline and this poll.
++struct BitChange {
++    int slot;
++    int ring;
++    int station;
++    int stationChan;
++    int bit;          // 0..7 within the byte
++    int oldV;         // 0 / 1
++    int newV;         // 0 / 1
++};
++
++// What one diff did with every slot, so the probe can SAY why a slot was silent.
++struct DiffStats {
++    int compared;     // valid now AND a same-address baseline existed -> compared bit by bit
++    int invalid;      // this poll's read failed: nothing reported, the baseline is KEPT
++    int adopted;      // first valid reading of the slot: it becomes the baseline, nothing reported
++    int readdressed;  // ring / station / stationChan changed (card map re-read): baseline replaced, nothing reported
++};
++
++inline bool SameAddress(const DiByte& a, const DiByte& b)
++{
++    return a.ring == b.ring && a.station == b.station &&
++           a.stationChan == b.stationChan && a.slot == b.slot;
++}
++
++// Compares `cur` against `base` -- the LAST VALID reading of each slot -- and
++// advances `base`. Only a slot valid in both, at the same address, can report a
++// change. Why "last valid" and not "last poll": a door opened while one read
++// failed would otherwise be lost (invalid -> valid would only be "adopted").
++// `base` grows to cur.size(); entries past a shrunk `cur` are kept untouched.
++inline std::vector<BitChange> DiffAndAdvance(std::vector<DiByte>& base,
++                                             const std::vector<DiByte>& cur,
++                                             DiffStats* stats)
++{
++    DiffStats st = { 0, 0, 0, 0 };
++    std::vector<BitChange> out;
++    if (base.size() < cur.size()) base.resize(cur.size());
++    for (std::size_t i = 0; i < cur.size(); ++i) {
++        const DiByte& c = cur[i];
++        DiByte& b = base[i];
++        if (!c.valid)            { ++st.invalid; continue; }
++        if (!b.valid)            { ++st.adopted; b = c; continue; }
++        if (!SameAddress(b, c))  { ++st.readdressed; b = c; continue; }
++        ++st.compared;
++        const unsigned x = static_cast<unsigned>(b.byteData ^ c.byteData);
++        for (int bit = 0; bit < 8; ++bit) {
++            if ((x & (1u << bit)) == 0u) continue;
++            BitChange ch = { c.slot, c.ring, c.station, c.stationChan, bit,
++                             (b.byteData >> bit) & 1, (c.byteData >> bit) & 1 };
++            out.push_back(ch);
++        }
++        b = c;
++    }
++    if (stats) *stats = st;
++    return out;
++}
++
++// One IO_Table row, in the fields the lookup needs (the probe copies them out of
++// HSys.IOTable; the test builds them by hand or from the same table).
++struct IoRow {
++    int         row;       // 0-based index into HSys.IOTable (= IoConfigJson "row")
++    std::string alias;
++    std::string type;      // IOType column
++    int         dir;       // kDirIn / kDirOut / kDirUnknown (sjson::IoDirectionOfType(type))
++    int         isaBase;
++    int         lane;      // -1 = empty
++    int         ip;        // -1 = empty
++    int         port;      // -1 = empty
++    int         bitCol;    // the Bit column, -1 = empty -- NOT part of the address rule
++    int         enable;
++    int         inType;
++    IoRow() : row(-1), dir(kDirUnknown), isaBase(-1), lane(-1), ip(-1), port(-1),
++              bitCol(-1), enable(0), inType(0) {}
++};
++
++// Does this row name DI bit (ring, station, stationChan, bit)? ResolveIoPoint's
++// address rule, plus the two generous cases the banner explains: an empty Lane
++// matches (with a caveat), and direction is NOT checked here (RowCaveat says).
++inline bool AddressMatches(const IoRow& r, int ring, int station, int stationChan, int bit)
++{
++    if (r.isaBase != kIsaPci1203) return false;
++    if (r.ip < 0 || r.port < 0) return false;
++    if (station < 0 || stationChan < 0 || bit < 0 || bit > 7) return false;
++    if (r.ip != station || r.port / 8 != stationChan || r.port % 8 != bit) return false;
++    if (ring >= 0 && r.lane >= 0 && r.lane != ring) return false;   // the other ring = another device
++    return true;
++}
++
++// Indices into `rows`, in table order, of every row that names this DI bit.
++inline std::vector<int> RowsForDiBit(const std::vector<IoRow>& rows,
++                                     int ring, int station, int stationChan, int bit)
++{
++    std::vector<int> hit;
++    for (std::size_t i = 0; i < rows.size(); ++i)
++        if (AddressMatches(rows[i], ring, station, stationChan, bit)) hit.push_back(static_cast<int>(i));
++    return hit;
++}
++
++// Would the IO page itself read this (address-matching) row from this DI bit?
++// ResolveIoPoint's remaining conditions: an input row with a Lane.
++inline bool PageReadsHere(const IoRow& r)
++{
++    return r.dir == kDirIn && r.lane >= 0;
++}
++
++// Why the page would NOT read this matching row from this bit; "" when it would.
++inline const char* RowCaveat(const IoRow& r)
++{
++    if (r.lane < 0)       return "Lane empty: the IO page resolves nothing for this row";
++    if (r.dir == kDirOut) return "output-typed: the IO page reads this row from DO, not from this DI bit";
++    if (r.dir != kDirIn)  return "IOType is neither input nor output: the IO page resolves nothing for this row";
++    return "";
++}
++
++// ⚠ Says "ePCI1203", not "IO_Table": only ISABase 3 rows are looked at, and a
++// door can have a row on another bus (DoorRowsOffPci1203 lists those).
++inline const char* NoRowText() { return "(no ePCI1203 row)"; }
++
++// THE LEGACY READING of an ISABase 3 row: Port = the station's byte, Bit = the
++// bit. NOT the page's rule (ResolveIoPoint reads Port = byte * 8 + bit and
++// ignores the Bit column) -- used only for the separately labelled candidate
++// list. Same ring / station / generous-Lane handling as AddressMatches.
++inline bool LegacyAddressMatches(const IoRow& r, int ring, int station, int stationChan, int bit)
++{
++    if (r.isaBase != kIsaPci1203) return false;
++    if (r.ip < 0 || r.port < 0 || r.bitCol < 0) return false;
++    if (station < 0 || stationChan < 0 || bit < 0 || bit > 7) return false;
++    if (r.bitCol == r.port % 8) return false;   //AI(W906-ONSITE-1) 20260926: only the legacy-form rows (Bit column != Port%8, the ones counted at start-up); a page-form row is already where the page reads it
++    if (r.ip != station || r.port != stationChan || r.bitCol != bit) return false;
++    if (ring >= 0 && r.lane >= 0 && r.lane != ring) return false;   // the other ring = another device
++    return true;
++}
++
++// Rows the legacy reading puts on this DI bit, in table order, EXCLUDING rows
++// already in the primary list (RowsForDiBit) -- a row is never shown twice.
++inline std::vector<int> BitColumnCandidates(const std::vector<IoRow>& rows,
++                                            int ring, int station, int stationChan, int bit)
++{
++    std::vector<int> hit;
++    for (std::size_t i = 0; i < rows.size(); ++i)
++        if (LegacyAddressMatches(rows[i], ring, station, stationChan, bit) &&
++            !AddressMatches(rows[i], ring, station, stationChan, bit))
++            hit.push_back(static_cast<int>(i));
++    return hit;
++}
++
++inline const char* BitColumnCandidatesLabel()
++{
++    return "Bit-column candidates (legacy reading Port = byte, Bit = bit -- NOT how the web page reads them; "
++           "the page uses Port = byte*8 + bit):";
++}
++
++// Case-insensitive "door" anywhere in the alias (SnSafeDoor1, SnHeaterDoor, ...).
++inline bool AliasHasDoor(const std::string& alias)
++{
++    static const char kDoor[] = "door";
++    if (alias.size() < 4) return false;
++    for (std::size_t i = 0; i + 4 <= alias.size(); ++i) {
++        std::size_t k = 0;
++        for (; k < 4; ++k) {
++            char c = alias[i + k];
++            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
++            if (c != kDoor[k]) break;
++        }
++        if (k == 4) return true;
++    }
++    return false;
++}
++
++// Door-named rows that are NOT ISABase 3, in table order -- the doors whose
++// input is not on the 1203 table yet, so a watch cannot name them.
++inline std::vector<int> DoorRowsOffPci1203(const std::vector<IoRow>& rows)
++{
++    std::vector<int> hit;
++    for (std::size_t i = 0; i < rows.size(); ++i)
++        if (rows[i].isaBase != kIsaPci1203 && AliasHasDoor(rows[i].alias)) hit.push_back(static_cast<int>(i));
++    return hit;
++}
++
++// "row 12 SnSafeDoor2 [Sensor] ISABase=0 Lane=1 IP=4 Port=0 Bit=1 Enable=0"
++inline std::string DescribeOffRow(const IoRow& r)
++{
++    char b[192];
++    std::snprintf(b, sizeof(b), "row %d %s [%s] ISABase=%d Lane=%d IP=%d Port=%d Bit=%d Enable=%d",
++                  r.row, r.alias.empty() ? "(no alias)" : r.alias.c_str(),
++                  r.type.empty() ? "?" : r.type.c_str(),
++                  r.isaBase, r.lane, r.ip, r.port, r.bitCol, r.enable);
++    return b;
++}
++
++// "row 623 SnSafeDoor1 [Sensor] Lane=1 IP=2 Port=25 Bit=1 Enable=1 InType=1"
++// + " -- <caveat>" and a Bit-column note when they apply.
++inline std::string DescribeRow(const IoRow& r)
++{
++    char b[160];
++    std::snprintf(b, sizeof(b), "row %d %s [%s] Lane=%d IP=%d Port=%d Bit=%d Enable=%d InType=%d",
++                  r.row, r.alias.empty() ? "(no alias)" : r.alias.c_str(),
++                  r.type.empty() ? "?" : r.type.c_str(),
++                  r.lane, r.ip, r.port, r.bitCol, r.enable, r.inType);
++    std::string s = b;
++    if (r.enable != 1) s += " (Enable=0: the page shows it as disabled)";
++    if (r.bitCol >= 0 && r.port >= 0 && r.bitCol != r.port % 8) {
++        std::snprintf(b, sizeof(b), " (Bit column %d differs from Port%%8 = %d; the page uses Port)",
++                      r.bitCol, r.port % 8);
++        s += b;
++    }
++    const char* cav = RowCaveat(r);
++    if (*cav) { s += " -- "; s += cav; }
++    return s;
++}
++
++// Every matching row, " | "-joined, or "(no ePCI1203 row)".
++inline std::string RowsText(const std::vector<IoRow>& rows, const std::vector<int>& hit)
++{
++    if (hit.empty()) return NoRowText();
++    std::string s;
++    for (std::size_t k = 0; k < hit.size(); ++k) {
++        if (k) s += " | ";
++        s += DescribeRow(rows[static_cast<std::size_t>(hit[k])]);
++    }
++    return s;
++}
++
++// The Bit-column candidates, " | "-joined; "" when there are none (the CSV
++// column is then an empty quoted field, never "(no ... row)").
++inline std::string CandidatesText(const std::vector<IoRow>& rows, const std::vector<int>& cand)
++{
++    return cand.empty() ? std::string() : RowsText(rows, cand);
++}
++
++// RFC 4180 field: always quoted, embedded quotes doubled.
++inline std::string CsvQuote(const std::string& v)
++{
++    std::string s = "\"";
++    for (std::size_t i = 0; i < v.size(); ++i) { if (v[i] == '"') s += '"'; s += v[i]; }
++    s += '"';
++    return s;
++}
++
++// ioTableRows = the page's rule (RowsText); bitColumnCandidates = the legacy
++// reading (CandidatesText), a separate column so the two cannot be confused.
++inline const char* ChangeCsvHeader()
++{
++    return "session,tSec,poll,ring,station,stationChan,bit,slot,old,new,ioTableRows,bitColumnCandidates\r\n";
++}
++
++// Is `firstLine` (as read, with or without its CR / LF) this version's header?
++// The probe appends to an existing log only when it is -- a log written by an
++// earlier build has one column fewer, and mixing the two in one file would
++// shift every later reader's columns.
++inline bool IsChangeCsvHeader(std::string firstLine)
++{
++    while (!firstLine.empty() && (firstLine[firstLine.size() - 1] == '\n' || firstLine[firstLine.size() - 1] == '\r'))
++        firstLine.erase(firstLine.size() - 1);
++    std::string h = ChangeCsvHeader();
++    h.erase(h.size() - 2);   // the CRLF
++    return firstLine == h;
++}
++
++// One CSV line (CRLF), in ChangeCsvHeader() order.
++inline std::string ChangeCsvLine(const std::string& session, double tSec, unsigned long poll,
++                                 const BitChange& c, const std::string& rowsText,
++                                 const std::string& candidatesText)
++{
++    char b[160];
++    std::snprintf(b, sizeof(b), ",%.1f,%lu,%d,%d,%d,%d,%d,%d,%d,",
++                  tSec, poll, c.ring, c.station, c.stationChan, c.bit, c.slot, c.oldV, c.newV);
++    return CsvQuote(session) + b + CsvQuote(rowsText) + "," + CsvQuote(candidatesText) + "\r\n";
++}
++
++// One half (60E0h or 60E1h) of an axis's torque-limit read-back, as the probe
++// copies it out of Pci1203AxisSample (trqLimValid / trqLimVal / trqLimRet /
++// trqLimRetText, readText = Pci1203TorqueLimitReadText).
++struct TrqLimHalf {
++    bool           valid;
++    unsigned short val;        // raw, 0.1 % of rated torque; meaningful only when valid
++    unsigned long  ret;        // the vendor return of the last attempt (0 = SUCCESS)
++    std::string    readText;   // "ok" / "readFailed" / "notRead"
++    std::string    retText;    // the vendor's own words for ret, from the monitor; "" = none
++    TrqLimHalf() : valid(false), val(0), ret(0ul) {}
++};
++
++// "ax3 station 2 axis B: 68E0h pos=3000 (300.0 %) ok ret=0x00000000 | 68E1h neg=- readFailed ret=0x80000009 \"...\""
++// `base` is Pci1203GearAxisBase(stationAxis) (0x000 / 0x800), passed in so this
++// file does not carry a second copy of that rule. ret is printed only when a
++// read was attempted (valid, or ret != 0); "-" otherwise.
++inline std::string TorqueLimitLine(int axis, int station, int stationAxis, unsigned base, const TrqLimHalf h[2])
++{
++    char b[160];
++    std::snprintf(b, sizeof(b), "ax%d station %d axis %s:", axis, station,
++                  stationAxis == 0 ? "A" : (stationAxis == 1 ? "B" : "?"));
++    std::string s = b;
++    for (int k = 0; k < 2; ++k) {
++        const unsigned idx = (k == 0 ? 0x60E0u : 0x60E1u) + base;
++        if (h[k].valid)
++            std::snprintf(b, sizeof(b), "%s %04Xh %s=%u (%.1f %%) %s", k ? " |" : "", idx, k ? "neg" : "pos",
++                          (unsigned)h[k].val, (double)h[k].val / 10.0, h[k].readText.c_str());
++        else
++            std::snprintf(b, sizeof(b), "%s %04Xh %s=- %s", k ? " |" : "", idx, k ? "neg" : "pos",
++                          h[k].readText.c_str());
++        s += b;
++        if (h[k].valid || h[k].ret != 0ul) {
++            std::snprintf(b, sizeof(b), " ret=0x%08lX", h[k].ret);
++            s += b;
++            if (!h[k].retText.empty()) { s += " \""; s += h[k].retText; s += "\""; }
++        } else {
++            s += " ret=-";
++        }
++    }
++    return s;
++}
++
++// "[   12.4 s] DI ring 1 station 2 chan 3 bit 1 (slot 25): 0 -> 1"
++inline std::string ChangeHeadline(double tSec, const BitChange& c)
++{
++    char b[160];
++    std::snprintf(b, sizeof(b), "[%7.1f s] DI ring %d station %d chan %d bit %d (slot %d): %d -> %d",
++                  tSec, c.ring, c.station, c.stationChan, c.bit, c.slot, c.oldV, c.newV);
++    return b;
++}
++
++}  // namespace iowatch
++}  // namespace ht9045
++
++#endif  // TOOLS_IOWEB_WATCH_H
+-- 
+2.55.0.windows.5
+

@@ -1,0 +1,554 @@
+From 5dc6706361a66725dc7c83da73190dbb62075efb Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 26 Sep 2026 00:43:23 +0800
+Subject: [PATCH 08/14] MT-FIX1: review fixes (C++) -- window registry no
+ longer stuck "open" after an HMI refresh, registry accepted during alarm
+ dialogs, Motor Power carries its direction, post-Poll loop step gated, jog
+ re-sends the bar's values
+
+From the adversarial review of 2c1afab / eef1a78 / 5a0f02d (20260925-26), C++ side (web side is web a5454b9):
+- WebWindowRegistry: a stale connection's "open" was never forgotten and beat a fresh connection's "closed", so
+  after an HMI refresh / WS reconnect with Motor Test or Teach open, fMotorTest read open forever -- and since
+  MT-E3b golden MainProc pauses while those are open, production would stay paused. Now a form that has ANY fresh
+  report is decided by the fresh reports only (union among them unchanged); only when every report is stale does
+  contract section 6 (stale = open) apply, unchanged. New test [5b] + WebWindowRegistryAgeConnForTest().
+- wb_serve modal wait answers ui.windows.put (inert, token-exempt, same reason as cfg.resync): a blocking alarm
+  left unanswered past 15 s used to make every form stale = open.
+- motorPowerToggle: refuses "relay-changed" when the live relay != the page's expectRelayOn, and a request with
+  confirmOff=true (the operator answered "Sure to turn off motor power?") never powers ON.
+- MotorAccessPollTick(be, operatorConnected): the step after every 1203 Poll is gated like the beat (operator gone
+  -> CancelAllJobs; last beat's safe lock -> CancelAllJobs) BEFORE any leg is issued; wb_serve passes the live
+  ControlOwner()!=0.
+- Jog = golden: the jog re-sends the exact jog-family values the scroll bar (or the 1% selection) wrote
+  (g_jogSpd), not MotorSpeedFromPct of today's MOT[] parameters (a cell edit / Copy From / Reload no longer
+  changes the jog speed); a failed scroll-bar write keeps the slower of old/new.
+- runtime / ack "cur" publish "selectable" (golden lM00Click :740-743 per build) so the SIM build can select.
+Tests: WebMotorAccess 377/0 (new [14]), WebWindowRegistry, MotorPoints_HT9050, SjsonChan pass; production_audit 0 changes.
+Not yet run on the machine.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ JsonBridge/ChanMotorPoints.cpp  |  7 +++
+ WebMotorAccess.cpp              | 73 ++++++++++++++++++++++---
+ WebMotorAccess.h                |  5 +-
+ WebMotorAccessLive.cpp          |  6 +--
+ WebWindowRegistry.cpp           | 56 +++++++++++--------
+ WebWindowRegistry.h             |  4 ++
+ tests/test_web_motor_access.cpp | 95 +++++++++++++++++++++++++++++++++
+ tests/test_winregistry.cpp      | 30 +++++++++++
+ tools/wb_serve.cpp              | 14 ++++-
+ 9 files changed, 254 insertions(+), 36 deletions(-)
+
+diff --git a/JsonBridge/ChanMotorPoints.cpp b/JsonBridge/ChanMotorPoints.cpp
+index 92a9e95..61f3367 100644
+--- a/JsonBridge/ChanMotorPoints.cpp
++++ b/JsonBridge/ChanMotorPoints.cpp
+@@ -362,6 +362,13 @@ std::string MotorRuntimeJson()
+             HTMotor* M = MOT[mi].Motor;
+             w.BeginObject();
+             w.Key("enable").Bool(M->Enable);
++            //AI(W906-MT-FIX1) 20260926: golden lM00Click :740-743 `#ifndef SOFT_SIMULTE if(Motor->Enable==false) return;` -- the SIM
++            //  build sets every Motor->Enable false yet every motor is selectable; the page decides selection on this, not "enable".
++#ifdef SOFT_SIMULTE
++            w.Key("selectable").Bool(true);
++#else
++            w.Key("selectable").Bool(M->Enable);
++#endif
+             w.Key("initSpeed").Number((wb_int64)M->ReadInitSpeed());
+             w.Key("jogHigh").Number((wb_int64)M->PJogHighSpeed);
+             w.Key("jogLow").Number((wb_int64)M->PJogLowSpeed);
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index bdc29d7..18aac1c 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -184,6 +184,13 @@ int JogPctOf(int mi)
+     std::map<int, int>::const_iterator it = g_jogPct.find(mi);
+     return it == g_jogPct.end() ? 1 : it->second;
+ }
++//AI(W906-MT-FIX1) 20260926: g_jogSpd[mi] = the jog-family VALUES written with that position (review medium: "jog speed is
++//  recalculated at every press"). golden fixes CFG_AxJog* at the moment of the scroll (PJogHighSpeed*pct, InitSpeed*pct,
++//  dAcc/dDec as they were then); a later cell edit / Copy From / Reload / btnHighSpeed only touches memory, so golden's next jog
++//  still runs at the old card values. The port used to re-derive them from the CURRENT MOT[] parameters at every press -- e.g.
++//  10x faster right after Copy From from a faster motor, or tens of Mpps after a row-2 keypad slip, without the bar moving.
++//  Set at selection (1%) and on every successful setSpeed(jog=true); DoJog re-sends exactly these.
++std::map<int, Motor1203Speed> g_jogSpd;
+ //AI(W906-MT-E3c) 20260925:
+ //  g_ptpPct[mi] = the percentage of the last golden SetSpeed(x) this file sent for that motor's PTP family (selection = 1,
+ //                 setSpeed, a MoveP/MoveN/Loop start that carried a speed). An All-mode loop starts every OTHER motor at it
+@@ -565,10 +572,10 @@ bool ParamNum(const MotorAccessReq& r, const char* k, double& v)
+ //   the jog press re-sending the jog family of the last scroll position (user ruling 20260925 「Jog = golden」: golden
+ //   JogP/JogN ignore their speed argument, so the PTP family must not be touched by a jog -- btnGo runs on it).
+ const int kFamPtp = 1, kFamJog = 2;
+-bool Send1203Speed(IMotorAccessBackend& be, long long wireId, const MotionCtx& m, int pct,
+-                   std::string& why, std::string& note, int families = kFamPtp)
++//AI(W906-MT-FIX1) 20260926: split so a jog can re-send the EXACT values the scroll bar wrote (see g_jogSpd below).
++bool Send1203SpeedValues(IMotorAccessBackend& be, long long wireId, const MotionCtx& m, int pct, const Motor1203Speed& sp,
++                         std::string& why, std::string& note, int families)
+ {
+-    const Motor1203Speed sp = MotorSpeedFromPct(pct, m.g);
+     if (sp.skip) { note = "golden SetSpeed 不設速度（index 軸，或 PJogHighSpeed==0）"; return true; }
+     const struct { Pci1203SpeedParam which; double v; } seq[8] = {
+         { kSpeedInit, sp.velLow }, { kSpeedRun, sp.velHigh }, { kSpeedAcc, sp.acc }, { kSpeedDec, sp.dec },
+@@ -587,6 +594,11 @@ bool Send1203Speed(IMotorAccessBackend& be, long long wireId, const MotionCtx& m
+     note = b;
+     return true;
+ }
++bool Send1203Speed(IMotorAccessBackend& be, long long wireId, const MotionCtx& m, int pct,
++                   std::string& why, std::string& note, int families = kFamPtp)
++{
++    return Send1203SpeedValues(be, wireId, m, pct, MotorSpeedFromPct(pct, m.g), why, note, families);
++}
+ 
+ //AI(W906-MT-E2) 20260925: an ack's "cur" = the same keys as /api/struct/motor/runtime "cur" (JsonBridge/ChanMotorPoints.cpp),
+ //  read back from the golden object AFTER the action -- what C++ actually holds, not what the page computed.
+@@ -596,6 +608,7 @@ void WriteCur(webbridge::JsonWriter& w, const MotorGolden& g)
+ {
+     w.Key("cur").BeginObject();
+     w.Key("enable").Bool(g.enable);
++    w.Key("selectable").Bool(g.selectable);                                     //AI(W906-MT-FIX1) 20260926: golden lM00Click :740-743 per build
+     w.Key("initSpeed").Number((wb_int64)g.initSpeed);
+     w.Key("jogHigh").Number((wb_int64)g.jogHigh);
+     w.Key("jogLow").Number((wb_int64)g.jogLow);
+@@ -717,6 +730,9 @@ MotorAccessOutcome DoJog(const MotorAccessReq& r, long long wireId, IMotorAccess
+     //  pct is the last setSpeed(jog=true) of this motor since it was selected, 1 when there was none (JogPctOf).
+     //  (Was: the jog family was set from edtSpeed right before each jog -- a stand-in while the page had no scroll bar.)
+     const int pct = JogPctOf(m.a.motIndex);
++    //AI(W906-MT-FIX1) 20260926: the values the bar wrote (g_jogSpd), not a fresh MotorSpeedFromPct of today's parameters.
++    std::map<int, Motor1203Speed>::const_iterator js = g_jogSpd.find(m.a.motIndex);
++    const Motor1203Speed jogSp = (js != g_jogSpd.end()) ? js->second : MotorSpeedFromPct(pct, m.g);
+     const bool positive = (r.action == "jogP");
+     if (!m.a.Is1203()) {
+         be.GoldenJog(m.a.motIndex, positive, pct);                              // MOT[i].JogP/JogN（TMyMotor 內含安全門檢查）
+@@ -730,7 +746,7 @@ MotorAccessOutcome DoJog(const MotorAccessReq& r, long long wireId, IMotorAccess
+     std::string why, note;
+     //AI(W906-MT-E2) 20260925: only the jog family (CFG_AxJog*), at the last scroll position -- what golden's card holds at
+     //  this moment. The PTP family is left alone (golden's jog never touches it; btnGo runs on it).
+-    if (!Send1203Speed(be, wireId, m, pct, why, note, kFamJog)) return Refuse(who + ": " + why);
++    if (!Send1203SpeedValues(be, wireId, m, pct, jogSp, why, note, kFamJog)) return Refuse(who + ": " + why);
+     // AI(W906-MT-E1) 20260925: THE GOLDEN JOG (user EastSun 20260925 「開放，照舊版做法」), replacing main's
+     //   kCmdAxMoveVel. golden TMyEtherCatMotor::JogP/JogN (golden Motor/myEthercatmotor.cpp:441-535): first click
+     //   Acm_AxSetExtDrive(ax, 1) ("Setting 1 is jog mode"), then Acm_AxJog(ax, Direction ? 1 : 0) for JogP and
+@@ -925,6 +941,7 @@ struct LoopJob {
+ std::vector<HomeJob> g_homes;
+ LoopJob              g_loop;
+ std::string          g_lastJobNote;
++bool                 g_lastSafeLock = false;   //AI(W906-MT-FIX1) 20260926: the beat's IsSafeLockCheck() result, for the post-Poll gate
+ 
+ //AI(W906-MT-E3c) 20260925: golden TfMotorTest's Light Scale state (uMotorTest.cpp:1789-1978). The statics of golden
+ //  LightScale() are members here and, like golden's, survive a reset except the ones LightScale(true) assigns
+@@ -1830,6 +1847,7 @@ MotorAccessOutcome DoSelectMotor(const MotorAccessReq& r, long long wireId, IMot
+     g_selMotor = r.motors[0];
+     g_mtShown = true;                                                           //AI(W906-MT-E3c) 20260925: a selection comes from an open page
+     g_jogPct[m.a.motIndex] = 1;                                                // golden :755 scrlbrMotorSpeed->Position=1
++    g_jogSpd[m.a.motIndex] = MotorSpeedFromPct(1, m.g);                        //AI(W906-MT-FIX1) 20260926: the 1% jog values, fixed now
+     g_ptpPct[m.a.motIndex] = 1;                                                //AI(W906-MT-E3c) 20260925: golden :756 SetSpeed(1) -> the PTP pct
+     be.GoldenSetSpeed(m.a.motIndex, 1, false);                                  // golden :756 MOT[Tag].SetSpeed(1)
+     std::string note, layer = "MOT";
+@@ -1981,7 +1999,19 @@ MotorAccessOutcome DoSetSpeed(const MotorAccessReq& r, long long wireId, IMotorA
+             be.Pci1203NoteRefusal(wireId, "motor.access setSpeed", msg);
+             return Refuse(msg);
+         }
+-        if (!Send1203Speed(be, wireId, m, pct, w1, note, jog ? (kFamPtp | kFamJog) : kFamPtp)) return Refuse(who + ": " + w1);
++        const Motor1203Speed spNew = MotorSpeedFromPct(pct, m.g);
++        if (!Send1203SpeedValues(be, wireId, m, pct, spNew, w1, note, jog ? (kFamPtp | kFamJog) : kFamPtp)) {
++            //AI(W906-MT-FIX1) 20260926: a failed scroll-bar write must not leave the jog at an OLD, possibly higher speed while the
++            //  page shows the new position (review low). Keep the slower of the two: the next jog re-sends it (DoJog).
++            std::string jogNote;
++            if (jog) {
++                std::map<int, Motor1203Speed>::const_iterator old = g_jogSpd.find(mi);
++                if (old == g_jogSpd.end() || spNew.velHigh < old->second.velHigh) { g_jogSpd[mi] = spNew; g_jogPct[mi] = pct; }
++                jogNote = "; jog 之後用 " + std::to_string(JogPctOf(mi)) + "%（取新舊兩者較慢的）";
++            }
++            return Refuse(who + ": " + w1 + jogNote);
++        }
++        if (jog) g_jogSpd[mi] = spNew;                                          //AI(W906-MT-FIX1) 20260926: the values just written
+         be.GoldenSetSpeed(mi, pct, false);                                      // the golden object's iSpeed (ReadSpeed / lblRealSpeed); no card
+         layer = "pci1203";
+     } else {
+@@ -2007,7 +2037,9 @@ MotorAccessOutcome DoSetSpeed(const MotorAccessReq& r, long long wireId, IMotorA
+             if (ax.a.Is1203()) {
+                 std::string w1, n1;
+                 if (!ax.a.tableEnable || !be.Pci1203Ready(w1) || ax.a.axis < 0) continue;   // golden: an unopened axis' SetSpeed stops at the object
+-                if (!Send1203Speed(be, wireId, lm, pct, w1, n1, kFamPtp | kFamJog)) { if (firstFail.empty()) firstFail = ax.motorId + ": " + w1; continue; }
++                const Motor1203Speed spAx = MotorSpeedFromPct(pct, lm.g);
++                if (!Send1203SpeedValues(be, wireId, lm, pct, spAx, w1, n1, kFamPtp | kFamJog)) { if (firstFail.empty()) firstFail = ax.motorId + ": " + w1; continue; }
++                g_jogSpd[ai] = spAx;                                            //AI(W906-MT-FIX1) 20260926
+                 be.GoldenSetSpeed(ai, pct, false);
+             } else {
+                 be.GoldenSetSpeed(ai, pct, true);
+@@ -2296,6 +2328,17 @@ MotorAccessOutcome DoMotorPower(const MotorAccessReq& r, long long wireId, IMoto
+     const bool bRelayOn = ps.relayOn;                                           // golden :1623
+     CancelAllJobs(be, "Motor Power (golden btnMotorPowerClick :1624 AllBtnUp)");
+     std::map<std::string, bool>::const_iterator cf = r.flag.find("confirmOff");
++    //AI(W906-MT-FIX1) 20260926: 方向要跟操作員確認的一致（審查 medium）。golden 在同一條執行緒上讀 OutValue → 問 → 照讀到的值切，
++    //   按了「Yes, turn off」一定是關電；網頁的判斷來自上一次 runtime，問的期間繼電器可能被 IO 頁／EMG 改掉。
++    //   (a) 頁面帶了 expectRelayOn（按下時以為的狀態）而現值不同 ⇒ 不切、回 relay-changed，頁面照 golden 重新判斷再問；
++    //   (b) confirmOff=true（操作員答了「確定要關掉馬達電源？」）而現值是關的 ⇒ 絕不開電（舊頁面沒有 expectRelayOn 也一樣）。
++    std::map<std::string, bool>::const_iterator ex = r.flag.find("expectRelayOn");
++    const bool confirmedOff = (cf != r.flag.end() && cf->second);
++    if ((ex != r.flag.end() && ex->second != bRelayOn) || (confirmedOff && !bRelayOn))
++        return Refuse(std::string("motorPowerToggle: relay-changed -- 按下時以為 SwMotorRelay ") +
++                      ((ex != r.flag.end() ? ex->second : confirmedOff) ? "開著" : "關著") + "，現在是" + (bRelayOn ? "開著" : "關著") +
++                      "（" + (ps.synced ? "照卡片回讀" : "OutValue") + "）—— 沒有切換；請看目前狀態再按一次" +
++                      (confirmedOff && !bRelayOn ? "（已確認關電的命令不會開電）" : ""));
+     if (bRelayOn && (cf == r.flag.end() || !cf->second))
+         return Refuse(std::string("needConfirm:true -- ") + kMotorPowerOffQ +
+                       " —— golden :1628 MessageDlg YES/NO：繼電器 SwMotorRelay 是開的（" + (ps.synced ? "OutValue 剛照卡片回讀更新" : "OutValue") +
+@@ -2717,8 +2760,10 @@ void MotorAccessTick(IMotorAccessBackend& be, int elapsedMs, bool operatorConnec
+     if (AnyJobActive()) {
+         if (!operatorConnected)
+             CancelAllJobs(be, "operator connection gone (golden Timer1Timer: fShow==false -> no further steps)");
+-        else if (be.GoldenSafeLockActive())
++        else if ((g_lastSafeLock = be.GoldenSafeLockActive()))                //AI(W906-MT-FIX1) 20260926: remembered for the post-Poll step
+             CancelAllJobs(be, "safe lock active (golden Timer1Timer: IsSafeLockCheck() -> Close())");
++    } else {
++        g_lastSafeLock = false;
+     }
+     TickHomes(be, elapsedMs);
+     TickLoop(be);                                                               //AI(W906-MT-E2) 20260925: times from LoopNow(), not elapsedMs
+@@ -2728,8 +2773,18 @@ void MotorAccessTick(IMotorAccessBackend& be, int elapsedMs, bool operatorConnec
+ 
+ //AI(W906-MT-E2) 20260925: see WebMotorAccess.h. Only a 1203 loop needs the fresh sample; the golden-object loop (non-1203)
+ //  asks MOT.MotorMove itself and stays on the beat, like everything else.
+-void MotorAccessPollTick(IMotorAccessBackend& be)
++void MotorAccessPollTick(IMotorAccessBackend& be, bool operatorConnected)
+ {
++    //AI(W906-MT-FIX1) 20260926: the same gate as the beat (MotorAccessTick), BEFORE any step -- otherwise a LoopMove leg could be
++    //  issued up to 500 ms after the operator's connection is gone or the safe lock tripped (the beat would only cancel it after
++    //  the leg was already on its way). The safe lock is the last beat's result: IsSafeLockCheck() switches an output, so it is
++    //  not called a second time here.
++    if (AnyJobActive()) {
++        if (!operatorConnected)
++            CancelAllJobs(be, "operator connection gone (seen after a Poll; golden Timer1Timer: fShow==false -> no further steps)");
++        else if (g_lastSafeLock)
++            CancelAllJobs(be, "safe lock active (last beat; golden Timer1Timer: IsSafeLockCheck() -> Close())");
++    }
+     bool loop1203 = g_loop.active && g_loop.a.Is1203();
+     //AI(W906-MT-E3c) 20260925: an All-mode loop with any 1203 axis, Light Scale and the power-on job step here too (a 1203
+     //  arrival is seen on the fresh sample; golden Timer1 is 5 ms, Timer2 10 ms).
+@@ -2905,6 +2960,8 @@ void MotorAccessResetJobs()
+     g_homes.clear();
+     g_loop = LoopJob();
+     g_lastJobNote.clear();
++    g_lastSafeLock = false;                                      //AI(W906-MT-FIX1) 20260926
++    g_jogSpd.clear();                                            //AI(W906-MT-FIX1) 20260926
+     g_selMotor.clear(); g_jogPct.clear();                        //AI(W906-MT-E2) 20260925
+     g_latchArmed = false; g_latchMs = 0.0; g_loopAverage = 0;
+     g_hasJogP = g_hasJogN = g_hasAvg = false; g_jogPTime = g_jogNTime = 0; g_avgTime = 0.0;
+diff --git a/WebMotorAccess.h b/WebMotorAccess.h
+index 9b8bd26..e63d351 100644
+--- a/WebMotorAccess.h
++++ b/WebMotorAccess.h
+@@ -409,7 +409,10 @@ void MotorAccessOnAlarm(IMotorAccessBackend& be, const std::string& what);
+ //AI(W906-MT-E2) 20260925: called right after every 1203 monitor Poll() (wb_serve, W906_MotorAccessPollTick), on the same
+ //  thread: a 1203 LoopMove sees its arrival on the fresh sample and the leg time is taken there (golden Timer1Timer checks
+ //  every 5 ms; the beat alone would round every leg up to 500 ms). Everything else keeps the 500 ms beat.
+-void MotorAccessPollTick(IMotorAccessBackend& be);
++//AI(W906-MT-FIX1) 20260926: operatorConnected = the LIVE WebBridgeServer::ControlOwner()!=0 (wb_serve passes it). The step
++//  after Poll is gated exactly like the beat (operator gone / last beat's safe lock -> CancelAllJobs before stepping): it used
++//  to issue a new LoopMove leg between beats with nobody connected (review medium).
++void MotorAccessPollTick(IMotorAccessBackend& be, bool operatorConnected = true);
+ 
+ // wb_serve 用的真實後端（WebMotorAccessLive.cpp；只連進 wb_serve）。
+ IMotorAccessBackend& MotorAccessLiveBackend();
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index 0e99b83..fdcc1ad 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -1021,11 +1021,11 @@ void W906_MotorAccessTick(bool operatorConnected)
+ //  taken as close to the Poll as this thread gets (QueryPerformanceCounter, LiveBackend::MonotonicMs) -- then the copy for
+ //  /api/struct/motor/runtime, so the copy already holds the new leg time / count and this Poll's motor IO lamps (they used to
+ //  wait for the 500 ms beat). The beat (W906_MotorAccessTick) is unchanged.
+-void W906_MotorAccessPollTick()
++void W906_MotorAccessPollTick(bool operatorConnected)                           //AI(W906-MT-FIX1) 20260926: live ControlOwner()!=0 from wb_serve
+ {
+     W906_MotorAccessEngineHooks();                                              //AI(W906-MT-E3c) 20260925: idempotent
+-    ht9045::MotorAccessPollTick(ht9045::MotorAccessLiveBackend());
++    ht9045::MotorAccessPollTick(ht9045::MotorAccessLiveBackend(), operatorConnected);
+     OverlaySnapshot();
+     W906_MotorAccessHooks();
+-    W906_TorqueFocus(g_opConnected);                                            //AI(W906-MT-E3c) 20260925: every Poll while the page shows the axis
++    W906_TorqueFocus(operatorConnected);                                        //AI(W906-MT-E3c) 20260925: every Poll while the page shows the axis
+ }
+diff --git a/WebWindowRegistry.cpp b/WebWindowRegistry.cpp
+index 7fb1db4..93e7ac5 100644
+--- a/WebWindowRegistry.cpp
++++ b/WebWindowRegistry.cpp
+@@ -176,9 +176,16 @@ WinQuery WebWindowRegistryQuery(const std::string& goldenForm)
+     q.fromAnyConn = false;
+ 
+     const std::int64_t now = NowMs();
+-    bool sawOpenLike = false;
+-    bool openFromStale = false;
+-    bool sawFresh = false;
++    //AI(W906-MT-FIX1) 20260926: 新鮮的回報蓋過過期的回報（審查 medium：「總表永遠忘不掉死掉那條連線的 open」）。
++    //   原本任何一條連線說 open 就是 open —— 連過期的也算，而且新鮮連線明確說 closed 也蓋不掉。HMI 重新整理或 WS 重連時
++    //   Motor Test／Teach 開著，舊連線最後一個訊框（open）永遠留在 Store()（只增不減，契約 §6），新連線每 5 秒送 closed，
++    //   結果 fMotorTest 永遠讀成 open；MT-E3b 起 golden MainProc 在 fMotorTest／fTeach 開著時暫停 ⇒ 生產永遠停住。
++    //   現在：這個表單只要有任何一條**新鮮**的回報，就只看新鮮的回報（新鮮的之間照舊取聯集 —— 兩個分頁各開各的，
++    //   任何一頁說 open 就是 open）；**全部都過期**時才照契約 §6 往「開著」那側倒（下面 stale 分支，行為不變）。
++    //   為什麼這樣仍然安全：過期的那條連線 15 秒沒送任何訊框（background.html 每 5 秒一次心跳）——那一頁已經不在了，
++    //   新鮮的那條才是現在畫面上的事實。
++    bool freshSeen = false, freshOpen = false, staleSeen = false, staleOpen = false;
++    WinState freshOpenState = kWinMinimized, freshOther = kWinUnknown;
+ 
+     for (std::map<std::uint64_t, ConnFrame>::const_iterator it = Store().begin();
+          it != Store().end(); ++it)
+@@ -190,32 +197,28 @@ WinQuery WebWindowRegistryQuery(const std::string& goldenForm)
+         q.fromAnyConn = true;
+         const bool entryStale = (now - it->second.recvMs) > g_staleMs;
+ 
+-        if (IsOpenLike(w->second.state)) {
+-            // ★ 任何一條連線說它開著，就是開著。
+-            //   兩個分頁各開各的，聯集才是事實；取交集會漏掉一頁。
+-            sawOpenLike = true;
+-            if (entryStale) openFromStale = true;
+-            if (!entryStale) {
+-                sawFresh = true;
+-                q.state = w->second.state;
++        if (entryStale) {
++            staleSeen = true;
++            if (IsOpenLike(w->second.state)) staleOpen = true;
++        } else {
++            freshSeen = true;
++            if (IsOpenLike(w->second.state)) {
++                // ★ 任何一條新鮮連線說它開著，就是開著（聯集）。open 蓋過 minimized。
++                freshOpen = true;
++                if (w->second.state == kWinOpen) freshOpenState = kWinOpen;
++            } else if (freshOther == kWinUnknown) {
++                freshOther = w->second.state;
+             }
+-        } else if (!entryStale && q.state == kWinUnknown) {
+-            q.state  = w->second.state;
+-            sawFresh = true;
+         }
+     }
+ 
+-    if (sawOpenLike && !sawFresh) {
+-        // 只有 stale 的連線說它開著 —— 照舊算開著，並標記 stale。
+-        q.state = kWinOpen;
+-        q.stale = true;
+-    } else if (sawOpenLike) {
+-        q.state = q.state == kWinMinimized ? kWinMinimized : kWinOpen;
+-    } else if (q.fromAnyConn && !sawFresh) {
+-        // 有人報過，但全部過期了。
++    if (freshSeen) {
++        q.state = freshOpen ? freshOpenState : freshOther;
++    } else if (staleSeen) {
++        // 只有過期的回報 —— 契約 §6：保留最後已知並標記 stale；說過 open 的照舊算開著。
++        if (staleOpen) q.state = kWinOpen;
+         q.stale = true;
+     }
+-    (void)openFromStale;
+     return q;
+ }
+ 
+@@ -466,4 +469,11 @@ void WebWindowRegistryResetForTest()
+     g_everAnyFrame = false;
+ }
+ 
++//AI(W906-MT-FIX1) 20260926
++void WebWindowRegistryAgeConnForTest(std::uint64_t connId, std::int64_t ageMs)
++{
++    std::map<std::uint64_t, ConnFrame>::iterator it = Store().find(connId);
++    if (it != Store().end()) it->second.recvMs -= ageMs;
++}
++
+ } // namespace ht9045
+diff --git a/WebWindowRegistry.h b/WebWindowRegistry.h
+index d4e2508..51225c2 100644
+--- a/WebWindowRegistry.h
++++ b/WebWindowRegistry.h
+@@ -216,6 +216,10 @@ const char* const* WebWindowRegistryNeverReportedForms(std::size_t& count);
+ //   偏偏那一格是整份契約最容易寫反的地方（契約 §6 自己這樣說）。
+ void WebWindowRegistrySetStaleMsForTest(std::int64_t ms);
+ 
++//AI(W906-MT-FIX1) 20260926: 測試用：把一條連線最後一個訊框的收到時間往前推 ageMs 毫秒（讓「一條過期、一條新鮮」
++//   在同一個門檻下並存 —— SetStaleMsForTest 只能讓全部一起過期）。連線不存在就什麼都不做。
++void WebWindowRegistryAgeConnForTest(std::uint64_t connId, std::int64_t ageMs);
++
+ } // namespace ht9045
+ 
+ #endif // WebWindowRegistryH
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index 3e2deb9..5d6464b 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -2167,6 +2167,101 @@ int main(int argc, char** argv)
+         MotorAccessResetJobs();
+     }
+ 
++    //AI(W906-MT-FIX1) 20260926: fixes from the adversarial review of 2c1afab / 5a0f02d.
++    printf("\n[14] AI(W906-MT-FIX1): Motor Power direction, post-Poll gate, jog re-sends the bar's values, failed bar write\n");
++    {
++        MotorAccessResetJobs();
++        MotorGolden g;
++        g.valid = true; g.enable = true; g.gearRatio = 1.0; g.softP = 1000; g.softN = 0;
++        g.jogHigh = 10000; g.jogLow = 100; g.initSpeed = 500; g.acc = 1000; g.dec = 2000; g.homeFlag = 1;
++        g.homeHigh = 2000; g.homeLow = 500; g.accDb = 3000; g.decDb = 3100; g.range = 100; g.rate = 100;
++        g.motorClass = 0; g.sensorType = true; g.in1Logic = false;
++        FakeBackend be;
++        be.table["A"] = Axis1203(20, 20, 0, 3);
++        be.table["B"] = Axis1203(21, 21, 0, 4);
++        be.aliasOf[20] = "A"; be.aliasOf[21] = "B";
++        be.golden[20] = g; be.golden[21] = g;
++        be.opened.assign(5, true);
++        for (int ax = 0; ax < 5; ++ax) { be.cmdPos[ax] = 0.0; be.state[ax] = 1; }
++        be.powerOnStepsToDone = 1;
++
++        // (a) Motor Power carries the operator's direction
++        be.relayOut = false; be.relayCard = -1;
++        MotorAccessReq mp = Req("uMotorTest", "motorPowerToggle", 0); mp.button = "btnMotorPower";
++        mp.flag["confirmOff"] = true;                                           // the operator answered "Sure to turn off motor power?"
++        const int pb = be.powerOnBegins;
++        MotorAccessOutcome o = MotorAccessDispatch(mp, 71, be);
++        CHECK(!o.ok && Has(o.ackJson, "relay-changed") && be.powerOnBegins == pb && be.servoOffs.empty(),
++              "confirmOff:true but the relay is already off -> refused relay-changed; a confirmed power-OFF never powers ON");
++        mp.flag.erase("confirmOff"); mp.flag["expectRelayOn"] = true;
++        o = MotorAccessDispatch(mp, 72, be);
++        CHECK(!o.ok && Has(o.ackJson, "relay-changed") && be.powerOnBegins == pb, "expectRelayOn=true, relay off -> refused, nothing switched");
++        mp.flag["expectRelayOn"] = false;
++        o = MotorAccessDispatch(mp, 73, be);
++        CHECK(o.ok && be.powerOnBegins == pb + 1, "expectRelayOn=false matches -> golden DoMotorPowerOn");
++        MotorAccessTick(be, 500);
++        o = MotorAccessDispatch(mp, 74, be);                                    // relay is ON now, page still thinks off
++        CHECK(!o.ok && Has(o.ackJson, "relay-changed") && be.servoOffs.empty() && be.relayOut, "expectRelayOn=false, relay on -> refused, power stays on");
++        MotorAccessResetJobs();
++
++        // (b) the post-Poll step is gated like the beat
++        MotorAccessReq lq = ReqStart("uMotorTest", "loopMove", "B", true); lq.num["pos1"] = 100; lq.num["pos2"] = 200;
++        CHECK(MotorAccessDispatch(lq, 1, be).ok && MotorAccessJobs().loopActive, "setup: a loop on B");
++        std::size_t x0 = be.executed.size();
++        MotorAccessPollTick(be, false);
++        bool mv = false;
++        for (std::size_t i = x0; i < be.executed.size(); ++i) if (be.executed[i].kind == kCmdAxMoveAbs) mv = true;
++        CHECK(!MotorAccessJobs().loopActive && !mv, "operator gone -> the post-Poll step cancels the loop BEFORE issuing a leg");
++        CHECK(MotorAccessDispatch(lq, 1, be).ok && MotorAccessJobs().loopActive, "setup: a loop again");
++        be.safeLock = true;
++        MotorAccessTick(be, 500);
++        CHECK(!MotorAccessJobs().loopActive, "beat: safe lock -> cancelled (and remembered)");
++        CHECK(MotorAccessDispatch(lq, 1, be).ok && MotorAccessJobs().loopActive, "a new loop started right after that beat");
++        x0 = be.executed.size();
++        MotorAccessPollTick(be, true);
++        mv = false;
++        for (std::size_t i = x0; i < be.executed.size(); ++i) if (be.executed[i].kind == kCmdAxMoveAbs) mv = true;
++        CHECK(!MotorAccessJobs().loopActive && !mv, "post-Poll step: the last beat's safe lock -> cancelled before a leg");
++        be.safeLock = false;
++        MotorAccessTick(be, 500);                                               // no job -> the remembered lock is cleared
++        CHECK(MotorAccessDispatch(lq, 1, be).ok, "setup: loop after the lock is gone");
++        MotorAccessPollTick(be, true);
++        CHECK(MotorAccessJobs().loopActive, "lock gone -> the loop keeps running after a Poll");
++        MotorAccessResetJobs();
++
++        // (c) a jog re-sends the values the scroll bar wrote, not today's parameters
++        CHECK(MotorAccessDispatch(Req("uMotorTest", "selectMotor", "A"), 1, be).ok, "select A");
++        MotorAccessReq sq = Req("uMotorTest", "setSpeed", "A"); sq.num["pct"] = 50; sq.flag["jog"] = true;
++        CHECK(MotorAccessDispatch(sq, 1, be).ok, "scroll bar 50");
++        be.golden[20].jogHigh = 100000;                                         // a later cell edit / Copy From raised JogHighSpeed (memory only)
++        MotorAccessReq jq = Req("uMotorTest", "jogP", "A"); jq.button = "sbMotorTest_JogP";
++        MotorAccessReq jr = Req("uMotorTest", "stop", "A"); jr.button = "sbMotorTest_JogP";
++        x0 = be.executed.size();
++        o = MotorAccessDispatch(jq, 1, be);
++        CHECK(o.ok && be.executed.size() >= x0 + 2 && be.executed[x0 + 1].speed == kSpeedJogRun && be.executed[x0 + 1].value == 5000.0,
++              "JogHighSpeed changed 10000 -> 100000 after the scroll -> the jog still runs at the 5000 the bar wrote (golden), not 50000");
++        MotorAccessDispatch(jr, 1, be);
++
++        // (d) a failed scroll-bar write keeps the slower jog values
++        be.golden[20].jogHigh = 10000;
++        be.rejectNext = true;
++        MotorAccessReq s10 = sq; s10.num["pct"] = 10;
++        o = MotorAccessDispatch(s10, 1, be);
++        CHECK(!o.ok && Has(o.ackJson, "10%"), "bar to 10 fails on the card -> refused; the jog now uses the slower 10%");
++        x0 = be.executed.size();
++        MotorAccessDispatch(jq, 1, be);
++        CHECK(be.executed.size() >= x0 + 2 && be.executed[x0 + 1].value == 1000.0, "... the next jog runs at the 10% values (1000), not the old 50% (5000)");
++        MotorAccessDispatch(jr, 1, be);
++        be.rejectNext = true;
++        MotorAccessReq s90 = sq; s90.num["pct"] = 90;
++        o = MotorAccessDispatch(s90, 1, be);
++        x0 = be.executed.size();
++        MotorAccessDispatch(jq, 1, be);
++        CHECK(!o.ok && be.executed.size() >= x0 + 2 && be.executed[x0 + 1].value == 1000.0, "bar to 90 fails -> the jog stays at the slower 10% (never faster than shown)");
++        MotorAccessDispatch(jr, 1, be);
++        MotorAccessResetJobs();
++    }
++
+     printf("\n%d passed, %d failed\n", g_pass, g_fail);
+     return (g_fail == 0) ? 0 : 1;
+ }
+diff --git a/tests/test_winregistry.cpp b/tests/test_winregistry.cpp
+index 19fa703..e9089e4 100644
+--- a/tests/test_winregistry.cpp
++++ b/tests/test_winregistry.cpp
+@@ -200,6 +200,36 @@ int main()
+               "★ 反過來也成立：B 說 fMotorTest 開著就算開著");
+     }
+ 
++    // -----------------------------------------------------------------------
++    //AI(W906-MT-FIX1) 20260926: HMI 重新整理／WS 重連時 Motor Test 開著 —— 舊連線最後說 open（永遠留在總表），
++    //   新連線每 5 秒說 closed。原本 stale 的 open 永遠蓋過新鮮的 closed ⇒ fMotorTest 永遠開著 ⇒ MainProc 永遠暫停。
++    printf("\n[5b] ★ 新鮮的回報蓋過過期的回報（重新整理後不會永遠卡在 open）\n");
++    {
++        WebWindowRegistryResetForTest();
++        WebWindowRegistryPut(2001, Frame("30", "open", "open"), why);     // 舊頁面：兩頁都開著
++        WebWindowRegistryAgeConnForTest(2001, kStaleAfterMsDefault + 1000);   // 舊連線斷了，超過門檻
++        WebWindowRegistryPut(2002, Frame("1", "closed", "closed"), why);  // 重新整理後的新頁面：都關著
++        const WinQuery q = WebWindowRegistryQuery("fMotorTest");
++        CHECK(q.state == kWinClosed && q.stale == false, "stale open + fresh closed -> closed（不是 stale）");
++        CHECK(WebWindowRegistryFShowConservative("fMotorTest") == false, "★ fShow(fMotorTest) = false：MainProc 不再被卡住");
++        CHECK(WebWindowRegistryFShowConservative("fTeach") == false, "fShow(fTeach) = false");
++
++        WebWindowRegistryPut(2002, Frame("2", "closed", "open"), why);    // 新頁面又把 Motor Test 打開
++        CHECK(WebWindowRegistryFShowConservative("fMotorTest") == true, "fresh open -> true");
++
++        WebWindowRegistryResetForTest();                                   // 兩條都新鮮：聯集照舊
++        WebWindowRegistryPut(2003, Frame("1", "open", "closed"), why);
++        WebWindowRegistryPut(2004, Frame("1", "closed", "closed"), why);
++        CHECK(WebWindowRegistryFShowConservative("fTeach") == true, "兩條新鮮連線：任何一條說 open 就是 open（聯集不變）");
++
++        WebWindowRegistryResetForTest();                                   // 只有過期的：照舊往「開著」倒
++        WebWindowRegistryPut(2005, Frame("1", "closed", "open"), why);
++        WebWindowRegistryAgeConnForTest(2005, kStaleAfterMsDefault + 1000);
++        const WinQuery q2 = WebWindowRegistryQuery("fMotorTest");
++        CHECK(q2.state == kWinOpen && q2.stale == true, "只有過期的 open -> open + stale（契約 §6 不變）");
++        CHECK(WebWindowRegistryFShowConservative("fTeach") == true, "只有過期的 closed -> 照舊算開著（不可知往擋得住那側）");
++    }
++
+     // -----------------------------------------------------------------------
+     printf("\n[6] ★★ stale：保留最後已知、標記 stale、照舊回答開著（契約 §6）\n");
+     {
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 0966cce..3dbad2a 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -623,6 +623,18 @@ static int ForwardShowErrorMessage(const char* code, int kcode, int pos)
+                 }
+                 g_modalServer->CompleteCommand((unsigned long long)wc.id, false,
+                                                "not an offered option");
++            } else if (wc.cmd == "ui.windows.put") {
++                //AI(W906-MT-FIX1) 20260926: 視窗總表在 modal 掛著時也收（同 cfg.resync 的理由：它是「回報」不碰機台狀態，
++                //   WebBridgeServer.cpp:1408-1423 本來就豁免權杖）。原本這裡回 modal-pending：告警框等回答超過 15 秒，
++                //   總表的每一條連線都過期、stale 算「開著」（WebWindowRegistry 契約 §6）⇒ fMotorTest／fTeach 讀成開著，
++                //   MT-E3b 起 golden MainProc 在它們開著時暫停 ⇒ 答完告警之後生產仍然停著，直到下一次心跳（審查 high 的 C++ 那一半）。
++                std::string whyW;
++                const std::string frameW = (wc.hasValue && wc.value.isString()) ? wc.value.asString() : std::string();
++                if (!frameW.empty() && ht9045::WebWindowRegistryPut(wc.connId, frameW, whyW))
++                    g_modalServer->CompleteCommand((unsigned long long)wc.id, true, "{\"accepted\":true,\"duringModal\":true}");
++                else
++                    g_modalServer->CompleteCommand((unsigned long long)wc.id, false,
++                                                   "ui.windows.put: " + (frameW.empty() ? std::string("value must be the frame JSON string") : whyW));
+             } else if (wc.cmd == "cfg.resync") {
+                 // AI(W906-JSONBRIDGE-S0) 20260923: 組態查詢在 modal 掛著時也放行。
+                 //
+@@ -4145,7 +4157,7 @@ int main(int argc, char** argv)
+                 //   卡住時要讓看門狗報成 "1203 Poll" 而不是 "tick"（否則看起來像 PumpTick／MainProc 卡住）。
+                 //   Poll 之後改回 "tick"，後面 drain／發布卡住時的報法與改動前相同。
+                 WdMark("1203 Poll");
+-                { extern void W906_IoTiming(int); W906_IoTiming(3); mon->Poll(); W906_IoTiming(4); }  { extern void W906_MotorAccessPollTick(); W906_MotorAccessPollTick(); }   // AI(W906-IOWEB-P21) 20260925: phase mark for the click-latency log  //AI(W906-MT-E2) 20260925: right after Poll -- a 1203 LoopMove sees its arrival on the fresh sample (golden leg times), the Motor Test copy is refreshed (WebMotorAccessLive.cpp). Same line, so no line below moves
++                { extern void W906_IoTiming(int); W906_IoTiming(3); mon->Poll(); W906_IoTiming(4); }  { extern void W906_MotorAccessPollTick(bool); W906_MotorAccessPollTick(server.ControlOwner() != 0); }   // AI(W906-IOWEB-P21) 20260925: phase mark for the click-latency log  //AI(W906-MT-E2) 20260925: right after Poll -- a 1203 LoopMove sees its arrival on the fresh sample (golden leg times), the Motor Test copy is refreshed (WebMotorAccessLive.cpp). Same line, so no line below moves
+                 WdMark("tick");
+                 ioPolled = wasOpen || mon->card().open;  g_apiCacheDirty = true;   // AI(W906-IOWEB-P6) 20260924: right after Poll(), same thread  // AI(W906-IOWEB-P25) 20260925: was rebuilt HERE, before the drain, so every click queued during the Poll also waited 20-160 ms for four JSON strings; now marked, rebuilt after the drain
+             }
+-- 
+2.55.0.windows.5
+

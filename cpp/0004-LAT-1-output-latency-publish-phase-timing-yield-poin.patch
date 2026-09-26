@@ -1,0 +1,451 @@
+From eef1a78cda9851e3fbcb196c2f3a4931c7789fae Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 25 Sep 2026 19:10:25 +0800
+Subject: [PATCH 04/14] LAT-1: output latency -- publish phase timing + yield
+ points in PublishHandlerTags, acquire+click pipelined, Poll segment timing
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203Monitor.cpp    | 18 +++++------
+ EtherCAT/Pci1203Monitor.h      |  2 +-
+ JsonBridge/ChanIo.h            |  4 +++
+ JsonBridge/ChanIoPoints.cpp    |  7 ++++
+ JsonBridge/IoBtnPanelClick.cpp | 59 +++++++++++++++++++++++++---------
+ WebBridgeTags.cpp              | 20 ++++++------
+ WebBridgeTags.h                |  2 +-
+ tools/wb_serve.cpp             | 33 +++++++++++++++----
+ 8 files changed, 102 insertions(+), 43 deletions(-)
+
+diff --git a/EtherCAT/Pci1203Monitor.cpp b/EtherCAT/Pci1203Monitor.cpp
+index 8e70f74..124bad9 100644
+--- a/EtherCAT/Pci1203Monitor.cpp
++++ b/EtherCAT/Pci1203Monitor.cpp
+@@ -97,7 +97,7 @@ struct TPci1203Monitor::Impl {
+     // the wire shape must not change with the topology, or a consumer rebinds
+     // mid-run (same rule as the axis slots).
+     std::vector<Pci1203SlaveSample> slaves;
+-
++    long long   yieldQpc = 0;   //AI(W906-LAT-1) 20260925: QueryPerformanceCounter ticks spent inside the yield hook, cumulative (Yield_); Poll's segment clock subtracts it. Beside yieldMs, which stays as it was for pollMs. On the old blank line, so no line below moves
+     bool        opened;
+     bool        disabled;
+     std::string disabledWhy;
+@@ -2095,7 +2095,7 @@ bool TPci1203Monitor::Poll()
+             ++impl_->cardS.detaches;
+             impl_->cardS.lastErrorText =
+                 "detached: production closed the card (uiDevhand went to 0)";
+-            impl_->cardS.pollMs = 0;
++            impl_->cardS.pollMs = 0;  impl_->cardS.pollSegValid = false;   //AI(W906-LAT-1) 20260925: no segments on a detached card
+             ++impl_->cardS.pollCount;
+             return false;
+         }
+@@ -2182,7 +2182,7 @@ bool TPci1203Monitor::Poll()
+             }
+         }
+     }
+-
++    struct SegClock_ { const long long& y; long long y0; LARGE_INTEGER f, t; explicit SegClock_(const long long& yq) : y(yq), y0(yq) { if (!::QueryPerformanceFrequency(&f)) f.QuadPart = 0; ::QueryPerformanceCounter(&t); } double Lap() { LARGE_INTEGER n; ::QueryPerformanceCounter(&n); const long long d = (long long)(n.QuadPart - t.QuadPart) - (y - y0); t = n; y0 = y; if (f.QuadPart <= 0 || d <= 0) return 0.0; return (double)(long long)(d * 100000.0 / (double)f.QuadPart + 0.5) / 100.0; } } segClock_(impl_->yieldQpc);   //AI(W906-LAT-1) 20260925: SEGMENT TIMING (batchinput report step 1: 「先量，不要先改」). Lap() = ms since the previous lap, minus the yield hook's time in between, to 0.01 ms. GetTickCount (pollMs) ticks at ~15.6 ms here, too coarse for a 5-40 ms segment, hence QueryPerformanceCounter. NOT a vendor call; the zero-scan re-sweep above is deliberately outside every segment. On the old blank line, so no line below moves
+     unsigned long calls = 0;
+ 
+     // --- EtherCAT ring: re-read the state of every DISCOVERED station -------
+@@ -2227,7 +2227,7 @@ bool TPci1203Monitor::Poll()
+     if (impl_->cardS.slavesFound == 0) {
+         // Nothing was ever discovered: the ring state is unknown, not good.
+         impl_->cardS.slaveValid = false;
+-    }
++    }  const double segStationsMs_ = segClock_.Lap();   //AI(W906-LAT-1) 20260925: end of the station-state segment, start of the axis segment
+     { const unsigned long nr = (unsigned long)::GetTickCount(); const bool due = !impl_->retryArmed || (nr - impl_->retryTick) >= 30000ul; if (due) { impl_->retryArmed = true; impl_->retryTick = nr; } impl_->alarmRetryDue = due; impl_->cfgRetryDue = due; }   //AI(W906-IOWEB-P25) 20260925: the 30 s retry window (failed 603Fh reads, failed configuration reads) is decided ONCE HERE, before the axis loop. It used to be decided inside the loop at axis index 0, so an unopened axis 0 skipped the decision; and `(long)(now - 0) >= 0` is false for an uptime of 24.8-49.7 days. Unsigned subtraction from an armed tick is wrap-correct. On the old blank line, so no line below moves
+     // --- axes --------------------------------------------------------------
+     for (std::size_t i = 0; i < impl_->axHandles.size(); ++i) {
+@@ -2835,7 +2835,7 @@ bool TPci1203Monitor::Poll()
+             }
+         }  if (i < impl_->cfgDue.size()) { const unsigned readNow = cfgWant; impl_->cfgDue[i] &= ~readNow; impl_->cfgFailed[i] = (impl_->cfgFailed[i] & ~readNow) | cfgBad; for (unsigned g = 0; g < 5u; ++g) { if ((cfgBad & (1u << g)) != 0u) ++impl_->cfgTries[i * 5u + g]; else if ((readNow & (1u << g)) != 0u) impl_->cfgTries[i * 5u + g] = 0; }  impl_->cfgWritten[i] &= ~readNow; if (readNow != 0u) CheckCfg_((int)i, readNow); if (s.station < 0) impl_->cfgDue[i] &= ~(unsigned)(kCfgGear | kCfgDrive); }  Yield_();   //AI(W906-IOWEB-P25) 20260925: what this pass read is no longer due; a failed group waits for the 30 s window (at most 3 tries, cfgTries); then the written values of this axis are compared with what was just read (CheckCfg_ may make a group due again). Then outputs first, between two axes
+     }
+-
++    const double segAxesMs_ = segClock_.Lap();   //AI(W906-LAT-1) 20260925: end of the axis segment (state/IO/positions/velocity/last error every poll, plus any configuration or 603Fh reads that were due this pass), start of the DI segment. On the old blank line
+     //AI(W906-1203CTL-38) 20260911: the comparison probe's own read, same tick,
+     //  same card, different addressing. See the pxHandles banner.
+     // --- digital inputs ----------------------------------------------------
+@@ -2937,7 +2937,7 @@ bool TPci1203Monitor::Poll()
+             }  Yield_();   //AI(W906-IOWEB-P25) 20260925: outputs first, between two DI bytes (after the store, never between the read and its store)
+         }
+     }
+-
++    const double segDiMs_ = segClock_.Lap();   //AI(W906-LAT-1) 20260925: end of the DI segment, start of the DO read-back segment. On the old blank line
+     // --- digital outputs, READ-BACK ONLY -----------------------------------
+     //AI(W906-1203MON-18) 20260910: Acm_DaqDoGetByte reads what the card says it
+     //  is currently driving. The Set family stays absent and
+@@ -2997,7 +2997,7 @@ bool TPci1203Monitor::Poll()
+             }  Yield_();   //AI(W906-IOWEB-P25) 20260925: outputs first, between two DO bytes -- after the store, so a write served here and its ForceDoReread are never overwritten by a byte read before the write
+         }
+     }
+-
++    { const double segDoMs_ = segClock_.Lap(); impl_->cardS.pollStationsMs = segStationsMs_; impl_->cardS.pollAxesMs = segAxesMs_; impl_->cardS.pollDiMs = segDiMs_; impl_->cardS.pollDoMs = segDoMs_; impl_->cardS.pollSegValid = true; }   //AI(W906-LAT-1) 20260925: end of the DO segment; the four segments are stored together, beside vendorCalls and pollMs, so one publish never mixes two polls' numbers. On the old blank line
+     impl_->cardS.vendorCalls = calls;
+     impl_->cardS.pollMs = static_cast<unsigned long>(::GetTickCount() - t0) - impl_->yieldMs;   //AI(W906-IOWEB-P25) 20260925: the poll's own cost, without the outputs served inside it
+     ++impl_->cardS.pollCount;
+@@ -3182,9 +3182,9 @@ void TPci1203Monitor::Yield_()
+ {
+     if (!impl_ || impl_->yieldHook == 0 || impl_->inYield) return;
+     impl_->inYield = true;
+-    const unsigned long y0 = (unsigned long)::GetTickCount();
++    const unsigned long y0 = (unsigned long)::GetTickCount();  LARGE_INTEGER q0; ::QueryPerformanceCounter(&q0);   //AI(W906-LAT-1) 20260925: + the same interval in QPC ticks, for Poll's segment clock
+     impl_->yieldHook();
+-    impl_->yieldMs += (unsigned long)::GetTickCount() - y0;
++    impl_->yieldMs += (unsigned long)::GetTickCount() - y0;  { LARGE_INTEGER q1; ::QueryPerformanceCounter(&q1); impl_->yieldQpc += (long long)(q1.QuadPart - q0.QuadPart); }   //AI(W906-LAT-1) 20260925
+     impl_->inYield = false;
+ }
+ 
+diff --git a/EtherCAT/Pci1203Monitor.h b/EtherCAT/Pci1203Monitor.h
+index 2491dcd..cc0bb51 100644
+--- a/EtherCAT/Pci1203Monitor.h
++++ b/EtherCAT/Pci1203Monitor.h
+@@ -1315,7 +1315,7 @@ struct Pci1203CardSample {
+     //   the reason this module publishes ring/addr/flat at all. An operator
+     //   looking at a populated panel has no other way to know.
+     bool          idConflict;
+-
++    double pollStationsMs = 0.0; double pollAxesMs = 0.0; double pollDiMs = 0.0; double pollDoMs = 0.0; bool pollSegValid = false;   //AI(W906-LAT-1) 20260925: the last FULL Poll() split into its four read segments -- station states / axes / DI bytes / DO bytes -- in milliseconds by QueryPerformanceCounter, each WITHOUT the time the output-first hook ran inside it (same rule as pollMs). Timing only: no vendor call was added for it and THE ALLOWLIST at the top of this header is unchanged. pollSegValid is false until a full pass completes and after a detach, so a screen shows null rather than a 0 that reads as "free". Default member initialisers so the constructor below is untouched. On the old blank line, so no line below moves
+     //AI(W906-1203COLD-1) 20260918: HOW LONG THE OPEN HAD TO WAIT FOR THE
+     //  ETHERCAT SLAVES, and how many attempts it took. Both 0 on the ordinary
+     //  warm start, where the first Acm_DevOpen succeeds.
+diff --git a/JsonBridge/ChanIo.h b/JsonBridge/ChanIo.h
+index 9e06861..b930394 100644
+--- a/JsonBridge/ChanIo.h
++++ b/JsonBridge/ChanIo.h
+@@ -255,6 +255,10 @@ struct IoMonitorStatus {
+     unsigned long pollCount;      // 單調遞增；兩次讀到同一個數字 = 這段時間沒有輪詢
+     unsigned long pollErrors;
+     unsigned long pollMs;         // 最後一次 Poll() 花的時間
++    // AI(W906-LAT-1) 20260925: 最後一次完整 Poll() 四段各花多少 ms（站狀態／軸／DI／DO，已扣掉中途插隊送輸出的時間；
++    //   Pci1203CardSample::pollSegValid）。預設值讓只填舊欄位的呼叫端（tests/test_io_points.cpp）照舊可用：segValid=false ⇒ 四個都發 null。
++    double        pollStationsMs = 0.0, pollAxesMs = 0.0, pollDiMs = 0.0, pollDoMs = 0.0;
++    bool          pollSegValid = false;
+ };
+ // 帶監看器狀態的版本：st 為 0 時與上面完全相同。
+ std::string IoRuntimeJsonFrom(const std::vector<IoByteSample>& di,
+diff --git a/JsonBridge/ChanIoPoints.cpp b/JsonBridge/ChanIoPoints.cpp
+index b665d4f..dcd89c3 100644
+--- a/JsonBridge/ChanIoPoints.cpp
++++ b/JsonBridge/ChanIoPoints.cpp
+@@ -327,6 +327,11 @@ std::string IoRuntimeJsonFrom(const std::vector<IoByteSample>& di,
+         w.Key("pollCount").Number((wb_int64)st->pollCount);
+         w.Key("pollErrors").Number((wb_int64)st->pollErrors);
+         w.Key("pollMs").Number((wb_int64)st->pollMs);
++        // AI(W906-LAT-1) 20260925: Poll 四段的實測（與 pci1203.poll.stationsMs/axesMs/diMs/doMs 同源），沒有完整量過一輪就是 null、不是 0。
++        w.Key("stationsMs"); if (st->pollSegValid) w.Number(st->pollStationsMs); else w.Null();
++        w.Key("axesMs");     if (st->pollSegValid) w.Number(st->pollAxesMs);     else w.Null();
++        w.Key("diMs");       if (st->pollSegValid) w.Number(st->pollDiMs);       else w.Null();
++        w.Key("doMs");       if (st->pollSegValid) w.Number(st->pollDoMs);       else w.Null();
+         w.EndObject();
+     }
+     if (!connected) {
+@@ -387,6 +392,8 @@ std::string IoRuntimeJson()
+         st.pollCount = c.pollCount;
+         st.pollErrors = c.pollErrors;
+         st.pollMs = c.pollMs;
++        st.pollSegValid = c.pollSegValid;   // AI(W906-LAT-1) 20260925
++        st.pollStationsMs = c.pollStationsMs; st.pollAxesMs = c.pollAxesMs; st.pollDiMs = c.pollDiMs; st.pollDoMs = c.pollDoMs;
+     }
+     const bool connected = (mon != 0) && st.open && !st.disabled && (nDi > 0 || nDo > 0);
+     return IoRuntimeJsonFrom(di, dout, connected, NowIsoUtc(), &st);
+diff --git a/JsonBridge/IoBtnPanelClick.cpp b/JsonBridge/IoBtnPanelClick.cpp
+index 087b275..f7e6245 100644
+--- a/JsonBridge/IoBtnPanelClick.cpp
++++ b/JsonBridge/IoBtnPanelClick.cpp
+@@ -156,8 +156,10 @@ std::string Str(const AnsiString& s) { return std::string(s.c_str()); }
+ //  A click travels: browser -> socket thread (CommandQueue::tryPush stamps
+ //  WebCommand::pushedUs) -> waits in the queue until the ONE tick thread drains it
+ //  -> MyLaneIO.IOBitOn -> route -> Execute -> the card. The tick thread also runs
+-//  PumpTick (500 ms beat), the 1203 Poll (200 ms clock) and the /api cache rebuild,
+-//  and while it does any of those the click waits. wb_serve marks each of those
++//  PumpTick (500 ms beat), the 1203 Poll (200 ms clock), the /api cache rebuild and
++//  the tag publish (AI(W906-LAT-1) 20260925), and while it does any of those the
++//  click waits -- except where the phase lends the thread to outputs (Poll, cache,
++//  publish: W906_ServiceOutputs in tools/wb_serve.cpp). wb_serve marks each of those
+ //  phases (W906_IoTiming below, same-line calls in tools/wb_serve.cpp), so the log
+ //  can say WHICH one the click was waiting behind -- not just that it waited.
+ //  All of it runs on the tick thread: no lock.
+@@ -172,8 +174,13 @@ struct Phase { int kind; std::uint64_t t0, t1; };
+ const int kPhaseRing = 256;
+ Phase         s_phase[kPhaseRing];
+ int           s_phaseHead = 0;
+-std::uint64_t s_phaseOpen[4] = { 0, 0, 0, 0 };
+-const char* const kPhaseName[4] = { "", "跑流程(PumpTick)", "讀卡(1203 Poll)", "畫面資料(api cache)" };
++//AI(W906-LAT-1) 20260925: + phase 4 = PublishHandlerTags (wb_serve marks it 7/8). The 14:19 log's
++//  "其他" (up to 43.6 ms) was every tick-thread moment no phase claimed, and the publish -- 7,084
++//  tags staged after every Poll, beat, drained batch and served output -- was the unmarked suspect
++//  (outputlatency report, step 1). Marking it turns that guess into a column.
++const int kPhaseKinds = 5;   // [0] unused, 1..4
++std::uint64_t s_phaseOpen[kPhaseKinds] = { 0, 0, 0, 0, 0 };
++const char* const kPhaseName[kPhaseKinds] = { "", "跑流程(PumpTick)", "讀卡(1203 Poll)", "畫面資料(api cache)", "發布(publish)" };
+ 
+ // Microseconds the tick thread spent in phase `kind` inside [from, to].
+ std::uint64_t PhaseOverlapUs(int kind, std::uint64_t from, std::uint64_t to)
+@@ -191,12 +198,13 @@ std::uint64_t PhaseOverlapUs(int kind, std::uint64_t from, std::uint64_t to)
+ 
+ }  // namespace
+ 
+-//  what: 1/2 = PumpTick begin/end, 3/4 = 1203 Poll begin/end, 5/6 = api cache begin/end.
++//  what: 1/2 = PumpTick begin/end, 3/4 = 1203 Poll begin/end, 5/6 = api cache begin/end,
++//        7/8 = PublishHandlerTags begin/end (AI(W906-LAT-1) 20260925).
+ void W906_IoTiming(int what)
+ {
+     const std::uint64_t now = NowUs_();
+     const int kind = (what + 1) / 2;
+-    if (kind < 1 || kind > 3) return;
++    if (kind < 1 || kind >= kPhaseKinds) return;
+     if (what % 2) { s_phaseOpen[kind] = now; return; }
+     if (s_phaseOpen[kind] == 0) return;
+     Phase& p = s_phase[s_phaseHead];
+@@ -463,10 +471,10 @@ bool W906_IoBtnPanelClick(const std::string& alias, int desiredDown, std::string
+     const std::uint64_t tDone = NowUs_();
+ 
+     const double queueMs = (pushedUs && tDispatch >= pushedUs) ? (tDispatch - pushedUs) / 1000.0 : -1.0;
+-    double busyMs[4] = { 0, 0, 0, 0 };
++    double busyMs[kPhaseKinds] = { 0, 0, 0, 0, 0 };
+     double busySum = 0;
+     if (queueMs >= 0) {
+-        for (int k = 1; k <= 3; ++k) {
++        for (int k = 1; k < kPhaseKinds; ++k) {
+             busyMs[k] = PhaseOverlapUs(k, pushedUs, tDispatch) / 1000.0;
+             busySum += busyMs[k];
+         }
+@@ -478,17 +486,17 @@ bool W906_IoBtnPanelClick(const std::string& alias, int desiredDown, std::string
+ 
+     char line[512];
+     std::snprintf(line, sizeof(line),
+-                  "排隊 %.0f ms（%s %.0f、%s %.0f、%s %.0f、其他 %.0f）；送卡 %.1f ms；伺服器端合計 %.0f ms",
++                  "排隊 %.0f ms（%s %.0f、%s %.0f、%s %.0f、%s %.0f、其他 %.0f）；送卡 %.1f ms；伺服器端合計 %.0f ms",
+                   queueMs, kPhaseName[1], busyMs[1], kPhaseName[2], busyMs[2], kPhaseName[3], busyMs[3],
+-                  otherMs, execMs, serverMs);
++                  kPhaseName[4], busyMs[4], otherMs, execMs, serverMs);
+     std::printf("io.btnPanelClick %s timing: %s\n", alias.c_str(), line);
+ 
+     if (ok && !out.empty() && out[out.size() - 1] == '}') {
+         char t[384];
+         std::snprintf(t, sizeof(t),
+                       ",\"timing\":{\"queueMs\":%.1f,\"pumpMs\":%.1f,\"pollMs\":%.1f,\"cacheMs\":%.1f,"
+-                      "\"otherMs\":%.1f,\"execMs\":%.2f,\"serverMs\":%.1f}",
+-                      queueMs, busyMs[1], busyMs[2], busyMs[3], otherMs, execMs, serverMs);
++                      "\"pubMs\":%.1f,\"otherMs\":%.1f,\"execMs\":%.2f,\"serverMs\":%.1f}",
++                      queueMs, busyMs[1], busyMs[2], busyMs[3], busyMs[4], otherMs, execMs, serverMs);
+         out.insert(out.size() - 1, t);
+     } else if (!ok) {
+         out += std::string("　｜計時：") + line;
+@@ -496,19 +504,38 @@ bool W906_IoBtnPanelClick(const std::string& alias, int desiredDown, std::string
+ 
+     const char* path = std::getenv("W906_IOTIMING_LOG");
+     if (path && *path) {
++        //AI(W906-LAT-1) 20260925: 發布ms is the LAST column, not next to 畫面資料ms, so the rows
++        //  already in runcfg\logs\io_click_timing.csv (11 columns, measured 13:27-14:19) keep every
++        //  column where it was. ⚠ But 其他ms changes meaning from here on (the publish is taken out
++        //  of it), so the first row this process writes into an OLD file is preceded by the new
++        //  header line -- a visible marker of where the column set changed, instead of a silent one.
++        static const char kHeader[] = "時間,Alias,Down,結果,排隊ms,跑流程ms,讀卡ms,畫面資料ms,其他ms,送卡ms,伺服器端合計ms,發布ms";
++        static bool headerChecked = false;
+         FILE* f = std::fopen(path, "ab");
+         if (f) {
+             std::fseek(f, 0, SEEK_END);
+-            if (std::ftell(f) == 0)   // new file: UTF-8 BOM so Excel shows the Chinese header
+-                std::fputs("\xEF\xBB\xBF" "時間,Alias,Down,結果,排隊ms,跑流程ms,讀卡ms,畫面資料ms,其他ms,送卡ms,伺服器端合計ms\r\n", f);
++            if (std::ftell(f) == 0) {   // new file: UTF-8 BOM so Excel shows the Chinese header
++                std::fputs("\xEF\xBB\xBF", f);
++                std::fputs(kHeader, f);
++                std::fputs("\r\n", f);
++            } else if (!headerChecked) {
++                char first[256] = { 0 };
++                FILE* r = std::fopen(path, "rb");
++                if (r) { if (!std::fgets(first, sizeof(first), r)) first[0] = '\0'; std::fclose(r); }
++                if (std::string(first).find("發布ms") == std::string::npos) {
++                    std::fputs(kHeader, f);
++                    std::fputs("\r\n", f);
++                }
++            }
++            headerChecked = true;
+             const std::time_t now = std::time(0);
+             const std::tm lt = *std::localtime(&now);
+             const long ms = (long)((std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::system_clock::now().time_since_epoch()).count()) % 1000);
+-            std::fprintf(f, "%04d-%02d-%02d %02d:%02d:%02d.%03ld,%s,%d,%s,%.1f,%.1f,%.1f,%.1f,%.1f,%.2f,%.1f\r\n",
++            std::fprintf(f, "%04d-%02d-%02d %02d:%02d:%02d.%03ld,%s,%d,%s,%.1f,%.1f,%.1f,%.1f,%.1f,%.2f,%.1f,%.1f\r\n",
+                          lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday, lt.tm_hour, lt.tm_min, lt.tm_sec, ms,
+                          alias.c_str(), desiredDown, result, queueMs, busyMs[1], busyMs[2], busyMs[3],
+-                         otherMs, execMs, serverMs);
++                         otherMs, execMs, serverMs, busyMs[4]);
+             std::fclose(f);
+         }
+     }
+diff --git a/WebBridgeTags.cpp b/WebBridgeTags.cpp
+index 877e512..35f4b38 100644
+--- a/WebBridgeTags.cpp
++++ b/WebBridgeTags.cpp
+@@ -75,7 +75,7 @@ namespace ht9045 {
+ static ExtraTagPublisher g_extraPublisher = 0;
+ 
+ void SetExtraTagPublisher(ExtraTagPublisher fn) { g_extraPublisher = fn; }
+-
++static PublishYieldHook g_publishYield = 0; static bool g_inPublish = false; static bool g_inPublishYield = false;  void SetPublishYieldHook(PublishYieldHook fn) { g_publishYield = fn; }  static void PublishYield_() { if (g_publishYield == 0 || g_inPublishYield) return; g_inPublishYield = true; g_publishYield(); g_inPublishYield = false; }   // AI(W906-LAT-1) 20260925: the publish's yield points (WebBridgeTags.h SetPublishYieldHook). g_inPublishYield: a hook that somehow reached a yield point again is not re-entered; g_inPublish: see the guard at the top of PublishHandlerTags(). On the old blank line, so no line below moves
+ 
+ using webbridge::TagValue;
+ 
+@@ -671,7 +671,7 @@ std::size_t PublishHandlerTags(webbridge::TagSnapshot& snap)
+     const bool strs  = IniConfigStringsLoaded();
+     const bool cust  = CustomerCodeLoaded();
+     const bool lastS = LastSetLoaded();
+-
++    if (g_inPublish) return 0;   struct InPublishGuard_ { InPublishGuard_() { g_inPublish = true; } ~InPublishGuard_() { g_inPublish = false; } } inPublishGuard_;   // AI(W906-LAT-1) 20260925: a publish reached from INSIDE a publish (an output served at a yield point that ended up publishing) would beginPublish() -- clear the staging map this call is half-way through filling -- and commit, and this call would then commit the remainder as a generation missing every tag staged before the yield. No path does that today (the three callers are wb_serve's loop and its two start-up publishes); refused rather than trusted, and the outer call's follow-up publish (g_outputsServed) covers it. On the old blank line, so no line below moves
+     snap.beginPublish();
+     // --- BUILD IDENTITY: compile-time facts, ALWAYS non-null ----------------
+     //AI(W906-FW-1e) 20260908. A new tag CATEGORY, and the category matters more
+@@ -1356,7 +1356,7 @@ std::size_t PublishHandlerTags(webbridge::TagSnapshot& snap)
+     stageInt(snap, "lot.auto1.trayCount", pumping, iUnloaderTrayCountCal[0]);
+     stageInt(snap, "lot.auto2.trayCount", pumping, iUnloaderTrayCountCal[1]);
+     stageInt(snap, "lot.auto3.trayCount", pumping, iUnloaderTrayCountCal[2]);
+-
++    PublishYield_();   // AI(W906-LAT-1) 20260925: yield point -- the machine half is staged, the pci1203 half (the bulk: ~110 tags per axis slot) follows. ⚠ Before `mon` is fetched below, so the pointer is taken after any output served here. On the old blank line
+     // --- 1203MON: the PCIE-1203 card, axes and digital inputs ---------------
+     //AI(W906-1203MON-5) 20260907: user requirement 20260907 -- monitor the 1203
+     // from a BCB6 screen over TCPIP. The BCB6 client is a SECOND consumer of the
+@@ -1992,7 +1992,7 @@ std::size_t PublishHandlerTags(webbridge::TagSnapshot& snap)
+             for (int b = 0; b < kBitCount; ++b) {
+                 std::snprintf(tag, sizeof(tag), "pci1203.ax%d.%s", i, kBits[b].suffix);
+                 stageBool(snap, tag, ok, (io & kBits[b].bit) != 0);
+-            }
++            }  PublishYield_();   // AI(W906-LAT-1) 20260925: yield point after each axis slot (each is ~110 stage() calls). The next slot re-reads its sample pointer, so an output served here is seen by every slot after it
+         }
+ 
+         // IO layer -- digital INPUT bytes.
+@@ -2075,7 +2075,7 @@ std::size_t PublishHandlerTags(webbridge::TagSnapshot& snap)
+             std::snprintf(tag, sizeof(tag), "pci1203.di%d.station", i);
+             stageInt(snap, tag, (d != 0 && d->station >= 0), (long long)(d ? d->station : 0));
+             std::snprintf(tag, sizeof(tag), "pci1203.di%d.chan", i);
+-            stageInt(snap, tag, (d != 0 && d->stationChan >= 0), (long long)(d ? d->stationChan : 0));
++            stageInt(snap, tag, (d != 0 && d->stationChan >= 0), (long long)(d ? d->stationChan : 0));  if ((i & 31) == 31) PublishYield_();   // AI(W906-LAT-1) 20260925: yield point every 32 DI slots
+         }
+ 
+         // IO layer -- digital OUTPUT read-back. See (a) above: this is
+@@ -2109,7 +2109,7 @@ std::size_t PublishHandlerTags(webbridge::TagSnapshot& snap)
+             //  what to draw from the difference.
+             std::snprintf(tag, sizeof(tag), "pci1203.do%d.ring", i);
+             stageInt(snap, tag, (o != 0 && o->ring >= 0),
+-                     (long long)(o ? o->ring : 0));
++                     (long long)(o ? o->ring : 0));  if ((i & 31) == 31) PublishYield_();   // AI(W906-LAT-1) 20260925: yield point every 32 DO slots
+         }
+ 
+         // --- discovered fieldbus stations -----------------------------------
+@@ -2135,7 +2135,7 @@ std::size_t PublishHandlerTags(webbridge::TagSnapshot& snap)
+         stageInt (snap, "pci1203.scan.master",    mon != 0, (long long)(mon ? mon->card().masterSlaves : 0));
+         stageInt (snap, "pci1203.scan.retries",   mon != 0, (long long)(mon ? mon->card().scanRetries : 0));
+         stageInt (snap, "pci1203.poll.vendorCalls", mon != 0, (long long)(mon ? mon->card().vendorCalls : 0));
+-
++        { const bool seg = (mon != 0 && mon->card().pollSegValid); stageDouble(snap, "pci1203.poll.stationsMs", seg, seg ? mon->card().pollStationsMs : 0.0); stageDouble(snap, "pci1203.poll.axesMs", seg, seg ? mon->card().pollAxesMs : 0.0); stageDouble(snap, "pci1203.poll.diMs", seg, seg ? mon->card().pollDiMs : 0.0); stageDouble(snap, "pci1203.poll.doMs", seg, seg ? mon->card().pollDoMs : 0.0); }   // AI(W906-LAT-1) 20260925: where the last Poll's own time went, segment by segment (stations / axes / DI / DO, output time served inside it excluded; Pci1203CardSample::pollSegValid). Null until one full pass has run -- a detached or not-yet-polled card has no segments, and 0 would read as "free". Replaces the batchinput report's ~0.18 ms-per-call estimate with a measurement. On the old blank line, so no line below moves
+         //AI(W906-1203MON-12) 20260907: the axis ID sweep. `axScan.byIdMode` is
+         // the gate on trusting a motor NAME beside an axis row: false means the
+         // numbers came from the physical-index fallback, which cannot be
+@@ -2165,7 +2165,7 @@ std::size_t PublishHandlerTags(webbridge::TagSnapshot& snap)
+                   (long long)(mon ? mon->card().axExpected : 0));
+         stageBool(snap, "pci1203.axScan.mapConsistent", mon != 0,
+                   (mon != 0 && mon->card().axMapConsistent));
+-
++        PublishYield_();   // AI(W906-LAT-1) 20260925: yield point before the station slots (and every 8 of them below -- each present station also costs one Pci1203Io.ini profile read). On the old blank line
+         for (int i = 0; i < kPci1203TagSlaves; ++i) {
+             char tag[48];
+             const Pci1203SlaveSample* s = 0;
+@@ -2309,10 +2309,10 @@ std::size_t PublishHandlerTags(webbridge::TagSnapshot& snap)
+             //   profile 0 -- a number that means nothing and would look like an
+             //   answer.
+             std::snprintf(tag, sizeof(tag), "pci1203.slave%d.profile", i);
+-            stageInt(snap, tag, (s != 0 && s->profileValid), (long long)(s ? s->profile : 0));
++            stageInt(snap, tag, (s != 0 && s->profileValid), (long long)(s ? s->profile : 0));  if ((i & 7) == 7) PublishYield_();   // AI(W906-LAT-1) 20260925: yield point every 8 station slots
+         }
+     }
+-
++    PublishYield_();   // AI(W906-LAT-1) 20260925: yield point before the extra publisher (SECS: 741 SV entries). On the old blank line
+     // AI(W906-P4-SECS) 20260920: 額外發布者（目前只有 SECS 的 SV 目錄）。
+     //
+     //   ⚠ **一定要在 commitPublish() 之前**跑。第一版是從 PublishHandlerTags()
+diff --git a/WebBridgeTags.h b/WebBridgeTags.h
+index a13e5b1..afb5b39 100644
+--- a/WebBridgeTags.h
++++ b/WebBridgeTags.h
+@@ -222,7 +222,7 @@ std::size_t PublishHandlerTags(webbridge::TagSnapshot& snap);
+ //     快照筆數斷言完全不受影響。
+ typedef std::size_t (*ExtraTagPublisher)(webbridge::TagSnapshot& snap);
+ void SetExtraTagPublisher(ExtraTagPublisher fn);
+-
++typedef void (*PublishYieldHook)(); void SetPublishYieldHook(PublishYieldHook fn);   // AI(W906-LAT-1) 20260925: OUTPUT FIRST inside the publish too (user 20260925: 「輸出一定要第一優先發出去」). PublishHandlerTags() calls the hook at iteration boundaries only -- before the pci1203 block, after each axis, every 32 DI / 32 DO ports, every 8 stations, before the extra publisher -- and wb_serve installs one that runs queued OUTPUT commands there (W906_ServiceOutputs(7), same service the 1203 Poll lends its thread to). Default null => the tests that compile this file directly are unchanged. ⚠ A snapshot built across a yield can mix state from before and after that output; the caller must publish once more afterwards (wb_serve: g_outputsServed is cleared BEFORE the publish). ⚠ The hook must not publish: a nested PublishHandlerTags() is refused (returns 0, stages nothing). On the old blank line, so no line below moves
+ // AI(W906-FW-W3) 20260819: the web server's control-token holder, injected by
+ // the serving loop before each PublishHandlerTags() call so the snapshot can
+ // carry it as the `control.owner` tag (design doc section 3). 0 = nobody.
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 4fab9e4..21d007f 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -3983,7 +3983,7 @@ int main(int argc, char** argv)
+     // --- 3. republish on a slow tick -----------------------------------------
+     // The real handler will do this from its existing UI timer. Nothing here
+     // reads machine state off the socket thread; the snapshot is the only seam.
+-    WdMark("startup: entering tick loop");                                      // AI(W906-WD) 20260923
++    WdMark("startup: entering tick loop");  { extern void W906_PublishYieldHook(); ht9045::SetPublishYieldHook(&W906_PublishYieldHook); }   // AI(W906-WD) 20260923  // AI(W906-LAT-1) 20260925: the tag publish lends this thread to queued OUTPUT commands too, between its blocks (WebBridgeTags.h SetPublishYieldHook; EOF: W906_PublishYieldHook). Installed here, after the two start-up publishes, whatever the monitor build: outputs exist only with WB_PUMP_1203_CONTROL, and without it W906_ServiceOutputs finds none
+     const DWORD started = ::GetTickCount();
+     std::vector<webbridge::WebCommand> drained;
+     //AI(W906-Q34-7) 20260923: 截止時間式的雙時鐘迴圈，取代原本「開頭 Sleep(kServeTickMs)、
+@@ -4059,7 +4059,7 @@ int main(int argc, char** argv)
+             if (wait > 50u) wait = 50u;
+             const DWORD until = ::GetTickCount() + wait;
+             for (;;) {
+-                if (cmdQueue.size() > 0 || !g_carry.empty()) break;   // AI(W906-IOWEB-P25) 20260925: a carried command is also work
++                if (cmdQueue.size() > 0 || !g_carry.empty() || g_outputsServed) break;   // AI(W906-IOWEB-P25) 20260925: a carried command is also work  // AI(W906-LAT-1) 20260925: + an output served INSIDE the last publish (its yield points): that snapshot may mix before/after-output state and does not show the read-back, so go round at once -- no sleep -- and publish again (publishNow sees g_outputsServed)
+                 const DWORD left = until - ::GetTickCount();
+                 if ((long)left <= 0) break;
+                 cmdQueue.waitForPush(left);   // AI(W906-IOWEB-P25) 20260925: was Sleep(2) slices: without timeBeginPeriod a slice is up to ~15.6 ms (the click log's 13-35 ms 其他). The queue now signals an event on every accepted push, so a click wakes this thread at once
+@@ -5298,9 +5298,9 @@ int main(int argc, char** argv)
+                                 ;
+         if (publishNow) {
+             ht9045::SetWebControlOwner(server.ControlOwner());   // AI(W906-FW-W3) 20260819: control.owner tag feed
+-            ht9045::PublishHandlerTags(snap);   // AI(W906-P4-SECS): secs.sv.* 在它內部
+-
+-            server.Wake();  g_outputsServed = false;
++            g_outputsServed = false;  extern void W906_IoTiming(int); W906_IoTiming(7); ht9045::PublishHandlerTags(snap); W906_IoTiming(8);   // AI(W906-P4-SECS): secs.sv.* 在它內部  // AI(W906-LAT-1) 20260925: (a) 7/8 = the publish's own phase in the click-latency log (JsonBridge/IoBtnPanelClick.cpp); (b) g_outputsServed is cleared BEFORE the publish (was: after it, on the line below): outputs now also run at the publish's yield points (SetPublishYieldHook), and clearing it afterwards would erase exactly that fact -- the next loop would then neither skip its sleep nor publish the read-back
++            //  ⓘ AI(W906-LAT-1) 20260925: the flag cleared above is set again by any output served inside that publish -> see the sleep loop's wake condition
++            server.Wake();
+         }
+ 
+         if (seconds > 0 &&
+@@ -5432,7 +5432,7 @@ BOOL WINAPI W906_ConsoleCtrl(DWORD ev)
+ //    * right after the loop's sleep, and right after PumpTick,
+ //    * from INSIDE TPci1203Monitor::Poll(), between two stations / axes / DI bytes / DO bytes /
+ //      SDO reads (the monitor's yield hook -- W906_OutputYieldHook), and
+-//    * between the api cache's JSON builds.
++//    * between the api cache's JSON builds, and between blocks of the tag publish (AI(W906-LAT-1) 20260925, W906_PublishYieldHook).
+ //  All on this one tick thread: the vendor API stays single-threaded (Pci1203Control.h), and
+ //  PumpTick never runs inside a Poll, so the engine globals the click touches are not in use.
+ //
+@@ -5698,3 +5698,24 @@ std::string W906_ApiCacheGet(int which)
+     return copy;
+ }
+ }  // namespace
++
++// ===========================================================================
++//  AI(W906-LAT-1) 20260925: installed on the tag publish (ht9045::SetPublishYieldHook) before the
++//  tick loop. PublishHandlerTags() stages ~7,000 tags after every Poll, beat, drained batch and served
++//  output, and had no yield point -- the likeliest owner of the click log's unexplained "其他" (up to
++//  43.6 ms, outputlatency report). Same service as the Poll's hook; phase 7 = the publish's mark in
++//  the click log, so a click served here is timed as "waited behind the publish", not as "other".
++//  ⚠ Consistency: a snapshot built across a yield may show some tags from before an output and some
++//  from after it (e.g. fAllMotorHome / HomeFlag reset by SwMotorRelay). It is committed as it is and
++//  REPAIRED by the next publish, which follows at once: g_outputsServed is cleared before the publish
++//  and set by the output, and the loop's sleep does not wait while it is set. The alternative --
++//  discarding the half-built map and staging again -- doubles the cost of exactly the publishes an
++//  operator is waiting on. Nothing here can re-enter the publish (PublishHandlerTags refuses nesting),
++//  and pci1203.card.rescan never runs as an output (W906_Dispatch1203Ex outputsOnly), so the monitor
++//  samples the publish holds pointers into cannot be re-allocated under it.
++//  At the end of the file so no line above moves.
++// ===========================================================================
++void W906_PublishYieldHook()
++{
++    W906_ServiceOutputs(7);
++}
+-- 
+2.55.0.windows.5
+

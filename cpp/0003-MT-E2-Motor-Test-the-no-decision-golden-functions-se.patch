@@ -1,0 +1,1986 @@
+From 2c1afabdecb0212bf60081978a6d80f60231b4ed Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 25 Sep 2026 19:30:18 +0800
+Subject: [PATCH 03/14] MT-E2: Motor Test -- the no-decision golden functions
+ (select, cell edit, Copy From, speed bar, loop timing, LastHomePos, Reload
+ re-applies Mot_Table)
+
+Every Motor Test control that needed no user ruling, each against golden uMotorTest.cpp:
+- selectMotor (lM00Click/lpA00Click :734-790): Enable=0 refused before anything (golden :740-743); AllBtnUp;
+  MOT.SetSpeed(1) -> 1% PTP speeds to a 1203 card as golden would; runtime.selectedMotor.
+- setParamCell (SelectCell :1176-1222), copyFrom (BitBtn1Click :1384-1401), setSpeed (scroll bar :791-810 jog+PTP,
+  edtSpeedChange :1587-1603 PTP only; Index axes nothing). Jog = golden: the last scroll-bar jog % of that axis,
+  1% until the bar moves.
+- runtime per motor "cur" (golden UpdateMotorParameter rows + ReadRate/ReadRange/GetSpeed/LastHomePos), motion
+  jogPTime/jogNTime/avgTime (golden lblJogPTime/lblJogNTime/lblAvgTime semantics, arrival checked after every
+  1203 Poll via W906_MotorAccessPollTick, QPC).
+- Alarm rule of UpdateMotorLed (:644-652) at the moment an alarm is raised; LastHomePos recorded on home end.
+- Reload Motor Data re-reads Mot_Table.csv (read only) and re-applies the InitialMotorParameter table values to the
+  existing MOT[i].Motor objects in place; rows whose identity changed are skipped ("restart wb_serve").
+Tests: WebMotorAccess 278/0, MotorPoints_HT9050 54/54; control gate only the pre-existing START_RING FAIL;
+readonly gate PASS; pe_truncation PASS; production_audit 0 changes. Not yet run on the machine.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ JsonBridge/ChanMotor.h          |  14 +
+ JsonBridge/ChanMotorPoints.cpp  |  42 +++
+ WebMotorAccess.cpp              | 510 +++++++++++++++++++++++++++++---
+ WebMotorAccess.h                |  55 +++-
+ WebMotorAccessLive.cpp          | 236 ++++++++++++++-
+ tests/test_motor_points.cpp     |  56 ++++
+ tests/test_web_motor_access.cpp | 506 +++++++++++++++++++++++++++++--
+ tools/wb_serve.cpp              |   2 +-
+ 8 files changed, 1361 insertions(+), 60 deletions(-)
+
+diff --git a/JsonBridge/ChanMotor.h b/JsonBridge/ChanMotor.h
+index 2d0063f..737d9cf 100644
+--- a/JsonBridge/ChanMotor.h
++++ b/JsonBridge/ChanMotor.h
+@@ -120,6 +120,20 @@ struct MotorRuntimeOverlay {
+ typedef bool (*MotorRuntimeOverlayFn)(const std::string& alias, MotorRuntimeOverlay& out);
+ void SetMotorRuntimeOverlay(MotorRuntimeOverlayFn fn);   // 0 = 取消
+ 
++// AI(W906-MT-E2) 20260925: golden TfMotorTest 的「整頁」狀態（不是某一軸的）—— 同一個掛鉤模式，wb_serve（WebMotorAccessLive.cpp）註冊。
++//   selectedMotor → runtime.selectedMotor（C++ 認為馬達測試頁選的是哪一軸 = golden ActiveIndex；空 = 沒選 → null）
++//   jogPTime／jogNTime／avgTime → 每一軸 motion 的同名欄位（golden lblJogPTime／lblJogNTime／lblAvgTime 是整張表單**一組**標籤，
++//   不分軸 ⇒ 每一軸帶同一組值；沒量過 = null）。沒註冊（ctest 等）⇒ 全部 null，與之前逐欄相同。
++struct MotorTestPageState {
++    std::string selectedMotor;
++    bool        hasJogPTime, hasJogNTime, hasAvgTime;
++    int         jogPTime, jogNTime;      // ms（golden LatchCycleTime）
++    double      avgTime;                 // golden ChangeToFloatNonPcnt((double)Average, (double)dwLoopCount)
++    MotorTestPageState() : hasJogPTime(false), hasJogNTime(false), hasAvgTime(false), jogPTime(0), jogNTime(0), avgTime(0.0) {}
++};
++typedef bool (*MotorTestPageStateFn)(MotorTestPageState& out);
++void SetMotorTestPageState(MotorTestPageStateFn fn);     // 0 = 取消
++
+ }  // namespace sjson
+ }  // namespace ht9045
+ 
+diff --git a/JsonBridge/ChanMotorPoints.cpp b/JsonBridge/ChanMotorPoints.cpp
+index 397c52c..8a8540e 100644
+--- a/JsonBridge/ChanMotorPoints.cpp
++++ b/JsonBridge/ChanMotorPoints.cpp
+@@ -31,6 +31,7 @@ namespace {
+ 
+ unsigned long long g_mrtSeq = 0;
+ MotorRuntimeOverlayFn g_overlay = 0;   // AI(W906-W4-MOTOR) 20260925: W4-c 覆蓋掛鉤（ChanMotor.h 檔尾）
++MotorTestPageStateFn  g_pageState = 0; //AI(W906-MT-E2) 20260925: Motor Test 整頁狀態掛鉤（ChanMotor.h 檔尾）
+ const int kMotorPollMs = 1000;       // HW.MotorTest.html 原本就是每秒重讀一次（loadRuntimeOnly）
+ 
+ std::string NowIso()
+@@ -206,6 +207,7 @@ const Pci1203AxisSample* FindCardAxis(TPci1203Monitor* mon, int station, int sub
+ }
+ }  // namespace
+ void SetMotorRuntimeOverlay(MotorRuntimeOverlayFn fn) { g_overlay = fn; }
++void SetMotorTestPageState(MotorTestPageStateFn fn) { g_pageState = fn; }   //AI(W906-MT-E2) 20260925
+ 
+ std::string MotorRuntimeJson()
+ {
+@@ -213,6 +215,8 @@ std::string MotorRuntimeJson()
+     const unsigned long long seq = ++g_mrtSeq;
+     int nGood = 0, nNoSrc = 0, nCard = 0;
+     TPci1203Monitor* mon = Pci1203Monitor();
++    MotorTestPageState pg;                                                      //AI(W906-MT-E2) 20260925: read once per body
++    const bool hasPg = (g_pageState != 0) && g_pageState(pg);
+ 
+     webbridge::JsonWriter w;
+     w.BeginObject();
+@@ -276,6 +280,11 @@ std::string MotorRuntimeJson()
+         w.Key("homeJob");   if (hasOv) w.Bool(ov.homeJob); else w.Null();
+         w.Key("loopJob");   if (hasOv) w.Bool(ov.loopJob); else w.Null();
+         w.Key("loopCount"); if (hasOv && ov.loopJob) w.Number((wb_int64)ov.loopCount); else w.Null();
++        //AI(W906-MT-E2) 20260925: golden lblJogPTime / lblJogNTime / lblAvgTime (uMotorTest.cpp:452 / :555 / :561) -- one set of
++        //  labels for the whole form, so every row carries the same values; null = never measured (or no hook).
++        w.Key("jogPTime"); if (hasPg && pg.hasJogPTime) w.Number((wb_int64)pg.jogPTime); else w.Null();
++        w.Key("jogNTime"); if (hasPg && pg.hasJogNTime) w.Number((wb_int64)pg.jogNTime); else w.Null();
++        w.Key("avgTime");  if (hasPg && pg.hasAvgTime)  w.Number(pg.avgTime);             else w.Null();
+         w.EndObject();
+         w.Key("state").BeginObject();
+         w.Key("servoOn"); if (hasOv) w.Bool(ov.servoOn); else w.Null();
+@@ -331,6 +340,37 @@ std::string MotorRuntimeJson()
+         w.Key("stateText");   if (ax) w.String(Pci1203AxisStateText(ax->state)); else w.Null();
+         w.Key("why").String(hasOv ? ov.why : std::string(why));
+         w.EndObject();
++        //AI(W906-MT-E2) 20260925: "cur" = what golden Motor Test shows for the selected motor, from the golden object MOT[mi]
++        //  (not Mot_Table, not the card): rows 1..10 of strngrdMotor are UpdateMotorParameter (uMotorTest.cpp:655-669) --
++        //  initSpeed, jogHigh, jogLow, homeHigh, homeLow, softP, softN, acc (ReadAcc = the database value), dec, range;
++        //  rate/range fill edtMotorRate/edtMotorRange on selection (:757-758); readSpeed = MOT.GetSpeed() = lblRealSpeed
++        //  (:982, the last SetSpeed's value, NOT the card's running speed); lastHomePos = edtHomeOffset after a home (:965).
++        //  Every one of them is a cached member (no driver call), and this body is built on the tick thread.
++        //  null = no golden object for this row (MOT[mi].Motor is NULL).
++        w.Key("cur");
++        if (motObj) {
++            HTMotor* M = MOT[mi].Motor;
++            w.BeginObject();
++            w.Key("enable").Bool(M->Enable);
++            w.Key("initSpeed").Number((wb_int64)M->ReadInitSpeed());
++            w.Key("jogHigh").Number((wb_int64)M->PJogHighSpeed);
++            w.Key("jogLow").Number((wb_int64)M->PJogLowSpeed);
++            w.Key("homeHigh").Number((wb_int64)M->PHomeHighSpeed);
++            w.Key("homeLow").Number((wb_int64)M->PHomeLowSpeed);
++            w.Key("softP").Number((wb_int64)M->PSoftLimitP);
++            w.Key("softN").Number((wb_int64)M->PSoftLimitN);
++            w.Key("acc").Number(M->ReadAcc());
++            w.Key("dec").Number(M->ReadDec());
++            w.Key("range").Number((wb_int64)M->ReadRange());
++            w.Key("rate").Number((wb_int64)M->ReadRate());
++            w.Key("readSpeed").Number((wb_int64)MOT[mi].GetSpeed());
++            w.Key("lastHomePos").Number((wb_int64)M->LastHomePos);
++            w.Key("gearRatio").Number(M->GearRatio);
++            w.Key("homeFlag").Number((wb_int64)MOT[mi].HomeFlag);
++            w.EndObject();
++        } else {
++            w.Null();
++        }
+         w.Key("seq").Number((wb_int64)seq);
+         w.EndObject();
+     }
+@@ -346,6 +386,8 @@ std::string MotorRuntimeJson()
+     w.Key("provider").String("wb_serve:pci1203-monitor");
+ #endif
+     w.Key("seq").Number((wb_int64)seq);
++    //AI(W906-MT-E2) 20260925: the motor C++ believes the Motor Test page has selected (golden ActiveIndex; selectMotor)
++    w.Key("selectedMotor"); if (hasPg && !pg.selectedMotor.empty()) w.String(pg.selectedMotor); else w.Null();
+     w.Key("counts").BeginObject();
+     w.Key("good").Number((wb_int64)nGood);
+     w.Key("nosource").Number((wb_int64)nNoSrc);
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index fe99156..e64dded 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -33,7 +33,7 @@ std::string NowIso()
+ }
+ 
+ // ---------------------------------------------------------------------------
+-//  28 個 action（motor-access.json 38 個命令去重）。golden 欄 = 該按鈕事件在 golden 的位置，
++//  28 個 action（motor-access.json 38 個命令去重）；AI(W906-MT-E2) 20260925：+4（43 個命令、32 個 action）。golden 欄 = 該按鈕事件在 golden 的位置，
+ //  讓每一列都能開 golden 對帳。status 見 MotorAccessActionStatus() 的說明。
+ // ---------------------------------------------------------------------------
+ struct ActionRow {
+@@ -66,8 +66,14 @@ const ActionRow kActions[] = {
+     { "refreshParameter",    "ui",     "",     "uMotorTest.cpp:1451 btnRangeClick／:1458 btnRateClick（只呼叫 UpdateMotorParameter）" },
+     { "setRangeAndInit",     "live",   "",     "uMotorTest.cpp:1374 btnSetRangeClick" },
+     { "setRateAndInit",      "live",   "",     "uMotorTest.cpp:1364 btnSetRateClick" },
+-    { "reloadMotorData",     "live",   "",     "uMotorTest.cpp:1695 btnReloadMotorDataClick（AI(W906-MT-E1) 20260925：EastSun 開放 SetCmd/ActualPosition ⇒ 做 PCIL132_SetPos(0)；InitialMotorParameter 仍不做，見 DoReloadMotorData）" },
++    { "reloadMotorData",     "live",   "",     "uMotorTest.cpp:1695 btnReloadMotorDataClick（AI(W906-MT-E1) 20260925：EastSun 開放 SetCmd/ActualPosition ⇒ 做 PCIL132_SetPos(0)；AI(W906-MT-E2) 20260925：InitialMotorParameter 的表值就地套回 MOT[]（不重建物件、不開軸），見 DoReloadMotorData）" },
+     { "resetMNet",           "live",   "",     "uMotorTest.cpp:1718 btResetMNetClick" },
++    //AI(W906-MT-E2) 20260925: the Motor Test functions that needed no ruling (contract with the web side: motor-access.json
++    //  buttons labName / strngrdMotor / BitBtn1 / scrlbrMotorSpeed / edtSpeed, source uMotorTest, none of kind motion).
++    { "selectMotor",         "live",   "",     "uMotorTest.cpp:734 lM00Click／:762 lpA00Click" },
++    { "setParamCell",        "live",   "",     "uMotorTest.cpp:1176 strngrdMotorSelectCell" },
++    { "copyFrom",            "live",   "",     "uMotorTest.cpp:1384 BitBtn1Click（來源 = cbbMotorName 的第 2、3 個字元）" },
++    { "setSpeed",            "live",   "",     "uMotorTest.cpp:791 scrlbrMotorSpeedScroll（jog=true）／:1587 edtSpeedChange（jog=false）" },
+     { "setTeachFromCurrent", "queued", "W5",   "uteach.cpp btnSetToClick" },
+     { "setTeachFromOffset",  "queued", "W5",   "uteach.cpp btnSetToOffsetClick" },
+     { "teachSet",            "queued", "W5",   "uteach.cpp SetButton*Click" },
+@@ -153,6 +159,21 @@ void ForgetJog(bool is1203, int axis, int mi)
+         else ++i;
+ }
+ 
++//AI(W906-MT-E2) 20260925: golden TfMotorTest page state that lives across buttons.
++//  g_selMotor           = golden ActiveIndex, as the Alias (set by lM00Click / lpA00Click; golden FormShow :1053 starts it at -1 = "").
++//  g_jogPct[mi]         = the scroll-bar position of the last SetSpeed(pos, true) (scrlbrMotorSpeedScroll :801) for that
++//                         motor since it was selected. golden JogP/JogN drop their speed argument (Motor/mymotor.cpp:1322-1335),
++//                         so a jog runs at whatever the last SetSpeed(x, true) put into CFG_AxJog*. User ruling 20260925
++//                         「Jog = golden」. Nothing set since the selection = 1 (golden lM00Click :755 scrlbrMotorSpeed->Position=1)
++//                         -- never a speed left over from before, never an unknown one.
++std::string        g_selMotor;
++std::map<int, int> g_jogPct;
++int JogPctOf(int mi)
++{
++    std::map<int, int>::const_iterator it = g_jogPct.find(mi);
++    return it == g_jogPct.end() ? 1 : it->second;
++}
++
+ // AI(W906-MT-E1) 20260925: golden TMyEtherCatMotor::DecStop (golden Motor/myEthercatmotor.cpp:415-437) for a 1203
+ //   axis -- Acm_AxStopDec, then Acm_AxSetExtDrive(ax, 0) (leave jog mode; golden then sets bFirstClickJog=true, so
+ //   the next jog sends ExtDrive(1) again). golden sends the ExtDrive(0) even when StopDec failed (it only pops
+@@ -493,29 +514,70 @@ bool ParamNum(const MotorAccessReq& r, const char* k, double& v)
+ //   Acc / Dec, which is what Acm_AxJog runs on (the PTP family alone would leave the jog at its old speed).
+ //   golden sets them from the speed scroll bar (uMotorTest.cpp:801 SetSpeed(pos, true)); the web page has no
+ //   scroll-bar event, so the jog sends them with the current percentage right before each jog.
++//   [AI(W906-MT-E2) 20260925: superseded -- the page now sends the scroll bar (setSpeed jog=true, DoSetSpeed), and a jog
++//   re-sends only the jog family at that position (DoJog).]
+ //   ⓘ golden also writes CFG_AxJogVLTime = 0 (an I32 property); Pci1203Control has no I32 setter, so it is not
+ //   written (gap, noted in the ack).
++//AI(W906-MT-E2) 20260925: `families` picks which half goes to the card -- kFamPtp = golden SetSpeed(x) (edtSpeedChange,
++//   MoveP/MoveN, LoopMove start), kFamPtp|kFamJog = golden SetSpeed(x, true) (the speed scroll bar, :801), kFamJog alone =
++//   the jog press re-sending the jog family of the last scroll position (user ruling 20260925 「Jog = golden」: golden
++//   JogP/JogN ignore their speed argument, so the PTP family must not be touched by a jog -- btnGo runs on it).
++const int kFamPtp = 1, kFamJog = 2;
+ bool Send1203Speed(IMotorAccessBackend& be, long long wireId, const MotionCtx& m, int pct,
+-                   std::string& why, std::string& note, bool setJog = false)
++                   std::string& why, std::string& note, int families = kFamPtp)
+ {
+     const Motor1203Speed sp = MotorSpeedFromPct(pct, m.g);
+     if (sp.skip) { note = "golden SetSpeed 不設速度（index 軸，或 PJogHighSpeed==0）"; return true; }
+     const struct { Pci1203SpeedParam which; double v; } seq[8] = {
+         { kSpeedInit, sp.velLow }, { kSpeedRun, sp.velHigh }, { kSpeedAcc, sp.acc }, { kSpeedDec, sp.dec },
+         { kSpeedJogInit, sp.velLow }, { kSpeedJogRun, sp.velHigh }, { kSpeedJogAcc, sp.acc }, { kSpeedJogDec, sp.dec } };
+-    for (int i = 0; i < (setJog ? 8 : 4); ++i) {
++    for (int i = 0; i < 8; ++i) {
++        if (!(families & (i < 4 ? kFamPtp : kFamJog))) continue;
+         Pci1203Cmd c;
+         c.kind = kCmdAxSetSpeed; c.wireId = wireId; c.axis = m.a.axis; c.speed = seq[i].which; c.value = seq[i].v;
+         const Pci1203CmdResult res = be.Pci1203Execute(c);
+         if (CmdFailed(res)) { why = "1203 設定速度失敗 —— " + CmdWhy(res); return false; }
+     }
+-    char b[160];
+-    std::snprintf(b, sizeof(b), "speed %d%% -> s=%u velLow=%.1f velHigh=%.1f acc=%.1f dec=%.1f",
+-                  pct, sp.s, sp.velLow, sp.velHigh, sp.acc, sp.dec);
++    char b[200];
++    std::snprintf(b, sizeof(b), "speed %d%% -> s=%u velLow=%.1f velHigh=%.1f acc=%.1f dec=%.1f (%s)",
++                  pct, sp.s, sp.velLow, sp.velHigh, sp.acc, sp.dec,
++                  families == (kFamPtp | kFamJog) ? "PTP + jog" : (families == kFamJog ? "jog family only" : "PTP"));
+     note = b;
+     return true;
+ }
+ 
++//AI(W906-MT-E2) 20260925: an ack's "cur" = the same keys as /api/struct/motor/runtime "cur" (JsonBridge/ChanMotorPoints.cpp),
++//  read back from the golden object AFTER the action -- what C++ actually holds, not what the page computed.
++//  Rows 1..10 of golden strngrdMotor are UpdateMotorParameter (uMotorTest.cpp:655-669): initSpeed, jogHigh, jogLow, homeHigh,
++//  homeLow, softP, softN, acc (ReadAcc = the database value), dec, range.
++void WriteCur(webbridge::JsonWriter& w, const MotorGolden& g)
++{
++    w.Key("cur").BeginObject();
++    w.Key("enable").Bool(g.enable);
++    w.Key("initSpeed").Number((wb_int64)g.initSpeed);
++    w.Key("jogHigh").Number((wb_int64)g.jogHigh);
++    w.Key("jogLow").Number((wb_int64)g.jogLow);
++    w.Key("homeHigh").Number((wb_int64)g.homeHigh);
++    w.Key("homeLow").Number((wb_int64)g.homeLow);
++    w.Key("softP").Number((wb_int64)g.softP);
++    w.Key("softN").Number((wb_int64)g.softN);
++    w.Key("acc").Number(g.accDb);
++    w.Key("dec").Number(g.decDb);
++    w.Key("range").Number((wb_int64)g.range);
++    w.Key("rate").Number((wb_int64)g.rate);
++    w.Key("readSpeed").Number((wb_int64)g.readSpeed);
++    w.Key("lastHomePos").Number((wb_int64)g.lastHomePos);
++    w.Key("gearRatio").Number(g.gearRatio);
++    w.Key("homeFlag").Number((wb_int64)g.homeFlag);
++    w.EndObject();
++}
++void WriteCurOf(webbridge::JsonWriter& w, IMotorAccessBackend& be, int mi)
++{
++    MotorGolden g;
++    if (mi >= 0 && be.GoldenMotor(mi, g)) WriteCur(w, g);
++    else w.Key("cur").Null();
++}
++
+ MotorAccessOutcome OkAck(const MotorAccessReq& r, const std::string& result, const std::string& layer,
+                          const std::string& msg, const MotionCtx& m, int target, bool hasTarget,
+                          long long card, bool hasCard)
+@@ -605,21 +667,26 @@ MotorAccessOutcome DoJog(const MotorAccessReq& r, long long wireId, IMotorAccess
+         return Refuse(who + ": Position over limitation! 移動位置超過限制!!");
+     if (!be.GoldenSafeDoorClosed())                                             // CheckSafeDoorIsClosed()==false → return
+         return Refuse(who + ": 安全門沒關（golden CheckSafeDoorIsClosed）");
+-    double pctD = 0.0;
+-    if (!ParamNum(r, "speed", pctD)) return Refuse(who + ": 缺 speed（golden SelMotSpeed=atoi(edtSpeed)）");
+-    const int pct = (int)pctD;
++    //AI(W906-MT-E2) 20260925: JOG SPEED = GOLDEN (user ruling 20260925). golden reads SelMotSpeed=atoi(edtSpeed) (:832/:882)
++    //  and passes it to MOT.JogP/JogN, which DROP it (Motor/mymotor.cpp:1322-1335): the jog runs at the last
++    //  SetSpeed(x, true), i.e. the speed scroll bar (:801). So the page's `speed` is no longer used (nor required); the
++    //  pct is the last setSpeed(jog=true) of this motor since it was selected, 1 when there was none (JogPctOf).
++    //  (Was: the jog family was set from edtSpeed right before each jog -- a stand-in while the page had no scroll bar.)
++    const int pct = JogPctOf(m.a.motIndex);
+     const bool positive = (r.action == "jogP");
+     if (!m.a.Is1203()) {
+         be.GoldenJog(m.a.motIndex, positive, pct);                              // MOT[i].JogP/JogN（TMyMotor 內含安全門檢查）
+         { JogRec j = { false, -1, m.a.motIndex, r.motors[0] }; ForgetJog(false, -1, m.a.motIndex); g_jogs.push_back(j); }
+         return OkAck(r, "jogging", "MOT", std::string("MOT[") + std::to_string(m.a.motIndex) + "]." +
+-                     (positive ? "JogP" : "JogN") + "(" + std::to_string(pct) + ")", m, 0, false, 0, false);
++                     (positive ? "JogP" : "JogN") + "(" + std::to_string(pct) + ") -- jog speed = last scroll position (golden)", m, 0, false, 0, false);
+     }
+     if (be.GoldenSafeDoorOpen(m.a.motIndex))                                    // TMyMotor::JogP：CheckIsSafeDoorOpen() → return
+         return Refuse(who + ": 安全門開著（golden TMyMotor::JogP 的 CheckIsSafeDoorOpen）");
+     if (SampleStale(be, m.a.axis)) return Refuse(who + ": " + kStaleWhy);    // NB2 R21 W4B-5
+     std::string why, note;
+-    if (!Send1203Speed(be, wireId, m, pct, why, note, true)) return Refuse(who + ": " + why);   // AI(W906-MT-E1): + the jog family
++    //AI(W906-MT-E2) 20260925: only the jog family (CFG_AxJog*), at the last scroll position -- what golden's card holds at
++    //  this moment. The PTP family is left alone (golden's jog never touches it; btnGo runs on it).
++    if (!Send1203Speed(be, wireId, m, pct, why, note, kFamJog)) return Refuse(who + ": " + why);
+     // AI(W906-MT-E1) 20260925: THE GOLDEN JOG (user EastSun 20260925 「開放，照舊版做法」), replacing main's
+     //   kCmdAxMoveVel. golden TMyEtherCatMotor::JogP/JogN (golden Motor/myEthercatmotor.cpp:441-535): first click
+     //   Acm_AxSetExtDrive(ax, 1) ("Setting 1 is jog mode"), then Acm_AxJog(ax, Direction ? 1 : 0) for JogP and
+@@ -738,6 +805,7 @@ MotorAccessOutcome DoSetParam(const MotorAccessReq& r, IMotorAccessBackend& be)
+     AckHead(w, r, "set", "MOT", std::string("MOT[") + std::to_string(m.a.motIndex) + "].Motor 參數已改（只在記憶體；golden 同，存檔走資料庫分頁）");
+     w.Key("motIndex").Number((wb_int64)m.a.motIndex);
+     w.Key("value").Number((wb_int64)value);
++    WriteCurOf(w, be, m.a.motIndex);   //AI(W906-MT-E2) 20260925: golden UpdateMotorParameter() after the button -- the page redraws from what C++ stored
+     MotorAccessOutcome o;
+     o.ok = true;
+     o.ackJson = Finish(w);
+@@ -772,15 +840,56 @@ struct LoopJob {
+     int         pos1, pos2, waitMs;
+     int         task;         // 1 = 去 pos1、10 = 等、50 = 去 pos2、60 = 等（golden DoLoopMove 的 Task 值）
+     bool        cmdIssued;
+-    int         legMs, waitLeft;
++    //AI(W906-MT-E2) 20260925: absolute ms on LoopNow() (was legMs/waitLeft accumulated from the beat's elapsed ms), so the
++    //  500 ms beat and the post-Poll tick (MotorAccessPollTick) can both advance the same job.
++    double      legStartMs, waitUntilMs;
++    int         wrongReady;   // fresh READY samples away from the target; the 2nd one = "stopped before target" (was: 2nd beat)
++    unsigned long wrongPoll;  // poll count of the last sample counted -- one sample is counted once, whoever looks at it
+     unsigned long count;
+     std::string lastWhy;
+-    LoopJob() : active(false), pos1(0), pos2(0), waitMs(0), task(1), cmdIssued(false), legMs(0), waitLeft(0), count(0) {}
++    LoopJob() : active(false), pos1(0), pos2(0), waitMs(0), task(1), cmdIssued(false), legStartMs(0.0), waitUntilMs(0.0),
++                wrongReady(0), wrongPoll(0), count(0) {}
+ };
+ std::vector<HomeJob> g_homes;
+ LoopJob              g_loop;
+ std::string          g_lastJobNote;
+ 
++//AI(W906-MT-E2) 20260925: golden Loop timing -- TQPF_Timer tLoopMoveTimer + DWORD Average (golden uMotorTest.cpp:393-610;
++//  TQPF_Timer::LatchCycleTime, myTimer.cpp:123-138: QueryPerformanceCounter, int ms of a float):
++//    every tick of a leg : `if(flag==false){ flag=true; tLoopMoveTimer.LatchCycleTime(true); }` then MotorMove(p)
++//    pos1 reached        : flag=false; lblJogPTime = LatchCycleTime();                                     (:451-452)
++//    pos2 reached        : flag=false; lblJogNTime = LatchCycleTime(); dwLoopCount++; Average += LatchCycleTime();
++//                          lblAvgTime = ChangeToFloatNonPcnt((double)Average, (double)dwLoopCount)  -- pos2 legs ONLY (:554-561)
++//    btnLoopMoveClick    : dwLoopCount=0 on both branches; Average=0 and lblAvgTime=0 ONLY when HomeFlag!=0 (:1326 / :1332-1334)
++//  ⚠ golden's `flag` is a function `static` (:399) that only an arrival clears: a loop stopped in the middle of a leg
++//    leaves it set, and the NEXT loop's first leg is then timed from that old latch. Kept as golden has it (it shows only as
++//    a long first-leg time after a mid-leg stop); MotorAccessResetJobs (tests) is the only other reset.
++bool          g_latchArmed  = false;
++double        g_latchMs     = 0.0;
++unsigned long g_loopAverage = 0;        // golden `DWORD Average;` (uMotorTest.h:377)
++bool          g_hasJogP = false, g_hasJogN = false, g_hasAvg = false;
++int           g_jogPTime = 0, g_jogNTime = 0;
++double        g_avgTime  = 0.0;
++double        g_beatClockMs = 0.0;      // the clock when the backend has none (MonotonicMs() < 0): the sum of the beats' elapsedMs
++
++double LoopNow(IMotorAccessBackend& be)
++{
++    const double t = be.MonotonicMs();
++    return t >= 0.0 ? t : g_beatClockMs;
++}
++int LoopLatchMs(double nowMs) { return (int)(float)(nowMs - g_latchMs); }     // golden: `int itmp=ChangeToFloatNonPcnt(...)` (a float)
++void LoopLegTimed(LoopJob& L, double nowMs)                                    // the arrival half of the table above
++{
++    g_latchArmed = false;
++    const int t = LoopLatchMs(nowMs);
++    if (L.task == 1) { g_jogPTime = t; g_hasJogP = true; return; }
++    g_jogNTime = t; g_hasJogN = true;
++    ++L.count;                                                                  // golden dwLoopCount++
++    g_loopAverage += (unsigned long)t;                                          // golden Average+=LatchCycleTime() (its 2nd call: the same instant here)
++    g_avgTime = (double)(float)((double)g_loopAverage / (double)L.count);
++    g_hasAvg = true;
++}
++
+ const int kHomeTimeoutMs      = 180000;   // DS402 歸零上限。⚠ NB2 R23 更正：golden 有逾時（MotorInitial 的 RESET_TIMES＝90 s，uhome.cpp:515-533 重試一次後停軸報錯），不是「沒有」；這裡 180 s ≈ 90 s×2
+ const int kHomeNoHomingMs     = 5000;     // 命令被接受卻一直沒進 HOMING ⇒ 當失敗（安全方向：HomeFlag 不會被誤設 1）
+ const int kZSafeTimeoutMs     = 60000;
+@@ -1058,13 +1167,15 @@ MotorAccessOutcome DoLoopMove(const MotorAccessReq& r, long long wireId, IMotorA
+         std::string why, note;
+         if (!Send1203Speed(be, wireId, m, (int)pct, why, note)) return Refuse(who + ": " + why);
+     }
+-    g_loop = LoopJob();
++    g_loop = LoopJob();                                                         // golden dwLoopCount=0 (:1326 / :1332)
+     g_loop.active = true; g_loop.motorId = r.motors[0]; g_loop.a = m.a; g_loop.g = m.g;
+     g_loop.pos1 = (int)p1; g_loop.pos2 = (int)p2;
+     const int w01 = (int)wt;
+     g_loop.waitMs = (w01 > 100 || w01 <= 0) ? 0 : w01 * 100;                  // golden Set0_1SecAndOn(Wait)；>100 或 <=0 不等
+     g_loop.task = 1;
++    if (m.g.homeFlag != 0) { g_loopAverage = 0; g_avgTime = 0.0; g_hasAvg = true; }   //AI(W906-MT-E2) 20260925: golden :1333-1334 Average=0; lblAvgTime->Caption=0 -- the homed branch only (the confirmed not-homed branch keeps both)
+     if (!m.a.Is1203()) {                                                        // golden 第一拍：MOT.MotorMove(pos1)（速度＝edtSpeed）
++        if (!g_latchArmed) { g_latchArmed = true; g_latchMs = LoopNow(be); }   //AI(W906-MT-E2) 20260925: that first tick latches the leg timer too (golden :443-447)
+         const int ret0 = be.GoldenMotorMove(m.a.motIndex, g_loop.pos1, (int)pct, hasPct);
+         if (ret0 < 0) { g_loop.active = false; return Refuse(who + ": golden MotorMove(pos1) 回 " + std::to_string(ret0) + "（安全門／軟體極限）"); }
+     }
+@@ -1127,6 +1238,10 @@ MotorAccessOutcome DoRangeRate(const MotorAccessReq& r, IMotorAccessBackend& be)
+ //   ⚠ GAP: InitialMotorParameter() is NOT re-run -- it re-creates the MOT[] objects that the Motor Test's golden
+ //   interlocks and the runtime overlay read, and it opens axes the golden way, which conflicts with the monitor's
+ //   single axis owner (W0 item 2). The Mot_Table values themselves are re-read by the next wb_serve start.
++//   [AI(W906-MT-E2) 20260925: gap narrowed -- the TABLE VALUES of InitialMotorParameter() are now put back
++//   (GoldenReloadMotorParams: Mot_Table.csv re-read, speeds / soft limits / acc-dec / range / gear / direction ... applied
++//   to the existing objects in place). Still not done: re-creating objects, InitMotor (opening axes), a changed row
++//   identity (that row is skipped, the ack says "restart wb_serve").]
+ MotorAccessOutcome DoReloadMotorData(const MotorAccessReq& r, long long wireId, IMotorAccessBackend& be)
+ {
+     std::string why;
+@@ -1134,6 +1249,7 @@ MotorAccessOutcome DoReloadMotorData(const MotorAccessReq& r, long long wireId,
+     // AI(W906-MT-E1) 20260925: golden order -- InitialMotorParameter() (HomeFlag=0 for every motor) BEFORE SetPos(0).
+     //   Cleared first so a partial zeroing failure still leaves nothing marked homed. Every axis must be homed again.
+     be.GoldenClearAllHomeFlags();
++    const MotorReloadResult rr = be.GoldenReloadMotorParams();                  //AI(W906-MT-E2) 20260925: the rest of golden InitialMotorParameter() -- before the zeroing, golden order
+     int done = 0, failed = 0;
+     std::string firstFail;
+     const int n = be.Pci1203AxisCount();
+@@ -1151,15 +1267,253 @@ MotorAccessOutcome DoReloadMotorData(const MotorAccessReq& r, long long wireId,
+     }
+     webbridge::JsonWriter w;
+     w.BeginObject();
+-    char b[200];
+-    std::snprintf(b, sizeof(b), "HomeFlag=0 on every motor; PCIL132_SetPos(0) on %d opened 1203 axis(es), %d failed%s", done + failed, failed,
+-                  " (rest of golden InitialMotorParameter() not re-run -- gap; home every axis again)");
+-    AckHead(w, r, failed ? "partial" : "reloaded", "pci1203", std::string(b) + (firstFail.empty() ? "" : "; first failure " + firstFail));
++    char b[320];
++    //AI(W906-MT-E2) 20260925: the message and the "reload" block say what came back from Mot_Table.csv.
++    std::snprintf(b, sizeof(b), "HomeFlag=0 on every motor; Mot_Table values re-applied to %d motor(s)%s; PCIL132_SetPos(0) on %d opened 1203 axis(es), %d failed; home every axis again",
++                  rr.applied, rr.identityChanged ? " (some rows changed identity -- restart wb_serve for those)" : "", done + failed, failed);
++    std::string msg(b);
++    if (!rr.read) msg += "; Mot_Table NOT re-read: " + rr.why;
++    if (!firstFail.empty()) msg += "; first failure " + firstFail;
++    AckHead(w, r, (failed || !rr.read || rr.identityChanged) ? "partial" : "reloaded", "pci1203", msg);
+     w.Key("axesZeroed").Number((wb_int64)done);
+     w.Key("axesFailed").Number((wb_int64)failed);
++    w.Key("reload").BeginObject();
++    w.Key("read").Bool(rr.read);
++    if (!rr.read) w.Key("why").String(rr.why);
++    w.Key("applied").Number((wb_int64)rr.applied);
++    w.Key("identityChanged").Number((wb_int64)rr.identityChanged);
++    if (!rr.firstChanged.empty()) w.Key("firstChanged").String(rr.firstChanged);
++    w.Key("restartNeeded").Bool(rr.identityChanged > 0);
++    w.EndObject();
++    MotorAccessOutcome o; o.ok = true; o.ackJson = Finish(w); return o;
++}
++
++// =============================================================================
++//  AI(W906-MT-E2) 20260925: the Motor Test functions that needed no ruling -- motor selection, the parameter grid,
++//  Copy From, the speed scroll bar / edtSpeed. Each follows its golden handler; the 1203 card is written only where
++//  golden's own SetSpeed would write it on an opened axis.
++// =============================================================================
++bool AnyHomeActive()
++{
++    for (std::size_t i = 0; i < g_homes.size(); ++i) if (g_homes[i].active) return true;
++    return false;
++}
++
++// the motor of a Motor Test page action (golden ActiveIndex): resolved, golden object present, selectable.
++bool PageMotor(const MotorAccessReq& r, IMotorAccessBackend& be, MotionCtx& m, std::string& who, std::string& why)
++{
++    if (r.motors.empty()) { why = r.action + ": 沒有選馬達（golden: ActiveIndex==-1 → return）"; return false; }
++    who = r.action + " " + r.motors[0];
++    if (!be.Resolve(r.motors[0], m.a)) { why = r.action + ": 馬達表上沒有 " + r.motors[0]; return false; }
++    if (m.a.motIndex < 0 || !be.GoldenMotor(m.a.motIndex, m.g)) {
++        why = who + ": 沒有 golden 馬達物件（MOT[].Motor 為 NULL；golden 在這裡會解參考 NULL）"; return false;
++    }
++    if (!m.g.selectable) { why = NotSelectable(who); return false; }
++    return true;
++}
++
++// ---- selectMotor：lM00Click :734 ／ lpA00Click :762 ----
++//   golden, in this order:
++//     #ifndef SOFT_SIMULTE  if(MOT[Tag].Motor->Enable==false) return;    <- BEFORE anything else (nothing is released)
++//     btnLoopMove->Down=false; btnHome->Down=false;                       <- CancelAllJobs, no stop (Down=false fires no OnClick)
++//     ShowMotorSelect(old,0); ActiveIndex=Tag; ShowMotorSelect(new,1)     <- page; C++ keeps the Alias (runtime.selectedMotor)
++//     scrlbrMotorSpeed->Position=1;                                       <- g_jogPct=1: the jog runs at 1% until the bar moves
++//     MOT[Tag].SetSpeed(1); ... edtSpeed->Text=1 (-> edtSpeedChange -> SetSpeed(1) again: the same values)
++//     edtMotorRate->Text=ReadRate(); edtMotorRange->Text=ReadRange();     <- the ack's cur (rate, range)
++//   golden's SetSpeed(1) WRITES THE CARD on an opened axis (TMyEtherCatMotor::SetSpeed -> PAR_AxVelLow/VelHigh/Acc/Dec), so a
++//   1203 axis gets those four values here (Send1203Speed, PTP family), and the golden object gets SetSpeed(1) for its iSpeed.
++//   ⚠ golden leaves bSingleHome alone (the single home runs on in MainProc with its button up); here the HOME job is dropped
++//     like every other AllBtnUp in this file (HomeFlag stays 0 -- home that axis again). The safe direction; noted.
++MotorAccessOutcome DoSelectMotor(const MotorAccessReq& r, long long wireId, IMotorAccessBackend& be)
++{
++    if (r.motors.empty()) return Refuse("selectMotor: 沒有指定馬達（golden lM00Click 的 Sender->Tag）");
++    MotionCtx m;
++    std::string who, why;
++    if (!PageMotor(r, be, m, who, why)) return Refuse(why);                    // golden :740-743 returns before anything
++    CancelAllJobs(be, "motor selected (golden lM00Click :744-745: btnLoopMove/btnHome->Down=false, no stop)");
++    const std::string prev = g_selMotor;
++    g_selMotor = r.motors[0];
++    g_jogPct[m.a.motIndex] = 1;                                                // golden :755 scrlbrMotorSpeed->Position=1
++    be.GoldenSetSpeed(m.a.motIndex, 1, false);                                  // golden :756 MOT[Tag].SetSpeed(1)
++    std::string note, layer = "MOT";
++    bool sent = false;
++    if (m.a.Is1203()) {
++        std::string w1;
++        if (MotorSpeedFromPct(1, m.g).skip) note = "golden SetSpeed sets no speed (Index axis, or PJogHighSpeed==0)";
++        else if (!m.a.tableEnable)          note = "Enable=0 (Mot_Table): golden never opened this axis, its SetSpeed stops at the object";
++        else if (!be.Pci1203Ready(w1))      note = "card speed not sent -- 1203 control not available: " + w1;
++        else if (m.a.axis < 0)              note = "card speed not sent -- " + m.a.why;
++        else if (!Send1203Speed(be, wireId, m, 1, w1, note)) note = "card speed NOT set -- " + w1;   // golden: a WAR16122 popup
++        else { sent = true; layer = "MOT+pci1203"; }
++    }
++    webbridge::JsonWriter w;
++    w.BeginObject();
++    AckHead(w, r, "selected", layer, "selected (golden lM00Click): SetSpeed(1)" + (note.empty() ? std::string() : "; " + note));
++    w.Key("selectedMotor").String(g_selMotor);
++    w.Key("previousMotor"); if (prev.empty()) w.Null(); else w.String(prev);
++    w.Key("motIndex").Number((wb_int64)m.a.motIndex);
++    w.Key("speedPct").Number((wb_int64)1);
++    w.Key("cardSpeedSent").Bool(sent);
++    WriteCurOf(w, be, m.a.motIndex);
++    MotorAccessOutcome o; o.ok = true; o.ackJson = Finish(w); return o;
++}
++
++// ---- setParamCell：strngrdMotorSelectCell :1176-1222 ----
++//   golden: `if(ACol!=1 || ARow==0) return; if(ActiveIndex==-1) return;` -> keypad (rows 8/9 N_DOUBLE + atof, the others
++//   N_INTEGER + atoi, no range check) -> the row's setter (memory only, golden same: TMyEtherCatMotor::SetInitSpeed /
++//   SetRange and HTMotor::Set*DataBase touch no card) -> btnLoopMove->Down=false -> HomeFlag=0 -> UpdateMotorParameter.
++//   ⚠ golden writes the cell even when the keypad is cancelled (Edit2 still holds the old text) -- the page sends that too.
++MotorAccessOutcome DoSetParamCell(const MotorAccessReq& r, IMotorAccessBackend& be)
++{
++    MotionCtx m;
++    std::string who, why;
++    if (!PageMotor(r, be, m, who, why)) return Refuse(why);
++    double rowD = 0.0, v = 0.0;
++    if (!ParamNum(r, "row", rowD)) return Refuse(who + ": 缺 row（golden strngrdMotor 的 ARow）");
++    if (!ParamNum(r, "value", v))  return Refuse(who + ": 缺 value（golden Edit2 經鍵盤後的值）");
++    if (!(rowD >= 1.0 && rowD <= 10.0) || rowD != (double)(int)rowD)           // range first: (int) of a huge double is undefined
++        return Refuse(who + ": row 必須是 1..10 —— golden strngrdMotorSelectCell :1179 `if(ACol!=1 || ARow==0) return;`，表只有第 1..10 列");
++    const int row = (int)rowD;
++    double ret = v;                                                             // rows 8/9: golden atof (N_DOUBLE keypad)
++    if (row != 8 && row != 9) {
++        if (!(v > -2147483649.0 && v < 2147483648.0))
++            return Refuse(who + ": 值超出 int 範圍 —— golden atoi 的結果不可預期，不寫");
++        ret = (double)(int)v;                                                   // golden atoi (N_INTEGER keypad): truncated toward 0
++    } else if (v != v) {
++        return Refuse(who + ": value 不是數字");
++    }
++    be.GoldenSetCell(m.a.motIndex, row, ret);                                   // golden :1198-1218
++    CancelLoop(be, false, "parameter cell edited (golden SelectCell :1219 btnLoopMove->Down=false, no stop)");
++    be.GoldenSetHomeFlag(m.a.motIndex, 0);                                      // golden :1220 MOT[ActiveIndex].HomeFlag=0
++    static const char* const kRowName[11] = { "", "InitialSpeed", "JogHighSpeed", "JogLowSpeed", "HomeHighSpeed", "HomeLowSpeed",
++                                              "SoftLimitP", "SoftLimitN", "Acc", "Dec", "Range" };   // golden FormShow :1011-1020
++    webbridge::JsonWriter w;
++    w.BeginObject();
++    char b[160];
++    std::snprintf(b, sizeof(b), "MOT[%d] row %d (%s) = %g (memory only, golden same); LoopMove up, HomeFlag=0 (golden :1219-1220)",
++                  m.a.motIndex, row, kRowName[row], ret);
++    AckHead(w, r, "set", "MOT", b);
++    w.Key("motIndex").Number((wb_int64)m.a.motIndex);
++    w.Key("row").Number((wb_int64)row);
++    w.Key("value").Number(ret);
++    WriteCurOf(w, be, m.a.motIndex);
++    MotorAccessOutcome o; o.ok = true; o.ackJson = Finish(w); return o;
++}
++
++// ---- copyFrom：BitBtn1Click :1384-1401 ----
++//   golden: Source = (str[1]-'0')*10 + (str[2]-'0') of cbbMotorName's text (the page sends that integer, parsed the golden
++//   way -- so "M108" gives 10); `if(ActiveIndex==-1 || Source>24 || Source<0) return;` then six copies (memory only) and
++//   UpdateMotorParameter. HomeFlag and LoopMove are NOT touched (golden).
++//   ⚠ golden returns silently on a bad Source; here the page is told why (ok=false). Nothing is copied either way.
++MotorAccessOutcome DoCopyFrom(const MotorAccessReq& r, IMotorAccessBackend& be)
++{
++    MotionCtx m;
++    std::string who, why;
++    if (!PageMotor(r, be, m, who, why)) return Refuse(why);
++    double sD = 0.0;
++    if (!ParamNum(r, "source", sD)) return Refuse(who + ": 缺 source（golden cbbMotorName 第 2、3 個字元算出的編號）");
++    char b[200];
++    if (!(sD >= 0.0 && sD <= 24.0) || sD != (double)(int)sD) {                 // range first: (int) of a huge double is undefined
++        std::snprintf(b, sizeof(b), ": Source=%g —— golden BitBtn1Click :1392 `if(ActiveIndex==-1 || Source>24 || Source<0) return;`（只抄得到 M00..M24）", sD);
++        return Refuse(who + b);
++    }
++    const int src = (int)sD;
++    MotorGolden gs;
++    if (!be.GoldenMotor(src, gs)) {
++        std::snprintf(b, sizeof(b), ": MOT[%d].Motor 為 NULL —— golden 在這裡會解參考 NULL，不抄", src);
++        return Refuse(who + b);
++    }
++    const int mi = m.a.motIndex;
++    be.GoldenSetParam(mi, kParamJogHigh,  (int)gs.jogHigh);                     // golden :1394
++    be.GoldenSetParam(mi, kParamJogLow,   (int)gs.jogLow);                      // :1395
++    be.GoldenSetParam(mi, kParamHomeHigh, (int)gs.homeHigh);                    // :1396
++    be.GoldenSetParam(mi, kParamHomeLow,  (int)gs.homeLow);                     // :1397
++    be.GoldenSetParam(mi, kParamSoftP,    gs.softP);                            // :1398
++    be.GoldenSetParam(mi, kParamSoftN,    gs.softN);                            // :1399
++    webbridge::JsonWriter w;
++    w.BeginObject();
++    std::snprintf(b, sizeof(b), "MOT[%d] <- MOT[%d]: JogHigh/JogLow/HomeHigh/HomeLow/SoftLimitP/SoftLimitN (memory only; HomeFlag untouched, golden same)", mi, src);
++    AckHead(w, r, "copied", "MOT", b);
++    w.Key("motIndex").Number((wb_int64)mi);
++    w.Key("source").Number((wb_int64)src);
++    WriteCurOf(w, be, mi);
++    MotorAccessOutcome o; o.ok = true; o.ackJson = Finish(w); return o;
++}
++
++// ---- setSpeed：scrlbrMotorSpeedScroll :791-810（jog=true）／edtSpeedChange :1587-1603（jog=false）----
++//   scroll bar: `if(ActiveIndex==-1) return; if(bSingleHome==true) return;` -> MOT.SetSpeed(pos, true) (PTP + jog family)
++//               -> edtSpeed->Text=pos (-> edtSpeedChange -> SetSpeed(pos): the same PTP values again, not re-sent here)
++//               -> `if(btnLoopMove->Down)` SetSpeed(pos, true) for every visible cbUsing-checked motor.
++//   edtSpeed:   `if(ActiveIndex==-1) return;` -> SetSpeed(atoi(edtSpeed)) (PTP family only); no bSingleHome check (golden).
++//   pct must be 1..100: the scroll bar's Min=1 / Max=100 (dfm :1609, :799) and edtSpeed's keypad bounds (edtSpeedClick :1715).
++//   Index axes (MTestY1/Z1/Z2/Y2): golden TMyMotor::SetSpeed is empty for them (Motor/mymotor.cpp:325-329) -> nothing.
++//   ⚠ GAP: the LoopMove branch's "every cbUsing-checked motor" -- the page sends no cbUsing (All mode is not wired), so only
++//     this motor is set (the single-axis loop runs on this motor anyway).
++MotorAccessOutcome DoSetSpeed(const MotorAccessReq& r, long long wireId, IMotorAccessBackend& be)
++{
++    MotionCtx m;
++    std::string who, why;
++    if (!PageMotor(r, be, m, who, why)) return Refuse(why);
++    std::map<std::string, bool>::const_iterator jf = r.flag.find("jog");
++    if (jf == r.flag.end()) return Refuse(who + ": 缺 jog（true = 速度捲軸 scrlbrMotorSpeed，false = edtSpeed）");
++    const bool jog = jf->second;
++    double pD = 0.0;
++    if (!ParamNum(r, "pct", pD)) return Refuse(who + ": 缺 pct");
++    if (!(pD >= 1.0 && pD <= 100.0) || pD != (double)(int)pD)                  // range first: (int) of a huge double is undefined
++        return Refuse(who + ": pct 必須是 1..100 的整數（golden 捲軸 Min=1／Max=100、edtSpeed 鍵盤上下限 100／1）");
++    const int pct = (int)pD;
++    const int mi = m.a.motIndex;
++    webbridge::JsonWriter w;
++    w.BeginObject();
++    if ((jog && AnyHomeActive()) || m.g.indexMotor) {                           // golden returns / does nothing
++        AckHead(w, r, "ignored", "none", m.g.indexMotor
++                ? "Index 軸（MTestY1/Z1/Z2/Y2）：golden TMyMotor::SetSpeed 對這四軸整段空白 —— 不設速度"
++                : "HOME 進行中：golden scrlbrMotorSpeedScroll :796 `if(bSingleHome==true) return;` —— 速度不變");
++        w.Key("pct").Number((wb_int64)pct);
++        w.Key("jog").Bool(jog);
++        WriteCurOf(w, be, mi);
++        MotorAccessOutcome o; o.ok = true; o.ackJson = Finish(w); return o;
++    }
++    std::string note, layer = "MOT";
++    if (m.a.Is1203()) {
++        if (!m.a.tableEnable) return Refuse(who + ": " + kEnable0Why);
++        std::string w1;
++        if (!be.Pci1203Ready(w1)) return Refuse(who + "（PCI1203）: 1203 控制層不可用 —— " + w1);
++        if (m.a.axis < 0) {
++            const std::string msg = who + "（PCI1203）: " + m.a.why;
++            be.Pci1203NoteRefusal(wireId, "motor.access setSpeed", msg);
++            return Refuse(msg);
++        }
++        if (!Send1203Speed(be, wireId, m, pct, w1, note, jog ? (kFamPtp | kFamJog) : kFamPtp)) return Refuse(who + ": " + w1);
++        be.GoldenSetSpeed(mi, pct, false);                                      // the golden object's iSpeed (ReadSpeed / lblRealSpeed); no card
++        layer = "pci1203";
++    } else {
++        be.GoldenSetSpeed(mi, pct, jog);                                        // golden MOT.SetSpeed(pos, true) / SetSpeed(edtSpeed)
++        if (jog) be.GoldenSetSpeed(mi, pct, false);                             // the scroll's edtSpeed->Text=pos -> edtSpeedChange
++        note = "MOT[" + std::to_string(mi) + "].SetSpeed(" + std::to_string(pct) + (jog ? ", true)" : ")");
++    }
++    if (jog) g_jogPct[mi] = pct;                                                // the jog now runs at this position (DoJog)
++    if (jog && g_loop.active) note += "; GAP: golden also sets every cbUsing-checked motor during LoopMove -- the page sends no cbUsing";
++    AckHead(w, r, "speedSet", layer, note);
++    w.Key("pct").Number((wb_int64)pct);
++    w.Key("jog").Bool(jog);
++    w.Key("jogPct").Number((wb_int64)JogPctOf(mi));
++    WriteCurOf(w, be, mi);
+     MotorAccessOutcome o; o.ok = true; o.ackJson = Finish(w); return o;
+ }
+ 
++//AI(W906-MT-E2) 20260925: golden LastHomePos -- TMyEtherCatMotor::EtherCatMotHome case 20 (golden Motor/myEthercatmotor.cpp
++//  :1357-1370; port :1744) `LastHomePos=-ReadPos();` right BEFORE SetCommand(0)/SetPosition(0): where the OLD zero lies in
++//  the new coordinates. golden Timer1Timer shows it in edtHomeOffset when the home ends (uMotorTest.cpp:965). Read here from
++//  a FRESH monitor sample (cmdPos = golden ReadRealPos's Acm_AxGetCmdPosition), in user units (ReadPos = ReadRealPos x
++//  GearRatio). Direction=1 axes record nothing: their positions are withheld until the direction convention is ruled (§0 #5).
++void RecordLastHomePos(IMotorAccessBackend& be, const HomeJob& h)
++{
++    double card = 0.0;
++    if (h.g.direction || SampleStale(be, h.axis) || !be.Pci1203CmdPos(h.axis, card)) return;
++    be.GoldenSetLastHomePos(h.mi, -MotorCardToUser(card, h.g.gearRatio));
++}
++
+ void TickHomes(IMotorAccessBackend& be, int ms)
+ {
+     for (std::size_t i = 0; i < g_homes.size(); ++i) {
+@@ -1187,6 +1541,7 @@ void TickHomes(IMotorAccessBackend& be, int ms)
+                     if (h.zeroWaitMs < 0) { h.zeroWaitMs = 0; continue; }       // first READY tick: start the 0.3 s
+                     h.zeroWaitMs += ms;
+                     if (h.zeroWaitMs < 300) continue;
++                    RecordLastHomePos(be, h);                                   //AI(W906-MT-E2) 20260925: golden `LastHomePos=-ReadPos();` BEFORE the zeroing
+                     Pci1203Cmd zc; zc.kind = kCmdAxSetCmdPos; zc.axis = h.axis; zc.value = 0.0;
+                     const Pci1203CmdResult zr = be.Pci1203Execute(zc);
+                     Pci1203Cmd za; za.kind = kCmdAxSetActPos; za.axis = h.axis; za.value = 0.0;
+@@ -1202,6 +1557,10 @@ void TickHomes(IMotorAccessBackend& be, int ms)
+                     if (!zfail.empty()) g_lastJobNote = "home " + h.motorId + zfail;
+                     continue;                                                   // armZ: next tick goes to ZSafePos (fresh sample)
+                 }
++                //AI(W906-MT-E2) 20260925: DS402 home: the same golden formula at completion. ⚠ Not the same meaning: the
++                //  drive defines the origin itself (nothing is zeroed here), so this is -(position when the drive says done)
++                //  and will usually read about 0 -- golden never homed a DS402 drive, there is no golden value to match.
++                if (!h.cardSide) RecordLastHomePos(be, h);
+                 if (h.g.armZ) {                                                 // golden ProcessSingleMotorHome case 500：MotorMove(ZSafePos)（下一段）
+                     h.phase = 1; h.elapsedMs = 0; h.zIssued = false;
+                     continue;
+@@ -1251,17 +1610,21 @@ void TickHomes(IMotorAccessBackend& be, int ms)
+     }
+ }
+ 
+-void TickLoop(IMotorAccessBackend& be, int ms)
++//AI(W906-MT-E2) 20260925: one step of golden DoLoopMove per call (golden: one step per 5 ms Timer1 tick). Called by the
++//  500 ms beat (every loop) AND right after each 1203 Poll (MotorAccessPollTick, 1203 loops only): the arrival is seen on
++//  the fresh sample and the leg is timed there. Times are LoopNow() (the backend's QPC ms; the beat sum without one).
++void TickLoop(IMotorAccessBackend& be)
+ {
+     LoopJob& L = g_loop;
+     if (!L.active) return;
++    const double now = LoopNow(be);
+     if (L.task == 10 || L.task == 60) {
+-        L.waitLeft -= ms;
+-        if (L.waitLeft <= 0) { L.task = (L.task == 10) ? 50 : 1; L.cmdIssued = false; }
++        if (now >= L.waitUntilMs) { L.task = (L.task == 10) ? 50 : 1; L.cmdIssued = false; }   // golden LoopWait.Off()
+         return;
+     }
+     const int target = (L.task == 1) ? L.pos1 : L.pos2;
+     const std::string who = "loopMove " + L.motorId;
++    if (!g_latchArmed) { g_latchArmed = true; g_latchMs = now; }               // golden `if(flag==false){flag=true; tLoopMoveTimer.LatchCycleTime(true);}`
+     bool arrived = false;
+     if (!L.a.Is1203()) {
+         const int ret = be.GoldenMotorMove(L.a.motIndex, target, 0, false);    // golden：`if(MOT[ActiveIndex].MotorMove(p))`
+@@ -1278,24 +1641,27 @@ void TickLoop(IMotorAccessBackend& be, int ms)
+             const Pci1203CmdResult res = be.Pci1203Execute(c);
+             if (CmdFailed(res)) { CancelLoop(be, false, "1203 move failed: " + CmdWhy(res)); return; }
+             NoteIssued(be, L.a.axis);
+-            L.cmdIssued = true; L.legMs = 0;
++            L.cmdIssued = true; L.legStartMs = now; L.wrongReady = 0; L.wrongPoll = 0;
+             return;
+         }
+-        L.legMs += ms;
+         unsigned st = 0;
+         if (be.Pci1203AxisState(L.a.axis, st) && IsErrorState(st)) { CancelLoop(be, false, "ERROR_STOP -> loop stopped"); return; }
+         double card = 0;
+         if (IsReadyState(st) && !SampleStale(be, L.a.axis) && be.Pci1203CmdPos(L.a.axis, card)) {
+             const int pos = MotorCardToUser(card, L.g.gearRatio);
+             if (pos - target <= 2 && target - pos <= 2) arrived = true;        // golden CompareCommandPos 的 iGap=2
+-            else if (L.legMs > ms) { CancelLoop(be, false, "stopped before target -> loop stopped"); return; }
++            else {
++                const unsigned long pc = be.Pci1203PollCount();
++                if (pc != L.wrongPoll) { L.wrongPoll = pc; ++L.wrongReady; }
++                if (L.wrongReady >= 2) { CancelLoop(be, false, "stopped before target -> loop stopped"); return; }
++            }
+         }
+-        if (!arrived && L.legMs > kLoopLegTimeoutMs) { CancelLoop(be, true, "leg timeout -> loop stopped"); return; }
++        if (!arrived && now - L.legStartMs > kLoopLegTimeoutMs) { CancelLoop(be, true, "leg timeout -> loop stopped"); return; }
+     }
+     if (!arrived) return;
++    LoopLegTimed(L, now);                                                       // lblJogPTime / lblJogNTime, dwLoopCount++, Average
+     L.cmdIssued = false;
+-    if (L.task == 50) ++L.count;                                                // golden dwLoopCount++
+-    if (L.waitMs > 0) { L.waitLeft = L.waitMs; L.task = (L.task == 1) ? 10 : 60; }
++    if (L.waitMs > 0) { L.waitUntilMs = now + L.waitMs; L.task = (L.task == 1) ? 10 : 60; }   // golden LoopWait.Set0_1SecAndOn(Wait)
+     else L.task = (L.task == 1) ? 50 : 1;
+ }
+ 
+@@ -1309,6 +1675,7 @@ bool IsTeachMotion(const std::string& a)
+ // ---------------------------------------------------------------------------
+ void MotorAccessTick(IMotorAccessBackend& be, int elapsedMs, bool operatorConnected)
+ {
++    g_beatClockMs += elapsedMs;                                                 //AI(W906-MT-E2) 20260925: LoopNow() when the backend has no clock
+     if (!operatorConnected && !g_jogs.empty()) {                                // NB2 R21 W4B-4：jog 的死人開關
+         for (std::size_t i = 0; i < g_jogs.size(); ++i) {
+             if (g_jogs[i].is1203) Stop1203(be, g_jogs[i].axis, -1);            // AI(W906-MT-E1): dead-man stop also leaves jog mode
+@@ -1329,23 +1696,68 @@ void MotorAccessTick(IMotorAccessBackend& be, int elapsedMs, bool operatorConnec
+             CancelAllJobs(be, "safe lock active (golden Timer1Timer: IsSafeLockCheck() -> Close())");
+     }
+     TickHomes(be, elapsedMs);
+-    TickLoop(be, elapsedMs);
++    TickLoop(be);                                                               //AI(W906-MT-E2) 20260925: times from LoopNow(), not elapsedMs
+ }
+ 
++//AI(W906-MT-E2) 20260925: see WebMotorAccess.h. Only a 1203 loop needs the fresh sample; the golden-object loop (non-1203)
++//  asks MOT.MotorMove itself and stays on the beat, like everything else.
++void MotorAccessPollTick(IMotorAccessBackend& be)
++{
++    if (g_loop.active && g_loop.a.Is1203()) TickLoop(be);
++}
++
++namespace {
++//AI(W906-MT-E2) 20260925: golden UpdateMotorLed (uMotorTest.cpp:644-652), run by Timer1Timer for the SELECTED motor:
++//      if(MOT[ActiveIndex].Led[iAlarmLed] && fNote->fShow)
++//      { MOT[ActiveIndex].PCIL132_StopMotor(); MOT[ActiveIndex].HomeFlag=0; btnLoopMove->Down=false; btnHome->Down=false; }
++//  The port's fNote->fShow: an alarm is up exactly from ForwardShowErrorMessage (wb_serve), which calls
++//  MotorAccessOnAlarm first and, for a blocking alarm, then holds the tick thread in its modal wait (no beat, no Poll)
++//  until it is answered -- so the moment it is raised is the only moment this thread can look, and it looks here.
++//  (golden looks every 5 ms while the note is up, so an alarm lamp that comes on only AFTER the note appeared is missed
++//  here; a kcode==0 note does not block and is not remembered as "shown".) Alarm lamp as golden decodes it:
++//  1203 = ALM (motionIO bit 1) or STA_AX_ERROR_STOP (TMyEtherCatMotor::ScanMotorStatus, myEthercatmotor.cpp:1179/:1188);
++//  other cards = MOT.Led[iAlarmLed] after ScanMotorStatus. Returns true when it acted.
++bool AlarmRuleSelected(IMotorAccessBackend& be)
++{
++    if (g_selMotor.empty()) return false;
++    MotorAccessAxis a;
++    if (!be.Resolve(g_selMotor, a) || a.motIndex < 0) return false;
++    bool alarm = false;
++    if (a.Is1203()) {
++        unsigned long io = 0;
++        unsigned st = 0;
++        const bool hasIo = a.axis >= 0 && be.Pci1203MotionIO(a.axis, io);
++        const bool hasSt = a.axis >= 0 && be.Pci1203AxisState(a.axis, st);
++        alarm = (hasIo && (io & 0x00000002ul) != 0) || (hasSt && IsErrorState(st));
++    } else if (a.motorLive) {
++        bool known = false;
++        alarm = be.GoldenAlarmLed(a.motIndex, known) && known;
++    }
++    if (!alarm) return false;
++    if (!a.Is1203()) be.GoldenStopMotor(a.motIndex);                           // golden PCIL132_StopMotor (1203 axes: all stopped by the caller, DecStop)
++    be.GoldenSetHomeFlag(a.motIndex, 0);                                        // golden MOT[ActiveIndex].HomeFlag=0
++    return true;
++}
++}  // namespace
++
+ void MotorAccessOnAlarm(IMotorAccessBackend& be, const std::string& what)
+ {
+     const bool had = AnyJobActive() || !g_jogs.empty();
+     CancelAllJobs(be, "alarm " + what + " (golden Timer1Timer: fNote->fShow -> btnLoopMove/btnHome up)");
+     g_jogs.clear();
+     std::string why;
+-    if (!be.Pci1203Ready(why)) return;
+     int n = 0;
+-    for (int ax = 0; ax < be.Pci1203AxisCount(); ++ax) {                        // golden note.cpp:795 StopAllMotor＝全部馬達（見 DoStop 的說明）
+-        if (!be.Pci1203AxisOpened(ax)) continue;
+-        Stop1203(be, ax, -1);                                                   // AI(W906-MT-E1): alarm stop = golden DecStop (StopDec + ExtDrive 0)
+-        ++n;
++    if (be.Pci1203Ready(why)) {
++        for (int ax = 0; ax < be.Pci1203AxisCount(); ++ax) {                    // golden note.cpp:795 StopAllMotor＝全部馬達（見 DoStop 的說明）
++            if (!be.Pci1203AxisOpened(ax)) continue;
++            Stop1203(be, ax, -1);                                               // AI(W906-MT-E1): alarm stop = golden DecStop (StopDec + ExtDrive 0)
++            ++n;
++        }
+     }
+-    if (had || n) g_lastJobNote = "alarm " + what + ": jobs cancelled, 1203 stop sent to " + std::to_string(n) + " axis(es)";
++    const bool sel = AlarmRuleSelected(be);                                     //AI(W906-MT-E2) 20260925: after the stops -- was: returned first when the 1203 control was missing
++    if (had || n || sel)
++        g_lastJobNote = "alarm " + what + ": jobs cancelled, 1203 stop sent to " + std::to_string(n) + " axis(es)" +
++                        (sel ? "; selected motor " + g_selMotor + " has its alarm lamp on -> HomeFlag=0 (golden UpdateMotorLed :644-652)" : "");
+ }
+ 
+ MotorAccessJobState MotorAccessJobs()
+@@ -1360,6 +1772,10 @@ MotorAccessJobState MotorAccessJobs()
+     j.loopCount  = g_loop.count;
+     j.lastNote   = g_lastJobNote;
+     j.jogsActive = (int)g_jogs.size();
++    j.selectedMotor = g_selMotor;                                               //AI(W906-MT-E2) 20260925
++    j.hasJogPTime = g_hasJogP;  j.jogPTime = g_jogPTime;
++    j.hasJogNTime = g_hasJogN;  j.jogNTime = g_jogNTime;
++    j.hasAvgTime  = g_hasAvg;   j.avgTime  = g_avgTime;
+     return j;
+ }
+ 
+@@ -1370,6 +1786,10 @@ void MotorAccessResetJobs()
+     g_homes.clear();
+     g_loop = LoopJob();
+     g_lastJobNote.clear();
++    g_selMotor.clear(); g_jogPct.clear();                        //AI(W906-MT-E2) 20260925
++    g_latchArmed = false; g_latchMs = 0.0; g_loopAverage = 0;
++    g_hasJogP = g_hasJogN = g_hasAvg = false; g_jogPTime = g_jogNTime = 0; g_avgTime = 0.0;
++    g_beatClockMs = 0.0;
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -1520,6 +1940,16 @@ MotorAccessOutcome MotorAccessDispatch(const MotorAccessReq& r, long long wireId
+     if (r.action == "resetMNet")                    return DoResetMNet(r, be);
+     if (r.action == "reloadMotorData")              return DoReloadMotorData(r, wireId, be);   // AI(W906-MT-E1) 20260925
+     if (r.action == "setRangeAndInit" || r.action == "setRateAndInit") return DoRangeRate(r, be);
++    //AI(W906-MT-E2) 20260925: the four Motor Test page actions -- golden uMotorTest handlers only; and BEFORE the generic
++    //  set*Speed matcher below, which would otherwise take "setSpeed" for a parameter button.
++    if (r.action == "selectMotor" || r.action == "setParamCell" || r.action == "copyFrom" || r.action == "setSpeed") {
++        if (r.source != "uMotorTest")
++            return Refuse("motor.access " + r.action + "（" + r.source + "）: 這是 golden uMotorTest 的畫面動作（" + row->golden + "），教導頁沒有");
++        if (r.action == "selectMotor")  return DoSelectMotor(r, wireId, be);
++        if (r.action == "setParamCell") return DoSetParamCell(r, be);
++        if (r.action == "copyFrom")     return DoCopyFrom(r, be);
++        return DoSetSpeed(r, wireId, be);
++    }
+     if (r.action.compare(0, 3, "set") == 0 &&
+         (r.action.find("Speed") != std::string::npos || r.action.compare(0, 12, "setSoftLimit") == 0))
+         return DoSetParam(r, be);
+@@ -1538,4 +1968,14 @@ MotorAccessOutcome MotorAccessDispatch(const MotorAccessReq& r, long long wireId
+ //      並照樣呼叫 golden StopAllMotor（非 1203 軸只有那條路）。停止不看控制權與互鎖。
+ //  W4-b 會碰到的四條（NB2 R1 §3，照通則跟 EastSun）：JOG 改 moveVel＋stop（Acm_AxJog 在這張卡 0 位移）、
+ //  HOME 用 DS402 124／128（golden 的卡片 mode 在這台回 0x8000510F）、SetPos(0) 不提供、SetExtDrive 不提供。
++//  AI(W906-MT-E2) 20260925 加的落差（每一條在程式旁邊都有說明）：
++//   3. selectMotor：golden lM00Click 只把 btnHome 抬起、bSingleHome 不動（單軸歸零在背景繼續）；這裡跟其他 AllBtnUp 一樣取消 HOME 工作
++//      （HomeFlag 留 0，要再歸零一次）—— 安全方向。
++//   4. copyFrom 來源 <0／>24、setParamCell 列號不對：golden 靜默 return；這裡回 ok=false 說原因（一樣什麼都不做）。
++//   5. Loop 計時：golden Timer1 每 5 ms 看一次到位；這裡在每次 1203 Poll 之後看（約 200 ms 一次），所以一段的時間最多多算一個輪詢週期。
++//   6. 告警時選中軸 Alarm 燈的規則（UpdateMotorLed）：golden 在告警框顯示期間每 5 ms 看；這裡只在告警出現的那一刻看一次
++//      （阻塞式告警期間 tick 執行緒停在 modal 等待裡，本來就看不到）。
++//   7. LastHomePos：DS402 歸零由驅動器自己設原點，同一公式的值通常約 0，意思跟 golden 卡片式歸零不同；Direction=1 的軸不記。
++//   8. Reload Motor Data：表值就地套回，但不重建物件、不 InitMotor（不開軸）、身分欄變了的列不套（要重開 wb_serve）。
++//   9. setSpeed：golden LoopMove 進行中捲軸也設「所有 cbUsing 勾選的軸」；頁面不送 cbUsing（All 模式未接），只設這一軸。
+ // =============================================================================
+diff --git a/WebMotorAccess.h b/WebMotorAccess.h
+index 2b70270..b8a166d 100644
+--- a/WebMotorAccess.h
++++ b/WebMotorAccess.h
+@@ -111,11 +111,27 @@ struct MotorGolden {
+     //   TMyEtherCatMotor::SetHomeSpeed（myEthercatmotor.cpp:1703）寫 PAR_AxHomeVelLow/High = PHomeLowSpeed/PHomeHighSpeed、HomeAcc/Dec = dAcc/dDec
+     unsigned homeHigh, homeLow;   // Motor->PHomeHighSpeed／PHomeLowSpeed（卡片單位）
+     double   accDb, decDb;        // Motor->GetAccDataBase()／GetDecDataBase()
++    //AI(W906-MT-E2) 20260925: the rest of what golden Motor Test shows for the selected motor -- the acks of the
++    //  parameter actions carry them as "cur" (same keys as /api/struct/motor/runtime "cur", ChanMotorPoints.cpp).
++    unsigned range, rate;         // Motor->ReadRange()／ReadRate()（golden UpdateMotorParameter :668；lM00Click :757-758 edtMotorRate/Range）
++    int      readSpeed;           // MOT[i].GetSpeed()（golden Timer1Timer :982 lblRealSpeed —— 上一次 SetSpeed 的 s，不是卡片正在跑的速度）
++    int      lastHomePos;         // Motor->LastHomePos（golden Timer1Timer :965 edtHomeOffset）
+     MotorGolden()
+         : valid(false), enable(false), gearRatio(1.0), direction(false), homeDirection(false),
+           softP(0), softN(0), initSpeed(0), jogHigh(0), jogLow(0), acc(0.0), dec(0.0),
+           homeFlag(0), zStack(false), indexMotor(false), galilIndex(false), armZ(false), scaleMotor(false),
+-          selectable(true), inShuttle(0), homeHigh(0), homeLow(0), accDb(0.0), decDb(0.0) {}
++          selectable(true), inShuttle(0), homeHigh(0), homeLow(0), accDb(0.0), decDb(0.0),
++          range(0), rate(0), readSpeed(0), lastHomePos(0) {}
++};
++
++//AI(W906-MT-E2) 20260925: what Reload Motor Data could put back from Mot_Table.csv (IMotorAccessBackend::GoldenReloadMotorParams).
++struct MotorReloadResult {
++    bool        read;             // the file was read and its header understood
++    std::string why;              // !read: why not (the file path is in it)
++    int         applied;          // motors whose table values were re-applied to MOT[i].Motor in place
++    int         identityChanged;  // motors whose row identity (No/Alias/CardModel/BoardID/Port/IP/Enable) changed -> nothing applied
++    std::string firstChanged;     // the first of those, for the ack ("restart wb_serve")
++    MotorReloadResult() : read(false), applied(0), identityChanged(0) {}
+ };
+ 
+ // 速度參數的哪一個（setJogHighSpeed 等四顆鈕、兩個軟體極限鈕）
+@@ -160,7 +176,7 @@ public:
+     virtual bool GoldenMotorCanRun() = 0;                         // TfMotorTest::IsMotorCanRun(true)（uMotorTest.cpp:1280）的本體
+     virtual bool GoldenMoveLocked(int motIndex) = 0;              // fCanMove*==false || mapLockList.size()!=0（TMyMotor::MotorMove）
+     virtual int  GoldenReadPos(int motIndex) = 0;                 // MOT[i].ReadPos()（非 1203 軸）
+-    virtual void GoldenJog(int motIndex, bool positive, int pct) = 0;   // 非 1203：MOT.SetSpeed(pct)＋MOT.JogP/JogN
++    virtual void GoldenJog(int motIndex, bool positive, int pct) = 0;   // 非 1203：MOT.SetSpeed(pct, true)＋MOT.JogP/JogN（AI(W906-MT-E2) 20260925：pct = 上次捲軸位置，原為 SetSpeed(edtSpeed)）
+     virtual int  GoldenMotorMove(int motIndex, int target, int pct, bool setSpeed) = 0;  // 非 1203：MOT.SetSpeed＋InitMOTParameter＋MotorMove
+     virtual void GoldenSetParam(int motIndex, MotorParamWhich which, int value) = 0;     // MOT[i].Motor->P*（只改記憶體，golden 同）
+ 
+@@ -194,6 +210,27 @@ public:
+     //   coordinates, so the "homed" state must be dropped with them -- otherwise Go / Loop Move interlocks that test
+     //   HomeFlag would pass on coordinates that no longer mean anything.
+     virtual void GoldenClearAllHomeFlags() = 0;
++
++    // ---- AI(W906-MT-E2) 20260925: the Motor Test functions that needed no ruling ----
++    // golden MOT[i].SetSpeed(pct, bSetJog) (TMyMotor::SetSpeed, Motor/mymotor.cpp:320). For a 1203 axis the golden object
++    //   never opened its axis here, so TMyEtherCatMotor::SetSpeed only sets iSpeed (myEthercatmotor.cpp:902, return at
++    //   :912-913) -- the card is written through Pci1203Execute; this call only keeps golden's ReadSpeed()/GetSpeed() true.
++    virtual void GoldenSetSpeed(int motIndex, int pct, bool jog) = 0;
++    // golden strngrdMotorSelectCell (uMotorTest.cpp:1198-1218): row 1 SetInitSpeed, 2..5 PJogHigh/PJogLow/PHomeHigh/PHomeLow,
++    //   6/7 PSoftLimitP/N, 8/9 SetAccDataBase/SetDecDataBase, 10 SetRange -- memory only (golden same). `value` is already
++    //   golden's `ret` (atoi for rows other than 8/9).
++    virtual void GoldenSetCell(int motIndex, int row, double value) = 0;
++    virtual void GoldenSetLastHomePos(int motIndex, int v) = 0;   // MOT[i].Motor->LastHomePos
++    virtual bool Pci1203MotionIO(int axis, unsigned long& io) = 0;  // the monitor sample's Acm_AxGetMotionIO (golden Led[] source)
++    // golden UpdateMotorLed's MOT[i].Led[iAlarmLed] for a non-1203 motor (after ScanMotorStatus / Gali_ScanMotStatus).
++    virtual bool GoldenAlarmLed(int motIndex, bool& known) = 0;
++    // golden btnReloadMotorDataClick's InitialMotorParameter(): re-read Mot_Table.csv (read only) and put the table
++    //   values back on the EXISTING MOT[i].Motor objects. Never re-creates an object, never opens an axis, never changes
++    //   a row's identity (such a row is skipped and counted). See WebMotorAccessLive.cpp.
++    virtual MotorReloadResult GoldenReloadMotorParams() = 0;
++    // A monotonic clock in ms (QueryPerformanceCounter) for golden's TQPF_Timer (Loop timing). < 0 = no clock: the loop
++    //   then counts the 500 ms beats (MotorAccessTick's elapsedMs) -- what the tests without a clock see.
++    virtual double MonotonicMs() = 0;
+ };
+ 
+ struct MotorAccessOutcome {
+@@ -241,6 +278,16 @@ struct MotorAccessJobState {
+     // AI(W906-MT-E1) 20260925: which motors (Alias) have a HOME job running -- the page's btnHome pops up when its
+     //   motor's job is gone (golden Timer1Timer :962-966 `else if(bSingleHome==false) btnHome->Down=false;`).
+     std::vector<std::string> homeMotors;
++    //AI(W906-MT-E2) 20260925: golden TfMotorTest page state.
++    std::string   selectedMotor;   // golden ActiveIndex as an Alias (selectMotor = lM00Click / lpA00Click); empty = none
++    //  golden lblJogPTime / lblJogNTime / lblAvgTime (uMotorTest.cpp:425/452, :524/555, :529/561). They are ONE set of
++    //  labels on the form (not per motor), they keep their value after the loop stops, and a new loop does not clear
++    //  lblJogPTime/lblJogNTime (only the homed start branch zeroes lblAvgTime, :1334). has* = false: never measured yet.
++    bool          hasJogPTime, hasJogNTime, hasAvgTime;
++    int           jogPTime, jogNTime;   // ms (golden LatchCycleTime: (int)(float) of the QPC ms since the leg's latch)
++    double        avgTime;              // golden ChangeToFloatNonPcnt((double)Average, (double)dwLoopCount) -- a float
++    MotorAccessJobState() : homesActive(0), loopActive(false), loopTask(1), loopCount(0), jogsActive(0),
++                            hasJogPTime(false), hasJogNTime(false), hasAvgTime(false), jogPTime(0), jogNTime(0), avgTime(0.0) {}
+ };
+ MotorAccessJobState MotorAccessJobs();
+ void MotorAccessResetJobs();       // 測試用
+@@ -249,6 +296,10 @@ void MotorAccessResetJobs();       // 測試用
+ //   （W906_AlarmStopLikeGolden，golden note.cpp:795 StopAllMotor）呼叫這支。golden 的 StopAllMotor 是「全部馬達」，
+ //   而 EastSun 監看器開的 1203 軸走不到 golden 的停止（m_Axishand 不是它開的）⇒ 這裡照 DoStop 對每一個開成功的 1203 軸補送停止。
+ void MotorAccessOnAlarm(IMotorAccessBackend& be, const std::string& what);
++//AI(W906-MT-E2) 20260925: called right after every 1203 monitor Poll() (wb_serve, W906_MotorAccessPollTick), on the same
++//  thread: a 1203 LoopMove sees its arrival on the fresh sample and the leg time is taken there (golden Timer1Timer checks
++//  every 5 ms; the beat alone would round every leg up to 500 ms). Everything else keeps the 500 ms beat.
++void MotorAccessPollTick(IMotorAccessBackend& be);
+ 
+ // wb_serve 用的真實後端（WebMotorAccessLive.cpp；只連進 wb_serve）。
+ IMotorAccessBackend& MotorAccessLiveBackend();
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index 2a9a43f..aaff126 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -16,10 +16,13 @@
+ 
+ #include <cstdio>
+ #include <cstdlib>
++#include <map>                         //AI(W906-MT-E2) 20260925: GoldenReloadMotorParams
+ #include <string>
++#include <vector>
+ 
+ #include "vclcompat/vcl_compat.h"
+ #include "database.h"                  // HSys.MotTable / TMOTDATA
++#include "common.h"                    //AI(W906-MT-E2) 20260925: MotTablePath (Reload Motor Data re-reads it)
+ #include "cmydef.h"                    // MTestY1
+ #include "Motor/mymotor.h"             // MOT[MAX_TRAY_MOTOR]
+ #include "Motor/HTMotor.h"             // iServoOn（Led 下標）
+@@ -35,6 +38,7 @@
+ #include "JsonBridge/ChanMotor.h"      // W4-c：MotorRuntimeOverlay
+ 
+ extern void StopAllMotor(bool bIndexCanStop);   // Motor/myGALILmotor.cpp（golden Motor/myGALILmotor.cpp:4712）
++void SetMotorAccelSpeed(int Index, int ADCSpeed);   //AI(W906-MT-E2) 20260925: cinitial.cpp:16730 (golden cinitial.h:51) -- Reload Motor Data
+ 
+ namespace ht9045 {
+ 
+@@ -265,6 +269,10 @@ public:
+         g.homeLow       = M->PHomeLowSpeed;
+         g.accDb         = M->GetAccDataBase();                                  // golden TMyMotor::Home SetADCRate(100) ⇒ dAcc = 資料庫值（mymotor.cpp:296-300）
+         g.decDb         = M->GetDecDataBase();
++        g.range         = M->ReadRange();                                       //AI(W906-MT-E2) 20260925: golden UpdateMotorParameter :668 / lM00Click :757-758
++        g.rate          = M->ReadRate();
++        g.readSpeed     = MOT[mi].GetSpeed();                                   //   golden Timer1Timer :982 lblRealSpeed (cached iSpeed / speed, no driver call)
++        g.lastHomePos   = M->LastHomePos;                                       //   golden Timer1Timer :965 edtHomeOffset
+         return true;
+     }
+     bool GoldenSafeDoorOpen(int mi) override
+@@ -300,7 +308,10 @@ public:
+     void GoldenJog(int mi, bool positive, int pct) override
+     {
+         if (mi < 0 || mi >= MAX_TRAY_MOTOR) return;
+-        MOT[mi].SetSpeed(pct);                                                  // golden edtSpeedChange → MOT.SetSpeed(edtSpeed)
++        //AI(W906-MT-E2) 20260925: pct = the last scroll-bar position (DoJog, user ruling 「Jog = golden」), so this re-applies
++        //  golden's SetSpeed(pos, true) (:801) -- was MOT.SetSpeed(edtSpeed) (the PTP family) as a stand-in. golden JogP/JogN
++        //  ignore their argument (Motor/mymotor.cpp:1322-1335).
++        MOT[mi].SetSpeed(pct, true);
+         if (positive) MOT[mi].JogP(pct); else MOT[mi].JogN(pct);                // golden :895／:845
+     }
+     int GoldenMotorMove(int mi, int target, int pct, bool setSpeed) override
+@@ -378,8 +389,192 @@ public:
+         MOT[mi].Motor->InitMotor(MOT[mi].Motor->Address);                       // golden :1379／:1369
+         MOT[mi].HomeFlag = 0;                                                   // golden :1380／:1370
+     }
++
++    // ---- AI(W906-MT-E2) 20260925 ----
++    void GoldenSetSpeed(int mi, int pct, bool jog) override
++    {
++        if (mi < 0 || mi >= MAX_TRAY_MOTOR || MOT[mi].Motor == 0) return;
++        MOT[mi].SetSpeed(pct, jog);                                             // TMyMotor::SetSpeed(double p, bool bSetJog) (Motor/mymotor.cpp:320)
++    }
++    void GoldenSetCell(int mi, int row, double v) override
++    {
++        if (mi < 0 || mi >= MAX_TRAY_MOTOR || MOT[mi].Motor == 0) return;
++        HTMotor* M = MOT[mi].Motor;
++        // golden assigns `double ret` to the unsigned fields; BCB converts through a 64-bit integer (__ftol), so an
++        //   integral ret below 0 wraps modulo 2^32 -- (unsigned)(int) is that, without C++'s undefined double->unsigned.
++        //   The dispatcher already made ret golden's atoi value (integral, in int range) for every row but 8/9.
++        const int iv = (row == 8 || row == 9) ? 0 : (int)v;
++        switch (row) {
++            case 1:  M->SetInitSpeed((unsigned)iv);    break;                  // golden :1200 (TMyEtherCatMotor: InitSpeed=x)
++            case 2:  M->PJogHighSpeed  = (unsigned)iv; break;                  // :1202
++            case 3:  M->PJogLowSpeed   = (unsigned)iv; break;                  // :1204
++            case 4:  M->PHomeHighSpeed = (unsigned)iv; break;                  // :1206
++            case 5:  M->PHomeLowSpeed  = (unsigned)iv; break;                  // :1208
++            case 6:  M->PSoftLimitP    = iv;           break;                  // :1210
++            case 7:  M->PSoftLimitN    = iv;           break;                  // :1212
++            case 8:  M->SetAccDataBase(v);             break;                  // :1214
++            case 9:  M->SetDecDataBase(v);             break;                  // :1216
++            case 10: M->SetRange((unsigned)iv);        break;                  // :1218 (TMyEtherCatMotor: Range=min(a,1000))
++            default: return;
++        }
++        std::printf("motor.access: MOT[%d] strngrdMotor row %d = %g (golden SelectCell, memory only)\n", mi, row, v);
++    }
++    void GoldenSetLastHomePos(int mi, int v) override
++    {
++        if (mi < 0 || mi >= MAX_TRAY_MOTOR || MOT[mi].Motor == 0) return;
++        MOT[mi].Motor->LastHomePos = v;
++        std::printf("motor.access: MOT[%d].Motor->LastHomePos = %d\n", mi, v);
++    }
++    bool Pci1203MotionIO(int axis, unsigned long& io) override
++    {
++        TPci1203Monitor* m = Pci1203Monitor();
++        if (!m || axis < 0 || axis >= m->axisCount()) return false;
++        const Pci1203AxisSample& s = m->axis(axis);
++        if (!s.valid || !s.opened) return false;
++        io = s.motionIO;
++        return true;
++    }
++    bool GoldenAlarmLed(int mi, bool& known) override
++    {
++        known = false;
++        if (mi < 0 || mi >= MAX_TRAY_MOTOR || MOT[mi].Motor == 0) return false;
++        if (INDEX_MOTION_CARD == 0 && (mi == MTestY1 || mi == MTestZ1 || mi == MTestZ2 || mi == MTestY2))
++            MOT[mi].Gali_ScanMotStatus();                                       // golden UpdateMotorLed :636-638
++        else
++            MOT[mi].ScanMotorStatus();                                          // :640
++        known = true;
++        return MOT[mi].Led[iAlarmLed];
++    }
++    MotorReloadResult GoldenReloadMotorParams() override;                       // below the class
++    double MonotonicMs() override
++    {
++        LARGE_INTEGER f, c;                                                     // golden TQPF_Timer's clock (myTimer.cpp:128-134)
++        if (!::QueryPerformanceFrequency(&f) || f.QuadPart == 0 || !::QueryPerformanceCounter(&c)) return -1.0;
++        return (double)c.QuadPart * 1000.0 / (double)f.QuadPart;
++    }
+ };
+ 
++//AI(W906-MT-E2) 20260925: golden btnReloadMotorDataClick's InitialMotorParameter() (golden cinitial.cpp:3392 on; port
++//  cinitial.cpp:3835-4107), WITHOUT the parts that would fight the 1203 monitor or re-shape the process:
++//    * the file is read the port's own way (TStringList + TMOTNO::SetMOTTableNo + the TMOTDATA row parser = the pieces of
++//      SYSTEM_MODULAR::LoadMotData, database.cpp:1774) into a PRIVATE list -- HSys.MotTable / mapMotTable (what Resolve,
++//      /api/struct/motor/config and the monitor's axis names are keyed on) are not replaced; HSys.MotNo is put back after.
++//      READ ONLY: Mot_Table.csv is never written.
++//    * a motor whose row identity changed (Motorname / Alias / CardModel / BoardID / Port / IP / Enable, or the row is new
++//      or gone) gets NOTHING -- its object was built for the old row; the ack says restart wb_serve.
++//    * for the others, exactly the table assignments of the bHasMotor branch (cinitial.cpp:4039-4094) onto the EXISTING
++//      MOT[i].Motor, then golden's SetMotorAccelSpeed(i, 100) (dAcc/dDec back to the database value -- memory only for the
++//      card types here, TMyEtherCatMotor::SetAcc is `dAcc=a`).
++//    * NOT re-run: InitialMotorName, `new`/`delete` of motor objects, Motor->Enable and MOT[i].CardType (identity),
++//      SetArmMaxSpeed (a SYNTEK card write), InitMotor(iAdder) (opens the axis -- the monitor owns every 1203 axis), and
++//      MC88X1's SetRate (no MC88X1 driver in this port, cinitial.cpp:3979).
++//  HomeFlag=0 for every motor is done by the caller first (GoldenClearAllHomeFlags), as golden's loop does for every i.
++//  (Still inside this file's anonymous namespace.)
++bool SameMotRowIdentity(const TMOTDATA& a, const TMOTDATA& b)
++{
++    return a.No == b.No && a.Alias == b.Alias && a.CardModel == b.CardModel && a.iBoardID == b.iBoardID &&
++           a.iPort == b.iPort && a.iIP == b.iIP && a.iEnable == b.iEnable;
++}
++void ReloadApplyRow(int i, const TMOTDATA& t)                                   // cinitial.cpp:4039-4094, line for line
++{
++    HTMotor* M = MOT[i].Motor;
++    const AnsiString sModel = t.CardModel;
++    M->GearRatio         = t.dGearRatio;
++    M->Direction         = (t.iDirection == 1) ? true : false;
++    M->HomeDirection     = (t.iHomeDirectior == 1) ? true : false;
++    double dAcc = t.dAcc;
++    double dDec = t.dDec;
++    if (sModel == "MN200") {                                                    // Steven 20230616 : MN200的加減速單位是秒
++        if (dAcc > 1) dAcc = t.dAcc / 100.0;
++        if (dDec > 1) dDec = t.dDec / 100.0;
++    } else if (sModel == "MC88X1") {                                            // golden also calls SetRate(iRate) -- not re-run (see above)
++        dAcc = t.iRate;
++        dDec = t.iRate;
++    }
++    M->SetAccDataBase(dAcc);
++    M->SetDecDataBase(dDec);
++    M->SetRange(t.iRange);
++    M->PHomeHighSpeed    = t.iHomeHighSpeed;
++    M->PHomeLowSpeed     = t.iHomeLowSpeed;
++    M->PJogHighSpeed     = t.iJogHighSpeed;
++    M->PJogLowSpeed      = t.iJogLowSpeed;
++    M->SetInitSpeed(t.iInitSpeed);
++    M->InitSpeed         = t.iInitSpeed;
++    M->PServoAlarmOn     = (t.iServoAlarmOn == 1) ? true : false;
++    M->MotorType         = t.i1P2P;
++    M->bSensorType       = t.iSensorType;
++    M->bLimitLogic       = (t.iLimitLogic == 1) ? true : false;
++    M->bIn1Logic         = (t.iIn1Logic == 1) ? true : false;
++    M->PSoftLimitN       = t.iSoftLimitN;
++    M->PSoftLimitP       = t.iSoftLimitP;
++    MOT[i].SimulateSpeed = t.iSimulateSpeed;
++    MOT[i].HomeFlag      = 0;                                                   // cinitial.cpp:4078
++    SetMotorAccelSpeed(i, 100);                                                 // :4079
++    if (MOT[i].Mot_Name == MInShuttle1) { iInitSpeedSh1 = M->InitSpeed; iPJogHighSpeedSh1 = M->PJogHighSpeed; }   // :4081-4085
++    if (MOT[i].Mot_Name == MInShuttle2) { iInitSpeedSh2 = M->InitSpeed; iPJogHighSpeedSh2 = M->PJogHighSpeed; }   // :4087-4091
++    if (i == MTestZ1 || i == MTestZ2) MOT[i].IndexPickLimit = t.iPickLimit;    // :4093-4094
++}
++
++MotorReloadResult LiveBackend::GoldenReloadMotorParams()
++{
++    MotorReloadResult R;
++    const AnsiString path = MotTablePath;                                       // what the boot LoadMotData read (database.cpp:1778)
++    if (!FileExists(path)) { R.why = std::string("file not found: ") + path.c_str(); return R; }
++    std::vector<TMOTDATA*> rows;
++    const TMOTNO bootCols = HSys.MotNo;
++    TStringList* SL = new TStringList();
++    try {
++        SL->LoadFromFile(path);
++        if (SL->Count <= 1)
++            R.why = std::string("no data rows in ") + path.c_str();
++        else if (HSys.MotNo.SetMOTTableNo(SL->Strings[0]) < HSys.MotNo.emotTotal - 1)   // LoadMotData's own gate (database.cpp:1799)
++            R.why = std::string("header not understood (LoadMotData gate) in ") + path.c_str();
++        else {
++            for (int k = 1; k < SL->Count; ++k) rows.push_back(new TMOTDATA(SL->Strings[k]));
++            R.read = true;
++        }
++    } catch (...) {
++        R.why = std::string("could not read (opened by other software?) ") + path.c_str();
++    }
++    HSys.MotNo = bootCols;                                                      // HSys.MotTable was parsed with this map
++    delete SL;
++    if (R.read) {
++        std::map<std::string, const TMOTDATA*> byNo;                            // LoadMotData's rule: the first row of a Motorname wins
++        for (std::size_t k = 0; k < rows.size(); ++k) {
++            const std::string no = rows[k]->No.c_str();
++            if (!no.empty() && byNo.find(no) == byNo.end()) byNo[no] = rows[k];
++        }
++        for (int i = 0; i < TOTAL_MOTOR && i < MAX_TRAY_MOTOR; ++i) {
++            AnsiString key;
++            key.sprintf("M%02d", i);
++            const TMOTDATA* o = 0;
++            std::map<AnsiString, AnsiString>::iterator it = HSys.mapMotTable.find(key);   // the boot row (cinitial.cpp:3880-3883)
++            if (it != HSys.mapMotTable.end()) {
++                const int k = std::atoi(it->second.c_str());
++                if (k >= 0 && k < (int)HSys.MotTable.size()) o = HSys.MotTable[k];
++            }
++            std::map<std::string, const TMOTDATA*>::const_iterator nt = byNo.find(key.c_str());
++            const TMOTDATA* n = (nt == byNo.end()) ? 0 : nt->second;
++            if (!o && !n) continue;
++            if (!o || !n || !SameMotRowIdentity(*o, *n)) {
++                ++R.identityChanged;
++                if (R.firstChanged.empty())
++                    R.firstChanged = std::string(key.c_str()) + (!o ? " (row added)" : !n ? " (row removed)" : " (No/Alias/CardModel/BoardID/Port/IP/Enable changed)");
++                continue;
++            }
++            if (MOT[i].Motor == 0) continue;
++            ReloadApplyRow(i, *n);
++            ++R.applied;
++        }
++    }
++    for (std::size_t k = 0; k < rows.size(); ++k) delete rows[k];
++    std::printf("motor.access reloadMotorData: %s: %s, applied %d, identity changed %d%s%s\n", path.c_str(),
++                R.read ? "re-read" : "NOT re-read", R.applied, R.identityChanged,
++                R.firstChanged.empty() ? "" : " first ", R.firstChanged.c_str());
++    if (!R.read) std::printf("  why: %s\n", R.why.c_str());
++    return R;
++}
++
+ }  // namespace
+ 
+ IMotorAccessBackend& MotorAccessLiveBackend()
+@@ -436,6 +631,7 @@ namespace {
+ CRITICAL_SECTION                                            g_ovCs;
+ bool                                                        g_ovInit = false;
+ std::map<std::string, ht9045::sjson::MotorRuntimeOverlay>   g_ov;
++ht9045::sjson::MotorTestPageState                           g_page;   //AI(W906-MT-E2) 20260925: under g_ovCs too
+ void OverlaySnapshot()                                                          // 主執行緒
+ {
+     if (!g_ovInit) { ::InitializeCriticalSection(&g_ovCs); g_ovInit = true; }
+@@ -475,8 +671,15 @@ void OverlaySnapshot()
+         out.loopCount = out.loopJob ? js.loopCount : 0;
+         v[row->Alias.c_str()] = out;
+     }
++    //AI(W906-MT-E2) 20260925: the page-wide half (golden ActiveIndex, lblJogPTime / lblJogNTime / lblAvgTime), same copy rule.
++    ht9045::sjson::MotorTestPageState pg;
++    pg.selectedMotor = js.selectedMotor;
++    pg.hasJogPTime = js.hasJogPTime;  pg.jogPTime = js.jogPTime;
++    pg.hasJogNTime = js.hasJogNTime;  pg.jogNTime = js.jogNTime;
++    pg.hasAvgTime  = js.hasAvgTime;   pg.avgTime  = js.avgTime;
+     ::EnterCriticalSection(&g_ovCs);
+     g_ov.swap(v);
++    g_page = pg;
+     ::LeaveCriticalSection(&g_ovCs);
+ }
+ }  // namespace
+@@ -490,15 +693,42 @@ static bool W906_MotorOverlay(const std::string& alias, ht9045::sjson::MotorRunt
+     ::LeaveCriticalSection(&g_ovCs);
+     return ok;
+ }
++static bool W906_MotorTestPage(ht9045::sjson::MotorTestPageState& out)          //AI(W906-MT-E2) 20260925: any thread, same lock
++{
++    if (!g_ovInit) return false;
++    ::EnterCriticalSection(&g_ovCs);
++    out = g_page;
++    ::LeaveCriticalSection(&g_ovCs);
++    return true;
++}
++static void W906_MotorAccessHooks()                                            // after the first copy (both hooks read it)
++{
++    static bool s_hooks = false;
++    if (s_hooks) return;
++    ht9045::sjson::SetMotorRuntimeOverlay(&W906_MotorOverlay);
++    ht9045::sjson::SetMotorTestPageState(&W906_MotorTestPage);                  //AI(W906-MT-E2) 20260925
++    s_hooks = true;
++}
+ 
+ void W906_MotorAccessTick(bool operatorConnected)
+ {
+     OverlaySnapshot();                                                          // NB2 R23 §2：先抄樣本，再（第一次）註冊掛鉤
+-    static bool s_overlay = false;
+-    if (!s_overlay) { ht9045::sjson::SetMotorRuntimeOverlay(&W906_MotorOverlay); s_overlay = true; }
++    W906_MotorAccessHooks();                                                    //AI(W906-MT-E2) 20260925: was the overlay hook alone, registered here
+     static DWORD s_last = 0;
+     const DWORD now = ::GetTickCount();
+     const int elapsed = (s_last == 0) ? 0 : (int)(now - s_last);
+     s_last = now;
+     if (elapsed > 0) ht9045::MotorAccessTick(ht9045::MotorAccessLiveBackend(), elapsed, operatorConnected);
+ }
++
++//AI(W906-MT-E2) 20260925: wb_serve calls this right after every Pci1203Monitor()->Poll() (tools/wb_serve.cpp, the Poll line of
++//  the IO clock, same thread, about every 200 ms). Order: first the loop step on the fresh sample -- its arrival time is
++//  taken as close to the Poll as this thread gets (QueryPerformanceCounter, LiveBackend::MonotonicMs) -- then the copy for
++//  /api/struct/motor/runtime, so the copy already holds the new leg time / count and this Poll's motor IO lamps (they used to
++//  wait for the 500 ms beat). The beat (W906_MotorAccessTick) is unchanged.
++void W906_MotorAccessPollTick()
++{
++    ht9045::MotorAccessPollTick(ht9045::MotorAccessLiveBackend());
++    OverlaySnapshot();
++    W906_MotorAccessHooks();
++}
+diff --git a/tests/test_motor_points.cpp b/tests/test_motor_points.cpp
+index bf8b71f..4e75706 100644
+--- a/tests/test_motor_points.cpp
++++ b/tests/test_motor_points.cpp
+@@ -130,6 +130,17 @@ int main(int argc, char** argv)
+         }
+         CHECK(nNoSrc == n);
+         CHECK(nNullPos == n);                          // null，不是 0 —— 0 是合法座標
++        //AI(W906-MT-E2) 20260925: no golden object -> "cur" is null (not a block of zeros); no page-state hook -> the timing is null
++        int nNullCur = 0, nNullTime = 0;
++        for (int i = 0; i < n; ++i) {
++            cJSON* m = cJSON_GetArrayItem(ms, i);
++            if (IsNull(Get(m, "cur"))) ++nNullCur;
++            cJSON* mo = Get(m, "motion");
++            if (IsNull(Get(mo, "jogPTime")) && IsNull(Get(mo, "jogNTime")) && IsNull(Get(mo, "avgTime"))) ++nNullTime;
++        }
++        CHECK(nNullCur == n);
++        CHECK(nNullTime == n);
++        CHECK(IsNull(Get(Get(rt, "runtime"), "selectedMotor")));
+         cJSON* r = Get(rt, "runtime");
+         CHECK(Get(r, "connected") && Get(r, "connected")->type == cJSON_False);
+         CHECK(!SOf(r, "why").empty());
+@@ -145,6 +156,51 @@ int main(int argc, char** argv)
+     MOT[0].EncoderPosition = 12340;
+     MOT[0].TargetPosition = 20000;
+     MOT[0].HomeFlag = 1;
++    //AI(W906-MT-E2) 20260925: [3a] "cur" = what golden Motor Test shows for the motor, read from MOT[0].Motor (golden
++    //  UpdateMotorParameter uMotorTest.cpp:655-669 + ReadRate/GetSpeed/LastHomePos) -- in BOTH builds: it is the golden
++    //  object's memory, not a card value, so the shipping build's P5 "no MOT[] positions" rule does not apply to it.
++    //  And [3b] the page-state hook: runtime.selectedMotor + motion.jogPTime/jogNTime/avgTime on every row (one set of labels).
++    //  (Done before the [3] body below: each MotorRuntimeJson() bumps seq, and [4] counts from [3]'s.)
++    sim->InitSpeed = 500; sim->PJogHighSpeed = 10000; sim->PJogLowSpeed = 100; sim->PHomeHighSpeed = 200; sim->PHomeLowSpeed = 50;
++    sim->PSoftLimitP = 900000; sim->PSoftLimitN = -5000; sim->SetAccDataBase(3000.5); sim->SetDecDataBase(3100);
++    sim->SetRange(20); sim->SetRate(90); sim->LastHomePos = -123; sim->GearRatio = 2.5; sim->Enable = false;
++    MOT[0].SetSpeed(37);                               // golden TMyMotor::SetSpeed with Enable=false: speed=p -> GetSpeed()=37
++    {
++        struct PageFake {
++            static bool Fn(MotorTestPageState& o)
++            {
++                o.selectedMotor = "MInArmX"; o.hasJogPTime = true; o.jogPTime = 1234; o.hasJogNTime = false;
++                o.hasAvgTime = true; o.avgTime = 800.5; return true;
++            }
++        };
++        SetMotorTestPageState(&PageFake::Fn);
++        cJSON* rc = cJSON_Parse(MotorRuntimeJson().c_str());
++        SetMotorTestPageState(0);
++        CHECK(rc != 0);
++        cJSON* x = FindMotor(rc, "MInArmX");
++        cJSON* cur = Get(x, "cur");
++        CHECK(cur && cur->type == cJSON_Object);
++        if (cur && cur->type == cJSON_Object) {
++            CHECK(Get(cur, "enable")->type == cJSON_False);
++            CHECK(Get(cur, "initSpeed")->valueint == 500 && Get(cur, "jogHigh")->valueint == 10000 && Get(cur, "jogLow")->valueint == 100);
++            CHECK(Get(cur, "homeHigh")->valueint == 200 && Get(cur, "homeLow")->valueint == 50);
++            CHECK(Get(cur, "softP")->valueint == 900000 && Get(cur, "softN")->valueint == -5000);
++            CHECK(Get(cur, "acc")->valuedouble == 3000.5 && Get(cur, "dec")->valuedouble == 3100.0);   // ReadAcc/ReadDec = the database values
++            CHECK(Get(cur, "range")->valueint == 20 && Get(cur, "rate")->valueint == 90);
++            CHECK(Get(cur, "readSpeed")->valueint == 37);                                       // MOT.GetSpeed() (lblRealSpeed)
++            CHECK(Get(cur, "lastHomePos")->valueint == -123 && Get(cur, "gearRatio")->valuedouble == 2.5);
++            CHECK(Get(cur, "homeFlag")->valueint == 1);
++        }
++        cJSON* y = FindMotor(rc, "MInArmY");           // MOT[1].Motor is NULL
++        CHECK(y && IsNull(Get(y, "cur")));
++        CHECK(SOf(Get(rc, "runtime"), "selectedMotor") == "MInArmX");
++        cJSON* xm = Get(x, "motion");
++        cJSON* ym = Get(y, "motion");
++        CHECK(Get(xm, "jogPTime") && Get(xm, "jogPTime")->valueint == 1234 && IsNull(Get(xm, "jogNTime")) &&
++              Get(xm, "avgTime") && Get(xm, "avgTime")->valuedouble == 800.5);
++        CHECK(Get(ym, "jogPTime") && Get(ym, "jogPTime")->valueint == 1234);   // golden: one set of labels -> every row the same
++        cJSON_Delete(rc);
++    }
+     unsigned long long seq1 = 0;
+     rt = cJSON_Parse(MotorRuntimeJson().c_str());
+     CHECK(rt != 0);
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index d233484..7b7953a 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -21,6 +21,9 @@
+ //  (10) NB2 R21：Enable=0 真機不可選、InShuttle 閘門互鎖、卡片回傳碼、jog 死人開關、命令後的輪詢新鮮度、Index 軸速度鈕寫 ReadSpeed。
+ //  (11) NB2 R22／R23：1203 軸 Enable=0 任何組態都拒絕；HOME 門檢查＋歸零速度＋一按就清 HomeFlag；arm Z 的 case 500 照 golden 回傳值；
+ //       Timer1Timer 三道閘（連線、安全鎖、告警）；home／loop 改成明講狀態；HOME／Loop 中其他運動鈕被擋；伺服鈕取消工作；All 模式拒絕。
++//  (12) AI(W906-MT-E2) 20260925：選馬達（Enable=0 先擋、SetSpeed(1)）、速度捲軸／edtSpeed 與 jog 速度來源（Jog = golden）、參數表格子、
++//       Copy From、告警時選中軸 Alarm 燈的規則、LastHomePos、Loop 計時（假時鐘；只平均第二段、只有已歸零的開始才歸零、golden static flag）。
++//       Reload Motor Data 的表值重套在 (9) 的最後。catalog 覆蓋 (2) 另驗與網頁那邊約好的 5 個命令。
+ //
+ //  NOT COVERED：真實後端（WebMotorAccessLive.cpp：HSys.MotTable／MOT[]／監看器的對號）—— 那一半要
+ //  wb_serve 起來後用 WS 探針量；1203 那一段要有卡的機台。
+@@ -163,6 +166,16 @@ public:
+     void GoldenSetParam(int mi, MotorParamWhich which, int value) override
+     {
+         Param p = { mi, which, value }; params.push_back(p);
++        std::map<int, MotorGolden>::iterator it = golden.find(mi);            // AI(W906-MT-E2) 20260925: opt-in (older sections keep golden[] as set)
++        if (!paramsUpdateGolden || it == golden.end()) return;
++        switch (which) {
++            case kParamJogHigh:  it->second.jogHigh  = (unsigned)value; break;
++            case kParamJogLow:   it->second.jogLow   = (unsigned)value; break;
++            case kParamHomeHigh: it->second.homeHigh = (unsigned)value; break;
++            case kParamHomeLow:  it->second.homeLow  = (unsigned)value; break;
++            case kParamSoftP:    it->second.softP    = value; break;
++            case kParamSoftN:    it->second.softN    = value; break;
++        }
+     }
+     int AllCalls() const { return Calls() + (int)(jogs.size() + moves.size() + params.size()); }
+ 
+@@ -211,6 +224,67 @@ public:
+     int  clearAllHomeFlagsCalls = 0;                                            // AI(W906-MT-E1) 20260925
+     std::size_t clearAllAtExecuted = 0;                                         // executed.size() when it was called
+     void GoldenClearAllHomeFlags() override { ++clearAllHomeFlagsCalls; clearAllAtExecuted = executed.size(); }
++
++    // ---- AI(W906-MT-E2) 20260925 ----
++    bool paramsUpdateGolden = false;          // GoldenSetParam also writes golden[] (the MT-E2 acks read it back as "cur")
++    struct SpeedCall { int mi; int pct; bool jog; };
++    std::vector<SpeedCall> speedCalls;
++    void GoldenSetSpeed(int mi, int pct, bool jog) override
++    {
++        SpeedCall s = { mi, pct, jog }; speedCalls.push_back(s);
++        std::map<int, MotorGolden>::iterator it = golden.find(mi);            // TMyMotor::SetSpeed -> Motor->SetSpeed(s): iSpeed = s
++        if (it != golden.end() && !it->second.indexMotor) it->second.readSpeed = (int)MotorSpeedFromPct(pct, it->second).s;
++    }
++    struct CellCall { int mi; int row; double v; };
++    std::vector<CellCall> cells;
++    void GoldenSetCell(int mi, int row, double v) override
++    {
++        CellCall c = { mi, row, v }; cells.push_back(c);
++        std::map<int, MotorGolden>::iterator it = golden.find(mi);
++        if (it == golden.end()) return;
++        MotorGolden& g = it->second;
++        const int iv = (row == 8 || row == 9) ? 0 : (int)v;
++        switch (row) {
++            case 1: g.initSpeed = (unsigned)iv; break;  case 2: g.jogHigh = (unsigned)iv; break;
++            case 3: g.jogLow = (unsigned)iv; break;     case 4: g.homeHigh = (unsigned)iv; break;
++            case 5: g.homeLow = (unsigned)iv; break;    case 6: g.softP = iv; break;
++            case 7: g.softN = iv; break;                case 8: g.accDb = v; break;
++            case 9: g.decDb = v; break;                 case 10: g.range = ((unsigned)iv > 1000u) ? 1000u : (unsigned)iv; break;
++        }
++    }
++    std::map<int, int> lastHome;                                              // GoldenSetLastHomePos
++    std::size_t lastHomeAtExecuted = 0;
++    void GoldenSetLastHomePos(int mi, int v) override
++    {
++        lastHome[mi] = v; lastHomeAtExecuted = executed.size();
++        std::map<int, MotorGolden>::iterator it = golden.find(mi);
++        if (it != golden.end()) it->second.lastHomePos = v;
++    }
++    std::map<int, unsigned long> motionIO;                                    // 1203 軸槽 → motionIO（沒有 = 讀不到）
++    bool Pci1203MotionIO(int ax, unsigned long& io) override
++    {
++        std::map<int, unsigned long>::const_iterator it = motionIO.find(ax);
++        if (it == motionIO.end()) return false;
++        io = it->second;
++        return true;
++    }
++    std::map<int, bool> alarmLed;                                             // 非 1203：MOT.Led[iAlarmLed]（沒有 = 讀不到）
++    bool GoldenAlarmLed(int mi, bool& known) override
++    {
++        std::map<int, bool>::const_iterator it = alarmLed.find(mi);
++        known = (it != alarmLed.end());
++        return known ? it->second : false;
++    }
++    MotorReloadResult reloadResult;
++    int               reloadCalls = 0, reloadAtClearCalls = -1;
++    std::size_t       reloadAtExecuted = 0;
++    MotorReloadResult GoldenReloadMotorParams() override
++    {
++        ++reloadCalls; reloadAtClearCalls = clearAllHomeFlagsCalls; reloadAtExecuted = executed.size();
++        return reloadResult;
++    }
++    double clockMs = -1.0;                                                    // < 0: no clock (the loop counts the beats)
++    double MonotonicMs() override { return clockMs; }
+ };
+ 
+ static MotorAccessAxis Axis1203(int mi, int board, int port, int axisSlot, const char* why = "")
+@@ -306,6 +380,15 @@ int main(int argc, char** argv)
+         CHECK(cJSON_IsArray(cmds), "catalog has commands[]");
+         int n = 0, unknown = 0;
+         std::set<std::string> actions, live, ui;
++        // AI(W906-MT-E2) 20260925: the contract with the web side -- five new commands, source uMotorTest, none of kind motion.
++        struct Contract { const char* button; const char* action; const char* params; int seen; };
++        Contract contract[5] = {
++            { "labName",          "selectMotor",  "motorId",             0 },
++            { "strngrdMotor",     "setParamCell", "motorId,row,value",   0 },
++            { "BitBtn1",          "copyFrom",     "motorId,source",      0 },
++            { "scrlbrMotorSpeed", "setSpeed",     "motorId,pct,jog",     0 },
++            { "edtSpeed",         "setSpeed",     "motorId,pct,jog",     0 } };
++        int contractBad = 0;
+         const cJSON* c = 0;
+         cJSON_ArrayForEach(c, cmds) {
+             const cJSON* a = cJSON_GetObjectItemCaseSensitive(c, "action");
+@@ -317,16 +400,36 @@ int main(int argc, char** argv)
+             if (st == "unknown") { ++unknown; printf("    unknown action: %s\n", act.c_str()); }
+             if (st == "live") live.insert(act);
+             if (st == "ui") ui.insert(act);
++            const cJSON* bt = cJSON_GetObjectItemCaseSensitive(c, "button");
++            for (int k = 0; k < 5; ++k) {
++                if (!cJSON_IsString(bt) || std::string(bt->valuestring) != contract[k].button) continue;
++                ++contract[k].seen;
++                const cJSON* src = cJSON_GetObjectItemCaseSensitive(c, "source");
++                const cJSON* kd  = cJSON_GetObjectItemCaseSensitive(c, "kind");
++                const cJSON* ps  = cJSON_GetObjectItemCaseSensitive(c, "params");
++                std::string plist;
++                const cJSON* p = 0;
++                if (cJSON_IsArray(ps)) cJSON_ArrayForEach(p, ps) if (cJSON_IsString(p)) plist += (plist.empty() ? "" : ",") + std::string(p->valuestring);
++                const bool okRow = act == contract[k].action && cJSON_IsString(src) && std::string(src->valuestring) == "uMotorTest" &&
++                                   !(cJSON_IsString(kd) && std::string(kd->valuestring) == "motion") && plist == contract[k].params;
++                if (!okRow) { ++contractBad; printf("    contract row %s: action=%s params=%s -- expected %s [%s], source uMotorTest, kind not motion\n",
++                                                    contract[k].button, act.c_str(), plist.c_str(), contract[k].action, contract[k].params); }
++            }
+         }
+         cJSON_Delete(cat);
+-        CHECK(n == 38, "38 catalog commands");
+-        CHECK(actions.size() == 28, "28 distinct actions");
++        int contractSeen = 0;
++        for (int k = 0; k < 5; ++k) { if (contract[k].seen == 1) ++contractSeen; else printf("    contract button %s seen %d time(s)\n", contract[k].button, contract[k].seen); }
++        CHECK(contractSeen == 5 && contractBad == 0,
++              "AI(W906-MT-E2): the 5 contract commands are in the catalog exactly once, with the agreed action/params, source uMotorTest, not kind motion");
++        CHECK(n == 43, "43 catalog commands (38 + the 5 MT-E2 contract commands)");
++        CHECK(actions.size() == 32, "32 distinct actions (28 + selectMotor/setParamCell/copyFrom/setSpeed)");
+         CHECK(unknown == 0, "every catalog action has a status");
+-        CHECK(live.size() == 20 && live.count("reloadMotorData") && live.count("stop") && live.count("servoToggle") && live.count("jogP") &&
++        CHECK(live.size() == 24 && live.count("reloadMotorData") && live.count("stop") && live.count("servoToggle") && live.count("jogP") &&
+               live.count("moveRelative") && live.count("moveAbsolute") && live.count("moveSoftLimitN") &&
+               live.count("setJogHighSpeed") && live.count("setSoftLimitP") && live.count("home") &&
+-              live.count("loopMove") && live.count("resetMNet") && live.count("setRangeAndInit"),
+-              "live = stop/servo + W4-b1 (12) + W4-b2 (5) + reloadMotorData (AI(W906-MT-E1) 20260925: EastSun allows SetCmd/ActualPosition)");
++              live.count("loopMove") && live.count("resetMNet") && live.count("setRangeAndInit") &&
++              live.count("selectMotor") && live.count("setParamCell") && live.count("copyFrom") && live.count("setSpeed"),
++              "live = stop/servo + W4-b1 (12) + W4-b2 (5) + reloadMotorData (AI(W906-MT-E1) 20260925: EastSun allows SetCmd/ActualPosition) + the 4 MT-E2 page actions");
+         CHECK(std::string(MotorAccessActionStatus("motorPowerToggle")) == "blocked" &&
+               std::string(MotorAccessActionStatus("reloadMotorData")) == "live", "blocked = motorPowerToggle only (reloadMotorData live since AI(W906-MT-E1))");
+         CHECK(ui.size() == 3 && ui.count("setPos1") && ui.count("setPos2") && ui.count("refreshParameter"),
+@@ -555,20 +658,23 @@ int main(int argc, char** argv)
+         be.readPos[2] = 5000;
+         be.opened.assign(8, true);
+ 
++        MotorAccessResetJobs();                                                  // AI(W906-MT-E2): no scroll-bar position remembered yet
+         MotorAccessReq r = Req("uMotorTest", "jogP", "MOutArmY"); r.button = "sbMotorTest_JogP"; r.num["speed"] = 50;
+         MotorAccessOutcome o = MotorAccessDispatch(r, 11, be);
+-        bool seqOk = o.ok && be.executed.size() == 9 &&
+-                     be.executed[0].kind == kCmdAxSetSpeed && be.executed[0].speed == kSpeedInit && be.executed[0].value == 250.0 &&
+-                     be.executed[1].speed == kSpeedRun && be.executed[1].value == 5000.0 &&
+-                     be.executed[2].speed == kSpeedAcc && be.executed[3].speed == kSpeedDec &&
+-                     be.executed[4].speed == kSpeedJogInit && be.executed[4].value == 250.0 && be.executed[5].speed == kSpeedJogRun &&
+-                     be.executed[5].value == 5000.0 && be.executed[6].speed == kSpeedJogAcc && be.executed[7].speed == kSpeedJogDec &&
+-                     be.executed[8].kind == kCmdAxJogStart && be.executed[8].dir == 1 && be.executed[8].axis == 3;
+-        CHECK(seqOk, "jogP 1203: golden SetSpeed(x, bSetJog=true) = 4 PTP + 4 CFG_AxJog* speeds, then Acm_AxJog +1 (AI(W906-MT-E1): golden jog, EastSun 20260925)");
++        // AI(W906-MT-E2) 20260925: JOG = GOLDEN (user ruling). The page's speed (edtSpeed 50) is dropped like golden JogP does;
++        //   the jog family goes out at the last scroll position -- none yet => 1% (s=100, persent 0.01: velLow 500*0.01=5,
++        //   velHigh 10000*0.01=100) -- and the PTP family is NOT touched.
++        bool seqOk = o.ok && be.executed.size() == 5 &&
++                     be.executed[0].kind == kCmdAxSetSpeed && be.executed[0].speed == kSpeedJogInit && be.executed[0].value == 5.0 &&
++                     be.executed[1].speed == kSpeedJogRun && be.executed[1].value == 100.0 &&
++                     be.executed[2].speed == kSpeedJogAcc && be.executed[2].value == 100000.0 &&
++                     be.executed[3].speed == kSpeedJogDec && be.executed[3].value == 200000.0 &&
++                     be.executed[4].kind == kCmdAxJogStart && be.executed[4].dir == 1 && be.executed[4].axis == 3;
++        CHECK(seqOk, "jogP 1203 with no scroll position yet: 4 CFG_AxJog* speeds at 1% (page speed 50 ignored, PTP untouched), then Acm_AxJog +1");
+         CHECK(be.extDrive.size() == 1 && be.extDrive[0].value == 1.0 && be.extDrive[0].axis == 3, "jogP 1203: Acm_AxSetExtDrive(ax, 1) before the jog (golden bFirstClickJog)");
+         r.action = "jogN"; r.button = "sbMotorTest_JogN";
+         o = MotorAccessDispatch(r, 11, be);
+-        CHECK(o.ok && be.executed.size() == 18 && be.executed[17].kind == kCmdAxJogStart && be.executed[17].dir == -1 && be.extDrive.size() == 2, "jogN -> ExtDrive(1) + Acm_AxJog -1");
++        CHECK(o.ok && be.executed.size() == 10 && be.executed[9].kind == kCmdAxJogStart && be.executed[9].dir == -1 && be.extDrive.size() == 2, "jogN -> ExtDrive(1) + Acm_AxJog -1");
+         {
+             MotorAccessReq rel = Req("uMotorTest", "stop", "MOutArmY"); rel.button = "sbMotorTest_JogN";
+             const std::size_t e0 = be.extDrive.size(), x0 = be.executed.size();
+@@ -576,6 +682,14 @@ int main(int argc, char** argv)
+                   be.extDrive.size() == e0 + 1 && be.extDrive.back().value == 0.0 && be.extDrive.back().axis == 3,
+                   "jog release = golden DecStop: Acm_AxStopDec then Acm_AxSetExtDrive(ax, 0) (AI(W906-MT-E1))");
+         }
++        {   // AI(W906-MT-E2): no speed at all is fine now (golden SelMotSpeed goes nowhere)
++            MotorAccessReq ns = r; ns.num.erase("speed");
++            const std::size_t x0 = be.executed.size();
++            CHECK(MotorAccessDispatch(ns, 1, be).ok && be.executed.size() == x0 + 5 && be.executed[x0 + 1].value == 100.0,
++                  "jog without speed -> allowed, jog family at the remembered 1% (was: refused for a missing edtSpeed)");
++            MotorAccessReq rel = Req("uMotorTest", "stop", "MOutArmY"); rel.button = "sbMotorTest_JogN";
++            MotorAccessDispatch(rel, 12, be);
++        }
+ 
+         const int before = (int)be.executed.size();
+         MotorAccessReq d1 = Req("uMotorTest", "jogP", "MInArmX"); d1.num["speed"] = 50;
+@@ -590,8 +704,6 @@ int main(int argc, char** argv)
+         o = MotorAccessDispatch(r, 1, be);
+         CHECK(!o.ok && (int)be.executed.size() == before, "CheckSafeDoorIsClosed false -> refused");
+         be.doorClosed = true;
+-        MotorAccessReq ns = r; ns.num.erase("speed");
+-        CHECK(!MotorAccessDispatch(ns, 1, be).ok, "jog without speed -> refused");
+         be.doorOpen.insert(20);
+         o = MotorAccessDispatch(r, 1, be);
+         CHECK(!o.ok && (int)be.executed.size() == before, "TMyMotor::JogP safe-door check -> refused");
+@@ -599,8 +711,8 @@ int main(int argc, char** argv)
+ 
+         MotorAccessReq jm = Req("uMotorTest", "jogP", "MInArmPitch"); jm.num["speed"] = 30;
+         o = MotorAccessDispatch(jm, 1, be);
+-        CHECK(o.ok && be.jogs.size() == 1 && be.jogs[0].mi == 2 && be.jogs[0].pos && be.jogs[0].pct == 30 &&
+-              (int)be.executed.size() == before, "non-1203 jog -> golden MOT[2].JogP(30), no 1203 command");
++        CHECK(o.ok && be.jogs.size() == 1 && be.jogs[0].mi == 2 && be.jogs[0].pos && be.jogs[0].pct == 1 &&
++              (int)be.executed.size() == before, "non-1203 jog -> golden MOT[2].JogP at the remembered scroll position 1% (page speed 30 ignored, AI(W906-MT-E2)), no 1203 command");
+ 
+         // moveRelative
+         MotorAccessReq mp = Req("uMotorTest", "moveRelative", "MOutArmY");
+@@ -859,6 +971,12 @@ int main(int argc, char** argv)
+         q = ReqStart("uMotorTest", "loopMove", "A", true); q.num["pos1"] = 1; q.num["pos2"] = 2; q.flag["confirmNotHomed"] = true; rs.push_back(q);   // 上一個 home 把 HomeFlag 設回 0
+         q = Req("uMotorTest", "resetMNet", 0); q.flag["confirm"] = true; rs.push_back(q);
+         q = Req("uMotorTest", "setRateAndInit", "M"); q.num["value"] = 5; rs.push_back(q);
++        // AI(W906-MT-E2) 20260925: the four page actions
++        q = Req("uMotorTest", "selectMotor", "A"); rs.push_back(q);
++        q = Req("uMotorTest", "setParamCell", "A"); q.num["row"] = 2; q.num["value"] = 5000; rs.push_back(q);
++        q = Req("uMotorTest", "copyFrom", "A"); q.num["source"] = 20; rs.push_back(q);
++        q = Req("uMotorTest", "setSpeed", "A"); q.num["pct"] = 10; q.flag["jog"] = true; rs.push_back(q);
++        q = Req("uMotorTest", "setSpeed", "M"); q.num["pct"] = 10; q.flag["jog"] = false; rs.push_back(q);
+         int okN = 0, shapeN = 0;
+         for (std::size_t i = 0; i < rs.size(); ++i) {
+             const MotorAccessOutcome o = MotorAccessDispatch(rs[i], 1, be);
+@@ -867,7 +985,7 @@ int main(int argc, char** argv)
+             if (AckShapeOk(o.ackJson, 7)) ++shapeN;
+             else printf("    bad shape: %s -> %s\n", rs[i].action.c_str(), o.ackJson.c_str());
+         }
+-        CHECK(okN == (int)rs.size(), "all 13 success paths answered ok");
++        CHECK(okN == (int)rs.size(), "all 18 success paths answered ok (13 + the 5 MT-E2 page commands)");
+         CHECK(shapeN == okN, "none of them carries type/id/ok/error; request id travels as reqId");
+         MotorAccessResetJobs();
+     }
+@@ -1185,6 +1303,356 @@ int main(int argc, char** argv)
+         CHECK(relOk, "reloadMotorData -> SetCommand(0) then SetPosition(0) on each of the 5 opened axes (slot 2 not opened)");
+         CHECK(be.clearAllHomeFlagsCalls == 1 && be.clearAllAtExecuted == r0,
+               "reloadMotorData clears every HomeFlag BEFORE zeroing (golden InitialMotorParameter, cinitial.cpp:3615) -- coordinates reset => not homed");
++        // AI(W906-MT-E2) 20260925: the table values come back too -- after the HomeFlag clear, before the zeroing (golden order)
++        CHECK(be.reloadCalls == 1 && be.reloadAtClearCalls == 1 && be.reloadAtExecuted == r0,
++              "reloadMotorData re-applies Mot_Table (GoldenReloadMotorParams) after the HomeFlag clear and before SetPos(0)");
++        CHECK(Has(o.ackJson, "\"reload\":{\"read\":false") && Has(o.ackJson, "\"result\":\"partial\"") && Has(o.ackJson, "NOT re-read"),
++              "Mot_Table could not be read -> the zeroing still runs (golden button), the ack says partial / NOT re-read");
++        be.reloadResult.read = true; be.reloadResult.applied = 44; be.reloadResult.identityChanged = 1; be.reloadResult.firstChanged = "M03 (row added)";
++        o = MotorAccessDispatch(Req("uMotorTest", "reloadMotorData", 0), 5, be);
++        CHECK(o.ok && Has(o.ackJson, "\"applied\":44") && Has(o.ackJson, "\"restartNeeded\":true") && Has(o.ackJson, "M03 (row added)") &&
++              Has(o.ackJson, "\"result\":\"partial\"") && Has(o.ackJson, "restart wb_serve"),
++              "a row whose identity changed -> nothing applied to it, the ack says restart wb_serve");
++        be.reloadResult.identityChanged = 0; be.reloadResult.firstChanged.clear();
++        o = MotorAccessDispatch(Req("uMotorTest", "reloadMotorData", 0), 6, be);
++        CHECK(o.ok && Has(o.ackJson, "\"result\":\"reloaded\"") && Has(o.ackJson, "\"restartNeeded\":false"), "everything re-applied -> reloaded");
++        MotorAccessResetJobs();
++    }
++
++    // ---------------------------------------------------------------- (12)
++    //  AI(W906-MT-E2) 20260925: the Motor Test functions that needed no ruling. Every expected value is worked out by hand
++    //  from the golden handler named in the message (golden uMotorTest.cpp line numbers).
++    printf("[12] AI(W906-MT-E2): selectMotor / setSpeed + jog speed / setParamCell / copyFrom / alarm rule / LastHomePos / loop timing\n");
++    {
++        MotorAccessResetJobs();
++        MotorGolden g;
++        g.valid = true; g.enable = true; g.gearRatio = 2.5; g.softP = 999999; g.softN = -999999;
++        g.jogHigh = 10000; g.jogLow = 100; g.initSpeed = 500; g.acc = 1000; g.dec = 2000; g.homeFlag = 1;
++        g.homeHigh = 2000; g.homeLow = 500; g.accDb = 3000; g.decDb = 3100; g.range = 100; g.rate = 100;
++        MotorGolden gOff = g; gOff.enable = false; gOff.selectable = false;
++        MotorGolden gIx  = g; gIx.indexMotor = true;
++        MotorGolden gSrc = g; gSrc.jogHigh = 12000; gSrc.jogLow = 120; gSrc.homeHigh = 3000; gSrc.homeLow = 300; gSrc.softP = 500000; gSrc.softN = -1000;
++        FakeBackend be;
++        be.paramsUpdateGolden = true;
++        be.table["A"]   = Axis1203(20, 20, 0, 3);
++        be.table["B"]   = Axis1203(21, 21, 0, 4);
++        be.table["OFF"] = Axis1203(22, 22, 0, 5);
++        be.table["IX"]  = Axis1203(14, 14, 0, 1);
++        be.table["M"]   = AxisOther(2, "MN200", true);
++        be.table["NUL"] = AxisOther(9, "MN200", false);
++        be.golden[20] = g; be.golden[21] = g; be.golden[22] = gOff; be.golden[14] = gIx; be.golden[2] = g; be.golden[7] = gSrc;
++        be.opened.assign(6, true);
++        for (int ax = 0; ax < 6; ++ax) { be.cmdPos[ax] = 0.0; be.state[ax] = 1; }
++
++        // ---- selectMotor (golden lM00Click :734-760) ----
++        MotorAccessReq lq = ReqStart("uMotorTest", "loopMove", "B", true); lq.num["pos1"] = 100; lq.num["pos2"] = 200;
++        lq.flag["confirmNotHomed"] = true;                                      // B's HomeFlag drops to 0 once it is homed below
++        CHECK(MotorAccessDispatch(lq, 1, be).ok && MotorAccessJobs().loopActive, "setup: a loop on B");
++        std::size_t x0 = be.executed.size();
++        MotorAccessOutcome o = MotorAccessDispatch(Req("uMotorTest", "selectMotor", "OFF"), 1, be);
++        CHECK(!o.ok && Has(o.ackJson, "Enable=0") && Has(o.ackJson, "740-743") && MotorAccessJobs().loopActive &&
++              be.executed.size() == x0 && be.speedCalls.empty() && MotorAccessJobs().selectedMotor.empty(),
++              "select an Enable=0 motor -> refused with golden's reason BEFORE anything: the loop runs on, nothing sent, nothing selected");
++        o = MotorAccessDispatch(Req("uMotorTest", "selectMotor", "A"), 31, be);
++        bool selOk = o.ok && !MotorAccessJobs().loopActive && MotorAccessJobs().selectedMotor == "A" && be.executed.size() == x0 + 4;
++        for (int i = 0; selOk && i < 4; ++i)
++            selOk = be.executed[x0 + i].kind == kCmdAxSetSpeed && be.executed[x0 + i].axis == 3 && be.executed[x0 + i].wireId == 31;
++        selOk = selOk && be.executed[x0].speed == kSpeedInit && be.executed[x0].value == 5.0 &&
++                be.executed[x0 + 1].speed == kSpeedRun && be.executed[x0 + 1].value == 100.0 &&
++                be.executed[x0 + 2].speed == kSpeedAcc && be.executed[x0 + 2].value == 1000.0 && be.executed[x0 + 3].speed == kSpeedDec;
++        CHECK(selOk, "select A -> the loop goes up WITHOUT a stop (golden :744), golden SetSpeed(1) = the 4 PTP values at 1% (velLow 5, velHigh 100)");
++        CHECK(be.speedCalls.size() == 1 && be.speedCalls[0].mi == 20 && be.speedCalls[0].pct == 1 && !be.speedCalls[0].jog,
++              "select A -> MOT[20].SetSpeed(1) on the golden object too (its iSpeed = ReadSpeed / lblRealSpeed)");
++        CHECK(Has(o.ackJson, "\"selectedMotor\":\"A\"") && Has(o.ackJson, "\"previousMotor\":null") && Has(o.ackJson, "\"cardSpeedSent\":true") &&
++              Has(o.ackJson, "\"rate\":100") && Has(o.ackJson, "\"range\":100") && Has(o.ackJson, "\"readSpeed\":100") && AckShapeOk(o.ackJson, 7),
++              "select ack: A selected, card speed sent, cur = rate/range (golden edtMotorRate/edtMotorRange :757-758), readSpeed = s of SetSpeed(1) = 100");
++        be.ready = false; be.notReadyWhy = "no SDK";
++        x0 = be.executed.size();
++        o = MotorAccessDispatch(Req("uMotorTest", "selectMotor", "B"), 1, be);
++        CHECK(o.ok && be.executed.size() == x0 && Has(o.ackJson, "\"cardSpeedSent\":false") && Has(o.ackJson, "no SDK") &&
++              Has(o.ackJson, "\"previousMotor\":\"A\"") && MotorAccessJobs().selectedMotor == "B",
++              "1203 control missing -> still selected (a screen action), the card speed is not sent and the ack says why");
++        be.ready = true;
++        CHECK(!MotorAccessDispatch(Req("uMotorTest", "selectMotor", "NUL"), 1, be).ok, "no golden object -> refused (golden would dereference NULL)");
++        CHECK(!MotorAccessDispatch(Req("uteach", "selectMotor", "A"), 1, be).ok, "selectMotor from uteach -> refused (a uMotorTest screen action)");
++        CHECK(!MotorAccessDispatch(Req("uMotorTest", "selectMotor", 0), 1, be).ok, "selectMotor without a motor -> refused");
++        x0 = be.executed.size();
++        o = MotorAccessDispatch(Req("uMotorTest", "selectMotor", "IX"), 1, be);
++        CHECK(o.ok && be.executed.size() == x0 && Has(o.ackJson, "\"cardSpeedSent\":false"), "Index axis -> golden SetSpeed sets nothing: selected, nothing sent");
++        o = MotorAccessDispatch(Req("uMotorTest", "selectMotor", "M"), 1, be);
++        CHECK(o.ok && be.speedCalls.back().mi == 2 && be.speedCalls.back().pct == 1 && Has(o.ackJson, "\"layer\":\"MOT\""),
++              "non-1203 -> golden MOT[2].SetSpeed(1) (its only path)");
++
++        // ---- setSpeed (scroll bar :791-810 / edtSpeed :1587-1603) and the jog speed source (user ruling: Jog = golden) ----
++        MotorAccessDispatch(Req("uMotorTest", "selectMotor", "A"), 1, be);
++        x0 = be.executed.size();
++        MotorAccessReq sq = Req("uMotorTest", "setSpeed", "A"); sq.num["pct"] = 50; sq.flag["jog"] = true;
++        o = MotorAccessDispatch(sq, 41, be);
++        bool ssOk = o.ok && be.executed.size() == x0 + 8;
++        const Pci1203SpeedParam order8[8] = { kSpeedInit, kSpeedRun, kSpeedAcc, kSpeedDec, kSpeedJogInit, kSpeedJogRun, kSpeedJogAcc, kSpeedJogDec };
++        for (int i = 0; ssOk && i < 8; ++i)
++            ssOk = be.executed[x0 + i].kind == kCmdAxSetSpeed && be.executed[x0 + i].speed == order8[i] && be.executed[x0 + i].wireId == 41;
++        ssOk = ssOk && be.executed[x0].value == 250.0 && be.executed[x0 + 1].value == 5000.0 &&
++               be.executed[x0 + 4].value == 250.0 && be.executed[x0 + 5].value == 5000.0;
++        CHECK(ssOk, "scroll bar 50 (jog=true) -> golden SetSpeed(50, true): 4 PTP + 4 CFG_AxJog* at 50% (velLow 500*0.5=250, velHigh 5000)");
++        CHECK(be.speedCalls.back().mi == 20 && be.speedCalls.back().pct == 50 && !be.speedCalls.back().jog &&
++              Has(o.ackJson, "\"jogPct\":50") && Has(o.ackJson, "\"readSpeed\":5000"),
++              "the golden object mirrored with SetSpeed(50) (an unopened 1203 object: memory only); ack readSpeed 5000");
++        MotorAccessReq jq = Req("uMotorTest", "jogP", "A"); jq.button = "sbMotorTest_JogP"; jq.num["speed"] = 5;
++        MotorAccessReq jr = Req("uMotorTest", "stop", "A"); jr.button = "sbMotorTest_JogP";
++        x0 = be.executed.size();
++        o = MotorAccessDispatch(jq, 1, be);
++        CHECK(o.ok && be.executed.size() == x0 + 5 && be.executed[x0].speed == kSpeedJogInit && be.executed[x0].value == 250.0 &&
++              be.executed[x0 + 1].value == 5000.0 && be.executed[x0 + 4].kind == kCmdAxJogStart,
++              "jog after the scroll bar went to 50 -> the jog family at 50% (edtSpeed 5 ignored -- golden JogP drops it)");
++        MotorAccessDispatch(jr, 1, be);
++        MotorAccessReq eq = Req("uMotorTest", "setSpeed", "A"); eq.num["pct"] = 30; eq.flag["jog"] = false;
++        x0 = be.executed.size();
++        o = MotorAccessDispatch(eq, 1, be);
++        CHECK(o.ok && be.executed.size() == x0 + 4 && be.executed[x0].speed == kSpeedInit && be.executed[x0].value == 150.0 &&
++              be.executed[x0 + 1].value == 3000.0 && be.executed[x0 + 3].speed == kSpeedDec && Has(o.ackJson, "\"jogPct\":50"),
++              "edtSpeed 30 (jog=false) -> golden SetSpeed(30): the 4 PTP values only (velLow 150, velHigh 3000); the jog stays at 50");
++        x0 = be.executed.size();
++        MotorAccessDispatch(jq, 1, be);
++        CHECK(be.executed.size() == x0 + 5 && be.executed[x0 + 1].value == 5000.0, "jog after edtSpeed 30 -> still the scroll bar's 50%");
++        MotorAccessDispatch(jr, 1, be);
++        MotorAccessDispatch(Req("uMotorTest", "selectMotor", "A"), 1, be);      // golden :755 scrlbrMotorSpeed->Position=1
++        x0 = be.executed.size();
++        MotorAccessDispatch(jq, 1, be);
++        CHECK(be.executed.size() == x0 + 5 && be.executed[x0 + 1].value == 100.0, "selected again -> the jog is back at 1% (golden: the bar goes to 1)");
++        MotorAccessDispatch(jr, 1, be);
++        MotorAccessReq bad = sq; bad.num["pct"] = 0;
++        CHECK(!MotorAccessDispatch(bad, 1, be).ok, "pct 0 -> refused (scroll bar Min=1)");
++        bad.num["pct"] = 101;  CHECK(!MotorAccessDispatch(bad, 1, be).ok, "pct 101 -> refused (Max=100)");
++        bad.num["pct"] = 50.5; CHECK(!MotorAccessDispatch(bad, 1, be).ok, "pct 50.5 -> refused (integer positions)");
++        bad = sq; bad.flag.erase("jog"); CHECK(!MotorAccessDispatch(bad, 1, be).ok, "setSpeed without jog -> refused");
++        MotorAccessReq ixq = Req("uMotorTest", "setSpeed", "IX"); ixq.num["pct"] = 40; ixq.flag["jog"] = true;
++        x0 = be.executed.size();
++        const std::size_t sc0 = be.speedCalls.size();
++        o = MotorAccessDispatch(ixq, 1, be);
++        CHECK(o.ok && Has(o.ackJson, "\"result\":\"ignored\"") && Has(o.ackJson, "Index") && be.executed.size() == x0 && be.speedCalls.size() == sc0,
++              "Index axis -> golden TMyMotor::SetSpeed is empty for it: ignored, nothing sent, the ack says so");
++        MotorAccessReq mq = Req("uMotorTest", "setSpeed", "M"); mq.num["pct"] = 60; mq.flag["jog"] = true;
++        o = MotorAccessDispatch(mq, 1, be);
++        CHECK(o.ok && be.speedCalls.size() == sc0 + 2 && be.speedCalls[sc0].mi == 2 && be.speedCalls[sc0].pct == 60 && be.speedCalls[sc0].jog &&
++              !be.speedCalls[sc0 + 1].jog && be.executed.size() == x0,
++              "non-1203 scroll bar -> golden MOT.SetSpeed(60, true), then edtSpeedChange's SetSpeed(60); no 1203 command");
++        MotorAccessReq mj = Req("uMotorTest", "jogN", "M"); mj.button = "sbMotorTest_JogN"; mj.num["speed"] = 5;
++        be.readPos[2] = 0;
++        o = MotorAccessDispatch(mj, 1, be);
++        CHECK(o.ok && be.jogs.back().mi == 2 && be.jogs.back().pct == 60, "non-1203 jog -> at the scroll bar's 60 (golden)");
++        { MotorAccessReq rel = Req("uMotorTest", "stop", "M"); rel.button = "sbMotorTest_JogN"; MotorAccessDispatch(rel, 1, be); }
++        MotorAccessDispatch(ReqStart("uMotorTest", "home", "B", true), 1, be);
++        CHECK(MotorAccessJobs().homesActive == 1, "setup: HOME running on B");
++        x0 = be.executed.size();
++        o = MotorAccessDispatch(sq, 1, be);
++        CHECK(o.ok && Has(o.ackJson, "\"result\":\"ignored\"") && Has(o.ackJson, "bSingleHome") && be.executed.size() == x0,
++              "scroll bar while HOME runs -> golden :796 `if(bSingleHome==true) return;`: nothing sent");
++        o = MotorAccessDispatch(eq, 1, be);
++        CHECK(o.ok && be.executed.size() == x0 + 4, "edtSpeed while HOME runs -> set (golden edtSpeedChange has no bSingleHome check)");
++        MotorAccessDispatch(Req("uMotorTest", "stop", 0), 1, be);
++
++        // ---- setParamCell (golden strngrdMotorSelectCell :1176-1222) ----
++        MotorAccessDispatch(Req("uMotorTest", "selectMotor", "A"), 1, be);
++        be.golden[20].homeFlag = 1; be.homeFlags.erase(20);
++        CHECK(MotorAccessDispatch(lq, 1, be).ok && MotorAccessJobs().loopActive, "setup: a loop on B again");
++        x0 = be.executed.size();
++        MotorAccessReq pc = Req("uMotorTest", "setParamCell", "A"); pc.num["row"] = 2; pc.num["value"] = 7000;
++        o = MotorAccessDispatch(pc, 1, be);
++        CHECK(o.ok && be.cells.size() == 1 && be.cells[0].mi == 20 && be.cells[0].row == 2 && be.cells[0].v == 7000.0 &&
++              Has(o.ackJson, "\"jogHigh\":7000") && be.executed.size() == x0 && AckShapeOk(o.ackJson, 7),
++              "row 2 = 7000 -> golden PJogHighSpeed=ret (memory only, no card), the ack's cur shows what C++ now holds");
++        CHECK(!MotorAccessJobs().loopActive && be.homeFlags.count(20) && be.homeFlags[20] == 0,
++              "golden SelectCell :1219-1220 -> LoopMove up (no stop) and HomeFlag=0");
++        pc.num["row"] = 3; pc.num["value"] = 12.7;
++        MotorAccessDispatch(pc, 1, be);
++        CHECK(be.cells.back().row == 3 && be.cells.back().v == 12.0, "an integer row takes golden atoi: 12.7 -> 12");
++        pc.num["value"] = -12.7;
++        MotorAccessDispatch(pc, 1, be);
++        CHECK(be.cells.back().v == -12.0, "atoi truncates toward zero: -12.7 -> -12");
++        pc.num["row"] = 8; pc.num["value"] = 1234.5;
++        o = MotorAccessDispatch(pc, 1, be);
++        CHECK(be.cells.back().row == 8 && be.cells.back().v == 1234.5 && Has(o.ackJson, "\"acc\":1234.5"),
++              "row 8 (Acc) takes golden atof: SetAccDataBase(1234.5), the ack's cur acc = ReadAcc() = 1234.5");
++        pc.num["row"] = 10; pc.num["value"] = 5000;
++        o = MotorAccessDispatch(pc, 1, be);
++        CHECK(be.cells.back().row == 10 && Has(o.ackJson, "\"range\":1000"),
++              "row 10 (Range) -> SetRange; the ack reads back what the object kept (the fake caps at 1000 like TMyEtherCatMotor::SetRange)");
++        const std::size_t nc = be.cells.size();
++        pc.num["row"] = 0;   CHECK(!MotorAccessDispatch(pc, 1, be).ok, "row 0 (the header) -> refused (golden `ARow==0 -> return`)");
++        pc.num["row"] = 11;  CHECK(!MotorAccessDispatch(pc, 1, be).ok, "row 11 -> refused (the grid has rows 1..10)");
++        pc.num["row"] = 2.5; CHECK(!MotorAccessDispatch(pc, 1, be).ok, "row 2.5 -> refused");
++        pc.num["row"] = 2; pc.num.erase("value"); CHECK(!MotorAccessDispatch(pc, 1, be).ok, "no value -> refused");
++        pc.num["value"] = 3e10; CHECK(!MotorAccessDispatch(pc, 1, be).ok, "a value outside int for an integer row -> refused");
++        CHECK(be.cells.size() == nc, "the refusals wrote nothing");
++        MotorAccessReq po = Req("uMotorTest", "setParamCell", "OFF"); po.num["row"] = 2; po.num["value"] = 1;
++        CHECK(!MotorAccessDispatch(po, 1, be).ok && be.cells.size() == nc, "an unselectable motor -> refused");
++
++        // ---- copyFrom (golden BitBtn1Click :1384-1401) ----
++        CHECK(MotorAccessDispatch(lq, 1, be).ok && MotorAccessJobs().loopActive, "setup: a loop on B again");
++        be.homeFlags.erase(20);
++        MotorAccessReq cq = Req("uMotorTest", "copyFrom", "A"); cq.num["source"] = 7;
++        const std::size_t np = be.params.size();
++        o = MotorAccessDispatch(cq, 1, be);
++        bool cpOk = o.ok && be.params.size() == np + 6;
++        const MotorParamWhich wh[6] = { kParamJogHigh, kParamJogLow, kParamHomeHigh, kParamHomeLow, kParamSoftP, kParamSoftN };
++        const int want[6] = { 12000, 120, 3000, 300, 500000, -1000 };
++        for (int i = 0; cpOk && i < 6; ++i) cpOk = be.params[np + i].mi == 20 && be.params[np + i].which == wh[i] && be.params[np + i].value == want[i];
++        CHECK(cpOk, "copyFrom M07 -> A: PJogHigh/PJogLow/PHomeHigh/PHomeLow/PSoftLimitP/PSoftLimitN = MOT[7]'s, in golden's order");
++        CHECK(MotorAccessJobs().loopActive && be.homeFlags.count(20) == 0 && Has(o.ackJson, "\"softP\":500000") && Has(o.ackJson, "\"source\":7"),
++              "copyFrom leaves HomeFlag and LoopMove alone (golden), the ack's cur shows the copied values");
++        cq.num["source"] = 25;
++        o = MotorAccessDispatch(cq, 1, be);
++        CHECK(!o.ok && Has(o.ackJson, "Source>24") && be.params.size() == np + 6, "source 25 -> refused, golden `Source>24 -> return` (M108 parses to 10, so M25+ can never be a source)");
++        cq.num["source"] = -1;  CHECK(!MotorAccessDispatch(cq, 1, be).ok, "source -1 -> refused (golden Source<0)");
++        cq.num["source"] = 10;
++        o = MotorAccessDispatch(cq, 1, be);
++        CHECK(!o.ok && Has(o.ackJson, "NULL") && be.params.size() == np + 6, "a source whose MOT[].Motor is NULL -> refused, nothing copied");
++        MotorAccessDispatch(Req("uMotorTest", "stop", 0), 1, be);
++
++        // ---- the alarm rule (golden UpdateMotorLed :644-652) ----
++        MotorAccessResetJobs();
++        MotorAccessDispatch(Req("uMotorTest", "selectMotor", "A"), 1, be);
++        be.golden[20].homeFlag = 1; be.homeFlags.erase(20);
++        be.motionIO[3] = 0x00004000ul;                                          // SVON only
++        MotorAccessOnAlarm(be, "JAM0101");
++        CHECK(be.homeFlags.count(20) == 0, "alarm while the selected motor's alarm lamp is off -> its HomeFlag is left alone");
++        be.motionIO[3] = 0x00004002ul;                                          // + ALM
++        std::size_t s0 = be.stopMotor.size();
++        MotorAccessOnAlarm(be, "JAM0102");
++        CHECK(be.homeFlags.count(20) && be.homeFlags[20] == 0 && Has(MotorAccessJobs().lastNote, "UpdateMotorLed") && be.stopMotor.size() == s0,
++              "alarm + the selected 1203 motor's ALM lamp -> HomeFlag=0 (golden UpdateMotorLed); its stop is the 1203 stop-all (DecStop)");
++        be.motionIO.erase(3); be.state[3] = 3; be.homeFlags.erase(20);
++        MotorAccessOnAlarm(be, "JAM0103");
++        CHECK(be.homeFlags.count(20) && be.homeFlags[20] == 0, "ERROR_STOP lights the alarm lamp too (golden ScanMotorStatus)");
++        be.state[3] = 1;
++        MotorAccessDispatch(Req("uMotorTest", "selectMotor", "M"), 1, be);
++        be.alarmLed[2] = true; be.homeFlags.erase(2); s0 = be.stopMotor.size();
++        be.ready = false;
++        MotorAccessOnAlarm(be, "JAM0104");
++        CHECK(be.homeFlags.count(2) && be.homeFlags[2] == 0 && be.stopMotor.size() == s0 + 1 && be.stopMotor.back() == 2,
++              "non-1203 selected motor with its alarm lamp on -> golden PCIL132_StopMotor + HomeFlag=0, even with no 1203 control");
++        be.ready = true;
++        MotorAccessResetJobs();
++        be.homeFlags.clear();
++        MotorAccessOnAlarm(be, "JAM0105");
++        CHECK(be.homeFlags.empty(), "nothing selected -> the rule does nothing");
++
++        // ---- LastHomePos (golden EtherCatMotHome case 20 `LastHomePos=-ReadPos();`) ----
++        be.driveKind = 1;
++        be.state[4] = 1; be.cmdPos[4] = 4.0;
++        MotorAccessDispatch(ReqStart("uMotorTest", "home", "B", true), 1, be);
++        be.state[4] = 4; MotorAccessTick(be, 500);
++        be.state[4] = 1; MotorAccessTick(be, 500);
++        CHECK(be.homeFlags[21] == 1 && be.lastHome.count(21) && be.lastHome[21] == -10,
++              "DS402 home done -> LastHomePos = -ReadPos() = -(int)(4 x 2.5) = -10 (golden formula; the drive defined the origin)");
++        be.driveKind = 0;
++        be.cmdPos[3] = 400.9;
++        MotorAccessDispatch(ReqStart("uMotorTest", "home", "A", true), 1, be);
++        be.state[3] = 4; MotorAccessTick(be, 500);
++        be.state[3] = 1; MotorAccessTick(be, 500);
++        const std::size_t z0 = be.executed.size();
++        MotorAccessTick(be, 500);
++        CHECK(be.lastHome.count(20) && be.lastHome[20] == -1000 && be.lastHomeAtExecuted == z0 &&
++              be.executed.size() == z0 + 2 && be.executed[z0].kind == kCmdAxSetCmdPos,
++              "card-side home -> LastHomePos = -(int)((int)400.9 x 2.5) = -1000, taken BEFORE SetCommand(0)/SetPosition(0)");
++        o = MotorAccessDispatch(Req("uMotorTest", "selectMotor", "A"), 1, be);
++        CHECK(Has(o.ackJson, "\"lastHomePos\":-1000"), "the ack's cur carries LastHomePos (golden edtHomeOffset :965)");
++        be.driveKind = 1;
++        be.golden[21].direction = true; be.lastHome.erase(21);
++        MotorAccessDispatch(ReqStart("uMotorTest", "home", "B", true), 1, be);
++        be.state[4] = 4; MotorAccessTick(be, 500);
++        be.state[4] = 1; MotorAccessTick(be, 500);
++        CHECK(be.homeFlags[21] == 1 && be.lastHome.count(21) == 0, "Direction=1 axis -> no LastHomePos (its positions are withheld, §0 #5)");
++        be.golden[21].direction = false;
++
++        // ---- loop timing (golden DoLoopMove :393-610 with TQPF_Timer), a fake QPC clock ----
++        MotorAccessResetJobs();
++        be.clockMs = 0.0;
++        be.golden[20].homeFlag = 1;
++        be.state[3] = 1; be.cmdPos[3] = 0.0;
++        MotorAccessReq tl = ReqStart("uMotorTest", "loopMove", "A", true);
++        tl.num["pos1"] = 1000; tl.num["pos2"] = 500; tl.num["waitTime"] = 0;
++        MotorAccessReq off = tl; off.flag["start"] = false;
++        CHECK(MotorAccessDispatch(tl, 1, be).ok, "setup: a timed loop on A (homed)");
++        MotorAccessJobState js = MotorAccessJobs();
++        CHECK(js.hasAvgTime && js.avgTime == 0.0 && !js.hasJogPTime && !js.hasJogNTime,
++              "homed start -> lblAvgTime=0 (golden :1334); lblJogPTime / lblJogNTime never measured yet");
++        MotorAccessPollTick(be);
++        CHECK(be.executed.back().kind == kCmdAxMoveAbs && be.executed.back().value == 400.0, "t=0 post-Poll tick -> leg 1 issued (pos1 1000 -> card 400), latched");
++        be.clockMs = 200.0; be.state[3] = 5; MotorAccessPollTick(be);
++        CHECK(MotorAccessJobs().loopTask == 1 && !MotorAccessJobs().hasJogPTime, "t=200 still moving");
++        be.clockMs = 1234.6; be.state[3] = 1; be.cmdPos[3] = 400.0; MotorAccessPollTick(be);
++        js = MotorAccessJobs();
++        CHECK(js.hasJogPTime && js.jogPTime == 1234 && js.loopTask == 50 && js.loopCount == 0,
++              "t=1234.6 arrival at pos1 on the fresh sample -> lblJogPTime = (int)(float)1234.6 = 1234 ms; count still 0");
++        be.clockMs = 1300.0; MotorAccessPollTick(be);
++        CHECK(be.executed.back().kind == kCmdAxMoveAbs && be.executed.back().value == 200.0, "t=1300 leg 2 issued (pos2 500 -> card 200)");
++        be.clockMs = 2100.9; be.cmdPos[3] = 200.0; MotorAccessPollTick(be);
++        js = MotorAccessJobs();
++        CHECK(js.hasJogNTime && js.jogNTime == 800 && js.loopCount == 1 && js.hasAvgTime && js.avgTime == 800.0 && js.jogPTime == 1234,
++              "t=2100.9 pos2 -> lblJogNTime 800, dwLoopCount 1, Average 800 -> lblAvgTime 800");
++        be.clockMs = 2200.0; MotorAccessPollTick(be);
++        be.clockMs = 3200.0; be.cmdPos[3] = 400.0; MotorAccessPollTick(be);
++        be.clockMs = 3300.0; MotorAccessPollTick(be);
++        be.clockMs = 4500.0; be.cmdPos[3] = 200.0; MotorAccessPollTick(be);
++        js = MotorAccessJobs();
++        CHECK(js.jogPTime == 1000 && js.jogNTime == 1200 && js.loopCount == 2 && js.avgTime == 1000.0,
++              "2nd cycle: lblJogPTime 1000, lblJogNTime 1200, lblAvgTime (800+1200)/2 = 1000 -- the pos1 legs are NOT averaged (golden :560)");
++        be.clockMs = 4600.0; MotorAccessTick(be, 500);
++        CHECK(be.executed.back().kind == kCmdAxMoveAbs && be.executed.back().value == 400.0, "the 500 ms beat steps the same job on the same clock (leg 1, latched at 4600)");
++        be.clockMs = 5000.0;
++        MotorAccessDispatch(off, 1, be);
++        CHECK(!MotorAccessJobs().loopActive && MotorAccessJobs().jogPTime == 1000 && MotorAccessJobs().avgTime == 1000.0,
++              "stopped mid-leg: the labels keep their values (golden captions)");
++        be.clockMs = 6000.0;
++        MotorAccessDispatch(tl, 1, be);
++        js = MotorAccessJobs();
++        CHECK(js.loopActive && js.loopCount == 0 && js.avgTime == 0.0 && js.jogNTime == 1200,
++              "homed restart -> dwLoopCount 0, Average / lblAvgTime 0; lblJogNTime keeps 1200 (golden never clears it)");
++        MotorAccessPollTick(be);
++        be.clockMs = 6500.0; be.cmdPos[3] = 400.0; MotorAccessPollTick(be);
++        CHECK(MotorAccessJobs().jogPTime == 1900,
++              "golden quirk kept: after a mid-leg stop the next first leg is timed from the OLD latch (`static bool flag`): 6500-4600 = 1900, not 500");
++        be.clockMs = 7000.0; MotorAccessPollTick(be);
++        be.clockMs = 7400.0; be.cmdPos[3] = 200.0; MotorAccessPollTick(be);
++        CHECK(MotorAccessJobs().avgTime == 400.0 && MotorAccessJobs().loopCount == 1, "after the restart: Average 400 -> lblAvgTime 400");
++        MotorAccessDispatch(off, 1, be);
++        be.golden[20].homeFlag = 0;
++        MotorAccessReq nh = tl; nh.flag["confirmNotHomed"] = true;
++        MotorAccessDispatch(nh, 1, be);
++        js = MotorAccessJobs();
++        CHECK(js.loopActive && js.loopCount == 0 && js.avgTime == 400.0,
++              "not-homed start (confirmed) -> dwLoopCount 0, but Average / lblAvgTime kept (golden resets them on the homed branch only)");
++        be.clockMs = 8000.0; MotorAccessPollTick(be);
++        be.clockMs = 8100.0; be.cmdPos[3] = 400.0; MotorAccessPollTick(be);
++        be.clockMs = 8200.0; MotorAccessPollTick(be);
++        be.clockMs = 8800.0; be.cmdPos[3] = 200.0; MotorAccessPollTick(be);
++        CHECK(MotorAccessJobs().loopCount == 1 && MotorAccessJobs().jogNTime == 600 && MotorAccessJobs().avgTime == 1000.0,
++              "golden quirk kept: the kept Average 400 + this leg 600 over the new count 1 = 1000");
++        MotorAccessDispatch(off, 1, be);
++        be.golden[20].homeFlag = 1;
++        MotorAccessReq wl = tl; wl.num["waitTime"] = 5;                          // golden Set0_1SecAndOn(5) = 0.5 s
++        be.clockMs = 10000.0; be.cmdPos[3] = 0.0;
++        MotorAccessDispatch(wl, 1, be);
++        MotorAccessPollTick(be);
++        be.clockMs = 10300.0; be.cmdPos[3] = 400.0; MotorAccessPollTick(be);
++        CHECK(MotorAccessJobs().loopTask == 10, "arrival with waitTime 5 -> waiting (golden LoopWait)");
++        be.clockMs = 10700.0; MotorAccessPollTick(be);
++        CHECK(MotorAccessJobs().loopTask == 10, "t+400 ms: still waiting");
++        be.clockMs = 10800.0; MotorAccessPollTick(be);
++        CHECK(MotorAccessJobs().loopTask == 50, "t+500 ms: the wait is over on the clock (not rounded to 500 ms beats)");
++        MotorAccessDispatch(off, 1, be);
++        be.moveRet = 0;
++        be.golden[2].homeFlag = 1;                                              // the alarm rule above cleared it
++        MotorAccessReq ml = ReqStart("uMotorTest", "loopMove", "M", true); ml.num["pos1"] = 10; ml.num["pos2"] = 20; ml.num["waitTime"] = 0;
++        CHECK(MotorAccessDispatch(ml, 1, be).ok, "setup: a golden-object loop on M");
++        const std::size_t nm = be.moves.size();
++        MotorAccessPollTick(be);
++        CHECK(be.moves.size() == nm, "a non-1203 (golden object) loop is not stepped by the post-Poll tick");
++        MotorAccessTick(be, 500);
++        CHECK(be.moves.size() == nm + 1, "... the beat steps it (golden MotorMove polled), as before");
++        be.clockMs = -1.0;
+         MotorAccessResetJobs();
+     }
+ 
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 7ef56ba..4fab9e4 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -4145,7 +4145,7 @@ int main(int argc, char** argv)
+                 //   卡住時要讓看門狗報成 "1203 Poll" 而不是 "tick"（否則看起來像 PumpTick／MainProc 卡住）。
+                 //   Poll 之後改回 "tick"，後面 drain／發布卡住時的報法與改動前相同。
+                 WdMark("1203 Poll");
+-                { extern void W906_IoTiming(int); W906_IoTiming(3); mon->Poll(); W906_IoTiming(4); }   // AI(W906-IOWEB-P21) 20260925: phase mark for the click-latency log
++                { extern void W906_IoTiming(int); W906_IoTiming(3); mon->Poll(); W906_IoTiming(4); }  { extern void W906_MotorAccessPollTick(); W906_MotorAccessPollTick(); }   // AI(W906-IOWEB-P21) 20260925: phase mark for the click-latency log  //AI(W906-MT-E2) 20260925: right after Poll -- a 1203 LoopMove sees its arrival on the fresh sample (golden leg times), the Motor Test copy is refreshed (WebMotorAccessLive.cpp). Same line, so no line below moves
+                 WdMark("tick");
+                 ioPolled = wasOpen || mon->card().open;  g_apiCacheDirty = true;   // AI(W906-IOWEB-P6) 20260924: right after Poll(), same thread  // AI(W906-IOWEB-P25) 20260925: was rebuilt HERE, before the drain, so every click queued during the Poll also waited 20-160 ms for four JSON strings; now marked, rebuilt after the drain
+             }
+-- 
+2.55.0.windows.5
+

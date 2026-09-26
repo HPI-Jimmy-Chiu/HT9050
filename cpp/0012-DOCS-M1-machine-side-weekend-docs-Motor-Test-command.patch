@@ -1,0 +1,1518 @@
+From 64237464d7a0004c6fc188231610125a375ac263 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 26 Sep 2026 09:18:37 +0800
+Subject: [PATCH 12/14] DOCS-M1: machine-side weekend docs -- Motor Test
+ command table, gates opened on this machine, engine->1203 motor route design
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Three new documents, no code (none of the laptop-owned progress docs is touched, so the next package merges cleanly):
+- docs/MT_COMMAND_TABLE_machine.md: the machine's version of the W4 command table at C++ 7961939 / web a5454b9 -- 48 commands /
+  37 actions, each with page source, C++ handler, layer (1203 / MOT / ui / refused), golden line, ctest coverage and what is still
+  to verify on the machine; what each button does on this machine (8 buttons move a motor), the safety behaviours now active, and
+  a risk-ordered on-machine checklist. Does not replace W4_PROGRESS.md.
+- docs/MACHINE_GATES_OPENED_20260926.md: the W2 premise re-check record for the 19 gates opened in 0d253a0 (MT-E3b) and
+  8929d13 (MT-FIX1b), done after the fact with nm on build_integ_ship_x86 objects; g2 G03 premise re-checked (stale; the laptop
+  opened it in eed5033b); 10 still-closed candidates whose dependency now exists (h4-G4 among them, opened by the laptop 760c13d2).
+- docs/ENGINE_1203_MOTOR_ROUTE_DESIGN.md: design for EastSun ruling 20260926 "甲" -- the engine's TMyEtherCatMotor (#else arm,
+  ht9045_motor has no HAVE_PCI1203) reaches the card through TPci1203Control::Execute on the monitor's handle, like
+  Pci1203IoRoute. Read-only draft; an adversarial critique found 5 high issues (setting writes counted as motion, MotorType vs
+  motorClass numbering, no START_RING precondition, stop de-duplication, HOME energize+home in one tick) -- they are to be fixed
+  in the implementation, together with EastSun's rulings of 20260926 (INDEX_MOTION_CARD effective 1 when the table puts MTestZ1
+  on the 1203; DS402 coordinate writes refused; StopAllMotor stops every 1203 axis; EMG release re-energizes per golden but clears
+  only the axis' own alarm; soft limits stay +-999999).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ docs/ENGINE_1203_MOTOR_ROUTE_DESIGN.md | 486 ++++++++++++++++++++++
+ docs/MACHINE_GATES_OPENED_20260926.md  | 549 +++++++++++++++++++++++++
+ docs/MT_COMMAND_TABLE_machine.md       | 427 +++++++++++++++++++
+ 3 files changed, 1462 insertions(+)
+ create mode 100644 docs/ENGINE_1203_MOTOR_ROUTE_DESIGN.md
+ create mode 100644 docs/MACHINE_GATES_OPENED_20260926.md
+ create mode 100644 docs/MT_COMMAND_TABLE_machine.md
+
+diff --git a/docs/ENGINE_1203_MOTOR_ROUTE_DESIGN.md b/docs/ENGINE_1203_MOTOR_ROUTE_DESIGN.md
+new file mode 100644
+index 0000000..97b6257
+--- /dev/null
++++ b/docs/ENGINE_1203_MOTOR_ROUTE_DESIGN.md
+@@ -0,0 +1,486 @@
++# 引擎馬達走 1203 控制層（EastSun 裁決「甲」）—— 設計
++
++> AI(W906-ECAT-ROUTE) 20260926：**唯讀設計**，本檔是這次唯一新增的檔案。沒有改程式、沒有建置、沒有跑 ctest、
++> 沒有啟動 wb_serve／ioweb_probe／pci1203_linkprobe、沒有碰卡。golden（Big5）只讀。
++> 行號量於分支 `integ/ioweb-8484bdb4`、HEAD `7961939`＋未 commit 的 ONSITE-1（`EtherCAT/Pci1203Monitor.*` 等）。
++> **行號會漂，要用就重量，不要抄。**
++> 機台檔（唯讀）：`D:\HT9045\system\Mot_Table.csv`（09-25 16:30:17）。
++
++---
++
++## 0. 先講結論
++
++1. **做法照 IO 路由的樣子**（`EtherCAT/Pci1203IoRoute.cpp`、`IOBackend.cpp:169-176`、`IOBackend.h:203-211`）：
++   * `ht9045_motor` **仍然不帶** `HAVE_PCI1203`（`CMakeLists.txt:3034-3046` 的姿態不變），所以 `Motor/myEthercatmotor.cpp`
++     仍走 `#else` 臂；
++   * `#else` 臂改成去問一個**可安裝的路由**（新標頭 `Motor/EcatMotorRoute.h`，函式指標，不 include 任何 EtherCAT 標頭）；
++   * 路由的本體在 wb_serve 裡（新檔 `EtherCAT/Pci1203MotorRoute.cpp`，跟 `Pci1203IoRoute.cpp` 同一行進 wb_serve 的來源清單）：
++     **讀**＝監看器的樣本（`Pci1203AxisSample`），**寫**＝`TPci1203Control::Execute`（監看器的 device／axis handle）。
++   * **不開第二個軸、不開卡、不關卡**：`Open_Axis` 的 `#else` 只「認領」監看器已經開好的 (站, 站內軸)；`Close_Card` 的 `#else` 維持什麼都不做。
++2. **沒裝路由＝今天的行為一個位元都不變**（每個 ctest、SIM 建置、沒有 `WB_ENGINE_MOTOR_1203` 的建置）。這是保住測試基準的關鍵，
++   與 `IOBackend.h:197-199` 同一個論點。§7.5 逐行列出每一處在「沒有路由」時為什麼等於今天。
++3. **單位與方向不用路由自己換算**：路由坐在 golden 換算（`TMyMotor::GetRealPos` `Motor/mymotor.cpp:1381-1415`、
++   `TMyEtherCatMotor::ReadPos` `Motor/myEthercatmotor.cpp:1110-1113`、`TMyMotor::SetSpeed` `Motor/mymotor.cpp:320-353`）**底下**，
++   收到的就是 `HAVE_PCI1203` 臂要交給 `Acm_*` 的同一組數字，逐一轉成 `Pci1203Cmd`。
++   WebMotorAccess 的 `MotorUserToCard`／`MotorCardToUser`／`MotorSpeedFromPct`／`MotorRateFromGolden`
++   （`WebMotorAccess.cpp:2974-3014`、`:2840-2857`）就是這幾段 golden 的複本 —— 在這個設計裡它們變成**測試用的對照答案**（§7.4）。
++4. **回原點照 EastSun**：DS402 驅動器 `Acm_AxHome(124/128, ±1)`、**回原點後不歸零**；非 DS402 驅動器才走 golden 的卡片式
++   `Acm_AxMoveHome(MODE12)`；判斷不出驅動器就不猜。完成判定與 Motor Test 的 HOME 工作同一套（看過 HOMING 之後的新樣本 READY）。§2。
++5. **停止**：golden `StopAllMotor` → `PCIL132_StopMotor` → `DecStop` 接上路由之後就會真的停 1203 軸，但**有兩個 golden 形狀的洞**：
++   Index 名稱的四軸（HT9050 的 M14 MTestZ1 是 1203 軸）永遠不經這條路停；`ServoAlarmOn=0` 的軸在 `SystemStart` 時不停。§3。
++6. **最大的風險不在命令，在「看起來完成了」**：樣本最多舊 200 ms，送出命令後若拿舊的 READY 回答 `MotionDone()`，
++   引擎會以為已到位。所以路由必須有「送出後、下一輪 Poll 之前一律算還在動」的規則（與 WebMotorAccess 的 `SampleStale` 同一條，
++   `WebMotorAccess.cpp:154-161`），而且 DRY RUN／被拒絕的運動**永遠不能回報完成**。§4。
++7. **路由絕對不能呼叫 `ShowErrorMessage`**：wb_serve 的 `ForwardShowErrorMessage` 一進來就 `W906_AlarmStopLikeGolden` →
++   `StopAllMotor`（`tools/wb_serve.cpp:435-437`、`:5392-5404`），沒有重入保護；停止失敗再跳警報就會無限遞迴。§4.4。
++8. **要 EastSun 拍板的有 11 題**（§8），每題附建議預設。最要緊的三題：InitMotor／各處的座標寫入在 DS402 軸上要不要做（Q1）、
++   HOME 開頭要不要照 golden 跑 InitMotor（＝會 Servo ON）（Q2）、DS402 回原點後 golden 要求的 ORG 燈會不會亮（Q3）。
++
++---
++
++## 1. 引擎用到的 `TMyEtherCatMotor` 呼叫面，逐一對照
++
++### 1.1 引擎怎麼碰到這個類別
++
++引擎不直接呼叫 `TMyEtherCatMotor`，而是經 `TTrayMotor MOT[]`（`Motor/mymotor.h:385`）的 `HTMotor* Motor`（`Motor/mymotor.h:139`）。
++PCI1203 列建成 `new TMyEtherCatMotor(BoardID*100+Port)`（`cinitial.cpp:3989-3997`），所以
++`iBoardID = BoardID`、`iPortID = Port`（`Motor/myEthercatmotor.cpp:288-289`；這兩個是類別自己宣告的 `short`，
++遮蔽了 `HTMotor` 的同名欄位，`Motor/myEthercatmotor.h:112-113`、`tests/test_machine_motors.cpp:59-68`）。
++
++| 引擎入口（golden 邏輯，照原樣留著） | 走到的 `HTMotor` 虛擬函式 |
++|---|---|
++| `TMyMotor::MotorMove` → `MotorMovePosition`（`Motor/mymotor.cpp:5906-5969`、`:5574-5894`，C21 起是活的，`Motor/mymotor.h:39-40`） | `CheckIsSafeDoorOpen`、`ReadPos`、`MotionDone`、`MoveToPos`（`MoveToPosShortDistance`／`ShortDisSlowSP` 預設就是 `MoveToPos`，`Motor/HTMotor.h:144-145`）、`ScanMotorStatus`、`ReadEncoderPos` |
++| `TMyMotor::SetSpeed`（`Motor/mymotor.cpp:320-353`） | `SetSpeed(s, bSetJog)` |
++| `TMyMotor::SetADCRate`（`:291-317`） | `SetAcc`／`SetDec`（只改記憶體） |
++| `TMyMotor::MotorInitial`／`HomeReset`／`Home`／`MotorHome`（`:1047-1206`） | `SetHomeobjectTask`（`Motor/HTMotor.cpp:102-105`）、`HomeObject`、`HomeFlag`、`ScanMotorStatus`、`GetAlarm` |
++| `TMyMotor::PCIL132_StopMotor`（`:1307-1319`） | `DecStop` |
++| `TMyMotor::PCIL132_SetPos`／`PCIL132_ResetPos`（`:1272-1304`） | `SetCommand`、`SetPosition`、`ReadEnCoderRealPos`、`ResetPos` |
++| `TMyMotor::JogP`／`JogN`（`:1322-1335`） | `JogP`／`JogN` |
++| `TMyMotor::ServoOnOff`（`:1341-1367`） | `SetServoOn` → `MotOutputOn`／`MotOutputOff` |
++| 直接 `MOT[i].Motor->…` | `InitMotor`（`cinitial.cpp:4106`、`:4567`；`EtherCAT/MyEtherCAT.cpp:690`）、`ResetAxisOpen`（`EtherCAT/MyEtherCAT.cpp:689`）、`MotionDone`（`csystem.cpp:30102`、`OCRInsp.cpp:1296`）、`ReadPos`（`acatchtray.cpp:2868`、`aoutarm.cpp:3063`、`asortarm.cpp:2296`）、`HomeFlag`（`uhome.cpp:2560`）、`ResetPos`（`uhome.cpp:3497-3500`） |
++
++`cinitial.cpp:4136` 起到 `:4517` 是 `#if 0`（GATE 2），所以那段裡的 `SetRate`／`SetSoftLimit`／`InitMotor`（`:4317`、`:4473`、`:4511`）是死的。
++引擎**沒有**呼叫 `Motor->Stop()`、`G00`、`MoveTo`、`SetRate`（PCI1203 列）、`ResetState`（在非測試 `.cpp` 裡搜 `->(G00|MoveTo|Stop|ResetState)(` 0 筆）。
++
++任務題目裡的通稱對應：MoveRelative＝`MoveTo`（`Acm_AxMoveRel`）、StopEMG＝`Stop()`、SlowStop＝`DecStop()`、
++GetCmdPos＝`ReadRealPos()`、GetRealPos＝`ReadEnCoderRealPos()`、IsMotorBusy＝`Busy()`（私有，只給 `RealG00`／`DoHome` 用）、
++ReadStatus＝`ScanMotorStatus()`、**torque：這個類別沒有**（golden 也沒有；`kCmdAxTorqueLimitSet` 是給筆電那層用的，`EtherCAT/Pci1203Control.h:993-1037`，不在本路由）。
++
++### 1.2 逐方法對照表
++
++欄位說明：**golden**＝`HT9011UC_Code_V3.33.906.0_20260618/Motor/myEthercatmotor.cpp` 行號（Big5 唯讀，實際是純 ASCII，本樹 banner `Motor/myEthercatmotor.cpp:5-9` 已說明）；
++**HAVE 臂**＝本樹 `Motor/myEthercatmotor.cpp` 裡 `#if HAVE_PCI1203` 那一臂的廠商呼叫；**#else 今天**＝這棵樹 `ht9045_motor` 實際跑的；
++**走控制層後**＝`Pci1203Cmd` 的 kind＋欄位（`EtherCAT/Pci1203Control.h:270-424`、`:617-696`），或「讀監看器樣本」＝`Pci1203AxisSample` 的哪些欄位（`EtherCAT/Pci1203Monitor.h:759-790`）。
++所有 axis 命令的 `c.axis` = 監看器軸槽：**唯一一個** `opened` 且 `station==iBoardID && stationAxis==iPortID` 的槽，
++與 `WebMotorAccessLive.cpp:124-139` 同一條規則（0 個或 2 個以上都拒絕，不挑）。
++
++| 方法（本樹行號） | golden | HAVE 臂（本樹行號：廠商呼叫） | #else 今天 | 走控制層後 | 備註 |
++|---|---|---|---|---|---|
++| 建構子 `:278-297` | :49-68 | 無 | 同 golden | 同 golden | `MotorID=iBoardID*10+iPortID`（`:291`）。⚠ HAVE 臂拿它當 `m_Axishand[999]` 下標（`Motor/myEthercatmotor.h:110`）；機台表 M108 MCCDY 的 BoardID=108 ⇒ 1080，**golden 會越界**。路由用 (board, port) 找槽，不用這個陣列，所以不繼承這個缺陷 |
++| `Open_Axis` `:372-402` | :143-164 | `:384` `Acm_AxOpenbyID(uiDevhand, iBoardID, iPortID, &m_Axishand[MotorID])` | `:393-399` `bAxisOpen=false` —— ⚠ **其實走不到**：`:374-375` `if(uiDevhand==0) return;` 而 `uiDevhand` 在本樹只有 `cmydef.cpp:5754` 的 `=0` | **不開軸**。只問監看器：該 (站, 站內軸) 有唯一一個 `opened` 的槽 ⇒ `bAxisOpen=true` | 見 §7.5 L374／L393-399 的改法。Direction=1 的列不認領（Q5） |
++| `InitMotor` `:404-649` | :166-396 | `:429-630`：ResetError→GetState→(非 READY 再 ResetError，失敗 `goto` 無上限)→PPU／ElReact／AlmEnable／AlmReact／OrgLogic（U32）→Jerk（F64）→`SetEtherCatInType`→PulseIn/Out→MaxVel=`PJogHighSpeed`／MaxAcc=`dAcc`／MaxDec=`dDec`→ResetError；之後 `:645-648` 兩臂共用的 `SetServoOn(true); SetCommand(0); SetPosition(0);` | `:413-414` 因 `bAxisOpen==false` 直接 `return false` | 路由的 `initCfg` 複合步驟＝`kCmdAxResetError`（狀態看樣本 `state`）＋依 `Pci1203GoldenInitCfgPlan(motorClass, bSensorType, bIn1Logic)` 逐項 `kCmdAxSetInitCfg`（`initCfg`＋`value`，EastSun 的封閉表 `Pci1203Control.h:955-991`）＋`kCmdAxSetSpeed` `kSpeedMaxVel`=`PJogHighSpeed`、`kSpeedMaxAcc`=`dAcc`、`kSpeedMaxDec`=`dDec`＋`kCmdAxResetError`。ResetError 階梯限 3 輪（同 `WebMotorAccess.cpp:1542`、`:1579-1600`）。尾巴三行照 golden 走各自的路由 | 與 Motor Test 的 Test Range（`WebMotorAccess.cpp:1566-1644`，EastSun R4）同一串。`:416-421` 的 EMG 檢查照舊在前面。尾巴的 `SetCommand(0)`／`SetPosition(0)` 在 DS402 軸上要不要做 → Q1 |
++| `Stop` `:653-666` | :400-411 | `:659` `Acm_AxStopEmg` | 什麼都不做（沒有 #else 臂） | `kCmdAxEmgStop` | 引擎沒有呼叫點；補上是為了完整 |
++| `DecStop` `:670-701` | :415-439 | `:679` `Acm_AxStopDec`；`:686` `Acm_AxSetExtDrive(0)`（失敗就 `return`，不設旗標）；`:694` `bFirstClickJog=true` | `:672-673` 因 `bAxisOpen==false` 直接 return | `kCmdAxStop` → `kCmdAxSetExtDrive` `value=0` → 成功才 `bFirstClickJog=true` | 與 Motor Test 的 `Stop1203`（`WebMotorAccess.cpp:216-225`）同一對。stop 不是 `IsMotion`（`Pci1203Control.cpp:562-566`），ERROR_STOP 不擋。去重見 Q7 |
++| `JogP` `:706-757` | :444-487 | `bFirstClickJog` 時 `:727` `Acm_AxSetExtDrive(1)`（失敗 return false）→ `bFirstClickJog=false`；`:740-743` `Acm_AxJog(Direction?1:0)` | `:755` return false | `kCmdAxSetExtDrive` `value=1`（只在 `bFirstClickJog`）→ `kCmdAxJogStart` `dir`：vendor 0（POS）→ wire +1、vendor 1 → wire −1（`Pci1203Control.h:165-169`） | ⚠ golden 怪癖照留：`bFirstClickJog` 是**全檔共用**的全域（`:274`），不是每軸一個 |
++| `JogN` `:761-810` | :491-533 | 同上，`:795-798` 方向相反 | `:808` return false | 同上，Direction=0 時 wire −1 | |
++| `G00`／`RealG00` `:814-840`、`:1242-1302` | :537-563、:923-975 | `Error()`／`Busy()` 擋；`:1273` `Acm_AxMoveAbs(p)`（Direction=1）或 `:1288` `Acm_AxMoveAbs(-p)`（Direction=0） | 不動卡，回 false | **不接**（引擎沒有呼叫點） | ⚠ golden 的號誌是反的：Direction=0 時送 `-p`。若日後要接必須先裁決 |
++| `SetRange` `:844-849` | :567-572 | 無（`Range=min(a,1000)`） | 同 | 同（只改記憶體） | |
++| `SetRate` `:853-896` | :576-616 | `:883`／`:889` `PAR_AxAcc`／`PAR_AxDec` = 算出的 `Rate` | 只算記憶體的 `dAcc` | `kCmdAxSetSpeed` `kSpeedAcc`=Rate、`kSpeedDec`=Rate | golden 這裡沒有 `bAxisOpen` 守衛。`MotorRateFromGolden`（`WebMotorAccess.cpp:2840-2857`）是測試對照 |
++| `SetSpeed(x, bSetJog)` `:898-1014` | :618-731 | `:947-969` VelLow=`InitSpeed*persent`、VelHigh=`PJogHighSpeed*persent`、Acc=`dAcc`、Dec=`dDec`；`bSetJog` 時 `:982-1005` 再寫 Jog 四個，`:1006` `CFG_AxJogVLTime=0`（I32） | `:912-913` 因 `bAxisOpen==false` return（只有 `iSpeed=x` 留下） | 4 個 `kCmdAxSetSpeed`：`kSpeedInit`／`kSpeedRun`／`kSpeedAcc`／`kSpeedDec`；`bSetJog` 時再 4 個 `kSpeedJogInit`／`JogRun`／`JogAcc`／`JogDec`（同值） | **缺口**：`CFG_AxJogVLTime`（I32）控制層沒有 I32 setter（`WebMotorAccess.cpp:568-569` 已記同一個缺口）。`dAcc` 是本類別遮蔽的那個（`Motor/myEthercatmotor.h:116`），`dDec` 是 `HTMotor` 的。`MotorSpeedFromPct`（`WebMotorAccess.cpp:2993-3014`）是測試對照 |
++| `SetInitSpeed` `:1016-1019` | :733-736 | 無 | 同 | 同 | |
++| `SetPosition` `:1021-1035` | :738-750 | `:1027` `Acm_AxSetActualPosition(p)`；永遠 `return true`（=1） | 不動卡，return true | `kCmdAxSetActPos` `value=p` | ⚠ 重新定義座標。DS402 軸 → Q1。golden 怪癖：回 1 讓 `ResetPos` 永遠回 false（`:1773-1783`） |
++| `SetCommand` `:1037-1061` | :752-766 | `Enable` 時 `:1048` `Acm_AxSetCmdPosition(p)`，回廠商碼 | return 0 | `Enable` 時 `kCmdAxSetCmdPos` `value=p`，回路由碼（0=成功） | 同 Q1 |
++| `SetSoftLimit` `:1065-1099` | :770-801 | `:1084` `CFG_AxSwPelValue`=LP、`:1092` `CFG_AxSwMelValue`=LN（F64；Direction=1 時兩者互換取負） | 只算 LP／LN | `kCmdAxSetLimit` `limit=kLimitSwPelValue` value=LP、`kLimitSwMelValue` value=LN | 只寫**位置值**，不碰 enable（golden 也不碰）。實測 ax3 的 SwPel/SwMel enable 是 0（`EtherCAT/Pci1203Monitor.h:888`），所以這兩個值平常不生效 |
++| `SetServoAlarmOn` `:1103-1106` | :805-808 | 無 | 同 | 同 | |
++| `ReadPos` `:1110-1113` | :812-815 | `ReadRealPos()*GearRatio` | 同 | 同（底下的 `ReadRealPos` 改讀樣本） | |
++| `GetAlarm` `:1119-1144` | :821-839 | `:1126` `Acm_AxGetMotionIO`；`(Status&0x3004e)!=0`（ALM、LMT±、EMG、SLMT±）；讀失敗 WAR16121＋false | false | 讀樣本 `motionIO & 0x3004e`；樣本無效＝golden 讀失敗臂（false，**不跳 WAR16121**，§4.4） | |
++| `ScanMotorStatus` `:1148-1211` | :843-892 | `:1158` MotionIO：bit4 ORG→`iHomeLed`、bit2→`iCcwLed`、bit3→`iCwLed`、bit16→`iSoftcwLed`、bit17→`iSoftccwLed`、bit1→`iAlarmLed`、bit14→`iServoOn`、bit6→`iEmgLed`；`:1185` GetState==ERROR_STOP→`iAlarmLed=true`；讀失敗 `return`（Led／`bAlarm` 不動） | 8 盞燈全 false，然後 `bAlarm=false` | 讀樣本 `motionIO`、`state`，同樣的位元解碼；樣本無效＝`return`（同 golden） | `:1210` `bAlarm=Led[iAlarmLed]` 是**全檔共用**的全域（`:273`），`MotOutputOn` 會讀它 —— golden 怪癖照留 |
++| `HomeFlag` `:1215-1236` | :896-917 | `GetHomeIO()` | false | 同（`GetHomeIO` 改讀樣本） | 引擎回原點最後一關（`Motor/mymotor.cpp:1157-1168`）→ Q3 |
++| `ReadRealPos` `:1306-1329` | :979-999 | `Enable` 時 `:1317` `Acm_AxGetCmdPosition`；`Direction` 時取負；回 int（截斷） | 0 | 讀樣本 `cmdPos`；樣本無效＝golden 讀失敗（Pos=0） | 卡片單位＝pulse（golden InitMotor 設 `CFG_AxPPU=1`，`:459-461`；EastSun 表 `kInitCfgPPU {1}`） |
++| `Busy` `:1336-1360` | :1006-1023 | `:1343` GetState；`!=STA_AX_READY` ⇒ true | true | 讀樣本 `state`；樣本無效或**命令後尚無新樣本**⇒ true | STA 值：READY=1、ERROR_STOP=3、HOMING=4（`WebMotorAccess.cpp:1016-1018`、`WebMotorAccessLive.cpp:274`） |
++| `Error` `:1364-1392` | :1027-1048 | `==STA_AX_ERROR_STOP` ⇒ true | false | 讀樣本 `state==3` | |
++| `GetHomeIO` `:1396-1417` | :1052-1067 | `:1403` MotionIO bit4 | false | 讀樣本 `(motionIO>>4)&1` | |
++| `DoHome`／`Pos*Home*`／`Neg*Home*` `:1419-1486` | :1069-1132 | CrossDistance＋`Acm_AxHome(mode,dir)`，case 2 `MySleep(300)` | 不動卡 | **不接** | 全樹沒有呼叫者（只互相呼叫） |
++| `AddAxis`／`AddPath`／`RunPath` | :1138-1153 | 空殼 | 同 | 同 | |
++| `ethercat_set_output_*`／`IOBitOff` `:1509-1560` | :1155-1188 | `Acm_DaqDoSet*(gDevhand,…)`，`gDevhand` 是永遠 NULL 的私有靜態成員（banner `:119-133`） | -1／false | **不接**（IO 走 IO 路由；golden 這三支本來就打 handle 0） | |
++| `SetAcc`／`SetDec` `:1563-1571` | :1191-1199 | 無 | 同 | 同（只改記憶體） | |
++| `MotionDone` `:1573-1602` | :1201-1223 | `Enable` 時 `:1582` GetState==READY | false | `Enable` 且樣本有效且**不是 pending**且 `state==1` | pending 規則見 §4.2。golden 比的是整個 16 位元；Motor Test 用 `&0xFF`（`WebMotorAccessLive.cpp:274`）—— 本路由照 golden |
++| `MoveTo` `:1604-1663` | :1225-1282 | `SetSpeed(iSpeed)` 後 `:1651` `Acm_AxMoveRel(iP1)` | 不動卡 | `kCmdAxMoveRel` `value=iP1` | 引擎沒有呼叫點；⚠ golden 拿絕對目標去做相對移動，照留 |
++| `HomeObject` `:1665-1668` | :1284-1287 | `EtherCatMotHome()` | 同 | 同 | |
++| `EtherCatMotHome` `:1670-1771` | :1289-1378 | case 1：`MotionDone` 否則 DecStop 等；DecStop；`InitMotor`；`SetHomeSpeed`；CrossDistance；`SetSoftLimit(999999,-999999)`；`:1704`／`:1713` `Acm_AxMoveHome(MODE12, HomeDirection?0:1)`；case 10 等 READY；case 20：0.3 s 後 `LastHomePos=-ReadPos()`、`SetCommand(0)`、`MySleep(10)`、`SetPosition(0)`、`SetSpeed(OldSpeed)`、`SetSoftLimit(PSoftLimitP,PSoftLimitN)` | `:1768-1769` `Task=1; return false` | **§2**：保留 golden 的 1/10/20 三段，回原點方式換成 EastSun 的 | |
++| `ResetPos` `:1773-1783` | :1380-1390 | `SetCommand`＋`SetPosition` | 同 | 同（各自走路由） | |
++| `MotOutputOn` `:1785-1807` | :1392-1412 | `bAlarm` 時 `:1794` ResetError＋`MySleep(100)`；`:1800` `Acm_AxSetSvOn(1)` | 不動卡 | `bAlarm` 時 `kCmdAxResetError`＋`MySleep(100)`；`kCmdAxSvOn` `value=1` | 與 `WebMotorAccess.cpp:1621-1636` 同一段（那裡把 `bAlarm` 換成本軸的燈，本路由照 golden 用全域） |
++| `MotOutputOff` `:1809-1822` | :1414-1425 | `:1815` `Acm_AxSetSvOn(0)` | 不動卡 | `kCmdAxSvOn` `value=0` | |
++| `SetServoOn` `:1824-1839` | :1427-1442 | `Enable` 時 On/Off | 同（底下不動卡） | 同 | 引擎呼叫點：`csystem.cpp:19839`／`:19876`（EMG 全軸 off/on）、`:21885-22246`、`AutoClean/AutoClean.cpp:3248-3249` |
++| `MoveToPos` `:1910-1942` | :1513-1543 | `bAxisOpen`＋`MotionDone` 擋；`:1928` `Acm_AxMoveAbs(Tar)`（**不**依 Direction 翻號） | `:1913-1914` 因 `bAxisOpen==false` return false | `kCmdAxMoveAbs` `value=Tar` | 引擎的主力。`Tar` 已是 pulse（`GetRealPos` 換好的，`Motor/mymotor.cpp:5624`） |
++| Latch 系列 `:1944-1965` | :1545-1566 | 空殼 | 同 | 同 | |
++| `ReadEnCoderRealPos` `:1967-1990` | :1568-1588 | `Enable` 時 `:1978` `Acm_AxGetActualPosition`，Direction 取負 | 0 | 讀樣本 `actPos` | `HTMotor::ReadEncoderPos` = 這個 × GearRatio（`Motor/HTMotor.cpp:78-81`） |
++| `SetEtherCatInType` `:1992-2098` | :1590-1690 | InpEnable／InpLogic／AlmLogic／EzLogic／ErcLogic（U32） | 不動卡 | 併進 `initCfg`（EastSun 的 plan 已含這一段，`Pci1203Control.h:927-931`） | 只有 `InitMotor` 呼叫它 |
++| `SetHomeSpeed` `:2113-2154` | :1703-1742 | HomeVelLow／High／Acc／Dec／HomeJerk=0 | 不動卡 | 只在非 DS402 分支用：`kCmdAxSetHome` `kHomeVelLow`／`kHomeVelHigh`／`kHomeAcc`／`kHomeDec` | **缺口**：`PAR_AxHomeJerk` 控制層沒有（同 `WebMotorAccess.cpp:1117-1118`） |
++| `Close_Card` `:2156-2176` | :1744-1762 | `Acm_DevClose(&uiDevhand)` | `uiDevhand==0` 就 return | **永遠不接**：卡是監看器的 | 解構子會呼叫它（`:300-303`），`#else` 維持不動 |
++| `ResetState` `:2178-2189` | :1764-1773 | `Acm_AxResetError` | 不動卡 | `kCmdAxResetError` | 引擎沒有呼叫點 |
++| `ResetAxisOpen` `:2191-2196` | :1775-1780 | `bAxisOpen=false` | 同 | 同（下一次用到時重新認領，§7.5） | |
++
++### 1.3 單位、號誌、方向（裁決 6B）
++
++* **位置**：卡片單位＝pulse（`CFG_AxPPU=1`）。引擎單位＝pulse × `GearRatio`（`ReadPos`，`:1110-1113`；`GetRealPos` 反算，`Motor/mymotor.cpp:1381-1415`）。
++  路由只搬 pulse，`Pci1203Control` 以 `(F64)c.value` 下給卡（`Pci1203Control.cpp:1736-1739`），與 HAVE 臂把 `int` 隱式轉成 `F64` 是同一個數。
++  機台表 19 列 PCI1203 的 `GearRatio` 全是 1、`Direction` 全是 0（`D:\HT9045\system\Mot_Table.csv`，本次唯讀量）。
++* **速度**：`PJogHighSpeed`／`InitSpeed`／`dAcc`／`dDec` 原樣（`double`）傳 `kCmdAxSetSpeed`。
++  電子齒輪（驅動器 2701h）是驅動器那半，不在這條路上（`Pci1203Control.h:332-336`）。
++* **方向**：裁決 6B（`docs/RULINGS_20260925.md:77`）＝1203 軸不看 Direction、方向交給驅動器 Pn000、HT9050 馬達表 Direction 改 0。
++  golden 的翻號散在兩臂共用的行上（`ReadRealPos :1325-1326`、`ReadEnCoderRealPos :1986-1987`、`SetSoftLimit :1069-1078`、`MoveTo :1640-1643`，
++  而 `MoveToPos :1928` 卻不翻 —— WebMotorAccess 就是為了這個不一致才拒絕 Direction=1，`WebMotorAccess.cpp:492-496`）。
++  **設計**：不去改那些共用行，而是 **Direction=1 的 1203 列不認領**（`Open_Axis` 的 `#else` 回 false，並印出「6B：請把 Mot_Table 的 Direction 改 0」）。
++  Direction=0 時所有翻號都是恆等，路由的結果與 HAVE 臂逐位元相同。→ Q5。
++* **Jog 方向**：HAVE 臂送 vendor 碼（0=POS、1=NEG），控制層收 wire 的 ±1 再換（`Pci1203Control.h:165-169`、`Pci1203Control.cpp:1727`）⇒ 路由送 `dir = (vendor==0) ? +1 : -1`。
++* **回原點方向**：golden `HomeDirection ? 0 : 1`（vendor）⇒ wire `HomeDirection ? +1 : -1`；DS402 method `HomeDirection ? 124 : 128`（`WebMotorAccess.cpp:1107-1108`、`:1213-1214`）。
++
++---
++
++## 2. 回原點
++
++### 2.1 EastSun 的方式（要守的三件事）
++
++* DS402 驅動器（監看器說該站 CiA 402、或名稱含 SERVOPACK、或是 Yaskawa Sigma-X）：`Acm_AxHome(124／128, ±1)`（驅動器方法 24／28），
++  **不用** golden 的 `Acm_AxMoveHome(MODE12)`（卡片模式在這台回 0x8000510F，`WebMotorAccess.cpp:1107`、`Pci1203Control.h:409-411`）。
++* **回原點後不歸零**（原點由驅動器自己定義；`WebMotorAccess.cpp:1110`、`:2095-2097`）。
++* 回原點速度：`Acm_AxHome` 會拿卡上**當下的 PTP** VelHigh／VelLow／Acc 去填 6099h:1／6099h:2／609Ah，不讀 `PAR_AxHomeVel*`
++  （`Pci1203Control.h:415-422`），所以回原點前要先把 PTP 速度設成回原點速度（`WebMotorAccess.cpp:1195-1210`）。
++* 分支看**驅動器**：DS402 → 上面那條；其他驅動器 → golden 的卡片式 MODE12（＋歸零）；判斷不出來 → 拒絕、不猜
++  （`WebMotorAccess.cpp:1179-1194`，驅動器判斷 `WebMotorAccessLive.cpp:174-193`）。
++
++### 2.2 引擎這邊的流程（golden，照原樣）
++
++1. `ProcessMotorHome` case 1 對每一軸 `MotorInitial()`（`uhome.cpp:944-959`）→ `SetHomeobjectTask(1)`、`HomeFlag=0`、`ResetTime` 90 s
++   （`Motor/mymotor.cpp:1069-1073`；`RESET_TIMES 900` ×0.1 s，`:76`）。
++2. 之後每拍 `MOT[i].MotorHome(flag1)`（`uhome.cpp:2568`、`:2578`、`:2972`）：
++   * 開頭 `ScanMotorStatus()`＋`GetMotorAlarm()`，有警報且錯誤碼不在 2..5 ⇒ 回 3（`Motor/mymotor.cpp:1113-1125`）→ `ProcessMotorHome` 停全部馬達並報錯（`uhome.cpp:2609-2622`）；
++   * case 10 `Home()`（門檢查、`SetADCRate(100)` ⇒ `dAcc/dDec` 回資料庫值、`HomeObject()`，`:1077-1088`），`HomeObject()` 回 true 之後：
++     `Led[iServoOn]==false` ⇒ 回 4（`:1149-1153`）；
++   * case 20：`Motor->HomeFlag()`（ORG 燈）在 300 ms 內亮 ⇒ `HomeFlag=1`；不亮就重試（case 30 → 重新 `HomeReset` → 再回原點），3 次後 `HomeFlag=2`（`:1157-1182`）；
++   * 90 s 到 ⇒ `HomeFlag=2`（`:1197-1204`）。
++
++### 2.3 `EtherCatMotHome` 的 `#else` 臂（路由版）
++
++保留 golden 的 Task 1／10／20，只換「怎麼回原點」與「完成後做什麼」：
++
++| Task | golden（`:1681-1759`） | 路由版 |
++|---|---|---|
++| 1 | `!MotionDone()` ⇒ `DecStop()`、等；否則 `DecStop()`、`InitMotor(MotorID)`、`SetHomeSpeed()`、`OldSpeed=iSpeed`、`GearRatio==0` 就停在這裡、CrossDistance、`SetSoftLimit(999999,-999999)`、`Acm_AxMoveHome(MODE12, HomeDirection?0:1)`、`Task=10` | `!MotionDone()` ⇒ `DecStop()`、等；否則 `DecStop()`、`InitMotor(MotorID)`（Q2）、`OldSpeed=iSpeed`、`GearRatio==0` 就停、`SetSoftLimit(999999,-999999)`、路由 `homeStart`、`Task=10`（**不管 homeStart 成不成功都進 10**，同 golden：MoveHome 失敗只跳 WAR16122，照樣進 10 等，最後由 90 s 逾時判失敗） |
++| `homeStart`（路由內） | — | DS402：`kCmdAxSetSpeed` ×4（`kSpeedInit`=`PHomeLowSpeed`、`kSpeedRun`=`PHomeHighSpeed`、`kSpeedAcc`=`dAcc`、`kSpeedDec`=`dDec`）→ `kCmdAxHome` `homeMode=HomeDirection?124:128` `dir=HomeDirection?+1:-1`。`PHomeHighSpeed==0` 就不送（同 `WebMotorAccess.cpp:1199-1200`）。非 DS402：`kCmdAxSetHome` ×4（`kHomeVelLow/High/Acc/Dec`）→ `kCmdAxMoveHome` `homeMode=11`（MODE12_AbsSearchReFind）`dir=HomeDirection?+1:-1`（同 `:1145-1159`）。判斷不出驅動器 ⇒ 不送，記一行 |
++| 10 | GetState==READY ⇒ `HomeDelay` 0.3 s、`Task=20` | 路由 `homeDone(board,port)`：只看**送出之後**的新樣本（pending 規則，§4.2）；看過 HOMING(4) 之後出現 READY(1) ⇒ 完成、`HomeDelay` 0.3 s、`Task=20`。ERROR_STOP(3) ⇒ 留在 10（golden 也是一直等；MotorHome 開頭的警報檢查會接手）。**一直沒看到 HOMING** ⇒ 留在 10、只記一行（不假裝完成；golden 的 90 s 逾時給 `HomeFlag=2`）。沒送出去（homeStart 拒絕）⇒ 留在 10 |
++| 20 | 0.3 s 後 `LastHomePos=-ReadPos()`、`SetCommand(0)`、`MySleep(10)`、`SetPosition(0)`、`SetSpeed(OldSpeed)`、`SetSoftLimit(PSoftLimitP,PSoftLimitN)`、`Task=1`、return true | 0.3 s 後 `LastHomePos=-ReadPos()`；**只有非 DS402 分支**才 `SetCommand(0)`、`MySleep(10)`、`SetPosition(0)`（golden 卡片式歸零）；`SetSpeed(OldSpeed)`（把 PTP 速度從回原點速度還原 —— golden 本來就有這一步，Motor Test 的 HOME 沒有）；`SetSoftLimit(PSoftLimitP,PSoftLimitN)`；`Task=1`；return true |
++
++完成判定與 Motor Test 的 HOME 工作一致（`WebMotorAccess.cpp:2075-2130`：`sawHoming`、READY、ERROR_STOP、不歸零、`LastHomePos` 同公式 `:2063-2073`、`:2118-2121`）。
++不同的只有逾時與失敗怎麼表示：Motor Test 自己管（180 s、5 s 沒進 HOMING 就 `HomeFlag=2`，`:1011-1012`、`:2092`），引擎這邊沒有管道讓
++`HomeObject()` 說「失敗」，所以交給 golden 的 90 s `ResetTime` 與 MotorHome 開頭的警報檢查。**兩邊都只會往「沒回好」的方向錯**。
++
++### 2.4 引擎回原點在 HT9050 上還會卡住的地方（不是路由能解的）
++
++* **M14 MTestZ1**（1203 的 Index Z）在 `ProcessMotorHome` 走 Galil：`uhome.cpp:2509` `if(INDEX_MOTION_CARD==0 && (i==MTestZ1||i==MTestZ2))` → `Gali_SingalHome`（離線樁）。
++  它根本不會叫到 `EtherCatMotHome`。→ Q4。
++* case 20 要 ORG 燈（`motionIO` bit4）亮；方法 24／28 停在開關邊緣時燈會不會亮、而且 `motionIO` 在 ring 0 沒啟動循環交換時是**凍住的**
++  （`EtherCAT/Pci1203Monitor.cpp:2244-2329` 的量測；`MachineType.h:159` `WB_PUMP_1203_START_RING` 現在是關的）。→ Q3、Q9。
++* case 10 要 `Led[iServoOn]`（`motionIO` bit14）；同樣受上一點影響。
++
++---
++
++## 3. 停止
++
++### 3.1 今天
++
++golden `StopAllMotor`（`Motor/myGALILmotor.cpp:5759-5785`）對每一軸：`Enable` 且（`PServoAlarmOn==1`，或 `SystemStart==false`）⇒ `PCIL132_StopMotor()`
++⇒ `DecStop()`（`Motor/mymotor.cpp:1307-1319`）。1203 軸的 `DecStop` 在 `:672-673` 就因為 `bAxisOpen==false` return，**一軸都停不到**。
++已經補過的地方都是「golden 停完再叫 1203 全停鉤子」：`VerifyMotorAction`（`csystem.cpp:30134-30136`）、`GaliMotorServoOff`（`uhome.cpp:4986-4988`）、
++HOME 畫面停機（`csystem.cpp:32670` 一帶）、警報（`tools/wb_serve.cpp:5401` → `MotorAccessOnAlarm` 對每個開成功的軸 `Stop1203`，`WebMotorAccess.cpp:2905-2926`）。
++**沒補到的**：G04 的 `LockIndexMotorAndDoHomeProcess` → `StopAllMotor()`（`csystem.cpp:16322`、`:19936`）、`ProcessMotorHome` 的三個錯誤出口（`uhome.cpp:2584`、`:2599`、`:2611`）、
++以及 `csystem.cpp` 其餘約 50 個 `StopAllMotor(` 呼叫點（`Select-String` 計數 51）。
++
++### 3.2 接上路由之後
++
++* `DecStop` 的 `#else` 送 `kCmdAxStop`（`Acm_AxStopDec`）＋`kCmdAxSetExtDrive 0`，與 Motor Test 的 `Stop1203` 同一對（`WebMotorAccess.cpp:210-225`）。
++  所以**所有** golden `StopAllMotor` 呼叫點都會照 golden 規則停到 1203 軸，包括 G04。
++* **用哪個命令**：減速停（StopDec），因為 golden 的 `PCIL132_StopMotor` 就是 `DecStop`。緊急停（`kCmdAxEmgStop`）只給 `Stop()`，引擎沒有呼叫點。
++* **不看權杖、不看鎖**：路由不是網頁命令，沒有權杖這回事；`Execute` 本身也沒有權杖檢查（`Pci1203Control.cpp:617-645` 的前提只有「控制已開」「監看器物件存在」「卡開著」）。
++  stop 不是 `IsMotion`，所以軸在 ERROR_STOP 也照送（`Pci1203Control.cpp:562-566`、`:1556`）。網頁那邊 `motor.stop` 本來就免權杖（`WebMotorAccessLive.cpp:806-809`）。
++  唯一會讓停止送不出去的是：控制沒武裝、卡沒開、監看器沒開這一軸 —— 這三種情況下軸也不會是本路由讓它動起來的。
++* **兩個照 golden 留下來的洞**（要 EastSun 決定，Q4、Q8）：
++  1. `PCIL132_StopMotor` 對 Index 四個名字直接 return（`Motor/mymotor.cpp:1311-1315`，golden 靠 Galil 的 `VS0;SP0` 停 Index，`Motor/myGALILmotor.cpp:5761-5766`）。
++     HT9050 的 M14 MTestZ1 是 1203 軸（EastSun R2），**`StopAllMotor` 永遠停不到它**；只有上面那幾個鉤子停得到。
++  2. `PServoAlarmOn==0` 的軸在 `SystemStart==true` 時 golden 刻意不停（「修正立即停止造成步進馬達失步」，`:5775-5783`）。
++     機台表 19 列 PCI1203 裡有 10 列 `ServoAlarmOn=0`（M03、M22、M35、M36、M38、M39、M40、M41、M42、M108）。
++     警報那條路（`MotorAccessOnAlarm`）已經會無條件停全部 1203 軸，所以最常見的「出事停機」已經涵蓋。
++* **每拍洪水**：沒馬達電時 G04 **每一拍**都跑 `StopAllMotor()`（`csystem.cpp:16315-16329`，`docs/MACHINE_GATES_OPENED_20260926.md:372-373`）。
++  閒置時 `SystemStart==false` ⇒ 19 軸 × 2 個命令 ÷ 500 ms。`Pci1203Control` 的稽核紀錄只有 512 行、「最後一個命令」也只有一格，幾秒就會被引擎洗掉 ——
++  這正是 IO 路由 S7 修過的問題（`EtherCAT/Pci1203IoRoute.cpp:207-218`）。→ Q7 的去重。
++
++---
++
++## 4. 執行緒、阻塞、以及「看起來完成了」
++
++### 4.1 同一條執行緒
++
++* wb_serve 單執行緒迴圈：`W906_ServiceOutputs` → `PumpTick()`（`MainProc` 在這裡）→ `W906_MotorAccessTick` → `Pci1203AxisIniTick` → 200 ms 的 `Poll()`＋`W906_MotorAccessPollTick` → drain 網頁命令 → 發布
++  （`tools/wb_serve.cpp:4080-4178`）。引擎的馬達呼叫全部發生在 `PumpTick` 裡（`:4102`）。
++* `TPci1203Control` 不是執行緒安全的，規定與監看器同一條執行緒（`EtherCAT/Pci1203Control.h:799-803`；IO 路由同一個前提 `IOBackend.cpp:286-290`）。
++  路由只在這條執行緒被呼叫；HTTP 執行緒只讀 WebMotorAccess 抄出來的副本（`WebMotorAccessLive.cpp:843-847`）。
++* **`Execute` 是同步的**：驗證 → 一個廠商呼叫 → 回來（`Pci1203Control.cpp:575-593`、`:1587-1745`），沒有佇列。運動命令只是「開始」，廠商呼叫立刻返回。
++  本路由會用到的 kind 都沒有內建等待（有等待的是 Fn008 的 `Sleep(100)` 迴圈 `:2086`、Rescan、torque SDO —— 路由都不用；**`kCmdCardRescan` 明確排除**，它會關開卡）。
++* **一條限制**：`Poll()` 期間會把執行緒借給排隊中的輸出命令（`tools/wb_serve.cpp:3983` 的 yield hook）。監看器的 `pollCount` 在 Poll **結束**時才加 1
++  （`EtherCAT/Pci1203Monitor.cpp:3003`）。路由命令**不可以**從 yield hook 裡送出，否則 §4.2 的新舊判斷會把 Poll 前半段讀到的舊樣本當成新的。引擎本來就不在 Poll 裡跑。
++
++### 4.2 pending 規則（最重要的一條）
++
++HAVE 臂的 `MotionDone()` 是**當下**去讀卡（`:1582`），剛下 `MoveAbs` 就讀會是「在動」。路由讀的是最多舊 200 ms 的樣本；
++如果 `MotorMovePosition` 下完命令、下一拍拿到的還是命令前的 READY，就會 `Position=Tar; return 1`（`Motor/mymotor.cpp:5743-5745`）—— 沒動卻到位。
++
++規則（與 `WebMotorAccess.cpp:154-161` 的 `NoteIssued`／`SampleStale` 相同）：
++* 路由對某軸送出（issued）任何命令後，記下當時的 `card().pollCount`（`Pci1203Monitor.h:1287-1288`）；
++* 直到 `pollCount` 大於那個數之前，這一軸 `pending=true`：`MotionDone()` 回 false、`Busy()` 回 true、`homeDone` 回 0；
++* 用 (站, 站內軸) 當鍵，不用軸槽號（Rescan 會重排槽，`EtherCAT/Pci1203IoRoute.cpp:67-69`）。
++
++**再加兩條，golden 沒有、但這裡一定要**（Q11）：
++* **DRY RUN**（`WB_PUMP_1203_CONTROL_LIVE` 沒定義，`tools/wb_serve.cpp:3792-3796`；`Execute` 驗證、記錄、`issued=false`，`Pci1203Control.cpp:1581-1585`）：
++  被接受但沒送出的**運動**，把該軸標成「不會完成」，直到下一個停止為止。否則引擎會以為每一步都到位、一路往下跑（IO 也是 dry，機台不會動，但狀態機會亂）。
++* **被拒絕或廠商回錯的運動**（ERROR_STOP 被擋 `:1556-1579`、沒有 handle `:1618-1631`、控制沒武裝……）：同樣標成「不會完成」直到停止。
++  golden 在 `MoveAbs` 失敗後照樣 `fCMD=true`（`Motor/mymotor.cpp:5735-5739`），下一拍 READY 就當到位 —— 那是 golden 的缺陷，這裡不照抄。
++
++### 4.3 會卡住 tick 執行緒的 golden 等待
++
++| 位置 | golden | 路由版 |
++|---|---|---|
++| `MotOutputOn` `bAlarm` 時 `MySleep(100)` | golden :1401 | 照留（100 ms；`MySleep`＝`::Sleep`，`common.cpp:2201-2204`）；WebMotorAccess 也照留（`WebMotorAccess.cpp:1631`） |
++| `EtherCatMotHome` case 20 `MySleep(10)` | golden :1363 | 只剩非 DS402 分支會跑 |
++| `InitMotor` 的 `goto ResetMotorError`，**沒有上限** | golden :187-217 | 限 3 輪後回 false（同 `WebMotorAccess.cpp:1529-1530`、`:1595-1600`） |
++| `DoHome` case 2 `MySleep(300)` | golden :1069-1102 | 死碼，不接 |
++| `Open_Card` 的 `MySleep(5000)` 重試 | golden :78-141 | golden 自己整段註解掉 |
++| 引擎在 `MotionDone` 上忙等 | — | 非測試 `.cpp` 裡 `while(...MotionDone|MotorMove|ReadPos|HomeObject|MotorHome` 0 筆；引擎全是跨拍狀態機 |
++| 既有、與路由無關 | G31a 的 `DoMotorPowerOn` 1 秒忙等 | `docs/MACHINE_GATES_OPENED_20260926.md:352` |
++
++`Poll()` 本身一次約 140 ms（`tools/wb_serve.cpp:4139-4141`），不變。
++
++### 4.4 錯誤訊息：路由不跳 `ShowErrorMessage`
++
++HAVE 臂每個廠商呼叫失敗都跳 WAR16121／WAR16122。在 wb_serve 裡 `ShowErrorMessage` → `ForwardShowErrorMessage` 第一件事就是
++`W906_AlarmStopLikeGolden` → `StopAllMotor(true)`（`tools/wb_serve.cpp:435-437`、`:5392-5398`），**沒有重入保護**。
++如果路由在停止失敗（例如卡剛好沒開）時跳 WAR16122，就會 `StopAllMotor` → `DecStop` → 又失敗 → 又跳 → 無限遞迴。
++所以路由的失敗與拒絕只做三件事：記進 `Pci1203Control` 的稽核（`Execute` 自己會記）、印一行（像 IO 路由一樣限流，`EtherCAT/Pci1203IoRoute.cpp:181-193`）、回非 0 碼給 golden 程式。
++讀取失敗（樣本無效）也不跳 WAR16121 —— 監看器自己會報、連續 10 次失敗會自己停用（`Pci1203Monitor.h:1365-1372`）。→ Q10。
++
++---
++
++## 5. 互鎖：路由繞不過哪些閘
++
++路由坐在 `HTMotor` 的虛擬函式底下，所以**上面所有 golden 互鎖照跑**，而且都在路由之前：
++
++| 閘 | 位置 | 對這條路的效果 |
++|---|---|---|
++| 安全門 | `HTMotor::CheckIsSafeDoorOpen`（`Motor/HTMotor.cpp:111-127`）接 `IdleCheckSafeDoor`（`cinitial.cpp:4554-4555`）；`MotorMove`／`MotorMovePosition`／`JogP`／`JogN`／`Home`／`MotorHome` 第一行（`Motor/mymotor.cpp:5911-5915`、`:5579-5582`、`:1322-1335`、`:1080`、`:1107`） | 門開就不會叫到路由（閒置且初始化完成時才判；`SystemStart` 期間恆 false，`cinitial.cpp:4548-4551`） |
++| `fCanMove*`／`mapLockList` | `TMyMotor::MotorMove`（`Motor/mymotor.cpp:5930-5967`） | 被鎖 ⇒ `PCIL132_StopMotor`（經路由停）、不下移動 |
++| 軟體極限（引擎單位） | `MotorMovePosition`（`:5593-5609`） | 超限 ⇒ -2／-3，不下命令 |
++| `MotionDone` 才下命令 | `:5618-5621` | 經 §4.2 的 pending 規則 |
++| 飛梭閘門 | `:5677-5723` | 照 golden |
++| Motor Test／Teach 開著時 MainProc 暫停 | `csystem.cpp:30451-30486`（EastSun R8） | `DoAllProcess`（`:32432`）、`DoHomeProcess`（`:31545`）不跑 ⇒ 引擎不下運動命令。⚠ `DoSystem`（`:30400`）在暫停**之前**，所以 G04 的 `StopAllMotor` 與 `ScanAllMotorStatus` 照跑 |
++| `VerifyMotorAction` | `csystem.cpp:30050-30153` | 門開或 2 秒沒動 ⇒ `StopAllMotor`（現在會經路由停到 1203 軸）＋`W906_Stop1203AllHook` |
++| G04（沒動力） | `csystem.cpp:16315-16329`、`IsIndexMotorOutOfPower` `:19903-19920` | 每拍 `StopAllMotor` |
++| G16 煞車 Servo-ON 檢查 | `W906_BrakeReleaseOK`（`csystem.cpp:30013-30031`）、鉤子 `WebMotorAccessLive.cpp:991-1012` | 管的是煞車輸出（IO 路由），不是運動命令；路由不碰它。⚠ 見 §6 最後一點 |
++| 控制層自己的閘 | `Execute`：控制已開、卡開著（`Pci1203Control.cpp:624-645`）、軸有 handle（`:1615-1633`）、ERROR_STOP 擋運動而且**不順手清錯**（`:1545-1579`）、DRY RUN（`:1581-1585`） | 全部照用 —— 路由只呼叫 `Execute`，沒有別的入口 |
++| 驅動器那半的極限 | Pn50A／Pn50B（`Pci1203Control.h:365-374`、`Pci1203Monitor.h:952-970`） | 驅動器自己拒絕，與路由無關 |
++| 建置開關 | `WB_PUMP_1203_CONTROL`（`MachineType.h:105`）、`_LIVE`（`:106`）、`INSTALL_1203_MONITOR`（`:121`）、新的 `WB_ENGINE_MOTOR_1203`（§7.1） | 缺一個就不安裝 |
++
++**SOFT_SIMULTE（預設建置，`MachineType.h:63-64`；出貨組態才帶 `-DW906_NO_SOFT_SIMULTE=ON`，`:53`）一定維持模擬**，而且是兩道：
++1. 安裝器 `#if defined(SOFT_SIMULTE)` ⇒ 不安裝（同 `EtherCAT/Pci1203IoRoute.cpp:347-348`）；
++2. golden 在 SIM 把每一軸 `Motor->Enable=false`（`cinitial.cpp:4011-4012`、`:4028-4029`），`TMyMotor` 的包裝全部短路，`MotorMovePosition` 走 SIM 終端（`Motor/mymotor.cpp:5846-5856`）。
++   ⚠ 注意 Motor Test 在 SIM 建置**照樣**驅動真軸（「0918 裁決甲」，`WebMotorAccess.h:82-85`）—— 那是 Motor Test 的事，引擎路由不跟。
++
++**DRY RUN**：路由照裝（為了留下「引擎會怎麼下命令」的完整紀錄），每個命令都驗證、記錄、不送；運動永遠不完成（§4.2）；讀取照讀真樣本。
++Servo ON 也是 dry ⇒ SVON 燈不會亮 ⇒ 引擎 HOME 會在 `MotorHome` case 10 回 4（servo off）—— 誠實的失敗。
++
++---
++
++## 6. 與 Motor Test 的互動
++
++* **同一軸兩邊都可能下命令**，但 golden 自己已經把兩者錯開：Motor Test／Teach 開著時 MainProc 在 `VerifyMotorAction` 之後就 return（`csystem.cpp:30451-30486`），
++  引擎不會下運動命令。會重疊的只有 `DoSystem` 那一段（G04 的 `StopAllMotor`、`ScanAllMotorStatus` 只讀樣本）。
++* `VerifyMotorAction` 對 1203 軸是問鉤子 `W906_MotorMovingHook`（`csystem.cpp:30072-30082`，本體 `WebMotorAccess.cpp:2798-2810`），**不是**問 `MotionDone()`；
++  路由接上後 `MotionDone()` 也答得對，但鉤子優先，行為不變。
++* 那個鉤子的「剛下命令、還沒新樣本」只看 WebMotorAccess 自己的帳（`g_issuedPoll`），看不到引擎下的命令；反過來路由也看不到 Motor Test 下的。
++  頁面剛關、引擎馬上接手的那一瞬間兩本帳會各說各話 ⇒ 建議把帳合成一本，放在兩者共同經過的 `TPci1203Control::Execute`（Q7）。
++* WebMotorAccess 目前有幾處**假設「golden 物件碰不到卡」**，路由接上後要重看：
++  * `GoldenSetSpeed` 呼叫 `MOT[mi].SetSpeed(pct, jog)`，註解寫「`TMyEtherCatMotor::SetSpeed` 只設 `iSpeed`，卡是另外寫的」（`WebMotorAccess.h:230-233`、`WebMotorAccessLive.cpp:455-459`）。
++    接上後這一行**也會寫卡**（同值寫兩次）⇒ 靠 Q7 的去重，並更新那段註解。
++  * `GoldenStopAll` → `StopAllMotor(true)`（`WebMotorAccessLive.cpp:222-233`）接上後會真的停 1203 軸，然後 `DoStop` 自己又對每一軸 `Stop1203`（`WebMotorAccess.cpp:341-349`）—— 停兩次，無害。
++  * `GoldenSetRangeRate` 會呼叫 `MOT[mi].Motor->InitMotor(...)`（`WebMotorAccessLive.cpp:445-452`）；1203 列走的是 `InitMotor1203`（`WebMotorAccess.cpp:1646-1654` 的說明），
++    實作時要確認 1203 列**不會**再走到 `GoldenSetRangeRate`，否則 InitMotor 會跑兩遍。
++* **EastSun 自己的 pci1203 頁面**（`pci1203.ax.*`，有權杖）任何時候都能直接動軸，引擎在跑時也可以；golden 沒有這個概念，路由也不擋。建議列為操作規定，不另加鎖。
++* `bFirstClickJog` 是 golden 的全域，Motor Test 的 jog 不碰它（直接送 `kCmdAxSetExtDrive 1`，`WebMotorAccess.cpp:759-764`）；引擎 `DecStop` 送的 `ExtDrive 0` 會結束 Motor Test 的 jog —— 那正是停止該有的效果。
++* **煞車與回原點**：HOME 一開始會試著放煞車（`uhome.cpp:2135-2139`，要 Servo ON 才放），而 golden 的 Servo ON 在 `EtherCatMotHome` case 1 的 `InitMotor` 裡（Q2），比放煞車晚；
++  之後 G05 在 `SystemStart==false || iHome!=1` 才會再放（`csystem.cpp:16375-16384`）。Z 軸會不會在煞車還抓著時開始回原點，要在機邊走一次看（`docs/MACHINE_GATES_OPENED_20260926.md:416-422` 已列）。
++
++---
++
++## 7. 安裝、建置、閘、測試、逐行改法
++
++### 7.1 新東西
++
++| 檔 | 內容 | 進哪裡 |
++|---|---|---|
++| `Motor/EcatMotorRoute.h`（新） | POD 介面（下面），**不 include 任何 EtherCAT 標頭**；路由指標放在 inline 函式的 static 裡（不必新增 .cpp）；`W906_EC_ONLY(...)` 巨集：`HAVE_PCI1203` 時展開成空、否則原樣 | 被 `Motor/myEthercatmotor.cpp`（`ht9045_motor`）與路由 TU 共用 |
++| `EtherCAT/Pci1203MotorRoute.{h,cpp}`（新） | 路由本體：(站, 站內軸)→監看器軸槽（與 `WebMotorAccessLive.cpp:124-139` 同規則，建議抽成共用函式兩邊一起用）、op→`Pci1203Cmd` 對照、pending 帳、去重、限流日誌、安裝器 `W906_InstallPci1203MotorRoute()` | wb_serve：接在 `CMakeLists.txt:3194` 同一行（`Pci1203IoRoute.cpp` 旁邊）。**這個 TU 自己不呼叫任何 `Acm_*`**（同 `EtherCAT/Pci1203IoRoute.cpp:4-10`） |
++| `MachineType.h` 新巨集 `WB_ENGINE_MOTOR_1203` | 放在 `:1776` `WB_ENGINE_IO_1203` 後面、檔尾 `#endif` 前（只會移動最後那一行 `#endif`）。**預設關**，等 §8 裁決 | |
++
++介面草稿（`Motor/EcatMotorRoute.h`）：
++
++```cpp
++struct TEcatAxisRead {                 // 監看器最近一輪的樣本（Pci1203AxisSample），不是廠商呼叫
++    bool valid;                        //   valid && opened
++    bool pending;                      //   §4.2：命令後還沒新 Poll，或 dry／被拒的運動尚未停止
++    unsigned short state;              //   Pci1203AxisSample::state（STA_AX_*，原值）
++    unsigned long  motionIO;           //   Pci1203AxisSample::motionIO
++    double cmdPos, actPos;             //   Pci1203AxisSample::cmdPos / actPos（pulse）
++};
++enum { kEcStaReady = 1, kEcStaErrorStop = 3, kEcStaHoming = 4 };
++enum TEcatOp { kEcStopDec = 1, kEcStopEmg, kEcExtDrive, kEcJog, kEcMoveAbs, kEcMoveRel,
++               kEcSetSpeed, kEcSetLimit, kEcSvOn, kEcResetError, kEcSetCmdPos, kEcSetActPos };
++enum { kEcSpdInit, kEcSpdRun, kEcSpdAcc, kEcSpdDec, kEcSpdJogInit, kEcSpdJogRun, kEcSpdJogAcc,
++       kEcSpdJogDec, kEcSpdMaxVel, kEcSpdMaxAcc, kEcSpdMaxDec };        // 路由對到 Pci1203SpeedParam
++enum { kEcLimSwPel, kEcLimSwMel };                                         // → kLimitSwPelValue / kLimitSwMelValue
++struct TEcatMotorRoute {
++    bool          (*bind)(int board, int port, int motorId);             // Open_Axis：只認領，不開軸
++    bool          (*read)(int board, int port, TEcatAxisRead* out);
++    unsigned long (*call)(int board, int port, int op, int which, double v);   // 0 = SUCCESS
++    bool          (*initCfg)(int board, int port, int motorClass, bool sensorType, bool in1Logic,
++                             double maxVel, double maxAcc, double maxDec);  // InitMotor 的設定表（§1.2）
++    int           (*homeStart)(int board, int port, bool homeDir, double hi, double lo, double acc, double dec);
++    int           (*homeDone)(int board, int port);                        // 1 完成、0 還沒
++    bool          (*homeCardSide)(int board, int port);                    // 上一次是卡片式（要歸零）
++};
++// + inline SetEcatMotorRoute／EcatMotorRoute、W906_EcCall／W906_EcRead／W906_EcSetSpeed 等小包裝
++```
++
++路由的失敗碼沿用 IO 路由的 0x7E 前綴（不是 Advantech 的範圍，`EtherCAT/Pci1203IoRoute.cpp:30-40`），例如 0x7E000101 沒有路由、…0102 監看器找不到這一軸、…0103 被 `Execute` 拒絕。
++
++### 7.2 安裝與解除
++
++* **安裝點**：`tools/wb_serve.cpp:3807`，同一行接在 `W906_InstallPci1203IoRoute();` 後面（在 `#ifdef WB_PUMP_1203_CONTROL` 裡，`:3780-3808`）。
++* 安裝器條件（照 `EtherCAT/Pci1203IoRoute.cpp:345-360`）：`SOFT_SIMULTE` ⇒ 不裝；
++  `WB_ENGINE_MOTOR_1203 && INSTALL_1203_MONITOR && WB_PUMP_1203_CONTROL` ⇒ 裝；**`Pci1203Control()==0`（沒武裝）也不裝**（避免一路被拒、又被 golden 當到位，§4.2）；其餘 ⇒ 印「NOT routed」。
++* **順序剛好是對的**：`InitialHandler`（裡面的開機 `InitMotor`，`cinitial.cpp:4105-4106`、`:4563-4567`）在 `tools/wb_serve.cpp:3130`，比安裝（`:3807`）與開卡（`:3947`）都早
++  ⇒ 開機時的 `InitMotor` 看不到路由、照今天回 false、**不會在開機時自動 Servo ON 或歸零**。卡開了之後第一次用到某軸時才「認領」（§7.5 的延遲認領）。
++  golden 自己有一條「開卡後重新 InitMotor 每個 1203 軸」（`EtherCAT/MyEtherCAT.cpp:683-692`）—— 要不要在 wb_serve 開卡後跑它是 Q6。
++* **解除**：`SetEcatMotorRoute(0)` 只給測試用；wb_serve 不解除（同 IO 路由）。結束時 `~TMyEtherCatMotor` → `Close_Card` 的 `#else` 因 `uiDevhand==0` 什麼都不做（`:2158-2159`），不會碰卡。
++
++### 7.3 建置與閘
++
++* `ht9045_motor` 維持不帶 `HAVE_PCI1203`（`CMakeLists.txt:1279-1322`、`:3034-3046`）；它只多 include 一個標頭。探針 `ht9045_pci1203_probe` 仍以 `HAVE_PCI1203=1` 編 `Motor/myEthercatmotor.cpp`（`:3023-3047`），
++  那時 `W906_EC_ONLY` 展開成空，HAVE 臂的文字與今天相同 —— 兩臂每次建置都會被型別檢查。
++* wb_serve 在有 SDK 的機器上帶 `HAVE_PCI1203=1`（`CMakeLists.txt:3339-3343`），路由 TU 也會帶，但它沒有任何 `Acm_*` 呼叫，所以**匯入的 DLL 與符號都不變**。
++* 建好後用 `nm` 驗：`ht9045_motor` 的物件 `Acm_` 符號仍是 0；`wb_serve.exe` 的廠商匯入集合與現在相同。
++* `tools/pci1203_control_gate.ps1` 要改的地方：
++  * 檢查 4（MachineType.h 巨集，`:338-341`）：把 `WB_ENGINE_MOTOR_1203` 加進 `$expectActive` 與 foreach 清單，期待值依 EastSun 裁決；
++  * 檢查 6（呼叫點唯一，`:472`、`:482`、`:496-503`、`:543`）：前置 `git grep` 加 `W906_InstallPci1203MotorRoute`，並比照 IO 路由要求「恰好 1 個呼叫點（tools/wb_serve.cpp）」；
++  * 新增一項：`EtherCAT/Pci1203MotorRoute.cpp`、`Motor/EcatMotorRoute.h`（順便 `EtherCAT/Pci1203IoRoute.cpp`）去掉註解與字串後不得出現 `\bAcm_\w+\s*\(` —— 那兩個路由檔頭都宣稱「沒有廠商呼叫」，但目前沒有任何閘在驗（`EtherCAT/Pci1203IoRoute.cpp:7-10`）；
++  * 允許清單不變（路由不新增廠商呼叫）。`Pci1203Control.h:185` 寫「internal kinds 只有 WebMotorAccess 會送」要改成「WebMotorAccess 與引擎馬達路由」（EastSun 的檔，同一行附加）。
++* `tools/pci1203_readonly_gate.ps1`：不受影響（監看器不改）。
++* `tools/macro_order_gate.ps1`：路由 TU 第一個 include `MachineType.h`（同 `EtherCAT/Pci1203IoRoute.cpp:12`）；`Motor/EcatMotorRoute.h` 只看編譯參數 `HAVE_PCI1203`，不看 MachineType 的巨集。
++* CLAUDE.md 的「要反轉武裝要四處一起看」（`CMakeLists.txt:3326-3328` 也有同一句）要變成五處。
++
++### 7.4 測試
++
++跑 ctest 前後照規定：`tools\production_audit.ps1 -Snapshot`，跑完 `tools\production_audit.ps1` 要印「稽核通過」。
++
++**新測試**
++1. `tests/test_ecat_motor_route.cpp`（ctest `EcatMotorRoute`，連結形狀同 `test_machine_motors`，`tests/CMakeLists.txt:4009-4017`）：
++   裝一個**假路由**，逐筆記下 (board, port, op, which, value)，讀取由腳本餵樣本；直接建 `TMyEtherCatMotor(BoardID*100+Port)`、`Enable=true`。
++   * A. **沒裝路由**：每個方法的回傳與副作用＝今天（§7.5 的逐行論證變成斷言）；
++   * B. 身分：假路由收到的 (board, port) ＝ 建構子的 BoardID／Port；
++   * C. 每個方法送出的序列＝HAVE 臂（順序、值）：`SetSpeed(x,false/true)`（4／8 筆、JogVLTime 缺口）、`SetRate`、`DecStop`（成功才重設 `bFirstClickJog`）、`JogP`／`JogN` 第一下與第二下（全域 `bFirstClickJog` 怪癖）、`MoveToPos`（只有新樣本 READY 才送）、`MotOutputOn`（`bAlarm` 時先 ResetError）、`SetSoftLimit`、`SetCommand`／`SetPosition`；
++   * D. 讀取解碼：`ScanMotorStatus` 的 8 個位元＋ERROR_STOP、`GetAlarm` 的 0x3004e、`ReadRealPos`／`ReadEnCoderRealPos`／`ReadPos`（GearRatio 1 與 2.5 的截斷）、`Busy`／`Error`／`MotionDone`／`GetHomeIO`；
++   * E. pending：送出後同一輪 `MotionDone` false，`pollCount` 加 1 之後才看 READY；DRY 與被拒的運動永遠 false 直到停止；
++   * F. `InitMotor`：四個 EMG 感測器 off ⇒ 什麼都不送；路由 `initCfg` 收到 golden 的參數；尾巴 SvOn／SetCmdPos／SetActPos（DS402 依 Q1）；
++   * G. 回原點（經 `TMyMotor::MotorHome`）：DS402 送 4 個 PTP 速度＋`Home(124/128, ±1)`；HOMING→READY→0.3 s 完成、**沒有**座標寫入、`SetSpeed(OldSpeed)` 還原；沒看到 HOMING 就不完成；卡片式分支送 `MoveHome(11)` 並歸零；
++   * H. Direction=1 不認領；
++   * I. `StopAllMotor(true)` 走過三個假 1203 軸（`PServoAlarmOn` 1/0 × `SystemStart` true/false）＝ golden 規則；Index 名稱那一軸不停（把今天的洞寫成斷言，等 Q4）。
++2. 路由 TU 的純對照（op→`Pci1203Cmd`）：加進 `tests/test_pci1203_pure.cpp`（它已經以不帶旗標的方式編 `Pci1203Control.cpp` 來測 `Pci1203GoldenInitCfgPlan`，`Pci1203Control.h:952-953`），
++   或新開 `test_pci1203_motor_route.cpp`：jog 的 vendor→wire 方向、MoveAbs 值、速度參數對照、極限參數對照、`Home(124/128)`、`MoveHome(11)`、SvOn 值、`initCfg` 的順序＝`Pci1203GoldenInitCfgPlan`。
++3. **對照測試（證明「沿用、不另發明」）**：同一個目標與速度，經引擎路徑（`TMyMotor::GetRealPos`＋`TMyEtherCatMotor::SetSpeed`／`SetRate`＋假路由）與經 Motor Test 的純函式
++   （`MotorUserToCard`、`MotorCardToUser`、`MotorSpeedFromPct`、`MotorRateFromGolden`，`WebMotorAccess.h:307-319`、`:393-399`）得到的卡片數字要逐一相同。
++
++**要維持綠燈、而且不會裝路由的既有測試**（它們跑的是「沒有路由」那一臂，證明基準不變）：
++`motor_w4`（`tests/CMakeLists.txt:441`）、`sim_motor`（`:465`）、`W7_S0_MotorConvergence`（`:1388`）、`MachineMotors_HT9050`（`:4018`，會建 `TMyEtherCatMotor` 並呼叫 `InitMotor`，
++預期仍是 false，`tests/test_machine_motors.cpp:18`）、`MotorPoints_HT9050`（`:406`）、`WebMotorAccess`（`:4048`）、`MT_E3b_Engine`（`:4076`）、`homeclass`（`:3928`）、`mainproc_guard`（`:3949`）、
++`Pci1203Seam`（`:557`）、`LaneIORoute`（`:508`）、`Pci1203Pure`（`:4060`），以及 `W6_6_Hub`、`W6_6_CSystemCycle`、`WB_SimPump`。
++
++### 7.5 `Motor/myEthercatmotor.cpp` 的逐行改法（行數不變）
++
++原則：每一處都是「同一行改寫」或「用掉一個空行」，**沒有任何一行往下移**。
++`#else` 臂裡的舊註解行改成程式（留一句短註解在同一行）。沒有 `#else` 臂的方法，把路由呼叫包在 `W906_EC_ONLY(...)` 裡，
++接在 `#endif` 後面那一行（`}` 或空行）—— 有 `HAVE_PCI1203` 時它展開成空，golden 那一臂的文字完全不變。
++註解格式 `//AI(W906-ECAT-ROUTE) 20260926: …`。
++
++| 行 | 今天 | 改成（草稿） | 沒裝路由時為什麼等於今天 |
++|---|---|---|---|
++| 255（空行） | 空 | `#include "Motor/EcatMotorRoute.h"   //AI(...)` | 只是宣告 |
++| 374 | `if(uiDevhand==0)` | `if(uiDevhand==0 W906_EC_ONLY(&& EcatMotorRoute()==0))` | 沒路由 ⇒ 條件同今天 ⇒ 照樣 return |
++| 394-399（`#else` 臂） | 5 行註解＋`bAxisOpen=false;` | `bAxisOpen = (EcatMotorRoute()!=0) && !Direction && EcatMotorRoute()->bind(iBoardID, iPortID, MotorID);`＋註解 | 沒路由時這一臂根本走不到（L374） |
++| 672 | `if(!bAxisOpen)` | `if(!bAxisOpen W906_EC_ONLY(&& (Open_Axis(), !bAxisOpen)))`（延遲認領） | 沒路由 ⇒ `Open_Axis` 在 L374 就回、`bAxisOpen` 仍 false ⇒ 照樣 return |
++| 695-700（DecStop `#else`） | 4 行註解 | `if(!EcatMotorRoute()) return;` → `W906_EcCall(…kEcStopDec)` → `if(W906_EcCall(…kEcExtDrive,0,0)!=0) return;` → `bFirstClickJog=true;` | 走不到（L672） |
++| 751-756（JogP `#else`） | 3 行註解＋`return false;` | `if(!EcatMotorRoute()) return false;` → `if(bFirstClickJog){ if(W906_EcCall(…kEcExtDrive,0,1)!=0) return false; bFirstClickJog=false; }` → `return W906_EcCall(…kEcJog,0,Direction?1:0)==0;` | 第一行就 return false |
++| 805-809（JogN `#else`） | 同上 | 同上，方向相反 | 同上 |
++| 666（Stop 的 `}`） | `}` | `    W906_EC_ONLY(W906_EcCall(iBoardID,iPortID,kEcStopEmg,0,0);) }` | `W906_EcCall` 沒路由回錯誤碼，無副作用 |
++| 896（SetRate 的 `}`） | `}` | `W906_EC_ONLY(`兩筆 `kEcSetSpeed`（Acc、Dec＝Rate）`) }` | 同上 |
++| 912 | `if(!bAxisOpen)` | 同 L672 的延遲認領 | 同 L672 |
++| 1014（SetSpeed 的 `}`） | `}` | `W906_EC_ONLY(W906_EcSetSpeed(iBoardID,iPortID,iSpeed1,iSpeed2,dAcc,dDec,bSetJog);) }` | 走不到（L912） |
++| 1034 | `return true;` | `W906_EC_ONLY(W906_EcCall(…kEcSetActPos,0,(double)p);) return true;` | 無副作用，仍回 true |
++| 1057-1059（SetCommand `#else`） | 2 行註解＋`return 0;` | `if(!EcatMotorRoute() \|\| !Enable) return 0;` → `return (int)W906_EcCall(…kEcSetCmdPos,0,(double)p);` | 回 0 |
++| 1099（SetSoftLimit 的 `}`） | `}` | `W906_EC_ONLY(`兩筆 `kEcSetLimit`（LP、LN）`) }` | 無副作用 |
++| 1139-1142（GetAlarm `#else`） | 3 行註解＋`return false;` | `TEcatAxisRead s; if(!W906_EcRead(iBoardID,iPortID,s)) return false; return (s.motionIO & 0x3004e)!=0;` | `W906_EcRead` 沒路由回 false |
++| 1192-1202（ScanMotorStatus `#else`） | 3 行註解＋8 行設 false | 有路由：讀、讀不到就 `return`、依 §1.2 解碼；**沒路由：原本那 8 行原樣保留在 else 裡** | 走原本那 8 行 |
++| 1324（空行） | 空 | `W906_EC_ONLY({ TEcatAxisRead s; if(W906_EcRead(iBoardID,iPortID,s)) Pos=s.cmdPos; })` | Pos 仍是 0 |
++| 1355-1358（Busy `#else`） | 3 行註解＋`return true;` | 讀不到或 pending ⇒ true；否則 `state!=kEcStaReady` | 回 true |
++| 1387-1390（Error `#else`） | 同形 | 讀不到 ⇒ false；否則 `state==kEcStaErrorStop` | 回 false |
++| 1413-1415（GetHomeIO `#else`） | 同形 | 讀不到 ⇒ false；否則 bit4 | 回 false |
++| 1597-1600（MotionDone `#else`） | 3 行註解＋`return false;` | `if(!Enable) return false;` → 讀不到或 pending ⇒ false → `return s.state==kEcStaReady;` | 回 false |
++| 1658（空行） | 空 | `W906_EC_ONLY(W906_EcCall(…kEcMoveRel,0,(double)iP1);)` | 無副作用 |
++| 1762-1769（EtherCatMotHome `#else`） | 6 行註解＋`Task=1; return false;` | 第一行 `if(!EcatMotorRoute()){ Task=1; return false; }`，其餘 7 行是 §2.3 的 switch | 第一行就是今天的兩句 |
++| 1807（MotOutputOn 的 `}`） | `}` | `W906_EC_ONLY(if(EcatMotorRoute()){ if(bAlarm){ W906_EcCall(…kEcResetError); MySleep(100);} W906_EcCall(…kEcSvOn,0,1);} ) }` | 沒路由連 `MySleep` 都不跑 |
++| 1822（MotOutputOff 的 `}`） | `}` | `W906_EC_ONLY(W906_EcCall(…kEcSvOn,0,0);) }` | 無副作用 |
++| 1913 | `if(!bAxisOpen)` | 同 L672 的延遲認領 | 同 L672 |
++| 1937（空行） | 空 | `W906_EC_ONLY(W906_EcCall(…kEcMoveAbs,0,(double)Tar);)` | 走不到（L1913） |
++| 1985（空行） | 空 | `W906_EC_ONLY({ TEcatAxisRead s; if(W906_EcRead(iBoardID,iPortID,s)) Pos=s.actPos; })` | Pos 仍是 0 |
++| 632-642（InitMotor `#else`） | 10 行註解＋`SetEtherCatInType();` | 註解縮短；加一行 `if(EcatMotorRoute() && !W906_EcInitCfg(iBoardID,iPortID,MotorType,bSensorType,bIn1Logic,PJogHighSpeed,dAcc,dDec)) return false;`；`SetEtherCatInType();` 照留 | 走不到（L413） |
++| 2189（ResetState 的 `}`） | `}` | `W906_EC_ONLY(W906_EcCall(…kEcResetError);) }` | 無副作用 |
++
++**刻意不改**：`G00`／`RealG00`、`DoHome` 與四個 `*DirectHome*`、`ethercat_set_output_*`／`IOBitOff`、`SetEtherCatInType` 的 `#else`（併進 initCfg）、`SetHomeSpeed`（由 homeStart 取代）、
++`Close_Card` 的 `#else`（卡是監看器的）、`EtherCatWriteAO`、Latch 系列。`Motor/myEthercatmotor.h` 不用改。
++
++**`Motor/mymotor.cpp`（不是這份清單，但 Q4 若照建議要改）**：`SetSpeed :325-329`、`GetMotorAlarm :1213-1220`、`ScanMotorStatus :1234-1240`、`PCIL132_StopMotor :1311-1315`、`ServoOnOff :1345-1353`
++的 Index 名稱判斷，同一行加上 `&& CardType!="PCI1203"`（EastSun R2 的延伸）。`csystem.cpp`／`uhome.cpp` 的對應處（`ScanAllMotorStatus :15881`、`uhome.cpp:2509`）筆電正在改，這次不碰。
++
++---
++
++## 8. 只有 EastSun 能回答的問題（各附建議預設）
++
++| # | 問題 | 建議預設 |
++|---|---|---|
++| Q1 | 引擎在 DS402 軸上的**座標寫入**要不要真的做？包括 `InitMotor` 尾巴的 `SetCommand(0)`／`SetPosition(0)`（`:645-648`）、`PCIL132_SetPos(0)`、`PCIL132_ResetPos`（Servo ON 後把 command 對齊 actual，`Motor/mymotor.cpp:1288-1304`、`:1357-1363`）。你的回原點規則是「驅動器定義原點、回原點後不歸零」；卡片座標若在回原點前被改寫，回原點後讀到的位置可能差一個位移 | **DS402 軸上路由拒絕 `kCmdAxSetCmdPos`／`kCmdAxSetActPos`（記一行、不跳警報），非 DS402 照 golden** |
++| Q2 | 引擎 HOME 開頭（`EtherCatMotHome` case 1）golden 會跑完整 `InitMotor`：ResetError（＝回原點順手清錯）、整張設定表、**Servo ON**。要照做嗎？不做的話軸沒 Servo ON，golden 的 `MotorHome` 會回 4 | **照 golden 做（扣掉 Q1 的歸零）**：按 HOME 本來就是操作員的明確動作，golden 也是在這裡 Servo ON。替代：只送 SvOn |
++| Q3 | 方法 24／28 回原點完成時，卡片 `motionIO` 的 ORG（bit4）會不會亮？golden `MotorHome` case 20 要它在 300 ms 內亮，否則重試 3 次後判失敗（`Motor/mymotor.cpp:1157-1182`）。SVON（bit14）也一樣要讀得到 | **先照 golden（看 ORG 燈），第一次在機邊量**；若不亮再裁決替代判據 |
++| Q4 | M14 MTestZ1（1203 的 Index Z）在引擎裡處處走 Galil：回原點（`uhome.cpp:2509`）、停止（`Motor/mymotor.cpp:1311-1315`）、速度（`:325-329`）、狀態／警報（`:1213-1240`、`csystem.cpp:15881`）、Servo（`:1345-1353`）。要把 R2 延伸到引擎嗎？ | **延伸到 `Motor/mymotor.cpp`**（`CardType=="PCI1203"` 就走一般 1203 路徑）；`csystem.cpp`／`uhome.cpp` 等筆電改完再一起 |
++| Q5 | Mot_Table 若仍有 Direction=1 的 1203 列：拒絕認領，還是照 6B 當成 0？ | **拒絕認領並印出原因**（6B 已要求表改 0；機台表 19 列目前全是 0） |
++| Q6 | wb_serve 開卡後要不要自動跑 golden 的「每個 1203 軸重新 InitMotor」（`EtherCAT/MyEtherCAT.cpp:683-692`）？那會在沒人按鍵時讓全部軸 Servo ON（並依 Q1 決定是否歸零） | **不要**。只在第一次用到時認領；Servo ON 靠 HOME（Q2）、Motor Power、Motor Test |
++| Q7 | 引擎每拍都會重送同樣的停止與速度（G04 沒電時 19 軸 × 2 命令／500 ms），會洗掉你的 512 行稽核與「最後一個命令」。可以在路由裡跳過「效果相同」的寫入嗎？判準：軸在一輪**比最後一個送出命令更新**的樣本裡是 READY 才跳過停止；速度與上次成功寫入且卡片讀回相同才跳過。另外，可以在 `Execute` 裡加一本「每軸最後送出時的 pollCount」帳，讓 Motor Test、pci1203 頁、引擎共用嗎？（你的檔，同行改） | **兩個都要**；跳過的次數印在路由的限流日誌裡 |
++| Q8 | golden `StopAllMotor` 在 `SystemStart` 時不停 `ServoAlarmOn=0` 的軸（機台 10 列）。1203 伺服要照 golden，還是一律停？ | **照 golden**；出事停機（警報）那條已經無條件停全部 1203 軸（`WebMotorAccess.cpp:2915-2921`） |
++| Q9 | `WB_PUMP_1203_START_RING` 現在關著（`MachineType.h:159`）：ring 0 沒有循環交換時，命令回 SUCCESS 但軸不動、`motionIO` 凍住（`MachineType.h:126-129`、`EtherCAT/Pci1203Monitor.cpp:2244-2329`）。引擎路由要以它打開為前提嗎？控制閘目前也因為它關著而紅（`docs/MACHINE_GATES_OPENED_20260926.md:536-538`） | **以它打開為前提**；`WB_ENGINE_MOTOR_1203` 與它同一次裁決 |
++| Q10 | golden 每個廠商呼叫失敗都跳 WAR16121／16122。路由的失敗要不要跳？（會遞迴，§4.4） | **不跳**，只記稽核＋印限流日誌；若要讓操作員看到，改成非阻塞的事件通道，不走 `ShowErrorMessage` |
++| Q11 | 被拒絕、失敗、或 DRY RUN 的運動，golden 會在下一拍當成「已到位」。路由把該軸鎖成「不會完成，直到下一個停止」可以嗎？ | **可以（安全方向的偏離）**；引擎停在那一步，由它自己的逾時／警報接手 |
++
++---
++
++### 附錄：本檔用到、但不屬於這次設計的量測
++
++* 機台表 `D:\HT9045\system\Mot_Table.csv`：19 列 `CardModel=PCI1203`（M00、M01、M03、M11、M14、M17、M18、M19、M20、M22、M30、M35、M36、M38、M39、M40、M41、M42、M108），
++  全部 `Direction=0`、`GearRatio=1`、`Enable=1`；`ServoAlarmOn=1` 的有 9 列（M00、M01、M11、M14、M17、M18、M19、M20、M30）。
++* 13／15 軸曾讀到 603Fh=0x0810（A.810），Fault Reset 清不掉（`EtherCAT/Pci1203Control.h:312-315`，20260912 量測）；ERROR_STOP 的軸會被 `Execute` 擋下所有運動（`Pci1203Control.cpp:1556-1579`）。
++  路由接上後，`ScanAllMotorStatus`（`csystem.cpp:15959-15977`）會開始真的看到這些警報燈 —— 那是 golden 行為，但畫面上會和今天（燈全暗）不一樣。
+diff --git a/docs/MACHINE_GATES_OPENED_20260926.md b/docs/MACHINE_GATES_OPENED_20260926.md
+new file mode 100644
+index 0000000..d02eaad
+--- /dev/null
++++ b/docs/MACHINE_GATES_OPENED_20260926.md
+@@ -0,0 +1,549 @@
++# 機台端解閘清單與前提重驗（2026-09-26）
++
++> AI(W906-GATE-AUDIT) 20260926：唯讀稽核，本文件是這次唯一新增的檔案。沒有改任何程式、沒有建置、
++> 沒有啟動 wb_serve／ioweb_probe／pci1203_linkprobe、沒有碰 1203 卡、沒有跑 ctest。
++> 行號全部量於 HEAD `7961939`（分支 `integ/ioweb-8484bdb4`）；本文件引用的六個引擎檔（csystem.cpp、uhome.cpp、
++> cinitial.cpp、csystem.h、database.cpp、cSocket.cpp）在工作樹與 HEAD 相同（同時段其他工作正在改 1203 監看器等別的檔，與本文件無關）。
++> 行號會漂，要用就重量，不要抄。
++
++---
++
++## 0. 先講結論
++
++1. **範圍** `95c398b..7961939` 共 10 顆 commit。真的拿掉 `#if 0` 的只有兩顆：
++   * `0d253a0`（MT-E3b，20260925）：14 個 `#if 0` 閘，外加 2 個「不是 `#if 0`、但效果等於解閘」的改動，並新關了 1 個閘。
++   * `8929d13`（MT-FIX1b，20260926）：4 個閘＋G15 的前半，並替 3 處 golden 的煞車放開加了一道 Servo-ON 檢查。
++   * 其餘 8 顆 commit（MT-E1、MT-E1b、MT-E2、MT-E3a、LAT-1、MT-E3c、MT-FIX1、MT-FIX1a）**一個 `#if 0` 都沒拿掉**（見 §2 的指令與結果）。
++2. **違反了 W2 的規則。** 週末計畫 W2 寫的是「一顆 commit 一個閘；解閘前重跑那個閘的前提」
++   （`docs/WEEKEND_PLAN_20260925.md:285`）。這台機把 19 個閘擠在 2 顆 commit 裡開。
++   commit 歷史不改（規則也不准改），本文件是**事後補做**的「前提重驗指令與結果」。
++3. **重驗結果：19 個閘原本的前提（「有宣告、沒有定義」「沒有 port」「連結會失敗」）全部確實已經過期。**
++   證據是 `nm` 對 `build_integ_ship_x86` 的目的檔與已連結的 `wb_serve.exe`：每一個原本缺的符號現在都是 `T`（已定義）。
++   目的檔比原始碼新（§1），所以量到的就是 HEAD 的內容。
++4. **但「前提過期」不等於「在真機上沒問題」。** 有幾件事只有機邊能驗，最要緊的四件：
++   * G31a：wb_serve 開起來約 100 拍後會**自己**把馬達電源繼電器 `SwMotorRelay` 吸合（沒人按鍵）。
++   * G04：HT9050 的四顆 EMG 感測器與 `SnServo` 在 IO 表上都是 `Enable=0`，所以「沒動力」在這台實際上**只看 `SnMotorPower`**。
++     按下 EMG 如果不會讓 `SnMotorPower` 掉，G04 的鎖就永遠不會因為 EMG 觸發。
++   * **8929d13 間接改變了 IO 頁**：`JsonBridge/IoBtnPanelClick.cpp:345` 拒絕放開 Index Z 煞車的條件只看
++     `IsIndexMotorOutOfPower()`。以前在這台恆為 true（放不掉），現在有馬達電、沒 EMG 就放得掉，
++     而且這條路**沒有經過** `W906_BrakeReleaseOK` 的 Servo-ON 檢查。它的註解（`:44`、`:48-50`）已過期。
++   * 煞車分組對應哪幾軸（Index→M14、InOutArmZ→M03/M22、Cassette→M35/M38/M39）程式裡自己寫著「待 EastSun 機邊確認」。
++5. **g2 G03（`csystem.cpp:15911`）：稽核員說得對，它寫的兩個理由都過期了。**
++   但這一段在 HT9050 上根本走不到（它在 Galil Index 那一臂，而且要 Galil 回報的警報燈），
++   所以**開或不開，這台機的行為都一樣**。可以照 W2 規則單獨一顆 commit 照 golden 開；對 HT9050 是零差異。詳見 §7。
++6. **仍關著、但理由提到的相依現在已存在的候選**有 10 個，最要緊的是 **h4-G4（`csystem.cpp:28834`）**：
++   它自己的註解寫「必須和讓 `iNozzleEvent` 變真的那一波一起開」——那一波（A4-6，20260924）已經落地，閘卻沒開，
++   所以**今天回原點不會等吸嘴吹氣完成**。詳見 §8。這裡只列候選，**一個都沒開**。
++
++---
++
++## 1. 環境與方法
++
++| 項目 | 值 |
++|---|---|
++| C++ 樹 | `D:\HT9045\_integ_ioweb\HT9011UC_Cpp_V3.33.906.0`，HEAD `7961939` |
++| 工作樹 | `git diff --stat HEAD -- csystem.cpp uhome.cpp cinitial.cpp csystem.h database.cpp cSocket.cpp` → 空輸出、exit 0 |
++| 目的檔 | `build_integ_ship_x86`（WinLibs i686 g++ 16.2.0，`-std=c++14`，出貨組態） |
++| 新舊 | `csystem.cpp.obj` 09-26 00:49:32 > `csystem.cpp` 00:47:20；`uhome.cpp.obj` 00:49:29 > `uhome.cpp` 00:47:38；`wb_serve.exe` 02:13:46 > 8929d13 的 commit 時間 02:12:43；`tests\test_mt_e3b_engine.exe` 01:27:50 > 其原始碼 00:49:37 |
++| nm | `%LOCALAPPDATA%\Programs\ht9045-nonoracle-toolchain\mingw32\bin\nm.exe`（`CMakeCache.txt` 的 `CMAKE_NM`） |
++| golden | `D:\HT9045\HT9011UC_Code_V3.33.906.0_20260618\`，用 Big5（code page 950）**唯讀**讀取；本文件引用的每個 golden 行號都逐行比對過原文 |
++| 機台檔（唯讀） | `D:\HT9045\system\Mot_Table.csv`（09-25 16:30:17）、`IO_Table.csv`（09-25 11:22:55）、`Gerneral.ini` |
++
++**沒有做的事**：沒有跑 ctest（測試證據引用 20260926 02:24:58 在 `build_integ_ship_x86` 跑的完整 ctest 紀錄，見 §10）；
++沒有執行任何會開卡的程式。唯一執行的外部腳本是兩支**只讀原始碼**的靜態檢查
++`tools\pci1203_readonly_gate.ps1`、`tools\pci1203_control_gate.ps1`（§9 末）。
++
++---
++
++## 2. 找出被打開的閘
++
++指令（對每顆 commit 找「被刪掉的前置處理指令」與「新增的 `#if 0`／`#endif`」）：
++
++```powershell
++foreach ($c in '4b21dbe','9fd97ff','2c1afab','b90b0ca','eef1a78','0d253a0','5a0f02d','5dc6706','8929d13','7961939') {
++  git show --format='%h %s' -U3 $c | Select-String '^-\s*#\s*(if|ifdef|ifndef|endif|else|elif)\b|^\+\s*#\s*(if 0|endif)'
++}
++# 另外查有沒有用別的形式閘（布林旗標、if(false)）：
++git diff 95c398b 7961939 -U0 -- '*.cpp' '*.h' | Select-String '^[-+].*(ENABLED\s*=\s*(true|false)|if\s*\(\s*false\s*\)|if\s*\(\s*0\s*\))'
++```
++
++結果：
++
++* `0d253a0`：刪掉 G9、G29、G31b、G31c、G07、G10、G13、G21、g1 G03、g1 G14、g1 G16、
++  `SAFETY-GATE(W906-T6-VERIFYMOT)`、`SAFETY-GATE(W906-T6-ABORTHOME)`、`GATE (W906-HOME-C2-GALIHOMETASK)` 共 14 組；
++  新增 1 組 `GATE (W906-MT-E3b-ABORTBTN)`。
++* `8929d13`：刪掉 G31a、G04、G34、G05；G15 改成只閘後半（`GATE G15 (second half)`）。
++* 其餘 8 顆：只有新程式碼自己的 `+#endif`（配 `#ifdef`／`#ifndef`），沒有任何 `-#if 0`。旗標形式的搜尋只命中 Light Scale 的 UI 欄位，不是閘。
++
++**編號注意**：csystem.cpp 有兩套編號。`g1` 群（翻 golden 1..3042 那段）和 `g2` 群（DoSystem 一帶）
++各有自己的 G03、G14、G15、G16、G17、G18、G19、G22……。本文件一律寫明是哪一群。
++「稽核員說過期的 g2 G03」是 `ScanAllMotorStatus` 那一個，不是煞車那一個。
++
++---
++
++## 3. 共同的重驗指令與結果
++
++```powershell
++$nm = "$env:LOCALAPPDATA\Programs\ht9045-nonoracle-toolchain\mingw32\bin\nm.exe"
++$o  = "build_integ_ship_x86\CMakeFiles\ht9045_sm.dir"
++& $nm -C --defined-only "$o\csystem.cpp.obj" | Select-String 'Breaker(ON|OFF|On)\(|IsEMGPressed\(|CountMotorPowerDelay\(|IsIndexMotorOutOfPower\(|LockIndexMotorAndDoHomeProcess\(|DoMotorPowerOn\(|VerifyMotorAction\(|iEMGPressDelay|W906_BrakeReleaseOK|W906_BrakeServoOnHook|IsSystemPowerOff\('
++& $nm -C --defined-only   "$o\uhome.cpp.obj"   | Select-String 'GaliMotorServoOff|InitGali_HomeTask|sbAbortHomeClick'
++& $nm -C --undefined-only "$o\csystem.cpp.obj" | Select-String 'TfHome'
++& $nm -C "build_integ_ship_x86\wb_serve.exe"   | Select-String ' (T|D|B) (W906_BrakeReleaseOK|TfHome::|iEMGPressDelay$|VerifyMotorAction|IsIndexMotorOutOfPower|CountMotorPowerDelay)'
++```
++
++實際輸出（節錄，20260926 量）：
++
++```
++csystem.cpp.obj:  T IndexMotorBreakerOFF()        T IndexMotorBreakerON()
++                  T MagazineBreakerOFF()          T MagazineBreakerON()
++                  T InOutArmZBreakerOFF()         T InOutArmZBreakerON()
++                  T LDCarRotArmZBreakerOFF()      T LDCarRotArmZBreakerOn()
++                  T CassetteBreakerOFF()          T CassetteBreakerON()
++                  T IsEMGPressed()  T IsSystemPowerOff()  T IsIndexMotorOutOfPower()
++                  T LockIndexMotorAndDoHomeProcess()  T CountMotorPowerDelay()
++                  T DoMotorPowerOn()  T VerifyMotorAction()
++                  T W906_BrakeReleaseOK(char const*, char const*)
++                  D iEMGPressDelay          B W906_BrakeServoOnHook
++uhome.cpp.obj:    T TfHome::InitGali_HomeTask()
++                  T TfHome::GaliMotorServoOff(vclcompat::AnsiString)
++                  T TfHome::sbAbortHomeClick(void*)
++csystem.cpp.obj (undefined, 由 uhome.cpp.obj 滿足):
++                  U TfHome::sbAbortHomeClick(void*)   U TfHome::GaliMotorServoOff(vclcompat::AnsiString)
++wb_serve.exe:     T VerifyMotorAction()  T W906_BrakeReleaseOK(...)  T CountMotorPowerDelay()
++                  T IsIndexMotorOutOfPower()  T W906_DoMotorPowerOnBegin()
++                  T TfHome::sbAbortHomeClick(void*)  T TfHome::GaliMotorServoOff(...)  T TfHome::InitGali_HomeTask()
++                  D iEMGPressDelay  B W906_BrakeServoOnHook
++```
++
++另外用字串確認打開的區塊真的編進了出貨執行檔（這些字串只出現在被打開的區塊裡）：
++`wb_serve.exe` 含 `DoSystem G05`、`CountMotorPowerDelay G16`、`HOME start`、`brake release %s: %s (%s)%s%s`、
++`VerifyMotorAction: 2 s without motion`、`GaliMotorServoOff - ` → 全部 True。
++`tests\test_mt_e3b_engine.exe` 含 `PART H: brake-release servo-ON guard` → True。
++
++golden 的煞車函式本體位置（Big5 唯讀比對）：`IndexMotorBreakerON` :1076、`IndexMotorBreakerOFF` :1082、
++`IsEMGPressed` :1416、`IsIndexMotorOutOfPower` :1501、`LockIndexMotorAndDoHomeProcess` :1514、`CountMotorPowerDelay` :1543、
++`MagazineBreakerON/OFF` :24083/:24088、`InOutArmZBreakerON/OFF` :24093/:24099、`LDCarRotArmZBreakerOn/OFF` :24105/:24110、
++`CassetteBreakerON/OFF` :24115/:24122、`DoMotorPowerOn` :19102。移植樹：`csystem.cpp:19097`／`:19103`／`:19723`／`:19903`／`:19923`／`:19979`、
++`:29390`～`:29429`、`:14381`。
++
++---
++
++## 4. 逐閘紀錄：`0d253a0`（MT-E3b，20260925）
++
++**這一整批的授權**（引自程式註解）：
++
++* **R1**（EastSun 20260925）：「the station-16 brake outputs are ON = release, same as golden, so the whole gated brake family goes back to golden」（`csystem.cpp:14399-14401`）。
++  也就是 `*BreakerOFF` = 抓住煞車、`*BreakerON` = 放開煞車。舊註解有幾處把方向寫反，這次一起更正。
++* **R2**：「M14 MTestZ1 uses the 1203 path like the other PCI1203 rows; do NOT edit Gerneral.ini (INDEX_MOTION_CARD stays 0) -- a Mot_Table row whose CardModel is PCI1203 is a 1203 axis」（`database.cpp` R2 註解，實作 `database.cpp:2576-2579`）。
++* **R8**：「VerifyMotorAction = COMPLETELY golden ... AND golden MainProc pauses while Motor Test / Teach is open」（`csystem.cpp:29966` 起的說明）。
++* **R9**：操作員的 Motor Power 按鈕「must not be blocked」（`csystem.cpp:16139`）。
++* **R10**：machinerecord.dat 不還原、測試寫暫存副本（不是閘，是測試圍堵）。
++
++### 4.1 G9 — `DoMotorPowerOn` 送電時抓住煞車
++
++* **位置**：`csystem.cpp:14402-14404`（註解 `:14395`），函式 `DoMotorPowerOn` `:14381`。
++* **golden**：`csystem.cpp:19116-19118`（`IndexMotorBreakerOFF(); MagazineBreakerOFF(); CassetteBreakerOFF();`）。
++* **原本的前提**：三個 `*BreakerOFF` 有宣告（`csystem.h:143/:145/:317`）但全樹沒有定義，用 `nm --undefined-only` 證明過。
++  （舊註解還把方向寫反，說成「煞車沒放開」。）
++* **重驗**：§3 → 三個都是 `T`。**過期。**
++* **授權**：R1。
++* **測試**：`DoMotorPowerOn` 本身**沒有直接測試**。它的跨拍複本 `W906_DoMotorPowerOnIteration`（`csystem.cpp:14428`）由 `MT_E3b_Engine` PART F 測（送電後 `SwInArmZBreaker` 被抓住、約 1 秒結束）。
++* **機邊待驗**：Motor Power ON 時，繼電器吸合的同時站 16 的煞車輸出要變 OFF（抓住）。呼叫者有 HOME（uhome.cpp）、`forms/fMain.cpp`、G31a、G31b。
++
++### 4.2 g1 G03 — `IndexMotorBreakerOFF` 尾端的四個輔助煞車
++
++* **位置**：`csystem.cpp:19148-19151`（註解 `:19142`）。
++* **golden**：`csystem.cpp:1103-1106`。
++* **原本的前提**：`MagazineBreakerOFF`／`InOutArmZBreakerOFF`／`LDCarRotArmZBreakerOFF`／`CassetteBreakerOFF` 在 csystem 第二波（golden :24088-:24122），當時沒有本體。
++* **重驗**：§3 → 四個都是 `T`（移植樹 `csystem.cpp:29395`／`:29406`／`:29417`／`:29429`）。**過期。**
++* **授權**：R1。
++* **測試**：`MT_E3b_Engine` PART F 間接測到：`W906_DoMotorPowerOnIteration` 只呼叫 Index／Magazine／Cassette 三個，
++  而斷言 `SwInArmZBreaker` 被抓住 —— 那只能來自這段尾巴裡的 `InOutArmZBreakerOFF()`。
++* **機邊待驗**：從此每一個呼叫 `IndexMotorBreakerOFF()` 的地方（`LockIndexMotorAndDoHomeProcess`、`IsEMGPressed`、G04…）都會一起抓住手臂 Z 與 Cassette 的煞車。
++  HT9050 會真的寫到的輸出：`SwInArmZBreaker`（站 16 ch5）、`SwOutArmZBreaker`（ch6）、`SwCassetteLD/Auto1/Auto2MotBreaker`（ch24/26/27），都是 `Enable=1`；
++  `SwMagazineMotorBreaker` 是 `Enable=0`，`SwLoadCarRFIDZBreaker` 表上沒有這一列。
++
++### 4.3 g1 G14 — `IsEMGPressed` 按下 EMG 時抓住輔助煞車
++
++* **位置**：`csystem.cpp:19831-19834`（註解 `:19827`）。
++* **golden**：`csystem.cpp:1445-1448`。
++* **原本的前提**：同 g1 G03，四個輔助煞車沒有本體。
++* **重驗**：§3 → 過期。
++* **授權**：R1。
++* **測試**：**沒有直接測試**（沒有測試真的觸發 EMG 分支）。
++* **機邊待驗**：HT9050 的四顆 EMG 感測器 `SnFrontLeftEMG`／`SnFrontRightEMG`／`SnRearLeftEMG`／`SnRearRightEMG` 與 `SnServo` 在
++  `D:\HT9045\system\IO_Table.csv` 都是 `Enable=0`，`Gerneral.ini:216 SafePlcIO=0`，所以這一臂在這台**實際上不會進來**。
++  EMG 在 HT9050 上要靠「切斷馬達電 → `SnMotorPower` 掉」由 G04 接手（見 4.18）。
++
++### 4.4 g1 G16 — `CountMotorPowerDelay` 倒數完放開輔助煞車
++
++* **位置**：`csystem.cpp:20024-20027`（註解 `:20017`；8929d13 又在 `:19996-19999` 加了 Index 的檢查）。
++* **golden**：`csystem.cpp:1561-1564`（前一行 :1560 是 `IndexMotorBreakerON()`）。
++* **原本的前提**：四個 `*BreakerON` 沒有本體。
++* **重驗**：§3 → 過期。
++* **授權**：R1；8929d13 再依 EastSun 20260926「對應軸 Servo On 才放」加上 `W906_BrakeReleaseOK`（見 4.21）。
++* **測試**：`MT_E3b_Engine` PART H：倒數歸零時，假 hook 說 InOutArmZ 沒激磁 → `SwInArmZBreaker`／`SwOutArmZBreaker` 維持抓住；Cassette 激磁 → `SwCassetteLDMotBreaker` 放開。
++* **機邊待驗**：只有 G21 會呼叫 `CountMotorPowerDelay`（4.8）。見 4.21 的 Servo-ON 對應表。
++
++### 4.5 g2 G07 — 系統斷電時抓住煞車
++
++* **位置**：`csystem.cpp:16411-16415`（註解 `:16409`）。
++* **golden**：`csystem.cpp:4333-4337`。
++* **原本的前提**：五個 `*BreakerOFF` 只有宣告。
++* **重驗**：§3 → 過期。
++* **授權**：R1。
++* **測試**：**沒有直接測試。**
++* **機邊待驗**：HT9050 的 `SnSystemPower` 在 IO 表是 `Enable=0`，這一臂在這台**進不來**，機邊無從驗。
++
++### 4.6 g2 G10 — 馬達斷電（運轉中）時抓住煞車
++
++* **位置**：`csystem.cpp:16463-16467`（註解 `:16459`）。
++* **golden**：`csystem.cpp:4369-4373`。
++* **原本的前提**：同 G07。
++* **重驗**：§3 → 過期。
++* **授權**：R1。
++* **測試**：**沒有直接測試。**
++* **機邊待驗**：運轉中（`SystemStart`）拔掉馬達電 → 煞車輸出要變 OFF。注意 `:16461-16462` 的註解「閒置時的斷電是 G04 的事，而 G04 還閘著」已經過期（G04 在 8929d13 打開了）。
++
++### 4.7 g2 G13 — DoSystem 的 EMG 條件補回 `IsEMGPressed() ||`
++
++* **位置**：`csystem.cpp:16538`（註解 `:16534`）。
++* **golden**：`csystem.cpp:4414`。
++* **原本的前提**：`IsEMGPressed` 只有宣告（`csystem.h:147`），本體在另一群還沒落地。
++* **重驗**：§3 → `T IsEMGPressed()`。**過期。**
++* **授權**：R1（EMG 那一半的煞車族）。
++* **測試**：**沒有直接測試。**
++* **機邊待驗**：因為 HT9050 的 EMG 感測器全是 `Enable=0`，這一臂在這台只會經由 `bIsIndexMotorOutOfPower` 進來，
++  畫面會顯示 golden 最後一個分支的訊息「EMG/Servo 訊號異常，請檢查 IO 模組」，**不會**是 WAR1630～1633。
++  `:16536-16537` 的註解「G04 閘著所以 bIsIndexMotorOutOfPower 恆為 false」已過期。
++
++### 4.8 g2 G21 — 伺服電源穩定前不准 START
++
++* **位置**：`csystem.cpp:16830-16836`（註解 `:16821`）。
++* **golden**：`csystem.cpp:4649-4655`。
++* **原本的前提**：`CountMotorPowerDelay()` 沒有宣告也沒有定義。
++* **重驗**：§3 → `T CountMotorPowerDelay()`，`csystem.h` 有宣告。**過期。**
++* **授權**：R1（它是 G16 唯一的觸發點，不開它 G16 就是死碼）。
++* **測試**：`W6_6_Hub` 間接：它的 PART C 因為 G21 打開後會把 `SystemStart` 拉回 false，所以改成重新設定守衛（`tests/test_w6_6_hub.cpp:224-230`）。沒有斷言 G21 本身。
++* **機邊待驗**：`SnMotorPower`（ring1 站 2 ch30，`Enable=1`）亮滿 `MotorPowerOnDelay` 秒（開機 10、斷電後 4）之前按 START 會被拉回停機。
++
++### 4.9 g2 G29 — 面板 [Power Off] 鍵呼叫 `GaliMotorServoOff`
++
++* **位置**：`csystem.cpp:16118-16121`（註解 `:16114`）。
++* **golden**：`csystem.cpp:4146-4149`。
++* **原本的前提**：`TfHome::GaliMotorServoOff` 不是移植樹 TfHome 的成員；而且 `W7C2_FHOME_SERVOOFF` 也是空巨集，要一起解。
++* **重驗**：§3 → `T TfHome::GaliMotorServoOff(vclcompat::AnsiString)` 在 `uhome.cpp.obj`（本體 `uhome.cpp:4984`，golden `uhome.cpp:4988-5016`）；
++  `csystem.cpp.obj` 有 `U TfHome::GaliMotorServoOff`（真的會呼叫）。**過期。**
++* **授權**：R1＋閘自己寫的解閘條件（「TfHome 長出這個方法時與 W7C2_FHOME_SERVOOFF 一起解」）。
++* **測試**：`GaliMotorServoOff` 本體由 `MT_E3b_Engine` PART B 測（煞車抓住、繼電器切掉、`InitGali_HomeTask` 的旗標、不清 HomeFlag）。這個呼叫點本身沒有測試。
++* **機邊待驗**：HT9050 的 `SnFKPowerOff`／`SnRKPowerOff` 是 `Enable=0`，這一臂在這台進不來。
++
++### 4.10 g2 G31b — 面板 [Power On] 鍵跑 `DoMotorPowerOn`
++
++* **位置**：`csystem.cpp:16142`（註解 `:16137`）。
++* **golden**：`csystem.cpp:4154`。
++* **原本的前提**：先是「`DoMotorPowerOn` 沒定義」（20260810 已更正），後來剩「G9 還閘著」。
++* **重驗**：§3 → `T DoMotorPowerOn()`，G9 已開（4.1）。**過期。**
++* **授權**：R1、R9。
++* **測試**：**沒有直接測試。**
++* **機邊待驗**：`SnFKPowerOn`／`SnRKPowerOn` 是 `Enable=0`，這台進不來。注意它是 golden 的 1 秒忙等，會卡住整個 tick 執行緒。
++
++### 4.11 g2 G31c — [Power On] 時先抓住五組煞車
++
++* **位置**：`csystem.cpp:16153-16157`（註解 `:16150`）。
++* **golden**：`csystem.cpp:4158-4162`。
++* **原本的前提**：五個 `*BreakerOFF` 只有宣告。
++* **重驗**：§3 → 過期。
++* **授權**：R1。
++* **測試**：**沒有直接測試。**
++* **機邊待驗**：同 G31b，這台進不來。
++
++### 4.12 `SAFETY-GATE(W906-T6-VERIFYMOT)` — Motor Test／Teach 開著時的馬達動作鎖
++
++* **位置**：呼叫 `csystem.cpp:30472-30475`（註解 `:30469`）；本體 `VerifyMotorAction` `csystem.cpp:30050`。
++* **golden**：呼叫 `csystem.cpp:16963`；本體 `uteach.cpp:5345-5426`（`MoveDelay` :5345、函式 :5346）。
++* **原本的前提**：`VerifyMotorAction()` 在 `forms/fTeach.h:830` 刻意只宣告不定義，20260923 實測 `undefined reference`。
++* **重驗**：§3 → `T VerifyMotorAction()`（`csystem.cpp.obj` 與 `wb_serve.exe`）。**過期。**
++* **授權**：R8。
++* **測試**：`MT_E3b_Engine` PART E（動作中上鎖、停 2 秒後 `StopAllMotor`＋1203 停止＋AllBtnUp、`*Lock by Homeing`、停用的馬達不上鎖）；PART D2（頁面開著時 MainProc 暫停）。
++  測試自己寫明**沒測**門開的那一臂。
++* **機邊待驗**：
++  * 門的判斷來自 `CheckSafeDoorIsClosed()`。週末計畫記載 HT9050 表上只有 `SnSafeDoor1` 是真的 1203 點（站 2 ch25），
++    其他門點是舊 HT9045 位址（`docs/WEEKEND_PLAN_20260925.md:293-296`）。要在機邊確認門讀值：
++    讀成「開」的話，Motor Test 一動就會被這裡停掉；讀成「關」而門真的開了，則不會停。
++  * 一個 LoopMove 的等待超過 2 秒（3／6 秒選項）會被 golden 的 2 秒閒置停機結束 —— 這是 golden 行為，不是移植錯。
++
++### 4.13 `SAFETY-GATE(W906-T6-ABORTHOME)` — 回原點畫面開著時停機就中止回原點
++
++* **位置**：`csystem.cpp:32673-32674`（註解 `:32667`）；本體 `TfHome::sbAbortHomeClick` `uhome.cpp:5027`。
++* **golden**：`csystem.cpp:18923-18924`；`uhome.cpp:4980-4986`。
++* **原本的前提**：`sbAbortHomeClick`／`GaliMotorServoOff` 沒翻進 TfHome。
++* **重驗**：§3 → `T TfHome::sbAbortHomeClick(void*)`，`csystem.cpp.obj` 有 `U`。**過期。**
++* **授權**：閘自己寫的解法（「把 sbAbortHomeClick／GaliMotorServoOff 翻進 TfHome」）；註解裡沒有單獨的裁決引文。
++* **測試**：`MT_E3b_Engine` PART C（本體）、PART D1（MainProc 停機臂真的觸發）。
++* **機邊待驗**：回原點途中停機 → 停所有馬達（含 1203 監看器的軸）、切 `SwMotorRelay`／`SwServerON`、抓住全部煞車。**之後要重新按 Motor Power**（golden 行為）。
++* **同時新關了一個閘**：`GATE (W906-MT-E3b-ABORTBTN)`，`uhome.cpp:5031-5033`，golden `uhome.cpp:4984` `sbAbortHome->Down=false;`。
++  理由：TfHome 沒有 `sbAbortHome` 這個按鈕元件（它在網頁 Home Monitor 上，而且不是切換鍵）。前提成立（全樹沒有這個成員）。
++
++### 4.14 `GATE (W906-HOME-C2-GALIHOMETASK)` — 回原點時呼叫 `InitGali_HomeTask`
++
++* **位置**：`uhome.cpp:2233`（註解 `:2219`）；本體 `TfHome::InitGali_HomeTask` `uhome.cpp:688`。
++* **golden**：呼叫 `uhome.cpp:2453`；本體 `uhome.cpp:646-662`。
++* **原本的前提**：(1) `TfHome::InitGali_HomeTask()` 沒有翻；(2) Galil 的 609 個重複符號樁還在，真本體進不了同一個連結。
++* **重驗**：§3 → `T TfHome::InitGali_HomeTask()`；(2) `Motor/mymotor.cpp:1601` `#if 0 // GALI-STUB RETIRED (W906-P0-5)`。**兩個都過期。**
++  本體只寫記憶體旗標，不下 Galil 命令。
++* **授權**：閘自己的解閘條件；註解裡沒有單獨的裁決引文。
++* **測試**：`MT_E3b_Engine` PART B 斷言它寫的旗標（經由 `GaliMotorServoOff`）；`ProcessMotorHome` 這個呼叫點沒有直接測試。
++* **機邊待驗**：無硬體輸出，不需要。
++
++### 4.15 （非 `#if 0`）`W7C2_FHOME_SERVOOFF` 空巨集退役
++
++* **位置**：`csystem.cpp:4072-4073`（註解 `:4067`）；呼叫點 `csystem.cpp:5277`（`DoOneCycleFinishCheck`，`IniConfig.bOneCycleNeedPowerOff`）。
++* **golden**：`csystem.cpp:13840` `fHome->GaliMotorServoOff("DoOneCycleFinishCheck");`。
++* **原本的前提**：`fHome->GaliMotorServoOff` 不存在，所以用 `do { (void)(f); } while(0)` 代替。
++* **重驗**：同 4.9。**過期。**
++* **授權**：G29 閘自己寫「要與 W7C2_FHOME_SERVOOFF 一起解」。
++* **測試**：這個呼叫點**沒有測試**。
++* **機邊待驗**：只有 `bOneCycleNeedPowerOff` 開著、One Cycle 結束按 SKIP／HOME 時才會切馬達電。
++
++### 4.16 （非 `#if 0`）MainProc 的「Motor Test／Teach 開著」判斷改讀瀏覽器
++
++* **位置**：`csystem.cpp:30451-30452`（註解 `:30448`）；`W906_FormFShow`（`csystem.h`）。
++* **golden**：`csystem.cpp:16952` `if(fMotorTest->fShow || fTeach->fShow)`。
++* **原本的前提**：fShow 在新架構由瀏覽器持有，C++ 這邊恆為 false，這一整臂走不到（「設計題，不補樁」）。
++* **重驗**：`W906_FormFShowHook` 由 `WebMotorAccessLive.cpp:1015` `W906_MotorAccessEngineHooks()` 註冊（wb_serve 才有；ctest 沒有 → 與舊行為相同）。
++* **授權**：R8。
++* **測試**：`MT_E3b_Engine` PART D2。
++* **機邊待驗**：**只要瀏覽器的視窗總表說 Motor Test 或 Teach 開著，MainProc 就整個暫停**（golden）。
++  5dc6706（MT-FIX1）修了「重新整理後總表卡在開著」—— 機邊要確認關頁、重新整理、斷線後引擎會恢復。
++
++### 4.17 （不是閘，但是 G04 的前提）`database.cpp` R2 偏離
++
++* **位置**：`database.cpp:2576-2579`。golden `database.cpp:2353-2363` 在 `INDEX_MOTION_CARD==0` 時把四個 Index 列強制改成 SMC。
++* **改動**：自己那一格寫 `PCI1203` 的 Index 列（HT9050 的 M14 MTestZ1）照原樣讀。
++* **重驗**：`D:\HT9045\system\Mot_Table.csv` 的 M14：`MTestZ1, BoardID 14, Port 0, Enable 1, CardModel PCI1203`；
++  `Gerneral.ini:165 INDEX_MOTION_CARD=0`。`cinitial.cpp:3916`／`:3923` 把這一格抄進 `MOT[MTestZ1].CardType`。
++* **測試**：`MT_E3b_Engine` PART G。
++* 注意：機台的 Mot_Table 與 repo 的 `machines/HT9050/Mot_Table.csv` **不同**（MD5 `BC2E4C69…` vs `79CCD044…`；M14 的 Direction 機台是 0、repo 是 1）。ctest 餵的是 repo 那份。
++
++---
++
++## 5. 逐閘紀錄：`8929d13`（MT-FIX1b，20260926）
++
++**這一批的授權**（引自 commit 訊息與程式註解，EastSun 20260926）：
++
++* **G16**：「對應軸 Servo On 才放」—— golden 的每一個 `*BreakerON()` 放開都要先過 `W906_BrakeReleaseOK(group, site)`。
++* **G04／G05**：HT9050 上「沒動力」＝ `SnMotorPower` 沒亮或 EMG。
++* **G31a**：「照舊版打開」。
++* commit 訊息最後一句：「Not yet run on the machine.」
++
++### 5.1 g2 G31a — 開機約 100 拍後自動送馬達電
++
++* **位置**：`csystem.cpp:16068`（註解 `:16063`；之前 MT-E3b 留的「為什麼還不開」在 `:16049-16062`）。
++* **golden**：`csystem.cpp:4116`（`if(flag && DelayMotNo>=100)` 之內）。
++* **原本的前提**：先是「`DoMotorPowerOn` 沒定義」，後來「G9 還閘著」，MT-E3b 時改成新理由：
++  沒人按鍵就送電，而且 G21＋G16 打開後 4 秒會放開手臂 Z／Cassette 煞車，這棵樹不保證那時驅動器已激磁。
++* **重驗**：`T DoMotorPowerOn()`、G9 已開；「沒激磁就放煞車」由同日的 `W906_BrakeReleaseOK` 擋住（`T W906_BrakeReleaseOK`，`B W906_BrakeServoOnHook`，註冊於 `WebMotorAccessLive.cpp:1024`）。
++* **授權**：EastSun 20260926「照舊版打開」。
++* **測試**：**沒有直接測試。**
++* **機邊待驗**（重要）：
++  * wb_serve 開起來後，`CheckMotorPowerShutDown` 被呼叫約 100 次時會**自己**吸合 `SwMotorRelay`（ring1 站 1 ch29，`Enable=1`），只做一次（`flag`）。
++  * 那一下是 golden 的 1 秒忙等，**tick 執行緒（含 1203 Poll、網頁輸出佇列）會停 1 秒**。
++  * 之後 console 應該印出 `brake release HELD: ...`（沒激磁的群組），直到操作員讓那些軸 Servo ON。
++
++### 5.2 g2 G04 — 沒動力時鎖 Index、抓煞車、強制回原點
++
++* **位置**：`csystem.cpp:16315-16330`（註解 `:16311`；MT-E3b 的「為什麼還不開」在 `:16294-16310`）。判斷式 `IsIndexMotorOutOfPower` `csystem.cpp:19903`，HT9050 臂 `:19912-19913`。
++* **golden**：`csystem.cpp:4279-4294`（含 :4294 的 `else`）；判斷式 golden `:1501`。
++* **原本的前提**：(1) 20260809：五個符號只有宣告；(2) MT-E3b：符號都在了，但判斷式在 HT9050 **永遠為 true**
++  （它看 Galil 掃描才會寫的 `MOT[MTestZ1/Z2].Led[iServoOn]`，這台沒 Galil 卡、M15 也沒裝），照原文打開會每一拍都把機台鎖住。
++* **重驗**：(1) §3 → 全部 `T`，過期。(2) 8929d13 在 `csystem.cpp:19912-19913` 加了
++  `if(MOT[MTestZ1].CardType == "PCI1203") return IsEMGPressed() || Sen[SnMotorPower].IsOff();`；
++  `MOT[MTestZ1].CardType` 在這台是 `PCI1203`（4.17）→ 有馬達電且沒 EMG 時為 false。**過期。**
++  非 1203 的 Index 設定仍走 golden 的判斷。
++* **授權**：EastSun 20260926（沒動力＝`SnMotorPower` 沒亮或 EMG）。
++* **測試**：`MT_E3b_Engine` PART H（兩臂：非 1203 列 → true；1203 列 → 等於 `IsEMGPressed()`）；
++  `mainproc_guard` 的測試夾具改成「有電的機台」（`tests/test_mainproc_guard.cpp:93-99`），否則 G04 會把 `iHome` 設成 1、干擾它要測的守衛。
++  G04 那一臂本身（鎖 Index）**沒有直接斷言**。
++* **機邊待驗**（重要）：
++  * EMG 感測器在這台全是 `Enable=0`、`SafePlcIO=0`，所以 `IsEMGPressed()` 實際上不會成立，**「沒動力」只看 `SnMotorPower`**。
++    要在機邊確認按下 EMG 會讓 `SnMotorPower`（ring1 站 2 ch30）掉下來。
++  * 馬達沒電時（例如開機到 G31a 送電之前）**每一拍**都會跑：`iHome=1`、`fAllMotorHome=false`、`StopAllMotor()`、
++    `Cylinder[C_Auto_Selector[i]].Off()`、五組煞車抓住、`DoIndexZ1Z2Free(0)`。這是 golden 行為；機邊確認這些每拍輸出沒有副作用。
++  * **IO 頁的連帶變化**：`JsonBridge/IoBtnPanelClick.cpp:345` 只在 `IsIndexMotorOutOfPower()` 時拒絕放開 `SwFMotorBreaker`（站 16 ch4，`Enable=1`）／`SwBMotorBreaker`。
++    8929d13 之後，有馬達電、沒 EMG 時就**可以**從 IO 頁放開 Index Z 煞車，而這條路**不經過** Servo-ON 檢查。
++    需要 EastSun 決定 IO 頁要不要也套 `W906_BrakeReleaseOK`。它的註解 `:44`（「G04 閘著」）與 `:48-50`（「恆為 true，網頁放不掉」）已過期。
++
++### 5.3 g2 G34 — `iEMGPressDelay` 每秒倒數
++
++* **位置**：`csystem.cpp:16345-16346`（註解 `:16343`）；全域 `int iEMGPressDelay=3;` `csystem.cpp:16266`。
++* **golden**：`csystem.cpp:4299-4300`；全域 golden `:133`。
++* **原本的前提**：`iEMGPressDelay` 全樹沒有宣告也沒有定義。
++* **重驗**：§3 → `D iEMGPressDelay`（`csystem.cpp.obj` 與 `wb_serve.exe`）。**過期。**
++* **授權**：隨 G04／G05 一起（EastSun 20260926）。
++* **測試**：**沒有直接測試。**
++* **機邊待驗**：無獨立輸出；它決定 G05 何時可以放煞車。
++
++### 5.4 g2 G05 — 閒置時每拍放開煞車（現在要先過 Servo-ON）
++
++* **位置**：`csystem.cpp:16375-16385`（註解 `:16369`）。
++* **golden**：`csystem.cpp:4303-4313`（原文無條件放開）。
++* **原本的前提**：(1) 五個 `*BreakerON` 只有宣告；(2) MT-E3b：它只在 G04 的 `else` 裡跑，G04 開不了它就不能開，
++  單獨開會在馬達剛斷電、`SnMotorPower` 還沒掉的那幾拍放開煞車。
++* **重驗**：(1) §3 過期；(2) G04 已開（5.2）；斷電那幾拍由 `W906_BrakeReleaseOK` 在 `bMotorPowerState==false` 時拒絕放開（`GaliMotorServoOff` 會立刻清掉它）。**過期。**
++* **授權**：EastSun 20260926（G04／G05、G16）。**與 golden 不同**：每一組放開前多了 `W906_BrakeReleaseOK`。
++* **測試**：`MT_E3b_Engine` PART H 測 `W906_BrakeReleaseOK` 本身（沒 hook＝照 golden；某組沒激磁＝不放；剛斷電＝不放）。G05 這一段本身沒有直接測試。
++* **機邊待驗**：見 5.6。
++
++### 5.5 g1 G15 前半 — `LockIndexMotorAndDoHomeProcess` 裡 `iEMGPressDelay=8;`
++
++* **位置**：`csystem.cpp:19965`（註解 `:19962`）；後半 `fContact->InitCarlibrationTask();` 仍閘在 `:19966-19968`。
++* **golden**：`csystem.cpp:1532`（後半 :1533）。
++* **原本的前提**：`iEMGPressDelay` 與 `InitCarlibrationTask` 都沒有 port。
++* **重驗**：前半 → `D iEMGPressDelay`，過期。後半 → 見 §8 B1（方法已存在，但 csystem 看到的 `fContact` 是替身，沒有這個方法）。
++* **授權**：EastSun 20260926（隨 G04／G05）。
++* **測試**：**沒有直接測試。**
++
++### 5.6 （修改，不是開閘）三處 golden 煞車放開加上 Servo-ON 檢查
++
++* **位置**：`CountMotorPowerDelay` `csystem.cpp:19999-20000`、`:20024-20027`；DoSystem G05 `csystem.cpp:16379-16383`；
++  HOME 開始 `uhome.cpp:2135-2139`（golden `uhome.cpp:2369-2373`）。判斷 `W906_BrakeReleaseOK` `csystem.cpp:30013`；
++  hook `W906_HookBrakeServoOn` `WebMotorAccessLive.cpp:991`，分組 `W906_BrakeGroupHasAlias` `:983`。
++* **行為**：沒註冊 hook（ctest）→ 照 golden；wb_serve 下 → `bMotorPowerState==false` 或該組任一個啟用中的 PCI1203 軸沒有 SVON → 不放，下一個 G05 閒置拍再試。每組答案改變時印一行。
++* **授權**：EastSun 20260926「對應軸 Servo On 才放」。
++* **測試**：`MT_E3b_Engine` PART H。
++* **機邊待驗**（重要）：
++  * 分組對應是從 IO／Mot 表的名字推的，程式自己寫著「to be confirmed by EastSun on the machine」：
++    Index → MTestZ1（M14）；InOutArmZ → MInArmZ\*／MOutArmZ\*（啟用中的是 M03 MInArmZA、M22 MOutArmZA）；
++    Cassette → MLoaderZ（M35）、MAuto1Z（M38）、MAuto2Z（M39）；Magazine、LDCarRotArmZ 在這台沒有軸（一律回 true）。
++  * SVON 位元來自 1203 監看器。`MachineType.h:159` 的 `WB_PUMP_1203_START_RING` 目前是關的（IOWEB-P9，20260924）。
++    機邊要確認在這個設定下監看器讀得到各軸的 SVON；讀不到的話所有群組會一直「HELD」（安全方向，但 HOME 會走不動）。
++  * 沒有任何程式會自己讓 1203 軸 Servo ON（golden 靠開機的 InitMotor）。實際順序要在機邊走一次：送電 → 讓軸 Servo ON → 看下一拍 `brake release ALLOWED`。
++
++---
++
++## 6. 開閘後留下的過期註解（沒有改，只記下來）
++
++csystem.cpp 正由筆電端修改，依規定不動。等合併後再一起改：
++
++| 位置 | 過期的內容 | 為什麼過期 |
++|---|---|---|
++| `csystem.cpp:14668-14678` | MT-E3b 的狀態總表寫「KEPT G04 G05 G34 … G31a」 | 8929d13 都開了 |
++| `csystem.cpp:15907-15910` | g2 G03「判斷式在 HT9050 永遠為 true」 | 8929d13 改了判斷式（§7） |
++| `csystem.cpp:16461-16462` | G10「閒置斷電是 G04 的事，G04 還閘著」 | G04 已開 |
++| `csystem.cpp:16536-16537` | G13「G04 閘著，所以 bIsIndexMotorOutOfPower 恆為 false」 | G04 已開 |
++| `csystem.cpp:16828-16829`、`:20021-20023` | G21／G16「golden 不看驅動器是否激磁，記錄給 EastSun，沒改」 | 8929d13 改了（`W906_BrakeReleaseOK`） |
++| `JsonBridge/IoBtnPanelClick.cpp:44`、`:48-50` | 「G04 閘著」「IsIndexMotorOutOfPower 恆為 true，網頁放不掉 Index 煞車」 | 見 5.2，這是行為變更，不只是註解 |
++
++---
++
++## 7. g2 G03（`csystem.cpp:15911`）前提重驗
++
++**閘的內容**：`ScanAllMotorStatus`（`csystem.cpp:15874`）的 Galil Index 警報分支，
++golden `csystem.cpp:4007` 的條件是 `MOT[i].MovFlag && SystemStart==true && IsIndexMotorOutOfPower()==false`，
++移植樹拿掉了最後一項（`:15914`）。golden 原文逐行比對一致（golden :4006-4007）。
++
++**它寫過的兩個理由與重驗**：
++
++| 理由 | 重驗指令 | 結果 | 判定 |
++|---|---|---|---|
++| 20260809：`IsIndexMotorOutOfPower` 只有宣告，呼叫會連結失敗 | `nm -C --defined-only csystem.cpp.obj \| Select-String IsIndexMotorOutOfPower`；`nm -C wb_serve.exe` 同 | `T IsIndexMotorOutOfPower()`（兩者都有） | **過期** |
++| 20260925（MT-E3b）：判斷式在 HT9050 永遠為 true，打開會讓這個 Index 警報永遠不出現 | 讀 `csystem.cpp:19912-19913`；`Import-Csv D:\HT9045\system\Mot_Table.csv` 看 M14；讀 `cinitial.cpp:3916`／`:3923` | 8929d13 起，`MOT[MTestZ1].CardType=="PCI1203"`（機台 M14 就是 PCI1203）時判斷式＝`IsEMGPressed() \|\| Sen[SnMotorPower].IsOff()`，有電且沒 EMG 時為 false | **過期** |
++
++**但這一段在 HT9050 上走不到，所以開不開都沒有可觀察的差異**：
++
++1. 它在 `if(INDEX_MOTION_CARD==0 && (i==MTestY1||i==MTestZ1||i==MTestZ2||i==MTestY2))` 之內（`csystem.cpp:15881-15882`），
++   這台 `Gerneral.ini:165 INDEX_MOTION_CARD=0`，所以會進來。
++2. 但裡面要先 `MOT[i].Led[iAlarmLed]` 成立（`:15885`）。這個燈只有 `Gali_ScanMotStatusTIMO` 會寫（`Motor/myGALILmotor.cpp:1589`），
++   而它只在 `bGali_CardInstall==true` 時被呼叫（`:1621-1622`、`:1642`）。
++3. `bGali_CardInstall` 預設 false（`myGALILmotor.cpp:736`），只有 `Open_GaliCard()` 成功才設 true（`:4144`）；
++   出貨組態下 `DMCGetControllerDesc` 是離線樁，固定回 `DMCERROR_CONTROLLER`（`Motor/vendor_offline_galil.cpp:75`），
++   所以 `Open_GaliCard` 在 `:4102-4105` 就回 false，燈永遠不會亮。
++4. → 整個警報分支（含這個閘）在 HT9050 上**一次都不會執行**。MT-E3b 那個理由即使在當時為真，對這台也是沒有作用的。
++
++**結論**：前提**不成立**。它可以照 W2 規則「一顆 commit 一個閘」、照 golden 原文打開（把 `:15911-15915` 換回 golden :4007 那一行），
++對 HT9050 是零行為差異；在有 Galil Index 的機種上則恢復 golden「沒動力時不顯示 Need home 訊息」的語意。
++注意 `IsIndexMotorOutOfPower()` 會呼叫 `IsEMGPressed()`（有副作用：抓煞車、全軸 Servo OFF／ON），但 golden 也是這樣，而且短路求值只在前兩項成立時才會呼叫。
++**不在這次動手**：csystem.cpp 正由筆電端修改。解的時候重跑上表兩個指令，並附上 `MT_E3b_Engine`／`mainproc_guard` 的結果。
++
++---
++
++## 8. 仍關著、但理由提到的相依現在已存在的候選（只列，不開）
++
++**方法**：掃了 0d253a0／8929d13 動過的五個引擎檔的全部頂層 `#if 0`（`csystem.cpp` 193、`cinitial.cpp` 69、`uhome.cpp` 42、`database.cpp` 7、`cSocket.cpp` 2，共 313 個），
++取出每個閘區塊裡呼叫的函式／成員／全域物件，對 `build_integ_ship_x86` 出貨函式庫（`libht9045_*.a`、`libvclcompat.a`、`wb_serve.dir\objects.a`）的 `nm --defined-only` 比對，
++再逐一人工讀閘的註解。掃描腳本與結果留在 scratchpad（`gate_scan.ps1`、`gate_scan.csv`），不進 repo。
++
++### A. 相依已存在、看不到別的阻擋（真正的候選）
++
++| # | 閘 | golden | 原本的理由 | 現在的證據 | 這台（HT9050）會不會碰到 |
++|---|---|---|---|---|---|
++| A1 | **h4-G4** `csystem.cpp:28834`（`CheckNozzleEventFinish`） | csystem.cpp:23566-23595 | 兩套不同佈局的 `TMyKitSuck`；`mykitsuck.cpp` 沒註冊；沒有編譯中的程式會把 `iNozzleEvent` 設成 2。註解明寫「**THE GATE MUST BE OPENED IN THE SAME WAVE THAT LANDS iNozzleEvent**」 | A4-6（20260924）已統一：`aHotPlateSubstrate.h:97` 改 include `mykitsuck.h`、精簡鏡像在 `:105-647` 退役；`CMakeLists.txt:1888` 註冊 `mykitsuck.cpp`；`nm`：`T TMyKitSuck::CheckDestoryFinish()`（`mykitsuck.cpp.obj`，本體 `mykitsuck.cpp:2885`）；`mykitsuck.cpp:2415` `TMySucker::Destroy()` 寫 `iNozzleEvent=2`（不在任何 `#if` 內） | **會**。呼叫者 `uhome.cpp:978`（golden uhome.cpp:1326）是活的（`uhome.cpp.obj` 有 `U CheckNozzleEventFinish()`）。今天回原點**不會等吸嘴吹氣完成**就繼續。**安全相關，優先處理** |
++| A2 | g1 G01 `csystem.cpp:18216`（`DoIonFanAutoClean`）與 h4-G2 `csystem.cpp:29181`（`DoAutoDecayCheck`） | :210-211／:23879-23883 | `MoveInArm2XYToDecayTeach` 全樹沒有本體 | `T MoveInArm2XYToDecayTeach()` 在 `ainarm2.cpp.obj`（本體 `ainarm2.cpp:925`） | 只在離子風扇自動清潔、ESD 自動衰減教導功能開著時。今天那兩個流程**永遠完成不了**（刻意的「大聲失敗」）。打開＝入料臂 XY 會動，要機邊驗 |
++| A3 | g2 G11 `csystem.cpp:16494` | :4394 | `RecordSafeDoorStates()` 本體在另一群，還沒落地 | `T RecordSafeDoorStates()`（`csystem.cpp:21332`） | 會（每拍）。只是安全門開關的稽核紀錄，不是互鎖；打開前要確認它寫的檔在不在 production_audit 名單 |
++| A4 | g2 G12 `csystem.cpp:16511`、g1 G23 `csystem.cpp:21105` | :4404-4407／:2669-2670 | `bCheckPLCConnet()` 沒有定義 | `T bCheckPLCConnet()`（`csystem.cpp:29761`） | 不會：`Gerneral.ini:216 SafePlcIO=0`（`Enable_PLCSafety_IO`），第一項就是 false |
++| A5 | g2 G14 `csystem.cpp:16561` | :4430-4435 | `bCheckPLCAllSafedoorAndEMGEnable()` 沒有定義 | `T bCheckPLCAllSafedoorAndEMGEnable()`（`csystem.cpp:29793`） | 不會（同上）。在有安全 PLC 的機種上是安全關鍵 |
++| A6 | g2 G19 `csystem.cpp:16728` | :4566-4605 | `CheckHotGun()`／`CheckHotGunFlow(int)` 沒有定義 | `T CheckHotGun()`、`T CheckHotGunFlow(int)`（`csystem.cpp:27686`／`:27708`） | 不會：`UseHotGunCheck=0`、`HotGunFlowEnable=0`、`UseHotGunFlowCheck=0` |
++| A7 | G2 `csystem.cpp:13650`（`InitNewFixTray`） | :15934 | `SaveUnloaderInfo` 全樹沒有本體 | `T SaveUnloaderInfo(int)`（`cinitial.cpp.obj`，本體 `cinitial.cpp:5533`） | 看組態（ATK 的卸料資訊檔）。會寫檔；ctest 已有 `W906_UNLOADERINFO_ROOT` 圍堵 |
++| A8 | `GATE (W906-HOME-W1-SPEEDCLOSE)` `csystem.cpp:31533` | （註解未標 golden 行號） | 20260923 已更正為「只缺全域實例 `fSpeed`」 | `B fSpeed`（`cSpeed.cpp.obj`）、`T TfSpeed::Close()` | 純畫面；`fShow` 由瀏覽器持有，打開前要決定讀哪個 fShow |
++
++### B. 相依一半在，要先做決定（不是單純解閘）
++
++| # | 閘 | 現況 |
++|---|---|---|
++| B1 | g1 G15 後半 `csystem.cpp:19966-19968`、g1 G17 `csystem.cpp:20040-20044`（`fContact->InitCarlibrationTask()`，golden :1533／:1568） | 方法已存在：`T TfContact::InitCarlibrationTask()`（`fContact.cpp.obj`）。但 csystem 看到的 `fContact` 是 `TfContactShim`（`atester_shims.h:251`），沒有這個方法；真正的表單實例叫 `fContactForm`（`forms/fContact.h:1634`，`B fContactForm`）。要先決定綁哪一個（和 FormHS／fSCKART 同一類設計題） |
++| B2 | g2 G22 `csystem.cpp:16852`（golden :4657-4672） | (a) `ClearAllManualSuckTask()` 已存在（`mykitsuck.cpp.obj`，`mykitsuck.cpp` 已註冊）→ 這半過期；(b) `fMain->bStartKeyPressCheck` 仍 0 命中 → 這半成立。可以考慮拆成兩個閘 |
++| B3 | g1 G22 `csystem.cpp:21025`（`CheckSafeDoorIsClosed` 的 0.5 秒門穩定窗，golden :2608-2624） | 理由「fTeach 仍是 NULL、沒有人 new」在 wb_serve 已不成立：`tools/wb_serve.cpp:2982` `fTeach = new TfTeach();`（20260924 匯入）。但 ctest 沒有 fTeach（原文是無保護的解參考），而且 `fShow` 由瀏覽器持有（現在有 `W906_FormFShow` 可用）。要決定怎麼改寫才不是照抄 |
++
++### C. 理由的字面過期、但另一個阻擋仍成立（不是候選，只是註解要更新）
++
++* g2 G18 `csystem.cpp:16698`（`fMonitor->OpenMonitorVedio`）：註解說「fMonitor 沒有 port」，現在有 `B fMonitor`、`T TfMonitor::OpenMonitorVedio(int)`；
++  但那個方法本體整段在 `GATE M-4`（`forms/fMonitor.cpp:167-174` 的 `#if 0`），打開這裡只會換成無聲的空呼叫。g1 G27（`:21541`）在 20260916 已經這樣記過，G18 的註解還沒跟上。
++
++### 查過、前提仍成立的（掃描誤報，列出以免重查）
++
++* g1 G18／G19（`:20327`／`:20388`）：`iRecordTrayPickPosX/Y` 仍 0 命中。
++* G3（`:13845`）`fMain->tESDError`、G30（`:16083`）`fMain->SitePanel`、G09（`:16439`）`HSys.BinDisCtrl`：仍缺。
++* g2 G17（`:16678`）`fiosetview->ProcessIndexSuckDestroy1/2`：替身仍沒有這兩個成員。
++* `SAFETY-GATE(W906-T6-*)` 一系列（`NOWSTATUS`、`SCCRTM`、`ATC30RESEND`、`ROTZERO`、`TEMPTAJOFS`、`OCREND`、`A37LOTINFO`、`GROUNDMAN`、`EQCQTY`、`UTACPPSEL`）：缺的都是表單鏡像上的欄位或同名衝突，仍成立。
++* uhome.cpp 的 `W906-HOME-C2-*`（`TORQUE` 的 `iWriteAndCheckMotorTorque` 只存在於 atester.cpp 的 TU 內擴充類別、`VTESTPOS` 的 `rgHomeStopPos`、`AOISENDCMD` 的 `TFrmAOI::SendCommand`、`MEMOHOME`、`RTC*`、`PITCHX2` 等）：仍成立。
++* cinitial.cpp 的 `n5-G*`、`n4-4`（`InitialTeachEditList`）、`n4-9`（`TfTeach::SaveFile` 不存在）：仍成立。
++
++---
++
++## 9. 機邊待驗總表
++
++依重要性排序。全部都要**有人在機台旁**、依 EastSun 的程序做；本文件不做任何一項。
++
++| # | 項目 | 來源 | 看什麼 |
++|---|---|---|---|
++| 1 | 開機自動送馬達電 | G31a（5.1） | wb_serve 啟動後多久 `SwMotorRelay` 吸合；那 1 秒網頁／1203 Poll 是否停住；console 的 `brake release HELD/ALLOWED` |
++| 2 | 煞車分組與 Servo-ON 對應 | 5.6 | Index／InOutArmZ／Cassette 各對哪幾軸；沒激磁時煞車輸出維持 OFF；激磁後下一拍放開；`START_RING` 關的情況下 SVON 讀不讀得到 |
++| 3 | IO 頁可以放開 Index Z 煞車 | 5.2 | 有馬達電、M14 沒激磁時，IO 頁按 `SwFMotorBreaker` 會不會真的放開 → 需要 EastSun 裁決要不要加 Servo-ON 檢查 |
++| 4 | EMG 在 HT9050 的路徑 | G04、G13（5.2、4.7） | 按 EMG 時 `SnMotorPower` 會不會掉；G04 是否每拍鎖 Index；畫面訊息是「EMG/Servo 訊號異常」而不是 WAR1630～1633 |
++| 5 | 馬達沒電時 G04 每拍的輸出 | 5.2 | `C_Auto_Selector` 氣缸 Off、五組煞車抓住、`DoIndexZ1Z2Free(0)` 每拍重寫是否有副作用 |
++| 6 | 安全門讀值與 VerifyMotorAction | 4.12 | 門的實際讀值；Motor Test 動作時會不會被當成「門開」立刻停掉 |
++| 7 | MainProc 暫停 | 4.16 | Motor Test／Teach 開著時引擎暫停；關頁、重新整理、斷線後會恢復 |
++| 8 | 回原點中停機 | 4.13 | 停所有軸（含 1203）、切電、抓煞車；之後要重新按 Motor Power |
++| 9 | 送電時煞車方向 | G9、g1 G03、R1（4.1、4.2） | 站 16 輸出 ON＝放開、OFF＝抓住，實物確認 |
++| 10 | 伺服電源穩定前不准 START | G21（4.8） | `SnMotorPower` 亮滿 `MotorPowerOnDelay` 秒前按 START 會被拉回 |
++| — | 這台進不來的臂 | G07、G29、G31b、G31c、g1 G14 | `SnSystemPower`、面板電源鍵、EMG 感測器都是 `Enable=0`；除非接線，否則機邊無從驗 |
++
++**附帶的靜態檢查**（只讀原始碼，不碰卡）：
++
++* `tools\pci1203_readonly_gate.ps1` → `RESULT: PASS`，exit 0。
++* `tools\pci1203_control_gate.ps1` → exit 1，唯一的 FAIL 是
++  `WB_PUMP_1203_START_RING is NOT active in MachineType.h`（`MachineType.h:159` 在 IOWEB-P9 20260924 刻意關掉）。
++  `MachineType.h` 在 `95c398b..7961939` 沒有被改過，所以這不是本範圍造成的；是那支 gate 的期待（20260911 裁決）和 20260924 的設定不一致，要另外裁決。
++
++---
++
++## 10. 測試證據出處
++
++* 20260926 02:24:58，`build_integ_ship_x86` 完整 ctest（8929d13 與 wb_serve.exe 建置之後）：
++  `MT_E3b_Engine`、`mainproc_guard`、`W6_6_Hub`、`W6_6_CSystemCycle`、`homeclass`、`WB_SimPump`、`WB_State`、`MachineMotors_HT9050`、`WebMotorAccess` 全部 Passed。
++  整體 166/176，失敗的 10 個是 `config_db`、`ini_helpers`、`config_loaders`、`ContactForceLoad`、`dfm2rc_rc_compiles`、`dfm2rc_fidelity`、`dfm2rc_idempotent`、`GA1_LastSet`、`GA1_ReadGeneralIni`、`MachineSuckers_HT9050` —— 沒有一個是本文件的閘相關測試。
++  （其中 `ContactForceLoad`、`MachineSuckers_HT9050` 不在 CLAUDE.md 記的常駐清單裡，是否為回歸不在本文件範圍。）
++* 8929d13 的 commit 訊息記載 `MT_E3b_Engine 79/0`、`production_audit 0 changes`。
++* **本次沒有重跑任何測試**；只確認了測試執行檔比原始碼新、且含 PART H 的字串（§1、§3）。
+diff --git a/docs/MT_COMMAND_TABLE_machine.md b/docs/MT_COMMAND_TABLE_machine.md
+new file mode 100644
+index 0000000..fff8388
+--- /dev/null
++++ b/docs/MT_COMMAND_TABLE_machine.md
+@@ -0,0 +1,427 @@
++# Motor Test／Teach 馬達命令對照表（這台 HT9050 機台版）
++
++> AI(W906-MT-TABLE) 20260926。**這份是什麼**：真機（HT9050＋Advantech PCIE-1203）上 `HW.MotorTest.html`／`HW.teach.html`
++> 每一顆馬達按鈕，從網頁送出的 action → C++ 哪一支處理 → 落到哪一層 → golden 哪一行 → 哪一段 ctest 驗過 → 還要在機台上驗什麼。
++> 全部從程式碼讀出來，每一列都附程式位置。
++>
++> * 描述的版本：C++ 樹 `integ/ioweb-8484bdb4` **HEAD `7961939`**（MT-FIX1a）；網頁樹 **`a5454b9`**（MT-FIX1 web）。
++>   涵蓋的 commit：C++ `4b21dbe` `9fd97ff` `2c1afab` `eef1a78` `b90b0ca` `0d253a0` `5a0f02d` `5dc6706` `8929d13` `7961939`；
++>   web `aaf0694` `d288f1f` `8336746` `ef20fb8` `b4c613e` `a5454b9`。
++> * 日期：2026-09-26。
++> * **不取代 `docs/W4_PROGRESS.md`**。那份是筆電的（38 個命令、W4-b2 當時的狀態），它的 §2 對這台已經過時；
++>   本檔只描述這台機台樹今天的程式。兩份衝突時以程式碼為準，並回頭改筆電那份（由筆電改，這裡不動它）。
++> * 本檔沒有執行任何會開卡的東西；唯一執行的是純邏輯的假後端測試（§7）。
++
++---
++
++## §0 怎麼讀
++
++### 縮寫
++
++| 縮寫 | 檔案 |
++|---|---|
++| `WMA` | `WebMotorAccess.cpp`（解析＋分派，純邏輯） |
++| `WMAL` | `WebMotorAccessLive.cpp`（真實後端，只連進 wb_serve） |
++| `uMT` | golden `HT9011UC_Code_V3.33.906.0_20260618\uMotorTest.cpp`（Big5，唯讀） |
++| `uT` | golden `...\uteach.cpp`（Big5，唯讀） |
++| `cs` | `csystem.cpp`（引擎） |
++| `T[n]` | `tests/test_web_motor_access.cpp` 的第 [n] 段（ctest 名稱 **`WebMotorAccess`**，`tests/CMakeLists.txt:4048`） |
++| `E3b-X` | `tests/test_mt_e3b_engine.cpp` 的 PART X（ctest **`MT_E3b_Engine`**，`tests/CMakeLists.txt:4076`） |
++| `MT.html` | `web/page/HW.MotorTest.html` |
++| `teach.html` | `web/page/HW.teach.html` |
++| `ma.js` | `web/page/motor-access.js` |
++
++⚠ `T[...]` 裡 **[9] 印了兩次**：`:1069` 那段是「ack 形狀」，`:1366` 那段是「MT-E1 歸零分支＋reloadMotorData」。本檔把後者寫成 **T[9b]**。
++
++### 「層」欄
++
++| 層 | 意思 | 程式位置 |
++|---|---|---|
++| **1203** | EastSun 的 `TPci1203Control`，經 `Pci1203Control()->Execute()` 打在 **1203 監看器開好的軸槽**上（不另開軸） | `WMAL:201-215` |
++| **MOT** | golden 馬達物件 `MOT[i]`（非 1203 軸唯一的路；這台實際上走不到，見 §1） | `WMAL:222-257`、`:369-396` |
++| **SW** | golden `SW[]` 輸出（繼電器、煞車），經 1203 IO 路由送到卡上，來源標成 `"web"` | `WMAL:519-564` |
++| **ui** | golden 只動畫面，C++ 回 done、不碰任何東西（ack 的 `layer:"ui"`） | `WMA:3098-3106` |
++| **file** | 寫 `D:\LightScale\...` 檔案 | `WMA:2651-2734` |
++| **拒絕** | C++ 回 ok=false＋理由，頁面顯示成錯誤；**後端一次都不呼叫** | `WMA:3089-3097`、T[3] |
++
++### 一個按鈕怎麼走到卡上
++
++```
++頁面按鈕 → ma.js send()（互斥；motion 期間只留 btnStop，ma.js:213-283）
++  → ht9045_recipe_client.js motorAccess：control.acquire 與 motor.access 背靠背送（:433-443）
++    或 motorStop：不取權杖（:458-461）
++  → tools/wb_serve.cpp:4994（motor.access／motor.stop 臂）
++  → W906_MotorAccessWire（WMAL:810-831；motor.stop 鎖死只收 action=="stop"，:819-823）
++  → MotorAccessParse（WMA:3017）→ MotorAccessDispatch（WMA:3080-3147）
++```
++
++* `motor.stop` **免操作權杖**（`WebBridge/WebBridgeServer.cpp:1446`），走輸出優先佇列（`tools/wb_serve.cpp:5469`、`:5605-5610`），
++  **告警框開著時也照樣處理**（`tools/wb_serve.cpp:666`）；其他 `motor.access` 在告警框期間回 `modal-pending`（同一行）。
++* 跨拍的工作（HOME、LoopMove、Motor Power 的 1 秒、Light Scale）由 500 ms 拍子 `W906_MotorAccessTick`（`tools/wb_serve.cpp:4103`）
++  與每次 1203 Poll 之後的 `W906_MotorAccessPollTick`（`tools/wb_serve.cpp:4160`）推進（`WMA:2744-2795`）。
++* 1203 的每一個停止都是 golden `DecStop` = `Acm_AxStopDec` ＋ `Acm_AxSetExtDrive(ax,0)`（`WMA:210-225`）。
++
++### 運動命令共同的前提（1203 軸）
++
++`MotionPreludeFor`（`WMA:507-534`）：有選馬達 → 馬達表查得到 → `MOT[i].Motor` 存在 → 可選（出貨組態＝Mot_Table Enable，`WMAL:318-322`）
++→ Mot_Table Enable=1 → 1203 控制層在 → 監看器對得到「站＋站內軸」（對不到就拒絕並記進 1203 稽核）→ 需要位置的命令拒絕 Direction=1。
++再加：上一個命令之後要等一次新的 Poll（`WMA:152-161`，否則回「監看器還沒更新…稍候再按」）。
++
++---
++
++## §1 這台的軸（2026-09-26 唯讀量測，要用就重量）
++
++* 讀的是 `D:\HT9045\system\Mot_Table.csv`（5,343 B，mtime 2026-09-25 16:30:17，MD5 `BC2E4C69…30C6`）。這台 F5 的出貨組態 wb_serve
++  讀的就是它（IOWEB-P16）。48 列：PCI1203 19、MN200 16、SMC 13。
++* **Enable=1 的 19 列全部是 PCI1203**，而且全部 **Direction=0、GearRatio=1、SoftLimit = ±999999**。
++  ⇒ 這台的運動全部走 **1203 層**；MOT 層只剩 Enable=0 的列，出貨組態選不到（`WMAL:318-322`，`WMA:514`）。
++  ⇒ `kDirPending`（Direction=1 拒絕，`WMA:495-496`）今天不會觸發；卡片單位＝使用者單位。
++  ⇒ **軟體極限實質上不存在**（±999999）。
++* ⚠ **這個檔跟 repo 裡的 `machines/HT9050/Mot_Table.csv` 不一樣**（MD5 `79CCD044…CE7F`）：M00 M01 M14 M18 M19 M35 M36 M38 M39 M40 M108
++  這 11 列在 repo 副本是 Direction=1，機台檔是 0。golden 的 EtherCAT jog 方向是 `Acm_AxJog(ax, Direction ? 1 : 0)`（`WMA:750-756`），
++  所以這 11 軸的 JogP 實體方向跟 golden 原設定**相反** —— 方向一定要機邊看（§6）。`E3b-G` 讀的是 repo 副本，不是機台檔。
++* 建置：F5 用 `build_integ_ship_x86`（`.vscode/launch.json:105`），CMakeCache `W906_NO_SOFT_SIMULTE=ON` ⇒ **SOFT_SIMULTE 沒定義**（真機臂）。
++  `MachineType.h:106` `WB_PUMP_1203_CONTROL_LIVE` 開著 ⇒ 1203 命令真的送到卡上（ack 不會出現 `NOT issued (dry)`）。
++
++| M | Alias | BoardID/Port | HomeDirection → 歸零方法（DS402 時） | 特殊處理 |
++|---|---|---|---|---|
++| M00 | MInArmX | 0/0 | 0 → `Acm_AxHome 128, -1` | Light Scale 軸（rgAxis 1，也是沒點選時的預設） |
++| M01 | MInArmY | 1/0 | 1 → `124, +1` | Light Scale 軸（rgAxis 2） |
++| M03 | MInArmZA | 3/0 | 0 → 128 | arm Z：歸零後去 ZSafePos；煞車群組 InOutArmZ |
++| M11 | MInShutte1 | 30/1 | 1 → 124 | MInShuttle1：`SHUTTLE_FLOODGATE==1` 時移動前先開閘（`WMAL:404-415`） |
++| M14 | MTestZ1 | 14/0 | 1 → 124 | R2：當一般 1203 軸（`WMAL:300-307`）；**JogHigh 900000、Acc 9000000**，第一次動之前先看；煞車群組 Index |
++| M17 | MOutShuttle1 | 10/0 | 1 → 124 | |
++| M18 | MOutShuttle2 | 10/1 | 0 → 128 | |
++| M19 | MOutArmX | 0/1 | 1 → 124 | Light Scale 軸（rgAxis 3） |
++| M20 | MOutArmY | 1/1 | 0 → 128 | Light Scale 軸（rgAxis 4） |
++| M22 | MOutArmZA | 3/1 | 0 → 128 | arm Z；煞車群組 InOutArmZ；HomeHigh＝HomeLow＝100 |
++| M30 | MTrayX | 30/0 | 1 → 124 | |
++| M35 | MLoaderZ | 35/0 | 0 → 128 | Z 堆疊速度內插；煞車群組 Cassette；**HomeLow 300 > HomeHigh 100** |
++| M36 | MEmptyZ | 36/0 | 0 → 128 | Z 堆疊；**不在任何煞車群組**；HomeLow 300 > HomeHigh 100 |
++| M38 | MAuto1Z | 38/0 | 0 → 128 | Z 堆疊；Cassette；HomeLow 300 > HomeHigh 100 |
++| M39 | MAuto2Z | 39/0 | 0 → 128 | Z 堆疊；Cassette；HomeLow 300 > HomeHigh 100 |
++| M40 | MAuto3Z | 40/0 | 0 → 128 | Z 堆疊；**不在任何煞車群組**；HomeLow 300 > HomeHigh 100 |
++| M41 | MInRotate | 41/0 | 1 → 124 | |
++| M42 | MOutRotate | 41/1 | 1 → 124 | |
++| M108 | MCCDY | 108/0 | 0 → 128 | |
++
++依據：方法 `WMA:1211-1215`；arm Z 名單 `WMAL:308-316`；Z 堆疊 `WMAL:296-297`＋`WMA:3001`；閘門 `WMAL:323`；煞車群組 `WMAL:973-990`。
++`MLightScale`＝MOT[79]（`cmydef.cpp:2417`）在 Mot_Table **沒有列** ⇒ 光學尺讀值 0（`WMAL:613-633`）。
++
++---
++
++## §2 48 個命令（catalog = `web/JSON/motor-access.json`，48 個命令、37 個 action）
++
++編號照 catalog 的順序（**與 W4_PROGRESS.md §2 的編號不同**：那份的 uteach 是 27–38，這裡是 37–48）。
++「頁面」欄是網頁送出的位置；`getParams` 會自動替每一筆補上 `speed=edtSpeed`、`currentPos`、`softLimitP/N`（`MT.html:1643-1651`）。
++
++### 2-1 運動（uMotorTest）
++
++| # | 按鈕 → action | 頁面 | C++ 入口 | 層 | golden | ctest | 機邊待驗 |
++|---|---|---|---|---|---|---|---|
++| 1 | `sbMotorTest_JogP` → `jogP`（按住） | `MT.html:1666-1680` pointer 事件＋`setPointerCapture` | `WMA:715-774` `DoJog` | 1203：只設 jog 家族 `CFG_AxJog*` 4 個（值＝捲軸上次寫的，`WMA:732-735`）→ `Acm_AxSetExtDrive(ax,1)` → `Acm_AxJog(+1)` | `uMT:862` MouseDown（放開 `:900`） | T[7] `:792-834`、T[10] W4B-1/4/5 `:1137`,`:1173-1193`、T[11] `:1229-1239`,`:1268`,`:1327`、T[12] `:1521-1567`、T[13] R2 `:1948-1953`、T[14] `:2235-2260` | ①方向（見 §1 Direction 的差異）②`ExtDrive(1)`＋`Acm_AxJog` 在這張卡真的會動（main 當初量到 0 位移是沒有 ExtDrive，`WMA:757-758`）③速度＝`PJogHighSpeed×捲軸%`（M14 是 900000）④放開、滑出按鈕、切走視窗都會停 |
++| 2 | `sbMotorTest_JogN` → `jogN`（按住） | 同上 | 同上 | 同上，`Acm_AxJog(-1)` | `uMT:812` | 同上 | 同上 |
++| — | jog 放開 → `stop`（button 是那顆 jog 鍵） | `ma.js:290-301`；每條放開路徑都送（`ma.js:246-261`），ack 比放開晚回也會補送（`ma.js:273`） | `WMA:278-322` `DoJogRelease`（`IsJogButton` `:272`） | 1203：**只停那一軸**（StopDec＋ExtDrive 0）；不做 StopAllMotor | `uMT:900-910` | T[4b] `:624-659`、T[7] `:802` | 放開後確實減速停；ExtDrive 回 0（下一次 jog 會重送 1） |
++| 3 | `sbMotorTest_MoveP` → `moveRelative` | `MT.html:1683-1686`（`interval`、`speed`＝捲軸位置） | `WMA:777-795` → `Move1203` `:654-696` | 1203：PTP 4 個速度（有 speed 時）→ `Acm_AxMoveAbs(目前 cmdPos＋interval)` | `uMT:1252` | T[7] `:836-878`、T[10] `:1152-1159`,`:1190`、T[11] `:1270` | ①目標以**命令位置 cmdPos** 算，不是編碼器 ②±999999 等於沒有軟體極限 ③M11 的閘門（Gerneral.ini `SHUTTLE_FLOODGATE`） |
++| 4 | `sbMotorTest_MoveN` → `moveRelative` | `MT.html:1687-1690`（送負的 interval，C++ 依按鈕名取絕對值，`WMA:790-792`） | 同上 | 同上，目前位置 − interval | `uMT:1224` | 同上 | 同上 |
++| 5 | `btnGo` → `moveAbsolute` | `MT.html:1692`（目標＝`edtHomeOffset`；`speed`＝edtSpeed 由 getParams 帶） | `WMA:798-810` → `Move1203` | 1203：IsMotorCanRun（EMG）→ HomeFlag≠0 → PTP 速度 → `Acm_AxMoveAbs` | `uMT:1605-1619` | T[7] `:880-891`、T[10] `:1165`、T[11] `:1275` | ①HomeFlag=2（歸零失敗）**也會放行**（golden 同樣只擋 0，`uMT:1613`）②DS402 歸零後 `edtHomeOffset`（LastHomePos）通常≈0，所以 Go 大多是回 0 ③HOME／Loop 進行中**不擋**（golden 沒有那行，`WMA:241-243`） |
++| 6 | `btnGoSoftP` → `moveSoftLimitP` | `MT.html:1698` | `WMA:814-824` | 目標取 C++ 的 PSoftLimitP；golden `Tar>=PSoftLimitP` ⇒ **一定被拒**（`WMA:667-671`） | `uMT:1097` | T[7] `:893-898`、T[11] `:1272` | 這台按了不會動（照 golden），只要確認回的是拒絕 |
++| 7 | `btnGoSoftN` → `moveSoftLimitN` | `MT.html:1699` | 同上 | 同上，`<=` 拒絕 | `uMT:1105` | T[7] `:900-902` | 同上 |
++| 8 | `btnHome` → `home`（帶 `start`＝按下後的狀態） | `MT.html:1700-1703`；換選軸時頁面會先送 `start:false`（`MT.html:492-493`） | `WMA:1228-1284`；開始 `StartHome1203` `:1168-1226`；完成偵測 `TickHomes` `:2075-2169` | 1203：一按就 HomeFlag=0 → 門開拒絕 → 看驅動器：DS402 → 先把 **PTP** 設成歸零速度（VelLow=HomeLow、VelHigh=HomeHigh、Acc/Dec=資料庫值）→ `Acm_AxHome(124/128, ±1)`；非 DS402 → 卡片式 MODE12＋歸零後 SetCmd/SetAct(0)（`:1137-1167`）；判斷不出 → 拒絕。完成：HOMING→READY ⇒ HomeFlag=1；ERROR_STOP ⇒ 2；5 秒沒進 HOMING ⇒ 2；180 秒逾時 ⇒ 停＋2（`:1011-1018`）；arm Z 再去 ZSafePos。磁性尺軸與非 1203 拒絕 | `uMT:1113-1175`＋ uhome.cpp ProcessSingleMotorHome | T[8] `:933-996`、T[11] `:1305-1353`、T[9b] `:1366-1418`、T[12] LastHomePos `:1665-1690`、T[13] `:1966` | ①每軸方向（§1 表）②歸零速度：DS402 的 6099h 是 `Acm_AxHome` 拿**當下 PTP** 去填（`WMA:1195-1198`）——量 6099h:1/:2、609Ah ③**M35/M36/M38/M39/M40 會送 VelLow 300 > VelHigh 100**，卡片怎麼處理 ④HOMING 狀態真的出現、READY 後 HomeFlag=1 ⑤M03/M22 去 ZSafePos 的值 ⑥`Pci1203DriveKind` 對每一站都答得出 1（`WMAL:174-193`） |
++| 9 | `btnLoopMove` → `loopMove`（帶 `start`、`mode`、`pos1/pos2`、`waitTime`、`confirmNotHomed`） | `MT.html:1704-1740`（All 模式另帶 `motors` 與 `pos1.<Alias>`／`pos2.<Alias>`） | 單軸 `WMA:1435-1503`＋`TickLoop` `:2209-2260`；All `:1360-1432`＋`TickLoopAll` `:2177-2207`＋`GoldenMove1203` `:1303-1344` | 1203：單軸 pos1→等→pos2→計數；到位＝READY 且 cmdPos 在 ±2 內；每段 120 秒逾時；半途被擋就停。All：每拍對每一個勾選軸下 golden MotorMove，全部回非 0 才換段；**被拒的（門 −1、極限 −2/−3）也算到位**；沒有逾時 | `uMT:1300-1336`＋ DoLoopMove `uMT:393` | T[8] `:998-1043`、T[11] `:1244-1301`、T[12] 計時 `:1701-1778`、T[13] All `:1985-2037`、T[14] `:2209-2229` | ①來回位置與等待 ②**waitTime 30/60（3/6 秒）會被 VerifyMotorAction 的「2 秒沒動」停掉**（golden 同，`cs:29994-29996`）③到位看 cmdPos 不看編碼器 ④All 模式速度：每軸用自己上一次的 %（沒設過 = 1%，`WMA:1396-1403`） |
++
++### 2-2 停止、伺服、電源（uMotorTest）
++
++| # | 按鈕 → action | 頁面 | C++ 入口 | 層 | golden | ctest | 機邊待驗 |
++|---|---|---|---|---|---|---|---|
++| 10 | `btnStop` → `stop`（走 `motor.stop`，免權杖） | `MT.html:1741`（先 allBtnUp） | `WMA:327-388` `DoStop` | MOT：golden `StopAllMotor(true)`＋`bSingleHome=false`（`WMAL:222-233`）；1203：**每一個監看器開成功的軸**都送 StopDec＋ExtDrive 0；取消 HOME／Loop 工作；有軸拒絕停止 ⇒ `partial:true`（頁面顯示紅色） | `uMT:1647-1659` | T[4] `:590-620`、T[7] `:920-929`、T[10] `:1144`,`:1168`、T[11] `:1236` | ①監看器開成功的軸（應涵蓋 Enable=1 的 19 軸）都減速停，ack 的 `stopSent` 等於開成功的軸數、`stopRefused`=0 ②別的分頁拿著權杖時照樣停得了 ③告警框開著時照樣停得了 ④**Light Scale 的掃描不會因此停**（§5-7） |
++| 11 | `btnServoOff` → `servoToggle` | `MT.html:1742-1746`（知道 servoOn 才帶 `servoOn:!現值`） | `WMA:407-487` `DoServo` | 1203：`Acm_AxSetSvOn(ax, 0/1)`。目標：頁面明講 > 實際 SVON 取反 > golden 函式內 static；先取消 HOME／Loop | `uMT:1661-1671` | T[5] `:663-725`、T[10] `:1141`、T[11] `:1235`,`:1301` | ①SVON 位元（motionIO `0x4000`，`WMAL:52`）真的跟著驅動器 ②Z 軸 Servo ON 之後，該煞車群組**全部軸**都 ON 時，下一個 DoSystem 才放煞車（§5-4） |
++| 12 | `btnMotorPower` → `motorPowerToggle`（帶 `confirmOff`、`expectRelayOn`） | `MT.html:958-993`（繼電器開著先問「確定要關掉馬達電源？」） | `WMA:2323-2365` `DoMotorPower`；跨拍 `:2283-2299` | SW：先把 `SW[SwMotorRelay].OutValue` 照卡片回讀同步（`WMAL:521-535`）。**關→開**：DoMotorPowerOn（繼電器 ON＋Index/Magazine/Cassette 煞車**鎖住**）→ 1 秒（跨拍，不凍結主執行緒）→ `SW[SwServerON].On()`。**開→關**：先 Stop1203 全軸，再 `fHome->GaliMotorServoOff`（StopAllMotor、繼電器與 ServerON 關、bMotorPowerState=false、SystemStart=false、fAllMotorHome=false、全部煞車鎖住；HomeFlag 保留）。按下時以為的狀態跟現值不同 ⇒ 不切（`:2335-2341`）；1 秒內再按 ⇒ 拒絕 | `uMT:1621-1645` | T[8] `:1062`、T[13] `:1829-1859`、T[14] `:2171-2204`、E3b-B、E3b-F | ①繼電器（`SwMotorRelay`，ring1 st1 ch29，`cs:16052`）與 ServerON 實際切換 ②1203 DO 回讀與 OutValue 同步 ③**關電再開電後 bMotorPowerState 仍是 false ⇒ Z 煞車一直鎖住，直到按機台 HOME**（§5-4，由程式推得，未在機台量過） |
++
++### 2-3 參數與畫面（uMotorTest）
++
++| # | 按鈕 → action | 頁面 | C++ 入口 | 層 | golden | ctest | 機邊待驗 |
++|---|---|---|---|---|---|---|---|
++| 13 | `btnSetPosP` → `setPos1` | `MT.html:1752-1762`（頁面自己把 edtCommandPos 抄進 edPos1） | `WMA:3098-3106` | ui | `uMT:1079` | T[2]、T[3] `:584-586` | — |
++| 14 | `btnSetPosN` → `setPos2` | 同上（edPos2） | 同上 | ui | `uMT:1088` | 同上 | — |
++| 15 | `btnHighSpeed` → `setJogHighSpeed` | `MT.html:1776-1781` | `WMA:828-873` `DoSetParam` | MOT 記憶體：`PJogHighSpeed = SetSpeed(params.speed%) 的 s`（C++ 用 getParams 帶的 edtSpeed，不用頁面的 value，`WMA:851-854`） | `uMT:1403` | T[7] `:904-918`、T[10] `:1143`,`:1199` | 只改記憶體；要存檔走 Motor Database 分頁（§3） |
++| 16 | `btnLowSpeed` → `setJogLowSpeed` | `MT.html:1782` | 同上 | 同上 → PJogLowSpeed | `uMT:1411` | 同上 | 同上 |
++| 17 | `btnHomeHigh` → `setHomeHighSpeed` | `MT.html:1783` | 同上 | 同上 → PHomeHighSpeed | `uMT:1419` | 同上 | 同上 |
++| 18 | `btnHomeLow` → `setHomeLowSpeed` | `MT.html:1784` | 同上 | 同上 → PHomeLowSpeed | `uMT:1427` | 同上 | 同上 |
++| 19 | `btnSoftPPos` → `setSoftLimitP` | `MT.html:1785` | 同上 | MOT 記憶體：PSoftLimitP = 1203 監看器 cmdPos 換算的目前位置 | `uMT:1435` | T[7] `:911-914` | 設了之後軟體極限才真的存在（這台原本 ±999999） |
++| 20 | `btnSoftNPos` → `setSoftLimitN` | `MT.html:1786` | 同上 | 同上 → PSoftLimitN | `uMT:1443` | 同上 | 同上 |
++| 21 | `btnRange` → `refreshParameter` | `MT.html:1839` | `WMA:3098-3106` | ui | `uMT:1451` | T[2] | — |
++| 22 | `btnRate` → `refreshParameter` | `MT.html:1840` | 同上 | ui | `uMT:1458` | T[2] | — |
++| 23 | `btnSetRange` → `setRangeAndInit` | `MT.html:1849-1855` | `WMA:1658-1743`；InitMotor `:1566-1644` | 1203（EastSun R4）：SetRange（記憶體）→ **完整 golden InitMotor**：ResetError（最多 3 輪）→ 設定表 `kCmdAxSetInitCfg`（PPU、ElReact、AlmEnable、AlmReact、OrgLogic、Jerk、Inp/Alm 邏輯、脈波模式）→ MaxVel/MaxAcc/MaxDec → ResetError →（有警報再 ResetError＋100 ms）→ **SvOn 1** → **SetCommand(0)、SetPosition(0)** → HomeFlag=0。EMG 任一顆 IsOff ⇒ 什麼都不寫 | `uMT:1374-1382` | T[8] `:1053-1059`、T[11] `:1359`、T[13] `:1894-1940`；設定表本身 `Pci1203Pure` | ①**會激磁（SvOn）並把這一軸座標歸 0**，之後要重新歸零 ②每一步的回傳（ack 的 `initMotor.steps`）③M14 的 CFG_AxMaxVel＝900000 |
++| 24 | `btnSetRate` → `setRateAndInit` | `MT.html:1856`（按鈕照 golden 藏著，dfm Visible=False） | 同上 | 同上，前面是 golden SetRate：dAcc 記憶體＋`PAR_AxAcc/PAR_AxDec`＝夾限後的 Rate（`WMA:2840-2857`），再 InitMotor（MaxAcc＝新的 dAcc） | `uMT:1364-1372` | T[13] `:1789-1799`,`:1930-1940` | 同上；頁面看不到這顆 |
++| 25 | `btnReloadMotorData` → `reloadMotorData` | `MT.html:1862`（頁面同時重讀資料庫，`:1555`） | `WMA:1757-1801`；表值 `WMAL:675-794` | MOT：**所有馬達 HomeFlag=0** → 重讀 Mot_Table.csv 就地套回（唯讀；身分欄變了的列不套、要重開 wb_serve）→ 1203：**每一個開成功的軸** `Acm_AxSetCmdPosition(0)`＋`Acm_AxSetActualPosition(0)`。golden 沒有任何保護，這裡也沒有 | `uMT:1695-1711` | T[9b] `:1420-1442` | ①**全部軸的座標被歸 0，每一軸都要重新歸零** ②DS402 絕對值編碼器上 SetActualPosition(0) 對驅動器端座標的影響 |
++| 26 | `btResetMNet` → `resetMNet`（帶 `confirm`） | `MT.html:1864-1869` | `WMA:1506-1518` | MOT：確認＋SystemStart==false 才 `ResetMNet(0,"MNet斷電","Power Off",false)`（`WMAL:440-444`） | `uMT:1718` | T[8] `:1045-1051` | 這台沒有 MN200 卡（Enable=1 的列全是 1203），確認呼叫無害 |
++| 27 | `labName` → `selectMotor` | `MT.html:508-512`（排隊送，`sendLater`） | `WMA:1839-1874` | MOT＋1203：先擋 Enable=0 → 取消 HOME／Loop（**不送停止**）→ 記住選取 → jog 家族值定在 1% → golden `SetSpeed(1)`：1203 軸把 **PTP 4 個速度設成 1%** 寫到卡上 | `uMT:734-760`／`:762` | T[12] `:1474-1508` | 每次點選都會寫該軸 PTP 速度（不會動） |
++| 28 | `strngrdMotor` → `setParamCell`（`row` 1–10、`value`） | `MT.html:843` | `WMA:1881-1916` | MOT 記憶體（第 8/9 列 atof，其他 atoi）→ Loop 抬起（不停）→ **該軸 HomeFlag=0** | `uMT:1176-1222` | T[12] `:1582-1613` | 只改記憶體；改完該軸要重歸零才能 Go |
++| 29 | `BitBtn1` → `copyFrom`（`source` 0–24） | `MT.html:1792-1799` | `WMA:1923-1956` | MOT 記憶體：抄 JogHigh/JogLow/HomeHigh/HomeLow/SoftP/SoftN；HomeFlag 不動 | `uMT:1384-1401` | T[12] `:1616-1634` | 抄完 jog 速度不會變快：jog 用的是捲軸當時寫到卡上的值（`WMA:187-193`） |
++| 30 | `scrlbrMotorSpeed` → `setSpeed`（`jog:true`、`pct` 1–100） | `MT.html:1807-1825`（拖動約每 100 ms 送一次） | `WMA:1967-2061` | 1203：PTP＋jog 家族共 8 個值寫卡；HOME 進行中不做（golden `bSingleHome`）；All 模式 Loop 進行中連勾選軸一起設。寫卡失敗時 jog 取新舊兩者**較慢**的 | `uMT:791-810` | T[12] `:1510-1576`、T[13] `:2027`、T[14] `:2235-2260` | CFG_AxJog*／PAR_AxVel* 讀回值 |
++| 31 | `edtSpeed` → `setSpeed`（`jog:false`） | `MT.html:1830-1837` | 同上 | 1203：只寫 PTP 4 個值 | `uMT:1587-1603` | T[12] `:1533-1541`,`:1576` | 同上 |
++| 32 | `FormShow` → `formShow` | `MT.html:1007-1019`（當成「狀態」同步，被拒 1.5–10 秒重送） | `WMA:2374-2401` | MOT＋SW：C++ 記 fShow=true、bSingleHome=false、HOME／Loop 抬起、ActiveIndex=-1；Motor Power 同步：繼電器**開**⇒ 再跑一次 DoMotorPowerOn（繼電器已開，所以只等 1 秒、不動煞車，`cs:14392-14405`）＋ServerON；繼電器**關**⇒ Stop1203 全軸＋`GaliMotorServoOff("TfMotorTest::FormShow")`（SystemStart=false、fAllMotorHome=false、bMotorPowerState=false、煞車鎖住） | `uMT:985-1077` | T[13] `:1862-1883` | ①**電源關著時打開 Motor Test 頁 = 清掉 fAllMotorHome，並觸發 §5-4 的煞車問題**（golden 同樣會跑 GaliMotorServoOff）②電源開著時打開頁面，ServerON 會再 On 一次 |
++| 33 | `FormClose` → `formClose` | `MT.html:1073-1080`（同時頁面寫 MotorTest.ini，§3） | `WMA:2410-2421` | MOT：fShow=false、`PauseUT150Polling=false`；進行中的 Loop 結束（不送停止，已下的那一段走完）；HOME 與 Light Scale 繼續 | `uMT:1347-1362` | T[13] `:1877-1882`,`:2147` | 關頁後 Light Scale 仍在跑（§5-7） |
++
++### 2-4 Light Scale（uMotorTest）
++
++| # | 按鈕 → action | 頁面 | C++ 入口 | 層 | golden | ctest | 機邊待驗 |
++|---|---|---|---|---|---|---|---|
++| 34 | `BitBtn2` → `lightScale`（`axisItem`、`moveType`、`pitch`、`delayMs`） | `MT.html:1875` | `WMA:2623-2649`；狀態機 `:2520-2602`；reset `:2605-2620` | 1203：每按一次只切換計時器（開／關），開的時候從 Task 0 開始：先單軸歸零（同 HOME 的 `StartHome1203`）→ 第一點 `PSoftLimitP−100`（去）或 `PSoftLimitN+100`（返）→ 到位 → 延遲 → 讀光學尺×(−1) → 記一行 → 下一點（± pitch）→ 到另一端 −100 結束 | `uMT:2096-2100`、LightScale `:1795-1978`、Timer2 `:2031-2037`、rgAxisClick `:2121-2133` | T[13] `:2041-2166` | 🛑 **這台第一點是 ±999899**（§5-7）。光學尺讀值 0（沒有 M79 列）。**在確認機構行程前不要按** |
++| 35 | `BitBtn3` → `lightScaleSave` | `MT.html:1877` | `WMA:2677-2702` | file：`D:\LightScale\Motor{1..8}Positive.csv`（**覆寫、不備份**），清 Memo1 | `uMT:2102-2119`、SaveAsCSV `:1749-1787` | T[13] `:2076-2097` | 寫到機台 D 槽 |
++| 36 | `btnSaveLogLightScaleData` → `lightScaleDataSave` | `MT.html:1879` | `WMA:2705-2734` | file：`D:\LightScale\LightScaleData_yyyymmddhhmm\` 8 個 csv；wb_serve 不建 fMotorTest，所以 mmo1..8 是空的（`WMAL:644-650`），8 個檔都是空檔 | `uMT:2051-2094` | T[13] `:2099-2111` | 同上 |
++
++### 2-5 教導頁（uteach）
++
++教導頁用同一個 `ma.js`，`source:'uteach'`（`teach.html:377-381`）。**除了 STOP 與伺服，運動鈕全部拒絕**（`WMA:3109-3111`、`:2736-2739`），教導設定鈕排在 W5。
++
++| # | 按鈕 → action | 頁面 | C++ 入口 | 層 | golden | ctest | 機邊待驗 |
++|---|---|---|---|---|---|---|---|
++| 37 | `btnJogP` → `jogP` | `teach.html:399-400` | `WMA:3110-3111` | 拒絕（W5：golden uteach 另有 CheckCanMove／IsCanQuickJogMove） | `uT:997`（放開 `:1262`） | T[3] `:573-574` | 回拒絕、不動 |
++| 38 | `btnJogN` → `jogN` | `teach.html:401-402` | 同上 | 拒絕 | `uT:1223` | 同上 | 同上 |
++| — | 教導頁 jog 放開 → `stop` | `teach.html:400`,`:402`＋`ma.js:290-301` | `WMA:278-322` | 1203：只停那一軸（jog 本來就沒開始，送停止無害） | `uT:1262` | T[4b] `:638-641` | — |
++| 39 | `btnMoveP` → `moveRelative` | `teach.html:403-406` | 同上 | 拒絕 | `uT:2104` | 同 #37 | 同上 |
++| 40 | `btnMoveN` → `moveRelative` | `teach.html:407-410` | 同上 | 拒絕 | `uT:2205` | 同上 | 同上 |
++| 41 | `btnMoveTo` → `moveAbsolute` | `teach.html:411` | 同上 | 拒絕 | `uT:2391` | 同上 | 同上 |
++| 42 | `btnHome` → `home` | `teach.html:412` | 同上 | 拒絕 | `uT:2133` | T[8] `:996` | 同上 |
++| 43 | `btnStop` → `stop` | `teach.html:413` | `WMA:327-388` | MOT＋1203：StopAllMotor＋`MOT[MTestY1].Gali_Command("ST")`（`WMAL:227-231`；`Tech_Part=0` 缺相依沒做）＋每個開成功的 1203 軸停止；不動 bSingleHome（只有 uMotorTest 才做，`WMA:334`） | `uT:2948` | T[4] `:608-615` | 同 #10；這台沒有 Galil，`Gali_Command` 應無作用 |
++| 44 | `btnServo` → `servoToggle` | `teach.html:414`（不帶 servoOn） | `WMA:407-487` | 1203：實際 SVON 取反；讀不到就拒絕、不猜 | `uT:4287` | T[5] `:700-703` | 同 #11 |
++| 45 | `btnSetTo` → `setTeachFromCurrent` | `teach.html:415` | `WMA:3092-3097` | 拒絕（queued W5） | `uT:2098` | T[3] `:565-578` | — |
++| 46 | `btnSetToOffset` → `setTeachFromOffset` | `teach.html:416` | 同上 | 拒絕（W5） | `uT:2200` | 同上 | — |
++| 47 | `SetButton*` → `teachSet` | `teach.html:437` | 同上 | 拒絕（W5） | `uT:3360` 起（例 `SetButton140Click`、`:3517`） | 同上 | — |
++| 48 | `GoButton*` → `teachGo` | `teach.html:447` | 同上 | 拒絕（W5） | `uT:3401` 起（例 `GoButton140Click`、`:3559`） | T[3] `:576-577` | — |
++
++---
++
++## §3 頁面送的其他東西（不走 `motor.access`，但跟馬達頁有關）
++
++| 做什麼 | 頁面 | C++ | 影響 |
++|---|---|---|---|
++| 讀馬達表與現值 | `MT.html:1302-1305`（`/api/struct/motor/config`、`runtime`） | 主執行緒每拍抄一份給 socket 執行緒讀（`WMAL:853-960`） | 唯讀。1203 軸的位置、SVON、ALM、INP、忙碌、扭力都來自監看器樣本 |
++| 扭力顯示 | `MT.html:400-425` | 頁面開著且有選軸時，每拍把該軸設成 6077h SDO 焦點（`WMAL:1033-1042`）；單位判準 `EtherCAT/Pci1203Monitor.cpp:4241-4269` | `unitVerified=false` 時頁面註明「unit NOT verified」 |
++| 關頁時寫 `MotorTest.ini` | `MT.html:656-690`、`:1079` | `system.file.put tag=motorTest`（`tools/wb_serve.cpp:1007`、`:4365-4458`） | **寫機台檔**。`gAllowSystemWrite` 恆為 true（`tools/wb_serve.cpp:2587`） |
++| Motor Database 分頁 Save（`sbUpdate`） | 引擎 sysGrid（`web/page/ht9045_wire_hwmotortest.js:49-57`） | `system.file.put tag=motTable` → `MotTablePath`（`tools/wb_serve.cpp:985`）；增刪列 `system.csv.rows`（`:4470-4478`） | **寫 `D:\HT9045\system\Mot_Table.csv`**（有備份檔，`:4447-4453`）。參數鈕、格子、Copy From 只改記憶體，要保存只能靠這顆 |
++| 視窗開關 | background.html `ui.windows.put`（`web/page/ht9045_recipe_client.js:784-820`） | `WebWindowRegistryFShowPolicy`（`WebWindowRegistry.h:153-155`）→ 引擎 `W906_FormFShow`（`WMAL:965-968`、`cs:30005-30008`） | 決定 MainProc 是否暫停、VerifyMotorAction 是否執行（§5-1、§5-2） |
++| 續權杖 | `MT.html:1086-1092`（有工作在跑時每 60 秒 `keepAlive`） | `control.acquire` | 權杖閒置被收回 ⇒ jog 被死人開關停下、HOME／Loop 被取消（§5-8） |
++
++⚠ 沒有任何頁面路徑會送 `kCmdAxTorqueLimitSet`（`7961939` 新增，`EtherCAT/Pci1203Control.h:993-1044`）。它只被 `tools/pci1203_safety_watch.cpp` 與 `tests/test_pci1203_pure.cpp` 使用；Motor Test 頁面今天**不能**設扭力上限。
++
++---
++
++## §4 按鈕在真機上會做什麼、哪些會動（給 EastSun）
++
++先講結論：**會讓馬達真的轉的，只有 Motor Test 頁的 JogP/JogN、MoveP/MoveN、Go、HOME、LoopMove、Light Scale（BitBtn2）這 8 顆**。
++教導頁的運動鈕全部被拒。GoSoftP/GoSoftN 在這台一定被拒（±999999）。
++
++| 類別 | 按鈕 | 在這台上的結果 |
++|---|---|---|
++| 🔴 **會動** | JogP/JogN（#1-2） | 按住就 `Acm_AxJog`，放開就停；速度＝捲軸上次的 %（剛選軸時 1%） |
++| | MoveP/MoveN（#3-4） | 從目前 cmdPos 走 ±間隔；速度＝捲軸位置 |
++| | Go（#5） | 走到 `edtHomeOffset`；要 HomeFlag≠0 且 EMG 沒按 |
++| | HOME（#8） | DS402 `Acm_AxHome` 124/128；arm Z（M03/M22）歸零後再走到 ZSafePos |
++| | LoopMove（#9） | pos1↔pos2 一直來回，直到再按一次、STOP、或被各種取消條件打斷 |
++| | Light Scale 開始（#34） | 🛑 先歸零，再**從 +999899（或 −999899）開始逐點走**；見 §5-7 |
++| 🟠 **會切電、激磁或鎖放煞車** | Motor Power（#12） | 切 SwMotorRelay／SwServerON；關電時全部煞車鎖住、SystemStart=false、fAllMotorHome=false |
++| | 伺服（#11、#44） | 該軸 SvOn 0/1；整組 Z 都 ON 之後，下一個 DoSystem 放煞車 |
++| | Test Range／Test Rate（#23-24） | 完整 InitMotor：**SvOn 1＋該軸座標歸 0** |
++| | 打開 Motor Test 頁（#32） | 電源關著：跑一次 GaliMotorServoOff（清 fAllMotorHome、鎖煞車）；電源開著：再跑一次 DoMotorPowerOn（只等 1 秒）＋ServerON |
++| | STOP（#10、#43） | 所有開成功的 1203 軸減速停＋離開 jog 模式 |
++| 🟡 **不動，但改座標或 HomeFlag（之後要重歸零）** | Reload Motor Data（#25） | **所有 1203 軸** SetCmd/SetActual(0)，全部 HomeFlag=0 |
++| | 參數格子（#28） | 該軸 HomeFlag=0 |
++| 🔵 **只寫卡片速度，不動** | 點選馬達（#27）、捲軸（#30）、edtSpeed（#31） | 寫 PTP（捲軸再加 jog 家族）速度 |
++| ⚪ **只改記憶體** | 速度參數鈕、軟體極限鈕（#15-20）、Copy From（#29） | MOT 記憶體；存檔要到 Motor Database 分頁按 Save |
++| ⚪ **只動畫面** | SetPosP/N（#13-14）、btnRange/btnRate（#21-22） | C++ 什麼都不做 |
++| 📄 **寫檔** | Light Scale 存檔（#35-36）、關頁（MotorTest.ini）、Motor Database Save（Mot_Table.csv） | 寫機台 D 槽／system 檔 |
++| ⛔ **一定拒絕** | GoSoftP/N（#6-7）、教導頁 jog/move/home/設定（#37-42、#45-48） | 回理由，不碰卡 |
++| ❔ 其他 | Reset MNet（#26） | 這台沒有 MN200 卡，應無作用 |
++
++---
++
++## §5 現在生效的安全相關行為
++
++### 5-1 VerifyMotorAction 鎖（golden 完整照翻，EastSun R8）
++
++* 位置：`cs:30050-30153`；hook 由 wb_serve 註冊（`WMAL:1015-1027`）：moving `WMA:2798-2810`、homing `:2811-2815`、AllBtnUp `:2816-2821`、Stop1203All `:2822-2826`。
++* 條件：Motor Test **或** Teach 視窗開著（瀏覽器回報的視窗總表），而且 `SystemStart==false`（`cs:30472`）。
++* 任一 Enable=1 的 1203 軸「在動」（樣本不是 READY、命令後還沒有新樣本、或正在 jog），或有 HOME 工作 ⇒ **鎖**：pnlStop 變黃、
++  MoveN／MoveP／LoopMove 不能按（`MT.html:905-924`；JogP/JogN golden 刻意不鎖）。
++* 動作停下 **2 秒** 後 ⇒ `StopAllMotor`＋**所有開成功的 1203 軸停止**＋AllBtnUp（取消 HOME／Loop 工作）⇒ 解鎖。鎖著時安全門打開 ⇒ 同樣立刻全停。
++* ⚠ **ERROR_STOP 也算「在動」**（golden MotionDone 就是 `state==READY`，T[13] `:1961`）⇒ 只要有一顆 Enable=1 的軸停在警報，鎖就**不會解除**。
++* ⚠ LoopMove 的等待 3/6 秒會被「2 秒沒動」切斷（golden 同，`cs:29994-29996`）。
++* 驗證：E3b-E（`test_mt_e3b_engine.cpp:274-335`）、T[13] `:1957-1974`。門開那一臂沒有測（要真的門感測器）。
++
++### 5-2 Motor Test／Teach 開著時 MainProc 暫停（EastSun R8）
++
++* `cs:30451-30486`：視窗開著時，MainProc 在 `ScanSystemSensor`＋`DoSystem`（`cs:30383`、`:30400`）**之後** return ——
++  主流程（DoAllProcess）與停機臂（含 §5-6 的 ABORTHOME）都不跑。**DoSystem 照跑**，所以 §5-3／§5-4 的電源與煞車邏輯在頁面開著時照樣生效。
++* 「開著」由瀏覽器總表決定（`WMAL:965-968`）；最小化也算開著（`WebWindowRegistry.cpp:205-208`）。⚠ 收過總表之後，
++  如果**所有**回報都過期（超過 15 秒沒有新訊框）一律當成**還開著**（`WebWindowRegistry.h:104-109`、`:128-133`）⇒ 瀏覽器斷線時暫停會持續，
++  直到重新回報。MT-FIX1 修掉了「HMI 重新整理後舊連線的 open 永遠留著、生產一直停住」：有新鮮回報時只看新鮮的（`WebWindowRegistry.cpp:179-186`）；
++  頁面那一側另外在重新載入時補送 formClose 給 C++（`MT.html:1042-1046`）。
++* 驗證：E3b-D（`test_mt_e3b_engine.cpp:251-269`）；總表政策 ctest `WebWindowRegistry`。
++
++### 5-3 G31a：開機後自動開馬達電源（EastSun 20260926「照舊版打開」）
++
++* `cs:16022`、`:16063-16077`：`CheckMotorPowerShutDown` 被呼叫到第 100 次時，**一次**（`flag=false`）執行 `DoMotorPowerOn()`
++  （繼電器原本沒開時：繼電器 ON＋Index/Magazine/Cassette 煞車鎖住；不論如何都有 **golden 的 1 秒忙等，會凍結主執行緒 1 秒**，`cs:14381-14412`）→ `SW[SwServerON].On()`
++  → `MotorPowerOnDelay=4`（`cmydef.h:34`）→ `bMotorPowerState=true`。
++* 呼叫條件：DoSystem 裡 `SystemStart==false` 且 `bDoProcess`（`cs:16803-16808`），`bDoProcess` 每次 DoSystem 翻轉（`cs:16997-17003`），
++  `IsSafeLockCheck()` 時整支 return（`cs:16020`）。⇒ 程式註解寫「約 100 次 DoSystem」，照程式算是約 **200 次 DoSystem**；
++  以 500 ms 拍子粗估約 100 秒（實際時間請看 console，本檔沒有量）。
++* 之後 4 秒 SnMotorPower 讀到 ON ⇒ G16 放煞車（受 §5-4 管）。
++* 沒有對應 ctest（只有 E3b-F 測了 DoMotorPowerOn 的跨拍版）。
++
++### 5-4 G16／G05／HOME 放煞車：該群組的軸都 Servo ON 才放（EastSun 20260926）
++
++* 關卡 `W906_BrakeReleaseOK`（`cs:30013-30031`）擋在每一個 golden `*BreakerON()` 前面：G16 `cs:19999-20027`、G05 `cs:16375-16385`、
++  HOME 開始 `uhome.cpp:2135-2139`。放行條件：`bMotorPowerState==true` **且** 群組裡每一個 Enable=1 的 PCI1203 軸都被監看器開成功、樣本有效、SVON 為 1
++  （`WMAL:991-1012`）。群組（`WMAL:973-990`，**待 EastSun 在機台確認**）：
++  * Index：M14 MTestZ1（M15 沒裝）
++  * InOutArmZ：M03 MInArmZA、M22 MOutArmZA
++  * Cassette：M35 MLoaderZ、M38 MAuto1Z、M39 MAuto2Z
++  * Magazine、LDCarRotArmZ：這台沒有軸 ⇒ 直接放行
++  * ⚠ **M36 MEmptyZ、M40 MAuto3Z 不在任何群組**，它們有沒有煞車、用哪個輸出要確認。
++* G05 是每一個閒置的 DoSystem 都跑（`MotorPowerOnDelay<=0` 且 `iEMGPressDelay<=0`），被擋的群組下一拍再試；console 只在狀態改變時印 `brake release ALLOWED/HELD`。
++* ⚠ **由程式推得、未在機台量過**：`bMotorPowerState` 只在三個地方變成 true —— G31a（每個行程一次，`cs:16075`）、面板 [Power On] 鍵
++  （`cs:16125`，這台該感測器 Enable=0，`cs:16138-16141`）、機台 HOME（`forms/fMain.cpp:981`）。而 `GaliMotorServoOff` 會把它清成 false（`uhome.cpp:5006`），
++  觸發它的有：Motor Power 關（#12）、**電源關著時打開 Motor Test 頁**（#32）、ABORTHOME（§5-6）。Motor Power 開（#12）本身不設 true（`cs:14440-14459`）。
++  ⇒ **Motor Test 關電再開電之後，Z 群組的煞車會一直鎖住，直到按機台 HOME**；這段期間 jog Z 軸會頂著煞車。golden 放煞車不看這個旗標，所以這是本樹的新行為。
++* 驗證：E3b-H（`test_mt_e3b_engine.cpp:400-434`，假 hook）。
++
++### 5-5 G04：沒電或 EMG 時每一拍鎖 Index 並鎖全部煞車（EastSun 20260926）
++
++* `cs:16315-16329`＋`cs:19903-19920`：這台 M14 是 PCI1203 ⇒「沒電」＝ EMG 或 SnMotorPower off。成立時每個 DoSystem：
++  `LockIndexMotorAndDoHomeProcess`（iHome=1、fAllMotorHome=false、golden StopAllMotor，`cs:19923-19940`）、五組煞車全部鎖住、`DoIndexZ1Z2Free(0)`。
++* ⚠ golden `StopAllMotor` 碰不到 1203 監看器開的軸（`cs:29990`；它只呼叫 golden 物件的 `PCIL132_StopMotor`，`Motor/myGALILmotor.cpp:5759-5784`）。
++  G04 這一臂本身**不送 Stop1203**；1203 軸要靠之後的告警入口（§5-10）或 EMG 硬體本身。要機邊確認 EMG／斷電時軸是怎麼停的。
++
++### 5-6 ABORTHOME：機台歸零途中停機 ⇒ 切馬達電源
++
++* `cs:32673-32674`（golden `:18923-18924`）：歸零畫面開著（`fHome->fShow`）而進到停機拍 ⇒ `sbAbortHomeClick`（`uhome.cpp:5027-5035`）
++  → `GaliMotorServoOff`（`uhome.cpp:4984-5014`）：StopAllMotor＋**Stop1203 全軸**、SwMotorRelay／SwServerON 關、bMotorPowerState=false、全部煞車鎖住、
++  SystemStart=false、fAllMotorHome=false；然後 fAbort=true、關畫面。⇒ **之後要重開 Motor Power**（而且見 §5-4 的煞車問題）。
++* Motor Test／Teach 開著時這一臂被 §5-2 的暫停擋住。驗證：E3b-C、E3b-D。
++
++### 5-7 🛑 Light Scale 沒有軟體極限保護，而且停不下來（EastSun R7：完全照 golden）
++
++* 目標：去＝`PSoftLimitP−100`，返＝`PSoftLimitN+100`（`WMA:2536-2546`）。這台四支手臂的軟體極限都是 ±999999 ⇒ **第一點就是 ±999899**，
++  等於直接走到硬體極限。光學尺讀值恆為 0（沒有 MLightScale 列，`WMAL:613-633`），量到的資料沒有意義。
++* 停不下來（`WMA:2425-2444`，T[13] `:2124-2147`）：
++  * STOP 只停軸、**不停掃描**；golden MotorMove 在停下後把「已下命令＋READY」當成到位，記一個沒走到的點，然後**下一點照走**；
++  * 告警、VerifyMotorAction 的 2 秒停止、Motor Power、關頁、操作員斷線都不停它（`WMA:2771` 不看連線、`WMA:2816-2821`）；
++  * 只有**再按一次 BitBtn2** 才關計時器，而且那一段已下的移動**不會停** —— 要再按 STOP。
++* 被拒的移動（門開 −1、極限 −2/−3）也算到位；rgAxis 沒點過 ⇒ 掃 MOT[0] MInArmX（`WMA:2437`）。
++* 建議：機構行程與軟體極限確認之前，不要在這台按 BitBtn2。
++
++### 5-8 操作員斷線、權杖被收回
++
++* jog 死人開關：操作員連線消失（`ControlOwner()==0`，含權杖閒置 10 分鐘被收回）⇒ 正在 jog 的軸 Stop1203（`WMA:2747-2754`）。
++* HOME／LoopMove：同樣條件或安全鎖成立 ⇒ **取消工作但不送停止**（golden 同，`WMA:2755-2767`；Poll 之後那一步也先檢查，`WMA:2776-2787`）。
++  ⚠ 驅動器會把正在跑的歸零／那一段移動跑完；HomeFlag 保持 0。
++* 頁面：每一條放開路徑都送停止，關視窗、pagehide 時 `releaseHeld()`（`ma.js:303-308`、`MT.html:1036`、`:1082-1085`）。
++
++### 5-9 送出前的輪詢新鮮度
++
++* 對一軸下過命令之後，下一個運動命令要等監看器有新樣本（≤200 ms），否則拒絕「稍候再按」（`WMA:152-161`）。停止不受限。T[10] `:1190-1193`。
++
++### 5-10 告警
++
++* wb_serve 的告警入口（`tools/wb_serve.cpp:5401`）⇒ `MotorAccessOnAlarm`（`WMA:2905-2926`）：取消 HOME／Loop、**Stop1203 全部開成功的軸**、
++  選中軸警報燈亮 ⇒ 該軸 HomeFlag=0。Light Scale 計時器不動。T[11] `:1290-1295`、T[12] `:1636-1663`。
++
++### 5-11 STOP 一定送得到
++
++* `motor.stop` 免權杖、輸出優先、告警框期間照處理（§0）；C++ 端鎖死只收 `action=="stop"`，所以豁免不會變成「不拿權杖也能動馬達」（`WMAL:806-823`）。
++
++### 5-12 歸零本身的保護
++
++* 驅動器類型判斷不出 ⇒ 拒絕（不猜 MODE12，`WMA:1188-1194`）；PHomeHighSpeed=0 ⇒ 拒絕（`:1199-1200`）；門開 ⇒ 拒絕且 HomeFlag 已清 0（`:1171-1175`）；
++  5 秒沒進 HOMING ⇒ HomeFlag=2（不會假的 1，`:2090-2093`）；180 秒逾時 ⇒ 停＋2（`:1011`、`:2130`）。
++
++---
++
++## §6 機邊驗證清單（照風險排）
++
++1. **Light Scale**：行程確認前不要按（§5-7）。
++2. **jog 方向**：M00 M01 M14 M18 M19 M35 M36 M38 M39 M40 M108 的 Direction 已從 1 改成 0（§1），JogP 實體方向跟 golden 原設定相反；每一軸看一次 JogP 往哪走。
++3. **jog 會不會動**：`ExtDrive(1)`＋`Acm_AxJog` 這條路在這張卡第一次上機（`WMA:757-758`）。
++4. **M14 速度**：JogHigh 900000、Acc 9000000，先用捲軸 1% 試。
++5. **STOP**：jog 中、MoveP 中、HOME 中、LoopMove 中各按一次，看 ack 的 `stopSent`／`stopRefused` 與實際減速。
++6. **歸零**：每軸 124/128 的方向、6099h／609Ah 讀回值、HOMING→READY→HomeFlag=1、M03/M22 去 ZSafePos；M35/M36/M38/M39/M40 的 VelLow 300 > VelHigh 100。
++7. **煞車**：Servo ON 之後 G05 何時放；Motor Power 關→開之後是否真的一直鎖到 HOME（§5-4）；M36/M40 的煞車。
++8. **G31a**：wb_serve 啟動後多久自動開電、那 1 秒主執行緒停住有沒有影響（§5-3）。
++9. **EMG／斷電**：G04 成立時 1203 軸怎麼停（§5-5）。
++10. **VerifyMotorAction**：有軸在 ERROR_STOP 時鎖是否解不開（§5-1）；LoopMove 等 3/6 秒被切斷。
++11. **到位判斷**：Loop／HOME 用 READY＋cmdPos，不看 INP 與編碼器；量一次跟隨誤差。
++12. **Reload Motor Data／Test Range**：全部（或該軸）座標歸 0 之後的行為，DS402 絕對值編碼器上 SetActualPosition(0) 的意義。
++13. **SVON 位元與扭力單位**：runtime 的 servoOn／torque 跟驅動器面板（或 SigmaWin）比對；扭力 `unitVerified`。
++14. **Motor Power 繼電器**：SwMotorRelay／SwServerON 實際接點、DO 回讀同步。
++15. **M11 閘門**：確認 Gerneral.ini `SHUTTLE_FLOODGATE` 值，=1 時 MInShuttle1 移動前會先開閘。
++
++---
++
++## §7 ctest 對照
++
++### 7-1 `WebMotorAccess`（`tests/test_web_motor_access.cpp`，假後端，不碰卡）
++
++2026-09-26 在這台執行 `build_integ_ship_x86\tests\test_web_motor_access.exe web\JSON\motor-access.json`
++（執行檔 02:13 建置，比 `WMA` 00:38、測試檔 00:42 新）：**377 passed, 0 failed**，exit 0。
++
++| 段 | 行 | 內容 |
++|---|---|---|
++| [1] | `:435` | 解析 |
++| [2] | `:463` | catalog 覆蓋：48 命令、37 action、live 30、ui 3、合約 5＋6 列 |
++| [3] | `:560` | 誠實：queued／unknown 不碰後端；教導頁運動鈕拒絕 |
++| [4] | `:590` | stop |
++| [4b] | `:624` | jog 放開＝只停那一軸 |
++| [5] | `:663` | servoToggle |
++| [6] | `:729` | 單位與速度換算手算值 |
++| [7] | `:763` | W4-b1 運動（jog／MoveP/N／Go／軟體極限／參數鈕／dry 與 partial） |
++| [8] | `:933` | W4-b2 home／loop／resetMNet／range-rate |
++| [9] | `:1069` | 每一種成功 ack 不帶 type/id/ok/error |
++| [10] | `:1116` | NB2 R21：Enable、閘門、卡片錯誤碼、jog 死人開關、樣本新鮮度、Index 速度 |
++| [11] | `:1204` | NB2 R22/R23：Enable=0、HOME 門與速度、case 500、Timer1 三道閘、明講狀態、互斥 |
++| [9b] | `:1366` | MT-E1：依驅動器分支的歸零、reloadMotorData |
++| [12] | `:1449` | MT-E2：selectMotor／setSpeed＋jog 速度／setParamCell／copyFrom／告警燈規則／LastHomePos／Loop 計時 |
++| [13] | `:1786` | MT-E3c：Motor Power／FormShow-Close／InitMotor／R2／All 模式／引擎 hook／Light Scale |
++| [14] | `:2171` | MT-FIX1：Motor Power 方向、Poll 後的閘、jog 重送捲軸值、捲軸寫卡失敗 |
++
++**沒測的**（測試檔頭 `:32-33` 自己寫明）：真實後端 `WMAL`（馬達表對號、監看器對軸、MOT[]）—— 要 wb_serve 起來在機台上量。
++
++### 7-2 其他相關 ctest（本次沒有執行）
++
++| ctest | 檔 | 管什麼 |
++|---|---|---|
++| `MT_E3b_Engine` | `tests/test_mt_e3b_engine.cpp` | A machinerecord 圍堵、B GaliMotorServoOff、C sbAbortHomeClick、D MainProc 暫停與停機臂、E VerifyMotorAction、F 跨拍 DoMotorPowerOn、G R2（讀 repo 的 Mot_Table 副本）、H 煞車 Servo ON 關卡與 G04 判準。全部用假 hook |
++| `Pci1203Pure` | `tests/test_pci1203_pure.cpp` | InitMotor 設定表（golden 順序、封閉值）、扭力換算、kCmdAxTorqueLimitSet |
++| `WebWindowRegistry` | `test_winregistry`（`tests/CMakeLists.txt:3097`） | 視窗總表與 fShow 政策（§5-2） |
++
++`MT_E3b_Engine` 連整個引擎與 IO 函式庫，本次為了不碰任何機台輸出沒有執行。
++
++---
++
++## §8 跟 `docs/W4_PROGRESS.md` §2 的差別（那份在這台已過時的地方）
++
++| W4 §2 | 那份寫的 | 這台今天 |
++|---|---|---|
++| #1-2 jog | `moveVel ±1`＋4 個 setSpeed | golden 做法：只設 jog 家族（捲軸上次的值）＋`ExtDrive(1)`＋`Acm_AxJog`；放開＝StopDec＋ExtDrive 0（MT-E1／MT-E2／MT-FIX1） |
++| #8 home | 只有 DS402 124/128 | 依驅動器分支（DS402／卡片式 MODE12／判斷不出拒絕）；Light Scale 也用同一個開始（MT-E1、MT-E3c） |
++| #9 loopMove | 只有單軸 | All 模式接上；計時照 golden；Poll 之後也推進（MT-E2、MT-E3c、MT-FIX1） |
++| #12 motorPowerToggle | 不做（G9 關著） | live：跨拍 DoMotorPowerOn、關電 GaliMotorServoOff、方向防呆（MT-E3b/E3c/FIX1） |
++| #23-24 Range／Rate | 1203 拒絕 | 1203 做完整 golden InitMotor（EastSun R4，MT-E3c） |
++| #25 reloadMotorData | 不做 | live：HomeFlag 全清、表值套回、全軸 SetCmd/SetAct(0)（MT-E1、MT-E2） |
++| — | 38 個命令 | 48 個：新增 labName、strngrdMotor、BitBtn1、scrlbrMotorSpeed、edtSpeed（MT-E2），FormShow、FormClose、BitBtn2、BitBtn3、btnSaveLogLightScaleData（MT-E3c） |
++| — | M14 走 Galil 拒絕 | R2：Mot_Table CardModel=PCI1203 的 Index 列當一般 1203 軸（`WMA:515-522`、`WMAL:300-307`） |
++| 引擎 | 無 | VerifyMotorAction、MainProc 暫停、G31a、G04/G05/G16 煞車關卡、ABORTHOME 都已生效（§5） |
++| 驗證 | 57 條 | 377 條（§7-1） |
++
++---
++
++## §9 讀程式時看到、本檔沒有改的事
++
++* `MT.html:1829` 註解還寫「M14 由 C++ 拒絕」—— R2 之後 M14 是一般 1203 軸（`WMA:515-522`），註解過時。
++* `WebMotorAccess.h:300` 的函式說明標題還寫「38 個 catalog 命令」，下一行才補「現在 48 個命令、37 個 action」。
++* `tests/test_web_motor_access.cpp` 有兩段都印 `[9]`（`:1069`、`:1366`）。
++* `btnSaveLogLightScaleData` 在 wb_serve 下永遠存出 8 個空檔（fMotorTest 沒有建立，`WMAL:644-650`）。
++* §5-4 的「關電再開電後煞車鎖到 HOME」與 §5-5 的「G04 不送 Stop1203」都是從程式推出來的，需要 EastSun 決定要不要處理。
+-- 
+2.55.0.windows.5
+

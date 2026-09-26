@@ -1,0 +1,75 @@
+From ef20fb849224abb35f7bb6031bfff006e2f66955 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 25 Sep 2026 19:32:01 +0800
+Subject: [PATCH 4/7] LAT-1 (web): IO page sends control.acquire and
+ io.btnPanelClick back to back (one round trip instead of two); control-held
+ still shows the control-held text
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ page/ht9045_io_do.js | 36 ++++++++++++++++++++++++++----------
+ 1 file changed, 26 insertions(+), 10 deletions(-)
+
+diff --git a/page/ht9045_io_do.js b/page/ht9045_io_do.js
+index d30572e..cabe27d 100644
+--- a/page/ht9045_io_do.js
++++ b/page/ht9045_io_do.js
+@@ -152,14 +152,18 @@
+   // AI(W906-IOWEB-P21) 20260925：計時（使用者：「你寫個LOG 給我測測看不就知道了?」）。
+   // 網頁量「按下 → 收到回應」的總時間；伺服器在回應裡附上它那一段的拆解（ack.timing）。
+   function now() { return (window.performance && performance.now) ? performance.now() : Date.now(); }
++  // AI(W906-LAT-1) 20260925：權杖和按鈕現在同時送出（見 send()），所以「權杖回覆」是跟按鈕重疊的那一段，
++  // 不再是加在前面的一趟來回；伺服器端多一欄「發布」（PublishHandlerTags，C++ 同一版加的計時）。
+   function timingText(ack, t0, tAcq) {
+     var total = Math.round(now() - t0);
+-    var s = '\n計時：按下到回應共 ' + total + ' ms（拿權杖 ' + Math.round(tAcq - t0) + ' ms）';
++    var s = '\n計時：按下到回應共 ' + total + ' ms（權杖回覆 ' + Math.round(tAcq - t0) + ' ms，與按鈕同時送出）';
+     var t = ack && ack.timing;
+     if (t) {
+       s += '\n  伺服器端：排隊 ' + Math.round(t.queueMs) + ' ms' +
+            '（跑流程 ' + Math.round(t.pumpMs) + '、讀卡 ' + Math.round(t.pollMs) +
+-           '、畫面資料 ' + Math.round(t.cacheMs) + '、其他 ' + Math.round(t.otherMs) + '）' +
++           '、畫面資料 ' + Math.round(t.cacheMs) +
++           (typeof t.pubMs === 'number' ? '、發布 ' + Math.round(t.pubMs) : '') +
++           '、其他 ' + Math.round(t.otherMs) + '）' +
+            '，送卡 ' + (Math.round(t.execMs * 10) / 10) + ' ms';
+     }
+     try { console.log('[io.btnPanelClick timing]', ack && ack.alias, 'total', total, 'ms', t); } catch (e) {}
+@@ -174,14 +178,26 @@
+     el.classList.add('io-busy');
+     // 每次都重新拿權杖：伺服器閒置 10 分鐘會收回，而 client 端的 haveToken 不會跟著變
+     // （ht9045_recipe_client.js:150-152 vs WebBridgeServer.cpp:1566-1568），所以不靠它。
+-    R.rawCmd('control.acquire').then(null, function (e) {
+-      var m = String(e && e.message || e);
+-      throw new Error(m.indexOf('control-held') >= 0
+-        ? '操作權杖在別的畫面手上（例如開著的 pci1203 監看頁或別的設定頁）——那邊關掉或閒置 10 分鐘後再試'
+-        : '拿不到操作權杖：' + m);
+-    }).then(function () {
+-      tAcq = now();
+-      return R.rawCmd('io.btnPanelClick', { tag: a, value: down });
++    // AI(W906-LAT-1) 20260925：acquire 與 btnPanelClick 連著送出，中間不等 acquire 的回覆 —— 少一趟來回
++    //   （輸出延遲調查第 3 步）。可以這樣做的理由：兩個訊框走同一條 WebSocket，送出順序就是 rawCmd 的呼叫順序
++    //   （ht9045_recipe_client.js cmd()：同一個 connect() 之後依序 send），伺服器照到達順序處理，而
++    //   control.acquire 在 socket 執行緒上當場回答（WebBridgeServer.cpp 的 control.acquire 分支）——
++    //   輪到按鈕做權杖檢查時，權杖已經是這條連線的了。
++    //   ⚠ 權杖在別人手上時：acquire 回 control-held，按鈕接著回 not-operator（伺服器擋下，不會進 tick、不會寫卡）。
++    //     畫面上要顯示的仍然是「操作權杖在別的畫面手上…」那句，所以按鈕失敗時先等 acquire 的結果再決定訊息。
++    //   ⚠ acq 這個 promise 永遠不 reject（錯誤當成值傳下去），否則權杖被佔時會多一個沒人接的 rejection。
++    var acq = R.rawCmd('control.acquire').then(function () { tAcq = now(); return null; },
++      function (e) { tAcq = now(); return e || new Error('control.acquire failed'); });
++    R.rawCmd('io.btnPanelClick', { tag: a, value: down }).then(function (ack) {
++      return acq.then(function () { return ack; });   // 等 acquire 也有結果，計時裡的「權杖回覆」才有數字
++    }, function (e) {
++      return acq.then(function (acqErr) {
++        if (!acqErr) throw e;                          // 權杖拿到了：按鈕自己的拒絕理由原樣顯示
++        var m = String(acqErr && acqErr.message || acqErr);
++        throw new Error(m.indexOf('control-held') >= 0
++          ? '操作權杖在別的畫面手上（例如開著的 pci1203 監看頁或別的設定頁）——那邊關掉或閒置 10 分鐘後再試'
++          : '拿不到操作權杖：' + m);
++      });
+     }).then(function (ack) {
+       var d = describe(a, ack);
+       say(d.text + timingText(ack, t0, tAcq), d.level, d.level === 'ok' ? 9000 : 12000);
+-- 
+2.55.0.windows.5
+
