@@ -61,6 +61,7 @@
 | 40 | `updates/6e81ec60/` | `6e81ec60` | `a425a971`（`updates/6e81ec60/_machine_ai/base_a425a971/`） | 只有文件（INBOX 第 83 列補註）。程式沒變、不用重建。1 檔。**先套第 3～39 包** |
 | 41 | `updates/f433d3b3/` | `f433d3b3` | `6e81ec60`（`updates/f433d3b3/_machine_ai/base_6e81ec60/`） | 只有文件（夜間報告 §0 第 27 題）。程式沒變、不用重建。1 檔。**先套第 3～40 包** |
 | 42 | `updates/0ef84f12/` | `0ef84f12` | `f433d3b3`（`updates/0ef84f12/_machine_ai/base_f433d3b3/`） | 只有文件（裁決紀錄 RULINGS_20260927：HT9050 只改 906 C++；906 的決策題照建議；INBOX 第 75 列補量）。程式沒變、不用重建。2 檔。**先套第 3～41 包** |
+| 43 | `updates/81e7c7c5/` | `81e7c7c5` | `0ef84f12`（`updates/81e7c7c5/_machine_ai/base_0ef84f12/`） | 只有文件（裁決紀錄 RULINGS_20260927 第 4 條：這兩天編譯＋模擬驗證通過就算完成）。程式沒變、不用重建。1 檔。**先套第 3～42 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
