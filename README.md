@@ -29,6 +29,7 @@
 | 8 | `updates/a6b553ef/` | `a6b553ef` | `bc5add9e`（`updates/a6b553ef/_machine_ai/base_bc5add9e/`） | Steven02 的測試機通訊（GPIB／RS232Standard 引擎，`TesterComm/` 42 個新檔）第一次接上 wb_serve —— **開機會自動啟動引擎執行緒，不要就設 `HT9045_TESTERCOMM=0`**；共用標頭有新增行，要全量重編。59 檔。**先套第 3～7 包** |
 | 9 | `updates/378fbb77/` | `378fbb77` | `a6b553ef`（`updates/378fbb77/_machine_ai/base_a6b553ef/`） | 教導頁 HOME 的權杖：HOME 進行中不還、做完照 golden 彈起按鈕、每 60 秒續權杖。1 檔（網頁，不用重建 C++）。**先套第 3～8 包** |
 | 10 | `updates/4c067b5f/` | `4c067b5f` | `378fbb77`（`updates/4c067b5f/_machine_ai/base_378fbb77/`） | Steven02 測試機通訊第二批：atester 四段活的翻譯、On-Line／Off-Line 切換本體（Off-Line 一律走 GPIB 模擬；SECS 遠端切換現在會真的切）、主畫面 Tester 鈕的 C++ 動作（網頁還沒有按鈕）。16 檔，**要全量重編**。**先套第 3～9 包** |
+| 11 | `updates/10936285/` | `10936285` | `4c067b5f`（`updates/10936285/_machine_ai/base_4c067b5f/`） | IO 輸出命令快取越界修掉（14 組 1203 輸出共用快取位元，RULINGS_20260925 第 18／29 條）：快取放大、MotionNet 規則不動、1203 輸出超出快取回 2。8 檔，**要全量重編**。**先套第 3～10 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
