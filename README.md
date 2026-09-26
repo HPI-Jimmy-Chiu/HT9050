@@ -27,6 +27,7 @@
 | 6 | `updates/1e15c4f9/` | `1e15c4f9` | `b5fb53be`（`updates/1e15c4f9/_machine_ai/base_b5fb53be/`） | 第 9 條：阻塞框在等的時候塔燈／蜂鳴器／面板鍵燈照 golden 動、30 秒沒有網頁自動開瀏覽器、是／否框面板 Alarm Reset 消音；**等待中也會 Poll 1203 監看器**（README_MACHINE_AI 有理由）。附 Jimmy 第 27 條裁決（R66-GALI＝A 你們做、D13 維持 0）。11 檔。**先套第 3～5 包** |
 | 7 | `updates/bc5add9e/` | `bc5add9e` | `1e15c4f9`（`updates/bc5add9e/_machine_ai/base_1e15c4f9/`） | 安全 PLC 閘照 golden 打開（**SafePlcIO=0 行為不變**；SafePlcIO 還不要改 1，見 README_MACHINE_AI）；網頁權杖：motor.access 被拒不自動重送、按住 jog 時不還權杖。10 檔。**先套第 3～6 包** |
 | 8 | `updates/a6b553ef/` | `a6b553ef` | `bc5add9e`（`updates/a6b553ef/_machine_ai/base_bc5add9e/`） | Steven02 的測試機通訊（GPIB／RS232Standard 引擎，`TesterComm/` 42 個新檔）第一次接上 wb_serve —— **開機會自動啟動引擎執行緒，不要就設 `HT9045_TESTERCOMM=0`**；共用標頭有新增行，要全量重編。59 檔。**先套第 3～7 包** |
+| 9 | `updates/378fbb77/` | `378fbb77` | `a6b553ef`（`updates/378fbb77/_machine_ai/base_a6b553ef/`） | 教導頁 HOME 的權杖：HOME 進行中不還、做完照 golden 彈起按鈕、每 60 秒續權杖。1 檔（網頁，不用重建 C++）。**先套第 3～8 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
