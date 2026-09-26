@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>Event Log Analyzer</title>
+<link rel="stylesheet" href="ht9xxx.css">
+<link rel="stylesheet" href="theme.css">
+<!--
+  AI(W906-ELA-P4) 20260927 (St02): Event Log Analyzer 的網頁（golden EventlogAnalyzer Rev891.0 TfrmELA 的 Summary／By Day／
+  By Hour／Top5／Alarm／Fail／By Filter 分頁）。計畫 docs/ELA_20260926_WEB_CONVERSION_PLAN.md，帳本 docs/ELA_PORT_LEDGER.md。
+  資料通道（EventLogAnalysis/ElaService.cpp，wb_serve 側的路由接線要 github-59 確認後才接）：
+    GET  /api/ela                      -> Hub 快照（seq／busy／history／config／result）
+    GET  /api/ela?since=<seq>          -> seq 沒變只回 {seq, busy, unchanged:true}（每秒輪詢不用搬整份快照）
+    POST /api/ela/query?from=&to=&top=&filter=&area=&func=   -> 排入一次查詢（分析在 ElaHub 的 worker 執行緒上跑，不在機台 tick）
+  暫照 golden（A），待使用者確認（progress-st02 #15～#19）：
+    * 功能篩選的勾選框照 golden 交叉對應（ctor Analyzer.cpp:257-263）：「2DID」框管 Temp 清單、「Temperature」管 ESD、「OCR」管 2DID、
+      「ESD」管 OCR。這是 golden 的 bug（#18），沒有改。
+    * Top5 下半部照 golden UpdateSgTop5：用 AlarmCode 前綴比對（較長的碼也會算進來）。
+  沒有移植、這頁也不提供按鈕的：報表／上傳（N25 FTP、N34 ChipAdvanced、N10、O19 VTEST MTBF、O06 自動存檔）——計畫 §5，Jimmy 決定。
+  Handler 的 tsEventLogTxt 單檔檢視（Data.Observer.html）不在這頁、也沒動（計畫 §5-1）。
+-->
+<style>
+  body.winpage{padding:0;margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden;background:#A6B8C2;}
+  .wrap{flex:1;display:flex;flex-direction:column;min-height:0;padding:6px;box-sizing:border-box;gap:6px;}
+  .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font:12px sans-serif;background:#d4dde2;border:1px solid #888;padding:4px 6px;}
+  .bar input[type=text]{width:140px;font:12px monospace;}
+  .state{padding:2px 8px;border-radius:3px;color:#fff;background:#777;font-weight:bold;}
+  .state.up{background:#1a8a3a;} .state.busy{background:#c08a00;} .state.down{background:#b03030;}
+  .tabs{display:flex;gap:2px;}
+  .tab{padding:3px 10px;background:#c8d2d8;border:1px solid #888;border-bottom:none;cursor:pointer;font:12px sans-serif;border-radius:4px 4px 0 0;}
+  .tab.act{background:#e4eaee;font-weight:bold;}
+  .pane{flex:1;min-height:0;overflow:auto;border:1px solid #888;background:#e4eaee;padding:6px;display:none;}
+  .pane.act{display:block;}
+  table.g{border-collapse:collapse;font:11px Consolas,"Courier New",monospace;background:#fff;}
+  table.g th,table.g td{border:1px solid #9aa;padding:1px 4px;white-space:nowrap;}
+  table.g th{background:#d0d8de;position:sticky;top:0;}
+  table.g tr.sel td{background:#ffe89a;}
+  pre.sum{font:12px Consolas,monospace;background:#fff;border:1px inset #9aa;padding:6px;margin:0;}
+  .grp{border:1px solid #8a9aa8;border-radius:3px;padding:4px 6px;margin-bottom:6px;background:#eef2f4;font:12px sans-serif;}
+  .grp label{display:inline-block;min-width:150px;}
+  .note{color:#555;font:11px sans-serif;}
+  .err{color:#a00;font:bold 12px sans-serif;}
+</style>
+</head>
+<body class="winpage">
+<div class="wrap">
+  <div class="bar">
+    <span class="state" id="st">—</span>
+    From <input type="text" id="from"> To <input type="text" id="to">
+    Top Alarm <select id="top"><option value="0">JAM</option><option value="1">WAR</option><option value="2">JAM + WAR</option></select>
+    Filter <select id="filter"><option value="0">By Area</option><option value="2">By Function</option></select>
+    <button class="btn3d" id="q">Query</button>
+    <span class="note" id="info"></span>
+    <span class="err" id="err"></span>
+  </div>
+  <div class="tabs" id="tabs">
+    <div class="tab act" data-p="sum">Summary</div><div class="tab" data-p="day">By Day</div><div class="tab" data-p="hour">By Hour</div>
+    <div class="tab" data-p="top5">Top5</div><div class="tab" data-p="alarm">Alarm</div><div class="tab" data-p="fail">Fail</div>
+    <div class="tab" data-p="filter">By Filter</div><div class="tab" data-p="log">Log</div>
+  </div>
+  <div class="pane act" id="p-sum"><pre class="sum" id="summary">（尚未查詢）</pre></div>
+  <div class="pane" id="p-day"><table class="g" id="t-day"></table></div>
+  <div class="pane" id="p-hour"><table class="g" id="t-hour"></table></div>
+  <div class="pane" id="p-top5"><table class="g" id="t-top5f"></table><br><table class="g" id="t-top5"></table><br><table class="g" id="t-top5a"></table></div>
+  <div class="pane" id="p-alarm"><table class="g" id="t-alarm"></table></div>
+  <div class="pane" id="p-fail"><table class="g" id="t-fail"></table></div>
+  <div class="pane" id="p-filter">
+    <div class="grp" id="areas"></div>
+    <div class="grp" id="funcs"></div>
+    <div class="note" id="byAreaCount"></div>
+    <table class="g" id="t-area"></table>
+  </div>
+  <div class="pane" id="p-log">
+    <div class="grp"><b>Job history</b><pre class="sum" id="history"></pre></div>
+    <div class="grp"><b>Exceptions</b><pre class="sum" id="exceptions"></pre></div>
+    <div class="grp"><b>Config（ReadConfig，FTP 密碼不顯示）</b><pre class="sum" id="config"></pre></div>
+    <div class="grp"><b>Files read</b><pre class="sum" id="files"></pre></div>
+  </div>
+</div>
+<script>
+(function () {
+  var API = '/api/ela';
+  // golden cbJamArea items (Analyzer.dfm:1946-1977); the first 30 are the By-Area boxes
+  var AREAS = ['01 Input Arm','02 Output Arm','03 Index Unit','04 Input Shuttle','05 Output Shuttle','06 Empty Tray Arm',
+    '07 Tester I/F','08 Scanner','09 Tray Loader','10 Empty Tray','11 Tray Unloader 1','12 Tray Unloader 2',
+    '13 Tray Unloader 3','14 Color Tray','15 Temp. Controller','16 System','17 Fix Tray 1','18 Fix Tray 2','19 Fix Tray 3',
+    '20 ESD System','21 Process Log','22 Motion Log','23 Message','24 Motor','25 Tray Unloader 4','26 Tray Unloader 5',
+    '27 Tray Unloader 6','28 Fix Tray 4','29 Fix Tray 5','30 Fix Tray 6'];
+  // golden check boxes and the list index each one drives (ctor :257-263, crossed as in golden -- see the file head)
+  var FUNCS = [['RTC', 0], ['2DID', 1], ['Temperature', 2], ['OCR', 3], ['ESD', 4], ['Auto Clean', 5], ['Yield', 6]];
+  var EVCOLS = ['Date','Time','UnitName','AlarmCode','Recovery','StopedTime','Duplicate','Message','ErrorPart'];
+  var DAYCOLS = ['Date','Input Qty','UPH','Contact Count','Total Test Time','Avg Test Time','Total Stop Time','Alarm Count',
+    'Alarm Time','MUBA','MTBA','Faliure Count','Faliure Time','MTBF'];
+  var lastSeq = -1, waiting = false, snap = null, selRow = 1;
+
+  function $(id) { return document.getElementById(id); }
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function fmt(d) { return d.getFullYear() + '/' + pad(d.getMonth() + 1) + '/' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()); }
+  var now = new Date(), start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  $('from').value = fmt(start); $('to').value = fmt(now);   // golden defaults: today 00:00 .. now
+
+  Array.prototype.forEach.call(document.querySelectorAll('#tabs .tab'), function (t) {
+    t.addEventListener('click', function () {
+      Array.prototype.forEach.call(document.querySelectorAll('#tabs .tab'), function (x) { x.classList.remove('act'); });
+      Array.prototype.forEach.call(document.querySelectorAll('.pane'), function (x) { x.classList.remove('act'); });
+      t.classList.add('act'); $('p-' + t.getAttribute('data-p')).classList.add('act');
+    });
+  });
+  AREAS.forEach(function (a, i) {
+    var l = document.createElement('label'); l.innerHTML = '<input type="checkbox" checked data-a="' + i + '"> ' + a; $('areas').appendChild(l);
+  });
+  FUNCS.forEach(function (f) {
+    var l = document.createElement('label'); l.innerHTML = '<input type="checkbox" checked data-f="' + f[1] + '"> ' + f[0]; $('funcs').appendChild(l);
+  });
+
+  function grid(id, head, rows, onRow) {
+    var t = $(id), h = '<tr>' + head.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join('') + '</tr>';
+    (rows || []).forEach(function (r, i) {
+      h += '<tr data-i="' + i + '"' + (onRow && i + 1 === selRow ? ' class="sel"' : '') + '>';
+      for (var k = 0; k < head.length; k++) h += '<td>' + esc(r[k] == null ? '' : r[k]) + '</td>';
+      h += '</tr>';
+    });
+    t.innerHTML = h;
+    if (onRow) Array.prototype.forEach.call(t.querySelectorAll('tr[data-i]'), function (tr) {
+      tr.addEventListener('click', function () { onRow(+tr.getAttribute('data-i') + 1); });
+    });
+  }
+  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+  // golden UpdateSgTop5(ARow): event rows whose AlarmCode starts with the selected code -> Date, Time, UnitName, Message
+  function top5(res, row) {
+    var f = (res.top5Filter || [])[row - 1] || [], code = f[2] || '', out = [];
+    if (code.indexOf('JAM') === 0 || code.indexOf('WAR') === 0)
+      (res.top5Alarm || []).forEach(function (r) { if ((r[3] || '').indexOf(code) === 0) out.push([r[0], r[1], r[2], r[7]]); });
+    return out;
+  }
+
+  function showState(busy) {
+    var st = $('st');
+    st.className = 'state ' + (busy ? 'busy' : 'up'); st.textContent = busy ? '分析中' : '待命';
+  }
+
+  function render(s) {
+    snap = s;
+    showState(s.busy);
+    $('history').textContent = (s.history || []).join('\n');
+    $('config').textContent = JSON.stringify(s.config || {}, null, 1);
+    var r = s.result;
+    if (!r) return;
+    $('info').textContent = '查詢 ' + (r.range || []).join(' ~ ') + '（' + (r.queryAt || '') + '）';
+    $('summary').textContent = (r.summary || []).join('\n') || '（沒有摘要）';
+    grid('t-day', DAYCOLS, r.byDay);
+    grid('t-hour', ['DateTime'].concat(DAYCOLS.slice(1)), r.byHour);
+    var vis = Math.max(1, (r.top5FilterRowCount || 6) - 1);
+    grid('t-top5f', ['', 'UnitName', 'AlarmCode', 'Message', 'Total Count', 'Total Stoped Time'], (r.top5Filter || []).slice(0, vis),
+         function (row) { selRow = row; render(snap); });
+    grid('t-top5', ['Date', 'Time', 'UnitName', 'Message'], top5(r, selRow));
+    grid('t-top5a', EVCOLS, r.top5Alarm);
+    grid('t-alarm', EVCOLS, r.alarm);
+    grid('t-fail', EVCOLS, r.fail);
+    grid('t-area', EVCOLS, r.byArea);
+    $('byAreaCount').textContent = 'Count: ' + (r.byAreaCount || 0);
+    $('exceptions').textContent = (r.exceptions || []).join('\n');
+    $('files').textContent = (r.filesRead || []).join('\n');
+  }
+
+  function poll() {
+    fetch(API + (lastSeq >= 0 ? '?since=' + lastSeq : '')).then(function (x) { return x.ok ? x.json() : x.json().then(function (e) { throw new Error(e.error || x.status); }); })
+      .then(function (s) {
+        $('err').textContent = '';
+        if (s.unchanged || s.seq === lastSeq) { if (snap) { snap.busy = s.busy; showState(s.busy); } }
+        else { lastSeq = s.seq; render(s); }
+      })
+      .catch(function (e) { var st = $('st'); st.className = 'state down'; st.textContent = '離線'; $('err').textContent = String(e.message || e); });
+  }
+
+  $('q').addEventListener('click', function () {
+    var area = '', func = '';
+    for (var i = 0; i < 30; i++) area += document.querySelector('[data-a="' + i + '"]').checked ? '1' : '0';
+    var f = ['0', '0', '0', '0', '0', '0', '0'];
+    Array.prototype.forEach.call(document.querySelectorAll('[data-f]'), function (c) { if (c.checked) f[+c.getAttribute('data-f')] = '1'; });
+    func = f.join('');
+    selRow = 1;
+    var qs = 'from=' + encodeURIComponent($('from').value) + '&to=' + encodeURIComponent($('to').value) +
+             '&top=' + $('top').value + '&filter=' + $('filter').value + '&area=' + area + '&func=' + func;
+    fetch(API + '/query?' + qs, { method: 'POST' })
+      .then(function (x) { return x.json(); })
+      .then(function (j) { $('err').textContent = j.error || ''; })
+      .catch(function (e) { $('err').textContent = String(e.message || e); });
+  });
+
+  poll();
+  setInterval(poll, 1000);
+})();
+</script>
+</body>
+</html>
