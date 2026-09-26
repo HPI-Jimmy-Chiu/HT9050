@@ -59,6 +59,7 @@
 | 38 | `updates/5c174f85/` | `5c174f85` | `a2cc9616`（`updates/5c174f85/_machine_ai/base_a2cc9616/`） | RS232 測試機介面的 client socket：port 寫成 `"05000"` 之類時不再一直重連（同第 37 包 EJ1N 那一處）；主畫面 Record 分頁的 CLEAR 接法整理（行為不變）；文件。**要重建 wb_serve 才生效**。8 檔。**先套第 3～37 包** |
 | 39 | `updates/a425a971/` | `a425a971` | `5c174f85`（`updates/a425a971/_machine_ai/base_5c174f85/`） | 只有測試（ctest `CpublicFoundation` 多 4 項，量第 37 包的測試時間佇列那一句）。程式沒變、不用重建。1 檔。**先套第 3～38 包** |
 | 40 | `updates/6e81ec60/` | `6e81ec60` | `a425a971`（`updates/6e81ec60/_machine_ai/base_a425a971/`） | 只有文件（INBOX 第 83 列補註）。程式沒變、不用重建。1 檔。**先套第 3～39 包** |
+| 41 | `updates/f433d3b3/` | `f433d3b3` | `6e81ec60`（`updates/f433d3b3/_machine_ai/base_6e81ec60/`） | 只有文件（夜間報告 §0 第 27 題）。程式沒變、不用重建。1 檔。**先套第 3～40 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
