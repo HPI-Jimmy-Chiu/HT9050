@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IO 即時狀態</title>
+<!--
+  AI(W906-IO-POINTS) 20260924：IO 表每一個點的即時狀態（唯讀，只做 HTTP GET，不送任何指令）。
+
+  為什麼另開一頁：HW.IoSetView.html 是 HT9045 的版面（1,489 個 Alias 元件），
+  HT9050 表上啟用的 236 點只有 74 點在那一頁有元件，其餘 162 點看不到。
+  這一頁把 wb_serve 實際載入的 IO 表整張列出來，機台端測試用。
+
+  資料：GET /api/struct/io/config（C++ 載入的 IO 表）＋ /api/struct/io/runtime
+  （1203 監看器讀到的 DI byte／DO 回授，JsonBridge/ChanIoPoints.cpp）。
+  ⚠ null 不是 off：沒有卡、不是 1203 的點、對不到站號 → 「無來源」，不是「OFF」。
+-->
+<style>
+  :root { --bg:#f4f5f7; --fg:#1d2330; --muted:#667085; --line:#d0d5dd; --card:#fff;
+          --on:#12b76a; --off:#98a2b3; --unk:#f79009; --bad:#f04438; --dis:#c4c9d2; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151b; --fg:#e4e7ec; --muted:#98a2b3; --line:#344054; --card:#1d2330;
+            --on:#32d583; --off:#667085; --unk:#fdb022; --bad:#f97066; --dis:#475467; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 "Segoe UI","Microsoft JhengHei",sans-serif; background:var(--bg); color:var(--fg); }
+  header { position:sticky; top:0; background:var(--card); border-bottom:1px solid var(--line); padding:10px 16px; z-index:2; }
+  h1 { font-size:17px; margin:0 0 6px; }
+  .bar { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; }
+  .bar input[type=search] { padding:4px 8px; border:1px solid var(--line); border-radius:4px; background:var(--bg); color:var(--fg); min-width:220px; }
+  #status { font-size:13px; color:var(--muted); margin-top:6px; }
+  #status b.ok { color:var(--on); } #status b.warn { color:var(--unk); } #status b.err { color:var(--bad); }
+  main { padding:0 16px 24px; overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; background:var(--card); margin-top:10px; font-size:13px; }
+  th, td { border-bottom:1px solid var(--line); padding:4px 8px; text-align:left; white-space:nowrap; }
+  th { position:sticky; top:0; background:var(--card); cursor:pointer; user-select:none; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .lamp { display:inline-block; min-width:64px; text-align:center; border-radius:10px; padding:1px 8px; font-weight:600; color:#fff; }
+  .lamp.on { background:var(--on); } .lamp.off { background:var(--off); }
+  .lamp.unknown { background:var(--unk); } .lamp.bad { background:var(--bad); } .lamp.disabled { background:var(--dis); color:var(--fg); }
+  tr.changed td { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background: rgba(247,144,9,.35); } to { background: transparent; } }
+  .muted { color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>IO 即時狀態（wb_serve／C++）</h1>
+  <div class="bar">
+    <input type="search" id="q" placeholder="搜尋 Alias／位址碼，例如 SnMotorPower 或 I2.30">
+    <label><input type="checkbox" id="onlyEnabled" checked> 只看啟用（Enable=1）</label>
+    <label><input type="checkbox" id="only1203"> 只看 1203</label>
+    <label><input type="checkbox" id="onlyChanged"> 只看最近 10 秒有變的</label>
+    <label><input type="checkbox" id="pause"> 暫停更新</label>
+  </div>
+  <div id="status">載入中…</div>
+</header>
+<main>
+  <table>
+    <thead><tr>
+      <th data-k="alias">Alias</th><th data-k="ioType">類型</th><th data-k="direction">方向</th>
+      <th data-k="code">位址碼</th><th data-k="station">站號</th><th data-k="chan">站內 byte</th><th data-k="sbit">bit</th>
+      <th data-k="inType">InType</th><th data-k="enable">Enable</th><th data-k="raw">原始位元</th>
+      <th data-k="state">狀態</th><th data-k="quality">品質</th><th data-k="changedAt">上次變化</th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</main>
+<script>
+(function(){
+  var API = '/api/struct/io/';
+  var cfgPts = [], byId = {}, last = {}, sortKey = 'alias', sortDir = 1, timer = null, busy = false;
+  var QUALITY = { good:'正常', bad:'讀取失敗', nosource:'無來源', disabled:'表上停用' };
+
+  function $(id){ return document.getElementById(id); }
+  function get(url){
+    return fetch(url + (url.indexOf('?') < 0 ? '?' : '&') + '_=' + Date.now(), { cache:'no-store' })
+      .then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+  }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function setStatus(html){ $('status').innerHTML = html; }
+
+  function lamp(p){
+    if(p.quality === 'bad') return '<span class="lamp bad">讀取失敗</span>';
+    if(p.quality === 'disabled') return '<span class="lamp disabled">停用</span>';
+    if(p.isOn === true) return '<span class="lamp on">ON</span>';
+    if(p.isOn === false) return '<span class="lamp off">OFF</span>';
+    return '<span class="lamp unknown">無來源</span>';
+  }
+
+  function rowsFor(rt){
+    var rtById = {};
+    (rt.points || []).forEach(function(p){ rtById[p.ioId] = p; });
+    var now = Date.now();
+    return cfgPts.map(function(c){
+      var r = rtById[c.ioId] || { isOn:null, quality:'nosource', raw:null };
+      var sig = r.quality + '|' + r.raw;
+      var prev = last[c.ioId];
+      if(!prev || prev.sig !== sig) last[c.ioId] = { sig: sig, at: prev ? now : 0 };
+      var a = c.address || {};
+      return {
+        id: c.ioId, alias: c.alias, ioType: c.ioType, direction: c.direction === 'input' ? '輸入' : c.direction === 'output' ? '輸出' : '?',
+        code: a.ioCode || '', station: a.station, chan: a.stationChan, sbit: a.stationBit,
+        inType: (c.hw || {}).inType, enable: (c.hw || {}).enable, isa: (c.hw || {}).isaBase,
+        raw: r.raw, isOn: r.isOn, quality: r.quality, state: r.isOn === true ? 'on' : r.isOn === false ? 'off' : r.quality,
+        changedAt: last[c.ioId].at
+      };
+    });
+  }
+
+  function render(rt){
+    var q = $('q').value.trim().toLowerCase();
+    var onlyEn = $('onlyEnabled').checked, only1203 = $('only1203').checked, onlyCh = $('onlyChanged').checked;
+    var now = Date.now();
+    var list = rowsFor(rt).filter(function(x){
+      if(onlyEn && x.enable !== 1) return false;
+      if(only1203 && x.isa !== 3) return false;
+      if(onlyCh && !(x.changedAt && now - x.changedAt < 10000)) return false;
+      if(q && (x.alias + ' ' + x.code).toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+    list.sort(function(a, b){
+      var va = a[sortKey], vb = b[sortKey];
+      if(va == null) va = ''; if(vb == null) vb = '';
+      return (va > vb ? 1 : va < vb ? -1 : 0) * sortDir;
+    });
+    var html = list.map(function(x){
+      var recent = x.changedAt && now - x.changedAt < 1500;
+      return '<tr' + (recent ? ' class="changed"' : '') + '><td>' + esc(x.alias) + '</td><td>' + esc(x.ioType) + '</td><td>' + x.direction +
+        '</td><td>' + esc(x.code) + '</td><td class="num">' + esc(x.station) + '</td><td class="num">' + esc(x.chan) +
+        '</td><td class="num">' + esc(x.sbit) + '</td><td class="num">' + esc(x.inType) + '</td><td class="num">' + esc(x.enable) +
+        '</td><td class="num">' + (x.raw == null ? '<span class="muted">—</span>' : x.raw) + '</td><td>' + lamp(x) +
+        '</td><td>' + esc(QUALITY[x.quality] || x.quality) + '</td><td class="muted">' +
+        (x.changedAt ? new Date(x.changedAt).toLocaleTimeString() : '') + '</td></tr>';
+    }).join('');
+    $('rows').innerHTML = html;
+
+    var run = rt.runtime || {}, c = run.counts || {};
+    var cls = run.connected ? 'ok' : 'warn';
+    setStatus('<b class="' + cls + '">' + (run.connected ? '已連上 1203 監看器' : '沒有資料來源') + '</b>'
+      + '　正常 ' + (c.good || 0) + '｜讀取失敗 ' + (c.bad || 0) + '｜無來源 ' + (c.nosource || 0) + '｜表上停用 ' + (c.disabled || 0)
+      + '　顯示 ' + list.length + ' / ' + cfgPts.length + ' 點'
+      + '　更新 ' + esc(run.lastPollAt || '') + (run.why ? '<br>' + esc(run.why) : ''));
+  }
+
+  var lastRt = { points: [], runtime: {} };
+  function poll(){
+    if(busy || document.hidden || $('pause').checked) return;
+    busy = true;
+    get(API + 'runtime').then(function(rt){ busy = false; lastRt = rt; render(rt); })
+      .catch(function(e){ busy = false; setStatus('<b class="err">讀取 /api/struct/io/runtime 失敗：' + esc(e.message) + '</b>（wb_serve 有在跑嗎？）'); });
+  }
+
+  ['q','onlyEnabled','only1203','onlyChanged'].forEach(function(id){
+    $(id).addEventListener(id === 'q' ? 'input' : 'change', function(){ render(lastRt); });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('th[data-k]'), function(th){
+    th.addEventListener('click', function(){
+      var k = th.getAttribute('data-k');
+      if(sortKey === k) sortDir = -sortDir; else { sortKey = k; sortDir = 1; }
+      render(lastRt);
+    });
+  });
+
+  get(API + 'config').then(function(cfg){
+    cfgPts = cfg.points || [];
+    cfgPts.forEach(function(p){ byId[p.ioId] = p; });
+    return get(API + 'runtime');
+  }).then(function(rt){
+    lastRt = rt; render(rt);
+    var ms = Math.max(500, (rt.runtime && rt.runtime.pollIntervalMs) || 500);
+    timer = setInterval(poll, ms);
+  }).catch(function(e){
+    setStatus('<b class="err">讀取 /api/struct/io/config 失敗：' + esc(e.message) + '</b>。這一頁要從 wb_serve 開（http://本機:埠/page/IoLive.html），不能用 file:// 開檔。');
+  });
+})();
+</script>
+</body>
+</html>
