@@ -46,6 +46,7 @@
 | 25 | `updates/44ddf2c6/` | `44ddf2c6` | `ef83be05`（`updates/44ddf2c6/_machine_ai/base_ef83be05/`） | 觀察頁的測試／Index 時間表照 golden 每次測完更新（以前是空的；遠端 IndexTime、SECS TestTime 也有值了）。⚠ `dTestSec` 從此每顆更新（ATC 測試時間補償會用）。不會讓馬達動、不改 IO。9 檔。**先套第 3～24 包** |
 | 26 | `updates/dcd37592/` | `dcd37592` | `44ddf2c6`（`updates/dcd37592/_machine_ai/base_44ddf2c6/`） | 只影響 ctest：每一支測試都拿到路徑轉向變數（以前檔尾十幾支會寫真的 `D:\HT9045_Log`／system）；ctest 沙盒 helper 認 `/`。wb_serve 行為不變。**需要 CMake ≥ 3.19**。3 檔。**先套第 3～25 包** |
 | 27 | `updates/683fafa1/` | `683fafa1` | `dcd37592`（`updates/683fafa1/_machine_ai/base_dcd37592/`） | St02 第五批：log 根目錄可由環境變數轉向（只給 ctest；機台不要設，沒設＝golden 路徑）、站況 log 轉接函式。wb_serve 行為不變。5 檔。**先套第 3～26 包** |
+| 28 | `updates/95c2c26a/` | `95c2c26a` | `683fafa1`（`updates/95c2c26a/_machine_ai/base_683fafa1/`） | 主畫面兩個 log 出口照 golden 翻（memo 仍是替身，機台上沒差別）、觀察頁 Yield 圖帶 dfm 預設值、**wb_serve 開機時印出有設的 W906_* 轉向變數**（F5「IOWEB(這台)」會看到 12 列 `!!`，HT9045_Web.cmd 應該 0 列）、ctest 的 log 根目錄轉向。11 檔。**先套第 3～27 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
