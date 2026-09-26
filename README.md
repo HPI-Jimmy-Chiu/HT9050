@@ -32,6 +32,7 @@
 | 11 | `updates/10936285/` | `10936285` | `4c067b5f`（`updates/10936285/_machine_ai/base_4c067b5f/`） | IO 輸出命令快取越界修掉（14 組 1203 輸出共用快取位元，RULINGS_20260925 第 18／29 條）：快取放大、MotionNet 規則不動、1203 輸出超出快取回 2。8 檔，**要全量重編**。**先套第 3～10 包** |
 | 12 | `updates/dfe09efb/` | `dfe09efb` | `10936285`（`updates/dfe09efb/_machine_ai/base_10936285/`） | ctest 不再寫到機台的 system\lastdata*.dat（只有測試執行檔轉進自己的沙盒，正式程式不變）；新 ctest LastDataSandbox。6 檔。**先套第 3～11 包** |
 | 13 | `updates/19844f8e/` | `19844f8e` | `dfe09efb`（`updates/19844f8e/_machine_ai/base_dfe09efb/`） | 多分頁的視窗總表不再互相蓋掉（WebCommand.connId 以前永遠是 0）；ctest 不寫真實 config.ini（正式程式不變）。7 檔，**要全量重編**。**先套第 3～12 包** |
+| 14 | `updates/21323505/` | `21323505` | `19844f8e`（`updates/21323505/_machine_ai/base_19844f8e/`） | ⚠ **UpdateMainOperateMode 整支照 golden 翻**（0922 裁決）：wb_serve 開機／讀配方／切模式時會切加熱器繼電器、送 ATC 命令、寫 lastdata 與 config.ini（照 golden）。10 檔，**要全量重編**，套之前確認機台周圍有沒有人。**先套第 3～13 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
