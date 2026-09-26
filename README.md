@@ -38,6 +38,7 @@
 | 17 | `updates/d4897dbd/` | `d4897dbd` | `39bd8f1e`（`updates/d4897dbd/_machine_ai/base_39bd8f1e/`） | ⚠ 警報框開著時照 golden 檢查 Index 吸嘴的 IC 掉落（該有 IC 卻沒真空、INDEX_SUCKER_TYPE==1 時會動到真空輸出）；面板 Alarm Reset 照 golden 清兩個 SECS 旗標。3 檔。**先套第 3～16 包** |
 | 18 | `updates/5459651f/` | `5459651f` | `d4897dbd`（`updates/5459651f/_machine_ai/base_d4897dbd/`） | ⚠ 警報框照 golden 設暫停標記：用 START 答掉警報後，恢復運轉時手臂先回 Z 安全位、tester 逾時重算（NB2 R71 C1；筆電沒實跑，請機台驗）。3 檔。**先套第 3～17 包** |
 | 19 | `updates/04c72d84/` | `04c72d84` | `5459651f`（`updates/04c72d84/_machine_ai/base_5459651f/`） | 測試通訊（St02）：機台停著、測區沒有 IC 時，On/Off-Line、工單、GPIB 位址、bin 數的變化照 golden 同步給測試機橋接程式（P2f，以前從來沒送）；TCP/IP OS 測試機換工單送 WORKFILE；測試通訊頁 400 ms 內同一顆鈕只算一次（P7）。不會讓馬達動。9 檔。**先套第 3～18 包** |
+| 20 | `updates/df8d1f69/` | `df8d1f69` | `04c72d84`（`updates/df8d1f69/_machine_ai/base_04c72d84/`） | 🔴 **`USE_ATC_MODE=4` 的機台換配方／登入／HOME 會當，這一包修掉**（開機照 golden 先 InitialATC）；Jam 次數、UPH 表、one cycle 存 `system\Arm*.dat`、Index 時間平均、測試秒數照 golden 開始有數字。不會讓馬達多動；套之前加備 `system\Arm*.dat`／`ArmHis*`／`ArmByLot*`、`ATC.ini`。15 檔。**先套第 3～19 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
