@@ -1,0 +1,159 @@
+From ab33f7ab4cbe74db96bf5652c51abc733e2ad400 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 26 Sep 2026 16:13:55 +0800
+Subject: [PATCH 16/16] WSFANOUT + TAKEOVER: web bridge -- tag patches computed
+ once per baseline, 64 connections, control.takeover
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260926 on the machine: "遮 CW 極限 sensor，瀏覽器要等接近 3 秒才變". Measured: the 1203 Poll ran every ~200 ms
+(78 ms each) and the page polled every 500 ms, but every HTTP request (even a static file) waited ~0.7 s for its first
+byte, and one wb_serve thread sat at 100% of a core. Then, after a restart, the HMI froze completely.
+- WebBridgeServer PumpSnapshot: it diffed ~6,400 tags and COPIED the whole tag map once PER WS CONNECTION on every snapshot
+  generation (~5/s, the 1203 Poll republishes). Conn::lastSent is now a shared immutable map (std::shared_ptr); the patch is
+  computed and encoded once per distinct baseline and the same frame goes to every connection on that baseline; `lastSent =
+  cur` is O(1). Frames are byte-identical to before (each connection still gets the delta against what IT last received;
+  a mid-run joiner has its own baseline).
+- wb_serve: cfg.maxConnections 16 -> 64 (cap FD_SETSIZE 128 - 8 = 120). Measured 23 TCP connections (every HMI window opens
+  1-2 WebSockets + the pages' HTTP polls): with the default 16 the rest sat in the listen backlog forever, so Motor Test's
+  /api/struct/motor/runtime never got an answer.
+- control.takeover (EastSun "我進入IO頁面就應該把控制權拿回來" / "我在哪一頁按按鈕，那一頁就把控制權拿回來"): answered on the socket
+  thread like control.acquire, but moves the single-operator token to the caller whoever holds it (loopback-only bridge, one
+  operator at the HMI); the old holder gets not-operator on its next command. control.acquire is unchanged. Web side (web
+  commit): IO outputs, Motor Test / Teach motor buttons, START/PAUSE/lot start and every Save use takeover; automatic sends
+  (formShow/formClose sync, editlist.get, keepAlive, dryRun preview) keep acquire. Root cause of the IO page lock-out at
+  start-up: the hidden Motor Test iframe's formClose sync took the token at load and never gave it back.
+Line counts unchanged in both files (same-line edits), so every :NNNN citation of them still points where it did.
+Verified on the machine by EastSun: limit lamp now follows the sensor without the 3 s delay; IO outputs work right after
+start-up; IO page -> Motor Test Servo Off works (was control-held). Build build_integ_ship_x86 exit 0; WB_/JsonBridge/Sjson/
+WebMotorAccess/WebWindowRegistry/IoPoints/MotorPoints/IoWatch ctest subset 20/20; production_audit 0 changes; pe_truncation
+178 complete.
+Known edge (not changed): if Motor Test runs HOME/Loop and the IO page takes over, the IO page's 30 s release leaves no owner
+and MotorAccessPollTick cancels Motor Test's jobs (no stop is sent; the running leg finishes).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebBridge/WebBridgeServer.cpp | 58 +++++++++++++++++------------------
+ tools/wb_serve.cpp            |  2 +-
+ 2 files changed, 30 insertions(+), 30 deletions(-)
+
+diff --git a/WebBridge/WebBridgeServer.cpp b/WebBridge/WebBridgeServer.cpp
+index b2f5d86..18a287c 100644
+--- a/WebBridge/WebBridgeServer.cpp
++++ b/WebBridge/WebBridgeServer.cpp
+@@ -34,7 +34,7 @@
+ #include "WebBridge/Sync.h"
+ 
+ #include "Public/cJSON.h"
+-
++#include <memory>   //AI(W906-WSFANOUT) 20260926: std::shared_ptr for Conn::lastSent (PumpSnapshot); on the old blank line so no line below moves
+ #include <atomic>
+ #include <chrono>
+ #include <cstdio>
+@@ -462,7 +462,7 @@ private:
+         std::string        fragment;      // text message being reassembled
+         bool               fragmenting;
+         bool               sentSnapshot;
+-        std::map<std::string, TagValue> lastSent;   // this connection's view
++        std::shared_ptr<const std::map<std::string, TagValue> > lastSent;   // this connection's view -- AI(W906-WSFANOUT) 20260926: SHARED, immutable (see PumpSnapshot); null = empty
+         unsigned long long lastRecvMs;
+         unsigned long long lastPingMs;
+         bool               awaitingPong;
+@@ -1144,9 +1144,9 @@ bool WebBridgeServer::Impl::DoWebSocketUpgrade(
+     }
+ 
+     // ARCHITECTURE.md section 4: full state on connect, deltas thereafter.
+-    std::map<std::string, TagValue> cur;
+-    sib::SnapRead(snapshot, cur);
+-    SendJson(c, "{\"type\":\"snapshot\",\"data\":" + sib::ObjectFrom(cur) + "}");
++    std::shared_ptr<std::map<std::string, TagValue> > cur(new std::map<std::string, TagValue>());   //AI(W906-WSFANOUT) 20260926
++    sib::SnapRead(snapshot, *cur);
++    SendJson(c, "{\"type\":\"snapshot\",\"data\":" + sib::ObjectFrom(*cur) + "}");
+     c.lastSent     = cur;
+     c.sentSnapshot = true;
+     {
+@@ -1385,9 +1385,9 @@ void WebBridgeServer::Impl::HandleTextMessage(Conn& c, const std::string& text)
+     // "ping". Every other command except the auth.* family requires the
+     // caller to BE the holder. Sits after the read-only gate on purpose: a
+     // read-only bridge stays uniformly fail-closed for every cmd.
+-    if (reject.empty() && cmdName == "control.acquire") {
++    if (reject.empty() && (cmdName == "control.acquire" || cmdName == "control.takeover")) {   //AI(W906-TAKEOVER) 20260926: EastSun「我進入IO頁面就應該把控制權拿回來」
+         const unsigned long long owner = ctrlOwner_.load();
+-        if (owner == 0 || owner == c.id) {
++        if (owner == 0 || owner == c.id || cmdName == "control.takeover") {   //AI(W906-TAKEOVER) 20260926: takeover moves the token to this connection whoever holds it (loopback-only bridge, one operator at the HMI); the old holder learns it on its next command (not-operator). Same lines, no line moves.
+             ctrlOwner_.store(c.id);
+             ctrlLastCmdMs_ = NowMs();
+             SendAck(c, id, true, std::string());
+@@ -1503,33 +1503,33 @@ void WebBridgeServer::Impl::PumpSnapshot(bool force)
+ 
+     if (conns_.empty()) return;
+ 
+-    std::map<std::string, TagValue> cur;
+-    sib::SnapRead(snapshot, cur);
+-
++    //AI(W906-WSFANOUT) 20260926: EastSun "遮 CW 極限 3 秒才顯示" -- measured: the socket thread at 100% of a core, every HTTP request
++    //  waiting ~0.7 s for its first byte. This loop diffed ~6,400 tags and COPIED the whole map once PER WS CONNECTION (14 HMI
++    //  windows) on every generation (~5/s: the 1203 Poll republishes). Same frames as before, computed once per BASELINE instead:
++    //  lastSent is a shared immutable map, so connections in step share one pointer, one diff, one encoded frame, and `= cur` is O(1).
++    std::shared_ptr<std::map<std::string, TagValue> > cur(new std::map<std::string, TagValue>());
++    sib::SnapRead(snapshot, *cur);
++    std::vector<std::pair<std::shared_ptr<const std::map<std::string, TagValue> >, std::string> > frames;   // baseline -> frame ("" = no change)
++    const std::map<std::string, TagValue> kEmpty;
+     for (size_t i = 0; i < conns_.size(); ++i) {
+         Conn& c = conns_[i];
+         if (!c.isWs || !c.sentSnapshot || c.closeAfterFlush) continue;
+-
+-        // Deltas for THIS connection only: a client that joined mid-run has a
+-        // different baseline from one that has been watching for an hour.
+-        std::map<std::string, TagValue> delta;
+-        for (std::map<std::string, TagValue>::const_iterator it = cur.begin();
+-             it != cur.end(); ++it) {
+-            std::map<std::string, TagValue>::const_iterator prev = c.lastSent.find(it->first);
+-            if (prev == c.lastSent.end() || !sib::ValuesEqual(prev->second, it->second)) {
+-                delta[it->first] = it->second;
++        size_t f = 0;  while (f < frames.size() && frames[f].first != c.lastSent) ++f;   // held in `frames`, so a baseline cannot be freed and its address reused
++        if (f == frames.size()) {
++            // Deltas per BASELINE: a client that joined mid-run has a different baseline from one that has been watching for an hour.
++            const std::map<std::string, TagValue>& base = c.lastSent ? *c.lastSent : kEmpty;
++            std::map<std::string, TagValue> delta;
++            for (std::map<std::string, TagValue>::const_iterator it = cur->begin(); it != cur->end(); ++it) {
++                std::map<std::string, TagValue>::const_iterator prev = base.find(it->first);
++                if (prev == base.end() || !sib::ValuesEqual(prev->second, it->second)) delta[it->first] = it->second;
+             }
++            // A tag that disappeared becomes null == "unknown / not installed" (ARCHITECTURE.md section 4 rule 3).
++            for (std::map<std::string, TagValue>::const_iterator it = base.begin(); it != base.end(); ++it)
++                if (cur->find(it->first) == cur->end()) delta[it->first] = sib::MakeNull();
++            frames.push_back(std::make_pair(c.lastSent, delta.empty() ? std::string() : "{\"type\":\"patch\",\"data\":" + sib::ObjectFrom(delta) + "}"));
+         }
+-        // A tag that disappeared becomes null == "unknown / not installed"
+-        // (ARCHITECTURE.md section 4 rule 3).
+-        for (std::map<std::string, TagValue>::const_iterator it = c.lastSent.begin();
+-             it != c.lastSent.end(); ++it) {
+-            if (cur.find(it->first) == cur.end()) delta[it->first] = sib::MakeNull();
+-        }
+-
+-        if (delta.empty()) continue;
+-
+-        SendJson(c, "{\"type\":\"patch\",\"data\":" + sib::ObjectFrom(delta) + "}");
++        if (frames[f].second.empty()) continue;
++        SendJson(c, frames[f].second);
+         c.lastSent = cur;
+         WbGuard sl(statsMx);
+         ++stats.patchesSent;
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 4aef22d..073a12a 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -4301,7 +4301,7 @@ int main(int argc, char** argv)
+     webbridge::WebBridgeConfig cfg;
+     cfg.port         = port;
+     cfg.documentRoot = root;
+-    // bindAddress and readOnly keep their safe defaults on purpose.
++    cfg.maxConnections = 64;   //AI(W906-WSFANOUT) 20260926: default 16 was FULL on this machine (measured 23 TCP connections: every HMI window opens 1-2 WebSockets + the pages' HTTP polls), so /api/struct/* requests sat in the backlog forever and Motor Test froze. FD_SETSIZE 128 - 8 = 120 cap (WebBridgeServer.cpp:578). Same line, no line moves.   // bindAddress and readOnly keep their safe defaults on purpose.
+ 
+     // AI(W906-Q30-8) 20260922: 警報信箱的目錄。**從 root 導出，不要各自寫死。**
+     //   同事的 JSON-Simulator/README.md 與 JsonBridge.cs:41-43 寫死
+-- 
+2.55.0.windows.5
+

@@ -1,0 +1,155 @@
+From dbe0d989c64f4a3cc93fb4005c143fe27322d193 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 26 Sep 2026 16:13:56 +0800
+Subject: [PATCH] TAKEOVER (web): the page the operator presses takes the
+ control token (control.takeover)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260926: IO outputs failed right after start-up ("操作權杖在別的畫面手上") and, after the IO page took the token, Motor
+Test's btnServoOff got control-held. Ruling: "我在哪一頁按按鈕，那一頁就把控制權拿回來".
+- ht9045_io_do.js: an output click sends control.takeover instead of control.acquire (pipelined with io.btnPanelClick as
+  before; the 30 s scheduleRelease is unchanged).
+- ht9045_recipe_client.js: new takeover(); operator actions take over every time -- motorAccess (all actions except the
+  automatic formShow/formClose window sync), editlistSave, formSave, write (not dryRun preview), start, pause, lotStart,
+  system.file.put / system.csv.rows / system.levels.put. Automatic sends keep acquire(): editlistGet, keepAlive,
+  formShow/formClose, preview. This also cures a stale haveToken after another page took the token.
+Needs wb_serve with control.takeover (C++ WSFANOUT + TAKEOVER commit). Verified on the machine by EastSun.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ page/ht9045_io_do.js         |  5 ++++-
+ page/ht9045_recipe_client.js | 30 ++++++++++++++++++++----------
+ 2 files changed, 24 insertions(+), 11 deletions(-)
+
+diff --git a/page/ht9045_io_do.js b/page/ht9045_io_do.js
+index 41d0d7a..63123ff 100644
+--- a/page/ht9045_io_do.js
++++ b/page/ht9045_io_do.js
+@@ -186,7 +186,10 @@
+     //   ⚠ 權杖在別人手上時：acquire 回 control-held，按鈕接著回 not-operator（伺服器擋下，不會進 tick、不會寫卡）。
+     //     畫面上要顯示的仍然是「操作權杖在別的畫面手上…」那句，所以按鈕失敗時先等 acquire 的結果再決定訊息。
+     //   ⚠ acq 這個 promise 永遠不 reject（錯誤當成值傳下去），否則權杖被佔時會多一個沒人接的 rejection。
+-    var acq = R.rawCmd('control.acquire').then(function () { tAcq = now(); return null; },
++    // AI(W906-TAKEOVER) 20260926：EastSun「我進入IO頁面就應該把控制權拿回來」—— 按輸出＝操作員正在用這一頁，
++    //   改送 control.takeover：不管權杖在哪一頁（例如開機時背景 Motor Test 送 formClose 拿走、一直沒還），都交給這一頁；
++    //   用完照舊 30 秒還（scheduleRelease）。舊的持有頁下一個命令會收到 not-operator，recipe client 會清掉 haveToken 重拿。
++    var acq = R.rawCmd('control.takeover').then(function () { tAcq = now(); return null; },
+       function (e) { tAcq = now(); return e || new Error('control.acquire failed'); });
+     R.rawCmd('io.btnPanelClick', { tag: a, value: down }).then(function (ack) {
+       return acq.then(function () { return ack; });   // 等 acquire 也有結果，計時裡的「權杖回覆」才有數字
+diff --git a/page/ht9045_recipe_client.js b/page/ht9045_recipe_client.js
+index d9e4131..a1312c0 100644
+--- a/page/ht9045_recipe_client.js
++++ b/page/ht9045_recipe_client.js
+@@ -220,6 +220,12 @@
+     if (haveToken) return Promise.resolve();
+     return cmd('control.acquire').then(function () { haveToken = true; });
+   }
++  // AI(W906-TAKEOVER) 20260926：EastSun「我在哪一頁按按鈕，那一頁就把控制權拿回來」（實測：IO 頁接管後回 Motor Test 按
++  //   btnServoOff 得到 control-held）。操作員親手按的（馬達按鈕、存檔）每次都送 control.takeover —— 不管權杖在哪一頁，
++  //   也順便修掉「以為自己還拿著、其實已被別頁接管」的過期 haveToken；自動送的（開頁／關頁同步、開頁讀資料、續約）照舊 acquire()，不搶。
++  function takeover() {
++    return cmd('control.takeover').then(function () { haveToken = true; });
++  }
+ 
+   // ---------------------------------------------------------------------------
+   //  HT9045Tags -- 執行期 tag 串流（snapshot / patch）
+@@ -420,7 +426,7 @@
+       var v = {};
+       if (extra) Object.keys(extra).forEach(function (k) { v[k] = extra[k]; });
+       v.widgets = widgets; v.answers = answers || {};
+-      return acquire().then(function () {
++      return takeover().then(function () {                 // AI(W906-TAKEOVER) 20260926：存檔＝操作員按的
+         return cmd('editlist.save', { tag: struct, value: JSON.stringify(v) })
+           .then(unwrapAck);
+       });
+@@ -439,7 +445,10 @@
+     //   保證停止不會超車已經到達的 jog。acquire 被拒（control-held）時，回報 acquire 的理由（那才是原因）。
+     motorAccess: function (req) {
+       var tag = (req && req.motors && req.motors[0]) || '';
+-      var a = haveToken ? null : cmd('control.acquire').then(function () { haveToken = true; });
++      // AI(W906-TAKEOVER) 20260926：formShow／formClose 是視窗狀態的自動同步（HW.MotorTest.html syncCppForm）→ 照舊 acquire，不搶；
++      //   其他動作都是操作員按的按鈕 → 每次都 takeover（背靠背送出的順序規則不變）。
++      var auto = !!(req && (req.action === 'formShow' || req.action === 'formClose'));
++      var a = (auto && haveToken) ? null : cmd(auto ? 'control.acquire' : 'control.takeover').then(function () { haveToken = true; });
+       var m = cmd('motor.access', { tag: tag, value: JSON.stringify(req) }).then(unwrapAck);
+       if (!a) return m;
+       a.catch(function () {});                       // 結果在下面合併，這裡只防 unhandled rejection
+@@ -467,7 +476,7 @@
+     // 少一個伺服器就整筆拒寫（golden SaveSetupFile 會把整頁寫回檔案）。
+     // ack：{page, closed, messages:[{en,zh}], todo:[...]}
+     formSave: function (page, widgets) {
+-      return acquire().then(function () {
++      return takeover().then(function () {                 // AI(W906-TAKEOVER) 20260926：存檔＝操作員按的
+         return cmd('form.save', { tag: page, value: JSON.stringify({ widgets: widgets }) });
+       });
+     },
+@@ -487,7 +496,8 @@
+           sections[sec][key] = {raw: String(edits[sec][key])};
+         });
+       });
+-      return acquire().then(function () {
++      // AI(W906-TAKEOVER) 20260926：真的寫（存檔）＝操作員按的 → takeover；preview（dryRun）不寫檔 → 照舊 acquire，不搶
++      return (opts.dryRun ? acquire() : takeover()).then(function () {
+         // AI(W906-FW-DRYRUN) 20260915 FIX: dryRun MUST travel INSIDE `value`.
+         // It used to be a sibling of `value` on the message, and the server
+         // drops it there: WebCommand carries only {id, cmd, tag, value}
+@@ -579,7 +589,7 @@
+     // =======================================================================
+ 
+     start: function (who) {
+-      return acquire().then(function () {
++      return takeover().then(function () {   // AI(W906-TAKEOVER) 20260926：操作員按的
+         return cmd('start.run', {value: String(who || 'web')});
+       });
+     },
+@@ -589,7 +599,7 @@
+     //   ⚠ systemStart 回來時**通常還是 true** —— ckernel 要到下一個 pump tick
+     //   才把它清掉。要看機台真的停了，看 machine.state tag，不要看這個欄位。
+     pause: function (who) {
+-      return acquire().then(function () {
++      return takeover().then(function () {   // AI(W906-TAKEOVER) 20260926：操作員按的
+         return cmd('pause.run', {value: String(who || 'web')});
+       });
+     },
+@@ -614,7 +624,7 @@
+     //
+     //   ⛔ 這是它**不會**做的事：它不啟動機台。按完 Lot Start 還是要按 START。
+     lotStart: function (lotId, operatorId) {
+-      return acquire().then(function () {
++      return takeover().then(function () {   // AI(W906-TAKEOVER) 20260926：操作員按的
+         return cmd('lot.start', {tag:   String(lotId || ''),
+                                  value: String(operatorId || '')});
+       });
+@@ -692,7 +702,7 @@
+         });
+       });
+       if (csv) body.rows = outer; else body.sections = outer;
+-      return acquire().then(function () {
++      return takeover().then(function () {   // AI(W906-TAKEOVER) 20260926：操作員按的
+         return cmd('system.file.put', {tag: name, value: JSON.stringify(body)});
+       });
+     },
+@@ -712,7 +722,7 @@
+     rows: function (name, ops, opts) {
+       opts = opts || {}; ops = ops || {};
+       var body = {dryRun: !!opts.dryRun, add: ops.add || [], 'delete': ops.del || ops['delete'] || []};
+-      return acquire().then(function () {
++      return takeover().then(function () {   // AI(W906-TAKEOVER) 20260926：操作員按的
+         return cmd('system.csv.rows', {tag: name, value: JSON.stringify(body)});
+       });
+     },
+@@ -734,7 +744,7 @@
+       var vals = {};
+       Object.keys(edits || {}).forEach(function (k) { vals[String(k)] = Number(edits[k]); });
+       var body = {dryRun: !!opts.dryRun, values: vals};
+-      return acquire().then(function () {
++      return takeover().then(function () {   // AI(W906-TAKEOVER) 20260926：操作員按的
+         return cmd('system.levels.put', {tag: name, value: JSON.stringify(body)});
+       });
+     }
+-- 
+2.55.0.windows.5
+
