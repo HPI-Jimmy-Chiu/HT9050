@@ -43,6 +43,7 @@
 | 22 | `updates/d1bd26ad/` | `d1bd26ad` | `71eda9b5`（`updates/d1bd26ad/_machine_ai/base_71eda9b5/`） | 開機紀錄 `D:\HT9045\Error\BootLog.txt` 照 golden 接上（開機當掉時看停在哪一行）；其餘只改註解。不會讓馬達動、不改 IO。6 檔。**先套第 3～21 包** |
 | 23 | `updates/661cc68c/` | `661cc68c` | `d1bd26ad`（`updates/661cc68c/_machine_ai/base_d1bd26ad/`） | St02 第四批：GPIB 程式的額外 RS232 port 跟配方走（P6 Q2(a)）、TTL 重送條件改讀網頁視窗總表、開機讀／建 `D:\HT9045\Error\AlarmCodeList.txt`（cMyDB P3）、testercomm 頁。不會讓馬達動、不改 IO；套之前加備 `D:\HT9045\Error\` 與 GPIB 配方。25 檔。**先套第 3～22 包** |
 | 24 | `updates/ef83be05/` | `ef83be05` | `661cc68c`（`updates/ef83be05/_machine_ai/base_661cc68c/`） | 面板 Alarm Reset 照 golden 送 SECS 事件 30（SECS 開著的機台 host 會收到）。沒有 IO、沒有動作。3 檔。**先套第 3～23 包** |
+| 25 | `updates/44ddf2c6/` | `44ddf2c6` | `ef83be05`（`updates/44ddf2c6/_machine_ai/base_ef83be05/`） | 觀察頁的測試／Index 時間表照 golden 每次測完更新（以前是空的；遠端 IndexTime、SECS TestTime 也有值了）。⚠ `dTestSec` 從此每顆更新（ATC 測試時間補償會用）。不會讓馬達動、不改 IO。9 檔。**先套第 3～24 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
