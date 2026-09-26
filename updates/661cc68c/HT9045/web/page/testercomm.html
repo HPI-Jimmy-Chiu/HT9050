@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>Tester Comm（GPIB／RS232・TTL／TCPIP）</title>
+<link rel="stylesheet" href="ht9xxx.css">
+<link rel="stylesheet" href="theme.css">
+<!--
+  AI(W906-GB-P7) 20260926：測試通訊畫面（計畫 docs/GPIB_20260926_INTEGRATION_PROPOSAL.md §2.5）。
+  一頁三分頁：GPIB（golden H9046_32GPIB Main.dfm）、RS232／TTL（golden RS232Standard MainForm.dfm，DIO＝TTL 板）、
+  TCPIP（Handler 內建 TfTesterTCP，P5 接上後才有資料）。32 站面板四種模式共用 HTWidgets.makeDutPanel（裁決 10）。
+
+  資料通道（wb_serve 側由 P3 接上；未接時本頁顯示「離線」並可切到 Demo）：
+    GET  /api/testercomm/<gpib|rs232|tcpip>   -> 引擎快照 JSON（TesterComm/UiChannel::Read，約 200 ms 更新一次）
+    POST /api/testercomm/<key>?cmd=<一行指令，URL 編碼> -> UiChannel::Post（引擎在 TesterComm 執行緒上套用並呼叫 golden 處理函式）
+  指令格式見 TesterComm/Gpib/GpibUiSnapshot.cpp 與 TesterComm/Rs232/Rs232UiSnapshot.cpp 檔頭。
+  裁決 1：IO 必須即時、畫面可以略有延遲 —— 本頁只讀快照、只送指令，不會拖慢通訊執行緒。
+-->
+<style>
+  body.winpage{padding:0;margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden;background:#A6B8C2;}
+  .tcWrap{flex:1;display:flex;flex-direction:column;min-height:0;padding:6px;box-sizing:border-box;}
+  .tcPane{flex:1;min-height:0;overflow:auto;border:1px solid #888;background:#d4dde2;padding:6px;box-sizing:border-box;
+    border-radius:0 4px 4px 4px;display:none;}
+  .tcPane.act{display:block;}
+  .tcBar{display:flex;gap:10px;align-items:center;font:13px "MS Sans Serif",sans-serif;margin-bottom:6px;flex-wrap:wrap;}
+  .tcState{padding:2px 8px;border-radius:3px;color:#fff;background:#888;font-weight:bold;}
+  .tcState.up{background:#1a8a3a;} .tcState.down{background:#b03030;} .tcState.off{background:#777;}
+  .status{display:grid;grid-template-columns:repeat(8,1fr);gap:2px;margin-bottom:6px;}
+  .status div{background:#ece9d8;border:1px inset #aaa;font:12px monospace;padding:1px 4px;min-height:16px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .leds{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;}
+  .leds label{display:flex;align-items:center;gap:3px;font:12px sans-serif;}
+  .grp{border:1px solid #8a9aa8;border-radius:3px;padding:6px;margin-bottom:6px;background:#e4eaee;}
+  .grp>b{display:block;font:bold 12px sans-serif;margin-bottom:4px;color:#234;}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font:12px sans-serif;}
+  .row select,.row input[type=text]{font:12px sans-serif;}
+  .btn3d{background:#ece9d8;border:2px outset #cfcfcf;border-radius:3px;padding:2px 8px;cursor:pointer;font:12px sans-serif;}
+  .btn3d:active{border-style:inset;}
+  .sites{position:relative;width:1232px;height:440px;margin-bottom:6px;}
+  .logs{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
+  .logs pre{height:180px;overflow:auto;margin:0;background:#CCD9DF;border:1px inset #8a9aa8;
+    font:11px Consolas,"Courier New",monospace;padding:3px;white-space:pre-wrap;}
+  .kv{font:12px sans-serif;color:#123;}
+  .notice{color:#a00;font:bold 12px sans-serif;}
+</style>
+</head>
+<body class="winpage">
+<div class="tcWrap">
+  <div class="tabs">
+    <div class="tab act" data-tab="gpib">GPIB</div>
+    <div class="tab" data-tab="rs232">RS232 / TTL（DIO）</div>
+    <div class="tab" data-tab="tcpip">TCP/IP</div>
+  </div>
+
+  <!-- ================= GPIB ================= -->
+  <div class="tcPane act" id="pane-gpib">
+    <div class="tcBar">
+      <span class="tcState off" id="g-state">離線</span>
+      <span class="kv">版本 <span id="g-version">-</span></span>
+      <span class="kv">機型 <span id="g-caption">-</span></span>
+      <span class="kv">驅動 <span id="g-driver">-</span></span>
+      <span class="kv" id="g-wnd"></span>
+      <span class="notice" id="g-notice"></span>
+      <label class="kv"><input type="checkbox" id="g-demo"> Demo（離線看版面）</label>
+    </div>
+    <div class="status" id="g-status"></div>
+    <div class="leds" id="g-leds"></div>
+    <div class="grp"><b>選項</b>
+      <div class="row" id="g-checks"></div>
+      <div class="row" style="margin-top:4px">
+        GPIB Timeout <select id="g-cbbGPIBTimo"></select>
+        Full Site Timeout <select id="g-cbbFullsiteTimeOut"></select>
+        Run Mode <select id="g-cbbRunMode"></select> <button class="btn3d" data-click="btnRunMode">Run Mode</button>
+        <button class="btn3d" data-click="btnManualStart">Manual Start</button>
+        <button class="btn3d" data-click="spbAutoRetest" id="g-spbAutoRetest">Auto Retest（SCK ART）</button>
+        <button class="btn3d" data-click="btnSaveLog">Save Log</button>
+        <button class="btn3d" data-click="btnDiagZip">Diag Zip</button>
+      </div>
+    </div>
+    <div class="grp" id="g-amd"><b>AMD／ATC 溫控（pnlAMDCmd）</b>
+      <div class="row">Controller <select id="g-rgController"><option value="0">0</option><option value="1">1</option></select>
+        Mode <select id="g-cbMode"></select> <button class="btn3d" data-click="btnSendTemp">Send Temp</button></div>
+    </div>
+    <div class="grp" id="g-hana"><b>HANA ART（pnlHanaART）</b>
+      <div class="row">To Handler <select id="g-cbCmdHANAART"></select> <button class="btn3d" data-click="btnHANA_SendCB">Send</button>
+        <input type="text" id="g-edCmdHANAART" size="16"> <button class="btn3d" data-click="btnSend_ED" data-edit="edCmdHANAART">Send Text</button></div>
+      <div class="row">To Tester <select id="g-cbCmdHANAARTtoTester"></select> <button class="btn3d" data-click="btnHANA_SendCBTotester">Send</button>
+        <input type="text" id="g-edCmdHANAARTtoTester" size="16"> <button class="btn3d" data-click="btnSend_EDToTester" data-edit="edCmdHANAARTtoTester">Send Text</button></div>
+    </div>
+    <!-- AI(W906-GB-P6) 20260926: golden Main.dfm tsRS232 (ts_STD_Setup + ts_STD_Log) -- the GPIB program's extra COM port
+         (golden RS232.cpp TfRS232Main).  Shown when golden shows the tab (customer code 0/860-863/943/985 or general.ini
+         [OpenTesterComm] RS232=1).  Ruling 2A + Q2 (a): its framing follows the recipe, so those four boxes are read-only. -->
+    <div class="grp" id="g-rs232" style="display:none"><b>RS232（tsRS232：GPIB 程式另外開的 COM port）</b>
+      <div class="row"><span class="tcState off" id="g-rsConn">-</span> <span class="kv" id="g-rsSrc"></span></div>
+      <div class="row" style="margin-top:4px">
+        Device <input type="text" id="g-cbDevice" list="g-cbDevice-l" size="7"><datalist id="g-cbDevice-l"></datalist>
+        Baud Rate <input type="text" id="g-cbBaudRate" list="g-cbBaudRate-l" size="7"><datalist id="g-cbBaudRate-l"></datalist>
+        Byte Size <select id="g-cbByteSize"></select>
+        Stop Bit <select id="g-cbStopBit"></select>
+        Parity <select id="g-cbParity"></select>
+        ReadIntervalTimeout <input type="text" id="g-edReadIntervalTimeout" size="4">
+        <button class="btn3d" id="g-btnUpdate">Update</button>
+      </div>
+      <div class="logs" style="grid-template-columns:1fr;margin-top:4px"><div><b class="kv">COM Log（MemoLog）</b><pre id="g-MemoLog" style="height:120px"></pre></div></div>
+    </div>
+    <div class="sites" id="g-sites"></div>
+    <div class="logs">
+      <div><b class="kv">Memo1（GPIB log）</b><pre id="g-Memo1"></pre></div>
+      <div><b class="kv">lstRecord</b><pre id="g-lstRecord"></pre></div>
+      <div><b class="kv">mmoBINON</b><pre id="g-mmoBINON"></pre></div>
+      <div><b class="kv">memoAlarmCode</b><pre id="g-memoAlarmCode"></pre></div>
+    </div>
+  </div>
+
+  <!-- ================= RS232 / TTL ================= -->
+  <div class="tcPane" id="pane-rs232">
+    <div class="tcBar">
+      <span class="tcState off" id="r-state">離線</span>
+      <span class="kv">版本 <span id="r-version">-</span></span>
+      <span class="kv">模式 <span id="r-mode">-</span></span>
+      <span class="kv">TTL_CARD_TYPE <span id="r-ttl">-</span></span>
+      <span class="kv">連線 <span id="r-comm">-</span></span>
+      <span class="notice" id="r-notice"></span>
+      <label class="kv"><input type="checkbox" id="r-demo"> Demo（離線看版面）</label>
+    </div>
+    <div class="status" id="r-status"></div>
+    <div class="grp"><b>Standard（ts_STD）</b>
+      <div class="row">COM <select id="r-cbDevice"></select> Baud <select id="r-cbBaudRate"></select>
+        Byte <select id="r-cbByteSize"></select> Stop <select id="r-cbStopBit"></select> Parity <select id="r-cbParity"></select>
+        ReadInterval <input type="text" id="r-edReadIntervalTimeout" size="5">
+        <button class="btn3d" data-click="btnUpdate" data-edit="edReadIntervalTimeout">Update</button></div>
+      <div class="row"><label><input type="checkbox" data-check="cbShowLog"> Show Log</label>
+        <label><input type="checkbox" data-check="cbSaveLog"> Save Log</label>
+        <button class="btn3d" data-click="btClear">Clear</button>
+        <button class="btn3d" data-click="btManualTest">Manual Test</button>
+        <button class="btn3d" data-click="btnAllUse">All Use</button>
+        <button class="btn3d" data-click="btnAllNoUse">All No Use</button></div>
+    </div>
+    <div class="grp"><b>TTL 板（tsTTL，DIO）</b>
+      <div class="row">COM1 <select id="r-cbDevice_TTL"></select> COM2 <select id="r-cbDevice_TTL_2"></select>
+        Baud <select id="r-cbBaudRate_TTL"></select> Byte <select id="r-cbByteSize_TTL"></select>
+        Stop <select id="r-cbStopBit_TTL"></select> Parity <select id="r-cbParity_TTL"></select>
+        ReadInterval <input type="text" id="r-edReadIntervalTimeout_TTL" size="5">
+        <button class="btn3d" data-click="btnUpdate_TTL" data-edit="edReadIntervalTimeout_TTL">Update</button></div>
+      <div class="row"><label><input type="checkbox" data-check="cbShowLog_TTL"> Show Log</label>
+        <label><input type="checkbox" data-check="cbSaveLog_TTL"> Save Log</label>
+        <button class="btn3d" data-click="btClear_TTL">Clear</button>
+        <button class="btn3d" data-click="btnTTL_Manual">TTL Manual（WSOTS）</button>
+        <button class="btn3d" data-click="btnClearSot">Clear SOT（WCSOT）</button>
+        <button class="btn3d" data-click="Button10">Close TTL</button>
+        <button class="btn3d" data-click="Button11">Open TTL</button>
+        <button class="btn3d" data-click="btnEnableSOTCSOT">Enable SOT/CSOT</button></div>
+    </div>
+    <div class="sites" id="r-sites"></div>
+    <div class="logs">
+      <div><b class="kv">MemoLog</b><pre id="r-MemoLog"></pre></div>
+      <div><b class="kv">MemoBinData</b><pre id="r-MemoBinData"></pre></div>
+      <div><b class="kv">MemoBinData_TTL</b><pre id="r-MemoBinData_TTL"></pre></div>
+      <div><b class="kv">MemoVer</b><pre id="r-MemoVer"></pre></div>
+    </div>
+  </div>
+
+  <!-- ================= TCPIP ================= -->
+  <div class="tcPane" id="pane-tcpip">
+    <div class="tcBar"><span class="tcState off" id="t-state">離線</span>
+      <span class="kv">TCP/IP 在 Handler 內建（golden TfTesterTCP，P5 pump 在 Handler 執行緒上跑）</span>
+      <span class="kv">Tester <span id="t-addr">-</span></span>
+      <span class="kv">連線 <span id="t-conn">-</span></span>
+      <span class="notice" id="t-err"></span></div>
+    <div class="sites" id="t-sites"></div>
+    <div class="logs"><div><b class="kv">收到的資料（SocketTCPIPReceiveList）</b><pre id="t-receive"></pre></div>
+      <div><b class="kv">最後一筆</b><pre id="t-last"></pre></div></div>
+  </div>
+</div>
+
+<script src="hwidgets.js"></script>
+<script>
+(function () {
+  'use strict';
+  var PERIOD = 300;                 // 快照輪詢（引擎 200 ms 發布一次）
+  var API = '/api/testercomm/';
+  var cur = 'gpib';
+  var demo = { gpib: false, rs232: false, tcpip: false };
+
+  // ---------- tabs ----------
+  Array.prototype.forEach.call(document.querySelectorAll('.tabs .tab'), function (t) {
+    t.addEventListener('click', function () {
+      Array.prototype.forEach.call(document.querySelectorAll('.tabs .tab'), function (x) { x.classList.remove('act'); });
+      Array.prototype.forEach.call(document.querySelectorAll('.tcPane'), function (x) { x.classList.remove('act'); });
+      t.classList.add('act');
+      cur = t.getAttribute('data-tab');
+      document.getElementById('pane-' + cur).classList.add('act');
+    });
+  });
+
+  // ---------- 32 site panels (shared maker, ruling 10) ----------
+  function buildSites(hostId, key) {
+    var host = document.getElementById(hostId), arr = [];
+    for (var i = 0; i < 32; i++) {
+      var p = HTWidgets.makeDutPanel({ index: i, left: (i % 8) * 154, top: Math.floor(i / 8) * 110 });
+      host.appendChild(p);
+      arr.push(p);
+      (function (idx, panel) {
+        var on = panel.querySelector('input[type=checkbox]'), bin = panel.querySelector('select');
+        if (key) {
+          on.addEventListener('change', function () { post(key, 'site ' + idx + ' on ' + (on.checked ? 1 : 0)); });
+          bin.addEventListener('change', function () { post(key, 'site ' + idx + ' bin ' + bin.selectedIndex); });
+        }
+      })(i, p);
+    }
+    return arr;
+  }
+  var sites = { gpib: buildSites('g-sites', 'gpib'), rs232: buildSites('r-sites', 'rs232'), tcpip: buildSites('t-sites', null) };
+
+  function bgr(c) {   // VCL TColor (BGR) -> CSS
+    if (c == null || c <= 0) return null;
+    var r = c & 0xff, g = (c >> 8) & 0xff, b = (c >> 16) & 0xff;
+    return 'rgb(' + r + ',' + g + ',' + b + ')';
+  }
+  function applySites(key, list) {
+    if (!list) return;
+    for (var i = 0; i < 32 && i < list.length; i++) {
+      var s = list[i], p = sites[key][i];
+      if (!s || !p) continue;
+      p.setSite(s.site, bgr(s.color));
+      if (s.binText) p.setBin(s.binText);
+      p.setOn(s.on);
+      p.setOcr(s.ocr);
+    }
+  }
+
+  // ---------- helpers ----------
+  function $(id) { return document.getElementById(id); }
+  function setText(id, v) { var e = $(id); if (e) e.textContent = v == null ? '' : v; }
+  function fillCombo(sel, c, key, name) {
+    if (!sel || !c) return;
+    if (sel.options.length !== (c.items || []).length) {
+      sel.innerHTML = '';
+      (c.items || []).forEach(function (t, i) { var o = document.createElement('option'); o.value = i; o.textContent = t; sel.appendChild(o); });
+    }
+    if (document.activeElement !== sel) sel.selectedIndex = c.index;
+    sel.disabled = c.enabled === false;
+    if (!sel._wired) {
+      sel._wired = true;
+      sel.addEventListener('change', function () { post(key, 'combo ' + name + ' ' + sel.selectedIndex); });
+    }
+  }
+  // AI(W906-GB-P6) 20260926: a VCL csDropDown combo (golden reads its Text): free text plus the item list.
+  function fillText(inp, list, c) {
+    if (!inp || !c) return;
+    var items = c.items || [];
+    if (list && list.children.length !== items.length) {
+      list.innerHTML = '';
+      items.forEach(function (t) { var o = document.createElement('option'); o.value = t; list.appendChild(o); });
+    }
+    if (document.activeElement !== inp) inp.value = c.text == null ? '' : c.text;
+    inp.disabled = c.enabled === false;
+  }
+  // several commands whose order matters (separate fetches may reach the server in any order)
+  function postChain(key, cmds) {
+    if (demo[key]) { cmds.forEach(function (c) { console.log('[demo] ' + key + ': ' + c); }); return; }
+    cmds.reduce(function (p, c) {
+      return p.then(function () { return fetch(API + key + '?cmd=' + encodeURIComponent(c), { method: 'POST' }); });
+    }, Promise.resolve()).catch(function () {});
+  }
+  function tail(id, lines) {
+    var e = $(id); if (!e || !lines) return;
+    var atEnd = e.scrollTop + e.clientHeight >= e.scrollHeight - 4;
+    e.textContent = lines.join('\n');
+    if (atEnd) e.scrollTop = e.scrollHeight;
+  }
+  function statusRow(id, arr) {
+    var host = $(id);
+    if (host.children.length !== 8) { host.innerHTML = ''; for (var i = 0; i < 8; i++) host.appendChild(document.createElement('div')); }
+    for (var j = 0; j < 8; j++) { host.children[j].textContent = (arr && arr[j]) || ''; host.children[j].title = host.children[j].textContent; }
+  }
+  function stateBadge(id, snap, ok) {
+    var e = $(id);
+    e.className = 'tcState ' + (!ok ? 'off' : (snap && snap.up ? 'up' : 'down'));
+    e.textContent = !ok ? '離線（/api/testercomm 未接）' : (snap && snap.up ? '連線中' : ('已停止' + (snap && snap.closeReason ? '：' + snap.closeReason : '')));
+  }
+  function post(key, cmd) {
+    if (demo[key]) { console.log('[demo] ' + key + ': ' + cmd); return; }
+    // wb_serve's HTTP route hook sees no request body, so the command travels in the query (URL-encoded)
+    fetch(API + key + '?cmd=' + encodeURIComponent(cmd), { method: 'POST' }).catch(function () {});
+  }
+
+  // buttons / edits / checks declared in the markup
+  Array.prototype.forEach.call(document.querySelectorAll('[data-click]'), function (b) {
+    var key = b.closest('#pane-rs232') ? 'rs232' : 'gpib';
+    b.addEventListener('click', function () {
+      var ed = b.getAttribute('data-edit');
+      if (ed) { var box = $((key === 'gpib' ? 'g-' : 'r-') + ed); if (box) post(key, 'edit ' + ed + ' ' + box.value); }
+      post(key, 'click ' + b.getAttribute('data-click'));
+    });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('#pane-rs232 [data-check]'), function (c) {
+    c.addEventListener('change', function () { post('rs232', 'check ' + c.getAttribute('data-check') + ' ' + (c.checked ? 1 : 0)); });
+  });
+  $('g-rgController').addEventListener('change', function () { post('gpib', 'radio rgController ' + this.selectedIndex); });
+  $('g-btnUpdate').addEventListener('click', function () {   // AI(W906-GB-P6) 20260926: golden btnUpdateClick (SetFormToData)
+    var cmds = [];
+    ['cbDevice', 'cbBaudRate'].forEach(function (n) { var e = $('g-' + n); if (!e.disabled) cmds.push('edit ' + n + ' ' + e.value); });
+    cmds.push('edit edReadIntervalTimeout ' + $('g-edReadIntervalTimeout').value);
+    cmds.push('click btnUpdate');
+    postChain('gpib', cmds);
+  });
+
+  // ---------- GPIB ----------
+  var gChecks = {};
+  function renderGpib(s, ok) {
+    stateBadge('g-state', s, ok);
+    if (!s || !s.leds) return;
+    setText('g-version', s.version); setText('g-caption', s.caption); setText('g-driver', s.driver);
+    setText('g-wnd', s.labels && s.labels.lblGPIBWnd ? s.labels.lblGPIBWnd.caption : '');
+    setText('g-notice', s.notice);
+    statusRow('g-status', s.status);
+    var lh = $('g-leds');
+    if (lh.children.length !== s.leds.length) {
+      lh.innerHTML = '';
+      s.leds.forEach(function (l, i) {
+        var lab = document.createElement('label'), led = HTWidgets.makeALed({ name: 'ALed' + (i + 1) });
+        lab.appendChild(led); lab.appendChild(document.createTextNode(l.label)); lab._led = led; lh.appendChild(lab);
+      });
+    }
+    s.leds.forEach(function (l, i) { lh.children[i]._led.setValue(l.on); lh.children[i].lastChild.textContent = l.label; });
+    var ch = $('g-checks');
+    Object.keys(s.checks || {}).forEach(function (n) {
+      var c = s.checks[n]; if (!c) return;
+      if (!gChecks[n]) {
+        var lab = document.createElement('label'), box = document.createElement('input');
+        box.type = 'checkbox';
+        box.addEventListener('change', function () { post('gpib', 'check ' + n + ' ' + (box.checked ? 1 : 0)); });
+        lab.appendChild(box); lab.appendChild(document.createTextNode(' ' + (c.caption || n)));
+        ch.appendChild(lab); gChecks[n] = { lab: lab, box: box };
+      }
+      gChecks[n].box.checked = c.checked; gChecks[n].box.disabled = c.enabled === false;
+      gChecks[n].lab.style.display = c.visible === false ? 'none' : '';
+    });
+    ['cbbGPIBTimo', 'cbbFullsiteTimeOut', 'cbbRunMode', 'cbMode', 'cbCmdHANAART', 'cbCmdHANAARTtoTester'].forEach(function (n) {
+      fillCombo($('g-' + n), s.combos && s.combos[n], 'gpib', n);
+    });
+    if (document.activeElement !== $('g-rgController')) $('g-rgController').selectedIndex = Math.max(0, s.rgController);
+    $('g-spbAutoRetest').style.borderStyle = s.spbAutoRetest ? 'inset' : 'outset';
+    $('g-amd').style.display = s.panels && s.panels.pnlAMDCmd ? '' : 'none';
+    $('g-hana').style.display = s.panels && s.panels.pnlHanaART ? '' : 'none';
+    var ra = s.rs232Aux;   // AI(W906-GB-P6) 20260926: tsRS232
+    $('g-rs232').style.display = s.panels && s.panels.tsRS232 && ra ? '' : 'none';
+    if (ra) {
+      var rc = $('g-rsConn');
+      rc.className = 'tcState ' + (ra.connected ? 'up' : 'down');
+      rc.textContent = ra.connected ? 'RS232 Connect : OK' : 'RS232 未連線';
+      setText('g-rsSrc', ra.fromRecipe
+        ? 'Baud／Byte／Stop／Parity 跟配方走（Tester.Data [RS-232C]，裁決 2A＋Q2 (a)；在 TesterIF 配方頁改）；Device、ReadIntervalTimeout 照 Setup.ini'
+        : '全部照 D:\\RS232Standard\\System\\Setup.ini [COMPort]（golden）');
+      fillText($('g-cbDevice'), $('g-cbDevice-l'), ra.combos && ra.combos.cbDevice);
+      fillText($('g-cbBaudRate'), $('g-cbBaudRate-l'), ra.combos && ra.combos.cbBaudRate);
+      ['cbByteSize', 'cbStopBit', 'cbParity'].forEach(function (n) { fillCombo($('g-' + n), ra.combos && ra.combos[n], 'gpib', n); });
+      var ri = $('g-edReadIntervalTimeout');
+      if (document.activeElement !== ri) ri.value = ra.edReadIntervalTimeout || '';
+      tail('g-MemoLog', ra.MemoLog);
+    }
+    applySites('gpib', s.sites);
+    if (s.logs) { tail('g-Memo1', s.logs.Memo1); tail('g-lstRecord', s.logs.lstRecord); tail('g-mmoBINON', s.logs.mmoBINON); tail('g-memoAlarmCode', s.logs.memoAlarmCode); }
+  }
+
+  // ---------- RS232 / TTL ----------
+  var MODES = { 0: 'Standard', 1: 'SLT', 1000: 'TTL' };
+  function renderRs232(s, ok) {
+    stateBadge('r-state', s, ok);
+    if (!s || !s.status) return;
+    setText('r-version', s.version);
+    setText('r-mode', (MODES[s.mode] || s.mode) + '（iTesterMode=' + s.mode + '）');
+    setText('r-ttl', s.ttlCardType);
+    setText('r-comm', (s.comm || []).map(function (b, i) { return ['STD', 'TTL1', 'TTL2'][i] + (b ? '●' : '○'); }).join('  '));
+    setText('r-notice', s.notice);
+    statusRow('r-status', s.status);
+    ['cbBaudRate', 'cbByteSize', 'cbStopBit', 'cbParity', 'cbDevice', 'cbBaudRate_TTL', 'cbByteSize_TTL', 'cbStopBit_TTL',
+     'cbParity_TTL', 'cbDevice_TTL', 'cbDevice_TTL_2'].forEach(function (n) { fillCombo($('r-' + n), s.combos && s.combos[n], 'rs232', n); });
+    Object.keys(s.edits || {}).forEach(function (n) { var e = $('r-' + n); if (e && document.activeElement !== e) e.value = s.edits[n]; });
+    Array.prototype.forEach.call(document.querySelectorAll('#pane-rs232 [data-check]'), function (c) {
+      var v = s.checks && s.checks[c.getAttribute('data-check')];
+      if (v) { c.checked = v.checked; c.disabled = v.enabled === false; }
+    });
+    applySites('rs232', s.sites);
+    if (s.logs) { tail('r-MemoLog', s.logs.MemoLog); tail('r-MemoBinData', s.logs.MemoBinData); tail('r-MemoBinData_TTL', s.logs.MemoBinData_TTL); tail('r-MemoVer', s.logs.MemoVer); }
+  }
+
+  // ---------- TCP/IP ----------
+  function renderTcp(s, ok) {
+    var e = $('t-state');
+    e.className = 'tcState ' + (!ok ? 'off' : (s && s.up ? 'up' : 'down'));
+    e.textContent = !ok ? '離線（/api/testercomm 未接）' : (s && s.up ? 'TCP/IP 模式 ON-LINE' : '不是 TCP/IP 模式或 OFF-LINE');
+    if (!s || !s.sites) return;
+    setText('t-addr', s.address + ':' + s.port);
+    setText('t-conn', s.connected ? 'ON-LINE' : (s.connecting ? '連線中' : 'OFF-LINE'));
+    setText('t-err', s.error ? s.errorMessage : '');
+    for (var i = 0; i < 32 && i < s.sites.length; i++) {
+      var p = sites.tcpip[i], t = s.sites[i];
+      if (!p || !t) continue;
+      p.setSite(t.site); p.setOcr(t.ocr);
+    }
+    tail('t-receive', s.receive);
+    setText('t-last', s.lastReceive);
+  }
+
+  // ---------- demo snapshots (offline layout check only; never sent anywhere) ----------
+  function demoSites(prefix) {
+    var a = [];
+    for (var i = 0; i < 32; i++) a.push({ caption: 'Site ' + (i < 9 ? '0' : '') + (i + 1), site: i % 5 === 0 ? String(i % 16) : (i < 9 ? '0' : '') + (i + 1),
+      color: i % 5 === 0 ? 0x00c000 : 0xc0c0c0, bin: 1, binText: '1', on: i < 16, ocr: i % 7 === 0 ? prefix + 'DEMO2D' + i : '' });
+    return a;
+  }
+  var DEMO = {
+    gpib: { up: true, driver: 'sim', version: 'V12.13.905.0', caption: '9045GPIB', closeReason: '', notice: '',
+      leds: 'ERR TIMO END SRQI RQS CMPL LOK REM CIC ATN TACS LACS DTAS'.split(' ').map(function (n, i) { return { label: n, on: i === 5 || i === 11 }; }),
+      status: ['GPIB0 ADDR 5', 'T1s', 'Task 0001', '', '', '', '', ''],
+      labels: { lblGPIBWnd: { caption: 'Handler : 1 ; GPIB : 2' } },
+      checks: { chkUpperCase: { checked: true, visible: true, caption: 'Upper Case' }, chkStrLengthCheck: { checked: true, visible: true, caption: 'String Length' },
+        cbBinonEcho: { checked: false, visible: true, caption: 'BINON Echo' }, cbFullSiteTimeOut: { checked: false, visible: true, caption: 'Full Site TimeOut' },
+        cbGPIBWriteWithout_r_n: { checked: false, visible: true, caption: 'Write without \\r\\n' } },
+      combos: { cbbGPIBTimo: { index: 3, items: ['T30ms', 'T100ms', 'T300ms', 'T1s', 'T3s'] }, cbbRunMode: { index: -1, items: ['TRAYFEED', 'RETEST'] } },
+      rgController: 0, spbAutoRetest: false, panels: { pnlAMDCmd: false, pnlHanaART: false, tsRS232: true }, sites: demoSites('G'),
+      rs232Aux: { connected: true, fromRecipe: true, edReadIntervalTimeout: '70', MemoLog: ['RS232 ==> Connect : OK'],
+        combos: { cbDevice: { index: -1, text: 'COM3', items: ['COM1', 'COM2', 'COM3', 'COM4'] },
+          cbBaudRate: { index: -1, text: '19200', enabled: false, items: ['4800', '7200', '9600', '14400', '19200'] },
+          cbByteSize: { index: 2, enabled: false, items: ['5', '6', '7', '8'] }, cbStopBit: { index: 0, enabled: false, items: ['1', '1.5', '2'] },
+          cbParity: { index: 2, enabled: false, items: ['None', 'Odd', 'Even', 'Mark', 'Space'] } } },
+      logs: { Memo1: ['0001 LISTEN:FULLSITES?', '0100 TALK:Fullsites 0000FFFF'], lstRecord: [], mmoBINON: ['Byte=42 str=BINON:00000000,00000000,00000000,00001111;'], memoAlarmCode: [] } },
+    rs232: { up: true, version: 'V12.13.902.0', mode: 0, ttlCardType: 0, comm: [true, false, false], closeReason: '', notice: '',
+      status: ['COM3 9600,7,E,1', '', '', '', '', '', '', ''], checks: { cbShowLog: { checked: true }, cbSaveLog: { checked: true } },
+      combos: { cbDevice: { index: 2, items: ['COM1', 'COM2', 'COM3', 'COM4'] }, cbBaudRate: { index: 2, items: ['4800', '7200', '9600', '14400', '19200'] } },
+      edits: { edReadIntervalTimeout: '70' }, sites: demoSites('R'),
+      logs: { MemoLog: ['[T->H] [STX]CF[ETX]', '[H->T] [STX]8|1,2,3,4[ETX]'], MemoBinData: [], MemoBinData_TTL: [], MemoVer: [] } }
+  };
+  $('g-demo').addEventListener('change', function () { demo.gpib = this.checked; });
+  $('r-demo').addEventListener('change', function () { demo.rs232 = this.checked; });
+
+  // ---------- poll ----------
+  var render = { gpib: renderGpib, rs232: renderRs232, tcpip: renderTcp };
+  var inflight = false;
+  function poll() {
+    var key = cur;
+    if (demo[key]) { render[key](DEMO[key], true); return; }
+    if (inflight) return;
+    inflight = true;
+    fetch(API + key, { cache: 'no-store' }).then(function (r) {
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    }).then(function (s) { render[key](s, true); })
+      .catch(function () { render[key](null, false); })
+      .then(function () { inflight = false; });
+  }
+  setInterval(poll, PERIOD);
+  poll();
+})();
+</script>
+</body>
+</html>

@@ -41,6 +41,7 @@
 | 20 | `updates/df8d1f69/` | `df8d1f69` | `04c72d84`（`updates/df8d1f69/_machine_ai/base_04c72d84/`） | 🔴 **`USE_ATC_MODE=4` 的機台換配方／登入／HOME 會當，這一包修掉**（開機照 golden 先 InitialATC）；Jam 次數、UPH 表、one cycle 存 `system\Arm*.dat`、Index 時間平均、測試秒數照 golden 開始有數字。不會讓馬達多動；套之前加備 `system\Arm*.dat`／`ArmHis*`／`ArmByLot*`、`ATC.ini`。15 檔。**先套第 3～19 包** |
 | 21 | `updates/71eda9b5/` | `71eda9b5` | `df8d1f69`（`updates/71eda9b5/_machine_ai/base_df8d1f69/`） | St02 第三批：開機照 golden 建 log 物件、**開始寫 `D:\HT9045_Log\`**；On-Line 測試不再一送 SOT 就逾時；Qorvo 的 Tester Pause 等 MaxTestTime 才響；觀察頁 bin 歷史與 bin 顏色照 golden。不會讓馬達多動；套之前加備 `D:\HT9045_Log\`。32 檔。**先套第 3～20 包** |
 | 22 | `updates/d1bd26ad/` | `d1bd26ad` | `71eda9b5`（`updates/d1bd26ad/_machine_ai/base_71eda9b5/`） | 開機紀錄 `D:\HT9045\Error\BootLog.txt` 照 golden 接上（開機當掉時看停在哪一行）；其餘只改註解。不會讓馬達動、不改 IO。6 檔。**先套第 3～21 包** |
+| 23 | `updates/661cc68c/` | `661cc68c` | `d1bd26ad`（`updates/661cc68c/_machine_ai/base_d1bd26ad/`） | St02 第四批：GPIB 程式的額外 RS232 port 跟配方走（P6 Q2(a)）、TTL 重送條件改讀網頁視窗總表、開機讀／建 `D:\HT9045\Error\AlarmCodeList.txt`（cMyDB P3）、testercomm 頁。不會讓馬達動、不改 IO；套之前加備 `D:\HT9045\Error\` 與 GPIB 配方。25 檔。**先套第 3～22 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
