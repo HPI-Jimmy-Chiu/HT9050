@@ -24,6 +24,7 @@
 | 3 | `updates/db6736c5/` | `db6736c5` | `56bbf785`（`updates/db6736c5/_machine_ai/base_56bbf785/`） | **取代第 2 包**：HAlarm（氣缸逾時照 golden 停機跳 JAM）、權杖修正、第 10～13 條、HT9050＝HT9046_LS＋1203（扭力不再開 COM11）、Steven 的 widget，58 檔。**Jimmy 說可以再套** |
 | 4 | `updates/0b506e82/` | `0b506e82` | `db6736c5`（`updates/0b506e82/_machine_ai/base_db6736c5/`） | Steven 的 cMyDB CSV 版（sqlite 退役＋AlarmCode 目錄）與 Tester 通訊 P0 骨架（未接 wb_serve），24 檔。**先套第 3 包**，Jimmy 說可以再套 |
 | 5 | `updates/b5fb53be/` | `b5fb53be` | `0b506e82`（`updates/b5fb53be/_machine_ai/base_0b506e82/`） | **你們（EastSun）的修改已合進 main**（`20494aea`，TEMP-DOORS 不含），這包大部分是你們自己的檔（Check 會顯示已相同）；新的是：警報框一次只跳一個（HAlarm FormClose）、Light Scale 持有權杖＋keepAlive 補閒置計時、G03 註解、Sync.h。**請把你們的 `machines/HT9050/IO_Table.csv` 現場表推上來**（README_MACHINE_AI）。94 檔。**先套第 3、4 包** |
+| 6 | `updates/1e15c4f9/` | `1e15c4f9` | `b5fb53be`（`updates/1e15c4f9/_machine_ai/base_b5fb53be/`） | 第 9 條：阻塞框在等的時候塔燈／蜂鳴器／面板鍵燈照 golden 動、30 秒沒有網頁自動開瀏覽器、是／否框面板 Alarm Reset 消音；**等待中也會 Poll 1203 監看器**（README_MACHINE_AI 有理由）。附 Jimmy 第 27 條裁決（R66-GALI＝A 你們做、D13 維持 0）。11 檔。**先套第 3～5 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
