@@ -48,6 +48,7 @@
 | 27 | `updates/683fafa1/` | `683fafa1` | `dcd37592`（`updates/683fafa1/_machine_ai/base_dcd37592/`） | St02 第五批：log 根目錄可由環境變數轉向（只給 ctest；機台不要設，沒設＝golden 路徑）、站況 log 轉接函式。wb_serve 行為不變。5 檔。**先套第 3～26 包** |
 | 28 | `updates/95c2c26a/` | `95c2c26a` | `683fafa1`（`updates/95c2c26a/_machine_ai/base_683fafa1/`） | 主畫面兩個 log 出口照 golden 翻（memo 仍是替身，機台上沒差別）、觀察頁 Yield 圖帶 dfm 預設值、**wb_serve 開機時印出有設的 W906_* 轉向變數**（F5「IOWEB(這台)」會看到 12 列 `!!`，HT9045_Web.cmd 應該 0 列）、ctest 的 log 根目錄轉向。11 檔。**先套第 3～27 包** |
 | 29 | `updates/3f166785/` | `3f166785` | `95c2c26a`（`updates/3f166785/_machine_ai/base_95c2c26a/`） | wb_serve 開機照 golden 呼叫 `InitialMemory()`（開機主控台不再印 `SiteData[] seeded` 那一行）、START 呼叫點普查更正成 34／30／4（活的路徑數沒變）＋新 ctest、觀察頁 mtRow 大小、St02 的 Event Log Analyzer 核心（新 library＋ctest，沒連進 wb_serve）。19 檔。**先套第 3～28 包** |
+| 30 | `updates/b635f32d/` | `b635f32d` | `3f166785`（`updates/b635f32d/_machine_ai/base_3f166785/`） | 良率計算兩支放進活的檔（PAT 沒連進 wb_serve，機台上沒差別）、三個解閘標記的註解行號、完成度普查工具修正、InitialMemory 測試多一節。wb_serve 行為不變。11 檔。**先套第 3～29 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
