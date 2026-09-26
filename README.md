@@ -20,7 +20,8 @@
 | 順序 | 位置 | 對應 GitLab main | 相對（底稿） | 內容 |
 |---|---|---|---|---|
 | 1 | 根目錄 `HT9045/`＋`_machine_ai/` | `56bbf785` | 機台上次合進去的 `66cb14e0`（`_machine_ai/base_66cb14e0/`） | 合併包（取代 USB 第二、三包），277 檔 |
-| 2 | `updates/410d27d9/` | `410d27d9` | `56bbf785`（`updates/410d27d9/_machine_ai/base_56bbf785/`） | 網頁權杖卡住（Motor Test 拿了不還，IO 頁按 Output 被擋 10 分鐘），4 檔 |
+| ~~2~~ | `updates/410d27d9/` | `410d27d9` | `56bbf785`（`updates/410d27d9/_machine_ai/base_56bbf785/`） | 網頁權杖卡住（Motor Test 拿了不還，IO 頁按 Output 被擋 10 分鐘），4 檔（**被第 3 包取代**：漏帶了在它之前的 HAlarm） |
+| 3 | `updates/db6736c5/` | `db6736c5` | `56bbf785`（`updates/db6736c5/_machine_ai/base_56bbf785/`） | **取代第 2 包**：HAlarm（氣缸逾時照 golden 停機跳 JAM）、權杖修正、第 10～13 條、HT9050＝HT9046_LS＋1203（扭力不再開 COM11）、Steven 的 widget，58 檔。**Jimmy 說可以再套** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
