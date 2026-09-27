@@ -62,6 +62,7 @@
 | 41 | `updates/f433d3b3/` | `f433d3b3` | `6e81ec60`（`updates/f433d3b3/_machine_ai/base_6e81ec60/`） | 只有文件（夜間報告 §0 第 27 題）。程式沒變、不用重建。1 檔。**先套第 3～40 包** |
 | 42 | `updates/0ef84f12/` | `0ef84f12` | `f433d3b3`（`updates/0ef84f12/_machine_ai/base_f433d3b3/`） | 只有文件（裁決紀錄 RULINGS_20260927：HT9050 只改 906 C++；906 的決策題照建議；INBOX 第 75 列補量）。程式沒變、不用重建。2 檔。**先套第 3～41 包** |
 | 43 | `updates/81e7c7c5/` | `81e7c7c5` | `0ef84f12`（`updates/81e7c7c5/_machine_ai/base_0ef84f12/`） | 只有文件（裁決紀錄 RULINGS_20260927 第 4 條：這兩天編譯＋模擬驗證通過就算完成）。程式沒變、不用重建。1 檔。**先套第 3～42 包** |
+| 44 | `updates/06c8754e/` | `06c8754e` | `81e7c7c5`（`updates/06c8754e/_machine_ai/base_81e7c7c5/`） | 主畫面的 log 小視窗（Shuttle／AutoClean／AGV E84）真的會記了（另加 4096 行防呆上限，比 golden 每個清空門檻都大）；主畫面「Show Shuttle Sensor」照 golden 預設勾選，Shuttle 感測 log 照 golden 存到 `D:\HT9045_Log\ShuttleLog\<年月>\SH1_／SH2_*.logs`；AutoClean 超過 2048 行照 golden 存 `d:\AutoCleanLogs\*.csv`；新 ctest `MemoLog`；文件。**要重建 wb_serve 才生效**。14 檔。**先套第 3～43 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
