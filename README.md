@@ -76,6 +76,7 @@
 | 55 | `updates/c0610ef6/` | `c0610ef6` | `00f9a882`（`updates/c0610ef6/_machine_ai/base_00f9a882/`） | ⚠ **行為改變（選配功能會動）**：入料臂的附加功能（Preciser 位置精修／Die Clean／底部 2D 條碼／入料旋轉站）與出料旋轉站照 golden 做了 —— 以前不管有沒有裝都一律跳過；沒裝這些選配的機台不變。AOI／Fix AI CCD 的動作本體還沒有，照舊不做。**要重建 wb_serve 才生效**。另：交接文件。5 檔。**先套第 3～54 包** |
 | 56 | `updates/bbbf3781/` | `bbbf3781` | `c0610ef6`（`updates/bbbf3781/_machine_ai/base_c0610ef6/`） | 只有文件（裁決紀錄與交接）：**不用重建**，機台不必套。3 檔。**先套第 3～55 包** |
 | 57 | `updates/a711b4b6/` | `a711b4b6` | `bbbf3781`（`updates/a711b4b6/_machine_ai/base_bbbf3781/`） | 合進 St01（資料讀寫轉檔）到 `6bd0f5a4` 的 208 顆：網頁設定頁的 C 路讀寫、開機讀檔鏈、Observer／ShowBinSelect、網頁指令防連點等。**要重建 wb_serve**。⚠ **上機要看**：①`bUseDynamicKitDiameter` 開著的機台，新版第一次開機會在 `system\ContactInfo.ini` 檔尾補 `[Diameter_*]` 段（每種口徑 16 段，之後不再變）；沒有 ContactInfo.ini 的機台會照 golden 寫 `Gerneral.ini [System]` 的 EP 8 鍵（St01 `725038a6`）。②網頁同一個指令還在執行時再按一次會回 busy、不重跑（防連點；按住的 jog 等放行）。③這包刪了 2 檔（`FileRW/TestIF_File.cpp`、`tests/test_formbridge_testerif.cpp`），腳本不會刪，見 `deleted_in_main.txt`。⚠ **已知風險（這包之前就有，處理中）**：運轉中把所有瀏覽器關掉超過 15 秒，機台可能停產而且沒有警報（St01 0927 17:20 回報）——運轉中請至少留一個 HMI 分頁開著。228 檔。**先套第 3～56 包** |
+| 58 | `updates/5cea05ff/` | `5cea05ff` | `a711b4b6`（`updates/5cea05ff/_machine_ai/base_a711b4b6/`） | 只有文件與比對工具（夜間報告、流程對照工具跑的途中有別的 wb_serve 出現就中止）：**不用重建**，機台不必套。3 檔。**先套第 3～57 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
