@@ -74,6 +74,7 @@
 | 53 | `updates/abf55988/` | `abf55988` | `56039beb`（`updates/abf55988/_machine_ai/base_56039beb/`） | ⚠ **行為改變（會動、會停）**：① Index 四軸位置出錯時照 golden **停所有馬達、跳警報、要求回原點**（以前錯誤被吞掉）；② **單軸回原點真的會動那顆馬達**（以前一律回「已經回好」）；③ **Fix3 盤滿照 golden 動氣缸、換盤**（以前整段跳過）；④ 另外 4 種出料臂排列的 Setup Teach 接回。**要重建 wb_serve 才生效**。**第一次上機請有人在旁邊看**。11 檔。**先套第 3～52 包** |
 | 54 | `updates/00f9a882/` | `00f9a882` | `abf55988`（`updates/00f9a882/_machine_ai/base_abf55988/`） | 網頁：Setup 頁的單選鈕照 VCL 規則分組（以前 Yield 的 On／Off 點過 On 就關不掉、存進去還是 On）——只改 `web/page/ht9045_wire_engine.js`，**不用重建 wb_serve**，重新整理網頁就生效。知會 EastSun：St01 的 IO 鈕防連點（400 ms 內同一顆鈕送同一個狀態才擋，on→off→on 照常）在他們的分支，還沒進 main。另：文件。2 檔。**先套第 3～53 包** |
 | 55 | `updates/c0610ef6/` | `c0610ef6` | `00f9a882`（`updates/c0610ef6/_machine_ai/base_00f9a882/`） | ⚠ **行為改變（選配功能會動）**：入料臂的附加功能（Preciser 位置精修／Die Clean／底部 2D 條碼／入料旋轉站）與出料旋轉站照 golden 做了 —— 以前不管有沒有裝都一律跳過；沒裝這些選配的機台不變。AOI／Fix AI CCD 的動作本體還沒有，照舊不做。**要重建 wb_serve 才生效**。另：交接文件。5 檔。**先套第 3～54 包** |
+| 56 | `updates/bbbf3781/` | `bbbf3781` | `c0610ef6`（`updates/bbbf3781/_machine_ai/base_c0610ef6/`） | 只有文件（裁決紀錄與交接）：**不用重建**，機台不必套。3 檔。**先套第 3～55 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
