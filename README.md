@@ -77,6 +77,7 @@
 | 56 | `updates/bbbf3781/` | `bbbf3781` | `c0610ef6`（`updates/bbbf3781/_machine_ai/base_c0610ef6/`） | 只有文件（裁決紀錄與交接）：**不用重建**，機台不必套。3 檔。**先套第 3～55 包** |
 | 57 | `updates/a711b4b6/` | `a711b4b6` | `bbbf3781`（`updates/a711b4b6/_machine_ai/base_bbbf3781/`） | 合進 St01（資料讀寫轉檔）到 `6bd0f5a4` 的 208 顆：網頁設定頁的 C 路讀寫、開機讀檔鏈、Observer／ShowBinSelect、網頁指令防連點等。**要重建 wb_serve**。⚠ **上機要看**：①`bUseDynamicKitDiameter` 開著的機台，新版第一次開機會在 `system\ContactInfo.ini` 檔尾補 `[Diameter_*]` 段（每種口徑 16 段，之後不再變）；沒有 ContactInfo.ini 的機台會照 golden 寫 `Gerneral.ini [System]` 的 EP 8 鍵（St01 `725038a6`）。②網頁同一個指令還在執行時再按一次會回 busy、不重跑（防連點；按住的 jog 等放行）。③這包刪了 2 檔（`FileRW/TestIF_File.cpp`、`tests/test_formbridge_testerif.cpp`），腳本不會刪，見 `deleted_in_main.txt`。⚠ **已知風險（這包之前就有，處理中）**：運轉中把所有瀏覽器關掉超過 15 秒，機台可能停產而且沒有警報（St01 0927 17:20 回報）——運轉中請至少留一個 HMI 分頁開著。228 檔。**先套第 3～56 包** |
 | 58 | `updates/5cea05ff/` | `5cea05ff` | `a711b4b6`（`updates/5cea05ff/_machine_ai/base_a711b4b6/`） | 只有文件與比對工具（夜間報告、流程對照工具跑的途中有別的 wb_serve 出現就中止）：**不用重建**，機台不必套。3 檔。**先套第 3～57 包** |
+| 59 | `updates/8b5a91b5/` | `8b5a91b5` | `5cea05ff`（`updates/8b5a91b5/_machine_ai/base_5cea05ff/`） | ⚠ **行為改變（照 golden）**：①開機照 golden 把 Loader／Empty／Color 升降與 Auto 台的狀態機設成 1（golden FormShow main.cpp:9159-9160；以前停在 0、這些狀態機從來沒動過）；②運轉中開 HMI 或重新整理，不再清「全部歸零過」旗標（以前會讓機台安靜停住、沒有警報）；③出料臂 2D 條碼重讀結果是 "0" 時照 BCB6 當成沒讀到；④模擬組態的 HeaterOK 預設勾選（只影響模擬）。**要重建 wb_serve**。上機要看：開機後 Loader／Empty／Color 的升降台會照 golden 開始動作。4 檔。**先套第 3～58 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
