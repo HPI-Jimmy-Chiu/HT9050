@@ -66,6 +66,7 @@
 | 45 | `updates/63a43ba2/` | `63a43ba2` | `06c8754e`（`updates/63a43ba2/_machine_ai/base_06c8754e/`） | ESD（St02，裁決第 24 題 B）：設了 ESD_Monitor／NOVX3360／KASUGA_Fan／HT IonBar 的機台，照 golden 在 ESD 程式手動開著時約 50 秒後對「警報感測器 on」的 IonBar 各送一次上電指令；**不會自己啟動 ESD 程式**。主畫面 Record 分頁接法整理；文件與註解（golden 行號改引 906）。**要重建 wb_serve 才生效**。14 檔。**先套第 3～44 包** |
 | 46 | `updates/d72c313d/` | `d72c313d` | `63a43ba2`（`updates/d72c313d/_machine_ai/base_63a43ba2/`） | **State Record 的 task 紀錄以前整份是空的，現在照 golden 登錄了**（`Task_ListWithTime.csv` 每列開頭有 task 名稱、時間、步序；golden 開機畫面登錄 281 個 task 的那段以前沒翻）。State Record 動作多一個只給比對工具用的參數（網頁的鈕行為不變）；主畫面 Record 分頁雙擊清除改成真的清；文件。**要重建 wb_serve 才生效**。14 檔。**先套第 3～45 包** |
 | 47 | `updates/abe688a6/` | `abe688a6` | `d72c313d`（`updates/abe688a6/_machine_ai/base_d72c313d/`） | **測試頭（Index）主流程照 golden 補回約 290 行**：起動時的吸嘴初始狀態檢查、F16 飛梭感測器斷線檢查（F16 開著的機台起動時兩個入料飛梭會先往右移再回來）、**第一顆 IC 的起測延遲旗標**、ESD 衰減測試、「先放飛梭」與 D71／D69「這次不做 Index Check」的分支（以前這段直接跳過）。DAQ 型 Index 吸嘴的真空泵也照 golden 接上，但目前待命（`INDEX_SUCKER_TYPE` 的讀檔還閘著，type 1 機台暫時照舊走 type 0 的路）。文件（裁決紀錄第 6 條）。**要重建 wb_serve 才生效**。10 檔。**先套第 3～46 包** |
+| 48 | `updates/ded836fe/` | `ded836fe` | `abe688a6`（`updates/ded836fe/_machine_ai/base_abe688a6/`） | ⚠ **行為改變（負壓機）**：`Gerneral.ini` 的 `INDEX_SUCKER_TYPE` 照 golden 讀進來了（以前一直是 0）。寫 1 的機台（DAQ 型 Index 吸嘴）從這包起 Index Check 會等兩排吸嘴開真空／破真空做完才往下，D44 開著時放完料會做回黏檢查（JAM0327）。type 0 機台不變。另：32-site 的回黏檢查旗標改成真的；動作流程對照工具（tools/flowcmp，不進建置）；文件。**要重建 wb_serve 才生效**。12 檔。**先套第 3～47 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
