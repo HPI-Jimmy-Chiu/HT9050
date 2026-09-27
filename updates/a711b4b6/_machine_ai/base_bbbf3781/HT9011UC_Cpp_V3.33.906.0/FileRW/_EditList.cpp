@@ -1,0 +1,379 @@
+// ===========================================================================
+//  FileRW/_EditList.cpp -- C 類共用層本體。說明見 _EditList.h。
+//
+//  Steven 20260924.  NOT in golden.
+// ===========================================================================
+#include "FileRW/_EditList.h"
+
+#include <map>
+#include <typeinfo>
+#include <utility>
+#include <vector>
+
+#include "Public/cJSON.h"
+#include "WebBridge/JsonWriter.h"
+
+namespace filerw {
+
+namespace {
+struct Proxies {
+    std::map<std::string, std::string> parentOf;     // "表單類別.名稱" → 父元件名稱
+    std::map<std::string, bool> readOnly;            // "表單類別.名稱"（golden DFM ReadOnly=True）
+    std::map<std::string, TControl*> byKey;          // "表單類別.名稱"
+    std::map<TControl*, std::string> formOf;
+    std::vector<std::pair<std::string, std::string> > order;   // (表單類別, 名稱)
+};
+std::string Key(const char* form, const char* name) { return std::string(form) + "." + name; }
+Proxies& P() {
+    static Proxies p;
+    return p;
+}
+
+// THTEdit 的值從它的替身讀（golden SaveEditTextToFile 讀的也是這幾個屬性）
+void PutValue(webbridge::JsonWriter& w, TControl* c) {
+    if (!c) return;
+    if (TCheckBox* x = dynamic_cast<TCheckBox*>(c))            { w.Key("checked").Bool(x->Checked); return; }
+    if (TComboBox* x = dynamic_cast<TComboBox*>(c))            { w.Key("itemIndex").Number((wb_int64)x->ItemIndex);
+                                                                w.Key("text").String(x->Text.c_str()); return; }
+    if (TRadioGroup* x = dynamic_cast<TRadioGroup*>(c))        { w.Key("itemIndex").Number((wb_int64)x->ItemIndex); return; }
+    if (TDateTimePicker* x = dynamic_cast<TDateTimePicker*>(c)) { w.Key("dateTime").Number(x->DateTime); return; }
+    if (TCustomEdit* x = dynamic_cast<TCustomEdit*>(c))        { w.Key("text").String(x->Text.c_str()); return; }
+}
+// 替身的值（golden FormShow／InitialDataToEdit 填的），欄位名與 ELApplyProxies 收的一致
+void PutProxyValue(webbridge::JsonWriter& w, TControl* c) {
+    if (TRadioButton* x = dynamic_cast<TRadioButton*>(c)) { w.Key("checked").Bool(x->Checked); return; }
+    if (ELTrackBar* x = dynamic_cast<ELTrackBar*>(c))     { w.Key("position").Number((wb_int64)x->Position); return; }
+    if (ELStringGrid* x = dynamic_cast<ELStringGrid*>(c)) {
+        w.Key("cells").BeginArray();
+        for (int ci = 0; ci < (int)x->grid.ColCount; ++ci) {
+            w.BeginArray();
+            for (int ri = 0; ri < (int)x->grid.RowCount; ++ri) w.String(x->Cells[ci][ri].c_str());
+            w.EndArray();
+        }
+        w.EndArray();
+        return;
+    }
+    if (TLabel* x = dynamic_cast<TLabel*>(c)) { if (!x->Caption.IsEmpty()) w.Key("caption").String(x->Caption.c_str()); return; }
+    if (dynamic_cast<TCheckBox*>(c) || dynamic_cast<TComboBox*>(c) || dynamic_cast<TRadioGroup*>(c) ||
+        dynamic_cast<TDateTimePicker*>(c) || dynamic_cast<TCustomEdit*>(c)) { PutValue(w, c); return; }
+    // golden 型別 vclcompat 沒有、退回 TControl 的（例 TImage imgI37_3：golden 拿 Tag 當值 0..7）→ 一律帶 tag（0 也要）；
+    // 面板／分頁等有自己型別的只在非 0 時帶
+    if (typeid(*c) == typeid(TControl) || c->Tag) w.Key("tag").Number((wb_int64)c->Tag);
+}
+}  // namespace
+
+TControl* ELFind(const char* form, const char* name) {
+    std::map<std::string, TControl*>::const_iterator it = P().byKey.find(Key(form, name));
+    return it == P().byKey.end() ? nullptr : it->second;
+}
+
+void ELKeep(const char* form, const char* name, TControl* c) {
+    // VCL 的設計期預設是 Visible=true、Enabled=true、TTabSheet::TabVisible=true（DFM 只記「與預設不同」的值，
+    // 由 IC_DfmState 套上）。vclcompat 的建構子三者都是 false —— 替身不改的話，權限判斷會把每個元件都當成
+    // 看不見／停用（實測：原值存檔 ignored 913 個，連 edA01 都改不到）。
+    c->Visible = true;
+    c->Enabled = true;
+    if (TTabSheet* t = dynamic_cast<TTabSheet*>(c)) t->TabVisible = true;
+    P().byKey[Key(form, name)] = c;
+    P().formOf[c] = form;
+    P().order.push_back(std::make_pair(std::string(form), std::string(name)));
+    HTEditList_RegisterControlName(c, AnsiString(name));
+}
+
+const char* ELFormOf(TControl* c) {
+    std::map<TControl*, std::string>::const_iterator it = P().formOf.find(c);
+    return it == P().formOf.end() ? "" : it->second.c_str();
+}
+
+std::string ProxyStateJson(const char* form) {
+    webbridge::JsonWriter w;
+    w.BeginObject();
+    for (std::size_t i = 0; i < P().order.size(); ++i) {
+        if (P().order[i].first != form) continue;
+        TControl* c = P().byKey[Key(form, P().order[i].second.c_str())];
+        w.Key(P().order[i].second).BeginObject();
+        w.Key("visible").Bool(c->Visible);
+        w.Key("enabled").Bool(c->Enabled);
+        // 審查 H1（第 6 輪）：頁面要照「自己＋所有上層」決定能不能改，和存檔丟值的判斷（ELEditable）同一個 ——
+        // 只送自己的 Enabled 時，停用容器底下 Enabled=true 的子元件會被頁面重新打開
+        w.Key("editable").Bool(ELEditable(form, P().order[i].second.c_str()));
+        if (TTabSheet* t = dynamic_cast<TTabSheet*>(c)) w.Key("tabVisible").Bool(t->TabVisible);
+        PutProxyValue(w, c);
+        w.EndObject();
+    }
+    w.EndObject();
+    return w.Str();
+}
+
+std::string EditListToJson(HTEditList* el, const char* onlyForm) {
+    webbridge::JsonWriter w;
+    w.BeginObject();
+    if (!el) {
+        w.Key("available").Bool(false);
+        w.EndObject();
+        return w.Str();
+    }
+    w.Key("available").Bool(true);
+    w.Key("count").Number((wb_int64)el->FEditList->Count);
+    w.Key("entries").BeginArray();
+    for (int i = 0; i < el->FEditList->Count; ++i) {
+        THTEdit* it = static_cast<THTEdit*>(el->FEditList->Items[i]);
+        if (onlyForm && std::string(ELFormOf(it->SourceControl)) != onlyForm) continue;
+        w.BeginObject();
+        w.Key("id").String(it->ControlName.c_str());
+        w.Key("form").String(ELFormOf(it->SourceControl));
+        w.Key("group").String(it->IniGroupName.c_str());
+        w.Key("key").String(it->IniKeyName.c_str());
+        w.Key("content").Number((wb_int64)it->Content);
+        w.Key("readFromFile").Bool(it->bReadFromFile);
+        w.Key("visible").Bool(it->bVisible);
+        w.Key("enabled").Bool(it->bEnable);
+        if (it->iTransformType) w.Key("transform").Number((wb_int64)it->iTransformType);
+        if (!it->MinValue.IsEmpty()) w.Key("min").String(it->MinValue.c_str());
+        if (!it->MaxValue.IsEmpty()) w.Key("max").String(it->MaxValue.c_str());
+        PutValue(w, it->SourceControl);
+        w.EndObject();
+    }
+    w.EndArray();
+    w.EndObject();
+    return w.Str();
+}
+
+namespace {
+struct Session {
+    std::map<std::string, int> answers;
+    std::vector<std::pair<std::string, std::string> > messages;
+    std::vector<std::pair<std::pair<std::string, std::string>, int> > asked;
+    std::vector<std::string> todo;
+    std::vector<std::string> trace;
+};
+Session& S() {
+    static Session s;
+    return s;
+}
+}  // namespace
+
+void SessionBegin(const std::string& answersJson) {
+    S() = Session();
+    cJSON* a = answersJson.empty() ? nullptr : cJSON_Parse(answersJson.c_str());
+    if (a && cJSON_IsObject(a))
+        for (const cJSON* it = a->child; it; it = it->next)
+            if (cJSON_IsNumber(it)) S().answers[it->string] = it->valueint;
+    if (a) cJSON_Delete(a);
+}
+
+std::string SessionJson() {
+    webbridge::JsonWriter w;
+    w.BeginObject();
+    w.Key("messages").BeginArray();
+    for (std::size_t i = 0; i < S().messages.size(); ++i)
+        w.BeginObject().Key("en").String(S().messages[i].first).Key("zh").String(S().messages[i].second).EndObject();
+    w.EndArray();
+    w.Key("asked").BeginArray();
+    for (std::size_t i = 0; i < S().asked.size(); ++i)
+        w.BeginObject().Key("en").String(S().asked[i].first.first).Key("zh").String(S().asked[i].first.second)
+         .Key("answer").Number((wb_int64)S().asked[i].second).EndObject();
+    w.EndArray();
+    w.Key("todo").BeginArray();
+    for (std::size_t i = 0; i < S().todo.size(); ++i) w.String(S().todo[i]);
+    w.EndArray();
+    w.Key("trace").BeginArray();
+    for (std::size_t i = 0; i < S().trace.size(); ++i) w.String(S().trace[i]);
+    w.EndArray();
+    w.EndObject();
+    return w.Str();
+}
+
+void ELMessage(AnsiString S1, AnsiString S2, AnsiString, bool, bool) {
+    S().messages.push_back(std::make_pair(std::string(S1.c_str()), std::string(S2.c_str())));
+}
+
+int ELAsk(AnsiString S1, AnsiString S2, AnsiString) {
+    std::map<std::string, int>::const_iterator it = S().answers.find(S1.c_str());
+    int ans = it == S().answers.end() ? 2 : it->second;      // golden：1＝YES、2＝NO
+    S().asked.push_back(std::make_pair(std::make_pair(std::string(S1.c_str()), std::string(S2.c_str())), ans));
+    return ans;
+}
+
+void ELTodo(const char* what) { S().todo.push_back(what); }
+
+void ELMark(const char* what) { S().trace.push_back(what); }
+
+void ELChangeCompomentEnabled(TControl* c, bool bEnable, bool bMustEnable) {
+    if (!c) return;
+    // golden：bMustEnable==false 時只會關、不會開；==true 時照 bEnable
+    if (bMustEnable) c->Enabled = bEnable;
+    else if (!bEnable) c->Enabled = false;
+}
+
+void ELSetParents(const char* form, const char* const (*pairs)[2], int n) {
+    for (int i = 0; i < n; ++i) P().parentOf[Key(form, pairs[i][0])] = pairs[i][1];
+}
+
+void ELSetReadOnly(const char* form, const char* name) { P().readOnly[Key(form, name)] = true; }
+
+void ELEnableNames(const char* form, const char* const* names, int n) {
+    for (int i = 0; i < n; ++i)
+        if (TControl* c = ELFind(form, names[i])) c->Enabled = true;
+}
+
+bool ELEditable(const char* form, const char* name) {
+    if (P().readOnly.count(Key(form, name))) return false;
+    std::string cur = name;
+    for (int depth = 0; depth < 64 && !cur.empty(); ++depth) {
+        TControl* c = ELFind(form, cur.c_str());
+        if (c && (!c->Enabled || !c->Visible)) return false;
+        if (TTabSheet* t = dynamic_cast<TTabSheet*>(c)) if (!t->TabVisible) return false;
+        std::map<std::string, std::string>::const_iterator it = P().parentOf.find(Key(form, cur.c_str()));
+        cur = it == P().parentOf.end() ? std::string() : it->second;
+    }
+    return true;
+}
+
+bool ELMarked(const char* what) {
+    for (std::size_t i = 0; i < S().trace.size(); ++i)
+        if (S().trace[i] == what) return true;
+    return false;
+}
+
+bool ELInAnyList(TControl* c, HTEditList* const* lists, int n) {
+    for (int k = 0; k < n; ++k) {
+        HTEditList* el = lists[k];
+        if (!el) continue;
+        for (int i = 0; i < el->FEditList->Count; ++i)
+            if (static_cast<THTEdit*>(el->FEditList->Items[i])->SourceControl == c) return true;
+    }
+    return false;
+}
+
+namespace {
+// 一個替身要哪個欄位、型別對不對；套用時照同一個判斷寫進去
+enum class PK { None, Checked, Index, Text, Position, DateTime, Cells, Tag };
+PK KindOf(TControl* c) {
+    if (dynamic_cast<TCheckBox*>(c) || dynamic_cast<TRadioButton*>(c)) return PK::Checked;   // 審查 H1：TRadioButton 不是 TCheckBox 衍生
+    if (dynamic_cast<TComboBox*>(c) || dynamic_cast<TRadioGroup*>(c)) return PK::Index;
+    if (dynamic_cast<ELTrackBar*>(c)) return PK::Position;
+    if (dynamic_cast<TDateTimePicker*>(c)) return PK::DateTime;
+    if (dynamic_cast<ELStringGrid*>(c)) return PK::Cells;
+    if (dynamic_cast<TCustomEdit*>(c)) return PK::Text;
+    return PK::None;
+}
+const char* FieldOf(PK k) {
+    switch (k) {
+        case PK::Checked: return "checked";
+        case PK::Index: return "itemIndex";
+        case PK::Text: return "text";
+        case PK::Position: return "position";
+        case PK::DateTime: return "dateTime";
+        case PK::Cells: return "cells";
+        case PK::Tag: return "tag";
+        default: return "";
+    }
+}
+bool TypeOk(PK k, const cJSON* v, TControl* c) {
+    switch (k) {
+        case PK::Checked: return cJSON_IsBool(v);
+        case PK::Index: case PK::Position: case PK::DateTime: case PK::Tag: return cJSON_IsNumber(v);
+        case PK::Text: return cJSON_IsString(v);
+        case PK::Cells: {
+            // 審查 M2：vclcompat Cells 越界會丟例外（套到一半）→ 檢查時就先比欄列數
+            if (!cJSON_IsArray(v)) return false;
+            ELStringGrid* g = static_cast<ELStringGrid*>(c);
+            if (cJSON_GetArraySize(v) > (int)g->grid.ColCount) return false;
+            for (const cJSON* col = v->child; col; col = col->next) {
+                if (!cJSON_IsArray(col) || cJSON_GetArraySize(col) > (int)g->grid.RowCount) return false;
+                for (const cJSON* x = col->child; x; x = x->next) if (!cJSON_IsString(x)) return false;
+            }
+            return true;
+        }
+        default: return false;
+    }
+}
+}  // namespace
+
+bool ELApplyProxies(const char* form, const std::string& widgetsJson, std::vector<std::string>* applied,
+                    std::vector<std::string>* unknown, std::string* err) {
+    cJSON* root = cJSON_Parse(widgetsJson.c_str());
+    if (!root || !cJSON_IsObject(root)) {
+        if (root) cJSON_Delete(root);
+        *err = "widgets is not a JSON object";
+        return false;
+    }
+    std::vector<std::pair<TControl*, const cJSON*> > todo;
+    std::vector<PK> kinds;
+    std::vector<std::string> bad;
+    for (const cJSON* it = root->child; it; it = it->next) {
+        TControl* c = ELFind(form, it->string);
+        if (!c) { unknown->push_back(it->string); continue; }
+        PK k = KindOf(c);
+        // 審查 H1：golden 讀 ->Tag 當值的元件（例 imgI37_3，TImage 點一下 Tag 0..7 循環）→ 頁面送 "tag"
+        if (k == PK::None && cJSON_IsObject(it) && cJSON_GetObjectItemCaseSensitive(it, "tag")) k = PK::Tag;
+        const cJSON* v = cJSON_IsObject(it) ? cJSON_GetObjectItemCaseSensitive(it, FieldOf(k)) : nullptr;
+        if (k == PK::None) { unknown->push_back(it->string); continue; }   // 面板／標籤：值不歸頁面管
+        if (!v || !TypeOk(k, v, c)) { bad.push_back(std::string(it->string) + "." + FieldOf(k)); continue; }
+        kinds.push_back(k);
+        todo.push_back(std::make_pair(c, it));
+    }
+    if (!bad.empty()) {
+        *err = "refused: wrong or missing value type for:";
+        for (std::size_t i = 0; i < bad.size() && i < 40; ++i) *err += (i ? ", " : " ") + bad[i];
+        cJSON_Delete(root);
+        return false;
+    }
+    for (std::size_t n = 0; n < todo.size(); ++n) {
+        TControl* c = todo[n].first;
+        const cJSON* o = todo[n].second;
+        const PK k = kinds[n];
+        const cJSON* v = cJSON_GetObjectItemCaseSensitive(o, FieldOf(k));
+        switch (k) {
+            case PK::Checked:
+                if (TCheckBox* x = dynamic_cast<TCheckBox*>(c)) x->Checked = cJSON_IsTrue(v) != 0;
+                else static_cast<TRadioButton*>(c)->Checked = cJSON_IsTrue(v) != 0;
+                break;
+            case PK::Tag: c->Tag = v->valueint; break;
+            case PK::Index:
+                if (TComboBox* b = dynamic_cast<TComboBox*>(c)) {
+                    b->ItemIndex = v->valueint;
+                    const cJSON* t = cJSON_GetObjectItemCaseSensitive(o, "text");
+                    if (t && cJSON_IsString(t)) b->Text = AnsiString(t->valuestring);
+                } else {
+                    static_cast<TRadioGroup*>(c)->ItemIndex = v->valueint;
+                }
+                break;
+            case PK::Text: dynamic_cast<TCustomEdit*>(c)->Text = AnsiString(v->valuestring); break;
+            case PK::Position: static_cast<ELTrackBar*>(c)->SetPosition(v->valueint, false); break;   // 頁面最後狀態：不觸發 OnChange
+            case PK::DateTime: dynamic_cast<TDateTimePicker*>(c)->DateTime = v->valuedouble; break;
+            case PK::Cells: {
+                ELStringGrid* g = static_cast<ELStringGrid*>(c);
+                int ci = 0;
+                for (const cJSON* col = v->child; col; col = col->next, ++ci) {
+                    int ri = 0;
+                    for (const cJSON* x = col->child; x; x = x->next, ++ri) g->Cells[ci][ri] = AnsiString(x->valuestring);
+                }
+                break;
+            }
+            default: break;
+        }
+        applied->push_back(o->string);
+    }
+    cJSON_Delete(root);
+    return true;
+}
+
+bool ELPasswordRefused(const char* what) {
+    S().todo.push_back(std::string(what) + ": golden 密碼框在網頁端還沒有對應，視同密碼錯誤（回 false）");
+    // 審查 M4：這會讓 golden 把勾選改回 false 再存（例 I37_1 FIFO），要讓操作者看得到
+    S().messages.push_back(std::make_pair(
+        std::string("Password dialog is not available on the web page; treated as wrong password (") + what + ")",
+        std::string("網頁端還沒有密碼框，視同密碼錯誤：需要密碼的設定不會被打開（") + what + "）"));
+    return false;
+}
+
+}  // namespace filerw
+
+// cprod.cpp 用的轉接：golden SaveLastSetIni 讀 fConfiguration->cbN07_EnableHostStart->Checked
+bool FileRW_ProxyChecked(const char* form, const char* name)
+{
+    TCheckBox* c = dynamic_cast<TCheckBox*>(filerw::ELFind(form, name));
+    return c ? c->Checked : false;
+}
