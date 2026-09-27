@@ -64,6 +64,7 @@
 | 43 | `updates/81e7c7c5/` | `81e7c7c5` | `0ef84f12`（`updates/81e7c7c5/_machine_ai/base_0ef84f12/`） | 只有文件（裁決紀錄 RULINGS_20260927 第 4 條：這兩天編譯＋模擬驗證通過就算完成）。程式沒變、不用重建。1 檔。**先套第 3～42 包** |
 | 44 | `updates/06c8754e/` | `06c8754e` | `81e7c7c5`（`updates/06c8754e/_machine_ai/base_81e7c7c5/`） | 主畫面的 log 小視窗（Shuttle／AutoClean／AGV E84）真的會記了（另加 4096 行防呆上限，比 golden 每個清空門檻都大）；主畫面「Show Shuttle Sensor」照 golden 預設勾選，Shuttle 感測 log 照 golden 存到 `D:\HT9045_Log\ShuttleLog\<年月>\SH1_／SH2_*.logs`；AutoClean 超過 2048 行照 golden 存 `d:\AutoCleanLogs\*.csv`；新 ctest `MemoLog`；文件。**要重建 wb_serve 才生效**。14 檔。**先套第 3～43 包** |
 | 45 | `updates/63a43ba2/` | `63a43ba2` | `06c8754e`（`updates/63a43ba2/_machine_ai/base_06c8754e/`） | ESD（St02，裁決第 24 題 B）：設了 ESD_Monitor／NOVX3360／KASUGA_Fan／HT IonBar 的機台，照 golden 在 ESD 程式手動開著時約 50 秒後對「警報感測器 on」的 IonBar 各送一次上電指令；**不會自己啟動 ESD 程式**。主畫面 Record 分頁接法整理；文件與註解（golden 行號改引 906）。**要重建 wb_serve 才生效**。14 檔。**先套第 3～44 包** |
+| 46 | `updates/d72c313d/` | `d72c313d` | `63a43ba2`（`updates/d72c313d/_machine_ai/base_63a43ba2/`） | **State Record 的 task 紀錄以前整份是空的，現在照 golden 登錄了**（`Task_ListWithTime.csv` 每列開頭有 task 名稱、時間、步序；golden 開機畫面登錄 281 個 task 的那段以前沒翻）。State Record 動作多一個只給比對工具用的參數（網頁的鈕行為不變）；主畫面 Record 分頁雙擊清除改成真的清；文件。**要重建 wb_serve 才生效**。14 檔。**先套第 3～45 包** |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
