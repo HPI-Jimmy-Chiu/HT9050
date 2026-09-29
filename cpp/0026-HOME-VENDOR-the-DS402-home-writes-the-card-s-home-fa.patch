@@ -1,0 +1,114 @@
+From e90deb632d7547edca3b78b8e15a75e5f16fa16b Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 19:35:23 +0800
+Subject: [PATCH] HOME-VENDOR: the DS402 home writes the card's home family
+ first, as Advantech's Home examples and golden SetHomeSpeed do; op log shows
+ the drive's 6099h/609Ah and gear
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260929: "你看範例程式 怎寫就怎改" (after homing at the Utility's PTP numbers crawled, 30000/2000 still slow, visible only at
+300000/20000). Read the vendor examples on this PC (C:\Program Files (x86)\Advantech\Common Motion\Examples_EtherCAT\Windows):
+- BCB Home Unit1.cpp:663-708 PAR_AxHomeVelLow/High/Acc/Dec, :351 PAR_AxHomeExSwitchMode, :364 PAR_AxHomeCrossDistance, :376
+  Acm_AxHome(mode, dir); WinForm Form1.h:2371-2410 the same four, :2164 Acm_AxMoveHome with CiA402_MODE24/28 = 124/128; its
+  Customer page (SetHomeParams :2939-3001) writes 6099h:1/:2, 609Ah, 6098h, 607Ch by SDO in drive units, then OperationMode 6 +
+  ControlWord 0x1F.
+- WebMotorAccess.cpp DS402 home (the path this machine uses): now writes PAR_AxHomeVelLow/High/Acc/Dec (PHomeLow/HighSpeed, dAcc/dDec
+  -- golden TMyEtherCatMotor::SetHomeSpeed myEthercatmotor.cpp:2113-2140) before the existing PTP seed and Acm_AxHome(124/128); the
+  card-side path already did. The PTP seed stays (EastSun 20260917: Acm_AxHome copies PTP VelHigh/VelLow/Acc into 6099h/609Ah).
+- tools/wb_serve.cpp op log MOT: + drvHome (6099h:1/6099h:2 acc609Ah, re-read after every home) and gear (2701h pos n/d, 2702h vel n/d),
+  so the next home on the machine shows what the drive really got and in which unit.
+- tests/test_web_motor_access.cpp: the W4C-3 sequence now expects the four kCmdAxSetHome first.
+Build wb_serve + test_web_motor_access exit 0; test_web_motor_access 528 passed / 0 failed (with the catalog argument);
+production_audit 0 changes; pe_truncation_check 178 complete. Speed effect NOT verified on the machine yet.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebMotorAccess.cpp              | 17 +++++++++++++++++
+ tests/test_web_motor_access.cpp | 15 ++++++++++-----
+ tools/wb_serve.cpp              | 13 +++++++++++++
+ 3 files changed, 40 insertions(+), 5 deletions(-)
+
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index d21139f..9aac961 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -1250,6 +1250,23 @@ std::string StartHome1203(const std::string& motorId, long long wireId, IMotorAc
+     //   不讀 PAR_AxHomeVel* ⇒ 同義做法是在 home 之前把 PTP 速度設成歸零速度（否則剛 jog 100% 的軸會用 jog 高速找原點）。
+     if (m.g.homeHigh == 0)
+         return who + ": Home High Speed（PHomeHighSpeed）是 0 —— 不拿卡上殘留的速度去找原點（NB2 R23 W4C-3）";
++    {   //AI(W906-HOME-VENDOR) 20260929: EastSun「你看範例程式 怎寫就怎改」-- Advantech's own Home examples set the CARD's home family
++        //  before the home call (Examples_EtherCAT/Windows/BCB/Home/Unit1.cpp:663-708 PAR_AxHomeVelLow/High/Acc/Dec, then :376
++        //  Acm_AxHome(mode, dir); the WinForm one Form1.h:2371-2410 the same four, then :2164 with CiA402_MODE24/28 = 124/128 as here),
++        //  and golden TMyEtherCatMotor::SetHomeSpeed (myEthercatmotor.cpp:2113-2140) writes exactly those four from PHomeLow/HighSpeed
++        //  and dAcc/dDec. This DS402 path used to skip them (the card-side path StartHomeCardSide above always wrote them), relying only
++        //  on the PTP seed below; now it writes them first, like the examples and golden. The PTP seed is KEPT: EastSun measured
++        //  20260917 that Acm_AxHome copies PAR_AxVelHigh/VelLow/Acc into 6099h:1/:2 / 609Ah (Pci1203Gear.h:476-507), so without it the
++        //  drive would home at whatever PTP speed the last jog left. The drive's 6099h/609Ah and gear are logged (op log MOT drvHome/gear).
++        const struct { int which; double v; } hs[4] = {
++            { kHomeVelLow, (double)m.g.homeLow }, { kHomeVelHigh, (double)m.g.homeHigh }, { kHomeAcc, m.g.accDb }, { kHomeDec, m.g.decDb } };
++        for (int i = 0; i < 4; ++i) {
++            Pci1203Cmd hc;
++            hc.kind = kCmdAxSetHome; hc.wireId = wireId; hc.axis = m.a.axis; hc.home = hs[i].which; hc.value = hs[i].v;
++            const Pci1203CmdResult hr = be.Pci1203Execute(hc);
++            if (CmdFailed(hr)) return who + ": 1203 設定卡片歸零速度失敗（golden SetHomeSpeed／研華 Home 範例）—— " + CmdWhy(hr);
++        }
++    }
+     {
+         const struct { Pci1203SpeedParam which; double v; } seq[4] = {
+             { kSpeedInit, (double)m.g.homeLow }, { kSpeedRun, (double)m.g.homeHigh }, { kSpeedAcc, m.g.accDb }, { kSpeedDec, m.g.decDb } };
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index 63a1c07..d752ba1 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -1532,12 +1532,17 @@ int main(int argc, char** argv)
+               "W4C-3 PHomeHighSpeed=0 -> refused (never home at whatever speed is left on the card)");
+         be.golden[20].homeHigh = 2000;
+         o = MotorAccessDispatch(ReqStart("uMotorTest", "home", "A", true), 1, be);
+-        bool speedOk = (int)be.executed.size() == n0 + 5;
+-        for (int i = 0; speedOk && i < 4; ++i) speedOk = be.executed[n0 + i].kind == kCmdAxSetSpeed && be.executed[n0 + i].axis == 3;
+-        speedOk = speedOk && be.executed[n0].value == 500 && be.executed[n0 + 1].value == 2000 &&
+-                  be.executed[n0 + 2].value == 3000 && be.executed[n0 + 3].value == 3100 && be.executed[n0 + 4].kind == kCmdAxHome;
++        //AI(W906-HOME-VENDOR) 20260929: first the card's home family (Advantech Home examples / golden SetHomeSpeed), then the PTP seed
++        bool speedOk = (int)be.executed.size() == n0 + 9;
++        for (int i = 0; speedOk && i < 4; ++i) speedOk = be.executed[n0 + i].kind == kCmdAxSetHome && be.executed[n0 + i].axis == 3;
++        speedOk = speedOk && be.executed[n0].home == kHomeVelLow && be.executed[n0].value == 500 && be.executed[n0 + 1].home == kHomeVelHigh &&
++                  be.executed[n0 + 1].value == 2000 && be.executed[n0 + 2].home == kHomeAcc && be.executed[n0 + 2].value == 3000 &&
++                  be.executed[n0 + 3].home == kHomeDec && be.executed[n0 + 3].value == 3100;
++        for (int i = 4; speedOk && i < 8; ++i) speedOk = be.executed[n0 + i].kind == kCmdAxSetSpeed && be.executed[n0 + i].axis == 3;
++        speedOk = speedOk && be.executed[n0 + 4].value == 500 && be.executed[n0 + 5].value == 2000 &&
++                  be.executed[n0 + 6].value == 3000 && be.executed[n0 + 7].value == 3100 && be.executed[n0 + 8].kind == kCmdAxHome;
+         CHECK(o.ok && speedOk && Has(o.ackJson, "\"homeActive\":true"),
+-              "W4C-3 home -> PTP speed = velLow PHomeLow 500, velHigh PHomeHigh 2000, acc/dec = database 3000/3100, then Acm_AxHome");
++              "W4C-3 home -> PAR_AxHomeVelLow/High/Acc/Dec 500/2000/3000/3100 (vendor example, golden SetHomeSpeed), then PTP 500/2000/3000/3100, then Acm_AxHome");
+         n0 = (int)be.executed.size();
+         o = MotorAccessDispatch(ReqStart("uMotorTest", "home", "A", true), 1, be);
+         CHECK(o.ok && (int)be.executed.size() == n0 && MotorAccessJobs().homesActive == 1, "home start=true while homing -> no second command");
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 126c7a5..5a9d44b 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -8250,6 +8250,19 @@ void W906_OpLogMotorRuntime(const std::string& json)
+                         f.push_back(std::make_pair(std::string("drvAlm"), a.driveAlarmValid
+                             ? std::string(a.driveAlarm ? hx : "0") + (a.driveAlarmName.empty() ? std::string() : " " + OpClip(a.driveAlarmName, 80))
+                             : std::string("?")));
++                        //AI(W906-HOME-VENDOR) 20260929: the drive's own homing objects as the monitor last read them (6099h:1 search-switch
++                        //  speed / 6099h:2 search-zero speed / 609Ah acc -- re-read after every home, MarkCfgDue kCfgDrive) and its user units
++                        //  (2701h position n/d = electronic gear, 2702h velocity n/d; gearVal[0..3] = Pci1203Gear.h kGearPosNum..kGearVelDen),
++                        //  to settle why a home at the Utility's PTP numbers crawls (EastSun 20260929).
++                        char hb[96];
++                        if (a.driveHomeValid[0] && a.driveHomeValid[1] && a.driveHomeValid[2])
++                            std::snprintf(hb, sizeof(hb), "%ld/%ld acc%ld", a.driveHomeVal[0], a.driveHomeVal[1], a.driveHomeVal[2]);
++                        else std::snprintf(hb, sizeof(hb), "?");
++                        f.push_back(std::make_pair(std::string("drvHome"), std::string(hb)));
++                        if (a.gearValid[0] && a.gearValid[1] && a.gearValid[2] && a.gearValid[3])
++                            std::snprintf(hb, sizeof(hb), "pos%lu/%lu vel%lu/%lu", a.gearVal[0], a.gearVal[1], a.gearVal[2], a.gearVal[3]);
++                        else std::snprintf(hb, sizeof(hb), "?");
++                        f.push_back(std::make_pair(std::string("gear"), std::string(hb)));
+                         break;
+                     }
+                 }
+-- 
+2.55.0.windows.5
+

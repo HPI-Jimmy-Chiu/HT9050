@@ -1,0 +1,103 @@
+From f6f0914ee622483c546797a10d0d5b805125e48d Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 20:44:51 +0800
+Subject: [PATCH] BRAKE-AXIS-2: the release no longer waits for
+ bMotorPowerState; the op-log BRAKE line really registered
+
+EastSun 20260929 20:40:44: MInArmZA servo ON, SwInArmZBreaker never released. Cause: BrakeAxisTick required
+bMotorPowerState, which golden sets only after its automatic power-on has counted ~100 DoSystem passes (PAGE "power"
+still 0 at 20:41:09 while the relay was on and the drive reported SVON). Now: SVON 0.5 s + no EMG (GEM_EMGPressed, the
+flag golden IsEMGPressed leaves each pass -- not calling it again, it has a servo-off / brake sweep) + SnMotorPower on.
+Also: the hold block no longer compares against 0 as a signed tick (would block for ever after 24.8 days uptime), and
+tools/wb_serve.cpp's W906_OpBrakeNote + its registration had been appended behind a // comment -- moved in front.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebMotorAccessLive.cpp | 20 ++++++++++++++------
+ tools/wb_serve.cpp     |  4 ++--
+ 2 files changed, 16 insertions(+), 8 deletions(-)
+
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index 8677aa3..2b9617e 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -139,8 +139,9 @@ struct BrakeAxisState {
+     DWORD onSince;       // GetTickCount at the SVON edge
+     bool  released;      // this SVON already released the brake (or found it released)
+     bool  waitLogged;    // "waiting for motor power / EMG" said once
+-    DWORD blockUntil;    // no release before this (set by a hold)
+-    BrakeAxisState() : on(false), onSince(0), released(false), waitLogged(false), blockUntil(0) {}
++    bool  blocked;       // a hold happened at blockSince: no release for kBrakeHoldBlockMs (2nd fix 20260929: a bare
++    DWORD blockSince;    //   "blockUntil=0" compared as (LONG)(now-0)<0 would block for ever once GetTickCount passes 2^31 ms)
++    BrakeAxisState() : on(false), onSince(0), released(false), waitLogged(false), blocked(false), blockSince(0) {}
+ };
+ std::map<std::string, BrakeAxisState> g_brakeAxis;
+ void BrakeLog(const std::string& s)                 // console + op log (BRAKE lines; wb_serve registers ::g_W906BrakeNote)
+@@ -148,7 +149,7 @@ void BrakeLog(const std::string& s)                 // console + op log (BRAKE l
+     std::printf("[brake] %s\n", s.c_str());
+     if (::g_W906BrakeNote) ::g_W906BrakeNote(s.c_str());
+ }
+-bool BrakeBlocked(const BrakeAxisState& st, DWORD now) { return (LONG)(now - st.blockUntil) < 0; }
++bool BrakeBlocked(const BrakeAxisState& st, DWORD now) { return st.blocked && (now - st.blockSince) < kBrakeHoldBlockMs; }
+ // the brake output of this axis, -1 = none / Enable=0 in IO_Table
+ int BrakeSwOf(const std::string& alias)
+ {
+@@ -172,7 +173,14 @@ void BrakeAxisTick()
+     if (Pci1203Monitor() == 0) return;
+     IMotorAccessBackend& be = MotorAccessLiveBackend();
+     const DWORD now = ::GetTickCount();
+-    const bool powerOk = bMotorPowerState && !IsIndexMotorOutOfPower();
++    //AI(W906-BRAKE-AXIS) 20260929 2nd fix (EastSun「我激磁的時候一樣沒有觸發對應io」, 20:40:44): bMotorPowerState is NOT asked here.
++    //  It turns true only when golden's automatic power-on has counted ~100 DoSystem passes (CheckMotorPowerShutDown G31a) --
++    //  the op log's PAGE "power" was still 0 at 20:41:09 although the relay was on and MInArmZA reported SVON, so the release
++    //  waited for nothing. The drive reporting SVON is the proof of power; what is left is EMG / SnMotorPower off (EastSun 20260926).
++    //  EMG is read from GEM_EMGPressed, the flag golden IsEMGPressed() leaves on every DoSystem pass (csystem.cpp): calling
++    //  IsEMGPressed() here would repeat its servo-off / brake sweep and consume its release edge.
++    const bool emg = GEM_EMGPressed, powerOff = Sen[SnMotorPower].IsOff();
++    const bool powerOk = !emg && !powerOff;
+     for (std::size_t i = 0; i < sizeof(kBrakeAxes) / sizeof(kBrakeAxes[0]); ++i) {
+         const std::string alias = kBrakeAxes[i].alias;
+         MotorAccessAxis a;
+@@ -186,7 +194,7 @@ void BrakeAxisTick()
+             if (!st.on) { st.on = true; st.onSince = now; st.released = false; st.waitLogged = false; }
+             if (sw < 0 || st.released || (now - st.onSince) < kBrakeReleaseDelayMs || BrakeBlocked(st, now)) continue;
+             if (!powerOk) {
+-                if (!st.waitLogged) { st.waitLogged = true; BrakeLog(alias + " SVON 0.5 s, " + SW[sw].Name.c_str() + " NOT released yet: motor power off or EMG (bMotorPowerState / SnMotorPower / EMG)"); }
++                if (!st.waitLogged) { st.waitLogged = true; BrakeLog(alias + " SVON 0.5 s, " + SW[sw].Name.c_str() + " NOT released yet: " + (emg ? "EMG pressed" : "SnMotorPower off") + " -- released as soon as it clears"); }
+                 continue;
+             }
+             st.released = true;
+@@ -866,7 +874,7 @@ public:
+         SW[sw].Off();
+         BrakeAxisState& st = g_brakeAxis[alias];
+         st.released = false;
+-        st.blockUntil = ::GetTickCount() + kBrakeHoldBlockMs;                   // the G05 group release / a stale SVON sample must not undo it
++        st.blocked = true; st.blockSince = ::GetTickCount();                   // the G05 group release / a stale SVON sample must not undo it
+         note = std::string("brake ") + SW[sw].Name.c_str() + " OFF (held) before servo off" + (was ? " + 100 ms" : " (it was already held)");
+         BrakeLog(alias + ": " + note);
+         return was;
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 7b44b8d..b628000 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -8148,7 +8148,7 @@ std::string OpAll(const OpFields& f)
+     return s;
+ }
+ 
+-void W906_OpSrNote(const char* s) { OpLine("SREC", s ? std::string(s) : std::string()); }   //AI(W906-SR-HANG) 20260929: State Record background worker steps (cStateRecord.cpp g_W906StateRecordNote)  void W906_OpBrakeNote(const char* s) { OpLine("BRAKE", s ? std::string(s) : std::string()); }   //AI(W906-BRAKE-AXIS) 20260929: per-axis brake release / hold (WebMotorAccessLive.cpp g_W906BrakeNote)
++void W906_OpSrNote(const char* s) { OpLine("SREC", s ? std::string(s) : std::string()); }  void W906_OpBrakeNote(const char* s) { OpLine("BRAKE", s ? std::string(s) : std::string()); }   //AI(W906-SR-HANG) 20260929: State Record background worker steps (cStateRecord.cpp g_W906StateRecordNote); AI(W906-BRAKE-AXIS) 20260929: per-axis brake release / hold (WebMotorAccessLive.cpp g_W906BrakeNote) -- 2nd fix: it sat behind this comment
+ 
+ std::string OpDiff(const OpFields& was, const OpFields& now)
+ {
+@@ -8187,7 +8187,7 @@ void W906_OpLogInit(int port)
+                   (int)(W906_WEB_TOKEN_ENFORCE != 0));
+     OpLine("START", std::string(head) + built + "  " + exe);
+     webbridge::g_W906OpLogHook = &W906_OpHook;
+-    { extern void (*g_W906StateRecordNote)(const char*); g_W906StateRecordNote = &W906_OpSrNote; }   //AI(W906-SR-HANG) 20260929  { extern void (*g_W906BrakeNote)(const char*); g_W906BrakeNote = &W906_OpBrakeNote; }   //AI(W906-BRAKE-AXIS) 20260929
++    { extern void (*g_W906StateRecordNote)(const char*); g_W906StateRecordNote = &W906_OpSrNote; }  { extern void (*g_W906BrakeNote)(const char*); g_W906BrakeNote = &W906_OpBrakeNote; }   //AI(W906-SR-HANG) 20260929; AI(W906-BRAKE-AXIS) 20260929 (2nd fix: the registration sat behind this comment)
+     std::printf("oplog: %s\\oplog_<yyyymmdd>.txt\n", g_opDir.c_str());
+ }
+ 
+-- 
+2.55.0.windows.5
+

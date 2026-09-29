@@ -1,0 +1,391 @@
+From 97edbd6251f941e3a662dafb08bb75bdf3fd3b10 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 21:29:27 +0800
+Subject: [PATCH] BOOTSPEED-2: the three boot hot spots the sampler found
+ (write-through ini + production-record titles)
+
+Boot samples 20260929 (bootsample_..._16644 / _12284): 68-98 s before the op-log START line; >70 % in
+ (1) W906_SecurityJamBoot, 30-46 s: D:\HT9045\Error\English\ is missing on this machine, so JAM0000.dat can never be
+     created and golden's "build it once" loop runs every boot: ~210,000 failed opens (on-access scanner 0.1-0.35 ms
+     each) + a never-read in-memory mirror growing to ~23,000 keys;
+ (2) TMyProductionRecord ctor x 37,800 (InitialMotorParameter), 13-21 s: five all-literal titles rebuilt every time;
+ (3) WriteLastDataFile x 4, 6-14 s: ~290 whole-file rewrites of config.ini each, with the bytes already on disk.
+
+vclcompat/IniFiles.cpp (write-through TIniFile only; TMemIniFile unchanged):
+ - W906_IniProbe: GetFileAttributesA first; only FILE_NOT_FOUND / PATH_NOT_FOUND skip an open that would fail anyway
+   (a missing directory also skips the "wb" create that cannot succeed). Everything else opens as before.
+ - WriteString no longer mirrors into store_ when writing through (store_ is read only by the Mem variant).
+ - identical result bytes -> W906_IniTouchSame stamps LastWriteTime (what kernel32 does, measured) instead of
+   truncate + rewrite; declines for any attribute other than plain ARCHIVE.
+ - W906_IniApplyFast = W906IniApply's bytes in one pass; the old engine kept as W906_Win32ProfileApplyRef.
+Public/MyProductionRecord.cpp: the five titles are function-local statics, copied (same bytes).
+
+Verified (scratch builds only): IniFiles 50/50, IniFiles_Win32Diff 3,027 cases vs kernel32 0 mismatches,
+IniFiles_Win32ReadDiff PASS, old-vs-new 404,970 cases 0 differences (re-run 21:3x), 9-case behaviour table identical.
+Known residual: a same-value write into a file another process holds open without write sharing now moves its
+LastWriteTime (the old path failed to open it); contents identical either way.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ Public/MyProductionRecord.cpp |  20 +--
+ vclcompat/IniFiles.cpp        | 222 ++++++++++++++++++++++++++++++++--
+ 2 files changed, 223 insertions(+), 19 deletions(-)
+
+diff --git a/Public/MyProductionRecord.cpp b/Public/MyProductionRecord.cpp
+index 29c3ae9..196d31d 100644
+--- a/Public/MyProductionRecord.cpp
++++ b/Public/MyProductionRecord.cpp
+@@ -141,7 +141,7 @@ TMyProductionRecord::TMyProductionRecord()
+     }
+     InitialRecord();
+ 
+-    asDataTitleGreatek=AnsiString("Schedule name, ")                 +   //eScheduleName         =0         //Sam 20200707 : ProductionRecord for Greatek
++    static const AnsiString W906_kTitleGreatek=AnsiString("Schedule name, ") +   //eScheduleName =0 //Sam 20200707 : ProductionRecord for Greatek   //AI(W906-BOOTSPEED-2) 20260929: the five titles below are all-literal, so each is built ONCE (function-local static) and copied -- same bytes; InitialMotorParameter constructs 18 x 2100 = 37,800 records at boot and the chained operator+ (~150 temporaries per record) was 13-22 s of it (boot samples 20260929)
+                        AnsiString("Start time, ")                    +   //eStartTime            =1
+                        AnsiString("Input tray, ")                    +   //eLoadNum              =2
+                        AnsiString("Tray Form, ")                     +   //eTrayForm             =41     //Sam 20210907 : Add record
+@@ -183,11 +183,11 @@ TMyProductionRecord::TMyProductionRecord()
+                        AnsiString("EOT time stamp,")                 +   //eEOTTime              =29
+                        AnsiString("Out Arm X pitch Pos, ")           + //eUnloadXpPos            =38  //JerryYang 20210119 : add x,y pitch位置
+                        AnsiString("Out Arm X pitch2 Pos, ")          + //eUnloadXp2Pos           =39
+-                       AnsiString("Out Arm Y pitch Pos, ")           ; //eUnloadYpPos            =40
++                       AnsiString("Out Arm Y pitch Pos, ")           ; asDataTitleGreatek=W906_kTitleGreatek; //eUnloadYpPos            =40   //AI(W906-BOOTSPEED-2) 20260929
+ 
+     //Ifor 20180510 : add 時間資訊
+     //==>
+-    asDataTitle=AnsiString("Schedule name, ")   +       //eScheduleName   =0
++    static const AnsiString W906_kTitle=AnsiString("Schedule name, ")   +       //eScheduleName   =0   //AI(W906-BOOTSPEED-2) 20260929: built once, see above
+                 AnsiString("Start time, ")      +       //eStartTime      =1
+                 AnsiString("Input tray, ")      +       //eLoadNum        =2
+                 AnsiString("In X, ")            +       //eLoadX          =3
+@@ -257,24 +257,24 @@ TMyProductionRecord::TMyProductionRecord()
+                 AnsiString("OutArm Pick From Shuttle Vacuum, ") +       //eOSHTPickVacuum           =67     //RogerYang 20251225 : 補上
+                 AnsiString("Index Pick Vacuum, ")               +       //eIndexPickVacuum          =68     //RogerYang 20251225 : 補上
+                 AnsiString("In Arm X Pos, ")                    +       //eLoadXPos                 =69     //Sam 20250211 : Add Load Pos
+-                AnsiString("In Arm Y Pos, ")                    ;       //eLoadYPos                 =70
++                AnsiString("In Arm Y Pos, ")                    ;       asDataTitle=W906_kTitle; //eLoadYPos                 =70   //AI(W906-BOOTSPEED-2) 20260929
+     //<==
+     //Ifor 20180510 : add 時間資訊
+ 
+     //Sam 20211223 : 每顆 IC 測試完成後要記錄測試當時的 Ground & ESD 數值。
+     //==>
+-    asDataTitle_SG=AnsiString("EOT time stamp, ")   +       //eEOTTime     =29
++    static const AnsiString W906_kTitleSG=AnsiString("EOT time stamp, ")   +       //eEOTTime     =29   //AI(W906-BOOTSPEED-2) 20260929: built once, see above
+                    AnsiString("2DCode, ")           +       //e2DCode      =9
+                    AnsiString("Test category, ")    +       //eTestCate    =16    //測試 BIN碼
+                    AnsiString("Test result, ")      +       //Pass=P , Fail=F
+                    AnsiString("Ground, ")           +       //eGround      =45
+-                   AnsiString("ESD ")               ;       //eESD         =46
++                   AnsiString("ESD ")               ;       asDataTitle_SG=W906_kTitleSG; //eESD         =46   //AI(W906-BOOTSPEED-2) 20260929
+     //<==
+     //Sam 20211223 : 每顆 IC 測試完成後要記錄測試當時的 Ground & ESD 數值。
+ 
+     //Sam 20230616 : Add Auto Clean Record
+     //==>
+-    asDataTitleCleanPad=AnsiString("Pick clean pad data, ")              +       //ePickCleanPadData         =48
++    static const AnsiString W906_kTitleCleanPad=AnsiString("Pick clean pad data, ")              +       //ePickCleanPadData         =48   //AI(W906-BOOTSPEED-2) 20260929: built once, see above
+                         AnsiString("Pick clean pad time, ")              +       //ePickCleanPadTime         =49
+                         AnsiString("Pick clean pad suck, ")              +       //ePickCleanPadSuck         =50
+                         AnsiString("Pick clean pad row, ")               +       //ePickCleanPadRow          =51
+@@ -291,12 +291,12 @@ TMyProductionRecord::TMyProductionRecord()
+                         AnsiString("Place clean pad suck, ")             +       //ePlaceCleanPadSuck        =62
+                         AnsiString("Place clean pad row, ")              +       //ePlaceCleanPadRow         =63
+                         AnsiString("Place clean pad col, ")              +       //ePlaceCleanPadCol         =64
+-                        AnsiString("Error log ")                         ;       //eErrorCode            =25
++                        AnsiString("Error log ")                         ;       asDataTitleCleanPad=W906_kTitleCleanPad; //eErrorCode            =25   //AI(W906-BOOTSPEED-2) 20260929
+     //<==
+     //Sam 20230616 : Add Auto Clean Record
+ 
+     //RogerYang 20251208 : JCET 2D FT1組名稱/FT2測試碼
+-    asJCET2DIDList= AnsiString("2DID, ")                            +           //e2DCode           =9
++    static const AnsiString W906_kJCET2DIDList= AnsiString("2DID, ")                            +           //e2DCode           =9   //AI(W906-BOOTSPEED-2) 20260929: built once, see above
+                     AnsiString("SOFTBIN, ")                         +           //eSBin             =44
+                     AnsiString("HARDBIN, ")                         +           //eTestCate         =16
+                     AnsiString("SubLOTID, ")                        +
+@@ -310,7 +310,7 @@ TMyProductionRecord::TMyProductionRecord()
+                     AnsiString("Out X, ")                           +           //eUnloadX          =19
+                     AnsiString("Out Y, ")                           +           //eUnloadY          =20
+                     AnsiString("iWhichAuto, ")                      +           //eWhichAuto        =17
+-                    AnsiString("PartID, ")                          ;
++                    AnsiString("PartID, ")                          ;   asJCET2DIDList=W906_kJCET2DIDList;   //AI(W906-BOOTSPEED-2) 20260929
+ }
+ //------------------------------------------------------------------------------
+ void TMyProductionRecord::DeleteProductionRecord()
+diff --git a/vclcompat/IniFiles.cpp b/vclcompat/IniFiles.cpp
+index d0a7c56..65bd10e 100644
+--- a/vclcompat/IniFiles.cpp
++++ b/vclcompat/IniFiles.cpp
+@@ -260,7 +260,7 @@ TIniFile::TIniFile(const AnsiString& fileName)
+     : FileName(fileName), writeThrough_(true) {
+     // Win32 TIniFile binds lazily, and so does this one: NOTHING is loaded here.   // AI(W906-A5-INIREAD) 20260924: was an eager store_.LoadFromFile(fileName) -- the image every read used to answer from
+     // Every Read*/ValueExists/SectionExists/ReadSection(s) re-reads the file (IniFiles.cpp EOF); a missing file => defaults.
+-    // (store_ is read only by the TMemIniFile variant; WriteString still mirrors into it, which is harmless.)
++    // (store_ is read only by the TMemIniFile variant; WriteString still mirrors into it, which is harmless.)   //AI(W906-BOOTSPEED-2) 20260929: no longer true -- harmless for results but O(keys) per write; the write-through TIniFile now leaves store_ empty (WriteString)
+ }
+ 
+ // Tag ctor: TMemIniFile path -- eager full load, but NO write-through.
+@@ -335,7 +335,7 @@ TDateTime TIniFile::ReadDateTime(const AnsiString& section, const AnsiString& id
+ 
+ void TIniFile::WriteString(const AnsiString& section, const AnsiString& ident,
+                            const AnsiString& value) {
+-    store_.WriteRaw(section, ident, value);
++    if (!writeThrough_) store_.WriteRaw(section, ident, value);   //AI(W906-BOOTSPEED-2) 20260929: the in-memory mirror is only READ by the TMemIniFile variant (every write-through read/ValueExists/ReadSection goes to disk, flush() runs only when !writeThrough_) -- mirroring here grew a never-read copy of every key and made each write O(keys) (boot sample: TIniStore::iequal < WriteRaw ~10 of 46 s in W906_SecurityJamBoot, whose one INIFile collects ~23,000 keys of JAM0000.dat)
+     if (writeThrough_) { void W906_Win32WriteProfileString(const AnsiString&, const AnsiString&, const AnsiString&, const AnsiString&); W906_Win32WriteProfileString(FileName, section, ident, value); }   // AI(W906-T4-INIFMT2) 20260924: in-place edit of the CURRENT disk file like Win32 WritePrivateProfileStringA (was flush() = rebuild the whole file from the image loaded at construction) -- see EOF
+ }
+ 
+@@ -403,7 +403,7 @@ TMemIniFile::~TMemIniFile() {
+ // =============================================================================
+ #include <string>
+ #include <vector>
+-namespace vclcompat {
++namespace vclcompat { int W906_IniProbe(const AnsiString& file); bool W906_IniTouchSame(const AnsiString& file); std::string W906_IniApplyFast(const std::string& buf, const std::string& secIn, const std::string& keyIn, const std::string& val);   //AI(W906-BOOTSPEED-2) 20260929: boot-speed helpers, defined at EOF
+ namespace {
+ struct W906IniLine { std::string c, t; };
+ bool W906IniWs(char ch) { return ch == ' ' || ch == '\t'; }
+@@ -506,21 +506,21 @@ std::string W906IniApply(std::string buf, const std::string& secIn, const std::s
+ std::string W906_Win32ProfileApply(const std::string& buf, const std::string& section, const std::string& key,
+                                    const std::string& value)
+ {
+-    return W906IniApply(buf, section, key, value);
++    return W906_IniApplyFast(buf, section, key, value);   //AI(W906-BOOTSPEED-2) 20260929: was W906IniApply -- same bytes, one pass, no per-line strings (EOF); the old engine stays as W906_Win32ProfileApplyRef for the differential test
+ }
+ 
+ void W906_Win32WriteProfileString(const AnsiString& file, const AnsiString& section, const AnsiString& ident,
+                                   const AnsiString& value)
+ {
+-    std::string buf;
+-    if (std::FILE* fp = std::fopen(file.c_str(), "rb")) {
++    std::string buf; const int probe = W906_IniProbe(file); bool had = false;   //AI(W906-BOOTSPEED-2) 20260929: 0 = open as before, 1 = the file is not there, 2 = its directory is not there (see EOF)
++    if (std::FILE* fp = (probe == 0 ? std::fopen(file.c_str(), "rb") : 0)) { had = true;   //AI(W906-BOOTSPEED-2) 20260929: a file the OS reports missing is not opened -- that open fails the same way (was: fopen on a missing path)
+         char tmp[65536];
+         size_t n;
+         while ((n = std::fread(tmp, 1, sizeof tmp, fp)) > 0) buf.append(tmp, n);
+         std::fclose(fp);
+     }
+-    const std::string out = W906IniApply(buf, section.c_str(), ident.c_str(), value.c_str());
+-    if (std::FILE* fp = std::fopen(file.c_str(), "wb")) {
++    const std::string out = W906_IniApplyFast(buf, section.c_str(), ident.c_str(), value.c_str());   if (had && out == buf && W906_IniTouchSame(file)) return;   //AI(W906-BOOTSPEED-2) 20260929: bytes on disk already == the result -> stamp LastWriteTime (what kernel32 does, measured) instead of truncate + rewrite; W906_IniApplyFast = W906IniApply's bytes in one pass (both at EOF)
++    if (std::FILE* fp = (probe == 2 ? 0 : std::fopen(file.c_str(), "wb"))) {   //AI(W906-BOOTSPEED-2) 20260929: no directory -> "wb" cannot create the file either (was: fopen on a missing directory)
+         std::fwrite(out.data(), 1, out.size(), fp);
+         std::fclose(fp);
+     }
+@@ -725,7 +725,7 @@ void W906RdSplitNames(const std::string& raw, std::vector<std::string>* out)
+ // (WebBridgeRecipeDoc.cpp MoveFileExA over the target) cannot fail because a read happens to hold the file open.
+ std::string W906RdSlurp(const AnsiString& file)
+ {
+-    std::string buf;
++    std::string buf; if (W906_IniProbe(file) != 0) return buf;   //AI(W906-BOOTSPEED-2) 20260929: the OS reports the file (or its directory) missing -> the open below would fail the same way; skip its ~100-170 us under the on-access scanner (see EOF)
+ #ifdef _WIN32
+     HANDLE h = ::CreateFileA(file.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+@@ -815,3 +815,207 @@ bool W906_DiskIniSectionExists(const AnsiString& file, const AnsiString& section
+     return !names.empty();
+ }
+ } // namespace vclcompat
++
++// =============================================================================
++//  AI(W906-BOOTSPEED-2) 20260929: two boot-speed helpers for the write-through TIniFile above.
++//
++//  Measured on this machine (on-access virus scanner running; boot samples bootsample_20260929_203751_16644 and
++//  _204608_12284, micro benchmarks on scratch copies):
++//    * opening a path that does not exist costs 96-168 us (CreateFileA read, fopen "rb", fopen "wb"); asking
++//      GetFileAttributesA about the same path costs ~6 us. W906_SecurityJamBoot (cSecurity.cpp) makes ~65 such
++//      failed opens per alarm code x 3,278 codes on every boot while D:\HT9045\Error\English\ does not exist
++//      (JAM0000.dat can then never be created, so golden's "build it once" loop runs every time) = most of the
++//      32-46 s that stretch took.
++//    * re-writing an ini with IDENTICAL bytes (fopen "wb" = truncate + write) costs 4-27 ms, because the scanner
++//      re-scans a file after every handle that had write access; WriteLastDataFile (cprod.cpp) makes ~290 of them on
++//      config.ini per call and runs 4 times at boot. kernel32 WritePrivateProfileStringA with an unchanged value
++//      leaves the bytes alone but DOES move LastWriteTime (measured), so the equivalent end state is "same bytes,
++//      LastWriteTime = now": stamping the time through a FILE_WRITE_ATTRIBUTES handle costs ~0.2 ms.
++//  Neither helper changes a byte of any file, the value any read returns, or the order of the writes.
++// =============================================================================
++namespace vclcompat {
++// 0 = open as before; 1 = the file does not exist (its directory does); 2 = the directory does not exist.
++// Only the two "not found" answers short-circuit. Every other outcome (exists, access denied, bad name, ...) goes
++// on to the original open, which then succeeds or fails exactly as it did before.
++int W906_IniProbe(const AnsiString& file)
++{
++#ifdef _WIN32
++    if (::GetFileAttributesA(file.c_str()) != INVALID_FILE_ATTRIBUTES) return 0;
++    const DWORD e = ::GetLastError();
++    if (e == ERROR_FILE_NOT_FOUND) return 1;
++    if (e == ERROR_PATH_NOT_FOUND) return 2;
++#else
++    (void)file;
++#endif
++    return 0;
++}
++// Called only when the file already holds exactly the bytes W906_Win32WriteProfileString would write. Sets
++// LastWriteTime to now -- what the rewrite (and kernel32) leave behind -- without writing the data again.
++// false -> the caller rewrites as before. Declines whenever the rewrite could end differently: any attribute other
++// than ARCHIVE (fopen "wb" = CREATE_ALWAYS + FILE_ATTRIBUTE_NORMAL fails on read-only / hidden / system files and
++// resets the others), or ARCHIVE not set (a rewrite sets it).
++bool W906_IniTouchSame(const AnsiString& file)
++{
++#ifdef _WIN32
++    if (::GetFileAttributesA(file.c_str()) != FILE_ATTRIBUTE_ARCHIVE) return false;
++    HANDLE h = ::CreateFileA(file.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
++                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
++    if (h == INVALID_HANDLE_VALUE) return false;
++    FILETIME now;
++    ::GetSystemTimeAsFileTime(&now);
++    const BOOL ok = ::SetFileTime(h, NULL, NULL, &now);
++    ::CloseHandle(h);
++    return ok != FALSE;
++#else
++    (void)file;
++    return false;
++#endif
++}
++} // namespace vclcompat
++
++// =============================================================================
++//  AI(W906-BOOTSPEED-2) 20260929: W906_IniApplyFast -- the same function as W906IniApply (AI(W906-T4-INIFMT2), the
++//  measured kernel32 WritePrivateProfileStringA rules above), without the per-line std::string / std::vector work.
++//  W906IniApply splits the whole file into a vector of line strings TWICE (W906IniDropWsTail + W906IniSplit), then
++//  trims / lower-cases a copy of every line it looks at and joins everything back: 4.0-4.4 ms of CPU per write on the
++//  33 KB config.ini at -O0 (more under the debugger's heap), and WriteLastDataFile alone makes ~290 writes per call,
++//  4 calls per boot. This version walks the buffer once with offsets and builds only the output string.
++//  Line by line it answers the same questions with the same definitions:
++//    * lines end at CRLF, a bare CR or a bare LF (W906IniSplit); the last one may have no terminator;
++//    * a trailing whitespace-only (' ' / '\t') line WITHOUT a terminator is dropped first (W906IniDropWsTail);
++//    * header = trimmed text starts with '['; name = up to the first ']' of the trimmed text (or its end), trimmed,
++//      compared A-Z-case-insensitively (W906IniSection + W906IniLower); the first matching header wins;
++//    * key line = the first non-blank char is not ';' and the text has '='; key = text before the FIRST '=', trimmed,
++//      same case folding (W906IniKey); the first matching key inside the section wins;
++//    * the three results (replace the value / append at end of file / insert after the last key line) are built
++//      exactly as W906IniApply builds them, including every W906IniEnsureNl.
++//  Verified 20260929: old-vs-new on 400,000 random buffers + ~5,000 writes into copies of real machine files (scratch
++//  differential, 0 differences) and the resident ctest IniFiles_Win32Diff (3,027 cases, TIniFile::WriteString ->
++//  W906_Win32WriteProfileString -> this function, vs the real kernel32: 0 mismatches). CPU per write on the 33 KB
++//  config.ini: 3.9 ms -> 0.09 ms (16.7 ms -> 0.15 ms under gdb's debug heap).
++// =============================================================================
++namespace vclcompat {
++namespace {
++inline bool W906FsWs(char c) { return c == ' ' || c == '\t'; }                 // == W906IniWs
++struct W906FsLine { size_t s, n, e; };                                         // text [s, s+n); the line incl. its terminator ends at e
++bool W906FsNext(const char* p, size_t len, size_t* pos, W906FsLine* ln)       // == one step of W906IniSplit
++{
++    const size_t i = *pos;
++    if (i >= len) return false;
++    size_t j = i;
++    while (j < len && p[j] != '\r' && p[j] != '\n') ++j;
++    ln->s = i;
++    ln->n = j - i;
++    if (j >= len) ln->e = len;
++    else if (p[j] == '\r' && j + 1 < len && p[j + 1] == '\n') ln->e = j + 2;
++    else ln->e = j + 1;
++    *pos = ln->e;
++    return true;
++}
++void W906FsTrim(const char* p, size_t* b, size_t* e)                          // == W906IniTrim on [b, e)
++{
++    while (*b < *e && W906FsWs(p[*b])) ++*b;
++    while (*e > *b && W906FsWs(p[*e - 1])) --*e;
++}
++bool W906FsSame(const char* p, size_t b, size_t e, const std::string& lower) // W906IniLower(p[b, e)) == lower
++{
++    if (e - b != lower.size()) return false;
++    for (size_t i = 0; i < lower.size(); ++i) {
++        char c = p[b + i];
++        if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
++        if (c != lower[i]) return false;
++    }
++    return true;
++}
++bool W906FsHeader(const char* p, const W906FsLine& ln, size_t* nb, size_t* ne) // == W906IniSection (name span, not folded)
++{
++    size_t b = ln.s, e = ln.s + ln.n;
++    W906FsTrim(p, &b, &e);
++    if (b >= e || p[b] != '[') return false;
++    size_t r = b + 1;
++    while (r < e && p[r] != ']') ++r;
++    size_t x = b + 1, y = r;
++    W906FsTrim(p, &x, &y);
++    *nb = x;
++    *ne = y;
++    return true;
++}
++bool W906FsKey(const char* p, const W906FsLine& ln, size_t* kb, size_t* ke, size_t* eq) // == W906IniKey (key span + first '=')
++{
++    const size_t e = ln.s + ln.n;
++    size_t b = ln.s;
++    while (b < e && W906FsWs(p[b])) ++b;
++    if (b < e && p[b] == ';') return false;
++    size_t k = ln.s;
++    while (k < e && p[k] != '=') ++k;
++    if (k >= e) return false;
++    size_t x = ln.s, y = k;
++    W906FsTrim(p, &x, &y);
++    *kb = x;
++    *ke = y;
++    *eq = k;
++    return true;
++}
++} // namespace
++
++std::string W906_IniApplyFast(const std::string& bufIn, const std::string& secIn, const std::string& keyIn, const std::string& val)
++{
++    const char* const p = bufIn.data();
++    size_t len = bufIn.size();
++    if (len > 0 && p[len - 1] != '\r' && p[len - 1] != '\n') {                // W906IniDropWsTail
++        size_t st = len;
++        while (st > 0 && p[st - 1] != '\r' && p[st - 1] != '\n') --st;
++        size_t i = st;
++        while (i < len && W906FsWs(p[i])) ++i;
++        if (i == len) len = st;
++    }
++    const std::string osec = W906IniTrim(secIn), okey = W906IniTrim(keyIn);
++    const std::string lsec = W906IniLower(osec), lkey = W906IniLower(okey);
++    size_t pos = 0, nb = 0, ne = 0, kb = 0, ke = 0, eq = 0;
++    W906FsLine ln = {0, 0, 0}, sec = {0, 0, 0};
++    bool found = false;
++    while (W906FsNext(p, len, &pos, &ln))
++        if (W906FsHeader(p, ln, &nb, &ne) && W906FsSame(p, nb, ne, lsec)) { sec = ln; found = true; break; }
++    if (!found)
++        return W906IniEnsureNl(W906IniEnsureNl(std::string(p, len)) + "[" + osec + "]\r\n" + okey + "=" + val + "\r\n");
++    W906FsLine lastKey = sec, last = sec;
++    bool nextHeader = false;
++    while (W906FsNext(p, len, &pos, &ln)) {
++        if (W906FsHeader(p, ln, &nb, &ne)) { nextHeader = true; break; }
++        last = ln;
++        if (W906FsKey(p, ln, &kb, &ke, &eq)) {
++            if (W906FsSame(p, kb, ke, lkey)) {                                  // modify: keep up to and including '=', then the value
++                std::string out;
++                out.reserve(len + val.size() + 2);
++                out.append(p, eq + 1);
++                out += val;
++                out.append(p + ln.s + ln.n, len - (ln.s + ln.n));
++                return W906IniEnsureNl(out);
++            }
++            lastKey = ln;
++        }
++    }
++    if (!nextHeader) {                                                          // section is the last one: blank last line -> append at EOF
++        size_t b = last.s, e = last.s + last.n;
++        W906FsTrim(p, &b, &e);
++        if (b == e && lastKey.s != last.s)
++            return W906IniEnsureNl(W906IniEnsureNl(std::string(p, len)) + okey + "=" + val + "\r\n");
++    }
++    std::string out;                                                            // insert after the last key line (or the header)
++    out.reserve(len + okey.size() + val.size() + 5);
++    out.append(p, lastKey.e);
++    if (lastKey.e == lastKey.s + lastKey.n) out += "\r\n";
++    out += okey;
++    out += '=';
++    out += val;
++    out += "\r\n";
++    out.append(p + lastKey.e, len - lastKey.e);
++    return W906IniEnsureNl(out);
++}
++// The engine before AI(W906-BOOTSPEED-2), kept byte-for-byte as the reference the differential test compares with.
++std::string W906_Win32ProfileApplyRef(const std::string& buf, const std::string& section, const std::string& key,
++                                      const std::string& value)
++{
++    return W906IniApply(buf, section, key, value);
++}
++} // namespace vclcompat
+-- 
+2.55.0.windows.5
+

@@ -70,5 +70,38 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼 0 筆；帳密字樣與內網 IP 只出現在 0017／0020 裡筆電翻譯的 golden 預設值（GitHub 上的更新包本來就有），
   機台自己寫的 0018／0019／0021、web 0010 是 0 筆。
   沒有放：MachineType.h 裡 EastSun 0928 手動註解掉的 SOFT_SIMULTE（沒 commit，出貨組態本來就用 W906_NO_SOFT_SIMULTE 關掉）。
+===== 20260929 追加（cpp 0022-0034、web 0012-0015）=====
+  ⓘ 機台樹同一天另有 47 顆 HTDESIGNER-*（tools/vscode-htdesigner，VS Code 設計器外掛，另一個工作階段；使用者說那些先不推）
+    沒有放進來；它們只動 tools/vscode-htdesigner/，下面的 patch 不依賴它們，照編號 git am 即可。
+  cpp 0022 a179025 IO-NOGUARD + MT-ENABLE + SR-HANG + OPLOG-3 —— IO 頁一律不卡控（EastSun「IO畫面一律不要卡控，讓我測試」，
+                    JsonBridge/IoBtnPanelClick.cpp W906_IO_PAGE_NO_GUARDS 1，回覆帶 guardsBypassed）；Motor Test 馬達格只列
+                    Mot_Table Enable=1；State Record 的 1.bat／7z 改成 job 物件＋逾時（原本 system() 卡死整個程式）。
+  cpp 0023-0024 68f0a21 / 4bbcec8 BOOTWAIT —— F5 先開等待畫面（web/boot_wait.html），伺服器起來自動切 HMI。
+  cpp 0025 bff7e58 HMI-KEEP —— wb_serve 跑著時 HMI 被關掉 5 秒就自動再開（預設 http 瀏覽器，W906_HMI_URL）。
+  cpp 0026 e90deb6 HOME-VENDOR —— DS402 歸零先寫卡片的 PAR_AxHomeVel*（研華 Home 範例、golden SetHomeSpeed）。
+                    ⚠ 20260929 查到歸零慢的真因是單位：驅動器用 2702h（64/1）解讀 6099h，卡片速度是 2701h 單位（MTrayX 慢 374 倍）；
+                    EastSun 要先用 Utility 比對，換算還沒做。
+  cpp 0027 1680ba1 MT-AXISLOCK + MT-ALMRST + HMI-KEEP-2 —— EastSun「每個軸都是獨立可控的」：Motor Test 的鎖只看選取的那一軸
+                    （ERROR_STOP 不算在動），HOME／LoopMove／伺服鈕只擋同一軸；新 action resetAlarm（Acm_AxResetError 選取軸）；
+                    阻塞框等回答時 HMI 看守也跑。test_web_motor_access 545/0。
+  cpp 0028 2ea7c90 + 0030 f6f0914 BRAKE-AXIS —— EastSun「SERVO ON 就必須要先激磁 0.5秒後 觸發io的煞車」：每一軸自己的煞車輸出，
+                    SVON 滿 0.5 s 才放（沒 EMG、SnMotorPower 亮）；Servo Off 先鎖煞車、100 ms、再關激磁；驅動器自己掉 SVON 立刻鎖。
+                    對應表（由名稱推，EastSun 看過沒反對）：MInArmZA/SwInArmZBreaker、MOutArmZA/SwOutArmZBreaker、MTestZ1/SwFMotorBreaker、
+                    MLoaderZ/SwCassetteLDMotBreaker、MAuto1Z/Auto1、MAuto2Z/Auto2。⚠ IO_Table 另有 SwCassetteEmptyMotBreaker、
+                    SwCassetteAuto3MotBreaker，但 cmydef.cpp 沒有這兩個 SW[]（golden V906 只到 366）→ MEmptyZ／MAuto3Z 的煞車送不出去。
+  cpp 0029 c077e63 BOOTSPEED-1 —— 開機取樣器（診斷，只印訊息；W906_BOOTSAMPLE_SEC=0 關）。
+  cpp 0031 5761489 BOOTSPEED-2 —— F5 不接 gdb（noDebug）、gdb 設定加 _NO_DEBUG_HEAP=1、建置 -j 6。
+  cpp 0032 97edbd6 BOOTSPEED-2 —— 開機熱點：寫穿式 TIniFile（不存在的檔先問 OS、不再存記憶體副本、同內容只更新時間、一次掃描的
+                    寫入演算法）＋生產紀錄標題只組一次。舊寫入演算法保留為 W906_Win32ProfileApplyRef；新舊 404,970 組 0 差異，
+                    IniFiles_Win32Diff 3,027 組對 kernel32 0 不符。實測開機到 START：68～98 s → 約 10 s（含不接 gdb）。
+                    ⚠ 這台缺 D:\HT9045\Error\English\（JAM0000.dat），golden 的建檔迴圈每次開機都跑；alarm 說明與 Security Jam 設定也存不下來。
+  cpp 0033 62e2f37 BOOTSPEED-3 —— 另一條 -O2 建置線（build_integ_ship_x86_o2，保留 -O0 語意的旗標）與 F5 選項；機台上還沒驗證。
+  cpp 0034 16ab6a6 STOPBTN —— 不接除錯器時紅色停止鈕／工作「關閉程式」走主畫面 Exit 的正常關站（命名事件，wb_serve 檔尾）。
+  web 0012-0013 7090832 / ab0b960 BOOTWAIT (web) —— boot_wait.html（就是 background.html 的開機畫面）。
+  web 0014 5adeac8 MT-AXISLOCK + MT-ALMRST (web) —— 鎖看選取軸、Alarm Reset 鈕、motor-access.json 49 條。
+  web 0015 fd2ec54 MT-RESEL (web) —— Motor Test 視窗重新打開時自動重選上一軸（golden FormShow 把 ActiveIndex 清成 -1，畫面就不更新）。
+  另：EastSun 20260929 改了 Mot_Table 的 BoardID／Port（BoardID＝1203 連線 ID＝Acm_AxOpenbyID 的站號，Port＝站內第幾軸）；
+    程式本來就是這樣對應，沒改程式。機台設定檔照舊沒有放。
+  掃描：權杖／私鑰／7z 密碼 0 筆。沒有放：MachineType.h 的 SOFT_SIMULTE（EastSun 手動、未 commit）。
 
 MD5 清單在 MANIFEST_MD5.tsv。

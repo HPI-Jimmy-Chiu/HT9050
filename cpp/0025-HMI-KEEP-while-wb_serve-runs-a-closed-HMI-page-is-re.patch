@@ -1,0 +1,176 @@
+From bff7e584a9edb4fc444083b63965e7a5bb6c6aac Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 19:14:21 +0800
+Subject: [PATCH] HMI-KEEP: while wb_serve runs, a closed HMI page is reopened
+ (5 s without a web page -> open it again)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260929: "你要一直持續偵測 如果html 被關掉 需要再次開啟 除非C++被關閉".
+- tools/wb_serve.cpp (end of file): W906_HmiKeeperTick, called from the main loop on every pump beat (500 ms, same line as the
+  State Record Timer2 call). "web page present" = W906_PagesPresent() (live WebSocket or an HTTP request in the last 3 s, the
+  MODAL-WAKE definition). 20 s grace after start (the F5 wait page switches to the HMI in that time), then 5 s without a page ->
+  open it; no second launch within 30 s; after 3 launches that never connected, every 2 min; any connected page resets it all.
+  URL = env W906_HMI_URL (both IOWEB F5 configurations: background.html?mode=debug&machine=HT9050), else ModalWakeUrl (release
+  screen). Browser = the default http browser's exe from the registry (the .html association starts nothing on this machine),
+  else ModalWakeLaunchEdge. Off with W906_NO_BROWSER_WAKE / --seconds N (g_modalWakeOff, as MODAL-WAKE). Stops with wb_serve.
+  Each launch is printed and written to the op log as an HMI line.
+- .vscode/launch.json: W906_HMI_URL in both IOWEB configurations.
+Syntax-checked (-fsyntax-only, the ship flags). Not built yet: wb_serve was running; the next F5 pre-launch build compiles it.
+Not verified on the machine yet (needs EastSun to close the page with wb_serve running).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ .vscode/launch.json |   4 +-
+ tools/wb_serve.cpp  | 101 +++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 102 insertions(+), 3 deletions(-)
+
+diff --git a/.vscode/launch.json b/.vscode/launch.json
+index b9e83e1..5a38950 100644
+--- a/.vscode/launch.json
++++ b/.vscode/launch.json
+@@ -118,7 +118,7 @@
+         { "name": "W906_BINCOUNT_PATH",    "value": "${workspaceFolder}\\..\\runcfg\\logs\\BinCount.ini" },
+         { "name": "W906_PWBOOK_PATH",      "value": "${workspaceFolder}\\..\\runcfg\\logs\\pwbook.ini" },
+         { "name": "W906_TEACH_INI_PATH",   "value": "${workspaceFolder}\\..\\runcfg\\system\\teach.ini" },
+-        { "name": "W906_IOTIMING_LOG",     "value": "${workspaceFolder}\\..\\runcfg\\logs\\io_click_timing.csv" }, { "name": "W906_OPLOG_DIR", "value": "${workspaceFolder}\\..\\runcfg\\logs" }
++        { "name": "W906_IOTIMING_LOG",     "value": "${workspaceFolder}\\..\\runcfg\\logs\\io_click_timing.csv" }, { "name": "W906_OPLOG_DIR", "value": "${workspaceFolder}\\..\\runcfg\\logs" }, { "name": "W906_HMI_URL", "value": "http://127.0.0.1:8055/background.html?mode=debug&machine=HT9050" }
+       ],
+       "MIMode": "gdb",
+       "miDebuggerPath": "${env:LOCALAPPDATA}\\Programs\\ht9045-nonoracle-toolchain\\mingw32\\bin\\gdb.exe",
+@@ -156,7 +156,7 @@
+         { "name": "W906_BINCOUNT_PATH",    "value": "${workspaceFolder}\\..\\runcfg\\logs\\BinCount.ini" },
+         { "name": "W906_PWBOOK_PATH",      "value": "${workspaceFolder}\\..\\runcfg\\logs\\pwbook.ini" },
+         { "name": "W906_TEACH_INI_PATH",   "value": "${workspaceFolder}\\..\\runcfg\\system\\teach.ini" },
+-        { "name": "W906_IOTIMING_LOG",     "value": "${workspaceFolder}\\..\\runcfg\\logs\\io_click_timing.csv" }, { "name": "W906_OPLOG_DIR", "value": "${workspaceFolder}\\..\\runcfg\\logs" }
++        { "name": "W906_IOTIMING_LOG",     "value": "${workspaceFolder}\\..\\runcfg\\logs\\io_click_timing.csv" }, { "name": "W906_OPLOG_DIR", "value": "${workspaceFolder}\\..\\runcfg\\logs" }, { "name": "W906_HMI_URL", "value": "http://127.0.0.1:8055/background.html?mode=debug&machine=HT9050" }
+       ],
+       "MIMode": "gdb",
+       "miDebuggerPath": "${env:LOCALAPPDATA}\\Programs\\ht9045-nonoracle-toolchain\\mingw32\\bin\\gdb.exe",
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 3ad6f80..126c7a5 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -4595,7 +4595,7 @@ int main(int argc, char** argv)
+         //  ⓘ rebase 到 bafb25e 之後：WdMark("tick") 放在 if 外面，**每一圈都執行**
+         //    （它只是停擺看門狗的心跳；雙時鐘之後一圈最長 50 ms，比 500 ms 更密，不會誤報）。
+         { extern void W906_IoTiming(int); if (pumpBeat) { W906_IoTiming(1); ht9045::PumpTick(); W906_IoTiming(2); extern void W906_ServiceOutputs(int); W906_ServiceOutputs(0); }  if (pumpBeat) g_apiCacheDirty = true; }   // AI(W906-IOWEB-P6) 20260924: rebuild on the tick thread (covers builds without INSTALL_1203_MONITOR and IO_Table reloads)  // AI(W906-IOWEB-P21) 20260925: W906_IoTiming marks the phase for the click-latency log (JsonBridge/IoBtnPanelClick.cpp)  // AI(W906-IOWEB-P25) 20260925: outputs right after PumpTick, before INI/Poll; the api cache is only MARKED here and rebuilt after the drain
+-        if (pumpBeat) { extern void W906_StateRecordTimer2Pump(); W906_StateRecordTimer2Pump(); }  if (pumpBeat) { extern void W906_MotorAccessTick(bool); W906_MotorAccessTick(server.ControlOwner() != 0); }  // AI(W906-STATEREC) 20260924: golden Timer2Timer 的 State Record 段（main.cpp:21142-21153，本體 cStateRecord.cpp，內部限每秒一次）—— 推 StateRecordImage 的格 1～6，格 6 發延後警報 JAM0316/JAM0317（會像其他警報一樣等瀏覽器回答）。佔用原本的空行，不移動行號
++        if (pumpBeat) { extern void W906_HmiKeeperTick(); W906_HmiKeeperTick(); }  /*AI(W906-HMI-KEEP) 20260929: reopen the HMI page when it is closed (end of file)*/  if (pumpBeat) { extern void W906_StateRecordTimer2Pump(); W906_StateRecordTimer2Pump(); }  if (pumpBeat) { extern void W906_MotorAccessTick(bool); W906_MotorAccessTick(server.ControlOwner() != 0); }  // AI(W906-STATEREC) 20260924: golden Timer2Timer 的 State Record 段（main.cpp:21142-21153，本體 cStateRecord.cpp，內部限每秒一次）—— 推 StateRecordImage 的格 1～6，格 6 發延後警報 JAM0316/JAM0317（會像其他警報一樣等瀏覽器回答）。佔用原本的空行，不移動行號
+ #ifdef WB_PUMP_1203_CONTROL
+         //AI(W906-Q34-5b) 20260923: 把 Pci1203Axis.ini 記下的卡片設定放回去（1203INI-1）
+         //  —— 照翻同事 wb_publish.cpp:806-823。卡片斷電不保留軸設定，所以兩個
+@@ -7983,6 +7983,7 @@ void W906_MainHomeCommand(webbridge::WebBridgeServer& server, const webbridge::W
+ //           QUERY qid N answered / closed = 那一題答掉或放棄了；操作員按的鈕是後面那一行 CMD modal.answer
+ //           （AI(W906-OPLOG) 20260929：EastSun 問「move 沒反應並跳出 Alarm 要如何查修」—— 框的內容之前沒記）
+ //    SREC   State Record 背景工作的每一步（開始、批次逾時、完成／沒壓成 zip、7z 的離開碼）—— AI(W906-SR-HANG) 20260929
++//    HMI    操作畫面被關掉、自動重開的每一次（W906_HmiKeeperTick，檔尾）—— AI(W906-HMI-KEEP) 20260929
+ //  太吵的（sys.ping、ui.windows.put、cfg.resync、*.get 查詢）成功時不記，失敗照記。
+ //  執行緒：CMD 與 socket 回覆在 socket 執行緒；tick 回覆、MOT、PAGE 在 tick 執行緒 —— 共用 g_opLock。
+ //  放在檔尾，上面的行號都不動。
+@@ -8284,3 +8285,101 @@ void W906_OpLogMotorRuntime(const std::string& json)
+     }
+     cJSON_Delete(root);
+ }
++
++// =============================================================================
++//  AI(W906-HMI-KEEP) 20260929: 操作畫面一直開著 —— 不是 golden。
++//  EastSun 20260929：「你要一直持續偵測 如果html 被關掉 需要再次開啟 除非C++被關閉」。
++//  golden 是 VCL 程式，主畫面就是它自己的視窗，關不掉也不會不見；移植樹的畫面在瀏覽器，關掉之後 wb_serve 照跑、沒有人看得到
++//  （筆電第 57 包也記了「運轉中把所有瀏覽器關掉超過 15 秒，機台可能停產而且沒有警報」）。
++//  既有的 W906-MODAL-WAKE 只在阻塞框等待時開瀏覽器；這裡是主迴圈（pumpBeat，500 ms）一直看：
++//    * 「有網頁」＝ W906_PagesPresent()（活著的 WebSocket，或 3 秒內有 HTTP 請求 —— 同 MODAL-WAKE 的定義）。
++//    * wb_serve 自己起來後先等 20 秒（F5 先開的 web/boot_wait.html 在這段時間切到操作畫面，不重複開）。
++//    * 連續 5 秒沒有網頁 ⇒ 開操作畫面；開過之後 30 秒內不再開（瀏覽器要幾秒才連上）；連開 3 次都沒連上 ⇒ 改成 2 分鐘一次。
++//      有網頁連上就全部歸零。
++//    * 網址：環境變數 W906_HMI_URL（F5「IOWEB(這台)」設成 background.html?mode=debug&machine=HT9050），沒設 = ModalWakeUrl（正式版畫面）。
++//    * 瀏覽器：這台的預設 http 瀏覽器（HKCU ...\UrlAssociations\http\UserChoice → HKCR\<ProgId>\shell\open\command 的 exe；實測
++//      ShellExecute／Start-Process 開 .html 檔在這台叫不起瀏覽器，直接叫 exe 才行）；找不到 ⇒ ModalWakeLaunchEdge（HT9045_Web.cmd 的 Edge）。
++//    * 關：W906_NO_BROWSER_WAKE（非 0）或 --seconds N（與 MODAL-WAKE 同一個開關 g_modalWakeOff）。
++//    * wb_serve 一結束就停（它就在這支程式裡）。每次開都寫進操作 LOG（HMI 行）與主控台。
++//  放在檔尾，上面的行號都不動。
++// =============================================================================
++namespace {
++bool W906_HmiDefaultBrowserExe(std::string& exe, std::string& why)
++{
++    HKEY k = 0;
++    char prog[128] = "";
++    DWORD sz = sizeof(prog) - 1, type = 0;
++    if (::RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\http\\UserChoice", 0, KEY_READ, &k) != ERROR_SUCCESS) { why = "no http UserChoice"; return false; }
++    const LONG r1 = ::RegQueryValueExA(k, "ProgId", 0, &type, (LPBYTE)prog, &sz);
++    ::RegCloseKey(k);
++    if (r1 != ERROR_SUCCESS || type != REG_SZ || !prog[0]) { why = "no http ProgId"; return false; }
++    const std::string sub = std::string(prog) + "\\shell\\open\\command";
++    char cmd[1024] = "";
++    sz = sizeof(cmd) - 1; type = 0;
++    if (::RegOpenKeyExA(HKEY_CLASSES_ROOT, sub.c_str(), 0, KEY_READ, &k) != ERROR_SUCCESS) { why = std::string("no open command for ") + prog; return false; }
++    const LONG r2 = ::RegQueryValueExA(k, 0, 0, &type, (LPBYTE)cmd, &sz);
++    ::RegCloseKey(k);
++    if (r2 != ERROR_SUCCESS || !cmd[0]) { why = std::string("empty open command for ") + prog; return false; }
++    std::string c(cmd);
++    if (c[0] == '"') { const std::string::size_type e = c.find('"', 1); exe = (e == std::string::npos) ? std::string() : c.substr(1, e - 1); }
++    else { const std::string::size_type e = c.find(".exe"); exe = (e == std::string::npos) ? std::string() : c.substr(0, e + 4); }
++    const DWORD a = exe.empty() ? INVALID_FILE_ATTRIBUTES : ::GetFileAttributesA(exe.c_str());
++    if (a == INVALID_FILE_ATTRIBUTES || (a & FILE_ATTRIBUTE_DIRECTORY)) { why = std::string(prog) + " -> '" + exe + "' not found"; exe.clear(); return false; }
++    why = prog;
++    return true;
++}
++
++bool W906_HmiLaunch(const std::string& url, std::string& how)
++{
++    std::string exe, why;
++    if (W906_HmiDefaultBrowserExe(exe, why)) {
++        std::string buf = "\"" + exe + "\" \"" + url + "\"";
++        STARTUPINFOA si; ZeroMemory(&si, sizeof(si)); si.cb = sizeof(si);
++        PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof(pi));
++        if (::CreateProcessA(NULL, &buf[0], NULL, NULL, FALSE, DETACHED_PROCESS, NULL, NULL, &si, &pi)) {
++            ::CloseHandle(pi.hThread); ::CloseHandle(pi.hProcess);
++            how = exe + " [" + why + "]";
++            return true;
++        }
++        char e[64]; std::snprintf(e, sizeof(e), "CreateProcess failed %lu", (unsigned long)::GetLastError()); why = e;
++    }
++    std::string ew;
++    if (ht9045::ModalWakeLaunchEdge(url, ew)) { how = "Edge (default browser: " + why + ")"; return true; }
++    how = "default browser: " + why + "; Edge: " + ew;
++    return false;
++}
++
++int                g_hmiKeepPort = 8055;
++unsigned long long g_hmiKeepStart = 0, g_hmiAbsentSince = 0, g_hmiLastLaunch = 0;
++int                g_hmiFailStreak = 0;
++bool               g_hmiKeepAnnounced = false;
++}  // namespace
++
++void W906_HmiKeeperTick()
++{
++    if (!g_modalServer) return;
++    if (!g_hmiKeepAnnounced) {
++        g_hmiKeepAnnounced = true;
++        g_hmiKeepPort = (int)g_modalServer->BoundPort();
++        std::printf("[hmi-keep] 操作畫面被關掉就重開：%s\n", g_modalWakeOff ? "關（W906_NO_BROWSER_WAKE 或 --seconds）" : "開（先等 20 s；沒有網頁 5 s 就開；30 s／3 次後 2 min）");
++    }
++    if (g_modalWakeOff) return;
++    const unsigned long long now = W906_TickMs64();
++    if (g_hmiKeepStart == 0) { g_hmiKeepStart = now; return; }
++    if (now - g_hmiKeepStart < 20000ULL) return;                                // boot_wait.html / the first page gets 20 s to connect
++    if (W906_PagesPresent() > 0) { g_hmiAbsentSince = 0; g_hmiFailStreak = 0; return; }
++    if (g_hmiAbsentSince == 0) { g_hmiAbsentSince = now; return; }
++    if (now - g_hmiAbsentSince < 5000ULL) return;
++    const unsigned long long gap = (g_hmiFailStreak >= 3) ? 120000ULL : 30000ULL;
++    if (g_hmiLastLaunch != 0 && now - g_hmiLastLaunch < gap) return;
++    g_hmiLastLaunch = now;
++    ++g_hmiFailStreak;
++    const char* u = std::getenv("W906_HMI_URL");
++    const std::string url = (u && *u) ? std::string(u) : ht9045::ModalWakeUrl(g_hmiKeepPort);
++    std::string how;
++    const bool ok = W906_HmiLaunch(url, how);
++    char head[96];
++    std::snprintf(head, sizeof(head), "no web page for %.0f s -> open #%d: %s ", (now - g_hmiAbsentSince) / 1000.0, g_hmiFailStreak, ok ? "OK" : "FAILED");
++    std::printf("[hmi-keep] %s%s  %s\n", head, url.c_str(), how.c_str());
++    OpLine("HMI", std::string(head) + url + "  " + how);
++}
+-- 
+2.55.0.windows.5
+

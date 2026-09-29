@@ -1,0 +1,277 @@
+From c077e63ae44a7b23e25cd1fae1d8ad232c18abc3 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 20:35:39 +0800
+Subject: [PATCH] BOOTSPEED-1: boot stopwatch + boot sampler (diagnostic prints
+ only)
+
+EastSun 20260929: F5 takes 1-2 minutes before the HMI is usable. 14 boots today: 62-134 s, 59-112 s of it before the
+op-log START line, where the console prints no times. LoadMachineConfig now starts (wb_serve.exe only) a sampler thread:
+once a second for W906_BOOTSAMPLE_SEC s (default 180, 0 = off) it suspends the main thread, copies its IP and frame
+chain (GetThreadContext / ReadProcessMemory only while suspended), resumes it, then writes
+<W906_OPLOG_DIR>\bootsample_*.txt and every 5 s a "[BOOT ...] cpu NN%" line. No machine file, card or IO is touched.
+Remove once the boot is explained.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ database.cpp | 228 ++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 225 insertions(+), 3 deletions(-)
+
+diff --git a/database.cpp b/database.cpp
+index cfcf26d..79e8d50 100644
+--- a/database.cpp
++++ b/database.cpp
+@@ -3129,14 +3129,14 @@ TMOTDATA::TMOTDATA(AnsiString Str)
+     }
+     delete SL;
+ }
+-
++static void W906_BootSamplerStart(); static void W906_BootStamp(const char* label);   //AI(W906-BOOTSPEED) 20260929: boot sampler + stopwatch (diagnostic prints only; bodies and the full note at the end of this file). On the old blank line, so no line moves
+ // ===========================================================================
+ //  LoadMachineConfig  --  AI(W906-WebBridge) 20260806.  NOT in golden.
+ //  Contract, and the reason this is not done from a constructor, are in
+ //  database.h at the declaration. Read that before changing anything here.
+ // ===========================================================================
+ bool LoadMachineConfig()
+-{
++{   W906_BootSamplerStart();  W906_BootStamp("LoadMachineConfig: begin (OpenGeneralIniFile + HSys.ReadGeneralIni)");   //AI(W906-BOOTSPEED) 20260929: first call starts the boot sampler (wb_serve.exe only)
+     // OpenGeneralIniFile() unconditionally closes first, so calling this twice
+     // is safe; it is not, however, cheap -- it reparses the whole ini.
+     OpenGeneralIniFile();
+@@ -3157,7 +3157,7 @@ bool LoadMachineConfig()
+     // 12,358 non-zero bytes land in LastSet; see tests/test_wb_datalayer.cpp).
+     HSys.ReadGeneralIni();
+ 
+-    return true;
++    W906_BootStamp("LoadMachineConfig: end");  return true;   //AI(W906-BOOTSPEED) 20260929
+ }
+ 
+ // AI(W906-HT9050-ID) 20260924: machine.typeChoice／typeName／gpibModel 三個 tag 的來源（Steven c56af0b 定的介面，
+@@ -3182,3 +3182,225 @@ const char* W906_MachineTypeName(int t)
+     default:                 return "";
+     }
+ }
++// ===========================================================================
++//AI(W906-BOOTSPEED) 20260929: boot stopwatch + boot sampler -- DIAGNOSTIC PRINTS ONLY, no machine effect.
++//
++//  Why: EastSun 20260929 "F5 之後程式要很久才能用". Measured from D:\HT9045\Error\BootLog.txt ("WinMain Enter" ->
++//  "All CreateForm Done") and runcfg\logs\oplog_20260929.txt (START line): 14 F5 boots today took 62-134 s, and
++//  59-112 s of each is BEFORE the op-log START line -- a stretch in which the console prints a few lines without
++//  times and the watchdog knows only the phase "startup: LoadMachineConfig()". These two helpers make the next
++//  boot say where the time goes:
++//    * W906_BootStamp(label): one line "[BOOT hh:mm:ss.mmm +wall s, CPU s] label" on stdout (and in the file below).
++//      wall = seconds since the process was created, CPU = user+kernel seconds of the whole process so far.
++//      CPU rising as fast as wall -> that stretch COMPUTES (build flags / debug heap under gdb / algorithm);
++//      CPU standing still -> it WAITS (disk, the virus scanner on file writes, the card, a Sleep, paging).
++//    * W906_BootSamplerStart(): a background thread that once a second, for W906_BOOTSAMPLE_SEC seconds (default
++//      180; 0 = off), suspends the MAIN thread, copies its instruction pointer and frame-pointer chain (this tree
++//      builds without -O, so every function keeps its frame), resumes it, and only then writes one line to
++//      <W906_OPLOG_DIR>\bootsample_<yyyymmdd_hhmmss>_<pid>.txt. Every 5th second a short "[BOOT ...] cpu NN%"
++//      line also goes to stdout. Exe addresses in the file are already re-based to the file's ImageBase, so
++//         nm -n -C --defined-only build_integ_ship_x86\wb_serve.exe
++//      maps them to function names; other modules are written as [module.dll+0xoffset].
++//  Runs only inside wb_serve.exe (ctest programs that call LoadMachineConfig print nothing). It touches no machine
++//  file, card or IO; while the main thread is suspended it calls only GetThreadContext and ReadProcessMemory
++//  (kernel calls that take no user-mode lock), everything else happens after ResumeThread.
++//  Remove this block (and the three call sites marked AI(W906-BOOTSPEED)) once the boot has been explained.
++// ===========================================================================
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#ifdef _WIN32
++namespace {
++FILE*    g_w906BsFile     = 0;
++HANDLE   g_w906BsMain     = 0;
++UINT_PTR g_w906BsExeLo    = 0;
++UINT_PTR g_w906BsExeHi    = 0;
++UINT_PTR g_w906BsPrefBase = 0;
++bool     g_w906BsOn       = false;
++
++double W906BsFt(const FILETIME& f)
++{
++    ULARGE_INTEGER u;
++    u.LowPart  = f.dwLowDateTime;
++    u.HighPart = f.dwHighDateTime;
++    return (double)u.QuadPart / 1.0e7;
++}
++bool W906BsTimes(double* wall, double* cpu)
++{
++    FILETIME c, e, k, u, now;
++    if (!::GetProcessTimes(::GetCurrentProcess(), &c, &e, &k, &u)) return false;
++    ::GetSystemTimeAsFileTime(&now);
++    *wall = W906BsFt(now) - W906BsFt(c);
++    *cpu  = W906BsFt(k) + W906BsFt(u);
++    return true;
++}
++const char* W906BsLeaf(const char* path)
++{
++    const char* leaf = path;
++    for (const char* p = path; *p; ++p) if (*p == '\\' || *p == '/') leaf = p + 1;
++    return leaf;
++}
++void W906BsHead(char* out, size_t n, double wall, double cpu)
++{
++    SYSTEMTIME st;
++    ::GetLocalTime(&st);
++    std::snprintf(out, n, "[BOOT %02d:%02d:%02d.%03d +%6.1f s, CPU %6.1f s]",
++                  (int)st.wHour, (int)st.wMinute, (int)st.wSecond, (int)st.wMilliseconds, wall, cpu);
++}
++// the module that holds pc -- called only AFTER ResumeThread (GetModuleFileNameA takes the loader lock)
++void W906BsModule(UINT_PTR pc, char* out, size_t n)
++{
++    MEMORY_BASIC_INFORMATION mbi;
++    char path[MAX_PATH] = "";
++    if (::VirtualQuery((LPCVOID)pc, &mbi, sizeof mbi) == 0 || mbi.AllocationBase == 0 ||
++        ::GetModuleFileNameA((HMODULE)mbi.AllocationBase, path, MAX_PATH) == 0) {
++        std::snprintf(out, n, "0x%llx", (unsigned long long)pc);
++        return;
++    }
++    std::snprintf(out, n, "%s+0x%llx", W906BsLeaf(path), (unsigned long long)(pc - (UINT_PTR)mbi.AllocationBase));
++}
++DWORD WINAPI W906BsThread(LPVOID arg)
++{
++    const int seconds = (int)(INT_PTR)arg;
++    double lastWall = 0, lastCpu = 0;
++    W906BsTimes(&lastWall, &lastCpu);
++    for (int s = 1; s <= seconds; ++s) {
++        ::Sleep(1000);
++        UINT_PTR pcs[32];
++        int npc = 0;
++        if (g_w906BsMain && ::SuspendThread(g_w906BsMain) != (DWORD)-1) {
++            // ---- main thread suspended: kernel calls only, no heap, no stdio, no loader ----
++            CONTEXT ctx;
++            std::memset(&ctx, 0, sizeof ctx);
++            ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
++            if (::GetThreadContext(g_w906BsMain, &ctx)) {
++#if defined(_M_X64) || defined(__x86_64__)
++                UINT_PTR pc = (UINT_PTR)ctx.Rip, fp = (UINT_PTR)ctx.Rbp;
++#else
++                UINT_PTR pc = (UINT_PTR)ctx.Eip, fp = (UINT_PTR)ctx.Ebp;
++#endif
++                pcs[npc++] = pc;
++                while (npc < 32 && fp != 0) {
++                    UINT_PTR fr[2] = {0, 0};
++                    SIZE_T got = 0;
++                    if (!::ReadProcessMemory(::GetCurrentProcess(), (LPCVOID)fp, fr, sizeof fr, &got) ||
++                        got != sizeof fr || fr[1] == 0)
++                        break;
++                    pcs[npc++] = fr[1];
++                    if (fr[0] <= fp) break;                      // a frame chain only walks UP the stack
++                    fp = fr[0];
++                }
++            }
++            ::ResumeThread(g_w906BsMain);
++            // ---- main thread running again ----
++        }
++        double wall = 0, cpu = 0;
++        W906BsTimes(&wall, &cpu);
++        const double busy = (wall > lastWall) ? 100.0 * (cpu - lastCpu) / (wall - lastWall) : 0.0;
++        lastWall = wall;
++        lastCpu  = cpu;
++        char head[96];
++        W906BsHead(head, sizeof head, wall, cpu);
++        char line[4000];
++        int len = std::snprintf(line, sizeof line, "%s cpu %3.0f%% | main:", head, busy);
++        for (int i = 0; i < npc && len > 0 && len < (int)sizeof line - (MAX_PATH + 32); ++i) {
++            if (pcs[i] >= g_w906BsExeLo && pcs[i] < g_w906BsExeHi) {
++                len += std::snprintf(line + len, sizeof line - len, " %08llx",
++                                     (unsigned long long)(pcs[i] - g_w906BsExeLo + g_w906BsPrefBase));
++            } else {
++                char m[MAX_PATH + 24];
++                W906BsModule(pcs[i], m, sizeof m);
++                len += std::snprintf(line + len, sizeof line - len, " [%s]", m);
++            }
++        }
++        if (g_w906BsFile) { std::fprintf(g_w906BsFile, "%s\n", line); std::fflush(g_w906BsFile); }
++        if (s % 5 == 0) {
++            std::printf("%s cpu %3.0f%% in the last second (boot sampler %d/%d s)\n", head, busy, s, seconds);
++            std::fflush(stdout);
++        }
++    }
++    if (g_w906BsFile) { std::fprintf(g_w906BsFile, "sampler stopped after %d s\n", seconds); std::fflush(g_w906BsFile); }
++    return 0;
++}
++} // namespace
++
++static void W906_BootStamp(const char* label)
++{
++    if (!g_w906BsOn) return;
++    double wall = 0, cpu = 0;
++    if (!W906BsTimes(&wall, &cpu)) return;
++    char head[96];
++    W906BsHead(head, sizeof head, wall, cpu);
++    std::printf("%s %s\n", head, label ? label : "");
++    std::fflush(stdout);
++    if (g_w906BsFile) { std::fprintf(g_w906BsFile, "%s %s\n", head, label ? label : ""); std::fflush(g_w906BsFile); }
++}
++
++static void W906_BootSamplerStart()
++{
++    static bool started = false;
++    if (started) return;
++    started = true;
++    char exe[MAX_PATH] = "";
++    const DWORD n = ::GetModuleFileNameA(0, exe, MAX_PATH);
++    if (n == 0 || n >= MAX_PATH || ::lstrcmpiA(W906BsLeaf(exe), "wb_serve.exe") != 0) return;   // the machine program only
++    g_w906BsOn = true;
++    int seconds = 180;
++    if (const char* e = std::getenv("W906_BOOTSAMPLE_SEC")) seconds = std::atoi(e);
++    if (seconds > 3600) seconds = 3600;
++    const HMODULE img = ::GetModuleHandleA(0);
++    const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*)img;
++    const IMAGE_NT_HEADERS* nt  = (const IMAGE_NT_HEADERS*)((const char*)img + dos->e_lfanew);
++    g_w906BsExeLo    = (UINT_PTR)img;
++    g_w906BsExeHi    = g_w906BsExeLo + (UINT_PTR)nt->OptionalHeader.SizeOfImage;
++    g_w906BsPrefBase = g_w906BsExeLo;   // fallback: loaded address (the loader overwrites ImageBase in memory on ASLR)
++    {   // nm prints addresses against the ImageBase written in the FILE, so read it from the file's own header
++        const HANDLE f = ::CreateFileA(exe, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0,
++                                       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
++        if (f != INVALID_HANDLE_VALUE) {
++            static char hdr[4096];
++            DWORD got = 0;
++            if (::ReadFile(f, hdr, sizeof hdr, &got, 0) && got >= sizeof(IMAGE_DOS_HEADER)) {
++                const IMAGE_DOS_HEADER* fd = (const IMAGE_DOS_HEADER*)hdr;
++                if (fd->e_magic == IMAGE_DOS_SIGNATURE && fd->e_lfanew > 0 &&
++                    (DWORD)fd->e_lfanew + sizeof(IMAGE_NT_HEADERS) <= got) {
++                    const IMAGE_NT_HEADERS* fn = (const IMAGE_NT_HEADERS*)(hdr + fd->e_lfanew);
++                    if (fn->Signature == IMAGE_NT_SIGNATURE) g_w906BsPrefBase = (UINT_PTR)fn->OptionalHeader.ImageBase;
++                }
++            }
++            ::CloseHandle(f);
++        }
++    }
++    if (seconds > 0) {
++        const char* dir = std::getenv("W906_OPLOG_DIR");
++        if (dir && *dir) {
++            SYSTEMTIME st;
++            ::GetLocalTime(&st);
++            char path[MAX_PATH + 96];
++            std::snprintf(path, sizeof path, "%s\\bootsample_%04d%02d%02d_%02d%02d%02d_%lu.txt", dir,
++                          (int)st.wYear, (int)st.wMonth, (int)st.wDay, (int)st.wHour, (int)st.wMinute, (int)st.wSecond,
++                          (unsigned long)::GetCurrentProcessId());
++            g_w906BsFile = std::fopen(path, "w");
++            if (g_w906BsFile) {
++                std::fprintf(g_w906BsFile, "# boot sampler of %s pid %lu -- once a second: wall / CPU since process start,\n"
++                                           "# CPU share of the last second, then the MAIN thread's call chain (innermost first).\n"
++                                           "# exe addresses are re-based to ImageBase 0x%llx (loaded at 0x%llx); map them with\n"
++                                           "#   nm -n -C --defined-only \"%s\"\n",
++                             exe, (unsigned long)::GetCurrentProcessId(), (unsigned long long)g_w906BsPrefBase,
++                             (unsigned long long)g_w906BsExeLo, exe);
++                std::fflush(g_w906BsFile);
++            }
++            std::printf("[BOOT] boot sampler: %d s, file %s\n", seconds, g_w906BsFile ? path : "(could not open -- stdout only)");
++        } else {
++            std::printf("[BOOT] boot sampler: %d s, stdout only (W906_OPLOG_DIR not set)\n", seconds);
++        }
++        ::DuplicateHandle(::GetCurrentProcess(), ::GetCurrentThread(), ::GetCurrentProcess(), &g_w906BsMain,
++                          0, FALSE, DUPLICATE_SAME_ACCESS);
++        const HANDLE t = ::CreateThread(0, 0, &W906BsThread, (LPVOID)(INT_PTR)seconds, 0, 0);
++        if (t) ::CloseHandle(t);
++    }
++}
++#else
++static void W906_BootStamp(const char*) {}
++static void W906_BootSamplerStart() {}
++#endif
+-- 
+2.55.0.windows.5
+

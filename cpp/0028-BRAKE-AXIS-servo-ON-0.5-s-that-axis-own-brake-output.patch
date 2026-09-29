@@ -1,0 +1,324 @@
+From 2ea7c90a8cb1add215fcc78ba82f5530f4d62906 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 20:35:38 +0800
+Subject: [PATCH] BRAKE-AXIS: servo ON 0.5 s -> that axis' own brake output
+ released; servo OFF -> brake held first
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260929: "只要SERVO ON 就必須要先激磁 0.5秒後 觸發io的煞車" / "寫在激磁 只要有激磁做動 0.5秒 就要觸發對應io煞車
+如果有煞車io的話". Measured before: MInArmZA servo ON at 20:20:27, but the golden group release (InOutArmZ) waited for
+MOutArmZA too, so SwInArmZBreaker stayed held while MoveN drove the axis.
+
+- WebMotorAccessLive.cpp BrakeAxisTick (after every monitor Poll, also in the modal wait loop): per axis
+  MInArmZA/SwInArmZBreaker, MOutArmZA/SwOutArmZBreaker, MTestZ1/SwFMotorBreaker, MTestZ2/SwBMotorBreaker,
+  MLoaderZ/SwCassetteLDMotBreaker, MAuto1Z/SwCassetteAuto1MotBreaker, MAuto2Z/SwCassetteAuto2MotBreaker
+  (only an Enable=1 output and an enabled PCI1203 row opened by the monitor):
+  SVON seen -> 0.5 s later the output ON (release) once, if motor power is on and no EMG;
+  SVON gone (drive alarm ...) -> the output OFF (hold) at once.
+- Motor Test / teach servo OFF: BrakeHoldBeforeServoOff, 100 ms, then Acm_AxSetSvOn 0; no release for 1 s after a hold.
+- The golden group releases (G05 / G16 / HOME start) now also need every axis of the group SVON for 0.5 s.
+- op log: BRAKE lines (g_W906BrakeNote); console: [brake] lines.
+- Not driven: SwCassetteEmptyMotBreaker (MEmptyZ) and SwCassetteAuto3MotBreaker (MAuto3Z) are in IO_Table but have no
+  SW[] in this program.
+- tests: test_web_motor_access 547 passed / 0 failed (scratch build).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebMotorAccess.cpp              |  14 +++-
+ WebMotorAccess.h                |   4 ++
+ WebMotorAccessLive.cpp          | 112 ++++++++++++++++++++++++++++++++
+ tests/test_web_motor_access.cpp |  27 ++++++++
+ tools/wb_serve.cpp              |   6 +-
+ 5 files changed, 157 insertions(+), 6 deletions(-)
+
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index bf28521..ba512bf 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -487,6 +487,11 @@ MotorAccessOutcome DoServo(const MotorAccessReq& r, long long wireId, IMotorAcce
+     webbridge::JsonWriter w;
+     w.BeginObject();
+     if (a.Is1203()) {
++        //AI(W906-BRAKE-AXIS) 20260929: SERVO OFF -> this axis' brake output to HOLD first, 100 ms for it to grip, then the servo off
++        //  (a Z axis must not hang on nothing). SERVO ON -> nothing here: the brake is released 0.5 s after the monitor sees SVON
++        //  (WebMotorAccessLive.cpp W906_BrakeAxisTick, EastSun 20260929).
++        std::string brakeNote;
++        if (!target && be.BrakeHoldBeforeServoOff(r.motors[0], brakeNote)) be.SleepMs(100);
+         Pci1203Cmd c;
+         c.kind = kCmdAxSvOn;
+         c.wireId = wireId;
+@@ -494,10 +499,12 @@ MotorAccessOutcome DoServo(const MotorAccessReq& r, long long wireId, IMotorAcce
+         c.value = target ? 1.0 : 0.0;
+         const Pci1203CmdResult res = be.Pci1203Execute(c);
+         if (CmdFailed(res))
+-            return Refuse("servoToggle " + r.motors[0] + ": 1203 失敗 —— " + CmdWhy(res));
++            return Refuse("servoToggle " + r.motors[0] + ": 1203 失敗 —— " + CmdWhy(res) + (brakeNote.empty() ? std::string() : "（" + brakeNote + "）"));
+         AckHead(w, r, target ? "servoOn" : "servoOff", "pci1203",
+-                res.issued ? std::string("sent: ") + res.wouldCall
+-                           : std::string("accepted, NOT issued (1203 control is in dry mode): ") + res.wouldCall);
++                (res.issued ? std::string("sent: ") + res.wouldCall
++                            : std::string("accepted, NOT issued (1203 control is in dry mode): ") + res.wouldCall) +
++                (brakeNote.empty() ? std::string() : "; " + brakeNote) +
++                (target ? "; brake: released 0.5 s after SVON (if this axis has a brake output)" : ""));
+         w.Key("axis").Number((wb_int64)a.axis);
+         w.Key("issued").Bool(res.issued);
+         w.Key("wouldCall").String(res.wouldCall);
+@@ -3134,6 +3141,7 @@ bool TeachFieldValue(const MotorAccessReq& r, const std::string& edit, int& v, s
+ bool TeachServo(IMotorAccessBackend& be, long long wireId, const MotionCtx& m, bool on, std::string& why)
+ {
+     if (!m.a.Is1203()) { be.GoldenServoOnOff(m.a.motIndex, on); return true; }
++    { std::string bn; if (!on && be.BrakeHoldBeforeServoOff(be.AliasOfMotor(m.a.motIndex), bn)) be.SleepMs(100); }   //AI(W906-BRAKE-AXIS) 20260929: brake HOLD before the servo off (see DoServo)
+     Pci1203Cmd c; c.kind = kCmdAxSvOn; c.wireId = wireId; c.axis = m.a.axis; c.value = on ? 1.0 : 0.0;
+     const Pci1203CmdResult res = be.Pci1203Execute(c);
+     if (CmdFailed(res)) { why = "1203 伺服" + std::string(on ? "開" : "關") + "失敗（" + m.a.cardModel + " MOT[" + std::to_string(m.a.motIndex) + "]）—— " + CmdWhy(res); return false; }
+diff --git a/WebMotorAccess.h b/WebMotorAccess.h
+index c09b4ea..2bf0220 100644
+--- a/WebMotorAccess.h
++++ b/WebMotorAccess.h
+@@ -355,6 +355,10 @@ public:
+     struct InitCfg { int which; double value; std::string name; };
+     virtual std::vector<InitCfg> GoldenInitCfgPlan(const MotorGolden& g) = 0;
+     virtual void SleepMs(int ms) = 0;                             // golden MotOutputOn's MySleep(100) (:1401) -- only after an alarm
++    //AI(W906-BRAKE-AXIS) 20260929: EastSun「只要SERVO ON 就必須要先激磁 0.5秒後 觸發io的煞車」-- the SERVO OFF half: hold this axis'
++    //   own brake output (if it has one) BEFORE the servo goes off. true = a brake output was switched to HOLD (note says which);
++    //   false = the axis has no brake output / it is not enabled in IO_Table. Default (ctest fakes): no brake.
++    virtual bool BrakeHoldBeforeServoOff(const std::string& alias, std::string& note) { (void)alias; note.clear(); return false; }
+     // golden btnLoopMoveClick :1314-1315 `for(i<TOTAL_MOTOR) MOT[i].InitMOTParameter();` (fCMD / Gali flags = false, memory only)
+     virtual void GoldenInitMOTParameterAll() = 0;
+     // golden FormClose :1361 `PauseUT150Polling=false;` (the MotorTest.ini write is the page's, R5)
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index a439e95..8677aa3 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -48,6 +48,7 @@
+ 
+ extern void StopAllMotor(bool bIndexCanStop);   // Motor/myGALILmotor.cpp（golden Motor/myGALILmotor.cpp:4712）
+ void SetMotorAccelSpeed(int Index, int ADCSpeed);   //AI(W906-MT-E2) 20260925: cinitial.cpp:16730 (golden cinitial.h:51) -- Reload Motor Data
++void (*g_W906BrakeNote)(const char*) = 0;           //AI(W906-BRAKE-AXIS) 20260929: the op log's BRAKE line (tools/wb_serve.cpp W906_OpLogInit registers it)
+ 
+ namespace ht9045 {
+ 
+@@ -110,6 +111,96 @@ bool RelayCardBit(int sw, bool& bit)
+ bool TeachLive1203Thunk(int mi) { return MotorAccessTeachLive1203(MotorAccessLiveBackend(), mi); }
+ int  TeachHomeLedThunk(int mi)  { return MotorAccessTeachHomeLed(MotorAccessLiveBackend(), mi); }
+ 
++//AI(W906-BRAKE-AXIS) 20260929: EastSun 20260929「只要SERVO ON 就必須要先激磁 0.5秒後 觸發io的煞車」／「寫在激磁 只要有激磁做動 0.5秒
++//  就要觸發對應io煞車 如果有煞車io的話」. One brake output per axis (IO_Table.csv names; output ON = release, EastSun R1):
++//    SVON seen by the monitor       -> 0.5 s later that axis' output ON (release), once per SVON; motor power on and no EMG
++//                                      (IsIndexMotorOutOfPower, EastSun 20260926) -- otherwise it waits until they are.
++//    SVON gone (drive alarm, ...)   -> the output OFF (hold) at once. The Motor Test / teach servo OFF holds it BEFORE the off
++//                                      (BrakeHoldBeforeServoOff, then 100 ms, then Acm_AxSetSvOn 0).
++//  An axis "has" its brake when the output is Enable=1 in IO_Table and its Mot_Table row is an enabled PCI1203 axis that the
++//  monitor opened. The golden group releases (DoSystem G05 / CountMotorPowerDelay G16 / HOME start) keep their groups but now
++//  also need every axis of the group to be SVON for 0.5 s (W906_HookBrakeServoOn), and none of them right after a hold.
++//  ⚠ IO_Table also lists SwCassetteEmptyMotBreaker (MEmptyZ, st16 ch25) and SwCassetteAuto3MotBreaker (MAuto3Z, ch28), but this
++//    program has no SW[] for them (cmydef.cpp stops at SwCassetteAuto2MotBreaker = 366): they are NOT driven -- reported.
++struct BrakeAxisDef { const char* alias; const int* sw; };
++const BrakeAxisDef kBrakeAxes[] = {
++    { "MInArmZA",  &SwInArmZBreaker },              // st16 ch5
++    { "MOutArmZA", &SwOutArmZBreaker },             // st16 ch6
++    { "MTestZ1",   &SwFMotorBreaker },              // st16 ch4 (Index Z1)
++    { "MTestZ2",   &SwBMotorBreaker },              // Enable=0 in IO_Table / Mot_Table on HT9050
++    { "MLoaderZ",  &SwCassetteLDMotBreaker },       // st16 ch24
++    { "MAuto1Z",   &SwCassetteAuto1MotBreaker },    // st16 ch26
++    { "MAuto2Z",   &SwCassetteAuto2MotBreaker },    // st16 ch27
++};
++const DWORD kBrakeReleaseDelayMs = 500;             // EastSun: servo ON 0.5 s, then the brake
++const DWORD kBrakeHoldBlockMs    = 1000;            // after a hold: no release (a stale SVON sample must not undo it)
++struct BrakeAxisState {
++    bool  on;            // the last known monitor SVON
++    DWORD onSince;       // GetTickCount at the SVON edge
++    bool  released;      // this SVON already released the brake (or found it released)
++    bool  waitLogged;    // "waiting for motor power / EMG" said once
++    DWORD blockUntil;    // no release before this (set by a hold)
++    BrakeAxisState() : on(false), onSince(0), released(false), waitLogged(false), blockUntil(0) {}
++};
++std::map<std::string, BrakeAxisState> g_brakeAxis;
++void BrakeLog(const std::string& s)                 // console + op log (BRAKE lines; wb_serve registers ::g_W906BrakeNote)
++{
++    std::printf("[brake] %s\n", s.c_str());
++    if (::g_W906BrakeNote) ::g_W906BrakeNote(s.c_str());
++}
++bool BrakeBlocked(const BrakeAxisState& st, DWORD now) { return (LONG)(now - st.blockUntil) < 0; }
++// the brake output of this axis, -1 = none / Enable=0 in IO_Table
++int BrakeSwOf(const std::string& alias)
++{
++    for (std::size_t i = 0; i < sizeof(kBrakeAxes) / sizeof(kBrakeAxes[0]); ++i)
++        if (alias == kBrakeAxes[i].alias) {
++            const int sw = *kBrakeAxes[i].sw;
++            return (sw >= 0 && sw < MAX_SWITCH_ITEM && SW[sw].Enable) ? sw : -1;
++        }
++    return -1;
++}
++// SVON for at least 0.5 s by the tick's record and not just held -- the golden group releases ask this per axis
++bool BrakeAxisOnLongEnough(const std::string& alias)
++{
++    std::map<std::string, BrakeAxisState>::const_iterator it = g_brakeAxis.find(alias);
++    const DWORD now = ::GetTickCount();
++    return it != g_brakeAxis.end() && it->second.on && (now - it->second.onSince) >= kBrakeReleaseDelayMs && !BrakeBlocked(it->second, now);
++}
++// tick thread, after every monitor Poll (main loop and the modal wait loop)
++void BrakeAxisTick()
++{
++    if (Pci1203Monitor() == 0) return;
++    IMotorAccessBackend& be = MotorAccessLiveBackend();
++    const DWORD now = ::GetTickCount();
++    const bool powerOk = bMotorPowerState && !IsIndexMotorOutOfPower();
++    for (std::size_t i = 0; i < sizeof(kBrakeAxes) / sizeof(kBrakeAxes[0]); ++i) {
++        const std::string alias = kBrakeAxes[i].alias;
++        MotorAccessAxis a;
++        if (!be.Resolve(alias, a) || !a.Is1203() || a.axis < 0 || !a.tableEnable) continue;
++        bool known = false;
++        const bool on = be.Pci1203ServoOn(a.axis, known);
++        if (!known) continue;                                                   // no fresh sample: decide nothing
++        BrakeAxisState& st = g_brakeAxis[alias];
++        const int sw = BrakeSwOf(alias);
++        if (on) {
++            if (!st.on) { st.on = true; st.onSince = now; st.released = false; st.waitLogged = false; }
++            if (sw < 0 || st.released || (now - st.onSince) < kBrakeReleaseDelayMs || BrakeBlocked(st, now)) continue;
++            if (!powerOk) {
++                if (!st.waitLogged) { st.waitLogged = true; BrakeLog(alias + " SVON 0.5 s, " + SW[sw].Name.c_str() + " NOT released yet: motor power off or EMG (bMotorPowerState / SnMotorPower / EMG)"); }
++                continue;
++            }
++            st.released = true;
++            if (SW[sw].OutValue) continue;                                      // already released (a golden group release)
++            SW[sw].On();
++            BrakeLog(alias + " SVON 0.5 s -> " + SW[sw].Name.c_str() + " ON (brake released)");
++        } else if (st.on) {                                                     // SVON just went away
++            st.on = false; st.released = false; st.waitLogged = false;
++            if (sw < 0) continue;
++            if (SW[sw].OutValue) { SW[sw].Off(); BrakeLog(alias + " SVON off -> " + SW[sw].Name.c_str() + " OFF (brake held)"); }
++        }
++    }
++}
++
+ class LiveBackend : public IMotorAccessBackend {
+ public:
+     bool Resolve(const std::string& motorId, MotorAccessAxis& out) override
+@@ -765,6 +856,21 @@ public:
+                Sen[SnRearLeftEMG].IsOff()  || Sen[SnRearRightEMG].IsOff();
+     }
+     void SleepMs(int ms) override { if (ms > 0) ::Sleep((DWORD)ms); }
++    //AI(W906-BRAKE-AXIS) 20260929: see BrakeAxisTick above -- the servo OFF holds the brake FIRST (true = it was released and is held now).
++    bool BrakeHoldBeforeServoOff(const std::string& alias, std::string& note) override
++    {
++        note.clear();
++        const int sw = BrakeSwOf(alias);
++        if (sw < 0) return false;
++        const bool was = SW[sw].OutValue;
++        SW[sw].Off();
++        BrakeAxisState& st = g_brakeAxis[alias];
++        st.released = false;
++        st.blockUntil = ::GetTickCount() + kBrakeHoldBlockMs;                   // the G05 group release / a stale SVON sample must not undo it
++        note = std::string("brake ") + SW[sw].Name.c_str() + " OFF (held) before servo off" + (was ? " + 100 ms" : " (it was already held)");
++        BrakeLog(alias + ": " + note);
++        return was;
++    }
+     void GoldenInitMOTParameterAll() override
+     {
+         for (int i = 0; i < TOTAL_MOTOR && i < MAX_TRAY_MOTOR; ++i) MOT[i].InitMOTParameter();   // golden uMotorTest.cpp:1314-1315
+@@ -1190,6 +1296,7 @@ static bool W906_HookBrakeServoOn(const char* group, AnsiString* why)
+         bool known = false;
+         const bool on = (a.axis >= 0) && be.Pci1203ServoOn(a.axis, known);
+         if (!known || !on) off += (off.empty() ? "" : ", ") + alias + (a.axis < 0 ? "（監看器沒開這一軸）" : (!known ? "（讀不到狀態）" : "（沒激磁）"));
++        else if (!ht9045::BrakeAxisOnLongEnough(alias)) off += (off.empty() ? "" : ", ") + alias + "（激磁未滿 0.5 秒，或剛鎖煞車）";   //AI(W906-BRAKE-AXIS) 20260929: EastSun: servo ON 0.5 s before any brake release
+     }
+     if (off.empty()) return true;
+     if (why) *why = AnsiString(("servo not ON: " + off + " -- 煞車維持鎖住，Servo On 之後下一拍才放（EastSun 裁決 20260926）").c_str());
+@@ -1248,10 +1355,15 @@ void W906_MotorAccessTick(bool operatorConnected)
+ //  taken as close to the Poll as this thread gets (QueryPerformanceCounter, LiveBackend::MonotonicMs) -- then the copy for
+ //  /api/struct/motor/runtime, so the copy already holds the new leg time / count and this Poll's motor IO lamps (they used to
+ //  wait for the 500 ms beat). The beat (W906_MotorAccessTick) is unchanged.
++//AI(W906-BRAKE-AXIS) 20260929: wb_serve's modal wait loop polls the monitor too (a box is up while a drive alarms and drops SVON):
++//  the brake half runs there as well (tools/wb_serve.cpp W906_ModalWaitTick, right after its Poll).
++void W906_BrakeAxisTick() { W906_MotorAccessEngineHooks(); ht9045::BrakeAxisTick(); }
++
+ void W906_MotorAccessPollTick(bool operatorConnected)                           //AI(W906-MT-FIX1) 20260926: live ControlOwner()!=0 from wb_serve
+ {
+     W906_MotorAccessEngineHooks();                                              //AI(W906-MT-E3c) 20260925: idempotent
+     ht9045::MotorAccessPollTick(ht9045::MotorAccessLiveBackend(), operatorConnected);
++    ht9045::BrakeAxisTick();                                                    //AI(W906-BRAKE-AXIS) 20260929: on the fresh sample (servo ON 0.5 s -> release; SVON gone -> hold)
+     OverlaySnapshot();
+     W906_MotorAccessHooks();
+     W906_TorqueFocus(operatorConnected);                                        //AI(W906-MT-E3c) 20260925: every Poll while the page shows the axis
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index ab51544..cf24299 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -375,6 +375,16 @@ public:
+     }
+     std::vector<int> sleeps;
+     void SleepMs(int ms) override { sleeps.push_back(ms); }
++    //AI(W906-BRAKE-AXIS) 20260929: the axis whose brake output is released ("" = no brake anywhere, the default)
++    std::string brakeAlias; bool brakeReleased = false; int brakeHoldAt = -1;
++    bool BrakeHoldBeforeServoOff(const std::string& alias, std::string& note) override
++    {
++        note.clear();
++        if (alias.empty() || alias != brakeAlias) return false;
++        const bool was = brakeReleased;
++        brakeReleased = false; brakeHoldAt = (int)executed.size(); note = "brake held before servo off";
++        return was;
++    }
+     int initMotParamCalls = 0;
+     void GoldenInitMOTParameterAll() override { ++initMotParamCalls; }
+     int formCloses = 0;
+@@ -891,6 +901,23 @@ int main(int argc, char** argv)
+         CHECK(o.ok && be.executed.size() == 1 && be.executed[0].kind == kCmdAxSvOn && be.executed[0].axis == 5 &&
+               be.executed[0].value == 0.0 && be.executed[0].wireId == 9, "explicit servoOn=false -> SvOn(ax5, 0)");
+         CHECK(Has(o.ackJson, "\"basis\":\"page\"") && Has(o.ackJson, "\"servoOn\":false"), "ack basis=page");
++        {   //AI(W906-BRAKE-AXIS) 20260929: servo OFF of an axis with a released brake -> hold it FIRST, 100 ms, then SvOn 0
++            be.brakeAlias = "MInArmX"; be.brakeReleased = false; be.brakeHoldAt = -1;
++            const std::size_t e0 = be.executed.size(), s1 = be.sleeps.size();
++            MotorAccessReq rb = Req("uMotorTest", "servoToggle", "MInArmX"); rb.flag["servoOn"] = true;
++            o = MotorAccessDispatch(rb, 9, be);
++            CHECK(o.ok && be.sleeps.size() == s1 && be.brakeHoldAt == -1 && be.executed.back().value == 1.0 && Has(o.ackJson, "0.5 s after SVON"),
++                  "BRAKE-AXIS: servo on -> no brake here (released 0.5 s after SVON by the live tick), no wait");
++            be.brakeReleased = true;                                            // the live tick released it
++            const std::size_t s0 = be.sleeps.size(), e1 = be.executed.size();
++            rb.flag["servoOn"] = false;                                         // (last: leaves golden's static toggle at false, as before)
++            o = MotorAccessDispatch(rb, 9, be);
++            CHECK(o.ok && be.brakeHoldAt == (int)e1 && be.executed.size() == e1 + 1 && be.executed.back().kind == kCmdAxSvOn &&
++                  be.executed.back().value == 0.0 && be.sleeps.size() == s0 + 1 && be.sleeps.back() == 100 && Has(o.ackJson, "brake held"),
++                  "BRAKE-AXIS: servo off -> brake held BEFORE SvOn 0, 100 ms between, the ack says so");
++            be.brakeAlias.clear();
++            be.executed.erase(be.executed.begin() + (std::ptrdiff_t)e0, be.executed.end());   // the checks below count from here
++        }
+ 
+         be.svon[5] = true;
+         o = MotorAccessDispatch(Req("uteach", "servoToggle", "MInArmX"), 9, be);
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index a96da5a..7b44b8d 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -7624,7 +7624,7 @@ void W906_ModalWaitTick(int kind, int kcode)
+         const unsigned long long now = W906_TickMs64();
+         if (now >= nextPoll) {
+             nextPoll = now + (unsigned long long)kIoTickMs;
+-            if (ht9045::TPci1203Monitor* mon = ht9045::Pci1203Monitor()) { mon->SetYieldHook(0); mon->Poll(); mon->SetYieldHook(&W906_OutputYieldHook); }   // AI(W906-R70) 20260926: NB2 R70 MW-A —— Poll 會跑「輸出優先」的 yield hook（:4477 裝、:6353 → W906_ServiceOutputs），框開著時網頁的 io.btnPanelClick／pci1203.do.*／ax.stop 因此被執行（約一半的點擊）。框裡的 Poll 前後把 hook 拿掉 ⇒ 回到第 9 條之前的語意：那些命令一律 modal-pending（golden ShowModal 時其他畫面按不到）；也解掉 MW-B 的巢狀 Poll。MW-E（這一塊沒包 #ifdef INSTALL_1203_MONITOR）刻意不做：要多兩行、後面的行號引用全部位移，而巨集一直開著（MachineType.h:121）—— 排在 INBOX
++            if (ht9045::TPci1203Monitor* mon = ht9045::Pci1203Monitor()) { mon->SetYieldHook(0); mon->Poll(); mon->SetYieldHook(&W906_OutputYieldHook); { extern void W906_BrakeAxisTick(); W906_BrakeAxisTick(); } }   /*AI(W906-BRAKE-AXIS) 20260929: the per-axis brake while a box waits (a drive alarm drops SVON -> hold)*/   // AI(W906-R70) 20260926: NB2 R70 MW-A —— Poll 會跑「輸出優先」的 yield hook（:4477 裝、:6353 → W906_ServiceOutputs），框開著時網頁的 io.btnPanelClick／pci1203.do.*／ax.stop 因此被執行（約一半的點擊）。框裡的 Poll 前後把 hook 拿掉 ⇒ 回到第 9 條之前的語意：那些命令一律 modal-pending（golden ShowModal 時其他畫面按不到）；也解掉 MW-B 的巢狀 Poll。MW-E（這一塊沒包 #ifdef INSTALL_1203_MONITOR）刻意不做：要多兩行、後面的行號引用全部位移，而巨集一直開著（MachineType.h:121）—— 排在 INBOX
+         }
+     }
+     if (((fNote != 0 && fNote->fShow) || (MyMessageBox != 0 && MyMessageBox->fShow)) && bIndexCheckNoStopVaccum == false) CheckIndexAllSuckICFallDown(true, true);  ht9045::W906_FlushFlagTick();                                               // AI(W906-R70) 20260926 MW-F：golden fMain->Timer1Timer main.cpp:3125-3128 —— 任何框開著時都跑（回傳值 golden 也不看）；REALLY 模式下 Index 吸嘴該有 IC 卻沒真空，INDEX_SUCKER_TYPE==1 時照 golden Normal()。第 9 條之前三個等待迴圈都沒跑它。  golden fMain->Timer1Timer 的 FlushFlag
+@@ -8148,7 +8148,7 @@ std::string OpAll(const OpFields& f)
+     return s;
+ }
+ 
+-void W906_OpSrNote(const char* s) { OpLine("SREC", s ? std::string(s) : std::string()); }   //AI(W906-SR-HANG) 20260929: State Record background worker steps (cStateRecord.cpp g_W906StateRecordNote)
++void W906_OpSrNote(const char* s) { OpLine("SREC", s ? std::string(s) : std::string()); }   //AI(W906-SR-HANG) 20260929: State Record background worker steps (cStateRecord.cpp g_W906StateRecordNote)  void W906_OpBrakeNote(const char* s) { OpLine("BRAKE", s ? std::string(s) : std::string()); }   //AI(W906-BRAKE-AXIS) 20260929: per-axis brake release / hold (WebMotorAccessLive.cpp g_W906BrakeNote)
+ 
+ std::string OpDiff(const OpFields& was, const OpFields& now)
+ {
+@@ -8187,7 +8187,7 @@ void W906_OpLogInit(int port)
+                   (int)(W906_WEB_TOKEN_ENFORCE != 0));
+     OpLine("START", std::string(head) + built + "  " + exe);
+     webbridge::g_W906OpLogHook = &W906_OpHook;
+-    { extern void (*g_W906StateRecordNote)(const char*); g_W906StateRecordNote = &W906_OpSrNote; }   //AI(W906-SR-HANG) 20260929
++    { extern void (*g_W906StateRecordNote)(const char*); g_W906StateRecordNote = &W906_OpSrNote; }   //AI(W906-SR-HANG) 20260929  { extern void (*g_W906BrakeNote)(const char*); g_W906BrakeNote = &W906_OpBrakeNote; }   //AI(W906-BRAKE-AXIS) 20260929
+     std::printf("oplog: %s\\oplog_<yyyymmdd>.txt\n", g_opDir.c_str());
+ }
+ 
+-- 
+2.55.0.windows.5
+

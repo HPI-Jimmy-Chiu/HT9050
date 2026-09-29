@@ -1,0 +1,457 @@
+From a179025fddec1f30d2e3bd64362fe01be6a7f856 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 17:35:08 +0800
+Subject: [PATCH] IO-NOGUARD + MT-ENABLE + SR-HANG + OPLOG-3: IO page
+ unguarded, Motor Test grid = Mot_Table Enable=1, State Record children
+ detached, card errors in the op log
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260929, on the machine:
+- "IO畫面一律不要卡控，讓我測試" (after C_Auto2_Up was refused: its Cylinder[] is switched off by golden cinitial.cpp:5296-5304 because
+  Gerneral.ini USE_AUTO_RETEST=0, while IO_Table has Enable=1). JsonBridge/IoBtnPanelClick.cpp: #define W906_IO_PAGE_NO_GUARDS 1 --
+  every golden rule that greys an IO button is skipped and listed in the reply's guardsBypassed (running/SystemStart, SoftStart,
+  IO_Table Enable=0, engine object off, Index-has-IC, EP_Install, the LOAD_Z_USE_MOTOR lanes, and the Index brake release without
+  power -- the last one can let a vertical axis sag, EastSun told). Physical limits stay: not a 1203 point, an input, no route.
+  tools/wb_serve.cpp: the three dialog wait loops (ShowErrorMessage / YesNo / MyMessageBox) serve io.btnPanelClick while a dialog is
+  open when W906_IoPageNoGuards() (was modal-pending). 0 restores golden. Same-line edits.
+- "需要你把MOT_Table有 enable 等於1的 才動態顯示在上面 開軟體偵測一次 不要都顯示在上面": JsonBridge/ChanMotorPoints.cpp
+  motorTestVisible = Mot_Table Enable=1 (HSys.MotTable, read at start-up; HW.MotorTest.html applyGoldenGridVisibility shows only
+  those rows); golden bView kept as goldenMotorTestVisible. This machine: 19 of 48 rows (all PCI1203). tests/test_motor_points.cpp
+  checks the new rule on every row and golden's cases on goldenMotorTestVisible.
+- State Record froze the whole wb_serve under the F5 debugger (11:26:45: 20 of 22 threads Suspended, F6 pause dead; 1.bat's last
+  line `d:\HT9045\7z.exe a -tzip ...Automation\2026_09.7z` stuck at start with 0 ms CPU; the same 7z runs in 47 ms standalone).
+  Not reproducible under a command-line gdb --batch (a harness with the same SHFileOperation -> batch -> system(7z) finished), so
+  this fixes the environment difference and bounds the wait: cStateRecord.cpp RunStateRecordJob runs the batch and the final zip
+  through W906_SrRunAndWait (CREATE_NO_WINDOW = its own hidden console, as golden's GUI parent gave it; no inherited handles; a job
+  with KILL_ON_JOB_CLOSE; 600 s then TerminateJobObject -- the old system() had no limit), and the worker thread initialises COM
+  (STA, ole32 via LoadLibrary) for SHFileOperation / ShellExecute. NOT yet verified on the machine (EastSun: State Record later).
+- op log: MOT lines add cardErr / cardErrText (Acm_GetLastError + the vendor's text, e.g. "Positive hardware limit has been
+  exceeded") and drvAlm (603Fh); SREC lines trace the State Record worker (g_W906StateRecordNote).
+Also found and repaired today (no source change): libht9045_sm.a truncated to 6.5 MB at 11:58:20 by an interrupted F5 pre-launch
+build (ar's temp std0vN7B left behind) -> "file too short", wb_serve.exe gone; both deleted, rebuilt (34.1 MB).
+Build build_integ_ship_x86 --target wb_serve exit 0; pe_truncation_check 178 complete; the new strings are in wb_serve.exe.
+MachineType.h (EastSun's SOFT_SIMULTE edit) is not in this commit.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ JsonBridge/ChanMotorPoints.cpp |   2 +-
+ JsonBridge/IoBtnPanelClick.cpp |  29 +++++----
+ cStateRecord.cpp               | 104 +++++++++++++++++++++++++++++----
+ tests/test_motor_points.cpp    |  21 ++++---
+ tools/wb_serve.cpp             |  41 +++++++++++--
+ 5 files changed, 161 insertions(+), 36 deletions(-)
+
+diff --git a/JsonBridge/ChanMotorPoints.cpp b/JsonBridge/ChanMotorPoints.cpp
+index 61f3367..054c4f1 100644
+--- a/JsonBridge/ChanMotorPoints.cpp
++++ b/JsonBridge/ChanMotorPoints.cpp
+@@ -100,7 +100,7 @@ std::string MotorConfigJson()
+         w.Key("enabledByDefault").Bool(r->iEnable == 1);
+         bool mtShow = false;   //AI(W906-MT-E1) 20260925: same test as golden's layout loop (fMotorTest.cpp:572-577) -- by index, not by vector position (push order is not MotNo order, e.g. MLoad2Y)
+         for (std::size_t v = 0; v < mtVis.size(); ++v) if (mtVis[v].first == mi && mtVis[v].second) { mtShow = true; break; }
+-        w.Key("motorTestVisible").Bool(mi >= 0 && mtShow);   //AI(W906-MT-E1) 20260925
++        w.Key("motorTestVisible").Bool(mi >= 0 && r->iEnable == 1);  w.Key("goldenMotorTestVisible").Bool(mi >= 0 && mtShow);   //AI(W906-MT-E1) 20260925  //AI(W906-MT-ENABLE) 20260929: EastSun「需要你把MOT_Table有 enable 等於1的 才動態顯示在上面 開軟體偵測一次 不要都顯示在上面」-- the Motor Test grid (HW.MotorTest.html applyGoldenGridVisibility) now shows a row iff Mot_Table Enable=1 (HSys.MotTable, read once at start-up); golden's bView (W906_MotorTestVisibility, "motors golden does not new") is kept as goldenMotorTestVisible for reference. Same line, no line moves
+         w.Key("enableCondition").String("");
+         w.Key("limits").BeginObject();
+         w.Key("softP").Number((wb_int64)r->iSoftLimitP);
+diff --git a/JsonBridge/IoBtnPanelClick.cpp b/JsonBridge/IoBtnPanelClick.cpp
+index 036cc6b..608993f 100644
+--- a/JsonBridge/IoBtnPanelClick.cpp
++++ b/JsonBridge/IoBtnPanelClick.cpp
+@@ -212,9 +212,9 @@ void W906_IoTiming(int what)
+     s_phaseHead = (s_phaseHead + 1) % kPhaseRing;
+     s_phaseOpen[kind] = 0;
+ }
+-
++#define W906_IO_PAGE_NO_GUARDS 1   //AI(W906-IO-NOGUARD) 20260929: EastSun「IO畫面一律不要卡控，讓我測試」-- 1 = every golden rule below that greys a button (running, SoftStart, IO_Table Enable=0, engine object off, Index-has-IC, EP_Install, Z-motor lanes, Index brake without power) is SKIPPED and listed in the reply's guardsBypassed; only the physical limits stay (not a 1203 point, an input, no route). 0 = golden's guards again. Occupies a blank line, no line moves
+ static bool Click_(const std::string& alias, int desiredDown, std::string& out, std::uint64_t* execUs)
+-{
++{   std::vector<std::string> bypassed;   //AI(W906-IO-NOGUARD) 20260929
+     using namespace ht9045;
+ 
+     if (alias.empty()) { out = "io.btnPanelClick：tag（Alias）是空的"; return false; }
+@@ -222,7 +222,7 @@ static bool Click_(const std::string& alias, int desiredDown, std::string& out,
+         out = "io.btnPanelClick：value 必須是 0 或 1（按下之後按鈕的 Down 狀態）";
+         return false;
+     }
+-    if (SystemStart) {   // golden main.cpp:27946 -- the IO form cannot even be opened while running
++    if (SystemStart && W906_IO_PAGE_NO_GUARDS) bypassed.push_back("運轉中 SystemStart");  else if (SystemStart) {   // golden main.cpp:27946 -- the IO form cannot even be opened while running   //AI(W906-IO-NOGUARD) 20260929
+         out = "機台運轉中（SystemStart）不能手動切輸出 —— golden 運轉中打不開 IO 畫面（main.cpp:27946）";
+         return false;
+     }
+@@ -236,7 +236,7 @@ static bool Click_(const std::string& alias, int desiredDown, std::string& out,
+     //    iHome is golden's "a home is REQUIRED" flag, `int iHome =1;` at cmydef.cpp:322,
+     //    and it stays 1 on an idle machine that has not homed -- testing it refused every
+     //    single click. SoftStart covers a home that has been pressed and not yet taken.
+-    if (SoftStart) {
++    if (SoftStart && W906_IO_PAGE_NO_GUARDS) bypassed.push_back("正要啟動／回原點 SoftStart");  else if (SoftStart) {   //AI(W906-IO-NOGUARD) 20260929
+         out = "機台正要啟動或回原點（SoftStart）——這時不能手動切輸出；golden 在 IO 畫面開著時根本不會進入這個狀態";
+         return false;
+     }
+@@ -262,7 +262,7 @@ static bool Click_(const std::string& alias, int desiredDown, std::string& out,
+         out = "「" + alias + "」是輸入（" + Str(r->Type) + "），不能寫";
+         return false;
+     }
+-    if (r->iEnable != 1) {   // golden: the button's Enabled comes from the object's Enable (iosetview.cpp:2130/:2210)
++    if (r->iEnable != 1 && W906_IO_PAGE_NO_GUARDS) bypassed.push_back("IO_Table Enable=0");  else if (r->iEnable != 1) {   // golden: the button's Enabled comes from the object's Enable (iosetview.cpp:2130/:2210)   //AI(W906-IO-NOGUARD) 20260929
+         out = "「" + alias + "」在 IO_Table 是 Enable=0";
+         return false;
+     }
+@@ -279,13 +279,13 @@ static bool Click_(const std::string& alias, int desiredDown, std::string& out,
+             if (SW[i].Name == a) { found = true; enabled = SW[i].Enable; }
+         for (int i = 0; i < MaxCylinderItem && !found; ++i)
+             if (Cylinder[i].CylinderName == a) { found = true; enabled = Cylinder[i].Enable; }
+-        if (found && !enabled) {
++        if (found && !enabled && W906_IO_PAGE_NO_GUARDS) bypassed.push_back("引擎物件被設定停用（USE_AUTO_RETEST／AUTO_EMPTY_COLOR 等）");  else if (found && !enabled) {   //AI(W906-IO-NOGUARD) 20260929: e.g. C_Auto2_Up with USE_AUTO_RETEST=0 (cinitial.cpp:5296-5304)
+             out = "「" + alias + "」的引擎物件被設定停用（例如 USE_AUTO_RETEST／AUTO_EMPTY_COLOR 沒開），golden 這顆按鈕是灰的";
+             return false;
+         }
+     }
+     const bool indexHasIC = IndexHasIC();
+-    if (indexHasIC && alias.find("TestSuck") != std::string::npos) {   // golden :1040, DEVIATION (b)
++    if (indexHasIC && alias.find("TestSuck") != std::string::npos && W906_IO_PAGE_NO_GUARDS) bypassed.push_back("Index 上有 IC（TestSuck 走 Suck()/Destroy()）");  else if (indexHasIC && alias.find("TestSuck") != std::string::npos) {   // golden :1040, DEVIATION (b)   //AI(W906-IO-NOGUARD) 20260929
+         out = "Index 上有 IC：golden 對 TestSuck 走 Suck()／Destroy() 流程（iosetview.cpp:1040-1083），這條還沒移植，所以不送";
+         return false;
+     }
+@@ -295,12 +295,12 @@ static bool Click_(const std::string& alias, int desiredDown, std::string& out,
+             "SwZ1SuckMode0", "SwZ1SuckMode1", "SwZ2SuckMode0", "SwZ2SuckMode1",
+             "SwEpArm1", "SwEpArm2" };   // bplEpSwitch1/2 (iosetview.dfm Alias)
+         for (std::size_t i = 0; i < sizeof(kLocked) / sizeof(kLocked[0]); ++i)
+-            if (alias == kLocked[i]) {
++            if (alias == kLocked[i] && W906_IO_PAGE_NO_GUARDS) { bypassed.push_back("Index 上有 IC 時這顆鈕停用"); break; }  else if (alias == kLocked[i]) {   //AI(W906-IO-NOGUARD) 20260929
+                 out = "Index 上有 IC：golden 會把「" + alias + "」這顆按鈕停用（iosetview.cpp:404-411）";
+                 return false;
+             }
+     }
+-    if (EP_Install == 0 && (alias == "SwEpArm1" || alias == "SwEpArm2")) {   // golden :432-436
++    if (EP_Install == 0 && (alias == "SwEpArm1" || alias == "SwEpArm2") && W906_IO_PAGE_NO_GUARDS) bypassed.push_back("EP_Install=0");  else if (EP_Install == 0 && (alias == "SwEpArm1" || alias == "SwEpArm2")) {   // golden :432-436   //AI(W906-IO-NOGUARD) 20260929
+         out = "EP_Install=0：golden 會把「" + alias + "」這顆按鈕停用（iosetview.cpp:432-436）";
+         return false;
+     }
+@@ -324,7 +324,7 @@ static bool Click_(const std::string& alias, int desiredDown, std::string& out,
+         for (std::size_t i = 0; i < sizeof(kZ) / sizeof(kZ[0]); ++i) {
+             if (alias != kZ[i].a && alias != kZ[i].b) continue;
+             const bool motorClick = LOAD_Z_USE_MOTOR[kZ[i].k] && (!kZ[i].needsAutoEmptyColor || AUTO_EMPTY_COLOR != 0);
+-            if (motorClick) {
++            if (motorClick && W906_IO_PAGE_NO_GUARDS) bypassed.push_back("LOAD_Z_USE_MOTOR：golden 按下去是 Z 馬達移動，這裡照寫 DO");  else if (motorClick) {   //AI(W906-IO-NOGUARD) 20260929
+                 out = "「" + alias + "」在 LOAD_Z_USE_MOTOR 開著時，golden 按下去是 Z 馬達移動（iosetview.cpp:3335-3379），不是寫 DO；這條還沒移植，所以不送";
+                 return false;
+             }
+@@ -346,7 +346,7 @@ static bool Click_(const std::string& alias, int desiredDown, std::string& out,
+         const bool front = (alias == "SwFMotorBreaker");
+         const bool manualDown = Sen[front ? SnFMotorDown : SnBMotorDown].IsOn() &&
+                                 IniConfig.bD48PowerOffEmgCanNotUseZ1Z2 == false;
+-        if (!manualDown) {
++        if (!manualDown && W906_IO_PAGE_NO_GUARDS) bypassed.push_back("⚠ Index 剎車釋放：Index 馬達沒有動力（golden 會鎖住剎車，垂直軸可能下滑）");  else if (!manualDown) {   //AI(W906-IO-NOGUARD) 20260929
+             out = std::string("「") + alias + "」是 Index " + (front ? "Z1" : "Z2") +
+                   " 的剎車釋放：Index 馬達目前沒有動力（EMG／系統斷電／伺服沒開，IsIndexMotorOutOfPower），"
+                   "golden 在這個狀態會強制鎖住剎車（IndexMotorBreakerOFF，csystem.cpp:1082-1102），所以不送。"
+@@ -425,7 +425,7 @@ static bool Click_(const std::string& alias, int desiredDown, std::string& out,
+     j.BeginObject();
+     j.Key("alias").String(alias);
+     j.Key("down").Number((wb_int64)desiredDown);
+-    j.Key("raw").Number((wb_int64)(on ? 1 : 0));
++    j.Key("raw").Number((wb_int64)(on ? 1 : 0));  j.Key("guardsBypassed").BeginArray(); for (std::size_t bi = 0; bi < bypassed.size(); ++bi) j.String(bypassed[bi]); j.EndArray();   //AI(W906-IO-NOGUARD) 20260929: which golden rules this click skipped (empty = none applied)
+     j.Key("outType").Number((wb_int64)outType);
+     j.Key("address").BeginObject();
+     j.Key("lane").Number((wb_int64)r->iLane);
+@@ -561,3 +561,8 @@ bool W906_IoBtnPanelClick(const std::string& alias, int desiredDown, std::string
+     }
+     return ok;
+ }
++
++//AI(W906-IO-NOGUARD) 20260929: the same switch for wb_serve's three dialog wait loops (tools/wb_serve.cpp ShowErrorMessage /
++//  YesNo / MyMessageBox waits): with the IO page unguarded, an io.btnPanelClick is served while a dialog is open too, instead of
++//  "modal-pending" (golden's ShowModal made the IO form unreachable). 0 in W906_IO_PAGE_NO_GUARDS restores that.
++bool W906_IoPageNoGuards() { return W906_IO_PAGE_NO_GUARDS != 0; }
+diff --git a/cStateRecord.cpp b/cStateRecord.cpp
+index 63d8076..79dbceb 100644
+--- a/cStateRecord.cpp
++++ b/cStateRecord.cpp
+@@ -1413,11 +1413,11 @@ void TfMain::W906_DoStateRecordBody(int iShowAlarm, bool bManual)              /
+ //      ⚠ 若 cMyDB.cpp:1831 的 golden 本體 homecoming（寫 ExString＋MyDBIProcess），這裡要改成回報給 tick 執行緒。
+ //    * Del_Tree（csystem.cpp:27726）—— 純遞迴刪檔，不碰全域。
+ // =============================================================================
+-namespace {
++extern void (*g_W906StateRecordNote)(const char*);  namespace {  int W906_SrRunAndWait(const char* cmdline, const char* cwd, DWORD ms, DWORD* exitCode);  void W906_SrComInit(bool on);   //AI(W906-SR-HANG) 20260929: helpers at the end of this file
+ 
+ void RunStateRecordJob(StateRecordJob job)
+ {
+-    RecordProcess("State Record worker start", AnsiString(job.newPath.c_str()));
++    W906_SrComInit(true);  if (g_W906StateRecordNote) g_W906StateRecordNote(("worker start " + job.newPath).c_str());  RecordProcess("State Record worker start", AnsiString(job.newPath.c_str()));   //AI(W906-SR-HANG) 20260929: COM for SHFileOperation / ShellExecute below (Microsoft requires it on the calling thread); op-log trail
+ 
+     // golden 的 CopyFile(src, dst, false)，順序同 golden（7z.exe、EventLog、elf、setup.inf、ATK）
+     for(std::size_t i=0; i<job.copies.size(); i++)
+@@ -1465,14 +1465,14 @@ void RunStateRecordJob(StateRecordJob job)
+         FStartupInfo.wShowWindow=SW_HIDE;
+         AnsiString ExecFile=BatFile+" "+" ";                                    // golden ExecZipCommand(BatFile, " ") ⇒ Path+" "+Param
+         AnsiString ExecPath=ExtractFilePath(BatFile);
+-        if(CreateProcess(NULL, const_cast<char*>(ExecFile.c_str()), NULL, NULL, false,
+-                         NORMAL_PRIORITY_CLASS, NULL, ExecPath.c_str(), &FStartupInfo, &FProcessInformation))
++        const int batRun=W906_SrRunAndWait(ExecFile.c_str(), ExecPath.c_str(), 10u*60u*1000u, 0);   //AI(W906-SR-HANG) 20260929: was CreateProcess(..., NORMAL_PRIORITY_CLASS, ...) sharing wb_serve's console; now CREATE_NO_WINDOW + a job (see the helper at the end of the file)
++        if(batRun>=0)                                                           //   -1 = could not start (the else below), 0 = finished, 1 = still running after 600 s -> killed with its children
+         {
+-            const DWORD w=::WaitForSingleObject(FProcessInformation.hProcess, 10u*60u*1000u);
++            const DWORD w=(batRun==0)?WAIT_OBJECT_0:WAIT_TIMEOUT;
+             if(w!=WAIT_OBJECT_0)
+-                RecordProcess("State Record worker: copy batch still running after 600 s, compressing anyway", BatFile);
+-            ::CloseHandle(FProcessInformation.hThread);
+-            ::CloseHandle(FProcessInformation.hProcess);
++                { RecordProcess("State Record worker: copy batch still running after 600 s -- killed with its children, compressing anyway", BatFile);  if (g_W906StateRecordNote) g_W906StateRecordNote("copy batch still running after 600 s -- killed with its children"); }
++            (void)FStartupInfo;                                                 // golden ExecZipCommand's STARTUPINFO shape above is kept for the record; the helper builds its own
++            (void)FProcessInformation;
+         }
+         else
+         {
+@@ -1491,7 +1491,7 @@ void RunStateRecordJob(StateRecordJob job)
+     if(FileExists("d:\\HT9045\\7z.exe"))                                        //KenHsieh 20230105 : 新增StateRecord 另存路徑
+     {
+         str1.sprintf("d:\\HT9045\\7z.exe a -tzip \"%s.zip\" \"%s\"", NewPath, NewPath);
+-        iret=system(str1.c_str());                                              //壓縮StateRecord
++        { DWORD zipExit=1; const int zr=W906_SrRunAndWait(str1.c_str(), NULL, 10u*60u*1000u, &zipExit); iret=(zr==0)?(int)zipExit:-1; }   //壓縮StateRecord   //AI(W906-SR-HANG) 20260929: golden system(str1) -- same 7z command line, run directly (no cmd.exe) with CREATE_NO_WINDOW and a 600 s limit; iret = 7z's exit code as system() returned it, -1 when it could not start or was killed
+         ::Sleep(500);                                                           // golden MySleep(500)；背景執行緒不走 MySleep（它是給 UI 執行緒抽訊息用的）
+         if(iret==0)                                                             //壓縮成功
+         {
+@@ -1505,7 +1505,7 @@ void RunStateRecordJob(StateRecordJob job)
+ 
+     RecordProcess(bZipped ? "State Record worker done (zipped)" : "State Record worker done (NOT zipped: 7z missing or failed; folder kept)",
+                   bZipped ? NewPath+".zip" : NewPath);
+-    W906_StateRecordWorkerBusy.store(false);
++    if (g_W906StateRecordNote) { char zn[96]; std::snprintf(zn, sizeof(zn), "worker done: %s (7z iret=%d)", bZipped ? "zipped" : "NOT zipped, folder kept", iret); g_W906StateRecordNote(zn); }  W906_SrComInit(false);  W906_StateRecordWorkerBusy.store(false);   //AI(W906-SR-HANG) 20260929
+ }
+ 
+ }  // namespace
+@@ -2016,3 +2016,87 @@ void W906_BootRegisterTaskList()
+         fMain->StringGrid2->Cells[0][i]=QueueTaskList[i].Alias;
+     }
+ }
++
++// =============================================================================
++//  AI(W906-SR-HANG) 20260929: State Record 的子程式怎麼跑（不是 golden 的演算法，是移植樹的執行環境）。
++//
++//  EastSun 20260929 在機台上按 State Record 之後整支 wb_serve 凍住（F5 除錯器底下：22 條執行緒 20 條 Suspended、CPU 0、
++//  F6 暫停也沒反應），當時 1.bat 的最後一行 `d:\HT9045\7z.exe a -tzip ...\Automation\2026_09.7z ...` 的 7z 從 11:26:47
++//  起 CPU 0 ms 卡在啟動、cmd.exe 在等它；而同一支 7z 單獨執行 47 ms 正常結束。使用者：「你把會導致當掉的bug解決」。
++//  ⚠ 在命令列的 gdb --batch 底下重現不出來（同樣的 SHFileOperation → 批次 → system(7z) 都正常），只有 VS Code 的
++//    MIEngine 驅動 gdb 時發生 —— 所以這裡修的是「會讓它卡住的環境差異」與「卡住時沒有上限」，不是一個重現到的單一行。
++//  差異：golden 是 VCL 視窗程式、自己沒有主控台，它用 CreateProcess(SW_HIDE) 叫起來的 cmd／7z 會各自拿到一個新的隱藏主控台；
++//        wb_serve 是主控台程式，子程式跟它（在 F5 底下＝跟除錯器）共用同一個主控台環境。
++//  所以：
++//    * 子程式一律 CREATE_NO_WINDOW（自己的隱藏主控台 = golden 的效果）、不繼承任何 handle（同 golden 的 bInheritHandles=false）；
++//    * 放進一個 job（JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE），逾時就 TerminateJobObject —— cmd 底下的 7z／robocopy 一起結束，
++//      背景工作一定會走到最後、放掉 W906_StateRecordWorkerBusy（以前 system() 沒有上限，一卡就永遠 busy）；
++//    * 背景執行緒開頭 CoInitializeEx（STA），結尾 CoUninitialize：SHFileOperation／ShellExecute 走 shell 的 COM 元件，
++//      Microsoft 的 ShellExecute 文件要求呼叫端的執行緒先初始化 COM。ole32 用 LoadLibrary 取（wb_serve 沒有連 ole32）。
++//  g_W906StateRecordNote：tools/wb_serve.cpp 的操作 LOG（W906_OpLogInit）裝上，把背景工作的每一步寫成 SREC 行；0 = 不記。
++// =============================================================================
++void (*g_W906StateRecordNote)(const char*) = 0;
++
++namespace {
++
++// 回傳 -1 = 起不來，0 = 在時限內結束（*exitCode = 它的離開碼），1 = 逾時，已連同子程式一起結束
++int W906_SrRunAndWait(const char* cmdline, const char* cwd, DWORD ms, DWORD* exitCode)
++{
++    STARTUPINFOA si;
++    PROCESS_INFORMATION pi;
++    ZeroMemory(&si, sizeof(si));
++    ZeroMemory(&pi, sizeof(pi));
++    si.cb = sizeof(si);
++    si.dwFlags = STARTF_USESHOWWINDOW;                                          // golden ExecZipCommand：SW_HIDE
++    si.wShowWindow = SW_HIDE;
++    std::string c(cmdline ? cmdline : "");
++    if (c.empty()) return -1;
++    HANDLE job = ::CreateJobObjectA(NULL, NULL);
++    if (job) {
++        JOBOBJECT_EXTENDED_LIMIT_INFORMATION li;
++        ZeroMemory(&li, sizeof(li));
++        li.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
++        ::SetInformationJobObject(job, JobObjectExtendedLimitInformation, &li, sizeof(li));
++    }
++    if (!::CreateProcessA(NULL, &c[0], NULL, NULL, FALSE, NORMAL_PRIORITY_CLASS | CREATE_NO_WINDOW | CREATE_SUSPENDED,
++                          NULL, (cwd && *cwd) ? cwd : NULL, &si, &pi)) {
++        if (job) ::CloseHandle(job);
++        return -1;
++    }
++    if (job && !::AssignProcessToJobObject(job, pi.hProcess)) { ::CloseHandle(job); job = 0; }   // 外層 job 不准巢狀時照跑，只是逾時只能結束它自己
++    ::ResumeThread(pi.hThread);
++    const DWORD w = ::WaitForSingleObject(pi.hProcess, ms);
++    int r = 0;
++    if (w != WAIT_OBJECT_0) {
++        r = 1;
++        if (job) ::TerminateJobObject(job, 1); else ::TerminateProcess(pi.hProcess, 1);
++        ::WaitForSingleObject(pi.hProcess, 5000);
++    }
++    DWORD code = 1;
++    ::GetExitCodeProcess(pi.hProcess, &code);
++    if (exitCode) *exitCode = code;
++    ::CloseHandle(pi.hThread);
++    ::CloseHandle(pi.hProcess);
++    if (job) ::CloseHandle(job);                                                // KILL_ON_JOB_CLOSE：批次留下來還在跑的子程式也在這裡結束
++    return r;
++}
++
++// 背景執行緒的 COM（STA）。同一時間只有一條背景工作（W906_StateRecordWorkerBusy），所以一個旗標就夠。
++void W906_SrComInit(bool on)
++{
++    typedef HRESULT (WINAPI *CoInitExFn)(LPVOID, DWORD);
++    typedef void (WINAPI *CoUninitFn)(void);
++    static bool inited = false;
++    HMODULE ole = ::LoadLibraryA("ole32.dll");                                  // 不 FreeLibrary：ole32 留著（每筆紀錄多兩次參考計數，無害）
++    if (!ole) return;
++    if (on) {
++        CoInitExFn f = (CoInitExFn)(void*)::GetProcAddress(ole, "CoInitializeEx");
++        inited = (f != 0) && SUCCEEDED(f(NULL, 0x2 /* COINIT_APARTMENTTHREADED */ | 0x4 /* COINIT_DISABLE_OLE1DDE */));
++    } else if (inited) {
++        CoUninitFn f = (CoUninitFn)(void*)::GetProcAddress(ole, "CoUninitialize");
++        if (f) f();
++        inited = false;
++    }
++}
++
++}  // namespace
+diff --git a/tests/test_motor_points.cpp b/tests/test_motor_points.cpp
+index 844d4be..ea61df0 100644
+--- a/tests/test_motor_points.cpp
++++ b/tests/test_motor_points.cpp
+@@ -100,17 +100,22 @@ int main(int argc, char** argv)
+             CHECK(Get(Get(x, "limits"), "softP")->valueint == 999999);
+         }
+         //AI(W906-MT-E1) 20260925: golden Motor Test bView (forms/fMotorTest.cpp W906_MotorTestVisibility) per row.
+-        int nBool = 0;
++        int nBool = 0, nRule = 0;   //AI(W906-MT-ENABLE) 20260929: motorTestVisible = Mot_Table Enable=1 (EastSun ruling); golden bView moved to goldenMotorTestVisible
+         for (int i = 0; i < nCfg; ++i) {
+-            cJSON* v = Get(cJSON_GetArrayItem(ms, i), "motorTestVisible");
+-            if (v && (v->type == cJSON_True || v->type == cJSON_False)) ++nBool;
++            cJSON* row = cJSON_GetArrayItem(ms, i);
++            cJSON* v = Get(row, "motorTestVisible");
++            cJSON* g = Get(row, "goldenMotorTestVisible");
++            if (v && (v->type == cJSON_True || v->type == cJSON_False) && g && (g->type == cJSON_True || g->type == cJSON_False)) ++nBool;
++            cJSON* en = Get(row, "enabledByDefault");
++            if (v && en && (v->type == cJSON_True) == (en->type == cJSON_True)) ++nRule;
+         }
+-        CHECK(nBool == nCfg);                          // 每一列都有，而且是布林
+-        CHECK(x && Get(x, "motorTestVisible")->type == cJSON_True);        // MInArmX：golden 無條件 new
+-        cJSON* sh1 = FindMotor(cfg, "MOutShuttle1");   // golden :373 整行註解掉 → 不顯示
+-        if (sh1) CHECK(Get(sh1, "motorTestVisible")->type == cJSON_False);
++        CHECK(nBool == nCfg);                          // 每一列都有兩個，而且是布林
++        CHECK(nRule == nCfg);                          // 每一列：顯示 == Mot_Table Enable=1
++        CHECK(x && Get(x, "goldenMotorTestVisible")->type == cJSON_True);  // MInArmX：golden 無條件 new
++        cJSON* sh1 = FindMotor(cfg, "MOutShuttle1");   // golden :373 整行註解掉 → golden 不顯示
++        if (sh1) CHECK(Get(sh1, "goldenMotorTestVisible")->type == cJSON_False);
+         cJSON* l2y = FindMotor(cfg, "MLoad2Y");        // golden :560 以 bView=false 建立（RogerYang 20250828）
+-        if (l2y) CHECK(Get(l2y, "motorTestVisible")->type == cJSON_False);
++        if (l2y) CHECK(Get(l2y, "goldenMotorTestVisible")->type == cJSON_False);
+         CHECK(SOf(Get(cfg, "source"), "motTable") == argv[1]);
+         cJSON_Delete(cfg);
+     }
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 78d955c..3ad6f80 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -668,7 +668,7 @@ static int ForwardShowErrorMessage(const char* code, int kcode, int pos)
+                 g_modalServer->CompleteCommand((unsigned long long)wc.id, true,
+                                                ht9045::sjson::ConfigResyncJson(since));
+             } else {
+-                if (wc.cmd == "motor.stop") { extern bool W906_MotorAccessWire(const std::string&, long long, std::string&, bool); std::string msAck; const bool msOk = W906_MotorAccessWire((wc.hasValue && wc.value.isString()) ? wc.value.asString() : std::string(), (long long)wc.id, msAck, true); g_modalServer->CompleteCommand((unsigned long long)wc.id, msOk, msAck); } else { extern bool W906_MsgBoxModelessAnswer(const webbridge::WebCommand&); extern bool W906_SimDiCommand(const webbridge::WebCommand&); if (!W906_MsgBoxModelessAnswer(wc) && !W906_SimDiCommand(wc)) g_modalServer->CompleteCommand((unsigned long long)wc.id, false, "modal-pending"); }   /*AI(W906-SMM) 20260925: 告警框開著時，網頁上不停機的 MyMessageBox 仍按得掉（dialog-bridge.js 不停機那一層在最上層、可單獨按）—— C++ 這側也要收，否則網頁關了、C++ 的 fShow／iUnLoaderCount 還留著（檔尾 W906_MsgBoxModelessAnswer）*/   /*AI(W906-W4D) 20260925: NB2 R23 §2 -- motor.stop answered even under a modal alarm: STOP never starts motion, golden keeps the physical STOP live during a modal, and for 1203 axes opened by the EastSun monitor this is the only stop there is (motor.stop is locked to action=stop)*/
++                extern bool W906_IoPageNoGuards(); extern void W906_DispatchIoClick(webbridge::WebBridgeServer&, const webbridge::WebCommand&);   /*AI(W906-IO-NOGUARD) 20260929: EastSun「IO畫面一律不要卡控」-- an IO click is served during this dialog too (JsonBridge/IoBtnPanelClick.cpp W906_IO_PAGE_NO_GUARDS)*/  if (wc.cmd == "io.btnPanelClick" && W906_IoPageNoGuards()) W906_DispatchIoClick(*g_modalServer, wc); else if (wc.cmd == "motor.stop") { extern bool W906_MotorAccessWire(const std::string&, long long, std::string&, bool); std::string msAck; const bool msOk = W906_MotorAccessWire((wc.hasValue && wc.value.isString()) ? wc.value.asString() : std::string(), (long long)wc.id, msAck, true); g_modalServer->CompleteCommand((unsigned long long)wc.id, msOk, msAck); } else { extern bool W906_MsgBoxModelessAnswer(const webbridge::WebCommand&); extern bool W906_SimDiCommand(const webbridge::WebCommand&); if (!W906_MsgBoxModelessAnswer(wc) && !W906_SimDiCommand(wc)) g_modalServer->CompleteCommand((unsigned long long)wc.id, false, "modal-pending"); }   /*AI(W906-SMM) 20260925: 告警框開著時，網頁上不停機的 MyMessageBox 仍按得掉（dialog-bridge.js 不停機那一層在最上層、可單獨按）—— C++ 這側也要收，否則網頁關了、C++ 的 fShow／iUnLoaderCount 還留著（檔尾 W906_MsgBoxModelessAnswer）*/   /*AI(W906-W4D) 20260925: NB2 R23 §2 -- motor.stop answered even under a modal alarm: STOP never starts motion, golden keeps the physical STOP live during a modal, and for 1203 axes opened by the EastSun monitor this is the only stop there is (motor.stop is locked to action=stop)*/
+             }
+         }
+         // ===== AI(W906-SMM-IO) 20260925 BEGIN -- 框開著時的實體面板鍵（RULINGS_20260925 第 42 條）=====
+@@ -852,7 +852,7 @@ static int ForwardShowMyMessageBoxYesNo(const char* s1, const char* s2, const ch
+                 const bool msOk = W906_MotorAccessWire((wc.hasValue && wc.value.isString()) ? wc.value.asString() : std::string(),
+                                                        (long long)wc.id, msAck, true);
+                 g_modalServer->CompleteCommand((unsigned long long)wc.id, msOk, msAck);
+-            } else if (W906_SimDiCommand(wc)) { } else {   // AI(W906-R70) 20260926 YN-3：是／否框也收模擬 DI（另外兩種框 :671／:6782 都收；同一行寫完，行數不變），SOFT_SIMULTE 下才驗得到第 26 條 Q3 的「面板 Alarm Reset 消音」
++            } else if (W906_SimDiCommand(wc)) { } else if (wc.cmd == "io.btnPanelClick" && []() { extern bool W906_IoPageNoGuards(); return W906_IoPageNoGuards(); }()) { extern void W906_DispatchIoClick(webbridge::WebBridgeServer&, const webbridge::WebCommand&); W906_DispatchIoClick(*g_modalServer, wc); } else {   /*AI(W906-IO-NOGUARD) 20260929: IO click served during the YesNo dialog too*/   // AI(W906-R70) 20260926 YN-3：是／否框也收模擬 DI（另外兩種框 :671／:6782 都收；同一行寫完，行數不變），SOFT_SIMULTE 下才驗得到第 26 條 Q3 的「面板 Alarm Reset 消音」
+                 g_modalServer->CompleteCommand((unsigned long long)wc.id, false, "modal-pending");
+             }
+         }
+@@ -6527,7 +6527,7 @@ void W906_DialogCloseRequest(const char* channel, const std::string& requestId,
+                              const std::string& actionName, int actionCode, const char* inputName);
+ bool W906_SimDiCommand(const webbridge::WebCommand& wc);
+ unsigned long long g_mbBlockingSeq = 0;   // MbPost 記下的「目前阻塞框」信箱 seq（Dialog-close-request 的 target.requestSeq）
+-
++bool W906_IoPageNoGuards();   //AI(W906-IO-NOGUARD) 20260929: JsonBridge/IoBtnPanelClick.cpp; declared at global scope HERE (the MyMessageBox wait below is inside the unnamed namespace). Occupies a blank line
+ namespace {
+ 
+ // ---- golden TMyMessageBox 的成員與 mymessbox.cpp 檔頭全域 ------------------------
+@@ -6794,7 +6794,7 @@ std::string MbWait(const std::string& qid, const char* const* opts, int nOpts)
+                 const bool msOk = W906_MotorAccessWire((wc.hasValue && wc.value.isString()) ? wc.value.asString() : std::string(),
+                                                        (long long)wc.id, msAck, true);
+                 g_modalServer->CompleteCommand((unsigned long long)wc.id, msOk, msAck);
+-            } else {
++            } else if (wc.cmd == "io.btnPanelClick" && ::W906_IoPageNoGuards()) { ::W906_DispatchIoClick(*g_modalServer, wc); } else {   //AI(W906-IO-NOGUARD) 20260929: IO click served during the MyMessageBox wait too
+                 if (wc.cmd == "modal.answer" || wc.cmd == "dialog.response")   // 答錯對象（例如舊的一則）—— 印出來，現場查「按了沒反應」用
+                     std::printf("  [MyMessageBox] %s 等待中收到給 %s 的回答 -> modal-pending\n", qid.c_str(),
+                                 wc.hasTag ? wc.tag.c_str() : "(no tag)");
+@@ -7975,12 +7975,14 @@ void W906_MainHomeCommand(webbridge::WebBridgeServer& server, const webbridge::W
+ //           （control.*、not-operator、格式錯、佇列滿）標 socket；其他是 tick 執行緒做完才回的
+ //    MOT    某一軸的狀態變了：只列變了的欄位 舊->新，| 後面附指令位置／編碼器位置；每軸第一筆是 baseline
+ //           欄位：svo servo、alm 警報、st 卡的軸狀態、busy 在動、homing 回原點中、homeJob／loopJob Motor Test 的工作、
+-//           homeFlag 引擎的原點旗標、cw／home／ccw／emg／ledAlm／softCw／softCcw 燈號、q 資料品質、err 錯誤文字
++//           homeFlag 引擎的原點旗標、cw／home／ccw／emg／ledAlm／softCw／softCcw 燈號、q 資料品質、err 錯誤文字、
++//           cardErr／cardErrText 卡片自己的錯誤碼與廠商文字（Acm_GetLastError）、drvAlm 驅動器 603Fh 警報（20260929 加）
+ //           （來源＝網頁讀的同一份 /api/struct/motor/runtime，W906_ApiCacheRefresh 每次重建後比一次）
+ //    PAGE   Motor Test 頁：鎖（locked／lockText）、馬達電源（relay／power／powerPending）、選的馬達、Light Scale
+ //    ALARM／MODAL／QUERY  伺服器推給畫面的框（警報、訊息框、要按鈕回答的框，原始 JSON 最多 800 字）；
+ //           QUERY qid N answered / closed = 那一題答掉或放棄了；操作員按的鈕是後面那一行 CMD modal.answer
+ //           （AI(W906-OPLOG) 20260929：EastSun 問「move 沒反應並跳出 Alarm 要如何查修」—— 框的內容之前沒記）
++//    SREC   State Record 背景工作的每一步（開始、批次逾時、完成／沒壓成 zip、7z 的離開碼）—— AI(W906-SR-HANG) 20260929
+ //  太吵的（sys.ping、ui.windows.put、cfg.resync、*.get 查詢）成功時不記，失敗照記。
+ //  執行緒：CMD 與 socket 回覆在 socket 執行緒；tick 回覆、MOT、PAGE 在 tick 執行緒 —— 共用 g_opLock。
+ //  放在檔尾，上面的行號都不動。
+@@ -8145,6 +8147,8 @@ std::string OpAll(const OpFields& f)
+     return s;
+ }
+ 
++void W906_OpSrNote(const char* s) { OpLine("SREC", s ? std::string(s) : std::string()); }   //AI(W906-SR-HANG) 20260929: State Record background worker steps (cStateRecord.cpp g_W906StateRecordNote)
++
+ std::string OpDiff(const OpFields& was, const OpFields& now)
+ {
+     std::string d;
+@@ -8182,6 +8186,7 @@ void W906_OpLogInit(int port)
+                   (int)(W906_WEB_TOKEN_ENFORCE != 0));
+     OpLine("START", std::string(head) + built + "  " + exe);
+     webbridge::g_W906OpLogHook = &W906_OpHook;
++    { extern void (*g_W906StateRecordNote)(const char*); g_W906StateRecordNote = &W906_OpSrNote; }   //AI(W906-SR-HANG) 20260929
+     std::printf("oplog: %s\\oplog_<yyyymmdd>.txt\n", g_opDir.c_str());
+ }
+ 
+@@ -8223,6 +8228,32 @@ void W906_OpLogMotorRuntime(const std::string& json)
+             }
+             OpAdd(f, "q", OpGet(st, "quality"));
+             OpAdd(f, "err", OpGet(dg, "errText"));
++#ifdef INSTALL_1203_MONITOR
++            {   //AI(W906-OPLOG) 20260929: WHY an axis went ERROR_STOP -- EastSun's JOG+ on MInArmX (09:26:10) logged only "alm 0->1 st
++                //  READY->ERROR_STOP". The monitor already reads the card's own reason (Acm_GetLastError + the vendor's text, e.g.
++                //  0x80005111 "Positive hardware limit has been exceeded", Pci1203Monitor.h driveErr) and the drive's 603Fh alarm;
++                //  matched to the row by diag.station / diag.stationAxis like ChanMotorPoints FindCardAxis (ambiguous stations refused).
++                const cJSON* stn = OpGet(dg, "station");
++                const cJSON* sax = OpGet(dg, "stationAxis");
++                ht9045::TPci1203Monitor* mon = ht9045::Pci1203Monitor();
++                if (mon && stn && sax && cJSON_IsNumber(stn) && cJSON_IsNumber(sax)) {
++                    const int st0 = (int)stn->valuedouble, sa0 = (int)sax->valuedouble;
++                    for (int k = 0; k < mon->axisCount(); ++k) {
++                        const ht9045::Pci1203AxisSample& a = mon->axis(k);
++                        if (!a.opened || a.stationAmbiguous || a.station != st0 || a.stationAxis != sa0) continue;
++                        char hx[32];
++                        std::snprintf(hx, sizeof(hx), "0x%08lX", (unsigned long)a.driveErr);
++                        f.push_back(std::make_pair(std::string("cardErr"), std::string(a.driveErr ? hx : "0")));
++                        f.push_back(std::make_pair(std::string("cardErrText"), "\"" + OpClip(a.driveErrText, 160) + "\""));
++                        std::snprintf(hx, sizeof(hx), "0x%04X", (unsigned)a.driveAlarm);
++                        f.push_back(std::make_pair(std::string("drvAlm"), a.driveAlarmValid
++                            ? std::string(a.driveAlarm ? hx : "0") + (a.driveAlarmName.empty() ? std::string() : " " + OpClip(a.driveAlarmName, 80))
++                            : std::string("?")));
++                        break;
++                    }
++                }
++            }
++#endif
+             const std::string where = "cmd=" + OpVal(OpGet(pos, "cmdPos")) + " enc=" + OpVal(OpGet(pos, "encPos"));
+             std::map<std::string, OpFields>::iterator it = g_opMot.find(id);
+             if (it == g_opMot.end()) {
+-- 
+2.55.0.windows.5
+
