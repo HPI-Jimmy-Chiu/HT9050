@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>Motor View（main.dfm tsMotorView）</title>
+<link rel="stylesheet" href="ht9xxx.css">
+<link rel="stylesheet" href="theme.css">
+<style>
+  body.winpage{padding:0;margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden;}
+  /* Panel17：標題列（Color=9534289 #517B91 白字）＋Check Encoder */
+  .mvHd{flex:none;display:flex;align-items:center;gap:14px;background:#517B91;color:#fff;
+    font:bold 15px "MS Sans Serif",sans-serif;padding:3px 10px;border-bottom:1px inset #7f97a8;}
+  .mvHd label{display:flex;align-items:center;gap:4px;font-size:13px;font-weight:normal;user-select:none;}
+  .mvHd #cbCheckEncoderEveryTime+span{color:#ff0;}
+  .mvHd .spacer{margin-left:auto;}
+  /* PanelMain3：TScrollBox */
+  .mvBody{flex:1;min-height:0;overflow:auto;background:#CCD9DF;}
+  table.mvGrid{border-collapse:collapse;font:12px "MS Sans Serif",sans-serif;white-space:nowrap;}
+  table.mvGrid th,table.mvGrid td{border:1px solid #9aa;height:18px;padding:0 4px;text-align:center;box-sizing:border-box;}
+  table.mvGrid thead th{background:#517B91;color:#fff;font-weight:normal;position:sticky;top:0;z-index:3;}
+  table.mvGrid td{background:#CCD9DF;color:#123;}
+  table.mvGrid tbody th{background:#517B91;color:#fff;font-weight:normal;text-align:left;padding:0 8px;
+    position:sticky;left:0;z-index:2;min-width:110px;}
+  table.mvGrid thead th:first-child{left:0;z-index:4;}
+  /* 位置/狀態欄與 LED 欄之間的分隔線（StringGrid1 | StringGrid3） */
+  table.mvGrid .sep{border-left:2px solid #33566a;}
+  table.mvGrid tr.dis td,table.mvGrid tr.dis th{opacity:.4;font-style:italic;}
+  .ledCell{padding:1px 2px !important;}
+  .aled{border-color:#557 !important;}
+  .mvInfo{padding:4px 8px;font-size:11px;border-top:1px solid #9aa;background:#e9eef2;color:#234;}
+  .mvInfo.ok{background:#0a5;color:#fff;}
+  .mvInfo.warn{background:#d9c27a;color:#222;}
+  .mvInfo.err{background:#a33;color:#fff;}
+  .srcnote{padding:4px 8px;}
+</style>
+</head>
+<body class="winpage">
+
+<div class="mvHd" title="Panel17 : TPanel">
+  Motor Position and Limit Sensor View
+  <label title="cbCheckEncoderEveryTime : TCheckBox（clYellow）">
+    <input type="checkbox" id="cbCheckEncoderEveryTime"><span>Check Encoder</span></label>
+  <label class="spacer" title="示範用：切換是否顯示未啟用（Visible=false）馬達列">
+    <input type="checkbox" id="cbShowDisabled"> 顯示未啟用馬達</label>
+</div>
+
+<div class="mvBody" title="PanelMain3 : TScrollBox">
+  <table class="mvGrid">
+    <thead><tr id="mvHead"></tr></thead>
+    <tbody id="mvRows"></tbody>
+  </table>
+</div>
+
+<div class="srcnote">程式碼對應：<code>main.dfm tsMotorView</code>（<code>StringGrid1</code> 位置＋<code>StringGrid3</code> LED）／<code>main.cpp TfMain::UpdateMotorScreen()</code>。列＝<code>fMotorTest-&gt;MotorTestClass</code> 中 <code>Visible==true</code> 的馬達（依機台選配 <code>enable</code> 動態增減）；每列 11 顆狀態 LED（<code>MOT[i].Led[]</code>）由程式動態生成</div>
+<div id="mvRuntimeInfo" class="mvInfo">Motor runtime loading...</div>
+
+<script src="hwidgets.js"></script>
+<script>
+(function(){
+  var POS=['Current','Target','Speed','Can','L','M','R'];
+  var LED=['Ready','CW','Home','CCW','EM Stop','Alarm','SoftCW','SoftCCW','S Alarm','In Pos','ServoOn'];
+  var MOTORS=[];
+  var RUNTIME={runtime:{connected:false,pollIntervalMs:200,provider:'TBD'},motors:[]};
+
+  function qv(name){
+    var q=(location.search||'').replace(/^\?/,'').split('&');
+    for(var i=0;i<q.length;i++){
+      if(!q[i]) continue;
+      var kv=q[i].split('=');
+      if(decodeURIComponent(kv[0]||'')===name) return decodeURIComponent(kv[1]||'');
+    }
+    return '';
+  }
+  function offlineEnabled(){
+    var v1=(qv('offline')||'').toLowerCase();
+    var v2=(qv('cppoffline')||'').toLowerCase();
+    return v1==='1' || v1==='true' || v1==='on' || v2==='1' || v2==='true' || v2==='on';
+  }
+  function setInfo(msg, cls){
+    var el=document.getElementById('mvRuntimeInfo');
+    if(!el) return;
+    el.textContent=msg;
+    el.className='mvInfo'+(cls?(' '+cls):'');
+  }
+
+  function loadJsonWithXhr(url){
+    return new Promise(function(resolve,reject){
+      var xhr=new XMLHttpRequest();
+      xhr.open('GET', url, true);
+      xhr.onreadystatechange=function(){
+        if(xhr.readyState!==4) return;
+        if(xhr.status===200 || xhr.status===0){
+          try{ resolve(JSON.parse(xhr.responseText)); }
+          catch(e){ reject(new Error('JSON parse error @ '+url+': '+e.message)); }
+        }else reject(new Error('HTTP '+xhr.status+' @ '+url));
+      };
+      xhr.onerror=function(){ reject(new Error('XHR error @ '+url)); };
+      xhr.send();
+    });
+  }
+  // file:// 下 Edge/Chromium 封鎖 XHR/fetch → 改用 <script> 墊片（JSON/js/*.js，由 JSON 自動生成）
+  function shimKeyFromUrl(url){
+    var u=String(url).split('?')[0].split('#')[0];
+    return u.substring(u.lastIndexOf('/')+1).replace(/\.json$/i,'');
+  }
+  function loadViaScript(url){
+    return new Promise(function(resolve,reject){
+      var key=shimKeyFromUrl(url);
+      var store=window.__HT9045_DATA__||{};
+      if(store[key]) return resolve(store[key]);
+      var s=document.createElement('script');
+      s.src='../JSON/js/'+key+'.js';
+      s.onload=function(){
+        var d=(window.__HT9045_DATA__||{})[key];
+        if(d) resolve(d); else reject(new Error('Shim has no data: '+key));
+      };
+      s.onerror=function(){ reject(new Error('Shim load failed: '+key)); };
+      document.head.appendChild(s);
+    });
+  }
+  function loadJsonNet(url){
+    if(typeof fetch==='function'){
+      return fetch(url,{cache:'no-store'}).then(function(r){
+        if(!r.ok) throw new Error('HTTP '+r.status+' @ '+url);
+        return r.json();
+      }).catch(function(){ return loadJsonWithXhr(url); });
+    }
+    return loadJsonWithXhr(url);
+  }
+  function loadJson(url){
+    if(location.protocol==='file:')
+      return loadViaScript(url).catch(function(){ return loadJsonNet(url); });
+    return loadJsonNet(url).catch(function(){ return loadViaScript(url); });
+  }
+  function saveCache(cfg, rt){
+    try{
+      localStorage.setItem('ht9045-motor-config-cache', JSON.stringify(cfg||{}));
+      localStorage.setItem('ht9045-motor-runtime-cache', JSON.stringify(rt||{}));
+      localStorage.setItem('ht9045-motor-cache-time', new Date().toISOString());
+    }catch(e){}
+  }
+  function loadCache(){
+    try{
+      var c=localStorage.getItem('ht9045-motor-config-cache');
+      var r=localStorage.getItem('ht9045-motor-runtime-cache');
+      if(!c || !r) return null;
+      return {cfg:JSON.parse(c), rt:JSON.parse(r), cachedAt:localStorage.getItem('ht9045-motor-cache-time')||''};
+    }catch(e){ return null; }
+  }
+  function loadDual(cfgUrl, rtUrl){
+    return Promise.all([loadJson(cfgUrl), loadJson(rtUrl)]).then(function(pair){
+      return {cfg:pair[0], rt:pair[1]};
+    });
+  }
+
+  function normalize(cfg, rt){
+    var motors=(cfg&&cfg.motors)?cfg.motors:[];
+    MOTORS=motors.map(function(m){
+      return [m.alias||m.motorId||'', m.enabledByDefault?1:0, m.enableCondition||''];
+    });
+    RUNTIME=rt||RUNTIME;
+  }
+  function runtimeById(){
+    var map={};
+    var arr=(RUNTIME&&RUNTIME.motors)?RUNTIME.motors:[];
+    for(var i=0;i<arr.length;i++){
+      var r=arr[i];
+      map[r.motorId]=r;
+    }
+    return map;
+  }
+
+  // 表頭
+  var head=document.getElementById('mvHead');
+  head.appendChild(th('Motor'));
+  POS.forEach(function(c,i){ head.appendChild(th(c, i===3?'sep':'')); });   // Can 前加分隔線
+  LED.forEach(function(c,i){ head.appendChild(th(c, i===0?'sep':'ledCol')); });
+
+  var body=document.getElementById('mvRows');
+  function b01(v){ return v?1:0; }
+  function render(showDisabled){
+    body.innerHTML='';
+    var rm=runtimeById();
+    MOTORS.forEach(function(m){
+      if(!m[1] && !showDisabled) return;
+      var tr=document.createElement('tr');
+      if(!m[1]) tr.className='dis';
+      var h=document.createElement('th');
+      h.textContent=m[0]; h.title=m[0]+' : MOT[].Alias'+(m[2]?'　啟用條件：'+m[2]:'');
+      tr.appendChild(h);
+
+      var rr=rm[m[0]]||{};
+      var pos=rr.position||{};
+      var mot=rr.motion||{};
+      var st=rr.state||{};
+      var rowPos=[
+        (pos.encPos!=null?pos.encPos:(pos.cmdPos!=null?pos.cmdPos:0)),
+        (pos.targetPos!=null?pos.targetPos:0),
+        (mot.speed!=null?mot.speed:0),
+        b01(!!mot.busy),
+        b01(st.isOn===true),
+        0,
+        b01(st.isOff===true)
+      ];
+
+      // 位置/移動旗標欄（StringGrid1）
+      POS.forEach(function(c,i){var td=document.createElement('td');
+        if(i===3)td.className='sep'; td.textContent=String(rowPos[i]); tr.appendChild(td);});
+
+      var ledVals=[
+        !st.alarm,
+        (mot.speed||0)>0,
+        !!st.homeDone,
+        (mot.speed||0)<0,
+        false,
+        !!st.alarm,
+        false,
+        false,
+        !!st.alarm,
+        !!st.inPos,
+        !!st.servoOn
+      ];
+      // LED 狀態欄（StringGrid3）：每欄一顆動態生成的 LED
+      LED.forEach(function(c,i){
+        var td=document.createElement('td'); td.className='ledCell'+(i===0?' sep':'');
+        var led=HTWidgets.makeALed({name:m[0]+'_'+c.replace(/\s/g,''),ledStyle:'LEDSqSmall',
+          value:!!ledVals[i], trueColor:(c==='Home')?'#00c000':'#ff0000', falseColor:'#9fb0ba'});
+        td.appendChild(led); tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    });
+  }
+  function th(txt,cls){var e=document.createElement('th'); if(cls)e.className=cls; e.textContent=txt; return e;}
+
+  function loadAndBind(){
+    var ts='?_=' + Date.now();
+    var online={cfg:'../JSON/Motor-config.json'+ts, rt:'../JSON/Motor-runtime.json'+ts};
+    var offline={cfg:'../JSON/offline/Motor-config.offline.json'+ts, rt:'../JSON/offline/Motor-runtime.offline.json'+ts};
+    var off=offlineEnabled();
+    var first=off?offline:online;
+    var second=off?online:offline;
+
+    setInfo('Motor runtime loading dual-json...', 'warn');
+    loadDual(first.cfg, first.rt).then(function(pair){
+      normalize(pair.cfg, pair.rt);
+      saveCache(pair.cfg, pair.rt);
+      render(document.getElementById('cbShowDisabled').checked);
+      setInfo('Motor runtime loaded ('+(off?'offline':'online')+')', 'ok');
+    }).catch(function(err1){
+      loadDual(second.cfg, second.rt).then(function(pair2){
+        normalize(pair2.cfg, pair2.rt);
+        saveCache(pair2.cfg, pair2.rt);
+        render(document.getElementById('cbShowDisabled').checked);
+        setInfo('Motor runtime fallback loaded', 'warn');
+      }).catch(function(err2){
+        var c=loadCache();
+        if(c){
+          normalize(c.cfg, c.rt);
+          render(document.getElementById('cbShowDisabled').checked);
+          setInfo('Motor runtime from cache ('+(c.cachedAt||'unknown')+')', 'warn');
+          return;
+        }
+        setInfo('Motor runtime load failed: '+err1.message+'; '+err2.message, 'err');
+      });
+    });
+  }
+
+  render(false);
+  loadAndBind();
+  document.getElementById('cbShowDisabled').addEventListener('change',function(){ render(this.checked); });
+})();
+</script>
+<script src="theme.js"></script><script src="ht9045_recipe_client.js"></script><script src="ht9045_main_st01_ev.js"></script><!-- AI(W906-EVB6) 20260928 [W906]：M-17 cbCheckEncoderEveryTime（act.main.checkEncoder）；同一行 -->
+</body>
+</html>
+
