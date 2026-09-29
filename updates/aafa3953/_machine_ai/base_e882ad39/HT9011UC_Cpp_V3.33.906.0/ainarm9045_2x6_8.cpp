@@ -1,0 +1,4280 @@
+// =============================================================================
+//  ainarm9045_2x6_8.cpp  --  In-Arm per-site VARIANT (2x6_8, 12-site 2x6 Site)
+//
+//  Faithful translation of golden ainarm9045_2x6_8.cpp (4240 lines, BCB6, Big5).
+//  Translator: AI(W6.2c-2x6_8) 20260626
+//  Translation wave: W6.2c (in-arm per-site-config variant: 2x6_8; 2 physical
+//  rows x up-to-6 sites, 8-picker A/C/E/G x Kit0/Kit1, with a file-local
+//  e2x6Mode special-mode enum: Standard / Step2 / OneByOne / CloseCenter2x4 /
+//  Run2x4 ...).  Sibling of the engine ainarm9045.cpp and the already-committed
+//  per-site leaves (1x3_4 / 1x2_2 / 2x3_6 / ...).
+//
+//  ROLE: the per-site in-arm pick/place state machines for the 2x6_8 layout.
+//  The engine dispatch ladders DoInArm_9045() / DoInArm_9045_SuckerMap() route
+//  iInArmType==e9045_2x6_8 here (un-gated at the serial integrate stage).  This
+//  file owns: SetInOutArmParameter_2x6_8, GetNowSiteKitMode_2x6_8,
+//  InArmZNeedDown_2x6_8, CheckXYPitch_2x6_8, MoveInArm2XYToShuttle_9045_2x6_8,
+//  DoPlaceToHotPlate_9045_2x6_8, DoInArmPlaceToShuttle_9045_2x6_8,
+//  DoInArm_9045_2x6_8_SuckerMap, DoInArm_9045_2x6_8,
+//  DoInArmTryPickFromHotPlate_9045_2x6_8, GetShuttleState_2x6_8,
+//  CheckSTMMode_2x6_8, SetInArmHasDropToShuttle_2x6_8.  It also defines the
+//  file-scope statics iCloseSiteStep_2x6 / iCloseSiteModeFor2x6 /
+//  XPHSuckToSht_2x6_6[e2x6ModeTotal][8] (extern-declared in the .h).
+//
+//  FAITHFUL: every fn/var/cursor value, switch(Task) structure, formula,
+//  fall-through and (all-commented) goto/label IN_ARM_SHUTTLE_2x6_8 /
+//  IN_ARM_TRY_PICK_HOTPLATE_2X6_8 is transcribed VERBATIM from the golden CP950.
+//  All SM case bodies are ACTIVE -- they touch MOT[]/Suck/Sensor/predicates/
+//  FormsFacade, all of which resolve over the Sim HAL + aHotPlateSubstrate +
+//  atester_shims + canary_support + the ainarm9045 engine.  No body is #if 0.
+//
+//  VCL/Borland conversions: AnsiString (1-based, .sprintf) via vclcompat;
+//  __fastcall/__property NOT present in this file.  SOFT_SIMULTE is NOT defined
+//  -> the four #ifdef SOFT_SIMULTE blocks in DoInArmTryPickFromHotPlate keep
+//  their golden #else (real) path active, reproduced verbatim.  Numeric
+//  semantics (int vs double, integer division, double pitch math) kept EXACT.
+//
+//  Big5: every Chinese comment decoded via cp950 and preserved as UTF-8.
+//  Final gate: ZERO U+FFFD.
+// =============================================================================
+// BCB6 ORIGINAL include block (mirrored as a comment for provenance):
+//   #include "MachineDefine.h" ; #pragma hdrstop
+//   #include "ainarm9045_2x6_8.h"
+//   #include "aArmHeader.h" (god-header; W6.0 SHIM) / "MyKitSuck.h" / "cprod.h"
+//   #include "mymotor.h" / "mycylin.h" / "mysensor.h" / "cSortCT.h" / "note.h"
+//   #include "main.h" / "csystem.h" / "uhome.h" / "mymessbox.h" / "cinitial.h"
+//   #include "atester.h" / "aRotateKIT.h" / "fRotate.h" / "cOffSet.h" / "cMyDB.h"
+//   #include "cObserver.h" / "cmydef.h" / "uYieldMonitoring.h" / "BarCode.h"
+//   #include "InOutArmZteach.h" / "acarry.h" ; #pragma package(smart_init)
+// =============================================================================
+#include "MachineDefine.h"
+
+#include "ainarm9045_2x6_8.h"
+#include "aArmHeader.h"             // __FUNC__ shim, RecordProcess, etc.
+#include "ainarm9045.h"             // engine: GetInArmToShuttleOffset_9045 / InArmNeedCheckOffset / MoveInArmXYToShuttle_9045 / GetShuttleCol / ...
+#include "ainarm_SearchPickPlate.h" // shared HP-pick externs (bInArmTryPickFromHotPlateFinish / HasHotReadyIC_9045 / iTryPickHP / ...)
+#include "ainarm_SearchPlacePlate.h"// shared HP-place externs (SearchPlateToPlace / MoveInArmXYToHotPlatePlace / DoPlaceToHPSwapData / GetPlaceToHotPlateSuckCol / Row2CanPutHP / GetHotPlateColStep / iPlaceHP / HPPlaceLog)
+#include "csystem.h"                // CheckInArmSuckICFallDownToHasNullIC / DoInArmAutoSiteMapping / CheckInArmDestroyICFail predicates
+#include "Motor/mymotor.h"          // MOT[], InArmContinuousMove_9045
+#include "cmydef.h"                 // global scalar universe + IC consts + enums (eInArmType / picker enum / Tempture_* / rsm* / CC_*)
+#include "common.h"
+#include "mycylin.h"
+#include "myswitch.h"               // SW[] (SwShuttleVibration1/2 .On())
+#include "cprod.h"                  // Prod / TestIF / TestIF_File / ArmSpeed / ArmSpeed_File / LastSet
+#include "cpublic.h"                // CosFunction
+#include "aHotPlateSubstrate.h"     // InArmSuck/FLCarryKit/BLCarryKit/OutArmSuck/FTestSuck/BTestSuck + ainarm2 cursors/timers + engine shims + PickFromHPList
+#include "FormsFacade.h"            // HotPlateForm / Zteach / TrayForm / fContact / fObserver / fYieldMonitoring offline stand-ins
+#include "atester_shims.h"          // fObserver (RecordInArmTime/AddTimeData/RecordInArmTime) / fContact (IsRun2DCheck)
+#include "acatchtray_shims.h"        // InitProcessSingleMotorTask (offline single-motor home)
+#include "canary_support.h"         // ShowErrorMessage / ShowMyMessage / RecordProcess / LastSet / __FUNC__
+
+int iCloseSiteStep_2x6=0;
+int iCloseSiteModeFor2x6=e2x6Standard;                                          //Steven 20240417 : 12site關中間4site
+                                         //   Kit 0  ||   Kit 1
+                                         //A  C  E  G  A  C  E  G
+int XPHSuckToSht_2x6_6[e2x6ModeTotal][8]={{0, 1, 2, 6, 7, 3, 4, 5},             //吸嘴 對 Shuttle
+                                          {0, 2, 1, 6, 7, 4, 3, 5},             //Steven 20250123 : 修正2x6 in arm to sht位置異常
+                                          {0, 1, 2, 6, 7, 3, 4, 5},
+                                          {0, 1, 4, 5, 2, 3, 6, 7},             //倆倆放, 標準pitch //Steven 20240417 : 12site關中間4site
+                                          {0, 4, 1, 5, 2, 3, 6, 7},             //倆倆放, 大pitch
+                                          {0, 1, 4, 5, 2, 3, 6, 7},             //單隻放
+                                          {0, 1, 2, 3, 4, 5, 6, 7},             //四顆一起放
+                                          {0, 1, 3, 2, 4, 5, 6, 7}};            //四顆跳格放
+//==============================================================================
+bool DoInArmTryPickFromHotPlate_9045_2x6_8(bool bOneTimeCheckAll, bool bShowErrorMessage);
+//==============================================================================
+void SetInOutArmParameter_2x6_8()
+{
+    if(USE_PICKER_COUNT==ep16Picker)
+    {
+//        CopyInitSuck(&InArmSuckBackup , &InArmSuck , 0, 0, 0, 0);
+//        CopyInitSuck(&InArmSuckBackup , &InArmSuck , 0, 2, 0, 1);
+//        CopyInitSuck(&InArmSuckBackup , &InArmSuck , 0, 4, 0, 2);
+//        CopyInitSuck(&InArmSuckBackup , &InArmSuck , 0, 6, 0, 3);
+//        CopyInitSuck(&InArmSuckBackup , &InArmSuck , 1, 0, 1, 0);
+//        CopyInitSuck(&InArmSuckBackup , &InArmSuck , 1, 2, 1, 1);
+//        CopyInitSuck(&InArmSuckBackup , &InArmSuck , 1, 4, 1, 2);
+//        CopyInitSuck(&InArmSuckBackup , &InArmSuck , 1, 6, 1, 3);
+
+//        CopyInitSuck(&InArmSuckBackup , &InArmSuck , 0, 1, 0, 4);
+//        CopyInitSuck(&InArmSuckBackup , &InArmSuck , 0, 3, 0, 5);
+//        CopyInitSuck(&InArmSuckBackup , &InArmSuck , 0, 5, 0, 6);
+//        CopyInitSuck(&InArmSuckBackup , &InArmSuck , 0, 7, 0, 7);
+//        CopyInitSuck(&InArmSuckBackup , &InArmSuck , 1, 1, 1, 4);
+//        CopyInitSuck(&InArmSuckBackup , &InArmSuck , 1, 3, 1, 5);
+//        CopyInitSuck(&InArmSuckBackup , &InArmSuck , 1, 5, 1, 6);
+//        CopyInitSuck(&InArmSuckBackup , &InArmSuck , 1, 7, 1, 7);
+
+        CopyInitSuck(&OutArmSuckBackup, &OutArmSuck, 0, 0, 0, 0);
+        CopyInitSuck(&OutArmSuckBackup, &OutArmSuck, 0, 2, 0, 1);
+        CopyInitSuck(&OutArmSuckBackup, &OutArmSuck, 0, 4, 0, 2);
+        CopyInitSuck(&OutArmSuckBackup, &OutArmSuck, 0, 6, 0, 3);
+        CopyInitSuck(&OutArmSuckBackup, &OutArmSuck, 1, 0, 1, 0);
+        CopyInitSuck(&OutArmSuckBackup, &OutArmSuck, 1, 2, 1, 1);
+        CopyInitSuck(&OutArmSuckBackup, &OutArmSuck, 1, 4, 1, 2);
+        CopyInitSuck(&OutArmSuckBackup, &OutArmSuck, 1, 6, 1, 3);
+
+        CopyInitSuck(&OutArmSuckBackup, &OutArmSuck, 0, 1, 0, 4);
+        CopyInitSuck(&OutArmSuckBackup, &OutArmSuck, 0, 3, 0, 5);
+        CopyInitSuck(&OutArmSuckBackup, &OutArmSuck, 0, 5, 0, 6);
+        CopyInitSuck(&OutArmSuckBackup, &OutArmSuck, 0, 7, 0, 7);
+        CopyInitSuck(&OutArmSuckBackup, &OutArmSuck, 1, 1, 1, 4);
+        CopyInitSuck(&OutArmSuckBackup, &OutArmSuck, 1, 3, 1, 5);
+        CopyInitSuck(&OutArmSuckBackup, &OutArmSuck, 1, 5, 1, 6);
+        CopyInitSuck(&OutArmSuckBackup, &OutArmSuck, 1, 7, 1, 7);
+    }
+
+    InArmSuck .SetPickerCount(2, 4, 2, 6, 1, 4, 3);
+    OutArmSuck.SetPickerCount(2, 4, 2, 6, 1, 4, 3);
+}
+//==============================================================================
+//個位數為Y座標, 2=標準, 0=A排, 1=B排
+//百位數以上為X座標, 千位數為Offset左右之分, 分配方式如下
+//        0        |        10           =標準
+//   100     101   |   110     111       =左右分兩次
+// 200 201 202 203 | 210 211 212 213     =左右分四次
+int GetNowSiteKitMode_2x6_8(int iSht, int iKit, bool bPlace)
+{
+    int iKitPos=(iCloseSiteModeFor2x6<=e2x6OneByOne)?(iKit*1000):0;
+    int iShtCol0=0, iShtCol1=0, iShtCol2=0, iShtCol3=0;
+    int iX=HAS_TESTING_IC;
+    if(Zteach->fShow)                                                           //kevin 20210416 add Autoteach Z offset shuttle pick
+        iX=NULL_IC;
+    else if(bRunAutoClean && fContact->IsRun2DCheck()==false)                   //JerryYang 20250428 : fix 2DID map                                   //kevin 20220927  IC >3500 //kevin 20220922//kevin 20121430
+        iX=CLEAN_FINISH_IC;
+    else if(fContact->IsRun2DCheck())                                           //JerryYang 20250428 : fix 2DID map
+        iX=HAS_IC;
+
+    if(bPlace==true)
+    {
+        if(TestIF.iAutoClean_Function &&
+           bUse8Picker==false && bRunAutoClean &&
+           fContact->IsRun2DCheck()==false)                                     //JerryYang 20250428 : fix 2DID map
+        {
+            if(iCloseSiteModeFor2x6==e2x6CloseCenter2x4)                        //倆倆放, 標準pitch //Steven 20240417 : 12site關中間4site
+            {
+                if(InArmSuck.Item[1][0]>=HAS_IC || InArmSuck.Item[1][1]>=HAS_IC)
+                    return ((iShuttleRowKit==1 || iShuttleRowKit==3)?30000:30001);
+                else                                                            //if(InArmSuck.Item[1][1]>=HAS_IC || InArmSuck.Item[1][3]>=HAS_IC)
+                    return ((iShuttleRowKit==1 || iShuttleRowKit==3)?31000:31001);
+            }
+            else if(iCloseSiteModeFor2x6==e2x6CloseCenter2x4Step2)              //倆倆放, 大pitch
+            {
+                if(InArmSuck.Item[1][0]>=HAS_IC || InArmSuck.Item[1][2]>=HAS_IC)
+                    return ((iShuttleRowKit==1 || iShuttleRowKit==3)?40000:40001);
+                else                                                            //if(InArmSuck.Item[1][1]>=HAS_IC || InArmSuck.Item[1][3]>=HAS_IC)
+                    return ((iShuttleRowKit==1 || iShuttleRowKit==3)?41000:41001);
+            }
+            else if(iCloseSiteModeFor2x6==e2x6CloseCenter2x41By1)               //單隻放
+            {
+                if(InArmSuck.Item[1][0]>=HAS_IC)
+                    return ((iShuttleRowKit==1 || iShuttleRowKit==3)?50000:50001);
+                else if(InArmSuck.Item[1][1]>=HAS_IC)
+                    return ((iShuttleRowKit==1 || iShuttleRowKit==3)?50100:50101);
+                else if(InArmSuck.Item[1][2]>=HAS_IC)
+                    return ((iShuttleRowKit==1 || iShuttleRowKit==3)?51000:51001);
+                else                                                            //if(InArmSuck.Item[1][3]>=HAS_IC)
+                    return ((iShuttleRowKit==1 || iShuttleRowKit==3)?51100:51101);
+            }
+            else if(iCloseSiteModeFor2x6==e2x6Run2x4)                           //四顆一起放
+            {
+                return ((iShuttleRowKit==1 || iShuttleRowKit==3)?60000:60001);
+            }
+            else if(iCloseSiteModeFor2x6==e2x6Run2x4Step2)                      //四顆跳格放
+            {
+                if(InArmSuck.Item[1][0]>=HAS_IC || InArmSuck.Item[1][2]>=HAS_IC)
+                    return ((iShuttleRowKit==1 || iShuttleRowKit==3)?70000:70001);
+                else                                                            //if(InArmSuck.Item[1][1]>=HAS_IC || InArmSuck.Item[1][3]>=HAS_IC)
+                    return ((iShuttleRowKit==1 || iShuttleRowKit==3)?70100:70101);
+            }
+            else if(InArmSuck.iXStep==1)
+            {
+                return ((iShuttleRowKit==1 || iShuttleRowKit==3)?0:1)+iKitPos;
+            }
+            else if(InArmSuck.iXStep==2)
+            {
+                if(InArmSuck.Item[1][0]>=HAS_IC || InArmSuck.Item[1][2]>=HAS_IC)
+                    return ((iShuttleRowKit==1 || iShuttleRowKit==3)?10000:10001)+iKitPos;
+                else                                                            //if(InArmSuck.Item[1][1]>=HAS_IC || InArmSuck.Item[1][3]>=HAS_IC)
+                    return ((iShuttleRowKit==1 || iShuttleRowKit==3)?10100:10101)+iKitPos;
+            }
+            else                                                                //if(InArmSuck.iXStep==4)
+            {
+                if(InArmSuck.Item[1][0]>=HAS_IC)
+                    return ((iShuttleRowKit==1 || iShuttleRowKit==3)?20000:20001)+iKitPos;
+                else if(InArmSuck.Item[1][1]>=HAS_IC)
+                    return ((iShuttleRowKit==1 || iShuttleRowKit==3)?20100:20101)+iKitPos;
+                else if(InArmSuck.Item[1][2]>=HAS_IC)
+                    return ((iShuttleRowKit==1 || iShuttleRowKit==3)?20200:20201)+iKitPos;
+                else                                                            //if(InArmSuck.Item[1][3]>=HAS_IC)
+                    return ((iShuttleRowKit==1 || iShuttleRowKit==3)?20300:20301)+iKitPos;
+            }
+        }
+        else
+        {
+            if(iCloseSiteModeFor2x6==e2x6CloseCenter2x4)                        //倆倆放, 標準pitch //Steven 20240417 : 12site關中間4site
+            {
+                if(InArmSuck.iYStep==1 && bRunAutoClean==false)
+                {
+                    if(InArmSuck.Item[0][0]>=HAS_IC || InArmSuck.Item[0][1]>=HAS_IC ||
+                       InArmSuck.Item[1][0]>=HAS_IC || InArmSuck.Item[1][1]>=HAS_IC)
+                        return 30002;                                           //左邊四顆
+                    else                                                        //if(InArmSuck.Item[0][1]>=HAS_IC || InArmSuck.Item[0][3]>=HAS_IC ||
+                         //   InArmSuck.Item[1][1]>=HAS_IC || InArmSuck.Item[1][3]>=HAS_IC)
+                        return 31002;                                           //右邊四顆
+                }
+                else
+                {
+                    if(InArmSuck.Item[0][0]>=HAS_IC || InArmSuck.Item[0][1]>=HAS_IC)
+                        return 30000;                                           //左上兩顆
+                    else if(InArmSuck.Item[0][2]>=HAS_IC || InArmSuck.Item[0][3]>=HAS_IC)
+                        return 31000;                                           //右上兩顆
+                    else if(InArmSuck.Item[1][0]>=HAS_IC || InArmSuck.Item[1][1]>=HAS_IC)
+                        return 30001;                                           //左下兩顆
+                    else                                                        //if(InArmSuck.Item[1][2]>=HAS_IC || InArmSuck.Item[1][3]>=HAS_IC)
+                        return 31001;                                           //右下兩顆
+                }
+            }
+            else if(iCloseSiteModeFor2x6==e2x6CloseCenter2x4Step2)              //倆倆放, 大pitch
+            {
+                if(InArmSuck.iYStep==1 && bRunAutoClean==false)
+                {
+                    if(InArmSuck.Item[0][0]>=HAS_IC || InArmSuck.Item[0][2]>=HAS_IC ||
+                       InArmSuck.Item[1][0]>=HAS_IC || InArmSuck.Item[1][2]>=HAS_IC)
+                        return 40002;                                           //左邊四顆
+                    else                                                        //if(InArmSuck.Item[0][1]>=HAS_IC || InArmSuck.Item[0][3]>=HAS_IC ||
+                         //   InArmSuck.Item[1][1]>=HAS_IC || InArmSuck.Item[1][3]>=HAS_IC)
+                        return 41002;                                           //右邊四顆
+                }
+                else
+                {
+                    if(InArmSuck.Item[0][0]>=HAS_IC || InArmSuck.Item[0][2]>=HAS_IC)
+                        return 40000;                                           //左上兩顆
+                    else if(InArmSuck.Item[0][1]>=HAS_IC || InArmSuck.Item[0][3]>=HAS_IC)
+                        return 41000;                                           //右上兩顆
+                    else if(InArmSuck.Item[1][0]>=HAS_IC || InArmSuck.Item[1][2]>=HAS_IC)
+                        return 40001;                                           //左下兩顆
+                    else                                                        //if(InArmSuck.Item[1][1]>=HAS_IC || InArmSuck.Item[1][3]>=HAS_IC)
+                        return 41001;                                           //右下兩顆
+                }
+            }
+            else if(iCloseSiteModeFor2x6==e2x6CloseCenter2x41By1)               //單隻放
+            {
+                if(InArmSuck.iYStep==1 && bRunAutoClean==false)
+                {
+                    if(InArmSuck.Item[0][0]>=HAS_IC ||
+                       InArmSuck.Item[1][0]>=HAS_IC)
+                        return 50002;
+                    else if(InArmSuck.Item[0][1]>=HAS_IC ||
+                            InArmSuck.Item[1][1]>=HAS_IC)
+                        return 50102;
+                    else if(InArmSuck.Item[0][2]>=HAS_IC ||
+                            InArmSuck.Item[1][2]>=HAS_IC)
+                        return 51002;
+                    else                                                        //if(InArmSuck.Item[0][3]>=HAS_IC ||
+                         //   InArmSuck.Item[1][3]>=HAS_IC)
+                        return 51002;
+                }
+                else
+                {
+                    if(InArmSuck.Item[0][0]>=HAS_IC)
+                        return 50000;
+                    else if(InArmSuck.Item[0][1]>=HAS_IC)
+                        return 50100;
+                    else if(InArmSuck.Item[0][2]>=HAS_IC)
+                        return 51000;
+                    else if(InArmSuck.Item[0][3]>=HAS_IC)
+                        return 51100;
+                    else if(InArmSuck.Item[1][0]>=HAS_IC)
+                        return 50001;
+                    else if(InArmSuck.Item[1][1]>=HAS_IC)
+                        return 50101;
+                    else if(InArmSuck.Item[1][2]>=HAS_IC)
+                        return 51001;
+                    else                                                        //if(InArmSuck.Item[1][3]>=HAS_IC)
+                        return 51101;
+                }
+            }
+            else if(iCloseSiteModeFor2x6==e2x6Run2x4)                           //四顆一起放
+            {
+                if(InArmSuck.iYStep==1 && bRunAutoClean==false)
+                {
+                    return 60002;
+                }
+                else
+                {
+                    if(InArmSuck.Item[0][0]>=HAS_IC || InArmSuck.Item[0][1]>=HAS_IC ||
+                       InArmSuck.Item[0][2]>=HAS_IC || InArmSuck.Item[0][3]>=HAS_IC)
+                        return 60000;
+                    else
+                        return 60001;
+                }
+            }
+            else if(iCloseSiteModeFor2x6==e2x6Run2x4Step2)                      //四顆跳格放
+            {
+                if(InArmSuck.iYStep==1 && bRunAutoClean==false)
+                {
+                    if(InArmSuck.Item[1][0]>=HAS_IC || InArmSuck.Item[1][2]>=HAS_IC)
+                        return 70002;
+                    else
+                        return 70102;
+                }
+                else
+                {
+                    if(InArmSuck.Item[0][0]>=HAS_IC || InArmSuck.Item[0][2]>=HAS_IC)
+                        return 70000;
+                    else if(InArmSuck.Item[0][1]>=HAS_IC || InArmSuck.Item[0][3]>=HAS_IC)
+                        return 70100;
+                    else if(InArmSuck.Item[1][0]>=HAS_IC || InArmSuck.Item[1][2]>=HAS_IC)
+                        return 70001;
+                    else if(InArmSuck.Item[1][1]>=HAS_IC || InArmSuck.Item[1][3]>=HAS_IC)
+                        return 70101;
+                }
+            }
+            else if(InArmSuck.iXStep==1)
+            {
+                if(InArmSuck.iYStep==1 && bRunAutoClean==false)
+                {
+                    return 2+iKitPos;
+                }
+                else
+                {
+                    for(int j=0; j<4; j++)
+                    {
+                        if(InArmSuck.Item[0][j]>=HAS_IC)
+                            return 0+iKitPos;                                   //A排四顆
+                    }
+                    return 1+iKitPos;                                           //B排四顆
+                }
+            }
+            else if(InArmSuck.iXStep==2)
+            {
+                if(InArmSuck.iYStep==1 && bRunAutoClean==false)
+                {
+                    if(InArmSuck.Item[0][0]>=HAS_IC || InArmSuck.Item[0][2]>=HAS_IC ||
+                       InArmSuck.Item[1][0]>=HAS_IC || InArmSuck.Item[1][2]>=HAS_IC)
+                        return 10002+iKitPos;                                   //左邊四顆
+                    else                                                        //if(InArmSuck.Item[0][1]>=HAS_IC || InArmSuck.Item[0][3]>=HAS_IC ||
+                         //   InArmSuck.Item[1][1]>=HAS_IC || InArmSuck.Item[1][3]>=HAS_IC)
+                        return 10102+iKitPos;                                   //右邊四顆
+                }
+                else
+                {
+                    if(InArmSuck.Item[0][0]>=HAS_IC || InArmSuck.Item[0][2]>=HAS_IC)
+                        return 10000+iKitPos;                                   //左上兩顆
+                    else if(InArmSuck.Item[0][1]>=HAS_IC || InArmSuck.Item[0][3]>=HAS_IC)
+                        return 10100+iKitPos;                                   //右上兩顆
+                    else if(InArmSuck.Item[1][0]>=HAS_IC || InArmSuck.Item[1][2]>=HAS_IC)
+                        return 10001+iKitPos;                                   //左下兩顆
+                    else                                                        //if(InArmSuck.Item[1][1]>=HAS_IC || InArmSuck.Item[1][3]>=HAS_IC)
+                        return 10101+iKitPos;                                   //右下兩顆
+                }
+            }
+            else                                                                //if(InArmSuck.iXStep==4)
+            {
+                if((InArmSuck.iYStep==1 && bRunAutoClean==false) ||
+                   (InArmSuck.iYStep==1 && bRunAutoClean==true && bUse8Picker==true))                                   //Sam 20250203 : 修正 2X6 Hangup
+                {
+                    if(InArmSuck.Item[0][0]>=HAS_IC ||
+                       InArmSuck.Item[1][0]>=HAS_IC)
+                        return 20002+iKitPos;
+                    else if(InArmSuck.Item[0][1]>=HAS_IC ||
+                            InArmSuck.Item[1][1]>=HAS_IC)
+                        return 20102+iKitPos;
+                    else if(InArmSuck.Item[0][2]>=HAS_IC ||
+                            InArmSuck.Item[1][2]>=HAS_IC)
+                        return 20202+iKitPos;
+                    else                                                        //if(InArmSuck.Item[0][3]>=HAS_IC ||
+                         //   InArmSuck.Item[1][3]>=HAS_IC)
+                        return 20302+iKitPos;
+                }
+                else
+                {
+                    if(InArmSuck.Item[0][0]>=HAS_IC)
+                        return 20000+iKitPos;
+                    else if(InArmSuck.Item[0][1]>=HAS_IC)
+                        return 20100+iKitPos;
+                    else if(InArmSuck.Item[0][2]>=HAS_IC)
+                        return 20200+iKitPos;
+                    else if(InArmSuck.Item[0][3]>=HAS_IC)
+                        return 20300+iKitPos;
+                    else if(InArmSuck.Item[1][0]>=HAS_IC)
+                        return 20001+iKitPos;
+                    else if(InArmSuck.Item[1][1]>=HAS_IC)
+                        return 20101+iKitPos;
+                    else if(InArmSuck.Item[1][2]>=HAS_IC)
+                        return 20201+iKitPos;
+                    else                                                        //if(InArmSuck.Item[1][3]>=HAS_IC)
+                        return 20301+iKitPos;
+                }
+            }
+        }
+    }
+    else
+    {
+        for(int i=0; i<FLCarryKit.iMaxRow; i++)                                 //Steven 20241206 : InArmSuck.iShtRow -->　FLCarryKit.iMaxRow
+        {
+            for(int j=0; j<FLCarryKit.iMaxCol; j++)                             //Steven 20241206 : InArmSuck.iShtCol -->　FLCarryKit.iMaxCol
+            {
+                if(iSht==0)
+                    ptrInSHTBackup.SetItemData(i, j, (FLCarryKit.Item[i][j] || FTestSuck.Item[i][j])?iX:0);             //kevin 20220928 change shuttle for autoclean pick data   //ChungHung 20131120 AutoClean use Hotplate1
+                else
+                    ptrInSHTBackup.SetItemData(i, j, (BLCarryKit.Item[i][j] || BTestSuck.Item[i][j])?iX:0);             //kevin 20220928 change shuttle for autoclean pick data  //ChungHung 20131120 AutoClean use Hotplate1
+            }
+        }
+
+        int iPickKit32=(iKit==1)?4:0;
+        iShtCol0=GetShuttleCol(0, 0+iPickKit32);
+        iShtCol1=GetShuttleCol(0, 1+iPickKit32);
+        iShtCol2=GetShuttleCol(0, 2+iPickKit32);
+        iShtCol3=GetShuttleCol(0, 3+iPickKit32);
+
+        if(iCloseSiteModeFor2x6==e2x6CloseCenter2x4)                            //倆倆放, 標準pitch //Steven 20240417 : 12site關中間4site
+        {
+            if(ptrInSHTBackup.Item[0][iShtCol0]==iX || ptrInSHTBackup.Item[0][iShtCol1]==iX)
+                return 30000;
+            else if(ptrInSHTBackup.Item[0][iShtCol2]==iX || ptrInSHTBackup.Item[0][iShtCol3]==iX)
+                return 31000;
+            else if(ptrInSHTBackup.Item[1][iShtCol0]==iX || ptrInSHTBackup.Item[1][iShtCol1]==iX)
+                return 30001;
+            else                                                                //if(ptrInSHTBackup.Item[1][iShtCol2]==iX || ptrInSHTBackup.Item[1][iShtCol3]==iX)
+                return 31001;
+        }
+        else if(iCloseSiteModeFor2x6==e2x6CloseCenter2x4Step2)                  //倆倆放, 大pitch
+        {
+            if(ptrInSHTBackup.Item[0][iShtCol0]==iX || ptrInSHTBackup.Item[0][iShtCol1]==iX)
+                return 40000;
+            else if(ptrInSHTBackup.Item[0][iShtCol2]==iX || ptrInSHTBackup.Item[0][iShtCol3]==iX)
+                return 40100;
+            else if(ptrInSHTBackup.Item[1][iShtCol0]==iX || ptrInSHTBackup.Item[1][iShtCol1]==iX)
+                return 40001;
+            else                                                                //if(ptrInSHTBackup.Item[1][iShtCol2]==iX || ptrInSHTBackup.Item[1][iShtCol3]==iX)
+                return 40101;
+        }
+        else if(iCloseSiteModeFor2x6==e2x6CloseCenter2x41By1)                   //單隻放
+        {
+            if(ptrInSHTBackup.Item[0][iShtCol0]==iX)
+                return 50000;
+            else if(ptrInSHTBackup.Item[0][iShtCol1]==iX)
+                return 50100;
+            else if(ptrInSHTBackup.Item[0][iShtCol2]==iX)
+                return 51000;
+            else if(ptrInSHTBackup.Item[0][iShtCol3]==iX)
+                return 51100;
+            else if(ptrInSHTBackup.Item[1][iShtCol0]==iX)
+                return 50001;
+            else if(ptrInSHTBackup.Item[1][iShtCol1]==iX)
+                return 50101;
+            else if(ptrInSHTBackup.Item[1][iShtCol2]==iX)
+                return 51001;
+            else                                                                //if(ptrInSHTBackup.Item[1][iShtCol3]==iX)
+                return 51101;
+        }
+        else if(iCloseSiteModeFor2x6==e2x6Run2x4)
+        {
+            if(ptrInSHTBackup.Item[0][0+iCloseSiteStep_2x6]>=HAS_IC ||
+               ptrInSHTBackup.Item[0][1+iCloseSiteStep_2x6]>=HAS_IC ||
+               ptrInSHTBackup.Item[0][2+iCloseSiteStep_2x6]>=HAS_IC ||
+               ptrInSHTBackup.Item[0][3+iCloseSiteStep_2x6]>=HAS_IC)
+                return 60000;
+            else
+                return 60001;
+        }
+        else if(iCloseSiteModeFor2x6==e2x6Run2x4Step2)
+        {
+            if(ptrInSHTBackup.Item[0][0+iCloseSiteStep_2x6]>=HAS_IC || ptrInSHTBackup.Item[0][2+iCloseSiteStep_2x6]>=HAS_IC)
+                return 70000;
+            else if(ptrInSHTBackup.Item[0][1+iCloseSiteStep_2x6]>=HAS_IC || ptrInSHTBackup.Item[0][3+iCloseSiteStep_2x6]>=HAS_IC)
+                return 70100;
+            else if(ptrInSHTBackup.Item[1][0+iCloseSiteStep_2x6]>=HAS_IC || ptrInSHTBackup.Item[1][2+iCloseSiteStep_2x6]>=HAS_IC)
+                return 70001;
+            else if(ptrInSHTBackup.Item[1][1+iCloseSiteStep_2x6]>=HAS_IC || ptrInSHTBackup.Item[1][3+iCloseSiteStep_2x6]>=HAS_IC)
+                return 70101;
+        }
+        else if(InArmSuck.iXStep==1)
+        {
+            for(int j=0; j<InArmSuck.iPickCol; j++)
+            {
+                int iShtCol=GetShuttleCol(0, j+iPickKit32);
+                if(ptrInSHTBackup.Item[0][iShtCol]==iX)
+                    return 0+iKitPos;                                           //A排四顆
+            }
+            return 1+iKitPos;                                                   //B排四顆
+        }
+        else if(InArmSuck.iXStep==2)
+        {
+            if(ptrInSHTBackup.Item[0][iShtCol0]==iX || ptrInSHTBackup.Item[0][iShtCol1]==iX)
+                return 10000+iKitPos;
+            else if(ptrInSHTBackup.Item[0][iShtCol2]==iX || ptrInSHTBackup.Item[0][iShtCol3]==iX)
+                return 10100+iKitPos;
+            else if(ptrInSHTBackup.Item[1][iShtCol0]==iX || ptrInSHTBackup.Item[1][iShtCol1]==iX)
+                return 10001+iKitPos;
+            else                                                                //if(ptrInSHTBackup.Item[1][iShtCol2]==iX || ptrInSHTBackup.Item[1][iShtCol3]==iX)
+                return 10101+iKitPos;
+        }
+        else                                                                    //if(InArmSuck.iXStep==4)
+        {
+            if(InArmSuck.iYStep==1 && bRunAutoClean==true && bUse8Picker==true)                                         //Sam 20250203 : 修正 2X6 Hangup
+            {
+                if(ptrInSHTBackup.Item[0][iShtCol0]==iX ||
+                   ptrInSHTBackup.Item[1][iShtCol0]==iX)
+                    return 20002+iKitPos;
+                else if(ptrInSHTBackup.Item[0][iShtCol1]==iX ||
+                        ptrInSHTBackup.Item[1][iShtCol1]==iX)
+                    return 20102+iKitPos;
+                else if(ptrInSHTBackup.Item[0][iShtCol2]==iX ||
+                        ptrInSHTBackup.Item[1][iShtCol2]==iX)
+                    return 20202+iKitPos;
+                else                                                            //if(ptrInSHTBackup.Item[0][iShtCol3]==iX ||
+                    //    ptrInSHTBackup.Item[0][iShtCol3]==iX)
+                    return 20302+iKitPos;
+            }
+            else
+            {
+                if(ptrInSHTBackup.Item[0][iShtCol0]==iX)
+                    return 20000+iKitPos;
+                else if(ptrInSHTBackup.Item[0][iShtCol1]==iX)
+                    return 20100+iKitPos;
+                else if(ptrInSHTBackup.Item[0][iShtCol2]==iX)
+                    return 20200+iKitPos;
+                else if(ptrInSHTBackup.Item[0][iShtCol3]==iX)
+                    return 20300+iKitPos;
+                else if(ptrInSHTBackup.Item[1][iShtCol0]==iX)
+                    return 20001+iKitPos;
+                else if(ptrInSHTBackup.Item[1][iShtCol1]==iX)
+                    return 20101+iKitPos;
+                else if(ptrInSHTBackup.Item[1][iShtCol2]==iX)
+                    return 20201+iKitPos;
+                else                                                            //if(ptrInSHTBackup.Item[1][iShtCol3]==iX)
+                    return 20301+iKitPos;
+            }
+        }
+    }
+
+    return 2;
+}
+//==============================================================================
+void InArmZNeedDown_2x6_8(int iSht, int iKit, bool bPlace)
+{
+    if(InitialInArmNeedSuck(iSht, bPlace)==false)
+        return;
+
+    int iSuckRow, iSuckCol, iShtCol;
+    int iMode   =GetNowSiteKitMode_2x6_8(iSht, iKit, bPlace);
+    int iModeRow=iMode%100;
+    int iModeCol=iMode/100;
+    int iPickKit32=(iKit==1)?4:0;
+
+    if(iCloseSiteModeFor2x6>e2x6OneByOne)
+        iPickKit32=0;
+
+    for(int i=0; i<2; i++)
+    {
+        for(int j=0; j<4; j++)
+        {
+            iSuckRow=(TestIF.iAutoClean_Function && bUse8Picker==false && bRunAutoClean && fContact->IsRun2DCheck()==false)?1:i;                                //JerryYang 20250428 : fix 2DID map
+            iSuckCol=j;
+            iShtCol =GetShuttleCol(i, j+iPickKit32);
+
+            if(iModeCol==0 &&                                                   //吸嘴    ==>  蝦頭 Kit 0
+               (iModeRow==2 || iModeRow==i))                                    //O O O X      O O O X X X X X
+            {                                                                   //O O O X      O O O X X X X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==10 &&                                             //吸嘴    ==>  蝦頭 Kit 1
+               (iModeRow==2 || iModeRow==i))                                    //X O O O      X X X O O O X X
+            {                                                                   //X O O O      X X X O O O X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==100 && (j==0 || j==2) &&                          //吸嘴    ==>  蝦頭 Kit 0
+                    (iModeRow==2 || iModeRow==i))                               //O X O X      O O X X X X X X
+            {                                                                   //O X O X      O O X X X X X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==101 && (j==1 || j==3) &&                          //吸嘴    ==>  蝦頭 Kit 1
+                    (iModeRow==2 || iModeRow==i))                               //X O X Q      X X O X X X Q X
+            {                                                                   //X O X Q      X X O X X X Q X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==110 && (j==0 || j==2) &&                          //吸嘴    ==>  蝦頭 Kit 0
+                    (iModeRow==2 || iModeRow==i))                               //Q X O X      X X X O X X X Q
+            {                                                                   //Q X O X      X X X O X X X Q
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==111 && (j==1 || j==3) &&                          //吸嘴    ==>  蝦頭 Kit 1
+                    (iModeRow==2 || iModeRow==i))                               //X O X O      X X X X O O X X
+            {                                                                   //X O X O      X X X X O O X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==200 && j==0 &&                                    //吸嘴    ==>  蝦頭 Kit 0
+                    (iModeRow==2 || iModeRow==i))                               //O X X X      O X X X X X X X
+            {                                                                   //O X X X      O X X X X X X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==201 && j==1 &&                                    //吸嘴    ==>  蝦頭 Kit 0
+                    (iModeRow==2 || iModeRow==i))                               //X O X X      X O X X X X X X
+            {                                                                   //X O X X      X O X X X X X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==202 && j==2 &&                                    //吸嘴    ==>  蝦頭 Kit 0
+                    (iModeRow==2 || iModeRow==i))                               //X X O X      X X O X X X X X
+            {                                                                   //X X O X      X X O X X X X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==203 && j==3 &&                                    //吸嘴    ==>  蝦頭 Kit 0
+                    (iModeRow==2 || iModeRow==i))                               //X X X Q      X X X X X X Q X
+            {                                                                   //X X X Q      X X X X X X Q X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==210 && j==0 &&                                    //吸嘴    ==>  蝦頭 Kit 1
+                    (iModeRow==2 || iModeRow==i))                               //Q X X X      X X X X X X X Q
+            {                                                                   //Q X X X      X X X X X X X Q
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==211 && j==1 &&                                    //吸嘴    ==>  蝦頭 Kit 1
+                    (iModeRow==2 || iModeRow==i))                               //X O X X      X X X O X X X X
+            {                                                                   //X O X X      X X X O X X X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==212 && j==2 &&                                    //吸嘴    ==>  蝦頭 Kit 1
+                    (iModeRow==2 || iModeRow==i))                               //X X O X      X X X X O X X X
+            {                                                                   //X X O X      X X X X O X X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==213 && j==3 &&                                    //吸嘴    ==>  蝦頭 Kit 1
+                    (iModeRow==2 || iModeRow==i))                               //X X X O      X X X X X O X X
+            {                                                                   //X X X O      X X X X X O X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==300 && (j==0 || j==1) &&                          //吸嘴    ==>  蝦頭
+                    (iModeRow==2 || iModeRow==i))                               //O O X X      O O X X X X X X
+            {                                                                   //O O X X      O O X X X X X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==310 && (j==2 || j==3) &&                          //吸嘴    ==>  蝦頭
+                    (iModeRow==2 || iModeRow==i))                               //X X O O      X X X X O O X X
+            {                                                                   //X X O O      X X X X O O X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==400 && (j==0 || j==2) &&                          //吸嘴    ==>  蝦頭
+                    (iModeRow==2 || iModeRow==i))                               //O X O X      O O X X X X X X
+            {                                                                   //O X O X      O O X X X X X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==410 && (j==1 || j==3) &&                          //吸嘴    ==>  蝦頭
+                    (iModeRow==2 || iModeRow==i))                               //X O X O      X X O O X X X X
+            {                                                                   //X O X O      X X O O X X X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==500 && j==0 &&                                    //吸嘴    ==>  蝦頭
+                    (iModeRow==2 || iModeRow==i))                               //O X X X      O X X X X X X X
+            {                                                                   //O X X X      O X X X X X X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==501 && j==1 &&                                    //吸嘴    ==>  蝦頭
+                    (iModeRow==2 || iModeRow==i))                               //X O X X      X O X X X X X X
+            {                                                                   //X O X X      X O X X X X X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==510 && j==2 &&                                    //吸嘴    ==>  蝦頭
+                    (iModeRow==2 || iModeRow==i))                               //X X O X      X X X X O X X X
+            {                                                                   //X X O X      X X X X O X X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==511 && j==3 &&                                    //吸嘴    ==>  蝦頭
+                    (iModeRow==2 || iModeRow==i))                               //X X X O      X X X X X O X X
+            {                                                                   //X X X O      X X X X X O X X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==600 && (j==0 || j==1 || j==2 || j==3) &&          //吸嘴
+                   (iModeRow==2 || iModeRow==i))                                //O O O O
+            {                                                                   //O O O O
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==700 && (j==0 || j==2) &&                          //吸嘴
+                   (iModeRow==2 || iModeRow==i))                                //O X O X
+            {                                                                   //O X O X
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+            else if(iModeCol==801 && (j==1 || j==3) &&                          //吸嘴
+                   (iModeRow==2 || iModeRow==i))                                //X O X O
+            {                                                                   //X O X O
+                SetInArmNeedDestory(bPlace, i, iShtCol, iSuckRow, iSuckCol);
+            }
+        }
+    }
+}
+//==============================================================================
+void CheckXYPitch_2x6_8(int *iX, int *iY, int iSht, int iKit, bool bPlace, int iMovePitchX, int iMovePitchY)
+{
+    int iMode       =GetNowSiteKitMode_2x6_8(iSht, iKit, bPlace);
+    int iModeRow    =iMode%100;
+    int iModeCol    =iMode/100;
+    int iOffsetPos  =GetInArmToShuttleOffset_9045(iSht, iModeRow, iModeCol+iKit*10, false);                             //Steven 20240826 : Fixed for offset
+    double dMovePitchX;
+
+    if(iSht==0)
+    {
+        *iX+=Prod.XInArm_Shuttle1_Place[iInArmYBase][iInArmXBase];
+        *iY+=Prod.YInArm_Shuttle1_Place[iInArmYBase][iInArmXBase];
+    }
+    else
+    {
+        *iX+=Prod.XInArm_Shuttle2_Place[iInArmYBase][iInArmXBase];
+        *iY+=Prod.YInArm_Shuttle2_Place[iInArmYBase][iInArmXBase];
+    }
+
+    if(iModeRow==0)                                                             //Row A
+    {
+        if(USE_IN_Y_IS_AUTO_PITCH==true)                                        //JerryYang 20251218 : IN/OUT ARM支援不同模組
+            *iY=*iY-iMovePitchY+TestIF.dSiteYPitch/2;
+        else
+            *iY=*iY+TestIF.dSiteYPitch/2;
+    }
+    else if(iModeRow==1)                                                        //Row B
+    {
+        if(USE_IN_Y_IS_AUTO_PITCH==true)                                        //JerryYang 20251218 : IN/OUT ARM支援不同模組
+            *iY=*iY-TestIF.dSiteYPitch/2;
+        else
+            *iY=*iY+iMovePitchY-TestIF.dSiteYPitch/2;
+    }
+    else                                                                        //Both
+    {
+        if(USE_IN_Y_IS_AUTO_PITCH==true)                                        //JerryYang 20251218 : IN/OUT ARM支援不同模組
+            *iY=*iY-TestIF.dSiteYPitch/2;
+        else
+            *iY=*iY+TestIF.dSiteYPitch/2;
+    }
+
+    if(USE_PICKER_COUNT==ep16Picker)                                            //基準為第四隻吸嘴
+    {
+        dMovePitchX=double(iMovePitchX)/7.0;
+        /**/
+    }
+    else if(USE_IN_OUT_ARM_Y_PITCH==iXYPitchBb)                                 //基準為第二隻吸嘴 //Steven for HT7080
+    {
+        dMovePitchX=double(iMovePitchX)/3.0;
+        if(iModeCol==0)                                                         //Aa --> Aa
+        {
+            *iX=*iX+(dMovePitchX*1.0-TestIF.dSiteXPitch*2.5);
+        }
+        else if(iModeCol==10)                                                   //Ab --> Ad
+        {
+            *iX=*iX+(dMovePitchX*0.0+TestIF.dSiteXPitch*0.5);
+        }
+        else if(iModeCol==100)                                                  //Aa --> Aa
+        {
+            *iX=*iX+(dMovePitchX*1.0-TestIF.dSiteXPitch*2.5);
+        }
+        else if(iModeCol==101)                                                  //Ab --> Ac
+        {
+            *iX=*iX+(dMovePitchX*0.0-TestIF.dSiteXPitch*0.5);
+        }
+        else if(iModeCol==110)                                                  //Ac --> Ad
+        {
+            *iX=*iX+(-dMovePitchX*1.0+TestIF.dSiteXPitch*0.5);
+        }
+        else if(iModeCol==111)                                                  //Ab --> Ae
+        {
+             *iX=*iX+(dMovePitchX*0.5+TestIF.dSiteXPitch*1.5);                  //Sam 20250203 : 修正 2X6 Hangup
+        }
+        else if(iModeCol==200)                                                  //Aa --> Aa
+        {
+            *iX=*iX+(dMovePitchX*1.0-TestIF.dSiteXPitch*2.5);
+        }
+        else if(iModeCol==201)                                                  //Ab --> Ab
+        {
+            *iX=*iX+(dMovePitchX*0.0-TestIF.dSiteXPitch*1.5);
+        }
+        else if(iModeCol==202 ||                                                //Ac --> Ac
+                iModeCol==203)                                                  //沒有這個項目
+        {
+            *iX=*iX+(-dMovePitchX*1.0-TestIF.dSiteXPitch*0.5);
+        }
+        else if(iModeCol==210 ||                                                //沒有這個項目
+                iModeCol==211)                                                  //Ab --> Ad
+        {
+            *iX=*iX+(dMovePitchX*0.0+TestIF.dSiteXPitch*0.5);
+        }
+        else if(iModeCol==212)                                                  //Ac --> Ae
+        {
+            *iX=*iX+(-dMovePitchX*1.0+TestIF.dSiteXPitch*1.5);
+        }
+        else if(iModeCol==213)                                                  //Ad --> Af
+        {
+            *iX=*iX+(-dMovePitchX*2.0+TestIF.dSiteXPitch*2.5);
+        }
+        else if(iModeCol==300)                                                  //Aa --> Aa
+        {
+            *iX=*iX+(dMovePitchX*1.0-TestIF.dSiteXPitch*2.5);
+        }
+        else if(iModeCol==310)                                                  //Ac --> Ae
+        {
+            *iX=*iX+(-dMovePitchX*1.0+TestIF.dSiteXPitch*1.5);
+        }
+        else if(iModeCol==400)                                                  //Aa --> Aa
+        {
+            *iX=*iX+(dMovePitchX*1.0-TestIF.dSiteXPitch*2.5);
+        }
+        else if(iModeCol==410)                                                  //Ab --> Ae
+        {
+            *iX=*iX+(dMovePitchX*0.0+TestIF.dSiteXPitch*1.5);
+        }
+        else if(iModeCol==500)                                                  //Aa --> Aa
+        {
+            *iX=*iX+(dMovePitchX*1.0-TestIF.dSiteXPitch*2.5);
+        }
+        else if(iModeCol==501)                                                  //Ab --> Ab
+        {
+            *iX=*iX+(dMovePitchX*0.0-TestIF.dSiteXPitch*1.5);
+        }
+        else if(iModeCol==510)                                                  //Ac --> Ae
+        {
+            *iX=*iX+(-dMovePitchX*1.0+TestIF.dSiteXPitch*1.5);
+        }
+        else if(iModeCol==511)                                                  //Ad --> Af
+        {
+            *iX=*iX+(-dMovePitchX*2.0+TestIF.dSiteXPitch*2.5);
+        }
+        else if(iModeCol==600)                                                  //Aa --> Aa
+        {
+            *iX=*iX+(dMovePitchX*1.0+TestIF.dSiteXPitch*((double)iCloseSiteStep_2x6-2.5));
+        }
+        else if(iModeCol==700)                                                  //Aa --> Aa
+        {
+            *iX=*iX+(dMovePitchX*1.0+TestIF.dSiteXPitch*((double)iCloseSiteStep_2x6-2.5));
+        }
+        else if(iModeCol==701)                                                  //Ab --> Aa
+        {
+            *iX=*iX+(dMovePitchX*0.0+TestIF.dSiteXPitch*((double)iCloseSiteStep_2x6-2.5));
+        }
+    }
+    else                                                                        //基準為第三隻吸嘴
+    {
+        dMovePitchX=double(iMovePitchX)/3.0;
+        if(iModeCol==0)                                                         //Aa --> Aa
+        {
+            *iX=*iX+(dMovePitchX*2.0-TestIF.dSiteXPitch*2.5);
+        }
+        else if(iModeCol==10)                                                   //Ab --> Ad
+        {
+            *iX=*iX+(dMovePitchX*1.0+TestIF.dSiteXPitch*0.5);
+        }
+        else if(iModeCol==100)                                                  //Aa --> Aa
+        {
+            *iX=*iX+(dMovePitchX*2.0-TestIF.dSiteXPitch*2.5);
+        }
+        else if(iModeCol==101)                                                  //Ab --> Ac
+        {
+            *iX=*iX+(dMovePitchX*1.0-TestIF.dSiteXPitch*0.5);
+        }
+        else if(iModeCol==110)                                                  //Ac --> Ad
+        {
+            *iX=*iX+(dMovePitchX*0.0+TestIF.dSiteXPitch*0.5);                   //Sam 20250203 : 修正 2X6 Hangup
+        }
+        else if(iModeCol==111)                                                  //Ab --> Ae
+        {
+            *iX=*iX+(dMovePitchX*1.0+TestIF.dSiteXPitch*1.5);                   //Sam 20250203 : 修正 2X6 Hangup
+        }
+        else if(iModeCol==200)                                                  //Aa --> Aa
+        {
+            *iX=*iX+(dMovePitchX*2.0-TestIF.dSiteXPitch*2.5);
+        }
+        else if(iModeCol==201)                                                  //Ab --> Ab
+        {
+            *iX=*iX+(dMovePitchX*1.0-TestIF.dSiteXPitch*1.5);
+        }
+        else if(iModeCol==202 ||                                                //Ac --> Ac
+                iModeCol==203)                                                  //沒有這個項目
+        {
+            *iX=*iX+(dMovePitchX*0.0-TestIF.dSiteXPitch*0.5);
+        }
+        else if(iModeCol==210 ||                                                //沒有這個項目
+                iModeCol==211)                                                  //Ab --> Ad
+        {
+            *iX=*iX+(dMovePitchX*1.0+TestIF.dSiteXPitch*0.5);
+        }
+        else if(iModeCol==212)                                                  //Ac --> Ae
+        {
+            *iX=*iX+(dMovePitchX*0.0+TestIF.dSiteXPitch*1.5);
+        }
+        else if(iModeCol==213)                                                  //Ad --> Af
+        {
+            *iX=*iX+(-dMovePitchX*1.0+TestIF.dSiteXPitch*2.5);
+        }
+        else if(iModeCol==300)                                                  //Aa --> Aa
+        {
+            *iX=*iX+(dMovePitchX*2.0-TestIF.dSiteXPitch*2.5);
+        }
+        else if(iModeCol==310)                                                  //Ac --> Ae
+        {
+            *iX=*iX+(dMovePitchX*0.0+TestIF.dSiteXPitch*1.5);
+        }
+        else if(iModeCol==400)                                                  //Aa --> Aa
+        {
+            *iX=*iX+(dMovePitchX*2.0-TestIF.dSiteXPitch*2.5);
+        }
+        else if(iModeCol==410)                                                  //Ab --> Ae
+        {
+            *iX=*iX+(dMovePitchX*1.0+TestIF.dSiteXPitch*1.5);
+        }
+        else if(iModeCol==500)                                                  //Aa --> Aa
+        {
+            *iX=*iX+(dMovePitchX*2.0-TestIF.dSiteXPitch*2.5);
+        }
+        else if(iModeCol==501)                                                  //Ab --> Ab
+        {
+            *iX=*iX+(dMovePitchX*1.0-TestIF.dSiteXPitch*1.5);
+        }
+        else if(iModeCol==510)                                                  //Ac --> Ae
+        {
+            *iX=*iX+(dMovePitchX*0.0+TestIF.dSiteXPitch*1.5);
+        }
+        else if(iModeCol==511)                                                  //Ad --> Af
+        {
+            *iX=*iX+(-dMovePitchX*1.0+TestIF.dSiteXPitch*2.5);
+        }
+        else if(iModeCol==600)                                                  //Aa --> Aa
+        {
+            *iX=*iX+(dMovePitchX*2.0+TestIF.dSiteXPitch*((double)iCloseSiteStep_2x6-2.5));
+        }
+        else if(iModeCol==700)                                                  //Aa --> Aa
+        {
+            *iX=*iX+(dMovePitchX*2.0+TestIF.dSiteXPitch*((double)iCloseSiteStep_2x6-2.5));
+        }
+        else if(iModeCol==701)                                                  //Ab --> Aa
+        {
+            *iX=*iX+(dMovePitchX*1.0+TestIF.dSiteXPitch*((double)iCloseSiteStep_2x6-2.5));
+        }
+    }
+
+    *iY=*iY+GetInArmYToShuttleOffset_9045(iSht, iOffsetPos);
+    *iX=*iX+GetInArmXToShuttleOffset_9045(iSht, iOffsetPos);
+    TransferInShuttleRatio(iSht, iX, iY, iInArmYBase, iInArmXBase);
+
+    InArmZNeedDown_9045(iSht, iKit, bPlace);
+}
+//==============================================================================
+// in arm x y to shuttle position
+//==============================================================================
+bool MoveInArm2XYToShuttle_9045_2x6_8(int iSht, int iKit, bool IncludeZ, bool bPlace)
+{
+    int iXPos               =iInArmShtXCenterPos;                               //Steven 20141029 : XY-Pitch for Shuttle Center position for base Suck
+    int iYPos               =iInArmShtYCenterPos;
+    int iMode               =GetNowSiteKitMode_2x6_8(iSht, iKit, bPlace);
+    int iModeRow            =iMode%100;
+    int iModeCol            =iMode/100;
+    int iMovePitchX         =iXpitchMaxX3;
+    int iMovePitchY         =GetVariableYInShuttleData();
+    int iOffsetPos          =GetInArmToShuttleOffset_9045(iSht, iModeRow, iModeCol+iKit*10, true);                      //Steven 20240826 : Fixed for offset
+    int iYVariable          =GetInArmPitchY_9045(iMovePitchY, iOffsetPos);
+    static bool bCheckZSafe =false;
+
+    if(bCheckZSafe==false)
+    {
+        if(MoveInArmZToPlateSafe(1111)==false)
+            return false;
+        else
+            bCheckZSafe=true;
+
+        ResetInToShtFlag();
+    }
+
+    if(USE_PICKER_COUNT==ep16Picker)                                            //基準為第四隻吸嘴
+    {
+        if(iCloseSiteModeFor2x6==e2x6CloseCenter2x4)
+            iMovePitchX=TestIF.dSiteXPitch/2.0*7.0;
+        else if(iCloseSiteModeFor2x6==e2x6CloseCenter2x4Step2)
+            iMovePitchX=TestIF.dSiteXPitch/4.0*7.0;
+        else if(iCloseSiteModeFor2x6==e2x6CloseCenter2x41By1)
+            iMovePitchX=iXpitchMaxX7;
+        else if(iCloseSiteModeFor2x6==e2x6Run2x4)
+            iMovePitchX=TestIF.dSiteXPitch/6.0*7.0;
+        else if(iCloseSiteModeFor2x6==e2x6Run2x4Step2)
+            iMovePitchX=TestIF.dSiteXPitch/4.0*7.0;
+        else if(InArmSuck.iXStep==1)
+            iMovePitchX=TestIF.dSiteXPitch/2.0*7.0;
+        else if(InArmSuck.iXStep==2)
+            iMovePitchX=TestIF.dSiteXPitch/4.0*7.0;                             //四隻吸嘴佔一個site pitch, 所以每隻吸嘴是半個site pitch
+        else
+            iMovePitchX=iXpitchMaxX7;
+    }
+    else
+    {
+        if(iCloseSiteModeFor2x6==e2x6CloseCenter2x4)
+            iMovePitchX=TestIF.dSiteXPitch*3.0;
+        else if(iCloseSiteModeFor2x6==e2x6CloseCenter2x4Step2)
+            iMovePitchX=TestIF.dSiteXPitch/2.0*3.0;
+        else if(iCloseSiteModeFor2x6==e2x6CloseCenter2x41By1)
+            iMovePitchX=iXpitchMaxX7;
+        else if(iCloseSiteModeFor2x6==e2x6Run2x4)
+            iMovePitchX=TestIF.dSiteXPitch*3.0;
+        else if(iCloseSiteModeFor2x6==e2x6Run2x4Step2)
+            iMovePitchX=TestIF.dSiteXPitch/2.0*3.0;
+        if(InArmSuck.iXStep==1)
+            iMovePitchX=TestIF.dSiteXPitch*3.0;
+        else if(InArmSuck.iXStep==2)
+            iMovePitchX=TestIF.dSiteXPitch/2.0*3.0;                             //兩隻吸嘴佔一個site pitch, 所以每隻吸嘴是半個site pitch
+        else
+            iMovePitchX=iXpitchMaxX3;
+    }
+
+    for(int i=0; i<X_PITCH_COUNT; i++)
+        iInXPToSht[i]=GetInArmPitchX_9045(iMovePitchX, i, iOffsetPos);
+
+    CheckXYPitch_2x6_8(&iXPos, &iYPos, iSht, iKit, bPlace, iMovePitchX, iMovePitchY);
+    GetInArmZShtDownPos_9045(iSht, bPlace, IncludeZ);
+
+    if(bRunAutoClean &&
+       TestIF.iAutoClean_Function && fContact->IsRun2DCheck()==false)           //JerryYang 20250428 : fix 2DID map
+    {
+        if(bUse8Picker==false)                                                  //Steven 20201014 : 整合8吸嘴auto clean
+        {
+            if(iShuttleRowKit==1 || iShuttleRowKit==3)
+                iYPos+=iMovePitchY;
+        }
+
+        if(iSht==0)                                                             //Steven 20241102 : fixed for Auto Clean offset
+        {
+            iXPos=iXPos+TestIF_File.iAutoClean_Shuttle1XOffset;
+            iYPos=iYPos+TestIF_File.iAutoClean_Shuttle1YOffset;
+        }
+        else
+        {
+            iXPos=iXPos+TestIF_File.iAutoClean_Shuttle2XOffset;
+            iYPos=iYPos+TestIF_File.iAutoClean_Shuttle2YOffset;
+        }
+    }
+
+    if(InArmContinuousMove_9045(iXPos, iYPos, iInXPToSht, iYVariable, bZFlgToSht, iZPosToSht, IncludeZ))
+    {
+        ResetInToShtFlag();
+        bCheckZSafe=false;
+        return true;
+    }
+    return false;
+}
+//==============================================================================
+bool DoPlaceToHotPlate_9045_2x6_8()
+{
+    int &Task=iInArmPlaceToHotPlateTask;
+    int ip, ix, iy, j2;
+    int iStepHP=4;
+    bool flag=true;
+
+    GetHotPlateYHalfPos();
+
+    switch(Task)
+    {
+        case 1:
+            GetVariableXInHotPlateData(iPlaceHP);
+            SearchPlateToPlace();
+            bPlaceToHotplatePartOK=false;
+            Task=100;                                                           //because Z and X-Y is continue move
+//            break;
+        case 100:
+            if(MoveInArmXYToHotPlatePlace(iPlaceHP, true))
+            {
+                Task=200;
+            }
+            else
+            {
+                if(CheckInArmSuckICFallDownToHasNullIC(false)==true)            //Steven 20110516 : 修改成整合式Alarm
+                {
+                    Task=110;                                                   //JerryYang 20200422 修正掉料可能檢查不出來的問題, 檢查到有掉料要重新再確認全部吸嘴
+                }
+            }
+            break;
+        case 110:
+            CheckInArmSuckICFallDownToHasNullIC();                              //JerryYang 20200422 修正掉料可能檢查不出來的問題, 檢查到有掉料要重新再確認全部吸嘴
+            Task=100;
+            break;
+        case 200:
+            if(InArmNeedCheckHotPlateOffset(true))                              //Steven 20230531 : 簡化判斷式
+            {
+                Task=210;
+                break;
+            }
+
+            if(LastSet.iRunStartMode==rsmAutoSiteMap &&
+               bAutoSiteMapHasPickHP==true &&
+               CosFunction.bUSEJCETSiteMapMode==true)                           //Steven 20220527 : for JCET Auto Site Map
+            {
+                //pass
+            }
+            else                                                                //Jimmychiu 20230417 : Record the position after placing the IC
+            {
+                PickFromHPList->UpdateHPSuckGroup(iPlacePlate[0], iPlacePlateY[0], iPlacePlateX[0], InArmSuck.iWhichSht, InArmSuck.iWhichKit);
+            }
+
+            if(ArmSpeed[InArm].iEnableReleaseDelay==0)                          //JerryYang 20160127 for TSMC inarm release device前delay
+            {
+                InArmReleaseDelayToHot.SetSecAndOn(ArmSpeed[InArm].dReleaseDelayTime);
+                Task=340;
+            }
+            else
+            {
+                Task=350;
+            }
+            break;
+        case 210:
+            if(bEnterOffset==true)
+            {
+                bEnterOffset=false;
+                Task=220;
+            }
+            else
+            {
+                Task=100;
+            }
+            break;
+        case 220:
+            if(MoveInArmZToPlateSafe(Task))
+            {
+                Task=100;
+            }
+            break;
+        case 340:
+            if(InArmReleaseDelayToHot.Off())                                    //JerryYang 20160127 for TSMC inarm release device前delay
+            {
+                Task=350;
+            }
+            break;
+        case 350:
+            iStepHP=GetHotPlateColStep(iPlaceHP);
+
+            if(LastSet.iRunStartMode==rsmAutoSiteMap &&
+               bAutoSiteMapHasPickHP==true &&
+               CosFunction.bUSEJCETSiteMapMode==true)                                                                   //Steven 20220527 : for JCET Auto Site Map
+            {
+                if(InArmSuck.Suck[iAutoSiteMapInArmRow][iAutoSiteMapInArmCol].Destroy())
+                {
+                    DoPlaceToHPBackupData(iAutoSiteMapInArmRow, iAutoSiteMapInArmCol, iAutoSiteMapHPNo, iAutoSiteMapHPR, iAutoSiteMapHPC);
+                    InArmSuck.SetAllToNullIC();
+                }
+                else                                                                                                    //if(InArmSuck.Suck[iAutoSiteMapInArmRow][iAutoSiteMapInArmCol].Error==false) // kevin 20141206
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                for(int i=0; i<2; i++)
+                {
+                    for(int j=0; j<iStepHP; j++)
+                    {
+                        if(i==1 && Row2CanPutHP(PlaceMode)==false &&
+                           iPlaceHPOrder==0 &&
+                           bAutoSiteMapHotplateSave==false)                                                             //Ifor 20171003 (Steven) : add避免無法放回 Hotplate
+                        {
+                            continue;
+                        }
+
+                        j2=GetPlaceToHotPlateSuckCol(j);
+
+                        if(InArmSuck.Item[i][j2]==HAS_IC ||
+                           InArmSuck.Item[i][j2]==HAS_NULL_IC)
+                        {
+                            ip=iPlacePlate[0];
+                            ix=GetPlaceToHotPlateCol(j);
+
+                            if(ix>=HotPlateForm.XDivision &&
+                               bAutoSiteMapHotplateSave==false)                                                         //Ifor 20180813 (Steven) : Add Auto Site Mapping 補回IC時不可跳過避免Hangup
+                            {
+                                continue;
+                            }
+
+                            if(iPlaceHPOrder==0)
+                            {
+                                iy=iPlacePlateY[0]+iYHalf*i;
+                            }
+                            else
+                            {
+                                iy=iPlacePlateY[0];
+                            }
+
+                            if(InArmSuck.Item[i][j2]==HAS_NULL_IC ||
+                               InArmSuck.Suck[i][j2].Destroy())
+                            {
+                                if(bAutoSiteMapHotplateSave==true)
+                                {
+                                    DoPlaceToHPBackupData(i, j2, iAutoSiteMapHotplateSource, iy, ix);                   //Ifor 20170928 (Steven) : 將Auto Site Mapping 資料寫回到HP
+                                }
+                                else
+                                {
+                                    DoPlaceToHPSwapData(i, j2, ip, iy, ix);                                             //Steven 20170109 : 將放料到HP資料交換改成Function
+                                }
+                            }
+                            else if(InArmSuck.Suck[i][j2].Error==false)
+                            {
+                                flag=false;
+                            }
+                        }
+                    }
+                }
+
+                if(flag==false)
+                    return false;
+
+                for(int i=0; i<2; i++)
+                {
+                    for(int j=0; j<iStepHP; j++)
+                    {
+                        j2=GetPlaceToHotPlateSuckCol(j);
+
+                        if(iPlaceHPOrder==0)
+                        {
+                            if(Row2CanPutHP(PlaceMode))
+                            {
+                                if(InArmSuck.Item[i][j2]!=NULL_IC)
+                                    return false;
+                            }
+                            else
+                            {
+                                if(InArmSuck.Item[0][j2]!=NULL_IC)
+                                    return false;
+                            }
+                        }
+                        else
+                        {
+                            if(InArmSuck.Item[1][j2]!=NULL_IC)
+                                return false;
+                        }
+                    }
+                }
+            }
+
+            bPlaceToHotplatePartOK=true;                                                                                //ChungHung 20120412 add
+            DoCheckAutoSiteMappingPosition();                                                                           //Ifor 20170928 (Steven) : Check Auto Site Mapping Position
+            Task=400;
+            break;
+        case 400:
+            if(MoveInArmZToPlateSafe(Task))
+            {
+                if(InArmSuck.HasIC())
+                {
+                    if(HotPlateForm.XDivision==6)
+                    {
+                        if(i8PickerHPMode==iHPWideHP)
+                        {
+                            if(iForPlaceHPX6Step==0)
+                            {
+                                if(InArmSuck.Item[0][0]!=NULL_IC && InArmSuck.Item[0][1]!=NULL_IC && InArmSuck.Item[0][2]!=NULL_IC && InArmSuck.Item[0][3]!=NULL_IC &&
+                                   InArmSuck.Item[1][0]!=NULL_IC && InArmSuck.Item[1][1]!=NULL_IC && InArmSuck.Item[1][2]!=NULL_IC && InArmSuck.Item[1][3]!=NULL_IC)
+                                {
+                                    Task=100;
+                                    break;
+                                }
+                            }
+                            else
+                            {
+                                if(InArmSuck.Item[0][2]!=NULL_IC && InArmSuck.Item[0][3]!=NULL_IC &&
+                                   InArmSuck.Item[1][2]!=NULL_IC && InArmSuck.Item[1][3]!=NULL_IC)
+                                {
+                                    Task=100;
+                                    break;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            if(iForPlaceHPX6Step==0)
+                            {
+                                if(InArmSuck.Item[0][0]!=NULL_IC && InArmSuck.Item[0][2]!=NULL_IC &&
+                                   InArmSuck.Item[1][0]!=NULL_IC && InArmSuck.Item[1][2]!=NULL_IC)
+                                {
+                                    Task=100;
+                                    break;
+                                }
+                            }
+                            else
+                            {
+                                if(InArmSuck.Item[0][1]!=NULL_IC && InArmSuck.Item[0][3]!=NULL_IC &&
+                                   InArmSuck.Item[1][1]!=NULL_IC && InArmSuck.Item[1][3]!=NULL_IC)
+                                {
+                                    Task=100;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    Task=1;
+                    iHotCount++;                                                //jou 2012-03-06 in arm丟IC需分兩段式時，Count應該也要分兩次，不然HasHotReadyIC會多等
+                    break;
+                }
+
+                Task=500;
+            }
+            break;
+        case 500:                                                               //kevin 20131106 start   黏貨判斷
+            flag=CheckInArmDestroyICFail();                                     //Steven 20111223 : 檢查吹氣IC是否粘黏錯誤
+            if(flag==false)
+            {
+                RecordProcess("VOFTask=500");
+                return false;
+            }
+            Task=501;
+            break;
+        case 501:
+            AdjustShuttleWhichKitOrder();                                       //Steven 20160201 : 修正Shuttle放料順序
+            iHotCount++;                                                        //jou 2013-02-08 修正等待 Soak 時間時，畫面沒有顯示倒數計時的問題
+
+            if(LastSet.iTemperature==Tempture_Hot &&
+               CheckHasSpaceToPlace_9045())
+                SearchPlateToPlace();
+
+            if(LastSet.iRunStartMode==rsmAutoSiteMap &&
+               bAutoSiteMapHasPickHP==true &&
+               CosFunction.bUSEJCETSiteMapMode==true)                           //Steven 20220527 : for JCET Auto Site Map
+            {
+                bAutoSiteMapHasPickHP=false;
+            }
+            else
+            {
+                PickFromHPList->AddHPSuckGroup();                               //放完了就加入一個新的Group
+            }
+
+            if(USE_LASER_DISTANCE &&
+               TestIF_File.bEnableInArmLaser &&
+               LaserCheckPos.size()!=0)                                         //Steven 20140228 : 雷射測距功能
+            {
+                CheckInArmFloating(true);
+                Task=600;
+                break;
+            }
+            else
+            {
+                return true;
+            }
+        case 600:
+            if(CheckInArmFloating())                                            //Steven 20140228 : 雷射測距功能
+            {
+                return true;
+            }
+            break;
+    }
+    return false;
+}
+//==============================================================================
+bool DoInArmPlaceToShuttle_9045_2x6_8()
+{
+//    IN_ARM_SHUTTLE_2x6_8:
+
+    QueueTaskList[4].CheckTaskChange();                                         //Steven 20200821 : 使用Goto也要記錄Task變化
+    int ret;
+    int &Task=iInArmPlaceToShuttleTask, iFlag=0;
+    int iSuckRow=0, iSuckCol=0, iShtRow=0, iShtCol=0;
+    bool flag, bCanFreeShuttle=false;
+    bool bNeedAdjust2Time=false;                                                //Steven 20191112 : fixed for ASM close site hang up
+    static bool bCheckSpeed=false;
+    AnsiString ErrPart="", str="";
+    static bool bCheckSpeed1=false;                                             //KaiChen 20171225 (Steven)：Add Speed Display
+    if(bIndexPickUpErrorWaitRetry)                                              //Ifor 20171119 : add 避免Index Pick Up Err Inarm 偷跑造成資料異常導致Hangup
+        return false;
+
+    int iSht=0, iKit=0;
+    if(LastSet.iRunStartMode==rsmAutoSiteMap &&
+       (CosFunction.bUSEJCETSiteMapMode==true ||                                //Steven 20231113 : 修正 auto site mapping 2x6 hangup
+        CUSTOMER_CODE==CC_SCS))                                                 //jou 20230626 : 修正JSCS auto site mapping 2x8 hangup
+    {
+        iSht=iAutoSiteMapHPToSht;
+        iKit=InArmSuck.iWhichKit;
+    }
+    else if(LastSet.iTemperature==Tempture_Hot &&                               //Steven 20160227 : 改成HOT在上面
+            LastSet.iRunStartMode!=rsmAutoSiteMap &&                            //kevin 20161124 add hot AutoSitmap hang up
+            fContact->IsRun2DCheck()==false)                                    //JerryYang 20250428 : fix 2DID map
+    {
+        if(LastSet.iTemperature==Tempture_Hot &&
+           LastSet.iRunStartMode==rsmQAMode &&
+           bQAModeFinishCleanOut==true)                                         //Steven 20180601 : 修正高溫QA mode放料
+        {
+            iSht=InArmSuck.iWhichSht;
+            iKit=InArmSuck.iWhichKit;
+        }
+        else
+        {
+            iSht=InArmSuck.iWhichShtPickFor32;
+            iKit=InArmSuck.iWhichKitPickFor32;
+        }
+    }
+    else
+    {
+        iSht=InArmSuck.iWhichSht;
+        iKit=InArmSuck.iWhichKit;
+    }
+    int iPickKit32=(iKit==0)?0:4;
+//    int iShtKit32 =(iKit==0)?0:InArmSuck.iShtKitStep;
+
+    AutoSiteMappingCheckShuttle(true);                                          //Ifor 20180116 (Steven) : add Auto Site Mapping Check iWhich Shuttle
+    switch(Task)
+    {
+        case 1:
+            bDestoryOnSht=false;                                                //Steven 20170905 (wei) : 在Shuttle吹氣與資料交換的Flag
+            InArmXMoveSafe=false;
+
+            if(bPlaceToShuttle2Step==false)                                     //Steven 20160721 (Wei) : 避免放一半歸零,會Hangup
+            {
+                SetInArmUseSuckToHasNullIC(iSht, iKit);
+            }
+
+            if(IniConfig.bI37_EnableFIFOMode &&                                 //Sam 20220411 : 2X6 補 FIFO
+               LastSet.iRunStartMode==rsmFIFOMode)                              //JerryYang 20170729 (Steven) 修正FIFO模式 hang up
+            {
+            }
+            else
+            {
+                if(InArmSuck.HasRealIC()==false)                                //ChungHung 20120105 如果剛好在Shuttle放完IC時 InArm剛好讓開會HangUp
+                {
+                    if(MoveInArmZToPlateSafe(Task))
+                    {
+                        InArmSuck.SetAll(NULL_IC);
+                        fObserver->RecordInArmTime();
+                        return true;
+                    }
+                    return false;
+                }
+            }
+
+            if(ArmSpeed[InArm].bAutoSpeed)
+                bCheckSpeed=true;
+            else
+                bCheckSpeed=false;
+
+            if(IniConfig.bA26MotorSpeedSortDisplay==true &&
+               LastSet.iTemperature!=Tempture_Hot)
+                bCheckSpeed1=true;
+            else
+                bCheckSpeed1=false;
+
+            Task=100;
+        case 100:
+            if(iSht==0)
+            {
+                if(IniConfig.bD43IndexDropErrorCanRetryandSkip &&
+                   (bShuttle1MoveToRight ||
+                    bShuttle1MoveToLeft  ||                                     //Steven 20220620 : 避免index在Kit1吸取異常, In arm偷放料
+                    bShuttle1HasPickErr))                                       //Steven 20230116 : 避免In arm 偷放料
+                {
+                    Task=1;
+                    return false;
+                }
+                else
+                {
+                    if(IniConfig.bA26MotorSpeedSortDisplay==true)
+                    {
+                        if(InShtInLF(0))
+                            iInShuttleSpeed1--;
+                        else
+                            iInShuttleSpeed1++;
+                    }
+                    Task=900;
+                }
+            }
+            else
+            {
+                if(IniConfig.bD43IndexDropErrorCanRetryandSkip &&
+                   (bShuttle2MoveToRight ||
+                    bShuttle2MoveToLeft  ||                                     //Steven 20220620 : 避免index在Kit1吸取異常, In arm偷放料
+                    bShuttle2HasPickErr))                                       //Steven 20230116 : 避免In arm 偷放料
+                {
+                    Task=1;
+                    return false;
+                }
+                else
+                {
+                    if(IniConfig.bA26MotorSpeedSortDisplay==true)
+                    {
+                        if(InShtInLF(1))
+                            iInShuttleSpeed1--;
+                        else
+                            iInShuttleSpeed1++;
+                    }
+                    Task=1900;
+                }
+            }
+
+            if(Task!=900)
+                break;
+//            goto IN_ARM_SHUTTLE_2x6_8;
+        case 900:
+            if(InSHT1InLF() &&
+               FLCarryKit.UseSiteFullIC()==false)
+            {
+                if(bCheckSpeed)                                                 //Steven 20110525 : Auto Speed
+                {
+                    bCheckSpeed=false;
+                    InArmAddSpeed();
+                }
+
+                if(bCheckSpeed1)
+                {
+                    bCheckSpeed1=false;
+                    InArmAddSpeedDisplay();
+                }
+                Task=950;
+                break;
+            }
+            else
+            {
+                if(bCheckSpeed)                                                 //Steven 20110525 : Auto Speed
+                {
+                    bCheckSpeed=false;
+                    InArmSubSpeed();
+                }
+
+                if(bCheckSpeed1)
+                {
+                    bCheckSpeed1=false;
+                    InArmSubSpeedDisplay();
+                }
+                Task=930;
+            }
+        case 930:
+            if(MoveInArmXYToWaitTrayArm(iSht, iKit, ZAxisNotDown, true)!=0)
+            {
+                Task=1000;
+            }
+
+            if(CheckInArmSuckICFallDownToHasNullIC(false)==true)                //Steven 20110516 : 修改成整合式Alarm
+            {
+                Task=935;                                                       //JerryYang 20200422 修正掉料可能檢查不出來的問題, 檢查到有掉料要重新再確認全部吸嘴
+            }
+            break;
+        case 935:
+            CheckInArmSuckICFallDownToHasNullIC();                              //JerryYang 20200422 修正掉料可能檢查不出來的問題, 檢查到有掉料要重新再確認全部吸嘴
+            Task=930;
+            break;
+        case 950:
+            SetShuttlefCanMoveL(0, false, __FUNC__, "950");
+            iFlag=MoveInArmXYToWaitTrayArm(iSht, iKit, ZAxisDown, true);
+            if(iFlag!=0)
+            {
+                Task=iFlag;
+            }
+
+            if(CheckInArmSuckICFallDownToHasNullIC(false)==true)                //Steven 20110516 : 修改成整合式Alarm
+            {
+                Task=955;                                                       //JerryYang 20200422 修正掉料可能檢查不出來的問題, 檢查到有掉料要重新再確認全部吸嘴
+            }
+            break;
+        case 955:
+            CheckInArmSuckICFallDownToHasNullIC(true);                          //JerryYang 20200422 修正掉料可能檢查不出來的問題, 檢查到有掉料要重新再確認全部吸嘴
+            if(MoveInArmZToPlateSafe(Task))
+            {
+                str.sprintf("Please take out the drop device from Shuttle%d", iSht+1);
+                ShowMyMessage(str);
+                Task=950;
+            }
+            break;
+        case 1000:
+            if(InSHT1InLF())
+            {
+                bCanFreeShuttle=true;                                                                                                                           //jou 2014-11-07 防止 16 site place to shuttle Z軸未上升 Shuttle 就移動撞機
+                for(int i=0; i<InArmSuck.iShtRow; i++)
+                {
+                    for(int j=0; j<InArmSuck.iShtCol; j++)
+                    {
+                        if(FLCarryKit.Item[i][j]==NULL_IC)
+                        {
+                            bCanFreeShuttle=false;                                                                                                              //jou 2014-11-07 防止 16 site place to shuttle Z軸未上升 Shuttle 就移動撞機
+                        }
+                    }
+                }
+
+                if(bPlaceToShuttle2Step)                                                                                                                        //Steven 20160721 (Wei) : 避免放一半歸零,會Hangup
+                    bCanFreeShuttle=false;
+
+                if(bCanFreeShuttle==false)
+                {
+                    if(bShuttle1HasPickErr==false)                                                                                                              //Sam 20230103 : 修正 32 Site Pickup error hange up
+                        SetShuttlefCanMoveL(0, false, __FUNC__, "1000");
+                    InArmZNeedDown_9045(0, iKit, true);
+                    Task=900;
+                    break;
+                }
+            }
+            else if(NeedWaitTrayArm && (IniConfig.bP56TrayArmWaitAtColorTrack || (INSTALL_OCR!=eocrUninstal && CosFunction.bTrayOCR)))                          //Steven 20240516 : Tray Arm等待位置改到Color        //wei 20150925 待機位置改道 Color
+            {
+                InitInOCRWaitTask();                                                                                                                            //wei 20170901 Place To Shuttle
+                Task=1030;
+            }
+
+            if(MOT[MInShuttle1].Led[iInposLed]==false &&
+               MOT[MInShuttle1].fCanMoveL==false)
+            {
+                bCanFreeShuttle=true;                                                                                                                           //jou 2014-11-07 防止 16 site place to shuttle Z軸未上升 Shuttle 就移動撞機
+            }
+
+            if(bCanFreeShuttle==true)                                                                                                                           //jou 2014-11-07 防止 16 site place to shuttle Z軸未上升 Shuttle 就移動撞機
+            {
+                Task=1050;
+            }
+            break;
+        case 1030:
+            if(OCRMoveInArm2XYToWait())                                         //wei 20170901 Place To Shuttle
+            {
+                Task=1;
+            }
+            break;
+        case 1050:                                                              //jou 2014-11-07 防止 16 site place to shuttle Z軸未上升 Shuttle 就移動撞機
+            if(MoveInArmZToPlateSafe(Task))
+            {
+                SetShuttlefCanMoveL(0, true, __FUNC__, "1050");
+                Task=1000;
+            }
+            break;
+        case 1100:
+            if(IniConfig.bD43IndexDropErrorCanRetryandSkip &&
+               (bShuttle1MoveToRight ||
+                bShuttle1MoveToLeft  ||                                         //Steven 20220620 : 避免index在Kit1吸取異常, In arm偷放料
+                bShuttle1HasPickErr))                                           //Steven 20230116 : 避免In arm 偷放料
+            {
+                Task=1;
+                return false;
+            }
+
+            SetShuttlefCanMoveL(0, false, __FUNC__, "1100");
+            if(InShtInLF(0)==false)
+            {
+                Task=1110;
+                break;
+            }
+
+            if(CUSTOMER_CODE==CC_ASE_KaohSiung &&
+               IniConfig.bF23ShuttleVibration)                                  //kevin 20210415 IN Arm Vibrate shuttle
+                SW[SwShuttleVibration1].On();
+
+            bDestoryOnSht=true;                                                 //Steven 20170905 (wei) : 在Shuttle吹氣與資料交換的Flag
+            if(MoveInArmZToShuttlePlace_9045(0))
+            {
+                if(InArmNeedCheckOffset(true, 0))                               //Steven 20230531 : 簡化判斷式
+                {
+                    Task=1150;
+                    break;
+                }
+                InArmSuck.ResetAll();                                           //Steven 20160323 : 避免未開啟真空
+                Task=1200;
+                if(ArmSpeed[InArm].iEnableReleaseDelay==0)                      //JerryYang 20160127 for TSMC inarm release device前delay
+                {
+                    InArmReleaseDelay.SetSecAndOn(ArmSpeed[InArm].dReleaseDelayTime);
+                    Task=1180;
+                }
+            }
+            break;
+        case 1110:
+            if(MoveInArmZToPlateSafe(Task))
+            {
+                bDestoryOnSht=false;                                            //Steven 20180419 (Jou) : 在Shuttle吹氣與資料交換的Flag
+                SetShuttlefCanMoveL(0, true, __FUNC__, "1110");
+                Task=1;
+            }
+            break;
+        case 1150:
+            if(bEnterOffset==true)
+            {
+                bEnterOffset=false;
+                Task=1160;
+            }
+            else
+            {
+                Task=1100;
+            }
+            break;
+        case 1160:
+            if(MoveInArmZToPlateSafe(Task))
+            {
+                Task=1170;
+            }
+            break;
+        case 1170:
+            if(MoveInArmXYToShuttle_9045(iSht, iKit, ZAxisDown, true))
+            {
+                Task=1100;
+            }
+            break;
+        case 1180:
+            if(InArmReleaseDelay.Off())                                         //JerryYang 20160127 for TSMC inarm release device前delay
+            {
+                Task=1200;
+            }
+            break;
+        case 1200:
+            flag=true;
+            bPlaceToShuttle2Step=true;                                                                                  //Steven 20160721 (Wei) : 避免放一半歸零,會Hangup
+            bCheckInarmPlaceShuttle=true;                                                                               //kevin 20180525 20180315 add inarm place shuttle 確認是否有抖動情形
+            for(int i=0; i<2; i++)
+            {
+                for(int j=0; j<4; j++)
+                {
+                    iSuckRow=i;
+                    iSuckCol=j;
+                    iShtRow =i;
+                    iShtCol =GetShuttleCol(i, j+iPickKit32);
+
+                    if(InArmSuck.Item[iSuckRow][iSuckCol] &&
+                       InArmSuck.Suck[iSuckRow][iSuckCol].GetNeedDestroyStatus())
+                    {
+                        iBackInArmHotCount=InArmSuck.HotCount;
+                        if(InArmSuck.Item[iSuckRow][iSuckCol]==HAS_NULL_IC ||
+                           InArmSuck.Suck[iSuckRow][iSuckCol].Destroy())
+                        {
+                            SetShuttleStatus_9045(iSht, iShtRow, iShtCol, iSuckRow, iSuckCol);
+                        }
+                        else if(InArmSuck.Suck[iSuckRow][iSuckCol].Error==false)
+                        {
+                            flag=false;
+                        }
+                    }
+                }
+            }
+
+            if(flag==false)                                                                                             //kevin 20131011 在下真空誤判, 換到上面來
+                break;
+
+            ret=CheckInArmDestroyICFail();                                                                              //Steven 20111223 : 檢查破壞錯誤
+            if(ret==false)
+                return false;
+
+            for(int i=0; i<2; i++)
+            {
+                for(int j=0; j<4; j++)
+                {
+                    if(InArmSuck.Item[i][j]!=NULL_IC &&
+                       InArmSuck.Suck[i][j].GetNeedDestroyStatus())
+                        return false;
+                }
+            }
+
+            bCheckInarmPlaceShuttle=false;                                                                              //kevin 20180525 20180315 add inarm place shuttle 確認是否有抖動情形
+            if(InArmSuck.HasRealIC()==false)
+            {
+                Task=1300;
+                bPlaceToShuttle2Step=false;                                                                             //Steven 20160721 (Wei) : 避免放一半歸零,會Hangup
+                fObserver->AddTimeData(2, MyInArmAtShuttleTimer.LatchCycleTime()/1000.0);                               //JerryYang 20151209
+            }
+            else
+            {
+                bPlaceToShuttle2Step=true;                                                                              //Steven 20160721 (Wei) : 避免放一半歸零,會Hangup
+                Task=1250;
+            }
+            break;
+        case 1250:
+            if(MoveInArmXYToShuttle_9045(iSht, iKit, ZAxisDown, true))
+            {
+                Task=1100;
+            }
+
+            if(CheckInArmSuckICFallDownToHasNullIC(false)==true)                //Steven 20110516 : 修改成整合式Alarm
+            {
+                Task=1255;                                                      //JerryYang 20200422 修正掉料可能檢查不出來的問題, 檢查到有掉料要重新再確認全部吸嘴
+            }
+            break;
+        case 1255:
+            CheckInArmSuckICFallDownToHasNullIC(true);                          //JerryYang 20200422 修正掉料可能檢查不出來的問題, 檢查到有掉料要重新再確認全部吸嘴
+            if(MoveInArmZToPlateSafe(Task))
+            {
+                str.sprintf("Please take out the drop device from Shuttle%d", iSht+1);
+                ShowMyMessage(str);
+                Task=1250;
+            }
+            break;
+        case 1300:                                                              //Steven 20220427 : 整合蝦頭搖搖敲敲功能
+            InitDoInArmCheckShtFloatTask();
+            Task=1400;
+        case 1400:
+            flag=DoInArmCheckShuttleFloating(0);
+            if(flag==true)
+            {
+                Task=1500;
+            }
+            else
+            {
+                break;
+            }
+        case 1500:
+            bNeedAdjust2Time=SetClosedShtKitToHasNullIC_9045(0, iKit, __FUNC__, "1500");                                //Steven 20231115 : fixed for auto site off
+
+            if(In_Shuttle_Auto_Latch==eInSHAutoLtc &&
+               bInSHLtcFin[0]==false               &&
+               FLCarryKit.UseSiteFullIC())                                      //KenHsieh 20251106 : fix close site don't do In Sht Latch
+            {
+                Task=1400;
+                break;
+            }
+
+            AdjustShtOrderWhenPlaceToSht(3);                                                                            //Steven 20180601 : 整合放完蝦頭後的調整
+
+            if(IniConfig.bUseAutoSiteMapping &&
+               LastSet.iRunStartMode==rsmAutoSiteMap &&
+               (CosFunction.bUSEJCETSiteMapMode==true ||                                                                //Steven 20220913 : Fixed for ASM function
+                CUSTOMER_CODE==CC_SCS))                                                                                 //jou 20230626 : 修正JSCS auto site mapping 2x8 hangup
+            {
+            }
+            else
+            {
+                if(bNeedAdjust2Time)                                                                                    //Steven 20191112 : fixed for ASM close site hang up
+                    AdjustShtOrderWhenPlaceToSht(3);
+            }
+
+            if(IniConfig.bIndexPickupWait==true &&
+               (LastSet.iTemperature==Tempture_Hot ||                                                                   //jou 2012-06-29 Index Pick up need wait Soak Time
+                LastSet.iTemperature==Tempture_AmbientHot))                                                             //kevin 20180903 (Steven) : add 恆溫控制
+            {
+                if(Temperature.iShuttleSoakTimeMode==1 &&
+                   Temperature.iInitialStart2Time!=0)
+                {
+                    FLCarryKit.TSoakTime.SetSecAndOn(Temperature.iInitialStart2Time);
+                    dwStartShuttle1Soak=MyTickCount();                                                                  //JerryYang 20181001 (Steven) : fix Shuttle soak time 倒數秒數異常
+                    iInitialStart2Count=Temperature.iInitialStart2Time;
+                }
+            }
+            fObserver->RecordInArmTime();
+            bDestoryOnSht=false;                                                                                        //Steven 20170905 (wei) : 在Shuttle吹氣與資料交換的Flag
+            iInArmPickPlaceCnt[InOfsInSh1]++;                                                                           //JerryYang 20180921 Setup Teach功能
+            if(USE_IN_Y_IS_AUTO_PITCH==true &&                                                                          //JerryYang 20251218 : IN/OUT ARM支援不同模組
+               IniConfig.bE57YPitchHome)                                                                                //kevin 20180822 (Steven) : add put shuttle Y pitch home AutoYPitch)
+            {
+                 hInArmYpitchHomeTimer.SetSecAndOn(10);
+                 Task=1600;
+                 return false;
+            }
+            return true;
+       case 1600:
+            if(bCheckYPitchRunHomeSen(0))
+            {
+                return true;
+            }
+            else if(hInArmYpitchHomeTimer.Off())
+            {
+                InitProcessSingleMotorTask(MInArmPitchY);
+                hInArmYpitchHomeTimer.SetSecAndOn(10);
+                bYpitchNeddHome=true;
+                Task=1610;
+            }
+            break;
+       case 1610:
+            if(bCheckYPitchHome(0))
+            {
+                bYpitchNeddHome=false;
+                SetMotorSpeed();
+                return true;
+            }
+            else if(hInArmYpitchHomeTimer.Off())
+            {
+                ShowErrorMessage("WAR0123", K_RETRY, MInArmPitchY);
+                Task=1600;
+            }
+            break;
+        //---------------------
+        //place shuttle1 finish
+        //---------------------
+        case 1900:
+            if(InSHT2InLF() &&
+               BLCarryKit.RightSideNoIC(InArmSuck.iShtKitStep)==true)
+            {
+                if(BLCarryKit.LeftSideNoIC(InArmSuck.iShtKitStep)==true && bCheckSpeed)                                                                         //Steven 20110525 : Auto Speed
+                {
+                    bCheckSpeed=false;
+                    InArmAddSpeed();
+                }
+
+                if(bCheckSpeed1)
+                {
+                    bCheckSpeed1=false;
+                    InArmAddSpeedDisplay();
+                }
+                Task=1950;
+                break;
+            }
+            else
+            {
+                Task=1910;
+            }
+            break;
+        case 1910:
+            if(bCheckSpeed && InSHT2InLF()==false)                                                                                                              //Steven 20110525 : Auto Speed
+            {
+                bCheckSpeed=false;
+                InArmSubSpeed();
+            }
+
+            if(bCheckSpeed1)
+            {
+                bCheckSpeed1=false;
+                InArmSubSpeedDisplay();
+            }
+            Task=1930;
+        case 1930:
+            if(MoveInArmXYToWaitTrayArm(iSht, iKit, ZAxisNotDown, true)!=0)
+            {
+                Task=2000;
+            }
+
+            if(CheckInArmSuckICFallDownToHasNullIC(false)==true)                                                                                                //Steven 20110516 : 修改成整合式Alarm
+            {
+                Task=1935;                                                                                                                                      //JerryYang 20200422 修正掉料可能檢查不出來的問題, 檢查到有掉料要重新再確認全部吸嘴
+            }
+            break;
+        case 1935:
+            CheckInArmSuckICFallDownToHasNullIC();                                                                                                              //JerryYang 20200422 修正掉料可能檢查不出來的問題, 檢查到有掉料要重新再確認全部吸嘴
+            Task=1930;
+            break;
+        case 1950:
+            SetShuttlefCanMoveL(1, false, __FUNC__, "1950");
+            if(MoveInArmXYToShuttle_9045(iSht, iKit, ZAxisDown, true))
+            {
+                Task=2100;
+            }
+
+            if(CheckInArmSuckICFallDownToHasNullIC(false)==true)                                                                                                //Steven 20110516 : 修改成整合式Alarm
+            {
+                Task=1955;                                                                                                                                      //JerryYang 20200422 修正掉料可能檢查不出來的問題, 檢查到有掉料要重新再確認全部吸嘴
+            }
+            break;
+        case 1955:
+            CheckInArmSuckICFallDownToHasNullIC(true);                                                                                                          //JerryYang 20200422 修正掉料可能檢查不出來的問題, 檢查到有掉料要重新再確認全部吸嘴
+            if(MoveInArmZToPlateSafe(Task))
+            {
+                str.sprintf("Please take out the drop device from Shuttle%d", iSht+1);
+                ShowMyMessage(str);
+                Task=1950;
+            }
+            break;
+        case 2000:
+            if(InSHT2InLF())
+            {
+                bCanFreeShuttle=true;                                                                                                                           //jou 2014-11-07 防止 16 site place to shuttle Z軸未上升 Shuttle 就移動撞機
+                for(int i=0; i<InArmSuck.iShtRow; i++)
+                {
+                    for(int j=0; j<InArmSuck.iShtCol; j++)
+                    {
+                        if(BLCarryKit.Item[i][j]==NULL_IC)
+                        {
+                            bCanFreeShuttle=false;                                                                                                              //jou 2014-11-07 防止 16 site place to shuttle Z軸未上升 Shuttle 就移動撞機
+                        }
+                    }
+                }
+
+                if(bPlaceToShuttle2Step)                                                                                                                        //Steven 20160721 (Wei) : 避免放一半歸零,會Hangup
+                    bCanFreeShuttle=false;
+
+                if(bCanFreeShuttle==false)
+                {
+                    if(bShuttle2HasPickErr==false)                                                                                                              //Sam 20230103 : 修正 32 Site Pickup error hange up
+                        SetShuttlefCanMoveL(1, false, __FUNC__, "2000");
+                    InArmZNeedDown_9045(1, iKit, true);
+                    Task=1900;
+                    break;
+                }
+            }
+            else if(NeedWaitTrayArm && (IniConfig.bP56TrayArmWaitAtColorTrack || (INSTALL_OCR!=eocrUninstal && CosFunction.bTrayOCR)))                          //Steven 20240516 : Tray Arm等待位置改到Color        //wei 20150925 待機位置改道 Color
+            {
+                InitInOCRWaitTask();                                                                                                                            //wei 20170901 Place To Shuttle
+                Task=2030;
+            }
+
+            if(MOT[MInShuttle2].Led[iInposLed]==false &&
+               MOT[MInShuttle2].fCanMoveL==false)
+            {
+                bCanFreeShuttle=true;
+            }
+
+            if(bCanFreeShuttle==true)                                                                                                                           //jou 2014-11-07 防止 16 site place to shuttle Z軸未上升 Shuttle 就移動撞機
+            {
+                Task=2050;
+            }
+            break;
+        case 2030:
+            if(OCRMoveInArm2XYToWait())                                                                                                                         //wei 20170901 Place To Shuttle
+            {
+                Task=1;
+            }
+            break;
+        case 2050:                                                                                                                                              //jou 2014-11-07 防止 16 site place to shuttle Z軸未上升 Shuttle 就移動撞機
+            if(MoveInArmZToPlateSafe(Task))
+            {
+                SetShuttlefCanMoveL(1, true, __FUNC__, "2050");
+                Task=2000;
+            }
+            break;
+        case 2100:
+            if(IniConfig.bD43IndexDropErrorCanRetryandSkip &&
+               (bShuttle2MoveToRight ||
+                bShuttle2MoveToLeft  ||                                                                                                                         //Steven 20220620 : 避免index在Kit1吸取異常, In arm偷放料
+                bShuttle2HasPickErr))                                                                                                                           //Steven 20230116 : 避免In arm 偷放料
+            {
+                Task=1;
+                return false;
+            }
+
+            SetShuttlefCanMoveL(1, false, __FUNC__, "2100");
+            if(InShtInLF(1)==false)
+            {
+                Task=2110;
+                break;
+            }
+
+            if(CUSTOMER_CODE==CC_ASE_KaohSiung &&
+               IniConfig.bF23ShuttleVibration)                                                                                                                  //kevin 20210415 IN Arm Vibrate shuttle
+                SW[SwShuttleVibration2].On();
+
+            bDestoryOnSht=true;                                                                                                                                 //Steven 20170905 (wei) : 在Shuttle吹氣與資料交換的Flag
+            if(MoveInArmZToShuttlePlace_9045(1))
+            {
+                if(InArmNeedCheckOffset(true, 1))                                                                                                               //Steven 20230531 : 簡化判斷式
+                {
+                    Task=2150;
+                    break;
+                }
+
+                InArmSuck.ResetAll();                                                                                                                           //Steven 20160323 : 避免未開啟真空
+                Task=2200;
+                if(ArmSpeed[InArm].iEnableReleaseDelay==0)                                                                                                      //JerryYang 20160127 for TSMC inarm release device前delay
+                {
+                    InArmReleaseDelay.SetSecAndOn(ArmSpeed[InArm].dReleaseDelayTime);
+                    Task=2180;
+                }
+            }
+            break;
+        case 2110:
+            if(MoveInArmZToPlateSafe(Task))
+            {
+                bDestoryOnSht=false;                                                                                                                            //Steven 20180419 (Jou) : 在Shuttle吹氣與資料交換的Flag
+                SetShuttlefCanMoveL(1, true, __FUNC__, "2110");
+                Task=1;
+            }
+            break;
+        case 2150:
+            if(bEnterOffset==true)
+            {
+                bEnterOffset=false;
+                Task=2160;
+            }
+            else
+            {
+                Task=2100;
+            }
+            break;
+        case 2160:
+            if(MoveInArmZToPlateSafe(Task))
+            {
+                Task=2170;
+            }
+            break;
+        case 2170:
+            if(MoveInArmXYToShuttle_9045(iSht, iKit, ZAxisDown, true))
+            {
+                Task=2100;
+            }
+            break;
+        case 2180:
+            if(InArmReleaseDelay.Off())                                                                                                                         //JerryYang 20160127 for TSMC inarm release device前delay
+            {
+                Task=2200;
+            }
+            break;
+        case 2200:
+            flag=true;
+            bPlaceToShuttle2Step=true;                                                                                                                          //Steven 20160721 (Wei) : 避免放一半歸零,會Hangup
+            for(int i=0; i<2; i++)
+            {
+                for(int j=0; j<4; j++)
+                {
+                    iSuckRow=i;
+                    iSuckCol=j;
+                    iShtRow =i;
+                    iShtCol =GetShuttleCol(i, j+iPickKit32);
+
+                    if(InArmSuck.Item[iSuckRow][iSuckCol] &&
+                       InArmSuck.Suck[iSuckRow][iSuckCol].GetNeedDestroyStatus())
+                    {
+                        iBackInArmHotCount=InArmSuck.HotCount;
+                        if(InArmSuck.Item[iSuckRow][iSuckCol]==HAS_NULL_IC ||
+                           InArmSuck.Suck[iSuckRow][iSuckCol].Destroy())
+                        {
+                            SetShuttleStatus_9045(iSht, iShtRow, iShtCol, iSuckRow, iSuckCol);
+                        }
+                        else if(InArmSuck.Suck[iSuckRow][iSuckCol].Error==false)
+                        {
+                            flag=false;
+                        }
+                    }
+                }
+            }
+
+            if(flag==false)                                                                                                                                     //kevin 20131011 在下真空誤判, 換到上面來
+                break;
+
+            ret=CheckInArmDestroyICFail();                                                                                                                      //Steven 20111223 : 檢查破壞錯誤
+            if(ret==false)
+                return false;
+
+            for(int i=0; i<2; i++)
+            {
+                for(int j=0; j<4; j++)
+                {
+                    if(InArmSuck.Item[i][j]!=NULL_IC &&
+                       InArmSuck.Suck[i][j].GetNeedDestroyStatus())
+                        return false;
+                }
+            }
+
+            if(InArmSuck.HasRealIC()==false)
+            {
+                Task=2300;
+                bPlaceToShuttle2Step=false;                                                                                                                     //Steven 20160721 (Wei) : 避免放一半歸零,會Hangup
+                fObserver->AddTimeData(2, MyInArmAtShuttleTimer.LatchCycleTime()/1000.0);                                                                       //JerryYang 20151209
+            }
+            else
+            {
+                bPlaceToShuttle2Step=true;                                                                                                                      //Steven 20160721 (Wei) : 避免放一半歸零,會Hangup
+                Task=2250;
+            }
+            break;
+        case 2250:
+            if(MoveInArmXYToShuttle_9045(iSht, iKit, ZAxisDown, true))
+            {
+                Task=2100;
+            }
+
+            if(CheckInArmSuckICFallDownToHasNullIC(false)==true)                                                                                                //Steven 20110516 : 修改成整合式Alarm
+            {
+                Task=2255;                                                                                                                                      //JerryYang 20200422 修正掉料可能檢查不出來的問題, 檢查到有掉料要重新再確認全部吸嘴
+            }
+            break;
+        case 2255:
+            CheckInArmSuckICFallDownToHasNullIC(true);                                                                                                          //JerryYang 20200422 修正掉料可能檢查不出來的問題, 檢查到有掉料要重新再確認全部吸嘴
+            if(MoveInArmZToPlateSafe(Task))
+            {
+                str.sprintf("Please take out the drop device from Shuttle%d", iSht+1);
+                ShowMyMessage(str);
+                Task=2250;
+            }
+            break;
+        case 2300:                                                                                                                                              //Steven 20220427 : 整合蝦頭搖搖敲敲功能
+            InitDoInArmCheckShtFloatTask();
+            Task=2400;
+        case 2400:
+            flag=DoInArmCheckShuttleFloating(1);
+            if(flag==true)
+            {
+                Task=2500;
+            }
+            else
+            {
+                break;
+            }
+        case 2500:
+            bNeedAdjust2Time=SetClosedShtKitToHasNullIC_9045(1, iKit, __FUNC__, "2500");                                                                        //Steven 20231115 : fixed for auto site off
+
+            if(In_Shuttle_Auto_Latch==eInSHAutoLtc &&
+               bInSHLtcFin[1]==false               &&
+               BLCarryKit.UseSiteFullIC())                                      //KenHsieh 20251106 : fix close site don't do In Sht Latch
+            {
+                Task=2400;
+                break;
+            }
+
+            AdjustShtOrderWhenPlaceToSht(4);                                                                                                                    //Steven 20180601 : 整合放完蝦頭後的調整
+
+            if(IniConfig.bUseAutoSiteMapping &&
+               LastSet.iRunStartMode==rsmAutoSiteMap &&
+               (CosFunction.bUSEJCETSiteMapMode==true ||                                                                                                        //Steven 20220913 : Fixed for ASM function
+                CUSTOMER_CODE==CC_SCS))                                                                                                                         //jou 20230626 : 修正JSCS auto site mapping 2x8 hangup
+            {
+            }
+            else
+            {
+                if(bNeedAdjust2Time)                                                                                                                            //Steven 20191112 : fixed for ASM close site hang up
+                    AdjustShtOrderWhenPlaceToSht(4);
+            }
+
+            if(IniConfig.bIndexPickupWait==true &&
+               (LastSet.iTemperature==Tempture_Hot ||                                                                                                           //jou 2012-06-29 Index Pick up need wait Soak Time
+               LastSet.iTemperature==Tempture_AmbientHot))                                                                                                      //kevin 20180903 (Steven) : add 恆溫控制
+            {
+                if(Temperature.iShuttleSoakTimeMode==1 &&
+                   Temperature.iInitialStart2Time!=0)
+                {
+                    BLCarryKit.TSoakTime.SetSecAndOn(Temperature.iInitialStart2Time);
+                    dwStartShuttle2Soak=MyTickCount();                                                                                                          //JerryYang 20181001 (Steven) : fix Shuttle soak time 倒數秒數異常
+                    iInitialStart2Count=Temperature.iInitialStart2Time;
+                }
+            }
+            fObserver->RecordInArmTime();
+            bDestoryOnSht=false;                                                                                                                                //Steven 20170905 (wei) : 在Shuttle吹氣與資料交換的Flag
+            iInArmPickPlaceCnt[InOfsInSh2]++;                                                                                                                   //JerryYang 20180921 Setup Teach功能
+            if(USE_IN_Y_IS_AUTO_PITCH==true &&                                                                                                                  //JerryYang 20251218 : IN/OUT ARM支援不同模組
+               IniConfig.bE57YPitchHome)                                                                                                                        //kevin 20180822 (Steven) : add put shuttle Y pitch home AutoYPitch
+            {
+                 hInArmYpitchHomeTimer.SetSecAndOn(10);
+                 Task=2600;
+                 return false;
+            }
+            return true;
+       case 2600:
+            if(bCheckYPitchRunHomeSen(0))
+            {
+                return true;
+            }
+            else if(hInArmYpitchHomeTimer.Off())
+            {
+                InitProcessSingleMotorTask(MInArmPitchY);
+                hInArmYpitchHomeTimer.SetSecAndOn(10);
+                bYpitchNeddHome=true;
+                Task=2610;
+            }
+            break;
+       case 2610:
+            if(bCheckYPitchHome(0))
+            {
+                bYpitchNeddHome=false;
+                SetMotorSpeed();
+                return true;
+            }
+            else if(hInArmYpitchHomeTimer.Off())
+            {
+                ShowErrorMessage("WAR0123", K_RETRY, MInArmPitchY);
+                Task=2600;
+            }
+            break;
+    }
+    return false;
+}
+//==============================================================================
+void DoInArm_9045_2x6_8_SuckerMap()
+{
+    for(int i=0; i<2; i++)
+    {
+        for(int j=0; j<8; j++)
+        {
+            int iShtCol=GetShuttleCol(i, j);
+            if(iShtCol<InArmSuck.iShtCol)
+            {
+                Prod.fInArmSuck4x8[0][i][j]=LastSet.bUseTestSocket[0][i][iShtCol];
+                Prod.fInArmSuck4x8[1][i][j]=LastSet.bUseTestSocket[1][i][iShtCol];
+                Prod.iSiteMap[0][i][j]     =TestIF.iSiteMap[i][iShtCol];
+                Prod.iSiteMap[1][i][j]     =TestIF.iSiteMap[i][iShtCol];
+            }
+            else
+            {
+                Prod.fInArmSuck4x8[0][i][j]=false;
+                Prod.fInArmSuck4x8[1][i][j]=false;
+            }
+
+            if(iCloseSiteModeFor2x6<=e2x6OneByOne)
+            {
+                Prod.bInSuckUse[0][i][j]=true;
+                Prod.bInSuckUse[1][i][j]=true;
+            }
+            else if(j<4)
+            {
+                Prod.bInSuckUse[0][i][j]=true;
+                Prod.bInSuckUse[1][i][j]=true;
+            }
+        }
+    }
+
+    if(HotPlateForm.XDivision==6 &&
+       i8PickerHPMode==iHPWideHP)                                               //Steven 20240415 : 1x3 3吸嘴跑6x11寬版要擺滿
+    {
+        Prod.bInSuckUse[0][0][3]=false;
+        Prod.bInSuckUse[0][1][3]=false;
+        Prod.bInSuckUse[1][0][3]=false;
+        Prod.bInSuckUse[1][1][3]=false;
+        Prod.bInSuckUse[0][0][4]=false;
+        Prod.bInSuckUse[0][1][4]=false;
+        Prod.bInSuckUse[1][0][4]=false;
+        Prod.bInSuckUse[1][1][4]=false;
+    }
+}
+//==============================================================================
+void DoInArm_9045_2x6_8()
+{
+    int &Task=iArmTask;
+//    int j2;
+    static int iAdjustSpeed=0;
+    static bool bOne=false;
+    bool flag=false;
+    static int iDisplaySpeed=0;                                                 //KaiChen 20171225 (Steven)：Add Speed Display
+
+    bool bCheckCloseSiteHaveIC=false;                                           //kevin 20130115
+    AnsiString ErrPart="";
+    bool bHasDuplicateErr=false;                                                //kevin 20130115
+//    DoJudgeInputShuttleNeedChangeToNullIC();
+
+    if(DoInArmAutoSiteMapping() ||                                              //jou 2011-03-24 start : Auto Site Mapping
+       bIndexAlarmInArmAway)                                                    //kevin 20181102 (Steven) :  index回吸檢測有IC inarm 讓位 inarm先不要動
+    {
+        return ;                                                                //jou 2016-11-03 JCET 要求Auto Site Mapping 需等待測試結果在繼續入料
+    }
+
+    if(iCloseSiteModeFor2x6>e2x6OneByOne)
+    {
+        InArmSuck.iWhichKit=0;
+    }
+
+    int iShtHP, iKitHP;
+    int iSht  =InArmSuck.iWhichSht;
+    int iKit  =InArmSuck.iWhichKit;
+    int iKit32=(iKit==1)?4:0;
+
+    if(LastSet.iTemperature==Tempture_Hot)                                      //Steven 20150626 : Fixed 32 site 吸取偵測異常    //Steven 20180525 : 修正一直跑Hotplate iWhichKit Close
+    {
+        iShtHP=InArmSuck.iWhichShtPickFor32;
+        iKitHP=InArmSuck.iWhichKitPickFor32;
+    }
+    else
+    {
+        iShtHP=InArmSuck.iWhichSht;
+        iKitHP=InArmSuck.iWhichKit;
+    }
+    int iKitHP32=(iKitHP==1)?4:0;
+
+    switch(Task)
+    {
+        case 1:
+            if(MoveInArm2XYToWait())
+            {
+                if((iOneCycle && IsInArmOneCycleFinish()) ||
+                   (iCleanOut && IsInArmCleanOutFinish()))
+                {
+                    if(LastSet.iTemperature==Tempture_Hot &&
+                       CosFunction.bUseInitialDelayAsSoakTime &&                //Steven 20170511 (wei) : 使用initial delay當 Soak time
+                       Temperature.bUseInitialDelayAsSoakTime &&
+                       MOT[MMPlate1].HasIC()==false &&
+                       MOT[MMPlate2].HasIC()==false)
+                    {
+                        bOneTimeWait=false;
+                    }
+
+                    SetShuttlefCanMoveL(0, true, __FUNC__, "1");
+                    SetShuttlefCanMoveL(1, true, __FUNC__, "1");
+                    bInArmWaitOneCycle=true;                                    //JerryYang 20220324 : Inarm是否完成ONE CYCLE
+                }
+                else
+                {
+                    bInArmWaitOneCycle=false;                                   //JerryYang 20220324 : Inarm是否完成ONE CYCLE
+                }
+                Task=10;
+                bOne=true;
+            }
+
+            if(Task!=10)                                                        //Steven 20180813 : add in arm speed
+                break;
+        case 10:
+            if(CheckInArmSuckInitial()==false || bIndexDropVacuumError)         //kevin 20190418 避免 inarm 來回跑
+                break;
+
+            if(InArmSuck.HasIC() || bPlaceToHotplate==true)                     //ChungHung 20131010 fix Hotplate 跨排Hangup
+            {
+                if(bPlaceToHotplate==false &&
+                   CheekNeedToDoInArmAdditionalFunction())                      //Steven 20210609 : 整合Precisor, Rotator, Bottom CCD, Die Clean
+                {
+                    Task=200;
+                }
+                else if(InArmSuck.HasType(HAS_TRY_SUCK_IC) ||                   //ChungHung 20120206 Hotplate check
+                        InArmSuck.HasType(HAS_SUCK_IC))
+                {
+                    if(bInArmTryPickFromHotPlateFinish==false)
+                    {
+                        InitInArmTryPickFromHotPlateTask100();
+                    }
+                    else
+                    {
+                        InitInArmTryPickFromHotPlateTask();
+                    }
+                    Task=15000;
+                }
+                else if(InArmSuck.HasType(HAS_NULL_IC) &&
+                        InArmSuck.HasType(NULL_IC) &&
+                        bPickFromHotplate==true)
+                {
+                    iHeaterWaitTime=0;
+                    if(bPickFormHotplatePartOK==true)
+                    {
+                        InitInArmPickFromHotPlateTask340();                     //ChungHung 20120502 Hang Up 解除
+                    }
+                    else
+                    {
+                        InitInArmPickFromHotPlateTask50();                      //ChungHung 20120112 Hang Up 解除
+                    }
+                    Task=1500;
+                }
+                else if(LastSet.iTemperature==Tempture_Ambient ||
+                        LastSet.iTemperature==Tempture_AmbientHot ||            //kevin 20141104 恆溫不放hotplate
+                        InArmSuck.HasType(HAS_HOT_IC))
+                {
+                    if(InArmSuck.HasType(HAS_HOT_IC) &&
+                       bPickFromHotplate)
+                    {
+                        iHeaterWaitTime=0;
+                        if(bPickFormHotplatePartOK==true)
+                        {
+                            InitInArmPickFromHotPlateTask340();                 //ChungHung 20120502 Hang Up 解除
+                        }
+                        else
+                        {
+                            InitInArmPickFromHotPlateTask50();                  //ChungHung 20120112 Hang Up 解除
+                        }
+                        Task=1500;
+                    }
+                    else
+                    {
+                        InitInArmPlaceToShuttleTask();
+                        Task=2000;
+                    }
+                }
+                else
+                {
+                    if(bPlaceToHotplate==false)
+                    {
+                        if(HotPlateForm.XDivision==6)
+                        {
+                            iForPlaceHPX6Step=0;
+                        }
+                        InitInArmPlaceToHotPlateTask();
+                        Task=400;                                               //Steven 20250107 : fixed for hot mode tray end hang up
+                    }
+                    else
+                    {
+                        if(bPlaceToHotplatePartOK==true)                        //ChungHung 20120109 add 6x11 HangeUp
+                        {
+                            InitInArmPlaceToHotPlateTask400();                  //ChungHung 20120502 HangUp 解除
+                        }
+                        else
+                        {
+                            InitInArmPlaceToHotPlateTask100();
+                        }
+                        Task=1100;                                              //Steven 20250107 : Move up
+                    }
+                }
+            }
+            else
+            {
+                if(CheekNeedToDoInArmAdditionalFunction())                      //Steven 20210609 : 整合Precisor, Rotator, Bottom CCD, Die Clean
+                {
+                    Task=200;
+                }
+                else
+                {
+                    bPlaceToHotplate=false;
+                    bPickFromHotplate=false;
+                    Task=50;
+                }
+            }
+
+            if(Task!=50)
+                break;
+        case 50:
+            if(CheckHeaterOK()==false)                                          //Steven 20250116 : 確認HeaterOK
+            {
+                Task=1;
+                break;
+            }
+
+            InitArmPickFromLoadStageTask();
+            Task=75;                                                            //ChungHung 20120206 Hotplate check
+
+            if(INSTALL_OCR!=eocrUninstal && CosFunction.bTrayOCR)
+            {
+                if(NeedWaitTrayArm==true)                                       //wei 20151002
+                {
+                    Task=1;                                                     //jou 2016-07-14 修正OCR In arm 讓位造成Hotplate疊料issue
+                    return;
+                }
+            }
+
+            if(CosFunction.bRTCAutoModelVerify==true &&                         //jou 2014-06-24 RTC 自動進行Model驗證
+               IniConfig.bD36EnableRTCAutoModelVerify==true)
+            {
+                if(bNeedWaitRTCAutoVerify==true)
+                {
+                    Task=1;
+                    return;
+                }
+            }
+
+            if(LastSet.iTemperature==Tempture_Hot &&
+               (IniConfig.bE39CheckHotPlateAfterCleanOutAndBeforeTrayFeed==true ||
+                IniConfig.bO01_ResetNeedClearAndCheckHP) &&                     //ChungHung 20120206 Hotplate check
+               bCanUseHotPlateCheck==true &&
+               (bNeedTrySuckHotPlate==true || bHPCleanout==true) &&             //wei 20160624 Hotplate clean out
+               bOneTimeHotPlateCheckAll==true)                                  //Steven 20120319 : Clean Out後的檢查
+            {
+                ;
+            }
+            else
+            {
+                if(MOT[MMTrayY].HasIC()==false             &&                   // load and load buffer no any tray
+                   MOT[MMTrayY].fHasTray==false            &&
+                   MOT[MMTrayY_Car].Tray.HasIC()==false    &&
+                   MOT[MMTrayY_Car].fHasTray==false)
+                {
+                    if(iCleanOut && iOneCycle==0 &&                             //ChungHung 20110829 add
+                       LastSet.iTemperature==Tempture_Hot &&
+                       (MOT[MMPlate1].HasIC() || MOT[MMPlate2].HasIC()))
+                    {
+                        DisableAutoSiteMapWhenCleanOut();                       //Steven 20220902 : 修正Auto Site Map, Loader沒有IC
+                        Task=500;
+                        break;
+                    }
+
+                    if(IniConfig.bI37_EnableFIFOMode &&                         //Steven 20160303 : FIFO Mode
+                       LastSet.iRunStartMode==rsmFIFOMode &&                    //Sam 20220411 : 2X6 補 FIFO
+                       InArmSuck.HasIC()==false)
+                    {
+                        if(iKit==1)
+                        {
+                            SetInArmUseSuckToHasNullIC(iSht, iKit);
+                        }
+                    }
+                }
+
+                if(IniConfig.bI37_EnableFIFOMode &&
+                   LastSet.iRunStartMode==rsmFIFOMode)                          //Sam 20230830 : 修正FIFO跨盤時排序問題
+                {
+                    if(MOT[MMTrayY].HasIC()==false)
+                    {
+                        if(iKit==0 && InArmSuck.HasIC() ||
+                           iKit==1)
+                        {
+                            if((iSht==0 && FLCarryKit.UseSiteFullIC()==false) ||
+                                iSht==1 && BLCarryKit.UseSiteFullIC()==false)
+                            {
+                                SetInArmUseSuckToHasNullIC(iSht, iKit);
+                                Task=1;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if((MOT[MMTrayY].HasIC()==false &&
+                MOT[MMTrayY].fHasTray==true) || bNeedSlapTray)
+            {
+                Task=1;
+                break;
+            }
+
+            if(iOneCycle &&                                                     //JerryYang 20250726 : fix clean out in arm loop
+               IsInArmOneCycleFinish() &&
+               InArmSuck.HasIC()==false)
+            {
+            }
+            else if(iCleanOut &&
+                    LastSet.iTemperature==Tempture_Hot &&
+                    IsInArmCleanOutFinish()==false)                             //Steven 20230309 : fixed for NN mode hang up
+            {
+                if(bRunAutoSiteMapping==true &&                                 //Ifor 20210426 add: Auto Site Mapping Clean Out 補料回Hot plate
+                   CheckHasSpaceToPlace_9045())
+                {
+                    if(MOT[MMTrayY].HasIC() || MOT[MMTrayY_Car].fHasTray)
+                    {
+                        Task=75;
+                        break;
+                    }
+                }
+
+                if((TrayForm.bAutoFeed ||
+                    bMustCleanAllTray) &&
+                   CheckHasSpaceToPlace_9045())
+                {
+                    if(MOT[MMTrayY].HasIC() || MOT[MMTrayY_Car].fHasTray)
+                    {
+                        Task=75;                                                //ChungHung 20120206 Hotplate check
+                        break;
+                    }
+                }
+
+                if((MOT[MMPlate1].HasIC() ||
+                    MOT[MMPlate2].HasIC()) &&
+                   HasHotReadyIC_9045())
+                {
+                    Task=500;
+                    break;
+                }
+
+                if(TrayForm.bAutoFeed==false &&                                 //jou 2010-08-31 start : 2x8 剛好只吸到奇數時,hang up
+                   MOT[MMPlate1].HasIC()==false &&
+                   MOT[MMPlate2].HasIC()==false &&
+                   InArmSuck.HasIC()==false &&
+                   (MOT[MInShuttle1].fCanMoveL==false ||
+                    MOT[MInShuttle2].fCanMoveL==false))
+                {
+                    Task=1;
+                    break;
+                }
+
+                if(TrayForm.bAutoFeed ||
+                   (MOT[MMTrayY].fHasTray==false &&
+                    MOT[MMTrayY_Car].fHasTray==false) ||
+                   bMustCleanAllTray)
+                {
+                    if(CheckHasSpaceToPlace_9045())
+                        Task=75;                                                //Isaac 20191007 : add Hotplate check
+                    else
+                        Task=500;
+                }
+                else
+                {
+                    Task=500;
+                }
+                break;
+            }
+
+            if(LastSet.iTemperature==Tempture_Hot &&                            //Ifor 20180507 : add 避免Auto Site Mapping 未補料直接取IC造成資料異常
+               CheckHasSpaceToPlace_9045()==false)
+            {
+                if(LastSet.iRunStartMode==rsmAutoSiteMap)
+                {
+                    if(bAutoSiteMapHotplateReady==true &&
+                       bAutoSiteMapHotplateSave==false)
+                    {
+                        Task=500;
+                    }
+                }
+                else
+                {
+                    Task=500;
+                }
+            }
+
+            if(LastSet.iTemperature==Tempture_Hot &&
+               iAdjustSpeed==1 &&
+               ArmSpeed[InArm].bAutoSpeed && Task!=500)
+            {
+                iAdjustSpeed=2;
+            }
+
+            if(LastSet.iTemperature==Tempture_Hot &&
+               iDisplaySpeed==1 &&
+               IniConfig.bA26MotorSpeedSortDisplay==true)
+            {
+                iDisplaySpeed=2;
+                InArmAddSpeedDisplay();
+            }
+
+            if((iOneCycle && IsInArmOneCycleFinish()) ||
+               (iCleanOut && IsInArmCleanOutFinish()) &&
+               InArmSuck.HasIC()==false)
+            {
+                bInArmWaitOneCycle=true;                                        //JerryYang 20220324 : Inarm是否完成ONE CYCLE
+                Task=CheckOneCycleAction(50);                                   //Steven 20240326 : 判斷one cycle的時候要不要繼續放料
+                if(Task==100 || Task==500)
+                    break;
+
+                if(MoveInArm2XYToWait()==false)
+                {
+                    Task=50;
+                    return;
+                }
+
+                bInArmWaitOneCycle=true;                                        //JerryYang 20220324 : Inarm是否完成ONE CYCLE
+                if(bOne)
+                {
+                    bOne=false;
+
+                    SetShuttlefCanMoveL(0, true, __FUNC__, "50");
+                    SetShuttlefCanMoveL(1, true, __FUNC__, "50");
+                }
+                Task=50;
+                break;                                                          //JerryYang 20220324 : add
+            }
+            bInArmWaitOneCycle=false;                                           //JerryYang 20220324 : Inarm是否完成ONE CYCLE
+
+            if(Task==75 &&
+               LastSet.iTemperature==Tempture_Hot &&
+               CheckHasSpaceToPlace_9045()==false &&                            //ChungHung 20120206 Hotplate check
+               LastSet.iRunStartMode!=rsmAutoSiteMap)                           //jou 2016-11-07 JCET fix Auto Site mapping Hot mode hangup
+            {
+                Task=50;
+            }
+
+            if(bBackupCleanOut==true && iOneCycle==1  &&                        //Steven 20240709 : One Cycle沒tray Hang up
+               MOT[MMTrayY].HasIC()==false            &&
+               MOT[MMTrayY].fHasTray==false           &&
+               MOT[MMTrayY_Car].Tray.HasIC()==false   &&
+               MOT[MMTrayY_Car].fHasTray==false)
+            {
+                if(LastSet.iTemperature==Tempture_Hot)
+                {
+                    Task=CheckOneCycleAction(50);                               //Steven 20240326 : 判斷one cycle的時候要不要繼續放料
+                    if(Task==100 || Task==500)
+                        break;
+                }
+            }
+
+            if(Task!=75)                                                        //Steven 20180813 : add in arm speed
+                break;
+        case 75:                                                                //ChungHung 20120206 Hotplate check start
+            if(LastSet.iTemperature==Tempture_Hot &&                            //Steven 20170718 (wei) : HP Check加上保護
+               bNeedTrySuckHotPlate &&
+               bAutoSiteMapHasPickHP==false)                                    //jou 20231018 : 修正E38與autositemapping衝突造成hotplate疊料問題
+            {
+                SetInArmUseSuckToHasTrySuckIC(iSht, iKit);
+                InitInArmTryPickFromHotPlateTask();
+                Task=15000;
+            }
+            else
+            {
+                TryHotClearRecBufMMPlate();                                     //ChungHung 20120206 Hotplate check
+                InitArmPickFromLoadStageTask();
+                Task=100;
+            }
+
+            if(Task!=100)                                                       //Steven 20180813 : add in arm speed
+                break;
+        case 100:
+            if(CheckHeaterOK()==false)                                          //Steven 20250116 : 確認HeaterOK
+            {
+                if(iPickFromLoadStageTask==1)
+                {
+                    Task=1;
+                    break;
+                }
+            }
+
+            if(CUSTOMER_CODE==CC_ASE_M &&                                       //Ifor 20190529 : add 避免 ASEM 常溫Site Mapoing 完成後多入料一次
+               LastSet.iRunStartMode==rsmAutoSiteMap &&
+               LastSet.iTemperature!=Tempture_Hot &&
+               bASMFinishOneCycle==true && iOneCycle==1)
+            {
+                Task=1;
+                break;
+            }
+
+            if(USE_TRAY_MAPPING==etmInstall &&
+               TestIF_File.bEnableDeviceRemain==true &&                         //Sam 20191113 : 防止殘料檢與 PickFormLoad 打架
+               bDoTrayDeviceCheck)
+            {
+                break;
+            }
+
+            flag=DoInArmPickFromLoadStage_9045();
+            if(flag)
+            {
+                iInArmPickPlaceCnt[InOfsLoader]++;                              //JerryYang 20180921 Setup Teach功能
+                bHangTimePause=true;                                            //Steven 20090827 : Hang Up dectector
+                if(InArmSuck.HasIC()==false)
+                {
+                    if(InArmSideAllCloseWithKit(iSht, iKit)==true)              //如果Site全部被關掉
+                    {
+                        AdjustShuttleWhichKitOrder();
+                    }
+                    Task=50;
+                }
+                else
+                {
+                    bLoaderNeedVibrate=true;                                    //JerryYang 20191002 loader震動馬達
+                    Task=200;
+                }
+            }
+
+            if(Task!=200)                                                       //Steven 20180813 : add in arm speed
+                break;
+        case 200:                                                               //kevin 20120115 判斷關site是否吸ic
+            CheekNeedToDoInArmAdditionalFunction();                             //Steven 20210609 : 整合Precisor, Rotator, Bottom CCD, Die Clean
+
+            if(IniConfig.bUseAutoSiteMapping &&
+               LastSet.iRunStartMode==rsmAutoSiteMap &&
+               bUseTwoArm32Site==true)                                          //kevin 20190516 add _16Site4X4
+            {
+                Task=400;
+                break;
+            }
+
+            for(int i=0; i<2; i++)
+            {
+                for(int j=0; j<4; j++)
+                {
+                    if(Prod.fInArmSuck4x8[iSht][i][j+iKit32]==false &&
+                       InArmSuck.Item[i][j]==HAS_IC)
+                    {
+                        Task=300;
+                        if(iKit==0)
+                            RecordProcess("Load tray Close 0");
+                        else
+                            RecordProcess("Load tray Close 1");
+                        return;
+                    }
+                }
+            }
+            Task=400;
+            break;
+        case 300:
+            ErrPart=" ";
+            bHasDuplicateErr=false;
+            bCheckCloseSiteHaveIC=false;                                        //kevin 20130115
+
+            for(int i=0; i<2; i++)
+            {
+                for(int j=0; j<4; j++)
+                {
+                    if(Prod.fInArmSuck4x8[iSht][i][j+iKit32]==false &&
+                       InArmSuck.Suck[i][j].GetStatus())
+                    {
+                        bCheckCloseSiteHaveIC=true;
+                        ErrPart+=InArmSuck.Suck[i][j].sName;
+                        InArmSuck.SetItemData(i, j, HAS_NULL_IC);
+                    }
+                }
+            }
+
+            if(bCheckCloseSiteHaveIC)
+            {
+                ShowErrorMessage("JAM0114", K_RETRY, MInArmX, bHasDuplicateErr, ErrPart);
+                bHasDuplicateErr=true;
+                break;
+            }
+            else
+            {
+                Task=400;
+            }
+
+            if(Task!=400)
+                break;
+        case 400:                                                                                                       //kevin 20130115 判斷關site是否吸ic
+            flag=DoInArmAdditionalFunction();                                                                           //Steven 20210609 : 整合Precisor, Rotator, Bottom CCD, Die Clean
+            if(flag==true)
+            {
+                SetInArmUseSuckToHasNullIC(iSht, iKit);
+                InitInArmPlaceToHotPlateTask();
+                InitInArmPlaceToShuttleTask();
+                if(LastSet.iTemperature==Tempture_Hot)
+                {
+                    if(IniConfig.bTemp25degControl==true ||
+                       IniConfig.bI03AmbientTempControl &&
+                       LastSet.iTemperature==Tempture_AmbientHot)                                                       //kevin 20140918 恆溫控制 //jou 2014-06-07 Temperature 25 deg. control
+                    {
+                        if(Temperature.iIndexHeatMode==HeadOnly && Temperature.fSoakTime==0 && Temperature.fWorkTemperBase<=25.0)
+                        {
+                            bOneTimeWait=false;
+                            Task=2000;                                                                                  // place to shuttle
+                        }
+                        else
+                        {
+                            Task=1000;                                                                                  // place to hot plate
+                        }
+                    }
+                    else
+                    {
+                        Task=1000;                                                                                      // place to hot plate
+                    }
+                }
+                else
+                {
+                    Task=2000;                                                                                          // place to shuttle
+                    if(IniConfig.bQAMode==true && LastSet.iRunStartMode==rsmQAMode)                                     //kevin 20181019 add //Steven 20111005 : QA Mode
+                    {
+                        if(iQAModeLoaderCT>Prod.iQAModeCount)                                                           //數量比設定值多，表示已經做完，所以就直接送Bin 1
+                        {
+                            InitInArmPlaceToShuttleTask();
+                            Task=2000;
+                            return;
+                        }
+                    }
+                }
+
+                if(IniConfig.bUseAutoSiteMapping)                                                                       //jou 2011-03-24 start : Auto Site Mapping
+                {
+                    if(LastSet.iTemperature==Tempture_Hot &&
+                       LastSet.iRunStartMode==rsmAutoSiteMap &&
+                       bSiteMappingCHKOK==false)
+                    {
+                        bOneTimeWait=false;
+                        if(IniConfig.bI21AutoSiteMappingUseHotplate==false)                                             //Ifor 20170919 (Steven) : add Auto Site Mapping Hotplate Mode
+                            Task=2000;
+                        else
+                            Task=1000;
+                    }
+                }
+            }
+            break;
+        case 500:
+            if((MOT[MMPlate1].HasIC() ||                                        //Steven 20170511 (wei) : 使用initial delay當 Soak time
+                MOT[MMPlate2].HasIC()) &&
+               HasHotReadyIC_9045())
+            {
+                if(MOT[MMTrayY].HasIC()==false && MOT[MMTrayY].fHasTray==true)  //spil 2006_0921
+                {
+                    Task=1;
+                    break;
+                }
+                iHeaterWaitTime=0;                                              //jou 2012-05-18 先預先在Hotplate上面等待Soak time
+                InitInArmPickFromHotPlateTask();
+                bOneTimeWait=false;
+
+                if(iDisplaySpeed==1 &&                                          //KaiChen 20171225 (Steven)：Add Speed Display
+                   IniConfig.bA26MotorSpeedSortDisplay==true)
+                {
+                    iDisplaySpeed=2;
+                    InArmAddSpeedDisplay();
+                }
+                Task=1500;
+            }
+            else
+            {
+                Task=50;
+                iHeaterWaitTime=GetHeaterWaitTime();
+                bHangTimePause=true;                                            //Steven 20090827 : Hang Up dectector
+
+                if(iDisplaySpeed==1 &&                                          //KaiChen 20171225 (Steven)：Add Speed Display
+                   IniConfig.bA26MotorSpeedSortDisplay==true)
+                {
+                    iDisplaySpeed=2;
+                    InArmSubSpeedDisplay();
+                }
+
+                if(CheckHasSpaceToPlace_9045()==false)
+                    Task=600;
+
+                if((iCleanOut && IsInArmCleanOutFinish()) || iOneCycle)         //JerryYang 20230808 : fix換arm預熱功能clean out hang up
+                {
+                    bInArmWaitOneCycle=true;
+                }
+            }
+            break;
+        case 600:
+            if(MoveInArmZToPlateSafe(Task))
+            {
+                Task=50;
+            }
+            break;
+        case 999:                                                               //Eastsun 20260521 整合
+            if(DoInArmIonFanGiveWay())
+            {
+                Task=1550;
+            }
+            break;
+        case 1000:
+            if(LastSet.iTemperature==Tempture_Hot)                                                                      //ChungHung 20141023 add for ATK QA mode after QA Clean out direct send to Shuttle
+            {
+                if(CheckPlaceToShuttle())                                                                               //Steven 20170511 (wei) : 使用initial delay當 Soak time
+                {
+                    Task=2000;
+                    return;
+                }
+
+                if(IniConfig.bQAMode==true && LastSet.iRunStartMode==rsmQAMode)                                         //Steven 20111005 : QA Mode
+                {
+                    if(iQAModeLoaderCT>Prod.iQAModeCount)                                                               //數量比設定值多，表示已經做完，所以就直接送Bin 1
+                    {
+                        InitInArmPlaceToShuttleTask();
+                        Task=2000;
+                        return;
+                    }
+                }
+            }
+
+            Task=1100;
+            InitInArmPlaceToHotPlateTask();
+//jou 2010-09-20 add in arm speed
+//            break;
+        case 1100:
+            bPlaceToHotplate=true;
+            bPickFromHotplate=false;
+
+            if(DoPlaceToHotPlate_9045())
+            {
+                if(LastSet.iTemperature==Tempture_Hot &&
+                   LastSet.iRunStartMode!=rsmAutoSiteMap)                       //Steven 20220527 : for JCET Auto Site Map
+                    HPPlaceLog.SetPosition();                                   //Steven 20211110 : 記錄放料到加熱盤的位置
+                bPlaceToHotplate=false;
+                bHangTimePause=true;                                            //Steven 20090827 : Hang Up dectector
+
+                if(iOneCycle==0 &&                                              //Steven 20240326 : 修正One Cycle後會多丟一次的問題
+                   IniConfig.bE40ClearAllHotICThenPickLoadIC &&                 //ChungHung 201205104 Clear HotIC then Pick Load IC
+                   CheckClearAllHotICThenPickLoadIC() &&
+                   HasHotReadyIC_9045())
+                {
+                    iHeaterWaitTime=0;
+                    InitInArmPickFromHotPlateTask();
+                    bOneTimeWait=false;
+                    Task=1500;
+                }
+                else
+                {
+                    Task=50;
+                    iAdjustSpeed=1;
+                    iDisplaySpeed=1;                                            //KaiChen 20171225 (Steven)：Add Speed Display
+                    iInRotateFinish=0;                                          //Ifor 20180112 (Steven) : add 避免加熱模式不跑Rotate
+                }
+                bSiteMappingPlaceHotplate=true;                                 //Ifor 20190308 : add 隨時開關 Site Mapping
+            }
+
+            if(Task!=1500)                                                      //Steven 20180813 : add in arm speed
+                break;
+        case 1500:
+            iHeaterWaitTime=0;
+            InitInArmPickFromHotPlateTask();
+            bOneTimeWait=false;
+
+            if(IniConfig.bA15_1ESDGiveWayFunction==true)                        //==> Eastsun 20260521 整合
+            {
+                InitDoInArmIonFanGiveWayTask();
+                Task=999;
+            }
+            else
+            {
+            Task=1550;
+            }
+
+            if(Task!=1550)                                                      //Eastsun 20260521 整合
+                break;
+        case 1550:
+            bOneTimeWait=false;
+            bPlaceToHotplate=false;
+
+            if(IniConfig.bI23HotTestWaitingMode && bChangeToInitStartMode)      //Chunghung 20111230 Hot Test Waiting Mode
+            {
+                bChangeToInitStartMode=false;
+                ShowMyMessage("Tester Ready?", "", "", true);
+            }
+
+            if(DoInArmPickFromHotPlate_9045())
+            {
+                bPickFromHotplate=false;
+                if(InArmSuck.HasIC()==false)
+                {
+                    if(bRunAutoSiteMapping==true)                               //Ifor 20171128 (Steven) add 避免Auto Site Mapping 多跑一次InArm安全位置
+                    {
+                        SetShuttlefCanMoveL(0, true, __FUNC__, "1500");
+                        SetShuttlefCanMoveL(1, true, __FUNC__, "1500");
+                        bOne=true;
+                        Task=10;
+                    }
+                    else
+                    {
+                        Task=1;
+                    }
+                    break;
+                }
+                else                                                            //Steven 20190508 : 改到下面, 避免HP異常hang up一直被重置
+                {
+                    bHangTimePause=true;                                        //Steven 20090827 : Hang Up dectector
+                }
+
+                if(IniConfig.bI28_OnOffSiteOnTheFly==false &&                   //Steven 20230131 : I28與E54衝突
+                   IniConfig.bE54CheckCloseSiteNoIC)                            //Steven 20160922 : 因為OneCycle永遠先跑蝦頭1, 檢查加熱盤錯誤功能與ByArmCloseSite衝突
+                {
+                    for(int i=0; i<2; i++)
+                    {
+                        for(int j=0; j<4; j++)
+                        {
+                            if(Prod.fInArmSuck4x8[iShtHP][i][j+iKitHP32]==false &&
+                               InArmSuck.Item[i][j]==HAS_HOT_IC)
+                            {
+                                Task=1600;
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                InitInArmPlaceToShuttleTask();
+                Task=2000;
+            }
+            break;
+        case 1600:
+            ErrPart=" ";
+            bHasDuplicateErr=false;
+            bCheckCloseSiteHaveIC=false;
+
+            for(int i=0; i<2; i++)
+            {
+                for(int j=0; j<4; j++)
+                {
+                    if(Prod.fInArmSuck4x8[iShtHP][i][j+iKitHP32]==false &&
+                       InArmSuck.Suck[i][j].GetStatus())
+                    {
+                        bCheckCloseSiteHaveIC=true;
+                        ErrPart+=InArmSuck.Suck[i][j].sName;
+                        InArmSuck.SetItemData(i, j, HAS_NULL_IC);
+                    }
+                }
+            }
+
+            if(bCheckCloseSiteHaveIC)
+            {
+                ShowErrorMessage("JAM0114", K_RETRY, MInArmX, bHasDuplicateErr, ErrPart);                               //Steven 20100104
+                bHasDuplicateErr=true;
+            }
+            else
+            {
+                InitInArmPlaceToShuttleTask();
+                bPickFromHotplate=false;
+                Task=2000;
+            }
+            break;
+        case 2000:
+            if(CheekNeedToDoInArmAdditionalFunction())                          //Steven 20210609 : 整合Precisor, Rotator, Bottom CCD, Die Clean
+            {
+                Task=200;
+                break;
+            }
+            bPlaceShuttle=true;                                                 //ChungHung 20120226 add
+            iInRotateFinish=3;                                                  //kevin 20130524 IC已放置SHUTTLE
+
+            if(DoInArmPlaceToShuttle_9045())
+            {
+                bInArmHasHotIC=false;                                           //Sam 20211012 : Debug 用
+                bPlaceShuttle=false;                                            //ChungHung 20120226 add
+                fYieldMonitoring->DoAutoCloseSite(0);                           //Steven 20170905 (wei) : Low Yield Auto Site Off for Ambient
+                iInRotateFinish=0;                                              //kevin 20130524 放完SHUTTLE
+                iSetShuttleToHasNullIC=0;
+                bHangTimePause=true;                                            //Steven 20090827 : Hang Up dectector
+                if(LastSet.iRealDummy==DUMMY && iCleanOut)
+                {
+                    MOT[MMTrayY].InitNewTray(NULL_IC, false, __FUNC__);
+                }
+
+                if(LastSet.iTemperature==Tempture_Hot)
+                {
+                    if(!bTrySuckHotPlateOneCycle)
+                        HasHotReadyIC_9045();                                   //Steven 20220530 : Add
+
+                    if(iOneCycle ||
+                       (IniConfig.bUseAutoSiteMapping==true &&
+                        LastSet.iRunStartMode==rsmAutoSiteMap &&
+                        bSiteMappingCHKOK==false))
+                    {
+                        Task=50;
+                        AdjustShuttlePlaceOrder_AutoSiteMapping();              //jou 2016-11-07 JCET fix Auto Site mapping Hot mode hangup
+                    }
+                    else
+                    {
+                        if(bNeedTrySuckHotPlate)                                //ChungHung 20120206 Hotplate check
+                        {
+                            if(bOneTimeHotPlateCheckAll)
+                                Task=75;
+                            else
+                                Task=50;
+                        }
+                        else
+                        {
+                            Task=50;
+                        }
+                    }
+                }
+                else if(IniConfig.bA15_1ESDGiveWayFunction==true)               //==> Eastsun 20260521 整合
+                {
+                    InitDoInArmIonFanGiveWayTask();
+                    Task=2100;
+                }
+                else
+                {
+                    Task=50;
+                }
+
+                if(IniConfig.bUseAutoSiteMapping)                               //jou 2011-03-24 start : Auto Site Mapping
+                {
+                    if(bSiteMappingCHKOK==false)
+                        DoSiteMappingCHK();
+                }
+            }
+            break;
+        case 2100:                                                              //Eastsun 20260521 整合
+            if(DoInArmIonFanGiveWay())
+            {
+                Task=50;
+            }
+            break;
+        case 15000:                                                             //ChungHung 20120206 Hotplate check
+            if(CheckHeaterOK()==false)                                          //Steven 20250116 : 確認HeaterOK
+            {
+                if(iInArmTryPickFromHotPlateTask==1)
+                {
+                    Task=1;
+                    break;
+                }
+            }
+
+            if(DoInArmTryPickFromHotPlate_9045_2x6_8(bOneTimeHotPlateCheckAll, bTryPickFromHotPlateShowError))
+            {
+                for(int i=0; i<2; i++)
+                {
+                    for(int j=0; j<4; j++)
+                    {
+                        if(InArmSuck.Item[i][j]==HAS_TRY_SUCK_IC)
+                            InArmSuck.SetItemData(i, j, NULL_IC);
+                    }
+                }
+
+                bHangTimePause=true;                                            //Steven 20090827 : Hang Up dectector
+                if(InArmSuck.HasIC()==false)
+                {
+                    InitArmPickFromLoadStageTask();
+
+                    if(bOneTimeHotPlateCheckAll)
+                    {
+                        if(bNeedTrySuckHotPlate)
+                        {
+                            Task=75;
+                        }
+                        else
+                        {
+                            Task=50;
+                        }
+                    }
+                    else
+                    {
+                        Task=100;
+                    }
+                    break;
+                }
+
+                iHeaterWaitTime=0;
+                bOneTimeWait=false;
+                InitInArmPlaceToShuttleTask();
+                Task=2000;
+            }
+            break;
+    }
+}
+//==============================================================================
+//ChungHung 20141031 add 12Site HotPlate Check
+bool DoInArmTryPickFromHotPlate_9045_2x6_8(bool bOneTimeCheckAll, bool bShowErrorMessage)
+{
+//    IN_ARM_TRY_PICK_HOTPLATE_2X6_8:
+    int &Task=iInArmTryPickFromHotPlateTask;
+    int ip=iPlacePlate[0], ix=iPlacePlateX[0], iy=iPlacePlateY[0];
+    int StartX=0, iStepX=0;
+    int i, j, j2;
+    AnsiString ErrPart="";
+    bool bHasDuplicateErr;
+    bool bHasError;
+//    static bool bSuckDuplicateErr[2][4]={{false, false, false, false}, {false, false, false, false}};
+    static bool bSuckFinish[2][4]={{false, false, false, false}, {false, false, false, false}};
+
+    int iStart=0, iEnd=0;                                                       //ChungHung 20141031 add 12Site HotPlate Check
+
+    GetHotPlateYHalfPos();
+
+    switch(Task)
+    {
+        case 1:
+            if(bInArmTryPickFromHotPlateFinish)                                 //搜尋目標位置
+            {
+                BackupPlacePos();                                               //ChungHung 20120206 Hotplate check
+            }
+            bInArmTryPickFromHotPlateFinish=false;                              //ChungHung 20120206 Hotplate check
+            SearchPlateToPlace();
+            if(IsHotPlateCheckFinsih())                                         //ChungHung 20120816 Hotplate check add
+            {
+                InArmSuck.SetAll(NULL_IC);
+                Task=400;
+                return false;
+            }
+            Task=100;
+        case 100:
+            if(MoveInArmXYToHotPlatePlace(iTryPickHP, true))
+            {
+                InArmSuck.ResetAll();                                           //Steven 20160323 : 避免未開啟真空
+
+                if(i8PickerHPMode==iHPWideHP &&
+                   HotPlateForm.XDivision==6)
+                {
+                    Task=375;
+                }
+                else
+                {
+                    Task=350;
+                }
+            }
+            break;
+        case 350:
+            if(HotPlateForm.XDivision==6)
+            {
+                for(i=0; i<MAX_ARM_Row; i++)
+                {
+                    for(j=0; j<2; j++)
+                    {
+                        if(i==1 && Row2CanPutHP(PlaceMode)==false && iPlaceHPOrder==0)
+                        {
+                            continue;
+                        }
+                        j2=j*2+iForPlaceHPX6Step;
+                        if(InArmSuck.Item[i][j2]==HAS_TRY_SUCK_IC || InArmSuck.Item[i][j2]==HAS_NULL_IC)
+                        {
+                            ip=iPlacePlate[0];
+                            ix=iPlacePlateX[0]+StartX+j*3;
+                            if(iPlaceHPOrder==0)
+                                iy=iPlacePlateY[0]+iYHalf*i;
+                            else
+                                iy=iPlacePlateY[0];
+
+                            if(ArmSpeed_File[InArm].bUseHPVacuum)               //Steven 20180125 (Jou) : 加熱盤的真空等待時間
+                                InArmSuck.Suck[i][j2].OnDelayTime=ArmSpeed[InArm].dHPVacuumTI*100;
+                            if(InArmSuck.Item[i][j2]==HAS_NULL_IC || InArmSuck.Suck[i][j2].Suck() || InArmSuck.Suck[i][j2].Error)
+                            {
+                                MOT[MMPlate1+ip].SetTraySingleData(ix, iy, HAS_TRY_SUCK_IC);
+                                #ifdef SOFT_SIMULTE
+                                    InArmSuck.SetItemData(i, j2, NULL_IC);
+                                #else
+                                    if(InArmSuck.Item[i][j2]==HAS_TRY_SUCK_IC && InArmSuck.Suck[i][j2].Error==false && LastSet.iRealDummy==REALLY)
+                                    {
+                                        InArmSuck.SetItemData(i, j2, HAS_SUCK_IC);
+                                    }
+                                    else
+                                    {
+                                        InArmSuck.SetItemData(i, j2, NULL_IC);
+                                    }
+                                #endif
+                            }
+                        }
+                    }
+                }
+
+                for(i=0; i<MAX_ARM_Row; i++)
+                {
+                    for(j=0; j<2; j++)
+                    {
+                        j2=j*2+iForPlaceHPX6Step;
+                        if(iPlaceHPOrder==0)
+                        {
+                            if(Row2CanPutHP(PlaceMode))
+                            {
+                                if(InArmSuck.Item[i][j2]==HAS_TRY_SUCK_IC)
+                                    return false;
+                            }
+                            else
+                            {
+                                if(InArmSuck.Item[0][j2]==HAS_TRY_SUCK_IC)
+                                    return false;
+                            }
+                        }
+                        else
+                        {
+                            if(InArmSuck.Item[1][j2]==HAS_TRY_SUCK_IC)
+                                return false;
+                        }
+                    }
+                }
+
+                Task=400;
+                break;
+                //goto IN_ARM_TRY_PICK_HOTPLATE_2X6_8;
+            }
+            else
+            {
+                //iXItem10Step=0;
+                //if(HotPlateForm.XDivision==10 && iPlacePlateX[0]==8 && InArmLeftSideNoIC())
+                //    iXItem10Step=2;
+
+                for(i=0; i<MAX_ARM_Row; i++)
+                {
+                    for(j=0; j<MAX_ARM_Col; j++)
+                    {
+                        if(i==1 && Row2CanPutHP(PlaceMode)==false && iPlaceHPOrder==0)
+                        {
+                            continue;
+                        }
+
+                        if(HotPlateForm.XDivision==4)
+                        {
+                            ix=iPlacePlateX[0]+j;
+                        }
+                        else if(HotPlateForm.XDivision==16)                     //Steven 20150826 : 16x24 Hot Plate for 32Site
+                        {
+                            ix=iPlacePlateX[0]+j*4;
+                        }
+                        else if(HotPlateForm.XDivision==8 || HotPlateForm.XDivision==12)
+                        {
+                            if(bPitchOver12000)                                 //Steven 20100307
+                                ix=iPlacePlateX[0]+j;
+                            else
+                                ix=iPlacePlateX[0]+j*2;
+                        }
+                        else if(HotPlateForm.XDivision==10)
+                        {
+                            if(iPlacePlateX[0]!=8)
+                                ix=iPlacePlateX[0]+j*2;
+                            else
+                                ix=iPlacePlateX[0]+j;
+                        }
+
+                        if(ix>=HotPlateForm.XDivision)
+                        {
+                            continue;
+                        }
+
+                        j2=j+iForPlaceHPX10Step;
+                        if(InArmSuck.Item[i][j2]==HAS_TRY_SUCK_IC || InArmSuck.Item[i][j2]==HAS_NULL_IC)
+                        {
+                            ip=iPlacePlate[0];
+                            if(iPlaceHPOrder==0)
+                                iy=iPlacePlateY[0]+iYHalf*i;
+                            else
+                                iy=iPlacePlateY[0];
+
+                            if(ArmSpeed_File[InArm].bUseHPVacuum)               //Steven 20180125 (Jou) : 加熱盤的真空等待時間
+                                InArmSuck.Suck[i][j2].OnDelayTime=ArmSpeed[InArm].dHPVacuumTI*100;
+                            if(InArmSuck.Item[i][j2]==HAS_NULL_IC || InArmSuck.Suck[i][j2].Suck() || InArmSuck.Suck[i][j2].Error)
+                            {
+                                MOT[MMPlate1+ip].SetTraySingleData(ix, iy, HAS_TRY_SUCK_IC);
+
+                                #ifdef SOFT_SIMULTE
+                                    InArmSuck.SetItemData(i, j2, NULL_IC);
+                                #else
+                                    if(InArmSuck.Item[i][j2]==HAS_TRY_SUCK_IC && InArmSuck.Suck[i][j2].Error==false && LastSet.iRealDummy==REALLY)
+                                    {
+                                        InArmSuck.SetItemData(i, j2, HAS_SUCK_IC);
+                                    }
+                                    else
+                                    {
+                                        InArmSuck.SetItemData(i, j2, NULL_IC);
+                                    }
+                                #endif
+                            }
+                        }
+                    }
+                }
+
+                if(HotPlateForm.XDivision==10 && iPlacePlateX[0]==8)
+                {
+                    for(i=0; i<MAX_ARM_Row; i++)
+                    {
+                        for(j=0; j<2; j++)
+                        {
+                            j2=j+iForPlaceHPX10Step;
+                            if(iPlaceHPOrder==0)
+                            {
+                                if(Row2CanPutHP(PlaceMode))
+                                {
+                                    if(InArmSuck.Item[i][j2]==HAS_TRY_SUCK_IC)
+                                        return false;
+                                }
+                                else
+                                {
+                                    if(InArmSuck.Item[0][j2]==HAS_TRY_SUCK_IC)
+                                        return false;
+                                }
+                            }
+                            else
+                            {
+                                if(InArmSuck.Item[1][j2]==HAS_TRY_SUCK_IC)
+                                    return false;
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    for(i=0; i<MAX_ARM_Row; i++)
+                    {
+                        for(j=0; j<MAX_ARM_Col; j++)
+                        {
+                            if(iPlaceHPOrder==0)
+                            {
+                                if(Row2CanPutHP(PlaceMode))
+                                {
+                                    if(InArmSuck.Item[i][j]==HAS_TRY_SUCK_IC)
+                                        return false;
+                                }
+                                else
+                                {
+                                    if(InArmSuck.Item[0][j]==HAS_TRY_SUCK_IC)
+                                        return false;
+                                }
+                            }
+                            else
+                            {
+                                if(InArmSuck.Item[1][j]==HAS_TRY_SUCK_IC)
+                                    return false;
+                            }
+                        }
+                    }
+                }
+            }
+            Task=400;
+            break;
+            //goto IN_ARM_TRY_PICK_HOTPLATE_2X6_8;
+        case 375:                                                               //ChungHung Add 20101025 CC_ASE_CL HotPlate Offset 10mm Start
+            if(HotPlateForm.XDivision==6 && iPlacePlateX[0]==4)
+                iStepX=2;
+            else
+                iStepX=4;
+
+            if(HotPlateForm.XDivision==6)
+            {
+                for(i=0; i<2; i++)
+                {
+                    for(j=0; j<iStepX; j++)
+                    {
+                        if(i==1 && Row2CanPutHP(PlaceMode)==false && iPlaceHPOrder==0)
+                            continue;
+
+                        j2=j+iForPlaceHPX6Step*2;
+                        if(InArmSuck.Item[i][j2]==HAS_TRY_SUCK_IC)
+                        {
+                            ip=iPlacePlate[0];
+                            ix=iPlacePlateX[0]+StartX+j;
+                            if(iPlaceHPOrder==0)
+                                iy=iPlacePlateY[0]+iYHalf*i;
+                            else
+                                iy=iPlacePlateY[0];
+
+                            if(ArmSpeed_File[InArm].bUseHPVacuum)               //Steven 20180125 (Jou) : 加熱盤的真空等待時間
+                                InArmSuck.Suck[i][j2].OnDelayTime=ArmSpeed[InArm].dHPVacuumTI*100;
+                            if(InArmSuck.Suck[i][j2].Suck() || InArmSuck.Suck[i][j2].Error)
+                            {
+                                MOT[MMPlate1+ip].SetTraySingleData(ix, iy, HAS_TRY_SUCK_IC);
+                                #ifdef SOFT_SIMULTE
+                                    InArmSuck.SetItemData(i, j2, NULL_IC);
+                                #else
+                                    if(InArmSuck.Suck[i][j2].Error==false && LastSet.iRealDummy==REALLY)
+                                    {
+                                        InArmSuck.SetItemData(i, j2, HAS_SUCK_IC);
+                                    }
+                                    else
+                                    {
+                                        InArmSuck.SetItemData(i, j2, NULL_IC);
+                                    }
+                                #endif
+                            }
+                        }
+                    }
+                }
+
+                for(i=0; i<MAX_ARM_Row; i++)
+                {
+                    for(j=0; j<iStepX; j++)
+                    {
+                        j2=j+iForPlaceHPX6Step*2;
+                        if(iPlaceHPOrder==0)
+                        {
+                            if(Row2CanPutHP(PlaceMode))
+                            {
+                                if(InArmSuck.Item[i][j2]==HAS_TRY_SUCK_IC)
+                                    return false;
+                            }
+                            else
+                            {
+                                if(InArmSuck.Item[0][j2]==HAS_TRY_SUCK_IC)
+                                    return false;
+                            }
+                        }
+                        else
+                        {
+                            if(InArmSuck.Item[1][j2]==HAS_TRY_SUCK_IC)
+                                return false;
+                        }
+                    }
+                }
+
+                Task=400;
+                break;
+                //goto IN_ARM_TRY_PICK_HOTPLATE_2X6_8;
+            }
+            else
+            {
+                //iXItem10Step=0;
+                //if(HotPlateForm.XDivision==10 && iPlacePlateX[0]==8 && InArmLeftSideNoIC())
+                //    iXItem10Step=2;
+
+                for(i=0; i<MAX_ARM_Row; i++)
+                {
+                    for(j=0; j<MAX_ARM_Col; j++)
+                    {
+                        if(i==1 && Row2CanPutHP(PlaceMode)==false && iPlaceHPOrder==0)
+                        {
+                            continue;
+                        }
+
+                        if(HotPlateForm.XDivision==4)
+                        {
+                            ix=iPlacePlateX[0]+j;
+                        }
+                        else if(HotPlateForm.XDivision==16)                     //Steven 20150826 : 16x24 Hot Plate for 32Site
+                        {
+                            ix=iPlacePlateX[0]+j*4;
+                        }
+                        else if(HotPlateForm.XDivision==8 || HotPlateForm.XDivision==12)
+                        {
+                            if(bPitchOver12000)                                 //Steven 20100307
+                                ix=iPlacePlateX[0]+j;
+                            else
+                                ix=iPlacePlateX[0]+j*2;
+                        }
+                        else if(HotPlateForm.XDivision==10)
+                        {
+                            if(iPlacePlateX[0]!=8)
+                                ix=iPlacePlateX[0]+j*2;
+                            else
+                                ix=iPlacePlateX[0]+j;
+                        }
+
+                        if(ix>=HotPlateForm.XDivision)
+                        {
+                            continue;
+                        }
+
+                        j2=j+iForPlaceHPX10Step;
+                        if(InArmSuck.Item[i][j2]==HAS_TRY_SUCK_IC)
+                        {
+                            ip=iPlacePlate[0];
+
+                            if(iPlaceHPOrder==0)
+                                iy=iPlacePlateY[0]+iYHalf*i;
+                            else
+                                iy=iPlacePlateY[0];
+
+                            if(ArmSpeed_File[InArm].bUseHPVacuum)               //Steven 20180125 (Jou) : 加熱盤的真空等待時間
+                                InArmSuck.Suck[i][j2].OnDelayTime=ArmSpeed[InArm].dHPVacuumTI*100;
+                            if(InArmSuck.Suck[i][j2].Suck() || InArmSuck.Suck[i][j2].Error)
+                            {
+                                MOT[MMPlate1+ip].SetTraySingleData(ix, iy, HAS_TRY_SUCK_IC);
+                                #ifdef SOFT_SIMULTE
+                                    InArmSuck.SetItemData(i, j2, NULL_IC);
+                                #else
+                                    if(InArmSuck.Suck[i][j2].Error==false && LastSet.iRealDummy==REALLY)
+                                    {
+                                        InArmSuck.SetItemData(i, j2, HAS_SUCK_IC);
+                                    }
+                                    else
+                                    {
+                                        InArmSuck.SetItemData(i, j2, NULL_IC);
+                                    }
+                                #endif
+                            }
+                        }
+                    }
+                }
+
+                if(HotPlateForm.XDivision==10 && iPlacePlateX[0]==8)
+                {
+                    for(i=0; i<MAX_ARM_Row; i++)
+                    {
+                        for(j=0; j<2; j++)
+                        {
+                            j2=j+iForPlaceHPX10Step;
+                            if(iPlaceHPOrder==0)
+                            {
+                                if(Row2CanPutHP(PlaceMode))
+                                {
+                                    if(InArmSuck.Item[i][j2]==HAS_TRY_SUCK_IC)
+                                        return false;
+                                }
+                                else
+                                {
+                                    if(InArmSuck.Item[0][j2]==HAS_TRY_SUCK_IC)
+                                        return false;
+                                }
+                            }
+                            else
+                            {
+                                if(InArmSuck.Item[1][j2]==HAS_TRY_SUCK_IC)
+                                    return false;
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    for(i=0; i<MAX_ARM_Row; i++)
+                    {
+                        for(j=0; j<MAX_ARM_Col; j++)
+                        {
+                            if(iPlaceHPOrder==0)
+                            {
+                                if(Row2CanPutHP(PlaceMode))
+                                {
+                                    if(InArmSuck.Item[i][j]==HAS_TRY_SUCK_IC)
+                                        return false;
+                                }
+                                else
+                                {
+                                    if(InArmSuck.Item[0][j]==HAS_TRY_SUCK_IC)
+                                        return false;
+                                }
+                            }
+                            else
+                            {
+                                if(InArmSuck.Item[1][j]==HAS_TRY_SUCK_IC)
+                                    return false;
+                            }
+                        }
+                    }
+                }
+            }
+            Task=400;
+//            goto IN_ARM_TRY_PICK_HOTPLATE_2X6_8;
+            break;
+        case 400:
+            if(InArmSuck.Item[0][0]==HAS_TRY_SUCK_IC || InArmSuck.Item[0][1]==HAS_TRY_SUCK_IC ||
+               InArmSuck.Item[0][2]==HAS_TRY_SUCK_IC || InArmSuck.Item[0][3]==HAS_TRY_SUCK_IC ||
+               InArmSuck.Item[1][0]==HAS_TRY_SUCK_IC || InArmSuck.Item[1][1]==HAS_TRY_SUCK_IC ||
+               InArmSuck.Item[1][2]==HAS_TRY_SUCK_IC || InArmSuck.Item[1][3]==HAS_TRY_SUCK_IC)
+            {
+                //jou 2010-01-14 start
+                if(HotPlateForm.XDivision==6)
+                {
+                    if(i8PickerHPMode==iHPWideHP)                               //JerryYang 20161007 簡化Hotplate判斷式
+                    {
+                        if(iForPlaceHPX6Step==0)
+                        {
+                            if(InArmSuck.Item[0][0]==HAS_TRY_SUCK_IC && InArmSuck.Item[0][1]==HAS_TRY_SUCK_IC &&
+                               InArmSuck.Item[0][2]==HAS_TRY_SUCK_IC && InArmSuck.Item[0][3]==HAS_TRY_SUCK_IC &&
+                               InArmSuck.Item[1][0]==HAS_TRY_SUCK_IC && InArmSuck.Item[1][1]==HAS_TRY_SUCK_IC &&
+                               InArmSuck.Item[1][2]==HAS_TRY_SUCK_IC && InArmSuck.Item[1][3]==HAS_TRY_SUCK_IC)
+                            {
+                                Task=100;
+                                break;
+                            }
+                        }
+                        else
+                        {
+                            if(InArmSuck.Item[0][2]==HAS_TRY_SUCK_IC &&
+                               InArmSuck.Item[0][3]==HAS_TRY_SUCK_IC &&
+                               InArmSuck.Item[1][2]==HAS_TRY_SUCK_IC &&
+                               InArmSuck.Item[1][3]==HAS_TRY_SUCK_IC)
+                            {
+                                Task=100;
+                                break;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        if(iForPlaceHPX6Step==0)
+                        {
+                            if(InArmSuck.Item[0][0]==HAS_TRY_SUCK_IC &&
+                               InArmSuck.Item[1][0]==HAS_TRY_SUCK_IC &&
+                               InArmSuck.Item[0][2]==HAS_TRY_SUCK_IC &&
+                               InArmSuck.Item[1][2]==HAS_TRY_SUCK_IC)
+                            {
+                                Task=100;
+                                break;
+                            }
+                        }
+                        else
+                        {
+                            if(InArmSuck.Item[0][1]==HAS_TRY_SUCK_IC &&
+                               InArmSuck.Item[1][1]==HAS_TRY_SUCK_IC &&
+                               InArmSuck.Item[0][3]==HAS_TRY_SUCK_IC &&
+                               InArmSuck.Item[1][3]==HAS_TRY_SUCK_IC)
+                            {
+                                Task=100;
+                                break;
+                            }
+                        }
+                    }
+                }
+                //jou 2010-01-14 end
+                Task=1;
+                break;
+            }
+
+            if(MoveInArmZToPlateSafe(Task))
+            {
+                //檢查是否有 HAS_SUCK_IC
+                //有HAS_SUCK_IC 秀出Error Message
+                //將HAS_SUCK_IC 改為HAS_TRY_SUCK_IC
+                bHasError=false;
+                if(bShowErrorMessage)
+                {
+                    ErrPart=" ";
+                    bHasDuplicateErr=false;
+
+                    for(i=0; i<MAX_ARM_Row; i++)
+                    {
+                        for(j=0; j<MAX_ARM_Col; j++)
+                        {
+                            InArmSuck.Suck[i][j].Error=false;
+                            bSuckFinish[i][j]=false;
+                            if(InArmSuck.Item[i][j]==HAS_SUCK_IC)
+                            {
+                                ErrPart+=InArmSuck.Suck[i][j].sName;
+                                bHasError=true;
+                            }
+
+                            if(bTryPickHPDuplicateErr[i][j])
+                            {
+                                bHasDuplicateErr=true;
+                            }
+                        }
+                    }
+
+                    if(bHasError)
+                    {
+                        ShowErrorMessage("WAR0170", K_RETRY, MInArmX, bHasDuplicateErr, ErrPart);
+                        for(i=0; i<MAX_ARM_Row; i++)
+                        {
+                            for(j=0; j<MAX_ARM_Col; j++)
+                            {
+                                bTryPickHPDuplicateErr[i][j]=true;
+                            }
+                        }
+
+                        Task=450;
+                    }
+                    else
+                    {
+                        for(i=0; i<MAX_ARM_Row; i++)
+                        {
+                            for(j=0; j<MAX_ARM_Col; j++)
+                            {
+                                bTryPickHPDuplicateErr[i][j]=false;
+                            }
+                        }
+
+                        Task=500;
+                    }
+                }
+                else
+                {
+                    if(bOneTimeCheckAll)
+                    {
+                        if(InArmSuck.HasType(HAS_SUCK_IC))
+                        {
+                            for(i=0; i<MAX_ARM_Row; i++)
+                            {
+                                for(j=0; j<MAX_ARM_Col; j++)
+                                {
+                                    if(InArmSuck.Item[i][j]==HAS_SUCK_IC)
+                                    {
+                                        InArmSuck.SetItemData(i, j, HAS_HOT_IC);
+                                    }
+                                    else
+                                    {
+                                        InArmSuck.SetItemData(i, j, HAS_NULL_IC);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Task=500;
+                }
+            }
+            break;
+        case 450:
+            for(i=0; i<MAX_ARM_Row; i++)
+            {
+                for(j=0; j<MAX_ARM_Col; j++)
+                {
+                    if(bSuckFinish[i][j]==true)
+                    {
+                        continue;
+                    }
+                    else
+                    {
+                        if(ArmSpeed_File[InArm].bUseHPVacuum)                   //Steven 20180125 (Jou) : 加熱盤的真空等待時間
+                            InArmSuck.Suck[i][j].OnDelayTime=ArmSpeed[InArm].dHPVacuumTI*100;
+                        if((InArmSuck.Suck[i][j].Suck() || InArmSuck.Suck[i][j].Error) && bSuckFinish[i][j]==false)
+                        {
+                            bSuckFinish[i][j]=true;
+                            if(InArmSuck.Suck[i][j].Error==false && LastSet.iRealDummy==REALLY)
+                            {
+                                InArmSuck.SetItemData(i, j, HAS_SUCK_IC);
+                            }
+                            else
+                            {
+                                InArmSuck.SetItemData(i, j, NULL_IC);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if(bSuckFinish[0][0] && bSuckFinish[0][1] && bSuckFinish[0][2] && bSuckFinish[0][3] &&
+               bSuckFinish[1][0] && bSuckFinish[1][1] && bSuckFinish[1][2] && bSuckFinish[1][3])
+            {
+                if(InArmSuck.HasType(HAS_SUCK_IC))
+                {
+                    Task=400;
+                }
+                else
+                {
+                    TryHotClearRecBufMMPlate();
+                    RestorePlacePos();
+                    bInArmTryPickFromHotPlateFinish=true;
+                    if(InArmSuck.iWhichKit==0)                                  //ChungHung 20141031 add 12Site HotPlate Check
+                    {
+                        iStart=0;
+                        iEnd=MAX_ARM_Col-1;
+                    }
+                    else
+                    {
+                        iStart=1;
+                        iEnd=MAX_ARM_Col;
+                    }
+                    for(i=0; i<MAX_ARM_Row; i++)
+                        for(j=iStart; j<iEnd; j++)
+                            if(InArmSuck.Item[i][j]==NULL_IC)
+                                InArmSuck.SetItemData(i, j, HAS_TRY_SUCK_IC);
+                    Task=1;
+                }
+            }
+            break;
+        case 500:
+            if(bOneTimeCheckAll==true)
+                AdjustShuttleWhichKitOrder();                                   //Steven 20220520 : 修正Try pick HP
+
+            if(IsHotPlateCheckFinsih())
+            {
+                if(bOneTimeCheckAll==true)
+                {
+                    bNeedTrySuckHotPlate=false;
+                    TryHotClearRecBufMMPlate();
+
+                    if(bHotPlateCheckNeedTrayFeed==true)
+                    {
+                        bTrySuckHotPlateCleanOut=true;
+                        iCleanOut=1;
+                    }
+                    else
+                    {
+                        bTrySuckHotPlateOneCycle=true;
+                        iOneCycle=1;
+                    }
+                    ResetHotPlateSearchParameter();
+                }
+                else
+                {
+                    if(InArmSuck.HasIC()==false)
+                    {
+                        bNeedTrySuckHotPlate=false;
+                    }
+                }
+            }
+
+            if(bOneTimeCheckAll==false)
+                TryHotClearRecBufMMPlate();                                     //ChungHung 20120206 Hotplate check
+
+            RestorePlacePos();                                                  //ChungHung 20120206 Hotplate check
+            bInArmTryPickFromHotPlateFinish=true;                               //ChungHung 20120206 Hotplate check
+
+            return true;
+    }
+    return false;
+}
+//ChungHung 20120206 Hotplate check end
+//==============================================================================
+int GetShuttleState_2x6_8(int iSht, bool bPick)
+{
+    if(iCloseSiteModeFor2x6==e2x6Run2x4 ||
+       iCloseSiteModeFor2x6==e2x6Run2x4Step2)
+    {
+        if(bPick==bAutoPick)                                                    //Pick
+        {
+            if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, iCloseSiteStep_2x6, 4)==false)                                     //Row 1有料
+                return 1;
+            else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, iCloseSiteStep_2x6, 4)==false)                              //Row 2有料
+                return 2;
+            else
+                return 0;
+        }
+        else                                                                    //Place
+        {
+            if(bUse8Picker)
+            {
+                if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, iCloseSiteStep_2x6, 4) &&                                      //Row 1無料
+                   ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(0, NULL_IC)) ||                            //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                    (bAutoCleanPlaceToSht==true  && InArmSuck.ArmUpSideNoIC()==false)))
+                    return 1;
+                else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, iCloseSiteStep_2x6, 4) &&                               //Row 2無料
+                        ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                       //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                         (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 2;
+                else
+                    return 0;
+            }
+            else
+            {
+                if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, iCloseSiteStep_2x6, 4) &&                                      //Row 1無料
+                   ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                            //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                    (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 1;
+                else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, iCloseSiteStep_2x6, 4) &&                               //Row 2無料
+                        ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                       //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                         (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 2;
+                else
+                    return 0;
+            }
+        }
+    }
+    else if(iCloseSiteModeFor2x6==e2x6CloseCenter2x4)                           //Steven 20241025 : fixed for 2x6 close center site auto clean
+    {
+        if(bPick==bAutoPick)                                                    //Pick
+        {
+            if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, 0, 2)==false)              //左上有料
+                return 1;
+            else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, 0, 2)==false)       //左下有料
+                return 2;
+            else if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, 4, 2)==false)         //右上有料
+                return 3;
+            else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, 3, 3)==false)       //右下有料
+                return 4;
+            else
+                return 0;
+        }
+        else                                                                    //Place
+        {
+            if(bUse8Picker)
+            {
+                if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, 0, 2) &&               //左上無料
+                   ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(0, NULL_IC)) ||                            //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                    (bAutoCleanPlaceToSht==true  && InArmSuck.ArmUpSideNoIC()==false)))
+                    return 1;
+                else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, 0, 2) &&        //左下無料
+                        ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                       //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                         (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 2;
+                else if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, 4, 2) &&          //右上無料
+                        ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(0, NULL_IC)) ||                       //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                         (bAutoCleanPlaceToSht==true  && InArmSuck.ArmUpSideNoIC()==false)))
+                    return 3;
+                else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, 4, 2) &&        //右下無料
+                        ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                       //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                         (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 4;
+                else
+                    return 0;
+            }
+            else
+            {
+                if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, 0, 3) &&               //左上無料
+                   ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                            //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                    (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 1;
+                else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, 0, 3) &&        //左下無料
+                        ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                       //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                         (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 2;
+                else if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, 3, 3) &&          //右上無料
+                        ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                       //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                         (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 3;
+                else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, 3, 3) &&        //右下無料
+                        ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                       //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                         (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 4;
+                else
+                    return 0;
+            }
+        }
+    }
+    else if(iCloseSiteModeFor2x6>e2x6OneByOne)
+    {
+        if(bPick==bAutoPick)                                                    //Pick
+        {
+            if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, 0, 6)==false)              //左上有料
+                return 1;
+            else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, 0, 6)==false)       //左下有料
+                return 2;
+            else
+                return 0;
+        }
+        else                                                                    //Place
+        {
+            if(bUse8Picker)
+            {
+                if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, 0, 4) &&               //左上無料
+                   ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(0, NULL_IC)) ||                            //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                    (bAutoCleanPlaceToSht==true  && InArmSuck.ArmUpSideNoIC()==false)))
+                    return 1;
+                else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, 0, 4) &&        //左下無料
+                        ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                       //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                         (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 2;
+                else
+                    return 0;
+            }
+            else
+            {
+                if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, 0, 4) &&               //左上無料
+                   ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                            //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                    (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 1;
+                else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, 0, 4) &&        //左下無料
+                        ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                       //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                         (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 2;
+                else
+                    return 0;
+            }
+        }
+    }
+    else
+    {
+        if(bPick==bAutoPick)                                                    //Pick
+        {
+            if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, 0, 3)==false)              //左上有料
+                return 1;
+            else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, 0, 3)==false)       //左下有料
+                return 2;
+            else if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, 3, 3)==false)         //右上有料
+                return 3;
+            else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, 3, 3)==false)       //右下有料
+                return 4;
+            else
+                return 0;
+        }
+        else                                                                    //Place
+        {
+            if(bUse8Picker)
+            {
+                if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, 0, 3) &&               //左上無料
+                   ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(0, NULL_IC)) ||                            //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                    (bAutoCleanPlaceToSht==true  && InArmSuck.ArmUpSideNoIC()==false)))
+                    return 1;
+                else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, 0, 3) &&        //左下無料
+                        ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                       //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                         (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 2;
+                else if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, 3, 3) &&          //右上無料
+                        ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(0, NULL_IC)) ||                       //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                         (bAutoCleanPlaceToSht==true  && InArmSuck.ArmUpSideNoIC()==false)))
+                    return 3;
+                else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, 3, 3) &&        //右下無料
+                        ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                       //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                         (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 4;
+                else
+                    return 0;
+            }
+            else
+            {
+                if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, 0, 3) &&               //左上無料
+                   ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                            //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                    (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 1;
+                else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, 0, 3) &&        //左下無料
+                        ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                       //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                         (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 2;
+                else if(ptrInSHT->ArmUpSideAllTypeIC(NULL_IC, 3, 3) &&          //右上無料
+                        ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                       //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                         (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 3;
+                else if(ptrInSHT->ArmDownSideAllTypeIC(NULL_IC, 3, 3) &&        //右下無料
+                        ((bAutoCleanPlaceToSht==false && InArmSuck.RowHasDefineIC(1, NULL_IC)) ||                       //Steven 20221005 : Fixed for auto clean clean kit吸兩次
+                         (bAutoCleanPlaceToSht==true  && InArmSuck.ArmDownSideNoIC()==false)))
+                    return 4;
+                else
+                    return 0;
+            }
+        }
+    }
+}
+//------------------------------------------------------------------------------
+void CheckSTMMode_2x6_8()                                                       //Steven 20221006 : 確認STM模式
+{
+    int iMode=-1, iUsedCol=0, iUnuseCol=0;
+
+    if(TestIF_File.iSiteMap[0][2]==0 && TestIF_File.iSiteMap[0][3]==0 &&        //iCloseSiteModeFor2x6==3時是  O O X X O O X X
+       TestIF_File.iSiteMap[1][2]==0 && TestIF_File.iSiteMap[1][3]==0)          //                             O O X X O O X X
+    {
+        if(TestIF_File.dSiteXPitch<=iXpitchMaxX1_MM)                            //倆倆放, 標準pitch //Steven 20240417 : 12site關中間4site
+        {
+            iCloseSiteModeFor2x6=e2x6CloseCenter2x4;
+            InArmSuck.iModeX=3;
+        }
+        else if(TestIF_File.dSiteXPitch<=iXpitchMaxX2_MM)                       //倆倆放, 大pitch
+        {
+            iCloseSiteModeFor2x6=e2x6CloseCenter2x4Step2;
+            InArmSuck.iModeX=4;
+        }
+        else                                                                    //單隻放
+        {
+            iCloseSiteModeFor2x6=e2x6CloseCenter2x41By1;
+            InArmSuck.iModeX=5;
+        }
+    }
+
+    if(iCloseSiteModeFor2x6<=e2x6OneByOne)
+    {
+        if(TestIF_File.iSiteMap[0][4]==0 && TestIF_File.iSiteMap[0][5]==0 &&
+           TestIF_File.iSiteMap[1][4]==0 && TestIF_File.iSiteMap[1][5]==0)
+        {
+            iMode=6;
+            iCloseSiteStep_2x6=0;                                               //JerryYang 20250603 : fixed for 2x6
+        }
+        else if(TestIF_File.iSiteMap[0][0]==0 && TestIF_File.iSiteMap[0][5]==0 &&
+                TestIF_File.iSiteMap[1][0]==0 && TestIF_File.iSiteMap[1][5]==0)
+        {
+            iMode=6;
+            iCloseSiteStep_2x6=1;                                               //JerryYang 20250603 : fixed for 2x6
+        }
+        else if(TestIF_File.iSiteMap[0][0]==0 && TestIF_File.iSiteMap[0][1]==0 &&
+                TestIF_File.iSiteMap[1][0]==0 && TestIF_File.iSiteMap[1][1]==0)
+        {
+            iMode=6;
+            iCloseSiteStep_2x6=2;
+        }
+        else if(TestIF_File.iSiteMap[0][0]==0 && TestIF_File.iSiteMap[0][1]==0 &&
+                TestIF_File.iSiteMap[1][0]==0 && TestIF_File.iSiteMap[1][1]==0)
+        {
+            iMode=6;
+            iCloseSiteStep_2x6=3;
+        }
+
+        iUsedCol=iCloseSiteStep_2x6;
+        if(iMode==6)
+        {
+            if(TestIF_File.dSiteXPitch<=iXpitchMaxX1_MM)
+            {
+                iCloseSiteModeFor2x6=e2x6Run2x4;
+                InArmSuck.iModeX=6;                                             //同時放
+                XPHSuckToSht_2x6_6[InArmSuck.iModeX][0]=iUsedCol+0;
+                XPHSuckToSht_2x6_6[InArmSuck.iModeX][1]=iUsedCol+1;
+                XPHSuckToSht_2x6_6[InArmSuck.iModeX][2]=iUsedCol+2;
+                XPHSuckToSht_2x6_6[InArmSuck.iModeX][3]=iUsedCol+3;
+            }
+            else
+            {
+                iCloseSiteModeFor2x6=e2x6Run2x4Step2;
+                InArmSuck.iModeX=7;                                             //跳格放
+                XPHSuckToSht_2x6_6[InArmSuck.iModeX][0]=iUsedCol+0;
+                XPHSuckToSht_2x6_6[InArmSuck.iModeX][1]=iUsedCol+2;
+                XPHSuckToSht_2x6_6[InArmSuck.iModeX][2]=iUsedCol+1;
+                XPHSuckToSht_2x6_6[InArmSuck.iModeX][3]=iUsedCol+3;
+            }
+
+            iUnuseCol=0;
+            for(int j=4; j<8; j++)
+            {
+                while(iUnuseCol==iUsedCol+0 ||
+                      iUnuseCol==iUsedCol+1 ||
+                      iUnuseCol==iUsedCol+2 ||
+                      iUnuseCol==iUsedCol+3)
+                {
+                    iUnuseCol++;
+                };
+                XPHSuckToSht_2x6_6[InArmSuck.iModeX][j]=iUnuseCol;
+                iUnuseCol++;
+            }
+        }
+    }
+}
+//==============================================================================
+void SetInArmHasDropToShuttle_2x6_8(int SHT, int Row, int Col)
+{
+    int YPos=0;
+
+    if(iWhichKit32==0)
+    {
+        YPos=Col;
+    }
+    else
+    {
+        if(Col==0)
+            YPos=Col;
+        else
+            YPos=Col+3-1;
+    }
+
+    if(SHT==0)
+    {
+        bDropAtSht1NeedCheckVac[Row][YPos]=true;
+    }
+    else
+    {
+        bDropAtSht2NeedCheckVac[Row][YPos]=true;
+    }
+}
+//==============================================================================
