@@ -3,6 +3,15 @@
 > **這不是主版本庫。** 主版本庫是公司 GitLab（`gitlab.honprec.com/.../ht9045`，分支 `main`）。
 > 這個 repo 只為了讓連不到公司 git 的 HT9050 機台可以用 `git pull` 拿到更新；每一顆 commit ＝ GitLab main 某一版的**更新包快照**，不帶 GitLab 的歷史。
 
+## ⚠⚠ 給機台端（20260929 18:1x 起，請先讀這一段）
+
+- **「引擎馬達走 1203」改由筆電做**（Jimmy 20260929 17:3x，RULINGS_20260929 第 11 條，推翻 RULINGS_20260926 第 2 條的「機台端做」）。
+  **機台端請不要改**：`Motor/myEthercatmotor.cpp`、`Motor/EcatMotorRoute.h`（新）、`EtherCAT/Pci1203MotorRoute.cpp`（新）、`tools/wb_serve.cpp` 的路由安裝點、`CMakeLists.txt` 的來源清單。
+  做法照你們 0926 寫的 `docs/ENGINE_1203_MOTOR_ROUTE_DESIGN.md`，§8 的 Q1～Q11 先用設計書的建議預設值；**EastSun 要改哪一題請直接回**。第一次上機要 EastSun 在旁。
+- 9050 IO_Table 裡吸嘴／Tray 臂氣缸與吸盤／滿盤感測器 Enable=0：Jimmy 確認是**真的，硬體還沒接**，表不改。
+- 機台 patch 0019／0021 OPLOG、web 0010 SR-WIRE 已合進 main（第 72 包）；**0018 TOKEN-OFF 沒有收**（Jimmy 決定中；main 維持操作權啟用）。
+- 請告訴筆電：機台現在套到第幾包。
+
 ## 裡面有什麼
 
 | 路徑 | 內容 |
@@ -90,6 +99,7 @@
 | 69 | `updates/4a4040ce/` | `4a4040ce` | `aafa3953`（`updates/4a4040ce/_machine_ai/base_aafa3953/`） | ⚠ **要重建 wb_serve＋更新 web**（22 檔；筆電兩組態 gate＝基準：出貨 4 項、模擬 19 項）。① **合進你們機台端的 0016（WSFANOUT＋TAKEOVER）＋web 0008**：網橋的 tag 補丁每個基準只算一次、**連線上限 16→64**、`control.takeover`（操作員親手按的動作——IO 輸出、Motor Test／Teach 的馬達鍵、系統頁寫入——直接接手操作權；dryRun 預覽與頁面載入仍用 acquire）。這包的 `WebBridgeServer.cpp`／`wb_serve.cpp`／`ht9045_recipe_client.js`／`ht9045_io_do.js` 已含 0016 與 dbe0d98，**不要再套一次 0016**。② **筆電審查修正**：TK-1 操作權被別的分頁接手時，**舊分頁的 Motor Test LoopMove／jog 會停**（以前只在「沒人持有」時才停，接手後舊分頁的 jog 會繼續跑）；TK-2 Teach 頁載入時的查詢不再搶操作權。③ **照 golden 的警報紀錄＋JAM 伺服斷電（會改機台行為）**：警報寫 golden 的 EventTracker／HANDLER LOG 與生產紀錄；警報框出來時照 golden `TfNote::FormShow` 把**入料臂、出料臂、出料飛梭的伺服斷電**（按 START 由 DoServoOn 復原；kcode==0 的提示不斷電）。④ AutoClean 清潔次數到上限只跳一次 WAR16313；csystem 的替身換成真的函式；`bMaintanceMode` 補定義（連結錯誤修正）。**這包沒有**：EP 氣壓設定值、Index Z 走 1203 —— 兩件都被筆電的審查擋下、重做中，**你們不要重做**。「一個瀏覽器只開一條連線」（S-08）是 Steven 那邊的瀏覽器端工作，還沒進來；在那之前靠這包的 64 條上限。 |
 | 70 | `updates/a84d25cc/` | `a84d25cc` | `4a4040ce`（`updates/a84d25cc/_machine_ai/base_4a4040ce/`） | ⚠ **要重建 wb_serve＋更新 web**（25 檔；筆電兩組態 gate＝基準：出貨 4 項、模擬 19 項）。**合進 St02 MR !6（`f9b63b37`）**：① OEE 時間分類照 Steven 裁決 W61：SystemStart 算生產，另分測試／Contact 測試／HOME／其他，閒置＝沒有測試也沒有 SystemStart；W48 開始後第一個 TimeData 時刻清一次每列計數（第一個整點列從開始算起）；② cMyDB：HANDLER LOG 的 TesterID 閘拿掉、`TfLotInfo::UploadEventLogFile` 翻進來（SaveEventLogInfo 閘退役）；③ Motion View 料盤頁（S118）：golden 的顏色與有料顯示、斷線重連、只重畫有變的格子；34 個料盤 tag 名稱只建一次；④ Configuration 頁（R117）：同樣的值在上一個回覆後 500 ms 內不重送；⑤ 54 處過期註解改成跟程式一致（只動註解）。 |
 | 71 | `updates/3a93a28f/` | `3a93a28f` | `a84d25cc`（`updates/3a93a28f/_machine_ai/base_a84d25cc/`） | ⚠ **要重建 wb_serve＋更新 web**（36 檔；筆電兩組態 gate＝基準：出貨 4 項、模擬 19 項）。① **關掉 Motor Test／Teach 視窗時的馬達保護（WSLINK-B，會改機台行為）**：一個瀏覽器只剩一條連線之後，關視窗不會斷線，所以改由頁面表的「關閉」事件照 golden 各自的 FormClose 處理——**關 Motor Test**＝golden FormClose（LoopMove 結束、不送停止，HOME 照走）＋停掉 Motor Test 自己按住的 jog；**關 Teach**＝golden 的 STOP（StopAllMotor、MTestY1 ST），Light Scale 的單軸回原點取消但不假裝完成；**運轉中關 Teach 不會停機**（只停 Teach 自己的 jog）。② **C++ 原生畫面（Steven 的六頁：IoSetView、MotorView、MotorTest、Teach、Home、ShuttleMove）已合進來，但預設關閉**（`W906_NATIVE_FORMS` OFF，exe 裡沒有原生碼）；要看請另外用 `-DW906_NATIVE_FORMS=ON` 建置，機台上還沒有人開過。③ 測試修正（W906_Trace 計時、FShow_Audit 基準）。**這包沒有**：EP 氣壓、Index Z 走 1203（重做中）；加熱模式（常溫優先，交給 ST02）。 |
+| 72 | `updates/180657c7/` | `180657c7` | `3a93a28f`（`updates/180657c7/_machine_ai/base_3a93a28f/`） | ⚠ **要重建 wb_serve＋更新 web**（6 檔；筆電兩組態 gate＝基準）。① **合進你們的 0019 OPLOG＋0021 OPLOG-2＋web 0010 SR-WIRE**（主畫面 State Record 鈕直接送 `act.main.stateRecord`）；**0018 TOKEN-OFF 沒有收**——OPLOG 第一段原本掛在 TOKEN-OFF 那一行，改接在 `cfg.maxConnections = 64;` 那一行；START 行的 `token-enforce` 固定印 1（main 操作權照擋）。⚠ 你們機台上的 TOKEN-OFF 是機台自己的修改（LOCAL）：`check_and_copy` 三方合併會保留（跟 TEMP-DOORS 一樣），這包也沒有改 `MachineType.h`；**合完請確認 `wb_serve.cpp` 的 `cfg.enforceControlToken = (W906_WEB_TOKEN_ENFORCE != 0)` 還在、OPLOG 那一句沒有重複**（這兩句在你們那邊是同一行）。② 文件：RULINGS 第 11、12 條、INBOX 111～116、TO_KEVIN.md。 |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
