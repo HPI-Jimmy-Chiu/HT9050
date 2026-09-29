@@ -110,6 +110,7 @@
 | 78 | `updates/3a26d332/` | `3a26d332` | `283c4567`（`updates/3a26d332/_machine_ai/base_283c4567/`） | ⚠ **要重建 wb_serve＋更新 web**（5 檔；筆電 gate：出貨＝4 項基準、模擬＝19 項基準，都剛好相等）。**St02 INBOX 117**：Motion View 的手臂位置改照 golden `SetScreenScale` 的兩個教點換算（C++ 發 `motionView.screenScale`、`mymotor.h` 一個唯讀 getter）；只影響畫面。 |
 | 79 | `updates/8f9edf73/` | `8f9edf73` | `3a26d332`（`updates/8f9edf73/_machine_ai/base_3a26d332/`） | ⚠ **要重建 wb_serve＋更新 web**（4 檔；筆電 gate：出貨＝4 項基準、模擬＝19 項基準）。**St02 INBOX 117 自審修正**：飛梭沒讀到位置時不再套 golden 直線（不會飛出畫面）、手臂讀數顯示馬達脈波、出料臂 Y 用 golden 那一對錨點；只影響畫面。另有交接檔（S-09 認領回覆）。 |
 | 80 | `updates/e8dda454/` | `e8dda454` | `8f9edf73`（`updates/e8dda454/_machine_ai/base_8f9edf73/`） | ⚠ **要重建 wb_serve**（18 檔；筆電 gate：出貨＝4 項基準、模擬＝19 項基準，都剛好相等；`pci1203_control_gate.ps1` 只剩原本就有的 2 個 FAIL）。**INBOX 112「引擎馬達走 1203」進 main，開關 `WB_ENGINE_MOTOR_1203` 預設關**——關著時跟上一包逐位元同樣行為（新檔 `Motor/EcatMotorRoute.*`、`EtherCAT/Pci1203MotorRoute.*`，`myEthercatmotor.cpp` 各處先問路由、沒裝就走原路）。三路審查＋複審：停止經過／不經過路由都會被記帳、停止失敗會被鎖存（但**畫面還看不到**）、突變測試 23 個全抓到。**武裝前**：看 README 最上面那兩條（軟體極限、停止失敗顯示）。 |
+| 81 | `updates/7a4aea10/` | `7a4aea10` | `e8dda454`（`updates/7a4aea10/_machine_ai/base_e8dda454/`） | ⚠ **要重建 wb_serve**（4 檔；筆電 gate：出貨＝4 項基準、模擬＝19 項基準）。**INBOX 115 第一批**：4 個理由已過期的 `#if 0` 照 golden 解開——`mymotor.h` 純外觀、`myMN200motor.cpp` 錯誤訊息框判斷（值不變）、`csystem.cpp` 開機汽缸自我測試讀資料＋畫格子（只在 `bC24InitialStartCheckCylinder` 時）；沒有動作面的變化。 |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
