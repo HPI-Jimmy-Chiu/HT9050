@@ -5,6 +5,7 @@
 
 ## ⚠⚠ 給機台端（20260929 18:1x 起，請先讀這一段）
 
+- ✅ **20260930 00:5x 更新：「引擎馬達走 1203」已進 GitLab main（`e8dda454`，第 80 包），開關 `WB_ENGINE_MOTOR_1203`（`MachineType.h:1777`）預設關**；要上機試時請 EastSun 在機台旁把它打開（同時要 `WB_PUMP_1203_START_RING`，那一行目前也是註解），先看 `docs/ENGINE_1203_MOTOR_ROUTE_DESIGN.md` §9.4 武裝前的 4 件事。
 - **「引擎馬達走 1203」改由筆電做**（Jimmy 20260929 17:3x，RULINGS_20260929 第 11 條，推翻 RULINGS_20260926 第 2 條的「機台端做」）。
   **機台端請不要改**：`Motor/myEthercatmotor.cpp`、`Motor/EcatMotorRoute.h`（新）、`EtherCAT/Pci1203MotorRoute.cpp`（新）、`tools/wb_serve.cpp` 的路由安裝點、`CMakeLists.txt` 的來源清單。
   做法照你們 0926 寫的 `docs/ENGINE_1203_MOTOR_ROUTE_DESIGN.md`，§8 的 Q1～Q11 先用設計書的建議預設值；**EastSun 要改哪一題請直接回**。第一次上機要 EastSun 在旁。
@@ -108,6 +109,7 @@
 | 77 | `updates/283c4567/` | `283c4567` | `d40fa5a0`（`updates/283c4567/_machine_ai/base_d40fa5a0/`） | ⚠ **要重建 wb_serve**（7 檔；筆電 gate：出貨＝4 項基準、模擬＝19 項基準，都剛好相等）。① **INBOX 114**：`PumpInit` 不再把 12 個機台外型變數寫死（`USE_OUT_SORT_ARM`、`AUTO_EMPTY_COLOR`、`TrayForm.bEnableAMR`…），改用 Gerneral.ini／配方讀到的值；開機會印一行 `PumpInit: machine shape from config …`，筆電模擬量到的值跟原本寫死的完全一樣（這台 Gerneral.ini 就是 HT9050 那份）⇒ **行為不變**；`bEnableAMR` 不再被強制關掉，golden 的 AMR 對接互鎖恢復；② 兩處過期註解。 |
 | 78 | `updates/3a26d332/` | `3a26d332` | `283c4567`（`updates/3a26d332/_machine_ai/base_283c4567/`） | ⚠ **要重建 wb_serve＋更新 web**（5 檔；筆電 gate：出貨＝4 項基準、模擬＝19 項基準，都剛好相等）。**St02 INBOX 117**：Motion View 的手臂位置改照 golden `SetScreenScale` 的兩個教點換算（C++ 發 `motionView.screenScale`、`mymotor.h` 一個唯讀 getter）；只影響畫面。 |
 | 79 | `updates/8f9edf73/` | `8f9edf73` | `3a26d332`（`updates/8f9edf73/_machine_ai/base_3a26d332/`） | ⚠ **要重建 wb_serve＋更新 web**（4 檔；筆電 gate：出貨＝4 項基準、模擬＝19 項基準）。**St02 INBOX 117 自審修正**：飛梭沒讀到位置時不再套 golden 直線（不會飛出畫面）、手臂讀數顯示馬達脈波、出料臂 Y 用 golden 那一對錨點；只影響畫面。另有交接檔（S-09 認領回覆）。 |
+| 80 | `updates/e8dda454/` | `e8dda454` | `8f9edf73`（`updates/e8dda454/_machine_ai/base_8f9edf73/`） | ⚠ **要重建 wb_serve**（18 檔；筆電 gate：出貨＝4 項基準、模擬＝19 項基準，都剛好相等；`pci1203_control_gate.ps1` 只剩原本就有的 2 個 FAIL）。**INBOX 112「引擎馬達走 1203」進 main，開關 `WB_ENGINE_MOTOR_1203` 預設關**——關著時跟上一包逐位元同樣行為（新檔 `Motor/EcatMotorRoute.*`、`EtherCAT/Pci1203MotorRoute.*`，`myEthercatmotor.cpp` 各處先問路由、沒裝就走原路）。三路審查＋複審：停止經過／不經過路由都會被記帳、停止失敗會被鎖存（但**畫面還看不到**）、突變測試 23 個全抓到。**武裝前**：看 README 最上面那兩條（軟體極限、停止失敗顯示）。 |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
