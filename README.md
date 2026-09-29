@@ -107,6 +107,7 @@
 | 76 | `updates/d40fa5a0/` | `d40fa5a0` | `64d8554e`（`updates/d40fa5a0/_machine_ai/base_64d8554e/`） | ⚠ **要重建 wb_serve**（11 檔；筆電 gate：出貨＝4 項基準、模擬＝19 項基準，都剛好相等）。**St02 MR !6 第三批**：S72 尾巴（golden `SetLotStart` 裡的 `slEventLog->SetLotData` 照跑）、S-12 模擬組態的加熱執行緒（`HeaterSimTick.cpp`，**只在 SOFT_SIMULTE 下有本體，機台組態沒有行為變化**）、S-09 `cprod.cpp:3009`（fLotInfo 兩個成員已存在，閘退役）。 |
 | 77 | `updates/283c4567/` | `283c4567` | `d40fa5a0`（`updates/283c4567/_machine_ai/base_d40fa5a0/`） | ⚠ **要重建 wb_serve**（7 檔；筆電 gate：出貨＝4 項基準、模擬＝19 項基準，都剛好相等）。① **INBOX 114**：`PumpInit` 不再把 12 個機台外型變數寫死（`USE_OUT_SORT_ARM`、`AUTO_EMPTY_COLOR`、`TrayForm.bEnableAMR`…），改用 Gerneral.ini／配方讀到的值；開機會印一行 `PumpInit: machine shape from config …`，筆電模擬量到的值跟原本寫死的完全一樣（這台 Gerneral.ini 就是 HT9050 那份）⇒ **行為不變**；`bEnableAMR` 不再被強制關掉，golden 的 AMR 對接互鎖恢復；② 兩處過期註解。 |
 | 78 | `updates/3a26d332/` | `3a26d332` | `283c4567`（`updates/3a26d332/_machine_ai/base_283c4567/`） | ⚠ **要重建 wb_serve＋更新 web**（5 檔；筆電 gate：出貨＝4 項基準、模擬＝19 項基準，都剛好相等）。**St02 INBOX 117**：Motion View 的手臂位置改照 golden `SetScreenScale` 的兩個教點換算（C++ 發 `motionView.screenScale`、`mymotor.h` 一個唯讀 getter）；只影響畫面。 |
+| 79 | `updates/8f9edf73/` | `8f9edf73` | `3a26d332`（`updates/8f9edf73/_machine_ai/base_3a26d332/`） | ⚠ **要重建 wb_serve＋更新 web**（4 檔；筆電 gate：出貨＝4 項基準、模擬＝19 項基準）。**St02 INBOX 117 自審修正**：飛梭沒讀到位置時不再套 golden 直線（不會飛出畫面）、手臂讀數顯示馬達脈波、出料臂 Y 用 golden 那一對錨點；只影響畫面。另有交接檔（S-09 認領回覆）。 |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
