@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<!-- =========================================================================
+  pci1203.html -- the PCIE-1203 monitor page (campaign MON1203-WEB, wave MW-2).
+
+  AI(W906-MW2) 20260908. All logic is in js/pci1203.js; this file is the shell
+  and the stylesheet. Read that file's header first -- it explains the five
+  different causes of an empty screen, which is the whole point of the page.
+
+  WHY A SEPARATE PAGE AND NOT A PANEL INSIDE index.html
+  Same reason motion.html is separate: index.html's shell is a fixed
+  1456x818 three-column design (js/main.js:17-18) scaled with --ui-scale.
+  This page is a variable-height diagnostic report with wide tables. Nesting
+  one layout model inside the other fights.
+
+  ?src=ws IS REQUIRED, NOT OPTIONAL
+  js/transport/index.js:18 is `q.get("src") || "mock"`, and the mock carries
+  no pci1203.* tags. Without the parameter this page reads "n/a" everywhere and
+  says so in a banner -- deliberately, because a diagnostic page that shows
+  plausible fake data is the worst possible failure for a diagnostic page.
+  The rail link in js/panels/chrome.js carries the parameter.
+
+  CONTROLS -- AI(W906-1203CTL-11) 20260911. THIS SECTION USED TO SAY THERE
+  WERE NONE, and that is worth keeping rather than overwriting, because the
+  reason it said so is still the reason the controls are shaped the way they
+  are. It read:
+
+    "this page has no buttons AT ALL. That is not a stage in a plan: the
+     observer behind these tags is allowlisted to twelve read-only vendor
+     calls... There is no command for a button here to send, so a button
+     would be a lie."
+
+  A user requirement 20260911 changed the premise: the page must operate
+  digital outputs and the servo axes the way Common Motion Utility does. So a
+  command for a button to send now exists -- in a DIFFERENT translation unit
+  (EtherCAT/Pci1203Control.cpp) with its OWN allowlist and its own gate
+  (tools/pci1203_control_gate.ps1). The observer did not gain a write; the
+  observer's gate still passes unchanged.
+
+  What survives from the old rule, and is why a button here is still not a lie:
+    * buttons are rendered ONLY when the feed says the far end will accept them
+      (pci1203.control.armed). Not disabled: ABSENT.
+    * the default build arms NOTHING, and even armed, the default is a DRY RUN
+      that records the exact vendor call and issues none of them.
+    * the page says which of those is in force, at the top, before any control.
+========================================================================== -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HT9045 · PCIE-1203 Monitor</title>
+<!-- AI(W906-BU-C-P6) 20260918 / 重貼 AI(W906-Q34-2) 20260923: 同事那份這裡有
+     <link rel="icon" href="assets/img/logo.jpg">
+     這棵樹的 web/ 沒有 assets/ 目錄，也沒有任何 logo 檔，而且
+     web/page/*.html 一頁都沒有用 favicon —— 那是他那棵樹的慣例。
+     留著就是一個 404，直接違反 P6 的「console 0 error」。
+     資產進來之後把上面那一行貼回來即可。
+     ⚠ 20260923 整檔取代 view.js / pci1203.js / 本檔時，這一處被他的版本蓋回去
+       過一次，是照計畫書 §7.3 重貼的。下次再取代本檔時同樣要重貼。 -->
+<style>
+  :root {
+    --bg:#1c1f24; --fg:#dde3ea; --dim:#8b96a3; --line:#333a42;
+    --panel:#22262c; --head:#9fc3e8;
+    --ok:#6fbf73; --warn:#e0b341; --bad:#e08a7a; --info:#7fb3d5;
+  }
+  * { box-sizing: border-box; }
+  /*  AI(W906-1203CTL-45) 20260912: base 13px -> 15px. User: "字體放大".
+      Raised on BODY rather than on the motor panel alone, because half the
+      page's sizes are relative to it and bumping one block would have left the
+      station list and the IO tables at the old size -- a screen where the part
+      you were told to read is bigger than everything around it reads as an
+      accident rather than a decision. The panel-local sizes above 15px stay
+      absolute on purpose: the position readout and the I/O lamps are meant to
+      be legible from a step back from the cabinet, not merely larger. */
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.55 "Segoe UI", system-ui, sans-serif; }
+
+  header { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap;
+           padding:10px 16px; border-bottom:1px solid var(--line);
+           position:sticky; top:0; background:var(--bg); z-index:5; }
+  h1 { font-size:15px; margin:0; color:var(--head); }
+  .sub { color:var(--dim); font-size:12px; font-variant-numeric:tabular-nums; }
+  a.back { color:var(--head); text-decoration:none; border:1px solid #3a4550;
+           padding:2px 9px; border-radius:3px; }
+  a.back:hover { background:#263039; }
+
+  /* --- AI(W906-1203CTL-19) 20260911: the two-pane shell ------------------
+     The rail is sticky and scrolls on its own: with 27 stations on the ring
+     the card list is longer than the viewport, and a rail that scrolled away
+     with the content would make selecting the NEXT card require scrolling
+     back to the top -- which is exactly the hunting the layout exists to end. */
+  #layout { display:flex; align-items:flex-start; gap:0; }
+  #rail   { flex:0 0 250px; width:250px; align-self:stretch;
+            border-right:1px solid var(--line); background:#1a1d22;
+            position:sticky; top:45px; max-height:calc(100vh - 45px);
+            overflow-y:auto; padding:8px 0 20px; }
+  #stage  { flex:1 1 auto; min-width:0; padding:14px 16px 4px; }
+
+  .railhead { padding:10px 12px 4px; color:var(--dim); font-size:11px;
+              letter-spacing:.06em; text-transform:uppercase; }
+  /* AI(W906-1203ALM-19) 20260914: the three operating groups are enlarged and
+     colour-coded. User: "左邊output input 馬達Axis 都放大 用不同顏色標 加粗".
+
+     ⚠ COLOUR IS THE SECOND SIGNAL, NEVER THE ONLY ONE. The headings still say
+     輸出 / 輸入 / 馬達 in words, so a dimmed panel, a screenshot, or a
+     colour-blind reader loses nothing but the shortcut. The same rule the
+     selected-card highlight follows a few lines below.
+
+     The three hues are chosen to stay apart under the commonest colour-vision
+     deficiency as well: amber and cyan differ in LIGHTNESS, not only in hue,
+     so they remain distinguishable when the red/green channel does not help.
+     ⓘ 其他 OTHER keeps the small grey .railhead deliberately -- it is
+     navigation, not a machine group, and giving it a colour would put it on
+     the same footing as the three that matter. */
+  .railhead.rhout, .railhead.rhin, .railhead.rhax {
+      font-size:15px; font-weight:800; letter-spacing:.02em;
+      padding:14px 12px 5px; text-transform:none; }
+  .railhead.rhout { color:#ffb454; }   /* 輸出 — amber, the group that ACTS   */
+  .railhead.rhin  { color:#5fc8e8; }   /* 輸入 — cyan,  the group that SENSES */
+  .railhead.rhax  { color:#87d787; }   /* 馬達 — green, motion                */
+  /* AI(W906-1203ALM-16) 20260914: one sub-heading per module MODEL inside a
+     group. Indented and dimmer than .railhead so the two never read as peers --
+     the group is the question ("is this an output?"), the model is the answer
+     ("three of these"). No uppercase: these are part numbers and shouting them
+     makes ECx-P32-HON harder to match against the label on the module. */
+  /* AI(W906-1203ALM-18) 20260914: enlarged with .railsub, same reason -- this
+     IS the module name, and it is what an operator compares against the part
+     printed on the module. Kept a step brighter than .railsub so the heading
+     still leads its members rather than competing with them. */
+  .railsubhead { padding:9px 12px 3px 18px; color:#dbe7f3; font-size:14px;
+                 font-weight:700; letter-spacing:.01em;
+                 border-left:2px solid #3d4a57; margin-left:6px; }
+  a.railitem { display:block; padding:6px 12px; color:var(--fg);
+               text-decoration:none; border-left:3px solid transparent; }
+  a.railitem:hover { background:#222831; }
+  /* AI(W906-1203WHY-1) 20260915: the last command's outcome, beside the buttons.
+     A refusal used to be written only to the diagnostics view, so pressing a
+     button that was refused looked exactly like pressing a dead one.
+     white-space:pre-wrap because the reason is a sentence and wrapping it into
+     one line is how a long explanation becomes unread. Empty when there is
+     nothing to report -- padding and border are on the state classes, not here,
+     so a silent row takes no space at all. */
+  .cmdresult { white-space:pre-wrap; font-size:13px; line-height:1.5; }
+  .cmdresult.cmdbad { margin:6px 0; padding:8px 10px; border-radius:4px;
+                      background:#3a1f22; border-left:4px solid #d9534f;
+                      color:#ffd9d6; }
+  .cmdresult.cmdok  { margin:6px 0; padding:4px 10px; color:#7c8896; }
+  /* AI(W906-1203RAIL-1) 20260915: a rail entry that REPORTS and does not link.
+     The 驅動器·此卡未開軸 group lists drives with no axis to operate and a
+     read-only PDO page, so they are <div> not <a> -- there is nowhere useful to
+     go. They must still LOOK like rail rows (same padding and columns) or the
+     group reads as broken layout, and must NOT look clickable, or an operator
+     keeps trying. Hence the shared geometry, the dimmed text and no :hover. */
+  div.raildead { display:block; padding:6px 12px; color:#8a97a6;
+                 border-left:3px solid #3d4a57; cursor:default; }
+  div.raildead .railmain { color:#b6c4d2; }
+  /* The selected card is marked by COLOUR AND A BAR AND THE URL. Three signals
+     because a single highlight is the first thing lost to a screenshot, a
+     colour-blind reader, or a dimmed panel on a machine floor. */
+  a.railitem.railon { background:#232c36; border-left-color:var(--head); }
+  a.railitem.railon .railmain { color:#cfe4fa; }
+  .railmain { font-variant-numeric:tabular-nums; }
+  /* AI(W906-1203ALM-18) 20260914: the module name is READ, not skimmed. User:
+     "模組名稱字體放大變粗 顏色明顯一點". It was 11px in #6d7885 -- roughly the
+     contrast of a footnote -- on a panel where matching this string against
+     the label on a physical module is the whole point of the line.
+     ⚠ nowrap and ellipsis are KEPT. These names run to 40+ characters
+     ("ECx-P32-HON 32DI 32 Ch. Dig. In. Dry/Wet 24V"); letting them wrap at a
+     larger size would push the next station off the visible rail, which costs
+     more than the tail of a name that the sub-heading above already gives in
+     full. */
+  .railsub  { color:#b9c6d4; font-size:13px; font-weight:600; margin-top:2px;
+              overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #rail .emptynote { padding:6px 12px; font-size:12px; }
+
+  /* Narrow screens: the rail becomes a band across the top rather than
+     squeezing the work area into nothing. */
+  @media (max-width: 900px) {
+    #layout { flex-direction:column; }
+    #rail { flex:0 0 auto; width:auto; align-self:auto; position:static;
+            max-height:none; border-right:none;
+            border-bottom:1px solid var(--line); }
+  }
+  section { margin:0 0 20px; border:1px solid var(--line); border-radius:5px;
+            background:var(--panel); overflow:hidden; }
+  h2 { font-size:13px; margin:0; padding:8px 12px; color:var(--head);
+       background:#262b32; border-bottom:1px solid var(--line);
+       letter-spacing:.02em; text-transform:uppercase; }
+
+  /* Banners carry the page's diagnosis. Colour is never the only signal --
+     each one also states its conclusion in words, because a colour-blind
+     reader and a screenshot both lose the hue. */
+  .banner { margin:10px 12px; padding:9px 12px; border-left:4px solid var(--dim);
+            background:#1e2329; border-radius:0 4px 4px 0; }
+  .banner .bhead { font-weight:600; margin-bottom:3px; }
+  .banner .bbody { color:#b9c3ce; }
+  .banner.ok   { border-left-color:var(--ok);   } .banner.ok   .bhead { color:var(--ok); }
+  .banner.warn { border-left-color:var(--warn); } .banner.warn .bhead { color:var(--warn); }
+  .banner.bad  { border-left-color:var(--bad);  } .banner.bad  .bhead { color:var(--bad); }
+  .banner.info { border-left-color:var(--info); } .banner.info .bhead { color:var(--info); }
+
+  #mockwarn { margin:10px 16px 0; padding:9px 12px; border-radius:4px;
+              background:#3a2f18; color:#f0d79a; border:1px solid #6b5423; }
+
+  .scroll { overflow-x:auto; padding:0 12px 12px; }
+
+  table { border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  table.kv { margin:6px 12px 12px; }
+  table.kv th { text-align:left; font-weight:500; color:var(--dim);
+                padding:2px 14px 2px 0; white-space:nowrap; }
+  table.kv td { padding:2px 14px 2px 0; white-space:nowrap; }
+  table.kv td.note { color:#6d7885; font-size:12px; white-space:normal; }
+
+  table.grid th, table.grid td { border:1px solid #2e343b; padding:3px 8px;
+                                 white-space:nowrap; text-align:right; }
+  table.grid th { background:#262b32; color:var(--dim); font-weight:500;
+                  text-align:center; }
+  table.grid td:first-child, table.grid th:first-child { text-align:left; }
+
+  /* The three display states, visually distinct on purpose:
+       .val  a real reading
+       .null present but null -- nobody read it
+       .na   not on this feed at all
+     Never render null as 0 (WebBridgeTags.h: "NULL, NEVER ZERO"). */
+  .val  { color:var(--fg); }
+  .null { color:#5f6a76; font-style:italic; }
+  .na   { color:#7a5c5c; font-style:italic; }
+
+  /* AI(W906-MW2b) 20260910: the IO section is now grouped by the module that
+     owns the bytes, so each group needs a heading that names the station AND
+     its model -- the number is what is on the dials, the model is what is in
+     the cabinet, and matching one to the other is the whole job. */
+  .grouphead { margin:12px 12px 4px; padding:5px 9px; border-radius:3px;
+               background:#262b32; color:var(--head); font-weight:600;
+               font-variant-numeric:tabular-nums; }
+
+  /* A station number is a LINK to this page filtered to that station.
+     AI(W906-1203CTL-11) 20260911: this comment used to end "...nothing else on
+     this page is clickable, because this page has no machine controls and must
+     never appear to". That is no longer true, so the rule it protected has to
+     be restated rather than deleted: NAVIGATION AND COMMANDS MUST NOT LOOK
+     ALIKE. A link is text with a dotted underline; a command is a raised button
+     with a border. An operator must never press one meaning the other. */
+  a.stlink { color:var(--head); text-decoration:none; border-bottom:1px dotted #5b7fa3; }
+  a.stlink:hover { color:#cfe4fa; border-bottom-color:#cfe4fa; }
+
+  /* ---------------------------------------------------------------------
+     AI(W906-1203CTL-11) 20260911: CONTROLS.
+     Deliberately NOT styled like the links above -- see the note there.
+     --------------------------------------------------------------------- */
+  #cmdnote { margin:10px 16px 0; padding:9px 12px; border-radius:4px;
+             background:#1f2b33; color:#bfe0f2; border:1px solid #2f4a5a;
+             font-variant-numeric:tabular-nums; }
+
+  button.cmd { font:600 12px/1.4 "Segoe UI", system-ui, sans-serif;
+               color:#dde3ea; background:#2f3740; border:1px solid #46515d;
+               border-radius:3px; padding:3px 10px; cursor:pointer;
+               min-width:3.2em; }
+  button.cmd:hover  { background:#3a444f; border-color:#5d6b7a; }
+  button.cmd:active { background:#27303a; }
+  button.cmd.small  { padding:2px 7px; min-width:2.4em; font-weight:500; }
+
+  /* ⚠ The three that must be findable WITHOUT reading. Colour is never the only
+     signal -- each also carries its own word ("reset error", "STOP",
+     "EMG STOP") -- but on a machine screen the hand gets there before the eye
+     finishes the label. */
+  button.cmd.warnbtn { border-color:#6b5423; background:#3a2f18; color:#f0d79a; }
+  button.cmd.warnbtn:hover { background:#4a3c1f; }
+  button.cmd.emgbtn  { border-color:#7a3328; background:#4d1f18; color:#ffc4b8; }
+  button.cmd.emgbtn:hover  { background:#63281f; }
+
+  /* An output bit renders its CURRENT read-back state as its face and sends the
+     opposite. Same palette as .lamp on/off so the armed table reads like the
+     unarmed one -- the value shown means the same thing in both. */
+  button.cmd.lampon  { background:#3d4c5c; color:#cfe0f0; border-color:#54687d;
+                       min-width:2.2em; padding:1px 6px; }
+  button.cmd.lampoff { background:#2b3138; color:#69737e; border-color:#3a424b;
+                       min-width:2.2em; padding:1px 6px; }
+
+  input.numbox { font:12px/1.4 "Segoe UI", system-ui, sans-serif;
+                 color:var(--fg); background:#1a1e23; border:1px solid #3a434d;
+                 border-radius:3px; padding:2px 6px; width:6em;
+                 font-variant-numeric:tabular-nums; }
+  input.numbox:focus { outline:none; border-color:#5b7fa3; }
+
+  .panels { padding:0 12px 12px; }
+  .panel  { margin:10px 0 0; border:1px solid #323a43; border-radius:4px;
+            background:#1e2329; }
+  .panelhead { padding:5px 10px; background:#262b32; color:var(--head);
+               font-weight:600; border-bottom:1px solid #323a43; }
+  .panelhead .ok  { color:var(--ok);  font-weight:500; }
+  .panelhead .bad { color:var(--bad); font-weight:500; }
+  /* Position beside the buttons that move it, like the Utility's 單軸運動 tab.
+     Tabular numerals so a moving value does not make the row jitter. */
+  .panelpos { float:right; display:inline-flex; gap:7px; align-items:baseline;
+              font-variant-numeric:tabular-nums; font-weight:400; }
+  .panelrow { display:flex; align-items:center; gap:7px; flex-wrap:wrap;
+              padding:6px 10px; border-bottom:1px solid #262c33; }
+  .panelrow:last-child { border-bottom:none; }
+  .panellabel { min-width:6.5em; color:var(--dim); }
+  .panelhint  { color:#6d7885; font-size:12px; }
+  /* AI(W906-1203CTL-35) 20260911: the value the CARD currently holds, shown
+     beside the box that changes it. Distinct from an input so nobody mistakes
+     a readback for something they typed. */
+  .curval { font-variant-numeric:tabular-nums; color:var(--fg);
+            background:#1c2127; border:1px solid #2b323a; border-radius:3px;
+            padding:1px 6px; min-width:4.5em; display:inline-block;
+            text-align:right; }
+  .curval.null, .curval.na { color:var(--dim); }
+  .panel .emptynote { padding:6px 10px; }
+
+  /* --- AI(W906-1203CTL-45) 20260912: the three sub-panels -----------------
+     User: "回饋數值 獨立面板 不要跟其他混淆 / 異常也獨立面板 /
+     馬達IO可以分到另一行嗎? 並且字體放大".
+
+     Each is a bordered block with its own heading so that a number can only be
+     read as belonging to one thing. The position readout in particular used to
+     be three small spans floated into the panel heading, sharing a line with
+     the station name and the axis state -- which is exactly the arrangement
+     that lets 回饋 be mistaken for something else. */
+  .subpanel   { border-top:1px solid #2b323a; background:#1b2026; }
+  .subpanelbad{ background:#241d1d; border-top-color:#3a2a2a; }
+  .subhead    { padding:6px 12px; font-size:15px; font-weight:600;
+                color:var(--head); border-bottom:1px solid #262c33;
+                display:flex; align-items:baseline; gap:10px; }
+  .subpanelbad .subhead { color:var(--bad); border-bottom-color:#322525; }
+  .subheadval { font-size:14px; font-weight:400; color:var(--dim);
+                font-variant-numeric:tabular-nums; }
+
+  /* 位置 / 回饋 -- big, tabular, unmistakable. This is what an operator watches
+     while pressing JOG to decide whether anything actually moved. */
+  .bignums    { display:flex; flex-wrap:wrap; gap:10px; padding:10px 12px; }
+  .bignum     { min-width:11em; flex:1 1 11em; background:#161a1f;
+                border:1px solid #2b323a; border-radius:4px; padding:8px 12px; }
+  .bignumlabel{ font-size:13px; color:var(--dim); }
+  .bignumval  { font-size:26px; font-weight:600; line-height:1.25;
+                font-variant-numeric:tabular-nums; color:var(--fg); }
+  .bignumval.null, .bignumval.na { color:var(--dim); font-size:20px; }
+  .bignumunit { font-size:12px; color:#6d7885; }
+
+  /* 馬達 I/O -- its own row, label above state, large enough to read from a
+     step back. Twenty-one of these used to be narrow table columns behind a
+     horizontal scrollbar. */
+  .lampgrid   { display:flex; flex-wrap:wrap; gap:6px; padding:10px 12px; }
+  .lampbig    { width:4.6em; text-align:center; background:#161a1f;
+                border:1px solid #2b323a; border-radius:4px; padding:5px 2px; }
+  .lampbiglabel { font-size:12px; color:var(--dim); letter-spacing:.02em; }
+  .lampbigval { font-size:20px; font-weight:700; line-height:1.3;
+                border-radius:3px; margin-top:2px; }
+  .lampbigval.on    { color:#cfe8ff; background:#1d3448; }
+  .lampbigval.off   { color:#59636e; }
+  .lampbigval.good  { color:#0b1a10; background:var(--ok); }
+  .lampbigval.alarm { color:#1a0b0b; background:var(--bad); }
+  .lampbigval.unknown { color:#59636e; }
+
+  .errhow2    { padding:2px 12px 10px; color:var(--dim); line-height:1.55; }
+
+  /* AI(W906-1203DHOME-1) 20260917: a note the operator must NOT skim past.
+     ⚠ It exists because .errhow2 is styled as "dim" -- correct for background
+     explanation and wrong for "the four boxes below this line do not work on
+     your machine". Reusing errhow2 for that would have put the one sentence
+     that explains a two-day misunderstanding in the same grey as the footnotes.
+     Left border rather than a filled banner: the surrounding panel already uses
+     background to mean "this is a different block", and a second meaning for
+     background would collide with it. */
+  .errwarn    { padding:6px 12px 8px 10px; margin:4px 0; line-height:1.55;
+                color:var(--head); border-left:3px solid var(--warn);
+                background:rgba(255,176,32,0.06); }
+
+  /* --- AI(W906-1203SECT-1) 20260917: the five sections -----------------------
+     User: "不同區塊用不同顏色區分 / 顏色不要差異太大".
+
+     ⚠ THE FIVE HUES ARE DELIBERATELY WITHIN ~40° OF EACH OTHER AND SHARE ONE
+     LIGHTNESS. The obvious implementation is five saturated colours, and on a
+     panel where --bad and --warn already MEAN something (fault, careful) a
+     bright unrelated colour competes with the alarm palette -- the operator
+     learns to ignore colour, and then the colour that matters stops working.
+     So: a 3px left border carries the hue, the wash is ~4%, and nothing here
+     is more saturated than the existing .errwarn.
+
+     ⓘ Background, not border, is what .subpanel uses to mean "a different kind
+     of block". These sections nest subpanels, so they had to signal with
+     something subpanel does not use, or the two would read as the same level. */
+  .sec        { border-left:3px solid #4a525c; margin:10px 0 2px;
+                border-radius:0 3px 3px 0; }
+  .sechead    { padding:5px 10px 4px; font-weight:600; font-size:12.5px;
+                letter-spacing:.04em; }
+  .sechint    { font-weight:400; font-size:11.5px; color:#6d7885;
+                margin-left:10px; letter-spacing:0; }
+
+  .sec-run    { border-left-color:#6f9ec4; background:rgba(111,158,196,.045); }
+  .sec-run    > .sechead { color:#8fb6d6; }
+  .sec-speed  { border-left-color:#6fb0ac; background:rgba(111,176,172,.045); }
+  .sec-speed  > .sechead { color:#8cc4c0; }
+  .sec-home   { border-left-color:#7bb183; background:rgba(123,177,131,.045); }
+  .sec-home   > .sechead { color:#96c49d; }
+  /* ⚠ the warm one, and the only one that stands out at all: 極限 is the single
+     group where a wrong setting removes a physical protection, and amber is
+     already this page's word for "careful" (--warn). */
+  .sec-limit  { border-left-color:#c2a05e; background:rgba(194,160,94,.05); }
+  .sec-limit  > .sechead { color:#d3b878; }
+  .sec-motor  { border-left-color:#9a93c6; background:rgba(154,147,198,.045); }
+  .sec-motor  > .sechead { color:#b0aad6; }
+
+  /* AI(W906-1203PTS-1) 20260918: a process-image bit with no coil behind it.
+     ⚠ It must NOT look like an output that is OFF. An off output and a
+     non-existent output are different facts, and a dark "0" in the same cell
+     style would read as the first -- which is how someone ends up waiting for
+     a valve that was never wired. So: no digit, a centred middle dot, dimmed,
+     and default cursor so it does not invite a click that would do nothing. */
+  .unwired    { color:#4d555e; text-align:center; cursor:default;
+                background:repeating-linear-gradient(135deg,
+                  transparent 0 3px, rgba(255,255,255,.025) 3px 6px); }
+
+  /* --- AI(W906-1203CTL-34) 20260911: 最新錯誤狀態 -------------------------
+     Mirrors the block at the bottom of Common Motion Utility's 單軸運動 tab.
+     Deliberately NOT styled as a banner: a banner reads as "the page has
+     something to say", and this is the drive speaking. The vendor's own
+     message text and our procedure list are visually separated for the same
+     reason -- one is sourced, the other is ours. */
+  .errblock  { border-top:1px solid #3a2a2a; background:#241d1d; }
+  .errhead   { padding:5px 10px; color:var(--bad); font-weight:600;
+               border-bottom:1px solid #322525; }
+  .errhead2  { padding:5px 10px 2px; color:var(--head); font-weight:600; }
+  .errrow    { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap;
+               padding:6px 10px; font-variant-numeric:tabular-nums; }
+  .errrow .val { color:var(--fg); }
+  .errhow    { margin:0; padding:0 10px 8px 26px; color:var(--dim);
+               line-height:1.55; }
+  .errhow li { margin:2px 0; }
+
+  /* --- AI(W906-1203ALM-12) 20260914: the disconnected banner -------------
+     Top of the page, red, and deliberately not styled like anything else on
+     it. A dropped link leaves every value on screen holding its last number,
+     so the page looks alive while nothing on it is current -- this has to
+     interrupt, not blend in. */
+  /* AI(W906-1203ALM-20) 20260914: the 重新掃描 strip, top of every pane.
+     Quiet on purpose -- it sits above everything on every page, so it must not
+     compete with the disconnection banner directly below it. The one moment it
+     needs to stand out is when the card is closed, and then the status strip
+     under it is already red. */
+  .rescanbar  { display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+                padding:8px 10px; margin:0 0 8px; border:1px solid #2b323a;
+                border-radius:5px; background:#1b2026; }
+  .rescanhint { color:var(--dim); font-size:12px; line-height:1.5; flex:1 1 320px; }
+
+  .offlinebar  { border:2px solid #8b3a3a; border-radius:5px; background:#241a1a;
+                 margin:0 0 10px; }
+  .offlinehead { background:#3a1f1f; color:#ffb4b4; font-weight:700;
+                 padding:7px 12px; font-size:15px; border-radius:3px 3px 0 0; }
+  .offlinebody { padding:8px 12px; color:#f0d0d0; line-height:1.6; font-size:13px; }
+  .offlinerow  { display:flex; gap:10px; align-items:center;
+                 padding:0 12px 10px; flex-wrap:wrap; }
+  .offlinecd   { color:#ffb4b4; font-variant-numeric:tabular-nums; font-size:13px; }
+
+  /* --- AI(W906-1203ALM-8) 20260914: the last-command result, on every view ---
+     Sits directly under the status bar so the answer to "what did that button
+     do" is where the operator already looks. Before this, the outcome lived in
+     sectionControl -- which the axes view does not render -- so every press
+     produced visible silence and the panel read as dead. */
+  .cmdresult      { display:flex; flex-wrap:wrap; gap:8px; align-items:baseline;
+                    padding:6px 10px; border-bottom:1px solid #2b323a;
+                    background:#171c21; font-size:12.5px; }
+  .cmdresultlabel { color:var(--head); font-weight:600; white-space:nowrap; }
+  .cmdresultcmd   { color:var(--fg); font-weight:600; }
+  .cmdresultcall  { color:var(--dim); font-family:ui-monospace,Consolas,monospace; }
+  .cmdresultwhy   { color:#f0c46a; flex:1 1 100%; }
+  .cmdresultret   { color:var(--dim); flex:1 1 100%; }
+  .cmdresult .ok  { color:#7ddc7d; font-weight:700; }
+  .cmdresult .bad { color:#ff8080; font-weight:700; }
+
+  /* --- AI(W906-1203ALM-5) 20260912: the confirm dialog ---------------------
+     For Fn008 絕對編碼器重置, the one control on this page whose effect cannot
+     be undone by driving the machine back. It is a real overlay rather than
+     window.confirm() because the operator has to TYPE the station number --
+     one OK button is a click, and a click is muscle memory by the third time.
+     ⚠ High contrast and a red head on purpose: this must not read like the
+     rest of the panel. An operator who is skimming should stop here. */
+  .confirmback { position:fixed; inset:0; background:rgba(0,0,0,.72);
+                 display:flex; align-items:center; justify-content:center;
+                 z-index:9000; padding:16px; }
+  .confirmbox  { background:#1b2026; border:2px solid #8b3a3a; border-radius:6px;
+                 max-width:560px; width:100%; box-shadow:0 8px 40px rgba(0,0,0,.6); }
+  .confirmhead { background:#3a1f1f; color:#ffb4b4; font-weight:700;
+                 padding:10px 14px; font-size:15px; border-radius:4px 4px 0 0; }
+  .confirmbody { padding:12px 14px; color:var(--fg); line-height:1.6;
+                 white-space:pre-wrap; font-size:13px; }
+  .confirminput{ margin:0 14px 4px; padding:7px 9px; width:calc(100% - 28px);
+                 background:#0f1216; color:var(--fg); border:1px solid #4a5560;
+                 border-radius:4px; font-size:15px; font-family:inherit;
+                 font-variant-numeric:tabular-nums; }
+  .confirmrow  { display:flex; gap:10px; justify-content:flex-end;
+                 padding:10px 14px 14px; }
+  .confirmrow button.cmd:disabled { opacity:.4; cursor:not-allowed; }
+
+  /* --- AI(W906-1203CTL-23) 20260911: the status strip ---------------------
+     Three facts, always visible, no prose. The user could not tell a live page
+     from a dead one ("我怎沒看到有一直讀取?") because on this machine the
+     inputs can sit unchanged for minutes while the feed is perfectly healthy.
+     ⚠ THE LIVENESS SIGNAL IS A NUMBER THAT COUNTS, not an animation. A spinner
+     spins whether or not data is arriving; pci1203.pollCount only moves when a
+     poll actually completed. The one animated thing here is the "still opening"
+     badge, where motion IS the message and the number would not exist yet. */
+  .statusbar { display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+               padding:8px 16px; background:#1f242b;
+               border-bottom:1px solid var(--line); margin:0 0 12px; }
+  .statusitem { display:flex; align-items:center; gap:7px; }
+  .statuslabel { color:var(--dim); font-size:11px; letter-spacing:.05em;
+                 text-transform:uppercase; }
+  .statuslive     { color:var(--ok); font-weight:600;
+                    font-variant-numeric:tabular-nums; }
+  .statuslivecmd  { color:var(--bad); font-weight:700; }
+  .statusdry      { color:var(--ok); font-weight:600; }
+  .statusdead     { color:var(--warn); font-weight:600; }
+  .statushint     { color:#6d7885; font-size:11px; }
+
+  .statusbusy { display:flex; align-items:center; gap:8px; flex-basis:100%;
+                padding:7px 11px; border-radius:4px; background:#3a2f18;
+                color:#f6e3b0; border:1px solid #6b5423; font-weight:600; }
+  .spin { display:inline-block; animation:spin 1s linear infinite;
+          font-size:15px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  /* Bigger lamps on the card pane: this is read across a machine floor, not
+     from a desk. */
+  #stage h3 { font-size:12px; margin:14px 12px 4px; color:var(--head);
+              letter-spacing:.04em; }
+
+  /* alias 0 means NO station number is set on the module -- distinct from both
+     a real number and from "---" (nobody read it). Nine modules reading this
+     at once is what an ID conflict looks like from the outside. */
+  .unset { color:var(--warn); font-style:italic; }
+
+  /* Explanatory prose inside a table. Deliberately NOT .null: that class means
+     "this tag's value is null" and probe_pci1203.mjs asserts every such cell
+     reads exactly "---". Prose in a .null cell would weaken that check. */
+  .emptynote { color:#6d7885; font-style:italic; text-align:left !important; }
+
+  .lampcell { text-align:center !important; }
+  .lamp { display:inline-block; min-width:20px; padding:0 3px; border-radius:3px;
+          font-size:11px; line-height:16px; font-weight:600; }
+  .lamp.off     { background:#2b3138; color:#69737e; }
+  .lamp.on      { background:#3d4c5c; color:#cfe0f0; }
+  .lamp.good    { background:#294d2c; color:#a9dfae; }
+  .lamp.alarm   { background:#5a2b24; color:#ffc4b8; }
+  .lamp.unknown { background:#26292e; color:#4d5560; }
+
+  footer { padding:12px 16px 26px; color:#98a2ad; font-size:12px;
+           border-top:1px solid var(--line); }
+  footer b { color:#d8dee5; }
+  code { color:#b9cbdd; }
+</style>
+</head>
+<body>
+
+<header>
+  <!-- AI(W906-BU-C-P6) 20260918 / 重貼 AI(W906-Q34-2) 20260923: 原本是
+     href="index.html?src=ws"。這個部署沒有 index.html（實測 / 與 /index.html
+     都 404）；殼是 background.html / debug.html / release.html，而使用者按 F5
+     落地的是 background.html（.vscode/launch.json 的 THE F5 -> uriFormat）。
+     ?src=ws 不再需要：transport/index.js 這一份是 WS-only。 -->
+  <a class="back" href="background.html">&larr; HMI</a>
+  <h1>PCIE-1203 Monitor</h1>
+  <span class="sub" id="sub">starting&hellip;</span>
+</header>
+<!-- AI(W906-IOWEB-P29) 20260925: 這一頁現在也會被 background.html 當成視窗（WINDOWS 表 id 'pci1203'，
+     入口 Tools ▾ → 1203 Setting）裝在 iframe 裡。在框裡照原樣點「← HMI」會把**整個 HMI**
+     （background.html）再載一份到這個視窗裡面 —— 巢狀的第二份 HMI，連 WS 都多開一組。
+     所以只在被框住時改成請 background 關掉本視窗（{closeMe:1}，跟各頁 Exit 鈕同一條路）；
+     單獨開啟（不在框裡）時一行都不改，照舊是回 background.html 的連結。
+     ⚠ 跟上面兩處 Q34-2 一樣：整檔取代本檔時這一段要重貼。 -->
+<script>
+(function () {
+  if (window.parent === window) return;
+  var a = document.querySelector('header a.back');
+  if (!a) return;
+  a.title = 'Close this window (back to HMI)';
+  a.addEventListener('click', function (ev) {
+    ev.preventDefault();
+    window.parent.postMessage({ closeMe: 1 }, '*');
+  });
+})();
+</script>
+
+<div id="mockwarn" hidden></div>
+<!-- AI(W906-1203CTL-11) 20260911: what the BROWSER last sent. Deliberately
+     separate from the "last command" block inside the report, which is what the
+     MACHINE did with it. Those are two different facts and a page that merged
+     them would report the browser's optimism as the machine's answer. -->
+<div id="cmdnote" hidden></div>
+
+<!-- AI(W906-1203CTL-19) 20260911: TWO PANES, left rail + right work area.
+     User requirement: "左邊是可以選擇卡片 / 右邊是操作視窗" -- the BCB6 client's
+     TreeView + TabControl shape. The rail holds ONLY <a href="?..."> links, so
+     the selection lives in the URL: bookmarkable, readable down a phone to
+     somebody standing at the machine, and (the reason it matters here) it keeps
+     js/pci1203/view.js a pure function that the headless probe can execute. -->
+<div id="layout">
+  <nav id="rail"></nav>
+  <div id="stage">loading&hellip;</div>
+</div>
+
+<footer id="foot"></footer>
+
+<noscript>
+  <p style="padding:24px">This page requires JavaScript.</p>
+</noscript>
+
+<script type="module" src="js/pci1203.js"></script>
+</body>
+</html>
