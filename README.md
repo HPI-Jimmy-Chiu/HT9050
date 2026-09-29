@@ -9,7 +9,7 @@
   **機台端請不要改**：`Motor/myEthercatmotor.cpp`、`Motor/EcatMotorRoute.h`（新）、`EtherCAT/Pci1203MotorRoute.cpp`（新）、`tools/wb_serve.cpp` 的路由安裝點、`CMakeLists.txt` 的來源清單。
   做法照你們 0926 寫的 `docs/ENGINE_1203_MOTOR_ROUTE_DESIGN.md`，§8 的 Q1～Q11 先用設計書的建議預設值；**EastSun 要改哪一題請直接回**。第一次上機要 EastSun 在旁。
 - 9050 IO_Table 裡吸嘴／Tray 臂氣缸與吸盤／滿盤感測器 Enable=0：Jimmy 確認是**真的，硬體還沒接**，表不改。
-- 機台 patch 0019／0021 OPLOG、web 0010 SR-WIRE 已合進 main（第 72 包）；**0018 TOKEN-OFF 沒有收**（Jimmy 決定中；main 維持操作權啟用）。
+- 機台 patch 0019／0021 OPLOG、web 0010 SR-WIRE 已合進 main（第 72 包）；**0018 TOKEN-OFF 不收**（Jimmy 0929 18:3x 決定，RULINGS_20260929 第 13 條；main 維持操作權照擋，你們機台上的本地修改套包時會保留）。
 - 請告訴筆電：機台現在套到第幾包。
 
 ## 裡面有什麼
