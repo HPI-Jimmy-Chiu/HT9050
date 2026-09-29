@@ -1,0 +1,92 @@
+From 41cd83ed2937ffa9ac3fa7f6bc8794b59279e6bd Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Mon, 28 Sep 2026 11:43:24 +0800
+Subject: [PATCH 10/11] SR-WIRE (web): the State Record button sends
+ act.main.stateRecord to C++ (it never reached C++ before)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260928: "你幫我把state record的按鈕修復，我看現在沒有記錄而且停住不能用" (screen: "Busy: State Record #1 running").
+Cause: Main.gbControlBtn.html's sbStateRecord still used state-record.js's HTML offline channel -- the request only went to
+localStorage and the page polled JSON/state-record-ack.json, which C++ never writes, so nothing was recorded and every press
+answered Busy until the 180 s ack timeout.
+Now the button sends WS act.main.stateRecord (JsonBridge/actions/MainStateRecord.cpp -> fMain->sbStateRecordClick, body
+cStateRecord.cpp, golden main.cpp:26209-26212 / 26340-26678): the record goes to D:\HT9045_StateRecord\<yyyy-MM-dd HH_mm_ss>\,
+zipped by the background worker. No prompt any more (golden SaveDialog1 is GATE G4 in C++: default folder). The button frees
+itself on the reply, or after 15 s without one; "busy" (previous record still copying/zipping) and guards are shown as they
+come back. ?offline=1 keeps the old offline channel. Takes effect on a page reload, no C++ rebuild. Inline script parse-checked
+(JScript). Not pressed by Claude (EastSun tests it).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ page/Main.gbControlBtn.html | 49 +++++++++++++++++++++++++++++++------
+ 1 file changed, 41 insertions(+), 8 deletions(-)
+
+diff --git a/page/Main.gbControlBtn.html b/page/Main.gbControlBtn.html
+index bb57d4b..7a5ec78 100644
+--- a/page/Main.gbControlBtn.html
++++ b/page/Main.gbControlBtn.html
+@@ -105,18 +105,51 @@ document.querySelectorAll('.navBtn[data-open]').forEach(function(b){
+     if(window.parent!==window) window.parent.postMessage({open:b.dataset.open},'*');
+   });
+ });
+-// sbStateRecord → DoStateRecord(0,true)（state-record.js；離線模式自動 ack 並下載快照包）
++// sbStateRecord → golden sbStateRecordClick → DoStateRecord(0,true)（main.cpp:26209-26212）
++// AI(W906-SR-WIRE) 20260928: EastSun「State Record 的按鈕……現在沒有記錄而且停住不能用」（畫面停在
++//   「Busy: State Record #1 running」）。原因：本鈕一直走 state-record.js 的 HTML 離線通道 —— 請求只寫進
++//   localStorage，再輪詢 JSON/state-record-ack.json，而 C++ 從來不寫那個檔 ⇒ C++ 根本沒收到、180 秒後才
++//   ack timeout，期間再按都是 Busy。改成直接送 WS act.main.stateRecord（JsonBridge/actions/MainStateRecord.cpp
++//   → fMain->sbStateRecordClick，本體 cStateRecord.cpp），存到 D:\HT9045_StateRecord\<yyyy-MM-dd HH_mm_ss>\，
++//   背景複製＋7z 之後只剩同名 .zip。golden 的 SaveDialog1 在 C++ 是 GATE G4（沒有對話框＝預設資料夾），
++//   所以不再跳 prompt。本鈕不會卡住：15 秒沒有回覆就放開。?offline=1 仍走舊的離線通道（沒有 C++ 時用）。
+ (function(){
+   var b=document.getElementById('sbStateRecord'), info=document.getElementById('stateRecInfo');
+-  if(!b||!window.HTStateRecord) return;
++  if(!b) return;
+   var off=/[?&](cppoffline|offline)=(1|true|on)/i.test(location.search||'');
+   function status(msg,cls){ info.textContent=msg; info.style.color=cls==='err'?'#a00':(cls==='ok'?'#070':'#345'); }
+-  HTStateRecord.init({source:'gbControlBtn', offline:off, status:status,
+-    context:function(){ return {page:'Main.gbControlBtn.html', cppOffline:off}; },
+-    onStart:function(){ b.style.background='#f9c'; }, onFinish:function(){ b.style.background='#fde9d2'; },
+-    onProgress:function(a){ status('running: '+(a.currentStep||'')+' '+((a.steps||[]).length)+' steps','warn'); }
+-  }).catch(function(){});
+-  b.addEventListener('click',function(){ HTStateRecord.run({button:'sbStateRecord', manual:true, showAlarm:0}); });
++  if(off){
++    if(!window.HTStateRecord) return;
++    HTStateRecord.init({source:'gbControlBtn', offline:off, status:status,
++      context:function(){ return {page:'Main.gbControlBtn.html', cppOffline:off}; },
++      onStart:function(){ b.style.background='#f9c'; }, onFinish:function(){ b.style.background='#fde9d2'; },
++      onProgress:function(a){ status('running: '+(a.currentStep||'')+' '+((a.steps||[]).length)+' steps','warn'); }
++    }).catch(function(){});
++    b.addEventListener('click',function(){ HTStateRecord.run({button:'sbStateRecord', manual:true, showAlarm:0}); });
++    return;
++  }
++  var busy=false;
++  function unwrap(m){ if(m&&typeof m.value==='string'){ try{ var j=JSON.parse(m.value); if(j&&typeof j==='object') return j; }catch(e){} } return m; }
++  function errObj(e){ var t=(e&&e.message)||String(e); try{ var j=JSON.parse(t); if(j&&typeof j==='object') return j; }catch(x){} return {executed:false, guard:'transport', detail:t}; }
++  function idle(){ busy=false; b.style.background='#fde9d2'; }
++  status('State Record ready','ok');
++  b.addEventListener('click',function(){
++    if(busy){ status('State Record 送出中，請稍候','warn'); return; }
++    var R=window.HT9045Recipe;
++    if(!R||!R.rawCmd){ status('[error] ht9045_recipe_client.js 沒有載入','err'); return; }
++    busy=true; b.style.background='#f9c'; status('→ State Record 送出…','warn');
++    var answered=false;
++    var t=setTimeout(function(){ if(!answered){ idle(); status('[error] State Record：15 秒沒有回覆（伺服器忙或斷線），可以再按一次','err'); } },15000);
++    R.rawCmd('control.takeover').catch(function(){ /* 權杖不擋人時照樣可以送 */ })
++      .then(function(){ return R.rawCmd('act.main.stateRecord',{value:JSON.stringify({})}); })
++      .then(unwrap, errObj)
++      .then(function(r){
++        answered=true; clearTimeout(t); idle();
++        if(r&&r.executed) status('[done] State Record → '+(r.zip||r.folder||'')+(r.backgroundRunning?'（背景複製／壓縮中，完成後只剩 .zip）':''),'ok');
++        else if(r&&r.guard==='busy') status('上一筆 State Record 的背景複製／壓縮還沒結束，稍後再按','warn');
++        else status('[error] State Record 沒有執行：'+((r&&r.guard)||'?')+(r&&r.detail?'（'+r.detail+'）':''),'err');
++      });
++  });
+ })();
+ </script>
+ <script src="theme.js"></script>
+-- 
+2.55.0.windows.5
+

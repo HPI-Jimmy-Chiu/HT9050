@@ -2,8 +2,10 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
 產生：20260926，機台端 Claude（EastSun 同意推送；範圍照 Jimmy 20260926 選的 B：只放機台自己的 patch）
 
 機台樹（本分支不含它們的歷史，只有 patch）：
-  C++  D:\HT9045\_integ_ioweb\HT9011UC_Cpp_V3.33.906.0  分支 integ/ioweb-8484bdb4  HEAD ab33f7a
-  web  D:\HT9045\_integ_ioweb\web                          HEAD dbe0d98
+  C++  D:\HT9045\_integ_ioweb\HT9011UC_Cpp_V3.33.906.0  分支 integ/ioweb-8484bdb4  HEAD ee3254e
+  web  D:\HT9045\_integ_ioweb\web                          HEAD 9f853a2
+  ⇒ 機台目前 = 筆電 GitHub main e4e4a69（第 67 包，GitLab main e882ad39）＋ 下面列的機台自己的修改。
+  ★ 這個分支只有機台端推（EastSun 20260929：「開一個你專門用來上傳的 branch，避免互相蓋版本」）；筆電請只讀它，main 機台不碰。
 
 套用順序（筆電 main 還沒收過任何一份機台 patch 的前提下）：
   1. usb01_P1_P25c\   （原 USB 包 01，20260925 16:25 產生）
@@ -41,5 +43,32 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   另：斷馬達電／重開機後驅動器會鎖 A.A12（EtherCAT Output Data Synchronization Error），ERROR_STOP 讓 VerifyMotorAction
   一直鎖 MoveN/MoveP/LoopMove；對那幾軸 pci1203.ax.resetError 就好（EastSun 同意後由機台端送，5 軸全回 READY）。
 推送前掃描：權杖／私鑰／7z 密碼參數 0 筆。
+
+===== 20260928～29 追加（cpp 0017-0021、web 0009-0011）=====
+  cpp 0017 9df67ef MERGE-8b5a91b5 —— 筆電第 3～59 包（GitHub 1d25eb6..d2f400b）一次合進機台：NEW 224／OLD 276／LOCAL 5（全乾淨）。
+                    LOCAL 5 檔保留的機台修改：cinitial.cpp（TEMP-DOORS）、wb_serve.cpp（maxConnections 64）、
+                    WebBridgeServer.cpp（WSFANOUT＋TAKEOVER）、ht9045_io_do.js、ht9045_recipe_client.js（TAKEOVER）。
+                    筆電刪掉的 8 個檔機台還留著（沒建進任何 target）。⚠ 絕大部分內容就是筆電自己的包，筆電不用套這一顆。
+  cpp 0018 8ca6123 TOKEN-OFF —— MachineType.h 檔尾 #define W906_WEB_TOKEN_ENFORCE 0：網頁權杖暫時不擋人（EastSun 20260928：
+                    「這部分先不要在機台端卡控，這是要做，但等我動作流程完成才進行」）。WebBridgeConfig::enforceControlToken 預設
+                    true，ctest 不受影響。⚠ 這是機台端的暫時設定，main 要不要收請 Jimmy 決定；要恢復就改成 1。
+  cpp 0019 e1a16cf OPLOG —— 操作 LOG：%W906_OPLOG_DIR%\oplog_YYYYMMDD.txt（網頁指令、回覆、各軸狀態變化、Motor Test 鎖／馬達電源），
+                    帳密類指令內容不記；State Record 會把當天的 oplog 一起收進快照（cStateRecord.cpp 一行，非 golden）。
+                    WebBridgeServer.cpp 的 g_W906OpLogHook 預設 0（沒裝就完全不動）。建議 main 收（排查機台問題用）。
+  cpp 0020 80cee99 MERGE-e882ad39 —— 筆電第 60～67 包（GitHub d2f400b..e4e4a69）：NEW 22／OLD 81／LOCAL 4；兩處衝突都是位置重疊
+                    （WebBridgeServer.cpp 豁免那行筆電改了註解、wb_serve.cpp 兩邊都加在檔尾），機台修改一行不少。
+                    ⚠ 其中一個機台改動在合併裡：第 62 包的 Q2-OBS（observer.get Yield 動作的權杖檢查）前面加
+                    `W906_WEB_TOKEN_ENFORCE != 0 &&` —— 不加的話權杖不擋人時 Yield 還是回 not-operator。
+                    第 67 包 RULINGS_20260928 #6：Index Z 的 Gali_* → 1203 由筆電做，機台端沒有重做。
+  cpp 0021 ee3254e OPLOG-2 —— 操作 LOG 也記伺服器推給畫面的框（ALARM／MODAL／QUERY 與答掉的時間）。
+  web 0009 3b35c9c MERGE-8b5a91b5 (web) —— 同 cpp 0017 的網頁部分；合併後多一處：takeover() 也掛閒置計時（armTokenIdle）。
+  web 0010 41cd83e SR-WIRE (web) —— 主畫面 State Record 鈕原本走 state-record.js 的離線通道（只寫 localStorage、等一個 C++ 從來
+                    不寫的 ack 檔 ⇒ 沒有紀錄、卡在 Busy #1 180 秒），改成直接送 WS act.main.stateRecord。建議 main 收。
+  web 0011 9f853a2 MERGE-e882ad39 (web) —— 同 cpp 0020 的網頁部分（5 檔全是 OLD）。
+  機台端驗證：build_integ_ship_x86 wb_serve 每一步 exit 0、pe_truncation 178 完整；EastSun 0929 09:32 F5 實跑，oplog 正常產生
+  （START／MOT／PAGE／CMD／OK／NG）。ctest 這兩天沒跑。State Record 新接法還沒在機台上按過。
+  掃描：權杖／私鑰／7z 密碼 0 筆；帳密字樣與內網 IP 只出現在 0017／0020 裡筆電翻譯的 golden 預設值（GitHub 上的更新包本來就有），
+  機台自己寫的 0018／0019／0021、web 0010 是 0 筆。
+  沒有放：MachineType.h 裡 EastSun 0928 手動註解掉的 SOFT_SIMULTE（沒 commit，出貨組態本來就用 W906_NO_SOFT_SIMULTE 關掉）。
 
 MD5 清單在 MANIFEST_MD5.tsv。

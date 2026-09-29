@@ -1,0 +1,899 @@
+From 9f853a228c719174ad9b0db5d0ff3264d6d8b151 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 10:17:42 +0800
+Subject: [PATCH 11/11] MERGE-e882ad39 (web): laptop packages 60..67 web files
+ applied (GitLab main 77cac68a..e882ad39)
+
+Same cumulative pass as the C++ commit MERGE-e882ad39. 5 web files, all OLD (the machine copy was a laptop version):
+Data.ContactCT.html, ht9045_contactct_wire.js, ht9045_hsys_heater_c.js, ht9045_observer_wire.js, ht9045_wire_statussecurity.js
+(package 61: St01 up to 0bca1318). No machine-modified web file is touched (SR-WIRE Main.gbControlBtn.html is not in 60..67).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ page/Data.ContactCT.html           |   2 +-
+ page/ht9045_contactct_wire.js      | 203 ++++++++++++++++++----
+ page/ht9045_hsys_heater_c.js       | 263 ++++++++++++++++++++++-------
+ page/ht9045_observer_wire.js       | 173 ++++++++++++++-----
+ page/ht9045_wire_statussecurity.js |   4 +-
+ 5 files changed, 509 insertions(+), 136 deletions(-)
+
+diff --git a/page/Data.ContactCT.html b/page/Data.ContactCT.html
+index 6636f88..0692c5c 100644
+--- a/page/Data.ContactCT.html
++++ b/page/Data.ContactCT.html
+@@ -30,7 +30,7 @@
+ 
+ <div id="ctStatus"></div>
+ 
+-<div class="srcnote">程式碼對應：<code>cContactCT.dfm</code>／<code>cContactCT.cpp</code>（golden V912 TfContactCT）；資料來源 C++ WS <code>contactct.get</code>（ArmData／ArmHistory ← system\Arm*.dat）</div>
++<div class="srcnote">程式碼對應：<code>cContactCT.dfm</code>／<code>cContactCT.cpp</code>（golden V912 TfContactCT）；資料來源 C++ WS <code>contactct.get</code>（ArmData／ArmHistory ← system\Arm*.dat）；開著時每秒重取一次（S115；golden 每測完一次 <code>sgYield-&gt;Refresh()</code>，atester_ProcessCount.cpp:1999）</div>
+ 
+ <script src="theme.js"></script>
+ <script src="ht9045_recipe_client.js"></script>
+diff --git a/page/ht9045_contactct_wire.js b/page/ht9045_contactct_wire.js
+index ed24ee6..9f595c1 100644
+--- a/page/ht9045_contactct_wire.js
++++ b/page/ht9045_contactct_wire.js
+@@ -6,16 +6,45 @@
+  *   開頁：contactct.get（不帶 value）＝ golden 開窗 FormShow（ItemIndex=3）→ 整格重畫
+  *   切選項：contactct.get value={"yieldType":n} ＝ golden 點 rgYieldType 第 n 項（rgYieldTypeClick）→ 整格重畫
+  *   回應：{rgYieldType:{items,itemIndex,columns}, rows, cols, colWidths, rowHeights,
+- *          cells[row][col]:{text,bg,fg,drawn}, palette:{clXxx:"#RRGGBB"}, font:{bold,size}, initialOK, errors[]}
++ *          cells[row][col]:{text,bg,fg,drawn}, palette:{clXxx:"#RRGGBB"}, font:{bold,size}, initialOK, errors[],
++ *          enabled:{btClearCount,btYieldChart}（AI(W906-FRW-S115) 20260927 起）}
+  *   格子文字與顏色全部照回應畫（bg／fg 是 golden 的 clXxx 色名，RGB 由回應的 palette 對照）。
+  * Count Clear（golden btClearCountClick :944-1069）與 Yield Chart（btYieldChartClick :1071-1075）這次不接。
++ *
++ * AI(W906-FRW-S115) 20260927 即時更新（RULINGS_20260926 S115；S124＝B：唯讀 *.get 免權杖）
++ *   golden 這張表沒有自己的 Timer，是別的程式叫 fContactCT->sgYield->Refresh() 重畫：
++ *     每測完一次（ProcessCount 結尾 atester_ProcessCount.cpp:1999，大約一個 Index 週期一次）、
++ *     各種清除之後（cSortCT.cpp:694／:866、Alarm4Yield :1336／:1363／:1403、main.cpp:15516、Timer10Timer :35349、
++ *     uYieldMonitoring.cpp:3983／:5648、SECS uHGemHT9045.cpp:1924／:1952）。
++ *   另外 golden TfMain::Timer1Timer（main.cpp:3222-3233，Interval 30 ms）一直寫 btClearCount->Enabled = !SystemStart。
++ *   網頁照 Steven S124 的話（「可能一秒鐘就更新一次」）：
++ *     tick   每 1000 ms 送一次 contactct.get value={"yieldType":<頁面正在看的那一項>}。它等於 C++ 的 ItemIndex
++ *            ⇒ C++ 不觸發 OnClick、只重畫＝golden sgYield->Refresh()。回應跟上一次一樣就不動 DOM。
++ *            btClearCount 的 disabled 跟著回應的 enabled 走（舊 C++ 沒帶 enabled 就不動）。
++ *     權杖   contactct.get 在 WebBridgeServer.cpp:1448 免權杖（St02 9d790ff2），這一頁不再拿權杖。
++ *            （原本開頁 control.acquire 之後沒有 release，權杖會被這一頁佔到伺服器 10 分鐘閒置才收回。）
++ *            舊的 wb_serve（沒有那一行）回 not-operator：tick 這一拍略過；開頁／點選項改走 acquire → get → release
++ *            （持有只有幾毫秒，同 Data.Observer）。
++ *     防連點 contactct.get 在 WebCmdGuard 名稱級白名單（WebCmdGuard.cpp:89），伺服器不會回 busy:。頁面一次只送一條：
++ *            tick 撞上送出中就略過；使用者點的選項不能被吃掉 ⇒ 排隊（只留最後一個），送出中那一條的回應已過時、不畫。
++ *     沒人看 分頁在背景（document.hidden）或外框被縮小／關掉（background.html 把外框設 display:none，iframe 還在）
++ *            就不拍；golden 視窗沒顯示時 Refresh 也畫不出東西，再顯示時畫的就是當下的值。
++ *   window.__contactct：data（畫面上正在顯示的那一份回應）、loads（開頁＋點選項送出的次數）、ticks、same（tick 回應跟上一次
++ *     一樣）、renders、skipped（略過的拍）、tokenFallback、error（開頁／點選）、tickError —— 探針
++ *     tools/webprobe/data_contactct_probe.py 與 data_contactct_live_probe.py 讀這些。
+  * ---------------------------------------------------------------------------
+  */
+ (function () {
+   'use strict';
+ 
+-  var D = null;          // 最近一次回應（探針也讀這個）
+-  var busy = false;
++  var TICK_MS = 1000;
++  var D = null;            // 畫面上正在顯示的那一份回應（探針也讀這個）
++  var sel = null;          // 頁面正在看的 rgYieldType 項次（開頁回應之後才有）
++  var inflight = false;    // 一次只送一條 contactct.get
++  var queued = null;       // 送出中時使用者點的選項：{yt, kind}，只留最後一個
++  var sigRadio = '', sigGrid = '', lastWarn = null, errShown = false, oldServerNoted = false;
++  var st = window.__contactct = { data: null, loads: 0, ticks: 0, same: 0, renders: 0, skipped: 0,
++                                  tokenFallback: 0, error: null, tickError: null };
+ 
+   function $(id) { return document.getElementById(id); }
+   function say(msg, colour) {
+@@ -26,18 +55,35 @@
+     if (m && typeof m.value === 'string') { try { var j = JSON.parse(m.value); if (j && typeof j === 'object') return j; } catch (e) {} }
+     return m;
+   }
+-  function cmd(name, extra) {
++  function raw(name, extra) {
+     if (!window.HT9045Recipe || !HT9045Recipe.rawCmd) return Promise.reject(new Error('ht9045_recipe_client.js 沒有載入'));
+-    return HT9045Recipe.rawCmd(name, extra).then(unwrap);
+-  }
+-  function acquire() {
+-    return cmd('control.acquire').catch(function () { /* 已持有或他人持有：後面的指令自己會回錯 */ });
++    return HT9045Recipe.rawCmd(name, extra);
+   }
+   function colour(name) {
+     if (D && D.palette && D.palette[name]) return D.palette[name];
+     return '';
+   }
+ 
++  // contactct.get。quiet（tick）＝舊伺服器要權杖時不去拿，把 not-operator 丟回去讓這一拍略過。
++  function fetchCT(yt, quiet) {
++    var extra = {};
++    if (yt !== undefined && yt !== null) extra.value = JSON.stringify({ yieldType: yt });
++    return raw('contactct.get', extra).then(unwrap, function (e) {
++      if (quiet || !e || e.message !== 'not-operator') throw e;
++      // 舊的 wb_serve（沒有 S124 免權杖那一行）：acquire → get → release，持有只有幾毫秒
++      st.tokenFallback++;
++      var held = false;
++      function release() { return held ? raw('control.release').catch(function () {}) : Promise.resolve(); }
++      return raw('control.acquire').then(function () {
++        held = true;
++        return raw('contactct.get', extra).then(unwrap);
++      }, function (e2) {
++        throw new Error('這一版 wb_serve 的 contactct.get 還要權杖，而權杖在別的頁面（' + e2.message + '）');
++      }).then(function (d) { return release().then(function () { return d; }); },
++              function (e3) { return release().then(function () { throw e3; }); });
++    });
++  }
++
+   function renderRadio() {
+     var box = $('rgYieldType');
+     var rg = D.rgYieldType || { items: [], itemIndex: -1, columns: 1 };
+@@ -52,7 +98,7 @@
+       var r = document.createElement('input');
+       r.type = 'radio'; r.name = 'rgYieldType'; r.value = String(i);
+       r.checked = (i === rg.itemIndex);
+-      r.addEventListener('change', function () { if (r.checked) load(i); });
++      r.addEventListener('change', function () { if (r.checked) { sel = i; send(i, 'click'); } });
+       lab.appendChild(r);
+       lab.appendChild(document.createTextNode(' ' + text));
+       box.appendChild(lab);
+@@ -72,13 +118,13 @@
+       var row = D.cells[r];
+       for (var k = 0; k < row.length; k++) {
+         var cell = row[k];
+-        var st = 'background:' + colour(cell.bg) + ';color:' + colour(cell.fg) + ';';
++        var sty = 'background:' + colour(cell.bg) + ';color:' + colour(cell.fg) + ';';
+         if (cell.drawn && D.font) {
+-          if (D.font.bold) st += 'font-weight:bold;';
+-          if (D.font.size) st += 'font-size:' + Math.round(D.font.size * 96 / 72) + 'px;';
++          if (D.font.bold) sty += 'font-weight:bold;';
++          if (D.font.size) sty += 'font-size:' + Math.round(D.font.size * 96 / 72) + 'px;';
+         }
+         html += '<td class="' + (cell.drawn ? 'drawn' : '') + '" data-r="' + r + '" data-c="' + k +
+-                '" data-bg="' + cell.bg + '" data-fg="' + cell.fg + '" style="' + st + '">' +
++                '" data-bg="' + cell.bg + '" data-fg="' + cell.fg + '" style="' + sty + '">' +
+                 String(cell.text).replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</td>';
+       }
+       html += '</tr>';
+@@ -86,26 +132,106 @@
+     t.innerHTML = html;
+   }
+ 
+-  function load(yieldType) {
+-    if (busy) return Promise.resolve();
+-    busy = true;
+-    say('讀取中…');
+-    var extra = {};
+-    if (yieldType !== undefined && yieldType !== null) extra.value = JSON.stringify({ yieldType: yieldType });
+-    return acquire().then(function () { return cmd('contactct.get', extra); }).then(function (d) {
+-      D = d;
+-      window.__contactct = { data: d, loads: (window.__contactct ? window.__contactct.loads : 0) + 1 };
++  // golden TfMain::Timer1Timer main.cpp:3222-3233：運轉中（SystemStart）btClearCount->Enabled=false，停下來 true
++  function renderButtons(d) {
++    var en = d.enabled || {};
++    ['btClearCount', 'btYieldChart'].forEach(function (id) {
++      var b = $(id);
++      if (b && typeof en[id] === 'boolean') b.disabled = !en[id];
++    });
++  }
++
++  function warnText(d) {
++    var msg = '';
++    if (!d.initialOK) msg = '⚠ C++ InitialOK=false：golden sgYieldDrawCell 開頭就 return，格子不會畫（顯示的是 VCL 預設格）';
++    if (d.errors && d.errors.length) msg += (msg ? '；' : '') + '⚠ ' + d.errors.length + ' 格繪製例外：' + d.errors[0].error;
++    return msg;
++  }
++
++  // 開頁／點選項：整張重畫（同原本）。tick：只重畫有變的那一塊，全部一樣就不動 DOM
++  // （每秒整張 innerHTML 會把正在按下去的 radio 換掉，那一下點選就丟了）。
++  function render(d, kind) {
++    var sr = JSON.stringify(d.rgYieldType || null);
++    var sg = JSON.stringify([d.cols, d.colWidths, d.rowHeights, d.font, d.palette, d.cells]);
++    var changed = false;
++    if (kind !== 'tick' || sr !== sigRadio) { renderRadio(); changed = true; }
++    if (kind !== 'tick' || sg !== sigGrid) { renderGrid(); changed = true; }
++    sigRadio = sr; sigGrid = sg;
++    renderButtons(d);
++    if (changed) st.renders++; else st.same++;
++    var w = warnText(d);
++    // tick 不蓋掉「尚未接」之類的提示：只有警告內容變了、或剛從錯誤恢復才改狀態列
++    if (kind !== 'tick' || w !== lastWarn || errShown) { say(w, w ? '#c60' : ''); errShown = false; }
++    lastWarn = w;
++  }
++
++  function fail(e, kind) {
++    var m = (e && e.message) || String(e);
++    if (kind === 'tick') {
++      if (m === 'not-operator') {                // 舊 wb_serve：這一拍略過（同 Data.Observer 拿不到權杖時）
++        st.skipped++;
++        if (!oldServerNoted) {
++          oldServerNoted = true; errShown = true;
++          say('⚠ 這一版 wb_serve 的 contactct.get 還要權杖（沒有 S124 免權杖那一行）：每秒更新暫停，點選項仍會重取', '#c60');
++        }
++        return;
++      }
++      st.tickError = m; errShown = true;
++      say('❌ contactct.get（每秒更新）失敗：' + m, '#c00');
++      return;
++    }
++    st.error = m; errShown = true;
++    say('❌ contactct.get 失敗：' + m, '#c00');
++    if (D) {                                      // 還原成伺服器那邊的選取
++      if (D.rgYieldType && typeof D.rgYieldType.itemIndex === 'number') sel = D.rgYieldType.itemIndex;
+       renderRadio();
+-      renderGrid();
+-      var msg = '';
+-      if (!d.initialOK) msg = '⚠ C++ InitialOK=false：golden sgYieldDrawCell 開頭就 return，格子不會畫（顯示的是 VCL 預設格）';
+-      if (d.errors && d.errors.length) msg += (msg ? '；' : '') + '⚠ ' + d.errors.length + ' 格繪製例外：' + d.errors[0].error;
+-      say(msg, msg ? '#c60' : '');
+-    }).catch(function (e) {
+-      say('❌ contactct.get 失敗：' + e.message, '#c00');
+-      window.__contactct = { error: e.message, loads: (window.__contactct ? window.__contactct.loads : 0) + 1 };
+-      if (D) renderRadio();   // 還原成伺服器那邊的選取
+-    }).then(function () { busy = false; });
++    }
++  }
++
++  // kind：'open'（開頁＝FormShow）、'click'（點 rgYieldType）、'tick'（每秒重畫）
++  function send(yt, kind) {
++    if (inflight) {
++      if (kind === 'tick') { st.skipped++; return Promise.resolve(null); }
++      queued = { yt: yt, kind: kind };
++      return Promise.resolve(null);
++    }
++    inflight = true;
++    if (kind !== 'tick') say('讀取中…');
++    return fetchCT(yt, kind === 'tick').then(function (d) {
++      if (kind === 'tick') { st.ticks++; st.tickError = null; } else { st.loads++; st.error = null; }
++      if (queued) return d;                       // 送出中使用者又點了：這一條已過時，不畫、不收（D／data＝畫面上那一份），下一條馬上送
++      D = d; st.data = d;
++      if (d.rgYieldType && typeof d.rgYieldType.itemIndex === 'number') sel = d.rgYieldType.itemIndex;
++      render(d, kind);
++      return d;
++    }, function (e) {
++      if (kind === 'tick') st.ticks++; else st.loads++;
++      fail(e, kind);
++      return null;
++    }).then(function (d) {
++      inflight = false;
++      var q = queued; queued = null;
++      if (q) return send(q.yt, q.kind);
++      return d;
++    });
++  }
++
++  function visible() {
++    if (document.hidden) return false;
++    try {
++      var fe = window.frameElement;               // background.html 的 iframe；直接開這一頁時是 null
++      if (fe && fe.getClientRects().length === 0) return false;   // 外框 display:none（縮小／關掉）
++    } catch (e) { /* 拿不到 frameElement：當作看得到 */ }
++    return true;
++  }
++
++  function onTick() {
++    if (!visible()) return;
++    if (D === null) {                             // 開頁那一下沒成功（例如 wb_serve 還沒起來）：每拍重試開窗
++      if (!inflight) send(undefined, 'open');
++      return;
++    }
++    send(sel, 'tick');
+   }
+ 
+   function notWired(ev) {
+@@ -117,9 +243,18 @@
+   function start() {
+     $('btClearCount').addEventListener('click', notWired);
+     $('btYieldChart').addEventListener('click', notWired);
+-    load();
++    send(undefined, 'open');
++    setInterval(onTick, TICK_MS);
+   }
+   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
+ 
+-  window.HT9045ContactCT = { reload: load, data: function () { return D; } };
++  window.HT9045ContactCT = {
++    reload: function (yieldType) {
++      if (yieldType === undefined || yieldType === null) return send(undefined, 'open');
++      sel = yieldType;
++      return send(yieldType, 'click');
++    },
++    data: function () { return D; },
++    tick: onTick
++  };
+ })();
+diff --git a/page/ht9045_hsys_heater_c.js b/page/ht9045_hsys_heater_c.js
+index f123b58..69a37d1 100644
+--- a/page/ht9045_hsys_heater_c.js
++++ b/page/ht9045_hsys_heater_c.js
+@@ -1,32 +1,41 @@
+-/* ht9045_hsys_heater_c.js -- HW.HandlerSys.html「Heater」分頁（grpHeater）的逐通道溫控器廠牌下拉，C 路頁面補件。
++/* ht9045_hsys_heater_c.js -- HW.HandlerSys.html「Heater」分頁（grpHeater）的溫控器廠牌設定，C 路頁面補件。
+  * ---------------------------------------------------------------------------
+  * //AI(W906-FRW-P8) 20260926: 新檔（Steven 團隊；手寫，不是 gen_wire.py 產物 —— 檔名刻意不叫 ht9045_wire_<slug>.js，免得產生器覆蓋）。
+  *
+  * golden V912 HandlerSys.cpp（EN_HEATER_SHEET=1，MachineType.h:658）：
+  *   建構子 :70-112 依 g_tHeaterInsInfo（MachineTypeUtility.cpp，71 通道、23 個 occupy）在 grpHeater 裡「動態」建 TLabel＋TComboBox，
+  *   DFM 沒有這些元件 → 頁面產生器畫不出來，grpHeater 是空的。
+- * 後端：FileRW/HSys.cpp（WS editlist.get／editlist.save tag=HSys）。
+- *   editlist.get 的 extra.heater：通道清單（替身 id lb/cbHeaterInsOpt_<通道>、標題、golden 算的 Left／Top、可見與否）、5 個廠牌選項、版面常數。
+- *   值／可見／可改走引擎的通用 proxies（本檔只負責「元件要先在」）。
+- *   開頁＝golden LoaderSystemSet :262-278（讀 [TempCtrl] 71 鍵、缺鍵補寫 -9999）；存檔＝golden SaveSystemSet :779-794（寫 71 鍵＋HEATER_CTRL_TYPE）。
++ * 後端：FileRW/HSys.cpp（WS editlist.get／editlist.save tag=HSys）。值／可見／可改走引擎的通用 proxies（本檔只負責「元件要先在」
++ *   ＋畫面上的連動）。
+  *
+- * 本檔做兩件事：
+- *  (1) 引擎套值之前，照 extra.heater 在 grpHeater 裡建 <span class="lb">／<select class="ed">（包 HT9045Recipe.editlistGet，
+- *      比照 ht9045_groundman_c.js／ht9045_setup_c_wire.js：這個 then 在引擎的 then 之前跑）。
+- *  (2) golden rgHeaterTypeClick（:1519）的「畫面那一半」：操作員點 Heater Type 的某個廠牌 → 所有逐通道下拉設成同一個廠牌。
+- *      檔案那一半（golden 按下即寫 71 鍵＋HEATER_CTRL_TYPE）：//AI(W906-FRW-Q14) 20260927: [W906] 偏離 golden：Steven 20260927 Q14＝B
+- *      —— 按 Heater Type 不寫檔；後端在存檔時重播這個事件只改記憶體（FileRW/HSys.cpp BeforeApply），71 鍵＋HEATER_CTRL_TYPE
+- *      等整頁存檔（golden SaveSystemSet :782-793，答「是」之後）一起寫，寫的鍵與值跟 golden 按下即寫的相同。
+- *      點了廠牌但沒按存檔、或存檔答「否」→ 不寫檔（golden 會寫）。
++ * //AI(W906-FRW-S166) 20260927 [W906] 偏離 golden（裁決過）：Q34 方案 D＋Q15（RULINGS_20260926 S166／S137；D-2＝A 依 RULINGS_20260927
++ *   第 7 條第 35 題）。全文 D:\HT9045\.claude\skills\ht9050-construction\references\decisions-decided.md「### Q34.」。
++ *   Heater 分頁改成：
++ *   ・最上面一列「溫控器廠牌：○ 全機相同 ○ 各溫控器不同」（替身 rgHeaterInsMode）。
++ *   ・「Index 位置溫控器」／「其他位置溫控器」兩個下拉（cbHeaterInsIndexOpt／cbHeaterInsOtherOpt）；Index 位置＝Head1～4＋Index 32 區
++ *     （D-2a，36 個，灰字列出）。USE_16_HEATER 是 EJ1N／DTME08 時 Index 下拉停用、顯示控制器名稱（那些 Index 區不走溫控 COM 埠，
++ *     golden V912 bthermo.cpp:1331-1367），而且 Index 跟著其他位置（後端 W906_HeaterInsIndexLocked 的說明）。
++ *   ・逐通道表（D-3a：golden 23 個有下拉的通道照 golden 可見條件＋依 USE_16_HEATER 走溫控 COM 埠的 Index 區）：名稱｜組別｜廠牌｜站號｜預設站號。
++ *     「全機相同」時表唯讀，只顯示每個通道算出來的廠牌與預設站號；「各溫控器不同」時可改廠牌與站號（空白＝預設，灰字顯示 golden 算的預設值；
++ *     TC401 只指定「第幾台」，通道仍是序號%4，D-7a）。
++ *   ・D-9a 提示：「不同」模式、Index≠其他、或改過站號時顯示「目前溫控只看 HEATER_CTRL_TYPE（單一廠牌、預設站號），這些設定要等底層翻完才生效」。
++ *   ・存檔前檢查在後端（D-7a 站號範圍、D-8a 同一個溫控 COM 埠同廠牌同站號 → 整頁不存，訊息列出是哪兩個通道）。
++ *   開頁不寫檔（Q15）；存檔寫的鍵見 FileRW/HSys_Heater.h 檔尾。
+  *
+- * ⚠ 底層：溫控流程（bthermo／rs232…）仍用單一廠牌 [TempCtrl] HEATER_CTRL_TYPE（底層照 906，RULINGS_20260926 第 26 條）。
+- *   各通道設成不同廠牌時，存檔會把 HEATER_CTRL_TYPE 寫成 Heater Type 單選的值（golden 912 同），逐通道的差異溫控目前用不到（列給 Jimmy）。
++ * (2) golden rgHeaterTypeClick（:1519）的「畫面那一半」：操作員點「Index Items」分頁的 Heater Type 某個廠牌 →
++ *     「全機相同，Index 與其他都設成這個廠牌」（方案 D ⑤）。檔案那一半：//AI(W906-FRW-Q14) 20260927: [W906] 偏離 golden：Steven 20260927
++ *     Q14＝B —— 按下不寫檔；後端存檔時重播這個事件只改記憶體（FileRW/HSys.cpp BeforeApply → W906_HeaterMixTypeClick），
++ *     等整頁存檔（答「是」）才寫。點了但沒存、或存檔答「否」→ 不寫檔（golden 會寫）。
++ *
++ * ⚠ 底層：溫控流程（bthermo／rs232…）在 Jimmy 翻完之前仍只用單一廠牌 [TempCtrl] HEATER_CTRL_TYPE（RULINGS_20260926 第 26 條；
++ *   Q34 ⑥ 1～3、5～8 歸 Jimmy），所以上面 D-9a 的提示要一直顯示到底層翻完（之後由 St01 拿掉，Q34 順序 ⑤）。
+  * ---------------------------------------------------------------------------
+  */
+ (function () {
+   'use strict';
+ 
+   var STRUCT = 'HSys';
++  var MODE_SAME = 0, MODE_DIFF = 1;
+ 
+   function $(id) { return document.getElementById(id); }
+   function host() {                                   // grpHeater 的內容區（頁面產生器畫的 .cli）
+@@ -34,47 +43,183 @@
+     if (!g) return null;
+     return g.querySelector('.cli') || g;
+   }
+-  var BUILT = [];                                     // 本檔建的下拉 id（給 (2) 用）
+-  var NOTE = '逐通道溫控器廠牌（golden V912 THandlerSystem 建構子 HandlerSys.cpp:70-112 動態建立）。' +
+-             '存檔寫 system\\Gerneral.ini [TempCtrl] 各通道鍵；溫控流程目前只讀 HEATER_CTRL_TYPE（底層照 906）。';
++  function el(tag, attrs, text) {
++    var e = document.createElement(tag);
++    Object.keys(attrs || {}).forEach(function (k) {
++      if (k === 'style') e.style.cssText = attrs[k]; else e.setAttribute(k, attrs[k]);
++    });
++    if (text !== undefined) e.textContent = text;
++    return e;
++  }
++
++  var MIX = null;                                     // extra.heater.mix（後端 FileRW/HSys.cpp W906_HeaterMixExtraJson）
++  var OPTS = [];                                      // 5 個廠牌（golden g_HeaterInsOptStr）
++  var LAST_MODE = MODE_SAME;                          // 上一次畫面上的模式（切換時暫存／還原逐通道值）
++  var GREY = 'color:#777;';
++
++  function selectWithOptions(id) {
++    var s = el('select', { 'class': 'ed', id: id, 'data-src': 'hsys-heater' });
++    OPTS.forEach(function (t) { s.appendChild(el('option', {}, t)); });
++    return s;
++  }
+ 
+   /* ---- (1) 引擎套值之前建元件 ---------------------------------------------------------------- */
+   function build(d) {
+     var hx = d && d.extra && d.extra.heater;
+     var box = host();
+-    if (!hx || !box || !hx.channels) return;
+-    var sz = hx.size || { lbW: 100, lbH: 28, cbW: 170, cbH: 28 };
+-    var opts = hx.options || [];
+-    BUILT = [];
+-    hx.channels.forEach(function (c) {
+-      var lb = $(c.lb);
+-      if (!lb) {
+-        lb = document.createElement('span');
+-        lb.className = 'lb'; lb.id = c.lb; lb.setAttribute('data-src', 'hsys-heater');
+-        lb.style.cssText = 'position:absolute;white-space:nowrap;font-size:11px;color:#000;';
+-        box.appendChild(lb);
+-      }
+-      lb.style.left = c.lbLeft + 'px'; lb.style.top = (c.lbTop + 6) + 'px';
+-      lb.textContent = c.caption;
+-      lb.title = c.lb + ' : TLabel（' + c.saveName + '）';
+-      var cb = $(c.cb);
+-      if (!cb) {
+-        cb = document.createElement('select');
+-        cb.className = 'ed'; cb.id = c.cb; cb.setAttribute('data-src', 'hsys-heater');
+-        cb.style.cssText = 'position:absolute;';
+-        box.appendChild(cb);
++    if (!hx || !box || !hx.mix) return;
++    MIX = hx.mix;
++    OPTS = hx.options || [];
++    LAST_MODE = MIX.mode === MODE_DIFF ? MODE_DIFF : MODE_SAME;
++
++    var old = $('hsysHeaterMix');
++    if (old && old.parentNode) old.parentNode.removeChild(old);
++    // 舊版（20260926 起）照 golden 版面直接放在 .cli 裡的下拉／標籤一併清掉（id 會在下面重建）
++    Array.prototype.slice.call(box.querySelectorAll('[data-src="hsys-heater"]')).forEach(function (x) {
++      if (x.parentNode) x.parentNode.removeChild(x);
++    });
++
++    var root = el('div', { id: 'hsysHeaterMix', 'data-src': 'hsys-heater',
++      style: 'position:absolute;left:8px;top:6px;right:8px;bottom:6px;overflow:auto;font-size:12px;color:#000;' });
++
++    // 第一列：模式（替身 rgHeaterInsMode，TRadioGroup：0 全機相同／1 各溫控器不同）
++    var r1 = el('div', { style: 'margin:2px 0 8px 0;' });
++    r1.appendChild(el('b', {}, '溫控器廠牌：'));
++    var rg = el('span', { id: MIX.modeProxy, 'data-src': 'hsys-heater',
++      title: MIX.modeProxy + '：[TempCtrl] HeaterInsMode（0 全機相同／1 各溫控器不同）' });
++    ['全機相同', '各溫控器不同'].forEach(function (t) {
++      var lb = el('label', { style: 'margin-right:18px;cursor:pointer;' });
++      lb.appendChild(el('input', { type: 'radio', name: 'rg_' + MIX.modeProxy }));
++      lb.appendChild(document.createTextNode(' ' + t));
++      rg.appendChild(lb);
++    });
++    r1.appendChild(rg);
++    root.appendChild(r1);
++
++    // 第二列：Index 位置／其他位置（替身 cbHeaterInsIndexOpt／cbHeaterInsOtherOpt）
++    var r2 = el('div', { style: 'margin:0 0 4px 0;' });
++    r2.appendChild(el('span', { style: 'display:inline-block;width:110px;' }, 'Index 位置溫控器'));
++    var sI = selectWithOptions(MIX.indexProxy);
++    sI.title = MIX.indexProxy + '：[TempCtrl] HeaterInsIndexOpt（全機相同時 Index 位置的廠牌）';
++    r2.appendChild(sI);
++    var lock = el('span', { id: 'hsysHeaterIndexLock', style: 'margin-left:8px;font-weight:bold;' }, MIX.indexLocked ? MIX.indexLockedLabel : '');
++    r2.appendChild(lock);
++    root.appendChild(r2);
++    root.appendChild(el('div', { style: GREY + 'margin:0 0 6px 110px;' },
++      'Index 位置（' + (MIX.indexGroup || []).length + ' 個通道）：' + (MIX.indexGroup || []).join('、') +
++      (MIX.indexLocked ? '。這台的 Index 區不走溫控 COM 埠，Index 的廠牌跟著「其他位置」。' : '')));
++    var r3 = el('div', { style: 'margin:0 0 6px 0;' });
++    r3.appendChild(el('span', { style: 'display:inline-block;width:110px;' }, '其他位置溫控器'));
++    var sO = selectWithOptions(MIX.otherProxy);
++    sO.title = MIX.otherProxy + '：[TempCtrl] HeaterInsOtherOpt（全機相同時其他位置的廠牌）';
++    r3.appendChild(sO);
++    r3.appendChild(el('span', { id: 'hsysHeaterDiffNote', style: GREY + 'margin-left:8px;' }, ''));
++    root.appendChild(r3);
++
++    // D-9a 提示
++    root.appendChild(el('div', { id: 'hsysHeaterHint',
++      style: 'display:none;margin:4px 0 8px 0;padding:4px 8px;border:1px solid #d08a00;background:#fff4dd;color:#8a4b00;' },
++      '⚠ ' + (MIX.hint || '')));
++
++    // 逐通道表：列出的通道（D-3a）分欄放；沒列出的放在看不見的暫存區（元件仍在，引擎套值／存檔照常，後端也不收）
++    var cols = el('div', { style: 'display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start;' });
++    var hold = el('div', { style: 'display:none;' });
++    var listed = (MIX.rows || []).filter(function (r) { return r.listed; });
++    var PER = 20, table = null;
++    function newTable() {
++      var t = el('table', { style: 'border-collapse:collapse;' });
++      var hr = el('tr', {});
++      ['通道', '組別', '廠牌', '站號', '預設站號'].forEach(function (h) {
++        hr.appendChild(el('th', { style: 'text-align:left;padding:1px 6px;border-bottom:1px solid #999;font-weight:normal;' + GREY }, h));
++      });
++      t.appendChild(hr);
++      cols.appendChild(t);
++      return t;
++    }
++    function rowOf(r) {
++      var tr = el('tr', { 'data-ti': r.typeIdx });
++      var nm = el('td', { style: 'padding:1px 6px;white-space:nowrap;' });
++      nm.appendChild(r.lb ? el('span', { 'class': 'lb', id: r.lb }, r.name) : el('span', {}, r.name));
++      nm.title = r.saveName + (r.golden ? '（golden 有下拉）' : '（golden 沒有下拉：Index 區）');
++      tr.appendChild(nm);
++      tr.appendChild(el('td', { style: 'padding:1px 6px;' + GREY }, r.indexGroup ? 'Index' : '其他'));
++      var tdc = el('td', { style: 'padding:1px 6px;' });
++      var cb = selectWithOptions(r.cb);
++      cb.title = r.cb + '：[TempCtrl] ' + r.saveName;
++      tdc.appendChild(cb);
++      tr.appendChild(tdc);
++      var tda = el('td', { style: 'padding:1px 6px;' });
++      var ad = el('input', { 'class': 'ed', id: r.addr, type: 'text', size: '4', 'data-src': 'hsys-heater',
++        title: r.addr + '：[TempCtrl] ' + r.addrKey + '（空白＝預設站號；1～' + MIX.stationMax + '，E5DC 1～' + MIX.stationMaxE5DC + '）' });
++      tda.appendChild(ad);
++      tr.appendChild(tda);
++      tr.appendChild(el('td', { 'class': 'hsys-def', style: 'padding:1px 6px;white-space:nowrap;' + GREY }, ''));
++      return tr;
++    }
++    listed.forEach(function (r, i) {
++      if (i % PER === 0) table = newTable();
++      table.appendChild(rowOf(r));
++    });
++    var tHold = el('table', {});
++    (MIX.rows || []).forEach(function (r) { if (!r.listed) tHold.appendChild(rowOf(r)); });
++    hold.appendChild(tHold);
++    if (!listed.length) cols.appendChild(el('div', { style: GREY }, '（這台沒有要列的通道）'));
++    root.appendChild(cols);
++    root.appendChild(hold);
++    box.appendChild(root);
++
++    root.addEventListener('change', refresh);
++    root.addEventListener('input', function (ev) { if (ev.target && ev.target.tagName === 'INPUT' && ev.target.type === 'text') refresh(); });
++    setTimeout(refresh, 0);                           // 引擎在自己的 then 裡套值（在這之後）→ 套完再整理畫面
++  }
++
++  function modeNow() {
++    var rs = MIX ? document.querySelectorAll('#' + MIX.modeProxy + ' input[type="radio"]') : [];
++    return (rs.length > 1 && rs[1].checked) ? MODE_DIFF : MODE_SAME;
++  }
++  function setRO(x, on) {                             // 自己的唯讀（不碰引擎依權限關掉的 data-gb-dis）
++    if (!x) return;
++    if (on) { if (!x.disabled) { x.disabled = true; x.setAttribute('data-hs-ro', '1'); } }
++    else if (x.getAttribute('data-hs-ro') === '1') { x.disabled = false; x.removeAttribute('data-hs-ro'); }
++  }
++
++  /* ---- 畫面連動（模式、Index／其他、逐通道表、D-9a 提示）-------------------------------------- */
++  function refresh() {
++    if (!MIX || !$('hsysHeaterMix')) return;
++    var mode = modeNow();
++    var sI = $(MIX.indexProxy), sO = $(MIX.otherProxy);
++    if (MIX.indexLocked && sI && sO) sI.selectedIndex = sO.selectedIndex;   // Index 跟著其他位置（後端同規則）
++    var I = sI ? sI.selectedIndex : -1, O = sO ? sO.selectedIndex : -1;
++    var B = MIX.brand || {}, anyStation = false;
++    (MIX.rows || []).forEach(function (r) {
++      var cb = $(r.cb), ad = $(r.addr);
++      if (!cb || !ad) return;
++      if (mode === MODE_SAME) {
++        if (LAST_MODE === MODE_DIFF) cb.setAttribute('data-hs-diff', String(cb.selectedIndex));   // 切回「相同」前先記下逐通道值
++        cb.selectedIndex = r.indexGroup ? I : O;                                              // 算出來的廠牌（唯讀）
++        setRO(cb, true); setRO(ad, true);
++        ad.style.display = 'none';
++      } else {
++        if (LAST_MODE === MODE_SAME && cb.getAttribute('data-hs-diff') !== null) {
++          cb.selectedIndex = parseInt(cb.getAttribute('data-hs-diff'), 10);
++        }
++        cb.removeAttribute('data-hs-diff');
++        setRO(cb, false); setRO(ad, false);
++        ad.style.display = '';
+       }
+-      cb.style.left = c.cbLeft + 'px'; cb.style.top = c.cbTop + 'px';
+-      cb.style.width = sz.cbW + 'px'; cb.style.height = sz.cbH + 'px';
+-      // 選項每次照後端重建（引擎補的 cpp-item／cpp-text 也一起清掉，引擎套值時會再補）
+-      while (cb.options.length) cb.remove(0);
+-      opts.forEach(function (t) { var o = document.createElement('option'); o.textContent = t; cb.appendChild(o); });
+-      cb.title = c.cb + ' : TComboBox — [TempCtrl] ' + c.saveName + '\n' + NOTE;
+-      // 可見與否：引擎只切 visibility，這裡同步給標籤（golden SetCtrlItemVis 同時切 Label 與 ComboBox）
+-      var vis = c.visible ? '' : 'hidden';
+-      lb.style.visibility = vis; cb.style.visibility = vis;
+-      BUILT.push(c.cb);
++      var tc = cb.selectedIndex === B.tc401;
++      var def = tc ? r.defTc401 : r.defOther;
++      ad.placeholder = String(def);
++      var tr = cb.closest ? cb.closest('tr') : null;
++      var dc = tr ? tr.querySelector('.hsys-def') : null;
++      if (dc) dc.textContent = tc ? ('第 ' + def + ' 台・通道 ' + r.tc401Ch) : ('預設 ' + def);
++      if (mode === MODE_DIFF && r.listed && String(ad.value).trim() !== '' && String(ad.value).trim() !== String(def)) anyStation = true;
+     });
++    var note = $('hsysHeaterDiffNote');
++    if (note) note.textContent = mode === MODE_DIFF ? '（各溫控器不同：這兩個下拉照樣存檔，切回全機相同時用）' : '';
++    var hint = $('hsysHeaterHint');
++    if (hint) hint.style.display = (mode === MODE_DIFF || (!MIX.indexLocked && I !== O) || anyStation) ? '' : 'none';
++    LAST_MODE = mode;
+   }
+ 
+   var R = window.HT9045Recipe;
+@@ -90,24 +235,28 @@
+     };
+   }
+ 
+-  /* ---- (2) golden rgHeaterTypeClick 的畫面那一半 ------------------------------------------------- */
++  /* ---- (2) golden rgHeaterTypeClick 的畫面那一半（方案 D ⑤：全機相同、Index＝其他＝點的廠牌）----------------- */
+   function bindHeaterType() {
+     var rg = $('rgHeaterType');
+     if (!rg || rg.__hsysHeater) return;
+     rg.__hsysHeater = true;
+     rg.title = (rg.title ? rg.title + '\n' : '') +
+-               'golden rgHeaterTypeClick（HandlerSys.cpp:1519）：點選廠牌 → Heater 分頁所有通道設成同一個廠牌；' +
+-               '按下不寫檔（Steven 20260927 Q14＝B，偏離 golden），[TempCtrl] 各通道鍵與 HEATER_CTRL_TYPE 等按「存檔」一起寫。';
++               'golden rgHeaterTypeClick（HandlerSys.cpp:1519）：點選廠牌 → Heater 分頁設成「全機相同」、Index 與其他位置都是這個廠牌；' +
++               '按下不寫檔（Steven 20260927 Q14＝B，偏離 golden），按「存檔」才寫 [TempCtrl]。';
+     rg.addEventListener('change', function (ev) {
+       var t = ev.target;
+-      if (!t || t.type !== 'radio' || !t.checked) return;
++      if (!t || t.type !== 'radio' || !t.checked || !MIX) return;
+       var rs = rg.querySelectorAll('input[type="radio"]'), idx = -1;
+       for (var i = 0; i < rs.length; i++) if (rs[i] === t) idx = i;
+       if (idx < 0) return;
+-      BUILT.forEach(function (id) {
+-        var cb = $(id);
+-        if (cb && idx < cb.options.length) cb.selectedIndex = idx;   // golden :1535 pCb->ItemIndex=iOpt（看不見的也設）
+-      });
++      var ms = document.querySelectorAll('#' + MIX.modeProxy + ' input[type="radio"]');
++      if (ms.length > 1) { ms[0].checked = true; ms[1].checked = false; }
++      var sI = $(MIX.indexProxy), sO = $(MIX.otherProxy);
++      if (sO && idx < sO.options.length) sO.selectedIndex = idx;
++      if (sI && idx < sI.options.length) sI.selectedIndex = idx;
++      (MIX.rows || []).forEach(function (r) { var cb = $(r.cb); if (cb) cb.removeAttribute('data-hs-diff'); });
++      LAST_MODE = MODE_SAME;                          // 點了 Heater Type ＝ 全部同一廠牌：之後切到「各溫控器不同」從這個廠牌開始（不還原先前的逐通道值）
++      refresh();
+     });
+   }
+   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindHeaterType);
+diff --git a/page/ht9045_observer_wire.js b/page/ht9045_observer_wire.js
+index a38c892..c8813dc 100644
+--- a/page/ht9045_observer_wire.js
++++ b/page/ht9045_observer_wire.js
+@@ -10,7 +10,7 @@
+  *     tab     點「Tester Category」(1)／「System Message」(3) 頁籤＝pgcObservChange（:2336）
+  *             AI(W906-PROD-S116) 20260926（Steven 團隊）：另外放行 0 Counter／4 Yield（第一次點才 SetSiteYieldDiagram）／6 Test Information
+  *     ccKinds／ccKindsForm／ccHistory／ccHistoryForm  點 Counter 分頁的四個 RadioGroup（arg＝項次）＝golden :3220-3241（WriteContactKind）
+- *     AI(W906-PROD-S116Y) 20260927（Steven 團隊）：Yield 分頁的四個操作（C++ 回 captions＋yield，full:false）
++ *     AI(W906-PROD-S116Y) 20260927（Steven 團隊）：Yield 分頁的四個操作（C++ 回 captions＋yield，full:false）—— 會改記憶體，要權杖（見下面「權杖」）
+  *     yieldSite   點 mtRowA..D 任一格（arg＝0..3，text＝"x,y" 格子座標）＝golden mtRowAMouseUp（:3244-3273）：
+  *                 site 那一列切換那一條線；表頭那一列（(0,0) 的 Show All／Hide All、Now、Last n）整排切換
+  *     yieldMax／yieldMin  edYieldMax／edYieldMin 打完字（text＝框的字）＝golden edYieldMaxClick :3208-3212／edYieldMinClick :3214-3218
+@@ -36,9 +36,26 @@
+  * labModel／labSerialNo／labMachineID／labDeviceName／labReleaseDate 維持 ht9045_wire_dataobserver.js
+  * （sysText／tag）接線，不在這裡重複寫，免得兩個寫入者搶同一格。
+  *
+- * 權杖：observer.get 不在 WebBridgeServer 的豁免清單，要 control 權杖。每次指令都是
+- *   acquire → observer.get → release（持有只有幾毫秒）。Timer 每秒一次，若長期持有，
+- *   其他頁面（Setup／Contact…）就永遠拿不到權杖存檔。別人正持有時，timer 這一拍略過。
++ * 權杖：AI(W906-Q2-S124) 20260927（Steven 團隊；RULINGS_20260926 S124＝B「唯讀的查詢免權杖」）
++ *   唯讀的 act（READ_ACTS：open／timer／tab／rowNo／form／year／month／file／filter／query／ccKinds／ccKindsForm／
++ *   ccHistory／ccHistoryForm ＝ WebCmdGuard.cpp:112-113 kObserverActs 同一張）直接送 observer.get、不拿權杖 ——
++ *   observer.get 在 WebBridgeServer.cpp:1448 名稱級免權杖（St02 9d790ff2）。
++ *   舊的 wb_serve（沒有那一行）回 not-operator：退回原本的 acquire → observer.get → release（持有只有幾毫秒；
++ *   timer 那一拍權杖在別人手上就略過，跟改之前一樣）。
++ *   會改記憶體的四個 act（yieldSite／yieldMax／yieldMin／yieldClear：切換 bShowYieldSeries、設 LeftAxis、
++ *   SpeedButton1Click 清 HistroyBin）照舊每次 acquire → observer.get → release —— St02 要把這四個改成要權杖，
++ *   這樣它的改動進來之前、之後都能用。不在 READ_ACTS 的 act 一律當成要權杖（新的 act 要一條一條放行，同伺服器）。
++ *   （原本每一條都 acquire → get → release：Timer 每秒一次，別的頁面正要存檔時剛好撞上就會拿不到權杖。）
++ * 定時更新：AI(W906-Q2-S124) 20260927，比照 ht9045_contactct_wire.js（c35f375e）
++ *   一次只送一條：timer 撞上送出中就略過；使用者的操作排隊、不丟（每一個都是 golden 的一個操作，照順序送）；
++ *   送出中那一拍 timer 的回應，若後面已經排了使用者的操作，就是過時的，不畫。
++ *   沒人看就不拍：分頁在背景（document.hidden）或外框被縮小／關掉（background.html 把外框設 display:none，iframe 還在）。
++ *   回應沒變就不動畫面：timer 回應逐塊（captions／yield／testInfo）比對上一次，一樣的那一塊不重畫；狀態列 timer
++ *   不每秒改寫（「尚未接」「剛送過」之類的提示不會一秒就被蓋掉），只有「沒有來源」清單變了或剛從錯誤恢復才改。
++ *   開頁那一下沒成功（wb_serve 還沒起來…）：之後每拍重試開窗（原本會停在錯誤，要重新整理）。
++ *   window.__observer：loads（開頁＋操作）、ticks、same（timer 回應整包沒變）、renders（timer 有改畫面）、skipped（略過的拍）、
++ *   stale（過時不畫的拍）、tokenFallback（舊 wb_serve 退回拿權杖）、tokenOps（四個改記憶體的 act 拿權杖）、error、tickError、
++ *   data、last、acts、sent（這一頁送出的指令，最後 40 條：{cmd, act}）—— 探針 tools/webprobe/data_observer_token_probe.py 讀這些。
+  * ---------------------------------------------------------------------------
+  */
+ (function () {
+@@ -62,9 +79,16 @@
+     APHeadLabel18: 'golden cObserver.cpp:375 MyDBQClearDT()'
+   };
+ 
++  var TICK_MS = 1000;       // golden Timer1（dfm 沒設 Interval → VCL 預設 1000）
+   var D = null;             // 最近一次完整（full）回應
+   var busy = false, opened = false, tick = null;
+-  var st = window.__observer = { loads: 0, ticks: 0, skipped: 0, data: null, last: null, error: null, acts: [] };
++  var st = window.__observer = { loads: 0, ticks: 0, same: 0, renders: 0, skipped: 0, stale: 0, tokenFallback: 0, tokenOps: 0,
++                                 data: null, last: null, error: null, tickError: null, acts: [], sent: [] };
++  // AI(W906-Q2-S124) 20260927（Steven 團隊）：唯讀、免權杖的 act ＝ WebCmdGuard.cpp:112-113 kObserverActs（"" 本體也當 open）。
++  //   不在這張表的（yieldSite／yieldMax／yieldMin／yieldClear，以及將來新加的）一律 acquire → get → release。
++  var READ_ACTS = { '': 1, open: 1, timer: 1, tab: 1, rowNo: 1, form: 1, year: 1, month: 1, file: 1, filter: 1, query: 1,
++                    ccKinds: 1, ccKindsForm: 1, ccHistory: 1, ccHistoryForm: 1 };
++  function isReadAct(act) { return Object.prototype.hasOwnProperty.call(READ_ACTS, act === undefined || act === null ? '' : String(act)); }
+ 
+   function $(id) { return document.getElementById(id); }
+   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+@@ -78,6 +102,11 @@
+   }
+   function raw(name, extra) {
+     if (!window.HT9045Recipe || !HT9045Recipe.rawCmd) return Promise.reject(new Error('ht9045_recipe_client.js 沒有載入'));
++    // AI(W906-Q2-S124) 20260927：記下送出的指令（最後 40 條），探針用來看「唯讀 act 前面沒有 control.acquire」
++    var act = null;
++    if (name === 'observer.get') { try { act = JSON.parse(extra.value).act; } catch (e) { act = null; } if (act === undefined) act = null; }
++    st.sent.push({ cmd: name, act: act });
++    if (st.sent.length > 40) st.sent.shift();
+     return HT9045Recipe.rawCmd(name, extra);
+   }
+ 
+@@ -94,9 +123,38 @@
+     el.textContent = text;
+   }
+ 
+-  // acquire → observer.get → release。quiet=true（timer）時，權杖在別人手上就略過這一拍。
+-  // 操作員的點擊不可以因為剛好撞上 timer 那一拍而被吃掉：排隊，等前一個做完再送；timer 撞上就略過。
++  // AI(W906-Q2-S124) 20260927（Steven 團隊）：acquire → observer.get → release（持有只有幾毫秒）。
++  //   quiet=true（timer）時，權杖在別人手上就丟 'control-held'，讓這一拍略過。release 不論成敗都會送（有拿到才送）。
++  function getWithToken(extra, quiet, why) {
++    var held = false;
++    function release() { return held ? raw('control.release').catch(function () {}) : Promise.resolve(); }
++    return raw('control.acquire').then(function () {
++      held = true;
++      return raw('observer.get', extra).then(unwrap);
++    }, function (e) {
++      if (quiet) throw new Error('control-held');
++      throw new Error('拿不到控制權杖（' + e.message + '）—— 別的頁面正持有，' + why);
++    }).then(function (d) { return release().then(function () { return d; }); },
++            function (e) { return release().then(function () { throw e; }); });
++  }
++  // 唯讀 act：直接 observer.get（S124 免權杖）；舊 wb_serve 回 not-operator 才退回 getWithToken。
++  // 其他 act（四個改記憶體的 Yield 操作）：每次都 getWithToken（St02 把它們改成要權杖之前、之後都能用）。
++  function fetchObs(v, quiet) {
++    var extra = { value: JSON.stringify(v) };
++    if (!isReadAct(v.act)) {
++      st.tokenOps++;
++      return getWithToken(extra, quiet, 'observer.get 的 ' + v.act + ' 會改記憶體，要權杖');
++    }
++    return raw('observer.get', extra).then(unwrap, function (e) {
++      if (!e || e.message !== 'not-operator') throw e;
++      st.tokenFallback++;               // 舊的 wb_serve（沒有 WebBridgeServer.cpp:1448 的 observer.get 免權杖）
++      return getWithToken(extra, quiet, '這一版 wb_serve 的 observer.get 還要權杖（沒有 S124 免權杖那一行）');
++    });
++  }
++
++  // 一次只送一條。操作員的點擊不可以因為剛好撞上 timer 那一拍而被吃掉：排隊，等前一個做完照順序送；timer 撞上就略過。
+   var queue = [];
++  var errShown = false, lastNote = null;
+   function send(v, quiet) {
+     if (busy) {
+       if (quiet) { st.skipped++; return Promise.resolve(null); }
+@@ -106,32 +164,26 @@
+   }
+   function sendNow(v, quiet) {
+     busy = true;
+-    var held = false;
+-    return raw('control.acquire').then(function () { held = true; }, function (e) {
+-      if (quiet) throw new Error('control-held');
+-      throw new Error('拿不到控制權杖（' + e.message + '）—— 別的頁面正持有，observer.get 需要權杖');
+-    }).then(function () {
+-      return raw('observer.get', { value: JSON.stringify(v) }).then(unwrap);
+-    }).then(function (d) {
+-      st.last = d; st.error = null;
+-      if (v.act === 'timer') st.ticks++; else { st.loads++; st.acts.push(v.act); }
++    var isTick = v.act === 'timer';
++    return fetchObs(v, quiet).then(function (d) {
++      if (isTick) { st.ticks++; st.tickError = null; } else { st.loads++; st.acts.push(v.act); st.error = null; }
++      if (isTick && queue.length) { st.stale++; return d; }   // 後面已經排了使用者的操作：這一拍的回應過時，不畫
++      st.last = d;
+       if (d.full) { D = d; st.data = d; }
+-      render(d);
++      render(d, isTick);
+       return d;
+     }).catch(function (e) {
+       if (quiet && e.message === 'control-held') { st.skipped++; return null; }
+       if (window.HT9045Busy && HT9045Busy.is(e)) { st.busy = (st.busy || 0) + 1; say(HT9045Busy.NOTE); return null; }   // AI(W906-PROD-S116Y) 20260927：busy: 不是失敗（ht9045_busy_util.js）
+-      st.error = e.message;
++      if (isTick) st.tickError = e.message; else st.error = e.message;
++      errShown = true;
+       say('❌ observer.get（' + v.act + '）失敗：' + e.message, '#c00');
+       return null;
+     }).then(function (d) {
+-      var rel = held ? raw('control.release').catch(function () {}) : Promise.resolve();
+-      return rel.then(function () {
+-        busy = false;
+-        var next = queue.shift();
+-        if (next) sendNow(next.v, false).then(next.resolve);
+-        return d;
+-      });
++      busy = false;
++      var next = queue.shift();
++      if (next) sendNow(next.v, false).then(next.resolve);
++      return d;
+     });
+   }
+ 
+@@ -140,6 +192,8 @@
+   //   coolMs()（400 ms）內，同一個操作（act＋arg＋text 都一樣）再來一律丟掉 —— 不排隊（send() 碰到 busy 會排隊：連點兩下 site 格
+   //   就會切換兩次＝等於沒點）。golden TTMyTray 連點兩下是 OnMouseUp 兩次＝切換兩次；這裡照 Steven 的規則擋掉第二下（刻意的差異）。
+   //   ⚠ 伺服器那一道（WebCmdGuard）目前不擋這四個：observer.get 在它的名稱級白名單（WebCmdGuard.cpp:71「純讀」）。
++  //   AI(W906-Q2-S124) 20260927：⛔ 上一行已過時 —— WebCmdGuard 現在按 act 分（WebCmdGuard.cpp:112-113 kObserverActs、:127），
++  //   這四個不在讀取型名單，伺服器那一道也會擋（回 busy:，sendNow 當成「剛送過」處理）。這四個送出時都拿權杖（fetchObs）。
+   var yHold = {};
+   function coolMs() { return (window.HT9045Busy && HT9045Busy.coolMs) ? HT9045Busy.coolMs() : 400; }
+   function busyNote() { return (window.HT9045Busy && HT9045Busy.NOTE) || '同一個指令剛送過（上一下還在跑或剛做完），這一下略過'; }
+@@ -159,20 +213,37 @@
+     });
+   }
+ 
+-  function render(d) {
+-    renderCaptions(d);
++  // AI(W906-Q2-S124) 20260927（Steven 團隊）：isTick＝timer 回應。開頁／操作的回應照原本整塊重畫；
++  //   timer 回應逐塊比對上一次畫的內容（sig），一樣就不動那一塊的 DOM（每秒整塊 innerHTML 會把正在點的格子／radio 換掉）。
++  var sig = {};
++  function render(d, isTick) {
++    var drew = false;
++    function block(key, obj, fn) {
++      var s = JSON.stringify(obj);
++      if (isTick && s === sig[key]) return;
++      sig[key] = s;
++      fn(obj);
++      drew = true;
++    }
++    block('caps', [d.captions || null, d.visible || null, d.noSource || null], function () { renderCaptions(d); });
+     if (d.full) {
+-      renderCategory(d.category);
+-      renderEventLog(d.eventLog);
++      block('category', d.category, renderCategory);
++      block('eventLog', d.eventLog, renderEventLog);
+     }
+     // AI(W906-PROD-S116) 20260926（Steven 團隊）：Counter／Yield／Test Information。full 回應一定帶 counter；
+     //   timer 回應只在 C++ 端目前停在 Yield（4）或 Test Information（6）時帶那一頁（golden 那兩頁的格子是生產時即時更新的）。
+-    if (d.counter) renderCounter(d.counter);
+-    if (d.yield) renderYield(d.yield);
+-    if (d.testInfo) renderTestInfo(d.testInfo);
++    if (d.counter) block('counter', d.counter, renderCounter);
++    if (d.yield) block('yield', d.yield, renderYield);
++    if (d.testInfo) block('testInfo', d.testInfo, renderTestInfo);
++    if (isTick) { if (drew) st.renders++; else st.same++; }
+     var ns = Object.keys(d.noSource || {});
+-    say('observer.get ' + d.act + ' ✓ ' + new Date().toLocaleTimeString() +
+-        '（沒有來源、顯示 "---" 的格子：' + (ns.length ? ns.join('、') : '無') + '）', '#282');
++    var note = ns.length ? ns.join('、') : '無';
++    // timer 不每秒改寫狀態列：只有「沒有來源」清單變了、或剛從錯誤恢復才改（別的提示不被一秒蓋掉）
++    if (!isTick || note !== lastNote || errShown) {
++      say('observer.get ' + d.act + ' ✓ ' + new Date().toLocaleTimeString() + '（沒有來源、顯示 "---" 的格子：' + note + '）', '#282');
++      errShown = false;
++    }
++    lastNote = note;
+   }
+ 
+   function renderCaptions(d) {
+@@ -643,16 +714,34 @@
+     var t = $('evGrid'); if (t) t.innerHTML = '<tbody><tr><td style="text-align:center;color:#666;padding:8px;">讀取中…（observer.get）</td></tr></tbody>';
+     wire();
+     say('讀取中…（observer.get open）');
+-    send({ act: 'open' }).then(function (d) {
+-      if (!d) return;
+-      opened = true;
+-      tick = setInterval(function () {
+-        if (document.hidden) return;             // 沒人在看的分頁不拍（golden Timer1 只在視窗開著時跑）
+-        send({ act: 'timer' }, true);
+-      }, 1000);
++    openPage();
++    tick = setInterval(onTick, TICK_MS);         // AI(W906-Q2-S124) 20260927：一開始就拍；開頁沒成功時由 onTick 重試開窗
++  }
++  function openPage() {
++    return send({ act: 'open' }).then(function (d) {
++      if (d) opened = true;
++      return d;
+     });
+   }
++  // AI(W906-Q2-S124) 20260927（Steven 團隊）：沒人看就不拍（同 ht9045_contactct_wire.js visible()）。
++  //   golden Timer1 只在視窗開著時跑；分頁在背景、或 background.html 把外框設 display:none（縮小／關掉，iframe 還在）都算沒人看。
++  function visible() {
++    if (document.hidden) return false;
++    try {
++      var fe = window.frameElement;               // background.html 的 iframe；直接開這一頁時是 null
++      if (fe && fe.getClientRects().length === 0) return false;   // 外框 display:none（縮小／關掉）
++    } catch (e) { /* 拿不到 frameElement：當作看得到 */ }
++    return true;
++  }
++  function onTick() {
++    if (!visible()) return;
++    if (!opened) {                               // 開頁那一下沒成功（例如 wb_serve 還沒起來）：每拍重試開窗
++      if (!busy) openPage();
++      return;
++    }
++    send({ act: 'timer' }, true);
++  }
+   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
+ 
+-  window.HT9045Observer = { send: send, data: function () { return D; } };
++  window.HT9045Observer = { send: send, data: function () { return D; }, tick: onTick, isReadAct: isReadAct };
+ })();
+diff --git a/page/ht9045_wire_statussecurity.js b/page/ht9045_wire_statussecurity.js
+index 9b2dc61..3ea9561 100644
+--- a/page/ht9045_wire_statussecurity.js
++++ b/page/ht9045_wire_statussecurity.js
+@@ -471,7 +471,7 @@ window.HT9045SecurityWireCfg = {
+       b.style.display = v ? '' : 'none';                                 // golden Visible=false
+     });
+     if (r && r.executed && r.allowed === false) note('此等級不足以使用密碼設定（golden Insufficient(29)）', true);
+-    else if (r && r.executed && r.mode === 'book-binary') note('密碼本是 login.dat（二進位），golden 由 PW_Editor 編輯；這裡只能看名單', false);
++    else if (r && r.executed && r.mode === 'book-binary') note('密碼本是 login.dat（二進位）：V906 可以新增／刪除／修改（Steven Q9＝B；golden 只能用 PW_Editor），寫入前先備份、寫完驗證', false);   // AI(W906-SEC-Q9) 20260927
+   }
+   function refresh() { return op({ op: 'state' }).then(function (r) { show(r); return r; }); }
+ 
+@@ -552,7 +552,7 @@ window.HT9045SecurityWireCfg = {
+       if (r.executed === false) {
+         if (r.guard === 'binary-book') {
+           var u = (r.users || []).map(function (x) { return x.name; });
+-          note('login.dat 是二進位密碼本，golden 這顆鈕改不到（由 PW_Editor 編輯）。等級 ' + r.level + ' 名單：' + (u.length ? u.join('、') : '（無）'), false);
++          note('login.dat 是二進位密碼本，現在不能從這裡改（' + (r.detail || '') + '）。等級 ' + r.level + ' 名單：' + (u.length ? u.join('、') : '（無）'), false);   // AI(W906-SEC-Q9)：bUseLoginDatToSetLevel 關著或檔案不是 64004 bytes
+         } else note('未執行：' + (r.guard || r.code || '') + ' ' + (r.detail || r.message || ''), true);
+         return;
+       }
+-- 
+2.55.0.windows.5
+

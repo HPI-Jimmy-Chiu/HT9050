@@ -1,0 +1,430 @@
+From e1a16cfaa4823ff24bd92a7e39889f4408128b01 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 09:45:25 +0800
+Subject: [PATCH 19/21] OPLOG: operation log -- every web command, its reply,
+ and each motor's state changes go to runcfg\logs\oplog_YYYYMMDD.txt
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260928: "接下來我要測試motor test功能，你能夠透過操作的LOG來知道我的動作對吧? 跟你反應問題你能夠處理清楚解嗎? 不能清楚
+解析的話，要強化LOG和state record功能". Before this, Motor Test's presses and the server's answers were only printed to the VS
+Code debug console (no file) and the log.event ring was empty (Motor Test sends none), so a problem report could not be traced.
+- WebBridgeServer.cpp: webbridge::g_W906OpLogHook (0 = off: tests and every other user unchanged), called for every cmd frame
+  as received (RECV, socket thread), every SendAck (ACK: control.*, refusals, malformed), and every CompleteCommand (DONE, tick
+  thread). Occupies blank lines / same lines, no line moves.
+- tools/wb_serve.cpp (end of file): W906_OpLogInit / W906_OpHook / W906_OpLogMotorRuntime. On only when W906_OPLOG_DIR is set
+  (both IOWEB F5 configurations in .vscode/launch.json set it to runcfg\logs). Lines: START (pid, port, token-enforce, exe
+  build time), CMD (c<conn>#<id> + raw JSON, 600 bytes max), OK/NG (reply or refusal, 400 bytes max, ms; "socket" for the
+  socket-thread answers), MOT (per axis, only the fields that changed old->new, plus cmd/enc position; first one = baseline;
+  fields svo alm st busy homing homeJob loopJob homeFlag cw home ccw emg ledAlm softCw softCcw q err, taken from the same
+  /api/struct/motor/runtime body the page reads, after every W906_ApiCacheRefresh), PAGE (Motor Test lock / lock text, motor
+  power relay / state / pending, selected motor, Light Scale). fflush per line (readable while running), one file per day.
+  Quiet unless they fail: sys.ping, ui.windows.put, cfg.resync, *.get, control.acquire, control.release (first run 20260929:
+  acquire/release were 422 of 1178 lines in 4 minutes). auth.* / security.* / any frame mentioning passw / pwd / pwbook: the
+  command content and the reply are NOT written, only the name, ok/ng and executed/guard.
+- cStateRecord.cpp (NOT golden, one line on a blank line): a State Record also copies today's oplog into its folder (background
+  job, before the zip); nothing when W906_OPLOG_DIR is not set.
+Verified: the first run (EastSun's F5 20260929 09:32) wrote 1178 lines: START, MOT baselines, the motor power relay going on,
+MInArmX / MInArmY selected, "*Lock by [00] MInArmX moveing" / "*Lock by Homeing", IO outputs refused with the engine's reason.
+Build build_integ_ship_x86 --target wb_serve exit 0, no warning in the new code; pe_truncation_check 178 complete.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ .vscode/launch.json           |   4 +-
+ WebBridge/WebBridgeServer.cpp |   8 +-
+ cStateRecord.cpp              |   2 +-
+ tools/wb_serve.cpp            | 284 +++++++++++++++++++++++++++++++++-
+ 4 files changed, 288 insertions(+), 10 deletions(-)
+
+diff --git a/.vscode/launch.json b/.vscode/launch.json
+index 19cc2fd..c4a17a8 100644
+--- a/.vscode/launch.json
++++ b/.vscode/launch.json
+@@ -118,7 +118,7 @@
+         { "name": "W906_BINCOUNT_PATH",    "value": "${workspaceFolder}\\..\\runcfg\\logs\\BinCount.ini" },
+         { "name": "W906_PWBOOK_PATH",      "value": "${workspaceFolder}\\..\\runcfg\\logs\\pwbook.ini" },
+         { "name": "W906_TEACH_INI_PATH",   "value": "${workspaceFolder}\\..\\runcfg\\system\\teach.ini" },
+-        { "name": "W906_IOTIMING_LOG",     "value": "${workspaceFolder}\\..\\runcfg\\logs\\io_click_timing.csv" }
++        { "name": "W906_IOTIMING_LOG",     "value": "${workspaceFolder}\\..\\runcfg\\logs\\io_click_timing.csv" }, { "name": "W906_OPLOG_DIR", "value": "${workspaceFolder}\\..\\runcfg\\logs" }
+       ],
+       "MIMode": "gdb",
+       "miDebuggerPath": "${env:LOCALAPPDATA}\\Programs\\ht9045-nonoracle-toolchain\\mingw32\\bin\\gdb.exe",
+@@ -158,7 +158,7 @@
+         { "name": "W906_BINCOUNT_PATH",    "value": "${workspaceFolder}\\..\\runcfg\\logs\\BinCount.ini" },
+         { "name": "W906_PWBOOK_PATH",      "value": "${workspaceFolder}\\..\\runcfg\\logs\\pwbook.ini" },
+         { "name": "W906_TEACH_INI_PATH",   "value": "${workspaceFolder}\\..\\runcfg\\system\\teach.ini" },
+-        { "name": "W906_IOTIMING_LOG",     "value": "${workspaceFolder}\\..\\runcfg\\logs\\io_click_timing.csv" }
++        { "name": "W906_IOTIMING_LOG",     "value": "${workspaceFolder}\\..\\runcfg\\logs\\io_click_timing.csv" }, { "name": "W906_OPLOG_DIR", "value": "${workspaceFolder}\\..\\runcfg\\logs" }
+       ],
+       "MIMode": "gdb",
+       "miDebuggerPath": "${env:LOCALAPPDATA}\\Programs\\ht9045-nonoracle-toolchain\\mingw32\\bin\\gdb.exe",
+diff --git a/WebBridge/WebBridgeServer.cpp b/WebBridge/WebBridgeServer.cpp
+index 6dab6fa..ff1f4f3 100644
+--- a/WebBridge/WebBridgeServer.cpp
++++ b/WebBridge/WebBridgeServer.cpp
+@@ -253,7 +253,7 @@ static std::string QuoteString(const std::string& s)
+ 
+ }  // namespace sib
+ // =============================== END SIBLING ADAPTER =========================
+-
++void (*g_W906OpLogHook)(const char* kind, unsigned long long conn, double id, bool ok, const std::string& a, const std::string& b) = 0;   //AI(W906-OPLOG) 20260928: operation-log tap (wb_serve installs it: tools/wb_serve.cpp W906_OpLogInit). kind "RECV" (socket thread, a=cmd, b=raw frame) / "ACK" (socket thread SendAck, a=error) / "DONE" (tick thread CompleteCommand, a=result). 0 = off (tests, every other user). Occupies a blank line, no line moves
+ namespace {
+ 
+ const size_t kMaxHttpHead    = 32u * 1024u;   // request head before we give up
+@@ -1305,7 +1305,7 @@ std::string WebBridgeServer::Impl::AckJson(double id, bool ok, const std::string
+ 
+ void WebBridgeServer::Impl::SendAck(Conn& c, double id, bool ok, const std::string& error)
+ {
+-    SendJson(c, AckJson(id, ok, error));
++    SendJson(c, AckJson(id, ok, error));  if (g_W906OpLogHook) g_W906OpLogHook("ACK", c.id, id, ok, error, std::string());   //AI(W906-OPLOG) 20260928
+     WbGuard sl(statsMx);
+     ++stats.acksSent;
+ }
+@@ -1353,7 +1353,7 @@ void WebBridgeServer::Impl::HandleTextMessage(Conn& c, const std::string& text)
+     const cJSON* jCmd = cJSON_GetObjectItemCaseSensitive(root, "cmd");
+     const std::string cmdName = (jCmd && cJSON_IsString(jCmd) && jCmd->valuestring)
+                                 ? std::string(jCmd->valuestring) : std::string();
+-
++    if (g_W906OpLogHook) g_W906OpLogHook("RECV", c.id, id, true, cmdName, text);   //AI(W906-OPLOG) 20260928: every cmd frame as received (occupies a blank line, no line moves)
+     const cJSON* jTag = cJSON_GetObjectItemCaseSensitive(root, "tag");
+     const std::string tagName = (jTag && cJSON_IsString(jTag) && jTag->valuestring)
+                                 ? std::string(jTag->valuestring) : std::string();
+@@ -1613,7 +1613,7 @@ void WebBridgeServer::Impl::CompleteCommand(unsigned long long ticket, bool ok,
+         o.frame  = AckJson(browserId, ok, error);
+         outQ_.push_back(o);
+     }
+-    Wake();
++    Wake();  if (g_W906OpLogHook) g_W906OpLogHook("DONE", connId, browserId, ok, error, std::string());   //AI(W906-OPLOG) 20260928: tick thread
+ }
+ 
+ void WebBridgeServer::Impl::PostAlarm(const std::string& code, const std::string& text,
+diff --git a/cStateRecord.cpp b/cStateRecord.cpp
+index 3025a3c..ae5a788 100644
+--- a/cStateRecord.cpp
++++ b/cStateRecord.cpp
+@@ -1080,7 +1080,7 @@ void TfMain::W906_DoStateRecordBody(int iShowAlarm, bool bManual)              /
+     MyForceDirectories(NewPath+"\\HT9045\\config");
+     MyForceDirectories(NewPath+"\\GPIB9045\\system");
+     MyForceDirectories(NewPath+"\\GPIBLOG");
+-
++    { const char* od = std::getenv("W906_OPLOG_DIR"); if (od && *od) { SYSTEMTIME lt; ::GetLocalTime(&lt); char nm[40]; std::snprintf(nm, sizeof(nm), "\\oplog_%04d%02d%02d.txt", lt.wYear, lt.wMonth, lt.wDay); job.copies.push_back(std::make_pair(std::string(od) + nm, std::string(NewPath.c_str()) + nm)); } }   //AI(W906-OPLOG) 20260928: NOT golden -- today's operation log (tools/wb_serve.cpp, end of file) goes into the record too (copied by the background job before the zip); nothing when W906_OPLOG_DIR is not set. Occupies a blank line, no line moves
+     fMain->SendMSG_CMD(MSG_CMD_State_Record);                                   //wei 20170911 (steven) State Record
+ 
+     if(FileExists("d:\\HT9045\\7z.exe")==false)                                 //Steven 20110222 : 改成先把log給壓縮然後才複製
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 8e12ee1..e7d2072 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -4302,7 +4302,7 @@ int main(int argc, char** argv)
+     webbridge::WebBridgeConfig cfg;
+     cfg.port         = port;
+     cfg.documentRoot = root;
+-    cfg.maxConnections = 64;  cfg.enforceControlToken = (W906_WEB_TOKEN_ENFORCE != 0);   //AI(W906-TOKEN-OFF) 20260928: MachineType.h 檔尾（EastSun「權杖先不要在機台端卡控」，現在 0 = 不擋）   //AI(W906-WSFANOUT) 20260926: default 16 was FULL on this machine (measured 23 TCP connections: every HMI window opens 1-2 WebSockets + the pages' HTTP polls), so /api/struct/* requests sat in the backlog forever and Motor Test froze. FD_SETSIZE 128 - 8 = 120 cap (WebBridgeServer.cpp:578). Same line, no line moves.   // bindAddress and readOnly keep their safe defaults on purpose.
++    cfg.maxConnections = 64;  cfg.enforceControlToken = (W906_WEB_TOKEN_ENFORCE != 0);  { extern void W906_OpLogInit(int port); W906_OpLogInit((int)port); }   //AI(W906-OPLOG) 20260928: operation log (end of file; on only when W906_OPLOG_DIR is set)   //AI(W906-TOKEN-OFF) 20260928: MachineType.h 檔尾（EastSun「權杖先不要在機台端卡控」，現在 0 = 不擋）   //AI(W906-WSFANOUT) 20260926: default 16 was FULL on this machine (measured 23 TCP connections: every HMI window opens 1-2 WebSockets + the pages' HTTP polls), so /api/struct/* requests sat in the backlog forever and Motor Test froze. FD_SETSIZE 128 - 8 = 120 cap (WebBridgeServer.cpp:578). Same line, no line moves.   // bindAddress and readOnly keep their safe defaults on purpose.
+ 
+     // AI(W906-Q30-8) 20260922: 警報信箱的目錄。**從 root 導出，不要各自寫死。**
+     //   同事的 JSON-Simulator/README.md 與 JsonBridge.cs:41-43 寫死
+@@ -6373,7 +6373,7 @@ void W906_OutputYieldHook()
+ //  string under a CRITICAL_SECTION -- same shape as g_wdLock above. JSON contract unchanged.
+ //  config endpoints (IoConfigJson / MotorConfigJson) read only HSys tables and stay as they were.
+ // ===========================================================================
+-namespace {
++void W906_OpLogMotorRuntime(const std::string& json);  namespace {   //AI(W906-OPLOG) 20260928: declared at global scope HERE (a block-scope extern inside the unnamed namespace would name a different function); defined at the end of the file
+ CRITICAL_SECTION g_apiCacheLock;
+ bool             g_apiCacheReady = false;
+ std::string      g_apiCache[4];
+@@ -6421,7 +6421,7 @@ void W906_ApiCacheRefresh()
+     g_apiSchemaKey = key;
+     ::EnterCriticalSection(&g_apiCacheLock);
+     for (int i = 0; i < 4; ++i) if (built[i]) g_apiCache[i].swap(fresh[i]);
+-    ::LeaveCriticalSection(&g_apiCacheLock);
++    ::LeaveCriticalSection(&g_apiCacheLock);  if (built[3]) ::W906_OpLogMotorRuntime(g_apiCache[3]);   //AI(W906-OPLOG) 20260928: diff the motor runtime body the page reads (tick thread = the only writer of g_apiCache, so no lock needed to read it here)
+ }
+ 
+ void W906_ApiCacheInit()
+@@ -7822,3 +7822,281 @@ void W906_RunStartModeCommand(webbridge::WebBridgeServer& server, const webbridg
+                 SystemStart ? "  [SystemStart: golden does not change the mode while running]" : "");
+     server.CompleteCommand((unsigned long long)wc.id, SystemStart == 0 && LastSet.iRunStartMode == idx, W906_RsmAckJson(want, before));
+ }
++
++// =============================================================================
++//  AI(W906-OPLOG) 20260928: 操作紀錄 —— 不是 golden。
++//  EastSun 20260928：「接下來我要測試 motor test 功能，你能夠透過操作的LOG來知道我的動作對吧? 跟你反應問題你能夠處理清楚解嗎?
++//  不能清楚解析的話，要強化LOG和state record功能」。在這之前 Motor Test 的按鍵與伺服器的回覆只印在 VS Code 的除錯主控台
++//  （沒有檔案），log.event 環也是 0 筆（Motor Test 頁不送）⇒ 事後無法知道按了什麼、伺服器回了什麼、軸當時是什麼狀態。
++//
++//  檔案：%W906_OPLOG_DIR%\oplog_YYYYMMDD.txt（UTF-8）。沒設這個環境變數就一行都不寫、勾子也不裝（WebBridgeServer 的
++//        g_W906OpLogHook 維持 0）。F5「IOWEB(這台)」兩個設定都設成 runcfg\logs。每行寫完就 fflush，跑的同時就讀得到。
++//  每一行：HH:MM:SS.mmm  種類  內容
++//    START  wb_serve 起來了（pid、port、權杖擋不擋人、exe 建置時間）
++//    CMD    網頁送來的指令：c<連線>#<指令 id>  原始 JSON（最多 600 字）
++//    OK/NG  它的回覆：c<連線>#<id> <指令名>  結果或拒絕理由（最多 400 字）  (<ms>)。socket 執行緒當場回的
++//           （control.*、not-operator、格式錯、佇列滿）標 socket；其他是 tick 執行緒做完才回的
++//    MOT    某一軸的狀態變了：只列變了的欄位 舊->新，| 後面附指令位置／編碼器位置；每軸第一筆是 baseline
++//           欄位：svo servo、alm 警報、st 卡的軸狀態、busy 在動、homing 回原點中、homeJob／loopJob Motor Test 的工作、
++//           homeFlag 引擎的原點旗標、cw／home／ccw／emg／ledAlm／softCw／softCcw 燈號、q 資料品質、err 錯誤文字
++//           （來源＝網頁讀的同一份 /api/struct/motor/runtime，W906_ApiCacheRefresh 每次重建後比一次）
++//    PAGE   Motor Test 頁：鎖（locked／lockText）、馬達電源（relay／power／powerPending）、選的馬達、Light Scale
++//  太吵的（sys.ping、ui.windows.put、cfg.resync、*.get 查詢）成功時不記，失敗照記。
++//  執行緒：CMD 與 socket 回覆在 socket 執行緒；tick 回覆、MOT、PAGE 在 tick 執行緒 —— 共用 g_opLock。
++//  放在檔尾，上面的行號都不動。
++// =============================================================================
++namespace webbridge { extern void (*g_W906OpLogHook)(const char*, unsigned long long, double, bool, const std::string&, const std::string&); }
++namespace {
++CRITICAL_SECTION g_opLock;
++bool             g_opOn = false;
++std::string      g_opDir;
++std::FILE*       g_opFile = 0;
++int              g_opDay = 0;
++struct OpPend { std::string cmd; DWORD t0; bool quiet; bool secret; };
++std::map<std::pair<unsigned long long, long long>, OpPend> g_opPend;           // (連線, 指令 id) -> 還沒回覆的
++typedef std::vector<std::pair<std::string, std::string> > OpFields;
++std::map<std::string, OpFields> g_opMot;                                        // 每軸上一次的欄位（tick 執行緒）
++OpFields g_opPage;
++bool     g_opPageBase = false;
++
++// 換行／tab 換成空白，超過 n 位元組就截掉並註明截了多少（不切在 UTF-8 字的中間）
++std::string OpClip(const std::string& s, std::size_t n)
++{
++    std::string t;
++    for (std::size_t i = 0; i < s.size() && t.size() < n; ++i) t += (s[i] == '\r' || s[i] == '\n' || s[i] == '\t') ? ' ' : s[i];
++    if (s.size() > n) {
++        if (((unsigned char)s[n] & 0xC0) == 0x80) {
++            std::size_t k = t.size();
++            while (k > 0 && ((unsigned char)t[k - 1] & 0xC0) == 0x80) --k;
++            if (k > 0) --k;
++            t.resize(k);
++        }
++        char b[32];
++        std::snprintf(b, sizeof(b), "...(+%u)", (unsigned)(s.size() - t.size()));
++        t += b;
++    }
++    return t;
++}
++
++void OpLine(const char* kind, const std::string& text)
++{
++    if (!g_opOn) return;
++    ::EnterCriticalSection(&g_opLock);
++    SYSTEMTIME st;
++    ::GetLocalTime(&st);
++    const int day = st.wYear * 10000 + st.wMonth * 100 + st.wDay;
++    if (g_opFile == 0 || day != g_opDay) {                                      // 每天一個檔
++        if (g_opFile) std::fclose(g_opFile);
++        char name[48];
++        std::snprintf(name, sizeof(name), "\\oplog_%04d%02d%02d.txt", st.wYear, st.wMonth, st.wDay);
++        g_opFile = std::fopen((g_opDir + name).c_str(), "ab");
++        g_opDay = day;
++        if (g_opFile) { std::fseek(g_opFile, 0, SEEK_END); if (std::ftell(g_opFile) == 0) std::fputs("\xEF\xBB\xBF", g_opFile); }
++    }
++    if (g_opFile) {
++        std::fprintf(g_opFile, "%02d:%02d:%02d.%03d  %-5s %s\r\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, kind, text.c_str());
++        std::fflush(g_opFile);
++    }
++    ::LeaveCriticalSection(&g_opLock);
++}
++
++bool OpQuiet(const std::string& c)
++{
++    // control.acquire／control.release：網頁一直在拿／還（閒置 30 秒自動還、IO 頁 30 秒還、keepAlive），0929 第一次實測
++    // 4 分鐘 422 行、佔全檔 36%；權杖現在不擋人（W906_WEB_TOKEN_ENFORCE 0），成功的只是雜訊。control.takeover 照記（誰接管）。
++    if (c == "sys.ping" || c == "ui.windows.put" || c == "cfg.resync" || c == "control.acquire" || c == "control.release") return true;
++    return c.size() > 4 && c.compare(c.size() - 4, 4, ".get") == 0;
++}
++
++// 帳號／密碼類：指令內容與回覆都不寫進檔案（登入、改密碼、密碼簿會帶明碼），只記指令名、成敗、guard
++bool OpSecret(const std::string& c, const std::string& frame)
++{
++    if (c.compare(0, 5, "auth.") == 0 || c.compare(0, 9, "security.") == 0) return true;
++    std::string low(frame);
++    for (std::size_t i = 0; i < low.size(); ++i) if (low[i] >= 'A' && low[i] <= 'Z') low[i] = (char)(low[i] - 'A' + 'a');
++    return low.find("passw") != std::string::npos || low.find("pwd") != std::string::npos || low.find("pwbook") != std::string::npos;
++}
++
++// 回覆裡只挑 executed／guard 兩個欄位出來（帳號／密碼類用）
++std::string OpSecretSummary(const std::string& r)
++{
++    std::string s;
++    std::string::size_type p = r.find("\"executed\":");
++    if (p != std::string::npos) s += r.substr(p, r.compare(p + 11, 4, "true") == 0 ? 15 : 16);
++    p = r.find("\"guard\":\"");
++    if (p != std::string::npos) { const std::string::size_type e = r.find('"', p + 9); if (e != std::string::npos) s += (s.empty() ? "" : ",") + OpClip(r.substr(p, e - p + 1), 80); }
++    return "(內容不記：帳號／密碼類)" + (s.empty() ? std::string() : " " + s);
++}
++
++std::string OpId(unsigned long long conn, double id)
++{
++    char b[48];
++    std::snprintf(b, sizeof(b), "c%lu#%.0f", (unsigned long)conn, id);
++    return b;
++}
++
++void W906_OpHook(const char* kind, unsigned long long conn, double id, bool ok, const std::string& a, const std::string& b)
++{
++    if (!g_opOn) return;
++    const std::pair<unsigned long long, long long> key(conn, (long long)id);
++    if (std::strcmp(kind, "RECV") == 0) {
++        const bool quiet = OpQuiet(a);
++        const bool secret = OpSecret(a, b);
++        OpPend p;
++        p.cmd = a; p.t0 = ::GetTickCount(); p.quiet = quiet; p.secret = secret;
++        ::EnterCriticalSection(&g_opLock);
++        g_opPend[key] = p;
++        if (g_opPend.size() > 2000) g_opPend.erase(g_opPend.begin());         // 斷線的那些永遠等不到回覆：設上限
++        ::LeaveCriticalSection(&g_opLock);
++        if (!quiet) OpLine("CMD", OpId(conn, id) + "  " + (secret ? "{\"cmd\":\"" + OpClip(a, 64) + "\"} (內容不記：帳號／密碼類)" : OpClip(b, 600)));
++        return;
++    }
++    OpPend p;
++    bool have = false;
++    ::EnterCriticalSection(&g_opLock);
++    std::map<std::pair<unsigned long long, long long>, OpPend>::iterator it = g_opPend.find(key);
++    if (it != g_opPend.end()) { p = it->second; have = true; g_opPend.erase(it); }
++    ::LeaveCriticalSection(&g_opLock);
++    if (!have && ok) return;                                                    // ping 的 ack 之類
++    if (have && p.quiet && ok) return;
++    const bool sock = (std::strcmp(kind, "ACK") == 0);
++    char ms[48];
++    if (have) std::snprintf(ms, sizeof(ms), "  (%lu ms%s)", (unsigned long)(::GetTickCount() - p.t0), sock ? ", socket" : "");
++    else      std::snprintf(ms, sizeof(ms), "  (%s)", sock ? "socket" : "tick");
++    OpLine(ok ? "OK" : "NG", OpId(conn, id) + " " + (have ? p.cmd : std::string("?")) + "  " + (have && p.secret ? OpSecretSummary(a) : OpClip(a, 400)) + ms);
++}
++
++const cJSON* OpGet(const cJSON* o, const char* k) { return o ? cJSON_GetObjectItemCaseSensitive(o, k) : 0; }
++
++std::string OpVal(const cJSON* j)
++{
++    if (!j || cJSON_IsNull(j)) return "null";
++    if (cJSON_IsBool(j)) return cJSON_IsTrue(j) ? "1" : "0";
++    if (cJSON_IsNumber(j)) {
++        char b[48];
++        const double v = j->valuedouble;
++        if (v > -1e15 && v < 1e15 && v == (double)(long long)v) std::snprintf(b, sizeof(b), "%.0f", v);
++        else std::snprintf(b, sizeof(b), "%.3f", v);
++        return b;
++    }
++    if (cJSON_IsString(j) && j->valuestring) return std::string("\"") + OpClip(j->valuestring, 160) + "\"";
++    return "?";
++}
++
++void OpAdd(OpFields& f, const char* k, const cJSON* j) { f.push_back(std::make_pair(std::string(k), OpVal(j))); }
++
++std::string OpAll(const OpFields& f)
++{
++    std::string s;
++    for (std::size_t i = 0; i < f.size(); ++i) s += (i ? " " : "") + f[i].first + "=" + f[i].second;
++    return s;
++}
++
++std::string OpDiff(const OpFields& was, const OpFields& now)
++{
++    std::string d;
++    for (std::size_t i = 0; i < now.size(); ++i) {
++        const std::string* old = 0;
++        for (std::size_t k = 0; k < was.size(); ++k) if (was[k].first == now[i].first) { old = &was[k].second; break; }
++        if (old && *old == now[i].second) continue;
++        d += (d.empty() ? "" : "  ") + now[i].first + " " + (old ? *old : std::string("-")) + "->" + now[i].second;
++    }
++    return d;
++}
++}  // namespace
++
++void W906_OpLogInit(int port)
++{
++    const char* d = std::getenv("W906_OPLOG_DIR");
++    if (!d || !*d) { std::printf("oplog: off (W906_OPLOG_DIR not set)\n"); return; }
++    ::InitializeCriticalSection(&g_opLock);
++    g_opDir = d;
++    while (!g_opDir.empty() && (g_opDir[g_opDir.size() - 1] == '\\' || g_opDir[g_opDir.size() - 1] == '/')) g_opDir.erase(g_opDir.size() - 1);
++    ::CreateDirectoryA(g_opDir.c_str(), 0);                                     // 已存在就什麼都不做
++    g_opOn = true;
++    char exe[MAX_PATH] = "";
++    ::GetModuleFileNameA(0, exe, MAX_PATH);
++    char built[32] = "?";
++    WIN32_FILE_ATTRIBUTE_DATA fa;
++    if (::GetFileAttributesExA(exe, GetFileExInfoStandard, &fa)) {
++        FILETIME lt; SYSTEMTIME s;
++        ::FileTimeToLocalFileTime(&fa.ftLastWriteTime, &lt);
++        ::FileTimeToSystemTime(&lt, &s);
++        std::snprintf(built, sizeof(built), "%04d-%02d-%02d %02d:%02d:%02d", s.wYear, s.wMonth, s.wDay, s.wHour, s.wMinute, s.wSecond);
++    }
++    char head[128];
++    std::snprintf(head, sizeof(head), "wb_serve pid=%lu port=%d token-enforce=%d exe-built=", (unsigned long)::GetCurrentProcessId(), port,
++                  (int)(W906_WEB_TOKEN_ENFORCE != 0));
++    OpLine("START", std::string(head) + built + "  " + exe);
++    webbridge::g_W906OpLogHook = &W906_OpHook;
++    std::printf("oplog: %s\\oplog_<yyyymmdd>.txt\n", g_opDir.c_str());
++}
++
++void W906_OpLogMotorRuntime(const std::string& json)
++{
++    if (!g_opOn) return;
++    cJSON* root = cJSON_Parse(json.c_str());
++    if (!root) return;
++    const cJSON* ms = OpGet(root, "motors");
++    if (ms && cJSON_IsArray(ms)) {
++        for (const cJSON* m = ms->child; m; m = m->next) {
++            const cJSON* idj = OpGet(m, "motorId");
++            if (!idj || !cJSON_IsString(idj) || !idj->valuestring) continue;
++            const std::string id = idj->valuestring;
++            const cJSON* st  = OpGet(m, "state");
++            const cJSON* mo  = OpGet(m, "motion");
++            const cJSON* dg  = OpGet(m, "diag");
++            const cJSON* led = OpGet(st, "led");
++            const cJSON* pos = OpGet(m, "position");
++            OpFields f;
++            OpAdd(f, "svo", OpGet(st, "servoOn"));
++            OpAdd(f, "alm", OpGet(st, "alarm"));
++            OpAdd(f, "st", OpGet(dg, "stateText"));
++            OpAdd(f, "busy", OpGet(mo, "busy"));
++            OpAdd(f, "homing", OpGet(mo, "homeBusy"));
++            OpAdd(f, "homeJob", OpGet(mo, "homeJob"));
++            OpAdd(f, "loopJob", OpGet(mo, "loopJob"));
++            OpAdd(f, "homeFlag", OpGet(dg, "homeFlag"));
++            if (led && cJSON_IsObject(led)) {
++                OpAdd(f, "cw", OpGet(led, "cw"));
++                OpAdd(f, "home", OpGet(led, "home"));
++                OpAdd(f, "ccw", OpGet(led, "ccw"));
++                OpAdd(f, "emg", OpGet(led, "emg"));
++                OpAdd(f, "ledAlm", OpGet(led, "alarm"));
++                OpAdd(f, "softCw", OpGet(led, "softCw"));
++                OpAdd(f, "softCcw", OpGet(led, "softCcw"));
++            } else {
++                f.push_back(std::make_pair(std::string("led"), std::string("null")));
++            }
++            OpAdd(f, "q", OpGet(st, "quality"));
++            OpAdd(f, "err", OpGet(dg, "errText"));
++            const std::string where = "cmd=" + OpVal(OpGet(pos, "cmdPos")) + " enc=" + OpVal(OpGet(pos, "encPos"));
++            std::map<std::string, OpFields>::iterator it = g_opMot.find(id);
++            if (it == g_opMot.end()) {
++                OpLine("MOT", id + " baseline  " + OpAll(f) + "  | " + where);
++                g_opMot[id] = f;
++            } else {
++                const std::string dd = OpDiff(it->second, f);
++                if (!dd.empty()) { OpLine("MOT", id + "  " + dd + "  | " + where); it->second = f; }
++            }
++        }
++    }
++    const cJSON* lk = OpGet(root, "lock");
++    const cJSON* pw = OpGet(root, "motorPower");
++    const cJSON* rt = OpGet(root, "runtime");
++    const cJSON* ls = OpGet(root, "lightScale");
++    OpFields pg;
++    OpAdd(pg, "locked", OpGet(lk, "locked"));
++    OpAdd(pg, "lockText", OpGet(lk, "text"));
++    OpAdd(pg, "relay", OpGet(pw, "relayOn"));
++    OpAdd(pg, "power", OpGet(pw, "motorPowerState"));
++    OpAdd(pg, "powerPending", OpGet(pw, "pending"));
++    OpAdd(pg, "selected", OpGet(rt, "selectedMotor"));
++    OpAdd(pg, "lightScale", OpGet(ls, "active"));
++    if (!g_opPageBase) { OpLine("PAGE", "baseline  " + OpAll(pg)); g_opPage = pg; g_opPageBase = true; }
++    else {
++        const std::string dd = OpDiff(g_opPage, pg);
++        if (!dd.empty()) { OpLine("PAGE", dd); g_opPage = pg; }
++    }
++    cJSON_Delete(root);
++}
+-- 
+2.55.0.windows.5
+

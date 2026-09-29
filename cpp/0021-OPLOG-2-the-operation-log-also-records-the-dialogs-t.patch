@@ -1,0 +1,110 @@
+From ee3254ef02d1fadab1178c9ef352f31972afba45 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 10:19:45 +0800
+Subject: [PATCH 21/21] OPLOG-2: the operation log also records the dialogs the
+ server puts on the screen (alarm / modal / query and when a query closes)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260929: "例如我讓馬達move移動，沒有反應並且跳出Alarm的話，要如何讓你查修?" -- the first OPLOG recorded the press, the
+reply and the axis state, but not the dialog itself (server -> browser, not a command), only the modal.answer pressed on it.
+- WebBridgeServer.cpp: g_W906OpLogHook("POST", ...) at the end of PostAlarm / PostModal / PostQuery / PostQueryOptions (same
+  lines as their Wake()), and at the top of ClearQuery before it takes outMx_ (same line). Every dialog path in wb_serve
+  (ShowErrorMessage, YesNo, ShowMyMessage, alarms) goes through these four.
+- tools/wb_serve.cpp W906_OpHook: kind POST -> lines ALARM / MODAL / QUERY with the frame (800 bytes max); "QUERY qid N
+  answered / closed" once per qid. Header comment updated.
+Build build_integ_ship_x86 --target wb_serve exit 0; pe_truncation_check 178 complete.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebBridge/WebBridgeServer.cpp | 10 +++++-----
+ tools/wb_serve.cpp            | 16 ++++++++++++++++
+ 2 files changed, 21 insertions(+), 5 deletions(-)
+
+diff --git a/WebBridge/WebBridgeServer.cpp b/WebBridge/WebBridgeServer.cpp
+index 9ef0386..f3d6e31 100644
+--- a/WebBridge/WebBridgeServer.cpp
++++ b/WebBridge/WebBridgeServer.cpp
+@@ -1635,7 +1635,7 @@ void WebBridgeServer::Impl::PostAlarm(const std::string& code, const std::string
+         WbGuard sl(statsMx);
+         ++stats.alarmsSent;
+     }
+-    Wake();
++    Wake();  if (g_W906OpLogHook) g_W906OpLogHook("POST", 0, 0, true, "alarm", os.str());   //AI(W906-OPLOG) 20260929: what the operator's screen was shown
+ }
+ 
+ // AI(W906-FW-W5a) 20260819: PostAlarm's sibling for display-only dialogs --
+@@ -1659,7 +1659,7 @@ void WebBridgeServer::Impl::PostModal(const std::string& title, const std::strin
+         WbGuard sl(statsMx);
+         ++stats.modalsSent;
+     }
+-    Wake();
++    Wake();  if (g_W906OpLogHook) g_W906OpLogHook("POST", 0, 0, true, "modal", os.str());   //AI(W906-OPLOG) 20260929
+ }
+ 
+ // AI(W906-FW-W5b) 20260819: the answer-carrying sibling. One-way broadcast;
+@@ -1734,7 +1734,7 @@ void WebBridgeServer::Impl::PostQuery(unsigned long long qid, const std::string&
+         WbGuard sl(statsMx);
+         ++stats.queriesSent;
+     }
+-    Wake();
++    Wake();  if (g_W906OpLogHook) g_W906OpLogHook("POST", 0, (double)qid, true, "query", os.str());   //AI(W906-OPLOG) 20260929
+ }
+ 
+ // AI(W906-YESNO) 20260925: PostQuery 的兄弟 —— 選項名字由呼叫端直接給（見標頭）。
+@@ -1770,7 +1770,7 @@ void WebBridgeServer::Impl::PostQueryOptions(unsigned long long qid, const std::
+         WbGuard sl(statsMx);
+         ++stats.queriesSent;
+     }
+-    Wake();
++    Wake();  if (g_W906OpLogHook) g_W906OpLogHook("POST", 0, (double)qid, true, "query", os.str());   //AI(W906-OPLOG) 20260929
+ }
+ 
+ // -----------------------------------------------------------------------------
+@@ -1787,7 +1787,7 @@ void WebBridgeServer::Impl::PostQueryOptions(unsigned long long qid, const std::
+ // -----------------------------------------------------------------------------
+ void WebBridgeServer::Impl::ClearQuery(unsigned long long qid)
+ {
+-    WbGuard ol(outMx_);
++    if (g_W906OpLogHook) g_W906OpLogHook("POST", 0, (double)qid, true, "clear", std::string());  WbGuard ol(outMx_);   //AI(W906-OPLOG) 20260929: the dialog was answered or given up (logged before taking outMx_)
+     if (pendingQueryQid_ == qid) {
+         pendingQueryQid_ = 0;
+         pendingQueryFrame_.clear();
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 6aaacbf..78d955c 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -7978,6 +7978,9 @@ void W906_MainHomeCommand(webbridge::WebBridgeServer& server, const webbridge::W
+ //           homeFlag 引擎的原點旗標、cw／home／ccw／emg／ledAlm／softCw／softCcw 燈號、q 資料品質、err 錯誤文字
+ //           （來源＝網頁讀的同一份 /api/struct/motor/runtime，W906_ApiCacheRefresh 每次重建後比一次）
+ //    PAGE   Motor Test 頁：鎖（locked／lockText）、馬達電源（relay／power／powerPending）、選的馬達、Light Scale
++//    ALARM／MODAL／QUERY  伺服器推給畫面的框（警報、訊息框、要按鈕回答的框，原始 JSON 最多 800 字）；
++//           QUERY qid N answered / closed = 那一題答掉或放棄了；操作員按的鈕是後面那一行 CMD modal.answer
++//           （AI(W906-OPLOG) 20260929：EastSun 問「move 沒反應並跳出 Alarm 要如何查修」—— 框的內容之前沒記）
+ //  太吵的（sys.ping、ui.windows.put、cfg.resync、*.get 查詢）成功時不記，失敗照記。
+ //  執行緒：CMD 與 socket 回覆在 socket 執行緒；tick 回覆、MOT、PAGE 在 tick 執行緒 —— 共用 g_opLock。
+ //  放在檔尾，上面的行號都不動。
+@@ -8088,6 +8091,19 @@ void W906_OpHook(const char* kind, unsigned long long conn, double id, bool ok,
+         if (!quiet) OpLine("CMD", OpId(conn, id) + "  " + (secret ? "{\"cmd\":\"" + OpClip(a, 64) + "\"} (內容不記：帳號／密碼類)" : OpClip(b, 600)));
+         return;
+     }
++    if (std::strcmp(kind, "POST") == 0) {                                       // 伺服器推給畫面的框（WebBridgeServer PostAlarm／PostModal／PostQuery／PostQueryOptions／ClearQuery）
++        static double lastCleared = -1;                                         // ClearQuery 對同一題可能叫不只一次：只記第一次
++        if (a == "clear") {
++            if (id == lastCleared) return;
++            lastCleared = id;
++            char q[64];
++            std::snprintf(q, sizeof(q), "qid %.0f answered / closed", id);
++            OpLine("QUERY", q);
++        } else {
++            OpLine(a == "alarm" ? "ALARM" : (a == "modal" ? "MODAL" : "QUERY"), OpClip(b, 800));
++        }
++        return;
++    }
+     OpPend p;
+     bool have = false;
+     ::EnterCriticalSection(&g_opLock);
+-- 
+2.55.0.windows.5
+

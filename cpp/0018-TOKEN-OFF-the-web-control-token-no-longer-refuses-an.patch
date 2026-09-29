@@ -1,0 +1,113 @@
+From 8ca61232adedd7bfbd338f6febd8f3c1e5c8d0e7 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Mon, 28 Sep 2026 11:12:03 +0800
+Subject: [PATCH 18/21] TOKEN-OFF: the web control token no longer refuses
+ anyone on this machine (MachineType.h W906_WEB_TOKEN_ENFORCE 0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260928: "權杖問題……這部分先不要在機台端卡控，這是要做，但等我動作流程完成才進行，不是很急", then chose "現在就關掉權杖擋人".
+- MachineType.h (end of file): #define W906_WEB_TOKEN_ENFORCE 0; 1 = the single-operator token as before. Put back by changing
+  it to 1 and rebuilding wb_serve.
+- WebBridgeServer.h: WebBridgeConfig::enforceControlToken (default true, so tests/test_wb_server.cpp and every other user of
+  the bridge keep the old behaviour); tools/wb_serve.cpp sets it from the #define on the maxConnections line.
+- WebBridgeServer.cpp, when not enforced: control.acquire is granted like control.takeover; a non-holder's control.release
+  answers ok and changes nothing; no command is refused with not-operator -- the sender becomes the holder instead (a no-op
+  when it already is), so the page that presses the buttons is the "operator connected" that W906_MotorAccessPollTick follows
+  (Motor Test's jog/HOME watchdog, which stops them when the holder's connection disappears). The idle timeout (10 min) and
+  the disconnect release are unchanged. The read-only gate is unchanged.
+Same-line edits in WebBridgeServer.h/.cpp and wb_serve.cpp (no line moves); MachineType.h grows at its end only.
+Build: build_integ_ship_x86 --target wb_serve exit 0; pe_truncation_check 178 complete.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ MachineType.h                 | 10 ++++++++++
+ WebBridge/WebBridgeServer.cpp | 10 +++++-----
+ WebBridge/WebBridgeServer.h   |  2 +-
+ tools/wb_serve.cpp            |  2 +-
+ 4 files changed, 17 insertions(+), 7 deletions(-)
+
+diff --git a/MachineType.h b/MachineType.h
+index 539141e..7428288 100644
+--- a/MachineType.h
++++ b/MachineType.h
+@@ -1775,4 +1775,14 @@ inline void vec_clr(vector<T> & v)
+ //    SOFT_SIMULTE 組態不接（MyLaneIO 在那裡維持模擬後端）。
+ #define WB_ENGINE_IO_1203
+ //------------------------------------------------------------------------------
++//  AI(W906-TOKEN-OFF) 20260928: 網頁操作權杖要不要擋人（wb_serve 開 bridge 時讀，tools/wb_serve.cpp 的 cfg.maxConnections 那一行）。
++//  EastSun 20260928：「權杖問題……這部分先不要在機台端卡控，這是要做，但等我動作流程完成才進行，不是很急」
++//  → 選「現在就關掉權杖擋人」。
++//    0（現在）= 不擋：哪一頁按都照做，不再回「not-operator」／「control-held」；送指令的那一頁自動變成持有者
++//               （control.acquire 一律給；別頁的 control.release 回 ok、不動作）。持有者照樣記著，
++//               Motor Test 的「操作員連線消失就停 jog／HOME」看的就是它（W906_MotorAccessPollTick）。
++//    1         = 原本的單一操作員權杖（同一時刻只有一頁能寫；control.takeover 照樣可接管）。
++//  恢復管控：改成 1，重建 wb_serve。ctest（tests/test_wb_server.cpp）用 WebBridgeConfig 的預設 true，不受這一行影響。
++#define W906_WEB_TOKEN_ENFORCE 0
++//------------------------------------------------------------------------------
+ #endif
+diff --git a/WebBridge/WebBridgeServer.cpp b/WebBridge/WebBridgeServer.cpp
+index dade805..6dab6fa 100644
+--- a/WebBridge/WebBridgeServer.cpp
++++ b/WebBridge/WebBridgeServer.cpp
+@@ -1387,7 +1387,7 @@ void WebBridgeServer::Impl::HandleTextMessage(Conn& c, const std::string& text)
+     // read-only bridge stays uniformly fail-closed for every cmd.
+     if (reject.empty() && (cmdName == "control.acquire" || cmdName == "control.takeover")) {   //AI(W906-TAKEOVER) 20260926: EastSun「我進入IO頁面就應該把控制權拿回來」
+         const unsigned long long owner = ctrlOwner_.load();
+-        if (owner == 0 || owner == c.id || cmdName == "control.takeover") {   //AI(W906-TAKEOVER) 20260926: takeover moves the token to this connection whoever holds it (loopback-only bridge, one operator at the HMI); the old holder learns it on its next command (not-operator). Same lines, no line moves.
++        if (owner == 0 || owner == c.id || cmdName == "control.takeover" || !cfg.enforceControlToken) {   //AI(W906-TOKEN-OFF) 20260928: token not enforced -> acquire is granted like takeover   //AI(W906-TAKEOVER) 20260926: takeover moves the token to this connection whoever holds it (loopback-only bridge, one operator at the HMI); the old holder learns it on its next command (not-operator). Same lines, no line moves.
+             ctrlOwner_.store(c.id);
+             ctrlLastCmdMs_ = NowMs();
+             SendAck(c, id, true, std::string());
+@@ -1398,8 +1398,8 @@ void WebBridgeServer::Impl::HandleTextMessage(Conn& c, const std::string& text)
+         return;
+     }
+     if (reject.empty() && cmdName == "control.release") {
+-        if (ctrlOwner_.load() == c.id) {
+-            ctrlOwner_.store(0);
++        if (ctrlOwner_.load() == c.id || !cfg.enforceControlToken) {   //AI(W906-TOKEN-OFF) 20260928: token not enforced -> a non-holder's release answers ok and changes nothing
++            if (ctrlOwner_.load() == c.id) ctrlOwner_.store(0);
+             SendAck(c, id, true, std::string());
+         } else {
+             SendAck(c, id, false, "not-operator");
+@@ -1446,8 +1446,8 @@ void WebBridgeServer::Impl::HandleTextMessage(Conn& c, const std::string& text)
+         && cmdName != "ui.windows.put"
+         && cmdName != "cfg.resync"
+         && cmdName != "log.event" && cmdName != "modal.answer" && cmdName != "dialog.response" && cmdName != "motor.stop" && cmdName != "contactct.get" && cmdName != "counterclear.get" && cmdName != "observer.get") {  // AI(W906-ALARM-ANSWER-TOKEN) 20260924: 告警回答豁免權杖 —— 使用者 F5 實測：MES0920 框上按 PAUSE 回 not-operator。ht9045_recipe_client.js:532-537 的 modalAnswer 刻意不 acquire（「警報一定要答得掉」，權杖可能在別的分頁），這裡卻沒豁免 ⇒ 告警框 iframe 的連線永遠答不掉。安全性不靠權杖：wb_serve 等待迴圈只收當前 qid＋有提供的選項（tools/wb_serve.cpp 回答處理），沒有告警時回 no query pending。⚠ c3c459f 起回答 START 會重走 StartFromWeb ⇒ 任何連上的瀏覽器答 START 都能讓機台繼續（golden 也是誰在框前誰按）  AI(W906-W4-MOTOR) 20260925: `motor.stop` 同列豁免 —— 停機不能被「權杖在別的分頁」擋住（golden 任何畫面的 STOP 都停得了；EastSun 的停止也不看控制權）。安全性不靠權杖：wb_serve 的 W906_MotorAccessWire 把 motor.stop 鎖死在 action=="stop"，其他動作走 motor.access 照樣要權杖。  AI(W906-Q2-S124) 20260927 (St02): Steven S124 = B -- the three read-only queries by exact name, no prefix (the laptop 20260927 10:2x: a `*.get` prefix would also pass a future `xxx.get` that writes). They read, write no file and move nothing (wb_serve contactct.get / counterclear.get / observer.get). editlist.get stays token-gated (it is not read-only). ctest: tests/test_wb_server.cpp section 7.
+-        if (ctrlOwner_.load() != c.id) reject = "not-operator";
+-        else                           ctrlLastCmdMs_ = NowMs();
++        if (ctrlOwner_.load() != c.id && cfg.enforceControlToken) reject = "not-operator";   //AI(W906-TOKEN-OFF) 20260928: EastSun「先不要在機台端卡控」-- not enforced: nobody is refused
++        else                           { ctrlOwner_.store(c.id); ctrlLastCmdMs_ = NowMs(); }   //AI(W906-TOKEN-OFF) 20260928: ...and the sender becomes the holder (a no-op when it already is), so the page that presses the buttons is the "operator connected" that Motor Test's jog/HOME watchdog follows (W906_MotorAccessPollTick)
+     }
+ 
+     if (!reject.empty()) {
+diff --git a/WebBridge/WebBridgeServer.h b/WebBridge/WebBridgeServer.h
+index 0bfc325..2e17e15 100644
+--- a/WebBridge/WebBridgeServer.h
++++ b/WebBridge/WebBridgeServer.h
+@@ -101,7 +101,7 @@ struct WebBridgeConfig {
+     // any non-auth.*, non-control.* command is accepted; the token releases
+     // on disconnect and after this idle window with no accepted command.
+     // <= 0 disables the idle timeout (disconnect release still applies).
+-    int            controlIdleTimeoutMs;   // default 600000 (10 min)
++    int            controlIdleTimeoutMs;  bool enforceControlToken = true;   // default 600000 (10 min)   // AI(W906-TOKEN-OFF) 20260928: enforceControlToken false = the token never refuses anyone (acquire always granted, a non-holder's release is a no-op ok, every command is accepted and makes its sender the holder). wb_serve sets it from MachineType.h W906_WEB_TOKEN_ENFORCE. Same line, no line moves
+ 
+     // AI(W906-FW-C1WIRE) 20260911: reject a WebSocket upgrade whose Origin is
+     // not this server's own. Default true.
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 0593707..8e12ee1 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -4302,7 +4302,7 @@ int main(int argc, char** argv)
+     webbridge::WebBridgeConfig cfg;
+     cfg.port         = port;
+     cfg.documentRoot = root;
+-    cfg.maxConnections = 64;   //AI(W906-WSFANOUT) 20260926: default 16 was FULL on this machine (measured 23 TCP connections: every HMI window opens 1-2 WebSockets + the pages' HTTP polls), so /api/struct/* requests sat in the backlog forever and Motor Test froze. FD_SETSIZE 128 - 8 = 120 cap (WebBridgeServer.cpp:578). Same line, no line moves.   // bindAddress and readOnly keep their safe defaults on purpose.
++    cfg.maxConnections = 64;  cfg.enforceControlToken = (W906_WEB_TOKEN_ENFORCE != 0);   //AI(W906-TOKEN-OFF) 20260928: MachineType.h 檔尾（EastSun「權杖先不要在機台端卡控」，現在 0 = 不擋）   //AI(W906-WSFANOUT) 20260926: default 16 was FULL on this machine (measured 23 TCP connections: every HMI window opens 1-2 WebSockets + the pages' HTTP polls), so /api/struct/* requests sat in the backlog forever and Motor Test froze. FD_SETSIZE 128 - 8 = 120 cap (WebBridgeServer.cpp:578). Same line, no line moves.   // bindAddress and readOnly keep their safe defaults on purpose.
+ 
+     // AI(W906-Q30-8) 20260922: 警報信箱的目錄。**從 root 導出，不要各自寫死。**
+     //   同事的 JSON-Simulator/README.md 與 JsonBridge.cs:41-43 寫死
+-- 
+2.55.0.windows.5
+
