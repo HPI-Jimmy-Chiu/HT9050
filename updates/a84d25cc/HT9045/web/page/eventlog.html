@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>Event Log Analyzer</title>
+<link rel="stylesheet" href="ht9xxx.css">
+<link rel="stylesheet" href="theme.css">
+<!--
+  AI(W906-ELA-P4) 20260927 (St02): Event Log Analyzer 的網頁（golden EventlogAnalyzer Rev891.0 TfrmELA 的 Summary／By Day／
+  By Hour／Top5／Alarm／Fail／By Filter 分頁）。計畫 docs/ELA_20260926_WEB_CONVERSION_PLAN.md，帳本 docs/ELA_PORT_LEDGER.md。
+  資料通道（EventLogAnalysis/ElaService.cpp，wb_serve 側的路由接線要 github-59 確認後才接）：
+    GET  /api/ela                      -> Hub 快照（seq／busy／history／config／result）
+    GET  /api/ela?since=<seq>          -> seq 沒變只回 {seq, busy, unchanged:true}（每秒輪詢不用搬整份快照）
+    POST /api/ela/query?from=&to=&top=&filter=&area=&func=   -> 排入一次查詢（分析在 ElaHub 的 worker 執行緒上跑，不在機台 tick）
+  AI(W906-ELA-W18) 20260927 (St02-E)：W18＝B（Steven 20260927，golden 的明顯 bug 修掉、記偏離；帳本 W18）：
+    * 功能篩選的勾選框各管自己的清單（golden ctor Analyzer.cpp:257-263 是交叉的：「2D barcode」框管 Temp 清單、
+      「Temperature」管 ESD、「OCR」管 2DID、「ESD」管 OCR）；框名照 golden Analyzer.dfm:1161-1210。
+    * Top5 下半部照 ElaTables UpdateSgTop5：AlarmCode 完全相同才算（golden 用前綴比對，WAR1520 會吃到 WAR15206）。
+  AI(W906-ELA-R6) 20260928 (St02-E)：「Auto Jobs」分頁＝自動工作（R5 ElaSchedule 與 Hub 的 EL_* 工作紀錄），只讀這兩個：
+    GET  /api/ela/schedule             -> {installed, build, ftp, o10, o10Source, schedule:{now, maxRetries, jobs[], history[]}}
+    POST /api/ela/job?id=<工作名>       -> 排入一次手動執行（D-a：頁面自己的操作不看 O10；工作的開關與客戶碼照看）
+    工作的結果只在這個分頁與快照的 jobs，不換掉使用者自己的查詢畫面（R2 追加的規則）；不顯示帳密（伺服器也不送）。
+    手動執行前一定先確認；N25-3／N25-4／N25-5 會用 WinINet 真的連 FTP（W22 20260928 加 N25-4／N25-5）。
+  AI(W906-ELA-W36) 20260928 (St02-E helper)：★W36＝C（Steven 20260928）：模擬組態也跟出貨組態一樣真的上傳（之前模擬組態只寫 log）；
+    確認框的上傳說明改看伺服器回的 ftp，不再看 build。模擬組態仍不會自動（排程）跑 N25-3／4／5（golden main.cpp:21425），手動執行會連線。
+  AI(W906-ELA-P7a) 20260928 (St02-E)：Save Summary 鈕（golden btnSaveSummaryClick，Rev891 Analyzer.cpp:2557-2570）：
+    POST /api/ela/summary?name=<檔名>   -> 在 ElaHub 的 worker 上把「目前這次查詢」存成 <資料夾><Machine ID>-SummaryData_<檔名>.txt
+    資料夾＝golden 對話框的預設 D:\RMS\（伺服器決定，頁面只送檔名）；結果（寫到哪、或錯誤）顯示在按鈕旁邊，查詢畫面不動。
+  AI(W906-ELA-XLSD) 20260928 (St02-E helper): ★ 第五題 = D (Steven 0928).  The four Save buttons (golden Analyzer.cpp
+    :2245-2297 -> SGDToXLS, XLSfile.pas BIFF2) write a real .xlsx built in the page by ht9045_ela_xlsx.js (a store-only ZIP
+    + minimal SpreadsheetML): header row first (golden row 0), every cell text like golden's LABEL cells, UTF-8, column
+    widths; file names = golden's defaults with .xlsx; Top5 = one workbook, three sheets Top5Alarm / AlarmList / AlarmList1.
+    No server code, no new route.  Replaces the interim option C (UTF-8 CSV, e40f110a).
+  AI(W906-ELA-W45) 20260928 (St02-E helper): ★W45 18a (Steven 0928, W20-1 = A).  golden's "Jam Code Setting" tab
+    (Rev891 PageControl2.tsJamCode, Analyzer.dfm:1840-2043) is merged into the Handler's Jam Code editor: the Jam Code tab
+    of the Password and Security window (background.html window 'security', Status.Security.html tab data-t="10", WS
+    security.jam).  The "Jam Code Setting" button in the bar opens that window on that tab; this page edits nothing.
+    The analyzer's second box (Include MTBF) is on that tab (18c, W20-5 = A).  Who may edit = the Handler's rule
+    (W20-2 未明確裁決，照 golden -- the Handler's, for Handler-owned data; golden's analyzer had no password).
+  Handler 的 tsEventLogTxt 單檔檢視（Data.Observer.html）不在這頁、也沒動（計畫 §5-1）。
+-->
+<style>
+  body.winpage{padding:0;margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden;background:#A6B8C2;}
+  .wrap{flex:1;display:flex;flex-direction:column;min-height:0;padding:6px;box-sizing:border-box;gap:6px;}
+  .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font:12px sans-serif;background:#d4dde2;border:1px solid #888;padding:4px 6px;}
+  .bar input[type=text]{width:140px;font:12px monospace;}
+  .state{padding:2px 8px;border-radius:3px;color:#fff;background:#777;font-weight:bold;}
+  .state.up{background:#1a8a3a;} .state.busy{background:#c08a00;} .state.down{background:#b03030;}
+  .tabs{display:flex;gap:2px;}
+  .tab{padding:3px 10px;background:#c8d2d8;border:1px solid #888;border-bottom:none;cursor:pointer;font:12px sans-serif;border-radius:4px 4px 0 0;}
+  .tab.act{background:#e4eaee;font-weight:bold;}
+  .pane{flex:1;min-height:0;overflow:auto;border:1px solid #888;background:#e4eaee;padding:6px;display:none;}
+  .pane.act{display:block;}
+  table.g{border-collapse:collapse;font:11px Consolas,"Courier New",monospace;background:#fff;}
+  table.g th,table.g td{border:1px solid #9aa;padding:1px 4px;white-space:nowrap;}
+  table.g th{background:#d0d8de;position:sticky;top:0;}
+  table.g tr.sel td{background:#ffe89a;}
+  pre.sum{font:12px Consolas,monospace;background:#fff;border:1px inset #9aa;padding:6px;margin:0;}
+  .grp{border:1px solid #8a9aa8;border-radius:3px;padding:4px 6px;margin-bottom:6px;background:#eef2f4;font:12px sans-serif;}
+  .grp label{display:inline-block;min-width:150px;}
+  .note{color:#555;font:11px sans-serif;}
+  .err{color:#a00;font:bold 12px sans-serif;}
+  table.g td.ok{color:#136b2c;font-weight:bold;} table.g td.warn{color:#9a6a00;font-weight:bold;}
+  table.g td.bad{color:#a00;font-weight:bold;} table.g td.dim{color:#777;}
+</style>
+</head>
+<body class="winpage">
+<div class="wrap">
+  <div class="bar">
+    <span class="state" id="st">—</span>
+    From <input type="text" id="from"> To <input type="text" id="to">
+    Top Alarm <select id="top"><option value="0">JAM</option><option value="1">WAR</option><option value="2">JAM + WAR</option></select>
+    Filter <select id="filter"><option value="0">By Area</option><option value="2">By Function</option></select>
+    <button class="btn3d" id="q">Query</button>
+    Name <input type="text" id="sumName" style="width:90px"> <button class="btn3d" id="saveSum">Save Summary</button>
+    <span class="note" id="sumInfo"></span>
+    <button class="btn3d" id="jamSetting" title="★W45: opens Password and Security, tab Jam Code (the merged Jam Code editor)">Jam Code Setting</button>
+    <span class="note" id="jamInfo"></span>
+    <span class="note" id="xlsxInfo"></span>
+    <span class="note" id="info"></span>
+    <span class="err" id="err"></span>
+  </div>
+  <div class="tabs" id="tabs">
+    <div class="tab act" data-p="sum">Summary</div><div class="tab" data-p="day">By Day</div><div class="tab" data-p="hour">By Hour</div>
+    <div class="tab" data-p="oee">OEE</div>
+    <div class="tab" data-p="top5">Top5</div><div class="tab" data-p="alarm">Alarm</div><div class="tab" data-p="fail">Fail</div>
+    <div class="tab" data-p="filter">By Filter</div><div class="tab" data-p="jobs">Auto Jobs</div><div class="tab" data-p="log">Log</div>
+  </div>
+  <div class="pane act" id="p-sum"><pre class="sum" id="summary">（尚未查詢）</pre></div>
+  <div class="pane" id="p-day"><table class="g" id="t-day"></table></div>
+  <div class="pane" id="p-hour"><table class="g" id="t-hour"></table></div>
+  <div class="pane" id="p-oee">
+    <!-- AI(W906-ELA-W48) 20260928 (St02-E helper): ★W48 OEE（Steven 0928＝A）：每天測試／停機／閒置的百分比。資料＝快照的 oee
+         （EventLogAnalysis/ElaOee.h），只有使用者自己的查詢會更新；沒有新路由。程式在下面 script 的 W48 區塊。
+         AI(W906-ELA-W48B) 20260928 (St02-E helper)：Steven 0928 09:3x 三項裁決（W48-1／W48-2＝B／W48-3＝B），多一段「關機」。
+         AI(W906-ELA-W61) 20260929 (St02-E helper)：★W61＝B（Steven）：SystemStart 全部算生產，生產再細分測試／contact test／home／其他；
+         最上層＝生產／停機／閒置／關機。 -->
+    <div class="grp"><button class="btn3d" id="oeeMonth" title="From＝本月 1 日 00:00:00，To＝現在，然後查詢">本月</button> <span class="note" id="oeeInfo">（尚未查詢）</span></div>
+    <div id="oeeChart"></div>
+    <div class="note" id="oeeRule" style="margin-top:4px"></div>
+    <div class="note">V906 從這一版起每小時寫 TimeData（軟體開著的時間，以及 SystemStart／home／contact test 的秒數，跟 golden 同一套），但還不寫帶 StopedTime 的告警列與 Production_Log，所以 V906 自己的 log 目前只分得出生產（沒有測試細項）、閒置與關機；測試與停機要 BCB6 機台寫的 log 才有。沒有 TimeData 的時間算閒置、不算關機（表格的「沒 TimeData」），也分不出生產（那時生產＝測試）。</div>
+    <table class="g" id="t-oee" style="margin-top:6px"></table>
+  </div>
+  <div class="pane" id="p-top5"><div class="grp"><button class="btn3d" data-xlsx="top5">Save</button> <span class="note">Top5Alarm.xlsx（三個工作表：Top5Alarm／AlarmList／AlarmList1）</span></div><table class="g" id="t-top5f"></table><br><table class="g" id="t-top5"></table><br><table class="g" id="t-top5a"></table></div>
+  <div class="pane" id="p-alarm"><div class="grp"><button class="btn3d" data-xlsx="alarm">Save</button> <span class="note">AlarmList.xlsx</span></div><table class="g" id="t-alarm"></table></div>
+  <div class="pane" id="p-fail"><div class="grp"><button class="btn3d" data-xlsx="fail">Save</button> <span class="note">FailureList.xlsx</span></div><table class="g" id="t-fail"></table></div>
+  <div class="pane" id="p-filter">
+    <div class="grp"><button class="btn3d" data-xlsx="filter">Save</button> <span class="note">AlarmListByArea／ByYield／ByFunction.xlsx（照 Filter 與 By Yield 框）</span></div>
+    <div class="grp" id="areas"></div>
+    <div class="grp" id="funcs"></div>
+    <div class="note" id="byAreaCount"></div>
+    <table class="g" id="t-area"></table>
+  </div>
+  <div class="pane" id="p-jobs">
+    <div class="grp"><b>自動工作（排程，R5）</b> <span class="note" id="jobsInfo"></span></div>
+    <table class="g" id="t-jobs"></table>
+    <div class="grp"><b>選取工作的紀錄</b> <span class="note" id="jobSel">（點上面一列）</span><pre class="sum" id="jobResults"></pre></div>
+    <div class="grp"><b>EL_* 工作紀錄（Hub，新的在上）</b><table class="g" id="t-hubjobs"></table></div>
+    <div class="grp"><b>排程歷史</b><pre class="sum" id="schedHistory"></pre></div>
+  </div>
+  <div class="pane" id="p-log">
+    <div class="grp"><b>Job history</b><pre class="sum" id="history"></pre></div>
+    <div class="grp"><b>Exceptions</b><pre class="sum" id="exceptions"></pre></div>
+    <div class="grp"><b>Config（ReadConfig，FTP 密碼不顯示）</b><pre class="sum" id="config"></pre></div>
+    <div class="grp"><b>Files read</b><pre class="sum" id="files"></pre></div>
+  </div>
+</div>
+<script src="ht9045_ela_xlsx.js"></script>
+<script>
+(function () {
+  var API = '/api/ela';
+  // golden cbJamArea items (Analyzer.dfm:1946-1977); the first 30 are the By-Area boxes
+  var AREAS = ['01 Input Arm','02 Output Arm','03 Index Unit','04 Input Shuttle','05 Output Shuttle','06 Empty Tray Arm',
+    '07 Tester I/F','08 Scanner','09 Tray Loader','10 Empty Tray','11 Tray Unloader 1','12 Tray Unloader 2',
+    '13 Tray Unloader 3','14 Color Tray','15 Temp. Controller','16 System','17 Fix Tray 1','18 Fix Tray 2','19 Fix Tray 3',
+    '20 ESD System','21 Process Log','22 Motion Log','23 Message','24 Motor','25 Tray Unloader 4','26 Tray Unloader 5',
+    '27 Tray Unloader 6','28 Fix Tray 4','29 Fix Tray 5','30 Fix Tray 6'];
+  // golden check boxes (Analyzer.dfm:1161-1210) and the list each one drives -- its own list (W18 B; golden's ctor
+  // :257-263 crossed four of them).  List index = ela::eByFunc: RTC 0, Temp 1, ESD 2, 2DID 3, OCR 4, AutoClean 5, Yield 6
+  var FUNCS = [['RTC', 0], ['2D barcode', 3], ['Temperature', 1], ['OCR', 4], ['ESD', 2], ['Auto clean', 5], ['By Yield', 6]];
+  var EVCOLS = ['Date','Time','UnitName','AlarmCode','Recovery','StopedTime','Duplicate','Message','ErrorPart'];
+  var DAYCOLS = ['Date','Input Qty','UPH','Contact Count','Total Test Time','Avg Test Time','Total Stop Time','Alarm Count',
+    'Alarm Time','MUBA','MTBA','Faliure Count','Faliure Time','MTBF'];
+  var lastSeq = -1, waiting = false, snap = null, selRow = 1;
+
+  function $(id) { return document.getElementById(id); }
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function fmt(d) { return d.getFullYear() + '/' + pad(d.getMonth() + 1) + '/' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()); }
+  var now = new Date(), start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  $('from').value = fmt(start); $('to').value = fmt(now);   // golden defaults: today 00:00 .. now
+  $('sumName').value = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate());   // golden SaveDialog default (:2562)
+
+  Array.prototype.forEach.call(document.querySelectorAll('#tabs .tab'), function (t) {
+    t.addEventListener('click', function () {
+      Array.prototype.forEach.call(document.querySelectorAll('#tabs .tab'), function (x) { x.classList.remove('act'); });
+      Array.prototype.forEach.call(document.querySelectorAll('.pane'), function (x) { x.classList.remove('act'); });
+      t.classList.add('act'); $('p-' + t.getAttribute('data-p')).classList.add('act');
+    });
+  });
+  AREAS.forEach(function (a, i) {
+    var l = document.createElement('label'); l.innerHTML = '<input type="checkbox" checked data-a="' + i + '"> ' + a; $('areas').appendChild(l);
+  });
+  FUNCS.forEach(function (f) {
+    var l = document.createElement('label'); l.innerHTML = '<input type="checkbox" checked data-f="' + f[1] + '"> ' + f[0]; $('funcs').appendChild(l);
+  });
+
+  function grid(id, head, rows, onRow) {
+    var t = $(id), h = '<tr>' + head.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join('') + '</tr>';
+    (rows || []).forEach(function (r, i) {
+      h += '<tr data-i="' + i + '"' + (onRow && i + 1 === selRow ? ' class="sel"' : '') + '>';
+      for (var k = 0; k < head.length; k++) h += '<td>' + esc(r[k] == null ? '' : r[k]) + '</td>';
+      h += '</tr>';
+    });
+    t.innerHTML = h;
+    if (onRow) Array.prototype.forEach.call(t.querySelectorAll('tr[data-i]'), function (tr) {
+      tr.addEventListener('click', function () { onRow(+tr.getAttribute('data-i') + 1); });
+    });
+  }
+  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+  // UpdateSgTop5(ARow): event rows whose AlarmCode IS the selected code -> Date, Time, UnitName, Message (W18 B;
+  // golden matched the prefix)
+  function top5(res, row) {
+    var f = (res.top5Filter || [])[row - 1] || [], code = f[2] || '', out = [];
+    if (code.indexOf('JAM') === 0 || code.indexOf('WAR') === 0)
+      (res.top5Alarm || []).forEach(function (r) { if ((r[3] || '') === code) out.push([r[0], r[1], r[2], r[7]]); });
+    return out;
+  }
+
+  function showState(busy) {
+    var st = $('st');
+    st.className = 'state ' + (busy ? 'busy' : 'up'); st.textContent = busy ? '分析中' : '待命';
+  }
+
+  function render(s) {
+    snap = s;
+    showState(s.busy);
+    $('history').textContent = (s.history || []).join('\n');
+    $('config').textContent = JSON.stringify(s.config || {}, null, 1);
+    var r = s.result;
+    if (!r) return;
+    $('info').textContent = '查詢 ' + (r.range || []).join(' ~ ') + '（' + (r.queryAt || '') + '）';
+    $('summary').textContent = (r.summary || []).join('\n') || '（沒有摘要）';
+    grid('t-day', DAYCOLS, r.byDay);
+    grid('t-hour', ['DateTime'].concat(DAYCOLS.slice(1)), r.byHour);
+    var vis = Math.max(1, (r.top5FilterRowCount || 6) - 1);
+    grid('t-top5f', ['', 'UnitName', 'AlarmCode', 'Message', 'Total Count', 'Total Stoped Time'], (r.top5Filter || []).slice(0, vis),
+         function (row) { selRow = row; render(snap); });
+    grid('t-top5', ['Date', 'Time', 'UnitName', 'Message'], top5(r, selRow));
+    grid('t-top5a', EVCOLS, r.top5Alarm);
+    grid('t-alarm', EVCOLS, r.alarm);
+    grid('t-fail', EVCOLS, r.fail);
+    grid('t-area', EVCOLS, r.byArea);
+    $('byAreaCount').textContent = 'Count: ' + (r.byAreaCount || 0);
+    $('exceptions').textContent = (r.exceptions || []).join('\n');
+    $('files').textContent = (r.filesRead || []).join('\n') +
+      (r.dupRowsSkipped ? '\n（' + r.dupRowsSkipped + ' 列在別的檔已經算過，跳過；W19）' : '');
+  }
+
+  function poll() {
+    fetch(API + (lastSeq >= 0 ? '?since=' + lastSeq : '')).then(function (x) { return x.ok ? x.json() : x.json().then(function (e) { throw new Error(e.error || x.status); }); })
+      .then(function (s) {
+        $('err').textContent = '';
+        if (s.unchanged || s.seq === lastSeq) { if (snap) { snap.busy = s.busy; showState(s.busy); } }
+        else { lastSeq = s.seq; render(s); }
+      })
+      .catch(function (e) { var st = $('st'); st.className = 'state down'; st.textContent = '離線'; $('err').textContent = String(e.message || e); });
+  }
+
+  $('q').addEventListener('click', function () {
+    var area = '', func = '';
+    for (var i = 0; i < 30; i++) area += document.querySelector('[data-a="' + i + '"]').checked ? '1' : '0';
+    var f = ['0', '0', '0', '0', '0', '0', '0'];
+    Array.prototype.forEach.call(document.querySelectorAll('[data-f]'), function (c) { if (c.checked) f[+c.getAttribute('data-f')] = '1'; });
+    func = f.join('');
+    selRow = 1;
+    var qs = 'from=' + encodeURIComponent($('from').value) + '&to=' + encodeURIComponent($('to').value) +
+             '&top=' + $('top').value + '&filter=' + $('filter').value + '&area=' + area + '&func=' + func;
+    fetch(API + '/query?' + qs, { method: 'POST' })
+      .then(function (x) { return x.json(); })
+      .then(function (j) { $('err').textContent = j.error || ''; })
+      .catch(function (e) { $('err').textContent = String(e.message || e); });
+  });
+
+  // ---- AI(W906-ELA-R6) 20260928 (St02-E): the automatic-jobs panel ----
+  var sched = null, jobSel = '', jobsTick = 0;
+  var JOBCOLS = ['工作', '狀態', '種類／錯開', '上次執行', '結果', '說明', '下次', '嘗試', '最後完成', '手動'];
+  function resultClass(st) {
+    if (st === 'verified') return 'ok';
+    if (st === 'failed (retry)') return 'warn';
+    if (st === 'failed (not retried)' || st === 'manual refused') return 'bad';
+    return 'dim';
+  }
+  function td(text, cls) { return '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + esc(text == null ? '' : text) + '</td>'; }
+  function renderJobs() {
+    var d = sched, sc = d && d.schedule;
+    $('jobsInfo').textContent = !d ? '' : (d.installed ? '' : '排程沒有安裝（HT9045_ELA=0 或還沒開機）；') +
+      '組態 ' + d.build + '，上傳 ' + d.ftp + '，O10 ' + (d.o10 ? '開' : '關') + '（' + d.o10Source + '）' +
+      (sc ? '，排程時間 ' + sc.now : '');
+    var h = '<tr>' + JOBCOLS.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join('') + '</tr>';
+    ((sc && sc.jobs) || []).forEach(function (j) {
+      h += '<tr data-job="' + esc(j.id) + '"' + (j.id === jobSel ? ' class="sel"' : '') + '>' + td(j.id) +
+        td(j.enabled ? '開' : '關：' + j.why, j.enabled ? '' : 'dim') +
+        td(j.kind + (j.windowSec ? '，' + j.offsetSec + ' / ' + j.windowSec + ' s' : '')) +
+        td(j.lastAt + (j.lastManual ? '（手動）' : '')) + td(j.lastStatus || '-', resultClass(j.lastStatus)) +
+        td(j.lastDetail) + td(j.next) + td(j.pending ? j.attempt + ' / ' + (sc.maxRetries + 1) : '-') + td(j.done) +
+        '<td><button class="btn3d" data-run="' + esc(j.id) + '"' + (d.installed && j.hasBody ? '' : ' disabled') +
+        ' title="' + (j.hasBody ? '排入一次手動執行' : '本體還沒接上') + '">立即執行</button></td></tr>';
+    });
+    $('t-jobs').innerHTML = h;
+    var cur = null;
+    ((sc && sc.jobs) || []).forEach(function (j) { if (j.id === jobSel) cur = j; });
+    $('jobSel').textContent = cur ? cur.id : '（點上面一列）';
+    $('jobResults').textContent = cur ? (cur.results || []).join('\n') : '';
+    $('schedHistory').textContent = ((sc && sc.history) || []).join('\n');
+    Array.prototype.forEach.call($('t-jobs').querySelectorAll('tr[data-job]'), function (tr) {
+      tr.addEventListener('click', function () { jobSel = tr.getAttribute('data-job'); renderJobs(); });
+    });
+    Array.prototype.forEach.call($('t-jobs').querySelectorAll('button[data-run]'), function (b) {
+      b.addEventListener('click', function (ev) { ev.stopPropagation(); runJob(b.getAttribute('data-run')); });
+    });
+  }
+  function renderHubJobs(jobs) {
+    var h = '<tr><th>時間</th><th>指令</th><th>執行</th><th>寫檔</th><th>檔案</th><th>區間</th><th>說明</th></tr>';
+    (jobs || []).slice().reverse().forEach(function (j) {
+      h += '<tr>' + td(j.at) + td(j.cmd) + td(j.ran ? '是' : '否', j.ran ? '' : 'dim') + td(j.written ? '是' : '否', j.written ? 'ok' : 'dim') +
+        td(j.path) + td(j.range ? j.range.join(' ~ ') : '') + td(j.note) + '</tr>';
+    });
+    $('t-hubjobs').innerHTML = h;
+  }
+  function runJob(id) {
+    var d = sched || {}, kind = '';
+    ((d.schedule && d.schedule.jobs) || []).forEach(function (j) { if (j.id === id) kind = j.kind; });
+    // AI(W906-ELA-W36) 20260928 (St02-E helper): the upload wording follows d.ftp, not d.build (★W36 = C: the sim build uploads too)
+    var real = d.ftp === 'WinINet';
+    var msg = (d.build === 'ship' ? '出貨組態：' : '模擬組態：') + id + ' 會真的執行一次' +
+              (kind === 'ftp' ? (real ? '，用 WinINet 連 FTP 主機上傳' : '（上傳只寫 log，不連線）') : '（寫報表／複製檔案到設定的資料夾）') +
+              '。\n不看 O10，但仍看這個工作的開關與客戶碼。確定？';
+    if (!window.confirm(msg)) return;
+    fetch(API + '/job?id=' + encodeURIComponent(id), { method: 'POST' })
+      .then(function (x) { return x.json(); })
+      .then(function (j) { $('err').textContent = j.error || ''; $('info').textContent = j.queued ? '已排入：' + j.job : $('info').textContent; pollJobs(); })
+      .catch(function (e) { $('err').textContent = String(e.message || e); });
+  }
+  function pollJobs() {
+    fetch(API + '/schedule').then(function (x) { return x.ok ? x.json() : null; })
+      .then(function (d) { if (d) { sched = d; renderJobs(); } })
+      .catch(function () {});
+  }
+  // ---- AI(W906-ELA-P7a) 20260928 (St02-E): Save Summary -- the newest "SaveSummary" job record is the result ----
+  function showSave(jobs) {
+    var last = null;
+    (jobs || []).forEach(function (j) { if (j.cmd === 'SaveSummary') last = j; });
+    if (last) $('sumInfo').textContent = 'Save Summary（' + last.at + '）：' + (last.written ? '已寫入 ' + last.path : last.note);
+  }
+  $('saveSum').addEventListener('click', function () {
+    fetch(API + '/summary?name=' + encodeURIComponent($('sumName').value), { method: 'POST' })
+      .then(function (x) { return x.json(); })
+      .then(function (j) {
+        $('err').textContent = j.error || '';
+        if (j.queued) $('sumInfo').textContent = 'Save Summary 排入：' + j.folder + '（' + (j.name || '今天') + '）';
+      })
+      .catch(function (e) { $('err').textContent = String(e.message || e); });
+  });
+  var renderBase = render;
+  render = function (s) { renderBase(s); renderHubJobs(s.jobs); showSave(s.jobs); };
+
+  // ---- AI(W906-ELA-W48) 20260928 (St02-E helper): ★W48 the OEE tab (Steven 0928 = A: test / down / idle % per day) ----
+  // Data = the snapshot's "oee" (EventLogAnalysis/ElaOee.h ComputeOee; only the user's own queries fill it; no new route).
+  // Golden has no real OEE: Rev891 Analyzer.cpp:385-416 draws its chart 1 (SetOeeAnaDay :1310-1385) with random() data
+  // and hides the tab.  Here: one 100 % bar per day, test first so every day's running share starts at the same left
+  // edge (golden drew idle | alarm | running from the left); % text only in segments of 5 % or more; golden's hues
+  // (:1286-1288, BGR): running 0x00C9D157 = #57D1C9, alarm 0x008080FF = #FF8080, idle 0x00CBFBFF = #FFFBCB darkened to
+  // #E3CF73 so it shows on white; no data = grey; a 2 px white gap between segments; each row's tooltip (SVG <title>)
+  // and the table below carry the numbers.  AI(W906-ELA-W48B) 20260928 (St02-E helper): the rules are Steven's (0928
+  // 09:3x): W48-1 test = each touchdown's Test Time (col 27 = 0x41 .. BIN ON + ECHO OK); W48-3 = B down = the "include
+  // in MTBA" alarms only; W48-2 = B a fourth segment, off (the software not running, from the Handler's TimeData),
+  // drawn last in a mid grey #8C939B (no data stays the light #C9CFD3).
+  // AI(W906-ELA-W61) 20260929 (St02-E helper): ★W61 = B (Steven: every SystemStart second is production, split inside;
+  // no test and no SystemStart = idle): the bar is production | down | idle | off; production is drawn as its parts --
+  // test (golden's running teal), contact test violet #9C8CD9, home pale blue #A9CBE8, the rest of production blue-grey
+  // #5B8DB8 -- with a dark teal line under the whole production part.  A snapshot from before W61 (no prodPct) draws
+  // production = test, as it was.
+  // 本月 = golden's chart month (FormShow :368 "%04d/%02d/01"): From = the 1st 00:00:00, To = now, then Query.
+  var OEE_C = { test: '#57D1C9', contact: '#9C8CD9', home: '#A9CBE8', prodRest: '#5B8DB8', down: '#FF8080',
+    idle: '#E3CF73', off: '#8C939B', none: '#C9CFD3', prodLine: '#1F6F6A' };
+  var OEE_LEG = [['test', '生產：測試'], ['contact', '生產：contact test'], ['home', '生產：home'], ['prodRest', '生產：其他'],
+    ['prodLine', '生產合計（底線）'], ['down', '停機'], ['idle', '閒置'], ['off', '關機'], ['none', '無資料']];
+  function oeeHms(sec) {
+    sec = Math.round(+sec || 0);
+    return Math.floor(sec / 3600) + ':' + pad(Math.floor(sec % 3600 / 60)) + ':' + pad(sec % 60);
+  }
+  function oeePct(v) { return (+v || 0).toFixed(2); }
+  // W61: production (a pre-W61 snapshot has no prodSec / prodPct: production = test, no parts)
+  function oeeProd(d) {
+    var w61 = d.prodPct != null;
+    return {
+      sec: w61 ? d.prodSec : d.testSec, pct: w61 ? +d.prodPct : +d.testPct,
+      contactSec: w61 ? d.contactSec : 0, contactPct: w61 ? +d.contactPct : 0,
+      homeSec: w61 ? d.homeSec : 0, homePct: w61 ? +d.homePct : 0,
+      restSec: w61 ? d.prodRestSec : 0, restPct: w61 ? +d.prodRestPct : 0
+    };
+  }
+  function oeeTip(d) {
+    if (d.noData) return d.date + (d.spanSec > 0 ? '：無資料（沒有觸壓、停機列，也沒有 TimeData）' : '：還沒到');
+    var p = oeeProd(d);
+    return d.date + '  生產 ' + oeeHms(p.sec) + '（' + oeePct(p.pct) + '%：測試 ' + oeeHms(d.testSec) + '／' +
+      oeePct(d.testPct) + '%，contact test ' + oeeHms(p.contactSec) + '／' + oeePct(p.contactPct) + '%，home ' +
+      oeeHms(p.homeSec) + '／' + oeePct(p.homePct) + '%，其他 ' + oeeHms(p.restSec) + '／' + oeePct(p.restPct) + '%）  停機 ' +
+      oeeHms(d.downSec) + '（' + oeePct(d.downPct) + '%）  閒置 ' + oeeHms(d.idleSec) + '（' + oeePct(d.idlePct) + '%）  關機 ' +
+      oeeHms(d.offSec) + '（' + oeePct(d.offPct) + '%）  區間 ' + oeeHms(d.spanSec) + '，軟體開著 ' + oeeHms(d.onSec) +
+      '（TimeData），SystemStart ' + oeeHms(d.startSec) + '（TimeData）' +
+      (+d.uncoveredSec > 0 ? '，沒 TimeData ' + oeeHms(d.uncoveredSec) + '（算閒置）' : '') +
+      '，觸壓 ' + d.touchdowns + ' 次，告警列 ' + d.stopRows + '（計入停機 ' + (d.alarmRows || 0) + '）';
+  }
+  function renderOee(r) {
+    if (!r) return;
+    var o = r.oee, days = (o && o.days) || [], rule = (o && o.rule) || {};
+    if (!o) {
+      $('oeeInfo').textContent = '這次查詢的快照沒有 oee（伺服器還沒更新？）';
+      $('oeeChart').innerHTML = ''; $('t-oee').innerHTML = ''; $('oeeRule').textContent = '';
+      return;
+    }
+    $('oeeInfo').textContent = '查詢 ' + (r.range || []).join(' ~ ') + '；每天截到 ' + (rule.now || '') + '（查詢當時）';
+    var W = 1000, X0 = 96, BW = 740, LX = 858, TOP = 32, RH = 22, BH = 16;
+    var H = TOP + Math.max(days.length, OEE_LEG.length) * RH + 8;
+    function rect(x, y, w, c) {
+      return '<rect x="' + x.toFixed(1) + '" y="' + y + '" width="' + Math.max(0, w).toFixed(1) + '" height="' + BH +
+        '" rx="2" fill="' + c + '"/>';
+    }
+    function txt(x, y, s, anchor, color) {
+      return '<text x="' + x.toFixed(1) + '" y="' + (y + 12) + '" font-size="11" text-anchor="' + anchor + '" fill="' +
+        (color || '#222') + '">' + esc(s) + '</text>';
+    }
+    var t = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + W + ' ' + H + '" width="100%" role="img" aria-label="每日稼動率"' +
+      ' style="display:block;max-width:1100px;background:#fff;border:1px solid #9aa;font-family:sans-serif">';
+    t += '<text x="' + X0 + '" y="20" font-size="13" font-weight="bold" fill="#222">每日稼動率（生產［測試／contact test／home／其他］／停機／閒置／關機）</text>';
+    days.forEach(function (d, i) {
+      var y = TOP + i * RH;
+      t += '<g><title>' + esc(oeeTip(d)) + '</title>' + txt(X0 - 6, y, d.date, 'end');
+      if (d.noData) t += rect(X0, y, BW, OEE_C.none) + txt(X0 + BW / 2, y, d.spanSec > 0 ? '無資料' : '（還沒到）', 'middle', '#444');
+      else {
+        var p = oeeProd(d);
+        var segs = [['test', +d.testPct], ['contact', p.contactPct], ['home', p.homePct], ['prodRest', p.restPct],
+          ['down', +d.downPct], ['idle', +d.idlePct], ['off', +d.offPct]]
+          .filter(function (s) { return s[1] > 0; });
+        var x = X0;
+        segs.forEach(function (s, k) {
+          var w = BW * s[1] / 100, gap = (k < segs.length - 1 && w > 3) ? 2 : 0;
+          t += rect(x, y, w - gap, OEE_C[s[0]]);
+          if (s[1] >= 5) t += txt(x + w / 2, y, oeePct(s[1]) + '%', 'middle');
+          x += w;
+        });
+        // the production group: a 2 px line under test + contact test + home + other (the parts start at X0)
+        if (p.pct > 0) t += '<rect x="' + X0 + '" y="' + (y + BH + 1) + '" width="' + (BW * p.pct / 100).toFixed(1) +
+          '" height="2" fill="' + OEE_C.prodLine + '"/>';
+      }
+      t += '</g>';
+    });
+    OEE_LEG.forEach(function (l, k) {
+      var y = TOP + k * RH;
+      t += (l[0] === 'prodLine'
+        ? '<rect x="' + LX + '" y="' + (y + BH / 2 - 1) + '" width="22" height="2" fill="' + OEE_C.prodLine + '"/>'
+        : '<rect x="' + LX + '" y="' + y + '" width="22" height="' + BH + '" rx="2" fill="' + OEE_C[l[0]] + '"/>') +
+        txt(LX + 28, y, l[1], 'start');
+    });
+    if (!days.length) t += txt(X0, TOP, '（沒有日期）', 'start', '#444');
+    $('oeeChart').innerHTML = t + '</svg>';
+    $('oeeRule').textContent = '規則：SystemStart 全部算生產（再細分測試／contact test／off-line／home／其他）；沒測試、沒 SystemStart＝閒置（★W61＝B）。' +
+      '生產＝TimeData 的 StartTime（Handler 每小時寫一列，那一小時的秒數平均攤到它開著的時間），至少等於測試；它只從原本的閒置裡拿，' +
+      '不會蓋過測試、停機、關機；contact test＝TimeData 的 ContactTestTime、home＝HomeTime（同樣平均攤），其他＝生產裡剩下的' +
+      '（換盤、soak、手臂走位等）；off-line：golden 的 TimeData、Production_Log、EventLog 都沒有記 off-line 的時間，所以不另外分，' +
+      '算在「其他」（off-line 的觸壓照樣算測試）；計入停機的馬達告警（WAR24）：golden 跳這種告警時 SystemStart 沒關、' +
+      'TimeData 也把那段記成 StartTime／HomeTime，這裡從生產扣掉，不重複算；其他告警 golden 跳出前就先關 SystemStart，不會重疊。' +
+      '測試＝每次觸壓自己的 Test Time（Production_Log 第 27 欄，就是 GPIB 送出 0x41 到收到 BIN ON 與 ECHO OK 的時間；' +
+      'RS232／TTL 同理），從 SOT 起算，一天＝加總，觸壓之間的時間不算測試，停機蓋過測試（W48-1，Steven 0928）' +
+      (rule.noTestTime ? '；這次有 ' + rule.noTestTime + ' 次觸壓讀不到 Test Time，不算' : '') + '；' +
+      '停機＝只算 JAM0000.dat 勾了「Include MTBA」的告警（客戶在 Security 頁的 Jam 分頁自己設；沒設過的代碼照 golden：代碼有 JAM 而且在 01～05 區才算），' +
+      '從告警時間起算 StopedTime 秒，重疊只算一次、跨午夜切開（W48-3＝B，Steven 0928；By Day 的 Alarm Time 則是整筆算在告警那天）；' +
+      '關機＝軟體沒開：Handler 每小時寫一列 TimeData（PowerOnTime＝那一小時軟體開著的秒數），兩列之間沒開到的時間就是關機；' +
+      '有觸壓或告警列的時間一定算開著（W48-2＝B，Steven 0928；這次讀到 ' + (rule.timeDataRows || 0) + ' 列 TimeData）；' +
+      '閒置＝區間－生產－停機－關機：軟體開著、沒按 Start（沒 SystemStart）、沒在測試、也沒有計入的告警（包括沒勾的告警、暫停）；' +
+      '沒有 TimeData 的時間也算閒置（那段分不出生產，生產＝測試）。表格的「SystemStart（TimeData）」是 TimeData 讀到的原始秒數。' +
+      '區間＝那一天 ∩ 查詢的 From～To（To 那一秒算進去）∩ 查詢當時以前。';
+    grid('t-oee', ['日期', '區間', '生產', '測試', 'contact test', 'home', '其他生產', '停機', '閒置', '關機', '生產 %', '測試 %',
+      'contact test %', 'home %', '其他生產 %', '停機 %', '閒置 %', '關機 %', '開著（TimeData）', 'SystemStart（TimeData）',
+      '沒 TimeData', '觸壓次數', '告警列', '計入停機', '備註'],
+      days.map(function (d) {
+        var p = oeeProd(d);
+        return [d.date, oeeHms(d.spanSec), oeeHms(p.sec), oeeHms(d.testSec), oeeHms(p.contactSec), oeeHms(p.homeSec),
+          oeeHms(p.restSec), oeeHms(d.downSec), oeeHms(d.idleSec), oeeHms(d.offSec), oeePct(p.pct), oeePct(d.testPct),
+          oeePct(p.contactPct), oeePct(p.homePct), oeePct(p.restPct), oeePct(d.downPct), oeePct(d.idlePct),
+          oeePct(d.offPct), oeeHms(d.onSec), oeeHms(d.startSec), oeeHms(d.uncoveredSec), d.touchdowns, d.stopRows,
+          d.alarmRows || 0, d.noData ? (d.spanSec > 0 ? '無資料' : '還沒到') : ''];
+      }));
+  }
+  var renderOeeBase = render;
+  render = function (s) { renderOeeBase(s); renderOee(s.result); };
+  $('oeeMonth').addEventListener('click', function () {
+    var n = new Date();
+    $('from').value = fmt(new Date(n.getFullYear(), n.getMonth(), 1));
+    $('to').value = fmt(n);
+    $('q').click();
+  });
+
+  // ---- AI(W906-ELA-XLSD) 20260928 (St02-E helper): ★ 第五題 = D (Steven 0928) -- golden's four XLS buttons as .xlsx ----
+  // golden Rev891 Analyzer.cpp :2245-2297 -> SGDToXLS (XLSfile.pas :91-111, BIFF2: every cell a LABEL = text, row 0 = the
+  // header).  Here the page builds a real .xlsx itself (HtXlsx, ht9045_ela_xlsx.js: a store-only ZIP + minimal
+  // SpreadsheetML, every cell an inline string with the Text format, the header row bold, column widths) from the rows it
+  // already has; the snapshot keeps at most 5,000 rows per grid (ElaHub.cpp kMaxRows, "<grid>Truncated"), and a cut grid
+  // is named next to the buttons.  One file per button, one sheet per golden grid, the sheet named after golden's file.
+  // Top5: golden wrote three .xls into one folder -- the dialog's file (default "C:\\Top5Alarm.xls", :2266) for
+  // sgTop5Filter, then "AlarmList.xls" (:2272, sgTop5Alarm) and "AlarmList1.xls" (:2275, sgTop5) next to it -- so here it
+  // is ONE workbook named after the dialog's file, Top5Alarm.xlsx, with the three sheets in golden's order.
+  // Replaces the interim option C (UTF-8 CSV, e40f110a); the table extraction below is the same.
+  var T5FCOLS = ['', 'UnitName', 'AlarmCode', 'Message', 'Total Count', 'Total Stoped Time'];   // golden InitStringGrid :586-590
+  var T5COLS = ['Date', 'Time', 'UnitName', 'Message'];                                          // :597-600
+  function xlsxExport(kind) {
+    var r = snap && snap.result, info = $('xlsxInfo');
+    if (!r) { info.textContent = '還沒有查詢結果，先按 Query'; return; }
+    if (!window.HtXlsx) { info.textContent = 'ht9045_ela_xlsx.js 沒有載入，不能存 .xlsx'; return; }
+    var file = '', sheets = [], cut = [];
+    function add(name, head, rows, truncKey) { sheets.push({ name: name, head: head, rows: rows || [] }); if (truncKey && r[truncKey]) cut.push(name); }
+    if (kind === 'alarm') { file = 'AlarmList.xlsx'; add('AlarmList', EVCOLS, r.alarm, 'alarmTruncated'); }        // golden "C:\\AlarmList.xls" :2247
+    else if (kind === 'fail') { file = 'FailureList.xlsx'; add('FailureList', EVCOLS, r.fail, 'failTruncated'); } // "C:\\FailureList.xls" :2256
+    else if (kind === 'top5') {                                                                                   // "C:\\Top5Alarm.xls" :2266
+      file = 'Top5Alarm.xlsx';
+      add('Top5Alarm', T5FCOLS, (r.top5Filter || []).slice(0, Math.max(1, (r.top5FilterRowCount || 6) - 1)), 'top5FilterTruncated');
+      add('AlarmList', EVCOLS, r.top5Alarm, 'top5AlarmTruncated');                                               // "<same folder>\\AlarmList.xls" :2272
+      add('AlarmList1', T5COLS, top5(r, selRow));                                                                 // "<same folder>\\AlarmList1.xls" :2275
+    } else if (kind === 'filter') {                                                                               // :2282-2293 (rgFilter, chkByYield)
+      var byFunc = $('filter').value === '2', byYield = document.querySelector('[data-f="6"]').checked;
+      var base = !byFunc ? 'AlarmListByArea' : byYield ? 'AlarmListByYield' : 'AlarmListByFunction';
+      file = base + '.xlsx';
+      add(base, EVCOLS, r.byArea, 'byAreaTruncated');
+    } else return;
+    try { HtXlsx.save(file, sheets); }
+    catch (e) { info.textContent = file + ' 沒有存成：' + String(e.message || e); return; }
+    info.textContent = '下載 ' + file +
+      (sheets.length > 1 ? '（' + sheets.length + ' 個工作表：' + sheets.map(function (s) { return s.name; }).join('／') + '）' : '') +
+      (cut.length ? '（' + cut.join('、') + ' 只有前 5,000 列）' : '');
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('button[data-xlsx]'), function (b) {
+    b.addEventListener('click', function () { xlsxExport(b.getAttribute('data-xlsx')); });
+  });
+
+  // ---- AI(W906-ELA-W45) 20260928 (St02-E helper): ★W45 18a (Steven 0928, W20-1 = A) -- "Jam Code Setting" ----
+  // golden's analyzer tab (Analyzer.dfm:1840-2043) is merged into the Handler's Jam Code tab (Status.Security.html
+  // data-t="10", window 'security' in background.html).  This opens that window through background.html's {open: id}
+  // message (the path Main.html's sbPassword takes) and clicks that tab when the page is there and the window is shown;
+  // the tab's own script then runs security.jam op "open".  Nothing is edited here; permission is the Handler's (the
+  // page answers not-authorized at the levels golden FormShow hides the tab, WebSecurityJam.cpp JamTabAllowed).
+  function clickJamTab(getDoc, isShown) {
+    var info = $('jamInfo'), tries = 0;
+    info.textContent = '開啟 Password and Security…';
+    (function next() {
+      var d = null;
+      try { d = getDoc(); } catch (e) { d = null; }                    // not loaded yet (or another origin)
+      var tab = d && d.readyState === 'complete' ? d.querySelector('.tab[data-t="10"]') : null;
+      if (tab && isShown()) { tab.click(); info.textContent = '已切到 Password and Security 的 Jam Code 分頁'; return; }
+      if (++tries >= 60) { info.textContent = '請在 Password and Security 視窗點「Jam Code」分頁'; return; }
+      setTimeout(next, 100);
+    })();
+  }
+  $('jamSetting').addEventListener('click', function () {
+    if (window.parent !== window) {                                    // inside background.html
+      window.parent.postMessage({ open: 'security' }, '*');
+      clickJamTab(function () {
+        var w = window.parent.document.getElementById('win-security'), f = w && w.querySelector('iframe');
+        return f && f.contentDocument;
+      }, function () {
+        var w = window.parent.document.getElementById('win-security');
+        return !!w && w.style.display !== 'none';
+      });
+    } else {                                                           // this page on its own: the page in a new tab
+      var nw = window.open('Status.Security.html', '_blank');
+      if (!nw) { $('jamInfo').textContent = '瀏覽器擋了新視窗：請開 Status.Security.html 的 Jam Code 分頁'; return; }
+      clickJamTab(function () { return nw.document; }, function () { return !nw.closed; });
+    }
+  });
+
+  poll();
+  pollJobs();
+  setInterval(function () {
+    poll();
+    jobsTick++;
+    if ($('p-jobs').classList.contains('act') ? jobsTick % 2 === 0 : jobsTick % 10 === 0) pollJobs();   // 2 s on the tab, else 10 s
+  }, 1000);
+})();
+</script>
+</body>
+</html>
