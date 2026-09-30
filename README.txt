@@ -231,4 +231,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     還沒做：IO 頁、Omron、Yield Monitor、Auto Clean（改到一半已還原）、Barcode、Temp Set、Tray Assign、Vacuum Unit。
                     只動版面，指令／IO／馬達的程式都沒改（Offset 加了一個 Scan AOI 勾選展開面板的小處理，照 golden）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（命中的都是畫面上的 Password: 標籤與欄位名）；沒有機台設定檔。
+  tools 0087 HTDESIGNER-89（0.89.0）—— 右鍵「版面重設」變子選單（WPF 的 Layout > Reset）：只重設位置／只重設大小／全部版面／全部改回 DFM。四層測試全過。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
