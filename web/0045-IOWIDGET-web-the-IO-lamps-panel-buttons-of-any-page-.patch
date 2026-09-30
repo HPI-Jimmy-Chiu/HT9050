@@ -1,0 +1,287 @@
+From a0e598180210759f991d98664a904ef70716b806 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 07:52:09 +0800
+Subject: [PATCH] IOWIDGET (web): the IO lamps / panel buttons of any page
+ bound by their Alias; the Teach page's Suck On / Off and Tray X U/D wired
+
+golden's architecture: the components (TMyLedLane / TMyLed / TBtnPanelLane / TBtnPanel) only
+carry properties (Alias, In/Out address, Value, Down, colours); the IO screen provides the
+functions that bind them and other forms borrow them -- fiosetview->SetCompomentIO(fTeach)
+(uteach.cpp:1598), fiosetview->ScanLed(fTeach) (uteach.cpp:1372), SetCompomentHint.
+
+New page/ht9045_io_widgets.js is that for the web: every Alias-bearing component of the page
+bound to the IO table (wb_serve /api/struct/io/config), repainted from the card
+(/api/struct/io/runtime, every pollIntervalMs, paused while hidden), golden's hint
+"(Lane:x,IP:y,Port:z,Bit:b) Alias" / "(%3X0%d) Alias" in its tooltip; it defines
+window.ioBindStatus so ht9045_io_do.js (io.btnPanelClick -> JsonBridge/IoBtnPanelClick.cpp)
+works on the page unchanged. A page opts in (golden: only the IO screen and Teach use it --
+GroundMan's lamps are alarm records, VacuumUnit's buttons write the 1203 themselves). It does
+nothing on HW.IoSetView.html (its own inline copy) and nothing when the page is not from
+wb_serve (a file, the HTML designer). wb_serve unreadable -> every component marked no-data
+with the reason.
+
+HW.teach.html: loads it + ht9045_io_do.js; BtnPanelLane1-3 (Suck On / Suck Off / Tray X U/D)
+off the "unwired" list -- golden BtnPanelLane1Click (uteach.cpp:3074) IOBitOn/Off. On the
+machine (LIVE build) pressing them now really switches those outputs, as the IO page does.
+
+Tested offline only (a local server with fake /api/struct/io data, the page's WebSocket
+replaced; no wb_serve, no machine): CatchSuck_On off -> io.btnPanelClick value 1,
+CatchSuck_Off on -> value 0, C_TrayX_UpDown (not a 1203 point) greyed and not sent; the
+hints in golden's format; API down -> every one no-data with the reason, nothing sent;
+opened as a file -> the page as drawn.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ page/HW.teach.html        |   8 +-
+ page/ht9045_io_widgets.js | 212 ++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 217 insertions(+), 3 deletions(-)
+ create mode 100644 page/ht9045_io_widgets.js
+
+diff --git a/page/HW.teach.html b/page/HW.teach.html
+index e1b6604..cd83244 100644
+--- a/page/HW.teach.html
++++ b/page/HW.teach.html
+@@ -181,10 +181,10 @@ function teachMarkUnwiredEl(el, why){
+   el.setAttribute('data-unwired', why);
+   el.addEventListener('click', function(ev){ ev.stopImmediatePropagation(); teachSetInfo(why, 'warn'); }, true);
+ }
++// AI(W906-IOWIDGET) 20261001：BtnPanelLane1-3（Suck On／Suck Off／Tray X U/D）接上 IO 了 —— golden 的 teach 借用 IO 畫面的
++//   SetCompomentIO／ScanLed（uteach.cpp:1598／:1372），按下＝BtnPanelLane1Click（uteach.cpp:3074）IOBitOn/Off；網頁版同樣借用
++//   ht9045_io_widgets.js（Alias 對 IO 表、依卡片回讀上色）＋ht9045_io_do.js（io.btnPanelClick），所以從這張清單拿掉。
+ var TEACH_UNWIRED=[
+-  ['BtnPanelLane1','Suck On：golden 會直接開吸嘴 IO，網頁還沒接 IO，按了不會吸。要吸請到 IO 頁操作'],
+-  ['BtnPanelLane2','Suck Off：golden 會直接關吸嘴 IO，網頁還沒接 IO。要關請到 IO 頁操作'],
+-  ['BtnPanelLane3','Tray X U/D：golden 會直接切 Tray X 上下 IO，網頁還沒接 IO。要動請到 IO 頁操作'],
+   ['btnIO','IO Check：還沒接（golden 會開 IO 視窗）。請從主選單開 IO 頁'],
+   ['btnAutoTeachZ','Auto Teach Z：自動教導 Z 會讓機台自己動，依裁決這版不接（FileRW/Zteach.cpp:19-20）'],
+   ['ScrollBar1','Speed Adjust 捲軸還沒接 —— 請直接改上面的 Now Speed 欄位']
+@@ -870,6 +870,8 @@ function teachBindTechButtons(){
+ </script>
+ <script src="qwerty.js"></script>
+ <script src="ht9045_recipe_client.js"></script>
++<script src="ht9045_io_widgets.js"></script><!-- AI(W906-IOWIDGET) 20261001: golden SetCompomentIO / ScanLed borrowed from the IO screen (uteach.cpp:1598 / :1372). Before ht9045_io_do.js. -->
++<script src="ht9045_io_do.js"></script><!-- AI(W906-IOWIDGET) 20261001: BtnPanelLane1-3 -> io.btnPanelClick (golden BtnPanelLane1Click, uteach.cpp:3074) -->
+ <script src="ht9045_wire_livesettings.js"></script>
+ <script src="ht9045_wire_engine.js"></script>
+ <script src="ht9045_wire_hwteach.js"></script>
+diff --git a/page/ht9045_io_widgets.js b/page/ht9045_io_widgets.js
+new file mode 100644
+index 0000000..af195e9
+--- /dev/null
++++ b/page/ht9045_io_widgets.js
+@@ -0,0 +1,212 @@
++/* ht9045_io_widgets.js -- the IO lamps / panel buttons of any page, bound by their Alias
++ * ---------------------------------------------------------------------------
++ * AI(W906-IOWIDGET) 20261001：新檔。EastSun 20261001「把舊版的功能架構仿造到現有架構」。
++ *
++ * golden 的架構：元件（TMyLedLane／TMyLed／TBtnPanelLane／TBtnPanel）本身只帶屬性（Alias、
++ * In/Out 位址、Value、Down、顏色），真正接 IO 的是 IO 畫面提供的三個共用函式，別的畫面直接借用：
++ *
++ *     fiosetview->SetCompomentIO(form)    Alias -> IO 位址（iosetview.cpp:2085；uteach.cpp:1598 借用）
++ *     fiosetview->SetCompomentHint(form)  提示「(Lane:x,IP:y,Port:z,Bit:b) Alias」（iosetview.cpp:2671）
++ *     fiosetview->ScanLed(form)           計時器讀輸入、依 InType 換算、Value＝亮／滅（iosetview.cpp:2741；uteach.cpp:1372 借用）
++ *     BtnPanelClick / BtnPanelLane1Click  Down 反相 -> IOBitOn/Off（iosetview.cpp:1030；uteach.cpp:3074）
++ *
++ * 網頁版照同一個分工：這個檔＝SetCompomentIO＋SetCompomentHint＋ScanLed（讀 wb_serve 的
++ * /api/struct/io/config＋runtime，依 Alias 上色、每 pollIntervalMs 重讀）；按鈕送出沿用
++ * ht9045_io_do.js（io.btnPanelClick -> JsonBridge/IoBtnPanelClick.cpp，golden 的 BtnPanelClick）。
++ *
++ * 用法（頁面自己決定要不要用 —— golden 也只有 IO 畫面和 teach 畫面用這套；GroundMan 的燈是警報記錄、
++ * VacuumUnit 的按鈕是自己寫 1203，那些頁不要載）：
++ *
++ *     <script src="ht9045_recipe_client.js"></script>
++ *     <script src="ht9045_io_widgets.js"></script>   <- 一定要在 ht9045_io_do.js 前面（它包 window.ioBindStatus）
++ *     <script src="ht9045_io_do.js"></script>
++ *
++ * 規則（跟 HW.IoSetView.html 的 inline 版一致，那一版是同事的檔、不動它）：
++ *   * 頁面已經有自己的 ioBindStatus（HW.IoSetView.html）就什麼都不做 —— 不重複讀、不重複上色。
++ *   * 資料只從 wb_serve 來（http 開的頁）；file:// 或讀不到就全部畫成 no-data，不拿舊 JSON 快照假裝。
++ *   * null 不是 off：沒有卡／不是 1203 的點畫成 unknown（ChanIoPoints.cpp 的 quality=nosource）。
++ *   * 顏色照 HW.IoSetView.html（EastSun 20260925 定的：亮＝藍燈綠框、沒觸發＝原本的燈加紅框；按鈕用自己的 TrueColor／FalseColor）。
++ * ------------------------------------------------------------------------- */
++(function () {
++  'use strict';
++  if (window.__ht9045IoWidgets) return;
++  window.__ht9045IoWidgets = true;
++  if (typeof window.ioBindStatus === 'function') return;   // HW.IoSetView.html：它自己那一份
++
++  var MOTION_NET = 0, PCI1203 = 3;
++  var live = { cfg: null, timer: null, busy: false, fails: 0 };
++  var noDataWhy = '';   /* set when wb_serve could not be read: every component says that, not "not in the IO table" */
++
++  // ------------------------------------------------------------------ style（頁面沒有才加，值同 HW.IoSetView.html:52-60）
++  (function () {
++    if (document.getElementById('ioWidgetStyle')) return;
++    var st = document.createElement('style');
++    st.id = 'ioWidgetStyle';
++    st.textContent =
++      '.io-on{box-shadow:0 0 0 1px #228b22 inset,0 0 6px rgba(34,139,34,.45);}' +
++      '.io-off{box-shadow:0 0 0 1px #b22222 inset,0 0 6px rgba(178,34,34,.35);}' +
++      '.aled.io-on{background-color:#1e6fff !important;background-image:radial-gradient(ellipse at 50% 45%,#e8f4ff 0%,#8cc4ff 25%,#3a8cff 55%,#1e6fff 80%,#1552c8 100%) !important;border-color:#228b22 !important;box-shadow:0 0 0 2px #228b22,0 0 6px rgba(34,139,34,.45) !important;}' +
++      '.aled.io-off{box-shadow:0 0 0 1px #b22222 inset,0 0 6px rgba(178,34,34,.35);}' +
++      '.btnpanel.io-on{background-color:var(--bp-true,#228b22) !important;border-color:var(--bp-true,#228b22) !important;color:var(--bp-true-font,#fff) !important;box-shadow:0 0 0 1px var(--bp-true,#228b22) inset;}' +
++      '.btnpanel.io-off{background-color:var(--bp-false,#b22222) !important;border-color:var(--bp-false,#b22222) !important;color:var(--bp-false-font,#fff) !important;box-shadow:0 0 0 1px var(--bp-false,#b22222) inset;}' +
++      '.io-unknown{box-shadow:0 0 0 1px #666 inset;filter:saturate(.35);}' +
++      '.io-stale{outline:1px dashed #ff8c00;outline-offset:1px;}' +
++      '.io-nodata{outline:1px dashed #8b4513;outline-offset:1px;}';
++    (document.head || document.documentElement).appendChild(st);
++  })();
++
++  // ------------------------------------------------------------------ helpers
++  function aliasOf(el) {
++    var t = el.getAttribute('data-io-title') || el.getAttribute('title') || el.getAttribute('data-htitle') || '';
++    var m = t.match(/Alias=([^｜|\s]+)/);
++    return m ? m[1].trim() : '';
++  }
++
++  function statusOf(pt, runtime) {
++    var st = pt && pt.status ? pt.status : null;
++    var state = 'unknown', stale = true;
++    if (st) {
++      if (st.isOn === true) state = 'on';
++      else if (st.isOn === false) state = 'off';
++      else if (st.state === 'on' || st.state === 'off') state = st.state;
++      if (st.updatedAt) {
++        var t = Date.parse(st.updatedAt);
++        if (!isNaN(t)) {
++          var interval = (runtime && runtime.pollIntervalMs) ? runtime.pollIntervalMs : 200;
++          stale = (Date.now() - t) > Math.max(interval * 5, 2000);
++        }
++      }
++      if (st.quality === 'good') stale = false;
++      if (st.quality === 'stale' || st.quality === 'bad') stale = true;
++    }
++    return { state: state, stale: stale };
++  }
++
++  function hex3(n) { var s = (n >>> 0).toString(16).toUpperCase(); while (s.length < 3) s = ' ' + s; return s; }
++
++  /* golden SetCompomentHint（iosetview.cpp:2671-2737）：MotionNet／1203 的點
++     「(Lane:%d,IP:%d,Port:%d,Bit:%d) Alias」，其他卡「(%3X0%d) Alias」 */
++  function hintOf(pt, alias) {
++    var a = (pt && pt.address) || {};
++    var isa = pt && pt.hw ? pt.hw.isaBase : null;
++    if (a.port == null || a.bit == null) return alias;
++    if (isa === MOTION_NET || isa === PCI1203)
++      return '(Lane:' + a.lane + ',IP:' + a.ip + ',Port:' + a.port + ',Bit:' + a.bit + ') ' + alias;
++    return '(' + hex3(a.port) + '0' + a.bit + ') ' + alias;
++  }
++
++  function mark(el, cls, on) { if (on) el.classList.add(cls); else el.classList.remove(cls); }
++
++  /* one component: its IO state as a class, the golden hint in its tooltip (the original title kept) */
++  function paint(el, pt, runtime) {
++    mark(el, 'io-on', false); mark(el, 'io-off', false); mark(el, 'io-unknown', false);
++    mark(el, 'io-stale', false); mark(el, 'io-nodata', false);
++    var tAttr = el.hasAttribute('title') ? 'title' : 'data-htitle';   // (theme.js's release mode moves title to data-htitle)
++    var base = el.getAttribute('data-io-title');
++    if (!base) { base = el.getAttribute(tAttr) || ''; el.setAttribute('data-io-title', base); }
++    var alias = aliasOf(el);
++    if (!pt) {
++      mark(el, 'io-nodata', true);
++      el.setAttribute(tAttr, alias + '（' + (noDataWhy || 'IO 表沒有這個 Alias') + '）\n' + base);
++      return;
++    }
++    var s = statusOf(pt, runtime);
++    mark(el, s.state === 'on' ? 'io-on' : s.state === 'off' ? 'io-off' : 'io-unknown', true);
++    if (s.stale || s.state === 'unknown') mark(el, 'io-stale', true);
++    el.setAttribute(tAttr, hintOf(pt, alias) + '\n' + base + '｜state=' + s.state + (s.stale ? '/stale' : ''));
++  }
++
++  function byAliasOf(data) {
++    var out = {}, pts = (data && data.points) || [], byId = {}, i;
++    for (i = 0; i < pts.length; i++) byId[pts[i].id] = pts[i];
++    var idx = data && data.index && data.index.byAlias;
++    if (idx) for (var k in idx) if (idx.hasOwnProperty(k) && idx[k] && idx[k].length && byId[idx[k][0]]) out[k] = byId[idx[k][0]];
++    // (no index: the first row of an Alias, as C++'s mapIOTable)
++    if (!Object.keys(out).length) for (i = 0; i < pts.length; i++) if (pts[i].alias && !out[pts[i].alias]) out[pts[i].alias] = pts[i];
++    return out;
++  }
++
++  /* golden ScanLed + the Down part of SetCompomentIO: every Alias-bearing component of the page.
++     Global name on purpose: ht9045_io_do.js wraps window.ioBindStatus to repaint the buttons' Down. */
++  function ioBindStatus(data) {
++    var runtime = (data && data.runtime) || {};
++    var map = byAliasOf(data || {});
++    var nodes = document.querySelectorAll('[title*="Alias="],[data-htitle*="Alias="],[data-io-title*="Alias="]');
++    var hit = 0, miss = 0;
++    for (var i = 0; i < nodes.length; i++) {
++      var a = aliasOf(nodes[i]);
++      if (!a) continue;                        // (Alias= empty: the page's own button, e.g. Alert.Note's)
++      paint(nodes[i], map[a], runtime);
++      if (map[a]) hit++; else miss++;
++    }
++    window.HT9045IoWidgets.last = { mapped: hit, noData: miss, connected: runtime.connected === true, provider: runtime.provider || '' };
++  }
++  window.ioBindStatus = ioBindStatus;   // (called as window.ioBindStatus below: ht9045_io_do.js wraps it after this file)
++
++  // ------------------------------------------------------------------ data（wb_serve only）
++  function getJson(url) {
++    if (window.fetch) return fetch(url, { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
++    return new Promise(function (ok, bad) {
++      var x = new XMLHttpRequest();
++      x.open('GET', url, true);
++      x.onreadystatechange = function () {
++        if (x.readyState !== 4) return;
++        if (x.status >= 200 && x.status < 300) { try { ok(JSON.parse(x.responseText)); } catch (e) { bad(e); } }
++        else bad(new Error('HTTP ' + x.status));
++      };
++      x.onerror = function () { bad(new Error('network error')); };
++      x.send();
++    });
++  }
++
++  /* golden SetCompomentIO: the IO table's row per Alias (address, ISABase, InType, Enable), the card's state */
++  function merge(cfg, rt) {
++    var st = {}, rtp = (rt && rt.points) || [], cp = (cfg && cfg.points) || [], i;
++    for (i = 0; i < rtp.length; i++) if (rtp[i] && rtp[i].ioId) st[rtp[i].ioId] = rtp[i];
++    var pts = [];
++    for (i = 0; i < cp.length; i++) {
++      var c = cp[i], id = c.ioId || c.id, s = st[id];
++      pts.push({ id: id, alias: c.alias, ioType: c.ioType, direction: c.direction, address: c.address, hw: c.hw,
++        status: s ? { isOn: s.isOn, isOff: s.isOff, state: s.state, updatedAt: s.updatedAt, source: s.source, quality: s.quality }
++                  : { isOn: null, isOff: null, state: 'unknown', updatedAt: null, source: 'merge-default', quality: 'stale' } });
++    }
++    return { runtime: (rt && rt.runtime) || { connected: false, pollIntervalMs: 200 }, points: pts, index: (cfg && cfg.index) || { byAlias: {} } };
++  }
++
++  function apiBase() { return (location.protocol === 'http:' || location.protocol === 'https:') ? '/api/struct/io/' : null; }
++
++  /* wb_serve could not be read: every component says so (dashed no-data) -- on the machine, lamps that do not follow
++     the card must not look like they do */
++  function nothing(why) {
++    window.HT9045IoWidgets.why = why;
++    noDataWhy = 'IO 讀不到：' + why;
++    window.ioBindStatus({ runtime: { connected: false }, points: [], index: { byAlias: {} } });
++  }
++
++  function start() {
++    var api = apiBase();
++    // (not opened from wb_serve -- a file, the HTML designer: the page stays as drawn, nothing marked)
++    if (!api) { window.HT9045IoWidgets.why = '不是從 wb_serve 開的頁（' + location.protocol + '）'; return; }
++    var q = '?_=' + Date.now();
++    Promise.all([getJson(api + 'config' + q), getJson(api + 'runtime' + q)]).then(function (p) {
++      if (!p[0] || !p[0].points || !p[1] || !p[1].points) throw new Error('bad shape');
++      live.cfg = p[0];
++      window.ioBindStatus(merge(p[0], p[1]));
++      var ms = Math.max(200, (p[1].runtime && p[1].runtime.pollIntervalMs) || 500);
++      live.timer = setInterval(function () {
++        if (live.busy || document.hidden) return;   // (not stacked; paused while the page is hidden)
++        live.busy = true;
++        getJson(api + 'runtime?_=' + Date.now()).then(function (rt) {
++          live.busy = false; live.fails = 0;
++          window.ioBindStatus(merge(live.cfg, rt));
++        }, function (e) {
++          live.busy = false; live.fails++;
++          window.HT9045IoWidgets.why = 'runtime 讀取失敗 x' + live.fails + '（' + (e && e.message) + '）';
++        });
++      }, ms);
++    }).catch(function (e) { nothing('/api/struct/io 讀不到（' + ((e && e.message) || e) + '）'); });
++  }
++
++  window.HT9045IoWidgets = { bind: ioBindStatus, hintOf: hintOf, aliasOf: aliasOf, last: null, why: '' };
++  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
++})();
+-- 
+2.55.0.windows.5
+

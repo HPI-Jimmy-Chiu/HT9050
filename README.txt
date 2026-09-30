@@ -291,4 +291,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   tools 0116 HTDESIGNER-118（0.118.0）—— 修正：右下的操作提示不再蓋住左下的工具列（縮放按鈕按得到）。四層測試全過。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  web 0045 IOWIDGET（web a0e5981）—— 新增 page/ht9045_io_widgets.js：舊版 IO 畫面的 SetCompomentIO／SetCompomentHint／ScanLed（元件用 Alias 對 IO 表、依卡片回讀上色、舊版格式的提示），頁面自己選擇載入；teach 頁載入它＋ht9045_io_do.js，Suck On／Off、Tray X U/D 接上 IO（golden BtnPanelLane1Click）。只做離線測試（假資料，不連 wb_serve、不動機台）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
