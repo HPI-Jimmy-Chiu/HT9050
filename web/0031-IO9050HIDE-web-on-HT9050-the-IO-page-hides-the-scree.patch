@@ -1,0 +1,221 @@
+From e3b8244087e72f4a29a8abae7cbce7edafdeb8ec Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 30 Sep 2026 16:30:27 +0800
+Subject: [PATCH] IO9050HIDE (web): on HT9050 the IO page hides the
+ screenshotted screens that have no Enable=1 IO
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260930: 「圖片上請針對9050 程式啟動後 隱藏圖片上的畫面。如果我不小心貼到IO有ENABLE的畫面 請不要隱藏」.
+
+HW.IoSetView.html only. When the machine is HT9050 (same detection as
+ht9050Gate: HT9045Live.machine()) the new script ht9050HideNoIo checks, once
+at start-up, the screens from his screenshots unit by unit (group box, tab
+sheet with its tab header, whole page control / panel). A unit is hidden only
+if none of its IO points (the same Alias= elements the page paints) has
+Enable=1 in the live IO table; a unit with one enabled IO stays fully visible.
+
+  (1)(2) Stack 3 page: pnlStack3_Top (Front/Rear strip) + pgcStack3
+         (Above/Under Coveyor, grpAuto4..6 and grpAuto4..6_Under);
+         the PC_IOSET tab "Stack 3" (tsUnLoader2) goes when all of it goes
+  (3)    Fix Tray page: pnlFixTray; the tab "Fix Tray" (tsFix) with it
+  (4)    Vacuum > Others: pgcTrayArm tabs tsTrayArm / tsRTArm / tsUnderArm /
+         tsTrayMobile (the gbTrayArm frame is not on the screenshot, untouched)
+
+Enable comes only from wb_serve's GET /api/struct/io/config (hw.enable of
+every point = the Enable column of the IO_Table.csv C++ loaded at boot); the
+inline IO script now hands its first result over as window.ioLiveConfig. No
+live table (file://, ?offline=1, request failed, any point without
+hw.enable) = nothing hidden; the JSON snapshot / cache fallbacks never count.
+Not HT9050 or machine unknown = nothing changed. A hidden active tab is
+replaced by the first visible one through the page's own tab click (as
+ht9050Gate does). Hidden units carry data-ht9050-hidden="no-enabled-io", kept
+ones data-ht9050-keep="<first enabled Alias>"; one console line
+[W906-IO9050HIDE] and window.__IO9050HIDE__ give the per-unit result.
+
+Offline test (own static server + fixture from a copy of IO_Table.csv, no
+wb_serve, headless Edge):
+  HT9050 + real table : hidden Stack 3 page (strip, pgcStack3, 2 tabs, 6
+                        groups), Fix Tray page, pgcTrayArm tabs Tray Arm /
+                        RT Arm / Tray Arm; kept pgcTrayArm + TrayMobile
+                        (SnMobileTrayTableSelect4 is Enable=1), TrayMobile
+                        becomes the active tab
+  HT9050, no hw.enable: nothing hidden
+  HT9050, config 503  : nothing hidden (the JSON fallback loaded, ignored)
+  HT9045W (non-9050)  : nothing hidden
+ht9050Gate unchanged (Stack 1/2 still on Above9050).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ page/HW.IoSetView.html | 130 ++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 128 insertions(+), 2 deletions(-)
+
+diff --git a/page/HW.IoSetView.html b/page/HW.IoSetView.html
+index 933bc09..d8cea6f 100644
+--- a/page/HW.IoSetView.html
++++ b/page/HW.IoSetView.html
+@@ -72,7 +72,10 @@ html:not(.m-ht9050) .ht9050-only{display:none!important;}
+    只在 html.m-ht9050 生效，其他機種畫面不變。用 id＋class 選，不用 title（release 模式 theme.js:13-21 會把 title 搬走）。
+    切到 Above9050 那一頁的動作在檔尾 ht9050Gate。 */
+ html.m-ht9050 #pgcStack1 > .pcTabs > .tab:not(.ht9050-only),
+-html.m-ht9050 #pgcStack2 > .pcTabs > .tab:not(.ht9050-only){display:none!important;}</style>
++html.m-ht9050 #pgcStack2 > .pcTabs > .tab:not(.ht9050-only){display:none!important;}
++/* AI(W906-IO9050HIDE) 20260930：HT9050 開機時，截圖上那幾個畫面裡沒有任何 Enable=1 IO 的單位（群組框／分頁連頁籤／分頁控制項／面板）。
++   屬性只由檔尾 ht9050HideNoIo 在「機種＝HT9050 且讀得到 wb_serve 即時 IO 表」時設定，其他情況這條規則碰不到任何元件。 */
++[data-ht9050-hidden]{display:none!important;}</style>
+ </head>
+ <body class="winpage">
+ <div class="form" style="width:922px;height:899px;">
+@@ -429,6 +432,11 @@ function ioLoadDual(cfgUrl, rtUrl){
+ //   API 拿不到（file:// 開檔、舊版 wb_serve）才走原本的 JSON 檔 → offline → cache → legacy。
+ //   ⚠ null 不是 off：沒有卡／不是 1203 的點 runtime 給 isOn=null（quality=nosource），畫成 unknown。
+ var ioLive={ cfg:null, timer:null, busy:false, fails:0 };
++// AI(W906-IO9050HIDE) 20260930：wb_serve 即時 IO 表的「第一次結果」，給檔尾 ht9050HideNoIo 看 hw.enable（HT9050 開機隱藏）。
++//   只有 /api/struct/io/config 那一條算數（C++ 開機載入的 D:\HT9045\system\IO_Table.csv）；
++//   JSON 檔／offline／cache 是舊快照，不算 → {cfg:null}（那邊就一個都不藏）。resolve 一次就定案，之後的重讀不改它。
++var ioLiveCfgResolve=null;
++window.ioLiveConfig=new Promise(function(r){ ioLiveCfgResolve=r; });
+ function ioApiBase(){
+   return (location.protocol==='http:' || location.protocol==='https:') ? '/api/struct/io/' : null;
+ }
+@@ -462,11 +470,15 @@ function ioLoadAndBind(){
+       ioBindStatus(ioMergeConfigRuntime(pair.cfg, pair.rt));
+       if(window.ioOnConfigLoaded) window.ioOnConfigLoaded(pair.cfg);
+       ioStartRuntimePoll(pair.cfg, pair.rt.runtime && pair.rt.runtime.pollIntervalMs);
+-    }).catch(function(){
++      ioLiveCfgResolve({cfg:pair.cfg, why:'wb_serve /api/struct/io/config'});   // AI(W906-IO9050HIDE) 20260930
++    }).catch(function(e){
++      ioLiveCfgResolve({cfg:null, why:'wb_serve /api/struct/io/config 讀不到（' + ((e && e.message) || e) + '）'});   // AI(W906-IO9050HIDE) 20260930：拿不到就不藏
+       ioLoadAndBind();   // triedApi 已設，這次走原本的 JSON 鏈
+     });
+     return;
+   }
++  // AI(W906-IO9050HIDE) 20260930：沒走 wb_serve（file:// 或 ?offline=1）＝沒有即時 IO 表；已定案時這行不改它。
++  ioLiveCfgResolve({cfg:null, why: api ? '?offline=1（不讀 wb_serve）' : '不是 http 開的頁（沒有 wb_serve）'});
+   ioSetInfo('IO runtime: loading IO-config.json + IO-runtime.json', 'warn');
+   var ts='?_=' + Date.now();
+   var online={ cfg:'../JSON/IO-config.json' + ts, rt:'../JSON/IO-runtime.json' + ts };
+@@ -826,5 +838,119 @@ ioLoadAndBind();
+   }).catch(function(){});
+ })();
+ </script>
++<script id="ht9050HideNoIo">
++/* AI(W906-IO9050HIDE) 20260930：HT9050 開機後，把 EastSun 截圖上的畫面裡「沒有任何 IO 是 Enable=1」的單位藏起來。
++   EastSun 20260930 原話：「圖片上請針對9050 程式啟動後 隱藏圖片上的畫面。如果我不小心貼到IO有ENABLE的畫面 請不要隱藏」。
++   截圖上的畫面（只有這些；其他畫面就算 IO 全是 Enable=0 也不動）：
++     (1)(2) Stack 3 頁：Front/Rear 標題條 pnlStack3_Top ＋ pgcStack3（Above／Under Coveyor，各三個 Auto 4～6 群組框）
++     (3)    Fix Tray 頁：pnlFixTray（Fix Move、Bin、Fix3 Full／Lock、六個 tray、Fix Tray Up/Down）
++     (4)    Vacuum → Others 的 pgcTrayArm（Tray Arm／RT Arm／Tray Arm／TrayMobile 四個分頁；外框 gbTrayArm 不在截圖上，不動）
++   規則：
++     * 單位 = 群組框、分頁（連頁籤）、整個分頁控制項／面板。單位裡只要有一個 IO 點 Enable=1 就留著，
++       而且不藏它裡面的個別元件；一個都沒有才藏。分頁全藏 → 分頁控制項藏；pgcStack3 藏 → 它的標題條一起藏；
++       整頁（Stack 3／Fix Tray）的內容全藏 → 那一頁連頁籤一起藏（不然剩一張空白頁）。
++     * IO 點 = 本頁上色的同一批元件（title／data-htitle 帶 Alias=，見 ioBindStatus），Alias 取法同 ioExtractAlias。
++     * Enable 只認 wb_serve 的即時 IO 表（GET /api/struct/io/config 每一點的 hw.enable ＝ C++ 開機載入的
++       D:\HT9045\system\IO_Table.csv 的 Enable 欄；同一個 Alias 有多列時任一列 Enable=1 就算有）。
++       拿不到（離線、錯誤、有任何一點沒有 hw.enable）＝一個都不藏，不猜。JSON 快照／cache 不算。
++     * 機種判定與 ht9050Gate 同一條（HT9045Live.machine()）；不是 HT9050 或判不出來＝什麼都不動。
++     * 被藏的單位標 data-ht9050-hidden="no-enabled-io"（CSS 在檔頭 ht9050OnlyCss），留下的標
++       data-ht9050-keep="<第一個 Enable=1 的 Alias>"；console 印一行總結，結果也放在 window.__IO9050HIDE__。
++     * 藏掉的分頁若是目前頁，改點第一個看得到的頁籤（走本頁原本的切頁程式，同 ht9050Gate）。
++     * 只在開機做一次（EastSun：「程式啟動後」）；之後改了 IO 表要重開頁面才會重算。 */
++(function(){
++  var TAG='[W906-IO9050HIDE]';
++  function done(r){ window.__IO9050HIDE__=r; console.log(TAG+' '+r.summary); }
++  if(!window.HT9045Live || !window.ioLiveConfig){ done({hidden:[],kept:[],summary:'沒有 HT9045Live／ioLiveConfig → 不動'}); return; }
++  // 單位樹。sheet=[分頁控制項 id, 分頁名（pcPane 的 title／data-htitle）]，不靠 data-t 序號；strip=跟著分頁控制項走的標題條。
++  var UNITS=[
++    {sheet:['PC_IOSET','tsUnLoader2'], kids:[                          // (1)(2) Stack 3 整頁
++      {pc:'pgcStack3', strip:'pnlStack3_Top', kids:[
++        {sheet:['pgcStack3','tsStack3_Above'], kids:[{id:'grpAuto4'},{id:'grpAuto5'},{id:'grpAuto6'}]},
++        {sheet:['pgcStack3','tsStack3_Under'], kids:[{id:'grpAuto4_Under'},{id:'grpAuto5_Under'},{id:'grpAuto6_Under'}]}
++      ]}
++    ]},
++    {sheet:['PC_IOSET','tsFix'], kids:[{id:'pnlFixTray'}]},             // (3) Fix Tray 整頁
++    {pc:'pgcTrayArm', kids:[                                           // (4)
++      {sheet:['pgcTrayArm','tsTrayArm']}, {sheet:['pgcTrayArm','tsRTArm']},
++      {sheet:['pgcTrayArm','tsUnderArm']}, {sheet:['pgcTrayArm','tsTrayMobile']}
++    ]}
++  ];
++  function sheetEls(pcId, ts){
++    var pc=document.getElementById(pcId); if(!pc) return null;
++    var panes=pc.querySelectorAll(':scope > .pcBody > .pcPane');
++    for(var i=0;i<panes.length;i++){
++      var p=panes[i];
++      if((p.getAttribute('title')||p.getAttribute('data-htitle'))!==ts) continue;
++      var t=pc.querySelector(':scope > .pcTabs > .tab[data-t="'+p.getAttribute('data-p')+'"]');
++      return t ? {name:ts, box:p, els:[t,p], pc:pc} : null;
++    }
++    return null;
++  }
++  function unitEls(u){
++    if(u.sheet) return sheetEls(u.sheet[0], u.sheet[1]);
++    var id=u.pc||u.id, e=document.getElementById(id); if(!e) return null;
++    var els=[e];
++    if(u.strip){ var s=document.getElementById(u.strip); if(!s) return null; els.push(s); }
++    return {name:id + (u.strip ? '+' + u.strip : ''), box:e, els:els, pc:null};
++  }
++  function firstEnabled(box, en){
++    var nodes=box.querySelectorAll('[title*="Alias="],[data-htitle*="Alias="],[data-io-title*="Alias="]');
++    for(var i=0;i<nodes.length;i++){
++      var n=nodes[i], a=ioExtractAlias(n.getAttribute('data-io-title')||n.getAttribute('title')||n.getAttribute('data-htitle')||'');
++      if(a && en[a]) return a;
++    }
++    return '';
++  }
++  Promise.all([
++    HT9045Live.load(),
++    fetch("../JSON/Machine-profile.json").then(function(x){ return x.json(); }).catch(function(){ return null; }),
++    window.ioLiveConfig
++  ]).then(function(r){
++    var m=HT9045Live.machine(r[1]);
++    if(m.id!=="HT9050"){ done({hidden:[],kept:[],summary:'machine='+m.id+'（'+m.source+'）→ 不是 HT9050，不動'}); return; }
++    var live=r[2]||{}, pts=(live.cfg && live.cfg.points) || [], en={}, nEn=0, noEn=0;
++    for(var i=0;i<pts.length;i++){
++      var hw=pts[i] && pts[i].hw;
++      if(!hw || typeof hw.enable!=='number'){ noEn++; continue; }
++      if(hw.enable===1 && pts[i].alias){ en[pts[i].alias]=true; nEn++; }
++    }
++    if(!pts.length || noEn){
++      done({hidden:[],kept:[],summary:'HT9050，但沒有可用的即時 Enable（'+(live.why||'?')+(pts.length?'；'+noEn+'/'+pts.length+' 點沒有 hw.enable':'')+'）→ 一個都不藏'});
++      return;
++    }
++    document.documentElement.classList.add("m-ht9050");   // 同 ht9050Gate（冪等）；下面判斷「看得到的頁籤」要它先在
++    var hidden=[], kept=[], missing=[], pcs=[];
++    (function walk(list){
++      list.forEach(function(u){
++        var e=unitEls(u);
++        if(!e){ missing.push(JSON.stringify(u.sheet||u.pc||u.id)); }
++        else {
++          var a=firstEnabled(e.box, en);
++          e.els.forEach(function(x){ if(a) x.setAttribute('data-ht9050-keep', a); else x.setAttribute('data-ht9050-hidden', 'no-enabled-io'); });
++          if(a) kept.push(e.name+'←'+a); else hidden.push(e.name);
++          if(e.pc && pcs.indexOf(e.pc)<0) pcs.push(e.pc);
++        }
++        if(u.kids) walk(u.kids);
++      });
++    })(UNITS);
++    // 目前頁被藏了 → 點第一個看得到的頁籤（同 ht9050Gate：走檔頭 pcWrap 的 tab click）
++    pcs.forEach(function(pc){
++      var act=pc.querySelector(':scope > .pcTabs > .tab.act');
++      if(!act || !act.hasAttribute('data-ht9050-hidden')) return;
++      var tabs=pc.querySelectorAll(':scope > .pcTabs > .tab');
++      for(var k=0;k<tabs.length;k++){
++        if(tabs[k].hasAttribute('data-ht9050-hidden') || getComputedStyle(tabs[k]).display==='none') continue;
++        tabs[k].click(); break;
++      }
++    });
++    done({hidden:hidden, kept:kept, missing:missing, points:pts.length, enabled:nEn, source:live.why,
++          summary:'HT9050｜即時 IO 表 '+pts.length+' 點、Enable=1 '+nEn+' 點｜藏 '+hidden.length+'：'+(hidden.join(', ')||'-')+
++                  '｜留 '+kept.length+'：'+(kept.join(', ')||'-')+(missing.length?'｜頁面上找不到：'+missing.join(', '):'')});
++  }).catch(function(e){
++    done({hidden:[],kept:[],summary:'判不出機種／讀不到資料（'+((e && e.message) || e)+'）→ 不動'});
++  });
++})();
++</script>
+ </body>
+ </html>
+-- 
+2.55.0.windows.5
+

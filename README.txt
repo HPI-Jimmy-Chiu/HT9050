@@ -163,5 +163,14 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   web 0029 af58936 JOGBLUR —— 按住 JOG 時，如果剛才游標在輸入框，按下那一刻輸入框失焦會被當成放開、寸動馬上停（Teach 與 Motor Test
                     共用）。現在只有整個視窗失焦才算放開；放開滑鼠／手指、頁面被藏起來照舊送停止。離線 A/B 測過。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  web 0030 a35ec22 TEACH-SH2 —— 教導頁 ComputeInSh2 照 golden 算偏移（InArm X/Y 目前位置 − Sh2 X/Y 欄位），只填兩個 Offset 欄、不送命令。
+  web 0031 e3b8244 IO9050HIDE —— HT9050 開機後 IO 頁把 Stack 3 頁、Fix Tray 頁、Vacuum→Others 的 Tray Arm／RT Arm／第二個 Tray Arm 分頁（全都沒有 Enable=1 IO）藏起來；
+                    只看 wb_serve 即時 IO 表（hw.enable），讀不到或不是 HT9050 就一個都不藏；TrayMobile 有 Enable=1 所以留著。
+  web 0032 2ccab9b IOCLEANPANEL —— IO 頁 Vacuum → In Arm 加 Clean Panel：C_CleanPanel／C_CleanPanelOff 兩顆汽缸鈕＋三顆感測燈（HT9050）。
+                    ⚠ IO_Table 裡 C_CleanPanel_Off 與 C_CleanPanelOff_On 是同一個輸入位址（17/0/0），照表畫、表沒改。
+  web 0033 6c1d8b5 VACUNIT-MENU —— Tools 加 Vacuum Adj.（golden sbVacuumUnit），VacuUnitType≠0 才顯示，讀不到就灰字顯示原因；開 HW.VacuumUnit.html。
+                    機台端同日把 D:\HT9045\system\Gerneral.ini [System] VacuUnitType 0→1（EastSun 要求；只改那一個字元，先備份）。
+                    設定檔本身沒有放進這裡。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 
 MD5 清單在 MANIFEST_MD5.tsv。
