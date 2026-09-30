@@ -1,0 +1,1344 @@
+From cbd3da535993e5601440ad86c84a49796556a6a9 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 30 Sep 2026 15:24:03 +0800
+Subject: [PATCH] =?UTF-8?q?MT-SAVEMOT:=20Motor=20Test=20"=E5=9B=9E?=
+ =?UTF-8?q?=E5=AF=AB=20Mot=5FTable"=20--=20the=20selected=20motor's=20Sett?=
+ =?UTF-8?q?ings=20(10=20values)=20written=20back=20to=20its=20Mot=5FTable.?=
+ =?UTF-8?q?csv=20row?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260930 (screenshot of the MInArmZA Settings grid by Copy From): "圖片上也幫我新增回寫至 MOT_table的按鈕".
+NOT golden: golden's Settings grid is memory only (strngrdMotorSelectCell); golden's only Mot_Table writer is the Motor
+Database tab's sbUpdateClick (uMotorTest.cpp:2240-2268, whole-file rewrite, MN200/P64C64 only).
+- WebMotorAccess.cpp/.h, WebMotorAccessLive.cpp: new action saveMotTable (selected motor, Motor Test page, not while
+  SystemStart). Values = MOT[mi] (what the grid shows); columns found with golden's TMOTNO::SetMOTTableNo matching; each old cell
+  read the way the boot reads it and rewritten only when the value really differs (an MN200 "70" shown as 0.7, a Range capped
+  at 1000, stay as they are); integers stay integers, decimals shortest exact text, quotes kept, every other byte identical.
+  All-or-nothing refusals: no motor / other page / running / unreadable / missing column / Alias on 0 or 2+ rows / Motorname
+  or CardModel mismatch / non-finite value / filling an empty cell (the boot would then turn Enable off) / Acc,Dec on the
+  Index rows the boot forces to 1.0 / MC88X1 Acc,Dec,Range. No change -> no write, no backup. Else: backup
+  Mot_Table.csv.bak_YYYYMMDD_HHMMSS (_2 if taken), .tmp_savemot written + read back, original re-read (refuse if it changed),
+  MoveFileEx replace + read back; HSys.MotTable row updated. MotTablePath / W906_MOTTABLE_PATH respected.
+- tests/test_mt_savemot.cpp (+ tests/CMakeLists.txt target test_mt_savemot, ctest MtSaveMotTable): 64/64 on a copy of the real
+  file (no-change pass over 48 rows under both INDEX_MOTION_CARD values; change pass = one line differs, CRLF / trailing newline
+  identical, backup = old file, undo restores the bytes; MN200 styles, Range cap, empty cells, Index rows, MC88X1, duplicate /
+  missing alias, mismatches, NaN/inf, quoting, LF / CR / no-final-newline files, unreadable and read-only files).
+  tests/test_web_motor_access.cpp: fake backend hooks, catalog counts 51 commands / 39 actions, dispatcher section [16];
+  WebMotorAccess 579 passed; EcatMotorRoute, GaliRouteLive pass.
+Built in build_integ_ship_x86_o2: exit 0, no new warnings. D:\HT9045\system\Mot_Table.csv not written by any test (MD5 / mtime
+unchanged, no .bak/.tmp under system\). Not yet pressed on the machine.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebMotorAccess.cpp              | 456 ++++++++++++++++++++++++++-
+ WebMotorAccess.h                |  59 ++++
+ WebMotorAccessLive.cpp          |  33 ++
+ tests/CMakeLists.txt            |  18 ++
+ tests/test_mt_savemot.cpp       | 526 ++++++++++++++++++++++++++++++++
+ tests/test_web_motor_access.cpp | 102 ++++++-
+ 6 files changed, 1187 insertions(+), 7 deletions(-)
+ create mode 100644 tests/test_mt_savemot.cpp
+
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index db3c7f8..6713fbd 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -78,7 +78,7 @@ const ActionRow kActions[] = {
+     //  buttons labName / strngrdMotor / BitBtn1 / scrlbrMotorSpeed / edtSpeed, source uMotorTest, none of kind motion).
+     { "selectMotor",         "live",   "",     "uMotorTest.cpp:734 lM00Click／:762 lpA00Click" },
+     { "setParamCell",        "live",   "",     "uMotorTest.cpp:1176 strngrdMotorSelectCell" },
+-    { "copyFrom",            "live",   "",     "uMotorTest.cpp:1384 BitBtn1Click（來源 = cbbMotorName 的第 2、3 個字元）" },
++    { "copyFrom",            "live",   "",     "uMotorTest.cpp:1384 BitBtn1Click（來源 = cbbMotorName 的第 2、3 個字元）" },  { "saveMotTable", "live", "", "（golden 沒有這顆鈕；golden 唯一寫 Mot_Table 的是 Motor Database 分頁 sbUpdateClick uMotorTest.cpp:2240-2268，整檔重寫）AI(W906-MT-SAVEMOT) 20260930 EastSun：選取軸 Settings 表（MOT[mi]，UpdateMotorParameter :659-668）寫回 Mot_Table.csv 那一列，只改變了的格子（本檔 EOF）" },
+     { "setSpeed",            "live",   "",     "uMotorTest.cpp:791 scrlbrMotorSpeedScroll（jog=true）／:1587 edtSpeedChange（jog=false）" },
+     //AI(W906-MT-E3c) 20260925: the contract with the web side (motor-access.json FormShow / FormClose / BitBtn2 / BitBtn3 /
+     //  btnSaveLogLightScaleData, source uMotorTest; only lightScale is kind motion).
+@@ -4240,7 +4240,7 @@ const char* MotorAccessActionStatus(const std::string& action)  // "live" | "ui"
+     const ActionRow* row = FindAction(action);
+     return row ? row->status : "unknown";
+ }
+-
++static MotorAccessOutcome DoSaveMotTable(const MotorAccessReq& r, IMotorAccessBackend& be);   //AI(W906-MT-SAVEMOT) 20260930: body at this file's EOF. Was a blank line: no line below moves
+ MotorAccessOutcome MotorAccessDispatch(const MotorAccessReq& r, long long wireId,
+                                        IMotorAccessBackend& be)
+ {
+@@ -4347,12 +4347,12 @@ MotorAccessOutcome MotorAccessDispatch(const MotorAccessReq& r, long long wireId
+     }
+     //AI(W906-MT-E2) 20260925: the four Motor Test page actions -- golden uMotorTest handlers only; and BEFORE the generic
+     //  set*Speed matcher below, which would otherwise take "setSpeed" for a parameter button.
+-    if (r.action == "selectMotor" || r.action == "setParamCell" || r.action == "copyFrom" || r.action == "setSpeed") {
++    if (r.action == "selectMotor" || r.action == "setParamCell" || r.action == "copyFrom" || r.action == "setSpeed" || r.action == "saveMotTable") {   //AI(W906-MT-SAVEMOT) 20260930: + saveMotTable (Motor Test only)
+         if (r.source != "uMotorTest")
+             return Refuse("motor.access " + r.action + "（" + r.source + "）: 這是 golden uMotorTest 的畫面動作（" + row->golden + "），教導頁沒有");
+         if (r.action == "selectMotor")  return DoSelectMotor(r, wireId, be);
+         if (r.action == "setParamCell") return DoSetParamCell(r, be);
+-        if (r.action == "copyFrom")     return DoCopyFrom(r, be);
++        if (r.action == "copyFrom")     return DoCopyFrom(r, be);  if (r.action == "saveMotTable") return DoSaveMotTable(r, be);   //AI(W906-MT-SAVEMOT) 20260930
+         return DoSetSpeed(r, wireId, be);
+     }
+     if (r.action.compare(0, 3, "set") == 0 &&
+@@ -4522,3 +4522,451 @@ bool MotorAccessInAlarmSweep() { return g_alarmSweep > 0; }
+ MotorAccessAlarmSweep::MotorAccessAlarmSweep()  { ++g_alarmSweep; }
+ MotorAccessAlarmSweep::~MotorAccessAlarmSweep() { --g_alarmSweep; }
+ }  // namespace ht9045
++
++// =============================================================================
++//  AI(W906-MT-SAVEMOT) 20260930: saveMotTable -- Motor Test「回寫 Mot_Table」(EastSun 20260930「圖片上也幫我新增回寫至 MOT_table的按鈕」,
++//  the button next to the "<Alias> Settings" grid / Copy From). NOT golden (see WebMotorAccess.h). In order:
++//   1. the motor = the request's motor with golden ActiveIndex rules (PageMotor: none selected / not in the table / no MOT object /
++//      not selectable -> refused). uMotorTest only; refused while SystemStart like every Motor Test button (dispatcher).
++//   2. the values = MOT[mi] as the grid shows them (UpdateMotorParameter :659-668): ReadInitSpeed, PJogHigh/Low, PHomeHigh/Low,
++//      PSoftLimitP/N, ReadAcc/ReadDec (= dAccDataBase, the database value), ReadRange.
++//   3. the file = the backend's MotTablePath (the boot's LoadMotData path: W906_MOTTABLE_PATH, else D:\HT9045\System\Mot_Table.csv),
++//      split into lines and cells exactly the way the boot reads it (vclcompat TStringList SetText + CommaText parseDelimited);
++//      columns by TMOTNO::SetMOTTableNo's rule (AnsiPos substring, the last match wins); the row = the ONE line whose Alias cell is
++//      the motor's Alias (0 or 2+ -> refused), with >= 29 cells (TMOTDATA's valid path) and Motorname "M<n>" = its MOT index.
++//   4. per column the old cell is read the boot's way (TMOTDATA atoi / atof, an empty cell = TMOTDATA's default, then
++//      InitialMotorParameter's MN200 rule `if(dAcc>1) dAcc/=100` and SetRange's a>1000 -> 1000) and compared with the grid's value.
++//      Equal -> the cell is NOT touched (its text stays, e.g. "70" on an MN200 row that the grid shows as 0.7). Different -> new text:
++//        integers as "%d" (an unsigned member as its 32-bit int, so the boot's atoi -> unsigned gives it back);
++//        Acc / Dec: the shortest "%.Nf" (N = 0..17) the boot reads back as exactly the grid's value -- 100000 stays "100000",
++//        0.025 is "0.025"; an MN200 cell > 1 keeps the x100 style (the boot's /100 gives the value back).
++//      A quoted cell stays quoted; nothing else in the line moves (other cells, blanks, separators, the line ending).
++//   5. all-or-nothing refusals (nothing written): a column missing / two tokens on one header cell, a value not finite / not an
++//      integer in range, an EMPTY cell whose value differs (TMOTDATA treats it as NULL data and sets Enable=0 -- filling it would
++//      change more than the setting), a cell the boot does not read for this row (INDEX_MOTION_CARD==0 Index rows' Acc/Dec are
++//      1.0; MC88X1's Acc/Dec come from Rate and its Range is 10), a CardModel that is not the one this run loaded.
++//   6. nothing changed -> nothing written, no backup ("no change"). Otherwise: backup = path + ".bak_yyyymmdd_hhmmss" (the bytes
++//      read), the new bytes to path + ".tmp_savemot" (read back), the file re-read (refused if it changed meanwhile), MoveFileEx
++//      REPLACE_EXISTING|WRITE_THROUGH, read back. Same naming as wb_serve's system.file.put csv writer (tools/wb_serve.cpp CsvApplyEdits).
++//   7. HSys.MotTable's row := the file (live backend MotTableRowSaved: _CommaText + the changed members).
++//  ⚠ Range's clamp is the 1203 / MN200 / SMC / SYNTEK classes' SetRange; a Galil / sim object does not clamp -- on such a row a file
++//    value > 1000 with the grid at exactly 1000 is kept as "no change" (no such row on this machine: PCI1203 / MN200 / SMC only).
++// =============================================================================
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#include <windows.h>     //AI(W906-MT-SAVEMOT) 20260930: MoveFileExA / GetLastError only -- included HERE, after every other line of this file, so its macros reach nothing above
++#include <algorithm>     //AI(W906-MT-SAVEMOT) 20260930: std::sort
++
++namespace ht9045 {
++namespace {
++
++const int kMtRowCells = 29;        // TMOTNO::emotTotal (database.cpp TMOTNO::TMOTNO): TMOTDATA reads a row's cells only with >= 29 of them
++
++struct MtLine { std::size_t b, e; };                                   // a line's text in the file, its terminator excluded
++struct MtCell { std::size_t b, e; bool quoted; std::string v; };      // a cell's bytes [b,e) in its line (quotes included) + its value
++
++// vclcompat TStringList::SetText (LoadFromFile): LF ends a line, so does CR LF (the CR is not part of the line) and a lone CR;
++//   a last line without a terminator counts when it is not empty.
++void MtSplitLines(const std::string& t, std::vector<MtLine>& out)
++{
++    out.clear();
++    std::size_t b = 0;
++    for (std::size_t i = 0; i < t.size(); ++i) {
++        if (t[i] == '\n') {
++            MtLine l; l.b = b; l.e = (i > b && t[i - 1] == '\r') ? i - 1 : i;
++            out.push_back(l); b = i + 1;
++        } else if (t[i] == '\r' && !(i + 1 < t.size() && t[i + 1] == '\n')) {
++            MtLine l; l.b = b; l.e = i;
++            out.push_back(l); b = i + 1;
++        }
++    }
++    if (b < t.size()) { MtLine l; l.b = b; l.e = t.size(); out.push_back(l); }
++}
++
++// vclcompat parseDelimited (TStringList CommaText -- what SetMOTTableNo and TMOTDATA read with), plus each cell's byte span:
++//   blanks before a cell skipped; "..." with "" = one quote, anything after the closing quote but ',' ends the line;
++//   an unquoted cell runs to the next ',' and loses its trailing blanks; "a,b," = 3 cells; "" = no cell.
++void MtSplitCells(const std::string& s, std::vector<MtCell>& out)
++{
++    out.clear();
++    const std::size_t n = s.size();
++    std::size_t i = 0;
++    while (i <= n) {
++        while (i < n && (unsigned char)s[i] <= ' ' && s[i] != ',') ++i;
++        MtCell c; c.b = i; c.e = i; c.quoted = false;
++        if (i < n && s[i] == '"') {
++            c.quoted = true; ++i;
++            while (i < n) {
++                if (s[i] == '"') {
++                    if (i + 1 < n && s[i + 1] == '"') { c.v += '"'; i += 2; }
++                    else { ++i; break; }
++                } else { c.v += s[i]; ++i; }
++            }
++            c.e = i;
++        } else {
++            while (i < n && s[i] != ',') { c.v += s[i]; ++i; }
++            std::size_t e = i;
++            while (!c.v.empty() && (unsigned char)c.v[c.v.size() - 1] <= ' ') { c.v.erase(c.v.size() - 1); --e; }
++            c.e = e;
++        }
++        out.push_back(c);
++        if (i < n && s[i] == ',') { ++i; continue; }
++        break;
++    }
++    if (s.empty()) out.clear();
++}
++
++int MtColumn(const std::vector<MtCell>& hdr, const std::string& token)   // TMOTNO::SetMOTTableNo: AnsiPos substring, LAST match wins
++{
++    int k = -1;
++    for (std::size_t i = 0; i < hdr.size(); ++i) if (hdr[i].v.find(token) != std::string::npos) k = (int)i;
++    return k;
++}
++
++int MtMotorIndexOf(const std::string& s)                                // WebMotorAccessLive.cpp MotorIndexOf (cinitial.cpp's "M%02d")
++{
++    if (s.size() < 2 || (s[0] != 'M' && s[0] != 'm')) return -1;
++    for (std::size_t i = 1; i < s.size(); ++i) if (s[i] < '0' || s[i] > '9') return -1;
++    return std::atoi(s.c_str() + 1);
++}
++
++double MtDefault(const std::string& col)                                // TMOTDATA's value for an EMPTY cell (database.cpp)
++{
++    if (col == "SoftLimitN") return -999999.0;
++    if (col == "SoftLimitP") return 999999.0;
++    if (col == "Acc" || col == "Dec") return 1.0;
++    if (col == "Range") return 1.0;
++    return 100.0;                                                       // InitSpeed / HomeHighSpeed / HomeLowSpeed / JogHighSpeed / JogLowSpeed
++}
++
++// what the boot puts into MOT from an Acc / Dec cell: TMOTDATA atof, then InitialMotorParameter's MN200 `if(dAcc>1) dAcc/100.0`
++//   volatile: the quotient is rounded to a double (what the boot stores into dAccDataBase) whatever the x87 excess-precision flags
++double MtBootReal(const std::string& text, bool mn200)
++{
++    volatile double a = std::atof(text.c_str());
++    if (mn200 && a > 1) { volatile double d = a / 100.0; return d; }
++    return a;
++}
++
++// the shortest cell text the boot reads back as exactly `want`; MN200: the x100 style first when the old cell used it
++bool MtRealText(double want, bool mn200, bool scaledFirst, std::string& out)
++{
++    if (want == 0.0) { out = "0"; return true; }                        // never "-0"
++    const int styles = mn200 ? 2 : 1;
++    for (int st = 0; st < styles; ++st) {
++        const bool scaled = mn200 && ((st == 0) == scaledFirst);
++        volatile double t = scaled ? want * 100.0 : want;
++        char b[400];
++        for (int d = 0; d <= 17; ++d) {
++            std::snprintf(b, sizeof(b), "%.*f", d, t);
++            volatile double got = MtBootReal(b, mn200);
++            if (got == want) { out = b; return true; }
++        }
++        std::snprintf(b, sizeof(b), "%.17g", t);
++        volatile double got = MtBootReal(b, mn200);
++        if (got == want) { out = b; return true; }
++    }
++    return false;
++}
++
++std::string MtNum(double v) { char b[64]; std::snprintf(b, sizeof(b), "%.15g", v); return b; }
++
++bool MtReadFile(const std::string& p, std::string& out)
++{
++    out.clear();
++    std::FILE* f = std::fopen(p.c_str(), "rb");
++    if (!f) return false;
++    char buf[65536];
++    std::size_t n;
++    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
++    const bool bad = std::ferror(f) != 0;
++    std::fclose(f);
++    return !bad;
++}
++bool MtWriteFile(const std::string& p, const std::string& data)        // write, then read back what landed
++{
++    std::FILE* f = std::fopen(p.c_str(), "wb");
++    if (!f) return false;
++    const bool wr = std::fwrite(data.data(), 1, data.size(), f) == data.size();
++    const bool fl = std::fflush(f) == 0;
++    const bool cl = std::fclose(f) == 0;
++    std::string back;
++    return wr && fl && cl && MtReadFile(p, back) && back == data;
++}
++bool MtExists(const std::string& p) { struct _stat st; return _stat(p.c_str(), &st) == 0; }
++std::string MtStamp()                                                   // local yyyymmdd_hhmmss (wb_serve CsvApplyEdits' format)
++{
++    const std::time_t now = std::time(0);
++    const std::tm lt = *std::localtime(&now);
++    char b[32];
++    std::strftime(b, sizeof(b), "%Y%m%d_%H%M%S", &lt);
++    return b;
++}
++
++struct MtRepl { std::size_t b, e; std::string s; };
++bool MtReplAfter(const MtRepl& x, const MtRepl& y) { return x.b > y.b; }
++
++}  // namespace
++
++std::vector<MotTableSaveField> MotTableFieldsOf(const MotorGolden& g)
++{
++    std::vector<MotTableSaveField> v;
++    const struct { const char* c; MotTableFieldKind k; double x; } t[10] = {
++        { "InitSpeed",     kMtfUInt, (double)g.initSpeed },                 // :659 ReadInitSpeed()
++        { "JogHighSpeed",  kMtfUInt, (double)g.jogHigh },                   // :660 PJogHighSpeed
++        { "JogLowSpeed",   kMtfUInt, (double)g.jogLow },                    // :661 PJogLowSpeed
++        { "HomeHighSpeed", kMtfUInt, (double)g.homeHigh },                  // :662 PHomeHighSpeed
++        { "HomeLowSpeed",  kMtfUInt, (double)g.homeLow },                   // :663 PHomeLowSpeed
++        { "SoftLimitP",    kMtfInt,  (double)g.softP },                     // :664 PSoftLimitP
++        { "SoftLimitN",    kMtfInt,  (double)g.softN },                     // :665 PSoftLimitN
++        { "Acc",           kMtfReal, g.accDb },                             // :666 ReadAcc() = dAccDataBase
++        { "Dec",           kMtfReal, g.decDb },                             // :667 ReadDec() = dDecDataBase
++        { "Range",         kMtfUInt, (double)g.range } };                   // :668 ReadRange()
++    for (int i = 0; i < 10; ++i) { MotTableSaveField f; f.column = t[i].c; f.kind = t[i].k; f.value = t[i].x; v.push_back(f); }
++    return v;
++}
++
++MotTableEditResult MotTableEditRow(const std::string& text, const std::string& alias, int motIndex,
++                                   const std::vector<MotTableSaveField>& fields, bool indexMotionCard0,
++                                   const std::string& expectCard, std::string& outText)
++{
++    MotTableEditResult R;
++    outText = text;
++    std::vector<MtLine> lines;
++    MtSplitLines(text, lines);
++    if (lines.size() < 2) { R.why = "檔案沒有資料列（不到 2 行；LoadMotData 的 `StrList->Count<=1`）"; return R; }
++    std::vector<MtCell> hdr;
++    MtSplitCells(text.substr(lines[0].b, lines[0].e - lines[0].b), hdr);
++    const int cNo = MtColumn(hdr, "Motorname"), cAlias = MtColumn(hdr, "Alias"), cCard = MtColumn(hdr, "CardModel"), cRate = MtColumn(hdr, "Rate");
++    if (cNo < 0 || cAlias < 0 || cCard < 0) {
++        R.why = std::string("表頭找不到 ") + (cNo < 0 ? "Motorname" : cAlias < 0 ? "Alias" : "CardModel") + " 欄（TMOTNO::SetMOTTableNo 的欄名）—— 不寫";
++        return R;
++    }
++    std::vector<int> col(fields.size(), -1);
++    for (std::size_t i = 0; i < fields.size(); ++i) {
++        col[i] = MtColumn(hdr, fields[i].column);
++        if (col[i] < 0) { R.why = "表頭找不到 " + fields[i].column + " 欄（TMOTNO::SetMOTTableNo 的欄名）—— 不寫"; return R; }
++        for (std::size_t j = 0; j < i; ++j)
++            if (col[j] == col[i]) {
++                R.why = "表頭第 " + std::to_string(col[i] + 1) + " 欄同時對到 " + fields[j].column + " 與 " + fields[i].column +
++                        "（SetMOTTableNo 是子字串比對）—— 不知道哪一格是哪一個，不寫";
++                return R;
++            }
++    }
++    std::size_t li = 0;
++    int hits = 0;
++    std::vector<MtCell> cells;
++    for (std::size_t k = 1; k < lines.size(); ++k) {
++        std::vector<MtCell> c;
++        MtSplitCells(text.substr(lines[k].b, lines[k].e - lines[k].b), c);
++        if ((int)c.size() > cAlias && c[(std::size_t)cAlias].v == alias) { if (++hits == 1) { li = k; cells.swap(c); } }
++    }
++    if (hits == 0) { R.why = "Mot_Table 裡找不到 Alias=" + alias + " 的那一列 —— 不寫"; return R; }
++    if (hits > 1)  { R.why = "Mot_Table 裡 Alias=" + alias + " 有 " + std::to_string(hits) + " 列 —— 不知道寫哪一列，不寫"; return R; }
++    R.lineNo = (int)li + 1;
++    const std::string where = "第 " + std::to_string(R.lineNo) + " 行（" + alias + "）";
++    if ((int)cells.size() < kMtRowCells) {
++        R.why = where + "只有 " + std::to_string(cells.size()) + " 格（TMOTDATA 要 >= 29 格才讀這一列的值，database.cpp）—— 不寫";
++        return R;
++    }
++    for (std::size_t i = 0; i < col.size(); ++i)
++        if (col[i] >= (int)cells.size()) { R.why = where + "沒有 " + fields[i].column + " 那一格 —— 不寫"; return R; }
++    if (cNo >= (int)cells.size() || cCard >= (int)cells.size()) { R.why = where + "沒有 Motorname／CardModel 那一格 —— 不寫"; return R; }
++    R.motorName = cells[(std::size_t)cNo].v;
++    if (MtMotorIndexOf(R.motorName) != motIndex) {
++        R.why = where + "的 Motorname=" + R.motorName + "，不是這一軸的 MOT[" + std::to_string(motIndex) + "] —— 不寫";
++        return R;
++    }
++    const std::string fileCard = cells[(std::size_t)cCard].v;
++    const bool indexRow = alias == "MTestY1" || alias == "MTestZ1" || alias == "MTestZ2" || alias == "MTestY2";
++    const bool indexForced = indexMotionCard0 && indexRow && fileCard != "PCI1203";   // TMOTDATA's special case + EastSun R2 (database.cpp)
++    R.cardModel = indexForced ? std::string("SMC") : fileCard;
++    if (!expectCard.empty() && expectCard != R.cardModel) {
++        R.why = where + "的 CardModel 開機讀起來是 " + R.cardModel + "，這次執行載入的是 " + expectCard +
++                " —— 檔案在開機後被改過；先重開 wb_serve，不寫";
++        return R;
++    }
++    const bool mn200 = R.cardModel == "MN200", mc88 = R.cardModel == "MC88X1";
++    const double rateV = (cRate < 0 || cRate >= (int)cells.size() || cells[(std::size_t)cRate].v.empty())
++                         ? 1.0 : (double)std::atoi(cells[(std::size_t)cRate].v.c_str());   // TMOTDATA iRate (empty -> 1)
++
++    std::vector<MtRepl> reps;
++    for (std::size_t i = 0; i < fields.size(); ++i) {
++        const MotTableSaveField& f = fields[i];
++        const MtCell& c = cells[(std::size_t)col[i]];
++        MotTableCellChange ch;
++        ch.column = f.column; ch.oldText = c.v; ch.newText = c.v;
++        const double v = f.value;
++        if (!std::isfinite(v)) { R.why = f.column + " 的值不是有限的數字 —— 整列不寫"; return R; }
++        const bool acc = (f.column == "Acc" || f.column == "Dec"), range = (f.column == "Range");
++        unsigned uv = 0;
++        int iv = 0;
++        if (f.kind != kMtfReal) {
++            const bool okInt = v == std::floor(v) &&
++                (f.kind == kMtfUInt ? (v >= 0.0 && v <= 4294967295.0) : (v >= -2147483648.0 && v <= 2147483647.0));
++            if (!okInt) { R.why = f.column + " 的值 " + MtNum(v) + " 不是範圍內的整數 —— 整列不寫"; return R; }
++            if (f.kind == kMtfUInt) { uv = (unsigned)(unsigned long long)v; iv = (int)uv; }
++            else                    { iv = (int)v; uv = (unsigned)iv; }
++        }
++        bool fixed = false;
++        double fixedV = 0.0;
++        std::string fixedWhy;
++        if (acc && indexForced)  { fixed = true; fixedV = 1.0;   fixedWhy = "INDEX_MOTION_CARD==0 的 Index 列（CardModel 不是 PCI1203）TMOTDATA 不讀這一格、一律 1.0（database.cpp）"; }
++        else if (acc && mc88)    { fixed = true; fixedV = rateV; fixedWhy = "MC88X1 開機的 Acc/Dec 取 Rate 欄（cinitial.cpp InitialMotorParameter），不讀這一格"; }
++        else if (range && mc88)  { fixed = true; fixedV = 10.0;  fixedWhy = "MC88X1 的 Range 在 TMOTDATA 一律 10，不讀這一格"; }
++        bool same;
++        if (fixed)                   same = (v == fixedV);
++        else if (c.v.empty())        same = (f.kind == kMtfReal) ? (v == MtDefault(f.column))
++                                          : (f.kind == kMtfUInt) ? (uv == (unsigned)(int)MtDefault(f.column)) : (iv == (int)MtDefault(f.column));
++        else if (f.kind == kMtfReal) {
++            volatile double got = MtBootReal(c.v, mn200);
++            same = (got == v);
++            if (same && mn200 && std::atof(c.v.c_str()) > 1) ch.note = "MN200：檔案 " + c.v + " 開機 /100 = " + MtNum(v) + "（畫面值），不動";
++        }
++        else if (range) {
++            const unsigned o = (unsigned)std::atoi(c.v.c_str());
++            same = (o == uv) || (o > 1000u && uv == 1000u);
++            if (same && o != uv) ch.note = "檔案 " + c.v + " 開機被 SetRange 夾成 1000（畫面值），不動";
++        }
++        else if (f.kind == kMtfUInt) same = ((unsigned)std::atoi(c.v.c_str()) == uv);
++        else                         same = (std::atoi(c.v.c_str()) == iv);
++        if (!same) {
++            if (fixed) { R.why = f.column + "：畫面值 " + MtNum(v) + "，但 " + fixedWhy + " —— 存不進 Mot_Table，整列不寫"; return R; }
++            if (c.v.empty()) {
++                R.why = f.column + "：檔案裡這一格是空的（TMOTDATA 把空格當 NULL、該軸 Enable 變 0，database.cpp）—— 這顆鈕不填空格，整列不寫";
++                return R;
++            }
++            std::string t;
++            if (f.kind == kMtfReal) {
++                if (!MtRealText(v, mn200, mn200 && std::atof(c.v.c_str()) > 1, t)) {
++                    R.why = f.column + " 的值 " + MtNum(v) + " 找不到開機讀回來完全相同的寫法 —— 整列不寫";
++                    return R;
++                }
++            } else {
++                char b[32];
++                std::snprintf(b, sizeof(b), "%d", iv);
++                t = b;
++            }
++            ch.newText = t; ch.changed = true; ++R.changedCount;
++            MtRepl rp; rp.b = c.b; rp.e = c.e; rp.s = c.quoted ? ("\"" + t + "\"") : t;
++            reps.push_back(rp);
++        }
++        R.cells.push_back(ch);
++    }
++
++    std::string row = text.substr(lines[li].b, lines[li].e - lines[li].b);
++    std::sort(reps.begin(), reps.end(), MtReplAfter);                  // right to left: the spans to the left stay valid
++    for (std::size_t k = 0; k < reps.size(); ++k) row.replace(reps[k].b, reps[k].e - reps[k].b, reps[k].s);
++    std::vector<MtCell> chk;                                            // read the new row back the boot's way
++    MtSplitCells(row, chk);
++    bool good = chk.size() == cells.size();
++    for (std::size_t k = 0; good && k < chk.size(); ++k) {
++        std::string want = cells[k].v;
++        for (std::size_t i = 0; i < col.size(); ++i) if (col[i] == (int)k) want = R.cells[i].newText;
++        if (chk[k].v != want) good = false;
++    }
++    if (!good) { R.why = "內部檢查失敗：改寫後的那一列重新讀回來不對 —— 不寫"; return R; }
++    R.newRowText = row;
++    outText = text.substr(0, lines[li].b) + row + text.substr(lines[li].e);
++    R.ok = true;
++    return R;
++}
++
++MotTableSaveResult MotTableSaveRow(const std::string& path, const std::string& stamp, const std::string& alias, int motIndex,
++                                   const std::vector<MotTableSaveField>& fields, bool indexMotionCard0, const std::string& expectCard)
++{
++    MotTableSaveResult S;
++    S.path = path;
++    std::string text;
++    if (path.empty() || !MtReadFile(path, text)) { S.why = "讀不到 " + path + " —— 不寫"; return S; }
++    if (text.empty()) { S.why = path + " 是空的 —— 不寫"; return S; }
++    std::string out;
++    S.edit = MotTableEditRow(text, alias, motIndex, fields, indexMotionCard0, expectCard, out);
++    if (!S.edit.ok) { S.why = S.edit.why; return S; }
++    if (S.edit.changedCount == 0) { S.ok = true; return S; }             // no change: nothing written, no backup
++    const std::string st = stamp.empty() ? MtStamp() : stamp;
++    std::string bak = path + ".bak_" + st;
++    for (int k = 2; MtExists(bak) && k < 100; ++k) bak = path + ".bak_" + st + "_" + std::to_string(k);
++    if (MtExists(bak)) { S.why = "備份檔名都被占用了（" + bak + "）—— 不寫"; return S; }
++    if (!MtWriteFile(bak, text)) { std::remove(bak.c_str()); S.why = "備份寫不出來（" + bak + "）—— 不寫"; return S; }
++    const std::string tmp = path + ".tmp_savemot";
++    if (!MtWriteFile(tmp, out)) {
++        std::remove(tmp.c_str()); std::remove(bak.c_str());
++        S.why = "暫存檔寫不出來（" + tmp + "）—— 原檔沒動"; return S;
++    }
++    std::string again;
++    if (!MtReadFile(path, again) || again != text) {
++        std::remove(tmp.c_str()); std::remove(bak.c_str());
++        S.why = path + " 在讀取之後被別的程式改過 —— 原檔沒動，請再按一次"; return S;
++    }
++    if (!::MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
++        const unsigned long e = (unsigned long)::GetLastError();
++        std::remove(tmp.c_str()); std::remove(bak.c_str());
++        S.why = "取代 " + path + " 失敗（MoveFileEx GetLastError=" + std::to_string(e) + "；檔案被別的程式開著？）—— 原檔沒動";
++        return S;
++    }
++    S.backup = bak;
++    S.wrote = true;
++    std::string back;
++    if (!MtReadFile(path, back) || back != out) { S.why = "已取代 " + path + "，但讀回來的內容不對 —— 請用備份 " + bak + " 還原"; return S; }
++    S.ok = true;
++    return S;
++}
++
++// ---- saveMotTable (the dispatcher's forward declaration is above MotorAccessDispatch) ----
++static MotorAccessOutcome DoSaveMotTable(const MotorAccessReq& r, IMotorAccessBackend& be)
++{
++    MotionCtx m;
++    std::string who, why;
++    if (!PageMotor(r, be, m, who, why)) return Refuse(why);                     // golden ActiveIndex==-1 etc.
++    const std::string path = be.MotTableFilePath();
++    if (path.empty()) return Refuse(who + ": 沒有 Mot_Table 的路徑（MotTablePath 是空的）—— 不寫");
++    const MotTableSaveResult s = MotTableSaveRow(path, std::string(), r.motors[0], m.a.motIndex, MotTableFieldsOf(m.g),
++                                                 be.MotTableIndexForced(), m.a.cardModel);
++    if (!s.ok) {
++        std::printf("motor.access saveMotTable %s: NOT written -- %s\n", r.motors[0].c_str(), s.why.c_str());
++        return Refuse(who + "（" + path + "）: " + s.why);
++    }
++    std::vector<std::pair<std::string, std::string> > changed;
++    std::string list;
++    for (std::size_t i = 0; i < s.edit.cells.size(); ++i) {
++        const MotTableCellChange& c = s.edit.cells[i];
++        if (!c.changed) continue;
++        changed.push_back(std::make_pair(c.column, c.newText));
++        list += (list.empty() ? "" : "、") + c.column + " " + c.oldText + " → " + c.newText;
++    }
++    if (s.wrote) be.MotTableRowSaved(r.motors[0], s.edit.newRowText, changed);
++    const std::string at = s.edit.motorName + "，第 " + std::to_string(s.edit.lineNo) + " 行";
++    const std::string msg = s.wrote
++        ? "已寫回 " + path + "：" + r.motors[0] + "（" + at + "）" + list + "；備份 " + s.backup
++        : r.motors[0] + "（" + at + "）的 10 個設定值與 " + path + " 相同 —— no change，沒有寫檔、沒有備份";
++    std::printf("motor.access saveMotTable: %s\n", msg.c_str());
++    webbridge::JsonWriter w;
++    w.BeginObject();
++    AckHead(w, r, s.wrote ? "saved" : "unchanged", s.wrote ? "Mot_Table" : "none", msg);
++    w.Key("file").String(path);
++    w.Key("backup"); if (s.backup.empty()) w.Null(); else w.String(s.backup);
++    w.Key("line").Number((wb_int64)s.edit.lineNo);
++    w.Key("motorName").String(s.edit.motorName);
++    w.Key("motIndex").Number((wb_int64)m.a.motIndex);
++    w.Key("changed").Number((wb_int64)s.edit.changedCount);
++    w.Key("changes").BeginArray();                                              // only the cells that were rewritten
++    for (std::size_t i = 0; i < s.edit.cells.size(); ++i) {
++        const MotTableCellChange& c = s.edit.cells[i];
++        if (!c.changed) continue;
++        w.BeginObject(); w.Key("column").String(c.column); w.Key("old").String(c.oldText); w.Key("new").String(c.newText); w.EndObject();
++    }
++    w.EndArray();
++    w.Key("kept").BeginArray();                                                 // unchanged cells whose text is not the grid's number (told, not touched)
++    for (std::size_t i = 0; i < s.edit.cells.size(); ++i) {
++        const MotTableCellChange& c = s.edit.cells[i];
++        if (c.changed || c.note.empty()) continue;
++        w.BeginObject(); w.Key("column").String(c.column); w.Key("text").String(c.oldText); w.Key("note").String(c.note); w.EndObject();
++    }
++    w.EndArray();
++    WriteCurOf(w, be, m.a.motIndex);
++    MotorAccessOutcome o; o.ok = true; o.ackJson = Finish(w); return o;
++}
++
++}  // namespace ht9045
+diff --git a/WebMotorAccess.h b/WebMotorAccess.h
+index 2df5081..eecaa89 100644
+--- a/WebMotorAccess.h
++++ b/WebMotorAccess.h
+@@ -403,6 +403,15 @@ public:
+     //AI(W906-W5-b) 20260925: 覆核 W5B-R3 —— 全域 fAllMotorHome=false。golden 進教導頁（FormShow uteach.cpp:1606）、離開教導頁
+     //  （main.cpp:27845）、MotorTest 關閉（uteach.cpp:2439）都清它 ⇒ 下一次 START 先做全部歸零（WebStart.cpp Home by Start）。
+     virtual void GoldenClearAllMotorHome() = 0;
++
++    //AI(W906-MT-SAVEMOT) 20260930: Motor Test「回寫 Mot_Table」(action saveMotTable, EastSun 20260930). Defaults = no file, so the
++    //  older fakes need nothing; the live backend (WebMotorAccessLive.cpp) answers from MotTablePath / INDEX_MOTION_CARD / HSys.MotTable.
++    virtual std::string MotTableFilePath() { return std::string(); }            // MotTablePath (database.cpp LoadMotData: W906_MOTTABLE_PATH, else the golden literal)
++    virtual bool        MotTableIndexForced() { return false; }                  // INDEX_MOTION_CARD==0: TMOTDATA forces the four Index rows' Acc/Dec (database.cpp)
++    //  after a successful write: the in-memory HSys.MotTable row of that Alias := the file (rowText = its new _CommaText; cells =
++    //  (column token, new cell text) of the changed cells only), so a later read in the same run agrees with the file.
++    virtual void        MotTableRowSaved(const std::string& alias, const std::string& rowText,
++                                         const std::vector<std::pair<std::string, std::string> >& cells) { (void)alias; (void)rowText; (void)cells; }
+ };
+ 
+ struct MotorAccessOutcome {
+@@ -588,6 +597,56 @@ IMotorAccessBackend& MotorAccessLiveBackend();
+ //  only Teach's jogs). Rules and golden cites: WebMotorAccess.cpp EOF.
+ void MotorAccessPageClosed(IMotorAccessBackend& be, const char* form);
+ 
++//AI(W906-MT-SAVEMOT) 20260930: EastSun 20260930「圖片上也幫我新增回寫至 MOT_table的按鈕」-- Motor Test's "<Alias> Settings" grid
++//  (golden strngrdMotor rows 1..10 = UpdateMotorParameter, uMotorTest.cpp:659-668) written back into THAT motor's row of
++//  Mot_Table.csv (action saveMotTable). NOT golden: golden's Settings grid is memory only (strngrdMotorSelectCell); golden's only
++//  Mot_Table writer is the Motor Database tab's sbUpdateClick (uMotorTest.cpp:2240-2268), which rewrites the WHOLE file from its
++//  text grid (TStringList CommaText + SaveToFile). This one changes only the cells whose value differs, in one row; every other
++//  byte of the file stays. Column names = TMOTNO::SetMOTTableNo's tokens (database.cpp); rules at WebMotorAccess.cpp EOF.
++enum MotTableFieldKind { kMtfInt = 0, kMtfUInt, kMtfReal };   // how TMOTDATA reads the cell: atoi into an int / an unsigned member, atof
++struct MotTableSaveField {
++    std::string       column;   // SetMOTTableNo token: InitSpeed, JogHighSpeed, JogLowSpeed, HomeHighSpeed, HomeLowSpeed, SoftLimitP, SoftLimitN, Acc, Dec, Range
++    MotTableFieldKind kind;
++    double            value;    // what MOT[mi] holds = what the grid shows
++};
++struct MotTableCellChange {
++    std::string column;
++    std::string oldText, newText;   // the cell's text as TMOTDATA reads it (quotes stripped); newText = oldText when unchanged
++    bool        changed;
++    std::string note;               // an unchanged cell whose text is not the grid's number (the boot's clamp / MN200 /100), or ""
++    MotTableCellChange() : changed(false) {}
++};
++struct MotTableEditResult {
++    bool        ok;
++    std::string why;                // !ok: why nothing may be written
++    int         lineNo;             // 1-based line of the row in the file
++    std::string motorName;          // the row's Motorname cell ("M03")
++    std::string cardModel;          // the row's CardModel as the boot reads it (the Index override -> "SMC")
++    std::string newRowText;         // the row after the edit, no line ending (= TMOTDATA::_CommaText)
++    std::vector<MotTableCellChange> cells;   // one per field, in the fields' order
++    int         changedCount;
++    MotTableEditResult() : ok(false), lineNo(0), changedCount(0) {}
++};
++// the ten grid rows in golden order (UpdateMotorParameter :659-668): InitSpeed .. Range, from the golden object
++std::vector<MotTableSaveField> MotTableFieldsOf(const MotorGolden& g);
++// pure: `text` = the file's bytes; `outText` = the same bytes with only the changed cells of the row replaced.
++//   expectCard: the CardModel this run loaded for the motor ("" = not checked) -- a different one = the file changed since boot.
++MotTableEditResult MotTableEditRow(const std::string& text, const std::string& alias, int motIndex,
++                                   const std::vector<MotTableSaveField>& fields, bool indexMotionCard0,
++                                   const std::string& expectCard, std::string& outText);
++struct MotTableSaveResult {
++    bool        ok;
++    std::string why;
++    std::string path, backup;       // backup = "" when nothing was written
++    bool        wrote;
++    MotTableEditResult edit;
++    MotTableSaveResult() : ok(false), wrote(false) {}
++};
++// read `path`, MotTableEditRow, and when a cell changed: backup (path + ".bak_" + stamp; stamp "" = local yyyymmdd_hhmmss) ->
++//   temp file -> MoveFileEx replace -> read back. Refuses (nothing written) on any failure before the replace.
++MotTableSaveResult MotTableSaveRow(const std::string& path, const std::string& stamp, const std::string& alias, int motIndex,
++                                   const std::vector<MotTableSaveField>& fields, bool indexMotionCard0, const std::string& expectCard);
++
+ }  // namespace ht9045
+ 
+ #endif  // HT9045_WEBMOTORACCESS_H
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index d2e0327..344d91b 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -980,6 +980,39 @@ public:
+         std::snprintf(b, sizeof(b), "%04u%02u%02u%02u%02u", (unsigned)t.wYear, (unsigned)t.wMonth, (unsigned)t.wDay, (unsigned)t.wHour, (unsigned)t.wMinute);
+         return b;
+     }
++
++    //AI(W906-MT-SAVEMOT) 20260930: saveMotTable (Motor Test「回寫 Mot_Table」, WebMotorAccess.cpp EOF). The path is the one the boot
++    //  read (MotTablePath, database.cpp LoadMotData: W906_MOTTABLE_PATH or the golden literal); INDEX_MOTION_CARD decides TMOTDATA's
++    //  Index-row override. After a write the in-memory row of that Alias (the first one, Resolve's rule) is set the way TMOTDATA would
++    //  read the new cells -- only the ten Settings members and _CommaText; the row's identity (No/Alias/CardModel/...) is not touched.
++    std::string MotTableFilePath() override { return std::string(MotTablePath.c_str()); }
++    bool MotTableIndexForced() override { return INDEX_MOTION_CARD == 0; }
++    void MotTableRowSaved(const std::string& alias, const std::string& rowText,
++                          const std::vector<std::pair<std::string, std::string> >& cells) override
++    {
++        TMOTDATA* row = 0;
++        for (std::size_t i = 0; i < HSys.MotTable.size(); ++i) {
++            TMOTDATA* r = HSys.MotTable[i];
++            if (r && alias == r->Alias.c_str()) { row = r; break; }
++        }
++        if (!row) { std::printf("motor.access saveMotTable: HSys.MotTable has no row %s -- memory not updated\n", alias.c_str()); return; }
++        row->_CommaText = AnsiString(rowText.c_str());
++        for (std::size_t k = 0; k < cells.size(); ++k) {                        // TMOTDATA's own reads (database.cpp: atoi / atof)
++            const std::string& c = cells[k].first;
++            const char* t = cells[k].second.c_str();
++            if      (c == "InitSpeed")     row->iInitSpeed     = std::atoi(t);
++            else if (c == "JogHighSpeed")  row->iJogHighSpeed  = std::atoi(t);
++            else if (c == "JogLowSpeed")   row->iJogLowSpeed   = std::atoi(t);
++            else if (c == "HomeHighSpeed") row->iHomeHighSpeed = std::atoi(t);
++            else if (c == "HomeLowSpeed")  row->iHomeLowSpeed  = std::atoi(t);
++            else if (c == "SoftLimitP")    row->iSoftLimitP    = std::atoi(t);
++            else if (c == "SoftLimitN")    row->iSoftLimitN    = std::atoi(t);
++            else if (c == "Acc")           row->dAcc           = std::atof(t);
++            else if (c == "Dec")           row->dDec           = std::atof(t);
++            else if (c == "Range")         row->iRange         = std::atoi(t);
++        }
++        std::printf("motor.access saveMotTable: HSys.MotTable row %s updated (%d cell(s))\n", alias.c_str(), (int)cells.size());
++    }
+ };
+ 
+ //AI(W906-MT-E2) 20260925: golden btnReloadMotorDataClick's InitialMotorParameter() (golden cinitial.cpp:3392 on; port
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index ee78327..3ba29de 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -5254,3 +5254,21 @@ if(NOT MSVC)   # new test file only
+ endif()
+ add_test(NAME NoteMotorError COMMAND test_note_motorerror)
+ set_tests_properties(NoteMotorError PROPERTIES TIMEOUT 120)
++
++# --- test_mt_savemot: AI(W906-MT-SAVEMOT) 20260930 -- Motor Test「回寫 Mot_Table」(EastSun 20260930), the writer behind motor.access
++#   saveMotTable (WebMotorAccess.cpp EOF: MotTableEditRow / MotTableSaveRow).  argv[1] = machines/HT9050/Mot_Table.csv, READ ONLY;
++#   every write goes to W906_MOTTABLE_PATH = a scratch copy in this build directory (the test refuses a target under
++#   D:\HT9045\System / config / IniData or equal to argv[1]).  Byte identity of every untouched byte is checked against an
++#   independent rebuild.  Same sources as test_web_motor_access (no god-stack).  After the GLOBAL TEST TIMEOUT block => own TIMEOUT;
++#   its own ENVIRONMENT is kept by _w906_env_all_tests (only _ht9045_env_extra is appended).
++add_executable(test_mt_savemot
++    test_mt_savemot.cpp
++    ${CMAKE_SOURCE_DIR}/WebMotorAccess.cpp
++    ${CMAKE_SOURCE_DIR}/WebBridge/JsonWriter.cpp
++    ${CMAKE_SOURCE_DIR}/Public/cJSON.c
++)
++target_include_directories(test_mt_savemot PRIVATE ${CMAKE_SOURCE_DIR})
++add_test(NAME MtSaveMotTable
++         COMMAND test_mt_savemot "${CMAKE_SOURCE_DIR}/../machines/HT9050/Mot_Table.csv")
++set_tests_properties(MtSaveMotTable PROPERTIES TIMEOUT 120
++    ENVIRONMENT "W906_MOTTABLE_PATH=${CMAKE_CURRENT_BINARY_DIR}/mt_savemot_scratch/Mot_Table.csv")
+diff --git a/tests/test_mt_savemot.cpp b/tests/test_mt_savemot.cpp
+new file mode 100644
+index 0000000..147fca9
+--- /dev/null
++++ b/tests/test_mt_savemot.cpp
+@@ -0,0 +1,526 @@
++// =============================================================================
++//  tests/test_mt_savemot.cpp
++//
++//  AI(W906-MT-SAVEMOT) 20260930: Motor Test「回寫 Mot_Table」-- the writer behind motor.access action saveMotTable
++//  (WebMotorAccess.cpp EOF: MotTableFieldsOf / MotTableEditRow / MotTableSaveRow). EastSun 20260930.
++//
++//  argv[1] = the Mot_Table.csv to start from -- READ ONLY (CMake passes machines/HT9050/Mot_Table.csv; by hand:
++//            D:\HT9045\System\Mot_Table.csv). This test never writes it.
++//  The copy it writes = W906_MOTTABLE_PATH (the seam the boot's LoadMotData reads, database.cpp), else
++//            %TEMP%\ht9045_savemot_<pid>\Mot_Table.csv. Refused (exit 2) when that path is argv[1] itself or lies under
++//            D:\HT9045\System, \config or \IniData (production configuration, CLAUDE.md). Every other file it writes
++//            (synthetic tables, backups) sits in the same directory as that copy.
++//  Locks:
++//   [1] every data row of the file: the ten values the boot puts in MOT (read here independently of the writer) -> "no change":
++//       nothing written, no backup, bytes identical; both INDEX_MOTION_CARD arms.
++//   [2] a change on a PCI1203 row through the file layer: backup == the old bytes; the new file == the old bytes with exactly
++//       those cells replaced (compared with an independent rebuild: every other line, cell, separator, CR LF and the trailing
++//       newline identical); integers stay integers ("12000", not "12000.000000"); a real is the shortest text ("0.125");
++//       undo -> the original bytes again; a backup name that exists -> "_2".
++//   [3] rules on synthetic text: MN200 styles, Range clamp, empty cells, the Index override, MC88X1, CardModel / Motorname /
++//       Alias checks, missing / ambiguous column, non-finite / not integral / out of range, the unsigned wrap, quoted cells,
++//       blanks around a cell, LF-only / lone CR / no trailing newline.
++//   [4] file layer refusals: unreadable file, a read-only file (MoveFileEx refused) -> the bytes kept, no .tmp / .bak left.
++// =============================================================================
++#include "WebMotorAccess.h"
++
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <fstream>
++#include <limits>
++#include <sstream>
++#include <string>
++#include <vector>
++#include <direct.h>      // _mkdir
++#include <process.h>     // _getpid
++#include <sys/stat.h>    // _stat
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#include <windows.h>     // SetFileAttributesA ([4] the read-only file)
++
++using namespace ht9045;
++
++static int g_pass = 0;
++static int g_fail = 0;
++#define CHECK(cond, msg)                                                        \
++    do {                                                                        \
++        if (cond) { printf("  PASS: %s\n", msg); ++g_pass; }                    \
++        else      { printf("  FAIL: %s  (line %d)\n", msg, __LINE__); ++g_fail; } \
++    } while (0)
++
++static bool Has(const std::string& s, const std::string& sub) { return s.find(sub) != std::string::npos; }
++static std::string ReadAll(const std::string& p)
++{
++    std::ifstream f(p.c_str(), std::ios::binary);
++    std::stringstream ss; ss << f.rdbuf();
++    return ss.str();
++}
++static bool CanRead(const std::string& p) { std::ifstream f(p.c_str(), std::ios::binary); return f.good(); }
++static bool WriteAll(const std::string& p, const std::string& d)
++{
++    std::ofstream f(p.c_str(), std::ios::binary | std::ios::trunc);
++    f.write(d.data(), (std::streamsize)d.size());
++    return f.good();
++}
++static bool Exists(const std::string& p) { struct _stat st; return _stat(p.c_str(), &st) == 0; }
++static std::string Norm(std::string s)   // lower case, backslashes (for the production-path guard)
++{
++    for (std::size_t i = 0; i < s.size(); ++i) {
++        if (s[i] == '/') s[i] = '\\';
++        if (s[i] >= 'A' && s[i] <= 'Z') s[i] = (char)(s[i] - 'A' + 'a');
++    }
++    return s;
++}
++static void ForceDir(const std::string& d)
++{
++    for (std::size_t i = 3; i <= d.size(); ++i)
++        if (i == d.size() || d[i] == '\\' || d[i] == '/') _mkdir(d.substr(0, i).c_str());
++}
++
++// The test's OWN reading of the file (plain comma split -- the source files have no quotes), independent of the writer's parser.
++static std::vector<std::string> Split(const std::string& s)
++{
++    std::vector<std::string> v;
++    std::string c;
++    for (std::size_t i = 0; i < s.size(); ++i) { if (s[i] == ',') { v.push_back(c); c.clear(); } else c += s[i]; }
++    v.push_back(c);
++    return v;
++}
++static std::string Join(const std::vector<std::string>& v)
++{
++    std::string s;
++    for (std::size_t i = 0; i < v.size(); ++i) { if (i) s += ','; s += v[i]; }
++    return s;
++}
++struct Ln { std::string body, eol; };
++static std::vector<Ln> Lines(const std::string& t)   // CR LF / LF files: body + its terminator
++{
++    std::vector<Ln> v;
++    std::size_t b = 0;
++    for (std::size_t i = 0; i < t.size(); ++i) {
++        if (t[i] != '\n') continue;
++        Ln l; l.body = t.substr(b, i - b); l.eol = "\n";
++        if (!l.body.empty() && l.body[l.body.size() - 1] == '\r') { l.body.erase(l.body.size() - 1); l.eol = "\r\n"; }
++        v.push_back(l); b = i + 1;
++    }
++    if (b < t.size()) { Ln l; l.body = t.substr(b); v.push_back(l); }
++    return v;
++}
++static std::string Unlines(const std::vector<Ln>& v)
++{
++    std::string s;
++    for (std::size_t i = 0; i < v.size(); ++i) s += v[i].body + v[i].eol;
++    return s;
++}
++static int Col(const std::vector<std::string>& hdr, const char* name)
++{
++    for (std::size_t i = 0; i < hdr.size(); ++i) if (hdr[i] == name) return (int)i;
++    return -1;
++}
++static std::string Fmt(const char* f, double v) { char b[64]; std::snprintf(b, sizeof(b), f, v); return b; }
++static std::string Int(long long v) { return std::to_string(v); }
++
++// What the boot puts into MOT[mi] from one row (TMOTDATA's reads and defaults, then cinitial InitialMotorParameter's MN200 /100,
++//   MC88X1 Rate -> Acc/Dec, SetRange's >1000 -> 1000) -- written from database.cpp / cinitial.cpp, not from the writer.
++struct BootRow { std::string no, alias, card; int mi; MotorGolden g; };
++static bool BootOf(const std::vector<std::string>& hdr, const std::vector<std::string>& c, bool indexMc0, BootRow& out)
++{
++    if (c.size() < 29) return false;
++    struct Cell {
++        const std::vector<std::string>& h; const std::vector<std::string>& c;
++        std::string operator()(const char* n) const { const int k = Col(h, n); return (k >= 0 && k < (int)c.size()) ? c[(std::size_t)k] : std::string(); }
++    } cell = { hdr, c };
++    out.no = cell("Motorname"); out.alias = cell("Alias"); out.card = cell("CardModel");
++    if (out.no.size() < 2 || (out.no[0] != 'M' && out.no[0] != 'm')) return false;
++    for (std::size_t i = 1; i < out.no.size(); ++i) if (out.no[i] < '0' || out.no[i] > '9') return false;
++    out.mi = std::atoi(out.no.c_str() + 1);
++    const bool indexRow = out.alias == "MTestY1" || out.alias == "MTestZ1" || out.alias == "MTestZ2" || out.alias == "MTestY2";
++    const bool forced = indexMc0 && indexRow && out.card != "PCI1203";
++    if (forced) out.card = "SMC";
++    struct IntOf { const Cell& cell; int operator()(const char* n, int d) const { const std::string s = cell(n); return s.empty() ? d : std::atoi(s.c_str()); } } I = { cell };
++    MotorGolden g;
++    g.initSpeed = (unsigned)I("InitSpeed", 100);
++    g.jogHigh   = (unsigned)I("JogHighSpeed", 100);
++    g.jogLow    = (unsigned)I("JogLowSpeed", 100);
++    g.homeHigh  = (unsigned)I("HomeHighSpeed", 100);
++    g.homeLow   = (unsigned)I("HomeLowSpeed", 100);
++    g.softP     = I("SoftLimitP", 999999);
++    g.softN     = I("SoftLimitN", -999999);
++    for (int k = 0; k < 2; ++k) {
++        double a;
++        if (forced) a = 1.0;
++        else if (out.card == "MC88X1") a = (double)I("Rate", 1);
++        else {
++            const std::string s = cell(k == 0 ? "Acc" : "Dec");
++            a = s.empty() ? 1.0 : std::atof(s.c_str());
++            if (out.card == "MN200" && a > 1) { const double d = a / 100.0; a = d; }
++        }
++        (k == 0 ? g.accDb : g.decDb) = a;
++    }
++    unsigned r = (out.card == "MC88X1") ? 10u : (unsigned)I("Range", 1);
++    if (r > 1000u) r = 1000u;
++    g.range = r;
++    out.g = g;
++    return true;
++}
++
++static const MotTableCellChange* CellOf(const MotTableEditResult& e, const char* col)
++{
++    for (std::size_t i = 0; i < e.cells.size(); ++i) if (e.cells[i].column == col) return &e.cells[i];
++    return 0;
++}
++
++int main(int argc, char** argv)
++{
++    setvbuf(stdout, NULL, _IONBF, 0);
++    if (argc < 2 || !CanRead(argv[1])) {
++        printf("FAIL: argv[1] = a readable Mot_Table.csv to start from (read only)\n");
++        return 1;
++    }
++    const std::string src = argv[1];
++    const char* envp = std::getenv("W906_MOTTABLE_PATH");
++    const bool fromEnv = envp && *envp;
++    std::string copy;
++    if (fromEnv) copy = envp;
++    else {
++        const char* t = std::getenv("TEMP");
++        copy = std::string(t ? t : ".") + "\\ht9045_savemot_" + std::to_string((long long)_getpid()) + "\\Mot_Table.csv";
++    }
++    for (std::size_t i = 0; i < copy.size(); ++i) if (copy[i] == '/') copy[i] = '\\';
++    {
++        const std::string n = Norm(copy);
++        const char* prod[] = { "d:\\ht9045\\system", "d:\\ht9045\\config", "d:\\ht9045\\inidata" };
++        for (int k = 0; k < 3; ++k)
++            if (n.compare(0, std::strlen(prod[k]), prod[k]) == 0) {
++                printf("REFUSED: the copy %s is under %s (production configuration) -- point W906_MOTTABLE_PATH at a scratch copy\n", copy.c_str(), prod[k]);
++                return 2;
++            }
++        if (n == Norm(src)) { printf("REFUSED: the copy %s is argv[1] itself (the source stays read only)\n", copy.c_str()); return 2; }
++    }
++    const std::size_t sl = copy.find_last_of('\\');
++    const std::string dir = (sl == std::string::npos) ? std::string(".") : copy.substr(0, sl);
++    ForceDir(dir);
++    const std::string orig = ReadAll(src);
++    printf("source (read only) %s  %u bytes\ncopy (written)     %s\n", src.c_str(), (unsigned)orig.size(), copy.c_str());
++    // leftovers of an earlier run in the same scratch directory
++    const char* stamps[] = { "t1", "t1b", "20260930_000001", "20260930_000001_2", "20260930_000002", "20260930_000003", "t4" };
++    for (int k = 0; k < 7; ++k) std::remove((copy + ".bak_" + stamps[k]).c_str());
++    std::remove((copy + ".tmp_savemot").c_str());
++
++    // ---------------------------------------------------------------- [1]
++    printf("[1] every row of the file: the boot's values -> no change, nothing written\n");
++    {
++        CHECK(WriteAll(copy, orig) && ReadAll(copy) == orig, "scratch copy made (byte for byte)");
++        const std::vector<Ln> L = Lines(orig);
++        CHECK(L.size() >= 2, "the file has a header and data rows");
++        const std::vector<std::string> hdr = Split(L.empty() ? std::string() : L[0].body);
++        for (int arm = 0; arm < 2; ++arm) {
++            const bool indexMc0 = (arm == 0);
++            int rows = 0, bad = 0;
++            for (std::size_t k = 1; k < L.size(); ++k) {
++                BootRow b;
++                if (!BootOf(hdr, Split(L[k].body), indexMc0, b) || b.alias.empty()) continue;
++                int same = 0;
++                for (std::size_t j = 1; j < L.size(); ++j) { const std::vector<std::string> c = Split(L[j].body); if ((int)c.size() > Col(hdr, "Alias") && c[(std::size_t)Col(hdr, "Alias")] == b.alias) ++same; }
++                if (same != 1) continue;
++                ++rows;
++                const MotTableSaveResult s = MotTableSaveRow(copy, indexMc0 ? "t1" : "t1b", b.alias, b.mi, MotTableFieldsOf(b.g), indexMc0, b.card);
++                if (!s.ok || s.wrote || s.edit.changedCount != 0 || s.edit.lineNo != (int)k + 1 || s.edit.newRowText != L[k].body) {
++                    if (++bad <= 5) printf("    row %u %s: ok=%d wrote=%d changed=%d line=%d why=%s\n", (unsigned)(k + 1), b.alias.c_str(),
++                                           (int)s.ok, (int)s.wrote, s.edit.changedCount, s.edit.lineNo, s.why.c_str());
++                }
++            }
++            printf("    INDEX_MOTION_CARD==0 %s: %d rows checked\n", indexMc0 ? "true" : "false", rows);
++            CHECK(rows >= 40 && bad == 0, indexMc0 ? "every row (Index override on): the boot's values -> ok, no change, right line, row text as is"
++                                                  : "every row (Index override off): the boot's values -> ok, no change, right line, row text as is");
++        }
++        CHECK(ReadAll(copy) == orig, "the copy is byte-identical after all the no-change saves");
++        CHECK(!Exists(copy + ".bak_t1") && !Exists(copy + ".bak_t1b") && !Exists(copy + ".tmp_savemot"), "no change -> no backup, no temp file");
++    }
++
++    // ---------------------------------------------------------------- [2]
++    printf("[2] a change on a PCI1203 row through the file layer: only those cells, backup, undo\n");
++    {
++        CHECK(WriteAll(copy, orig), "scratch copy reset");
++        const std::vector<Ln> L = Lines(orig);
++        const std::vector<std::string> hdr = Split(L[0].body);
++        std::size_t k = 0;
++        BootRow b;
++        for (std::size_t j = 1; j < L.size() && k == 0; ++j) {
++            const std::vector<std::string> c = Split(L[j].body);
++            if (!BootOf(hdr, c, true, b) || b.card != "PCI1203") continue;
++            const char* need[] = { "InitSpeed", "JogHighSpeed", "JogLowSpeed", "HomeHighSpeed", "HomeLowSpeed", "SoftLimitP", "SoftLimitN", "Acc", "Dec", "Range" };
++            bool full = true;
++            for (int q = 0; q < 10; ++q) if (c[(std::size_t)Col(hdr, need[q])].empty()) full = false;
++            if (full && b.g.range <= 1000u && std::atof(c[(std::size_t)Col(hdr, "Acc")].c_str()) == b.g.accDb) k = j;
++        }
++        CHECK(k != 0, "a PCI1203 row with all ten cells filled");
++        if (k != 0) {
++            printf("    row %u: %s\n", (unsigned)(k + 1), L[k].body.c_str());
++            MotorGolden g = b.g;
++            g.jogHigh += 100;
++            g.softP -= 1;
++            g.accDb += 4000.0;                                                  // an integral double
++            std::vector<std::string> c = Split(L[k].body);
++            c[(std::size_t)Col(hdr, "JogHighSpeed")] = Int(g.jogHigh);
++            c[(std::size_t)Col(hdr, "SoftLimitP")]   = Int(g.softP);
++            c[(std::size_t)Col(hdr, "Acc")]          = Fmt("%.0f", g.accDb);
++            std::vector<Ln> E = L; E[k].body = Join(c);
++            const std::string expect = Unlines(E);
++            const MotTableSaveResult s = MotTableSaveRow(copy, "20260930_000001", b.alias, b.mi, MotTableFieldsOf(g), true, b.card);
++            printf("    why=%s backup=%s\n", s.why.c_str(), s.backup.c_str());
++            CHECK(s.ok && s.wrote && s.edit.changedCount == 3, "3 cells changed (JogHighSpeed, SoftLimitP, Acc), written");
++            CHECK(s.backup == copy + ".bak_20260930_000001" && ReadAll(s.backup) == orig, "backup = path.bak_<stamp>, byte-identical to the old file");
++            const std::string now = ReadAll(copy);
++            CHECK(now == expect, "the new file == the old bytes with exactly those three cells replaced (independent rebuild)");
++            const std::vector<Ln> N = Lines(now);
++            int diffLines = 0; bool eolSame = N.size() == L.size();
++            for (std::size_t j = 0; j < N.size() && j < L.size(); ++j) { if (N[j].body != L[j].body) ++diffLines; if (N[j].eol != L[j].eol) eolSame = false; }
++            CHECK(diffLines == 1 && eolSame && now.size() >= 2 && orig.size() >= 2 && now.substr(now.size() - 2) == orig.substr(orig.size() - 2),
++                  "one line differs; same line count, every line ending and the trailing newline unchanged");
++            const MotTableCellChange* jh = CellOf(s.edit, "JogHighSpeed");
++            const MotTableCellChange* ac = CellOf(s.edit, "Acc");
++            const MotTableCellChange* dc = CellOf(s.edit, "Dec");
++            CHECK(jh && jh->changed && jh->newText == Int(g.jogHigh) && ac && ac->changed && ac->newText.find('.') == std::string::npos &&
++                  ac->newText == Fmt("%.0f", g.accDb) && dc && !dc->changed, "integers stay integers (Acc \"" "12000\"-style, not \"12000.000000\"); Dec untouched");
++            CHECK(s.edit.newRowText == E[k].body && s.edit.lineNo == (int)k + 1, "newRowText (the in-memory _CommaText) = the new line; lineNo 1-based");
++            CHECK(!Exists(copy + ".tmp_savemot"), "the temp file is gone after the replace");
++
++            g.accDb = 0.125;
++            const MotTableSaveResult s2 = MotTableSaveRow(copy, "20260930_000002", b.alias, b.mi, MotTableFieldsOf(g), true, b.card);
++            const MotTableCellChange* a2 = CellOf(s2.edit, "Acc");
++            CHECK(s2.ok && s2.wrote && s2.edit.changedCount == 1 && a2 && a2->newText == "0.125" && a2->oldText == Fmt("%.0f", b.g.accDb + 4000.0),
++                  "a real value -> the shortest text \"0.125\"; only that cell changes this time");
++            CHECK(ReadAll(s2.backup) == expect, "the second backup holds the first result");
++            c[(std::size_t)Col(hdr, "Acc")] = "0.125";
++            std::vector<Ln> E2 = L; E2[k].body = Join(c);
++            CHECK(ReadAll(copy) == Unlines(E2), "file == rebuild after the second save");
++
++            const MotTableSaveResult s3 = MotTableSaveRow(copy, "20260930_000001", b.alias, b.mi, MotTableFieldsOf(b.g), true, b.card);   // undo; stamp taken
++            CHECK(s3.ok && s3.wrote && s3.edit.changedCount == 3 && s3.backup == copy + ".bak_20260930_000001_2" && ReadAll(s3.backup) == Unlines(E2),
++                  "undo with an existing backup name -> \"_2\"; that backup = the state before the undo");
++            CHECK(ReadAll(copy) == orig, "undo -> the file is byte-identical to the original again");
++            CHECK(ReadAll(copy + ".bak_20260930_000001") == orig, "the first backup was not overwritten");
++        }
++    }
++
++    // ---------------------------------------------------------------- [3]
++    printf("[3] rules on synthetic text\n");
++    {
++        const std::string H = "Motorname,Alias,SoftLimitN,SoftLimitP,BoardID,Port,IP,Direction,GearRatio,HomeDirectior,HomeHighSpeed,HomeLowSpeed,"
++                              "InitSpeed,JogHighSpeed,JogLowSpeed,Rate,Enable,ServoAlarmOn,Range,1P2P,SensorType,SimulateSpeed,CardModel,Acc,Dec,"
++                              "EncodeType,PickLimit,LimitLogic,In1Logic";
++        const std::string R1203 = "M03,MInArmZA,-999999,999999,3,0,3,0,1,0,10000,1000,100,800,100,60,1,0,75,1,0,10000,PCI1203,8000,8000,0,,0,1";
++        const std::string RMnRaw = "M02,MInArmPitch,-999999,999999,2,18,,0,2.5,1,50,1000,50,400,100,50,0,0,30,0,0,10000,MN200,0.1,0.1,0,,0,1";
++        const std::string RMnX = "M04,MInArmZB,-999999,999999,2,20,,0,0.85,1,10000,1000,100,800,100,60,0,0,1500,0,0,10000,MN200,70,70,0,,0,1";
++        const std::string RY1 = "M13,MTestY1,-999999,999999,,,,0,0.2,0,10000,50000,100,900000,100,20,0,1,70,1,0,10000,SMC,,,2,,,";
++        const std::string RZ1 = "M14,MTestZ1,-999999,999999,14,0,14,0,0.1,1,6000,3000,10,90000,100,10,1,1,70,1,0,10000,PCI1203,9000000,9000000,2,-99999,0,1";
++        const std::string RMc = "M50,MC88Axis,-999999,999999,0,A,,0,1,0,100,100,100,100,100,77,1,0,10,0,0,1000,MC88X1,1,1,0,,0,0";
++        const std::string RDup1 = "M60,MDup,-999999,999999,3,0,3,0,1,0,10000,1000,100,800,100,60,1,0,75,1,0,10000,PCI1203,8000,8000,0,,0,1";
++        const std::string RDup2 = "M61,MDup,-999999,999999,3,0,3,0,1,0,10000,1000,100,800,100,60,1,0,75,1,0,10000,PCI1203,8000,8000,0,,0,1";
++        const std::string RShort = "M62,MShort,1,2,3";
++        std::vector<std::string> q = Split(R1203);
++        q[0] = "M70"; q[1] = "MQuoted";
++        std::string RQ;
++        for (std::size_t i = 0; i < q.size(); ++i) RQ += (i ? "," : "") + std::string("\"") + q[i] + "\"";
++        const std::string RSp = "M71,MSpace,-999999,999999,3,0,3,0,1,0,10000,1000,100, 800 ,100,60,1,0,75,1,0,10000,PCI1203,8000,8000,0,,0,1";
++        const std::string rows[] = { R1203, RMnRaw, RMnX, RY1, RZ1, RMc, RDup1, RDup2, RShort, RQ, RSp };
++        std::string T = H + "\r\n";
++        for (int i = 0; i < 11; ++i) T += rows[i] + "\r\n";
++        const std::vector<std::string> hdr = Split(H);
++        struct Ed {
++            const std::string& T;
++            MotTableEditResult operator()(const std::string& alias, int mi, const std::vector<MotTableSaveField>& f, bool indexMc0,
++                                          const std::string& card, std::string& out) const { return MotTableEditRow(T, alias, mi, f, indexMc0, card, out); }
++        } edit = { T };
++        std::string out;
++        BootRow b;
++
++        // MN200, raw style (Acc 0.1)
++        BootOf(hdr, Split(RMnRaw), true, b);
++        MotorGolden g = b.g;
++        MotTableEditResult e = edit("MInArmPitch", 2, MotTableFieldsOf(g), true, "MN200", out);
++        CHECK(e.ok && e.changedCount == 0 && out == T, "MN200 raw style: the boot's values -> no change, text identical");
++        g.accDb = 0.2;  e = edit("MInArmPitch", 2, MotTableFieldsOf(g), true, "MN200", out);
++        CHECK(e.ok && CellOf(e, "Acc")->newText == "0.2", "MN200 raw: 0.2 -> \"0.2\"");
++        g.accDb = 5.0;  e = edit("MInArmPitch", 2, MotTableFieldsOf(g), true, "MN200", out);
++        CHECK(e.ok && CellOf(e, "Acc")->newText == "500", "MN200 raw: 5 (> 1) -> \"500\" (the boot's /100 gives 5 back)");
++        g.accDb = 0.005; e = edit("MInArmPitch", 2, MotTableFieldsOf(g), true, "MN200", out);
++        CHECK(e.ok && CellOf(e, "Acc")->newText == "0.005", "MN200 raw: 0.005 -> \"0.005\"");
++
++        // MN200, x100 style (Acc 70 = 0.7) + Range 1500 (SetRange clamps to 1000)
++        BootOf(hdr, Split(RMnX), true, b);
++        g = b.g;
++        const double k07 = 0.7;                                                 // a double variable: on x87 with -fexcess-precision=standard a bare
++        CHECK(g.accDb == k07 && g.range == 1000u, "(model) MN200 70 -> 0.7, Range 1500 -> 1000");   //   literal compares in long double
++        e = edit("MInArmZB", 4, MotTableFieldsOf(g), true, "MN200", out);
++        CHECK(e.ok && e.changedCount == 0 && out == T && !CellOf(e, "Acc")->note.empty() && !CellOf(e, "Range")->note.empty(),
++              "MN200 70 shown as 0.7 and Range 1500 shown as 1000 -> no change, kept with a note");
++        g.accDb = 0.8;  e = edit("MInArmZB", 4, MotTableFieldsOf(g), true, "MN200", out);
++        CHECK(e.ok && CellOf(e, "Acc")->newText == "80" && !CellOf(e, "Dec")->changed, "MN200 x100 style kept: 0.8 -> \"80\"");
++        g.accDb = 0.005; e = edit("MInArmZB", 4, MotTableFieldsOf(g), true, "MN200", out);
++        CHECK(e.ok && CellOf(e, "Acc")->newText == "0.005", "MN200 x100 style, 0.005 (x100 = 0.5 would boot as 0.5) -> \"0.005\"");
++        g = b.g; g.range = 999; e = edit("MInArmZB", 4, MotTableFieldsOf(g), true, "MN200", out);
++        CHECK(e.ok && CellOf(e, "Range")->newText == "999" && e.changedCount == 1, "Range 999 -> \"999\"");
++
++        // MTestY1 (SMC, Acc/Dec empty): the Index override / an empty cell
++        BootOf(hdr, Split(RY1), true, b);
++        g = b.g;
++        e = edit("MTestY1", 13, MotTableFieldsOf(g), true, "SMC", out);
++        CHECK(e.ok && e.changedCount == 0 && e.cardModel == "SMC", "Index row, override on: Acc/Dec 1.0 -> no change");
++        g.accDb = 2.0; e = edit("MTestY1", 13, MotTableFieldsOf(g), true, "SMC", out);
++        CHECK(!e.ok && Has(e.why, "INDEX_MOTION_CARD") && out == T, "Index row, override on: Acc 2 -> refused (the boot never reads it), nothing changed");
++        BootOf(hdr, Split(RY1), false, b);
++        g = b.g;
++        e = edit("MTestY1", 13, MotTableFieldsOf(g), false, "SMC", out);
++        CHECK(e.ok && e.changedCount == 0, "Index row, override off: empty Acc = TMOTDATA's 1.0 -> no change");
++        g.accDb = 2.0; e = edit("MTestY1", 13, MotTableFieldsOf(g), false, "SMC", out);
++        CHECK(!e.ok && Has(e.why, "空的"), "an EMPTY cell with a different value -> refused (not filled)");
++        g = b.g; e = edit("MTestY1", 13, MotTableFieldsOf(g), true, "PCI1203", out);
++        CHECK(!e.ok && Has(e.why, "CardModel"), "the CardModel this run loaded differs -> refused");
++
++        // MTestZ1 on a PCI1203 row: EastSun R2, no override
++        BootOf(hdr, Split(RZ1), true, b);
++        g = b.g; g.accDb = 8000000.0;
++        e = edit("MTestZ1", 14, MotTableFieldsOf(g), true, "PCI1203", out);
++        CHECK(e.ok && CellOf(e, "Acc")->newText == "8000000" && e.cardModel == "PCI1203", "MTestZ1 PCI1203 (R2): Acc written \"8000000\"");
++
++        // MC88X1: Acc/Dec from Rate, Range 10
++        BootOf(hdr, Split(RMc), true, b);
++        g = b.g;
++        CHECK(g.accDb == 77.0 && g.range == 10u, "(model) MC88X1 Acc/Dec = Rate 77, Range 10");
++        e = edit("MC88Axis", 50, MotTableFieldsOf(g), true, "MC88X1", out);
++        CHECK(e.ok && e.changedCount == 0, "MC88X1 at the boot's values -> no change");
++        g.accDb = 5.0; e = edit("MC88Axis", 50, MotTableFieldsOf(g), true, "MC88X1", out);
++        CHECK(!e.ok && Has(e.why, "MC88X1"), "MC88X1 Acc 5 -> refused (Acc comes from Rate)");
++        g = b.g; g.range = 11; e = edit("MC88Axis", 50, MotTableFieldsOf(g), true, "MC88X1", out);
++        CHECK(!e.ok && Has(e.why, "MC88X1"), "MC88X1 Range 11 -> refused (always 10)");
++
++        // row lookup
++        BootOf(hdr, Split(R1203), true, b);
++        g = b.g;
++        e = edit("MDup", 60, MotTableFieldsOf(g), true, "", out);
++        CHECK(!e.ok && Has(e.why, "2 列"), "an Alias on two rows -> refused");
++        e = edit("MNoSuch", 99, MotTableFieldsOf(g), true, "", out);
++        CHECK(!e.ok && Has(e.why, "找不到"), "no such Alias -> refused");
++        e = edit("MShort", 62, MotTableFieldsOf(g), true, "", out);
++        CHECK(!e.ok && Has(e.why, "29"), "a row with < 29 cells -> refused");
++        e = edit("MInArmZA", 4, MotTableFieldsOf(g), true, "", out);
++        CHECK(!e.ok && Has(e.why, "Motorname"), "Motorname M03 is not MOT[4] -> refused");
++        e = edit("MInArmZA", 3, MotTableFieldsOf(g), true, "PCI1203", out);
++        CHECK(e.ok && e.changedCount == 0 && e.lineNo == 2 && e.motorName == "M03", "the right row: line 2, M03");
++
++        // header
++        {
++            std::string H2 = H; H2.replace(H2.find(",Dec,"), 5, ",Dxc,");
++            std::string o2;
++            MotTableEditResult e2 = MotTableEditRow(H2 + "\r\n" + R1203 + "\r\n", "MInArmZA", 3, MotTableFieldsOf(g), true, "", o2);
++            CHECK(!e2.ok && Has(e2.why, "Dec"), "a column missing from the header -> refused");
++            std::string H3 = H; H3.replace(H3.find(",Acc,"), 5, ",AccDec,"); H3.replace(H3.find(",Dec,"), 5, ",Dxc,");
++            e2 = MotTableEditRow(H3 + "\r\n" + R1203 + "\r\n", "MInArmZA", 3, MotTableFieldsOf(g), true, "", o2);
++            CHECK(!e2.ok && Has(e2.why, "同時"), "two tokens on one header cell (SetMOTTableNo's substring rule) -> refused");
++        }
++
++        // values
++        {
++            std::vector<MotTableSaveField> f = MotTableFieldsOf(g);
++            f[7].value = std::numeric_limits<double>::quiet_NaN();
++            e = edit("MInArmZA", 3, f, true, "", out);
++            CHECK(!e.ok && Has(e.why, "Acc") && out == T, "Acc NaN -> refused");
++            f = MotTableFieldsOf(g); f[8].value = std::numeric_limits<double>::infinity();
++            e = edit("MInArmZA", 3, f, true, "", out);
++            CHECK(!e.ok && Has(e.why, "Dec"), "Dec inf -> refused");
++            f = MotTableFieldsOf(g); f[1].value = 800.5;
++            e = edit("MInArmZA", 3, f, true, "", out);
++            CHECK(!e.ok && Has(e.why, "JogHighSpeed"), "JogHighSpeed 800.5 -> refused (not an integer)");
++            f = MotTableFieldsOf(g); f[1].value = -1.0;
++            e = edit("MInArmZA", 3, f, true, "", out);
++            CHECK(!e.ok, "an unsigned field -1 -> refused (out of range)");
++            f = MotTableFieldsOf(g); f[5].value = 3e9;
++            e = edit("MInArmZA", 3, f, true, "", out);
++            CHECK(!e.ok && Has(e.why, "SoftLimitP"), "SoftLimitP 3e9 -> refused (out of int range)");
++            MotorGolden g2 = g; g2.jogHigh = 4294967196u; g2.softN = -5;
++            e = edit("MInArmZA", 3, MotTableFieldsOf(g2), true, "", out);
++            CHECK(e.ok && CellOf(e, "JogHighSpeed")->newText == "-100" && (unsigned)std::atoi("-100") == 4294967196u && CellOf(e, "SoftLimitN")->newText == "-5",
++                  "unsigned 4294967196 -> \"-100\" (the boot's atoi -> unsigned gives it back); SoftLimitN -5 -> \"-5\"");
++            std::vector<std::string> c = Split(R1203);
++            c[13] = "-100"; c[2] = "-5";
++            std::string expect = T; expect.replace(expect.find(R1203), R1203.size(), Join(c));
++            CHECK(out == expect, "... and the file text = the old text with those two cells replaced, nothing else");
++        }
++
++        // quoting and blanks
++        {
++            MotorGolden gq = g; gq.jogHigh = 900;
++            e = edit("MQuoted", 70, MotTableFieldsOf(gq), true, "", out);
++            std::string RQ2 = RQ; RQ2.replace(RQ2.find("\"800\""), 5, "\"900\"");
++            std::string expect = T; expect.replace(expect.find(RQ), RQ.size(), RQ2);
++            CHECK(e.ok && e.changedCount == 1 && out == expect, "a quoted cell stays quoted (\"800\" -> \"900\"), every other byte identical");
++            e = edit("MSpace", 71, MotTableFieldsOf(gq), true, "", out);
++            std::string RSp2 = RSp; RSp2.replace(RSp2.find(" 800 "), 5, " 900 ");
++            expect = T; expect.replace(expect.find(RSp), RSp.size(), RSp2);
++            CHECK(e.ok && e.changedCount == 1 && out == expect, "blanks around a cell stay (\" 800 \" -> \" 900 \")");
++        }
++
++        // line endings
++        {
++            MotorGolden gz; BootOf(hdr, Split(RZ1), true, b); gz = b.g; gz.jogHigh = 90001;
++            std::vector<std::string> cz = Split(RZ1); cz[13] = "90001";
++            const std::string lf = H + "\n" + R1203 + "\n" + RZ1;                // LF only, no trailing newline
++            std::string o2;
++            MotTableEditResult e2 = MotTableEditRow(lf, "MTestZ1", 14, MotTableFieldsOf(gz), true, "", o2);
++            CHECK(e2.ok && o2 == H + "\n" + R1203 + "\n" + Join(cz), "LF-only file, last line without a newline: kept exactly");
++            const std::string cr = H + "\r" + RZ1 + "\r" + R1203 + "\r";          // lone CR
++            e2 = MotTableEditRow(cr, "MTestZ1", 14, MotTableFieldsOf(gz), true, "", o2);
++            CHECK(e2.ok && o2 == H + "\r" + Join(cz) + "\r" + R1203 + "\r" && e2.lineNo == 2, "lone-CR file: kept exactly");
++        }
++    }
++
++    // ---------------------------------------------------------------- [4]
++    printf("[4] file layer refusals\n");
++    {
++        const std::string none = dir + "\\no_such_mot_table.csv";
++        std::remove(none.c_str());
++        MotorGolden g;
++        MotTableSaveResult s = MotTableSaveRow(none, "t4", "MInArmZA", 3, MotTableFieldsOf(g), true, "");
++        CHECK(!s.ok && !s.wrote && Has(s.why, "讀不到"), "unreadable file -> refused");
++
++        const std::string ro = dir + "\\readonly_mot_table.csv";
++        ::SetFileAttributesA(ro.c_str(), FILE_ATTRIBUTE_NORMAL);
++        std::remove(ro.c_str()); std::remove((ro + ".bak_t4").c_str()); std::remove((ro + ".bak_t4_2").c_str()); std::remove((ro + ".tmp_savemot").c_str());
++        const std::string H = "Motorname,Alias,SoftLimitN,SoftLimitP,BoardID,Port,IP,Direction,GearRatio,HomeDirectior,HomeHighSpeed,HomeLowSpeed,"
++                              "InitSpeed,JogHighSpeed,JogLowSpeed,Rate,Enable,ServoAlarmOn,Range,1P2P,SensorType,SimulateSpeed,CardModel,Acc,Dec,"
++                              "EncodeType,PickLimit,LimitLogic,In1Logic";
++        const std::string R1203 = "M03,MInArmZA,-999999,999999,3,0,3,0,1,0,10000,1000,100,800,100,60,1,0,75,1,0,10000,PCI1203,8000,8000,0,,0,1";
++        const std::string T = H + "\r\n" + R1203 + "\r\n";
++        CHECK(WriteAll(ro, T), "synthetic file written");
++        BootRow b;
++        BootOf(Split(H), Split(R1203), true, b);
++        g = b.g;
++        s = MotTableSaveRow(ro, "t4", "MInArmZA", 3, MotTableFieldsOf(g), true, "PCI1203");
++        CHECK(s.ok && !s.wrote && !Exists(ro + ".bak_t4"), "no change -> ok, nothing written, no backup");
++        ::SetFileAttributesA(ro.c_str(), FILE_ATTRIBUTE_READONLY);
++        g.jogHigh = 801;
++        s = MotTableSaveRow(ro, "t4", "MInArmZA", 3, MotTableFieldsOf(g), true, "PCI1203");
++        printf("    read-only: ok=%d wrote=%d why=%s\n", (int)s.ok, (int)s.wrote, s.why.c_str());
++        CHECK(!s.ok && !s.wrote && ReadAll(ro) == T && !Exists(ro + ".tmp_savemot") && !Exists(ro + ".bak_t4"),
++              "read-only file: the replace is refused -> the bytes kept, no .tmp / .bak left");
++        ::SetFileAttributesA(ro.c_str(), FILE_ATTRIBUTE_NORMAL);
++        s = MotTableSaveRow(ro, "t4", "MInArmZA", 3, MotTableFieldsOf(g), true, "PCI1203");
++        std::string expect = T; expect.replace(expect.find(",800,"), 5, ",801,");
++        CHECK(s.ok && s.wrote && ReadAll(ro) == expect && ReadAll(ro + ".bak_t4") == T, "writable again -> written, backup = the old bytes");
++        std::remove(ro.c_str()); std::remove((ro + ".bak_t4").c_str());
++    }
++
++    CHECK(ReadAll(src) == orig, "argv[1] (the source) is byte-identical at the end -- never written");
++    if (!fromEnv) {                                                           // the %TEMP% default: leave nothing behind
++        for (int k = 0; k < 7; ++k) std::remove((copy + ".bak_" + stamps[k]).c_str());
++        std::remove(copy.c_str());
++        _rmdir(dir.c_str());
++    }
++    printf("\n%d passed, %d failed\n", g_pass, g_fail);
++    return (g_fail == 0) ? 0 : 1;
++}
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index fdc28e1..a1878f1 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -451,6 +451,19 @@ public:
+     }
+     int              clearAllHome;          // AI(W906-W5-b) 20260925: W5B-R3 GoldenClearAllMotorHome 被叫幾次
+     void GoldenClearAllMotorHome() override { ++clearAllHome; }
++    //AI(W906-MT-SAVEMOT) 20260930: saveMotTable -- the file is a temp copy the test writes; MotTableRowSaved is recorded.
++    std::string motTablePath;
++    bool        motIndexForced = false;
++    std::vector<std::string> motSaved;      // "alias|rowText|col=new;col=new;"
++    std::string MotTableFilePath() override { return motTablePath; }
++    bool MotTableIndexForced() override { return motIndexForced; }
++    void MotTableRowSaved(const std::string& alias, const std::string& rowText,
++                          const std::vector<std::pair<std::string, std::string> >& cells) override
++    {
++        std::string s = alias + "|" + rowText + "|";
++        for (std::size_t i = 0; i < cells.size(); ++i) s += cells[i].first + "=" + cells[i].second + ";";
++        motSaved.push_back(s);
++    }
+ };
+ 
+ static MotorAccessAxis Axis1203(int mi, int board, int port, int axisSlot, const char* why = "")
+@@ -761,12 +774,12 @@ int main(int argc, char** argv)
+         for (int k = 0; k < 6; ++k) { if (contract3[k].seen == 1) ++contractSeen; else printf("    contract button %s seen %d time(s)\n", contract3[k].button, contract3[k].seen); }
+         CHECK(contractSeen == 11 && contractBad == 0,
+               "AI(W906-MT-E2/E3c): the 5 + 6 contract commands are in the catalog exactly once, with the agreed action/params/kind, source uMotorTest");
+-        CHECK(n == 49, "49 catalog commands (38 + 5 MT-E2 + 5 MT-E3c: FormShow/FormClose/BitBtn2/BitBtn3/btnSaveLogLightScaleData + AI(W906-MT-ALMRST) 20260929 btnAlarmReset)");
+-        CHECK(actions.size() == 38, "38 distinct actions (28 + 4 MT-E2 + formShow/formClose/lightScale/lightScaleSave/lightScaleDataSave + resetAlarm)");
++        CHECK(n == 51, "51 catalog commands (38 + 5 MT-E2 + 5 MT-E3c: FormShow/FormClose/BitBtn2/BitBtn3/btnSaveLogLightScaleData + AI(W906-MT-ALMRST) 20260929 btnAlarmReset + AI(W906-TEACH-ALMRST) 20260930 uteach btnAlarmReset + AI(W906-MT-SAVEMOT) 20260930 btnSaveMotTable)");
++        CHECK(actions.size() == 39, "39 distinct actions (28 + 4 MT-E2 + formShow/formClose/lightScale/lightScaleSave/lightScaleDataSave + resetAlarm + AI(W906-MT-SAVEMOT) saveMotTable)");
+         CHECK(unknown == 0, "every catalog action has a status");
+         //AI(W906-MERGE-56bbf785) 20260926: machine live 30 (MT-E1..E3c) + laptop W5-b teachSet/teachGo = 32; ui = machine 3 + the laptop's
+         //  setTeachFromCurrent/Offset = 5; 32 + 5 = the 37 actions -- nothing queued or blocked any more.
+-        CHECK(live.size() == 33 && live.count("resetAlarm") && live.count("reloadMotorData") && live.count("stop") && live.count("servoToggle") && live.count("jogP") &&   //AI(W906-MT-ALMRST) 20260929: + resetAlarm
++        CHECK(live.size() == 34 && live.count("saveMotTable") && live.count("resetAlarm") && live.count("reloadMotorData") && live.count("stop") && live.count("servoToggle") && live.count("jogP") &&   //AI(W906-MT-ALMRST) 20260929: + resetAlarm  //AI(W906-MT-SAVEMOT) 20260930: + saveMotTable (live 34)
+               live.count("moveRelative") && live.count("moveAbsolute") && live.count("moveSoftLimitN") &&
+               live.count("setJogHighSpeed") && live.count("setSoftLimitP") && live.count("home") &&
+               live.count("loopMove") && live.count("resetMNet") && live.count("setRangeAndInit") &&
+@@ -3395,6 +3408,89 @@ int main(int argc, char** argv)
+         MotorAccessResetJobs();
+     }
+ 
++    // ---------------------------------------------------------------- (16)
++    //AI(W906-MT-SAVEMOT) 20260930: saveMotTable (Motor Test「回寫 Mot_Table」) through the dispatcher -- the glue: who may, where the
++    //  file is, the ack, the in-memory callback. The writer's own rules and byte identity: tests/test_mt_savemot.cpp.
++    printf("[16] AI(W906-MT-SAVEMOT): saveMotTable through the dispatcher (a temp copy, never a machine file)\n");
++    {
++        MotorAccessResetJobs();
++        FakeBackend be;
++        be.table["MInArmZA"] = Axis1203(3, 3, 0, 0);
++        be.opened.assign(1, true);
++        MotorGolden g;
++        g.valid = true; g.enable = true; g.initSpeed = 100; g.jogHigh = 800; g.jogLow = 100; g.homeHigh = 10000; g.homeLow = 1000;
++        g.softP = 999999; g.softN = -999999; g.accDb = 8000.0; g.decDb = 8000.0; g.range = 75;
++        be.golden[3] = g; be.aliasOf[3] = "MInArmZA";
++        const char* tmpEnv = std::getenv("TEMP");
++        const std::string dir = std::string(tmpEnv ? tmpEnv : ".") + "\\ht9045_savemot_disp_" + std::to_string((long long)_getpid());
++        _mkdir(dir.c_str());
++        const std::string path = dir + "\\Mot_Table.csv";
++        const std::string H = "Motorname,Alias,SoftLimitN,SoftLimitP,BoardID,Port,IP,Direction,GearRatio,HomeDirectior,HomeHighSpeed,HomeLowSpeed,"
++                              "InitSpeed,JogHighSpeed,JogLowSpeed,Rate,Enable,ServoAlarmOn,Range,1P2P,SensorType,SimulateSpeed,CardModel,Acc,Dec,"
++                              "EncodeType,PickLimit,LimitLogic,In1Logic";
++        const std::string R0 = "M00,MInArmX,-999999,999999,0,0,0,0,1,0,20000,5000,500,10000,100,90,1,1,100,1,1,10000,PCI1203,100000,100000,2,,0,1";
++        const std::string R3 = "M03,MInArmZA,-999999,999999,3,0,3,0,1,0,10000,1000,100,800,100,60,1,0,75,1,0,10000,PCI1203,8000,8000,0,,0,1";
++        const std::string T = H + "\r\n" + R0 + "\r\n" + R3 + "\r\n";
++        { std::ofstream f(path.c_str(), std::ios::binary | std::ios::trunc); f << T; }
++        MotorAccessReq rq = Req("uMotorTest", "saveMotTable", 0);
++        rq.button = "btnSaveMotTable";
++        MotorAccessOutcome o = MotorAccessDispatch(rq, 1, be);
++        CHECK(!o.ok && Has(o.ackJson, "沒有選馬達"), "saveMotTable with no motor -> refused (golden ActiveIndex==-1)");
++        rq.motors.push_back("MInArmZA");
++        o = MotorAccessDispatch(rq, 1, be);
++        CHECK(!o.ok && Has(o.ackJson, "MotTablePath"), "no Mot_Table path from the backend -> refused");
++        be.motTablePath = path;
++        MotorAccessReq rt = rq; rt.source = "uteach";
++        o = MotorAccessDispatch(rt, 1, be);
++        CHECK(!o.ok && Has(o.ackJson, "uMotorTest"), "saveMotTable from the teach page -> refused (a Motor Test action)");
++        be.systemStart = true;
++        o = MotorAccessDispatch(rq, 1, be);
++        CHECK(!o.ok && Has(o.ackJson, "SystemStart"), "while SystemStart -> refused (like every Motor Test button)");
++        be.systemStart = false;
++        o = MotorAccessDispatch(rq, 1, be);
++        CHECK(o.ok && AckShapeOk(o.ackJson, 7) && Has(o.ackJson, "\"result\":\"unchanged\"") && Has(o.ackJson, "\"backup\":null") &&
++              Has(o.ackJson, "no change") && be.motSaved.empty() && ReadAll(path) == T,
++              "values equal to the file -> ok, result unchanged, no backup, no memory update, file untouched");
++        be.golden[3].jogHigh = 900; be.golden[3].accDb = 9000.0;
++        o = MotorAccessDispatch(rq, 1, be);
++        std::string bak, c0, o0, n0, c1, o1, n1, file;
++        int nch = -1;
++        {
++            cJSON* j = cJSON_Parse(o.ackJson.c_str());
++            const cJSON* b = j ? cJSON_GetObjectItemCaseSensitive(j, "backup") : 0;
++            const cJSON* fl = j ? cJSON_GetObjectItemCaseSensitive(j, "file") : 0;
++            const cJSON* ch = j ? cJSON_GetObjectItemCaseSensitive(j, "changes") : 0;
++            if (cJSON_IsString(b)) bak = b->valuestring;
++            if (cJSON_IsString(fl)) file = fl->valuestring;
++            if (cJSON_IsArray(ch)) {
++                nch = cJSON_GetArraySize(ch);
++                for (int k = 0; k < nch && k < 2; ++k) {
++                    const cJSON* e = cJSON_GetArrayItem(ch, k);
++                    const cJSON* ec = cJSON_GetObjectItemCaseSensitive(e, "column");
++                    const cJSON* eo = cJSON_GetObjectItemCaseSensitive(e, "old");
++                    const cJSON* en = cJSON_GetObjectItemCaseSensitive(e, "new");
++                    std::string& C = k ? c1 : c0; std::string& O = k ? o1 : o0; std::string& N = k ? n1 : n0;
++                    if (cJSON_IsString(ec)) C = ec->valuestring;
++                    if (cJSON_IsString(eo)) O = eo->valuestring;
++                    if (cJSON_IsString(en)) N = en->valuestring;
++                }
++            }
++            cJSON_Delete(j);
++        }
++        std::string R3n = R3;
++        R3n.replace(R3n.find(",800,"), 5, ",900,");
++        R3n.replace(R3n.find(",8000,8000,"), 11, ",9000,8000,");
++        CHECK(o.ok && AckShapeOk(o.ackJson, 7) && Has(o.ackJson, "\"result\":\"saved\"") && file == path && nch == 2 &&
++              c0 == "JogHighSpeed" && o0 == "800" && n0 == "900" && c1 == "Acc" && o1 == "8000" && n1 == "9000",
++              "JogHighSpeed 800 -> 900 and Acc 8000 -> 9000: result saved, the ack names the file and each column old -> new");
++        CHECK(!bak.empty() && bak.compare(0, path.size() + 5, path + ".bak_") == 0 && ReadAll(bak) == T, "the ack's backup = path.bak_<stamp>, byte-identical to the old file");
++        CHECK(ReadAll(path) == H + "\r\n" + R0 + "\r\n" + R3n + "\r\n", "the file = the old bytes with those two cells replaced");
++        CHECK(be.motSaved.size() == 1 && be.motSaved[0] == "MInArmZA|" + R3n + "|JogHighSpeed=900;Acc=9000;",
++              "MotTableRowSaved: the Alias, the new row text (_CommaText) and only the changed cells");
++        std::remove(bak.c_str()); std::remove(path.c_str()); _rmdir(dir.c_str());
++        MotorAccessResetJobs();
++    }
++
+     printf("\n%d passed, %d failed\n", g_pass, g_fail);
+     return (g_fail == 0) ? 0 : 1;
+ }
+-- 
+2.55.0.windows.5
+

@@ -145,5 +145,14 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     EastSun 0930「我不需要確認都歸零」）；運轉中、機台內有 IC、Q44 停機照舊。離線測過，機台上還沒實跑。
   web 0023 cbc7920 HMI-SHELL + EXIT-ONECONFIRM (web) —— Exit 只問一次「確定要關閉程式??」（第二框 "Sure To Exit?" 當 YES）；
                     background.html 給程式視窗的 ✕ 用的 HT9045ShellCloseRequest，document.title 跟著 machine.caption。
+  cpp 0043 cbd3da5 MT-SAVEMOT —— Motor Test「回寫 Mot_Table」：選取軸 Settings 表的 10 個值寫回 Mot_Table.csv 那一列（非 golden；
+                    golden 的 Settings 表只改記憶體）。只改值真的不同的格子、其餘位元組不動、先備份 .bak_YYYYMMDD_HHMMSS、
+                    暫存檔＋讀回＋MoveFileEx；多種拒絕（運轉中、Alias 重複、CardModel 不符、空格子、Index 列 Acc/Dec…）。
+                    tests/test_mt_savemot.cpp（ctest MtSaveMotTable）64/64，用真檔的副本；機台上還沒按過。
+  web 0024 dcf921d LAYOUT110 —— 110% 時開站 9 個視窗都放進 1920×1032（不重疊、不出畫面），程式碼對應 footer 與標題的（xxx.dfm）一律不顯示。
+  web 0025 a83604f LAYOUT110-2 —— BinSelect／Lot Info 的開發說明（.sbsNote、.nowire）不顯示。
+  web 0026 977e759 TEACH-ALMRST —— 教導頁 Active Motor 區加 Alarm Reset（同 Motor Test 的 resetAlarm），指令表加 uteach 那一列。
+  web 0027 f149905 MT-SAVEMOT (web) —— Motor Test「回寫 Mot_Table」按鈕、確認框與回覆顯示，指令表加 btnSaveMotTable。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 
 MD5 清單在 MANIFEST_MD5.tsv。
