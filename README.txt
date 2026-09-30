@@ -235,4 +235,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   tools 0088 HTDESIGNER-90（0.90.0）—— 照 XAML 設計工具快捷鍵補五個：Ctrl+Shift+A 取消選取、F9 藏控制點、Alt＋方向鍵複製一份、Ctrl+N 新增元件、Shift＋角落控制點等比例。四層測試全過。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  tools 0089 HTDESIGNER-91（0.91.0）—— 設計畫面上 F2＝直接在元件上改文字（WPF 的 Edit control text），Enter 寫入、Esc 不改；改名稱改用名稱方塊／元件樹 F2／右鍵。四層測試全過。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
