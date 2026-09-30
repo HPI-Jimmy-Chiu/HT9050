@@ -285,4 +285,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   tools 0113 HTDESIGNER-115（0.115.0）—— 新設定 ht9045Designer.defaultView：開頁面時只開設計畫面（預設）或旁邊同時開 HTML（WPF 的 Split）。四層測試全過。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  tools 0114 HTDESIGNER-116（0.116.0）—— 新設定 ht9045Designer.snapSpacing：間距吸附的距離（預設 8px，0＝不吸附）。WPF 設定那四項（28～31）都做完。四層測試全過。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
