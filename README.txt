@@ -208,4 +208,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   tools 0085 HTDESIGNER-87（0.87.0）—— 按住 Ctrl 拖曳元件＝複製一份放到放開的地方（WinForms／WPF），原本的不動、新名稱、一次 Ctrl+Z；Ctrl＋點照舊是加選。四層測試全過。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  tools 0086 HTDESIGNER-88（0.88.0）—— 隱藏／鎖定快捷鍵 Ctrl+H／Shift+Ctrl+H／Ctrl+L／Shift+Ctrl+L（WPF 文件大綱）、縮放 12.5%～800%、工具列「背景」亮／暗切換；元件樹上 F2 改名改的是樹上那列。四層測試全過。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
