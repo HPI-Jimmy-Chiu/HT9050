@@ -154,5 +154,14 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   web 0026 977e759 TEACH-ALMRST —— 教導頁 Active Motor 區加 Alarm Reset（同 Motor Test 的 resetAlarm），指令表加 uteach 那一列。
   web 0027 f149905 MT-SAVEMOT (web) —— Motor Test「回寫 Mot_Table」按鈕、確認框與回覆顯示，指令表加 btnSaveMotTable。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0044 8fc60c7 HMI-DLG —— 程式視窗裡所有小視窗（網頁的 alert／confirm／prompt 共 68 處，加上 ✕ 的「確定要關閉軟體嗎？」）
+                    改成軟體自己的 MyMessageBox 風格，不再出現瀏覽器的「127.0.0.1:8055 說」：HMI 漸層標題列、凸起面板、深藍字、
+                    藍灰按鈕（確定／取消），Enter＝確定、Esc＝取消、拖標題可移動；顏色與縮放每 3 秒從頁面讀（跟著主題與 110% 等）。
+                    離線編譯過，機台上還沒看過。
+  web 0028 24f2b4f MENU15 + NOOVERLAP-1 —— Tools／Config／Debug 三個下拉選單全部放大 1.5 倍（按鈕 186×44、字 16.5px、圖示 21px）；
+                    Motor Test「回寫 Mot_Table」往下移（原本蓋住 Torque）、Torque 說明字不再超出面板、select 框的「All」不再壓線。
+  web 0029 af58936 JOGBLUR —— 按住 JOG 時，如果剛才游標在輸入框，按下那一刻輸入框失焦會被當成放開、寸動馬上停（Teach 與 Motor Test
+                    共用）。現在只有整個視窗失焦才算放開；放開滑鼠／手指、頁面被藏起來照舊送停止。離線 A/B 測過。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 
 MD5 清單在 MANIFEST_MD5.tsv。
