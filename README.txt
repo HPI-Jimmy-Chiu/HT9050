@@ -221,4 +221,14 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   cpp 0046 57c3d45 VACUNIT-1203 —— 拒絕訊息「每個物件每分鐘一行」的表 32 → 256 格（沒有 VC8 時 48 個物件把表擠爆，變成每秒都印）。
   web 0034 b9000ea VACUNIT-1203 (web) —— Vacuum Unit 頁：每秒輪詢、顯示 C++ 算出的值、只有 available 的鈕才解鎖、寫之前確認框、回應逐筆標示。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  web 0035-0044 NOOVERLAP-A／B／C —— EastSun 20260930「重疊是不被允許的」：離線掃描工具量 72 個視窗、590 種分頁狀態找到 759 處，
+                    先修 golden 執行時會藏／會對齊（alBottom／alRight／FormShow Visible）卻被畫在設計位置的元件，其次才微調網頁字寬／圓鈕大小。
+                    EastSun 同日喊暫停，已完成的頁面（掃描後 → 剩下、剩下的都判定為誤判或 golden 本來如此）：
+                    Teach 45→2、Contact 43→3、Contact Force 43→0、CC-Link 68→0、Offset 67→22、Configure 46→4、Handler System 27→1、
+                    Speed 21→0、Security 7→6、Motor Test 6→0、Home 16→0、Observer 16→1、Setup 9→1、Ld/ULd 7→4、Tray Form 13→0，
+                    以及主畫面、Contact CT、Counter Clear、Show Message、Bin Select、Sort CT、Lot Info、Comm View、Tower Light、Tester IF、
+                    AGV、Start Condition、Smart Diagnostic 全部 0。
+                    還沒做：IO 頁、Omron、Yield Monitor、Auto Clean（改到一半已還原）、Barcode、Temp Set、Tray Assign、Vacuum Unit。
+                    只動版面，指令／IO／馬達的程式都沒改（Offset 加了一個 Scan AOI 勾選展開面板的小處理，照 golden）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（命中的都是畫面上的 Password: 標籤與欄位名）；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
