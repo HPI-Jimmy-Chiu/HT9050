@@ -197,4 +197,7 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   tools 0080 HTDESIGNER-82（0.82.0）—— Font.Name 有下拉清單（WPF 的 FontFamily）；README 加「跟 WPF 設計工具的操作對照」表
                     （逐項對微軟說明；做不到的：工具箱直接拖到畫面上——VS Code 的限制）。四層測試全過。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  tools 0081 HTDESIGNER-83（0.83.0）—— 開始「自己找跟 WPF 不一樣的地方直接改」（EastSun 20260930），每次改動記在 tools/vscode-htdesigner/WPF_DIFF_LOG.md：
+                    元件樹 F2／Ctrl+C／X／V／Delete；HTML 右鍵「移到事件處理函式」；一打開頁面屬性面板就顯示表單。四層測試全過。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
