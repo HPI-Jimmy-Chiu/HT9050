@@ -194,4 +194,7 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   tools 0079 HTDESIGNER-81（0.81.0）—— 旁邊的 HTML 游標在元件的標籤、文字或沒有 id 的子元素裡都會選取它（WPF 的分割檢視），
                     在 <div class="form"> 裡＝表單；「排列：依名稱／依類別／DFM 順序」移到屬性清單最上面。四層測試全過。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  tools 0080 HTDESIGNER-82（0.82.0）—— Font.Name 有下拉清單（WPF 的 FontFamily）；README 加「跟 WPF 設計工具的操作對照」表
+                    （逐項對微軟說明；做不到的：工具箱直接拖到畫面上——VS Code 的限制）。四層測試全過。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
