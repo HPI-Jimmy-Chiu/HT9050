@@ -1,0 +1,433 @@
+From b8b992390ed8e10b21e2014a1625799f734c5c04 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 30 Sep 2026 22:15:12 +0800
+Subject: [PATCH] HTDESIGNER-95: reparent on the design surface (Alt at the
+ release), like Blend; into the form = the form itself (0.95.0)
+
+Blend (Artboard modifier keys): "Reparent an object: drag the object over a
+layout panel and press Alt before releasing the mouse button". Here a drag on
+the surface only moved; changing the container needed the component tree.
+Now a move let go with Alt held puts the originals back and posts
+reparentDrop (where each one's top-left is from the pointer, and the id'd
+elements under the pointer -- the dragged ones hidden while looking -- each
+with the pointer in its own coordinates). cmdReparentDrop takes the first
+container (Panel / GroupBox / the form; a tab sheet is refused and said):
+the one they are in = just that move (a batch setLayout); another one =
+cmdReparent with the drop place (pos: each unit's first tag moved to it), one
+undo.
+
+Fix found by the real VS Code test: htmlblock.insideEnd took the first
+<div class="cli"> ANYWHERE inside the container, so a paste / a toolbox add /
+an outline drop / this reparent "into the form" landed in the form's first
+GroupBox. Now only a direct child cli counts.
+
+Tests (all 4 layers pass: lib 160, smoke 186, panels, real VS Code 159): lib
+(into the form with a GroupBox inside = the form's own end); probe (let go
+with Alt over a box of its own: reparentDrop with the name, -5 / -5 from the
+pointer, the box then the form; the button back, nothing written); smoke (into
+the form at 295, 244, not in Panel2 nor GroupBox1; over its own Panel2 just
+the move; over no container nothing); real VS Code (into the form, the tree
+says so, one undo).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHANGELOG.md          |  7 +++
+ tools/vscode-htdesigner/CHEATSHEET.md         |  1 +
+ tools/vscode-htdesigner/README.md             |  1 +
+ tools/vscode-htdesigner/WPF_DIFF_LOG.md       |  5 +-
+ tools/vscode-htdesigner/extension.js          | 51 +++++++++++++++++--
+ tools/vscode-htdesigner/lib/htmlblock.js      | 14 ++---
+ tools/vscode-htdesigner/media/probe.js        | 32 ++++++++++--
+ tools/vscode-htdesigner/package.json          |  2 +-
+ .../test/integration/index.js                 | 16 ++++++
+ tools/vscode-htdesigner/test/probe_driver.js  | 29 +++++++++++
+ tools/vscode-htdesigner/test/probe_test.ps1   |  1 +
+ tools/vscode-htdesigner/test/run_tests.js     |  5 ++
+ .../vscode-htdesigner/test/smoke_extension.js | 17 +++++++
+ 13 files changed, 161 insertions(+), 20 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/CHANGELOG.md b/tools/vscode-htdesigner/CHANGELOG.md
+index 94e82ce..4681800 100644
+--- a/tools/vscode-htdesigner/CHANGELOG.md
++++ b/tools/vscode-htdesigner/CHANGELOG.md
+@@ -2,6 +2,13 @@
+ 
+ 每一版多了什麼。怎麼操作看 [操作一覽](CHEATSHEET.md)，詳細說明看 README。
+ 
++## 0.95.0
++- **在畫面上拖曳換容器**（Blend 的 Reparent：拖到另一個 Panel 上，放開前按住 `Alt`）：元件搬進滑鼠下面的 Panel／GroupBox／表單，
++  就放在放開的位置（座標換成新容器的）；一個 Ctrl+Z 復原。放開的地方還是原本的容器＝只是移動。
++  以前畫面上拖曳只能改位置，換容器要到元件樹拖。分頁（TabSheet）裡照舊要用元件樹。
++- 修正：**貼上、工具箱新增、元件樹拖曳「放進表單」時，會跑進表單裡第一個 GroupBox**（找表單的內框時找到的是 GroupBox 的）。
++  現在只認表單自己的，放在表單的最後。（真 VS Code 的測試抓到的）
++
+ ## 0.94.0
+ 照 Blend 的快捷鍵清單補上（只在設計畫面有焦點時；F2 文字框打字時不作用）：
+ - `Ctrl+Shift+1`＝同寬、`Ctrl+Shift+2`＝同高、`Ctrl+Shift+9`＝同大小（以主要選取為準，跟右鍵「對齊與間距」一樣）。
+diff --git a/tools/vscode-htdesigner/CHEATSHEET.md b/tools/vscode-htdesigner/CHEATSHEET.md
+index e76ce61..5646a85 100644
+--- a/tools/vscode-htdesigner/CHEATSHEET.md
++++ b/tools/vscode-htdesigner/CHEATSHEET.md
+@@ -47,6 +47,7 @@
+ | 剪下／複製／貼上／刪除 | `Ctrl+X`／`Ctrl+C`／`Ctrl+V`／`Del`（右鍵最上面四個） |
+ | 複製一份放到別的地方 | 按住 `Ctrl` 拖曳元件，放開的地方就是複製的那一份（原本的不動；Ctrl＋點一下＝加選） |
+ | 複製一份、錯開一點 | `Alt`＋方向鍵（1px）；`Shift+Alt`＋方向鍵（10px） |
++| 拖到別的 Panel 裡 | 拖到那個 Panel 上，**放開前按住 `Alt`**（放在放開的位置） |
+ | 新增元件（清單選） | `Ctrl+N` |
+ | 取消全部選取 | `Ctrl+Shift+A` |
+ | 藏起／顯示控制點 | `F9` |
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 4a9bd85..39a017c 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -67,6 +67,7 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ | 縮放：Ctrl＋滾輪、左下的比例清單（12.5%～800%）、符合視窗、符合選取；空白鍵＋拖曳＝平移；左下「背景」＝亮／暗切換 | 一樣 |
+ | 在畫面上雙擊元件＝預設事件（空的就新增、打開程式碼） | 一樣（新增時網頁到 C++ 也接好） |
+ | 右鍵：檢視程式碼、順序（移到最上層…）、群組、取消群組、版面重設（位置／大小／全部版面／全部）、剪下／複製／貼上／刪除、改名 | 一樣（版面重設＝改回 BCB6 .dfm 的值） |
++| 畫面上拖到另一個 Panel、放開前按 Alt＝換到那個容器（Blend 的 Reparent） | 一樣（放在放開的位置） |
+ | 文件大綱（元件樹）：階層、選取、拖曳調順序或移進容器、眼睛（設計時隱藏）、鎖、右鍵選單；Ctrl+H／Shift+Ctrl+H 隱藏／顯示、Ctrl+L／Shift+Ctrl+L 鎖定／解鎖 | 一樣 |
+ | 屬性視窗：名稱方塊、型別、〔⚡ 事件〕按鈕、搜尋、排列（類別（預設）／名稱／來源）、類別可收合、屬性名稱上的說明、值旁邊的小方塊（點一下＝重設） | 一樣（「預設值」＝BCB6 .dfm 的值） |
+ | 事件分頁：兩欄；打名稱＋Enter 或雙擊＝新增、空白按 Enter＝預設名稱、下拉＝用已經有的函式、右鍵重設、雙擊＝跳到程式碼 | 一樣 |
+diff --git a/tools/vscode-htdesigner/WPF_DIFF_LOG.md b/tools/vscode-htdesigner/WPF_DIFF_LOG.md
+index 611d6bd..de79416 100644
+--- a/tools/vscode-htdesigner/WPF_DIFF_LOG.md
++++ b/tools/vscode-htdesigner/WPF_DIFF_LOG.md
+@@ -23,7 +23,6 @@ EastSun 20260930：「你看還有那邊跟 wpf 不一樣，直接做修改，
+ | — | 工具箱上方的搜尋框（Search Toolbox） | 不用改：VS Code 的樹狀清單本身就能打字篩選（點工具箱後直接打字） |
+ | — | Blend：按住 Alt 拖曳＝複製（〔MK〕） | 不改：這裡 Alt＝拖曳時暫時不吸附；複製用 WinForms／VS 的 Ctrl＋拖曳（0.87） |
+ | — | Blend：Ctrl／Shift＋滾輪＝上下／左右捲動（〔MK〕） | 不改：VS 的 XAML 設計工具是 Ctrl＋滾輪縮放，這裡照 VS |
+-| 24 | 拖曳到另一個 Panel 上、放開前按 Alt＝換到那個容器（〔MK〕Reparent an object） | 畫面上拖曳只移位置；換容器只能在元件樹拖 |
+ | 25 | Alt＋點＝選到下面那一層，再點一次再往下（〔MK〕） | 沒有一層一層往下選 |
+ | 26 | Shift＋點＝選一串相鄰的（第一個到最後一個）；Shift＋拖曳＝從元件上也能拉框選（〔KS〕〔MK〕） | Shift＋點＝跟 Ctrl 一樣加選／取消 |
+ | 27 | Ctrl＋空白鍵＋點＝放大、Ctrl+Alt＋空白鍵＋點＝縮小（〔MK〕） | 沒有 |
+@@ -67,4 +66,6 @@ EastSun 20260930：「你看還有那邊跟 wpf 不一樣，直接做修改，
+ | 0930 | 0.91.0 | F2＝直接在畫面上編輯元件的文字，Esc 結束（〔KS〕Edit control text） | 畫面上 F2＝改名稱（WPF 改名稱是在屬性視窗的 Name 方塊） | 畫面上 F2＝在元件上開一個文字框（字型、對齊照元件），Enter／點別處＝寫進去（跟屬性面板的 Caption 同一個修改，一個 Ctrl+Z），Esc＝不改；打字時設計畫面的快捷鍵都不作用，Ctrl+Z／Ctrl+Y＝文字框自己的復原。改名稱：屬性面板 Name 方塊、元件樹 F2、右鍵「改名稱」 | probe：F2 開框（Save2）、方向鍵不移動、框裡按滑鼠不被擋、Enter 寫 Save3、Esc 不寫；smoke：F2 的鍵、打字時快捷鍵的 when 全部擋掉、Ctrl+Z 給文字框；真 VS Code：開框、關掉不寫 | 84a2ed1 |
+ | 0930 | 0.92.0 | 左下工具列「Show/Hide snap grid」和「snapping to gridlines」是兩個按鈕（〔XD〕） | 「格線」一個按鈕＝顯示又吸附 | 「格線」＝畫不畫、「吸附」＝吸不吸，可以只吸不畫、只畫不吸；每頁共用、記住；標題列 # 和右鍵照舊一起開關 | probe：只吸不畫＝格線沒畫但落在 8 的倍數、只畫不吸＝格線有畫但自由移動 5px；工具列四個按鈕送出 gridShow、gridSnap；smoke：兩個分開記住、通知每一頁 | 20adafc |
+ | 0930 | 0.93.0 | 對齊線也對齊文字的基準線（〔XD〕「when the edges and the text of some controls are aligned」） | 只對齊邊緣和中心 | 移動時自己的文字基準線對旁邊元件的基準線（標籤、按鈕的文字、Panel 標題、輸入框的值），比邊緣近就用它，紅色虛線 | probe：40px 和 12px 的字，小的放在大的基準線下 2px、橫向拖 → 基準線對齊（差 <1px）、虛線 | 5e5b5df |
+-| 0930 | 0.94.0 | Blend 快捷鍵：Ctrl+Shift+1／2／9 同寬／同高／同大小、Ctrl+=／Ctrl+- 縮放、Ctrl+0／Ctrl+9 符合選取、Ctrl+1 實際大小（〔BK〕） | 只有右鍵和左下工具列 | 8 個鍵，只在設計畫面有焦點、沒在打字時（其他地方照舊是 VS Code 的） | smoke：8 個鍵的指令和 when、放大縮小各送一級；probe：zoomStep 1→1.1→1 | （本次） |
++| 0930 | 0.94.0 | Blend 快捷鍵：Ctrl+Shift+1／2／9 同寬／同高／同大小、Ctrl+=／Ctrl+- 縮放、Ctrl+0／Ctrl+9 符合選取、Ctrl+1 實際大小（〔BK〕） | 只有右鍵和左下工具列 | 8 個鍵，只在設計畫面有焦點、沒在打字時（其他地方照舊是 VS Code 的） | smoke：8 個鍵的指令和 when、放大縮小各送一級；probe：zoomStep 1→1.1→1 | 06847ca |
++| 0930 | 0.95.0 | 拖到另一個 Panel 上、放開前按 Alt＝換到那個容器（〔MK〕Reparent an object） | 畫面上拖曳只移位置；換容器只能在元件樹拖 | 放開時按著 Alt：原本的回原位，搬進滑鼠下最裡層的容器、放在放開的位置（座標換成新容器的），一個 Ctrl+Z；同一個容器＝只是移動；分頁拒絕並說明 | probe：放在臨時框上 → reparentDrop（名稱、離滑鼠 −5,−5、目標框＋表單），按鈕回原位、沒有寫；smoke：搬到表單 295,244、同容器只移動、沒有容器不動；真 VS Code：搬進表單（樹上看得到）、一次復原 | （本次） |
++| 0930 | 0.95.0 | （修正，不是 WPF 差異）放進表單＝放在表單自己裡面 | 貼上／工具箱新增／元件樹拖曳／換容器「放進表單」時，找到表單裡第一個 GroupBox 的 div.cli，跑進那個 GroupBox | insideEnd 只認直接子元素的 div.cli | lib：表單裡有 GroupBox 時放進表單＝表單的最後；smoke：換容器後不在 GroupBox1 裡；真 VS Code 抓到（parent=GroupBox1） | （本次） |
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 4c1fc80..14f4cf9 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -2523,7 +2523,7 @@ class Hub {
+    * component they move next to it, into its parent. Their left/top numbers stay
+    * (they now count from the new container). One WorkspaceEdit, the page re-drawn.
+    */
+-  async cmdReparent(ids, target) {
++  async cmdReparent(ids, target, pos) {
+     const d = this.active;
+     if (!d) return null;
+     ids = ids.filter(id => id && id !== '@form');
+@@ -2554,15 +2554,21 @@ class Hub {
+     if (at < 0) { this.refuseEdit(d, '找不到「' + tId + '」在原始碼的位置（或沒有正常結束），沒有移動。'); return null; }
+     if (us.units.some(u => u.start < at && at < u.end)) { this.refuseEdit(d, '不能把元件放進它自己裡面。'); return null; }
+     const parts = us.units.map(u => ({ range: htmlblock.removeRange(text, u.start, u.end).range, repl: '' }));
++    // pos (a drop on the design surface): where each one goes in the new container, { id: { left, top } }
++    const htmlOf = u => {
++      const p = pos && pos[u.id], at0 = p ? htmlblock.firstPx(u.html) : null;
++      return p && at0 && typeof at0.left === 'number' && typeof at0.top === 'number'
++        ? htmlblock.offsetBlock(u.html, Math.round(p.left) - at0.left, Math.round(p.top) - at0.top) : u.html;
++    };
+     const ls = text.lastIndexOf('\n', at - 1) + 1;
+     let repl;
+     if (container && !text.slice(ls, at).trim()) {
+       const ind = htmlblock.indentAt(text, at) + '  ';
+-      repl = us.units.map(u => ind + u.html + '\n').join('');
++      repl = us.units.map(u => ind + htmlOf(u) + '\n').join('');
+       at = ls;
+     } else {
+       const ind = htmlblock.indentAt(text, lineOf) + (container ? '  ' : '');
+-      repl = us.units.map(u => '\n' + ind + u.html).join('');
++      repl = us.units.map(u => '\n' + ind + htmlOf(u)).join('');
+     }
+     // the insertion must not fall inside what is taken out
+     if (parts.some(p => p.range[0] < at && at < p.range[1])) { this.refuseEdit(d, '放的位置在要移走的那一段裡面，沒有移動。'); return null; }
+@@ -2571,11 +2577,44 @@ class Hub {
+     const ok = await this.applyStructural(d, parts);
+     if (ok) {
+       vscode.window.setStatusBarMessage('$(move) ' + us.units.map(u => u.id).join('、') + (container ? ' 移進 ' + (tId === '@form' ? '表單' : tId) : ' 移到 ' + tId + ' 旁邊') +
+-        '（left/top 數值沒變，現在從新的上層算起；Ctrl+Z 復原）', 7000);
++        (pos ? '（放在放開的地方；Ctrl+Z 復原）' : '（left/top 數值沒變，現在從新的上層算起；Ctrl+Z 復原）'), 7000);
+     }
+     return ok ? { moved: us.units.map(u => u.id), into: container ? tId : null, after: container ? null : tId } : null;
+   }
+ 
++  /**
++   * Blend: "Reparent an object: drag the object over a layout panel and press Alt" -- the design surface let the
++   * selection go with Alt held: targets = the id'd elements under the pointer (innermost first, the form last, each
++   * with the pointer in its own child coordinates), offs = where each one's top-left is from the pointer. The first
++   * container takes them, at the place they were let go; the container they are already in = just that move.
++   */
++  async cmdReparentDrop(d, m) {
++    if (this.active !== d) this.setActive(d);
++    const offs = Array.isArray(m && m.offs) ? m.offs.filter(o => o && typeof o.id === 'string' && o.id && o.id !== '@form') : [];
++    const ids = offs.map(o => o.id);
++    if (!ids.length || !Array.isArray(m.targets)) return null;
++    const pi = await d.info;
++    const text = d.doc.getText();
++    const t = m.targets.find(g => g && !(typeof g.id === 'string' && ids.includes(g.id)) &&
++      (g.pane || g.id === '@form' || (typeof g.id === 'string' && toolbox.CONTAINERS.test(this.classOf(d, pi, g.id, text))))) || null;
++    if (!t) { this.refuseEdit(d, '放開的地方沒有可以放進去的容器（Panel、GroupBox 或表單），沒有換。'); return null; }
++    if (t.pane) { this.refuseEdit(d, '分頁（TabSheet）在 HTML 裡沒有名稱，不能用拖的換進去：在元件樹把它拖到那個分頁裡的元件上。'); return null; }
++    const pos = {};
++    for (const o of offs) pos[o.id] = { left: Math.round((+t.x || 0) + (+o.dx || 0)), top: Math.round((+t.y || 0) + (+o.dy || 0)) };
++    const parentOf = id => {
++      const row = d.treeData.find(r => r[2] === id);
++      const pr = row && row[1] != null ? d.treeData.find(r => r[0] === row[1]) : null;
++      return pr ? (pr[7] ? '@form' : pr[2]) : null;
++    };
++    if (ids.every(id => parentOf(id) === t.id)) {
++      // already in it: only the move (ONE batch edit, from the source's positions)
++      d.post({ type: 'editMany', items: ids.map(id => ({ id, type: 'setLayout', left: pos[id].left, top: pos[id].top, force: true })) });
++      return { same: true, into: t.id, pos };
++    }
++    const r = await this.cmdReparent(ids, t.id === '@form' ? null : { id: t.id }, pos);
++    return r ? Object.assign({ pos }, r) : null;
++  }
++
+   /**
+    * WPF / Blend "Group Into": the selected components (all in one parent) get a new
+    * TPanel around them -- no border, no background, exactly their bounding box -- and
+@@ -3831,6 +3870,10 @@ class Designer {
+         this.textEditing = !!m.open;
+         vscode.commands.executeCommand('setContext', 'ht9045Designer.textEditing', this.textEditing);
+         break;
++      case 'reparentDrop':
++        // Alt held when a drag was let go (Blend): into the container under the pointer
++        this.hub.cmdReparentDrop(this, m).catch(e => this.hub.log('換容器失敗：' + (e && e.stack || e)));
++        break;
+       case 'copyDrop':
+         // Ctrl+drag on the surface: copies of the selection where it was let go
+         this.hub.cmdCopyDrop(this, m).catch(e => this.hub.log('複製失敗：' + (e && e.stack || e)));
+diff --git a/tools/vscode-htdesigner/lib/htmlblock.js b/tools/vscode-htdesigner/lib/htmlblock.js
+index d7ce517..bb05c7e 100644
+--- a/tools/vscode-htdesigner/lib/htmlblock.js
++++ b/tools/vscode-htdesigner/lib/htmlblock.js
+@@ -163,15 +163,11 @@ function indentAt(text, at) {
+ function insideEnd(text, tag) {
+   const r = elementRange(text, tag);
+   if (!r || he.VOID.has(nameOf(tag.text))) return -1;
+-  // a direct <div class="cli"> child
+-  const re = /<div\b[^>]*\bclass\s*=\s*["'][^"']*\bcli\b[^"']*["'][^>]*>/g;
+-  re.lastIndex = tag.end;
+-  const m = re.exec(text);
+-  if (m && m.index < r[1]) {
+-    const cliTag = { start: m.index, end: m.index + m[0].length, text: m[0] };
+-    const cr = elementRange(text, cliTag);
+-    if (cr && cr[1] <= r[1]) return text.lastIndexOf('</', cr[1] - 1);
+-  }
++  // a DIRECT <div class="cli"> child (the form holds GroupBoxes with their own: those are not the form's)
++  //AI(W906-HTDESIGNER) 20260930: the first cli anywhere inside was taken -- a paste / a move into the form landed in a GroupBox
++  const cliRe = /^<div\b[^>]*\bclass\s*=\s*["'][^"']*\bcli\b[^"']*["']/;
++  const cli = childrenOf(text, { tag, range: r }).find(c => c.name === 'div' && cliRe.test(c.text));
++  if (cli) return text.lastIndexOf('</', cli.end - 1);
+   return text.lastIndexOf('</', r[1] - 1);
+ }
+ 
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index 43d3c1a..39fccfc 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -364,11 +364,14 @@
+      the point in its own child coordinates, and picks the first container. */
+   var PLACE = null, plEl = null;
+   function placeShield(on) { if (plEl) plEl.style.display = on ? 'block' : 'none'; }
+-  function placeTargets(x, y) {
+-    /* the whole overlay out of the way while looking: a resize handle under the point is ours, not the page */
++  function placeTargets(x, y, skip) {
++    /* the whole overlay out of the way while looking: a resize handle under the point is ours, not the page;
++       skip = nodes being dragged (they are under the pointer themselves) */
+     var hd = host ? host.style.display : '';
+     if (host) host.style.display = 'none';
++    var vis = (skip || []).map(function (n) { var v = n.style.visibility; n.style.visibility = 'hidden'; return v; });
+     var under = document.elementFromPoint(x, y);
++    (skip || []).forEach(function (n, i) { n.style.visibility = vis[i]; });
+     if (host) host.style.display = hd;
+     var z = typeof zoom === 'number' && zoom > 0 ? zoom : 1;
+     var fr = formRoot(), out = [];
+@@ -1688,7 +1691,7 @@
+       e.preventDefault();
+       return;
+     }
+-    if ((drag || marquee) && t === 'mouseup') endDrag();
++    if ((drag || marquee) && t === 'mouseup') endDrag(e);
+     if (host && e.target === host) {
+       /* our own overlay: a resize handle (or the pan shield), never the page's business */
+       var real = e.composedPath ? e.composedPath()[0] : null;
+@@ -1914,12 +1917,33 @@
+     if (el !== hoverEl) { hoverEl = el; scheduleDraw(); }
+   }, true);
+   /* called from onBlock (which stops mouseup for the page) and, as a fallback, here */
+-  function endDrag() {
++  function endDrag(ev) {
+     if (PAN.drag) { endPan(); return; }
+     if (marquee) { finishMarquee(); return; }
+     if (!drag) return;
+     var d = drag;
+     drag = null;
++    if (d.active && !d.copy && !d.locked && d.how === 'move' && ev && ev.altKey && typeof ev.clientX === 'number') {
++      /* Blend: "Reparent an object: drag the object over a layout panel and press Alt" (before letting go) -- the
++         originals go back, the extension moves them into the container under the pointer, where they were let go */
++      var rItems = d.items || [{ el: d.el, bx: d.bx, s0: d.s0 }];
++      var zr = typeof zoom === 'number' && zoom > 0 ? zoom : 1;
++      var offs = rItems.map(function (it) {
++        var rr = it.bx.node.getBoundingClientRect();
++        return { id: idOf(it.el), dx: Math.round((rr.left - ev.clientX) / zr), dy: Math.round((rr.top - ev.clientY) / zr) };
++      });
++      var tg = placeTargets(ev.clientX, ev.clientY, rItems.map(function (it) { return it.bx.node; }));
++      for (var ri = 0; ri < rItems.length; ri++) {
++        var r0s = rItems[ri].s0;
++        applyStyle(rItems[ri].bx.node, { left: r0s.left, top: r0s.top, right: r0s.right, bottom: r0s.bottom, width: r0s.width, height: r0s.height });
++      }
++      justDragged = true;
++      setTimeout(function () { justDragged = false; }, 0);
++      if (offs.some(function (o) { return !o.id; })) post({ type: 'editRefused', why: '有元件沒有名稱（id），不能換容器' });
++      else post({ type: 'reparentDrop', offs: offs, targets: tg });
++      scheduleDraw();
++      return;
++    }
+     if (d.locked) {
+       if (d.told) { justDragged = true; setTimeout(function () { justDragged = false; }, 0); }
+       scheduleDraw();
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 48e37c1..91be818 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HTML 視覺設計工具",
+   "description": "BCB6 表單移植成 web HMI（網頁＋C++）的專案通用：像 WPF 設計工具一樣看、改頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.94.0",
++  "version": "0.95.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index e213e63..9f88996 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -616,6 +616,22 @@ exports.run = async function () {
+       const f2Closed = await waitFor(() => (d.textEditing === false ? true : null), 5000);
+       ok(!!(f2r && f2Open && f2Closed && d.doc.getText() === original && !d.doc.isDirty),
+         'F2 (real): the text box opens on spbSave (textEditing on), closed without writing, the source untouched', JSON.stringify({ f2r, f2Open, f2Closed }));
++      // Blend reparent (Alt at the release), what the probe sends: spbSave let go over the form -> out of Panel2 into the form
++      // (the real tree says so) at the drop place; ONE undo
++      const rpd = await hub.cmdReparentDrop(d, { offs: [{ id: 'spbSave', dx: 0, dy: 0 }], targets: [{ id: '@form', x: 20, y: 440 }] });
++      const formKey = () => { const r = d.treeData.find(x => x[7]); return r ? r[0] : null; };
++      const rpdTree = rpd ? await waitFor(() => { const r = d.treeData.find(x => x[2] === 'spbSave'); return r && r[1] === formKey() ? true : null; }, 10000) : null;
++      const rpdRow = d.treeData.find(x => x[2] === 'spbSave');
++      const rpdPar = rpdRow ? d.treeData.find(x => x[0] === rpdRow[1]) : null;
++      ok(!!(rpd && rpd.into === '@form' && rpdTree && cdLeft('spbSave') === 20),
++        'Blend reparent (real): spbSave out of Panel2 into the form at 20, 440 (the tree says so)', (rpd ? JSON.stringify(rpd) : '-') +
++          ' tree=' + !!rpdTree + ' parent=' + (rpdPar ? rpdPar[2] : '-') + ' left=' + cdLeft('spbSave') + ' tag=' + ((cdHe.startTagOf(d.doc.getText(), 'spbSave') || {}).text || '').slice(0, 160));
++      d.panel.reveal(d.panel.viewColumn, false);
++      await sleep(300);
++      await vscode.commands.executeCommand('undo');
++      ok(!!(await waitFor(() => (d.doc.getText() === original ? true : null), 5000)), 'ONE undo puts spbSave back into Panel2');
++      if (d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
++      await waitFor(() => { const r = d.treeData.find(x => x[2] === 'spbSave'); return r && r[1] === p2Key() ? true : null; }, 10000);
+     }
+ 
+     // 全選 (right-click menu) and the title bar's undo button
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index 68c8561..19df2e0 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -225,6 +225,35 @@
+         mouse('click', ex0, er2.left + 5, er2.top + 5, { ctrlKey: true });
+         var sm2 = msgs('select').pop();
+         R.ctrlClickOff = !!sm2 && sm2.info.id === 'spbSave' && (sm2.info.multi || []).indexOf('sbtExit') < 0 && msgs('copyDrop').length === 1;
++        /* Blend: dragged out of its panel and let go with Alt held = into the container under the pointer -- the
++           button goes back where it was (the extension moves it in the source), the targets under the pointer and
++           where its top-left is from the pointer are sent, nothing written here */
++        window.__htdProbe.selectById('spbSave');
++        var rpP = btn.offsetParent, rpF = document.querySelector('body > .form');
++        if (rpP && rpF && rpP !== rpF) {
++          var rpB = btn.getBoundingClientRect();
++          /* a small box of its own on the form, on top of everything: the place it is let go */
++          var rpBox = document.createElement('div');
++          rpBox.id = 'htdRpBox';
++          rpBox.style.cssText = 'position:absolute;left:4px;top:4px;width:40px;height:30px;z-index:99999;';
++          rpF.appendChild(rpBox);
++          var rpBr = rpBox.getBoundingClientRect();
++          var rpX = Math.round(rpBr.left + 20), rpY = Math.round(rpBr.top + 15);
++          var rpL0 = btn.style.left, rpT0 = btn.style.top, nRp = edits().length;
++          mouse('mousedown', btn, rpB.left + 5, rpB.top + 5);
++          mouse('mousemove', btn, rpB.left + 9, rpB.top + 9, { altKey: true });
++          mouse('mousemove', btn, rpX, rpY, { altKey: true });
++          mouse('mouseup', btn, rpX, rpY, { altKey: true });
++          var rpm = msgs('reparentDrop').pop();
++          R.reparentDrop = rpm ? JSON.stringify(rpm).slice(0, 240) : null;
++          R.reparentDropOk = !!rpm && rpm.offs.length === 1 && rpm.offs[0].id === 'spbSave' && Math.abs(rpm.offs[0].dx + 5) <= 1 && Math.abs(rpm.offs[0].dy + 5) <= 1 &&
++            ((rpm.targets.length === 2 && rpm.targets[0].id === 'htdRpBox' && Math.abs(rpm.targets[0].x - 20) <= 1 && Math.abs(rpm.targets[0].y - 15) <= 1) ||
++              (rpm.targets.length === 1)) &&   // (a page that stacks its own layers over the box: the form under the pointer)
++            rpm.targets[rpm.targets.length - 1].id === '@form' && btn.style.left === rpL0 && btn.style.top === rpT0 && edits().length === nRp;
++          rpF.removeChild(rpBox);
++        } else R.reparentDropOk = 'no panel';
++        /* without Alt the same drag is a plain move (no reparentDrop) */
++        R.reparentPlain = msgs('reparentDrop').length;
+       }
+       /* right-click: selects, the page does not see it, VS Code's menu is not blocked */
+       var exr = document.getElementById('sbtExit');
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index 518ad71..ddace87 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -60,6 +60,7 @@ foreach ($p in $Pages) {
+       'F2 then Esc writes nothing' = [bool]$R.textBoxEscOk
+       'grid shown and snapping apart (WPF two buttons)' = [bool]$R.gridApartOk
+       'Ctrl+= / Ctrl+- zoom a step (Blend)' = [bool]$R.zoomStepOk
++      'Alt at the release = into the container under the pointer (Blend reparent); the button back, nothing written' = (($R.reparentDropOk -eq $true) -or ($R.reparentDropOk -eq 'no panel'))
+       'snaplines on the text baselines (WPF): a small text lands on a big text baseline, dashed guide' = [bool]$R.baselineSnapOk
+       'Ctrl+click on a selected one takes it out (no copy)' = [bool]$R.ctrlClickOff
+       'Enter opens the event'      = [bool]$R.keyEnterOpens
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index df62cb1..b06a100 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -622,6 +622,11 @@ async function main() {
+   const hbCli = '<fieldset id="g"><legend>L</legend><div class="cli" style="inset:0"><i id="k"></i></div></fieldset>';
+   const hbAt = hbMod.insideEnd(hbCli, he.startTagOf(hbCli, 'g'));
+   ok(hbCli.slice(hbAt, hbAt + 6) === '</div>' && hbCli.slice(0, hbAt).endsWith('<i id="k"></i>'), 'insideEnd: a GroupBox keeps its children in <div class="cli">: paste goes there');
++  // (the form holds a GroupBox with its own cli: into the FORM = the form's end, not that GroupBox's cli)
++  const hbForm = '<div class="form"><div id="p"></div>' + hbCli + '<b id="z"></b></div>';
++  const hbFAt = hbMod.insideEnd(hbForm, he.startTagOf(hbForm, '@form'));
++  ok(hbForm.slice(hbFAt) === '</div>' && hbForm.slice(0, hbFAt).endsWith('<b id="z"></b>'),
++    'insideEnd: into the form = the form\'s own end, not a GroupBox\'s <div class="cli"> inside it', hbForm.slice(Math.max(0, hbFAt - 20), hbFAt + 6));
+   ok(hbMod.elementRange('<div id="u"><p>', he.startTagOf('<div id="u"><p>', 'u')) === null, 'elementRange: unbalanced markup -> null (nothing is cut)');
+ 
+   // --- WPF Order: the place among the siblings (later = on top); a legend / pnlCap stays first
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index fb83435..98a9d5e 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -1408,6 +1408,23 @@ async function main() {
+   for (let i = 0; i < 40 && text === cdBefore; i++) await new Promise(r => setTimeout(r, 50));
+   ok(text !== cdBefore && /id="spbSave_\d+"/.test(text), 'the design surface\'s copyDrop message: copied');
+   doc._setText(cdBefore);
++  // Blend reparent (let go with Alt): over the form, outside Panel2 -> spbSave moved out of Panel2 into the form, where it was
++  // let go; over Panel2 (where it already is) -> only that move (a batch setLayout, nothing restructured); over no container -> nothing
++  const bpBefore = text;
++  const bpIn = (t, id, cont) => { const c0 = he2.startTagOf(t, cont); const rc = c0 ? hb2.elementRange(t, c0) : null; const e0 = he2.startTagOf(t, id); return !!(rc && e0 && e0.start > rc[0] && e0.start < rc[1]); };
++  const bpWas = bpIn(bpBefore, 'spbSave', 'Panel2');
++  const bpR = await api.hub.cmdReparentDrop(edD, { offs: [{ id: 'spbSave', dx: -5, dy: -6 }], targets: [{ id: '@form', x: 300, y: 250 }] });
++  const bpPos = cdPos(text, 'spbSave');
++  ok(!!(bpWas && bpR && bpR.into === '@form' && !bpIn(text, 'spbSave', 'Panel2') && !bpIn(text, 'spbSave', 'GroupBox1') && bpPos && bpPos[0] === 295 && bpPos[1] === 244),
++    'Blend reparent (Alt at the release): spbSave out of Panel2 into the form, at the place it was let go (295, 244)', JSON.stringify({ bpR, bpPos }));
++  doc._setText(bpBefore);
++  pagePosted.length = 0;
++  const bpSame = await api.hub.cmdReparentDrop(edD, { offs: [{ id: 'spbSave', dx: 0, dy: 0 }], targets: [{ id: 'Panel2', x: 70, y: 9 }, { id: '@form', x: 70, y: 490 }] });
++  const bpSameMsg = pagePosted.filter(m => m.type === 'editMany').pop();
++  const bpNone = await api.hub.cmdReparentDrop(edD, { offs: [{ id: 'spbSave', dx: 0, dy: 0 }], targets: [{ id: 'sbtExit', x: 1, y: 1 }] });
++  ok(!!(bpSame && bpSame.same && text === bpBefore && bpSameMsg && bpSameMsg.items.length === 1 && bpSameMsg.items[0].id === 'spbSave' &&
++    bpSameMsg.items[0].left === 70 && bpSameMsg.items[0].top === 9 && bpNone === null && text === bpBefore),
++    'Blend reparent over its own Panel2: just the move (setLayout 70, 9); over no container: nothing', JSON.stringify({ bpSame, items: bpSameMsg && bpSameMsg.items }));
+   // WPF keyboard shortcuts: Alt+arrow = duplicate (1 px that way, Shift = 10 px), Ctrl+N = create an element -- bound only
+   // while the design surface has the focus (not the side bar / panel: Alt+Left there is VS Code's Go Back)
+   await selAs('spbSave', 'button');
+-- 
+2.55.0.windows.5
+

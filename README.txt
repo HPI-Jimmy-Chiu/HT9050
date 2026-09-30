@@ -243,4 +243,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   tools 0092 HTDESIGNER-94（0.94.0）—— Blend 快捷鍵：Ctrl+Shift+1／2／9 同寬／同高／同大小、Ctrl+=／Ctrl+- 縮放、Ctrl+0／9 符合選取、Ctrl+1 實際大小（只在設計畫面有焦點時）。四層測試全過（第 4 層重跑一次）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  tools 0093 HTDESIGNER-95（0.95.0）—— 畫面上拖到另一個 Panel、放開前按 Alt＝換到那個容器（Blend 的 Reparent）；修正「放進表單」會跑進第一個 GroupBox。四層測試全過。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
