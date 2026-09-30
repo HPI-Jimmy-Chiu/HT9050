@@ -1,0 +1,87 @@
+From dcc13239955443a562c4ea69c2272db0b3f9ce77 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 30 Sep 2026 09:10:29 +0800
+Subject: [PATCH] BRAKE-GROUP: a golden group brake release that is refused for
+ one axis still releases the group's other ready axes
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260930: "我每次開軟體的時候 M35 我都需要先把激磁關掉再開起來 這樣機構才會動作".
+Measured in runcfg\logs\oplog_20260930.txt (restarts 08:48 / 08:51 / 08:55 / 08:59 / 09:02, same shape each time):
+  +0.5 s  BrakeAxisTick releases MLoaderZ / MAuto1Z (SVON is carried over from the previous run)
+  +3 s    Motor Test FormShow "relay ON -> DoMotorPowerOn" -> golden CassetteBreakerOFF() holds all three cassette brakes
+  then    golden's release (DoSystem G05 idle pass / CountMotorPowerDelay G16) asks W906_BrakeReleaseOK("Cassette"), refused
+          for the WHOLE group because MAuto2Z is not servo-ON at any start today; BrakeAxisTick's one-release-per-SVON latch
+          never looks again -> held until the operator toggles servo (08:49:57 servo off: "it was already held").
+InOutArmZ has the same shape (MInArmZA off at start keeps MOutArmZA's brake held after DoMotorPowerOn).
+Fix (WebMotorAccessLive.cpp): W906_HookBrakeServoOn, when it refuses a group, releases one by one the members that are ready
+(BrakeReleaseAxisIfReady: brake output exists, SVON 0.5 s, not just held by a servo off, no EMG, SnMotorPower on); the others
+stay held. It runs only where golden itself releases (G05 / G16 / HOME start), which golden already keeps exclusive with
+every golden hold (EMG, motor power off, MotorPowerOnDelay, bMotorPowerState). EastSun 20260926 "對應軸 Servo On 才放" and
+20260929 "只要有激磁做動 0.5 秒就要觸發對應 io 煞車" are per axis. One BRAKE log line per switch.
+Built wb_serve in build_integ_ship_x86_o2 (EXIT 0). Not run on the machine yet.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebMotorAccessLive.cpp | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index ca3e6b4..49915d9 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -167,6 +167,31 @@ bool BrakeAxisOnLongEnough(const std::string& alias)
+     const DWORD now = ::GetTickCount();
+     return it != g_brakeAxis.end() && it->second.on && (now - it->second.onSince) >= kBrakeReleaseDelayMs && !BrakeBlocked(it->second, now);
+ }
++//AI(W906-BRAKE-GROUP) 20260930: EastSun「我每次開軟體的時候 M35 我都需要先把激磁關掉再開起來，這樣機構才會動作」.
++//  Measured in runcfg\logs\oplog_20260930.txt (restart 08:48:36): 08:48:47.48 BrakeAxisTick released MLoaderZ / MAuto1Z (SVON
++//  carried over from the last run) -> 08:48:49.70 Motor Test FormShow "relay ON -> DoMotorPowerOn" -> golden CassetteBreakerOFF()
++//  held all three cassette brakes -> golden's own release (G05 idle pass / G16) asks W906_BrakeReleaseOK("Cassette"), which
++//  refused the WHOLE group because MAuto2Z is not servo-ON (every start today) -> the brakes stayed held, and BrakeAxisTick's
++//  `released` latch (one release per SVON) never looked again. 08:49:57 servo off: "it was already held". Servo off/on = a new
++//  SVON edge = BrakeAxisTick releases again -- that is why the toggle "fixed" it. Same shape for InOutArmZ (MInArmZA off at start
++//  holds MOutArmZA's brake).
++//  Fix: when golden asks to release a group (only then -- G05 / G16 / HOME start, each already exclusive with every golden hold:
++//  EMG / motor power off / MotorPowerOnDelay / bMotorPowerState), the members that ARE ready are released one by one; the rest
++//  stay held. EastSun 20260926 "對應軸 Servo On 才放" is per axis, and so is 20260929 "只要有激磁做動 0.5 秒就要觸發對應 io 煞車".
++//  Ready = the same test as BrakeAxisTick: SVON sample on for 0.5 s, not just held by a servo off, no EMG, SnMotorPower on.
++//  Returns true when it switched the output (logged once per switch -- G05 asks every idle pass).
++bool BrakeReleaseAxisIfReady(const std::string& alias, const char* group)
++{
++    const int sw = BrakeSwOf(alias);
++    if (sw < 0 || SW[sw].OutValue) return false;                                // no brake output here / already released
++    if (!BrakeAxisOnLongEnough(alias)) return false;
++    if (GEM_EMGPressed || Sen[SnMotorPower].IsOff()) return false;
++    SW[sw].On();
++    g_brakeAxis[alias].released = true;
++    BrakeLog(alias + " SVON 0.5 s -> " + SW[sw].Name.c_str() + " ON (brake released per axis; golden group " + (group ? group : "?") +
++             " held because another axis of it is not servo-ON)");
++    return true;
++}
+ // tick thread, after every monitor Poll (main loop and the modal wait loop)
+ void BrakeAxisTick()
+ {
+@@ -1292,6 +1317,7 @@ static bool W906_HookBrakeServoOn(const char* group, AnsiString* why)
+ {
+     ht9045::IMotorAccessBackend& be = ht9045::MotorAccessLiveBackend();
+     std::string off;
++    std::vector<std::string> ready;                                             //AI(W906-BRAKE-GROUP) 20260930: members that could go alone
+     int n = 0;
+     for (std::size_t i = 0; i < HSys.MotTable.size(); ++i) {
+         const TMOTDATA* row = HSys.MotTable[i];
+@@ -1305,8 +1331,10 @@ static bool W906_HookBrakeServoOn(const char* group, AnsiString* why)
+         const bool on = (a.axis >= 0) && be.Pci1203ServoOn(a.axis, known);
+         if (!known || !on) off += (off.empty() ? "" : ", ") + alias + (a.axis < 0 ? "（監看器沒開這一軸）" : (!known ? "（讀不到狀態）" : "（沒激磁）"));
+         else if (!ht9045::BrakeAxisOnLongEnough(alias)) off += (off.empty() ? "" : ", ") + alias + "（激磁未滿 0.5 秒，或剛鎖煞車）";   //AI(W906-BRAKE-AXIS) 20260929: EastSun: servo ON 0.5 s before any brake release
++        else ready.push_back(alias);
+     }
+     if (off.empty()) return true;
++    for (std::size_t k = 0; k < ready.size(); ++k) ht9045::BrakeReleaseAxisIfReady(ready[k], group);   //AI(W906-BRAKE-GROUP) 20260930: see BrakeReleaseAxisIfReady
+     if (why) *why = AnsiString(("servo not ON: " + off + " -- 煞車維持鎖住，Servo On 之後下一拍才放（EastSun 裁決 20260926）").c_str());
+     (void)n;
+     return false;
+-- 
+2.55.0.windows.5
+

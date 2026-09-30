@@ -104,4 +104,35 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
     程式本來就是這樣對應，沒改程式。機台設定檔照舊沒有放。
   掃描：權杖／私鑰／7z 密碼 0 筆。沒有放：MachineType.h 的 SOFT_SIMULTE（EastSun 手動、未 commit）。
 
+===== 20260930 追加（cpp 0035-0041、web 0016-0022）=====
+  ★ 機台現在套到第 85 包：機台 = 筆電 GitHub main 8b4a7a9（GitLab main b21ca17e）＋ 下面列的機台自己的修改。
+     機台樹 HEAD：C++ cab4289、web 09d6bda（C++ 同一天另有 HTDESIGNER-*，另一個工作階段、使用者說先不推，沒放）。
+  cpp 0035 5f3ff7b MERGE-d40fa5a0 —— 筆電第 68～76 包合進機台（三方合併，機台修改保留）。⚠ 絕大部分是筆電自己的內容，不用再套。
+  cpp 0036 56bc828 SHTSPELL —— 入料飛梭別名改成 MInShuttle1／MInShuttle2（原 MInShutte1／2）；teach.ini 兩種拼法都讀得到。
+                    機台的 D:\HT9045\system\Mot_Table.csv 同步改名（設定檔，沒有放）。
+  cpp 0037 dcc1323 BRAKE-GROUP —— golden 整組放煞車（G05／G16／HOME）因為組內某一軸沒激磁被拒時，組內已激磁 0.5 s 的軸逐軸放開。
+                    根因：開 Motor Test 會跑 DoMotorPowerOn 鎖住整組卡匣煞車，MAuto2Z 沒激磁 ⇒ 整組永遠不放，操作員要切激磁才會動。
+  cpp 0038 ebeb04e G31A-TIME —— golden 開機自動上電的「數 100 次」改成照 golden 的時間（100 次或 1 秒先到）：golden MainProc 約 1 ms，
+                    wb_serve 是 500 ms，原本要等約 100 秒才准放煞車。✅ EastSun 0930 09:36 實測：開機後不用切激磁就放開。
+  cpp 0039 484b82a BRAKE-EMPTY-AUTO3 —— 補 SW[] SwCassetteEmptyMotBreaker(369)／SwCassetteAuto3MotBreaker(370)，MAX_SWITCH_ITEM 372；
+                    加進 golden Cassette 群組與逐軸煞車表（M36 MEmptyZ、M40 MAuto3Z）。IO_Table 本來就有這兩列，只是程式沒有物件。
+                    golden V906／V912 都沒有這兩個名字。機台上還沒實測。
+  cpp 0040 df97a7e CAPTION —— tag machine.caption＝golden fMain->Caption 依機型（main.cpp:9216-9253／:9590-9607）＋ HT9050 分支
+                    （W906_GpibModel=="9050GPIB" ⇒ "HT-9050"，非 golden）。
+                    ⚠ 機台設定：EastSun 0930 選擇把 D:\GPIB9045\system\general.ini [Version] Model 從 9046_32GPIB 改成 9050GPIB
+                    （設定檔，沒有放；依 RULINGS_20260926 第 25 條兩者都解碼成 HT9046_LS，行為相同；HandlerSys 機型下拉沒有 9050）。
+  cpp 0041 cab4289 MERGE-b21ca17e —— 筆電第 77～85 包合進機台：NEW 35／OLD 162／LOCAL 13（11 乾淨、2 處衝突都是「兩邊都加」：
+                    WebMotorAccessLive.cpp 同一空白行的煞車 note 與 Pci1203GaliRoute.h include；wb_serve.cpp 檔尾 HMI-KEEP／STOPBTN
+                    與 JAM-STOP host）。機台修改一個都沒少（逐檔關鍵字比對）。README 的路由檔照筆電原樣、沒改；兩個 1203 路由開關維持關。
+                    ⚠ 絕大部分是筆電自己的內容，不用再套。-O2 建置 exit 0；機台上還沒實跑。
+  web 0016 e099c92 MERGE-d40fa5a0 (web)、0022 09d6bda MERGE-b21ca17e (web) —— 同上兩顆合併的網頁部分。
+  web 0017 abaf098 UIZOOM —— 主工具列 🔍 整個 HMI 縮放 80～200 %（localStorage，每台自己記）。
+  web 0018 7d4377e SHTSPELL (web) —— 教導表、Motion View、Home 頁的 MInShuttle1／2。
+  web 0019 41681a5 TEACH-LED、0020 627eeeb TEACH-SEL／TEACH-UNWIRED —— 教導頁 10 顆燈跟著選的馬達；release 模式下馬達選取鈕綁不上
+                    （theme.js 把 title 移到 data-htitle）已修；這台沒有的軸、沒接好的按鈕（Suck On/Off、IO Check、Auto Teach Z、
+                    速度捲軸）改成灰色＋點了說明原因。
+  web 0021 215b806 CAPTION (web) —— 主視窗標題列跟著 machine.caption。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；新 patch 裡的 8 個 .csv 全是筆電包本來就在 GitHub 上的測試樣本與 docs。
+  沒有放：MachineType.h 的 SOFT_SIMULTE（EastSun 手動、未 commit）；機台設定檔（Mot_Table／IO_Table／general.ini）。
+
 MD5 清單在 MANIFEST_MD5.tsv。

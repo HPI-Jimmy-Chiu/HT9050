@@ -1,0 +1,158 @@
+From 484b82af2bf07ae83513007a4fbec8b56963ca34 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 30 Sep 2026 11:36:29 +0800
+Subject: [PATCH] BRAKE-EMPTY-AUTO3: M36 MEmptyZ / M40 MAuto3Z brake outputs
+ exist and are driven (SW 369 / 370, Cassette group)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260930: "目前M40不會觸發" (IO page 1034 = st16 ch28). D:\HT9045\system\IO_Table.csv already has
+SwCassetteEmptyMotBreaker (1,1,16,25,1,1,3,1) and SwCassetteAuto3MotBreaker (1,1,16,28,4,1,3,1), but InitialSwitch only
+fills SW[] objects the program names (InitialSwitchName) -- cmydef.cpp stopped at SwCassetteAuto2MotBreaker = 366, so both
+rows were read and never used. Neither name exists in golden V906 or V912 (checked 20260930).
+- cmydef.cpp / cmydef.h: SwCassetteEmptyMotBreaker = 369, SwCassetteAuto3MotBreaker = 370 (367/368 are SwDryAirUse*).
+- myswitch.h: MAX_SWITCH_ITEM 370 -> 372 (every user is a 0..MAX loop; no literal 370 elsewhere).
+- cinitial.cpp InitialSwitchName: the two names.
+- csystem.cpp CassetteBreakerON/OFF: both added to golden's Cassette group -- held with the other three at every golden hold
+  site (EMG / power off / DoMotorPowerOn); every release is behind W906_BrakeReleaseOK("Cassette").
+- WebMotorAccessLive.cpp: kBrakeAxes + MEmptyZ / MAuto3Z (servo ON 0.5 s -> release, SVON off -> hold, per axis) and the
+  Cassette group's alias list (dcc1323's per-axis release covers them).
+On a machine whose IO_Table lacks the rows the two stay Enable=false (TMySwitch::On/Off write nothing).
+Built wb_serve in build_integ_ship_x86_o2. Not run on the machine yet.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebMotorAccessLive.cpp | 8 +++++++-
+ cinitial.cpp           | 2 ++
+ cmydef.cpp             | 7 ++++++-
+ cmydef.h               | 2 ++
+ csystem.cpp            | 4 ++++
+ myswitch.h             | 2 +-
+ 6 files changed, 22 insertions(+), 3 deletions(-)
+
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index 49915d9..bd9c8c3 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -122,6 +122,8 @@ int  TeachHomeLedThunk(int mi)  { return MotorAccessTeachHomeLed(MotorAccessLive
+ //  also need every axis of the group to be SVON for 0.5 s (W906_HookBrakeServoOn), and none of them right after a hold.
+ //  ⚠ IO_Table also lists SwCassetteEmptyMotBreaker (MEmptyZ, st16 ch25) and SwCassetteAuto3MotBreaker (MAuto3Z, ch28), but this
+ //    program has no SW[] for them (cmydef.cpp stops at SwCassetteAuto2MotBreaker = 366): they are NOT driven -- reported.
++//  AI(W906-BRAKE-EMPTY-AUTO3) 20260930: EastSun「目前M40不會觸發」-- the two SW[] now exist (cmydef.cpp 369 / 370, MAX_SWITCH_ITEM
++//    372) and are in golden's Cassette group (CassetteBreakerON/OFF) and in the table below, so the note above is history.
+ struct BrakeAxisDef { const char* alias; const int* sw; };
+ const BrakeAxisDef kBrakeAxes[] = {
+     { "MInArmZA",  &SwInArmZBreaker },              // st16 ch5
+@@ -129,8 +131,10 @@ const BrakeAxisDef kBrakeAxes[] = {
+     { "MTestZ1",   &SwFMotorBreaker },              // st16 ch4 (Index Z1)
+     { "MTestZ2",   &SwBMotorBreaker },              // Enable=0 in IO_Table / Mot_Table on HT9050
+     { "MLoaderZ",  &SwCassetteLDMotBreaker },       // st16 ch24
++    { "MEmptyZ",   &SwCassetteEmptyMotBreaker },    // st16 ch25   AI(W906-BRAKE-EMPTY-AUTO3) 20260930
+     { "MAuto1Z",   &SwCassetteAuto1MotBreaker },    // st16 ch26
+     { "MAuto2Z",   &SwCassetteAuto2MotBreaker },    // st16 ch27
++    { "MAuto3Z",   &SwCassetteAuto3MotBreaker },    // st16 ch28   AI(W906-BRAKE-EMPTY-AUTO3) 20260930
+ };
+ const DWORD kBrakeReleaseDelayMs = 500;             // EastSun: servo ON 0.5 s, then the brake
+ const DWORD kBrakeHoldBlockMs    = 1000;            // after a hold: no release (a stale SVON sample must not undo it)
+@@ -1301,6 +1305,7 @@ static void W906_HookStop1203All(const char* why) { ht9045::MotorAccessStop1203A
+ //    Index        SwFMotorBreaker / SwBMotorBreaker                 -> MTestZ1 (M14), MTestZ2 (not fitted)
+ //    InOutArmZ    SwInArmZBreaker / SwOutArmZBreaker                -> MInArmZ*, MOutArmZ* (M03 MInArmZA, M22 MOutArmZA)
+ //    Cassette     SwCassetteLD/Auto1/Auto2MotBreaker                -> MLoaderZ (M35), MAuto1Z (M38), MAuto2Z (M39)
++//                 + SwCassetteEmpty/Auto3MotBreaker (20260930)       -> MEmptyZ (M36), MAuto3Z (M40)
+ //    Magazine     SwMagazineMotorBreaker (Enable=0 on HT9050)       -> no axis
+ //    LDCarRotArmZ SwLoadCarRFIDZBreaker (not in IO_Table on HT9050) -> no axis
+ //  Only enabled PCI1203 rows count; each must be opened by the monitor with a valid sample and its SVON bit on. A group with
+@@ -1310,7 +1315,8 @@ static bool W906_BrakeGroupHasAlias(const char* group, const std::string& alias)
+     const std::string g = group ? group : "";
+     if (g == "Index")     return alias == "MTestZ1" || alias == "MTestZ2";
+     if (g == "InOutArmZ") return alias.compare(0, 7, "MInArmZ") == 0 || alias.compare(0, 8, "MOutArmZ") == 0;
+-    if (g == "Cassette")  return alias == "MLoaderZ" || alias == "MAuto1Z" || alias == "MAuto2Z";
++    if (g == "Cassette")  return alias == "MLoaderZ" || alias == "MAuto1Z" || alias == "MAuto2Z" ||
++                                 alias == "MEmptyZ"  || alias == "MAuto3Z";   //AI(W906-BRAKE-EMPTY-AUTO3) 20260930: HT9050's two extra cassette brakes
+     return false;                                                               // Magazine / LDCarRotArmZ: no axis on HT9050
+ }
+ static bool W906_HookBrakeServoOn(const char* group, AnsiString* why)
+diff --git a/cinitial.cpp b/cinitial.cpp
+index f54d2fe..3f5e960 100644
+--- a/cinitial.cpp
++++ b/cinitial.cpp
+@@ -1493,6 +1493,8 @@ void InitialSwitchName()
+     SW[SwCassetteLDMotBreaker     ].Name="SwCassetteLDMotBreaker";              //Ifor 20251216 add:Boat Carrier
+     SW[SwCassetteAuto1MotBreaker  ].Name="SwCassetteAuto1MotBreaker";
+     SW[SwCassetteAuto2MotBreaker  ].Name="SwCassetteAuto2MotBreaker";
++    SW[SwCassetteEmptyMotBreaker  ].Name="SwCassetteEmptyMotBreaker";           //AI(W906-BRAKE-EMPTY-AUTO3) 20260930: HT9050 M36（cmydef.cpp）
++    SW[SwCassetteAuto3MotBreaker  ].Name="SwCassetteAuto3MotBreaker";           //AI(W906-BRAKE-EMPTY-AUTO3) 20260930: HT9050 M40
+ 
+     SW[SwDryAirUseHandler           ].Name="SwDryAirUseHandler";
+     SW[SwDryAirUseATCCar            ].Name="SwDryAirUseATCCar";
+diff --git a/cmydef.cpp b/cmydef.cpp
+index b871a65..d68127d 100644
+--- a/cmydef.cpp
++++ b/cmydef.cpp
+@@ -2298,8 +2298,13 @@ const int SwCassetteAuto2MotBreaker     =366;
+ 
+ const int SwDryAirUseHandler            =367;
+ const int SwDryAirUseATCCar             =368;
++//AI(W906-BRAKE-EMPTY-AUTO3) 20260930: EastSun「目前M40不會觸發」—— HT9050 的 IO_Table 有 5 顆卡匣 Z 煞車（st16 ch24..28），
++//  golden 只有 LD／Auto1／Auto2 三顆（Ifor 20251216）。沒有 SW[] 物件的名字 InitialSwitch 找不到、永遠不會被驅動，所以補這兩顆。
++//  golden V906／V912 都沒有這兩個名字（20260930 查過），編號接在 368 後面。
++const int SwCassetteEmptyMotBreaker     =369;                                   //M36 MEmptyZ（IO 頁 1031）
++const int SwCassetteAuto3MotBreaker     =370;                                   //M40 MAuto3Z（IO 頁 1034）
+ 
+-//MAX_SWITCH_ITEM 370  <--記得去改!!
++//MAX_SWITCH_ITEM 372  <--記得去改!!   （AI(W906-BRAKE-EMPTY-AUTO3) 20260930：原 370）
+ 
+ int SwAutoCCW[MAX_AUTO_TRAY]={SwACAuto1,   SwACAuto2,   SwACAuto3,   SwACAuto4,   SwACAuto5,   SwACAuto6};
+ int SwAutoCW [MAX_AUTO_TRAY]={SwACAutoCW,  SwACAuto2CW, SwACAuto3CW, SwACAuto4CW, SwACAuto5CW, SwACAuto6CW};
+diff --git a/cmydef.h b/cmydef.h
+index 90bf7f0..91f967a 100644
+--- a/cmydef.h
++++ b/cmydef.h
+@@ -2093,6 +2093,8 @@ extern const int SwMultiEp;
+ extern const int SwCassetteLDMotBreaker;                                        //Ifor 20251216 add:Boat Carrier
+ extern const int SwCassetteAuto1MotBreaker;                                     //Ifor 20251216 add:Boat Carrier
+ extern const int SwCassetteAuto2MotBreaker;                                     //Ifor 20251216 add:Boat Carrier
++extern const int SwCassetteEmptyMotBreaker;                                     //AI(W906-BRAKE-EMPTY-AUTO3) 20260930: HT9050 M36 MEmptyZ brake (IO_Table st16 ch25)
++extern const int SwCassetteAuto3MotBreaker;                                     //AI(W906-BRAKE-EMPTY-AUTO3) 20260930: HT9050 M40 MAuto3Z brake (IO_Table st16 ch28)
+ 
+ extern int SwAutoCCW[MAX_AUTO_TRAY];
+ extern int SwAutoCW [MAX_AUTO_TRAY];
+diff --git a/csystem.cpp b/csystem.cpp
+index e650995..07247ae 100644
+--- a/csystem.cpp
++++ b/csystem.cpp
+@@ -29480,6 +29480,8 @@ void CassetteBreakerON()
+     SW[SwCassetteLDMotBreaker].On();
+     SW[SwCassetteAuto1MotBreaker].On();
+     SW[SwCassetteAuto2MotBreaker].On();
++    SW[SwCassetteEmptyMotBreaker].On();                                         //AI(W906-BRAKE-EMPTY-AUTO3) 20260930: HT9050 M36 / M40 -- same group as the three above;
++    SW[SwCassetteAuto3MotBreaker].On();                                         //  every caller is behind W906_BrakeReleaseOK("Cassette") (per-axis servo-ON, WebMotorAccessLive.cpp)
+ }
+ //---------------------------------------------------------------------------
+ void CassetteBreakerOFF()                                                       //Ifor 20251216 add:Boat Carrier
+@@ -29487,6 +29489,8 @@ void CassetteBreakerOFF()
+     SW[SwCassetteLDMotBreaker].Off();
+     SW[SwCassetteAuto1MotBreaker].Off();
+     SW[SwCassetteAuto2MotBreaker].Off();
++    SW[SwCassetteEmptyMotBreaker].Off();                                        //AI(W906-BRAKE-EMPTY-AUTO3) 20260930: HT9050 M36 / M40 held with the rest of the group
++    SW[SwCassetteAuto3MotBreaker].Off();                                        //  (EMG / power off / DoMotorPowerOn -- golden's hold sites)
+ }
+ //==============================================================================
+ bool IsTriTempFixDoorLockCheck()                                                //Ztex 2023.04.19 Add HT-1032 TriTemp Function
+diff --git a/myswitch.h b/myswitch.h
+index ed1bc2e..cb7f9c8 100644
+--- a/myswitch.h
++++ b/myswitch.h
+@@ -37,7 +37,7 @@ public:
+     int  ISABase;
+ };
+ 
+-#define MAX_SWITCH_ITEM 370
++#define MAX_SWITCH_ITEM 372     // AI(W906-BRAKE-EMPTY-AUTO3) 20260930: was 370 (0..369); +SwCassetteEmptyMotBreaker 369, +SwCassetteAuto3MotBreaker 370 (cmydef.cpp)
+ #define MAX_TTL_SWITCH  16      // Steven 20161011: TTL 8-site support
+ 
+ extern class TMySwitch SW[MAX_SWITCH_ITEM];
+-- 
+2.55.0.windows.5
+

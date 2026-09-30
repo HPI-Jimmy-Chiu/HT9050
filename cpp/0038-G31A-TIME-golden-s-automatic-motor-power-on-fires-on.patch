@@ -1,0 +1,62 @@
+From ebeb04ef56cc5f4b0a6949990ab31fa8972e25fd Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 30 Sep 2026 09:24:53 +0800
+Subject: [PATCH] G31A-TIME: golden's automatic motor power-on fires on
+ golden's time (100 calls or 1 s), not after ~100 s of 500 ms ticks
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260930, after dcc1323: "還是一樣的狀況 我都需要先放激磁 再開 機構才可以移動".
+Measured oplog_20260930.txt, run 09:17:01 (exe built 09:16:49, i.e. with dcc1323):
+  09:17:11     BrakeAxisTick releases MOutArmZA / MLoaderZ / MAuto1Z (SVON carried over)
+  09:17:53     Motor Test FormShow -> DoMotorPowerOn: TMySwitch::Status() reads the relay's OutPortData (0, never commanded
+               this run) although the card reads it ON -> relay On + CassetteBreakerOFF() -> brakes held
+  09:18:21     operator servo off: "it was already held"; servo on -> released
+  09:18:55     PAGE power 0->1 -- bMotorPowerState, i.e. golden G31a, ~114 s after START
+  09:18:57     dcc1323's per-axis release runs for the first time (MOutArmZA, MLoaderZ) -- W906_BrakeReleaseOK refuses every
+               group while bMotorPowerState is false, so it could not act earlier
+Cause: CheckMotorPowerShutDown's `DelayMotNo>=100` counts calls, one per 2 DoSystem passes. golden's MainProc runs at ~1 ms
+(B13), so golden powers on a fraction of a second after start-up and the operator never meets this window; on wb_serve's
+500 ms tick (B13, deliberate, unchanged) it is ~100 s.
+Fix (csystem.cpp CheckMotorPowerShutDown): `flag && (DelayMotNo>=100 || 1 s since the first counted call)`. Same golden body,
+same EastSun ruling 20260926 on G31a ("照舊版打開"); only its timing is restored. After it, Motor Test FormShow finds the relay
+already commanded (no second DoMotorPowerOn hold), and the golden releases (G16 / G05, per axis since dcc1323) are allowed.
+Built wb_serve in build_integ_ship_x86_o2. Not run on the machine yet.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ csystem.cpp | 17 ++++++++++++++++-
+ 1 file changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/csystem.cpp b/csystem.cpp
+index f23e5d8..e650995 100644
+--- a/csystem.cpp
++++ b/csystem.cpp
+@@ -16060,7 +16060,22 @@ void CheckMotorPowerShutDown()
+ 
+         if(IsSafeLockCheck())
+             return ;
+-        if(flag && DelayMotNo>=100)
++//AI(W906-G31A-TIME) 20260930: EastSun「還是一樣的狀況 我都需要先放激磁 再開 機構才可以移動」. golden's 100 is a count of
++//  CheckMotorPowerShutDown calls = 200 DoSystem passes (it runs only when bDoProcess, which flips every pass) on golden's
++//  ~1 ms MainProc (TRunControl, timeBeginPeriod(1); docs/RULINGS_20260917.md B13) -- i.e. golden's automatic motor
++//  power-on happens a fraction of a second after start-up. On wb_serve's 500 ms tick (B13, deliberate) the same 100 calls
++//  take ~100 s: measured oplog_20260930.txt, START 09:17:01 -> PAGE power 0->1 at 09:18:55. Until then bMotorPowerState is
++//  false, so every golden brake release (W906_BrakeReleaseOK) is refused, and the Motor Test FormShow of that window
++//  (09:17:53) runs DoMotorPowerOn with the relay's OutPortData still 0 (TMySwitch::Status() reads the command cache, not
++//  the card) -> CassetteBreakerOFF() -> the Loader / Auto1 brakes held for the rest of those ~100 s; the operator's
++//  servo off/on (a fresh SVON edge for BrakeAxisTick) was the only way out. golden's operator never sees that window.
++//  So the threshold is golden's TIME, not its pass count: 100 calls OR 1 s since the first counted call, whichever first
++//  (1 s = one CheckMotorPowerShutDown call on this tick; golden's own delay is shorter still). Same golden body below,
++//  EastSun ruling 20260926 "照舊版打開" on G31a unchanged -- this only restores its timing.
++        static DWORD W906_G31aFirstMs=0;
++        if(W906_G31aFirstMs==0)
++            W906_G31aFirstMs=::GetTickCount()|1u;
++        if(flag && (DelayMotNo>=100 || (::GetTickCount()-W906_G31aFirstMs)>=1000u))
+         {
+ //AI(ht9045-v906) 20260810: PT-W5c audit finding 4 -- THE ORIGINAL REASON BELOW WAS FALSE,
+ // AND THE GATE IS STILL CORRECT. Corrected reason first, original text kept after it:
+-- 
+2.55.0.windows.5
+
