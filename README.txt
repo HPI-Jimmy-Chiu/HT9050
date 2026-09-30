@@ -283,4 +283,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   tools 0112 HTDESIGNER-114（0.114.0）—— 重開頁面回到上次的縮放比例；新設定 ht9045Designer.defaultZoom（上次／符合全部／100%，WPF 的 Default zoom setting）。四層測試全過。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  tools 0113 HTDESIGNER-115（0.115.0）—— 新設定 ht9045Designer.defaultView：開頁面時只開設計畫面（預設）或旁邊同時開 HTML（WPF 的 Split）。四層測試全過。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
