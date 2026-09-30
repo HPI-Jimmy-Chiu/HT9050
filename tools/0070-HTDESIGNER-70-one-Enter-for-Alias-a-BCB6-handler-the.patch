@@ -1,0 +1,300 @@
+From 66206b8dcdf2276f34cadb95ff770fcd0e3a94ed Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 30 Sep 2026 14:53:20 +0800
+Subject: [PATCH] HTDESIGNER-70: one Enter for Alias; a BCB6 handler -> the
+ port's C++ through a named command (0.70.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260930: "我更改alias後按下enter需要操作兩次才輸入得進去", and on main.html's Exit
+button: "BCB 就可以對應到 void __fastcall TfMain::sbCloseProgramClick，你這邊怎不行對應到?"
+- Alias / Name: the panel was drawn again from the SOURCE text before the edit
+  reached it -- the field showed the old Alias, so a second Enter. Alias is now
+  read from the page (the probe changes the title before it asks again). And
+  the field commits on Enter's key release too (the IO names' suggestion list
+  can take the key press) and on a name picked from the list, never twice.
+- the command trace resolves a command held in a name: raw(CMD, ...) with
+  var CMD = 'act.main.closeProgram' (ht9045_main_close.js:40). So the Exit
+  button's OnClick = BCB6 sbCloseProgramClick AND the port's
+  W906_Main_CloseProgramOp (FileRW/MainClose.cpp:1318) through
+  act.main.closeProgram; a .dfm event gets the 網頁 / 伺服器 marks and the
+  port's function too (its handler name stays the .dfm's).
+- vscode_it.ps1: a page put back to exactly its committed text while the test
+  ran (another session reverted HW.IoSetView.html mid-run at 14:39:14, same
+  MD5 as HEAD) is theirs when the test saved nothing -- a WARN, not a FAIL.
+
+Tests (all 4 layers pass: lib 154, smoke 156, real VS Code 143): lib (raw(CMD)
+resolved), panels (one Enter + key release + change + blur = ONE setAlias),
+real VS Code (BtnPanelLane3's Alias changed once -> the panel shows the new
+one, reverted; main.html sbCloseProgram OnClick -> act.main.closeProgram ->
+W906_Main_CloseProgramOp).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHANGELOG.md          |  9 ++++
+ tools/vscode-htdesigner/extension.js          |  8 +++-
+ tools/vscode-htdesigner/lib/websearch.js      | 25 ++++++++++-
+ tools/vscode-htdesigner/media/props.js        | 14 ++++++-
+ tools/vscode-htdesigner/package.json          |  2 +-
+ .../test/integration/index.js                 | 41 +++++++++++++++++++
+ .../vscode-htdesigner/test/panels_render.ps1  | 23 +++++++++++
+ tools/vscode-htdesigner/test/run_tests.js     |  5 +++
+ tools/vscode-htdesigner/test/vscode_it.ps1    | 10 ++++-
+ 9 files changed, 130 insertions(+), 7 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/CHANGELOG.md b/tools/vscode-htdesigner/CHANGELOG.md
+index db8848c..ac94f0e 100644
+--- a/tools/vscode-htdesigner/CHANGELOG.md
++++ b/tools/vscode-htdesigner/CHANGELOG.md
+@@ -2,6 +2,15 @@
+ 
+ 每一版多了什麼。怎麼操作看 [操作一覽](CHEATSHEET.md)，詳細說明看 README。
+ 
++## 0.70.0
++- **BCB6 的事件函式對到移植樹的 C++**：例如主畫面 Exit（sbCloseProgram）的 OnClick＝BCB6 `TfMain::sbCloseProgramClick`，
++  移植樹是 `W906_Main_CloseProgramOp`（FileRW/MainClose.cpp），經由網頁命令 `act.main.closeProgram`。
++  以前只找到 BCB6 那一份：網頁把命令名稱放在變數裡（`var CMD = 'act.main.closeProgram'; raw(CMD, …)`），追不到；現在追得到，
++  事件表的網頁／伺服器／C++／BCB6 都亮，雙擊可以選要跳哪一份。
++- 修正：**改 Alias（或 Name）按 Enter 要按兩次**。
++  (1) 改完之後面板馬上重畫，但它讀的是還沒寫進去的 HTML，所以格子又顯示舊的 Alias；現在照頁面上已經改好的讀。
++  (2) IO 名稱的建議清單開著時，第一個 Enter 會被清單吃掉（只關清單）；現在放開 Enter、或從清單點選，就直接送出，而且同一個值不會送兩次。
++
+ ## 0.69.0
+ - 修正：**CSV 表格在 VS Code 裡整個疊在左上角**（格子、欄名都擠在同一個位置，看不到資料）。
+   表格的每一格是用位置排的，VS Code 的安全規則把這些位置擋掉了；測試用的瀏覽器沒有同樣的規則所以沒抓到。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index ae942d2..db06c80 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -973,7 +973,9 @@ class Hub {
+     // Name / Alias (the IO it stands for, kept in the title) and the page's own JS handlers (網頁事件): editable
+     const titleNow = edTag ? ((attrsOf(edTag.text).find(a => a[0] === 'title') || [])[1] || '') : '';
+     edit.aliasOn = !isForm && !!edTag && /Alias=/.test(html);
+-    edit.alias = aliasedit.aliasOf(titleNow);
++    // (from the page as it is now -- the probe changed the title before it asked again -- not from the source text,
++    // which the edit may not have reached yet: the field showed the old Alias and it took a second Enter)
++    edit.alias = aliasedit.aliasOf(info.title ? info.title : titleNow);
+     edit.ioAliases = edit.aliasOn ? this.ioAliasList(d) : null;
+     edit.jsEvents = !isForm && edTag ? { types: jsevents.TYPES, handlers: jsevents.handlersOf(html, info.id) } : null;
+ 
+@@ -1104,7 +1106,9 @@ class Hub {
+         // wired through the page's JS: its listener of this DOM event sends a WS command the server dispatches to
+         // C++ (EastSun 20260930 on BtnPanelLane3: "應該有click吧? 他是連到C++的" -- io.btnPanelClick ->
+         // W906_DispatchIoClick); a component the .dfm does not have (added for the 9050) is wired this way too
+-        if (!row.dfm && !isForm) {
++        // (a .dfm one keeps its handler name -- sbCloseProgram.OnClick = sbCloseProgramClick -- and gets the marks and
++        // the port's function, W906_Main_CloseProgramOp through act.main.closeProgram)
++        if (!isForm) {
+           const types = fmt.domTypesOf(evName);
+           let via = null;
+           // (the operator-token handshake the sender does first -- control.takeover / control.release -- is not it)
+diff --git a/tools/vscode-htdesigner/lib/websearch.js b/tools/vscode-htdesigner/lib/websearch.js
+index 152be8d..685bf38 100644
+--- a/tools/vscode-htdesigner/lib/websearch.js
++++ b/tools/vscode-htdesigner/lib/websearch.js
+@@ -289,11 +289,34 @@ function findFnDefs(sources, name, limit, preferFile) {
+  * Follow a handler into the functions it calls (depth-limited) and collect the
+  * command names that end up being sent. Returns [{ cmd, via: ['save', 'putDoc'] }].
+  */
++/**
++ * Commands a sender gets through a name: raw(CMD, …) with `var CMD = 'act.main.closeProgram'` in the page's scripts
++ * (ht9045_main_close.js:40 -- the Exit button's C++ was never found: EastSun 20260930 "BCB 就可以對應到
++ * TfMain::sbCloseProgramClick，你這邊怎不行對應到?"). The script of the text first, then the others.
++ */
++function namedCmds(sources, text, file) {
++  const out = [];
++  const re = new RegExp('\\b(?:' + SENDERS.join('|') + ')\\s*\\(\\s*([A-Za-z_$][\\w$]*)\\s*[,)]', 'g');
++  const names = [];
++  let m;
++  while ((m = re.exec(String(text || '')))) if (!names.includes(m[1])) names.push(m[1]);
++  if (!names.length) return out;
++  const ordered = file ? sources.filter(s => samePath(s.file, file)).concat(sources.filter(s => !samePath(s.file, file))) : sources;
++  for (const name of names) {
++    const def = new RegExp('\\b(?:var|let|const)\\s+' + escRe(name) + '\\s*=\\s*([\'"])([\\w.:-]+)\\1');
++    for (const s of ordered) {
++      const d = def.exec(s.text);
++      if (d && d[2].includes('.') && !out.includes(d[2])) { out.push(d[2]); break; }
++    }
++  }
++  return out;
++}
++
+ function traceCmds(sources, rootText, maxDepth, rootFile) {
+   const found = [];
+   const seen = new Set();
+   const visit = (text, via, depth, file) => {
+-    for (const c of extractCmds(text)) {
++    for (const c of extractCmds(text).concat(namedCmds(sources, text, file))) {
+       if (!found.some(f => f.cmd === c)) found.push({ cmd: c, via: via.slice() });
+     }
+     if (depth >= (maxDepth || 3) || found.length >= 12) return;
+diff --git a/tools/vscode-htdesigner/media/props.js b/tools/vscode-htdesigner/media/props.js
+index 4b6171b..8962e26 100644
+--- a/tools/vscode-htdesigner/media/props.js
++++ b/tools/vscode-htdesigner/media/props.js
+@@ -314,13 +314,23 @@
+         /* Name (WPF's / the Object Inspector's first row) and Alias (the IO an IO page's component stands for, in its
+            title): typed in, written into the HTML (EastSun: "名稱都要讓我改 alias") */
+         if (!ed.multi && !c.isForm && c.htmlId && ed.inSource) {
++          /* ONE Enter commits (EastSun: "我更改alias後按下enter需要操作兩次"): the IO names' suggestion list may take the
++             key press (it closes itself with it), so the key's release commits too, and a name picked from the list
++             commits at once; the same value is never sent twice */
+           var txtIn = function (field, value, onCommit, list) {
+             var i = el('input', 'txt');
+             i.type = 'text'; i.value = value || ''; i.spellcheck = false;
+             i.setAttribute('data-field', field);
+             if (list) i.setAttribute('list', list);
+-            i.addEventListener('change', function () { onCommit(i.value.trim()); });
+-            i.addEventListener('keydown', function (e) { if (e.key === 'Enter') i.blur(); else if (e.key === 'Escape') { i.value = value || ''; i.blur(); } });
++            var sent = value || '';
++            var commit = function () { var v = i.value.trim(); if (v === sent) return; sent = v; onCommit(v); };
++            i.addEventListener('change', commit);
++            i.addEventListener('keydown', function (e) {
++              if (e.key === 'Enter') { e.preventDefault(); commit(); }
++              else if (e.key === 'Escape') { i.value = sent; i.blur(); }
++            });
++            i.addEventListener('keyup', function (e) { if (e.key === 'Enter') commit(); });
++            i.addEventListener('input', function (e) { if (list && e.inputType === 'insertReplacementText') commit(); });
+             return i;
+           };
+           row('Name', txtIn('name', c.htmlId, function (v) { if (v && v !== c.htmlId) vscode.postMessage({ type: 'rename', name: v }); }),
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 2a4a71d..7c107b3 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HTML 視覺設計工具",
+   "description": "BCB6 表單移植成 web HMI（網頁＋C++）的專案通用：像 WPF 設計工具一樣看、改頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.69.0",
++  "version": "0.70.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 66f3223..1389688 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -1044,6 +1044,47 @@ exports.run = async function () {
+       bpT(bpRow.server) && /wb_serve\.cpp$/i.test(bpT(bpRow.server).file) && bpT(bpRow.port) && bpT(bpRow.port).kind === 'port'),
+       '事件表: BtnPanelLane3 (not in the .dfm) OnClick = the page\'s listener -> io.btnPanelClick -> C++ ' + (bpRow ? bpRow.handler : '-'),
+       bpRow ? JSON.stringify({ cmd: bpRow.cmd, handler: bpRow.handler, web: bpT(bpRow.web) && path.basename(bpT(bpRow.web).file), server: bpT(bpRow.server) && path.basename(bpT(bpRow.server).file) + ':' + bpT(bpRow.server).line }) : 'no row');
++    // 事件表 on main.html's Exit button: OnClick = BCB6's sbCloseProgramClick AND the port's C++ it runs --
++    // ht9045_main_close.js raw(CMD) with CMD = 'act.main.closeProgram' -> W906_Main_CloseProgramOp (FileRW/MainClose.cpp)
++    // (EastSun 20260930: "BCB 就可以對應到 TfMain::sbCloseProgramClick，你這邊怎不行對應到?")
++    let exRow = null, exData = null;
++    const mainPage = path.join(hub.pages.root() || '', 'page', 'main.html');
++    if (fs.existsSync(mainPage)) {
++      const dm = await hub.openPageAt(mainPage, 'sbCloseProgram');
++      if (dm) {
++        const exSel = await waitFor(() => (dm.sel && dm.sel.info && dm.sel.info.id === 'sbCloseProgram' ? dm.sel : null), 15000);
++        exData = exSel ? await exSel.promise : null;
++        exRow = exData && exData.eventGrid && exData.eventGrid.rows.find(r => r.name === 'OnClick');
++      }
++    }
++    const exT = i => (exData && i != null ? exData.targets[i] : null);
++    const exEv = exRow && exRow.idx >= 0 ? exData.events[exRow.idx] : null;
++    const exPort = exEv ? exEv.targets.map(exT).filter(t => t && t.kind === 'port' && /W906_Main_CloseProgramOp/.test(t.note || '')) : [];
++    ok(!!(exRow && exRow.handler === 'sbCloseProgramClick' && exRow.dfm && exRow.cmd === 'act.main.closeProgram' && exT(exRow.port) &&
++      /MainClose\.cpp$/i.test(exT(exRow.port).file) && exPort.length && exEv.targets.some(k => exT(k) && exT(k).kind === 'golden')),
++      '事件表: main.html sbCloseProgram OnClick = sbCloseProgramClick (BCB6) and its C++: act.main.closeProgram -> W906_Main_CloseProgramOp',
++      exRow ? JSON.stringify({ handler: exRow.handler, cmd: exRow.cmd, port: exT(exRow.port) && path.basename(exT(exRow.port).file) + ':' + exT(exRow.port).line }) : 'no row');
++    if (exData) {
++      await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
++      // (back on the IO page: the checks after this use it)
++      await waitFor(() => (hub.active && /HW\.IoSetView\.html$/.test(hub.active.file) ? true : null), 8000);
++    }
++
++    // Alias: ONE change -> the page's title changes and the panel shows the NEW Alias at once (it read the source
++    // text before the edit reached it, showed the old one, and it took a second Enter)
++    let alShown = null, alMade = null, alBack = false;
++    if (bpData && hub.active && /HW\.IoSetView\.html$/.test(hub.active.file)) {
++      const dio = hub.active;
++      alMade = hub.cmdSetAlias(dio, bpData, 'C_HtdAliasTest');
++      const pd = await waitFor(() => { const x = hub.props.data; return x && x.comp && x.comp.htmlId === 'BtnPanelLane3' && x.edit && x.edit.alias === 'C_HtdAliasTest' ? x : null; }, 8000);
++      alShown = pd ? pd.edit.alias : (hub.props.data && hub.props.data.edit ? hub.props.data.edit.alias : null);
++      const srcOk = /id="BtnPanelLane3"[^>]*Alias=C_HtdAliasTest/.test(dio.doc.getText());
++      await vscode.window.showTextDocument(dio.doc, { preview: false });
++      await vscode.commands.executeCommand('workbench.action.files.revert');
++      alBack = srcOk && !dio.doc.isDirty && dio.doc.getText() === fs.readFileSync(dio.file, 'utf8');
++    }
++    ok(!!(alMade && alMade.from === 'C_LoaderEdgePush' && alShown === 'C_HtdAliasTest' && alBack),
++      'Alias: one change -> the title in the source, and the panel shows the new Alias at once (reverted)', JSON.stringify({ made: alMade, shown: alShown, back: alBack }));
+     const snNone = await vscode.commands.executeCommand('ht9045Designer.pickMachine', '-');
+     let snRowNone = null;
+     for (let i = 0; i < 100; i++) {
+diff --git a/tools/vscode-htdesigner/test/panels_render.ps1 b/tools/vscode-htdesigner/test/panels_render.ps1
+index 305e880..67a64c1 100644
+--- a/tools/vscode-htdesigner/test/panels_render.ps1
++++ b/tools/vscode-htdesigner/test/panels_render.ps1
+@@ -144,6 +144,29 @@ R.q4 = run('zzzz-nothing');
+ R.q0 = run('');
+ R.q0secs = Array.prototype.filter.call(document.querySelectorAll('details.sec'), function (s) { return s.style.display !== 'none'; }).length;
+ '@
++# Alias (an IO page's field): ONE Enter commits it -- the suggestion list may take the key press, so the key's
++# release commits too; the same value is never sent twice
++$aliasFile = Join-Path $dump 'props_alias.json'
++$aj = [IO.File]::ReadAllText((Join-Path $dump 'props_spbSave.json'), $utf8).Replace('"aliasOn":false,"alias":"","ioAliases":null', '"aliasOn":true,"alias":"C_A","ioAliases":{"file":"x","names":["C_A","C_B"]}')
++[IO.File]::WriteAllText($aliasFile, $aj, $utf8)
++$aliasChecks = @"
++var inp = document.querySelector('input[data-field="alias"]');
++R.hasAlias = !!inp && inp.value === 'C_A' && !!document.getElementById('ioAliasList');
++if (inp) {
++  inp.focus(); inp.value = 'C_B';
++  inp.dispatchEvent(new Event('input', { bubbles: true }));
++  inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
++  inp.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
++  inp.dispatchEvent(new Event('change', { bubbles: true }));
++  inp.blur();
++}
++R.aliasSent = window.__out.filter(function (m) { return m.type === 'setAlias'; }).map(function (m) { return m.value; });
++"@
++$r7 = Render 'props_alias' 'props.css' 'props.js' 'show' $aliasFile $aliasChecks
++if ($r7) {
++  Check ($r7.errors.Count -eq 0 -and $r7.hasAlias) 'Alias row: the IO page field, with the IO names to pick from' ''
++  Check ((@($r7.aliasSent) -join ',') -eq 'C_B') 'Alias: ONE Enter sends it, once (key release / change / leaving the field do not send it again)' (@($r7.aliasSent) -join ',')
++}
+ $r5 = Render 'props_search' 'props.css' 'props.js' 'show' (Join-Path $dump 'props_spbSave.json') $searchChecks
+ if ($r5) {
+   Check ($r5.errors.Count -eq 0 -and $r5.q1.rows -ge 1 -and $r5.q1.secs -lt $r5.all -and $r5.q1.text -match 'spbSaveClick') 'search spbSaveClick: only the rows with it, other sections fold away' "secs=$($r5.q1.secs)/$($r5.all) rows=$($r5.q1.rows) $($r5.q1.count)"
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index 2771bda..b20461b 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -850,6 +850,11 @@ async function main() {
+   const wsTr = wsT.traceCmds(wsSrc, 'function (e) { ws.send("x"); onClick(e.target); }', 3, 'C:\\x\\io.js');
+   ok(wsTr.map(t => t.cmd).join(',') === 'control.takeover,io.btnPanelClick' && wsTr[1].via.join('>') === 'onClick>send',
+     'traceCmds: a listener -> onClick -> the page\'s own send() -> io.btnPanelClick (ws.send stays a builtin)', JSON.stringify(wsTr));
++  // a command held in a name (ht9045_main_close.js: var CMD = 'act.main.closeProgram'; raw(CMD, …))
++  const wsSrc2 = [new wsT.Source('C:\\x\\close.js', "var CMD = 'act.main.closeProgram';\nfunction raw(name, extra) { return R.rawCmd(name, extra); }\nfunction send(step) { return raw(CMD, { value: { step: step } }); }\n", false)];
++  const wsTr2 = wsT.traceCmds(wsSrc2, 'function () { send(0); }', 3, 'C:\\x\\close.js');
++  ok(wsTr2.some(t => t.cmd === 'act.main.closeProgram' && t.via.join('>') === 'send'),
++    'traceCmds: raw(CMD, …) with var CMD = \'act.main.closeProgram\' -> the command (the Exit button\'s)', JSON.stringify(wsTr2));
+ 
+   // --- a C++ handler the designer added, renamed: the declaration in the class and cls::name in the .cpp only
+   const csRn = cstub.renameEdits(csH2, csC2, 'TfHotPlate', 'spbTestClick', 'spbTest2Click');
+diff --git a/tools/vscode-htdesigner/test/vscode_it.ps1 b/tools/vscode-htdesigner/test/vscode_it.ps1
+index 58a87fd..f3b0f77 100644
+--- a/tools/vscode-htdesigner/test/vscode_it.ps1
++++ b/tools/vscode-htdesigner/test/vscode_it.ps1
+@@ -90,7 +90,15 @@ function CommittedSince([string]$f, [datetime]$since) {
+   if (-not $ct) { return $false }
+   return ([DateTimeOffset]::FromUnixTimeSeconds([int64]$ct).LocalDateTime -ge $since.AddSeconds(-5))
+ }
+-$strict = @($changed | Where-Object { -not ($noSaves -and (($_.StartsWith([string]$port, [StringComparison]::OrdinalIgnoreCase) -and $_ -match '\.(cpp|h)$') -or (CommittedSince $_ $t0))) })
++# ... or put BACK to what its repo holds while the test ran: before the test it held someone's uncommitted work,
++# now it is clean again (20260930 14:39: another session reverted HW.IoSetView.html mid-run; the test saved
++# nothing, and nothing it does can write a page's committed text back byte for byte).
++function BackToCommitted([string]$f) {
++  $dir = Split-Path $f -Parent
++  $st = & git -C $dir status --porcelain -- $f 2>$null
++  return ($LASTEXITCODE -eq 0 -and -not $st -and (& git -C $dir ls-files -- $f 2>$null))
++}
++$strict = @($changed | Where-Object { -not ($noSaves -and (($_.StartsWith([string]$port, [StringComparison]::OrdinalIgnoreCase) -and $_ -match '\.(cpp|h)$') -or (CommittedSince $_ $t0) -or (BackToCommitted $_))) })
+ $theirs = @($changed | Where-Object { $strict -notcontains $_ })
+ foreach ($f in $theirs) {
+   $who = & git -C (Split-Path $f -Parent) log -1 --format='%h %ci %s' -- $f 2>$null
+-- 
+2.55.0.windows.5
+

@@ -1,0 +1,859 @@
+From 1eea0c78e0e77874a077b05f7cb55922fa15c972 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 17:57:15 +0800
+Subject: [PATCH] HTDESIGNER-10: snaplines, multi-select, align / make same
+ size -- WPF designer operations (0.10.0)
+
+- snaplines: while dragging or resizing, the moving edges / centres snap (5px)
+  to the edges and centres of the siblings in the same container and of the
+  container; a red guide is drawn; Alt = no snapping
+- multi-select like WPF: Ctrl+click / Shift+click add or remove, the last one
+  clicked is primary; pressing a member drags the whole selection, a click
+  without moving keeps only that one; arrows / Ctrl+arrows move / resize the
+  whole selection
+- align & size (WPF Format > Align): left / h-centre / right / top / v-centre /
+  bottom / same width / height / size, relative to the primary; buttons in the
+  properties panel when several are selected
+- a group move or an alignment is ONE message -> ONE WorkspaceEdit -> ONE undo
+  step (unchanged tags are not written; overlapping edits are refused)
+- "operate once" moved off Ctrl+click (now multi-select) to the operate-mode
+  toggle; tabs still switch in design mode
+
+Tests: probe 2 pages x 20 asserted (multi-select, group drag = one batch,
+align top, snap, operate mode) / fake vscode 53 (batch = one WorkspaceEdit,
+unchanged skipped) / real VS Code 52: multi-select + same height -> ONE undo
+restores the page exactly; never saved, opened files byte-identical (MD5).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  18 +-
+ tools/vscode-htdesigner/extension.js          |  62 +++--
+ tools/vscode-htdesigner/media/probe.js        | 261 ++++++++++++++++--
+ tools/vscode-htdesigner/media/props.js        |  17 ++
+ tools/vscode-htdesigner/package.json          |   2 +-
+ tools/vscode-htdesigner/test/fake_vscode.js   |   5 +-
+ .../test/integration/index.js                 |  17 ++
+ tools/vscode-htdesigner/test/probe_driver.js  |  72 ++++-
+ tools/vscode-htdesigner/test/probe_test.ps1   |   6 +-
+ .../vscode-htdesigner/test/smoke_extension.js |  12 +
+ 10 files changed, 398 insertions(+), 74 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 03bfb1b..a3cade0 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -39,8 +39,9 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ | 動作 | 結果 |
+ |---|---|
+ | 按一下元件 | 選取它（按下時就選，跟 WPF 一樣），右邊「屬性與事件」顯示它的資料，四周出現 8 個控制點 |
+-| 按住元件拖曳 | 移動它 |
+-| 拖曳控制點 | 改大小（角落兩個方向一起改） |
++| 按住元件拖曳 | 移動它；靠近旁邊元件或外框的邊緣／中線 5px 內會**自動對齊**並畫出紅色參考線（按住 Alt 不吸附） |
++| 拖曳控制點 | 改大小（角落兩個方向一起改），一樣有對齊線 |
++| Ctrl＋點 ／ Shift＋點 | **多選**：加入或移出選取，最後點的是主要選取。整組可以一起拖曳、一起用方向鍵移動 |
+ | 方向鍵 | 移動 1 px；**Shift**＋方向鍵 10 px |
+ | **Ctrl**＋方向鍵 | 改大小 1 px；**Ctrl＋Shift**＋方向鍵 10 px |
+ | 雙擊元件、Enter | 跳到它的預設事件程式碼（OnClick／OnChange…；表單本身是 OnShow） |
+@@ -49,8 +50,11 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ | Ctrl＋Z ／ Ctrl＋Y | 復原／重做（VS Code 原本的功能，一次拖曳或一串方向鍵＝一步） |
+ | Ctrl＋S | 存檔 |
+ | Alt＋點 | 選最內層的 HTML 元素（沒有 id 的也可以） |
+-| Ctrl＋點 | 把這一下點擊交給頁面自己處理（例如展開下拉選單） |
+ | 點分頁標籤 | 照樣切換分頁 |
++| 要操作頁面本身（展開下拉選單等） | 按編輯器右上角的鉛筆圖示（或狀態列）切到「操作模式」，再按一次切回來 |
++
++**多選時的對齊**（WPF 的「格式 → 對齊」）：屬性面板最上面出現「多選：對齊與大小」，
++有 靠左／水平置中／靠右／靠上／垂直置中／靠下／同寬／同高／同大小，**以主要選取為基準**。一次對齊＝一個復原步驟。
+ 
+ 滑鼠移到元件上，標籤會顯示 `名稱 : 型別 · 事件`，例如 `spbSave : TSpeedButton · OnClick   227×40`。
+ 
+@@ -173,7 +177,7 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ - **只改得動寫在元件自己 `style` 裡的 px 數值**。位置是 `%`、`auto` 或寫在 CSS class 裡的元件，會拒絕修改並在狀態列說明，不會亂猜。
+ - **頁面 JS 產生的元件**（例如 `HW.IoSetView.html` 的清單）HTML 原始碼裡沒有，不能改；面板會寫明原因。
+ - **HTML 會被同步覆蓋**：見上面「改到哪裡」的 ⚠。DFM 屬性（BCB6 的 Object Inspector 那份）是參考資料，只能看。
+-- 還沒有：多選、對齊線、複製貼上、刪除元件、工具箱拖新元件進來。
++- 還沒有：複製貼上、刪除元件、工具箱拖新元件進來（這些頁面是照 BCB6 表單做的，元件增減應該回到網頁作者的流程）。
+ - **80 頁裡 44 頁的標題寫明對應哪個 DFM**；其他頁用元件名稱推測，推測不到就只顯示 HTML 屬性和網頁 JS。
+ - **只在連線成功後才綁的監聽器看不到**，因為預覽不連線。「網頁 JS 提到此元件」那一段是靠搜尋，可以補一部分。
+ - **C++ 的 `#if 0` 判斷是靜態掃描**，只認得 `#if 0`／`#if 1`；`#ifdef SOFT_SIMULTE` 這類要看建置線的，一律當成活的。
+@@ -214,9 +218,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\vscode-htdesigner\test
+    會在螢幕上出現約 30 秒後自己關掉）。開 HotPlate 頁走完整條路，再逐頁掃 8 種頁面；
+    測試前後比對所有開過的檔案的 MD5，有任何變動就判失敗
+ 
+-實測 20260929：1～4 層 84 ＋ 32（2 頁各 16）＋ 52（＋面板畫面 10）＋ 48（含 8 頁掃描，每頁也跑接線總覽）項全部通過。
+-編輯的部分在真正的 VS Code 裡測了「改 Left → 原始碼變 → 未存檔 → Ctrl+Z 兩次完全還原 → 畫面重新載入」，測試從不存檔，
+-所有開過的檔案前後 MD5 一樣。
++實測 20260929：1～4 層 84 ＋ 2 頁各 20 ＋ 53（＋面板畫面 10）＋ 52（含 8 頁掃描，每頁也跑接線總覽）項全部通過。
++編輯的部分在真正的 VS Code 裡測了「改 Left → 原始碼變 → 未存檔 → Ctrl+Z 兩次完全還原 → 畫面重新載入」、
++「多選兩個 → 同高 → 一次 Ctrl+Z 整組還原」，測試從不存檔，所有開過的檔案前後 MD5 一樣。
+ （途中抓到一個真 bug：CRLF 換行的 C++ 檔，`#endif` 後面的 `\r` 讓 `#if 0` 永遠不結束，
+ `wb_serve.cpp` 從第 3,322 行起整段被當成死碼。已修，並加了 CRLF 的測試。）
+ 
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index d43de29..3b45849 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -459,6 +459,7 @@ class Hub {
+       inSource: !!edTag,
+       layoutInSource: !!(edTag && info.layout && (info.layout.target === 'self' || edWrap)),
+       dirty: !!d.doc.isDirty,
++      multi: Array.isArray(info.multi) && info.multi.length ? info.multi : null,
+     };
+ 
+     const data = {
+@@ -789,6 +790,7 @@ class Hub {
+       case 'setLayout':
+       case 'setCaption':
+       case 'setLook':
++      case 'align':
+         if (d && data && data.comp) this.forwardEdit(d, data.comp.key, m);
+         break;
+       default: break;
+@@ -891,43 +893,44 @@ class Hub {
+    * m = { what:'style'|'attr'|'caption', id, target:'self'|'parent', style:{…}, attr:{…},
+    *       capKind, value }. One WorkspaceEdit = one undo step; nothing is saved to disk.
+    */
+-  async applySourceEdit(d, m) {
+-    const text = d.doc.getText();
++  /** The characters one edit changes in `text`: { range:[s,e], repl } or { error }. */
++  editRange(text, m) {
+     const tag = m.id ? htmledit.startTagOf(text, m.id) : null;
+-    if (!tag) {
+-      this.refuseEdit(d, '原始碼裡找不到 id="' + (m.id || '') + '"（可能是頁面 JS 產生的元件），只改到畫面、沒有寫回。');
+-      d.render();
+-      return false;
+-    }
+-    let range = null, repl = null;
++    if (!tag) return { error: '原始碼裡找不到 id="' + (m.id || '') + '"（可能是頁面 JS 產生的元件），只改到畫面、沒有寫回。' };
+     if (m.what === 'style' || m.what === 'attr') {
+       const target = m.target === 'parent' ? htmledit.wrapperTagOf(text, tag.start) : tag;
+-      if (!target) {
+-        this.refuseEdit(d, '「' + m.id + '」的位置由外層元素決定，但原始碼裡找不到緊鄰的外層標籤，沒有寫回。');
+-        d.render();
+-        return false;
+-      }
++      if (!target) return { error: '「' + m.id + '」的位置由外層元素決定，但原始碼裡找不到緊鄰的外層標籤，沒有寫回。' };
+       let t = target.text;
+       if (m.what === 'style') t = htmledit.setStyle(t, m.style || {});
+       else for (const [k, v] of Object.entries(m.attr || {})) t = htmledit.setAttr(t, k, v);
+-      range = [target.start, target.end];
+-      repl = t;
+-    } else if (m.what === 'caption') {
+-      if (m.capKind === 'value') {
+-        range = [tag.start, tag.end];
+-        repl = htmledit.setAttr(tag.text, 'value', String(m.value));
+-      } else {
+-        const r = htmledit.captionRange(text, tag, m.capKind);
+-        if (!r) { this.refuseEdit(d, '找不到「' + m.id + '」的文字在原始碼的位置，沒有寫回。'); d.render(); return false; }
+-        range = r;
+-        repl = htmledit.escText(m.value);
+-      }
+-    } else {
+-      return false;
++      return { range: [target.start, target.end], repl: t };
++    }
++    if (m.what === 'caption') {
++      if (m.capKind === 'value') return { range: [tag.start, tag.end], repl: htmledit.setAttr(tag.text, 'value', String(m.value)) };
++      const r = htmledit.captionRange(text, tag, m.capKind);
++      if (!r) return { error: '找不到「' + m.id + '」的文字在原始碼的位置，沒有寫回。' };
++      return { range: r, repl: htmledit.escText(m.value) };
++    }
++    return { error: '不認得的修改：' + m.what };
++  }
++
++  /** One edit, or a batch (group drag, align) as ONE WorkspaceEdit = one undo step. */
++  async applySourceEdit(d, m) {
++    const text = d.doc.getText();
++    const list = m.what === 'batch' ? (m.edits || []) : [m];
++    const parts = [];
++    for (const one of list) {
++      const r = this.editRange(text, one);
++      if (r.error) { this.refuseEdit(d, r.error); d.render(); return false; }
++      if (text.slice(r.range[0], r.range[1]) !== r.repl) parts.push(r);
++    }
++    if (!parts.length) return true;
++    parts.sort((a, b) => a.range[0] - b.range[0]);
++    for (let i = 1; i < parts.length; i++) {
++      if (parts[i].range[0] < parts[i - 1].range[1]) { this.refuseEdit(d, '同一段原始碼被改了兩次（重疊），沒有寫回。'); d.render(); return false; }
+     }
+-    if (text.slice(range[0], range[1]) === repl) return true;
+     const we = new vscode.WorkspaceEdit();
+-    we.replace(d.doc.uri, new vscode.Range(d.doc.positionAt(range[0]), d.doc.positionAt(range[1])), repl);
++    for (const p of parts) we.replace(d.doc.uri, new vscode.Range(d.doc.positionAt(p.range[0]), d.doc.positionAt(p.range[1])), p.repl);
+     d.selfEdits++;
+     const ok = await vscode.workspace.applyEdit(we);
+     if (!ok) { d.selfEdits--; this.refuseEdit(d, '寫回原始碼失敗。'); d.render(); return false; }
+@@ -948,6 +951,7 @@ class Hub {
+     if (m.type === 'setLayout') d.post({ type: 'setLayout', key, left: m.left, top: m.top, width: m.width, height: m.height });
+     else if (m.type === 'setCaption') d.post({ type: 'setCaption', key, value: m.value });
+     else if (m.type === 'setLook') d.post({ type: 'setLook', key, prop: m.prop, value: m.value });
++    else if (m.type === 'align') d.post({ type: 'align', how: m.how });
+   }
+ 
+   // --- code -> designer ------------------------------------------------------
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index 7610e0d..4518426 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -218,8 +218,14 @@
+ 
+   /* 5. overlay (shadow root, custom tag so page selectors never match it). Open, so
+         the window-level handler can tell which resize handle was pressed. */
+-  var host = null, sh = null, bH, bS, tH, tS, badge, handles = [];
++  var host = null, sh = null, bH, bS, tH, tS, badge, handles = [], gX = null, gY = null, extraBoxes = [];
+   var hoverEl = null, selEl = null;
++  var multi = [];   /* the other selected components (WPF multi-select); selEl is the primary */
++  function allSel() {
++    var out = selEl ? [selEl] : [];
++    for (var i = 0; i < multi.length; i++) if (multi[i].isConnected && multi[i] !== selEl) out.push(multi[i]);
++    return out;
++  }
+   var DIRS = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+   function ensureOverlay() {
+     if (host || !document.documentElement) return;
+@@ -241,7 +247,11 @@
+       'background:#fff;border:1px solid #b35c00;pointer-events:auto;}' +
+       '.hd[data-dir=nw],.hd[data-dir=se]{cursor:nwse-resize;} .hd[data-dir=ne],.hd[data-dir=sw]{cursor:nesw-resize;}' +
+       '.hd[data-dir=n],.hd[data-dir=s]{cursor:ns-resize;} .hd[data-dir=e],.hd[data-dir=w]{cursor:ew-resize;}' +
+-      '</style><div class="b h"></div><div class="b s"></div><div class="t th"></div><div class="t ts"></div><div class="m"></div>' + hs;
++      '.g{position:fixed;display:none;pointer-events:none;background:#e5172f;}' +
++      '.s2{outline:1px solid #ff8c00;background:rgba(255,140,0,.06);}' +
++      '</style><div class="b h"></div><div class="b s"></div><div class="t th"></div><div class="t ts"></div><div class="m"></div>' +
++      '<div class="g gx"></div><div class="g gy"></div>' + hs;
++    gX = sh.querySelector('.gx'); gY = sh.querySelector('.gy');
+     bH = sh.querySelector('.h'); bS = sh.querySelector('.s');
+     tH = sh.querySelector('.th'); tS = sh.querySelector('.ts');
+     badge = sh.querySelector('.m');
+@@ -269,7 +279,8 @@
+     var name = id || el.tagName.toLowerCase();
+     var ev = id && Object.prototype.hasOwnProperty.call(EVS, id) ? EVS[id] : null;
+     var evs = ev && ev.length ? '  · ' + ev.slice(0, 3).join(', ') + (ev.length > 3 ? ' …' : '') : '';
+-    return name + (v.cls ? ' : ' + v.cls : '') + evs + '   ' + Math.round(r.width) + '×' + Math.round(r.height);
++    var n = el === selEl ? allSel().length : 0;
++    return name + (v.cls ? ' : ' + v.cls : '') + evs + '   ' + Math.round(r.width) + '×' + Math.round(r.height) + (n > 1 ? '   （共選 ' + n + ' 個）' : '');
+   }
+   function place(box, tag, el) {
+     if (!el || !el.isConnected) { box.style.display = 'none'; tag.style.display = 'none'; return; }
+@@ -291,6 +302,33 @@
+     if (mode === 'design' && hoverEl && hoverEl !== selEl && !drag) place(bH, tH, hoverEl);
+     else { bH.style.display = 'none'; tH.style.display = 'none'; }
+     placeHandles();
++    /* the other selected components: thinner boxes */
++    var others = allSel().slice(1);
++    for (var i = 0; i < others.length || i < extraBoxes.length; i++) {
++      if (i >= extraBoxes.length) {
++        var nb = document.createElement('div');
++        nb.className = 'b s2';
++        sh.appendChild(nb);
++        extraBoxes.push(nb);
++      }
++      var bxd = extraBoxes[i];
++      var o = others[i];
++      var rr = o ? o.getBoundingClientRect() : null;
++      if (!rr || (!rr.width && !rr.height)) { bxd.style.display = 'none'; continue; }
++      bxd.style.display = 'block';
++      bxd.style.left = rr.left + 'px'; bxd.style.top = rr.top + 'px';
++      bxd.style.width = rr.width + 'px'; bxd.style.height = rr.height + 'px';
++    }
++    var g = drag && drag.active && drag.guide ? drag.guide : null;
++    var box = drag && drag.lines ? drag.lines.box : null;
++    if (g && g.x != null && box) {
++      gX.style.display = 'block'; gX.style.left = Math.round(g.x) + 'px'; gX.style.top = box.top + 'px';
++      gX.style.width = '1px'; gX.style.height = box.height + 'px';
++    } else gX.style.display = 'none';
++    if (g && g.y != null && box) {
++      gY.style.display = 'block'; gY.style.top = Math.round(g.y) + 'px'; gY.style.left = box.left + 'px';
++      gY.style.height = '1px'; gY.style.width = box.width + 'px';
++    } else gY.style.display = 'none';
+   }
+   function scheduleDraw() {
+     if (drawPending) return;
+@@ -300,7 +338,7 @@
+   function drawBadge() {
+     if (!badge) return;
+     badge.textContent = mode === 'design'
+-      ? '設計模式：點＝選取　拖曳＝移動　控制點＝改大小　方向鍵＝微調　雙擊／Enter＝事件程式碼　Esc＝上層　Tab＝下一個　Ctrl+點＝操作一次'
++      ? '設計模式：點＝選取　Ctrl/Shift+點＝多選　拖曳＝移動　控制點＝改大小　方向鍵＝微調　雙擊／Enter＝事件程式碼　Esc＝上層　Tab＝下一個'
+       : '操作模式：點擊交給頁面（網路仍全部封鎖）';
+   }
+ 
+@@ -365,6 +403,10 @@
+       var l2 = serList(REC.get(p[0]), INHERIT_TYPES, budget);
+       if (l2.length) { d.inherited.push({ label: p[1], list: l2 }); budget -= l2.length; }
+     });
++    if (el === selEl) {
++      var ms = allSel().slice(1);
++      if (ms.length) d.multi = ms.map(function (x) { return idOf(x) || x.tagName.toLowerCase(); });
++    }
+     try { d.layout = layoutOf(el); } catch (e) { d.layout = null; }
+     try { d.caption = captionOf(el); } catch (e) { d.caption = null; }
+     try { d.look = lookOf(el); } catch (e) { d.look = null; }
+@@ -509,6 +551,8 @@
+     }
+   }
+   function select(el, origin, scroll) {
++    /* a plain selection ends a multi-selection; an edit or a Ctrl/Shift toggle keeps it */
++    if (origin !== 'edit' && origin !== 'multi') multi = [];
+     if (!el) {
+       selEl = null; scheduleDraw();
+       post({ type: 'select', info: null, origin: origin });
+@@ -528,8 +572,68 @@
+ 
+   /* 8. event blocking (design mode) and hover -------------------------------- */
+   var justDragged = false;
+-  function startDrag(el, bx, how, e) {
+-    drag = { el: el, bx: bx, how: how, s0: snap(bx), x: e.clientX, y: e.clientY, active: how !== 'move', last: null };
++  /* snaplines (WPF): the edges and centres of the siblings in the same container and
++     of the container itself, in viewport px, collected once when a drag starts */
++  function snapLines(bx) {
++    var node = bx.node, par = node.offsetParent || document.body;
++    var xs = [], ys = [];
++    var pr = par.getBoundingClientRect();
++    var pl = pr.left + par.clientLeft, pt = pr.top + par.clientTop;
++    xs.push(pl, pl + par.clientWidth, pl + par.clientWidth / 2);
++    ys.push(pt, pt + par.clientHeight, pt + par.clientHeight / 2);
++    var all = par.querySelectorAll('*');
++    for (var i = 0; i < all.length && i < 4000; i++) {
++      var o = all[i];
++      if (o === node || node.contains(o) || o.offsetParent !== par || !o.style || o.style.position !== 'absolute') continue;
++      var r = o.getBoundingClientRect();
++      if (!r.width && !r.height) continue;
++      xs.push(r.left, r.right, r.left + r.width / 2);
++      ys.push(r.top, r.bottom, r.top + r.height / 2);
++    }
++    return { xs: xs, ys: ys, box: pr };
++  }
++  var SNAP = 5;
++  /* best correction so that one of `edges` lands on one of `lines` (within SNAP) */
++  function snapTo(edges, lines) {
++    var best = null;
++    for (var i = 0; i < edges.length; i++) {
++      for (var j = 0; j < lines.length; j++) {
++        var d = lines[j] - edges[i];
++        if (Math.abs(d) <= SNAP && (best === null || Math.abs(d) < Math.abs(best.d))) best = { d: d, at: lines[j] };
++      }
++    }
++    return best;
++  }
++  function startDrag(el, bx, how, e, group) {
++    drag = { el: el, bx: bx, how: how, s0: snap(bx), x: e.clientX, y: e.clientY, active: how !== 'move', last: null,
++      r0: bx.node.getBoundingClientRect(), lines: null, items: null, collapse: null };
++    /* moving a multi-selection moves every selected component by the same delta */
++    if (how === 'move' && group && group.length > 1) {
++      drag.items = group.map(function (g) { return { el: g.el, bx: g.bx, s0: snap(g.bx), last: null }; });
++    }
++  }
++  /* Ctrl/Shift+click: add to / remove from the selection; the last one clicked is primary */
++  function toggleSel(el) {
++    if (!el) return;
++    if (el === selEl) {
++      if (multi.length) { var np = multi.pop(); selEl = null; select(np, 'multi', false); }
++      return;
++    }
++    var i = multi.indexOf(el);
++    if (i >= 0) { multi.splice(i, 1); var p = selEl; selEl = null; select(p, 'multi', false); return; }
++    if (selEl) multi.push(selEl);
++    selEl = null;
++    select(el, 'multi', false);
++  }
++  /* several components' edits as ONE message = one source edit = one undo step */
++  function commitGroup(items) {
++    var edits = [];
++    for (var i = 0; i < items.length; i++) {
++      var it = items[i];
++      if (it.last && Object.keys(it.last).length) edits.push({ what: 'style', id: idOf(it.el), key: keyOf(it.el), target: it.bx.target, style: it.last });
++    }
++    if (edits.length === 1) post({ type: 'edit', what: 'style', id: edits[0].id, key: edits[0].key, target: edits[0].target, style: edits[0].style });
++    else if (edits.length) post({ type: 'edit', what: 'batch', edits: edits });
+   }
+   function onBlock(e) {
+     var t = e.type;
+@@ -557,23 +661,33 @@
+     }
+     if (t === 'submit') e.preventDefault();
+     if (passNext || mode !== 'design') return;
+-    if (e.ctrlKey || e.metaKey) return;
+-    if (isTab(e.target) && !e.altKey) {
++    var toggle = e.ctrlKey || e.metaKey || e.shiftKey;
++    if (isTab(e.target) && !e.altKey && !toggle) {
+       if (t === 'click') select(pick(e.target, false), 'click', false);
+       return;
+     }
+     e.stopImmediatePropagation();
+     if (t !== 'touchstart' || e.cancelable) e.preventDefault();
+     if (t === 'mousedown' && e.button === 0) {
+-      /* WPF: pressing selects, and dragging from there moves */
+       var md = pick(e.target, e.altKey);
+-      if (md !== selEl) select(md, 'click', false);
++      if (toggle) { toggleSel(md); return; }            // WPF: Ctrl/Shift+click = multi-select
++      /* WPF: pressing selects, and dragging from there moves (the whole selection
++         when it is pressed on one of its members) */
++      var inSel = !!md && (md === selEl || multi.indexOf(md) >= 0);
++      if (!inSel) select(md, 'click', false);
++      else if (md !== selEl) { multi.splice(multi.indexOf(md), 1); if (selEl) multi.push(selEl); selEl = null; select(md, 'multi', false); }
+       var bx = md ? boxOf(md) : null;
+-      if (bx) startDrag(md, bx, 'move', e);
++      if (bx) {
++        var group = allSel().map(function (x) { return { el: x, bx: boxOf(x) }; }).filter(function (g) { return g.bx; });
++        startDrag(md, bx, 'move', e, group);
++        if (inSel && multi.length) drag.collapse = md;   // a click (no move) on a member keeps only it
++      }
+     } else if (t === 'click') {
++      if (toggle) return;
+       if (justDragged) { justDragged = false; return; }
+       select(pick(e.target, e.altKey), 'click', false);
+     } else if (t === 'dblclick') {
++      if (toggle) return;
+       var el = pick(e.target, e.altKey);
+       select(el, 'click', false);
+       if (el) post({ type: 'dblclick', key: keyOf(el) });
+@@ -590,7 +704,25 @@
+         if (Math.abs(dx) + Math.abs(dy) < 3) return;   // a click, not a drag (yet)
+         drag.active = true;
+       }
+-      var h = drag.how, dL = 0, dT = 0, dW = 0, dH = 0;
++      var h = drag.how;
++      /* snap the moving edges to the siblings' / container's lines (Alt = no snapping) */
++      var gx = null, gy = null;
++      if (!e.altKey) {
++        if (!drag.lines) drag.lines = snapLines(drag.bx);
++        var r0 = drag.r0;
++        var L = r0.left + dx, R = r0.right + dx, T = r0.top + dy, B = r0.bottom + dy;
++        var ex, ey;
++        if (h === 'move') { ex = [L, R, (L + R) / 2]; ey = [T, B, (T + B) / 2]; }
++        else {
++          ex = h.indexOf('e') >= 0 ? [R] : h.indexOf('w') >= 0 ? [L] : [];
++          ey = h.indexOf('s') >= 0 ? [B] : h.indexOf('n') >= 0 ? [T] : [];
++        }
++        var sx = snapTo(ex, drag.lines.xs), sy = snapTo(ey, drag.lines.ys);
++        if (sx) { dx += sx.d; gx = sx.at; }
++        if (sy) { dy += sy.d; gy = sy.at; }
++      }
++      drag.guide = { x: gx, y: gy };
++      var dL = 0, dT = 0, dW = 0, dH = 0;
+       if (h === 'move') { dL = dx; dT = dy; }
+       else {
+         if (h.indexOf('e') >= 0) dW = dx;
+@@ -598,9 +730,18 @@
+         if (h.indexOf('s') >= 0) dH = dy;
+         if (h.indexOf('n') >= 0) { dT = dy; dH = -dy; }
+       }
+-      var ch = deltaStyle(drag.s0, dL, dT, dW, dH);
+-      if (ch) { applyStyle(drag.bx.node, ch); drag.last = ch; }
+-      else drag.refused = true;
++      if (drag.items) {
++        for (var gi = 0; gi < drag.items.length; gi++) {
++          var it = drag.items[gi];
++          var gch = deltaStyle(it.s0, dL, dT, 0, 0);
++          if (gch) { applyStyle(it.bx.node, gch); it.last = gch; } else drag.refused = true;
++        }
++        drag.last = drag.items[0] ? drag.items[0].last : null;
++      } else {
++        var ch = deltaStyle(drag.s0, dL, dT, dW, dH);
++        if (ch) { applyStyle(drag.bx.node, ch); drag.last = ch; }
++        else drag.refused = true;
++      }
+       e.preventDefault();
+       e.stopImmediatePropagation();
+       scheduleDraw();
+@@ -618,8 +759,12 @@
+     if (d.active) {
+       justDragged = true;
+       setTimeout(function () { justDragged = false; }, 0);
+-      if (d.last) { commitLayout(d.el, d.bx, d.last); selEl = null; select(d.el, 'edit', false); }
+-      else if (d.refused) post({ type: 'editRefused', why: '這個元件的位置／大小不是寫在自己 style 裡的 px 數值，不能拖曳' });
++      if (d.items) { commitGroup(d.items); selEl = null; select(d.el, 'edit', false); }
++      else if (d.last) { commitLayout(d.el, d.bx, d.last); selEl = null; select(d.el, 'edit', false); }
++      if (d.refused) post({ type: 'editRefused', why: '有元件的位置／大小不是寫在自己 style 裡的 px 數值，那個沒有移動' });
++    } else if (d.collapse) {
++      selEl = null;
++      select(d.collapse, 'click', false);   // clears the multi-selection
+     }
+     scheduleDraw();
+   }
+@@ -652,7 +797,11 @@
+     clearTimeout(nudgeTimer);
+     var n = nudge;
+     nudge = null;
+-    if (n && n.last) { commitLayout(n.el, n.bx, n.last); selEl = null; select(n.el, 'edit', false); }
++    if (!n || !n.items.some(function (it) { return it.last; })) return;
++    if (n.items.length > 1) commitGroup(n.items);
++    else commitLayout(n.items[0].el, n.items[0].bx, n.items[0].last);
++    selEl = null;
++    select(n.el, 'edit', false);
+   }
+   var ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+   origAdd.call(window, 'keydown', function (e) {
+@@ -686,16 +835,25 @@
+     if (!ARROWS[k]) return;
+     e.preventDefault();
+     e.stopImmediatePropagation();
+-    var bx = boxOf(selEl);
+-    if (!bx) { post({ type: 'editRefused', why: '這個元件不是用 position:absolute 定位的，不能用方向鍵移動' }); return; }
++    var group = allSel().map(function (x) { return { el: x, bx: boxOf(x) }; }).filter(function (g) { return g.bx; });
++    if (!group.length) { post({ type: 'editRefused', why: '這個元件不是用 position:absolute 定位的，不能用方向鍵移動' }); return; }
+     var step = e.shiftKey ? 10 : 1;
+-    if (!nudge || nudge.el !== selEl) { flushNudge(); nudge = { el: selEl, bx: bx, s0: snap(bx), dL: 0, dT: 0, dW: 0, dH: 0, last: null }; }
++    if (!nudge || nudge.el !== selEl || nudge.items.length !== group.length) {
++      flushNudge();
++      nudge = { el: selEl, dL: 0, dT: 0, dW: 0, dH: 0,
++        items: group.map(function (g) { return { el: g.el, bx: g.bx, s0: snap(g.bx), last: null }; }) };
++    }
+     if (e.ctrlKey) { nudge.dW += ARROWS[k][0] * step; nudge.dH += ARROWS[k][1] * step; }
+     else { nudge.dL += ARROWS[k][0] * step; nudge.dT += ARROWS[k][1] * step; }
+-    var ch = deltaStyle(nudge.s0, nudge.dL, nudge.dT, nudge.dW, nudge.dH);
+-    if (!ch) { nudge = null; post({ type: 'editRefused', why: '這個元件的位置／大小不是寫在自己 style 裡的 px 數值' }); return; }
+-    applyStyle(bx.node, ch);
+-    nudge.last = ch;
++    var refused = false;
++    for (var ni = 0; ni < nudge.items.length; ni++) {
++      var it = nudge.items[ni];
++      var ch = deltaStyle(it.s0, nudge.dL, nudge.dT, nudge.dW, nudge.dH);
++      if (!ch) { refused = true; continue; }
++      applyStyle(it.bx.node, ch);
++      it.last = ch;
++    }
++    if (refused) post({ type: 'editRefused', why: '有元件的位置／大小不是寫在自己 style 裡的 px 數值，那個沒有移動' });
+     scheduleDraw();
+     clearTimeout(nudgeTimer);
+     nudgeTimer = setTimeout(flushNudge, 400);   // one source edit (one undo step) per burst of keys
+@@ -759,8 +917,8 @@
+     if (id === '@form') return formRoot();
+     return id ? document.getElementById(id) : null;
+   }
+-  origAdd.call(window, 'message', function (e) {
+-    var m = e.data;
++  origAdd.call(window, 'message', function (e) { onHostMessage(e.data); });
++  function onHostMessage(m) {
+     if (!m || m.__htd !== 1) return;
+     switch (m.type) {
+       case 'init':
+@@ -779,6 +937,15 @@
+         if (el1 && el1.isConnected) { selEl = null; select(el1, m.origin || 'tree', true); }
+         break;
+       }
++      case 'selectIds': {
++        /* a multi-selection by ids: the first is the primary */
++        var list6 = (m.ids || []).map(byId).filter(function (x) { return !!x; });
++        if (!list6.length) break;
++        multi = list6.slice(1);
++        selEl = null;
++        select(list6[0], 'multi', true);
++        break;
++      }
+       case 'selectId': {
+         var el2 = byId(m.id);
+         if (el2) { selEl = null; select(el2, m.origin || 'editor', true); }
+@@ -834,6 +1001,43 @@
+         selEl = null; select(el5, 'edit', false);
+         break;
+       }
++      case 'align': {
++        /* WPF Format > Align / Make Same Size: the primary selection is the reference */
++        if (!selEl) break;
++        var ref = selEl.getBoundingClientRect();
++        var rest = allSel().slice(1);
++        var items = [];
++        var bad = false;
++        for (var ai = 0; ai < rest.length; ai++) {
++          var ae = rest[ai], abx = boxOf(ae);
++          if (!abx) { bad = true; continue; }
++          var ar = ae.getBoundingClientRect();
++          var aL = 0, aT = 0, aW = 0, aH = 0;
++          switch (m.how) {
++            case 'left': aL = ref.left - ar.left; break;
++            case 'right': aL = ref.right - ar.right; break;
++            case 'top': aT = ref.top - ar.top; break;
++            case 'bottom': aT = ref.bottom - ar.bottom; break;
++            case 'hcenter': aL = (ref.left + ref.width / 2) - (ar.left + ar.width / 2); break;
++            case 'vcenter': aT = (ref.top + ref.height / 2) - (ar.top + ar.height / 2); break;
++            case 'width': aW = ref.width - ar.width; break;
++            case 'height': aH = ref.height - ar.height; break;
++            case 'size': aW = ref.width - ar.width; aH = ref.height - ar.height; break;
++            default: break;
++          }
++          var s0a = snap(abx);
++          var ach = deltaStyle(s0a, aL, aT, aW, aH);
++          if (!ach) { bad = true; continue; }
++          applyStyle(abx.node, ach);
++          items.push({ el: ae, bx: abx, last: ach });
++        }
++        if (items.length) commitGroup(items);
++        if (bad) post({ type: 'editRefused', why: '有元件的位置／大小不是寫在自己 style 裡的 px 數值，那個沒有對齊' });
++        var prim = selEl;
++        selEl = null;
++        select(prim, 'edit', false);
++        break;
++      }
+       case 'listenersAll': {
+         /* for the wiring overview: every control's own listener types (+ inline on*) */
+         var map = {};
+@@ -897,7 +1101,7 @@
+       default:
+         break;
+     }
+-  });
++  }
+ 
+   /* 12. start --------------------------------------------------------------- */
+   var lastScroll = 0;
+@@ -932,5 +1136,6 @@
+     mode: function () { return mode; },
+     selectById: function (id) { var el = byId(id); if (el) { selEl = null; select(el, 'test', true); } return !!el; },
+     drawNow: function () { draw(); },   /* tests: headless virtual time may not run animation frames */
++    message: function (m) { m.__htd = 1; onHostMessage(m); },   /* tests: a host message, synchronously */
+   };
+ })();
+diff --git a/tools/vscode-htdesigner/media/props.js b/tools/vscode-htdesigner/media/props.js
+index 504dbb6..6c454a6 100644
+--- a/tools/vscode-htdesigner/media/props.js
++++ b/tools/vscode-htdesigner/media/props.js
+@@ -134,6 +134,23 @@
+ 
+     /* editable properties -- the WPF property grid: commit on Enter or leaving the field */
+     var ed = data.edit;
++    if (ed && ed.multi) {
++      /* WPF Format > Align: the primary (this one) is the reference */
++      section('align', '多選：對齊與大小', ed.multi.length + 1, function (body) {
++        body.appendChild(el('div', 'pad small', '主要：' + c.name + '　其他：' + ed.multi.join('、')));
++        var bar2 = el('div', 'bar pad');
++        [['left', '靠左'], ['hcenter', '水平置中'], ['right', '靠右'], ['top', '靠上'], ['vcenter', '垂直置中'], ['bottom', '靠下'],
++          ['width', '同寬'], ['height', '同高'], ['size', '同大小']].forEach(function (a) {
++          var b = el('button', null, a[1]);
++          b.setAttribute('data-align', a[0]);
++          b.title = '以「' + c.name + '」為基準';
++          b.addEventListener('click', function () { vscode.postMessage({ type: 'align', how: a[0] }); });
++          bar2.appendChild(b);
++        });
++        body.appendChild(bar2);
++        body.appendChild(el('div', 'dim pad small', '整組一起拖曳、一起用方向鍵移動；一次對齊＝一個復原步驟。Ctrl／Shift＋點可以加入或移出選取。'));
++      });
++    }
+     if (ed && (ed.layout || ed.caption || ed.look)) {
+       section('edit', '外觀與版面（可編輯）', null, function (body) {
+         var tb = el('table', 'kv edit');
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 2d15365..0c06879 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.9.0",
++  "version": "0.10.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/fake_vscode.js b/tools/vscode-htdesigner/test/fake_vscode.js
+index b80e20d..f6e5a01 100644
+--- a/tools/vscode-htdesigner/test/fake_vscode.js
++++ b/tools/vscode-htdesigner/test/fake_vscode.js
+@@ -97,7 +97,10 @@ const vscode = {
+     onDidChangeTextDocument: () => disp(),
+     // edits go to documents registered in vscode._docs (uri string -> { offsetAt, _setText, getText })
+     applyEdit: async we => {
+-      for (const op of we.ops) {
++      rec('applyEditCall', [we.ops.length]);
++      // apply from the end so earlier offsets stay valid (like VS Code applies a WorkspaceEdit)
++      const ops = we.ops.slice().sort((a, b) => b.range.start.line - a.range.start.line || b.range.start.character - a.range.start.character);
++      for (const op of ops) {
+         const doc = (vscode._docs || {})[op.uri.toString()];
+         if (!doc) return false;
+         const t = doc.getText();
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 818063a..104320b 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -187,6 +187,23 @@ exports.run = async function () {
+       // the undo re-rendered the page from the source: the tree comes back
+       const back = await waitFor(() => (d.treeData.length ? true : null), 8000);
+       ok(!!back, 'the page re-renders after undo');
++
++      // multi-select + align top = ONE undo step
++      await sleep(800);
++      d.post({ type: 'selectIds', ids: ['sbtExit', 'spbSave'] });
++      const ms = await waitFor(() => (d.sel && d.sel.info && d.sel.info.id === 'sbtExit' && d.sel.info.multi ? d.sel : null), 5000);
++      ok(!!ms && ms.info.multi.indexOf('spbSave') >= 0, 'multi-select sbtExit + spbSave', ms ? JSON.stringify(ms.info.multi) : '-');
++      d.post({ type: 'align', how: 'height' });
++      const al = await waitFor(() => (d.doc.isDirty && d.doc.getText() !== original ? true : null), 5000);
++      ok(!!al, 'align (same height) changed the source');
++      d.panel.reveal(d.panel.viewColumn, false);
++      await sleep(300);
++      await vscode.commands.executeCommand('undo');
++      const un2 = await waitFor(() => (d.doc.getText() === original ? true : null), 5000);
++      ok(!!un2, 'ONE undo restores the whole alignment');
++      if (d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
++      ok(!d.doc.isDirty && d.doc.getText() === original, 'clean again, nothing saved');
++      await waitFor(() => (d.treeData.length ? true : null), 8000);
+     }
+ 
+     // mode toggle reaches the probe (no error)
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index 042fbb2..2752267 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -51,8 +51,14 @@
+         R.selGeom = sel && sel.info ? sel.info.geom : null;
+         R.selInfo = sel ? sel.info : null;           /* full, for test\smoke_extension.js */
+         R.treeNodes = tree ? tree.nodes : [];
+-        btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
+-        R.ctrlClickOperates = ran === 1;
++        /* operate mode hands clicks to the page (the network is still walled off) */
++        window.postMessage({ __htd: 1, type: 'setMode', mode: 'operate' }, '*');
++        R._ranBefore = ran;
++        setTimeout(function () {
++          btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
++          R.operateModeOperates = ran === R._ranBefore + 1;
++          window.postMessage({ __htd: 1, type: 'setMode', mode: 'design' }, '*');
++        }, 50);
+ 
+         /* Enter = open the default event (arrows/Esc/Tab are checked in editTests) */
+         var before = msgs('dblclick').length;
+@@ -109,11 +115,12 @@
+       var r = btn.getBoundingClientRect();
+       var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+       var l0 = btn.style.left, t0 = btn.style.top;
+-      /* drag the Save button by (+20, +10) */
++      /* drag the Save button by (+20, +10), Alt held = no snapping, exact deltas */
++      var ALT = { altKey: true };
+       var n0 = edits().length;
+       mouse('mousedown', btn, cx, cy);
+-      mouse('mousemove', btn, cx + 10, cy + 5);
+-      mouse('mousemove', btn, cx + 20, cy + 10);
++      mouse('mousemove', btn, cx + 10, cy + 5, ALT);
++      mouse('mousemove', btn, cx + 20, cy + 10, ALT);
+       mouse('mouseup', btn, cx + 20, cy + 10);
+       var e1 = edits()[n0];
+       R.dragEdit = e1 ? JSON.stringify(e1.style) + ' ' + e1.target : null;
+@@ -131,7 +138,7 @@
+         var w0 = btn.style.width, h0 = btn.style.height;
+         var n2 = edits().length;
+         mouse('mousedown', se, hr.left + 3, hr.top + 3);
+-        mouse('mousemove', btn, hr.left + 3 + 15, hr.top + 3 + 6);
++        mouse('mousemove', btn, hr.left + 3 + 15, hr.top + 3 + 6, ALT);
+         mouse('mouseup', btn, hr.left + 3 + 15, hr.top + 3 + 6);
+         var e2 = edits()[n2];
+         R.resizeEdit = e2 ? JSON.stringify(e2.style) : null;
+@@ -143,12 +150,63 @@
+         var ir = inp.getBoundingClientRect();
+         var n3 = edits().length;
+         mouse('mousedown', inp, ir.left + 5, ir.top + 5);
+-        mouse('mousemove', inp, ir.left + 5 + 7, ir.top + 5);
++        mouse('mousemove', inp, ir.left + 5 + 7, ir.top + 5, ALT);
+         mouse('mouseup', inp, ir.left + 5 + 7, ir.top + 5);
+         var e3 = edits()[n3];
+         R.wrapperEdit = e3 ? e3.target + ' ' + JSON.stringify(e3.style) : null;
+         R.wrapperOk = !!e3 && e3.id === 'XST1' && e3.target === 'parent' && /px$/.test(e3.style.left);
+       }
++      /* multi-select (Ctrl+click), group drag = ONE batch edit, align = ONE batch edit */
++      var ex0 = document.getElementById('sbtExit');
++      if (ex0) {
++        window.__htdProbe.selectById('spbSave');
++        var er = ex0.getBoundingClientRect();
++        mouse('mousedown', ex0, er.left + 5, er.top + 5, { ctrlKey: true });
++        mouse('mouseup', ex0, er.left + 5, er.top + 5, { ctrlKey: true });
++        mouse('click', ex0, er.left + 5, er.top + 5, { ctrlKey: true });
++        var sm = msgs('select').pop();
++        R.multiSel = sm && sm.info ? sm.info.id + '+' + (sm.info.multi || []).join(',') : null;
++        R.multiOk = !!sm && sm.info.id === 'sbtExit' && (sm.info.multi || []).indexOf('spbSave') >= 0;
++        var bl0 = btn.style.left, xl0 = ex0.style.left;
++        var nb = edits().length;
++        mouse('mousedown', ex0, er.left + 5, er.top + 5);
++        mouse('mousemove', ex0, er.left + 5 + 4, er.top + 5, ALT);
++        mouse('mousemove', ex0, er.left + 5 + 8, er.top + 5, ALT);
++        mouse('mouseup', ex0, er.left + 5 + 8, er.top + 5);
++        var eb = edits()[nb];
++        R.groupEdit = eb ? eb.what + ' ' + (eb.edits || []).map(function (x) { return x.id + JSON.stringify(x.style); }).join(' ') : null;
++        R.groupOk = !!eb && eb.what === 'batch' && eb.edits.length === 2 &&
++          btn.style.left === (parseFloat(bl0) + 8) + 'px' && ex0.style.left === (parseFloat(xl0) + 8) + 'px';
++        var na = edits().length;
++        window.__htdProbe.message({ type: 'align', how: 'top' });   // primary = sbtExit, other = spbSave
++        var ea = edits()[na];
++        var aTopDiff = Math.abs(btn.getBoundingClientRect().top - ex0.getBoundingClientRect().top);
++        R.alignEdit = ea ? ea.what + ' ' + ea.id + JSON.stringify(ea.style) + ' topDiff=' + aTopDiff.toFixed(1) : null;
++        R.alignOk = !!ea && ea.id === 'spbSave' && aTopDiff < 0.5;
++      }
++      /* snaplines: drag the Save button up so its top comes within 5px of lines of the
++         Exit button / the panel -- it must land ON a line, and the guide is drawn */
++      var ex = document.getElementById('sbtExit');
++      if (ex) {
++        window.__htdProbe.selectById('spbSave');     // a single selection again
++        btn.style.top = '30px';                     // away from every line first (DOM only)
++        window.__htdProbe.drawNow();
++        var br = btn.getBoundingClientRect(), xr = ex.getBoundingClientRect();
++        var want = xr.top + 2 - br.top;                 // 2px below the Exit button's top
++        var sx0 = br.left + 5, sy0 = br.top + 5;
++        var ns = edits().length;
++        mouse('mousedown', btn, sx0, sy0);
++        mouse('mousemove', btn, sx0, sy0 + want / 2);
++        mouse('mousemove', btn, sx0, sy0 + want);
++        window.__htdProbe.drawNow();
++        var gy = host && host.shadowRoot ? host.shadowRoot.querySelector('.gy') : null;
++        R.snapGuide = !!gy && gy.style.display === 'block';
++        mouse('mouseup', btn, sx0, sy0 + want);
++        var es = edits()[ns];
++        var topNow = btn.getBoundingClientRect().top;
++        R.snapEdit = es ? JSON.stringify(es.style) + ' offBy=' + (topNow - (br.top + want)).toFixed(1) : null;
++        R.snapOk = !!es && Math.abs(topNow - (br.top + want)) >= 0.5 && Math.abs(topNow - (br.top + want)) <= 5;
++      }
+       /* keyboard: Esc = parent, Tab = next, arrows = nudge (one edit per burst) */
+       window.__htdProbe.selectById('spbSave');
+       var key = function (k, extra) {
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index a7d8821..de16765 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -48,7 +48,10 @@ foreach ($p in $Pages) {
+       'ready'                      = [bool]$R.ready
+       'tree has the form root'     = [bool]$R.treeHasForm
+       'design mode blocks clicks'  = [bool]$R.blockedInDesign
+-      'Ctrl+click operates'        = [bool]$R.ctrlClickOperates
++      'operate mode operates'      = [bool]$R.operateModeOperates
++      'Ctrl+click multi-selects'   = [bool]$R.multiOk
++      'group drag = one batch edit' = [bool]$R.groupOk
++      'align top'                  = [bool]$R.alignOk
+       'Enter opens the event'      = [bool]$R.keyEnterOpens
+       'CSP blocked ws://127.0.0.1:9' = [bool](@($R.violations) -match 'ws://127\.0\.0\.1:9').Count
+       'no page JS errors'          = (@($R.pageErrors).Count -eq 0)
+@@ -60,6 +63,7 @@ foreach ($p in $Pages) {
+       'caption edit'               = [bool]$R.captionOk
+       'Esc selects the parent'     = [bool]$R.escParent
+       'Tab selects the next'       = [bool]$R.tabNext
++      'snaps to a line, guide drawn' = ([bool]$R.snapOk -and [bool]$R.snapGuide)
+     }
+     if ($R.PSObject.Properties.Name -contains 'hiddenTarget') { $must['hidden tab revealed'] = [bool]$R.hiddenTabRevealed }
+     if ($R.PSObject.Properties.Name -contains 'wrapperEdit') { $must['input moves its wrapper'] = [bool]$R.wrapperOk }
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index f9fa3e4..40aee53 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -354,6 +354,17 @@ async function main() {
+   ok(/>Save &lt;2&gt;<\/button>/.test(text), 'caption edit -> button text, HTML-escaped');
+   ok(/<legend[^>]*>Plates<\/legend>/.test(text), 'caption edit -> GroupBox legend');
+   ok(/id="XST1"[^>]*value="1\.5"[^>]*disabled>/.test(text), 'value + disabled edits on <input id="XST1"> (queued, applied in order)', tagNow('XST1').slice(-60));
++  // a group drag / align: several tags in ONE WorkspaceEdit (one undo step)
++  const callsBefore = fake._calls.filter(c => c.name === 'applyEditCall').length;
++  pageRecv({ __htd: 1, type: 'edit', what: 'batch', edits: [
++    { what: 'style', id: 'spbSave', target: 'self', style: { top: '9px' } },
++    { what: 'style', id: 'sbtExit', target: 'self', style: { top: '9px' } },
++    { what: 'style', id: 'Panel2', target: 'self', style: { top: '475px' } },   // unchanged: not written
++  ] });
++  await wait(50);
++  const calls = fake._calls.filter(c => c.name === 'applyEditCall').slice(callsBefore);
++  ok(calls.length === 1 && calls[0].args[0] === 2 && /id="spbSave"[^>]*top:9px;/.test(text) && /id="sbtExit"[^>]*top:9px;/.test(text),
++    'batch edit (align top) -> 2 changed tags in ONE WorkspaceEdit, the unchanged one skipped', JSON.stringify(calls.map(c => c.args[0])));
+   const textBefore = text;
+   const refusedBefore = fake._calls.length;
+   pageRecv({ __htd: 1, type: 'edit', what: 'style', id: 'noSuchControl', target: 'self', style: { left: '1px' } });
+@@ -361,6 +372,7 @@ async function main() {
+   ok(text === textBefore, 'an id that is not in the source is refused, text untouched');
+   // everything outside the edited tags is byte-identical to the file on disk
+   const strip = s => s.replace(/<button class="btn3d" id="spbSave"[^>]*>[\s\S]*?<\/button>/, '')
++    .replace(/<button class="btn3d exitbtn" id="sbtExit"[^>]*>/, '')
+     .replace(/<legend[^>]*>(Plate of Use|Plates)<\/legend>/, '')
+     .replace(/<span style="position:absolute;left:1\d\dpx;top:58px;width:61px;height:24px;"><input class="ed" id="XST1"[^>]*>/, '');
+   ok(strip(text) === strip(ORIGINAL), 'nothing else in the page changed');
+-- 
+2.55.0.windows.5
+

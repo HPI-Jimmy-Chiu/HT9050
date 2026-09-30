@@ -1,0 +1,408 @@
+From 6e9d1ac71bfa0de9e065c198586ec052781e5a84 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 18:37:12 +0800
+Subject: [PATCH] HTDESIGNER-14: compare with DFM / reset to DFM value in the
+ property grid (0.14.0)
+
+WPF "Reset Value": every editable property shows the BCB6 .dfm value beside it;
+a row whose page value differs is marked and gets a reset button that writes the
+DFM value back (one undo step, like any other edit).
+
+- lib/format.js dfmEditValues(node): only what the DFM actually says (a default
+  or ParentFont property stays null, not guessed); the & accelerator is dropped
+  from Caption; a system colour (clBtnFace ...) is given by name only -- its RGB
+  is the Windows theme's, so it is not compared (5,268 of 14,641 colours in the IR).
+- Font.Name counts as the same when the page's font list names the DFM font
+  (the pages use "Microsoft JhengHei","MS Sans Serif" on purpose); the probe now
+  reports the whole family list.
+- Measured over all pages: position/size equal to the DFM 12,228, different 432
+  (mostly pop-up panels the web author moved on purpose).
+- vscode_it.ps1 -AllPages also sweeps web\*.html: 128 pass / 0 fail, all files
+  MD5-unchanged (background.html, boot_wait.html, pci1203.html included).
+
+Tests: lib 91, probe, smoke 54, panels (Font.Size / Font.Bold exactly the marked
+rows on spbSave, reset posts fontSize=16), real VS Code 55 -- all pass.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             | 13 ++++
+ tools/vscode-htdesigner/extension.js          |  3 +
+ tools/vscode-htdesigner/lib/format.js         | 56 ++++++++++++++++-
+ tools/vscode-htdesigner/media/probe.js        |  1 +
+ tools/vscode-htdesigner/media/props.css       |  5 ++
+ tools/vscode-htdesigner/media/props.js        | 61 +++++++++++++++----
+ tools/vscode-htdesigner/package.json          |  2 +-
+ .../test/integration/index.js                 |  6 ++
+ .../vscode-htdesigner/test/panels_render.ps1  | 15 +++++
+ tools/vscode-htdesigner/test/run_tests.js     | 16 +++++
+ tools/vscode-htdesigner/test/vscode_it.ps1    |  4 +-
+ 11 files changed, 166 insertions(+), 16 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index e5d229f..d87e2aa 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -66,6 +66,19 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ 表單本身（元件樹最上面那一個）可以改 `Width`／`Height`，跟 WPF 拉 Window 的大小一樣，但不能移動。
+ 輸入後按 Enter 或離開欄位就生效（跟 WPF 的屬性視窗一樣），畫面和 HTML 原始碼同時改。
+ 
++**跟 DFM 比對、重設為 DFM 值**（WPF 的「重設值」）：每個欄位旁邊灰字 `DFM …` 是 BCB6 `.dfm` 裡的原值。
++網頁的值跟它**不一樣**時，那一列會標成警告色，旁邊出現 **↺**，按下去就改回 DFM 的值（一樣是一個復原步驟）。
++例如 `spbSave`：位置、大小、文字都跟 DFM 一樣；`Font.Size`（網頁 14、DFM 16）和 `Font.Bold` 不一樣，
++因為網頁把存檔按鈕統一成一種樣式 —— **不一樣不代表錯**，網頁作者常常是刻意調的，要不要改回去由你決定。
++
++- 只比 DFM **有寫的**屬性。DFM 沒寫（用預設值、或 `ParentFont`）的欄位不顯示 DFM 值，不去猜。
++- `&Save` 的 `&` 是 VCL 的快捷鍵記號，比對時當成 `Save`。
++- **系統色**（`clBtnFace`、`clWindowText`……）只顯示名稱、不比對：它的實際顏色看 Windows 佈景
++  （同一個 `clBtnFace`，傳統佈景是 `#d4d0c8`、XP 佈景是 `#ece9d8`）。
++- 字型：網頁的字型清單裡**有** DFM 的字型就算一樣（這些頁面刻意用 `"Microsoft JhengHei","MS Sans Serif"`，
++  先用正黑體顯示中文）。
++- 實測全部頁面：位置／大小跟 DFM 一致的有 12,228 個、不一樣的 432 個（大多是網頁刻意移過的彈出面板）。
++
+ **改到哪裡**：跟 WPF 改 XAML 一樣，改的是這一頁的 **HTML 原始碼**，而且只動被改到的那一小段：
+ 
+ - 位置／大小：元件自己標籤的 `style` 裡的 `left/top/width/height`（或 `right/bottom`，看它原本怎麼錨定）。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 1ab1861..f691123 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -496,6 +496,9 @@ class Hub {
+       layoutInSource: !!(edTag && info.layout && (info.layout.target === 'self' || edWrap)),
+       dirty: !!d.doc.isDirty,
+       multi: Array.isArray(info.multi) && info.multi.length ? info.multi : null,
++      // (the form's DFM Width/Height are the whole window incl. caption and borders,
++      // not the page's client area: nothing comparable, so no DFM values for it)
++      dfm: node && !isForm ? fmt.dfmEditValues(node) : null,
+     };
+ 
+     const data = {
+diff --git a/tools/vscode-htdesigner/lib/format.js b/tools/vscode-htdesigner/lib/format.js
+index 2848948..306a412 100644
+--- a/tools/vscode-htdesigner/lib/format.js
++++ b/tools/vscode-htdesigner/lib/format.js
+@@ -88,6 +88,24 @@ function tcolor(v) {
+   return '#' + hex2(v) + hex2(v >> 8) + hex2(v >> 16);
+ }
+ 
++/** The system colour's name (clBtnFace ...) when v is one, else null: its RGB depends on the Windows theme. */
++function sysColorName(v) {
++  if (typeof v === 'string') {
++    if (SYS.includes(v)) return v;
++    if (/^\$[0-9a-f]+$/i.test(v)) v = parseInt(v.slice(1), 16);
++    else if (/^-?\d+$/.test(v)) v = parseInt(v, 10);
++    else return null;
++  }
++  if (typeof v !== 'number' || !isFinite(v)) return null;
++  if (v < 0 || v >= 0x80000000) return SYS[v & 0xff] || null;
++  return null;
++}
++
++/** A VCL caption as shown: "&Save" -> "Save", "A && B" -> "A & B" (the & marks the accelerator). */
++function vclText(s) {
++  return String(s).replace(/&&|&/g, m => (m === '&&' ? '&' : ''));
++}
++
+ /** One DFM property -> [key, text, colour|null, hint|null]. */
+ function formatProp(key, prop) {
+   const type = prop && prop.type;
+@@ -133,4 +151,40 @@ function formatProps(properties) {
+     .map(k => formatProp(k, properties[k]));
+ }
+ 
+-module.exports = { DOM_OF, domTypesOf, defaultEvent, parseVclTitle, tcolor, formatProp, formatProps };
++/**
++ * The DFM (BCB6) values of the properties the designer can edit, in the designer's
++ * terms, for "compare with DFM" / "reset to DFM". Only what the DFM actually says:
++ * a property the DFM leaves at its default is missing here (null), not guessed.
++ * A system colour (clBtnFace ...) is not given as RGB -- its colour is the Windows
++ * theme's, so there is nothing to compare -- only its name (colorSys / backgroundSys).
++ *   node: an IR node (properties + geometry)
++ */
++function dfmEditValues(node) {
++  if (!node) return null;
++  const p = node.properties || {};
++  const val = k => (p[k] && p[k].value !== undefined ? p[k].value : null);
++  const g = node.geometry || {};
++  const fc = val('Font.Color');
++  const bg = val('Color');
++  const out = {
++    left: typeof g.left === 'number' ? g.left : null,
++    top: typeof g.top === 'number' ? g.top : null,
++    width: typeof g.width === 'number' ? g.width : null,
++    height: typeof g.height === 'number' ? g.height : null,
++    caption: val('Caption') != null ? vclText(val('Caption')) : null,
++    text: val('Text') != null ? String(val('Text')) : null,
++    fontName: val('Font.Name') != null ? String(val('Font.Name')) : null,
++    fontSize: typeof val('Font.Height') === 'number' ? Math.abs(val('Font.Height')) : null,
++    bold: Array.isArray(val('Font.Style')) ? val('Font.Style').includes('fsBold') : null,
++    italic: Array.isArray(val('Font.Style')) ? val('Font.Style').includes('fsItalic') : null,
++    color: fc != null && !sysColorName(fc) ? tcolor(fc) : null,
++    colorSys: fc != null ? sysColorName(fc) : null,
++    background: bg != null && !sysColorName(bg) ? tcolor(bg) : null,
++    backgroundSys: bg != null ? sysColorName(bg) : null,
++    visible: val('Visible') != null ? String(val('Visible')) !== 'False' : null,
++    enabled: val('Enabled') != null ? String(val('Enabled')) !== 'False' : null,
++  };
++  return out;
++}
++
++module.exports = { DOM_OF, domTypesOf, defaultEvent, parseVclTitle, tcolor, sysColorName, vclText, formatProp, formatProps, dfmEditValues };
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index 4548180..b135d14 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -532,6 +532,7 @@
+       enabled: form ? !el.disabled : null,
+       fontSize: Math.round(parseFloat(cs.fontSize) || 0),
+       fontName: String(cs.fontFamily || '').split(',')[0].replace(/^["']|["']$/g, '').trim(),
++      fontFamilies: String(cs.fontFamily || '').split(',').map(function (f) { return f.trim().replace(/^["']|["']$/g, ''); }).filter(Boolean),
+       bold: (parseInt(cs.fontWeight, 10) || 400) >= 600 || cs.fontWeight === 'bold',
+       italic: cs.fontStyle === 'italic',
+       color: hexOf(cs.color),
+diff --git a/tools/vscode-htdesigner/media/props.css b/tools/vscode-htdesigner/media/props.css
+index 9b80a3a..1d5e940 100644
+--- a/tools/vscode-htdesigner/media/props.css
++++ b/tools/vscode-htdesigner/media/props.css
+@@ -93,6 +93,11 @@ table.edit td.v input.num { width: 80px; }
+ table.edit td.v input.txt { width: calc(100% - 8px); }
+ table.edit td.v input:focus { outline: 1px solid var(--vscode-focusBorder); }
+ table.edit td.v input:disabled { opacity: .5; }
++table.edit .dfmv { margin-left: 8px; font-size: .88em; color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family); }
++table.edit tr.diff td.k { color: var(--vscode-editorWarning-foreground); }
++table.edit tr.diff .dfmv { color: var(--vscode-editorWarning-foreground); }
++table.edit button.reset { margin-left: 4px; padding: 0 5px; line-height: 1.3; }
++.diffnote { color: var(--vscode-editorWarning-foreground); }
+ table.edit td.v input.col { width: 34px; height: 18px; padding: 0; border: 1px solid var(--vscode-input-border, rgba(128,128,128,.5)); vertical-align: middle; }
+ .foot { padding: 8px 12px; color: var(--vscode-descriptionForeground); font-size: .9em; line-height: 1.5; }
+ .fname { font-family: var(--vscode-editor-font-family); color: var(--vscode-foreground); }
+diff --git a/tools/vscode-htdesigner/media/props.js b/tools/vscode-htdesigner/media/props.js
+index 35f1906..cb3cd6b 100644
+--- a/tools/vscode-htdesigner/media/props.js
++++ b/tools/vscode-htdesigner/media/props.js
+@@ -152,17 +152,50 @@
+       });
+     }
+     if (ed && (ed.layout || ed.caption || ed.look)) {
++      var dfm = ed.dfm || {};
++      var diffs = 0;
+       section('edit', '外觀與版面（可編輯）', null, function (body) {
+         var tb = el('table', 'kv edit');
+-        function row(label, input, hint) {
++        /* dv = the DFM (BCB6) value, cur = the page's; different -> marked, ↺ resets */
++        function same(a, b) {
++          if (typeof a === 'number' || typeof b === 'number') return Math.round(+a) === Math.round(+b);
++          if (typeof a === 'boolean' || typeof b === 'boolean') return !!a === !!b;
++          return String(a == null ? '' : a).trim().toLowerCase() === String(b == null ? '' : b).trim().toLowerCase();
++        }
++        function row(label, input, hint, dv, cur, onReset, sysName) {
+           var tr = el('tr');
+           tr.appendChild(el('td', 'k', label));
+           var td = el('td', 'v');
+           td.appendChild(input);
+           if (hint) td.appendChild(el('span', 'hint', hint));
++          if ((dv === null || dv === undefined) && sysName) {
++            /* clBtnFace ...: the Windows theme's colour -- nothing to compare */
++            var sy = el('span', 'dfmv', 'DFM ' + sysName + '（系統色）');
++            sy.title = '系統色的實際顏色看 Windows 佈景，不比對';
++            td.appendChild(sy);
++          } else if (dv !== null && dv !== undefined && onReset) {
++            var shown = typeof dv === 'boolean' ? (dv ? 'True' : 'False') : String(dv);
++            var d = el('span', 'dfmv', 'DFM ' + shown);
++            if (!same(dv, cur)) {
++              diffs++;
++              tr.className = 'diff';
++              d.title = '和 BCB6 .dfm 的值不同';
++              var rb = el('button', 'reset', '↺');
++              rb.title = '重設為 DFM 值（' + shown + '）';
++              rb.disabled = input.disabled;
++              rb.addEventListener('click', function () { onReset(dv); });
++              td.appendChild(d);
++              td.appendChild(rb);
++            } else {
++              d.title = '和 BCB6 .dfm 的值相同';
++              td.appendChild(d);
++            }
++          }
+           tr.appendChild(td);
+           tb.appendChild(tr);
+         }
++        var setLay = function (k) { return function (v) { var msg = { type: 'setLayout' }; msg[k] = v; vscode.postMessage(msg); }; };
++        var setLook = function (k) { return function (v) { vscode.postMessage({ type: 'setLook', prop: k, value: v }); }; };
+         function num(field, value, disabled, onCommit) {
+           var i = el('input', 'num');
+           i.type = 'number'; i.step = '1'; i.value = String(value);
+@@ -177,11 +210,8 @@
+         if (lay) {
+           (lay.root ? ['width', 'height'] : ['left', 'top', 'width', 'height']).forEach(function (k) {
+             var label = k.charAt(0).toUpperCase() + k.slice(1);
+-            row(label, num(k, lay[k], !layOk, function (v) {
+-              var msg = { type: 'setLayout' };
+-              msg[k] = v;
+-              vscode.postMessage(msg);
+-            }), k === 'left' && lay.target === 'parent' ? '（外層 span 定位）' : '');
++            row(label, num(k, lay[k], !layOk, setLay(k)), k === 'left' && lay.target === 'parent' ? '（外層 span 定位）' : '',
++              dfm[k], lay[k], setLay(k));
+           });
+         }
+         var cap = ed.caption;
+@@ -191,40 +221,45 @@
+           ti.disabled = !ed.inSource;
+           ti.addEventListener('change', function () { vscode.postMessage({ type: 'setCaption', value: ti.value }); });
+           ti.addEventListener('keydown', function (e) { if (e.key === 'Enter') ti.blur(); });
+-          row(cap.kind === 'value' ? 'Text' : 'Caption', ti, '');
++          row(cap.kind === 'value' ? 'Text' : 'Caption', ti, '', cap.kind === 'value' ? dfm.text : dfm.caption, cap.value,
++            function (v) { vscode.postMessage({ type: 'setCaption', value: v }); });
+         }
+         var lk = ed.look;
+         if (lk) {
+           var vis = el('input');
+           vis.type = 'checkbox'; vis.checked = !!lk.visible; vis.setAttribute('data-field', 'visible'); vis.disabled = !ed.inSource;
+           vis.addEventListener('change', function () { vscode.postMessage({ type: 'setLook', prop: 'visible', value: vis.checked }); });
+-          row('Visible', vis, '');
++          row('Visible', vis, '', dfm.visible, lk.visible, setLook('visible'));
+           if (lk.enabled !== null && lk.enabled !== undefined) {
+             var en = el('input');
+             en.type = 'checkbox'; en.checked = !!lk.enabled; en.setAttribute('data-field', 'enabled'); en.disabled = !ed.inSource;
+             en.addEventListener('change', function () { vscode.postMessage({ type: 'setLook', prop: 'enabled', value: en.checked }); });
+-            row('Enabled', en, '');
++            row('Enabled', en, '', dfm.enabled, lk.enabled, setLook('enabled'));
+           }
+           var fname = el('input', 'txt');
+           fname.type = 'text'; fname.value = lk.fontName || ''; fname.setAttribute('data-field', 'fontName'); fname.disabled = !ed.inSource;
+           fname.addEventListener('change', function () { vscode.postMessage({ type: 'setLook', prop: 'fontName', value: fname.value }); });
+           fname.addEventListener('keydown', function (e) { if (e.key === 'Enter') fname.blur(); });
+-          row('Font.Name', fname, '');
+-          row('Font.Size', num('fontSize', lk.fontSize, !ed.inSource, function (v) { vscode.postMessage({ type: 'setLook', prop: 'fontSize', value: v }); }), 'px');
++          /* the page's font list names the DFM font (e.g. "Microsoft JhengHei","MS Sans Serif") -> same */
++          var fams = lk.fontFamilies || [];
++          var famHit = dfm.fontName && fams.some(function (f) { return f.toLowerCase() === String(dfm.fontName).toLowerCase(); });
++          row('Font.Name', fname, fams.length > 1 ? '（清單：' + fams.join(', ') + '）' : '', dfm.fontName, famHit ? dfm.fontName : lk.fontName, setLook('fontName'));
++          row('Font.Size', num('fontSize', lk.fontSize, !ed.inSource, setLook('fontSize')), 'px', dfm.fontSize, lk.fontSize, setLook('fontSize'));
+           [['bold', 'Font.Bold'], ['italic', 'Font.Italic']].forEach(function (p) {
+             var cb = el('input');
+             cb.type = 'checkbox'; cb.checked = !!lk[p[0]]; cb.setAttribute('data-field', p[0]); cb.disabled = !ed.inSource;
+             cb.addEventListener('change', function () { vscode.postMessage({ type: 'setLook', prop: p[0], value: cb.checked }); });
+-            row(p[1], cb, '');
++            row(p[1], cb, '', dfm[p[0]], lk[p[0]], setLook(p[0]));
+           });
+           [['color', 'Font.Color'], ['background', 'Color']].forEach(function (p) {
+             var c = el('input', 'col');
+             c.type = 'color'; c.value = lk[p[0]] || (p[0] === 'color' ? '#000000' : '#ffffff');
+             c.setAttribute('data-field', p[0]); c.disabled = !ed.inSource;
+             c.addEventListener('change', function () { vscode.postMessage({ type: 'setLook', prop: p[0], value: c.value }); });
+-            row(p[1], c, lk[p[0]] ? lk[p[0]] : '（未設定）');
++            row(p[1], c, lk[p[0]] ? lk[p[0]] : '（未設定）', dfm[p[0]], lk[p[0]], setLook(p[0]), dfm[p[0] + 'Sys']);
+           });
+         }
++        if (diffs) body.appendChild(el('div', 'pad small diffnote', '有 ' + diffs + ' 項和 BCB6 .dfm 的值不同（標色的列）；按 ↺ 改回 DFM 的值。'));
+         body.appendChild(tb);
+         var note;
+         if (!ed.inSource) note = '這個元件是頁面 JS 產生的，HTML 原始碼裡沒有它，不能在這裡改。';
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 7787ce6..4632fc6 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.13.0",
++  "version": "0.14.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 1ef8d68..46ca9a3 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -79,6 +79,12 @@ exports.run = async function () {
+     // properties view got it
+     const pv = await waitFor(() => (hub.props.view && hub.props.data && hub.props.data.comp && hub.props.data.comp.htmlId === 'spbSave' ? hub.props.view : null), 5000);
+     ok(!!pv, 'properties panel resolved and showing spbSave');
++    // compare with DFM: the page's look (real webview) next to the .dfm values
++    const ed0 = pv ? hub.props.data.edit : null;
++    ok(ed0 && ed0.dfm && ed0.dfm.left === ed0.layout.left && ed0.dfm.fontSize === 16 && ed0.look && ed0.look.fontSize !== 16 &&
++      Array.isArray(ed0.look.fontFamilies) && ed0.look.fontFamilies.length >= 1,
++      'panel data: DFM values beside the page values (Left same, Font.Size differs)',
++      ed0 ? 'dfm.fontSize=' + (ed0.dfm && ed0.dfm.fontSize) + ' page=' + (ed0.look && ed0.look.fontSize) + ' families=' + (ed0.look && (ed0.look.fontFamilies || []).join('|')) : '-');
+ 
+     // BCB6: open (eventJump=golden set by the launcher), Big5, read-only
+     await hub.openEvent(data, ci, d);
+diff --git a/tools/vscode-htdesigner/test/panels_render.ps1 b/tools/vscode-htdesigner/test/panels_render.ps1
+index 55a40d8..b80b5d5 100644
+--- a/tools/vscode-htdesigner/test/panels_render.ps1
++++ b/tools/vscode-htdesigner/test/panels_render.ps1
+@@ -79,6 +79,17 @@ R.capVal = cap ? cap.value : null;
+ if (left) { left.value = '77'; left.dispatchEvent(new Event('change')); }
+ if (cap) { cap.value = 'OK'; cap.dispatchEvent(new Event('change')); }
+ R.afterEdit = window.__out.slice(-2).map(function (m) { return m.type + ':' + (m.left != null ? m.left : m.value); });
++/* compare with DFM: the marked rows, the DFM hints, the reset button */
++R.diffRows = Array.prototype.map.call(document.querySelectorAll('table.edit tr.diff td.k'), function (t) { return t.textContent; });
++R.dfmHints = document.querySelectorAll('table.edit .dfmv').length;
++R.sysHint = txt.indexOf('DFM clWindowText（系統色）') >= 0;
++R.diffNote = !!document.querySelector('.diffnote');
++var fsRow = null;
++Array.prototype.forEach.call(document.querySelectorAll('table.edit tr'), function (tr) { if (tr.firstChild.textContent === 'Font.Size') fsRow = tr; });
++var rb = fsRow && fsRow.querySelector('button.reset');
++if (rb) rb.click();
++var lastMsg = window.__out[window.__out.length - 1] || {};
++R.afterReset = rb ? lastMsg.type + ':' + lastMsg.prop + '=' + lastMsg.value : 'no reset button';
+ '@
+ $r1 = Render 'props_spbSave' 'props.css' 'props.js' 'show' (Join-Path $dump 'props_spbSave.json') $propsChecks
+ if ($r1) {
+@@ -89,6 +100,10 @@ if ($r1) {
+   Check (($r1.afterDbl -join ',') -match 'openEvent') 'double-click on an event row posts openEvent' ($r1.afterDbl -join ',')
+   Check ($r1.hasEdit -and $r1.leftVal -eq '54' -and $r1.capVal -eq 'Save') 'editable section: Left = 54, Caption = Save' "left=$($r1.leftVal) caption=$($r1.capVal)"
+   Check (($r1.afterEdit -join ',') -eq 'setLayout:77,setCaption:OK') 'changing Left / Caption posts setLayout / setCaption' ($r1.afterEdit -join ',')
++  # the page's save style is 14px bold; the DFM says Font.Height = -16, no fsBold; position/size/caption = DFM
++  Check ((($r1.diffRows | Sort-Object) -join ',') -eq 'Font.Bold,Font.Size' -and $r1.diffNote) 'compare with DFM: exactly Font.Size / Font.Bold marked' ($r1.diffRows -join ',')
++  Check ($r1.dfmHints -ge 8 -and $r1.sysHint) 'DFM hints on the rows, system colour shown by name only' "hints=$($r1.dfmHints) sys=$($r1.sysHint)"
++  Check ($r1.afterReset -eq 'setLook:fontSize=16') 'reset button posts the DFM value' $r1.afterReset
+ } else { $script:bad++ }
+ $r2 = Render 'props_XST1' 'props.css' 'props.js' 'show' (Join-Path $dump 'props_XST1.json') $propsChecks
+ if ($r2) {
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index f86c973..e50a9cf 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -395,6 +395,22 @@ async function main() {
+   const v = fmt.parseVclTitle('spbSave : TSpeedButton（統一 save 樣式）');
+   ok(v && v.cls === 'TSpeedButton' && v.note === '統一 save 樣式', 'parseVclTitle', JSON.stringify(v));
+   ok(fmt.formatProps(sp.properties).every(p => !/^On[A-Z]/.test(p[0])), 'formatProps drops On* events');
++
++  // --- compare with DFM / reset to DFM
++  const dv = fmt.dfmEditValues(sp);
++  ok(dv && dv.left === 54 && dv.top === 8 && dv.width === 227 && dv.height === 40 && dv.caption === 'Save',
++    'dfmEditValues(spbSave): geometry + Caption', JSON.stringify(dv));
++  const syn = fmt.dfmEditValues({ geometry: {}, properties: {
++    Caption: { type: 'STR', value: '&Save && Exit' }, Color: { type: 'SCALAR', value: 'clBtnFace' },
++    'Font.Color': { type: 'SCALAR', value: 255 }, 'Font.Style': { type: 'SET', value: ['fsBold'] },
++    'Font.Height': { type: 'SCALAR', value: -13 }, Visible: { type: 'SCALAR', value: 'False' } } });
++  ok(syn.caption === 'Save & Exit' && syn.background === null && syn.backgroundSys === 'clBtnFace' && syn.color === '#ff0000' &&
++    syn.colorSys === null && syn.bold === true && syn.italic === false && syn.fontSize === 13 && syn.visible === false &&
++    syn.enabled === null && syn.left === null && syn.fontName === null,
++    'dfmEditValues: & accelerator dropped, system colour by name only, only what the DFM says', JSON.stringify(syn));
++  ok(fmt.sysColorName(-2147483633) === 'clBtnFace' && fmt.sysColorName('$8000000F') === 'clBtnFace' &&
++    fmt.sysColorName('clRed') === null && fmt.sysColorName(255) === null, 'sysColorName: system vs fixed colours');
++  ok(fmt.dfmEditValues(null) === null, 'dfmEditValues(null)');
+ }
+ 
+ main().catch(e => { fail++; log('CRASH ' + (e && e.stack || e)); }).then(() => {
+diff --git a/tools/vscode-htdesigner/test/vscode_it.ps1 b/tools/vscode-htdesigner/test/vscode_it.ps1
+index c58f93b..774f5be 100644
+--- a/tools/vscode-htdesigner/test/vscode_it.ps1
++++ b/tools/vscode-htdesigner/test/vscode_it.ps1
+@@ -24,7 +24,9 @@ $webRoot = Join-Path (Split-Path $port -Parent) 'web'
+ if (-not $Page) { $Page = Join-Path $webRoot 'page\Setup.HotPlate.html' }
+ $golden = Get-ChildItem (Split-Path (Split-Path $port -Parent) -Parent) -Directory -Filter 'HT9011UC_Code_V*' | Select-Object -First 1
+ if ($AllPages) {
+-  $Sweep = @(Get-ChildItem (Split-Path $Page -Parent) -File -Filter *.html | Where-Object { $_.Name -ne (Split-Path $Page -Leaf) } | Sort-Object Name | ForEach-Object { $_.Name })
++  # every page of web\page, plus web\*.html (as ..\name.html, relative to web\page)
++  $Sweep = @(Get-ChildItem (Split-Path $Page -Parent) -File -Filter *.html | Where-Object { $_.Name -ne (Split-Path $Page -Leaf) } | Sort-Object Name | ForEach-Object { $_.Name }) +
++    @(Get-ChildItem $webRoot -File -Filter *.html | Sort-Object Name | ForEach-Object { '..\' + $_.Name })
+   if ($TimeoutSec -lt 900) { $TimeoutSec = 1200 }
+ }
+ $code = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\Code.exe'
+-- 
+2.55.0.windows.5
+

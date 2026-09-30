@@ -1,0 +1,200 @@
+From c32e46ff78a02e31b3f518b2d4a9cf16e7992175 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 17:12:42 +0800
+Subject: [PATCH] HTDESIGNER-8: keyboard navigation in the designer, events on
+ the hover label (0.8.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- design mode, a component selected: Up = parent component, Down = first child,
+  Left/Right = previous/next sibling (the same hierarchy as the component tree),
+  Enter = open the default event's code, Esc = clear. Only plain keys are taken;
+  every modified key (VS Code shortcuts) is left alone
+- hover / selection label: "spbSave : TSpeedButton · OnClick   227x40" (events
+  from the IR, sent with init)
+- the HTML source follows keyboard selection too
+
+Tests: probe keyboard checks on Setup.HotPlate / Setup.Speed (Up -> Panel2,
+Down -> spbSave, Right -> sbtExit, Enter -> default event) plus all layers.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md            |  5 +++
+ tools/vscode-htdesigner/extension.js         | 12 +++--
+ tools/vscode-htdesigner/media/probe.js       | 46 ++++++++++++++++++--
+ tools/vscode-htdesigner/package.json         |  2 +-
+ tools/vscode-htdesigner/test/probe_driver.js | 14 ++++++
+ 5 files changed, 72 insertions(+), 7 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index ff7cf11..3f0c6df 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -42,8 +42,13 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-0.1.0
+ | Alt＋點 | 選最內層的 HTML 元素（沒有 id 的也可以） |
+ | Ctrl＋點 | 把這一下點擊交給頁面自己處理（例如展開下拉選單） |
+ | 點分頁標籤 | 照樣切換分頁 |
++| ↑ ／ ↓ | 選上層元件／第一個子元件（跟元件樹的層次一樣） |
++| ← ／ → | 同一層的前一個／下一個元件 |
++| Enter | 跳到選取元件的預設事件程式碼（同雙擊） |
+ | Esc | 取消選取 |
+ 
++滑鼠移到元件上，標籤會顯示 `名稱 : 型別 · 事件`，例如 `spbSave : TSpeedButton · OnClick   227×40`。
++
+ **「元件」樹**：頁面上所有有名字的元件，照 DFM 的層次排列。點一下＝在畫面上選取；
+ 選到在隱藏分頁裡的元件時，會自動切到那一頁。每一列右邊兩個圖示＝跳到 DFM 定義／跳到 HTML 原始碼。
+ 
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 3112f05..7aa6497 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -263,7 +263,7 @@ class Hub {
+     const seq = ++this.selSeq;
+     if (!info) { d.sel = null; this.showProps(d, null); return; }
+     if (origin !== 'tree') this.tree.reveal(info.key);
+-    if (origin === 'click' || origin === 'tree' || origin === 'find') this.syncSource(d, info.id);
++    if (origin === 'click' || origin === 'tree' || origin === 'find' || origin === 'key') this.syncSource(d, info.id);
+     const sel = { info, data: null, promise: null };
+     d.sel = sel;
+     sel.promise = this.resolve(d, info, partial => {
+@@ -1155,11 +1155,17 @@ class Designer {
+         // runtime, so the probe gets the VCL class of every name from the IR
+         const send = pi => {
+           const classes = {};
++          const events = {};
+           if (pi && pi.ir) {
+-            for (const [n, node] of pi.ir.byName) classes[n] = node.class;
++            for (const [n, node] of pi.ir.byName) {
++              classes[n] = node.class;
++              const ev = Object.keys(node.events || {});
++              if (ev.length && node !== pi.ir.root) events[n] = ev;
++            }
+             if (pi.ir.formClass) classes['@form'] = pi.ir.formClass;
++            if (pi.ir.root && pi.ir.root.events) events['@form'] = Object.keys(pi.ir.root.events);
+           }
+-          this.post({ type: 'init', mode: this.mode, selectId: this.lastSelId, scroll: this.scroll, classes });
++          this.post({ type: 'init', mode: this.mode, selectId: this.lastSelId, scroll: this.scroll, classes, events });
+         };
+         this.info.then(send, () => send(null));
+         clearTimeout(this.diagTimer);
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index baa2fb4..21eb06f 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -191,6 +191,7 @@
+   function isTab(t) { return !!closestSafe(t, '.pcTabs > .tab, .tabs > .tab, [role="tab"]'); }
+ 
+   var CLS = {};   /* name -> VCL class, from the IR (sent with 'init') */
++  var EVS = {};   /* name -> ["OnClick", ...], from the IR (sent with 'init') */
+   function vclOf(el) {
+     var t = (el && el.getAttribute && el.getAttribute('title')) || '';
+     var m = /^\s*([A-Za-z_@][\w]*)\s*:\s*(T\w+)/.exec(t);
+@@ -241,8 +242,11 @@
+   }
+   function labelOf(el, r) {
+     var v = vclOf(el);
+-    var name = idOf(el) || el.tagName.toLowerCase();
+-    return name + (v.cls ? ' : ' + v.cls : '') + '   ' + Math.round(r.width) + '×' + Math.round(r.height);
++    var id = idOf(el);
++    var name = id || el.tagName.toLowerCase();
++    var ev = id && Object.prototype.hasOwnProperty.call(EVS, id) ? EVS[id] : null;
++    var evs = ev && ev.length ? '  · ' + ev.slice(0, 3).join(', ') + (ev.length > 3 ? ' …' : '') : '';
++    return name + (v.cls ? ' : ' + v.cls : '') + evs + '   ' + Math.round(r.width) + '×' + Math.round(r.height);
+   }
+   function place(box, tag, el) {
+     if (!el || !el.isConnected) { box.style.display = 'none'; tag.style.display = 'none'; return; }
+@@ -418,8 +422,43 @@
+   origAdd.call(document, 'mouseleave', function () { hoverEl = null; scheduleDraw(); }, true);
+   origAdd.call(window, 'scroll', scheduleDraw, { capture: true, passive: true });
+   origAdd.call(window, 'resize', scheduleDraw, true);
++  /* keyboard, design mode, a component selected: move like the WPF document outline.
++     Only plain arrows / Enter / Esc -- every other key (VS Code shortcuts) is left alone. */
++  function compParent(el) {
++    var fr = formRoot();
++    for (var p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
++      if (p.id || p === fr) return p;
++    }
++    return null;
++  }
++  function compChildren(parent) {
++    var scope = parent || document.body;
++    var all = scope.querySelectorAll('[id]');
++    var out = [];
++    for (var i = 0; i < all.length; i++) {
++      var x = all[i];
++      if (/^(SCRIPT|STYLE|TEMPLATE|LINK|META)$/.test(x.tagName)) continue;
++      if (compParent(x) === (parent || null)) out.push(x);
++    }
++    return out;
++  }
+   origAdd.call(window, 'keydown', function (e) {
+-    if (e.key === 'Escape' && mode === 'design' && selEl) select(null, 'key', false);
++    if (mode !== 'design' || !selEl || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
++    var t = e.target;
++    if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
++    var next = null;
++    if (e.key === 'Escape') { select(null, 'key', false); return; }
++    if (e.key === 'Enter') { e.preventDefault(); post({ type: 'dblclick', key: keyOf(selEl) }); return; }
++    if (e.key === 'ArrowUp') next = compParent(selEl);
++    else if (e.key === 'ArrowDown') next = compChildren(selEl)[0] || null;
++    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
++      var sib = compChildren(compParent(selEl));
++      var i = sib.indexOf(selEl);
++      if (i >= 0) next = sib[i + (e.key === 'ArrowRight' ? 1 : -1)] || null;
++    } else return;
++    e.preventDefault();
++    e.stopImmediatePropagation();
++    if (next) { selEl = null; select(next, 'key', true); }
+   }, true);
+   setInterval(function () { if (selEl) scheduleDraw(); }, 400);
+ 
+@@ -486,6 +525,7 @@
+     switch (m.type) {
+       case 'init':
+         if (m.classes && typeof m.classes === 'object') { CLS = m.classes; lastSig = ''; scheduleTree(); }
++        if (m.events && typeof m.events === 'object') EVS = m.events;
+         if (m.mode) { mode = m.mode; drawBadge(); }
+         if (m.scroll) { try { window.scrollTo(m.scroll.x || 0, m.scroll.y || 0); } catch (x) { /* ignore */ } }
+         if (m.selectId) { var el0 = byId(m.selectId); if (el0) select(el0, 'init', !m.scroll); }
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 582fcfe..25a8dae 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼）。",
+-  "version": "0.7.0",
++  "version": "0.8.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index d338e19..b7a7a32 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -53,6 +53,20 @@
+         R.treeNodes = tree ? tree.nodes : [];
+         btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
+         R.ctrlClickOperates = ran === 1;
++
++        /* keyboard: up = parent component, down = first child, right = next sibling, Enter = default event */
++        var key = function (k) {
++          window.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
++          var s = msgs('select').pop();
++          return s && s.info ? s.info.id : null;
++        };
++        R.keyUp = key('ArrowUp');
++        R.keyDown = key('ArrowDown');
++        R.keyRight = key('ArrowRight');
++        R.keyLeft = key('ArrowLeft');
++        var before = msgs('dblclick').length;
++        key('Enter');
++        R.keyEnterOpens = msgs('dblclick').length === before + 1;
+       }
+ 
+       /* a component inside a tab page that is not showing */
+-- 
+2.55.0.windows.5
+

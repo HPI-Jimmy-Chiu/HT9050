@@ -1,0 +1,911 @@
+From 9faa502d3a4950ee241a7b836b1f2ef3103fe66c Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 17:09:47 +0800
+Subject: [PATCH] =?UTF-8?q?HTDESIGNER-7:=20=E6=8E=A5=E7=B7=9A=E7=B8=BD?=
+ =?UTF-8?q?=E8=A6=BD=20--=20every=20DFM=20event=20of=20a=20page:=20wired?=
+ =?UTF-8?q?=20on=20the=20web=3F=20same-name=20C++=20in=20the=20port=3F=20B?=
+ =?UTF-8?q?CB6=3F=20(0.7.0)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- lib/overview.js: per event, web = a real listener of that DOM type (the probe
+  now answers listenersAll), or the wire field map, or only a mention; C++ port =
+  SourceTree.defState(): live / only in #if 0 / only in a comment / none (stops
+  at the first live definition, so a 2,900-control page takes ~30 ms); BCB6 too
+- overview tab: summary chips, filters (web not wired / no same-name C++ /
+  controls not on the page), text filter; click a row -> designer selects it,
+  click a location -> opens it. The C++ column is labelled for what it is: a
+  same-name TfXxx:: function -- web pages often go through commands instead
+- test\panels_render.ps1: the properties panel and the overview drawn in a
+  headless Edge with the real data of the fake-vscode layer (no JS error, the
+  right sections and rows, double-click / click post the right messages)
+
+Tests: lib 68 / probe 2 pages / fake vscode 43 + panels 8 / real VS Code 42
+incl. an 8-page sweep that also runs the overview -- all pass, 12 opened files
+byte-identical (MD5).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  16 +-
+ tools/vscode-htdesigner/extension.js          | 108 +++++++++++++
+ tools/vscode-htdesigner/lib/cppindex.js       |  23 +++
+ tools/vscode-htdesigner/lib/overview.js       |  83 ++++++++++
+ tools/vscode-htdesigner/media/overview.css    |  39 +++++
+ tools/vscode-htdesigner/media/overview.js     | 152 ++++++++++++++++++
+ tools/vscode-htdesigner/media/probe.js        |  18 +++
+ tools/vscode-htdesigner/package.json          |  18 ++-
+ tools/vscode-htdesigner/test/fake_vscode.js   |  16 ++
+ .../test/integration/index.js                 |  19 ++-
+ .../vscode-htdesigner/test/panels_render.ps1  | 101 ++++++++++++
+ tools/vscode-htdesigner/test/run_all.ps1      |   4 +
+ tools/vscode-htdesigner/test/run_tests.js     |  18 +++
+ .../vscode-htdesigner/test/smoke_extension.js |  26 +++
+ 14 files changed, 638 insertions(+), 3 deletions(-)
+ create mode 100644 tools/vscode-htdesigner/lib/overview.js
+ create mode 100644 tools/vscode-htdesigner/media/overview.css
+ create mode 100644 tools/vscode-htdesigner/media/overview.js
+ create mode 100644 tools/vscode-htdesigner/test/panels_render.ps1
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 14569c5..ff7cf11 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -75,6 +75,18 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-0.1.0
+ **HTML 原始碼同步**：旁邊開著同一頁的 HTML 時，在設計檢視選元件，原始碼會捲到那個元件；
+ 反過來，在原始碼裡把游標放進某個元件的標籤，設計檢視也會選到它。
+ 
++**接線總覽**（編輯器右上角的清單圖示，或「元件」標題列）：這一頁**所有 DFM 事件**一張表，每個事件標出：
++
++| 欄 | ✔ | △／⚠ | ✗ |
++|---|---|---|---|
++| 網頁 | 預覽時真的綁了這個事件，或由 wire 引擎的欄位對照處理 | 網頁程式有提到這個元件，但沒直接綁（多半是事件委派） | 網頁沒處理 |
++| C++ 移植 | 有會編譯的同名 `TfXxx::函式` | 只在 `#if 0` 裡／只在註解裡 | 沒有同名函式 |
++| BCB6 | 原版有這個函式 | | |
++
++上方是統計，可以只看「網頁未接」「C++ 沒有同名函式」「不在網頁上的元件」。點一列＝在設計檢視選那個元件；點檔名＝開那一行。
++⚠ 「C++ 沒有同名函式」不一定代表沒做：網頁常改走命令（`act.main.*`）到別的 C++ 函式，點那個元件看「送到 C++ 的命令」。
++實測：`HW.MotorTest.html` 79 個事件，網頁 44 個已接、23 個沒接；`main.html` 250 個事件大部分在別的 `Main.*` 頁。
++
+ **從程式碼回到設計檢視**（像 WPF 從 code-behind 切回設計畫面）：
+ 
+ - C++ 移植樹和 BCB6 原始碼裡，凡是有網頁元件在用的事件函式，上方會出現一行
+@@ -167,11 +179,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\vscode-htdesigner\test
+ 1. `run_tests.ps1`：搜尋與解析的函式，直接對這台的真實檔案測（例如 `TfHotPlate::spbSaveClick` 要找到 `cHotPlate.cpp:440`）
+ 2. `probe_test.ps1`：用無頭 Edge 開頁面，檢查點擊有被攔下、分頁能切換、**網路確實被擋**（測試只試連 `127.0.0.1:9` 這個關閉的埠）
+ 3. `smoke_extension.js`：用假的 VS Code 環境跑外掛主程式，餵第 2 層量到的真實點選資料，檢查事件→三份程式碼→開檔整條路
++   - `panels_render.ps1`：把第 3 層算出來的真實資料，丟給屬性面板和接線總覽的畫面程式，在無頭 Edge 裡實際畫出來，檢查沒有 JS 錯誤、內容正確
+ 4. `vscode_it.ps1`：**在真正的 VS Code 裡跑**（另開一個測試用的 VS Code，用暫存的設定資料夾，不影響你正在用的那個；
+    會在螢幕上出現約 30 秒後自己關掉）。開 HotPlate 頁走完整條路，再逐頁掃 8 種頁面；
+    測試前後比對所有開過的檔案的 MD5，有任何變動就判失敗
+ 
+-實測 20260929：1～4 層 64 ＋ 2 頁 ＋ 40 ＋ 40（含 8 頁掃描）項全部通過。
++實測 20260929：1～4 層 68 ＋ 2 頁 ＋ 43（＋面板畫面 8）＋ 42（含 8 頁掃描，每頁也跑接線總覽）項全部通過。
+ （途中抓到一個真 bug：CRLF 換行的 C++ 檔，`#endif` 後面的 `\r` 讓 `#if 0` 永遠不結束，
+ `wb_serve.cpp` 從第 3,322 行起整段被當成死碼。已修，並加了 CRLF 的測試。）
+ 
+@@ -184,6 +197,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\vscode-htdesigner\test
+ | `extension.js` | 外掛主程式：設計檢視分頁、元件樹、屬性面板、跳到程式碼 |
+ | `media/probe.js` | 注入頁面的探針：選取、攔點擊、記錄監聽器 |
+ | `media/props.js`、`props.css` | 屬性與事件面板 |
++| `media/overview.js`、`overview.css`、`lib/overview.js` | 接線總覽 |
+ | `lib/pagehtml.js` | 產生預覽用的 HTML（CSP＋探針） |
+ | `lib/pageinfo.js` | 頁面對應哪個 DFM、讀 IR |
+ | `lib/cppindex.js`、`cpplex.js` | 搜尋 C++／BCB6 的 `Class::方法`，判斷註解與 `#if 0` |
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index da55a80..3112f05 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -24,6 +24,7 @@ const fmt = require('./lib/format');
+ const { buildPageHtml, hasIframe } = require('./lib/pagehtml');
+ const { ReverseIndex, enclosingMethod } = require('./lib/reverse');
+ const { WebCmdIndex } = require('./lib/webcmds');
++const overview = require('./lib/overview');
+ const lex = require('./lib/cpplex');
+ 
+ const sleep = ms => new Promise(r => setTimeout(r, ms));
+@@ -102,6 +103,7 @@ class Hub {
+       reg('ht9045Designer.showInDesigner', entries => this.cmdShowInDesigner(entries)),
+       reg('ht9045Designer.showCodeInDesigner', () => this.cmdShowCodeInDesigner()),
+       reg('ht9045Designer.openWebSenders', (cmd, hits) => this.cmdOpenWebSenders(cmd, hits)),
++      reg('ht9045Designer.pageOverview', () => this.cmdPageOverview()),
+       vscode.languages.registerCodeLensProvider([{ language: 'cpp' }, { language: 'c' }], this.lens = new HandlerLens(this)),
+       reg('ht9045Designer.netCheck', () => {
+         const d = this.active;
+@@ -989,6 +991,44 @@ class Hub {
+     return Array.from(count.entries()).sort((a, b) => b[1] - a[1]).slice(0, 2).map(x => x[0]);
+   }
+ 
++  /** 接線總覽: every DFM event of the page -- wired on the web? implemented in C++? */
++  async cmdPageOverview() {
++    const d = this.active;
++    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return; }
++    const pi = await d.info;
++    if (!pi.ir) { vscode.window.showInformationMessage('這一頁沒有對應的 DFM，沒有事件可以總覽。'); return; }
++    return vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '整理接線總覽：' + path.basename(d.file) + '…' }, async () => {
++      const t0 = Date.now();
++      const reply = await d.request({ type: 'listenersAll' }, 5000);
++      const sources = this.webSources(d, pi);
++      const widx = d.r.webRoot ? this.webCmdIndex(d.r.webRoot) : null;
++      const fieldIds = new Set();
++      const tagIds = new Set();
++      if (widx) {
++        widx.build();
++        for (const id of widx.fieldsById.keys()) if (widx.fieldsOf(d.file, id).length) fieldIds.add(id);
++        for (const id of widx.tagsById.keys()) if (widx.tagsOf(d.file, id).length) tagIds.add(id);
++      }
++      const ov = await overview.buildOverview({
++        ir: pi.ir,
++        pageIds: new Set(pageinfo.collectIds(d.doc.getText()).concat(d.treeData.map(r => r[2]))),
++        listeners: reply ? reply.map : {},
++        fieldIds, tagIds,
++        quoted: overview.quotedNames(sources),
++        classes: pi.classes,
++        port: this.sourceTree(d.r.portRoot, 'port'),
++        gold: this.sourceTree(d.r.goldenRoot, 'golden'),
++      });
++      ov.page = path.basename(d.file);
++      ov.dfm = pi.ir.sourceDfm || path.basename(pi.ir.file);
++      ov.formClass = pi.ir.formClass || '';
++      ov.listenersOk = !!reply;
++      this.log('接線總覽 ' + ov.page + '：' + ov.summary.events + ' 個事件（' + (Date.now() - t0) + ' ms）' + (reply ? '' : '，⚠ 探針沒回應，網頁監聽器一欄不準'));
++      OverviewPanel.show(this, d, ov);
++      return ov;
++    });
++  }
++
+   /** Quick pick over every component of the page (big pages have thousands). */
+   async cmdFindComponent() {
+     const d = this.active;
+@@ -1088,9 +1128,27 @@ class Designer {
+     this.panel.webview.postMessage(Object.assign({ __htd: 1 }, m));
+   }
+ 
++  /** Ask the probe something and wait for the reply of the same type (null on timeout). */
++  request(m, ms) {
++    this._reqSeq = (this._reqSeq || 0) + 1;
++    const seq = this._reqSeq;
++    this._pending = this._pending || new Map();
++    return new Promise(res => {
++      const timer = setTimeout(() => { this._pending.delete(seq); res(null); }, ms || 5000);
++      this._pending.set(seq, v => { clearTimeout(timer); res(v); });
++      this.post(Object.assign({}, m, { seq }));
++    });
++  }
++
+   onMessage(m) {
+     if (!m || m.__htd !== 1) return;
+     const name = path.basename(this.file);
++    if (m.seq && this._pending && this._pending.has(m.seq)) {
++      const done = this._pending.get(m.seq);
++      this._pending.delete(m.seq);
++      done(m);
++      return;
++    }
+     switch (m.type) {
+       case 'ready': {
+         // page scripts may strip the generated title="name : TClass" attributes at
+@@ -1443,6 +1501,56 @@ class ComponentTree {
+   }
+ }
+ 
++// ---------------------------------------------------------------------------
++/** 接線總覽 tab (one per designer; re-running the command refreshes it). */
++class OverviewPanel {
++  static show(hub, d, data) {
++    if (d.overview && !d.overview.disposed) { d.overview.set(data); d.overview.panel.reveal(undefined, true); return d.overview; }
++    d.overview = new OverviewPanel(hub, d, data);
++    return d.overview;
++  }
++
++  constructor(hub, d, data) {
++    this.hub = hub;
++    this.d = d;
++    this.data = data;
++    this.disposed = false;
++    const media = vscode.Uri.joinPath(hub.ctx.extensionUri, 'media');
++    this.panel = vscode.window.createWebviewPanel('ht9045Designer.overview', '接線總覽：' + path.basename(d.file),
++      { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
++      { enableScripts: true, enableCommandUris: false, localResourceRoots: [media], retainContextWhenHidden: true });
++    const w = this.panel.webview;
++    const nonce = crypto.randomBytes(16).toString('base64');
++    w.html = '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">' +
++      '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src ' + w.cspSource + '; script-src \'nonce-' + nonce + '\';">' +
++      '<link rel="stylesheet" href="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'overview.css')) + '"></head><body><div id="root"></div>' +
++      '<script nonce="' + nonce + '" src="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'overview.js')) + '"></script></body></html>';
++    w.onDidReceiveMessage(m => this.onMessage(m));
++    this.panel.onDidDispose(() => { this.disposed = true; if (d.overview === this) d.overview = null; });
++  }
++
++  set(data) {
++    this.data = data;
++    this.panel.webview.postMessage({ type: 'data', data });
++  }
++
++  onMessage(m) {
++    switch (m && m.type) {
++      case 'ready': this.panel.webview.postMessage({ type: 'data', data: this.data }); break;
++      case 'select':
++        if (!this.d.disposed) {
++          this.d.panel.reveal(this.d.panel.viewColumn, true);
++          this.d.post({ type: 'selectId', id: String(m.id || ''), origin: 'overview' });
++        }
++        break;
++      case 'open':
++        this.hub.openTarget({ kind: m.kind === 'golden' ? 'golden' : m.kind === 'port' ? 'port' : 'web', file: String(m.file), line: m.line | 0, col: m.col | 0 }, this.d);
++        break;
++      default: break;
++    }
++  }
++}
++
+ // ---------------------------------------------------------------------------
+ class PropsView {
+   constructor(hub) {
+diff --git a/tools/vscode-htdesigner/lib/cppindex.js b/tools/vscode-htdesigner/lib/cppindex.js
+index 1ea5b9c..1d7e224 100644
+--- a/tools/vscode-htdesigner/lib/cppindex.js
++++ b/tools/vscode-htdesigner/lib/cppindex.js
+@@ -205,6 +205,29 @@ class SourceTree {
+     return out;
+   }
+ 
++  /**
++   * Is Cls::member implemented? 'live' (a definition that compiles), 'dead' (only
++   * inside #if 0), 'mention' (only named in comments -- often a moved body), 'none'.
++   * Stops at the first live definition, so it is cheap enough for a whole form.
++   */
++  async defState(classes, member) {
++    await this.ensure();
++    let dead = false, mention = false;
++    for (const c of classes || []) {
++      for (const o of this.qual.get(c + '::' + member) || []) {
++        let h;
++        try { h = await this.describe(o.file, o.off, o.len); } catch (e) { continue; }
++        if (h.test) continue;
++        if (h.def && !h.dead) return { state: 'live', hit: h };
++        if (h.def) dead = h;
++        else if (h.comment && !mention) mention = h;
++      }
++    }
++    if (dead) return { state: 'dead', hit: dead };
++    if (mention) return { state: 'mention', hit: mention };
++    return { state: 'none', hit: null };
++  }
++
+   /** "cmd" string literal hits; dispatch-looking lines (==, case, strcmp) first. */
+   async findString(str) {
+     if (this._str.has(str)) return this._str.get(str);
+diff --git a/tools/vscode-htdesigner/lib/overview.js b/tools/vscode-htdesigner/lib/overview.js
+new file mode 100644
+index 0000000..27edbe8
+--- /dev/null
++++ b/tools/vscode-htdesigner/lib/overview.js
+@@ -0,0 +1,83 @@
++'use strict';
++// AI(W906-HTDESIGNER) 20260929: the wiring overview of one page -- every DFM event of
++// every control, and for each: is it wired on the web page, implemented in the C++
++// port, where is it in BCB6. The FW campaign's "what is left on this page" view.
++// Plain Node (no vscode).
++
++const { domTypesOf } = require('./format');
++
++// events the wire engine covers through its field map (keyboard pop-up, value
++// write-back) rather than a listener of that exact DOM type
++const FIELD_EVENTS = new Set(['OnChange', 'OnKeyPress', 'OnKeyDown', 'OnKeyUp', 'OnMouseDown', 'OnMouseUp', 'OnExit', 'OnEnter', 'OnClick', 'OnDblClick']);
++
++/** Every quoted name in the page's code ('spbSave', "#XST1", `x`) -- one pass. */
++function quotedNames(sources) {
++  const out = new Set();
++  const re = /(['"`])#?([A-Za-z_]\w*)\1/g;
++  for (const s of sources) {
++    re.lastIndex = 0;
++    let m;
++    while ((m = re.exec(s.text))) if (s.inScope(m.index)) out.add(m[2]);
++  }
++  return out;
++}
++
++/**
++ * opt: { ir, pageIds:Set, listeners:{id:[types]}, fieldIds:Set, tagIds:Set,
++ *        quoted:Set, classes:[...], port:SourceTree|null, gold:SourceTree|null }
++ */
++async function buildOverview(opt) {
++  const ir = opt.ir;
++  const rows = [];
++  const sum = {
++    controls: 0, events: 0, notOnPage: 0,
++    web: { yes: 0, field: 0, weak: 0, no: 0 },
++    port: { live: 0, dead: 0, mention: 0, none: 0 },
++    golden: { live: 0, none: 0 },
++  };
++  const cache = new Map();
++  const state = async (tree, member) => {
++    if (!tree || !opt.classes.length) return { state: 'none', hit: null };
++    const k = tree.kind + '|' + member;
++    if (!cache.has(k)) cache.set(k, tree.defState(opt.classes, member));
++    return cache.get(k);
++  };
++  for (const node of ir.byName.values()) {
++    const evs = Object.entries(node.events || {});
++    if (!evs.length) continue;
++    const isRoot = node === ir.root;
++    const id = isRoot ? '@form' : node.name;
++    const present = isRoot || opt.pageIds.has(node.name);
++    const row = { id, name: node.name, cls: node.class, path: node.path, present, events: [] };
++    sum.controls++;
++    if (!present) sum.notOnPage++;
++    const own = (opt.listeners && opt.listeners[node.name]) || [];
++    for (const [ev, handler] of evs) {
++      sum.events++;
++      let web;
++      if (isRoot) web = 'na';
++      else if (!present) web = 'absent';
++      else if (domTypesOf(ev).some(t => own.includes(t))) web = 'yes';
++      else if (opt.fieldIds.has(node.name) && FIELD_EVENTS.has(ev)) web = 'field';
++      else if (opt.quoted.has(node.name) || (opt.tagIds && opt.tagIds.has(node.name))) web = 'weak';
++      else web = 'no';
++      if (web in sum.web) sum.web[web]++;
++      const p = await state(opt.port, handler);
++      const g = await state(opt.gold, handler);
++      sum.port[p.state]++;
++      if (g.state === 'live') sum.golden.live++; else sum.golden.none++;
++      const loc = s => (s.hit ? { file: s.hit.file, line: s.hit.line, col: s.hit.col } : null);
++      row.events.push({
++        name: ev, handler, web,
++        port: { state: p.state, at: loc(p) },
++        golden: { state: g.state === 'live' ? 'live' : 'none', at: loc(g) },
++      });
++    }
++    rows.push(row);
++  }
++  // controls on the page first, in DFM order; the absent ones last
++  rows.sort((a, b) => (a.present === b.present ? 0 : a.present ? -1 : 1));
++  return { rows, summary: sum };
++}
++
++module.exports = { buildOverview, quotedNames, FIELD_EVENTS };
+diff --git a/tools/vscode-htdesigner/media/overview.css b/tools/vscode-htdesigner/media/overview.css
+new file mode 100644
+index 0000000..1bfe11d
+--- /dev/null
++++ b/tools/vscode-htdesigner/media/overview.css
+@@ -0,0 +1,39 @@
++/* AI(W906-HTDESIGNER) 20260929: 接線總覽. VS Code theme variables only. */
++body { margin: 0; padding: 0 16px 24px; color: var(--vscode-foreground); background: var(--vscode-editor-background);
++  font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
++.head { position: sticky; top: 0; background: var(--vscode-editor-background); padding: 12px 0 8px; z-index: 2;
++  border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,.3)); }
++h1 { font-size: 1.3em; margin: 0 0 4px; font-weight: 600; }
++.sub { color: var(--vscode-descriptionForeground); }
++.chips { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
++.chip { padding: 1px 8px; border-radius: 10px; font-size: .9em; border: 1px solid transparent; }
++.chip.ok { background: rgba(46,125,50,.18); border-color: rgba(46,125,50,.5); }
++.chip.mid { background: rgba(176,96,10,.16); border-color: rgba(176,96,10,.5); }
++.chip.bad { background: rgba(190,40,40,.16); border-color: rgba(190,40,40,.5); }
++.bar { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
++button { font: inherit; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground);
++  border: none; padding: 2px 10px; border-radius: 2px; cursor: pointer; }
++button:hover { background: var(--vscode-button-secondaryHoverBackground); }
++button.on { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
++.q { font: inherit; color: var(--vscode-input-foreground); background: var(--vscode-input-background);
++  border: 1px solid var(--vscode-input-border, transparent); padding: 2px 6px; min-width: 220px; }
++.q:focus { outline: 1px solid var(--vscode-focusBorder); }
++table.grid { border-collapse: collapse; width: 100%; margin-top: 8px; }
++.grid th { text-align: left; font-weight: 600; padding: 4px 8px;
++  background: var(--vscode-editor-background); border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,.4)); }
++.grid td { padding: 2px 8px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,.12)); vertical-align: top; }
++.grid tbody tr { cursor: pointer; }
++.grid tbody tr:hover td { background: var(--vscode-list-hoverBackground); }
++.grid tr.absent td { color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground)); }
++.name, .fn, .ev, .loc { font-family: var(--vscode-editor-font-family); }
++.name { font-weight: 600; }
++.cls { color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family); }
++.mark { display: inline-block; width: 1.2em; font-weight: 700; }
++.mark.ok { color: #3fa34d; }
++.mark.mid { color: #d18616; }
++.mark.bad { color: #e5534b; }
++.mark.dim { color: var(--vscode-descriptionForeground); }
++.loc { margin-left: 4px; color: var(--vscode-textLink-foreground); text-decoration: none; font-size: .92em; }
++.loc:hover { text-decoration: underline; }
++.dim { color: var(--vscode-descriptionForeground); }
++.pad { padding: 8px 0; }
+diff --git a/tools/vscode-htdesigner/media/overview.js b/tools/vscode-htdesigner/media/overview.js
+new file mode 100644
+index 0000000..c60b320
+--- /dev/null
++++ b/tools/vscode-htdesigner/media/overview.js
+@@ -0,0 +1,152 @@
++/* AI(W906-HTDESIGNER) 20260929: 接線總覽 -- one page's DFM events and their state.
++   textContent only; click a row = select the control in the designer, click a
++   location = open it. */
++(function () {
++  'use strict';
++  var vscode = acquireVsCodeApi();
++  var root = document.getElementById('root');
++  var data = null;
++  var st = vscode.getState() || { filter: 'all', q: '' };
++
++  function el(tag, cls, text) {
++    var e = document.createElement(tag);
++    if (cls) e.className = cls;
++    if (text != null) e.textContent = String(text);
++    return e;
++  }
++  function base(p) { return String(p || '').split(/[\\/]/).pop(); }
++
++  var WEB = {
++    yes: ['✔', '網頁有綁這個事件的監聽器', 'ok'],
++    field: ['✔', '由 wire 引擎的欄位對照處理（小鍵盤／寫回）', 'ok'],
++    weak: ['△', '網頁程式有提到這個元件，但沒有直接綁這個事件（多半是事件委派）', 'mid'],
++    no: ['✗', '網頁沒有處理', 'bad'],
++    absent: ['—', '這個元件不在網頁上', 'dim'],
++    na: ['—', '表單事件', 'dim'],
++  };
++  var PORT = {
++    live: ['✔', 'C++ 移植樹有定義', 'ok'],
++    dead: ['⚠', '只有 #if 0 裡的定義（不會編譯）', 'mid'],
++    mention: ['△', '只在註解裡提到（實作可能搬到別的函式）', 'mid'],
++    none: ['✗', 'C++ 移植樹沒有同名函式（可能沒做，也可能網頁改走命令到別的函式）', 'bad'],
++  };
++
++  function cell(map, s, at, kind) {
++    var td = el('td', 'st');
++    var d = map[s] || ['?', s, 'dim'];
++    var b = el('span', 'mark ' + d[2], d[0]);
++    b.title = d[1];
++    td.appendChild(b);
++    if (at) {
++      var a = el('a', 'loc', base(at.file) + ':' + at.line);
++      a.href = '#';
++      a.title = at.file + ':' + at.line;
++      a.addEventListener('click', function (e) {
++        e.preventDefault(); e.stopPropagation();
++        vscode.postMessage({ type: 'open', kind: kind, file: at.file, line: at.line, col: at.col || 1 });
++      });
++      td.appendChild(a);
++    }
++    return td;
++  }
++
++  function keep(row, ev) {
++    var f = st.filter;
++    if (f === 'webno' && !(ev.web === 'no' || ev.web === 'weak')) return false;
++    if (f === 'portno' && ev.port.state === 'live') return false;
++    if (f === 'absent' && row.present) return false;
++    var q = (st.q || '').trim().toLowerCase();
++    if (q && (row.id + ' ' + row.cls + ' ' + ev.name + ' ' + ev.handler).toLowerCase().indexOf(q) < 0) return false;
++    return true;
++  }
++
++  function render() {
++    root.textContent = '';
++    if (!data) { root.appendChild(el('p', 'dim', '整理中…')); return; }
++    var s = data.summary;
++    var h = el('div', 'head');
++    h.appendChild(el('h1', null, '接線總覽：' + data.page));
++    h.appendChild(el('div', 'sub', 'DFM ' + data.dfm + '　表單類別 ' + data.formClass + '　' + s.controls + ' 個有事件的元件、' + s.events + ' 個事件' +
++      (s.notOnPage ? '（其中 ' + s.notOnPage + ' 個元件不在網頁上）' : '')));
++    var chips = el('div', 'chips');
++    function chip(label, n, cls, tip) { var c = el('span', 'chip ' + cls, label + ' ' + n); c.title = tip; chips.appendChild(c); }
++    chip('網頁有接', s.web.yes + s.web.field, 'ok', '直接綁了監聽器，或由欄位對照處理');
++    chip('只有提到', s.web.weak, 'mid', '網頁程式提到這個元件，但沒有直接綁這個事件');
++    chip('網頁未接', s.web.no, 'bad', '網頁完全沒處理');
++    chip('C++ 有同名函式', s.port.live, 'ok', 'C++ 移植樹有會編譯的 ' + data.formClass + '::函式');
++    chip('只在 #if 0', s.port.dead, 'mid', '定義在 #if 0 裡，不會編譯');
++    chip('只在註解', s.port.mention, 'mid', '只在註解裡提到，實作可能搬到別的函式');
++    chip('C++ 沒有同名函式', s.port.none, 'bad', '可能沒做，也可能改走命令到別的 C++ 函式');
++    h.appendChild(chips);
++    var bar = el('div', 'bar');
++    [['all', '全部'], ['webno', '網頁未接'], ['portno', 'C++ 沒有同名函式'], ['absent', '不在網頁上的元件']].forEach(function (f) {
++      var b = el('button', st.filter === f[0] ? 'on' : '', f[1]);
++      b.addEventListener('click', function () { st.filter = f[0]; vscode.setState(st); render(); });
++      bar.appendChild(b);
++    });
++    var q = el('input', 'q');
++    q.placeholder = '篩選元件／事件／函式…';
++    q.value = st.q || '';
++    q.addEventListener('input', function () { st.q = q.value; vscode.setState(st); fill(); });
++    bar.appendChild(q);
++    h.appendChild(bar);
++    root.appendChild(h);
++
++    var table = el('table', 'grid');
++    var thead = el('thead');
++    var tr = el('tr');
++    [['元件', ''], ['型別', ''], ['事件', ''], ['函式', ''], ['網頁', '預覽時網頁實際綁上的監聽器／欄位對照'],
++      ['C++ 移植（' + data.formClass + '::函式）', '移植樹裡有沒有同名的事件函式'], ['BCB6', '原版的事件函式']].forEach(function (t) {
++      var th = el('th', null, t[0]);
++      if (t[1]) th.title = t[1];
++      tr.appendChild(th);
++    });
++    thead.appendChild(tr);
++    table.appendChild(thead);
++    var tbody = el('tbody');
++    table.appendChild(tbody);
++    root.appendChild(table);
++    var count = el('div', 'dim pad');
++    root.appendChild(count);
++
++    function fill() {
++      tbody.textContent = '';
++      var shown = 0;
++      data.rows.forEach(function (row) {
++        var evs = row.events.filter(function (ev) { return keep(row, ev); });
++        evs.forEach(function (ev, i) {
++          var r = el('tr', row.present ? '' : 'absent');
++          if (i === 0) {
++            var n = el('td', 'name', row.id === '@form' ? '（表單）' : row.id);
++            n.rowSpan = evs.length;
++            r.appendChild(n);
++            var c = el('td', 'cls', row.cls);
++            c.rowSpan = evs.length;
++            r.appendChild(c);
++          }
++          r.appendChild(el('td', 'ev', ev.name));
++          r.appendChild(el('td', 'fn', ev.handler));
++          r.appendChild(cell(WEB, ev.web, null, 'web'));
++          r.appendChild(cell(PORT, ev.port.state, ev.port.at, 'port'));
++          r.appendChild(cell({ live: ['✔', 'BCB6 有定義', 'ok'], none: ['✗', 'BCB6 找不到', 'bad'] }, ev.golden.state, ev.golden.at, 'golden'));
++          r.title = row.present ? '點一下：在設計檢視選取 ' + row.id : '這個元件不在網頁上';
++          r.addEventListener('click', function () { if (row.present) vscode.postMessage({ type: 'select', id: row.id }); });
++          tbody.appendChild(r);
++          shown++;
++        });
++      });
++      count.textContent = '顯示 ' + shown + ' / ' + s.events + ' 個事件。' +
++        '「網頁」來自預覽時實際綁上的監聽器（只在連線後才綁的看不到）。' +
++        '「C++ 移植」只看有沒有同名的 ' + data.formClass + '::函式 —— 網頁常改走命令（例如 act.main.*）到別的 C++ 函式，' +
++        '所以 ✗ 不一定代表功能沒做；點那個元件，看屬性面板的「送到 C++ 的命令」。';
++    }
++    fill();
++  }
++
++  window.addEventListener('message', function (e) {
++    var m = e.data;
++    if (m && m.type === 'data') { data = m.data; render(); }
++  });
++  render();
++  vscode.postMessage({ type: 'ready' });
++})();
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index d970341..baa2fb4 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -507,6 +507,24 @@
+       case 'refreshTree':
+         sendTree(true);
+         break;
++      case 'listenersAll': {
++        /* for the wiring overview: every control's own listener types (+ inline on*) */
++        var map = {};
++        var all = document.body ? document.body.querySelectorAll('[id]') : [];
++        for (var li = 0; li < all.length; li++) {
++          var le = all[li];
++          var types = [];
++          var rl = REC.get(le);
++          if (rl) for (var lj = 0; lj < rl.length; lj++) if (types.indexOf(rl[lj].type) < 0) types.push(rl[lj].type);
++          for (var la = 0; la < le.attributes.length; la++) {
++            var an = le.attributes[la].name;
++            if (/^on/i.test(an) && types.indexOf(an.slice(2).toLowerCase()) < 0) types.push(an.slice(2).toLowerCase());
++          }
++          if (types.length) map[le.id] = types;
++        }
++        post({ type: 'listenersAll', seq: m.seq, map: map });
++        break;
++      }
+       case 'netcheck': {
+         /* prove the wall from inside the page: try ws / http / xhr to 127.0.0.1:9
+            (a closed port, never the machine) and report what the CSP did */
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 9aece9a..582fcfe 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼）。",
+-  "version": "0.6.0",
++  "version": "0.7.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -86,6 +86,12 @@
+         "category": "HT9045",
+         "icon": "$(search)"
+       },
++      {
++        "command": "ht9045Designer.pageOverview",
++        "title": "接線總覽（這一頁每個事件：網頁接了沒、C++ 做了沒）",
++        "category": "HT9045",
++        "icon": "$(checklist)"
++      },
+       {
+         "command": "ht9045Designer.showCodeInDesigner",
+         "title": "在設計檢視中顯示這段程式對應的元件",
+@@ -134,6 +140,11 @@
+           "when": "activeCustomEditorId == 'ht9045Designer.editor'",
+           "group": "navigation@0"
+         },
++        {
++          "command": "ht9045Designer.pageOverview",
++          "when": "activeCustomEditorId == 'ht9045Designer.editor'",
++          "group": "navigation@0"
++        },
+         {
+           "command": "ht9045Designer.toggleMode",
+           "when": "activeCustomEditorId == 'ht9045Designer.editor'",
+@@ -161,6 +172,11 @@
+           "when": "view == ht9045Designer.components && ht9045Designer.active",
+           "group": "navigation@1"
+         },
++        {
++          "command": "ht9045Designer.pageOverview",
++          "when": "view == ht9045Designer.components && ht9045Designer.active",
++          "group": "navigation@1"
++        },
+         {
+           "command": "ht9045Designer.toggleMode",
+           "when": "view == ht9045Designer.components",
+diff --git a/tools/vscode-htdesigner/test/fake_vscode.js b/tools/vscode-htdesigner/test/fake_vscode.js
+index 8aa837e..a275c3f 100644
+--- a/tools/vscode-htdesigner/test/fake_vscode.js
++++ b/tools/vscode-htdesigner/test/fake_vscode.js
+@@ -46,6 +46,7 @@ const vscode = {
+     registerCodeLensProvider: (sel, p) => { vscode._lens = p; return disp(); },
+   },
+   StatusBarAlignment: { Left: 1, Right: 2 },
++  ProgressLocation: { SourceControl: 1, Window: 10, Notification: 15 },
+   TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
+   ViewColumn: { Active: -1, Beside: -2, One: 1, Two: 2, Three: 3 },
+   TextEditorSelectionChangeKind: { Keyboard: 1, Mouse: 2, Command: 3 },
+@@ -68,6 +69,21 @@ const vscode = {
+       return Promise.resolve({ revealRange() {}, selection: null });
+     },
+     showOpenDialog: () => Promise.resolve(undefined),
++    withProgress: (o, fn) => Promise.resolve(fn({ report() {} })),
++    createWebviewPanel: (viewType, title) => {
++      const p = {
++        viewType, title, posted: [], recv: null, disposed: false,
++        webview: {
++          cspSource: 'https://*.vscode-cdn.net', html: '', options: null,
++          asWebviewUri: u => ({ toString: () => 'https://file+.vscode-resource.vscode-cdn.net/' + u.fsPath.replace(/\\/g, '/') }),
++          postMessage: m => { p.posted.push(m); return Promise.resolve(true); },
++          onDidReceiveMessage: fn => { p.recv = fn; return disp(); },
++        },
++        reveal() {}, onDidDispose: () => disp(),
++      };
++      (vscode._panels = vscode._panels || []).push(p);
++      return p;
++    },
+   },
+   workspace: {
+     get workspaceFolders() { return vscode._folders || []; },
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index afed124..3541416 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -150,6 +150,15 @@ exports.run = async function () {
+     const hed = await waitFor(() => { const e = vscode.window.activeTextEditor; return e && e.document === d.doc ? e : null; }, 5000);
+     ok(!!hed && /id="spbSave"/.test(hed.document.getText(hed.selection)), 'HTML 原始碼 selects id="spbSave"', hed ? JSON.stringify(hed.document.getText(hed.selection)) : '');
+ 
++    // wiring overview with the REAL probe's listener list
++    d.panel.reveal(d.panel.viewColumn, false);
++    await waitFor(() => hub.active === d, 3000);
++    const ov = await vscode.commands.executeCommand('ht9045Designer.pageOverview');
++    ok(ov && ov.listenersOk && ov.summary.events === 19, 'page overview (real probe): HotPlate 19 events',
++      ov ? 'web ' + JSON.stringify(ov.summary.web) + ' port ' + JSON.stringify(ov.summary.port) : 'none');
++    const exitEv = ov && ov.rows.find(r => r.id === 'sbtExit');
++    ok(exitEv && exitEv.events[0].web === 'yes', 'overview: sbtExit.OnClick has a real web listener', exitEv ? exitEv.events[0].web : '-');
++
+     // mode toggle reaches the probe (no error)
+     await vscode.commands.executeCommand('ht9045Designer.toggleMode');
+     ok(d.mode === 'operate', 'toggle -> operate mode');
+@@ -192,7 +201,15 @@ exports.run = async function () {
+             res = pickId + ' ' + (evs.join(' ') || 'no DFM events') + ' listeners=' + r2.listeners.length;
+           } else res = pickId + ' did not resolve';
+         }
+-        ok(!!(n2 && n2.ok), 'sweep ' + p, dd.treeData.length + ' nodes | ' +
++        let ovs = '-';
++        if (pi.ir) {
++          const t1 = Date.now();
++          const o = await vscode.commands.executeCommand('ht9045Designer.pageOverview');
++          ovs = o ? 'overview ' + o.summary.events + ' ev, web ✔' + (o.summary.web.yes + o.summary.web.field) + ' △' + o.summary.web.weak + ' ✗' + o.summary.web.no +
++            ', C++ ✔' + o.summary.port.live + ' ✗' + o.summary.port.none + ' (' + (Date.now() - t1) + ' ms)' : 'overview failed';
++          if (dd.overview) dd.overview.panel.dispose();   // the overview tab (opened without focus)
++        }
++        ok(!!(n2 && n2.ok), 'sweep ' + p, dd.treeData.length + ' nodes | ' + ovs + ' | ' +
+           (pi.ir ? path.basename(pi.ir.file).replace('.dfm.ir.json', '') + '(' + (pi.dfm && pi.dfm.how) + ')' : 'no DFM') +
+           ' | img ' + (dg ? dg.imagesLoaded + '/' + dg.images : '?') +
+           ' | err ' + dd.errors.length + (dd.errors.length ? ' [' + dd.errors[0].msg.slice(0, 80) + ']' : '') +
+diff --git a/tools/vscode-htdesigner/test/panels_render.ps1 b/tools/vscode-htdesigner/test/panels_render.ps1
+new file mode 100644
+index 0000000..f76ef47
+--- /dev/null
++++ b/tools/vscode-htdesigner/test/panels_render.ps1
+@@ -0,0 +1,101 @@
++# AI(W906-HTDESIGNER) 20260929: render the two panels (media/props.js, media/overview.js)
++# in a headless Edge with REAL data written by smoke_extension.js
++# (%TEMP%\htdesigner_panels\*.json), and check they draw without a JS error.
++# Read-only; everything goes to %TEMP%. (ASCII only: Windows PowerShell 5.1 reads a
++# BOM-less script in the ANSI code page, so the Chinese checks are \u escapes in JS.)
++$ErrorActionPreference = 'Stop'
++$here = $PSScriptRoot
++$media = Resolve-Path (Join-Path $here '..\media')
++$dump = Join-Path $env:TEMP 'htdesigner_panels'
++$edge = @("${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe", "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
++if (-not $edge) { Write-Host 'msedge.exe not found'; exit 2 }
++if (-not (Test-Path $dump)) { Write-Host "no data in $dump (run smoke_extension.js first)"; exit 2 }
++$profileDir = Join-Path $dump 'edge-profile'
++$utf8 = New-Object System.Text.UTF8Encoding($false)
++
++function Render([string]$name, [string]$css, [string]$js, [string]$msgType, [string]$dataFile, [string]$checks) {
++  # "</" inside the data (HTML snippets) must not end the <script> early
++  $data = [IO.File]::ReadAllText($dataFile, $utf8).Replace('</', '<\/')
++  $mediaUrl = ([Uri]("$media\")).AbsoluteUri
++  $html = @"
++<!DOCTYPE html><html><head><meta charset="UTF-8">
++<link rel="stylesheet" href="$mediaUrl$css">
++<script>
++window.__err = [];
++window.addEventListener('error', function (e) { window.__err.push(String(e.message) + ' @' + e.lineno); });
++window.__out = [];
++window.acquireVsCodeApi = function () { return { postMessage: function (m) { window.__out.push(m); }, getState: function () { return null; }, setState: function () {} }; };
++</script></head><body><div id="root"></div>
++<script src="$mediaUrl$js"></script>
++<script>
++var DATA = $data;
++window.postMessage({ type: '$msgType', data: DATA }, '*');
++setTimeout(function () {
++  var R = { errors: window.__err, posted: window.__out.map(function (m) { return m.type; }) };
++  try { $checks } catch (e) { R.checkError = String(e); }
++  var pre = document.createElement('pre'); pre.id = 'HTDPANEL'; pre.textContent = 'HTDPANEL' + JSON.stringify(R) + 'HTDEND';
++  document.body.appendChild(pre);
++}, 600);
++</script></body></html>
++"@
++  $file = Join-Path $dump ("render_$name.html")
++  [IO.File]::WriteAllText($file, $html, $utf8)
++  $out = Join-Path $dump ("render_$name.dom.txt")
++  $eargs = @('--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', "--user-data-dir=`"$profileDir`"",
++    '--allow-file-access-from-files', '--virtual-time-budget=3000', '--dump-dom', ([Uri]$file).AbsoluteUri)
++  Start-Process -FilePath $edge -ArgumentList $eargs -Wait -NoNewWindow -RedirectStandardOutput $out | Out-Null
++  $t = [IO.File]::ReadAllText($out, $utf8)
++  $m = [regex]::Match($t, '<pre id="HTDPANEL">HTDPANEL(\{.*?\})HTDEND</pre>', 'Singleline')
++  if (-not $m.Success) { Write-Host "[$name] no result"; return $null }
++  return ([System.Net.WebUtility]::HtmlDecode($m.Groups[1].Value) | ConvertFrom-Json)
++}
++
++$script:bad = 0
++function Check([bool]$c, [string]$n, [string]$x) { if ($c) { Write-Host "PASS  $n   $x" } else { Write-Host "FAIL  $n   $x"; $script:bad++ } }
++
++# section titles: events / DFM properties / commands to C++ / data field
++$propsChecks = @'
++var secs = Array.prototype.map.call(document.querySelectorAll('details.sec > summary'), function (s) { return s.firstChild.textContent; });
++R.secCount = secs.length;
++R.hasEvents = secs.indexOf('事件') >= 0;
++R.hasProps = secs.indexOf('DFM 屬性') >= 0;
++R.hasCmds = secs.indexOf('送到 C++ 的命令') >= 0;
++R.hasField = secs.indexOf('資料欄位') >= 0;
++var txt = document.body.innerText;
++R.hasHandler = txt.indexOf('spbSaveClick') >= 0;
++R.hasGolden440 = txt.indexOf('cHotPlate.cpp:440') >= 0;
++R.hasCmd = txt.indexOf('recipe.doc.put') >= 0;
++R.hasXStart = txt.indexOf('[Hotplate Form] X Start') >= 0;
++R.targets = document.querySelectorAll('.row.target').length;
++R.propRows = document.querySelectorAll('table.kv tr').length;
++var ev = document.querySelector('.row.event');
++if (ev) ev.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
++R.afterDbl = window.__out.map(function (m) { return m.type; });
++'@
++$r1 = Render 'props_spbSave' 'props.css' 'props.js' 'show' (Join-Path $dump 'props_spbSave.json') $propsChecks
++if ($r1) {
++  Check ($r1.errors.Count -eq 0 -and -not $r1.checkError) 'props panel (spbSave) renders without a JS error' (($r1.errors -join ' / ') + $r1.checkError)
++  Check ($r1.hasEvents -and $r1.hasProps -and $r1.hasCmds) 'props panel sections: events, DFM properties, commands' "sections=$($r1.secCount)"
++  Check ($r1.hasHandler -and $r1.hasGolden440 -and $r1.hasCmd) 'props panel shows spbSaveClick, cHotPlate.cpp:440 and recipe.doc.put' ''
++  Check ($r1.targets -ge 5 -and $r1.propRows -ge 10) 'props panel rows' "targets=$($r1.targets) propRows=$($r1.propRows)"
++  Check (($r1.afterDbl -join ',') -match 'openEvent') 'double-click on an event row posts openEvent' ($r1.afterDbl -join ',')
++} else { $script:bad++ }
++$r2 = Render 'props_XST1' 'props.css' 'props.js' 'show' (Join-Path $dump 'props_XST1.json') $propsChecks
++if ($r2) {
++  Check ($r2.errors.Count -eq 0 -and $r2.hasField -and $r2.hasXStart) 'props panel (XST1) renders the data field [Hotplate Form] X Start' ($r2.errors -join ' / ')
++} else { $script:bad++ }
++$ovChecks = @'
++R.rows = document.querySelectorAll('table.grid tbody tr').length;
++R.chips = document.querySelectorAll('.chip').length;
++var tr = document.querySelector('table.grid tbody tr');
++if (tr) tr.click();
++R.after = window.__out.map(function (m) { return m.type + (m.id ? ':' + m.id : ''); });
++'@
++$r3 = Render 'overview' 'overview.css' 'overview.js' 'data' (Join-Path $dump 'overview_HotPlate.json') $ovChecks
++if ($r3) {
++  Check ($r3.errors.Count -eq 0 -and $r3.rows -eq 19 -and $r3.chips -eq 7) 'overview renders 19 event rows and 7 summary chips' "rows=$($r3.rows) chips=$($r3.chips) errors=$($r3.errors -join ' / ')"
++  Check (($r3.after -join ',') -match 'select:') 'clicking a row posts select' ($r3.after -join ',')
++} else { $script:bad++ }
++Write-Host ''
++if ($script:bad) { Write-Host "RESULT: $($script:bad) fail" } else { Write-Host 'RESULT: all pass' }
++exit $script:bad
+diff --git a/tools/vscode-htdesigner/test/run_all.ps1 b/tools/vscode-htdesigner/test/run_all.ps1
+index 01fad77..2371764 100644
+--- a/tools/vscode-htdesigner/test/run_all.ps1
++++ b/tools/vscode-htdesigner/test/run_all.ps1
+@@ -25,6 +25,10 @@ $p = Start-Process -FilePath $code -ArgumentList "`"$(Join-Path $here 'smoke_ext
+ $env:ELECTRON_RUN_AS_NODE = $null
+ if (Test-Path $rep) { Get-Content $rep -Encoding utf8; Remove-Item $rep -Force } else { Write-Host 'no report' }
+ if ($p.ExitCode -ne 0) { $bad++ }
++Write-Host ''
++Write-Host '=== 3b. panels rendered in headless Edge with the data of layer 3 ==='
++& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $here 'panels_render.ps1')
++if ($LASTEXITCODE -ne 0) { $bad++ }
+ $layers = 3
+ if ($WithVSCode) {
+   $layers = 4
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index d85fa01..3d34d0e 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -321,6 +321,24 @@ async function main() {
+   const tp = (await port.findString('machine.state')).filter(h => !h.test && !h.comment);
+   ok(tp.length > 0, 'C++ lines with "machine.state"', tp.slice(0, 4).map(h => rel(h.file, PORT) + ':' + h.line).join(' | '));
+ 
++  // --- wiring overview (HotPlate, no runtime listeners: static signals only)
++  const ovm = require('../lib/overview');
++  const fieldIdsHP = new Set(Array.from(wci.fieldsById.keys()).filter(id => wci.fieldsOf(PAGE, id).length));
++  t1 = Date.now();
++  const ov = await ovm.buildOverview({
++    ir: d, pageIds: new Set(pageinfo.collectIds(html)), listeners: { sbtExit: ['click'] },
++    fieldIds: fieldIdsHP, tagIds: new Set(), quoted: ovm.quotedNames(srcs), classes: ['TfHotPlate'], port, gold,
++  });
++  const evOf = (id, ev) => { const r = ov.rows.find(x => x.id === id); return r && r.events.find(e => e.name === ev); };
++  log('overview HotPlate: ' + JSON.stringify(ov.summary) + ' (' + (Date.now() - t1) + ' ms)');
++  const e1 = evOf('sbtExit', 'OnClick'), e2 = evOf('spbSave', 'OnClick'), e3 = evOf('XST1', 'OnKeyPress'), e4 = evOf('@form', 'OnShow');
++  ok(e1 && e1.web === 'yes' && e1.port.state === 'live' && /fHotPlate\.cpp$/i.test(e1.port.at.file), 'overview sbtExit.OnClick: web ✔ (listener), C++ ✔ forms\\fHotPlate.cpp',
++    e1 ? e1.web + ' / ' + e1.port.state + ' ' + path.basename(e1.port.at.file) + ':' + e1.port.at.line : '-');
++  ok(e2 && e2.web === 'weak' && e2.port.state === 'mention' && e2.golden.state === 'live', 'overview spbSave.OnClick: web △ (delegated), C++ only a comment (moved), BCB6 ✔',
++    e2 ? e2.web + ' / ' + e2.port.state + ' / ' + e2.golden.state : '-');
++  ok(e3 && e3.web === 'field', 'overview XST1.OnKeyPress: web ✔ via the field map', e3 ? e3.web : '-');
++  ok(e4 && e4.web === 'na' && e4.golden.state === 'live', 'overview form OnShow: n/a on the web, BCB6 ✔');
++
+   // --- format
+   ok(fmt.tcolor(12761254) === '#a6b8c2', 'TColor int -> #rrggbb (BGR)', fmt.tcolor(12761254));
+   ok(fmt.tcolor('clBtnFace') === '#d4d0c8', 'TColor clBtnFace');
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 1ffcdbf..29a1b63 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -241,6 +241,32 @@ async function main() {
+   ok(!!fl && /XST1/.test(fl.command.title) && !/等/.test(fl.command.title), 'CodeLens above the BCB6 INI line: 網頁欄位 → XST1 (one control, not counted twice)',
+     fl ? fl.command.title + ' @' + (fl.range.start.line + 1) : '-');
+ 
++  // wiring overview of HotPlate: the probe answers listenersAll, the panel gets the table
++  const origPM = panel.webview.postMessage;
++  panel.webview.postMessage = m => {
++    if (m.type === 'listenersAll') setTimeout(() => pageRecv({ __htd: 1, type: 'listenersAll', seq: m.seq, map: { sbtExit: ['click'] } }), 10);
++    return origPM(m);
++  };
++  pageRecv({ __htd: 1, type: 'select', info: R.selInfo, origin: 'click' });   // make HotPlate the active designer again
++  await new Promise(r => setTimeout(r, 100));
++  const ov = await fake._cmds['ht9045Designer.pageOverview']();
++  const opanel = (fake._panels || []).find(p => p.viewType === 'ht9045Designer.overview');
++  ok(ov && ov.listenersOk && ov.summary.events === 19 && opanel, 'page overview: 19 events on HotPlate, probe answered, panel opened',
++    ov ? JSON.stringify(ov.summary.web) + ' ' + JSON.stringify(ov.summary.port) : 'none');
++  // real panel data for test\panels_render.ps1 (renders media/props.js and overview.js in Edge)
++  const dumpDir = path.join(require('os').tmpdir(), 'htdesigner_panels');
++  fs.mkdirSync(dumpDir, { recursive: true });
++  fs.writeFileSync(path.join(dumpDir, 'props_spbSave.json'), JSON.stringify(full), 'utf8');
++  if (xs) fs.writeFileSync(path.join(dumpDir, 'props_XST1.json'), JSON.stringify(xs), 'utf8');
++  if (ov) fs.writeFileSync(path.join(dumpDir, 'overview_HotPlate.json'), JSON.stringify(ov), 'utf8');
++  if (opanel) {
++    opanel.recv({ type: 'ready' });
++    ok(opanel.posted.some(m => m.type === 'data' && m.data.rows.length === 11), 'overview panel receives the rows');
++    pagePosted.length = 0;
++    opanel.recv({ type: 'select', id: 'XST1' });
++    ok(pagePosted.some(m => m.type === 'selectId' && m.id === 'XST1' && m.origin === 'overview'), 'clicking a row selects the control in the designer');
++  }
++
+   // live data tag: main.html palMainStatus <- machine.state <- WebBridgeTags.cpp
+   const MAINP = path.join(PORT, '..', 'web', 'page', 'main.html');
+   const mtext = fs.readFileSync(MAINP, 'utf8');
+-- 
+2.55.0.windows.5
+

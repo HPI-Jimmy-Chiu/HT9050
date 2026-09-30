@@ -1,0 +1,348 @@
+From 8bde20a56506cc2dd3edc95d7a3cb9ca55558968 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 30 Sep 2026 00:54:21 +0800
+Subject: [PATCH] HTDESIGNER-52: four fixes found by a review of R28-R44
+ (0.52.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+An independent read-only review of the R28-R44 diff found these; each one
+checked against the code, then fixed and tested:
+- 改回 DFM wrote nothing when one control had two differences on the same
+  tag (Left + Font.Bold of one button: two edits of its start tag = "the
+  same source changed twice (overlapping)", refused). applySourceEdit now
+  applies every change of one tag to that tag's text -- one edit of it.
+  Every batch gains (a panel change on many, editMany, group drags).
+- Tab 順序 showed every checkbox as "not in the DFM": a generated TCheckBox
+  has its name on <label class="ckb" id>, the <input> has none. A stop
+  without an id now belongs to the label around it (HotPlate: 11 stops
+  compared, not 8). A name reached twice counts once.
+- DFM 位置 switched off while a comparison was still waiting for the page:
+  the late answer switched it back on. A generation counter now drops it.
+- cmdPlace works on the designer it was put down on (setActive first), not
+  whichever is active.
+Also: with Tab 順序 on, the stops are read again at most every 0.7 s (and
+after an edit) instead of on every mouse move.
+
+Tests: smoke (a batch of style + style + attribute on spbSave = one edit of
+its tag with all three; turned off while comparing = stays off), probe (a
+checkbox named by its label is the 4th stop, blue; the non-grey badges are
+exactly the compared ones), real VS Code (spbSave moved AND bold -> both
+back to the DFM in the source, two undos; HotPlate Tab order: 11 compared).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHANGELOG.md          |  7 +++++
+ tools/vscode-htdesigner/extension.js          | 30 ++++++++++++++-----
+ tools/vscode-htdesigner/media/probe.js        | 28 +++++++++++++----
+ tools/vscode-htdesigner/package.json          |  2 +-
+ .../test/integration/index.js                 | 15 +++++++---
+ tools/vscode-htdesigner/test/probe_driver.js  | 18 +++++++----
+ .../vscode-htdesigner/test/smoke_extension.js | 30 +++++++++++++++++++
+ 7 files changed, 108 insertions(+), 22 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/CHANGELOG.md b/tools/vscode-htdesigner/CHANGELOG.md
+index 89f6232..2f82138 100644
+--- a/tools/vscode-htdesigner/CHANGELOG.md
++++ b/tools/vscode-htdesigner/CHANGELOG.md
+@@ -2,6 +2,13 @@
+ 
+ 每一版多了什麼。怎麼操作看 [操作一覽](CHEATSHEET.md)，詳細說明看 README。
+ 
++## 0.52.0
++- 修正：**「改回 DFM」遇到同一個元件有兩項以上不同**（例如位置和粗體）時什麼都沒寫回。現在同一個標籤的多個修改會合成一次寫入。
++- 修正：Tab 順序把所有 **CheckBox** 當成「DFM 沒有」（名稱在外層的 `<label>` 上）。
++- 修正：關掉「DFM 位置」時，正在背景重算的結果可能又把它打開。
++- 修正：開著兩個設計檢視時，工具箱放置可能加到另一頁。
++- Tab 順序開著時，大頁面移動滑鼠比較不會卡（停點不再每次重算）。
++
+ ## 0.51.0
+ - 這份更新紀錄（VS Code 擴充功能頁面的「變更記錄」分頁也看得到）。
+ 
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 97bfa84..461df0e 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -1212,13 +1212,20 @@ class Hub {
+         return { error: '找不到「' + m.id + '」的標題元素（' + (m.target === 'legend' ? '<legend>' : '.pnlCap') + '）在原始碼的位置，沒有寫回。' };
+       }
+       if (!target) return { error: '「' + m.id + '」的位置由外層元素決定，但原始碼裡找不到緊鄰的外層標籤，沒有寫回。' };
+-      let t = target.text;
+-      if (m.what === 'style') t = htmledit.setStyle(t, m.style || {});
+-      else for (const [k, v] of Object.entries(m.attr || {})) t = htmledit.setAttr(t, k, v);
+-      return { range: [target.start, target.end], repl: t };
++      // (fn: the same change applied to a tag's text -- a batch may change one tag twice)
++      const fn = t0 => {
++        let t = t0;
++        if (m.what === 'style') t = htmledit.setStyle(t, m.style || {});
++        else for (const [k, v] of Object.entries(m.attr || {})) t = htmledit.setAttr(t, k, v);
++        return t;
++      };
++      return { range: [target.start, target.end], repl: fn(target.text), fn };
+     }
+     if (m.what === 'caption') {
+-      if (m.capKind === 'value') return { range: [tag.start, tag.end], repl: htmledit.setAttr(tag.text, 'value', String(m.value)) };
++      if (m.capKind === 'value') {
++        const fnv = t0 => htmledit.setAttr(t0, 'value', String(m.value));
++        return { range: [tag.start, tag.end], repl: fnv(tag.text), fn: fnv };
++      }
+       const r = htmledit.captionRange(text, tag, m.capKind);
+       if (!r) return { error: '找不到「' + m.id + '」的文字在原始碼的位置，沒有寫回。' };
+       return { range: r, repl: htmledit.escText(m.value) };
+@@ -1230,12 +1237,16 @@ class Hub {
+   async applySourceEdit(d, m) {
+     const text = d.doc.getText();
+     const list = m.what === 'batch' ? (m.edits || []) : [m];
+-    const parts = [];
++    const all = [];
+     for (const one of list) {
+       const r = this.editRange(text, one);
+       if (r.error) { this.refuseEdit(d, r.error); d.render(); return false; }
+-      if (text.slice(r.range[0], r.range[1]) !== r.repl) parts.push(r);
++      // two changes of the same tag (改回 DFM: Left and Font.Bold of one button) = one edit of it
++      const same = r.fn ? all.find(p => p.fn && p.range[0] === r.range[0] && p.range[1] === r.range[1]) : null;
++      if (same) { same.repl = r.fn(same.repl); continue; }
++      all.push(r);
+     }
++    const parts = all.filter(r => text.slice(r.range[0], r.range[1]) !== r.repl);
+     if (!parts.length) return true;
+     parts.sort((a, b) => a.range[0] - b.range[0]);
+     for (let i = 1; i < parts.length; i++) {
+@@ -1681,6 +1692,8 @@ class Hub {
+   async cmdPlace(d, m) {
+     const item = toolbox.itemOf(m && m.cls);
+     d.armed = null;
++    // cmdAdd works on the active designer: the one it was put down on
++    if (this.active !== d) this.setActive(d);
+     if (!item || !Array.isArray(m.targets) || !m.targets.length) return null;
+     const pi = await d.info;
+     const text = d.doc.getText();
+@@ -2075,14 +2088,17 @@ class Hub {
+     const nu = typeof on === 'boolean' ? on : !d.dfmGhosts;
+     if (!nu) {
+       d.dfmGhosts = null;
++      d.ghostGen = (d.ghostGen || 0) + 1;   // a comparison already on its way must not turn them back on
+       clearTimeout(d.ghostTimer);
+       d.post({ type: 'dfmGhosts', items: null });
+       this.updateStatus();
+       return { on: false };
+     }
++    const gen = d.ghostGen || 0;
+     const pi = await d.info;
+     if (!pi.ir) { if (!quiet) vscode.window.showInformationMessage('這一頁沒有對應的 DFM，沒有位置可以畫。'); return null; }
+     const reply = await d.request({ type: 'lookAll', ids: Array.from(pi.ir.byName.keys()) }, 8000);
++    if ((d.ghostGen || 0) !== gen) return { on: false };   // turned off while it compared
+     if (!reply) { if (!quiet) vscode.window.showWarningMessage('設計檢視沒有回應（頁面還在載入？），請稍後再試。'); return null; }
+     const items = dfmdiff.ghostsOf(dfmdiff.diffPage(reply.items || [], pi.ir).rows);
+     d.dfmGhosts = items;
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index 969796d..33fefe8 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -27,6 +27,7 @@
+   try { api = acquireVsCodeApi(); } catch (e) { api = null; }
+   function post(m) {
+     m.__htd = 1;
++    if (m.type === 'edit' && typeof tabCache !== 'undefined') tabCache = null;   // (an edit may move a Tab stop)
+     try {
+       if (api) api.postMessage(m);
+       else (window.__htdOut = window.__htdOut || []).push(JSON.parse(JSON.stringify(m)));
+@@ -602,18 +603,26 @@
+     var pos = list.filter(function (x) { return x.tabIndex > 0; }).sort(function (a, b) { return a.tabIndex - b.tabIndex; });
+     return pos.concat(list.filter(function (x) { return x.tabIndex === 0; }));
+   }
++  /* the component a Tab stop belongs to: its own id, or -- a generated TCheckBox / TRadioButton
++     is <label class="ckb" id="name"><input type="checkbox"> -- the label's around it */
++  function stopName(x) {
++    if (x.id) return x.id;
++    var p = x.parentElement;
++    return p && p.tagName === 'LABEL' && p.id ? p.id : '';
++  }
+   function tabModel() {
+     var seq = pageTabOrder();
+     var dfm = TABO || [];
+     var inDfm = {}, onPage = {};
+     for (var i = 0; i < dfm.length; i++) inDfm[dfm[i]] = 1;
+-    for (var j = 0; j < seq.length; j++) if (seq[j].id) onPage[seq[j].id] = 1;
++    for (var j = 0; j < seq.length; j++) { var sn = stopName(seq[j]); if (sn) onPage[sn] = 1; }
+     var dRank = {}, k = 0;
+     for (var d = 0; d < dfm.length; d++) if (onPage[dfm[d]]) dRank[dfm[d]] = ++k;
+-    var items = [], p = 0, bad = [];
++    var items = [], p = 0, bad = [], counted = {};
+     for (var s = 0; s < seq.length; s++) {
+-      var id = seq[s].id;
+-      if (id && inDfm[id]) {
++      var id = stopName(seq[s]);
++      if (id && inDfm[id] && !counted[id]) {
++        counted[id] = 1;
+         p++;
+         items.push({ el: seq[s], page: p, dfm: dRank[id] });
+         if (p !== dRank[id]) bad.push(id + '（網頁第 ' + p + '、DFM 第 ' + dRank[id] + '）');
+@@ -621,10 +630,18 @@
+     }
+     return { items: items, stops: seq.length, common: p, bad: bad };
+   }
++  /* the stops change only with an edit / a redraw: read them again at most every 0.7 s (a big
++     page has hundreds, and the overlay is drawn on every mouse move); the badges follow each draw */
++  var tabCache = null;
++  function tabModelCached() {
++    var now = Date.now();
++    if (!tabCache || now - tabCache.at > 700) tabCache = { at: now, model: tabModel() };
++    return tabCache.model;
++  }
+   function placeTabOrder() {
+     var n = 0;
+     if (TABO && mode === 'design') {
+-      var md = tabModel();
++      var md = tabModelCached();
+       for (var i = 0; i < md.items.length && n < 3000; i++) {
+         var it = md.items[i];
+         var r = it.el.getBoundingClientRect();
+@@ -1773,6 +1790,7 @@
+         break;
+       case 'tabOrder': {
+         TABO = Array.isArray(m.dfm) ? m.dfm.filter(function (x) { return typeof x === 'string'; }) : null;
++        tabCache = null;
+         drawBadge();
+         scheduleDraw();
+         var tm = TABO ? tabModel() : null;
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index cbf9ab2..89510b0 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.51.0",
++  "version": "0.52.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index b5edbd7..26758e3 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -594,7 +594,8 @@ exports.run = async function () {
+       await vscode.commands.executeCommand('ht9045Designer.toggleTabOrder', false);
+       d.diag = null; d.post({ type: 'diag' });
+       const tg2 = await waitFor(() => d.diag, 5000);
+-      ok(!!(tOn && tOn.on && tOn.stops > 0 && tOn.common >= 5 && tOn.dfm[0] === 'HotPlateName' && tg1 && tg1.tabBadges > 0 && tg2 && tg2.tabBadges === 0),
++      // (8 before the checkboxes were named by their <label>: now they count too)
++      ok(!!(tOn && tOn.on && tOn.stops > 0 && tOn.common > 8 && tOn.dfm[0] === 'HotPlateName' && tg1 && tg1.tabBadges > 0 && tg2 && tg2.tabBadges === 0),
+         'Tab 順序 (real): ' + (tOn ? tOn.stops + ' stops, ' + tOn.common + ' in the .dfm, ' + tOn.bad.length + ' out of order' : '-') + '; badges drawn, off = none',
+         tOn && tOn.bad ? tOn.bad.slice(0, 3).join(' | ') : '');
+     }
+@@ -606,13 +607,19 @@ exports.run = async function () {
+       await waitFor(() => (d.sel && d.sel.info && d.sel.info.id === 'spbSave' && !d.sel.info.multi ? true : null), 5000);
+       d.panel.reveal(d.panel.viewColumn, false);
+       await waitFor(() => hub.active === d, 3000);
++      // first move it 6 px (a second difference on the same tag: Left + Font.Bold -- both must be written)
++      d.post({ type: 'setLayout', key: d.sel.info.key, left: 60 });
++      await waitFor(() => (/id="spbSave"[^>]*left:60px/.test(d.doc.getText()) ? true : null), 5000);
++      await sleep(300);
+       const rd = await vscode.commands.executeCommand('ht9045Designer.resetToDfm');
+-      const rdOk = await waitFor(() => (/id="spbSave"[^>]*font-weight:normal/.test(d.doc.getText()) ? true : null), 5000);
+-      ok(!!(rd && rd.count >= 1 && rdOk), 'reset to DFM (real): spbSave back to its .dfm values (' + (rd ? rd.count : 0) + ' item(s)), not saved');
++      const rdOk = await waitFor(() => (/id="spbSave"[^>]*font-weight:normal/.test(d.doc.getText()) && /id="spbSave"[^>]*left:54px/.test(d.doc.getText()) ? true : null), 5000);
++      ok(!!(rd && rd.count >= 2 && rdOk), 'reset to DFM (real): spbSave moved + bold -> both back to its .dfm values in the source (' + (rd ? rd.count : 0) + ' items), not saved');
+       d.panel.reveal(d.panel.viewColumn, false);
+       await sleep(300);
+       await vscode.commands.executeCommand('undo');
+-      ok(!!(await waitFor(() => (d.doc.getText() === orig5 ? true : null), 5000)), 'ONE undo takes the reset back');
++      await sleep(300);
++      await vscode.commands.executeCommand('undo');
++      ok(!!(await waitFor(() => (d.doc.getText() === orig5 ? true : null), 5000)), 'two undos (the reset, the move) give the page back');
+       if (d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
+       await waitFor(() => (d.treeData.length ? true : null), 8000);
+     }
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index e034ada..2026e04 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -622,10 +622,15 @@
+               var cs = getComputedStyle(x);
+               return cs.visibility !== 'hidden' && cs.display !== 'none';
+             });
+-            var ids = stops.filter(function (x) { return x.tabIndex === 0 && x.id; }).map(function (x) { return x.id; });
++            /* (a checkbox's name is on its <label class="ckb" id>, the <input> has none) */
++            var nm = function (x) { if (x.id) return x.id; var pp = x.parentElement; return pp && pp.tagName === 'LABEL' && pp.id ? pp.id : ''; };
++            var ids = [];
++            stops.forEach(function (x) { var n0 = nm(x); if (x.tabIndex === 0 && n0 && ids.indexOf(n0) < 0) ids.push(n0); });
+             if (ids.length < 4 || stops.some(function (x) { return x.tabIndex > 0; })) { R.tabTried = 'page has ' + ids.length + ' stops (skipped)'; R.tabOk = true; return; }
++            var ck = stops.filter(function (x) { return x.type === 'checkbox' && !x.id && nm(x) && ids.indexOf(nm(x)) > 2; })[0];
++            var dfmL = [ids[1], ids[0], ids[2], 'no-such-id'].concat(ck ? [nm(ck)] : []);
+             var nTI = msgs('tabOrderInfo').length;
+-            window.__htdProbe.message({ type: 'tabOrder', dfm: [ids[1], ids[0], ids[2], 'no-such-id'], seq: 777 });
++            window.__htdProbe.message({ type: 'tabOrder', dfm: dfmL, seq: 777 });
+             window.__htdProbe.drawNow();
+             var rep = msgs('tabOrderInfo')[nTI];
+             var tbs = Array.prototype.filter.call(host.shadowRoot.querySelectorAll('.tb'), function (b) { return b.style.display === 'block'; });
+@@ -635,9 +640,12 @@
+             window.__htdProbe.message({ type: 'tabOrder', dfm: null });
+             window.__htdProbe.drawNow();
+             var left = Array.prototype.filter.call(host.shadowRoot.querySelectorAll('.tb'), function (b) { return b.style.display === 'block'; }).length;
+-            R.tabTried = 'badges ' + txt.slice(0, 6).join(' ') + ' (' + tbs.length + ', red ' + reds + ', grey ' + greys + ') reply ' + (rep ? rep.seq + ' stops ' + rep.stops + ' common ' + rep.common + ' bad ' + rep.bad.length : '-') + ' after off ' + left;
+-            R.tabOk = !!rep && rep.seq === 777 && rep.common === 3 && rep.bad.length === 2 && txt.indexOf('1≠2') >= 0 && txt.indexOf('2≠1') >= 0 && txt.indexOf('3') >= 0 &&
+-              reds === 2 && greys === tbs.length - 3 && left === 0;
++            var expC = 3 + (ck ? 1 : 0);
++            R.tabTried = 'badges ' + txt.slice(0, 6).join(' ') + ' (' + tbs.length + ', red ' + reds + ', grey ' + greys + ') reply ' + (rep ? rep.seq + ' stops ' + rep.stops + ' common ' + rep.common + ' bad ' + rep.bad.length : '-') +
++              ' checkbox ' + (ck ? nm(ck) : '-') + ' after off ' + left;
++            /* a checkbox named by its label counts like the others (4th, blue), not grey */
++            R.tabOk = !!rep && rep.seq === 777 && rep.common === expC && rep.bad.length === 2 && txt.indexOf('1≠2') >= 0 && txt.indexOf('2≠1') >= 0 && txt.indexOf('3') >= 0 &&
++              reds === 2 && tbs.length - greys === expC && (!ck || txt.indexOf('4') >= 0) && left === 0;
+           })();
+ 
+           /* 選取同型別: every button made a "TSpeedButton" -> the page scope selects them all
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 3b2c169..f3122f2 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -352,6 +352,22 @@ async function main() {
+   }
+   const ghEnd = await fake._cmds['ht9045Designer.toggleDfmGhosts'](false);
+   ok(ghEnd && ghEnd.on === false && !/DFM 位置/.test(api.hub.status.text), 'DFM 位置 off');
++  // turned off while a comparison is still on its way (the page answers late): it stays off
++  const ghFastPM = panel.webview.postMessage;
++  panel.webview.postMessage = m => {
++    if (m.type === 'lookAll') setTimeout(() => pageRecv({ __htd: 1, type: 'lookAll', seq: m.seq, items: [
++      { id: 'spbSave', lay: Object.assign({}, realLay, { left: 64 }), cap: full.edit.caption, look: realLook }] }), 80);
++    return origPM(m);
++  };
++  pagePosted.length = 0;
++  const ghLate = fake._cmds['ht9045Designer.toggleDfmGhosts'](true);
++  await new Promise(r => setTimeout(r, 10));
++  await fake._cmds['ht9045Designer.toggleDfmGhosts'](false);
++  const ghLateRes = await ghLate;
++  const ghLast = pagePosted.filter(m => m.type === 'dfmGhosts').pop();
++  ok(ghLateRes && ghLateRes.on === false && !(api.hub.active && api.hub.active.dfmGhosts) && ghLast && ghLast.items === null && !/DFM 位置/.test(api.hub.status.text),
++    'DFM 位置 turned off while it compared: the late answer does not turn it back on', JSON.stringify(ghLateRes));
++  panel.webview.postMessage = ghFastPM;
+   // Tab 順序: the .dfm's order goes to the probe; its reply (2 stops out of order) -> status bar + output panel
+   const toPM = panel.webview.postMessage;
+   panel.webview.postMessage = m => {
+@@ -892,6 +908,20 @@ async function main() {
+   const calls = fake._calls.filter(c => c.name === 'applyEditCall').slice(callsBefore);
+   ok(calls.length === 1 && calls[0].args[0] === 2 && /id="spbSave"[^>]*top:9px;/.test(text) && /id="sbtExit"[^>]*top:9px;/.test(text),
+     'batch edit (align top) -> 2 changed tags in ONE WorkspaceEdit, the unchanged one skipped', JSON.stringify(calls.map(c => c.args[0])));
++  // 改回 DFM sends Left and Font.Bold of ONE button: both land in its one start tag (not "overlapping, nothing written")
++  const sameBefore = fake._calls.filter(c => c.name === 'applyEditCall').length;
++  const sameText0 = text;
++  pageRecv({ __htd: 1, type: 'edit', what: 'batch', edits: [
++    { what: 'style', id: 'spbSave', target: 'self', style: { left: '61px' } },
++    { what: 'style', id: 'spbSave', target: 'self', style: { 'font-weight': 'normal' } },
++    { what: 'attr', id: 'spbSave', attr: { 'data-x': '1' } },
++  ] });
++  await wait(50);
++  const sameCalls = fake._calls.filter(c => c.name === 'applyEditCall').slice(sameBefore);
++  ok(sameCalls.length === 1 && sameCalls[0].args[0] === 1 && /id="spbSave"[^>]*left:61px;/.test(text) && /id="spbSave"[^>]*font-weight:normal/.test(text) &&
++    /id="spbSave"[^>]*data-x="1"/.test(text),
++    'batch with three changes of ONE tag (style, style, attribute) -> one edit of that tag, all three in it', tagNow('spbSave').slice(0, 160));
++  doc._setText(sameText0);
+   const textBefore = text;
+   const refusedBefore = fake._calls.length;
+   pageRecv({ __htd: 1, type: 'edit', what: 'style', id: 'noSuchControl', target: 'self', style: { left: '1px' } });
+-- 
+2.55.0.windows.5
+

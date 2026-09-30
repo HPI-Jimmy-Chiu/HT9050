@@ -1,0 +1,1208 @@
+From c0153f70b6f41482c2abec582c29463b75ee076d Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 30 Sep 2026 15:40:46 +0800
+Subject: [PATCH] HTDESIGNER-72: a new event is wired page -> server -> C++ by
+ itself (htd.event) (0.72.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260930: "如果我有需要新增事件 其他連結 理應外掛程式自動幫我新增" (and before:
+"你用json中間連線的 是你這邊要幫我處理 我只需要處理C++的部分").
+A double-click on an empty event (or a typed name) adds the C++ handler as
+before AND, in the same edit, nothing saved:
+- the page: one line in its <script id="htdEvents"> block --
+  htdCpp('spbSave', 'dblclick', 'TfHotPlate', 'spbSaveDblClick', 'OnDblClick');
+  -- and, once, the htdCpp helper: sends WS htd.event through the page's
+  client (the loaded object with rawCmd; token first, like the page's own
+  senders; a failure said on the page). The client script is added when the
+  page does not load it.
+- HtdEvents/HtdEvents.gen.cpp (new lib/cppbridge.js; an untitled document at
+  that path, nothing on disk until saved): one row per designer event, calling
+  the form's global object (fHotPlate->spbSaveDblClick(sender)); mouse button /
+  position / Shift-Ctrl-Alt / key code from the page, by the declared
+  parameters. Same rules as form.event, taken from its implementation: not
+  while SystemStart / SoftStart, under ht9045::formjson::FormLock, cJSON.
+- tools/wb_serve.cpp: the htd.event branch made from form.event's own (its
+  checks, W906_HtdEvent, CompleteCommand), in front of it ON THE SAME LINE --
+  no line moves; once.
+- CMakeLists.txt: the generated file in wb_serve's add_executable, in front of
+  its ")" (same line); once.
+Not wired (said why, the handler still added): no global object, a parameter
+the page cannot give, a non-public declaration, no form.event to copy.
+A renamed handler's page line and generated row follow. The 事件表 row of a
+designer event is ITS handler (not htd.event's entry point), read from the
+open documents before they are saved. A form.event table row's function is
+the one the server runs (&B_cbSelectHPFromDBChange's definition).
+
+Checked by compiling (syntax only, in scratch; no build dir touched): the
+generated file (WinLibs 16.2 C++14 and MinGW.org 6.3) and wb_serve.cpp with
+the branch (a deliberately broken copy fails, so the branch is compiled).
+
+Tests (all 4 layers pass: lib 158, smoke 159, panels, real VS Code 147):
+real VS Code (OnDblClick -> the page line, the redrawn page binds dblclick,
+wb_serve.cpp / CMakeLists.txt dirty with the hooks, the generated file
+untitled and not on disk; the row = spbSaveDblClick; all reverted; MD5 of
+wb_serve.cpp / CMakeLists.txt / fHotPlate.h / .cpp unchanged), smoke (the
+same in memory + rename follows), lib (server hook on the real wb_serve.cpp
+keeps the line count, CMake hook, calls, generated file, page lines).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHANGELOG.md          |  10 +
+ tools/vscode-htdesigner/README.md             |  13 +-
+ tools/vscode-htdesigner/extension.js          | 304 ++++++++++++++++--
+ tools/vscode-htdesigner/lib/cppbridge.js      | 271 ++++++++++++++++
+ tools/vscode-htdesigner/lib/jsevents.js       | 105 +++++-
+ tools/vscode-htdesigner/media/props.js        |  13 +-
+ tools/vscode-htdesigner/package.json          |   2 +-
+ tools/vscode-htdesigner/test/fake_vscode.js   |   3 +-
+ .../test/integration/index.js                 |  38 ++-
+ tools/vscode-htdesigner/test/run_tests.js     |  55 ++++
+ .../vscode-htdesigner/test/smoke_extension.js |  44 ++-
+ tools/vscode-htdesigner/test/vscode_it.ps1    |   8 +-
+ 12 files changed, 828 insertions(+), 38 deletions(-)
+ create mode 100644 tools/vscode-htdesigner/lib/cppbridge.js
+
+diff --git a/tools/vscode-htdesigner/CHANGELOG.md b/tools/vscode-htdesigner/CHANGELOG.md
+index d8db28a..57b9140 100644
+--- a/tools/vscode-htdesigner/CHANGELOG.md
++++ b/tools/vscode-htdesigner/CHANGELOG.md
+@@ -2,6 +2,16 @@
+ 
+ 每一版多了什麼。怎麼操作看 [操作一覽](CHEATSHEET.md)，詳細說明看 README。
+ 
++## 0.72.0
++- **新增事件時，網頁到 C++ 的連線自動接好**（像 WPF：你只寫 C++ 函式的內容）。在事件表雙擊空的事件（或打名稱），
++  除了 `.h` 宣告、`.cpp` 空的本體，同一次修改還會：
++  這一頁 HTML 加一行 `htdCpp(...)`（按下去經由 WS `htd.event` 送出）、`HtdEvents/HtdEvents.gen.cpp`（產生檔：一列一個事件，呼叫表單物件上的函式）、
++  伺服器 `wb_serve.cpp` 加 `htd.event` 分支（照 form.event 的寫法，接在同一行、行號不動）、`CMakeLists.txt` 加那個產生檔。
++  都不存檔；存檔後重建、重開伺服器才會生效。改函式名稱時，網頁那一行和產生檔跟著改。
++- 事件表認得這種接法：那一列只列那個函式（不是 `htd.event` 的入口），還沒存檔也看得到（從開著的檔案讀）。
++- 伺服器 form.event 事件表接的事件（例如 Hot Plate 的 cbSelectHPFromDB OnChange），那一列列的是伺服器真正跑的函式
++  （`B_cbSelectHPFromDBChange`，FileRW/HotPlateForm_File.cpp），不是事件表那一行。
++
+ ## 0.71.0
+ - **事件表每個事件只列「真正會執行的那一個 C++ 函式」**：例如主畫面 Exit 的 OnClick 只列 `W906_Main_CloseProgramOp`
+   （FileRW/MainClose.cpp），IO 頁 BtnPanelLane3 的 OnClick 只列 `W906_DispatchIoClick`。
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index f558c65..10e9788 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -319,8 +319,17 @@ GroupBox 的 `<legend>` 和 Panel 的標題永遠留在第一個；已經在最
+   **雙擊空的那一列**：像 BCB6 一樣新增處理函式到 **C++ 移植樹**：表單類別的 `.h` 加宣告（接在其他事件函式後面、同樣的縮排）、
+   `.cpp` 最後加空的本體（VCL 的參數，名稱照 BCB6：元件名＋事件名去掉 On，例如 `spbSaveDblClick`），打開 `.cpp` 到那一行。
+   都是**還沒存檔**的修改，Ctrl+Z 可以復原；同名的已經宣告過（例如刻意沒有本體的 GATE）就不再加。
+-  讓網頁的按鈕真的叫到它，還要：這一頁的 `*_ev.js` 事件清單（`CTLS`）、伺服器事件表（`tools/editlist` 或 `tools/formbridge` 的 `events`，再跑產生器）——
+-  這兩個屬於事件移植流程，這一版不自動改，新增完會列出還差哪一步。
++  **網頁到 C++ 也同時自動接好**（像 WPF：你只寫 C++ 函式的內容，中間的 JSON 連線工具處理），同一次修改、都不存檔：
++  1. 這一頁 HTML 檔尾的 `<script id="htdEvents">` 加一行 `htdCpp('spbSave', 'dblclick', 'TfHotPlate', 'spbSaveDblClick', 'OnDblClick');`
++     （第一次會加一個 `htdCpp` 小函式：按下去就經由頁面的 WS 送 `htd.event`，跟頁面其他按鈕一樣先拿操作權；頁面沒載入送命令的 .js 就順便載入）。
++  2. `HtdEvents/HtdEvents.gen.cpp`（產生檔，第一次是新檔）：設計工具新增的事件一列一個，在表單的全域物件上呼叫它
++     （`fHotPlate->spbSaveDblClick(fHotPlate 的 spbSave 或 nullptr)`；滑鼠鍵、位置、Shift／Ctrl／Alt、按鍵碼照網頁送來的）。
++     規則跟 form.event 一樣：機台運轉中不跑、持同一把表單鎖。
++  3. 伺服器（`tools/wb_serve.cpp`）加 `htd.event` 那一個分支：照 form.event 的寫法，**接在 form.event 同一行，行號不動**；已經有就不再加。
++  4. `CMakeLists.txt`：wb_serve 的來源清單加 `HtdEvents/HtdEvents.gen.cpp`（接在收尾括號同一行）。
++  存檔之後要**重建、重開伺服器**網頁按下去才會跑到它。事件表那一列會顯示「網頁／伺服器／C++」都亮、雙擊到那個函式。
++  在事件表改那個函式的名稱，`.h`／`.cpp`、網頁那一行、產生檔跟著改。
++  接不上時（表單沒有全域物件、事件的參數網頁給不出來、宣告在 private 裡…）只新增函式，訊息會說原因。
+ - **Name／Alias**（「外觀與版面」最上面）：直接打。Name＝id（改名，title、`<label for>`、網頁事件的綁定一起改）；
+   Alias＝IO 頁的元件對到的 IO（title 裡的 `｜Alias=…`，網頁程式照它對 IO），可以從 IO 表（`IO_Table.csv`，唯讀）的名稱挑。
+   事件表裡不是 .dfm 指定的函式名稱也可以打：空的＝用那個名稱新增，已經有的＝`.h`／`.cpp` 一起改名。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 2dcac2c..5b95492 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -40,6 +40,7 @@ const vclevents = require('./lib/vclevents');
+ const cppstub = require('./lib/cppstub');
+ const jsevents = require('./lib/jsevents');
+ const aliasedit = require('./lib/aliasedit');
++const cppbridge = require('./lib/cppbridge');
+ const CSV_VIEW = 'ht9045Designer.csv';
+ const LINT_SOURCE = 'HTML 頁面檢查';
+ const htmledit = require('./lib/htmledit');
+@@ -1080,6 +1081,21 @@ class Hub {
+       const name = isForm ? '' : info.id || '';
+       const dfmEv = node && node.events ? node.events : {};
+       const table = port && d.r.portRoot ? this.serverEvents(d.r.portRoot) : [];
++      // the C++ events the designer wired on this page (htdCpp lines), the server's htd.event branch, the generated table
++      const pageText = d.doc.getText();
++      const htdLines = name ? jsevents.cppLines(pageText).filter(x => x.id === name) : [];
++      let htdDisp = null, htdRows = [];
++      if (htdLines.length && port) {
++        const hh = (await port.findString(cppbridge.CMD)).filter(h => h.dispatch && !h.dead && !h.test && !h.comment);
++        if (hh.length) htdDisp = T(Object.assign(this.cppTarget('port', hh[0], true), { note: '伺服器分派 ' + cppbridge.CMD + '（設計工具的事件）' }));
++        // (not saved yet: the open document has it)
++        if (!htdDisp) {
++          const od = this.dirtyHit(d.r.portRoot, /\.cmd\s*==\s*"htd\.event"/);
++          if (od) htdDisp = T({ kind: 'port', file: od.file, line: od.line, col: 1, snippet: od.snippet, note: '伺服器分派 ' + cppbridge.CMD + '（還沒存檔）', weak: false });
++        }
++        const gd = d.r.portRoot ? await this.htdGenDoc(d.r.portRoot, false) : { doc: null };
++        htdRows = gd.doc ? cppbridge.rowsOf(gd.doc.getText()) : [];
++      }
+       const rows = [];
+       for (const evName of vclevents.eventsOf(vcl, Object.keys(dfmEv))) {
+         const dfmH = dfmEv[evName] || '';
+@@ -1110,14 +1126,45 @@ class Hub {
+         // W906_DispatchIoClick); a component the .dfm does not have (added for the 9050) is wired this way too
+         // (a .dfm one keeps its handler name -- sbCloseProgram.OnClick = sbCloseProgramClick -- and gets the marks and
+         // the port's function, W906_Main_CloseProgramOp through act.main.closeProgram)
+-        if (!isForm) {
++        // a C++ event the designer wired (its htdCpp line): THAT handler -- not the htd.event entry point the page's
++        // listener sends to
++        const dl = htdLines.find(x => x.event === evName);
++        if (dl) {
++          row.cmd = cppbridge.CMD;
++          row.via = 'htd';
++          if (!row.handler) row.handler = dl.handler;
++          row.web = T({ kind: 'web', file: d.file, line: pageText.slice(0, dl.s).split('\n').length, col: 1, snippet: pageText.slice(dl.s, dl.e).trim(),
++            note: '這一頁送出（設計工具的 htdCpp）', weak: false });
++          row.server = htdDisp && htdRows.some(r => r.form === formCls && r.handler === dl.handler) ? htdDisp : null;
++          if (port && pi.classes.length) {
++            const st = dl.handler === (dfmH || conv) && row.portState ? { state: row.portState, hit: null } : await port.defState(pi.classes, dl.handler);
++            if (st.state === 'live') {
++              if (st.hit) row.port = T(this.cppTarget('port', st.hit));
++              row.portState = 'live';
++              row.main = row.port;
++              row.mainName = dl.handler;
++            } else {
++              // added and not saved yet: its body in the open .cpp
++              const od = this.dirtyHit(d.r.portRoot, new RegExp('\\b' + formCls + '\\s*::\\s*' + dl.handler + '\\s*\\('), /\.cpp$/i);
++              if (od) {
++                row.port = T({ kind: 'port', file: od.file, line: od.line, col: 1, snippet: od.snippet, note: '定義（還沒存檔）', weak: false });
++                row.portState = 'new';
++                row.main = row.port;
++                row.mainName = dl.handler;
++              }
++            }
++          }
++        }
++        if (!isForm && !dl) {
+           const types = fmt.domTypesOf(evName);
+           let via = null;
+-          // (the operator-token handshake the sender does first -- control.takeover / control.release -- is not it)
++          // (the operator-token handshake the sender does first -- control.takeover / control.release -- is not it;
++          // nor htd.event, the designer's own entry point: its handler is the row's htdCpp line)
+           for (const pass of [0, 1]) {
+             for (const l of listeners) {
+               if (via || !(l.on === 'self' || l.relevant) || !types.includes(l.type)) continue;
+               for (const c of l.cmds) {
++                if (c === cppbridge.CMD) continue;
+                 if (pass === 0 && /^control\./.test(c)) continue;
+                 const r = cmdRes.get(c);
+                 if (r && (r.dispatch.length || r.handlers.length)) { via = { l, r }; break; }
+@@ -1141,7 +1188,12 @@ class Hub {
+             row.via = 'cmd';
+           }
+         }
+-        // no command to follow: the port's own definition of it (live), else the server's form.event table row
++        // no command to follow: the function the server's form.event table runs (B_cbSelectHPFromDBChange, the golden
++        // handler's translation), else the port's own definition of it (live), else that table row
++        if (row.main == null && srv && srv.fnLine) {
++          row.main = T({ kind: 'port', file: srv.file, line: srv.fnLine, col: 1, snippet: srv.fnSnippet, note: '伺服器的 form.event 跑的函式（' + srv.golden + ' 的翻譯）', weak: false });
++          row.mainName = srv.fn;
++        }
+         if (row.main == null && row.port != null && row.portState === 'live') { row.main = row.port; row.mainName = dfmH || conv; }
+         if (row.main == null && row.server != null) { row.main = row.server; row.mainName = (srv ? srv.meth : '') + '（form.event 事件表）'; }
+         rows.push(row);
+@@ -1286,7 +1338,8 @@ class Hub {
+     const c = this._srvEv;
+     if (c && c.root === portRoot && Date.now() - c.at < 20000) return c.rows;
+     const rows = [];
+-    const re = /\{\s*"(\w+)"\s*,\s*"(click|change)"\s*,\s*"([^"]*?(T\w+)::(\w+))"/g;
++    // (the handler pointer after it -- &B_cbSelectHPFromDBChange -- is the function the server really runs)
++    const re = /\{\s*"(\w+)"\s*,\s*"(click|change)"\s*,\s*"([^"]*?(T\w+)::(\w+))"(?:\s*,\s*&\s*([A-Za-z_][\w:]*))?/g;
+     for (const sub of ['FileRW', 'JsonBridge']) {
+       let names = [];
+       try { names = fs.readdirSync(path.join(portRoot, sub)); } catch (e) { continue; }
+@@ -1301,7 +1354,18 @@ class Hub {
+         while ((m = re.exec(t))) {
+           let line = 1;
+           for (let i = 0; i < m.index; i++) if (t.charCodeAt(i) === 10) line++;
+-          rows.push({ ctl: m[1], ev: m[2], golden: m[3], cls: m[4], meth: m[5], file: f, line, snippet: m[0].trim() });
++          const row = { ctl: m[1], ev: m[2], golden: m[3], cls: m[4], meth: m[5], file: f, line, snippet: m[0].trim() };
++          if (m[6]) {
++            const fn = m[6].replace(/^.*::/, '');
++            const dm = new RegExp('(^|\\n)([^\\n;{}]*\\b' + fn + '\\s*\\([^;{)]*\\)\\s*)\\{').exec(t);
++            if (dm) {
++              const at = dm.index + dm[1].length;
++              row.fn = fn;
++              row.fnLine = t.slice(0, at).split('\n').length;
++              row.fnSnippet = dm[2].trim();
++            }
++          }
++          rows.push(row);
+         }
+       }
+     }
+@@ -1407,6 +1471,32 @@ class Hub {
+     const rng = (doc, x) => new vscode.Range(doc.positionAt(x.s), doc.positionAt(x.e));
+     for (const x of r.h) we.replace(hDoc.uri, rng(hDoc, x), x.text);
+     for (const x of r.cpp) we.replace(cDoc.uri, rng(cDoc, x), x.text);
++    // its wiring follows: the page's htdCpp line(s), the generated table's row
++    const pageR = jsevents.renameCppEdits(d.doc.getText(), cls, row.handler, nu);
++    for (const x of pageR) we.replace(d.doc.uri, rng(d.doc, x), x.text);
++    let genN = 0;
++    const gen = d.r.portRoot ? await this.htdGenDoc(d.r.portRoot, false) : { doc: null };
++    const genRows = gen.doc ? cppbridge.rowsOf(gen.doc.getText()) : [];
++    if (genRows.some(x => x.form === cls && x.handler === row.handler)) {
++      const port = this.sourceTree(d.r.portRoot, 'port');
++      const disp = (await port.findString('form.event')).filter(h => h.dispatch && !h.dead && !h.test && !h.comment);
++      const sDoc = disp.length ? await vscode.workspace.openTextDocument(vscode.Uri.file(disp[0].file)) : null;
++      const sh = sDoc ? cppbridge.serverHook(sDoc.getText(), this.stamp()) : { error: 'no server' };
++      const ctx = sh.fn ? await this.htdCtx(port, sh.fn) : null;
++      const full = [];
++      let eol = '\n';
++      for (const x of genRows) {
++        const renamed = x.form === cls && x.handler === row.handler;
++        const dc = renamed ? cppbridge.declOf(hDoc.getText(), cls, row.handler) : null;
++        const c = await this.htdRowCode(d, renamed ? Object.assign({}, x, { handler: nu }) : x, dc ? dc.params : undefined);
++        if (c.error) continue;
++        eol = c.eol;
++        full.push(Object.assign({}, x, renamed ? { handler: nu } : {}, c));
++        if (renamed) genN++;
++      }
++      if (ctx && ctx.cjson) we.replace(gen.doc.uri, rng(gen.doc, { s: 0, e: gen.doc.getText().length }), cppbridge.genFile(full, ctx, eol));
++      else genN = 0;
++    }
+     if (!(await vscode.workspace.applyEdit(we))) { vscode.window.showWarningMessage('改名沒有寫進去（檔案可能是唯讀的）。'); return null; }
+     // other files that name it (saved ones: the source index) -- said, not changed
+     const others = (await pf.port.lookup([cls], row.handler)).filter(h => !web.samePath(h.file, pf.hFile) && !web.samePath(h.file, pf.cppFile));
+@@ -1414,9 +1504,10 @@ class Hub {
+     row.handler = nu;
+     if (this.props && this.props.data === data) this.props.show(data);
+     this.log('事件處理函式改名 ' + cls + '::' + old + ' → ' + nu + '：' + path.basename(pf.hFile) + ' ' + r.h.length + ' 處、' + path.basename(pf.cppFile) + ' ' + r.cpp.length + ' 處（未存檔）');
+-    vscode.window.showInformationMessage(cls + '::' + old + ' 改名為 ' + nu + '（' + path.basename(pf.hFile) + ' ' + r.h.length + ' 處、' + path.basename(pf.cppFile) + ' ' + r.cpp.length + ' 處；還沒存檔，Ctrl+Z 可以復原）。' +
++    const wired = (pageR.length ? '、網頁 ' + pageR.length + ' 處' : '') + (genN ? '、' + path.basename(cppbridge.GEN_REL) : '');
++    vscode.window.showInformationMessage(cls + '::' + old + ' 改名為 ' + nu + '（' + path.basename(pf.hFile) + ' ' + r.h.length + ' 處、' + path.basename(pf.cppFile) + ' ' + r.cpp.length + ' 處' + wired + '；還沒存檔，Ctrl+Z 可以復原）。' +
+       (others.length ? '另外 ' + others.length + ' 個地方也寫到 ' + old + '（例如 ' + path.basename(others[0].file) + ':' + others[0].line + '），那些沒有改。' : ''));
+-    return { from: old, to: nu, h: r.h.length, cpp: r.cpp.length, others: others.length };
++    return { from: old, to: nu, h: r.h.length, cpp: r.cpp.length, page: pageR.length, gen: genN, others: others.length };
+   }
+ 
+   /**
+@@ -1472,18 +1563,24 @@ class Hub {
+       return null;
+     }
+     const params = vclevents.signatureOf(row.name);
+-    const day = new Date();
+-    const stamp = day.getFullYear() + String(day.getMonth() + 1).padStart(2, '0') + String(day.getDate()).padStart(2, '0');
++    const stamp = this.stamp();
+     const note = '//AI(W906-HTDESIGNER) ' + stamp + ': 設計檢視新增的事件處理函式（' + (g.name || '表單') + '.' + row.name + '）';
+     const de = cppstub.declEdit(hDoc.getText(), cls, name, params, note);
+     const fe = cppstub.defEdit(cDoc.getText(), cls, name, params, note);
+     if (!de) { vscode.window.showInformationMessage('在 ' + path.basename(hFile) + ' 找不到 class ' + cls + ' 的本體。'); return null; }
++    // 自動接線 (EastSun 20260930: "如果我有需要新增事件 其他連結 理應外掛程式自動幫我新增"): the page's sender, the
++    // generated C++ table, the server's htd.event branch, the CMake entry -- in the SAME edit
++    const hb = cppstub.classBody(hDoc.getText(), cls);
++    const access = hb ? cppbridge.accessAt(cppstub.mask(hDoc.getText()), hb, de.at) : 'public';
++    const wire = await this.wirePlan(d, g, row, cls, name, params, access, stamp);
+     const we = new vscode.WorkspaceEdit();
+     const at = (doc, off) => new vscode.Range(doc.positionAt(off), doc.positionAt(off));
+     we.replace(hDoc.uri, at(hDoc, de.at), de.text);
+     we.replace(cDoc.uri, at(cDoc, fe.at), fe.text);
++    for (const op of wire.ops) we.replace(op.doc.uri, new vscode.Range(op.doc.positionAt(op.s), op.doc.positionAt(op.e)), op.text);
+     if (!(await vscode.workspace.applyEdit(we))) { vscode.window.showWarningMessage('新增 ' + name + ' 沒有寫進去（檔案可能是唯讀的）。'); return null; }
+-    this.log('新增事件處理函式 ' + cls + '::' + name + '（' + row.name + '）：' + path.basename(hFile) + ' 宣告、' + path.basename(cppFile) + ' 本體（未存檔）');
++    this.log('新增事件處理函式 ' + cls + '::' + name + '（' + row.name + '）：' + path.basename(hFile) + ' 宣告、' + path.basename(cppFile) + ' 本體' +
++      (wire.done.length ? '；自動接線 ' + wire.done.join('、') : '') + (wire.notes.length ? '；沒有接：' + wire.notes.join('；') : '') + '（未存檔）');
+     const pos = new vscode.Position(fe.bodyLine, 4);
+     await vscode.window.showTextDocument(cDoc, { preview: false, selection: new vscode.Range(pos, new vscode.Position(fe.bodyLine, 11)) });
+     // the 事件表 shows it at once (the source index sees it when the files are saved)
+@@ -1494,15 +1591,186 @@ class Hub {
+     row.mainName = name;
+     row.portState = 'new';
+     row.handler = name;
++    if (wire.wired) {
++      row.cmd = cppbridge.CMD;
++      row.via = 'htd';
++      data.targets.push({ kind: 'web', file: d.file, line: wire.webLine, col: 1, snippet: wire.webSnippet, note: '這一頁送出（設計工具的 htdCpp，剛新增）', weak: false });
++      row.web = data.targets.length - 1;
++      data.targets.push({ kind: 'port', file: wire.serverFile, line: wire.serverLine, col: 1, snippet: cppbridge.CMD + ' → ' + wire.fn, note: '伺服器分派 ' + cppbridge.CMD + '（剛新增）', weak: false });
++      row.server = data.targets.length - 1;
++    }
+     if (this.props && this.props.data === data) this.props.show(data);
+-    // what else it takes for the page's control to reach it (said, not written)
+-    const left = [];
+-    if (row.fe && !row.web) left.push('網頁：這一頁的 *_ev.js 事件清單（CTLS）加 [\'' + g.name + '\', \'' + row.fe + '\']');
+-    if (row.fe && !row.server) left.push('伺服器：form.event 事件表（tools/editlist 或 tools/formbridge 的 \'events\'，再跑產生器）');
+-    if (!row.fe) left.push('網頁不會送 ' + row.name + '（form.event 只接 OnClick／OnChange）');
+-    vscode.window.showInformationMessage('已新增 ' + cls + '::' + name + '（' + path.basename(hFile) + ' 宣告、' + path.basename(cppFile) + ' 空的本體；都還沒存檔，Ctrl+Z 可以復原）。' +
+-      (left.length ? '還要接上：' + left.join('；') + '。' : ''));
+-    return { h: hFile, cpp: cppFile, name, left };
++    const left = wire.wired ? [] : wire.notes;
++    vscode.window.showInformationMessage('已新增 ' + cls + '::' + name + '（' + path.basename(hFile) + ' 宣告、' + path.basename(cppFile) + ' 空的本體）。' +
++      (wire.wired ? '網頁也接好了：' + wire.done.join('、') + '——網頁 → WS ' + cppbridge.CMD + ' → 伺服器 → 這個函式。' : '') +
++      '都還沒存檔（不要就不存，或各檔 Ctrl+Z）。' + (wire.wired ? '存檔後重建、重開 ' + path.basename(wire.serverFile).replace(/\.\w+$/, '') + '，網頁按下去才會跑到它。' : '') +
++      (left.length ? '網頁沒有接上：' + left.join('；') + '。' : ''));
++    return { h: hFile, cpp: cppFile, name, left, wired: wire.wired, done: wire.done, notes: wire.notes };
++  }
++
++  stamp() {
++    const day = new Date();
++    return day.getFullYear() + String(day.getMonth() + 1).padStart(2, '0') + String(day.getDate()).padStart(2, '0');
++  }
++
++  /** The designer's generated C++ event table: an open document, else the file, else (create) a new untitled one there. */
++  async htdGenDoc(portRoot, create) {
++    const f = path.join(portRoot, ...cppbridge.GEN_REL.split('/'));
++    const open = vscode.workspace.textDocuments.find(x => x.uri && web.samePath(x.uri.fsPath, f));
++    if (open) return { doc: open, file: f, exists: open.uri.scheme === 'file' };
++    if (fs.existsSync(f)) return { doc: await vscode.workspace.openTextDocument(vscode.Uri.file(f)), file: f, exists: true };
++    if (!create) return { doc: null, file: f, exists: false };
++    // (untitled with the path: nothing is written to disk until it is saved, and a save goes there without asking)
++    return { doc: await vscode.workspace.openTextDocument(vscode.Uri.file(f).with({ scheme: 'untitled' })), file: f, exists: false };
++  }
++
++  /** What the generated file takes from the form.event implementation: its JSON header, form lock, running flags. */
++  async htdCtx(port, fn) {
++    const root = port.root;
++    const rel = f => path.relative(root, f).split(path.sep).join('/');
++    const read = f => { try { return fs.readFileSync(f, 'utf8'); } catch (e) { return ''; } };
++    const ctx = { fn, running: [] };
++    const impl = (await port.findFuncDefs(fn.replace(/HtdEvent$/, 'FormEvent'))).find(x => !x.dead && !x.test);
++    const it = impl ? read(impl.file) : '';
++    const incs = [];
++    const ire = /^[ \t]*#[ \t]*include[ \t]+"([^"]+)"/gm;
++    let m;
++    while ((m = ire.exec(it))) incs.push(m[1]);
++    const cj = incs.find(i => /(^|\/)cJSON\.h$/i.test(i)) || (() => { const f = port.files.find(x => /[\\/]cJSON\.h$/i.test(x)); return f ? rel(f) : null; })();
++    ctx.cjson = cj;
++    const lk = /([\w:]*FormLock)\s*\(\s*\)\s*;/.exec(it), ul = /([\w:]*FormUnlock)\s*\(\s*\)\s*;/.exec(it);
++    const lh = incs.find(i => /\bFormLock\s*\(/.test(read(path.join(root, i))));
++    if (lk && ul && lh) { ctx.lockHeader = lh; ctx.lock = lk[1]; ctx.unlock = ul[1]; }
++    const rre = /^[ \t]*extern[ \t]+bool[ \t]+(\w+)[ \t]*;/gm;
++    while ((m = rre.exec(it))) ctx.running.push(m[1]);
++    const sh = Array.from(port.clsFiles.get('TShiftState') || []).find(f => /\.h(pp)?$/i.test(f));
++    ctx.shiftHeader = sh ? rel(sh) : null;
++    return ctx;
++  }
++
++  /** One row of the generated table, made from the port: its form's header and the call. -> { header, call } | { error } */
++  async htdRowCode(d, r, params) {
++    const pf = await this.portClassFiles(d, r.form);
++    if (!pf) return { error: '移植樹裡找不到 ' + r.form + ' 的 .h／.cpp' };
++    const hText = (await vscode.workspace.openTextDocument(vscode.Uri.file(pf.hFile))).getText();
++    const cText = (await vscode.workspace.openTextDocument(vscode.Uri.file(pf.cppFile))).getText();
++    const obj = cppbridge.globalOf(hText, cText, r.form);
++    if (!obj) return { error: r.form + ' 沒有全域物件（像 extern ' + r.form + ' *fXxx;），網頁叫不到它的函式' };
++    let ps = params;
++    if (ps == null) {
++      const dc = cppbridge.declOf(hText, r.form, r.handler);
++      if (!dc) return { error: r.form + '::' + r.handler + ' 沒有宣告在 ' + path.basename(pf.hFile) };
++      if (dc.access !== 'public') return { error: r.form + '::' + r.handler + ' 宣告在 ' + dc.access + ' 裡，伺服器叫不到' };
++      ps = dc.params;
++    }
++    const sender = cppbridge.hasMember(hText, r.form, r.control) ? 'HtdSender(' + obj + '->' + r.control + ')' : 'nullptr';
++    const call = cppbridge.callOf(ps, obj, r.handler, sender);
++    if (call.error) return { error: r.form + '::' + r.handler + '：' + call.error };
++    return { header: path.relative(d.r.portRoot, pf.hFile).split(path.sep).join('/'), call, eol: /\r\n/.test(hText) ? '\r\n' : '\n' };
++  }
++
++  /** The page's script that sends WS commands (a .js with rawCmd), loaded or to be loaded. -> { src } (to add) | null (loaded) | { error } */
++  htdClient(d) {
++    const t = d.doc.getText();
++    const dir = path.dirname(d.file);
++    const has = f => { try { return /\brawCmd\s*[:=]/.test(fs.readFileSync(f, 'utf8')); } catch (e) { return false; } };
++    const re = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi;
++    let m;
++    while ((m = re.exec(t))) { if (!/^[a-z]+:/i.test(m[1]) && has(path.resolve(dir, m[1].split(/[?#]/)[0]))) return null; }
++    const cands = [];
++    for (const base of [dir, d.r.webRoot, d.r.webRoot && path.join(d.r.webRoot, 'js')]) {
++      if (!base) continue;
++      try { for (const n of fs.readdirSync(base).sort()) if (/\.js$/i.test(n)) cands.push(path.join(base, n)); } catch (e) { /* none */ }
++    }
++    const hit = cands.find(has);
++    if (!hit) return { error: '找不到送命令的程式（有 rawCmd 的 .js）' };
++    return { src: path.relative(dir, hit).split(path.sep).join('/') };
++  }
++
++  /**
++   * 自動接線: the edits that make the page's control reach the new handler (lib/cppbridge.js explains the chain).
++   * Everything is checked first; anything missing -> nothing wired and the reason said (the handler is still added).
++   * -> { ops: [{ doc, s, e, text }], done, notes, wired, ... }
++   */
++  async wirePlan(d, g, row, cls, handler, params, access, stamp) {
++    const out = { ops: [], done: [], notes: [], wired: false };
++    const DOM = ['click', 'dblclick', 'mousedown', 'mouseup', 'mousemove', 'mouseenter', 'mouseleave', 'keydown', 'keyup', 'keypress', 'change', 'focus', 'blur', 'contextmenu'];
++    const type = fmt.domTypesOf(row.name).find(x => DOM.includes(x));
++    if (g.isForm || !g.name) { out.notes.push('表單本身的事件網頁不會送'); return out; }
++    if (!type) { out.notes.push(row.name + ' 在網頁上沒有對應的事件'); return out; }
++    if (access !== 'public') { out.notes.push(cls + '::' + handler + ' 會宣告在 ' + access + ' 裡，伺服器叫不到'); return out; }
++    const port = this.sourceTree(d.r.portRoot, 'port');
++    const code = await this.htdRowCode(d, { form: cls, handler, control: g.name, event: row.name }, params);
++    if (code.error) { out.notes.push(code.error); return out; }
++    const client = this.htdClient(d);
++    if (client && client.error) { out.notes.push(client.error); return out; }
++    const pt = d.doc.getText();
++    const pe = jsevents.setCpp(pt, g.name, type, cls, handler, row.name);
++    if (pe.error) { out.notes.push(pe.error); return out; }
++    const disp = (await port.findString('form.event')).filter(h => h.dispatch && !h.dead && !h.test && !h.comment);
++    if (!disp.length) { out.notes.push('伺服器程式裡找不到 form.event 的分派'); return out; }
++    const sDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(disp[0].file));
++    const sh = cppbridge.serverHook(sDoc.getText(), stamp);
++    if (sh.error) { out.notes.push(sh.error); return out; }
++    const ctx = await this.htdCtx(port, sh.fn);
++    if (!ctx.cjson) { out.notes.push('移植樹裡找不到 cJSON.h（伺服器要用它讀網頁送來的值）'); return out; }
++    const cm = path.join(d.r.portRoot, 'CMakeLists.txt');
++    const cmDoc = fs.existsSync(cm) ? await vscode.workspace.openTextDocument(vscode.Uri.file(cm)) : null;
++    const relS = path.relative(d.r.portRoot, sDoc.uri.fsPath).split(path.sep).join('/');
++    const ch = cmDoc ? cppbridge.cmakeHook(cmDoc.getText(), relS, cppbridge.GEN_REL) : { error: '找不到 CMakeLists.txt' };
++    if (ch.error) { out.notes.push(ch.error); return out; }
++    const gen = await this.htdGenDoc(d.r.portRoot, true);
++    const keep = cppbridge.rowsOf(gen.doc.getText()).filter(r => !(r.form === cls && (r.handler === handler || (r.control === g.name && r.event === row.name))));
++    const rows = [];
++    for (const r of keep) {
++      const c = await this.htdRowCode(d, r);
++      if (c.error) out.notes.push('（' + c.error + '：產生檔裡這一列拿掉）'); else rows.push(Object.assign({}, r, c));
++    }
++    rows.push({ form: cls, handler, control: g.name, event: row.name, header: code.header, call: code.call });
++    // the page: the htdCpp line (and the helper, and the client script when the page does not load it)
++    const block = jsevents.findBlock(pt);
++    const tag = client ? '<script src="' + client.src + '"></script>' + (/\r\n/.test(pt) ? '\r\n' : '\n') : '';
++    for (const x of pe.edits) out.ops.push({ doc: d.doc, s: x.s, e: x.e, text: (!block && tag ? tag : '') + x.text });
++    if (block && tag) out.ops.push({ doc: d.doc, s: block.start, e: block.start, text: tag });
++    out.done.push(path.basename(d.file) + '（htdCpp' + (client ? '＋載入 ' + path.basename(client.src) : '') + '）');
++    out.ops.push({ doc: gen.doc, s: 0, e: gen.doc.getText().length, text: cppbridge.genFile(rows, ctx, code.eol) });
++    out.done.push(cppbridge.GEN_REL + (gen.exists ? '' : '（新檔）'));
++    if (sh.edit) { out.ops.push({ doc: sDoc, s: sh.edit.s, e: sh.edit.e, text: sh.edit.text }); out.done.push(path.basename(sDoc.uri.fsPath) + ' 的 ' + cppbridge.CMD + ' 分支'); }
++    if (ch.edit) { out.ops.push({ doc: cmDoc, s: ch.edit.s, e: ch.edit.e, text: ch.edit.text }); out.done.push('CMakeLists.txt（' + path.basename(sDoc.uri.fsPath).replace(/\.\w+$/, '') + ' 的來源清單）'); }
++    // where the page line / the server branch will be (for the 事件表)
++    const after = this.applyOps(pt, out.ops.filter(o => o.doc === d.doc));
++    const li = jsevents.cppLines(after).find(x => x.id === g.name && x.event === row.name);
++    out.webLine = li ? after.slice(0, li.s).split('\n').length : 1;
++    out.webSnippet = li ? after.slice(li.s, li.e).trim() : '';
++    const hookAt = sh.edit ? sh.edit.s : (/\.cmd\s*==\s*"htd\.event"/.exec(sDoc.getText()) || { index: 0 }).index;
++    out.serverFile = sDoc.uri.fsPath;
++    out.serverLine = sDoc.getText().slice(0, hookAt).split('\n').length;
++    out.fn = sh.fn;
++    out.wired = true;
++    return out;
++  }
++
++  /** The first match of `re` in an open, not-saved document under `root` (a change the source index cannot see yet). */
++  dirtyHit(root, re, fileRe) {
++    if (!root) return null;
++    for (const doc of vscode.workspace.textDocuments) {
++      if (!doc.isDirty || !doc.uri || (fileRe && !fileRe.test(doc.uri.fsPath))) continue;
++      const rel = path.relative(root, doc.uri.fsPath);
++      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
++      const t = doc.getText();
++      const m = re.exec(t);
++      if (!m) continue;
++      const ls = t.lastIndexOf('\n', m.index) + 1, le = t.indexOf('\n', m.index);
++      return { file: doc.uri.fsPath, line: t.slice(0, m.index).split('\n').length, snippet: t.slice(ls, le < 0 ? t.length : le).trim().slice(0, 200) };
++    }
++    return null;
++  }
++
++  /** The text after non-overlapping edits { s, e, text } (for positions after an edit). */
++  applyOps(text, ops) {
++    let t = String(text || '');
++    for (const o of ops.slice().sort((a, b) => b.s - a.s)) t = t.slice(0, o.s) + o.text + t.slice(o.e);
++    return t;
+   }
+ 
+   async openEvent(data, i, d) {
+diff --git a/tools/vscode-htdesigner/lib/cppbridge.js b/tools/vscode-htdesigner/lib/cppbridge.js
+new file mode 100644
+index 0000000..3da0813
+--- /dev/null
++++ b/tools/vscode-htdesigner/lib/cppbridge.js
+@@ -0,0 +1,271 @@
++'use strict';
++// AI(W906-HTDESIGNER) 20260930: 自動接線 -- a C++ event handler the designer adds is reached from the web page
++// with nothing left to do by hand (EastSun 20260930: "如果我有需要新增事件 其他連結 理應外掛程式自動幫我新增";
++// "你用json中間連線的 是你這邊要幫我處理 我只需要處理C++的部分"). The chain, like WPF / BCB6's .dfm wiring:
++//
++//   page   <script id="htdEvents">  htdCpp('spbSave', 'mouseup', 'TfHotPlate', 'spbSaveMouseUp', 'OnMouseUp');
++//            -> the page's WS client: rawCmd('htd.event', { tag: <page>, value: '{"form","handler",...}' })
++//   server the dispatch branch of htd.event, the same shape as form.event's (one branch, on form.event's line)
++//            -> <prefix>HtdEvent(tag, value, &ack, &err)
++//   C++    HtdEvents/HtdEvents.gen.cpp (this module writes it): the table of the designer's events -> the form's
++//            global object -> fHotPlate->spbSaveMouseUp(sender, button, shift, x, y)
++//
++// The same rules as form.event: not while the machine runs, under the same form lock. These functions only compute
++// text and where it goes; the extension applies it as ONE edit of the documents (nothing saved). Plain Node.
++
++const { mask, classBody } = require('./cppstub');
++
++const CMD = 'htd.event';
++const GEN_REL = 'HtdEvents/HtdEvents.gen.cpp';
++const TAG = 'AI(W906-HTDESIGNER)';
++
++function eolOf(text) { return /\r\n/.test(String(text || '')) ? '\r\n' : '\n'; }
++function lineStart(t, i) { while (i > 0 && t[i - 1] !== '\n') i--; return i; }
++function lineEnd(t, i) { const n = t.indexOf('\n', i); return n < 0 ? t.length : (t[n - 1] === '\r' ? n - 1 : n); }
++
++/**
++ * The server's dispatch: a branch for htd.event made from form.event's (its checks, its call, its CompleteCommand,
++ * with the names changed), put in front of it ON THE SAME LINE (the file's rule: 接在同一行，不移動行號).
++ * -> { has: true } (already there) | { edit: { s, e, text }, fn } | { error }
++ */
++function serverHook(text, stamp) {
++  const t = String(text || '');
++  if (/\.cmd\s*==\s*"htd\.event"/.test(t)) {
++    const f = /extern\s+bool\s+(\w*HtdEvent)\s*\(/.exec(t);
++    return { has: true, fn: f ? f[1] : 'HtdEvent' };
++  }
++  const head = /\}\s*else\s+if\s*\(\s*(\w+)\.cmd\s*==\s*"form\.event"\s*\)\s*\{/.exec(t);
++  if (!head) return { error: '伺服器程式裡找不到 form.event 的分派（} else if (x.cmd == "form.event") {）' };
++  const s = head.index;
++  const le = lineEnd(t, s);
++  const next = new RegExp('\\}\\s*else\\s+if\\s*\\(\\s*' + head[1] + '\\.cmd\\s*==', 'g');
++  next.lastIndex = s + head[0].length;
++  const nx = next.exec(t);
++  const e = nx && nx.index < le ? nx.index : le;
++  let branch = t.slice(s, e);
++  const fe = /extern\s+bool\s+(\w*?)FormEvent\s*\(/.exec(branch);
++  if (!fe) return { error: 'form.event 的分派裡找不到 extern bool …FormEvent(…) 的宣告' };
++  const fn = fe[1] + 'HtdEvent';
++  branch = branch.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/.*$/, '')
++    .replace(/form\.event/g, 'htd.event')
++    .replace(new RegExp('\\b' + fe[1] + 'FormEvent\\b', 'g'), fn)
++    .replace(/[ \t]{2,}/g, ' ').replace(/\s+$/, '');
++  if (!branch.includes(fn + '(') || !/CompleteCommand\s*\(/.test(branch)) return { error: 'form.event 的分派形狀認不得（沒有呼叫與 CompleteCommand）' };
++  const note = '/*' + TAG + ' ' + stamp + '：設計工具的事件（網頁 → C++ 表單的事件函式），同 form.event 的檢查；本體 ' + GEN_REL + '（設計工具產生）；接在同一行，不移動行號*/';
++  const open = branch.indexOf('{');
++  const text2 = branch.slice(0, open + 1) + ' ' + note + branch.slice(open + 1) + ' ';
++  return { edit: { s, e: s, text: text2 }, fn };
++}
++
++/**
++ * CMake: the server executable's source list gets the generated file, in front of its closing parenthesis (same line).
++ * `serverRel`: the server's source as the list names it (tools/wb_serve.cpp). -> { has } | { edit } | { error }
++ */
++function cmakeHook(text, serverRel, genRel) {
++  const t = String(text || '');
++  const rel = genRel || GEN_REL;
++  const re = /add_executable\s*\(/g;
++  let m;
++  while ((m = re.exec(t))) {
++    // the call's closing parenthesis: # comments and "strings" skipped, $<...> / nested parentheses counted
++    let depth = 1, i = m.index + m[0].length, q = false;
++    for (; i < t.length && depth; i++) {
++      const c = t[i];
++      if (q) { if (c === '\\') { i++; continue; } if (c === '"') q = false; continue; }
++      if (c === '"') { q = true; continue; }
++      if (c === '#') { const n = t.indexOf('\n', i); i = n < 0 ? t.length : n; continue; }
++      if (c === '(') depth++;
++      else if (c === ')') depth--;
++    }
++    if (depth) break;
++    const close = i - 1;
++    const call = t.slice(m.index, close);
++    const code = call.replace(/#[^\n]*/g, '');
++    if (!new RegExp('(^|[\\s(])' + serverRel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\s|$)').test(code)) continue;
++    if (code.includes(rel)) return { has: true };
++    return { edit: { s: close, e: close, text: '  ' + rel } };
++  }
++  return { error: 'CMakeLists.txt 裡找不到列出 ' + serverRel + ' 的 add_executable' };
++}
++
++/** The designer's events in the generated file: [{ form, handler, control, event }]. */
++function rowsOf(genText) {
++  const out = [];
++  const re = /^\/\/\s*htd-row\s+(\w+)\s+(\w+)\s+(\w+)\s+(On\w+)\s*$/gm;
++  let m;
++  while ((m = re.exec(String(genText || '')))) out.push({ form: m[1], handler: m[2], control: m[3], event: m[4] });
++  return out;
++}
++
++/** The class's global object: `extern TfHotPlate *fHotPlate;` in its .h, else `TfHotPlate *fHotPlate = ...` in its .cpp. */
++function globalOf(hText, cppText, cls) {
++  const h = new RegExp('\\bextern\\s+' + cls + '\\s*\\*\\s*(\\w+)\\s*;').exec(mask(hText || ''));
++  if (h) return h[1];
++  const c = new RegExp('^[ \\t]*' + cls + '\\s*\\*\\s*(\\w+)\\s*=', 'm').exec(mask(cppText || ''));
++  return c ? c[1] : null;
++}
++
++/** public / private / protected at `off` inside the class body (a class starts private). */
++function accessAt(maskedText, body, off) {
++  const seg = maskedText.slice(body.open + 1, off);
++  const re = /\b(public|private|protected)\s*:/g;
++  let a = 'private', m;
++  while ((m = re.exec(seg))) a = m[1];
++  return a;
++}
++
++/** The handler's declaration in the class: { params, access } or null. */
++function declOf(hText, cls, name) {
++  const b = classBody(hText, cls);
++  if (!b) return null;
++  const m = mask(hText);
++  const re = new RegExp('\\bvoid\\s+' + name + '\\s*\\(([^)]*)\\)\\s*;', 'g');
++  re.lastIndex = b.open;
++  const x = re.exec(m);
++  if (!x || x.index > b.close) return null;
++  return { params: hText.slice(x.index, x.index + x[0].length).replace(/^[^(]*\(/, '').replace(/\)\s*;$/, '').replace(/\s+/g, ' ').trim(), access: accessAt(m, b, x.index) };
++}
++
++/** Does the class have the control as a member (`TSpeedButton *spbSave ...`)? */
++function hasMember(hText, cls, ctl) {
++  const b = classBody(hText, cls);
++  if (!b || !ctl) return false;
++  return new RegExp('\\*\\s*' + ctl + '\\s*[=;]').test(mask(hText).slice(b.open, b.close));
++}
++
++/**
++ * The call of `obj->name(...)` made from what the page sends (a.button / a.x / a.y / a.shift ... a.key / a.chr),
++ * by the declared parameters. -> { pre: [statements], call, usesShift } | { error }
++ */
++function callOf(params, obj, name, sender) {
++  const ps = String(params || '').split(',').map(s => s.trim()).filter(Boolean);
++  const pre = [], args = [];
++  let usesShift = false, n = 0;
++  for (const p of ps) {
++    // "TObject *Sender" / "WORD &Key" / "TShiftState Shift" / "unsigned short &Key" / "int X"
++    const m = /^(?:const )?([\w:]+(?: [\w:]+)*?) ?([*&]?) ?(\w+)?$/.exec(p.replace(/\s*([*&])\s*/g, ' $1 ').replace(/\s+/g, ' ').trim());
++    if (!m) return { error: '參數「' + p + '」認不得' };
++    const type = m[1], ref = m[2] || '', pname = m[3] || '';
++    if (type === 'TObject' && ref === '*') args.push(sender);
++    else if (type === 'TMouseButton' && !ref) { args.push('HtdButton(a)'); usesShift = true; }
++    else if (type === 'TShiftState' && !ref) { args.push('HtdShift(a)'); usesShift = true; }
++    else if (type === 'int' && !ref) args.push(/^X$/i.test(pname) ? 'a.x' : /^Y$/i.test(pname) ? 'a.y' : '0');
++    else if ((type === 'WORD' || type === 'Word' || type === 'unsigned short') && ref === '&') { const v = 'k' + (n++); pre.push(type + ' ' + v + ' = (' + type + ')a.key;'); args.push(v); }
++    else if (type === 'char' && ref === '&') { const v = 'c' + (n++); pre.push('char ' + v + ' = (char)a.chr;'); args.push(v); }
++    else if (type === 'bool' && ref === '&') { const v = 'b' + (n++); pre.push('bool ' + v + ' = true;'); args.push(v); }
++    else return { error: '參數「' + p + '」網頁給不出來（網頁事件只有滑鼠按鍵、位置、Shift／Ctrl／Alt、按鍵碼）' };
++  }
++  return { pre, call: obj + '->' + name + '(' + args.join(', ') + ');', usesShift };
++}
++
++function esc(s) { return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"'); }
++
++/**
++ * The generated C++ file. rows: [{ form, handler, control, event, header, call: { pre, call } }];
++ * ctx: { fn, cjson, lockHeader, lock, unlock, running: [names], shiftHeader }. One edit writes it whole.
++ */
++function genFile(rows, ctx, eol) {
++  const E = eol || '\n';
++  const c = ctx || {};
++  const L = [];
++  L.push('// 產生檔 -- HTML 視覺設計工具（tools/vscode-htdesigner）。不要手改：在設計工具的事件表新增、改名，它會重寫這個檔。');
++  L.push('// ---------------------------------------------------------------------------');
++  L.push('//  WS 命令 ' + CMD + '：網頁上的事件 → C++ 表單類別的事件函式（像 BCB6 的 .dfm 把 OnClick 接到 spbSaveClick）。');
++  L.push('//  網頁（<script id="htdEvents"> 的 htdCpp(...)）送 value＝{"form","handler","control","event",');
++  L.push('//  "button","x","y","shift","ctrl","alt","dbl","key","chr"}（tag＝頁名）；這裡照表找到那一列，在表單的全域物件上呼叫它。');
++  L.push('//  跟 form.event 一樣：' + (c.running && c.running.length ? '機台運轉中（' + c.running.join('／') + '）不跑、' : '') +
++    (c.lock ? '持 ' + c.lock.replace(/^.*::/, '') + '（同一把鎖）。' : '（這棵樹沒有找到表單鎖）。'));
++  L.push('//  伺服器的分派：' + CMD + ' 那一個分支（設計工具加在 form.event 的同一行）。');
++  L.push('//  事件（一列一個，設計工具靠這幾行重寫這個檔）：');
++  for (const r of rows) L.push('// htd-row ' + r.form + ' ' + r.handler + ' ' + r.control + ' ' + r.event);
++  L.push('// ---------------------------------------------------------------------------');
++  L.push('#include <exception>');
++  L.push('#include <string>');
++  L.push('#include <type_traits>');
++  L.push('');
++  if (c.cjson) L.push('#include "' + c.cjson + '"');
++  if (c.lockHeader) L.push('#include "' + c.lockHeader + '"');
++  const usesShift = rows.some(r => r.call && r.call.usesShift);
++  if (usesShift && c.shiftHeader) L.push('#include "' + c.shiftHeader + '"');
++  const hs = [];
++  for (const r of rows) if (r.header && !hs.includes(r.header)) hs.push(r.header);
++  for (const h of hs) L.push('#include "' + h + '"');
++  L.push('');
++  for (const v of c.running || []) L.push('extern bool ' + v + ';');
++  if ((c.running || []).length) L.push('');
++  L.push('namespace {');
++  L.push('');
++  L.push('struct HtdIn { int button = 0; int x = 0; int y = 0; bool shift = false; bool ctrl = false; bool alt = false; bool dbl = false; int key = 0; int chr = 0; };');
++  L.push('');
++  L.push('// Sender：表單有那個元件就傳它（VCL 的 Sender），沒有就 nullptr');
++  L.push('template <class T> TObject* HtdSender(T* p, typename std::enable_if<std::is_convertible<T*, TObject*>::value>::type* = 0) { return p; }');
++  L.push('template <class T> TObject* HtdSender(T*, typename std::enable_if<!std::is_convertible<T*, TObject*>::value>::type* = 0) { return nullptr; }');
++  if (usesShift) {
++    L.push('TShiftState HtdShift(const HtdIn& a) { TShiftState s; if (a.shift) s << ssShift; if (a.alt) s << ssAlt; if (a.ctrl) s << ssCtrl; if (a.dbl) s << ssDouble; return s; }');
++    L.push('TMouseButton HtdButton(const HtdIn& a) { return a.button == 2 ? mbRight : a.button == 1 ? mbMiddle : mbLeft; }');
++  }
++  L.push('');
++  rows.forEach((r, i) => {
++    L.push('// ' + r.form + '::' + r.handler + '（' + r.control + '.' + r.event + '）');
++    L.push('void E' + i + '(const HtdIn& a) { (void)a; ' + (r.call.pre || []).join(' ') + (r.call.pre && r.call.pre.length ? ' ' : '') + r.call.call + ' }');
++  });
++  L.push('');
++  L.push('struct HtdRow { const char* form; const char* handler; const char* control; const char* event; void (*run)(const HtdIn&); };');
++  L.push('const HtdRow kRows[] = {');
++  rows.forEach((r, i) => L.push('    {"' + r.form + '", "' + r.handler + '", "' + r.control + '", "' + r.event + '", &E' + i + '},'));
++  L.push('    {nullptr, nullptr, nullptr, nullptr, nullptr},');
++  L.push('};');
++  L.push('');
++  L.push('std::string Str(const cJSON* o, const char* k) { const cJSON* v = cJSON_GetObjectItemCaseSensitive(o, k); return v && cJSON_IsString(v) && v->valuestring ? std::string(v->valuestring) : std::string(); }');
++  L.push('int Int(const cJSON* o, const char* k) { const cJSON* v = cJSON_GetObjectItemCaseSensitive(o, k); return v && cJSON_IsNumber(v) ? (int)v->valuedouble : 0; }');
++  L.push('bool Bool(const cJSON* o, const char* k) { const cJSON* v = cJSON_GetObjectItemCaseSensitive(o, k); return v && cJSON_IsTrue(v); }');
++  L.push('');
++  L.push('}  // namespace');
++  L.push('');
++  L.push('bool ' + c.fn + '(const std::string& tag, const std::string& valueJson, std::string* ack, std::string* err)');
++  L.push('{');
++  L.push('    (void)tag;');
++  if ((c.running || []).length) {
++    L.push('    if (' + c.running.join(' || ') + ') {');
++    L.push('        *err = "running: 機台運轉中不能從網頁執行畫面的事件（同 form.event）";');
++    L.push('        return false;');
++    L.push('    }');
++  }
++  L.push('    cJSON* root = cJSON_Parse(valueJson.c_str());');
++  L.push('    if (!root || !cJSON_IsObject(root)) {');
++  L.push('        if (root) cJSON_Delete(root);');
++  L.push('        *err = "bad-payload: value must be a JSON object string {\\"form\\",\\"handler\\",\\"control\\",\\"event\\",...}";');
++  L.push('        return false;');
++  L.push('    }');
++  L.push('    const std::string form = Str(root, "form"), handler = Str(root, "handler");');
++  L.push('    HtdIn a;');
++  L.push('    a.button = Int(root, "button"); a.x = Int(root, "x"); a.y = Int(root, "y");');
++  L.push('    a.shift = Bool(root, "shift"); a.ctrl = Bool(root, "ctrl"); a.alt = Bool(root, "alt"); a.dbl = Bool(root, "dbl");');
++  L.push('    a.key = Int(root, "key"); a.chr = Int(root, "chr");');
++  L.push('    cJSON_Delete(root);');
++  L.push('    const HtdRow* r = nullptr;');
++  L.push('    for (const HtdRow* p = kRows; p->form; ++p) if (form == p->form && handler == p->handler) { r = p; break; }');
++  L.push('    if (!r) {');
++  L.push('        *err = "unknown-handler: " + form + "::" + handler + " is not in ' + esc(GEN_REL) + ' (add it in the designer\'s events table)";');
++  L.push('        return false;');
++  L.push('    }');
++  L.push('    bool ok = true;');
++  L.push('    std::string why;');
++  if (c.lock) L.push('    ' + c.lock + '();');
++  L.push('    try {');
++  L.push('        r->run(a);');
++  L.push('    } catch (const std::exception& x) {');
++  L.push('        ok = false; why = std::string("exception: ") + x.what();');
++  L.push('    } catch (...) {');
++  L.push('        ok = false; why = "non-std exception";');
++  L.push('    }');
++  if (c.unlock) L.push('    ' + c.unlock + '();');
++  L.push('    if (!ok) { *err = "handler-failed: " + why; return false; }');
++  L.push('    *ack = std::string("{\\"form\\":\\"") + r->form + "\\",\\"handler\\":\\"" + r->handler + "\\",\\"control\\":\\"" + r->control + "\\",\\"event\\":\\"" + r->event + "\\"}";');
++  L.push('    return true;');
++  L.push('}');
++  L.push('');
++  return L.join(E);
++}
++
++module.exports = { CMD, GEN_REL, serverHook, cmakeHook, rowsOf, globalOf, declOf, hasMember, callOf, genFile, accessAt };
+diff --git a/tools/vscode-htdesigner/lib/jsevents.js b/tools/vscode-htdesigner/lib/jsevents.js
+index 6d60646..dca6b0d 100644
+--- a/tools/vscode-htdesigner/lib/jsevents.js
++++ b/tools/vscode-htdesigner/lib/jsevents.js
+@@ -137,7 +137,101 @@ function setBinding(html, id, type, fn) {
+   return { edits: [{ s: at, e: at, text: (needEol ? eol : '') + text }], fnAdded: fnOf(t, fn) ? null : fn };
+ }
+ 
+-/** A component renamed: its bindings in the block follow. -> edits */
++// ---------------------------------------------------------------------------
++// C++ 事件 (EastSun 20260930: "如果我有需要新增事件 其他連結 理應外掛程式自動幫我新增"): a C++ event handler the
++// designer added is sent from the same block, one line each --
++//   htdCpp('spbSave', 'mouseup', 'TfHotPlate', 'spbSaveMouseUp', 'OnMouseUp');
++// -- and ONE helper function (htdCpp) that sends WS htd.event through the page's client (the loaded script
++// object that has rawCmd), like the page's own senders do (token first, a failure said on the page).
++// ---------------------------------------------------------------------------
++const CPP_RE = /^[ \t]*htdCpp\(\s*'([^']+)'\s*,\s*'(\w+)'\s*,\s*'(\w+)'\s*,\s*'(\w+)'\s*,\s*'(On\w+)'\s*\)\s*;?[ \t]*(\r?\n)?/gm;
++const HELPER_NAME = 'htdCpp';
++
++function helperText(eol) {
++  return [
++    '/* 送到 C++：WS htd.event → 伺服器 → C++ 表單的事件函式（設計工具產生，不要改名；每個事件一行在下面） */',
++    'function htdCpp(id, type, form, handler, event) {',
++    '  var el = document.getElementById(id);',
++    '  if (!el) return;',
++    '  el.addEventListener(type, function (e) {',
++    '    var R = htdCpp.client;',
++    '    if (!R) { for (var k in window) { try { var o = window[k]; if (o && o !== window && typeof o.rawCmd === \'function\') { R = htdCpp.client = o; break; } } catch (x) { /* next */ } } }',
++    '    var say = function (msg) {',
++    '      if (window.console) console.warn(\'[htd.event] \' + form + \'::\' + handler + \'：\' + msg);',
++    '      var d = document.createElement(\'div\');',
++    '      d.textContent = form + \'::\' + handler + \' 沒有執行：\' + msg;',
++    '      d.style.cssText = \'position:fixed;left:8px;bottom:8px;z-index:99999;padding:6px 10px;background:#fff3cd;color:#000;border:1px solid #c90;font:12px sans-serif;\';',
++    '      document.body.appendChild(d);',
++    '      setTimeout(function () { if (d.parentNode) d.parentNode.removeChild(d); }, 5000);',
++    '    };',
++    '    if (!R) { say(\'這一頁沒有載入送命令的程式（rawCmd）\'); return; }',
++    '    var v = { form: form, handler: handler, control: id, event: event, button: e.button || 0, x: e.offsetX || 0, y: e.offsetY || 0,',
++    '      shift: !!e.shiftKey, ctrl: !!e.ctrlKey, alt: !!e.altKey, dbl: e.type === \'dblclick\',',
++    '      key: e.keyCode || 0, chr: e.key && e.key.length === 1 ? e.key.charCodeAt(0) : 0 };',
++    '    var extra = { tag: (location.pathname.split(\'/\').pop() || \'\').replace(/\\.html?$/i, \'\'), value: JSON.stringify(v) };',
++    '    var pre = (R.status && R.keepAlive && !R.status().holdsToken) ? R.keepAlive().catch(function () {}) : Promise.resolve();',
++    '    pre.then(function () { return R.rawCmd(\'htd.event\', extra); }).then(null, function (err) { say((err && err.message) || String(err)); });',
++    '  });',
++    '}',
++    '',
++  ].join(eol);
++}
++
++/** The C++ event lines of the block: [{ id, type, form, handler, event, s, e }]. */
++function cppLines(html) {
++  const t = String(html || '');
++  const b = findBlock(t);
++  if (!b) return [];
++  const inner = t.slice(b.innerStart, b.innerEnd);
++  const out = [];
++  CPP_RE.lastIndex = 0;
++  let m;
++  while ((m = CPP_RE.exec(inner))) out.push({ id: m[1], type: m[2], form: m[3], handler: m[4], event: m[5], s: b.innerStart + m.index, e: b.innerStart + m.index + m[0].length });
++  return out;
++}
++
++/**
++ * Send `event` of element `id` (on DOM `type`) to C++ `form::handler`; handler '' = no more. The helper is added
++ * once. -> { edits, error? }
++ */
++function setCpp(html, id, type, form, handler, event) {
++  const t = String(html || '');
++  const eol = eolOf(t);
++  if (!IDENT.test(String(type || '')) || !/^\w+$/.test(String(form || '')) || !/^On\w+$/.test(String(event || ''))) return { edits: [], error: '事件不對：' + type + ' / ' + event };
++  if (handler && !/^[A-Za-z_]\w*$/.test(handler)) return { edits: [], error: '函式名稱不對：' + handler };
++  const line = handler ? 'htdCpp(\'' + id + '\', \'' + type + '\', \'' + form + '\', \'' + handler + '\', \'' + event + '\');' + eol : '';
++  const b = findBlock(t);
++  if (!b) {
++    if (!handler) return { edits: [] };
++    const block = '<script id="' + BLOCK_ID + '">' + eol + NOTE + eol + helperText(eol) + line + '</script>' + eol;
++    const bodyEnd = t.toLowerCase().lastIndexOf('</body');
++    const at = bodyEnd >= 0 ? bodyEnd : t.length;
++    return { edits: [{ s: at, e: at, text: block }] };
++  }
++  const cur = cppLines(t).find(x => x.id === id && x.event === event);
++  if (cur) return cur.handler === handler && cur.type === type && cur.form === form ? { edits: [] } : { edits: [{ s: cur.s, e: cur.e, text: line }] };
++  if (!handler) return { edits: [] };
++  const hasHelper = new RegExp('^[ \\t]*function\\s+' + HELPER_NAME + '\\s*\\(', 'm').test(t.slice(b.innerStart, b.innerEnd));
++  let at = b.innerEnd;
++  while (at > b.innerStart && (t[at - 1] === ' ' || t[at - 1] === '\t')) at--;
++  const needEol = at > b.innerStart && t[at - 1] !== '\n';
++  return { edits: [{ s: at, e: at, text: (needEol ? eol : '') + (hasHelper ? '' : helperText(eol)) + line }] };
++}
++
++/** A C++ handler renamed: its lines follow. -> edits */
++function renameCppEdits(html, form, oldName, newName) {
++  const t = String(html || '');
++  const out = [];
++  for (const x of cppLines(t)) {
++    if (x.form !== form || x.handler !== oldName) continue;
++    const seg = t.slice(x.s, x.e);
++    const i = seg.indexOf('\'' + oldName + '\'');
++    if (i >= 0) out.push({ s: x.s + i + 1, e: x.s + i + 1 + oldName.length, text: newName });
++  }
++  return out;
++}
++
++/** A component renamed: its bindings in the block follow (the JS ones and the C++ ones). -> edits */
+ function renameIdEdits(html, oldId, newId) {
+   const t = String(html || '');
+   const out = [];
+@@ -148,7 +242,12 @@ function renameIdEdits(html, oldId, newId) {
+     const at = x.s + m.index + m[0].indexOf(m[2], m[0].indexOf(m[1]));
+     out.push({ s: at, e: at + oldId.length, text: newId });
+   }
+-  return out;
++  for (const x of cppLines(t)) {
++    if (x.id !== oldId) continue;
++    const i = t.slice(x.s, x.e).indexOf('\'' + oldId + '\'');
++    if (i >= 0) out.push({ s: x.s + i + 1, e: x.s + i + 1 + oldId.length, text: newId });
++  }
++  return out.sort((a, b) => a.s - b.s);
+ }
+ 
+ /** The handlers of element `id`: { type: { fn, s (the function's offset, or the binding's) } }. */
+@@ -162,4 +261,4 @@ function handlersOf(html, id) {
+   return out;
+ }
+ 
+-module.exports = { BLOCK_ID, TYPES, findBlock, bindings, fnOf, setBinding, renameIdEdits, handlersOf };
++module.exports = { BLOCK_ID, TYPES, findBlock, bindings, fnOf, setBinding, renameIdEdits, handlersOf, cppLines, setCpp, renameCppEdits, helperText };
+diff --git a/tools/vscode-htdesigner/media/props.js b/tools/vscode-htdesigner/media/props.js
+index 41fa6a8..36a1af2 100644
+--- a/tools/vscode-htdesigner/media/props.js
++++ b/tools/vscode-htdesigner/media/props.js
+@@ -519,8 +519,8 @@
+     if (eg && eg.rows && eg.rows.length) {
+       var nSet = eg.rows.filter(function (x) { return !!x.handler; }).length;
+       section('events', '事件', nSet + ' / ' + eg.rows.length, function (body) {
+-        body.appendChild(el('div', 'dim pad small', '雙擊有設定的＝跳到程式碼；雙擊空的＝在 C++ 移植樹新增 ' + (eg.formCls || '表單') + ' 的處理函式（像 BCB6）。' +
+-          '網頁／伺服器：這個事件接到 C++ 了沒（WS form.event，只有 OnClick、OnChange 有）。'));
++        body.appendChild(el('div', 'dim pad small', '雙擊有設定的＝跳到會執行的 C++ 函式；雙擊空的＝在 C++ 移植樹新增 ' + (eg.formCls || '表單') + ' 的處理函式（像 BCB6），' +
++          '網頁 → 伺服器 → 這個函式也自動接好（WS htd.event；都不存檔，存檔後重建伺服器程式）。網頁／伺服器：這個事件接到 C++ 了沒。'));
+         eg.rows.forEach(function (rw) {
+           var r = el('div', 'row event evg' + (rw.handler ? ' set' : ' empty'));
+           r.tabIndex = 0;
+@@ -536,7 +536,7 @@
+               h.title = '移植樹真正執行的 C++ 函式' + (rw.cmd ? '（網頁 → WS 命令 ' + rw.cmd + '）' : '');
+             }
+           }
+-          else if (rw.cmd) {
++          else if (rw.cmd && rw.via !== 'htd') {
+             /* reached through a WS command: the C++ function the server runs (double-click opens it) */
+             h = el('span', 'evh', rw.mainName || rw.handler);
+             h.title = '網頁 → WS 命令 ' + rw.cmd + ' → C++ ' + (rw.mainName || rw.handler);
+@@ -558,7 +558,12 @@
+             c.title = (on ? '' : '沒有：') + title;
+             r.appendChild(c);
+           };
+-          if (rw.cmd) {
++          if (rw.via === 'htd') {
++            /* the designer's own wiring: the page's htdCpp line -> WS htd.event -> the generated table -> this handler */
++            chip(rw.web != null, '網頁', '這一頁送出（設計工具的 htdCpp，WS ' + rw.cmd + '）', 'k-web');
++            chip(rw.server != null, '伺服器', rw.server != null ? '伺服器分派 ' + rw.cmd + '，產生檔的事件表有這一列' :
++              '伺服器還沒有 ' + rw.cmd + '，或產生檔沒有這一列（存檔之後重建伺服器程式）', 'k-srv');
++          } else if (rw.cmd) {
+             /* wired through the page's JS: its listener sends a WS command the server dispatches to C++ */
+             chip(rw.web != null, '網頁', '網頁 JS 的監聽器送出命令 ' + rw.cmd, 'k-web');
+             chip(rw.server != null, '伺服器', '伺服器分派命令 ' + rw.cmd + '（WS／JSON）', 'k-srv');
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index de54d5f..2017f76 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HTML 視覺設計工具",
+   "description": "BCB6 表單移植成 web HMI（網頁＋C++）的專案通用：像 WPF 設計工具一樣看、改頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.71.0",
++  "version": "0.72.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/fake_vscode.js b/tools/vscode-htdesigner/test/fake_vscode.js
+index d637a3f..5e323a6 100644
+--- a/tools/vscode-htdesigner/test/fake_vscode.js
++++ b/tools/vscode-htdesigner/test/fake_vscode.js
+@@ -158,7 +158,8 @@ const vscode = {
+       // a file: an in-memory document (edits change only this copy -- nothing is ever written)
+       const key = uri.toString();
+       if (vscode._docs && vscode._docs[key]) return vscode._docs[key];
+-      let t = require('fs').readFileSync(uri.fsPath, 'utf8'), ls = [0];
++      // (untitled with a path: a new empty document, nothing on disk)
++      let t = uri.scheme === 'untitled' ? '' : require('fs').readFileSync(uri.fsPath, 'utf8'), ls = [0];
+       const idx = () => { ls = [0]; for (let i = 0; i < t.length; i++) if (t.charCodeAt(i) === 10) ls.push(i + 1); };
+       idx();
+       const d = {
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index b16a67f..c7d9faa 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -134,20 +134,43 @@ exports.run = async function () {
+     const egNames = eg ? eg.rows.map(r => r.name).join(',') : '';
+     const egClick = eg && eg.rows.find(r => r.name === 'OnClick');
+     const egDbl = eg && eg.rows.find(r => r.name === 'OnDblClick');
+-    let egMade = null, egH = '', egC = '', egBack = false;
++    let egMade = null, egH = '', egC = '', egBack = false, egWire = {}, egRow2 = null, egListen = false;
++    const egPort = d.r.portRoot;
++    const egSrvF = path.join(egPort, 'tools', 'wb_serve.cpp'), egCmF = path.join(egPort, 'CMakeLists.txt'), egGenF = path.join(egPort, 'HtdEvents', 'HtdEvents.gen.cpp');
++    const egGenBefore = fs.existsSync(egGenF);
+     if (egDbl && !egDbl.handler) {
++      const egR0 = d.readyCount || 0;
+       egMade = await hub.onEventGrid(data, 'OnDblClick', d);
+       if (egMade) {
+         const find = f => vscode.workspace.textDocuments.find(x => x.uri.fsPath.toLowerCase() === f.toLowerCase());
+-        const hd = find(egMade.h), cd = find(egMade.cpp);
++        const hd = find(egMade.h), cd = find(egMade.cpp), sd = find(egSrvF), md = find(egCmF), gd = find(egGenF);
+         egH = hd ? hd.getText() : '';
+         egC = cd ? cd.getText() : '';
+-        for (const doc of [hd, cd]) {
+-          if (!doc) continue;
++        egWire = { wired: egMade.wired, notes: egMade.notes, page: /htdCpp\('spbSave', 'dblclick', 'TfHotPlate', 'spbSaveDblClick', 'OnDblClick'\);/.test(d.doc.getText()),
++          server: !!(sd && sd.isDirty && /\.cmd == "htd\.event"/.test(sd.getText())), cmake: !!(md && md.isDirty && /HtdEvents\/HtdEvents\.gen\.cpp\)/.test(md.getText())),
++          gen: !!(gd && gd.uri.scheme === 'untitled' && /htd-row TfHotPlate spbSaveDblClick spbSave OnDblClick/.test(gd.getText())), genOnDisk: fs.existsSync(egGenF) };
++        // the redrawn page binds it (the helper's listener), and the 事件表 shows the one function from the NOT-saved documents
++        await waitFor(() => ((d.readyCount || 0) > egR0 ? true : null), 10000);
++        await sleep(400);
++        const sb = d.sel;
++        d.post({ type: 'selectId', id: 'spbSave', origin: 'editor' });
++        const s2 = await waitFor(() => (d.sel && d.sel !== sb && d.sel.info && d.sel.info.id === 'spbSave' ? d.sel : null), 10000);
++        const dd2 = s2 ? await s2.promise : null;
++        egRow2 = dd2 && dd2.eventGrid ? dd2.eventGrid.rows.find(r => r.name === 'OnDblClick') : null;
++        if (egRow2) egRow2 = { via: egRow2.via, mainName: egRow2.mainName, main: egRow2.main != null && dd2.targets[egRow2.main] ? path.basename(dd2.targets[egRow2.main].file) : null,
++          server: egRow2.server != null && dd2.targets[egRow2.server] ? path.basename(dd2.targets[egRow2.server].file) : null, web: egRow2.web != null };
++        egListen = !!(dd2 && dd2.listeners.filter(l => l.type === 'dblclick').length > data.listeners.filter(l => l.type === 'dblclick').length);
++        // put everything back (nothing was saved): the documents reverted, the untitled one closed without saving
++        for (const doc of [hd, cd, sd, md, d.doc]) {
++          if (!doc || !doc.isDirty) continue;
+           await vscode.window.showTextDocument(doc, { preview: false });
+           await vscode.commands.executeCommand('workbench.action.files.revert');
+         }
+-        egBack = !!(hd && cd && !hd.isDirty && !cd.isDirty && hd.getText() === fs.readFileSync(egMade.h, 'utf8') && cd.getText() === fs.readFileSync(egMade.cpp, 'utf8'));
++        if (gd) { await vscode.window.showTextDocument(gd, { preview: false }); await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor'); }
++        await waitFor(() => (![hd, cd, sd, md, d.doc].some(x => x && x.isDirty) ? true : null), 5000);
++        egBack = !!(hd && cd && !hd.isDirty && !cd.isDirty && hd.getText() === fs.readFileSync(egMade.h, 'utf8') && cd.getText() === fs.readFileSync(egMade.cpp, 'utf8') &&
++          (!sd || (!sd.isDirty && sd.getText() === fs.readFileSync(egSrvF, 'utf8'))) && (!md || (!md.isDirty && md.getText() === fs.readFileSync(egCmF, 'utf8'))) &&
++          !d.doc.isDirty && fs.existsSync(egGenF) === egGenBefore);
+       }
+     }
+     ok(!!(eg && eg.vcl === 'TSpeedButton' && egNames === 'OnClick,OnDblClick,OnMouseDown,OnMouseMove,OnMouseUp' && egClick && egClick.handler === 'spbSaveClick' &&
+@@ -155,6 +178,11 @@ exports.run = async function () {
+       /\n\s*void spbSaveDblClick\(TObject \*Sender\);\s+\/\/AI\(W906-HTDESIGNER\)/.test(egH) && /void TfHotPlate::spbSaveDblClick\(TObject \*Sender\)\r?\n\{/.test(egC) && egBack),
+       '事件表: every TSpeedButton event, OnClick = spbSaveClick; a double-click on the empty OnDblClick adds TfHotPlate::spbSaveDblClick to fHotPlate.h / .cpp (put back, not saved)',
+       egNames + ' | made ' + (egMade ? path.basename(egMade.h) + '+' + path.basename(egMade.cpp) : '-') + ' | back ' + egBack);
++    // 自動接線 (EastSun 20260930: "如果我有需要新增事件 其他連結 理應外掛程式自動幫我新增")
++    ok(!!(egWire.wired && egWire.page && egWire.server && egWire.cmake && egWire.gen && !egWire.genOnDisk && egListen &&
++      egRow2 && egRow2.via === 'htd' && egRow2.mainName === 'spbSaveDblClick' && /fHotPlate\.cpp$/i.test(egRow2.main || '') && /wb_serve\.cpp$/i.test(egRow2.server || '') && egRow2.web && egBack),
++      '事件表: ... and wired in the same edit: the page\'s htdCpp line (the redrawn page binds dblclick), wb_serve.cpp\'s htd.event branch, CMakeLists.txt, HtdEvents.gen.cpp (untitled, not on disk); ' +
++      'the row = spbSaveDblClick from the not-saved documents; all put back', JSON.stringify({ wire: egWire, row: egRow2, listen: egListen, back: egBack }));
+ 
+     // 網頁事件: a typed function name -> the page's htdEvents block; the redrawn page really binds it (the probe sees
+     // the listener); put back with a revert
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index b20461b..640da42 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -890,6 +890,61 @@ async function main() {
+     'jsevents: a name = the function + addEventListener in the page\'s htdEvents block (its line ends); renamed = its code stays; cleared = the binding out (an empty function too); a renamed component\'s bindings follow',
+     JSON.stringify(jeP3.slice(jeP3.indexOf('<script')).slice(0, 160)));
+ 
++  // --- 自動接線 (EastSun 20260930: "如果我有需要新增事件 其他連結 理應外掛程式自動幫我新增"): the page's htdCpp line,
++  //     the server's htd.event branch made from form.event's, the CMake entry, the generated table (real files, READ only)
++  const cbr = require('../lib/cppbridge');
++  const cbServer = fs.readFileSync(path.join(PORT, 'tools', 'wb_serve.cpp'), 'utf8');
++  const cbS = cbr.serverHook(cbServer, '20260930');
++  const cbS2 = cbS.edit ? jeApply(cbServer, [cbS.edit]) : cbServer;
++  const nlOf = s => (s.match(/\n/g) || []).length;
++  const cbHead = cbS.edit ? cbS2.slice(cbS.edit.s, cbS.edit.s + cbS.edit.text.length) : '';
++  ok(!!((cbS.has && cbS.fn === 'W906_HtdEvent') || (cbS.edit && cbS.fn === 'W906_HtdEvent' && nlOf(cbS2) === nlOf(cbServer) &&
++    /^\} else if \(wc\.cmd == "htd\.event"\) \{ \/\*AI\(W906-HTDESIGNER\) 20260930/.test(cbHead) && /extern bool W906_HtdEvent\(const std::string& tag/.test(cbHead) &&
++    /server\.CompleteCommand\(/.test(cbHead) && !/"form\.event"|W906_FormEvent/.test(cbHead) && cbS2.slice(cbS.edit.s + cbS.edit.text.length).startsWith('} else if (wc.cmd == "form.event")') &&
++    cbr.serverHook(cbS2, 'x').has)),
++    'cppbridge.serverHook: the htd.event branch = form.event\'s checks + W906_HtdEvent + CompleteCommand, in front of it on the same line (no line moves); a second time = already there',
++    cbS.error || (cbS.has ? 'already hooked' : cbHead.slice(0, 120)));
++  const cbCm = fs.readFileSync(path.join(PORT, 'CMakeLists.txt'), 'utf8');
++  const cbC = cbr.cmakeHook(cbCm, 'tools/wb_serve.cpp', cbr.GEN_REL);
++  const cbCm2 = cbC.edit ? jeApply(cbCm, [cbC.edit]) : cbCm;
++  const cbWbs = /add_executable\(wb_serve[\s\S]*?\)\s*#/.exec(cbCm2.replace(/#[^\n]*/g, '#'));
++  ok(!!(cbC.has || (cbC.edit && nlOf(cbCm2) === nlOf(cbCm) && cbCm2.slice(cbC.edit.s - 40, cbC.edit.s + 40).includes('MainStateRecord.cpp  HtdEvents/HtdEvents.gen.cpp)') &&
++    cbr.cmakeHook(cbCm2, 'tools/wb_serve.cpp', cbr.GEN_REL).has && !cbr.cmakeHook(cbCm, 'tools/nothere.cpp', cbr.GEN_REL).edit)),
++    'cppbridge.cmakeHook: the generated file goes in wb_serve\'s add_executable, in front of its ")" (same line); a second time = already there; no such executable = nothing',
++    cbC.error || (cbC.has ? 'already listed' : cbCm2.slice(cbC.edit.s - 40, cbC.edit.s + 40)));
++  const cbCall = cbr.callOf('TObject *Sender, TMouseButton Button, TShiftState Shift, int X, int Y', 'fHotPlate', 'spbSaveMouseUp', 'nullptr');
++  const cbKey = cbr.callOf('TObject *Sender, WORD &Key, TShiftState Shift', 'fHotPlate', 'XST1KeyDown', 'HtdSender(fHotPlate->XST1)');
++  const cbBad = cbr.callOf('TObject *Sender, TPoint &MousePos, bool &Handled', 'fX', 'a', 'nullptr');
++  const cbRows = [{ form: 'TfHotPlate', handler: 'spbSaveMouseUp', control: 'spbSave', event: 'OnMouseUp', header: 'forms/fHotPlate.h', call: cbCall }];
++  const cbGen = cbr.genFile(cbRows, { fn: 'W906_HtdEvent', cjson: 'Public/cJSON.h', lockHeader: 'JsonBridge/FormJson.h', lock: 'ht9045::formjson::FormLock',
++    unlock: 'ht9045::formjson::FormUnlock', running: ['SystemStart', 'SoftStart'], shiftHeader: 'vclcompat/ShiftState.h' }, '\r\n');
++  ok(cbCall.call === 'fHotPlate->spbSaveMouseUp(nullptr, HtdButton(a), HtdShift(a), a.x, a.y);' && cbCall.usesShift &&
++    cbKey.pre[0] === 'WORD k0 = (WORD)a.key;' && cbKey.call === 'fHotPlate->XST1KeyDown(HtdSender(fHotPlate->XST1), k0, HtdShift(a));' && !!cbBad.error &&
++    cbr.globalOf(csH, csC, 'TfHotPlate') === 'fHotPlate' && cbr.hasMember(csH, 'TfHotPlate', 'sbtExit') && !cbr.hasMember(csH, 'TfHotPlate', 'spbSave') &&
++    cbr.declOf(csH, 'TfHotPlate', 'sbtExitClick').access === 'public' && cbr.declOf(csH, 'TfHotPlate', 'LoadImage').access === 'private' &&
++    JSON.stringify(cbr.rowsOf(cbGen)) === JSON.stringify([{ form: 'TfHotPlate', handler: 'spbSaveMouseUp', control: 'spbSave', event: 'OnMouseUp' }]) &&
++    /bool W906_HtdEvent\(const std::string& tag, const std::string& valueJson, std::string\* ack, std::string\* err\)/.test(cbGen) &&
++    /if \(SystemStart \|\| SoftStart\)/.test(cbGen) && /ht9045::formjson::FormLock\(\);[\s\S]*r->run\(a\);[\s\S]*ht9045::formjson::FormUnlock\(\);/.test(cbGen) &&
++    /#include "forms\/fHotPlate\.h"/.test(cbGen) && /#include "vclcompat\/ShiftState\.h"/.test(cbGen) && !/\n(?!\r)/.test(cbGen.replace(/\r\n/g, '')),
++    'cppbridge: the call from the declared parameters (mouse / key / a parameter the page cannot give = refused); the global (fHotPlate), members, access; the generated file (its rows read back, running check, lock, headers)',
++    JSON.stringify([cbCall.call, cbKey.pre, cbBad.error]));
++  const jc0 = '<html><body>\r\n<button id="b1">x</button>\r\n</body></html>';
++  const jc1 = jeApply(jc0, je.setCpp(jc0, 'b1', 'mouseup', 'TfX', 'b1MouseUp', 'OnMouseUp').edits);
++  const jc2 = jeApply(jc1, je.setCpp(jc1, 'b1', 'click', 'TfX', 'b1Click', 'OnClick').edits);
++  const jcAgain = je.setCpp(jc2, 'b1', 'click', 'TfX', 'b1Click', 'OnClick');
++  const jc3 = jeApply(jc2, je.renameCppEdits(jc2, 'TfX', 'b1Click', 'b1Go'));
++  const jc4 = jeApply(jc3, je.renameIdEdits(jc3, 'b1', 'b2'));
++  const jcWithJs = jeApply(jc2, je.setBinding(jc2, 'b1', 'click', 'b1Js').edits);
++  const jcBlk = je.findBlock(jc2);
++  let jcParses = false;
++  try { new Function(jc2.slice(jcBlk.innerStart, jcBlk.innerEnd)); jcParses = true; } catch (e) { /* no */ }
++  ok(JSON.stringify(je.cppLines(jc2).map(x => [x.id, x.type, x.form, x.handler, x.event])) === JSON.stringify([['b1', 'mouseup', 'TfX', 'b1MouseUp', 'OnMouseUp'], ['b1', 'click', 'TfX', 'b1Click', 'OnClick']]) &&
++    (jc2.match(/function htdCpp\(/g) || []).length === 1 && jcParses && !jcAgain.edits.length && /rawCmd\('htd\.event'/.test(jc2) && !/\n(?!\r)/.test(jc2.replace(/\r\n/g, '')) &&
++    /htdCpp\('b1', 'click', 'TfX', 'b1Go', 'OnClick'\)/.test(jc3) && !/b1Click/.test(jc3) && (jc4.match(/htdCpp\('b2'/g) || []).length === 2 &&
++    je.cppLines(jcWithJs).length === 2 && je.bindings(jcWithJs).length === 1 && je.bindings(jc2).length === 0,
++    'jsevents C++ lines: htdCpp(id, type, form, handler, event) in the htdEvents block + ONE helper (it parses, sends htd.event); the same again = nothing; a renamed handler / component follows; the page\'s own JS bindings apart',
++    JSON.stringify(jc2.slice(jc2.lastIndexOf('}\r\nhtdCpp') + 3).slice(0, 140)));
++
+   // --- Alias: the part of the title the page's JS reads (title.match(/Alias=([^｜|\s]+)/)), the IO table's names
+   const al = require('../lib/aliasedit');
+   const alT = 'BtnPanelLane3 : TBtnPanelLane｜Alias=C_LoaderEdgePush';
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index cc29d73..20cc153 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -864,6 +864,12 @@ async function main() {
+     egClickRow && egClickRow.handler === 'spbSaveClick' && egClickRow.dfm && egClickRow.idx >= 0 && egUp && !egUp.handler && egUp.conv === 'spbSaveMouseUp'),
+     '事件表: every TSpeedButton event (the Object Inspector\'s list), OnClick = spbSaveClick from the .dfm, OnMouseUp empty (would be spbSaveMouseUp)', egNames);
+   const egCalls = fake._calls.length;
++  const egPage = api.hub.active && api.hub.active.doc;
++  const egPage0 = egPage ? egPage.getText() : '';
++  const egPort = api.hub.active && api.hub.active.r.portRoot;
++  const egSrvF = egPort ? path.join(egPort, 'tools', 'wb_serve.cpp') : '', egCmF = egPort ? path.join(egPort, 'CMakeLists.txt') : '';
++  const egGenF = egPort ? path.join(egPort, 'HtdEvents', 'HtdEvents.gen.cpp') : '';
++  const egSrv0 = egSrvF && fs.existsSync(egSrvF) ? fs.readFileSync(egSrvF, 'utf8') : '', egCm0 = egCmF && fs.existsSync(egCmF) ? fs.readFileSync(egCmF, 'utf8') : '';
+   const egMade = egData ? await api.hub.onEventGrid(egData, 'OnMouseUp', api.hub.active) : null;
+   const egH = egMade && fake._docs[fake.Uri.file(egMade.h).toString()];
+   const egC = egMade && fake._docs[fake.Uri.file(egMade.cpp).toString()];
+@@ -875,11 +881,34 @@ async function main() {
+   ok(!!(egMade && egHText.length > egDisk.length &&
+     /void spbSaveMouseUp\(TObject \*Sender, TMouseButton Button, TShiftState Shift, int X, int Y\);\s+\/\/AI\(W906-HTDESIGNER\)/.test(egHText) &&
+     /void TfHotPlate::spbSaveMouseUp\(TObject \*Sender, TMouseButton Button, TShiftState Shift, int X, int Y\)\r?\n\{\r?\n\s+\(void\)Sender;/.test(egCText) &&
+-    egOpened && /fHotPlate\.cpp$/i.test(egOpened.uri.fsPath) && egInfo && /網頁不會送 OnMouseUp/.test(egInfo.args[0]) &&
++    egOpened && /fHotPlate\.cpp$/i.test(egOpened.uri.fsPath) && egInfo &&
+     egRow && egRow.handler === 'spbSaveMouseUp' && egRow.portState === 'new' && egRow.main === egRow.port && egRow.mainName === 'spbSaveMouseUp' &&
+     fs.readFileSync(egMade.h, 'utf8') === egDisk),
+-    '事件表: a double-click on the empty OnMouseUp adds TfHotPlate::spbSaveMouseUp (VCL signature) to fHotPlate.h / .cpp, opens the .cpp there, says what is left; nothing written to disk',
++    '事件表: a double-click on the empty OnMouseUp adds TfHotPlate::spbSaveMouseUp (VCL signature) to fHotPlate.h / .cpp, opens the .cpp there; nothing written to disk',
+     egInfo ? egInfo.args[0].slice(0, 90) : '-');
++  // an event the server's form.event table runs: the function it really calls (HotPlate cbSelectHPFromDB.OnChange ->
++  // &B_cbSelectHPFromDBChange, the golden handler's translation in FileRW\HotPlateForm_File.cpp)
++  const egSrvRows = egPort ? api.hub.serverEvents(egPort) : [];
++  const egHp = egSrvRows.find(r => r.cls === 'TfHotPlate' && r.ctl === 'cbSelectHPFromDB' && r.ev === 'change');
++  const egHpText = egHp ? fs.readFileSync(egHp.file, 'utf8').split('\n') : [];
++  ok(!!(egHp && egHp.fn === 'B_cbSelectHPFromDBChange' && /HotPlateForm_File\.cpp$/i.test(egHp.file) &&
++    /^static void B_cbSelectHPFromDBChange\(FormState& J\)/.test(egHpText[egHp.fnLine - 1] || '') && egHp.fnLine !== egHp.line),
++    '事件表: a form.event table row -> the function the server runs: cbSelectHPFromDB change -> B_cbSelectHPFromDBChange (its definition, not the forward declaration)',
++    egHp ? path.basename(egHp.file) + ':' + egHp.fnLine + ' ' + egHp.fnSnippet : 'no row');
++  // ... and wires it (自動接線): the page's htdCpp line, the server's htd.event branch, the CMake entry, the generated table --
++  // every one an in-memory document; nothing on disk
++  const egDoc = f => fake._docs[fake.Uri.file(f).toString()] || fake._docs[fake.Uri.file(f).with({ scheme: 'untitled' }).toString()];
++  const egSrvT = egSrvF && egDoc(egSrvF) ? egDoc(egSrvF).getText() : '', egCmT = egCmF && egDoc(egCmF) ? egDoc(egCmF).getText() : '';
++  const egGenT = egGenF && egDoc(egGenF) ? egDoc(egGenF).getText() : '';
++  const egPageT = egPage ? egPage.getText() : '';
++  ok(!!(egMade && egMade.wired && /htdCpp\('spbSave', 'mouseup', 'TfHotPlate', 'spbSaveMouseUp', 'OnMouseUp'\);/.test(egPageT) && /function htdCpp\(/.test(egPageT) &&
++    /\} else if \(wc\.cmd == "htd\.event"\) \{[^\n]*W906_HtdEvent\(/.test(egSrvT) && egSrvT.split('\n').length === egSrv0.split('\n').length &&
++    /HtdEvents\/HtdEvents\.gen\.cpp\)/.test(egCmT) && egCmT.split('\n').length === egCm0.split('\n').length &&
++    /^\/\/ htd-row TfHotPlate spbSaveMouseUp spbSave OnMouseUp\r?$/m.test(egGenT) && /fHotPlate->spbSaveMouseUp\(nullptr, HtdButton\(a\), HtdShift\(a\), a\.x, a\.y\);/.test(egGenT) &&
++    fs.readFileSync(egSrvF, 'utf8') === egSrv0 && fs.readFileSync(egCmF, 'utf8') === egCm0 && !fs.existsSync(egGenF) &&
++    egRow.cmd === 'htd.event' && egRow.via === 'htd' && egRow.web != null && egRow.server != null && /網頁也接好了/.test(egInfo.args[0])),
++    '事件表: ... and wired: the page\'s htdCpp line (+ its helper), wb_serve.cpp\'s htd.event branch (same line count), CMakeLists.txt, HtdEvents.gen.cpp (untitled) -- all in memory, nothing on disk',
++    egMade ? JSON.stringify({ done: egMade.done, notes: egMade.notes }) : '-');
+   // a second double-click on it: its code (no second copy)
+   const egAgain = egData ? await api.hub.onEventGrid(egData, 'OnMouseUp', api.hub.active) : null;
+   const egHText2 = egH ? egH.getText() : '';
+@@ -899,7 +928,18 @@ async function main() {
+     egTyped && egTyped.name === 'spbSavePress' && /void spbSavePress\(TObject \*Sender, TMouseButton Button, TShiftState Shift, int X, int Y\);/.test(egHT)),
+     '事件表: a typed name renames the added handler in fHotPlate.h / .cpp; an empty one gets the typed name; the .dfm\'s OnClick is not renamed',
+     JSON.stringify({ ren: egRen, dfm: egDfmRen, typed: egTyped && egTyped.name }));
++  // the rename's wiring followed: the page's line, the generated table's row; the typed one is wired too
++  const egPageR = egPage ? egPage.getText() : '', egGenR = egGenF && egDoc(egGenF) ? egDoc(egGenF).getText() : '';
++  ok(!!(egRen && egRen.page === 1 && egRen.gen === 1 && /htdCpp\('spbSave', 'mouseup', 'TfHotPlate', 'spbSaveUp', 'OnMouseUp'\);/.test(egPageR) && !/spbSaveMouseUp/.test(egPageR) &&
++    /^\/\/ htd-row TfHotPlate spbSaveUp spbSave OnMouseUp\r?$/m.test(egGenR) && /^\/\/ htd-row TfHotPlate spbSavePress spbSave OnMouseDown\r?$/m.test(egGenR) &&
++    /fHotPlate->spbSaveUp\(/.test(egGenR) && !/spbSaveMouseUp/.test(egGenR) && /htdCpp\('spbSave', 'mousedown', 'TfHotPlate', 'spbSavePress', 'OnMouseDown'\);/.test(egPageR) &&
++    (egPageR.match(/function htdCpp\(/g) || []).length === 1),
++    '事件表: the renamed handler\'s page line and generated row follow (spbSaveUp); the typed spbSavePress is wired too (one helper on the page)',
++    JSON.stringify({ page: egRen && egRen.page, gen: egRen && egRen.gen }));
+   if (egMade) { delete fake._docs[fake.Uri.file(egMade.h).toString()]; delete fake._docs[fake.Uri.file(egMade.cpp).toString()]; }
++  for (const f of [egSrvF, egCmF]) if (f) delete fake._docs[fake.Uri.file(f).toString()];
++  if (egGenF) { delete fake._docs[fake.Uri.file(egGenF).toString()]; delete fake._docs[fake.Uri.file(egGenF).with({ scheme: 'untitled' }).toString()]; }
++  if (egPage && egPage._setText) { egPage._setText(egPage0); egPage.isDirty = false; }
+ 
+   // Name / Alias / 網頁事件 from the panel
+   const nmCalls = pagePosted.length;
+diff --git a/tools/vscode-htdesigner/test/vscode_it.ps1 b/tools/vscode-htdesigner/test/vscode_it.ps1
+index 29bed78..be5f49d 100644
+--- a/tools/vscode-htdesigner/test/vscode_it.ps1
++++ b/tools/vscode-htdesigner/test/vscode_it.ps1
+@@ -52,7 +52,10 @@ $settings = [ordered]@{
+ 
+ $report = Join-Path $tmp 'report.txt'
+ # the files the test opens must be byte-identical afterwards
+-$watched = @($Page, (Join-Path $golden.FullName 'cHotPlate.cpp'), (Join-Path $golden.FullName 'cHotPlate.dfm'), (Join-Path $port 'tools\wb_serve.cpp')) + @($Sweep | ForEach-Object { Join-Path (Split-Path $Page -Parent) $_ })
++$watched = @($Page, (Join-Path $golden.FullName 'cHotPlate.cpp'), (Join-Path $golden.FullName 'cHotPlate.dfm'), (Join-Path $port 'tools\wb_serve.cpp'), (Join-Path $port 'CMakeLists.txt'), (Join-Path $port 'forms\fHotPlate.h'), (Join-Path $port 'forms\fHotPlate.cpp')) + @($Sweep | ForEach-Object { Join-Path (Split-Path $Page -Parent) $_ })
++# the designer's generated C++ table must not appear on disk (the test saves nothing)
++$genFile = Join-Path $port 'HtdEvents\HtdEvents.gen.cpp'
++$genBefore = Test-Path $genFile
+ $before = @{}
+ foreach ($f in $watched) { $before[$f] = (Get-FileHash $f -Algorithm MD5).Hash }
+ $t0 = Get-Date
+@@ -111,7 +114,8 @@ function ExtensionCannotWrite() {
+   return $true
+ }
+ $cannotWrite = ExtensionCannotWrite
+-$strict = @($changed | Where-Object { -not ($noSaves -and (($_.StartsWith([string]$port, [StringComparison]::OrdinalIgnoreCase) -and $_ -match '\.(cpp|h)$') -or (CommittedSince $_ $t0) -or (BackToCommitted $_) -or $cannotWrite)) })
++$strict = @($changed | Where-Object { -not ($noSaves -and (($_.StartsWith([string]$port, [StringComparison]::OrdinalIgnoreCase) -and $_ -match '(\.(cpp|h)|CMakeLists\.txt)$') -or (CommittedSince $_ $t0) -or (BackToCommitted $_) -or $cannotWrite)) })
++if ((Test-Path $genFile) -and -not $genBefore) { Write-Host ('FAIL  the generated file appeared on disk: ' + $genFile); exit 1 }
+ $theirs = @($changed | Where-Object { $strict -notcontains $_ })
+ foreach ($f in $theirs) {
+   $who = & git -C (Split-Path $f -Parent) log -1 --format='%h %ci %s' -- $f 2>$null
+-- 
+2.55.0.windows.5
+

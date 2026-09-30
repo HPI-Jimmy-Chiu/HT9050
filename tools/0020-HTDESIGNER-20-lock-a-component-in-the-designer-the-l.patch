@@ -1,0 +1,600 @@
+From 32327474eab5e88ed6121d4717f0c40549d13276 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 20:07:58 +0800
+Subject: [PATCH] HTDESIGNER-20: lock a component in the designer -- the lock
+ of the WPF document outline (0.20.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A locked component -- and everything inside it -- cannot be dragged, resized
+(no handles are shown), nudged with the arrows or moved by an alignment on
+the design surface, nor deleted, cut or reordered; its position / size fields
+in the property grid are disabled with a note. It can still be selected, and
+its text and look can still be changed.
+- The component tree: a lock on every row (open = lock it, closed = unlock),
+  "🔒" in the description; the title bar has "unlock all" while something is
+  locked; the design surface's right-click menu has the toggle.
+- The probe is told the whole set (and gets it again with every init); a press
+  on a locked component says so once, only when it would have moved; the
+  selection label shows 🔒.
+- The extension refuses delete / cut / order when the name or a component
+  around it is locked (walks up the component tree).
+- Kept per page in the workspace state like the eye; never in the source.
+  The tree's contextValue is now 'component' + '.hidden' / '.locked', and the
+  inline eye / lock pick their action from it.
+
+Tests: lib 114, probe (a locked panel's button: no drag, no arrows, no handles,
+refused once each), smoke 78 (tree mark, kept per page, inside-a-locked-panel
+counts, delete / cut / order refused, unlock all), panels, real VS Code 80
+(the real probe knows the lock, a confirmed delete inside it is refused, the
+page untouched, unlock all) -- all pass; opened files MD5-unchanged.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  6 ++
+ tools/vscode-htdesigner/extension.js          | 90 +++++++++++++++++--
+ tools/vscode-htdesigner/media/probe.js        | 47 +++++++++-
+ tools/vscode-htdesigner/media/props.js        |  1 +
+ tools/vscode-htdesigner/package.json          | 49 +++++++++-
+ .../test/integration/index.js                 | 12 +++
+ tools/vscode-htdesigner/test/probe_driver.js  | 20 +++++
+ tools/vscode-htdesigner/test/probe_test.ps1   |  1 +
+ .../vscode-htdesigner/test/smoke_extension.js | 21 ++++-
+ 9 files changed, 234 insertions(+), 13 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 05bfde1..696b69d 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -140,6 +140,12 @@ GroupBox 的 `<legend>` 和 Panel 的標題永遠留在第一個；已經在最
+ 隱藏的元件點不到，**滑鼠會點到它下面那一層** —— 像 Alert.Note 十幾個面板疊在同一個位置，把上面的藏起來就能選、能改下面的。
+ **只影響設計畫面，原始碼一個字都不改**；每一頁記住自己藏了哪些（關掉再開、重新整理都還在），表單本身不能藏。
+ 
++**鎖定（鎖頭）**：跟 WPF 文件大綱的鎖一樣。「元件」樹每一列右邊的鎖頭（開著的鎖）＝鎖定，再按一次（鎖上的鎖）＝解除；
++標題列有「全部解除鎖定」，畫面右鍵也有「鎖定／解除鎖定這個元件」。
++鎖定的元件**連同它裡面的元件**：在設計畫面不能拖曳、拉控制點（控制點不顯示）、方向鍵移動、被對齊，也不能刪除、剪下、調順序；
++屬性面板的位置／大小欄位變灰。**還是可以選取、看屬性、改文字和外觀**。跟眼睛一樣只記在這台 VS Code、不改原始碼。
++適合把整個畫面的外框、大 Panel 鎖起來，只改裡面某幾個元件時不會不小心拖到外面那層。
++
+ **「元件」樹**（WPF 的文件大綱）：頁面上所有有名字的元件，照 DFM 的層次排列。點一下＝在畫面上選取；
+ **Ctrl／Shift＋點＝多選**（最後點的是主要選取）；選到在隱藏分頁裡的元件時，會自動切到那一頁。
+ 每一列右邊兩個圖示＝跳到 DFM 定義／跳到 HTML 原始碼。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 8ead64f..d3d8328 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -123,6 +123,11 @@ class Hub {
+       reg('ht9045Designer.designUnhide', n => this.designHide(n, false)),
+       reg('ht9045Designer.designToggle', n => this.designHide(n)),
+       reg('ht9045Designer.designUnhideAll', () => { if (this.active) this.applyDesignHidden(this.active, []); }),
++      // locked in the designer only (the lock in the component tree / the design surface's menu)
++      reg('ht9045Designer.designLock', n => this.designLock(n, true)),
++      reg('ht9045Designer.designUnlock', n => this.designLock(n, false)),
++      reg('ht9045Designer.designLockToggle', n => this.designLock(n)),
++      reg('ht9045Designer.designUnlockAll', () => { if (this.active) this.applyDesignLocked(this.active, []); }),
+       // WPF Delete / Cut / Copy / Paste of whole components (the page is drawn again from the source)
+       reg('ht9045Designer.deleteComponent', arg => this.cmdDelete(arg && typeof arg === 'object' && 'confirmed' in arg ? arg : null)),
+       reg('ht9045Designer.cutComponent', arg => this.cmdCut(arg && typeof arg === 'object' && 'confirmed' in arg ? arg : null)),
+@@ -266,6 +271,7 @@ class Hub {
+     this.active = d;
+     this.tree.set(d);
+     vscode.commands.executeCommand('setContext', 'ht9045Designer.anyDesignHidden', !!(d && d.designHidden && d.designHidden.size));
++    vscode.commands.executeCommand('setContext', 'ht9045Designer.anyDesignLocked', !!(d && d.designLocked && d.designLocked.size));
+     this.pages.mark();
+     this.pages.revealActive();
+     vscode.commands.executeCommand('setContext', 'ht9045Designer.active', !!d);
+@@ -280,12 +286,72 @@ class Hub {
+   }
+ 
+   // --- hidden in the designer only (the eye; the workspace state, never the source) ---
+-  loadDesignHidden(file) {
+-    const all = this.ctx.workspaceState ? this.ctx.workspaceState.get('htd.designHidden', {}) : {};
++  loadDesignHidden(file) { return this.loadDesignSet('htd.designHidden', file); }
++
++  /** A per-page list of names kept in the workspace state (hidden / locked in the designer). */
++  loadDesignSet(key, file) {
++    const all = this.ctx.workspaceState ? this.ctx.workspaceState.get(key, {}) : {};
+     const v = all && all[String(file).toLowerCase()];
+     return Array.isArray(v) ? v.filter(x => typeof x === 'string' && x) : [];
+   }
+ 
++  saveDesignSet(key, file, list) {
++    if (!this.ctx.workspaceState) return;
++    const all = Object.assign({}, this.ctx.workspaceState.get(key, {}));
++    if (list.length) all[String(file).toLowerCase()] = list; else delete all[String(file).toLowerCase()];
++    this.ctx.workspaceState.update(key, all);
++  }
++
++  /** Locked in the designer (the lock): it or a component around it. The locked name, or ''. */
++  lockedName(d, id) {
++    if (!d || !d.designLocked || !d.designLocked.size || !id) return '';
++    if (d.designLocked.has(id)) return id;
++    let row = d.treeData.find(r => r[2] === id);
++    const seen = new Set();
++    while (row && !seen.has(row[0])) {
++      seen.add(row[0]);
++      const name = row[7] ? '@form' : row[2];
++      if (d.designLocked.has(name)) return name;
++      row = row[1] ? d.treeData.find(r => r[0] === row[1]) : null;
++    }
++    return '';
++  }
++
++  applyDesignLocked(d, ids) {
++    if (!d) return;
++    d.designLocked = new Set(ids.filter(x => typeof x === 'string' && x && x !== '@form'));
++    const list = Array.from(d.designLocked);
++    this.saveDesignSet('htd.designLocked', d.file, list);
++    d.post({ type: 'designLocked', ids: list });
++    if (this.active === d) {
++      this.tree.refresh();
++      vscode.commands.executeCommand('setContext', 'ht9045Designer.anyDesignLocked', list.length > 0);
++      // the properties panel: its position / size fields follow the lock
++      if (d.sel && d.sel.info) this.onSelect(d, d.sel.info, 'lock');
++    }
++  }
++
++  designLock(n, lock) {
++    const d = this.active;
++    if (!d) return;
++    const id = n && typeof n.id === 'string' ? (n.isForm ? '' : n.id) : (d.sel && d.sel.info ? d.sel.info.id : '');
++    if (!id || id === '@form') { vscode.window.setStatusBarMessage('$(info) 表單本身不能鎖定', 4000); return; }
++    const ids = new Set(d.designLocked);
++    if (lock === undefined) lock = !ids.has(id);
++    if (lock) ids.add(id); else ids.delete(id);
++    this.applyDesignLocked(d, Array.from(ids));
++    vscode.window.setStatusBarMessage('$(' + (lock ? 'lock' : 'unlock') + ') ' + id + (lock ? ' 鎖定了：在設計畫面不能移動、改大小、刪除（裡面的元件也一樣；原始碼沒改）' : ' 解除鎖定'), 5000);
++  }
++
++  /** Refused when one of the names is locked: true (and the status says so). */
++  refuseLocked(d, ids, verb) {
++    for (const id of ids) {
++      const lk = this.lockedName(d, id);
++      if (lk) { this.refuseEdit(d, '「' + lk + '」鎖定了（元件樹上的鎖頭），不能' + verb + (lk !== id ? '（' + id + ' 在它裡面）' : '') + '。'); return true; }
++    }
++    return false;
++  }
++
+   /** ids = the names to hide (a toggle adds / removes one; [] shows everything again). */
+   applyDesignHidden(d, ids) {
+     if (!d) return;
+@@ -560,10 +626,13 @@ class Hub {
+     // WPF-style editing: what can be changed, and whether it can be written back
+     const edTag = info.id ? htmledit.startTagOf(html, info.id) : null;
+     const edWrap = edTag && info.layout && info.layout.target === 'parent' ? htmledit.wrapperTagOf(html, edTag.start) : null;
++    // locked in the designer (the lock): position / size cannot be changed, text and look can
++    const locked = this.lockedName(d, isForm ? '@form' : info.id) || null;
+     const edit = {
+       layout: info.layout || null, caption: info.caption || null, look: info.look || null,
+       inSource: !!edTag,
+-      layoutInSource: !!(edTag && info.layout && (info.layout.target === 'self' || edWrap)),
++      locked,
++      layoutInSource: !locked && !!(edTag && info.layout && (info.layout.target === 'self' || edWrap)),
+       dirty: !!d.doc.isDirty,
+       multi: Array.isArray(info.multi) && info.multi.length ? info.multi : null,
+       // (the form's DFM Width/Height are the whole window incl. caption and borders,
+@@ -1128,6 +1197,7 @@ class Hub {
+     if (!d) return null;
+     const ids = this.selIds(d);
+     if (!ids.length) { vscode.window.setStatusBarMessage('$(info) 先選一個元件（表單本身不能' + verb + '）', 5000); return null; }
++    if (this.refuseLocked(d, ids, verb)) return null;
+     const text = d.doc.getText();
+     const us = this.unitsFor(text, ids);
+     if (us.error) { this.refuseEdit(d, us.error); return null; }
+@@ -1160,6 +1230,7 @@ class Hub {
+     if (!d) return null;
+     const ids = this.selIds(d);
+     if (!ids.length) { vscode.window.setStatusBarMessage('$(info) 先選一個元件（表單本身沒有前後順序）', 5000); return null; }
++    if (this.refuseLocked(d, [ids[0]], '調整順序')) return null;
+     const text = d.doc.getText();
+     const u = this.unitFor(text, ids[0]);
+     if (!u) { this.refuseEdit(d, '原始碼裡找不到「' + ids[0] + '」（可能是頁面 JS 產生的元件），沒有動。'); return null; }
+@@ -1192,6 +1263,7 @@ class Hub {
+ 
+   /** Ctrl+X: copy, then delete (asks like Delete when the page's JS uses them). */
+   async cmdCut(arg) {
++    if (this.active && this.refuseLocked(this.active, this.selIds(this.active), '剪下')) return null;
+     const c = await this.cmdCopy();
+     if (!c) return null;
+     return this.cmdDelete(arg, '剪下');
+@@ -1507,6 +1579,7 @@ class Designer {
+     // hidden in the designer only (WPF: the eye in the document outline); kept per
+     // page in the workspace state, never in the source
+     this.designHidden = new Set(hub.loadDesignHidden(doc.uri.fsPath));
++    this.designLocked = new Set(hub.loadDesignSet('htd.designLocked', doc.uri.fsPath));
+     this.formLabel = '表單';
+     this.disposed = false;
+     this.renderN = 0;
+@@ -1621,7 +1694,7 @@ class Designer {
+             if (pi.ir.root && pi.ir.root.events) events['@form'] = Object.keys(pi.ir.root.events);
+           }
+           this.post({ type: 'init', mode: this.mode, selectId: this.lastSelId, scroll: this.scroll, classes, events, zoom: this.zoom || 1,
+-            designHidden: Array.from(this.designHidden) });
++            designHidden: Array.from(this.designHidden), designLocked: Array.from(this.designLocked) });
+         };
+         this.info.then(send, () => send(null));
+         clearTimeout(this.diagTimer);
+@@ -1970,18 +2043,21 @@ class ComponentTree {
+       if (node) n.cls = node.class;
+     }
+     const dh = !n.isForm && !!(this.d && this.d.designHidden && this.d.designHidden.has(n.id));
++    const lk = !n.isForm && !!(this.d && this.d.designLocked && this.d.designLocked.has(n.id));
+     const desc = [];
++    if (lk) desc.push('🔒');
+     if (!n.isForm) desc.push(n.cls || '<' + n.tag + '>');
+     if (n.cap) desc.push('「' + n.cap + '」');
+     if (dh) desc.push('（設計時隱藏）');
+     else if (n.hidden) desc.push('（隱藏）');
+     item.description = desc.join(' ');
+     item.tooltip = label + (n.cls ? ' : ' + n.cls : '') + '\n<' + n.tag + '>' + (n.cap ? '\n' + n.cap : '') +
+-      (dh ? '\n在設計檢視暫時隱藏（按右邊的眼睛顯示回來；原始碼沒改）' : n.hidden ? '\n目前不可見（在未顯示的分頁裡，或被隱藏）' : '');
++      (dh ? '\n在設計檢視暫時隱藏（按右邊的眼睛顯示回來；原始碼沒改）' : n.hidden ? '\n目前不可見（在未顯示的分頁裡，或被隱藏）' : '') +
++      (lk ? '\n鎖定：在設計畫面不能移動、改大小、刪除（裡面的元件也一樣）；按右邊的鎖頭解除' : '');
+     item.iconPath = new vscode.ThemeIcon(dh ? 'eye-closed' : iconFor(n), dh || n.hidden ? new vscode.ThemeColor('disabledForeground') : undefined);
+     item.command = { command: 'ht9045Designer.selectKey', title: '選取', arguments: [n.key] };
+-    // the eye: 'component' shows "hide", 'componentDesignHidden' shows "show"; the form has none
+-    item.contextValue = n.isForm ? 'componentForm' : dh ? 'componentDesignHidden' : 'component';
++    // 'component' + '.hidden' / '.locked': the eye and the lock pick their icon from it; the form has neither
++    item.contextValue = n.isForm ? 'componentForm' : 'component' + (dh ? '.hidden' : '') + (lk ? '.locked' : '');
+     return item;
+   }
+ 
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index 23c5c8a..9c87b1e 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -260,7 +260,8 @@
+     drawBadge();
+   }
+   function placeHandles() {
+-    var bx = mode === 'design' && selEl && !drag ? boxOf(selEl) : null;
++    /* a locked component shows no resize handles (WPF) */
++    var bx = mode === 'design' && selEl && !drag && !lockedOf(selEl) ? boxOf(selEl) : null;
+     var r = bx ? bx.node.getBoundingClientRect() : null;
+     for (var i = 0; i < handles.length; i++) {
+       var h = handles[i];
+@@ -282,7 +283,7 @@
+     var evs = ev && ev.length ? '  · ' + ev.slice(0, 3).join(', ') + (ev.length > 3 ? ' …' : '') : '';
+     var n = el === selEl ? allSel().length : 0;
+     var z = typeof zoom === 'number' && zoom > 0 ? zoom : 1;   // the page's own px, not the zoomed screen's
+-    return name + (v.cls ? ' : ' + v.cls : '') + evs + '   ' + Math.round(r.width / z) + '×' + Math.round(r.height / z) + (n > 1 ? '   （共選 ' + n + ' 個）' : '');
++    return (lockedOf(el) ? '🔒 ' : '') + name + (v.cls ? ' : ' + v.cls : '') + evs + '   ' + Math.round(r.width / z) + '×' + Math.round(r.height / z) + (n > 1 ? '   （共選 ' + n + ' 個）' : '');
+   }
+   function place(box, tag, el) {
+     if (!el || !el.isConnected) { box.style.display = 'none'; tag.style.display = 'none'; return; }
+@@ -672,7 +673,22 @@
+     }
+     return best;
+   }
++  /* locked in the designer (WPF: the lock in the document outline): it and what is
++     inside it cannot be moved or resized here; selecting and its properties still work */
++  var LOCK = {};
++  function lockedOf(el) {
++    var fr = formRoot();
++    for (var x = el; x && x !== document.body && x !== document.documentElement; x = x.parentElement) {
++      var nm = x === fr ? '@form' : x.id;
++      if (nm && LOCK[nm]) return nm;
++    }
++    return '';
++  }
++  function lockedWhy(name) { return '「' + name + '」鎖定了（元件樹上的鎖頭），在設計畫面不能移動或改大小'; }
+   function startDrag(el, bx, how, e, group) {
++    var lk = lockedOf(el);
++    for (var gi = 0; !lk && group && gi < group.length; gi++) lk = lockedOf(group[gi].el);
++    if (lk) { drag = { locked: lk, el: el, x: e.clientX, y: e.clientY, active: false, told: false }; return; }
+     drag = { el: el, bx: bx, how: how, s0: snap(bx), x: e.clientX, y: e.clientY, active: how !== 'move', last: null,
+       r0: bx.node.getBoundingClientRect(), lines: null, items: null, collapse: null };
+     /* moving a multi-selection moves every selected component by the same delta */
+@@ -778,6 +794,13 @@
+   origAdd.call(window, 'mousemove', function (e) {
+     if (drag) {
+       var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
++      if (drag.locked) {
++        /* pressed on a locked component: nothing moves; said once, when it would have */
++        if (!drag.told && Math.abs(dx) + Math.abs(dy) >= 3) { drag.told = true; post({ type: 'editRefused', why: lockedWhy(drag.locked) }); }
++        e.preventDefault();
++        e.stopImmediatePropagation();
++        return;
++      }
+       if (!drag.active) {
+         if (Math.abs(dx) + Math.abs(dy) < 3) return;   // a click, not a drag (yet)
+         drag.active = true;
+@@ -836,6 +859,11 @@
+     if (!drag) return;
+     var d = drag;
+     drag = null;
++    if (d.locked) {
++      if (d.told) { justDragged = true; setTimeout(function () { justDragged = false; }, 0); }
++      scheduleDraw();
++      return;
++    }
+     if (d.active) {
+       justDragged = true;
+       setTimeout(function () { justDragged = false; }, 0);
+@@ -949,6 +977,9 @@
+     if (!ARROWS[k]) return;
+     e.preventDefault();
+     e.stopImmediatePropagation();
++    var lkK = '';
++    allSel().forEach(function (x) { if (!lkK) lkK = lockedOf(x); });
++    if (lkK) { post({ type: 'editRefused', why: lockedWhy(lkK) }); return; }
+     var group = allSel().map(function (x) { return { el: x, bx: boxOf(x) }; })
+       .filter(function (g) { return g.bx && (e.ctrlKey || !g.bx.root); });   // the form resizes, never moves
+     if (!group.length) { post({ type: 'editRefused', why: '這個元件不是用 position:absolute 定位的，不能用方向鍵移動' }); return; }
+@@ -1065,6 +1096,7 @@
+         if (typeof m.zoom === 'number' && m.zoom !== 1) setZoom(m.zoom);
+         if (m.mode) { mode = m.mode; drawBadge(); }
+         if (Array.isArray(m.designHidden) && m.designHidden.length) setDesignHidden(m.designHidden);
++        if (Array.isArray(m.designLocked)) { LOCK = {}; m.designLocked.forEach(function (id) { LOCK[String(id)] = 1; }); }
+         if (m.scroll) { try { window.scrollTo(m.scroll.x || 0, m.scroll.y || 0); } catch (x) { /* ignore */ } }
+         if (m.selectId) { var el0 = byId(m.selectId); if (el0) select(el0, 'init', !m.scroll); }
+         break;
+@@ -1106,12 +1138,18 @@
+         /* the whole set each time (ids), so it can never drift from the extension's */
+         setDesignHidden(m.ids);
+         break;
++      case 'designLocked':
++        LOCK = {};
++        (Array.isArray(m.ids) ? m.ids : []).forEach(function (id) { LOCK[String(id)] = 1; });
++        scheduleDraw();
++        break;
+       /* edits from the properties panel: change the DOM, then report the same change
+          as an 'edit' for the extension to write into the source */
+       case 'setLayout': {
+         /* (by id: from the DFM difference list, for a control that is not selected) */
+         var el3 = m.id ? byId(m.id) : els.get(m.key);
+         if (!el3 || !el3.isConnected) break;
++        if (lockedOf(el3)) { post({ type: 'editRefused', why: lockedWhy(lockedOf(el3)) }); break; }
+         var bx3 = boxOf(el3);
+         if (!bx3) { post({ type: 'editRefused', why: '這個元件不是用 position:absolute 定位的，位置／大小不能改' }); break; }
+         var s3 = snap(bx3), cb3 = curBox(bx3.node);
+@@ -1172,8 +1210,11 @@
+         var rest = allSel().slice(1);
+         var items = [];
+         var bad = false;
++        var lockedA = '';
+         for (var ai = 0; ai < rest.length; ai++) {
+           var ae = rest[ai], abx = boxOf(ae);
++          /* a locked one stays where it is (the primary is only the reference, it never moves) */
++          if (lockedOf(ae)) { lockedA = lockedA || lockedOf(ae); continue; }
+           if (!abx) { bad = true; continue; }
+           var ar = ae.getBoundingClientRect();
+           var aL = 0, aT = 0, aW = 0, aH = 0;
+@@ -1197,6 +1238,7 @@
+         }
+         if (items.length) commitGroup(items);
+         if (bad) post({ type: 'editRefused', why: '有元件的位置／大小不是寫在自己 style 裡的 px 數值，那個沒有對齊' });
++        else if (lockedA) post({ type: 'editRefused', why: lockedWhy(lockedA) + '，它沒有跟著對齊' });
+         var prim = selEl;
+         selEl = null;
+         select(prim, 'edit', false);
+@@ -1280,6 +1322,7 @@
+           bodyBg: bs ? bs.backgroundColor : '', bodyPadding: bs ? bs.padding : '',
+           vscodeDefaultsLeft: !!document.getElementById('_defaultStyles'),
+           designHidden: document.querySelectorAll('[data-htd-hide]').length,
++          designLocked: Object.keys(LOCK).length,
+           base: document.baseURI,
+         });
+         break;
+diff --git a/tools/vscode-htdesigner/media/props.js b/tools/vscode-htdesigner/media/props.js
+index dc2a321..73b8ead 100644
+--- a/tools/vscode-htdesigner/media/props.js
++++ b/tools/vscode-htdesigner/media/props.js
+@@ -287,6 +287,7 @@
+         body.appendChild(tb);
+         var note;
+         if (!ed.inSource) note = '這個元件是頁面 JS 產生的，HTML 原始碼裡沒有它，不能在這裡改。';
++        else if (ed.locked) note = '🔒「' + ed.locked + '」鎖定了：位置／大小不能改（在「元件」樹上按鎖頭解除）；文字和外觀可以改。';
+         else if (lay && !ed.layoutInSource) note = '位置由外層元素決定、原始碼對不上，位置／大小不能改；文字和外觀可以。';
+         else note = '也可以直接在畫面上拖曳、拉控制點、用方向鍵微調。改的是 HTML 原始碼' + (ed.dirty ? '（目前有未存檔的修改）' : '') +
+           '：Ctrl+Z 復原、Ctrl+S 存檔。這一頁由 sync_web.py 同步，--apply 會覆蓋。';
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 4498209..5df1c5a 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.19.0",
++  "version": "0.20.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -138,6 +138,29 @@
+         "category": "HT9045",
+         "icon": "$(eye)"
+       },
++      {
++        "command": "ht9045Designer.designLock",
++        "title": "鎖定（設計畫面不能移動、改大小、刪除）",
++        "category": "HT9045",
++        "icon": "$(unlock)"
++      },
++      {
++        "command": "ht9045Designer.designUnlock",
++        "title": "解除鎖定",
++        "category": "HT9045",
++        "icon": "$(lock)"
++      },
++      {
++        "command": "ht9045Designer.designLockToggle",
++        "title": "鎖定／解除鎖定這個元件",
++        "category": "HT9045"
++      },
++      {
++        "command": "ht9045Designer.designUnlockAll",
++        "title": "全部解除鎖定",
++        "category": "HT9045",
++        "icon": "$(unlock)"
++      },
+       {
+         "command": "ht9045Designer.cutComponent",
+         "title": "剪下元件",
+@@ -238,6 +261,7 @@
+         { "command": "ht9045Designer.deleteComponent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "0_edit@4" },
+         { "command": "ht9045Designer.findComponent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@2" },
+         { "command": "ht9045Designer.designToggle", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@3" },
++        { "command": "ht9045Designer.designLockToggle", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@5" },
+         { "command": "ht9045Designer.designUnhideAll", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign' && ht9045Designer.anyDesignHidden", "group": "2_select@4" },
+         { "submenu": "ht9045Designer.alignMenu", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@1" },
+         { "submenu": "ht9045Designer.orderMenu", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@2" },
+@@ -323,6 +347,11 @@
+           "when": "view == ht9045Designer.components && ht9045Designer.anyDesignHidden",
+           "group": "navigation@0"
+         },
++        {
++          "command": "ht9045Designer.designUnlockAll",
++          "when": "view == ht9045Designer.components && ht9045Designer.anyDesignLocked",
++          "group": "navigation@0"
++        },
+         {
+           "command": "ht9045Designer.openPage",
+           "when": "view == ht9045Designer.components",
+@@ -370,14 +399,24 @@
+           "when": "view == ht9045Designer.pages && viewItem == page",
+           "group": "1_open@1"
+         },
++        {
++          "command": "ht9045Designer.designLock",
++          "when": "view == ht9045Designer.components && viewItem =~ /^component(\\.hidden)?$/",
++          "group": "inline@0"
++        },
++        {
++          "command": "ht9045Designer.designUnlock",
++          "when": "view == ht9045Designer.components && viewItem =~ /^component(\\.hidden)?\\.locked$/",
++          "group": "inline@0"
++        },
+         {
+           "command": "ht9045Designer.designHide",
+-          "when": "view == ht9045Designer.components && viewItem == component",
++          "when": "view == ht9045Designer.components && viewItem =~ /^component(\\.locked)?$/",
+           "group": "inline@0"
+         },
+         {
+           "command": "ht9045Designer.designUnhide",
+-          "when": "view == ht9045Designer.components && viewItem == componentDesignHidden",
++          "when": "view == ht9045Designer.components && viewItem =~ /^component\\.hidden(\\.locked)?$/",
+           "group": "inline@0"
+         },
+         {
+@@ -425,6 +464,10 @@
+         { "command": "ht9045Designer.designHide", "when": "false" },
+         { "command": "ht9045Designer.designUnhide", "when": "false" },
+         { "command": "ht9045Designer.designToggle", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.designLock", "when": "false" },
++        { "command": "ht9045Designer.designUnlock", "when": "false" },
++        { "command": "ht9045Designer.designLockToggle", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.designUnlockAll", "when": "ht9045Designer.active && ht9045Designer.anyDesignLocked" },
+         { "command": "ht9045Designer.cutComponent", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.copyComponent", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.pasteComponent", "when": "ht9045Designer.active" },
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index d75c6c3..e3abde8 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -281,6 +281,18 @@ exports.run = async function () {
+       await vscode.commands.executeCommand('ht9045Designer.designUnhideAll');
+       const g3 = await diagNow();
+       ok(g3 && g3.designHidden === 0 && !d.doc.isDirty && hub.loadDesignHidden(d.file).length === 0, 'show all: back, nothing kept, page not dirty');
++      // the lock: Panel2 locked -> deleting spbSave (inside it) is refused even when confirmed; unlock all
++      await vscode.commands.executeCommand('ht9045Designer.designLock', { id: 'Panel2', isForm: false });
++      const g4 = await diagNow();
++      d.post({ type: 'selectId', id: 'spbSave', origin: 'editor' });
++      await waitFor(() => (d.sel && d.sel.info && d.sel.info.id === 'spbSave' ? true : null), 5000);
++      const lkBefore = d.doc.getText();
++      const lkDel = await vscode.commands.executeCommand('ht9045Designer.deleteComponent', { confirmed: true });
++      ok(g4 && g4.designLocked === 1 && lkDel === null && d.doc.getText() === lkBefore && !d.doc.isDirty,
++        'lock Panel2 (real probe knows it): deleting spbSave inside it is refused, page untouched', JSON.stringify(g4 && g4.designLocked));
++      await vscode.commands.executeCommand('ht9045Designer.designUnlockAll');
++      const g5 = await diagNow();
++      ok(g5 && g5.designLocked === 0 && hub.loadDesignSet('htd.designLocked', d.file).length === 0, 'unlock all: nothing locked, nothing kept');
+     }
+ 
+     // WPF Copy / Paste / Delete in the real designer: the page is drawn again from the source each time
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index 49f99f0..a693840 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -359,6 +359,26 @@
+           R.cmds = msgs('cmd').slice(nc).map(function (m) { return m.cmd; }).join(',');
+           R.cmdsOk = R.cmds === 'delete,copy,paste' && document.getElementById(btn.id) === btn;
+ 
++          /* the lock: the button of a locked panel moves neither by drag nor by arrows (said once
++             each), shows no resize handles; unlocked again afterwards */
++          if (hpnl && hpnl !== document.body) {
++            window.__htdProbe.message({ type: 'designLocked', ids: [hpnl.id] });
++            window.__htdProbe.selectById(btn.id);
++            var nl0 = edits().length, nr0 = msgs('editRefused').length, lb0 = btn.style.left;
++            var lr = btn.getBoundingClientRect();
++            mouse('mousedown', btn, lr.left + 5, lr.top + 5);
++            mouse('mousemove', btn, lr.left + 25, lr.top + 5, ALT);
++            mouse('mousemove', btn, lr.left + 45, lr.top + 5, ALT);
++            mouse('mouseup', btn, lr.left + 45, lr.top + 5);
++            key('ArrowRight');
++            window.__htdProbe.drawNow();
++            var hs2 = host && host.shadowRoot ? host.shadowRoot.querySelectorAll('.hd') : [];
++            R.lockTried = 'edits ' + (edits().length - nl0) + ' refused ' + (msgs('editRefused').length - nr0) + ' left ' + lb0 + '->' + btn.style.left;
++            R.lockOk = edits().length === nl0 && btn.style.left === lb0 && msgs('editRefused').length === nr0 + 2 &&
++              Array.prototype.every.call(hs2, function (h) { return h.style.display !== 'block'; });
++            window.__htdProbe.message({ type: 'designLocked', ids: [] });
++          }
++
+           /* zoom 200%: a 20px drag on screen is 10px in the page */
+           window.__htdProbe.message({ type: 'setZoom', zoom: 2 });
+           window.__htdProbe.selectById('spbSave');
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index 000f19b..a3ee122 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -74,6 +74,7 @@ foreach ($p in $Pages) {
+     }
+     if ($R.PSObject.Properties.Name -contains 'hiddenTarget') { $must['hidden tab revealed'] = [bool]$R.hiddenTabRevealed }
+     if ($R.PSObject.Properties.Name -contains 'wrapperEdit') { $must['input moves its wrapper'] = [bool]$R.wrapperOk }
++    if ($R.PSObject.Properties.Name -contains 'lockTried') { $must['locked: no drag, no arrows, no handles, said once each'] = [bool]$R.lockOk }
+     if ($R.PSObject.Properties.Name -contains 'cmds') { $must['Del / copy / paste -> commands, a doubled paste once'] = [bool]$R.cmdsOk }
+     if ($R.PSObject.Properties.Name -contains 'designHideTarget') {
+       $must['hidden in the designer: invisible, clicks go through'] = [bool]$R.designHideOk
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 7340800..4351528 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -348,7 +348,7 @@ async function main() {
+   const eyeMsg = pagePosted.filter(m => m.type === 'designHidden').pop();
+   const eyeNode = Array.from(fake._tree.byKey.values()).find(n => n.id === 'Panel2');
+   const eyeItem = eyeNode ? fake._tree.getTreeItem(eyeNode) : null;
+-  ok(eyeMsg && JSON.stringify(eyeMsg.ids) === '["Panel2"]' && eyeItem && eyeItem.contextValue === 'componentDesignHidden' && /設計時隱藏/.test(eyeItem.description) &&
++  ok(eyeMsg && JSON.stringify(eyeMsg.ids) === '["Panel2"]' && eyeItem && eyeItem.contextValue === 'component.hidden' && /設計時隱藏/.test(eyeItem.description) &&
+     JSON.stringify(api.hub.loadDesignHidden(PAGE)) === '["Panel2"]',
+     'eye: Panel2 hidden in the designer (probe told, tree marks it, kept for the page)', JSON.stringify(eyeMsg) + ' | ' + (eyeItem && eyeItem.description));
+   await fake._cmds['ht9045Designer.designHide']({ id: '@form', isForm: true });
+@@ -418,6 +418,25 @@ async function main() {
+     'order back: first after the caption span (which stays first)', JSON.stringify(orBack));
+   doc._setText(edBefore);
+ 
++  // the lock: Panel2 locked -> spbSave (inside it) cannot be deleted / cut / reordered; the tree and the probe know
++  pagePosted.length = 0;
++  await fake._cmds['ht9045Designer.designLock']({ id: 'Panel2', isForm: false });
++  const lkMsg = pagePosted.filter(m => m.type === 'designLocked').pop();
++  const lkNode = Array.from(fake._tree.byKey.values()).find(n => n.id === 'Panel2');
++  const lkItem = lkNode ? fake._tree.getTreeItem(lkNode) : null;
++  ok(lkMsg && JSON.stringify(lkMsg.ids) === '["Panel2"]' && lkItem && lkItem.contextValue === 'component.locked' && /🔒/.test(lkItem.description) &&
++    JSON.stringify(api.hub.loadDesignSet('htd.designLocked', PAGE)) === '["Panel2"]' && api.hub.lockedName(edD, 'spbSave') === 'Panel2',
++    'lock Panel2: probe told, tree marks it, kept for the page; spbSave inside it counts as locked', lkItem ? lkItem.description : '-');
++  await selAs('spbSave', 'button');
++  const lkText = text;
++  const lkDel = await fake._cmds['ht9045Designer.deleteComponent']({ confirmed: true });
++  const lkCut = await fake._cmds['ht9045Designer.cutComponent']({ confirmed: true });
++  const lkOrd = await fake._cmds['ht9045Designer.order.front']();
++  ok(lkDel === null && lkCut === null && lkOrd === null && text === lkText, 'locked: delete / cut / order refused, the page untouched');
++  await fake._cmds['ht9045Designer.designUnlockAll']();
++  ok(api.hub.loadDesignSet('htd.designLocked', PAGE).length === 0 && api.hub.lockedName(edD, 'spbSave') === '' && fake._tree.getTreeItem(lkNode).contextValue === 'component',
++    'unlock all: nothing locked, nothing kept');
++
+   // live data tag: main.html palMainStatus <- machine.state <- WebBridgeTags.cpp
+   const MAINP = path.join(PORT, '..', 'web', 'page', 'main.html');
+   const mtext = fs.readFileSync(MAINP, 'utf8');
+-- 
+2.55.0.windows.5
+

@@ -1,0 +1,153 @@
+From 4e0425123bae71486d933b52eb53300de38eff68 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 23:24:46 +0800
+Subject: [PATCH] HTDESIGNER-44: a resize handle with several selected resizes
+ all of them (0.44.0)
+
+WinForms / WPF: dragging a resize handle of the primary with a multi-
+selection changes every selected component by the same amount -- as
+Ctrl+arrows already did here. Before, only the primary changed. Now the
+handle's drag carries the group (the form, which is never in a group,
+resizes alone), a locked member stops the whole drag as a move does, and
+the result is ONE batch edit = one undo step.
+
+Also checked: the all-pages sweep in real VS Code after R28-R36 -- 83 pages,
+189 pass / 0 fail, no page-JS errors, nothing saved, the sources' MD5
+unchanged.
+
+Test: probe (2 selected, the SE handle dragged +12 / +6 with Alt: both
+widths +12, both heights +6, one batch of 2).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHEATSHEET.md        |  2 +-
+ tools/vscode-htdesigner/README.md            |  2 +-
+ tools/vscode-htdesigner/media/probe.js       | 11 ++++++----
+ tools/vscode-htdesigner/package.json         |  2 +-
+ tools/vscode-htdesigner/test/probe_driver.js | 22 ++++++++++++++++++++
+ tools/vscode-htdesigner/test/probe_test.ps1  |  1 +
+ 6 files changed, 33 insertions(+), 7 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/CHEATSHEET.md b/tools/vscode-htdesigner/CHEATSHEET.md
+index 76ce8c7..c41dcef 100644
+--- a/tools/vscode-htdesigner/CHEATSHEET.md
++++ b/tools/vscode-htdesigner/CHEATSHEET.md
+@@ -28,7 +28,7 @@
+ |---|---|
+ | 移動 | 拖曳（靠近別的元件會出現紅色對齊線；`Alt` 不吸附） |
+ | 微調 | 方向鍵 1px、`Shift`＋方向鍵 10px |
+-| 改大小 | 拉 8 個控制點；或 `Ctrl`＋方向鍵 |
++| 改大小 | 拉 8 個控制點；或 `Ctrl`＋方向鍵（多選時整組一起改） |
+ | 輸入數字 | 屬性面板的 Left／Top／Width／Height |
+ | 對齊／同大小 | 多選後右鍵「對齊與間距」（以最後點的為準） |
+ | 等距排列 | 選 3 個以上 → 右鍵「對齊與間距 → 水平等距／垂直等距」 |
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 9fe85af..dedf763 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -52,7 +52,7 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ |---|---|
+ | 按一下元件 | 選取它（按下時就選，跟 WPF 一樣），右邊「屬性與事件」顯示它的資料，四周出現 8 個控制點 |
+ | 按住元件拖曳 | 移動它；靠近旁邊元件或外框的邊緣／中線 5px 內會**自動對齊**並畫出紅色參考線（按住 Alt 不吸附） |
+-| 拖曳控制點 | 改大小（角落兩個方向一起改），一樣有對齊線 |
++| 拖曳控制點 | 改大小（角落兩個方向一起改），一樣有對齊線；**多選時整組一起**改同樣的量（跟 WinForms／WPF、Ctrl＋方向鍵一樣），一次＝一個復原步驟 |
+ | Ctrl＋點 ／ Shift＋點 | **多選**：加入或移出選取，最後點的是主要選取。整組可以一起拖曳、一起用方向鍵移動 |
+ | 拖曳／拉控制點的時候 | 標籤即時顯示要寫進去的數值：移動時「left 62　top 16」、改大小時「248 × 48」 |
+ | 右鍵「顯示所有元件名稱」 | 每個元件左上角貼一個小標籤寫它的名字（再按一次關掉；狀態列顯示「名稱」） |
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index 7461beb..673f657 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -983,8 +983,8 @@
+     if (lk) { drag = { locked: lk, el: el, x: e.clientX, y: e.clientY, active: false, told: false }; return; }
+     drag = { el: el, bx: bx, how: how, s0: snap(bx), x: e.clientX, y: e.clientY, active: how !== 'move', last: null,
+       r0: bx.node.getBoundingClientRect(), lines: null, items: null, collapse: null };
+-    /* moving a multi-selection moves every selected component by the same delta */
+-    if (how === 'move' && group && group.length > 1) {
++    /* moving / resizing a multi-selection changes every selected component by the same delta */
++    if (group && group.length > 1) {
+       drag.items = group.map(function (g) { return { el: g.el, bx: g.bx, s0: snap(g.bx), last: null }; });
+     }
+   }
+@@ -1100,7 +1100,10 @@
+         if (t === 'mousedown' && (PAN.space ? e.button === 0 : e.button === 1)) startPan(e);
+         else if (t === 'mousedown' && e.button === 0 && dir && selEl) {
+           var hb = boxOf(selEl);
+-          if (hb) startDrag(selEl, hb, dir, e);
++          /* WinForms / WPF: with several selected a handle resizes all of them by the same amount
++             (as Ctrl+arrows do); the form resizes alone */
++          var rg = hb && !hb.root ? allSel().map(function (x) { return { el: x, bx: boxOf(x) }; }).filter(function (g) { return g.bx && !g.bx.root; }) : [];
++          if (hb) startDrag(selEl, hb, dir, e, rg.length > 1 ? rg : null);
+         }
+         e.stopImmediatePropagation();
+         e.preventDefault();
+@@ -1238,7 +1241,7 @@
+       if (drag.items) {
+         for (var gi = 0; gi < drag.items.length; gi++) {
+           var it = drag.items[gi];
+-          var gch = deltaStyle(it.s0, dL, dT, 0, 0);
++          var gch = deltaStyle(it.s0, dL, dT, dW, dH);
+           if (gch) { applyStyle(it.bx.node, gch); it.last = gch; } else drag.refused = true;
+         }
+         drag.last = drag.items[0] ? drag.items[0].last : null;
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 024f2b5..e892695 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.43.0",
++  "version": "0.44.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index 1aa23a6..9bc07d0 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -457,6 +457,28 @@
+             saved.forEach(function (s) { s[0].style.left = s[1]; s[0].style.top = s[2]; });
+           })();
+ 
++          /* a resize handle with 2 selected: both get the same +12 / +6 (WinForms / WPF), ONE batch edit */
++          if (other2) {
++            var gs0 = [btn.style.width, btn.style.height, other2.style.width, other2.style.height];
++            var gw0 = [btn.offsetWidth, btn.offsetHeight, other2.offsetWidth, other2.offsetHeight];
++            window.__htdProbe.message({ type: 'selectIds', ids: [btn.id, other2.id] });
++            window.__htdProbe.drawNow();
++            var gse = host && host.shadowRoot ? host.shadowRoot.querySelector('.hd[data-dir="se"]') : null;
++            var ngr = edits().length;
++            if (gse) {
++              var ghr = gse.getBoundingClientRect(), gzz = btn.getBoundingClientRect().width / btn.offsetWidth;
++              mouse('mousedown', gse, ghr.left + 3, ghr.top + 3);
++              mouse('mousemove', btn, ghr.left + 3 + 12 * gzz, ghr.top + 3 + 6 * gzz, ALT);
++              mouse('mouseup', btn, ghr.left + 3 + 12 * gzz, ghr.top + 3 + 6 * gzz);
++            }
++            var egr = edits().slice(ngr);
++            R.groupResize = egr.map(function (x) { return x.what + (x.edits ? x.edits.length : ''); }).join(',') + ' sizes ' +
++              [btn.offsetWidth - gw0[0], btn.offsetHeight - gw0[1], other2.offsetWidth - gw0[2], other2.offsetHeight - gw0[3]].join('/');
++            R.groupResizeOk = !!gse && egr.length === 1 && egr[0].what === 'batch' && egr[0].edits.length === 2 &&
++              btn.offsetWidth - gw0[0] === 12 && btn.offsetHeight - gw0[1] === 6 && other2.offsetWidth - gw0[2] === 12 && other2.offsetHeight - gw0[3] === 6;
++            btn.style.width = gs0[0]; btn.style.height = gs0[1]; other2.style.width = gs0[2]; other2.style.height = gs0[3];
++          }
++
+           /* the properties panel with 2 selected (all: true): bold / width on both = ONE batch edit
+              each; a width with one locked = nothing; without all = the primary only */
+           if (other2) {
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index 75d48a9..a78f7fc 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -79,6 +79,7 @@ foreach ($p in $Pages) {
+     if ($R.PSObject.Properties.Name -contains 'sameTypeTried') { $must['select same type: the whole page / only its container, the selection stays primary'] = [bool]$R.sameTypeOk }
+     if ($R.PSObject.Properties.Name -contains 'panTried') { $must['the hand: Space + drag and a middle-button drag pan the view, nothing picked or written'] = [bool]$R.panOk }
+     if ($R.PSObject.Properties.Name -contains 'ghostTried') { $must['DFM place: dashed frame where the DFM says, labelled, a drag snaps onto it, off = gone'] = [bool]$R.ghostOk }
++    if ($R.PSObject.Properties.Name -contains 'groupResize') { $must['a resize handle with 2 selected: both get the same size change, ONE batch edit'] = [bool]$R.groupResizeOk }
+     if ($R.PSObject.Properties.Name -contains 'allEdit') { $must['panel with 2 selected: every one, ONE batch edit; a locked one = none; one selected = only it'] = [bool]$R.allOk }
+     if ($R.PSObject.Properties.Name -contains 'spaceTried') { $must['equal spacing: outer two stay, gaps equal, the primary moves too'] = [bool]$R.spaceOk }
+     if ($R.PSObject.Properties.Name -contains 'centerTried') {
+-- 
+2.55.0.windows.5
+

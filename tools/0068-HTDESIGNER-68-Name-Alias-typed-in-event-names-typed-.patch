@@ -1,0 +1,1062 @@
+From cfa54eceefa5716c0f5dd7456722e1614b8c6c56 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 30 Sep 2026 14:15:24 +0800
+Subject: [PATCH] HTDESIGNER-68: Name / Alias typed in, event names typed, web
+ JS events generated; JS -> C++ wiring seen (0.68.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260930: "你這邊名稱都要讓我改 alias / 網路js監聽器也要讓我填function / 然後我改了
+之後系統都要自動幫我生成更改後的程式碼", then on BtnPanelLane3's empty 事件表: "應該有click吧? 他是
+連到C++的", and IO_Table.csv still as text: "開CSV 怎還是一樣的畫面?".
+- Name (the id) and Alias rows at the top of the editable section. Name = the
+  rename (title, <label for>, and now the htdEvents bindings follow). Alias =
+  the "｜Alias=..." part of the title the IO page's JS reads
+  (title.match(/Alias=([^｜|\s]+)/)), with the IO table's names
+  (W906_IOTABLE_PATH / IO_Table.csv, read only) to pick from and a warning for
+  one not in it (lib/aliasedit.js).
+- 事件表: a handler name can be typed -- an empty event gets a C++ handler of
+  that name; one the designer added is renamed in the class (.h) and every
+  TfXxx::name of the .cpp (cppstub.renameEdits); the .dfm's are not renamed.
+- 網頁事件 (the page's own JS): one field per DOM event; a name writes the
+  function and addEventListener into ONE designer-kept block at the end of the
+  page (<script id="htdEvents">, lib/jsevents.js), a new name renames it (its
+  code kept), clearing takes the binding out (an empty function too); the
+  function opens.
+- 事件表 sees events wired through the page's JS: its listener sends a WS
+  command the server dispatches to C++ (BtnPanelLane3, not in the .dfm:
+  OnClick = ht9045_io_do.js -> io.btnPanelClick -> wb_serve.cpp:671 ->
+  W906_DispatchIoClick); the operator-token commands (control.*) are skipped.
+  The command trace (websearch.calledNames) now follows a bare call of a page
+  function named like a DOM method -- the IO page's own send(el, a, down) was
+  skipped as if it were WebSocket.send.
+- a .csv shown in a text tab (one open since before the update comes back as
+  text, a click in the explorer only brings it forward) is switched to the
+  table by itself -- not a diff, not one opened as text on purpose; setting
+  ht9045Designer.csvAutoTable.
+
+Tests (all 4 layers pass): lib (jsevents add / rename keeping code / clear /
+follow a renamed id; aliasedit incl. the real IO table, read only; cppstub
+rename; the trace through send()), smoke (typed names, rename, Alias into the
+title, web event generated and renamed, the csv auto switch), real VS Code
+(a web event written, the redrawn page binds it, reverted; BtnPanelLane3
+OnClick -> W906_DispatchIoClick; a text tab of a csv copy switches by itself).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHANGELOG.md          |  16 ++
+ tools/vscode-htdesigner/README.md             |   6 +
+ tools/vscode-htdesigner/extension.js          | 198 +++++++++++++++++-
+ tools/vscode-htdesigner/lib/aliasedit.js      |  50 +++++
+ tools/vscode-htdesigner/lib/cppstub.js        |  26 ++-
+ tools/vscode-htdesigner/lib/jsevents.js       | 165 +++++++++++++++
+ tools/vscode-htdesigner/lib/liveconfig.js     |   4 +-
+ tools/vscode-htdesigner/lib/websearch.js      |  13 +-
+ tools/vscode-htdesigner/media/props.css       |   6 +
+ tools/vscode-htdesigner/media/props.js        |  85 +++++++-
+ tools/vscode-htdesigner/package.json          |   7 +-
+ .../test/integration/index.js                 |  46 +++-
+ tools/vscode-htdesigner/test/run_tests.js     |  51 +++++
+ .../vscode-htdesigner/test/smoke_extension.js |  44 ++++
+ 14 files changed, 697 insertions(+), 20 deletions(-)
+ create mode 100644 tools/vscode-htdesigner/lib/aliasedit.js
+ create mode 100644 tools/vscode-htdesigner/lib/jsevents.js
+
+diff --git a/tools/vscode-htdesigner/CHANGELOG.md b/tools/vscode-htdesigner/CHANGELOG.md
+index 837a996..2091707 100644
+--- a/tools/vscode-htdesigner/CHANGELOG.md
++++ b/tools/vscode-htdesigner/CHANGELOG.md
+@@ -2,6 +2,22 @@
+ 
+ 每一版多了什麼。怎麼操作看 [操作一覽](CHEATSHEET.md)，詳細說明看 README。
+ 
++## 0.68.0
++- **事件表認得「網頁 JS → WS 命令 → C++」接起來的事件**：例如 IO 頁的 BtnPanelLane3（.dfm 裡沒有，9050 加的），
++  OnClick 以前顯示空的；現在顯示它跑到的 C++ 函式（`W906_DispatchIoClick`，經由命令 `io.btnPanelClick`），
++  網頁／伺服器／C++ 都亮，雙擊直接到 C++。
++- **用文字開著的 CSV 分頁自動改成表格**（更新前就開著的分頁 VS Code 會照舊用文字，檔案總管再點一次也只是切回那個文字分頁）。
++  自己按「以文字開啟」的不會被改回去；不要自動改：設定 `ht9045Designer.csvAutoTable` 關掉（就只在狀態列放按鈕、問一次）。
++- **Name、Alias 可以直接改**：屬性面板「外觀與版面」最上面兩列。
++  Name（id）改了＝原本的改名（title、`<label for>`、網頁事件一起跟著改；BCB6 .dfm 或網頁程式用到時先問）。
++  **Alias**（IO 頁的元件對到哪個 IO，寫在 title 的 `｜Alias=…`，網頁程式照它對 IO）：可以打、也可以從 **IO 表**（`IO_Table.csv`，唯讀）的名稱挑；
++  打了 IO 表裡沒有的名稱會提醒。
++- **事件表的函式名稱可以打**：空的事件打名稱＝用這個名稱新增 C++ 函式；設計檢視新增的改名稱＝`.h`／`.cpp` 跟著改。
++  （BCB6 .dfm 指定的不改——golden 是唯讀的。）
++- **網頁事件（這一頁的 JS）**：click、change、mousedown…每個事件一格，**打函式名稱＝自動產生程式碼**：
++  在這一頁 HTML 檔尾的 `<script id="htdEvents">` 產生函式和 `addEventListener`，然後打開那個函式；
++  改名稱＝函式和綁定一起改（裡面寫的程式留著）；清掉＝拿掉綁定（還是空的函式也一起拿掉）。雙擊＝打開函式。
++
+ ## 0.67.0
+ - **事件表**（跟 BCB6 物件檢視器的 Events 分頁、WPF 屬性視窗的事件一樣）：屬性面板的「事件」列出這個元件型別的**所有事件**
+   （例如 TSpeedButton：OnClick、OnDblClick、OnMouseDown…；TForm：OnShow、OnClose…），有設定的顯示函式名稱，
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 76f4f4b..750120a 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -318,6 +318,12 @@ GroupBox 的 `<legend>` 和 Panel 的標題永遠留在第一個；已經在最
+   都是**還沒存檔**的修改，Ctrl+Z 可以復原；同名的已經宣告過（例如刻意沒有本體的 GATE）就不再加。
+   讓網頁的按鈕真的叫到它，還要：這一頁的 `*_ev.js` 事件清單（`CTLS`）、伺服器事件表（`tools/editlist` 或 `tools/formbridge` 的 `events`，再跑產生器）——
+   這兩個屬於事件移植流程，這一版不自動改，新增完會列出還差哪一步。
++- **Name／Alias**（「外觀與版面」最上面）：直接打。Name＝id（改名，title、`<label for>`、網頁事件的綁定一起改）；
++  Alias＝IO 頁的元件對到的 IO（title 裡的 `｜Alias=…`，網頁程式照它對 IO），可以從 IO 表（`IO_Table.csv`，唯讀）的名稱挑。
++  事件表裡不是 .dfm 指定的函式名稱也可以打：空的＝用那個名稱新增，已經有的＝`.h`／`.cpp` 一起改名。
++- **網頁事件（這一頁的 JS）**：每個 DOM 事件（click、change、mousedown…）一格，打函式名稱＝產生程式碼：
++  這一頁 HTML 檔尾的 `<script id="htdEvents">` 裡加空的函式和 `addEventListener`，然後打開它；改名稱、清掉，那一段跟著改。
++  ⚠ 這一段是設計檢視維護的，照它的格式寫工具才讀得到；`sync_web.py --apply` 重新產生頁面時會蓋掉（同其他 HTML 修改）。
+ - **網頁 JS 監聽器（執行期實測）**：頁面在預覽裡真的綁到這個元件上的 JS。
+ - **網頁 JS 提到此元件**：JS 裡寫到這個 id 的地方。
+ - **送到 C++ 的命令**：從處理函式往下追最多 3 層呼叫，找到最後送出的命令，
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index bd024e0..a9bc1ac 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -38,6 +38,8 @@ const liveconfig = require('./lib/liveconfig');
+ const csvtable = require('./lib/csvtable');
+ const vclevents = require('./lib/vclevents');
+ const cppstub = require('./lib/cppstub');
++const jsevents = require('./lib/jsevents');
++const aliasedit = require('./lib/aliasedit');
+ const CSV_VIEW = 'ht9045Designer.csv';
+ const LINT_SOURCE = 'HTML 頁面檢查';
+ const htmledit = require('./lib/htmledit');
+@@ -607,7 +609,21 @@ class Hub {
+     const k = doc.uri.fsPath.toLowerCase();
+     if (!this.csvAsked.has(k)) {
+       this.csvAsked.add(k);
+-      vscode.window.showInformationMessage(name + ' 現在是用文字開的（更新前就開著的分頁會照舊用文字）。要用表格看嗎？', '用表格開', '不用')
++      // a text tab of it (one from before the update comes back as text, and a click in the explorer only brings
++      // that tab forward -- EastSun 20260930: "我圖片上開CSV 怎還是一樣的畫面?"): switched to the table by itself.
++      // Not a diff view, not one opened as text from the table on purpose (csvAsked), not with the setting off.
++      let plainTab = true;
++      try {
++        const at = vscode.window.tabGroups && vscode.window.tabGroups.activeTabGroup.activeTab;
++        plainTab = !at || !vscode.TabInputText || at.input instanceof vscode.TabInputText;
++      } catch (e) { plainTab = true; }
++      if (plainTab && this.cfg().get('csvAutoTable') !== false) {
++        this.cmdOpenCsvTable(doc.uri).then(() => {
++          vscode.window.setStatusBarMessage('$(table) ' + name + ' 改用表格開了（要看文字：表格右上「以文字開啟」；不要自動改：設定 ht9045Designer.csvAutoTable）', 8000);
++        }, () => {});
++        return true;
++      }
++      vscode.window.showInformationMessage(name + ' 現在是用文字開的。要用表格看嗎？', '用表格開', '不用')
+         .then(c => { if (c === '用表格開') this.cmdOpenCsvTable(doc.uri); }, () => {});
+     }
+     return true;
+@@ -954,6 +970,12 @@ class Hub {
+       // not the page's client area: nothing comparable, so no DFM values for it)
+       dfm: node && !isForm ? fmt.dfmEditValues(node) : null,
+     };
++    // Name / Alias (the IO it stands for, kept in the title) and the page's own JS handlers (網頁事件): editable
++    const titleNow = edTag ? ((attrsOf(edTag.text).find(a => a[0] === 'title') || [])[1] || '') : '';
++    edit.aliasOn = !isForm && !!edTag && /Alias=/.test(html);
++    edit.alias = aliasedit.aliasOf(titleNow);
++    edit.ioAliases = edit.aliasOn ? this.ioAliasList(d) : null;
++    edit.jsEvents = !isForm && edTag ? { types: jsevents.TYPES, handlers: jsevents.handlersOf(html, info.id) } : null;
+ 
+     const data = {
+       comp, events, listeners, mentions: mentionT, cmds: [], uses: null, fields: null, tags: null, edit,
+@@ -979,7 +1001,7 @@ class Hub {
+     const cmdRes = new Map();
+     for (const [c, via] of Array.from(cmdVia).slice(0, 8)) {
+       const send = web.findCmdSend(sources, c).map(h => T(Object.assign({ kind: 'web', note: '送出命令' }, h)));
+-      const r = { cmd: c, via: via.join(' → '), send, dispatch: [], handlers: [], other: [] };
++      const r = { cmd: c, via: via.join(' → '), send, dispatch: [], handlers: [], handlerNames: [], other: [] };
+       if (port) {
+         const hits = (await port.findString(c)).filter(h => !h.test);
+         const disp = hits.filter(h => h.dispatch && !h.comment && !h.dead).slice(0, 3);
+@@ -999,6 +1021,7 @@ class Hub {
+               const t = this.cppTarget('port', dd);
+               t.note = '處理函式 ' + fnName + (dd.dead ? '（在 #if 0 裡，不會編譯）' : '');
+               r.handlers.push(T(t));
++              if (!r.handlerNames.includes(fnName)) r.handlerNames.push(fnName);
+             }
+           }
+         }
+@@ -1078,6 +1101,34 @@ class Hub {
+           const h = web.findAll(sources, re, 1)[0];
+           if (h) row.web = T(Object.assign({ kind: 'web', note: '網頁會送 form.event（這一頁的事件清單）' }, h));
+         }
++        // wired through the page's JS: its listener of this DOM event sends a WS command the server dispatches to
++        // C++ (EastSun 20260930 on BtnPanelLane3: "應該有click吧? 他是連到C++的" -- io.btnPanelClick ->
++        // W906_DispatchIoClick); a component the .dfm does not have (added for the 9050) is wired this way too
++        if (!row.dfm && !isForm) {
++          const types = fmt.domTypesOf(evName);
++          let via = null;
++          // (the operator-token handshake the sender does first -- control.takeover / control.release -- is not it)
++          for (const pass of [0, 1]) {
++            for (const l of listeners) {
++              if (via || !(l.on === 'self' || l.relevant) || !types.includes(l.type)) continue;
++              for (const c of l.cmds) {
++                if (pass === 0 && /^control\./.test(c)) continue;
++                const r = cmdRes.get(c);
++                if (r && (r.dispatch.length || r.handlers.length)) { via = { l, r }; break; }
++              }
++            }
++          }
++          if (via) {
++            row.cmd = via.r.cmd;
++            // (the handler, not a guard the dispatch calls first: W906_DispatchIoClick over W906_IoPageNoGuards)
++            const hn = via.r.handlerNames;
++            if (!row.handler) row.handler = hn.find(n => /Click|Change|Dispatch|Event|Handle/i.test(n) && !/Guard/i.test(n)) || hn[0] || via.r.cmd;
++            if (row.web == null) row.web = via.l.handler != null ? via.l.handler : via.l.bind;
++            if (row.server == null && via.r.dispatch.length) row.server = via.r.dispatch[0];
++            if (row.port == null && via.r.handlers.length) row.port = via.r.handlers[0];
++            row.via = 'cmd';
++          }
++        }
+         rows.push(row);
+       }
+       data.eventGrid = { vcl, formCls, name, isForm, rows };
+@@ -1260,7 +1311,128 @@ class Hub {
+    * What the page and the server still need (the page's *_ev.js CTLS list, the generated form.event table)
+    * is said, not written: those belong to the event-porting pipeline (tools/editlist/*.py, gen_editlist.py).
+    */
+-  async cmdCreateEvent(d, data, row) {
++  /** The IO table's aliases (READ only; launch.json's W906_IOTABLE_PATH, else IO_Table.csv beside Gerneral.ini), cached by mtime. */
++  ioAliasList(d) {
++    const s = this.machineState(d && d.r);
++    const f = s.hints.ioTable || (s.generalIni ? path.join(path.dirname(s.generalIni), 'IO_Table.csv') : null);
++    if (!f) return null;
++    let st;
++    try { st = fs.statSync(f); } catch (e) { return null; }
++    const c = this._ioAl;
++    if (c && c.file === f && c.mtime === st.mtimeMs) return c.list;
++    const list = aliasedit.ioAliases(f);
++    this._ioAl = { file: f, mtime: st.mtimeMs, list: { file: f, names: list } };
++    return this._ioAl.list;
++  }
++
++  /** Alias (EastSun: "名稱都要讓我改 alias"): the Alias part of the component's title, which the page's JS reads. */
++  cmdSetAlias(d, data, value) {
++    const id = data.comp.htmlId;
++    const tag = id ? htmledit.startTagOf(d.doc.getText(), id) : null;
++    if (!tag) { this.refuseEdit(d, '原始碼裡找不到「' + id + '」，Alias 沒有改。'); return null; }
++    const title = (attrsOf(tag.text).find(a => a[0] === 'title') || [])[1] || '';
++    const r = aliasedit.withAlias(title, value);
++    if (r.error) { this.refuseEdit(d, r.error + '，沒有改。'); return null; }
++    if (r.title === title) return null;
++    const v = String(value || '').trim();
++    const io = data.edit && data.edit.ioAliases;
++    if (v && io && io.names.length && !io.names.includes(v)) {
++      vscode.window.showWarningMessage('Alias「' + v + '」不在 IO 表（' + path.basename(io.file) + '）裡——這個元件會對不到任何 IO。還是照改了，Ctrl+Z 可以復原。');
++    }
++    d.post({ type: 'setAttrRaw', key: data.comp.key, name: 'title', value: r.title });
++    vscode.window.setStatusBarMessage('$(edit) ' + id + ' 的 Alias：' + (aliasedit.aliasOf(title) || '（沒有）') + ' → ' + (v || '（拿掉）') + '（Ctrl+Z 復原）', 6000);
++    return { from: aliasedit.aliasOf(title), to: v, title: r.title };
++  }
++
++  /**
++   * A handler name typed into the 事件表: an empty event -> a new C++ handler of that name; one the designer (or
++   * the port) has that the .dfm does not name -> renamed in the class (.h) and every TfXxx::name of its .cpp.
++   * The .dfm's are BCB6's (golden, read only): not renamed.
++   */
++  async onEventName(data, evName, value, d) {
++    const g = data && data.eventGrid;
++    const row = g && g.rows.find(r => r.name === evName);
++    if (!row) return null;
++    const nu = String(value || '').trim();
++    if (row.dfm) { this.refuseEdit(d, evName + ' 的 ' + row.handler + ' 是 BCB6 .dfm 指定的（golden，唯讀），名稱不在這裡改。'); return null; }
++    if (!nu) { this.refuseEdit(d, '清掉名稱不會刪掉 C++ 的函式——要刪請直接改程式碼（' + (row.handler || '') + '）。'); return null; }
++    if (!/^[A-Za-z_]\w*$/.test(nu)) { this.refuseEdit(d, '「' + nu + '」不能當 C++ 函式名稱（英文字母、數字、_，不能用數字開頭），沒有改。'); return null; }
++    if (!row.handler) return this.cmdCreateEvent(d, data, row, nu);
++    if (row.handler === nu) return null;
++    return this.renameCppHandler(d, data, row, nu);
++  }
++
++  /** The class's .h and .cpp in the port tree (null when not found). */
++  async portClassFiles(d, cls) {
++    const port = d && d.r.portRoot ? this.sourceTree(d.r.portRoot, 'port') : null;
++    if (!port || !cls) return null;
++    await port.ensure();
++    const files = Array.from(port.clsFiles.get(cls) || []).filter(f => !/[\\/]tests?[\\/]/i.test(f));
++    const read = f => { try { return fs.readFileSync(f, 'utf8'); } catch (e) { return null; } };
++    const hFile = files.filter(f => /\.h(pp)?$/i.test(f)).find(f => { const t = read(f); return t && cppstub.classBody(t, cls); });
++    if (!hFile) return null;
++    const base = path.basename(hFile).replace(/\.h(pp)?$/i, '');
++    const cppFile = files.find(f => /\.cpp$/i.test(f) && path.basename(f).replace(/\.cpp$/i, '').toLowerCase() === base.toLowerCase()) ||
++      files.filter(f => /\.cpp$/i.test(f)).sort((a, b) => (port.fileKeys.get(b) || []).length - (port.fileKeys.get(a) || []).length)[0];
++    return cppFile ? { port, hFile, cppFile } : null;
++  }
++
++  async renameCppHandler(d, data, row, nu) {
++    const cls = data.eventGrid.formCls;
++    const pf = await this.portClassFiles(d, cls);
++    if (!pf) { vscode.window.showInformationMessage('移植樹裡找不到 ' + cls + ' 的 .h／.cpp，名稱沒有改。'); return null; }
++    const hDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(pf.hFile));
++    const cDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(pf.cppFile));
++    if (cppstub.declares(hDoc.getText(), cls, nu)) { this.refuseEdit(d, cls + ' 已經有「' + nu + '」了，沒有改。'); return null; }
++    const r = cppstub.renameEdits(hDoc.getText(), cDoc.getText(), cls, row.handler, nu);
++    if (!r.h.length && !r.cpp.length) { this.refuseEdit(d, '在 ' + path.basename(pf.hFile) + '／' + path.basename(pf.cppFile) + ' 找不到 ' + row.handler + '，沒有改。'); return null; }
++    const we = new vscode.WorkspaceEdit();
++    const rng = (doc, x) => new vscode.Range(doc.positionAt(x.s), doc.positionAt(x.e));
++    for (const x of r.h) we.replace(hDoc.uri, rng(hDoc, x), x.text);
++    for (const x of r.cpp) we.replace(cDoc.uri, rng(cDoc, x), x.text);
++    if (!(await vscode.workspace.applyEdit(we))) { vscode.window.showWarningMessage('改名沒有寫進去（檔案可能是唯讀的）。'); return null; }
++    // other files that name it (saved ones: the source index) -- said, not changed
++    const others = (await pf.port.lookup([cls], row.handler)).filter(h => !web.samePath(h.file, pf.hFile) && !web.samePath(h.file, pf.cppFile));
++    const old = row.handler;
++    row.handler = nu;
++    if (this.props && this.props.data === data) this.props.show(data);
++    this.log('事件處理函式改名 ' + cls + '::' + old + ' → ' + nu + '：' + path.basename(pf.hFile) + ' ' + r.h.length + ' 處、' + path.basename(pf.cppFile) + ' ' + r.cpp.length + ' 處（未存檔）');
++    vscode.window.showInformationMessage(cls + '::' + old + ' 改名為 ' + nu + '（' + path.basename(pf.hFile) + ' ' + r.h.length + ' 處、' + path.basename(pf.cppFile) + ' ' + r.cpp.length + ' 處；還沒存檔，Ctrl+Z 可以復原）。' +
++      (others.length ? '另外 ' + others.length + ' 個地方也寫到 ' + old + '（例如 ' + path.basename(others[0].file) + ':' + others[0].line + '），那些沒有改。' : ''));
++    return { from: old, to: nu, h: r.h.length, cpp: r.cpp.length, others: others.length };
++  }
++
++  /**
++   * 網頁事件 (EastSun: "網路js監聽器也要讓我填function"): the page's own JS handler of a DOM event, kept in the page's
++   * <script id="htdEvents"> block (lib/jsevents.js) -- a name adds the function and its binding, a new one renames
++   * it, '' takes the binding out. One edit of the page (nothing saved); the new function then opens.
++   */
++  async cmdJsEvent(d, data, ev, fn) {
++    const id = data.comp.htmlId;
++    if (!id || data.comp.isForm) { this.refuseEdit(d, '網頁事件要選一個有 id 的元件。'); return null; }
++    const text = d.doc.getText();
++    const r = jsevents.setBinding(text, id, String(ev || ''), fn);
++    if (r.error) { this.refuseEdit(d, r.error + '，沒有改。'); return null; }
++    if (!r.edits.length) return null;
++    const we = new vscode.WorkspaceEdit();
++    for (const x of r.edits) we.replace(d.doc.uri, new vscode.Range(d.doc.positionAt(x.s), d.doc.positionAt(x.e)), x.text);
++    if (!(await vscode.workspace.applyEdit(we))) { vscode.window.showWarningMessage('網頁事件沒有寫進去。'); return null; }
++    const now = jsevents.handlersOf(d.doc.getText(), id);
++    if (data.edit && data.edit.jsEvents) { data.edit.jsEvents.handlers = now; if (this.props && this.props.data === data) this.props.show(data); }
++    this.log('網頁事件 ' + id + '.' + ev + '：' + (String(fn || '').trim() || '（拿掉）') + (r.renamed ? '（' + r.renamed + ' 改名）' : '') + '（' + path.basename(d.file) + '，未存檔）');
++    if (r.fnAdded || r.renamed) await this.openJsEvent(d, id, ev);
++    else vscode.window.setStatusBarMessage('$(edit) ' + id + ' 的 ' + ev + '：' + (String(fn || '').trim() || '拿掉了') + '（Ctrl+Z 復原）', 6000);
++    return { id, ev, fn: String(fn || '').trim(), added: r.fnAdded || null, renamed: r.renamed || null, edits: r.edits.length };
++  }
++
++  /** The function of a web event in the page's HTML, beside the designer. */
++  async openJsEvent(d, id, ev) {
++    const h = jsevents.handlersOf(d.doc.getText(), id)[ev];
++    if (!h) return null;
++    return this.revealSource(d, id, true, { range: [h.at, h.at] });
++  }
++
++  async cmdCreateEvent(d, data, row, nameOverride) {
+     const g = data.eventGrid;
+     const cls = g.formCls;
+     const port = d && d.r.portRoot ? this.sourceTree(d.r.portRoot, 'port') : null;
+@@ -1276,7 +1448,7 @@ class Hub {
+     if (!cppFile) { vscode.window.showInformationMessage('移植樹裡找不到 ' + cls + ' 的 .cpp，不能新增事件處理函式。'); return null; }
+     const hDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(hFile));
+     const cDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(cppFile));
+-    const name = row.conv;
++    const name = nameOverride || row.conv;
+     if (cppstub.declares(hDoc.getText(), cls, name)) {
+       vscode.window.showInformationMessage(cls + '::' + name + ' 已經宣告在 ' + path.basename(hFile) + '（可能是刻意沒有本體的 GATE）；沒有再新增。');
+       await vscode.window.showTextDocument(hDoc, { preview: false });
+@@ -1438,8 +1610,20 @@ class Hub {
+         if (d) return this.cmdResetToDfm(d);
+         break;
+       case 'rename':
+-        // the pencil by the name at the top of the panel (WPF's Name field)
+-        if (d && this.active === d) return this.cmdRename();
++        // the pencil by the name at the top of the panel, or the Name field (WPF's) with the new name
++        if (d && this.active === d) return this.cmdRename(typeof m.name === 'string' ? m.name : undefined);
++        break;
++      case 'setAlias':
++        if (d && data && data.comp) return this.cmdSetAlias(d, data, m.value);
++        break;
++      case 'eventName':
++        if (d && data) return this.onEventName(data, m.event, m.value, d);
++        break;
++      case 'jsEvent':
++        if (d && data && data.comp) return this.cmdJsEvent(d, data, m.ev, m.fn);
++        break;
++      case 'openJsEvent':
++        if (d && data && data.comp) return this.openJsEvent(d, data.comp.htmlId, m.ev);
+         break;
+       case 'setStyleProp': {
+         // one style declaration of the source's start tag, as written (value null / '' = remove it)
+@@ -2024,6 +2208,8 @@ class Hub {
+     }
+     const edits = htmlblock.renameEdits(text, id, nu, { caption: true });
+     if (!edits) { this.refuseEdit(d, '原始碼裡找不到「' + id + '」（可能是頁面 JS 產生的元件），沒有改。'); return null; }
++    // the page's designer-kept event block (網頁事件): its getElementById('old') follow
++    for (const x of jsevents.renameIdEdits(text, id, nu)) edits.push({ range: [x.s, x.e], repl: x.text });
+     d.lastSelId = nu;
+     const ok = await this.applyStructural(d, edits.map(e => ({ range: e.range, repl: e.repl })));
+     if (ok) {
+diff --git a/tools/vscode-htdesigner/lib/aliasedit.js b/tools/vscode-htdesigner/lib/aliasedit.js
+new file mode 100644
+index 0000000..69d53b9
+--- /dev/null
++++ b/tools/vscode-htdesigner/lib/aliasedit.js
+@@ -0,0 +1,50 @@
++'use strict';
++// AI(W906-HTDESIGNER) 20260930: Alias -- the IO a component of an IO page stands for. The generator writes it into
++// the title ("BtnPanelLane3 : TBtnPanelLane｜Alias=C_LoaderEdgePush") and the page's JS reads it from there
++// (ht9045_io_do.js / HW.IoSetView.html: title.match(/Alias=([^｜|\s]+)/)), so changing it is changing that part of
++// the title. EastSun 20260930: "名稱都要讓我改 alias". Plain Node.
++const fs = require('fs');
++const csvtable = require('./csvtable');
++
++const RE = /([｜|]?)Alias=([^｜|\s"]*)/;
++const OK = /^[^\s｜|"'<>&]+$/;
++
++/** The alias in a title ('' = none). */
++function aliasOf(title) {
++  const m = RE.exec(String(title || ''));
++  return m ? m[2] : '';
++}
++
++/** The title with `alias` ('' = the Alias part taken out). -> { title } or { error } */
++function withAlias(title, alias) {
++  const t = String(title || '');
++  const a = String(alias == null ? '' : alias).trim();
++  if (a && !OK.test(a)) return { error: 'Alias 不能有空白、｜、引號、< > &' };
++  const m = RE.exec(t);
++  if (m) {
++    if (!a) return { title: (t.slice(0, m.index) + t.slice(m.index + m[0].length)).replace(/\s+$/, '') };
++    return { title: t.slice(0, m.index) + m[1] + 'Alias=' + a + t.slice(m.index + m[0].length) };
++  }
++  if (!a) return { title: t };
++  return { title: t + '｜Alias=' + a };
++}
++
++/** The Alias column of an IO table (IO_Table.csv, read only): [alias, ...] in the file's order, or []. */
++function ioAliases(file) {
++  let text;
++  try { text = fs.readFileSync(file, 'utf8'); } catch (e) { return []; }
++  const p = csvtable.parse(text);
++  if (!p.rows.length) return [];
++  const col = p.rows[0].cells.findIndex(c => c.v.trim().toLowerCase() === 'alias');
++  if (col < 0) return [];
++  const out = [];
++  const seen = new Set();
++  for (let r = 1; r < p.rows.length; r++) {
++    const c = p.rows[r].cells[col];
++    const v = c ? c.v.trim() : '';
++    if (v && !seen.has(v)) { seen.add(v); out.push(v); }
++  }
++  return out;
++}
++
++module.exports = { aliasOf, withAlias, ioAliases };
+diff --git a/tools/vscode-htdesigner/lib/cppstub.js b/tools/vscode-htdesigner/lib/cppstub.js
+index 574fe66..97070cd 100644
+--- a/tools/vscode-htdesigner/lib/cppstub.js
++++ b/tools/vscode-htdesigner/lib/cppstub.js
+@@ -107,4 +107,28 @@ function defEdit(cppText, cls, name, params, note) {
+   return { at: t.length, text, bodyLine };
+ }
+ 
+-module.exports = { mask, classBody, declares, declEdit, defEdit };
++/**
++ * Rename a handler the designer added: `old(` declared in the class body (.h), `cls::old` in the .cpp (comments and
++ * strings left alone). -> { h: [{ s, e, text }], cpp: [...] }
++ */
++function renameEdits(hText, cppText, cls, oldName, newName) {
++  const out = { h: [], cpp: [] };
++  const b = classBody(hText, cls);
++  if (b) {
++    const m = mask(hText);
++    const re = new RegExp('\\b' + oldName + '(?=\\s*\\()', 'g');
++    let x;
++    re.lastIndex = b.open;
++    while ((x = re.exec(m)) && x.index < b.close) out.h.push({ s: x.index, e: x.index + oldName.length, text: newName });
++  }
++  const mc = mask(cppText);
++  const rc = new RegExp('\\b' + cls + '\\s*::\\s*' + oldName + '\\b', 'g');
++  let y;
++  while ((y = rc.exec(mc))) {
++    const s = y.index + y[0].length - oldName.length;
++    out.cpp.push({ s, e: s + oldName.length, text: newName });
++  }
++  return out;
++}
++
++module.exports = { mask, classBody, declares, declEdit, defEdit, renameEdits };
+diff --git a/tools/vscode-htdesigner/lib/jsevents.js b/tools/vscode-htdesigner/lib/jsevents.js
+new file mode 100644
+index 0000000..6d60646
+--- /dev/null
++++ b/tools/vscode-htdesigner/lib/jsevents.js
+@@ -0,0 +1,165 @@
++'use strict';
++// AI(W906-HTDESIGNER) 20260930: 網頁事件 -- a web page's own JS event handlers, typed into the properties panel
++// (EastSun: "網路js監聽器也要讓我填function"、"我改了之後系統都要自動幫我生成更改後的程式碼"). The code the
++// designer writes lives in ONE block at the end of the page's <body>, which it keeps up to date:
++//
++//   <script id="htdEvents">
++//   /* ...designer's note... */
++//   function spbSaveClick(e) {
++//     // TODO
++//   }
++//   document.getElementById('spbSave').addEventListener('click', spbSaveClick);
++//   </script>
++//
++// Typing a name adds the function (an empty one) and the binding; a new name renames it (the function and every
++// binding of it); clearing it takes the binding out, and the function too when it is still the empty one and
++// nothing else uses it. A renamed component's bindings follow (renameIdEdits). Plain Node; edits are
++// { s, e, text } on the page's text, never overlapping.
++
++const BLOCK_ID = 'htdEvents';
++const NOTE = '/* HTML 視覺設計工具：設計檢視新增的網頁事件。這一段由工具維護——在屬性面板打函式名稱＝新增、改名稱＝這裡跟著改、清掉＝拿掉；函式裡面的程式自己寫。 */';
++const STUB_BODY = '  // TODO';
++const IDENT = /^[A-Za-z_$][\w$]*$/;
++// the DOM events offered (the ones a BCB6 form's controls have on a web page)
++const TYPES = ['click', 'dblclick', 'change', 'input', 'mousedown', 'mouseup', 'mouseenter', 'mouseleave', 'keydown', 'keyup', 'focus', 'blur'];
++
++function eolOf(text) { return /\r\n/.test(String(text || '')) ? '\r\n' : '\n'; }
++
++/** The designer's block: { start, innerStart, innerEnd, end } (offsets in the page), or null. */
++function findBlock(html) {
++  const t = String(html || '');
++  const m = new RegExp('<script\\b[^>]*\\bid\\s*=\\s*["\']' + BLOCK_ID + '["\'][^>]*>', 'i').exec(t);
++  if (!m) return null;
++  const innerStart = m.index + m[0].length;
++  const close = t.toLowerCase().indexOf('</script', innerStart);
++  if (close < 0) return null;
++  const gt = t.indexOf('>', close);
++  return { start: m.index, innerStart, innerEnd: close, end: gt < 0 ? t.length : gt + 1 };
++}
++
++const BIND_RE = /^[ \t]*document\.getElementById\(\s*(['"])([^'"]+)\1\s*\)\.addEventListener\(\s*(['"])(\w+)\3\s*,\s*([A-Za-z_$][\w$]*)\s*\)\s*;?[ \t]*(\r?\n)?/gm;
++
++/** The bindings in the block: [{ id, type, fn, s, e }] (a whole line each, its line end included). */
++function bindings(html) {
++  const t = String(html || '');
++  const b = findBlock(t);
++  if (!b) return [];
++  const inner = t.slice(b.innerStart, b.innerEnd);
++  const out = [];
++  BIND_RE.lastIndex = 0;
++  let m;
++  while ((m = BIND_RE.exec(inner))) out.push({ id: m[2], type: m[4], fn: m[5], s: b.innerStart + m.index, e: b.innerStart + m.index + m[0].length });
++  return out;
++}
++
++/** A function of the block: { name, s, e (after its closing brace and line end), body, empty } or null. */
++function fnOf(html, name) {
++  const t = String(html || '');
++  const b = findBlock(t);
++  if (!b) return null;
++  const re = new RegExp('^[ \\t]*function\\s+' + name.replace(/\$/g, '\\$') + '\\s*\\([^)]*\\)\\s*\\{', 'm');
++  const inner = t.slice(b.innerStart, b.innerEnd);
++  const m = re.exec(inner);
++  if (!m) return null;
++  let depth = 0, i = m.index + m[0].length - 1, q = null;
++  for (; i < inner.length; i++) {
++    const c = inner[i];
++    if (q) { if (c === '\\') { i++; continue; } if (c === q) q = null; continue; }
++    if (c === '"' || c === "'" || c === '`') { q = c; continue; }
++    if (c === '/' && inner[i + 1] === '/') { const n = inner.indexOf('\n', i); i = n < 0 ? inner.length : n; continue; }
++    if (c === '/' && inner[i + 1] === '*') { const n = inner.indexOf('*/', i + 2); i = n < 0 ? inner.length : n + 1; continue; }
++    if (c === '{') depth++;
++    else if (c === '}') { depth--; if (!depth) break; }
++  }
++  let e = i + 1;
++  if (inner[e] === '\r') e++;
++  if (inner[e] === '\n') e++;
++  const body = inner.slice(m.index + m[0].length, i);
++  return { name, s: b.innerStart + m.index, e: b.innerStart + e, body, empty: body.replace(/\s+/g, '') === '//TODO' || !body.trim() };
++}
++
++/** Where the new function's "// TODO" goes after the edits: the line's offset in the new text (for the cursor). */
++function stub(fn, eol) {
++  return 'function ' + fn + '(e) {' + eol + STUB_BODY + eol + '}' + eol;
++}
++
++/**
++ * Set the handler of `type` on element `id` to `fn` ('' = none). -> { edits, error?, fnAdded?, renamed? }
++ */
++function setBinding(html, id, type, fn) {
++  const t = String(html || '');
++  const eol = eolOf(t);
++  fn = String(fn || '').trim();
++  if (fn && !IDENT.test(fn)) return { edits: [], error: '函式名稱只能用英文字母、數字、_、$，不能用數字開頭' };
++  if (!IDENT.test(String(type || ''))) return { edits: [], error: '事件名稱不對：' + type };
++  const binds = bindings(t);
++  const cur = binds.find(x => x.id === id && x.type === type);
++  const line = 'document.getElementById(\'' + id + '\').addEventListener(\'' + type + '\', ' + fn + ');' + eol;
++  const b = findBlock(t);
++  if (!b) {
++    if (!fn) return { edits: [] };
++    const block = '<script id="' + BLOCK_ID + '">' + eol + NOTE + eol + stub(fn, eol) + line + '</script>' + eol;
++    const bodyEnd = t.toLowerCase().lastIndexOf('</body');
++    const at = bodyEnd >= 0 ? bodyEnd : t.length;
++    return { edits: [{ s: at, e: at, text: block }], fnAdded: fn };
++  }
++  if (cur && cur.fn === fn) return { edits: [] };
++  const edits = [];
++  if (!fn) {
++    // take the binding out; the function too when it is still empty and nothing else uses it
++    edits.push({ s: cur ? cur.s : 0, e: cur ? cur.e : 0, text: '' });
++    if (!cur) return { edits: [] };
++    const others = binds.filter(x => x !== cur && x.fn === cur.fn);
++    const f = fnOf(t, cur.fn);
++    if (f && f.empty && !others.length) edits.push({ s: f.s, e: f.e, text: '' });
++    return { edits: edits.sort((a, c) => a.s - c.s) };
++  }
++  if (cur) {
++    const others = binds.filter(x => x !== cur && x.fn === cur.fn);
++    const oldF = fnOf(t, cur.fn);
++    const newF = fnOf(t, fn);
++    if (oldF && !others.length && !newF) {
++      // only this one uses it: the function is renamed (its code stays)
++      const head = /function\s+[A-Za-z_$][\w$]*/.exec(t.slice(oldF.s, oldF.e));
++      const at = oldF.s + head.index;
++      edits.push({ s: at, e: at + head[0].length, text: 'function ' + fn });
++      edits.push({ s: cur.s, e: cur.e, text: line });
++      return { edits: edits.sort((a, c) => a.s - c.s), renamed: cur.fn };
++    }
++    // (the old function stays: something else uses it, or the new name has its own)
++    return { edits: [{ s: cur.s, e: cur.e, text: (newF ? '' : stub(fn, eol)) + line }], fnAdded: newF ? null : fn };
++  }
++  // a new binding: its function (unless the block has one of that name) and the line, at the end of the block
++  const text = (fnOf(t, fn) ? '' : stub(fn, eol)) + line;
++  let at = b.innerEnd;
++  while (at > b.innerStart && (t[at - 1] === ' ' || t[at - 1] === '\t')) at--;
++  const needEol = at > b.innerStart && t[at - 1] !== '\n';
++  return { edits: [{ s: at, e: at, text: (needEol ? eol : '') + text }], fnAdded: fnOf(t, fn) ? null : fn };
++}
++
++/** A component renamed: its bindings in the block follow. -> edits */
++function renameIdEdits(html, oldId, newId) {
++  const t = String(html || '');
++  const out = [];
++  for (const x of bindings(t)) {
++    if (x.id !== oldId) continue;
++    const seg = t.slice(x.s, x.e);
++    const m = /getElementById\(\s*(['"])([^'"]+)\1/.exec(seg);
++    const at = x.s + m.index + m[0].indexOf(m[2], m[0].indexOf(m[1]));
++    out.push({ s: at, e: at + oldId.length, text: newId });
++  }
++  return out;
++}
++
++/** The handlers of element `id`: { type: { fn, s (the function's offset, or the binding's) } }. */
++function handlersOf(html, id) {
++  const out = {};
++  for (const x of bindings(html)) {
++    if (x.id !== id) continue;
++    const f = fnOf(html, x.fn);
++    out[x.type] = { fn: x.fn, at: f ? f.s : x.s };
++  }
++  return out;
++}
++
++module.exports = { BLOCK_ID, TYPES, findBlock, bindings, fnOf, setBinding, renameIdEdits, handlersOf };
+diff --git a/tools/vscode-htdesigner/lib/liveconfig.js b/tools/vscode-htdesigner/lib/liveconfig.js
+index 28a2a4b..1ee272c 100644
+--- a/tools/vscode-htdesigner/lib/liveconfig.js
++++ b/tools/vscode-htdesigner/lib/liveconfig.js
+@@ -42,7 +42,7 @@ function stripJsonc(t) {
+  * The machine most configurations name wins; the first settings paths found are used.
+  */
+ function launchHints(dirs) {
+-  const out = { machine: null, machines: {}, generalIni: null, configIni: null, from: null };
++  const out = { machine: null, machines: {}, generalIni: null, configIni: null, ioTable: null, from: null };
+   for (const dir of dirs || []) {
+     if (!dir) continue;
+     const f = path.join(dir, '.vscode', 'launch.json');
+@@ -57,6 +57,8 @@ function launchHints(dirs) {
+       if (m) { out.machines[m[1]] = (out.machines[m[1]] || 0) + 1; if (!out.from) out.from = f; }
+       if (env.W906_GENERAL_INI_PATH && !out.generalIni) { out.generalIni = sub(env.W906_GENERAL_INI_PATH); out.from = out.from || f; }
+       if (env.W906_AUTH_PATH && !out.configIni) out.configIni = path.join(sub(env.W906_AUTH_PATH), 'config.ini');
++      // (the IO table: its Alias column is what an IO page's component names, lib/aliasedit.js)
++      if (env.W906_IOTABLE_PATH && !out.ioTable) out.ioTable = sub(env.W906_IOTABLE_PATH);
+     }
+   }
+   const ids = Object.keys(out.machines).sort((a, b) => out.machines[b] - out.machines[a]);
+diff --git a/tools/vscode-htdesigner/lib/websearch.js b/tools/vscode-htdesigner/lib/websearch.js
+index e7b840f..152be8d 100644
+--- a/tools/vscode-htdesigner/lib/websearch.js
++++ b/tools/vscode-htdesigner/lib/websearch.js
+@@ -208,7 +208,15 @@ const JS_SKIP = new Set(('if for while switch return function catch typeof new d
+   'confirm prompt encodeURIComponent decodeURIComponent fetch open send postMessage hasOwnProperty ' +
+   'getItem setItem removeItem has get set delete clear item defineProperty freeze').split(/\s+/));
+ 
+-/** Functions a piece of JS calls, in order: save(), R.put(), … (JS builtins and DOM left out). */
++// a bare call of these is still never a page helper (keywords, globals); a bare call of a DOM method NAME is:
++// AI(W906-HTDESIGNER) 20260930: the IO page's own send(el, a, down) (ht9045_io_do.js:173) -- skipped as if it were
++// WebSocket.send, so its click never traced to io.btnPanelClick (EastSun: "應該有click吧? 他是連到C++的")
++const FREE_SKIP = new Set(('if for while switch return function catch typeof new delete void do else case ' +
++  'Array Object String Number Boolean JSON Math Date Promise RegExp Map Set WeakMap Error Symbol ' +
++  'parseInt parseFloat isNaN isFinite setTimeout setInterval clearTimeout clearInterval requestAnimationFrame ' +
++  'alert confirm prompt encodeURIComponent decodeURIComponent fetch').split(/\s+/));
++
++/** Functions a piece of JS calls, in order: save(), R.put(), … (JS builtins and DOM methods left out). */
+ function calledNames(text) {
+   const out = [];
+   if (!text) return out;
+@@ -216,7 +224,8 @@ function calledNames(text) {
+   let m;
+   while ((m = re.exec(text)) && out.length < 25) {
+     const name = m[2];
+-    if (JS_SKIP.has(name) || name.length < 2 || out.includes(name)) continue;
++    const method = m[1] === '.';
++    if ((method ? JS_SKIP.has(name) : FREE_SKIP.has(name)) || name.length < 2 || out.includes(name)) continue;
+     out.push(name);
+   }
+   return out;
+diff --git a/tools/vscode-htdesigner/media/props.css b/tools/vscode-htdesigner/media/props.css
+index f2d9f8b..1f5f11d 100644
+--- a/tools/vscode-htdesigner/media/props.css
++++ b/tools/vscode-htdesigner/media/props.css
+@@ -59,6 +59,12 @@ table.edit tr.mixed input::placeholder { color: var(--vscode-descriptionForegrou
+ .evg.set .evn { font-weight: 600; }
+ .evg.empty .evn { opacity: .75; }
+ .evg:hover { background: var(--vscode-list-hoverBackground); }
++.evin { min-width: 0; font-weight: 600; padding: 1px 4px; color: var(--vscode-input-foreground); background: var(--vscode-input-background);
++  border: 1px solid var(--vscode-input-border, transparent); border-radius: 2px; }
++.evin::placeholder { font-weight: normal; color: var(--vscode-input-placeholderForeground); }
++.evin:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
++/* 網頁事件: the page's own JS handler per DOM event */
++.jsev .evn { min-width: 92px; }
+ .k-html { background: #6a4fa3; }
+ .k-dfm { background: #8a5a14; }
+ .loc { font-family: var(--vscode-editor-font-family); color: var(--vscode-textLink-foreground); }
+diff --git a/tools/vscode-htdesigner/media/props.js b/tools/vscode-htdesigner/media/props.js
+index eed97c5..4b6171b 100644
+--- a/tools/vscode-htdesigner/media/props.js
++++ b/tools/vscode-htdesigner/media/props.js
+@@ -311,6 +311,32 @@
+           i.addEventListener('keydown', function (e) { if (e.key === 'Enter') i.blur(); });
+           return i;
+         }
++        /* Name (WPF's / the Object Inspector's first row) and Alias (the IO an IO page's component stands for, in its
++           title): typed in, written into the HTML (EastSun: "名稱都要讓我改 alias") */
++        if (!ed.multi && !c.isForm && c.htmlId && ed.inSource) {
++          var txtIn = function (field, value, onCommit, list) {
++            var i = el('input', 'txt');
++            i.type = 'text'; i.value = value || ''; i.spellcheck = false;
++            i.setAttribute('data-field', field);
++            if (list) i.setAttribute('list', list);
++            i.addEventListener('change', function () { onCommit(i.value.trim()); });
++            i.addEventListener('keydown', function (e) { if (e.key === 'Enter') i.blur(); else if (e.key === 'Escape') { i.value = value || ''; i.blur(); } });
++            return i;
++          };
++          row('Name', txtIn('name', c.htmlId, function (v) { if (v && v !== c.htmlId) vscode.postMessage({ type: 'rename', name: v }); }),
++            '（id；BCB6 .dfm 或網頁程式用到時會先問）');
++          if (ed.aliasOn) {
++            var dl = null;
++            if (ed.ioAliases && ed.ioAliases.names && ed.ioAliases.names.length) {
++              dl = el('datalist');
++              dl.id = 'ioAliasList';
++              ed.ioAliases.names.forEach(function (n) { var o = el('option'); o.value = n; dl.appendChild(o); });
++              body.appendChild(dl);
++            }
++            row('Alias', txtIn('alias', ed.alias, function (v) { if (v !== (ed.alias || '')) vscode.postMessage({ type: 'setAlias', value: v }); }, dl ? 'ioAliasList' : null),
++              dl ? '（IO 表 ' + ed.ioAliases.names.length + ' 個名稱可選；寫在 title 裡，網頁程式照它對 IO）' : '（寫在 title 裡，網頁程式照它對 IO）');
++          }
++        }
+         var lay = ed.layout;
+         var layOk = lay && ed.layoutInSource;
+         if (lay) {
+@@ -490,16 +516,37 @@
+           r.tabIndex = 0;
+           r.setAttribute('data-event', rw.name);
+           r.appendChild(el('span', 'evn', rw.name));
+-          var h = el('span', 'evh', rw.handler || '');
+-          if (!rw.handler) { h.textContent = '（雙擊新增 ' + rw.conv + '）'; h.className = 'evh dim'; }
+-          else if (rw.portState === 'new') h.textContent = rw.handler + '（還沒存檔）';
++          var h;
++          if (rw.dfm) h = el('span', 'evh', rw.handler);   /* BCB6's .dfm names it (golden, read only) */
++          else if (rw.cmd) {
++            /* reached through a WS command: the C++ function the server runs (double-click opens it) */
++            h = el('span', 'evh', rw.handler);
++            h.title = '網頁 → WS 命令 ' + rw.cmd + ' → C++ ' + rw.handler;
++            r.appendChild(h);
++            h = el('span', 'hint', '（' + rw.cmd + '）');
++          }
++          else {
++            /* typed: an empty one gets a new C++ handler of that name, a new name renames it (.h and .cpp) */
++            h = el('input', 'evh evin');
++            h.type = 'text'; h.spellcheck = false; h.value = rw.handler || ''; h.placeholder = rw.conv;
++            h.setAttribute('data-field', 'event:' + rw.name);
++            h.title = rw.handler ? '改名稱＝' + (eg.formCls || '') + ' 的 .h／.cpp 跟著改' : '打名稱（或雙擊這一列用 ' + rw.conv + '）＝在 C++ 移植樹新增';
++            h.addEventListener('change', function () { var v = h.value.trim(); if (v !== (rw.handler || '')) vscode.postMessage({ type: 'eventName', event: rw.name, value: v }); });
++            h.addEventListener('keydown', function (e) { e.stopPropagation(); if (e.key === 'Enter') h.blur(); else if (e.key === 'Escape') { h.value = rw.handler || ''; h.blur(); } });
++            h.addEventListener('dblclick', function (e) { e.stopPropagation(); });
++          }
+           r.appendChild(h);
++          if (rw.portState === 'new') r.appendChild(el('span', 'hint', '還沒存檔'));
+           var chip = function (on, label, title, cls) {
+             var c = el('span', 'chip mini ' + cls + (on ? '' : ' off'), label);
+             c.title = (on ? '' : '沒有：') + title;
+             r.appendChild(c);
+           };
+-          if (rw.fe) {
++          if (rw.cmd) {
++            /* wired through the page's JS: its listener sends a WS command the server dispatches to C++ */
++            chip(rw.web != null, '網頁', '網頁 JS 的監聽器送出命令 ' + rw.cmd, 'k-web');
++            chip(rw.server != null, '伺服器', '伺服器分派命令 ' + rw.cmd + '（WS／JSON）', 'k-srv');
++          } else if (rw.fe) {
+             chip(rw.web != null, '網頁', '網頁會送（這一頁的事件清單 CTLS）', 'k-web');
+             chip(rw.server != null, '伺服器', '伺服器的 form.event 事件表有它', 'k-srv');
+           }
+@@ -550,6 +597,36 @@
+       });
+     });
+ 
++    /* 網頁事件: the page's own JS handler of each DOM event, typed in (EastSun: "網路js監聽器也要讓我填function"):
++       a name adds the function and its binding to the page's <script id="htdEvents"> block, a new name renames it,
++       clearing takes the binding out; a double-click opens the function */
++    var je = data.edit && data.edit.jsEvents;
++    if (je && !(data.edit && data.edit.multi)) {
++      var nJs = Object.keys(je.handlers || {}).length;
++      section('jsevents', '網頁事件（這一頁的 JS）', nJs + ' / ' + je.types.length, function (body) {
++        body.appendChild(el('div', 'dim pad small', '打函式名稱＝在這一頁的 HTML 產生函式和 addEventListener（在檔尾 <script id="htdEvents">）；改名稱＝跟著改；清掉＝拿掉。雙擊＝打開函式。'));
++        je.types.forEach(function (ty) {
++          var cur = (je.handlers || {})[ty];
++          var r = el('div', 'row event jsev' + (cur ? ' set' : ' empty'));
++          r.setAttribute('data-jsevent', ty);
++          r.appendChild(el('span', 'evn', ty));
++          var inp = el('input', 'evh evin');
++          inp.type = 'text'; inp.spellcheck = false; inp.value = cur ? cur.fn : '';
++          inp.placeholder = (c.htmlId || 'x') + ty.charAt(0).toUpperCase() + ty.slice(1);
++          inp.setAttribute('data-field', 'js:' + ty);
++          inp.addEventListener('change', function () { var v = inp.value.trim(); if (v !== (cur ? cur.fn : '')) vscode.postMessage({ type: 'jsEvent', ev: ty, fn: v }); });
++          inp.addEventListener('keydown', function (e) { e.stopPropagation(); if (e.key === 'Enter') inp.blur(); else if (e.key === 'Escape') { inp.value = cur ? cur.fn : ''; inp.blur(); } });
++          inp.addEventListener('dblclick', function (e) { e.stopPropagation(); if (cur) vscode.postMessage({ type: 'openJsEvent', ev: ty }); });
++          r.appendChild(inp);
++          /* other JS on it (the page's own wire files), measured in the preview */
++          var others = data.listeners.filter(function (l) { return l.on === 'self' && l.type === ty; }).length - (cur ? 1 : 0);
++          if (others > 0) r.appendChild(el('span', 'hint', '另外還有 ' + others + ' 個（見下面）'));
++          r.addEventListener('dblclick', function () { if (cur) vscode.postMessage({ type: 'openJsEvent', ev: ty }); });
++          body.appendChild(r);
++        });
++      });
++    }
++
+     /* web listeners */
+     var own = data.listeners.filter(function (l) { return l.on !== 'up'; });
+     var upRel = data.listeners.filter(function (l) { return l.on === 'up' && l.relevant; });
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 8f833ee..b7ebc13 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HTML 視覺設計工具",
+   "description": "BCB6 表單移植成 web HMI（網頁＋C++）的專案通用：像 WPF 設計工具一樣看、改頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.67.0",
++  "version": "0.68.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -848,6 +848,11 @@
+     "configuration": {
+       "title": "HTML 視覺設計",
+       "properties": {
++        "ht9045Designer.csvAutoTable": {
++          "type": "boolean",
++          "default": true,
++          "description": "用文字開著的 .csv 分頁（例如更新前就開著的）自動改成 CSV 表格。關掉＝只在狀態列放「用表格開啟」按鈕並問一次。"
++        },
+         "ht9045Designer.generalIni": {
+           "type": "string",
+           "default": "",
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 78dff21..66f3223 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -155,6 +155,28 @@ exports.run = async function () {
+       /\n\s*void spbSaveDblClick\(TObject \*Sender\);\s+\/\/AI\(W906-HTDESIGNER\)/.test(egH) && /void TfHotPlate::spbSaveDblClick\(TObject \*Sender\)\r?\n\{/.test(egC) && egBack),
+       '事件表: every TSpeedButton event, OnClick = spbSaveClick; a double-click on the empty OnDblClick adds TfHotPlate::spbSaveDblClick to fHotPlate.h / .cpp (put back, not saved)',
+       egNames + ' | made ' + (egMade ? path.basename(egMade.h) + '+' + path.basename(egMade.cpp) : '-') + ' | back ' + egBack);
++
++    // 網頁事件: a typed function name -> the page's htdEvents block; the redrawn page really binds it (the probe sees
++    // the listener); put back with a revert
++    const jsR0 = d.readyCount || 0;
++    const jsMade = await hub.cmdJsEvent(d, data, 'mouseup', 'spbSaveUpJs');
++    await waitFor(() => ((d.readyCount || 0) > jsR0 ? true : null), 10000);
++    await sleep(400);
++    // (a selection made AFTER the redraw -- the one before it has the old listeners)
++    const jsSelBefore = d.sel;
++    d.post({ type: 'selectId', id: 'spbSave', origin: 'editor' });
++    const jsSel = await waitFor(() => (d.sel && d.sel !== jsSelBefore && d.sel.info && d.sel.info.id === 'spbSave' ? d.sel : null), 10000);
++    const jsData = jsSel ? await jsSel.promise : null;
++    const jsBound = !!(jsData && jsData.listeners.some(l => l.type === 'mouseup' && l.fnName === 'spbSaveUpJs'));
++    const jsText = d.doc.getText();
++    await vscode.window.showTextDocument(d.doc, { preview: false });
++    await vscode.commands.executeCommand('workbench.action.files.revert');
++    const jsBack = !d.doc.isDirty && d.doc.getText() === fs.readFileSync(d.file, 'utf8');
++    ok(!!(jsMade && jsMade.added === 'spbSaveUpJs' && /<script id="htdEvents">[\s\S]*addEventListener\('mouseup', spbSaveUpJs\)/.test(jsText) && jsBound && jsBack),
++      '網頁事件: spbSaveUpJs written into the page (htdEvents block), the redrawn page binds it (the probe records mouseup -> spbSaveUpJs); reverted',
++      JSON.stringify({ made: jsMade && jsMade.added, bound: jsBound, back: jsBack }));
++    d.post({ type: 'selectId', id: 'spbSave', origin: 'editor' });
++    await waitFor(() => (d.sel && d.sel.info && d.sel.info.id === 'spbSave' ? d.sel : null), 5000);
+     ok(data.uses && data.uses.golden.length > 0, 'uses of spbSave found in BCB6', data.uses ? data.uses.golden.length + ' golden, ' + data.uses.port.length + ' port' : '-');
+ 
+     // code -> designer: CodeLens on the BCB6 handler, then clicking it
+@@ -1007,6 +1029,21 @@ exports.run = async function () {
+     const snFuncDesc = snFuncNode ? hub.tree.getTreeItem(snFuncNode).description : '';
+     ok(!!(snFunc && snFunc[8] === 1 && /執行時隱藏/.test(snFuncDesc)),
+       'design mode shows everything: grpLoaderFunc (Visible=False) is marked hidden-when-running, the tree says 執行時隱藏', snFuncDesc);
++    // 事件表 on a component the .dfm does not have (BtnPanelLane3, in the 9050 group): its click is wired through the
++    // page's JS -> WS io.btnPanelClick -> C++ (EastSun 20260930: "應該有click吧? 他是連到C++的")
++    let bpRow = null, bpData = null;
++    if (hub.active && /HW\.IoSetView\.html$/.test(hub.active.file)) {
++      const dio = hub.active;
++      dio.post({ type: 'selectId', id: 'BtnPanelLane3', origin: 'editor' });
++      const bpSel = await waitFor(() => (dio.sel && dio.sel.info && dio.sel.info.id === 'BtnPanelLane3' ? dio.sel : null), 10000);
++      bpData = bpSel ? await bpSel.promise : null;
++      bpRow = bpData && bpData.eventGrid && bpData.eventGrid.rows.find(r => r.name === 'OnClick');
++    }
++    const bpT = i => (bpData && i != null ? bpData.targets[i] : null);
++    ok(!!(bpRow && bpRow.cmd === 'io.btnPanelClick' && /DispatchIoClick/.test(bpRow.handler) && bpT(bpRow.web) && bpT(bpRow.web).kind === 'web' &&
++      bpT(bpRow.server) && /wb_serve\.cpp$/i.test(bpT(bpRow.server).file) && bpT(bpRow.port) && bpT(bpRow.port).kind === 'port'),
++      '事件表: BtnPanelLane3 (not in the .dfm) OnClick = the page\'s listener -> io.btnPanelClick -> C++ ' + (bpRow ? bpRow.handler : '-'),
++      bpRow ? JSON.stringify({ cmd: bpRow.cmd, handler: bpRow.handler, web: bpT(bpRow.web) && path.basename(bpT(bpRow.web).file), server: bpT(bpRow.server) && path.basename(bpT(bpRow.server).file) + ':' + bpT(bpRow.server).line }) : 'no row');
+     const snNone = await vscode.commands.executeCommand('ht9045Designer.pickMachine', '-');
+     let snRowNone = null;
+     for (let i = 0; i < 100; i++) {
+@@ -1060,12 +1097,11 @@ exports.run = async function () {
+         await sleep(200);
+       }
+       await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+-      // a text tab of it (as one from before the update): the status bar button; it opens the table, the text tab closes
++      // a text tab of it (as one from before the update): switched to the table by itself, the text tab closes
++      hub.csvAsked.delete(mtCopy.toLowerCase());
+       const otDoc = await vscode.workspace.openTextDocument(mtCopy);
+       await vscode.window.showTextDocument(otDoc);
+-      for (let i = 0; i < 15 && !hub.csvShown; i++) await sleep(200);
+-      const otShown = !!hub.csvShown;
+-      await hub.cmdOpenCsvTable();
++      const otShown = true;
+       let otText = -1, otTable = false;
+       for (let i = 0; i < 20; i++) {
+         const tabs = vscode.window.tabGroups.all.reduce((a, g) => a.concat(g.tabs), []);
+@@ -1075,7 +1111,7 @@ exports.run = async function () {
+         await sleep(200);
+       }
+       ok(!!(otTab && otShown && otText === 0 && otTable && fs.readFileSync(mtCopy, 'utf8') === mt0),
+-        'a .csv opened the ordinary way is the table; a text tab of it: the status bar button, which opens the table and closes the text tab',
++        'a .csv opened the ordinary way is the table; a text tab of it switches to the table by itself (the text tab closes)',
+         JSON.stringify({ openedAsTable: !!otTab, button: otShown, textTabs: otText, table: otTable }));
+       await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+       try { fs.rmSync(mtDir, { recursive: true, force: true }); } catch (e) { /* ignore */ }
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index d8f09f4..2771bda 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -844,6 +844,57 @@ async function main() {
+     'cppstub: TfHotPlate found in fHotPlate.h (braces in comments / strings skipped); the declaration after its last handler, the file\'s line ends; the body at the end of fHotPlate.cpp; nothing else moves',
+     csDe ? JSON.stringify(csDe.text) : '-');
+ 
++  // --- the command trace follows the page's own send(...) (a bare call), not socket.send(...) (a method)
++  const wsT = require('../lib/websearch');
++  const wsSrc = [new wsT.Source('C:\\x\\io.js', 'function onClick(el){ send(el, 1); }\nfunction send(el, v){ R.rawCmd(\'control.takeover\'); R.rawCmd(\'io.btnPanelClick\', {tag:1}); }\n', false)];
++  const wsTr = wsT.traceCmds(wsSrc, 'function (e) { ws.send("x"); onClick(e.target); }', 3, 'C:\\x\\io.js');
++  ok(wsTr.map(t => t.cmd).join(',') === 'control.takeover,io.btnPanelClick' && wsTr[1].via.join('>') === 'onClick>send',
++    'traceCmds: a listener -> onClick -> the page\'s own send() -> io.btnPanelClick (ws.send stays a builtin)', JSON.stringify(wsTr));
++
++  // --- a C++ handler the designer added, renamed: the declaration in the class and cls::name in the .cpp only
++  const csRn = cstub.renameEdits(csH2, csC2, 'TfHotPlate', 'spbTestClick', 'spbTest2Click');
++  const csApply = (t, eds) => { let o = t; for (const x of eds.slice().sort((a, b) => b.s - a.s)) o = o.slice(0, x.s) + x.text + o.slice(x.e); return o; };
++  const csH3 = csApply(csH2, csRn.h), csC3 = csApply(csC2, csRn.cpp);
++  ok(csRn.h.length === 1 && csRn.cpp.length === 1 && csH3 === csH2.replace('void spbTestClick(', 'void spbTest2Click(') &&
++    csC3 === csC2.replace('TfHotPlate::spbTestClick(', 'TfHotPlate::spbTest2Click('),
++    'cppstub.renameEdits: the declaration in the class, TfHotPlate::name in the .cpp; nothing else', JSON.stringify([csRn.h.length, csRn.cpp.length]));
++
++  // --- 網頁事件: the page's own JS handlers in its <script id="htdEvents"> block
++  const je = require('../lib/jsevents');
++  const jeApply = (t, eds) => { let o = t; for (const x of eds.slice().sort((a, b) => b.s - a.s)) o = o.slice(0, x.s) + x.text + o.slice(x.e); return o; };
++  const jeP0 = '<html><body>\r\n<button id="b1">x</button>\r\n</body></html>';
++  const je1 = je.setBinding(jeP0, 'b1', 'click', 'b1Click');
++  const jeP1 = jeApply(jeP0, je1.edits);
++  const je2 = je.setBinding(jeP1, 'b1', 'mouseup', 'b1Up');
++  const jeP2 = jeApply(jeP1, je2.edits);
++  const jeP2b = jeP2.replace('function b1Click(e) {\r\n  // TODO', 'function b1Click(e) {\r\n  alert(1);');
++  const je3 = je.setBinding(jeP2b, 'b1', 'click', 'b1Go');        // renamed: its code stays
++  const jeP3 = jeApply(jeP2b, je3.edits);
++  const je4 = je.setBinding(jeP3, 'b1', 'mouseup', '');           // cleared: the empty function goes too
++  const jeP4 = jeApply(jeP3, je4.edits);
++  const je5 = je.setBinding(jeP4, 'b1', 'click', '');             // cleared: a function with code stays
++  const jeP5 = jeApply(jeP4, je5.edits);
++  const jeRid = jeApply(jeP3, je.renameIdEdits(jeP3, 'b1', 'b2'));
++  const jeBad = je.setBinding(jeP0, 'b1', 'click', '1x');
++  ok(je1.fnAdded === 'b1Click' && /<script id="htdEvents">\r\n\/\*[^\n]*\*\/\r\nfunction b1Click\(e\) \{\r\n  \/\/ TODO\r\n\}\r\ndocument\.getElementById\('b1'\)\.addEventListener\('click', b1Click\);\r\n<\/script>\r\n<\/body>/.test(jeP1) &&
++    jeP1.indexOf('<button id="b1">x</button>') > 0 && JSON.stringify(je.handlersOf(jeP2, 'b1')).indexOf('"mouseup":{"fn":"b1Up"') > 0 &&
++    je3.renamed === 'b1Click' && /function b1Go\(e\) \{\r\n  alert\(1\);/.test(jeP3) && /addEventListener\('click', b1Go\)/.test(jeP3) && !/b1Click/.test(jeP3) &&
++    !/b1Up/.test(jeP4) && /function b1Go/.test(jeP4) && !/addEventListener\('click'/.test(jeP5) && /function b1Go\(e\) \{\r\n  alert\(1\);/.test(jeP5) &&
++    /getElementById\('b2'\)\.addEventListener\('click', b1Go\)/.test(jeRid) && /getElementById\('b2'\)\.addEventListener\('mouseup', b1Up\)/.test(jeRid) &&
++    jeBad.error && !jeBad.edits.length,
++    'jsevents: a name = the function + addEventListener in the page\'s htdEvents block (its line ends); renamed = its code stays; cleared = the binding out (an empty function too); a renamed component\'s bindings follow',
++    JSON.stringify(jeP3.slice(jeP3.indexOf('<script')).slice(0, 160)));
++
++  // --- Alias: the part of the title the page's JS reads (title.match(/Alias=([^｜|\s]+)/)), the IO table's names
++  const al = require('../lib/aliasedit');
++  const alT = 'BtnPanelLane3 : TBtnPanelLane｜Alias=C_LoaderEdgePush';
++  const alIo = 'D:\\HT9045\\system\\IO_Table.csv';
++  const alNames = fs.existsSync(alIo) ? al.ioAliases(alIo) : null;
++  ok(al.aliasOf(alT) === 'C_LoaderEdgePush' && al.withAlias(alT, 'C_Other').title === 'BtnPanelLane3 : TBtnPanelLane｜Alias=C_Other' &&
++    al.withAlias(alT, '').title === 'BtnPanelLane3 : TBtnPanelLane' && al.withAlias('X : TButton', 'Y1').title === 'X : TButton｜Alias=Y1' &&
++    !!al.withAlias(alT, 'a b').error && (alNames === null || (alNames.length > 100 && alNames.includes('C_OTD_Valve_On'))),
++    'aliasedit: read / change / take out / add the Alias of a title; the IO table\'s Alias column (read only)', alNames ? alNames.length + ' IO names' : 'no IO table');
++
+   // the real Mot_Table.csv (READ only, in memory): one value changed = only that value differs
+   const mtFile = 'D:\\HT9045\\system\\Mot_Table.csv';
+   if (fs.existsSync(mtFile)) {
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index c4c5b7a..738f88a 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -884,15 +884,59 @@ async function main() {
+   const egHText2 = egH ? egH.getText() : '';
+   ok(!(egAgain && egAgain.h) && egHText2 === egHText && (egHText2.match(/spbSaveMouseUp/g) || []).length === 1,
+     '事件表: the new handler is set now -- a second double-click opens it, no second copy');
++  // a typed name: renames the handler the designer added (.h and .cpp follow); the .dfm's is not renamed
++  const egRen = egData ? await api.hub.onEventName(egData, 'OnMouseUp', 'spbSaveUp', api.hub.active) : null;
++  const egHR = egH ? egH.getText() : '', egCR = egC ? egC.getText() : '';
++  const egDfmCalls = fake._calls.length;
++  const egDfmRen = egData ? await api.hub.onEventName(egData, 'OnClick', 'spbSaveGo', api.hub.active) : null;
++  const egDfmRefused = fake._calls.slice(egDfmCalls).some(c => (c.name === 'warning' || c.name === 'info' || c.name === 'error') && /golden|唯讀/.test(c.args[0])) ||
++    pagePosted.some(m => m.type === 'refused');
++  const egTyped = egData ? await api.hub.onEventName(egData, 'OnMouseDown', 'spbSavePress', api.hub.active) : null;
++  const egHT = egH ? egH.getText() : '';
++  ok(!!(egRen && egRen.from === 'spbSaveMouseUp' && egRen.to === 'spbSaveUp' && /void spbSaveUp\(TObject \*Sender, TMouseButton/.test(egHR) && !/spbSaveMouseUp/.test(egHR) &&
++    /void TfHotPlate::spbSaveUp\(/.test(egCR) && !/spbSaveMouseUp/.test(egCR) && !egDfmRen &&
++    egTyped && egTyped.name === 'spbSavePress' && /void spbSavePress\(TObject \*Sender, TMouseButton Button, TShiftState Shift, int X, int Y\);/.test(egHT)),
++    '事件表: a typed name renames the added handler in fHotPlate.h / .cpp; an empty one gets the typed name; the .dfm\'s OnClick is not renamed',
++    JSON.stringify({ ren: egRen, dfm: egDfmRen, typed: egTyped && egTyped.name }));
+   if (egMade) { delete fake._docs[fake.Uri.file(egMade.h).toString()]; delete fake._docs[fake.Uri.file(egMade.cpp).toString()]; }
+ 
++  // Name / Alias / 網頁事件 from the panel
++  const nmCalls = pagePosted.length;
++  const alRes = egData ? api.hub.cmdSetAlias(api.hub.active, egData, 'C_Test_Alias') : null;
++  const alPost = pagePosted.slice(nmCalls).find(m => m.type === 'setAttrRaw' && m.name === 'title');
++  const jsDoc = api.hub.active.doc;
++  const jsBefore = jsDoc.getText();
++  const jsRes = egData ? await api.hub.cmdJsEvent(api.hub.active, egData, 'click', 'spbSaveJsClick') : null;
++  const jsAfter = jsDoc.getText();
++  const jsRen = egData ? await api.hub.cmdJsEvent(api.hub.active, egData, 'click', 'spbSaveGoJs') : null;
++  const jsAfter2 = jsDoc.getText();
++  ok(!!(alRes && alRes.to === 'C_Test_Alias' && alPost && /｜Alias=C_Test_Alias$/.test(alPost.value) && /^spbSave : TSpeedButton/.test(alPost.value) &&
++    jsRes && jsRes.added === 'spbSaveJsClick' && /<script id="htdEvents">[\s\S]*function spbSaveJsClick\(e\) \{[\s\S]*addEventListener\('click', spbSaveJsClick\);[\s\S]*<\/script>\s*<\/body>/.test(jsAfter) &&
++    jsAfter.slice(0, jsAfter.indexOf('<script id="htdEvents">')) === jsBefore.slice(0, jsAfter.indexOf('<script id="htdEvents">')) &&
++    jsRen && jsRen.renamed === 'spbSaveJsClick' && /function spbSaveGoJs\(e\)/.test(jsAfter2) && !/spbSaveJsClick/.test(jsAfter2) &&
++    egData.edit.jsEvents.handlers.click && egData.edit.jsEvents.handlers.click.fn === 'spbSaveGoJs'),
++    'Alias written into the title (the rest kept); 網頁事件: a name = the function + addEventListener at the end of the page, a new name renames it',
++    alPost ? alPost.value : '-');
++  // (the page's text back as it was for the tests after this)
++  if (jsDoc._setText) { jsDoc._setText(jsBefore); jsDoc.isDirty = false; }
++
+   // a .csv shown as text (a tab from before the update): the status bar offers the table, asked once per file
++  // (by itself: a text tab of a .csv becomes the table -- EastSun: "開CSV 怎還是一樣的畫面?")
++  const ctAuto0 = fake._calls.length;
++  api.hub.csvTextEditor({ document: { uri: fake.Uri.file('C:\\x\\Mot_Table.csv') } });
++  await new Promise(r => setTimeout(r, 30));
++  const ctAuto = fake._calls.slice(ctAuto0).find(c => c.name === 'exec' && c.args[0] === 'vscode.openWith' && /Mot_Table\.csv/.test(c.args[1]) && c.args[2] === 'ht9045Designer.csv');
++  const ctAutoAsk = fake._calls.slice(ctAuto0).some(c => c.name === 'info');
++  ok(!!(ctAuto && !ctAutoAsk), 'a .csv shown as text: switched to the table by itself (no question)', ctAuto && ctAuto.args.join(' '));
++  // with the setting off: the status bar button and one question
++  fake._config.csvAutoTable = false;
+   const ctCalls = fake._calls.length;
+   const ctUri = fake.Uri.file('C:\\x\\IO_Table.csv');
+   const ctOn = api.hub.csvTextEditor({ document: { uri: ctUri } });
+   const ctItemShown = api.hub.csvItem.shown;
+   api.hub.csvTextEditor({ document: { uri: ctUri } });
+   const ctAsk = fake._calls.slice(ctCalls).filter(c => c.name === 'info' && /IO_Table\.csv.*表格/.test(c.args[0])).length;
++  delete fake._config.csvAutoTable;
+   const ctOff = api.hub.csvTextEditor(undefined);
+   const ctHtml = api.hub.csvTextEditor({ document: { uri: fake.Uri.file('C:\\x\\a.html') } });
+   const ctOpen0 = fake._calls.length;
+-- 
+2.55.0.windows.5
+

@@ -1,0 +1,271 @@
+From 05b1c5cfb49f49360b3191fbb1575ff7bb614edb Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 23:41:22 +0800
+Subject: [PATCH] HTDESIGNER-47: several selected -- the fields whose values
+ differ are shown empty, like WPF (0.47.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+With a multi-selection the properties panel showed the primary's values,
+which reads as "they are all 14px". WPF shows a field empty when the
+selected controls do not agree (a checkbox half set). Now so does ours:
+- host: after the panel data is built for a multi-selection, the page is
+  asked for every selected one's layout / caption / look (lookAll), and
+  lib/mixed.mixedFields marks the fields that differ (text compared
+  case-blind; a control without the field does not count)
+- panel: those fields are empty with the placeholder （不同）, a checkbox is
+  indeterminate, a colour says （不同）; the row's name is italic, and it is
+  not compared with the DFM there (no diff mark, no reset). Typing a value
+  still sets it on all of them (R30).
+
+Tests: lib (mixedFields), smoke (the panel data gets mixed = left / bold from
+the page's answer), panels_render (Font.Size / Left empty, Font.Bold half
+set and not a DFM difference, Top as it is), real VS Code (sbtExit + spbSave:
+left / top / width / height / caption differ, the font size does not).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  2 ++
+ tools/vscode-htdesigner/extension.js          |  8 ++++-
+ tools/vscode-htdesigner/lib/mixed.js          | 32 +++++++++++++++++++
+ tools/vscode-htdesigner/media/props.css       |  2 ++
+ tools/vscode-htdesigner/media/props.js        | 21 ++++++++++++
+ tools/vscode-htdesigner/package.json          |  2 +-
+ .../test/integration/index.js                 |  3 ++
+ .../vscode-htdesigner/test/panels_render.ps1  |  7 ++++
+ tools/vscode-htdesigner/test/run_tests.js     |  9 ++++++
+ .../vscode-htdesigner/test/smoke_extension.js | 15 +++++++--
+ 10 files changed, 97 insertions(+), 4 deletions(-)
+ create mode 100644 tools/vscode-htdesigner/lib/mixed.js
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index c9f869d..f183060 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -88,6 +88,8 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ **多選時改屬性**（WPF 屬性視窗的行為）：選了好幾個時，屬性面板「外觀與版面」改的值（字型、粗體、顏色、文字、Left／Width…）
+ 會**套用到全部選取的元件**，一次＝一個復原步驟；面板上顯示的是主要選取的值。位置／大小是「全部或不做」：
+ 其中有一個鎖定或不能改，就一個都不改並說原因。文字（Caption）只改有文字的那些。HTML 原始碼那一格只改主要選取。
++**選取的元件值不一樣的欄位是空白的**（打勾的變成半勾，列名斜體），跟 WPF 一樣：例如三個 Label 字型大小不同，Font.Size 就是空的；
++填一個值下去就三個都變成那個值。這些欄位不跟 DFM 比對。
+ 
+ 滑鼠移到元件上，標籤會顯示 `名稱 : 型別 · 事件`，例如 `spbSave : TSpeedButton · OnClick   227×40`。
+ 
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 41a7bda..6503552 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -27,6 +27,7 @@ const { WebCmdIndex } = require('./lib/webcmds');
+ const overview = require('./lib/overview');
+ const dfmdiff = require('./lib/dfmdiff');
+ const taborder = require('./lib/taborder');
++const mixed = require('./lib/mixed');
+ const pagelist = require('./lib/pagelist');
+ const htmlblock = require('./lib/htmlblock');
+ const toolbox = require('./lib/toolbox');
+@@ -528,7 +529,12 @@ class Hub {
+     d.sel = sel;
+     sel.promise = this.resolve(d, info, partial => {
+       if (seq === this.selSeq) { sel.data = partial; this.showProps(d, partial); }
+-    }).then(data => {
++    }).then(async data => {
++      // several selected: which fields differ among them (WPF shows those empty)
++      if (data && data.edit && Array.isArray(info.multi) && info.multi.length && seq === this.selSeq) {
++        const rep = await d.request({ type: 'lookAll', ids: [info.id].concat(info.multi) }, 3000);
++        if (rep) data.edit.mixed = mixed.mixedFields(rep.items);
++      }
+       if (seq === this.selSeq) { sel.data = data; this.showProps(d, data); }
+       return data;
+     }, e => {
+diff --git a/tools/vscode-htdesigner/lib/mixed.js b/tools/vscode-htdesigner/lib/mixed.js
+new file mode 100644
+index 0000000..9020d38
+--- /dev/null
++++ b/tools/vscode-htdesigner/lib/mixed.js
+@@ -0,0 +1,32 @@
++'use strict';
++// AI(W906-HTDESIGNER) 20260929: several selected -- which fields of the properties panel have
++// different values among them (WPF shows those empty). Plain Node (no vscode).
++
++const LAYOUT = ['left', 'top', 'width', 'height'];
++const LOOK = ['visible', 'enabled', 'fontName', 'fontSize', 'bold', 'italic', 'color', 'background'];
++
++function valueOf(it, f) {
++  if (LAYOUT.includes(f)) return it.lay ? it.lay[f] : undefined;
++  if (f === 'caption') return it.cap ? it.cap.value : undefined;
++  return it.look ? it.look[f] : undefined;
++}
++
++/**
++ * items: the probe's lookAll answer for the selected ones -- [{ id, lay, cap, look }]
++ * -> { field: true } for each panel field (the data-field names) whose value is not the
++ * same on all of them; a component that has no such field (no caption ...) does not count.
++ */
++function mixedFields(items) {
++  const out = {};
++  const list = (items || []).filter(Boolean);
++  if (list.length < 2) return out;
++  for (const f of LAYOUT.concat(['caption'], LOOK)) {
++    const vals = list.map(it => valueOf(it, f)).filter(v => v !== undefined && v !== null);
++    if (vals.length < 2) continue;
++    const s = new Set(vals.map(v => (typeof v === 'string' ? v.trim().toLowerCase() : String(v))));
++    if (s.size > 1) out[f] = true;
++  }
++  return out;
++}
++
++module.exports = { mixedFields, FIELDS: LAYOUT.concat(['caption'], LOOK) };
+diff --git a/tools/vscode-htdesigner/media/props.css b/tools/vscode-htdesigner/media/props.css
+index 29eda40..51f3a1e 100644
+--- a/tools/vscode-htdesigner/media/props.css
++++ b/tools/vscode-htdesigner/media/props.css
+@@ -22,6 +22,8 @@ button {
+ }
+ button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+ .sortbar { margin-top: 0; gap: 2px; }
++table.edit tr.mixed td.k { font-style: italic; }
++table.edit tr.mixed input::placeholder { color: var(--vscode-descriptionForeground); font-style: italic; }
+ .sortbar button.on { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+ .sec { border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,.2)); }
+ .sec > summary {
+diff --git a/tools/vscode-htdesigner/media/props.js b/tools/vscode-htdesigner/media/props.js
+index 107fabe..332952a 100644
+--- a/tools/vscode-htdesigner/media/props.js
++++ b/tools/vscode-htdesigner/media/props.js
+@@ -397,6 +397,27 @@
+             }
+           });
+         }
++        /* several selected and their values differ: WPF shows the field empty (a checkbox half
++           set); typing a value still sets it on all of them. Not compared with the DFM there. */
++        var MX = ed.mixed || {};
++        Object.keys(MX).forEach(function (f) {
++          var inp = tb.querySelector('[data-field="' + f + '"]');
++          if (!inp || !MX[f]) return;
++          if (inp.type === 'checkbox') inp.indeterminate = true;
++          else if (inp.type !== 'color') { inp.value = ''; inp.placeholder = '（不同）'; }
++          var mtr = inp.closest('tr');
++          if (!mtr) return;
++          mtr.classList.remove('diff');
++          mtr.classList.add('mixed');
++          mtr.title = '選取的元件這一項的值不一樣；改了就全部一起改';
++          var mh = mtr.querySelector('.hint');
++          if (inp.type === 'color') { if (mh) mh.textContent = '（不同）'; else inp.parentNode.insertBefore(el('span', 'hint', '（不同）'), inp.nextSibling); }
++          var mdv = mtr.querySelector('.dfmv');
++          if (mdv) mdv.textContent = '（值不同，不比對）';
++          var mrb = mtr.querySelector('button.reset');
++          if (mrb) mrb.remove();
++        });
++        diffs = tb.querySelectorAll('tr.diff').length;
+         if (diffs) {
+           var dn = el('div', 'pad small diffnote', '有 ' + diffs + ' 項和 BCB6 .dfm 的值不同（標色的列）；按 ↺ 改回 DFM 的值，或 ');
+           var ra = el('button', 'resetall', ed.multi ? '選取的 ' + (ed.multi.length + 1) + ' 個全部改回 DFM' : '這個元件全部改回 DFM');
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 54d6b47..7ceec22 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.46.0",
++  "version": "0.47.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 4475e16..171e949 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -565,6 +565,9 @@ exports.run = async function () {
+       d.post({ type: 'selectIds', ids: ['sbtExit', 'spbSave'], origin: 'tree' });
+       await waitFor(() => (hub.props.data && hub.props.data.comp && hub.props.data.comp.htmlId === 'sbtExit' && hub.props.data.edit &&
+         (hub.props.data.edit.multi || []).indexOf('spbSave') >= 0 && hub.propsDesigner === d ? true : null), 8000);
++      // the values that differ between the two (left 332 / 54, width 241 / 227) are marked mixed, measured by the real probe
++      const mxR = await waitFor(() => (hub.props.data && hub.props.data.edit && hub.props.data.edit.mixed ? hub.props.data.edit.mixed : null), 5000);
++      ok(!!(mxR && mxR.left && mxR.width && !mxR.fontSize), 'several selected (real): left / width differ and are marked, the font size is the same', JSON.stringify(mxR));
+       hub.onPropsMessage({ type: 'setLook', prop: 'italic', value: true });
+       const it2 = await waitFor(() => (/id="sbtExit"[^>]*font-style:italic/.test(d.doc.getText()) && /id="spbSave"[^>]*font-style:italic/.test(d.doc.getText()) ? true : null), 5000);
+       ok(!!it2, 'panel with 2 selected: Font.Italic on -> sbtExit and spbSave both italic in the source');
+diff --git a/tools/vscode-htdesigner/test/panels_render.ps1 b/tools/vscode-htdesigner/test/panels_render.ps1
+index fd4ff49..6047bdf 100644
+--- a/tools/vscode-htdesigner/test/panels_render.ps1
++++ b/tools/vscode-htdesigner/test/panels_render.ps1
+@@ -190,12 +190,19 @@ if (b('hspace')) b('hspace').click();
+ R.afterMulti = window.__out.filter(function (m) { return m.type === 'align'; }).map(function (m) { return m.how; }).join(',');
+ R.note = !!document.querySelector('.multinote');
+ R.multiReset = !!document.querySelector('details.sec[data-key="align"] button[data-act="resetToDfm"]');
++/* the fields whose values differ: empty with a placeholder, a checkbox half set, the row marked, not compared */
++var mfs = document.querySelector('input[data-field="fontSize"]'), mlf = document.querySelector('input[data-field="left"]'), mbd = document.querySelector('input[data-field="bold"]');
++var mcl = document.querySelector('input[data-field="color"]');
++R.mixedShown = !!(mfs && mfs.value === '' && mfs.placeholder && mlf && mlf.value === '' && mbd && mbd.indeterminate &&
++  mfs.closest('tr').classList.contains('mixed') && mcl && mcl.closest('tr').classList.contains('mixed') && !mbd.closest('tr').classList.contains('diff'));
++R.notMixed = (function () { var t = document.querySelector('input[data-field="top"]'); return !!t && t.value !== '' && !t.closest('tr').classList.contains('mixed'); })();
+ R.editAll = Array.prototype.some.call(document.querySelectorAll('details.sec > summary'), function (s) { return /\u5957\u7528\u5230\u5168\u90e8 2 \u500b/.test(s.textContent); });
+ '@
+ $r8 = if (Test-Path (Join-Path $dump 'props_multi.json')) { Render 'props_multi' 'props.css' 'props.js' 'show' (Join-Path $dump 'props_multi.json') $multiChecks } else { $null }
+ if ($r8) {
+   Check ($r8.errors.Count -eq 0 -and $r8.have -eq 'left,size,hspace,vspace,hcenterIn,vcenterIn' -and $r8.spaceOff -and $r8.centerOn -and $r8.afterMulti -eq 'hcenterIn') '2 selected: spacing buttons off (need 3), centre on and posts align hcenterIn' "have=$($r8.have) posted=$($r8.afterMulti)"
+   Check ($r8.multiReset) '2 selected: "reset all to DFM" in the multi-select section' "$($r8.multiReset)"
++  Check ($r8.mixedShown -and $r8.notMixed) '2 selected, values differ: those fields empty / half set and marked, not compared; the others as they are' "mixed=$($r8.mixedShown) others=$($r8.notMixed)"
+   Check ($r8.note -and $r8.editAll) '2 selected: the panel says a change goes to all 2 (note + section title)' "note=$($r8.note) title=$($r8.editAll)"
+ } else { $script:bad++ }
+ $sortChecks = @'
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index ef595c0..abf2cb7 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -493,6 +493,15 @@ async function main() {
+     'dfmTabOrder: panels by TabOrder, depth first; TabStop=False, a TLabel, an invisible panel and what is in it left out; compare: eB/eA swapped = 2 out of order',
+     fTab.join(',') + ' ' + JSON.stringify(cmpT.common));
+ 
++  // several selected: which fields differ (a component without the field does not count)
++  const mxd = require('../lib/mixed');
++  const mxA = { id: 'a', lay: { left: 54, top: 8, width: 227, height: 40 }, cap: { value: 'Save' }, look: { bold: true, fontName: 'Arial', fontSize: 14, color: '#000000' } };
++  const mxB = { id: 'b', lay: { left: 332, top: 8, width: 227, height: 40 }, cap: { value: 'save ' }, look: { bold: false, fontName: 'arial', fontSize: 14, color: '#FF0000' } };
++  const mxC = { id: 'c', lay: { left: 54, top: 8, width: 227, height: 40 }, cap: null, look: { bold: true, fontName: 'Arial', fontSize: 14, color: '#000000' } };
++  const mx1 = mxd.mixedFields([mxA, mxB]), mx2 = mxd.mixedFields([mxA, mxC]);
++  ok(mx1.left && mx1.bold && mx1.color && !mx1.top && !mx1.width && !mx1.fontName && !mx1.fontSize && !mx1.caption && Object.keys(mx2).length === 0 && Object.keys(mxd.mixedFields([mxA])).length === 0,
++    'mixedFields: left / bold / color differ; the same text in another case is the same; a missing caption does not count', JSON.stringify(mx1));
++
+   // 改回 DFM: one setLayout per control (its sides merged), one setLook / setCaption per property
+   const riRows = [
+     { id: 'A', reset: { type: 'setLayout', left: 54 } }, { id: 'A', reset: { type: 'setLayout', width: 227 } },
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 1751f6c..5bc929d 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -278,7 +278,8 @@ async function main() {
+   fs.mkdirSync(dumpDir, { recursive: true });
+   fs.writeFileSync(path.join(dumpDir, 'props_spbSave.json'), JSON.stringify(full), 'utf8');
+   // the same with sbtExit also selected (2 selected: the spacing buttons need 3)
+-  if (full && full.edit) fs.writeFileSync(path.join(dumpDir, 'props_multi.json'), JSON.stringify(Object.assign({}, full, { edit: Object.assign({}, full.edit, { multi: ['sbtExit'] }) })), 'utf8');
++  if (full && full.edit) fs.writeFileSync(path.join(dumpDir, 'props_multi.json'), JSON.stringify(Object.assign({}, full, { edit: Object.assign({}, full.edit,
++    { multi: ['sbtExit'], mixed: { left: true, fontSize: true, bold: true, color: true } }) })), 'utf8');
+   if (xs) fs.writeFileSync(path.join(dumpDir, 'props_XST1.json'), JSON.stringify(xs), 'utf8');
+   if (ov) fs.writeFileSync(path.join(dumpDir, 'overview_HotPlate.json'), JSON.stringify(ov), 'utf8');
+   if (opanel) {
+@@ -572,8 +573,18 @@ async function main() {
+     'right-click menu: 顯示 / 檢查與比對 submenus, ' + mnTop.length + ' top-level items (33 before); every menu command declared and registered', mnBad.join(','));
+   // the panel with several selected: a change is asked for all of them (all: true); one selected: not
+   const mlInfo = multi => ({ key: 960, id: 'spbSave', multi, tag: 'button', title: '', attrs: [], style: [], inline: [], computed: [], chain: [], listeners: [], inherited: [] });
++  const mlPM = panel.webview.postMessage;
++  panel.webview.postMessage = m => {
++    // the two selected: left and bold differ, the rest the same
++    if (m.type === 'lookAll') setTimeout(() => pageRecv({ __htd: 1, type: 'lookAll', seq: m.seq, items: m.ids.map(id => ({ id,
++      lay: { left: id === 'spbSave' ? 54 : 332, top: 8, width: 227, height: 40 }, cap: { value: 'X' }, look: { bold: id === 'spbSave', fontSize: 14 } })) }), 5);
++    return mlPM(m);
++  };
+   pageRecv({ __htd: 1, type: 'select', info: mlInfo(['sbtExit']), origin: 'multi' });
+-  await new Promise(r => setTimeout(r, 30));
++  const smWait = async (fn, ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { const v = fn(); if (v) return v; await new Promise(r => setTimeout(r, 20)); } return null; };
++  const mlMx = await smWait(() => (api.hub.props.data && api.hub.props.data.edit && api.hub.props.data.edit.mixed ? api.hub.props.data.edit.mixed : null), 3000);
++  panel.webview.postMessage = mlPM;
++  ok(!!(mlMx && mlMx.left && mlMx.bold && !mlMx.top && !mlMx.caption), 'several selected: the panel data says which fields differ (left, bold), asked of the page', JSON.stringify(mlMx));
+   pagePosted.length = 0;
+   propsRecv({ type: 'setLook', prop: 'bold', value: false });
+   propsRecv({ type: 'setLayout', width: 120 });
+-- 
+2.55.0.windows.5
+

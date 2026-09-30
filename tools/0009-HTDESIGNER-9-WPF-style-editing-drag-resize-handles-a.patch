@@ -1,0 +1,1570 @@
+From 961edd694b38a3064dd63d0cadd8093d73adc3ad Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 17:47:43 +0800
+Subject: [PATCH] HTDESIGNER-9: WPF-style editing -- drag, resize handles,
+ arrow nudge, editable property grid, written into the HTML source (0.9.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+User 20260929: "用你覺得合理的一直做下去 只要操作上跟WPF一樣就好".
+
+- design surface: press = select (WPF), drag = move, 8 handles = resize,
+  arrows = 1px (Shift 10px), Ctrl+arrows = resize, Esc = parent, Tab /
+  Shift+Tab = next / previous, Enter = default event; Ctrl+Z / Ctrl+Y / Ctrl+S
+  are VS Code's own (the page is a normal TextDocument)
+- properties panel "外觀與版面（可編輯）": Left Top Width Height Caption/Text
+  Visible Enabled Font.Size Font.Color Color, commit on Enter / leaving the field
+- lib/htmledit.js: the exact characters to change -- one declaration of one
+  start tag's style (in place; spaces and order kept), one attribute, or one
+  caption text (button / label / <legend> / Panel caption / input value).
+  Anchoring kept: left+width, left+right, right+width. An <input> moves its
+  positioning <span>. Non-px values and JS-built controls are refused, not guessed
+- one edit = one WorkspaceEdit = one undo step (a burst of arrow keys is one);
+  edits are queued per page; the designer's own edits do not reload the page,
+  undo does. Nothing is saved to disk by the extension; a first-edit notice says
+  the page is synced by sync_web.py (--apply overwrites) and warns about autoSave
+- DFM and BCB6 stay read-only
+
+Tests: lib 84 (incl. byte-for-byte add/remove, in-place style edits) / probe
+2 pages x 16 now asserted (drag, handles, nudge, wrapper, Esc, Tab, caption) /
+fake vscode 52 (source edits, escaping, queueing, refusal, nothing else changed)
++ panels 10 / real VS Code 48: Left=60 -> source + dirty -> Ctrl+Z twice ->
+exact original -> re-render; never saved, opened files byte-identical (MD5).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  52 ++-
+ tools/vscode-htdesigner/extension.js          | 103 +++++-
+ tools/vscode-htdesigner/lib/htmledit.js       | 209 +++++++++++
+ tools/vscode-htdesigner/media/probe.js        | 350 ++++++++++++++++--
+ tools/vscode-htdesigner/media/props.css       |  10 +
+ tools/vscode-htdesigner/media/props.js        |  88 ++++-
+ tools/vscode-htdesigner/package.json          |   4 +-
+ tools/vscode-htdesigner/test/fake_vscode.js   |  18 +-
+ .../test/integration/index.js                 |  30 ++
+ .../vscode-htdesigner/test/panels_render.ps1  |  10 +
+ tools/vscode-htdesigner/test/probe_driver.js  | 113 +++++-
+ tools/vscode-htdesigner/test/probe_test.ps1   |  27 +-
+ tools/vscode-htdesigner/test/run_tests.js     |  37 ++
+ .../vscode-htdesigner/test/smoke_extension.js |  47 ++-
+ tools/vscode-htdesigner/test/vscode_it.ps1    |   2 +
+ 15 files changed, 1033 insertions(+), 67 deletions(-)
+ create mode 100644 tools/vscode-htdesigner/lib/htmledit.js
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 3f0c6df..03bfb1b 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -1,11 +1,12 @@
+ # HT9045 HTML 設計檢視（VS Code 外掛）
+ 
+-像 WPF 設計工具那樣看 web HMI 的頁面（`web\page\*.html`）：
++像 WPF 設計工具那樣看、改 web HMI 的頁面（`web\page\*.html`）：
+ 
+ - 在 VS Code 裡看到頁面的真實樣子
+ - 點一個元件，就會顯示它的 **DFM 屬性** 和 **事件**
+ - **雙擊事件**，直接跳到那個事件的程式碼
+ - 在畫面上直接雙擊元件，會跳到它的預設事件（通常是 OnClick），跟 WPF 一樣
++- **拖曳移動、拉控制點改大小、方向鍵微調、在屬性面板改值**，改的是 HTML 原始碼，Ctrl+Z 復原、Ctrl+S 存檔
+ 
+ > `AI(W906-HTDESIGNER) 20260929` 建立。純 JavaScript，不需要 npm／Node.js。
+ 
+@@ -16,7 +17,7 @@
+ ```powershell
+ # 在移植樹根目錄
+ powershell -NoProfile -ExecutionPolicy Bypass -File tools\vscode-htdesigner\pack.ps1
+-code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-0.1.0.vsix --force
++code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版本>.vsix --force
+ ```
+ 
+ 裝好後在 VS Code 按 `Ctrl+Shift+P` →「Developer: Reload Window」。
+@@ -33,22 +34,42 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-0.1.0
+ - 在 `.html` 檔上按右鍵 →「在設計檢視開啟」
+ - 開著某個 `.html` 時，編輯器右上角的預覽圖示（會開在旁邊，像 WPF 的 XAML／設計分割畫面）
+ 
+-**看元件**：
++**設計畫面上的操作（跟 WPF 設計工具一樣）**：
+ 
+ | 動作 | 結果 |
+ |---|---|
+-| 點元件 | 選取它，右邊「屬性與事件」顯示它的資料 |
+-| 雙擊元件 | 跳到它的預設事件程式碼（OnClick／OnChange…；表單本身是 OnShow） |
++| 按一下元件 | 選取它（按下時就選，跟 WPF 一樣），右邊「屬性與事件」顯示它的資料，四周出現 8 個控制點 |
++| 按住元件拖曳 | 移動它 |
++| 拖曳控制點 | 改大小（角落兩個方向一起改） |
++| 方向鍵 | 移動 1 px；**Shift**＋方向鍵 10 px |
++| **Ctrl**＋方向鍵 | 改大小 1 px；**Ctrl＋Shift**＋方向鍵 10 px |
++| 雙擊元件、Enter | 跳到它的預設事件程式碼（OnClick／OnChange…；表單本身是 OnShow） |
++| Esc | 選上一層（外層的 GroupBox／Panel…）；已經是最外層就取消選取 |
++| Tab ／ Shift＋Tab | 選下一個／上一個元件 |
++| Ctrl＋Z ／ Ctrl＋Y | 復原／重做（VS Code 原本的功能，一次拖曳或一串方向鍵＝一步） |
++| Ctrl＋S | 存檔 |
+ | Alt＋點 | 選最內層的 HTML 元素（沒有 id 的也可以） |
+ | Ctrl＋點 | 把這一下點擊交給頁面自己處理（例如展開下拉選單） |
+ | 點分頁標籤 | 照樣切換分頁 |
+-| ↑ ／ ↓ | 選上層元件／第一個子元件（跟元件樹的層次一樣） |
+-| ← ／ → | 同一層的前一個／下一個元件 |
+-| Enter | 跳到選取元件的預設事件程式碼（同雙擊） |
+-| Esc | 取消選取 |
+ 
+ 滑鼠移到元件上，標籤會顯示 `名稱 : 型別 · 事件`，例如 `spbSave : TSpeedButton · OnClick   227×40`。
+ 
++**在屬性面板改值**：面板最上面的「外觀與版面（可編輯）」，用 VCL 的屬性名稱：
++`Left`、`Top`、`Width`、`Height`、`Caption`（輸入框是 `Text`）、`Visible`、`Enabled`、`Font.Size`、`Font.Color`、`Color`。
++輸入後按 Enter 或離開欄位就生效（跟 WPF 的屬性視窗一樣），畫面和 HTML 原始碼同時改。
++
++**改到哪裡**：跟 WPF 改 XAML 一樣，改的是這一頁的 **HTML 原始碼**，而且只動被改到的那一小段：
++
++- 位置／大小：元件自己標籤的 `style` 裡的 `left/top/width/height`（或 `right/bottom`，看它原本怎麼錨定）。
++  輸入框（`<input>`）的位置由外面那層 `<span style="position:absolute…">` 決定，所以改的是那層。
++- 文字：按鈕／標籤的文字、GroupBox 的 `<legend>`、Panel 的標題、輸入框的 `value`。
++- Visible＝`display:none`、Enabled＝`disabled`、字型大小／顏色＝`style`。
++- 分頁標題會顯示「未存檔」，**按 Ctrl+S 才寫到磁碟**。旁邊開著 HTML 原始碼的話會即時看到它被改。
++- DFM 和 BCB6 原始碼永遠不會被改（它們是唯讀的參考）。
++
++⚠ 這些頁面是網頁作者的作品，透過 `sync_web.py` 同步進來，`--apply` 會整份覆蓋。第一次改的時候外掛會提醒你；
++存檔前請確認，並告訴網頁作者。如果你開了自動存檔（`files.autoSave`），改動會自動寫到磁碟，提醒裡也會寫出來。
++
+ **「元件」樹**：頁面上所有有名字的元件，照 DFM 的層次排列。點一下＝在畫面上選取；
+ 選到在隱藏分頁裡的元件時，會自動切到那一頁。每一列右邊兩個圖示＝跳到 DFM 定義／跳到 HTML 原始碼。
+ 
+@@ -135,7 +156,8 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-0.1.0
+    實測：HotPlate 頁自己的通訊層試圖連 `ws://ht9045/`，被擋下了。
+ 2. **設計模式下，頁面的點擊處理不會執行。** 點擊在最外層就被攔下，只拿來選取元件。
+    Ctrl＋點或切到「操作模式」才會交給頁面，而那時網路仍然是封死的。
+-3. **不寫任何檔案。** 外掛只讀 HTML、JS、`tools\dfm2rc\ir_out\*.json` 和兩棵原始碼樹。
++3. **外掛自己不寫任何檔案。** 設計畫面上的修改只進 VS Code 的編輯緩衝區（跟打字一樣），要你按 Ctrl+S 才會存檔；
++   除此之外只讀 HTML、JS、`tools\dfm2rc\ir_out\*.json` 和兩棵原始碼樹。
+ 4. **golden 樹唯讀。** BCB6 原始碼透過外掛自己的**唯讀檔案系統**開啟：編輯器不能打字，任何寫入都會被拒絕（`NoPermissions`），
+    所以不可能被存回成 UTF-8。
+ 
+@@ -148,7 +170,10 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-0.1.0
+ 
+ ## 已知限制
+ 
+-- **HTML 是產生器做的**（`sync_web.py` 等會整份覆蓋），所以屬性只能看不能改。要改請改 DFM 或產生器的來源。
++- **只改得動寫在元件自己 `style` 裡的 px 數值**。位置是 `%`、`auto` 或寫在 CSS class 裡的元件，會拒絕修改並在狀態列說明，不會亂猜。
++- **頁面 JS 產生的元件**（例如 `HW.IoSetView.html` 的清單）HTML 原始碼裡沒有，不能改；面板會寫明原因。
++- **HTML 會被同步覆蓋**：見上面「改到哪裡」的 ⚠。DFM 屬性（BCB6 的 Object Inspector 那份）是參考資料，只能看。
++- 還沒有：多選、對齊線、複製貼上、刪除元件、工具箱拖新元件進來。
+ - **80 頁裡 44 頁的標題寫明對應哪個 DFM**；其他頁用元件名稱推測，推測不到就只顯示 HTML 屬性和網頁 JS。
+ - **只在連線成功後才綁的監聽器看不到**，因為預覽不連線。「網頁 JS 提到此元件」那一段是靠搜尋，可以補一部分。
+ - **C++ 的 `#if 0` 判斷是靜態掃描**，只認得 `#if 0`／`#if 1`；`#ifdef SOFT_SIMULTE` 這類要看建置線的，一律當成活的。
+@@ -189,7 +214,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\vscode-htdesigner\test
+    會在螢幕上出現約 30 秒後自己關掉）。開 HotPlate 頁走完整條路，再逐頁掃 8 種頁面；
+    測試前後比對所有開過的檔案的 MD5，有任何變動就判失敗
+ 
+-實測 20260929：1～4 層 68 ＋ 2 頁 ＋ 43（＋面板畫面 8）＋ 42（含 8 頁掃描，每頁也跑接線總覽）項全部通過。
++實測 20260929：1～4 層 84 ＋ 32（2 頁各 16）＋ 52（＋面板畫面 10）＋ 48（含 8 頁掃描，每頁也跑接線總覽）項全部通過。
++編輯的部分在真正的 VS Code 裡測了「改 Left → 原始碼變 → 未存檔 → Ctrl+Z 兩次完全還原 → 畫面重新載入」，測試從不存檔，
++所有開過的檔案前後 MD5 一樣。
+ （途中抓到一個真 bug：CRLF 換行的 C++ 檔，`#endif` 後面的 `\r` 讓 `#if 0` 永遠不結束，
+ `wb_serve.cpp` 從第 3,322 行起整段被當成死碼。已修，並加了 CRLF 的測試。）
+ 
+@@ -204,6 +231,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\vscode-htdesigner\test
+ | `media/props.js`、`props.css` | 屬性與事件面板 |
+ | `media/overview.js`、`overview.css`、`lib/overview.js` | 接線總覽 |
+ | `lib/pagehtml.js` | 產生預覽用的 HTML（CSP＋探針） |
++| `lib/htmledit.js` | 把設計畫面上的修改寫回 HTML 原始碼（只改被動到的那一小段） |
+ | `lib/pageinfo.js` | 頁面對應哪個 DFM、讀 IR |
+ | `lib/cppindex.js`、`cpplex.js` | 搜尋 C++／BCB6 的 `Class::方法`，判斷註解與 `#if 0` |
+ | `lib/websearch.js` | 找網頁 JS 的位置 |
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 7aa6497..d43de29 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -25,6 +25,7 @@ const { buildPageHtml, hasIframe } = require('./lib/pagehtml');
+ const { ReverseIndex, enclosingMethod } = require('./lib/reverse');
+ const { WebCmdIndex } = require('./lib/webcmds');
+ const overview = require('./lib/overview');
++const htmledit = require('./lib/htmledit');
+ const lex = require('./lib/cpplex');
+ 
+ const sleep = ms => new Promise(r => setTimeout(r, ms));
+@@ -263,7 +264,7 @@ class Hub {
+     const seq = ++this.selSeq;
+     if (!info) { d.sel = null; this.showProps(d, null); return; }
+     if (origin !== 'tree') this.tree.reveal(info.key);
+-    if (origin === 'click' || origin === 'tree' || origin === 'find' || origin === 'key') this.syncSource(d, info.id);
++    if (origin === 'click' || origin === 'tree' || origin === 'find' || origin === 'key' || origin === 'edit') this.syncSource(d, info.id);
+     const sel = { info, data: null, promise: null };
+     d.sel = sel;
+     sel.promise = this.resolve(d, info, partial => {
+@@ -450,8 +451,18 @@ class Hub {
+       for (const c of web.extractCmds(m.snippet)) if (!cmdVia.has(c)) cmdVia.set(c, ['提到此 id 的那一行']);
+     }
+ 
++    // WPF-style editing: what can be changed, and whether it can be written back
++    const edTag = info.id ? htmledit.startTagOf(html, info.id) : null;
++    const edWrap = edTag && info.layout && info.layout.target === 'parent' ? htmledit.wrapperTagOf(html, edTag.start) : null;
++    const edit = {
++      layout: info.layout || null, caption: info.caption || null, look: info.look || null,
++      inSource: !!edTag,
++      layoutInSource: !!(edTag && info.layout && (info.layout.target === 'self' || edWrap)),
++      dirty: !!d.doc.isDirty,
++    };
++
+     const data = {
+-      comp, events, listeners, mentions: mentionT, cmds: [], uses: null, fields: null, tags: null,
++      comp, events, listeners, mentions: mentionT, cmds: [], uses: null, fields: null, tags: null, edit,
+       props: node ? fmt.formatProps(node.properties).map(p => p.concat([propLines[p[0]] || 0])) : [],
+       dfmFile: dfmFile || null,
+       html: {
+@@ -775,6 +786,11 @@ class Hub {
+         vscode.env.clipboard.writeText(String(m.text || ''));
+         vscode.window.setStatusBarMessage('已複製：' + m.text, 2000);
+         break;
++      case 'setLayout':
++      case 'setCaption':
++      case 'setLook':
++        if (d && data && data.comp) this.forwardEdit(d, data.comp.key, m);
++        break;
+       default: break;
+     }
+   }
+@@ -865,6 +881,75 @@ class Hub {
+     return this.openTarget({ kind: 'dfm', file: f, line: n.line, col: 1 }, d);
+   }
+ 
++  // --- WPF-style editing: the probe changed the DOM, now write it into the source ---
++  refuseEdit(d, why) {
++    vscode.window.setStatusBarMessage('$(warning) ' + why, 6000);
++    this.log('[' + path.basename(d.file) + '] 沒有寫回：' + why);
++  }
++
++  /**
++   * m = { what:'style'|'attr'|'caption', id, target:'self'|'parent', style:{…}, attr:{…},
++   *       capKind, value }. One WorkspaceEdit = one undo step; nothing is saved to disk.
++   */
++  async applySourceEdit(d, m) {
++    const text = d.doc.getText();
++    const tag = m.id ? htmledit.startTagOf(text, m.id) : null;
++    if (!tag) {
++      this.refuseEdit(d, '原始碼裡找不到 id="' + (m.id || '') + '"（可能是頁面 JS 產生的元件），只改到畫面、沒有寫回。');
++      d.render();
++      return false;
++    }
++    let range = null, repl = null;
++    if (m.what === 'style' || m.what === 'attr') {
++      const target = m.target === 'parent' ? htmledit.wrapperTagOf(text, tag.start) : tag;
++      if (!target) {
++        this.refuseEdit(d, '「' + m.id + '」的位置由外層元素決定，但原始碼裡找不到緊鄰的外層標籤，沒有寫回。');
++        d.render();
++        return false;
++      }
++      let t = target.text;
++      if (m.what === 'style') t = htmledit.setStyle(t, m.style || {});
++      else for (const [k, v] of Object.entries(m.attr || {})) t = htmledit.setAttr(t, k, v);
++      range = [target.start, target.end];
++      repl = t;
++    } else if (m.what === 'caption') {
++      if (m.capKind === 'value') {
++        range = [tag.start, tag.end];
++        repl = htmledit.setAttr(tag.text, 'value', String(m.value));
++      } else {
++        const r = htmledit.captionRange(text, tag, m.capKind);
++        if (!r) { this.refuseEdit(d, '找不到「' + m.id + '」的文字在原始碼的位置，沒有寫回。'); d.render(); return false; }
++        range = r;
++        repl = htmledit.escText(m.value);
++      }
++    } else {
++      return false;
++    }
++    if (text.slice(range[0], range[1]) === repl) return true;
++    const we = new vscode.WorkspaceEdit();
++    we.replace(d.doc.uri, new vscode.Range(d.doc.positionAt(range[0]), d.doc.positionAt(range[1])), repl);
++    d.selfEdits++;
++    const ok = await vscode.workspace.applyEdit(we);
++    if (!ok) { d.selfEdits--; this.refuseEdit(d, '寫回原始碼失敗。'); d.render(); return false; }
++    if (!this.warnedEdit) {
++      this.warnedEdit = true;
++      const auto = vscode.workspace.getConfiguration('files', d.doc.uri).get('autoSave');
++      const autoNote = auto && auto !== 'off' ? '⚠ 你開了自動存檔（files.autoSave = ' + auto + '），改動會自動寫到磁碟。' : '還沒存檔；Ctrl+Z 復原、Ctrl+S 存檔。';
++      vscode.window.showInformationMessage(
++        '已改到 ' + path.basename(d.file) + ' 的 HTML 原始碼。' + autoNote +
++        '這一頁由 sync_web.py 從網頁作者那邊同步，--apply 會整份覆蓋：存檔前請確認，並告訴網頁作者。');
++    }
++    return true;
++  }
++
++  /** From the properties panel: ask the probe to apply (it then reports an 'edit'). */
++  forwardEdit(d, key, m) {
++    if (!d || key == null) return;
++    if (m.type === 'setLayout') d.post({ type: 'setLayout', key, left: m.left, top: m.top, width: m.width, height: m.height });
++    else if (m.type === 'setCaption') d.post({ type: 'setCaption', key, value: m.value });
++    else if (m.type === 'setLook') d.post({ type: 'setLook', key, prop: m.prop, value: m.value });
++  }
++
+   // --- code -> designer ------------------------------------------------------
+   /** Roots when no page is involved (a C++ file): settings, else the workspace. */
+   globalRoots() {
+@@ -1087,6 +1172,7 @@ class Designer {
+     this.disposed = false;
+     this.renderN = 0;
+     this.readyP = new Promise(res => { this._ready = res; });   // first component tree arrived
++    this.selfEdits = 0;   // our own source edits: the DOM already shows them, no reload
+     this.file = doc.uri.fsPath;
+     this.pageDir = path.dirname(this.file);
+     this.r = hub.rootsFor(this.file);
+@@ -1098,7 +1184,9 @@ class Designer {
+       panel.onDidChangeViewState(() => { if (panel.active) hub.setActive(this); }),
+       panel.onDidDispose(() => this.dispose()),
+       vscode.workspace.onDidChangeTextDocument(e => {
+-        if (e.document === doc && e.contentChanges.length) this.scheduleRender();
++        if (e.document !== doc || !e.contentChanges.length) return;
++        if (this.selfEdits > 0) { this.selfEdits--; return; }   // a designer edit: the page already shows it
++        this.scheduleRender();                                   // typing in the HTML, undo/redo, reload
+       }),
+     ];
+     this.render();
+@@ -1203,6 +1291,15 @@ class Designer {
+       case 'dblclick':
+         this.hub.onDesignerDblClick(this);
+         break;
++      case 'edit':
++        // one at a time: each edit is computed on the text the previous one left
++        this.editChain = (this.editChain || Promise.resolve())
++          .then(() => this.hub.applySourceEdit(this, m))
++          .catch(e => this.hub.log('寫回失敗：' + (e && e.stack || e)));
++        break;
++      case 'editRefused':
++        this.hub.refuseEdit(this, String(m.why || '不能改'));
++        break;
+       case 'scroll':
+         this.scroll = { x: m.x || 0, y: m.y || 0 };
+         break;
+diff --git a/tools/vscode-htdesigner/lib/htmledit.js b/tools/vscode-htdesigner/lib/htmledit.js
+new file mode 100644
+index 0000000..f3314be
+--- /dev/null
++++ b/tools/vscode-htdesigner/lib/htmledit.js
+@@ -0,0 +1,209 @@
++'use strict';
++// AI(W906-HTDESIGNER) 20260929: WPF-style edits written back into the page source.
++// The designer changes the page like the WPF designer changes XAML: every edit is a
++// text edit of the .html (undo/redo/save are VS Code's). This file finds the exact
++// characters to change -- one start tag's style / attribute, or one text node -- and
++// never touches anything else. Plain Node (no vscode).
++
++const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
++
++function escRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
++
++/** End of the tag that starts at `s` ('<'), quote-aware: index of its '>' (or -1). */
++function tagEnd(text, s) {
++  let q = null;
++  for (let i = s + 1; i < text.length; i++) {
++    const c = text[i];
++    if (q) { if (c === q) q = null; continue; }
++    if (c === '"' || c === "'") { q = c; continue; }
++    if (c === '>') return i;
++  }
++  return -1;
++}
++
++/** Start tag of the element with id="…" ('@form' = the generated <div class="form">). */
++function startTagOf(text, id) {
++  let at;
++  if (id === '@form') {
++    const m = /<div\b[^>]*\bclass\s*=\s*["']form["'][^>]*>/.exec(text);
++    if (!m) return null;
++    at = m.index;
++  } else {
++    const re = new RegExp('<[A-Za-z][\\w-]*\\b[^>]*?\\bid\\s*=\\s*["\']' + escRe(id) + '["\']');
++    const m = re.exec(text);
++    if (!m) return null;
++    at = m.index;
++  }
++  const end = tagEnd(text, at);
++  if (end < 0) return null;
++  const name = /^<([A-Za-z][\w-]*)/.exec(text.slice(at, at + 40))[1].toLowerCase();
++  return { start: at, end: end + 1, name, text: text.slice(at, end + 1) };
++}
++
++/**
++ * The start tag right before `tagStart`, when it is the element's direct wrapper:
++ * <span style="position:absolute;…"><input id="XST1" …> (only whitespace between).
++ */
++function wrapperTagOf(text, tagStart) {
++  let i = tagStart - 1;
++  while (i >= 0 && /\s/.test(text[i])) i--;
++  if (i < 0 || text[i] !== '>') return null;
++  // walk back to that tag's '<' (quote-aware enough for generated markup)
++  let s = text.lastIndexOf('<', i);
++  while (s >= 0 && tagEnd(text, s) !== i) s = text.lastIndexOf('<', s - 1);
++  if (s < 0) return null;
++  const t = text.slice(s, i + 1);
++  if (/^<\//.test(t) || /^<!/.test(t)) return null;
++  const name = /^<([A-Za-z][\w-]*)/.exec(t);
++  if (!name || VOID.has(name[1].toLowerCase())) return null;
++  return { start: s, end: i + 1, name: name[1].toLowerCase(), text: t };
++}
++
++/**
++ * style="…" of a start tag: { decls:[{ name, value, s, e, vs, ve }], range:[s,e] of the
++ * value, quote }. s/e = the whole declaration incl. its ';', vs/ve = the value only
++ * (offsets in the tag text).
++ */
++function styleOf(tagText) {
++  const m = /\sstyle\s*=\s*(["'])([\s\S]*?)\1/i.exec(tagText);
++  if (!m) return { decls: [], range: null, quote: '"' };
++  const base = m.index + m[0].indexOf(m[1]) + 1;
++  const v = m[2];
++  const decls = [];
++  // split on ';' outside parentheses and quotes (font-family:"MS Sans Serif",sans-serif)
++  let depth = 0, q = null, from = 0;
++  const cut = (a, b, withSemi) => {
++    const part = v.slice(a, b);
++    const k = part.indexOf(':');
++    if (k < 0 || !part.slice(0, k).trim()) return;
++    const lead = part.search(/\S/);
++    const rawVal = part.slice(k + 1);
++    const vLead = rawVal.search(/\S/);
++    const vs = a + k + 1 + (vLead < 0 ? 0 : vLead);
++    const ve = a + k + 1 + rawVal.replace(/\s+$/, '').length;
++    decls.push({ name: part.slice(0, k).trim().toLowerCase(), value: v.slice(vs, ve), s: base + a + lead, e: base + b + (withSemi ? 1 : 0), vs: base + vs, ve: base + Math.max(vs, ve) });
++  };
++  for (let i = 0; i < v.length; i++) {
++    const c = v[i];
++    if (q) { if (c === q) q = null; continue; }
++    if (c === '"' || c === "'") { q = c; continue; }
++    if (c === '(') depth++;
++    if (c === ')') depth--;
++    if (c === ';' && depth === 0) { cut(from, i, true); from = i + 1; }
++  }
++  if (v.slice(from).trim()) cut(from, v.length, false);
++  return { decls, range: [base, base + v.length], quote: m[1] };
++}
++
++/**
++ * New start tag with style properties changed. changes: { left: '12px', display: null }
++ * (null = remove). Only the characters of the changed declarations move: an existing
++ * one gets its value replaced in place (the LAST occurrence -- the one CSS uses; earlier
++ * duplicates are removed), a new one is appended, a removed one is cut out.
++ */
++function setStyle(tagText, changes) {
++  const st = styleOf(tagText);
++  const q = st.quote;
++  const clean = s => (q === '"' ? String(s).replace(/"/g, "'") : String(s).replace(/'/g, '"'));
++  const edits = [];   // [start, end, replacement] in tag-text offsets
++  const append = [];
++  for (const [name, value] of Object.entries(changes)) {
++    const key = name.toLowerCase();
++    const hits = st.decls.filter(d => d.name === key);
++    if (value == null) { for (const d of hits) edits.push([d.s, d.e, '']); continue; }
++    if (!hits.length) { append.push(key + ':' + clean(value) + ';'); continue; }
++    const last = hits[hits.length - 1];
++    for (const d of hits.slice(0, -1)) edits.push([d.s, d.e, '']);
++    edits.push([last.vs, last.ve, clean(value)]);
++  }
++  let t = tagText;
++  if (!st.range) {
++    if (!append.length) return t;
++    const close = /\s*\/?>$/.exec(t);
++    const at = close ? close.index : t.length - 1;
++    return t.slice(0, at) + ' style=' + q + append.join('') + q + t.slice(at);
++  }
++  if (append.length) {
++    // after the value's last char; add a ';' first if the last declaration had none
++    const valEnd = st.range[1];
++    const lastDecl = st.decls[st.decls.length - 1];
++    const needSemi = lastDecl && lastDecl.e === valEnd && tagText[valEnd - 1] !== ';';
++    edits.push([valEnd, valEnd, (needSemi ? ';' : '') + append.join('')]);
++  }
++  edits.sort((a, b) => b[0] - a[0] || b[1] - a[1]);
++  for (const [s, e, r] of edits) t = t.slice(0, s) + r + t.slice(e);
++  return t;
++}
++
++function escAttr(s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
++function escText(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
++
++/** New start tag with an attribute set (value string), made boolean (true), or removed (null). */
++function setAttr(tagText, name, value) {
++  const re = new RegExp('\\s' + escRe(name) + '(\\s*=\\s*("[^"]*"|\'[^\']*\'|[^\\s>]+))?(?=[\\s/>])', 'i');
++  const m = re.exec(tagText);
++  let t = m ? tagText.slice(0, m.index) + tagText.slice(m.index + m[0].length) : tagText;
++  if (value == null || value === false) return t;
++  const close = /\s*\/?>$/.exec(t);
++  const at = close ? close.index : t.length - 1;
++  const piece = value === true ? ' ' + name : ' ' + name + '="' + escAttr(value) + '"';
++  return t.slice(0, at) + piece + t.slice(at);
++}
++
++/**
++ * Where the caption text of an element lives in the source, as [start, end) of the
++ * raw text (possibly empty, an insertion point). kind:
++ *   'text'   first non-blank text directly inside the element (button, label, span)
++ *   'legend' the text of its first <legend>            (TGroupBox caption)
++ *   'pnlCap' the text of its first <span class="pnlCap"> (TPanel caption)
++ * Returns null when the element's end is not found.
++ */
++function captionRange(text, tag, kind) {
++  let i = tag.end;
++  let depth = 0;
++  let firstText = null;
++  const n = text.length;
++  while (i < n) {
++    const lt = text.indexOf('<', i);
++    const segEnd = lt < 0 ? n : lt;
++    if (depth === 0 && kind === 'text' && segEnd > i && /\S/.test(text.slice(i, segEnd))) {
++      const raw = text.slice(i, segEnd);
++      const a = i + raw.search(/\S/);
++      const b = i + raw.replace(/\s+$/, '').length;
++      return [a, b];
++    }
++    if (lt < 0) break;
++    if (text.startsWith('<!--', lt)) { const e = text.indexOf('-->', lt); i = e < 0 ? n : e + 3; continue; }
++    const e = tagEnd(text, lt);
++    if (e < 0) break;
++    const t = text.slice(lt, e + 1);
++    const close = /^<\/([A-Za-z][\w-]*)/.exec(t);
++    if (close) {
++      if (depth === 0) {
++        // end of our element: an empty 'text' caption is inserted here
++        return kind === 'text' ? (firstText || [lt, lt]) : null;
++      }
++      depth--;
++      i = e + 1;
++      continue;
++    }
++    const open = /^<([A-Za-z][\w-]*)/.exec(t);
++    if (open) {
++      const nm = open[1].toLowerCase();
++      if (depth === 0 && ((kind === 'legend' && nm === 'legend') || (kind === 'pnlCap' && /\bclass\s*=\s*["'][^"']*\bpnlCap\b/.test(t)))) {
++        const inner = text.indexOf('<', e + 1);
++        return inner < 0 ? null : [e + 1, inner];
++      }
++      if (nm === 'script' || nm === 'style') {
++        const endTag = text.toLowerCase().indexOf('</' + nm, e + 1);
++        i = endTag < 0 ? n : endTag;
++        continue;
++      }
++      if (!VOID.has(nm) && !/\/>$/.test(t)) depth++;
++    }
++    i = e + 1;
++  }
++  return null;
++}
++
++module.exports = { VOID, tagEnd, startTagOf, wrapperTagOf, styleOf, setStyle, setAttr, captionRange, escText, escAttr };
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index 21eb06f..7610e0d 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -216,14 +216,18 @@
+     return !(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+   }
+ 
+-  /* 5. overlay (closed shadow root, custom tag so page selectors never match it) */
+-  var host = null, sh = null, bH, bS, tH, tS, badge;
++  /* 5. overlay (shadow root, custom tag so page selectors never match it). Open, so
++        the window-level handler can tell which resize handle was pressed. */
++  var host = null, sh = null, bH, bS, tH, tS, badge, handles = [];
+   var hoverEl = null, selEl = null;
++  var DIRS = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+   function ensureOverlay() {
+     if (host || !document.documentElement) return;
+     host = document.createElement('htd-overlay');
+     host.setAttribute('style', 'all:initial;position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;pointer-events:none;');
+-    sh = host.attachShadow({ mode: 'closed' });
++    sh = host.attachShadow({ mode: 'open' });
++    var hs = '';
++    for (var i = 0; i < DIRS.length; i++) hs += '<div class="hd" data-dir="' + DIRS[i] + '"></div>';
+     sh.innerHTML = '<style>' +
+       '.b{position:fixed;display:none;box-sizing:border-box;pointer-events:none;}' +
+       '.h{outline:1px dashed #1e90ff;background:rgba(30,144,255,.08);}' +
+@@ -233,13 +237,32 @@
+       '.th{background:#1e5fa8;} .ts{background:#b35c00;}' +
+       '.m{position:fixed;right:6px;bottom:6px;pointer-events:none;font:11px/18px "Microsoft JhengHei",sans-serif;' +
+       'background:rgba(0,0,0,.66);color:#fff;padding:0 8px;border-radius:3px;}' +
+-      '</style><div class="b h"></div><div class="b s"></div><div class="t th"></div><div class="t ts"></div><div class="m"></div>';
++      '.hd{position:fixed;display:none;width:7px;height:7px;margin:-4px 0 0 -4px;box-sizing:border-box;' +
++      'background:#fff;border:1px solid #b35c00;pointer-events:auto;}' +
++      '.hd[data-dir=nw],.hd[data-dir=se]{cursor:nwse-resize;} .hd[data-dir=ne],.hd[data-dir=sw]{cursor:nesw-resize;}' +
++      '.hd[data-dir=n],.hd[data-dir=s]{cursor:ns-resize;} .hd[data-dir=e],.hd[data-dir=w]{cursor:ew-resize;}' +
++      '</style><div class="b h"></div><div class="b s"></div><div class="t th"></div><div class="t ts"></div><div class="m"></div>' + hs;
+     bH = sh.querySelector('.h'); bS = sh.querySelector('.s');
+     tH = sh.querySelector('.th'); tS = sh.querySelector('.ts');
+     badge = sh.querySelector('.m');
++    handles = Array.prototype.slice.call(sh.querySelectorAll('.hd'));
+     document.documentElement.appendChild(host);
+     drawBadge();
+   }
++  function placeHandles() {
++    var bx = mode === 'design' && selEl && !drag ? boxOf(selEl) : null;
++    var r = bx ? bx.node.getBoundingClientRect() : null;
++    for (var i = 0; i < handles.length; i++) {
++      var h = handles[i];
++      if (!r || (!r.width && !r.height)) { h.style.display = 'none'; continue; }
++      var d = h.getAttribute('data-dir');
++      var x = d.indexOf('w') >= 0 ? r.left : d.indexOf('e') >= 0 ? r.right : r.left + r.width / 2;
++      var y = d.indexOf('n') >= 0 ? r.top : d.indexOf('s') >= 0 ? r.bottom : r.top + r.height / 2;
++      h.style.display = 'block';
++      h.style.left = x + 'px';
++      h.style.top = y + 'px';
++    }
++  }
+   function labelOf(el, r) {
+     var v = vclOf(el);
+     var id = idOf(el);
+@@ -265,8 +288,9 @@
+     drawPending = false;
+     if (!host) return;
+     place(bS, tS, selEl);
+-    if (mode === 'design' && hoverEl && hoverEl !== selEl) place(bH, tH, hoverEl);
++    if (mode === 'design' && hoverEl && hoverEl !== selEl && !drag) place(bH, tH, hoverEl);
+     else { bH.style.display = 'none'; tH.style.display = 'none'; }
++    placeHandles();
+   }
+   function scheduleDraw() {
+     if (drawPending) return;
+@@ -276,7 +300,7 @@
+   function drawBadge() {
+     if (!badge) return;
+     badge.textContent = mode === 'design'
+-      ? '設計模式：點＝選元件　雙擊＝跳到事件程式碼　Ctrl+點＝操作一次　Alt+點＝選最內層'
++      ? '設計模式：點＝選取　拖曳＝移動　控制點＝改大小　方向鍵＝微調　雙擊／Enter＝事件程式碼　Esc＝上層　Tab＝下一個　Ctrl+點＝操作一次'
+       : '操作模式：點擊交給頁面（網路仍全部封鎖）';
+   }
+ 
+@@ -341,9 +365,128 @@
+       var l2 = serList(REC.get(p[0]), INHERIT_TYPES, budget);
+       if (l2.length) { d.inherited.push({ label: p[1], list: l2 }); budget -= l2.length; }
+     });
++    try { d.layout = layoutOf(el); } catch (e) { d.layout = null; }
++    try { d.caption = captionOf(el); } catch (e) { d.caption = null; }
++    try { d.look = lookOf(el); } catch (e) { d.look = null; }
+     return d;
+   }
+ 
++  /* 6b. WPF-style editing --------------------------------------------------------
++     The DOM is changed here (instant feedback); the extension then writes the same
++     change into the page source ('edit' messages). Only inline px values are edited;
++     anything else (%, auto, a class rule) is refused rather than guessed. */
++  var drag = null;
++  /* the element that actually carries the position: itself, or the generated
++     <span style="position:absolute…"> wrapper around an <input> */
++  function boxOf(el) {
++    if (!el || el === formRoot() || el === document.body) return null;
++    if (el.style && el.style.position === 'absolute') return { node: el, target: 'self' };
++    var p = el.parentElement;
++    if (p && !p.id && p !== document.body && p.style && p.style.position === 'absolute' && p.children.length === 1) return { node: p, target: 'parent' };
++    return null;
++  }
++  function pxOf(v) {
++    var m = /^\s*(-?\d+(?:\.\d+)?)px\s*$/.exec(v || '');
++    return m ? parseFloat(m[1]) : null;
++  }
++  function snap(bx) {
++    var s = bx.node.style;
++    return { left: s.left, top: s.top, width: s.width, height: s.height, right: s.right, bottom: s.bottom,
++      ow: bx.node.offsetWidth, oh: bx.node.offsetHeight };
++  }
++  /* new inline values for a move/resize by (dL, dT, dW, dH), from snapshot s0;
++     null when a value that must change is not an inline px number */
++  function deltaStyle(s0, dL, dT, dW, dH) {
++    var ch = {};
++    function axis(a, b, size, osize, dA, dS) {
++      if (!dA && !dS) return true;
++      var A = pxOf(s0[a]), B = pxOf(s0[b]), S = pxOf(s0[size]);
++      var hasA = s0[a] !== '', hasB = s0[b] !== '', hasS = s0[size] !== '';
++      if (hasA) { if (A == null) return false; if (dA) ch[a] = Math.round(A + dA) + 'px'; }
++      if (hasS) {
++        if (S == null) return false;
++        if (dS) ch[size] = Math.max(2, Math.round(S + dS)) + 'px';
++        if (!hasA && hasB) { if (B == null) return false; ch[b] = Math.round(B - dA - dS) + 'px'; }
++      } else if (hasB) {
++        if (B == null) return false;
++        ch[b] = Math.round(B - dA - dS) + 'px';
++        if (!hasA) return true;
++      } else if (dS) {
++        ch[size] = Math.max(2, Math.round(osize + dS)) + 'px';
++      }
++      if (!hasA && !hasB && dA) return false;   // not positioned on this axis
++      return true;
++    }
++    if (!axis('left', 'right', 'width', s0.ow, dL, dW)) return null;
++    if (!axis('top', 'bottom', 'height', s0.oh, dT, dH)) return null;
++    return ch;
++  }
++  function applyStyle(node, ch) { for (var k in ch) if (Object.prototype.hasOwnProperty.call(ch, k)) node.style[k] = ch[k]; }
++  function layoutOf(el) {
++    var bx = boxOf(el);
++    if (!bx) return null;
++    var s = bx.node.style;
++    return {
++      target: bx.target, left: bx.node.offsetLeft, top: bx.node.offsetTop, width: bx.node.offsetWidth, height: bx.node.offsetHeight,
++      raw: { left: s.left, top: s.top, width: s.width, height: s.height, right: s.right, bottom: s.bottom },
++    };
++  }
++  /* the element's caption and where it lives: value / legend / pnlCap / text */
++  function captionOf(el) {
++    var tn = el.tagName;
++    if (tn === 'INPUT') {
++      var ty = (el.getAttribute('type') || 'text').toLowerCase();
++      if (/^(checkbox|radio|button|submit|image|file|hidden|range|color)$/.test(ty)) return null;
++      return { kind: 'value', value: el.getAttribute('value') || '' };
++    }
++    if (/^(SELECT|TEXTAREA|IMG|TABLE|CANVAS|SVG)$/.test(tn)) return null;
++    if (tn === 'FIELDSET') { var lg = el.querySelector(':scope > legend'); return lg ? { kind: 'legend', value: lg.textContent } : null; }
++    var cap = el.querySelector(':scope > .pnlCap');
++    if (cap) return { kind: 'pnlCap', value: cap.textContent };
++    for (var n = el.firstChild; n; n = n.nextSibling) {
++      if (n.nodeType === 3 && /\S/.test(n.nodeValue)) return { kind: 'text', value: n.nodeValue.replace(/^\s+|\s+$/g, '') };
++    }
++    if (!el.children.length) return { kind: 'text', value: '' };
++    return null;
++  }
++  function setCaptionDom(el, kind, value) {
++    if (kind === 'value') { el.setAttribute('value', value); el.value = value; return; }
++    if (kind === 'legend') { var lg = el.querySelector(':scope > legend'); if (lg) lg.textContent = value; return; }
++    if (kind === 'pnlCap') { var cap = el.querySelector(':scope > .pnlCap'); if (cap) cap.textContent = value; return; }
++    for (var n = el.firstChild; n; n = n.nextSibling) {
++      if (n.nodeType === 3 && /\S/.test(n.nodeValue)) { n.nodeValue = value; return; }
++    }
++    el.appendChild(document.createTextNode(value));
++  }
++  function hexOf(c) {
++    var m = /^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)$/.exec(c || '');
++    if (!m) return '';
++    if (m[4] !== undefined && parseFloat(m[4]) === 0) return '';
++    return '#' + [m[1], m[2], m[3]].map(function (x) { return ('0' + (+x).toString(16)).slice(-2); }).join('');
++  }
++  function lookOf(el) {
++    var cs = getComputedStyle(el);
++    var form = /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(el.tagName);
++    return {
++      visible: el.style.display !== 'none',
++      enabled: form ? !el.disabled : null,
++      fontSize: Math.round(parseFloat(cs.fontSize) || 0),
++      color: hexOf(cs.color),
++      background: hexOf(cs.backgroundColor),
++    };
++  }
++  function sendEdit(el, payload) {
++    payload.type = 'edit';
++    payload.id = idOf(el);
++    payload.key = keyOf(el);
++    post(payload);
++  }
++  function commitLayout(el, bx, ch) {
++    var keys = Object.keys(ch);
++    if (!keys.length) return;
++    sendEdit(el, { what: 'style', target: bx.target, style: ch });
++  }
++
+   /* 7. selection ------------------------------------------------------------- */
+   function revealTabs(el) {
+     var panes = [];
+@@ -384,9 +527,27 @@
+   }
+ 
+   /* 8. event blocking (design mode) and hover -------------------------------- */
++  var justDragged = false;
++  function startDrag(el, bx, how, e) {
++    drag = { el: el, bx: bx, how: how, s0: snap(bx), x: e.clientX, y: e.clientY, active: how !== 'move', last: null };
++  }
+   function onBlock(e) {
+     var t = e.type;
+-    if (host && e.target === host) return;
++    if (drag && t === 'mouseup') endDrag();
++    if (host && e.target === host) {
++      /* our own overlay: a resize handle, never the page's business */
++      if (mode === 'design') {
++        var real = e.composedPath ? e.composedPath()[0] : null;
++        var dir = real && real.getAttribute ? real.getAttribute('data-dir') : null;
++        if (t === 'mousedown' && e.button === 0 && dir && selEl) {
++          var hb = boxOf(selEl);
++          if (hb) startDrag(selEl, hb, dir, e);
++        }
++        e.stopImmediatePropagation();
++        e.preventDefault();
++      }
++      return;
++    }
+     if (t === 'click' || t === 'auxclick') {
+       var a = closestSafe(e.target, 'a[href]');
+       if (a) {
+@@ -403,8 +564,16 @@
+     }
+     e.stopImmediatePropagation();
+     if (t !== 'touchstart' || e.cancelable) e.preventDefault();
+-    if (t === 'click') select(pick(e.target, e.altKey), 'click', false);
+-    else if (t === 'dblclick') {
++    if (t === 'mousedown' && e.button === 0) {
++      /* WPF: pressing selects, and dragging from there moves */
++      var md = pick(e.target, e.altKey);
++      if (md !== selEl) select(md, 'click', false);
++      var bx = md ? boxOf(md) : null;
++      if (bx) startDrag(md, bx, 'move', e);
++    } else if (t === 'click') {
++      if (justDragged) { justDragged = false; return; }
++      select(pick(e.target, e.altKey), 'click', false);
++    } else if (t === 'dblclick') {
+       var el = pick(e.target, e.altKey);
+       select(el, 'click', false);
+       if (el) post({ type: 'dblclick', key: keyOf(el) });
+@@ -415,15 +584,54 @@
+     origAdd.call(window, t, onBlock, { capture: true, passive: false });
+   });
+   origAdd.call(window, 'mousemove', function (e) {
++    if (drag) {
++      var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
++      if (!drag.active) {
++        if (Math.abs(dx) + Math.abs(dy) < 3) return;   // a click, not a drag (yet)
++        drag.active = true;
++      }
++      var h = drag.how, dL = 0, dT = 0, dW = 0, dH = 0;
++      if (h === 'move') { dL = dx; dT = dy; }
++      else {
++        if (h.indexOf('e') >= 0) dW = dx;
++        if (h.indexOf('w') >= 0) { dL = dx; dW = -dx; }
++        if (h.indexOf('s') >= 0) dH = dy;
++        if (h.indexOf('n') >= 0) { dT = dy; dH = -dy; }
++      }
++      var ch = deltaStyle(drag.s0, dL, dT, dW, dH);
++      if (ch) { applyStyle(drag.bx.node, ch); drag.last = ch; }
++      else drag.refused = true;
++      e.preventDefault();
++      e.stopImmediatePropagation();
++      scheduleDraw();
++      return;
++    }
+     if (mode !== 'design') { if (hoverEl) { hoverEl = null; scheduleDraw(); } return; }
+     var el = pick(e.target, e.altKey);
+     if (el !== hoverEl) { hoverEl = el; scheduleDraw(); }
+   }, true);
++  /* called from onBlock (which stops mouseup for the page) and, as a fallback, here */
++  function endDrag() {
++    if (!drag) return;
++    var d = drag;
++    drag = null;
++    if (d.active) {
++      justDragged = true;
++      setTimeout(function () { justDragged = false; }, 0);
++      if (d.last) { commitLayout(d.el, d.bx, d.last); selEl = null; select(d.el, 'edit', false); }
++      else if (d.refused) post({ type: 'editRefused', why: '這個元件的位置／大小不是寫在自己 style 裡的 px 數值，不能拖曳' });
++    }
++    scheduleDraw();
++  }
++  origAdd.call(window, 'mouseup', endDrag, true);
+   origAdd.call(document, 'mouseleave', function () { hoverEl = null; scheduleDraw(); }, true);
+   origAdd.call(window, 'scroll', scheduleDraw, { capture: true, passive: true });
+   origAdd.call(window, 'resize', scheduleDraw, true);
+-  /* keyboard, design mode, a component selected: move like the WPF document outline.
+-     Only plain arrows / Enter / Esc -- every other key (VS Code shortcuts) is left alone. */
++  /* keyboard, design mode, a component selected -- the WPF designer's keys:
++       arrows = nudge 1px (Shift = 10px)      Ctrl+arrows = resize 1px (Ctrl+Shift = 10px)
++       Esc = select the parent                Tab / Shift+Tab = next / previous component
++       Enter = open the default event's code
++     Every other key (Ctrl+Z, Ctrl+S, VS Code shortcuts) is left alone. */
+   function compParent(el) {
+     var fr = formRoot();
+     for (var p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+@@ -431,34 +639,66 @@
+     }
+     return null;
+   }
+-  function compChildren(parent) {
+-    var scope = parent || document.body;
+-    var all = scope.querySelectorAll('[id]');
++  function allComps() {
+     var out = [];
+-    for (var i = 0; i < all.length; i++) {
+-      var x = all[i];
+-      if (/^(SCRIPT|STYLE|TEMPLATE|LINK|META)$/.test(x.tagName)) continue;
+-      if (compParent(x) === (parent || null)) out.push(x);
+-    }
++    var fr = formRoot();
++    if (fr) out.push(fr);
++    var all = document.body ? document.body.querySelectorAll('[id]') : [];
++    for (var i = 0; i < all.length; i++) if (!/^(SCRIPT|STYLE|TEMPLATE|LINK|META)$/.test(all[i].tagName)) out.push(all[i]);
+     return out;
+   }
++  var nudge = null, nudgeTimer = 0;
++  function flushNudge() {
++    clearTimeout(nudgeTimer);
++    var n = nudge;
++    nudge = null;
++    if (n && n.last) { commitLayout(n.el, n.bx, n.last); selEl = null; select(n.el, 'edit', false); }
++  }
++  var ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+   origAdd.call(window, 'keydown', function (e) {
+-    if (mode !== 'design' || !selEl || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
++    if (mode !== 'design' || !selEl || e.altKey || e.metaKey) return;
+     var t = e.target;
+     if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+-    var next = null;
+-    if (e.key === 'Escape') { select(null, 'key', false); return; }
+-    if (e.key === 'Enter') { e.preventDefault(); post({ type: 'dblclick', key: keyOf(selEl) }); return; }
+-    if (e.key === 'ArrowUp') next = compParent(selEl);
+-    else if (e.key === 'ArrowDown') next = compChildren(selEl)[0] || null;
+-    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+-      var sib = compChildren(compParent(selEl));
+-      var i = sib.indexOf(selEl);
+-      if (i >= 0) next = sib[i + (e.key === 'ArrowRight' ? 1 : -1)] || null;
+-    } else return;
++    var k = e.key;
++    if (k === 'Escape' && !e.ctrlKey) {
++      e.preventDefault();
++      flushNudge();
++      var p = compParent(selEl);
++      if (p) { selEl = null; select(p, 'key', true); } else select(null, 'key', false);
++      return;
++    }
++    if (k === 'Tab' && !e.ctrlKey) {
++      e.preventDefault();
++      e.stopImmediatePropagation();
++      flushNudge();
++      var list = allComps();
++      var i = list.indexOf(selEl);
++      var nx = list[(i + (e.shiftKey ? -1 : 1) + list.length) % list.length];
++      if (nx) { selEl = null; select(nx, 'key', true); }
++      return;
++    }
++    if (k === 'Enter' && !e.ctrlKey && !e.shiftKey) {
++      e.preventDefault();
++      flushNudge();
++      post({ type: 'dblclick', key: keyOf(selEl) });
++      return;
++    }
++    if (!ARROWS[k]) return;
+     e.preventDefault();
+     e.stopImmediatePropagation();
+-    if (next) { selEl = null; select(next, 'key', true); }
++    var bx = boxOf(selEl);
++    if (!bx) { post({ type: 'editRefused', why: '這個元件不是用 position:absolute 定位的，不能用方向鍵移動' }); return; }
++    var step = e.shiftKey ? 10 : 1;
++    if (!nudge || nudge.el !== selEl) { flushNudge(); nudge = { el: selEl, bx: bx, s0: snap(bx), dL: 0, dT: 0, dW: 0, dH: 0, last: null }; }
++    if (e.ctrlKey) { nudge.dW += ARROWS[k][0] * step; nudge.dH += ARROWS[k][1] * step; }
++    else { nudge.dL += ARROWS[k][0] * step; nudge.dT += ARROWS[k][1] * step; }
++    var ch = deltaStyle(nudge.s0, nudge.dL, nudge.dT, nudge.dW, nudge.dH);
++    if (!ch) { nudge = null; post({ type: 'editRefused', why: '這個元件的位置／大小不是寫在自己 style 裡的 px 數值' }); return; }
++    applyStyle(bx.node, ch);
++    nudge.last = ch;
++    scheduleDraw();
++    clearTimeout(nudgeTimer);
++    nudgeTimer = setTimeout(flushNudge, 400);   // one source edit (one undo step) per burst of keys
+   }, true);
+   setInterval(function () { if (selEl) scheduleDraw(); }, 400);
+ 
+@@ -547,6 +787,53 @@
+       case 'refreshTree':
+         sendTree(true);
+         break;
++      /* edits from the properties panel: change the DOM, then report the same change
++         as an 'edit' for the extension to write into the source */
++      case 'setLayout': {
++        var el3 = els.get(m.key);
++        if (!el3 || !el3.isConnected) break;
++        var bx3 = boxOf(el3);
++        if (!bx3) { post({ type: 'editRefused', why: '這個元件不是用 position:absolute 定位的，位置／大小不能改' }); break; }
++        var s3 = snap(bx3), n3 = bx3.node;
++        var dL3 = m.left != null ? m.left - n3.offsetLeft : 0, dT3 = m.top != null ? m.top - n3.offsetTop : 0;
++        var dW3 = m.width != null ? m.width - n3.offsetWidth : 0, dH3 = m.height != null ? m.height - n3.offsetHeight : 0;
++        var ch3 = deltaStyle(s3, dL3, dT3, dW3, dH3);
++        if (!ch3) { post({ type: 'editRefused', why: '這個元件的位置／大小不是寫在自己 style 裡的 px 數值' }); break; }
++        applyStyle(n3, ch3);
++        commitLayout(el3, bx3, ch3);
++        selEl = null; select(el3, 'edit', false);
++        break;
++      }
++      case 'setCaption': {
++        var el4 = els.get(m.key);
++        if (!el4 || !el4.isConnected) break;
++        var c4 = captionOf(el4);
++        if (!c4) { post({ type: 'editRefused', why: '這個元件沒有可以直接改的文字' }); break; }
++        var v4 = String(m.value == null ? '' : m.value);
++        setCaptionDom(el4, c4.kind, v4);
++        sendEdit(el4, { what: 'caption', capKind: c4.kind, value: v4 });
++        selEl = null; select(el4, 'edit', false);
++        break;
++      }
++      case 'setLook': {
++        var el5 = els.get(m.key);
++        if (!el5 || !el5.isConnected) break;
++        var st5 = null, at5 = null;
++        if (m.prop === 'visible') st5 = { display: m.value ? null : 'none' };
++        else if (m.prop === 'enabled') at5 = { disabled: m.value ? null : true };
++        else if (m.prop === 'fontSize') st5 = { 'font-size': Math.max(1, Math.round(+m.value || 0)) + 'px' };
++        else if (m.prop === 'color') st5 = { color: String(m.value) };
++        else if (m.prop === 'background') st5 = { 'background-color': String(m.value) };
++        if (st5) {
++          for (var k5 in st5) { if (st5[k5] == null) el5.style.removeProperty(k5); else el5.style.setProperty(k5, st5[k5]); }
++          sendEdit(el5, { what: 'style', target: 'self', style: st5 });
++        } else if (at5) {
++          el5.disabled = !m.value;
++          sendEdit(el5, { what: 'attr', attr: at5 });
++        }
++        selEl = null; select(el5, 'edit', false);
++        break;
++      }
+       case 'listenersAll': {
+         /* for the wiring overview: every control's own listener types (+ inline on*) */
+         var map = {};
+@@ -644,5 +931,6 @@
+     version: 1,
+     mode: function () { return mode; },
+     selectById: function (id) { var el = byId(id); if (el) { selEl = null; select(el, 'test', true); } return !!el; },
++    drawNow: function () { draw(); },   /* tests: headless virtual time may not run animation frames */
+   };
+ })();
+diff --git a/tools/vscode-htdesigner/media/props.css b/tools/vscode-htdesigner/media/props.css
+index 8c2d2d3..9b80a3a 100644
+--- a/tools/vscode-htdesigner/media/props.css
++++ b/tools/vscode-htdesigner/media/props.css
+@@ -84,6 +84,16 @@ table.kv td.v { font-family: var(--vscode-editor-font-family); word-break: break
+ .hint { margin-left: 6px; color: var(--vscode-descriptionForeground); }
+ .subhead { padding: 6px 12px 2px; color: var(--vscode-descriptionForeground); font-weight: 600; }
+ .ind.subhead { padding-left: 28px; }
++table.edit td.v input.num, table.edit td.v input.txt {
++  font: inherit; font-family: var(--vscode-editor-font-family); color: var(--vscode-input-foreground);
++  background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent);
++  padding: 0 4px; box-sizing: border-box;
++}
++table.edit td.v input.num { width: 80px; }
++table.edit td.v input.txt { width: calc(100% - 8px); }
++table.edit td.v input:focus { outline: 1px solid var(--vscode-focusBorder); }
++table.edit td.v input:disabled { opacity: .5; }
++table.edit td.v input.col { width: 34px; height: 18px; padding: 0; border: 1px solid var(--vscode-input-border, rgba(128,128,128,.5)); vertical-align: middle; }
+ .foot { padding: 8px 12px; color: var(--vscode-descriptionForeground); font-size: .9em; line-height: 1.5; }
+ .fname { font-family: var(--vscode-editor-font-family); color: var(--vscode-foreground); }
+ .fnote { margin-top: 2px; }
+diff --git a/tools/vscode-htdesigner/media/props.js b/tools/vscode-htdesigner/media/props.js
+index ef1e9e0..504dbb6 100644
+--- a/tools/vscode-htdesigner/media/props.js
++++ b/tools/vscode-htdesigner/media/props.js
+@@ -132,6 +132,81 @@
+     h.appendChild(bar);
+     root.appendChild(h);
+ 
++    /* editable properties -- the WPF property grid: commit on Enter or leaving the field */
++    var ed = data.edit;
++    if (ed && (ed.layout || ed.caption || ed.look)) {
++      section('edit', '外觀與版面（可編輯）', null, function (body) {
++        var tb = el('table', 'kv edit');
++        function row(label, input, hint) {
++          var tr = el('tr');
++          tr.appendChild(el('td', 'k', label));
++          var td = el('td', 'v');
++          td.appendChild(input);
++          if (hint) td.appendChild(el('span', 'hint', hint));
++          tr.appendChild(td);
++          tb.appendChild(tr);
++        }
++        function num(field, value, disabled, onCommit) {
++          var i = el('input', 'num');
++          i.type = 'number'; i.step = '1'; i.value = String(value);
++          i.setAttribute('data-field', field);
++          i.disabled = !!disabled;
++          i.addEventListener('change', function () { if (i.value !== '' && isFinite(+i.value)) onCommit(Math.round(+i.value)); });
++          i.addEventListener('keydown', function (e) { if (e.key === 'Enter') i.blur(); });
++          return i;
++        }
++        var lay = ed.layout;
++        var layOk = lay && ed.layoutInSource;
++        if (lay) {
++          ['left', 'top', 'width', 'height'].forEach(function (k) {
++            var label = k.charAt(0).toUpperCase() + k.slice(1);
++            row(label, num(k, lay[k], !layOk, function (v) {
++              var msg = { type: 'setLayout' };
++              msg[k] = v;
++              vscode.postMessage(msg);
++            }), k === 'left' && lay.target === 'parent' ? '（外層 span 定位）' : '');
++          });
++        }
++        var cap = ed.caption;
++        if (cap) {
++          var ti = el('input', 'txt');
++          ti.type = 'text'; ti.value = cap.value; ti.setAttribute('data-field', 'caption');
++          ti.disabled = !ed.inSource;
++          ti.addEventListener('change', function () { vscode.postMessage({ type: 'setCaption', value: ti.value }); });
++          ti.addEventListener('keydown', function (e) { if (e.key === 'Enter') ti.blur(); });
++          row(cap.kind === 'value' ? 'Text' : 'Caption', ti, '');
++        }
++        var lk = ed.look;
++        if (lk) {
++          var vis = el('input');
++          vis.type = 'checkbox'; vis.checked = !!lk.visible; vis.setAttribute('data-field', 'visible'); vis.disabled = !ed.inSource;
++          vis.addEventListener('change', function () { vscode.postMessage({ type: 'setLook', prop: 'visible', value: vis.checked }); });
++          row('Visible', vis, '');
++          if (lk.enabled !== null && lk.enabled !== undefined) {
++            var en = el('input');
++            en.type = 'checkbox'; en.checked = !!lk.enabled; en.setAttribute('data-field', 'enabled'); en.disabled = !ed.inSource;
++            en.addEventListener('change', function () { vscode.postMessage({ type: 'setLook', prop: 'enabled', value: en.checked }); });
++            row('Enabled', en, '');
++          }
++          row('Font.Size', num('fontSize', lk.fontSize, !ed.inSource, function (v) { vscode.postMessage({ type: 'setLook', prop: 'fontSize', value: v }); }), 'px');
++          [['color', 'Font.Color'], ['background', 'Color']].forEach(function (p) {
++            var c = el('input', 'col');
++            c.type = 'color'; c.value = lk[p[0]] || (p[0] === 'color' ? '#000000' : '#ffffff');
++            c.setAttribute('data-field', p[0]); c.disabled = !ed.inSource;
++            c.addEventListener('change', function () { vscode.postMessage({ type: 'setLook', prop: p[0], value: c.value }); });
++            row(p[1], c, lk[p[0]] ? lk[p[0]] : '（未設定）');
++          });
++        }
++        body.appendChild(tb);
++        var note;
++        if (!ed.inSource) note = '這個元件是頁面 JS 產生的，HTML 原始碼裡沒有它，不能在這裡改。';
++        else if (lay && !ed.layoutInSource) note = '位置由外層元素決定、原始碼對不上，位置／大小不能改；文字和外觀可以。';
++        else note = '也可以直接在畫面上拖曳、拉控制點、用方向鍵微調。改的是 HTML 原始碼' + (ed.dirty ? '（目前有未存檔的修改）' : '') +
++          '：Ctrl+Z 復原、Ctrl+S 存檔。這一頁由 sync_web.py 同步，--apply 會覆蓋。';
++        body.appendChild(el('div', 'dim pad small', note));
++      });
++    }
++
+     /* events */
+     section('events', '事件', data.events.length, function (body) {
+       if (!data.events.length) {
+@@ -331,7 +406,18 @@
+ 
+   window.addEventListener('message', function (e) {
+     var m = e.data;
+-    if (m && m.type === 'show') { data = m.data; render(); }
++    if (m && m.type === 'show') {
++      // keep the focused field (typing Left, Tab to Top …) across the re-render an edit causes
++      var a = document.activeElement;
++      var field = a && a.getAttribute ? a.getAttribute('data-field') : null;
++      var sameComp = data && m.data && data.comp && m.data.comp && data.comp.key === m.data.comp.key;
++      data = m.data;
++      render();
++      if (field && sameComp) {
++        var again = root.querySelector('[data-field="' + field + '"]');
++        if (again) { again.focus(); if (again.select) try { again.select(); } catch (x) { /* ignore */ } }
++      }
++    }
+   });
+   render();
+   vscode.postMessage({ type: 'ready' });
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 25a8dae..2d15365 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+-  "description": "像 WPF 設計工具一樣看 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼）。",
+-  "version": "0.8.0",
++  "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
++  "version": "0.9.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/fake_vscode.js b/tools/vscode-htdesigner/test/fake_vscode.js
+index a275c3f..b80e20d 100644
+--- a/tools/vscode-htdesigner/test/fake_vscode.js
++++ b/tools/vscode-htdesigner/test/fake_vscode.js
+@@ -27,6 +27,10 @@ class ThemeColor { constructor(id) { this.id = id; } }
+ class RelativePattern { constructor(base, glob) { this.base = base; this.glob = glob; } }
+ class Disposable { constructor(fn) { this.fn = fn; } dispose() { if (this.fn) this.fn(); } }
+ class CodeLens { constructor(range, command) { this.range = range; this.command = command; } }
++class WorkspaceEdit {
++  constructor() { this.ops = []; }
++  replace(uri, range, text) { this.ops.push({ uri, range, text }); }
++}
+ const FileSystemError = {
+   FileNotFound: u => Object.assign(new Error('FileNotFound ' + u), { code: 'FileNotFound' }),
+   NoPermissions: u => Object.assign(new Error('NoPermissions ' + u), { code: 'NoPermissions' }),
+@@ -41,7 +45,7 @@ const state = {
+ 
+ const vscode = {
+   Uri, EventEmitter, Position, Range, Selection, TreeItem, ThemeIcon, ThemeColor, RelativePattern,
+-  Disposable, CodeLens, FileSystemError, FileType: { File: 1, Directory: 2 }, FilePermission: { Readonly: 1 },
++  Disposable, CodeLens, WorkspaceEdit, FileSystemError, FileType: { File: 1, Directory: 2 }, FilePermission: { Readonly: 1 },
+   languages: {
+     registerCodeLensProvider: (sel, p) => { vscode._lens = p; return disp(); },
+   },
+@@ -91,6 +95,18 @@ const vscode = {
+     registerFileSystemProvider: (s, p, o) => { vscode._fs = { scheme: s, p, o }; return disp(); },
+     createFileSystemWatcher: () => ({ onDidChange() {}, onDidCreate() {}, onDidDelete() {}, dispose() {} }),
+     onDidChangeTextDocument: () => disp(),
++    // edits go to documents registered in vscode._docs (uri string -> { offsetAt, _setText, getText })
++    applyEdit: async we => {
++      for (const op of we.ops) {
++        const doc = (vscode._docs || {})[op.uri.toString()];
++        if (!doc) return false;
++        const t = doc.getText();
++        const s = doc.offsetAt(op.range.start), e = doc.offsetAt(op.range.end);
++        doc._setText(t.slice(0, s) + op.text + t.slice(e));
++        rec('applyEdit', [op.uri.toString(), s, e, op.text]);
++      }
++      return true;
++    },
+     openTextDocument: async (uri) => {
+       if (vscode._fs && uri.scheme === vscode._fs.scheme) {
+         const b = Buffer.from(vscode._fs.p.readFile(uri));
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 3541416..818063a 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -159,6 +159,36 @@ exports.run = async function () {
+     const exitEv = ov && ov.rows.find(r => r.id === 'sbtExit');
+     ok(exitEv && exitEv.events[0].web === 'yes', 'overview: sbtExit.OnClick has a real web listener', exitEv ? exitEv.events[0].web : '-');
+ 
++    // WPF-style editing in the real designer: edit -> dirty -> undo -> clean. Never saved.
++    const original = d.doc.getText();
++    d.post({ type: 'selectId', id: 'spbSave', origin: 'editor' });
++    const s3 = await waitFor(() => (d.sel && d.sel.info && d.sel.info.id === 'spbSave' ? d.sel : null), 5000);
++    ok(!!(s3 && s3.info.layout && s3.info.layout.target === 'self' && s3.info.caption && s3.info.caption.value === 'Save'),
++      'real probe: spbSave layout + caption are editable', s3 && s3.info.layout ? JSON.stringify(s3.info.layout.raw) : '-');
++    if (s3) {
++      d.panel.reveal(d.panel.viewColumn, false);
++      await waitFor(() => hub.active === d, 3000);
++      d.post({ type: 'setLayout', key: s3.info.key, left: 60 });
++      const moved = await waitFor(() => (d.doc.isDirty && /id="spbSave"[^>]*left:60px;/.test(d.doc.getText()) ? true : null), 5000);
++      ok(!!moved, 'setLayout Left=60 -> the source says left:60px, the page is dirty (not saved)');
++      d.post({ type: 'setCaption', key: s3.info.key, value: 'Save It' });
++      const capd = await waitFor(() => (/>Save It<\/button>/.test(d.doc.getText()) ? true : null), 5000);
++      ok(!!capd, 'setCaption -> <button id="spbSave"> text in the source');
++      // Ctrl+Z, twice, with the designer active
++      d.panel.reveal(d.panel.viewColumn, false);
++      await sleep(300);
++      await vscode.commands.executeCommand('undo');
++      await sleep(300);
++      await vscode.commands.executeCommand('undo');
++      const undone = await waitFor(() => (d.doc.getText() === original ? true : null), 5000);
++      ok(!!undone, 'undo twice (Ctrl+Z) restores the source exactly', undone ? '' : 'isDirty=' + d.doc.isDirty);
++      if (!undone || d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
++      ok(!d.doc.isDirty && d.doc.getText() === original, 'page clean again, nothing saved');
++      // the undo re-rendered the page from the source: the tree comes back
++      const back = await waitFor(() => (d.treeData.length ? true : null), 8000);
++      ok(!!back, 'the page re-renders after undo');
++    }
++
+     // mode toggle reaches the probe (no error)
+     await vscode.commands.executeCommand('ht9045Designer.toggleMode');
+     ok(d.mode === 'operate', 'toggle -> operate mode');
+diff --git a/tools/vscode-htdesigner/test/panels_render.ps1 b/tools/vscode-htdesigner/test/panels_render.ps1
+index f76ef47..55a40d8 100644
+--- a/tools/vscode-htdesigner/test/panels_render.ps1
++++ b/tools/vscode-htdesigner/test/panels_render.ps1
+@@ -71,6 +71,14 @@ R.propRows = document.querySelectorAll('table.kv tr').length;
+ var ev = document.querySelector('.row.event');
+ if (ev) ev.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+ R.afterDbl = window.__out.map(function (m) { return m.type; });
++R.hasEdit = secs.indexOf('外觀與版面（可編輯）') >= 0;
++var left = document.querySelector('input[data-field="left"]');
++var cap = document.querySelector('input[data-field="caption"]');
++R.leftVal = left ? left.value : null;
++R.capVal = cap ? cap.value : null;
++if (left) { left.value = '77'; left.dispatchEvent(new Event('change')); }
++if (cap) { cap.value = 'OK'; cap.dispatchEvent(new Event('change')); }
++R.afterEdit = window.__out.slice(-2).map(function (m) { return m.type + ':' + (m.left != null ? m.left : m.value); });
+ '@
+ $r1 = Render 'props_spbSave' 'props.css' 'props.js' 'show' (Join-Path $dump 'props_spbSave.json') $propsChecks
+ if ($r1) {
+@@ -79,6 +87,8 @@ if ($r1) {
+   Check ($r1.hasHandler -and $r1.hasGolden440 -and $r1.hasCmd) 'props panel shows spbSaveClick, cHotPlate.cpp:440 and recipe.doc.put' ''
+   Check ($r1.targets -ge 5 -and $r1.propRows -ge 10) 'props panel rows' "targets=$($r1.targets) propRows=$($r1.propRows)"
+   Check (($r1.afterDbl -join ',') -match 'openEvent') 'double-click on an event row posts openEvent' ($r1.afterDbl -join ',')
++  Check ($r1.hasEdit -and $r1.leftVal -eq '54' -and $r1.capVal -eq 'Save') 'editable section: Left = 54, Caption = Save' "left=$($r1.leftVal) caption=$($r1.capVal)"
++  Check (($r1.afterEdit -join ',') -eq 'setLayout:77,setCaption:OK') 'changing Left / Caption posts setLayout / setCaption' ($r1.afterEdit -join ',')
+ } else { $script:bad++ }
+ $r2 = Render 'props_XST1' 'props.css' 'props.js' 'show' (Join-Path $dump 'props_XST1.json') $propsChecks
+ if ($r2) {
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index b7a7a32..042fbb2 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -54,18 +54,9 @@
+         btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
+         R.ctrlClickOperates = ran === 1;
+ 
+-        /* keyboard: up = parent component, down = first child, right = next sibling, Enter = default event */
+-        var key = function (k) {
+-          window.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+-          var s = msgs('select').pop();
+-          return s && s.info ? s.info.id : null;
+-        };
+-        R.keyUp = key('ArrowUp');
+-        R.keyDown = key('ArrowDown');
+-        R.keyRight = key('ArrowRight');
+-        R.keyLeft = key('ArrowLeft');
++        /* Enter = open the default event (arrows/Esc/Tab are checked in editTests) */
+         var before = msgs('dblclick').length;
+-        key('Enter');
++        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+         R.keyEnterOpens = msgs('dblclick').length === before + 1;
+       }
+ 
+@@ -101,6 +92,104 @@
+     } catch (e) {
+       R.driverError = String(e && e.stack || e);
+     }
+-    setTimeout(finish, 800);
++    setTimeout(editTests, 300);
+   }, 1500);
++
++  /* WPF-style editing (DOM only here; the extension writes the source) */
++  function editTests() {
++    try {
++      var btn = document.getElementById('spbSave');
++      if (!btn) { setTimeout(finish, 100); return; }
++      var edits = function () { return msgs('edit'); };
++      var mouse = function (type, target, x, y, extra) {
++        var o = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, button: 0 };
++        for (var k in extra || {}) o[k] = extra[k];
++        target.dispatchEvent(new MouseEvent(type, o));
++      };
++      var r = btn.getBoundingClientRect();
++      var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
++      var l0 = btn.style.left, t0 = btn.style.top;
++      /* drag the Save button by (+20, +10) */
++      var n0 = edits().length;
++      mouse('mousedown', btn, cx, cy);
++      mouse('mousemove', btn, cx + 10, cy + 5);
++      mouse('mousemove', btn, cx + 20, cy + 10);
++      mouse('mouseup', btn, cx + 20, cy + 10);
++      var e1 = edits()[n0];
++      R.dragEdit = e1 ? JSON.stringify(e1.style) + ' ' + e1.target : null;
++      R.dragOk = !!e1 && e1.what === 'style' && e1.id === 'spbSave' && e1.style.left === (parseFloat(l0) + 20) + 'px' && e1.style.top === (parseFloat(t0) + 10) + 'px' && btn.style.left === e1.style.left;
++      /* a click without moving is not a drag */
++      var n1 = edits().length;
++      mouse('mousedown', btn, cx + 20, cy + 10);
++      mouse('mouseup', btn, cx + 20, cy + 10);
++      R.clickNoEdit = edits().length === n1;
++      /* resize from the south-east handle (open shadow root) */
++      var host = document.querySelector('htd-overlay');
++      var se = host && host.shadowRoot ? host.shadowRoot.querySelector('.hd[data-dir="se"]') : null;
++      if (se) {
++        var hr = se.getBoundingClientRect();
++        var w0 = btn.style.width, h0 = btn.style.height;
++        var n2 = edits().length;
++        mouse('mousedown', se, hr.left + 3, hr.top + 3);
++        mouse('mousemove', btn, hr.left + 3 + 15, hr.top + 3 + 6);
++        mouse('mouseup', btn, hr.left + 3 + 15, hr.top + 3 + 6);
++        var e2 = edits()[n2];
++        R.resizeEdit = e2 ? JSON.stringify(e2.style) : null;
++        R.resizeOk = !!e2 && e2.style.width === (parseFloat(w0) + 15) + 'px' && e2.style.height === (parseFloat(h0) + 6) + 'px' && !('left' in e2.style);
++      }
++      /* the positioning wrapper of an input */
++      var inp = document.getElementById('XST1');
++      if (inp) {
++        var ir = inp.getBoundingClientRect();
++        var n3 = edits().length;
++        mouse('mousedown', inp, ir.left + 5, ir.top + 5);
++        mouse('mousemove', inp, ir.left + 5 + 7, ir.top + 5);
++        mouse('mouseup', inp, ir.left + 5 + 7, ir.top + 5);
++        var e3 = edits()[n3];
++        R.wrapperEdit = e3 ? e3.target + ' ' + JSON.stringify(e3.style) : null;
++        R.wrapperOk = !!e3 && e3.id === 'XST1' && e3.target === 'parent' && /px$/.test(e3.style.left);
++      }
++      /* keyboard: Esc = parent, Tab = next, arrows = nudge (one edit per burst) */
++      window.__htdProbe.selectById('spbSave');
++      var key = function (k, extra) {
++        var o = { key: k, bubbles: true, cancelable: true };
++        for (var q in extra || {}) o[q] = extra[q];
++        window.dispatchEvent(new KeyboardEvent('keydown', o));
++        var s = msgs('select').pop();
++        return s && s.info ? s.info.id : null;
++      };
++      R.escParent = key('Escape');
++      window.__htdProbe.selectById('spbSave');
++      R.tabNext = key('Tab');
++      window.__htdProbe.selectById('spbSave');
++      var n4 = edits().length;
++      var lBefore = parseFloat(btn.style.left);
++      key('ArrowRight'); key('ArrowRight'); key('ArrowRight', { shiftKey: true });
++      R.nudgeDom = parseFloat(btn.style.left) - lBefore;
++      setTimeout(function () {
++        /* the 8 resize handles are drawn around the selection (next animation frame) */
++        window.__htdProbe.drawNow();
++        var hs = host && host.shadowRoot ? host.shadowRoot.querySelectorAll('.hd') : [];
++        R.handlesShown = Array.prototype.filter.call(hs, function (h) { return h.style.display === 'block'; }).length;
++        var e4 = edits().slice(n4);
++        R.nudgeEdits = e4.length;
++        R.nudgeOk = e4.length === 1 && e4[0].style.left === (lBefore + 12) + 'px';
++        /* from the properties panel: caption */
++        var sel = msgs('select').pop();
++        window.postMessage({ __htd: 1, type: 'setCaption', key: sel.info.key, value: 'Save2' }, '*');
++        setTimeout(function () {
++          var e5 = edits().pop();
++          R.captionEdit = e5 ? e5.what + ' ' + e5.capKind + ' ' + e5.value : null;
++          R.captionOk = !!e5 && e5.what === 'caption' && e5.capKind === 'text' && e5.value === 'Save2' && /Save2/.test(btn.textContent);
++          var s2 = msgs('select').pop();
++          R.selLayout = s2 && s2.info && s2.info.layout ? s2.info.layout.target + ' ' + s2.info.layout.width + 'x' + s2.info.layout.height : null;
++          R.selCaption = s2 && s2.info && s2.info.caption ? s2.info.caption.kind + ':' + s2.info.caption.value : null;
++          finish();
++        }, 100);
++      }, 600);
++    } catch (e) {
++      R.editError = String(e && e.stack || e);
++      finish();
++    }
++  }
+ })();
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index 22dfe74..a7d8821 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -41,7 +41,32 @@ foreach ($p in $Pages) {
+     $json = [System.Net.WebUtility]::HtmlDecode($m.Groups[1].Value)
+     [IO.File]::WriteAllText((Join-Path $work ($p + '.result.json')), $json, (New-Object System.Text.UTF8Encoding($false)))
+     Write-Host "[$p]"
+-    ($json | ConvertFrom-Json | Select-Object -Property * -ExcludeProperty selInfo, treeNodes | Format-List | Out-String -Width 220).Trim()
++    $R = $json | ConvertFrom-Json
++    ($R | Select-Object -Property * -ExcludeProperty selInfo, treeNodes | Format-List | Out-String -Width 220).Trim()
++    # judge, do not just print
++    $must = [ordered]@{
++      'ready'                      = [bool]$R.ready
++      'tree has the form root'     = [bool]$R.treeHasForm
++      'design mode blocks clicks'  = [bool]$R.blockedInDesign
++      'Ctrl+click operates'        = [bool]$R.ctrlClickOperates
++      'Enter opens the event'      = [bool]$R.keyEnterOpens
++      'CSP blocked ws://127.0.0.1:9' = [bool](@($R.violations) -match 'ws://127\.0\.0\.1:9').Count
++      'no page JS errors'          = (@($R.pageErrors).Count -eq 0)
++      'drag moves'                 = [bool]$R.dragOk
++      'click is not a drag'        = [bool]$R.clickNoEdit
++      'resize handle'              = [bool]$R.resizeOk
++      '8 handles drawn'            = ($R.handlesShown -eq 8)
++      'arrow nudge = one edit'     = [bool]$R.nudgeOk
++      'caption edit'               = [bool]$R.captionOk
++      'Esc selects the parent'     = [bool]$R.escParent
++      'Tab selects the next'       = [bool]$R.tabNext
++    }
++    if ($R.PSObject.Properties.Name -contains 'hiddenTarget') { $must['hidden tab revealed'] = [bool]$R.hiddenTabRevealed }
++    if ($R.PSObject.Properties.Name -contains 'wrapperEdit') { $must['input moves its wrapper'] = [bool]$R.wrapperOk }
++    if ($R.driverError -or $R.editError) { $must['driver ran'] = $false }
++    foreach ($k in $must.Keys) {
++      if ($must[$k]) { Write-Host "PASS  $k" } else { Write-Host "FAIL  $k"; $bad++ }
++    }
+     if ($Screenshot) {
+       $png = Join-Path $work ($p + '.png')
+       $sargs = @('--headless=new', '--disable-gpu', '--no-first-run', "--user-data-dir=`"$profileDir`"",
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index 3d34d0e..e7ae9dd 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -339,6 +339,43 @@ async function main() {
+   ok(e3 && e3.web === 'field', 'overview XST1.OnKeyPress: web ✔ via the field map', e3 ? e3.web : '-');
+   ok(e4 && e4.web === 'na' && e4.golden.state === 'live', 'overview form OnShow: n/a on the web, BCB6 ✔');
+ 
++  // --- source edits (WPF-style), on the real HotPlate markup, in memory only
++  const he = require('../lib/htmledit');
++  const bt = he.startTagOf(html, 'spbSave');
++  ok(bt && bt.name === 'button' && /id="spbSave"/.test(bt.text), 'startTagOf spbSave', bt ? bt.text.slice(0, 60) : '-');
++  const moved = he.setStyle(bt.text, { left: '60px', top: '9px' });
++  ok(/left:60px;/.test(moved) && /top:9px;/.test(moved) && /width:227px;/.test(moved) && moved.length - bt.text.length < 4,
++    'setStyle moves spbSave, keeps the rest', moved.slice(moved.indexOf('style='), moved.indexOf('style=') + 90));
++  const x1 = he.startTagOf(html, 'XST1');
++  const wr = he.wrapperTagOf(html, x1.start);
++  ok(wr && wr.name === 'span' && /position:absolute;left:129px/.test(wr.text), 'wrapperTagOf XST1 -> the positioning <span>', wr ? wr.text : '-');
++  const hid = he.setStyle(x1.text, { display: 'none' });
++  ok(/display:none;/.test(hid) && he.setStyle(hid, { display: null }) === x1.text, 'setStyle add then remove display:none restores the tag byte for byte');
++  // hand-written style with spaces and no final ';': only the changed value moves
++  const hw = '<div id="a" style="position: absolute; left: 10px;  top : 5px">';
++  ok(he.setStyle(hw, { left: '12px' }) === '<div id="a" style="position: absolute; left: 12px;  top : 5px">', 'setStyle edits one value in place (spaces kept)');
++  ok(he.setStyle(hw, { width: '30px' }) === '<div id="a" style="position: absolute; left: 10px;  top : 5px;width:30px;">', 'setStyle appends a new property after a missing ";"');
++  ok(he.setStyle('<p id="b">', { left: '1px' }) === '<p id="b" style="left:1px;">', 'setStyle adds a style attribute when there is none');
++  ok(he.setStyle('<p id="c" style="left:1px;top:2px;left:3px;">', { left: '9px' }) === '<p id="c" style="top:2px;left:9px;">', 'setStyle collapses duplicates onto the last one');
++  const dis = he.setAttr(x1.text, 'disabled', true);
++  ok(/ disabled>$/.test(dis) || / disabled\s*\/?>$/.test(dis), 'setAttr disabled', dis.slice(-30));
++  ok(he.setAttr(dis, 'disabled', null) === x1.text, 'setAttr remove restores the tag byte for byte');
++  const vset = he.setAttr(x1.text, 'value', '12.5');
++  ok(/value="12\.5"/.test(vset) && !/value=""/.test(vset), 'setAttr value replaces the old value', vset.slice(vset.indexOf('value'), vset.indexOf('value') + 14));
++  const cr = he.captionRange(html, bt, 'text');
++  ok(cr && html.slice(cr[0], cr[1]) === 'Save', 'captionRange(spbSave) = "Save" (after the <img>)', cr ? JSON.stringify(html.slice(cr[0], cr[1])) : '-');
++  const gb = he.startTagOf(html, 'GroupBox1');
++  const lr = he.captionRange(html, gb, 'legend');
++  ok(lr && html.slice(lr[0], lr[1]) === 'Plate of Use', 'captionRange(GroupBox1, legend) = "Plate of Use"', lr ? JSON.stringify(html.slice(lr[0], lr[1])) : '-');
++  const ck = he.startTagOf(html, 'cbEnableHP2');
++  const kr = he.captionRange(html, ck, 'text');
++  ok(kr && html.slice(kr[0], kr[1]) === 'Plate 2', 'captionRange(checkbox label) = "Plate 2"', kr ? JSON.stringify(html.slice(kr[0], kr[1])) : '-');
++  const pn = he.startTagOf(html, 'Panel1');
++  const pr = he.captionRange(html, pn, 'pnlCap');
++  ok(pr && pr[0] === pr[1], 'captionRange(Panel1, pnlCap) = empty insertion point', pr ? JSON.stringify(pr) : '-');
++  const fr = he.startTagOf(html, '@form');
++  ok(fr && /class="form"/.test(fr.text), 'startTagOf @form');
++
+   // --- format
+   ok(fmt.tcolor(12761254) === '#a6b8c2', 'TColor int -> #rrggbb (BGR)', fmt.tcolor(12761254));
+   ok(fmt.tcolor('clBtnFace') === '#d4d0c8', 'TColor clBtnFace');
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 29a1b63..f9fa3e4 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -47,15 +47,19 @@ async function main() {
+   });
+ 
+   // designer on the real page
+-  const text = fs.readFileSync(PAGE, 'utf8');
+-  const lineStarts = [0];
+-  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) lineStarts.push(i + 1);
++  const ORIGINAL = fs.readFileSync(PAGE, 'utf8');
++  let text = ORIGINAL;
++  let lineStarts = [];
++  const indexLines = () => { lineStarts = [0]; for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) lineStarts.push(i + 1); };
++  indexLines();
+   const doc = {
+-    uri: fake.Uri.file(PAGE), fileName: PAGE, text,
++    uri: fake.Uri.file(PAGE), fileName: PAGE, isDirty: false,
+     getText: () => text,
+     positionAt: off => { let lo = 0, hi = lineStarts.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (lineStarts[m] <= off) lo = m; else hi = m - 1; } return new fake.Position(lo, off - lineStarts[lo]); },
+     offsetAt: p => lineStarts[p.line] + p.character,
++    _setText: t => { text = t; indexLines(); doc.isDirty = true; },
+   };
++  fake._docs = { [doc.uri.toString()]: doc };
+   const pagePosted = [];
+   let pageRecv = null;
+   const panel = {
+@@ -326,6 +330,41 @@ async function main() {
+   ok(show && show.handler === 'FormShow' && show.targets.some(i => fr.targets[i].kind === 'golden'), 'form root: OnShow -> FormShow with a BCB6 target',
+     show ? show.targets.map(i => fr.targets[i].kind + ' ' + path.basename(fr.targets[i].file) + ':' + fr.targets[i].line).join(' | ') : '');
+   ok(!fake._calls.some(c => c.name === 'error'), 'no error messages shown', fake._calls.filter(c => c.name === 'error').map(c => c.args[0]).join(' / '));
++
++  // --- WPF-style edits written into the source (in memory; nothing is saved) ---
++  ok(full.edit && full.edit.layout && full.edit.layout.target === 'self' && full.edit.inSource && full.edit.layoutInSource &&
++    full.edit.caption && full.edit.caption.kind === 'text' && full.edit.caption.value === 'Save',
++    'panel data: spbSave is editable (layout self, caption "Save")', full.edit ? JSON.stringify({ l: full.edit.layout && full.edit.layout.raw, c: full.edit.caption }) : '-');
++  const tagNow = id => require('../lib/htmledit').startTagOf(text, id).text;
++  const wait = ms => new Promise(r => setTimeout(r, ms));
++  pageRecv({ __htd: 1, type: 'edit', what: 'style', id: 'spbSave', target: 'self', style: { left: '74px', top: '18px' } });
++  await wait(50);
++  ok(/left:74px;top:18px;width:227px/.test(tagNow('spbSave')) && doc.isDirty, 'drag edit -> <button id="spbSave"> style left/top rewritten, document dirty',
++    tagNow('spbSave').slice(tagNow('spbSave').indexOf('style'), tagNow('spbSave').indexOf('style') + 60));
++  pageRecv({ __htd: 1, type: 'edit', what: 'style', id: 'XST1', target: 'parent', style: { left: '136px' } });
++  await wait(50);
++  const xs1 = require('../lib/htmledit').startTagOf(text, 'XST1');
++  const wr1 = require('../lib/htmledit').wrapperTagOf(text, xs1.start);
++  ok(/left:136px;/.test(wr1.text) && !/left:136px/.test(xs1.text), 'wrapper edit -> the <span> around XST1 moved, the input untouched', wr1.text);
++  pageRecv({ __htd: 1, type: 'edit', what: 'caption', id: 'spbSave', capKind: 'text', value: 'Save <2>' });
++  pageRecv({ __htd: 1, type: 'edit', what: 'caption', id: 'GroupBox1', capKind: 'legend', value: 'Plates' });
++  pageRecv({ __htd: 1, type: 'edit', what: 'caption', id: 'XST1', capKind: 'value', value: '1.5' });
++  pageRecv({ __htd: 1, type: 'edit', what: 'attr', id: 'XST1', attr: { disabled: true } });
++  await wait(100);
++  ok(/>Save &lt;2&gt;<\/button>/.test(text), 'caption edit -> button text, HTML-escaped');
++  ok(/<legend[^>]*>Plates<\/legend>/.test(text), 'caption edit -> GroupBox legend');
++  ok(/id="XST1"[^>]*value="1\.5"[^>]*disabled>/.test(text), 'value + disabled edits on <input id="XST1"> (queued, applied in order)', tagNow('XST1').slice(-60));
++  const textBefore = text;
++  const refusedBefore = fake._calls.length;
++  pageRecv({ __htd: 1, type: 'edit', what: 'style', id: 'noSuchControl', target: 'self', style: { left: '1px' } });
++  await wait(50);
++  ok(text === textBefore, 'an id that is not in the source is refused, text untouched');
++  // everything outside the edited tags is byte-identical to the file on disk
++  const strip = s => s.replace(/<button class="btn3d" id="spbSave"[^>]*>[\s\S]*?<\/button>/, '')
++    .replace(/<legend[^>]*>(Plate of Use|Plates)<\/legend>/, '')
++    .replace(/<span style="position:absolute;left:1\d\dpx;top:58px;width:61px;height:24px;"><input class="ed" id="XST1"[^>]*>/, '');
++  ok(strip(text) === strip(ORIGINAL), 'nothing else in the page changed');
++  ok(!fake._calls.slice(refusedBefore).some(c => c.name === 'error'), 'refusal is a status message, not an error dialog');
+ }
+ 
+ main().catch(e => { fail++; log('CRASH ' + (e && e.stack || e)); }).then(() => {
+diff --git a/tools/vscode-htdesigner/test/vscode_it.ps1 b/tools/vscode-htdesigner/test/vscode_it.ps1
+index 963c3e7..40ffc1f 100644
+--- a/tools/vscode-htdesigner/test/vscode_it.ps1
++++ b/tools/vscode-htdesigner/test/vscode_it.ps1
+@@ -34,6 +34,8 @@ $settings = [ordered]@{
+   'extensions.autoCheckUpdates'       = $false
+   'extensions.autoUpdate'             = $false
+   'task.allowAutomaticTasks'          = 'off'
++  'files.autoSave'                    = 'off'
++  'files.hotExit'                     = 'off'
+ }
+ [IO.File]::WriteAllText((Join-Path $tmp 'user\User\settings.json'), ($settings | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+ 
+-- 
+2.55.0.windows.5
+

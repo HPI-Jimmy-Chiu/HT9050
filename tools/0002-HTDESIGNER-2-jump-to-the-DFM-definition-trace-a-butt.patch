@@ -1,0 +1,1227 @@
+From a04612e9c7d07282d8fc817d52072f849564ce9f Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 16:31:17 +0800
+Subject: [PATCH] HTDESIGNER-2: jump to the DFM definition, trace a button's
+ command into the C++ server, show where the form code uses a control (0.2.0)
+
+- DFM: the control's "object Name: TClass" line in the BCB6 .dfm, and every
+  property's own line (double-click a property -> that line), read-only Big5
+- web -> C++: follow the handler into what it calls (depth 3, same-file
+  definitions first) to cmd()/rawCmd()/raw()/run(); then the server's dispatch
+  branch (== "x.y", case, strcmp, command table) and the function it hands the
+  command to (same-line call only -- a block dispatch IS the handler)
+- uses: "spbSave->..." and the declaration, only in files that implement or
+  declare the form class
+- find component: Ctrl+Alt+O quick pick over every control of the page
+- fix: CRLF C++ files -- "#endif\r" never matched, so an "#if 0" never closed
+  (wb_serve.cpp was dead from line 3322 on); the old csystem.cpp test passed
+  only because it counted the forward declaration
+
+Tests: lib 49 / probe 2 pages / fake vscode 30 / real VS Code 29 + 8-page
+sweep -- all pass, opened files byte-identical (MD5) before and after.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  24 ++-
+ tools/vscode-htdesigner/extension.js          | 186 ++++++++++++++++--
+ tools/vscode-htdesigner/lib/cppindex.js       | 131 +++++++++++-
+ tools/vscode-htdesigner/lib/cpplex.js         |   5 +-
+ tools/vscode-htdesigner/lib/pageinfo.js       |  24 ++-
+ tools/vscode-htdesigner/lib/websearch.js      | 135 ++++++++++++-
+ tools/vscode-htdesigner/media/props.css       |   1 +
+ tools/vscode-htdesigner/media/props.js        |  58 +++++-
+ tools/vscode-htdesigner/package.json          |  38 +++-
+ .../test/integration/index.js                 |   9 +
+ tools/vscode-htdesigner/test/run_tests.js     |  81 +++++++-
+ .../vscode-htdesigner/test/smoke_extension.js |  36 +++-
+ tools/vscode-htdesigner/test/vscode_it.ps1    |   6 +-
+ 13 files changed, 687 insertions(+), 47 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 67e5b2b..f308d15 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -45,7 +45,10 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-0.1.0
+ | Esc | 取消選取 |
+ 
+ **「元件」樹**：頁面上所有有名字的元件，照 DFM 的層次排列。點一下＝在畫面上選取；
+-選到在隱藏分頁裡的元件時，會自動切到那一頁。每一列右邊的圖示＝跳到 HTML 原始碼。
++選到在隱藏分頁裡的元件時，會自動切到那一頁。每一列右邊兩個圖示＝跳到 DFM 定義／跳到 HTML 原始碼。
++
++**找元件**：`Ctrl+Alt+O`（或編輯器右上角的放大鏡），輸入名稱、型別或畫面上的文字。
++`HW.IoSetView.html` 這種兩千多個元件的頁面用這個最快。
+ 
+ **「屬性與事件」面板**：
+ 
+@@ -53,10 +56,17 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-0.1.0
+   **雙擊事件那一列**：只找到一份就直接跳，找到好幾份就讓你選。**雙擊下面某一份**：直接跳那一份。
+ - **網頁 JS 監聽器（執行期實測）**：頁面在預覽裡真的綁到這個元件上的 JS。
+ - **網頁 JS 提到此元件**：JS 裡寫到這個 id 的地方。
+-- **送到 C++ 的命令**：處理函式裡送出的命令（例如 `io.btnPanelClick`），以及 C++ 那邊分派它的位置。
++- **送到 C++ 的命令**：從處理函式往下追最多 3 層呼叫，找到最後送出的命令，
++  例如 Save 鈕：`click 處理函式 → save() → preview() → write() → cmd('recipe.doc.put')`。
++  再列出 C++ 伺服器分派這個命令的那一行（`wb_serve.cpp` 的 `wc.cmd == "recipe.doc.put"`），
++  以及它交給哪個函式處理（例如 `io.btnPanelClick → W906_DispatchIoClick`）。
++- **程式碼用到此元件**：表單程式裡寫到這個元件的地方（`spbSave->Enabled = …`）和它的宣告，C++ 與 BCB6 分開列。
+ - **DFM 屬性**：跟 BCB6 的 Object Inspector 一樣的屬性表，可以篩選，顏色會顯示色塊。
++  **雙擊一個屬性＝跳到 `.dfm` 裡那個屬性的那一行**（例如 `Caption` 在 `cHotPlate.dfm:356`）。
+ - **HTML**：位置、大小、HTML 屬性、style。
+ 
++標題下的「DFM 定義」按鈕：跳到 BCB6 `.dfm` 裡定義這個元件的 `object spbSave: TSpeedButton` 那一行（唯讀、Big5）。
++
+ **HTML 原始碼同步**：旁邊開著同一頁的 HTML 時，在設計檢視選元件，原始碼會捲到那個元件；
+ 反過來，在原始碼裡把游標放進某個元件的標籤，設計檢視也會選到它。
+ 
+@@ -70,6 +80,10 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-0.1.0
+ | **C++** | 移植樹 `HT9011UC_Cpp_*` | 搜尋 `TfXxx::事件名`。會標出「定義」「在 `#if 0` 裡（不會編譯）」「註解提到（實作可能搬到這裡）」 |
+ | **BCB6** | golden `HT9011UC_Code_V*` | 搜尋 `TfXxx::事件名`。**用 Big5 解碼、唯讀開啟**，不可能被存成 UTF-8 |
+ 
++另外，如果網頁的處理函式會送命令給 C++，事件清單也會列出那個命令在 C++ 伺服器的處理位置
++（標成「網頁命令 x.y → …」）。**網頁上按下按鈕，實際在機台上跑的就是這一段**；
++`TfXxx::事件名` 是 BCB6 表單翻譯過來的版本，網頁不一定會走到它。
++
+ 設定 `ht9045Designer.eventJump` 可以改成固定優先跳某一份（`web`／`cpp`／`golden`），不再每次問。
+ 
+ ## 安全設計
+@@ -100,6 +114,8 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-0.1.0
+ - **只在連線成功後才綁的監聽器看不到**，因為預覽不連線。「網頁 JS 提到此元件」那一段是靠搜尋，可以補一部分。
+ - **C++ 的 `#if 0` 判斷是靜態掃描**，只認得 `#if 0`／`#if 1`；`#ifdef SOFT_SIMULTE` 這類要看建置線的，一律當成活的。
+   要確定某一行有沒有被編譯，用 `tools\live_lines.ps1`。
++- **命令追蹤是靜態的**：命令名稱是字串接出來的（`cmd(prefix + '.put')`）就追不到；同名函式在好幾個檔都有時，
++  先用同一個檔裡的，沒有才去別的檔找。
+ - **內嵌 iframe 不載入**（為了不繞過網路封鎖）。目前只有 `IDE.MotionView9050-UPH.html` 有 iframe。
+ - **靠 JS 在執行期畫出來的頁面**（例如 `HW.IoSetView.html` 的清單）要等 JS 跑完才看得到；它讀的是本機 `JSON\` 檔，這個讀得到。
+ 
+@@ -132,7 +148,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\vscode-htdesigner\test
+    會在螢幕上出現約 30 秒後自己關掉）。開 HotPlate 頁走完整條路，再逐頁掃 8 種頁面；
+    測試前後比對所有開過的檔案的 MD5，有任何變動就判失敗
+ 
+-實測 20260929：1～4 層 33 ＋ 2 頁 ＋ 23 ＋ 34 項全部通過。
++實測 20260929：1～4 層 49 ＋ 2 頁 ＋ 30 ＋ 34 項全部通過。
++（途中抓到一個真 bug：CRLF 換行的 C++ 檔，`#endif` 後面的 `\r` 讓 `#if 0` 永遠不結束，
++`wb_serve.cpp` 從第 3,322 行起整段被當成死碼。已修，並加了 CRLF 的測試。）
+ 
+ 這台沒有 Node.js，1～3 層用 VS Code 內建的 Electron 當 Node 跑（`ELECTRON_RUN_AS_NODE=1`）。
+ 
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index b7f5144..0709cbc 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -31,6 +31,7 @@ const KIND = {
+   web: { icon: '$(globe)', label: '網頁 JS' },
+   port: { icon: '$(symbol-class)', label: 'C++ 移植樹' },
+   golden: { icon: '$(history)', label: 'BCB6 原始碼（唯讀）' },
++  dfm: { icon: '$(symbol-structure)', label: 'BCB6 表單 .dfm（唯讀）' },
+   html: { icon: '$(code)', label: 'HTML 原始碼' },
+ };
+ 
+@@ -91,6 +92,8 @@ class Hub {
+         if (this.active) this.active.post({ type: 'selectKey', key, origin: 'tree' });
+       }),
+       reg('ht9045Designer.showInfo', () => this.cmdShowInfo()),
++      reg('ht9045Designer.revealDfm', node => this.cmdRevealDfm(node)),
++      reg('ht9045Designer.findComponent', () => this.cmdFindComponent()),
+       reg('ht9045Designer.netCheck', () => {
+         const d = this.active;
+         if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return; }
+@@ -249,7 +252,7 @@ class Hub {
+     const seq = ++this.selSeq;
+     if (!info) { d.sel = null; this.showProps(d, null); return; }
+     if (origin !== 'tree') this.tree.reveal(info.key);
+-    if (origin === 'click' || origin === 'tree') this.syncSource(d, info.id);
++    if (origin === 'click' || origin === 'tree' || origin === 'find') this.syncSource(d, info.id);
+     const sel = { info, data: null, promise: null };
+     d.sel = sel;
+     sel.promise = this.resolve(d, info, partial => {
+@@ -282,6 +285,27 @@ class Hub {
+     return list;
+   }
+ 
++  /** The BCB6 .dfm a page's IR came from (golden tree), or null. */
++  dfmFileOf(d, ir) {
++    if (!ir || !ir.sourceDfm || !d.r.goldenRoot) return null;
++    const f = path.join(d.r.goldenRoot, ir.sourceDfm.replace(/[\\/]/g, path.sep));
++    return fs.existsSync(f) ? f : null;
++  }
++
++  /** A golden (Big5) file as lines, cached by mtime. */
++  goldenLines(file) {
++    let st;
++    try { st = fs.statSync(file); } catch (e) { return null; }
++    this._goldenLines = this._goldenLines || new Map();
++    const hit = this._goldenLines.get(file);
++    if (hit && hit.mtime === st.mtimeMs) return hit.lines;
++    let lines;
++    try { lines = decodeBig5(fs.readFileSync(file)).split('\n').map(l => l.replace(/\r$/, '')); } catch (e) { return null; }
++    this._goldenLines.set(file, { mtime: st.mtimeMs, lines });
++    if (this._goldenLines.size > 20) this._goldenLines.delete(this._goldenLines.keys().next().value);
++    return lines;
++  }
++
+   lineSnippet(file, line) {
+     const t = web.readText(file);
+     if (t == null) return '';
+@@ -331,6 +355,14 @@ class Hub {
+         comp.html = T({ kind: 'html', file: d.file, line: p.line + 1, col: p.character + 1, snippet: '', note: 'HTML 原始碼', range: [at.start, at.end] });
+       }
+     }
++    // the control's own lines in the BCB6 .dfm (Big5): the IR knows "object Name: TClass"
++    const dfmFile = this.dfmFileOf(d, ir);
++    const dfmLines = dfmFile ? this.goldenLines(dfmFile) : null;
++    comp.dfm = null;
++    if (node && node.line && dfmLines) {
++      comp.dfm = T({ kind: 'dfm', file: dfmFile, line: node.line, col: 1, snippet: (dfmLines[node.line - 1] || '').trim(), note: 'DFM 定義' });
++    }
++    const propLines = node && node.line && dfmLines ? pageinfo.dfmPropLines(dfmLines, node.line) : {};
+ 
+     // web: listeners recorded at runtime, then where their code is
+     const sources = this.webSources(d, pi);
+@@ -362,17 +394,22 @@ class Hub {
+         near(bind) || near(handler);
+       if (bind) bindT = T(bind);
+       const hT = handler ? T(handler) : null;
++      // follow the handler into what it calls, to the command it finally sends
++      const traced = relevant ? web.traceCmds(sources, text, 3, handler ? handler.file : bindFile) : [];
+       listeners.push({
+         type: l.type, on, onLabel: onLabel || '', via: l.via, cap: !!l.cap, fnName: l.fnName || '',
+-        handler: hT, bind: bindT, cmds: web.extractCmds(text), relevant: !!relevant,
++        handler: hT, bind: bindT, cmds: traced.map(t => t.cmd), traced, relevant: !!relevant,
+       });
+     };
+     (info.listeners || []).forEach(l => addL(l, 'self'));
+     (info.inherited || []).forEach(a => a.list.forEach(l => addL(l, 'up', a.label)));
+-    (info.inline || []).forEach(pair => listeners.push({
+-      type: String(pair[0]).replace(/^on/i, ''), on: 'attr', onLabel: '', via: 'attr', cap: false, fnName: '',
+-      handler: comp.html, bind: null, code: pair[1], cmds: web.extractCmds(pair[1]), relevant: true,
+-    }));
++    (info.inline || []).forEach(pair => {
++      const traced = web.traceCmds(sources, pair[1], 3, d.file);
++      listeners.push({
++        type: String(pair[0]).replace(/^on/i, ''), on: 'attr', onLabel: '', via: 'attr', cap: false, fnName: '',
++        handler: comp.html, bind: null, code: pair[1], cmds: traced.map(t => t.cmd), traced, relevant: true,
++      });
++    });
+     const mentionT = mentions.map(m => T(Object.assign({ kind: 'web', note: '提到此 id' }, m)));
+ 
+     // DFM events -> web targets now, C++ targets below
+@@ -390,9 +427,22 @@ class Hub {
+       events.push({ name, handler: handlerName, targets: tl, cppPending: true });
+     }
+ 
++    // commands the relevant handlers send (traced through their calls), and via what
++    const cmdVia = new Map();
++    for (const l of listeners) {
++      if (!l.relevant) continue;
++      for (const t of l.traced) {
++        if (!cmdVia.has(t.cmd)) cmdVia.set(t.cmd, [l.type + ' 處理函式'].concat(t.via.map(n => n + '()')));
++      }
++    }
++    for (const m of mentions) {
++      for (const c of web.extractCmds(m.snippet)) if (!cmdVia.has(c)) cmdVia.set(c, ['提到此 id 的那一行']);
++    }
++
+     const data = {
+-      comp, events, listeners, mentions: mentionT, cmds: [],
+-      props: node ? fmt.formatProps(node.properties) : [],
++      comp, events, listeners, mentions: mentionT, cmds: [], uses: null,
++      props: node ? fmt.formatProps(node.properties).map(p => p.concat([propLines[p[0]] || 0])) : [],
++      dfmFile: dfmFile || null,
+       html: {
+         geom: info.geom || null, dfmGeom: node ? node.geometry : null, attrs: info.attrs || [],
+         style: info.style || [], computed: info.computed || [], text: info.text || '', visible: info.visible !== false,
+@@ -404,7 +454,60 @@ class Hub {
+ 
+     const port = this.sourceTree(d.r.portRoot, 'port');
+     const gold = this.sourceTree(d.r.goldenRoot, 'golden');
++
++    // web command -> C++: the dispatch branch in the server, and the function it calls
++    const cmdRes = new Map();
++    for (const [c, via] of Array.from(cmdVia).slice(0, 8)) {
++      const send = web.findCmdSend(sources, c).map(h => T(Object.assign({ kind: 'web', note: '送出命令' }, h)));
++      const r = { cmd: c, via: via.join(' → '), send, dispatch: [], handlers: [], other: [] };
++      if (port) {
++        const hits = (await port.findString(c)).filter(h => !h.test);
++        const disp = hits.filter(h => h.dispatch && !h.comment && !h.dead).slice(0, 3);
++        const called = [];
++        for (const h of disp) called.push(await port.calledFuncsAt(h.file, h.off));
++        r.dispatch = disp.map((h, k) => {
++          const t = this.cppTarget('port', h, true);
++          if (!called[k].length && /\{\s*$/.test(h.snippet)) t.note = '命令分派（處理程式就寫在這個區塊裡）';
++          return T(t);
++        });
++        const seenFn = new Set();
++        for (let k = 0; k < Math.min(2, disp.length); k++) {
++          for (const fnName of called[k]) {
++            if (seenFn.has(fnName)) continue;
++            seenFn.add(fnName);
++            for (const dd of (await port.findFuncDefs(fnName)).slice(0, 2)) {
++              const t = this.cppTarget('port', dd);
++              t.note = '處理函式 ' + fnName + (dd.dead ? '（在 #if 0 裡，不會編譯）' : '');
++              r.handlers.push(T(t));
++            }
++          }
++        }
++        r.other = hits.filter(h => !disp.includes(h)).slice(0, 3).map(h => T(this.cppTarget('port', h, true)));
++      }
++      cmdRes.set(c, r);
++      data.cmds.push(r);
++    }
++
+     for (const ev of events) {
++      // what really runs when the web page's button is used: its command's C++ path
++      // (per command: its C++ handler functions, else its dispatch line; at most 4 in all,
++      // shallowest command first -- the full list is in the 送到 C++ 的命令 section)
++      const types = fmt.domTypesOf(ev.name);
++      let extra = 0;
++      for (const l of listeners) {
++        if (!(l.on === 'self' || l.relevant) || !types.includes(l.type)) continue;
++        for (const c of l.cmds) {
++          const r = cmdRes.get(c);
++          if (!r) continue;
++          const pick = r.handlers.length ? r.handlers.slice(0, 2) : r.dispatch.slice(0, 1);
++          for (const i of pick) {
++            if (extra >= 4 || ev.targets.includes(i)) continue;
++            data.targets[i] = Object.assign({}, data.targets[i], { note: '網頁命令 ' + c + ' → ' + data.targets[i].note });
++            ev.targets.push(i);
++            extra++;
++          }
++        }
++      }
+       if (port && pi.classes.length) {
+         const hits = await port.lookup(pi.classes, ev.handler);
+         const defs = hits.filter(h => h.def && !h.test).slice(0, 6);
+@@ -420,15 +523,22 @@ class Hub {
+       }
+       ev.cppPending = false;
+     }
+-    const cmdNames = [];
+-    for (const l of listeners) if (l.relevant) for (const c of l.cmds) if (!cmdNames.includes(c)) cmdNames.push(c);
+-    for (const m of mentions) for (const c of web.extractCmds(m.snippet)) if (!cmdNames.includes(c)) cmdNames.push(c);
+-    if (port) {
+-      for (const c of cmdNames.slice(0, 8)) {
+-        const hits = await port.findString(c);
+-        const pick = hits.filter(h => !h.test).slice(0, 6);
+-        data.cmds.push({ cmd: c, targets: pick.map(h => T(this.cppTarget('port', h, true))) });
++
++    // where the form's code touches this control (spbSave->Enabled = …, the declaration)
++    if (info.id && !isForm && pi.classes.length) {
++      const uses = { port: [], portMore: 0, golden: [], goldenMore: 0 };
++      const useNote = h => (h.decl ? '宣告' : h.comment ? '註解' : '使用') + (h.dead ? '（在 #if 0 裡）' : '') + (h.test ? '（測試）' : '');
++      if (port) {
++        const u = await port.findMemberUses(pi.classes, info.id, 80);
++        uses.port = u.slice(0, 15).map(h => T(Object.assign(this.cppTarget('port', h), { note: useNote(h), weak: h.comment || h.dead })));
++        uses.portMore = Math.max(0, u.length - 15);
+       }
++      if (gold) {
++        const u = await gold.findMemberUses(pi.classes, info.id, 80);
++        uses.golden = u.slice(0, 15).map(h => T(Object.assign(this.cppTarget('golden', h), { note: useNote(h), weak: h.comment })));
++        uses.goldenMore = Math.max(0, u.length - 15);
++      }
++      data.uses = uses;
+     }
+     data.cppPending = false;
+     data.page = this.pageSummary(d, pi);
+@@ -477,7 +587,8 @@ class Hub {
+     if (!t) return;
+     if (t.kind === 'html') { if (d) await this.revealSource(d, null, true, t); return; }
+     try {
+-      const uri = t.kind === 'golden' ? vscode.Uri.file(t.file).with({ scheme: GOLDEN_SCHEME }) : vscode.Uri.file(t.file);
++      const big5 = t.kind === 'golden' || t.kind === 'dfm';
++      const uri = big5 ? vscode.Uri.file(t.file).with({ scheme: GOLDEN_SCHEME }) : vscode.Uri.file(t.file);
+       const doc = await vscode.workspace.openTextDocument(uri);
+       const pos = new vscode.Position(Math.max(0, (t.line || 1) - 1), Math.max(0, (t.col || 1) - 1));
+       const ed = await vscode.window.showTextDocument(doc, {
+@@ -590,6 +701,9 @@ class Hub {
+       case 'ready': this.props.show(this.props.data); break;
+       case 'open': if (data) this.openTarget(data.targets[m.i], d); break;
+       case 'openEvent': if (data) this.openEvent(data, m.i, d); break;
++      case 'openDfmLine':
++        if (data && data.dfmFile && m.line > 0) this.openTarget({ kind: 'dfm', file: data.dfmFile, line: m.line, col: 1 }, d);
++        break;
+       case 'revealSource':
+         if (d && data) this.revealSource(d, data.comp.htmlId, true, data.comp.html != null ? data.targets[data.comp.html] : null);
+         break;
+@@ -671,6 +785,44 @@ class Hub {
+     if (d.sel && d.sel.info) return this.revealSource(d, d.sel.info.id, true);
+   }
+ 
++  /** Open the BCB6 .dfm at "object Name: TClass" (tree node, or the current selection). */
++  async cmdRevealDfm(node) {
++    const d = this.active;
++    if (!d) return;
++    const pi = await d.info;
++    const id = node && node.key ? (node.isForm ? '@form' : node.id) : (d.sel && d.sel.info ? d.sel.info.id : null);
++    if (!id) { vscode.window.showInformationMessage('先選一個元件。'); return; }
++    const n = pi.ir ? (id === '@form' ? pi.ir.root : pi.ir.byName.get(id)) : null;
++    const f = this.dfmFileOf(d, pi.ir);
++    if (!n || !n.line || !f) {
++      vscode.window.showInformationMessage(!pi.ir ? '這一頁沒有對應的 DFM。' : !f ? '找不到 BCB6 的 .dfm 檔（' + (pi.ir.sourceDfm || '?') + '）。' : 'DFM 裡沒有「' + id + '」（可能是網頁自己加的元件）。');
++      return;
++    }
++    return this.openTarget({ kind: 'dfm', file: f, line: n.line, col: 1 }, d);
++  }
++
++  /** Quick pick over every component of the page (big pages have thousands). */
++  async cmdFindComponent() {
++    const d = this.active;
++    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return; }
++    const pi = await d.info;
++    const items = d.treeData.map(r => {
++      const key = r[0], id = r[2], tag = r[3], cls = r[4], cap = r[5], hidden = r[6], isForm = r[7];
++      const node = pi.ir && !isForm ? pi.ir.byName.get(id) : null;
++      return {
++        label: isForm ? d.formLabel : id,
++        description: (cls || (node && node.class) || '<' + tag + '>') + (cap ? '　「' + cap + '」' : '') + (hidden ? '　（隱藏）' : ''),
++        detail: node && node.path ? node.path : undefined,
++        key,
++      };
++    });
++    const pick = await vscode.window.showQuickPick(items, {
++      placeHolder: '輸入元件名稱、型別或畫面上的文字（這頁共 ' + items.length + ' 個）',
++      matchOnDescription: true, matchOnDetail: true,
++    });
++    if (pick) d.post({ type: 'selectKey', key: pick.key, origin: 'find' });
++  }
++
+   cmdShowInfo() {
+     const r = this.active ? this.active.r : roots.resolveRoots(null, this.wsFolders(), this.over());
+     this.out.appendLine('');
+diff --git a/tools/vscode-htdesigner/lib/cppindex.js b/tools/vscode-htdesigner/lib/cppindex.js
+index f4d671d..1ea5b9c 100644
+--- a/tools/vscode-htdesigner/lib/cppindex.js
++++ b/tools/vscode-htdesigner/lib/cppindex.js
+@@ -53,9 +53,12 @@ class SourceTree {
+     this.fileKeys = new Map();  // file -> ["Cls::member", ...]
+     this.ready = null;
+     this.buildMs = 0;
++    this.clsFiles = new Map();  // "TfHotPlate" -> Set(files that implement or declare it)
++    this.fileCls = new Map();   // file -> ["TfHotPlate", ...]
+     this._buf = new Map();      // small LRU of file buffers used by lookups
+     this._an = new Map();       // file -> { mtime, an }
+     this._str = new Map();      // string literal cache
++    this._fn = new Map();       // free-function definition cache
+   }
+ 
+   ensure() {
+@@ -76,6 +79,7 @@ class SourceTree {
+     const text = buf.toString('latin1');
+     const re = /\b(T[A-Za-z_]\w*)\s*::\s*(~?[A-Za-z_]\w*)/g;
+     const keys = [];
++    const cls = new Set();
+     let m;
+     while ((m = re.exec(text))) {
+       const k = m[1] + '::' + m[2];
+@@ -83,8 +87,17 @@ class SourceTree {
+       if (!a) { a = []; this.qual.set(k, a); }
+       a.push({ file, off: m.index, len: m[0].length });
+       keys.push(k);
++      cls.add(m[1]);
++    }
++    const cre = /\bclass\s+(?:PACKAGE\s+)?(T[A-Za-z_]\w*)\s*[:{]/g;
++    while ((m = cre.exec(text))) cls.add(m[1]);
++    for (const c of cls) {
++      let s = this.clsFiles.get(c);
++      if (!s) { s = new Set(); this.clsFiles.set(c, s); }
++      s.add(file);
+     }
+     this.fileKeys.set(file, keys);
++    this.fileCls.set(file, Array.from(cls));
+   }
+ 
+   /** A file changed on disk (from a file watcher). */
+@@ -101,9 +114,15 @@ class SourceTree {
+       }
+       this.fileKeys.delete(file);
+     }
++    for (const c of this.fileCls.get(file) || []) {
++      const s = this.clsFiles.get(c);
++      if (s) { s.delete(file); if (!s.size) this.clsFiles.delete(c); }
++    }
++    this.fileCls.delete(file);
+     this._buf.delete(file);
+     this._an.delete(file);
+     this._str.clear();
++    this._fn.clear();
+     let exists = false;
+     try { exists = fs.statSync(file).isFile(); } catch (e) { exists = false; }
+     if (exists) {
+@@ -162,7 +181,7 @@ class SourceTree {
+     let snippet = lineText.trim();
+     if (snippet.length > 180) snippet = snippet.slice(0, 180) + '…';
+     return {
+-      file, line: li + 1, col, snippet, comment, dead, def,
++      file, off, line: li + 1, col, snippet, comment, dead, def,
+       test: /(^|[\\/])tests?[\\/]/i.test(path.relative(this.root, file)),
+     };
+   }
+@@ -202,7 +221,13 @@ class SourceTree {
+     for (const r of raw) {
+       try {
+         const d = await this.describe(r.file, r.off, null);
+-        d.dispatch = !d.comment && /==|\bcase\b|strcmp|\bcmd\b|Cmd\(/.test(d.snippet);
++        // a dispatch compares THIS literal: == "x", case "x", strcmp(c, "x"), or a
++        // command table entry { "x", … } -- not a line that merely contains it
++        const text = (await this._read(r.file)).toString('latin1');
++        const before = text.slice(text.lastIndexOf('\n', r.off - 1) + 1, r.off);
++        d.dispatch = !d.comment && (/(==|!=)\s*$/.test(before) || /\bcase\s*$/.test(before) ||
++          /\b(strcmp|stricmp|strcasecmp|_stricmp|compare|equals|Equals)\s*\([^()]*,\s*$/.test(before) ||
++          /\{\s*$/.test(before));
+         out.push(d);
+       } catch (e) { /* skip */ }
+     }
+@@ -211,6 +236,108 @@ class SourceTree {
+     this._str.set(str, out);
+     return out;
+   }
++
++  /**
++   * Where the form's code touches a component: "spbSave->Enabled = …" and the
++   * declaration "TSpeedButton *spbSave;". Only files that implement or declare one
++   * of `classes`, so generic names (Label1) do not drag in every other form.
++   */
++  async findMemberUses(classes, name, limit) {
++    await this.ensure();
++    const files = new Set();
++    for (const c of classes || []) for (const f of this.clsFiles.get(c) || []) files.add(f);
++    const needle = Buffer.from(name, 'latin1');
++    const e = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++    const re = new RegExp('\\b' + e + '\\s*->|\\*\\s*' + e + '\\s*;', 'g');
++    const out = [];
++    for (const f of Array.from(files).sort()) {
++      let buf;
++      try { buf = await this._read(f); } catch (x) { continue; }
++      if (buf.indexOf(needle) < 0) continue;
++      const text = buf.toString('latin1');
++      re.lastIndex = 0;
++      let m;
++      while ((m = re.exec(text)) && out.length < (limit || 80)) {
++        const d = await this.describe(f, m.index, null);
++        d.decl = m[0].charAt(0) === '*';
++        out.push(d);
++      }
++    }
++    const rank = h => (h.comment ? 4 : 0) + (h.dead ? 2 : 0) + (h.decl ? 1 : 0) + (h.test ? 8 : 0);
++    out.sort((a, b) => rank(a) - rank(b) || a.file.localeCompare(b.file) || a.line - b.line);
++    return out;
++  }
++
++  /** Definitions of a free function (W906_CounterClearClick, DoClearRecordAction, ...). */
++  async findFuncDefs(name) {
++    if (this._fn.has(name)) return this._fn.get(name);
++    await this.ensure();
++    const needle = Buffer.from(name, 'latin1');
++    const e = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++    const re = new RegExp('(^|[^\\w:.>])' + e + '\\s*\\(', 'g');
++    const out = [];
++    await pool(this.files, 16, async f => {
++      let buf;
++      try { buf = await fsp.readFile(f); } catch (x) { return; }
++      if (buf.indexOf(needle) < 0) return;
++      const text = buf.toString('latin1');
++      re.lastIndex = 0;
++      let m;
++      while ((m = re.exec(text)) && out.length < 20) {
++        const off = m.index + m[1].length;
++        try {
++          const d = await this.describe(f, off, name.length);
++          if (d.def) out.push(d);
++        } catch (x) { /* skip */ }
++      }
++    });
++    out.sort((a, b) => (a.dead - b.dead) || (a.test - b.test) || a.file.localeCompare(b.file) || a.line - b.line);
++    this._fn.set(name, out);
++    return out;
++  }
++
++  /**
++   * The function a dispatch branch hands the command to. `off` = byte offset of the
++   * command string literal ("io.btnPanelClick"). Only the rest of that branch on the
++   * same line counts, up to the next branch when several share one line:
++   *   if (cmd == "x") return DoX(p);                  -> ["DoX"]
++   *   else if (wc.cmd == "x") r = W906_X(tag, &ok);   -> ["W906_X"]
++   *   } else if (wc.cmd == "x") {   (code follows)    -> []  (the block IS the handler;
++   *                                                         its helpers are not)
++   * Member calls (v.isString(), p->Foo()) are never a handler.
++   */
++  async calledFuncsAt(file, off) {
++    const buf = await this._read(file);
++    const text = buf.toString('latin1');
++    const src = this.kind === 'port' ? this._analysis(file, text).masked : text;
++    let e = src.indexOf('\n', off);
++    if (e < 0) e = src.length;
++    const line = src.slice(off, e);
++    const q = line.indexOf('"', 1);               // past the literal itself
++    const rest = q > 0 ? line.slice(q + 1) : line;
++    const next = rest.search(/==\s*"/);           // the next branch on the same line
++    const region = next >= 0 ? rest.slice(0, next) : rest;
++    const out = [];
++    const re = /(^|[^\w.>])([A-Za-z_]\w*)\s*\(/g;
++    let m;
++    while ((m = re.exec(region)) && out.length < 3) {
++      const n = m[2];
++      if (m[1] === ':' && region[m.index - 1] !== ':') continue;   // a::b ok, a:b no
++      if (CPP_SKIP.has(n) || out.includes(n) || n.length < 4) continue;
++      if (!/^W906_|[A-Z]/.test(n)) continue;   // project functions are CamelCase / W906_*
++      out.push(n);
++    }
++    return out;
++  }
+ }
+ 
++const CPP_SKIP = new Set(('if while for switch return sizeof static_cast reinterpret_cast const_cast ' +
++  'dynamic_cast catch throw new delete std string wstring to_string printf sprintf snprintf fprintf strcmp ' +
++  'strncmp stricmp memcpy memset strlen atoi atof strtol strtod min max abs size empty c_str find substr ' +
++  'append push_back emplace_back begin end insert erase at front back reset get make_shared make_unique move ' +
++  'forward lock unlock AnsiString UnicodeString StrToInt IntToStr FloatToStr StrToFloat Format ShowMessage ' +
++  'assert Key String Int Uint Int64 Bool Double Null StartObject EndObject StartArray EndArray Writer ' +
++  'GetString GetInt GetBool HasMember IsString IsInt IsBool IsObject IsArray FindMember Parse ' +
++  'ToString TRUE FALSE NULL DWORD BOOL WORD BYTE LOBYTE HIBYTE').split(/\s+/));
++
+ module.exports = { SourceTree, walk, decodeBig5, SKIP_DIR };
+diff --git a/tools/vscode-htdesigner/lib/cpplex.js b/tools/vscode-htdesigner/lib/cpplex.js
+index d321dcd..a2d9e73 100644
+--- a/tools/vscode-htdesigner/lib/cpplex.js
++++ b/tools/vscode-htdesigner/lib/cpplex.js
+@@ -115,7 +115,8 @@ function analyze(text) {
+   masked += text.slice(last);
+ 
+   const starts = lineStartsOf(text);
+-  const lines = masked.split('\n');
++  // CRLF files: the '\r' must go, or "#endif\r" never matches (JS '.' stops at '\r')
++  const lines = masked.split('\n').map(l => (l.charCodeAt(l.length - 1) === 13 ? l.slice(0, -1) : l));
+   const dead = new Uint8Array(lines.length);
+   // frame: dead = this branch is dead; taken = an earlier branch was the live one;
+   // unknown = the condition depends on the build (every branch reported live)
+@@ -131,7 +132,7 @@ function analyze(text) {
+       span++;
+       line = line.replace(/\\\s*$/, ' ') + lines[L + span];
+     }
+-    const m = /^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)$/.exec(line);
++    const m = /^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b([\s\S]*)$/.exec(line);
+     if (!m) {
+       dead[L] = deadCount > 0 ? 1 : 0;
+       continue;
+diff --git a/tools/vscode-htdesigner/lib/pageinfo.js b/tools/vscode-htdesigner/lib/pageinfo.js
+index 022b162..95451ce 100644
+--- a/tools/vscode-htdesigner/lib/pageinfo.js
++++ b/tools/vscode-htdesigner/lib/pageinfo.js
+@@ -138,4 +138,26 @@ class IrStore {
+   }
+ }
+ 
+-module.exports = { parseTitle, collectIds, listScripts, IrStore, GENERIC_ID };
++/**
++ * Line of every property of one DFM object. `lines` = the .dfm split into lines,
++ * `nodeLine` = the IR's 1-based line of "object Name: TClass". Nested objects and
++ * collection items (item … end) are skipped so their properties are not taken.
++ * Returns { "Caption": 355, "Font.Name": 360, ... } (1-based).
++ */
++function dfmPropLines(lines, nodeLine) {
++  const out = {};
++  let depth = 0;
++  for (let i = nodeLine; i < lines.length; i++) {
++    const t = lines[i].trim();
++    if (/^(object|inherited|inline|item)\b/i.test(t)) { depth++; continue; }
++    if (/^end\b/i.test(t) || /^end>\s*$/i.test(t)) { if (depth === 0) break; depth--; continue; }
++    if (/^item\s*$/i.test(t)) { depth++; continue; }
++    if (depth === 0) {
++      const m = /^([A-Za-z_][\w.]*)\s*=/.exec(t);
++      if (m && !Object.prototype.hasOwnProperty.call(out, m[1])) out[m[1]] = i + 1;
++    }
++  }
++  return out;
++}
++
++module.exports = { parseTitle, collectIds, listScripts, IrStore, GENERIC_ID, dfmPropLines };
+diff --git a/tools/vscode-htdesigner/lib/websearch.js b/tools/vscode-htdesigner/lib/websearch.js
+index 8fb99e5..4ae5a3b 100644
+--- a/tools/vscode-htdesigner/lib/websearch.js
++++ b/tools/vscode-htdesigner/lib/websearch.js
+@@ -139,22 +139,140 @@ function locateFn(sources, fnText, preferFile) {
+   return null;
+ }
+ 
+-/** Command names a handler sends: rawCmd('io.btnPanelClick'), {cmd:'x.y'}, ... */
++// The page scripts send commands to C++ through these helpers (measured 20260929 over
++// web\page: cmd( 36, rawCmd( 20, raw( 19, run( 4) plus {cmd:'x.y'} envelopes.
++const SENDERS = ['cmd', 'rawCmd', 'raw', 'run', 'sendCmd', 'sendCommand'];
++const SEND_RE_SRC = '\\b(?:' + SENDERS.join('|') + ')\\s*\\(\\s*([\'"])([\\w.:-]+)\\1';
++
++/** Command names a piece of JS sends: cmd('recipe.doc.put'), rawCmd('io.btnPanelClick'), {cmd:'x.y'} */
+ function extractCmds(text) {
+   const out = [];
+   if (!text) return out;
+-  const res = [
+-    /\brawCmd\s*\(\s*(['"])([\w.:-]+)\1/g,
+-    /\bcmd\s*:\s*(['"])([\w.:-]+)\1/g,
+-    /\bsend(?:Cmd|Command)\s*\(\s*(['"])([\w.:-]+)\1/g,
+-  ];
++  const res = [new RegExp(SEND_RE_SRC, 'g'), /\bcmd\s*:\s*(['"])([\w.:-]+)\1/g];
+   for (const re of res) {
+     let m;
+-    while ((m = re.exec(text))) if (m[2].includes('.') && !out.includes(m[2])) out.push(m[2]);
++    while ((m = re.exec(text))) {
++      const c = m[2];
++      if (c.includes('.') && !/\.(html?|js|json|css|png|cpp|ini|csv|txt)$/i.test(c) && !out.includes(c)) out.push(c);
++    }
++  }
++  return out;
++}
++
++// names that are never the page's own helpers
++const JS_SKIP = new Set(('if for while switch return function catch typeof new delete void do else case ' +
++  'Array Object String Number Boolean JSON Math Date Promise RegExp Map Set WeakMap Error Symbol ' +
++  'parseInt parseFloat isNaN isFinite setTimeout setInterval clearTimeout clearInterval requestAnimationFrame ' +
++  'console log warn error info debug push pop shift unshift slice splice concat join split indexOf lastIndexOf ' +
++  'includes map filter forEach reduce some every find findIndex sort reverse keys values entries assign create ' +
++  'stringify parse then finally resolve reject all race call apply bind toString trim replace replaceAll match ' +
++  'test exec toFixed toLowerCase toUpperCase charAt charCodeAt substring substr startsWith endsWith padStart ' +
++  'padEnd getElementById querySelector querySelectorAll closest contains matches addEventListener ' +
++  'removeEventListener preventDefault stopPropagation stopImmediatePropagation getAttribute setAttribute ' +
++  'removeAttribute hasAttribute appendChild removeChild insertBefore replaceChild createElement createTextNode ' +
++  'cloneNode add remove toggle focus blur click select dispatchEvent getBoundingClientRect getComputedStyle ' +
++  'scrollIntoView scrollTo fromCharCode isArray max min round floor ceil abs pow sqrt random now alert ' +
++  'confirm prompt encodeURIComponent decodeURIComponent fetch open send postMessage hasOwnProperty ' +
++  'getItem setItem removeItem has get set delete clear item defineProperty freeze').split(/\s+/));
++
++/** Functions a piece of JS calls, in order: save(), R.put(), … (JS builtins and DOM left out). */
++function calledNames(text) {
++  const out = [];
++  if (!text) return out;
++  const re = /(^|[^\w$])([A-Za-z_$][\w$]*)\s*\(/g;
++  let m;
++  while ((m = re.exec(text)) && out.length < 25) {
++    const name = m[2];
++    if (JS_SKIP.has(name) || name.length < 2 || out.includes(name)) continue;
++    out.push(name);
+   }
+   return out;
+ }
+ 
++/** Offset just past the "}" matching the "{" at `open` (strings, comments, templates skipped). */
++function braceEnd(text, open) {
++  let depth = 0;
++  const n = Math.min(text.length, open + 60000);
++  for (let i = open; i < n; i++) {
++    const c = text[i];
++    if (c === '/' && text[i + 1] === '/') { const e = text.indexOf('\n', i); i = e < 0 ? n : e; continue; }
++    if (c === '/' && text[i + 1] === '*') { const e = text.indexOf('*/', i + 2); i = e < 0 ? n : e + 1; continue; }
++    if (c === '"' || c === "'" || c === '`') {
++      for (i++; i < n; i++) {
++        if (text[i] === '\\') { i++; continue; }
++        if (text[i] === c) break;
++        if (c !== '`' && text[i] === '\n') break;
++      }
++      continue;
++    }
++    if (c === '{') depth++;
++    else if (c === '}') { depth--; if (depth === 0) return i + 1; }
++  }
++  return n;
++}
++
++/**
++ * Where `name` is defined as a function in the page sources: [{ source, off, body }].
++ * With `preferFile`: a definition in that file wins (JS scope: the caller's own
++ * `function save()` is the one called, not another page script's `save`).
++ */
++function findFnDefs(sources, name, limit, preferFile) {
++  if (preferFile) {
++    const own = findFnDefs(sources.filter(s => samePath(s.file, preferFile)), name, limit, null);
++    if (own.length) return own;
++  }
++  const e = escRe(name);
++  const re = new RegExp(
++    '\\bfunction\\s+' + e + '\\s*\\(' +                                     // function name(
++    '|(?:^|[^\\w$])' + e + '\\s*[:=]\\s*(?:async\\s+)?function\\b' +       // name: function / X.name = function
++    '|(?:^|[^\\w$])' + e + '\\s*[:=]\\s*(?:async\\s*)?(?:\\([^()]*\\)|[A-Za-z_$][\\w$]*)\\s*=>' + // arrow
++    '|^[ \\t]*(?:async\\s+)?' + e + '\\s*\\([^()]*\\)\\s*\\{',              // method shorthand
++    'gm');
++  const out = [];
++  for (const s of sources) {
++    re.lastIndex = 0;
++    let m;
++    while ((m = re.exec(s.text)) && out.length < (limit || 4)) {
++      if (!s.inScope(m.index)) continue;
++      const open = s.text.indexOf('{', m.index + m[0].length - 1);
++      if (open < 0 || open - m.index > 400) continue;
++      const end = braceEnd(s.text, open);
++      out.push({ source: s, off: m.index + (m[0].length - m[0].trimStart().length), body: s.text.slice(open, end) });
++    }
++  }
++  return out;
++}
++
++/**
++ * Follow a handler into the functions it calls (depth-limited) and collect the
++ * command names that end up being sent. Returns [{ cmd, via: ['save', 'putDoc'] }].
++ */
++function traceCmds(sources, rootText, maxDepth, rootFile) {
++  const found = [];
++  const seen = new Set();
++  const visit = (text, via, depth, file) => {
++    for (const c of extractCmds(text)) {
++      if (!found.some(f => f.cmd === c)) found.push({ cmd: c, via: via.slice() });
++    }
++    if (depth >= (maxDepth || 3) || found.length >= 12) return;
++    for (const name of calledNames(text)) {
++      const key = name + '|' + (file || '');
++      if (SENDERS.includes(name) || seen.has(key)) continue;
++      seen.add(key);
++      for (const d of findFnDefs(sources, name, 3, file)) visit(d.body, via.concat([name]), depth + 1, d.source.file);
++    }
++  };
++  visit(rootText || '', [], 0, rootFile || null);
++  return found;
++}
++
++/** The line that sends `cmd` (cmd('x.y' / rawCmd('x.y' / {cmd:'x.y'}), for "go to". */
++function findCmdSend(sources, cmd) {
++  const e = escRe(cmd);
++  const re = new RegExp('\\b(?:' + SENDERS.join('|') + ')\\s*\\(\\s*[\'"]' + e + '[\'"]|\\bcmd\\s*:\\s*[\'"]' + e + '[\'"]', 'g');
++  return findAll(sources, re, 3);
++}
++
+ /**
+  * Stack-frame URL -> local file. Webview resources look like
+  *   https://file+.vscode-resource.vscode-cdn.net/d%3A/HT9045/.../x.js
+@@ -220,5 +338,6 @@ function mentionsClass(text, cls) {
+ 
+ module.exports = {
+   Source, scriptRanges, readText, samePath, findAll, idMentionRe, identRe, locateFn,
+-  extractCmds, mapFrameUrl, idAtOffset, findIdAttr, titleOf, mentionsClass, escRe,
++  extractCmds, calledNames, findFnDefs, traceCmds, findCmdSend, braceEnd,
++  mapFrameUrl, idAtOffset, findIdAttr, titleOf, mentionsClass, escRe,
+ };
+diff --git a/tools/vscode-htdesigner/media/props.css b/tools/vscode-htdesigner/media/props.css
+index c3c1dec..1ecb7c0 100644
+--- a/tools/vscode-htdesigner/media/props.css
++++ b/tools/vscode-htdesigner/media/props.css
+@@ -48,6 +48,7 @@ button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+ .k-port { background: #2e7d32; }
+ .k-golden { background: #b0600a; }
+ .k-html { background: #6a4fa3; }
++.k-dfm { background: #8a5a14; }
+ .loc { font-family: var(--vscode-editor-font-family); color: var(--vscode-textLink-foreground); }
+ .note { margin-left: 8px; color: var(--vscode-descriptionForeground); font-size: .92em; }
+ .warn .note { color: var(--vscode-editorWarning-foreground); }
+diff --git a/tools/vscode-htdesigner/media/props.js b/tools/vscode-htdesigner/media/props.js
+index 443259c..ad41a8f 100644
+--- a/tools/vscode-htdesigner/media/props.js
++++ b/tools/vscode-htdesigner/media/props.js
+@@ -22,6 +22,7 @@
+     web: { chip: '網頁', title: '網頁 JS：瀏覽器實際執行的程式' },
+     port: { chip: 'C++', title: 'C++ 移植樹（HT9011UC_Cpp）' },
+     golden: { chip: 'BCB6', title: 'BCB6 原始碼（golden，Big5，唯讀開啟）' },
++    dfm: { chip: 'DFM', title: 'BCB6 表單檔 .dfm（golden，Big5，唯讀開啟）' },
+     html: { chip: 'HTML', title: '頁面 HTML 原始碼' },
+   };
+ 
+@@ -63,7 +64,8 @@
+     r.classList.add('sel');
+   }
+ 
+-  function kv(body, rows, withColor) {
++  /* onDbl(p) -> true when it handled the double-click (else the value is copied) */
++  function kv(body, rows, withColor, onDbl) {
+     var tb = el('table', 'kv');
+     rows.forEach(function (p) {
+       var tr = el('tr');
+@@ -76,8 +78,12 @@
+       }
+       v.appendChild(document.createTextNode(p[1] == null ? '' : String(p[1])));
+       if (p[3]) v.appendChild(el('span', 'hint', p[3]));
++      if (onDbl && p[4]) tr.title = '雙擊：跳到 .dfm 第 ' + p[4] + ' 行';
+       tr.appendChild(k); tr.appendChild(v);
+-      tr.addEventListener('dblclick', function () { vscode.postMessage({ type: 'copy', text: String(p[1]) }); });
++      tr.addEventListener('dblclick', function () {
++        if (onDbl && onDbl(p)) return;
++        vscode.postMessage({ type: 'copy', text: String(p[1]) });
++      });
+       tb.appendChild(tr);
+     });
+     body.appendChild(tb);
+@@ -106,6 +112,12 @@
+     if (crumbs) h.appendChild(el('div', 'path', crumbs));
+     if (!c.inIr && !c.isForm) h.appendChild(el('div', 'sub dim', c.htmlId ? '（DFM 裡沒有這個名稱：可能是網頁自己加的元件）' : '（沒有 id 的 HTML 元素：' + (c.cssPath || '<' + c.tag + '>') + '）'));
+     var bar = el('div', 'bar');
++    if (c.dfm != null) {
++      var b0 = el('button', null, 'DFM 定義');
++      b0.title = '跳到 BCB6 .dfm 裡定義這個元件的那一行（唯讀）';
++      b0.addEventListener('click', function () { vscode.postMessage({ type: 'open', i: c.dfm }); });
++      bar.appendChild(b0);
++    }
+     if (c.html != null) {
+       var b1 = el('button', null, 'HTML 原始碼');
+       b1.title = '跳到這個元件在 HTML 裡的位置';
+@@ -190,17 +202,43 @@
+       });
+     }
+ 
+-    /* commands to C++ */
++    /* commands to C++: web handler -> ... -> cmd('x.y') -> server dispatch -> C++ function */
+     if (data.cmds.length || data.cppPending) {
+       section('cmds', '送到 C++ 的命令', data.cmds.length, function (body) {
+-        if (data.cppPending && !data.cmds.length) body.appendChild(el('div', 'dim pad', '（搜尋中…）'));
++        if (data.cppPending && !data.cmds.length) body.appendChild(el('div', 'dim pad', '（追蹤中…）'));
+         data.cmds.forEach(function (cm) {
+           var r = el('div', 'row cmd');
+           r.appendChild(el('span', 'evh', cm.cmd));
+           body.appendChild(r);
+-          if (!cm.targets.length) body.appendChild(el('div', 'ind dim pad', 'C++ 移植樹裡找不到這個字串'));
+-          cm.targets.forEach(function (k) { body.appendChild(targetRow(k, true)); });
++          if (cm.via) body.appendChild(el('div', 'ind dim small', '路徑：' + cm.via + ' → 送出'));
++          (cm.send || []).forEach(function (k) { body.appendChild(targetRow(k, true)); });
++          (cm.dispatch || []).forEach(function (k) { body.appendChild(targetRow(k, true)); });
++          (cm.handlers || []).forEach(function (k) { body.appendChild(targetRow(k, true)); });
++          if (!(cm.dispatch || []).length && !(cm.handlers || []).length) {
++            body.appendChild(el('div', 'ind dim pad', data.cppPending ? '（正在找 C++ 端…）' : 'C++ 移植樹裡找不到分派這個命令的地方'));
++          }
++          if ((cm.other || []).length) {
++            var more = el('details', 'more ind');
++            more.appendChild(el('summary', null, '其他出現這個字串的地方 ' + cm.other.length + ' 處'));
++            cm.other.forEach(function (k) { more.appendChild(targetRow(k, true)); });
++            body.appendChild(more);
++          }
+         });
++        body.appendChild(el('div', 'dim pad small', '從網頁的處理函式往下追最多 3 層呼叫，找 cmd()／rawCmd()／raw()／run() 送出的命令；命令名稱是組出來的就追不到。'));
++      });
++    }
++
++    /* where the form's code touches this control */
++    if (data.uses || (data.cppPending && c.htmlId && !c.isForm)) {
++      var u = data.uses || { port: [], golden: [], portMore: 0, goldenMore: 0 };
++      section('uses', '程式碼用到此元件', u.port.length + u.golden.length, function (body) {
++        if (!data.uses) { body.appendChild(el('div', 'dim pad', '（搜尋中…）')); return; }
++        if (!u.port.length && !u.golden.length) { body.appendChild(el('div', 'dim pad', '表單的程式碼沒有直接用到「' + c.htmlId + '」。')); return; }
++        if (u.port.length) body.appendChild(el('div', 'subhead', 'C++ 移植樹' + (u.portMore ? '（另有 ' + u.portMore + ' 處）' : '')));
++        u.port.forEach(function (k) { body.appendChild(targetRow(k, false)); });
++        if (u.golden.length) body.appendChild(el('div', 'subhead', 'BCB6 原始碼' + (u.goldenMore ? '（另有 ' + u.goldenMore + ' 處）' : '')));
++        u.golden.forEach(function (k) { body.appendChild(targetRow(k, false)); });
++        body.appendChild(el('div', 'dim pad small', '只搜這個表單自己的檔案（實作或宣告了表單類別的檔），找「' + c.htmlId + '->」和宣告。'));
+       });
+     }
+ 
+@@ -211,7 +249,11 @@
+       f.placeholder = '篩選屬性…';
+       f.value = state.filter || '';
+       body.appendChild(f);
+-      var tb = kv(body, data.props, true);
++      var tb = kv(body, data.props, true, function (p) {
++        if (!p[4]) return false;
++        vscode.postMessage({ type: 'openDfmLine', line: p[4] });
++        return true;
++      });
+       var apply = function () {
+         var q = f.value.trim().toLowerCase();
+         state.filter = f.value; save();
+@@ -223,7 +265,7 @@
+       };
+       f.addEventListener('input', apply);
+       apply();
+-      body.appendChild(el('div', 'dim pad small', '唯讀。HTML 是產生器做的，要改請改 DFM／產生器來源。雙擊一列可複製值。'));
++      body.appendChild(el('div', 'dim pad small', '唯讀。雙擊一列：跳到 BCB6 .dfm 裡那個屬性的那一行（找不到行號時改為複製值）。'));
+     });
+ 
+     /* HTML */
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index b098560..157bb49 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼）。",
+-  "version": "0.1.0",
++  "version": "0.2.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -74,6 +74,18 @@
+         "title": "檢查預覽畫面的網路封鎖",
+         "category": "HT9045"
+       },
++      {
++        "command": "ht9045Designer.revealDfm",
++        "title": "跳到 DFM 定義（BCB6 .dfm）",
++        "category": "HT9045",
++        "icon": "$(symbol-structure)"
++      },
++      {
++        "command": "ht9045Designer.findComponent",
++        "title": "找元件…",
++        "category": "HT9045",
++        "icon": "$(search)"
++      },
+       {
+         "command": "ht9045Designer.selectKey",
+         "title": "選取元件",
+@@ -94,6 +106,11 @@
+           "when": "resourceExtname == .html && activeCustomEditorId != 'ht9045Designer.editor'",
+           "group": "navigation"
+         },
++        {
++          "command": "ht9045Designer.findComponent",
++          "when": "activeCustomEditorId == 'ht9045Designer.editor'",
++          "group": "navigation@0"
++        },
+         {
+           "command": "ht9045Designer.toggleMode",
+           "when": "activeCustomEditorId == 'ht9045Designer.editor'",
+@@ -116,6 +133,11 @@
+           "when": "view == ht9045Designer.components",
+           "group": "navigation@1"
+         },
++        {
++          "command": "ht9045Designer.findComponent",
++          "when": "view == ht9045Designer.components && ht9045Designer.active",
++          "group": "navigation@1"
++        },
+         {
+           "command": "ht9045Designer.toggleMode",
+           "when": "view == ht9045Designer.components",
+@@ -128,10 +150,15 @@
+         }
+       ],
+       "view/item/context": [
++        {
++          "command": "ht9045Designer.revealDfm",
++          "when": "view == ht9045Designer.components",
++          "group": "inline@1"
++        },
+         {
+           "command": "ht9045Designer.revealSource",
+           "when": "view == ht9045Designer.components",
+-          "group": "inline"
++          "group": "inline@2"
+         }
+       ],
+       "commandPalette": [
+@@ -145,6 +172,13 @@
+         }
+       ]
+     },
++    "keybindings": [
++      {
++        "command": "ht9045Designer.findComponent",
++        "key": "ctrl+alt+o",
++        "when": "activeCustomEditorId == 'ht9045Designer.editor'"
++      }
++    ],
+     "viewsContainers": {
+       "activitybar": [
+         {
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 9fa6020..642253e 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -105,6 +105,15 @@ exports.run = async function () {
+     ok(!!wed, 'eventJump=web opens the wire script', wed ? path.basename(wed.document.uri.fsPath) + ':' + (wed.selection.active.line + 1) : 'not opened');
+     ok(!!wed && wed.viewColumn !== d.panel.viewColumn, 'code opens beside the designer, not over it', wed ? 'designer=' + d.panel.viewColumn + ' code=' + wed.viewColumn : '');
+ 
++    // DFM definition: .dfm opens read-only (Big5) at "object spbSave: TSpeedButton"
++    await vscode.commands.executeCommand('ht9045Designer.revealDfm');
++    const ded = await waitFor(() => { const e = vscode.window.activeTextEditor; return e && /cHotPlate\.dfm$/i.test(e.document.uri.path) ? e : null; }, 5000);
++    ok(!!ded && ded.document.uri.scheme === 'ht9045-golden' && /object spbSave: TSpeedButton/.test(ded.document.lineAt(ded.selection.active.line).text),
++      'revealDfm opens cHotPlate.dfm at "object spbSave: TSpeedButton"', ded ? 'line ' + (ded.selection.active.line + 1) : 'not opened');
++    ok(!!data.cmds.find(c => c.cmd === 'recipe.doc.put' && c.dispatch.length), 'command recipe.doc.put traced to its C++ dispatch',
++      data.cmds.map(c => c.cmd + '(' + c.dispatch.length + ')').join(' '));
++    ok(data.uses && data.uses.golden.length > 0, 'uses of spbSave found in BCB6', data.uses ? data.uses.golden.length + ' golden, ' + data.uses.port.length + ' port' : '-');
++
+     // HTML source reveal
+     await hub.revealSource(d, 'spbSave', true);
+     const hed = await waitFor(() => { const e = vscode.window.activeTextEditor; return e && e.document === d.doc ? e : null; }, 5000);
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index 9665589..de7b0d9 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -87,13 +87,32 @@ async function main() {
+   const deadLines = [];
+   for (let i = 0; i < an.dead.length; i++) if (an.dead[i]) deadLines.push(i + 1);
+   ok(deadLines.join(',') === '3,4,5,6,13', 'cpplex dead lines (comment/string #endif ignored)', deadLines.join(','));
++  const anCr = lex.analyze(sample.replace(/\n/g, '\r\n'));
++  const deadCr = [];
++  for (let i = 0; i < anCr.dead.length; i++) if (anCr.dead[i]) deadCr.push(i + 1);
++  ok(deadCr.join(',') === '3,4,5,6,13', 'cpplex dead lines, CRLF file', deadCr.join(','));
++
++  // wb_serve.cpp (CRLF): a live function after a closed #if 0 must stay live
++  const wbs = path.join(PORT, 'tools', 'wb_serve.cpp');
++  if (fs.existsSync(wbs)) {
++    const wt = fs.readFileSync(wbs).toString('latin1');
++    const wa = lex.analyze(wt);
++    const at = wt.indexOf('void W906_DispatchIoClick(webbridge::WebBridgeServer& server');
++    const wl = lex.lineIndexOf(wa.starts, at);
++    let deadTotal = 0;
++    for (let i = 0; i < wa.dead.length; i++) deadTotal += wa.dead[i];
++    ok(at > 0 && !wa.dead[wl], 'wb_serve.cpp (CRLF): W906_DispatchIoClick definition is live', 'line ' + (wl + 1) + ', dead lines in file ' + deadTotal + '/' + wa.dead.length);
++  }
+ 
+   const csys = path.join(PORT, 'csystem.cpp');
+   if (fs.existsSync(csys)) {
+     const txt = fs.readFileSync(csys).toString('latin1');
+     const a2 = lex.analyze(txt);
++    // definitions only ("void DoAllProcess()" with no ';' -- the forward declaration
++    // near the top is live and must not be counted; before the CRLF fix it was, and
++    // that hid the live definition being reported dead)
+     const defs = [];
+-    const re = /^[ \t]*void[ \t]+DoAllProcess[ \t]*\(/gm;
++    const re = /^[ \t]*void[ \t]+DoAllProcess[ \t]*\([^)]*\)[ \t]*\r?$/gm;
+     let m;
+     while ((m = re.exec(txt))) {
+       const li = lex.lineIndexOf(a2.starts, m.index);
+@@ -161,6 +180,66 @@ async function main() {
+   ok(web.idAtOffset(html, oi + 3) === 'XST1', 'idAtOffset inside a tag');
+   ok(web.idAtOffset(html, html.indexOf('class="form"') + 2) === '@form', 'idAtOffset form root');
+ 
++  // --- DFM property lines (golden .dfm, Big5)
++  const dfmFile = path.join(r.goldenRoot, d.sourceDfm);
++  const dfmLines = require('../lib/cppindex').decodeBig5(fs.readFileSync(dfmFile)).split('\n').map(l => l.replace(/\r$/, ''));
++  ok(/^\s*object spbSave: TSpeedButton/.test(dfmLines[sp.line - 1]), 'IR line -> "object spbSave: TSpeedButton" in the .dfm', 'line ' + sp.line);
++  const pl = pageinfo.dfmPropLines(dfmLines, sp.line);
++  ok(pl.Caption && /^\s*Caption\s*=/.test(dfmLines[pl.Caption - 1]) && pl.OnClick && /spbSaveClick/.test(dfmLines[pl.OnClick - 1]),
++    'dfmPropLines: Caption / OnClick lines', 'Caption=' + pl.Caption + ' OnClick=' + pl.OnClick);
++  const g1 = d.byName.get('GroupBox1');
++  const pg = pageinfo.dfmPropLines(dfmLines, g1.line);
++  ok(pg.Caption && !Object.prototype.hasOwnProperty.call(pg, 'Picture.Data'), 'dfmPropLines skips nested objects', 'GroupBox1.Caption=' + pg.Caption);
++
++  // --- web: follow the save handler to the command it sends
++  const wire = srcs.find(s => /ht9045_hotplate_wire\.js$/i.test(s.file));
++  const hStart = wire.text.indexOf("document.addEventListener('click', function (ev)");
++  const hOpen = wire.text.indexOf('{', wire.text.indexOf('function (ev)', hStart));
++  const hText = wire.text.slice(wire.text.indexOf('function (ev)', hStart), web.braceEnd(wire.text, hOpen));
++  const tr = web.traceCmds(srcs, hText, 3, wire.file);
++  ok(tr.some(t => t.cmd === 'recipe.doc.put') && !tr.some(t => t.cmd === 'editlist.save'),
++    'traceCmds: save handler -> own save() -> ... -> cmd(recipe.doc.put), not other pages\' save()',
++    tr.map(t => t.cmd + ' via ' + t.via.join('>')).join(' | '));
++  ok(web.extractCmds("return cmd('form.save', {tag:p}); raw('control.acquire'); run('act.main.x'); x('a.html')").join() === 'form.save,control.acquire,act.main.x',
++    'extractCmds: cmd( raw( run(, file names ignored');
++  const sends = web.findCmdSend(srcs, 'recipe.doc.put');
++  ok(sends.some(h => /ht9045_recipe_client\.js$/i.test(h.file)), 'findCmdSend recipe.doc.put -> recipe client', sends.map(h => path.basename(h.file) + ':' + h.line).join(' '));
++
++  // --- C++: dispatch line -> handler function -> its definition
++  const disp = (await port.findString('io.btnPanelClick')).find(h => h.dispatch && /W906_DispatchIoClick/.test(h.snippet));
++  const called = disp ? await port.calledFuncsAt(disp.file, disp.off) : [];
++  ok(called.includes('W906_DispatchIoClick'), 'calledFuncsAt: dispatch branch -> W906_DispatchIoClick', called.join(','));
++  const fdef = await port.findFuncDefs('W906_DispatchIoClick');
++  ok(fdef.length && fdef[0].def && !fdef[0].dead && /wb_serve\.cpp$/i.test(fdef[0].file), 'findFuncDefs W906_DispatchIoClick (live, in wb_serve.cpp)',
++    fdef.map(h => rel(h.file, PORT) + ':' + h.line + (h.dead ? ' dead' : '')).join(' '));
++  const rp = (await port.findString('recipe.doc.put')).find(h => h.dispatch);
++  const rpCalled = rp ? await port.calledFuncsAt(rp.file, rp.off) : [];
++  ok(rp && rpCalled.length === 0, 'calledFuncsAt: block-style dispatch (recipe.doc.put) -> no "handler" (the block is the handler)',
++    (rp ? rel(rp.file, PORT) + ':' + rp.line : '-') + ' calls [' + rpCalled.join(',') + ']');
++  // like the extension: the first three dispatch hits (an outer grouping "if" first,
++  // then the inner "else if (wc.cmd == "counterclear.click") ccRes = W906_X(…)")
++  const ccHits = (await port.findString('counterclear.click')).filter(h => h.dispatch && !h.test).slice(0, 3);
++  const ccCalled = [];
++  for (const h of ccHits) ccCalled.push(...(await port.calledFuncsAt(h.file, h.off)));
++  ok(ccCalled.includes('W906_CounterClearClick'), 'calledFuncsAt: "else if (…) r = W906_X(…)" -> W906_X',
++    ccHits.map(h => rel(h.file, PORT) + ':' + h.line).join(' ') + ' -> ' + ccCalled.join(','));
++  const ar = (await port.findString('act.main.clearRecord')).find(h => h.dispatch);
++  const arCalled = ar ? await port.calledFuncsAt(ar.file, ar.off) : [];
++  ok(arCalled[0] === 'DoClearRecordAction', 'calledFuncsAt: "if (…) return DoX(p);" -> DoX', arCalled.join(','));
++  // several branches on one long line: only this command's branch
++  const multi = (await port.findString('io.btnPanelClick')).find(h => h.dispatch && /W906_SimDiCommand/.test(h.snippet));
++  if (multi) {
++    const mc = await port.calledFuncsAt(multi.file, multi.off);
++    ok(!mc.includes('W906_SimDiCommand'), 'calledFuncsAt: stops at the other branches of a long line', rel(multi.file, PORT) + ':' + multi.line + ' -> ' + mc.join(','));
++  }
++
++  // --- where the form code uses a control
++  const gu = await gold.findMemberUses(['TfHotPlate'], 'spbSave', 50);
++  ok(gu.some(h => !h.decl && /spbSave\s*->/.test(h.snippet)) && gu.some(h => h.decl), 'golden uses of spbSave (use + declaration)',
++    gu.slice(0, 4).map(h => path.basename(h.file) + ':' + h.line + (h.decl ? ' decl' : '')).join(' | '));
++  const pu = await port.findMemberUses(['TfHotPlate'], 'XST1', 50);
++  ok(pu.length > 0, 'port uses of XST1', pu.slice(0, 4).map(h => rel(h.file, PORT) + ':' + h.line + (h.comment ? ' comment' : '') + (h.dead ? ' dead' : '')).join(' | '));
++
+   // --- format
+   ok(fmt.tcolor(12761254) === '#a6b8c2', 'TColor int -> #rrggbb (BGR)', fmt.tcolor(12761254));
+   ok(fmt.tcolor('clBtnFace') === '#d4d0c8', 'TColor clBtnFace');
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 68f0037..5488afa 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -115,6 +115,24 @@ async function main() {
+   ok(full.props.length > 10 && full.props.some(p => p[0] === 'Caption'), 'DFM properties listed', full.props.length + ' props');
+   ok(full.comp.html != null && T(full.comp.html).kind === 'html', 'HTML source location known', where(full.comp.html));
+   log('      listeners: ' + full.listeners.map(l => l.type + '/' + l.on + (l.relevant ? '*' : '') + ' ' + (l.handler != null ? where(l.handler) : l.bind != null ? where(l.bind) : '-')).join(' | '));
++
++  // DFM definition, per-property .dfm lines
++  ok(full.comp.dfm != null && T(full.comp.dfm).kind === 'dfm' && T(full.comp.dfm).line === 351 && /cHotPlate\.dfm$/i.test(T(full.comp.dfm).file),
++    'DFM definition -> cHotPlate.dfm:351', full.comp.dfm != null ? where(full.comp.dfm) + ' ' + T(full.comp.dfm).snippet : '-');
++  const cap = full.props.find(p => p[0] === 'Caption');
++  ok(cap && cap[4] === 356, 'DFM property Caption -> .dfm line 356', cap ? String(cap[4]) : '-');
++
++  // web command -> C++ dispatch -> handler function
++  const rdp = full.cmds.find(c => c.cmd === 'recipe.doc.put');
++  ok(rdp && /save\(\)/.test(rdp.via) && rdp.send.length && rdp.dispatch.length && /wb_serve\.cpp$/i.test(T(rdp.dispatch[0]).file),
++    'command recipe.doc.put: traced from the handler, sent from the recipe client, dispatched in wb_serve.cpp',
++    rdp ? rdp.via + ' | send ' + rdp.send.map(where).join(',') + ' | dispatch ' + rdp.dispatch.map(where).join(',') + ' | handlers ' + rdp.handlers.map(where).join(',') : full.cmds.map(c => c.cmd).join(','));
++  ok(click.targets.length <= 12, 'OnClick jump list stays short', click.targets.length + ' targets');
++
++  // where the form code uses the control
++  ok(full.uses && full.uses.golden.some(i => /cHotPlate\.cpp$/i.test(T(i).file)) && full.uses.golden.some(i => /cHotPlate\.h$/i.test(T(i).file) && T(i).note === '宣告'),
++    'uses of spbSave in BCB6: code + declaration', full.uses ? full.uses.golden.map(where).join(' | ') : '-');
++  log('      uses (port): ' + (full.uses ? full.uses.port.map(where).join(' | ') || '(none)' : '-'));
+   log('      page notes: ' + full.page.notes.join(' / '));
+ 
+   // double-click the event in the panel -> quick pick (3 kinds) -> open golden (virtual Big5 doc)
+@@ -132,6 +150,21 @@ async function main() {
+   try { fake._fs.p.writeFile(opened.uri, Buffer.from('x')); } catch (e) { refused = e.code === 'NoPermissions'; }
+   ok(refused, 'BCB6 file system refuses writes');
+ 
++  // double-click a DFM property -> the .dfm opens read-only at that property's line
++  propsRecv({ type: 'openDfmLine', line: 356 });
++  await new Promise(r => setTimeout(r, 200));
++  const od = fake._state.opened.pop();
++  ok(od && od.uri.scheme === 'ht9045-golden' && /cHotPlate\.dfm$/i.test(od.uri.fsPath) && od.selection.start.line === 355 && /Caption/.test(od.text.split('\n')[355]),
++    'property double-click opens cHotPlate.dfm:356 (Big5, read-only)', od ? od.uri.fsPath + ':' + (od.selection.start.line + 1) : 'none');
++
++  // find component (quick pick) -> selectKey to the page
++  fake._state.quickPick = items => items.find(i => i.label === 'XST1');
++  pagePosted.length = 0;
++  await fake._cmds['ht9045Designer.findComponent']();
++  const sk = pagePosted.find(m => m.type === 'selectKey');
++  const xnode = R.treeNodes.find(n => n[2] === 'XST1');
++  ok(sk && xnode && sk.key === xnode[0], 'find component -> selects XST1 in the page');
++
+   // eventJump=web: direct jump without asking
+   fake._config.eventJump = 'web';
+   const before = fake._calls.filter(c => c.name === 'quickPick').length;
+@@ -146,7 +179,8 @@ async function main() {
+   pageRecv({ __htd: 1, type: 'dblclick', key: R.selInfo.key });
+   await new Promise(r => setTimeout(r, 200));
+   const o3 = fake._state.opened.pop();
+-  ok(o3 && /\.cpp$/i.test(o3.uri.fsPath) && o3.uri.scheme === 'file', 'double-click component (eventJump=cpp) opens the C++ port', o3 ? path.basename(o3.uri.fsPath) + ':' + (o3.selection.start.line + 1) : 'none');
++  ok(o3 && /\.cpp$/i.test(o3.uri.fsPath) && o3.uri.scheme === 'file' && o3.uri.fsPath.toLowerCase().startsWith(PORT.toLowerCase()),
++    'double-click component (eventJump=cpp) opens C++ in the port tree', o3 ? path.basename(o3.uri.fsPath) + ':' + (o3.selection.start.line + 1) : 'none');
+ 
+   // form root: OnShow -> FormShow
+   pageRecv({ __htd: 1, type: 'select', info: { key: 1, id: '@form', tag: 'div', title: '', attrs: [], style: [], inline: [], computed: [], chain: [], listeners: [], inherited: [] }, origin: 'click' });
+diff --git a/tools/vscode-htdesigner/test/vscode_it.ps1 b/tools/vscode-htdesigner/test/vscode_it.ps1
+index 44d1d9c..a621579 100644
+--- a/tools/vscode-htdesigner/test/vscode_it.ps1
++++ b/tools/vscode-htdesigner/test/vscode_it.ps1
+@@ -7,8 +7,10 @@ param(
+   [string]$Page = '',
+   # other pages to open one after another (generated / hand-written / JS-built / iframe)
+   [string[]]$Sweep = @('main.html', 'HW.IoSetView.html', 'Setup.Speed.html', 'Data.LotInfo.html',
+-    'Main.MotionView.html', 'IDE.MotionView9050-UPH.html', 'Status.Security.html', 'HW.MotorTest.html')
++    'Main.MotionView.html', 'IDE.MotionView9050-UPH.html', 'Status.Security.html', 'HW.MotorTest.html'),
++  [switch]$NoSweep
+ )
++if ($NoSweep) { $Sweep = @() }
+ $ErrorActionPreference = 'Stop'
+ $here = $PSScriptRoot
+ $ext = Resolve-Path (Join-Path $here '..')
+@@ -37,7 +39,7 @@ $settings = [ordered]@{
+ 
+ $report = Join-Path $tmp 'report.txt'
+ # the files the test opens must be byte-identical afterwards
+-$watched = @($Page, (Join-Path $golden.FullName 'cHotPlate.cpp')) + @($Sweep | ForEach-Object { Join-Path (Split-Path $Page -Parent) $_ })
++$watched = @($Page, (Join-Path $golden.FullName 'cHotPlate.cpp'), (Join-Path $golden.FullName 'cHotPlate.dfm')) + @($Sweep | ForEach-Object { Join-Path (Split-Path $Page -Parent) $_ })
+ $before = @{}
+ foreach ($f in $watched) { $before[$f] = (Get-FileHash $f -Algorithm MD5).Hash }
+ $env:ELECTRON_RUN_AS_NODE = $null
+-- 
+2.55.0.windows.5
+

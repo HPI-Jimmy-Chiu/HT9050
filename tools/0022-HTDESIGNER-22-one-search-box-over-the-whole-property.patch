@@ -1,0 +1,253 @@
+From 3719e317e195d7e37fc0bb1424a85a4e4a2c4a8d Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 20:28:07 +0800
+Subject: [PATCH] HTDESIGNER-22: one search box over the whole property grid --
+ WPF "Search Properties" (0.22.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Under the panel's header: typing keeps only the rows that have the words --
+in every section at once (the editable fields count with the value in their
+input, events, web listeners, commands to C++, data fields, DFM properties,
+HTML); a section with nothing left folds away, one with a hit opens (also a
+folded sub-list such as the computed styles); "找到 N 項" beside it. Words
+separated by blanks must all match ("left 54"); Esc clears; the text stays
+when another component is selected. The DFM section's own filter became this
+box (its old text is taken over). Opening sections for a search is not taken
+as the user's choice (the 'toggle' event comes later, the box's text tells).
+
+Tests: panels 5 new checks on the real spbSave data (spbSaveClick: 3 rows,
+1 of 8 sections; font.size; "left 54" matches the input's value; no hit says
+so; cleared: all 8 back); lib 116, probe, smoke 82, real VS Code 82 -- all
+pass; opened files MD5-unchanged.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  4 +
+ tools/vscode-htdesigner/media/props.css       |  3 +
+ tools/vscode-htdesigner/media/props.js        | 96 +++++++++++++++----
+ tools/vscode-htdesigner/package.json          |  2 +-
+ .../vscode-htdesigner/test/panels_render.ps1  | 25 +++++
+ 5 files changed, 110 insertions(+), 20 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 8de6e64..6b57fdb 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -65,6 +65,10 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ 
+ 滑鼠移到元件上，標籤會顯示 `名稱 : 型別 · 事件`，例如 `spbSave : TSpeedButton · OnClick   227×40`。
+ 
++**搜尋屬性**（WPF 屬性視窗上面那一格）：屬性面板標題下的搜尋框，打字就只留下符合的列 —— 所有區塊一起找
++（可編輯的欄位連輸入框裡的值也算、事件、網頁監聽器、送到 C++ 的命令、資料欄位、DFM 屬性、HTML），
++有找到的區塊自動展開、沒有的收起，旁邊顯示「找到 N 項」；空白隔開的多個字要同時符合（例如 `left 54`）。Esc 清掉。換元件時搜尋字會保留。
++
+ **在屬性面板改值**：面板最上面的「外觀與版面（可編輯）」，用 VCL 的屬性名稱：
+ `Left`、`Top`、`Width`、`Height`、`Caption`（輸入框是 `Text`）、`Visible`、`Enabled`、
+ `Font.Name`、`Font.Size`、`Font.Bold`、`Font.Italic`、`Font.Color`、`Color`。
+diff --git a/tools/vscode-htdesigner/media/props.css b/tools/vscode-htdesigner/media/props.css
+index 1d5e940..a33cbe1 100644
+--- a/tools/vscode-htdesigner/media/props.css
++++ b/tools/vscode-htdesigner/media/props.css
+@@ -75,6 +75,9 @@ button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+   border: 1px solid var(--vscode-input-border, transparent); padding: 2px 6px;
+ }
+ .filter:focus { outline: 1px solid var(--vscode-focusBorder); }
++.search { margin-top: 6px; display: flex; align-items: center; gap: 6px; }
++.search .filter { margin: 0; width: auto; flex: 1; }
++.shits { white-space: nowrap; }
+ table.kv { border-collapse: collapse; width: 100%; table-layout: fixed; }
+ table.kv td { padding: 1px 12px; vertical-align: top; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,.12)); }
+ table.kv tr:hover td { background: var(--vscode-list-hoverBackground); }
+diff --git a/tools/vscode-htdesigner/media/props.js b/tools/vscode-htdesigner/media/props.js
+index 73b8ead..7ca0fe6 100644
+--- a/tools/vscode-htdesigner/media/props.js
++++ b/tools/vscode-htdesigner/media/props.js
+@@ -6,7 +6,9 @@
+   var vscode = acquireVsCodeApi();
+   var root = document.getElementById('root');
+   var data = null;
+-  var state = vscode.getState() || { filter: '', closed: {} };
++  var state = vscode.getState() || { q: '', closed: {} };
++  if (state.q == null) state.q = state.filter || '';   // (the DFM section's own filter became the search box)
++  var searching = false;
+ 
+   function save() { vscode.setState(state); }
+ 
+@@ -32,7 +34,10 @@
+     var s = el('summary', null, title);
+     if (count != null) s.appendChild(el('span', 'count', count));
+     d.appendChild(s);
+-    d.addEventListener('toggle', function () { state.closed[key] = !d.open; save(); });
++    d.setAttribute('data-key', key);
++    // (a search opens the sections it finds something in: that is not the user closing / opening one)
++    // ('toggle' comes later than the change, so the search box's text is what tells)
++    d.addEventListener('toggle', function () { if (searching || String(state.q || '').trim()) return; state.closed[key] = !d.open; save(); });
+     var body = el('div', 'body');
+     build(body);
+     d.appendChild(body);
+@@ -130,6 +135,19 @@
+       bar.appendChild(b2);
+     }
+     h.appendChild(bar);
++    /* WPF: one search box over the whole property grid */
++    var sb = el('div', 'search');
++    var sq = el('input', 'filter');
++    sq.type = 'search';
++    sq.placeholder = '搜尋屬性、事件、值…';
++    sq.value = state.q || '';
++    sq.setAttribute('data-field', 'search');
++    var sn = el('span', 'dim small shits');
++    sq.addEventListener('input', function () { state.q = sq.value; save(); sn.textContent = applySearch(); });
++    sq.addEventListener('keydown', function (e) { if (e.key === 'Escape') { sq.value = ''; state.q = ''; save(); sn.textContent = applySearch(); } });
++    sb.appendChild(sq);
++    sb.appendChild(sn);
++    h.appendChild(sb);
+     root.appendChild(h);
+ 
+     /* editable properties -- the WPF property grid: commit on Enter or leaving the field */
+@@ -442,27 +460,12 @@
+     /* DFM properties */
+     section('props', 'DFM 屬性', data.props.length, function (body) {
+       if (!data.props.length) { body.appendChild(el('div', 'dim pad', '沒有 DFM 屬性資料。')); return; }
+-      var f = el('input', 'filter');
+-      f.placeholder = '篩選屬性…';
+-      f.value = state.filter || '';
+-      body.appendChild(f);
+-      var tb = kv(body, data.props, true, function (p) {
++      kv(body, data.props, true, function (p) {
+         if (!p[4]) return false;
+         vscode.postMessage({ type: 'openDfmLine', line: p[4] });
+         return true;
+       });
+-      var apply = function () {
+-        var q = f.value.trim().toLowerCase();
+-        state.filter = f.value; save();
+-        var trs = tb.querySelectorAll('tr');
+-        for (var i = 0; i < trs.length; i++) {
+-          var p = data.props[i];
+-          trs[i].style.display = !q || String(p[0]).toLowerCase().indexOf(q) >= 0 || String(p[1]).toLowerCase().indexOf(q) >= 0 ? '' : 'none';
+-        }
+-      };
+-      f.addEventListener('input', apply);
+-      apply();
+-      body.appendChild(el('div', 'dim pad small', '唯讀。雙擊一列：跳到 BCB6 .dfm 裡那個屬性的那一行（找不到行號時改為複製值）。'));
++      body.appendChild(el('div', 'dim pad small', '唯讀。雙擊一列：跳到 BCB6 .dfm 裡那個屬性的那一行（找不到行號時改為複製值）。上面的搜尋框可以篩選。'));
+     });
+ 
+     /* HTML */
+@@ -490,6 +493,61 @@
+     foot.appendChild(el('div', 'fname', data.page.name));
+     data.page.notes.forEach(function (n) { foot.appendChild(el('div', 'fnote', n)); });
+     root.appendChild(foot);
++    var shits = root.querySelector('.shits');
++    if (shits) shits.textContent = applySearch();
++  }
++
++  /* the search box: every row of every section (a table row, a code location, an event,
++     a listener) stays when its text -- or the value in its input -- has the words; a
++     section with nothing left folds away, one with a hit opens. Returns the count text. */
++  function applySearch() {
++    var q = String(state.q || '').trim().toLowerCase();
++    var words = q ? q.split(/\s+/) : [];
++    var hits = 0;
++    searching = true;
++    var secs = root.querySelectorAll('details.sec');
++    for (var s = 0; s < secs.length; s++) {
++      var sec = secs[s];
++      var body = sec.querySelector(':scope > .body');
++      var title = sec.querySelector(':scope > summary');
++      var leaves = body ? body.querySelectorAll('tr, .row, .lhead') : [];
++      var shown = 0;
++      for (var i = 0; i < leaves.length; i++) {
++        var lf = leaves[i];
++        var txt = lf.textContent;
++        var ins = lf.querySelectorAll('input');
++        for (var j = 0; j < ins.length; j++) txt += ' ' + (ins[j].type === 'checkbox' ? (ins[j].checked ? 'true' : 'false') : ins[j].value);
++        txt = txt.toLowerCase();
++        var ok = words.every(function (w) { return txt.indexOf(w) >= 0; });
++        lf.style.display = ok ? '' : 'none';
++        if (ok) shown++;
++      }
++      /* a listener block (.lst) with nothing left goes too; the notes / sub-headings only without a search */
++      var lsts = body ? body.querySelectorAll('.lst') : [];
++      for (var k = 0; k < lsts.length; k++) {
++        var vis = Array.prototype.some.call(lsts[k].querySelectorAll('.row, .lhead'), function (x) { return x.style.display !== 'none'; });
++        lsts[k].style.display = !words.length || vis ? '' : 'none';
++      }
++      /* a folded sub-list (計算後樣式) with a hit opens */
++      var mores = body ? body.querySelectorAll('details.more') : [];
++      for (var mo = 0; mo < mores.length; mo++) {
++        if (words.length && Array.prototype.some.call(mores[mo].querySelectorAll('tr'), function (x) { return x.style.display !== 'none'; })) mores[mo].open = true;
++      }
++      var extras = body ? body.querySelectorAll(':scope > .subhead, :scope > .pad, :scope > .dim, :scope > .diffnote') : [];
++      for (var x = 0; x < extras.length; x++) extras[x].style.display = words.length ? 'none' : '';
++      var titleHit = words.length && words.every(function (w) { return (title ? title.textContent.toLowerCase() : '').indexOf(w) >= 0; });
++      if (titleHit) { for (var i2 = 0; i2 < leaves.length; i2++) leaves[i2].style.display = ''; shown = leaves.length; }
++      if (!words.length) {
++        sec.style.display = '';
++        sec.open = !state.closed[sec.getAttribute('data-key')];
++      } else {
++        sec.style.display = shown ? '' : 'none';
++        if (shown) sec.open = true;
++      }
++      hits += shown;
++    }
++    searching = false;
++    return words.length ? (hits ? '找到 ' + hits + ' 項' : '沒有符合的項目') : '';
+   }
+ 
+   window.addEventListener('message', function (e) {
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index c88c5ab..061ea54 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.21.0",
++  "version": "0.22.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/panels_render.ps1 b/tools/vscode-htdesigner/test/panels_render.ps1
+index 7bf37ce..2407820 100644
+--- a/tools/vscode-htdesigner/test/panels_render.ps1
++++ b/tools/vscode-htdesigner/test/panels_render.ps1
+@@ -109,6 +109,31 @@ if ($r1) {
+   Check ($r1.dfmHints -ge 8 -and $r1.sysHint -and $r1.sizeHint -match '14.*-16') 'DFM hints on the rows, system colour by name, Font.Size shows the Height' "hints=$($r1.dfmHints) sys=$($r1.sysHint) size=$($r1.sizeHint)"
+   Check ($r1.afterReset -eq 'setLook:bold=false') 'reset button posts the DFM value' $r1.afterReset
+ } else { $script:bad++ }
++$searchChecks = @'
++var sq = document.querySelector('input[data-field="search"]');
++function vis(e) { return e && e.offsetParent !== null; }
++function run(q) {
++  sq.value = q; sq.dispatchEvent(new Event('input'));
++  var secs = Array.prototype.filter.call(document.querySelectorAll('details.sec'), function (s) { return s.style.display !== 'none'; });
++  var rows = Array.prototype.filter.call(document.querySelectorAll('details.sec tr, details.sec .row'), function (r) { return r.style.display !== 'none' && vis(r); });
++  return { secs: secs.length, rows: rows.length, text: rows.map(function (r) { return r.textContent.slice(0, 30); }).join(' | '), count: document.querySelector('.shits').textContent };
++}
++R.all = document.querySelectorAll('details.sec').length;
++R.q1 = run('spbSaveClick');
++R.q2 = run('font.size');
++R.q3 = run('left 54');
++R.q4 = run('zzzz-nothing');
++R.q0 = run('');
++R.q0secs = Array.prototype.filter.call(document.querySelectorAll('details.sec'), function (s) { return s.style.display !== 'none'; }).length;
++'@
++$r5 = Render 'props_search' 'props.css' 'props.js' 'show' (Join-Path $dump 'props_spbSave.json') $searchChecks
++if ($r5) {
++  Check ($r5.errors.Count -eq 0 -and $r5.q1.rows -ge 1 -and $r5.q1.secs -lt $r5.all -and $r5.q1.text -match 'spbSaveClick') 'search spbSaveClick: only the rows with it, other sections fold away' "secs=$($r5.q1.secs)/$($r5.all) rows=$($r5.q1.rows) $($r5.q1.count)"
++  Check ($r5.q2.rows -ge 1 -and $r5.q2.text -match 'Font\.Size') 'search font.size: the Font.Size row' "rows=$($r5.q2.rows) [$($r5.q2.text)]"
++  Check ($r5.q3.rows -ge 1 -and $r5.q3.text -match '^Left') 'search "left 54": both words, the value in the input counts' "rows=$($r5.q3.rows) [$($r5.q3.text)]"
++  Check ($r5.q4.rows -eq 0 -and $r5.q4.secs -eq 0 -and $r5.q4.count -ne '') 'search with no hit: nothing shown, says so' "count=$($r5.q4.count)"
++  Check ($r5.q0secs -eq $r5.all -and $r5.q0.count -eq '') 'clearing the search: every section back' "secs=$($r5.q0secs)/$($r5.all)"
++} else { $script:bad++ }
+ $r2 = Render 'props_XST1' 'props.css' 'props.js' 'show' (Join-Path $dump 'props_XST1.json') $propsChecks
+ if ($r2) {
+   Check ($r2.errors.Count -eq 0 -and $r2.hasField -and $r2.hasXStart) 'props panel (XST1) renders the data field [Hotplate Form] X Start' ($r2.errors -join ' / ')
+-- 
+2.55.0.windows.5
+

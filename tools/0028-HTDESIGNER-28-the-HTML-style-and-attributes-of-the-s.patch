@@ -1,0 +1,465 @@
+From e8c967c02f32bb3503240b7437acd8f4113d0810 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 21:21:03 +0800
+Subject: [PATCH] HTDESIGNER-28: the HTML style and attributes of the source,
+ editable in the property grid (0.28.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The panel's HTML section lists what the SOURCE's start tag writes -- the style
+declarations as written (not the browser's longhands: border:1px outset was
+a dozen border-* rows) and the attributes as written (the page's JS strips
+titles at run time) -- and they can be changed like WPF changes the XAML:
+- double-click a value -> an input; Enter or leaving it commits (a changed
+  value only), empty = remove, Esc cancels;
+- "＋ 樣式名稱 / 值" adds a declaration (z-index, border ...);
+- attributes: title, class, placeholder, tabindex, alt, data-*, aria-*;
+  never the id (the page's JS finds the control by it) nor an on* handler;
+- checked twice (extension and probe): a CSS name of lowercase letters and
+  '-', a value without ; { } < > \ -- so nothing can leave its declaration;
+  a locked component's position properties are refused.
+- The probe writes it (setStyleRaw / setAttrRaw) and reports the edit; one
+  Ctrl+Z. htmledit.attrsOf.
+
+Tests: lib 121 (attrsOf: spbSave's class/id/title/style, bare and unquoted
+ones), probe (z-index / title written, onclick never, removal), smoke 94
+(the data: left 54px, id not editable, title editable; only the clean style
+and the text attribute reach the probe), panels (double-click left -> 54px
+-> Enter posts 60px; id not editable; the new-style row; title), real VS
+Code 96 (z-index:5 in spbSave's source, the panel shows it, one undo) -- all
+pass; NO-SAVES, MD5-unchanged.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  5 ++
+ tools/vscode-htdesigner/extension.js          | 32 ++++++++
+ tools/vscode-htdesigner/lib/htmledit.js       | 16 +++-
+ tools/vscode-htdesigner/media/probe.js        | 23 ++++++
+ tools/vscode-htdesigner/media/props.css       |  8 ++
+ tools/vscode-htdesigner/media/props.js        | 80 ++++++++++++++++++-
+ tools/vscode-htdesigner/package.json          |  2 +-
+ .../test/integration/index.js                 | 17 ++++
+ .../vscode-htdesigner/test/panels_render.ps1  | 33 ++++++++
+ tools/vscode-htdesigner/test/probe_driver.js  | 13 +++
+ tools/vscode-htdesigner/test/probe_test.ps1   |  1 +
+ tools/vscode-htdesigner/test/run_tests.js     |  7 ++
+ .../vscode-htdesigner/test/smoke_extension.js | 15 ++++
+ 13 files changed, 248 insertions(+), 4 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index e0dfd51..72b25be 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -69,6 +69,11 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ 
+ 滑鼠移到元件上，標籤會顯示 `名稱 : 型別 · 事件`，例如 `spbSave : TSpeedButton · OnClick   227×40`。
+ 
++**HTML 的 style／屬性也能直接改**：屬性面板「HTML」區塊列的是**原始碼裡寫的** style 與屬性（不是瀏覽器展開後的一大串），
++雙擊值＝改，Enter 或離開欄位生效，清空＝刪掉那一項，Esc 取消；最下面「＋ 樣式名稱／值」可以新增一項（例如 `z-index`、`border`）。
++屬性可以改 `title`、`class`、`placeholder`、`tabindex`、`alt`、`data-*`、`aria-*`；**id 不在這裡改**（網頁程式靠它找元件），`on…` 事件屬性也不行。
++值裡不能有 `; { } < > \`（不能跑出那一項）。一樣寫回原始碼、一個 Ctrl+Z 復原。
++
+ **搜尋屬性**（WPF 屬性視窗上面那一格）：屬性面板標題下的搜尋框，打字就只留下符合的列 —— 所有區塊一起找
+ （可編輯的欄位連輸入框裡的值也算、事件、網頁監聽器、送到 C++ 的命令、資料欄位、DFM 屬性、HTML），
+ 有找到的區塊自動展開、沒有的收起，旁邊顯示「找到 N 項」；空白隔開的多個字要同時符合（例如 `left 54`）。Esc 清掉。換元件時搜尋字會保留。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index c7a324f..00613ad 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -35,6 +35,14 @@ const lex = require('./lib/cpplex');
+ 
+ const sleep = ms => new Promise(r => setTimeout(r, ms));
+ 
++const attrsOf = t => htmledit.attrsOf(t);
++/** Attributes the grid may change: text-like ones. Never the id (the page's JS finds it by it) or on* handlers. */
++const ATTR_EDIT = /^(title|class|placeholder|tabindex|alt|data-[\w-]+|aria-[\w-]+)$/;
++/** A CSS property name / value the grid writes into a style="…" (no way out of the declaration;
++    a quote is fine: htmledit.setStyle turns it into the other kind). */
++const CSS_NAME = /^(--)?[a-z][a-z0-9-]*$/;
++const CSS_BAD = /[;{}<>\\]/;
++
+ const VIEW_TYPE = 'ht9045Designer.editor';
+ const GOLDEN_SCHEME = 'ht9045-golden';
+ const CONTAINER = 'workbench.view.extension.ht9045-designer';
+@@ -686,6 +694,10 @@ class Hub {
+       html: {
+         geom: info.geom || null, dfmGeom: node ? node.geometry : null, attrs: info.attrs || [],
+         style: info.style || [], computed: info.computed || [], text: info.text || '', visible: info.visible !== false,
++        // what the SOURCE's start tag says (the grid edits these, like WPF edits the XAML):
++        // the declarations as written, not the browser's longhands; the attributes as written
++        srcStyle: edTag ? htmledit.styleOf(edTag.text).decls.map(x => [x.name, x.value]) : null,
++        srcAttrs: edTag ? attrsOf(edTag.text).filter(a => a[0] !== 'style').map(a => a.concat([ATTR_EDIT.test(a[0]) ? 1 : 0])) : null,
+       },
+       page: this.pageSummary(d, pi),
+       targets, cppPending: true,
+@@ -1010,6 +1022,26 @@ class Hub {
+       case 'align':
+         if (d && data && data.comp) this.forwardEdit(d, data.comp.key, m);
+         break;
++      case 'setStyleProp': {
++        // one style declaration of the source's start tag, as written (value null / '' = remove it)
++        if (!d || !data || !data.comp) break;
++        const name = String(m.name || '').trim().toLowerCase();
++        const value = m.value == null || String(m.value).trim() === '' ? null : String(m.value).trim();
++        if (!CSS_NAME.test(name) || (value !== null && CSS_BAD.test(value))) {
++          this.refuseEdit(d, '樣式「' + name + (value ? ': ' + value : '') + '」不能寫（名稱只能是英文小寫與 -，值不能有 ; { } < > \\）。');
++          break;
++        }
++        if (/^(left|top|right|bottom|width|height|position|inset)$/.test(name) && this.refuseLocked(d, [data.comp.htmlId], '改位置')) break;
++        d.post({ type: 'setStyleRaw', key: data.comp.key, name, value });
++        break;
++      }
++      case 'setAttrProp': {
++        if (!d || !data || !data.comp) break;
++        const name = String(m.name || '').trim().toLowerCase();
++        if (!ATTR_EDIT.test(name)) { this.refuseEdit(d, '屬性「' + name + '」不在這裡改（id 是網頁程式找元件用的；on… 是事件）。'); break; }
++        d.post({ type: 'setAttrRaw', key: data.comp.key, name, value: m.value == null ? null : String(m.value) });
++        break;
++      }
+       default: break;
+     }
+   }
+diff --git a/tools/vscode-htdesigner/lib/htmledit.js b/tools/vscode-htdesigner/lib/htmledit.js
+index 6748193..9c32819 100644
+--- a/tools/vscode-htdesigner/lib/htmledit.js
++++ b/tools/vscode-htdesigner/lib/htmledit.js
+@@ -222,4 +222,18 @@ function captionHostTag(text, tag, kind) {
+   return { start: lt, end: e + 1, text: text.slice(lt, e + 1) };
+ }
+ 
+-module.exports = { VOID, tagEnd, startTagOf, wrapperTagOf, styleOf, setStyle, setAttr, captionRange, captionHostTag, escText, escAttr };
++/** The attributes a start tag writes, in order: [[name, value], ...] (a bare one = ''). */
++function attrsOf(tagText) {
++  const out = [];
++  const body = String(tagText).replace(/^<[A-Za-z][\w-]*/, '').replace(/\/?>$/, '');
++  const re = /\s*([^\s=/>"']+)(?:\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
++  let m;
++  while ((m = re.exec(body))) {
++    if (!m[1]) break;
++    out.push([m[1].toLowerCase(), m[3] !== undefined ? m[3] : m[4] !== undefined ? m[4] : m[5] !== undefined ? m[5] : '']);
++    if (m[0].length === 0) re.lastIndex++;
++  }
++  return out;
++}
++
++module.exports = { VOID, tagEnd, startTagOf, wrapperTagOf, styleOf, setStyle, setAttr, attrsOf, captionRange, captionHostTag, escText, escAttr };
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index e0a3fce..e3eedc0 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -1276,6 +1276,29 @@
+         selEl = null; select(el5, 'edit', false);
+         break;
+       }
++      case 'setStyleRaw': {
++        /* one declaration of the element's own style="…" from the grid (value null = remove) */
++        var el8 = els.get(m.key);
++        if (!el8 || !el8.isConnected || !/^(--)?[a-z][a-z0-9-]*$/.test(String(m.name || ''))) break;
++        if (m.value != null && /[;{}<>\\]/.test(String(m.value))) break;
++        var st8 = {};
++        st8[m.name] = m.value == null ? null : String(m.value);
++        if (st8[m.name] == null) el8.style.removeProperty(m.name); else el8.style.setProperty(m.name, st8[m.name]);
++        sendEdit(el8, { what: 'style', target: 'self', style: st8 });
++        selEl = null; select(el8, 'edit', false);
++        break;
++      }
++      case 'setAttrRaw': {
++        /* a text-like attribute from the grid (never the id or an on* handler) */
++        var el9 = els.get(m.key);
++        if (!el9 || !el9.isConnected || !/^(title|class|placeholder|tabindex|alt|data-[\w-]+|aria-[\w-]+)$/.test(String(m.name || ''))) break;
++        var at9 = {};
++        at9[m.name] = m.value == null ? null : String(m.value);
++        if (at9[m.name] == null) el9.removeAttribute(m.name); else el9.setAttribute(m.name, at9[m.name]);
++        sendEdit(el9, { what: 'attr', attr: at9 });
++        selEl = null; select(el9, 'edit', false);
++        break;
++      }
+       case 'align': {
+         /* WPF Format > Align / Make Same Size: the primary selection is the reference */
+         if (!selEl) break;
+diff --git a/tools/vscode-htdesigner/media/props.css b/tools/vscode-htdesigner/media/props.css
+index a33cbe1..693462b 100644
+--- a/tools/vscode-htdesigner/media/props.css
++++ b/tools/vscode-htdesigner/media/props.css
+@@ -75,6 +75,14 @@ button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+   border: 1px solid var(--vscode-input-border, transparent); padding: 2px 6px;
+ }
+ .filter:focus { outline: 1px solid var(--vscode-focusBorder); }
++table.html tr.editable td.v { cursor: text; }
++table.html tr.editable:hover td.v { text-decoration: underline dotted; }
++table.html td input.txt {
++  font: inherit; font-family: var(--vscode-editor-font-family); color: var(--vscode-input-foreground);
++  background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent);
++  padding: 0 4px; box-sizing: border-box; width: calc(100% - 4px);
++}
++table.html tr.addrow td { padding-top: 3px; padding-bottom: 3px; }
+ .search { margin-top: 6px; display: flex; align-items: center; gap: 6px; }
+ .search .filter { margin: 0; width: auto; flex: 1; }
+ .shits { white-space: nowrap; }
+diff --git a/tools/vscode-htdesigner/media/props.js b/tools/vscode-htdesigner/media/props.js
+index 7ca0fe6..25c0de1 100644
+--- a/tools/vscode-htdesigner/media/props.js
++++ b/tools/vscode-htdesigner/media/props.js
+@@ -69,6 +69,46 @@
+     r.classList.add('sel');
+   }
+ 
++  /* a name / value row whose value becomes an input on double-click; Enter or leaving the
++     field commits (only a changed value), Esc cancels */
++  function editRow(tb, name, value, canEdit, onCommit, tip) {
++    var tr = el('tr', canEdit ? 'editable' : null);
++    tr.setAttribute('data-name', name);
++    tr.appendChild(el('td', 'k', name));
++    var v = el('td', 'v');
++    var shown = el('span', null, value);
++    v.appendChild(shown);
++    tr.appendChild(v);
++    tr.title = tip || '';
++    if (canEdit) {
++      tr.addEventListener('dblclick', function () {
++        if (v.querySelector('input')) return;
++        var i = el('input', 'txt');
++        i.value = value;
++        i.setAttribute('data-field', 'html:' + name);
++        v.textContent = '';
++        v.appendChild(i);
++        i.focus();
++        try { i.select(); } catch (x) { /* ignore */ }
++        var done = false;
++        var finish = function (commit) {
++          if (done) return;
++          done = true;
++          if (commit && i.value !== value) { onCommit(i.value); return; }
++          v.textContent = '';
++          v.appendChild(shown);
++        };
++        i.addEventListener('keydown', function (e) {
++          if (e.key === 'Enter') finish(true);
++          else if (e.key === 'Escape') finish(false);
++        });
++        i.addEventListener('blur', function () { finish(true); });
++      });
++    }
++    tb.appendChild(tr);
++    return tr;
++  }
++
+   /* onDbl(p) -> true when it handled the double-click (else the value is copied) */
+   function kv(body, rows, withColor, onDbl) {
+     var tb = el('table', 'kv');
+@@ -478,8 +518,44 @@
+       rows.push(['可見', hm.visible ? '是' : '否（在未顯示的分頁裡，或被隱藏）']);
+       if (hm.text) rows.push(['文字', hm.text]);
+       kv(body, rows, false);
+-      if (hm.attrs.length) { body.appendChild(el('div', 'subhead', '屬性')); kv(body, hm.attrs, false); }
+-      if (hm.style.length) { body.appendChild(el('div', 'subhead', 'style')); kv(body, hm.style, false); }
++      if (hm.srcAttrs) {
++        /* what the source writes -- double-click a value to change it (WPF edits the XAML) */
++        body.appendChild(el('div', 'subhead', '屬性（原始碼）'));
++        var ta = el('table', 'kv html');
++        hm.srcAttrs.forEach(function (a) {
++          editRow(ta, a[0], a[1], !!a[2], function (v) { vscode.postMessage({ type: 'setAttrProp', name: a[0], value: v === '' ? null : v }); },
++            a[2] ? '雙擊：改這個屬性（清空＝刪掉）' : a[0] === 'id' ? 'id 不在這裡改：網頁程式靠它找這個元件' : '這個屬性不在這裡改');
++        });
++        body.appendChild(ta);
++      } else if (hm.attrs.length) { body.appendChild(el('div', 'subhead', '屬性')); kv(body, hm.attrs, false); }
++      if (hm.srcStyle) {
++        body.appendChild(el('div', 'subhead', 'style（原始碼）'));
++        var ts = el('table', 'kv html');
++        hm.srcStyle.forEach(function (s) {
++          editRow(ts, s[0], s[1], true, function (v) { vscode.postMessage({ type: 'setStyleProp', name: s[0], value: v === '' ? null : v }); },
++            '雙擊：改這個值（清空＝刪掉這一項）');
++        });
++        /* a new declaration: name + value, Enter */
++        var trn = el('tr', 'addrow');
++        var kn = el('td', 'k');
++        var ni = el('input', 'txt');
++        ni.placeholder = '＋ 樣式名稱';
++        ni.setAttribute('data-field', 'html:+name');
++        kn.appendChild(ni);
++        var vn = el('td', 'v');
++        var vi = el('input', 'txt');
++        vi.placeholder = '值（例：5、1px solid #888）';
++        vi.setAttribute('data-field', 'html:+value');
++        vn.appendChild(vi);
++        var addDecl = function () {
++          if (ni.value.trim() && vi.value.trim()) vscode.postMessage({ type: 'setStyleProp', name: ni.value.trim(), value: vi.value.trim() });
++        };
++        vi.addEventListener('keydown', function (e) { if (e.key === 'Enter') addDecl(); });
++        ni.addEventListener('keydown', function (e) { if (e.key === 'Enter') vi.focus(); });
++        trn.appendChild(kn); trn.appendChild(vn);
++        ts.appendChild(trn);
++        body.appendChild(ts);
++      } else if (hm.style.length) { body.appendChild(el('div', 'subhead', 'style')); kv(body, hm.style, false); }
+       if (hm.computed.length) {
+         var more = el('details', 'more');
+         more.appendChild(el('summary', null, '計算後樣式'));
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 81d1e00..9e3f0cf 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.27.0",
++  "version": "0.28.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 453d5ee..b1efbc1 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -453,6 +453,23 @@ exports.run = async function () {
+       await waitFor(() => (d.treeData.length ? true : null), 8000);
+     }
+ 
++    // the grid's HTML rows: z-index 5 on spbSave from the properties panel -> the source has it; undo
++    {
++      const orig3 = d.doc.getText();
++      d.post({ type: 'selectId', id: 'spbSave', origin: 'editor' });
++      await waitFor(() => (hub.props.data && hub.props.data.comp && hub.props.data.comp.htmlId === 'spbSave' && hub.propsDesigner === d ? true : null), 8000);
++      hub.onPropsMessage({ type: 'setStyleProp', name: 'z-index', value: '5' });
++      const zi = await waitFor(() => (/id="spbSave"[^>]*z-index:5/.test(d.doc.getText()) ? true : null), 5000);
++      const zp = await waitFor(() => (hub.props.data && hub.props.data.html && (hub.props.data.html.srcStyle || []).some(s => s[0] === 'z-index' && s[1] === '5') ? true : null), 5000);
++      ok(!!zi && !!zp, 'HTML style row: z-index:5 written into spbSave\'s style, the panel shows it');
++      d.panel.reveal(d.panel.viewColumn, false);
++      await sleep(300);
++      await vscode.commands.executeCommand('undo');
++      ok(!!(await waitFor(() => (d.doc.getText() === orig3 ? true : null), 5000)), 'ONE undo takes it back');
++      if (d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
++      await waitFor(() => (d.treeData.length ? true : null), 8000);
++    }
++
+     // 在所有頁面搜尋: spbSave on another page -> that page opens and spbSave is selected there
+     {
+       const hits = await vscode.commands.executeCommand('ht9045Designer.searchPages', 'spbSave');
+diff --git a/tools/vscode-htdesigner/test/panels_render.ps1 b/tools/vscode-htdesigner/test/panels_render.ps1
+index 2407820..96d1be3 100644
+--- a/tools/vscode-htdesigner/test/panels_render.ps1
++++ b/tools/vscode-htdesigner/test/panels_render.ps1
+@@ -134,6 +134,39 @@ if ($r5) {
+   Check ($r5.q4.rows -eq 0 -and $r5.q4.secs -eq 0 -and $r5.q4.count -ne '') 'search with no hit: nothing shown, says so' "count=$($r5.q4.count)"
+   Check ($r5.q0secs -eq $r5.all -and $r5.q0.count -eq '') 'clearing the search: every section back' "secs=$($r5.q0secs)/$($r5.all)"
+ } else { $script:bad++ }
++$htmlChecks = @'
++function last() { return window.__out[window.__out.length - 1] || {}; }
++function row(tbl, name) { return Array.prototype.filter.call(document.querySelectorAll('table.html tr[data-name="' + name + '"]'), function (r) { return true; })[tbl] || null; }
++var sl = document.querySelector('table.html tr.editable[data-name="left"]');
++R.hasLeft = !!sl;
++if (sl) {
++  sl.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
++  var inp = sl.querySelector('input');
++  R.leftInput = inp ? inp.value : null;
++  if (inp) { inp.value = '60px'; inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); }
++  var m1 = last(); R.afterLeft = m1.type + ':' + m1.name + '=' + m1.value;
++}
++var idr = document.querySelector('table.html tr[data-name="id"]');
++if (idr) idr.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
++R.idEditable = !!(idr && idr.querySelector('input'));
++var nn = document.querySelector('input[data-field="html:+name"]'), nv = document.querySelector('input[data-field="html:+value"]');
++if (nn && nv) { nn.value = 'z-index'; nv.value = '5'; nv.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); }
++var m2 = last(); R.afterAdd = m2.type + ':' + m2.name + '=' + m2.value;
++var tr = document.querySelector('table.html tr.editable[data-name="title"]');
++if (tr) {
++  tr.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
++  var ti = tr.querySelector('input');
++  if (ti) { ti.value = 'Save it'; ti.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); }
++}
++var m3 = last(); R.afterTitle = m3.type + ':' + m3.name + '=' + m3.value;
++'@
++$r6 = Render 'props_html' 'props.css' 'props.js' 'show' (Join-Path $dump 'props_spbSave.json') $htmlChecks
++if ($r6) {
++  Check ($r6.errors.Count -eq 0 -and $r6.hasLeft -and $r6.leftInput -eq '54px' -and $r6.afterLeft -eq 'setStyleProp:left=60px') 'HTML style row: double-click -> input with 54px, Enter posts left=60px' "$($r6.leftInput) -> $($r6.afterLeft)"
++  Check (-not $r6.idEditable) 'the id row is not editable' ''
++  Check ($r6.afterAdd -eq 'setStyleProp:z-index=5') 'new style row: name + value, Enter' $r6.afterAdd
++  Check ($r6.afterTitle -eq 'setAttrProp:title=Save it') 'title attribute: double-click, change, Enter' $r6.afterTitle
++} else { $script:bad++ }
+ $r2 = Render 'props_XST1' 'props.css' 'props.js' 'show' (Join-Path $dump 'props_XST1.json') $propsChecks
+ if ($r2) {
+   Check ($r2.errors.Count -eq 0 -and $r2.hasField -and $r2.hasXStart) 'props panel (XST1) renders the data field [Hotplate Form] X Start' ($r2.errors -join ' / ')
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index b40436b..149ce50 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -349,6 +349,19 @@
+             R.designShowOk = !hpnl.hasAttribute('data-htd-hide') && getComputedStyle(btn).visibility === 'visible' && edits().length === ne2;
+           }
+ 
++          /* the grid's HTML rows: a style declaration / a text attribute, written as an edit; an on* never */
++          window.__htdProbe.selectById(btn.id);
++          var skR = msgs('select').pop().info.key;
++          var nR = edits().length;
++          window.__htdProbe.message({ type: 'setStyleRaw', key: skR, name: 'z-index', value: '5' });
++          window.__htdProbe.message({ type: 'setAttrRaw', key: skR, name: 'title', value: 'Save it' });
++          window.__htdProbe.message({ type: 'setAttrRaw', key: skR, name: 'onclick', value: 'x()' });
++          window.__htdProbe.message({ type: 'setStyleRaw', key: skR, name: 'z-index', value: null });
++          var eR = edits().slice(nR);
++          R.rawEdits = eR.map(function (x) { return x.what + JSON.stringify(x.style || x.attr); }).join(' ');
++          R.rawOk = eR.length === 3 && eR[0].style['z-index'] === '5' && eR[1].attr.title === 'Save it' && eR[2].style['z-index'] === null &&
++            btn.getAttribute('title') === 'Save it' && !btn.hasAttribute('onclick') && btn.style.zIndex === '';
++
+           /* Ctrl+A: every component in the button's container, the button still the primary */
+           window.__htdProbe.selectById(btn.id);
+           window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true, cancelable: true }));
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index e972233..4c1f31d 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -74,6 +74,7 @@ foreach ($p in $Pages) {
+     }
+     if ($R.PSObject.Properties.Name -contains 'hiddenTarget') { $must['hidden tab revealed'] = [bool]$R.hiddenTabRevealed }
+     if ($R.PSObject.Properties.Name -contains 'wrapperEdit') { $must['input moves its wrapper'] = [bool]$R.wrapperOk }
++    if ($R.PSObject.Properties.Name -contains 'rawEdits') { $must['grid HTML rows: style / title written, onclick never'] = [bool]$R.rawOk }
+     if ($R.PSObject.Properties.Name -contains 'selAll') { $must['Ctrl+A: the whole container, the button still primary'] = [bool]$R.selAllOk }
+     if ($R.PSObject.Properties.Name -contains 'gridTried') {
+       $must['grid 8px: a drag and a resize land on multiples of 8, the grid is drawn'] = [bool]$R.gridOk
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index 086528a..7c2933a 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -541,6 +541,13 @@ async function main() {
+   ok(tbMod.newName('Label', new Set(['Label1', 'Label2', 'Label4'])) === 'Label3' && tbMod.newName('Panel', new Set()) === 'Panel1',
+     'toolbox names: the first free BCB6-style name (Label3, Panel1)');
+ 
++  // --- the grid's HTML rows: the attributes the source's start tag writes, as written
++  const atSave = he.attrsOf(he.startTagOf(hbHtml, 'spbSave').text);
++  const atBare = he.attrsOf('<input type="checkbox" checked data-x=\'a b\' tabindex=3>');
++  ok(atSave.map(a => a[0]).join(',') === 'class,id,title,style' && atSave[1][1] === 'spbSave' && /^spbSave : TSpeedButton/.test(atSave[2][1]) &&
++    JSON.stringify(atBare) === JSON.stringify([['type', 'checkbox'], ['checked', ''], ['data-x', 'a b'], ['tabindex', '3']]),
++    'attrsOf: spbSave\'s class / id / title / style as written; bare and unquoted ones too', JSON.stringify(atSave.map(a => a[0])));
++
+   // --- 在所有頁面搜尋: a name, the shown text, a class -- over every page
+   const psMod = require('../lib/pagesearch');
+   const psIds = psMod.searchPages(WEB, 'spbSave');
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 1c934ca..66db96f 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -437,6 +437,21 @@ async function main() {
+   ok(api.hub.loadDesignSet('htd.designLocked', PAGE).length === 0 && api.hub.lockedName(edD, 'spbSave') === '' && fake._tree.getTreeItem(lkNode).contextValue === 'component',
+     'unlock all: nothing locked, nothing kept');
+ 
++  // the grid's HTML rows: the source's own style / attributes; a change goes to the probe (checked first)
++  const hmS = full.html && full.html.srcStyle, hmA = full.html && full.html.srcAttrs;
++  ok(Array.isArray(hmS) && hmS.some(s => s[0] === 'left' && s[1] === '54px') && Array.isArray(hmA) && hmA.some(a => a[0] === 'id' && a[2] === 0) &&
++    hmA.some(a => a[0] === 'title' && a[2] === 1) && !hmA.some(a => a[0] === 'style'),
++    'panel data: style as the source writes it (left 54px), attributes with id not editable, title editable', JSON.stringify(hmS && hmS.slice(0, 3)));
++  pagePosted.length = 0;
++  propsRecv({ type: 'setStyleProp', name: 'z-index', value: '5' });
++  propsRecv({ type: 'setStyleProp', name: 'color;x', value: 'red' });
++  propsRecv({ type: 'setStyleProp', name: 'color', value: 'red;background:url(x)' });
++  propsRecv({ type: 'setAttrProp', name: 'title', value: 'Save it' });
++  propsRecv({ type: 'setAttrProp', name: 'onclick', value: 'alert(1)' });
++  propsRecv({ type: 'setAttrProp', name: 'id', value: 'other' });
++  const hmSent = pagePosted.filter(m => /^set(Style|Attr)Raw$/.test(m.type)).map(m => m.type + ':' + m.name + '=' + m.value);
++  ok(hmSent.join(' | ') === 'setStyleRaw:z-index=5 | setAttrRaw:title=Save it', 'only a clean style / a text attribute reaches the probe (no ";", no on…, no id)', hmSent.join(' | '));
++
+   // select all / undo / redo from the menus and the title bar
+   pagePosted.length = 0;
+   const uxCalls = fake._calls.length;
+-- 
+2.55.0.windows.5
+

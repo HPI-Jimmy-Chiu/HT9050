@@ -1,0 +1,447 @@
+From 7017a16b99c64b946f443aa20fe8786d2c6815ac Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 20:56:01 +0800
+Subject: [PATCH] HTDESIGNER-25: Group Into a new panel / Ungroup -- Blend's
+ Ctrl+G / Ctrl+Shift+G (0.25.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- 放進新 Panel (Ctrl+G, right-click): the selected components -- all in one
+  parent -- get a new TPanel around them (Panel3 ..., no border, no
+  background, a caption span like the generated ones), exactly their bounding
+  box; they now count from it, so on the screen nothing moves. The probe
+  measures the drawn sizes (a label without a width is as wide as its text).
+  The panel takes the first one's place in the source.
+- 解除群組 (Ctrl+Shift+G): the selected TPanel / TGroupBox's children (from
+  its <div class="cli"> when it has one; its caption span / legend stay out)
+  move into its parent, their left/top plus the container's place and border
+  (the probe's clientLeft/Top), and the container goes.
+- One WorkspaceEdit each; a locked one is refused; the new panel / the first
+  child is selected.
+- classOf(): the DFM's class, else the component tree's, else the source's
+  generated title="name : TClass" -- so a panel made a moment ago (in no DFM,
+  the tree not re-drawn yet) is known as a TPanel; used by ungroup, the
+  toolbox, paste and the tree's drag and drop.
+- lookAll now reports cl / ct (the box's border); htmlblock.firstPx.
+
+Tests: lib 117, smoke 90 (spbSave + sbtExit into Panel3 at their box,
+counting from it; ungroup Panel3 right away: both back at their old left/top;
+ungroup needs a container), real VS Code 90 (group: the re-drawn tree has the
+new panel with both; ungroup Panel2: its buttons in its parent; each undone;
+NO-SAVES), probe, panels -- all pass.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |   6 +
+ tools/vscode-htdesigner/extension.js          | 130 +++++++++++++++---
+ tools/vscode-htdesigner/lib/htmlblock.js      |  15 +-
+ tools/vscode-htdesigner/media/probe.js        |   4 +-
+ tools/vscode-htdesigner/package.json          |  20 ++-
+ .../test/integration/index.js                 |  30 ++++
+ tools/vscode-htdesigner/test/run_tests.js     |   2 +
+ .../vscode-htdesigner/test/smoke_extension.js |  34 +++++
+ 8 files changed, 219 insertions(+), 22 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 52f7dcc..01dbe03 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -145,6 +145,12 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ 新元件的 HTML 跟網頁產生器（`_gen_dfm_abs.py`）產生的一模一樣（`<span class="lb">`、`<button class="btn3d">`…），外觀跟其他元件一致；
+ 新增完會自動選取，可以直接拖曳、在屬性面板改文字。它沒有接任何網頁程式、DFM 裡也沒有它（跟 WPF 新拉的按鈕一樣，事件要自己接）。
+ 
++**放進新 Panel／解除群組**（Blend 的「群組至」「取消群組」；畫面右鍵，或 `Ctrl+G`／`Ctrl+Shift+G`）：
++- 放進新 Panel：選一個或多個**同一層**的元件 → 外面包一個新的 Panel（`Panel3`…，沒有框、透明），大小剛好框住它們，
++  它們的位置改成從 Panel 算起 —— **畫面上一點都不動**。
++- 解除群組：選一個 Panel／GroupBox → 裡面的元件移到外層（位置加回 Panel 的位置和邊框，畫面上也不動），那個 Panel 刪掉。
++- 都是一個 Ctrl+Z 復原；鎖定的不能動。
++
+ **順序**（WPF 右鍵的「順序」，畫面右鍵 →「順序」，或 Blend 的快捷鍵）：
+ 移到最上層 `Ctrl+Shift+]`、上移一層 `Ctrl+]`、下移一層 `Ctrl+[`、移到最下層 `Ctrl+Shift+[`。
+ 網頁裡「原始碼越後面的蓋在越上面」，所以調的是元件在同一層兄弟之間的前後位置（跟 WPF 調 XAML 裡的順序一樣），元件樹的順序也跟著變。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 9341fce..1b5d964 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -143,6 +143,9 @@ class Hub {
+       // 工具箱 (WPF Toolbox): a click on an item adds one
+       reg('ht9045Designer.toolboxAdd', cls => this.cmdAdd(typeof cls === 'string' ? cls : cls && cls.cls)),
+       reg('ht9045Designer.addComponent', () => this.cmdAddPick()),
++      // Blend Group Into (a new panel) / Ungroup
++      reg('ht9045Designer.groupIntoPanel', () => this.cmdGroup()),
++      reg('ht9045Designer.ungroup', () => this.cmdUngroup()),
+       // WPF "snap to gridlines"
+       reg('ht9045Designer.toggleGrid', on => this.cmdToggleGrid(typeof on === 'boolean' ? on : undefined)),
+       reg('ht9045Designer.toggleMode', () => this.cmdToggleMode()),
+@@ -1163,6 +1166,21 @@ class Hub {
+   }
+ 
+   // --- WPF Delete / Copy / Cut / Paste: whole elements; the page is drawn again from the source ---
++  /**
++   * The VCL class of a name: the DFM's, else the component tree's, else the source's
++   * generated title="name : TClass" (a component added in this session is in neither yet).
++   */
++  classOf(d, pi, id, text) {
++    if (id === '@form') return 'form';
++    const n = pi && pi.ir ? pi.ir.byName.get(id) : null;
++    if (n && n.class) return n.class;
++    const row = d.treeData.find(r => r[2] === id);
++    if (row && row[4]) return row[4];
++    const tag = htmledit.startTagOf(text || d.doc.getText(), id);
++    const t = tag ? /\stitle\s*=\s*["']\s*[\w@]+\s*:\s*(T\w+)/.exec(tag.text) : null;
++    return t ? t[1] : '';
++  }
++
+   /** The names a structural command works on: the selection (+ the multi-selection), never the form. */
+   selIds(d) {
+     const info = d && d.sel && d.sel.info;
+@@ -1298,14 +1316,7 @@ class Hub {
+       if (!row[7] && ids.includes(row[2])) { this.refuseEdit(d, '不能把「' + row[2] + '」放進它自己裡面。'); return null; }
+     }
+     const pi = await d.info;
+-    const clsOf = id => {
+-      if (id === '@form') return 'form';
+-      const n = pi.ir ? pi.ir.byName.get(id) : null;
+-      if (n) return n.class;
+-      const r = rowOf(id);
+-      return r ? r[4] : '';
+-    };
+-    const container = tId === '@form' || toolbox.CONTAINERS.test(clsOf(tId));
++    const container = tId === '@form' || toolbox.CONTAINERS.test(this.classOf(d, pi, tId));
+     const text = d.doc.getText();
+     const us = this.unitsFor(text, ids);
+     if (us.error) { this.refuseEdit(d, us.error); return null; }
+@@ -1344,6 +1355,97 @@ class Hub {
+     return ok ? { moved: us.units.map(u => u.id), into: container ? tId : null, after: container ? null : tId } : null;
+   }
+ 
++  /**
++   * WPF / Blend "Group Into": the selected components (all in one parent) get a new
++   * TPanel around them -- no border, no background, exactly their bounding box -- and
++   * count from it: on the screen nothing moves. One WorkspaceEdit, the panel selected.
++   */
++  async cmdGroup() {
++    const d = this.active;
++    if (!d) return null;
++    const ids = this.selIds(d);
++    if (!ids.length) { vscode.window.setStatusBarMessage('$(info) 先選要放進新 Panel 的元件（可以多選）', 5000); return null; }
++    if (this.refuseLocked(d, ids, '放進新 Panel')) return null;
++    const text = d.doc.getText();
++    const us = this.unitsFor(text, ids);
++    if (us.error) { this.refuseEdit(d, us.error); return null; }
++    const parents = us.units.map(u => htmlblock.parentOf(text, u.start));
++    if (!parents.every(p => p && parents[0] && p.tag.start === parents[0].tag.start)) {
++      this.refuseEdit(d, '要放進同一個新 Panel 的元件必須在同一層（同一個上層容器裡）。'); return null;
++    }
++    // drawn sizes (a label without a width is as wide as its text): the probe measures
++    const reply = await d.request({ type: 'lookAll', ids: us.units.map(u => u.id) }, 5000);
++    const lay = new Map(((reply && reply.items) || []).map(it => [it.id, it.lay]));
++    let minL = Infinity, minT = Infinity, maxR = -Infinity, maxB = -Infinity;
++    for (const u of us.units) {
++      const p = htmlblock.firstPx(u.html);
++      const l = lay.get(u.id);
++      const w = p && p.width !== null ? p.width : l && typeof l.width === 'number' ? l.width : null;
++      const h = p && p.height !== null ? p.height : l && typeof l.height === 'number' ? l.height : null;
++      if (!p || p.left === null || p.top === null || w === null || h === null) {
++        this.refuseEdit(d, '「' + u.id + '」的位置不是寫在自己 style 裡的 px 數值（或量不到大小），不能放進新 Panel。'); return null;
++      }
++      minL = Math.min(minL, p.left); minT = Math.min(minT, p.top);
++      maxR = Math.max(maxR, p.left + w); maxB = Math.max(maxB, p.top + h);
++    }
++    const used = new Set(pageinfo.collectIds(text).concat(d.treeData.map(r => r[2]).filter(Boolean)));
++    const pid = toolbox.newName('Panel', used);
++    const inner = us.units.map(u => htmlblock.offsetBlock(u.html, -minL, -minT)).join('');
++    const html = '<div class="pnl" id="' + pid + '" style="position:absolute;left:' + minL + 'px;top:' + minT + 'px;width:' + Math.round(maxR - minL) + 'px;height:' +
++      Math.round(maxB - minT) + 'px;" title="' + pid + ' : TPanel"><span class="pnlCap" style="font-size:11px;"></span>' + inner + '</div>';
++    // the panel takes the first one's place in the source; the others go
++    const first = us.units[0];
++    const parts = [{ range: [first.start, first.end], repl: html }].concat(
++      us.units.slice(1).map(u => ({ range: htmlblock.removeRange(text, u.start, u.end).range, repl: '' })));
++    d.lastSelId = pid;
++    const ok = await this.applyStructural(d, parts);
++    if (ok) vscode.window.setStatusBarMessage('$(group-by-ref-type) ' + us.units.map(u => u.id).join('、') + ' 放進新的 ' + pid + '（畫面上沒動；Ctrl+Z 復原）', 6000);
++    return ok ? { panel: pid, moved: us.units.map(u => u.id), box: { left: minL, top: minT, width: Math.round(maxR - minL), height: Math.round(maxB - minT) } } : null;
++  }
++
++  /**
++   * Blend "Ungroup": the selected TPanel / TGroupBox's children move out into its
++   * parent (their left/top plus the container's place and border: on the screen
++   * nothing moves) and the container goes. One WorkspaceEdit.
++   */
++  async cmdUngroup() {
++    const d = this.active;
++    if (!d) return null;
++    const id = this.selIds(d)[0];
++    const pi = await d.info;
++    const cls = id ? this.classOf(d, pi, id) : '';
++    if (!id || !/^(TPanel|TGroupBox)$/.test(cls)) { vscode.window.setStatusBarMessage('$(info) 先選一個 Panel 或 GroupBox（它裡面的元件會移到外面）', 5000); return null; }
++    if (this.refuseLocked(d, [id], '解除群組')) return null;
++    const text = d.doc.getText();
++    const u = this.unitFor(text, id);
++    const tag = htmledit.startTagOf(text, id);
++    if (!u || !tag) { this.refuseEdit(d, '原始碼裡找不到「' + id + '」，沒有動。'); return null; }
++    // the children live in it, or in its <div class="cli">
++    let holder = { tag, range: [u.start, u.end] };
++    const cliAt = htmlblock.insideEnd(text, tag);
++    const cli = htmlblock.parentOf(text, cliAt);
++    if (cli && cli.tag.start !== tag.start && cli.tag.start > tag.start && /\bclass\s*=\s*["'][^"']*\bcli\b/.test(cli.tag.text)) holder = cli;
++    const kids = htmlblock.childrenOf(text, holder).filter(k => k.name !== 'legend' && !/\bclass\s*=\s*["'][^"']*\bpnlCap\b/.test(k.text) &&
++      !/\bclass\s*=\s*["'][^"']*\bcli\b/.test(k.text));
++    if (!kids.length) { vscode.window.setStatusBarMessage('$(info) ' + id + ' 裡面沒有元件', 5000); return null; }
++    const own = htmlblock.firstPx(u.html);
++    if (!own || own.left === null || own.top === null) { this.refuseEdit(d, '「' + id + '」的位置不是 px 數值，不能解除群組。'); return null; }
++    const reply = await d.request({ type: 'lookAll', ids: [id] }, 5000);
++    const l = reply && reply.items && reply.items[0] ? reply.items[0].lay : null;
++    const cl = l && typeof l.cl === 'number' ? l.cl : 0, ct = l && typeof l.ct === 'number' ? l.ct : 0;
++    const blocks = kids.map(k => text.slice(k.start, k.end));
++    const bad = blocks.find(b => { const p = htmlblock.firstPx(b); return !p || p.left === null || p.top === null; });
++    if (bad) { this.refuseEdit(d, '裡面有元件的位置不是 px 數值，不能解除群組。'); return null; }
++    const out = blocks.map(b => htmlblock.offsetBlock(b, own.left + cl, own.top + ct));
++    const ind = htmlblock.indentAt(text, u.start);
++    const repl = out.join('\n' + ind);
++    const firstIds = htmlblock.idsIn(blocks[0]);
++    d.lastSelId = firstIds[0] || null;
++    const ok = await this.applyStructural(d, [{ range: [u.start, u.end], repl }]);
++    if (ok) vscode.window.setStatusBarMessage('$(ungroup-by-ref-type) ' + id + ' 解除群組：' + blocks.length + ' 個元件移到外面（畫面上沒動；Ctrl+Z 復原）', 6000);
++    return ok ? { removed: id, out: [].concat(...blocks.map(b => htmlblock.idsIn(b).slice(0, 1))), shift: { x: own.left + cl, y: own.top + ct } } : null;
++  }
++
+   /**
+    * 工具箱 (WPF Toolbox): a new component of class `cls` (the generator's markup, a
+    * BCB6-style name Label1 ...): into the selected container (TPanel / TGroupBox /
+@@ -1359,14 +1461,7 @@ class Hub {
+     const pi = await d.info;
+     const info = d.sel && d.sel.info;
+     const selId = info && info.id ? info.id : '@form';
+-    const clsOf = id => {
+-      if (id === '@form') return 'form';
+-      const n = pi.ir ? pi.ir.byName.get(id) : null;
+-      if (n) return n.class;
+-      const row = d.treeData.find(r => r[2] === id);
+-      return row ? row[4] : '';
+-    };
+-    const container = selId === '@form' || toolbox.CONTAINERS.test(clsOf(selId));
++    const container = selId === '@form' || toolbox.CONTAINERS.test(this.classOf(d, pi, selId, text));
+     const used = new Set(pageinfo.collectIds(text).concat(d.treeData.map(r => r[2]).filter(Boolean)));
+     const id = toolbox.newName(item.base, used);
+     let at, x = 8, y = 8, lineOf, into = null;
+@@ -1443,8 +1538,7 @@ class Hub {
+     const pi = await d.info;
+     const info = d.sel && d.sel.info;
+     const selId = info && info.id ? info.id : '@form';
+-    const node = pi.ir && selId !== '@form' ? pi.ir.byName.get(selId) : null;
+-    const container = selId === '@form' || !!(node && /^(TPanel|TGroupBox|TTabSheet|TScrollBox|TFrame)$/.test(node.class));
++    const container = selId === '@form' || toolbox.CONTAINERS.test(this.classOf(d, pi, selId, text));
+     let at;
+     let lineOf;
+     if (container) {
+diff --git a/tools/vscode-htdesigner/lib/htmlblock.js b/tools/vscode-htdesigner/lib/htmlblock.js
+index 9be96d7..340547d 100644
+--- a/tools/vscode-htdesigner/lib/htmlblock.js
++++ b/tools/vscode-htdesigner/lib/htmlblock.js
+@@ -129,6 +129,19 @@ function offsetBlock(html, dx, dy) {
+   return he.setStyle(tag, ch) + html.slice(e + 1);
+ }
+ 
++/** left / top / width / height (px numbers, null when not px) of a block's first start tag. */
++function firstPx(html) {
++  const e = he.tagEnd(html, 0);
++  if (e < 0) return null;
++  const st = he.styleOf(html.slice(0, e + 1));
++  const px = name => {
++    const d = st.decls.filter(x => x.name === name).pop();
++    const m = d ? /^(-?\d+(?:\.\d+)?)px$/.exec(d.value) : null;
++    return m ? parseFloat(m[1]) : null;
++  };
++  return { left: px('left'), top: px('top'), width: px('width'), height: px('height') };
++}
++
+ /** The indentation of the line `at` is on. */
+ function indentAt(text, at) {
+   const ls = text.lastIndexOf('\n', at - 1) + 1;
+@@ -274,4 +287,4 @@ function reorder(text, unit, how) {
+   return { parts: [del, { range: [ins.at, ins.at], repl: ins.repl }], from: idx, to, of: kids.length };
+ }
+ 
+-module.exports = { nameOf, elementRange, unitOf, idsIn, freshName, renameIds, offsetBlock, indentAt, insideEnd, removeRange, parentOf, childrenOf, reorder };
++module.exports = { nameOf, elementRange, unitOf, idsIn, freshName, renameIds, offsetBlock, firstPx, indentAt, insideEnd, removeRange, parentOf, childrenOf, reorder };
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index 175fbe9..7f52b32 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -1315,10 +1315,12 @@
+           if (want && !want.has(e7.id)) continue;
+           if (/^(SCRIPT|STYLE|TEMPLATE|LINK|META)$/.test(e7.tagName)) continue;
+           var l7 = layoutOf(e7);
++          var b7 = l7 ? boxOf(e7) : null;
+           items7.push({
+             id: e7.id,
++            /* cl / ct: its border (children count from inside it) -- for "ungroup" */
+             lay: l7 ? { left: l7.left, top: l7.top, width: l7.width, height: l7.height, rendered: l7.rendered, root: l7.root, target: l7.target,
+-              raw: l7.raw, ox: l7.ox, oy: l7.oy } : null,
++              raw: l7.raw, ox: l7.ox, oy: l7.oy, cl: b7 ? b7.node.clientLeft : 0, ct: b7 ? b7.node.clientTop : 0 } : null,
+             cap: captionOf(e7),
+             look: lookOf(e7),
+           });
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 96ca6d6..a6bfa2b 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.24.0",
++  "version": "0.25.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -182,6 +182,16 @@
+         "category": "HT9045",
+         "icon": "$(trash)"
+       },
++      {
++        "command": "ht9045Designer.groupIntoPanel",
++        "title": "放進新 Panel（群組）",
++        "category": "HT9045"
++      },
++      {
++        "command": "ht9045Designer.ungroup",
++        "title": "解除群組（把 Panel 裡的元件移到外面）",
++        "category": "HT9045"
++      },
+       {
+         "command": "ht9045Designer.toggleGrid",
+         "title": "對齊格線（開／關）",
+@@ -285,6 +295,8 @@
+         { "submenu": "ht9045Designer.alignMenu", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@1" },
+         { "submenu": "ht9045Designer.orderMenu", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@2" },
+         { "command": "ht9045Designer.toggleGrid", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@3" },
++        { "command": "ht9045Designer.groupIntoPanel", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@4" },
++        { "command": "ht9045Designer.ungroup", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@5" },
+         { "command": "ht9045Designer.pageOverview", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@1" },
+         { "command": "ht9045Designer.dfmDiff", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@2" },
+         { "command": "ht9045Designer.toggleMode", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@3" }
+@@ -499,6 +511,8 @@
+         { "command": "ht9045Designer.deleteComponent", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.toolboxAdd", "when": "false" },
+         { "command": "ht9045Designer.toggleGrid", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.groupIntoPanel", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.ungroup", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.addComponent", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.order.front", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.order.forward", "when": "ht9045Designer.active" },
+@@ -528,7 +542,9 @@
+       { "command": "ht9045Designer.order.front", "key": "ctrl+shift+]", "when": "activeCustomEditorId == 'ht9045Designer.editor'" },
+       { "command": "ht9045Designer.order.forward", "key": "ctrl+]", "when": "activeCustomEditorId == 'ht9045Designer.editor'" },
+       { "command": "ht9045Designer.order.backward", "key": "ctrl+[", "when": "activeCustomEditorId == 'ht9045Designer.editor'" },
+-      { "command": "ht9045Designer.order.back", "key": "ctrl+shift+[", "when": "activeCustomEditorId == 'ht9045Designer.editor'" }
++      { "command": "ht9045Designer.order.back", "key": "ctrl+shift+[", "when": "activeCustomEditorId == 'ht9045Designer.editor'" },
++      { "command": "ht9045Designer.groupIntoPanel", "key": "ctrl+g", "when": "activeCustomEditorId == 'ht9045Designer.editor'" },
++      { "command": "ht9045Designer.ungroup", "key": "ctrl+shift+g", "when": "activeCustomEditorId == 'ht9045Designer.editor'" }
+     ],
+     "viewsContainers": {
+       "activitybar": [
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index a1fad2a..4f3f0b0 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -383,6 +383,36 @@ exports.run = async function () {
+         await waitFor(() => { const r = d.treeData.find(x => x[2] === 'spbSave'); return r && r[1] === keyOfId('Panel2') ? true : null; }, 10000);
+       }
+ 
++      // Group Into a new panel (the real probe measures) / Ungroup Panel2 -- each undone again
++      await sleep(800);
++      {
++        const keyOfId = id => { const r = d.treeData.find(x => x[2] === id); return r ? r[0] : null; };
++        const parentIdOf = id => { const r = d.treeData.find(x => x[2] === id); const p = r ? d.treeData.find(x => x[0] === r[1]) : null; return p ? (p[7] ? '@form' : p[2]) : null; };
++        const p2Parent = parentIdOf('Panel2');
++        d.post({ type: 'selectIds', ids: ['spbSave', 'sbtExit'], origin: 'tree' });
++        await waitFor(() => (d.sel && d.sel.info && d.sel.info.id === 'spbSave' && d.sel.info.multi && d.sel.info.multi.indexOf('sbtExit') >= 0 ? true : null), 5000);
++        const gp = await vscode.commands.executeCommand('ht9045Designer.groupIntoPanel');
++        const inNew = gp ? await waitFor(() => (parentIdOf('spbSave') === gp.panel && parentIdOf('sbtExit') === gp.panel && parentIdOf(gp.panel) === 'Panel2' ? true : null), 10000) : null;
++        ok(gp && !!inNew && gp.box.width > 0 && gp.box.height > 0, 'group: a new panel in Panel2 holds spbSave + sbtExit (the re-drawn tree)', gp ? JSON.stringify(gp) : '-');
++        d.panel.reveal(d.panel.viewColumn, false);
++        await sleep(300);
++        await vscode.commands.executeCommand('undo');
++        ok(!!(await waitFor(() => (d.doc.getText() === original ? true : null), 5000)), 'ONE undo takes the new panel away');
++        if (d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
++        await waitFor(() => (parentIdOf('spbSave') === 'Panel2' ? true : null), 10000);
++        d.post({ type: 'selectId', id: 'Panel2', origin: 'editor' });
++        await waitFor(() => (d.sel && d.sel.info && d.sel.info.id === 'Panel2' ? true : null), 5000);
++        const ug = await vscode.commands.executeCommand('ht9045Designer.ungroup');
++        const outOk = ug ? await waitFor(() => (!keyOfId('Panel2') && parentIdOf('spbSave') === p2Parent && parentIdOf('sbtExit') === p2Parent ? true : null), 10000) : null;
++        ok(ug && ug.removed === 'Panel2' && !!outOk, 'ungroup Panel2: its buttons now in Panel2\'s parent, Panel2 gone', ug ? JSON.stringify(ug) : '-');
++        d.panel.reveal(d.panel.viewColumn, false);
++        await sleep(300);
++        await vscode.commands.executeCommand('undo');
++        ok(!!(await waitFor(() => (d.doc.getText() === original ? true : null), 5000)), 'ONE undo brings Panel2 back');
++        if (d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
++        await waitFor(() => (parentIdOf('spbSave') === 'Panel2' ? true : null), 10000);
++      }
++
+       // 工具箱: a new TLabel into Panel2 -- drawn, inside Panel2 in the tree, selected; Ctrl+Z removes it
+       await sleep(800);
+       d.post({ type: 'selectId', id: 'Panel2', origin: 'editor' });
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index d9566ef..70b0085 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -490,6 +490,8 @@ async function main() {
+     'renameIds: every id of the copy new (Panel2_2, spbSave_2, sbtExit_2), the generated titles too', JSON.stringify(Array.from(hbRn.map)));
+   const hbOff = hbMod.offsetBlock('<div id="a" style="position:absolute;left:10px;top:20px;width:5px;"><b></b></div>', 8, 8);
+   ok(/left:18px;top:28px;width:5px;/.test(hbOff) && /<b><\/b><\/div>$/.test(hbOff), 'offsetBlock: only the first tag, left/top +8', hbOff);
++  const hbFp = hbMod.firstPx('<span class="lb" id="q" style="position:absolute;left:12px;top:3px;width:auto;"><i style="left:99px"></i></span>');
++  ok(hbFp && hbFp.left === 12 && hbFp.top === 3 && hbFp.width === null && hbFp.height === null, 'firstPx: the first tag\'s px values, auto = null', JSON.stringify(hbFp));
+   const hbDoc = 'a\n  <div id="x">1</div><span id="y"></span>\n  <i id="z"></i>\nb';
+   const hbT1 = hbMod.unitOf(hbDoc, 'z', 'self');
+   const hbR1 = hbMod.removeRange(hbDoc, hbT1.start, hbT1.end);
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 03836d8..df19211 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -492,6 +492,40 @@ async function main() {
+     'tree drag onto XST1 (an edit, not a container): moved right after it, into its parent', JSON.stringify(dn3));
+   doc._setText(dnBefore);
+ 
++  // Group Into a new panel / Ungroup (the probe measures: here answered from the styles, borders 0)
++  const grPM = panel.webview.postMessage;
++  panel.webview.postMessage = m => {
++    if (m.type === 'lookAll') {
++      setTimeout(() => pageRecv({ __htd: 1, type: 'lookAll', seq: m.seq, items: (m.ids || []).map(id => {
++        const u = hb2.unitOf(text, id, 'self');
++        const p = u ? hb2.firstPx(u.html) : null;
++        return { id, lay: p ? { left: p.left, top: p.top, width: p.width === null ? 50 : p.width, height: p.height === null ? 20 : p.height, cl: 0, ct: 0 } : null };
++      }) }), 5);
++    }
++    return grPM(m);
++  };
++  const grBefore = text;
++  const grPos = id => { const u = hb2.unitOf(text, id, 'self'); return u ? hb2.firstPx(u.html) : null; };
++  const grS0 = grPos('spbSave'), grE0 = grPos('sbtExit');
++  pageRecv({ __htd: 1, type: 'select', info: { key: 960, id: 'spbSave', multi: ['sbtExit'], tag: 'button', title: '', attrs: [], style: [], inline: [], computed: [], chain: [], listeners: [], inherited: [] }, origin: 'multi' });
++  await new Promise(r => setTimeout(r, 30));
++  const grp = await fake._cmds['ht9045Designer.groupIntoPanel']();
++  const grIn = grp ? dnRange(grp.panel) : '';
++  const grS1 = grPos('spbSave');
++  ok(grp && grp.panel === 'Panel3' && grIn.indexOf('id="spbSave"') > 0 && grIn.indexOf('id="sbtExit"') > 0 && grp.box.left === Math.min(grS0.left, grE0.left) &&
++    grS1.left === grS0.left - grp.box.left && grS1.top === grS0.top - grp.box.top && text.split('id="spbSave"').length === 2 && edD.lastSelId === 'Panel3',
++    'group: spbSave + sbtExit into a new Panel3 at their bounding box, counting from it (nothing moves on screen)', JSON.stringify(grp));
++  await selAs('Panel3', 'div');
++  const ugr = await fake._cmds['ht9045Designer.ungroup']();
++  const grS2 = grPos('spbSave'), grE2 = grPos('sbtExit');
++  ok(ugr && ugr.removed === 'Panel3' && !/id="Panel3"/.test(text) && grS2.left === grS0.left && grS2.top === grS0.top && grE2.left === grE0.left && grE2.top === grE0.top &&
++    dnRange('Panel2').indexOf('id="spbSave"') > 0, 'ungroup Panel3: both back in Panel2 at their old left/top, Panel3 gone', JSON.stringify(ugr));
++  await selAs('spbSave', 'button');
++  const ugNo = await fake._cmds['ht9045Designer.ungroup']();
++  ok(ugNo === null, 'ungroup needs a Panel / GroupBox selected');
++  panel.webview.postMessage = grPM;
++  doc._setText(grBefore);
++
+   // live data tag: main.html palMainStatus <- machine.state <- WebBridgeTags.cpp
+   const MAINP = path.join(PORT, '..', 'web', 'page', 'main.html');
+   const mtext = fs.readFileSync(MAINP, 'utf8');
+-- 
+2.55.0.windows.5
+

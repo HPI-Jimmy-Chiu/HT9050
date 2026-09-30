@@ -1,0 +1,394 @@
+From 0f41264f73f985d5fb35b5c2a9e1daf021beab4a Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 21:37:15 +0800
+Subject: [PATCH] HTDESIGNER-30: mark the wiring state on the design surface --
+ green / orange / red frames (0.30.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+右鍵 > 在畫面上標出接線狀態 (and the command palette): every component with
+DFM events gets a coloured frame on the design surface -- green: the web
+handles all of its events (a listener, or the wire engine's field map),
+orange: some / only mentioned (delegated), red: none. A legend in the
+corner, "接線標示" in the status bar; again = off. Kept across a re-draw (the
+probe gets it with init). The data is the wiring overview's
+(computeOverview, now shared by the overview tab and this); porting BCB6
+pages, the buttons still to wire stand out at a glance.
+
+Tests: probe (a red frame exactly on the button; off: gone), smoke 97
+(sbtExit green with a click listener, spbSave orange -- delegated; status
+bar), real VS Code 98 (the real listeners: HotPlate 9 green, 1 orange, 0
+red; off again), lib 121, panels -- all pass; NO-SAVES.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  5 +
+ tools/vscode-htdesigner/extension.js          | 99 +++++++++++++------
+ tools/vscode-htdesigner/media/probe.js        | 33 ++++++-
+ tools/vscode-htdesigner/package.json          | 10 +-
+ .../test/integration/index.js                 |  7 ++
+ tools/vscode-htdesigner/test/probe_driver.js  | 11 +++
+ tools/vscode-htdesigner/test/probe_test.ps1   |  4 +
+ .../vscode-htdesigner/test/smoke_extension.js | 15 +++
+ 8 files changed, 154 insertions(+), 30 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 8cc5585..33abd2a 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -107,6 +107,11 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+   比對時會加回包裝的位移、換算成 DFM 的座標；↺ 寫回時再扣掉。分頁（`.pcPane`）就是 TabSheet，不算包裝。
+ - 實測全部頁面：位置／大小跟 DFM 一致的有 12,228 個、不一樣的 432 個（大多是網頁刻意移過的彈出面板）。
+ 
++**在畫面上標出接線狀態**（畫面右鍵，或命令「HT9045: 在畫面上標出接線狀態」）：DFM 裡有事件的元件加上彩色框 ——
++**綠**＝網頁都接了（有監聽器，或由 wire 引擎的欄位對照處理）、**橘**＝只接了一部分或只有提到（多半是事件委派）、**紅**＝網頁完全沒接。
++右下角有顏色說明，狀態列顯示「接線標示」；再按一次關掉。資料跟「接線總覽」同一份，所以哪個紅了就去總覽或屬性面板看細節。
++做 BCB6 → 網頁移植時，一眼就看得出這一頁還有哪些按鈕沒接。
++
+ **整頁「與 DFM 的差異」**：分頁標題列的差異圖示按鈕、畫面右鍵選單、或命令「HT9045: 與 DFM 的差異」。
+ 一次列出這一頁**所有**跟 `.dfm` 不一樣的屬性：元件、屬性、網頁的值、DFM 的值。
+ 
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 39efce1..40ca5f3 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -173,6 +173,7 @@ class Hub {
+       reg('ht9045Designer.showCodeInDesigner', () => this.cmdShowCodeInDesigner()),
+       reg('ht9045Designer.openWebSenders', (cmd, hits) => this.cmdOpenWebSenders(cmd, hits)),
+       reg('ht9045Designer.pageOverview', () => this.cmdPageOverview()),
++      reg('ht9045Designer.toggleWireMarks', on => this.cmdWireMarks(typeof on === 'boolean' ? on : undefined)),
+       reg('ht9045Designer.dfmDiff', () => this.cmdDfmDiff()),
+       reg('ht9045Designer.resetZoom', () => { if (this.active) this.active.post({ type: 'setZoom', zoom: 1 }); }),
+       reg('ht9045Designer.zoomFit', () => { if (this.active) this.active.post({ type: 'zoomFit' }); }),
+@@ -434,7 +435,7 @@ class Hub {
+     if (!d) { this.status.hide(); return; }
+     const g = this.gridState();
+     this.status.text = (d.mode === 'design' ? '$(pencil) 設計模式' : '$(play) 操作模式') +
+-      (d.zoom && d.zoom !== 1 ? '　' + Math.round(d.zoom * 100) + '%' : '') + (g.on ? '　格線 ' + g.size + 'px' : '');
++      (d.zoom && d.zoom !== 1 ? '　' + Math.round(d.zoom * 100) + '%' : '') + (g.on ? '　格線 ' + g.size + 'px' : '') + (d.wireMarks ? '　接線標示' : '');
+     this.status.tooltip = (d.mode === 'design'
+       ? '點＝選元件，雙擊＝跳到事件程式碼。按這裡切到操作模式。'
+       : '點擊交給頁面自己的程式（網路仍全部封鎖）。按這裡切回設計模式。') +
+@@ -1759,37 +1760,78 @@ class Hub {
+     const pi = await d.info;
+     if (!pi.ir) { vscode.window.showInformationMessage('這一頁沒有對應的 DFM，沒有事件可以總覽。'); return; }
+     return vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '整理接線總覽：' + path.basename(d.file) + '…' }, async () => {
+-      const t0 = Date.now();
+-      const reply = await d.request({ type: 'listenersAll' }, 5000);
+-      const sources = this.webSources(d, pi);
+-      const widx = d.r.webRoot ? this.webCmdIndex(d.r.webRoot) : null;
+-      const fieldIds = new Set();
+-      const tagIds = new Set();
+-      if (widx) {
+-        widx.build();
+-        for (const id of widx.fieldsById.keys()) if (widx.fieldsOf(d.file, id).length) fieldIds.add(id);
+-        for (const id of widx.tagsById.keys()) if (widx.tagsOf(d.file, id).length) tagIds.add(id);
+-      }
+-      const ov = await overview.buildOverview({
+-        ir: pi.ir,
+-        pageIds: new Set(pageinfo.collectIds(d.doc.getText()).concat(d.treeData.map(r => r[2]))),
+-        listeners: reply ? reply.map : {},
+-        fieldIds, tagIds,
+-        quoted: overview.quotedNames(sources),
+-        classes: pi.classes,
+-        port: this.sourceTree(d.r.portRoot, 'port'),
+-        gold: this.sourceTree(d.r.goldenRoot, 'golden'),
+-      });
+-      ov.page = path.basename(d.file);
+-      ov.dfm = pi.ir.sourceDfm || path.basename(pi.ir.file);
+-      ov.formClass = pi.ir.formClass || '';
+-      ov.listenersOk = !!reply;
+-      this.log('接線總覽 ' + ov.page + '：' + ov.summary.events + ' 個事件（' + (Date.now() - t0) + ' ms）' + (reply ? '' : '，⚠ 探針沒回應，網頁監聽器一欄不準'));
++      const ov = await this.computeOverview(d, pi);
+       OverviewPanel.show(this, d, ov);
+       return ov;
+     });
+   }
+ 
++  /** Every DFM event of the page: wired on the web? implemented in C++? (the overview's data) */
++  async computeOverview(d, pi) {
++    const t0 = Date.now();
++    const reply = await d.request({ type: 'listenersAll' }, 5000);
++    const sources = this.webSources(d, pi);
++    const widx = d.r.webRoot ? this.webCmdIndex(d.r.webRoot) : null;
++    const fieldIds = new Set();
++    const tagIds = new Set();
++    if (widx) {
++      widx.build();
++      for (const id of widx.fieldsById.keys()) if (widx.fieldsOf(d.file, id).length) fieldIds.add(id);
++      for (const id of widx.tagsById.keys()) if (widx.tagsOf(d.file, id).length) tagIds.add(id);
++    }
++    const ov = await overview.buildOverview({
++      ir: pi.ir,
++      pageIds: new Set(pageinfo.collectIds(d.doc.getText()).concat(d.treeData.map(r => r[2]))),
++      listeners: reply ? reply.map : {},
++      fieldIds, tagIds,
++      quoted: overview.quotedNames(sources),
++      classes: pi.classes,
++      port: this.sourceTree(d.r.portRoot, 'port'),
++      gold: this.sourceTree(d.r.goldenRoot, 'golden'),
++    });
++    ov.page = path.basename(d.file);
++    ov.dfm = pi.ir.sourceDfm || path.basename(pi.ir.file);
++    ov.formClass = pi.ir.formClass || '';
++    ov.listenersOk = !!reply;
++    this.log('接線總覽 ' + ov.page + '：' + ov.summary.events + ' 個事件（' + (Date.now() - t0) + ' ms）' + (reply ? '' : '，⚠ 探針沒回應，網頁監聽器一欄不準'));
++    return ov;
++  }
++
++  /**
++   * 在畫面上標出接線狀態: every component with DFM events gets a coloured frame on the
++   * design surface -- green: the web handles all of them (a listener or the wire engine's
++   * field map), orange: some / only mentioned (delegated), red: none. On / off per designer.
++   */
++  async cmdWireMarks(on) {
++    const d = this.active;
++    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
++    const nu = typeof on === 'boolean' ? on : !d.wireMarks;
++    if (!nu) {
++      d.wireMarks = null;
++      d.post({ type: 'wireMarks', marks: null });
++      this.updateStatus();
++      return { on: false };
++    }
++    const pi = await d.info;
++    if (!pi.ir) { vscode.window.showInformationMessage('這一頁沒有對應的 DFM，沒有事件可以標示。'); return null; }
++    const ov = await this.computeOverview(d, pi);
++    const marks = {};
++    const count = { ok: 0, mid: 0, bad: 0 };
++    for (const row of ov.rows) {
++      if (!row.present || row.id === '@form' || !row.events.length) continue;
++      const good = row.events.filter(e => e.web === 'yes' || e.web === 'field').length;
++      const none = row.events.filter(e => e.web === 'no').length;
++      const st = good === row.events.length ? 'ok' : none === row.events.length ? 'bad' : 'mid';
++      marks[row.id] = st;
++      count[st]++;
++    }
++    d.wireMarks = marks;
++    d.post({ type: 'wireMarks', marks });
++    this.updateStatus();
++    vscode.window.setStatusBarMessage('$(plug) 接線標示：綠 ' + count.ok + '（網頁有接）、橘 ' + count.mid + '（部分／只有提到）、紅 ' + count.bad + '（網頁沒接）', 8000);
++    return { on: true, marks, count, listenersOk: ov.listenersOk };
++  }
++
+   /** 與 DFM 的差異: every control of the page against the .dfm (position, text, look). */
+   async cmdDfmDiff(d0, quiet) {
+     // (from a menu VS Code passes a Uri / the webview context as the first argument)
+@@ -2033,7 +2075,8 @@ class Designer {
+             if (pi.ir.root && pi.ir.root.events) events['@form'] = Object.keys(pi.ir.root.events);
+           }
+           this.post({ type: 'init', mode: this.mode, selectId: this.lastSelId, scroll: this.scroll, classes, events, zoom: this.zoom || 1,
+-            designHidden: Array.from(this.designHidden), designLocked: Array.from(this.designLocked), grid: this.hub.gridState() });
++            designHidden: Array.from(this.designHidden), designLocked: Array.from(this.designLocked), grid: this.hub.gridState(),
++            wireMarks: this.wireMarks || null });
+         };
+         this.info.then(send, () => send(null));
+         clearTimeout(this.diagTimer);
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index 60fc5bb..ab6bc0a 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -306,6 +306,8 @@
+       '.s2{outline:1px solid #ff8c00;background:rgba(255,140,0,.06);}' +
+       '.gr{position:fixed;display:none;pointer-events:none;background-image:radial-gradient(circle,rgba(40,40,40,.5) .8px,transparent 1.2px);}' +
+       '.mq{position:fixed;display:none;pointer-events:none;box-sizing:border-box;border:1px dashed #1e90ff;background:rgba(30,144,255,.10);}' +
++      '.wm{position:fixed;display:none;pointer-events:none;box-sizing:border-box;border:2px solid;}' +
++      '.wm.ok{border-color:rgba(46,160,67,.85);} .wm.mid{border-color:rgba(214,140,20,.95);} .wm.bad{border-color:rgba(229,23,47,.95);background:rgba(229,23,47,.07);}' +
+       '</style><div class="gr"></div><div class="b h"></div><div class="b s"></div><div class="t th"></div><div class="t ts"></div><div class="m"></div><div class="mq"></div>' +
+       '<div class="g gx"></div><div class="g gy"></div>' + hs;
+     gX = sh.querySelector('.gx'); gY = sh.querySelector('.gy');
+@@ -361,6 +363,7 @@
+     drawPending = false;
+     if (!host) return;
+     placeGrid();
++    placeWireMarks();
+     place(bS, tS, selEl);
+     if (mode === 'design' && hoverEl && hoverEl !== selEl && !drag) place(bH, tH, hoverEl);
+     else { bH.style.display = 'none'; tH.style.display = 'none'; }
+@@ -401,9 +404,30 @@
+   function drawBadge() {
+     if (!badge) return;
+     var z = typeof zoom === 'number' && zoom !== 1 ? '　［縮放 ' + Math.round(zoom * 100) + '%，Ctrl+滾輪］' : '';
++    var w = WIRE ? '　［接線：綠＝網頁有接　橘＝部分／只有提到　紅＝網頁沒接］' : '';
+     badge.textContent = (mode === 'design'
+       ? '設計模式：點＝選取　Ctrl/Shift+點＝多選　拖曳＝移動　控制點＝改大小　方向鍵＝微調　雙擊／Enter＝事件程式碼　Esc＝上層　Tab＝下一個'
+-      : '操作模式：點擊交給頁面（網路仍全部封鎖）') + z;
++      : '操作模式：點擊交給頁面（網路仍全部封鎖）') + z + w;
++  }
++  /* 在畫面上標出接線狀態: a coloured frame per component with DFM events (id -> ok | mid | bad) */
++  var WIRE = null, wireBoxes = [];
++  function placeWireMarks() {
++    var ids = WIRE ? Object.keys(WIRE) : [];
++    var n = 0;
++    for (var i = 0; i < ids.length; i++) {
++      var el = byId(ids[i]);
++      if (!el || !el.getClientRects().length) continue;
++      var r = el.getBoundingClientRect();
++      if (!r.width && !r.height) continue;
++      if (n >= wireBoxes.length) { var nb = document.createElement('div'); sh.appendChild(nb); wireBoxes.push(nb); }
++      var b = wireBoxes[n++];
++      b.className = 'wm ' + WIRE[ids[i]];
++      b.style.display = 'block';
++      b.style.left = r.left + 'px'; b.style.top = r.top + 'px';
++      b.style.width = r.width + 'px'; b.style.height = r.height + 'px';
++    }
++    for (var j = n; j < wireBoxes.length; j++) wireBoxes[j].style.display = 'none';
++    return n;
+   }
+ 
+   /* 6. describing a component ---------------------------------------------- */
+@@ -1227,6 +1251,7 @@
+         if (Array.isArray(m.designHidden) && m.designHidden.length) setDesignHidden(m.designHidden);
+         if (Array.isArray(m.designLocked)) { LOCK = {}; m.designLocked.forEach(function (id) { LOCK[String(id)] = 1; }); }
+         if (m.grid && typeof m.grid === 'object') GRID = { on: !!m.grid.on, size: Math.max(2, Math.min(64, Math.round(+m.grid.size || 8))) };
++        if (m.wireMarks && typeof m.wireMarks === 'object') { WIRE = m.wireMarks; drawBadge(); }
+         if (m.scroll) { try { window.scrollTo(m.scroll.x || 0, m.scroll.y || 0); } catch (x) { /* ignore */ } }
+         if (m.selectId) { var el0 = byId(m.selectId); if (el0) select(el0, 'init', !m.scroll); }
+         break;
+@@ -1249,6 +1274,11 @@
+       case 'zoomFit':
+         zoomFit();
+         break;
++      case 'wireMarks':
++        WIRE = m.marks && typeof m.marks === 'object' ? m.marks : null;
++        drawBadge();
++        scheduleDraw();
++        break;
+       case 'selectParent': {
+         var pp = selEl ? compParent(selEl) : null;
+         if (pp) { selEl = null; select(pp, 'key', true); }
+@@ -1490,6 +1520,7 @@
+           designHidden: document.querySelectorAll('[data-htd-hide]').length,
+           designLocked: Object.keys(LOCK).length,
+           grid: GRID.on ? GRID.size : 0,
++          wireMarks: WIRE ? Object.keys(WIRE).length : 0,
+           base: document.baseURI,
+         });
+         break;
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 4b968b7..e50be50 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.29.0",
++  "version": "0.30.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -92,6 +92,12 @@
+         "category": "HT9045",
+         "icon": "$(checklist)"
+       },
++      {
++        "command": "ht9045Designer.toggleWireMarks",
++        "title": "在畫面上標出接線狀態（開／關）：綠＝網頁有接、橘＝部分、紅＝沒接",
++        "category": "HT9045",
++        "icon": "$(plug)"
++      },
+       {
+         "command": "ht9045Designer.dfmDiff",
+         "title": "與 DFM 的差異（整頁的位置、文字、外觀跟 BCB6 .dfm 比對）",
+@@ -331,6 +337,7 @@
+         { "command": "ht9045Designer.ungroup", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@5" },
+         { "command": "ht9045Designer.pageOverview", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@1" },
+         { "command": "ht9045Designer.dfmDiff", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@2" },
++        { "command": "ht9045Designer.toggleWireMarks", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@2" },
+         { "command": "ht9045Designer.toggleMode", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@3" }
+       ],
+       "ht9045Designer.orderMenu": [
+@@ -549,6 +556,7 @@
+         { "command": "ht9045Designer.resetZoom", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.pageOverview", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.dfmDiff", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.toggleWireMarks", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.openPageFile", "when": "false" },
+         { "command": "ht9045Designer.designHide", "when": "false" },
+         { "command": "ht9045Designer.designUnhide", "when": "false" },
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index cc69a8b..bcc5fc4 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -301,6 +301,13 @@ exports.run = async function () {
+       await vscode.commands.executeCommand('ht9045Designer.designUnlockAll');
+       const g5 = await diagNow();
+       ok(g5 && g5.designLocked === 0 && hub.loadDesignSet('htd.designLocked', d.file).length === 0, 'unlock all: nothing locked, nothing kept');
++      // 接線標示 with the real probe's listeners: sbtExit green; off again
++      const wm = await vscode.commands.executeCommand('ht9045Designer.toggleWireMarks', true);
++      const gw = await diagNow();
++      await vscode.commands.executeCommand('ht9045Designer.toggleWireMarks', false);
++      const gw2 = await diagNow();
++      ok(wm && wm.on && wm.marks && wm.marks.sbtExit === 'ok' && gw && gw.wireMarks > 0 && gw2 && gw2.wireMarks === 0,
++        'wiring marks (real probe): sbtExit green, ' + (wm ? JSON.stringify(wm.count) : '-') + '; off again');
+       // snap to gridlines: the real probe gets it (and again after a Reload), off again
+       const gon = await vscode.commands.executeCommand('ht9045Designer.toggleGrid', true);
+       const g6 = await diagNow();
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index 5ffdc8d..f1c0b0f 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -437,6 +437,17 @@
+             window.__htdProbe.message({ type: 'designLocked', ids: [] });
+           }
+ 
++          /* 接線標示: a red frame around the button, exactly on it; gone when switched off */
++          window.__htdProbe.message({ type: 'wireMarks', marks: (function () { var o = {}; o[btn.id] = 'bad'; return o; })() });
++          window.__htdProbe.drawNow();
++          var wmb = host && host.shadowRoot ? host.shadowRoot.querySelector('.wm.bad') : null;
++          var br3 = btn.getBoundingClientRect();
++          R.wireMark = wmb ? wmb.style.display + ' ' + wmb.style.left + ',' + wmb.style.top : 'none';
++          R.wireMarkOk = !!wmb && wmb.style.display === 'block' && Math.abs(parseFloat(wmb.style.left) - br3.left) < 1 && Math.abs(parseFloat(wmb.style.width) - br3.width) < 1;
++          window.__htdProbe.message({ type: 'wireMarks', marks: null });
++          window.__htdProbe.drawNow();
++          R.wireMarkOffOk = !!wmb && wmb.style.display === 'none';
++
+           /* 符合視窗: the whole form fits the view afterwards (a zoom step) */
+           window.__htdProbe.message({ type: 'zoomFit' });
+           var zf = msgs('zoom').pop();
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index 394f6ce..406a726 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -74,6 +74,10 @@ foreach ($p in $Pages) {
+     }
+     if ($R.PSObject.Properties.Name -contains 'hiddenTarget') { $must['hidden tab revealed'] = [bool]$R.hiddenTabRevealed }
+     if ($R.PSObject.Properties.Name -contains 'wrapperEdit') { $must['input moves its wrapper'] = [bool]$R.wrapperOk }
++    if ($R.PSObject.Properties.Name -contains 'wireMark') {
++      $must['wiring marks: a red frame exactly on the button'] = [bool]$R.wireMarkOk
++      $must['wiring marks off: gone'] = [bool]$R.wireMarkOffOk
++    }
+     if ($R.PSObject.Properties.Name -contains 'zoomFit') { $must['zoom to fit: the form fits the view'] = [bool]$R.zoomFitOk }
+     if ($R.PSObject.Properties.Name -contains 'marquee') { $must['rubber band from the form background: what is inside gets selected'] = [bool]$R.marqueeOk }
+     if ($R.PSObject.Properties.Name -contains 'rawEdits') { $must['grid HTML rows: style / title written, onclick never'] = [bool]$R.rawOk }
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 5c7fe47..be288a3 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -464,6 +464,21 @@ async function main() {
+   await fake._cmds['ht9045Designer.zoomFit']();
+   ok(pagePosted.some(m => m.type === 'zoomFit'), 'zoom to fit goes to the probe');
+ 
++  // 接線標示: from the overview's data (the probe answers listenersAll: sbtExit has a click listener)
++  const wmPM = panel.webview.postMessage;
++  panel.webview.postMessage = m => {
++    if (m.type === 'listenersAll') setTimeout(() => pageRecv({ __htd: 1, type: 'listenersAll', seq: m.seq, map: { sbtExit: ['click'] } }), 5);
++    return wmPM(m);
++  };
++  pagePosted.length = 0;
++  const wmOn = await fake._cmds['ht9045Designer.toggleWireMarks']();
++  const wmMsg = pagePosted.filter(m => m.type === 'wireMarks').pop();
++  ok(wmOn && wmOn.on && wmMsg && wmMsg.marks && wmMsg.marks.sbtExit === 'ok' && wmMsg.marks.spbSave === 'mid' && /接線標示/.test(api.hub.status.text),
++    'wiring marks: sbtExit green (a click listener), spbSave orange (only delegated); the status bar says so', wmMsg ? JSON.stringify(wmOn.count) : '-');
++  const wmOff = await fake._cmds['ht9045Designer.toggleWireMarks']();
++  ok(wmOff && wmOff.on === false && pagePosted.filter(m => m.type === 'wireMarks').pop().marks === null && !/接線標示/.test(api.hub.status.text), 'wiring marks off');
++  panel.webview.postMessage = wmPM;
++
+   // 在所有頁面搜尋: with a string the command returns the hits (the input box / pick are for people)
+   const psHits = await fake._cmds['ht9045Designer.searchPages']('spbSave');
+   ok(Array.isArray(psHits) && psHits.length >= 5 && psHits.some(h => /Setup\.HotPlate\.html$/.test(h.file) && h.id === 'spbSave'),
+-- 
+2.55.0.windows.5
+

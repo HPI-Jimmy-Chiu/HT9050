@@ -1,0 +1,335 @@
+From 801e5b39cbf27f33ceb4452ca4eac41a6d40c2e7 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 21:02:42 +0800
+Subject: [PATCH] HTDESIGNER-26: search every page for a component -- by name,
+ class or the text it shows (0.26.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The 頁面 view's title bar (magnifier), the design surface's right-click menu,
+or Ctrl+Alt+Shift+O: one input -- a name (spbSave), a class (TGroupBox) or
+text on the screen (Save, 存檔; words separated by blanks must all match) --
+over every page of the web folder at once (about 80 ms after the first read);
+an exact name first, then name hits, then text, then class. Picking a hit
+opens that page in the designer and selects the component there (a hidden
+tab opens), once its page is drawn.
+- lib/pagesearch.js: every element with an id, its class from the generated
+  title, and the text it shows -- a container's caption child (pnlCap /
+  legend), an edit's value, a check box's label, else the text up to its own
+  end tag with the tags left out (<button><img …>Save</button> -> "Save").
+- With a string argument the command returns the hits (tests, other code).
+
+Tests: lib 120 (spbSave on 17 pages, exact first, HotPlate's "Save"; by a
+group box's legend; an edit's value, a check box's label; no hit = empty),
+smoke 91, real VS Code 92 (spbSave on another page: it opens, spbSave is
+selected there), probe, panels -- all pass; NO-SAVES, MD5-unchanged.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  3 +
+ tools/vscode-htdesigner/extension.js          | 47 ++++++++++++
+ tools/vscode-htdesigner/lib/pagesearch.js     | 74 +++++++++++++++++++
+ tools/vscode-htdesigner/package.json          | 15 +++-
+ .../test/integration/index.js                 | 14 ++++
+ tools/vscode-htdesigner/test/run_tests.js     | 14 ++++
+ .../vscode-htdesigner/test/smoke_extension.js |  5 ++
+ 7 files changed, 171 insertions(+), 1 deletion(-)
+ create mode 100644 tools/vscode-htdesigner/lib/pagesearch.js
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 01dbe03..86098c9 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -34,6 +34,9 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+   目前這一頁標「● 目前」（橘色眼睛圖示）、其他開著的標「○ 已開啟」；換頁時清單會自己捲到目前那一頁、打開它的分組。
+   滑鼠移到一頁上，右邊的 `</>` 圖示＝用文字編輯器開 HTML 原始碼（右鍵選單也有）。轉址頁標「→ 目標」。
+   web 資料夾裡新增／刪除 .html，清單會自己更新；標題列的重新整理圖示可以手動重讀。在清單裡直接打字可以篩選。
++- **在所有頁面搜尋**：「頁面」標題列的放大鏡、畫面右鍵、或 `Ctrl+Alt+Shift+O`。輸入元件名稱、型別（`TGroupBox`）或畫面上的文字
++  （`Save`、`存檔`；空白隔開＝每個字都要有），一次找全部 80 多頁；名稱完全相同的排最前面。
++  選一個結果＝開那一頁、直接選到那個元件（在沒顯示的分頁裡會自動切過去）。
+ - 左邊「HT9045 設計檢視」→「元件」標題列的清單圖示 → 選頁面
+ - `Ctrl+Shift+P` →「HT9045: 選擇頁面開啟設計檢視」
+ - 在 `.html` 檔上按右鍵 →「在設計檢視開啟」
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 1b5d964..9be9169 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -29,6 +29,7 @@ const dfmdiff = require('./lib/dfmdiff');
+ const pagelist = require('./lib/pagelist');
+ const htmlblock = require('./lib/htmlblock');
+ const toolbox = require('./lib/toolbox');
++const pagesearch = require('./lib/pagesearch');
+ const htmledit = require('./lib/htmledit');
+ const lex = require('./lib/cpplex');
+ 
+@@ -123,6 +124,7 @@ class Hub {
+         if (f) return vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(f), 'default', vscode.ViewColumn.Beside);
+       }),
+       reg('ht9045Designer.refreshPages', () => this.pages.refresh()),
++      reg('ht9045Designer.searchPages', q => this.cmdSearchPages(typeof q === 'string' ? q : undefined)),
+       // hidden in the designer only (the eye in the component tree / the design surface's menu)
+       reg('ht9045Designer.designHide', n => this.designHide(n, true)),
+       reg('ht9045Designer.designUnhide', n => this.designHide(n, false)),
+@@ -1777,6 +1779,51 @@ class Hub {
+     return res;
+   }
+ 
++  /**
++   * 在所有頁面搜尋: a component by its name, its class or the text it shows, over every
++   * page of the web folder; the pick opens that page and selects it there. With a
++   * string argument (tests, other code) the hits are returned without asking.
++   */
++  async cmdSearchPages(query) {
++    const webRoot = (this.active && this.active.r.webRoot) || roots.resolveRoots(null, this.wsFolders(), this.over()).webRoot;
++    if (!webRoot) { vscode.window.showInformationMessage('找不到 web 資料夾（設定 ht9045Designer.webRoot）。'); return null; }
++    const direct = typeof query === 'string';
++    const q = direct ? query : await vscode.window.showInputBox({
++      prompt: '在所有頁面找元件：名稱、型別或畫面上的文字（空白隔開＝每個字都要有）',
++      placeHolder: '例如 spbSave、Save、TGroupBox、存檔', value: this.lastPageQuery || '',
++    });
++    if (!q || !q.trim()) return null;
++    this.lastPageQuery = q;
++    const t0 = Date.now();
++    const hits = pagesearch.searchPages(webRoot, q, 500);
++    this.log('在所有頁面搜尋「' + q + '」：' + hits.length + ' 個（' + (Date.now() - t0) + ' ms）');
++    if (direct) return hits;
++    if (!hits.length) { vscode.window.showInformationMessage('所有頁面都沒有找到「' + q + '」。'); return hits; }
++    const HOW = { id: '名稱', text: '文字', class: '型別' };
++    const pick = await vscode.window.showQuickPick(hits.map(h => ({
++      label: h.id,
++      description: (h.cls ? h.cls + '　' : '') + (h.caption ? '「' + h.caption.slice(0, 40) + (h.caption.length > 40 ? '…' : '') + '」' : ''),
++      detail: h.page + ':' + h.line + '　（找到：' + HOW[h.how] + '）',
++      hit: h,
++    })), { placeHolder: '找到 ' + hits.length + (hits.length >= 500 ? '+' : '') + ' 個「' + q + '」— 選一個就開那一頁並選取它', matchOnDescription: true, matchOnDetail: true });
++    if (pick) await this.openPageAt(pick.hit.file, pick.hit.id);
++    return hits;
++  }
++
++  /** Open `file` in the designer and select `id` once its page is drawn (a hidden tab opens). */
++  async openPageAt(file, id) {
++    await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(file), VIEW_TYPE);
++    let d = null;
++    for (let i = 0; i < 200 && !d; i++) {
++      d = Array.from(this.designers).find(x => web.samePath(x.file, file) && x.treeData.length) || null;
++      if (!d) await sleep(100);
++    }
++    if (!d) return null;
++    d.lastSelId = id;
++    d.post({ type: 'selectId', id, origin: 'search' });
++    return d;
++  }
++
+   /** Quick pick over every component of the page (big pages have thousands). */
+   async cmdFindComponent() {
+     const d = this.active;
+diff --git a/tools/vscode-htdesigner/lib/pagesearch.js b/tools/vscode-htdesigner/lib/pagesearch.js
+new file mode 100644
+index 0000000..890225f
+--- /dev/null
++++ b/tools/vscode-htdesigner/lib/pagesearch.js
+@@ -0,0 +1,74 @@
++'use strict';
++// AI(W906-HTDESIGNER) 20260929: 在所有頁面搜尋 -- a component by its name or by the text
++// it shows, over every page of the web folder at once. Plain Node (no vscode).
++//   hit = { file, page, id, cls, caption, line, how: 'id' | 'text' | 'class' }
++const fs = require('fs');
++const path = require('path');
++const pagelist = require('./pagelist');
++
++function decode(s) {
++  return String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
++}
++
++/** Every element with an id in one page's source: { id, cls, caption, at }. */
++function elementsOf(text) {
++  const out = [];
++  const re = /<([A-Za-z][\w-]*)\b([^>]*?)\sid\s*=\s*(["'])([^"']+)\3([^>]*)>/g;
++  let m;
++  while ((m = re.exec(text))) {
++    const attrs = m[2] + ' ' + m[5];
++    const t = /\stitle\s*=\s*(["'])([^"']*)\1/.exec(attrs);
++    const cm = t ? /^\s*[\w@]+\s*:\s*(T\w+)/.exec(t[2]) : null;
++    // the caption: a container's (TPanel / TGroupBox) is its caption child only; an input's is
++    // its value; anything else shows the text up to its own end tag, tags left out
++    // (<button><img …>Save</button> -> "Save")
++    const tag = m[1].toLowerCase();
++    const after = text.slice(m.index + m[0].length, m.index + m[0].length + 800);
++    let cap = '';
++    const c = /^\s*<(?:legend|span class="pnlCap")[^>]*>([^<]*)</.exec(after);
++    if (c) cap = c[1];
++    else if (tag === 'input') { const v = /\svalue\s*=\s*(["'])([^"']*)\1/.exec(attrs); cap = v ? v[2] : ''; }
++    else if (tag !== 'div' && tag !== 'fieldset') {
++      const end = after.toLowerCase().indexOf('</' + tag);
++      cap = (end >= 0 ? after.slice(0, end) : /^([^<]*)/.exec(after)[1]).replace(/<[^>]*>/g, ' ');
++    } else cap = /^([^<]*)/.exec(after)[1];
++    out.push({ id: m[4], cls: cm ? cm[1] : '', caption: decode(cap).replace(/\s+/g, ' ').trim(), at: m.index });
++  }
++  return out;
++}
++
++/**
++ * Search every page of `webRoot` for `query` (words separated by blanks must all be
++ * in the name, the class or the text; case-blind). Best first: name hits, then text.
++ */
++function searchPages(webRoot, query, limit) {
++  const words = String(query || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
++  if (!words.length || !webRoot) return [];
++  const hits = [];
++  for (const g of pagelist.listPages(webRoot)) {
++    for (const p of g.pages) {
++      if (p.redirect) continue;
++      let text = '';
++      try { text = fs.readFileSync(p.file, 'utf8'); } catch (e) { continue; }
++      let lineStarts = null;
++      const lineOf = at => {
++        if (!lineStarts) { lineStarts = [0]; for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) lineStarts.push(i + 1); }
++        let lo = 0, hi = lineStarts.length - 1;
++        while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (lineStarts[mid] <= at) lo = mid; else hi = mid - 1; }
++        return lo + 1;
++      };
++      for (const e of elementsOf(text)) {
++        const idL = e.id.toLowerCase(), capL = e.caption.toLowerCase(), clsL = e.cls.toLowerCase();
++        if (!words.every(w => idL.includes(w) || capL.includes(w) || clsL.includes(w))) continue;
++        const how = words.every(w => idL.includes(w)) ? 'id' : words.every(w => capL.includes(w) || idL.includes(w)) ? 'text' : 'class';
++        hits.push({ file: p.file, page: p.name, group: g.name, id: e.id, cls: e.cls, caption: e.caption, line: lineOf(e.at), how,
++          exact: idL === words.join(' ') });
++      }
++    }
++  }
++  const rank = h => (h.exact ? 0 : h.how === 'id' ? 1 : h.how === 'text' ? 2 : 3);
++  hits.sort((a, b) => rank(a) - rank(b) || a.page.localeCompare(b.page) || a.line - b.line);
++  return hits.slice(0, limit || 500);
++}
++
++module.exports = { elementsOf, searchPages };
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index a6bfa2b..2166a22 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.25.0",
++  "version": "0.26.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -115,6 +115,12 @@
+         "category": "HT9045",
+         "icon": "$(refresh)"
+       },
++      {
++        "command": "ht9045Designer.searchPages",
++        "title": "在所有頁面搜尋元件…（名稱、型別、畫面上的文字）",
++        "category": "HT9045",
++        "icon": "$(search)"
++      },
+       {
+         "command": "ht9045Designer.designHide",
+         "title": "在設計檢視隱藏（不改原始碼）",
+@@ -289,6 +295,7 @@
+         { "command": "ht9045Designer.deleteComponent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "0_edit@4" },
+         { "command": "ht9045Designer.addComponent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "0_edit@5" },
+         { "command": "ht9045Designer.findComponent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@2" },
++        { "command": "ht9045Designer.searchPages", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@6" },
+         { "command": "ht9045Designer.designToggle", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@3" },
+         { "command": "ht9045Designer.designLockToggle", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@5" },
+         { "command": "ht9045Designer.designUnhideAll", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign' && ht9045Designer.anyDesignHidden", "group": "2_select@4" },
+@@ -374,6 +381,11 @@
+         }
+       ],
+       "view/title": [
++        {
++          "command": "ht9045Designer.searchPages",
++          "when": "view == ht9045Designer.pages",
++          "group": "navigation@0"
++        },
+         {
+           "command": "ht9045Designer.refreshPages",
+           "when": "view == ht9045Designer.pages",
+@@ -543,6 +555,7 @@
+       { "command": "ht9045Designer.order.forward", "key": "ctrl+]", "when": "activeCustomEditorId == 'ht9045Designer.editor'" },
+       { "command": "ht9045Designer.order.backward", "key": "ctrl+[", "when": "activeCustomEditorId == 'ht9045Designer.editor'" },
+       { "command": "ht9045Designer.order.back", "key": "ctrl+shift+[", "when": "activeCustomEditorId == 'ht9045Designer.editor'" },
++      { "command": "ht9045Designer.searchPages", "key": "ctrl+alt+shift+o", "when": "activeCustomEditorId == 'ht9045Designer.editor' || focusedView == ht9045Designer.pages" },
+       { "command": "ht9045Designer.groupIntoPanel", "key": "ctrl+g", "when": "activeCustomEditorId == 'ht9045Designer.editor'" },
+       { "command": "ht9045Designer.ungroup", "key": "ctrl+shift+g", "when": "activeCustomEditorId == 'ht9045Designer.editor'" }
+     ],
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 4f3f0b0..5eba62d 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -8,6 +8,7 @@
+ const vscode = require('vscode');
+ const fs = require('fs');
+ const path = require('path');
++const web2 = require('../../lib/websearch');
+ 
+ const sleep = ms => new Promise(r => setTimeout(r, ms));
+ async function waitFor(fn, ms) {
+@@ -431,6 +432,19 @@ exports.run = async function () {
+       await waitFor(() => (d.treeData.length && (!tb || !d.treeData.some(x => x[2] === tb.id)) ? true : null), 10000);
+     }
+ 
++    // 在所有頁面搜尋: spbSave on another page -> that page opens and spbSave is selected there
++    {
++      const hits = await vscode.commands.executeCommand('ht9045Designer.searchPages', 'spbSave');
++      const other = hits && hits.find(h => !web2.samePath(h.file, page) && /[\\/]page[\\/]/i.test(h.file));
++      ok(hits && hits.length >= 5 && !!other, 'search all pages: spbSave on ' + (hits ? hits.length : 0) + ' pages', other ? path.basename(other.file) : '-');
++      if (other) {
++        const od = await hub.openPageAt(other.file, other.id);
++        const sel = od ? await waitFor(() => (od.sel && od.sel.info && od.sel.info.id === other.id ? true : null), 10000) : null;
++        ok(!!od && !!sel && hub.active === od, 'openPageAt: ' + path.basename(other.file) + ' opened in the designer, spbSave selected there');
++        if (od) { await vscode.commands.executeCommand('workbench.action.closeActiveEditor'); await sleep(300); }
++      }
++    }
++
+     // 頁面 list (the real tree view): HotPlate is the current page; a click switches to Setup.Speed.html
+     {
+       const pgs = hub.pages.getChildren();
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index 70b0085..086528a 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -541,6 +541,20 @@ async function main() {
+   ok(tbMod.newName('Label', new Set(['Label1', 'Label2', 'Label4'])) === 'Label3' && tbMod.newName('Panel', new Set()) === 'Panel1',
+     'toolbox names: the first free BCB6-style name (Label3, Panel1)');
+ 
++  // --- 在所有頁面搜尋: a name, the shown text, a class -- over every page
++  const psMod = require('../lib/pagesearch');
++  const psIds = psMod.searchPages(WEB, 'spbSave');
++  const psHp = psIds.find(h => h.page === 'Setup.HotPlate.html');
++  ok(psIds.length >= 5 && psIds[0].exact && psHp && psHp.cls === 'TSpeedButton' && psHp.caption === 'Save' && psHp.how === 'id' && psHp.line > 0,
++    'searchPages spbSave: on many pages, exact name first; HotPlate\'s is a TSpeedButton showing "Save" (the text after its <img>)', psIds.length + ' hits');
++  const psText = psMod.searchPages(WEB, 'plate of use');
++  ok(psText.some(h => h.page === 'Setup.HotPlate.html' && h.id === 'GroupBox1' && h.how === 'text'), 'searchPages by the text a group box shows (its legend): GroupBox1',
++    psText.slice(0, 3).map(h => h.page + ' ' + h.id).join(', '));
++  const psNone = psMod.searchPages(WEB, 'zz-no-such-thing-qq');
++  const psEls = psMod.elementsOf('<span style="position:absolute"><input class="ed" id="e1" title="e1 : TEdit" value="12.5"></span><label class="ckb" id="c1" title="c1 : TCheckBox"><input type="checkbox" >On</label>');
++  ok(psNone.length === 0 && psEls.length === 2 && psEls[0].caption === '12.5' && psEls[1].caption === 'On' && psEls[1].cls === 'TCheckBox',
++    'searchPages: no hit = empty; an edit shows its value, a check box its label', JSON.stringify(psEls));
++
+   // --- the 頁面 list: every page of web\page and web\, by the name before the first dot
+   const plMod = require('../lib/pagelist');
+   const plGroups = plMod.listPages(WEB);
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index df19211..40b42a0 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -437,6 +437,11 @@ async function main() {
+   ok(api.hub.loadDesignSet('htd.designLocked', PAGE).length === 0 && api.hub.lockedName(edD, 'spbSave') === '' && fake._tree.getTreeItem(lkNode).contextValue === 'component',
+     'unlock all: nothing locked, nothing kept');
+ 
++  // 在所有頁面搜尋: with a string the command returns the hits (the input box / pick are for people)
++  const psHits = await fake._cmds['ht9045Designer.searchPages']('spbSave');
++  ok(Array.isArray(psHits) && psHits.length >= 5 && psHits.some(h => /Setup\.HotPlate\.html$/.test(h.file) && h.id === 'spbSave'),
++    'search all pages for spbSave: many pages, HotPlate among them', psHits ? psHits.length + ' hits' : '-');
++
+   // snap to gridlines: on / off for every designer, kept in the workspace state, shown in the status bar
+   pagePosted.length = 0;
+   const grOn = await fake._cmds['ht9045Designer.toggleGrid']();
+-- 
+2.55.0.windows.5
+

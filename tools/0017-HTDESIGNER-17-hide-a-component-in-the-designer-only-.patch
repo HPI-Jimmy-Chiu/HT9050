@@ -1,0 +1,434 @@
+From 1f6c3d86c8f73e2a892092722dbc12faedd243d2 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 19:43:54 +0800
+Subject: [PATCH] HTDESIGNER-17: hide a component in the designer only -- the
+ eye of the WPF document outline (0.17.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Pages stack many panels at one place (Alert.Note: a dozen pop-up panels at
+160,290), so the ones underneath could not be seen or clicked.
+- The component tree has an eye on every row: hide in the designer / show
+  again (eye-closed); the title bar has "show all" while something is hidden.
+  The design surface's right-click menu has the same toggle for the selection.
+- The probe hides it with a rule of its own ([data-htd-hide] { visibility:
+  hidden !important }): a click at its place reaches what is underneath, the
+  tree's own "(hidden)" (no layout box) is not affected, the DFM comparison
+  (display) neither.
+- Never written to the source: kept per page in the workspace state, so it
+  survives Reload and reopening; the form itself cannot be hidden.
+- The tree marks it "（設計時隱藏）" with a dimmed eye-closed icon.
+
+Tests: lib 103, probe (hidden = invisible and a click goes through, shown
+again, no edit), smoke 66 (probe told the whole set, tree mark, kept per page,
+form refused, show all, no WorkspaceEdit), panels, real VS Code 69 (hidden in
+the real designer, still hidden after Reload, show all, page never dirty).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  5 ++
+ tools/vscode-htdesigner/extension.js          | 61 +++++++++++++++++--
+ tools/vscode-htdesigner/media/probe.js        | 29 +++++++++
+ tools/vscode-htdesigner/package.json          | 46 +++++++++++++-
+ .../test/integration/index.js                 | 17 ++++++
+ tools/vscode-htdesigner/test/probe_driver.js  | 14 +++++
+ tools/vscode-htdesigner/test/probe_test.ps1   |  4 ++
+ .../vscode-htdesigner/test/smoke_extension.js | 25 +++++++-
+ 8 files changed, 193 insertions(+), 8 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 7044f7a..fd416fc 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -118,6 +118,11 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ ⚠ 這些頁面是網頁作者的作品，透過 `sync_web.py` 同步進來，`--apply` 會整份覆蓋。第一次改的時候外掛會提醒你；
+ 存檔前請確認，並告訴網頁作者。如果你開了自動存檔（`files.autoSave`），改動會自動寫到磁碟，提醒裡也會寫出來。
+ 
++**設計時隱藏（眼睛）**：跟 WPF 文件大綱的眼睛一樣。「元件」樹每一列右邊的眼睛＝在設計畫面**暫時隱藏**那個元件（連同裡面的東西），
++再按一次（閉眼圖示）顯示回來；標題列的眼睛＝全部顯示。畫面上按右鍵也有「設計時隱藏／顯示這個元件」。
++隱藏的元件點不到，**滑鼠會點到它下面那一層** —— 像 Alert.Note 十幾個面板疊在同一個位置，把上面的藏起來就能選、能改下面的。
++**只影響設計畫面，原始碼一個字都不改**；每一頁記住自己藏了哪些（關掉再開、重新整理都還在），表單本身不能藏。
++
+ **「元件」樹**（WPF 的文件大綱）：頁面上所有有名字的元件，照 DFM 的層次排列。點一下＝在畫面上選取；
+ **Ctrl／Shift＋點＝多選**（最後點的是主要選取）；選到在隱藏分頁裡的元件時，會自動切到那一頁。
+ 每一列右邊兩個圖示＝跳到 DFM 定義／跳到 HTML 原始碼。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index ef6ecd7..5ee0ed8 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -117,6 +117,11 @@ class Hub {
+         if (f) return vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(f), 'default', vscode.ViewColumn.Beside);
+       }),
+       reg('ht9045Designer.refreshPages', () => this.pages.refresh()),
++      // hidden in the designer only (the eye in the component tree / the design surface's menu)
++      reg('ht9045Designer.designHide', n => this.designHide(n, true)),
++      reg('ht9045Designer.designUnhide', n => this.designHide(n, false)),
++      reg('ht9045Designer.designToggle', n => this.designHide(n)),
++      reg('ht9045Designer.designUnhideAll', () => { if (this.active) this.applyDesignHidden(this.active, []); }),
+       reg('ht9045Designer.toggleMode', () => this.cmdToggleMode()),
+       reg('ht9045Designer.reload', () => { if (this.active) this.active.render(); }),
+       reg('ht9045Designer.showSource', () => this.cmdShowSource()),
+@@ -252,6 +257,7 @@ class Hub {
+     if (this.active === d) return;
+     this.active = d;
+     this.tree.set(d);
++    vscode.commands.executeCommand('setContext', 'ht9045Designer.anyDesignHidden', !!(d && d.designHidden && d.designHidden.size));
+     this.pages.mark();
+     this.pages.revealActive();
+     vscode.commands.executeCommand('setContext', 'ht9045Designer.active', !!d);
+@@ -265,6 +271,43 @@ class Hub {
+     this.showProps(d, d && d.sel ? d.sel.data : null);
+   }
+ 
++  // --- hidden in the designer only (the eye; the workspace state, never the source) ---
++  loadDesignHidden(file) {
++    const all = this.ctx.workspaceState ? this.ctx.workspaceState.get('htd.designHidden', {}) : {};
++    const v = all && all[String(file).toLowerCase()];
++    return Array.isArray(v) ? v.filter(x => typeof x === 'string' && x) : [];
++  }
++
++  /** ids = the names to hide (a toggle adds / removes one; [] shows everything again). */
++  applyDesignHidden(d, ids) {
++    if (!d) return;
++    d.designHidden = new Set(ids.filter(x => typeof x === 'string' && x && x !== '@form'));
++    const list = Array.from(d.designHidden);
++    if (this.ctx.workspaceState) {
++      const all = Object.assign({}, this.ctx.workspaceState.get('htd.designHidden', {}));
++      if (list.length) all[d.file.toLowerCase()] = list; else delete all[d.file.toLowerCase()];
++      this.ctx.workspaceState.update('htd.designHidden', all);
++    }
++    d.post({ type: 'designHidden', ids: list });
++    if (this.active === d) {
++      this.tree.refresh();
++      vscode.commands.executeCommand('setContext', 'ht9045Designer.anyDesignHidden', list.length > 0);
++    }
++  }
++
++  designHide(n, hide) {
++    const d = this.active;
++    if (!d) return;
++    // from the tree: its node; from the design surface's menu: the selection
++    const id = n && typeof n.id === 'string' ? (n.isForm ? '' : n.id) : (d.sel && d.sel.info ? d.sel.info.id : '');
++    if (!id || id === '@form') { vscode.window.setStatusBarMessage('$(info) 表單本身不能隱藏', 4000); return; }
++    const ids = new Set(d.designHidden);
++    if (hide === undefined) hide = !ids.has(id);
++    if (hide) ids.add(id); else ids.delete(id);
++    this.applyDesignHidden(d, Array.from(ids));
++    vscode.window.setStatusBarMessage('$(eye' + (hide ? '-closed' : '') + ') ' + id + (hide ? ' 在設計檢視隱藏了（只影響畫面，原始碼沒改）' : ' 顯示回來了'), 5000);
++  }
++
+   updateStatus() {
+     const d = this.active;
+     if (!d) { this.status.hide(); return; }
+@@ -1261,6 +1304,9 @@ class Designer {
+     this.sel = null;
+     this.blocked = [];
+     this.errors = [];
++    // hidden in the designer only (WPF: the eye in the document outline); kept per
++    // page in the workspace state, never in the source
++    this.designHidden = new Set(hub.loadDesignHidden(doc.uri.fsPath));
+     this.formLabel = '表單';
+     this.disposed = false;
+     this.renderN = 0;
+@@ -1374,7 +1420,8 @@ class Designer {
+             if (pi.ir.formClass) classes['@form'] = pi.ir.formClass;
+             if (pi.ir.root && pi.ir.root.events) events['@form'] = Object.keys(pi.ir.root.events);
+           }
+-          this.post({ type: 'init', mode: this.mode, selectId: this.lastSelId, scroll: this.scroll, classes, events, zoom: this.zoom || 1 });
++          this.post({ type: 'init', mode: this.mode, selectId: this.lastSelId, scroll: this.scroll, classes, events, zoom: this.zoom || 1,
++            designHidden: Array.from(this.designHidden) });
+         };
+         this.info.then(send, () => send(null));
+         clearTimeout(this.diagTimer);
+@@ -1715,15 +1762,19 @@ class ComponentTree {
+       const node = this.d.ir.byName.get(n.id);
+       if (node) n.cls = node.class;
+     }
++    const dh = !n.isForm && !!(this.d && this.d.designHidden && this.d.designHidden.has(n.id));
+     const desc = [];
+     if (!n.isForm) desc.push(n.cls || '<' + n.tag + '>');
+     if (n.cap) desc.push('「' + n.cap + '」');
+-    if (n.hidden) desc.push('（隱藏）');
++    if (dh) desc.push('（設計時隱藏）');
++    else if (n.hidden) desc.push('（隱藏）');
+     item.description = desc.join(' ');
+-    item.tooltip = label + (n.cls ? ' : ' + n.cls : '') + '\n<' + n.tag + '>' + (n.cap ? '\n' + n.cap : '') + (n.hidden ? '\n目前不可見（在未顯示的分頁裡，或被隱藏）' : '');
+-    item.iconPath = new vscode.ThemeIcon(iconFor(n), n.hidden ? new vscode.ThemeColor('disabledForeground') : undefined);
++    item.tooltip = label + (n.cls ? ' : ' + n.cls : '') + '\n<' + n.tag + '>' + (n.cap ? '\n' + n.cap : '') +
++      (dh ? '\n在設計檢視暫時隱藏（按右邊的眼睛顯示回來；原始碼沒改）' : n.hidden ? '\n目前不可見（在未顯示的分頁裡，或被隱藏）' : '');
++    item.iconPath = new vscode.ThemeIcon(dh ? 'eye-closed' : iconFor(n), dh || n.hidden ? new vscode.ThemeColor('disabledForeground') : undefined);
+     item.command = { command: 'ht9045Designer.selectKey', title: '選取', arguments: [n.key] };
+-    item.contextValue = 'component';
++    // the eye: 'component' shows "hide", 'componentDesignHidden' shows "show"; the form has none
++    item.contextValue = n.isForm ? 'componentForm' : dh ? 'componentDesignHidden' : 'component';
+     return item;
+   }
+ 
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index dfeb76a..f93a540 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -967,6 +967,29 @@
+     post({ type: 'pageError', msg: String(e.message || ''), src: String(e.filename || ''), line: e.lineno || 0 });
+   }, true);
+ 
++  /* hidden in the designer only (WPF: the eye in the document outline) -- a
++     visibility rule of our own, never written to the source; a click goes through
++     to what is underneath (pages stack many panels at one place) */
++  var hideStyle = null;
++  function setDesignHidden(ids) {
++    if (!hideStyle) {
++      hideStyle = document.createElement('style');
++      hideStyle.setAttribute('data-htd', 'hide');
++      hideStyle.textContent = '[data-htd-hide],[data-htd-hide] *{visibility:hidden!important;}';
++      (document.head || document.documentElement).appendChild(hideStyle);
++    }
++    var want = {};
++    (Array.isArray(ids) ? ids : []).forEach(function (id) { want[String(id)] = 1; });
++    var now = document.querySelectorAll('[data-htd-hide]');
++    for (var i = 0; i < now.length; i++) if (!want[idOf(now[i])]) now[i].removeAttribute('data-htd-hide');
++    for (var id in want) {
++      var e = byId(id);
++      if (e && e !== document.body) e.setAttribute('data-htd-hide', '1');
++    }
++    hoverEl = null;
++    scheduleDraw();
++  }
++
+   /* 10. component tree -------------------------------------------------------- */
+   function buildTree() {
+     var out = [];
+@@ -1015,6 +1038,7 @@
+         if (m.events && typeof m.events === 'object') EVS = m.events;
+         if (typeof m.zoom === 'number' && m.zoom !== 1) setZoom(m.zoom);
+         if (m.mode) { mode = m.mode; drawBadge(); }
++        if (Array.isArray(m.designHidden) && m.designHidden.length) setDesignHidden(m.designHidden);
+         if (m.scroll) { try { window.scrollTo(m.scroll.x || 0, m.scroll.y || 0); } catch (x) { /* ignore */ } }
+         if (m.selectId) { var el0 = byId(m.selectId); if (el0) select(el0, 'init', !m.scroll); }
+         break;
+@@ -1052,6 +1076,10 @@
+       case 'refreshTree':
+         sendTree(true);
+         break;
++      case 'designHidden':
++        /* the whole set each time (ids), so it can never drift from the extension's */
++        setDesignHidden(m.ids);
++        break;
+       /* edits from the properties panel: change the DOM, then report the same change
+          as an 'edit' for the extension to write into the source */
+       case 'setLayout': {
+@@ -1225,6 +1253,7 @@
+           sheets: document.styleSheets.length, scripts: document.scripts.length,
+           bodyBg: bs ? bs.backgroundColor : '', bodyPadding: bs ? bs.padding : '',
+           vscodeDefaultsLeft: !!document.getElementById('_defaultStyles'),
++          designHidden: document.querySelectorAll('[data-htd-hide]').length,
+           base: document.baseURI,
+         });
+         break;
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 509bb4a..eee471a 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.16.0",
++  "version": "0.17.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -115,6 +115,29 @@
+         "category": "HT9045",
+         "icon": "$(refresh)"
+       },
++      {
++        "command": "ht9045Designer.designHide",
++        "title": "在設計檢視隱藏（不改原始碼）",
++        "category": "HT9045",
++        "icon": "$(eye)"
++      },
++      {
++        "command": "ht9045Designer.designUnhide",
++        "title": "在設計檢視顯示回來",
++        "category": "HT9045",
++        "icon": "$(eye-closed)"
++      },
++      {
++        "command": "ht9045Designer.designToggle",
++        "title": "設計時隱藏／顯示這個元件（不改原始碼）",
++        "category": "HT9045"
++      },
++      {
++        "command": "ht9045Designer.designUnhideAll",
++        "title": "設計時隱藏的元件全部顯示",
++        "category": "HT9045",
++        "icon": "$(eye)"
++      },
+       { "command": "ht9045Designer.viewCode", "title": "檢視程式碼（預設事件）", "category": "HT9045" },
+       { "command": "ht9045Designer.selectParent", "title": "選取上層", "category": "HT9045" },
+       { "command": "ht9045Designer.align.left", "title": "靠左對齊", "category": "HT9045" },
+@@ -168,6 +191,8 @@
+         { "command": "ht9045Designer.revealDfm", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "1_code@3" },
+         { "command": "ht9045Designer.selectParent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@1" },
+         { "command": "ht9045Designer.findComponent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@2" },
++        { "command": "ht9045Designer.designToggle", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@3" },
++        { "command": "ht9045Designer.designUnhideAll", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign' && ht9045Designer.anyDesignHidden", "group": "2_select@4" },
+         { "submenu": "ht9045Designer.alignMenu", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@1" },
+         { "command": "ht9045Designer.pageOverview", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@1" },
+         { "command": "ht9045Designer.dfmDiff", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@2" },
+@@ -240,6 +265,11 @@
+           "when": "view == ht9045Designer.pages",
+           "group": "navigation@1"
+         },
++        {
++          "command": "ht9045Designer.designUnhideAll",
++          "when": "view == ht9045Designer.components && ht9045Designer.anyDesignHidden",
++          "group": "navigation@0"
++        },
+         {
+           "command": "ht9045Designer.openPage",
+           "when": "view == ht9045Designer.components",
+@@ -287,6 +317,16 @@
+           "when": "view == ht9045Designer.pages && viewItem == page",
+           "group": "1_open@1"
+         },
++        {
++          "command": "ht9045Designer.designHide",
++          "when": "view == ht9045Designer.components && viewItem == component",
++          "group": "inline@0"
++        },
++        {
++          "command": "ht9045Designer.designUnhide",
++          "when": "view == ht9045Designer.components && viewItem == componentDesignHidden",
++          "group": "inline@0"
++        },
+         {
+           "command": "ht9045Designer.revealDfm",
+           "when": "view == ht9045Designer.components",
+@@ -329,6 +369,10 @@
+         { "command": "ht9045Designer.pageOverview", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.dfmDiff", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.openPageFile", "when": "false" },
++        { "command": "ht9045Designer.designHide", "when": "false" },
++        { "command": "ht9045Designer.designUnhide", "when": "false" },
++        { "command": "ht9045Designer.designToggle", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.designUnhideAll", "when": "ht9045Designer.active && ht9045Designer.anyDesignHidden" },
+         { "command": "ht9045Designer.openPageText", "when": "false" },
+         { "command": "ht9045Designer.findComponent", "when": "ht9045Designer.active" }
+       ]
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 50c60f7..0db9b1d 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -266,6 +266,23 @@ exports.run = async function () {
+     // the page file itself was not modified
+     ok(!d.doc.isDirty, 'page document not modified');
+ 
++    // hidden in the designer only (the eye): the real probe hides Panel2, it stays hidden after the page
++    // is drawn again (Reload), "show all" brings it back -- and the page is never dirty
++    {
++      const diagNow = async () => { d.diag = null; d.post({ type: 'diag' }); return waitFor(() => d.diag, 5000); };
++      await vscode.commands.executeCommand('ht9045Designer.designHide', { id: 'Panel2', isForm: false });
++      const g1 = await diagNow();
++      ok(g1 && g1.designHidden === 1 && !d.doc.isDirty, 'eye: Panel2 hidden in the real designer, page not dirty', JSON.stringify(g1 && g1.designHidden));
++      await vscode.commands.executeCommand('ht9045Designer.reload');
++      await sleep(1500);
++      await waitFor(() => (d.treeData.length ? true : null), 10000);
++      const g2 = await diagNow();
++      ok(g2 && g2.designHidden === 1, 'still hidden after the page is drawn again (Reload)', JSON.stringify(g2 && g2.designHidden));
++      await vscode.commands.executeCommand('ht9045Designer.designUnhideAll');
++      const g3 = await diagNow();
++      ok(g3 && g3.designHidden === 0 && !d.doc.isDirty && hub.loadDesignHidden(d.file).length === 0, 'show all: back, nothing kept, page not dirty');
++    }
++
+     // 頁面 list (the real tree view): HotPlate is the current page; a click switches to Setup.Speed.html
+     {
+       const pgs = hub.pages.getChildren();
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index 515f403..182c617 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -335,6 +335,20 @@
+             ex2.style.display = disp;
+           }
+ 
++          /* hidden in the designer only: invisible, a click at its place reaches what is
++             underneath; showing it again restores it (nothing written: no 'edit') */
++          var hpnl = btn.parentElement && btn.parentElement.closest ? btn.parentElement.closest('[id]') : null;
++          if (hpnl && hpnl !== document.body && hpnl.contains(btn)) {
++            var ne2 = edits().length;
++            window.__htdProbe.message({ type: 'designHidden', ids: [hpnl.id] });
++            var br2 = btn.getBoundingClientRect();
++            var hit = document.elementFromPoint(br2.left + br2.width / 2, br2.top + br2.height / 2);
++            R.designHideTarget = hpnl.id + ' hit=' + (hit ? (hit.id || hit.tagName) : '-') + ' vis=' + getComputedStyle(btn).visibility;
++            R.designHideOk = hpnl.getAttribute('data-htd-hide') === '1' && getComputedStyle(btn).visibility === 'hidden' && !!hit && !hpnl.contains(hit);
++            window.__htdProbe.message({ type: 'designHidden', ids: [] });
++            R.designShowOk = !hpnl.hasAttribute('data-htd-hide') && getComputedStyle(btn).visibility === 'visible' && edits().length === ne2;
++          }
++
+           /* zoom 200%: a 20px drag on screen is 10px in the page */
+           window.__htdProbe.message({ type: 'setZoom', zoom: 2 });
+           window.__htdProbe.selectById('spbSave');
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index c427995..cf7498e 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -74,6 +74,10 @@ foreach ($p in $Pages) {
+     }
+     if ($R.PSObject.Properties.Name -contains 'hiddenTarget') { $must['hidden tab revealed'] = [bool]$R.hiddenTabRevealed }
+     if ($R.PSObject.Properties.Name -contains 'wrapperEdit') { $must['input moves its wrapper'] = [bool]$R.wrapperOk }
++    if ($R.PSObject.Properties.Name -contains 'designHideTarget') {
++      $must['hidden in the designer: invisible, clicks go through'] = [bool]$R.designHideOk
++      $must['shown again, nothing written'] = [bool]$R.designShowOk
++    }
+     if ($R.PSObject.Properties.Name -contains 'setLayoutKey') {
+       $must['setLayout from the panel (by key)'] = [bool]$R.setLayoutKeyOk
+       $must['lookAll: a hidden control measured by its style'] = [bool]$R.lookAllOk
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index c6b1c88..7acc753 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -29,8 +29,9 @@ async function main() {
+   Object.assign(fake._config, { eventJump: 'ask', syncSource: true });
+ 
+   const ext = require('../extension');
+-  const ctx = { subscriptions: [], extensionUri: fake.Uri.file(path.resolve(__dirname, '..')) };
+-  ext.activate(ctx);
++  const memento = { _m: {}, get(k, d) { return k in this._m ? this._m[k] : d; }, update(k, v) { this._m[k] = v; return Promise.resolve(); } };
++  const ctx = { subscriptions: [], extensionUri: fake.Uri.file(path.resolve(__dirname, '..')), workspaceState: memento };
++  const api = ext.activate(ctx);
+   ok(!!fake._editor && !!fake._props, 'activate registers the custom editor and the properties view');
+ 
+   // properties view
+@@ -338,6 +339,26 @@ async function main() {
+   const onDisk = fs.readdirSync(path.dirname(PAGE)).filter(n => /\.html?$/i.test(n)).length + fs.readdirSync(path.join(path.dirname(PAGE), '..')).filter(n => /\.html?$/i.test(n)).length;
+   ok(all === onDisk && pgroups[pgroups.length - 1].name === 'web 根目錄', 'every .html of web\\page and web\\ is listed (web root last)', all + ' listed, ' + onDisk + ' on disk');
+ 
++  // hidden in the designer only (the eye): the probe gets the whole set, the tree shows it, the workspace state keeps it
++  const nCallsEye = fake._calls.length;
++  pagePosted.length = 0;
++  await fake._cmds['ht9045Designer.designHide']({ id: 'Panel2', isForm: false });
++  const eyeMsg = pagePosted.filter(m => m.type === 'designHidden').pop();
++  const eyeNode = Array.from(fake._tree.byKey.values()).find(n => n.id === 'Panel2');
++  const eyeItem = eyeNode ? fake._tree.getTreeItem(eyeNode) : null;
++  ok(eyeMsg && JSON.stringify(eyeMsg.ids) === '["Panel2"]' && eyeItem && eyeItem.contextValue === 'componentDesignHidden' && /設計時隱藏/.test(eyeItem.description) &&
++    JSON.stringify(api.hub.loadDesignHidden(PAGE)) === '["Panel2"]',
++    'eye: Panel2 hidden in the designer (probe told, tree marks it, kept for the page)', JSON.stringify(eyeMsg) + ' | ' + (eyeItem && eyeItem.description));
++  await fake._cmds['ht9045Designer.designHide']({ id: '@form', isForm: true });
++  ok(JSON.stringify(Array.from(api.hub.active.designHidden)) === '["Panel2"]', 'the form itself cannot be hidden');
++  pagePosted.length = 0;
++  await fake._cmds['ht9045Designer.designUnhideAll']();
++  const eyeMsg2 = pagePosted.filter(m => m.type === 'designHidden').pop();
++  ok(eyeMsg2 && eyeMsg2.ids.length === 0 && api.hub.loadDesignHidden(PAGE).length === 0 && fake._tree.getTreeItem(eyeNode).contextValue === 'component',
++    'show all: nothing hidden, nothing kept, the tree is back');
++  // the source was never touched by any of it
++  ok(!fake._calls.slice(nCallsEye).some(c => c.name === 'applyEditCall'), 'hiding in the designer writes nothing into the page (no WorkspaceEdit)');
++
+   // live data tag: main.html palMainStatus <- machine.state <- WebBridgeTags.cpp
+   const MAINP = path.join(PORT, '..', 'web', 'page', 'main.html');
+   const mtext = fs.readFileSync(MAINP, 'utf8');
+-- 
+2.55.0.windows.5
+

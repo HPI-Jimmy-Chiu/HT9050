@@ -1,0 +1,279 @@
+From 5e7fac16bfb6bc0e82951e2ed507e1eaac66fa07 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 18:01:07 +0800
+Subject: [PATCH] HTDESIGNER-11: zoom the design surface with Ctrl+wheel (WPF),
+ 25%..400% (0.11.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- CSS zoom on <body> only; the overlay lives on <html>, so boxes, handles and
+  snaplines stay in viewport px and line up with the zoomed page
+- every screen delta (drag, resize, align) is divided by the zoom before it
+  becomes a CSS px value in the source; arrow keys stay 1 / 10 page px; the
+  size on the label is the page's px, not the screen's
+- zoom shown on the badge and the status bar, kept per page across reloads;
+  "HT9045: 設計檢視縮放回 100%" resets it
+
+Tests: probe 2 pages x 22 asserted (200%: a 20px drag writes +10px; Ctrl+wheel
+steps 2 -> 3) + all layers; a 150% screenshot checked by eye (box and handles
+on the input, the second selection boxed).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md            |  3 +-
+ tools/vscode-htdesigner/extension.js         | 15 +++++---
+ tools/vscode-htdesigner/media/probe.js       | 38 +++++++++++++++++---
+ tools/vscode-htdesigner/package.json         |  7 +++-
+ tools/vscode-htdesigner/test/probe_driver.js | 21 +++++++++++
+ tools/vscode-htdesigner/test/probe_test.ps1  |  2 ++
+ 6 files changed, 75 insertions(+), 11 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index a3cade0..a5a0c31 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -49,6 +49,7 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ | Tab ／ Shift＋Tab | 選下一個／上一個元件 |
+ | Ctrl＋Z ／ Ctrl＋Y | 復原／重做（VS Code 原本的功能，一次拖曳或一串方向鍵＝一步） |
+ | Ctrl＋S | 存檔 |
++| Ctrl＋滑鼠滾輪 | **縮放** 25%～400%（右下角和狀態列顯示比例）；拖曳距離會換算回頁面的 px。「HT9045: 設計檢視縮放回 100%」還原 |
+ | Alt＋點 | 選最內層的 HTML 元素（沒有 id 的也可以） |
+ | 點分頁標籤 | 照樣切換分頁 |
+ | 要操作頁面本身（展開下拉選單等） | 按編輯器右上角的鉛筆圖示（或狀態列）切到「操作模式」，再按一次切回來 |
+@@ -218,7 +219,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\vscode-htdesigner\test
+    會在螢幕上出現約 30 秒後自己關掉）。開 HotPlate 頁走完整條路，再逐頁掃 8 種頁面；
+    測試前後比對所有開過的檔案的 MD5，有任何變動就判失敗
+ 
+-實測 20260929：1～4 層 84 ＋ 2 頁各 20 ＋ 53（＋面板畫面 10）＋ 52（含 8 頁掃描，每頁也跑接線總覽）項全部通過。
++實測 20260929：1～4 層 84 ＋ 2 頁各 22 ＋ 53（＋面板畫面 10）＋ 52（含 8 頁掃描，每頁也跑接線總覽）項全部通過。
+ 編輯的部分在真正的 VS Code 裡測了「改 Left → 原始碼變 → 未存檔 → Ctrl+Z 兩次完全還原 → 畫面重新載入」、
+ 「多選兩個 → 同高 → 一次 Ctrl+Z 整組還原」，測試從不存檔，所有開過的檔案前後 MD5 一樣。
+ （途中抓到一個真 bug：CRLF 換行的 C++ 檔，`#endif` 後面的 `\r` 讓 `#if 0` 永遠不結束，
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 3b45849..7e08d3a 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -105,6 +105,7 @@ class Hub {
+       reg('ht9045Designer.showCodeInDesigner', () => this.cmdShowCodeInDesigner()),
+       reg('ht9045Designer.openWebSenders', (cmd, hits) => this.cmdOpenWebSenders(cmd, hits)),
+       reg('ht9045Designer.pageOverview', () => this.cmdPageOverview()),
++      reg('ht9045Designer.resetZoom', () => { if (this.active) this.active.post({ type: 'setZoom', zoom: 1 }); }),
+       vscode.languages.registerCodeLensProvider([{ language: 'cpp' }, { language: 'c' }], this.lens = new HandlerLens(this)),
+       reg('ht9045Designer.netCheck', () => {
+         const d = this.active;
+@@ -221,10 +222,12 @@ class Hub {
+   updateStatus() {
+     const d = this.active;
+     if (!d) { this.status.hide(); return; }
+-    this.status.text = d.mode === 'design' ? '$(pencil) 設計模式' : '$(play) 操作模式';
+-    this.status.tooltip = d.mode === 'design'
++    this.status.text = (d.mode === 'design' ? '$(pencil) 設計模式' : '$(play) 操作模式') +
++      (d.zoom && d.zoom !== 1 ? '　' + Math.round(d.zoom * 100) + '%' : '');
++    this.status.tooltip = (d.mode === 'design'
+       ? '點＝選元件，雙擊＝跳到事件程式碼。按這裡切到操作模式。'
+-      : '點擊交給頁面自己的程式（網路仍全部封鎖）。按這裡切回設計模式。';
++      : '點擊交給頁面自己的程式（網路仍全部封鎖）。按這裡切回設計模式。') +
++      '\nCtrl＋滾輪縮放；「HT9045: 設計檢視縮放回 100%」還原。';
+     this.status.show();
+   }
+ 
+@@ -1257,7 +1260,7 @@ class Designer {
+             if (pi.ir.formClass) classes['@form'] = pi.ir.formClass;
+             if (pi.ir.root && pi.ir.root.events) events['@form'] = Object.keys(pi.ir.root.events);
+           }
+-          this.post({ type: 'init', mode: this.mode, selectId: this.lastSelId, scroll: this.scroll, classes, events });
++          this.post({ type: 'init', mode: this.mode, selectId: this.lastSelId, scroll: this.scroll, classes, events, zoom: this.zoom || 1 });
+         };
+         this.info.then(send, () => send(null));
+         clearTimeout(this.diagTimer);
+@@ -1304,6 +1307,10 @@ class Designer {
+       case 'editRefused':
+         this.hub.refuseEdit(this, String(m.why || '不能改'));
+         break;
++      case 'zoom':
++        this.zoom = typeof m.zoom === 'number' ? m.zoom : 1;
++        if (this.hub.active === this) this.hub.updateStatus();
++        break;
+       case 'scroll':
+         this.scroll = { x: m.x || 0, y: m.y || 0 };
+         break;
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index 4518426..7dfeb91 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -280,7 +280,8 @@
+     var ev = id && Object.prototype.hasOwnProperty.call(EVS, id) ? EVS[id] : null;
+     var evs = ev && ev.length ? '  · ' + ev.slice(0, 3).join(', ') + (ev.length > 3 ? ' …' : '') : '';
+     var n = el === selEl ? allSel().length : 0;
+-    return name + (v.cls ? ' : ' + v.cls : '') + evs + '   ' + Math.round(r.width) + '×' + Math.round(r.height) + (n > 1 ? '   （共選 ' + n + ' 個）' : '');
++    var z = typeof zoom === 'number' && zoom > 0 ? zoom : 1;   // the page's own px, not the zoomed screen's
++    return name + (v.cls ? ' : ' + v.cls : '') + evs + '   ' + Math.round(r.width / z) + '×' + Math.round(r.height / z) + (n > 1 ? '   （共選 ' + n + ' 個）' : '');
+   }
+   function place(box, tag, el) {
+     if (!el || !el.isConnected) { box.style.display = 'none'; tag.style.display = 'none'; return; }
+@@ -337,9 +338,10 @@
+   }
+   function drawBadge() {
+     if (!badge) return;
+-    badge.textContent = mode === 'design'
++    var z = typeof zoom === 'number' && zoom !== 1 ? '　［縮放 ' + Math.round(zoom * 100) + '%，Ctrl+滾輪］' : '';
++    badge.textContent = (mode === 'design'
+       ? '設計模式：點＝選取　Ctrl/Shift+點＝多選　拖曳＝移動　控制點＝改大小　方向鍵＝微調　雙擊／Enter＝事件程式碼　Esc＝上層　Tab＝下一個'
+-      : '操作模式：點擊交給頁面（網路仍全部封鎖）';
++      : '操作模式：點擊交給頁面（網路仍全部封鎖）') + z;
+   }
+ 
+   /* 6. describing a component ---------------------------------------------- */
+@@ -418,6 +420,18 @@
+      change into the page source ('edit' messages). Only inline px values are edited;
+      anything else (%, auto, a class rule) is refused rather than guessed. */
+   var drag = null;
++  /* zoom (WPF: Ctrl+wheel). CSS zoom on <body> only -- the overlay lives on <html>, so
++     it stays in plain viewport px. Screen deltas are divided by the zoom before they
++     become CSS px in the source. */
++  var zoom = 1;
++  var ZOOMS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 2, 3, 4];
++  function setZoom(z) {
++    zoom = Math.max(0.25, Math.min(4, z));
++    if (document.body) document.body.style.zoom = zoom === 1 ? '' : String(zoom);
++    drawBadge();
++    scheduleDraw();
++    post({ type: 'zoom', zoom: zoom });
++  }
+   /* the element that actually carries the position: itself, or the generated
+      <span style="position:absolute…"> wrapper around an <input> */
+   function boxOf(el) {
+@@ -722,6 +736,8 @@
+         if (sy) { dy += sy.d; gy = sy.at; }
+       }
+       drag.guide = { x: gx, y: gy };
++      dx /= zoom;      // screen px -> CSS px of the page
++      dy /= zoom;
+       var dL = 0, dT = 0, dW = 0, dH = 0;
+       if (h === 'move') { dL = dx; dT = dy; }
+       else {
+@@ -771,6 +787,14 @@
+   origAdd.call(window, 'mouseup', endDrag, true);
+   origAdd.call(document, 'mouseleave', function () { hoverEl = null; scheduleDraw(); }, true);
+   origAdd.call(window, 'scroll', scheduleDraw, { capture: true, passive: true });
++  origAdd.call(window, 'wheel', function (e) {
++    if (!e.ctrlKey) return;              // plain wheel scrolls as usual
++    e.preventDefault();
++    e.stopImmediatePropagation();
++    var i = 0, best = Infinity;
++    for (var k = 0; k < ZOOMS.length; k++) { var dd = Math.abs(ZOOMS[k] - zoom); if (dd < best) { best = dd; i = k; } }
++    setZoom(ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, i + (e.deltaY < 0 ? 1 : -1)))]);
++  }, { capture: true, passive: false });
+   origAdd.call(window, 'resize', scheduleDraw, true);
+   /* keyboard, design mode, a component selected -- the WPF designer's keys:
+        arrows = nudge 1px (Shift = 10px)      Ctrl+arrows = resize 1px (Ctrl+Shift = 10px)
+@@ -924,6 +948,7 @@
+       case 'init':
+         if (m.classes && typeof m.classes === 'object') { CLS = m.classes; lastSig = ''; scheduleTree(); }
+         if (m.events && typeof m.events === 'object') EVS = m.events;
++        if (typeof m.zoom === 'number' && m.zoom !== 1) setZoom(m.zoom);
+         if (m.mode) { mode = m.mode; drawBadge(); }
+         if (m.scroll) { try { window.scrollTo(m.scroll.x || 0, m.scroll.y || 0); } catch (x) { /* ignore */ } }
+         if (m.selectId) { var el0 = byId(m.selectId); if (el0) select(el0, 'init', !m.scroll); }
+@@ -937,6 +962,9 @@
+         if (el1 && el1.isConnected) { selEl = null; select(el1, m.origin || 'tree', true); }
+         break;
+       }
++      case 'setZoom':
++        setZoom(typeof m.zoom === 'number' ? m.zoom : 1);
++        break;
+       case 'selectIds': {
+         /* a multi-selection by ids: the first is the primary */
+         var list6 = (m.ids || []).map(byId).filter(function (x) { return !!x; });
+@@ -1013,7 +1041,7 @@
+           if (!abx) { bad = true; continue; }
+           var ar = ae.getBoundingClientRect();
+           var aL = 0, aT = 0, aW = 0, aH = 0;
+-          switch (m.how) {
++          switch (m.how) {   /* (rects are screen px; divided by the zoom below) */
+             case 'left': aL = ref.left - ar.left; break;
+             case 'right': aL = ref.right - ar.right; break;
+             case 'top': aT = ref.top - ar.top; break;
+@@ -1026,7 +1054,7 @@
+             default: break;
+           }
+           var s0a = snap(abx);
+-          var ach = deltaStyle(s0a, aL, aT, aW, aH);
++          var ach = deltaStyle(s0a, aL / zoom, aT / zoom, aW / zoom, aH / zoom);
+           if (!ach) { bad = true; continue; }
+           applyStyle(abx.node, ach);
+           items.push({ el: ae, bx: abx, last: ach });
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 0c06879..44014ea 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.10.0",
++  "version": "0.11.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -92,6 +92,11 @@
+         "category": "HT9045",
+         "icon": "$(checklist)"
+       },
++      {
++        "command": "ht9045Designer.resetZoom",
++        "title": "設計檢視縮放回 100%",
++        "category": "HT9045"
++      },
+       {
+         "command": "ht9045Designer.showCodeInDesigner",
+         "title": "在設計檢視中顯示這段程式對應的元件",
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index 2752267..90b6fa4 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -242,6 +242,27 @@
+           var s2 = msgs('select').pop();
+           R.selLayout = s2 && s2.info && s2.info.layout ? s2.info.layout.target + ' ' + s2.info.layout.width + 'x' + s2.info.layout.height : null;
+           R.selCaption = s2 && s2.info && s2.info.caption ? s2.info.caption.kind + ':' + s2.info.caption.value : null;
++          /* zoom 200%: a 20px drag on screen is 10px in the page */
++          window.__htdProbe.message({ type: 'setZoom', zoom: 2 });
++          window.__htdProbe.selectById('spbSave');
++          var zr = btn.getBoundingClientRect();
++          var zl0 = parseFloat(btn.style.left);
++          var nz = edits().length;
++          var zx = zr.left + 6, zy = zr.top + 6;
++          mouse('mousedown', btn, zx, zy);
++          mouse('mousemove', btn, zx + 10, zy, ALT);
++          mouse('mousemove', btn, zx + 20, zy, ALT);
++          mouse('mouseup', btn, zx + 20, zy);
++          var ez = edits()[nz];
++          R.zoomEdit = ez ? JSON.stringify(ez.style) : null;
++          R.zoomDragOk = !!ez && ez.style.left === (zl0 + 10) + 'px';
++          /* Ctrl+wheel up = zoom in one step */
++          var nzm = msgs('zoom').length;
++          window.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, ctrlKey: true, bubbles: true, cancelable: true }));
++          var zm = msgs('zoom').slice(nzm).pop();
++          R.wheelZoom = zm ? zm.zoom : null;
++          R.wheelZoomOk = !!zm && zm.zoom === 3;
++          window.__htdProbe.message({ type: 'setZoom', zoom: 1 });
+           finish();
+         }, 100);
+       }, 600);
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index de16765..8ddbd18 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -64,6 +64,8 @@ foreach ($p in $Pages) {
+       'Esc selects the parent'     = [bool]$R.escParent
+       'Tab selects the next'       = [bool]$R.tabNext
+       'snaps to a line, guide drawn' = ([bool]$R.snapOk -and [bool]$R.snapGuide)
++      'zoom 200%: 20px drag = 10px' = [bool]$R.zoomDragOk
++      'Ctrl+wheel zooms in'        = [bool]$R.wheelZoomOk
+     }
+     if ($R.PSObject.Properties.Name -contains 'hiddenTarget') { $must['hidden tab revealed'] = [bool]$R.hiddenTabRevealed }
+     if ($R.PSObject.Properties.Name -contains 'wrapperEdit') { $must['input moves its wrapper'] = [bool]$R.wrapperOk }
+-- 
+2.55.0.windows.5
+

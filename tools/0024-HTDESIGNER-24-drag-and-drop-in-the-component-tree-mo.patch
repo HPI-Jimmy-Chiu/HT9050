@@ -1,0 +1,284 @@
+From a4b1a2c0c737c27bd4420c836ee96bfc7e038274 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 20:47:20 +0800
+Subject: [PATCH] HTDESIGNER-24: drag and drop in the component tree moves a
+ component into another container (0.24.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+WPF document outline: drag components (the multi-selection too) in the 元件
+tree and drop them
+- onto a TPanel / TGroupBox / TTabSheet / the form (or the empty area): they
+  move into it, at its end (on top) -- into a generated group box's
+  <div class="cli">;
+- onto any other component: they move next to it, into its parent.
+Their left/top numbers stay (they now count from the new container). Never
+into itself or into something inside it; a locked one does not move. One
+WorkspaceEdit (one Ctrl+Z), the page re-drawn, the moved one selected.
+- ComponentDnd: a TreeDragAndDropController on the tree's own mime type; the
+  names travel in the DataTransfer, the drop runs cmdReparent.
+
+Tests: smoke 87 (spbSave onto GroupBox1: into it, out of Panel2, once,
+selected; Panel2 onto its own spbSave refused; onto XST1: right after it),
+real VS Code 86 (the real DataTransfer: spbSave into GroupBox1, the re-drawn
+tree has it there; one undo puts it back; NO-SAVES), lib 116, probe, panels
+-- all pass. (tools/wb_serve.cpp changed during the run by another session:
+the launcher's WARN, as it should.)
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  2 +
+ tools/vscode-htdesigner/extension.js          | 94 ++++++++++++++++++-
+ tools/vscode-htdesigner/package.json          |  2 +-
+ tools/vscode-htdesigner/test/fake_vscode.js   |  6 +-
+ .../test/integration/index.js                 | 20 ++++
+ .../vscode-htdesigner/test/smoke_extension.js | 24 +++++
+ 6 files changed, 144 insertions(+), 4 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 4e57764..52f7dcc 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -167,6 +167,8 @@ GroupBox 的 `<legend>` 和 Panel 的標題永遠留在第一個；已經在最
+ **「元件」樹**（WPF 的文件大綱）：頁面上所有有名字的元件，照 DFM 的層次排列。點一下＝在畫面上選取；
+ **Ctrl／Shift＋點＝多選**（最後點的是主要選取）；選到在隱藏分頁裡的元件時，會自動切到那一頁。
+ 每一列右邊兩個圖示＝跳到 DFM 定義／跳到 HTML 原始碼。
++**在樹上拖曳＝換上層**（WPF 文件大綱一樣）：把元件拖到 Panel／GroupBox／分頁／表單上＝移進它裡面（放在最後、也就是最上層）；
++拖到一般元件上＝移到它旁邊（它的上層裡）。多選可以一起拖。left/top 數值不變（現在從新的上層算起），不能拖進自己裡面，鎖定的不能拖；一個 Ctrl+Z 復原。
+ 
+ **找元件**：`Ctrl+Alt+O`（或編輯器右上角的放大鏡），輸入名稱、型別或畫面上的文字。
+ `HW.IoSetView.html` 這種兩千多個元件的頁面用這個最快。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index e42a2dd..9341fce 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -72,8 +72,10 @@ class Hub {
+     this.propsDesigner = null;
+     this.warnedOperate = false;
+     this.tree = new ComponentTree(this);
++    // WPF document outline: drag a component onto a container to move it in there
++    this.treeDnd = new ComponentDnd(this);
+     this.treeView = vscode.window.createTreeView('ht9045Designer.components', {
+-      treeDataProvider: this.tree, showCollapseAll: true, canSelectMany: true,
++      treeDataProvider: this.tree, showCollapseAll: true, canSelectMany: true, dragAndDropController: this.treeDnd,
+     });
+     // WPF document outline: Ctrl/Shift+click in the tree = multi-select on the page
+     // (a single click is the item's command; the tree's own reveal is ignored here)
+@@ -1275,6 +1277,73 @@ class Hub {
+     return ok ? { id: ids[0], from: r.from, to: r.to, of: r.of } : null;
+   }
+ 
++  /**
++   * WPF document outline drag and drop: `ids` onto `target` (a component tree node;
++   * null = the empty area = the form). Onto a container (TPanel / TGroupBox /
++   * TTabSheet / the form) they move into it -- at its end, so on top; onto any other
++   * component they move next to it, into its parent. Their left/top numbers stay
++   * (they now count from the new container). One WorkspaceEdit, the page re-drawn.
++   */
++  async cmdReparent(ids, target) {
++    const d = this.active;
++    if (!d) return null;
++    ids = ids.filter(id => id && id !== '@form');
++    if (!ids.length) return null;
++    const tId = !target ? '@form' : target.isForm ? '@form' : target.id;
++    if (!tId) return null;
++    if (this.refuseLocked(d, ids, '移動')) return null;
++    // never into itself or into something inside it
++    const rowOf = id => d.treeData.find(r => (id === '@form' ? r[7] : r[2] === id));
++    for (let row = rowOf(tId); row; row = row[1] ? d.treeData.find(r => r[0] === row[1]) : null) {
++      if (!row[7] && ids.includes(row[2])) { this.refuseEdit(d, '不能把「' + row[2] + '」放進它自己裡面。'); return null; }
++    }
++    const pi = await d.info;
++    const clsOf = id => {
++      if (id === '@form') return 'form';
++      const n = pi.ir ? pi.ir.byName.get(id) : null;
++      if (n) return n.class;
++      const r = rowOf(id);
++      return r ? r[4] : '';
++    };
++    const container = tId === '@form' || toolbox.CONTAINERS.test(clsOf(tId));
++    const text = d.doc.getText();
++    const us = this.unitsFor(text, ids);
++    if (us.error) { this.refuseEdit(d, us.error); return null; }
++    let at, lineOf;
++    if (container) {
++      const tag = htmledit.startTagOf(text, tId);
++      at = tag ? htmlblock.insideEnd(text, tag) : -1;
++      lineOf = at;
++    } else {
++      const tu = this.unitFor(text, tId);
++      at = tu ? tu.end : -1;
++      lineOf = tu ? tu.start : -1;
++    }
++    if (at < 0) { this.refuseEdit(d, '找不到「' + tId + '」在原始碼的位置（或沒有正常結束），沒有移動。'); return null; }
++    if (us.units.some(u => u.start < at && at < u.end)) { this.refuseEdit(d, '不能把元件放進它自己裡面。'); return null; }
++    const parts = us.units.map(u => ({ range: htmlblock.removeRange(text, u.start, u.end).range, repl: '' }));
++    const ls = text.lastIndexOf('\n', at - 1) + 1;
++    let repl;
++    if (container && !text.slice(ls, at).trim()) {
++      const ind = htmlblock.indentAt(text, at) + '  ';
++      repl = us.units.map(u => ind + u.html + '\n').join('');
++      at = ls;
++    } else {
++      const ind = htmlblock.indentAt(text, lineOf) + (container ? '  ' : '');
++      repl = us.units.map(u => '\n' + ind + u.html).join('');
++    }
++    // the insertion must not fall inside what is taken out
++    if (parts.some(p => p.range[0] < at && at < p.range[1])) { this.refuseEdit(d, '放的位置在要移走的那一段裡面，沒有移動。'); return null; }
++    parts.push({ range: [at, at], repl });
++    d.lastSelId = ids[0];
++    const ok = await this.applyStructural(d, parts);
++    if (ok) {
++      vscode.window.setStatusBarMessage('$(move) ' + us.units.map(u => u.id).join('、') + (container ? ' 移進 ' + (tId === '@form' ? '表單' : tId) : ' 移到 ' + tId + ' 旁邊') +
++        '（left/top 數值沒變，現在從新的上層算起；Ctrl+Z 復原）', 7000);
++    }
++    return ok ? { moved: us.units.map(u => u.id), into: container ? tId : null, after: container ? null : tId } : null;
++  }
++
+   /**
+    * 工具箱 (WPF Toolbox): a new component of class `cls` (the generator's markup, a
+    * BCB6-style name Label1 ...): into the selected container (TPanel / TGroupBox /
+@@ -2254,6 +2323,29 @@ class PageTree {
+   }
+ }
+ 
++// ---------------------------------------------------------------------------
++/** Drag and drop in the component tree (WPF document outline): the names travel, the drop moves them. */
++const TREE_MIME = 'application/vnd.code.tree.ht9045designer.components';
++class ComponentDnd {
++  constructor(hub) {
++    this.hub = hub;
++    this.dragMimeTypes = [TREE_MIME];
++    this.dropMimeTypes = [TREE_MIME];
++  }
++  handleDrag(source, dataTransfer) {
++    const ids = (source || []).filter(n => n && !n.isForm && n.id).map(n => n.id);
++    if (ids.length) dataTransfer.set(TREE_MIME, new vscode.DataTransferItem(ids));
++  }
++  async handleDrop(target, dataTransfer) {
++    const item = dataTransfer.get(TREE_MIME);
++    if (!item) return null;
++    let ids = item.value;
++    if (typeof ids === 'string') { try { ids = JSON.parse(ids); } catch (e) { ids = []; } }
++    if (!Array.isArray(ids) || !ids.length || !ids.every(x => typeof x === 'string')) return null;
++    return this.hub.cmdReparent(ids, target || null);
++  }
++}
++
+ // ---------------------------------------------------------------------------
+ /** 工具箱 (WPF Toolbox): the component classes a page can get; a click adds one. */
+ class ToolboxTree {
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index c412cae..96ca6d6 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.23.0",
++  "version": "0.24.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/fake_vscode.js b/tools/vscode-htdesigner/test/fake_vscode.js
+index c5adc8d..aea8aee 100644
+--- a/tools/vscode-htdesigner/test/fake_vscode.js
++++ b/tools/vscode-htdesigner/test/fake_vscode.js
+@@ -24,6 +24,8 @@ class Selection extends Range {}
+ class TreeItem { constructor(label, state) { this.label = label; this.collapsibleState = state; } }
+ class ThemeIcon { constructor(id, color) { this.id = id; this.color = color; } }
+ class ThemeColor { constructor(id) { this.id = id; } }
++class DataTransferItem { constructor(value) { this.value = value; } asString() { return Promise.resolve(typeof this.value === 'string' ? this.value : JSON.stringify(this.value)); } }
++class DataTransfer { constructor() { this._m = new Map(); } set(k, v) { this._m.set(k, v); } get(k) { return this._m.get(k); } }
+ class RelativePattern { constructor(base, glob) { this.base = base; this.glob = glob; } }
+ class Disposable { constructor(fn) { this.fn = fn; } dispose() { if (this.fn) this.fn(); } }
+ class CodeLens { constructor(range, command) { this.range = range; this.command = command; } }
+@@ -44,7 +46,7 @@ const state = {
+ };
+ 
+ const vscode = {
+-  Uri, EventEmitter, Position, Range, Selection, TreeItem, ThemeIcon, ThemeColor, RelativePattern,
++  Uri, EventEmitter, Position, Range, Selection, TreeItem, ThemeIcon, ThemeColor, RelativePattern, DataTransfer, DataTransferItem,
+   Disposable, CodeLens, WorkspaceEdit, FileSystemError, FileType: { File: 1, Directory: 2 }, FilePermission: { Readonly: 1 },
+   languages: {
+     registerCodeLensProvider: (sel, p) => { vscode._lens = p; return disp(); },
+@@ -62,7 +64,7 @@ const vscode = {
+         onDidChangeSelection: fn => { tv._sel = fn; return disp(); },
+         onDidChangeVisibility: fn => { tv._vis = fn; return disp(); } };
+       // _tree / _treeView = the component tree (the tests' old name); every view by id in _views
+-      (vscode._views = vscode._views || {})[id] = { provider: o.treeDataProvider, view: tv };
++      (vscode._views = vscode._views || {})[id] = { provider: o.treeDataProvider, view: tv, dnd: o.dragAndDropController || null };
+       if (id === 'ht9045Designer.components') { vscode._tree = o.treeDataProvider; vscode._treeView = tv; }
+       return tv;
+     },
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index b964682..a1fad2a 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -363,6 +363,26 @@ exports.run = async function () {
+       if (d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
+       await waitFor(() => (idxOf('spbSave') >= 0 && idxOf('spbSave') < idxOf('sbtExit') ? true : null), 10000);
+ 
++      // document outline drag and drop (the real DataTransfer): spbSave onto GroupBox1 -> the re-drawn
++      // tree has it under GroupBox1; one undo puts it back
++      await sleep(800);
++      {
++        const nodeOf = id => Array.from(hub.tree.byKey.values()).find(n => n.id === id);
++        const dt = new vscode.DataTransfer();
++        hub.treeDnd.handleDrag([nodeOf('spbSave')], dt);
++        const mv = await hub.treeDnd.handleDrop(nodeOf('GroupBox1'), dt);
++        const keyOfId = id => { const r = d.treeData.find(x => x[2] === id); return r ? r[0] : null; };
++        const under = await waitFor(() => { const r = d.treeData.find(x => x[2] === 'spbSave'); return r && r[1] === keyOfId('GroupBox1') ? true : null; }, 10000);
++        ok(mv && mv.into === 'GroupBox1' && !!under, 'tree drag: spbSave into GroupBox1 -- the re-drawn tree has it there', mv ? JSON.stringify(mv) : '-');
++        d.panel.reveal(d.panel.viewColumn, false);
++        await sleep(300);
++        await vscode.commands.executeCommand('undo');
++        const back = await waitFor(() => (d.doc.getText() === original ? true : null), 5000);
++        ok(!!back, 'ONE undo puts it back in Panel2');
++        if (d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
++        await waitFor(() => { const r = d.treeData.find(x => x[2] === 'spbSave'); return r && r[1] === keyOfId('Panel2') ? true : null; }, 10000);
++      }
++
+       // 工具箱: a new TLabel into Panel2 -- drawn, inside Panel2 in the tree, selected; Ctrl+Z removes it
+       await sleep(800);
+       d.post({ type: 'selectId', id: 'Panel2', origin: 'editor' });
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 51c2fcc..03836d8 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -468,6 +468,30 @@ async function main() {
+     'toolbox with spbSave selected: a new label right after it (same parent), a free LabelN name', JSON.stringify(tbAdd3));
+   doc._setText(tbBefore);
+ 
++  // WPF document outline drag and drop: the names travel in the DataTransfer, the drop moves them
++  const dnd = fake._views['ht9045Designer.components'].dnd;
++  const dnNode = id => Array.from(fake._tree.byKey.values()).find(n => n.id === id);
++  const dnRange = id => { const t0 = he2.startTagOf(text, id); const r = t0 ? hb2.elementRange(text, t0) : null; return r ? text.slice(r[0], r[1]) : ''; };
++  const dnBefore = text;
++  const dnT1 = new fake.DataTransfer();
++  dnd.handleDrag([dnNode('spbSave')], dnT1);
++  const dn1 = await dnd.handleDrop(dnNode('GroupBox1'), dnT1);
++  ok(dnd.dragMimeTypes[0] === dnd.dropMimeTypes[0] && dn1 && dn1.into === 'GroupBox1' && dnRange('GroupBox1').indexOf('id="spbSave"') > 0 &&
++    dnRange('Panel2').indexOf('id="spbSave"') < 0 && text.split('id="spbSave"').length === 2 && edD.lastSelId === 'spbSave',
++    'tree drag: spbSave dropped on GroupBox1 moves into it, out of Panel2, once; selected', JSON.stringify(dn1));
++  doc._setText(dnBefore);
++  const dnT2 = new fake.DataTransfer();
++  dnd.handleDrag([dnNode('Panel2')], dnT2);
++  const dn2 = await dnd.handleDrop(dnNode('spbSave'), dnT2);
++  ok(dn2 === null && text === dnBefore, 'tree drag: Panel2 onto spbSave (inside it) is refused, nothing moves');
++  const dnT3 = new fake.DataTransfer();
++  dnd.handleDrag([dnNode('spbSave')], dnT3);
++  const dn3 = await dnd.handleDrop(dnNode('XST1'), dnT3);
++  const dnX = hb2.unitOf(text, 'XST1', 'parent');
++  ok(dn3 && dn3.after === 'XST1' && dnX && text.slice(dnX.end).replace(/^\s+/, '').indexOf('<button class="btn3d" id="spbSave"') === 0 && dnRange('Panel2').indexOf('id="spbSave"') < 0,
++    'tree drag onto XST1 (an edit, not a container): moved right after it, into its parent', JSON.stringify(dn3));
++  doc._setText(dnBefore);
++
+   // live data tag: main.html palMainStatus <- machine.state <- WebBridgeTags.cpp
+   const MAINP = path.join(PORT, '..', 'web', 'page', 'main.html');
+   const mtext = fs.readFileSync(MAINP, 'utf8');
+-- 
+2.55.0.windows.5
+

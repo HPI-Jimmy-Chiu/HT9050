@@ -1,0 +1,291 @@
+From 170dfc72eb6e448cff6fa96d0c5957eb16b1bd7c Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 21:09:55 +0800
+Subject: [PATCH] HTDESIGNER-27: Ctrl+A selects the whole container; undo /
+ redo buttons in the title bar (0.27.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Ctrl+A on the design surface (and right-click > 全選): every component in
+  the same container as the selection -- an ancestor with an id, the form, or
+  a tab sheet (.pcPane has no id, so a tab's components do not drag the other
+  tabs' along); the form or nothing selected: the form's own. The selection
+  stays the primary when it is one of them (WPF). The menu entry is the sure
+  way: VS Code may keep Ctrl+A for itself.
+- The designer's title bar gets undo / redo buttons (VS Code's own undo stack
+  of the page source), for the mouse.
+
+Tests: probe (Ctrl+A: the button primary, the rest all in its container),
+smoke 92 (select all reaches the probe; the buttons run undo / redo), real VS
+Code 94 (全選 from the menu: spbSave + sbtExit; the undo button takes an edit
+back), lib 120, panels -- all pass; NO-SAVES, MD5-unchanged.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  2 ++
+ tools/vscode-htdesigner/extension.js          |  4 +++
+ tools/vscode-htdesigner/media/probe.js        | 30 +++++++++++++++++
+ tools/vscode-htdesigner/package.json          | 33 ++++++++++++++++++-
+ .../test/integration/index.js                 | 21 ++++++++++++
+ tools/vscode-htdesigner/test/probe_driver.js  | 15 +++++++++
+ tools/vscode-htdesigner/test/probe_test.ps1   |  1 +
+ .../vscode-htdesigner/test/smoke_extension.js | 10 ++++++
+ 8 files changed, 115 insertions(+), 1 deletion(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 86098c9..e0dfd51 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -50,6 +50,7 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ | 按住元件拖曳 | 移動它；靠近旁邊元件或外框的邊緣／中線 5px 內會**自動對齊**並畫出紅色參考線（按住 Alt 不吸附） |
+ | 拖曳控制點 | 改大小（角落兩個方向一起改），一樣有對齊線 |
+ | Ctrl＋點 ／ Shift＋點 | **多選**：加入或移出選取，最後點的是主要選取。整組可以一起拖曳、一起用方向鍵移動 |
++| Ctrl+A（或右鍵「全選」） | 選取**同一層**的全部元件（同一個 Panel／GroupBox／分頁裡）；沒選東西或選了表單＝表單最外層的全部 |
+ | 方向鍵 | 移動 1 px；**Shift**＋方向鍵 10 px |
+ | **Ctrl**＋方向鍵 | 改大小 1 px；**Ctrl＋Shift**＋方向鍵 10 px |
+ | 雙擊元件、Enter、**F7** | 跳到它的預設事件程式碼（OnClick／OnChange…；表單本身是 OnShow）——WPF 的「檢視程式碼」 |
+@@ -120,6 +121,7 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ - 文字：按鈕／標籤的文字、GroupBox 的 `<legend>`、Panel 的標題、輸入框的 `value`。
+ - Visible＝`display:none`、Enabled＝`disabled`、字型大小／顏色＝`style`。
+ - 分頁標題會顯示「未存檔」，**按 Ctrl+S 才寫到磁碟**。旁邊開著 HTML 原始碼的話會即時看到它被改。
++- 復原／重做：Ctrl+Z／Ctrl+Y，或設計畫面標題列的 ↶ ↷ 兩個按鈕。
+ - DFM 和 BCB6 原始碼永遠不會被改（它們是唯讀的參考）。
+ 
+ ⚠ 這些頁面是網頁作者的作品，透過 `sync_web.py` 同步進來，`--apply` 會整份覆蓋。第一次改的時候外掛會提醒你；
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 9be9169..c7a324f 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -171,6 +171,10 @@ class Hub {
+       // the design surface's right-click menu (webview/context)
+       reg('ht9045Designer.viewCode', () => { if (this.active) return this.onDesignerDblClick(this.active); }),
+       reg('ht9045Designer.selectParent', () => { if (this.active) this.active.post({ type: 'selectParent' }); }),
++      reg('ht9045Designer.selectAll', () => { if (this.active) this.active.post({ type: 'selectAll' }); }),
++      // undo / redo from the designer's title bar (the page source's own undo stack)
++      reg('ht9045Designer.undo', () => { if (this.active) { this.active.panel.reveal(this.active.panel.viewColumn, false); return vscode.commands.executeCommand('undo'); } }),
++      reg('ht9045Designer.redo', () => { if (this.active) { this.active.panel.reveal(this.active.panel.viewColumn, false); return vscode.commands.executeCommand('redo'); } }),
+       ...['left', 'right', 'top', 'bottom', 'hcenter', 'vcenter', 'width', 'height'].map(how =>
+         reg('ht9045Designer.align.' + how, () => { if (this.active) this.active.post({ type: 'align', how }); })),
+       vscode.languages.registerCodeLensProvider([{ language: 'cpp' }, { language: 'c' }], this.lens = new HandlerLens(this)),
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index 7f52b32..e0a3fce 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -946,6 +946,26 @@
+     for (var i = 0; i < all.length; i++) if (!/^(SCRIPT|STYLE|TEMPLATE|LINK|META)$/.test(all[i].tagName)) out.push(all[i]);
+     return out;
+   }
++  /* WPF Ctrl+A: every component in the same container as the selection (with the form or
++     nothing selected: the form's own); the selection stays the primary when it is one of them */
++  function selectAllSiblings() {
++    var fr = formRoot();
++    /* the container: an ancestor with an id, the form, or a tab sheet (a .pcPane has no id) */
++    var contOf = function (x) {
++      for (var p = x.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
++        if (p.id || p === fr || (p.classList && p.classList.contains('pcPane'))) return p;
++      }
++      return null;
++    };
++    var par = !selEl || selEl === fr ? fr : contOf(selEl);
++    var sibs = allComps().filter(function (x) { return x !== fr && contOf(x) === par; });
++    if (!sibs.length) return 0;
++    var prim = selEl && sibs.indexOf(selEl) >= 0 ? selEl : sibs[0];
++    multi = sibs.filter(function (x) { return x !== prim; });
++    selEl = null;
++    select(prim, 'multi', false, true);
++    return sibs.length;
++  }
+   var nudge = null, nudgeTimer = 0;
+   function flushNudge() {
+     clearTimeout(nudgeTimer);
+@@ -978,6 +998,12 @@
+     }, true);
+   });
+   origAdd.call(window, 'keydown', function (e) {
++    if (mode === 'design' && e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey && (e.key === 'a' || e.key === 'A')) {
++      e.preventDefault();
++      flushNudge();
++      selectAllSiblings();
++      return;
++    }
+     if (mode !== 'design' || !selEl || e.altKey || e.metaKey) return;
+     var t = e.target;
+     if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+@@ -1151,6 +1177,10 @@
+       case 'setZoom':
+         setZoom(typeof m.zoom === 'number' ? m.zoom : 1);
+         break;
++      case 'selectAll':
++        flushNudge();
++        selectAllSiblings();
++        break;
+       case 'selectParent': {
+         var pp = selEl ? compParent(selEl) : null;
+         if (pp) { selEl = null; select(pp, 'key', true); }
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 2166a22..81d1e00 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.26.0",
++  "version": "0.27.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -188,6 +188,23 @@
+         "category": "HT9045",
+         "icon": "$(trash)"
+       },
++      {
++        "command": "ht9045Designer.selectAll",
++        "title": "全選（同一層的元件）",
++        "category": "HT9045"
++      },
++      {
++        "command": "ht9045Designer.undo",
++        "title": "復原",
++        "category": "HT9045",
++        "icon": "$(discard)"
++      },
++      {
++        "command": "ht9045Designer.redo",
++        "title": "重做",
++        "category": "HT9045",
++        "icon": "$(redo)"
++      },
+       {
+         "command": "ht9045Designer.groupIntoPanel",
+         "title": "放進新 Panel（群組）",
+@@ -295,6 +312,7 @@
+         { "command": "ht9045Designer.deleteComponent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "0_edit@4" },
+         { "command": "ht9045Designer.addComponent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "0_edit@5" },
+         { "command": "ht9045Designer.findComponent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@2" },
++        { "command": "ht9045Designer.selectAll", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@1" },
+         { "command": "ht9045Designer.searchPages", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@6" },
+         { "command": "ht9045Designer.designToggle", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@3" },
+         { "command": "ht9045Designer.designLockToggle", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@5" },
+@@ -344,6 +362,16 @@
+           "when": "resourceExtname == .html && activeCustomEditorId != 'ht9045Designer.editor'",
+           "group": "navigation"
+         },
++        {
++          "command": "ht9045Designer.undo",
++          "when": "activeCustomEditorId == 'ht9045Designer.editor'",
++          "group": "navigation@0"
++        },
++        {
++          "command": "ht9045Designer.redo",
++          "when": "activeCustomEditorId == 'ht9045Designer.editor'",
++          "group": "navigation@0"
++        },
+         {
+           "command": "ht9045Designer.findComponent",
+           "when": "activeCustomEditorId == 'ht9045Designer.editor'",
+@@ -524,6 +552,9 @@
+         { "command": "ht9045Designer.toolboxAdd", "when": "false" },
+         { "command": "ht9045Designer.toggleGrid", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.groupIntoPanel", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.selectAll", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.undo", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.redo", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.ungroup", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.addComponent", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.order.front", "when": "ht9045Designer.active" },
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 5eba62d..453d5ee 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -432,6 +432,27 @@ exports.run = async function () {
+       await waitFor(() => (d.treeData.length && (!tb || !d.treeData.some(x => x[2] === tb.id)) ? true : null), 10000);
+     }
+ 
++    // 全選 (right-click menu) and the title bar's undo button
++    {
++      d.panel.reveal(d.panel.viewColumn, false);
++      await waitFor(() => hub.active === d, 3000);
++      d.post({ type: 'selectId', id: 'spbSave', origin: 'editor' });
++      await waitFor(() => (d.sel && d.sel.info && d.sel.info.id === 'spbSave' ? true : null), 5000);
++      await vscode.commands.executeCommand('ht9045Designer.selectAll');
++      const all = await waitFor(() => (d.sel && d.sel.info && d.sel.info.id === 'spbSave' && (d.sel.info.multi || []).indexOf('sbtExit') >= 0 ? true : null), 5000);
++      ok(!!all, '全選: spbSave + the rest of Panel2 (sbtExit among them)', d.sel && d.sel.info ? JSON.stringify(d.sel.info.multi) : '-');
++      const orig2 = d.doc.getText();
++      d.post({ type: 'selectId', id: 'spbSave', origin: 'editor' });
++      const s9 = await waitFor(() => (d.sel && d.sel.info && d.sel.info.id === 'spbSave' && !(d.sel.info.multi || []).length ? d.sel : null), 5000);
++      if (s9) d.post({ type: 'setLayout', key: s9.info.key, left: 61 });
++      const mv9 = await waitFor(() => (d.doc.isDirty && d.doc.getText() !== orig2 ? true : null), 5000);
++      await vscode.commands.executeCommand('ht9045Designer.undo');
++      const un9 = await waitFor(() => (d.doc.getText() === orig2 ? true : null), 5000);
++      ok(!!mv9 && !!un9, 'the title bar\'s undo button takes the edit back');
++      if (d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
++      await waitFor(() => (d.treeData.length ? true : null), 8000);
++    }
++
+     // 在所有頁面搜尋: spbSave on another page -> that page opens and spbSave is selected there
+     {
+       const hits = await vscode.commands.executeCommand('ht9045Designer.searchPages', 'spbSave');
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index 35289ac..b40436b 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -349,6 +349,21 @@
+             R.designShowOk = !hpnl.hasAttribute('data-htd-hide') && getComputedStyle(btn).visibility === 'visible' && edits().length === ne2;
+           }
+ 
++          /* Ctrl+A: every component in the button's container, the button still the primary */
++          window.__htdProbe.selectById(btn.id);
++          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true, cancelable: true }));
++          var sa = msgs('select').pop();
++          var contOf = function (x) {
++            for (var p = x.parentElement; p && p !== document.body; p = p.parentElement) {
++              if (p.id || p.classList.contains('form') || p.classList.contains('pcPane')) return p;
++            }
++            return null;
++          };
++          var saMulti = sa && sa.info && sa.info.multi ? sa.info.multi : [];
++          R.selAll = sa && sa.info ? sa.info.id + ' + ' + saMulti.length : null;
++          R.selAllOk = !!sa && sa.info.id === btn.id && saMulti.length >= 1 && saMulti.indexOf(btn.id) < 0 &&
++            saMulti.every(function (id) { var x = document.getElementById(id); return x && contOf(x) === contOf(btn); });
++
+           /* Del / Ctrl+C / Ctrl+V reach the extension as commands; a doubled paste event counts once */
+           window.__htdProbe.selectById(btn.id);
+           var nc = msgs('cmd').length;
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index 840bc28..e972233 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -74,6 +74,7 @@ foreach ($p in $Pages) {
+     }
+     if ($R.PSObject.Properties.Name -contains 'hiddenTarget') { $must['hidden tab revealed'] = [bool]$R.hiddenTabRevealed }
+     if ($R.PSObject.Properties.Name -contains 'wrapperEdit') { $must['input moves its wrapper'] = [bool]$R.wrapperOk }
++    if ($R.PSObject.Properties.Name -contains 'selAll') { $must['Ctrl+A: the whole container, the button still primary'] = [bool]$R.selAllOk }
+     if ($R.PSObject.Properties.Name -contains 'gridTried') {
+       $must['grid 8px: a drag and a resize land on multiples of 8, the grid is drawn'] = [bool]$R.gridOk
+       $must['grid off: not drawn'] = [bool]$R.gridOffOk
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 40b42a0..1c934ca 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -437,6 +437,16 @@ async function main() {
+   ok(api.hub.loadDesignSet('htd.designLocked', PAGE).length === 0 && api.hub.lockedName(edD, 'spbSave') === '' && fake._tree.getTreeItem(lkNode).contextValue === 'component',
+     'unlock all: nothing locked, nothing kept');
+ 
++  // select all / undo / redo from the menus and the title bar
++  pagePosted.length = 0;
++  const uxCalls = fake._calls.length;
++  await fake._cmds['ht9045Designer.selectAll']();
++  await fake._cmds['ht9045Designer.undo']();
++  await fake._cmds['ht9045Designer.redo']();
++  const uxExec = fake._calls.slice(uxCalls).filter(c => c.name === 'exec').map(c => c.args[0]);
++  ok(pagePosted.some(m => m.type === 'selectAll') && uxExec.indexOf('undo') >= 0 && uxExec.indexOf('redo') > uxExec.indexOf('undo'),
++    'select all goes to the probe; the title bar\'s undo / redo run VS Code\'s undo / redo', uxExec.join(','));
++
+   // 在所有頁面搜尋: with a string the command returns the hits (the input box / pick are for people)
+   const psHits = await fake._cmds['ht9045Designer.searchPages']('spbSave');
+   ok(Array.isArray(psHits) && psHits.length >= 5 && psHits.some(h => /Setup\.HotPlate\.html$/.test(h.file) && h.id === 'spbSave'),
+-- 
+2.55.0.windows.5
+

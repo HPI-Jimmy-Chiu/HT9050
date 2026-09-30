@@ -1,0 +1,191 @@
+From 9d172c765bf2ec3639210320cb388e5a07885744 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 23:09:36 +0800
+Subject: [PATCH] HTDESIGNER-42: DFM properties by name / by category / in the
+ .dfm's own order (0.42.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+WPF's Properties window arranges by Name or by Category. The DFM properties
+table now has three buttons:
+- 依名稱 (the default, as before: A-Z)
+- 依類別: 版面 / 外觀 / 行為 / 其他 groups (by the property's first part,
+  Font.Size -> Font), each with its count
+- DFM 順序: as BCB6 wrote them in the .dfm (by line: Left, Top, Width,
+  Height, Caption ...); one without a line keeps its place at the end
+The choice is remembered (the panel's state); the search box works in all.
+
+Test: panels_render (A-Z by default with the button marked; the .dfm order
+starts Left, Top, Width, Height, Caption for spbSave; by category the
+layout group comes first with Left / Width and no row is lost; back to
+by name).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHEATSHEET.md         |  1 +
+ tools/vscode-htdesigner/README.md             |  2 +
+ tools/vscode-htdesigner/media/props.css       |  2 +
+ tools/vscode-htdesigner/media/props.js        | 44 +++++++++++++++++--
+ tools/vscode-htdesigner/package.json          |  2 +-
+ .../vscode-htdesigner/test/panels_render.ps1  | 26 +++++++++++
+ 6 files changed, 73 insertions(+), 4 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/CHEATSHEET.md b/tools/vscode-htdesigner/CHEATSHEET.md
+index b25c8a3..1093d42 100644
+--- a/tools/vscode-htdesigner/CHEATSHEET.md
++++ b/tools/vscode-htdesigner/CHEATSHEET.md
+@@ -57,6 +57,7 @@
+ | 改回 DFM 的值 | 值不一樣的列會標色，按 ↺ |
+ | 改 HTML 的 style／屬性 | 「HTML」那一區雙擊值；最下面可以新增樣式 |
+ | 找某個屬性 | 最上面的搜尋框（空白隔開＝都要有；`Esc` 清掉） |
++| DFM 屬性換排列 | 「DFM 屬性」上面的 依名稱／依類別／DFM 順序 |
+ | 跳到事件程式 | 雙擊事件；在畫面上雙擊元件＝它的預設事件；`F7` |
+ | 跳到 DFM 定義 | 屬性面板「DFM 定義」；DFM 屬性雙擊＝那一行 |
+ 
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 5a237fb..50402ad 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -252,6 +252,8 @@ GroupBox 的 `<legend>` 和 Panel 的標題永遠留在第一個；已經在最
+   `palMainStatus ← machine.state ← WebBridgeTags.cpp:1156`（來自 wire 腳本的 `'machine.state': ['palMainStatus', 'text']`）。
+ - **程式碼用到此元件**：表單程式裡寫到這個元件的地方（`spbSave->Enabled = …`）和它的宣告，C++ 與 BCB6 分開列。
+ - **DFM 屬性**：跟 BCB6 的 Object Inspector 一樣的屬性表，可以篩選，顏色會顯示色塊。
++  上面三個按鈕切換排列（WPF 屬性視窗的「依名稱／依類別」）：**依名稱**（預設，A→Z）、
++  **依類別**（版面／外觀／行為／其他 分組）、**DFM 順序**（照 BCB6 在 `.dfm` 裡寫的順序：Left、Top、Width、Height、Caption…）。會記住上次選的。
+   **雙擊一個屬性＝跳到 `.dfm` 裡那個屬性的那一行**（例如 `Caption` 在 `cHotPlate.dfm:356`）。
+ - **HTML**：位置、大小、HTML 屬性、style。
+ 
+diff --git a/tools/vscode-htdesigner/media/props.css b/tools/vscode-htdesigner/media/props.css
+index 44a6684..29eda40 100644
+--- a/tools/vscode-htdesigner/media/props.css
++++ b/tools/vscode-htdesigner/media/props.css
+@@ -21,6 +21,8 @@ button {
+   border: none; padding: 2px 8px; border-radius: 2px; cursor: pointer;
+ }
+ button:hover { background: var(--vscode-button-secondaryHoverBackground); }
++.sortbar { margin-top: 0; gap: 2px; }
++.sortbar button.on { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+ .sec { border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,.2)); }
+ .sec > summary {
+   cursor: pointer; padding: 4px 12px; font-weight: 600; text-transform: none; user-select: none;
+diff --git a/tools/vscode-htdesigner/media/props.js b/tools/vscode-htdesigner/media/props.js
+index 21812bb..39900f8 100644
+--- a/tools/vscode-htdesigner/media/props.js
++++ b/tools/vscode-htdesigner/media/props.js
+@@ -19,6 +19,19 @@
+     return e;
+   }
+   function base(p) { return String(p || '').split(/[\\/]/).pop(); }
++  /* the DFM property's category (by its first part: Font.Size -> Font): BCB6's Object
++     Inspector groups, in the four a user of this designer looks for */
++  var PROP_CATS = ['版面', '外觀', '行為', '其他'];
++  var CAT_OF = {
++    '版面': /^(Left|Top|Width|Height|Align|Anchors|Constraints|AutoSize|ClientWidth|ClientHeight|ClientLeft|ClientTop|BorderWidth|Margins|AlignWithMargins|Position|Scaled|PixelsPerInch|HorzScrollBar|VertScrollBar|AutoScroll|DefaultMonitor)$/,
++    '外觀': /^(Caption|Text|Color|Font|ParentFont|ParentColor|Visible|Bevel\w*|BorderStyle|BorderIcons|Ctl3D|ParentCtl3D|Transparent|Picture|Glyph|Layout|Alignment|WordWrap|Flat|Style|Brush|Pen|Shape|Stretch|Center|Proportional|Icon|Kind|NumGlyphs|Spacing|FormStyle|WindowState|TitleFont|FixedColor|Lines|Items|Tabs|Columns|ShowCaption|FullRepaint|Images|ImageIndex|Orientation)$/,
++    '行為': /^(Enabled|TabOrder|TabStop|ReadOnly|Cursor|Hint|ShowHint|ParentShowHint|PopupMenu|Default|Cancel|ModalResult|Checked|State|AllowGrayed|ItemIndex|ItemHeight|MaxLength|GroupIndex|Down|AllowAllUp|Interval|TabIndex|ActivePage|DragKind|DragMode|DragCursor|KeyPreview|Sorted|MultiSelect|Options|PasswordChar|CharCase|HideSelection|ScrollBars|WantReturns|WantTabs|Action|Increment|Min|Max|MaxValue|MinValue|Value|Frequency)$/,
++  };
++  function propCat(name) {
++    var head = String(name || '').split('.')[0];
++    for (var i = 0; i < 3; i++) if (CAT_OF[PROP_CATS[i]].test(head)) return PROP_CATS[i];
++    return '其他';
++  }
+   /* BCB6's 16 standard TColor values (lib/format.js CL has the same) */
+   var VCL16 = [['clBlack', '#000000'], ['clMaroon', '#800000'], ['clGreen', '#008000'], ['clOlive', '#808000'],
+     ['clNavy', '#000080'], ['clPurple', '#800080'], ['clTeal', '#008080'], ['clGray', '#808080'],
+@@ -532,14 +545,39 @@
+       });
+     }
+ 
+-    /* DFM properties */
++    /* DFM properties -- WPF's "Arrange by: Name / Category", and the .dfm's own order (by line) */
+     section('props', 'DFM 屬性', data.props.length, function (body) {
+       if (!data.props.length) { body.appendChild(el('div', 'dim pad', '沒有 DFM 屬性資料。')); return; }
+-      kv(body, data.props, true, function (p) {
++      var sort = state.propSort === 'cat' || state.propSort === 'dfm' ? state.propSort : 'name';
++      var sbar = el('div', 'bar pad sortbar');
++      [['name', '依名稱'], ['cat', '依類別'], ['dfm', 'DFM 順序']].forEach(function (o) {
++        var b = el('button', sort === o[0] ? 'on' : null, o[1]);
++        b.setAttribute('data-sort', o[0]);
++        b.addEventListener('click', function () { state.propSort = o[0]; save(); render(); });
++        sbar.appendChild(b);
++      });
++      body.appendChild(sbar);
++      var onDbl = function (p) {
+         if (!p[4]) return false;
+         vscode.postMessage({ type: 'openDfmLine', line: p[4] });
+         return true;
+-      });
++      };
++      if (sort === 'dfm') {
++        /* the order BCB6 wrote them in (their .dfm line); one without a line keeps its place at the end */
++        kv(body, data.props.map(function (p, i) { return [p, i]; }).sort(function (a, b) {
++          return ((a[0][4] || 1e9) - (b[0][4] || 1e9)) || (a[1] - b[1]);
++        }).map(function (x) { return x[0]; }), true, onDbl);
++      } else if (sort === 'cat') {
++        var groups = {};
++        data.props.forEach(function (p) { var g = propCat(p[0]); (groups[g] = groups[g] || []).push(p); });
++        PROP_CATS.forEach(function (g) {
++          if (!groups[g]) return;
++          var sh = el('div', 'subhead', g + '（' + groups[g].length + '）');
++          sh.setAttribute('data-cat', g);
++          body.appendChild(sh);
++          kv(body, groups[g], true, onDbl);
++        });
++      } else kv(body, data.props, true, onDbl);
+       body.appendChild(el('div', 'dim pad small', '唯讀。雙擊一列：跳到 BCB6 .dfm 裡那個屬性的那一行（找不到行號時改為複製值）。上面的搜尋框可以篩選。'));
+     });
+ 
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index bcaf2b3..e340205 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.41.0",
++  "version": "0.42.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/panels_render.ps1 b/tools/vscode-htdesigner/test/panels_render.ps1
+index 04fbe4f..1a3f738 100644
+--- a/tools/vscode-htdesigner/test/panels_render.ps1
++++ b/tools/vscode-htdesigner/test/panels_render.ps1
+@@ -191,6 +191,32 @@ if ($r8) {
+   Check ($r8.errors.Count -eq 0 -and $r8.have -eq 'left,size,hspace,vspace,hcenterIn,vcenterIn' -and $r8.spaceOff -and $r8.centerOn -and $r8.afterMulti -eq 'hcenterIn') '2 selected: spacing buttons off (need 3), centre on and posts align hcenterIn' "have=$($r8.have) posted=$($r8.afterMulti)"
+   Check ($r8.note -and $r8.editAll) '2 selected: the panel says a change goes to all 2 (note + section title)' "note=$($r8.note) title=$($r8.editAll)"
+ } else { $script:bad++ }
++$sortChecks = @'
++function keys() { return Array.prototype.map.call(document.querySelectorAll('details.sec[data-key="props"] table.kv td.k'), function (t) { return t.textContent; }); }
++function click(s) { var b = document.querySelector('details.sec[data-key="props"] button[data-sort="' + s + '"]'); if (b) b.click(); return !!b; }
++/* the default: by name (A-Z), the button marked */
++R.byName = keys();
++var srt = R.byName.slice().sort(function (a, b) { a = a.toLowerCase(); b = b.toLowerCase(); return a < b ? -1 : a > b ? 1 : 0; });
++R.nameSorted = R.byName.length > 4 && R.byName.join('|') === srt.join('|');
++R.nameOn = !!document.querySelector('details.sec[data-key="props"] button.on[data-sort="name"]');
++/* the .dfm's own order: spbSave starts Left, Top, Width, Height, Caption */
++R.hasButtons = click('dfm');
++R.dfmOrder = keys();
++/* by category: the first group is the layout one (Left / Width in it), no row lost */
++click('cat');
++R.cats = document.querySelectorAll('details.sec[data-key="props"] .subhead[data-cat]').length;
++var lay = document.querySelector('details.sec[data-key="props"] .subhead[data-cat]');
++R.layoutRows = lay && lay.nextSibling ? Array.prototype.map.call(lay.nextSibling.querySelectorAll('td.k'), function (t) { return t.textContent; }) : [];
++R.catCount = keys().length;
++click('name');
++R.backToName = keys().join('|') === R.byName.join('|');
++'@
++$r9 = Render 'props_sort' 'props.css' 'props.js' 'show' (Join-Path $dump 'props_spbSave.json') $sortChecks
++if ($r9) {
++  Check ($r9.errors.Count -eq 0 -and $r9.nameSorted -and $r9.nameOn) 'DFM properties by name (the default): A-Z, the button marked' "rows=$($r9.byName.Count) first=$($r9.byName[0])"
++  Check ($r9.hasButtons -and (($r9.dfmOrder | Select-Object -First 5) -join ',') -eq 'Left,Top,Width,Height,Caption' -and $r9.dfmOrder.Count -eq $r9.byName.Count) 'DFM order: as BCB6 wrote them (Left, Top, Width, Height, Caption ...)' (($r9.dfmOrder | Select-Object -First 6) -join ',')
++  Check ($r9.cats -ge 2 -and ($r9.layoutRows -contains 'Left') -and ($r9.layoutRows -contains 'Width') -and $r9.catCount -eq $r9.byName.Count -and $r9.backToName) 'by category: groups (layout first, with Left / Width), no row lost; back to by name' "groups=$($r9.cats) layout=$($r9.layoutRows -join ',')"
++} else { $script:bad++ }
+ $r2 = Render 'props_XST1' 'props.css' 'props.js' 'show' (Join-Path $dump 'props_XST1.json') $propsChecks
+ if ($r2) {
+   Check ($r2.errors.Count -eq 0 -and $r2.hasField -and $r2.hasXStart) 'props panel (XST1) renders the data field [Hotplate Form] X Start' ($r2.errors -join ' / ')
+-- 
+2.55.0.windows.5
+

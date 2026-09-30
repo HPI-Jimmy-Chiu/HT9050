@@ -173,4 +173,19 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     設定檔本身沒有放進這裡。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 
+20260930 傍晚追加（tools 0001-0077）：小工具「HTML 視覺設計工具」VS Code 外掛（tools/vscode-htdesigner）
+  EastSun 20260930：「關於小工具部分，編譯沒問題就能commit and push 到github」。
+  tools\  機台樹裡碰過 tools/vscode-htdesigner 的 commit，一顆一個檔（77 顆，9484e81..d60160c，git format-patch）：
+       每一顆都只碰 tools/vscode-htdesigner；第一顆（9484e81）建立整個資料夾，之後沒有別的 commit 動過它。
+       ⇒ 照編號 git am（或 git apply）就是機台端現在的樣子，不會碰到其他檔案。
+       0001 9484e81 第一版（設計檢視、DFM 屬性、事件）……0073 d3edc33 事件表照 WPF 的事件分頁（兩欄、空白＝空、Enter 新增、
+       下拉選已有函式、右鍵重設）  0074 6ee8c8d 屬性面板上方：名稱方塊、〔屬性〕〔⚡事件〕  0075 d1a5872 工具箱 Enter＝新增
+       0076 c69b535 雙擊＝預設事件（空的＝新增）、Shift+F7、元件樹右鍵選單  0077 d60160c 設計畫面左下工具列、上層路徑可點
+  版本 0.79.0。裝法：cd tools\vscode-htdesigner → powershell -File pack.ps1 → code --install-extension dist\ht9045-html-designer-0.79.0.vsix
+  （dist\ 不在版控裡，要自己打包）。怎麼用：README.md、CHEATSHEET.md、CHANGELOG.md（同資料夾）。
+  測試（機台端，離線）：四層全過 —— 程式庫 159、假 VS Code 166、面板、真的 VS Code 148；不動機台、不存檔、不需要 wb_serve。
+  ⚠ 新增事件時外掛會「提議」改 tools/wb_serve.cpp（htd.event 分支）、CMakeLists.txt、HtdEvents/HtdEvents.gen.cpp——
+    都是編輯器裡還沒存檔的修改，使用者存了才算；這些 patch 本身沒有改那幾個檔。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+
 MD5 清單在 MANIFEST_MD5.tsv。

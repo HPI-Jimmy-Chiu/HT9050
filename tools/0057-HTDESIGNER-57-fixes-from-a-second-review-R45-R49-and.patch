@@ -1,0 +1,315 @@
+From 48ff2f770c00a72e086ed504c4430ebafa246da6 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 30 Sep 2026 04:24:45 +0800
+Subject: [PATCH] HTDESIGNER-57: fixes from a second review (R45-R49), and a
+ placing bug the tests then found (0.57.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A second read-only review of HTDESIGNER-52..56; each point checked, fixed,
+tested:
+- WordWrap labels: BCB6 draws an AutoSize label that wraps with a fixed
+  width and a height that follows the text; the generator writes exactly
+  that (width px + height:auto). The probe read only width:auto, so it said
+  AutoSize off (a false "AutoSize False / True" in the DFM list) and the
+  reset wrote width:auto, letting the text wrap at the container's edge.
+  Now a label is AutoSize when its width OR its height is auto, and turning
+  AutoSize on for a label that wraps writes height:auto only.
+- AutoSize off on a label that is not drawn (hidden, a tab not shown)
+  measured 0 x 0 and wrote it; now refused with the reason (a size from the
+  DFM still works).
+- the spacing snap of a resize handle tested "same row" with sides the
+  handle does not move (the mouse drifting down); now only the moving sides.
+- DFM 位置 clicked twice while the first "on" still waited stayed on; a
+  second click now counts as off.
+- Tab order: the stops are read again after a selection change and after
+  the eye (a tab switch no longer shows old numbers for a moment).
+Found on the way by the new tests: putting a toolbox tool down on a point
+where a resize handle of the selection sits looked up our own overlay, not
+the page, so the component fell onto the form. The overlay is now out of the
+way while looking.
+
+Tests: probe (a wrap label reads on, on keeps the width, a hidden one is
+refused; a right handle dragged with the mouse 76 px below still lands 8 px
+before its neighbour; placing with the button selected finds its panel),
+smoke (the ghost toggle clicked twice quickly ends off), real VS Code
+(Setup.Contact lblWarning1 reads AutoSize on, as in its .dfm).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHANGELOG.md          |  8 +++
+ tools/vscode-htdesigner/extension.js          |  8 ++-
+ tools/vscode-htdesigner/media/probe.js        | 31 ++++++++---
+ tools/vscode-htdesigner/package.json          |  2 +-
+ .../test/integration/index.js                 |  6 +++
+ tools/vscode-htdesigner/test/probe_driver.js  | 54 +++++++++++++++++++
+ tools/vscode-htdesigner/test/probe_test.ps1   |  2 +
+ .../vscode-htdesigner/test/smoke_extension.js |  8 +++
+ 8 files changed, 109 insertions(+), 10 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/CHANGELOG.md b/tools/vscode-htdesigner/CHANGELOG.md
+index 6630636..d05d6c2 100644
+--- a/tools/vscode-htdesigner/CHANGELOG.md
++++ b/tools/vscode-htdesigner/CHANGELOG.md
+@@ -2,6 +2,14 @@
+ 
+ 每一版多了什麼。怎麼操作看 [操作一覽](CHEATSHEET.md)，詳細說明看 README。
+ 
++## 0.57.0
++第二次程式審查找到的修正：
++- **會自動換行的 Label**（WordWrap：寬度固定、高度跟著文字）以前被當成 AutoSize 關、改回 DFM 還會弄壞排版；現在寬或高是 auto 就算 AutoSize 開，換行的 Label 打開 AutoSize 只讓高度跟著文字。
++- 看不到的 Label（隱藏、在沒切到的分頁）關 AutoSize 不再寫成 0×0，改成說明原因。
++- 工具箱放置時，點的位置剛好在選取元件的控制點上，元件會掉到表單上 —— 修好。
++- 拉控制點時的間距吸附線用錯上下位置 —— 修好。
++- 「DFM 位置」快速按兩下會停在開 —— 修好。Tab 順序切分頁後號碼會即時更新。
++
+ ## 0.56.0
+ - 修正：差異清單「同一種差異 → 全部改回」遇到 AutoSize=False 的 Label，現在每個都用它自己在 DFM 的寬高（以前會用文字的大小）。
+ 
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 290d349..606144f 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -2088,9 +2088,11 @@ class Hub {
+   async cmdDfmGhosts(on, d0, quiet) {
+     const d = d0 instanceof Designer ? d0 : this.active;
+     if (!d) { if (!quiet) vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
+-    const nu = typeof on === 'boolean' ? on : !d.dfmGhosts;
++    // (a click while the first "on" still waits for the page counts as on already: the second turns it off)
++    const nu = typeof on === 'boolean' ? on : !(d.dfmGhosts || d.ghostsComing);
+     if (!nu) {
+       d.dfmGhosts = null;
++      d.ghostsComing = false;
+       d.ghostGen = (d.ghostGen || 0) + 1;   // a comparison already on its way must not turn them back on
+       clearTimeout(d.ghostTimer);
+       d.post({ type: 'dfmGhosts', items: null });
+@@ -2098,10 +2100,12 @@ class Hub {
+       return { on: false };
+     }
+     const gen = d.ghostGen || 0;
++    if (!d.dfmGhosts) d.ghostsComing = true;
+     const pi = await d.info;
+-    if (!pi.ir) { if (!quiet) vscode.window.showInformationMessage('這一頁沒有對應的 DFM，沒有位置可以畫。'); return null; }
++    if (!pi.ir) { d.ghostsComing = false; if (!quiet) vscode.window.showInformationMessage('這一頁沒有對應的 DFM，沒有位置可以畫。'); return null; }
+     const reply = await d.request({ type: 'lookAll', ids: Array.from(pi.ir.byName.keys()) }, 8000);
+     if ((d.ghostGen || 0) !== gen) return { on: false };   // turned off while it compared
++    d.ghostsComing = false;
+     if (!reply) { if (!quiet) vscode.window.showWarningMessage('設計檢視沒有回應（頁面還在載入？），請稍後再試。'); return null; }
+     const items = dfmdiff.ghostsOf(dfmdiff.diffPage(reply.items || [], pi.ir).rows);
+     d.dfmGhosts = items;
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index a202ef9..51796c6 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -27,7 +27,7 @@
+   try { api = acquireVsCodeApi(); } catch (e) { api = null; }
+   function post(m) {
+     m.__htd = 1;
+-    if (m.type === 'edit' && typeof tabCache !== 'undefined') tabCache = null;   // (an edit may move a Tab stop)
++    if ((m.type === 'edit' || m.type === 'select') && typeof tabCache !== 'undefined') tabCache = null;   // (an edit / a tab switch may change the Tab stops)
+     try {
+       if (api) api.postMessage(m);
+       else (window.__htdOut = window.__htdOut || []).push(JSON.parse(JSON.stringify(m)));
+@@ -283,9 +283,11 @@
+   var PLACE = null, plEl = null;
+   function placeShield(on) { if (plEl) plEl.style.display = on ? 'block' : 'none'; }
+   function placeTargets(x, y) {
+-    placeShield(false);
++    /* the whole overlay out of the way while looking: a resize handle under the point is ours, not the page */
++    var hd = host ? host.style.display : '';
++    if (host) host.style.display = 'none';
+     var under = document.elementFromPoint(x, y);
+-    placeShield(!!PLACE);
++    if (host) host.style.display = hd;
+     var z = typeof zoom === 'number' && zoom > 0 ? zoom : 1;
+     var fr = formRoot(), out = [];
+     for (var e = under; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+@@ -972,7 +974,10 @@
+     };
+   }
+   function isLabel(el) { return !!(el.classList && el.classList.contains('lb')) || vclOf(el).cls === 'TLabel'; }
+-  function autoSized(el) { var b = boxOf(el); return !!b && b.node.style.width === 'auto'; }
++  /* BCB6 AutoSize on the page: a size that follows the text -- its width is auto, or (a label that
++     wraps, WordWrap: a fixed width, the height follows) its height is auto */
++  function autoSized(el) { var b = boxOf(el); return !!b && (b.node.style.width === 'auto' || b.node.style.height === 'auto'); }
++  function wraps(el) { try { return !/^(nowrap|pre)$/.test(getComputedStyle(el).whiteSpace); } catch (x) { return false; } }
+   /* a Visible / Enabled / Font / Color change: applied to the DOM, returned as the edit to
+      write (null = not a look property). A font goes where the control's Font lives. */
+   function lookChange(el, prop, value, size) {
+@@ -990,8 +995,15 @@
+       var ab = boxOf(el);
+       if (!ab || ab.root || !isLabel(el)) return null;   /* (only a label has it; several selected: the others are skipped) */
+       if (lockedOf(el)) { post({ type: 'editRefused', why: lockedWhy(lockedOf(el)) }); return null; }
+-      var sw = size && +size.width > 0 ? Math.round(+size.width) : ab.node.offsetWidth, shh = size && +size.height > 0 ? Math.round(+size.height) : ab.node.offsetHeight;
+-      var ast = value ? { width: 'auto', height: 'auto' } : { width: sw + 'px', height: shh + 'px' };
++      var hasSize = size && +size.width > 0 && +size.height > 0;
++      if (!value && !hasSize && !ab.node.getClientRects().length) {
++        /* not drawn (hidden, a tab not shown): its size cannot be measured -- 0 x 0 would be written */
++        post({ type: 'editRefused', why: '「' + (idOf(el) || el.tagName.toLowerCase()) + '」現在沒有顯示（隱藏，或在沒切到的分頁裡），量不到大小；先讓它顯示再關 AutoSize' });
++        return null;
++      }
++      var sw = hasSize ? Math.round(+size.width) : ab.node.offsetWidth, shh = hasSize ? Math.round(+size.height) : ab.node.offsetHeight;
++      /* a label that wraps (WordWrap) keeps its width: only its height follows the text */
++      var ast = value ? (wraps(el) ? { height: 'auto' } : { width: 'auto', height: 'auto' }) : { width: sw + 'px', height: shh + 'px' };
+       for (var ak in ast) ab.node.style.setProperty(ak, ast[ak]);
+       return { what: 'style', target: ab.target, style: ast };
+     }
+@@ -1457,7 +1469,11 @@
+         }
+         var sx = snapTo(ex, drag.lines.xs), sy = snapTo(ey, drag.lines.ys);
+         /* the nearer of an edge line and a spacing line wins */
+-        var qx = gapSnap(drag.lines.sibs, h, L, R, T, B, true), qy = gapSnap(drag.lines.sibs, h, L, R, T, B, false);
++        /* (for a handle only the sides it moves have moved: the row / column test uses the others as they are) */
++        var mv = h === 'move';
++        var gL = r0.left + (mv || h.indexOf('w') >= 0 ? dx : 0), gR = r0.right + (mv || h.indexOf('e') >= 0 ? dx : 0);
++        var gT = r0.top + (mv || h.indexOf('n') >= 0 ? dy : 0), gB = r0.bottom + (mv || h.indexOf('s') >= 0 ? dy : 0);
++        var qx = gapSnap(drag.lines.sibs, h, gL, gR, gT, gB, true), qy = gapSnap(drag.lines.sibs, h, gL, gR, gT, gB, false);
+         if (qx && (!sx || Math.abs(qx.d) < Math.abs(sx.d))) { dx += qx.d; gpx = qx; }
+         else if (sx) { dx += sx.d; gx = sx.at; }
+         if (qy && (!sy || Math.abs(qy.d) < Math.abs(sy.d))) { dy += qy.d; gpy = qy; }
+@@ -1753,6 +1769,7 @@
+      to what is underneath (pages stack many panels at one place) */
+   var hideStyle = null;
+   function setDesignHidden(ids) {
++    tabCache = null;   // (a hidden one is no Tab stop)
+     if (!hideStyle) {
+       hideStyle = document.createElement('style');
+       hideStyle.setAttribute('data-htd', 'hide');
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 3f91a8b..fdb9bfb 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.56.0",
++  "version": "0.57.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 5d72deb..b2e13c6 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -759,6 +759,12 @@ exports.run = async function () {
+         await sleep(300);
+         await vscode.commands.executeCommand('undo');
+         ok(!!(await waitFor(() => (cd.doc.getText() === ctBefore ? true : null), 5000)), 'ONE undo gives Setup.Contact back');
++        // lblWarning1 wraps (WordWrap): a fixed width, height:auto -- that is AutoSize on, as in its .dfm (not a difference)
++        await waitFor(() => (cd.treeData.length ? true : null), 8000);
++        cd.post({ type: 'selectId', id: 'lblWarning1', origin: 'editor' });
++        const wwD = await waitFor(() => (hub.props.data && hub.props.data.comp && hub.props.data.comp.htmlId === 'lblWarning1' && hub.props.data.edit && hub.props.data.edit.look ? hub.props.data : null), 8000);
++        ok(!!(wwD && wwD.edit.look.autoSize === true && wwD.edit.dfm && wwD.edit.dfm.autoSize === true),
++          'a WordWrap label (lblWarning1: fixed width, height:auto) reads AutoSize on, the same as its .dfm', wwD ? JSON.stringify({ page: wwD.edit.look.autoSize, dfm: wwD.edit.dfm && wwD.edit.dfm.autoSize }) : '-');
+         if (cd.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
+         await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+         await sleep(300);
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index 596ddcc..3e7d1c1 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -597,6 +597,57 @@
+             lab.style.cssText = sv;
+           })();
+ 
++          /* a label that wraps (WordWrap: a fixed width, height:auto) reads AutoSize on; turning it on keeps
++             the width (only height:auto); a hidden label's AutoSize off is refused, never 0 x 0 */
++          (function () {
++            var lab = Array.prototype.filter.call(document.querySelectorAll('span.lb[id]'), function (x) { return x.getClientRects().length; })[0];
++            if (!lab) { R.wrapTried = 'no label (skipped)'; R.wrapOk = true; return; }
++            var sv = lab.style.cssText;
++            lab.style.width = '120px'; lab.style.height = 'auto'; lab.style.whiteSpace = 'normal';
++            window.__htdProbe.selectById(lab.id);
++            var info = msgs('select').pop().info;
++            var ne = edits().length, nr = msgs('editRefused').length;
++            window.__htdProbe.message({ type: 'setLook', key: info.key, prop: 'autoSize', value: false });
++            var eOff = edits()[ne];
++            window.__htdProbe.message({ type: 'setLook', key: info.key, prop: 'autoSize', value: true });
++            var eOn = edits()[ne + 1];
++            lab.style.display = 'none';
++            window.__htdProbe.message({ type: 'setLook', key: info.key, prop: 'autoSize', value: false });
++            var hiddenRefused = edits().length === ne + 2 && msgs('editRefused').length === nr + 1;
++            R.wrapTried = lab.id + ' look ' + info.look.autoSize + ' off ' + (eOff ? JSON.stringify(eOff.style) : '-') + ' on ' + (eOn ? JSON.stringify(eOn.style) : '-') + ' hidden refused ' + hiddenRefused;
++            R.wrapOk = info.look.autoSize === true && !!eOff && eOff.style.width === '120px' && !!eOn && eOn.style.height === 'auto' && !('width' in eOn.style) && hiddenRefused;
++            lab.style.cssText = sv;
++          })();
++
++          /* a resize handle dragged right with the mouse drifting well below: the row test uses the box's real
++             top / bottom (an 'e' handle moves neither), so it still lands 8 px before the neighbour */
++          (function () {
++            var par = btn.offsetParent;
++            window.__htdProbe.selectById(btn.id);
++            window.__htdProbe.drawNow();
++            var br = btn.getBoundingClientRect(), z = br.width / btn.offsetWidth;
++            var sib = null;
++            Array.prototype.forEach.call(par.querySelectorAll('*'), function (o) {
++              if (o === btn || o.offsetParent !== par || !o.style || o.style.position !== 'absolute' || !o.getClientRects().length) return;
++              var r = o.getBoundingClientRect();
++              if (r.left <= br.right || Math.min(r.bottom, br.bottom) - Math.max(r.top, br.top) <= 0) return;
++              if (!sib || r.left < sib.getBoundingClientRect().left) sib = o;
++            });
++            var he = host.shadowRoot.querySelector('.hd[data-dir="e"]');
++            if (!sib || !he) { R.gapResizeTried = 'no neighbour / handle (skipped)'; R.gapResizeOk = true; return; }
++            var w0 = btn.style.width;
++            var hr = he.getBoundingClientRect();
++            var dxs = (sib.getBoundingClientRect().left - 8 * z) - br.right - 2 * z, drift = br.height + 30 * z;
++            mouse('mousedown', he, hr.left + 3, hr.top + 3);
++            mouse('mousemove', btn, hr.left + 3 + dxs / 2, hr.top + 3 + drift / 2);
++            mouse('mousemove', btn, hr.left + 3 + dxs, hr.top + 3 + drift);
++            mouse('mouseup', btn, hr.left + 3 + dxs, hr.top + 3 + drift);
++            var gapNow = (sib.getBoundingClientRect().left - btn.getBoundingClientRect().right) / z;
++            R.gapResizeTried = 'right handle towards ' + sib.id + ' with the mouse ' + Math.round(drift / z) + ' px below: gap ' + gapNow.toFixed(1);
++            R.gapResizeOk = Math.abs(gapNow - 8) < 0.6;
++            btn.style.width = w0;
++          })();
++
+           /* Alignment of a label: taCenter -> text-align:center written, the look says taCenter; AutoSize
+              off with the .dfm's size (from the DFM reset) -> exactly that size, not the text's */
+           (function () {
+@@ -670,6 +721,9 @@
+           (function () {
+             var shield = host && host.shadowRoot ? host.shadowRoot.querySelector('.plc') : null;
+             var par = btn.offsetParent;
++            /* (the button selected: its top-left resize handle is right under the point -- ours, not the page) */
++            window.__htdProbe.selectById(btn.id);
++            window.__htdProbe.drawNow();
+             var ne = edits().length, ns = msgs('select').length;
+             var sp = function (type, x, y, b) { shield.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, button: b || 0 })); };
+             window.__htdProbe.message({ type: 'placeArm', cls: 'TSpeedButton', label: 'SpeedButton' });
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index 8dc7e05..6ab42d9 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -79,6 +79,8 @@ foreach ($p in $Pages) {
+     if ($R.PSObject.Properties.Name -contains 'placeTried') { $must['toolbox placing: crosshair, a drag = point in each container + size, a click = no size, Esc gives up, nothing written'] = [bool]$R.placeOk }
+     if ($R.PSObject.Properties.Name -contains 'tabTried') { $must['Tab order: badges in the page order, two swapped = red 1/2 and 2/1, grey for the rest, off = none'] = [bool]$R.tabOk }
+     if ($R.PSObject.Properties.Name -contains 'sameTypeTried') { $must['select same type: the whole page / only its container, the selection stays primary'] = [bool]$R.sameTypeOk }
++    if ($R.PSObject.Properties.Name -contains 'wrapTried') { $must['WordWrap label: AutoSize read on, on keeps the width; a hidden one refused (never 0 x 0)'] = [bool]$R.wrapOk }
++    if ($R.PSObject.Properties.Name -contains 'gapResizeTried') { $must['spacing snap with a handle: the row test uses the real top / bottom'] = [bool]$R.gapResizeOk }
+     if ($R.PSObject.Properties.Name -contains 'alignTried') { $must['label Alignment written (text-align); AutoSize off with the DFM size = exactly that size'] = [bool]$R.alignOk }
+     if ($R.PSObject.Properties.Name -contains 'gapTried') { $must['spacing snapline: lands 8 px from the neighbour on the same row, a blue line while dragging'] = [bool]$R.gapOk }
+     if ($R.PSObject.Properties.Name -contains 'autoSizeTried') { $must['AutoSize label: the handle refused with the reason; off = measured size written, on = auto'] = [bool]$R.autoSizeOk }
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index ecdcab0..1a21569 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -367,6 +367,14 @@ async function main() {
+   const ghLast = pagePosted.filter(m => m.type === 'dfmGhosts').pop();
+   ok(ghLateRes && ghLateRes.on === false && !(api.hub.active && api.hub.active.dfmGhosts) && ghLast && ghLast.items === null && !/DFM 位置/.test(api.hub.status.text),
+     'DFM 位置 turned off while it compared: the late answer does not turn it back on', JSON.stringify(ghLateRes));
++  // the toggle clicked twice quickly (the first "on" still waiting): the second one means off
++  pagePosted.length = 0;
++  const ghT1 = fake._cmds['ht9045Designer.toggleDfmGhosts']();
++  await new Promise(r => setTimeout(r, 10));
++  const ghT2 = await fake._cmds['ht9045Designer.toggleDfmGhosts']();
++  const ghT1r = await ghT1;
++  ok(ghT2 && ghT2.on === false && ghT1r && ghT1r.on === false && !(api.hub.active && api.hub.active.dfmGhosts),
++    'DFM 位置 clicked twice quickly: off in the end', JSON.stringify([ghT1r, ghT2]));
+   panel.webview.postMessage = ghFastPM;
+   // Tab 順序: the .dfm's order goes to the probe; its reply (2 stops out of order) -> status bar + output panel
+   const toPM = panel.webview.postMessage;
+-- 
+2.55.0.windows.5
+

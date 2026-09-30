@@ -1,0 +1,1384 @@
+From 645b18c1e6faa1332fa9212fa550bcb198fe80d1 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 19:15:38 +0800
+Subject: [PATCH] =?UTF-8?q?HTDESIGNER-15:=20the=20whole=20page=20against?=
+ =?UTF-8?q?=20the=20DFM=20--=20=E8=88=87=20DFM=20=E7=9A=84=E5=B7=AE?=
+ =?UTF-8?q?=E7=95=B0=20list=20(0.15.0)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A new tab lists every property of the page that is not what the BCB6 .dfm
+says (position/size, text, look), component by component. A row click selects
+the control; the reset button writes that one DFM value back (one undo step);
+the list compares again after every edit, undo and re-draw.
+
+What is compared -- only what the DFM says AND the page's source gives, in the
+terms the page generator (_gen_dfm_abs.py) uses, so the list shows changes
+someone made rather than the generator's own conventions:
+- Font.Size: the generator writes |Font.Height| - 2 (fontpx); the DFM value is
+  shown as "14（Height -16）" and reset writes 14.
+- Width/Height a source does not give in px (AutoSize labels are generated as
+  "width:136px; ... width:auto") are the text's size: not compared.
+- Font.Name inherited from the form's UI font (labels, buttons): not compared.
+- System colours (clBtnFace ...): shown by name, not compared.
+- Coordinates: a wrapper the generator adds (span.lled around an LED + label)
+  shifts the origin; compared in DFM coordinates, reset in the element's own.
+  A tab sheet (.pcPane) is the DFM parent, not a wrapper.
+- A hidden control (hidden tab / panel) is measured by its style, not as 0.
+- The same difference on >= 5 controls of one class (e.g. 612 bold
+  TBtnPanelLane on HW.IoSetView) is folded into one "同一種差異" line.
+  IoSetView: 3,348 raw differences -> 92 single + 13 patterns.
+
+Also fixed on the way:
+- A TPanel's Font lives on its <span class="pnlCap">, a TGroupBox's on its
+  <legend>: the property grid now reads and writes the font there (a panel
+  font-size edit used to be overridden by the caption span's own font-size).
+- setLayout from the property grid threw "n3 is not defined" (an earlier edit
+  in this round); now covered by the probe test.
+- A command run from a menu gets the Uri / webview context as its first
+  argument; the diff command no longer takes it for a designer.
+
+Found, not changed (web author's files): 264 style attributes on 21 pages
+write font-family:"Name" inside style="..."; the inner quote ends the
+attribute, so the font name and font-weight after it are lost.
+
+Tests: lib 101, probe (setLayout by key / by id on a hidden control, lookAll),
+smoke 58, panels, real VS Code 62 -- all pass; sweep of 8 pages.
+(tools/wb_serve.cpp changed during the last real VS Code run: another
+session's AI(W906-HMI-KEEP) work, not this test; not in this commit.)
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  23 +-
+ tools/vscode-htdesigner/extension.js          | 112 +++++++++-
+ tools/vscode-htdesigner/lib/dfmdiff.js        | 130 +++++++++++
+ tools/vscode-htdesigner/lib/format.js         |  13 +-
+ tools/vscode-htdesigner/lib/htmledit.js       |  18 +-
+ tools/vscode-htdesigner/media/dfmdiff.js      | 201 ++++++++++++++++++
+ tools/vscode-htdesigner/media/overview.css    |   7 +
+ tools/vscode-htdesigner/media/probe.js        | 109 ++++++++--
+ tools/vscode-htdesigner/media/props.js        |  46 +++-
+ tools/vscode-htdesigner/package.json          |  22 +-
+ .../test/integration/index.js                 |  59 ++++-
+ .../vscode-htdesigner/test/panels_render.ps1  |  37 +++-
+ tools/vscode-htdesigner/test/probe_driver.js  |  28 +++
+ tools/vscode-htdesigner/test/probe_test.ps1   |   5 +
+ tools/vscode-htdesigner/test/run_tests.js     |  66 +++++-
+ .../vscode-htdesigner/test/smoke_extension.js |  33 +++
+ 16 files changed, 860 insertions(+), 49 deletions(-)
+ create mode 100644 tools/vscode-htdesigner/lib/dfmdiff.js
+ create mode 100644 tools/vscode-htdesigner/media/dfmdiff.js
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index d87e2aa..ef61d9f 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -73,12 +73,33 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ 
+ - 只比 DFM **有寫的**屬性。DFM 沒寫（用預設值、或 `ParentFont`）的欄位不顯示 DFM 值，不去猜。
+ - `&Save` 的 `&` 是 VCL 的快捷鍵記號，比對時當成 `Save`。
++- **原始碼沒寫的寬／高不比**：例如 `AutoSize` 的 Label，網頁沒給它 `width/height`，大小由文字決定；
++  網頁的字型跟 BCB6 不一樣，大小本來就會差幾個 px（HotPlate 的 8 個 Label 全是這樣）。這時只顯示「DFM 136（大小由文字決定）」。
++  兩邊都錨定（`left`＋`right`）的寬度算有寫。
+ - **系統色**（`clBtnFace`、`clWindowText`……）只顯示名稱、不比對：它的實際顏色看 Windows 佈景
+   （同一個 `clBtnFace`，傳統佈景是 `#d4d0c8`、XP 佈景是 `#ece9d8`）。
+ - 字型：網頁的字型清單裡**有** DFM 的字型就算一樣（這些頁面刻意用 `"Microsoft JhengHei","MS Sans Serif"`，
+-  先用正黑體顯示中文）。
++  先用正黑體顯示中文）。元件**沒有自己的字型**、沿用表單 UI 字型的（網頁產生器對 Label／按鈕的做法），字型名稱不比。
++- **字型大小照網頁產生器的換算**：`_gen_dfm_abs.py` 把 `Font.Height` −13 寫成 11px（|Height|−2）。
++  所以 DFM 值顯示成「14（Height -16）」—— 14 才是「用這份 DFM 產生出來的頁面」會有的大小，↺ 也是改回 14。
++- **Panel／GroupBox 的字型在標題上**：產生器把 TPanel 的 Font 寫在 `<span class="pnlCap">`、TGroupBox 的在 `<legend>`。
++  屬性面板讀的、改的都是那裡（以前改 Panel 的字型大小會被 pnlCap 自己的 font-size 蓋掉，看不出效果）。
++- **座標原點**：產生器會加外層包裝（例如 LED＋Label 合成的 `span.lled`），元件自己的 `left/top` 是相對包裝的。
++  比對時會加回包裝的位移、換算成 DFM 的座標；↺ 寫回時再扣掉。分頁（`.pcPane`）就是 TabSheet，不算包裝。
+ - 實測全部頁面：位置／大小跟 DFM 一致的有 12,228 個、不一樣的 432 個（大多是網頁刻意移過的彈出面板）。
+ 
++**整頁「與 DFM 的差異」**：分頁標題列的差異圖示按鈕、畫面右鍵選單、或命令「HT9045: 與 DFM 的差異」。
++一次列出這一頁**所有**跟 `.dfm` 不一樣的屬性：元件、屬性、網頁的值、DFM 的值。
++
++- 上面可以只看「位置／大小」「文字」「外觀」，也可以打字篩選。
++- **同一種差異收成一行**：同一型別至少 5 個元件都有一模一樣的差異（例如 IoSetView 的 612 個 TBtnPanelLane 都是粗體、
++  DFM 不是），多半是網頁的統一樣式，收在「同一種差異」裡，一種一行、附個數；點那一行才列出是哪些元件。
++  清單本身預設只列**個別差異**（IoSetView：3,348 項 → 個別 92 項＋同一種差異 13 種）。
++- 點一列＝在畫面上選取那個元件；按 **↺**＝只把那一項改回 DFM 的值（一次一項，Ctrl+Z 可以復原）。沒有「全部改回」—— 一項一項看過再決定。
++- 改完、復原、或頁面重畫之後，清單會自己重新比對；在別處改過頁面的話按「重新比對」。
++- 標 `*` 的是目前**沒有顯示**的元件（在沒切到的分頁、或隱藏的面板裡）：畫面量不到它的大小，改用原始碼 `style` 裡寫的數值比對。
++- 頁面 JS 產生的元件（HTML 原始碼裡沒有）↺ 是灰的：沒有地方可以寫回去。
++
+ **改到哪裡**：跟 WPF 改 XAML 一樣，改的是這一頁的 **HTML 原始碼**，而且只動被改到的那一小段：
+ 
+ - 位置／大小：元件自己標籤的 `style` 裡的 `left/top/width/height`（或 `right/bottom`，看它原本怎麼錨定）。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index f691123..08e551a 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -25,6 +25,7 @@ const { buildPageHtml, hasIframe } = require('./lib/pagehtml');
+ const { ReverseIndex, enclosingMethod } = require('./lib/reverse');
+ const { WebCmdIndex } = require('./lib/webcmds');
+ const overview = require('./lib/overview');
++const dfmdiff = require('./lib/dfmdiff');
+ const htmledit = require('./lib/htmledit');
+ const lex = require('./lib/cpplex');
+ 
+@@ -117,6 +118,7 @@ class Hub {
+       reg('ht9045Designer.showCodeInDesigner', () => this.cmdShowCodeInDesigner()),
+       reg('ht9045Designer.openWebSenders', (cmd, hits) => this.cmdOpenWebSenders(cmd, hits)),
+       reg('ht9045Designer.pageOverview', () => this.cmdPageOverview()),
++      reg('ht9045Designer.dfmDiff', () => this.cmdDfmDiff()),
+       reg('ht9045Designer.resetZoom', () => { if (this.active) this.active.post({ type: 'setZoom', zoom: 1 }); }),
+       reg('ht9045Designer.help', () => vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.joinPath(ctx.extensionUri, 'README.md'))),
+       // the design surface's right-click menu (webview/context)
+@@ -937,7 +939,12 @@ class Hub {
+     const tag = m.id ? htmledit.startTagOf(text, m.id) : null;
+     if (!tag) return { error: '原始碼裡找不到 id="' + (m.id || '') + '"（可能是頁面 JS 產生的元件），只改到畫面、沒有寫回。' };
+     if (m.what === 'style' || m.what === 'attr') {
+-      const target = m.target === 'parent' ? htmledit.wrapperTagOf(text, tag.start) : tag;
++      // 'pnlCap' / 'legend': the child that carries a TPanel's / TGroupBox's caption font
++      const target = m.target === 'parent' ? htmledit.wrapperTagOf(text, tag.start)
++        : m.target === 'pnlCap' || m.target === 'legend' ? htmledit.captionHostTag(text, tag, m.target) : tag;
++      if (!target && (m.target === 'pnlCap' || m.target === 'legend')) {
++        return { error: '找不到「' + m.id + '」的標題元素（' + (m.target === 'legend' ? '<legend>' : '.pnlCap') + '）在原始碼的位置，沒有寫回。' };
++      }
+       if (!target) return { error: '「' + m.id + '」的位置由外層元素決定，但原始碼裡找不到緊鄰的外層標籤，沒有寫回。' };
+       let t = target.text;
+       if (m.what === 'style') t = htmledit.setStyle(t, m.style || {});
+@@ -1157,6 +1164,32 @@ class Hub {
+     });
+   }
+ 
++  /** 與 DFM 的差異: every control of the page against the .dfm (position, text, look). */
++  async cmdDfmDiff(d0, quiet) {
++    // (from a menu VS Code passes a Uri / the webview context as the first argument)
++    const d = d0 instanceof Designer ? d0 : this.active;
++    quiet = d0 instanceof Designer && quiet === true;
++    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return; }
++    const pi = await d.info;
++    if (!pi.ir) { if (!quiet) vscode.window.showInformationMessage('這一頁沒有對應的 DFM，沒有東西可以比對。'); return; }
++    const t0 = Date.now();
++    const ids = Array.from(pi.ir.byName.keys());
++    const reply = await d.request({ type: 'lookAll', ids }, 8000);
++    if (!reply) { if (!quiet) vscode.window.showWarningMessage('設計檢視沒有回應（頁面還在載入？），請稍後再試。'); return; }
++    const res = dfmdiff.diffPage(reply.items || [], pi.ir);
++    res.page = path.basename(d.file);
++    res.dfm = pi.ir.sourceDfm || path.basename(pi.ir.file);
++    res.formClass = pi.ir.formClass || '';
++    // a control the page's JS builds is not in the HTML source: nothing to write back into
++    const inSource = new Set(pageinfo.collectIds(d.doc.getText()));
++    for (const r of res.rows) r.inSource = inSource.has(r.id);
++    res.dirty = !!d.doc.isDirty;
++    this.log('與 DFM 的差異 ' + res.page + '：' + res.controls + ' 個元件、比了 ' + res.compared + ' 項、不同 ' + res.rows.length +
++      ' 項（位置／大小 ' + res.byGroup.layout + '、文字 ' + res.byGroup.text + '、外觀 ' + res.byGroup.look + '；' + (Date.now() - t0) + ' ms）');
++    DfmDiffPanel.show(this, d, res, quiet);
++    return res;
++  }
++
+   /** Quick pick over every component of the page (big pages have thousands). */
+   async cmdFindComponent() {
+     const d = this.active;
+@@ -1353,6 +1386,8 @@ class Designer {
+       case 'tree':
+         this.treeData = Array.isArray(m.nodes) ? m.nodes : [];
+         if (this.hub.active === this) this.hub.tree.set(this);
++        // the page was (re)drawn -- e.g. after an undo: the difference list compares again
++        if (this.dfmDiff && !this.dfmDiff.disposed) this.dfmDiff.scheduleRefresh();
+         if (this._ready) { this._ready(); this._ready = null; }
+         break;
+       case 'select':
+@@ -1366,7 +1401,8 @@ class Designer {
+         // one at a time: each edit is computed on the text the previous one left
+         this.editChain = (this.editChain || Promise.resolve())
+           .then(() => this.hub.applySourceEdit(this, m))
+-          .catch(e => this.hub.log('寫回失敗：' + (e && e.stack || e)));
++          .catch(e => this.hub.log('寫回失敗：' + (e && e.stack || e)))
++          .then(() => { if (this.dfmDiff && !this.dfmDiff.disposed) this.dfmDiff.scheduleRefresh(); });
+         break;
+       case 'editRefused':
+         this.hub.refuseEdit(this, String(m.why || '不能改'));
+@@ -1397,6 +1433,8 @@ class Designer {
+     clearTimeout(this.renderTimer);
+     clearTimeout(this.diagTimer);
+     for (const s of this.subs) { try { s.dispose(); } catch (e) { /* ignore */ } }
++    // its side tabs only make sense with it
++    for (const p of [this.overview, this.dfmDiff]) { if (p && !p.disposed) { try { p.panel.dispose(); } catch (e) { /* ignore */ } } }
+     this.hub.removeDesigner(this);
+   }
+ }
+@@ -1732,6 +1770,76 @@ class OverviewPanel {
+   }
+ }
+ 
++// ---------------------------------------------------------------------------
++/** 與 DFM 的差異 tab (one per designer; refreshed after every edit). */
++class DfmDiffPanel {
++  static show(hub, d, data, quiet) {
++    if (d.dfmDiff && !d.dfmDiff.disposed) {
++      d.dfmDiff.set(data);
++      if (!quiet) d.dfmDiff.panel.reveal(undefined, true);
++      return d.dfmDiff;
++    }
++    if (quiet) return null;
++    d.dfmDiff = new DfmDiffPanel(hub, d, data);
++    return d.dfmDiff;
++  }
++
++  constructor(hub, d, data) {
++    this.hub = hub;
++    this.d = d;
++    this.data = data;
++    this.disposed = false;
++    const media = vscode.Uri.joinPath(hub.ctx.extensionUri, 'media');
++    this.panel = vscode.window.createWebviewPanel('ht9045Designer.dfmDiff', '與 DFM 的差異：' + path.basename(d.file),
++      { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
++      { enableScripts: true, enableCommandUris: false, localResourceRoots: [media], retainContextWhenHidden: true });
++    const w = this.panel.webview;
++    const nonce = crypto.randomBytes(16).toString('base64');
++    w.html = '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">' +
++      '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src ' + w.cspSource + '; script-src \'nonce-' + nonce + '\';">' +
++      '<link rel="stylesheet" href="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'overview.css')) + '"></head><body><div id="root"></div>' +
++      '<script nonce="' + nonce + '" src="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'dfmdiff.js')) + '"></script></body></html>';
++    w.onDidReceiveMessage(m => this.onMessage(m));
++    this.panel.onDidDispose(() => { this.disposed = true; clearTimeout(this.timer); if (d.dfmDiff === this) d.dfmDiff = null; });
++  }
++
++  set(data) {
++    this.data = data;
++    this.panel.webview.postMessage({ type: 'data', data });
++  }
++
++  scheduleRefresh() {
++    clearTimeout(this.timer);
++    this.timer = setTimeout(() => { if (!this.disposed && !this.d.disposed) this.hub.cmdDfmDiff(this.d, true); }, 400);
++  }
++
++  onMessage(m) {
++    if (this.d.disposed) return;
++    switch (m && m.type) {
++      case 'ready': this.panel.webview.postMessage({ type: 'data', data: this.data }); break;
++      case 'refresh': this.hub.cmdDfmDiff(this.d, true); break;
++      case 'select':
++        this.d.panel.reveal(this.d.panel.viewColumn, true);
++        this.d.post({ type: 'selectId', id: String(m.id || ''), origin: 'dfmdiff' });
++        break;
++      case 'reset': {
++        // write one DFM value back: the probe changes the page and reports the edit
++        const r = m.reset || {};
++        const id = String(m.id || '');
++        if (!id || !/^(setLayout|setCaption|setLook)$/.test(r.type)) break;
++        const msg = { type: r.type, id };
++        for (const k of ['left', 'top', 'width', 'height']) if (typeof r[k] === 'number') msg[k] = r[k];
++        if (r.type === 'setCaption') msg.value = String(r.value == null ? '' : r.value);
++        if (r.type === 'setLook') { msg.prop = String(r.prop || ''); msg.value = r.value; }
++        this.d.panel.reveal(this.d.panel.viewColumn, true);
++        this.d.post(msg);
++        break;
++      }
++      default: break;
++    }
++  }
++}
++
+ // ---------------------------------------------------------------------------
+ class PropsView {
+   constructor(hub) {
+diff --git a/tools/vscode-htdesigner/lib/dfmdiff.js b/tools/vscode-htdesigner/lib/dfmdiff.js
+new file mode 100644
+index 0000000..788dcff
+--- /dev/null
++++ b/tools/vscode-htdesigner/lib/dfmdiff.js
+@@ -0,0 +1,130 @@
++'use strict';
++// AI(W906-HTDESIGNER) 20260929: 與 DFM 的差異 -- the whole page against the BCB6 .dfm.
++// The same comparison the property grid makes for one control (media/props.js), for
++// every control of the page at once. Plain Node (no vscode).
++const fmt = require('./format');
++
++/** Same value? numbers rounded, booleans as booleans, text trimmed and case-blind (#RRGGBB). */
++function same(a, b) {
++  if (typeof a === 'number' || typeof b === 'number') return Math.round(+a) === Math.round(+b);
++  if (typeof a === 'boolean' || typeof b === 'boolean') return !!a === !!b;
++  return String(a == null ? '' : a).trim().toLowerCase() === String(b == null ? '' : b).trim().toLowerCase();
++}
++
++function shown(v) {
++  if (v === null || v === undefined) return '';
++  if (typeof v === 'boolean') return v ? 'True' : 'False';
++  return String(v);
++}
++
++const GROUP = { layout: '位置／大小', text: '文字', look: '外觀' };
++
++/**
++ * Does the page's source give this size? A width the source does not set (an
++ * AutoSize TLabel, a box sized by its text) is the text's -- in another font than
++ * BCB6's -- so it is not compared. Only a px size counts: the generated pages write
++ * an AutoSize label as "width:136px; … width:auto" (the later one wins). Anchored
++ * on both sides (left + right in px) counts as set.
++ *   raw: the positioning box's inline style { left, top, width, height, right, bottom }
++ */
++const PX = /^\s*-?\d+(\.\d+)?px\s*$/;
++function sizeInSource(raw, k) {
++  if (!raw) return true;
++  if (k === 'width') return PX.test(raw.width || '') || (PX.test(raw.left || '') && PX.test(raw.right || ''));
++  if (k === 'height') return PX.test(raw.height || '') || (PX.test(raw.top || '') && PX.test(raw.bottom || ''));
++  return true;
++}
++
++/**
++ * items: the probe's lookAll answer -- [{ id, lay, cap, look }]
++ * ir:    the page's IR (IrStore.load) -- byName, root
++ * Returns { rows: [{ id, cls, group, prop, page, dfm, reset, note }], compared, controls }
++ * reset = the message that writes the DFM value back ({ type:'setLayout', left:54 } ...).
++ */
++function diffPage(items, ir) {
++  const rows = [];
++  let compared = 0;
++  let controls = 0;
++  const rootName = ir && ir.root ? ir.root.name : null;
++  for (const it of items || []) {
++    const node = ir && ir.byName ? ir.byName.get(it.id) : null;
++    if (!node || node.name === rootName) continue;   // the form: its DFM Width/Height include the window frame
++    const dv = fmt.dfmEditValues(node);
++    if (!dv) continue;
++    controls++;
++    const cls = node.class || '';
++    const add = (group, prop, page, dfm, reset, note, dfmText) => {
++      compared++;
++      if (same(dfm, page)) return;
++      rows.push({ id: it.id, cls, group, prop, page: shown(page), dfm: dfmText || shown(dfm), reset, note: note || '' });
++    };
++    const lay = it.lay;
++    if (lay && !lay.root) {
++      // a wrapper the generator adds (span.lled around an LED + its label) moves the
++      // origin: compare in the DFM's coordinates, reset in the element's own
++      const shift = { left: lay.ox || 0, top: lay.oy || 0, width: 0, height: 0 };
++      for (const k of ['left', 'top', 'width', 'height']) {
++        if (dv[k] === null || lay[k] === null || lay[k] === undefined) continue;
++        if (!sizeInSource(lay.raw, k)) continue;
++        const r = { type: 'setLayout' };
++        r[k] = dv[k] - shift[k];
++        const notes = [];
++        if (lay.rendered === false) notes.push('目前沒有顯示（隱藏的分頁或面板），用原始碼 style 裡的數值比對');
++        if (shift[k]) notes.push('外層包裝讓座標原點位移 ' + shift[k] + ' px，已換算成 DFM 的座標');
++        add('layout', k.charAt(0).toUpperCase() + k.slice(1), lay[k] + shift[k], dv[k], r, notes.join('；'));
++      }
++    }
++    const cap = it.cap;
++    if (cap) {
++      const want = cap.kind === 'value' ? dv.text : dv.caption;
++      if (want !== null) add('text', cap.kind === 'value' ? 'Text' : 'Caption', cap.value, want, { type: 'setCaption', value: want });
++    }
++    const lk = it.look;
++    if (lk) {
++      const look = (prop, label, page, dfm, note, dfmText) => {
++        if (dfm === null || dfm === undefined) return;
++        add('look', label, page, dfm, { type: 'setLook', prop, value: dfm }, note, dfmText);
++      };
++      look('visible', 'Visible', lk.visible, dv.visible);
++      if (lk.enabled !== null && lk.enabled !== undefined) look('enabled', 'Enabled', lk.enabled, dv.enabled);
++      // a font family the page does not give for this control is the form's UI font (the
++      // generator's choice for labels and buttons): not compared
++      if (dv.fontName !== null && lk.fontOwn !== false) {
++        // the page's font list naming the DFM font counts as the same font
++        const fams = Array.isArray(lk.fontFamilies) ? lk.fontFamilies : [lk.fontName];
++        const hit = fams.some(f => String(f).toLowerCase() === dv.fontName.toLowerCase());
++        look('fontName', 'Font.Name', hit ? dv.fontName : lk.fontName, dv.fontName);
++      }
++      // DFM Font.Height -13 -> the 11px a generated page has (|Height| - 2)
++      look('fontSize', 'Font.Size', lk.fontSize, dv.fontSize, '', dv.fontHeight !== null ? dv.fontSize + '（Height ' + dv.fontHeight + '）' : '');
++      look('bold', 'Font.Bold', lk.bold, dv.bold);
++      look('italic', 'Font.Italic', lk.italic, dv.italic);
++      look('color', 'Font.Color', lk.color, dv.color);          // system colours are null here: not compared
++      look('background', 'Color', lk.background, dv.background);
++    }
++  }
++  // the same difference on many controls of one class (every TBtnPanelLane bold, every
++  // GroupBox caption in the theme colour) is the page's common style, not a one-off
++  // change: those are folded into one pattern line
++  const count = new Map();
++  const keyOf = r => r.cls + '|' + r.prop + '|' + r.page + '|' + r.dfm;
++  for (const r of rows) count.set(keyOf(r), (count.get(keyOf(r)) || 0) + 1);
++  const patterns = [];
++  const seen = new Set();
++  for (const r of rows) {
++    const k = keyOf(r);
++    if (count.get(k) < PATTERN_MIN) continue;
++    r.pattern = k;
++    if (!seen.has(k)) { seen.add(k); patterns.push({ key: k, cls: r.cls, group: r.group, prop: r.prop, page: r.page, dfm: r.dfm, count: count.get(k) }); }
++  }
++  patterns.sort((a, b) => b.count - a.count);
++  const byGroup = { layout: 0, text: 0, look: 0 };
++  let single = 0;
++  for (const r of rows) { byGroup[r.group]++; if (!r.pattern) single++; }
++  return { rows, compared, controls, byGroup, patterns, single };
++}
++
++/** How many controls of one class must share a difference to count as the page's common style. */
++const PATTERN_MIN = 5;
++
++module.exports = { same, sizeInSource, diffPage, GROUP, PATTERN_MIN };
+diff --git a/tools/vscode-htdesigner/lib/format.js b/tools/vscode-htdesigner/lib/format.js
+index 306a412..23370bb 100644
+--- a/tools/vscode-htdesigner/lib/format.js
++++ b/tools/vscode-htdesigner/lib/format.js
+@@ -101,6 +101,11 @@ function sysColorName(v) {
+   return null;
+ }
+ 
++/** Font.Height -> the px the generated pages use for it (|h| - 2, the generator's rule). */
++function pagePx(h) {
++  return Math.max(1, Math.abs(h) - 2);
++}
++
+ /** A VCL caption as shown: "&Save" -> "Save", "A && B" -> "A & B" (the & marks the accelerator). */
+ function vclText(s) {
+   return String(s).replace(/&&|&/g, m => (m === '&&' ? '&' : ''));
+@@ -157,6 +162,9 @@ function formatProps(properties) {
+  * a property the DFM leaves at its default is missing here (null), not guessed.
+  * A system colour (clBtnFace ...) is not given as RGB -- its colour is the Windows
+  * theme's, so there is nothing to compare -- only its name (colorSys / backgroundSys).
++ * fontSize is in the pages' px: the generator writes |Font.Height| - 2
++ * (_gen_dfm_abs.py fontpx: "VCL Font.Height(-13)≈11px 顯示"), so that is the value a
++ * page made from this DFM has; fontHeight keeps the DFM's own number for display.
+  *   node: an IR node (properties + geometry)
+  */
+ function dfmEditValues(node) {
+@@ -174,7 +182,8 @@ function dfmEditValues(node) {
+     caption: val('Caption') != null ? vclText(val('Caption')) : null,
+     text: val('Text') != null ? String(val('Text')) : null,
+     fontName: val('Font.Name') != null ? String(val('Font.Name')) : null,
+-    fontSize: typeof val('Font.Height') === 'number' ? Math.abs(val('Font.Height')) : null,
++    fontSize: typeof val('Font.Height') === 'number' && val('Font.Height') !== 0 ? pagePx(val('Font.Height')) : null,
++    fontHeight: typeof val('Font.Height') === 'number' ? val('Font.Height') : null,
+     bold: Array.isArray(val('Font.Style')) ? val('Font.Style').includes('fsBold') : null,
+     italic: Array.isArray(val('Font.Style')) ? val('Font.Style').includes('fsItalic') : null,
+     color: fc != null && !sysColorName(fc) ? tcolor(fc) : null,
+@@ -187,4 +196,4 @@ function dfmEditValues(node) {
+   return out;
+ }
+ 
+-module.exports = { DOM_OF, domTypesOf, defaultEvent, parseVclTitle, tcolor, sysColorName, vclText, formatProp, formatProps, dfmEditValues };
++module.exports = { DOM_OF, domTypesOf, defaultEvent, parseVclTitle, tcolor, sysColorName, vclText, pagePx, formatProp, formatProps, dfmEditValues };
+diff --git a/tools/vscode-htdesigner/lib/htmledit.js b/tools/vscode-htdesigner/lib/htmledit.js
+index f3314be..6748193 100644
+--- a/tools/vscode-htdesigner/lib/htmledit.js
++++ b/tools/vscode-htdesigner/lib/htmledit.js
+@@ -206,4 +206,20 @@ function captionRange(text, tag, kind) {
+   return null;
+ }
+ 
+-module.exports = { VOID, tagEnd, startTagOf, wrapperTagOf, styleOf, setStyle, setAttr, captionRange, escText, escAttr };
++/**
++ * The start tag of the child that carries an element's caption -- and so its font:
++ * kind 'legend' (TGroupBox) or 'pnlCap' (TPanel: the generator writes the panel's
++ * Font on <span class="pnlCap" style="font-size:…">). { start, end, text } or null.
++ */
++function captionHostTag(text, tag, kind) {
++  if (kind !== 'legend' && kind !== 'pnlCap') return null;
++  const r = captionRange(text, tag, kind);          // [just after the child's start tag, …)
++  if (!r) return null;
++  const lt = text.lastIndexOf('<', r[0] - 1);
++  if (lt < tag.end) return null;
++  const e = tagEnd(text, lt);
++  if (e < 0 || e + 1 !== r[0]) return null;
++  return { start: lt, end: e + 1, text: text.slice(lt, e + 1) };
++}
++
++module.exports = { VOID, tagEnd, startTagOf, wrapperTagOf, styleOf, setStyle, setAttr, captionRange, captionHostTag, escText, escAttr };
+diff --git a/tools/vscode-htdesigner/media/dfmdiff.js b/tools/vscode-htdesigner/media/dfmdiff.js
+new file mode 100644
+index 0000000..f926dd0
+--- /dev/null
++++ b/tools/vscode-htdesigner/media/dfmdiff.js
+@@ -0,0 +1,201 @@
++/* AI(W906-HTDESIGNER) 20260929: 與 DFM 的差異 -- every property of the page that is not
++   what the BCB6 .dfm says. textContent only; click a row = select the control in the
++   designer, ↺ = write the DFM value back (one undo step). The same difference on many
++   controls of one class (the page's common style) is folded into one pattern line. */
++(function () {
++  'use strict';
++  var vscode = acquireVsCodeApi();
++  var root = document.getElementById('root');
++  var data = null;
++  var st = vscode.getState() || { group: 'all', q: '', pattern: null, showPat: false };
++  var GROUP = { layout: '位置／大小', text: '文字', look: '外觀' };
++
++  function el(tag, cls, text) {
++    var e = document.createElement(tag);
++    if (cls) e.className = cls;
++    if (text != null) e.textContent = String(text);
++    return e;
++  }
++  function save() { vscode.setState(st); }
++  function val(prop, v) {
++    var td = el('td', 'fn');
++    if (/Color$/.test(prop) && /^#[0-9a-f]{6}$/i.test(v)) {
++      var sw = el('span', 'sw');
++      sw.style.background = v;
++      td.appendChild(sw);
++    }
++    td.appendChild(document.createTextNode(v === '' ? '（空）' : v));
++    return td;
++  }
++  function keep(r) {
++    if (st.group !== 'all' && r.group !== st.group) return false;
++    if (st.pattern) { if (r.pattern !== st.pattern) return false; }
++    else if (!st.showPat && r.pattern) return false;
++    var q = (st.q || '').trim().toLowerCase();
++    if (q && (r.id + ' ' + r.cls + ' ' + r.prop + ' ' + r.page + ' ' + r.dfm).toLowerCase().indexOf(q) < 0) return false;
++    return true;
++  }
++
++  function render() {
++    root.textContent = '';
++    if (!data) { root.appendChild(el('p', 'dim', '比對中…')); return; }
++    var pats = data.patterns || [];
++    if (st.pattern && !pats.some(function (p) { return p.key === st.pattern; })) st.pattern = null;
++    var h = el('div', 'head');
++    h.appendChild(el('h1', null, '與 DFM 的差異：' + data.page));
++    var inPat = data.rows.length - (data.single == null ? data.rows.length : data.single);
++    h.appendChild(el('div', 'sub', 'DFM ' + data.dfm + '　表單類別 ' + data.formClass + '　比了 ' + data.controls + ' 個元件、' +
++      data.compared + ' 項，不一樣的 ' + data.rows.length + ' 項：個別 ' + (data.rows.length - inPat) + ' 項' +
++      (pats.length ? '、同一種差異 ' + pats.length + ' 種（' + inPat + ' 項）' : '') + (data.dirty ? '　（頁面有未存檔的修改）' : '')));
++    var chips = el('div', 'chips');
++    ['layout', 'text', 'look'].forEach(function (g) {
++      chips.appendChild(el('span', 'chip ' + (data.byGroup[g] ? 'mid' : 'ok'), GROUP[g] + ' ' + data.byGroup[g]));
++    });
++    h.appendChild(chips);
++    var bar = el('div', 'bar');
++    [['all', '全部'], ['layout', GROUP.layout], ['text', GROUP.text], ['look', GROUP.look]].forEach(function (f) {
++      var b = el('button', st.group === f[0] ? 'on' : '', f[1]);
++      b.setAttribute('data-group', f[0]);
++      b.addEventListener('click', function () { st.group = f[0]; save(); render(); });
++      bar.appendChild(b);
++    });
++    if (pats.length && !st.pattern) {
++      var sp = el('button', st.showPat ? 'on' : '', st.showPat ? '也列出同一種差異' : '只列個別差異');
++      sp.setAttribute('data-act', 'showPat');
++      sp.title = '同一種差異＝同一型別的很多元件都一樣（多半是網頁的統一樣式）';
++      sp.addEventListener('click', function () { st.showPat = !st.showPat; save(); render(); });
++      bar.appendChild(sp);
++    }
++    var q = el('input', 'q');
++    q.placeholder = '篩選元件／屬性／值…';
++    q.value = st.q || '';
++    q.addEventListener('input', function () { st.q = q.value; save(); fill(); });
++    bar.appendChild(q);
++    var rf = el('button', null, '重新比對');
++    rf.title = '頁面在別處被改過的話，按這個重新比對';
++    rf.addEventListener('click', function () { vscode.postMessage({ type: 'refresh' }); });
++    bar.appendChild(rf);
++    h.appendChild(bar);
++    root.appendChild(h);
++
++    if (!data.rows.length) {
++      root.appendChild(el('p', 'pad', '全部和 DFM 一樣（DFM 有寫、網頁也有給的屬性）。'));
++      return;
++    }
++
++    /* the page's common style: one line per pattern */
++    if (pats.length) {
++      var det = el('details', 'pats');
++      det.open = !!st.patOpen || !!st.pattern;
++      det.addEventListener('toggle', function () { st.patOpen = det.open; save(); });
++      det.appendChild(el('summary', null, '同一種差異 ' + pats.length + ' 種（同一型別至少 5 個元件都一樣，多半是網頁的統一樣式；點一列看是哪些元件）'));
++      var pt = el('table', 'grid');
++      var ph = el('tr');
++      ['型別', '屬性', '網頁', 'DFM', '個數'].forEach(function (t) { ph.appendChild(el('th', null, t)); });
++      var pthead = el('thead');
++      pthead.appendChild(ph);
++      pt.appendChild(pthead);
++      var ptb = el('tbody');
++      pats.forEach(function (p) {
++        var r = el('tr', 'patrow' + (st.pattern === p.key ? ' on' : ''));
++        r.setAttribute('data-key', p.key);
++        r.appendChild(el('td', 'cls', p.cls));
++        r.appendChild(el('td', 'ev', p.prop));
++        r.appendChild(val(p.prop, p.page));
++        r.appendChild(val(p.prop, p.dfm));
++        r.appendChild(el('td', 'fn', p.count));
++        r.title = '點一下：只看這一種差異的元件';
++        r.addEventListener('click', function () { st.pattern = st.pattern === p.key ? null : p.key; save(); render(); });
++        ptb.appendChild(r);
++      });
++      pt.appendChild(ptb);
++      det.appendChild(pt);
++      root.appendChild(det);
++    }
++    if (st.pattern) {
++      var pp = pats.filter(function (p) { return p.key === st.pattern; })[0];
++      var line = el('div', 'bar');
++      line.appendChild(el('span', 'dim', '只看：' + pp.cls + ' 的 ' + pp.prop + '（網頁 ' + (pp.page || '（空）') + '、DFM ' + (pp.dfm || '（空）') + '）共 ' + pp.count + ' 個'));
++      var back = el('button', null, '回到個別差異');
++      back.setAttribute('data-act', 'back');
++      back.addEventListener('click', function () { st.pattern = null; save(); render(); });
++      line.appendChild(back);
++      root.appendChild(line);
++    }
++
++    var table = el('table', 'grid');
++    var thead = el('thead');
++    var tr = el('tr');
++    ['元件', '型別', '屬性', '網頁', 'DFM', ''].forEach(function (t) { tr.appendChild(el('th', null, t)); });
++    thead.appendChild(tr);
++    table.appendChild(thead);
++    var tbody = el('tbody');
++    table.appendChild(tbody);
++    root.appendChild(table);
++    var count = el('div', 'dim pad');
++    root.appendChild(count);
++
++    function fill() {
++      tbody.textContent = '';
++      var list = data.rows.filter(keep);
++      var i = 0;
++      while (i < list.length) {
++        var j = i;
++        while (j < list.length && list[j].id === list[i].id) j++;
++        for (var k = i; k < j; k++) {
++          (function (r, first, span) {
++            var row = el('tr', 'diffrow');
++            row.setAttribute('data-id', r.id);
++            row.setAttribute('data-prop', r.prop);
++            if (first) {
++              var n = el('td', 'name', r.id);
++              n.rowSpan = span;
++              row.appendChild(n);
++              var c = el('td', 'cls', r.cls);
++              c.rowSpan = span;
++              row.appendChild(c);
++            }
++            var p = el('td', 'ev', r.prop);
++            if (r.note) { p.title = r.note; p.appendChild(el('span', 'mark dim', ' *')); }
++            row.appendChild(p);
++            row.appendChild(val(r.prop, r.page));
++            row.appendChild(val(r.prop, r.dfm));
++            var td = el('td');
++            var b = el('button', 'reset', '↺');
++            b.disabled = !r.inSource;
++            b.title = r.inSource ? '重設為 DFM 值（' + r.dfm + '）' : '這個元件是頁面 JS 產生的，HTML 原始碼裡沒有它，不能改';
++            b.addEventListener('click', function (e) {
++              e.stopPropagation();
++              vscode.postMessage({ type: 'reset', id: r.id, reset: r.reset });
++            });
++            td.appendChild(b);
++            row.appendChild(td);
++            row.title = '點一下：在設計檢視選取 ' + r.id;
++            row.addEventListener('click', function () { vscode.postMessage({ type: 'select', id: r.id }); });
++            tbody.appendChild(row);
++          })(list[k], k === i, j - i);
++        }
++        i = j;
++      }
++      if (!list.length && !st.pattern && pats.length && !st.showPat) {
++        var tr0 = el('tr');
++        var td0 = el('td', 'dim', '沒有個別差異 —— 全部都是上面的「同一種差異」。');
++        td0.colSpan = 6;
++        tr0.appendChild(td0);
++        tbody.appendChild(tr0);
++      }
++      count.textContent = '顯示 ' + list.length + ' / ' + data.rows.length + ' 項。' +
++        '不一樣不代表錯 —— 網頁作者常常是刻意調的；要不要改回去由你決定，↺ 一次改一項（Ctrl+Z 可以復原）。' +
++        '只比 DFM 有寫、而且網頁原始碼也有給的屬性：系統色（clBtnFace…）、沿用表單字型的字型名稱、由文字決定的大小都不比。' +
++        '字型大小照網頁產生器的換算（Font.Height −13 → 11px）。標 * 的滑鼠移上去看說明（沒有顯示的元件、座標原點換算）。';
++    }
++    fill();
++  }
++
++  window.addEventListener('message', function (e) {
++    var m = e.data;
++    if (m && m.type === 'data') { data = m.data; render(); }
++  });
++  render();
++  vscode.postMessage({ type: 'ready' });
++})();
+diff --git a/tools/vscode-htdesigner/media/overview.css b/tools/vscode-htdesigner/media/overview.css
+index 1bfe11d..3bcbddd 100644
+--- a/tools/vscode-htdesigner/media/overview.css
++++ b/tools/vscode-htdesigner/media/overview.css
+@@ -37,3 +37,10 @@ table.grid { border-collapse: collapse; width: 100%; margin-top: 8px; }
+ .loc:hover { text-decoration: underline; }
+ .dim { color: var(--vscode-descriptionForeground); }
+ .pad { padding: 8px 0; }
++/* 與 DFM 的差異 (media/dfmdiff.js) */
++.sw { display: inline-block; width: 11px; height: 11px; margin-right: 5px; vertical-align: -1px; border: 1px solid rgba(128,128,128,.7); }
++button.reset { padding: 0 6px; }
++details.pats { margin-top: 10px; }
++details.pats > summary { cursor: pointer; color: var(--vscode-descriptionForeground); }
++.grid tr.patrow.on td { background: var(--vscode-list-inactiveSelectionBackground); }
++button:disabled { opacity: .4; cursor: default; }
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index b135d14..dfeb76a 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -481,13 +481,44 @@
+     return ch;
+   }
+   function applyStyle(node, ch) { for (var k in ch) if (Object.prototype.hasOwnProperty.call(ch, k)) node.style[k] = ch[k]; }
++  /* where the box is: as drawn (outer size, like the DFM's Width/Height); a box that
++     is not drawn (a hidden tab or panel) measures 0, so then the px its style says */
++  function curBox(n) {
++    if (n.getClientRects().length) return { left: n.offsetLeft, top: n.offsetTop, width: n.offsetWidth, height: n.offsetHeight, rendered: true };
++    var s = n.style;
++    return { left: pxOf(s.left), top: pxOf(s.top), width: pxOf(s.width), height: pxOf(s.height), rendered: false };
++  }
++  /* how far the box's coordinate origin is from its DFM parent's: a wrapper the
++     generator adds (span.lled around an LED and its label) shifts it. The walk stops
++     at the element that stands for the DFM parent: one with an id, a tab sheet
++     (<div class="pcPane"> -- a TTabSheet has no id on the page; its tab bar and body
++     offsets belong to the TPageControl), or a container titled with a bare component
++     name (the page's JS strips most titles at run time, so that is only a fallback) */
++  function originShift(n, el) {
++    var cp = compParent(el) || formRoot();
++    var dx = 0, dy = 0;
++    var drawn = n.getClientRects().length > 0;
++    for (var p = n.parentElement; p && p !== cp && p !== document.body && p !== document.documentElement; p = p.parentElement) {
++      if (p.classList && p.classList.contains('pcPane')) break;
++      /* (a wrapper's title is "name : TClass…", never a bare name) */
++      var tt = p.getAttribute('title');
++      if (tt && (Object.prototype.hasOwnProperty.call(CLS, tt) || /^[A-Za-z_]\w*$/.test(tt))) break;
++      var pcs = getComputedStyle(p);
++      if (pcs.position === 'static') continue;
++      if (drawn) { dx += p.offsetLeft; dy += p.offsetTop; }
++      else { dx += pxOf(pcs.left) || 0; dy += pxOf(pcs.top) || 0; }
++    }
++    return { x: dx, y: dy };
++  }
+   function layoutOf(el) {
+     var bx = boxOf(el);
+     if (!bx) return null;
+     var s = bx.node.style;
++    var cb = curBox(bx.node);
++    var sh = bx.root ? { x: 0, y: 0 } : originShift(bx.node, el);
+     return {
+-      target: bx.target, root: !!bx.root,
+-      left: bx.node.offsetLeft, top: bx.node.offsetTop, width: bx.node.offsetWidth, height: bx.node.offsetHeight,
++      target: bx.target, root: !!bx.root, rendered: cb.rendered, ox: sh.x, oy: sh.y,
++      left: cb.left, top: cb.top, width: cb.width, height: cb.height,
+       raw: { left: s.left, top: s.top, width: s.width, height: s.height, right: s.right, bottom: s.bottom },
+     };
+   }
+@@ -524,18 +555,33 @@
+     if (m[4] !== undefined && parseFloat(m[4]) === 0) return '';
+     return '#' + [m[1], m[2], m[3]].map(function (x) { return ('0' + (+x).toString(16)).slice(-2); }).join('');
+   }
++  /* where a control's Font lives: a TPanel's on its caption <span class="pnlCap"> (the
++     generator writes the Font there), a TGroupBox's on its <legend>, else on itself */
++  function fontHost(el) {
++    var pc = el.querySelector(':scope > .pnlCap');
++    if (pc) return { el: pc, target: 'pnlCap' };
++    if (el.tagName === 'FIELDSET') { var lg = el.querySelector(':scope > legend'); if (lg) return { el: lg, target: 'legend' }; }
++    return { el: el, target: 'self' };
++  }
+   function lookOf(el) {
+     var cs = getComputedStyle(el);
++    var fh = fontHost(el);
++    var fs = fh.el === el ? cs : getComputedStyle(fh.el);
+     var form = /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(el.tagName);
++    var par = el.parentElement;
+     return {
+-      visible: el.style.display !== 'none',
++      /* its own display (a class or the page's JS may hide it too); a hidden tab around it does not count */
++      visible: cs.display !== 'none',
+       enabled: form ? !el.disabled : null,
+-      fontSize: Math.round(parseFloat(cs.fontSize) || 0),
+-      fontName: String(cs.fontFamily || '').split(',')[0].replace(/^["']|["']$/g, '').trim(),
+-      fontFamilies: String(cs.fontFamily || '').split(',').map(function (f) { return f.trim().replace(/^["']|["']$/g, ''); }).filter(Boolean),
+-      bold: (parseInt(cs.fontWeight, 10) || 400) >= 600 || cs.fontWeight === 'bold',
+-      italic: cs.fontStyle === 'italic',
+-      color: hexOf(cs.color),
++      fontOn: fh.target,
++      fontSize: Math.round(parseFloat(fs.fontSize) || 0),
++      fontName: String(fs.fontFamily || '').split(',')[0].replace(/^["']|["']$/g, '').trim(),
++      fontFamilies: String(fs.fontFamily || '').split(',').map(function (f) { return f.trim().replace(/^["']|["']$/g, ''); }).filter(Boolean),
++      /* false = the font family is inherited (the form's UI font), not given for this control */
++      fontOwn: !par || !!el.style.fontFamily || !!fh.el.style.fontFamily || fs.fontFamily !== getComputedStyle(par).fontFamily,
++      bold: (parseInt(fs.fontWeight, 10) || 400) >= 600 || fs.fontWeight === 'bold',
++      italic: fs.fontStyle === 'italic',
++      color: hexOf(fs.color),
+       background: hexOf(cs.backgroundColor),
+     };
+   }
+@@ -1009,22 +1055,26 @@
+       /* edits from the properties panel: change the DOM, then report the same change
+          as an 'edit' for the extension to write into the source */
+       case 'setLayout': {
+-        var el3 = els.get(m.key);
++        /* (by id: from the DFM difference list, for a control that is not selected) */
++        var el3 = m.id ? byId(m.id) : els.get(m.key);
+         if (!el3 || !el3.isConnected) break;
+         var bx3 = boxOf(el3);
+         if (!bx3) { post({ type: 'editRefused', why: '這個元件不是用 position:absolute 定位的，位置／大小不能改' }); break; }
+-        var s3 = snap(bx3), n3 = bx3.node;
+-        var dL3 = m.left != null ? m.left - n3.offsetLeft : 0, dT3 = m.top != null ? m.top - n3.offsetTop : 0;
+-        var dW3 = m.width != null ? m.width - n3.offsetWidth : 0, dH3 = m.height != null ? m.height - n3.offsetHeight : 0;
++        var s3 = snap(bx3), cb3 = curBox(bx3.node);
++        var need3 = (m.left != null && cb3.left == null) || (m.top != null && cb3.top == null) ||
++          (m.width != null && cb3.width == null) || (m.height != null && cb3.height == null);
++        if (need3) { post({ type: 'editRefused', why: '這個元件目前沒有顯示，而它的位置／大小不是寫在自己 style 裡的 px 數值' }); break; }
++        var dL3 = m.left != null ? m.left - cb3.left : 0, dT3 = m.top != null ? m.top - cb3.top : 0;
++        var dW3 = m.width != null ? m.width - cb3.width : 0, dH3 = m.height != null ? m.height - cb3.height : 0;
+         var ch3 = deltaStyle(s3, dL3, dT3, dW3, dH3);
+         if (!ch3) { post({ type: 'editRefused', why: '這個元件的位置／大小不是寫在自己 style 裡的 px 數值' }); break; }
+-        applyStyle(n3, ch3);
++        applyStyle(bx3.node, ch3);
+         commitLayout(el3, bx3, ch3);
+         selEl = null; select(el3, 'edit', false);
+         break;
+       }
+       case 'setCaption': {
+-        var el4 = els.get(m.key);
++        var el4 = m.id ? byId(m.id) : els.get(m.key);
+         if (!el4 || !el4.isConnected) break;
+         var c4 = captionOf(el4);
+         if (!c4) { post({ type: 'editRefused', why: '這個元件沒有可以直接改的文字' }); break; }
+@@ -1035,7 +1085,7 @@
+         break;
+       }
+       case 'setLook': {
+-        var el5 = els.get(m.key);
++        var el5 = m.id ? byId(m.id) : els.get(m.key);
+         if (!el5 || !el5.isConnected) break;
+         var st5 = null, at5 = null;
+         if (m.prop === 'visible') st5 = { display: m.value ? null : 'none' };
+@@ -1050,8 +1100,10 @@
+         else if (m.prop === 'color') st5 = { color: String(m.value) };
+         else if (m.prop === 'background') st5 = { 'background-color': String(m.value) };
+         if (st5) {
+-          for (var k5 in st5) { if (st5[k5] == null) el5.style.removeProperty(k5); else el5.style.setProperty(k5, st5[k5]); }
+-          sendEdit(el5, { what: 'style', target: 'self', style: st5 });
++          /* a font goes where the control's Font lives (a TPanel's caption span, a TGroupBox's legend) */
++          var fh5 = /^(fontSize|bold|italic|fontName|color)$/.test(m.prop) ? fontHost(el5) : { el: el5, target: 'self' };
++          for (var k5 in st5) { if (st5[k5] == null) fh5.el.style.removeProperty(k5); else fh5.el.style.setProperty(k5, st5[k5]); }
++          sendEdit(el5, { what: 'style', target: fh5.target, style: st5 });
+         } else if (at5) {
+           el5.disabled = !m.value;
+           sendEdit(el5, { what: 'attr', attr: at5 });
+@@ -1114,6 +1166,27 @@
+         post({ type: 'listenersAll', seq: m.seq, map: map });
+         break;
+       }
++      case 'lookAll': {
++        /* for the DFM difference list: position / caption / look of the controls asked for */
++        var want = Array.isArray(m.ids) ? new Set(m.ids) : null;
++        var items7 = [];
++        var all7 = document.body ? document.body.querySelectorAll('[id]') : [];
++        for (var i7 = 0; i7 < all7.length; i7++) {
++          var e7 = all7[i7];
++          if (want && !want.has(e7.id)) continue;
++          if (/^(SCRIPT|STYLE|TEMPLATE|LINK|META)$/.test(e7.tagName)) continue;
++          var l7 = layoutOf(e7);
++          items7.push({
++            id: e7.id,
++            lay: l7 ? { left: l7.left, top: l7.top, width: l7.width, height: l7.height, rendered: l7.rendered, root: l7.root, target: l7.target,
++              raw: l7.raw, ox: l7.ox, oy: l7.oy } : null,
++            cap: captionOf(e7),
++            look: lookOf(e7),
++          });
++        }
++        post({ type: 'lookAll', seq: m.seq, items: items7 });
++        break;
++      }
+       case 'netcheck': {
+         /* prove the wall from inside the page: try ws / http / xhr to 127.0.0.1:9
+            (a closed port, never the machine) and report what the CSP did */
+diff --git a/tools/vscode-htdesigner/media/props.js b/tools/vscode-htdesigner/media/props.js
+index cb3cd6b..dc2a321 100644
+--- a/tools/vscode-htdesigner/media/props.js
++++ b/tools/vscode-htdesigner/media/props.js
+@@ -162,19 +162,20 @@
+           if (typeof a === 'boolean' || typeof b === 'boolean') return !!a === !!b;
+           return String(a == null ? '' : a).trim().toLowerCase() === String(b == null ? '' : b).trim().toLowerCase();
+         }
+-        function row(label, input, hint, dv, cur, onReset, sysName) {
++        /* info = { text, title }: a DFM value shown but not compared */
++        /* dvText: how to show the DFM value (default: dv itself) */
++        function row(label, input, hint, dv, cur, onReset, info, dvText) {
+           var tr = el('tr');
+           tr.appendChild(el('td', 'k', label));
+           var td = el('td', 'v');
+           td.appendChild(input);
+           if (hint) td.appendChild(el('span', 'hint', hint));
+-          if ((dv === null || dv === undefined) && sysName) {
+-            /* clBtnFace ...: the Windows theme's colour -- nothing to compare */
+-            var sy = el('span', 'dfmv', 'DFM ' + sysName + '（系統色）');
+-            sy.title = '系統色的實際顏色看 Windows 佈景，不比對';
++          if ((dv === null || dv === undefined) && info) {
++            var sy = el('span', 'dfmv', info.text);
++            sy.title = info.title;
+             td.appendChild(sy);
+           } else if (dv !== null && dv !== undefined && onReset) {
+-            var shown = typeof dv === 'boolean' ? (dv ? 'True' : 'False') : String(dv);
++            var shown = dvText || (typeof dv === 'boolean' ? (dv ? 'True' : 'False') : String(dv));
+             var d = el('span', 'dfmv', 'DFM ' + shown);
+             if (!same(dv, cur)) {
+               diffs++;
+@@ -208,10 +209,27 @@
+         var lay = ed.layout;
+         var layOk = lay && ed.layoutInSource;
+         if (lay) {
++          /* a size the source does not give (an AutoSize label) is the text's, in another font: not compared
++             (the same rule as lib/dfmdiff.js sizeInSource) */
++          var raw = lay.raw;
++          var PX = /^\s*-?\d+(\.\d+)?px\s*$/;     /* "width:136px; … width:auto" = auto */
++          var sizeSet = function (k) {
++            if (!raw) return true;
++            if (k === 'width') return PX.test(raw.width || '') || (PX.test(raw.left || '') && PX.test(raw.right || ''));
++            if (k === 'height') return PX.test(raw.height || '') || (PX.test(raw.top || '') && PX.test(raw.bottom || ''));
++            return true;
++          };
++          /* a wrapper the generator adds (span.lled) moves the origin: compare in the DFM's coordinates */
++          var shift = { left: lay.ox || 0, top: lay.oy || 0, width: 0, height: 0 };
+           (lay.root ? ['width', 'height'] : ['left', 'top', 'width', 'height']).forEach(function (k) {
+             var label = k.charAt(0).toUpperCase() + k.slice(1);
+-            row(label, num(k, lay[k], !layOk, setLay(k)), k === 'left' && lay.target === 'parent' ? '（外層 span 定位）' : '',
+-              dfm[k], lay[k], setLay(k));
++            var auto = dfm[k] != null && !sizeSet(k);
++            var hint = k === 'left' && lay.target === 'parent' ? '（外層 span 定位）' : '';
++            if (shift[k]) hint = '（外層包裝位移 ' + shift[k] + '）';
++            row(label, num(k, lay[k], !layOk, setLay(k)), hint,
++              auto || lay[k] == null ? null : dfm[k], lay[k] == null ? null : lay[k] + shift[k], function (v) { setLay(k)(v - shift[k]); },
++              auto ? { text: 'DFM ' + dfm[k] + '（大小由文字決定）', title: '原始碼沒有寫這個大小（例如 AutoSize 的 Label），大小由文字和字型決定，不比對' } : null,
++              shift[k] ? dfm[k] + '（在 DFM 座標；這裡是 ' + (dfm[k] - shift[k]) + '）' : '');
+           });
+         }
+         var cap = ed.caption;
+@@ -243,8 +261,12 @@
+           /* the page's font list names the DFM font (e.g. "Microsoft JhengHei","MS Sans Serif") -> same */
+           var fams = lk.fontFamilies || [];
+           var famHit = dfm.fontName && fams.some(function (f) { return f.toLowerCase() === String(dfm.fontName).toLowerCase(); });
+-          row('Font.Name', fname, fams.length > 1 ? '（清單：' + fams.join(', ') + '）' : '', dfm.fontName, famHit ? dfm.fontName : lk.fontName, setLook('fontName'));
+-          row('Font.Size', num('fontSize', lk.fontSize, !ed.inSource, setLook('fontSize')), 'px', dfm.fontSize, lk.fontSize, setLook('fontSize'));
++          var inh = lk.fontOwn === false && dfm.fontName != null;   /* the form's UI font, not given for this control */
++          row('Font.Name', fname, fams.length > 1 ? '（清單：' + fams.join(', ') + '）' : '', inh ? null : dfm.fontName, famHit ? dfm.fontName : lk.fontName, setLook('fontName'),
++            inh ? { text: 'DFM ' + dfm.fontName + '（沿用表單字型，不比對）', title: '網頁沒有給這個元件字型，用的是表單的 UI 字型（網頁產生器對 Label／按鈕的做法），不比對' } : null);
++          /* DFM Font.Height -13 -> the 11px a generated page has (|Height| - 2) */
++          row('Font.Size', num('fontSize', lk.fontSize, !ed.inSource, setLook('fontSize')), 'px', dfm.fontSize, lk.fontSize, setLook('fontSize'), null,
++            dfm.fontHeight != null ? dfm.fontSize + '（Height ' + dfm.fontHeight + '）' : '');
+           [['bold', 'Font.Bold'], ['italic', 'Font.Italic']].forEach(function (p) {
+             var cb = el('input');
+             cb.type = 'checkbox'; cb.checked = !!lk[p[0]]; cb.setAttribute('data-field', p[0]); cb.disabled = !ed.inSource;
+@@ -256,7 +278,9 @@
+             c.type = 'color'; c.value = lk[p[0]] || (p[0] === 'color' ? '#000000' : '#ffffff');
+             c.setAttribute('data-field', p[0]); c.disabled = !ed.inSource;
+             c.addEventListener('change', function () { vscode.postMessage({ type: 'setLook', prop: p[0], value: c.value }); });
+-            row(p[1], c, lk[p[0]] ? lk[p[0]] : '（未設定）', dfm[p[0]], lk[p[0]], setLook(p[0]), dfm[p[0] + 'Sys']);
++            var sys = dfm[p[0] + 'Sys'];
++            row(p[1], c, lk[p[0]] ? lk[p[0]] : '（未設定）', dfm[p[0]], lk[p[0]], setLook(p[0]),
++              sys ? { text: 'DFM ' + sys + '（系統色）', title: '系統色的實際顏色看 Windows 佈景，不比對' } : null);
+           });
+         }
+         if (diffs) body.appendChild(el('div', 'pad small diffnote', '有 ' + diffs + ' 項和 BCB6 .dfm 的值不同（標色的列）；按 ↺ 改回 DFM 的值。'));
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 4632fc6..e633675 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.14.0",
++  "version": "0.15.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -92,6 +92,12 @@
+         "category": "HT9045",
+         "icon": "$(checklist)"
+       },
++      {
++        "command": "ht9045Designer.dfmDiff",
++        "title": "與 DFM 的差異（整頁的位置、文字、外觀跟 BCB6 .dfm 比對）",
++        "category": "HT9045",
++        "icon": "$(diff)"
++      },
+       { "command": "ht9045Designer.viewCode", "title": "檢視程式碼（預設事件）", "category": "HT9045" },
+       { "command": "ht9045Designer.selectParent", "title": "選取上層", "category": "HT9045" },
+       { "command": "ht9045Designer.align.left", "title": "靠左對齊", "category": "HT9045" },
+@@ -147,7 +153,8 @@
+         { "command": "ht9045Designer.findComponent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@2" },
+         { "submenu": "ht9045Designer.alignMenu", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@1" },
+         { "command": "ht9045Designer.pageOverview", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@1" },
+-        { "command": "ht9045Designer.toggleMode", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@2" }
++        { "command": "ht9045Designer.dfmDiff", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@2" },
++        { "command": "ht9045Designer.toggleMode", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@3" }
+       ],
+       "ht9045Designer.alignMenu": [
+         { "command": "ht9045Designer.align.left", "group": "1@1" },
+@@ -189,6 +196,11 @@
+           "when": "activeCustomEditorId == 'ht9045Designer.editor'",
+           "group": "navigation@0"
+         },
++        {
++          "command": "ht9045Designer.dfmDiff",
++          "when": "activeCustomEditorId == 'ht9045Designer.editor'",
++          "group": "navigation@0"
++        },
+         {
+           "command": "ht9045Designer.toggleMode",
+           "when": "activeCustomEditorId == 'ht9045Designer.editor'",
+@@ -221,6 +233,11 @@
+           "when": "view == ht9045Designer.components && ht9045Designer.active",
+           "group": "navigation@1"
+         },
++        {
++          "command": "ht9045Designer.dfmDiff",
++          "when": "view == ht9045Designer.components && ht9045Designer.active",
++          "group": "navigation@1"
++        },
+         {
+           "command": "ht9045Designer.help",
+           "when": "view == ht9045Designer.components",
+@@ -278,6 +295,7 @@
+         { "command": "ht9045Designer.align.height", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.resetZoom", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.pageOverview", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.dfmDiff", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.findComponent", "when": "ht9045Designer.active" }
+       ]
+     },
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 46ca9a3..261827a 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -81,9 +81,10 @@ exports.run = async function () {
+     ok(!!pv, 'properties panel resolved and showing spbSave');
+     // compare with DFM: the page's look (real webview) next to the .dfm values
+     const ed0 = pv ? hub.props.data.edit : null;
+-    ok(ed0 && ed0.dfm && ed0.dfm.left === ed0.layout.left && ed0.dfm.fontSize === 16 && ed0.look && ed0.look.fontSize !== 16 &&
++    // Font.Height -16 is 14px on a generated page (|Height| - 2), and the page has 14px
++    ok(ed0 && ed0.dfm && ed0.dfm.left === ed0.layout.left && ed0.dfm.fontSize === 14 && ed0.dfm.fontHeight === -16 && ed0.look && ed0.look.fontSize === 14 &&
+       Array.isArray(ed0.look.fontFamilies) && ed0.look.fontFamilies.length >= 1,
+-      'panel data: DFM values beside the page values (Left same, Font.Size differs)',
++      'panel data: DFM values beside the page values (Left same; Font.Size 14 = |Height -16| - 2 = the page)',
+       ed0 ? 'dfm.fontSize=' + (ed0.dfm && ed0.dfm.fontSize) + ' page=' + (ed0.look && ed0.look.fontSize) + ' families=' + (ed0.look && (ed0.look.fontFamilies || []).join('|')) : '-');
+ 
+     // BCB6: open (eventJump=golden set by the launcher), Big5, read-only
+@@ -176,7 +177,9 @@ exports.run = async function () {
+       await waitFor(() => hub.active === d, 3000);
+       d.post({ type: 'setLayout', key: s3.info.key, left: 60 });
+       const moved = await waitFor(() => (d.doc.isDirty && /id="spbSave"[^>]*left:60px;/.test(d.doc.getText()) ? true : null), 5000);
+-      ok(!!moved, 'setLayout Left=60 -> the source says left:60px, the page is dirty (not saved)');
++      ok(!!moved, 'setLayout Left=60 -> the source says left:60px, the page is dirty (not saved)',
++        moved ? '' : 'dirty=' + d.doc.isDirty + ' tag=' + ((/<button[^>]*id="spbSave"[^>]*>/.exec(d.doc.getText()) || [''])[0]) +
++          ' visible=' + d.panel.visible + ' log: ' + (hub.logLines || []).slice(-4).join(' / '));
+       d.post({ type: 'setCaption', key: s3.info.key, value: 'Save It' });
+       const capd = await waitFor(() => (/>Save It<\/button>/.test(d.doc.getText()) ? true : null), 5000);
+       ok(!!capd, 'setCaption -> <button id="spbSave"> text in the source');
+@@ -210,6 +213,38 @@ exports.run = async function () {
+       if (d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
+       ok(!d.doc.isDirty && d.doc.getText() === original, 'clean again, nothing saved');
+       await waitFor(() => (d.treeData.length ? true : null), 8000);
++
++      // 與 DFM 的差異 (real probe, whole page): reset spbSave Font.Bold -> normal, the list compares again, ONE undo
++      await sleep(800);
++      d.panel.reveal(d.panel.viewColumn, false);
++      await waitFor(() => hub.active === d, 3000);
++      const df = await vscode.commands.executeCommand('ht9045Designer.dfmDiff');
++      const dfs = df && df.rows.find(r => r.id === 'spbSave' && r.prop === 'Font.Bold');
++      ok(df && df.controls >= 20 && dfs && dfs.page === 'True' && dfs.dfm === 'False' &&
++        !df.rows.some(r => r.id === 'spbSave' && /^(Left|Top|Width|Height|Caption|Font\.Size)$/.test(r.prop)),
++        'DFM difference list (real probe): spbSave Font.Bold True/False; position, caption, Font.Size (14 = |-16|-2) equal the DFM',
++        df ? df.controls + ' controls, ' + df.compared + ' compared, ' + df.rows.length + ' differ ' + JSON.stringify(df.byGroup) : 'none');
++      if (df) df.rows.filter(r => r.group === 'layout').slice(0, 20).forEach(r => out.push('        pos ' + r.id + '.' + r.prop + ' page ' + r.page + ' dfm ' + r.dfm + (r.note ? ' *' : '')));
++      // HotPlate's only size differences were its 8 AutoSize labels ("width:136px; … width:auto")
++      ok(df && df.byGroup.layout === 0, 'AutoSize labels (width:auto in the source) are not compared: HotPlate has no position/size difference',
++        df ? JSON.stringify(df.byGroup) : '-');
++      if (dfs && d.dfmDiff) {
++        d.dfmDiff.onMessage({ type: 'reset', id: 'spbSave', reset: dfs.reset });
++        const rs = await waitFor(() => (d.doc.isDirty && /id="spbSave"[^>]*font-weight:normal/.test(d.doc.getText()) ? true : null), 5000);
++        ok(!!rs, 'reset from the list -> the source says font-weight:normal on spbSave (not saved)');
++        const re = await waitFor(() => (d.dfmDiff && d.dfmDiff.data && !d.dfmDiff.data.rows.some(r => r.id === 'spbSave' && r.prop === 'Font.Bold') ? true : null), 5000);
++        ok(!!re, 'the list compares again after the edit: spbSave Font.Bold is gone');
++        d.panel.reveal(d.panel.viewColumn, false);
++        await sleep(300);
++        await vscode.commands.executeCommand('undo');
++        const un3 = await waitFor(() => (d.doc.getText() === original ? true : null), 5000);
++        ok(!!un3, 'ONE undo restores the reset');
++        if (d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
++        ok(!d.doc.isDirty && d.doc.getText() === original, 'clean again, nothing saved');
++        await waitFor(() => (d.treeData.length ? true : null), 8000);
++        const back3 = await waitFor(() => (d.dfmDiff && d.dfmDiff.data && d.dfmDiff.data.rows.some(r => r.id === 'spbSave' && r.prop === 'Font.Bold') ? true : null), 8000);
++        ok(!!back3, 'after the undo re-draw the list shows spbSave Font.Bold again');
++      }
+     }
+ 
+     // right-click menu commands (the menu itself cannot be opened from a test)
+@@ -233,6 +268,7 @@ exports.run = async function () {
+ 
+     // sweep: other kinds of page (generated / hand-written / JS-built / iframe)
+     const sweep = String(process.env.HTD_IT_SWEEP || '').split(';').filter(Boolean);
++    const sweepBad = [];
+     if (sweep.length) {
+       out.push('');
+       out.push('sweep (nodes / DFM / images / JS errors / blocked / net wall / a component resolves):');
+@@ -284,8 +320,23 @@ exports.run = async function () {
+           ovs = o ? 'overview ' + o.summary.events + ' ev, web ✔' + (o.summary.web.yes + o.summary.web.field) + ' △' + o.summary.web.weak + ' ✗' + o.summary.web.no +
+             ', C++ ✔' + o.summary.port.live + ' ✗' + o.summary.port.none + ' (' + (Date.now() - t1) + ' ms)' : 'overview failed';
+           if (dd.overview) dd.overview.panel.dispose();   // the overview tab (opened without focus)
++          // the whole page against the DFM (read-only: nothing is reset here)
++          dd.panel.reveal(dd.panel.viewColumn, false);
++          await waitFor(() => hub.active === dd, 3000);
++          const t2 = Date.now();
++          const df2 = await vscode.commands.executeCommand('ht9045Designer.dfmDiff');
++          let top2 = '';
++          if (df2) {
++            const byProp = {};
++            for (const r of df2.rows) byProp[r.prop] = (byProp[r.prop] || 0) + 1;
++            top2 = Object.keys(byProp).sort((a, b) => byProp[b] - byProp[a]).slice(0, 4).map(k => k + ' ' + byProp[k]).join(', ');
++          }
++          ovs += df2 ? ' | DFM diff ' + df2.controls + ' ctl / ' + df2.compared + ' cmp: pos ' + df2.byGroup.layout + ' text ' + df2.byGroup.text +
++            ' look ' + df2.byGroup.look + ', single ' + df2.single + ', patterns ' + df2.patterns.length + ' [' + top2 + '] (' + (Date.now() - t2) + ' ms)' : ' | DFM diff failed';
++          if (dd.dfmDiff) dd.dfmDiff.panel.dispose();
++          if (!df2) sweepBad.push(p + ': DFM diff failed');
+         }
+-        ok(!!(n2 && n2.ok), 'sweep ' + p, dd.treeData.length + ' nodes | ' + ovs + ' | ' +
++        ok(!!(n2 && n2.ok) && !sweepBad.some(s => s.indexOf(p + ':') === 0), 'sweep ' + p, dd.treeData.length + ' nodes | ' + ovs + ' | ' +
+           (pi.ir ? path.basename(pi.ir.file).replace('.dfm.ir.json', '') + '(' + (pi.dfm && pi.dfm.how) + ')' : 'no DFM') +
+           ' | img ' + (dg ? dg.imagesLoaded + '/' + dg.images : '?') +
+           ' | err ' + dd.errors.length + (dd.errors.length ? ' [' + dd.errors[0].msg.slice(0, 80) + ']' : '') +
+diff --git a/tools/vscode-htdesigner/test/panels_render.ps1 b/tools/vscode-htdesigner/test/panels_render.ps1
+index b80b5d5..7bf37ce 100644
+--- a/tools/vscode-htdesigner/test/panels_render.ps1
++++ b/tools/vscode-htdesigner/test/panels_render.ps1
+@@ -84,8 +84,12 @@ R.diffRows = Array.prototype.map.call(document.querySelectorAll('table.edit tr.d
+ R.dfmHints = document.querySelectorAll('table.edit .dfmv').length;
+ R.sysHint = txt.indexOf('DFM clWindowText（系統色）') >= 0;
+ R.diffNote = !!document.querySelector('.diffnote');
+-var fsRow = null;
+-Array.prototype.forEach.call(document.querySelectorAll('table.edit tr'), function (tr) { if (tr.firstChild.textContent === 'Font.Size') fsRow = tr; });
++var fsRow = null, fzRow = null;
++Array.prototype.forEach.call(document.querySelectorAll('table.edit tr'), function (tr) {
++  if (tr.firstChild.textContent === 'Font.Bold') fsRow = tr;
++  if (tr.firstChild.textContent === 'Font.Size') fzRow = tr;
++});
++R.sizeHint = fzRow ? (fzRow.querySelector('.dfmv') || {}).textContent : null;
+ var rb = fsRow && fsRow.querySelector('button.reset');
+ if (rb) rb.click();
+ var lastMsg = window.__out[window.__out.length - 1] || {};
+@@ -100,10 +104,10 @@ if ($r1) {
+   Check (($r1.afterDbl -join ',') -match 'openEvent') 'double-click on an event row posts openEvent' ($r1.afterDbl -join ',')
+   Check ($r1.hasEdit -and $r1.leftVal -eq '54' -and $r1.capVal -eq 'Save') 'editable section: Left = 54, Caption = Save' "left=$($r1.leftVal) caption=$($r1.capVal)"
+   Check (($r1.afterEdit -join ',') -eq 'setLayout:77,setCaption:OK') 'changing Left / Caption posts setLayout / setCaption' ($r1.afterEdit -join ',')
+-  # the page's save style is 14px bold; the DFM says Font.Height = -16, no fsBold; position/size/caption = DFM
+-  Check ((($r1.diffRows | Sort-Object) -join ',') -eq 'Font.Bold,Font.Size' -and $r1.diffNote) 'compare with DFM: exactly Font.Size / Font.Bold marked' ($r1.diffRows -join ',')
+-  Check ($r1.dfmHints -ge 8 -and $r1.sysHint) 'DFM hints on the rows, system colour shown by name only' "hints=$($r1.dfmHints) sys=$($r1.sysHint)"
+-  Check ($r1.afterReset -eq 'setLook:fontSize=16') 'reset button posts the DFM value' $r1.afterReset
++  # the page's save style is 14px bold; the DFM says Font.Height = -16 (= 14px on a generated page), no fsBold
++  Check ((($r1.diffRows | Sort-Object) -join ',') -eq 'Font.Bold' -and $r1.diffNote) 'compare with DFM: exactly Font.Bold marked (Font.Size 14 = |-16|-2)' ($r1.diffRows -join ',')
++  Check ($r1.dfmHints -ge 8 -and $r1.sysHint -and $r1.sizeHint -match '14.*-16') 'DFM hints on the rows, system colour by name, Font.Size shows the Height' "hints=$($r1.dfmHints) sys=$($r1.sysHint) size=$($r1.sizeHint)"
++  Check ($r1.afterReset -eq 'setLook:bold=false') 'reset button posts the DFM value' $r1.afterReset
+ } else { $script:bad++ }
+ $r2 = Render 'props_XST1' 'props.css' 'props.js' 'show' (Join-Path $dump 'props_XST1.json') $propsChecks
+ if ($r2) {
+@@ -121,6 +125,27 @@ if ($r3) {
+   Check ($r3.errors.Count -eq 0 -and $r3.rows -eq 19 -and $r3.chips -eq 7) 'overview renders 19 event rows and 7 summary chips' "rows=$($r3.rows) chips=$($r3.chips) errors=$($r3.errors -join ' / ')"
+   Check (($r3.after -join ',') -match 'select:') 'clicking a row posts select' ($r3.after -join ',')
+ } else { $script:bad++ }
++$ddChecks = @'
++R.rows = document.querySelectorAll('tr.diffrow').length;
++R.props = Array.prototype.map.call(document.querySelectorAll('tr.diffrow'), function (tr) { return tr.getAttribute('data-prop'); });
++var rb = document.querySelector('tr.diffrow[data-prop="Font.Bold"] button.reset');
++if (rb) rb.click();
++var last = window.__out[window.__out.length - 1] || {};
++R.afterReset = rb ? last.type + ':' + last.id + ':' + (last.reset && last.reset.prop) + '=' + (last.reset && last.reset.value) : 'no button';
++var tr0 = document.querySelector('tr.diffrow');
++if (tr0) tr0.click();
++last = window.__out[window.__out.length - 1] || {};
++R.afterClick = last.type + ':' + last.id;
++var gb = document.querySelector('button[data-group="layout"]');
++if (gb) gb.click();
++R.rowsLayoutOnly = document.querySelectorAll('tr.diffrow').length;
++'@
++$r4 = Render 'dfmdiff' 'overview.css' 'dfmdiff.js' 'data' (Join-Path $dump 'dfmdiff_HotPlate.json') $ddChecks
++if ($r4) {
++  Check ($r4.errors.Count -eq 0 -and $r4.rows -eq 1 -and ($r4.props -join ',') -eq 'Font.Bold') 'DFM difference list renders Font.Bold' "rows=$($r4.rows) props=$($r4.props -join ',') errors=$($r4.errors -join ' / ')"
++  Check ($r4.afterReset -eq 'reset:spbSave:bold=False' -and $r4.afterClick -eq 'select:spbSave') 'reset button posts reset, a row click posts select' "$($r4.afterReset) | $($r4.afterClick)"
++  Check ($r4.rowsLayoutOnly -eq 0) 'filter layout (position/size) hides the look rows' "rows=$($r4.rowsLayoutOnly)"
++} else { $script:bad++ }
+ Write-Host ''
+ if ($script:bad) { Write-Host "RESULT: $($script:bad) fail" } else { Write-Host 'RESULT: all pass' }
+ exit $script:bad
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index 18966a6..515f403 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -307,6 +307,34 @@
+             R.lookBold = !!(sl && sl.info && sl.info.look && sl.info.look.bold);
+           }
+ 
++          /* from the properties panel / the DFM difference list: setLayout by key, and by id
++             for a control that is not drawn (measured by its style then, not as 0) */
++          var ex2 = document.getElementById('sbtExit');
++          if (ex2 && /px$/.test(ex2.style.left)) {
++            window.__htdProbe.selectById('spbSave');
++            var sk3 = msgs('select').pop().info.key;
++            var nl = edits().length;
++            window.__htdProbe.message({ type: 'setLayout', key: sk3, left: 61 });
++            var el1 = edits()[nl];
++            R.setLayoutKey = el1 ? JSON.stringify(el1.style) : 'no edit';
++            R.setLayoutKeyOk = !!el1 && el1.style.left === '61px' && btn.style.left === '61px';
++            var xl = parseFloat(ex2.style.left);
++            var disp = ex2.style.display;
++            ex2.style.display = 'none';                     /* DOM only: as if in a hidden panel */
++            window.__htdProbe.message({ type: 'lookAll', seq: 7, ids: ['sbtExit', 'spbSave'] });
++            var la = msgs('lookAll').pop();
++            var lx = la && la.items.filter(function (x) { return x.id === 'sbtExit'; })[0];
++            R.lookAllHidden = lx ? JSON.stringify({ lay: lx.lay && { left: lx.lay.left, rendered: lx.lay.rendered }, visible: lx.look.visible }) : null;
++            R.lookAllOk = !!la && la.seq === 7 && la.items.length === 2 && !!lx && lx.lay && lx.lay.rendered === false && lx.lay.left === xl &&
++              lx.look.visible === false && Array.isArray(lx.look.fontFamilies);
++            var nh = edits().length;
++            window.__htdProbe.message({ type: 'setLayout', id: 'sbtExit', left: xl + 5 });
++            var eh = edits()[nh];
++            R.setLayoutHidden = eh ? eh.id + JSON.stringify(eh.style) : 'no edit';
++            R.setLayoutHiddenOk = !!eh && eh.id === 'sbtExit' && eh.style.left === (xl + 5) + 'px';
++            ex2.style.display = disp;
++          }
++
+           /* zoom 200%: a 20px drag on screen is 10px in the page */
+           window.__htdProbe.message({ type: 'setZoom', zoom: 2 });
+           window.__htdProbe.selectById('spbSave');
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index bf50115..c427995 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -74,6 +74,11 @@ foreach ($p in $Pages) {
+     }
+     if ($R.PSObject.Properties.Name -contains 'hiddenTarget') { $must['hidden tab revealed'] = [bool]$R.hiddenTabRevealed }
+     if ($R.PSObject.Properties.Name -contains 'wrapperEdit') { $must['input moves its wrapper'] = [bool]$R.wrapperOk }
++    if ($R.PSObject.Properties.Name -contains 'setLayoutKey') {
++      $must['setLayout from the panel (by key)'] = [bool]$R.setLayoutKeyOk
++      $must['lookAll: a hidden control measured by its style'] = [bool]$R.lookAllOk
++      $must['setLayout by id on a hidden control'] = [bool]$R.setLayoutHiddenOk
++    }
+     if ($R.PSObject.Properties.Name -contains 'anchMoveDom') {
+       $must['left+right anchored: move keeps the size'] = [bool]$R.anchMoveOk
+       $must['left+right anchored: resize moves only the right edge'] = [bool]$R.anchResizeOk
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index e50a9cf..5ba330c 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -405,12 +405,74 @@ async function main() {
+     'Font.Color': { type: 'SCALAR', value: 255 }, 'Font.Style': { type: 'SET', value: ['fsBold'] },
+     'Font.Height': { type: 'SCALAR', value: -13 }, Visible: { type: 'SCALAR', value: 'False' } } });
+   ok(syn.caption === 'Save & Exit' && syn.background === null && syn.backgroundSys === 'clBtnFace' && syn.color === '#ff0000' &&
+-    syn.colorSys === null && syn.bold === true && syn.italic === false && syn.fontSize === 13 && syn.visible === false &&
++    syn.colorSys === null && syn.bold === true && syn.italic === false && syn.fontSize === 11 && syn.fontHeight === -13 && syn.visible === false &&
+     syn.enabled === null && syn.left === null && syn.fontName === null,
+-    'dfmEditValues: & accelerator dropped, system colour by name only, only what the DFM says', JSON.stringify(syn));
++    'dfmEditValues: & accelerator dropped, system colour by name only, Font.Height -13 -> 11px (the generator), only what the DFM says', JSON.stringify(syn));
+   ok(fmt.sysColorName(-2147483633) === 'clBtnFace' && fmt.sysColorName('$8000000F') === 'clBtnFace' &&
+     fmt.sysColorName('clRed') === null && fmt.sysColorName(255) === null, 'sysColorName: system vs fixed colours');
+   ok(fmt.dfmEditValues(null) === null, 'dfmEditValues(null)');
++
++  // --- the whole page against the DFM (what the probe's lookAll would answer)
++  const dd = require('../lib/dfmdiff');
++  const look0 = { visible: true, enabled: true, fontSize: 14, fontName: 'Arial', fontFamilies: ['Arial'], bold: true, italic: false, color: '#222222', background: '#ece9d8' };
++  const pd = dd.diffPage([
++    { id: 'spbSave', lay: { left: 54, top: 8, width: 227, height: 40, rendered: true, root: false }, cap: { kind: 'text', value: 'Save' }, look: look0 },
++    { id: 'spbSave_not_in_dfm', lay: { left: 1, top: 1, width: 1, height: 1 }, cap: null, look: look0 },
++    { id: d.root.name, lay: { left: 0, top: 0, width: 10, height: 10, root: true }, cap: null, look: look0 },
++  ], d);
++  // the page's 14px IS what the generator makes of Font.Height -16; bold is the save style
++  ok(pd.controls === 1 && pd.rows.map(r => r.prop).join(',') === 'Font.Bold',
++    'diffPage(spbSave): only Font.Bold (Font.Size 14 = |-16|-2); the form and unknown ids skipped', JSON.stringify(pd.rows.map(r => r.prop + ' ' + r.page + '/' + r.dfm)));
++  const fbd = pd.rows[0];
++  ok(fbd && fbd.page === 'True' && fbd.dfm === 'False' && fbd.group === 'look' && fbd.reset.type === 'setLook' && fbd.reset.prop === 'bold' && fbd.reset.value === false,
++    'diffPage row: page True, DFM False, reset = setLook bold false', JSON.stringify(fbd));
++  const pdSize = dd.diffPage([{ id: 'spbSave', lay: null, cap: null, look: Object.assign({}, look0, { fontSize: 16, bold: false }) }], d);
++  ok(pdSize.rows.length === 1 && pdSize.rows[0].prop === 'Font.Size' && pdSize.rows[0].dfm === '14（Height -16）' && pdSize.rows[0].reset.value === 14,
++    'Font.Size 16 on the page vs DFM Height -16 -> shown as "14（Height -16）", reset 14', JSON.stringify(pdSize.rows));
++  const pdHidden = dd.diffPage([{ id: 'spbSave', lay: { left: 60, top: 8, width: 227, height: 40, rendered: false }, cap: { kind: 'text', value: 'Save' },
++    look: Object.assign({}, look0, { fontSize: 14, bold: false }) }], d);
++  ok(pdHidden.rows.length === 1 && pdHidden.rows[0].prop === 'Left' && pdHidden.rows[0].reset.left === 54 && /沒有顯示/.test(pdHidden.rows[0].note) && pdHidden.byGroup.layout === 1,
++    'diffPage: a moved, hidden control -> Left 60/54, reset setLayout left 54, measured by style', JSON.stringify(pdHidden.rows));
++  ok(dd.same(14, '14') && dd.same('#AABBCC', '#aabbcc') && !dd.same(true, false) && dd.same(' Save ', 'Save'), 'dfmdiff.same');
++  // an AutoSize label: the source gives no width/height -> its size is the text's, not compared
++  const raw0 = { left: '54px', top: '8px', width: '', height: '', right: '', bottom: '' };
++  const pdAuto = dd.diffPage([{ id: 'spbSave', lay: { left: 54, top: 8, width: 126, height: 22, rendered: true, raw: raw0 }, cap: { kind: 'text', value: 'Save' },
++    look: Object.assign({}, look0, { fontSize: 14, bold: false }) }], d);
++  ok(pdAuto.rows.length === 0 && !dd.sizeInSource(raw0, 'width') && dd.sizeInSource(Object.assign({}, raw0, { right: '3px' }), 'width') &&
++    dd.sizeInSource(Object.assign({}, raw0, { height: '40px' }), 'height') && !dd.sizeInSource(Object.assign({}, raw0, { width: 'auto' }), 'width'),
++    'a size the source does not give (AutoSize label) is not compared; left+right anchoring counts as given', JSON.stringify(pdAuto.rows));
++  // a wrapper (span.lled) moves the origin by (10, 37): compared in the DFM's coordinates, reset in the element's own
++  const pdShift = dd.diffPage([{ id: 'spbSave', lay: { left: 44, top: -29, width: 227, height: 40, rendered: true, ox: 10, oy: 37 }, cap: null,
++    look: Object.assign({}, look0, { fontSize: 14, bold: false }) }], d);
++  const pdShift2 = dd.diffPage([{ id: 'spbSave', lay: { left: 50, top: -29, width: 227, height: 40, rendered: true, ox: 10, oy: 37 }, cap: null,
++    look: Object.assign({}, look0, { fontSize: 14, bold: false }) }], d);
++  ok(pdShift.rows.length === 0 && pdShift2.rows.length === 1 && pdShift2.rows[0].page === '60' && pdShift2.rows[0].reset.left === 44 && /位移 10/.test(pdShift2.rows[0].note),
++    'origin shift: 44+10 = DFM 54 is the same; 50+10 = 60 differs, reset writes 54-10 = 44', JSON.stringify(pdShift2.rows));
++  // the form's UI font, not given for this control: Font.Name not compared
++  const pdFont = dd.diffPage([{ id: 'spbSave', lay: null, cap: null, look: Object.assign({}, look0, { fontSize: 14, bold: false, fontName: 'Microsoft JhengHei', fontFamilies: ['Microsoft JhengHei'], fontOwn: false }) },
++  ], d);
++  const pdFont2 = dd.diffPage([{ id: 'spbSave', lay: null, cap: null, look: Object.assign({}, look0, { fontSize: 14, bold: false, fontName: 'Segoe UI', fontFamilies: ['Segoe UI'], fontOwn: true }) },
++  ], d);
++  ok(pdFont.rows.length === 0 && pdFont2.rows.length === 1 && pdFont2.rows[0].prop === 'Font.Name',
++    'Font.Name: inherited (the form UI font) not compared; its own font compared', JSON.stringify(pdFont2.rows));
++  // the same difference on >= 5 controls of one class = one pattern line
++  const many = [];
++  for (const n of d.byName.values()) {
++    if (n.class !== 'TLabel' || !n.properties['Font.Height']) continue;
++    const dv0 = fmt.dfmEditValues(n);
++    many.push({ id: n.name, lay: null, cap: null, look: Object.assign({}, look0, { fontSize: dv0.fontSize, bold: !dv0.bold, italic: !!dv0.italic, color: dv0.color || '#222222', fontOwn: false }) });
++  }
++  const pdPat = dd.diffPage(many, d);
++  ok(many.length >= 5 && pdPat.patterns.length >= 1 && pdPat.patterns[0].cls === 'TLabel' && pdPat.patterns[0].prop === 'Font.Bold' && pdPat.single < pdPat.rows.length,
++    'the same Font.Bold difference on every TLabel of HotPlate -> one pattern', many.length + ' labels, patterns ' + JSON.stringify(pdPat.patterns.map(p => p.cls + ' ' + p.prop + ' ' + p.page + '/' + p.dfm + ' x' + p.count)));
++
++  // the font of a TPanel lives on its caption span, a TGroupBox's on its legend
++  const hpHtml = fs.readFileSync(path.join(WEB, 'page', 'Setup.HotPlate.html'), 'utf8');
++  const pc1 = he.captionHostTag(hpHtml, he.startTagOf(hpHtml, 'Panel1'), 'pnlCap');
++  const lg1 = he.captionHostTag(hpHtml, he.startTagOf(hpHtml, 'GroupBox1'), 'legend');
++  ok(pc1 && /^<span class="pnlCap"/.test(pc1.text) && /font-size:14px/.test(pc1.text) && lg1 && /^<legend\b/.test(lg1.text) &&
++    /font-size:16px/.test(he.setStyle(pc1.text, { 'font-size': '16px' })),
++    'captionHostTag: Panel1 -> its <span class="pnlCap">, GroupBox1 -> its <legend>; a font edit lands there', pc1 ? pc1.text.slice(0, 70) : '-');
+ }
+ 
+ main().catch(e => { fail++; log('CRASH ' + (e && e.stack || e)); }).then(() => {
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 5146e36..d03f1d9 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -284,6 +284,39 @@ async function main() {
+     ok(pagePosted.some(m => m.type === 'selectId' && m.id === 'XST1' && m.origin === 'overview'), 'clicking a row selects the control in the designer');
+   }
+ 
++  // 與 DFM 的差異: the probe answers lookAll with the page's real look of spbSave (from the probe run)
++  const realLook = full.edit && full.edit.look;
++  const realLay = full.edit && full.edit.layout;
++  panel.webview.postMessage = m => {
++    if (m.type === 'lookAll') {
++      setTimeout(() => pageRecv({ __htd: 1, type: 'lookAll', seq: m.seq, askedIds: m.ids.length, items: [
++        { id: 'spbSave', lay: realLay, cap: full.edit.caption, look: realLook },
++      ] }), 10);
++    }
++    return origPM(m);
++  };
++  const dfr = await fake._cmds['ht9045Designer.dfmDiff']();
++  const dpanel = (fake._panels || []).find(p => p.viewType === 'ht9045Designer.dfmDiff');
++  // Font.Size 14 is what the generator makes of Font.Height -16; the save style's bold is not in the DFM
++  ok(dfr && dpanel && dfr.controls === 1 && dfr.rows.map(r => r.prop).join(',') === 'Font.Bold' && dfr.rows.every(r => r.inSource),
++    'DFM difference list (spbSave): only Font.Bold, panel opened, writable', dfr ? JSON.stringify(dfr.rows.map(r => r.prop + ' ' + r.page + '/' + r.dfm)) : 'none');
++  if (dfr) fs.writeFileSync(path.join(dumpDir, 'dfmdiff_HotPlate.json'), JSON.stringify(dfr), 'utf8');
++  // from the right-click menu / title bar VS Code passes the webview context / the Uri first
++  const dfm2 = await fake._cmds['ht9045Designer.dfmDiff']({ webview: 'ht9045Designer.editor', webviewSection: 'htdDesign' });
++  const dfm3 = await fake._cmds['ht9045Designer.dfmDiff'](fake.Uri.file(PAGE));
++  ok(dfm2 && dfm3 && dfm2.rows.length === dfr.rows.length && dfm3.rows.length === dfr.rows.length,
++    'DFM difference list from a menu (context / Uri argument) works the same');
++  if (dpanel) {
++    pagePosted.length = 0;
++    dpanel.recv({ type: 'reset', id: 'spbSave', reset: dfr.rows.find(r => r.prop === 'Font.Bold').reset });
++    ok(pagePosted.some(m => m.type === 'setLook' && m.id === 'spbSave' && m.prop === 'bold' && m.value === false), 'reset posts setLook bold=false for spbSave (by id)',
++      JSON.stringify(pagePosted.filter(m => m.type !== 'diag')));
++    pagePosted.length = 0;
++    dpanel.recv({ type: 'reset', id: 'spbSave', reset: { type: 'evil', value: 1 } });
++    ok(!pagePosted.some(m => m.type === 'evil'), 'the panel can only ask for setLayout / setCaption / setLook');
++  }
++  panel.webview.postMessage = origPM;
++
+   // live data tag: main.html palMainStatus <- machine.state <- WebBridgeTags.cpp
+   const MAINP = path.join(PORT, '..', 'web', 'page', 'main.html');
+   const mtext = fs.readFileSync(MAINP, 'utf8');
+-- 
+2.55.0.windows.5
+

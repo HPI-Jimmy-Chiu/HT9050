@@ -1,0 +1,532 @@
+From df17e877a507c88b0218c7acf4605b590ce3814d Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 30 Sep 2026 11:26:09 +0800
+Subject: [PATCH] HTDESIGNER-64: design mode shows everything, Visible decides
+ at run time (0.64.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun (the Above9050 screenshot): "我需要向WPF一樣 所有東西都顯示在上面 / 並且屬性可以
+設定要不要隱藏 / 當軟體啟動時才判定隱藏還是顯示 / 編輯的時候我需要全部都顯示不要隱藏".
+Like the BCB6 / WinForms form designer:
+- DESIGN mode draws every component and every tab whatever hides it when the
+  page runs: Visible=False (display:none in its style, 71 on HW.IoSetView),
+  a machine's "-only" rule (the golden Stack tabs on a 9050, Above9050
+  elsewhere), an option rule (rule-hide), the page's JS. How: the page's own
+  <style> rules that hide only components are switched off while designing
+  (not menus / popups), each component still hidden gets data-htd-show="<its
+  own display>" (read with the display:none taken out, the style attribute
+  put back as it was) -- the source is never touched. A tab sheet's body
+  still follows its tab; what the user hid with the eye stays hidden. The
+  page's later hiding is caught by a MutationObserver (inside the form only).
+- OPERATE mode = as the page runs (rules back, marks gone).
+- Visible in the properties panel = the element's own display:none (not
+  "is it drawn now"): off writes display:none, the component keeps showing
+  while designing, the panel says 執行時隱藏；設計時照樣顯示 (or 執行時由頁面決定
+  for a machine / option rule). The component tree marks 執行時隱藏 (tree row
+  field 8).
+
+Tests (all 4 layers pass: lib 142, smoke 145, real VS Code 136): probe (the
+real HW.IoSetView: design = all 5 Stack 1 tabs + grpLoaderFunc marked, its
+style untouched; operate = only Above9050 on the 9050 / 4 tabs without, the
+group hidden; Visible off = display:none written and still shown, on again =
+taken out), smoke (the tree's 執行時隱藏), real VS Code (grpLoaderFunc marked
+in the tree).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHANGELOG.md          |  10 ++
+ tools/vscode-htdesigner/README.md             |   9 +
+ tools/vscode-htdesigner/extension.js          |   7 +-
+ tools/vscode-htdesigner/media/probe.js        | 160 +++++++++++++++++-
+ tools/vscode-htdesigner/media/props.js        |   4 +-
+ tools/vscode-htdesigner/package.json          |   2 +-
+ .../test/integration/index.js                 |   7 +
+ tools/vscode-htdesigner/test/live_driver.js   |  63 +++++--
+ tools/vscode-htdesigner/test/probe_test.ps1   |  13 +-
+ .../vscode-htdesigner/test/smoke_extension.js |  14 ++
+ 10 files changed, 266 insertions(+), 23 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/CHANGELOG.md b/tools/vscode-htdesigner/CHANGELOG.md
+index 13ebf6d..4bf60c7 100644
+--- a/tools/vscode-htdesigner/CHANGELOG.md
++++ b/tools/vscode-htdesigner/CHANGELOG.md
+@@ -2,6 +2,16 @@
+ 
+ 每一版多了什麼。怎麼操作看 [操作一覽](CHEATSHEET.md)，詳細說明看 README。
+ 
++## 0.64.0
++- **設計時全部顯示**（跟 BCB6／WinForms 的表單設計畫面一樣）：設計模式下**所有元件、所有頁籤都畫出來**，
++  不管執行時會不會藏——Visible=False 的、只給某個機種的（例如 HT9050 上的 Above Coveyor／Under Coveyor…，
++  或 HT9045 上的 Above9050）、選配規則藏起來的、頁面程式藏起來的，全部照樣顯示、可以選、可以改。
++  分頁的內容還是跟著點到的頁籤切換；你自己用眼睛圖示「設計時隱藏」的照樣隱藏。
++- **要不要隱藏是屬性**：屬性面板的 **Visible** 勾掉＝寫進 HTML（`display:none`），**執行時才隱藏**，設計畫面上照樣看得到；
++  旁邊會寫「執行時隱藏；設計時照樣顯示」。由頁面依機種／選配決定的，寫「執行時由頁面決定」。
++  元件樹在這些元件後面標「（執行時隱藏）」。跟 DFM 比對、「改回 DFM」都包含 Visible。
++- 想看**執行時實際的樣子**：狀態列「設計模式」按一下切到「操作模式」，就照頁面自己的規則藏起來（機種照「設計檢視的機種」）。
++
+ ## 0.63.0
+ - **「頁面」上面多了搜尋框**（像 Visual Studio 方案總管上面那個）：打字就篩選下面的頁面清單——頁面名稱、元件名稱、型別、畫面上的文字都找，
+   符合的頁面會展開、底下列出符合的元件，點一下就開那一頁並選取它。Enter 開第一個、Esc 清除、↓ 到清單；在「頁面」清單按 `Ctrl+F` 也會跳到搜尋框。
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index d137029..add0f4b 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -277,6 +277,15 @@ GroupBox 的 `<legend>` 和 Panel 的標題永遠留在第一個；已經在最
+ 改的是 HTML 原始碼（整個元件那一段），設計畫面照新原始碼重畫；每個動作都是一個復原步驟（Ctrl+Z）。
+ 貼上的新元件沒有接任何網頁程式（跟 WPF 複製按鈕一樣，事件要自己接）。在「元件」樹上按 Del 也能刪。
+ 
++**設計時全部顯示、執行時才決定**（跟 BCB6／WinForms 的表單設計畫面一樣）：設計模式下**所有元件、所有頁籤都畫出來**，
++不管執行時會不會藏 —— Visible=False 的（HTML 裡 `display:none`）、只給某個機種的（例如 HT9050 上藏起來的 Above Coveyor／Under Coveyor…，
++或 HT9045 上的 Above9050）、選配規則或頁面程式藏起來的，都照樣顯示、可以選、可以改。分頁內容還是跟著點到的頁籤切換。
++**要不要隱藏是屬性**：屬性面板的 **Visible** 勾掉＝寫進 HTML（`display:none`），**執行時才隱藏**，設計畫面上照樣看得到，
++旁邊寫「執行時隱藏；設計時照樣顯示」；由頁面依機種／選配決定的寫「執行時由頁面決定」。元件樹在這些元件後面標「（執行時隱藏）」。
++想看執行時實際的樣子：切到「操作模式」（狀態列「設計模式」按一下），就照頁面自己的規則藏（機種照「設計檢視的機種」）。
++做法：設計時把頁面自己 `<style>` 裡藏元件的規則暫停、對還藏著的元件加一個設計用的標記讓它顯示；**HTML 原始碼一個字都不改**。
++（藏選單、彈出視窗的規則不動；別的網域的樣式表讀不到，由它藏的元件照樣顯示，但用 `display:block`。）
++
+ **設計時隱藏（眼睛）**：跟 WPF 文件大綱的眼睛一樣。「元件」樹每一列右邊的眼睛＝在設計畫面**暫時隱藏**那個元件（連同裡面的東西），
+ 再按一次（閉眼圖示）顯示回來；標題列的眼睛＝全部顯示。畫面上按右鍵也有「設計時隱藏／顯示這個元件」。
+ 隱藏的元件點不到，**滑鼠會點到它下面那一層** —— 像 Alert.Note 十幾個面板疊在同一個位置，把上面的藏起來就能選、能改下面的。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index e3feb73..1cfb070 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -2984,7 +2984,7 @@ class ComponentTree {
+     const rows = d ? d.treeData : [];
+     for (const r of rows) {
+       const n = {
+-        key: r[0], pk: r[1], id: r[2], tag: r[3], cls: r[4], cap: r[5], hidden: !!r[6], isForm: !!r[7],
++        key: r[0], pk: r[1], id: r[2], tag: r[3], cls: r[4], cap: r[5], hidden: !!r[6], isForm: !!r[7], runHidden: !!r[8],
+         children: [], parent: null, depth: 0, tid: '',
+       };
+       this.byKey.set(n.key, n);
+@@ -3024,10 +3024,13 @@ class ComponentTree {
+     if (!n.isForm) desc.push(n.cls || '<' + n.tag + '>');
+     if (n.cap) desc.push('「' + n.cap + '」');
+     if (dh) desc.push('（設計時隱藏）');
++    else if (n.runHidden) desc.push('（執行時隱藏）');
+     else if (n.hidden) desc.push('（隱藏）');
+     item.description = desc.join(' ');
+     item.tooltip = label + (n.cls ? ' : ' + n.cls : '') + '\n<' + n.tag + '>' + (n.cap ? '\n' + n.cap : '') +
+-      (dh ? '\n在設計檢視暫時隱藏（按右邊的眼睛顯示回來；原始碼沒改）' : n.hidden ? '\n目前不可見（在未顯示的分頁裡，或被隱藏）' : '') +
++      (dh ? '\n在設計檢視暫時隱藏（按右邊的眼睛顯示回來；原始碼沒改）'
++        : n.runHidden ? '\n執行時隱藏（Visible=False，或頁面依機種／選配決定）；設計時照樣顯示，像 BCB6 的設計畫面'
++        : n.hidden ? '\n目前不可見（在未顯示的分頁裡，或被隱藏）' : '') +
+       (lk ? '\n鎖定：在設計畫面不能移動、改大小、刪除（裡面的元件也一樣）；按右邊的鎖頭解除' : '');
+     item.iconPath = new vscode.ThemeIcon(dh ? 'eye-closed' : iconFor(n), dh || n.hidden ? new vscode.ThemeColor('disabledForeground') : undefined);
+     item.command = { command: 'ht9045Designer.selectKey', title: '選取', arguments: [n.key] };
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index 1f1205f..6d63bd4 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -1035,8 +1035,12 @@
+     var form = /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(el.tagName);
+     var par = el.parentElement;
+     return {
+-      /* its own display (a class or the page's JS may hide it too); a hidden tab around it does not count */
+-      visible: cs.display !== 'none',
++      /* BCB6 Visible: its own style says display:none (what Visible=False becomes). While designing it shows
++         anyway; when the page runs it is hidden. A hidden tab around it does not count. */
++      visible: el.style.display !== 'none',
++      /* hidden when the page runs, shown now only because we are designing: 'self' = its Visible=False,
++         'rule' = a page rule or the page's JS (a machine's "-only" class, an option rule) */
++      runHidden: runHidden(el) ? (el.style.display === 'none' ? 'self' : 'rule') : null,
+       enabled: form ? !el.disabled : null,
+       fontOn: fh.target,
+       fontSize: Math.round(parseFloat(fs.fontSize) || 0),
+@@ -1886,7 +1890,8 @@
+   function buildTree() {
+     var out = [];
+     var fr = formRoot();
+-    if (fr) out.push([keyOf(fr), 0, '@form', fr.tagName.toLowerCase(), '', '', hidden(fr) ? 1 : 0, 1]);
++    /* [key, parent key, id, tag, class, caption, hidden now, is the form, hidden when the page runs (shown only while designing)] */
++    if (fr) out.push([keyOf(fr), 0, '@form', fr.tagName.toLowerCase(), '', '', hidden(fr) ? 1 : 0, 1, 0]);
+     var all = document.body ? document.body.querySelectorAll('[id]') : [];
+     for (var i = 0; i < all.length; i++) {
+       var el = all[i];
+@@ -1897,7 +1902,7 @@
+         if (p.id || p === fr) { pk = keyOf(p); break; }
+         p = p.parentElement;
+       }
+-      out.push([keyOf(el), pk, el.id, tn.toLowerCase(), vclOf(el).cls, caption(el), hidden(el) ? 1 : 0, 0]);
++      out.push([keyOf(el), pk, el.id, tn.toLowerCase(), vclOf(el).cls, caption(el), hidden(el) ? 1 : 0, 0, runHidden(el) ? 1 : 0]);
+     }
+     return out;
+   }
+@@ -1905,7 +1910,7 @@
+   function sendTree(force) {
+     var nodes;
+     try { nodes = buildTree(); } catch (e) { return; }
+-    var sig = nodes.length + '|' + nodes.map(function (n) { return n[2] + (n[6] ? '-' : '+'); }).join(',');
++    var sig = nodes.length + '|' + nodes.map(function (n) { return n[2] + (n[6] ? '-' : '+') + (n[8] ? 'r' : ''); }).join(',');
+     if (!force && sig === lastSig) return;
+     lastSig = sig;
+     post({ type: 'tree', nodes: nodes });
+@@ -1922,6 +1927,145 @@
+     return id ? document.getElementById(id) : null;
+   }
+   origAdd.call(window, 'message', function (e) { onHostMessage(e.data); });
++  /* 10b. 設計時全部顯示 (the BCB6 / WinForms form designer; EastSun: "編輯的時候我需要全部都顯示不要隱藏，
++          當軟體啟動時才判定隱藏還是顯示"). In DESIGN mode every component and every tab shows, whatever
++          hides it when the page runs: its own Visible=False (display:none in its style), a page rule (a
++          machine's "-only" class, an option rule), the page's JS. A tab sheet's body still follows its tab,
++          and what the user hid in the designer (the eye) stays hidden. 操作模式 shows the page as it runs.
++          How: the page's own display:none rules (the ones it can reach: <style> in the page) are switched
++          off while designing, and each component still hidden gets data-htd-show="<its display>" -- the
++          page's source is never touched (the style attribute is read, never kept changed). */
++  var SHOWALL = { on: false, rules: [], vals: {}, css: null, obs: null, t: 0, busy: false };
++  function showAllTargets() {
++    var fr = formRoot();
++    var out = [];
++    if (!fr) return out;
++    var all = fr.querySelectorAll('[id], .pcTabs > .tab');
++    for (var i = 0; i < all.length; i++) {
++      var e = all[i];
++      if (/^(SCRIPT|STYLE|TEMPLATE|LINK|META)$/.test(e.tagName)) continue;
++      if (e.classList.contains('pcPane')) continue;   /* a tab sheet's body: its tab decides */
++      out.push(e);
++    }
++    return out;
++  }
++  function showAllRules(on) {
++    if (!on) {
++      SHOWALL.rules.forEach(function (r) { try { r.rule.style.setProperty(r.prop, r.value, r.prio); } catch (e) { /* ignore */ } });
++      SHOWALL.rules = [];
++      return;
++    }
++    var fr = formRoot();
++    var inForm = function (x) { return !!fr && fr.contains(x) && !(host && (x === host || host.contains(x))); };
++    var walk = function (list) {
++      for (var i = 0; i < list.length; i++) {
++        var r = list[i];
++        if (r.cssRules && !r.selectorText) { try { walk(r.cssRules); } catch (e) { /* ignore */ } continue; }
++        if (!r.style || !r.selectorText) continue;
++        ['display', 'visibility'].forEach(function (prop) {
++          var v = r.style.getPropertyValue(prop);
++          if (!(prop === 'display' ? v === 'none' : v === 'hidden')) return;
++          var hits;
++          try { hits = document.querySelectorAll(r.selectorText); } catch (e) { return; }
++          /* only a rule for components: one that also hides a popup / a menu is left alone */
++          if (!hits.length) return;
++          for (var k = 0; k < hits.length; k++) if (!inForm(hits[k])) return;
++          SHOWALL.rules.push({ rule: r, prop: prop, value: v, prio: r.style.getPropertyPriority(prop) });
++          r.style.removeProperty(prop);
++        });
++      }
++    };
++    var sheets = document.styleSheets;
++    for (var s = 0; s < sheets.length; s++) {
++      var sh0 = sheets[s];
++      if (sh0.ownerNode === SHOWALL.css || (hideStyle && sh0.ownerNode === hideStyle)) continue;
++      var rl;
++      try { rl = sh0.cssRules; } catch (e) { continue; }   /* another origin's sheet: cannot be read */
++      if (rl) walk(rl);
++    }
++  }
++  function showAllCss(val) {
++    if (!SHOWALL.css) {
++      SHOWALL.css = document.createElement('style');
++      SHOWALL.css.id = '__htd_showall';
++      (document.head || document.documentElement).appendChild(SHOWALL.css);
++    }
++    if (val && !SHOWALL.vals[val]) {
++      SHOWALL.vals[val] = 1;
++      SHOWALL.css.textContent += ':root [data-htd-show="' + val + '"]{display:' + val + '!important;}';
++    }
++    if (!SHOWALL.css.textContent || SHOWALL.css.textContent.indexOf('data-htd-vis') < 0)
++      SHOWALL.css.textContent += ':root [data-htd-vis]:not([data-htd-hide]):not([data-htd-hide] *){visibility:visible!important;}';
++  }
++  function showAllPass() {
++    if (SHOWALL.busy) return;
++    SHOWALL.busy = true;
++    try {
++      var marked = document.querySelectorAll('[data-htd-show],[data-htd-vis]');
++      for (var i = 0; i < marked.length; i++) { marked[i].removeAttribute('data-htd-show'); marked[i].removeAttribute('data-htd-vis'); }
++      showAllCss(null);
++      showAllRules(true);
++      var t = showAllTargets(), hid = [];
++      for (var j = 0; j < t.length; j++) {
++        var cs = getComputedStyle(t[j]);
++        if (cs.display === 'none' || cs.visibility === 'hidden') hid.push({ el: t[j], d: cs.display === 'none', v: cs.visibility === 'hidden' });
++      }
++      for (var k = 0; k < hid.length; k++) {
++        var h = hid[k], el = h.el;
++        if (el.closest('[data-htd-hide]')) continue;   /* hidden in the designer by the user */
++        if (h.d) {
++          /* its own display: what it has without the display:none (read, and the style put back as it was) */
++          var nat = 'block';
++          if (el.style.display === 'none') {
++            var old = el.getAttribute('style');
++            el.style.removeProperty('display');
++            var nd = getComputedStyle(el).display;
++            if (old == null) el.removeAttribute('style'); else el.setAttribute('style', old);
++            if (nd && nd !== 'none') nat = nd;
++          }
++          showAllCss(nat);
++          el.setAttribute('data-htd-show', nat);
++        }
++        if (h.v && el.parentElement && getComputedStyle(el.parentElement).visibility !== 'hidden') el.setAttribute('data-htd-vis', '1');
++      }
++    } catch (e) { /* ignore */ }
++    SHOWALL.busy = false;
++    if (SHOWALL.obs) SHOWALL.obs.takeRecords();   /* (our own style reads-and-restores are no change) */
++  }
++  function setShowAll(on) {
++    SHOWALL.on = !!on;
++    clearTimeout(SHOWALL.t);
++    if (SHOWALL.on) {
++      showAllPass();
++      if (!SHOWALL.obs) {
++        try {
++          /* the page's JS may hide something later (a gate, an option rule): shown again */
++          SHOWALL.obs = new MutationObserver(function (list) {
++            if (!SHOWALL.on || SHOWALL.busy) return;
++            var fr = formRoot();
++            for (var i = 0; i < list.length; i++) {
++              var r = list[i];
++              if (r.target === host || (host && host.contains(r.target))) continue;
++              /* (a status line outside the form ticking every 200 ms is no reason; a <style> the page adds is) */
++              if (fr && !fr.contains(r.target) && r.target !== document.documentElement && r.target !== document.head && !(r.target.closest && r.target.closest('head'))) continue;
++              clearTimeout(SHOWALL.t);
++              SHOWALL.t = setTimeout(function () { if (SHOWALL.on) { showAllPass(); scheduleTree(); scheduleDraw(); } }, 120);
++              return;
++            }
++          });
++          SHOWALL.obs.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
++        } catch (e) { SHOWALL.obs = null; }
++      }
++    } else {
++      var marked = document.querySelectorAll('[data-htd-show],[data-htd-vis]');
++      for (var i = 0; i < marked.length; i++) { marked[i].removeAttribute('data-htd-show'); marked[i].removeAttribute('data-htd-vis'); }
++      showAllRules(false);
++    }
++    tabCache = null;
++  }
++  /* hidden when the page runs: shown only because we are designing */
++  function runHidden(el) { return !!(el && el.hasAttribute && (el.hasAttribute('data-htd-show') || el.hasAttribute('data-htd-vis'))); }
++
+   function onHostMessage(m) {
+     if (!m || m.__htd !== 1) return;
+     switch (m.type) {
+@@ -1930,6 +2074,7 @@
+         if (m.events && typeof m.events === 'object') EVS = m.events;
+         if (typeof m.zoom === 'number' && m.zoom !== 1) setZoom(m.zoom);
+         if (m.mode) { mode = m.mode; drawBadge(); }
++        if (SHOWALL.on !== (mode === 'design')) { setShowAll(mode === 'design'); scheduleTree(); }
+         if (Array.isArray(m.designHidden) && m.designHidden.length) setDesignHidden(m.designHidden);
+         if (Array.isArray(m.designLocked)) { LOCK = {}; m.designLocked.forEach(function (id) { LOCK[String(id)] = 1; }); }
+         if (m.grid && typeof m.grid === 'object') GRID = { on: !!m.grid.on, size: Math.max(2, Math.min(64, Math.round(+m.grid.size || 8))) };
+@@ -1942,6 +2087,8 @@
+         break;
+       case 'setMode':
+         mode = m.mode === 'operate' ? 'operate' : 'design';
++        setShowAll(mode === 'design');
++        scheduleTree();
+         PAN.space = false; PAN.drag = null; panShield(false);
+         PLACE = null; placeShield(false);
+         hoverEl = null; drawBadge(); scheduleDraw();
+@@ -2273,6 +2420,7 @@
+     try {
+       document.documentElement.setAttribute('data-vscode-context', JSON.stringify({ webviewSection: 'htdDesign', preventDefaultContextMenuItems: true }));
+     } catch (e) { /* ignore */ }
++    if (mode === 'design') setShowAll(true);
+     post({ type: 'ready', url: location.href, title: document.title, mode: mode });
+     setTimeout(function () { sendTree(true); }, 60);
+     try {
+@@ -2288,7 +2436,7 @@
+   }
+   if (document.readyState === 'loading') origAdd.call(document, 'DOMContentLoaded', start);
+   else start();
+-  origAdd.call(window, 'load', function () { sendTree(false); scheduleDraw(); });
++  origAdd.call(window, 'load', function () { if (SHOWALL.on) showAllPass(); sendTree(false); scheduleDraw(); });
+ 
+   window.__htdProbe = {
+     version: 1,
+diff --git a/tools/vscode-htdesigner/media/props.js b/tools/vscode-htdesigner/media/props.js
+index e8dc6a5..92d8b35 100644
+--- a/tools/vscode-htdesigner/media/props.js
++++ b/tools/vscode-htdesigner/media/props.js
+@@ -352,7 +352,9 @@
+           var vis = el('input');
+           vis.type = 'checkbox'; vis.checked = !!lk.visible; vis.setAttribute('data-field', 'visible'); vis.disabled = !ed.inSource;
+           vis.addEventListener('change', function () { vscode.postMessage({ type: 'setLook', prop: 'visible', value: vis.checked }); });
+-          row('Visible', vis, '', dfm.visible, lk.visible, setLook('visible'));
++          /* like the BCB6 designer: it shows while designing either way; this is what happens when it runs */
++          row('Visible', vis, !lk.visible ? '（執行時隱藏；設計時照樣顯示）' :
++            lk.runHidden === 'rule' ? '（執行時由頁面決定，例如機種專用、選配；設計時照樣顯示）' : '', dfm.visible, lk.visible, setLook('visible'));
+           if (lk.enabled !== null && lk.enabled !== undefined) {
+             var en = el('input');
+             en.type = 'checkbox'; en.checked = !!lk.enabled; en.setAttribute('data-field', 'enabled'); en.disabled = !ed.inSource;
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index a70c0c4..09fdb3c 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HTML 視覺設計工具",
+   "description": "BCB6 表單移植成 web HMI（網頁＋C++）的專案通用：像 WPF 設計工具一樣看、改頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.63.0",
++  "version": "0.64.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 3449a5b..2d5edc6 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -972,6 +972,13 @@ exports.run = async function () {
+       await sleep(200);
+     }
+     const snLive = hub.active && hub.active.live;
++    // 設計時全部顯示: grpLoaderFunc is Visible=False (display:none in its style) -- the tree says 執行時隱藏
++    let snFunc = null;
++    for (let i = 0; i < 50; i++) { snFunc = rowOf('grpLoaderFunc'); if (snFunc && snFunc[8] === 1) break; await sleep(200); }
++    const snFuncNode = snFunc && Array.from(hub.tree.byKey.values()).find(n => n.id === 'grpLoaderFunc');
++    const snFuncDesc = snFuncNode ? hub.tree.getTreeItem(snFuncNode).description : '';
++    ok(!!(snFunc && snFunc[8] === 1 && /執行時隱藏/.test(snFuncDesc)),
++      'design mode shows everything: grpLoaderFunc (Visible=False) is marked hidden-when-running, the tree says 執行時隱藏', snFuncDesc);
+     const snNone = await vscode.commands.executeCommand('ht9045Designer.pickMachine', '-');
+     let snRowNone = null;
+     for (let i = 0; i < 100; i++) {
+diff --git a/tools/vscode-htdesigner/test/live_driver.js b/tools/vscode-htdesigner/test/live_driver.js
+index 89beb9b..ddf898b 100644
+--- a/tools/vscode-htdesigner/test/live_driver.js
++++ b/tools/vscode-htdesigner/test/live_driver.js
+@@ -1,25 +1,66 @@
+-// AI(W906-HTDESIGNER) 20260930: 機種與機台設定 in a headless Edge -- after the page's own scripts ran,
+-// write what it decided (HW.IoSetView: html.m-ht9050, data-machine, the Above9050 tab opened) into
+-// <pre id="HTDTEST"> for test\probe_test.ps1.
++// AI(W906-HTDESIGNER) 20260930: HW.IoSetView in a headless Edge, for test\probe_test.ps1 --
++//   機種與機台設定: after the page's own scripts ran, what it decided (html.m-ht9050, data-machine, the
++//   Above9050 tab opened);
++//   設計時全部顯示: in DESIGN mode every tab and every component shows (grpLoaderFunc is Visible=False,
++//   the golden tabs are hidden on a 9050); in OPERATE mode the page is as it runs.
++// Written into <pre id="HTDTEST"> as { design: {...}, operate: {...} }.
+ (function () {
+   var errors = [];
+   window.addEventListener('error', function (e) { errors.push(String(e.message || e)); });
+-  setTimeout(function () {
++  function shown(el) { return !!el && el.getBoundingClientRect().width > 0; }
++  function snap() {
+     var h = document.documentElement;
+     var tab = document.querySelector('#pgcStack1 > .pcTabs > .tab.ht9050-only');
+-    var res = {
++    var tabs = document.querySelectorAll('#pgcStack1 > .pcTabs > .tab');
++    var func = document.getElementById('grpLoaderFunc');
++    return {
+       mHt9050: h.classList.contains('m-ht9050'),
+       dataMachine: h.getAttribute('data-machine') || '',
+       aboveTab: !!tab,
+       aboveActive: !!(tab && tab.classList.contains('act')),
+-      aboveShown: !!(tab && tab.getBoundingClientRect().width > 0),
++      aboveShown: shown(tab),
++      tabsAll: tabs.length,
++      tabsShown: Array.prototype.filter.call(tabs, shown).length,
++      funcDisplay: func ? getComputedStyle(func).display : 'missing',
++      funcOwnNone: !!func && func.style.display === 'none',
++      funcMarked: !!func && func.hasAttribute('data-htd-show'),
+       answered: (window.__htdLiveAnswered || []).slice(),
+       moved: (window.__htdLiveMoved || []).map(function (u) { return u.replace(/[?#].*$/, '').replace(/^.*\//, ''); }),
+-      errors: errors
++      errors: errors.slice()
+     };
+-    var pre = document.createElement('pre');
+-    pre.id = 'HTDTEST';
+-    pre.textContent = 'HTDTEST' + JSON.stringify(res) + 'HTDEND';
+-    document.body.appendChild(pre);
++  }
++  function lastEdit() {
++    var o = (window.__htdOut || []).filter(function (m) { return m.type === 'edit'; });
++    return o.length ? o[o.length - 1] : null;
++  }
++  function send(m) { m.__htd = 1; window.postMessage(m, '*'); }
++  setTimeout(function () {
++    var res = { design: snap() };
++    // the Visible property while designing: off = display:none written, the component still shows
++    var g = document.getElementById('grpLoader2');
++    send({ type: 'setLook', id: 'grpLoader2', prop: 'visible', value: false });
++    setTimeout(function () {
++      var e1 = lastEdit();
++      res.visOff = {
++        edit: e1 ? e1.id + ' ' + JSON.stringify(e1.style) : null,
++        own: g ? g.style.display : 'missing', display: g ? getComputedStyle(g).display : '', marked: !!g && g.hasAttribute('data-htd-show')
++      };
++      send({ type: 'setLook', id: 'grpLoader2', prop: 'visible', value: true });
++      setTimeout(function () {
++        var e2 = lastEdit();
++        res.visOn = {
++          edit: e2 ? e2.id + ' ' + JSON.stringify(e2.style) : null,
++          own: g ? g.style.display : 'missing', display: g ? getComputedStyle(g).display : '', marked: !!g && g.hasAttribute('data-htd-show')
++        };
++        send({ type: 'setMode', mode: 'operate' });
++        setTimeout(function () {
++          res.operate = snap();
++          var pre = document.createElement('pre');
++          pre.id = 'HTDTEST';
++          pre.textContent = 'HTDTEST' + JSON.stringify(res) + 'HTDEND';
++          document.body.appendChild(pre);
++        }, 400);
++      }, 400);
++    }, 400);
+   }, 2500);
+ })();
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index 62a9c0d..6617f55 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -173,14 +173,23 @@ if (Test-Path $ioPage) {
+     }
+   }
+   Remove-Item $liveJson -Force -ErrorAction SilentlyContinue
+-  $L = $lr['live']; $N = $lr['none']
++  $L = $null; $N = $null; $LO = $null; $NO = $null
++  if ($lr['live']) { $L = $lr['live'].design; $LO = $lr['live'].operate }
++  if ($lr['none']) { $N = $lr['none'].design; $NO = $lr['none'].operate }
+   $lmust = [ordered]@{
+     'machine HT9050 given: the page shows it as an HT9050 (html.m-ht9050, data-machine)' = [bool]($L -and $L.mHt9050 -and $L.dataMachine -eq 'HT9050')
+     'the Above9050 tab is shown and opened, like on the machine' = [bool]($L -and $L.aboveActive -and $L.aboveShown)
+     '/api/system/gerneral and config answered from the copies' = [bool]($L -and (@($L.answered) -contains 'gerneral') -and (@($L.answered) -contains 'config'))
+     "the page's JSON/View-rules.json read from the web root's JSON" = [bool]($L -and (@($L.moved) -contains 'View-rules.json'))
+-    'without them: the "no server" face (no m-ht9050, Above9050 hidden)' = [bool]($N -and -not $N.mHt9050 -and -not $N.aboveShown -and @($N.answered).Count -eq 0)
++    'design mode shows everything: all 5 Stack 1 tabs (the golden ones too, on a 9050), grpLoaderFunc (Visible=False) marked, its own style untouched' = [bool]($L -and $L.tabsAll -eq 5 -and $L.tabsShown -eq 5 -and $L.funcDisplay -ne 'none' -and $L.funcMarked -and $L.funcOwnNone)
++    'operate mode = as it runs on the 9050: only Above9050, grpLoaderFunc hidden' = [bool]($LO -and $LO.tabsShown -eq 1 -and $LO.aboveShown -and $LO.funcDisplay -eq 'none' -and -not $LO.funcMarked)
++    'without them, design mode: every tab shows too (Above9050 as well)' = [bool]($N -and -not $N.mHt9050 -and $N.tabsShown -eq 5 -and $N.aboveShown -and @($N.answered).Count -eq 0)
++    'without them, operate mode: the "no server" face (Above9050 hidden)' = [bool]($NO -and -not $NO.aboveShown -and $NO.tabsShown -eq 4 -and $NO.funcDisplay -eq 'none')
+   }
++  $VF = $null; $VN = $null
++  if ($lr['live']) { $VF = $lr['live'].visOff; $VN = $lr['live'].visOn }
++  $lmust['Visible off while designing: display:none written, the component still shows (marked)'] = [bool]($VF -and $VF.edit -eq 'grpLoader2 {"display":"none"}' -and $VF.own -eq 'none' -and $VF.display -ne 'none' -and $VF.marked)
++  $lmust['Visible on again: display:none taken out, no mark'] = [bool]($VN -and $VN.edit -eq 'grpLoader2 {"display":null}' -and $VN.own -eq '' -and -not $VN.marked)
+   foreach ($k in $lmust.Keys) {
+     if ($lmust[$k]) { Write-Host "PASS  $k" } else { Write-Host "FAIL  $k"; $bad++ }
+   }
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 507fd84..a80caf1 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -758,6 +758,20 @@ async function main() {
+   ok(!!(sbOpen && /Setup\.Speed\.html/.test(sbOpen.args[1]) && sbAll.length > 3 && sbAll.some(g => g.name === 'Main') && !api.hub.pageView.message && sbCtx && sbCtx.args[2] === 'false'),
+     'Enter opens the first page found; clearing shows every page again', sbOpen && sbOpen.args[1]);
+ 
++  // 設計時全部顯示: a component hidden when the page runs (tree row [8]) says so in the tree
++  const rhNodes = R.treeNodes.map(r => r.slice());
++  const rhRow = rhNodes.find(r => r[2] === 'spbSave');
++  if (rhRow) rhRow[8] = 1;
++  pageRecv({ __htd: 1, type: 'tree', nodes: rhNodes });
++  await new Promise(r => setTimeout(r, 50));
++  const rhNode = Array.from(fake._tree.byKey.values()).find(n => n.id === 'spbSave');
++  const rhItem = rhNode && fake._tree.getTreeItem(rhNode);
++  pageRecv({ __htd: 1, type: 'tree', nodes: R.treeNodes });
++  await new Promise(r => setTimeout(r, 50));
++  const rhBack = Array.from(fake._tree.byKey.values()).find(n => n.id === 'spbSave');
++  ok(!!(rhItem && /執行時隱藏/.test(rhItem.description) && /設計時照樣顯示/.test(rhItem.tooltip) && rhBack && !/執行時隱藏/.test(fake._tree.getTreeItem(rhBack).description)),
++    'a component hidden when the page runs: the tree says 執行時隱藏 (it shows while designing)', rhItem && rhItem.description);
++
+   // 機種: which machine the pages are shown for -- the page gets it (and read-only copies of the settings)
+   const lcHintsSm = require('../lib/liveconfig').launchHints([api.hub.active.r.portRoot]);
+   const mcQp0 = fake._state.quickPick;
+-- 
+2.55.0.windows.5
+

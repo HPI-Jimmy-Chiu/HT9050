@@ -1,0 +1,238 @@
+From d0934e4f84fc16e80714110dd9ed2d14227e04f3 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 30 Sep 2026 11:58:43 +0800
+Subject: [PATCH] HTDESIGNER-66: a .csv tab from before the update -> the table
+ is one click away (0.66.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun (IO_Table.csv shown as text): "依照圖片 表格沒有出現阿 我已經有更新過". 0.65.0 was
+running (the exthost log: activated 11:49:58, the table icon in the title bar),
+but VS Code keeps the kind of editor a tab had: Mot_Table.csv / IO_Table.csv
+were open as text before the reload and came back as text.
+- a .csv shown as text: 「⊞ 用表格開啟」 in the status bar and one question per
+  file (not for one opened as text from the table on purpose)
+- 用表格開啟 opens the table and closes the text tab of the same file (the same
+  document: nothing unsaved is lost)
+- the 頁面 list reveals the current page after the list has drawn the new items
+  (the exthost log had "No tree item with id '1/q3:page:...'" and "Data tree
+  node not found: 1/grp:web 根目錄")
+
+Tests (all 4 layers pass: lib 147, smoke 150, real VS Code 138): smoke (the
+button, one question, the table opened), real VS Code (a copy of
+Mot_Table.csv opened with vscode.open = the table; a text tab of it: the
+button shows, it opens the table, the text tab is gone).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHANGELOG.md          |  6 ++
+ tools/vscode-htdesigner/extension.js          | 67 +++++++++++++++++--
+ tools/vscode-htdesigner/package.json          |  2 +-
+ .../test/integration/index.js                 | 27 ++++++++
+ .../vscode-htdesigner/test/smoke_extension.js | 16 +++++
+ 5 files changed, 110 insertions(+), 8 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/CHANGELOG.md b/tools/vscode-htdesigner/CHANGELOG.md
+index 51c9342..18289cd 100644
+--- a/tools/vscode-htdesigner/CHANGELOG.md
++++ b/tools/vscode-htdesigner/CHANGELOG.md
+@@ -2,6 +2,12 @@
+ 
+ 每一版多了什麼。怎麼操作看 [操作一覽](CHEATSHEET.md)，詳細說明看 README。
+ 
++## 0.66.0
++- **更新前就用文字開著的 CSV 分頁**（VS Code 會照舊用文字）：左下角狀態列出現「⊞ 用表格開啟」，每個檔也會問一次「要用表格看嗎？」；
++  按下去就換成表格，同一個檔的文字分頁會自己關掉（是同一份內容，沒存的也不會不見）。
++  新打開的 `.csv`（檔案總管點一下）本來就是表格。
++- 修正：「頁面」清單在篩選或剛載入時跳到目前頁面，VS Code 記錄裡會出現「No tree item with id」的錯誤。
++
+ ## 0.65.0
+ - **CSV 表格**：打開 `.csv` 就是像 Excel 的表格（例如 `Mot_Table.csv`、`IO_Table.csv`），可以直接編輯。
+   點格子、打字或 F2 編輯，Enter／Tab／方向鍵移動，Esc 取消，Delete 清除，Shift＋方向鍵選一塊，
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 5bac9db..430f6fb 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -136,17 +136,24 @@ class Hub {
+     if (vscode.window.onDidChangeWindowState) ctx.subscriptions.push(vscode.window.onDidChangeWindowState(e => { if (e.focused) this.checkUpdate(); }));
+     const updFirst = setTimeout(() => this.checkUpdate(), 3000);
+     if (updFirst && updFirst.unref) updFirst.unref();
++    // CSV 表格: a .csv open as text -- a tab from before the update comes back as text (VS Code keeps the kind
++    // of editor a tab had): the table one click away, and asked once per file
++    // (EastSun 20260930: "依照圖片 表格沒有出現阿 我已經有更新過")
++    this.csvItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 43);
++    this.csvItem.command = 'ht9045Designer.openCsvTable';
++    this.csvItem.text = '$(table) 用表格開啟';
++    this.csvAsked = new Set();
++    if (vscode.window.onDidChangeActiveTextEditor) ctx.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(ed => this.csvTextEditor(ed)));
++    const csvFirst = setTimeout(() => this.csvTextEditor(vscode.window.activeTextEditor), 1500);
++    if (csvFirst && csvFirst.unref) csvFirst.unref();
+     const reg = (id, fn) => vscode.commands.registerCommand(id, fn);
+     ctx.subscriptions.push(
+-      this.out, this.treeView, this.pageView, this.toolboxView, this.status, this.pageStatus, this.updateItem,
++      this.out, this.treeView, this.pageView, this.toolboxView, this.status, this.pageStatus, this.updateItem, this.csvItem,
+       reg('ht9045Designer.reloadWindow', () => this.cmdReloadWindow()),
+       vscode.window.registerWebviewViewProvider('ht9045Designer.pageSearch', this.pageSearch),
+       // CSV 表格: a .csv as a table, edited like Excel (only the changed cells' text is replaced)
+       vscode.window.registerCustomEditorProvider(CSV_VIEW, this.csv = new CsvTableEditor(this), { webviewOptions: { retainContextWhenHidden: true } }),
+-      reg('ht9045Designer.openCsvTable', uri => {
+-        const u = uri instanceof vscode.Uri ? uri : (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document.uri);
+-        if (u) return vscode.commands.executeCommand('vscode.openWith', u, CSV_VIEW);
+-      }),
++      reg('ht9045Designer.openCsvTable', uri => this.cmdOpenCsvTable(uri)),
+       // 搜尋頁面: filter the 頁面 list (the box, or a command with the words); '' = every page again
+       reg('ht9045Designer.filterPages', q => this.filterPages(typeof q === 'string' ? q : '')),
+       reg('ht9045Designer.clearPageFilter', () => this.filterPages('')),
+@@ -566,6 +573,44 @@ class Hub {
+     return newer;
+   }
+ 
++  /**
++   * CSV 表格 for `uri` (default: the active text editor's): the table opens, and the text tab of the same
++   * file closes (it is the same document: nothing unsaved is lost, the table shows it).
++   */
++  async cmdOpenCsvTable(uri) {
++    const u = uri instanceof vscode.Uri ? uri : (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document.uri);
++    if (!u) return false;
++    await vscode.commands.executeCommand('vscode.openWith', u, CSV_VIEW);
++    try {
++      const tg = vscode.window.tabGroups;
++      if (tg && vscode.TabInputText) {
++        const texts = tg.all.reduce((a, g) => a.concat(g.tabs), []).filter(t => t.input instanceof vscode.TabInputText && web.samePath(t.input.uri.fsPath, u.fsPath));
++        if (texts.length) await tg.close(texts, true);
++      }
++    } catch (e) { /* the text tab stays: harmless */ }
++    if (this.csvItem) this.csvItem.hide();
++    this.csvShown = false;
++    return true;
++  }
++
++  /** The active editor is a .csv shown as text: the status bar offers the table; asked once per file. */
++  csvTextEditor(ed) {
++    const doc = ed && ed.document;
++    const isCsv = !!(doc && doc.uri && doc.uri.scheme === 'file' && /\.csv$/i.test(doc.uri.fsPath || ''));
++    this.csvShown = isCsv;
++    if (!isCsv) { this.csvItem.hide(); return false; }
++    const name = path.basename(doc.uri.fsPath);
++    this.csvItem.tooltip = name + ' 現在是文字畫面。按這裡用「CSV 表格」開（像 Excel 一樣編輯，只改你改的格子）';
++    this.csvItem.show();
++    const k = doc.uri.fsPath.toLowerCase();
++    if (!this.csvAsked.has(k)) {
++      this.csvAsked.add(k);
++      vscode.window.showInformationMessage(name + ' 現在是用文字開的（更新前就開著的分頁會照舊用文字）。要用表格看嗎？', '用表格開', '不用')
++        .then(c => { if (c === '用表格開') this.cmdOpenCsvTable(doc.uri); }, () => {});
++    }
++    return true;
++  }
++
+   /** 搜尋頁面 from a command: filter the 頁面 list by `q` ('' = every page) and put the words in the box. */
+   filterPages(q) {
+     const s = this.pages.setFilter(q);
+@@ -3258,8 +3303,14 @@ class PageTree {
+     const tv = this.hub.pageView;
+     if (!act || !tv || !tv.visible) return;
+     this.build();
+-    const n = (this.query ? this.foundByFile : this.byFile).get(act.file.toLowerCase());
+-    if (n) tv.reveal(n, { select: true, focus: false, expand: true }).then(() => {}, () => {});
++    // after the list has drawn what it was just told (a new filter, the first load): revealing an item it
++    // does not have yet is an error in VS Code's log ("No tree item with id ...")
++    clearTimeout(this._revealT);
++    this._revealT = setTimeout(() => {
++      const map = this.query ? this.foundByFile : this.byFile;
++      const n = map && act.file && map.get(act.file.toLowerCase());
++      if (n && tv.visible) tv.reveal(n, { select: true, focus: false, expand: true }).then(() => {}, () => {});
++    }, 250);
+   }
+ }
+ 
+@@ -3680,6 +3731,8 @@ class CsvTableEditor {
+       case 'deleteRows':
+         return this.apply(t, csvtable.deleteRows(t.p, Math.max(0, m.r | 0), m.count), '刪除列');
+       case 'openText':
++        // (asked for on purpose: no "use the table?" question for it)
++        if (this.hub.csvAsked) this.hub.csvAsked.add(t.doc.uri.fsPath.toLowerCase());
+         return vscode.commands.executeCommand('vscode.openWith', t.doc.uri, 'default');
+     }
+     return null;
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index fffff0d..d5d7734 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HTML 視覺設計工具",
+   "description": "BCB6 表單移植成 web HMI（網頁＋C++）的專案通用：像 WPF 設計工具一樣看、改頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.65.0",
++  "version": "0.66.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index d13d89f..b611de1 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -1023,6 +1023,33 @@ exports.run = async function () {
+         'CSV 表格 (a copy of Mot_Table.csv): one cell = only its bytes, not saved; VS Code\'s undo takes it back exactly',
+         JSON.stringify({ opened: !!mtT, cell: mtCell && mtCell.v, dirty: mtDirty, undone: mtUndone === mt0, dirtyAfter: mtDirtyAfter }));
+       await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
++      // opened the ordinary way (vscode.open, like a click in the explorer): the table, not text
++      await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(mtCopy));
++      let otTab = null;
++      for (let i = 0; i < 30; i++) {
++        const at = vscode.window.tabGroups.activeTabGroup.activeTab;
++        if (at && at.input instanceof vscode.TabInputCustom && at.input.viewType === 'ht9045Designer.csv') { otTab = at; break; }
++        await sleep(200);
++      }
++      await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
++      // a text tab of it (as one from before the update): the status bar button; it opens the table, the text tab closes
++      const otDoc = await vscode.workspace.openTextDocument(mtCopy);
++      await vscode.window.showTextDocument(otDoc);
++      for (let i = 0; i < 15 && !hub.csvShown; i++) await sleep(200);
++      const otShown = !!hub.csvShown;
++      await hub.cmdOpenCsvTable();
++      let otText = -1, otTable = false;
++      for (let i = 0; i < 20; i++) {
++        const tabs = vscode.window.tabGroups.all.reduce((a, g) => a.concat(g.tabs), []);
++        otText = tabs.filter(t => t.input instanceof vscode.TabInputText && t.input.uri.fsPath.toLowerCase() === mtCopy.toLowerCase()).length;
++        otTable = tabs.some(t => t.input instanceof vscode.TabInputCustom && t.input.viewType === 'ht9045Designer.csv' && t.input.uri.fsPath.toLowerCase() === mtCopy.toLowerCase());
++        if (otText === 0 && otTable) break;
++        await sleep(200);
++      }
++      ok(!!(otTab && otShown && otText === 0 && otTable && fs.readFileSync(mtCopy, 'utf8') === mt0),
++        'a .csv opened the ordinary way is the table; a text tab of it: the status bar button, which opens the table and closes the text tab',
++        JSON.stringify({ openedAsTable: !!otTab, button: otShown, textTabs: otText, table: otTable }));
++      await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+       try { fs.rmSync(mtDir, { recursive: true, force: true }); } catch (e) { /* ignore */ }
+     }
+     out.push('');
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 8f5f339..41fa042 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -846,6 +846,22 @@ async function main() {
+   ok(!!(cbBadData && cbBadData.readOnly && /Big5/.test(cbBadData.why) && !cbBadEdit && cbBadWarn && cbBad.doc.getText() === 'A,��\r\n'),
+     'CSV 表格: a Big5 file read as UTF-8 is read only (it says how to reopen it), an edit is refused', cbBadData && cbBadData.why.slice(0, 40));
+ 
++  // a .csv shown as text (a tab from before the update): the status bar offers the table, asked once per file
++  const ctCalls = fake._calls.length;
++  const ctUri = fake.Uri.file('C:\\x\\IO_Table.csv');
++  const ctOn = api.hub.csvTextEditor({ document: { uri: ctUri } });
++  const ctItemShown = api.hub.csvItem.shown;
++  api.hub.csvTextEditor({ document: { uri: ctUri } });
++  const ctAsk = fake._calls.slice(ctCalls).filter(c => c.name === 'info' && /IO_Table\.csv.*表格/.test(c.args[0])).length;
++  const ctOff = api.hub.csvTextEditor(undefined);
++  const ctHtml = api.hub.csvTextEditor({ document: { uri: fake.Uri.file('C:\\x\\a.html') } });
++  const ctOpen0 = fake._calls.length;
++  await fake._cmds['ht9045Designer.openCsvTable'](ctUri);
++  const ctOpenExec = fake._calls.slice(ctOpen0).find(c => c.name === 'exec' && c.args[0] === 'vscode.openWith');
++  ok(!!(ctOn && ctItemShown && api.hub.csvItem.command === 'ht9045Designer.openCsvTable' && ctAsk === 1 && ctOff === false && ctHtml === false && !api.hub.csvItem.shown &&
++    ctOpenExec && ctOpenExec.args[2] === 'ht9045Designer.csv'),
++    'a .csv open as text: the status bar button (用表格開啟) and one question per file; the button opens the table', ctOpenExec && ctOpenExec.args.join(' '));
++
+   // 機種: which machine the pages are shown for -- the page gets it (and read-only copies of the settings)
+   const lcHintsSm = require('../lib/liveconfig').launchHints([api.hub.active.r.portRoot]);
+   const mcQp0 = fake._state.quickPick;
+-- 
+2.55.0.windows.5
+

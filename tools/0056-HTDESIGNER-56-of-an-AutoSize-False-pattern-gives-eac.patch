@@ -1,0 +1,98 @@
+From 9b9d176ff297cf5d70e7c5bec88c52bb4e277832 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 30 Sep 2026 04:01:55 +0800
+Subject: [PATCH] =?UTF-8?q?HTDESIGNER-56:=20=E5=85=A8=E9=83=A8=E6=94=B9?=
+ =?UTF-8?q?=E5=9B=9E=20of=20an=20AutoSize=3DFalse=20pattern=20gives=20each?=
+ =?UTF-8?q?=20label=20its=20own=20.dfm=20size=20(0.56.0)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+R48 made a single reset of an AutoSize=False label bring the .dfm's own
+size, but the pattern line's 全部改回 (DfmDiffPanel.resetPattern) built its
+items from type / prop / value only, so a whole pattern of such labels got
+the sizes their text makes instead. It now carries each row's size, the same
+way lib/dfmdiff.resetItemsOf does.
+
+Test: smoke (a pattern of two AutoSize=False labels -> one editMany with 136 x
+24 and 39 x 16, each its own).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHANGELOG.md            |  3 +++
+ tools/vscode-htdesigner/extension.js            |  3 ++-
+ tools/vscode-htdesigner/package.json            |  2 +-
+ tools/vscode-htdesigner/test/smoke_extension.js | 16 ++++++++++++++++
+ 4 files changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/CHANGELOG.md b/tools/vscode-htdesigner/CHANGELOG.md
+index 4690cd0..6630636 100644
+--- a/tools/vscode-htdesigner/CHANGELOG.md
++++ b/tools/vscode-htdesigner/CHANGELOG.md
+@@ -2,6 +2,9 @@
+ 
+ 每一版多了什麼。怎麼操作看 [操作一覽](CHEATSHEET.md)，詳細說明看 README。
+ 
++## 0.56.0
++- 修正：差異清單「同一種差異 → 全部改回」遇到 AutoSize=False 的 Label，現在每個都用它自己在 DFM 的寬高（以前會用文字的大小）。
++
+ ## 0.55.0
+ - 屬性面板多了 Label 的 **Alignment**（靠左／置中／靠右），會跟 DFM 比對。
+ - 「改回 DFM」遇到 BCB6 是 **AutoSize=False** 的 Label，會直接用 DFM 的寬高（不是文字的大小），加上 Alignment，一次就跟 BCB6 一樣。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index c085f77..290d349 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -3129,7 +3129,8 @@ class DfmDiffPanel {
+         '（寫進 HTML 原始碼，一個 Ctrl+Z 全部復原；要存檔才寫入）', { modal: true }, '改回');
+       if (pick !== '改回') return null;
+     }
+-    const items = rows.map(r => ({ id: r.id, type: r.reset.type, prop: r.reset.prop, value: r.reset.value }));
++    // (AutoSize = False: each label's own .dfm size comes along -- lib/dfmdiff.resetItemsOf does the same)
++    const items = rows.map(r => Object.assign({ id: r.id, type: r.reset.type, prop: r.reset.prop, value: r.reset.value }, r.reset.size ? { size: r.reset.size } : {}));
+     this.d.panel.reveal(this.d.panel.viewColumn, true);
+     this.d.post({ type: 'editMany', items });
+     vscode.window.setStatusBarMessage('$(discard) ' + rows.length + ' 個 ' + pat.cls + ' 的 ' + pat.prop + ' 改回 DFM 的值（Ctrl+Z 復原）', 6000);
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 1b69772..3f91a8b 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.55.0",
++  "version": "0.56.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index f3122f2..ecdcab0 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -418,6 +418,22 @@ async function main() {
+     'pattern "every TLabel bold": 全部改回 sends all ' + (ptPat ? ptPat.count : 0) + ' to the probe in one message (bold = DFM\'s false)');
+   const ptLay = ptDiff && ptDiff.patterns.find(p => p.group === 'layout');
+   ok(!ptLay || (await dpanel.recv({ type: 'resetPattern', key: ptLay.key, confirmed: true })) === null, 'a position pattern is not reset in bulk');
++  // an AutoSize=False pattern: 全部改回 gives every label its own .dfm size (not the one its text makes)
++  const asPanel = api.hub.active && api.hub.active.dfmDiff;
++  if (asPanel) {
++    const asKey = 'TLabel|AutoSize|True|False';
++    const asData0 = asPanel.data;
++    asPanel.data = { patterns: [{ key: asKey, cls: 'TLabel', group: 'look', prop: 'AutoSize', page: 'True', dfm: 'False', count: 2 }], rows: [
++      { id: 'Label1', cls: 'TLabel', group: 'look', prop: 'AutoSize', page: 'True', dfm: 'False', pattern: asKey, inSource: true, reset: { type: 'setLook', prop: 'autoSize', value: false, size: { width: 136, height: 24 } } },
++      { id: 'Label2', cls: 'TLabel', group: 'look', prop: 'AutoSize', page: 'True', dfm: 'False', pattern: asKey, inSource: true, reset: { type: 'setLook', prop: 'autoSize', value: false, size: { width: 39, height: 16 } } },
++    ] };
++    pagePosted.length = 0;
++    await dpanel.recv({ type: 'resetPattern', key: asKey, confirmed: true });
++    const asSent = pagePosted.filter(m => m.type === 'editMany').pop();
++    ok(!!(asSent && asSent.items.length === 2 && asSent.items[0].size && asSent.items[0].size.width === 136 && asSent.items[1].size.width === 39),
++      'an AutoSize=False pattern: 全部改回 sends each label with its own .dfm size', JSON.stringify(asSent && asSent.items));
++    asPanel.data = asData0;
++  } else ok(false, 'the DFM list is open for the AutoSize pattern check');
+ 
+   // 頁面 list: every page by group (Main first), HotPlate marked as the current page, a click opens it
+   const pv = fake._views && fake._views['ht9045Designer.pages'];
+-- 
+2.55.0.windows.5
+

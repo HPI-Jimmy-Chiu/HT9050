@@ -1,0 +1,360 @@
+From 309c88f3c04a798d938bbc98145c3bd386999487 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 22:35:20 +0800
+Subject: [PATCH] HTDESIGNER-37: with several selected, the properties panel
+ changes every one of them (0.37.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+WPF's property grid sets a value on every selected control. Now so does ours:
+with a multi-selection, a change in 外觀與版面 (font, bold, colours, caption,
+Left / Width ...) goes to all of them as ONE source edit = one undo step.
+The panel shows the primary's values and says so (note + section title
+"套用到全部 N 個"). Position / size is all or nothing: one locked or not
+movable = none changes, the status bar says why. A caption skips the ones
+that have none (and says how many). The HTML source rows stay primary-only.
+
+- probe: layoutPlan (the old setLayout checks, now reusable) + editAllSel;
+  setLayout / setCaption / setLook with all: true and the key of the
+  current primary use it, anything else keeps the old single path
+- host: forwardEdit passes all when the panel's data has a multi-selection
+- tests: probe (bold + width on 2 = one batch each, a locked one = none,
+  without all = primary only, the multi-selection kept), smoke (all: true
+  only with 2 selected), panels_render (note + title), real VS Code
+  (italic on sbtExit + spbSave in the source, ONE undo, no save)
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHEATSHEET.md         |  1 +
+ tools/vscode-htdesigner/README.md             |  4 ++
+ tools/vscode-htdesigner/extension.js          | 15 +++--
+ tools/vscode-htdesigner/media/probe.js        | 67 +++++++++++++++----
+ tools/vscode-htdesigner/media/props.js        |  4 +-
+ tools/vscode-htdesigner/package.json          |  2 +-
+ .../test/integration/index.js                 | 17 +++++
+ .../vscode-htdesigner/test/panels_render.ps1  |  3 +
+ tools/vscode-htdesigner/test/probe_driver.js  | 29 ++++++++
+ tools/vscode-htdesigner/test/probe_test.ps1   |  1 +
+ .../vscode-htdesigner/test/smoke_extension.js | 16 +++++
+ 11 files changed, 138 insertions(+), 21 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/CHEATSHEET.md b/tools/vscode-htdesigner/CHEATSHEET.md
+index d703834..5933b24 100644
+--- a/tools/vscode-htdesigner/CHEATSHEET.md
++++ b/tools/vscode-htdesigner/CHEATSHEET.md
+@@ -31,6 +31,7 @@
+ | 輸入數字 | 屬性面板的 Left／Top／Width／Height |
+ | 對齊／同大小 | 多選後右鍵「對齊與間距」（以最後點的為準） |
+ | 等距排列 | 選 3 個以上 → 右鍵「對齊與間距 → 水平等距／垂直等距」 |
++| 好幾個一起改字型／顏色／寬度 | 多選後在屬性面板「外觀與版面」改（全部一起改，一個 Ctrl+Z 復原） |
+ | 放到容器正中間 | 右鍵「對齊與間距 → 在容器中水平置中／垂直置中」（多選＝整組一起） |
+ | 吸到格線 | 標題列的 `#`（格線大小：設定 `ht9045Designer.gridSize`） |
+ 
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 27b27d0..59609de 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -83,6 +83,10 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ 
+ 這兩種**沒有基準元件**，主要選取也會動。選取裡有鎖定的元件，或位置不是寫在自己 style 裡的 px，就整個不做並在狀態列說原因（不會只動一半）。
+ 
++**多選時改屬性**（WPF 屬性視窗的行為）：選了好幾個時，屬性面板「外觀與版面」改的值（字型、粗體、顏色、文字、Left／Width…）
++會**套用到全部選取的元件**，一次＝一個復原步驟；面板上顯示的是主要選取的值。位置／大小是「全部或不做」：
++其中有一個鎖定或不能改，就一個都不改並說原因。文字（Caption）只改有文字的那些。HTML 原始碼那一格只改主要選取。
++
+ 滑鼠移到元件上，標籤會顯示 `名稱 : 型別 · 事件`，例如 `spbSave : TSpeedButton · OnClick   227×40`。
+ 
+ **HTML 的 style／屬性也能直接改**：屬性面板「HTML」區塊列的是**原始碼裡寫的** style 與屬性（不是瀏覽器展開後的一大串），
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index b40fdd5..406cbff 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -1054,7 +1054,8 @@ class Hub {
+       case 'setCaption':
+       case 'setLook':
+       case 'align':
+-        if (d && data && data.comp) this.forwardEdit(d, data.comp.key, m);
++        // several selected: WPF's grid sets the value on every one of them
++        if (d && data && data.comp) this.forwardEdit(d, data.comp.key, m, !!(data.edit && data.edit.multi && data.edit.multi.length));
+         break;
+       case 'setStyleProp': {
+         // one style declaration of the source's start tag, as written (value null / '' = remove it)
+@@ -1650,12 +1651,14 @@ class Hub {
+     return ok ? { made, into: container ? selId : null, after: container ? null : selId } : null;
+   }
+ 
+-  /** From the properties panel: ask the probe to apply (it then reports an 'edit'). */
+-  forwardEdit(d, key, m) {
++  /** From the properties panel: ask the probe to apply (it then reports an 'edit').
++   *  all: the panel shows a multi-selection -- the probe sets it on every selected one. */
++  forwardEdit(d, key, m, all) {
+     if (!d || key == null) return;
+-    if (m.type === 'setLayout') d.post({ type: 'setLayout', key, left: m.left, top: m.top, width: m.width, height: m.height });
+-    else if (m.type === 'setCaption') d.post({ type: 'setCaption', key, value: m.value });
+-    else if (m.type === 'setLook') d.post({ type: 'setLook', key, prop: m.prop, value: m.value });
++    all = all === true;
++    if (m.type === 'setLayout') d.post({ type: 'setLayout', key, left: m.left, top: m.top, width: m.width, height: m.height, all });
++    else if (m.type === 'setCaption') d.post({ type: 'setCaption', key, value: m.value, all });
++    else if (m.type === 'setLook') d.post({ type: 'setLook', key, prop: m.prop, value: m.value, all });
+     else if (m.type === 'align') d.post({ type: 'align', how: m.how });
+   }
+ 
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index 03fa34c..c73ebf3 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -750,6 +750,53 @@
+     setCaptionDom(el, c.kind, v);
+     return { what: 'caption', capKind: c.kind, value: v };
+   }
++  /* a Left / Top / Width / Height from the panel: the new inline values (not applied yet),
++     or why it cannot be done */
++  function layoutPlan(el, m) {
++    if (lockedOf(el)) return lockedWhy(lockedOf(el));
++    var bx = boxOf(el);
++    if (!bx) return '「' + (idOf(el) || el.tagName.toLowerCase()) + '」不是用 position:absolute 定位的，位置／大小不能改';
++    var s = snap(bx), cb = curBox(bx.node);
++    if ((m.left != null && cb.left == null) || (m.top != null && cb.top == null) ||
++      (m.width != null && cb.width == null) || (m.height != null && cb.height == null))
++      return '「' + (idOf(el) || el.tagName.toLowerCase()) + '」目前沒有顯示，而它的位置／大小不是寫在自己 style 裡的 px 數值';
++    var ch = deltaStyle(s, m.left != null ? m.left - cb.left : 0, m.top != null ? m.top - cb.top : 0,
++      m.width != null ? m.width - cb.width : 0, m.height != null ? m.height - cb.height : 0);
++    if (!ch) return '「' + (idOf(el) || el.tagName.toLowerCase()) + '」的位置／大小不是寫在自己 style 裡的 px 數值';
++    return { bx: bx, ch: ch };
++  }
++  /* the properties panel with several selected (WPF: the grid sets the value on every selected
++     one): the same change on each, ONE batch edit = one undo step. A position / size change
++     is all or nothing (a locked one = none); a caption skips the ones that have none. */
++  function editAllSel(m) {
++    var sel = allSel(), batch = [], plans = [], skipped = 0;
++    if (m.type === 'setLayout') {
++      for (var i = 0; i < sel.length; i++) {
++        var pl = layoutPlan(sel[i], m);
++        if (typeof pl === 'string') { post({ type: 'editRefused', why: pl + '，這次 ' + sel.length + ' 個都沒有改' }); return 0; }
++        plans.push(pl);
++      }
++      for (var j = 0; j < sel.length; j++) {
++        applyStyle(plans[j].bx.node, plans[j].ch);
++        if (Object.keys(plans[j].ch).length) batch.push({ what: 'style', target: plans[j].bx.target, style: plans[j].ch, id: idOf(sel[j]), key: keyOf(sel[j]) });
++      }
++    } else {
++      for (var k = 0; k < sel.length; k++) {
++        var p2 = m.type === 'setCaption' ? captionChange(sel[k], m.value) : lookChange(sel[k], m.prop, m.value);
++        if (!p2) { skipped++; continue; }
++        p2.id = idOf(sel[k]);
++        p2.key = keyOf(sel[k]);
++        batch.push(p2);
++      }
++    }
++    if (batch.length === 1) { var b1 = batch[0]; b1.type = 'edit'; post(b1); }
++    else if (batch.length) post({ type: 'edit', what: 'batch', edits: batch });
++    if (skipped) post({ type: 'editRefused', why: '有 ' + skipped + ' 個選取的元件沒有可以直接改的' + (m.type === 'setCaption' ? '文字' : '這個屬性') + '，那些沒有改' });
++    var prim = selEl;
++    selEl = null;
++    select(prim, 'edit', false);
++    return batch.length;
++  }
+   function sendEdit(el, payload) {
+     payload.type = 'edit';
+     payload.id = idOf(el);
+@@ -1463,23 +1510,16 @@
+         /* (by id: from the DFM difference list, for a control that is not selected) */
+         var el3 = m.id ? byId(m.id) : els.get(m.key);
+         if (!el3 || !el3.isConnected) break;
+-        if (lockedOf(el3)) { post({ type: 'editRefused', why: lockedWhy(lockedOf(el3)) }); break; }
+-        var bx3 = boxOf(el3);
+-        if (!bx3) { post({ type: 'editRefused', why: '這個元件不是用 position:absolute 定位的，位置／大小不能改' }); break; }
+-        var s3 = snap(bx3), cb3 = curBox(bx3.node);
+-        var need3 = (m.left != null && cb3.left == null) || (m.top != null && cb3.top == null) ||
+-          (m.width != null && cb3.width == null) || (m.height != null && cb3.height == null);
+-        if (need3) { post({ type: 'editRefused', why: '這個元件目前沒有顯示，而它的位置／大小不是寫在自己 style 裡的 px 數值' }); break; }
+-        var dL3 = m.left != null ? m.left - cb3.left : 0, dT3 = m.top != null ? m.top - cb3.top : 0;
+-        var dW3 = m.width != null ? m.width - cb3.width : 0, dH3 = m.height != null ? m.height - cb3.height : 0;
+-        var ch3 = deltaStyle(s3, dL3, dT3, dW3, dH3);
+-        if (!ch3) { post({ type: 'editRefused', why: '這個元件的位置／大小不是寫在自己 style 裡的 px 數值' }); break; }
+-        applyStyle(bx3.node, ch3);
+-        commitLayout(el3, bx3, ch3);
++        if (m.all && !m.id && el3 === selEl && multi.length) { editAllSel(m); break; }
++        var pl3 = layoutPlan(el3, m);
++        if (typeof pl3 === 'string') { post({ type: 'editRefused', why: pl3 }); break; }
++        applyStyle(pl3.bx.node, pl3.ch);
++        commitLayout(el3, pl3.bx, pl3.ch);
+         selEl = null; select(el3, 'edit', false);
+         break;
+       }
+       case 'setCaption': {
++        if (m.all && !m.id && els.get(m.key) === selEl && multi.length) { editAllSel(m); break; }
+         var el4 = m.id ? byId(m.id) : els.get(m.key);
+         if (!el4 || !el4.isConnected) break;
+         var c4 = captionOf(el4);
+@@ -1493,6 +1533,7 @@
+       case 'setLook': {
+         var el5 = m.id ? byId(m.id) : els.get(m.key);
+         if (!el5 || !el5.isConnected) break;
++        if (m.all && !m.id && el5 === selEl && multi.length) { editAllSel(m); break; }
+         var e5 = lookChange(el5, m.prop, m.value);
+         if (e5) sendEdit(el5, e5);
+         selEl = null; select(el5, 'edit', false);
+diff --git a/tools/vscode-htdesigner/media/props.js b/tools/vscode-htdesigner/media/props.js
+index 89f4e12..89c94d3 100644
+--- a/tools/vscode-htdesigner/media/props.js
++++ b/tools/vscode-htdesigner/media/props.js
+@@ -217,13 +217,15 @@
+           bar3.appendChild(b);
+         });
+         body.appendChild(bar3);
++        var allNote = el('div', 'pad small multinote', '下面「外觀與版面」改的值會套用到全部 ' + (ed.multi.length + 1) + ' 個選取的元件（顯示的是「' + c.name + '」的值）；一次＝一個復原步驟。HTML 原始碼那一格只改「' + c.name + '」。');
++        body.appendChild(allNote);
+         body.appendChild(el('div', 'dim pad small', '整組一起拖曳、一起用方向鍵移動；一次對齊＝一個復原步驟。Ctrl／Shift＋點可以加入或移出選取。'));
+       });
+     }
+     if (ed && (ed.layout || ed.caption || ed.look)) {
+       var dfm = ed.dfm || {};
+       var diffs = 0;
+-      section('edit', '外觀與版面（可編輯）', null, function (body) {
++      section('edit', ed.multi ? '外觀與版面（可編輯，套用到全部 ' + (ed.multi.length + 1) + ' 個）' : '外觀與版面（可編輯）', null, function (body) {
+         var tb = el('table', 'kv edit');
+         /* dv = the DFM (BCB6) value, cur = the page's; different -> marked, ↺ resets */
+         function same(a, b) {
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index bf96cf1..8479248 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.36.0",
++  "version": "0.37.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 592dad3..23cdff8 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -512,6 +512,23 @@ exports.run = async function () {
+       await waitFor(() => (d.treeData.length ? true : null), 8000);
+     }
+ 
++    // the properties panel with sbtExit + spbSave selected: italic on -> both in the source, ONE undo
++    {
++      const orig4 = d.doc.getText();
++      d.post({ type: 'selectIds', ids: ['sbtExit', 'spbSave'], origin: 'tree' });
++      await waitFor(() => (hub.props.data && hub.props.data.comp && hub.props.data.comp.htmlId === 'sbtExit' && hub.props.data.edit &&
++        (hub.props.data.edit.multi || []).indexOf('spbSave') >= 0 && hub.propsDesigner === d ? true : null), 8000);
++      hub.onPropsMessage({ type: 'setLook', prop: 'italic', value: true });
++      const it2 = await waitFor(() => (/id="sbtExit"[^>]*font-style:italic/.test(d.doc.getText()) && /id="spbSave"[^>]*font-style:italic/.test(d.doc.getText()) ? true : null), 5000);
++      ok(!!it2, 'panel with 2 selected: Font.Italic on -> sbtExit and spbSave both italic in the source');
++      d.panel.reveal(d.panel.viewColumn, false);
++      await sleep(300);
++      await vscode.commands.executeCommand('undo');
++      ok(!!(await waitFor(() => (d.doc.getText() === orig4 ? true : null), 5000)), 'ONE undo takes both back');
++      if (d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
++      await waitFor(() => (d.treeData.length ? true : null), 8000);
++    }
++
+     // 頁面檢查 in the real Problems panel: HotPlate's cut style, VS Code offers our fix, fix-all fixes it; undo
+     {
+       d.panel.reveal(d.panel.viewColumn, false);
+diff --git a/tools/vscode-htdesigner/test/panels_render.ps1 b/tools/vscode-htdesigner/test/panels_render.ps1
+index b1bc576..e29a636 100644
+--- a/tools/vscode-htdesigner/test/panels_render.ps1
++++ b/tools/vscode-htdesigner/test/panels_render.ps1
+@@ -175,10 +175,13 @@ R.centerOn = !!(b('hcenterIn') && !b('hcenterIn').disabled);
+ if (b('hcenterIn')) b('hcenterIn').click();
+ if (b('hspace')) b('hspace').click();
+ R.afterMulti = window.__out.filter(function (m) { return m.type === 'align'; }).map(function (m) { return m.how; }).join(',');
++R.note = !!document.querySelector('.multinote');
++R.editAll = Array.prototype.some.call(document.querySelectorAll('details.sec > summary'), function (s) { return /\u5957\u7528\u5230\u5168\u90e8 2 \u500b/.test(s.textContent); });
+ '@
+ $r8 = if (Test-Path (Join-Path $dump 'props_multi.json')) { Render 'props_multi' 'props.css' 'props.js' 'show' (Join-Path $dump 'props_multi.json') $multiChecks } else { $null }
+ if ($r8) {
+   Check ($r8.errors.Count -eq 0 -and $r8.have -eq 'left,size,hspace,vspace,hcenterIn,vcenterIn' -and $r8.spaceOff -and $r8.centerOn -and $r8.afterMulti -eq 'hcenterIn') '2 selected: spacing buttons off (need 3), centre on and posts align hcenterIn' "have=$($r8.have) posted=$($r8.afterMulti)"
++  Check ($r8.note -and $r8.editAll) '2 selected: the panel says a change goes to all 2 (note + section title)' "note=$($r8.note) title=$($r8.editAll)"
+ } else { $script:bad++ }
+ $r2 = Render 'props_XST1' 'props.css' 'props.js' 'show' (Join-Path $dump 'props_XST1.json') $propsChecks
+ if ($r2) {
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index 0451bef..42b50e3 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -435,6 +435,35 @@
+             saved.forEach(function (s) { s[0].style.left = s[1]; s[0].style.top = s[2]; });
+           })();
+ 
++          /* the properties panel with 2 selected (all: true): bold / width on both = ONE batch edit
++             each; a width with one locked = nothing; without all = the primary only */
++          if (other2) {
++            var w0b = btn.style.width, w0o = other2.style.width;
++            window.__htdProbe.message({ type: 'selectIds', ids: [btn.id, other2.id] });
++            var ak = msgs('select').pop().info.key;
++            var na0 = edits().length;
++            window.__htdProbe.message({ type: 'setLook', key: ak, prop: 'bold', value: false, all: true });
++            var ea1 = edits().slice(na0);
++            window.__htdProbe.message({ type: 'setLayout', key: ak, width: 120, all: true });
++            var ea2 = edits().slice(na0 + ea1.length);
++            window.__htdProbe.message({ type: 'designLocked', ids: [other2.id] });
++            var nr1 = msgs('editRefused').length, na1 = edits().length;
++            window.__htdProbe.message({ type: 'setLayout', key: ak, width: 130, all: true });
++            var lockedNone = edits().length === na1 && msgs('editRefused').length === nr1 + 1 && btn.offsetWidth === 120;
++            window.__htdProbe.message({ type: 'designLocked', ids: [] });
++            var na2 = edits().length;
++            window.__htdProbe.message({ type: 'setLook', key: ak, prop: 'italic', value: false });
++            var ea3 = edits().slice(na2);
++            var stillMulti = (msgs('select').pop().info.multi || []).indexOf(other2.id) >= 0;
++            R.allEdit = [ea1, ea2, ea3].map(function (a) { return a.map(function (x) { return x.what + (x.edits ? x.edits.length : ':' + x.id); }).join(','); }).join(' | ') +
++              ' w ' + btn.offsetWidth + '/' + other2.offsetWidth + ' locked ' + lockedNone + ' multi ' + stillMulti;
++            R.allOk = ea1.length === 1 && ea1[0].what === 'batch' && ea1[0].edits.length === 2 &&
++              getComputedStyle(btn).fontWeight === '400' && getComputedStyle(other2).fontWeight === '400' &&
++              ea2.length === 1 && ea2[0].what === 'batch' && ea2[0].edits.length === 2 && btn.offsetWidth === 120 && other2.offsetWidth === 120 &&
++              lockedNone && ea3.length === 1 && ea3[0].id === btn.id && stillMulti;
++            btn.style.width = w0b; other2.style.width = w0o;
++          }
++
+           /* the grid's HTML rows: a style declaration / a text attribute, written as an edit; an on* never */
+           window.__htdProbe.selectById(btn.id);
+           var skR = msgs('select').pop().info.key;
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index 7dbc898..20fde87 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -75,6 +75,7 @@ foreach ($p in $Pages) {
+     if ($R.PSObject.Properties.Name -contains 'hiddenTarget') { $must['hidden tab revealed'] = [bool]$R.hiddenTabRevealed }
+     if ($R.PSObject.Properties.Name -contains 'wrapperEdit') { $must['input moves its wrapper'] = [bool]$R.wrapperOk }
+     if ($R.PSObject.Properties.Name -contains 'editMany') { $must['one change on several controls = ONE batch edit'] = [bool]$R.editManyOk }
++    if ($R.PSObject.Properties.Name -contains 'allEdit') { $must['panel with 2 selected: every one, ONE batch edit; a locked one = none; one selected = only it'] = [bool]$R.allOk }
+     if ($R.PSObject.Properties.Name -contains 'spaceTried') { $must['equal spacing: outer two stay, gaps equal, the primary moves too'] = [bool]$R.spaceOk }
+     if ($R.PSObject.Properties.Name -contains 'centerTried') {
+       $must['center in the container: one, then a block of two (their distance kept) = one edit'] = [bool]$R.centerOk
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index c633448..53377b0 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -495,6 +495,22 @@ async function main() {
+   const arrMenu = (arrPkg.contributes.menus['ht9045Designer.alignMenu'] || []).map(x => x.command);
+   ok(arrHows.every(h => pagePosted.some(m => m.type === 'align' && m.how === h) && arrMenu.includes('ht9045Designer.align.' + h)),
+     'same size / equal spacing / centre in container: in the menu, each goes to the probe', pagePosted.map(m => m.how).join(','));
++  // the panel with several selected: a change is asked for all of them (all: true); one selected: not
++  const mlInfo = multi => ({ key: 960, id: 'spbSave', multi, tag: 'button', title: '', attrs: [], style: [], inline: [], computed: [], chain: [], listeners: [], inherited: [] });
++  pageRecv({ __htd: 1, type: 'select', info: mlInfo(['sbtExit']), origin: 'multi' });
++  await new Promise(r => setTimeout(r, 30));
++  pagePosted.length = 0;
++  propsRecv({ type: 'setLook', prop: 'bold', value: false });
++  propsRecv({ type: 'setLayout', width: 120 });
++  const mlAll = pagePosted.filter(m => /^set(Look|Layout)$/.test(m.type));
++  pageRecv({ __htd: 1, type: 'select', info: mlInfo(undefined), origin: 'click' });
++  await new Promise(r => setTimeout(r, 30));
++  pagePosted.length = 0;
++  propsRecv({ type: 'setLook', prop: 'bold', value: false });
++  const mlOne = pagePosted.filter(m => m.type === 'setLook');
++  ok(mlAll.length === 2 && mlAll.every(m => m.all === true && m.key === 960) && mlOne.length === 1 && mlOne[0].all === false,
++    'properties panel: with 2 selected a change goes out for all of them; with one, only that one', JSON.stringify(mlAll.concat(mlOne).map(m => m.type + ':' + m.all)));
++  if (R.selInfo) { pageRecv({ __htd: 1, type: 'select', info: R.selInfo, origin: 'click' }); await new Promise(r => setTimeout(r, 30)); }
+ 
+   // 操作一覽: the cheat sheet opens as a markdown preview (and ships with the extension)
+   const csCalls = fake._calls.length;
+-- 
+2.55.0.windows.5
+

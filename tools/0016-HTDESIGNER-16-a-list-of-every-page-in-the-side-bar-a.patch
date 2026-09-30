@@ -1,0 +1,495 @@
+From b2b5035b2f1b32b70d53c64c4ae1fc4f5c567f56 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 19:24:15 +0800
+Subject: [PATCH] =?UTF-8?q?HTDESIGNER-16:=20=E9=A0=81=E9=9D=A2=20--=20a=20?=
+ =?UTF-8?q?list=20of=20every=20page=20in=20the=20side=20bar,=20a=20click?=
+ =?UTF-8?q?=20switches=20to=20it=20(0.16.0)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260929: 「你可以再新增一欄 所有頁面選項 方便我換html頁面嗎?」
+
+A new view 頁面 at the top of the HT9045 side bar: every .html of web\page and
+web\, grouped by the name before the first dot -- Main / Setup / HW / Data /
+Status / Alert / Config / IDE, then 其他 (no Group. prefix: main.html,
+eventlog.html ...) and web 根目錄 last -- each group with its page count.
+- A page shows its short name (Setup.HotPlate.html -> HotPlate) and its title;
+  a forwarding page shows "→ target".
+- A click opens it in the designer (an open one comes to the front).
+- The active page is marked ● 目前 (orange eye), other open ones ○ 已開啟; on
+  every switch the list selects the active page and opens its group.
+- Inline / right-click: open the HTML as text beside. Title bar: read again.
+- Pages added / removed in the web folder show up by themselves (watcher).
+- lib/pagelist.js does the listing (plain Node, tested on its own).
+
+Tests: lib 103 (listPages: every .html once, groups in order, 其他, the
+forwarding page), smoke 62 (groups, current mark, open group, a click runs
+vscode.openWith with the designer), real VS Code 66 (a click in the real tree
+opens Setup.Speed.html; the marks follow: Speed current, HotPlate still open),
+probe, panels -- all pass.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |   5 +
+ tools/vscode-htdesigner/extension.js          | 110 +++++++++++++++++-
+ tools/vscode-htdesigner/lib/pagelist.js       |  57 +++++++++
+ tools/vscode-htdesigner/package.json          |  44 ++++++-
+ tools/vscode-htdesigner/test/fake_vscode.js   |   8 +-
+ .../test/integration/index.js                 |  23 ++++
+ tools/vscode-htdesigner/test/run_tests.js     |  14 +++
+ .../vscode-htdesigner/test/smoke_extension.js |  21 ++++
+ 8 files changed, 277 insertions(+), 5 deletions(-)
+ create mode 100644 tools/vscode-htdesigner/lib/pagelist.js
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index ef61d9f..7044f7a 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -29,6 +29,11 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ 
+ **開啟一頁**（任選一種）：
+ 
++- 左邊「HT9045 設計檢視」最上面的 **「頁面」**：所有頁面照名稱前綴分組（Main／Setup／HW／Data／Status／Alert／Config／IDE／其他／web 根目錄，
++  後面是頁數），每一頁顯示短名稱和它的標題（例如 `HotPlate　Hot Plate（cHotPlate.dfm …）`）。**點一下就換到那一頁**。
++  目前這一頁標「● 目前」（橘色眼睛圖示）、其他開著的標「○ 已開啟」；換頁時清單會自己捲到目前那一頁、打開它的分組。
++  滑鼠移到一頁上，右邊的 `</>` 圖示＝用文字編輯器開 HTML 原始碼（右鍵選單也有）。轉址頁標「→ 目標」。
++  web 資料夾裡新增／刪除 .html，清單會自己更新；標題列的重新整理圖示可以手動重讀。在清單裡直接打字可以篩選。
+ - 左邊「HT9045 設計檢視」→「元件」標題列的清單圖示 → 選頁面
+ - `Ctrl+Shift+P` →「HT9045: 選擇頁面開啟設計檢視」
+ - 在 `.html` 檔上按右鍵 →「在設計檢視開啟」
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 08e551a..ef6ecd7 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -26,6 +26,7 @@ const { ReverseIndex, enclosingMethod } = require('./lib/reverse');
+ const { WebCmdIndex } = require('./lib/webcmds');
+ const overview = require('./lib/overview');
+ const dfmdiff = require('./lib/dfmdiff');
++const pagelist = require('./lib/pagelist');
+ const htmledit = require('./lib/htmledit');
+ const lex = require('./lib/cpplex');
+ 
+@@ -83,12 +84,16 @@ class Hub {
+       if (focus) ids.unshift(ids.splice(ids.indexOf(focus.isForm ? '@form' : focus.id), 1)[0]);
+       this.active.post({ type: 'selectIds', ids, origin: 'tree' });
+     });
++    // 頁面: all pages of the web folder, a click switches the designer to one
++    this.pages = new PageTree(this);
++    this.pageView = vscode.window.createTreeView('ht9045Designer.pages', { treeDataProvider: this.pages, showCollapseAll: true });
++    if (this.pageView.onDidChangeVisibility) this.pageView.onDidChangeVisibility(e => { if (e.visible) this.pages.revealActive(); });
+     this.props = new PropsView(this);
+     this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 40);
+     this.status.command = 'ht9045Designer.toggleMode';
+     const reg = (id, fn) => vscode.commands.registerCommand(id, fn);
+     ctx.subscriptions.push(
+-      this.out, this.treeView, this.status,
++      this.out, this.treeView, this.pageView, this.status,
+       vscode.window.registerWebviewViewProvider('ht9045Designer.properties', this.props, {
+         webviewOptions: { retainContextWhenHidden: true },
+       }),
+@@ -103,6 +108,15 @@ class Hub {
+       }),
+       reg('ht9045Designer.open', uri => this.cmdOpen(uri)),
+       reg('ht9045Designer.openPage', () => this.cmdOpenPage()),
++      // the 頁面 list: open a page in the designer / as HTML text; read the folder again
++      reg('ht9045Designer.openPageFile', file => {
++        if (typeof file === 'string' && file) return vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(file), VIEW_TYPE);
++      }),
++      reg('ht9045Designer.openPageText', n => {
++        const f = n && n.file ? n.file : (this.active ? this.active.file : null);
++        if (f) return vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(f), 'default', vscode.ViewColumn.Beside);
++      }),
++      reg('ht9045Designer.refreshPages', () => this.pages.refresh()),
+       reg('ht9045Designer.toggleMode', () => this.cmdToggleMode()),
+       reg('ht9045Designer.reload', () => { if (this.active) this.active.render(); }),
+       reg('ht9045Designer.showSource', () => this.cmdShowSource()),
+@@ -227,6 +241,7 @@ class Hub {
+ 
+   removeDesigner(d) {
+     this.designers.delete(d);
++    this.pages.mark();
+     if (this.active === d) {
+       const next = Array.from(this.designers).find(x => x.panel.visible) || null;
+       this.setActive(next);
+@@ -237,6 +252,8 @@ class Hub {
+     if (this.active === d) return;
+     this.active = d;
+     this.tree.set(d);
++    this.pages.mark();
++    this.pages.revealActive();
+     vscode.commands.executeCommand('setContext', 'ht9045Designer.active', !!d);
+     this.updateStatus();
+     if (d && d.pendingSel) {             // it changed selection while in the background
+@@ -1720,6 +1737,97 @@ class ComponentTree {
+   }
+ }
+ 
++// ---------------------------------------------------------------------------
++/** 頁面: every page of the web folder by group -- a click opens it in the designer. */
++class PageTree {
++  constructor(hub) {
++    this.hub = hub;
++    this._em = new vscode.EventEmitter();
++    this.onDidChangeTreeData = this._em.event;
++    this.groups = null;
++    this.byFile = new Map();
++    this.webRoot = null;
++  }
++
++  /** The web folder: the active designer's, else the one the settings / workspace name. */
++  root() {
++    if (this.hub.active && this.hub.active.r.webRoot) return this.hub.active.r.webRoot;
++    return roots.resolveRoots(null, this.hub.wsFolders(), this.hub.over()).webRoot || null;
++  }
++
++  build() {
++    const webRoot = this.root();
++    if (this.groups && webRoot === this.webRoot) return this.groups;
++    this.webRoot = webRoot;
++    this.byFile = new Map();
++    this.groups = pagelist.listPages(webRoot).map(g => {
++      const gn = { kind: 'group', name: g.name, children: [], parent: null };
++      gn.children = g.pages.map(p => {
++        const pn = Object.assign({ kind: 'page', parent: gn }, p);
++        this.byFile.set(p.file.toLowerCase(), pn);
++        return pn;
++      });
++      return gn;
++    });
++    if (webRoot) {
++      // a page added / removed / renamed: the list follows (debounced)
++      this.hub.watch(webRoot, '**/*.html', () => {
++        clearTimeout(this._t);
++        this._t = setTimeout(() => this.refresh(), 500);
++      });
++    }
++    return this.groups;
++  }
++
++  refresh() { this.groups = null; this._em.fire(); }
++  /** The open / active marks changed (no need to read the folder again). */
++  mark() { this._em.fire(); }
++
++  getChildren(n) { return n ? n.children || [] : this.build(); }
++  getParent(n) { return n.parent || undefined; }
++
++  getTreeItem(n) {
++    const S = vscode.TreeItemCollapsibleState;
++    if (n.kind === 'group') {
++      const act = this.hub.active;
++      const has = act && n.children.some(p => web.samePath(p.file, act.file));
++      const item = new vscode.TreeItem(n.name, has ? S.Expanded : S.Collapsed);
++      item.id = 'grp:' + n.name;
++      item.description = String(n.children.length);
++      item.iconPath = new vscode.ThemeIcon(n.name === pagelist.ROOT ? 'root-folder' : 'folder');
++      item.contextValue = 'pageGroup';
++      return item;
++    }
++    const act = this.hub.active;
++    const isActive = !!(act && web.samePath(act.file, n.file));
++    const isOpen = Array.from(this.hub.designers).some(d => web.samePath(d.file, n.file));
++    const item = new vscode.TreeItem(n.label, S.None);
++    item.id = 'page:' + n.file.toLowerCase();
++    const desc = [];
++    if (isActive) desc.push('● 目前');
++    else if (isOpen) desc.push('○ 已開啟');
++    if (n.redirect) desc.push('→ ' + n.redirect);
++    else if (n.title) desc.push(n.title);
++    item.description = desc.join('  ');
++    item.tooltip = n.rel + (n.title ? '\n' + n.title : '') + (n.redirect ? '\n轉址頁 → ' + n.redirect : '') + '\n\n點一下：用設計檢視開啟';
++    item.iconPath = new vscode.ThemeIcon(isActive ? 'eye' : n.redirect ? 'arrow-right' : 'file-code',
++      isActive ? new vscode.ThemeColor('charts.orange') : undefined);
++    item.command = { command: 'ht9045Designer.openPageFile', title: '開啟', arguments: [n.file] };
++    item.contextValue = 'page';
++    return item;
++  }
++
++  /** Select the active page in the list (its group opens). */
++  revealActive() {
++    const act = this.hub.active;
++    const tv = this.hub.pageView;
++    if (!act || !tv || !tv.visible) return;
++    this.build();
++    const n = this.byFile.get(act.file.toLowerCase());
++    if (n) tv.reveal(n, { select: true, focus: false, expand: true }).then(() => {}, () => {});
++  }
++}
++
+ // ---------------------------------------------------------------------------
+ /** 接線總覽 tab (one per designer; re-running the command refreshes it). */
+ class OverviewPanel {
+diff --git a/tools/vscode-htdesigner/lib/pagelist.js b/tools/vscode-htdesigner/lib/pagelist.js
+new file mode 100644
+index 0000000..3c03956
+--- /dev/null
++++ b/tools/vscode-htdesigner/lib/pagelist.js
+@@ -0,0 +1,57 @@
++'use strict';
++// AI(W906-HTDESIGNER) 20260929: 頁面 -- every page of the web folder, grouped by the
++// part of the name before the first dot (Setup.HotPlate.html -> Setup / HotPlate),
++// for the page list in the side bar. Plain Node (no vscode).
++const fs = require('fs');
++const path = require('path');
++const pageinfo = require('./pageinfo');
++
++/** The order the groups are shown in; the rest follow alphabetically, then 其他, then web root. */
++const ORDER = ['Main', 'Setup', 'HW', 'Data', 'Status', 'Alert', 'Config', 'IDE'];
++const OTHER = '其他';
++const ROOT = 'web 根目錄';
++
++function head(file) {
++  try {
++    const fd = fs.openSync(file, 'r');
++    const buf = Buffer.alloc(8192);
++    const len = fs.readSync(fd, buf, 0, buf.length, 0);
++    fs.closeSync(fd);
++    return buf.subarray(0, len).toString('utf8');
++  } catch (e) {
++    return '';
++  }
++}
++
++/**
++ * [{ name, pages: [{ file, name, label, rel, title, redirect }] }] in display order.
++ *   webRoot: the web folder (its page\ and the .html files directly in it)
++ */
++function listPages(webRoot) {
++  const groups = new Map();
++  const put = (g, p) => { if (!groups.has(g)) groups.set(g, []); groups.get(g).push(p); };
++  const one = (dir, name, group) => {
++    const file = path.join(dir, name);
++    const h = head(file);
++    const t = pageinfo.parseTitle(h);
++    let title = t ? t.title : '';
++    if (!title) { const m = /<title>([^<]*)<\/title>/i.exec(h); title = m ? m[1].trim() : ''; }
++    const m = /^([A-Z][A-Za-z0-9]*)\.(.+)\.html?$/.exec(name);
++    const g = group || (m ? m[1] : OTHER);
++    put(g, {
++      file, name, rel: path.relative(webRoot, file),
++      label: !group && m ? m[2] : name.replace(/\.html?$/i, ''),
++      title, redirect: pageinfo.redirectTarget(h) || '',
++    });
++  };
++  const ls = dir => { try { return fs.readdirSync(dir).filter(n => /\.html?$/i.test(n)).sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' })); } catch (e) { return []; } };
++  if (!webRoot) return [];
++  for (const n of ls(path.join(webRoot, 'page'))) one(path.join(webRoot, 'page'), n, null);
++  for (const n of ls(webRoot)) one(webRoot, n, ROOT);
++  const names = Array.from(groups.keys());
++  const rank = g => (g === ROOT ? 3 : g === OTHER ? 2 : ORDER.includes(g) ? 0 : 1);
++  names.sort((a, b) => rank(a) - rank(b) || (rank(a) === 0 ? ORDER.indexOf(a) - ORDER.indexOf(b) : a.localeCompare(b)));
++  return names.map(g => ({ name: g, pages: groups.get(g) }));
++}
++
++module.exports = { listPages, ORDER, OTHER, ROOT };
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index e633675..509bb4a 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.15.0",
++  "version": "0.16.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -98,6 +98,23 @@
+         "category": "HT9045",
+         "icon": "$(diff)"
+       },
++      {
++        "command": "ht9045Designer.openPageFile",
++        "title": "用設計檢視開啟這一頁",
++        "category": "HT9045"
++      },
++      {
++        "command": "ht9045Designer.openPageText",
++        "title": "用文字編輯器開啟 HTML",
++        "category": "HT9045",
++        "icon": "$(code)"
++      },
++      {
++        "command": "ht9045Designer.refreshPages",
++        "title": "重新讀取頁面清單",
++        "category": "HT9045",
++        "icon": "$(refresh)"
++      },
+       { "command": "ht9045Designer.viewCode", "title": "檢視程式碼（預設事件）", "category": "HT9045" },
+       { "command": "ht9045Designer.selectParent", "title": "選取上層", "category": "HT9045" },
+       { "command": "ht9045Designer.align.left", "title": "靠左對齊", "category": "HT9045" },
+@@ -218,6 +235,11 @@
+         }
+       ],
+       "view/title": [
++        {
++          "command": "ht9045Designer.refreshPages",
++          "when": "view == ht9045Designer.pages",
++          "group": "navigation@1"
++        },
+         {
+           "command": "ht9045Designer.openPage",
+           "when": "view == ht9045Designer.components",
+@@ -255,6 +277,16 @@
+         }
+       ],
+       "view/item/context": [
++        {
++          "command": "ht9045Designer.openPageText",
++          "when": "view == ht9045Designer.pages && viewItem == page",
++          "group": "inline@1"
++        },
++        {
++          "command": "ht9045Designer.openPageText",
++          "when": "view == ht9045Designer.pages && viewItem == page",
++          "group": "1_open@1"
++        },
+         {
+           "command": "ht9045Designer.revealDfm",
+           "when": "view == ht9045Designer.components",
+@@ -296,6 +328,8 @@
+         { "command": "ht9045Designer.resetZoom", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.pageOverview", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.dfmDiff", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.openPageFile", "when": "false" },
++        { "command": "ht9045Designer.openPageText", "when": "false" },
+         { "command": "ht9045Designer.findComponent", "when": "ht9045Designer.active" }
+       ]
+     },
+@@ -322,6 +356,10 @@
+     },
+     "views": {
+       "ht9045-designer": [
++        {
++          "id": "ht9045Designer.pages",
++          "name": "頁面"
++        },
+         {
+           "id": "ht9045Designer.components",
+           "name": "元件"
+@@ -334,6 +372,10 @@
+       ]
+     },
+     "viewsWelcome": [
++      {
++        "view": "ht9045Designer.pages",
++        "contents": "找不到 web 資料夾（裡面有 page\\ 的那一個）。\n開一個含 web 的資料夾，或在設定 ht9045Designer.webRoot 指定。\n[選擇頁面開啟](command:ht9045Designer.openPage)"
++      },
+       {
+         "view": "ht9045Designer.components",
+         "contents": "還沒有開啟設計檢視。\n[選擇頁面開啟](command:ht9045Designer.openPage)\n也可以在 .html 檔上按右鍵 →「在設計檢視開啟」。\n[使用說明](command:ht9045Designer.help)"
+diff --git a/tools/vscode-htdesigner/test/fake_vscode.js b/tools/vscode-htdesigner/test/fake_vscode.js
+index ec4a547..1211d3a 100644
+--- a/tools/vscode-htdesigner/test/fake_vscode.js
++++ b/tools/vscode-htdesigner/test/fake_vscode.js
+@@ -58,10 +58,12 @@ const vscode = {
+   window: {
+     createOutputChannel: () => ({ lines: [], appendLine(s) { this.lines.push(s); }, show() {}, dispose() {} }),
+     createTreeView: (id, o) => {
+-      vscode._tree = o.treeDataProvider;
+       const tv = { id, visible: false, reveal: () => Promise.resolve(), dispose() {}, _sel: null,
+-        onDidChangeSelection: fn => { tv._sel = fn; return disp(); } };
+-      vscode._treeView = tv;
++        onDidChangeSelection: fn => { tv._sel = fn; return disp(); },
++        onDidChangeVisibility: fn => { tv._vis = fn; return disp(); } };
++      // _tree / _treeView = the component tree (the tests' old name); every view by id in _views
++      (vscode._views = vscode._views || {})[id] = { provider: o.treeDataProvider, view: tv };
++      if (id === 'ht9045Designer.components') { vscode._tree = o.treeDataProvider; vscode._treeView = tv; }
+       return tv;
+     },
+     createStatusBarItem: () => ({ show() { this.shown = true; }, hide() { this.shown = false; }, dispose() {} }),
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 261827a..50c60f7 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -266,6 +266,29 @@ exports.run = async function () {
+     // the page file itself was not modified
+     ok(!d.doc.isDirty, 'page document not modified');
+ 
++    // 頁面 list (the real tree view): HotPlate is the current page; a click switches to Setup.Speed.html
++    {
++      const pgs = hub.pages.getChildren();
++      const hpNode = hub.pages.byFile.get(page.toLowerCase());
++      const hpItem = hpNode ? hub.pages.getTreeItem(hpNode) : null;
++      ok(pgs.length >= 5 && hpItem && /● 目前/.test(hpItem.description), '頁面 list: HotPlate marked as the current page',
++        pgs.map(g => g.name + ' ' + g.children.length).join(', '));
++      const speed = path.join(path.dirname(page), 'Setup.Speed.html');
++      const spNode = hub.pages.byFile.get(speed.toLowerCase());
++      ok(!!spNode && spNode.label === 'Speed', '頁面 list has Setup › Speed');
++      if (spNode) {
++        const it = hub.pages.getTreeItem(spNode);
++        await vscode.commands.executeCommand(it.command.command, ...it.command.arguments);   // what a click runs
++        const sd = await waitFor(() => (hub.active && /Setup\.Speed\.html$/i.test(hub.active.file) && hub.active.treeData.length ? hub.active : null), 30000);
++        ok(!!sd, 'a click in the 頁面 list opens that page in the designer');
++        const it2 = hub.pages.getTreeItem(spNode);
++        const it3 = hub.pages.getTreeItem(hpNode);
++        ok(/● 目前/.test(it2.description) && /○ 已開啟/.test(it3.description), 'the list follows: Speed is current, HotPlate still open',
++          it2.description + ' | ' + it3.description);
++        if (sd) { await vscode.commands.executeCommand('workbench.action.closeActiveEditor'); await sleep(300); }
++      }
++    }
++
+     // sweep: other kinds of page (generated / hand-written / JS-built / iframe)
+     const sweep = String(process.env.HTD_IT_SWEEP || '').split(';').filter(Boolean);
+     const sweepBad = [];
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index 5ba330c..81fe2c9 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -473,6 +473,20 @@ async function main() {
+   ok(pc1 && /^<span class="pnlCap"/.test(pc1.text) && /font-size:14px/.test(pc1.text) && lg1 && /^<legend\b/.test(lg1.text) &&
+     /font-size:16px/.test(he.setStyle(pc1.text, { 'font-size': '16px' })),
+     'captionHostTag: Panel1 -> its <span class="pnlCap">, GroupBox1 -> its <legend>; a font edit lands there', pc1 ? pc1.text.slice(0, 70) : '-');
++
++  // --- the 頁面 list: every page of web\page and web\, by the name before the first dot
++  const plMod = require('../lib/pagelist');
++  const plGroups = plMod.listPages(WEB);
++  const plFlat = [].concat(...plGroups.map(g => g.pages));
++  const plHp = plFlat.find(p => p.name === 'Setup.HotPlate.html');
++  const plDisk = fs.readdirSync(path.join(WEB, 'page')).filter(n => /\.html?$/i.test(n)).length + fs.readdirSync(WEB).filter(n => /\.html?$/i.test(n)).length;
++  ok(plGroups[0].name === 'Main' && plGroups[plGroups.length - 1].name === plMod.ROOT && plFlat.length === plDisk && plHp && plHp.label === 'HotPlate' && /Hot Plate/.test(plHp.title),
++    'listPages: Main first, web root last, every .html once; Setup.HotPlate.html -> Setup / HotPlate (title from the page)',
++    plGroups.map(g => g.name + ' ' + g.pages.length).join(', '));
++  const plOther = plGroups.find(g => g.name === plMod.OTHER);
++  const plInPage = [].concat(...plGroups.filter(g => g.name !== plMod.ROOT).map(g => g.pages));
++  ok(plOther && plOther.pages.some(p => p.name === 'main.html') && plInPage.filter(p => p.redirect).length === fwd,
++    'names without a Group. prefix go to 其他; forwarding pages carry their target', 'forwarding ' + plFlat.filter(p => p.redirect).map(p => p.name + '->' + p.redirect).join(', '));
+ }
+ 
+ main().catch(e => { fail++; log('CRASH ' + (e && e.stack || e)); }).then(() => {
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index d03f1d9..c6b1c88 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -317,6 +317,27 @@ async function main() {
+   }
+   panel.webview.postMessage = origPM;
+ 
++  // 頁面 list: every page by group (Main first), HotPlate marked as the current page, a click opens it
++  const pv = fake._views && fake._views['ht9045Designer.pages'];
++  const pgroups = pv ? pv.provider.getChildren() : [];
++  const psetup = pgroups.find(g => g.name === 'Setup');
++  const php = psetup && psetup.children.find(p => p.name === 'Setup.HotPlate.html');
++  const phpItem = php ? pv.provider.getTreeItem(php) : null;
++  ok(pgroups.length >= 5 && pgroups[0].name === 'Main' && php && php.label === 'HotPlate' && phpItem && /● 目前/.test(phpItem.description) &&
++    phpItem.command.command === 'ht9045Designer.openPageFile',
++    '頁面 list: groups (Main first), Setup › HotPlate marked as the current page', pgroups.map(g => g.name + ' ' + g.children.length).join(', '));
++  const psItem = psetup ? pv.provider.getTreeItem(psetup) : null;
++  const pmItem = pv ? pv.provider.getTreeItem(pgroups[0]) : null;
++  ok(psItem && psItem.collapsibleState === fake.TreeItemCollapsibleState.Expanded && pmItem && pmItem.collapsibleState === fake.TreeItemCollapsibleState.Collapsed,
++    'the group of the current page is open, the others closed');
++  const nExec = fake._calls.length;
++  if (php) await fake._cmds['ht9045Designer.openPageFile'](php.file);
++  ok(fake._calls.slice(nExec).some(c => c.name === 'exec' && c.args[0] === 'vscode.openWith' && /Setup\.HotPlate\.html$/i.test(c.args[1]) && c.args[2] === 'ht9045Designer.editor'),
++    'a click on a page runs vscode.openWith(…, the designer)', JSON.stringify(fake._calls.slice(nExec).map(c => c.args)));
++  const all = pgroups.reduce((n, g) => n + g.children.length, 0);
++  const onDisk = fs.readdirSync(path.dirname(PAGE)).filter(n => /\.html?$/i.test(n)).length + fs.readdirSync(path.join(path.dirname(PAGE), '..')).filter(n => /\.html?$/i.test(n)).length;
++  ok(all === onDisk && pgroups[pgroups.length - 1].name === 'web 根目錄', 'every .html of web\\page and web\\ is listed (web root last)', all + ' listed, ' + onDisk + ' on disk');
++
+   // live data tag: main.html palMainStatus <- machine.state <- WebBridgeTags.cpp
+   const MAINP = path.join(PORT, '..', 'web', 'page', 'main.html');
+   const mtext = fs.readFileSync(MAINP, 'utf8');
+-- 
+2.55.0.windows.5
+

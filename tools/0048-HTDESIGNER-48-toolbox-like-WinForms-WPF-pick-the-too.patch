@@ -1,0 +1,593 @@
+From 1a836e5c870e643b72525d5cf667b849a932da3a Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 23:50:09 +0800
+Subject: [PATCH] HTDESIGNER-48: toolbox like WinForms / WPF -- pick the tool,
+ then click (or draw a box) on the surface (0.48.0)
+
+A click on a toolbox item now picks the tool: the design surface shows a
+crosshair (a shield over the page, the hint line says what to do); a click
+puts the new component there, a drag puts it there with that size; Esc or a
+right-click gives up. A quick second click on the same item adds it at once,
+as a click did before (WinForms: double-click).
+- probe: place mode -- the id'd elements under the point, innermost first
+  and the form last, each with the point in its own child coordinates (a
+  GroupBox's div.cli counts); a generated tab sheet (no id) is marked
+- host: toolboxArm (the double-click by timing), cmdPlace (the first
+  container under the point: Panel / GroupBox / the form; a button there ->
+  its Panel; a tab sheet is refused with the way that works); cmdAdd takes
+  { into, x, y, w, h }; the templates take a size
+- README: the toolbox section; the stale "no copy / paste / delete yet"
+  line replaced
+
+Tests: lib (templates with / without a size), probe (a drag from the Save
+button: button > its panel (the point in the panel's px) > form, 40x20; a
+click = no size; Esc = placeCancel; nothing written, nothing selected),
+smoke (a click arms; put down over spbSave -> into Panel2 at 57,11, 40x20;
+a tab sheet refused; a quick second click adds at once), real VS Code (the
+probe holds the tool; put down into Panel2 at 400,10, 60x24, drawn there,
+ONE undo).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHEATSHEET.md         |  3 +-
+ tools/vscode-htdesigner/README.md             | 15 ++--
+ tools/vscode-htdesigner/extension.js          | 69 +++++++++++++--
+ tools/vscode-htdesigner/lib/toolbox.js        | 12 +--
+ tools/vscode-htdesigner/media/probe.js        | 86 ++++++++++++++++++-
+ tools/vscode-htdesigner/package.json          |  8 +-
+ .../test/integration/index.js                 | 18 ++++
+ tools/vscode-htdesigner/test/probe_driver.js  | 32 +++++++
+ tools/vscode-htdesigner/test/probe_test.ps1   |  1 +
+ tools/vscode-htdesigner/test/run_tests.js     |  4 +
+ .../vscode-htdesigner/test/smoke_extension.js | 27 +++++-
+ 11 files changed, 250 insertions(+), 25 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/CHEATSHEET.md b/tools/vscode-htdesigner/CHEATSHEET.md
+index 8654346..fd47d29 100644
+--- a/tools/vscode-htdesigner/CHEATSHEET.md
++++ b/tools/vscode-htdesigner/CHEATSHEET.md
+@@ -40,7 +40,8 @@
+ | 要做什麼 | 怎麼做 |
+ |---|---|
+ | 剪下／複製／貼上／刪除 | `Ctrl+X`／`Ctrl+C`／`Ctrl+V`／`Del`（右鍵最上面四個） |
+-| 新增元件 | 左邊「**工具箱**」點一下（放進選取的 Panel／GroupBox，或放在選取元件下面） |
++| 新增元件（放在指定位置） | 「**工具箱**」點一下 → 到畫面上點一下（或拖一個框＝連大小）；`Esc` 取消 |
++| 新增元件（直接加） | 「工具箱」連點兩下（放進選取的 Panel／GroupBox，或放在選取元件下面） |
+ | 放進新 Panel／解除群組 | `Ctrl+G`／`Ctrl+Shift+G` |
+ | 換上層容器 | 在元件樹上**拖曳**到別的 Panel／GroupBox |
+ | 前後順序 | `Ctrl+Shift+]` 最上、`Ctrl+]` 上一層、`Ctrl+[` 下一層、`Ctrl+Shift+[` 最下 |
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index f183060..031da03 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -209,10 +209,15 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ 間距在設定 `ht9045Designer.gridSize`（預設 8）；開／關每一頁共用、記在這台 VS Code。
+ 
+ **工具箱**（WPF 的工具箱）：左邊「HT9045 設計檢視」的「工具箱」一欄：Label、SpeedButton（按鈕）、Edit（輸入框）、CheckBox、ComboBox、Panel、GroupBox。
+-**點一下就新增一個**（畫面右鍵「新增元件…」或命令面板也可以選）：
+-- 選了 Panel／GroupBox／分頁／表單 → 放進它裡面的左上角 (8,8)，那裡已經有新元件就再往右下 16px；
+-- 選了其他元件 → 放在它下面 8px、跟它同一層（同一個分頁或群組框裡）；
+-- 名稱照 BCB6 的習慣：`Label1`、`SpeedButton1`…（頁面上已經有的會跳過）。
++跟 WinForms／WPF 一樣：
++
++- **點一下**＝拿起這個工具：設計畫面變成十字游標，**在畫面上點一下**＝放在那一點（左上角），**拖一個框**＝放在那裡而且就是那個大小；
++  放進滑鼠下面最裡層的容器（Panel、GroupBox 或表單；點在按鈕上就放進按鈕所在的 Panel）。`Esc` 或右鍵＝不放了。
++  分頁（TabSheet）裡不能用點的放（它在 HTML 裡沒有名稱可以指定），改用下面的連點兩下。
++- **連點兩下**（或畫面右鍵「新增元件…」、命令面板）＝直接新增：
++  - 選了 Panel／GroupBox／分頁／表單 → 放進它裡面的左上角 (8,8)，那裡已經有新元件就再往右下 16px；
++  - 選了其他元件 → 放在它下面 8px、跟它同一層（同一個分頁或群組框裡）。
++- 名稱照 BCB6 的習慣：`Label1`、`SpeedButton1`…（頁面上已經有的會跳過）。一次新增＝一個復原步驟。
+ 
+ 新元件的 HTML 跟網頁產生器（`_gen_dfm_abs.py`）產生的一模一樣（`<span class="lb">`、`<button class="btn3d">`…），外觀跟其他元件一致；
+ 新增完會自動選取，可以直接拖曳、在屬性面板改文字。它沒有接任何網頁程式、DFM 裡也沒有它（跟 WPF 新拉的按鈕一樣，事件要自己接）。
+@@ -350,7 +355,7 @@ GroupBox 的 `<legend>` 和 Panel 的標題永遠留在第一個；已經在最
+ - **只改得動寫在元件自己 `style` 裡的 px 數值**。位置是 `%`、`auto` 或寫在 CSS class 裡的元件，會拒絕修改並在狀態列說明，不會亂猜。
+ - **頁面 JS 產生的元件**（例如 `HW.IoSetView.html` 的清單）HTML 原始碼裡沒有，不能改；面板會寫明原因。
+ - **HTML 會被同步覆蓋**：見上面「改到哪裡」的 ⚠。DFM 屬性（BCB6 的 Object Inspector 那份）是參考資料，只能看。
+-- 還沒有：複製貼上、刪除元件、工具箱拖新元件進來（這些頁面是照 BCB6 表單做的，元件增減應該回到網頁作者的流程）。
++- 新增、刪除、複製貼上元件都可以，但這些頁面是照 BCB6 表單做的，元件增減最好也跟網頁作者講（`sync_web.py --apply` 會蓋掉）。
+ - **80 頁裡 44 頁的標題寫明對應哪個 DFM**；其他頁用元件名稱推測，推測不到就只顯示 HTML 屬性和網頁 JS。
+ - **只在連線成功後才綁的監聽器看不到**，因為預覽不連線。「網頁 JS 提到此元件」那一段是靠搜尋，可以補一部分。
+ - **C++ 的 `#if 0` 判斷是靜態掃描**，只認得 `#if 0`／`#if 1`；`#ifdef SOFT_SIMULTE` 這類要看建置線的，一律當成活的。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 6503552..746e463 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -156,6 +156,7 @@ class Hub {
+       ...['front', 'forward', 'backward', 'back'].map(how => reg('ht9045Designer.order.' + how, () => this.cmdOrder(how))),
+       // 工具箱 (WPF Toolbox): a click on an item adds one
+       reg('ht9045Designer.toolboxAdd', cls => this.cmdAdd(typeof cls === 'string' ? cls : cls && cls.cls)),
++      reg('ht9045Designer.toolboxArm', cls => this.toolboxArm(typeof cls === 'string' ? cls : cls && cls.cls)),
+       reg('ht9045Designer.addComponent', () => this.cmdAddPick()),
+       // Blend Group Into (a new panel) / Ungroup
+       reg('ht9045Designer.groupIntoPanel', () => this.cmdGroup()),
+@@ -1541,7 +1542,7 @@ class Hub {
+    * TTabSheet / the form) at 8,8 -- moved on while that place is taken --, else just
+    * below the selected component, next to it in the source (same tab sheet / group).
+    */
+-  async cmdAdd(cls) {
++  async cmdAdd(cls, place) {
+     const d = this.active;
+     if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
+     const item = toolbox.itemOf(cls);
+@@ -1549,8 +1550,9 @@ class Hub {
+     const text = d.doc.getText();
+     const pi = await d.info;
+     const info = d.sel && d.sel.info;
+-    const selId = info && info.id ? info.id : '@form';
+-    const container = selId === '@form' || toolbox.CONTAINERS.test(this.classOf(d, pi, selId, text));
++    // (place: from the design surface -- { into, x, y, w, h }, the container and the point it was put at)
++    const selId = place ? place.into : info && info.id ? info.id : '@form';
++    const container = !!place || selId === '@form' || toolbox.CONTAINERS.test(this.classOf(d, pi, selId, text));
+     const used = new Set(pageinfo.collectIds(text).concat(d.treeData.map(r => r[2]).filter(Boolean)));
+     const id = toolbox.newName(item.base, used);
+     let at, x = 8, y = 8, lineOf, into = null;
+@@ -1559,9 +1561,10 @@ class Hub {
+       at = tag ? htmlblock.insideEnd(text, tag) : -1;
+       lineOf = at;
+       into = selId;
++      if (place) { x = Math.max(0, Math.round(place.x)); y = Math.max(0, Math.round(place.y)); }
+       // 8,8 unless a child already stands there: then 16 px further down-right
+       const inner = tag && at > 0 ? text.slice(tag.end, at) : '';
+-      for (let k = 0; k < 20 && new RegExp('left:' + x + 'px;top:' + y + 'px').test(inner); k++) { x += 16; y += 16; }
++      for (let k = 0; !place && k < 20 && new RegExp('left:' + x + 'px;top:' + y + 'px').test(inner); k++) { x += 16; y += 16; }
+     } else {
+       const u = this.unitFor(text, selId);
+       at = u ? u.end : -1;
+@@ -1570,7 +1573,8 @@ class Hub {
+       if (lay && typeof lay.left === 'number' && typeof lay.top === 'number') { x = Math.round(lay.left); y = Math.round(lay.top + (lay.height || 0) + 8); }
+     }
+     if (at < 0) { this.refuseEdit(d, '找不到要放到哪裡（「' + selId + '」在原始碼裡找不到或沒有正常結束），沒有新增。'); return null; }
+-    const html = item.html(id, x, y);
++    const w = place && place.w >= 4 ? Math.round(place.w) : 0, h = place && place.h >= 4 ? Math.round(place.h) : 0;
++    const html = item.html(id, x, y, w, h);
+     let repl;
+     const ls = text.lastIndexOf('\n', at - 1) + 1;
+     if (container && !text.slice(ls, at).trim()) {
+@@ -1582,7 +1586,46 @@ class Hub {
+     d.lastSelId = id;
+     const ok = await this.applyStructural(d, [{ range: [at, at], repl }]);
+     if (ok) vscode.window.setStatusBarMessage('$(add) 新增了 ' + id + ' : ' + item.cls + (into ? '（在 ' + into + ' 裡）' : '（在 ' + selId + ' 下面）') + '（Ctrl+Z 復原）', 6000);
+-    return ok ? { id, cls: item.cls, into, after: into ? null : selId, x, y } : null;
++    return ok ? { id, cls: item.cls, into, after: into ? null : selId, x, y, w, h } : null;
++  }
++
++  /**
++   * WinForms / WPF: a click on a toolbox item picks the tool (the design surface then shows a
++   * crosshair: a click puts it there, a drag also gives its size, Esc gives up); a second
++   * click on the same item within a moment ("double-click") adds it at once, as before.
++   */
++  toolboxArm(cls) {
++    const item = toolbox.itemOf(cls);
++    const d = this.active;
++    if (!item) return null;
++    const now = Date.now();
++    const dbl = this.lastArm && this.lastArm.cls === cls && now - this.lastArm.t < 450;
++    this.lastArm = dbl ? null : { cls, t: now };
++    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
++    if (dbl) { d.post({ type: 'placeArm', cls: null }); return this.cmdAdd(cls); }
++    d.armed = cls;
++    d.post({ type: 'placeArm', cls, label: item.label });
++    d.panel.reveal(d.panel.viewColumn, false);
++    vscode.window.setStatusBarMessage('$(add) 放置 ' + item.cls + '：在設計畫面上點一下放在那裡（拖一個框＝連大小），Esc 取消；連點兩下工具箱＝直接加', 8000);
++    return { armed: cls };
++  }
++
++  /**
++   * The design surface put the armed tool down: targets = the id'd elements under the point,
++   * innermost first, each with the point in its own child coordinates ('@form' last). The
++   * first container (Panel / GroupBox / tab sheet ... or the form) takes it.
++   */
++  async cmdPlace(d, m) {
++    const item = toolbox.itemOf(m && m.cls);
++    d.armed = null;
++    if (!item || !Array.isArray(m.targets) || !m.targets.length) return null;
++    const pi = await d.info;
++    const text = d.doc.getText();
++    const t = m.targets.find(g => g && (g.pane || g.id === '@form' || (typeof g.id === 'string' && toolbox.CONTAINERS.test(this.classOf(d, pi, g.id, text))))) || null;
++    if (!t) { this.refuseEdit(d, '這裡沒有可以放元件的容器（Panel、GroupBox 或表單），沒有新增。'); return null; }
++    // a generated tab sheet has no id: nothing to name as the parent (it would land on the form)
++    if (t.pane) { this.refuseEdit(d, '分頁（TabSheet）裡不能用點的放：先選那個分頁上的一個元件，再連點兩下工具箱（新的會放在它下面、同一個分頁裡）。'); return null; }
++    return this.cmdAdd(item.cls, { into: t.id, x: +t.x || 0, y: +t.y || 0, w: +m.w || 0, h: +m.h || 0 });
+   }
+ 
+   /** The toolbox as a quick pick (the command palette / the design surface's menu). */
+@@ -2350,6 +2393,13 @@ class Designer {
+       case 'editRefused':
+         this.hub.refuseEdit(this, String(m.why || '不能改'));
+         break;
++      case 'place':
++        // the armed toolbox tool was put down on the surface
++        this.hub.cmdPlace(this, m).catch(e => this.hub.log('放置失敗：' + (e && e.stack || e)));
++        break;
++      case 'placeCancel':
++        this.armed = null;
++        break;
+       case 'note':
+         // a plain status line from the design surface (e.g. "選取了 12 個 TLabel")
+         this.lastNote = String(m.text || '').slice(0, 200);
+@@ -2844,10 +2894,11 @@ class ToolboxTree {
+     const item = new vscode.TreeItem(it.label, vscode.TreeItemCollapsibleState.None);
+     item.id = 'tool:' + it.cls;
+     item.description = it.note + '　' + it.cls;
+-    item.tooltip = it.cls + '：' + it.note + '\n\n點一下＝新增一個（名稱 ' + it.base + '1、' + it.base + '2…）：\n' +
+-      '選了 Panel／GroupBox／分頁／表單 → 放進去（左上 8,8）\n選了其他元件 → 放在它下面\n\n寫進 HTML 原始碼，Ctrl+Z 復原。';
++    item.tooltip = it.cls + '：' + it.note + '（名稱 ' + it.base + '1、' + it.base + '2…）\n\n' +
++      '點一下＝拿起這個工具：到設計畫面上點一下放在那裡，或拖一個框（連大小）；Esc 取消\n' +
++      '連點兩下＝直接新增：選了 Panel／GroupBox／分頁／表單 → 放進去（左上 8,8）；選了其他元件 → 放在它下面\n\n寫進 HTML 原始碼，Ctrl+Z 復原。';
+     item.iconPath = new vscode.ThemeIcon(it.icon);
+-    item.command = { command: 'ht9045Designer.toolboxAdd', title: '新增', arguments: [it.cls] };
++    item.command = { command: 'ht9045Designer.toolboxArm', title: '放置', arguments: [it.cls] };
+     item.contextValue = 'tool';
+     return item;
+   }
+diff --git a/tools/vscode-htdesigner/lib/toolbox.js b/tools/vscode-htdesigner/lib/toolbox.js
+index af0f2eb..9b49771 100644
+--- a/tools/vscode-htdesigner/lib/toolbox.js
++++ b/tools/vscode-htdesigner/lib/toolbox.js
+@@ -15,17 +15,17 @@ const ITEMS = [
+   { cls: 'TLabel', base: 'Label', label: 'Label', note: '文字標籤', icon: 'symbol-text',
+     html: (id, x, y) => '<span class="lb" id="' + id + '" title="' + id + ' : TLabel" style="position:absolute;left:' + x + 'px;top:' + y + 'px;color:#000000;white-space:nowrap;font-size:11px;">' + esc(id) + '</span>' },
+   { cls: 'TSpeedButton', base: 'SpeedButton', label: 'SpeedButton', note: '按鈕', icon: 'symbol-event',
+-    html: (id, x, y) => '<button class="btn3d" id="' + id + '" title="' + id + ' : TSpeedButton" style="position:absolute;left:' + x + 'px;top:' + y + 'px;width:75px;height:25px;font-size:11px;">' + esc(id) + '</button>' },
++    html: (id, x, y, w, h) => '<button class="btn3d" id="' + id + '" title="' + id + ' : TSpeedButton" style="position:absolute;left:' + x + 'px;top:' + y + 'px;width:' + (w || 75) + 'px;height:' + (h || 25) + 'px;font-size:11px;">' + esc(id) + '</button>' },
+   { cls: 'TEdit', base: 'Edit', label: 'Edit', note: '輸入框', icon: 'symbol-string',
+-    html: (id, x, y) => '<span style="position:absolute;left:' + x + 'px;top:' + y + 'px;width:121px;height:21px;"><input class="ed" id="' + id + '" title="' + id + ' : TEdit" value="" style="width:100%;height:100%;box-sizing:border-box;"></span>' },
++    html: (id, x, y, w, h) => '<span style="position:absolute;left:' + x + 'px;top:' + y + 'px;width:' + (w || 121) + 'px;height:' + (h || 21) + 'px;"><input class="ed" id="' + id + '" title="' + id + ' : TEdit" value="" style="width:100%;height:100%;box-sizing:border-box;"></span>' },
+   { cls: 'TCheckBox', base: 'CheckBox', label: 'CheckBox', note: '核取方塊', icon: 'check',
+-    html: (id, x, y) => '<label class="ckb" id="' + id + '" style="position:absolute;left:' + x + 'px;top:' + y + 'px;width:97px;height:17px;" title="' + id + ' : TCheckBox"><input type="checkbox" >' + esc(id) + '</label>' },
++    html: (id, x, y, w, h) => '<label class="ckb" id="' + id + '" style="position:absolute;left:' + x + 'px;top:' + y + 'px;width:' + (w || 97) + 'px;height:' + (h || 17) + 'px;" title="' + id + ' : TCheckBox"><input type="checkbox" >' + esc(id) + '</label>' },
+   { cls: 'TComboBox', base: 'ComboBox', label: 'ComboBox', note: '下拉選單', icon: 'list-selection',
+-    html: (id, x, y) => '<select class="ed" id="' + id + '" title="' + id + ' : TComboBox" style="position:absolute;left:' + x + 'px;top:' + y + 'px;width:145px;height:24px;"></select>' },
++    html: (id, x, y, w, h) => '<select class="ed" id="' + id + '" title="' + id + ' : TComboBox" style="position:absolute;left:' + x + 'px;top:' + y + 'px;width:' + (w || 145) + 'px;height:' + (h || 24) + 'px;"></select>' },
+   { cls: 'TPanel', base: 'Panel', label: 'Panel', note: '面板（容器）', icon: 'layout-panel',
+-    html: (id, x, y) => '<div class="pnl" id="' + id + '" style="position:absolute;left:' + x + 'px;top:' + y + 'px;width:185px;height:41px;background:var(--form-bg,#ece9d8);border:1px outset #ddd;" title="' + id + ' : TPanel"><span class="pnlCap" style="color:#000000;font-size:11px;font-weight:400;">' + esc(id) + '</span></div>' },
++    html: (id, x, y, w, h) => '<div class="pnl" id="' + id + '" style="position:absolute;left:' + x + 'px;top:' + y + 'px;width:' + (w || 185) + 'px;height:' + (h || 41) + 'px;background:var(--form-bg,#ece9d8);border:1px outset #ddd;" title="' + id + ' : TPanel"><span class="pnlCap" style="color:#000000;font-size:11px;font-weight:400;">' + esc(id) + '</span></div>' },
+   { cls: 'TGroupBox', base: 'GroupBox', label: 'GroupBox', note: '群組框（容器）', icon: 'group-by-ref-type',
+-    html: (id, x, y) => '<fieldset class="gbx" id="' + id + '" style="position:absolute;left:' + x + 'px;top:' + y + 'px;width:185px;height:105px;--gbi:2px 3px 3px 2px;" title="' + id + ' : TGroupBox"><legend style="background:var(--panel,#ece9d8);">' + esc(id) + '</legend><div class="cli" style="position:absolute;inset:0;overflow:hidden;"></div></fieldset>' },
++    html: (id, x, y, w, h) => '<fieldset class="gbx" id="' + id + '" style="position:absolute;left:' + x + 'px;top:' + y + 'px;width:' + (w || 185) + 'px;height:' + (h || 105) + 'px;--gbi:2px 3px 3px 2px;" title="' + id + ' : TGroupBox"><legend style="background:var(--panel,#ece9d8);">' + esc(id) + '</legend><div class="cli" style="position:absolute;inset:0;overflow:hidden;"></div></fieldset>' },
+ ];
+ 
+ /** The first free BCB6-style name: Label1, Label2 ... */
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index 95f266c..82ea761 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -275,6 +275,66 @@
+     if (p && p.moved) { justDragged = true; setTimeout(function () { justDragged = false; }, 0); }
+     panShield(PAN.space);
+   }
++  /* 工具箱放置 (WinForms / WPF): a tool picked in the toolbox -- a crosshair over the page; a
++     click puts it there, a drag gives its size too; Esc / a right-click gives up. The host
++     is told the id'd elements under the point (innermost first, the form last), each with
++     the point in its own child coordinates, and picks the first container. */
++  var PLACE = null, plEl = null;
++  function placeShield(on) { if (plEl) plEl.style.display = on ? 'block' : 'none'; }
++  function placeTargets(x, y) {
++    placeShield(false);
++    var under = document.elementFromPoint(x, y);
++    placeShield(!!PLACE);
++    var z = typeof zoom === 'number' && zoom > 0 ? zoom : 1;
++    var fr = formRoot(), out = [];
++    for (var e = under; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
++      if (e === host) break;
++      if (!e.id && e.classList && e.classList.contains('pcPane')) { out.push({ id: null, pane: true }); continue; }
++      var nm = e === fr ? '@form' : e.id;
++      if (!nm) continue;
++      /* a GroupBox keeps its children in <div class="cli">: that is where their left/top count from */
++      var org = (e.querySelector && e.querySelector(':scope > div.cli')) || e;
++      var r = org.getBoundingClientRect();
++      out.push({ id: nm, x: Math.round((x - r.left) / z - org.clientLeft), y: Math.round((y - r.top) / z - org.clientTop) });
++      if (e === fr) break;
++    }
++    if (fr && !out.some(function (o) { return o.id === '@form'; })) {
++      var rf = fr.getBoundingClientRect();
++      out.push({ id: '@form', x: Math.round((x - rf.left) / z - fr.clientLeft), y: Math.round((y - rf.top) / z - fr.clientTop) });
++    }
++    return out;
++  }
++  function placeBand() {
++    if (!mqEl) return;
++    var p = PLACE && PLACE.drag;
++    if (!p || Math.abs(p.x1 - p.x0) + Math.abs(p.y1 - p.y0) < 4) { mqEl.style.display = 'none'; return; }
++    mqEl.style.display = 'block';
++    mqEl.style.left = Math.min(p.x0, p.x1) + 'px'; mqEl.style.top = Math.min(p.y0, p.y1) + 'px';
++    mqEl.style.width = Math.abs(p.x1 - p.x0) + 'px'; mqEl.style.height = Math.abs(p.y1 - p.y0) + 'px';
++  }
++  function finishPlace() {
++    var pl = PLACE, p = pl && pl.drag;
++    PLACE = null;
++    placeShield(false);
++    if (mqEl) mqEl.style.display = 'none';
++    drawBadge();
++    if (!p) return;
++    var z = typeof zoom === 'number' && zoom > 0 ? zoom : 1;
++    var x = Math.min(p.x0, p.x1), y = Math.min(p.y0, p.y1);
++    var w = Math.abs(p.x1 - p.x0) / z, h = Math.abs(p.y1 - p.y0) / z;
++    var sized = w >= 4 && h >= 4;
++    justDragged = true;
++    setTimeout(function () { justDragged = false; }, 0);
++    post({ type: 'place', cls: pl.cls, targets: placeTargets(x, y), w: sized ? Math.round(w) : 0, h: sized ? Math.round(h) : 0 });
++  }
++  function cancelPlace() {
++    if (!PLACE) return;
++    PLACE = null;
++    placeShield(false);
++    if (mqEl) mqEl.style.display = 'none';
++    drawBadge();
++    post({ type: 'placeCancel' });
++  }
+   /* WPF "snap to gridlines": positions and sizes land on multiples of GRID.size (Alt = free) */
+   var GRID = { on: false, size: 8 };
+   function snapG(v) { return Math.round(v / GRID.size) * GRID.size; }
+@@ -335,16 +395,18 @@
+       '.gh{position:fixed;display:none;pointer-events:none;box-sizing:border-box;border:1px dashed rgba(192,38,211,.9);background:rgba(192,38,211,.05);}' +
+       '.gh.sel{border:2px dashed #c026d3;background:rgba(192,38,211,.10);}' +
+       '.pan{position:fixed;left:0;top:0;right:0;bottom:0;display:none;pointer-events:auto;cursor:grab;} .pan.on{cursor:grabbing;}' +
++      '.plc{position:fixed;left:0;top:0;right:0;bottom:0;display:none;pointer-events:auto;cursor:crosshair;}' +
+       '.tb{position:fixed;display:none;pointer-events:none;font:bold 10px/14px Consolas,"Courier New",monospace;padding:0 4px;border-radius:7px;' +
+       'white-space:nowrap;color:#fff;background:#1e5fa8;box-shadow:0 0 0 1px rgba(255,255,255,.8);} .tb.bad{background:#d11a2a;} .tb.x{background:#808080;}' +
+       '.ght{position:fixed;display:none;pointer-events:none;font:10px/14px Consolas,"Courier New",monospace;padding:0 4px;white-space:nowrap;' +
+       'background:#a21caf;color:#fff;border-radius:2px;}' +
+       '.wm.ok{border-color:rgba(46,160,67,.85);} .wm.mid{border-color:rgba(214,140,20,.95);} .wm.bad{border-color:rgba(229,23,47,.95);background:rgba(229,23,47,.07);}' +
+       '</style><div class="gr"></div><div class="b h"></div><div class="b s"></div><div class="t th"></div><div class="t ts"></div><div class="m"></div><div class="mq"></div>' +
+-      '<div class="g gx"></div><div class="g gy"></div><div class="ght"></div>' + hs + '<div class="pan"></div>';
++      '<div class="g gx"></div><div class="g gy"></div><div class="ght"></div>' + hs + '<div class="pan"></div><div class="plc"></div>';
+     gX = sh.querySelector('.gx'); gY = sh.querySelector('.gy');
+     ghTag = sh.querySelector('.ght');
+     panEl = sh.querySelector('.pan');
++    plEl = sh.querySelector('.plc');
+     grEl = sh.querySelector('.gr');
+     mqEl = sh.querySelector('.mq');
+     bH = sh.querySelector('.h'); bS = sh.querySelector('.s');
+@@ -451,6 +513,7 @@
+     var w = WIRE ? '　［接線：綠＝網頁有接　橘＝部分／只有提到　紅＝網頁沒接］' : '';
+     var gh = GHOST ? '　［紫色虛線框＝BCB6 .dfm 的位置（拖過去會吸附）］' : '';
+     gh += TABO ? '　［Tab 順序：藍＝跟 DFM 一樣　紅 3≠5＝網頁第 3、DFM 第 5　灰＝DFM 沒有］' : '';
++    if (PLACE) { badge.textContent = '放置 ' + PLACE.label + '：點一下＝放在那裡　拖一個框＝連大小　Esc／右鍵＝取消'; return; }
+     badge.textContent = (mode === 'design'
+       ? '設計模式：點＝選取　Ctrl/Shift+點＝多選　拖曳＝移動　控制點＝改大小　方向鍵＝微調　雙擊／Enter＝事件程式碼　Esc＝上層　Tab＝下一個　空白鍵＋拖曳＝平移'
+       : '操作模式：點擊交給頁面（網路仍全部封鎖）') + z + w + gh;
+@@ -1145,6 +1208,16 @@
+   }
+   function onBlock(e) {
+     var t = e.type;
++    if (PLACE && mode === 'design') {
++      /* a toolbox tool in the hand: the press starts it, the release puts it down; right = give up */
++      if (t === 'mousedown') {
++        if (e.button === 0) PLACE.drag = { x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY };
++        else if (e.button === 2) cancelPlace();
++      } else if (t === 'mouseup' && PLACE.drag) finishPlace();
++      e.stopImmediatePropagation();
++      e.preventDefault();
++      return;
++    }
+     if (PAN.drag && /^(mouseup|pointerup|click|auxclick)$/.test(t)) {
+       /* the end of a pan: the page never sees it */
+       if (t === 'mouseup') endPan();
+@@ -1235,6 +1308,7 @@
+     origAdd.call(window, t, onBlock, { capture: true, passive: false });
+   });
+   origAdd.call(window, 'mousemove', function (e) {
++    if (PLACE && PLACE.drag) { PLACE.drag.x1 = e.clientX; PLACE.drag.y1 = e.clientY; placeBand(); e.preventDefault(); e.stopImmediatePropagation(); return; }
+     if (PAN.drag) { movePan(e); e.preventDefault(); e.stopImmediatePropagation(); return; }
+     if (marquee) {
+       marquee.x1 = e.clientX;
+@@ -1460,6 +1534,7 @@
+   }, true);
+   origAdd.call(window, 'blur', function () { PAN.space = false; if (PAN.drag) endPan(); else panShield(false); }, true);
+   origAdd.call(window, 'keydown', function (e) {
++    if (PLACE && e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); cancelPlace(); return; }
+     if ((e.key === ' ' || e.code === 'Space') && mode === 'design' && !e.ctrlKey && !e.altKey && !e.metaKey &&
+       !(e.target && (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable))) {
+       /* Space held = the hand (pan); the page does not see it, the view does not page down */
+@@ -1642,6 +1717,7 @@
+       case 'setMode':
+         mode = m.mode === 'operate' ? 'operate' : 'design';
+         PAN.space = false; PAN.drag = null; panShield(false);
++        PLACE = null; placeShield(false);
+         hoverEl = null; drawBadge(); scheduleDraw();
+         break;
+       case 'selectKey': {
+@@ -1663,6 +1739,13 @@
+       case 'zoomFit':
+         zoomFit();
+         break;
++      case 'placeArm':
++        /* the toolbox picked a tool (cls null = put it back) */
++        PLACE = m.cls && mode === 'design' ? { cls: String(m.cls), label: String(m.label || m.cls), drag: null } : null;
++        placeShield(!!PLACE);
++        if (!PLACE && mqEl) mqEl.style.display = 'none';
++        drawBadge();
++        break;
+       case 'tabOrder': {
+         TABO = Array.isArray(m.dfm) ? m.dfm.filter(function (x) { return typeof x === 'string'; }) : null;
+         drawBadge();
+@@ -1934,6 +2017,7 @@
+           wireMarks: WIRE ? Object.keys(WIRE).length : 0,
+           ghosts: GHOST && sh ? placeGhosts() : 0,
+           tabBadges: TABO && sh ? placeTabOrder() : 0,
++          placing: PLACE ? PLACE.cls : '',
+           names: NAMES && sh ? placeNameTags() : 0,
+           base: document.baseURI,
+         });
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 7ceec22..b3153fc 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.47.0",
++  "version": "0.48.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -287,6 +287,11 @@
+         "category": "HT9045",
+         "icon": "$(add)"
+       },
++      {
++        "command": "ht9045Designer.toolboxArm",
++        "title": "拿起這個工具（到設計畫面上點一下／拖一個框放置）",
++        "category": "HT9045"
++      },
+       {
+         "command": "ht9045Designer.addComponent",
+         "title": "新增元件…（工具箱）",
+@@ -676,6 +681,7 @@
+         { "command": "ht9045Designer.pasteComponent", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.deleteComponent", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.toolboxAdd", "when": "false" },
++        { "command": "ht9045Designer.toolboxArm", "when": "false" },
+         { "command": "ht9045Designer.toggleGrid", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.groupIntoPanel", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.selectAll", "when": "ht9045Designer.active" },
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 171e949..0ac3c77 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -463,6 +463,24 @@ exports.run = async function () {
+       ok(!!tbGone, 'ONE undo removes it');
+       if (d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
+       await waitFor(() => (d.treeData.length && (!tb || !d.treeData.some(x => x[2] === tb.id)) ? true : null), 10000);
++
++      // WinForms / WPF placing: a toolbox click hands the real probe the tool (crosshair); put down in Panel2
++      // at 400,10 with 60x24 -> drawn inside Panel2; ONE undo
++      hub.lastArm = null;
++      await vscode.commands.executeCommand('ht9045Designer.toolboxArm', 'TSpeedButton');
++      d.diag = null; d.post({ type: 'diag' });
++      const pgA = await waitFor(() => d.diag, 5000);
++      d.post({ type: 'placeArm', cls: null });
++      const tp = await hub.cmdPlace(d, { cls: 'TSpeedButton', w: 60, h: 24, targets: [{ id: 'Panel2', x: 400, y: 10 }, { id: '@form', x: 400, y: 485 }] });
++      const tpDrawn = tp ? await waitFor(() => { const r = d.treeData.find(x => x[2] === tp.id); return r && r[1] === p2Key() ? true : null; }, 10000) : null;
++      ok(!!(pgA && pgA.placing === 'TSpeedButton' && tp && tp.into === 'Panel2' && tpDrawn && new RegExp('id="' + tp.id + '"[^>]*left:400px;top:10px;width:60px;height:24px;').test(d.doc.getText())),
++        'toolbox placing (real): the probe holds the tool; put down into Panel2 at 400,10, 60x24, drawn there', tp ? JSON.stringify(tp) : '-');
++      d.panel.reveal(d.panel.viewColumn, false);
++      await sleep(300);
++      await vscode.commands.executeCommand('undo');
++      ok(!!(await waitFor(() => (d.doc.getText() === original ? true : null), 5000)), 'ONE undo removes the placed one');
++      if (d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
++      await waitFor(() => (d.treeData.length && (!tp || !d.treeData.some(x => x[2] === tp.id)) ? true : null), 10000);
+     }
+ 
+     // 全選 (right-click menu) and the title bar's undo button
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index 65bb4e5..b6ea52d 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -563,6 +563,38 @@
+             window.scrollTo(0, 0);
+           })();
+ 
++          /* 工具箱放置: a tool in the hand -> a crosshair shield; a drag from a point on the Save button
++             posts place with the button, its container (the point in its own px) and the form, and the
++             dragged size; a click = no size; Esc gives up (placeCancel), nothing written */
++          (function () {
++            var shield = host && host.shadowRoot ? host.shadowRoot.querySelector('.plc') : null;
++            var par = btn.offsetParent;
++            var ne = edits().length, ns = msgs('select').length;
++            var sp = function (type, x, y, b) { shield.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, button: b || 0 })); };
++            window.__htdProbe.message({ type: 'placeArm', cls: 'TSpeedButton', label: 'SpeedButton' });
++            var shown = !!shield && shield.style.display === 'block';
++            var br = btn.getBoundingClientRect(), pz = br.width / btn.offsetWidth;
++            var nP = msgs('place').length;
++            if (shield) { sp('mousedown', br.left + 2 * pz, br.top + 2 * pz); window.dispatchEvent(new MouseEvent('mousemove', { clientX: br.left + 42 * pz, clientY: br.top + 22 * pz, bubbles: true }));
++              sp('mouseup', br.left + 42 * pz, br.top + 22 * pz); sp('click', br.left + 42 * pz, br.top + 22 * pz); }
++            var pm = msgs('place')[nP];
++            var tIds = pm ? pm.targets.map(function (g) { return g.id; }) : [];
++            var tPar = pm ? pm.targets.filter(function (g) { return g.id === par.id; })[0] : null;
++            var hidden = !!shield && shield.style.display === 'none';
++            window.__htdProbe.message({ type: 'placeArm', cls: 'TLabel', label: 'Label' });
++            if (shield) { sp('mousedown', br.left + 5 * pz, br.top + 5 * pz); sp('mouseup', br.left + 5 * pz, br.top + 5 * pz); }
++            var pc = msgs('place')[nP + 1];
++            var nC = msgs('placeCancel').length;
++            window.__htdProbe.message({ type: 'placeArm', cls: 'TLabel', label: 'Label' });
++            document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
++            var cancelled = msgs('placeCancel').length === nC + 1 && shield.style.display === 'none';
++            R.placeTried = 'targets ' + tIds.join('>') + (tPar ? ' in ' + tPar.id + ' at ' + tPar.x + ',' + tPar.y : '') + ' size ' + (pm ? pm.w + 'x' + pm.h : '-') +
++              ' | click ' + (pc ? pc.cls + ' ' + pc.w + 'x' + pc.h : '-') + ' | esc ' + cancelled + ' | edits ' + (edits().length - ne) + ' selects ' + (msgs('select').length - ns);
++            R.placeOk = shown && hidden && !!pm && pm.cls === 'TSpeedButton' && tIds[0] === btn.id && tIds[tIds.length - 1] === '@form' && !!tPar &&
++              Math.abs(tPar.x - (btn.offsetLeft + 2)) <= 1 && Math.abs(tPar.y - (btn.offsetTop + 2)) <= 1 && pm.w === 40 && pm.h === 20 &&
++              !!pc && pc.cls === 'TLabel' && pc.w === 0 && pc.h === 0 && cancelled && edits().length === ne && msgs('select').length === ns;
++          })();
++
+           /* Tab 順序: the .dfm's order = the page's first three stops with the first two swapped ->
+              "1≠2", "2≠1", "3" and grey for the rest; the reply counts them; off = no badge */
+           (function () {
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index f46ff62..7feae6d 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -76,6 +76,7 @@ foreach ($p in $Pages) {
+     if ($R.PSObject.Properties.Name -contains 'wrapperEdit') { $must['input moves its wrapper'] = [bool]$R.wrapperOk }
+     if ($R.PSObject.Properties.Name -contains 'editMany') { $must['one change on several controls = ONE batch edit'] = [bool]$R.editManyOk }
+     if ($R.PSObject.Properties.Name -contains 'editManyLayout') { $must['reset to DFM: position / size in the same batch; a locked one keeps its place, said'] = [bool]$R.editManyLayoutOk }
++    if ($R.PSObject.Properties.Name -contains 'placeTried') { $must['toolbox placing: crosshair, a drag = point in each container + size, a click = no size, Esc gives up, nothing written'] = [bool]$R.placeOk }
+     if ($R.PSObject.Properties.Name -contains 'tabTried') { $must['Tab order: badges in the page order, two swapped = red 1/2 and 2/1, grey for the rest, off = none'] = [bool]$R.tabOk }
+     if ($R.PSObject.Properties.Name -contains 'sameTypeTried') { $must['select same type: the whole page / only its container, the selection stays primary'] = [bool]$R.sameTypeOk }
+     if ($R.PSObject.Properties.Name -contains 'panTried') { $must['the hand: Space + drag and a middle-button drag pan the view, nothing picked or written'] = [bool]$R.panOk }
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index abf2cb7..ebc52ad 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -587,6 +587,10 @@ async function main() {
+   ok(tbMod.ITEMS.length === 7 && tbBad.length === 0, 'toolbox: 7 templates, each one balanced element with id, title "name : TClass", left/top', 'bad: ' + tbBad.join(','));
+   ok(tbMod.newName('Label', new Set(['Label1', 'Label2', 'Label4'])) === 'Label3' && tbMod.newName('Panel', new Set()) === 'Panel1',
+     'toolbox names: the first free BCB6-style name (Label3, Panel1)');
++  const tbSized = tbMod.itemOf('TSpeedButton').html('SB9', 3, 4, 100, 30), tbDef = tbMod.itemOf('TSpeedButton').html('SB9', 3, 4);
++  const tbGb = tbMod.itemOf('TGroupBox').html('GB9', 0, 0, 200, 120);
++  ok(/left:3px;top:4px;width:100px;height:30px;/.test(tbSized) && /width:75px;height:25px;/.test(tbDef) && /width:200px;height:120px;/.test(tbGb),
++    'toolbox templates take a size (a drawn box); without one, the default', tbSized.slice(0, 120));
+ 
+   // --- 頁面檢查: the generator's cut style attribute (HotPlate Panel1's caption span), and the other kinds
+   const lnMod = require('../lib/pagelint');
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 5bc929d..1814002 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -673,8 +673,8 @@ async function main() {
+   const tbItems = tbView ? tbView.provider.getChildren() : [];
+   const tbBtn = tbItems.find(i => i.cls === 'TSpeedButton');
+   const tbItem = tbBtn ? tbView.provider.getTreeItem(tbBtn) : null;
+-  ok(tbItems.length === 7 && tbItem && tbItem.command.command === 'ht9045Designer.toolboxAdd' && tbItem.command.arguments[0] === 'TSpeedButton',
+-    'toolbox view: 7 items, a click runs toolboxAdd(class)');
++  ok(tbItems.length === 7 && tbItem && tbItem.command.command === 'ht9045Designer.toolboxArm' && tbItem.command.arguments[0] === 'TSpeedButton',
++    'toolbox view: 7 items, a click picks the tool (toolboxArm(class))');
+   const tbBefore = text;
+   await selAs('Panel2', 'div');
+   const tbAdd1 = await fake._cmds['ht9045Designer.toolboxAdd']('TSpeedButton');
+@@ -689,6 +689,29 @@ async function main() {
+   ok(tbAdd3 && /^Label\d+$/.test(tbAdd3.id) && !tbAdd3.into && tbAdd3.after === 'spbSave' && tbSave && text.slice(tbSave.end).replace(/^\s+/, '').indexOf('<span class="lb" id="' + tbAdd3.id + '"') === 0,
+     'toolbox with spbSave selected: a new label right after it (same parent), a free LabelN name', JSON.stringify(tbAdd3));
+   doc._setText(tbBefore);
++  // WinForms / WPF placing: a click picks the tool (the page shows a crosshair), the page puts it down
++  // in the first container under the point (at that point, with the dragged size); a quick second click adds at once
++  pagePosted.length = 0;
++  api.hub.lastArm = null;
++  const tpArm = await fake._cmds['ht9045Designer.toolboxArm']('TSpeedButton');
++  const tpMsg = pagePosted.filter(m => m.type === 'placeArm').pop();
++  ok(tpArm && tpArm.armed === 'TSpeedButton' && tpMsg && tpMsg.cls === 'TSpeedButton' && edD.armed === 'TSpeedButton', 'toolbox click: the tool is picked, the page is told (crosshair)');
++  const tpPlaced = await api.hub.cmdPlace(edD, { cls: 'TSpeedButton', w: 40, h: 20,
++    targets: [{ id: 'spbSave', x: 3, y: 3 }, { id: 'Panel2', x: 57, y: 11 }, { id: '@form', x: 57, y: 486 }] });
++  const tpP2 = (() => { const t0 = he2.startTagOf(text, 'Panel2'); const r = t0 ? hb2.elementRange(text, t0) : null; return r ? text.slice(r[0], r[1]) : ''; })();
++  ok(tpPlaced && tpPlaced.into === 'Panel2' && new RegExp('id="' + tpPlaced.id + '"[^>]*left:57px;top:11px;width:40px;height:20px;').test(tpP2) && !edD.armed,
++    'put down over spbSave: into Panel2 (spbSave is no container) at 57,11, 40x20', JSON.stringify(tpPlaced));
++  doc._setText(tbBefore);
++  const tpText = text;
++  const tpPane = await api.hub.cmdPlace(edD, { cls: 'TLabel', w: 0, h: 0, targets: [{ id: null, pane: true }, { id: '@form', x: 5, y: 5 }] });
++  ok(tpPane === null && text === tpText, 'put down in a tab sheet (no id): refused, not dropped on the form');
++  api.hub.lastArm = null;
++  await fake._cmds['ht9045Designer.toolboxArm']('TLabel');
++  await selAs('Panel2', 'div');
++  const tpDbl = await fake._cmds['ht9045Designer.toolboxArm']('TLabel');
++  ok(tpDbl && /^Label\d+$/.test(tpDbl.id) && tpDbl.into === 'Panel2' && pagePosted.filter(m => m.type === 'placeArm').pop().cls === null,
++    'a quick second click on the same tool: added at once (as before), the crosshair put away', JSON.stringify(tpDbl));
++  doc._setText(tbBefore);
+ 
+   // WPF document outline drag and drop: the names travel in the DataTransfer, the drop moves them
+   const dnd = fake._views['ht9045Designer.components'].dnd;
+-- 
+2.55.0.windows.5
+

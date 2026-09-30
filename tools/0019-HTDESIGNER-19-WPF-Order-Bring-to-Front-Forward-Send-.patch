@@ -1,0 +1,385 @@
+From 200b5760cea3b03a156e670dd424bf653def1140 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 19:59:30 +0800
+Subject: [PATCH] HTDESIGNER-19: WPF Order -- Bring to Front / Forward / Send
+ Backward / to Back (0.19.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+On a web page the element later in the source is drawn on top, so Order is
+the element's place among its siblings in the source -- like the WPF designer
+reordering the XAML; the page is drawn again and the component tree follows.
+- Right-click > 順序: 移到最上層 / 上移一層 / 下移一層 / 移到最下層, with the
+  Blend keys Ctrl+Shift+] / Ctrl+] / Ctrl+[ / Ctrl+Shift+[.
+- A fieldset's <legend> and a panel's caption <span class="pnlCap"> stay first.
+- Already on top / at the bottom: a status note, nothing changed.
+- One WorkspaceEdit (one Ctrl+Z); an element alone on its line moves as that
+  line, so front then back leaves the source byte-identical.
+- lib/htmlblock.js: parentOf (one pass with a stack), childrenOf, reorder.
+
+Tests: lib 114 (back after the legend / front / forward / backward / already
+there; line moves; HotPlate Panel2 with its caption span), smoke 75, real VS
+Code 78 (front: the re-drawn tree lists spbSave after sbtExit; one undo puts
+it back), probe, panels -- all pass; opened files MD5-unchanged.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |   5 +
+ tools/vscode-htdesigner/extension.js          |  28 +++++
+ tools/vscode-htdesigner/lib/htmlblock.js      | 101 +++++++++++++++++-
+ tools/vscode-htdesigner/package.json          |  42 +++++++-
+ .../test/integration/index.js                 |  17 +++
+ tools/vscode-htdesigner/test/run_tests.js     |  21 ++++
+ .../vscode-htdesigner/test/smoke_extension.js |  12 +++
+ 7 files changed, 222 insertions(+), 4 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 019da07..05bfde1 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -127,6 +127,11 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ | Ctrl+V | 貼上一份新的：id 自動改成不重複的（`spbSave` → `spbSave_2`，裡面子元件的 id 也一起改），選了 Panel／GroupBox／分頁就貼進它裡面，否則貼在選取元件的旁邊；同一頁貼上會往右下偏 8px |
+ | Ctrl+X | 剪下＝複製＋刪除 |
+ 
++**順序**（WPF 右鍵的「順序」，畫面右鍵 →「順序」，或 Blend 的快捷鍵）：
++移到最上層 `Ctrl+Shift+]`、上移一層 `Ctrl+]`、下移一層 `Ctrl+[`、移到最下層 `Ctrl+Shift+[`。
++網頁裡「原始碼越後面的蓋在越上面」，所以調的是元件在同一層兄弟之間的前後位置（跟 WPF 調 XAML 裡的順序一樣），元件樹的順序也跟著變。
++GroupBox 的 `<legend>` 和 Panel 的標題永遠留在第一個；已經在最上／最下層時只會提示、不改。
++
+ 改的是 HTML 原始碼（整個元件那一段），設計畫面照新原始碼重畫；每個動作都是一個復原步驟（Ctrl+Z）。
+ 貼上的新元件沒有接任何網頁程式（跟 WPF 複製按鈕一樣，事件要自己接）。在「元件」樹上按 Del 也能刪。
+ 
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 05160f9..8ead64f 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -128,6 +128,8 @@ class Hub {
+       reg('ht9045Designer.cutComponent', arg => this.cmdCut(arg && typeof arg === 'object' && 'confirmed' in arg ? arg : null)),
+       reg('ht9045Designer.copyComponent', () => this.cmdCopy()),
+       reg('ht9045Designer.pasteComponent', () => this.cmdPaste()),
++      // WPF Order
++      ...['front', 'forward', 'backward', 'back'].map(how => reg('ht9045Designer.order.' + how, () => this.cmdOrder(how))),
+       reg('ht9045Designer.toggleMode', () => this.cmdToggleMode()),
+       reg('ht9045Designer.reload', () => { if (this.active) this.active.render(); }),
+       reg('ht9045Designer.showSource', () => this.cmdShowSource()),
+@@ -1148,6 +1150,32 @@ class Hub {
+     return ok ? { removed: us.units.map(u => u.id), uses: uses.map(u => u.id) } : null;
+   }
+ 
++  /**
++   * WPF Order: Bring to Front / Bring Forward / Send Backward / Send to Back = the
++   * element's place among its siblings in the source (later = drawn on top); the
++   * page is drawn again and the component tree follows. how: front|forward|backward|back
++   */
++  async cmdOrder(how) {
++    const d = this.active;
++    if (!d) return null;
++    const ids = this.selIds(d);
++    if (!ids.length) { vscode.window.setStatusBarMessage('$(info) 先選一個元件（表單本身沒有前後順序）', 5000); return null; }
++    const text = d.doc.getText();
++    const u = this.unitFor(text, ids[0]);
++    if (!u) { this.refuseEdit(d, '原始碼裡找不到「' + ids[0] + '」（可能是頁面 JS 產生的元件），沒有動。'); return null; }
++    const r = htmlblock.reorder(text, u, how);
++    const WORD = { front: '最上層', forward: '上一層', backward: '下一層', back: '最下層' };
++    if (r.error) { this.refuseEdit(d, '「' + ids[0] + '」不能調整順序：' + r.error); return null; }
++    if (r.same) { vscode.window.setStatusBarMessage('$(info) ' + ids[0] + ' 已經在' + (how === 'front' || how === 'forward' ? '最上層' : '最下層'), 4000); return { same: true }; }
++    d.lastSelId = ids[0];
++    const ok = await this.applyStructural(d, r.parts);
++    if (ok) {
++      vscode.window.setStatusBarMessage('$(layers) ' + ids[0] + ' 移到' + WORD[how] + '（同一層第 ' + (r.to + 1) + ' / ' + r.of + ' 個；Ctrl+Z 復原）' +
++        (ids.length > 1 ? '　多選時只移動主要選取' : ''), 6000);
++    }
++    return ok ? { id: ids[0], from: r.from, to: r.to, of: r.of } : null;
++  }
++
+   /** Ctrl+C: the selected elements' HTML, for Paste (also on the system clipboard as text). */
+   async cmdCopy() {
+     const d = this.active;
+diff --git a/tools/vscode-htdesigner/lib/htmlblock.js b/tools/vscode-htdesigner/lib/htmlblock.js
+index 8d80dfb..9be96d7 100644
+--- a/tools/vscode-htdesigner/lib/htmlblock.js
++++ b/tools/vscode-htdesigner/lib/htmlblock.js
+@@ -175,4 +175,103 @@ function removeRange(text, start, end) {
+   return { text: text.slice(0, s) + text.slice(e), range: [s, e] };
+ }
+ 
+-module.exports = { nameOf, elementRange, unitOf, idsIn, freshName, renameIds, offsetBlock, indentAt, insideEnd, removeRange };
++/**
++ * The element that directly contains offset `at` (a start tag's '<'): { tag, range },
++ * or null at the top. One pass with a stack of the open elements.
++ */
++function parentOf(text, at) {
++  const stack = [];
++  let i = 0;
++  const n = text.length;
++  while (i < n && i < at) {
++    const lt = text.indexOf('<', i);
++    if (lt < 0 || lt >= at) break;
++    if (text.startsWith('<!--', lt)) { const e = text.indexOf('-->', lt); if (e < 0) return null; i = e + 3; continue; }
++    const e = he.tagEnd(text, lt);
++    if (e < 0) return null;
++    const t = text.slice(lt, e + 1);
++    const close = /^<\/([A-Za-z][\w-]*)/.exec(t);
++    if (close) {
++      const nm = close[1].toLowerCase();
++      // back to the matching open element (tolerates an unclosed <p> and the like)
++      for (let k = stack.length - 1; k >= 0; k--) if (stack[k].name === nm) { stack.length = k; break; }
++      i = e + 1;
++      continue;
++    }
++    const open = /^<([A-Za-z][\w-]*)/.exec(t);
++    if (open) {
++      const nm = open[1].toLowerCase();
++      if (nm === 'script' || nm === 'style') {
++        const endTag = text.toLowerCase().indexOf('</' + nm, e + 1);
++        const ee = endTag < 0 ? -1 : he.tagEnd(text, endTag);
++        i = ee < 0 ? n : ee + 1;
++        continue;
++      }
++      if (!he.VOID.has(nm) && !/\/>$/.test(t)) stack.push({ name: nm, start: lt, end: e + 1, text: t });
++    }
++    i = e + 1;
++  }
++  const top = stack[stack.length - 1];
++  if (!top) return null;
++  const range = elementRange(text, top);
++  return range ? { tag: top, range } : null;
++}
++
++/** The element children of a parent ({ tag, range }), in order: [{ start, end, name, text }]. */
++function childrenOf(text, parent) {
++  const out = [];
++  let i = parent.tag.end;
++  const stop = text.lastIndexOf('</', parent.range[1] - 1);
++  while (i < stop) {
++    const lt = text.indexOf('<', i);
++    if (lt < 0 || lt >= stop) break;
++    if (text.startsWith('<!--', lt)) { const e = text.indexOf('-->', lt); i = e < 0 ? stop : e + 3; continue; }
++    const e = he.tagEnd(text, lt);
++    if (e < 0) break;
++    const t = text.slice(lt, e + 1);
++    if (/^<\//.test(t)) { i = e + 1; continue; }
++    const r = elementRange(text, { start: lt, end: e + 1, text: t });
++    if (!r) break;
++    out.push({ start: r[0], end: r[1], name: nameOf(t), text: t });
++    i = r[1];
++  }
++  return out;
++}
++
++/**
++ * WPF Order (Bring to Front / Forward / Send Backward / to Back) = where the element
++ * stands among its siblings: later in the source is drawn on top. A fieldset's
++ * <legend> and a panel's caption <span class="pnlCap"> stay first.
++ *   how: 'front' | 'forward' | 'backward' | 'back'
++ * Returns { parts: [{ range, repl }] } (one WorkspaceEdit), { same: true } when it is
++ * already there, or { error }.
++ */
++function reorder(text, unit, how) {
++  const parent = parentOf(text, unit.start);
++  if (!parent) return { error: '找不到它的上層元素' };
++  const kids = childrenOf(text, parent);
++  const idx = kids.findIndex(k => k.start === unit.start && k.end === unit.end);
++  if (idx < 0) return { error: '在上層元素裡找不到它（原始碼結構不完整）' };
++  let fixed = 0;
++  while (fixed < kids.length && (kids[fixed].name === 'legend' || /\bclass\s*=\s*["'][^"']*\bpnlCap\b/.test(kids[fixed].text))) fixed++;
++  if (idx < fixed) return { error: '標題元素不能移動' };
++  const last = kids.length - 1;
++  const to = how === 'front' ? last : how === 'forward' ? Math.min(last, idx + 1) : how === 'backward' ? Math.max(fixed, idx - 1) : fixed;
++  if (to === idx) return { same: true };
++  const html = text.slice(unit.start, unit.end);
++  const cut = removeRange(text, unit.start, unit.end).range;
++  const moved = text.slice(cut[0], cut[1]);
++  const wholeLine = moved.endsWith('\n') && moved.trim() === html.trim();
++  const tgt = kids[to];
++  const tLs = text.lastIndexOf('\n', tgt.start - 1) + 1;
++  let tLe = text.indexOf('\n', tgt.end);
++  if (tLe < 0) tLe = text.length;
++  const tgtOwnLine = !text.slice(tLs, tgt.start).trim() && !text.slice(tgt.end, tLe).replace(/\r$/, '').trim() && tLe < text.length;
++  let ins;
++  if (wholeLine && tgtOwnLine) ins = { at: to > idx ? tLe + 1 : tLs, repl: moved };        // line with line
++  else ins = { at: to > idx ? tgt.end : tgt.start, repl: html };
++  const del = wholeLine && tgtOwnLine ? { range: cut, repl: '' } : { range: [unit.start, unit.end], repl: '' };
++  return { parts: [del, { range: [ins.at, ins.at], repl: ins.repl }], from: idx, to, of: kids.length };
++}
++
++module.exports = { nameOf, elementRange, unitOf, idsIn, freshName, renameIds, offsetBlock, indentAt, insideEnd, removeRange, parentOf, childrenOf, reorder };
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index af11921..4498209 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.18.0",
++  "version": "0.19.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -159,6 +159,26 @@
+         "category": "HT9045",
+         "icon": "$(trash)"
+       },
++      {
++        "command": "ht9045Designer.order.front",
++        "title": "移到最上層",
++        "category": "HT9045"
++      },
++      {
++        "command": "ht9045Designer.order.forward",
++        "title": "上移一層",
++        "category": "HT9045"
++      },
++      {
++        "command": "ht9045Designer.order.backward",
++        "title": "下移一層",
++        "category": "HT9045"
++      },
++      {
++        "command": "ht9045Designer.order.back",
++        "title": "移到最下層",
++        "category": "HT9045"
++      },
+       { "command": "ht9045Designer.viewCode", "title": "檢視程式碼（預設事件）", "category": "HT9045" },
+       { "command": "ht9045Designer.selectParent", "title": "選取上層", "category": "HT9045" },
+       { "command": "ht9045Designer.align.left", "title": "靠左對齊", "category": "HT9045" },
+@@ -203,7 +223,8 @@
+       }
+     ],
+     "submenus": [
+-      { "id": "ht9045Designer.alignMenu", "label": "對齊（以主要選取為基準）" }
++      { "id": "ht9045Designer.alignMenu", "label": "對齊（以主要選取為基準）" },
++      { "id": "ht9045Designer.orderMenu", "label": "順序" }
+     ],
+     "menus": {
+       "webview/context": [
+@@ -219,10 +240,17 @@
+         { "command": "ht9045Designer.designToggle", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@3" },
+         { "command": "ht9045Designer.designUnhideAll", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign' && ht9045Designer.anyDesignHidden", "group": "2_select@4" },
+         { "submenu": "ht9045Designer.alignMenu", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@1" },
++        { "submenu": "ht9045Designer.orderMenu", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@2" },
+         { "command": "ht9045Designer.pageOverview", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@1" },
+         { "command": "ht9045Designer.dfmDiff", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@2" },
+         { "command": "ht9045Designer.toggleMode", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@3" }
+       ],
++      "ht9045Designer.orderMenu": [
++        { "command": "ht9045Designer.order.front", "group": "1@1" },
++        { "command": "ht9045Designer.order.forward", "group": "1@2" },
++        { "command": "ht9045Designer.order.backward", "group": "1@3" },
++        { "command": "ht9045Designer.order.back", "group": "1@4" }
++      ],
+       "ht9045Designer.alignMenu": [
+         { "command": "ht9045Designer.align.left", "group": "1@1" },
+         { "command": "ht9045Designer.align.hcenter", "group": "1@2" },
+@@ -401,6 +429,10 @@
+         { "command": "ht9045Designer.copyComponent", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.pasteComponent", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.deleteComponent", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.order.front", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.order.forward", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.order.backward", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.order.back", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.designUnhideAll", "when": "ht9045Designer.active && ht9045Designer.anyDesignHidden" },
+         { "command": "ht9045Designer.openPageText", "when": "false" },
+         { "command": "ht9045Designer.findComponent", "when": "ht9045Designer.active" }
+@@ -421,7 +453,11 @@
+         "command": "ht9045Designer.deleteComponent",
+         "key": "delete",
+         "when": "focusedView == ht9045Designer.components && ht9045Designer.active"
+-      }
++      },
++      { "command": "ht9045Designer.order.front", "key": "ctrl+shift+]", "when": "activeCustomEditorId == 'ht9045Designer.editor'" },
++      { "command": "ht9045Designer.order.forward", "key": "ctrl+]", "when": "activeCustomEditorId == 'ht9045Designer.editor'" },
++      { "command": "ht9045Designer.order.backward", "key": "ctrl+[", "when": "activeCustomEditorId == 'ht9045Designer.editor'" },
++      { "command": "ht9045Designer.order.back", "key": "ctrl+shift+[", "when": "activeCustomEditorId == 'ht9045Designer.editor'" }
+     ],
+     "viewsContainers": {
+       "activitybar": [
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 13a825d..d75c6c3 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -315,6 +315,23 @@ exports.run = async function () {
+       if (d.doc.getText() !== original || d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
+       ok(d.doc.getText() === original && !d.doc.isDirty, 'clean again, nothing saved');
+       await waitFor(() => (d.treeData.some(r => r[2] === 'spbSave') ? true : null), 10000);
++
++      // WPF Order (Ctrl+Shift+]): spbSave to the front -- the re-drawn tree lists it after sbtExit; Ctrl+Z
++      await sleep(800);
++      const idxOf = id => d.treeData.findIndex(r => r[2] === id);
++      const was = idxOf('spbSave') < idxOf('sbtExit');
++      d.post({ type: 'selectId', id: 'spbSave', origin: 'editor' });
++      await waitFor(() => (d.sel && d.sel.info && d.sel.info.id === 'spbSave' ? true : null), 5000);
++      const of = await vscode.commands.executeCommand('ht9045Designer.order.front');
++      const redrawn = await waitFor(() => (d.doc.getText() !== original && idxOf('spbSave') > idxOf('sbtExit') && idxOf('sbtExit') >= 0 ? true : null), 10000);
++      ok(was && of && !!redrawn, 'order front: spbSave moved after sbtExit, the re-drawn component tree follows', of ? JSON.stringify(of) : '-');
++      d.panel.reveal(d.panel.viewColumn, false);
++      await sleep(300);
++      await vscode.commands.executeCommand('undo');
++      const unOrd = await waitFor(() => (d.doc.getText() === original ? true : null), 5000);
++      ok(!!unOrd, 'ONE undo puts it back');
++      if (d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
++      await waitFor(() => (idxOf('spbSave') >= 0 && idxOf('spbSave') < idxOf('sbtExit') ? true : null), 10000);
+     }
+ 
+     // 頁面 list (the real tree view): HotPlate is the current page; a click switches to Setup.Speed.html
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index ad60811..d4a40ab 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -505,6 +505,27 @@ async function main() {
+   ok(hbCli.slice(hbAt, hbAt + 6) === '</div>' && hbCli.slice(0, hbAt).endsWith('<i id="k"></i>'), 'insideEnd: a GroupBox keeps its children in <div class="cli">: paste goes there');
+   ok(hbMod.elementRange('<div id="u"><p>', he.startTagOf('<div id="u"><p>', 'u')) === null, 'elementRange: unbalanced markup -> null (nothing is cut)');
+ 
++  // --- WPF Order: the place among the siblings (later = on top); a legend / pnlCap stays first
++  const orApply = (t, parts) => parts.slice().sort((a, b) => b.range[0] - a.range[0]).reduce((s, p) => s.slice(0, p.range[0]) + p.repl + s.slice(p.range[1]), t);
++  const orIds = t => hbMod.idsIn(t).join(',');
++  const orDo = (t, id, how) => { const u = hbMod.unitOf(t, id, 'self'); const r = hbMod.reorder(t, u, how); return r.parts ? orApply(t, r.parts) : r; };
++  const orFs = '<fieldset id="g"><legend>L</legend><i id="a"></i><i id="b"></i><i id="c"></i></fieldset>';
++  ok(orIds(orDo(orFs, 'c', 'back')) === 'g,c,a,b' && /<legend>L<\/legend><i id="c">/.test(orDo(orFs, 'c', 'back')) &&
++    orIds(orDo(orFs, 'a', 'front')) === 'g,b,c,a' && orIds(orDo(orFs, 'a', 'forward')) === 'g,b,a,c' && orIds(orDo(orFs, 'c', 'backward')) === 'g,a,c,b' &&
++    orDo(orFs, 'a', 'backward').same === true && orDo(orFs, 'c', 'front').same === true,
++    'reorder: back (after the legend) / front / forward / backward; already there = same', [orDo(orFs, 'c', 'back'), orDo(orFs, 'a', 'front')].join(' | '));
++  const orLines = '<div id="p">\n  <i id="a"></i>\n  <i id="b"></i>\n</div>\n';
++  ok(orDo(orLines, 'a', 'front') === '<div id="p">\n  <i id="b"></i>\n  <i id="a"></i>\n</div>\n' && orDo(orDo(orLines, 'a', 'front'), 'a', 'back') === orLines,
++    'reorder: a line moves as a line; front then back = byte-identical', JSON.stringify(orDo(orLines, 'a', 'front')));
++  const orHp = hbHtml;
++  const orP2 = t => { const u = hbMod.unitOf(t, 'Panel2', 'self'); return u.html; };
++  const orHp2 = orDo(orHp, 'spbSave', 'front');
++  const orHp3 = typeof orHp2 === 'string' ? orDo(orHp2, 'spbSave', 'back') : null;
++  const orBefore = (t, a, b) => orP2(t).indexOf('id="' + a + '"') < orP2(t).indexOf('id="' + b + '"');
++  ok(typeof orHp2 === 'string' && orBefore(orHp2, 'sbtExit', 'spbSave') && /^<div[^>]*id="Panel2"[^>]*>\s*<span class="pnlCap"/.test(orP2(orHp2)) &&
++    typeof orHp3 === 'string' && orBefore(orHp3, 'spbSave', 'sbtExit') && /^<div[^>]*id="Panel2"[^>]*>\s*<span class="pnlCap"/.test(orP2(orHp3)),
++    'HotPlate Panel2: spbSave to the front goes after sbtExit, to the back before it; the caption span stays first', hbMod.idsIn(orP2(orHp2)).join(','));
++
+   // --- the 頁面 list: every page of web\page and web\, by the name before the first dot
+   const plMod = require('../lib/pagelist');
+   const plGroups = plMod.listPages(WEB);
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 1bf2fce..7340800 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -406,6 +406,18 @@ async function main() {
+   doc._setText(edBefore);
+   await selAs('spbSave', 'button');
+ 
++  // WPF Order: spbSave's place among Panel2's children (later in the source = drawn on top)
++  const orP2Of = () => { const t0 = he2.startTagOf(text, 'Panel2'); const r = t0 ? hb2.elementRange(text, t0) : null; return r ? text.slice(r[0], r[1]) : ''; };
++  const orFront = await fake._cmds['ht9045Designer.order.front']();
++  ok(orFront && orFront.to === orFront.of - 1 && orP2Of().indexOf('id="sbtExit"') < orP2Of().indexOf('id="spbSave"'),
++    'order front: spbSave last in Panel2 (drawn on top)', JSON.stringify(orFront));
++  const orAgain = await fake._cmds['ht9045Designer.order.front']();
++  ok(orAgain && orAgain.same === true, 'front again: already on top, nothing changed');
++  const orBack = await fake._cmds['ht9045Designer.order.back']();
++  ok(orBack && orBack.to === 1 && orP2Of().indexOf('id="spbSave"') < orP2Of().indexOf('id="sbtExit"') && /^<div[^>]*id="Panel2"[^>]*>\s*<span class="pnlCap"/.test(orP2Of()),
++    'order back: first after the caption span (which stays first)', JSON.stringify(orBack));
++  doc._setText(edBefore);
++
+   // live data tag: main.html palMainStatus <- machine.state <- WebBridgeTags.cpp
+   const MAINP = path.join(PORT, '..', 'web', 'page', 'main.html');
+   const mtext = fs.readFileSync(MAINP, 'utf8');
+-- 
+2.55.0.windows.5
+

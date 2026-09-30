@@ -1,0 +1,810 @@
+From 84a857c74af440e858f158f5e2754f77acc1a030 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 19:53:14 +0800
+Subject: [PATCH] HTDESIGNER-18: WPF Delete / Copy / Cut / Paste of whole
+ components (0.18.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Like the WPF designer changing the XAML: the whole element (start tag through
+its end tag -- or the <span style="position:absolute"> around an input) is
+cut out of / put into the page source as ONE WorkspaceEdit (one Ctrl+Z), and
+the designer draws the page again from the new source.
+- Del (design surface, or the component tree): removed. When the page's JS
+  uses the name (getElementById('x'), '#x' ...), a modal question first lists
+  where (e.g. spbSave: ht9045_hotplate_wire.js:249, ht9045_wire_engine.js:2076);
+  afterwards the parent is selected.
+- Ctrl+C: the selected elements' HTML (multi-selection too), also on the
+  system clipboard as text.
+- Ctrl+V: a new copy -- every id renamed so none collides (spbSave ->
+  spbSave_2, children too, the generated title="name : TClass" and
+  <label for> with them); into the selected TPanel / TGroupBox (its
+  <div class="cli">) / TTabSheet / the form, else next to the selected
+  element; 8 px down-right on the page it came from; selected afterwards.
+- Ctrl+X: copy, then delete (asks like Delete).
+- Right-click menu (first group): 剪下 / 複製 / 貼上 / 刪除.
+- Ctrl+C / X / V arrive as clipboard events (VS Code runs its clipboard
+  commands inside the webview); one of a kind per 300 ms, so a doubled
+  event can never paste twice.
+- lib/htmlblock.js: elementRange, unitOf, renameIds, offsetBlock, insideEnd,
+  removeRange (a pasted block deleted again leaves the page byte-identical).
+
+Tests: lib 111, probe (Del / copy / paste -> commands, a doubled paste once),
+smoke 72 (copy, paste + offset + one edit, delete asks and names the script,
+delete of the copy = byte-identical page, paste into Panel2, cut), panels,
+real VS Code 76 (paste drawn + selected, delete byte-identical, confirmed
+delete of spbSave, Ctrl+Z brings it back, nothing saved) -- all pass.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  12 ++
+ tools/vscode-htdesigner/extension.js          | 193 +++++++++++++++++-
+ tools/vscode-htdesigner/lib/htmlblock.js      | 178 ++++++++++++++++
+ tools/vscode-htdesigner/media/probe.js        |  26 +++
+ tools/vscode-htdesigner/package.json          |  36 +++-
+ tools/vscode-htdesigner/test/fake_vscode.js   |   2 +
+ .../test/integration/index.js                 |  34 +++
+ tools/vscode-htdesigner/test/probe_driver.js  |  10 +
+ tools/vscode-htdesigner/test/probe_test.ps1   |   1 +
+ tools/vscode-htdesigner/test/run_tests.js     |  31 +++
+ .../vscode-htdesigner/test/smoke_extension.js |  47 +++++
+ 11 files changed, 562 insertions(+), 8 deletions(-)
+ create mode 100644 tools/vscode-htdesigner/lib/htmlblock.js
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index fd416fc..019da07 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -118,6 +118,18 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ ⚠ 這些頁面是網頁作者的作品，透過 `sync_web.py` 同步進來，`--apply` 會整份覆蓋。第一次改的時候外掛會提醒你；
+ 存檔前請確認，並告訴網頁作者。如果你開了自動存檔（`files.autoSave`），改動會自動寫到磁碟，提醒裡也會寫出來。
+ 
++**剪下／複製／貼上／刪除元件**（跟 WPF 一樣；畫面上按右鍵最上面四個，或鍵盤）：
++
++| 動作 | 結果 |
++|---|---|
++| Del | 刪掉選取的元件（連同裡面的東西）。**網頁程式有用到它的 id**（例如 `getElementById('spbSave')`）會先跳出確認，列出是哪個檔第幾行 |
++| Ctrl+C | 複製選取的元件（多選也可以） |
++| Ctrl+V | 貼上一份新的：id 自動改成不重複的（`spbSave` → `spbSave_2`，裡面子元件的 id 也一起改），選了 Panel／GroupBox／分頁就貼進它裡面，否則貼在選取元件的旁邊；同一頁貼上會往右下偏 8px |
++| Ctrl+X | 剪下＝複製＋刪除 |
++
++改的是 HTML 原始碼（整個元件那一段），設計畫面照新原始碼重畫；每個動作都是一個復原步驟（Ctrl+Z）。
++貼上的新元件沒有接任何網頁程式（跟 WPF 複製按鈕一樣，事件要自己接）。在「元件」樹上按 Del 也能刪。
++
+ **設計時隱藏（眼睛）**：跟 WPF 文件大綱的眼睛一樣。「元件」樹每一列右邊的眼睛＝在設計畫面**暫時隱藏**那個元件（連同裡面的東西），
+ 再按一次（閉眼圖示）顯示回來；標題列的眼睛＝全部顯示。畫面上按右鍵也有「設計時隱藏／顯示這個元件」。
+ 隱藏的元件點不到，**滑鼠會點到它下面那一層** —— 像 Alert.Note 十幾個面板疊在同一個位置，把上面的藏起來就能選、能改下面的。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 5ee0ed8..05160f9 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -27,6 +27,7 @@ const { WebCmdIndex } = require('./lib/webcmds');
+ const overview = require('./lib/overview');
+ const dfmdiff = require('./lib/dfmdiff');
+ const pagelist = require('./lib/pagelist');
++const htmlblock = require('./lib/htmlblock');
+ const htmledit = require('./lib/htmledit');
+ const lex = require('./lib/cpplex');
+ 
+@@ -122,6 +123,11 @@ class Hub {
+       reg('ht9045Designer.designUnhide', n => this.designHide(n, false)),
+       reg('ht9045Designer.designToggle', n => this.designHide(n)),
+       reg('ht9045Designer.designUnhideAll', () => { if (this.active) this.applyDesignHidden(this.active, []); }),
++      // WPF Delete / Cut / Copy / Paste of whole components (the page is drawn again from the source)
++      reg('ht9045Designer.deleteComponent', arg => this.cmdDelete(arg && typeof arg === 'object' && 'confirmed' in arg ? arg : null)),
++      reg('ht9045Designer.cutComponent', arg => this.cmdCut(arg && typeof arg === 'object' && 'confirmed' in arg ? arg : null)),
++      reg('ht9045Designer.copyComponent', () => this.cmdCopy()),
++      reg('ht9045Designer.pasteComponent', () => this.cmdPaste()),
+       reg('ht9045Designer.toggleMode', () => this.cmdToggleMode()),
+       reg('ht9045Designer.reload', () => { if (this.active) this.active.render(); }),
+       reg('ht9045Designer.showSource', () => this.cmdShowSource()),
+@@ -1040,17 +1046,183 @@ class Hub {
+     d.selfEdits++;
+     const ok = await vscode.workspace.applyEdit(we);
+     if (!ok) { d.selfEdits--; this.refuseEdit(d, '寫回原始碼失敗。'); d.render(); return false; }
+-    if (!this.warnedEdit) {
+-      this.warnedEdit = true;
+-      const auto = vscode.workspace.getConfiguration('files', d.doc.uri).get('autoSave');
+-      const autoNote = auto && auto !== 'off' ? '⚠ 你開了自動存檔（files.autoSave = ' + auto + '），改動會自動寫到磁碟。' : '還沒存檔；Ctrl+Z 復原、Ctrl+S 存檔。';
+-      vscode.window.showInformationMessage(
+-        '已改到 ' + path.basename(d.file) + ' 的 HTML 原始碼。' + autoNote +
+-        '這一頁由 sync_web.py 從網頁作者那邊同步，--apply 會整份覆蓋：存檔前請確認，並告訴網頁作者。');
++    this.noteFirstEdit(d);
++    return true;
++  }
++
++  /** The first change of the session: say where it went, how to undo / save, and sync_web.py. */
++  noteFirstEdit(d) {
++    if (this.warnedEdit) return;
++    this.warnedEdit = true;
++    const auto = vscode.workspace.getConfiguration('files', d.doc.uri).get('autoSave');
++    const autoNote = auto && auto !== 'off' ? '⚠ 你開了自動存檔（files.autoSave = ' + auto + '），改動會自動寫到磁碟。' : '還沒存檔；Ctrl+Z 復原、Ctrl+S 存檔。';
++    vscode.window.showInformationMessage(
++      '已改到 ' + path.basename(d.file) + ' 的 HTML 原始碼。' + autoNote +
++      '這一頁由 sync_web.py 從網頁作者那邊同步，--apply 會整份覆蓋：存檔前請確認，並告訴網頁作者。');
++  }
++
++  // --- WPF Delete / Copy / Cut / Paste: whole elements; the page is drawn again from the source ---
++  /** The names a structural command works on: the selection (+ the multi-selection), never the form. */
++  selIds(d) {
++    const info = d && d.sel && d.sel.info;
++    if (!info) return [];
++    return [info.id].concat(Array.isArray(info.multi) ? info.multi : []).filter(id => id && id !== '@form');
++  }
++
++  /** The unit of one name: the element, or the <span style="position:absolute"> around it (an input). */
++  unitFor(text, id) {
++    const tag = htmledit.startTagOf(text, id);
++    if (!tag) return null;
++    const w = htmledit.wrapperTagOf(text, tag.start);
++    const wrap = !!(w && !/\sid\s*=/.test(w.text) && /position\s*:\s*absolute/i.test(w.text));
++    const u = htmlblock.unitOf(text, id, wrap ? 'parent' : 'self');
++    if (u) u.id = id;
++    return u;
++  }
++
++  /** Units of these names; one inside another counts once. { units } or { error }. */
++  unitsFor(text, ids) {
++    const units = [];
++    for (const id of ids) {
++      const u = this.unitFor(text, id);
++      if (!u) return { error: '原始碼裡找不到「' + id + '」（可能是頁面 JS 產生的元件，或標籤沒有正常結束），沒有動。' };
++      units.push(u);
++    }
++    const outer = units.filter(u => !units.some(o => o !== u && o.start <= u.start && u.end <= o.end));
++    outer.sort((a, b) => a.start - b.start);
++    return { units: outer };
++  }
++
++  /** A structural change as ONE WorkspaceEdit (one undo step); the designer re-draws from it. */
++  async applyStructural(d, parts) {
++    parts.sort((a, b) => a.range[0] - b.range[0]);
++    for (let i = 1; i < parts.length; i++) {
++      if (parts[i].range[0] < parts[i - 1].range[1]) { this.refuseEdit(d, '同一段原始碼被改了兩次（重疊），沒有改。'); return false; }
+     }
++    const we = new vscode.WorkspaceEdit();
++    for (const p of parts) we.replace(d.doc.uri, new vscode.Range(d.doc.positionAt(p.range[0]), d.doc.positionAt(p.range[1])), p.repl);
++    const ok = await vscode.workspace.applyEdit(we);
++    if (!ok) { this.refuseEdit(d, '改原始碼失敗。'); return false; }
++    this.noteFirstEdit(d);
+     return true;
+   }
+ 
++  /** The page's JS that uses these names (getElementById('x'), '#x' ...): [{ id, hits }]. */
++  async webUsesOf(d, names) {
++    const pi = await d.info;
++    const sources = this.webSources(d, pi);
++    const out = [];
++    for (const id of names) {
++      const hits = web.findAll(sources, web.idMentionRe(id), 5);
++      if (hits.length) out.push({ id, hits });
++    }
++    return out;
++  }
++
++  /** Del / Cut: remove the selected elements from the source (asks first when the page's JS uses them). */
++  async cmdDelete(arg, verb) {
++    const d = this.active;
++    verb = verb || '刪除';
++    if (!d) return null;
++    const ids = this.selIds(d);
++    if (!ids.length) { vscode.window.setStatusBarMessage('$(info) 先選一個元件（表單本身不能' + verb + '）', 5000); return null; }
++    const text = d.doc.getText();
++    const us = this.unitsFor(text, ids);
++    if (us.error) { this.refuseEdit(d, us.error); return null; }
++    const names = [].concat(...us.units.map(u => htmlblock.idsIn(u.html)));
++    const uses = await this.webUsesOf(d, names);
++    if (uses.length && !(arg && arg.confirmed)) {
++      const list = uses.slice(0, 6).map(u => u.id + '（' + u.hits.map(h => path.basename(h.file) + ':' + h.line).join('、') + '）').join('\n');
++      const pick = await vscode.window.showWarningMessage(
++        '網頁程式有用到要' + verb + '的元件，' + verb + '之後那些程式會找不到它：\n' + list + (uses.length > 6 ? '\n…共 ' + uses.length + ' 個' : '') +
++        '\n\n確定要' + verb + '嗎？（Ctrl+Z 可以復原）', { modal: true }, verb);
++      if (pick !== verb) return null;
++    }
++    // afterwards the parent is selected (WPF)
++    const row = d.treeData.find(r => r[2] === ids[0]);
++    const prow = row ? d.treeData.find(r => r[0] === row[1]) : null;
++    d.lastSelId = prow ? prow[2] : null;
++    const parts = us.units.map(u => { const r = htmlblock.removeRange(text, u.start, u.end); return { range: r.range, repl: '' }; });
++    const ok = await this.applyStructural(d, parts);
++    if (ok) vscode.window.setStatusBarMessage('$(trash) 已' + verb + ' ' + us.units.map(u => u.id).join('、') + '（Ctrl+Z 復原）', 6000);
++    return ok ? { removed: us.units.map(u => u.id), uses: uses.map(u => u.id) } : null;
++  }
++
++  /** Ctrl+C: the selected elements' HTML, for Paste (also on the system clipboard as text). */
++  async cmdCopy() {
++    const d = this.active;
++    if (!d) return null;
++    const ids = this.selIds(d);
++    if (!ids.length) { vscode.window.setStatusBarMessage('$(info) 先選一個元件（表單本身不能複製）', 5000); return null; }
++    const us = this.unitsFor(d.doc.getText(), ids);
++    if (us.error) { this.refuseEdit(d, us.error); return null; }
++    this.clip = { blocks: us.units.map(u => u.html), ids: us.units.map(u => u.id), file: d.file };
++    try { await vscode.env.clipboard.writeText(this.clip.blocks.join('\n')); } catch (e) { /* the internal copy is enough */ }
++    vscode.window.setStatusBarMessage('$(copy) 已複製 ' + this.clip.ids.join('、') + '，Ctrl+V 貼上', 5000);
++    return this.clip;
++  }
++
++  /** Ctrl+X: copy, then delete (asks like Delete when the page's JS uses them). */
++  async cmdCut(arg) {
++    const c = await this.cmdCopy();
++    if (!c) return null;
++    return this.cmdDelete(arg, '剪下');
++  }
++
++  /**
++   * Ctrl+V: the copied elements as new ones -- every id made new (spbSave -> spbSave_2),
++   * into the selected container (TPanel / TGroupBox / TTabSheet / the form), else next
++   * to the selected element; 8 px down-right when pasted on the page they came from.
++   */
++  async cmdPaste() {
++    const d = this.active;
++    if (!d) return null;
++    if (!this.clip || !this.clip.blocks.length) { vscode.window.setStatusBarMessage('$(info) 還沒有複製元件（先在設計檢視選元件按 Ctrl+C）', 5000); return null; }
++    const text = d.doc.getText();
++    const pi = await d.info;
++    const info = d.sel && d.sel.info;
++    const selId = info && info.id ? info.id : '@form';
++    const node = pi.ir && selId !== '@form' ? pi.ir.byName.get(selId) : null;
++    const container = selId === '@form' || !!(node && /^(TPanel|TGroupBox|TTabSheet|TScrollBox|TFrame)$/.test(node.class));
++    let at;
++    let lineOf;
++    if (container) {
++      const tag = htmledit.startTagOf(text, selId);
++      at = tag ? htmlblock.insideEnd(text, tag) : -1;
++      lineOf = at;
++    } else {
++      const u = this.unitFor(text, selId);
++      at = u ? u.end : -1;
++      lineOf = u ? u.start : -1;
++    }
++    if (at < 0) { this.refuseEdit(d, '找不到要貼到哪裡（「' + selId + '」在原始碼裡找不到或沒有正常結束），沒有貼上。'); return null; }
++    const used = new Set(pageinfo.collectIds(text).concat(d.treeData.map(r => r[2]).filter(Boolean)));
++    const same = web.samePath(this.clip.file, d.file);
++    const made = [];
++    const blocks = this.clip.blocks.map(b => {
++      const r = htmlblock.renameIds(b, used);
++      made.push(...r.map.values());
++      return same ? htmlblock.offsetBlock(r.html, 8, 8) : r.html;
++    });
++    let repl;
++    const ls = text.lastIndexOf('\n', at - 1) + 1;
++    if (container && !text.slice(ls, at).trim()) {
++      // the container's end tag starts its line: whole lines, just before it
++      const ind = htmlblock.indentAt(text, at) + '  ';
++      repl = blocks.map(b => ind + b + '\n').join('');
++      at = ls;
++    } else {
++      // "\n" + indent + block: Delete takes the same break away again (htmlblock.removeRange)
++      const ind = htmlblock.indentAt(text, lineOf) + (container ? '  ' : '');
++      repl = blocks.map(b => '\n' + ind + b).join('');
++    }
++    // afterwards the first new element is selected
++    d.lastSelId = made[0] || d.lastSelId;
++    const ok = await this.applyStructural(d, [{ range: [at, at], repl }]);
++    if (ok) vscode.window.setStatusBarMessage('$(clippy) 已貼上 ' + made.join('、') + (container ? '（在 ' + selId + ' 裡）' : '') + '（Ctrl+Z 復原）', 6000);
++    return ok ? { made, into: container ? selId : null, after: container ? null : selId } : null;
++  }
++
+   /** From the properties panel: ask the probe to apply (it then reports an 'edit'). */
+   forwardEdit(d, key, m) {
+     if (!d || key == null) return;
+@@ -1471,6 +1643,13 @@ class Designer {
+       case 'editRefused':
+         this.hub.refuseEdit(this, String(m.why || '不能改'));
+         break;
++      case 'cmd': {
++        // Del / Ctrl+C / Ctrl+X / Ctrl+V on the design surface (this designer has the focus)
++        if (this.hub.active !== this) this.hub.setActive(this);
++        const run = { delete: () => this.hub.cmdDelete(null), copy: () => this.hub.cmdCopy(), cut: () => this.hub.cmdCut(null), paste: () => this.hub.cmdPaste() }[m.cmd];
++        if (run) Promise.resolve(run()).catch(e => this.hub.log('指令失敗（' + m.cmd + '）：' + (e && e.stack || e)));
++        break;
++      }
+       case 'zoom':
+         this.zoom = typeof m.zoom === 'number' ? m.zoom : 1;
+         if (this.hub.active === this) this.hub.updateStatus();
+diff --git a/tools/vscode-htdesigner/lib/htmlblock.js b/tools/vscode-htdesigner/lib/htmlblock.js
+new file mode 100644
+index 0000000..8d80dfb
+--- /dev/null
++++ b/tools/vscode-htdesigner/lib/htmlblock.js
+@@ -0,0 +1,178 @@
++'use strict';
++// AI(W906-HTDESIGNER) 20260929: whole elements of the page source, for the WPF-style
++// Delete / Copy / Cut / Paste. The designer re-draws the page from the new source, so
++// everything here is text: find an element's whole range (start tag .. its end tag),
++// rename the ids of a copied block so none collides, move it a little, and say where
++// a pasted block goes. Plain Node (no vscode).
++const he = require('./htmledit');
++
++/** Name of a start tag ('<div …>' -> 'div'). */
++function nameOf(tagText) {
++  const m = /^<([A-Za-z][\w-]*)/.exec(tagText);
++  return m ? m[1].toLowerCase() : '';
++}
++
++/**
++ * [start, end) of the whole element whose start tag is `tag` ({ start, end, text }):
++ * through its matching end tag. A void or self-closing element is its start tag.
++ * null when the end is not found (unbalanced markup).
++ */
++function elementRange(text, tag) {
++  const nm = nameOf(tag.text);
++  if (!nm) return null;
++  if (he.VOID.has(nm) || /\/>$/.test(tag.text)) return [tag.start, tag.end];
++  let i = tag.end;
++  let depth = 0;
++  const n = text.length;
++  while (i < n) {
++    const lt = text.indexOf('<', i);
++    if (lt < 0) return null;
++    if (text.startsWith('<!--', lt)) { const e = text.indexOf('-->', lt); if (e < 0) return null; i = e + 3; continue; }
++    const e = he.tagEnd(text, lt);
++    if (e < 0) return null;
++    const t = text.slice(lt, e + 1);
++    const close = /^<\/([A-Za-z][\w-]*)/.exec(t);
++    if (close) {
++      if (depth === 0) return close[1].toLowerCase() === nm ? [tag.start, e + 1] : null;
++      depth--;
++      i = e + 1;
++      continue;
++    }
++    const open = /^<([A-Za-z][\w-]*)/.exec(t);
++    if (open) {
++      const on = open[1].toLowerCase();
++      if (on === 'script' || on === 'style') {
++        const endTag = text.toLowerCase().indexOf('</' + on, e + 1);
++        if (endTag < 0) return null;
++        const ee = he.tagEnd(text, endTag);
++        i = ee < 0 ? n : ee + 1;
++        continue;
++      }
++      if (!he.VOID.has(on) && !/\/>$/.test(t)) depth++;
++    }
++    i = e + 1;
++  }
++  return null;
++}
++
++/**
++ * The unit the designer moves: the element itself, or -- when its position lives on
++ * the <span> around it (an <input>, target 'parent') -- that span.
++ * { start, end, html, tag } or null.
++ */
++function unitOf(text, id, target) {
++  const tag = he.startTagOf(text, id);
++  if (!tag) return null;
++  const outer = target === 'parent' ? he.wrapperTagOf(text, tag.start) : null;
++  const t = outer || tag;
++  const r = elementRange(text, t);
++  if (!r) return null;
++  return { start: r[0], end: r[1], html: text.slice(r[0], r[1]), tag: t };
++}
++
++/** Every id="…" in a block, in order. */
++function idsIn(html) {
++  const out = [];
++  const re = /<[A-Za-z][\w-]*\b[^>]*?\sid\s*=\s*(["'])([^"']+)\1/g;
++  let m;
++  while ((m = re.exec(html))) out.push(m[2]);
++  return out;
++}
++
++/** A name not in `used`: spbSave -> spbSave_2, spbSave_2 -> spbSave_3. */
++function freshName(id, used) {
++  const base = String(id).replace(/_\d+$/, '');
++  for (let k = 2; ; k++) {
++    const c = base + '_' + k;
++    if (!used.has(c)) return c;
++  }
++}
++
++/**
++ * A copy of `html` whose ids are all new (not in `used`, which gets them added):
++ * id="…", the generated title="name : TClass…" and <label for="…">. { html, map }.
++ */
++function renameIds(html, used) {
++  const map = new Map();
++  for (const id of idsIn(html)) {
++    if (map.has(id)) continue;
++    const nu = freshName(id, used);
++    used.add(nu);
++    map.set(id, nu);
++  }
++  const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++  let out = html;
++  for (const [a, b] of map) {
++    out = out.replace(new RegExp('(\\sid\\s*=\\s*["\'])' + esc(a) + '(["\'])', 'g'), '$1' + b + '$2');
++    out = out.replace(new RegExp('(\\stitle\\s*=\\s*["\'])' + esc(a) + '(\\s*:)', 'g'), '$1' + b + '$2');
++    out = out.replace(new RegExp('(\\sfor\\s*=\\s*["\'])' + esc(a) + '(["\'])', 'g'), '$1' + b + '$2');
++  }
++  return { html: out, map };
++}
++
++/** The block with its first start tag moved by (dx, dy) px (left/top in px only). */
++function offsetBlock(html, dx, dy) {
++  const e = he.tagEnd(html, 0);
++  if (e < 0) return html;
++  const tag = html.slice(0, e + 1);
++  const st = he.styleOf(tag);
++  const px = name => {
++    const d = st.decls.filter(x => x.name === name).pop();
++    const m = d ? /^(-?\d+(?:\.\d+)?)px$/.exec(d.value) : null;
++    return m ? parseFloat(m[1]) : null;
++  };
++  const ch = {};
++  const l = px('left'), t = px('top');
++  if (l !== null && dx) ch.left = Math.round(l + dx) + 'px';
++  if (t !== null && dy) ch.top = Math.round(t + dy) + 'px';
++  if (!Object.keys(ch).length) return html;
++  return he.setStyle(tag, ch) + html.slice(e + 1);
++}
++
++/** The indentation of the line `at` is on. */
++function indentAt(text, at) {
++  const ls = text.lastIndexOf('\n', at - 1) + 1;
++  const m = /^[ \t]*/.exec(text.slice(ls, at));
++  return m ? m[0] : '';
++}
++
++/**
++ * Where a block pasted INTO a container goes: just before the container's end tag,
++ * or -- a generated TGroupBox / TPanel keeps its children in <div class="cli"> --
++ * before the end of that. Offset or -1.
++ */
++function insideEnd(text, tag) {
++  const r = elementRange(text, tag);
++  if (!r || he.VOID.has(nameOf(tag.text))) return -1;
++  // a direct <div class="cli"> child
++  const re = /<div\b[^>]*\bclass\s*=\s*["'][^"']*\bcli\b[^"']*["'][^>]*>/g;
++  re.lastIndex = tag.end;
++  const m = re.exec(text);
++  if (m && m.index < r[1]) {
++    const cliTag = { start: m.index, end: m.index + m[0].length, text: m[0] };
++    const cr = elementRange(text, cliTag);
++    if (cr && cr[1] <= r[1]) return text.lastIndexOf('</', cr[1] - 1);
++  }
++  return text.lastIndexOf('</', r[1] - 1);
++}
++
++/**
++ * The text with [start, end) removed, and the line break that came with it:
++ *   alone on its line          -> the whole line goes;
++ *   starts a line, more after  -> the break (and indentation) before it goes.
++ * So a pasted block (inserted as "\n" + indent + block) deleted again leaves the
++ * page byte-identical. { text, range:[s,e] } -- the range actually removed.
++ */
++function removeRange(text, start, end) {
++  let s = start, e = end;
++  const ls = text.lastIndexOf('\n', s - 1) + 1;
++  let le = text.indexOf('\n', e);
++  if (le < 0) le = text.length;
++  const blankBefore = !text.slice(ls, s).trim();
++  const blankAfter = !text.slice(e, le).replace(/\r$/, '').trim();
++  if (blankBefore && blankAfter) { s = ls; e = le < text.length ? le + 1 : le; }
++  else if (blankBefore && ls > 0) { s = ls - 1; if (s > 0 && text[s - 1] === '\r') s--; }
++  return { text: text.slice(0, s) + text.slice(e), range: [s, e] };
++}
++
++module.exports = { nameOf, elementRange, unitOf, idsIn, freshName, renameIds, offsetBlock, indentAt, insideEnd, removeRange };
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index f93a540..23c5c8a 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -892,6 +892,25 @@
+     if (selEl === n.el) { selEl = null; select(n.el, 'edit', false); }
+   }
+   var ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
++  /* WPF Cut / Copy / Paste / Delete of whole components: the extension does them on
++     the source. Ctrl+C / X / V arrive as clipboard events (VS Code runs its clipboard
++     commands inside the webview); one of a kind per 300 ms, as the browser's own
++     default action may fire it too -- a doubled paste would make two copies. */
++  var lastCmd = { cmd: '', t: 0 };
++  function postCmd(cmd) {
++    var now = Date.now();
++    if (lastCmd.cmd === cmd && now - lastCmd.t < 300) return;
++    lastCmd = { cmd: cmd, t: now };
++    post({ type: 'cmd', cmd: cmd });
++  }
++  ['copy', 'cut', 'paste'].forEach(function (evn) {
++    origAdd.call(document, evn, function (e) {
++      if (mode !== 'design') return;
++      if (evn !== 'paste' && !selEl) return;
++      e.preventDefault();
++      postCmd(evn);
++    }, true);
++  });
+   origAdd.call(window, 'keydown', function (e) {
+     if (mode !== 'design' || !selEl || e.altKey || e.metaKey) return;
+     var t = e.target;
+@@ -920,6 +939,13 @@
+       post({ type: 'dblclick', key: keyOf(selEl) });
+       return;
+     }
++    if (k === 'Delete' && !e.ctrlKey && !e.shiftKey) {
++      /* WPF Delete: the extension removes it from the source, the page is drawn again */
++      e.preventDefault();
++      flushNudge();
++      postCmd('delete');
++      return;
++    }
+     if (!ARROWS[k]) return;
+     e.preventDefault();
+     e.stopImmediatePropagation();
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index eee471a..af11921 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.17.0",
++  "version": "0.18.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -138,6 +138,27 @@
+         "category": "HT9045",
+         "icon": "$(eye)"
+       },
++      {
++        "command": "ht9045Designer.cutComponent",
++        "title": "剪下元件",
++        "category": "HT9045"
++      },
++      {
++        "command": "ht9045Designer.copyComponent",
++        "title": "複製元件",
++        "category": "HT9045"
++      },
++      {
++        "command": "ht9045Designer.pasteComponent",
++        "title": "貼上元件",
++        "category": "HT9045"
++      },
++      {
++        "command": "ht9045Designer.deleteComponent",
++        "title": "刪除元件",
++        "category": "HT9045",
++        "icon": "$(trash)"
++      },
+       { "command": "ht9045Designer.viewCode", "title": "檢視程式碼（預設事件）", "category": "HT9045" },
+       { "command": "ht9045Designer.selectParent", "title": "選取上層", "category": "HT9045" },
+       { "command": "ht9045Designer.align.left", "title": "靠左對齊", "category": "HT9045" },
+@@ -190,6 +211,10 @@
+         { "command": "ht9045Designer.revealSource", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "1_code@2" },
+         { "command": "ht9045Designer.revealDfm", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "1_code@3" },
+         { "command": "ht9045Designer.selectParent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@1" },
++        { "command": "ht9045Designer.cutComponent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "0_edit@1" },
++        { "command": "ht9045Designer.copyComponent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "0_edit@2" },
++        { "command": "ht9045Designer.pasteComponent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "0_edit@3" },
++        { "command": "ht9045Designer.deleteComponent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "0_edit@4" },
+         { "command": "ht9045Designer.findComponent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@2" },
+         { "command": "ht9045Designer.designToggle", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@3" },
+         { "command": "ht9045Designer.designUnhideAll", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign' && ht9045Designer.anyDesignHidden", "group": "2_select@4" },
+@@ -372,6 +397,10 @@
+         { "command": "ht9045Designer.designHide", "when": "false" },
+         { "command": "ht9045Designer.designUnhide", "when": "false" },
+         { "command": "ht9045Designer.designToggle", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.cutComponent", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.copyComponent", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.pasteComponent", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.deleteComponent", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.designUnhideAll", "when": "ht9045Designer.active && ht9045Designer.anyDesignHidden" },
+         { "command": "ht9045Designer.openPageText", "when": "false" },
+         { "command": "ht9045Designer.findComponent", "when": "ht9045Designer.active" }
+@@ -387,6 +416,11 @@
+         "command": "ht9045Designer.viewCode",
+         "key": "f7",
+         "when": "activeCustomEditorId == 'ht9045Designer.editor'"
++      },
++      {
++        "command": "ht9045Designer.deleteComponent",
++        "key": "delete",
++        "when": "focusedView == ht9045Designer.components && ht9045Designer.active"
+       }
+     ],
+     "viewsContainers": {
+diff --git a/tools/vscode-htdesigner/test/fake_vscode.js b/tools/vscode-htdesigner/test/fake_vscode.js
+index 1211d3a..c5adc8d 100644
+--- a/tools/vscode-htdesigner/test/fake_vscode.js
++++ b/tools/vscode-htdesigner/test/fake_vscode.js
+@@ -74,6 +74,8 @@ const vscode = {
+     get activeTextEditor() { return null; },
+     showInformationMessage: (m) => { rec('info', [m]); return Promise.resolve(); },
+     showErrorMessage: (m) => { rec('error', [m]); return Promise.resolve(); },
++    // a modal question: answered with vscode._answer (undefined = closed without an answer)
++    showWarningMessage: (m, ...rest) => { rec('warning', [m]); return Promise.resolve(vscode._answer); },
+     setStatusBarMessage: () => disp(),
+     showQuickPick: (items, o) => { rec('quickPick', [items.map(i => i.label + ' ' + i.description), o && o.placeHolder]); return Promise.resolve(state.quickPick(items)); },
+     showTextDocument: (doc, o) => {
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 0db9b1d..13a825d 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -283,6 +283,40 @@ exports.run = async function () {
+       ok(g3 && g3.designHidden === 0 && !d.doc.isDirty && hub.loadDesignHidden(d.file).length === 0, 'show all: back, nothing kept, page not dirty');
+     }
+ 
++    // WPF Copy / Paste / Delete in the real designer: the page is drawn again from the source each time
++    {
++      const original = d.doc.getText();
++      d.panel.reveal(d.panel.viewColumn, false);
++      await waitFor(() => hub.active === d, 3000);
++      d.post({ type: 'selectId', id: 'spbSave', origin: 'editor' });
++      await waitFor(() => (d.sel && d.sel.info && d.sel.info.id === 'spbSave' ? true : null), 5000);
++      const cp = await vscode.commands.executeCommand('ht9045Designer.copyComponent');
++      ok(cp && cp.ids[0] === 'spbSave', 'copy spbSave (real designer)');
++      const ps = await vscode.commands.executeCommand('ht9045Designer.pasteComponent');
++      const drawn = await waitFor(() => (/id="spbSave_2"/.test(d.doc.getText()) && d.treeData.some(r => r[2] === 'spbSave_2') ? true : null), 10000);
++      ok(ps && ps.made[0] === 'spbSave_2' && !!drawn, 'paste: spbSave_2 in the source AND drawn on the page (the tree has it)');
++      const selNew = await waitFor(() => (d.sel && d.sel.info && d.sel.info.id === 'spbSave_2' ? true : null), 8000);
++      ok(!!selNew, 'the pasted button is selected after the re-draw');
++      const del = await vscode.commands.executeCommand('ht9045Designer.deleteComponent');
++      const gone = await waitFor(() => (d.doc.getText() === original ? true : null), 5000);
++      ok(del && del.removed[0] === 'spbSave_2' && !!gone, 'delete spbSave_2 (no script uses it): the source is byte-identical to before the paste');
++      await waitFor(() => (d.treeData.length && !d.treeData.some(r => r[2] === 'spbSave_2') ? true : null), 10000);
++      // a component the page's JS uses: removed only when confirmed (here: the argument), Ctrl+Z brings it back
++      d.post({ type: 'selectId', id: 'spbSave', origin: 'editor' });
++      await waitFor(() => (d.sel && d.sel.info && d.sel.info.id === 'spbSave' ? true : null), 5000);
++      const del2 = await vscode.commands.executeCommand('ht9045Designer.deleteComponent', { confirmed: true });
++      const gone2 = await waitFor(() => (!/id="spbSave"/.test(d.doc.getText()) ? true : null), 5000);
++      ok(del2 && del2.uses.indexOf('spbSave') >= 0 && !!gone2, 'delete spbSave (the wire script uses it; confirmed): gone from the source', del2 ? JSON.stringify(del2) : '-');
++      d.panel.reveal(d.panel.viewColumn, false);
++      await sleep(300);
++      await vscode.commands.executeCommand('undo');
++      const back = await waitFor(() => (/id="spbSave"/.test(d.doc.getText()) && !/id="spbSave_2"/.test(d.doc.getText()) ? true : null), 5000);
++      ok(!!back, 'Ctrl+Z brings spbSave back');
++      if (d.doc.getText() !== original || d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
++      ok(d.doc.getText() === original && !d.doc.isDirty, 'clean again, nothing saved');
++      await waitFor(() => (d.treeData.some(r => r[2] === 'spbSave') ? true : null), 10000);
++    }
++
+     // 頁面 list (the real tree view): HotPlate is the current page; a click switches to Setup.Speed.html
+     {
+       const pgs = hub.pages.getChildren();
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index 182c617..49f99f0 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -349,6 +349,16 @@
+             R.designShowOk = !hpnl.hasAttribute('data-htd-hide') && getComputedStyle(btn).visibility === 'visible' && edits().length === ne2;
+           }
+ 
++          /* Del / Ctrl+C / Ctrl+V reach the extension as commands; a doubled paste event counts once */
++          window.__htdProbe.selectById(btn.id);
++          var nc = msgs('cmd').length;
++          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }));
++          document.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true }));
++          document.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true }));
++          document.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true }));
++          R.cmds = msgs('cmd').slice(nc).map(function (m) { return m.cmd; }).join(',');
++          R.cmdsOk = R.cmds === 'delete,copy,paste' && document.getElementById(btn.id) === btn;
++
+           /* zoom 200%: a 20px drag on screen is 10px in the page */
+           window.__htdProbe.message({ type: 'setZoom', zoom: 2 });
+           window.__htdProbe.selectById('spbSave');
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index cf7498e..000f19b 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -74,6 +74,7 @@ foreach ($p in $Pages) {
+     }
+     if ($R.PSObject.Properties.Name -contains 'hiddenTarget') { $must['hidden tab revealed'] = [bool]$R.hiddenTabRevealed }
+     if ($R.PSObject.Properties.Name -contains 'wrapperEdit') { $must['input moves its wrapper'] = [bool]$R.wrapperOk }
++    if ($R.PSObject.Properties.Name -contains 'cmds') { $must['Del / copy / paste -> commands, a doubled paste once'] = [bool]$R.cmdsOk }
+     if ($R.PSObject.Properties.Name -contains 'designHideTarget') {
+       $must['hidden in the designer: invisible, clicks go through'] = [bool]$R.designHideOk
+       $must['shown again, nothing written'] = [bool]$R.designShowOk
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index 81fe2c9..ad60811 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -474,6 +474,37 @@ async function main() {
+     /font-size:16px/.test(he.setStyle(pc1.text, { 'font-size': '16px' })),
+     'captionHostTag: Panel1 -> its <span class="pnlCap">, GroupBox1 -> its <legend>; a font edit lands there', pc1 ? pc1.text.slice(0, 70) : '-');
+ 
++  // --- whole elements (Delete / Copy / Paste): HotPlate's Panel2 holds spbSave + sbtExit
++  const hbMod = require('../lib/htmlblock');
++  const hbHtml = fs.readFileSync(path.join(WEB, 'page', 'Setup.HotPlate.html'), 'utf8');
++  const hbP2 = hbMod.unitOf(hbHtml, 'Panel2', 'self');
++  ok(hbP2 && /^<div[^>]*id="Panel2"/.test(hbP2.html) && /<\/div>$/.test(hbP2.html) && hbMod.idsIn(hbP2.html).join(',').indexOf('spbSave') >= 0 &&
++    hbMod.idsIn(hbP2.html).indexOf('sbtExit') >= 0 && hbMod.idsIn(hbP2.html)[0] === 'Panel2',
++    'elementRange: Panel2 from its start tag through its own </div>, with spbSave and sbtExit inside', hbMod.idsIn(hbP2 ? hbP2.html : '').join(','));
++  const hbX = hbMod.unitOf(hbHtml, 'XST1', 'parent');
++  ok(hbX && /^<span\b/.test(hbX.html) && /id="XST1"/.test(hbX.html) && /<\/span>$/.test(hbX.html), 'unitOf(XST1, parent): the positioning <span> with the input in it', hbX ? hbX.html.slice(0, 80) : '-');
++  const hbUsed = new Set(pageinfo.collectIds(hbHtml));
++  const hbRn = hbMod.renameIds(hbP2.html, hbUsed);
++  ok(hbRn.map.get('Panel2') === 'Panel2_2' && hbRn.map.get('spbSave') === 'spbSave_2' && !/id="(Panel2|spbSave|sbtExit)"/.test(hbRn.html) &&
++    /title="spbSave_2 : TSpeedButton/.test(hbRn.html) && hbUsed.has('sbtExit_2'),
++    'renameIds: every id of the copy new (Panel2_2, spbSave_2, sbtExit_2), the generated titles too', JSON.stringify(Array.from(hbRn.map)));
++  const hbOff = hbMod.offsetBlock('<div id="a" style="position:absolute;left:10px;top:20px;width:5px;"><b></b></div>', 8, 8);
++  ok(/left:18px;top:28px;width:5px;/.test(hbOff) && /<b><\/b><\/div>$/.test(hbOff), 'offsetBlock: only the first tag, left/top +8', hbOff);
++  const hbDoc = 'a\n  <div id="x">1</div><span id="y"></span>\n  <i id="z"></i>\nb';
++  const hbT1 = hbMod.unitOf(hbDoc, 'z', 'self');
++  const hbR1 = hbMod.removeRange(hbDoc, hbT1.start, hbT1.end);
++  const hbT2 = hbMod.unitOf(hbDoc, 'x', 'self');
++  const hbR2 = hbMod.removeRange(hbDoc, hbT2.start, hbT2.end);
++  ok(hbR1.text === 'a\n  <div id="x">1</div><span id="y"></span>\nb' && hbR2.text === 'a<span id="y"></span>\n  <i id="z"></i>\nb',
++    'removeRange: alone on its line -> the line goes; starts a line with more after -> the break before it goes', JSON.stringify([hbR1.text, hbR2.text]));
++  const hbIns = 'P' + '\n    ' + '<i id="n"></i>' + '<q></q>';
++  const hbT3 = hbMod.unitOf(hbIns, 'n', 'self');
++  ok(hbMod.removeRange(hbIns, hbT3.start, hbT3.end).text === 'P<q></q>', 'a block pasted as "\\n" + indent + block, deleted again: byte-identical');
++  const hbCli = '<fieldset id="g"><legend>L</legend><div class="cli" style="inset:0"><i id="k"></i></div></fieldset>';
++  const hbAt = hbMod.insideEnd(hbCli, he.startTagOf(hbCli, 'g'));
++  ok(hbCli.slice(hbAt, hbAt + 6) === '</div>' && hbCli.slice(0, hbAt).endsWith('<i id="k"></i>'), 'insideEnd: a GroupBox keeps its children in <div class="cli">: paste goes there');
++  ok(hbMod.elementRange('<div id="u"><p>', he.startTagOf('<div id="u"><p>', 'u')) === null, 'elementRange: unbalanced markup -> null (nothing is cut)');
++
+   // --- the 頁面 list: every page of web\page and web\, by the name before the first dot
+   const plMod = require('../lib/pagelist');
+   const plGroups = plMod.listPages(WEB);
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 7acc753..1bf2fce 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -8,6 +8,8 @@ const Module = require('module');
+ const fs = require('fs');
+ const path = require('path');
+ const fake = require('./fake_vscode');
++const he2 = require('../lib/htmledit');
++const hb2 = require('../lib/htmlblock');
+ 
+ const origResolve = Module._resolveFilename;
+ Module._resolveFilename = function (req, parent, ...rest) {
+@@ -359,6 +361,51 @@ async function main() {
+   // the source was never touched by any of it
+   ok(!fake._calls.slice(nCallsEye).some(c => c.name === 'applyEditCall'), 'hiding in the designer writes nothing into the page (no WorkspaceEdit)');
+ 
++  // WPF Copy / Paste / Delete / Cut of whole components -- text of the source, one WorkspaceEdit each
++  const edHub = api.hub;
++  const edD = edHub.active;
++  const edBefore = text;
++  const selAs = async (id, tag) => {
++    pageRecv({ __htd: 1, type: 'select', info: { key: 900 + id.length, id, tag, title: '', attrs: [], style: [], inline: [], computed: [], chain: [], listeners: [], inherited: [] }, origin: 'click' });
++    await new Promise(r => setTimeout(r, 30));
++  };
++  await selAs('spbSave', 'button');
++  const edClip = await fake._cmds['ht9045Designer.copyComponent']();
++  ok(edClip && edClip.ids[0] === 'spbSave' && /^<button[^>]*id="spbSave"/.test(edClip.blocks[0]) && /<\/button>$/.test(edClip.blocks[0]),
++    'copy: the whole <button id="spbSave"> … </button>', edClip ? edClip.blocks[0].slice(0, 60) + ' … ' + edClip.blocks[0].slice(-12) : '-');
++  const edCalls = fake._calls.length;
++  const edPos = /id="spbSave"[^>]*left:(\d+)px;top:(\d+)px/.exec(edBefore);
++  const edWant = edPos ? 'left:' + (+edPos[1] + 8) + 'px;top:' + (+edPos[2] + 8) + 'px' : '?';
++  const edPaste = await fake._cmds['ht9045Designer.pasteComponent']();
++  ok(edPaste && edPaste.made[0] === 'spbSave_2' && new RegExp('id="spbSave_2"[^>]*' + edWant).test(text) && text.split('id="spbSave"').length === 2 &&
++    /title="spbSave_2 : TSpeedButton/.test(text) && edD.lastSelId === 'spbSave_2' &&
++    fake._calls.slice(edCalls).filter(c => c.name === 'applyEditCall').length === 1,
++    'paste: a new spbSave_2 next to it, 8 px down-right, ONE WorkspaceEdit, selected afterwards', edPaste ? JSON.stringify(edPaste) : '-');
++  // the page's JS uses "spbSave": Delete asks first; closed without an answer = nothing removed
++  fake._answer = undefined;
++  const edNo = await fake._cmds['ht9045Designer.deleteComponent']();
++  const edAsked = fake._calls.filter(c => c.name === 'warning').pop();
++  ok(edNo === null && /id="spbSave"/.test(text) && edAsked && /spbSave/.test(edAsked.args[0]) && /hotplate_wire\.js/i.test(edAsked.args[0]),
++    'delete asks first when the page JS uses it (names the script); no answer = nothing removed', edAsked ? edAsked.args[0].split('\n')[1] : '-');
++  // spbSave_2 is used by no script: removed at once, and the page is exactly as before
++  await selAs('spbSave_2', 'button');
++  const edDel = await fake._cmds['ht9045Designer.deleteComponent']();
++  ok(edDel && edDel.removed[0] === 'spbSave_2' && edDel.uses.length === 0 && text === edBefore, 'delete spbSave_2: no question, the page is byte-identical to before the paste');
++  // paste INTO a container (Panel2 is a TPanel): inside it, the ids new again
++  await selAs('Panel2', 'div');
++  const edIn = await fake._cmds['ht9045Designer.pasteComponent']();
++  const p2Range = (() => { const t0 = he2.startTagOf(text, 'Panel2'); const r = t0 ? hb2.elementRange(text, t0) : null; return r ? text.slice(r[0], r[1]) : ''; })();
++  ok(edIn && edIn.into === 'Panel2' && edIn.made[0] === 'spbSave_2' && p2Range.indexOf('id="spbSave_2"') > 0, 'paste into Panel2 (a TPanel): the new button is inside it',
++    edIn ? JSON.stringify(edIn) : '-');
++  // Cut = copy + delete, the question answered "剪下"
++  await selAs('spbSave_2', 'button');
++  fake._answer = '剪下';
++  const edCut = await fake._cmds['ht9045Designer.cutComponent']();
++  ok(edCut && edCut.removed[0] === 'spbSave_2' && text === edBefore && edHub.clip.ids[0] === 'spbSave_2', 'cut: copied, then removed; the page as before');
++  fake._answer = undefined;
++  doc._setText(edBefore);
++  await selAs('spbSave', 'button');
++
+   // live data tag: main.html palMainStatus <- machine.state <- WebBridgeTags.cpp
+   const MAINP = path.join(PORT, '..', 'web', 'page', 'main.html');
+   const mtext = fs.readFileSync(MAINP, 'utf8');
+-- 
+2.55.0.windows.5
+

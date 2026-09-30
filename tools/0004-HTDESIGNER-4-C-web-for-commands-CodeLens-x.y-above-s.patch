@@ -1,0 +1,486 @@
+From 463438f5d03943ac3e8174adb7403e756f2cb35f Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 16:43:54 +0800
+Subject: [PATCH] =?UTF-8?q?HTDESIGNER-4:=20C++=20->=20web=20for=20commands?=
+ =?UTF-8?q?=20(CodeLens=20"=E7=B6=B2=E9=A0=81=E9=80=81=E5=87=BA=20x.y"=20a?=
+ =?UTF-8?q?bove=20server=20dispatch=20lines)=20(0.4.0)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- lib/webcmds.js: one pass over web\**\*.js and the pages' inline scripts
+  (JSON\ data skipped): command -> where the web sends it, and which pages
+  load that script
+- CodeLens above `== "x.y"` / `case "x.y":` in C++: "網頁送出 io.btnPanelClick：
+  ht9045_io_do.js:194（HW.IoSetView.html）", click -> the web line
+  (66 such lines in wb_serve.cpp)
+- JS comments are skipped when looking for sends (a doc-comment example in
+  ht9045_io_do.js:9 used to count); the panel's "送出命令" row too
+- the index is rebuilt (debounced) when a web .js/.html changes, never for
+  JSON\ which the running system may rewrite
+
+Tests: lib 58 / probe 2 pages / fake vscode 35 / real VS Code 40 incl.
+8-page sweep -- all pass, 12 opened files byte-identical (MD5).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  6 +-
+ tools/vscode-htdesigner/extension.js          | 72 ++++++++++++++++++-
+ tools/vscode-htdesigner/lib/webcmds.js        | 71 ++++++++++++++++++
+ tools/vscode-htdesigner/lib/websearch.js      | 64 +++++++++++++++--
+ tools/vscode-htdesigner/package.json          | 11 ++-
+ .../test/integration/index.js                 | 13 ++++
+ tools/vscode-htdesigner/test/run_tests.js     | 15 ++++
+ .../vscode-htdesigner/test/smoke_extension.js | 19 +++++
+ tools/vscode-htdesigner/test/vscode_it.ps1    |  2 +-
+ 9 files changed, 262 insertions(+), 11 deletions(-)
+ create mode 100644 tools/vscode-htdesigner/lib/webcmds.js
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 2ffb07f..881014a 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -79,6 +79,9 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-0.1.0
+   在 `TfXxx::函式名` 上、或在元件名稱（`spbSave->…`）上都可以。
+ - 只認得「網頁標題寫了 `.dfm`」的頁面（目前 61 頁）。`main.dfm` 被拆成好幾頁（`main.html`、`Main.AOAInfo.html`…），
+   每個元件會對到真的有它的那一頁。
++- C++ 伺服器分派命令的那一行（`wc.cmd == "io.btnPanelClick"`、`case "x.y":`）上方會出現
++  `網頁送出 io.btnPanelClick：ht9045_io_do.js:194（HW.IoSetView.html）`，點一下跳到網頁送出它的那一行。
++  **看 C++ 的命令，馬上知道網頁上是誰送的**（註解裡的範例文字不算）。`wb_serve.cpp` 目前有 66 行會出現。
+ - 不想看到那行字：設定 `ht9045Designer.codeLens` 關掉。
+ 
+ ## 事件會跳到哪裡
+@@ -160,7 +163,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\vscode-htdesigner\test
+    會在螢幕上出現約 30 秒後自己關掉）。開 HotPlate 頁走完整條路，再逐頁掃 8 種頁面；
+    測試前後比對所有開過的檔案的 MD5，有任何變動就判失敗
+ 
+-實測 20260929：1～4 層 56 ＋ 2 頁 ＋ 33 ＋ 31（另加 8 頁掃描）項全部通過。
++實測 20260929：1～4 層 58 ＋ 2 頁 ＋ 35 ＋ 40（含 8 頁掃描）項全部通過。
+ （途中抓到一個真 bug：CRLF 換行的 C++ 檔，`#endif` 後面的 `\r` 讓 `#if 0` 永遠不結束，
+ `wb_serve.cpp` 從第 3,322 行起整段被當成死碼。已修，並加了 CRLF 的測試。）
+ 
+@@ -180,4 +183,5 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\vscode-htdesigner\test
+ | `lib/format.js` | DFM 屬性格式化（TColor 等）、VCL 事件對應的 DOM 事件 |
+ | `lib/roots.js` | 自動找四個資料夾 |
+ | `lib/reverse.js` | 反查：事件函式 → 哪一頁的哪個元件（給 CodeLens 和右鍵選單用） |
++| `lib/webcmds.js` | 反查：命令字串 → 網頁哪裡送出、哪幾頁會執行 |
+ | `pack.ps1` | 打包成 `.vsix` |
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 3672151..aeb3c4a 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -23,6 +23,7 @@ const web = require('./lib/websearch');
+ const fmt = require('./lib/format');
+ const { buildPageHtml, hasIframe } = require('./lib/pagehtml');
+ const { ReverseIndex, enclosingMethod } = require('./lib/reverse');
++const { WebCmdIndex } = require('./lib/webcmds');
+ const lex = require('./lib/cpplex');
+ 
+ const sleep = ms => new Promise(r => setTimeout(r, ms));
+@@ -100,6 +101,7 @@ class Hub {
+       reg('ht9045Designer.findComponent', () => this.cmdFindComponent()),
+       reg('ht9045Designer.showInDesigner', entries => this.cmdShowInDesigner(entries)),
+       reg('ht9045Designer.showCodeInDesigner', () => this.cmdShowCodeInDesigner()),
++      reg('ht9045Designer.openWebSenders', (cmd, hits) => this.cmdOpenWebSenders(cmd, hits)),
+       vscode.languages.registerCodeLensProvider([{ language: 'cpp' }, { language: 'c' }], this.lens = new HandlerLens(this)),
+       reg('ht9045Designer.netCheck', () => {
+         const d = this.active;
+@@ -825,6 +827,39 @@ class Hub {
+     return this._rev.idx;
+   }
+ 
++  /** C++ -> web for commands: which web script sends "x.y" (built lazily, once). */
++  webCmdIndex() {
++    const r = this.globalRoots();
++    if (!r.webRoot) return null;
++    const key = r.webRoot.toLowerCase();
++    if (!this._wci || this._wci.key !== key) {
++      this._wci = { key, idx: new WebCmdIndex(r.webRoot) };
++      // JSON\ holds data the running system may rewrite often: not code, ignore it
++      this.watch(r.webRoot, '**/*.{js,html}', uri => {
++        if (/[\\/]JSON[\\/]/i.test(uri.fsPath) || !this._wci) return;
++        clearTimeout(this._wciTimer);
++        this._wciTimer = setTimeout(() => { this._wci.idx = new WebCmdIndex(r.webRoot); this.lens._em.fire(); }, 1500);
++      });
++    }
++    return this._wci.idx;
++  }
++
++  async cmdOpenWebSenders(cmd, hits) {
++    const list = Array.isArray(hits) ? hits : [];
++    if (!list.length) return;
++    let pick = list[0];
++    if (list.length > 1) {
++      const it = await vscode.window.showQuickPick(list.map(h => ({
++        label: '$(globe) ' + path.basename(h.file) + ':' + h.line,
++        description: h.pages && h.pages.length ? h.pages.map(p => path.basename(p)).slice(0, 3).join('、') + (h.pages.length > 3 ? '…' : '') : '',
++        detail: h.snippet, h,
++      })), { placeHolder: '網頁在這些地方送出「' + cmd + '」', matchOnDescription: true, matchOnDetail: true });
++      if (!it) return;
++      pick = it.h;
++    }
++    return this.openTarget({ kind: 'web', file: pick.file, line: pick.line, col: pick.col }, null);
++  }
++
+   /** Open a page in the designer (or bring it forward) and select a control. */
+   async openInDesigner(e) {
+     let d = Array.from(this.designers).find(x => web.samePath(x.file, e.page));
+@@ -1126,12 +1161,16 @@ class HandlerLens {
+   provideCodeLenses(doc) {
+     if (this.hub.cfg().get('codeLens') === false) return [];
+     const idx = this.hub.reverseIndex();
+-    if (!idx) return [];
+-    if (!idx.built) {
++    const widx = this.hub.webCmdIndex();
++    if (!idx && !widx) return [];
++    if ((idx && !idx.built) || (widx && !widx.built)) {
+       if (!this.building) {
+         this.building = true;
+         setTimeout(() => {
+-          try { idx.build(); this.hub.log('反查索引完成：' + idx.pages.length + ' 頁，' + idx.handlers.size + ' 個事件函式（' + idx.buildMs + ' ms）'); } catch (e) { this.hub.log('反查索引失敗：' + e); }
++          try {
++            if (idx) { idx.build(); this.hub.log('反查索引完成：' + idx.pages.length + ' 頁，' + idx.handlers.size + ' 個事件函式（' + idx.buildMs + ' ms）'); }
++            if (widx) { widx.build(); this.hub.log('網頁命令索引完成：' + widx.files + ' 個檔，' + widx.sends.size + ' 種命令（' + widx.buildMs + ' ms）'); }
++          } catch (e) { this.hub.log('索引失敗：' + e); }
+           this.building = false;
+           this._em.fire();
+         }, 50);
+@@ -1140,6 +1179,8 @@ class HandlerLens {
+     }
+     const text = doc.getText();
+     const out = [];
++    if (widx) this.commandLenses(doc, text, widx, out);
++    if (!idx) return out;
+     const re = /\b(T[A-Za-z_]\w*)\s*::\s*([A-Za-z_]\w*)\s*\(/g;
+     let m;
+     while ((m = re.exec(text)) && out.length < 400) {
+@@ -1159,6 +1200,31 @@ class HandlerLens {
+     }
+     return out;
+   }
++
++  /** Above a server dispatch (== "io.btnPanelClick"): where the web sends that command. */
++  commandLenses(doc, text, widx, out) {
++    const re = /(==|\bcase)\s*"([a-z][\w]*\.[\w.:-]+)"/g;
++    const seen = new Set();
++    let m;
++    while ((m = re.exec(text)) && out.length < 600) {
++      const cmd = m[2];
++      const lineStart = text.lastIndexOf('\n', m.index) + 1;
++      if (text.slice(lineStart, m.index).includes('//')) continue;
++      const pos = doc.positionAt(m.index);
++      const key = pos.line + '|' + cmd;
++      if (seen.has(key)) continue;
++      seen.add(key);
++      const hits = widx.senders(cmd);
++      if (!hits.length) continue;
++      const pages = Array.from(new Set([].concat(...hits.map(h => h.pages)).map(p => path.basename(p))));
++      let title = '$(globe) 網頁送出 ' + cmd + '：' + path.basename(hits[0].file) + ':' + hits[0].line;
++      if (hits.length > 1) title += ' 等 ' + hits.length + ' 處';
++      if (pages.length) title += '（' + pages.slice(0, 2).join('、') + (pages.length > 2 ? ' 等 ' + pages.length + ' 頁' : '') + '）';
++      out.push(new vscode.CodeLens(new vscode.Range(pos.line, 0, pos.line, 0), {
++        title, command: 'ht9045Designer.openWebSenders', arguments: [cmd, hits], tooltip: '跳到網頁送出這個命令的地方',
++      }));
++    }
++  }
+ }
+ 
+ // ---------------------------------------------------------------------------
+diff --git a/tools/vscode-htdesigner/lib/webcmds.js b/tools/vscode-htdesigner/lib/webcmds.js
+new file mode 100644
+index 0000000..69a3180
+--- /dev/null
++++ b/tools/vscode-htdesigner/lib/webcmds.js
+@@ -0,0 +1,71 @@
++'use strict';
++// AI(W906-HTDESIGNER) 20260929: C++ -> web for commands. Which web script sends
++// "io.btnPanelClick", and which pages load that script?
++//   one pass over web\**\*.js and the pages' inline <script>s (~6 MB, well under a second)
++// Plain Node (no vscode).
++
++const fs = require('fs');
++const path = require('path');
++const web = require('./websearch');
++const { listScripts } = require('./pageinfo');
++
++// JSON\ is data (and JSON\js the same data as <script> shims), not code
++const SKIP = /^(img|shot|ScreenShot|_partials|node_modules|\.git|JSON)$/i;
++
++class WebCmdIndex {
++  constructor(webRoot) {
++    this.root = webRoot;
++    this.sends = new Map();   // cmd -> [{ file, line, col, snippet }]
++    this.pagesOf = new Map(); // script file (lower) -> [page files]
++    this.built = false;
++    this.buildMs = 0;
++    this.files = 0;
++  }
++
++  build() {
++    if (this.built) return this;
++    const t0 = Date.now();
++    const files = [];
++    const walk = d => {
++      let ents = [];
++      try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
++      for (const e of ents) {
++        const p = path.join(d, e.name);
++        if (e.isDirectory()) { if (!SKIP.test(e.name)) walk(p); }
++        else if (/\.(js|html?)$/i.test(e.name)) files.push(p);
++      }
++    };
++    if (this.root) walk(this.root);
++    for (const f of files) {
++      const text = web.readText(f);
++      if (text == null) continue;
++      const isHtml = /\.html?$/i.test(f);
++      const src = new web.Source(f, text, isHtml);
++      for (const s of web.sendsIn(src)) {
++        if (!this.sends.has(s.cmd)) this.sends.set(s.cmd, []);
++        this.sends.get(s.cmd).push(s.hit);
++      }
++      if (isHtml) {
++        for (const sc of listScripts(text, path.dirname(f))) {
++          const k = sc.toLowerCase();
++          if (!this.pagesOf.has(k)) this.pagesOf.set(k, []);
++          this.pagesOf.get(k).push(f);
++        }
++      }
++    }
++    this.files = files.length;
++    this.built = true;
++    this.buildMs = Date.now() - t0;
++    return this;
++  }
++
++  /** Where the web sends `cmd`, each with the pages that run it. */
++  senders(cmd) {
++    this.build();
++    return (this.sends.get(cmd) || []).map(h => Object.assign({
++      pages: /\.html?$/i.test(h.file) ? [h.file] : (this.pagesOf.get(h.file.toLowerCase()) || []),
++    }, h));
++  }
++}
++
++module.exports = { WebCmdIndex };
+diff --git a/tools/vscode-htdesigner/lib/websearch.js b/tools/vscode-htdesigner/lib/websearch.js
+index 4ae5a3b..6a581b9 100644
+--- a/tools/vscode-htdesigner/lib/websearch.js
++++ b/tools/vscode-htdesigner/lib/websearch.js
+@@ -36,6 +36,39 @@ class Source {
+     this._ls = null;
+   }
+   get starts() { return this._ls || (this._ls = lineStartsOf(this.text)); }
++  /** Inside a JS comment? (// … and /* … *\/; strings and template literals skipped.) */
++  inComment(off) {
++    if (!this._cm) {
++      const t = this.text;
++      const n = t.length;
++      const cm = [];
++      const scopes = this.ranges || [0, n];
++      for (let r = 0; r < scopes.length; r += 2) {
++        for (let i = scopes[r], end = scopes[r + 1]; i < end; i++) {
++          const c = t[i];
++          if (c === '/' && t[i + 1] === '/') { const e = t.indexOf('\n', i); const s = i; i = e < 0 || e > end ? end : e; cm.push(s, i); continue; }
++          if (c === '/' && t[i + 1] === '*') { const e = t.indexOf('*/', i + 2); const s = i; i = e < 0 ? end : Math.min(end, e + 2); cm.push(s, i); i--; continue; }
++          if (c === '"' || c === "'" || c === '`') {
++            for (i++; i < end; i++) {
++              if (t[i] === '\\') { i++; continue; }
++              if (t[i] === c) break;
++              if (c !== '`' && t[i] === '\n') break;
++            }
++          }
++        }
++      }
++      this._cm = cm;
++    }
++    const cm = this._cm;
++    let lo = 0, hi = (cm.length >> 1) - 1;
++    while (lo <= hi) {
++      const mid = (lo + hi) >> 1;
++      if (off < cm[mid * 2]) hi = mid - 1;
++      else if (off >= cm[mid * 2 + 1]) lo = mid + 1;
++      else return true;
++    }
++    return false;
++  }
+   inScope(off) {
+     if (!this.ranges) return true;
+     for (let i = 0; i < this.ranges.length; i += 2) {
+@@ -268,9 +301,14 @@ function traceCmds(sources, rootText, maxDepth, rootFile) {
+ 
+ /** The line that sends `cmd` (cmd('x.y' / rawCmd('x.y' / {cmd:'x.y'}), for "go to". */
+ function findCmdSend(sources, cmd) {
+-  const e = escRe(cmd);
+-  const re = new RegExp('\\b(?:' + SENDERS.join('|') + ')\\s*\\(\\s*[\'"]' + e + '[\'"]|\\bcmd\\s*:\\s*[\'"]' + e + '[\'"]', 'g');
+-  return findAll(sources, re, 3);
++  const out = [];
++  for (const s of sources) {
++    for (const x of sendsIn(s)) {      // comments skipped
++      if (x.cmd === cmd) out.push(x.hit);
++      if (out.length >= 3) return out;
++    }
++  }
++  return out;
+ }
+ 
+ /**
+@@ -336,8 +374,24 @@ function mentionsClass(text, cls) {
+   return text.includes('.' + cls) || text.includes("'" + cls + "'") || text.includes('"' + cls + '"');
+ }
+ 
++/** Every command a source sends, with where: [{ cmd, hit }] (hit = file/line/col/snippet). */
++function sendsIn(source) {
++  const out = [];
++  const res = [new RegExp(SEND_RE_SRC, 'g'), /\bcmd\s*:\s*(['"])([\w.:-]+)\1/g];
++  for (const re of res) {
++    let m;
++    while ((m = re.exec(source.text))) {
++      const c = m[2];
++      if (!c.includes('.') || /\.(html?|js|json|css|png|cpp|ini|csv|txt)$/i.test(c)) continue;
++      if (!source.inScope(m.index) || source.inComment(m.index)) continue;
++      out.push({ cmd: c, hit: source.hitAt(m.index) });
++    }
++  }
++  return out;
++}
++
+ module.exports = {
+   Source, scriptRanges, readText, samePath, findAll, idMentionRe, identRe, locateFn,
+-  extractCmds, calledNames, findFnDefs, traceCmds, findCmdSend, braceEnd,
+-  mapFrameUrl, idAtOffset, findIdAttr, titleOf, mentionsClass, escRe,
++  extractCmds, calledNames, findFnDefs, traceCmds, findCmdSend, sendsIn, braceEnd,
++  mapFrameUrl, idAtOffset, findIdAttr, titleOf, mentionsClass, escRe, SENDERS,
+ };
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 8cba3c8..a27f5a9 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼）。",
+-  "version": "0.3.0",
++  "version": "0.4.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -97,6 +97,11 @@
+         "title": "在設計檢視中顯示",
+         "category": "HT9045"
+       },
++      {
++        "command": "ht9045Designer.openWebSenders",
++        "title": "跳到網頁送出這個命令的地方",
++        "category": "HT9045"
++      },
+       {
+         "command": "ht9045Designer.selectKey",
+         "title": "選取元件",
+@@ -191,6 +196,10 @@
+         {
+           "command": "ht9045Designer.showInDesigner",
+           "when": "false"
++        },
++        {
++          "command": "ht9045Designer.openWebSenders",
++          "when": "false"
+         }
+       ]
+     },
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 6c54375..afed124 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -132,6 +132,19 @@ exports.run = async function () {
+       ok(!!back, 'clicking it selects spbSave in the designer');
+     }
+ 
++    // C++ -> web: lens above the server's dispatch shows where the web sends it
++    const wsUri = vscode.Uri.file(path.join(d.r.portRoot, 'tools', 'wb_serve.cpp'));
++    await vscode.workspace.openTextDocument(wsUri);   // executeCodeLensProvider needs a loaded model
++    let wl = [];
++    for (let i = 0; i < 40; i++) {
++      wl = (await vscode.commands.executeCommand('vscode.executeCodeLensProvider', wsUri)) || [];
++      if (wl.some(l => l.command && l.command.command === 'ht9045Designer.openWebSenders')) break;
++      await sleep(250);
++    }
++    const ioLens = wl.find(l => l.command && l.command.command === 'ht9045Designer.openWebSenders' && l.command.arguments[0] === 'io.btnPanelClick');
++    ok(!!ioLens && /HW\.IoSetView\.html/.test(ioLens.command.title), 'wb_serve.cpp: CodeLens "網頁送出 io.btnPanelClick"',
++      ioLens ? ioLens.command.title + ' @' + (ioLens.range.start.line + 1) : wl.length + ' lenses');
++
+     // HTML source reveal
+     await hub.revealSource(d, 'spbSave', true);
+     const hed = await waitFor(() => { const e = vscode.window.activeTextEditor; return e && e.document === d.doc ? e : null; }, 5000);
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index e9c8c85..493d1a5 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -281,6 +281,21 @@ async function main() {
+   const em3 = enclosingMethod(ptxt, ptxt.length - 5, lex.isDefinitionAt);
+   log('      enclosingMethod at end of fHotPlate.cpp: ' + (em3 ? em3.cls + '::' + em3.method : 'none'));
+ 
++  // --- C++ -> web for commands
++  const { WebCmdIndex } = require('../lib/webcmds');
++  const wci = new WebCmdIndex(WEB);
++  t1 = Date.now();
++  wci.build();
++  log('web command index: ' + wci.files + ' files, ' + wci.sends.size + ' commands, ' + (Date.now() - t1) + ' ms');
++  const ws1 = wci.senders('io.btnPanelClick');
++  ok(ws1.some(h => /ht9045_io_do\.js$/i.test(h.file) && h.pages.some(p => /HW\.IoSetView\.html$/i.test(p))) &&
++    !ws1.some(h => /ht9045_io_do\.js$/i.test(h.file) && h.line === 9),
++    'web senders of io.btnPanelClick: ht9045_io_do.js, loaded by HW.IoSetView.html (not the doc comment at :9)',
++    ws1.map(h => path.basename(h.file) + ':' + h.line + ' [' + h.pages.map(p => path.basename(p)).join(',') + ']').join(' | '));
++  const ws2 = wci.senders('recipe.doc.put');
++  ok(ws2.some(h => h.pages.some(p => /Setup\.HotPlate\.html$/i.test(p))), 'web senders of recipe.doc.put include a script HotPlate loads',
++    ws2.map(h => path.basename(h.file) + ':' + h.line + ' (' + h.pages.length + ' pages)').join(' | '));
++
+   // --- format
+   ok(fmt.tcolor(12761254) === '#a6b8c2', 'TColor int -> #rrggbb (BGR)', fmt.tcolor(12761254));
+   ok(fmt.tcolor('clBtnFace') === '#d4d0c8', 'TColor clBtnFace');
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index a01e45d..c36c09c 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -203,6 +203,25 @@ async function main() {
+   const sel2 = pagePosted.find(m => m.type === 'selectId');
+   ok(sel2 && sel2.id === 'spbSave' && sel2.origin === 'code', 'clicking the CodeLens selects spbSave in the designer', sel2 ? JSON.stringify(sel2) : 'nothing posted');
+ 
++  // C++ -> web: lens above the server's dispatch of io.btnPanelClick
++  const wsFile = path.join(PORT, 'tools', 'wb_serve.cpp');
++  const wsText = fs.readFileSync(wsFile, 'utf8');
++  const wsStarts = [0];
++  for (let i = 0; i < wsText.length; i++) if (wsText.charCodeAt(i) === 10) wsStarts.push(i + 1);
++  const wsDoc = {
++    uri: fake.Uri.file(wsFile), getText: () => wsText,
++    positionAt: off => { let lo = 0, hi = wsStarts.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (wsStarts[m] <= off) lo = m; else hi = m - 1; } return new fake.Position(lo, off - wsStarts[lo]); },
++  };
++  let wl = fake._lens.provideCodeLenses(wsDoc);
++  for (let i = 0; i < 100 && !wl.some(l => l.command.command === 'ht9045Designer.openWebSenders'); i++) { await new Promise(r => setTimeout(r, 50)); wl = fake._lens.provideCodeLenses(wsDoc); }
++  const ioLens = wl.find(l => l.command.command === 'ht9045Designer.openWebSenders' && l.command.arguments[0] === 'io.btnPanelClick');
++  ok(!!ioLens && /HW\.IoSetView\.html/.test(ioLens.command.title), 'CodeLens above wb_serve.cpp dispatch: web sender of io.btnPanelClick',
++    wl.filter(l => l.command.command === 'ht9045Designer.openWebSenders').length + ' command lenses; ' + (ioLens ? ioLens.command.title + ' @' + (ioLens.range.start.line + 1) : '-'));
++  fake._state.quickPick = items => items[0];
++  await fake._cmds['ht9045Designer.openWebSenders'].apply(null, ioLens.command.arguments);
++  const ow = fake._state.opened.pop();
++  ok(ow && /\.js$/i.test(ow.uri.fsPath), 'clicking it opens the web script at the send', ow ? path.basename(ow.uri.fsPath) + ':' + (ow.selection.start.line + 1) : 'none');
++
+   // form root: OnShow -> FormShow
+   pageRecv({ __htd: 1, type: 'select', info: { key: 1, id: '@form', tag: 'div', title: '', attrs: [], style: [], inline: [], computed: [], chain: [], listeners: [], inherited: [] }, origin: 'click' });
+   let fr = null;
+diff --git a/tools/vscode-htdesigner/test/vscode_it.ps1 b/tools/vscode-htdesigner/test/vscode_it.ps1
+index a621579..963c3e7 100644
+--- a/tools/vscode-htdesigner/test/vscode_it.ps1
++++ b/tools/vscode-htdesigner/test/vscode_it.ps1
+@@ -39,7 +39,7 @@ $settings = [ordered]@{
+ 
+ $report = Join-Path $tmp 'report.txt'
+ # the files the test opens must be byte-identical afterwards
+-$watched = @($Page, (Join-Path $golden.FullName 'cHotPlate.cpp'), (Join-Path $golden.FullName 'cHotPlate.dfm')) + @($Sweep | ForEach-Object { Join-Path (Split-Path $Page -Parent) $_ })
++$watched = @($Page, (Join-Path $golden.FullName 'cHotPlate.cpp'), (Join-Path $golden.FullName 'cHotPlate.dfm'), (Join-Path $port 'tools\wb_serve.cpp')) + @($Sweep | ForEach-Object { Join-Path (Split-Path $Page -Parent) $_ })
+ $before = @{}
+ foreach ($f in $watched) { $before[$f] = (Get-FileHash $f -Algorithm MD5).Hash }
+ $env:ELECTRON_RUN_AS_NODE = $null
+-- 
+2.55.0.windows.5
+

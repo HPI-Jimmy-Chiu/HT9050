@@ -1,0 +1,749 @@
+From d8d999219ac0bdfba30c98d6e4affc9f19f36f55 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 18:27:49 +0800
+Subject: [PATCH] HTDESIGNER-13: all-pages sweep + its two fixes, right-click
+ menu, F7, fonts, form resize (0.13.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+User 20260929: "一輪一輪 持續做下去 不要等".
+
+Found by the new all-pages sweep (real VS Code, all 80 pages of web\page;
+no page had a JS error):
+- fix: a page reloading in the background restored its selection and took the
+  tree and the properties panel away from the page on screen. A hidden page's
+  selection is now kept and shown when that page becomes active again
+- fix: Setup.BinSelNormal.html is only location.replace('Setup.BinSel.html'),
+  which navigated the designer away from itself. Forwarding pages (empty body +
+  location.replace / href = / meta refresh) now show a notice and a button to
+  open the target in the designer
+
+WPF operations:
+- right-click on the design surface selects (unless already selected) and opens
+  the designer menu (webview/context): view code, HTML source, DFM definition,
+  select parent, find, Align submenu, overview, mode; the page never sees it
+- F7 = view code (the default event), like WPF
+- properties: Font.Name, Font.Bold, Font.Italic
+- the form itself resizes (Width/Height, e/s/se handles, Ctrl+arrows) but never
+  moves, like a WPF Window
+- fix: a pending arrow-key nudge flushed after the selection moved on took the
+  selection back
+- "HT9045: 設計檢視使用說明" opens the README
+
+Tests: lib 87 / probe 2 pages x 27 (right-click, select parent, form resize,
+fonts, both-side anchoring) / fake vscode 54 + panels 10 / real VS Code 54 and
+the re-run of the two failing pages; vscode_it.ps1 -AllPages for the sweep.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             | 21 ++++--
+ tools/vscode-htdesigner/extension.js          | 51 +++++++++++++-
+ tools/vscode-htdesigner/lib/pageinfo.js       | 18 ++++-
+ tools/vscode-htdesigner/media/probe.js        | 47 +++++++++++--
+ tools/vscode-htdesigner/media/props.js        | 13 +++-
+ tools/vscode-htdesigner/package.json          | 68 ++++++++++++++++++-
+ .../test/integration/index.js                 | 27 +++++++-
+ tools/vscode-htdesigner/test/probe_driver.js  | 65 ++++++++++++++++++
+ tools/vscode-htdesigner/test/probe_test.ps1   |  9 +++
+ tools/vscode-htdesigner/test/run_tests.js     | 11 +++
+ tools/vscode-htdesigner/test/vscode_it.ps1    | 13 +++-
+ 11 files changed, 322 insertions(+), 21 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 551efbc..e5d229f 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -21,7 +21,7 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ ```
+ 
+ 裝好後在 VS Code 按 `Ctrl+Shift+P` →「Developer: Reload Window」。
+-左邊活動列會多一個「HT9045 設計檢視」圖示。
++左邊活動列會多一個「HT9045 設計檢視」圖示。這份說明隨時可以用「HT9045: 設計檢視使用說明」（或元件樹標題列的 ? 圖示）打開。
+ 
+ 移除：延伸模組面板找「HT9045 HTML 設計檢視」→ 解除安裝。
+ 
+@@ -44,7 +44,8 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ | Ctrl＋點 ／ Shift＋點 | **多選**：加入或移出選取，最後點的是主要選取。整組可以一起拖曳、一起用方向鍵移動 |
+ | 方向鍵 | 移動 1 px；**Shift**＋方向鍵 10 px |
+ | **Ctrl**＋方向鍵 | 改大小 1 px；**Ctrl＋Shift**＋方向鍵 10 px |
+-| 雙擊元件、Enter | 跳到它的預設事件程式碼（OnClick／OnChange…；表單本身是 OnShow） |
++| 雙擊元件、Enter、**F7** | 跳到它的預設事件程式碼（OnClick／OnChange…；表單本身是 OnShow）——WPF 的「檢視程式碼」 |
++| 右鍵 | 選取滑鼠下的元件，出現設計工具的選單：檢視程式碼、跳到 HTML 原始碼、跳到 DFM 定義、選取上層、找元件、對齊（子選單）、接線總覽、切換模式 |
+ | Esc | 選上一層（外層的 GroupBox／Panel…）；已經是最外層就取消選取 |
+ | Tab ／ Shift＋Tab | 選下一個／上一個元件 |
+ | Ctrl＋Z ／ Ctrl＋Y | 復原／重做（VS Code 原本的功能，一次拖曳或一串方向鍵＝一步） |
+@@ -60,12 +61,15 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ 滑鼠移到元件上，標籤會顯示 `名稱 : 型別 · 事件`，例如 `spbSave : TSpeedButton · OnClick   227×40`。
+ 
+ **在屬性面板改值**：面板最上面的「外觀與版面（可編輯）」，用 VCL 的屬性名稱：
+-`Left`、`Top`、`Width`、`Height`、`Caption`（輸入框是 `Text`）、`Visible`、`Enabled`、`Font.Size`、`Font.Color`、`Color`。
++`Left`、`Top`、`Width`、`Height`、`Caption`（輸入框是 `Text`）、`Visible`、`Enabled`、
++`Font.Name`、`Font.Size`、`Font.Bold`、`Font.Italic`、`Font.Color`、`Color`。
++表單本身（元件樹最上面那一個）可以改 `Width`／`Height`，跟 WPF 拉 Window 的大小一樣，但不能移動。
+ 輸入後按 Enter 或離開欄位就生效（跟 WPF 的屬性視窗一樣），畫面和 HTML 原始碼同時改。
+ 
+ **改到哪裡**：跟 WPF 改 XAML 一樣，改的是這一頁的 **HTML 原始碼**，而且只動被改到的那一小段：
+ 
+ - 位置／大小：元件自己標籤的 `style` 裡的 `left/top/width/height`（或 `right/bottom`，看它原本怎麼錨定）。
++  兩邊都錨定的元件（例如 `left:121px; right:0px` 沒有 `width`）：移動時兩邊一起動、大小不變；改大小時只動遠的那一邊。
+   輸入框（`<input>`）的位置由外面那層 `<span style="position:absolute…">` 決定，所以改的是那層。
+ - 文字：按鈕／標籤的文字、GroupBox 的 `<legend>`、Panel 的標題、輸入框的 `value`。
+ - Visible＝`display:none`、Enabled＝`disabled`、字型大小／顏色＝`style`。
+@@ -187,6 +191,8 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ - **命令追蹤是靜態的**：命令名稱是字串接出來的（`cmd(prefix + '.put')`）就追不到；同名函式在好幾個檔都有時，
+   先用同一個檔裡的，沒有才去別的檔找。
+ - **內嵌 iframe 不載入**（為了不繞過網路封鎖）。目前只有 `IDE.MotionView9050-UPH.html` 有 iframe。
++- **轉址頁**（例如 `Setup.BinSelNormal.html` 只有 `location.replace('Setup.BinSel.html')`）不會真的跳走，
++  設計檢視會寫「這頁只會轉到 …」，並給一個按鈕用設計檢視開目標頁。
+ - **靠 JS 在執行期畫出來的頁面**（例如 `HW.IoSetView.html` 的清單）要等 JS 跑完才看得到；它讀的是本機 `JSON\` 檔，這個讀得到。
+ 
+ ## 設定
+@@ -220,7 +226,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\vscode-htdesigner\test
+    會在螢幕上出現約 30 秒後自己關掉）。開 HotPlate 頁走完整條路，再逐頁掃 8 種頁面；
+    測試前後比對所有開過的檔案的 MD5，有任何變動就判失敗
+ 
+-實測 20260929：1～4 層 84 ＋ 2 頁各 22 ＋ 53（＋面板畫面 10）＋ 52（含 8 頁掃描，每頁也跑接線總覽）項全部通過。
++全站掃描（真正的 VS Code 把 `web\page` 的 80 頁全部開一次，約 8 分鐘）：
++
++```powershell
++powershell -NoProfile -ExecutionPolicy Bypass -File tools\vscode-htdesigner\test\vscode_it.ps1 -AllPages
++```
++
++實測 20260929：1～4 層 87 ＋ 2 頁各 27 ＋ 54（＋面板畫面 10）＋ 54（含 8 頁掃描，每頁也跑接線總覽）項全部通過；
++全站 80 頁掃描抓到 2 個問題（背景頁重新載入會搶走屬性面板、轉址頁會把設計檢視帶走），都已修好；**80 頁都沒有 JS 錯誤**。
+ 編輯的部分在真正的 VS Code 裡測了「改 Left → 原始碼變 → 未存檔 → Ctrl+Z 兩次完全還原 → 畫面重新載入」、
+ 「多選兩個 → 同高 → 一次 Ctrl+Z 整組還原」，測試從不存檔，所有開過的檔案前後 MD5 一樣。
+ （途中抓到一個真 bug：CRLF 換行的 C++ 檔，`#endif` 後面的 `\r` 讓 `#if 0` 永遠不結束，
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 5317081..1ab1861 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -118,6 +118,12 @@ class Hub {
+       reg('ht9045Designer.openWebSenders', (cmd, hits) => this.cmdOpenWebSenders(cmd, hits)),
+       reg('ht9045Designer.pageOverview', () => this.cmdPageOverview()),
+       reg('ht9045Designer.resetZoom', () => { if (this.active) this.active.post({ type: 'setZoom', zoom: 1 }); }),
++      reg('ht9045Designer.help', () => vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.joinPath(ctx.extensionUri, 'README.md'))),
++      // the design surface's right-click menu (webview/context)
++      reg('ht9045Designer.viewCode', () => { if (this.active) return this.onDesignerDblClick(this.active); }),
++      reg('ht9045Designer.selectParent', () => { if (this.active) this.active.post({ type: 'selectParent' }); }),
++      ...['left', 'right', 'top', 'bottom', 'hcenter', 'vcenter', 'width', 'height'].map(how =>
++        reg('ht9045Designer.align.' + how, () => { if (this.active) this.active.post({ type: 'align', how }); })),
+       vscode.languages.registerCodeLensProvider([{ language: 'cpp' }, { language: 'c' }], this.lens = new HandlerLens(this)),
+       reg('ht9045Designer.netCheck', () => {
+         const d = this.active;
+@@ -133,6 +139,9 @@ class Hub {
+     const t = new Date();
+     const hh = String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0') + ':' + String(t.getSeconds()).padStart(2, '0');
+     this.out.appendLine('[' + hh + '] ' + s);
++    this.logLines = this.logLines || [];
++    this.logLines.push('[' + hh + '] ' + s);
++    if (this.logLines.length > 300) this.logLines.shift();
+   }
+ 
+   cfg() { return vscode.workspace.getConfiguration('ht9045Designer'); }
+@@ -228,6 +237,12 @@ class Hub {
+     this.tree.set(d);
+     vscode.commands.executeCommand('setContext', 'ht9045Designer.active', !!d);
+     this.updateStatus();
++    if (d && d.pendingSel) {             // it changed selection while in the background
++      const p = d.pendingSel;
++      d.pendingSel = null;
++      this.onSelect(d, p.info, p.origin);
++      return;
++    }
+     this.showProps(d, d && d.sel ? d.sel.data : null);
+   }
+ 
+@@ -275,7 +290,13 @@ class Hub {
+ 
+   // --- selection -----------------------------------------------------------
+   onSelect(d, info, origin) {
+-    if (this.active !== d) this.setActive(d);
++    if (this.active !== d) {
++      // a page in the background (it reloaded and restored its selection) must not
++      // take the tree and the panel away from the page the user is looking at
++      if (!d.panel.active) { d.pendingSel = { info, origin }; return; }
++      this.setActive(d);
++    }
++    d.pendingSel = null;
+     const seq = ++this.selSeq;
+     if (!info) { d.sel = null; this.showProps(d, null); return; }
+     if (origin !== 'tree') this.tree.reveal(info.key);
+@@ -1220,6 +1241,24 @@ class Designer {
+     const base = w.asWebviewUri(vscode.Uri.file(this.pageDir)).toString().replace(/\/?$/, '/');
+     const probe = w.asWebviewUri(vscode.Uri.joinPath(this.hub.ctx.extensionUri, 'media', 'probe.js')).toString();
+     this.renderN++;
++    // a forwarding page would navigate the designer away from itself: say so instead
++    const target = pageinfo.redirectTarget(this.doc.getText());
++    this.redirect = target;
++    if (target) {
++      const nonce = crypto.randomBytes(16).toString('base64');
++      const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
++      w.html = '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">' +
++        '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'nonce-' + nonce + '\';">' +
++        '<style>body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);padding:24px;line-height:1.7}' +
++        'button{font:inherit;color:var(--vscode-button-foreground);background:var(--vscode-button-background);border:none;padding:4px 14px;cursor:pointer}' +
++        'code{font-family:var(--vscode-editor-font-family)}</style></head><body>' +
++        '<p><code>' + esc(path.basename(this.file)) + '</code> 只是一個轉址頁：一打開就會轉到 <code>' + esc(target) + '</code>，本身沒有畫面。</p>' +
++        '<p><button id="go">用設計檢視開啟 ' + esc(target) + '</button></p>' +
++        '<script nonce="' + nonce + '">(function(){var api=acquireVsCodeApi();' +
++        'document.getElementById("go").addEventListener("click",function(){api.postMessage({__htd:1,type:"openRedirect"});});' +
++        'api.postMessage({__htd:1,type:"ready",redirect:true});})();</script></body></html><!-- htd-render ' + this.renderN + ' -->';
++      return;
++    }
+     w.html = buildPageHtml(this.doc.getText(), {
+       cspSource: w.cspSource, baseHref: base, probeSrc: probe, mode: this.mode,
+     }) + '\n<!-- htd-render ' + this.renderN + ' -->';
+@@ -1250,6 +1289,9 @@ class Designer {
+   onMessage(m) {
+     if (!m || m.__htd !== 1) return;
+     const name = path.basename(this.file);
++    this.msgCount = (this.msgCount || 0) + 1;
++    this.lastMsg = m.type;
++    if (m.type === 'ready') this.readyCount = (this.readyCount || 0) + 1;
+     if (m.seq && this._pending && this._pending.has(m.seq)) {
+       const done = this._pending.get(m.seq);
+       this._pending.delete(m.seq);
+@@ -1257,7 +1299,14 @@ class Designer {
+       return;
+     }
+     switch (m.type) {
++      case 'openRedirect':
++        if (this.redirect) {
++          const f = path.resolve(this.pageDir, this.redirect);
++          vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(f), VIEW_TYPE);
++        }
++        break;
+       case 'ready': {
++        if (m.redirect) { if (this._ready) { this._ready(); this._ready = null; } break; }
+         // page scripts may strip the generated title="name : TClass" attributes at
+         // runtime, so the probe gets the VCL class of every name from the IR
+         const send = pi => {
+diff --git a/tools/vscode-htdesigner/lib/pageinfo.js b/tools/vscode-htdesigner/lib/pageinfo.js
+index 95451ce..340e063 100644
+--- a/tools/vscode-htdesigner/lib/pageinfo.js
++++ b/tools/vscode-htdesigner/lib/pageinfo.js
+@@ -160,4 +160,20 @@ function dfmPropLines(lines, nodeLine) {
+   return out;
+ }
+ 
+-module.exports = { parseTitle, collectIds, listScripts, IrStore, GENERIC_ID, dfmPropLines };
++/**
++ * A page that only forwards to another one (an empty <body> plus location.replace /
++ * location.href = / meta refresh): the target file name, else null.
++ *   Setup.BinSelNormal.html: location.replace('Setup.BinSel.html' + location.search)
++ */
++function redirectTarget(html) {
++  const text = String(html || '');
++  const body = /<body[^>]*>([\s\S]*?)<\/body>/i.exec(text);
++  const rest = body ? body[1].replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<!--[\s\S]*?-->/g, '').trim() : '';
++  if (rest) return null;
++  const m = /location\.(?:replace|assign)\(\s*['"]([^'"?#]+\.html?)/i.exec(text) ||
++    /location(?:\.href)?\s*=\s*['"]([^'"?#]+\.html?)/i.exec(text) ||
++    /<meta[^>]+http-equiv\s*=\s*["']?refresh["']?[^>]*url\s*=\s*([^"'>\s;]+\.html?)/i.exec(text);
++  return m ? m[1] : null;
++}
++
++module.exports = { parseTitle, collectIds, listScripts, IrStore, GENERIC_ID, dfmPropLines, redirectTarget };
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index 881d884..4548180 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -266,6 +266,7 @@
+       var h = handles[i];
+       if (!r || (!r.width && !r.height)) { h.style.display = 'none'; continue; }
+       var d = h.getAttribute('data-dir');
++      if (bx.root && !/^(e|s|se)$/.test(d)) { h.style.display = 'none'; continue; }   // the form: size only
+       var x = d.indexOf('w') >= 0 ? r.left : d.indexOf('e') >= 0 ? r.right : r.left + r.width / 2;
+       var y = d.indexOf('n') >= 0 ? r.top : d.indexOf('s') >= 0 ? r.bottom : r.top + r.height / 2;
+       h.style.display = 'block';
+@@ -435,7 +436,9 @@
+   /* the element that actually carries the position: itself, or the generated
+      <span style="position:absolute…"> wrapper around an <input> */
+   function boxOf(el) {
+-    if (!el || el === formRoot() || el === document.body) return null;
++    if (!el || el === document.body) return null;
++    /* the form itself: resizable (inline width/height), not movable -- like a WPF Window */
++    if (el === formRoot()) return el.style && (el.style.width || el.style.height) ? { node: el, target: 'self', root: true } : null;
+     if (el.style && el.style.position === 'absolute') return { node: el, target: 'self' };
+     var p = el.parentElement;
+     if (p && !p.id && p !== document.body && p.style && p.style.position === 'absolute' && p.children.length === 1) return { node: p, target: 'parent' };
+@@ -483,7 +486,8 @@
+     if (!bx) return null;
+     var s = bx.node.style;
+     return {
+-      target: bx.target, left: bx.node.offsetLeft, top: bx.node.offsetTop, width: bx.node.offsetWidth, height: bx.node.offsetHeight,
++      target: bx.target, root: !!bx.root,
++      left: bx.node.offsetLeft, top: bx.node.offsetTop, width: bx.node.offsetWidth, height: bx.node.offsetHeight,
+       raw: { left: s.left, top: s.top, width: s.width, height: s.height, right: s.right, bottom: s.bottom },
+     };
+   }
+@@ -527,6 +531,9 @@
+       visible: el.style.display !== 'none',
+       enabled: form ? !el.disabled : null,
+       fontSize: Math.round(parseFloat(cs.fontSize) || 0),
++      fontName: String(cs.fontFamily || '').split(',')[0].replace(/^["']|["']$/g, '').trim(),
++      bold: (parseInt(cs.fontWeight, 10) || 400) >= 600 || cs.fontWeight === 'bold',
++      italic: cs.fontStyle === 'italic',
+       color: hexOf(cs.color),
+       background: hexOf(cs.backgroundColor),
+     };
+@@ -675,6 +682,16 @@
+     }
+     if (t === 'submit') e.preventDefault();
+     if (passNext || mode !== 'design') return;
++    if (t === 'contextmenu') {
++      /* WPF: right-click selects (unless it is already in the selection) and opens the
++         designer's menu. The page never sees it; VS Code shows our webview/context menu,
++         so no preventDefault here. */
++      e.stopImmediatePropagation();
++      var cm = pick(e.target, e.altKey);
++      if (cm && cm !== selEl && multi.indexOf(cm) < 0) select(cm, 'click', false);
++      return;
++    }
++    if (t === 'mousedown' && e.button !== 0) { e.stopImmediatePropagation(); return; }
+     var toggle = e.ctrlKey || e.metaKey || e.shiftKey;
+     if (isTab(e.target) && !e.altKey && !toggle) {
+       if (t === 'click') select(pick(e.target, false), 'click', false);
+@@ -691,8 +708,8 @@
+       if (!inSel) select(md, 'click', false);
+       else if (md !== selEl) { multi.splice(multi.indexOf(md), 1); if (selEl) multi.push(selEl); selEl = null; select(md, 'multi', false); }
+       var bx = md ? boxOf(md) : null;
+-      if (bx) {
+-        var group = allSel().map(function (x) { return { el: x, bx: boxOf(x) }; }).filter(function (g) { return g.bx; });
++      if (bx && !bx.root) {
++        var group = allSel().map(function (x) { return { el: x, bx: boxOf(x) }; }).filter(function (g) { return g.bx && !g.bx.root; });
+         startDrag(md, bx, 'move', e, group);
+         if (inSel && multi.length) drag.collapse = md;   // a click (no move) on a member keeps only it
+       }
+@@ -824,8 +841,8 @@
+     if (!n || !n.items.some(function (it) { return it.last; })) return;
+     if (n.items.length > 1) commitGroup(n.items);
+     else commitLayout(n.items[0].el, n.items[0].bx, n.items[0].last);
+-    selEl = null;
+-    select(n.el, 'edit', false);
++    // refresh the panel -- but never take the selection back if it has moved on
++    if (selEl === n.el) { selEl = null; select(n.el, 'edit', false); }
+   }
+   var ARROWS = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+   origAdd.call(window, 'keydown', function (e) {
+@@ -859,7 +876,8 @@
+     if (!ARROWS[k]) return;
+     e.preventDefault();
+     e.stopImmediatePropagation();
+-    var group = allSel().map(function (x) { return { el: x, bx: boxOf(x) }; }).filter(function (g) { return g.bx; });
++    var group = allSel().map(function (x) { return { el: x, bx: boxOf(x) }; })
++      .filter(function (g) { return g.bx && (e.ctrlKey || !g.bx.root); });   // the form resizes, never moves
+     if (!group.length) { post({ type: 'editRefused', why: '這個元件不是用 position:absolute 定位的，不能用方向鍵移動' }); return; }
+     var step = e.shiftKey ? 10 : 1;
+     if (!nudge || nudge.el !== selEl || nudge.items.length !== group.length) {
+@@ -965,6 +983,11 @@
+       case 'setZoom':
+         setZoom(typeof m.zoom === 'number' ? m.zoom : 1);
+         break;
++      case 'selectParent': {
++        var pp = selEl ? compParent(selEl) : null;
++        if (pp) { selEl = null; select(pp, 'key', true); }
++        break;
++      }
+       case 'selectIds': {
+         /* a multi-selection by ids: the first is the primary */
+         var list6 = (m.ids || []).map(byId).filter(function (x) { return !!x; });
+@@ -1017,6 +1040,12 @@
+         if (m.prop === 'visible') st5 = { display: m.value ? null : 'none' };
+         else if (m.prop === 'enabled') at5 = { disabled: m.value ? null : true };
+         else if (m.prop === 'fontSize') st5 = { 'font-size': Math.max(1, Math.round(+m.value || 0)) + 'px' };
++        else if (m.prop === 'bold') st5 = { 'font-weight': m.value ? 'bold' : 'normal' };
++        else if (m.prop === 'italic') st5 = { 'font-style': m.value ? 'italic' : 'normal' };
++        else if (m.prop === 'fontName') {
++          var fn5 = String(m.value || '').replace(/["';{}<>]/g, '').trim();
++          st5 = { 'font-family': fn5 ? (/\s/.test(fn5) ? "'" + fn5 + "'" : fn5) : null };
++        }
+         else if (m.prop === 'color') st5 = { color: String(m.value) };
+         else if (m.prop === 'background') st5 = { 'background-color': String(m.value) };
+         if (st5) {
+@@ -1142,6 +1171,10 @@
+ 
+   function start() {
+     ensureOverlay();
++    /* the context for VS Code's webview/context menu (our designer commands only) */
++    try {
++      document.documentElement.setAttribute('data-vscode-context', JSON.stringify({ webviewSection: 'htdDesign', preventDefaultContextMenuItems: true }));
++    } catch (e) { /* ignore */ }
+     post({ type: 'ready', url: location.href, title: document.title, mode: mode });
+     setTimeout(function () { sendTree(true); }, 60);
+     try {
+diff --git a/tools/vscode-htdesigner/media/props.js b/tools/vscode-htdesigner/media/props.js
+index 6c454a6..35f1906 100644
+--- a/tools/vscode-htdesigner/media/props.js
++++ b/tools/vscode-htdesigner/media/props.js
+@@ -175,7 +175,7 @@
+         var lay = ed.layout;
+         var layOk = lay && ed.layoutInSource;
+         if (lay) {
+-          ['left', 'top', 'width', 'height'].forEach(function (k) {
++          (lay.root ? ['width', 'height'] : ['left', 'top', 'width', 'height']).forEach(function (k) {
+             var label = k.charAt(0).toUpperCase() + k.slice(1);
+             row(label, num(k, lay[k], !layOk, function (v) {
+               var msg = { type: 'setLayout' };
+@@ -205,7 +205,18 @@
+             en.addEventListener('change', function () { vscode.postMessage({ type: 'setLook', prop: 'enabled', value: en.checked }); });
+             row('Enabled', en, '');
+           }
++          var fname = el('input', 'txt');
++          fname.type = 'text'; fname.value = lk.fontName || ''; fname.setAttribute('data-field', 'fontName'); fname.disabled = !ed.inSource;
++          fname.addEventListener('change', function () { vscode.postMessage({ type: 'setLook', prop: 'fontName', value: fname.value }); });
++          fname.addEventListener('keydown', function (e) { if (e.key === 'Enter') fname.blur(); });
++          row('Font.Name', fname, '');
+           row('Font.Size', num('fontSize', lk.fontSize, !ed.inSource, function (v) { vscode.postMessage({ type: 'setLook', prop: 'fontSize', value: v }); }), 'px');
++          [['bold', 'Font.Bold'], ['italic', 'Font.Italic']].forEach(function (p) {
++            var cb = el('input');
++            cb.type = 'checkbox'; cb.checked = !!lk[p[0]]; cb.setAttribute('data-field', p[0]); cb.disabled = !ed.inSource;
++            cb.addEventListener('change', function () { vscode.postMessage({ type: 'setLook', prop: p[0], value: cb.checked }); });
++            row(p[1], cb, '');
++          });
+           [['color', 'Font.Color'], ['background', 'Color']].forEach(function (p) {
+             var c = el('input', 'col');
+             c.type = 'color'; c.value = lk[p[0]] || (p[0] === 'color' ? '#000000' : '#ffffff');
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 7155363..7787ce6 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.12.0",
++  "version": "0.13.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -92,6 +92,22 @@
+         "category": "HT9045",
+         "icon": "$(checklist)"
+       },
++      { "command": "ht9045Designer.viewCode", "title": "檢視程式碼（預設事件）", "category": "HT9045" },
++      { "command": "ht9045Designer.selectParent", "title": "選取上層", "category": "HT9045" },
++      { "command": "ht9045Designer.align.left", "title": "靠左對齊", "category": "HT9045" },
++      { "command": "ht9045Designer.align.hcenter", "title": "水平置中", "category": "HT9045" },
++      { "command": "ht9045Designer.align.right", "title": "靠右對齊", "category": "HT9045" },
++      { "command": "ht9045Designer.align.top", "title": "靠上對齊", "category": "HT9045" },
++      { "command": "ht9045Designer.align.vcenter", "title": "垂直置中", "category": "HT9045" },
++      { "command": "ht9045Designer.align.bottom", "title": "靠下對齊", "category": "HT9045" },
++      { "command": "ht9045Designer.align.width", "title": "同寬", "category": "HT9045" },
++      { "command": "ht9045Designer.align.height", "title": "同高", "category": "HT9045" },
++      {
++        "command": "ht9045Designer.help",
++        "title": "設計檢視使用說明",
++        "category": "HT9045",
++        "icon": "$(question)"
++      },
+       {
+         "command": "ht9045Designer.resetZoom",
+         "title": "設計檢視縮放回 100%",
+@@ -119,7 +135,30 @@
+         "category": "HT9045"
+       }
+     ],
++    "submenus": [
++      { "id": "ht9045Designer.alignMenu", "label": "對齊（以主要選取為基準）" }
++    ],
+     "menus": {
++      "webview/context": [
++        { "command": "ht9045Designer.viewCode", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "1_code@1" },
++        { "command": "ht9045Designer.revealSource", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "1_code@2" },
++        { "command": "ht9045Designer.revealDfm", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "1_code@3" },
++        { "command": "ht9045Designer.selectParent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@1" },
++        { "command": "ht9045Designer.findComponent", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "2_select@2" },
++        { "submenu": "ht9045Designer.alignMenu", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@1" },
++        { "command": "ht9045Designer.pageOverview", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@1" },
++        { "command": "ht9045Designer.toggleMode", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@2" }
++      ],
++      "ht9045Designer.alignMenu": [
++        { "command": "ht9045Designer.align.left", "group": "1@1" },
++        { "command": "ht9045Designer.align.hcenter", "group": "1@2" },
++        { "command": "ht9045Designer.align.right", "group": "1@3" },
++        { "command": "ht9045Designer.align.top", "group": "2@1" },
++        { "command": "ht9045Designer.align.vcenter", "group": "2@2" },
++        { "command": "ht9045Designer.align.bottom", "group": "2@3" },
++        { "command": "ht9045Designer.align.width", "group": "3@1" },
++        { "command": "ht9045Designer.align.height", "group": "3@2" }
++      ],
+       "editor/context": [
+         {
+           "command": "ht9045Designer.showCodeInDesigner",
+@@ -182,6 +221,11 @@
+           "when": "view == ht9045Designer.components && ht9045Designer.active",
+           "group": "navigation@1"
+         },
++        {
++          "command": "ht9045Designer.help",
++          "when": "view == ht9045Designer.components",
++          "group": "navigation@9"
++        },
+         {
+           "command": "ht9045Designer.toggleMode",
+           "when": "view == ht9045Designer.components",
+@@ -221,7 +265,20 @@
+         {
+           "command": "ht9045Designer.openWebSenders",
+           "when": "false"
+-        }
++        },
++        { "command": "ht9045Designer.viewCode", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.selectParent", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.align.left", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.align.hcenter", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.align.right", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.align.top", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.align.vcenter", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.align.bottom", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.align.width", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.align.height", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.resetZoom", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.pageOverview", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.findComponent", "when": "ht9045Designer.active" }
+       ]
+     },
+     "keybindings": [
+@@ -229,6 +286,11 @@
+         "command": "ht9045Designer.findComponent",
+         "key": "ctrl+alt+o",
+         "when": "activeCustomEditorId == 'ht9045Designer.editor'"
++      },
++      {
++        "command": "ht9045Designer.viewCode",
++        "key": "f7",
++        "when": "activeCustomEditorId == 'ht9045Designer.editor'"
+       }
+     ],
+     "viewsContainers": {
+@@ -256,7 +318,7 @@
+     "viewsWelcome": [
+       {
+         "view": "ht9045Designer.components",
+-        "contents": "還沒有開啟設計檢視。\n[選擇頁面開啟](command:ht9045Designer.openPage)\n也可以在 .html 檔上按右鍵 →「在設計檢視開啟」。"
++        "contents": "還沒有開啟設計檢視。\n[選擇頁面開啟](command:ht9045Designer.openPage)\n也可以在 .html 檔上按右鍵 →「在設計檢視開啟」。\n[使用說明](command:ht9045Designer.help)"
+       }
+     ],
+     "configuration": {
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 2e072cf..1ef8d68 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -206,6 +206,16 @@ exports.run = async function () {
+       await waitFor(() => (d.treeData.length ? true : null), 8000);
+     }
+ 
++    // right-click menu commands (the menu itself cannot be opened from a test)
++    d.post({ type: 'selectId', id: 'spbSave', origin: 'editor' });
++    await waitFor(() => (d.sel && d.sel.info && d.sel.info.id === 'spbSave' ? true : null), 5000);
++    await vscode.commands.executeCommand('ht9045Designer.selectParent');
++    const par = await waitFor(() => (d.sel && d.sel.info && d.sel.info.id === 'Panel2' ? true : null), 5000);
++    ok(!!par, 'menu: 選取上層 -> Panel2');
++    const cmds = await vscode.commands.getCommands(true);
++    ok(['viewCode', 'selectParent', 'align.left', 'align.height', 'help', 'resetZoom'].every(c => cmds.includes('ht9045Designer.' + c)),
++      'menu / palette commands registered');
++
+     // mode toggle reaches the probe (no error)
+     await vscode.commands.executeCommand('ht9045Designer.toggleMode');
+     ok(d.mode === 'operate', 'toggle -> operate mode');
+@@ -226,9 +236,22 @@ exports.run = async function () {
+         await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(file), 'ht9045Designer.editor');
+         const dd = await waitFor(() => {
+           const a = hub.active;
+-          return a && a.file.toLowerCase() === file.toLowerCase() && a.treeData.length ? a : null;
++          return a && a.file.toLowerCase() === file.toLowerCase() && (a.treeData.length || (a.redirect && a.readyCount)) ? a : null;
+         }, 30000);
+-        if (!dd) { ok(false, 'sweep ' + p + ': tree arrives', 'timeout'); continue; }
++        if (dd && dd.redirect) {
++          ok(true, 'sweep ' + p, 'a forwarding page -> ' + dd.redirect + ' (shown as a notice, not followed)');
++          await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
++          await sleep(300);
++          continue;
++        }
++        if (!dd) {
++          const any = Array.from(hub.designers).find(x => x.file.toLowerCase() === file.toLowerCase());
++          ok(false, 'sweep ' + p + ': tree arrives', 'timeout' + (any ? ' (designer exists: ready=' + (any.readyCount || 0) + ' msgs=' + (any.msgCount || 0) +
++            ' last=' + (any.lastMsg || '-') + ' tree=' + any.treeData.length + ' active=' + (hub.active === any) + ')' : ' (no designer)'));
++          (hub.logLines || []).slice(-8).forEach(l => out.push('        log ' + l));
++          await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
++          continue;
++        }
+         const dg = await waitFor(() => dd.diag, 8000);
+         dd.post({ type: 'netcheck' });
+         const n2 = await waitFor(() => dd.netcheck, 8000);
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index 90b6fa4..18966a6 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -184,6 +184,25 @@
+         R.alignEdit = ea ? ea.what + ' ' + ea.id + JSON.stringify(ea.style) + ' topDiff=' + aTopDiff.toFixed(1) : null;
+         R.alignOk = !!ea && ea.id === 'spbSave' && aTopDiff < 0.5;
+       }
++      /* right-click: selects, the page does not see it, VS Code's menu is not blocked */
++      var exr = document.getElementById('sbtExit');
++      if (exr) {
++        window.__htdProbe.selectById('spbSave');
++        var pageSaw = 0;
++        var seen = function () { pageSaw++; };
++        exr.addEventListener('contextmenu', seen);
++        var rr0 = exr.getBoundingClientRect();
++        var cmEv = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, composed: true, button: 2, clientX: rr0.left + 4, clientY: rr0.top + 4 });
++        exr.dispatchEvent(cmEv);
++        var sc = msgs('select').pop();
++        R.ctxSelects = !!sc && sc.info.id === 'sbtExit';
++        R.ctxNotBlocked = !cmEv.defaultPrevented && pageSaw === 0;
++        R.ctxAttr = /htdDesign/.test(document.documentElement.getAttribute('data-vscode-context') || '');
++        exr.removeEventListener('contextmenu', seen);
++        window.__htdProbe.message({ type: 'selectParent' });
++        var spar = msgs('select').pop();
++        R.selectParent = spar && spar.info ? spar.info.id : null;
++      }
+       /* snaplines: drag the Save button up so its top comes within 5px of lines of the
+          Exit button / the panel -- it must land ON a line, and the guide is drawn */
+       var ex = document.getElementById('sbtExit');
+@@ -242,6 +261,52 @@
+           var s2 = msgs('select').pop();
+           R.selLayout = s2 && s2.info && s2.info.layout ? s2.info.layout.target + ' ' + s2.info.layout.width + 'x' + s2.info.layout.height : null;
+           R.selCaption = s2 && s2.info && s2.info.caption ? s2.info.caption.kind + ':' + s2.info.caption.value : null;
++          /* anchored on both sides (left+right, top+bottom, no width/height): moving keeps
++             the size (both edges move), resizing moves only the far edge */
++          var gb2 = document.getElementById('GroupBox2');
++          if (gb2 && gb2.style.right !== '' && gb2.style.width === '') {
++            window.__htdProbe.selectById('GroupBox2');
++            var w2 = gb2.offsetWidth, l2 = parseFloat(gb2.style.left), r2 = parseFloat(gb2.style.right), b2 = parseFloat(gb2.style.bottom);
++            var ne = edits().length;
++            key('ArrowRight');
++            key('ArrowDown');
++            window.__htdProbe.message({ type: 'noop' });
++            R._anch = { ne: ne, w2: w2, l2: l2, r2: r2, b2: b2 };
++            R.anchMoveDom = gb2.style.left + ' ' + gb2.style.right + ' ' + gb2.style.bottom + ' w=' + gb2.offsetWidth;
++            R.anchMoveOk = gb2.style.left === (l2 + 1) + 'px' && gb2.style.right === (r2 - 1) + 'px' && gb2.style.bottom === (b2 - 1) + 'px' && gb2.offsetWidth === w2;
++            key('ArrowLeft', { ctrlKey: true });        // 1px narrower: only the right edge moves
++            R.anchResizeDom = gb2.style.left + ' ' + gb2.style.right + ' w=' + gb2.offsetWidth;
++            R.anchResizeOk = gb2.style.left === (l2 + 1) + 'px' && gb2.style.right === (r2 - 1 + 1) + 'px' && gb2.offsetWidth === w2 - 1 && gb2.style.width === '';
++          }
++
++          /* the form itself: Ctrl+arrow resizes it (like a WPF Window), plain arrows do not move it */
++          var frm = document.querySelector('body > .form');
++          if (frm && frm.style.width) {
++            window.__htdProbe.selectById('@form');
++            var fw0 = parseFloat(frm.style.width);
++            var nf = edits().length;
++            key('ArrowRight');                               // no move for the form
++            key('ArrowRight', { ctrlKey: true });            // +1 width
++            window.__htdProbe.message({ type: 'noop' });
++            R._formAt = nf;
++            R.formResizeDom = frm.style.width + ' left=' + (frm.style.left || '-');
++            R.formResizeOk = frm.style.width === (fw0 + 1) + 'px' && !frm.style.left;
++            var sf = msgs('select').pop();
++            R.formLayoutRoot = !!(sf && sf.info && sf.info.layout && sf.info.layout.root);
++            /* fonts from the properties panel */
++            window.__htdProbe.selectById('spbSave');
++            var sk2 = msgs('select').pop().info.key;
++            var nfb = edits().length;
++            window.__htdProbe.message({ type: 'setLook', key: sk2, prop: 'bold', value: true });
++            window.__htdProbe.message({ type: 'setLook', key: sk2, prop: 'fontName', value: 'Microsoft JhengHei' });
++            var fb = edits().slice(nfb);
++            R.fontEdits = fb.map(function (x) { return JSON.stringify(x.style); }).join(' ');
++            R.fontOk = fb.length === 2 && fb[0].style['font-weight'] === 'bold' && fb[1].style['font-family'] === "'Microsoft JhengHei'" &&
++              getComputedStyle(btn).fontWeight >= 600;
++            var sl = msgs('select').pop();
++            R.lookBold = !!(sl && sl.info && sl.info.look && sl.info.look.bold);
++          }
++
+           /* zoom 200%: a 20px drag on screen is 10px in the page */
+           window.__htdProbe.message({ type: 'setZoom', zoom: 2 });
+           window.__htdProbe.selectById('spbSave');
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index 8ddbd18..bf50115 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -64,11 +64,20 @@ foreach ($p in $Pages) {
+       'Esc selects the parent'     = [bool]$R.escParent
+       'Tab selects the next'       = [bool]$R.tabNext
+       'snaps to a line, guide drawn' = ([bool]$R.snapOk -and [bool]$R.snapGuide)
++      'right-click selects'        = [bool]$R.ctxSelects
++      'right-click: page blind, menu not blocked' = ([bool]$R.ctxNotBlocked -and [bool]$R.ctxAttr)
++      'selectParent'               = [bool]$R.selectParent
++      'the form resizes, does not move' = ([bool]$R.formResizeOk -and [bool]$R.formLayoutRoot)
++      'Font.Bold / Font.Name'      = ([bool]$R.fontOk -and [bool]$R.lookBold)
+       'zoom 200%: 20px drag = 10px' = [bool]$R.zoomDragOk
+       'Ctrl+wheel zooms in'        = [bool]$R.wheelZoomOk
+     }
+     if ($R.PSObject.Properties.Name -contains 'hiddenTarget') { $must['hidden tab revealed'] = [bool]$R.hiddenTabRevealed }
+     if ($R.PSObject.Properties.Name -contains 'wrapperEdit') { $must['input moves its wrapper'] = [bool]$R.wrapperOk }
++    if ($R.PSObject.Properties.Name -contains 'anchMoveDom') {
++      $must['left+right anchored: move keeps the size'] = [bool]$R.anchMoveOk
++      $must['left+right anchored: resize moves only the right edge'] = [bool]$R.anchResizeOk
++    }
+     if ($R.driverError -or $R.editError) { $must['driver ran'] = $false }
+     foreach ($k in $must.Keys) {
+       if ($must[$k]) { Write-Host "PASS  $k" } else { Write-Host "FAIL  $k"; $bad++ }
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index e7ae9dd..f86c973 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -376,6 +376,17 @@ async function main() {
+   const fr = he.startTagOf(html, '@form');
+   ok(fr && /class="form"/.test(fr.text), 'startTagOf @form');
+ 
++  // --- forwarding pages
++  const bsn = fs.readFileSync(path.join(WEB, 'page', 'Setup.BinSelNormal.html'), 'utf8');
++  ok(pageinfo.redirectTarget(bsn) === 'Setup.BinSel.html', 'redirectTarget: Setup.BinSelNormal.html -> Setup.BinSel.html');
++  ok(pageinfo.redirectTarget(html) === null, 'redirectTarget: a real page is not a forwarder');
++  ok(pageinfo.redirectTarget('<html><head><meta http-equiv="refresh" content="0; url=main.html"></head><body></body></html>') === 'main.html', 'redirectTarget: meta refresh');
++  let fwd = 0;
++  for (const n of fs.readdirSync(path.join(WEB, 'page')).filter(x => /\.html$/i.test(x))) {
++    if (pageinfo.redirectTarget(fs.readFileSync(path.join(WEB, 'page', n), 'utf8'))) fwd++;
++  }
++  log('forwarding pages in web\\page: ' + fwd);
++
+   // --- format
+   ok(fmt.tcolor(12761254) === '#a6b8c2', 'TColor int -> #rrggbb (BGR)', fmt.tcolor(12761254));
+   ok(fmt.tcolor('clBtnFace') === '#d4d0c8', 'TColor clBtnFace');
+diff --git a/tools/vscode-htdesigner/test/vscode_it.ps1 b/tools/vscode-htdesigner/test/vscode_it.ps1
+index 40ffc1f..c58f93b 100644
+--- a/tools/vscode-htdesigner/test/vscode_it.ps1
++++ b/tools/vscode-htdesigner/test/vscode_it.ps1
+@@ -8,9 +8,14 @@ param(
+   # other pages to open one after another (generated / hand-written / JS-built / iframe)
+   [string[]]$Sweep = @('main.html', 'HW.IoSetView.html', 'Setup.Speed.html', 'Data.LotInfo.html',
+     'Main.MotionView.html', 'IDE.MotionView9050-UPH.html', 'Status.Security.html', 'HW.MotorTest.html'),
+-  [switch]$NoSweep
++  [switch]$NoSweep,
++  # every page of web\page (a long run: use -TimeoutSec 1200)
++  [switch]$AllPages,
++  [int]$TimeoutSec = 180
+ )
+ if ($NoSweep) { $Sweep = @() }
++# "powershell -File" hands "-Sweep a.html,b.html" over as one string
++if ($Sweep.Count -eq 1 -and $Sweep[0] -match ',') { $Sweep = @($Sweep[0] -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+ $ErrorActionPreference = 'Stop'
+ $here = $PSScriptRoot
+ $ext = Resolve-Path (Join-Path $here '..')
+@@ -18,6 +23,10 @@ $port = Resolve-Path (Join-Path $here '..\..\..')
+ $webRoot = Join-Path (Split-Path $port -Parent) 'web'
+ if (-not $Page) { $Page = Join-Path $webRoot 'page\Setup.HotPlate.html' }
+ $golden = Get-ChildItem (Split-Path (Split-Path $port -Parent) -Parent) -Directory -Filter 'HT9011UC_Code_V*' | Select-Object -First 1
++if ($AllPages) {
++  $Sweep = @(Get-ChildItem (Split-Path $Page -Parent) -File -Filter *.html | Where-Object { $_.Name -ne (Split-Path $Page -Leaf) } | Sort-Object Name | ForEach-Object { $_.Name })
++  if ($TimeoutSec -lt 900) { $TimeoutSec = 1200 }
++}
+ $code = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\Code.exe'
+ 
+ $tmp = Join-Path $env:TEMP ('htd_vscode_it_' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+@@ -52,7 +61,7 @@ $a = @("--user-data-dir=`"$(Join-Path $tmp 'user')`"", "--extensions-dir=`"$(Joi
+   "--extensionDevelopmentPath=`"$ext`"", "--extensionTestsPath=`"$(Join-Path $here 'integration')`"",
+   '--new-window', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust')
+ $p = Start-Process -FilePath $code -ArgumentList $a -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $tmp 'stdout.txt') -RedirectStandardError (Join-Path $tmp 'stderr.txt')
+-if (-not $p.WaitForExit(180000)) { Write-Host 'timeout: killing the test instance'; $p.Kill() }
++if (-not $p.WaitForExit($TimeoutSec * 1000)) { Write-Host 'timeout: killing the test instance'; $p.Kill() }
+ $env:HTD_IT_REPORT = $null
+ $env:HTD_IT_PAGE = $null
+ $env:HTD_IT_SWEEP = $null
+-- 
+2.55.0.windows.5
+

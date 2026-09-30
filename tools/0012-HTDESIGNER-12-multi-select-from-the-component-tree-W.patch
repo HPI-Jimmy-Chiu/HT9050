@@ -1,0 +1,187 @@
+From 6f9fd1b39381f510aeff464b3e4353881d677433 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 18:03:41 +0800
+Subject: [PATCH] HTDESIGNER-12: multi-select from the component tree (WPF
+ document outline) (0.12.0)
+
+- the tree allows Ctrl/Shift+click; a multi-selection there becomes the page's
+  multi-selection (the clicked item is primary), so the align tools and group
+  moves work from the outline too
+- the page mirroring its selection into the tree no longer answers back
+  (revealing flag), and a tree-originated multi-selection is kept by the probe
+
+Tests: fake vscode 54 (click command + selection -> selectIds, clicked first),
+real VS Code: selectIds from the tree keeps the multi-selection, align + one
+undo; all layers pass, opened files byte-identical (MD5).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  5 +++--
+ tools/vscode-htdesigner/extension.js          | 19 +++++++++++++++++--
+ tools/vscode-htdesigner/media/probe.js        |  6 +++---
+ tools/vscode-htdesigner/package.json          |  2 +-
+ tools/vscode-htdesigner/test/fake_vscode.js   |  8 +++++++-
+ .../test/integration/index.js                 |  4 ++--
+ .../vscode-htdesigner/test/smoke_extension.js | 13 +++++++++++++
+ 7 files changed, 46 insertions(+), 11 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index a5a0c31..551efbc 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -75,8 +75,9 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ ⚠ 這些頁面是網頁作者的作品，透過 `sync_web.py` 同步進來，`--apply` 會整份覆蓋。第一次改的時候外掛會提醒你；
+ 存檔前請確認，並告訴網頁作者。如果你開了自動存檔（`files.autoSave`），改動會自動寫到磁碟，提醒裡也會寫出來。
+ 
+-**「元件」樹**：頁面上所有有名字的元件，照 DFM 的層次排列。點一下＝在畫面上選取；
+-選到在隱藏分頁裡的元件時，會自動切到那一頁。每一列右邊兩個圖示＝跳到 DFM 定義／跳到 HTML 原始碼。
++**「元件」樹**（WPF 的文件大綱）：頁面上所有有名字的元件，照 DFM 的層次排列。點一下＝在畫面上選取；
++**Ctrl／Shift＋點＝多選**（最後點的是主要選取）；選到在隱藏分頁裡的元件時，會自動切到那一頁。
++每一列右邊兩個圖示＝跳到 DFM 定義／跳到 HTML 原始碼。
+ 
+ **找元件**：`Ctrl+Alt+O`（或編輯器右上角的放大鏡），輸入名稱、型別或畫面上的文字。
+ `HW.IoSetView.html` 這種兩千多個元件的頁面用這個最快。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 7e08d3a..5317081 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -69,7 +69,18 @@ class Hub {
+     this.warnedOperate = false;
+     this.tree = new ComponentTree(this);
+     this.treeView = vscode.window.createTreeView('ht9045Designer.components', {
+-      treeDataProvider: this.tree, showCollapseAll: true,
++      treeDataProvider: this.tree, showCollapseAll: true, canSelectMany: true,
++    });
++    // WPF document outline: Ctrl/Shift+click in the tree = multi-select on the page
++    // (a single click is the item's command; the tree's own reveal is ignored here)
++    this.treeView.onDidChangeSelection(e => {
++      if (this.tree.revealing || !this.active) return;
++      const sel = (e.selection || []).filter(n => n && n.key);
++      if (sel.length < 2) return;
++      const ids = sel.map(n => (n.isForm ? '@form' : n.id)).filter(Boolean);
++      const focus = this.tree.lastClicked && sel.find(n => n.key === this.tree.lastClicked);
++      if (focus) ids.unshift(ids.splice(ids.indexOf(focus.isForm ? '@form' : focus.id), 1)[0]);
++      this.active.post({ type: 'selectIds', ids, origin: 'tree' });
+     });
+     this.props = new PropsView(this);
+     this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 40);
+@@ -96,6 +107,7 @@ class Hub {
+       reg('ht9045Designer.showSource', () => this.cmdShowSource()),
+       reg('ht9045Designer.revealSource', node => this.cmdRevealSource(node)),
+       reg('ht9045Designer.selectKey', key => {
++        this.tree.lastClicked = key;
+         if (this.active) this.active.post({ type: 'selectKey', key, origin: 'tree' });
+       }),
+       reg('ht9045Designer.showInfo', () => this.cmdShowInfo()),
+@@ -1611,7 +1623,10 @@ class ComponentTree {
+   reveal(key) {
+     const n = this.byKey.get(key);
+     if (!n || !this.hub.treeView.visible) return;
+-    this.hub.treeView.reveal(n, { select: true, focus: false }).then(undefined, () => {});
++    // the page selected it: mirror that in the tree without the tree answering back
++    this.revealing = true;
++    const done = () => { setTimeout(() => { this.revealing = false; }, 50); };
++    this.hub.treeView.reveal(n, { select: true, focus: false }).then(done, done);
+   }
+ }
+ 
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index 7dfeb91..881d884 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -564,9 +564,9 @@
+       }
+     }
+   }
+-  function select(el, origin, scroll) {
++  function select(el, origin, scroll, keepMulti) {
+     /* a plain selection ends a multi-selection; an edit or a Ctrl/Shift toggle keeps it */
+-    if (origin !== 'edit' && origin !== 'multi') multi = [];
++    if (!keepMulti && origin !== 'edit' && origin !== 'multi') multi = [];
+     if (!el) {
+       selEl = null; scheduleDraw();
+       post({ type: 'select', info: null, origin: origin });
+@@ -971,7 +971,7 @@
+         if (!list6.length) break;
+         multi = list6.slice(1);
+         selEl = null;
+-        select(list6[0], 'multi', true);
++        select(list6[0], m.origin === 'tree' ? 'tree' : 'multi', true, true);
+         break;
+       }
+       case 'selectId': {
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 44014ea..7155363 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.11.0",
++  "version": "0.12.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/fake_vscode.js b/tools/vscode-htdesigner/test/fake_vscode.js
+index f6e5a01..ec4a547 100644
+--- a/tools/vscode-htdesigner/test/fake_vscode.js
++++ b/tools/vscode-htdesigner/test/fake_vscode.js
+@@ -57,7 +57,13 @@ const vscode = {
+   TextEditorRevealType: { Default: 0, InCenter: 1, InCenterIfOutsideViewport: 2, AtTop: 3 },
+   window: {
+     createOutputChannel: () => ({ lines: [], appendLine(s) { this.lines.push(s); }, show() {}, dispose() {} }),
+-    createTreeView: (id, o) => { vscode._tree = o.treeDataProvider; return { id, visible: false, reveal: () => Promise.resolve(), dispose() {} }; },
++    createTreeView: (id, o) => {
++      vscode._tree = o.treeDataProvider;
++      const tv = { id, visible: false, reveal: () => Promise.resolve(), dispose() {}, _sel: null,
++        onDidChangeSelection: fn => { tv._sel = fn; return disp(); } };
++      vscode._treeView = tv;
++      return tv;
++    },
+     createStatusBarItem: () => ({ show() { this.shown = true; }, hide() { this.shown = false; }, dispose() {} }),
+     registerWebviewViewProvider: (id, p) => { rec('registerWebviewViewProvider', [id]); vscode._props = p; return disp(); },
+     registerCustomEditorProvider: (id, p) => { rec('registerCustomEditorProvider', [id]); vscode._editor = p; return disp(); },
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 104320b..2e072cf 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -190,9 +190,9 @@ exports.run = async function () {
+ 
+       // multi-select + align top = ONE undo step
+       await sleep(800);
+-      d.post({ type: 'selectIds', ids: ['sbtExit', 'spbSave'] });
++      d.post({ type: 'selectIds', ids: ['sbtExit', 'spbSave'], origin: 'tree' });   // as the outline sends it
+       const ms = await waitFor(() => (d.sel && d.sel.info && d.sel.info.id === 'sbtExit' && d.sel.info.multi ? d.sel : null), 5000);
+-      ok(!!ms && ms.info.multi.indexOf('spbSave') >= 0, 'multi-select sbtExit + spbSave', ms ? JSON.stringify(ms.info.multi) : '-');
++      ok(!!ms && ms.info.multi.indexOf('spbSave') >= 0, 'multi-select sbtExit + spbSave (from the tree)', ms ? JSON.stringify(ms.info.multi) : '-');
+       d.post({ type: 'align', how: 'height' });
+       const al = await waitFor(() => (d.doc.isDirty && d.doc.getText() !== original ? true : null), 5000);
+       ok(!!al, 'align (same height) changed the source');
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 40aee53..5146e36 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -161,6 +161,19 @@ async function main() {
+   ok(od && od.uri.scheme === 'ht9045-golden' && /cHotPlate\.dfm$/i.test(od.uri.fsPath) && od.selection.start.line === 355 && /Caption/.test(od.text.split('\n')[355]),
+     'property double-click opens cHotPlate.dfm:356 (Big5, read-only)', od ? od.uri.fsPath + ':' + (od.selection.start.line + 1) : 'none');
+ 
++  // tree multi-select (Ctrl+click in the outline) -> selectIds to the page, clicked one first
++  const kids2 = fake._tree.getChildren(fake._tree.getChildren()[0]);
++  const p2 = kids2.find(n => n.id === 'Panel2');
++  const pn2 = p2 ? fake._tree.getChildren(p2) : [];
++  const nSave = pn2.find(n => n.id === 'spbSave'), nExit = pn2.find(n => n.id === 'sbtExit');
++  if (nSave && nExit) {
++    pagePosted.length = 0;
++    await fake._cmds['ht9045Designer.selectKey'](nExit.key);           // the item's click command
++    fake._treeView._sel({ selection: [nSave, nExit] });                 // then the tree's selection
++    const si = pagePosted.find(m => m.type === 'selectIds');
++    ok(si && si.ids.join(',') === 'sbtExit,spbSave' && si.origin === 'tree', 'tree Ctrl+click multi-select -> selectIds, clicked one primary', si ? JSON.stringify(si.ids) : 'none');
++  }
++
+   // find component (quick pick) -> selectKey to the page
+   fake._state.quickPick = items => items.find(i => i.label === 'XST1');
+   pagePosted.length = 0;
+-- 
+2.55.0.windows.5
+

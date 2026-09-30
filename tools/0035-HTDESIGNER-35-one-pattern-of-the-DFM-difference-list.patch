@@ -1,0 +1,374 @@
+From f3d272abdea72ef212804e8ce272f5cf9925a6bc Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 22:14:25 +0800
+Subject: [PATCH] =?UTF-8?q?HTDESIGNER-35:=20=E5=85=A8=E9=83=A8=E6=94=B9?=
+ =?UTF-8?q?=E5=9B=9E=20--=20one=20pattern=20of=20the=20DFM=20difference=20?=
+ =?UTF-8?q?list=20back=20to=20the=20DFM=20in=20one=20step=20(0.35.0)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The DFM difference list folds "the same difference on many controls" into
+one pattern line. A look / caption pattern line now has a 全部改回 button:
+it asks once, then every control of that pattern gets the DFM value back
+in ONE source edit, so one Ctrl+Z takes all of them back. Position / size
+patterns get no button (each control has its own DFM value there).
+
+- probe: lookChange / captionChange split out of setLook / setCaption;
+  new message editMany -> one batch edit
+- host: DfmDiffPanel.resetPattern (modal confirm; tests pass confirmed)
+- dfmdiff panel: the button, only on non-layout pattern lines
+- tests: probe (one batch for 2 controls), smoke (a bold pattern of 7
+  labels -> editMany of 7; a position pattern -> nothing), panels_render
+  (the button posts resetPattern:<key>, none on position lines), real
+  VS Code (Setup.Speed TPanel Color x36 written, ONE undo back, no save)
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHEATSHEET.md         |  1 +
+ tools/vscode-htdesigner/README.md             |  2 +
+ tools/vscode-htdesigner/extension.js          | 25 +++++++
+ tools/vscode-htdesigner/media/dfmdiff.js      | 12 ++-
+ tools/vscode-htdesigner/media/probe.js        | 75 +++++++++++++------
+ tools/vscode-htdesigner/package.json          |  2 +-
+ .../test/integration/index.js                 | 22 ++++++
+ .../vscode-htdesigner/test/panels_render.ps1  | 13 ++++
+ tools/vscode-htdesigner/test/probe_driver.js  | 15 ++++
+ tools/vscode-htdesigner/test/probe_test.ps1   |  1 +
+ .../vscode-htdesigner/test/smoke_extension.js | 22 ++++++
+ 11 files changed, 167 insertions(+), 23 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/CHEATSHEET.md b/tools/vscode-htdesigner/CHEATSHEET.md
+index a499732..826b3e4 100644
+--- a/tools/vscode-htdesigner/CHEATSHEET.md
++++ b/tools/vscode-htdesigner/CHEATSHEET.md
+@@ -71,6 +71,7 @@
+ | 要做什麼 | 怎麼做 |
+ |---|---|
+ | 跟 DFM 比對整頁 | 標題列／右鍵「與 DFM 的差異」 |
++| 同一種差異一次改回 DFM | 差異清單「同一種差異」那一行的「全部改回」（一個 Ctrl+Z 全部復原） |
+ | 每個事件接了沒 | 標題列／右鍵「接線總覽」 |
+ | 找 HTML 的毛病 | 右鍵「檢查這一頁」／「頁面」標題列 ⚠「檢查所有頁面」→「問題」面板，燈泡修正 |
+ 
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 413f8bc..a5af78a 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -134,6 +134,8 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ - **同一種差異收成一行**：同一型別至少 5 個元件都有一模一樣的差異（例如 IoSetView 的 612 個 TBtnPanelLane 都是粗體、
+   DFM 不是），多半是網頁的統一樣式，收在「同一種差異」裡，一種一行、附個數；點那一行才列出是哪些元件。
+   清單本身預設只列**個別差異**（IoSetView：3,348 項 → 個別 92 項＋同一種差異 13 種）。
++  外觀／文字類的「同一種差異」那一行有 **「全部改回」**：會先問，然後那幾個元件一次改回 DFM 的值 —— **一個 Ctrl+Z 全部復原**。
++  位置／大小類沒有這個按鈕（每個元件的 DFM 值都不一樣，一個一個看比較安全）。
+ - 點一列＝在畫面上選取那個元件；按 **↺**＝只把那一項改回 DFM 的值（一次一項，Ctrl+Z 可以復原）。沒有「全部改回」—— 一項一項看過再決定。
+ - 改完、復原、或頁面重畫之後，清單會自己重新比對；在別處改過頁面的話按「重新比對」。
+ - 標 `*` 的是目前**沒有顯示**的元件（在沒切到的分頁、或隱藏的面板裡）：畫面量不到它的大小，改用原始碼 `style` 裡寫的數值比對。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 2482ea2..ebf2b18 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -2843,9 +2843,34 @@ class DfmDiffPanel {
+         this.d.post(msg);
+         break;
+       }
++      case 'resetPattern': return this.resetPattern(String(m.key || ''), m.confirmed === true);
+       default: break;
+     }
+   }
++
++  /**
++   * "全部改回" on a pattern line: the same look / text difference on many controls -- every
++   * one written back to the DFM value in ONE edit (one Ctrl+Z), after a question.
++   * Position / size patterns are not offered: their DFM values differ control by control.
++   */
++  async resetPattern(key, confirmed) {
++    const data = this.data;
++    const pat = data && (data.patterns || []).find(p => p.key === key);
++    if (!pat) return null;
++    const rows = data.rows.filter(r => r.pattern === key && r.inSource && r.reset && /^(setLook|setCaption)$/.test(r.reset.type));
++    if (!rows.length) { vscode.window.setStatusBarMessage('$(info) 這一種差異沒有可以改回的元件（位置／大小請一個一個改）', 5000); return null; }
++    if (!confirmed) {
++      const pick = await vscode.window.showWarningMessage(
++        '把 ' + rows.length + ' 個 ' + pat.cls + ' 的 ' + pat.prop + ' 從「' + (pat.page || '（空）') + '」改回 DFM 的「' + (pat.dfm || '（空）') + '」？\n' +
++        '（寫進 HTML 原始碼，一個 Ctrl+Z 全部復原；要存檔才寫入）', { modal: true }, '改回');
++      if (pick !== '改回') return null;
++    }
++    const items = rows.map(r => ({ id: r.id, type: r.reset.type, prop: r.reset.prop, value: r.reset.value }));
++    this.d.panel.reveal(this.d.panel.viewColumn, true);
++    this.d.post({ type: 'editMany', items });
++    vscode.window.setStatusBarMessage('$(discard) ' + rows.length + ' 個 ' + pat.cls + ' 的 ' + pat.prop + ' 改回 DFM 的值（Ctrl+Z 復原）', 6000);
++    return { count: rows.length, items };
++  }
+ }
+ 
+ // ---------------------------------------------------------------------------
+diff --git a/tools/vscode-htdesigner/media/dfmdiff.js b/tools/vscode-htdesigner/media/dfmdiff.js
+index f926dd0..6c110ce 100644
+--- a/tools/vscode-htdesigner/media/dfmdiff.js
++++ b/tools/vscode-htdesigner/media/dfmdiff.js
+@@ -91,7 +91,7 @@
+       det.appendChild(el('summary', null, '同一種差異 ' + pats.length + ' 種（同一型別至少 5 個元件都一樣，多半是網頁的統一樣式；點一列看是哪些元件）'));
+       var pt = el('table', 'grid');
+       var ph = el('tr');
+-      ['型別', '屬性', '網頁', 'DFM', '個數'].forEach(function (t) { ph.appendChild(el('th', null, t)); });
++      ['型別', '屬性', '網頁', 'DFM', '個數', ''].forEach(function (t) { ph.appendChild(el('th', null, t)); });
+       var pthead = el('thead');
+       pthead.appendChild(ph);
+       pt.appendChild(pthead);
+@@ -104,6 +104,16 @@
+         r.appendChild(val(p.prop, p.page));
+         r.appendChild(val(p.prop, p.dfm));
+         r.appendChild(el('td', 'fn', p.count));
++        /* a look / text pattern: every one back to the DFM value at once (asks first; one Ctrl+Z) */
++        var tdb = el('td');
++        if (p.group !== 'layout') {
++          var ab = el('button', 'reset', '全部改回');
++          ab.setAttribute('data-act', 'resetPattern');
++          ab.title = '把這 ' + p.count + ' 個都改回 DFM 的值（會先問；一個 Ctrl+Z 全部復原）';
++          ab.addEventListener('click', function (e) { e.stopPropagation(); vscode.postMessage({ type: 'resetPattern', key: p.key }); });
++          tdb.appendChild(ab);
++        }
++        r.appendChild(tdb);
+         r.title = '點一下：只看這一種差異的元件';
+         r.addEventListener('click', function () { st.pattern = st.pattern === p.key ? null : p.key; save(); render(); });
+         ptb.appendChild(r);
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index d6d3be2..3fcaeea 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -716,6 +716,40 @@
+       background: hexOf(cs.backgroundColor),
+     };
+   }
++  /* a Visible / Enabled / Font / Color change: applied to the DOM, returned as the edit to
++     write (null = not a look property). A font goes where the control's Font lives. */
++  function lookChange(el, prop, value) {
++    var st = null, at = null;
++    if (prop === 'visible') st = { display: value ? null : 'none' };
++    else if (prop === 'enabled') at = { disabled: value ? null : true };
++    else if (prop === 'fontSize') st = { 'font-size': Math.max(1, Math.round(+value || 0)) + 'px' };
++    else if (prop === 'bold') st = { 'font-weight': value ? 'bold' : 'normal' };
++    else if (prop === 'italic') st = { 'font-style': value ? 'italic' : 'normal' };
++    else if (prop === 'fontName') {
++      var fn = String(value || '').replace(/["';{}<>]/g, '').trim();
++      st = { 'font-family': fn ? (/\s/.test(fn) ? "'" + fn + "'" : fn) : null };
++    }
++    else if (prop === 'color') st = { color: String(value) };
++    else if (prop === 'background') st = { 'background-color': String(value) };
++    if (st) {
++      var fh = /^(fontSize|bold|italic|fontName|color)$/.test(prop) ? fontHost(el) : { el: el, target: 'self' };
++      for (var k in st) { if (st[k] == null) fh.el.style.removeProperty(k); else fh.el.style.setProperty(k, st[k]); }
++      return { what: 'style', target: fh.target, style: st };
++    }
++    if (at) {
++      el.disabled = !value;
++      return { what: 'attr', attr: at };
++    }
++    return null;
++  }
++  /* a caption change: applied, returned as the edit (null = it has no caption to change) */
++  function captionChange(el, value) {
++    var c = captionOf(el);
++    if (!c) return null;
++    var v = String(value == null ? '' : value);
++    setCaptionDom(el, c.kind, v);
++    return { what: 'caption', capKind: c.kind, value: v };
++  }
+   function sendEdit(el, payload) {
+     payload.type = 'edit';
+     payload.id = idOf(el);
+@@ -1388,30 +1422,29 @@
+       case 'setLook': {
+         var el5 = m.id ? byId(m.id) : els.get(m.key);
+         if (!el5 || !el5.isConnected) break;
+-        var st5 = null, at5 = null;
+-        if (m.prop === 'visible') st5 = { display: m.value ? null : 'none' };
+-        else if (m.prop === 'enabled') at5 = { disabled: m.value ? null : true };
+-        else if (m.prop === 'fontSize') st5 = { 'font-size': Math.max(1, Math.round(+m.value || 0)) + 'px' };
+-        else if (m.prop === 'bold') st5 = { 'font-weight': m.value ? 'bold' : 'normal' };
+-        else if (m.prop === 'italic') st5 = { 'font-style': m.value ? 'italic' : 'normal' };
+-        else if (m.prop === 'fontName') {
+-          var fn5 = String(m.value || '').replace(/["';{}<>]/g, '').trim();
+-          st5 = { 'font-family': fn5 ? (/\s/.test(fn5) ? "'" + fn5 + "'" : fn5) : null };
+-        }
+-        else if (m.prop === 'color') st5 = { color: String(m.value) };
+-        else if (m.prop === 'background') st5 = { 'background-color': String(m.value) };
+-        if (st5) {
+-          /* a font goes where the control's Font lives (a TPanel's caption span, a TGroupBox's legend) */
+-          var fh5 = /^(fontSize|bold|italic|fontName|color)$/.test(m.prop) ? fontHost(el5) : { el: el5, target: 'self' };
+-          for (var k5 in st5) { if (st5[k5] == null) fh5.el.style.removeProperty(k5); else fh5.el.style.setProperty(k5, st5[k5]); }
+-          sendEdit(el5, { what: 'style', target: fh5.target, style: st5 });
+-        } else if (at5) {
+-          el5.disabled = !m.value;
+-          sendEdit(el5, { what: 'attr', attr: at5 });
+-        }
++        var e5 = lookChange(el5, m.prop, m.value);
++        if (e5) sendEdit(el5, e5);
+         selEl = null; select(el5, 'edit', false);
+         break;
+       }
++      case 'editMany': {
++        /* one look / caption change on many controls (the DFM difference list's "全部改回"):
++           applied to each, reported as ONE batch edit = one source edit = one undo step */
++        var batch = [];
++        (Array.isArray(m.items) ? m.items : []).forEach(function (it) {
++          var e = byId(it.id);
++          if (!e || !e.isConnected) return;
++          var pl = it.type === 'setCaption' ? captionChange(e, it.value) : it.type === 'setLook' ? lookChange(e, it.prop, it.value) : null;
++          if (!pl) return;
++          pl.id = idOf(e);
++          pl.key = keyOf(e);
++          batch.push(pl);
++        });
++        if (batch.length === 1) { var b1 = batch[0]; b1.type = 'edit'; post(b1); }
++        else if (batch.length) post({ type: 'edit', what: 'batch', edits: batch });
++        scheduleDraw();
++        break;
++      }
+       case 'setStyleRaw': {
+         /* one declaration of the element's own style="…" from the grid (value null = remove) */
+         var el8 = els.get(m.key);
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 93c364a..c63ae13 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.34.0",
++  "version": "0.35.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 56d3a59..a4c332d 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -533,6 +533,28 @@ exports.run = async function () {
+       }
+     }
+ 
++    // "全部改回" of a real pattern on Setup.Speed.html: one edit for all of them, one undo
++    {
++      const speedFile = path.join(path.dirname(page), 'Setup.Speed.html');
++      const sd = await hub.openPageAt(speedFile, null);
++      if (sd) {
++        await sleep(800);
++        const df = await vscode.commands.executeCommand('ht9045Designer.dfmDiff');
++        const pat = df && df.patterns.find(p => p.group !== 'layout');
++        const before = sd.doc.getText();
++        const res = pat && sd.dfmDiff ? await sd.dfmDiff.resetPattern(pat.key, true) : null;
++        const changed = res ? await waitFor(() => (sd.doc.isDirty && sd.doc.getText() !== before ? true : null), 8000) : null;
++        ok(pat && res && res.count === pat.count && !!changed, 'Setup.Speed: 全部改回 ' + (pat ? pat.cls + ' ' + pat.prop + ' x' + pat.count : '-') + ' written into the source');
++        sd.panel.reveal(sd.panel.viewColumn, false);
++        await sleep(300);
++        await vscode.commands.executeCommand('undo');
++        ok(!!(await waitFor(() => (sd.doc.getText() === before ? true : null), 5000)), 'ONE undo takes all of them back');
++        if (sd.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
++        await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
++        await sleep(300);
++      } else ok(false, 'Setup.Speed opens for the pattern test');
++    }
++
+     // 頁面 list (the real tree view): HotPlate is the current page; a click switches to Setup.Speed.html
+     {
+       const pgs = hub.pages.getChildren();
+diff --git a/tools/vscode-htdesigner/test/panels_render.ps1 b/tools/vscode-htdesigner/test/panels_render.ps1
+index 96d1be3..dc2ca19 100644
+--- a/tools/vscode-htdesigner/test/panels_render.ps1
++++ b/tools/vscode-htdesigner/test/panels_render.ps1
+@@ -198,6 +198,19 @@ var gb = document.querySelector('button[data-group="layout"]');
+ if (gb) gb.click();
+ R.rowsLayoutOnly = document.querySelectorAll('tr.diffrow').length;
+ '@
++$patChecks = @'
++var ab = document.querySelector('tr.patrow button[data-act="resetPattern"]');
++R.hasButton = !!ab;
++R.patKey = ab ? ab.closest('tr').getAttribute('data-key') : null;
++if (ab) ab.click();
++var lastP = window.__out[window.__out.length - 1] || {};
++R.afterPat = lastP.type + ':' + lastP.key;
++R.layoutButtons = Array.prototype.filter.call(document.querySelectorAll('tr.patrow'), function (r) { return /\|(Left|Top|Width|Height)\|/.test(r.getAttribute('data-key')) && r.querySelector('button'); }).length;
++'@
++$r7 = Render 'dfmdiff_pattern' 'overview.css' 'dfmdiff.js' 'data' (Join-Path $dump 'dfmdiff_pattern.json') $patChecks
++if ($r7) {
++  Check ($r7.errors.Count -eq 0 -and $r7.hasButton -and $r7.afterPat -eq ('resetPattern:' + $r7.patKey) -and $r7.layoutButtons -eq 0) 'pattern line: "reset all" posts resetPattern with its key; no button on position lines' "$($r7.afterPat)"
++} else { $script:bad++ }
+ $r4 = Render 'dfmdiff' 'overview.css' 'dfmdiff.js' 'data' (Join-Path $dump 'dfmdiff_HotPlate.json') $ddChecks
+ if ($r4) {
+   Check ($r4.errors.Count -eq 0 -and $r4.rows -eq 1 -and ($r4.props -join ',') -eq 'Font.Bold') 'DFM difference list renders Font.Bold' "rows=$($r4.rows) props=$($r4.props -join ',') errors=$($r4.errors -join ' / ')"
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index a10b922..8a086da 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -349,6 +349,21 @@
+             R.designShowOk = !hpnl.hasAttribute('data-htd-hide') && getComputedStyle(btn).visibility === 'visible' && edits().length === ne2;
+           }
+ 
++          /* "全部改回" of a pattern: one look change on several controls = ONE batch edit */
++          var other2 = Array.prototype.filter.call(document.querySelectorAll('button[id]'), function (b) { return b !== btn; })[0];
++          if (other2) {
++            var nM = edits().length;
++            window.__htdProbe.message({ type: 'editMany', items: [
++              { id: btn.id, type: 'setLook', prop: 'italic', value: true },
++              { id: other2.id, type: 'setLook', prop: 'italic', value: true },
++              { id: 'no-such-id', type: 'setLook', prop: 'italic', value: true },
++            ] });
++            var eM = edits().slice(nM);
++            R.editMany = eM.map(function (x) { return x.what + ':' + (x.edits || []).map(function (y) { return y.id; }).join('+'); }).join(' ');
++            R.editManyOk = eM.length === 1 && eM[0].what === 'batch' && eM[0].edits.length === 2 &&
++              getComputedStyle(btn).fontStyle === 'italic' && getComputedStyle(other2).fontStyle === 'italic';
++          }
++
+           /* the grid's HTML rows: a style declaration / a text attribute, written as an edit; an on* never */
+           window.__htdProbe.selectById(btn.id);
+           var skR = msgs('select').pop().info.key;
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index 450b6f8..c14e231 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -74,6 +74,7 @@ foreach ($p in $Pages) {
+     }
+     if ($R.PSObject.Properties.Name -contains 'hiddenTarget') { $must['hidden tab revealed'] = [bool]$R.hiddenTabRevealed }
+     if ($R.PSObject.Properties.Name -contains 'wrapperEdit') { $must['input moves its wrapper'] = [bool]$R.wrapperOk }
++    if ($R.PSObject.Properties.Name -contains 'editMany') { $must['one change on several controls = ONE batch edit'] = [bool]$R.editManyOk }
+     if ($R.PSObject.Properties.Name -contains 'dragTip') { $must['live tip while dragging: left / top of the style'] = [bool]$R.dragTipOk }
+     if ($R.PSObject.Properties.Name -contains 'nameTags') {
+       $must['name tags on every component'] = [bool]$R.nameTagsOk
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 66edaf9..dade2c7 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -320,6 +320,28 @@ async function main() {
+   }
+   panel.webview.postMessage = origPM;
+ 
++  // "全部改回" of a pattern: every TLabel bold on the page, none in the DFM -> one line; the button sends them all
++  const ptLabels = Array.from(require('../lib/pageinfo').collectIds(text)).filter(id => /^Label\d+$/.test(id));
++  panel.webview.postMessage = m => {
++    if (m.type === 'lookAll') {
++      setTimeout(() => pageRecv({ __htd: 1, type: 'lookAll', seq: m.seq, items: ptLabels.map(id => ({
++        id, lay: null, cap: null, look: { visible: true, enabled: null, fontSize: 0, fontName: 'x', fontFamilies: ['x'], fontOwn: false, bold: true, italic: false, color: '', background: '' },
++      })) }), 5);
++    }
++    return origPM(m);
++  };
++  const ptDiff = await fake._cmds['ht9045Designer.dfmDiff']();
++  panel.webview.postMessage = origPM;
++  const ptPat = ptDiff && ptDiff.patterns.find(p => p.cls === 'TLabel' && p.prop === 'Font.Bold');
++  if (ptDiff) fs.writeFileSync(path.join(dumpDir, 'dfmdiff_pattern.json'), JSON.stringify(ptDiff), 'utf8');
++  pagePosted.length = 0;
++  const ptRes = ptPat && dpanel ? await dpanel.recv({ type: 'resetPattern', key: ptPat.key, confirmed: true }) : null;
++  const ptSent = pagePosted.filter(m => m.type === 'editMany').pop();
++  ok(ptPat && ptPat.count >= 5 && ptRes && ptSent && ptSent.items.length === ptPat.count && ptSent.items.every(i => i.type === 'setLook' && i.prop === 'bold' && i.value === false),
++    'pattern "every TLabel bold": 全部改回 sends all ' + (ptPat ? ptPat.count : 0) + ' to the probe in one message (bold = DFM\'s false)');
++  const ptLay = ptDiff && ptDiff.patterns.find(p => p.group === 'layout');
++  ok(!ptLay || (await dpanel.recv({ type: 'resetPattern', key: ptLay.key, confirmed: true })) === null, 'a position pattern is not reset in bulk');
++
+   // 頁面 list: every page by group (Main first), HotPlate marked as the current page, a click opens it
+   const pv = fake._views && fake._views['ht9045Designer.pages'];
+   const pgroups = pv ? pv.provider.getChildren() : [];
+-- 
+2.55.0.windows.5
+

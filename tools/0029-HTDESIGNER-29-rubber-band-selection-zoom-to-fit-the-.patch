@@ -1,0 +1,380 @@
+From 8d2885fc2408fb9a65d82843b0702141c945f084 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 21:29:57 +0800
+Subject: [PATCH] HTDESIGNER-29: rubber-band selection, zoom to fit, the Visual
+ Studio keys F4 / Ctrl+Alt+X / Ctrl+Alt+T (0.29.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Rubber band (WPF): a drag that starts on the form's own background -- or
+  outside the form -- draws a dashed band; on release the components entirely
+  inside it become the selection, the outermost only (a panel and its
+  children both inside: the panel); design-hidden ones do not count.
+  (The probe's mouseup handler now ends a band too -- it stops the event for
+  the page, so the window's own mouseup listener never runs.)
+- 縮放到符合視窗 (title bar, right-click): the largest zoom step at which the
+  whole form fits the view, measured in the form's own px.
+- F4 = the properties panel, Ctrl+Alt+X = the toolbox, Ctrl+Alt+T = the
+  component tree (document outline), while the designer is active.
+
+Tests: probe (fit: 1.25 on HotPlate, 0.9 on Speed, the form fits; a band
+from outside past the top-left corner: 8 / 9 components, all entirely
+inside), smoke 95, real VS Code 97 (the real webview picks a step; the three
+view commands exist), lib 121, panels -- all pass; NO-SAVES.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  4 +
+ tools/vscode-htdesigner/extension.js          |  1 +
+ tools/vscode-htdesigner/media/probe.js        | 74 ++++++++++++++++++-
+ tools/vscode-htdesigner/package.json          | 18 ++++-
+ .../test/integration/index.js                 |  9 +++
+ tools/vscode-htdesigner/test/probe_driver.js  | 48 ++++++++++++
+ tools/vscode-htdesigner/test/probe_test.ps1   |  2 +
+ .../vscode-htdesigner/test/smoke_extension.js |  2 +
+ 8 files changed, 154 insertions(+), 4 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 72b25be..8cc5585 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -50,6 +50,7 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ | 按住元件拖曳 | 移動它；靠近旁邊元件或外框的邊緣／中線 5px 內會**自動對齊**並畫出紅色參考線（按住 Alt 不吸附） |
+ | 拖曳控制點 | 改大小（角落兩個方向一起改），一樣有對齊線 |
+ | Ctrl＋點 ／ Shift＋點 | **多選**：加入或移出選取，最後點的是主要選取。整組可以一起拖曳、一起用方向鍵移動 |
++| 在表單空白處按住拖曳 | **框選**（WPF 一樣）：畫出藍色虛線框，放開後框裡**整個被框住**的元件都選起來（外層和裡面都被框住時只選外層） |
+ | Ctrl+A（或右鍵「全選」） | 選取**同一層**的全部元件（同一個 Panel／GroupBox／分頁裡）；沒選東西或選了表單＝表單最外層的全部 |
+ | 方向鍵 | 移動 1 px；**Shift**＋方向鍵 10 px |
+ | **Ctrl**＋方向鍵 | 改大小 1 px；**Ctrl＋Shift**＋方向鍵 10 px |
+@@ -127,6 +128,9 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ - Visible＝`display:none`、Enabled＝`disabled`、字型大小／顏色＝`style`。
+ - 分頁標題會顯示「未存檔」，**按 Ctrl+S 才寫到磁碟**。旁邊開著 HTML 原始碼的話會即時看到它被改。
+ - 復原／重做：Ctrl+Z／Ctrl+Y，或設計畫面標題列的 ↶ ↷ 兩個按鈕。
++
++**Visual Studio 的快捷鍵**：F4＝跳到屬性面板、Ctrl+Alt+X＝跳到工具箱、Ctrl+Alt+T＝跳到元件樹（文件大綱）。
++**縮放到符合視窗**：標題列的螢幕圖示（或右鍵）：整個表單剛好塞進視窗的最大縮放；Ctrl+滾輪照樣可以調，右鍵「縮放 100%」回原大小。
+ - DFM 和 BCB6 原始碼永遠不會被改（它們是唯讀的參考）。
+ 
+ ⚠ 這些頁面是網頁作者的作品，透過 `sync_web.py` 同步進來，`--apply` 會整份覆蓋。第一次改的時候外掛會提醒你；
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 00613ad..39efce1 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -175,6 +175,7 @@ class Hub {
+       reg('ht9045Designer.pageOverview', () => this.cmdPageOverview()),
+       reg('ht9045Designer.dfmDiff', () => this.cmdDfmDiff()),
+       reg('ht9045Designer.resetZoom', () => { if (this.active) this.active.post({ type: 'setZoom', zoom: 1 }); }),
++      reg('ht9045Designer.zoomFit', () => { if (this.active) this.active.post({ type: 'zoomFit' }); }),
+       reg('ht9045Designer.help', () => vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.joinPath(ctx.extensionUri, 'README.md'))),
+       // the design surface's right-click menu (webview/context)
+       reg('ht9045Designer.viewCode', () => { if (this.active) return this.onDesignerDblClick(this.active); }),
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index e3eedc0..60fc5bb 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -218,7 +218,40 @@
+ 
+   /* 5. overlay (shadow root, custom tag so page selectors never match it). Open, so
+         the window-level handler can tell which resize handle was pressed. */
+-  var host = null, sh = null, bH, bS, tH, tS, badge, handles = [], gX = null, gY = null, extraBoxes = [], grEl = null;
++  var host = null, sh = null, bH, bS, tH, tS, badge, handles = [], gX = null, gY = null, extraBoxes = [], grEl = null, mqEl = null;
++  /* WPF rubber-band selection: a drag that starts on the form's own background */
++  var marquee = null;
++  function drawMarquee() {
++    if (!mqEl || !marquee) return;
++    if (!marquee.on) { mqEl.style.display = 'none'; return; }
++    var L = Math.min(marquee.x0, marquee.x1), T = Math.min(marquee.y0, marquee.y1);
++    mqEl.style.display = 'block';
++    mqEl.style.left = L + 'px'; mqEl.style.top = T + 'px';
++    mqEl.style.width = Math.abs(marquee.x1 - marquee.x0) + 'px'; mqEl.style.height = Math.abs(marquee.y1 - marquee.y0) + 'px';
++  }
++  /* the components entirely inside the band -- the outermost of them -- become the selection */
++  function finishMarquee() {
++    var m = marquee;
++    marquee = null;
++    if (mqEl) mqEl.style.display = 'none';
++    if (!m || !m.on) { scheduleDraw(); return 0; }
++    justDragged = true;
++    setTimeout(function () { justDragged = false; }, 0);
++    var L = Math.min(m.x0, m.x1), R = Math.max(m.x0, m.x1), T = Math.min(m.y0, m.y1), B = Math.max(m.y0, m.y1);
++    var fr = formRoot();
++    var inside = allComps().filter(function (x) {
++      if (x === fr || !x.getClientRects().length || (x.closest && x.closest('[data-htd-hide]'))) return false;
++      var r = x.getBoundingClientRect();
++      if (!r.width && !r.height) return false;
++      return r.left >= L && r.right <= R && r.top >= T && r.bottom <= B;
++    });
++    var outer = inside.filter(function (x) { return !inside.some(function (o) { return o !== x && o.contains(x); }); });
++    if (!outer.length) { scheduleDraw(); return 0; }
++    multi = outer.slice(1);
++    selEl = null;
++    select(outer[0], 'multi', false, true);
++    return outer.length;
++  }
+   /* WPF "snap to gridlines": positions and sizes land on multiples of GRID.size (Alt = free) */
+   var GRID = { on: false, size: 8 };
+   function snapG(v) { return Math.round(v / GRID.size) * GRID.size; }
+@@ -272,10 +305,12 @@
+       '.g{position:fixed;display:none;pointer-events:none;background:#e5172f;}' +
+       '.s2{outline:1px solid #ff8c00;background:rgba(255,140,0,.06);}' +
+       '.gr{position:fixed;display:none;pointer-events:none;background-image:radial-gradient(circle,rgba(40,40,40,.5) .8px,transparent 1.2px);}' +
+-      '</style><div class="gr"></div><div class="b h"></div><div class="b s"></div><div class="t th"></div><div class="t ts"></div><div class="m"></div>' +
++      '.mq{position:fixed;display:none;pointer-events:none;box-sizing:border-box;border:1px dashed #1e90ff;background:rgba(30,144,255,.10);}' +
++      '</style><div class="gr"></div><div class="b h"></div><div class="b s"></div><div class="t th"></div><div class="t ts"></div><div class="m"></div><div class="mq"></div>' +
+       '<div class="g gx"></div><div class="g gy"></div>' + hs;
+     gX = sh.querySelector('.gx'); gY = sh.querySelector('.gy');
+     grEl = sh.querySelector('.gr');
++    mqEl = sh.querySelector('.mq');
+     bH = sh.querySelector('.h'); bS = sh.querySelector('.s');
+     tH = sh.querySelector('.th'); tS = sh.querySelector('.ts');
+     badge = sh.querySelector('.m');
+@@ -459,6 +494,19 @@
+     scheduleDraw();
+     post({ type: 'zoom', zoom: zoom });
+   }
++  /* 符合視窗: the largest zoom step at which the whole form fits the view */
++  function zoomFit() {
++    var fr = formRoot() || document.body;
++    var r = fr.getBoundingClientRect();
++    var w = r.width / zoom, h = r.height / zoom;            // the form's own px
++    if (!w || !h) return zoom;
++    var want = Math.min((window.innerWidth - 16) / w, (window.innerHeight - 16) / h);
++    var z = ZOOMS[0];
++    for (var i = 0; i < ZOOMS.length; i++) if (ZOOMS[i] <= want + 1e-9) z = ZOOMS[i];
++    setZoom(z);
++    try { window.scrollTo(0, 0); } catch (x) { /* ignore */ }
++    return z;
++  }
+   /* the element that actually carries the position: itself, or the generated
+      <span style="position:absolute…"> wrapper around an <input> */
+   function boxOf(el) {
+@@ -746,7 +794,7 @@
+   }
+   function onBlock(e) {
+     var t = e.type;
+-    if (drag && t === 'mouseup') endDrag();
++    if ((drag || marquee) && t === 'mouseup') endDrag();
+     if (host && e.target === host) {
+       /* our own overlay: a resize handle, never the page's business */
+       if (mode === 'design') {
+@@ -790,6 +838,13 @@
+     if (t === 'mousedown' && e.button === 0) {
+       var md = pick(e.target, e.altKey);
+       if (toggle) { toggleSel(md); return; }            // WPF: Ctrl/Shift+click = multi-select
++      if (!md || md === formRoot()) {
++        /* pressed on the form's own background (it gets selected) or outside the form (nothing is):
++           a drag from here is a rubber band */
++        select(md, 'click', false);
++        marquee = { x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY, on: false };
++        return;
++      }
+       /* WPF: pressing selects, and dragging from there moves (the whole selection
+          when it is pressed on one of its members) */
+       var inSel = !!md && (md === selEl || multi.indexOf(md) >= 0);
+@@ -817,6 +872,15 @@
+     origAdd.call(window, t, onBlock, { capture: true, passive: false });
+   });
+   origAdd.call(window, 'mousemove', function (e) {
++    if (marquee) {
++      marquee.x1 = e.clientX;
++      marquee.y1 = e.clientY;
++      if (!marquee.on && Math.abs(marquee.x1 - marquee.x0) + Math.abs(marquee.y1 - marquee.y0) >= 4) marquee.on = true;
++      drawMarquee();
++      e.preventDefault();
++      e.stopImmediatePropagation();
++      return;
++    }
+     if (drag) {
+       var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+       if (drag.locked) {
+@@ -894,6 +958,7 @@
+   }, true);
+   /* called from onBlock (which stops mouseup for the page) and, as a fallback, here */
+   function endDrag() {
++    if (marquee) { finishMarquee(); return; }
+     if (!drag) return;
+     var d = drag;
+     drag = null;
+@@ -1181,6 +1246,9 @@
+         flushNudge();
+         selectAllSiblings();
+         break;
++      case 'zoomFit':
++        zoomFit();
++        break;
+       case 'selectParent': {
+         var pp = selEl ? compParent(selEl) : null;
+         if (pp) { selEl = null; select(pp, 'key', true); }
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 9e3f0cf..4b968b7 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.28.0",
++  "version": "0.29.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -193,6 +193,12 @@
+         "title": "全選（同一層的元件）",
+         "category": "HT9045"
+       },
++      {
++        "command": "ht9045Designer.zoomFit",
++        "title": "縮放到符合視窗",
++        "category": "HT9045",
++        "icon": "$(screen-normal)"
++      },
+       {
+         "command": "ht9045Designer.undo",
+         "title": "復原",
+@@ -320,6 +326,7 @@
+         { "submenu": "ht9045Designer.alignMenu", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@1" },
+         { "submenu": "ht9045Designer.orderMenu", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@2" },
+         { "command": "ht9045Designer.toggleGrid", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@3" },
++        { "command": "ht9045Designer.zoomFit", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@4" },
+         { "command": "ht9045Designer.groupIntoPanel", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@4" },
+         { "command": "ht9045Designer.ungroup", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "3_layout@5" },
+         { "command": "ht9045Designer.pageOverview", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@1" },
+@@ -397,6 +404,11 @@
+           "when": "activeCustomEditorId == 'ht9045Designer.editor'",
+           "group": "navigation@1"
+         },
++        {
++          "command": "ht9045Designer.zoomFit",
++          "when": "activeCustomEditorId == 'ht9045Designer.editor'",
++          "group": "navigation@1"
++        },
+         {
+           "command": "ht9045Designer.showSource",
+           "when": "activeCustomEditorId == 'ht9045Designer.editor'",
+@@ -553,6 +565,7 @@
+         { "command": "ht9045Designer.toggleGrid", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.groupIntoPanel", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.selectAll", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.zoomFit", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.undo", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.redo", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.ungroup", "when": "ht9045Designer.active" },
+@@ -588,6 +601,9 @@
+       { "command": "ht9045Designer.order.back", "key": "ctrl+shift+[", "when": "activeCustomEditorId == 'ht9045Designer.editor'" },
+       { "command": "ht9045Designer.searchPages", "key": "ctrl+alt+shift+o", "when": "activeCustomEditorId == 'ht9045Designer.editor' || focusedView == ht9045Designer.pages" },
+       { "command": "ht9045Designer.groupIntoPanel", "key": "ctrl+g", "when": "activeCustomEditorId == 'ht9045Designer.editor'" },
++      { "command": "ht9045Designer.properties.focus", "key": "f4", "when": "activeCustomEditorId == 'ht9045Designer.editor'" },
++      { "command": "ht9045Designer.toolbox.focus", "key": "ctrl+alt+x", "when": "activeCustomEditorId == 'ht9045Designer.editor'" },
++      { "command": "ht9045Designer.components.focus", "key": "ctrl+alt+t", "when": "activeCustomEditorId == 'ht9045Designer.editor'" },
+       { "command": "ht9045Designer.ungroup", "key": "ctrl+shift+g", "when": "activeCustomEditorId == 'ht9045Designer.editor'" }
+     ],
+     "viewsContainers": {
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index b1efbc1..cc69a8b 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -449,6 +449,15 @@ exports.run = async function () {
+       await vscode.commands.executeCommand('ht9045Designer.undo');
+       const un9 = await waitFor(() => (d.doc.getText() === orig2 ? true : null), 5000);
+       ok(!!mv9 && !!un9, 'the title bar\'s undo button takes the edit back');
++      // zoom to fit (the real webview reports its zoom), back to 100%; the Visual Studio keys' targets exist
++      d.zoom = null;
++      await vscode.commands.executeCommand('ht9045Designer.zoomFit');
++      const zf = await waitFor(() => (typeof d.zoom === 'number' ? d.zoom : null), 5000);
++      await vscode.commands.executeCommand('ht9045Designer.resetZoom');
++      await waitFor(() => (d.zoom === 1 ? true : null), 5000);
++      const cmdsNow = await vscode.commands.getCommands(true);
++      ok(typeof zf === 'number' && zf >= 0.25 && zf <= 4 && ['ht9045Designer.properties.focus', 'ht9045Designer.toolbox.focus', 'ht9045Designer.components.focus'].every(c => cmdsNow.includes(c)),
++        'zoom to fit: the webview picks a step (' + zf + '); F4 / Ctrl+Alt+X / Ctrl+Alt+T have their views');
+       if (d.doc.isDirty) await vscode.commands.executeCommand('workbench.action.files.revert');
+       await waitFor(() => (d.treeData.length ? true : null), 8000);
+     }
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index 149ce50..5ffdc8d 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -437,6 +437,54 @@
+             window.__htdProbe.message({ type: 'designLocked', ids: [] });
+           }
+ 
++          /* 符合視窗: the whole form fits the view afterwards (a zoom step) */
++          window.__htdProbe.message({ type: 'zoomFit' });
++          var zf = msgs('zoom').pop();
++          var frm2 = document.querySelector('body > .form');
++          var fr2 = frm2 ? frm2.getBoundingClientRect() : null;
++          R.zoomFit = zf ? zf.zoom : null;
++          R.zoomFitOk = !!zf && !!fr2 && (zf.zoom === 0.25 || (fr2.width <= window.innerWidth && fr2.height <= window.innerHeight));
++          /* (the rubber band below runs at this zoom: fitted, there is room around the form) */
++
++          /* rubber band: from an empty spot (outside the form, or its own background) past its
++             top-left corner -- the components entirely inside become the selection, outermost only */
++          if (frm2) {
++            var fb = frm2.getBoundingClientRect(), spot = null;
++            var outsideAt = function (x, y) {
++              if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) return false;
++              var h0 = document.elementFromPoint(x, y);
++              return !!h0 && (h0 === document.body || h0 === document.documentElement);
++            };
++            if (outsideAt(fb.right + 6, fb.bottom + 6)) spot = { x: fb.right + 6, y: fb.bottom + 6 };
++            for (var gy2 = fb.bottom - 3; !spot && gy2 > fb.top + 20; gy2 -= 7) {
++              for (var gx2 = fb.right - 3; !spot && gx2 > fb.left + 20; gx2 -= 7) {
++                var hitE = document.elementFromPoint(gx2, gy2);
++                var up = hitE;
++                while (up && up !== document.body && !up.id && up !== frm2) up = up.parentElement;
++                if (up === frm2) spot = { x: gx2, y: gy2 };
++              }
++            }
++            R.marqueeSpot = spot ? Math.round(spot.x) + ',' + Math.round(spot.y) : 'none';
++            if (spot) {
++              var tgtEl = document.elementFromPoint(spot.x, spot.y);
++              var nsel = msgs('select').length;
++              mouse('mousedown', tgtEl, spot.x, spot.y);
++              mouse('mousemove', tgtEl, spot.x - 10, spot.y - 10);
++              mouse('mousemove', tgtEl, fb.left + 1, fb.top + 1);
++              mouse('mouseup', tgtEl, fb.left + 1, fb.top + 1);
++              var ms2 = msgs('select').pop();
++              var ids2 = ms2 && ms2.info ? [ms2.info.id].concat(ms2.info.multi || []) : [];
++              var L2 = fb.left + 1, T2 = fb.top + 1, R2 = spot.x, B2 = spot.y;
++              R.marquee = ids2.length + ' selected from ' + R.marqueeSpot + ' (' + ids2.slice(0, 4).join(',') + ')';
++              R.marqueeOk = msgs('select').length > nsel && ids2.length >= 1 && ids2.indexOf('@form') < 0 && ids2.every(function (id) {
++                var x = document.getElementById(id); if (!x) return false;
++                var r = x.getBoundingClientRect(); return r.left >= L2 - 0.5 && r.top >= T2 - 0.5 && r.right <= R2 + 0.5 && r.bottom <= B2 + 0.5;
++              });
++            }
++          }
++
++          window.__htdProbe.message({ type: 'setZoom', zoom: 1 });
++
+           /* zoom 200%: a 20px drag on screen is 10px in the page */
+           window.__htdProbe.message({ type: 'setZoom', zoom: 2 });
+           window.__htdProbe.selectById('spbSave');
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index 4c1f31d..394f6ce 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -74,6 +74,8 @@ foreach ($p in $Pages) {
+     }
+     if ($R.PSObject.Properties.Name -contains 'hiddenTarget') { $must['hidden tab revealed'] = [bool]$R.hiddenTabRevealed }
+     if ($R.PSObject.Properties.Name -contains 'wrapperEdit') { $must['input moves its wrapper'] = [bool]$R.wrapperOk }
++    if ($R.PSObject.Properties.Name -contains 'zoomFit') { $must['zoom to fit: the form fits the view'] = [bool]$R.zoomFitOk }
++    if ($R.PSObject.Properties.Name -contains 'marquee') { $must['rubber band from the form background: what is inside gets selected'] = [bool]$R.marqueeOk }
+     if ($R.PSObject.Properties.Name -contains 'rawEdits') { $must['grid HTML rows: style / title written, onclick never'] = [bool]$R.rawOk }
+     if ($R.PSObject.Properties.Name -contains 'selAll') { $must['Ctrl+A: the whole container, the button still primary'] = [bool]$R.selAllOk }
+     if ($R.PSObject.Properties.Name -contains 'gridTried') {
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index 66db96f..5c7fe47 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -461,6 +461,8 @@ async function main() {
+   const uxExec = fake._calls.slice(uxCalls).filter(c => c.name === 'exec').map(c => c.args[0]);
+   ok(pagePosted.some(m => m.type === 'selectAll') && uxExec.indexOf('undo') >= 0 && uxExec.indexOf('redo') > uxExec.indexOf('undo'),
+     'select all goes to the probe; the title bar\'s undo / redo run VS Code\'s undo / redo', uxExec.join(','));
++  await fake._cmds['ht9045Designer.zoomFit']();
++  ok(pagePosted.some(m => m.type === 'zoomFit'), 'zoom to fit goes to the probe');
+ 
+   // 在所有頁面搜尋: with a string the command returns the hits (the input box / pick are for people)
+   const psHits = await fake._cmds['ht9045Designer.searchPages']('spbSave');
+-- 
+2.55.0.windows.5
+

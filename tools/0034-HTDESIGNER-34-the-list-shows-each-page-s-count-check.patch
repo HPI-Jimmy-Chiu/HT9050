@@ -1,0 +1,195 @@
+From fa7b89e4fc3c7a252715b01e12a2771b28f865c4 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 22:08:31 +0800
+Subject: [PATCH] =?UTF-8?q?HTDESIGNER-34:=20the=20=E9=A0=81=E9=9D=A2=20lis?=
+ =?UTF-8?q?t=20shows=20each=20page's=20=E9=A0=81=E9=9D=A2=E6=AA=A2?=
+ =?UTF-8?q?=E6=9F=A5=20count;=20check=20one=20page=20from=20its=20right-cl?=
+ =?UTF-8?q?ick=20(0.34.0)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- After a check, every page in the 頁面 list shows its number of problems
+  ("⚠ 93") and each group the sum ("7　⚠ 99" for Alert), also in the tooltip;
+  it follows the Problems panel (re-checks while a page changes, fixes).
+- Right-click a page in the list > 檢查這一頁: checks it without opening it.
+
+Tests: smoke 104 (after checking all pages: HotPlate "⚠ 1", the Alert group
+"⚠ 99" = 6 + 93; the right-click check: 1), real VS Code 104 (the real list
+shows HotPlate "⚠ 1" and keeps it next to the open / current marks), lib
+124, probe, panels -- all pass; NO-SAVES. (tools/wb_serve.cpp changed during
+the run by another session: the launcher's WARN.)
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  1 +
+ tools/vscode-htdesigner/extension.js          | 26 +++++++++++++++++--
+ tools/vscode-htdesigner/package.json          | 13 +++++++++-
+ .../test/integration/index.js                 |  3 +++
+ .../vscode-htdesigner/test/smoke_extension.js |  9 +++++++
+ 5 files changed, 49 insertions(+), 3 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 5774cf8..413f8bc 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -120,6 +120,7 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+   **修正**：在 HTML 原始碼裡按燈泡＝修這一處或整頁；設計畫面右鍵「修正這一頁所有被切斷的屬性」。把裡面的 `"` 改成 `'`（本來的意思），一個 Ctrl+Z 復原、要存檔才寫入。
+   ⚠ 這些是網頁作者的檔案，`sync_web.py --apply` 會蓋掉；根本的修法在產生器 `_gen_dfm_abs.py`（寫 `font-family:'…'`）。
+ - 同一頁 id 重複（錯誤）、有 id 的元素沒有結束標籤、`<img>`／`<script>`／`<link>` 用到的檔案不存在（警告）。
++- 檢查過的頁面在左邊「頁面」清單會顯示問題數（例如 `⚠ 93`），分組也有合計；清單上每一頁按右鍵也有「檢查這一頁」（不用先打開）。
+ 
+ **在畫面上標出接線狀態**（畫面右鍵，或命令「HT9045: 在畫面上標出接線狀態」）：DFM 裡有事件的元件加上彩色框 ——
+ **綠**＝網頁都接了（有監聽器，或由 wire 引擎的欄位對照處理）、**橘**＝只接了一部分或只有提到（多半是事件委派）、**紅**＝網頁完全沒接。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index fc4a06e..2482ea2 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -211,6 +211,14 @@ class Hub {
+       }),
+       reg('ht9045Designer.lintPage', () => this.cmdLint('page')),
+       reg('ht9045Designer.lintAll', () => this.cmdLint('all')),
++      // from the 頁面 list: one page, without opening it
++      reg('ht9045Designer.lintPageFile', n => {
++        if (!n || !n.file) return null;
++        const issues = this.lintFile(n.file);
++        if (issues.length) vscode.commands.executeCommand('workbench.actions.view.problems').then(() => {}, () => {});
++        vscode.window.setStatusBarMessage('$(checklist) ' + path.basename(n.file) + '：' + (issues.length ? issues.length + ' 個問題（看「問題」面板）' : '沒有問題'), 6000);
++        return issues.length;
++      }),
+       reg('ht9045Designer.lintFixAll', uri => this.cmdLintFixAll(uri)),
+       reg('ht9045Designer.netCheck', () => {
+         const d = this.active;
+@@ -1840,6 +1848,9 @@ class Hub {
+       return dg;
+     });
+     if (diags.length) this.lintDiag.set(uri, diags); else this.lintDiag.delete(uri);
++    // the 頁面 list shows each page's count ("⚠ 93"): once after a burst of checks
++    clearTimeout(this._pmT);
++    this._pmT = setTimeout(() => { if (this.pages) this.pages.mark(); }, 200);
+     return issues;
+   }
+ 
+@@ -2593,6 +2604,13 @@ class PageTree {
+   refresh() { this.groups = null; this._em.fire(); }
+   /** The open / active marks changed (no need to read the folder again). */
+   mark() { this._em.fire(); }
++  /** How many 頁面檢查 problems this page has in the Problems panel (0 = none or not checked). */
++  problemsOf(file) {
++    const c = this.hub.lintDiag;
++    if (!c) return 0;
++    const l = c.get(vscode.Uri.file(file));
++    return l ? l.length : 0;
++  }
+ 
+   getChildren(n) { return n ? n.children || [] : this.build(); }
+   getParent(n) { return n.parent || undefined; }
+@@ -2604,7 +2622,8 @@ class PageTree {
+       const has = act && n.children.some(p => web.samePath(p.file, act.file));
+       const item = new vscode.TreeItem(n.name, has ? S.Expanded : S.Collapsed);
+       item.id = 'grp:' + n.name;
+-      item.description = String(n.children.length);
++      const probs = n.children.reduce((s, p) => s + this.problemsOf(p.file), 0);
++      item.description = String(n.children.length) + (probs ? '　⚠ ' + probs : '');
+       item.iconPath = new vscode.ThemeIcon(n.name === pagelist.ROOT ? 'root-folder' : 'folder');
+       item.contextValue = 'pageGroup';
+       return item;
+@@ -2615,12 +2634,15 @@ class PageTree {
+     const item = new vscode.TreeItem(n.label, S.None);
+     item.id = 'page:' + n.file.toLowerCase();
+     const desc = [];
++    const probs = this.problemsOf(n.file);
++    if (probs) desc.push('⚠ ' + probs);
+     if (isActive) desc.push('● 目前');
+     else if (isOpen) desc.push('○ 已開啟');
+     if (n.redirect) desc.push('→ ' + n.redirect);
+     else if (n.title) desc.push(n.title);
+     item.description = desc.join('  ');
+-    item.tooltip = n.rel + (n.title ? '\n' + n.title : '') + (n.redirect ? '\n轉址頁 → ' + n.redirect : '') + '\n\n點一下：用設計檢視開啟';
++    item.tooltip = n.rel + (n.title ? '\n' + n.title : '') + (n.redirect ? '\n轉址頁 → ' + n.redirect : '') +
++      (probs ? '\n頁面檢查：' + probs + ' 個問題（看「問題」面板）' : '') + '\n\n點一下：用設計檢視開啟';
+     item.iconPath = new vscode.ThemeIcon(isActive ? 'eye' : n.redirect ? 'arrow-right' : 'file-code',
+       isActive ? new vscode.ThemeColor('charts.orange') : undefined);
+     item.command = { command: 'ht9045Designer.openPageFile', title: '開啟', arguments: [n.file] };
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 91a448f..93c364a 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.33.0",
++  "version": "0.34.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -115,6 +115,11 @@
+         "title": "修正這一頁所有被切斷的屬性",
+         "category": "HT9045"
+       },
++      {
++        "command": "ht9045Designer.lintPageFile",
++        "title": "檢查這一頁（問題面板）",
++        "category": "HT9045"
++      },
+       {
+         "command": "ht9045Designer.toggleWireMarks",
+         "title": "在畫面上標出接線狀態（開／關）：綠＝網頁有接、橘＝部分、紅＝沒接",
+@@ -537,6 +542,11 @@
+           "when": "view == ht9045Designer.pages && viewItem == page",
+           "group": "1_open@1"
+         },
++        {
++          "command": "ht9045Designer.lintPageFile",
++          "when": "view == ht9045Designer.pages && viewItem == page",
++          "group": "2_check@1"
++        },
+         {
+           "command": "ht9045Designer.designLock",
+           "when": "view == ht9045Designer.components && viewItem =~ /^component(\\.hidden)?$/",
+@@ -628,6 +638,7 @@
+         { "command": "ht9045Designer.order.back", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.designUnhideAll", "when": "ht9045Designer.active && ht9045Designer.anyDesignHidden" },
+         { "command": "ht9045Designer.openPageText", "when": "false" },
++        { "command": "ht9045Designer.lintPageFile", "when": "false" },
+         { "command": "ht9045Designer.findComponent", "when": "ht9045Designer.active" }
+       ]
+     },
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index 7661992..56d3a59 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -501,6 +501,9 @@ exports.run = async function () {
+       const dgs = ours();
+       ok(sumL && sumL.error === 1 && dgs.length === 1 && dgs[0].code === 'quote-cut', 'lint: HotPlate\'s cut style in the real Problems panel',
+         dgs.map(x => x.code + '@' + (x.range.start.line + 1)).join(','));
++      const hpPage = hub.pages.byFile.get(page.toLowerCase());
++      const hpDesc = hpPage ? hub.pages.getTreeItem(hpPage).description : '';
++      ok(/⚠ 1(\s|$)/.test(hpDesc), 'the 頁面 list shows it: HotPlate "⚠ 1"', hpDesc);
+       const acts = dgs.length ? await vscode.commands.executeCommand('vscode.executeCodeActionProvider', d.doc.uri, dgs[0].range) : [];
+       ok(Array.isArray(acts) && acts.some(a => /修正被切斷的屬性/.test(a.title)), 'VS Code offers the fix (the bulb)', (acts || []).map(a => a.title).join(' | '));
+       const origL = d.doc.getText();
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index d17cf62..66edaf9 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -495,6 +495,15 @@ async function main() {
+     'the bulb: this one fixed (the inner " become \'), or the whole page', lnActs.map(a => a.title).join(' | '));
+   const lnAll = await fake._cmds['ht9045Designer.lintAll']();
+   ok(lnAll && lnAll.byKind['quote-cut'] >= 290 && lnAll.withIssues >= 20, 'lint all pages: ' + (lnAll ? lnAll.byKind['quote-cut'] + ' cut attributes on ' + lnAll.withIssues + ' pages' : '-'));
++  // the 頁面 list shows the counts: a page "⚠ 1", its group the sum
++  const lnGroups = pv.provider.getChildren();
++  const lnSetup = lnGroups.find(g => g.name === 'Setup'), lnAlert = lnGroups.find(g => g.name === 'Alert');
++  const lnHpNode = lnSetup.children.find(p => p.name === 'Setup.HotPlate.html');
++  const lnHpItem = pv.provider.getTreeItem(lnHpNode), lnAlertItem = pv.provider.getTreeItem(lnAlert);
++  ok(/⚠ 1(\s|$)/.test(lnHpItem.description) && /⚠ 99$/.test(lnAlertItem.description) && /1 個問題/.test(lnHpItem.tooltip),
++    'the 頁面 list: HotPlate "⚠ 1", the Alert group "⚠ 99" (6 + 93)', lnHpItem.description + ' | ' + lnAlertItem.description);
++  const lnOne = await fake._cmds['ht9045Designer.lintPageFile'](lnHpNode);
++  ok(lnOne === 1, 'right-click a page > 檢查這一頁: 1 problem');
+ 
+   // 接線標示: from the overview's data (the probe answers listenersAll: sbtExit has a click listener)
+   const wmPM = panel.webview.postMessage;
+-- 
+2.55.0.windows.5
+

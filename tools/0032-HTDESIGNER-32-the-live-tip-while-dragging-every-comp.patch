@@ -1,0 +1,306 @@
+From cd20b535b04555e0b03705e638d3f524010f69b9 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 29 Sep 2026 21:56:36 +0800
+Subject: [PATCH] HTDESIGNER-32: the live tip while dragging; every component's
+ name on the surface (0.32.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- While a component moves / resizes, its label shows the numbers going into
+  its style: "left 73　top 14" when moving, "248 × 48" (and left / top for the
+  w / n handles) when resizing -- WPF's live tip.
+- 右鍵 > 顯示所有元件名稱: a small tag with its name at every visible
+  component's top-left corner (at most 1500, only those on screen; not the
+  design-hidden); "名稱" in the status bar; kept across a re-draw.
+
+Tests: probe (the tip reads the style's left / top mid-drag on both pages;
+name tags on every component, the button's among them; off), smoke 101,
+real VS Code 103 (22 name tags on HotPlate; off again), lib 124, panels --
+all pass; NO-SAVES.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/README.md             |  2 +
+ tools/vscode-htdesigner/extension.js          | 13 ++++++-
+ tools/vscode-htdesigner/media/probe.js        | 39 +++++++++++++++++++
+ tools/vscode-htdesigner/package.json          | 10 ++++-
+ .../test/integration/index.js                 |  6 +++
+ tools/vscode-htdesigner/test/probe_driver.js  | 21 ++++++++++
+ tools/vscode-htdesigner/test/probe_test.ps1   |  5 +++
+ .../vscode-htdesigner/test/smoke_extension.js |  9 +++++
+ 8 files changed, 102 insertions(+), 3 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index f1432b8..1ba6ca6 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -50,6 +50,8 @@ code --install-extension tools\vscode-htdesigner\dist\ht9045-html-designer-<版
+ | 按住元件拖曳 | 移動它；靠近旁邊元件或外框的邊緣／中線 5px 內會**自動對齊**並畫出紅色參考線（按住 Alt 不吸附） |
+ | 拖曳控制點 | 改大小（角落兩個方向一起改），一樣有對齊線 |
+ | Ctrl＋點 ／ Shift＋點 | **多選**：加入或移出選取，最後點的是主要選取。整組可以一起拖曳、一起用方向鍵移動 |
++| 拖曳／拉控制點的時候 | 標籤即時顯示要寫進去的數值：移動時「left 62　top 16」、改大小時「248 × 48」 |
++| 右鍵「顯示所有元件名稱」 | 每個元件左上角貼一個小標籤寫它的名字（再按一次關掉；狀態列顯示「名稱」） |
+ | 在表單空白處按住拖曳 | **框選**（WPF 一樣）：畫出藍色虛線框，放開後框裡**整個被框住**的元件都選起來（外層和裡面都被框住時只選外層） |
+ | Ctrl+A（或右鍵「全選」） | 選取**同一層**的全部元件（同一個 Panel／GroupBox／分頁裡）；沒選東西或選了表單＝表單最外層的全部 |
+ | 方向鍵 | 移動 1 px；**Shift**＋方向鍵 10 px |
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index a104c56..f9cfcb5 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -176,6 +176,15 @@ class Hub {
+       reg('ht9045Designer.openWebSenders', (cmd, hits) => this.cmdOpenWebSenders(cmd, hits)),
+       reg('ht9045Designer.pageOverview', () => this.cmdPageOverview()),
+       reg('ht9045Designer.toggleWireMarks', on => this.cmdWireMarks(typeof on === 'boolean' ? on : undefined)),
++      // every component's name on the design surface (on / off per designer)
++      reg('ht9045Designer.toggleNames', on => {
++        const d = this.active;
++        if (!d) return null;
++        d.showNames = typeof on === 'boolean' ? on : !d.showNames;
++        d.post({ type: 'showNames', on: d.showNames });
++        this.updateStatus();
++        return { on: d.showNames };
++      }),
+       reg('ht9045Designer.dfmDiff', () => this.cmdDfmDiff()),
+       reg('ht9045Designer.resetZoom', () => { if (this.active) this.active.post({ type: 'setZoom', zoom: 1 }); }),
+       reg('ht9045Designer.zoomFit', () => { if (this.active) this.active.post({ type: 'zoomFit' }); }),
+@@ -449,7 +458,7 @@ class Hub {
+     if (!d) { this.status.hide(); return; }
+     const g = this.gridState();
+     this.status.text = (d.mode === 'design' ? '$(pencil) 設計模式' : '$(play) 操作模式') +
+-      (d.zoom && d.zoom !== 1 ? '　' + Math.round(d.zoom * 100) + '%' : '') + (g.on ? '　格線 ' + g.size + 'px' : '') + (d.wireMarks ? '　接線標示' : '');
++      (d.zoom && d.zoom !== 1 ? '　' + Math.round(d.zoom * 100) + '%' : '') + (g.on ? '　格線 ' + g.size + 'px' : '') + (d.wireMarks ? '　接線標示' : '') + (d.showNames ? '　名稱' : '');
+     this.status.tooltip = (d.mode === 'design'
+       ? '點＝選元件，雙擊＝跳到事件程式碼。按這裡切到操作模式。'
+       : '點擊交給頁面自己的程式（網路仍全部封鎖）。按這裡切回設計模式。') +
+@@ -2161,7 +2170,7 @@ class Designer {
+           }
+           this.post({ type: 'init', mode: this.mode, selectId: this.lastSelId, scroll: this.scroll, classes, events, zoom: this.zoom || 1,
+             designHidden: Array.from(this.designHidden), designLocked: Array.from(this.designLocked), grid: this.hub.gridState(),
+-            wireMarks: this.wireMarks || null });
++            wireMarks: this.wireMarks || null, showNames: !!this.showNames });
+         };
+         this.info.then(send, () => send(null));
+         clearTimeout(this.diagTimer);
+diff --git a/tools/vscode-htdesigner/media/probe.js b/tools/vscode-htdesigner/media/probe.js
+index ab6bc0a..d6d3be2 100644
+--- a/tools/vscode-htdesigner/media/probe.js
++++ b/tools/vscode-htdesigner/media/probe.js
+@@ -307,6 +307,8 @@
+       '.gr{position:fixed;display:none;pointer-events:none;background-image:radial-gradient(circle,rgba(40,40,40,.5) .8px,transparent 1.2px);}' +
+       '.mq{position:fixed;display:none;pointer-events:none;box-sizing:border-box;border:1px dashed #1e90ff;background:rgba(30,144,255,.10);}' +
+       '.wm{position:fixed;display:none;pointer-events:none;box-sizing:border-box;border:2px solid;}' +
++      '.nt{position:fixed;display:none;pointer-events:none;font:10px/12px Consolas,"Courier New",monospace;padding:0 2px;white-space:nowrap;' +
++      'background:rgba(255,255,215,.92);color:#333;border:1px solid rgba(0,0,0,.25);border-radius:2px;}' +
+       '.wm.ok{border-color:rgba(46,160,67,.85);} .wm.mid{border-color:rgba(214,140,20,.95);} .wm.bad{border-color:rgba(229,23,47,.95);background:rgba(229,23,47,.07);}' +
+       '</style><div class="gr"></div><div class="b h"></div><div class="b s"></div><div class="t th"></div><div class="t ts"></div><div class="m"></div><div class="mq"></div>' +
+       '<div class="g gx"></div><div class="g gy"></div>' + hs;
+@@ -344,6 +346,13 @@
+     var evs = ev && ev.length ? '  · ' + ev.slice(0, 3).join(', ') + (ev.length > 3 ? ' …' : '') : '';
+     var n = el === selEl ? allSel().length : 0;
+     var z = typeof zoom === 'number' && zoom > 0 ? zoom : 1;   // the page's own px, not the zoomed screen's
++    if (drag && drag.active && drag.el === el && drag.bx) {
++      /* while it moves / resizes: the numbers going into its style (WPF's live tip) */
++      var st = drag.bx.node.style;
++      var num = function (v) { var p = pxOf(v); return p === null ? '—' : String(Math.round(p)); };
++      return name + '   ' + (drag.how === 'move' ? 'left ' + num(st.left) + '　top ' + num(st.top)
++        : Math.round(r.width / z) + ' × ' + Math.round(r.height / z) + (/[wn]/.test(drag.how) ? '　left ' + num(st.left) + '　top ' + num(st.top) : ''));
++    }
+     return (lockedOf(el) ? '🔒 ' : '') + name + (v.cls ? ' : ' + v.cls : '') + evs + '   ' + Math.round(r.width / z) + '×' + Math.round(r.height / z) + (n > 1 ? '   （共選 ' + n + ' 個）' : '');
+   }
+   function place(box, tag, el) {
+@@ -364,6 +373,7 @@
+     if (!host) return;
+     placeGrid();
+     placeWireMarks();
++    placeNameTags();
+     place(bS, tS, selEl);
+     if (mode === 'design' && hoverEl && hoverEl !== selEl && !drag) place(bH, tH, hoverEl);
+     else { bH.style.display = 'none'; tH.style.display = 'none'; }
+@@ -409,6 +419,29 @@
+       ? '設計模式：點＝選取　Ctrl/Shift+點＝多選　拖曳＝移動　控制點＝改大小　方向鍵＝微調　雙擊／Enter＝事件程式碼　Esc＝上層　Tab＝下一個'
+       : '操作模式：點擊交給頁面（網路仍全部封鎖）') + z + w;
+   }
++  /* 顯示所有元件名稱: a small tag with its name at every visible component's top-left corner */
++  var NAMES = false, nameTags = [];
++  function placeNameTags() {
++    var n = 0;
++    if (NAMES) {
++      var fr = formRoot();
++      var list = allComps();
++      for (var i = 0; i < list.length && n < 1500; i++) {
++        var el = list[i];
++        if (el === fr || !el.id || !el.getClientRects().length || (el.closest && el.closest('[data-htd-hide]'))) continue;
++        var r = el.getBoundingClientRect();
++        if ((!r.width && !r.height) || r.bottom < 0 || r.right < 0 || r.top > window.innerHeight || r.left > window.innerWidth) continue;
++        if (n >= nameTags.length) { var nt = document.createElement('div'); nt.className = 'nt'; sh.appendChild(nt); nameTags.push(nt); }
++        var t = nameTags[n++];
++        t.textContent = el.id;
++        t.style.display = 'block';
++        t.style.left = r.left + 'px';
++        t.style.top = r.top + 'px';
++      }
++    }
++    for (var j = n; j < nameTags.length; j++) nameTags[j].style.display = 'none';
++    return n;
++  }
+   /* 在畫面上標出接線狀態: a coloured frame per component with DFM events (id -> ok | mid | bad) */
+   var WIRE = null, wireBoxes = [];
+   function placeWireMarks() {
+@@ -1252,6 +1285,7 @@
+         if (Array.isArray(m.designLocked)) { LOCK = {}; m.designLocked.forEach(function (id) { LOCK[String(id)] = 1; }); }
+         if (m.grid && typeof m.grid === 'object') GRID = { on: !!m.grid.on, size: Math.max(2, Math.min(64, Math.round(+m.grid.size || 8))) };
+         if (m.wireMarks && typeof m.wireMarks === 'object') { WIRE = m.wireMarks; drawBadge(); }
++        if (m.showNames) NAMES = true;
+         if (m.scroll) { try { window.scrollTo(m.scroll.x || 0, m.scroll.y || 0); } catch (x) { /* ignore */ } }
+         if (m.selectId) { var el0 = byId(m.selectId); if (el0) select(el0, 'init', !m.scroll); }
+         break;
+@@ -1279,6 +1313,10 @@
+         drawBadge();
+         scheduleDraw();
+         break;
++      case 'showNames':
++        NAMES = !!m.on;
++        scheduleDraw();
++        break;
+       case 'selectParent': {
+         var pp = selEl ? compParent(selEl) : null;
+         if (pp) { selEl = null; select(pp, 'key', true); }
+@@ -1521,6 +1559,7 @@
+           designLocked: Object.keys(LOCK).length,
+           grid: GRID.on ? GRID.size : 0,
+           wireMarks: WIRE ? Object.keys(WIRE).length : 0,
++          names: NAMES && sh ? placeNameTags() : 0,
+           base: document.baseURI,
+         });
+         break;
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 06d063b..ddfbb9a 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HT9045 HTML 設計檢視",
+   "description": "像 WPF 設計工具一樣看、改 web HMI 頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.31.0",
++  "version": "0.32.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -92,6 +92,12 @@
+         "category": "HT9045",
+         "icon": "$(checklist)"
+       },
++      {
++        "command": "ht9045Designer.toggleNames",
++        "title": "顯示所有元件名稱（開／關）",
++        "category": "HT9045",
++        "icon": "$(tag)"
++      },
+       {
+         "command": "ht9045Designer.lintPage",
+         "title": "檢查這一頁（結果在「問題」面板）",
+@@ -355,6 +361,7 @@
+         { "command": "ht9045Designer.pageOverview", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@1" },
+         { "command": "ht9045Designer.dfmDiff", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@2" },
+         { "command": "ht9045Designer.toggleWireMarks", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@2" },
++        { "command": "ht9045Designer.toggleNames", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@2" },
+         { "command": "ht9045Designer.lintPage", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@2" },
+         { "command": "ht9045Designer.lintFixAll", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@2" },
+         { "command": "ht9045Designer.toggleMode", "when": "webviewId == 'ht9045Designer.editor' && webviewSection == 'htdDesign'", "group": "4_page@3" }
+@@ -581,6 +588,7 @@
+         { "command": "ht9045Designer.pageOverview", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.dfmDiff", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.toggleWireMarks", "when": "ht9045Designer.active" },
++        { "command": "ht9045Designer.toggleNames", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.lintFixAll", "when": "ht9045Designer.active || resourceExtname == .html" },
+         { "command": "ht9045Designer.openPageFile", "when": "false" },
+         { "command": "ht9045Designer.designHide", "when": "false" },
+diff --git a/tools/vscode-htdesigner/test/integration/index.js b/tools/vscode-htdesigner/test/integration/index.js
+index ec21561..7661992 100644
+--- a/tools/vscode-htdesigner/test/integration/index.js
++++ b/tools/vscode-htdesigner/test/integration/index.js
+@@ -308,6 +308,12 @@ exports.run = async function () {
+       const gw2 = await diagNow();
+       ok(wm && wm.on && wm.marks && wm.marks.sbtExit === 'ok' && gw && gw.wireMarks > 0 && gw2 && gw2.wireMarks === 0,
+         'wiring marks (real probe): sbtExit green, ' + (wm ? JSON.stringify(wm.count) : '-') + '; off again');
++      // every component's name on the real design surface
++      await vscode.commands.executeCommand('ht9045Designer.toggleNames', true);
++      const gn = await diagNow();
++      await vscode.commands.executeCommand('ht9045Designer.toggleNames', false);
++      const gn2 = await diagNow();
++      ok(gn && gn.names >= 10 && gn2 && gn2.names === 0, 'name tags (real probe): ' + (gn && gn.names) + ' shown; off again');
+       // snap to gridlines: the real probe gets it (and again after a Reload), off again
+       const gon = await vscode.commands.executeCommand('ht9045Designer.toggleGrid', true);
+       const g6 = await diagNow();
+diff --git a/tools/vscode-htdesigner/test/probe_driver.js b/tools/vscode-htdesigner/test/probe_driver.js
+index f1c0b0f..a10b922 100644
+--- a/tools/vscode-htdesigner/test/probe_driver.js
++++ b/tools/vscode-htdesigner/test/probe_driver.js
+@@ -387,6 +387,27 @@
+           R.cmds = msgs('cmd').slice(nc).map(function (m) { return m.cmd; }).join(',');
+           R.cmdsOk = R.cmds === 'delete,copy,paste' && document.getElementById(btn.id) === btn;
+ 
++          /* the live tip while dragging: the label shows the left / top going into the style */
++          window.__htdProbe.selectById(btn.id);
++          var lr0 = btn.getBoundingClientRect();
++          mouse('mousedown', btn, lr0.left + 6, lr0.top + 6);
++          mouse('mousemove', btn, lr0.left + 12, lr0.top + 8, ALT);
++          mouse('mousemove', btn, lr0.left + 18, lr0.top + 10, ALT);
++          window.__htdProbe.drawNow();
++          var tsEl = host && host.shadowRoot ? host.shadowRoot.querySelector('.ts') : null;
++          R.dragTip = tsEl ? tsEl.textContent : null;
++          R.dragTipOk = !!tsEl && new RegExp('left ' + Math.round(parseFloat(btn.style.left)) + '　top ' + Math.round(parseFloat(btn.style.top))).test(tsEl.textContent);
++          mouse('mouseup', btn, lr0.left + 18, lr0.top + 10);
++          /* every component's name as a tag; off again */
++          window.__htdProbe.message({ type: 'showNames', on: true });
++          window.__htdProbe.drawNow();
++          var tags = host && host.shadowRoot ? Array.prototype.filter.call(host.shadowRoot.querySelectorAll('.nt'), function (t) { return t.style.display === 'block'; }) : [];
++          R.nameTags = tags.length;
++          R.nameTagsOk = tags.length >= 3 && tags.some(function (t) { return t.textContent === btn.id; });
++          window.__htdProbe.message({ type: 'showNames', on: false });
++          window.__htdProbe.drawNow();
++          R.nameTagsOffOk = tags.every(function (t) { return t.style.display === 'none'; });
++
+           /* snap to gridlines (8 px): a free drag of (+13, +5) lands on multiples of 8, so does a
+              resize from the south-east handle; the grid is drawn; off again afterwards */
+           window.__htdProbe.message({ type: 'setGrid', on: true, size: 8 });
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index 406a726..450b6f8 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -74,6 +74,11 @@ foreach ($p in $Pages) {
+     }
+     if ($R.PSObject.Properties.Name -contains 'hiddenTarget') { $must['hidden tab revealed'] = [bool]$R.hiddenTabRevealed }
+     if ($R.PSObject.Properties.Name -contains 'wrapperEdit') { $must['input moves its wrapper'] = [bool]$R.wrapperOk }
++    if ($R.PSObject.Properties.Name -contains 'dragTip') { $must['live tip while dragging: left / top of the style'] = [bool]$R.dragTipOk }
++    if ($R.PSObject.Properties.Name -contains 'nameTags') {
++      $must['name tags on every component'] = [bool]$R.nameTagsOk
++      $must['name tags off'] = [bool]$R.nameTagsOffOk
++    }
+     if ($R.PSObject.Properties.Name -contains 'wireMark') {
+       $must['wiring marks: a red frame exactly on the button'] = [bool]$R.wireMarkOk
+       $must['wiring marks off: gone'] = [bool]$R.wireMarkOffOk
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index c44c916..e4e68b8 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -464,6 +464,15 @@ async function main() {
+   await fake._cmds['ht9045Designer.zoomFit']();
+   ok(pagePosted.some(m => m.type === 'zoomFit'), 'zoom to fit goes to the probe');
+ 
++  // every component's name on the surface: told to the probe, shown in the status bar
++  pagePosted.length = 0;
++  const nmOn = await fake._cmds['ht9045Designer.toggleNames']();
++  const nmMsg = pagePosted.filter(m => m.type === 'showNames').pop();
++  const nmStatus = api.hub.status.text;
++  const nmOff = await fake._cmds['ht9045Designer.toggleNames']();
++  ok(nmOn && nmOn.on && nmMsg && nmMsg.on === true && /名稱/.test(nmStatus) && nmOff && nmOff.on === false && !/　名稱/.test(api.hub.status.text),
++    'name tags: on (the probe told, the status bar), off again', nmStatus);
++
+   // 頁面檢查: the Problems panel gets HotPlate's cut style; the bulb offers the fix; all pages: 297
+   const lnSum = await fake._cmds['ht9045Designer.lintPage']();
+   const lnDiags = fake._diag.get(doc.uri) || [];
+-- 
+2.55.0.windows.5
+
