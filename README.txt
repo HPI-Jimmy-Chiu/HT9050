@@ -134,5 +134,16 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   web 0021 215b806 CAPTION (web) —— 主視窗標題列跟著 machine.caption。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；新 patch 裡的 8 個 .csv 全是筆電包本來就在 GitHub 上的測試樣本與 docs。
   沒有放：MachineType.h 的 SOFT_SIMULTE（EastSun 手動、未 commit）；機台設定檔（Mot_Table／IO_Table／general.ini）。
+  cpp 0042 1954b25 HMI-SHELL + EXIT-NOHOME —— HMI 改用自己的程式視窗（tools/hmi_shell，ht9045_hmi.exe，WebView2），不再用 Chrome：
+                    客戶要求「外框不是 chrome、不要讓人員有額外操作的空間、按快捷鍵不會改到畫面、工作列是軟體的圖標」。
+                    沒有標題列／邊框、貼齊螢幕工作區；瀏覽器快捷鍵在引擎層關掉（重新整理、縮放、找、列印、上一頁、DevTools…）；
+                    工作列是鴻勁 LOGO（D:\HT9045\web\assets\img\logo.jpg 的標誌，去背）；✕／Alt+F4 問一次「確定要關閉軟體嗎？」後走
+                    主畫面 Exit；wb_serve 正常關站／VS Code 停止鈕會一併關掉它。HMI-KEEP、MODAL-WAKE、F5 等待頁都先開它，找不到才開瀏覽器。
+                    自己的 build_hmi_shell.bat（沒有動 CMake 來源清單）。附 Microsoft.Web.WebView2 1.0.4258.31 的標頭與 x86
+                    WebView2Loader.dll（BSD 類授權，LICENSE.txt 同放）；WebView2 Runtime 是 Windows 11 內建。
+                    Exit：golden「請在關閉程式前,執行歸零步驟」只在 #define W906_EXIT_REQUIRE_HOME 時檢查（MachineType.h 檔尾，預設關，
+                    EastSun 0930「我不需要確認都歸零」）；運轉中、機台內有 IC、Q44 停機照舊。離線測過，機台上還沒實跑。
+  web 0023 cbc7920 HMI-SHELL + EXIT-ONECONFIRM (web) —— Exit 只問一次「確定要關閉程式??」（第二框 "Sure To Exit?" 當 YES）；
+                    background.html 給程式視窗的 ✕ 用的 HT9045ShellCloseRequest，document.title 跟著 machine.caption。
 
 MD5 清單在 MANIFEST_MD5.tsv。

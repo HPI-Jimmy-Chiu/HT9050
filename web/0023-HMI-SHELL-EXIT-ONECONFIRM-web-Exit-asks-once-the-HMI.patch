@@ -1,0 +1,82 @@
+From cbc79209d2f975c06a5c3fe3e797fa15e9bb1fa2 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 30 Sep 2026 14:05:38 +0800
+Subject: [PATCH] =?UTF-8?q?HMI-SHELL=20+=20EXIT-ONECONFIRM=20(web):=20Exit?=
+ =?UTF-8?q?=20asks=20once;=20the=20HMI=20program=20window's=20=E2=9C=95=20?=
+ =?UTF-8?q?runs=20the=20same=20Exit?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20260930: "我只需要讓客戶確認是否真的要關閉軟體".
+- page/ht9045_main_close.js: ONE_CONFIRM -- only "Sure close??／確定要關閉程式??" (step 0); golden FormClose's second box
+  "Sure To Exit?" (:11903) is taken as YES (save, stop, close unchanged). false = golden's two boxes.
+- background.html: window.HT9045ShellCloseRequest() for the HMI program window (tools/hmi_shell): after the window's own
+  "確定要關閉軟體嗎？" it runs HT9045MainClose.close with the answers filled in -> 'exit'; not connected to wb_serve or no main
+  screen -> 'none' (the window just closes). document.title follows machine.caption (the window's title bar / taskbar).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ background.html           | 14 ++++++++++++++
+ page/ht9045_main_close.js |  6 +++++-
+ 2 files changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/background.html b/background.html
+index 60082f7..483b0fa 100644
+--- a/background.html
++++ b/background.html
+@@ -1183,6 +1183,19 @@ function refreshGuardUi(){
+   scheduleRegistry();
+ }
+ 
++// AI(W906-HMI-SHELL) 20260930：HMI 程式視窗（tools/hmi_shell/hmi_shell.cpp）的 ✕／Alt+F4 —— 程式視窗先問「確定要關閉軟體嗎？」，
++//   按是就用 ExecuteScript 叫這裡：走主畫面 Exit 的同一條路（ht9045_main_close.js HT9045MainClose.close，答案預先填 YES，
++//   EastSun「我只需要讓客戶確認是否真的要關閉軟體」—— 不會再問第二次）。守衛（運轉中、機台內有 IC）照樣由 C++ 擋並顯示原因；
++//   通過後 wb_serve 關站，最後通知程式視窗自己關掉。回 'exit'＝已交給 Exit；'none'＝主畫面還沒載入（程式視窗就直接關）。
++window.HT9045ShellCloseRequest=function(){
++  try{
++    var conn=false; try{ conn=!!(window.HT9045Recipe && HT9045Recipe.status().connected); }catch(e){}
++    if(!conn) return 'none';                                   // 程式（wb_serve）已經不在：沒有 Exit 可走，程式視窗直接關
++    var mw=document.getElementById('win-main'), mf=mw&&mw.querySelector('iframe'), cw=mf&&mf.contentWindow;
++    if(cw && cw.HT9045MainClose && typeof cw.HT9045MainClose.close==='function'){ cw.HT9045MainClose.close({answers:[true,true]}); return 'exit'; }
++  }catch(e){}
++  return 'none';
++};
+ // 接收子頁請求：
+ // {open:id}    Main.html 的 sbOffset/sbSpeed/sbIO/Configure → 開啟視窗
+ // {closeMe:1}  各分頁 Exit 按鈕 → 依發送來源 iframe 找到所屬視窗隱藏（同標題列 ✕）
+@@ -1239,6 +1252,7 @@ window.addEventListener('message',function(e){
+         mcfg.title=cap+'（main.dfm）';
+         var mt=mw.querySelector('.tbar .ttl'); if(mt) mt.textContent=dispTitle(mcfg.title);
+         if(mw._task) mw._task.textContent=dispTitle(mcfg.title);
++        try{ document.title=cap; }catch(err){}   // AI(W906-HMI-SHELL) 20260930：HMI 程式視窗（tools/hmi_shell）的標題列與工作列用這個
+       }
+     }
+   }
+diff --git a/page/ht9045_main_close.js b/page/ht9045_main_close.js
+index 8045ab6..c266627 100644
+--- a/page/ht9045_main_close.js
++++ b/page/ht9045_main_close.js
+@@ -38,6 +38,7 @@
+   'use strict';
+ 
+   var CMD = 'act.main.closeProgram';
++  var ONE_CONFIRM = true;   // AI(W906-EXIT-ONECONFIRM) 20260930：Exit 只問一次（見 closeProgram 的 step 1）
+   var st = { last: null, lastError: '', saves: 0 };
+ 
+   function $(id) { return document.getElementById(id); }
+@@ -366,7 +367,10 @@
+         return send(1).then(function (r1) {
+           showMessages(r1);
+           if (!(r1 && r1.needConfirm)) return r1;
+-          if (!ask(r1, ['Sure To Exit?', '確定要離開？'])) return { executed: false, guard: 'confirm-no', cancelled: true, step: 1, writes: r1.writes };
++          // AI(W906-EXIT-ONECONFIRM) 20260930：EastSun「我只需要讓客戶確認是否真的要關閉軟體」—— 只問一次（上面 step 0 的 "Sure close??"）。
++          //   golden FormClose 的第二框 "Sure To Exit?"（:11903）不再問，直接當作 YES 往 step 2（存完生產資料、停機、關站，流程不變）。
++          //   要恢復兩次確認：把 ONE_CONFIRM 改成 false。
++          if (!ONE_CONFIRM && !ask(r1, ['Sure To Exit?', '確定要離開？'])) return { executed: false, guard: 'confirm-no', cancelled: true, step: 1, writes: r1.writes };
+           // AI(W906-PROD-S121) 20260926：step 2 之後伺服器會關站；ack 沒到連線就斷（伺服器已經在關）＝ closedBeforeAck
+           return raw(CMD, { value: JSON.stringify({ step: 2 }) }).then(unwrap, function (e) {
+             var t = (e && e.message) || String(e);
+-- 
+2.55.0.windows.5
+
