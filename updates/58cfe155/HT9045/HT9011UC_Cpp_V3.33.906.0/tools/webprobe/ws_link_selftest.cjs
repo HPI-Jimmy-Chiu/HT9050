@@ -1,0 +1,595 @@
+// AI(W906-WSLINK) 20260929 [W906] ST01-E3: web/page/ht9045_link.js（一個瀏覽器分頁只開一條 WebSocket）的離線自我測試。
+//   Jimmy 20260929：機台 9/26 實測每個 iframe 各開一條連線，23 條撞 16 條上限，Motor Test 整頁沒反應。
+//   這支用 node 的 vm 開一個「外框」（background.html，跑 hub）和幾個「iframe」（各自載入 ht9045_link.js），
+//   iframe 經 MessageChannel 找外框的 hub；假伺服器照 WebBridgeServer.cpp 的權杖規則（control.acquire／release
+//   只看連線；免權杖指令；其他指令要是持有者，否則 not-operator），另外照 WebCmdGuardGlobal 的 400 ms 防連點
+//   （cmd+tag+value 相同就 busy，WebCmdGuard.cpp:412）記錄有沒有 hub 重送造成的 busy。
+//   [11] 把真的 web/page/ht9045_recipe_client.js 載進兩個 iframe，只把它開連線的那一行換成 HT9045Link.open
+//   （＝等 Jimmy 那包合進來之後要改的那一行），驗 Motor Test 還拿著權杖時 IO 頁閒置 release 不會把權杖交還伺服器。
+//   不連真的 wb_serve、不讀寫任何檔。用法：node tools/webprobe/ws_link_selftest.cjs
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+const { MessageChannel } = require('worker_threads');
+
+const WEB = path.join(__dirname, '..', '..', '..', 'web', 'page');
+const LINK = process.env.W906_WS_LINK || path.join(WEB, 'ht9045_link.js');
+const RECIPE = path.join(WEB, 'ht9045_recipe_client.js');
+const linkCode = fs.readFileSync(LINK, 'utf8');
+const recipeCode = fs.readFileSync(RECIPE, 'utf8');
+const URL = 'ws://127.0.0.1:8055/ht9045';
+
+// ---- 假伺服器 --------------------------------------------------------------------------------
+const server = { conns: [], owner: 0, nextConn: 1, log: [], busy: 0, guard: {}, seq: 1, tags: { 'machine.state': 'Stop', 'clock.text': '13:00:00' } };
+const EXEMPT = new Set(['motor.stop', 'modal.answer', 'dialog.response', 'ui.windows.put', 'cfg.resync', 'log.event', 'sys.ping', 'stream.resync']);
+const GUARD_FREE = new Set(['sys.ping', 'cfg.resync', 'log.event', 'ui.windows.put', 'stream.resync', 'motor.stop',
+  'control.acquire', 'control.takeover', 'control.release']);   // control.* 在 WebBridgeServer.cpp:1388 的 socket 執行緒就回了，不進 WebCmdGuard
+function serverHandle(conn, msg) {
+  const reply = (ok, error, extra) => conn._deliver(Object.assign({ type: 'ack', id: msg.id, ok, error: error || '' }, extra || {}));
+  if (msg.type !== 'cmd') return reply(true);
+  const name = msg.cmd;
+  server.log.push({ cid: conn.cid, cmd: name, tag: msg.tag, value: msg.value });
+  if (!GUARD_FREE.has(name)) {                       // WebCmdGuardGlobal：同一個 cmd+tag+value 400 ms 內第二次＝busy
+    const key = name + '|' + (msg.tag || '') + '|' + (msg.value || '');
+    const t = Date.now();
+    if (server.guard[key] && t - server.guard[key] < 400) { server.busy++; return reply(false, 'busy: ' + name); }
+    server.guard[key] = t;
+  }
+  if (name === 'motor.stop' && server.refuseStop && (JSON.parse(msg.value || '{}').button === server.refuseStop)) return reply(false, 'refused (test)');   // [19] m11
+  if (name === 'control.acquire' || name === 'control.takeover') {
+    if (server.owner === 0 || server.owner === conn.cid || name === 'control.takeover') { server.owner = conn.cid; return reply(true); }
+    return reply(false, 'control-held');
+  }
+  if (name === 'control.release') {
+    if (server.owner === conn.cid) { server.owner = 0; return reply(true); }
+    return reply(false, 'not-operator');
+  }
+  if (!name.startsWith('auth.') && !EXEMPT.has(name) && server.owner !== conn.cid) return reply(false, 'not-operator');
+  return reply(true, '', { state: 'done', result: 'ok', echo: name });
+}
+class FakeWS {
+  constructor(url) {
+    this.url = url; this.cid = server.nextConn++; this.readyState = 0;
+    server.conns.push(this);
+    setTimeout(() => {
+      this.readyState = 1; if (this.onopen) this.onopen({});
+      this._deliver({ type: 'snapshot', seq: server.seq, data: Object.assign({}, server.tags) });
+    }, 1);
+  }
+  send(s) { const m = JSON.parse(s); setTimeout(() => serverHandle(this, m), 2 + (server.slow || 0)); }   // slow: [19] m11
+  _deliver(o) { if (this.readyState === 1 && this.onmessage) this.onmessage({ data: JSON.stringify(o) }); }
+  close() { if (this.readyState === 3) return; this.readyState = 3; if (server.owner === this.cid) server.owner = 0; if (this.onclose) this.onclose({ code: 1000, reason: '', wasClean: true }); }
+}
+function openConns() { return server.conns.filter((c) => c.readyState === 1).length; }
+function pushPatch(data) {
+  server.seq++; Object.assign(server.tags, data);
+  server.conns.forEach((c) => c._deliver({ type: 'patch', seq: server.seq, data }));
+}
+
+// ---- 假視窗 ----------------------------------------------------------------------------------
+const CFG = { helloWaitMs: 150, pingMs: 40, pingLoss: 3, idleCloseMs: 100, dupReleaseMs: 300 };
+function makeWindow(name, parentWin) {
+  const listeners = {};
+  const w = {
+    console, setTimeout, clearTimeout, setInterval, clearInterval, Promise, JSON, Date, Math, Object, Array, String, Number, Error, RegExp,
+    MessageChannel, WebSocket: FakeWS, HT9045LinkConfig: CFG,
+    location: { protocol: 'http:', host: '127.0.0.1:8055', pathname: '/page/' + name + '.html', search: '' },
+    document: { addEventListener() {}, removeEventListener() {}, hidden: false },
+    XMLHttpRequest: function () { this.open = () => {}; this.send = () => {}; },
+    localStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
+    sessionStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
+    addEventListener(t, f) { (listeners[t] || (listeners[t] = [])).push(f); },
+    removeEventListener(t, f) { const a = listeners[t] || []; const i = a.indexOf(f); if (i >= 0) a.splice(i, 1); },
+    _fire(t, ev) { (listeners[t] || []).slice().forEach((f) => f(ev)); },
+    // 別的視窗 postMessage 給這個視窗；source＝一個「這個視窗的子框架」（hub 只收自己 iframe 的 hello）
+    postMessage(data, origin, transfer) { setTimeout(() => w._fire('message', { data, ports: transfer || [], source: { parent: w._inner } }), 0); },
+  };
+  w.window = w; w.self = w; w.globalThis = w;
+  vm.createContext(w);
+  // node vm：context 裡看到的 global 不是外面這個 sandbox 物件本身（瀏覽器裡 iframe.parent 就是父視窗），
+  // 所以 parent／source 都用 context 裡的那個 global，hub 的「只收自己 iframe 的 hello」與 isTop() 才量得到。
+  w._inner = vm.runInContext('this', w);
+  // 子視窗各拿一個自己的「父視窗代理」：它 postMessage 過去時 ev.source＝w._src（瀏覽器裡就是這個 iframe 的 WindowProxy），
+  // hub 才分得出是哪一個 iframe（[17] windowHidden(iframe.contentWindow)）
+  if (parentWin) {
+    const src = { parent: parentWin._inner };
+    w._src = src;
+    w.parent = { postMessage(data, origin, transfer) { setTimeout(() => parentWin._fire('message', { data, ports: transfer || [], source: src }), 0); } };
+  } else w.parent = w._inner;
+  w.name = name;
+  return w;
+}
+function load(w, code, file) { vm.runInContext(code, w, { filename: w.name + ':' + file }); }
+// Jimmy 那包（55007a32／6f7f9624）合進來之後 ht9045_recipe_client.js 自己就走 HT9045Link.open（:146），這裡原檔照載、不改寫；
+// 連線那行被改回去就紅
+function recipeViaLink(code) {
+  const a = 'try { s = global.HT9045Link ? global.HT9045Link.open(wsUrl()) : new WebSocket(wsUrl()); }';
+  if (code.indexOf(a) < 0) throw new Error('recipe client connect line does not go through HT9045Link.open; see ht9045_recipe_client.js:146');
+  return code;
+}
+
+let fail = 0, pass = 0;
+function check(cond, what) { if (cond) { pass++; console.log('  ok   ' + what); } else { fail++; console.log('  FAIL ' + what); } }
+// one source line without its // and /* */ comments (quote-aware: 'wss://' stays) -- [17] / [18] check code, not comments
+function codeOfLine(line) {
+  let out = '', q = '';
+  for (let k = 0; k < line.length; k++) {
+    const ch = line[k], nx = line[k + 1];
+    if (q) { out += ch; if (ch === '\\') { out += nx || ''; k++; } else if (ch === q) q = ''; continue; }
+    if (ch === '/' && nx === '/') break;
+    if (ch === '/' && nx === '*') { const e = line.indexOf('*/', k + 2); if (e < 0) break; k = e + 1; out += ' '; continue; }
+    if (ch === '\'' || ch === '"' || ch === '`') q = ch;
+    out += ch;
+  }
+  return out;
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));  const waitFor = async (cond, ms) => { const t0 = Date.now(); while (!cond() && Date.now() - t0 < (ms || 2000)) await sleep(5); return !!cond(); };   // 機台忙（CPU 100%）時固定 sleep 不夠
+function collector(sock) {
+  const got = [];
+  sock.onmessage = (ev) => got.push(JSON.parse(ev.data));
+  return got;
+}
+function waitOpen(sock, ms) { return new Promise((res) => { if (sock.readyState === 1) return res(true); const t = setTimeout(() => res(false), ms || 1000); sock.addEventListener('open', () => { clearTimeout(t); res(true); }); }); }
+const outcome = (p) => p.then(() => 'ok', (e) => 'err:' + (e && e.message));
+const cmds = (name) => server.log.filter((x) => x.cmd === name);
+
+(async () => {
+  const frame = makeWindow('background', null);
+  load(frame, linkCode, 'ht9045_link.js');
+  const hub = frame.HT9045Link.startHub(URL);
+  const A = makeWindow('HW.MotorTest', frame), B = makeWindow('HW.IoSetView', frame);
+  load(A, linkCode, 'ht9045_link.js'); load(B, linkCode, 'ht9045_link.js');
+
+  console.log('[1] 外框＋兩個 iframe 各開一條 → 伺服器只有 1 條連線');
+  const sF = frame.HT9045Link.open(URL, 'frame'), sA = A.HT9045Link.open(URL, 'A'), sB = B.HT9045Link.open(URL, 'B');
+  const gF = collector(sF), gA = collector(sA), gB = collector(sB);
+  check(await waitOpen(sF) && await waitOpen(sA) && await waitOpen(sB), '三個虛擬 socket 都 open');
+  check(server.conns.length === 1 && openConns() === 1, '伺服器連線數 = 1（原本 3）');
+  check(sF.via === 'hub' && sA.via === 'relay' && sB.via === 'relay', '外框走 hub、iframe 走 relay（' + [sF.via, sA.via, sB.via].join('/') + '）');
+  await waitFor(() => [gF, gA, gB].every((g) => g.some((m) => m.type === 'snapshot')));
+  check([gF, gA, gB].every((g) => g.some((m) => m.type === 'snapshot' && m.data['machine.state'] === 'Stop')), '三個都收到 snapshot');
+
+  console.log('[2] 兩個 iframe 都用 id 1 → hub 換成不同的 id，ack 只回給發的那一個、id 還原');
+  gA.length = 0; gB.length = 0;
+  sA.send(JSON.stringify({ type: 'cmd', id: 1, cmd: 'sys.ping', tag: 'A' }));
+  sB.send(JSON.stringify({ type: 'cmd', id: 1, cmd: 'sys.ping', tag: 'B' }));
+  await waitFor(() => gA.some((m) => m.type === 'ack') && gB.some((m) => m.type === 'ack'));
+  const aA = gA.filter((m) => m.type === 'ack'), aB = gB.filter((m) => m.type === 'ack');
+  check(aA.length === 1 && aA[0].id === 1 && aB.length === 1 && aB[0].id === 1, '各自收到一個 ack，id 都是 1');
+  const pings = cmds('sys.ping');
+  check(pings.length === 2 && pings[0].tag === 'A' && pings[1].tag === 'B', '伺服器收到兩個 ping，各一次');
+
+  console.log('[3] patch 扇出給所有頁面；hub 記下快取');
+  gF.length = 0; gA.length = 0; gB.length = 0;
+  pushPatch({ 'clock.text': '13:00:01', 'io.x': null });
+  await waitFor(() => [gF, gA, gB].every((g) => g.some((m) => m.type === 'patch')));
+  check([gF, gA, gB].every((g) => g.some((m) => m.type === 'patch' && m.data['clock.text'] === '13:00:01')), '三個都收到 patch');
+  check(hub.cache['clock.text'] === '13:00:01' && 'io.x' in hub.cache && hub.cache['io.x'] === null, '快取有新值，null 照存（不是刪掉）');
+
+  console.log('[4] 晚開的 iframe 收到合成的 snapshot（快取內容＋最後的 seq），不另開連線');
+  const C = makeWindow('HW.teach', frame); load(C, linkCode, 'ht9045_link.js');
+  const sC = C.HT9045Link.open(URL, 'C'); const gC = collector(sC);
+  check(await waitOpen(sC), 'C open');
+  await waitFor(() => gC.some((m) => m.type === 'snapshot'));
+  const snapC = gC.find((m) => m.type === 'snapshot');
+  check(!!snapC && snapC.synthetic === true && snapC.data['clock.text'] === '13:00:01' && snapC.seq === server.seq, '合成 snapshot：快取值＋seq=' + server.seq);
+  check(server.conns.length === 1, '連線數仍是 1');
+
+  console.log('[5] 權杖由 hub 管：A 拿（伺服器 1 次）、B 拿（本地回 ok）、A 放（本地）、B 放（這時才送伺服器）');
+  gA.length = 0; gB.length = 0;
+  const acq0 = cmds('control.acquire').length;
+  sA.send(JSON.stringify({ type: 'cmd', id: 11, cmd: 'control.acquire' })); await waitFor(() => hub.token.held && gA.some((m) => m.id === 11));
+  sB.send(JSON.stringify({ type: 'cmd', id: 12, cmd: 'control.acquire' })); await waitFor(() => gB.some((m) => m.id === 12));
+  check(cmds('control.acquire').length - acq0 === 1, '伺服器只收到 1 個 acquire');
+  check(gB.some((m) => m.type === 'ack' && m.id === 12 && m.ok && m.link === 'local'), 'B 的 acquire 由 hub 本地回 ok');
+  sA.send(JSON.stringify({ type: 'cmd', id: 13, cmd: 'control.release' })); await waitFor(() => gA.some((m) => m.id === 13));
+  check(server.owner === server.conns[0].cid && cmds('control.release').length === 0, 'A 放掉：B 還拿著 → 沒送伺服器，伺服器仍是持有者');
+  sB.send(JSON.stringify({ type: 'cmd', id: 14, cmd: 'control.release' })); await waitFor(() => gB.some((m) => m.id === 14) && server.owner === 0);
+  check(server.owner === 0 && cmds('control.release').length === 1, 'B 放掉（最後一個）→ 才送 release，伺服器 owner=0');
+
+  console.log('[6] A、B 同時 acquire（沒人拿著）→ 只送一個，兩個都拿到 ok（不會有第二個被 busy）');
+  await sleep(450);                                                                       // 跟 [5] 隔開（control.* 真的伺服器不經 WebCmdGuard，假伺服器也一樣；留著不影響）
+  gA.length = 0; gB.length = 0;
+  const acq1 = cmds('control.acquire').length, busy0 = server.busy;
+  sA.send(JSON.stringify({ type: 'cmd', id: 21, cmd: 'control.acquire' }));
+  sB.send(JSON.stringify({ type: 'cmd', id: 22, cmd: 'control.acquire' }));
+  await waitFor(() => gA.some((m) => m.id === 21) && gB.some((m) => m.id === 22));
+  check(cmds('control.acquire').length - acq1 === 1 && server.busy === busy0, '伺服器 1 個 acquire、0 個 busy');
+  check(gA.some((m) => m.id === 21 && m.ok) && gB.some((m) => m.id === 22 && m.ok), 'A、B 都收到 ok');
+
+  console.log('[7] 伺服器收回權杖（閒置 10 分鐘）→ 下一個指令 not-operator → 所有頁面收到 link.token owner:false');
+  gF.length = 0; gA.length = 0; gB.length = 0; gC.length = 0;
+  server.owner = 0;
+  sA.send(JSON.stringify({ type: 'cmd', id: 31, cmd: 'recipe.doc.put', tag: 'x', value: '{}' }));
+  await waitFor(() => gA.some((m) => m.id === 31) && [gF, gA, gB, gC].every((g) => g.some((m) => m.type === 'link.token')));
+  check(gA.some((m) => m.type === 'ack' && m.id === 31 && m.error === 'not-operator'), 'A 收到 not-operator');
+  check([gF, gA, gB, gC].every((g) => g.some((m) => m.type === 'link.token' && m.owner === false)), '四個頁面都收到 link.token owner:false');
+  check(hub.token.held === false, 'hub 記成沒有權杖');
+
+  // AI(W906-WSLINK) 20260930 ST01-E3: M1 (St02-E2 review B) -- page gone never sends a STOP; only held jogs are released
+  console.log('[8] 頁面不見了 → 只放開它還按著的 jog（自己的按鈕、只那一軸）；從來不送 STOP（M1：原本 link.pageGone＝整台 StopAllMotor）');
+  const ma8 = (id, v) => JSON.stringify({ type: 'cmd', id, cmd: 'motor.access', tag: (v.motors || [])[0] || '', value: JSON.stringify(v) });
+  sA.send(JSON.stringify({ type: 'cmd', id: 41, cmd: 'control.acquire' })); await waitFor(() => gA.some((m) => m.id === 41));
+  sA.send(ma8(42, { source: 'uMotorTest', action: 'formShow', button: 'FormShow', kind: 'control', motors: [] }));
+  sA.send(ma8(43, { source: 'uteach', action: 'teachSet', button: 'SetButton030', kind: 'motion', motors: ['MInArmX'], params: { query: true } }));
+  sA.send(ma8(44, { source: 'uMotorTest', action: 'moveAbsolute', button: 'btnMoveAbs', kind: 'motion', motors: ['MInArmX'] }));
+  await waitFor(() => gA.some((m) => m.id === 44));
+  const stop0 = cmds('motor.stop').length;
+  sA.close(); await sleep(80);
+  check(cmds('motor.stop').length === stop0,
+        'M1：只送過 formShow／Teach 載入查詢／一般移動的頁面不見了（例：生產中重新整理 Motor Test）→ 什麼都不送（原本是整台 STOP）');
+  const A8 = makeWindow('HW.MotorTest8', frame); load(A8, linkCode, 'ht9045_link.js');
+  const s8 = A8.HT9045Link.open(URL, 'A8'); const g8 = collector(s8);
+  check(await waitOpen(s8), 'setup: 另一個 Motor Test iframe');
+  s8.send(JSON.stringify({ type: 'cmd', id: 1, cmd: 'control.acquire' })); await waitFor(() => g8.some((m) => m.id === 1));
+  s8.send(ma8(2, { source: 'uMotorTest', action: 'jogP', button: 'sbMotorTest_JogP', kind: 'motion', motors: ['MInArmX'] }));
+  s8.send(ma8(3, { source: 'uMotorTest', action: 'jogN', button: 'sbMotorTest_JogN', kind: 'motion', motors: ['MOutArmY'] }));
+  s8.send(ma8(4, { source: 'uMotorTest', action: 'formClose', button: 'FormClose', kind: 'control', motors: [] }));
+  await waitFor(() => g8.some((m) => m.id === 4));
+  const st8 = cmds('motor.stop').length;
+  s8.close(); await waitFor(() => cmds('motor.stop').length >= st8 + 2);
+  await sleep(60);
+  const r8 = cmds('motor.stop').slice(st8).map((x) => JSON.parse(x.value));
+  const b8 = r8.map((v) => v.button + '=' + JSON.stringify(v.motors)).sort().join(' ');
+  check(r8.length === 2 && b8 === 'sbMotorTest_JogN=["MOutArmY"] sbMotorTest_JogP=["MInArmX"]' &&
+        r8.every((v) => v.action === 'stop' && v.source === 'uMotorTest' && /^link[.]pageGone:/.test(v.reason)),
+        '按著兩個 jog 的頁面不見了 → 每個 jog 剛好一個放開，按鈕是它自己的（DoJogRelease：只那一軸）（' + b8 + '）');
+  check(!r8.some((v) => v.button === 'link.pageGone' || !/jog/i.test(v.button)), '沒有 link.pageGone、沒有任何非 jog 按鈕的停止（不會走伺服器的 DoStop）');
+  check(server.conns.length === 1 && openConns() === 1, '連線還在（其他頁面仍開著）');
+
+  console.log('[9] iframe 不回 ping（當掉）→ 3 次後 hub 把它移掉；沒動過馬達的不送 stop');
+  const deadCh = new MessageChannel();
+  let welcomed = false;
+  deadCh.port1.onmessage = (e) => { if (e.data && e.data.k === 'welcome') welcomed = true; };   // 故意不回 pong
+  frame.postMessage({ ht9045link: 'hello', v: 1, url: URL, name: 'dead' }, '*', [deadCh.port2]);
+  await waitFor(() => welcomed && hub.status().clients.some((c) => c.name === 'dead'));
+  const n0 = hub.status().clients.length;
+  check(welcomed && hub.status().clients.some((c) => c.name === 'dead'), '死掉的頁面先被收進來（welcomed=' + welcomed + ' clients=' + hub.status().clients.map((c) => c.name).join(',') + ' state=' + hub.state + '）');
+  const s1 = cmds('motor.stop').length;
+  await sleep(CFG.pingMs * (CFG.pingLoss + 3));
+  check(!hub.status().clients.some((c) => c.name === 'dead') && hub.status().clients.length === n0 - 1, 'ping 遺失後被移掉');
+  check(cmds('motor.stop').length === s1, '沒動過馬達 → 不送 stop');
+  deadCh.port1.close();
+
+  console.log('[10] 退路：父視窗沒有 hub → 直接開真的連線（今天的行為）；別的 URL 也直接開');
+  const lone = makeWindow('lonely-frame', null); load(lone, linkCode, 'ht9045_link.js');   // 有 link、沒 startHub
+  const D = makeWindow('Standalone', lone); load(D, linkCode, 'ht9045_link.js');
+  const c0 = server.conns.length;
+  const sD = D.HT9045Link.open(URL, 'D');
+  check(await waitOpen(sD, 1000) && sD.via === 'direct' && server.conns.length === c0 + 1, '回 nohub → 直連（多 1 條）');
+  const bare = makeWindow('no-link-parent', null);                                         // 父視窗根本沒有 link
+  const E = makeWindow('OldFrameChild', bare); load(E, linkCode, 'ht9045_link.js');
+  const t0 = Date.now(); const sE = E.HT9045Link.open(URL, 'E');
+  check(await waitOpen(sE, 1000) && sE.via === 'direct' && Date.now() - t0 >= CFG.helloWaitMs, '等 hello 逾時 → 直連');
+  const top = makeWindow('top-no-hub', null); load(top, linkCode, 'ht9045_link.js');
+  const sT = top.HT9045Link.open(URL, 'T');
+  check(await waitOpen(sT, 500) && sT.via === 'direct', '最上層沒有 hub → 立刻直連（不等）');
+  const sSim = A.HT9045Link.open('ws://127.0.0.1:9045/ht9045-json/', 'sim');
+  check(await waitOpen(sSim, 1000) && sSim.via !== 'relay', '模擬器的 URL 不走 hub（外框的 hub 只收 bridge 那條）');
+  [sD, sE, sT, sSim].forEach((s) => s.close());
+  await sleep(20);
+
+  console.log('[11] 真的 recipe client（Motor Test、IO 兩頁）經 hub：同一瀏覽器＝同一操作員；IO 閒置 release 不會放掉 Motor Test 的權杖');
+  const MT = makeWindow('HW.MotorTest2', frame), IO = makeWindow('HW.IoSetView2', frame);
+  [MT, IO].forEach((w) => { load(w, linkCode, 'ht9045_link.js'); load(w, recipeViaLink(recipeCode), 'ht9045_recipe_client.js'); });
+  const RM = MT.HT9045Recipe, RI = IO.HT9045Recipe;
+  const req = { motors: ['MInArmY'], action: 'move', button: 'btnGo', source: 'motortest' };
+  if (RM.tokenIdleMs) { RM.tokenIdleMs(150); RI.tokenIdleMs(150); }
+  let homing = true;
+  if (RM.setTokenHold) RM.setTokenHold(() => homing);
+  const connsBefore = server.conns.length, busy1 = server.busy;
+  const o11 = await outcome(RM.motorAccess(req));
+  check(o11 === 'ok', 'Motor Test motor.access ok（經 hub 拿權杖）（' + o11 + '）');
+  check(await outcome(RI.write('Doc.Data', { S: { K: '1' } })) === 'ok', 'IO 頁寫入 ok（同一瀏覽器同一條連線：takeover 到伺服器 owner 不變；原本兩條連線會 control-held）');
+  await sleep(400);                                                                       // IO 閒置 → release
+  check(server.owner !== 0, 'IO 閒置放掉後，伺服器上權杖仍在（Motor Test hold 中）');
+  const no0 = server.log.length;
+  check(await outcome(RM.motorAccess(req)) === 'ok', 'Motor Test 下一個 motor.access 仍 ok');
+  check(!server.log.slice(no0).some((x) => x.cmd === 'control.acquire'), '而且不必重拿（沒有被 not-operator）');
+  homing = false;
+  await sleep(400);
+  check(server.owner === 0, 'hold 結束、兩頁都閒置 → 最後一個放掉時才還伺服器');
+  check(server.conns.length === connsBefore, '兩個 recipe client 沒有多開連線（' + connsBefore + ' 條不變）');
+  check(server.busy === busy1, '整段 0 個 busy（hub 沒有重送）');
+
+  console.log('[12] 外框 hub 的真連線斷掉 → 所有虛擬 socket 收到 close；下一次 open 重連，仍只有 1 條');
+  const hubConn = server.conns.find((c) => c.readyState === 1 && c.url === URL && hub.sock === c);
+  let closedB = false; sB.onclose = () => { closedB = true; };
+  hubConn.close();
+  await waitFor(() => closedB);
+  check(closedB && sB.readyState === 3, 'B 的虛擬 socket 收到 close');
+  const before12 = server.conns.length;
+  const sB2 = B.HT9045Link.open(URL, 'B2'), sF2 = frame.HT9045Link.open(URL, 'F2');
+  check(await waitOpen(sB2) && await waitOpen(sF2) && server.conns.length === before12 + 1, '重連：兩個頁面共用 1 條新連線');
+
+  // AI(W906-WSLINK) 20260929 ST01-E3: [13]-[16] after Jimmy's TAKEOVER pack (55007a32 / 6f7f9624 / 8c6ac9a0) and his conditions ① / ②
+  //   (main TO_STEVEN.md section 4, 14:2x): cancel on bye / heartbeat loss; an in-browser hand-over must not cancel.
+  console.log('[13] 同一瀏覽器換頁接手（takeover）→ 送伺服器、owner 不變、不送 motor.stop（Jimmy ②）；別的瀏覽器拿走後，這邊按一下就拿回來');
+  const M3 = makeWindow('HW.MotorTest3', frame); load(M3, linkCode, 'ht9045_link.js');
+  const sM3 = M3.HT9045Link.open(URL, 'M3'); const gM3 = collector(sM3), gB2 = collector(sB2);
+  check(await waitOpen(sM3), 'M3 open');
+  sM3.send(JSON.stringify({ type: 'cmd', id: 51, cmd: 'control.acquire' })); await waitFor(() => gM3.some((m) => m.id === 51));
+  sM3.send(JSON.stringify({ type: 'cmd', id: 52, cmd: 'motor.access', tag: 'MInArmX',
+    value: JSON.stringify({ source: 'uMotorTest', action: 'jogP', motors: ['MInArmX'], button: 'sbMotorTest_JogP' }) }));
+  await waitFor(() => gM3.some((m) => m.id === 52));
+  const hubCid = hub.sock.cid, tk0 = cmds('control.takeover').length, st13 = cmds('motor.stop').length;
+  check(server.owner === hubCid && gM3.some((m) => m.id === 52 && m.ok), 'setup: Motor Test 拿著權杖、正在 jog');
+  sB2.send(JSON.stringify({ type: 'cmd', id: 53, cmd: 'control.takeover' })); await waitFor(() => gB2.some((m) => m.id === 53));
+  check(cmds('control.takeover').length - tk0 === 1 && gB2.some((m) => m.type === 'ack' && m.id === 53 && m.ok), 'IO 頁 takeover → 送伺服器一次、ok');
+  check(server.owner === hubCid && cmds('motor.stop').length === st13,
+        'owner 還是同一條連線（wb_serve W906_OwnerHeldSince 看不到換手）、沒有 motor.stop → Motor Test 的 jog 不被取消');
+  const other = new FakeWS(URL); await waitFor(() => other.readyState === 1);                                         // 另一個瀏覽器（直連）
+  other.send(JSON.stringify({ type: 'cmd', id: 1, cmd: 'control.takeover' })); await waitFor(() => server.owner === other.cid);
+  check(server.owner === other.cid, 'setup: 另一個瀏覽器 takeover（伺服器 owner＝它）');
+  const tk1 = cmds('control.takeover').length;
+  sM3.send(JSON.stringify({ type: 'cmd', id: 54, cmd: 'control.takeover' })); await waitFor(() => gM3.some((m) => m.id === 54));
+  check(cmds('control.takeover').length - tk1 === 1 && server.owner === hubCid && gM3.some((m) => m.id === 54 && m.ok),
+        'Motor Test 按一下（takeover）：hub 以為自己還拿著也照送伺服器 → 權杖拿回來（原本就地回 ok、下一個指令才 not-operator）');
+  const tk2 = cmds('control.takeover').length;
+  sM3.send(JSON.stringify({ type: 'cmd', id: 55, cmd: 'control.takeover' }));
+  sB2.send(JSON.stringify({ type: 'cmd', id: 56, cmd: 'control.takeover' }));
+  await waitFor(() => gM3.some((m) => m.id === 55) && gB2.some((m) => m.id === 56));
+  check(cmds('control.takeover').length - tk2 === 1 && gM3.some((m) => m.id === 55 && m.ok) && gB2.some((m) => m.id === 56 && m.ok),
+        '兩頁同時 takeover → 伺服器只收到 1 個、兩頁都 ok');
+
+  console.log('[14] 動過馬達的頁面：pagehide（F5／關分頁的 bye）、當掉（ping 漏 3 次）都算不見 → hub 代送 motor.stop（Jimmy ①）');
+  const st14 = cmds('motor.stop').length;
+  M3._fire('pagehide', {}); await waitFor(() => cmds('motor.stop').length > st14);
+  let s14 = cmds('motor.stop').slice(st14).map((x) => JSON.parse(x.value));
+  check(s14.length === 1 && JSON.stringify(s14[0].motors) === '["MInArmX"]' && s14[0].button === 'sbMotorTest_JogP' &&
+        s14[0].reason === 'link.pageGone:bye' && s14[0].source === 'uMotorTest',
+        'pagehide → bye → 放開它按著的 sbMotorTest_JogP（MInArmX，reason=link.pageGone:bye，不是 STOP）');
+  const hung = new MessageChannel();
+  let hungWelcomed = false;
+  hung.port1.onmessage = (e) => {                                                         // 送一個 jog 之後就當掉：不回 pong
+    if (!e.data || e.data.k !== 'welcome') return;
+    hungWelcomed = true;
+    hung.port1.postMessage({ k: 'send', data: JSON.stringify({ type: 'cmd', id: 1, cmd: 'motor.access', tag: 'MOutArmY',
+      value: JSON.stringify({ source: 'uteach', action: 'jogP', motors: ['MOutArmY'], button: 'btnJogP' }) }) });
+  };
+  const st14b = cmds('motor.stop').length;
+  frame.postMessage({ ht9045link: 'hello', v: 1, url: URL, name: 'hung-teach' }, '*', [hung.port2]);
+  await waitFor(() => cmds('motor.stop').length > st14b, 3000);
+  s14 = cmds('motor.stop').slice(st14b).map((x) => JSON.parse(x.value));
+  check(hungWelcomed && s14.length === 1 && JSON.stringify(s14[0].motors) === '["MOutArmY"]' && s14[0].button === 'btnJogP' &&
+        s14[0].reason === 'link.pageGone:ping lost' && s14[0].source === 'uteach',
+        '當掉的 Teach 頁（按著 btnJogP）→ 放開那一個 jog（MOutArmY，reason=link.pageGone:ping lost，不是 STOP）');
+  hung.port1.close();
+
+  console.log('[15] 真的 recipe client、頁面沒載 ht9045_link.js：自己載同資料夾那支、等它、走 hub；TK-2 的載入查詢照舊 acquire；載不到 → 直連');
+  function withLoader(w, loadIt) {
+    let appended = null;
+    w.document = { addEventListener() {}, removeEventListener() {}, hidden: false,
+      currentScript: { src: 'http://127.0.0.1:8055/page/ht9045_recipe_client.js?v=7' },
+      createElement: (t) => ({ tagName: t }),
+      head: { appendChild: (el) => { appended = el; setTimeout(() => { if (loadIt) { load(w, linkCode, 'ht9045_link.js'); el.onload(); } else el.onerror(); }, 30); } } };
+    return () => appended;
+  }
+  const T15 = makeWindow('HW.teach', frame);
+  const app15 = withLoader(T15, true);
+  load(T15, recipeViaLink(recipeCode), 'ht9045_recipe_client.js');
+  check(!!app15() && app15().src === 'http://127.0.0.1:8055/page/ht9045_link.js', '載入同資料夾的 ht9045_link.js（' + (app15() && app15().src) + '）');
+  const RT = T15.HT9045Recipe, conns15 = server.conns.length, acq15 = cmds('control.acquire').length, tk15 = cmds('control.takeover').length;
+  const q15 = { motors: ['MInArmX'], action: 'teachSet', button: 'SetButton030', source: 'uteach', params: { query: true } };
+  const o15 = await outcome(RT.motorAccess(q15));
+  check(o15 === 'ok' && server.conns.length === conns15 && T15.HT9045Link.status().relayedSockets === 1,
+        'Teach 頁的 recipe client 走 relay、伺服器連線數不變（' + o15 + '）');
+  check(cmds('control.takeover').length === tk15 && cmds('control.acquire').length === acq15,
+        'TK-2：載入查詢（params.query）＝自動 → acquire（hub 拿著 → 本地回），不 takeover');
+  const F15 = makeWindow('HW.OldPage', frame);
+  withLoader(F15, false);
+  load(F15, recipeViaLink(recipeCode), 'ht9045_recipe_client.js');
+  const conns15b = server.conns.length;
+  await outcome(F15.HT9045Recipe.motorAccess({ motors: [], action: 'formShow', source: 'uMotorTest' }));
+  check(server.conns.length === conns15b + 1 && !F15.HT9045Link, '載不到 ht9045_link.js → 照舊直接開 WebSocket（多 1 條）');
+
+  console.log('[16] link.token owner:false → recipe client 忘掉權杖：下一個自動動作重新 acquire（不帶著過期的 haveToken 送出去）');
+  other.send(JSON.stringify({ type: 'cmd', id: 2, cmd: 'control.takeover' })); await waitFor(() => server.owner === other.cid);  // 另一個瀏覽器又拿走
+  sB2.send(JSON.stringify({ type: 'cmd', id: 61, cmd: 'recipe.doc.put', tag: 'x', value: '{}' })); await waitFor(() => gB2.some((m) => m.id === 61) && !hub.token.held);
+  check(gB2.some((m) => m.id === 61 && m.error === 'not-operator') && hub.token.held === false, 'setup: IO 頁 not-operator → hub 通知每一頁 link.token');
+  const acq16 = cmds('control.acquire').length;
+  const o16 = await outcome(RT.motorAccess(Object.assign({}, q15, { button: 'SetButton031' })));
+  check(cmds('control.acquire').length === acq16 + 1 && o16 === 'err:control-held',
+        'Teach 頁下一個自動查詢 → 先送 control.acquire（別的瀏覽器拿著 → control-held，照原樣報）（' + o16 + '）');
+  other.close();
+
+  // AI(W906-WSLINK) 20260929 ST01-E3: [17] Jimmy 20260929 -- the frame's closeWin / minimizeWin only set display:none
+  //   (the iframe stays loaded, no bye, pings go on), so [8] / [14] never fire on a normal close; HW.teach.html has
+  //   no HT_WIN release. background.html setWinState (st != 'open') -> HT9045Link.windowHidden(iframe.contentWindow).
+  console.log('[17] 關窗／縮小（display:none，頁面沒卸載）→ hub 放開那一頁還按著的 jog（只那一軸，不是整台 STOP）');
+  const T17 = makeWindow('HW.teach17', frame), M17 = makeWindow('HW.MotorTest17', frame);
+  load(T17, linkCode, 'ht9045_link.js'); load(M17, linkCode, 'ht9045_link.js');
+  const sT17 = T17.HT9045Link.open(URL, 'T17'), sM17 = M17.HT9045Link.open(URL, 'M17');
+  const gT17 = collector(sT17), gM17 = collector(sM17);
+  check(await waitOpen(sT17) && await waitOpen(sM17), 'setup: Teach 與 Motor Test 兩個 iframe 經 hub 開好');
+  sT17.send(JSON.stringify({ type: 'cmd', id: 1, cmd: 'control.acquire' }));
+  await waitFor(() => gT17.some((m) => m.id === 1));
+  const jogReq = (id, source, button, action, motor) => JSON.stringify({ type: 'cmd', id, cmd: 'motor.access', tag: motor,
+    value: JSON.stringify({ source, button, action, kind: 'motion', motors: [motor] }) });
+  const relReq = (id, source, button, motor) => JSON.stringify({ type: 'cmd', id, cmd: 'motor.stop', tag: motor,
+    value: JSON.stringify({ source, button, action: 'stop', kind: 'control', motors: motor ? [motor] : [] }) });
+  const ma0 = cmds('motor.access').length;
+  sT17.send(jogReq(2, 'uteach', 'btnJogP', 'jogP', 'MInArmX'));
+  sM17.send(jogReq(3, 'uMotorTest', 'sbMotorTest_JogP', 'jogP', 'MOutArmY'));
+  await waitFor(() => cmds('motor.access').length >= ma0 + 2);
+  let st17 = cmds('motor.stop').length;
+  let n17 = frame.HT9045Link.windowHidden(T17._src, 'closed');
+  await waitFor(() => cmds('motor.stop').length > st17);
+  let s17 = cmds('motor.stop').slice(st17).map((x) => JSON.parse(x.value));
+  check(n17 === 1 && s17.length === 1 && s17[0].button === 'btnJogP' && JSON.stringify(s17[0].motors) === '["MInArmX"]' &&
+        s17[0].action === 'stop' && s17[0].source === 'uteach' && /windowHidden:closed/.test(s17[0].reason),
+        '關 Teach（按著 btnJogP）→ 一個 motor.stop，button＝btnJogP（伺服器 DoJogRelease：只停 MInArmX），source＝uteach');
+  check(!s17.some((v) => v.button === 'link.pageGone' || v.button === 'btnStop'), '不是整台 STOP（別頁的 HOME／Loop 不受影響）');
+  await sleep(60);
+  check(cmds('motor.stop').length === st17 + 1, 'Motor Test 還按著的 jog 沒有被放開（不是它的視窗）');
+  st17 = cmds('motor.stop').length;
+  n17 = frame.HT9045Link.windowHidden(T17._src, 'closed'); await sleep(60);
+  check(n17 === 0 && cmds('motor.stop').length === st17, '同一個視窗再關一次：已經放開了，什麼都不送');
+  sM17.send(relReq(4, 'uMotorTest', 'sbMotorTest_JogP', 'MOutArmY'));
+  await waitFor(() => cmds('motor.stop').length > st17);
+  st17 = cmds('motor.stop').length;
+  n17 = frame.HT9045Link.windowHidden(M17._src, 'minimized'); await sleep(60);
+  check(n17 === 0 && cmds('motor.stop').length === st17, 'Motor Test 自己放開之後再縮小：沒有按著的 jog，什麼都不送');
+  sM17.send(jogReq(5, 'uMotorTest', 'sbMotorTest_JogN', 'jogN', 'MOutArmY'));
+  await waitFor(() => cmds('motor.access').length >= ma0 + 3);
+  n17 = frame.HT9045Link.windowHidden(M17._src, 'minimized');
+  await waitFor(() => cmds('motor.stop').length > st17);
+  s17 = cmds('motor.stop').slice(st17).map((x) => JSON.parse(x.value));
+  check(n17 === 1 && s17.length === 1 && s17[0].button === 'sbMotorTest_JogN' && /windowHidden:minimized/.test(s17[0].reason),
+        '縮小 Motor Test（按著 jogN）→ 放開 sbMotorTest_JogN（縮小時手指也放不開）');
+  st17 = cmds('motor.stop').length;
+  sT17.send(jogReq(6, 'uteach', 'btnJogP', 'jogP', 'MInArmX'));
+  sT17.send(relReq(7, 'uteach', 'btnJogN', 'MInArmX'));                                   // 放開的是另一顆（沒按著）
+  await waitFor(() => cmds('motor.stop').length > st17);
+  st17 = cmds('motor.stop').length;
+  n17 = frame.HT9045Link.windowHidden(T17._src, 'closed');
+  await waitFor(() => cmds('motor.stop').length > st17);
+  check(n17 === 1 && JSON.parse(cmds('motor.stop').slice(-1)[0].value).button === 'btnJogP',
+        '放開另一顆 jog 鈕不會清掉真正按著的 btnJogP → 關窗時照樣放開它');
+  st17 = cmds('motor.stop').length;
+  sT17.send(jogReq(8, 'uteach', 'btnJogP', 'jogP', 'MInArmX'));
+  sT17.send(relReq(9, 'uteach', 'btnStop', ''));                                          // STOP：golden StopAllMotor
+  await waitFor(() => cmds('motor.stop').length > st17);
+  st17 = cmds('motor.stop').length;
+  n17 = frame.HT9045Link.windowHidden(T17._src, 'closed'); await sleep(60);
+  check(n17 === 0 && cmds('motor.stop').length === st17, '按過 STOP（btnStop）之後關窗：STOP 已經停了全部，不再多送');
+  n17 = frame.HT9045Link.windowHidden({ parent: null }, 'closed') + frame.HT9045Link.windowHidden(null, 'closed');
+  check(n17 === 0, '不認得的視窗／null：什麼都不做');
+  check(hub.status().clients.some((c) => c.name === 'T17') && hub.status().clients.some((c) => c.name === 'M17'),
+        '藏起來的頁面仍是 hub 的 client（沒卸載、連線還在；bye／ping 遺失那條路照舊）');
+  {
+    // AI(W906-WSLINK) 20260929 ST01-E3: compare the CODE only -- every line's // and /* */ comments are cut first (quotes are
+    //   respected, so 'wss://' stays). 3f95f0c8 appended the call AFTER :668's // comment, which made it dead code
+    //   (ST01-E fixed it in fd4ecb82); the old text-only match here passed anyway. W906_WS_BG = another background.html (control).
+    const codeOf = codeOfLine;
+    const bg =fs.readFileSync(process.env.W906_WS_BG || path.join(WEB, '..', 'background.html'), 'utf8');
+    const i = bg.indexOf('function setWinState(');
+    const code = (i >= 0 ? bg.slice(i, bg.indexOf('\n}', i)) : '').split('\n').map(codeOf).join('\n');
+    check(/st!=='open'/.test(code) && /HT9045Link\.windowHidden\(hf\.contentWindow,st\)/.test(code) && /querySelector\('iframe'\)/.test(code),
+          'background.html setWinState：狀態不是 open（closed／minimized）就呼叫 HT9045Link.windowHidden(iframe.contentWindow)——在程式裡，不在 // 註解後面');
+  }
+
+  // AI(W906-WSLINK) 20260929 ST01-E3: [18] Jimmy 「可以，請 ST01-E3 做」 -- HW.teach.html's own release (the HW.MotorTest.html
+  //   pattern). The code part of the teach page's line (comments cut) runs in a sandbox with a fake window / HTMotorAccess.
+  console.log('[18] HW.teach.html 頁面這一側的放開：HT_WIN 關／縮小、pagehide → HTMotorAccess.releaseHeld()（同 Motor Test）');
+  {
+    const tp = process.env.W906_WS_TEACH || path.join(WEB, 'HW.teach.html');
+    const line = fs.readFileSync(tp, 'utf8').split('\n').find((l) => /teachOn\('btnJogN','mouseup'/.test(l)) || '';
+    const code = codeOfLine(line.replace(/\r$/, ''));
+    const ls = {}, parent = { name: 'frame' }, other = { name: 'someone' };
+    let rel = 0;
+    const win = { addEventListener(t, f) { (ls[t] || (ls[t] = [])).push(f); }, parent };
+    const ctx = { window: win, HTMotorAccess: { releaseHeld() { rel++; }, release() {} }, teachOn() {} };
+    let ran = true;
+    try { vm.runInNewContext(code, ctx); } catch (e) { ran = false; console.log('    (' + e.message + ')'); }
+    const fire = (t, ev) => (ls[t] || []).forEach((f) => f(ev || {}));
+    const msg = (d, src) => fire('message', { data: d, source: src || parent });
+    check(ran && (ls.message || []).length === 1 && (ls.pagehide || []).length === 1, '掛了一個 message、一個 pagehide 監聽（程式在 // 註解前面，真的會跑）');
+    msg({ type: 'HT_WIN', id: 'teach', open: true, state: 'open', initial: true });
+    check(rel === 0, 'HT_WIN open（含 initial）→ 不放開');
+    msg({ type: 'HT_WIN', id: 'teach', open: false, state: 'closed' });
+    check(rel === 1, 'HT_WIN closed → releaseHeld 一次');
+    msg({ type: 'HT_WIN', id: 'teach', open: true, state: 'minimized' });
+    check(rel === 2, 'HT_WIN minimized（open 仍是 true）→ 也放開（藏起來的 iframe 收不到 pointerup）');
+    msg({ type: 'HT_WIN', id: 'teach', open: false });
+    check(rel === 3, '舊外框沒有 state：看 open=false → 放開');
+    msg({ type: 'HT_WIN', id: 'teach', open: false, state: 'closed' }, other);
+    msg({ type: 'HT_LANG', lang: 'en' });
+    check(rel === 3, '不是父視窗送的 HT_WIN、別的訊息 → 不理');
+    fire('pagehide');
+    check(rel === 4, 'pagehide（F5／重載／關分頁）→ releaseHeld');
+  }
+
+  // AI(W906-WSLINK) 20260930 ST01-E3: [19] E-017 m11 (St02-E2 review B) -- a window close sent two identical jog releases
+  //   (the hub's windowHidden, then the page's own HT_WIN -> releaseHeld). The page's copy now rides on the hub's release.
+  console.log('[19] 關窗時同一個 jog 只放開一次：頁面自己的放開等 hub 那次的結果（成功＝回 ok；被拒＝照送當重試）；STOP 一律照送（m11）');
+  {
+    const P = makeWindow('HW.teach19', frame); load(P, linkCode, 'ht9045_link.js');
+    const sP = P.HT9045Link.open(URL, 'P19'), gP = collector(sP);
+    check(await waitOpen(sP), 'setup: Teach iframe P19');
+    sP.send(JSON.stringify({ type: 'cmd', id: 1, cmd: 'control.acquire' })); await waitFor(() => gP.some((m) => m.id === 1));
+    const press = (id, button, action) => JSON.stringify({ type: 'cmd', id, cmd: 'motor.access', tag: 'MInArmX',
+      value: JSON.stringify({ source: 'uteach', button, action, kind: 'motion', motors: ['MInArmX'] }) });
+    const rel = (id, button) => JSON.stringify({ type: 'cmd', id, cmd: 'motor.stop', tag: 'MInArmX',
+      value: JSON.stringify({ source: 'uteach', button, action: 'stop', kind: 'control', motors: ['MInArmX'], reason: 'release' }) });
+    const ackOf = (id) => gP.find((m) => m.type === 'ack' && m.id === id);
+    let ma = cmds('motor.access').length, st = cmds('motor.stop').length;
+    sP.send(press(2, 'btnJogP', 'jogP')); await waitFor(() => cmds('motor.access').length > ma);
+    frame.HT9045Link.windowHidden(P._src, 'closed');
+    sP.send(rel(3, 'btnJogP'));                                                            // the page's own HT_WIN release
+    await waitFor(() => !!ackOf(3)); await sleep(40);
+    check(cmds('motor.stop').length === st + 1 && ackOf(3).ok && ackOf(3).linkDup === true,
+          '關窗：hub 放開 btnJogP 一次，頁面自己的放開不再送（回 ok、linkDup）→ 伺服器只收到 1 個停止');
+    server.slow = 60;                                                                       // the page's release arrives before the hub's ack
+    ma = cmds('motor.access').length; st = cmds('motor.stop').length;
+    sP.send(press(4, 'btnJogN', 'jogN')); await waitFor(() => cmds('motor.access').length > ma);
+    frame.HT9045Link.windowHidden(P._src, 'minimized');
+    sP.send(rel(5, 'btnJogN'));
+    await waitFor(() => !!ackOf(5)); await sleep(100);
+    check(cmds('motor.stop').length === st + 1 && ackOf(5).ok && ackOf(5).linkDup === true,
+          '頁面的放開比 hub 的 ack 先到：等 hub 那次的結果再回 ok，伺服器仍只收到 1 個停止');
+    server.refuseStop = 'btnJogP';
+    ma = cmds('motor.access').length; st = cmds('motor.stop').length;
+    sP.send(press(6, 'btnJogP', 'jogP')); await waitFor(() => cmds('motor.access').length > ma);
+    frame.HT9045Link.windowHidden(P._src, 'closed');
+    sP.send(rel(7, 'btnJogP'));
+    await waitFor(() => !!ackOf(7), 3000); await sleep(100);
+    check(cmds('motor.stop').length === st + 2 && ackOf(7) && ackOf(7).ok === false && !ackOf(7).linkDup,
+          'hub 的放開被伺服器拒絕 → 頁面自己的放開照送（重試），頁面拿到伺服器的真結果');
+    server.refuseStop = null; server.slow = 0;
+    ma = cmds('motor.access').length; st = cmds('motor.stop').length;
+    sP.send(press(8, 'btnJogP', 'jogP')); await waitFor(() => cmds('motor.access').length > ma);
+    frame.HT9045Link.windowHidden(P._src, 'closed');
+    await sleep(CFG.dupReleaseMs + 60);
+    sP.send(rel(9, 'btnJogP')); await waitFor(() => !!ackOf(9));
+    check(cmds('motor.stop').length === st + 2 && !ackOf(9).linkDup, '超過重複判定時間（' + CFG.dupReleaseMs + ' ms）才來的放開 → 照送');
+    ma = cmds('motor.access').length; st = cmds('motor.stop').length;
+    sP.send(press(10, 'btnJogP', 'jogP')); await waitFor(() => cmds('motor.access').length > ma);
+    frame.HT9045Link.windowHidden(P._src, 'closed');
+    sP.send(rel(11, 'btnStop')); await waitFor(() => !!ackOf(11));
+    check(cmds('motor.stop').length === st + 2 && !ackOf(11).linkDup, '頁面的 STOP（btnStop）絕不攔：照送');
+    ma = cmds('motor.access').length; st = cmds('motor.stop').length;
+    sP.send(press(12, 'btnJogP', 'jogP')); await waitFor(() => cmds('motor.access').length > ma);
+    frame.HT9045Link.windowHidden(P._src, 'closed');
+    sP.send(press(13, 'btnJogP', 'jogP')); sP.send(rel(14, 'btnJogP'));                  // pressed again, then released
+    await waitFor(() => !!ackOf(14));
+    check(cmds('motor.stop').length === st + 2 && !ackOf(14).linkDup, '藏起來之後又按了同一顆 → 那一次的放開是新的，照送');
+    sP.close();
+  }
+
+  // AI(W906-WSLINK) 20260930 ST01-E3: [20] E-017 m13 (St02-E2 review B) -- relayOk was one global, sticky flag
+  console.log('[20] relay 探測依網址記：hello 逾時只讓這一條直連（警告、下次再問）；別的網址回 nohub 不影響 bridge 那條（m13）');
+  {
+    const slowFrame = makeWindow('m13-frame', null);                                        // no link yet: the hello goes unanswered
+    const X = makeWindow('m13-child', slowFrame); load(X, linkCode, 'ht9045_link.js');
+    const warns = []; X.console = { warn: (t) => warns.push(String(t)), log() {}, error() {}, info() {} };
+    const cBefore = server.conns.length;
+    const sX1 = X.HT9045Link.open(URL, 'x1');
+    check(await waitOpen(sX1, 1500) && sX1.via === 'direct' && server.conns.length === cBefore + 1, 'hello 逾時 → 這一條直連');
+    check(warns.length === 1 && /no hub answered/.test(warns[0]) && X.HT9045Link.status().relayMisses === 1,
+          '逾時會在 console 警告（不再靜默），status().relayMisses=1');
+    load(slowFrame, linkCode, 'ht9045_link.js'); slowFrame.HT9045Link.startHub(URL);         // the frame's hub is up now
+    const sX2 = X.HT9045Link.open(URL, 'x2');
+    check(await waitOpen(sX2, 1500) && sX2.via === 'relay', '下一次 open() 再問一次 → 這次走 hub（原本：一次逾時之後永遠直連）');
+    const Y = makeWindow('m13-y', frame); load(Y, linkCode, 'ht9045_link.js');
+    const sY1 = Y.HT9045Link.open('ws://127.0.0.1:9045/ht9045-json/', 'sim');
+    check(await waitOpen(sY1, 1500) && sY1.via === 'direct', 'setup: 模擬器網址 → 外框回 nohub → 直連');
+    const sY2 = Y.HT9045Link.open(URL, 'bridge');
+    check(await waitOpen(sY2, 1500) && sY2.via === 'relay' && Y.HT9045Link.status().relay[URL] === true &&
+          Y.HT9045Link.status().relay['ws://127.0.0.1:9045/ht9045-json'] === 'nohub',
+          '同一個 iframe 之後開 bridge 網址 → 照樣走 hub（nohub 只記在那個網址）');
+    [sX1, sX2, sY1, sY2].forEach((x) => x.close());
+    await sleep(20);
+  }
+
+  // AI(W906-WSLINK) 20260930 M1: over the whole run, every stop the HUB itself sent (reason link.*) is a jog release
+  {
+    const hubStops = cmds('motor.stop').map((x) => JSON.parse(x.value)).filter((v) => /^link[.]/.test(v.reason || '') || v.button === 'link.pageGone');
+    check(hubStops.length > 0 && hubStops.every((v) => /jog/i.test(v.button) && v.button !== 'link.pageGone'),
+          '整段測試裡 hub 自己送的 ' + hubStops.length + ' 個停止，全部是 jog 放開（沒有一個是 STOP／link.pageGone）');
+  }
+
+  console.log('\n' + pass + ' passed, ' + fail + ' failed');
+  process.exit(fail ? 1 : 0);
+})().catch((e) => { console.log('FAIL exception: ' + (e && e.stack || e)); process.exit(1); });
