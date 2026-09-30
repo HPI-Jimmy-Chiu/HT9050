@@ -1,0 +1,447 @@
+From b9000ea2629ab70c7abd86706f0f1ceadfcf3a0e Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 30 Sep 2026 21:00:27 +0800
+Subject: [PATCH] VACUNIT-1203 (web): the Vacuum Unit hardware buttons and live
+ values (see the C++ commit of the same name)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+page/ht9045_vacuumunit_c.js section (3): the hardware half is no longer disabled.
+- On open (after editlist.get = golden FormShow) the page sends vacuum.open, then
+  vacuum.get {act:'timer'} every second (golden tmr1Timer); HT_WIN open=false (or a snapshot
+  saying the window is not open in wb_serve) stops it and sends vacuum.close.
+- Each panel shows what C++ drew: current value, threshold, Event text and colour, the vacuum
+  OK LED, and the ^ / v colours from the DO read-back; a value that cannot be read is grey,
+  not "off".
+- A button is unlocked only when the snapshot says available; otherwise it stays locked and
+  its tooltip (and the status bar, on a click) gives C++'s reason, e.g. "ring 1 上沒有站 0x20"
+  or the real module name at 0x50 that is not in the ECAT-VC8 table. The browser decides no
+  interlock itself.
+- Set / ^ / v / Set All (in, index, out) / Reset: a confirm dialog with the station, VC, DO
+  channel or SDO address and the value, then control.takeover + the command; the status bar
+  says per write: sent to the card / DRY RUN / refused (why) / card error. After Set All the
+  arm's edSV inputs take (int)kPa like golden (saved only by Save).
+- The Set All inputs are no longer disabled; their keypad is golden edSetInArmClick
+  (VacuumUnit.cpp:599, N_DOUBLE -116..148).
+- Save / Exit unchanged. HW.VacuumUnit.html unchanged.
+
+Checked offline in headless Edge with a stub recipe client (no network, no wb_serve): no VC8
+= all 32 panel Set buttons and every ^ / v locked with the reason, a click sends nothing;
+a fake VC8 on the InArm station unlocks only the InArm panels and Set All InArm; ^, Set,
+Set All send the expected commands after the confirm; a refused press shows "沒有送出" with
+the reason; closing the window sends vacuum.close and locks everything.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ page/ht9045_vacuumunit_c.js | 342 +++++++++++++++++++++++++++++++-----
+ 1 file changed, 300 insertions(+), 42 deletions(-)
+
+diff --git a/page/ht9045_vacuumunit_c.js b/page/ht9045_vacuumunit_c.js
+index 1a412dc..fcf0f19 100644
+--- a/page/ht9045_vacuumunit_c.js
++++ b/page/ht9045_vacuumunit_c.js
+@@ -16,16 +16,24 @@
+  *  (2) 存檔鈕 spbSave → 引擎 HT9045Page.save()（golden spbSaveClick 沒有 YES/NO → 不登錄 GB_SAVE_Q，頁面仍確認一次，引擎慣例）。
+  *      這一頁沒有 B 路欄位，引擎不會自己攔存檔鈕 → 由這裡綁。sbtExit 照頁面內建 .exitbtn 關視窗（golden sbtExitClick → Close →
+  *      FormClose：ReadFile＋DoIniDataToForm，不寫檔）。
+- *  (3) 硬體指令鈕停用（網頁 → 機台的指令通道還沒設計；互鎖在 C++ 端，瀏覽器不可直接驅動硬體）：
+- *        每顆面板的 Set（btnSV → MyVacuumPanel.cpp:385 WriteVaccumThreshold → MyLaneIO.SetIOValueThread 寫 ECAT-VC8 閥值）
+- *        ^／v（bplOn／bplOff → MyVacuumPanel.cpp:391 Acm_DaqDoSetBitEx 吸／破真空 DO）
+- *        Set All Value 三顆（btnSetInArmClick VacuumUnit.cpp:551：改全部 edSV＋逐顆寫 VC8 閥值）與它的三個輸入框
+- *        Reset（sbResetClick :409：清面板事件、下一個 tick 重寫 VC8 閥值模式 SDO）
+- *      ⚠ 這代表：頁面 Save 只把 edSV 存進 HandlerCondition.Data（golden 也是只存檔）；VC8 硬體閥值要在 golden BCB 按 Set 才會生效。
++ *  (3) AI(W906-VACUNIT-1203) 20260930：硬體那一半 —— 原本這裡把硬體鈕全部停用，現在接上 C++（EastSun 20260930
++ *      「vacuunit 所有功能按鈕和內部功能要有所對應，我需要實際上有功能」）。WS 指令（FileRW/TestIF_File_VacuumUnit.cpp 檔尾）：
++ *        vacuum.open／vacuum.get {act:'timer'}（每秒一次＝golden tmr1Timer）／vacuum.close   —— 讀，不拿操作權杖
++ *        vacuum.setSV  {panel,kPa}                 每顆面板的 Set（golden btnSVClick → WriteVaccumThreshold）
++ *        vacuum.do     {panel,which:'on'|'off',value}  ^ 吸真空／v 破真空（golden btnVaccumOnOffOnClick；value＝按下之後的 Down）
++ *        vacuum.setAll {arm:'in'|'index'|'out',kPa}   Set All Value 三顆（golden btnSetInArmClick，Tag 由 C++ 照 DFM 表對應）
++ *        vacuum.reset  {}                            Reset（golden sbResetClick）
++ *      規則（每一條都有理由）：
++ *        * 畫面上的現值／閥值／Event／燈／^v 的底色＝C++ 快照裡 golden 真的畫出來的東西，不是頁面自己記的狀態；
++ *          讀不到的燈與 DO 畫成灰色（不知道），不畫成「關」。
++ *        * 一顆鈕只在快照說 available 時才能按；不能按的鈕鎖住，滑鼠停在上面看得到 C++ 給的原因（例如「ring 1 站 0x50 回報的模組是
++ *          ECx-P32-HON …，不在 ECAT-VC8 身分表」）。瀏覽器不做互鎖判斷 —— 互鎖、身分檢查、範圍檢查都在 C++，這裡只是不讓人按注定被拒的鈕。
++ *        * 每一次寫入先跳確認框，送出後把回應講清楚：已送到卡片／DRY RUN（沒有真的寫）／被拒（原因）／卡片回錯誤。
++ *        * 視窗關掉（外框 HT_WIN open=false）就停止輪詢並送 vacuum.close；golden FormClose 也把 tmr1 關掉。
++ *      ⚠ 今天這台的 ring 上沒有 ECAT-VC8（EastSun 20260930「沒有，先把軟體做好」）：每顆面板會顯示 golden 的 999.0／Error3／Error5，
++ *        每顆硬體鈕鎖住並寫明原因。這是預期，不是故障。
+  *  (4) 小鍵盤：golden edSVClick（MyVacuumPanel.cpp:382）N_DOUBLE (-116.0, 148.0)；Edit1 golden 沒有小鍵盤事件 → 引擎的通用鍵盤
+- *      （範圍取清單筆 0~300）。
+- *
+- * 現值／閥值／Event／myld1（tmr1Timer :255 讀 VC8）是即時硬體顯示，不在讀寫檔範圍：頁面保留 DFM 的 0.0／Event。
++ *      （範圍取清單筆 0~300）。Set All 的三個輸入框同 golden edSetInArmClick（VacuumUnit.cpp:599）。
+  * ---------------------------------------------------------------------------
+  */
+ (function () {
+@@ -39,8 +47,8 @@
+ 
+   var get0 = R.editlistGet;
+   var ARMS = { myPalArm1: 'scrlbxIndexArm1', myPalArm2: 'scrlbxIndexArm2', myPalInArm: 'scrlbxInArm', myPalOutArm: 'scrlbxOutArm' };
+-  var KB_SV = ['DOUBLE', 0, true, -116.0, 148.0];          // golden MyVacuumPanel.cpp:382 edSVClick
+-  var HW_NOTE = '網頁停用：golden 這顆鈕直接寫 ECAT-VC8 硬體（網頁 → 機台的指令通道還沒設計）。存檔只寫 HandlerCondition.Data。';
++  var KB_SV = ['DOUBLE', 0, true, -116.0, 148.0];          // golden MyVacuumPanel.cpp:382 edSVClick / VacuumUnit.cpp:599 edSetInArmClick
++  var ON_BG = '#45b0dc', OFF_BG = '#014a9d', NA_BG = '#8a8a8a';   // TBtnPanelLane TrueColor / Color；灰＝讀不到
+ 
+   function $(id) { return document.getElementById(id); }
+   function say2(msg, colour) {
+@@ -49,43 +57,47 @@
+     if (window.HT9045Wire && HT9045Wire.say) HT9045Wire.say((prev ? prev + '\n' : '') + msg, colour || (b && b.style.color) || '#ffcc66');
+     console.info('[VacuumUnit/C] ' + msg);
+   }
++  function sayNow(msg, colour) {                        // 取代狀態列（硬體鈕的回應不要疊在舊訊息後面）
++    if (window.HT9045Wire && HT9045Wire.say) HT9045Wire.say(msg, colour || '#ffcc66');
++    console.info('[VacuumUnit/C] ' + msg);
++  }
+ 
+-  /* ---- (3) 硬體指令鈕停用 ------------------------------------------------------------------ */
+-  function lockButton(el, why) {
+-    if (!el || el.__vuLocked) return el;
+-    if (el.tagName !== 'BUTTON' && el.tagName !== 'INPUT') {   // TBtnPanelLane（div）：換成不帶監聽器的複本
++  /* ---- (3a) 鈕的鎖：鎖住＝不能按，title 寫原因；div 形的 TBtnPanelLane 換成不帶監聽器的複本（它自己的 toggle 會假裝有動作） ---- */
++  function plain(el) {
++    if (!el || el.__vuPlain) return el;
++    if (el.tagName !== 'BUTTON' && el.tagName !== 'INPUT') {
+       var n = el.cloneNode(true);
+       el.parentNode.replaceChild(n, el);
+       el = n;
+-      el.style.cursor = 'not-allowed';
+-      el.style.opacity = '0.55';
+-      el.setAttribute('aria-disabled', 'true');
+-    } else {
+-      el.disabled = true;
+     }
+-    el.__vuLocked = true;
+-    el.title = (el.title ? el.title + '\n' : '') + why;
++    el.__vuPlain = true;
++    if (el.__vuTitle == null) el.__vuTitle = el.title || '';
+     return el;
+   }
+-  function lockPanel(gb) {
+-    if (!gb || gb.__vuPanel) return;
+-    gb.__vuPanel = true;
+-    Array.prototype.forEach.call(gb.querySelectorAll('button'), function (b) {
+-      lockButton(b, 'btnSV Set → MyVacuumPanel.cpp:385 WriteVaccumThreshold（VC8 閥值）。' + HW_NOTE);
+-    });
+-    ['_bplOn', '_bplOff'].forEach(function (s) {
+-      lockButton($(gb.id + s), (s === '_bplOn' ? 'bplOn 吸真空' : 'bplOff 破真空') + ' → MyVacuumPanel.cpp:391 Acm_DaqDoSetBitEx（DO）。' + HW_NOTE);
+-    });
++  function setLock(el, locked, why) {
++    el = plain(el);
++    if (!el) return;
++    if (el.tagName === 'BUTTON' || el.tagName === 'INPUT') el.disabled = !!locked;
++    else {
++      el.style.cursor = locked ? 'not-allowed' : 'pointer';
++      el.style.opacity = locked ? '0.55' : '1';
++      el.setAttribute('aria-disabled', locked ? 'true' : 'false');
++    }
++    el.__vuLocked = !!locked;
++    el.__vuWhy = why || '';
++    el.title = el.__vuTitle ? el.__vuTitle + (why ? '\n' + why : '') : (why || '');
+   }
+-  function lockStatic() {
+-    ['btnSetInArm', 'btnSetIndexArm', 'btnSetOutArm'].forEach(function (id) {
+-      lockButton($(id), 'btnSetInArmClick（VacuumUnit.cpp:551）：改全部 edSV＋逐顆寫 VC8 閥值。' + HW_NOTE);
+-    });
+-    ['edSetInArm', 'edSetIndexArm', 'edSetOutArm'].forEach(function (id) {
+-      lockButton($(id), 'Set All Value 的輸入（只給上面的 Set 用）。' + HW_NOTE);
+-    });
+-    lockButton($('sbReset'), 'sbResetClick（VacuumUnit.cpp:409）：清面板事件，下一個 tick 重寫 VC8 閥值模式（SDO）。' + HW_NOTE);
+-    Array.prototype.forEach.call(document.querySelectorAll('.vacpanel'), lockPanel);
++  function panelSetBtn(gb) { return gb ? gb.querySelector('button') : null; }
++  function lockPanel(gb, why) {
++    if (!gb) return;
++    setLock(panelSetBtn(gb), true, why);
++    setLock($(gb.id + '_bplOn'), true, why);
++    setLock($(gb.id + '_bplOff'), true, why);
++  }
++  var WAIT_NOTE = '等 C++ 的即時快照（vacuum.open）——還沒確認這一站是不是 ECAT-VC8，所以先鎖住';
++  function lockStatic(why) {
++    ['btnSetInArm', 'btnSetIndexArm', 'btnSetOutArm', 'sbReset'].forEach(function (id) { setLock($(id), true, why); });
++    Array.prototype.forEach.call(document.querySelectorAll('.vacpanel'), function (gb) { lockPanel(gb, why); });
+   }
+ 
+   /* ---- (1) golden Initial 的面板數 --------------------------------------------------------- */
+@@ -118,7 +130,7 @@
+                                    event: 'Event', threshold: '0.0', sv: '0', left: col * 81, top: 10 + row * 177 });
+       host.appendChild(gb);
+       host.style.width = Math.max(parseInt(host.style.width, 10) || 0, (col + 1) * 81) + 'px';
+-      lockPanel(gb);
++      lockPanel(gb, (VU.snap ? '' : WAIT_NOTE));
+       if ($(e.id)) kbAttach($(e.id));
+       made.push(arr + '_' + col + '_' + row);
+     });
+@@ -131,6 +143,7 @@
+     if (st !== STRUCT) return get0.apply(this, arguments);
+     return get0.apply(this, arguments).then(function (d) {
+       buildMissing(d);                       // 引擎在這個 promise 的 then 裡才套值：元件要先在
++      setTimeout(vuOpen, 0);                 // (3) golden FormShow 跑完（editlist.get）→ 即時畫面開始
+       return d;
+     });
+   };
+@@ -155,8 +168,252 @@
+   }
+   bindSave();
+ 
++  /* ---- (3) 硬體那一半：即時快照與硬體鈕（AI(W906-VACUNIT-1203) 20260930） ----------------------------- */
++  var VU = { snap: null, live: false, timer: null, inflight: false, busy: false, lastPollErr: '', said: '' };
++
++  function unwrap(m) {                                  // 伺服器把 JSON 欄位併進 ack；舊寫法放在 value 字串裡（同 recipe client）
++    if (m && typeof m.value === 'string') { try { var j = JSON.parse(m.value); if (j && typeof j === 'object') return j; } catch (e) {} }
++    return m;
++  }
++  function vuCmd(cmd, obj) { return R.rawCmd(cmd, { value: JSON.stringify(obj || {}) }).then(unwrap); }
++
++  function stationOf(s, p) { return (s && s.stations && s.stations[p.st]) || null; }
++  function hex2(n) { var h = (n >>> 0).toString(16).toUpperCase(); return '0x' + (h.length < 2 ? '0' + h : h); }
++  function addrText(s, p) {
++    var st = stationOf(s, p);
++    return 'ring ' + (st ? st.ring : '?') + '・站 ' + (st ? hex2(st.station) : '?') + '・VC' + p.vc +
++           '（吸真空 DO ' + p.onCh + '／破真空 DO ' + p.offCh + '／真空 OK DI ' + p.diCh + '）';
++  }
++  function paintLed(el, v) {
++    if (!el) return;
++    if (el.setValue) el.setValue(v === true);
++    el.style.opacity = (v === null || v === undefined) ? '0.4' : '1';
++  }
++  function paintBpl(el, v, locked) {
++    el = plain(el);
++    if (!el) return;
++    el.style.background = v === true ? ON_BG : v === false ? OFF_BG : NA_BG;
++    el.dataset.down = v === true ? '1' : '0';
++    el.style.opacity = locked ? '0.55' : '1';
++  }
++
++  function render(s) {
++    if (!s || !s.panels) return;
++    VU.snap = s;
++    var armOk = { myPalInArm: false, myPalArm1: false, myPalArm2: false, myPalOutArm: false };
++    var firstWhy = {};
++    s.panels.forEach(function (p) {
++      var gb = $(p.id);
++      if (!gb) return;                                   // 頁面沒有這顆（例如欄數不同）
++      var arr = p.id.replace(/_\d+_\d+$/, '');
++      if (p.vis) {
++        if (gb.setCurrent) gb.setCurrent(p.cur);
++        if (gb.setThreshold) gb.setThreshold(p.thr);
++        if (gb.setEvent) gb.setEvent(p.evt, p.evtColor);
++      }
++      paintLed($(p.id + '_myld1'), p.led);
++      var why = p.available ? '' : (p.reason || '不可用');
++      var where = addrText(s, p);
++      var setBtn = panelSetBtn(gb);
++      setLock(setBtn, !p.available, (p.available ? '' : '🔒 ' + why + '\n') + where);
++      setLock($(p.id + '_bplOn'), !p.available, (p.available ? '' : '🔒 ' + why + '\n') + 'bplOn 吸真空 ' + where);
++      setLock($(p.id + '_bplOff'), !p.available, (p.available ? '' : '🔒 ' + why + '\n') + 'bplOff 破真空 ' + where);
++      paintBpl($(p.id + '_bplOn'), p.on, !p.available);
++      paintBpl($(p.id + '_bplOff'), p.off, !p.available);
++      if (p.available) armOk[arr] = true;
++      else if (!firstWhy[arr]) firstWhy[arr] = why;
++    });
++    var block = s.writeBlock || '';
++    var idxOk = armOk.myPalArm1 || armOk.myPalArm2;
++    setLock($('btnSetInArm'), !armOk.myPalInArm, armOk.myPalInArm ? 'Set All：InArm（golden btnSetInArmClick Tag 0）' : '🔒 ' + (block || firstWhy.myPalInArm || '沒有可寫的 ECAT-VC8'));
++    setLock($('btnSetIndexArm'), !idxOk, idxOk ? 'Set All：Index Arm1／Arm2（Tag 1）' : '🔒 ' + (block || firstWhy.myPalArm1 || firstWhy.myPalArm2 || '沒有可寫的 ECAT-VC8'));
++    setLock($('btnSetOutArm'), !armOk.myPalOutArm, armOk.myPalOutArm ? 'Set All：OutArm（Tag 2）' : '🔒 ' + (block || firstWhy.myPalOutArm || '沒有可寫的 ECAT-VC8'));
++    var resetOk = !!s.live && !block;
++    setLock($('sbReset'), !resetOk, resetOk ? 'Reset：golden sbResetClick（清面板事件，下一個 tick 重讀並重寫閥值模式）' : '🔒 ' + (block || '即時畫面沒有在跑'));
++    // Set All 的三個輸入框不鎖（改數字不會動到硬體）；小鍵盤由引擎 attachKeyboards 依 (4) 的 kb 表掛上，這裡不再掛第二個
++
++    // 一行總結（換狀況才講一次）
++    var nOk = (s.stations || []).filter(function (x) { return x.writable; }).length;
++    var line;
++    if (!s.route) line = '真空單元：這個 wb_serve 沒有 ECAT-VC8 路由 —— 只有讀寫檔（Save），硬體鈕鎖住';
++    else if (block) line = '真空單元：' + block;
++    else if (!nOk) {
++      var st0 = (s.stations || []).filter(function (x) { return !x.writable; })[0];
++      line = '真空單元：ring 上沒有可用的 ECAT-VC8（' + (s.stations || []).length + ' 站都不行）—— 面板顯示 golden 的 999.0／Error3／Error5，硬體鈕鎖住。' +
++             (st0 ? '\n例：' + st0.why : '');
++    } else line = '真空單元：即時畫面（golden tmr1Timer 每秒）—— ' + nOk + '／' + (s.stations || []).length + ' 站 ECAT-VC8 可用' + (s.dryRun ? '（DRY RUN：按了也不會真的寫）' : '');
++    if (line !== VU.said) { VU.said = line; say2(line, nOk ? '#9f9' : '#ffcc66'); }
++  }
++
++  function poll() {
++    if (VU.inflight || !VU.live) return;
++    VU.inflight = true;
++    vuCmd('vacuum.get', { act: 'timer' }).then(function (s) {
++      VU.inflight = false; VU.lastPollErr = '';
++      if (s && s.open === false) {                               // golden FormClose 跑過了（視窗關掉），或 wb_serve 重新啟動過
++        stopPolling();
++        lockStatic('Vacuum Unit 在 wb_serve 那邊沒有開著（視窗關過、或 wb_serve 重新啟動過）——請重新開啟這個視窗');
++        return;
++      }
++      render(s);
++    }, function (e) {
++      VU.inflight = false;
++      var m = String(e && e.message || e);
++      if (m !== VU.lastPollErr) { VU.lastPollErr = m; say2('⚠ 真空單元即時畫面讀不到：' + m, '#f88'); lockStatic('即時畫面讀不到（' + m + '）'); }
++    });
++  }
++  function stopPolling() {
++    VU.live = false;
++    if (VU.timer) { clearInterval(VU.timer); VU.timer = null; }
++  }
++  function vuOpen() {
++    vuCmd('vacuum.open', {}).then(function (s) {
++      render(s);
++      VU.live = true;
++      if (!VU.timer) VU.timer = setInterval(poll, 1000);   // golden tmr1 Interval 1000 ms（DFM 預設）
++    }, function (e) {
++      lockStatic('vacuum.open 被拒：' + (e && e.message || e));
++      say2('⚠ 真空單元即時畫面沒有啟動：' + (e && e.message || e), '#f88');
++    });
++  }
++  window.addEventListener('message', function (ev) {      // 外框 background.html 的視窗狀態（ht9045_wire_engine.js H4 同一個訊息）
++    var m = ev && ev.data;
++    if (!m || m.type !== 'HT_WIN') return;
++    if (m.open === false && (VU.live || VU.timer)) {
++      stopPolling();
++      vuCmd('vacuum.close', {}).then(null, function () {});
++      lockStatic('視窗已關閉');
++    }
++  });
++
++  // 操作權杖：跟 IO 頁同一個作法（ht9045_io_do.js）——按下去就接管，30 秒沒再按就還
++  var releaseTimer = null;
++  function scheduleRelease() {
++    if (releaseTimer) clearTimeout(releaseTimer);
++    releaseTimer = setTimeout(function () {
++      releaseTimer = null;
++      if (VU.busy) { scheduleRelease(); return; }
++      var st = (typeof R.status === 'function') ? R.status() : null;
++      if (st && st.holdsToken) return;
++      R.rawCmd('control.release').then(null, function () {});
++    }, 30000);
++  }
++
++  function describe(what, a) {
++    var ws = (a && a.writes) || [];
++    var lines = [what];
++    if (a && a.note) lines.push(a.note);
++    if (!ws.length) lines.push('（沒有任何寫入：golden 在這一步沒有要寫卡片的東西）');
++    ws.slice(0, 12).forEach(function (w) {
++      var tgt = 'ring ' + w.ring + ' 站 ' + hex2(w.station) + ' ' + (w.kind === 'do' ? 'DO ' + w.chan : hex2(w.index).replace('0x', '') + 'h:' + hex2(w.sub).replace('0x', '') + 'h') + ' = ' + w.value;
++      var res = w.issued ? (w.rc === 0 ? '已送到卡片' : '卡片回錯誤 0x' + (w.rc >>> 0).toString(16).toUpperCase()) : w.dryRun ? 'DRY RUN（沒有真的寫）' : '被拒';
++      lines.push('・' + tgt + ' → ' + res + (w.why ? '：' + w.why : ''));
++    });
++    if (ws.length > 12) lines.push('…還有 ' + (ws.length - 12) + ' 筆（' + (a.issued || 0) + ' 送出／' + (a.dry || 0) + ' DRY／' + (a.refused || 0) + ' 被拒／' + (a.failed || 0) + ' 錯誤）');
++    var level = !ws.length ? 'info' : (a.issued && !a.refused && !a.failed) ? 'ok' : (a.dry && !a.refused && !a.failed) ? 'dry' : 'err';
++    return { text: lines.join('\n'), colour: level === 'ok' ? '#9f9' : level === 'dry' ? '#ffcc66' : level === 'err' ? '#f88' : '#cde' };
++  }
++
++  function press(cmd, obj, label) {
++    if (VU.busy) { sayNow('上一個指令還在路上，請稍候', '#ffcc66'); return; }
++    VU.busy = true;
++    var acq = R.rawCmd('control.takeover').then(function () { return null; }, function (e) { return e || new Error('control.takeover failed'); });
++    vuCmd(cmd, obj).then(function (a) {
++      var d = describe(label, a);
++      sayNow(d.text, d.colour);
++      if (a && a.panels) render(a);
++      return a;
++    }, function (e) {
++      return acq.then(function (ae) {
++        var m = String(e && e.message || e);
++        if (/no ack within/.test(m)) m = '沒有回應（逾時）——不代表沒有執行，看一下畫面與 wb_serve 主控台';
++        else if (ae && !/socket closed|no ack within/i.test(String(ae.message || ae))) m += '\n（操作權杖：' + (ae.message || ae) + '）';
++        sayNow('❌ ' + label + '\n沒有送出：' + m, '#f88');
++      });
++    }).then(function () { VU.busy = false; scheduleRelease(); poll(); });
++  }
++
++  function panelOf(el) { return el && el.closest ? el.closest('.vacpanel') : null; }
++  function snapPanel(id) { return VU.snap && VU.snap.panels ? VU.snap.panels.filter(function (p) { return p.id === id; })[0] : null; }
++  function captionOf(gb) { var c = gb && gb.querySelector('span'); return c ? c.textContent.trim() : ''; }
++  function numOf(el) {
++    var v = el ? String(el.value).trim() : '';
++    var n = Number(v);
++    return (v === '' || !isFinite(n)) ? null : n;
++  }
++  function kpaOk(n) { return n !== null && n >= -116 && n <= 148; }
++
++  function onSet(gb) {
++    var p = snapPanel(gb.id);
++    if (!p || !p.available) { sayNow('❌ ' + gb.id + ' 不能寫：' + (p ? p.reason : '還沒有快照'), '#f88'); return; }
++    var n = numOf($(gb.id + '_edSV'));
++    if (!kpaOk(n)) { sayNow('❌ 閥值要是 -116 ~ 148 kPa 的數字（golden 小鍵盤範圍）', '#f88'); return; }
++    if (!window.confirm('寫入 ECAT-VC8 真空閥值\n面板 ' + captionOf(gb) + '（' + gb.id + '）\n' + addrText(VU.snap, p) +
++                        '\n閥值 = ' + n + ' kPa（SDO ' + (0x8000 + 0x10 * p.vc).toString(16).toUpperCase() + 'h:13h）' +
++                        (p.modeOk ? '' : '\n（這一格的閥值模式還沒寫成功：下一個 tick 照 golden 寫 02h = 1）') + '\n\n確定送出？')) return;
++    press('vacuum.setSV', { panel: gb.id, kPa: n }, 'Set（golden btnSVClick）' + captionOf(gb) + ' → ' + n + ' kPa');
++  }
++  function onBpl(gb, which) {
++    var p = snapPanel(gb.id);
++    if (!p || !p.available) { sayNow('❌ ' + gb.id + ' 不能寫：' + (p ? p.reason : '還沒有快照'), '#f88'); return; }
++    var cur = which === 'on' ? p.on : p.off;
++    if (cur !== true && cur !== false) { sayNow('❌ 讀不到這個輸出目前的狀態，不知道要切成什麼，所以不送', '#f88'); return; }
++    var down = cur ? 0 : 1;                              // golden Ptr->Down = !Ptr->Down
++    var name = which === 'on' ? '吸真空（^ bplOn）' : '破真空（v bplOff）';
++    if (!window.confirm(name + ' → ' + (down ? 'ON' : 'OFF') + '\n面板 ' + captionOf(gb) + '（' + gb.id + '）\n' + addrText(VU.snap, p) +
++                        '\nDO 通道 ' + (which === 'on' ? p.onCh : p.offCh) + '\n\n確定送出？')) return;
++    press('vacuum.do', { panel: gb.id, which: which, value: down }, name + ' ' + (down ? 'ON' : 'OFF') + '：' + captionOf(gb));
++  }
++  function onSetAll(arm, editId, label) {
++    var n = numOf($(editId));
++    if (!kpaOk(n)) { sayNow('❌ Set All 的值要是 -116 ~ 148 kPa 的數字（golden 小鍵盤範圍）', '#f88'); return; }
++    if (!window.confirm('Set All Value：' + label + ' 的每一格閥值都寫成 ' + n + ' kPa\n（golden btnSetInArmClick：先把每一格的 edSV 改成 ' + Math.trunc(n) +
++                        '，再逐格寫 ECAT-VC8；不是 VC8 的站會被 C++ 拒絕並列出原因）\n\n確定送出？')) return;
++    var prefix = arm === 'in' ? ['myPalInArm'] : arm === 'out' ? ['myPalOutArm'] : ['myPalArm1', 'myPalArm2'];
++    press('vacuum.setAll', { arm: arm, kPa: n }, 'Set All（' + label + '）→ ' + n + ' kPa');
++    // golden :563 / :575-576 / :590 fVacuumUnit->myPal*->edSV->Text=(int)dValue —— 頁面的 edSV 也跟著改（按 Save 才存檔）
++    Array.prototype.forEach.call(document.querySelectorAll('.vacpanel'), function (gb) {
++      if (prefix.indexOf(gb.id.replace(/_\d+_\d+$/, '')) < 0) return;
++      var e = $(gb.id + '_edSV');
++      if (!e) return;
++      e.value = String(Math.trunc(n));
++      try { e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); } catch (x) {}
++    });
++  }
++  function onReset() {
++    if (!window.confirm('Reset（golden sbResetClick）\n清掉每一格面板的事件；下一個 tick 重新讀值，並照 golden 重寫閥值模式（SDO 02h = 1）\n\n確定？')) return;
++    press('vacuum.reset', {}, 'Reset（golden sbResetClick）');
++  }
++
++  // capture 階段、掛在 document：比面板自己的 toggle 與頁面內建的 .btnpanel 監聽都先執行，並攔下它們（同 ht9045_io_do.js）
++  document.addEventListener('click', function (e) {
++    if (e.defaultPrevented || document.body.classList.contains('layoutEdit') || document.body.classList.contains('layoutPlace')) return;
++    var t = e.target;
++    if (!t || !t.closest) return;
++    var gb = panelOf(t);
++    var hit = null;
++    if (gb) {
++      if (t.closest('#' + gb.id + '_bplOn')) hit = 'on';
++      else if (t.closest('#' + gb.id + '_bplOff')) hit = 'off';
++      else if (t.closest('button') && t.closest('button') === panelSetBtn(gb)) hit = 'set';
++    } else {
++      var b = t.closest('#btnSetInArm, #btnSetIndexArm, #btnSetOutArm, #sbReset');
++      if (b) hit = b.id;
++    }
++    if (!hit) return;
++    e.stopPropagation(); e.preventDefault();
++    var el = hit === 'on' ? $(gb.id + '_bplOn') : hit === 'off' ? $(gb.id + '_bplOff') : hit === 'set' ? panelSetBtn(gb) : $(hit);
++    if (el && el.__vuLocked) { var w = el.__vuWhy || '這顆鈕目前不能按'; sayNow(w.indexOf('🔒') === 0 ? w : '🔒 ' + w, '#ffcc66'); return; }
++    if (hit === 'on' || hit === 'off') onBpl(gb, hit);
++    else if (hit === 'set') onSet(gb);
++    else if (hit === 'btnSetInArm') onSetAll('in', 'edSetInArm', 'InArm');
++    else if (hit === 'btnSetIndexArm') onSetAll('index', 'edSetIndexArm', 'Index Arm1／Arm2');
++    else if (hit === 'btnSetOutArm') onSetAll('out', 'edSetOutArm', 'OutArm');
++    else if (hit === 'sbReset') onReset();
++  }, true);
++
+   /* ---- 面板由 page-widgets.js 在 DOMContentLoaded 建立（它的監聽器先註冊）；本監聽器排在它之後、引擎 attach 之前 ---- */
+-  function onReady() { lockStatic(); }
++  function onReady() { lockStatic(WAIT_NOTE); }
+   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', onReady);
+   else onReady();
+ 
+@@ -165,6 +422,7 @@
+   Object.keys(ARMS).forEach(function (arr) {
+     for (var c = 0; c < 8; c++) for (var r = 0; r < 2; r++) kb[arr + '_' + c + '_' + r + '_edSV'] = KB_SV;
+   });
++  ['edSetInArm', 'edSetIndexArm', 'edSetOutArm'].forEach(function (id) { kb[id] = KB_SV; });   // golden edSetInArmClick（VacuumUnit.cpp:599）
+   if (window.HT9045Wire && HT9045Wire.register) {
+     HT9045Wire.register({ page: PAGE, slug: 'vacuumunit_c', fields: {}, optional: {}, kb: kb });
+   }
+-- 
+2.55.0.windows.5
+

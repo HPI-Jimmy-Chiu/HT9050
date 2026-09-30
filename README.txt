@@ -210,4 +210,15 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   tools 0086 HTDESIGNER-88（0.88.0）—— 隱藏／鎖定快捷鍵 Ctrl+H／Shift+Ctrl+H／Ctrl+L／Shift+Ctrl+L（WPF 文件大綱）、縮放 12.5%～800%、工具列「背景」亮／暗切換；元件樹上 F2 改名改的是樹上那列。四層測試全過。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0045 7860efc VACUNIT-1203 —— Vacuum Unit 視窗在 PCIE-1203 上接好（ECAT-VC8 路徑，一律安全失敗）：讀／寫前都確認 ring 1 那一站存在、
+                    是 ECAT-VC8（身分表 EtherCAT/Pci1203Vc8.h）、OP 狀態、位址在卡片對應表；寫還要 VacuUnitType=1、沒有在運轉。
+                    Set／^／v／Set All（三臂的 Tag 改由 DFM 表決定，解開 VacuumUnit.cpp 原本 gated 的 btnSetInArmClick）／Reset、
+                    現值／閥值／Event／LED 都走這條；開頁照 golden 寫閥值模式（EastSun R2）；吸嘴照 golden 交給 VC8
+                    （#define W906_VC8_SUCKER_REMAP，EastSun R3），而且那 144 個吸嘴別名只有在確認是 VC8 時才送 —— BTestSuck 在 0x50／0x51
+                    DO 16..19 跟上料／Auto1 氣缸同通道，以前 IO 頁的吸嘴鈕打得到氣缸線圈，現在擋住。這台今天 ring 上沒有 VC8：
+                    全部 999.0／Error5、按鈕鎖住並寫原因。ctest VacuumVc8 119/119；1203 兩個 gate 跟改前一樣（control gate 2 個既有 FAIL）。
+                    改到 EastSun 的 Pci1203Monitor／Control／IoRoute（只有加內容）；筆電端的檔一個都沒碰。機台上還沒實跑。
+  cpp 0046 57c3d45 VACUNIT-1203 —— 拒絕訊息「每個物件每分鐘一行」的表 32 → 256 格（沒有 VC8 時 48 個物件把表擠爆，變成每秒都印）。
+  web 0034 b9000ea VACUNIT-1203 (web) —— Vacuum Unit 頁：每秒輪詢、顯示 C++ 算出的值、只有 available 的鈕才解鎖、寫之前確認框、回應逐筆標示。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
