@@ -1,0 +1,255 @@
+From 29df2986a48bf717104d3e25a94c4971a4c6a82f Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 30 Sep 2026 19:27:14 +0800
+Subject: [PATCH] HTDESIGNER-81: the split view follows the cursor anywhere in
+ an element; Arrange by at the top (0.81.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+"所有基礎操作模式能跟WPF一樣方便" (EastSun 20260930):
+- WPF's split view: the cursor in the page's HTML beside the designer selects
+  the element it is in -- its start tag, its text, a child without an id; in
+  <div class="form"> the form (@form). It used to follow only a cursor inside
+  a start tag. One pass over the page (htmlblock.openStackAt: the elements open
+  at an offset; parentOf is built on it), shared with Shift+F7's finder.
+- WPF's "Arrange by" (Name / Category / Source) is at the top of the properties
+  list, under the search box -- it was inside the DFM 屬性 section.
+
+Tests (all 4 layers pass: lib 159, smoke 167, panels, real VS Code 148): smoke
+(the cursor in spbSave's caption text -> selectId spbSave; in the form div ->
+@form), panels (the sort buttons from the header).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHANGELOG.md          |  6 +++
+ tools/vscode-htdesigner/extension.js          | 39 ++++++++++++-------
+ tools/vscode-htdesigner/lib/htmlblock.js      | 17 +++++---
+ tools/vscode-htdesigner/media/props.js        | 24 ++++++++----
+ tools/vscode-htdesigner/package.json          |  2 +-
+ .../vscode-htdesigner/test/panels_render.ps1  |  4 +-
+ .../vscode-htdesigner/test/smoke_extension.js | 18 +++++++++
+ 7 files changed, 79 insertions(+), 31 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/CHANGELOG.md b/tools/vscode-htdesigner/CHANGELOG.md
+index 07c6e14..56e1d4b 100644
+--- a/tools/vscode-htdesigner/CHANGELOG.md
++++ b/tools/vscode-htdesigner/CHANGELOG.md
+@@ -2,6 +2,12 @@
+ 
+ 每一版多了什麼。怎麼操作看 [操作一覽](CHEATSHEET.md)，詳細說明看 README。
+ 
++## 0.81.0
++- **HTML 旁邊的游標跟設計畫面同步得更完整**（WPF 的分割檢視：在 XAML 任何位置＝選取那個元素）：
++  游標在元件的標籤裡、它的文字裡、或它裡面沒有 id 的子元素裡，都會選取它；在 `<div class="form">` 裡＝選取表單。
++  以前只有游標在開頭標籤裡才會選。
++- **「排列：依名稱／依類別／DFM 順序」移到屬性清單最上面**（WPF 的 Arrange by，在搜尋框下面），原本在「DFM 屬性」那一區裡面。
++
+ ## 0.80.0
+ - **屬性值右邊的小方塊（WPF 的 property marker）**：「外觀與版面」每個跟 DFM 比對的屬性都有一個——
+   空心＝跟 BCB6 .dfm 一樣，實心＝改過；點一下出現選單「重設（改回 DFM：…）」。原本只有改過的才出現的 ↺ 按鈕換成這個。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index dcf7246..fee3e80 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -2033,7 +2033,8 @@ class Hub {
+     clearTimeout(this._edTimer);
+     this._edTimer = setTimeout(() => {
+       const off = d.doc.offsetAt(e.selections[0].active);
+-      const id = web.idAtOffset(d.doc.getText(), off);
++      // WPF's split view: the cursor anywhere in an element's markup (its tag, its text, a child without an id)
++      const id = this.idAtOffset(d.doc.getText(), off);
+       if (id && id !== d.lastSelId) d.post({ type: 'selectId', id, origin: 'editor' });
+     }, 200);
+   }
+@@ -3362,22 +3363,30 @@ class Hub {
+     return d ? { file: doc.fileName, id } : null;
+   }
+ 
+-  /** The id of the element whose start tag -- or body -- holds `off` (the innermost one with an id), or null. */
++  /**
++   * The id of the element whose start tag -- or body -- holds `off` (the innermost one with an id; the generated
++   * <div class="form"> = '@form'), or null (the head, a script, outside the form).
++   */
+   idAtOffset(text, off) {
+-    let at = off;
+-    for (let guard = 0; guard < 200 && at > 0; guard++) {
+-      // the start tag the cursor is in
+-      const lt = text.lastIndexOf('<', at);
+-      const gt = lt >= 0 ? text.indexOf('>', lt) : -1;
+-      if (lt >= 0 && gt >= off && text[lt + 1] !== '/' && text[lt + 1] !== '!') {
+-        const m = /\sid\s*=\s*["']([^"']+)["']/.exec(text.slice(lt, gt + 1));
+-        if (m) return m[1];
+-      }
+-      const p = htmlblock.parentOf(text, at);
+-      if (!p) return null;
+-      const m = /\sid\s*=\s*["']([^"']+)["']/.exec(p.tag.text || text.slice(p.tag.start, p.tag.end));
++    const idOf = tag => {
++      const m = /\sid\s*=\s*["']([^"']+)["']/.exec(tag);
+       if (m) return m[1];
+-      at = p.tag.start;
++      return /^<div\b[^>]*\bclass\s*=\s*["']form["']/.test(tag) ? '@form' : null;
++    };
++    let at = off;
++    // the start tag the cursor is in
++    const lt = text.lastIndexOf('<', at);
++    const gt = lt >= 0 ? text.indexOf('>', lt) : -1;
++    if (lt >= 0 && gt >= off && text[lt + 1] !== '/' && text[lt + 1] !== '!') {
++      const own = idOf(text.slice(lt, gt + 1));
++      if (own) return own;
++      at = lt;
++    }
++    // the elements open there, innermost first (one pass over the page)
++    const stack = htmlblock.openStackAt(text, at) || [];
++    for (let i = stack.length - 1; i >= 0; i--) {
++      const got = idOf(stack[i].text);
++      if (got) return got;
+     }
+     return null;
+   }
+diff --git a/tools/vscode-htdesigner/lib/htmlblock.js b/tools/vscode-htdesigner/lib/htmlblock.js
+index 211f9d2..d7ce517 100644
+--- a/tools/vscode-htdesigner/lib/htmlblock.js
++++ b/tools/vscode-htdesigner/lib/htmlblock.js
+@@ -199,6 +199,16 @@ function removeRange(text, start, end) {
+  * or null at the top. One pass with a stack of the open elements.
+  */
+ function parentOf(text, at) {
++  const stack = openStackAt(text, at);
++  if (!stack) return null;
++  const top = stack[stack.length - 1];
++  if (!top) return null;
++  const range = elementRange(text, top);
++  return range ? { tag: top, range } : null;
++}
++
++/** The elements open at offset `at`, outermost first: [{ name, start, end, text }] (its start tags), or null. */
++function openStackAt(text, at) {
+   const stack = [];
+   let i = 0;
+   const n = text.length;
+@@ -230,10 +240,7 @@ function parentOf(text, at) {
+     }
+     i = e + 1;
+   }
+-  const top = stack[stack.length - 1];
+-  if (!top) return null;
+-  const range = elementRange(text, top);
+-  return range ? { tag: top, range } : null;
++  return stack;
+ }
+ 
+ /** The element children of a parent ({ tag, range }), in order: [{ start, end, name, text }]. */
+@@ -330,4 +337,4 @@ function renameEdits(text, oldId, newId, opts) {
+   return edits.sort((a, b) => a.range[0] - b.range[0]);
+ }
+ 
+-module.exports = { nameOf, elementRange, unitOf, idsIn, freshName, renameIds, renameEdits, offsetBlock, firstPx, indentAt, insideEnd, removeRange, parentOf, childrenOf, reorder };
++module.exports = { nameOf, elementRange, unitOf, idsIn, freshName, renameIds, renameEdits, offsetBlock, firstPx, indentAt, insideEnd, removeRange, parentOf, openStackAt, childrenOf, reorder };
+diff --git a/tools/vscode-htdesigner/media/props.js b/tools/vscode-htdesigner/media/props.js
+index 25eabb4..d0b7889 100644
+--- a/tools/vscode-htdesigner/media/props.js
++++ b/tools/vscode-htdesigner/media/props.js
+@@ -287,6 +287,21 @@
+     sb.appendChild(sq);
+     sb.appendChild(sn);
+     h.appendChild(sb);
++    /* WPF: "To arrange the properties by category or alphabetically, click Category, Name, or Source in the Arrange by
++       list" -- at the top of the properties list (the DFM properties follow it) */
++    if (state.view !== 'events' && data.props && data.props.length) {
++      var srt = state.propSort === 'cat' || state.propSort === 'dfm' ? state.propSort : 'name';
++      var sbar = el('div', 'bar sortbar');
++      sbar.appendChild(el('span', 'dim small', '排列：'));
++      [['name', '依名稱', 'Arrange by Name'], ['cat', '依類別', 'Arrange by Category'], ['dfm', 'DFM 順序', 'Arrange by Source：BCB6 .dfm 寫的順序']].forEach(function (o) {
++        var b = el('button', srt === o[0] ? 'on' : null, o[1]);
++        b.setAttribute('data-sort', o[0]);
++        b.title = o[2];
++        b.addEventListener('click', function () { state.propSort = o[0]; save(); render(); });
++        sbar.appendChild(b);
++      });
++      h.appendChild(sbar);
++    }
+     root.appendChild(h);
+ 
+     /* editable properties -- the WPF property grid: commit on Enter or leaving the field */
+@@ -832,15 +847,8 @@
+     /* DFM properties -- WPF's "Arrange by: Name / Category", and the .dfm's own order (by line) */
+     section('props', 'DFM 屬性', data.props.length, function (body) {
+       if (!data.props.length) { body.appendChild(el('div', 'dim pad', '沒有 DFM 屬性資料。')); return; }
++      /* (arranged by the "排列" buttons at the top, WPF's "Arrange by") */
+       var sort = state.propSort === 'cat' || state.propSort === 'dfm' ? state.propSort : 'name';
+-      var sbar = el('div', 'bar pad sortbar');
+-      [['name', '依名稱'], ['cat', '依類別'], ['dfm', 'DFM 順序']].forEach(function (o) {
+-        var b = el('button', sort === o[0] ? 'on' : null, o[1]);
+-        b.setAttribute('data-sort', o[0]);
+-        b.addEventListener('click', function () { state.propSort = o[0]; save(); render(); });
+-        sbar.appendChild(b);
+-      });
+-      body.appendChild(sbar);
+       var onDbl = function (p) {
+         if (!p[4]) return false;
+         vscode.postMessage({ type: 'openDfmLine', line: p[4] });
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index 639ef24..ca7959b 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HTML 視覺設計工具",
+   "description": "BCB6 表單移植成 web HMI（網頁＋C++）的專案通用：像 WPF 設計工具一樣看、改頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.80.0",
++  "version": "0.81.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/panels_render.ps1 b/tools/vscode-htdesigner/test/panels_render.ps1
+index c5cb700..43fc3f0 100644
+--- a/tools/vscode-htdesigner/test/panels_render.ps1
++++ b/tools/vscode-htdesigner/test/panels_render.ps1
+@@ -314,12 +314,12 @@ if ($r8) {
+ } else { $script:bad++ }
+ $sortChecks = @'
+ function keys() { return Array.prototype.map.call(document.querySelectorAll('details.sec[data-key="props"] table.kv td.k'), function (t) { return t.textContent; }); }
+-function click(s) { var b = document.querySelector('details.sec[data-key="props"] button[data-sort="' + s + '"]'); if (b) b.click(); return !!b; }
++function click(s) { var b = document.querySelector('.head button[data-sort="' + s + '"]'); if (b) b.click(); return !!b; }
+ /* the default: by name (A-Z), the button marked */
+ R.byName = keys();
+ var srt = R.byName.slice().sort(function (a, b) { a = a.toLowerCase(); b = b.toLowerCase(); return a < b ? -1 : a > b ? 1 : 0; });
+ R.nameSorted = R.byName.length > 4 && R.byName.join('|') === srt.join('|');
+-R.nameOn = !!document.querySelector('details.sec[data-key="props"] button.on[data-sort="name"]');
++R.nameOn = !!document.querySelector('.head button.on[data-sort="name"]');
+ /* the .dfm's own order: spbSave starts Left, Top, Width, Height, Caption */
+ R.hasButtons = click('dfm');
+ R.dfmOrder = keys();
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index aeac3af..ad7a158 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -983,6 +983,24 @@ async function main() {
+     api.hub.idAtOffset(vdT, vdT.indexOf('<head') + 2) === null),
+     'Shift+F7 (View Designer): the element at the cursor -- spbSave in its start tag and in its caption; none in <head>',
+     JSON.stringify({ tag: vdTag >= 0 ? api.hub.idAtOffset(vdT, vdTag + 3) : '-', cap: vdCap > 0 ? api.hub.idAtOffset(vdT, vdCap + 1) : '-' }));
++  // WPF's split view: the cursor in the page's HTML beside the designer (its caption text, the form's own div) selects that
++  const svForm = vdT.search(/<div\b[^>]*\bclass="form"/);
++  const svAt = async off => {
++    pagePosted.length = 0;
++    api.hub.onEditorSelection({ kind: fake.TextEditorSelectionChangeKind.Keyboard, textEditor: { document: egPage }, selections: [{ active: egPage.positionAt(off) }] });
++    await new Promise(r => setTimeout(r, 320));
++    const m = pagePosted.filter(x => x.type === 'selectId').pop();
++    return m ? m.id : null;
++  };
++  // (it posts only when the element differs from the one selected last)
++  const svLast = api.hub.active.lastSelId;
++  api.hub.active.lastSelId = null;
++  const svCap = vdCap > 0 ? await svAt(vdCap + 1) : null;
++  api.hub.active.lastSelId = null;
++  const svFm = svForm >= 0 ? await svAt(svForm + 5) : null;
++  api.hub.active.lastSelId = svLast;
++  ok(svCap === 'spbSave' && (svForm < 0 || svFm === '@form'),
++    'split view (WPF): the cursor in spbSave\'s caption text selects spbSave; inside <div class="form"> the form', JSON.stringify({ cap: svCap, form: svFm }));
+   // WPF: a double-click on the component = its default event; an empty one is created (Label1, a TLabel: OnClick ->
+   // Label1Click, wired); F7 (View Code) with an empty default event only opens the form's code, nothing added
+   await selAs('Label1', 'span');
+-- 
+2.55.0.windows.5
+
