@@ -5,6 +5,7 @@
 
 ## ⚠⚠ 給機台端（20260929 18:1x 起，請先讀這一段）
 
+- ✅ **20261001 第 97 包（GitLab main `813ca9dd`）——要重建 wb_serve**：只有一個小準備：`cprod.cpp` 的「每天 JAM 率存檔」加了一個掛勾（沒裝上時行為跟現在完全一樣）。裝上它要改 St01 的 `FileRW/MainClose.cpp`，還沒做；裝上之後，每天第一次 JAM 時會照 golden 把昨天的逐日 JAM 檔寫到 `D:\HT9045_Log\JamRate_Daily`。
 - ✅ **20261001 第 96 包（GitLab main `6f0d4302`）——要重建 wb_serve**：網頁外框每 250 ms 抓一次 `web\JSON\Production-update.json`；如果機台上有那支 **8.6 MB 的舊檔**（JSON 模擬器時代留下的，不在 git 裡），以前每抓一次就讓 wb_serve 處理網頁與 WebSocket 的那條執行緒（網頁的「停止」命令也走它）忙 0.1 秒以上。這包起：檔案沒變就不重讀（回應內容完全一樣），網頁先問「變了沒」、沒變就不下載。機台上有沒有這支舊檔都可以套；有的話也可以移到別處（它是假的生產資料），**要不要移由 Jimmy 決定**。
 - ✅ **20261001 第 95 包（GitLab main `b7572fdd`）——要重建 wb_serve**：① **Contact 頁的 Kit 直徑選項照 golden**：選項清單重建（`Items->Clear()`）後，選中的那一格會回到「沒選」（-1），golden 讀配方時靠這個把找不到的直徑預設成第一格；移植樹原本會留著舊的格號（可能超出清單）。同一個修正也讓 36 mm Y-Pitch 的機台在配方缺「In Out Arm Y Pitch」鍵時，預設值照 golden 用 3600（原本 6000）。② St01：Setup.Contact 每次開窗照 golden FormShow 重算一次力量數字；Lot Info 藏起來的頁籤不再送它的命令。 🔴 `TempFuseLimitType`（加熱保險絲上限）仍未改，等 Jimmy 決定（見第 94 包那一條）。
 - ✅ **20261001 第 94 包（GitLab main `f528311a`）——要重建 wb_serve**：St01 review6（D-015 A01b 自動登出等）、St02 的 Observer「GPIB／TTL 版本」兩格照 golden 顯示（H-022 T3）、Configuration 頁 8 列照 golden 讀寫（Q3）、權限表在 SoftStart 也拒存（Q7 A）；網頁：外框一建 iframe 就告訴 hub 視窗開關、**Contact CT 與 Observer 視窗縮小時照樣更新**（golden 縮小不跑 FormClose），Smart Diagnostic 照 golden 在記錄時一直跑。 🔴 **提醒（還沒改，等 Jimmy 決定）**：移植樹的 `TempFuseLimitType`（加熱保險絲上限）從沒被設過＝0——Temp_Set 頁存檔會被 WAR15194 擋、出貨組態下加熱繼電器 41 秒後會被 `CheckHeater` 關掉。如果你們測溫度時遇到這兩件事，就是它（golden `TfMain::FormShow` main.cpp:9539～9551）。
@@ -137,6 +138,7 @@
 | 94 | `updates/f528311a/` | `f528311a` | `3b476827`（`updates/f528311a/_machine_ai/base_3b476827/`） | ⚠ **要重建 wb_serve**（53 檔；筆電兩組態全新 gate：出貨 279 支 4 項＝基準、模擬 279 支 19 項＝基準；system／config 整目錄 0 改）。① St01 review6 到 `ea17dd3a`；② St02 MR !14（Observer 版本兩格）、!15（Q3 fConfiguration）、!16（SoftStart 不存權限表）；③ 串流 F2：外框早報開關、Contact CT／Observer 縮小照拍（新 ctest `Stream2E_St01Polls`）。 |
 | 95 | `updates/b7572fdd/` | `b7572fdd` | `f528311a`（`updates/b7572fdd/_machine_ai/base_f528311a/`） | ⚠ **要重建 wb_serve**（8 檔；出貨 280 支 4 項＝基準、模擬 280 支 19 項＝基準）。① D-024：vclcompat `TRadioGroup` 的 `Items->Clear()` 照 VCL 把 `ItemIndex` 歸成 -1（Contact Kit 直徑的 golden 後備值、36 mm Y-Pitch 缺鍵預設）；② St01 review6 到 `f2df9e4f`（D-019 Setup.Contact 開窗重算、D-020 Lot Info 藏頁不送命令，新 ctest `D019_D020_PageSelftest`）。 |
 | 96 | `updates/6f0d4302/` | `6f0d4302` | `b7572fdd`（`updates/6f0d4302/_machine_ai/base_b7572fdd/`） | ⚠ **要重建 wb_serve**（12 檔；出貨 282 支 4 項＝基準、模擬 282 支 19 項＝基準；新舊兩版實測回應位元組相同）。① `/JSON` 清密碼路由的檔案快取＋開機背景預讀（新檔 `WebJsonScrubCache.*`，輸出位元組不變）；② `web/page/settings.js` refreshProduction 先 HEAD 比 ETag；③ D-027 `fTeachPara.cpp` 註解更正。新 ctest `WebJsonScrubCache`、`ScrubCache_SettingsEtag`。 |
+| 97 | `updates/813ca9dd/` | `813ca9dd` | `6f0d4302`（`updates/813ca9dd/_machine_ai/base_6f0d4302/`） | ⚠ **要重建 wb_serve**（5 檔；出貨 283 支 4 項＝基準、模擬 283 支 19 項＝基準）。① `cprod.cpp` RUN_INFO::SaveJamRateByDay 的本體掛勾（W906_SaveJamRateByDayBody，未安裝＝不變）；新 ctest `JamDayHook`。 |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
