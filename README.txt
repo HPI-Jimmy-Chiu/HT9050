@@ -279,4 +279,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   tools 0110 HTDESIGNER-112（0.112.0）—— 屬性頁一張表不重複：DFM 清單只列上面表格沒有的；小方塊選單可以跳到 .dfm 那一行。四層測試全過。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  tools 0111 HTDESIGNER-113（0.113.0）—— 新設定 ht9045Designer.zoomWheel：Ctrl＋滾輪（預設）／只用滾輪／Alt＋滾輪縮放（WPF 的 Zoom by using）。四層測試全過。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
