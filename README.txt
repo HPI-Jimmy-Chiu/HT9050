@@ -200,4 +200,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   tools 0081 HTDESIGNER-83（0.83.0）—— 開始「自己找跟 WPF 不一樣的地方直接改」（EastSun 20260930），每次改動記在 tools/vscode-htdesigner/WPF_DIFF_LOG.md：
                     元件樹 F2／Ctrl+C／X／V／Delete；HTML 右鍵「移到事件處理函式」；一打開頁面屬性面板就顯示表單。四層測試全過。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  tools 0082 HTDESIGNER-84（0.84.0）—— 設計畫面上方的資訊列（WPF 的 Information Bar）：頁面有 JS 錯誤就顯示數量與第一個，「看全部」＝輸出面板，×＝關掉。四層測試全過。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
