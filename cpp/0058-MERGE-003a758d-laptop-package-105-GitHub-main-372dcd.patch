@@ -1,0 +1,1837 @@
+From 15562d066cad65292d49dab67823698021a8551f Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 15:21:37 +0800
+Subject: [PATCH] MERGE-003a758d: laptop package 105 (GitHub main 372dcd1,
+ GitLab main 003a758d) into the machine tree
+
+Package 105: the shipping-config TCP tester really dials (St02 H-008), GPIB remote START per golden through
+W906_RemoteRunStart and STOP really pauses (H-012, with the fix for its fMotorTest NULL read), safe-door open / close
+records and the [O18] last-open time per golden (RecordSafeDoorStates), the cooling fan per golden (SIM config only).
+
+21 files: NEW 3 (tests/test_coolfan_rules.cpp, test_safedoor_record.cpp, test_tcp_tester_real.cpp), OLD 18 (machine had
+an older laptop version, taken as is), LOCAL 0. Nothing under tools/vscode-htdesigner. o2: wb_serve + 5 tests build,
+PE 32/32 complete; ctest CoolFan_Rules / TesterComm_TcpTesterReal / TesterComm_Handler / SafeDoorRecord / VacuumVc8 /
+MachineIoTable_HT9050 / IoPoints_HT9050 / MachineSuckers_HT9050 pass; production_audit unchanged.
+Line endings: package 105 arrived LF (every earlier package, and this tree, is CRLF); the 21 files are stored CRLF as
+before -- content byte-identical to the package apart from CR, so later packages still classify them by normalized MD5.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ TesterComm/Handler/HandlerGpibMsg.cpp   |  33 ++-
+ TesterComm/Handler/TesterCommWiring.cpp |   2 +-
+ TesterComm/Tcp/TcpPump.cpp              |  26 +-
+ TesterComm/Tcp/TcpPump.h                |  29 +-
+ WebStart.h                              |   2 +-
+ csystem.cpp                             |  24 +-
+ docs/DUET3D_REFERENCE_ANALYSIS.md       |   2 +-
+ docs/GOLDEN_DEFECT_LEDGER.md            |   2 +-
+ docs/INBOX_QUEUE.md                     |   5 +-
+ docs/NIGHT_REPORT.md                    |  33 ++-
+ docs/RULINGS_20261001.md                |  93 +++++++
+ docs/ST02_BRINGUP_CHECKLIST.md          |   3 +-
+ docs/TESTERCOMM_PORT_LEDGER.md          |   4 +-
+ tests/CMakeLists.txt                    |  45 +++-
+ tests/test_coolfan_rules.cpp            | 177 +++++++++++++
+ tests/test_safedoor_record.cpp          | 143 ++++++++++
+ tests/test_tcp_tester_real.cpp          | 334 ++++++++++++++++++++++++
+ tests/test_testercomm_handler.cpp       |  82 ++++++
+ uHeaterThread.cpp                       |   2 +-
+ vclcompat/ClientSocket.cpp              | 268 ++++++++++++++++++-
+ vclcompat/ClientSocket.h                |   4 +-
+ 21 files changed, 1250 insertions(+), 63 deletions(-)
+ create mode 100644 tests/test_coolfan_rules.cpp
+ create mode 100644 tests/test_safedoor_record.cpp
+ create mode 100644 tests/test_tcp_tester_real.cpp
+
+diff --git a/TesterComm/Handler/HandlerGpibMsg.cpp b/TesterComm/Handler/HandlerGpibMsg.cpp
+index 7a67409..9c2b106 100644
+--- a/TesterComm/Handler/HandlerGpibMsg.cpp
++++ b/TesterComm/Handler/HandlerGpibMsg.cpp
+@@ -61,7 +61,10 @@
+ //                     user todo item "②"; the MaxTime arm is golden text again.
+ //   [LIFTED P2c 20260926] G16 :16431-16472  MSG_CMD_RemoteStart / MSG_CMD_RemoteStop -- not in V906 MessageDef.h/.cpp (V912, JerryYang
+ //                     20260828); no bridge can send them.  Also fiosetview is TfiosetviewShim (no fShow).
+-//                     START's success arm answers SETTINGNG while W906_REMOTE_START_WIRED==0 (user ruling item 8 = B).
++//                     START's success arm answered SETTINGNG while W906_REMOTE_START_WIRED==0 (user ruling item 8 = B).
++//                     AI(W906-H012) 20261001 (St02-E): wired (H-012, RULINGS_20261001 #0): START goes through the W10 seat
++//                     W906_RemoteRun (TfMainWeb::StartFromWeb), as HTSET,333 does; STOP stays golden fMain->BtnPauseClick
++//                     (TfMain::Pause -> PauseFromWeb with the laptop's batch 18, St01 D-032).
+ //   G17 :16604        fObserver->pnlTTLRS232Version -- not a TfObserver member (cObserver.cpp:7455 documents it).
+ //   G18 :16626        fObserver->pnlGPIBVersion -- not a TfObserver member (cObserver.cpp:7454).  The
+ //                     RunInfo.GPIBSoftwareVersion write before it stays live.
+@@ -170,10 +173,13 @@
+ //   W906_ATC_PORTED           item 7 "在 ATC 接好之前改回「失敗」": ATC_InterfaceForm is still the shim (G23), so
+ //                             SET_SLOPE_OFFSET and RESET_ATCALARM (when it would have reached the ATC) answer
+ //                             SETTINGNG instead of golden's SETTINGOK.
+-//   W906_REMOTE_START_WIRED   item 8 "真的啟動接好之前強制回「失敗」": TfMain::Start is still the offline no-op
+-//                             (forms/fMain.cpp:411), so GPIB remote START answers SETTINGNG and changes nothing.
++//   W906_REMOTE_START_WIRED   item 8 "真的啟動接好之前強制回「失敗」": TfMain::Start stays the base no-op on purpose
++//                             (forms/fMain.cpp:411; WebStart.h:20-74), but the real start is wired now through the
++//                             W10 seat W906_RemoteRun (wb_serve installs Start -> TfMainWeb::StartFromWeb), so the
++//                             switch is 1 (AI(W906-H012) 20261001 (St02-E): H-012, RULINGS_20261001 #0).  Not installed /
++//                             manual teach -> SETTINGNG, as HTSET,333 (Command.cpp:17108).
+ #define W906_ATC_PORTED          0
+-#define W906_REMOTE_START_WIRED  0
++#define W906_REMOTE_START_WIRED  1   //AI(W906-H012) 20261001 (St02-E): H-012 (see above)
+ 
+ // AI(W906-GB-P2a) 20260926: golden main.cpp:15690-15692 `bool bEcho=false, bUnderTest=false; bool bEchoStop=false;
+ //   bool bExist=false;` and :15694 `unsigned int iBin[4][8];` -- V906 defines them at atester_shims.cpp:101/:102/:120
+@@ -704,18 +710,27 @@ bool THandlerTesterSide::ProcessARTMessage()
+             if(W906_FormShowing("fNote", fNote->fShow) ||  // AI(W906-PAGETAB-ST02) 20260928 (St02-E): page-state reads wrapped as St01 W906FormShowing.h (:704-708, :861, :1256, :1285)
+                W906_FormShowing("MyMessageBox", MyMessageBox->fShow) ||
+                W906_FormShowing("fiosetview", fiosetview->fShow) ||
+-               W906_FormShowing("fMotorTest", fMotorTest->fShow) ||
+-               W906_FormShowing("fTeach", fTeach->fShow))
++               W906_FormShowing("fMotorTest", fMotorTest != 0 && fMotorTest->fShow) ||   //AI(W906-B19-NULLFORM) 20261001: nothing in this tree creates fMotorTest (forms/fMotorTest.cpp:99, WebMotorAccessLive.cpp:956), so golden's read was a NULL dereference (gate b19g: ctest TesterComm_Handler SegFault here, ProcessARTMessage+5995) -- guard the member only; the page table still answers through W906_FormShowing (csystem.cpp:30512 pattern)
++               W906_FormShowing("fTeach", fTeach != 0 && fTeach->fShow))   //AI(W906-B19-NULLFORM) 20261001: same guard -- only wb_serve creates fTeach (tools/wb_serve.cpp:3915); ctest and other binaries leave it NULL
+             {
+                 SendMSG_CMD(MSG_CMD_RemoteStart, "SETTINGNG");
+             }
+             else
+             {
+ #if W906_REMOTE_START_WIRED
++                const bool bSavedAlarm = bSECSGEMAlarm, bSavedSaveSet = bHasSaveSet;   //AI(W906-H012) 20261001 (St02-E): a refused START changes nothing
+                 bSECSGEMAlarm=false;                                                //Unlock the panel, same as S2F42 RCMD REMOTE_START
+                 bHasSaveSet=false;                                                  //Clear the setup file changed flag
+-                fMain->Start("GPIB Command : START");   //AI(W906-GB-P2c) 20260926: TfMain member -> fMain->
+-                SendMSG_CMD(MSG_CMD_RemoteStart, "SETTINGOK");
++                if(W906_RemoteRunStart("GPIB Command : START"))                   //AI(W906-H012) 20261001 (St02-E): golden fMain->Start("GPIB Command : START") through the W10 seat (TfMainWeb::StartFromWeb); never the base TfMain::Start (WebStart.h:20-74)
++                {
++                    SendMSG_CMD(MSG_CMD_RemoteStart, "SETTINGOK");
++                }
++                else
++                {
++                    bSECSGEMAlarm=bSavedAlarm;                                      //AI(W906-H012) 20261001 (St02-E): DEVIATION, as HTSET,333: not installed / manual teach blocks START -> nothing changes, SETTINGNG
++                    bHasSaveSet=bSavedSaveSet;
++                    SendMSG_CMD(MSG_CMD_RemoteStart, "SETTINGNG");
++                }
+ #else
+                 //AI(W906-GB-P2c) 20260926: user ruling item 8 = B -- fMain->Start is still the offline no-op
+                 //   (forms/fMain.cpp:411), so nothing would start: answer SETTINGNG and leave bSECSGEMAlarm /
+@@ -734,7 +749,7 @@ bool THandlerTesterSide::ProcessARTMessage()
+         RecordProcess("GPIB Command STOP");
+         if(CosFunction.bGPIBRemoteStartStop==true)                              //Only the customer who passed the risk notification
+         {
+-            fMain->BtnPauseClick(fMain);   //AI(W906-GB-P2c) 20260926: TfMain member -> fMain->                                               //Stop only, no alarm, same as S2F42 RCMD PAUSE
++            fMain->BtnPauseClick(fMain);   //AI(W906-GB-P2c) 20260926: TfMain member -> fMain->                                               //Stop only, no alarm, same as S2F42 RCMD PAUSE   //AI(W906-H012) 20261001 (St02-E): H-012 -- STOP stays golden: the laptop's batch 18 makes TfMain::Pause forward to TfMainWeb::PauseFromWeb (St01 D-032, forms/fMain.cpp:246); until it lands the base Pause is the no-op (the status quo, not a regression)
+             if(SystemStart==false)                                              //Was not running, reject, same as S2F42 RCMD PAUSE
+                 SendMSG_CMD(MSG_CMD_RemoteStop, "SETTINGNG");
+             else
+diff --git a/TesterComm/Handler/TesterCommWiring.cpp b/TesterComm/Handler/TesterCommWiring.cpp
+index 064a7f4..dc18530 100644
+--- a/TesterComm/Handler/TesterCommWiring.cpp
++++ b/TesterComm/Handler/TesterCommWiring.cpp
+@@ -131,7 +131,7 @@ void W906_TesterCommInit()
+     W906_TesterSendToBridgeHook                 = &FwdSendToBridge;
+     g_lastConnect = ::GetTickCount() - kConnectPeriodMs;   // first ProcessHVisionConnect on the first tick
+     W906_GpibAuxEnable(true);   //AI(W906-GB-P6) 20260926: 2A + Q2(a) -- only the composition root (wb_serve) reads / seeds the recipe
+-    W906_TcpPumpInit();  { const char* w10Sim = std::getenv("HT9045_TCPCMD_SIM"); W906_CmdServerPumpInit(W906_SimTcpRealSockets(!(w10Sim && w10Sim[0] == '1' && w10Sim[1] == '\0'))); }   // P5: the Handler's built-in TCP/IP tester channel (golden TfTesterTCP).  AI(W906-W10) 20260927 (St02-E): golden TCPCommandServer / TeraTCPResultServer as polled real sockets (HT9045_TCPCMD_SIM=1 keeps them Sim).  AI(W906-W10fix) 20260928: that block sat behind the P5 comment (dead)   //AI(W906-W58-4) 20260930 (St02-E): W58-4 -- SIM build: real 7016 / 7017 sockets only with W906_SIM_TCP_SERVERS=1 (end of file)
++    W906_TcpPumpInit(W906_TcpTesterRealSocket());  { const char* w10Sim = std::getenv("HT9045_TCPCMD_SIM"); W906_CmdServerPumpInit(W906_SimTcpRealSockets(!(w10Sim && w10Sim[0] == '1' && w10Sim[1] == '\0'))); }   // P5: the Handler's built-in TCP/IP tester channel (golden TfTesterTCP).  AI(W906-W10) 20260927 (St02-E): golden TCPCommandServer / TeraTCPResultServer as polled real sockets (HT9045_TCPCMD_SIM=1 keeps them Sim).  AI(W906-W10fix) 20260928: that block sat behind the P5 comment (dead)   //AI(W906-W58-4) 20260930 (St02-E): W58-4 -- SIM build: real 7016 / 7017 sockets only with W906_SIM_TCP_SERVERS=1 (end of file)
+ }
+ 
+ void W906_TesterCommPoll()
+diff --git a/TesterComm/Tcp/TcpPump.cpp b/TesterComm/Tcp/TcpPump.cpp
+index cf4b042..68b8eae 100644
+--- a/TesterComm/Tcp/TcpPump.cpp
++++ b/TesterComm/Tcp/TcpPump.cpp
+@@ -1,12 +1,14 @@
+ // ===========================================================================
+ //  TesterComm/Tcp/TcpPump.cpp -- see TcpPump.h.  AI(W906-GB-P5) 20260926.
+ // ===========================================================================
++#include "MachineType.h"                     // SOFT_SIMULTE (W906_TcpTesterRealSocket) -- before any #ifdef
+ #include "TesterComm/Tcp/TcpPump.h"
+ #include "Interface/TesterTCP_Socket.h"   // TesterTCPSocket_*, TesterTCPSocket, TestIF_File, LastSet, OFF_LINE/ON_LINE
+ #include "TesterComm/UiChannel.h"
+ #include "WebBridge/Sync.h"
+ 
+ #include <cstdio>
++#include <cstdlib>
+ #include <string>
+ #include <vector>
+ 
+@@ -113,7 +115,7 @@ std::string Snapshot(bool on)
+ 
+ }  // namespace
+ 
+-void W906_TcpPumpInit()
++void W906_TcpPumpInit(bool bRealSocket)
+ {
+     if (g_inited)
+         return;
+@@ -137,6 +139,11 @@ void W906_TcpPumpInit()
+         Ev e = { kEvRead, s, k, eeGeneral, 0 };
+         Push(e);   // the bytes stay in the socket's buffer; golden's OnRead pulls them with ReceiveText()
+     };
++    // AI(W906-H008) 20261001 (St02-E): H-008 -- POLLED: Open() never blocks, Poll() (Tick step 0) fires the events on this thread.
++    //   SetSimMode(false) takes effect at the next Open() (the socket is not connected yet here).
++    TesterTCPSocket_ClientSocket->SetPolled(true);
++    TesterTCPSocket_ClientSocket->SetSimMode(!bRealSocket);
++    std::printf("[H-008] TCP tester socket: %s\n", bRealSocket ? "REAL (polled)" : "SIM");
+ }
+ 
+ void W906_TcpPumpTick()
+@@ -144,6 +151,10 @@ void W906_TcpPumpTick()
+     if (!g_inited)
+         return;
+ 
++    // 0) AI(W906-H008) 20261001 (St02-E): the POLLED socket -- finish a pending connect, read, notice a close (H-008).
++    //    Its events land in the queue below and are replayed in this same tick.
++    TesterTCPSocket_ClientSocket->Poll();
++
+     // 1) socket events, in arrival order, on this (Handler) thread
+     std::vector<Ev> q;
+     {
+@@ -199,3 +210,16 @@ void W906_TcpPumpTick()
+ }
+ 
+ unsigned long W906_TcpPumpEvents() { return g_replayed; }
++
++// AI(W906-H008) 20261001 (St02-E): H-008 policy, here (not TesterCommWiring) so a narrow ctest can link it (E2 review n6).
++//   SIM build: the tester client stays SIM (St02-M 20261001: W906_SIM_TCP_SERVERS covers 7016 / 7017 only, W58-4).
++//   SHIP: real, unless HT9045_TCPCMD_SIM is exactly "1" (the same test TesterCommWiring.cpp applies to 7016 / 7017).
++bool W906_TcpTesterRealSocket()
++{
++#ifdef SOFT_SIMULTE
++    return false;
++#else
++    const char* e = std::getenv("HT9045_TCPCMD_SIM");
++    return !(e && e[0] == '1' && e[1] == '\0');
++#endif
++}
+diff --git a/TesterComm/Tcp/TcpPump.h b/TesterComm/Tcp/TcpPump.h
+index 2b60e71..3b2fa3e 100644
+--- a/TesterComm/Tcp/TcpPump.h
++++ b/TesterComm/Tcp/TcpPump.h
+@@ -9,30 +9,35 @@
+ //
+ //    golden                                               here
+ //    ---------------------------------------------------  ------------------------------------------------------
+-//    ClientSocket_TCPIP OnConnect/OnDisconnect/OnError/   vclcompat TClientSocket fires them on ITS reader thread;
+-//      OnRead on the main thread                            W906_TcpPumpInit() re-routes the four events into a
+-//                                                           queue, W906_TcpPumpTick() replays the golden handlers
++//    ClientSocket_TCPIP OnConnect/OnDisconnect/OnError/   vclcompat TClientSocket in POLLED mode (H-008) fires them
++//      OnRead on the main thread (ctNonBlocking:            from Poll() on this thread; W906_TcpPumpInit() still
++//      golden 906_0625_Steven TesterTCP.dfm:2936-2943)      re-routes the four events into a queue, and
++//                                                           W906_TcpPumpTick() replays the golden handlers
+ //                                                           (TesterTCPSocket_On*) on the Handler thread
+ //    TimerTCPIPConnect / TimerProcessTCPData Enabled when  every tick: the same condition golden evaluates in
+-//      TestIF_File.iTestType==TCP_IP_MODE && ON_LINE        TfMain::FormShow (main.cpp:11320-11325) and when the mode
+-//      (main.cpp:11320, cTesterIF.cpp:581-618,              or ON/OFF-LINE changes (cTesterIF.cpp:581-618,
+-//      main.cpp:29770-29781)                                main.cpp:29770-29781); on a true->false edge the socket
++//      TestIF_File.iTestType==TCP_IP_MODE && ON_LINE        TfMain::FormShow (906_0625_Steven main.cpp:10879-10884) and
++//      (main.cpp:10879-10884, cTesterIF.cpp:580-617,        when the mode or ON/OFF-LINE changes (cTesterIF.cpp:580-617,
++//      main.cpp:28804-28819)                                main.cpp:28804-28819); on a true->false edge the socket
+ //                                                           is closed as golden does
+ //    TTimer firing                                        Enabled + Interval (TimerTCPIPConnect: VCL default 1000;
+ //                                                           TimerProcessTCPData: 1 -> every tick pass)
+ //
+-//  ⚠ KNOWN LIMIT (P8): vclcompat TClientSocket in REAL mode connects synchronously (golden's VCL socket was
+-//  non-blocking).  TimerTCPIPConnectTimer's Open() would then block the Handler thread while the tester is
+-//  unreachable -- ruling 11 ("不能互相干擾").  The socket is in SIM mode today (nothing calls SetSimMode(false)),
+-//  so this cannot happen yet; switching to real mode at bring-up must move that Open() off the Handler thread
+-//  (ledger P5).
++//  AI(W906-H008) 20261001 (St02-E): REAL socket in the SHIP build (H-008; RULINGS_20261001 #0).  W906_TcpPumpInit(true)
++//  puts the socket in vclcompat's POLLED mode (SetPolled + SetSimMode(false)): TimerTCPIPConnectTimer's Open()
++//  starts a non-blocking connect and returns at once, and Poll() at the top of every tick finishes it -- the
++//  Handler thread never waits for the tester (ruling 10 = A's aim; ruling 11 "不能互相干擾").  The SIM build stays
++//  SIM, and HT9045_TCPCMD_SIM=1 keeps SHIP SIM too (W906_TcpTesterRealSocket).  SHIP + TCP_IP_MODE + ON-LINE really
++//  dials TesterIF [Tester TCPIP] Address:Port (golden default 172.16.8.150:6000, cTesterIF.cpp:778-779).
++//  Known gap: inside a modal wait (ShowMyMessage -> MbWait) this pump does not run; golden's ShowModal kept
++//  processing socket messages.
+ //
+ //  Threads: Init / Tick on the Handler thread only.  The queue callbacks run on the shim's thread.
+ // ===========================================================================
+ #ifndef TESTERCOMM_TCP_TCPPUMP_H
+ #define TESTERCOMM_TCP_TCPPUMP_H
+ 
+-void W906_TcpPumpInit();
++void W906_TcpPumpInit(bool bRealSocket = false);   // AI(W906-H008) 20261001 (St02-E): true = REAL socket, POLLED (H-008)
++bool W906_TcpTesterRealSocket();                   // AI(W906-H008) 20261001 (St02-E): SIM build false; SHIP true unless HT9045_TCPCMD_SIM=1
+ void W906_TcpPumpTick();
+ unsigned long W906_TcpPumpEvents();   // replayed socket events (diagnostics / ctest)
+ 
+diff --git a/WebStart.h b/WebStart.h
+index a196f56..4de5620 100644
+--- a/WebStart.h
++++ b/WebStart.h
+@@ -33,7 +33,7 @@
+ //
+ //  量法 ＝ 跑這支（它一次跑就抓到上面那個錯）：
+ //      python tools/start_sites_census.py
+-//      python tools/start_sites_census.py --check 34 30 4    ← CI 用（ctest START_SitesCensus），數字變了就紅燈（AI(W906-R80) 20260927：原為 33 30 3，HandlerGpibMsg.cpp:717 其實被同檔 `#define W906_REMOTE_START_WIRED 0` 閘住；AI(W906-SENSORSCAN) 20260924：原為 32 29 3，cSensorScan.cpp 新增一個活的呼叫點，見 :68）  AI(W906-W10) 20260927 (St02-E)：現為 --check 34 31 3 —— Command.cpp:17108 HTSET,333 經 W906_RemoteRunStart（forms/fMain.h 檔尾）接到 StartFromWeb，工具把它算成活的呼叫點
++//      python tools/start_sites_census.py --check 34 30 4    ← CI 用（ctest START_SitesCensus），數字變了就紅燈（AI(W906-R80) 20260927：原為 33 30 3，HandlerGpibMsg.cpp:717 其實被同檔 `#define W906_REMOTE_START_WIRED 0` 閘住；AI(W906-SENSORSCAN) 20260924：原為 32 29 3，cSensorScan.cpp 新增一個活的呼叫點，見 :68）  AI(W906-W10) 20260927 (St02-E)：現為 --check 34 31 3 —— Command.cpp:17108 HTSET,333 經 W906_RemoteRunStart（forms/fMain.h 檔尾）接到 StartFromWeb，工具把它算成活的呼叫點  AI(W906-H012-CENSUS) 20261001：現為 --check 34 32 2 —— St02 MR !33 把 TesterComm/Handler/HandlerGpibMsg.cpp 的 GPIB 遠端 START 接上 W906_RemoteRunStart（W906_REMOTE_START_WIRED 1），原本的第 4 個閘（:717）變成活的
+ //  它做兩件目視做不到的事：(1) 同時比對直接呼叫與包裝巨集，且**去掉註解後才比對**；
+ //  (2) 對每個候選**整檔線性累積 #if 0 深度**，而不是往回找最近的 #if ——
+ //  GATE G01 橫跨 212 行（4521-4733），往回看只會看到 4182 那個已經 #endif 掉的。
+diff --git a/csystem.cpp b/csystem.cpp
+index 422e64d..1f52968 100644
+--- a/csystem.cpp
++++ b/csystem.cpp
+@@ -2574,7 +2574,7 @@ void ResetHotPlateSearchParameter();                                           /
+ #define W7C1_FLTCSENSOR_CLEAR(w)  do { } while(0)   // golden fLtcSensor->ClearLtcSensor(w)
+ //  GetLastOpenFN / DataPath / WriteIniData (common.h; GetLastOpenFN is #if 0 there,
+ //  WriteIniData is __fastcall).  Used only inside if(bRestModeBackupParm) (false
+-//  offline).  Provide TU-local stand-ins (offline: no recipe file written).   [RETIRED 20261001, AI(W906-W7C1-INI) on :2578]
++void __fastcall WriteIniData(AnsiString FileName, AnsiString Group, AnsiString Name, AnsiString Value);  extern AnsiString asGeneralPath;   //AI(W906-SAFEDOOR-REC) 20261001: golden common.h:251 / :60, for RecordSafeDoorStates G25 / G28a / G28b (:21452 / :21667 / :21686) -- the AnsiString overload was only declared at :28488, after them.   //  offline).  Provide TU-local stand-ins (offline: no recipe file written).   [RETIRED 20261001, AI(W906-W7C1-INI) on :2578]
+ AnsiString __fastcall GetLastOpenFN();   //AI(W906-W7C1-INI) 20261001: seam RETIRED (this line and :2579-2584) per RULINGS_20261001 #0 / #5 -- was 'static AnsiString W7C1_GetLastOpenFN(){ return AnsiString(""); }' plus the #defines below, which turned EVERY later GetLastOpenFN / DataPath / WriteIniData in this TU into a no-op.  The real ones are common.cpp:1446 GetLastOpenFN, :225 DataPath (W906IniDataRedirect), :1044-1214 WriteIniData (common.h:247-252), declared here because common.h is not included in this TU (see :8894).  Live sites this makes real, measured with g++ -E on 1001 (only these survive the preprocessor): :3111-3116 the rest-mode Contact.Data restore (reachable only once atester.cpp:4221 un-gates the [I49] raise -- the only setter of bRestModeBackupParm), :7510-7513 [I06] config.ini bI01TesterFinishThenHome, :7659 CC_ASE_KaohSiung HandlerCondition.Data "Auto Site Mapping Count"
+ //#define GetLastOpenFN          W7C1_GetLastOpenFN   (retired 20261001, see :2578)
+ extern AnsiString DataPath;   // common.cpp:225 = golden common.h:72   (was 'static AnsiString W7C1_DataPath_seam;', retired 20261001, see :2578)
+@@ -16547,7 +16547,7 @@ void DoSystem()
+ // BEHAVIOUR DELTA: the per-tick safe-door open/close AUDIT LOG is not written.  This is a
+ // LOGGING loss only -- it is not an interlock; the interlock is CheckSafeDoorIsClosed()
+ // below.  UN-GATE as soon as the sibling body lands (single line).
+-#if 0 // GATE G11 -- golden csystem.cpp:4394 VERBATIM below; see note above
++#if 1 // GATE G11 -- golden csystem.cpp:4394 VERBATIM below; see note above   //AI(W906-SAFEDOOR-REC) 20261001: LIFTED per RULINGS_20261001 #0 / #5 -- the note above is stale: RecordSafeDoorStates has its golden body in this file (:21388 = golden csystem.cpp:2833), so DoSystem() (:16323 = golden :4269) records the safe-door / heater-door / hatchway open-close messages and SECS door events again, as golden.  Logging and state only: no output, no interlock (that is CheckSafeDoorIsClosed below).  G26 / G27 inside the body stay gated
+     RecordSafeDoorStates();                                                     //Steven 20100116
+ #endif // GATE G11
+ 
+@@ -19305,7 +19305,7 @@ void DoHeaterOn()
+                     //  DELTA : The vortex/cooling-fan solenoid is not driven.  WAR1637 ("Heater fan can
+                     //  DELTA : not run") STILL FIRES and bChamboFanCloseTemp is still latched, so the
+                     //  DELTA : ALARM PATH IS INTACT -- only the cooling-fan actuation is lost.
+-                    #if 0 // GATE G04 -- golden csystem.cpp:1158-1158 (text below is golden VERBATIM)
++                    #if 1 // GATE G04 -- golden csystem.cpp:1158-1158 (text below is golden VERBATIM)   //AI(W906-COOLFAN) 20261001 (St02-E): LIFTED -- DoSwCoolingFan has a live body (:24787 = golden 906 csystem.cpp:20434-20569); the #else arm is dead text
+                     DoSwCoolingFan(HasAreaOverAmbientTemp());                   //20111130  Dell
+                     #else
+                         // (no replacement -- the gated statement(s) simply do not happen)
+@@ -19428,7 +19428,7 @@ void DoHeaterOn()
+         //  DELTA : Cooling fan not driven when EMG/power-save switches the heater off.
+         //  DELTA : SW[SwHeaterRelay].Off() + HeaterLog + fHeaterOK=false (golden :1211-1215)
+         //  DELTA : are ACTIVE, so the heater really is cut.
+-        #if 0 // GATE G07 -- golden csystem.cpp:1217-1217 (text below is golden VERBATIM)
++        #if 1 // GATE G07 -- golden csystem.cpp:1217-1217 (text below is golden VERBATIM)   //AI(W906-COOLFAN) 20261001 (St02-E): LIFTED -- see :19308
+         DoSwCoolingFan(HasAreaOverAmbientTemp());                               //20111130  Dell
+         #else
+             // (no replacement -- the gated statement(s) simply do not happen)
+@@ -19462,7 +19462,7 @@ void DoHeaterOn()
+         //  WHY   : same as G04.
+         //  DELTA : Cooling fan not driven while a heater/chamber door is open.  fHeaterOK is
+         //  DELTA : still cleared (golden :1225-1239, ACTIVE), so the door interlock holds.
+-        #if 0 // GATE G08 -- golden csystem.cpp:1241-1241 (text below is golden VERBATIM)
++        #if 1 // GATE G08 -- golden csystem.cpp:1241-1241 (text below is golden VERBATIM)   //AI(W906-COOLFAN) 20261001 (St02-E): LIFTED -- see :19308
+         DoSwCoolingFan(HasAreaOverAmbientTemp());                               //20111130  Dell
+         #else
+             // (no replacement -- the gated statement(s) simply do not happen)
+@@ -19658,7 +19658,7 @@ void DoHeaterOn()
+                 //       DELTA: no cooling-fan drive on the normal (non-QA) heater
+                 //       path.  The ladder below that actually switches
+                 //       SW[SwHeaterRelay] is ACTIVE.
+-#if 0 // GATE G12b -- golden csystem.cpp:1337 (text below is golden VERBATIM)
++#if 1 // GATE G12b -- golden csystem.cpp:1337 (text below is golden VERBATIM)   //AI(W906-COOLFAN) 20261001 (St02-E): LIFTED -- see :19308 (G12 above stays gated: a customer-only Configuration chkHeater relay override, S25)
+                 DoSwCoolingFan(HasAreaOverAmbientTemp());                       //20111130  Dell
+ #else
+                 // (DoSwCoolingFan has no compiled body in this tree -- see G04)
+@@ -21449,7 +21449,7 @@ void RecordSafeDoorStates()
+                     //  DELTA : has not been opened for a long time" report.  The door-open DB message
+                     //  DELTA : (MyDBIProcess "Safe Door %d is Opened", golden :2864-2865) and every SECS
+                     //  DELTA : report below ARE ACTIVE.  No interlock, no alarm.
+-                    #if 0 // GATE G25 -- golden csystem.cpp:2874-2875 (text below is golden VERBATIM)
++                    #if 1 // GATE G25 -- golden csystem.cpp:2874-2875 (text below is golden VERBATIM)   //AI(W906-SAFEDOOR-REC) 20261001: LIFTED -- both WHY blockers expired: (1) batch 18 retired the W7C1 WriteIniData seam (:2578-2584) and :2577 declares the real AnsiString overload; (2) ht9045_sm already called the real common.cpp WriteIniData after :26488, and every binary links ht9045_core.  Writes asGeneralPath (system Gerneral.ini; per-test scratch copy in ctest, W906_GENERAL_INI_PATH)
+                     sTime.sprintf("%04d-%02d-%02d-%02d", SystemYear, SystemMonth, SystemDate, SystemHour);
+                     WriteIniData(asGeneralPath, "LastSafeDoorOpen", Sen[iSafeDoor[i]].Name, sTime);
+                     #else
+@@ -21557,7 +21557,7 @@ void RecordSafeDoorStates()
+     //  WHY   : with no compiled body in the port, and in THIS TU it would anyway resolve
+     //  WHY   : through the pre-existing `#define EmptySocketCheckModeBeUse
+     //  WHY   : W7C2_EmptySocketCheckModeBeUse` seam to a `return false` stand-in, so the
+-    //  WHY   : branch is already dead here even before the gate.
++    //  WHY   : branch is already dead here even before the gate.   [20261001 AI(W906-SAFEDOOR-REC): (2) expired -- batch 16 retired that seam (dd4609f0), EmptySocketCheckModeBeUse is real; (1) still true -- TfMain has no ResetForESC (golden main.cpp:8028-8038 is translated as THandlerTesterSide::ResetForESC, TesterComm/Handler/HandlerTesterSide.h:72), so the gate stands until a TfMain forward exists]
+     //  DELTA : On an RFMD machine using Empty Socket Check, opening a heater door no
+     //  DELTA : longer kicks off the empty-socket One Cycle.  The heater-door-open DB
+     //  DELTA : message (golden :2958-2962) is ACTIVE.  No interlock, no alarm.
+@@ -21664,7 +21664,7 @@ void RecordSafeDoorStates()
+                 //  DELTA : The bSafeDoorHatchway[i] latch transition itself (golden :3027) IS
+                 //  DELTA : ACTIVE, and the hatchway ALARM lives in CheckSafeDoorIsClosed (golden
+                 //  DELTA : :2698-2715, ACTIVE in this block), not here.  No interlock, no alarm.
+-                #if 0 // GATE G28a -- golden csystem.cpp:3028-3029 (text below is golden VERBATIM)
++                #if 1 // GATE G28a -- golden csystem.cpp:3028-3029 (text below is golden VERBATIM)   //AI(W906-SAFEDOOR-REC) 20261001: LIFTED -- both WHY blockers expired: (1) batch 18 retired the W7C1 WriteIniData seam (:2578-2584) and :2577 declares the real AnsiString overload; (2) ht9045_sm already called the real common.cpp WriteIniData after :26488, and every binary links ht9045_core.  Writes asGeneralPath (system Gerneral.ini; per-test scratch copy in ctest, W906_GENERAL_INI_PATH)
+                 sTime.sprintf("%04d-%02d-%02d-%02d", SystemYear, SystemMonth, SystemDate, SystemHour);
+                 WriteIniData(asGeneralPath, "TriTemp_SafeDoorHatchwayOpen", Sen[iSafeDoorHatchway[i]].Name, sTime);
+                 #else
+@@ -21683,7 +21683,7 @@ void RecordSafeDoorStates()
+                 //  WHY   : same as G28a.
+                 //  DELTA : The hatchway-closed timestamp is not persisted.  bSafeDoorHatchway[i]=true
+                 //  DELTA : at golden :3039 IS ACTIVE.  No interlock, no alarm.
+-                #if 0 // GATE G28b -- golden csystem.cpp:3036-3037 (text below is golden VERBATIM)
++                #if 1 // GATE G28b -- golden csystem.cpp:3036-3037 (text below is golden VERBATIM)   //AI(W906-SAFEDOOR-REC) 20261001: LIFTED -- both WHY blockers expired: (1) batch 18 retired the W7C1 WriteIniData seam (:2578-2584) and :2577 declares the real AnsiString overload; (2) ht9045_sm already called the real common.cpp WriteIniData after :26488, and every binary links ht9045_core.  Writes asGeneralPath (system Gerneral.ini; per-test scratch copy in ctest, W906_GENERAL_INI_PATH)
+                 sTime.sprintf("%04d-%02d-%02d-%02d", SystemYear, SystemMonth, SystemDate, SystemHour);
+                 WriteIniData(asGeneralPath, "TriTemp_SafeDoorHatchwayClosed", Sen[iSafeDoorHatchway[i]].Name, sTime);
+                 #else
+@@ -24809,7 +24809,7 @@ bool DoSwCoolingFan(bool OnOff)
+         return false;
+     }
+     #else
+-        // (no replacement -- the gated statement(s) simply do not happen)
++        if(W906_FormShowing("fiosetview", fiosetview->fShow)==true) return false;   //AI(W906-COOLFAN) 20261001 (St02-E): GATE H1-07 = golden 906 csystem.cpp:20437-20440 (V912 :21431-21434) through the page table (csystem.h:440 W906_FormShowing; kRows "fiosetview" = the IO page); golden text stays under the #if 0 above
+     #endif
+ 
+     //--------------------------------------------------------------------------
+@@ -24835,7 +24835,7 @@ bool DoSwCoolingFan(bool OnOff)
+         return false;
+     }
+     #else
+-        // (no replacement -- the gated statement(s) simply do not happen)
++        // (no replacement -- the gated statement(s) simply do not happen)   //AI(W906-COOLFAN) 20261001 (St02-E): H1-08 stays gated -- waits for St01's FileRW_ProxyPageIndex (claim FROM_STEVEN §1 10:37); inert today, since golden chkHeaterClick (cConfiguration.cpp:5697-5711) is not ported, so the chkHeater proxy is never checked here
+     #endif
+ 
+     if(MachineTypeChoice==Type_HT9046_LS ||                                     //9046LS是利用蝸牛降溫，所以控制方式跟其它版本不一樣
+diff --git a/docs/DUET3D_REFERENCE_ANALYSIS.md b/docs/DUET3D_REFERENCE_ANALYSIS.md
+index bbfe443..4e9a0b7 100644
+--- a/docs/DUET3D_REFERENCE_ANALYSIS.md
++++ b/docs/DUET3D_REFERENCE_ANALYSIS.md
+@@ -1037,7 +1037,7 @@ vs 我們硬編碼的警報處置；
+ ### 9.1.1 P12 的輸入：全樹「能啟動機台」的呼叫點 census（20260921）
+ 
+ 提案 P12 說「不是逐一補 gate，而是讓它們全部經過同一個入口」。要做那件事，
+-第一步是知道「它們」到底有幾個。**這張清單被量錯三次，第三次是這一輪的我。**
++第一步是知道「它們」到底有幾個。**這張清單被量錯三次，第三次是這一輪的我。**　**最新（20261001）：34 個／活 32／閘 2**（St02 MR !33 接上 GPIB 遠端 START）——數字一律以 `tools/start_sites_census.py` 為準，下面的舊數字是當時的量測。
+ 
+ **三次錯誤**（寫出來是因為它們共同證明了 P12 的價值）：
+ 
+diff --git a/docs/GOLDEN_DEFECT_LEDGER.md b/docs/GOLDEN_DEFECT_LEDGER.md
+index 9074946..da161a3 100644
+--- a/docs/GOLDEN_DEFECT_LEDGER.md
++++ b/docs/GOLDEN_DEFECT_LEDGER.md
+@@ -1799,7 +1799,7 @@ DEFECT/NOTE/...` 命中；fixture 內的所有 `golden :NNNN` 引註都只是客
+ 
+ | # | 標記/編號 | 類型 | port 位置(檔:行) | golden 位置 | 現象摘要(一句話,繁中) | 潛在影響(一句話,繁中) | 發現波次/日期 |
+ |---|---|---|---|---|---|---|---|
+-| 1 | （程式碼裡還沒有 GOLDEN 標記；來源 FROM_IFOR §3 20261001 09:1x） | BUG | aRotateKIT_In.cpp:3691-3694；aRotateKIT_Out.cpp:3806-3809 | golden 906 aRotateKIT_In.cpp:3243、aRotateKIT_Out.cpp:3335（V912 :3370／:3393 同一段） | 取料失敗重試的 case 4700 先把手臂歸零再回 case 4000，歸零後 Z 停在原點而不是安全高度，case 4000 移 XY 之前的 Z 檢查（CheckInArmZ／CheckOutArmZ）永遠成立。 | 入料臂一直重複歸零 Z、點動 pitch；出料臂綠燈亮著不動也不報警，要按 HOME 才停。Ifor 0922 在 V912 本機插 case 4710（先把 Z 移到安全高度）修過、未交付；移植樹要不要修＝NIGHT_REPORT §0 第 27 項（Jimmy 決定），在那之前照翻。 | 20261001 |
++| 1 | （程式碼裡還沒有 GOLDEN 標記；來源 FROM_IFOR §3 20261001 09:1x） | BUG | aRotateKIT_In.cpp:3691-3694；aRotateKIT_Out.cpp:3806-3809 | golden 906 aRotateKIT_In.cpp:3243、aRotateKIT_Out.cpp:3335（V912 :3370／:3393 同一段） | 取料失敗重試的 case 4700 先把手臂歸零再回 case 4000，歸零後 Z 停在原點而不是安全高度，case 4000 移 XY 之前的 Z 檢查（CheckInArmZ／CheckOutArmZ）永遠成立。 | 入料臂一直重複歸零 Z、點動 pitch；出料臂綠燈亮著不動也不報警，要按 HOME 才停。Ifor 0922 在 V912 本機插 case 4710（先把 Z 移到安全高度）修過、未交付；移植樹要不要修＝NIGHT_REPORT §0 第 27 項（Jimmy 決定），在那之前照翻。【1001 13:2x Jimmy「照建議」＝移植樹照 Ifor 修法修（Ifor01 的 I-04；RULINGS_20261001 第 15 條），修好之後這一筆改成「移植樹已修」】 | 20261001 |
+ 
+ ## 維護規則
+ 
+diff --git a/docs/INBOX_QUEUE.md b/docs/INBOX_QUEUE.md
+index 1bae665..92df45d 100644
+--- a/docs/INBOX_QUEUE.md
++++ b/docs/INBOX_QUEUE.md
+@@ -161,11 +161,12 @@
+ | 126 | 🟢 **ctest `TesterComm_TcpCmdServer` 第 10 段（HTSET,322／323）寫檔太多，負載一高就逾時**：0930 第三批 gate 出貨組態逾時（201 s）、單獨重跑也逾時（180 s），放寬逾時單獨跑 116.5 s 全過——第 1～9 段 8.4 s，第 10 段 107 s（`HTSET,322,5` 一個指令 58.8 s，INI 逐次寫檔）。安靜時整支約 20 s。處置：調高它的 TIMEOUT 或減少那段的寫檔次數（不改被測程式） | 筆電 0930 14:1x | 🔜 |
+ | 127 | 🔴 **跳出 Message／Note 時，誰在接收面板實體鍵？**（使用者 0930 14:4x：「在周末下班任務中，加入思考跳出Message和Note時候，是否有Timer專門接收面板訊息，在BCB6是有Scankey來接收訊息並做出反應」）——golden：框開著時框自己的 Timer（例 TfNote::Timer1Timer，10 ms）呼叫 `ScanKey`／`ScanPannelKey`，面板 START／PAUSE／RETRY…＝按畫面上那顆鈕（`KeyComp`／`ReturnCode`）。移植樹：阻塞型框的等待迴圈有輪詢 1203 IO（沒逐一對過 golden）；不阻塞的 kcode==0 通知（含撞機警報，INBOX 118／119）沒有人讀面板鍵；主畫面沒框時面板鍵也沒作用（INBOX 86）。要做：① 研究（唯讀 workflow）：golden 每一種框（fNote 通知／阻塞、MyMessageBox、YES/NO、ShowMyMessage…）開著時面板鍵的接收點、週期、對應表；移植樹每一種框現在實際怎麼接；缺口表。② 照 golden 補（跟 122／123／124、86 一起排；面板鍵答框＝機台會動的決定，照 golden 翻，不另加條件）。技能 `ht9045-alarm-dismissal` 有 ScanKey／ScanPannelKey／KeyComp 的整理 | 使用者 0930 14:4x | ✅ 第七批 `f474abc8`：golden `TfMain::FormShow` main.cpp:9659 `SystemInitialOK=true` 照翻進 wb_serve 開機（`FileRW/MainBoot.cpp` `W906_FRWBoot_SystemInitialOK`，型號讀取失敗時照 golden 不設）⇒ 三個等待迴圈（警報／ShowMyMessage／YES-NO）的實體面板鍵、`DoPanelLamp`、訊息框出現時 `StopAllMotor(true)` 從此照 golden；新 ctest `SysinitBoot`。兩組態全新 gate＝基準（出貨 273 支 4 項、模擬 273 支 19 項），main `beccfda4`＝GitHub 第 92 包 `05c15d1` |
+ | 128 | 🔴 **常溫模擬第二個停點：入料臂取完料後 `InArmTask` 停在 1100，入料飛梭不動**（筆電 0930 14:4x 用 INBOX 121 的模擬 wb_serve 重跑 S1 流程 amb0930b 量到）——121 之後 `InArmPickFromLoadTask` 走完 10→12→200→1000→2000→2100→1（入料臂真的從 Loader 取料了），但 `InArmTask` 從 14:40:16 起一直是 1100，`MInShutte1` 沒動、出料飛梭與出料臂從頭到尾沒動。要做：① 唯讀研究（workflow，筆電 0930 14:5x 派）：golden 的 InArm case 1100 在等哪個條件、移植樹那個條件由誰維護、是替身還是沒翻；② 照 golden 補，附 ctest，再重跑流程看有沒有走到放料／飛梭。可能相關：121 帶出來的兩個舊替身（`InArmLeftSideNoIC`、`IsPick*`／`IsSht*Finish` 恆回 true） | 筆電 0930 16:06 | 🔧 0930 16:1x 根因找到（研究 workflow，筆電獨立再比一次）：`DoPlaceToHotPlate_9045()` 是恆回 false 的替身，golden 派送器原文（`ainarm_SearchPlacePlate.cpp:4814-4948`，extern 24／24、本體 110／110 行 0 差異）被 `#if 0 // TODO(W7)` 包著；熱盤模式下每一種機型的 case 1100 只等這個函式 ⇒ 永遠出不去。W6.2c 解開了旁邊兩條同類派送（`ainarm9045.cpp` DoInArm_9045／_SuckerMap）卻沒回來解這一條。修正在 `v906/jimmy-hpdisp`（`AI(W906-HPDISP)`，同一行改、行數不變，canary 改成會失敗的路由見證），16:38 起兩組態建置＋反證測試中；過了進第五批，再重跑模擬流程看熱盤放料→浸溫→取料→飛梭；✅ **1001 第十四批上 main**（`b2937e19`）：canary 的 SegFault 用 gdb 查到是測試沒照開機建 `InArmOffSet[]`（產品碼沒問題），補了開機順序；反證（換回替身＝紅）成立；兩組態全新 gate＝基準（出貨 284 支 4 項、模擬 284 支 19 項），system／config 0／0／0。下一步重跑模擬流程看熱盤放料→浸溫→取料→飛梭 |
+-| 129 | 🔴 **全樹「空砲彈」普查，照 golden 把功能補齊**（使用者 0930 19:5x 補充：「在機台端測試功能時，發現很多功能是空砲彈，沒有功能，後來經過修改才解決，你能夠依此類推把其他功能也搜尋一遍，一併把功能補齊。這任務可以放在機台完整整合到主版後接著進行」）——「空砲彈」＝按了回 ok、畫面也沒報錯，但底下什麼都沒做。機台端 0022～0044 修掉的同一族：web 0010 SR-WIRE（State Record 鈕從沒送到 C++）、web 0019 TEACH-LED（教導頁十顆燈從不更新）、web 0020 TEACH-UNWIRED（按了沒反應的鈕）、cpp 0039（M36／M40 的煞車沒有 SW[] 物件，永遠不會被驅動）、cpp 0026（DS402 歸零沒寫卡片的歸零速度）。筆電這邊同族的前例：INBOX 121（`SetHTrayPanel` 空殼＋閘 ⇒ 盤面永遠 0 顆）、125（`CheckCanChangeRealDummy` 恆回 true）、127（`SystemInitialOK` 從沒設 true ⇒ 面板鍵沒作用）、128（`DoPlaceToHotPlate_9045` 恆回 false）、Jerry J-6（`CheckSocketSensor` 替身）、121 帶出的 `InArmLeftSideNoIC`／`IsPick*`／`IsSht*Finish` 恆回 true。**做法**：① 用工具普查（不靠人工 grep；分母要附）五類：(a) 函式本體是空的或只回常數，而 golden 同名函式有本體；(b) `#if 0`／`GATE`／`TODO(W…)` 閘住的 golden 行，閘的理由已過期（相依已存在）；(c) 網頁送出的命令在 C++ 沒有分派、或分派到替身；(d) 全域旗標只有定義、沒有任何寫入點；(e) golden 有的 SW[]／Sen[]／MOT 物件或登錄在移植樹沒有。② 每一筆分級（會動機台／改檔／只顯示）＋對 golden 逐行看；≥95% 確定就照 golden 補、附 ctest（會動機台的照「忠於翻譯」直接翻，加閘只因為相依不存在）。③ 每批兩組態 gate＝基準才推 main＋GitHub 包；跟 St01／St02 認領的檔先看 FROM_STEVEN §1 | 使用者 0930 19:5x | 🔧 **1001 普查結果**（唯讀；筆電 scratchpad `census129\`）：**(a)(b)** 空殼函式與過期的閘 944 列、手動讀 114 列、確認 56 個真的空砲彈；**(c)(d)** 網頁命令沒人接與從沒寫入的旗標 975 列、信心 ≥70 的 34 列，其中活 bug：`TempFuseLimitType` 從沒被設（Temp_Set 存檔被 WAR15194 擋、出貨組態加熱繼電器 41 秒後被關）；**(e)**（1001 06:2x 回來）缺的 SW／Sen／MOT 物件、計時器、開機步驟 360 列（STATE 194、IO 輸出 92、通訊 34、寫檔 15、畫面 13、運動 12），前 15 項與活 bug `SaveJamRateByDay`（換日時昨天的 JAM 次數沒存就被清掉；第十二批做了 `cprod.cpp` 的掛勾，裝上要 St01 的 `MainClose.cpp`）列在 NIGHT_REPORT §0b。幾乎都會讓機台多做動作 ⇒ 照夜間規則不自己補，分三組列在 NIGHT_REPORT §0 第 17、18 項與 §0b 等 Jimmy 決定；✅ **1001 第十五批**（你 08:4x 裁決照 golden 全補）：(c)(d) D1-006 `TempFuseLimitType`（`037062cf`）、更正帶出來的 Motor Test 非 1203 軸回原點（`44ced20e`）上 main；第十六批（筆電 b16）：(a)(b) #13 三溫機門 6 鎖、#17 急停通知 ATC（連同放開 G-ATC-C 與 CheckATC6System G-ATC-A）、#11 BinCount.txt、#5 Auto 盤氣缸放開、I41 空 socket 檢查、#7 上料氣缸預推；✅ **1001 第十六批上 main**：(a)(b) #13、#17（＋G-ATC-A／C）、#11、#5、I41、#7；(e) E-BOOT-002 開機 Servo On 卡在 1203（§0 第 22 項）；#6 冷卻風扇委派 St02；加熱鏈（E-T2-008／E-TH-001／E-RT-007）交派 Ifor（等 Jimmy 轉）；第十七批：E-T1-012 安全門鎖、E-T2-001 大風扇、#16 SetLotState；✅ **1001 第十七批上 main**：(e) E-T1-012 安全門鎖、E-T2-001 大風扇，(a)(b) #16 SetLotState；✅ **1001 第十八批上 main**：(a)(b) `csystem.cpp` W7C1／g4 寫檔替身退役（[I06] config.ini、ASE 高雄 ASM 計數變真的；休息模式還原 Contact 等 atester 那半）；另 TfMain::Pause 轉送（St01 D-032）、SECS RCMD REMOTE_START、Jerry MR !24；E-BOOT-005 `RunInfo.Factory` 改請 St01 先加 FileRW 的客戶名稱函式 |
++| 129 | 🔴 **全樹「空砲彈」普查，照 golden 把功能補齊**（使用者 0930 19:5x 補充：「在機台端測試功能時，發現很多功能是空砲彈，沒有功能，後來經過修改才解決，你能夠依此類推把其他功能也搜尋一遍，一併把功能補齊。這任務可以放在機台完整整合到主版後接著進行」）——「空砲彈」＝按了回 ok、畫面也沒報錯，但底下什麼都沒做。機台端 0022～0044 修掉的同一族：web 0010 SR-WIRE（State Record 鈕從沒送到 C++）、web 0019 TEACH-LED（教導頁十顆燈從不更新）、web 0020 TEACH-UNWIRED（按了沒反應的鈕）、cpp 0039（M36／M40 的煞車沒有 SW[] 物件，永遠不會被驅動）、cpp 0026（DS402 歸零沒寫卡片的歸零速度）。筆電這邊同族的前例：INBOX 121（`SetHTrayPanel` 空殼＋閘 ⇒ 盤面永遠 0 顆）、125（`CheckCanChangeRealDummy` 恆回 true）、127（`SystemInitialOK` 從沒設 true ⇒ 面板鍵沒作用）、128（`DoPlaceToHotPlate_9045` 恆回 false）、Jerry J-6（`CheckSocketSensor` 替身）、121 帶出的 `InArmLeftSideNoIC`／`IsPick*`／`IsSht*Finish` 恆回 true。**做法**：① 用工具普查（不靠人工 grep；分母要附）五類：(a) 函式本體是空的或只回常數，而 golden 同名函式有本體；(b) `#if 0`／`GATE`／`TODO(W…)` 閘住的 golden 行，閘的理由已過期（相依已存在）；(c) 網頁送出的命令在 C++ 沒有分派、或分派到替身；(d) 全域旗標只有定義、沒有任何寫入點；(e) golden 有的 SW[]／Sen[]／MOT 物件或登錄在移植樹沒有。② 每一筆分級（會動機台／改檔／只顯示）＋對 golden 逐行看；≥95% 確定就照 golden 補、附 ctest（會動機台的照「忠於翻譯」直接翻，加閘只因為相依不存在）。③ 每批兩組態 gate＝基準才推 main＋GitHub 包；跟 St01／St02 認領的檔先看 FROM_STEVEN §1 | 使用者 0930 19:5x | 🔧 **1001 普查結果**（唯讀；筆電 scratchpad `census129\`）：**(a)(b)** 空殼函式與過期的閘 944 列、手動讀 114 列、確認 56 個真的空砲彈；**(c)(d)** 網頁命令沒人接與從沒寫入的旗標 975 列、信心 ≥70 的 34 列，其中活 bug：`TempFuseLimitType` 從沒被設（Temp_Set 存檔被 WAR15194 擋、出貨組態加熱繼電器 41 秒後被關）；**(e)**（1001 06:2x 回來）缺的 SW／Sen／MOT 物件、計時器、開機步驟 360 列（STATE 194、IO 輸出 92、通訊 34、寫檔 15、畫面 13、運動 12），前 15 項與活 bug `SaveJamRateByDay`（換日時昨天的 JAM 次數沒存就被清掉；第十二批做了 `cprod.cpp` 的掛勾，裝上要 St01 的 `MainClose.cpp`）列在 NIGHT_REPORT §0b。幾乎都會讓機台多做動作 ⇒ 照夜間規則不自己補，分三組列在 NIGHT_REPORT §0 第 17、18 項與 §0b 等 Jimmy 決定；✅ **1001 第十五批**（你 08:4x 裁決照 golden 全補）：(c)(d) D1-006 `TempFuseLimitType`（`037062cf`）、更正帶出來的 Motor Test 非 1203 軸回原點（`44ced20e`）上 main；第十六批（筆電 b16）：(a)(b) #13 三溫機門 6 鎖、#17 急停通知 ATC（連同放開 G-ATC-C 與 CheckATC6System G-ATC-A）、#11 BinCount.txt、#5 Auto 盤氣缸放開、I41 空 socket 檢查、#7 上料氣缸預推；✅ **1001 第十六批上 main**：(a)(b) #13、#17（＋G-ATC-A／C）、#11、#5、I41、#7；(e) E-BOOT-002 開機 Servo On 卡在 1203（§0 第 22 項）；#6 冷卻風扇委派 St02；加熱鏈（E-T2-008／E-TH-001／E-RT-007）交派 Ifor（等 Jimmy 轉）；第十七批：E-T1-012 安全門鎖、E-T2-001 大風扇、#16 SetLotState；✅ **1001 第十七批上 main**：(e) E-T1-012 安全門鎖、E-T2-001 大風扇，(a)(b) #16 SetLotState；✅ **1001 第十八批上 main**：(a)(b) `csystem.cpp` W7C1／g4 寫檔替身退役（[I06] config.ini、ASE 高雄 ASM 計數變真的；休息模式還原 Contact 等 atester 那半）；另 TfMain::Pause 轉送（St01 D-032）、SECS RCMD REMOTE_START、Jerry MR !24；E-BOOT-005 `RunInfo.Factory` 改請 St01 先加 FileRW 的客戶名稱函式；✅ **1001 第十九批上 main**：(a)(b) #15 `RecordSafeDoorStates`（G11 呼叫點＋G25／G28a／G28b 開門時間戳記；G26／G27 理由更新後留著）；#6 冷卻風扇（St02 MR !34，H1-08 等 St01）；另 St02 MR !31（出貨組態真 TCP tester）、MR !33（GPIB 遠端 START）；gate 抓到 `fMotorTest` 從來沒建立（NULL）⇒ `HandlerGpibMsg.cpp:713` 讀它的成員會當，已修；同類還有 INBOX 134 |
+ | 130 | 🟢 **機台新推的 tools 0001～0080（HTDESIGNER：VS Code 的 HTML 視覺設計工具，`tools/vscode-htdesigner`，0.79.0→0.82.0）**：機台 0930 19:19～19:31 推到 GitHub `machine/integ-ioweb`（`24100e6`..`3617712`），EastSun：「關於小工具部分，編譯沒問題就能commit and push 到github」。每一顆只碰 `tools/vscode-htdesigner`（第一顆建立整個資料夾），不影響 wb_serve、不碰機台設定。不在 RULINGS_20260930 第 11 條的範圍（那條是 cpp 0022～0044／web 0012～0033）⇒ **安全預設：照同一條精神（照機台）下一批收進 main**；收之前在筆電跑它自己的離線測試（機台報：程式庫 159、假 VS Code 166、面板、真 VS Code 148 四層全過）。⚠ 外掛新增事件時會「提議」改 `tools/wb_serve.cpp`／`CMakeLists.txt`／`HtdEvents/HtdEvents.gen.cpp`（編輯器裡未存檔的修改，存了才算）；patch 本身沒有改那幾個檔 | 筆電 0930 19:5x（fetch GitHub 分支時看到） | ✅ 第八批收 **tools 0001～0109**（機台推到 0109，HTDESIGNER 0.111.0；`HT9011UC_Cpp_V3.33.906.0/tools/vscode-htdesigner/`，109 顆照編號 `git am`、59 個檔、只動這個資料夾，不進 wb_serve 建置；EastSun：「編譯沒問題就能 commit and push」）。筆電測試：第 1 層（函式庫，直接對樹上的檔）162／0、第 3 層（假 VS Code）188／0；**第 2 層（無頭 Edge）1 項紅**（對齊線吸附 snaps to a line）、**第 3b 層 2 項沒結果**（這台 msedge 回「invalid option -d」）——機台端四層全過，差異已請 EastSun 看（第 93 包 README）；第 4 層（真的 VS Code）沒跑 |
+ | 131 | 🔴 **網頁更新太頻繁：筆電全部接手，「有開的網頁才更新資料」**（使用者 0930 20:4x：「1. 關於網頁更新過於頻繁問題，你能夠全部接手做嗎？後面通知st01按照我們做法 2. 有開的網頁才能更新資料 3. 參考duet3d做法，連上也會全部送？也是各頁輪詢資料？」＝RULINGS_20260930 第 12 條，取代第 10 條「St01 寫、筆電審」的分工）。**現況**（St01 評估 `.claude/skills/ht9050-st01-evaluations/references/stream-by-open-page.md` `0bfcf9e0`＋筆電 0930 20:3x 對第六批程式核對）：① C++ 每 0.2～0.5 秒整理約 7,100～8,100 個 tag、推給每個瀏覽器分頁（連上先送整張約 200～230 KB，之後只送變的），約 3/4（`pci1203.*` 約 5,900 個）只有平常關著的 1203 設定頁用；② hub（`ht9045_link.js`）把每個 patch 複製給分頁裡每一個 iframe——68 個視窗 65 個開站就載入（59 個藏著）；③ IO 頁每 200 ms 拿一整份 IO 狀態（約 11～16 萬位元組，`HW.IoSetView.html:449-450` 只看 `document.hidden`）、教導頁每 1 秒拿馬達狀態（`HW.teach.html:483-487`），視窗關著也照拿；golden `iosetview.cpp:162`／`uteach.cpp:1366` 第一行都是 `if(fShow==false) return;`。**Duet3D 對照**（`docs/DUET3D_REFERENCE_ANALYSIS.md` §3.2／§3.4／§5.2～5.4，當時逐行驗證）：SBC 模式連上第一則就是完整 Object Model、之後只送變更欄位的 patch，瀏覽器回 `OK` 才送下一包（慢的分頁收合併後的一包）；獨立模式是一條連線的輪詢，高頻 live 欄位每輪一包，其他區塊看「分區序號」變了才重抓；**兩種都不是各頁輪詢，也不是只送開著的頁面**——整個瀏覽器共用一份機台狀態，頁面只讀它（DSF 有訂閱過濾，但官方網頁自己訂整棵）；省量靠「寫入那一刻就知道變了（不比快照）」＋「高頻／低頻分流」＋「OK 背壓」。**做法**（先量後改；第 10 條的四個條件照舊）：第 1 階段 `[STREAM]` 計數（每 10 秒一行：整理幾個 tag、花幾毫秒、送幾位元組，HTTP 輪詢各端點次數），SIM 改前改後各量一次；第 2 階段 A 頁面表加「這頁有沒有開」的查詢（最小化算開，同 golden fShow）、B `pci1203.*` 在整理那一步就跳過（1203 設定頁沒開時）、C `motionView.trays.*`（Motion View 沒開時）、D hub 只扇出給開著的 iframe、視窗打開時補一份快取快照、E IO 頁／教導頁照 golden 視窗關著不拿；不能停的照送（SECS SV、事件記錄、REST 目錄公開的 io／motor、告警信箱、主畫面群）。第 3 階段（量完再跟你討論）：Duet 的 OK 背壓、分區序號。做完在 TO_STEVEN §4 寫做法，請 St01／St02 之後照做 | 使用者 0930 20:4x | ✅ 第 1 階段＋2A／2B／2C＋2E（`v906/jimmy-stream` `04fd5b04`）兩組態全新 gate＝基準（出貨 4 項＋`WB_F5Contract` 暫存目錄 EPERM 一次、單跑重過 9.14 秒；模擬 19 項＝基準，271 項），sysguard 整目錄 0 改／0 刪／0 新增，0930 23:4x 推 main＝GitHub 第 90 包；F（hub 只給開著的視窗）的藏著頁面審查已完成（71 列，只有 security／io／contact／motionview 在載入時看一次 tag）⇒ 做法改成：關著的視窗連上時只給一小份開機資料（`auth.level`、`machine.gpibModel`、`site.arm{1,2}.s{n}`），打開那一下補完整快照、之後才收更新——已做 `e977284a`（WB_WsLink +20 項）；瀏覽器實測另外抓到 Motion View 的馬達輪詢在視窗關著時還在拿（外框的開關通知它漏收），已修 `ec427cc5`（新 ctest `Stream2E_MvMotor`）；兩者＝第 91 包。**筆電模擬實測（無頭 Edge 開 background.html：40 秒全關、30 秒開 IO、30 秒再關；改前→改後）**：每次整理 tag 8,120→1,787、每次 27～32 ms→4～5 ms、伺服器差異比對 6.8→1.4 ms、連上快照 338 KB→147 KB；視窗全關 40 秒 `io/runtime` 200 次 29.2 MB→0、`motor/runtime` 120 次 5.5 MB→0；IO 開著 30 秒 300→151 次。沒動的（不能停的）：外框對話框信箱每秒 30 次、Production-update 每秒 4 次——第 3 階段再議；**1001 第九批 F2**（St01 00:39 三個 FYI）：外框一建 iframe 就告訴 hub 開關（`background.html` WIN_STATE 起點那一行）；Contact CT／Observer 的輪詢改看外框 `WIN_STATE`，**縮小照拍**（golden 縮小不跑 FormClose：TfContactCT bShow、TfObserver Timer1）；Smart Diagnostic 的 1 秒 timer **不改**（是 golden 的記錄計時器 `SmartDiagnosticTimer->Enabled = bStartRecord`，跟視窗開不開無關）；新 ctest `Stream2E_St01Polls` 18 項、對照組 3 紅；**1001 06:0x 第十一批**（NB2 問題 A：8.6 MB `Production-update.json` 每 250 ms 讓 socket 執行緒忙 115～132 ms）：伺服器檔案快取＋開機預讀＋瀏覽器 HEAD／ETag ✅ 上 main（第 96 包）；新舊兩版模擬 wb_serve 對同一支 8.6 MB 檔：回應位元組 MD5 相同（清過密碼的 General-config.json 也相同），伺服器首位元組 GET 98→19 ms、HEAD 86→6 ms；開機背景預讀 10 個大檔 21.7 MB 用 265 ms；兩次單獨跑 wb_serve 改到的 6 個 system／config 檔已從快照還原（MD5 核對）、新增的 lastdata_backup2.dat 搬到隔離區。**NB2 獨立重量（Q16，S9→S15）**：閒置停止命令 p95 155～285 → 29～42 ms、`sys.ping` 最大 → 7 ms、wb_serve 閒置 CPU 32～36% → 2.4～4.1%、閒置 HTTP 流量 25～33 MB/s → 27 KB/s。問題 B（開機後第一次載入卡約 4.9 秒）原因＝公司端點代理 IST Agent 的掛鉤（socket 執行緒 48 次取樣都在 `winahdcore32.dll`），筆電也有這支代理；根本解法（socket 執行緒上不做可能被掛鉤擋住的呼叫）列 NIGHT_REPORT §2 |
+ | 132 | 🔴 **IO 畫面的吸嘴（suck）那一塊沒有作用**（使用者 0930 22:0x 轉述 EastSun：「eastsun有提到io畫面的suck部分沒功能，需確認」）——INBOX 129「空砲彈」的具體案例，優先查。已知的線索（`JsonBridge/IoBtnPanelClick.cpp` 檔頭）：(h) golden 的吸嘴按鈕看的是**吸嘴感測器那一列的 Enable**（`iosetview.cpp:2159` `pTempSuck->Enable`），移植樹的**吸嘴綁定器 `cinitial.cpp:493-878` 整段 `#if 0`**，沒有吸嘴物件可問；(g) golden 有幾個元件不是一般的 BtnPanelClick（`btnAllVacuumClick` 等）；(b) Index 上有 IC 時 TestSuck 走 golden 的 Suck()／Destroy() 流程，移植樹沒翻、直接拒絕；HT9050 版控的 IO 表吸嘴列 Enable=0（RULINGS_20260929 第 11 條「硬體還沒接」），機台現在的表可能已經改了。要做：① 照 golden `iosetview.cpp` 逐行對吸嘴那一塊（按鈕的 OnClick、SetCompomentIO 的吸嘴分支、燈號從哪裡讀）與網頁 `HW.IoSetView.html` 的 Vacuum 分頁實際送什麼；② 吸嘴綁定器為什麼閘住、相依現在在不在（≥95% 就照 golden 解）；③ 附 ctest；④ 在 GitHub README 請 EastSun 說明「沒功能」是按了沒反應、真空沒起來、還是燈號不亮 | 使用者 0930 22:0x（EastSun 轉述） | ⛔ **1001 00:3x 更正：下面寫的 A／B 兩條路都作廢**——機台 cpp 0045（VACUNIT-1203，第八批收）：吸嘴照 golden 交給 Vacuum Unit（ECAT-VC8，`W906_VC8_SUCKER_REMAP`），而且 `BTestSuck` 在 0x50／0x51 的 DO 16～19 跟上料／Auto1 氣缸（`C_Load_Up`、`C_LoaderDrawerLock`、`C_Auto1_Up`、`C_Auto1DrawerLock`）同一條通道——**B（網頁不擋）會打到氣缸線圈**，A（改 Enable=1）也不是正確的路。真正原因：**這台 ring 1 上目前沒有 ECAT-VC8**（0045：全部 999.0／Error5、按鈕鎖住並寫原因）。GitHub 第 91 包 README 1001 00:3x 已更正（`46fb729`）；只剩「VC8 有沒有裝、接上 ring 1」要 EastSun 回。筆電自己的教訓在 NIGHT_REPORT §6。｜以下是 0930 23:5x 的原紀錄：🔎 **0930 23:5x 查完（只讀，筆電沒有機台的 IO 表，手上最新是 0925 那份 `machines/HT9050/IO_Table.csv`）**：頁面上吸嘴相關元件 313 個（211 顆按鈕、102 個燈，跟 golden `iosetview.dfm` 同數）。照那份表，**147 列吸嘴（Sucker／_On／_Off）全部 Enable=0**，所以 ① **網頁自己擋**：`web/page/ht9045_io_do.js:99`（`whyNotWritable` 回「IO 表 Enable=0」）＋`:276-280` 跳「不能輸出：IO 表 Enable=0」、什麼都不送——EastSun 0929 的「IO畫面一律不要卡控，讓我測試」（`JsonBridge/IoBtnPanelClick.cpp:215` `W906_IO_PAGE_NO_GUARDS 1`）**只改了 C++**，網頁這一層還在擋（128 顆按鈕是這樣）；② 燈：runtime 對 Enable=0 回 `quality:"disabled"`、`isOn:null`（`ChanIoPoints.cpp:139`），燈永遠不變（64 個）；③ 這台是 8 吸嘴（`USE_PICKER_COUNT=1`），16 吸嘴／Placement／OutArm2Suck 那幾塊 IO 表根本沒有列（74 顆按鈕、37 個燈），golden 會藏起來，網頁照畫；④ Tray Arm 的 CatchSuck 是 MotionNet（ISABase 0），1203 機台上本來就不會動；唯一會動的是 System 分頁的 `btnSwDieCleanSuck`（Enable=1、1203）。golden 對 Enable=0 的吸嘴也是按鈕反灰、燈藏起來（`iosetview.cpp:2255-2258`／`:2469-2473`），而且引擎在 Enable=0 時不寫閥、`Sensor()` 恆回 true——**所以現在自動流程取放時也沒有開真空、沒有檢查真空**。另外 INBOX 132 原先寫的「吸嘴綁定器 `cinitial.cpp:493-878` 整段 `#if 0`」**是錯的**：IO 表那一半 `:493-654` 從 0924 就是活的，只有 BDE 那一半 `:656-877` 圍著（`IoBtnPanelClick.cpp:106-110` 檔頭的 (h) 也寫錯，下一批 C++ 改註解）。**⇒ 決策題（NIGHT_REPORT §0）**：A 機台把真的有裝、有接線的吸嘴在 `system\IO_Table.csv` 改 Enable=1（照 golden；感測器列＋_On／_Off 列；改前先備份；之後 START 流程會真的開閥、等真空）；B 網頁也照「IO 畫面一律不要卡控」不擋 Enable=0、燈照 `raw` 顯示（約 8 行，改的是機台端的 `ht9045_io_do.js`／`HW.IoSetView.html`；風險：可以從網頁把「沒裝」的閥通電）。筆電建議先問 EastSun（第 91 包 README）：按哪幾顆、跳什麼字、`/api/struct/io/runtime` 裡 `InArmSuckA@I32.128` 是 `disabled`（有模組，只差 Enable）還是 `nosource`（卡片表沒有那個位元組，改 Enable 也沒用）。明細 `docs/INBOX132_IO_SUCKER_CONTROLS_20260930.tsv`（每顆元件一列：分頁、元件 id、alias、IO 表行號、Enable、為什麼不動） |
+-| 133 | 🔴 **Frank 的 9050 動作流程整合進 V906**（使用者 1001 11:0x：「後續要思考如何把Frank開發的動作流程整合進來」；11:3x：「Frank01要接關於流程控制的導入，尤其是Index和shuttle動作，可以派工給她處理」） | 使用者 1001 11:0x | 🔧 **1001 量**（唯讀；筆電 scratchpad 的解出副本，`.svn` 沒動）：Frank 的 910 樹（`D:\HT9045\Staterecord\HT9011UC_Code_V3.33.910.0_20260820_beforeFinePitch`）＝公司 SVN `HT9011UC_Code_V3.20` r909／r910 的工作副本，9050 的改動都還沒提交：29 檔 +6,340／−256（134 處）＋3 支新檔（`atester_FinePitch.cpp` 3,040 行）；新增行署名 Eastsun 227；新機型 `Type_HT9050=800`（26 處）；流程：Shuttle `Do_Auto_InSH`／`Do_Auto_OutSH`、Index `MoveIndexZ`＋FinePitch、Tray 臂 7 組 `*_9050`。參考軌跡＝State Record `2026-10-01 10_50_09`（Frank 用模擬跑完一輪）。環境沒對齊：工單、卡別、機型三項都不同。**派工**：Frank01（`docs/handoff/TO_FRANK.md`）F-01a 唯讀盤點＋環境對齊＋參考軌跡，F-01b 等 NIGHT_REPORT §0 第 23～26 項；✅ **1001 12:16 Frank01 交 F-01a ①**（MR !32 `docs/FLOW9050_PORT_LEDGER.md`，第十八批合進 main）：V906 缺 9050 的 26 個氣缸＋75 個感測器定義（＝普查 (e) E-IO-* 那 202 列的來源）、`Type_HT9050` 20 處分支今天走不到等；F-01／K-02 分工＝§0 第 29 項 |
++| 133 | 🔴 **Frank 的 9050 動作流程整合進 V906**（使用者 1001 11:0x：「後續要思考如何把Frank開發的動作流程整合進來」；11:3x：「Frank01要接關於流程控制的導入，尤其是Index和shuttle動作，可以派工給她處理」） | 使用者 1001 11:0x | 🔧 **1001 量**（唯讀；筆電 scratchpad 的解出副本，`.svn` 沒動）：Frank 的 910 樹（`D:\HT9045\Staterecord\HT9011UC_Code_V3.33.910.0_20260820_beforeFinePitch`）＝公司 SVN `HT9011UC_Code_V3.20` r909／r910 的工作副本，9050 的改動都還沒提交：29 檔 +6,340／−256（134 處）＋3 支新檔（`atester_FinePitch.cpp` 3,040 行）；新增行署名 Eastsun 227；新機型 `Type_HT9050=800`（26 處）；流程：Shuttle `Do_Auto_InSH`／`Do_Auto_OutSH`、Index `MoveIndexZ`＋FinePitch、Tray 臂 7 組 `*_9050`。參考軌跡＝State Record `2026-10-01 10_50_09`（Frank 用模擬跑完一輪）。環境沒對齊：工單、卡別、機型三項都不同。**派工**：Frank01（`docs/handoff/TO_FRANK.md`）F-01a 唯讀盤點＋環境對齊＋參考軌跡，F-01b 等 NIGHT_REPORT §0 第 23～26 項；✅ **1001 12:16 Frank01 交 F-01a ①**（MR !32 `docs/FLOW9050_PORT_LEDGER.md`，第十八批合進 main）：V906 缺 9050 的 26 個氣缸＋75 個感測器定義（＝普查 (e) E-IO-* 那 202 列的來源）、`Type_HT9050` 20 處分支今天走不到等；F-01／K-02 分工＝§0 第 29 項；✅ **1001 13:2x Jimmy「照建議」**：新增 `Type_HT9050`、共用模擬組用 Frank 的工單、910 樹放 `ref/frank-910-9050`（F-02）、9050 流程直接在 V906 開發、Index 只留一份（K-02 改成審 910）——RULINGS_20261001 第 11～14、17 條；F-01b 開工 |
++| 134 | 🔴 **移植樹從來沒建立 `fMotorTest`（永遠 NULL），還有沒檢查就讀它的地方**（筆電 1001 14:0x 查第十九批 gate 的 SegFault 時盤點）：`Motor/mymotor.cpp:4105`／`:4117`／`:4130`／`:4142`（出料臂）與 `:5017`／`:5027`／`:5038`／`:5048`（入料臂）的光學尺紀錄 `fMotorTest->mmoN->Lines->Add(S1)`，只看 `IniConfig.bA27_1LogEnableLightScaleData`（[A27-1]）⇒ 機台開了 [A27-1]、手臂 X 有光學尺補償時 wb_serve 會當。其他讀取點（`csystem.cpp:30105`／`:30202`／`:30517`、`WebMotorAccessLive.cpp:956`）都有檢查；`Command.cpp:15075` 在 `#if 0` 裡。golden 的 fMotorTest 一定存在、紀錄寫在 Motor Test 頁的 memo；移植樹網頁讀的就是那個 memo（`GoldenLightScaleData`），表單不在時本來就是空的 ⇒ 修法＝讀之前檢查（表單不在就不記，行為跟現在網頁看到的一樣，只是不當）。第二十批做；另查 `fTeach`／其他只在 wb_serve 建立的表單有沒有同類。 | 筆電第二十批 |
+ 
+ ---
+ 
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index c64a51d..9eb2bb3 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -1,4 +1,4 @@
+-# 夜間報告 2026-09-29（二）晚起 —— **進行中版本**（每推一批整份更新；最後更新 1001 13:0x，新帳號）
++# 夜間報告 2026-09-29（二）晚起 —— **進行中版本**（每推一批整份更新；最後更新 1001 14:4x，新帳號）
+ 
+ > 使用者 0929 17:5x 下班：「完成手頭任務且無任務情況下，自動切換到Loop周末下班任務」；18:0x：「不用限制，我如果需要停止Loop會主動說明白」
+ > ⇒ **沒有收尾時間**，一直做到使用者說停；早上使用者在也照跑。迴圈：舊帳號的 cron `4ca5c42b` 已隨帳號停掉；新帳號 0930 第六批推完後重掛 `/loop 20m /night-loop`（cron 編號見 §5 最後一列）。
+@@ -6,7 +6,7 @@
+ > 0924～0929 週末那一輪的舊報告在 git 歷史（`f455a765` 之前的版本）。
+ > **0930 09:3x 使用者不小心下了 `/clear`**：只清掉對話記憶；commit、各批 gate 紀錄（上一輪暫存區 `ef8cf4db…\scratchpad\iz3`／`aml3`／`flow4`）、NIGHT_REPORT／INBOX、cron 心跳 `4ca5c42b` 都還在，已從磁碟接回，**沒有遺失任何工作**。
+ 
+-## ★ 接手（1001 13:0x 更新：第十七批＝GitHub 第 102 包、第 103 包只有文件；**第十八批上 main＝第 104 包**：基底 `TfMain::Pause` 照 golden 真的暫停機台（狀態機約 40 處 `fMain->Pause` 生效）、SECS 遠端 START 改走 `W906_RemoteRunStart`（SECS 引擎還沒啟動，今天跑不到）、`csystem.cpp` 的寫檔替身退役、Jerry 的 MR !24（CheckSocketSensor）、Frank01 的 MR !32（9050 盤點）；**§0 第 22～29 項等你**）
++## ★ 接手（1001 14:4x 更新：第十八批＝GitHub 第 104 包；**第十九批上 main＝第 105 包**：安全門開關紀錄照 golden（`RecordSafeDoorStates`）、St02 的真 TCP tester 連線（出貨組態會真的撥 tester）、GPIB 遠端 START、冷卻風扇；START 普查改成 34／32／2；gate 第一次跑抓到 GPIB 遠端 START 會讀空指標 `fMotorTest`（真機也會當），已修；§0 第 22～29 項已照建議（RULINGS_20261001 第 10～19 條）；**ES02（EastSun 的筆電）加入**、Z 軸照 Frank 定案、週末迴圈做完任務才停（第 20～26 條））
+ 
+ | 項目 | 在哪 | 狀態／下一步 |
+ |---|---|---|
+@@ -23,6 +23,7 @@
+ | ⛔ **INBOX 132 IO 畫面吸嘴沒作用——原因更正**（你 0930 22:0x 轉述 EastSun） | `docs/INBOX_QUEUE.md` 第 132 列、`docs/MACHINE_PATCHES_20261001.md` §3 | 機台自己的 cpp 0045（VACUNIT-1203，第八批收）查清楚了：吸嘴照 golden 交給 **VC8 真空模組**，而**這台 ring 1 上目前沒有 VC8**，所以按了沒作用（0045 讓畫面寫出原因）。筆電 0930 23:5x 給的 A（改 IO 表）／B（網頁不擋）**兩條都作廢**——`BTestSuck` 的輸出點跟上料／Auto1 氣缸同一條通道，B 會打到氣缸線圈。第 91 包 README 已更正（§0 第 16 項） |
+ | 🔜 INBOX 130 機台新推的 tools 0001～0080（HTDESIGNER，VS Code 設計工具） | GitHub `machine/integ-ioweb` `24100e6`..`3617712` | 只碰 `tools/vscode-htdesigner`，不影響 wb_serve；照「照機台」精神下一批收（先跑它自己的測試） |
+ | ✅ 第五批 | GitLab main `f5ad8ade`＝GitHub 第 88 包 `9e38ee3` | 0930 18:39 推上：INBOX 115 B＋Y pitch 防呆、St02 MR !6 到 `236adb8e`、St01 到 `ed4716f2`。gate：出貨 265 支 4 項＝基準；模擬 19 項＝基準 |
++| ✅ **第十九批：安全門開關紀錄＋St02 MR !31／!33／!34（真 TCP tester、GPIB 遠端 START、冷卻風扇）** | GitLab main＝GitHub 第 105 包（hash 見 §5） | ①**普查 (a)(b) #15**：`DoSystem()` 照 golden 每拍呼叫 `RecordSafeDoorStates()`（G11；本體早就翻好了，閘的理由「全樹沒有定義」過期）——停機時開／關安全門、加熱門、天窗門會記事件紀錄、送 SECS 門事件；開 [O18] 時把「最後開門時間」寫進 Gerneral.ini（G25／G28a／G28b）。只有紀錄與狀態，**不動 IO、不是互鎖**。G26（缺 `TfMain::ResetForESC`）、G27（要跟 fMonitor 的 M-4 一起開）留著，理由已更新。②**St02 MR !31（H-008）**：**出貨組態**的 TCP tester 連線變成真的——TesterIF 是 TCP_IP_MODE 又按 ON-LINE，就會撥 TesterIF 的位址（預設 172.16.8.150:6000），連不到時照 golden 跳「TCP/IP error for tester!」（暫停＋停所有馬達）；模擬組態不變。③**MR !33（H-012）**：GPIB 遠端 START 照 golden 真的啟動（經 `W906_RemoteRunStart`）；STOP 照 golden 走 `BtnPauseClick`，第十八批之後是真的暫停。④**MR !34**：冷卻風扇照 golden（呼叫點＋IO 設定頁開著時不動；H1-08 等 St01）；出貨組態還沒有加熱執行緒，所以 IO 只在模擬組態動。⑤MR !33 沒更新 START 普查釘住的數字，合併時量到 34／32／2（原 34／31／3），四個地方一起改。⑥**gate 第一次跑（b19g 13:10）出貨組態多一個 `TesterComm_Handler` SegFault**：gdb 量到 `ProcessARTMessage+5995`＝`HandlerGpibMsg.cpp:713` 讀 `fMotorTest->fShow`，而 `fMotorTest` 移植樹從來沒建立（NULL）⇒ 真機收到 GPIB 遠端 START 時 wb_serve 也會當在這裡（MR !33 第 12 段是第一個走到它的測試；St02 只連結沒執行）。修法：成員讀取前先檢查（`fMotorTest != 0 && …`，`fTeach` 同），頁面表照樣回答；測試的 STOP 期望照第十八批改（真的會轉 PauseFromWeb）；變異測試證明新檢查抓得到錯（`d9aa28cb`）。新 ctest `SafeDoorRecord`（另含 St02 的 `TesterComm_TcpTesterReal`、`CoolFan_Rules`）。gate：兩組態全新 gate b19h（14:00～14:43，HEAD d9aa28cb）：出貨 293 支、失敗 4＝基準；模擬 293 支、失敗 19＝基準（與第十八批 b18g 逐項相同）；sysguard system／config／IniData 0／0／0 |
+ | ✅ **第十八批：TfMain::Pause 真的暫停＋SECS 遠端 START＋寫檔替身退役＋Jerry MR !24＋Frank MR !32** | GitLab main＝GitHub 第 104 包（hash 見 §5） | ①**Pause**：golden `TfMain::Pause`（main.cpp:6325-6379：SoftStop、StopAllMotor、SECS DoPause、ESD 停機）。移植樹的狀態機約 40 處、RemoteControl／RCMD:PAUSE、St01 Offset 的位置檢查 START 都叫到基底那支，以前它回 false、什麼都不做＝**機台照跑**；現在轉到 wb_serve 已翻好的 `PauseFromWeb`（**會讓機台停**，照 golden）。②**SECS RCMD REMOTE_START** 改走跟 HTSET,333 同一個座位（手動教導中照樣拒絕）；SECS 引擎在 wb_serve 還沒建立，所以今天跑不到。③`csystem.cpp` 的 W7C1／g4 寫檔替身退役：[I06]「回原點完成後強制開 I01」會照 golden 寫 config.ini；ASE 高雄的 Auto Site Mapping 計數寫進工單；休息模式清料後還原 Contact 高度要等 `atester.cpp:4221` 的「拉高」那半開了才會跑（已問 Jerry）。④Jerry MR !24：`CheckSocketSensor` 照 golden 解閘（舊替身恆回「有錯」）。⑤Frank01 MR !32：只加文件 `docs/FLOW9050_PORT_LEDGER.md`。新 ctest `PauseForward`、`SocketSensor`。gate：兩組態全新 gate＝基準（出貨 290 支 4 項、模擬 290 支 19 項，逐項同；system／config／IniData 0／0／0） |
+ | ✅ **第十七批：安全門鎖跟 SystemStart＋大風扇＋SetLotState** | GitLab main＝GitHub 第 102 包（hash 見 §5） | ①**E-T1-012**：golden 主計時器（Timer1 :3051-3076）讓安全門鎖跟著 SystemStart——運轉中鎖、停止放開；CE PLC 非安全模式一直鎖；IO 設定頁開著時不動；Contact 手動量高度時放開；Magazine 機的兩道門同一段（**IO 會動**）。以前只有開機錯誤路徑寫它＝運轉中從沒鎖過。「畫面開著嗎」照移植樹的做法問網頁頁面表。②**E-T2-001**：大風扇照 golden（Timer2 :20964-20968）跟著主畫面 FAN 鈕（`LastSet.bBigFan`），ASE_CL／HONPREC QC 另驅動風向。③**#16**：`TfMain::SetLotState`（golden main.cpp:15160-15407）照原文翻：TCP/IP tester 收到 LOTNUMBER／LOTSTART／LOTEND，GPIB tester 的批次狀態（MSG_CMD_LotStatus）照 golden 送到橋接，SCK ART 步驟／批次逾時計時器照設；三個「假裝送了」的空巨集改呼叫它。HANA ART 與 Renesas FT-CT 兩小段在移植樹不可達（那兩個子系統沒接上），條件照留、本體閘住並寫明原因。gate：兩組態全新 gate＝基準（出貨 288 支 4 項、模擬 288 支 19 項，逐項同；system／config 0／0／0） |
+ | ✅ **第十六批：普查 (a)(b) 安全缺口＋三個替身退役＋上料氣缸預推** | GitLab main＝GitHub 第 101 包（hash 見 §5） | ①**#13**：三溫機（Gerneral.ini 有 Tri_Temp_Machine）的安全門 6 開著時照 golden 鎖住運轉（閘的兩個理由都過期了：本體在、旗標有讀）；②**#17**：急停按下／放開時照 golden 通知 ATC 溫控器（G-ATC-B／C，原註解就寫兩邊要成對），連同 ATC 6.0／3.0 的錯誤訊息與斷線重連（G-ATC-A）；③**#11**：一輪結束／換盤時照 golden 寫 `system\BinCount.txt`（ctest 一律轉到暫存檔）；④**#5**：一輪結束時 Auto 盤氣缸照 golden 放開（[EnableUnloadTrayFree] 開時，**氣缸會動**）；⑤**I41**：空 socket 檢查照 golden 啟動（[I41] 開時）；⑥**#7**：Initial／RT Start 照 golden 先把上料氣缸打兩下（**氣缸會動**）。每一支本體都跟 golden 逐行比過。gate：兩組態全新 gate＝基準（出貨 286 支 4 項、模擬 286 支 19 項），system／config 0／0／0 |
+@@ -53,14 +54,14 @@
+ 
+ | # | 事項 | 為什麼需要你 | 預設（你沒回之前照這個做） | 在哪 |
+ |---|---|---|---|---|
+-| 29 | **HT9050 的 Index 流程只留一份：Kevin 的 K-02 跟 Frank01 的 F-01 怎麼分** | 白話：兩張卡都在做 HT9050 的 Index（下壓）流程。K-02（你 0929 派給 Kevin）＝在 BCB6 以 golden 906 為底重寫 Index、寫完你審；F-01（今天派給 Frank01）＝把 Frank 910 樹裡**已經寫好**的 9050 Index（`DoTestHeadMotorFP()`、`MoveIndexZ()`、`CheckIndexStatusERRSH1()`、`atester_FinePitch.cpp` 3,040 行）與 Shuttle 翻進 V906。兩邊都照做，Index 會有兩份 BCB6 版本。A＝K-02 改成「審 910 的 Index」（以 `atester_FinePitch.cpp` 為底），F-01b 照 910 翻；B＝K-02 照原計畫，F-01b 的 Index 等 K-02 定稿、先只做 Shuttle；C＝其他。**建議 A**（910 那份 EastSun／Frank 已經寫好、模擬跑過一輪；只留一份） | F-01a（唯讀盤點）照做；F-01b 不開工 | Frank01 的 FROM_FRANK §3 11:53；`docs/handoff/TO_FRANK.md` §4 |
+-| 28 | **Kevin 的 K-01（用 golden 0618 模擬版錄 State Record 給流程對照）改由誰錄** | 白話：Kevin 那台正在處理別的客戶問題，不能換 `D:\HT9045` 的設定，所以錄不了。A＝在筆電錄：筆電的 `D:\HT9045` 本來就是 HT9050 模擬設定，用 Kevin 建好的模擬版 EXE 跑一輪、存 State Record（要有人在筆電上按 START，大約 15～30 分鐘；golden 會寫 system／config，照備份→還原做）；B＝開放給別人認領（例 St02、Ifor01；他們要先換成 HT9050 的設定、錄完還原）。**建議 A**（不用換設定，最快） | 先請 Kevin 把模擬版 EXE 建好放共用區；錄製等你回 | `docs/handoff/TO_KEVIN.md` §4；Kevin 的 FROM_KEVIN §3（09:20） |
+-| 27 | **Ifor 回報的 golden 缺陷：RotateKit 取料失敗重試後手臂卡住，移植樹要不要修** | 白話：IC 旋轉站取料失敗會重試；重試那一步（case 4700）先把手臂歸零再回去移 XY，但歸零後 Z 停在 0、不是安全高度，所以「移 XY 之前先確認 Z」那一關永遠擋住：入料臂一直重複歸零 Z、點動 pitch；出料臂綠燈亮著、不動也不報警，要按 HOME 才停。Ifor 0922 在客戶現場分析過，在他本機的 V912 插了一步「先把 Z 移到安全高度」修好（還沒交付）。移植樹照翻了同一段（`RotateKit/aRotateKIT_In.cpp:3691-3694`、`aRotateKIT_Out.cpp:3806-3809`，筆電核過；golden 906 :3243／:3335）。A＝移植樹照 Ifor 的修法修（Ifor 來做）；B＝照翻不修、只記台帳。**建議 A**（重試卡死沒有任何好處）。V912 那份修正怎麼出貨（V912 是量產線）也請你定，建議走正常的 V912 案件流程（建 case、release note） | 移植樹照翻（不修），已記進 golden 缺陷台帳 | `docs/GOLDEN_DEFECT_LEDGER.md`（RotateKit 新節）；`docs/handoff/TO_IFOR.md` §4 |
+-| 26 | **之後 9050 的動作流程在哪裡開發** | 白話：A＝從現在起 Frank01 直接在 V906（C++）寫，Frank 的 910 樹凍結當參考，只維護一份程式；B＝Frank 繼續在 BCB 寫、Frank01 定期搬過來（兩份要一直對）。**建議 A**。（UI 的 .dfm 部分不管選哪個，都交給 Steven 那邊做網頁） | Frank 照舊在 BCB；Frank01 先做唯讀盤點（F-01a） | `docs/handoff/TO_FRANK.md` §3 F-01b |
+-| 25 | **Frank 的 910 樹要不要上 git** | 白話：那棵是公司 SVN（`HT9011UC_Code_V3.20` r909／r910）的工作副本，9050 的改動（29 支檔、+6,340／−256 行，另 3 支新檔）都還沒提交進 SVN，只在 Frank 那台。A＝開一支獨立的參考分支（不進 main、不進 GitHub 包），兩顆 commit：SVN 原版＋Frank 的修改；之後 Frank 每給一次新快照就再加一顆，`git diff` 就看得出他改了什麼（跟 V912 重複的檔 git 會共用，幾乎不占空間）；B＝只把 diff 存成文件；C＝不上。**建議 A**（之後翻譯要逐行對照，有版本才對得準） | 不上（Frank01 從共用區讀） | `docs/handoff/TO_FRANK.md` §2 |
+-| 24 | **共用的 9050 模擬組要用哪一份工單** | 白話：大家要跑出一樣的 Task 序列才能逐項比，所以要一份共用的模擬設定（工單＋Gerneral.ini＋config.ini＋IO／馬達表＋教導資料，放 repo 的 `machines/HT9050/`，誰要用就備份後裝進去；`machines/` 不進公開的 GitHub 包）。現在兩邊不一致：Frank 那次模擬用 `9378_1952DFT4_H9046_22_025_V01`、運動卡 1／IO 卡 1、機型 Type_HT9050；git 的 `machines/HT9050` 是 `FT005054_9050`、運動卡 0／IO 卡 4（1203），而且沒有 Gerneral.ini／config.ini／教導資料。A＝用 Frank 那份（只有它有參考軌跡 2026-10-01 10_50_09），`FT005054_9050` 留著當量產工單；B＝用 `FT005054_9050`（要有人重錄參考軌跡）。**建議 A** | 先不建模擬組 | `docs/handoff/TO_FRANK.md` §2 對照表 |
+-| 23 | **HT9050 的機型代號：照 Frank／EastSun 新增 `Type_HT9050`，還是維持現在當 `Type_HT9046_LS`** | 白話：Frank 的 910 樹（9050 客製，新增的行大多署名 Eastsun）新增了機型 `Type_HT9050 = 800`，有 26 處判斷靠它（9050 專用的 Tray 臂流程、單組 In／Out Shuttle 等）；移植樹目前照 RULINGS_20260926 第 25 條把 HT9050 當 `Type_HT9046_LS`。A＝移植樹也新增 `Type_HT9050`，照他們的 26 處判斷搬（真正的 HT9046LS 機不受影響）；B＝維持 `HT9046_LS`，把 9050 的判斷硬套進去（會跟真正的 HT9046LS 機攪在一起）。**建議 A** | 先不動（Frank01 的 F-01a 是唯讀盤點，不受影響） | `docs/handoff/TO_FRANK.md` §2／§3；INBOX 133 |
+-| 22 | **開機時要不要照 golden 對所有馬達下 Servo On（普查 (e) E-BOOT-002），1203 軸怎麼辦** | 白話：golden 開機最後會對每顆啟用的馬達下 Servo On（Index 的 Y 除外，golden Motor/mymotor.cpp:4609 `ServoOnAllMOT`，main.cpp:10165 呼叫）。移植樹是空的、也沒人呼叫，所以開機後馬達都沒 Servo On。**卡在 1203**：golden 這段對 1203 軸會直接呼叫 `Acm_AxSetSvOn`，失敗時跳 WAR16122，而它的按鍵碼是 0——wb_serve 的訊息框遇到 0 會一直等不回來，等於開機卡住；1203 的開卡與 Servo 現在是 EastSun 那一層在管（Motor Test 的 Motor Power On）。例：HT9050 開機後，Motor Test 不按 Motor Power On，1203 軸就沒有 Servo On；照 A 接的話，開機就會讓 HT9050 的 14 個啟用軸（repo 的 machines/HT9050/Mot_Table.csv，全部是 PCI1203）Servo On（要是 golden 那邊的軸 handle 沒開好，就卡在警報框）。**A** 照 golden 全接；**B** 非 1203 軸照 golden 接、1203 軸照現在交給 EastSun 的 Motor Power On（**建議**，並請 EastSun 確認 1203 開機要不要自動 Servo On）；**C** 先不接 | 預設 C（保持現行），你回 A／B 我就照做 | `NIGHT_REPORT` §0b（e）E-BOOT-002 |
++| ~~29~~ | ~~**HT9050 的 Index 流程只留一份：Kevin 的 K-02 跟 Frank01 的 F-01 怎麼分**~~ | ✅ **照建議 A**：K-02 改成審 910 的 Index，F-01b 照 910 翻（使用者 1001 13:2x「照建議」） | — | `RULINGS_20261001.md` 第 17 條 |
++| ~~28~~ | ~~**Kevin 的 K-01（用 golden 0618 模擬版錄 State Record 給流程對照）改由誰錄**~~ | ✅ **照建議 A**：在筆電錄；等 Kevin 的模擬版 EXE，**跑的時候要有人在筆電按 START**（使用者 1001 13:2x「照建議」） | — | `RULINGS_20261001.md` 第 16 條 |
++| ~~27~~ | ~~**Ifor 回報的 golden 缺陷：RotateKit 取料失敗重試後手臂卡住，移植樹要不要修**~~ | ✅ **照建議 A**：移植樹照 Ifor 的修法修（Ifor01 的新卡 I-04）；V912 那份走案件流程（使用者 1001 13:2x「照建議」） | — | `RULINGS_20261001.md` 第 15 條 |
++| ~~26~~ | ~~**之後 9050 的動作流程在哪裡開發**~~ | ✅ **照建議 A**：之後 9050 流程直接在 V906 開發，910 樹凍結當參考（使用者 1001 13:2x「照建議」） | — | `RULINGS_20261001.md` 第 14 條 |
++| ~~25~~ | ~~**Frank 的 910 樹要不要上 git**~~ | ✅ **照建議 A**：獨立參考分支 `ref/frank-910-9050`；Frank01 的新卡 F-02（使用者 1001 13:2x「照建議」） | — | `RULINGS_20261001.md` 第 13 條 |
++| ~~24~~ | ~~**共用的 9050 模擬組要用哪一份工單**~~ | ✅ **照建議 A**：用 Frank 那份工單做共用模擬組；Frank01 的 F-01a ② 做成 `machines/HT9050/` 的檔（使用者 1001 13:2x「照建議」） | — | `RULINGS_20261001.md` 第 12 條 |
++| ~~23~~ | ~~**HT9050 的機型代號：照 Frank／EastSun 新增 `Type_HT9050`，還是維持現在當 `Type_HT9046_LS`**~~ | ✅ **照建議 A**：新增 `Type_HT9050`；Frank01 在 F-01b 做（使用者 1001 13:2x「照建議」） | — | `RULINGS_20261001.md` 第 11 條 |
++| ~~22~~ | ~~**開機時要不要照 golden 對所有馬達下 Servo On（普查 (e) E-BOOT-002），1203 軸怎麼辦**~~ | ✅ **照建議 B**：非 1203 軸照 golden 下 Servo On，1203 軸維持 EastSun 的 Motor Power On；筆電第二十批做（使用者 1001 13:2x「照建議」） | — | `RULINGS_20261001.md` 第 10 條 |
+ | ~~16~~ | ~~**IO 畫面吸嘴：原因已更正，只剩「VC8 有沒有接」**~~ | ✅ **收到**：你自己轉問 EastSun（RULINGS_20261001 第 6 條）；筆電這邊不動 | — | `RULINGS_20261001.md 第 6 條` |
+ | ~~17~~ | ~~**INBOX 129 普查 (a)(b)：20 個確定的空砲彈要不要照 golden 補**~~ | ✅ **照筆電建議**：先安全缺口 2 項＋純資料 3 項，再運動類；(c)(d)(e) 同一原則（第 5 條）。加上第 0 條「現在所有功能都要接上」⇒ 運動類也補，只是排在後面。進行中：第十六批做了 #13／#17／#11／#5／#7／I41，第十七批做了安全門鎖、大風扇、SetLotState（#16） | — | `RULINGS_20261001.md 第 0、5 條` |
+ | ~~18~~ | ~~**🔴 溫度：`TempFuseLimitType` 在移植樹永遠是 0（普查 (c)(d) 抓到的活 bug）**~~ | ✅ **照 golden 補**（第 4 條）：**第十五批已上 main**——新檔 `MainFormShow_TempFuse.cpp`＝golden main.cpp:9535-9551 逐字，開機在 InitialHandler 之前呼叫（golden 順序；開機那次 ReadLastSetIni 才會用到真的上限），附 ctest `TempFuseLimit` | — | `RULINGS_20261001.md 第 4 條` |
+@@ -150,6 +151,8 @@
+ 
+ | 時間 | 事項 | 證據 |
+ |---|---|---|
++| 1001 13:1x～14:4x | **第十九批上 main**：RecordSafeDoorStates（`csystem.cpp` :2577、:16550、:21452、:21560、:21667、:21686）、START 普查 34／32／2、St02 MR !31／!33／!34；gate 抓到的 `fMotorTest` 空指標（`HandlerGpibMsg.cpp:713-714`）＋第 12 段的 STOP 期望 | 新 ctest `SafeDoorRecord`（只寫測試自己的暫存 Gerneral.ini）；St02 的 `TesterComm_TcpTesterReal`、`CoolFan_Rules`；`TesterComm_Handler` 89/89（原 SegFault），變異 87/89；兩組態全新 gate b19h（14:00～14:43，HEAD d9aa28cb）：出貨 293 支、失敗 4＝基準；模擬 293 支、失敗 19＝基準（與第十八批 b18g 逐項相同）；sysguard system／config／IniData 0／0／0 |
++| 1001 13:5x～14:3x | **ES02（EastSun 的筆電）加入**：`docs/handoff/TO_ES02.md`（角色、規則、E-01 上機清單、E-03 Z 軸確認）、夜間迴圈 5b 讀 `v906/es02-handoff`；同事回覆（St02 D1 認領同意＋4 張卡、St01 人員表 `LAPTOP_CHANNELS_20261001.md`、Kevin K-01、Frank Z 軸） | `7ec1841e`、`4cd5bb8a`（只動交接檔） |
+ | 1001 12:1x～13:0x | **第十八批上 main**：TfMain::Pause 轉送（`forms/fMain.cpp:246`）、SECS RCMD REMOTE_START（`SECSGEM/uHGemHT9045.cpp:5811`／`:5816`）、csystem.cpp W7C1／g4 寫檔替身退役（`:2578-2584`、`:2762`、`:3117`、`:6369`）、Jerry MR !24、Frank01 MR !32 | 新 ctest `PauseForward`、`SocketSensor`；新變成真的寫檔的呼叫點用 `g++ -E` 逐一列出（只有 :3111-3116、:7510-7513、:7659）；兩組態全新 gate＝基準（出貨 290 支 4 項、模擬 290 支 19 項，逐項同；system／config／IniData 0／0／0） |
+ | 1001 11:0x～11:5x | **第十七批上 main**：E-T1-012 安全門鎖＋Magazine 門鎖、E-T2-001 大風扇（`MainTimerSegments.cpp`）、#16 SetLotState（`forms/fMain_SetLotState.cpp`） | 新 ctest `MainTimerSegments`、`SetLotState`；本體逐行比對 golden；兩組態全新 gate＝基準（出貨 288 支 4 項、模擬 288 支 19 項，逐項同；system／config 0／0／0） |
+ | 1001 10:1x～10:4x | **委派**：冷卻風扇（#6）→ St02 工作卡（RULINGS_20261001 第 9 條）；**加熱鏈 → 給你轉 Ifor 的交派句子**（golden Index16Heater／IndexHeatMode／HotplateHeatMode＋出貨組態建加熱執行緒；筆電不碰這幾支） | 交接檔 |
+@@ -223,6 +226,7 @@
+ 
+ ## §3 紅燈／哨兵
+ 
++- **1001 12:4x 哨兵「配方母體」：66 個目錄／65 個帶 Contact.Data**（舊基準 65／64）。多的是 `FT005054`——`setup.inf` 指的作用中配方（HT9050 模擬環境），**09-28 10:13 建立**（RULINGS_20260928 對齊環境時從 T1 參考紀錄 2025-12-11 複製，檔案時間還是 12-10／12-11）。今天 06:32／06:34 的寫入是 wb_serve 開機照 golden 重寫作用中配方的 `Binasgn*.Data` 與 `SetMD5ByFolder`，不是異常。新基準 66／65；pagewire 的 119 筆欄位三元組要對 `FT005054` 重驗一次（待辦）。
+ - **1001 02:4x～04:30 額度第二次用完**：普查 (e)（缺的物件與計時器）被中斷，沒有產出；第九批的模擬組態 gate 是背景程序，02:40 照樣跑完（279 支 19 項＝基準）。04:3x 額度重置後接著推 main、做第 94 包；(e) 之後再接回。
+ - **1001 02:1x 第九批的模擬組態又碰到同一個 cmake 錯誤（第三次：0930 串流批、第八批、第九批）**：出貨組態一跑完、模擬組態一開始 configure，`CMakeDetermineCompilerABI_CXX.bin cannot be read`（剛產生的 ABI 檢測程式被鎖住，最可能是防毒）。照「同一個坑第三次就改機制」：新的 gate 腳本 `D:\HT9045\backup\night_tools_20260927\gate_wt.sh <worktree> <tag> [ship|sim|both]` 只在 log 同時出現 `CMakeDetermineCompilerABI` 與 `cannot be read` 時，等 15 秒、清掉那個 build 目錄、自動重跑一次；其他失敗照樣直接紅。
+ - **1001 01:2x 第八批第一次 gate：出貨多紅一項 `FShow_Audit`**——機台 0045 的新檔 `VacuumUnit/VacuumUnitLive.inc` 直接讀 `fShow` 兩處（專案規則要走 `W906_FormShowing`，機台那邊沒跑這支稽核）；同一行改好（`3b476827`），稽核 60 ≤ 基準 61。模擬組態那次是 **cmake 設定階段讀不到 `CMakeDetermineCompilerABI_CXX.bin`**（剛產生就被鎖住，0930 串流批也遇過一次），整批重跑。
+@@ -288,11 +292,18 @@
+ | `985c44be` | 101 `bdb4665` | 普查 (a)(b) #13／#17（＋G-ATC-A／C）／#11／#5／I41／#7、本報告與交接檔 |
+ | `5ae25f4d` | 102 `8ee6c67` | E-T1-012 安全門鎖、E-T2-001 大風扇、#16 SetLotState、本報告與交接檔 |
+ | `7ea471cf` | 103 `f43e9bc` | 只有文件：答覆同事、§0 第 23～28 項、INBOX 133、RotateKit 台帳（`3f282e79` 只動交接檔，不出包） |
+-| 本批（第十八批，含本份報告） | 104（hash 見下一批） | TfMain::Pause 轉送、SECS REMOTE_START、csystem 寫檔替身退役、Jerry MR !24、Frank01 MR !32、本報告與交接檔 |
++| `0b3a0735` | 104 `309a6d3` | TfMain::Pause 轉送、SECS REMOTE_START、csystem 寫檔替身退役、Jerry MR !24、Frank01 MR !32、本報告與交接檔 |
++| `10b673d9`、`06decd86`、`c5be6093` | — | 只動交接檔（第十九批認領、13:2x 派工、統一密碼寫進各交接檔 §2），不出包 |
++| `7ec1841e`、`4cd5bb8a` | — | 只動交接檔（ES02 頻道、14:3x 同事回覆、night-loop「做完任務才停」），不出包 |
++| `backup/jimmy-nb-main-local-20260930`（分支） | — | 主 checkout 只在本機的 2 顆（`edfa0fec`、`c4009526`）保存用，不進 main（第 26 條） |
++| 本批（第十九批，含本份報告） | 105（hash 見下一批） | RecordSafeDoorStates、START 普查 34／32／2、St02 MR !31／!33／!34、`fMotorTest` 空指標修正、本報告與交接檔 |
+ | — | — | **夜間迴圈（新帳號）**：cron `f34a7ab2`（`7,27,47 * * * *`＝每 20 分鐘，session 閒置才觸發、7 天自動到期），0930 21:0x 掛上。⚠ session-scoped：視窗關掉或筆電被強制關機就沒了 |
+ 
+ ## §6 我自己犯的錯與更正
+ 
++- **1001 12:2x 合 Jerry 的 MR !24 時，把帶著衝突標記的 `tests/CMakeLists.txt` 提交進了合併 commit**：解衝突的腳本斷言失敗，但我那條指令後半用 `;` 接著 `git add`／`git commit`，沒被 `&&` 擋住。幾秒後看輸出發現，**在推之前**修好腳本、確認 0 個標記，改寫那顆還在本機的合併 commit（`a894ec9e`），之後才開 gate。之後的合併改成「先 `--no-commit` 合、列出衝突檔、解完逐項確認 0 個標記才提交」，每一步都檢查回傳值。
++- **1001 14:2x 問了你一題已經裁過的事**：Frank 的第 3 題（模擬組缺的檔誰補），我建議「筆電從這台補」，但你 13:2x 的第 12 條早就指定 Frank01 從參考軌跡取檔，Frank 14:14 也照做了。你回「照建議」之後我才對到，已收回（第 24 條），照第 12 條由 Frank 做。之後出題前先對一次當天的 RULINGS。
++- **1001 14:1x 交接列的時間手打錯**（打成 14:3x）：推之前發現，只改了自己新加的 4 處；之後的交接列一律由腳本讀時鐘產生時間。
+ - **1001 06:5x 第十二批第一次 gate：我自己寫的測試錯了**：`test_jamday_hook.cpp` 自己宣告 `extern int SystemDate;`，真正的是 `Word`（2 位元組，`cmydef.h:227`），讀了 4 個位元組、3 個 iToday 檢查失敗；編譯器與連結器都不比對變數型別，所以編得過也連得過。改成 include `cmydef.h`，停掉那一輪 gate 重跑（產品碼沒改）。教訓：測試要用到全域就 include 它的標頭，不要自己寫 extern。
+ - **1001 06:3x 差點把「密碼在哪些檔、哪一行」寫進會公開的報告**：§0 第 20 項第一版列了含值的檔名與那一行網頁註解的位置；這份報告本身會隨每一包更新包公開。推 GitHub 前發現，改成只指向 NB2 在私人 GitLab 分支的筆記（`6f0d4302`），第 96 包是改過之後才打的包（GitLab 私人 main 上有那一版約 3 分鐘）。
+ - **1001 06:1x 才發現 NB2 0930 21:5x 就標了「今天要決定」的安全問題（公開 repo 有機台密碼，§0 第 20 項）**：整夜只讀了 NB2 條目裡跟串流、效能有關的段落，沒讀它最上面「給主電腦／Jimmy」那段，之後又推了第 92～95 包——其中第 94 包多公開了 4 份含值的檔。更正：推送前改掃這三組值（`machine_pw_scan.py`，第 96 包起），列 §0 第 20 項等你決定 A／B／C；報告裡也不寫它們在哪些檔（報告會隨包公開）。教訓：讀 NB2 的新條目要先讀「給主電腦／Jimmy」那一段，它標了「安全」「今天要決定」的，當輪就列 §0。
+diff --git a/docs/RULINGS_20261001.md b/docs/RULINGS_20261001.md
+index 51bbe88..2b368b2 100644
+--- a/docs/RULINGS_20261001.md
++++ b/docs/RULINGS_20261001.md
+@@ -69,3 +69,96 @@
+ - 範圍：本體 `csystem.cpp:24787`（golden csystem.cpp:20434-20569）裡 8 個閘（H1-07、H1-08、H1-09a～f：冷氣機 `fAirCon` 的 PowerUp／PowerDown），
+   以及所有呼叫點的閘（csystem.cpp G04／G07／G08／G12／G12b、`uHeaterThread.cpp:540` GATE 5）。照第 0 條＝照 golden 補、會動 IO 也照補。
+ - 筆電不做這一項；筆電第十六批改的 csystem.cpp 行號列在 TO_STEVEN §1，跟這張卡不重疊。
++
++## 10. 開機 Servo On（普查 (e) E-BOOT-002）：**B＝非 1203 軸照 golden 下 Servo On，1203 軸維持 EastSun 那一層的 Motor Power On**（§0 第 22 項）
++
++- 使用者 1001 13:2x：「照建議，RogerYang 的先放著」（對 NIGHT_REPORT §0 第 22～29 項與 RogerYang 技能分支那一題的回覆）。
++- golden `ServoOnAllMOT()`（Motor/mymotor.cpp:4609-4621，main.cpp:10165 開機呼叫）照翻接上開機段；遇到 1203 軸跳過（不叫 `Acm_AxSetSvOn`、不會跳 kcode 0 的 WAR16122 把開機卡住），1203 軸的 Servo 仍由 Motor Test 的 Motor Power On 負責。
++- HT9050 的 14 個啟用軸全是 PCI1203 ⇒ 這台開機行為不變；有非 1203 軸的機台開機會照 golden Servo On。筆電第二十批做。
++
++## 11. HT9050 機型代號：**A＝移植樹新增 `Type_HT9050`**（§0 第 23 項）
++
++- 使用者 1001 13:2x：「照建議，RogerYang 的先放著」（對 NIGHT_REPORT §0 第 22～29 項與 RogerYang 技能分支那一題的回覆）。
++- 照 Frank／EastSun 910 樹的 `Type_HT9050 = 800` 與它的 26 處判斷搬，連同 9050 的 26 個氣缸＋75 個感測器定義（上限 295／820 → 321／900）；真正的 HT9046LS 機不受影響。
++- 取代 RULINGS_20260926 第 25 條「HT9050 當 `Type_HT9046_LS`」的暫行做法（搬完、HT9050 的設定改成 800 之後才生效）。Frank01 在 F-01b 做（TO_FRANK）。
++
++## 12. 共用 9050 模擬組：**A＝用 Frank 那份工單 `9378_1952DFT4_H9046_22_025_V01`**（§0 第 24 項）
++
++- 使用者 1001 13:2x：「照建議，RogerYang 的先放著」（對 NIGHT_REPORT §0 第 22～29 項與 RogerYang 技能分支那一題的回覆）。
++- 放 `machines/HT9050/`（不進公開的 GitHub 包）：工單、`Gerneral.ini`、`config.ini`、IO／馬達表、教導資料，加參考軌跡 2026-10-01 10_50_09 的純文字部分；誰要用就備份後裝進 `D:\HT9045`。`FT005054_9050` 留著當量產工單。Frank01 的 F-01a ② 做。
++
++## 13. Frank 的 910 樹上 git：**A＝獨立參考分支 `ref/frank-910-9050`**（§0 第 25 項）
++
++- 使用者 1001 13:2x：「照建議，RogerYang 的先放著」（對 NIGHT_REPORT §0 第 22～29 項與 RogerYang 技能分支那一題的回覆）。
++- orphan 分支，不進 main、不開 MR、不進 GitHub 包：第 1 顆＝SVN 原版（BASE），第 2 顆＝Frank 的修改；之後 Frank 每給一次新快照就再加一顆。不放 `.svn`、建置產物、執行期資料；位元組不變（`* -text`）。Frank01 的 F-02。
++
++## 14. 之後 9050 動作流程在哪裡開發：**A＝直接在 V906（C++）開發，910 樹凍結當參考**（§0 第 26 項）
++
++- 使用者 1001 13:2x：「照建議，RogerYang 的先放著」（對 NIGHT_REPORT §0 第 22～29 項與 RogerYang 技能分支那一題的回覆）。
++- 從現在起 9050 流程的改動做在 `HT9011UC_Cpp_V3.33.906.0`（分支＋MR），910 樹只當對照；UI 的 .dfm 交給 Steven 那邊做網頁。
++
++## 15. RotateKit 取料失敗重試卡死（golden 缺陷）：**A＝移植樹照 Ifor 的修法修，Ifor 來做；V912 那份走正常案件流程**（§0 第 27 項）
++
++- 使用者 1001 13:2x：「照建議，RogerYang 的先放著」（對 NIGHT_REPORT §0 第 22～29 項與 RogerYang 技能分支那一題的回覆）。
++- 移植樹 `RotateKit/aRotateKIT_In.cpp:3691-3694`、`aRotateKIT_Out.cpp:3806-3809`：重試的 case 4700 歸零後先把 Z 移到安全高度再回 case 4000（Ifor 0922 V912 的 case 4710 做法）。這是「改得跟 golden 不一樣」，由本條授權。Ifor01 的 I-04。
++- V912：Ifor 推分支（BCB6／Big5），筆電建 case、BCB6 建置驗證、出 release note。
++
++## 16. Kevin 的 K-01（golden 0618 模擬版 State Record）：**A＝在筆電錄**（§0 第 28 項）
++
++- 使用者 1001 13:2x：「照建議，RogerYang 的先放著」（對 NIGHT_REPORT §0 第 22～29 項與 RogerYang 技能分支那一題的回覆）。
++- Kevin 把模擬版 EXE 建好放共用區；在筆電跑一輪（要有人按 START，約 15～30 分鐘；golden 會寫 system／config，跑之前備份、跑完還原）。
++
++## 17. HT9050 的 Index 流程只留一份：**A＝K-02 改成審 Frank 910 的 Index，Frank01 的 F-01b 照 910 翻**（§0 第 29 項）
++
++- 使用者 1001 13:2x：「照建議，RogerYang 的先放著」（對 NIGHT_REPORT §0 第 22～29 項與 RogerYang 技能分支那一題的回覆）。
++- 以 `atester_FinePitch.cpp` 為底；K-02 原本「在 BCB6 以 golden 906 為底重寫 Index」取消（RULINGS_20260929 第 8 條的那一部分由本條取代）。
++
++## 18. RogerYang 的 6 支技能分支（`skills/rogeryang-*`）：**先放著**
++
++- 使用者 1001 13:2x：「照建議，RogerYang 的先放著」（對 NIGHT_REPORT §0 第 22～29 項與 RogerYang 技能分支那一題的回覆）。
++- 不審、不合；等 RogerYang 開 MR 再審。
++
++## 19. 共用區 7z 交付包密碼：**使用者 1001 13:3x 要求在對話裡直接給出**（Ifor 解不開 K-01 的 golden 包而卡住）
++
++- 使用者原話：「但基於 9/25 裁決不會直接打出密碼或寫入記事本->密碼全部打出來，現在因為不知道密碼已經卡住」。
++- 筆電 13:3x 在對話裡給了新、舊兩組。**13:4x 起（下一點），統一的那一組照使用者要求寫在各同事交接檔 §2 須知**（公司 GitLab 的 `docs/handoff/`，打包只取 906 樹與 `web`，所以不進 GitHub 包）；本檔、NIGHT_REPORT 等會進公開 GitHub 機台包的檔、commit 訊息、信件、`machines/` 仍不寫值（RULINGS_20260925 第 11 條其餘照舊）。
++- **13:4x 使用者：「未來統一用一個密碼」——以後所有共用區交付包統一用 9/24 以前那一組（舊密碼）**，9/25 第 11 條 4A 換的那組退役（值都不寫在這裡）。9/30 打的 K-01 兩包（`U:\共用區\HT-9050\K01_golden0618_HT9050snapshot_20260930\`）仍是退役那一組，Ifor 已拿到。
++- 筆電端：使用者環境變數 `HT9045_7Z_PW` 改成統一的那一組（新打的包自動用它）；推 GitHub 包之前的掃描照樣兩組都掃（退役的那組改記在記憶檔的「舊密碼」位置）。
++- 以後同事卡在密碼時：先告訴 Jimmy「哪一包」，由 Jimmy 直接給，或照本條在對話裡給 Jimmy 轉交。
++
++## 20. ES02（EastSun 的筆電）加入協作：**在筆電（和機台）上測試，測到問題就修，修好交給筆電整合；筆電跑 gate、合 main、推 GitLab main 與 GitHub 機台更新包**
++
++- 使用者 1001 13:5x：「Eastsun的筆電，簡稱ET02，也要加入協作，但是他的角色是在筆電測試有問題，修改後需要給我們整合，並推到gitlab和github」；隨後「更正，簡寫好像是ES02比較順暢」。
++- 管道（比照 Ifor／Frank）：派工與回答寫 main 的 `docs/handoff/TO_ES02.md`（只有筆電寫）；ES02 的認領／完成／問題寫它自己開的 `v906/es02-handoff` 的 `FROM_ES02.md`（聊天 `CHAT_ES02.md`）；修正走 `v906/es02-<主題>`＋MR（目標 main）。ES02 不推 main、不推 GitHub。夜間迴圈 5b 每輪讀它（`7ec1841e`）。
++- Steven 1001 09:4x「需要上機驗證的, 都是請Eastsun處理」：St01／St02 的上機清單由筆電轉成 TO_ES02 §3 的卡（E-01）；ES02 的上機結果回 TO_STEVEN §4。
++
++## 21. 週末／下班迴圈的結束條件：**完成任務才停，沒有時間停點**
++
++- 使用者 1001 14:2x：「現在周末下班任務唯一結束條件是完成任務才能停，所以沒有哪一個時間點要停止」。
++- night-loop §0 的 T-90／T-60／T-30 時間表這次不適用：一直做到任務清單做完才收尾（寫 NIGHT_REPORT、刪 cron、停迴圈），中間沒有靜默時段；每一輪照樣 commit／更新 RESUME（筆電會被公司工具強制關機，night-loop §5.1）。技能 §0 已加這一列（`4cd5bb8a`）。
++
++## 22. HT9050 的 Loader／Empty／Auto1～3 的 Z：**Loader、Empty＝馬達；Auto1～3＝氣缸＋馬達複合**（更正 RULINGS_20260930 第 2、3 條）
++
++- 使用者 1001 14:2x：「Loader／Empty／Auto 的 Z 是馬達還是氣缸？->這部分Frank有回覆，你確認他的訊息」。Frank 本人 1001 14:0x（FROM_FRANK §3）：「`MLoaderZ` 這個是 Loader 的馬達」「`MEmptyZ` 這個是 Empty 的馬達」，Auto1～3 的 Z「目前是有汽缸以及馬達雙複合的機構」。
++- ⇒ 910 的 9050 Loader／Tray 臂流程（Eastsun 0819，對 `MLoaderZ`／`MEmptyZ` 直接 `MotorMove(Prod.TrayZ_Up[層])`）照翻（Frank01 的 F-01b），不是新設計。RULINGS_20260930 第 2 條「Z軸是氣缸」與第 3 條「M35／M36／M38～M40 `Enable=0`」對 Loader／Empty 不再成立，對 Auto1～3 只對一半。
++- 機台正本 `machines/HT9050/Mot_Table.csv`（與 `Pci1203Axis.ini`）的 Enable／軸號，等 ES02 上機確認後才改（TO_ES02 E-03）；確認前不在機台上打開這幾軸去跑 HOME。Frank 的 `machines/HT9050/sim_9378/` 用它自己的表。
++
++## 23. 共用 9050 模擬組的工單與溫度：**照第 12 條用 Frank 的 9378（常溫）；`FT005054_9050` 不動**
++
++- 使用者 1001 14:2x「其他照建議」。Frank 13:48 的提案寫成用 `FT005054_9050`（`Temperature Mode=1` 高溫）；第 12 條（13:2x）已定共用組＝9378（`Temperature Mode=0` 常溫），Frank 14:14 也改回 9378（「以 Jimmy 的常溫為主」）。`FT005054_9050` 留著當量產工單，不改溫度。
++
++## 24. 共用模擬組缺的檔：**照第 12 條由 Frank01 從參考軌跡那份 state record 取，放 `machines/HT9050/sim_9378/`**
++
++- 筆電 14:2x 原本建議由筆電從這台 `D:\HT9045` 補——那個建議跟第 12 條重複又矛盾，**收回**（筆電問了一題已經裁過的事）。
++- Frank 14:14 照第 12 條自己做：工單、`Gerneral.ini`、`config.ini`、IO／馬達表、教導資料、`setup.inf`、GPIB `general.ini`，全部取自 `2026-10-01 10_50_09`；放子目錄、不蓋機台正本的 IO／馬達表、不放 `Security*.def` 等密碼檔。`machines/` 不進 GitHub 包。
++
++## 25. K-01（golden 0618 模擬版 state record）的錄製：**下個上班日在筆電錄**
++
++- 使用者 1001 14:2x「其他照建議」（建議 B）。Kevin 1001 13:5x 已把模擬版 EXE 放共用區（`K01_golden0618_SIM_EXE_Kevin_20261001`，SHA256 在 FROM_KEVIN §2）。
++- 錄製要有人按 START（約 15～30 分鐘）；錄之前備份 `system`／`config`／`IniData`，錄完還原（第 16 條）。
++
++## 26. 主 checkout 只在本機的 commit：**推到 GitLab 備份分支保存，不進 main、不出包**；**912 是 9046 量產機的版本，跟 HT9050 無關，9050 用 906 C++ 版**
++
++- 使用者 1001 14:2x：「其他照建議，補充，912是9046量產機版本，和我們進行的HT9050沒有關係，9050目前是用906 C++版本」。
++- 量到：主 checkout 的 `main` 比 origin/main 多 4 顆、少 656 顆。`git cherry` 顯示其中 2 顆（V912 力成 OLP 修正 CASE-PTI-20260929-001、bcb_build 新機器三個坑）已經以別的 hash 在 origin/main（`85b42b65`、`be2cf439`）；真的只在本機的是 `edfa0fec`（bcb_build 技能補充）與 `c4009526`（Honprec 工具箱 0.1.0）⇒ 1001 14:2x 推到 `backup/jimmy-nb-main-local-20260930` 保存，那個工作區要合時自己開 MR。
++- HT9050 的 GitHub 機台更新包只打 906 樹與 `web`，V912 的改動本來就不在包裡；V912 的出貨走它自己的案件流程。
+diff --git a/docs/ST02_BRINGUP_CHECKLIST.md b/docs/ST02_BRINGUP_CHECKLIST.md
+index e9e9929..2d27a13 100644
+--- a/docs/ST02_BRINGUP_CHECKLIST.md
++++ b/docs/ST02_BRINGUP_CHECKLIST.md
+@@ -40,7 +40,8 @@
+ - `--dry` **已退場**：帶了會印一段說明並以 2 結束（同檔第 3683～3684 行）。保護方式是「先備份 → 驗證 → 沒問題才刪備份」，不是旗標。
+ - 會用到的環境變數（都只在啟動 wb_serve 的那個主控台設）：
+   - `HT9045_ELA=0`：整個 Event Log 分析器不啟動（`/api/ela` 回 503，開機不會寫 config.ini／JAM0000.dat）。
+-  - `HT9045_TCPCMD_SIM=1`：7016／7017 兩個 TCP 伺服器留在模擬，不開真的 socket。
++  - `HT9045_TCPCMD_SIM=1`：7016／7017 兩個 TCP 伺服器留在模擬，不開真的 socket；**H-008（20261001）起也讓 TCP 測試機 client 留在模擬**。開機會印一行 `[H-008] TCP tester socket: REAL (polled)` 或 `SIM`。
++    - ⚠ 出貨版不設它的話，TesterIF 是 TCP 模式又切 ON-LINE，就會真的去連 `[Tester TCPIP] Address:Port`（golden 預設 172.16.8.150:6000）。不是機台的電腦（St01 沙箱、辦公室）跑出貨版時請設 `HT9045_TCPCMD_SIM=1`，除非就是要測真的連線。
+   - `HT9045_TESTERCOMM=0`：Tester 通訊整個不裝（7016／7017 物件仍會建，按 Start 不會當掉）。⚠ **P8 B4 之後**，這樣開的 wb_serve 在「GPIB／RS232 配方＋On-Line」「TCP/IP 配方＋Off-Line」「TTL 配方＋`TTL_CARD_TYPE` 2 或 3」按 START 會照 golden 被擋（跳 `GPIB no execute!!`／`RS232 no execute!!`／`TTL RS232 no execute!!`，`WebStart.cpp` 第 1722～1757 行）。要按 START 就不要設它，或把 GPIB／RS232 配方切到 Off-Line（見 S-2）。D1～D7 的規則不受它影響（`TesterComm\Handler\TesterCommWiring.cpp` 第 97 行在退出判斷之前）。
+   - 上機驗證時**不要**設任何 `W906_*` 測試縫（例如 `W906_INIDATA_ROOT` 設了 wb_serve 會拒絕啟動）；唯一例外是 2-10 可以先用 `W906_PWBOOK_PATH` 指到複本練習。
+ 
+diff --git a/docs/TESTERCOMM_PORT_LEDGER.md b/docs/TESTERCOMM_PORT_LEDGER.md
+index 2fcd0d3..24b42c3 100644
+--- a/docs/TESTERCOMM_PORT_LEDGER.md
++++ b/docs/TESTERCOMM_PORT_LEDGER.md
+@@ -476,7 +476,7 @@ ctest `TesterComm_Handler`（`tests/test_testercomm_handler.cpp`）：預設部
+ - TCP/IP 在 golden 沒有 bridge 程式：TfTesterTCP 是 Handler 的表單，socket 事件與兩個 timer 都在主執行緒，TimerProcessTCPDataTimer 直接寫 Handler 的測試結果。所以放在 Handler 執行緒（`TesterComm/Tcp/TcpPump.*`，由 `W906_TesterCommTick` 呼叫），不是通訊執行緒。
+ - V906 早就翻好 `Interface/TesterTCP_Socket.*`，但沒有任何正式程式呼叫 `TesterTCPSocket_Init()` 或驅動它的 timer，而且它的 OnRead 會在 socket shim 的讀取執行緒上直接改 Handler 狀態。pump 只呼叫它的公開函式、不改那個檔：把四個事件改成排隊、在 Handler 執行緒重播 golden 處理函式；兩個 timer 依 golden 的條件（`TestIF_File.iTestType==TCP_IP_MODE && LastSet.iTester==ON_LINE`，main.cpp:11320／cTesterIF.cpp:581-618／main.cpp:29770）開關，條件由真轉假時照 golden `Close()`；TimerTCPIPConnect 1000 ms、TimerProcessTCPData 1 ms（＝每圈）。
+ - 頁面的 TCP/IP 分頁吃 `UiChannel` 的 "tcpip" 快照（連線狀態、位址、32 站、收到的資料）。
+-- ⚠ **P8 前要處理**：vclcompat `TClientSocket` 在 REAL 模式是同步 connect（golden 的 VCL socket 是非阻塞）。今天沒有人呼叫 `SetSimMode(false)`，所以不會發生；轉真 socket 時 TimerTCPIPConnectTimer 的 `Open()` 要移出 Handler 執行緒，否則 Tester 不在線時會卡住機台執行緒（違反裁決 11）。✅ 使用者 20260926 裁決 10＝A：同意到時候（P8）再改。
++- ⚠ **P8 前要處理**：vclcompat `TClientSocket` 在 REAL 模式是同步 connect（golden 的 VCL socket 是非阻塞）。今天沒有人呼叫 `SetSimMode(false)`，所以不會發生；轉真 socket 時 TimerTCPIPConnectTimer 的 `Open()` 要移出 Handler 執行緒，否則 Tester 不在線時會卡住機台執行緒（違反裁決 11）。✅ 使用者 20260926 裁決 10＝A：同意到時候（P8）再改。　✅ **H-008（20261001，St02-E）已處理**：RULINGS_20261001 #0 起不等 P8；vclcompat TClientSocket 加 opt-in 的 POLLED 模式（`ClientSocket.cpp` 檔尾，同 W10 的 TServerSocket），`W906_TcpPumpInit(W906_TcpTesterRealSocket())`：出貨版真 socket、模擬版模擬、`HT9045_TCPCMD_SIM=1` 也是模擬；Open() 不阻塞，Poll() 在 tick 執行緒發事件。
+ - gate：`fLotInfo->labTCPIPSimulate`（V906 TfLotInfo 沒有這個成員）。
+ 
+ ### P7 核心：畫面通道與頁面（20260926，第一段）
+@@ -509,7 +509,7 @@ ctest `TesterComm_Handler`（`tests/test_testercomm_handler.cpp`）：預設部
+ | ATC 接好後把 `W906_ATC_PORTED` 改 1（SET_SLOPE_OFFSET／RESET_ATCALARM 回 golden 的 SETTINGOK），同時拿掉 G23 | `BLOCKED` | St02 | 要等 ATC（`ATC_InterfaceForm` 真的類別，fATCHandlerSide.h:709）移進 V906 並有全域 | 裁決 7；HandlerGpibMsg.cpp G23 |
+ | 真的啟動接好後把 `W906_REMOTE_START_WIRED` 改 1（遠端 START 回 golden） | `BLOCKED` | St02 | `TfMain::Start` 還是離線 no-op（forms/fMain.cpp:411） | 裁決 8；HandlerGpibMsg.cpp G16 |
+ | 912 補充：S10F3 SECS 警報視窗 `fSecsAlarm`（TSecsAlarmForm）、安全 PLC `IsSafePLCIOInstall`（MachineStatus）、HANA RMS `PrepareHANARMSConnect`（拿掉 G9） | `NOT_STARTED` | St02 | 使用者：「測試通訊這邊一起補，先不做」 | 裁決 11；上方「P2a 的 912 補充清單」 |
+-| TCP 真 socket 的 connect 移出 Handler 執行緒 | `NOT_STARTED` | St02 | P8（接實機）時做 | 裁決 10；P5 |
++| TCP 真 socket 的 connect 移出 Handler 執行緒 | `DONE`（H-008，20261001：vclcompat TClientSocket POLLED 模式，Open() 不阻塞、Poll() 在 tick 執行緒發事件；出貨版真、模擬版模擬） | St02 | RULINGS_20261001 #0 起不等 P8 | 裁決 10；P5 |
+ | 兩塊 TTL 板的行為、16BinGS／256 bin 判定 | `NOT_STARTED` | St02 | 照 golden，等實機驗證再決定 | 裁決 3、4；P8 |
+ 
+ ### ESD G3 拿掉（20260927，St02；github-59 轉 St01 §4 23:55 的待辦）
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 64767f0..b1e96d0 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -4684,7 +4684,7 @@ set_tests_properties(InitialMemory PROPERTIES TIMEOUT 120)
+ #   Static scan of the source tree, no build dir, seconds.
+ if(Python3_Interpreter_FOUND)
+     add_test(NAME START_SitesCensus
+-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/start_sites_census.py" --check 34 31 3)
++        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/start_sites_census.py" --check 34 32 2)   # AI(W906-H012-CENSUS) 20261001: was 34 31 3 -- St02 MR !33 wired the GPIB remote START (TesterComm/Handler/HandlerGpibMsg.cpp, W906_REMOTE_START_WIRED 1) to W906_RemoteRunStart, so one gated site is live
+     set_tests_properties(START_SitesCensus PROPERTIES ENVIRONMENT "PYTHONIOENCODING=utf-8:replace" TIMEOUT 120)
+ endif()
+ 
+@@ -5903,3 +5903,46 @@ if(WIN32)
+ endif()
+ add_test(NAME SocketSensor COMMAND test_socket_sensor)
+ set_tests_properties(SocketSensor PROPERTIES TIMEOUT 120)
++
++# --- test_safedoor_record: AI(W906-SAFEDOOR-REC) 20261001 -- batch 19, RULINGS_20261001 #0 / #5: csystem.cpp GATE G11 (DoSystem calls
++#   RecordSafeDoorStates again, golden csystem.cpp:4394) and G25 / G28a / G28b (the Gerneral.ini door timestamps) lifted.  Writes only
++#   asGeneralPath, which ENV-ALL points at this test's own scratch Gerneral.ini (W906_GENERAL_INI_PATH); refuses to run otherwise.
++#   Reads csystem.cpp (argv[1] = source root) for the gate states.
++add_executable(test_safedoor_record test_safedoor_record.cpp)
++target_include_directories(test_safedoor_record PRIVATE ${CMAKE_SOURCE_DIR})
++target_link_libraries(test_safedoor_record PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_safedoor_record PRIVATE ws2_32)
++endif()
++add_test(NAME SafeDoorRecord COMMAND test_safedoor_record "${CMAKE_SOURCE_DIR}")
++set_tests_properties(SafeDoorRecord PROPERTIES TIMEOUT 60)
++# --- test_tcp_tester_real: AI(W906-H008) 20261001 (St02-E) -- H-008: the TCP tester socket REAL in vclcompat's POLLED
++#   mode (ClientSocket.cpp end of file) and TcpPump driving golden TfTesterTCP (Interface/TesterTCP_Socket.cpp).
++#   CONTAINED: test-owned sockets on 127.0.0.1 with ephemeral ports only (never 6000 / 7016 / 7017 / the TesterIF
++#   address), the log path redirected, no W906_TesterCommInit.  The refused case waits up to ~45 s worst case.
++add_executable(test_tcp_tester_real test_tcp_tester_real.cpp)
++target_link_libraries(test_tcp_tester_real PRIVATE
++    ht9045_testercomm_handler ht9045_testercomm
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_tcp_tester_real PRIVATE ws2_32)
++endif()
++add_test(NAME TesterComm_TcpTesterReal COMMAND test_tcp_tester_real)
++set_tests_properties(TesterComm_TcpTesterReal PROPERTIES TIMEOUT 120)
++# --- test_coolfan_rules: AI(W906-COOLFAN) 20261001 (St02-E) -- RULINGS_20261001 #9: golden DoSwCoolingFan (csystem.cpp, golden
++#   906_0625_Steven csystem.cpp:20434-20569) and its callers.  The blower / valve rules, the IO-page guard H1-07, H1-08 with the
++#   ht9045_globals fallback, the air-conditioner branch (fAirCon lines stay gated), and the SIM heater tick reaching it.
++#   Memory only; no IO table, writes nothing.
++add_executable(test_coolfan_rules test_coolfan_rules.cpp)
++target_link_libraries(test_coolfan_rules PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++    ht9045_webbridge
++)
++if(WIN32)
++    target_link_libraries(test_coolfan_rules PRIVATE ws2_32)
++endif()
++add_test(NAME CoolFan_Rules COMMAND test_coolfan_rules)
++set_tests_properties(CoolFan_Rules PROPERTIES TIMEOUT 60)
+diff --git a/tests/test_coolfan_rules.cpp b/tests/test_coolfan_rules.cpp
+new file mode 100644
+index 0000000..9f569e1
+--- /dev/null
++++ b/tests/test_coolfan_rules.cpp
+@@ -0,0 +1,177 @@
++// =============================================================================
++//  tests/test_coolfan_rules.cpp -- golden DoSwCoolingFan (csystem.cpp:24787 = golden 906_0625_Steven csystem.cpp:20434-20569)
++//  and its callers, lifted by the RULINGS_20261001 #9 work card.  AI(W906-COOLFAN) 20261001 (St02-E).  Suite: CoolFan_Rules
++//
++//  The two outputs it drives: SW[SwCoolingFan_Blower] (OutValue) and Cylinder[C_CoolingValve] (Status; golden "CoolingValve
++//  Off 是吹風進去").  No IO table is loaded, so both points are Enable=false: On() / Off() only set those fields, nothing
++//  reaches a card (myswitch.cpp:74-76, mycylin.cpp:344-362).
++//    1. A normal machine (not HT9046_LS, USE_AIR_CONDITIONER 0), golden :20548-20567: chamber over fChamberCoolTemp-1 in
++//       Ambient, or in Hot with Head / Head+Socket heating -> blower on, valve off; otherwise (Chamber heating, cool chamber,
++//       no reading 999) -> blower off, valve on.
++//    2. H1-07 (golden :20437-20440): the IO Set View page open -> return false and touch nothing, both through
++//       fiosetview->fShow and through the web page table (W906_FormFShowHook "fiosetview").  H1-08 (golden :20442-20446) in a
++//       ctest: FileRW_ProxyChecked is the ht9045_globals fallback (false), so an open "fConfiguration" page never refuses --
++//       the same answer whether or not H1-08's port line is in (it reads the chkHeater proxy, which only wb_serve has).
++//    3. An air-conditioner machine (USE_AIR_CONDITIONER 1), golden :20448-20546: CCD over temperature -> blower on, valve on;
++//       Hot + Head mode -> by the chamber temperature; Ambient, not ASE Kaohsiung: bHALTing and a warm chamber -> blower on,
++//       valve off, else blower off (valve untouched).  The fAirCon->PowerUp / PowerDown lines stay gated (H1-09a-f).
++//    4. The callers: SIM -- W906_HeaterSimTick -> DoHeaterOn (G12b) reaches it.  CheckHeater's GATE 5 (golden
++//       uHeaterThread.cpp:173) sits after golden's SOFT_SIMULTE early return (uHeaterThread.cpp:505-511): SHIP-only.
++//       SHIP -- the tick is a no-op, so the outputs stay as set (no caller yet: THeaterThread is never created, MainClose.cpp:986).
++//  Every global it changes is saved and restored.
++// =============================================================================
++#include "MachineType.h"      // SOFT_SIMULTE, Type_HT9046_LS, HeadOnly / ChamberOnly / HeadSocket, tcChamber, CC_*
++#include "cmydef.h"           // InitialOK, MachineTypeChoice, USE_AIR_CONDITIONER, bCCDOverTemp, bHALTing, UN150Read, CUSTOMER_CODE,
++                              // fHeaterOK / fHeaterStableOK / iHeaterWait / iATCOnLine
++#include "cprod.h"            // Temperature.iIndexHeatMode / fChamberCoolTemp
++#include "csystem.h"          // DoSwCoolingFan, W906_FormFShowHook, bHeaterDoorIsOpen[]
++#include "LastSet.h"          // LastSet.iTemperature
++#include "forms/fMain.h"      // fMain->chkHeaterOk (the SIM tick's CheckHeater reads it)
++#include "atester_shims.h"    // fiosetview (TfiosetviewShim::fShow)
++#include "myswitch.h"         // SW[]
++#include "mycylin.h"          // Cylinder[]
++
++#include <cstdio>
++#include <cstring>
++
++namespace ht9045 { void W906_HeaterSimTick(); unsigned long W906_HeaterSimTickExceptions(); }   // HeaterSimTick.cpp
++
++static int g_total = 0, g_fail = 0;
++static void check(bool ok, const char* what, int line)
++{
++    ++g_total;
++    if (!ok) { ++g_fail; std::printf("  FAIL (line %d): %s\n", line, what); }
++    else     std::printf("  ok: %s\n", what);
++}
++#define CHECK(c) check((c), #c, __LINE__)
++
++static const char* g_openPage = 0;   // the fake web page table: this one golden form is "open"
++static bool FakePageTable(const char* goldenForm) { return g_openPage != 0 && std::strcmp(goldenForm, g_openPage) == 0; }
++
++static bool Blower() { return SW[SwCoolingFan_Blower].OutValue; }
++static bool Valve()  { return Cylinder[C_CoolingValve].Status; }
++static void Preset(bool blower, bool valve)
++{
++    SW[SwCoolingFan_Blower].OutValue = blower;
++    Cylinder[C_CoolingValve].Status  = valve;
++}
++
++// one normal-machine case: preset the opposite of the expected result, run, compare
++static void Normal(const char* name, int temp, int heatMode, double chamber, bool expBlower, bool expValve)
++{
++    LastSet.iTemperature        = temp;
++    Temperature.iIndexHeatMode  = heatMode;
++    UN150Read[tcChamber]        = chamber;
++    Preset(!expBlower, !expValve);
++    const bool r = DoSwCoolingFan(false);
++    std::printf("  -- %s\n", name);
++    CHECK(r == true);
++    CHECK(Blower() == expBlower && Valve() == expValve);
++}
++
++int main()
++{
++    std::printf("CoolFan_Rules\n");
++    const int    sMachine = MachineTypeChoice, sAirCon = USE_AIR_CONDITIONER, sCust = CUSTOMER_CODE;
++    const int    sTemp = LastSet.iTemperature, sMode = Temperature.iIndexHeatMode;
++    const double sCool = Temperature.fChamberCoolTemp, sChamber = UN150Read[tcChamber];
++    const bool   sCCD = bCCDOverTemp, sHalt = bHALTing, sInit = InitialOK;
++    const bool   sBlower = Blower(), sValve = Valve();
++    bool (*const sHook)(const char*) = W906_FormFShowHook;
++    CHECK(fiosetview != 0);
++    if (fiosetview == 0) return 1;
++    const bool sIoShow = fiosetview->fShow;
++
++    if (MachineTypeChoice == Type_HT9046_LS)
++        MachineTypeChoice = 0;
++    USE_AIR_CONDITIONER = 0;
++    CUSTOMER_CODE = 0;
++    bCCDOverTemp = false;
++    bHALTing = false;
++    fiosetview->fShow = false;
++    W906_FormFShowHook = 0;
++    Temperature.fChamberCoolTemp = 35.0;
++
++    std::printf(" 1. normal machine (golden :20548-20567)\n");
++    Normal("Ambient, chamber 40 > 34",                 Tempture_Ambient, ChamberOnly, 40.0, true,  false);
++    Normal("Ambient, chamber 30 <= 34",                Tempture_Ambient, ChamberOnly, 30.0, false, true);
++    Normal("Ambient, no reading (999)",                Tempture_Ambient, ChamberOnly, 999.0, false, true);
++    Normal("Hot + HeadOnly, chamber 40",               Tempture_Hot,     HeadOnly,    40.0, true,  false);
++    Normal("AmbientHot + HeadSocket, chamber 40",      Tempture_AmbientHot, HeadSocket, 40.0, true, false);
++    Normal("Hot + ChamberOnly, chamber 40",            Tempture_Hot,     ChamberOnly, 40.0, false, true);
++
++    std::printf(" 2. H1-07 the IO page / H1-08 in a ctest\n");
++    LastSet.iTemperature = Tempture_Ambient;  Temperature.iIndexHeatMode = ChamberOnly;  UN150Read[tcChamber] = 40.0;
++    Preset(false, true);
++    fiosetview->fShow = true;
++    CHECK(DoSwCoolingFan(false) == false);
++    CHECK(Blower() == false && Valve() == true);             // untouched (else blower on, valve off)
++    fiosetview->fShow = false;
++    W906_FormFShowHook = &FakePageTable;
++    g_openPage = "fiosetview";
++    CHECK(DoSwCoolingFan(false) == false);
++    CHECK(Blower() == false && Valve() == true);
++    g_openPage = "fConfiguration";                           // chkHeater proxy: the fallback answers false -> not refused
++    CHECK(DoSwCoolingFan(false) == true);
++    CHECK(Blower() == true && Valve() == false);
++    g_openPage = 0;
++    W906_FormFShowHook = 0;
++
++    std::printf(" 3. air-conditioner machine (golden :20448-20546; fAirCon lines stay gated)\n");
++    USE_AIR_CONDITIONER = 1;
++    bCCDOverTemp = true;
++    Preset(false, false);
++    CHECK(DoSwCoolingFan(false) == true);
++    CHECK(Blower() == true && Valve() == true);
++    bCCDOverTemp = false;
++    LastSet.iTemperature = Tempture_Hot;  Temperature.iIndexHeatMode = HeadOnly;
++    UN150Read[tcChamber] = 40.0;  Preset(false, true);
++    CHECK(DoSwCoolingFan(false) == true);
++    CHECK(Blower() == true && Valve() == false);              // Head mode, chamber over fChamberCoolTemp
++    UN150Read[tcChamber] = 30.0;  Preset(true, true);
++    CHECK(DoSwCoolingFan(false) == true);
++    CHECK(Blower() == false && Valve() == false);
++    LastSet.iTemperature = Tempture_Ambient;  UN150Read[tcChamber] = 40.0;
++    bHALTing = true;  Preset(false, true);
++    CHECK(DoSwCoolingFan(false) == true);
++    CHECK(Blower() == true && Valve() == false);              // halting + warm chamber: fast cool
++    bHALTing = false;  Preset(true, true);
++    CHECK(DoSwCoolingFan(false) == true);
++    CHECK(Blower() == false && Valve() == true);              // idle: blower off, valve untouched
++    USE_AIR_CONDITIONER = 0;
++
++    std::printf(" 4. the callers (W906_HeaterSimTick -> DoHeaterOn G12b; GATE 5 is SHIP-only)\n");
++    CHECK(fMain != 0 && fMain->chkHeaterOk != 0);
++    if (fMain != 0 && fMain->chkHeaterOk != 0)
++    {
++        const bool sChk = fMain->chkHeaterOk->Checked;
++        const bool sOK = fHeaterOK, sStable = fHeaterStableOK, sATC = iATCOnLine;   // the tick's CheckHeater writes these
++        const int  sWait = iHeaterWait;
++        bool sDoor[4];
++        for (int i = 0; i < 4; ++i) sDoor[i] = bHeaterDoorIsOpen[i];
++        const bool sRelay = SW[SwHeaterRelay].OutValue, sFan = SW[SwHeaterFan].OutValue;   // DoHeaterOn sets them
++        LastSet.iTemperature = Tempture_Ambient;  Temperature.iIndexHeatMode = ChamberOnly;  UN150Read[tcChamber] = 999.0;
++        InitialOK = true;
++        fMain->chkHeaterOk->Checked = true;
++        Preset(true, false);
++        ht9045::W906_HeaterSimTick();
++#ifdef SOFT_SIMULTE
++        CHECK(Blower() == false && Valve() == true);          // reached: no chamber reading -> blower off, valve on
++#else
++        CHECK(Blower() == true && Valve() == false);          // SHIP: the tick is a no-op (no caller yet)
++#endif
++        CHECK(ht9045::W906_HeaterSimTickExceptions() == 0);
++        fMain->chkHeaterOk->Checked = sChk;
++        fHeaterOK = sOK;  fHeaterStableOK = sStable;  iATCOnLine = sATC;  iHeaterWait = sWait;
++        for (int i = 0; i < 4; ++i) bHeaterDoorIsOpen[i] = sDoor[i];
++        SW[SwHeaterRelay].OutValue = sRelay;  SW[SwHeaterFan].OutValue = sFan;
++    }
++
++    MachineTypeChoice = sMachine;  USE_AIR_CONDITIONER = sAirCon;  CUSTOMER_CODE = sCust;
++    LastSet.iTemperature = sTemp;  Temperature.iIndexHeatMode = sMode;  Temperature.fChamberCoolTemp = sCool;
++    UN150Read[tcChamber] = sChamber;  bCCDOverTemp = sCCD;  bHALTing = sHalt;  InitialOK = sInit;
++    fiosetview->fShow = sIoShow;  W906_FormFShowHook = sHook;
++    Preset(sBlower, sValve);
++    std::printf("%s: %d/%d checks passed\n", g_fail ? "FAIL" : "PASS", g_total - g_fail, g_total);
++    return g_fail ? 1 : 0;
++}
+diff --git a/tests/test_safedoor_record.cpp b/tests/test_safedoor_record.cpp
+new file mode 100644
+index 0000000..1cc935e
+--- /dev/null
++++ b/tests/test_safedoor_record.cpp
+@@ -0,0 +1,143 @@
++// AI(W906-SAFEDOOR-REC) 20261001: batch 19, RULINGS_20261001 #0 / #5 -- csystem.cpp GATE G11 / G25 / G28a / G28b lifted.
++//   RecordSafeDoorStates (csystem.cpp:21388 = golden csystem.cpp:2833-3042), the call DoSystem() makes every pass again.
++//   Part 1 (behaviour, only through the function itself):
++//     SystemStart true -> returns at once (golden :2845-2856), nothing written;
++//     SystemStart false, [O18] on, safe door 1 opens (SnSafeDoor1 reads off) -> Gerneral.ini [LastSafeDoorOpen]
++//       <sensor name>=YYYY-MM-DD-HH (golden :2874-2875, GATE G25) in asGeneralPath;
++//     the latch: a second pass with the door still open writes nothing new; the door closes -> latch cleared;
++//     [O18] off -> the door opens again and nothing is written.
++//   The test refuses to run unless asGeneralPath is the per-test scratch copy (tests/CMakeLists.txt ENV-ALL
++//   W906_GENERAL_INI_PATH) -- never the machine's D:\HT9045\system\Gerneral.ini.  CloseIniFile() is never called.
++//   Part 2 (source, argv[1] = source root, // comments stripped): G11 / G25 / G28a / G28b are #if 1, G26 / G27 still #if 0.
++//   NOT COVERED: the hatchway timestamps (G28a / G28b need a Tri-Temp hatchway sensor table), the MyDBIProcess rows
++//   (they go to the redirected log roots), the SECS events (EventReport is a counter in this port).
++#include <cstdio>
++#include <cctype>
++#include <fstream>
++#include <sstream>
++#include <string>
++#include "cmydef.h"
++#include "Config.h"
++#include "csystem.h"
++#include "common.h"
++#include "mysensor.h"
++
++static int g_fail = 0;
++static void check(bool ok, const char* what)
++{
++    std::printf("%s %s\n", ok ? "PASS" : "FAIL", what);
++    if (!ok) ++g_fail;
++}
++
++static void SensorOff(int idx) { Sen[idx].Enable = true; Sen[idx].Type = TYPE_A; Sen[idx].ISABase = eISABase; }   // IsOff()==true
++static void SensorOn(int idx)  { Sen[idx].Enable = true; Sen[idx].Type = TYPE_B; Sen[idx].ISABase = eISABase; }   // IsOn()==true
++
++static std::string Read(const std::string& p)
++{
++    std::ifstream f(p.c_str(), std::ios::binary);
++    std::stringstream ss;
++    ss << f.rdbuf();
++    return ss.str();
++}
++
++static std::string Code(const std::string& text)
++{
++    std::string code;
++    std::istringstream in(text);
++    std::string line;
++    while (std::getline(in, line)) {
++        const std::size_t c = line.find("//");
++        code += (c == std::string::npos ? line : line.substr(0, c)) + "\n";
++    }
++    return code;
++}
++
++static std::string Lower(std::string s)
++{
++    for (std::size_t i = 0; i < s.size(); ++i) s[i] = (char)std::tolower((unsigned char)s[i]);
++    return s;
++}
++
++int main(int argc, char** argv)
++{
++    const std::string gen = Lower(asGeneralPath.c_str());
++    if (gen.empty() || gen.find("d:" "\x5c" "ht9045" "\x5c" "system") == 0 || gen.find("d:/ht9045/system") == 0) {
++        std::printf("FAIL asGeneralPath is the machine's file (%s) -- refusing to run (ENV-ALL W906_GENERAL_INI_PATH missing)\n", asGeneralPath.c_str());
++        return 1;
++    }
++    std::printf("asGeneralPath = %s\n", asGeneralPath.c_str());
++
++    // every listed safe door closed, the hatchways not installed, door 1 = the one under test
++    int door1 = -1;
++    for (int i = 0; i < MAX_SAFE_DOOR_CNT; i++) {
++        SensorOn(iSafeDoor[i]);
++        if (iSafeDoor[i] == SnSafeDoor1 && door1 < 0) door1 = i;
++    }
++    for (int i = 0; i < MAX_HATCH_DOOR_CNT; i++) Sen[iSafeDoorHatchway[i]].Enable = false;
++    check(door1 >= 0, "SnSafeDoor1 is in the golden iSafeDoor[] list");
++    if (door1 < 0) return 1;
++    const AnsiString key = "W906TestSafeDoor1";
++    Sen[SnSafeDoor1].Name = key;
++    IniConfig.bA36OpenDoorSetErrBin = false;
++    IniConfig.bO18SafeDoorOnOffDurationDetect = true;
++    SystemYear = 2026; SystemMonth = 10; SystemDate = 1; SystemHour = 12;
++    WriteIniData(asGeneralPath, "LastSafeDoorOpen", key, AnsiString("unset"));
++
++    // running: golden returns before looking at any door
++    SystemStart = true;
++    SensorOff(SnSafeDoor1);
++    RecordSafeDoorStates();
++    check(ReadIniData(asGeneralPath, "LastSafeDoorOpen", key, AnsiString("")) == AnsiString("unset"),
++          "SystemStart true -> returns at once, nothing written (golden :2845-2856)");
++
++    // stopped, [O18] on, door 1 open -> the timestamp (GATE G25)
++    SystemStart = false;
++    RecordSafeDoorStates();
++    check(ReadIniData(asGeneralPath, "LastSafeDoorOpen", key, AnsiString("")) == AnsiString("2026-10-01-12"),
++          "door 1 opens while stopped, [O18] on -> [LastSafeDoorOpen] W906TestSafeDoor1=2026-10-01-12 (golden :2874-2875)");
++
++    // still open next pass: the latch keeps it from writing again
++    SystemHour = 13;
++    RecordSafeDoorStates();
++    check(ReadIniData(asGeneralPath, "LastSafeDoorOpen", key, AnsiString("")) == AnsiString("2026-10-01-12"),
++          "door still open on the next pass -> no second write (bSafeDoorOpen latch, golden :2862 / :2866)");
++
++    // closes -> latch cleared; opens again with [O18] off -> no write
++    SensorOn(SnSafeDoor1);
++    RecordSafeDoorStates();
++    IniConfig.bO18SafeDoorOnOffDurationDetect = false;
++    SensorOff(SnSafeDoor1);
++    RecordSafeDoorStates();
++    check(ReadIniData(asGeneralPath, "LastSafeDoorOpen", key, AnsiString("")) == AnsiString("2026-10-01-12"),
++          "closed then opened again with [O18] off -> nothing written (the option gates the timestamp, golden :2868)");
++
++    // and with [O18] back on, the next opening writes the new hour
++    SensorOn(SnSafeDoor1);
++    RecordSafeDoorStates();
++    IniConfig.bO18SafeDoorOnOffDurationDetect = true;
++    SensorOff(SnSafeDoor1);
++    RecordSafeDoorStates();
++    check(ReadIniData(asGeneralPath, "LastSafeDoorOpen", key, AnsiString("")) == AnsiString("2026-10-01-13"),
++          "closed, [O18] on again, opened at hour 13 -> the timestamp follows");
++    SensorOn(SnSafeDoor1);
++    RecordSafeDoorStates();
++
++    // Part 2: the source
++    const std::string src = argc > 1 ? argv[1] : ".";
++    const std::string cs = Code(Read(src + "/csystem.cpp"));
++    check(cs.size() > 1000000, "csystem.cpp read (comments stripped)");
++    struct G { const char* tag; bool live; } gates[] = {
++        {"GATE G11 -- golden csystem.cpp:4394", true}, {"GATE G25 -- golden csystem.cpp:2874-2875", true},
++        {"GATE G28a -- golden csystem.cpp:3028-3029", true}, {"GATE G28b -- golden csystem.cpp:3036-3037", true},
++        {"GATE G26 -- golden csystem.cpp:2966-2971", false}, {"GATE G27 -- golden csystem.cpp:2973-3016", false},
++    };
++    const std::string raw = Read(src + "/csystem.cpp");
++    for (unsigned k = 0; k < sizeof(gates) / sizeof(gates[0]); ++k) {
++        const std::string want = std::string(gates[k].live ? "#if 1 // " : "#if 0 // ") + gates[k].tag;
++        const std::string what = std::string("csystem.cpp: ") + gates[k].tag + (gates[k].live ? " is #if 1" : " stays #if 0");
++        check(raw.find(want) != std::string::npos, what.c_str());
++    }
++
++    std::printf("%s SafeDoorRecord (%d failure(s))\n", g_fail ? "FAILED" : "ALL PASS", g_fail);
++    return g_fail ? 1 : 0;
++}
+diff --git a/tests/test_tcp_tester_real.cpp b/tests/test_tcp_tester_real.cpp
+new file mode 100644
+index 0000000..b442de4
+--- /dev/null
++++ b/tests/test_tcp_tester_real.cpp
+@@ -0,0 +1,334 @@
++// =============================================================================
++//  tests/test_tcp_tester_real.cpp -- H-008: the TCP tester socket in REAL, POLLED mode.  AI(W906-H008) 20261001 (St02-E).
++//  Suite: TesterComm_TcpTesterReal (both configs).
++//
++//  CONTAINMENT: every socket this test opens is its own, on 127.0.0.1 with an ephemeral port (bind port 0).  It never
++//  uses 6000 / 7016 / 7017 or the TesterIF address, never reads a TesterIF file, never calls W906_TesterCommInit, and
++//  points asTestTCPIPLogPath at a scratch folder next to the exe first (test_testertcp_socket.cpp:21-29).  Before every
++//  TesterTCPSocket_TimerTCPIPConnectTimer() call it CHECKs that the address is still 127.0.0.1 (E2 review m3).
++//    1. vclcompat TClientSocket POLLED (vclcompat/ClientSocket.cpp end of file): Open() returns with Active false and
++//       no event; Poll() -> OnConnect; send / receive; the peer closes -> OnDisconnect, Active false, a second Close()
++//       fires nothing; a refused connect (target = a bound, NOT listening 127.0.0.1 socket, held open: an RST, and no
++//       one else can take the port) -> OnError(eeConnect) from Poll(), never from Open(), within 10 s (Windows retries
++//       the SYN after an RST); Close() while connecting fires nothing; a plain Sim socket behaves as before.
++//    2. TcpPump end to end (W906_TcpPumpInit(true): REAL polled; golden TfTesterTCP through Interface/TesterTCP_Socket):
++//       TCP_IP_MODE + ON_LINE + InitialOK -> the golden timer opens (Count1 starts at 20, golden TesterTCP.cpp:194) ->
++//       ON-LINE, bConnectOK; SOT "TEST 1;" reaches the server with "\r\n"; a reply reaches sTCPIPRecevieData; the server
++//       closes -> OFF-LINE; a refused target -> ERROR, bTCPError, and the next timer shows "TCP/IP error for tester!"
++//       once (no host hook in a ctest: ShowMyMessage only records, canary_support.cpp).  Outcomes, not call counts
++//       (W906_TcpPumpTick fires the connect timer itself every 1000 ms too).
++//    3. The policy W906_TcpTesterRealSocket(): SIM build false; SHIP true, false with HT9045_TCPCMD_SIM=1.
++// =============================================================================
++#include <winsock2.h>                     // before anything that pulls <windows.h>
++#include "MachineType.h"                  // SOFT_SIMULTE
++#include "Interface/TesterTCP_Socket.h"   // TesterTCPSocket_*, TesterTCPSocket, TestIF_File, LastSet, InitialOK, fLotInfo
++#include "TesterComm/Tcp/TcpPump.h"       // W906_TcpPumpInit / Tick, W906_TcpTesterRealSocket
++#include "vclcompat/ClientSocket.h"
++
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <string>
++
++#if defined(__MINGW32__) && !defined(__MINGW64_VERSION_MAJOR)   // MinGW.org strict mode: no _putenv prototype (test_agv_e84.cpp:143-162)
++extern "C" int _putenv(const char*);
++#  define HT9045_TEST_PUTENV _putenv
++#else
++#  define HT9045_TEST_PUTENV putenv
++#endif
++
++static int g_total = 0, g_fail = 0;
++static void check(bool ok, const char* what, int line)
++{
++    ++g_total;
++    if (!ok) { ++g_fail; std::printf("  FAIL (line %d): %s\n", line, what); }
++    else     std::printf("  ok: %s\n", what);
++}
++#define CHECK(c) check((c), #c, __LINE__)
++
++// ---- test-owned loopback sockets -------------------------------------------------------------------------
++static SOCKET Bound(bool listening, int* port)   // 127.0.0.1:0; listening or only bound
++{
++    SOCKET s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
++    sockaddr_in a;
++    std::memset(&a, 0, sizeof(a));
++    a.sin_family = AF_INET;
++    a.sin_addr.s_addr = ::inet_addr("127.0.0.1");
++    a.sin_port = 0;
++    if (s == INVALID_SOCKET || ::bind(s, reinterpret_cast<sockaddr*>(&a), sizeof(a)) != 0)
++        return INVALID_SOCKET;
++    if (listening && ::listen(s, 4) != 0)
++        return INVALID_SOCKET;
++    int len = sizeof(a);
++    ::getsockname(s, reinterpret_cast<sockaddr*>(&a), &len);
++    *port = static_cast<int>(::ntohs(a.sin_port));
++    return s;
++}
++static SOCKET AcceptNow(SOCKET l)                // non-blocking accept (INVALID_SOCKET when nothing waits)
++{
++    fd_set r;
++    FD_ZERO(&r);
++    FD_SET(l, &r);
++    timeval tv;
++    tv.tv_sec = 0;
++    tv.tv_usec = 0;
++    if (::select(0, &r, 0, 0, &tv) <= 0)
++        return INVALID_SOCKET;
++    return ::accept(l, 0, 0);
++}
++static std::string RecvWait(SOCKET s, DWORD ms)  // what arrives on a test-owned socket within ms
++{
++    std::string got;
++    const DWORD t0 = ::GetTickCount();
++    while (::GetTickCount() - t0 < ms)
++    {
++        fd_set r;
++        FD_ZERO(&r);
++        FD_SET(s, &r);
++        timeval tv;
++        tv.tv_sec = 0;
++        tv.tv_usec = 20000;
++        if (::select(0, &r, 0, 0, &tv) > 0)
++        {
++            char b[256];
++            const int n = ::recv(s, b, sizeof(b), 0);
++            if (n <= 0)
++                break;
++            got.append(b, static_cast<size_t>(n));
++            if (got.find('\n') != std::string::npos)
++                break;
++        }
++    }
++    return got;
++}
++
++// ---- section 1 event counters ----------------------------------------------------------------------------
++struct Ev { int connect, disconnect, error, read, lastErr; TErrorEvent lastKind; };
++static void Hook(TClientSocket& c, Ev& e)
++{
++    e.connect = e.disconnect = e.error = e.read = e.lastErr = 0;
++    e.lastKind = eeGeneral;
++    c.OnConnect    = [&e](TObject*, TCustomWinSocket*) { ++e.connect; };
++    c.OnDisconnect = [&e](TObject*, TCustomWinSocket*) { ++e.disconnect; };
++    c.OnRead       = [&e](TObject*, TCustomWinSocket*) { ++e.read; };
++    c.OnError      = [&e](TObject*, TCustomWinSocket*, TErrorEvent k, int& code) { ++e.error; e.lastErr = code; e.lastKind = k; code = 0; };
++}
++template <class Pred> static bool PollUntil(TClientSocket& c, DWORD ms, Pred done)
++{
++    const DWORD t0 = ::GetTickCount();
++    while (::GetTickCount() - t0 < ms)
++    {
++        c.Poll();
++        if (done())
++            return true;
++        ::Sleep(10);
++    }
++    return done();
++}
++
++static void Section1()
++{
++    std::printf(" 1. vclcompat TClientSocket POLLED\n");
++    int port = 0;
++    SOCKET l = Bound(true, &port);
++    CHECK(l != INVALID_SOCKET && port > 0);
++    if (l == INVALID_SOCKET) return;
++
++    Ev e;                                                          // before the socket: its dtor may still fire
++    TClientSocket c(0);
++    Hook(c, e);
++    c.SetPolled(true);
++    c.SetSimMode(false);
++    c.Address = "127.0.0.1";
++    c.Port = port;
++    CHECK(c.IsPolled() && !c.IsSimMode());
++    c.Open();
++    CHECK(!c.Active && e.connect == 0 && e.error == 0);            // Open() returned at once, no event yet
++    SOCKET peer = INVALID_SOCKET;
++    const bool up = PollUntil(c, 2000, [&]() { if (peer == INVALID_SOCKET) peer = AcceptNow(l); return e.connect == 1; });
++    CHECK(up && c.Active && e.error == 0);
++    if (peer == INVALID_SOCKET) peer = AcceptNow(l);
++    CHECK(peer != INVALID_SOCKET);
++    if (up && peer != INVALID_SOCKET)
++    {
++        CHECK(c.Socket->SendText("PING\r\n") == 6);
++        CHECK(RecvWait(peer, 2000) == "PING\r\n");
++        ::send(peer, "PONG\r\n", 6, 0);
++        CHECK(PollUntil(c, 2000, [&]() { return e.read >= 1; }));
++        CHECK(std::string(c.Socket->ReceiveText().c_str()) == "PONG\r\n");
++        ::closesocket(peer);                                       // the peer closes
++        peer = INVALID_SOCKET;
++        CHECK(PollUntil(c, 2000, [&]() { return e.disconnect == 1; }));
++        CHECK(!c.Active);
++        c.Close();
++        CHECK(e.disconnect == 1);                                  // nothing more: the handle is already gone
++    }
++    if (peer != INVALID_SOCKET) ::closesocket(peer);
++    ::closesocket(l);
++
++    std::printf("  -- refused (a bound, not listening target, held open)\n");
++    int rport = 0;
++    SOCKET r = Bound(false, &rport);
++    CHECK(r != INVALID_SOCKET && rport > 0);
++    Ev e2;
++    TClientSocket c2(0);
++    Hook(c2, e2);
++    c2.SetPolled(true);
++    c2.SetSimMode(false);
++    c2.Address = "127.0.0.1";
++    c2.Port = rport;
++    c2.Open();
++    CHECK(e2.error == 0 && e2.connect == 0 && !c2.Active);         // never from inside Open()
++    CHECK(PollUntil(c2, 10000, [&]() { return e2.error == 1; }));
++    std::printf("     (OnError code %d, kind %d)\n", e2.lastErr, static_cast<int>(e2.lastKind));
++    CHECK(e2.lastKind == eeConnect && e2.lastErr != 0 && e2.connect == 0 && !c2.Active);
++
++    std::printf("  -- Close() while connecting\n");
++    Ev e3;
++    TClientSocket c3(0);
++    Hook(c3, e3);
++    c3.SetPolled(true);
++    c3.SetSimMode(false);
++    c3.Address = "127.0.0.1";
++    c3.Port = rport;
++    c3.Open();
++    c3.Close();
++    for (int i = 0; i < 20; ++i) { c3.Poll(); ::Sleep(10); }
++    CHECK(e3.connect == 0 && e3.error == 0 && e3.disconnect == 0 && !c3.Active);
++    if (r != INVALID_SOCKET) ::closesocket(r);
++
++    std::printf("  -- a plain Sim socket is unchanged\n");
++    Ev es;
++    TClientSocket s(0);
++    Hook(s, es);
++    s.Address = "127.0.0.1";
++    s.Port = 1;
++    s.Open();                                                      // Sim: connects at once, fires OnConnect inside Open()
++    CHECK(s.IsSimMode() && !s.IsPolled() && s.Active && es.connect == 1);
++    CHECK(s.Poll() == 0);
++    s.Close();
++    CHECK(es.disconnect == 1);
++}
++
++// ---- section 2: TcpPump + golden TfTesterTCP ----------------------------------------------------------------
++static bool AddrIsLoopback() { return TestIF_File.asTester_Address == AnsiString("127.0.0.1"); }
++
++static void Section2()
++{
++    std::printf(" 2. TcpPump end to end (REAL, polled)\n");
++    int port = 0;
++    SOCKET l = Bound(true, &port);
++    CHECK(l != INVALID_SOCKET && port > 0);
++    if (l == INVALID_SOCKET) return;
++    CHECK(fLotInfo != 0 && fLotInfo->labTCPIPStatus != 0);
++    if (fLotInfo == 0 || fLotInfo->labTCPIPStatus == 0) return;
++
++    InitialOK = true;
++    TestIF_File.iTestType = TCP_IP_MODE;
++    LastSet.iTester = ON_LINE;
++    TestIF_File.asTester_Address = "127.0.0.1";
++    TestIF_File.iTester_Port = port;
++    W906_TcpPumpInit(true);
++    CHECK(TesterTCPSocket_ClientSocket->IsPolled() && !TesterTCPSocket_ClientSocket->IsSimMode());
++
++    SOCKET peer = INVALID_SOCKET;
++    const DWORD t0 = ::GetTickCount();
++    while (::GetTickCount() - t0 < 8000 && !TesterTCPSocket.bConnectOK)
++    {
++        CHECK(AddrIsLoopback());
++        if (!AddrIsLoopback()) break;
++        TesterTCPSocket_TimerTCPIPConnectTimer();                 // golden: Count1 > 30 -> Open()
++        W906_TcpPumpTick();                                         // Poll + replay the golden handlers
++        if (peer == INVALID_SOCKET) peer = AcceptNow(l);
++        ::Sleep(5);
++    }
++    CHECK(TesterTCPSocket.bConnectOK);
++    CHECK(std::string(fLotInfo->labTCPIPStatus->Caption.c_str()) == "ON-LINE");
++    if (peer == INVALID_SOCKET) peer = AcceptNow(l);
++    CHECK(peer != INVALID_SOCKET);
++    if (TesterTCPSocket.bConnectOK && peer != INVALID_SOCKET)
++    {
++        TesterTCPSocket_SendTCPIPCommand(0, "SOT", "TEST 1;");      // HandlerBridgeCtl.cpp:910's call shape
++        CHECK(RecvWait(peer, 2000) == "TEST 1;\r\n");
++        ::send(peer, "HELLO\r\n", 7, 0);
++        const DWORD t1 = ::GetTickCount();
++        while (::GetTickCount() - t1 < 2000 && std::string(TesterTCPSocket.sTCPIPRecevieData.c_str()).find("HELLO") == std::string::npos)
++        {
++            W906_TcpPumpTick();
++            ::Sleep(5);
++        }
++        CHECK(std::string(TesterTCPSocket.sTCPIPRecevieData.c_str()).find("HELLO") != std::string::npos);
++        ::closesocket(peer);                                        // the tester goes away
++        peer = INVALID_SOCKET;
++        const DWORD t2 = ::GetTickCount();
++        while (::GetTickCount() - t2 < 2000 && TesterTCPSocket.bConnectOK)
++        {
++            W906_TcpPumpTick();
++            ::Sleep(5);
++        }
++        CHECK(!TesterTCPSocket.bConnectOK);
++        CHECK(std::string(fLotInfo->labTCPIPStatus->Caption.c_str()) == "OFF-LINE");
++    }
++    if (peer != INVALID_SOCKET) ::closesocket(peer);
++    ::closesocket(l);
++
++    std::printf("  -- a refused tester -> ERROR, one box at the next timer\n");
++    int rport = 0;
++    SOCKET r = Bound(false, &rport);
++    CHECK(r != INVALID_SOCKET && rport > 0);
++    TestIF_File.iTester_Port = rport;
++    const int boxes0 = W906_ShowMyMessage_Count;
++    const DWORD t3 = ::GetTickCount();
++    // the pump's own 1000 ms timer may show the box inside a tick (and clear the flag): stop on either
++    while (::GetTickCount() - t3 < 45000 && !TesterTCPSocket.bTCPError && W906_ShowMyMessage_Count == boxes0)
++    {
++        CHECK(AddrIsLoopback());
++        if (!AddrIsLoopback()) break;
++        TesterTCPSocket_TimerTCPIPConnectTimer();
++        W906_TcpPumpTick();
++        ::Sleep(5);
++    }
++    CHECK(TesterTCPSocket.bTCPError || W906_ShowMyMessage_Count == boxes0 + 1);
++    CHECK(std::string(fLotInfo->labTCPIPStatus->Caption.c_str()) == "ERROR");
++    CHECK(AddrIsLoopback());
++    if (AddrIsLoopback() && TesterTCPSocket.bTCPError)
++        TesterTCPSocket_TimerTCPIPConnectTimer();                 // golden :196-200: the box, then the flag clears
++    CHECK(W906_ShowMyMessage_Count == boxes0 + 1);
++    CHECK(std::string(W906_ShowMyMessage_LastS1.c_str()) == "TCP/IP error for tester!");
++    CHECK(!TesterTCPSocket.bTCPError);
++    LastSet.iTester = OFF_LINE;                                     // stop the timers: TcpPump closes on the edge
++    W906_TcpPumpTick();
++    if (r != INVALID_SOCKET) ::closesocket(r);
++}
++
++static void Section3()
++{
++    std::printf(" 3. W906_TcpTesterRealSocket\n");
++#ifdef SOFT_SIMULTE
++    CHECK(W906_TcpTesterRealSocket() == false);
++    HT9045_TEST_PUTENV(const_cast<char*>("HT9045_TCPCMD_SIM=0"));
++    CHECK(W906_TcpTesterRealSocket() == false);                     // SIM stays SIM whatever the variable says
++#else
++    HT9045_TEST_PUTENV(const_cast<char*>("HT9045_TCPCMD_SIM=0"));
++    CHECK(W906_TcpTesterRealSocket() == true);
++    HT9045_TEST_PUTENV(const_cast<char*>("HT9045_TCPCMD_SIM=1"));
++    CHECK(W906_TcpTesterRealSocket() == false);
++    HT9045_TEST_PUTENV(const_cast<char*>("HT9045_TCPCMD_SIM=11"));
++    CHECK(W906_TcpTesterRealSocket() == true);                      // exactly "1", as TesterCommWiring.cpp:134
++#endif
++    HT9045_TEST_PUTENV(const_cast<char*>("HT9045_TCPCMD_SIM="));
++}
++
++int main()
++{
++    std::printf("TesterComm_TcpTesterReal\n");
++    asTestTCPIPLogPath = ".\\_test_scratch_tcptesterreal";          // never the production D:\HT9045_Log\Test_TCPIP
++    WSADATA wsa;
++    CHECK(::WSAStartup(MAKEWORD(2, 2), &wsa) == 0);
++    Section1();
++    Section2();
++    Section3();
++    ::WSACleanup();
++    std::printf("%s: %d/%d checks passed\n", g_fail ? "FAIL" : "PASS", g_total - g_fail, g_total);
++    return g_fail ? 1 : 0;
++}
+diff --git a/tests/test_testercomm_handler.cpp b/tests/test_testercomm_handler.cpp
+index a735ac6..01d9a75 100644
+--- a/tests/test_testercomm_handler.cpp
++++ b/tests/test_testercomm_handler.cpp
+@@ -11,6 +11,12 @@
+ //    2. identity token == the hub's mailbox (what the engines use as HMountWnd); no bridge -> FindBridgeWindow NULL.
+ //    3. golden guards with no bridge: RunTestProgram / CloseGpibProgram / SendMSG_CMD return without sending.
+ //    4. Sink(): a bridge packet (MSG_CMD_TesterMode, MSG_CMD_Version) runs OnGpibProgramMsg on this thread, no throw.
++//   12. AI(W906-H012) 20261001 (St02-E): H-012 -- GPIB remote START / STOP (golden OnMyCopyMsg MSG_CMD_RemoteStart / RemoteStop) go
++//       START goes through the W10 seat W906_RemoteRun, like HTSET,333: a stub table stands in for wb_serve's
++//       StartFromWeb.  Not installed -> START changes nothing (bSECSGEMAlarm / bHasSaveSet kept); installed ->
++//       Start("GPIB Command : START") once with both flags cleared; a refusal (manual teach) -> both flags back.  STOP
++//       stays golden fMain->BtnPauseClick (fMain->W906_BtnPauseClickCallCount); bGPIBRemoteStartStop false -> neither.
++//       The replies go to a bridge this test does not have (no engine), so the calls and the flags are checked.
+ //    6. P2b install seat (forms/fMain.h W906_TesterForward): before W906_TesterCommInit the TfMain members are the old
+ //       offline no-ops; after it they reach fTesterSide.  St01 S86 (INSTALL_OCR != 0): the four BarCode / Pin1
+ //       commands sent at boot, recipe change and OCR page open return at once while no bridge is found (no mailbox
+@@ -52,6 +58,9 @@
+ #include "Interface/InterfaceSYS.h"
+ #include "mysensor.h"
+ #include "MachineType.h"
++#include "CosFunction.h"            // AI(W906-H012) 20261001 (St02-E): CosFunction.bGPIBRemoteStartStop (H-012 section)
++#include "atester_shims.h"          // fiosetview (the remote START busy check)
++extern bool (*W906_FormFShowHook)(const char* goldenForm);   // csystem.h:421 (body csystem.cpp), as test_b8_ag1_initial.cpp:66
+ #include <vector>
+ 
+ #include <cstdio>
+@@ -528,6 +537,78 @@ static void TestMachineStatusSend()
+     fTesterSide = NULL;
+ }
+ 
++// ---- AI(W906-H012) 20261001 (St02-E): H-012 GPIB remote START / STOP through W906_RemoteRun --------------------------------------
++static int g_rrStart = 0, g_rrPause = 0;
++static bool g_rrAllow = true;
++static std::string g_rrStartFunc, g_rrPauseFunc;
++static bool RrStart(AnsiString f) { if (!g_rrAllow) return false; ++g_rrStart; g_rrStartFunc = f.c_str(); return true; }
++static bool RrPause(AnsiString f) { ++g_rrPause; g_rrPauseFunc = f.c_str(); return true; }
++
++static void TestRemoteRun()
++{
++    testercomm::TesterCommHub hub;
++    THandlerTesterSide side;
++    side.Attach(&hub);
++    InitialOK = true;
++    bSystemClose = false;
++    const bool sRemote = CosFunction.bGPIBRemoteStartStop, sStart = SystemStart, sAlarm = bSECSGEMAlarm, sSave = bHasSaveSet;
++    const W906_RemoteRunTable sTable = W906_RemoteRun;
++    bool (*const sHook)(const char*) = W906_FormFShowHook;
++    W906_FormFShowHook = 0;                                    // no page open (the busy check)
++    if (fiosetview) fiosetview->fShow = false;
++    CosFunction.bGPIBRemoteStartStop = true;
++    SystemStart = false;
++
++    // not installed: START refused before anything changes
++    W906_RemoteRun.Start = 0;  W906_RemoteRun.Pause = 0;
++    bSECSGEMAlarm = true;  bHasSaveSet = true;
++    CHECK(THandlerTesterSide::Sink(Packet(MSG_CMD_RemoteStart, ""), &side) == 0);
++    CHECK(bSECSGEMAlarm == true && bHasSaveSet == true);
++
++    // installed (the stub stands in for StartFromWeb / PauseFromWeb)
++    W906_RemoteRun.Start = &RrStart;  W906_RemoteRun.Pause = &RrPause;
++    g_rrStart = g_rrPause = 0;  g_rrAllow = true;
++    CHECK(THandlerTesterSide::Sink(Packet(MSG_CMD_RemoteStart, ""), &side) == 0);
++    CHECK(g_rrStart == 1 && g_rrStartFunc == "GPIB Command : START");
++    CHECK(bSECSGEMAlarm == false && bHasSaveSet == false);   // golden: unlock the panel, clear the setup-changed flag
++
++    // refused (manual teach blocks START): both flags come back
++    g_rrAllow = false;  bSECSGEMAlarm = true;  bHasSaveSet = true;
++    CHECK(THandlerTesterSide::Sink(Packet(MSG_CMD_RemoteStart, ""), &side) == 0);
++    CHECK(g_rrStart == 1 && bSECSGEMAlarm == true && bHasSaveSet == true);
++    g_rrAllow = true;
++
++    // a running machine: START is not for it (golden SystemStart==false check); STOP calls golden BtnPauseClick
++    SystemStart = true;
++    CHECK(THandlerTesterSide::Sink(Packet(MSG_CMD_RemoteStart, ""), &side) == 0);
++    CHECK(g_rrStart == 1);
++    CHECK(fMain != 0);
++    const int pause0 = fMain ? fMain->W906_BtnPauseClickCallCount : 0;
++    CHECK(THandlerTesterSide::Sink(Packet(MSG_CMD_RemoteStop, ""), &side) == 0);
++    CHECK(fMain != 0 && fMain->W906_BtnPauseClickCallCount == pause0 + 1);
++    CHECK(g_rrPause == 1 && g_rrPauseFunc == "BtnPauseClick");   // AI(W906-B19-NULLFORM) 20261001: batch 18 -- golden BtnPauseClick -> TfMain::Pause now forwards to the seat (forms/fMain.cpp:246), so STOP really pauses; this line was written on 7ea471cf, before batch 18, as `g_rrPause == 0`
++    SystemStart = false;
++
++    // AI(W906-B19-NULLFORM) 20261001: fMotorTest is never created in this tree, so its member is guarded in HandlerGpibMsg.cpp;
++    //   the page table must still answer "Motor Test is open" -> START refused, nothing changes
++    struct PageOpen { static bool MotorTest(const char* f) { return std::string(f) == "fMotorTest"; } };
++    W906_FormFShowHook = &PageOpen::MotorTest;  bSECSGEMAlarm = true;  bHasSaveSet = true;
++    CHECK(THandlerTesterSide::Sink(Packet(MSG_CMD_RemoteStart, ""), &side) == 0);
++    CHECK(g_rrStart == 1 && bSECSGEMAlarm == true && bHasSaveSet == true);
++    W906_FormFShowHook = 0;
++
++    // not a risk-notified customer: neither runs
++    CosFunction.bGPIBRemoteStartStop = false;
++    CHECK(THandlerTesterSide::Sink(Packet(MSG_CMD_RemoteStart, ""), &side) == 0);
++    const int pause1 = fMain ? fMain->W906_BtnPauseClickCallCount : 0;
++    CHECK(THandlerTesterSide::Sink(Packet(MSG_CMD_RemoteStop, ""), &side) == 0);
++    CHECK(g_rrStart == 1 && fMain != 0 && fMain->W906_BtnPauseClickCallCount == pause1);
++    CHECK(side.depth == 0);
++
++    W906_RemoteRun = sTable;  W906_FormFShowHook = sHook;
++    CosFunction.bGPIBRemoteStartStop = sRemote;  SystemStart = sStart;  bSECSGEMAlarm = sAlarm;  bHasSaveSet = sSave;
++}
++
+ int main()
+ {
+     std::setvbuf(stdout, NULL, _IONBF, 0);   // AI(W906-TEST-SAFE) 20260928 (St02-E helper): unbuffered -- a crash report shows the exact last line
+@@ -544,6 +625,7 @@ int main()
+     TestEsdWindow();
+     TestEsdIonBarPowerOn();
+     TestEndToEnd();
++    TestRemoteRun();   // AI(W906-H012) 20261001 (St02-E): H-012
+     std::printf("test_testercomm_handler: %d/%d passed\n", g_total - g_fail, g_total);
+     return g_fail == 0 ? 0 : 1;
+ }
+diff --git a/uHeaterThread.cpp b/uHeaterThread.cpp
+index 6ef0090..abf06ad 100644
+--- a/uHeaterThread.cpp
++++ b/uHeaterThread.cpp
+@@ -537,7 +537,7 @@ void CheckHeater()
+     static bool bFirstEnter=true;
+     static bool bLastHeatOK=false;                                              //JerryYang 20210122 : ASE-CL新增待溫功能
+ 
+-#if 0 // TODO(W7-csystem) GATE 5: golden :173 DoSwCoolingFan(false) -- declared csystem.h:224, DEFINED ONLY in golden csystem.cpp:20434 (no body in the port: csystem.cpp is only partially translated and does not carry it -- re-verified AI(W906-PT-W1-integrate) 20260807).  Return value is discarded in golden, so there is nothing to default; offline the cooling-fan switch is simply not poked here.
++#if 1 // TODO(W7-csystem) GATE 5: golden :173 DoSwCoolingFan(false) -- declared csystem.h:224, DEFINED ONLY in golden csystem.cpp:20434 (no body in the port: csystem.cpp is only partially translated and does not carry it -- re-verified AI(W906-PT-W1-integrate) 20260807).  Return value is discarded in golden, so there is nothing to default; offline the cooling-fan switch is simply not poked here.   //AI(W906-COOLFAN) 20261001 (St02-E): LIFTED -- DoSwCoolingFan is live (csystem.cpp:24787); golden uHeaterThread.cpp:173
+     DoSwCoolingFan(false);                                                      //jou 2013-04-09
+ #endif
+ 
+diff --git a/vclcompat/ClientSocket.cpp b/vclcompat/ClientSocket.cpp
+index 02d4219..2c49f34 100644
+--- a/vclcompat/ClientSocket.cpp
++++ b/vclcompat/ClientSocket.cpp
+@@ -363,12 +363,12 @@ unsigned long __stdcall TCustomWinSocket::ReaderProc_(void* param)
+ // ===========================================================================
+ //  TClientSocket
+ // ===========================================================================
+-struct TClientSocket::Impl {
++struct W906CPollState_;  static void W906CPollStateDelete_(W906CPollState_* p);  struct TClientSocket::Impl {   //AI(W906-H008) 20261001 (St02-E): POLLED mode, end of this file
+     // The requested Sim/Real policy (composition-root choice via
+     // SetSimMode()). Defaults to Sim (true) -- matches
+     // TCustomWinSocket::Impl::bSim's default and the "Sim unless the caller
+     // explicitly opts in to Real" policy documented in ClientSocket.h.
+-    bool bSimRequested;
++    bool bSimRequested;  W906CPollState_* pPoll = nullptr;   //AI(W906-H008) 20261001 (St02-E): POLLED-mode state (end of this file); 0 = never configured
+     Impl() : bSimRequested(true) {}
+ };
+ 
+@@ -393,7 +393,7 @@ TClientSocket::~TClientSocket()
+     DoClose_();
+     delete Socket;
+     Socket = 0;
+-    delete pImpl_;
++    W906CPollStateDelete_(pImpl_->pPoll); delete pImpl_;   //AI(W906-H008) 20261001 (St02-E)
+     pImpl_ = 0;
+ }
+ 
+@@ -419,7 +419,7 @@ bool TClientSocket::IsActiveNow() const { return Socket->pImpl_->bConnected; }
+ // ---------------------------------------------------------------------------
+ void TClientSocket::DoConnect_()
+ {
+-    if (Socket->pImpl_->bConnected)
++    if (PolledConnect_()) { return; }  if (Socket->pImpl_->bConnected)   //AI(W906-H008) 20261001 (St02-E): POLLED non-blocking connect (end of this file); false = the paths below, unchanged
+         return;   // idempotent, mirrors Comm.h's StartComm guard
+ 
+ #if defined(_WIN32)
+@@ -491,7 +491,7 @@ void TClientSocket::DoConnect_()
+ 
+ void TClientSocket::DoClose_()
+ {
+-    if (!Socket->pImpl_->bConnected)
++    if (PolledClose_()) { return; }  if (!Socket->pImpl_->bConnected)   //AI(W906-H008) 20261001 (St02-E): POLLED close (end of this file); false = the paths below, unchanged
+         return;   // idempotent
+ 
+     bool wasSim = Socket->pImpl_->bSim;
+@@ -554,3 +554,261 @@ TClientSocket::ActiveProxy& TClientSocket::ActiveProxy::operator=(bool v)
+ }
+ 
+ } // namespace Scktcomp
++
++// ===========================================================================
++//  AI(W906-H008) 20261001 (St02-E): POLLED mode for TClientSocket -- H-008, the Handler's TCP/IP tester channel
++//  (golden TfTesterTCP ClientSocket_TCPIP, ClientType = ctNonBlocking: golden 906_0625_Steven
++//  Interface/TesterTCP.dfm:2936-2943).  Additive and OFF by default: Sim, and the thread-per-connection Real mode
++//  above, behave exactly as before unless the owner calls SetPolled(true).  Same shape as TServerSocket's POLLED mode
++//  (ServerSocket.cpp, W10).
++//
++//  Why: the Real mode above connects synchronously (::connect on a blocking socket) on the caller's thread, fires no
++//  OnDisconnect when the peer closes (and keeps the handle until the next connect), and drops a recv error silently.
++//  Golden's VCL socket was non-blocking: Open() returned at once, and the connect / read / close came back as window
++//  messages on the main thread.  Polled mode does the same with no thread: Open() starts a non-blocking connect and
++//  returns; Poll(), called by the owner on ITS thread (every tick), finishes it and fires the events right there.
++//
++//  Contract
++//    SetPolled(true) + SetSimMode(false)  Open() / Active=true start a non-blocking connect and return at once.
++//                                         Active stays false until Poll() sees the connect finish (VCL sets Active on
++//                                         the connect event).  Open() while a connect is pending does nothing.
++//    Poll(), connecting                   connected -> OnConnect.  Failed (refused, unreachable, the OS timeout) ->
++//                                         handle closed, OnError(eeConnect, WSA code).  An Open() that fails at once
++//                                         (no socket, bad address) reports the same OnError from the next Poll().
++//    Poll(), connected                    non-blocking recv into the receive queue (at most kW906CPolledQueueCap bytes
++//                                         wait; TCP flow control holds the rest), then OnRead once.  Peer closed ->
++//                                         Close(): handle closed, OnDisconnect.  A recv error -> OnError(eeReceive,
++//                                         code), then Close() unless the handler already closed it.
++//    Close() / Active=false               closes a pending or live handle; OnDisconnect only if it was connected.
++//    SendBuf / SendText                   the Real path above on a non-blocking socket: never blocks (a full send
++//                                         buffer returns -1 / a short count, like VCL ctNonBlocking).
++//    Send error                           DEVIATION: VCL fired OnError(eeSend) and disconnected on a send error
++//                                         [inferred]; here SendBuf only returns -1.  The next Poll()'s recv sees the
++//                                         reset -> OnError(eeReceive) -> Close(): the same end state one tick later
++//                                         (golden's handler ignores ErrorEvent, TesterTCP.cpp:615-633).
++//    SetPolled(true), Sim                 nothing changes: Open() is the Sim connect above; Poll() does nothing.
++//    Threads                              Open / Close / Poll / SendBuf on ONE thread (the owner's).  No reader thread.
++//    Name lookup                          a non-numeric Address still resolves with gethostbyname (blocking), as the
++//                                         Real path above; golden's TesterIF Address is an IP (cTesterIF.cpp:778).
++// ===========================================================================
++namespace Scktcomp {
++
++static const int kW906CPolledQueueCap = 64 * 1024;
++
++struct W906CPollState_ {
++    bool bPolled;
++    bool bConnecting;    // a non-blocking connect is pending on Socket->pImpl_->sock
++    int  pendingError;   // an Open() that failed at once: reported by the next Poll()
++    W906CPollState_() : bPolled(false), bConnecting(false), pendingError(0) {}
++};
++
++static void W906CPollStateDelete_(W906CPollState_* p) { delete p; }
++
++static W906CPollState_& W906CPollOf_(W906CPollState_*& p)
++{
++    if (p == 0)
++        p = new W906CPollState_();
++    return *p;
++}
++
++void TClientSocket::SetPolled(bool bPolled) { W906CPollOf_(pImpl_->pPoll).bPolled = bPolled; }
++bool TClientSocket::IsPolled() const        { return pImpl_->pPoll != 0 && pImpl_->pPoll->bPolled; }
++
++// DoConnect_'s first step.  true = handled here; false = not polled-Real -> DoConnect_'s original paths, unchanged.
++bool TClientSocket::PolledConnect_()
++{
++    W906CPollState_* ps = pImpl_->pPoll;
++    if (ps == 0 || !ps->bPolled || Socket->pImpl_->bSim)
++        return false;
++#if defined(_WIN32)
++    if (Socket->pImpl_->bConnected || ps->bConnecting)
++        return true;                                   // connected, or a connect is pending: nothing to do
++    ps->pendingError = 0;
++    if (!EnsureWinsockInit_())
++    {
++        ps->pendingError = WSANOTINITIALISED;
++        return true;
++    }
++    SOCKET s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
++    if (s == INVALID_SOCKET)
++    {
++        ps->pendingError = ::WSAGetLastError();
++        return true;
++    }
++    sockaddr_in addr;
++    std::memset(&addr, 0, sizeof(addr));
++    addr.sin_family = AF_INET;
++    addr.sin_port   = ::htons(static_cast<u_short>(Port));
++    addr.sin_addr.s_addr = ::inet_addr(Address.c_str());
++    if (addr.sin_addr.s_addr == INADDR_NONE)
++    {
++        struct hostent* he = ::gethostbyname(Address.c_str());   // see "Name lookup" above
++        if (he == 0 || he->h_length != sizeof(addr.sin_addr))
++        {
++            ps->pendingError = WSAHOST_NOT_FOUND;
++            ::closesocket(s);
++            return true;
++        }
++        std::memcpy(&addr.sin_addr, he->h_addr, sizeof(addr.sin_addr));
++    }
++    u_long nb = 1;
++    if (::ioctlsocket(s, FIONBIO, &nb) != 0)
++    {
++        ps->pendingError = ::WSAGetLastError();
++        ::closesocket(s);
++        return true;
++    }
++    if (::connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0)
++    {
++        const int e = ::WSAGetLastError();
++        if (e != WSAEWOULDBLOCK)
++        {
++            ps->pendingError = e;
++            ::closesocket(s);
++            return true;
++        }
++    }
++    Socket->pImpl_->sock = s;          // connect() == 0 (loopback can finish at once) is finished by Poll() too,
++    ps->bConnecting = true;            // so OnConnect always comes from Poll(), never from inside Open()
++    return true;
++#else
++    return false;                      // no WinSock: DoConnect_'s original paths (as PolledClose_ below)
++#endif
++}
++
++// DoClose_'s first step.  true = handled here; false = not polled-Real -> DoClose_'s original paths, unchanged.
++bool TClientSocket::PolledClose_()
++{
++    W906CPollState_* ps = pImpl_->pPoll;
++    if (ps == 0 || !ps->bPolled || Socket->pImpl_->bSim)
++        return false;
++#if defined(_WIN32)
++    const bool wasConnected = Socket->pImpl_->bConnected;
++    ps->bConnecting  = false;
++    ps->pendingError = 0;
++    if (Socket->pImpl_->sock != INVALID_SOCKET)
++    {
++        ::closesocket(Socket->pImpl_->sock);
++        Socket->pImpl_->sock = INVALID_SOCKET;
++    }
++    Socket->pImpl_->bConnected = false;
++    Socket->Connected = false;
++    Socket->pImpl_->bSim = pImpl_->bSimRequested;   // as DoClose_ above
++    if (wasConnected && OnDisconnect)
++        OnDisconnect(this, Socket);
++    return true;
++#else
++    return false;
++#endif
++}
++
++int TClientSocket::Poll()
++{
++    W906CPollState_* ps = pImpl_->pPoll;
++    if (ps == 0 || !ps->bPolled || Socket->pImpl_->bSim)
++        return 0;
++    int events = 0;
++#if defined(_WIN32)
++    if (ps->pendingError != 0)
++    {
++        int code = ps->pendingError;
++        ps->pendingError = 0;
++        if (OnError)
++            OnError(this, Socket, eeConnect, code);
++        return 1;
++    }
++    if (ps->bConnecting)
++    {
++        const SOCKET s = Socket->pImpl_->sock;
++        fd_set w, x;
++        FD_ZERO(&w);
++        FD_ZERO(&x);
++        FD_SET(s, &w);
++        FD_SET(s, &x);
++        timeval tv;
++        tv.tv_sec  = 0;
++        tv.tv_usec = 0;
++        const int r = ::select(0, 0, &w, &x, &tv);
++        if (r == 0)
++            return 0;                                  // still connecting
++        int err = 0;
++        if (r == SOCKET_ERROR)
++            err = ::WSAGetLastError();
++        else if (FD_ISSET(s, &x) || !FD_ISSET(s, &w))
++        {
++            int len = sizeof(err);
++            ::getsockopt(s, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&err), &len);
++            if (err == 0)
++                err = WSAECONNREFUSED;
++        }
++        ps->bConnecting = false;
++        if (err != 0)
++        {
++            ::closesocket(s);
++            Socket->pImpl_->sock = INVALID_SOCKET;
++            Socket->pImpl_->bSim = pImpl_->bSimRequested;
++            int code = err;
++            if (OnError)
++                OnError(this, Socket, eeConnect, code);
++            return 1;
++        }
++        Socket->pImpl_->bConnected = true;
++        Socket->RemotePort = Port;
++        Socket->Connected  = true;
++        ++events;
++        if (OnConnect)
++            OnConnect(this, Socket);
++    }
++    if (!Socket->pImpl_->bConnected || Socket->pImpl_->sock == INVALID_SOCKET)
++        return events;                                 // not connected, or a handler closed it
++    const SOCKET s = Socket->pImpl_->sock;
++    std::vector<char> got;
++    bool closed = false;
++    int err = 0;
++    char buf[4096];
++    for (;;)
++    {
++        const int room = kW906CPolledQueueCap - Socket->ReceiveLength() - static_cast<int>(got.size());
++        if (room <= 0)
++            break;                                     // queue full: leave the rest in the OS buffer
++        const int want = room < static_cast<int>(sizeof(buf)) ? room : static_cast<int>(sizeof(buf));
++        const int n = ::recv(s, buf, want, 0);
++        if (n > 0)
++        {
++            got.insert(got.end(), buf, buf + n);
++            continue;
++        }
++        if (n == 0)
++        {
++            closed = true;                             // peer closed
++            break;
++        }
++        const int e = ::WSAGetLastError();
++        if (e != WSAEWOULDBLOCK)
++        {
++            err = e;
++            closed = true;
++        }
++        break;
++    }
++    if (!got.empty())
++    {
++        Socket->SimPushReceive(&got[0], static_cast<int>(got.size()));   // -> OnRead(this, Socket), on this thread
++        ++events;
++    }
++    if (closed && Socket->pImpl_->bConnected && Socket->pImpl_->sock == s)
++    {
++        if (err != 0 && OnError)
++        {
++            int code = err;
++            OnError(this, Socket, eeReceive, code);   // golden TesterTCP.cpp:615-633 closes the socket itself
++        }
++        if (Socket->pImpl_->bConnected && Socket->pImpl_->sock == s)
++            DoClose_();                                // -> PolledClose_: closesocket + OnDisconnect
++        ++events;
++    }
++#endif
++    return events;
++}
++
++} // namespace Scktcomp
+diff --git a/vclcompat/ClientSocket.h b/vclcompat/ClientSocket.h
+index 50db51a..761e5fa 100644
+--- a/vclcompat/ClientSocket.h
++++ b/vclcompat/ClientSocket.h
+@@ -380,14 +380,14 @@ public:
+     // Call SetSimMode(false) to opt in to a REAL WinSock2 connection.
+     void SetSimMode(bool bSim);
+     bool IsSimMode() const;
+-    bool IsActiveNow() const;   // true between a successful connect and close
++    bool IsActiveNow() const;  void SetPolled(bool bPolled); bool IsPolled() const; int Poll();   // IsActiveNow: true between a successful connect and close.  AI(W906-H008) 20261001 (St02-E): POLLED mode (opt-in, end of ClientSocket.cpp)
+ 
+ private:
+     TClientSocket(const TClientSocket&);
+     TClientSocket& operator=(const TClientSocket&);
+ 
+     void DoConnect_();
+-    void DoClose_();
++    void DoClose_();  bool PolledConnect_(); bool PolledClose_();   //AI(W906-H008) 20261001 (St02-E): POLLED mode, end of ClientSocket.cpp
+     friend class ActiveProxy;
+ 
+     struct Impl;
+-- 
+2.55.0.windows.5
+

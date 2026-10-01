@@ -399,4 +399,12 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   tools 0135 HTDESIGNER-138（0.138.0）—— 筆電包 106 合進機台：ES02（EastSun 筆電）在機台 133d 上接著做的 0.134–0.138（元件樹裡的分頁、工具箱放到分頁上、Alt 拖進分頁、在檔案中尋找、方案總管、新增事件前的型別檢查）。46 個檔逐檔比過，沒有少掉機台的東西。機台測試：探針 7/7＋分頁樹 7/7、假 VS Code 207/207、面板全過；程式庫 173/174（那 1 項是 IO_Table.csv 的標記列 #NEW_FROM_9050_DRAWING_20260923，不是程式）；e2e_build.ps1 沒跑（會啟動 wb_serve）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  web 0050 6a1bccc IOCLEANPANEL-2 —— IO 頁 Clean Panel（Vacuum > In Arm，HT9050）的 C_CleanPanelOff_On 燈＋標籤拿掉（EastSun 1001「圖片上的sensor幫我刪掉」）。
+                    它在 IO_Table 跟 C_CleanPanel_Off 同一個位址 I17.0；IO_Table 沒動。
+  cpp 0058 15562d0 MERGE-003a758d —— 筆電第 105 包（GitHub main 372dcd1、GitLab main 003a758d）：出貨組態的 TCP tester 真的連線、GPIB 遠端 START／STOP
+                    照 golden、安全門開關紀錄與 [O18] 最後開門時間、冷卻風扇（只在 SIM 組態）。21 檔：新 3、舊版 18、兩邊都改 0。
+                    ⚠ 這一包的檔案是 LF 行尾（之前每一包與機台樹都是 CRLF），已轉回 CRLF 再 commit，內容逐字相同。o2 建置 0 錯誤、PE 32/32、
+                    8 個相關 ctest 通過、production_audit 0 變更。（第 106 包只有設計外掛，由設計外掛工作階段處理，見 tools 系列。）
+  cpp 0059 4a6fdf8 WORKLOG —— 工作紀錄補 10-01 第 13～14 項（上面兩件）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
