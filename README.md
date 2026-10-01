@@ -5,6 +5,7 @@
 
 ## ⚠⚠ 給機台端（20260929 18:1x 起，請先讀這一段）
 
+- ✅ **20261002 第 122 包（GitLab main `52d95eec`）——要重建 wb_serve**：普查照 golden 補齊——①飛梭上關掉的站，格子照 golden 標成空料；②**Die Clean**：`USE_DIE_CLEAN=1` 且配方開了 Die Clean 的機台，以前入料臂會停在 case 10000，現在照 golden 先移到 Die Clean 位置再吹；③滿的 Fix 盤照 golden 會被換掉；④**除靜電（ESD／離子風扇）三處**：入料臂現在會照 golden **真的移到 Decay 教導點**（以前沒移就當成到了）——⚠ 有 ESD／離子風扇的機台，Decay 教導點要先教好，上機時請在機台旁。Teach 頁仍然沒有範圍，輸入教導值請人工確認。
 - ✅ **20261002 第 121 包（GitLab main `40ea4392`）——要重建 wb_serve**：①入料臂判斷「左邊吸嘴有沒有料」照 golden 只看左邊 2×2（只影響 10 欄熱板的機種，HT9050 的熱板是 2 欄、碰不到）；②網頁小鍵盤：小數照 golden 不再四捨五入、Setup.SetUp 的 pitch 可以輸入 3 位小數；③Contact CT 清數量時照 golden 一併更新 Control Bin（只有超豐的機台有作用）；St01 開機客戶名檢查（行為不變）。Teach 頁仍然沒有範圍——輸入教導值請人工確認。
 - ✅ **20261002 第 120 包（GitLab main `269cb13b`）——沒有 C++ 改動，不用重建 wb_serve**：網頁 19 支接線檔的小鍵盤範圍照 golden 補了 205 欄（例：Setup.Speed `edInArmDieCleanHeight` 可以輸入負值 -20～0.1、Setup.Temp_Set 環境溫度 10～50（原本被夾在 23～30）、重試次數 0～10）。⚠⚠ **Teach 頁（教導位置）沒有照抄 golden 的範圍**：golden 的範圍是 HT9045 的機構，HT9050 的教導值落在外面，照抄會夾掉正確的值——在 Teach 頁輸入教導值仍請人工確認，存完先低速或手動確認位置再自動跑。
 - ✅ **20261002 第 119 包（GitLab main `8ec97e2f`）——要重建 wb_serve**：St01 把 golden 的 Lot Start 檢查翻成一支函式，**還沒接上網頁的 Lot Start**，機台上的行為不變。⚠⚠ **安全提醒：網頁 Teach 頁（教導位置）幾乎沒有輸入範圍保護**（golden 會擋的 Z 安全高度、等待下降位置、手臂 X 等，網頁照存）——在 Teach 頁輸入教導值請人工確認數值，存完先低速或手動確認位置再自動跑；修正在 GitLab INBOX 140。
@@ -187,6 +188,7 @@
 | 119 | `updates/8ec97e2f/` | `8ec97e2f` | `3ff4a55a`（`updates/8ec97e2f/_machine_ai/base_3ff4a55a/`） | ⚠ **要重建 wb_serve**（9 檔；gate b34a 兩組態全新：出貨 318／4、模擬 318／19＝基準）。St01 新檔 `FileRW/LotInfo_SECSLotStart.*`、`CMakeLists.txt` 一行、測試。 |
 | 120 | `updates/269cb13b/` | `269cb13b` | `8ec97e2f`（`updates/269cb13b/_machine_ai/base_8ec97e2f/`） | 不用重建 wb_serve（23 檔＝19 支網頁接線檔＋pagewire 工具 2 檔＋文件 2 份；gate b35a 兩組態＝基準）。19 支 `web/page/ht9045_wire_*.js` 的 `kb` 行照 golden 補範圍；Teach 頁不動。 |
 | 121 | `updates/40ea4392/` | `40ea4392` | `269cb13b`（`updates/40ea4392/_machine_ai/base_269cb13b/`） | ⚠ **要重建 wb_serve**（16 檔；gate b36a 兩組態＝基準）。`ainarm9045.cpp`、`cContactCT.cpp`、St01 `FileRW/HSys.cpp`＋`cObserver.cpp` 一處訊息；網頁 `qwerty.js`、4 支接線檔；新測試 2 支（`InArmLeftSideGolden`、node `QWERTY_P3`）。 |
+| 122 | `updates/52d95eec/` | `52d95eec` | `40ea4392`（`updates/52d95eec/_machine_ai/base_40ea4392/`） | ⚠ **要重建 wb_serve**（8 檔；gate b37a 兩組態＝基準）。`ainarm9045.cpp`、`ainarm2.cpp`、`aoutarm.cpp`、`csystem.cpp`；新測試 `I129_Batch37`。 |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
