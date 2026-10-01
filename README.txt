@@ -475,4 +475,15 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   cpp 0075 2bae95f WORKLOG —— 工作紀錄補 10-01 第 28～32 項。
   ⓘ 測試前後 production_audit 0 變更（第一次的變動是 EastSun 20:46 關站寫的，重拍快照再跑一次 0 變更）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0076 3f4835f PKG-109 —— 筆電第 109 包（GitHub main bd20f84、GitLab c4ddcada）的 C++ 部分：主畫面 Timer2 加熱段照原版每秒跑（SetTemp 掛勾還沒裝）、
+                    RotateKit 取料失敗重試先把 Z 移到安全高度（Jimmy 裁決）＋入料臂 CheckInArmZ 接回、HT9050 Shuttle 流程（包在 Type_HT9050 裡，今天行為不變）、
+                    G-031 格式差異文件。22 檔（新 5、照收 16、合併 1：tests/CMakeLists.txt 檔尾兩邊的新測試都留）；0 重複列；LF 行尾已照原本行尾存。
+                    o2 建置 0 錯誤、PE 52/52、7 個相關 ctest 通過（含 RotateKitRetry、Flow9050_Shuttle）、production_audit 0 變更。
+                    設計外掛 8 檔（0.147）不在這裡，由設計外掛工作階段整合。
+  cpp 0077 a4ffaaa VC4-SDO —— 打開 ECAT-VC4 的閥值 SDO 寫入（EastSun 1001「不要擋了」「VC4 沒有的 用VC8 去推論」）：VC4 照 VC8 手冊的物件表
+                    （80n0:02 閥值模式、80n0:13 閥值），只開 VC0～3。ctest VacuumVc8、Pci1203LinkWatch 通過；pci1203_readonly_gate PASS。
+  cpp 0078 879da37 WORKLOG —— 工作紀錄補 10-01 第 33～36 項（含機台 IO_Table 的 VC4 吸嘴感測列 64+VC，設定檔不推）；第 3 節補 108（tools 0139）、109。
+  ⚠ 給筆電：機台的 IO_Table 吸嘴列已改成 VC4 格式（站 160～162：_On 偶數＝吸、_Off 奇數＝破、感測 64+VC，VC＝DO 所在的 VC）；
+     B／D／F／H 與 FTest AC／BC／AD／BD 在 VC4 上沒有通道。machines\HT9050\IO_Table.csv 要不要跟著改請 Jimmy 決定。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
