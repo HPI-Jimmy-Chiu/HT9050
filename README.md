@@ -5,6 +5,7 @@
 
 ## ⚠⚠ 給機台端（20260929 18:1x 起，請先讀這一段）
 
+- ✅ **20261001 第 99 包（GitLab main `e240a3f4`）——要重建 wb_serve**：INBOX 128。**熱盤模式**下入料臂取完料以前會停在 InArm case 1100（等一個恆回 false 的替身）；現在照 golden 派送到各機型的熱盤放料流程（**行為改變：取完料會繼續去熱盤放料，手臂會動**）。沒開熱盤的機台不受影響。
 - ✅ **20261001 第 98 包（GitLab main `ae9f7d0d`）——要重建 wb_serve**：St02 的三張 MR。① 遠端指令在設定視窗開著時照 golden 拒絕（這幾支指令今天還沒有呼叫者，行為不變）；② 有 Sort Arm 的機台：Sort Arm 放料照 golden 寫生產紀錄 CSV、清 OutSht3Kit 的空料標記；③ 模擬組態在 Lot End 不寫網路分享路徑（**出貨組態不變**）。
 - ✅ **20261001 第 97 包（GitLab main `813ca9dd`）——要重建 wb_serve**：只有一個小準備：`cprod.cpp` 的「每天 JAM 率存檔」加了一個掛勾（沒裝上時行為跟現在完全一樣）。裝上它要改 St01 的 `FileRW/MainClose.cpp`，還沒做；裝上之後，每天第一次 JAM 時會照 golden 把昨天的逐日 JAM 檔寫到 `D:\HT9045_Log\JamRate_Daily`。
 - ✅ **20261001 第 96 包（GitLab main `6f0d4302`）——要重建 wb_serve**：網頁外框每 250 ms 抓一次 `web\JSON\Production-update.json`；如果機台上有那支 **8.6 MB 的舊檔**（JSON 模擬器時代留下的，不在 git 裡），以前每抓一次就讓 wb_serve 處理網頁與 WebSocket 的那條執行緒（網頁的「停止」命令也走它）忙 0.1 秒以上。這包起：檔案沒變就不重讀（回應內容完全一樣），網頁先問「變了沒」、沒變就不下載。機台上有沒有這支舊檔都可以套；有的話也可以移到別處（它是假的生產資料），**要不要移由 Jimmy 決定**。
@@ -141,6 +142,7 @@
 | 96 | `updates/6f0d4302/` | `6f0d4302` | `b7572fdd`（`updates/6f0d4302/_machine_ai/base_b7572fdd/`） | ⚠ **要重建 wb_serve**（12 檔；出貨 282 支 4 項＝基準、模擬 282 支 19 項＝基準；新舊兩版實測回應位元組相同）。① `/JSON` 清密碼路由的檔案快取＋開機背景預讀（新檔 `WebJsonScrubCache.*`，輸出位元組不變）；② `web/page/settings.js` refreshProduction 先 HEAD 比 ETag；③ D-027 `fTeachPara.cpp` 註解更正。新 ctest `WebJsonScrubCache`、`ScrubCache_SettingsEtag`。 |
 | 97 | `updates/813ca9dd/` | `813ca9dd` | `6f0d4302`（`updates/813ca9dd/_machine_ai/base_6f0d4302/`） | ⚠ **要重建 wb_serve**（5 檔；出貨 283 支 4 項＝基準、模擬 283 支 19 項＝基準）。① `cprod.cpp` RUN_INFO::SaveJamRateByDay 的本體掛勾（W906_SaveJamRateByDayBody，未安裝＝不變）；新 ctest `JamDayHook`。 |
 | 98 | `updates/ae9f7d0d/` | `ae9f7d0d` | `813ca9dd`（`updates/ae9f7d0d/_machine_ai/base_813ca9dd/`） | ⚠ **要重建 wb_serve**（11 檔；出貨 284 支 4 項＝基準、模擬 284 支 19 項＝基準）。① St02 MR !19（R146 第 2 版）；② MR !20（S-09 重掃：asortarm 兩處、cmydef 一處）；③ MR !21（W58 第二階段 A 組，新 ctest `SimNet_Path`）。 |
+| 99 | `updates/e240a3f4/` | `e240a3f4` | `ae9f7d0d`（`updates/e240a3f4/_machine_ai/base_ae9f7d0d/`） | ⚠ **要重建 wb_serve**（8 檔；兩組態全新 gate＝基準：出貨 284 支 4 項、模擬 284 支 19 項）。INBOX 128：`ainarm_SearchPlacePlate.cpp` 的 `DoPlaceToHotPlate_9045()` 派送器照 golden 解開（熱盤模式取完料會去熱盤放料）；測試 `W6_2_InArmCanary` 照開機順序建手臂偏移物件。其餘是文件（裁決 20261001、夜間報告）。 |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
