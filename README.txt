@@ -553,4 +553,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     機台補丁（版本號不變）：C++ 索引、尋找、方案總管不再掃樹裡的 .claude 資料夾（別的工作階段的幫手在 .claude\worktrees\ 開了整份原始碼的複本，每個函式找到兩次、屬性面板要等 30 秒）；smoke「檢查所有頁面」改成自己數同一批頁面（HW.home.html 被修好後寫死的 290 誤判）。機台測試：程式庫 178/178、探針 7/7＋分頁樹 7/7、假 VS Code 216/216、面板全過；e2e_build.ps1 沒跑。
   ⚠ 給筆電：請收機台的 (1) tools 0136（lib/aliasedit.js＋test/run_tests.js：Alias 清單跳過 # 分段標記列）、(2) tools 0143 的 .claude 跳過（lib/cppindex.js、lib/projectsearch.js 的 SKIP_DIR、run_tests.js 的測試）與 smoke 的頁面檢查改法。機台現在套到第 112 包，外掛 0.154.0。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0098 e5551f2 WORKLOG —— 工作紀錄補 10-01 第 60 項（畫面截掉全站修正）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
