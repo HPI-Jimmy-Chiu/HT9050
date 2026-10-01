@@ -549,4 +549,8 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   cpp 0096 af53dc4 TEACH-FORMSHOW —— Teach 照原版 FormShow 顯示／隱藏：C++ 用原版條件式、機台真正的設定算出約 150 個元件的 Visible／分頁／標題／顏色／Enabled／開在哪一頁`n                    （FileRW/TeachFormShow_File.cpp，第二型 bridge，只顯示）；FormState 加顏色與依名字切分頁；ctest TeachFormShowBridge 28/28。`n  cpp 0097 826d04b WORKLOG —— 工作紀錄補 10-01 第 59 項。`n  web 0066 e34f7df TEACH-FORMSHOW／ALLCOMP (web) —— 開頁與每次開窗套用 C++ 算好的 FormShow（無頭瀏覽器 186 項全部套上）；TTL 勾選框灰掉＋說明。`n  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。`n
   web 0067 9d49661 CLIPFIX (web) —— 畫面截掉：80 頁、每個分頁量過，249 個截斷修掉 196 個、6 個變小，剩 54 個都有原因（golden 本來就捲動、等決定的視窗大小…）；`n                    群組框標題被切掉 4px（25 頁）、Setup 勾選框跑到畫面外、Offset 照原版寬度、Observer 的 Exit 被捲軸蓋住等；放大倍率時視窗會留在畫面內。`n  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。`n
+  tools 0143 HTDESIGNER-154（0.154.0）—— 筆電包 112 的外掛部分合進機台：ES02 的 0.151–0.154（方案總管上方的執行工具列〔綠色 ▶＝建置並啟動 wb_serve〕、偏黑的工具視窗樣式；屬性表能改底線／刪除線／換行／唯讀／字數上限／打勾／Tab 順序；工具箱補齊 Button、BitBtn、單選、Memo、單選群組、分頁、圖片、色塊、分隔線並分類；改名時網頁程式一起改）。三方合併（基準＝包 111）：17 個只有 ES02 改、3 個兩邊都改都沒有衝突；機台的 tools 0136 Alias 補丁與測試保留。C++ 部分＝整合工作階段的 cpp 0092。
+                    機台補丁（版本號不變）：C++ 索引、尋找、方案總管不再掃樹裡的 .claude 資料夾（別的工作階段的幫手在 .claude\worktrees\ 開了整份原始碼的複本，每個函式找到兩次、屬性面板要等 30 秒）；smoke「檢查所有頁面」改成自己數同一批頁面（HW.home.html 被修好後寫死的 290 誤判）。機台測試：程式庫 178/178、探針 7/7＋分頁樹 7/7、假 VS Code 216/216、面板全過；e2e_build.ps1 沒跑。
+  ⚠ 給筆電：請收機台的 (1) tools 0136（lib/aliasedit.js＋test/run_tests.js：Alias 清單跳過 # 分段標記列）、(2) tools 0143 的 .claude 跳過（lib/cppindex.js、lib/projectsearch.js 的 SKIP_DIR、run_tests.js 的測試）與 smoke 的頁面檢查改法。機台現在套到第 112 包，外掛 0.154.0。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
