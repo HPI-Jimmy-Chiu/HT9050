@@ -346,4 +346,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     WB_ENGINE_MOTOR_1203／WB_ENGINE_INDEXZ_1203 武裝時要照「LOW＝在原點」；Mot_Table SensorType 機台 19 軸全部 0（跟這條規則一致，
                     1 會讓路由開機寫卡時把 ORG 反過來）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  tools 0127 HTDESIGNER-129（0.129.0）—— 補上 WinForms／BCB6 格式選單的指令：對齊格線、大小對齊格線、水平／垂直間距加大／縮小／移除（主要選取不動），元件樹「…」全部鎖定（跟全部解除鎖定成對）。三層測試全過。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
