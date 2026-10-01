@@ -358,4 +358,14 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   tools 0132 HTDESIGNER-133b —— 交接文件 HANDOVER.md（流程、規則、分工、EastSun 的裁決、待辦、踩過的坑、檔案地圖）＋ dev\ 開發小工具（語法檢查、截圖、推送）。EastSun 20261001：詳細紀錄也要推、要讓別的帳號能接手；之後每一輪都更新它。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0052 29db258 VC8-IP —— 第一版：IO_Table 新增 IOType=Vacuum 列（InArm／OutArm／Index）指定 ECAT-VC8 站號。EastSun 當天改主意，
+                    由 0053 整個撤掉（0052＋0053 合起來，程式碼淨變動只有測試檔）。
+  cpp 0053 eef5797 VC8-IP-2 —— 撤掉 0052（EastSun 1001「Vacuum 那三列刪了不要用了，照舊用 Sucker 列」）。真空模組的新站號照 golden 放在
+                    吸嘴列，機台 IO_Table（機台設定檔，不進 git）：InArmSuck* IP 32→160（0xA0）、OutArmSuck* 48→161（0xA1）、
+                    FTestSuck AA–AD／BA–BD 64→162（0xA2），Sucker／_On／_Off 共 72 列，這 72 列 Enable 0→1（EastSun 1001）；其他格一格都沒動。
+                    程式不用改：VacuUnitType=1 時 golden 的 SetIOTableByECAT_VC8_Sucker 把吸嘴列的站號／Port 帶給真空頁，InitSucker 用同一列綁吸嘴，
+                    吸嘴保護在新站號登記。ctest VacuumVc8 [10] 補 160／161／162 的檢查（128/128）；IO 表相關 ctest 全過；production_audit 0 變更。
+                    ⚠ 給筆電：machines/HT9050/IO_Table.csv 還是舊站號（32／48／64）、Enable 0。OutArmSuck 的 DO（_On／_Off 的 Port）跟感測（Port 128+VC）
+                    差 4 個 VC（例：OutArmSuckA 感測 135＝VC7、DO 22／23＝VC3 那一對），InArm／FTest 是一致的——這是 0923 的表原本就這樣，要對配線。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。

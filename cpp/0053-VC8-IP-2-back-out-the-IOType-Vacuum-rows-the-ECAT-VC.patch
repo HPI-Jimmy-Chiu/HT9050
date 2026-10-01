@@ -1,0 +1,388 @@
+From eef57971ba40f36e66be2919c67437abfffa5d12 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 11:54:08 +0800
+Subject: [PATCH 53/53] VC8-IP-2: back out the IOType=Vacuum rows -- the
+ ECAT-VC8 station is the sucker rows' own IP (golden's path)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This reverts commit 29db258. EastSun 20261001 changed the plan: "Vacuum InArm / OutArm / Index ... 這個取消 一樣照舊
+使用 Sucker InArmSuckA..H" and "這個就刪了不要用了". The module stations now live where golden keeps them, in the
+Sucker / Sucker_On / Sucker_Off rows of IO_Table.csv (set on the machine, not in git: InArmSuck* IP 32 -> 160 = 0xA0,
+OutArmSuck* 48 -> 161 = 0xA1, FTestSuck AA-AD / BA-BD 64 -> 162 = 0xA2, 72 rows, Enable 0 -> 1 as EastSun asked).
+No code is needed for that: with VacuUnitType=1 golden's SetIOTableByECAT_VC8_Sucker (W906_VC8_SUCKER_REMAP) copies
+each sucker row's Ring / IP / Port / Bit into its Vacuum Unit panel, InitSucker binds the engine's suckers from the
+same rows, and the sucker gate registers them at that station.
+
+* tests/test_vacuum_vc8.cpp [10]: an InArm sucker at 160, an OutArm sucker at 161 (with IO_Table.csv's own ports
+  23 / 22 / 135), an Index sucker at 162 -> the panels take those stations and ports, the gate registers them there,
+  a refusal while no ECAT-VC8 answers at 0xA0, and a vacuum ON / OFF press writes station 0xA0 channel 17 when one
+  does. 128 / 128. The IO-table ctests pass; config_loaders keeps its 8 resident failures; production_audit unchanged.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ VacuumUnit/MyVacuumPanel.cpp |   1 -
+ VacuumUnit/Vc8Route.h        |  74 ------------------------
+ database.cpp                 |  87 ----------------------------
+ database.h                   |   1 -
+ tests/test_vacuum_vc8.cpp    | 109 ++++++++++-------------------------
+ 5 files changed, 31 insertions(+), 241 deletions(-)
+
+diff --git a/VacuumUnit/MyVacuumPanel.cpp b/VacuumUnit/MyVacuumPanel.cpp
+index 7f537da..3d0d834 100644
+--- a/VacuumUnit/MyVacuumPanel.cpp
++++ b/VacuumUnit/MyVacuumPanel.cpp
+@@ -209,7 +209,6 @@ TMyVacuumPanel::TMyVacuumPanel(TComponent* Owner, int _Kind ,int _iCol,int _iRow
+         OffVCNo=iIndexVCSort2_16[iRow][iCol]; //HT9045 的排序原要是 HT9046LS Arm2 排序，只是換個名
+         SenVCNo=iIndexVCSort2_16[iRow][iCol]; //HT9045 的排序原要是 HT9046LS Arm2 排序，只是換個名
+     }
+-    { int w906Ring=0, w906Ip=0; if(iKind>=0 && iKind<=5 && W906_Vc8StationMap(SenRing, SenIP, &w906Ring, &w906Ip)) { OnRing=OffRing=SenRing=w906Ring; OnIP=OffIP=SenIP=w906Ip; } }   //AI(W906-VC8-IP) 20261001: HT9050 + PCIE-1203 -- the station of IO_Table.csv's IOType=Vacuum row for this module (EastSun 20261001 InArm 0xA0 / OutArm 0xA1 / Index 0xA2; VacuumUnit/Vc8Route.h); not moved = golden's number above
+     _fVacuumUnit=(TfVacuumUnit *)Owner;
+     GroupBox        =new TGroupBox();
+     edSV            =new TEdit();
+diff --git a/VacuumUnit/Vc8Route.h b/VacuumUnit/Vc8Route.h
+index a52cf23..d0a1c9d 100644
+--- a/VacuumUnit/Vc8Route.h
++++ b/VacuumUnit/Vc8Route.h
+@@ -238,78 +238,4 @@ inline bool W906_Vc8SuckerGate(int ring, int ip, const char* name, bool write)
+     return false;
+ }
+ 
+-// ---------------------------------------------------------------------------
+-//  HT9050 + PCIE-1203: WHERE EACH ECAT-VC8 IS, FROM IO_Table.csv -- AI(W906-VC8-IP) 20261001, EastSun 20261001:
+-//      「我們現在vacuum 的模組IP有改 inarm ID 改成 0xA0 outarm ID 改成 0xA1 index ID 改成 0xA2」
+-//      「在IO_Table 多出欄位 新的IO Type 叫Vacuum 然後alias 分別寫入 index inarm outarm 然後對應1203 設定
+-//        0xA0 0xA1 0xA2 讓我可以自由設定ip 下次機台有變動 就不用每次麻煩你 並且是9050 1203 才去讀去IO_table」
+-//  golden fixes each module's station in code (TMyVacuumPanel ctor: InArm 0x20, OutArm 0x30, Index 0x40 / 0x41 /
+-//  0x50 / 0x51) and again in the sucker rows of IO_Table.csv (InArmSuck* IP 32, OutArmSuck* 48, FTestSuck* 64 / 65,
+-//  BTestSuck* 80 / 81). A row in the table's own format (EastSun 20261001「要照表照格式 照架構 轉成IP 160」)
+-//      IOType,Alias,Lane,ModuleType,IP,Port,Bit,InType,ISABase,Enable
+-//      Vacuum,InArm,1,2,160,0,0,1,3,1          Alias InArm|OutArm|Index|Index2|Index3|Index4; IP decimal (160 = 0xA0)
+-//  moves the module golden has at 0x20 / 0x30 / 0x40 / 0x41 / 0x50 / 0x51 (ring 1) to that ring (Lane) / station (IP).
+-//  database.cpp W906_ApplyVacuumStations() (end of LoadIoData) fills this table and moves every Sucker / Sucker_On /
+-//  Sucker_Off row of IO_Table.csv on the old station, BEFORE InitSucker binds them -- so the engine's suckers, the
+-//  IO page, golden's SetIOTableByECAT_VC8_Sucker copy, the sucker gate and the Vacuum Unit page all use the new
+-//  station; TMyVacuumPanel's ctor asks W906_Vc8StationMap for the panels' own numbers. Only on HT9050 (general.ini
+-//  [Version] Model=9050GPIB); elsewhere the table stays empty and golden's numbers stand. The identity check
+-//  (EtherCAT/Pci1203Vc8.h) still decides whether anything is read or written there.
+-// ---------------------------------------------------------------------------
+-struct TVc8Station {
+-    int         goldenIp;      // golden's station on ring 1
+-    const char* alias;         // the IO_Table.csv Alias of its IOType=Vacuum row (case-insensitive)
+-    bool        set;           // a valid row moved it
+-    int         ring, ip;      // where it is now
+-};
+-inline TVc8Station* W906_Vc8Stations_(int* n)
+-{
+-    static TVc8Station s[] = {
+-        { 0x20, "InArm",  false, 0, 0 },    // golden MyVacuumPanel.cpp iKind 2
+-        { 0x30, "OutArm", false, 0, 0 },    //   iKind 3
+-        { 0x40, "Index",  false, 0, 0 },    //   iKind 0 cols 0..3 (Aa-Ad / Ba-Bd), iKind 4
+-        { 0x41, "Index2", false, 0, 0 },    //   iKind 0 cols 4..7
+-        { 0x50, "Index3", false, 0, 0 },    //   iKind 1 cols 0..3, iKind 5
+-        { 0x51, "Index4", false, 0, 0 },    //   iKind 1 cols 4..7
+-    };
+-    if (n) *n = (int)(sizeof(s) / sizeof(s[0]));
+-    return s;
+-}
+-inline void W906_Vc8StationsClear()
+-{
+-    int n = 0;
+-    TVc8Station* s = W906_Vc8Stations_(&n);
+-    for (int i = 0; i < n; ++i) { s[i].set = false; s[i].ring = 0; s[i].ip = 0; }
+-}
+-// The slot of an IOType=Vacuum row's Alias, -1 if it names no module.
+-inline int W906_Vc8StationSlot(const char* alias)
+-{
+-    int n = 0;
+-    const TVc8Station* s = W906_Vc8Stations_(&n);
+-    for (int i = 0; alias && i < n; ++i) {
+-        int k = 0;
+-        for (;; ++k) {
+-            char a = alias[k], b = s[i].alias[k];
+-            if (a >= 'a' && a <= 'z') a = (char)(a - 'a' + 'A');
+-            if (b >= 'a' && b <= 'z') b = (char)(b - 'a' + 'A');
+-            if (a != b) break;
+-            if (a == '\0') return i;
+-        }
+-    }
+-    return -1;
+-}
+-// golden's (ring, station) -> where that module is now. false = not moved (golden's number stands).
+-inline bool W906_Vc8StationMap(int goldenRing, int goldenIp, int* ring, int* ip)
+-{
+-    int n = 0;
+-    const TVc8Station* s = W906_Vc8Stations_(&n);
+-    for (int i = 0; goldenRing == 1 && i < n; ++i) {
+-        if (!s[i].set || s[i].goldenIp != goldenIp) continue;
+-        if (ring) *ring = s[i].ring;
+-        if (ip)   *ip   = s[i].ip;
+-        return true;
+-    }
+-    return false;
+-}
+-
+ #endif  // VACUUMUNIT_VC8ROUTE_H
+diff --git a/database.cpp b/database.cpp
+index b63adb7..2fd1ea3 100644
+--- a/database.cpp
++++ b/database.cpp
+@@ -1760,7 +1760,6 @@ void SYSTEM_MODULAR::LoadIoData()
+         Str.sprintf("File %s is not exist!", IoTablePath);
+         ShowMyMessage(Str, "注意！IO檔案遺失!");   // AI(W906-DBMSG) 20260926: 標題照 golden database.cpp:1612 原文（移植初期改成英文）
+     }
+-    W906_ApplyVacuumStations();   //AI(W906-VC8-IP) 20261001: HT9050 + PCIE-1203 -- IOType=Vacuum rows move the ECAT-VC8 stations and their sucker rows, before InitSucker binds them (database.cpp W906_ApplyVacuumStations); not HT9050 = nothing
+ }
+ 
+ // ===========================================================================
+@@ -3184,92 +3183,6 @@ const char* W906_MachineTypeName(int t)
+     }
+ }
+ // ===========================================================================
+-//AI(W906-VC8-IP) 20261001: HT9050 + PCIE-1203 -- IO_Table.csv IOType=Vacuum rows say where each ECAT-VC8 is.
+-//  EastSun 20261001 (quoted in VacuumUnit/Vc8Route.h): InArm 0xA0, OutArm 0xA1, Index 0xA2 -- kept in IO_Table.csv
+-//  so that the next change needs no code. One row per module, IN THE TABLE'S OWN FORMAT (EastSun 20261001
+-//  「你不能直接填0xA0 要照表照格式 照架構 轉成IP 160」): read through TIODATA like every other row, IP decimal
+-//  as the sucker rows (InArmSuck* IP 32 = 0x20), Port / Bit filled (TIODATA forces iEnable=0 when they are blank):
+-//      IOType,Alias,Lane,ModuleType,IP,Port,Bit,InType,ISABase,Enable
+-//      Vacuum,InArm,1,2,160,0,0,1,3,1         (Alias InArm|OutArm|Index|Index2|Index3|Index4, IP 160 = 0xA0)
+-//  Lane = the ring, IP = the station, ISABase must be 3 (ePCI1203), Enable must be 1; ModuleType / Port / Bit /
+-//  InType / the times are not used.
+-//  Only when general.ini [Version] Model=9050GPIB (W906_GpibModel, read at :318 before LoadIoData runs):
+-//    1. VacuumUnit/Vc8Route.h's station table is filled -- TMyVacuumPanel's ctor asks it for the panels' numbers;
+-//    2. every Sucker / Sucker_On / Sucker_Off row with ISABase ePCI1203 on ring 1 at a moved module's golden station
+-//       is moved to the new ring / station IN HSys.IOTable -- InitSucker (cinitial.cpp:559-591) binds the suckers
+-//       from these rows later, the IO page and its buttons read them, golden's SetIOTableByECAT_VC8_Sucker copies
+-//       them into the panels and the sucker gate registers them there: one station everywhere.
+-//  A row that cannot be used (unknown Alias, IP / Lane not a number, ISABase not 3, Enable not 1, a second row for
+-//  one module, two modules on one station) is skipped with a console line; that module keeps golden's station,
+-//  where the identity check (EtherCAT/Pci1203Vc8.h) refuses everything unless an ECAT-VC8 really answers there.
+-//  Not HT9050: the table stays empty and nothing moves (golden). LoadIoData's last step, every time it runs.
+-// ===========================================================================
+-#include "VacuumUnit/Vc8Route.h"
+-#include <cstdio>
+-
+-int W906_ApplyVacuumStations()
+-{
+-    W906_Vc8StationsClear();
+-    int nSt = 0;
+-    TVc8Station* st = W906_Vc8Stations_(&nSt);
+-    const bool ht9050 = (W906_GpibModel == "9050GPIB");
+-    int rows = 0;
+-    for (int i = 0; i < (int)HSys.IOTable.size(); i++)
+-    {
+-        const TIODATA* r = HSys.IOTable[i];
+-        if (r == 0 || r->Type.Trim().UpperCase() != "VACUUM") continue;
+-        ++rows;
+-        if (!ht9050) continue;
+-        const int line = i + 2;                                   // the file's line: the header is line 1
+-        const int k = W906_Vc8StationSlot(r->Alias.Trim().c_str());
+-        if (k < 0) {
+-            std::printf("IO_Table line %d: IOType=Vacuum Alias \"%s\" is not InArm / OutArm / Index / Index2 / Index3 / Index4 -- skipped\n",
+-                        line, r->Alias.c_str());
+-            continue;
+-        }
+-        const char* bad = 0;
+-        if (r->iISABase != ePCI1203) bad = "ISABase is not 3 (ePCI1203)";
+-        else if (r->iEnable != 1)    bad = "Enable is not 1 (a blank Port / Bit also makes it 0, as on every row)";
+-        else if (r->iLane < 0)       bad = "Lane (the ring) is blank";
+-        else if (r->iIP <= 0 || r->iIP > 0xFFFF) bad = "IP is not a station number (decimal, as the table: 160 = 0xA0)";
+-        else if (st[k].set)          bad = "a second row for this module";
+-        for (int j = 0; bad == 0 && j < nSt; j++)
+-            if (j != k && st[j].set && st[j].ring == r->iLane && st[j].ip == r->iIP) bad = "another module is already on that station";
+-        if (bad) {
+-            std::printf("IO_Table line %d: IOType=Vacuum %s: %s -- skipped, golden's station 0x%02X stays\n",
+-                        line, st[k].alias, bad, st[k].goldenIp);
+-            continue;
+-        }
+-        st[k].set = true; st[k].ring = r->iLane; st[k].ip = r->iIP;
+-    }
+-    if (!ht9050) {
+-        if (rows)
+-            std::printf("IO_Table: %d IOType=Vacuum row(s) not used -- general.ini Model=%s is not 9050GPIB; golden's ECAT-VC8 stations\n",
+-                        rows, W906_GpibModel.c_str());
+-        return 0;
+-    }
+-    int moved = 0, per[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+-    for (int i = 0; i < (int)HSys.IOTable.size(); i++)
+-    {
+-        TIODATA* r = HSys.IOTable[i];
+-        if (r == 0 || r->iISABase != ePCI1203) continue;
+-        if (r->Type != "Sucker" && r->Type != "Sucker_On" && r->Type != "Sucker_Off") continue;
+-        int ring = 0, ip = 0;
+-        if (!W906_Vc8StationMap(r->iLane, r->iIP, &ring, &ip)) continue;
+-        for (int k = 0; k < nSt && k < 8; k++) if (st[k].set && st[k].goldenIp == r->iIP) ++per[k];
+-        r->iLane = ring; r->iIP = ip;
+-        ++moved;
+-    }
+-    for (int k = 0; k < nSt && k < 8; k++)
+-        if (st[k].set)
+-            std::printf("IO_Table: IOType=Vacuum %s (HT9050 + PCIE-1203): the ECAT-VC8 golden has at ring 1 0x%02X is at ring %d 0x%02X -- "
+-                        "%d sucker row(s) moved, the Vacuum Unit panels follow\n",
+-                        st[k].alias, st[k].goldenIp, st[k].ring, st[k].ip, per[k]);
+-    if (rows == 0)
+-        std::printf("IO_Table: no IOType=Vacuum row -- golden's ECAT-VC8 stations (InArm 0x20, OutArm 0x30, Index 0x40/0x41/0x50/0x51)\n");
+-    return moved;
+-}
+-// ===========================================================================
+ //AI(W906-BOOTSPEED) 20260929: boot stopwatch + boot sampler -- DIAGNOSTIC PRINTS ONLY, no machine effect.
+ //
+ //  Why: EastSun 20260929 "F5 之後程式要很久才能用". Measured from D:\HT9045\Error\BootLog.txt ("WinMain Enter" ->
+diff --git a/database.h b/database.h
+index 32b401e..aa2c77d 100644
+--- a/database.h
++++ b/database.h
+@@ -396,6 +396,5 @@ bool LoadMachineConfig();
+ extern AnsiString W906_GpibModel;                         // ReadGeneralIni() 在 database.cpp:318 讀到的 [Version] Model
+ const char* W906_MachineTypeName(int machineTypeChoice);  // eMachineType 的列舉名稱；未知值回 ""
+ AnsiString  W906_MainCaption();                           // AI(W906-CAPTION) 20260930: golden fMain->Caption（main.cpp:9216-9253 / :9590-9607）+ HT9050；本體在 WebBridgeTags.cpp 檔尾，tag machine.caption
+-int         W906_ApplyVacuumStations();                   // AI(W906-VC8-IP) 20261001: HT9050 + PCIE-1203 -- IO_Table.csv IOType=Vacuum rows move the ECAT-VC8 stations (VacuumUnit/Vc8Route.h); LoadIoData's last step; returns the sucker rows moved
+ 
+ #endif // DATABASEH
+diff --git a/tests/test_vacuum_vc8.cpp b/tests/test_vacuum_vc8.cpp
+index 17eb0ce..87ec58a 100644
+--- a/tests/test_vacuum_vc8.cpp
++++ b/tests/test_vacuum_vc8.cpp
+@@ -27,11 +27,10 @@
+ //        refused before any write (D3); vacuum OFF
+ //   [10] R3 (MachineType.h W906_VC8_SUCKER_REMAP): golden SetIOTableByECAT_VC8_Sucker copies the sucker table into
+ //        the panels, sets ISABase ePCI1203, and registers the suckers with the gate -- a registered alias passes
+-//        only on a VC8, an unregistered one (the loader cylinder sharing the station) always passes
++//        only on a VC8, an unregistered one (the loader cylinder sharing the station) always passes; AI(W906-VC8-IP)
++//        20261001: the station is the sucker row's (InArm 160 = 0xA0, OutArm 161, Index 162) -- panel, gate, DO write
+ //   [11] Pci1203Control: the two VC8 kinds are INTERNAL (no wire name, audit name "(internal)"), refused on a
+ //        closed control
+-//   [12] AI(W906-VC8-IP) 20261001: IO_Table.csv IOType=Vacuum rows (HT9050 + PCIE-1203 only): the station table,
+-//        the sucker rows moved off golden's station, the unusable rows skipped, the panels' ctor numbers
+ // ===========================================================================
+ #include <cmath>
+ #include <cstdio>
+@@ -53,7 +52,6 @@
+ #include "EtherCAT/Pci1203Vc8.h"
+ #include "EtherCAT/Pci1203Control.h"
+ #include "Public/cJSON.h"
+-#include "database.h"                   // AI(W906-VC8-IP) 20261001: [12] HSys.IOTable / TIODATA / W906_GpibModel / W906_ApplyVacuumStations
+ #include "w906_ctest_guard.h"
+ 
+ using namespace ht9045;
+@@ -446,6 +444,35 @@ int main(int argc, char** argv)
+         SetVc8Route(0);
+         CHECK(!W906_Vc8SuckerGate(1, 0x40, "FTestSuckAA_On", true));   // no route: a registered sucker fails closed
+         SetVc8Route(&kFake);
++        //  AI(W906-VC8-IP) 20261001: the station is the IO_Table.csv sucker row's (EastSun 20261001: the modules moved to
++        //  InArm 0xA0 / OutArm 0xA1 / Index 0xA2, set in the Sucker / Sucker_On / Sucker_Off rows, IP 160 / 161 / 162) --
++        //  golden's ctor numbers 0x20 / 0x30 are overwritten by the copy, the gate registers the new station, the page
++        //  writes there.
++        TMySucker& ia = InArmSuck.Suck[0][0];
++        ia.SuckerName = "InArmSuckA"; ia.SensorName = "InArmSuckA"; ia.OnPortName = "InArmSuckA_On"; ia.OffPortName = "InArmSuckA_Off";
++        ia.OnRing = 1; ia.OnIP = 160; ia.OnPort = 17; ia.OnBit = 0; ia.OnType = 1; ia.OnISABase = 3;
++        ia.OffRing = 1; ia.OffIP = 160; ia.OffPort = 16; ia.OffBit = 0; ia.OffType = 1; ia.OffISABase = 3;
++        ia.SenRing = 1; ia.SenIP = 160; ia.SenPort = 128; ia.SenBit = 0; ia.SenType = 1; ia.SenISABase = 3; ia.ISABase = 3;
++        TMySucker& oa = OutArmSuck.Suck[0][0];
++        oa.SuckerName = "OutArmSuckA"; oa.SensorName = "OutArmSuckA"; oa.OnPortName = "OutArmSuckA_On"; oa.OffPortName = "OutArmSuckA_Off";
++        oa.OnRing = 1; oa.OnIP = 161; oa.OnPort = 23; oa.OnBit = 7; oa.OnType = 1; oa.OnISABase = 3;   // IO_Table.csv as it is: OutArmSuckA_On 23 /
++        oa.OffRing = 1; oa.OffIP = 161; oa.OffPort = 22; oa.OffBit = 7; oa.OffType = 1; oa.OffISABase = 3; //   _Off 22 (VC3's DO pair) with its sensor on 135 (VC7)
++        oa.SenRing = 1; oa.SenIP = 161; oa.SenPort = 135; oa.SenBit = 7; oa.SenType = 1; oa.SenISABase = 3; oa.ISABase = 3;
++        fa.OnIP = fa.OffIP = fa.SenIP = 162;
++        SetIOTableByECAT_VC8_Sucker();
++        CHECK(P("myPalInArm_0_0").ip == 0xA0 && P("myPalInArm_0_0").ring == 1 && P("myPalInArm_0_0").onPort == 17);
++        CHECK(P("myPalOutArm_0_0").ip == 0xA1 && P("myPalOutArm_0_0").vc == 7 && P("myPalOutArm_0_0").onPort == 23 && P("myPalOutArm_0_0").offPort == 22);   // the row's Port wins (golden)
++        CHECK(P("myPalArm1_0_0").ip == 0xA2);
++        CHECK(W906_Vc8IsGuardedSucker(1, 0xA0, "InArmSuckA_On") && W906_Vc8IsGuardedSucker(1, 0xA1, "OutArmSuckA") && W906_Vc8IsGuardedSucker(1, 0xA2, "FTestSuckAA_Off"));
++        CHECK(!W906_Vc8SuckerGate(1, 0xA0, "InArmSuckA_On", true));   // no VC8 answers at 0xA0 (the fake): refused
++        g.vc8[0xA0] = true;
++        CHECK(W906_Vc8SuckerGate(1, 0xA0, "InArmSuckA_On", true));    // an ECAT-VC8 at 0xA0: through
++        const std::size_t before = g.writes.size();
++        char why[320] = "";
++        CHECK(W906_VacuumLiveDo(Find("myPalInArm_0_0"), true, true, why, (int)sizeof(why)) == 0);
++        CHECK(g.writes.size() == before + 1 && g.writes.back().ip == 0xA0 && g.writes.back().chan == 17 && g.writes.back().value == 1);
++        CHECK(W906_VacuumLiveDo(Find("myPalInArm_0_0"), true, false, why, (int)sizeof(why)) == 0 && g.writes.back().ip == 0xA0);
++        g.vc8[0xA0] = false;
+     }
+ #else
+     std::printf("-- [10] R3 skipped: W906_VC8_SUCKER_REMAP is commented out in MachineType.h\n");
+@@ -470,80 +497,6 @@ int main(int argc, char** argv)
+         CHECK(!r.accepted && !r.issued);
+     }
+ 
+-    // ---------------------------------------------------------------- [12]
+-    //  AI(W906-VC8-IP) 20261001: HT9050 + PCIE-1203 -- IO_Table.csv IOType=Vacuum rows move the ECAT-VC8 stations
+-    //  (EastSun 20261001: InArm 0xA0, OutArm 0xA1, Index 0xA2). Rows built in memory, no file read or written.
+-    std::printf("-- [12] IOType=Vacuum rows (HT9050 + PCIE-1203)\n");
+-    {
+-        CHECK(W906_Vc8StationSlot("InArm") == 0 && W906_Vc8StationSlot("inarm") == 0 && W906_Vc8StationSlot("OUTARM") == 1);
+-        CHECK(W906_Vc8StationSlot("Index") == 2 && W906_Vc8StationSlot("Index4") == 5);
+-        CHECK(W906_Vc8StationSlot("Index5") == -1 && W906_Vc8StationSlot("") == -1 && W906_Vc8StationSlot(0) == -1);
+-        const char* rows[] = {
+-            "Vacuum,InArm,1,2,160,0,0,1,3,1,,,,",                    // 0  the table's format: IP decimal (160 = 0xA0)
+-            "Vacuum,outarm,1,2,161,0,0,1,3,1,,,,",                   // 1  lower-case alias
+-            "Vacuum,Index,1,1,162,0,0,1,3,1,,,,",                    // 2
+-            "Vacuum,Index2,1,1,160,0,0,1,3,1,,,,",                   // 3  InArm's station -> skipped
+-            "Vacuum,Index3,1,1,176,0,0,1,2,1,,,,",                   // 4  ISABase 2 -> skipped
+-            "Vacuum,Index4,1,1,177,0,0,1,3,0,,,,",                   // 5  Enable 0 -> skipped
+-            "Vacuum,Bogus,1,1,178,0,0,1,3,1,,,,",                    // 6  unknown alias -> skipped
+-            "Vacuum,InArm,1,2,179,0,0,1,3,1,,,,",                    // 7  a second InArm row -> skipped
+-            "Sucker,InArmSuckA,1,2,32,128,0,1,3,0,,,,",              // 8  -> 0xA0
+-            "Sucker_On,InArmSuckA_On,1,2,32,17,0,1,3,0,,,,",         // 9  -> 0xA0
+-            "Sucker_Off,OutArmSuckA_Off,1,2,48,22,7,1,3,0,,,,",      // 10 -> 0xA1
+-            "Sucker,FTestSuckAA,1,1,64,128,0,1,3,0,,,,",             // 11 -> 0xA2
+-            "Sucker,FTestSuckAE,1,1,65,128,0,1,3,0,,,,",             // 12 0x41: Index2 was skipped -> stays
+-            "Cylinder,C_Load_Up,1,1,32,16,0,1,3,1,,,,",              // 13 not a sucker -> stays
+-            "Sucker,InArmSuckZ,1,2,32,128,0,1,1,0,,,,",              // 14 ISABase 1 -> stays
+-            "Sucker,InArmSuckR,0,2,32,128,0,1,3,0,,,,",              // 15 ring 0 -> stays
+-        };
+-        const int nRows = (int)(sizeof(rows) / sizeof(rows[0]));
+-        CHECK(HSys.IOTable.empty());
+-        for (int i = 0; i < nRows; ++i) HSys.IOTable.push_back(new TIODATA(AnsiString(rows[i])));
+-        CHECK(HSys.IOTable[0]->iIP == 160 && HSys.IOTable[0]->iEnable == 1 && HSys.IOTable[0]->iLane == 1);   // read as every row
+-        int r = 0, ip = 0;
+-        W906_GpibModel = "ModelNG";
+-        CHECK(W906_ApplyVacuumStations() == 0);
+-        CHECK(!W906_Vc8StationMap(1, 0x20, &r, &ip) && HSys.IOTable[8]->iIP == 32);   // not HT9050: golden
+-        W906_GpibModel = "9050GPIB";
+-        CHECK(W906_ApplyVacuumStations() == 4);
+-        CHECK(W906_Vc8StationMap(1, 0x20, &r, &ip) && r == 1 && ip == 0xA0);
+-        CHECK(W906_Vc8StationMap(1, 0x30, &r, &ip) && r == 1 && ip == 0xA1);
+-        CHECK(W906_Vc8StationMap(1, 0x40, &r, &ip) && r == 1 && ip == 0xA2);
+-        CHECK(!W906_Vc8StationMap(1, 0x41, &r, &ip) && !W906_Vc8StationMap(1, 0x50, &r, &ip) && !W906_Vc8StationMap(1, 0x51, &r, &ip));
+-        CHECK(!W906_Vc8StationMap(0, 0x20, &r, &ip));
+-        CHECK(HSys.IOTable[8]->iIP == 0xA0 && HSys.IOTable[8]->iLane == 1 && HSys.IOTable[9]->iIP == 0xA0);
+-        CHECK(HSys.IOTable[9]->iPort == 17 && HSys.IOTable[9]->iBit == 0);          // only the station moves
+-        CHECK(HSys.IOTable[10]->iIP == 0xA1 && HSys.IOTable[11]->iIP == 0xA2);
+-        CHECK(HSys.IOTable[12]->iIP == 65 && HSys.IOTable[13]->iIP == 32 && HSys.IOTable[14]->iIP == 32 && HSys.IOTable[15]->iIP == 32);
+-        CHECK(W906_ApplyVacuumStations() == 0 && HSys.IOTable[8]->iIP == 0xA0);   // again: 0xA0 is no golden station, nothing moves twice
+-        CHECK(W906_Vc8StationMap(1, 0x20, &r, &ip) && ip == 0xA0);
+-        //  the panels' own numbers (golden TMyVacuumPanel ctor)
+-        TMyVacuumPanel* in  = new TMyVacuumPanel(fVacuumUnit, 2, 0, 0);
+-        TMyVacuumPanel* out = new TMyVacuumPanel(fVacuumUnit, 3, 3, 1);
+-        TMyVacuumPanel* a1  = new TMyVacuumPanel(fVacuumUnit, 0, 1, 0);
+-        TMyVacuumPanel* a1b = new TMyVacuumPanel(fVacuumUnit, 0, 5, 0);
+-        TMyVacuumPanel* a2  = new TMyVacuumPanel(fVacuumUnit, 1, 0, 0);
+-        CHECK(in->SenIP == 0xA0 && in->OnIP == 0xA0 && in->OffIP == 0xA0 && in->SenRing == 1 && in->OnRing == 1 && in->OffRing == 1);
+-        CHECK(in->SenVCNo == 0 && in->OnPort == 17 && in->OffPort == 16);           // the VC and channels are golden's
+-        CHECK(out->SenIP == 0xA1 && out->OnIP == 0xA1 && out->SenVCNo == 7);
+-        CHECK(a1->SenIP == 0xA2 && a1->SenVCNo == 2);
+-        CHECK(a1b->SenIP == 0x41 && a2->SenIP == 0x50);                              // not moved: golden
+-        //  not the table's format: a hex IP is 0 to TIODATA's atoi, a blank Port / Bit makes iEnable 0 -> both skipped
+-        for (int i = 0; i < (int)HSys.IOTable.size(); ++i) delete HSys.IOTable[i];
+-        HSys.IOTable.clear();
+-        HSys.IOTable.push_back(new TIODATA(AnsiString("Vacuum,InArm,1,2,0xA0,0,0,1,3,1,,,,")));
+-        HSys.IOTable.push_back(new TIODATA(AnsiString("Vacuum,OutArm,1,2,161,,,1,3,1,,,,")));
+-        HSys.IOTable.push_back(new TIODATA(AnsiString("Sucker,InArmSuckA,1,2,32,128,0,1,3,0,,,,")));
+-        CHECK(HSys.IOTable[0]->iIP == 0 && HSys.IOTable[1]->iEnable == 0);
+-        CHECK(W906_ApplyVacuumStations() == 0);
+-        CHECK(!W906_Vc8StationMap(1, 0x20, &r, &ip) && !W906_Vc8StationMap(1, 0x30, &r, &ip) && HSys.IOTable[2]->iIP == 32);
+-        W906_GpibModel = "";
+-        CHECK(W906_ApplyVacuumStations() == 0 && !W906_Vc8StationMap(1, 0x20, &r, &ip));
+-        for (int i = 0; i < (int)HSys.IOTable.size(); ++i) delete HSys.IOTable[i];
+-        HSys.IOTable.clear();
+-        (void)in; (void)out; (void)a1; (void)a1b; (void)a2;                        // owned by fVacuumUnit, as golden's panels
+-    }
+-
+     W906_VacuumLiveClose();
+     SetVc8Route(0);
+     std::printf("\n%d / %d checks passed\n", g_total - g_fail, g_total);
+-- 
+2.55.0.windows.5
+
