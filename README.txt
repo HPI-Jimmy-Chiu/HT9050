@@ -409,4 +409,7 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   tools 0136 HTDESIGNER-138a（0.138.0，版本號不變）—— Alias 下拉清單不再列出 IO 表的分段標記列（#NEW_FROM_9050_DRAWING_20260923）；並更正 tools 0135 說明：那 1 項失敗的原因是 0.138 把測試改嚴了，不是 IO 表 15:05 被改（15:05 是 EastSun 對調 C_CleanPanel_On／Off）。三層全過（程式庫 175/175）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0060 d70025d WORKLOG —— 工作紀錄補 10-01 第 15 項：0xA0 系列真空模組實際是 ECAT-VC4-ODM1（4 通道，模組自己回報），不是 VC8；
+                    第 3 節補第 106 包（設計外掛工作階段整合）；第 1 節記 EastSun 15:05 自己改 IO_Table（C_CleanPanel_On／_Off 對調）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
