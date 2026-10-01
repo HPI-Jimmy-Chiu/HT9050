@@ -412,4 +412,11 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   cpp 0060 d70025d WORKLOG —— 工作紀錄補 10-01 第 15 項：0xA0 系列真空模組實際是 ECAT-VC4-ODM1（4 通道，模組自己回報），不是 VC8；
                     第 3 節補第 106 包（設計外掛工作階段整合）；第 1 節記 EastSun 15:05 自己改 IO_Table（C_CleanPanel_On／_Off 對調）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  tools 0137 HTDESIGNER-138b —— ⚠ 給筆電（EastSun 20261001 16:3x：「叫筆電 給我新版」）：機台要 HTML 視覺設計工具（外掛）的最新版。
+                    請把 ES02（EastSun 筆電）在 GitLab v906/es02-htdesigner 上 0.138.0 之後的外掛進度，做成「只帶 tools/vscode-htdesigner」的筆電包推到 GitHub main（跟第 106 包一樣）；
+                    一起收機台的 tools 0136（aaae678，Alias 下拉清單跳過 IO 表的 # 分段標記列，版本號不變，還是 0.138.0），版本號請接在 ES02 最後一版後面。
+                    機台現在套到第 106 包（第 105 包＝cpp 0058，第 106 包＝tools 0135）；外掛是 0.138.0＋tools 0136。
+                    機台每 30 分鐘自動查 GitHub main，看到帶外掛的新包就逐檔比對、測試後合進來（不跑 e2e_build.ps1：它會啟動 wb_serve）。
+                    這份交接也記在 tools/vscode-htdesigner/HANDOVER.md §5。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
