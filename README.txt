@@ -609,4 +609,8 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   web 0078 f2523ed TEACH-KB —— 網頁那一半（ht9045_teach_kb_c.js）。
   cpp 0118 ce40df1 WORKLOG —— 工作紀錄第 71 項。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0119 b2e2720 NOTE-SCREENSTART／IO-FORMSHOW-OUT —— ①警報 Note 畫面上的 START 照原版不做事（這台 PTI；面板實體 START 鍵照常啟動）；
+                    ②IO 視窗打開時 C++ 照原版抱住 Index 煞車（SwFMotorBreaker／SwBMotorBreaker Off）並記錄 Index 四軸位置，運轉中不做。ctest IoFormShow。
+  cpp 0120 befb016 WORKLOG —— 工作紀錄第 72～73 項；§4 記 EastSun「剩下照 BCB」。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
