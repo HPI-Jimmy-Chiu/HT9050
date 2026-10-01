@@ -584,4 +584,7 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   cpp 0108 3defd66 WORKLOG —— 工作紀錄補 10-02 第 65 項；第 4 節設定頁要決定的事。
   web 0073 fa6aea5 COMPK-SETUPA (web) —— 12 頁 5,730 個元件逐一判定：Configuration 又存得進去（原版 Exit 的那一題）、ContactForce 接上、小鍵盤照原版、反灰欄位不開鍵盤。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0109 ec6a4e1 WORKLOG —— 工作紀錄補 10-02 第 66 項；第 4 節：警報 Note 的安全問題（網頁按鍵沒照原版的 IC 在座鎖、PTI 的 START）等。
+  web 0074 812a16b COMPK-MOTORB (web) —— 29 頁 4,270 個元件逐一判定、修 457 個：小鍵盤照原版上下限、Speed 的 47 個微調鈕、ShowMessage 不再顯示假數字、testercomm Run Mode 照原版只在模擬時出現。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
