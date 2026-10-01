@@ -5,6 +5,7 @@
 
 ## ⚠⚠ 給機台端（20260929 18:1x 起，請先讀這一段）
 
+- ✅ **20261002 第 119 包（GitLab main `8ec97e2f`）——要重建 wb_serve**：St01 把 golden 的 Lot Start 檢查翻成一支函式，**還沒接上網頁的 Lot Start**，機台上的行為不變。⚠⚠ **安全提醒：網頁 Teach 頁（教導位置）幾乎沒有輸入範圍保護**（golden 會擋的 Z 安全高度、等待下降位置、手臂 X 等，網頁照存）——在 Teach 頁輸入教導值請人工確認數值，存完先低速或手動確認位置再自動跑；修正在 GitLab INBOX 140。
 - ✅ **20261002 第 118 包（GitLab main `3ff4a55a`）——要重建 wb_serve**：開了 VTEST 的機台，TesterIF 頁最長測試時間照 golden 用 0～36000 的範圍（沒開的照第 117 包，0～15000）。
 - ✅ **20261002 第 117 包（GitLab main `95be5593`）——只動網頁與測試，不用重建 wb_serve**：Setup.TesterIF 頁 9 個欄位的鍵盤範圍照 golden 通用分支（最長測試時間可以輸入小數、0～15000；原本被夾成整數 60～9999，輸入 10 會存成 60。三個 Initial Start Delay 不再有最小 30）。**之前在那頁存過的最長測試時間請再看一下。**
 - ✅ **20261002 第 116 包（GitLab main `19e8826c`）——要重建 wb_serve**：St02 的計時器修正——Timer3 與每分鐘溫度紀錄在自己的框開著時照 golden 繼續跑；Observer 頁的溫度歷史照 golden 記錄（原本全是 0）。
@@ -181,6 +182,7 @@
 | 116 | `updates/19e8826c/` | `19e8826c` | `8b8209cc`（`updates/19e8826c/_machine_ai/base_8b8209cc/`） | ⚠ **要重建 wb_serve**（12 檔；gate b30a 兩組態全新：出貨 316／4、模擬 316／19＝基準）。St02 MR !90（`MainTimersSt02.cpp`、`MainTimer3.cpp`、`MainTimerESD*.cpp`、`Interface/TesterTCP_OSReport.cpp`、測試）；筆電 `mykitsuck.h`／`.cpp`（註解）。 |
 | 117 | `updates/95be5593/` | `95be5593` | `19e8826c`（`updates/95be5593/_machine_ai/base_19e8826c/`） | 只動網頁與測試（7 檔；gate b32a 兩組態全新：出貨 317／4、模擬 317／19＝基準）。St02 MR !93（`web/page/ht9045_testerif_c_wire.js`、新 node 測試）、MR !91（`tests/test_g023_os_report.cpp`）、MR !92（文件）。 |
 | 118 | `updates/3ff4a55a/` | `3ff4a55a` | `95be5593`（`updates/3ff4a55a/_machine_ai/base_95be5593/`） | ⚠ **要重建 wb_serve**（6 檔；gate b33a 兩組態全新：出貨 317／4、模擬 317／19＝基準）。St02 MR !94（`FileRW/TestIF_File_TesterIF.cpp` 一行、`web/page/ht9045_testerif_c_wire.js`、測試）。 |
+| 119 | `updates/8ec97e2f/` | `8ec97e2f` | `3ff4a55a`（`updates/8ec97e2f/_machine_ai/base_3ff4a55a/`） | ⚠ **要重建 wb_serve**（9 檔；gate b34a 兩組態全新：出貨 318／4、模擬 318／19＝基準）。St01 新檔 `FileRW/LotInfo_SECSLotStart.*`、`CMakeLists.txt` 一行、測試。 |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
