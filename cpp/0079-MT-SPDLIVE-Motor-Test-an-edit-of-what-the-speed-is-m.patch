@@ -1,0 +1,188 @@
+From 108b8e35702f678428758f226c2ba1072fa5f1a1 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 21:20:44 +0800
+Subject: [PATCH] MT-SPDLIVE: Motor Test -- an edit of what the speed is made
+ of goes to the card at once (no scroll-bar wiggle), changed from golden by
+ EastSun's ruling
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 1001 (Speed / Speed Adjust screenshot): 「當我百分比速度有變動時 請要直接改速度 不然每次我案第二次 JOG 速度都不一樣」.
+oplog 21:10-21:12: a row-1 (InitialSpeed) edit to 5000 left the next jogs at velLow=500 until the bar was moved -- the jog
+re-sends g_jogSpd (the last scroll's values, MT-FIX1 = golden: a cell edit touches memory only).
+Now setParamCell rows 1/2/3/8/9 (InitialSpeed / JogHigh / JogLow / Acc / Dec), setJogHighSpeed / setJogLowSpeed and Copy
+From re-apply the speed at once (ReapplySpeedAfterEdit): jog family at the bar's pct (JogPctOf), PTP family at the last
+SetSpeed's (PtpPctOf), g_jogSpd updated, the ack says the new values. Not while a HOME runs on the axis (golden :796).
+Non-1203 axes: MOT.SetSpeed(pct, true) again. The re-derive happens at the edit (ack shows it), not silently at the press.
+Test: the row-2 case now expects 8 card writes and checks the next jog runs at the new JogHigh (7000 x 1% = 70).
+ctest WebMotorAccess, GaliRouteEngine pass.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebMotorAccess.cpp              | 66 ++++++++++++++++++++++++++++-----
+ tests/test_web_motor_access.cpp | 17 ++++++++-
+ 2 files changed, 72 insertions(+), 11 deletions(-)
+
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index 06c3d2b..780531e 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -884,7 +884,8 @@ MotorAccessOutcome DoMoveSoftLimit(const MotorAccessReq& r, long long wireId, IM
+ 
+ // ---- setJogHighSpeed 等：btnHighSpeedClick :1403 … btnSoftNPosClick :1443 ----
+ //   golden：PJogHighSpeed=Motor->ReadSpeed()（上一次 SetSpeed 的 s）；PSoftLimitP=MOT.ReadPos()。只改記憶體（存檔走資料庫分頁）。
+-MotorAccessOutcome DoSetParam(const MotorAccessReq& r, IMotorAccessBackend& be)
++std::string ReapplySpeedAfterEdit(long long wireId, IMotorAccessBackend& be, const std::string& motorId);   //AI(W906-MT-SPDLIVE) 20261001: defined before DoSetParamCell
++MotorAccessOutcome DoSetParam(const MotorAccessReq& r, long long wireId, IMotorAccessBackend& be)   //AI(W906-MT-SPDLIVE) 20261001: + wireId
+ {
+     MotionCtx m;
+     const bool isSoft = (r.action == "setSoftLimitP" || r.action == "setSoftLimitN");
+@@ -919,9 +920,11 @@ MotorAccessOutcome DoSetParam(const MotorAccessReq& r, IMotorAccessBackend& be)
+         else                                     which = kParamHomeLow;
+     }
+     be.GoldenSetParam(m.a.motIndex, which, value);
++    //AI(W906-MT-SPDLIVE) 20261001: JogHigh / JogLow are what the speed is made of -> re-applied now (EastSun 1001)
++    const std::string spd = (which == kParamJogHigh || which == kParamJogLow) ? ReapplySpeedAfterEdit(wireId, be, r.motors[0]) : std::string();
+     webbridge::JsonWriter w;
+     w.BeginObject();
+-    AckHead(w, r, "set", "MOT", std::string("MOT[") + std::to_string(m.a.motIndex) + "].Motor 參數已改（只在記憶體；golden 同，存檔走資料庫分頁）");
++    AckHead(w, r, "set", "MOT", std::string("MOT[") + std::to_string(m.a.motIndex) + "].Motor 參數已改（只在記憶體；golden 同，存檔走資料庫分頁）" + spd);
+     w.Key("motIndex").Number((wb_int64)m.a.motIndex);
+     w.Key("value").Number((wb_int64)value);
+     WriteCurOf(w, be, m.a.motIndex);   //AI(W906-MT-E2) 20260925: golden UpdateMotorParameter() after the button -- the page redraws from what C++ stored
+@@ -2029,12 +2032,55 @@ MotorAccessOutcome DoSelectMotor(const MotorAccessReq& r, long long wireId, IMot
+     MotorAccessOutcome o; o.ok = true; o.ackJson = Finish(w); return o;
+ }
+ 
++//AI(W906-MT-SPDLIVE) 20261001: EastSun 1001 (Motor Test, screenshot of Speed / Speed Adjust): 「當我百分比速度有變動時 請要
++//  直接改速度 不然每次我案第二次 JOG 速度都不一樣」. oplog 21:10-21:12: a row-1 (InitialSpeed) edit to 5000 left the next
++//  jogs at velLow=500 until the bar was wiggled (21:10:35 / 21:12:24) -- the jog re-sends g_jogSpd, the values of the LAST
++//  scroll (MT-FIX1, = golden: a cell edit touches memory only). Changed from golden by that ruling: an edit that changes
++//  what the speed is made of (InitialSpeed / JogHigh / JogLow / Acc / Dec, the JogHigh / JogLow buttons, Copy From)
++//  re-applies the speed AT ONCE, at the motor's current percentages -- the jog family at the bar's (JogPctOf) and the PTP
++//  family at the last SetSpeed's (PtpPctOf) -- so the card, g_jogSpd and the next jog all carry the new parameters.
++//  MT-FIX1's concern (a silent re-derive at the press) still holds: the re-derive happens at the edit, and its ack says
++//  the new values. Not while a HOME runs on the axis (golden scroll bar :796 `if(bSingleHome==true) return;`: the card's
++//  PTP family is the home speed then). Returns the text for the ack ("" = nothing to say).
++std::string ReapplySpeedAfterEdit(long long wireId, IMotorAccessBackend& be, const std::string& motorId)
++{
++    MotionCtx m;
++    if (!be.Resolve(motorId, m.a) || m.a.motIndex < 0 || !be.GoldenMotor(m.a.motIndex, m.g)) return "";
++    const int mi = m.a.motIndex;
++    if (m.g.indexMotor) return "";                                              // golden TMyMotor::SetSpeed: empty for the Index four
++    for (std::size_t i = 0; i < g_homes.size(); ++i)
++        if (HomeOnAxis(g_homes[i], motorId, m.a)) return "; speed NOT re-applied: HOME running on this axis (golden :796 bSingleHome)";
++    const int jogPct = JogPctOf(mi), ptpPct = PtpPctOf(mi);
++    if (!m.a.Is1203()) {
++        be.GoldenSetSpeed(mi, jogPct, true);                                    // golden SetSpeed(x, true) re-derives from the new parameters
++        if (ptpPct != jogPct) be.GoldenSetSpeed(mi, ptpPct, false);
++        return "; speed re-applied: MOT[" + std::to_string(mi) + "].SetSpeed(" + std::to_string(jogPct) + ", true)" +
++               (ptpPct != jogPct ? " + SetSpeed(" + std::to_string(ptpPct) + ")" : std::string());
++    }
++    std::string w1;
++    if (!m.a.tableEnable || !be.Pci1203Ready(w1) || m.a.axis < 0)
++        return "; speed NOT re-applied (1203 axis not usable now" + (w1.empty() ? std::string() : ": " + w1) + ") -- the next scroll applies it";
++    const Motor1203Speed spJog = MotorSpeedFromPct(jogPct, m.g), spPtp = MotorSpeedFromPct(ptpPct, m.g);
++    std::string why, noteJ, noteP;
++    if (!Send1203SpeedValues(be, wireId, m, jogPct, spJog, why, noteJ, kFamJog)) {
++        //  same rule as DoSetSpeed's failure path (MT-FIX1 review low): keep the slower of the old and the new jog values
++        std::map<int, Motor1203Speed>::const_iterator old = g_jogSpd.find(mi);
++        if (old == g_jogSpd.end() || spJog.velHigh < old->second.velHigh) g_jogSpd[mi] = spJog;
++        return "; speed re-apply FAILED (jog keeps the slower of old/new): " + why;
++    }
++    g_jogSpd[mi] = spJog;                                                       // what the next jog re-sends (DoJog)
++    if (!Send1203SpeedValues(be, wireId, m, ptpPct, spPtp, why, noteP, kFamPtp))
++        return "; jog speed re-applied (" + noteJ + "); PTP re-apply FAILED: " + why;
++    be.GoldenSetSpeed(mi, ptpPct, false);                                       // the golden object's iSpeed, as DoSetSpeed
++    return "; speed re-applied now -- jog " + noteJ + "; PTP " + noteP;
++}
++
+ // ---- setParamCell：strngrdMotorSelectCell :1176-1222 ----
+ //   golden: `if(ACol!=1 || ARow==0) return; if(ActiveIndex==-1) return;` -> keypad (rows 8/9 N_DOUBLE + atof, the others
+ //   N_INTEGER + atoi, no range check) -> the row's setter (memory only, golden same: TMyEtherCatMotor::SetInitSpeed /
+ //   SetRange and HTMotor::Set*DataBase touch no card) -> btnLoopMove->Down=false -> HomeFlag=0 -> UpdateMotorParameter.
+ //   ⚠ golden writes the cell even when the keypad is cancelled (Edit2 still holds the old text) -- the page sends that too.
+-MotorAccessOutcome DoSetParamCell(const MotorAccessReq& r, IMotorAccessBackend& be)
++MotorAccessOutcome DoSetParamCell(const MotorAccessReq& r, long long wireId, IMotorAccessBackend& be)   //AI(W906-MT-SPDLIVE) 20261001: + wireId
+ {
+     MotionCtx m;
+     std::string who, why;
+@@ -2063,7 +2109,9 @@ MotorAccessOutcome DoSetParamCell(const MotorAccessReq& r, IMotorAccessBackend&
+     char b[160];
+     std::snprintf(b, sizeof(b), "MOT[%d] row %d (%s) = %g (memory only, golden same); LoopMove up, HomeFlag=0 (golden :1219-1220)",
+                   m.a.motIndex, row, kRowName[row], ret);
+-    AckHead(w, r, "set", "MOT", b);
++    //AI(W906-MT-SPDLIVE) 20261001: the rows MotorSpeedFromPct is made of -> the speed goes to the card now (EastSun 1001)
++    const std::string spd = (row == 1 || row == 2 || row == 3 || row == 8 || row == 9) ? ReapplySpeedAfterEdit(wireId, be, r.motors[0]) : std::string();
++    AckHead(w, r, "set", "MOT", std::string(b) + spd);
+     w.Key("motIndex").Number((wb_int64)m.a.motIndex);
+     w.Key("row").Number((wb_int64)row);
+     w.Key("value").Number(ret);
+@@ -2076,7 +2124,7 @@ MotorAccessOutcome DoSetParamCell(const MotorAccessReq& r, IMotorAccessBackend&
+ //   way -- so "M108" gives 10); `if(ActiveIndex==-1 || Source>24 || Source<0) return;` then six copies (memory only) and
+ //   UpdateMotorParameter. HomeFlag and LoopMove are NOT touched (golden).
+ //   ⚠ golden returns silently on a bad Source; here the page is told why (ok=false). Nothing is copied either way.
+-MotorAccessOutcome DoCopyFrom(const MotorAccessReq& r, IMotorAccessBackend& be)
++MotorAccessOutcome DoCopyFrom(const MotorAccessReq& r, long long wireId, IMotorAccessBackend& be)   //AI(W906-MT-SPDLIVE) 20261001: + wireId
+ {
+     MotionCtx m;
+     std::string who, why;
+@@ -2104,7 +2152,7 @@ MotorAccessOutcome DoCopyFrom(const MotorAccessReq& r, IMotorAccessBackend& be)
+     webbridge::JsonWriter w;
+     w.BeginObject();
+     std::snprintf(b, sizeof(b), "MOT[%d] <- MOT[%d]: JogHigh/JogLow/HomeHigh/HomeLow/SoftLimitP/SoftLimitN (memory only; HomeFlag untouched, golden same)", mi, src);
+-    AckHead(w, r, "copied", "MOT", b);
++    AckHead(w, r, "copied", "MOT", std::string(b) + ReapplySpeedAfterEdit(wireId, be, r.motors[0]));   //AI(W906-MT-SPDLIVE) 20261001: JogHigh/JogLow changed
+     w.Key("motIndex").Number((wb_int64)mi);
+     w.Key("source").Number((wb_int64)src);
+     WriteCurOf(w, be, mi);
+@@ -4356,13 +4404,13 @@ MotorAccessOutcome MotorAccessDispatch(const MotorAccessReq& r, long long wireId
+         if (r.source != "uMotorTest")
+             return Refuse("motor.access " + r.action + "（" + r.source + "）: 這是 golden uMotorTest 的畫面動作（" + row->golden + "），教導頁沒有");
+         if (r.action == "selectMotor")  return DoSelectMotor(r, wireId, be);
+-        if (r.action == "setParamCell") return DoSetParamCell(r, be);
+-        if (r.action == "copyFrom")     return DoCopyFrom(r, be);  if (r.action == "saveMotTable") return DoSaveMotTable(r, be);   //AI(W906-MT-SAVEMOT) 20260930
++        if (r.action == "setParamCell") return DoSetParamCell(r, wireId, be);   //AI(W906-MT-SPDLIVE) 20261001: + wireId
++        if (r.action == "copyFrom")     return DoCopyFrom(r, wireId, be);  if (r.action == "saveMotTable") return DoSaveMotTable(r, be);   //AI(W906-MT-SAVEMOT) 20260930
+         return DoSetSpeed(r, wireId, be);
+     }
+     if (r.action.compare(0, 3, "set") == 0 &&
+         (r.action.find("Speed") != std::string::npos || r.action.compare(0, 12, "setSoftLimit") == 0))
+-        return DoSetParam(r, be);
++        return DoSetParam(r, wireId, be);   //AI(W906-MT-SPDLIVE) 20261001: + wireId
+     return Refuse("motor.access " + r.action + ": 表上標 live 但沒有實作（程式錯誤）");
+ }
+ 
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index e81860c..f814d17 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -1869,9 +1869,22 @@ int main(int argc, char** argv)
+         x0 = be.executed.size();
+         MotorAccessReq pc = Req("uMotorTest", "setParamCell", "A"); pc.num["row"] = 2; pc.num["value"] = 7000;
+         o = MotorAccessDispatch(pc, 1, be);
++        //AI(W906-MT-SPDLIVE) 20261001: EastSun 1001 「當我百分比速度有變動時 請要直接改速度」 -- changed from golden (memory only):
++        //  a row that the speed is made of re-applies it at once: jog family (4) at the bar's pct + PTP family (4) at the last SetSpeed's.
+         CHECK(o.ok && be.cells.size() == 1 && be.cells[0].mi == 20 && be.cells[0].row == 2 && be.cells[0].v == 7000.0 &&
+-              Has(o.ackJson, "\"jogHigh\":7000") && be.executed.size() == x0 && AckShapeOk(o.ackJson, 7),
+-              "row 2 = 7000 -> golden PJogHighSpeed=ret (memory only, no card), the ack's cur shows what C++ now holds");
++              Has(o.ackJson, "\"jogHigh\":7000") && be.executed.size() == x0 + 8 && Has(o.ackJson, "speed re-applied now") &&
++              AckShapeOk(o.ackJson, 7),
++              "row 2 = 7000 -> PJogHighSpeed=ret AND the speed re-applied to the card now (MT-SPDLIVE), the ack's cur shows what C++ now holds");
++        {
++            //  the next jog re-sends exactly the re-applied jog values (no bar wiggle needed): its jog-family run speed = 7000 x 1% = 70
++            const std::size_t j0 = be.executed.size();
++            MotorAccessOutcome oj = MotorAccessDispatch(Req("uMotorTest", "jogP", "A"), 1, be);
++            bool saw70 = false;
++            for (std::size_t k = j0; k < be.executed.size(); ++k)
++                if (be.executed[k].kind == kCmdAxSetSpeed && be.executed[k].speed == kSpeedJogRun && be.executed[k].value == 70.0) saw70 = true;
++            CHECK(oj.ok && saw70, "MT-SPDLIVE: the jog after the row-2 edit runs at the NEW JogHigh (7000 x 1% = 70), no scroll needed");
++            MotorAccessDispatch(Req("uMotorTest", "stop", 0), 1, be);
++        }
+         CHECK(!MotorAccessJobs().loopActive && be.homeFlags.count(20) && be.homeFlags[20] == 0,
+               "golden SelectCell :1219-1220 -> LoopMove up (no stop) and HomeFlag=0");
+         pc.num["row"] = 3; pc.num["value"] = 12.7;
+-- 
+2.55.0.windows.5
+

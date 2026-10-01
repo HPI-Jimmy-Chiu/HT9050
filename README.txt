@@ -489,4 +489,10 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   tools 0140 HTDESIGNER-147（0.147.0）—— 筆電包 109 的外掛部分合進機台：ES02 的 0.146–0.147（方案總管上方的搜尋框，打字篩選檔案／頁面／元件；只剩一行輸入框；側欄每一區的標題列有底色和框線，像 Visual Studio 的工具視窗）。三方合併（基準＝包 108）：6 個只有 ES02 改、2 個兩邊都改都沒有衝突；機台的 tools 0136 Alias 補丁保留。C++ 部分＝整合工作階段的 cpp 0076。機台測試：程式庫 176/176、探針 7/7＋分頁樹 7/7、假 VS Code 213/213、面板全過；e2e_build.ps1 沒跑。
   ⚠ 給筆電：機台的 tools 0136（lib/aliasedit.js：Alias 清單跳過 IO 表的 # 分段標記列，含 lib 測試）到第 109 包還沒進 GitLab，請收；機台現在套到第 109 包，外掛 0.147.0。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0079 108b8e3 MT-SPDLIVE —— Motor Test 改速度直接生效（EastSun 1001「當我百分比速度有變動時 請要直接改速度 不然每次我按第二次 JOG 速度都不一樣」）：
+                    參數表 InitialSpeed／JogHigh／JogLow／Acc／Dec、Jog High／Low 鈕、Copy From 一改，就用目前捲軸的 % 重算並寫進卡片（jog＋點位），
+                    回覆框寫出新速度；HOME 進行中不改。跟原版不同（原版只改記憶體，要拉捲軸才生效）。ctest WebMotorAccess、GaliRouteEngine 通過。
+  web 0058 e509570 MT-SPDLIVE (web) —— Speed 欄打 %＝把捲軸拉到那一格（捲軸跟著移、JOG 也用這個 %）。
+  cpp 0080 cd0cb5c WORKLOG —— 工作紀錄補 10-01 第 37 項；第 3 節 109 補設計外掛部分（tools 0140，0.147.0）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
