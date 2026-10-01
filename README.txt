@@ -295,4 +295,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   tools 0117 HTDESIGNER-119（0.119.0）—— IO 燈號（TALed 系列）、按鈕面板（TBtnPanel 系列）的特有屬性在屬性表「IO 元件」類別直接改（LEDStyle／Value／Blink／Style／Down／四種顏色），跟 .dfm 比對、改回。程式庫／smoke／面板三層全過；真 VS Code 那層這次沒跑（VS Code 自己在更新、鎖住，要重開 VS Code 才裝完）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  tools 0118 HTDESIGNER-120（0.120.0）—— 工具箱多 5 種 IO 元件（MyLedLane／MyLed／ALed／BtnPanelLane／BtnPanel），寫法同網頁產生器、Alias 留空給屬性表挑。程式庫／smoke／面板三層全過；真 VS Code 那層等 VS Code 重開（更新鎖住）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
