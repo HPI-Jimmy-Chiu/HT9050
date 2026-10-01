@@ -407,4 +407,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     8 個相關 ctest 通過、production_audit 0 變更。（第 106 包只有設計外掛，由設計外掛工作階段處理，見 tools 系列。）
   cpp 0059 4a6fdf8 WORKLOG —— 工作紀錄補 10-01 第 13～14 項（上面兩件）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  tools 0136 HTDESIGNER-138a（0.138.0，版本號不變）—— Alias 下拉清單不再列出 IO 表的分段標記列（#NEW_FROM_9050_DRAWING_20260923）；並更正 tools 0135 說明：那 1 項失敗的原因是 0.138 把測試改嚴了，不是 IO 表 15:05 被改（15:05 是 EastSun 對調 C_CleanPanel_On／Off）。三層全過（程式庫 175/175）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
