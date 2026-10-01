@@ -1,0 +1,132 @@
+From 6b7016605ae464f5d82a7e37e93e5e865efaa930 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 10:48:50 +0800
+Subject: [PATCH] HT9050-ORG-ENG: every engine "motor at home" check on HT9050
+ uses the 1203 ORG signal (LOW = at home)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20261001: "所有動作如果有馬達判定home的 都要用9050 1203來判定" (after HT9050-ORG for Teach).
+Why it was needed: with WB_ENGINE_MOTOR_1203 off, TMyEtherCatMotor::ScanMotorStatus (laptop-owned,
+Motor/myEthercatmotor.cpp #else arm) sets Led[iHomeLed]=false for every enabled 1203 axis, so every
+engine interlock that asks "is this Z at home?" saw "not at home".
+- Motor/mymotor.h: hook W906_Ht9050OrgHomeHook(motIndex): -2 not ours (not HT9050 / not a PCI1203
+  axis, or not installed) -> golden unchanged; -1 ORG unreadable -> not at home (fail-closed);
+  0 / 1. Installed at boot by WebMotorAccessLive.cpp W906_MotorAccessEngineHooks (also installs
+  the Teach rule g_W906OrgActiveLow at boot instead of at the first teach command).
+- Motor/mymotor.cpp TMyMotor::ScanMotorStatus: after both branches (Galil / Motor->ScanMotorStatus),
+  Led[iHomeLed] = the hook's answer -- every engine reader of MOT[i].Led[iHomeLed] goes through it.
+- The two homing sequences that ask Motor->HomeFlag() directly: mymotor.cpp TMyMotor home case 20,
+  uhome.cpp InArmX check -> the hook first, golden's call when it answers -2.
+- The hook body is the same function as Teach (WebMotorAccess.cpp MotorAccessTeachHomeLed).
+Not changed (laptop-owned): Motor/myEthercatmotor.cpp, EtherCAT/Pci1203GaliRouteCore.cpp (Index Z1
+route takes ORG=1 as home) -- both paths are off today; they must follow this rule when armed.
+Build in build_integ_ship_x86_o2: 0 errors, no new warnings; ctest WebMotorAccess passes;
+production_audit 0 changes; PE 13/13.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ Motor/mymotor.cpp      |  6 +++++-
+ Motor/mymotor.h        | 11 +++++++++++
+ WebMotorAccessLive.cpp | 10 ++++++++++
+ uhome.cpp              |  2 +-
+ 4 files changed, 27 insertions(+), 2 deletions(-)
+
+diff --git a/Motor/mymotor.cpp b/Motor/mymotor.cpp
+index 62579e2..6c23cc2 100644
+--- a/Motor/mymotor.cpp
++++ b/Motor/mymotor.cpp
+@@ -1155,7 +1155,7 @@ int TMyMotor::MotorHome(bool Flag)
+             break;
+ 
+         case 20:
+-            if (Motor->HomeFlag())
++            if (W906_Ht9050OrgHome(Mot_Name) != -2 ? W906_Ht9050OrgHome(Mot_Name) == 1 : Motor->HomeFlag())   //AI(W906-HT9050-ORG-ENG) 20261001: golden `Motor->HomeFlag()`；HT9050＋1203＝原點訊號 low（mymotor.h）
+             {
+                 Task = 1;
+                 HomeFlag  = 1;
+@@ -1227,6 +1227,8 @@ bool TMyMotor::GetMotorAlarm()
+ }
+ 
+ // ---------------------------------------------------------------------------
++int (*W906_Ht9050OrgHomeHook)(int motIndex) = 0;   //AI(W906-HT9050-ORG-ENG) 20261001: mymotor.h（wb_serve 開機裝；沒裝＝-2＝golden 原樣）
++
+ void TMyMotor::ScanMotorStatus()
+ {
+     if (Motor != NULL)
+@@ -1242,6 +1244,8 @@ void TMyMotor::ScanMotorStatus()
+         {
+             Motor->ScanMotorStatus(Led);
+         }
++        //AI(W906-HT9050-ORG-ENG) 20261001: HT9050＋1203：HOME 燈＝1203 原點訊號 low（兩個分支之後，各家 ScanMotorStatus 寫的值不會蓋掉它；mymotor.h）
++        { const int w906Home = W906_Ht9050OrgHome(Mot_Name); if (w906Home != -2) Led[iHomeLed] = (w906Home == 1); }
+     }
+ }
+ 
+diff --git a/Motor/mymotor.h b/Motor/mymotor.h
+index 34bd8c5..f4735e0 100644
+--- a/Motor/mymotor.h
++++ b/Motor/mymotor.h
+@@ -85,6 +85,17 @@ class TTMyTray;                 // AI(W4) 20260626: was #include "HTray.h" (W7-U
+ // ---------------------------------------------------------------------------
+ class TTrayMotor;
+ 
++// ---------------------------------------------------------------------------
++//AI(W906-HT9050-ORG-ENG) 20261001: HT9050＋1203 分支，引擎這一半。EastSun 20261001「所有動作如果有馬達判定home的 都要用9050 1203來判定」
++//  （規則：1203 回來的原點訊號 low＝在原點、high＝沒偵測到；Teach 那一半在 WebMotorAccess.cpp MotorAccessTeachHomeLed）。
++//  掛勾由 wb_serve 開機裝（WebMotorAccessLive.cpp W906_MotorAccessEngineHooks）：回 -2＝不歸這條管（不是 HT9050，或不是 PCI1203 軸）→ golden 原樣；
++//  -1＝讀不到 1203 的原點訊號 → 當成不在原點（fail-closed）；0＝不在原點；1＝在原點。沒裝（ctest、其他機種）＝-2。
++//  用在：TMyMotor::ScanMotorStatus 的最後（全引擎讀 MOT[i].Led[iHomeLed] 的地方都先經過它），以及兩個直接問 Motor->HomeFlag() 的回原點流程
++//  （mymotor.cpp TMyMotor 回原點 case 20、uhome.cpp InArmX 檢查）。⚠ 筆電擁有的 myEthercatmotor.cpp／Pci1203GaliRouteCore.cpp 沒改。
++// ---------------------------------------------------------------------------
++extern int (*W906_Ht9050OrgHomeHook)(int motIndex);
++inline int W906_Ht9050OrgHome(int motIndex) { return W906_Ht9050OrgHomeHook ? W906_Ht9050OrgHomeHook(motIndex) : -2; }
++
+ // ===========================================================================
+ //  TMyMotor
+ // ===========================================================================
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index 1e76793..943668f 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -1333,6 +1333,14 @@ static bool W906_HookFShow(const char* goldenForm)                             /
+ }
+ static int  W906_HookMoving(int motIndex) { return ht9045::MotorAccessMovingOf(ht9045::MotorAccessLiveBackend(), motIndex); }
+ static bool W906_HookHoming() { return ht9045::MotorAccessHomingActive(); }
++//AI(W906-HT9050-ORG-ENG) 20261001: 引擎的「馬達在原點」（Motor/mymotor.h W906_Ht9050OrgHomeHook）。HT9050＋1203 軸＝1203 監看器的原點訊號 low，
++//  跟 Teach 同一支 MotorAccessTeachHomeLed（-2 不是 1203 軸、-1 讀不到／命令後沒新樣本、Mot_Table Enable=0＝1 照 golden、0／1）。不是 HT9050＝-2（golden 原樣）。
++static int W906_HookHt9050OrgHome(int mi)
++{
++    if (W906_GpibModel != "9050GPIB") return -2;
++    ht9045::g_W906OrgActiveLow = &ht9045::OrgActiveLowHT9050;
++    return ht9045::MotorAccessTeachHomeLed(ht9045::MotorAccessLiveBackend(), mi);
++}
+ static void W906_HookAllBtnUp(const char* why) { ht9045::MotorAccessAllBtnUp(ht9045::MotorAccessLiveBackend(), why ? why : ""); }
+ static void W906_HookStop1203All(const char* why) { ht9045::MotorAccessStop1203All(ht9045::MotorAccessLiveBackend(), why ? why : ""); }
+ //AI(W906-MT-FIX1) 20260926: EastSun ruling 20260926 on G16 -- "對應軸 Servo On 才放" (csystem.h W906_BrakeServoOnHook).
+@@ -1393,6 +1401,8 @@ void W906_MotorAccessEngineHooks()
+     W906_MotorHomingHook   = &W906_HookHoming;
+     W906_MotorAllBtnUpHook = &W906_HookAllBtnUp;
+     W906_BrakeServoOnHook  = &W906_HookBrakeServoOn;                            //AI(W906-MT-FIX1) 20260926
++    W906_Ht9050OrgHomeHook = &W906_HookHt9050OrgHome;                           //AI(W906-HT9050-ORG-ENG) 20261001: 引擎的「在原點」（Motor/mymotor.h）
++    ht9045::g_W906OrgActiveLow = &ht9045::OrgActiveLowHT9050;                   //AI(W906-HT9050-ORG) 20261001: Teach 的也在開機就裝（不等第一個 teach 命令）
+     s_done = true;  { extern void W906_MotorAccessPageEdges(); W906_MotorAccessPageEdges(); }   //AI(W906-WSLINK-B) 20260929: page-table close edges of fMotorTest / fTeach (EOF)
+     std::printf("motor.access: engine hooks registered (Motor Test / Teach fShow, 1203 motion, HOME, AllBtnUp, Stop1203All)\n");
+ }
+diff --git a/uhome.cpp b/uhome.cpp
+index 25674d9..9a81297 100644
+--- a/uhome.cpp
++++ b/uhome.cpp
+@@ -2540,7 +2540,7 @@ bool ProcessMotorHome(bool Flag2)
+                                 {
+                                     ret=0;
+                                     MOT[MInArmX].ScanMotorStatus();
+-                                    if(MOT[MInArmX].Motor->HomeFlag())
++                                    if(W906_Ht9050OrgHome(MInArmX)!=-2 ? W906_Ht9050OrgHome(MInArmX)==1 : MOT[MInArmX].Motor->HomeFlag())   //AI(W906-HT9050-ORG-ENG) 20261001: golden `MOT[MInArmX].Motor->HomeFlag()`；HT9050＋1203＝原點訊號 low（Motor/mymotor.h）
+                                     {
+                                         MOT[MInArmX].PCIL132_StopMotor();
+                                         bCheckInArmX=false;
+-- 
+2.55.0.windows.5
+

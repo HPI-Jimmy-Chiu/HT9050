@@ -337,4 +337,13 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   tools 0126 HTDESIGNER-128（0.128.0）—— 設計畫面右鍵「選取這裡的元件…」（Blend 的 Set Current Selection：列出滑鼠底下疊著的元件，挑一個就選它）；多選時「順序」整組一起移、彼此前後不變、一個 Ctrl+Z（以前只移主要選取）。三層測試全過。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0051 6b70166 HT9050-ORG-ENG —— 引擎這一半：HT9050＋1203 軸「馬達在原點」一律＝1203 原點訊號 LOW（EastSun 1001「所有動作如果有馬達判定
+                    home的 都要用9050 1203來判定」）。原因：1203 馬達路徑沒開時，myEthercatmotor.cpp 的 ScanMotorStatus 把 1203 軸的 HOME 燈一律設
+                    false，引擎所有「Z 要在原點」的判斷都看成不在。改在 TMyMotor::ScanMotorStatus 最後套規則（全引擎讀 Led[iHomeLed] 都經過它），
+                    以及兩個直接問 Motor->HomeFlag() 的回原點流程（mymotor.cpp 第 20 步、uhome.cpp InArmX）；判斷本體跟 Teach 同一支函式。
+                    讀不到訊號＝不在原點（照樣擋）；不是 HT9050 或不是 1203 軸＝golden 原樣。
+                    ⚠ 給筆電：Motor/myEthercatmotor.cpp（ScanMotorStatus／GetHomeIO）與 EtherCAT/Pci1203GaliRouteCore.cpp（Index Z1）都把 ORG=1 當在原點，
+                    WB_ENGINE_MOTOR_1203／WB_ENGINE_INDEXZ_1203 武裝時要照「LOW＝在原點」；Mot_Table SensorType 機台 19 軸全部 0（跟這條規則一致，
+                    1 會讓路由開機寫卡時把 ORG 反過來）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
