@@ -451,4 +451,15 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     VC4 閥值 SDO 寫入預設關（W906_VC4_SDO_WRITE）。⚠ 給筆電：IO_Table 的吸嘴列要改成 VC4 格式才會動（方案在工作紀錄）。
   cpp 0070 e7c5e06 WORKLOG —— 工作紀錄補 10-01 第 20～23 項。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  web 0054 d049405 MENU-MINGLIU —— Tools／Config／Debug 選單項目改細明體、不要粗體（EastSun 1001「圖片上的我不要粗體 我要細明體」）；只改這三個選單。
+  cpp 0071 02598f6 PKG-108 —— 筆電第 108 包（GitHub main 5de3e3d）的 C++ 部分：St02 主計時器／ESD 計時器、加熱器鏈、Config 的 Tray Plate（S98）、
+                    TA5 捲軸、D028 每日 Jam 紀錄、SECS 目錄／通知確認。42 檔（新 14、照收 28、兩邊都改 2：MainClose.cpp 保留機台 CLOSE-BUSY、wb_serve.cpp）；
+                    0 衝突、0 重複列；LF 行尾已照原本行尾存。o2 建置 0 錯誤、PE 48/48、12 個相關 ctest 通過、production_audit 0 變更。
+                    設計外掛的 6 檔（tools/vscode-htdesigner）不在這裡，由設計外掛工作階段整合。
+  web 0055 5b1544c MERGE-108 (web) —— 同一包的 3 個網頁檔（Config 的 Tray Plate 頁、Tray Assign 事件），照收筆電的版本。
+  web 0056 59c6cb5 VACUNIT-NOCONFIRM／VACUNIT-FIT —— Vacuum Unit 按了就送（原版沒有確認框，拿掉我加的 4 個）；InArm／Index／OutArm 外框跟著面板撐大，
+                    第二排不再被捲軸切掉（EastSun 1001「我按下不要有提醒視窗」「我畫面被截掉了」）。
+  cpp 0072 dedea08 WORKLOG —— 工作紀錄補 10-01 第 24～28 項（含機台 IO_Table 吸／破真空 Port 對調，設定檔不推）。
+  ⓘ 機台樹另有 8979fea（TEACH-3AXES）、e696967（1203-LINKLOST）已 commit、還在建置測試，下一次推。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
