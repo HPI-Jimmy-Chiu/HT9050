@@ -495,4 +495,12 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   web 0058 e509570 MT-SPDLIVE (web) —— Speed 欄打 %＝把捲軸拉到那一格（捲軸跟著移、JOG 也用這個 %）。
   cpp 0080 cd0cb5c WORKLOG —— 工作紀錄補 10-01 第 37 項；第 3 節 109 補設計外掛部分（tools 0140，0.147.0）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0081 68ff728 PKG-110 —— 筆電第 110 包（GitHub main 0fa9db2、GitLab e6d4da65）的 C++ 部分：開機照原版設 RunInfo.Factory 與 Observer labFactory（E-BOOT-005）、
+                    St02 S-14 主畫面 Timer3。14 檔（新 4、照收 8、合併 2：tests/CMakeLists.txt、tools/wb_serve.cpp，0 衝突、0 重複列）；
+                    o2 建置 0 錯誤、PE 54/54、7 個相關 ctest 通過、production_audit 0 變更。設計外掛 11 檔（0.148）由設計外掛工作階段整合。
+  cpp 0082 7b91d08 VC4-ODD —— ECAT-VC4 其實是奇數吸（17+2VC）、偶數破（16+2VC），跟 VC8 一樣（EastSun 1001 21:3x 實機：Vacuum Unit 按 v＝DO 19 在吸）。
+                    先前「偶數吸」的寫法撤回；VC4 其他差異不變。ctest VacuumVc8、Pci1203Pure、Pci1203LinkWatch 通過；pci1203_readonly_gate PASS。
+  cpp 0083 895e7ad WORKLOG —— 工作紀錄補 10-01 第 38～41 項（含機台 IO_Table：吸／破對調回來、VC4 沒有通道的 12 顆吸嘴 Enable=0，設定檔不推）。
+  ⚠ 給筆電：機台 IO_Table 站 160～162 的吸嘴列＝_On 奇數、_Off 偶數、感測 64+VC（VC＝DO 所在的 VC），B／D／F／H 與 FTest AC／BC／AD／BD Enable=0。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
