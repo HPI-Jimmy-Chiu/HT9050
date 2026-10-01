@@ -5,6 +5,7 @@
 
 ## ⚠⚠ 給機台端（20260929 18:1x 起，請先讀這一段）
 
+- ✅ **20261002 第 114 包（GitLab main `2138c080`）——要重建 wb_serve**：① St02：生產資料紀錄照 golden 呼叫 TimerRecordLoaderDate（wb_serve 上值不變）；② 一支測試（TcpCmdServer 第 10 段）變短；③ 一句註解更正。機台上沒有可見的改變。
 - ✅ **20261001 第 113 包（GitLab main `16debc74`）——要重建 wb_serve**：① St01 的 D-026：要密碼的告警（JAM0000.dat 等級≠0），網頁上按 START／PAUSE 先跳登入框，密碼對了才照按的鍵關；實體面板鍵在密碼過之前關不掉（照 golden）。上機驗收 11 項在 GitLab commit `87e75615` 的訊息最後，會讓機台照按的鍵動作，請在機台旁；② St02 的 DIO 設定頁 Delete 鈕照 golden：選了檔按 Open 就刪（沒有確認框），只能刪 DIO 資料夾裡的 *.ini——測之前先備份那個資料夾；③ HTML 視覺設計工具外掛 0.154 → 0.157（要重新安裝，步驟同第 106 包）；④ 工具：`tools/websync/sync_web.py` 的保留清單再補 50 支頁面會載入的輔助 js。
 - ✅ **20261001 第 112 包（GitLab main `65330849`）——要重建 wb_serve**：① Jerry 的 J-7：入料手臂把 IC 放進 Socket 的起點改回照 golden 讀 TestSocket 的列／行數（原本固定 0×0，模擬時跳 WAR0154）；② Jerry 的 J-10：`DoCheckSocketHasIC`（檢查 Socket 有沒有殘留 IC，golden 477 行）解閘，DoTestY 不再卡在 case 20；⚠ 沒開 SOFT_SIMULTE 的機台上，這一段會真的動 index 的 Z／Y 軸與真空（Jerry 提醒）；③ St02 的 H-013 第一部分：`Command.cpp` 四支方法照 912 加檢查（執行時的值不變）；④ HTML 視覺設計工具外掛 0.150 → 0.154（要重新安裝，步驟同第 106 包）；⑤ 工具：`tools/websync/sync_web.py` 的保留清單補 27 支接線 js（之後用它 `--apply` 不會再刪掉那些檔）。
 - ✅ **20261001 第 111 包（GitLab main `bdc0f1ba`）——要重建 wb_serve**：① St02 的 G-023：TesterTCP 的 Open／Short 報表三支照 golden 接上（PlaceOSTestResultToTray／ProcessOSPrint／ProcessOSTrayData；只有 TesterTCP 的 O/S 測試模式會走到）；② St02 的 E-T1-022：type 2 Bin 號碼面板照 golden Timer1 跑（先用 500 ms 的節拍；要不要加 30 ms 的快時鐘等 Jimmy 定）；③ HTML 視覺設計工具外掛 0.148 → 0.150（要重新安裝，步驟同第 106 包）。
@@ -171,6 +172,7 @@
 | 111 | `updates/bdc0f1ba/` | `bdc0f1ba` | `e6d4da65`（`updates/bdc0f1ba/_machine_ai/base_e6d4da65/`） | ⚠ **要重建 wb_serve**（30 檔；b24a 1001 21:25-21:55: SHIP 4 = baseline, SIM 19 = baseline）。St02 MR !75（新檔 `Interface/TesterTCP_OSReport.*`、`aoutarm9045.cpp`、`Automation/SCK_ART_*`、`forms/fTesterTCP.*`）、MR !74（`MainTimersSt02.cpp`）；HTDESIGNER 0.150（ES02）。新 ctest `G023_OSReport`、`St02_Timer1`。 |
 | 112 | `updates/65330849/` | `65330849` | `bdc0f1ba`（`updates/65330849/_machine_ai/base_bdc0f1ba/`） | ⚠ **要重建 wb_serve**（35 檔；gate b26a 兩組態全新：出貨 314／4、模擬 314／19＝基準）。Jerry MR !81（含 !80：`ainarm9045.cpp`、`atester.cpp`、`forms/fMain.h`）、St02 MR !79（`Command.cpp`、`cmydef.h`、新檔 `SafePlcIOInstall.cpp`／`SecsAlarmForm.*`）；HTDESIGNER 0.154（ES02）；`tools/websync/sync_web.py`。新 ctest `SocketCheck`、`H013_Terms`。 |
 | 113 | `updates/16debc74/` | `16debc74` | `65330849`（`updates/16debc74/_machine_ai/base_65330849/`） | ⚠ **要重建 wb_serve**（31 檔；gate b27a 兩組態全新：出貨 316／4、模擬 316／19＝基準）。St01 D-026（`tools/wb_serve.cpp`、`tools/wb_dialog_mailbox.h`、`WebBridge/WebBridgeServer.cpp`、`WebLogin.cpp`、新檔 `WebNoteAuth.h`、`web/page/ht9045_dialog_host.js`）、St02 MR !83（新檔 `web/page/ht9045_dio_delete.js`＋兩頁各一行）、MR !82（文件）；HTDESIGNER 0.157（ES02）；`tools/websync/sync_web.py`。新 ctest `D026_NoteAuth`、`D026_NoteAuthPage`。 |
+| 114 | `updates/2138c080/` | `2138c080` | `16debc74`（`updates/2138c080/_machine_ai/base_16debc74/`） | ⚠ **要重建 wb_serve**（6 檔；gate b28a 兩組態全新：出貨 316／4、模擬 316／19＝基準）。St02 MR !87（`cMyDB.cpp`）、MR !86（`tests/test_tcp_cmd_server.cpp`）；筆電 `forms/fNote_ShowError.cpp`（註解）。 |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
