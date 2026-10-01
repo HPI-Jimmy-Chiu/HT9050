@@ -293,4 +293,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   web 0045 IOWIDGET（web a0e5981）—— 新增 page/ht9045_io_widgets.js：舊版 IO 畫面的 SetCompomentIO／SetCompomentHint／ScanLed（元件用 Alias 對 IO 表、依卡片回讀上色、舊版格式的提示），頁面自己選擇載入；teach 頁載入它＋ht9045_io_do.js，Suck On／Off、Tray X U/D 接上 IO（golden BtnPanelLane1Click）。只做離線測試（假資料，不連 wb_serve、不動機台）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  tools 0117 HTDESIGNER-119（0.119.0）—— IO 燈號（TALed 系列）、按鈕面板（TBtnPanel 系列）的特有屬性在屬性表「IO 元件」類別直接改（LEDStyle／Value／Blink／Style／Down／四種顏色），跟 .dfm 比對、改回。程式庫／smoke／面板三層全過；真 VS Code 那層這次沒跑（VS Code 自己在更新、鎖住，要重開 VS Code 才裝完）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
