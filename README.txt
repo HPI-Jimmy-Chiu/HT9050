@@ -597,4 +597,8 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     原版 BtnSkipClick＋UpdateButtonStatus（note.cpp:2764-2870）；面板實體鍵本來就有，網頁路徑以前沒有。ctest NoteWebKeyGate。
   cpp 0113 c3df6a2 WORKLOG —— 工作紀錄補 10-02 第 68 項。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0114 fb75cde PKG-118-119 —— 整合筆電第 118～119 包（GitHub main 58f3487）：VTEST 機台 TesterIF 最長測試時間 0～36000；St01 Lot Start 檢查函式（還沒接，行為不變）；小鍵盤第一分支稽核文件。
+  web 0077 5968853 PKG-118-119 —— 同上（ht9045_testerif_c_wire.js）。
+  cpp 0115 54115e4 WORKLOG —— 工作紀錄補 10-02 第 69 項、§3 一列、§4 Teach 頁教導值上下限。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
