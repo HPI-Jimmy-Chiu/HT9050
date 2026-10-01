@@ -368,4 +368,12 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     ⚠ 給筆電：machines/HT9050/IO_Table.csv 還是舊站號（32／48／64）、Enable 0。OutArmSuck 的 DO（_On／_Off 的 Port）跟感測（Port 128+VC）
                     差 4 個 VC（例：OutArmSuckA 感測 135＝VC7、DO 22／23＝VC3 那一對），InArm／FTest 是一致的——這是 0923 的表原本就這樣，要對配線。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0054 fb32cb9 MERGE-985c44be —— 筆電第 100、101 包（GitHub main bdb4665、GitLab main 985c44be）併進機台樹。第 100 包：加熱器保險絲上限
+                    TempFuseLimitType 開機照 golden 設（250／200／170，依客戶、機種、溫度上限；以前是 0＝41 秒後斷電、Temp_Set 存不進去的原因）、
+                    Motor Test 非 1203 軸的 HOME 跑 golden 單軸回原點（1203 軸不受影響）、St02 MR !22。第 101 包：普查 129 照 golden 補（三溫機安全門 6
+                    鎖、急停通知 ATC、BinCount.txt、一輪結束放開 Auto 盤氣缸、[I41] 空 socket 檢查、Initial／RT Start 時上料氣缸預推——氣缸會動）。
+                    17 檔：新 3、舊版 9（照收筆電的）、兩邊都改 5（WebMotorAccess.cpp／.h／Live.cpp、test_web_motor_access.cpp、wb_serve.cpp）
+                    三方合併 0 衝突、0 重複列，機台的 HT9050-ORG 原點程式碼全部保留。o2 建置 0 錯誤、PE 24/24 完整；8 個相關 ctest 全過；
+                    production_audit 0 變更。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。

@@ -1,0 +1,954 @@
+From fb32cb967bab0accaeabe43f59e45a99eea5d560 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 12:03:50 +0800
+Subject: [PATCH] MERGE-985c44be: laptop packages 100-101 (GitHub main bdb4665,
+ GitLab main 985c44be) into the machine tree
+
+Package 100 (GitLab de4249da): the heater fuse limit TempFuseLimitType is set at boot as golden (250 / 200 / 170 by
+customer, machine and temperature limit; it was 0 -- the cause of the relay dropping out after 41 s and the refused
+Temp_Set saves), Motor Test HOME on a non-1203 axis runs golden's single-axis home (no effect on a PCI1203 axis:
+RowIs1203 -> false), St02 MR !22 (ART LOTCLEARED / LOTRETESTCLEARED clear the 2DID list).
+Package 101 (GitLab 985c44be): census 129 back-fills per golden -- tri-temp door 6 lock, ATC EMG down / up + ATC 6.0
+messages / reconnect, BinCount.txt writes, Auto tray cylinders released at one-cycle finish, [I41] empty-socket check,
+Loader cylinder pre-push at Initial / RT Start (cylinders move).
+
+17 files: NEW 3 (MainFormShow_TempFuse.cpp, tests/test_tempfuse_limit.cpp, tests/test_atc_emg_bridge.cpp), OLD 9
+(machine had an older laptop version, taken as is), LOCAL 5 merged three-way on the package's own base with no conflict
+(WebMotorAccess.cpp / .h / WebMotorAccessLive.cpp, tests/test_web_motor_access.cpp, tools/wb_serve.cpp): the
+machine's HT9050-ORG code (g_W906OrgActiveLow, W906_Ht9050OrgHomeHook) is all kept, no line duplicated by the merge.
+o2: wb_serve + 5 tests build, PE 24/24 complete; ctest WebMotorAccess / TempFuseLimit / AtcEmgBridge / W7_L2_CKernel /
+VacuumVc8 / MachineIoTable_HT9050 / IoPoints_HT9050 / MachineSuckers_HT9050 pass; production_audit unchanged.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ ATC/ATCInterface.cpp                  |  41 ++++++++++
+ CMakeLists.txt                        |   2 +-
+ MainFormShow_TempFuse.cpp             |  41 ++++++++++
+ TesterComm/Handler/HandlerGpibMsg.cpp |  16 ++--
+ WebMotorAccess.cpp                    | 105 ++++++++++++++++++++++++--
+ WebMotorAccess.h                      |   2 +-
+ WebMotorAccessLive.cpp                |   4 +-
+ csystem.cpp                           |  30 ++++----
+ docs/INBOX_QUEUE.md                   |   2 +-
+ docs/NIGHT_REPORT.md                  |  32 +++++---
+ docs/RULINGS_20261001.md              |  10 +++
+ tests/CMakeLists.txt                  |  27 +++++++
+ tests/test_atc_emg_bridge.cpp         |  94 +++++++++++++++++++++++
+ tests/test_tempfuse_limit.cpp         |  70 +++++++++++++++++
+ tests/test_w7_l2_ckernel.cpp          |  34 +++++++++
+ tests/test_web_motor_access.cpp       |  55 +++++++++++++-
+ tools/wb_serve.cpp                    |   2 +-
+ 17 files changed, 517 insertions(+), 50 deletions(-)
+ create mode 100644 MainFormShow_TempFuse.cpp
+ create mode 100644 tests/test_atc_emg_bridge.cpp
+ create mode 100644 tests/test_tempfuse_limit.cpp
+
+diff --git a/ATC/ATCInterface.cpp b/ATC/ATCInterface.cpp
+index 60d636d..56bf1d8 100644
+--- a/ATC/ATCInterface.cpp
++++ b/ATC/ATCInterface.cpp
+@@ -2326,3 +2326,44 @@ void TATCInterfaceForm::edtPortClick(TObject *Sender)
+     fQwertyKey->ShowQwertyKey((TEdit*)Sender, N_PORT);
+ }
+ //---------------------------------------------------------------------------
++
++//---------------------------------------------------------------------------
++//AI(W906-ATCEMG) 20261001: RULINGS_20261001 #5 (census 129 (a)(b) #17, safety gap). golden csystem.cpp:1442-1443, on the EMG-pressed
++//  path, `if(bServoOff==false) ATCInterfaceForm->SendCommToATC7(ATC_EMG_DOWN,"","");` -- the ATC 7.0 controller is told the
++//  handler EMG went down ("@EMG_DOWN+", SendCommToATC7 case 9 above). csystem.cpp cannot include this header (the clWhite
++//  collision at its G-ATC block), so its G-ATC-B arm calls this bridge; the body is golden's statement, unchanged
++//  (no client connected -> SendCommToATC7 only logs "No Client!" in HandlerMemo, as golden).
++void W906_ATC_SendEmgDown()
++{
++    ATCInterfaceForm->SendCommToATC7(ATC_EMG_DOWN,"","");                       //Eliot 2015_0122
++}
++//AI(W906-ATCEMG) 20261001: golden csystem.cpp:1470, the EMG-released edge of the same handshake (G-ATC-C, opened with G-ATC-B).
++void W906_ATC_SendEmgUp()
++{
++    ATCInterfaceForm->SendCommToATC7(ATC_EMG_UP,"","");                         //Eliot 2015_0122
++}
++//AI(W906-ATCEMG) 20261001: golden csystem.cpp:1111-1129, the whole body of CheckATC6System (G-ATC-A, the same header-visibility
++//  gate): on an ATC 6.0 / 3.0 machine the ATC's error messages reach the operator and a dropped ATC link is re-opened.
++//  csystem.cpp's CheckATC6System calls this; the text is golden's, line for line.
++void W906_CheckATC6System_Body()
++{
++    AnsiString sMessage;
++    if(ATC_SYSTEM==eATC60 ||                                                    //ChungHung 20141024 add
++       ATC_SYSTEM==eATC30)                                                      //20141204 ChungHung add for ATC3.0
++    {
++        if(SystemInitialOK==false)
++            return;
++
++        if(ATCInterfaceForm->ATC_60_SYS.GetErrorMessage(sMessage))
++        {
++            ShowMyMessage(sMessage);
++        }
++
++        if(ATCInterfaceForm->ATC_60_SYS.IsConnected()==false &&
++           ATCInterfaceForm->ATC_60_SYS.IsConnecting()==false)
++        {
++            ATCInterfaceForm->ATC_60_SYS.CloseSocket();
++            ATCInterfaceForm->ATC_60_SYS.OpenSocket();
++        }
++    }
++}
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c31046b..3dd2127 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -514,7 +514,7 @@ add_library(ht9045_globals STATIC
+     myTimer.cpp
+     cprod.cpp  FileRW/_fallback.cpp  # AI(W906-FILERW-FALLBACK) 20260924: cprod.cpp 引用的兩個 FileRW 函式在非 wb_serve 程式的後備（wb_serve 自己的 FileRW 物件先解，不會抽出本成員）；見檔頭
+     cpublic.cpp
+-    cmydef.cpp  cmydef_InitialMemory.cpp  cmydef_TotalYield.cpp   # AI(W906-TOTALYIELD) 20260927: golden GetTotalYield_double/_Str (cmydef.cpp:5885-5901), live copies (INBOX 81).  AI(W906-INITMEM) 20260927: golden InitialMemory (cmydef.cpp:5786-5872), live copy; called by wb_serve before LoadMachineConfig
++    cmydef.cpp  cmydef_InitialMemory.cpp  cmydef_TotalYield.cpp   MainFormShow_TempFuse.cpp   # AI(W906-FUSELIMIT) 20261001: MainFormShow_TempFuse.cpp = golden TfMain::FormShow main.cpp:9535-9551 TempFuseLimitType (RULINGS_20261001 #4).  # AI(W906-TOTALYIELD) 20260927: golden GetTotalYield_double/_Str (cmydef.cpp:5885-5901), live copies (INBOX 81).  AI(W906-INITMEM) 20260927: golden InitialMemory (cmydef.cpp:5786-5872), live copy; called by wb_serve before LoadMachineConfig
+     LastSet.cpp    # AI(W906-GA1-B2-integrate) 20260804: moved here from ht9045_sm -- the
+                    # ungated cprod.cpp (same archive) references LastSet directly, and
+                    # globals is the lowest common archive every consumer already links.
+diff --git a/MainFormShow_TempFuse.cpp b/MainFormShow_TempFuse.cpp
+new file mode 100644
+index 0000000..8dfd14d
+--- /dev/null
++++ b/MainFormShow_TempFuse.cpp
+@@ -0,0 +1,41 @@
++//------------------------------------------------------------------------------
++// AI(W906-FUSELIMIT) 20261001: golden TfMain::FormShow main.cpp:9535-9551 -- the heater temperature-fuse limit
++//   TempFuseLimitType, line for line (RULINGS_20261001 #4, Jimmy 1001 08:4x: "照建議，一切都要翻").
++//   Nothing in the port assigned it before, so it stayed at its cmydef.cpp:5604 initialiser 0.0 and its three
++//   readers all compared against 0:
++//     cprod.cpp:3033 SetCustomerLimitationForConfig (run by every ReadLastSetIni) -- WorkTemperBase+range+10 >= 0
++//        always held, so IniConfig.iSocketTemptureRangeOver was rewritten to 0-WorkTemperBase-11 (negative);
++//     forms/fHS.cpp:857 -- outside the tri-temp machines every set temperature above 0 was flagged bOverSet;
++//     uHeaterThread.cpp:1294 CheckHeater -- the "over the fuse" branch (iAlarmOver165 counter) needed only
++//        iSec!=SystemSec to fire.
++//   wb_serve calls it where golden has it: after the MyForceDirectories run and right before bHasTrayCSV /
++//   bHasPlateCSV (:9553-9554) and InitialHandler (:9559), so the boot ReadLastSetIni (:9564; wb_serve.cpp
++//   W906_DoReadLastData) clamps with the real limit.  CUSTOMER_CODE / MachineTypeChoice / iTempLimitation are
++//   loaded before that by LoadMachineConfig (database.cpp), as golden loads them before FormShow.
++//   ⚠ golden: CC_HONPREC_QC is 0 (MachineType.h:224), the same value as a CUSTOMER_CODE that was never set, and the
++//   ReadLastSetIni inside LoadMachineConfig still runs before this with 0.0 (golden database.cpp:336 does the same);
++//   both kept verbatim -- the FormShow ReadLastSetIni after this is the one whose result stays.
++//------------------------------------------------------------------------------
++#include "cmydef.h"
++
++void W906_TfMain_FormShow_TempFuseLimit()
++{
++    if(CUSTOMER_CODE==CC_HONPREC_QC ||
++       CUSTOMER_CODE==CC_EMemory ||                                             //Steven 20250701 : 力旺要求溫度200度
++       iTempLimitation==tTemp200)
++    {
++        TempFuseLimitType=TemperatureFuseLimit250;
++    }
++    else if(CUSTOMER_CODE==CC_SCC ||                                            //Steven 20140424 : SCC加熱150度 會一直Alarm修正
++            MachineTypeChoice==Type_HT9046_LS ||
++            iTempLimitation==tTemp150 ||                                        //wei 20150617 改機最高溫150度
++            iTempLimitation==tTemp155 ||                                        //Sam 20240118 新增 155度 模式
++            iTempLimitation==tTemp175 )                                         //Steven 20210927 : add for 175度
++    {
++        TempFuseLimitType=TemperatureFuseLimit200;
++    }
++    else
++    {
++        TempFuseLimitType=TemperatureFuseLimit170;
++    }
++}
+diff --git a/TesterComm/Handler/HandlerGpibMsg.cpp b/TesterComm/Handler/HandlerGpibMsg.cpp
+index 8ae09ab..7a67409 100644
+--- a/TesterComm/Handler/HandlerGpibMsg.cpp
++++ b/TesterComm/Handler/HandlerGpibMsg.cpp
+@@ -28,7 +28,7 @@
+ //      `extern` below (same shape as atester.cpp:650-652 and HandlerBridgeCtl.cpp:70).
+ //
+ //  GATE REGISTER  (every `#if 0` in this file; golden text kept inside; the missing symbol that forces it)
+-//   G1  :15997        fLotInfo->btClearBarcodeList->Click() -- TfLotInfo has no btClearBarcodeListClick (golden
++//   G1  :15997        fLotInfo->btClearBarcodeList->Click() -- TfLotInfo has no btClearBarcodeListClick (golden   [AI(W906-TC-G1G5) 20261001 (St02-E): lifted -- :229, golden 0625 main.cpp:15432]
+ //                     uLotInfo.cpp:10005-10014) and vclcompat Click() is a no-op (rule 8): the call would do nothing.
+ //   G2  :16027        fSCKART->iCurrentStatus / ->iLOTSTATUS_A are not TfSCKART members (forms/fSCKART.h).
+ //                     NARROW: golden `if(fSCKART->iTesterType==1 || iCurrentStatus!=iLOTSTATUS_A)` short-circuits,
+@@ -40,7 +40,7 @@
+ //                     gated for SAFETY (writes the hard-coded production D:\HT9045\system\lastdata.dat, no --dry
+ //                     redirect; Command.cpp's S3 is the same call).  Now live as golden.
+ //   G4  :16077-16081  fSCKART->iCurrentStatus (not a TfSCKART member).
+-//   G5  :16084        as G1.
++//   G5  :16084        as G1.   [AI(W906-TC-G1G5) 20261001 (St02-E): lifted -- :327, golden 0625 main.cpp:15519]
+ //   G6  :16086-16090  else arm of G2 -- reachable only when iCurrentStatus==iLOTSTATUS_A (not TfSCKART members).
+ //   G7  :16103-16119  fSCKART->iCurrentStatus / iLOTSTATUS_A / iLOTSTATUS_F (not TfSCKART members).
+ //                     AccessFile(false, 10) after it stays live.
+@@ -226,9 +226,9 @@ bool THandlerTesterSide::ProcessARTMessage()
+             fMain->Clarn_Data(1, "ART_LOTCLEARED");
+             fSCKART->ClearLotInfo();
+             RecordProcess("ART LOTCLEARED.");
+-#if 0 // TODO(W906-GB-P2a): G1 TfLotInfo has no btClearBarcodeListClick (golden uLotInfo.cpp:10005-10014); btClearBarcodeList->Click() is a vclcompat no-op (rule 8) -- golden main.cpp:15997
+-            fLotInfo->btClearBarcodeList->Click();                              //Steven 20190214 : 統一清除2DID方式
+-#endif
++//#if 0 // TODO(W906-GB-P2a): G1 TfLotInfo has no btClearBarcodeListClick (golden uLotInfo.cpp:10005-10014); btClearBarcodeList->Click() is a vclcompat no-op (rule 8) -- golden main.cpp:15997   //AI(W906-TC-G1G5) 20261001 (St02-E): STALE -- the gate is retired, TfLotInfo::btClearBarcodeListClick exists now (forms/fLotInfo.cpp:6553)
++            fLotInfo->btClearBarcodeListClick();   //Steven 20190214 : 統一清除2DID方式   //AI(W906-TC-G1G5) 20261001 (St02-E): golden 906_0625_Steven main.cpp:15432 fLotInfo->btClearBarcodeList->Click() -- the VCL Click fires OnClick = TfLotInfo::btClearBarcodeListClick (uLotInfo.cpp:10005-10014); the port's button stand-in has no OnClick, so the handler is called (St01's seat forms/fLotInfo.cpp:6550 names this caller)
++//#endif   // G1 (AI(W906-TC-G1G5) 20261001 (St02-E): retired)
+         }
+ 
+         if((CosFunction.bUseSCKART &&
+@@ -324,9 +324,9 @@ bool THandlerTesterSide::ProcessARTMessage()
+ #endif
+             fSCKART->AccessFile(false, -1);
+             RecordProcess("ART LOTRETESTCLEARED.");
+-#if 0 // TODO(W906-GB-P2a): G5 same as G1 (btClearBarcodeListClick) -- golden main.cpp:16084
+-            fLotInfo->btClearBarcodeList->Click();                              //Steven 20190214 : 統一清除2DID方式
+-#endif
++//#if 0 // TODO(W906-GB-P2a): G5 same as G1 (btClearBarcodeListClick) -- golden main.cpp:16084   //AI(W906-TC-G1G5) 20261001 (St02-E): STALE -- retired with G1 (:229)
++            fLotInfo->btClearBarcodeListClick();   //Steven 20190214 : 統一清除2DID方式   //AI(W906-TC-G1G5) 20261001 (St02-E): golden 906_0625_Steven main.cpp:15519 fLotInfo->btClearBarcodeList->Click() -- the VCL Click fires OnClick = TfLotInfo::btClearBarcodeListClick (uLotInfo.cpp:10005-10014); the port's button stand-in has no OnClick, so the handler is called (St01's seat forms/fLotInfo.cpp:6550 names this caller)
++//#endif   // G5 (AI(W906-TC-G1G5) 20261001 (St02-E): retired)
+         }
+ #if 0 // TODO(W906-GB-P2a): G6 else arm of G2: reached only when iCurrentStatus==iLOTSTATUS_A (not TfSCKART members) -- golden main.cpp:16086-16090
+         else
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index e230a36..d837148 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -952,9 +952,9 @@ struct HomeJob {
+     //  bSingleHome WITHOUT btnHome->Down). Such a job is golden's bSingleHome only: an AllBtnUp (btnHome->Down=false) does not
+     //  end it, VerifyMotorAction's "Homeing" lock does not see it (golden sees it through MotionDone instead), and the motion
+     //  buttons' `btnHome->Down` guard does not refuse for it.
+-    bool        fromLS;
++    bool        fromLS;  int kind;   //AI(W906-MT-SMHOME) 20261001: 0 = 1203 (this file's home), 1 = golden ProcessSingleMotorHome (a non-1203 row; axis stays -1)
+     HomeJob() : active(false), mi(-1), axis(-1), phase(0), sawHoming(false), elapsedMs(0), readyMs(0), zTarget(0), zIssued(false),
+-                cardSide(false), zeroed(false), zeroWaitMs(-1), fromLS(false) {}
++                cardSide(false), zeroed(false), zeroWaitMs(-1), fromLS(false), kind(0) {}
+ };
+ //AI(W906-MT-E3c) 20260925: golden TMyMotor's MotorMove state (iOldPos, fCMD -- members of MOT[i], golden mymotor.cpp:871-962),
+ //  for a 1203 axis driven the golden way by the All-mode loop and Light Scale (GoldenMove1203). One per motor, like golden's
+@@ -997,7 +997,7 @@ struct LoopJob {
+     LoopJob() : active(false), pos1(0), pos2(0), waitMs(0), task(1), cmdIssued(false), legStartMs(0.0), waitUntilMs(0.0),
+                 wrongReady(0), wrongPoll(0), count(0), all(false) {}
+ };
+-std::vector<HomeJob> g_homes;
++std::vector<HomeJob> g_homes;  MotorAccessOutcome DoHomeGolden(const MotorAccessReq& r, IMotorAccessBackend& be, const MotionCtx& m, const std::string& who, bool wantStart);  void TickGoldenHome(IMotorAccessBackend& be, HomeJob& h);  bool LsStartGoldenHome(IMotorAccessBackend& be, int mi, const std::string& alias, const MotionCtx& m);   //AI(W906-MT-SMHOME) 20261001: bodies at the end of this file
+ LoopJob              g_loop;
+ std::string          g_lastJobNote;
+ bool                 g_lastSafeLock = false;   //AI(W906-MT-FIX1) 20260926: the beat's IsSafeLockCheck() result, for the post-Poll gate
+@@ -1079,7 +1079,7 @@ bool IsErrorState(unsigned st)  { return (st & 0xFFu) == 3u; }   // STA_AX_ERROR
+ void CancelHome(IMotorAccessBackend& be, HomeJob& h, bool sendStop, const std::string& why)
+ {
+     if (!h.active) return;
+-    if (sendStop) Stop1203(be, h.axis, -1);                                    // AI(W906-MT-E1): StopDec + ExtDrive 0
++    if (sendStop) { if (h.kind != 0) be.GoldenStopMotor(h.mi); else Stop1203(be, h.axis, -1); }                                    // AI(W906-MT-E1): StopDec + ExtDrive 0; //AI(W906-MT-SMHOME) 20261001: a golden (non-1203) home stops with golden PCIL132_StopMotor
+     h.active = false;
+     g_lastJobNote = "home " + h.motorId + ": " + why;
+ }
+@@ -1387,7 +1387,7 @@ MotorAccessOutcome DoHome(const MotorAccessReq& r, long long wireId, IMotorAcces
+     if (m.g.scaleMotor)
+         return Refuse(who + ": 磁性尺軸 golden 直接 ResetPos(0)＋HomeFlag=1 —— EastSun 不提供重設座標（落差清單 §3 第 7 條），不做");
+     if (!m.a.Is1203())
+-        return Refuse(who + "（" + m.a.cardModel + "）: 非 1203 軸的單軸歸零走 golden ProcessSingleMotorHome（uhome.cpp:415），移植樹那支是樁（acatchtray_shims.cpp:134 回 true）—— 缺相依");
++        return DoHomeGolden(r, be, m, who, wantStart);   //AI(W906-MT-SMHOME) 20261001: RULINGS_20261001 #8「照golden接上」-- golden btnHomeClick's non-1203 branch (uMotorTest.cpp:1152-1158 / release :1168-1171), body at the end of this file. Was a refusal citing the return-true stub that AI(W906-SMHOME) 0927 retired (ProcessSingleMotorHome is translated at the end of uhome.cpp)
+     HomeJob* running = FindHome(m.a.axis);
+     if (!wantStart) {                                                           // golden else 支（:1166）：bSingleHome=false; PCIL132_StopMotor();（無條件停）
+         if (running) CancelHome(be, *running, true, "home released (golden: bSingleHome=false; PCIL132_StopMotor)");
+@@ -2236,7 +2236,7 @@ void TickHomes(IMotorAccessBackend& be, int ms)
+     for (std::size_t i = 0; i < g_homes.size(); ++i) {
+         HomeJob& h = g_homes[i];
+         if (!h.active) continue;
+-        h.elapsedMs += ms;
++        h.elapsedMs += ms;  if (h.kind != 0) { TickGoldenHome(be, h); continue; }   //AI(W906-MT-SMHOME) 20261001: a golden (non-1203) home = one golden MainProc pass per beat (csystem.cpp:16954-16960), none of the 1203 state below
+         unsigned st = 0;
+         if (!be.Pci1203AxisState(h.axis, st)) {
+             if (h.elapsedMs > kHomeNoHomingMs) { be.GoldenSetHomeFlag(h.mi, 2); CancelHome(be, h, true, "axis state unreadable -> HomeFlag=2"); }
+@@ -2672,7 +2672,7 @@ bool LsStartHome(IMotorAccessBackend& be, int mi)
+     if (alias.empty()) { g_ls.lastNote = "Light Scale home: MOT[" + std::to_string(mi) + "] has no Mot_Table row" + stuck; return true; }
+     if (!prelude) { g_ls.lastNote = m.why + stuck; return true; }
+     if (!m.a.Is1203()) {
+-        g_ls.lastNote = "lightScale home " + alias + "（" + m.a.cardModel + "）: golden ProcessSingleMotorHome is a stub in this tree (acatchtray_shims.cpp:134)" + stuck;
++        return LsStartGoldenHome(be, mi, alias, m);   //AI(W906-MT-SMHOME) 20261001: golden LightScale case 0 (:1835-1840) = the same single home as btnHomeClick (fromLS); was a note citing the retired stub -- the next line is now unreachable
+         return true;
+     }
+     if (FindHome(m.a.axis)) { g_ls.lastNote = "lightScale home " + alias + ": a single home already runs on this axis (it goes on)"; return true; }
+@@ -4975,3 +4975,94 @@ static MotorAccessOutcome DoSaveMotTable(const MotorAccessReq& r, IMotorAccessBa
+ }
+ 
+ }  // namespace ht9045
++
++//AI(W906-MT-SMHOME) 20261001: RULINGS_20261001 #8 (Jimmy 1001 08:4x「照golden接上，現在所有功能都要接上，不然我在機台端無法測試」).
++//  A non-1203 axis (MN200 / PCI-L132 / a non-1203 EtherCAT row ...) homes the golden way:
++//    start    btnHomeClick's else branch (golden uMotorTest.cpp:1152-1158) `fHome->iHomeStep=1; iSingleHomeIndex=ActiveIndex;
++//             InitProcessSingleMotorTask(iSingleHomeIndex); bSingleHome=true; MOT[ActiveIndex].HomeFlag=0;`
++//    stepping golden MainProc while the page is shown (csystem.cpp:16954-16960)
++//             `if(ProcessSingleMotorHome(i) && MOT[i].HomeFlag==1) bSingleHome=false;`
++//    end      Timer1Timer (:962-966) sees bSingleHome==false: `btnHome->Down=false; edtHomeOffset->Text=MOT[ActiveIndex].Motor->
++//             LastHomePos; MOT[ActiveIndex].SetSpeed(scrlbrMotorSpeed->Position);`
++//    release  (:1168-1171) `bSingleHome=false; MOT[ActiveIndex].PCIL132_StopMotor();`
++//  Light Scale's case 0 (:1835-1840) starts the same single home without the button (fromLS: no Timer1Timer SetSpeed).
++//  Until today DoHome refused this and Light Scale only left a note, both citing the return-true stub that AI(W906-SMHOME) 0927
++//  retired (ProcessSingleMotorHome is translated line for line at the end of uhome.cpp).
++//  Here: a HomeJob of kind 1 (axis -1) in the same job list -- STOP / AllBtnUp / an alarm / the page gone / the safe lock already
++//  cancel it like any HOME -- stepped once per 500 ms beat (golden: once per MainProc pass; same state machine, coarser).
++//  ⚠ golden's failure path is kept: ProcessSingleMotorHome raises ShowMotorErrorMessage itself (in wb_serve a blocking alarm box
++//  like every MainProc alarm; other web commands answer "modal-pending" meanwhile, so nothing re-enters the job list) and leaves
++//  HomeFlag != 1 -- the job then stays, as golden's bSingleHome does, until HOME is released or STOP.
++//  Not here: the Galil Index rows (INDEX_MOTION_CARD==0, golden :1133-1151 / DoGaliHome) -- MotionPreludeFor refuses every motion
++//  of such a row before DoHome gets here (the Galil Motor Test family is its own back-fill).
++namespace ht9045 {
++namespace {
++
++HomeJob* FindGoldenHome(int mi)
++{
++    for (std::size_t i = 0; i < g_homes.size(); ++i)
++        if (g_homes[i].active && g_homes[i].kind != 0 && g_homes[i].mi == mi) return &g_homes[i];
++    return 0;
++}
++
++MotorAccessOutcome DoHomeGolden(const MotorAccessReq& r, IMotorAccessBackend& be, const MotionCtx& m, const std::string& who, bool wantStart)
++{
++    HomeJob* running = FindGoldenHome(m.a.motIndex);
++    if (!wantStart) {                                                           // golden else branch (:1168-1171)
++        if (running) CancelHome(be, *running, false, "home released (golden: bSingleHome=false)");
++        be.GoldenStopMotor(m.a.motIndex);                                       // golden MOT[ActiveIndex].PCIL132_StopMotor() (unconditional)
++        EndSingleHome(be, "HOME released (golden btnHomeClick :1170 bSingleHome=false)");
++        webbridge::JsonWriter w;
++        w.BeginObject();
++        AckHead(w, r, "homeStopped", "MOT", running ? "HOME 抬起：停止歸零（golden else 支：bSingleHome=false; PCIL132_StopMotor）"
++                                                    : "HOME 抬起：沒有進行中的歸零，照 golden 送停止");
++        w.Key("homeActive").Bool(false);
++        MotorAccessOutcome o; o.ok = true; o.ackJson = Finish(w); return o;
++    }
++    if (running) {                                                              // already homing: no second InitProcessSingleMotorTask
++        webbridge::JsonWriter w;
++        w.BeginObject();
++        AckHead(w, r, "homing", "MOT", "已在歸零中（不重下命令）");
++        w.Key("homeActive").Bool(true);
++        MotorAccessOutcome o; o.ok = true; o.ackJson = Finish(w); return o;
++    }
++    if (!be.GoldenSingleHomeBegin(m.a.motIndex))
++        return Refuse(who + "（" + m.a.cardModel + "）: 這個後端沒有 golden 單軸歸零（GoldenSingleHomeBegin）");
++    HomeJob h;
++    h.active = true; h.motorId = r.motors[0]; h.mi = m.a.motIndex; h.axis = -1; h.g = m.g; h.kind = 1; h.fromLS = false;
++    PushHomeJob(h);
++    char b[200];
++    std::snprintf(b, sizeof(b), "golden InitProcessSingleMotorTask(%d) + MOT[%d].HomeFlag=0; ProcessSingleMotorHome(%d) every beat (golden MainProc) until HomeFlag==1",
++                  m.a.motIndex, m.a.motIndex, m.a.motIndex);
++    webbridge::JsonWriter w;
++    w.BeginObject();
++    AckHead(w, r, "homing", "MOT", b);
++    w.Key("homeActive").Bool(true);
++    MotorAccessOutcome o; o.ok = true; o.ackJson = Finish(w); return o;
++}
++
++void TickGoldenHome(IMotorAccessBackend& be, HomeJob& h)
++{
++    if (!be.GoldenSingleHomeStep(h.mi)) return;                                 // golden: bSingleHome stays true, the next MainProc steps again
++    SingleHomeSucceeded();                                                      // golden bSingleHome=false (also releases Light Scale's case 1)
++    if (!h.fromLS) {                                                            // golden Timer1Timer :962-966 (btnHome->Down only)
++        const int pct = JogPctOf(h.mi);                                         // scrlbrMotorSpeed->Position (non-Galil rows: only the bar / the selection set it)
++        be.GoldenSetSpeed(h.mi, pct, false);                                    // MOT[ActiveIndex].SetSpeed(Position) -- PTP family
++        g_ptpPct[h.mi] = pct;
++    }
++    CancelHome(be, h, false, "golden ProcessSingleMotorHome done, HomeFlag=1 -> bSingleHome=false");
++}
++
++bool LsStartGoldenHome(IMotorAccessBackend& be, int mi, const std::string& alias, const MotionCtx& m)
++{
++    if (FindGoldenHome(mi)) { g_ls.lastNote = "lightScale home " + alias + ": a single home already runs on this axis (it goes on)"; return true; }
++    if (!be.GoldenSingleHomeBegin(mi)) { g_ls.lastNote = "lightScale home " + alias + "（" + m.a.cardModel + "）: this backend has no golden single home -- the scan waits at case 1"; return true; }
++    HomeJob h;
++    h.active = true; h.motorId = alias; h.mi = mi; h.axis = -1; h.g = m.g; h.kind = 1; h.fromLS = true;
++    PushHomeJob(h);
++    g_ls.lastNote = "lightScale home " + alias + "（" + m.a.cardModel + "）: golden InitProcessSingleMotorTask + ProcessSingleMotorHome every beat";
++    return true;
++}
++
++}  // namespace
++}  // namespace ht9045
+diff --git a/WebMotorAccess.h b/WebMotorAccess.h
+index d343eaa..53dc28f 100644
+--- a/WebMotorAccess.h
++++ b/WebMotorAccess.h
+@@ -412,7 +412,7 @@ public:
+     //  (column token, new cell text) of the changed cells only), so a later read in the same run agrees with the file.
+     virtual void        MotTableRowSaved(const std::string& alias, const std::string& rowText,
+                                          const std::vector<std::pair<std::string, std::string> >& cells) { (void)alias; (void)rowText; (void)cells; }
+-};
++    virtual bool GoldenSingleHomeBegin(int motIndex) { (void)motIndex; return false; }  virtual bool GoldenSingleHomeStep(int motIndex) { (void)motIndex; return false; }  };   //AI(W906-MT-SMHOME) 20261001: RULINGS_20261001 #8 -- a non-1203 axis homes the golden way. Begin = golden btnHomeClick :1154-1158 `fHome->iHomeStep=1; InitProcessSingleMotorTask(i); MOT[i].HomeFlag=0;` (false = this backend cannot); Step = one golden MainProc pass (csystem.cpp:16954-16960) `ProcessSingleMotorHome(i) && MOT[i].HomeFlag==1` (true = golden drops bSingleHome). Defaults keep the older fakes unchanged.
+ 
+ struct MotorAccessOutcome {
+     bool        ok;
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index 943668f..5ff90e2 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -50,7 +50,7 @@ extern void StopAllMotor(bool bIndexCanStop);   // Motor/myGALILmotor.cpp（gold
+ void SetMotorAccelSpeed(int Index, int ADCSpeed);   //AI(W906-MT-E2) 20260925: cinitial.cpp:16730 (golden cinitial.h:51) -- Reload Motor Data
+ #include "EtherCAT/Pci1203GaliRoute.h"   //AI(W906-INDEXZ) 20260930: INBOX 113 -- the Index Z1 route's foreign-stop entry (W906_EngineRouteForeignStop, EOF) and its fault text (OverlaySnapshot). Was a blank line: no line below moves
+ void (*g_W906BrakeNote)(const char*) = 0;           //AI(W906-BRAKE-AXIS) 20260929: the op log's BRAKE line (tools/wb_serve.cpp W906_OpLogInit registers it)
+-
++void InitProcessSingleMotorTask(int iMot);  bool ProcessSingleMotorHome(int iMot);   //AI(W906-MT-SMHOME) 20261001: acatchtray_shims.h:423-424 (golden uhome.cpp:397 / :415; translated at the end of uhome.cpp, AI(W906-SMHOME))
+ namespace ht9045 {
+ 
+ namespace {
+@@ -731,7 +731,7 @@ public:
+         if (mi >= 0 && mi < MAX_TRAY_MOTOR) MOT[mi].HomeFlag = v;
+         std::printf("motor.access: MOT[%d].HomeFlag = %d\n", mi, v);
+     }
+-    int  GoldenZSafePos() override { return ZSafePos; }
++    int  GoldenZSafePos() override { return ZSafePos; }  bool GoldenSingleHomeBegin(int mi) override { if (mi < 0 || mi >= MAX_TRAY_MOTOR || MOT[mi].Motor == 0 || RowIs1203(mi)) return false; fHome->iHomeStep=1; InitProcessSingleMotorTask(mi); MOT[mi].HomeFlag=0; std::printf("motor.access home: golden InitProcessSingleMotorTask(%d) + HomeFlag=0 (btnHomeClick :1154-1158)\n", mi); return true; }  bool GoldenSingleHomeStep(int mi) override { if (mi < 0 || mi >= MAX_TRAY_MOTOR || RowIs1203(mi)) return false; return ProcessSingleMotorHome(mi) && MOT[mi].HomeFlag==1; }   //AI(W906-MT-SMHOME) 20261001: golden btnHomeClick :1154-1158 / MainProc csystem.cpp:16956-16957; a PCI1203 row never takes this path (second lock, as GoldenStopMotor)
+     bool GoldenSystemStart() override { return SystemStart; }
+     void GoldenResetMNet() override
+     {
+diff --git a/csystem.cpp b/csystem.cpp
+index 06bb206..0121c59 100644
+--- a/csystem.cpp
++++ b/csystem.cpp
+@@ -516,13 +516,13 @@ bool IsSafeLockCheck()
+         SW[SwRKSafeLock].Off();                                                 //KenHsieh 20211228 : 區分實體IO與通訊面板
+     }
+ 
+-#if 0   // TODO(W7-TriTemp): golden csystem.cpp:16502-16506. IsTriSafeDoor6LockCheck() lives in golden TempCtrl/TriTemp.cpp:469 (decl TempCtrl/TriTemp.h:17); the ported tree has no TempCtrl directory, so the symbol does not exist here. Unreachable today anyway -- Tri_Temp_Machine is 0 (ported cmydef.cpp:5506) and is never assigned anywhere in the ported tree -- so gating it changes nothing observable. Un-gate with TriTemp.cpp.
++bool IsTriSafeDoor6LockCheck();   //AI(W906-TRIDOOR6) 20261001: RULINGS_20261001 #5 (census 129 (a)(b) #13, safety gap) -- was `#if 0 // TODO(W7-TriTemp)`; both premises are dead: TempCtrl/TriTemp.cpp:989 is the real body (ht9045_sm, the same archive; already called live at :29498) and Tri_Temp_Machine IS read from Gerneral.ini [System] (database.cpp:1639) -- the header paragraph above ("ONE GATE ... BEHAVIOUR-NEUTRAL") is stale. Golden csystem.cpp:16502-16506 below, verbatim
+     if(Tri_Temp_Machine==1)                                                     //Ztex 2023.04.19 Add HT-1032 TriTemp Function
+     {
+         if(IsTriSafeDoor6LockCheck())                                           //檢查SafeDoor 6
+             return true;
+     }
+-#endif
++//#endif   (AI(W906-TRIDOOR6) 20261001: the gate is retired -- see the line that opened it)
+     return false;
+ }
+ //------------------------------------------------------------------------------
+@@ -4182,12 +4182,12 @@ static bool W7C2_bFix3_OneCycleTimeSet = false; // golden cmydef -- Fix3 one-cyc
+ //  when those units are translated.  AI(W7C2-Integrate) 20260701.
+ //static void W7C2_DoSiteMappingResult(){}                        // golden csystem.cpp -- Auto Site Mapping result write   //AI(W906-AMB-L2) 20260929: retired together with the DoInArm_SuckerMap stand-in at :4152-4153 (in-arm review #1; NB2 macro-seam checklist 20250925 :787 asks for both in one commit): the calls at :4605 / :4617 (golden csystem.cpp:13166 / :13178) now run golden's DoSiteMappingResult (real body :24240, declared csystem.h:212) before the real DoInArm_SuckerMap -- JCET / CC_ASE_M / CC_ASE_CL Auto Site Mapping machines only; verify there
+ //#define DoSiteMappingResult    W7C2_DoSiteMappingResult   //AI(W906-AMB-L2) 20260929: see the line above (the #undef at :23516 is now a no-op)
+-static void W7C2_ReadWriteBinCountMode(bool /*bRead*/){}        // golden csystem.cpp -- Bin1/Bin2... count record
+-#define ReadWriteBinCountMode  W7C2_ReadWriteBinCountMode
+-static void W7C2_AutoTrayCylinderFree(){}                       // golden csystem.cpp -- release Auto-Tray cylinders
+-#define AutoTrayCylinderFree   W7C2_AutoTrayCylinderFree
+-static bool W7C2_EmptySocketCheckModeBeUse(){ return false; }   // golden csystem.cpp -- offline: no empty-socket-check mode
+-#define EmptySocketCheckModeBeUse W7C2_EmptySocketCheckModeBeUse
++//static void W7C2_ReadWriteBinCountMode(bool /*bRead*/){}        // golden csystem.cpp -- Bin1/Bin2... count record   //AI(W906-BINCOUNT) 20261001: RETIRED (RULINGS_20261001 #0 / #5, census 129 (a)(b) #11) -- the real body is csystem.cpp:28971 (declared csystem.h:294) -- the three writes of system\BinCount.txt in DoOneCycleFinishCheck (golden: one cycle / clean out finish) and DoTrayFeedProcess now happen as in golden (ctest: test_bootstrap.cpp:119 redirects W906_BINCOUNT_PATH for every test exe). This is the "Integrate binds the real bodies" step the banner above promised
++//#define ReadWriteBinCountMode  W7C2_ReadWriteBinCountMode   //AI(W906-BINCOUNT) 20261001: see the line above (the #undef further down is now a no-op)
++//static void W7C2_AutoTrayCylinderFree(){}                       // golden csystem.cpp -- release Auto-Tray cylinders   //AI(W906-TRAYFREE) 20261001: RETIRED (RULINGS_20261001 #0 / #5, census 129 (a)(b) #5) -- the real body is csystem.cpp:23587 (= golden csystem.cpp:12705, declared csystem.h:210) -- at the one-cycle finish the track fixer / loader edge push / up press and every Auto stack's fixers really go Off, as in golden. This is the "Integrate binds the real bodies" step the banner above promised
++//#define AutoTrayCylinderFree   W7C2_AutoTrayCylinderFree   //AI(W906-TRAYFREE) 20261001: see the line above (the #undef further down is now a no-op)
++//static bool W7C2_EmptySocketCheckModeBeUse(){ return false; }   // golden csystem.cpp -- offline: no empty-socket-check mode   //AI(W906-I41) 20261001: RETIRED (RULINGS_20261001 #0 / #5, census 129 (a)(b) I41) -- the real body is csystem.cpp:28561 (declared csystem.h:286) -- reads LastSet.iTester / IniConfig.bI41EnableEmptySocketCheck / bDoEmptySocketCheck / bDoEmptySocketOneCycle only, so the I41 empty-socket check runs where golden runs it (only on machines with option [I41] on). This is the "Integrate binds the real bodies" step the banner above promised
++//#define EmptySocketCheckModeBeUse W7C2_EmptySocketCheckModeBeUse   //AI(W906-I41) 20261001: see the line above (the #undef further down is now a no-op)
+ //  AI(W906-ARTSEAM) 20260928: RETIRED W7C2_WriteLastDataFile (was a no-op `return true`) -- cprod.h:3241 declares the real one (cprod.cpp:2014 == golden cprod.cpp:1910, writes lastdata.dat via W906_LastDataPath)
+ //  ...retired together with the W7C2_LS_* shadows above (NB2 seam list 0925: the :5771/:5856 calls persist the BinCT/lSCKARTBinCT they just zeroed)
+ //AI(ht9045-v906) 20260810: PT-W5c audit fix (A) -- RETIRED. This `static int` plus its
+@@ -9875,8 +9875,8 @@ enum eATkTrayFeed{eAtkTfInit        =0,
+ //  refuses no motion, and golden's callers read a false only as "not yet".
+ //  BEHAVIOUR DELTA ON A REAL MACHINE: the Loader tray is not pre-tapped, so a
+ //  tray sitting slightly high is never seated before the first InArm pick.
+-static bool W7G3_PrePushLoaderCylinder(bool /*bReset*/=false){ return true; }
+-#define PrePushLoaderCylinder  W7G3_PrePushLoaderCylinder
++bool PrePushLoaderCylinder(bool bReset=false);   //AI(W906-PREPUSH) 20261001: RULINGS_20261001 #0 / #5 (census 129 (a)(b) #7) -- the return-true stand-in `static bool W7G3_PrePushLoaderCylinder(bool=false){ return true; }` is RETIRED: the real body landed in uhome.cpp:388 (= golden uhome.cpp:967-999 line for line, diffed 20261001), so the absence claim of the banner above is stale. Golden uhome.h:90 declaration (the default argument is needed by the no-argument call at :11017)
++//#define PrePushLoaderCylinder  W7G3_PrePushLoaderCylinder   //AI(W906-PREPUSH) 20261001: retired with the line above
+ //AI(W906-FW-YMSwap-enable) 20260818: TU-local shadow RETIRED -- the real
+ //  IniRecordMonitoringIndexCycleTime landed with cObserver Wave 2
+ //  (cObserver.cpp, golden :1836-1844) and the fObserver swap made its
+@@ -19253,7 +19253,7 @@ void CheckATC6System()
+         }
+     }
+     #else
+-        // (no replacement -- the gated statement(s) simply do not happen)
++    { void W906_CheckATC6System_Body(); W906_CheckATC6System_Body(); }   //AI(W906-ATCEMG) 20261001: OPENED (RULINGS_20261001 #0 / #5, the same header-visibility gate as G-ATC-B) -- golden :1111-1129 (the text above, kept as the reference) runs from ATC/ATCInterface.cpp end of file; this TU still cannot include ATC/ATCInterface.h
+     #endif
+ }
+ 
+@@ -19857,9 +19857,9 @@ bool IsEMGPressed()
+         //  DELTA : caller interlocks on.  So the HANDLER interlock is whole; only the ATC
+         //  DELTA : side of the handshake is silent, which means the ATC will keep heating /
+         //  DELTA : cooling through an EMG.
+-        #if 0 // GATE G-ATC-B -- golden csystem.cpp:1442-1443 (text below is golden VERBATIM)
++        #if 1 // GATE G-ATC-B -- golden csystem.cpp:1442-1443 (text below is golden VERBATIM)  //AI(W906-ATCEMG) 20261001: OPENED (RULINGS_20261001 #5, census 129 (a)(b) #17) through W906_ATC_SendEmgDown (ATC/ATCInterface.cpp end of file = golden's statement) -- this TU still cannot include ATC/ATCInterface.h
+         if(bServoOff==false)                                                    //Eliot 2015_0122
+-            ATCInterfaceForm->SendCommToATC7(ATC_EMG_DOWN,"","");               //Eliot 2015_0122
++            { void W906_ATC_SendEmgDown(); W906_ATC_SendEmgDown(); }   //Eliot 2015_0122   //AI(W906-ATCEMG) 20261001: golden ATCInterfaceForm->SendCommToATC7(ATC_EMG_DOWN,"","");
+         #else
+             // (no replacement -- the gated statement(s) simply do not happen)
+         #endif
+@@ -19920,8 +19920,8 @@ bool IsEMGPressed()
+         //  DELTA : ATC that latched on the (also-gated, G-ATC-B) down-edge would stay latched.
+         //  DELTA : Because BOTH edges are gated together, the ATC sees NEITHER and its state
+         //  DELTA : stays consistent -- which is why gating them as a pair matters.
+-        #if 0 // GATE G-ATC-C -- golden csystem.cpp:1470-1470 (text below is golden VERBATIM)
+-        ATCInterfaceForm->SendCommToATC7(ATC_EMG_UP,"","");                     //Eliot 2015_0122
++        #if 1 // GATE G-ATC-C -- golden csystem.cpp:1470-1470 (text below is golden VERBATIM)  //AI(W906-ATCEMG) 20261001: OPENED together with G-ATC-B (the DELTA above: the two edges must stay a pair) through W906_ATC_SendEmgUp (ATC/ATCInterface.cpp end of file)
++        { void W906_ATC_SendEmgUp(); W906_ATC_SendEmgUp(); }   //Eliot 2015_0122   //AI(W906-ATCEMG) 20261001: golden ATCInterfaceForm->SendCommToATC7(ATC_EMG_UP,"","");
+         #else
+             // (no replacement -- the gated statement(s) simply do not happen)
+         #endif
+diff --git a/docs/INBOX_QUEUE.md b/docs/INBOX_QUEUE.md
+index cab3dee..b365f8d 100644
+--- a/docs/INBOX_QUEUE.md
++++ b/docs/INBOX_QUEUE.md
+@@ -161,7 +161,7 @@
+ | 126 | 🟢 **ctest `TesterComm_TcpCmdServer` 第 10 段（HTSET,322／323）寫檔太多，負載一高就逾時**：0930 第三批 gate 出貨組態逾時（201 s）、單獨重跑也逾時（180 s），放寬逾時單獨跑 116.5 s 全過——第 1～9 段 8.4 s，第 10 段 107 s（`HTSET,322,5` 一個指令 58.8 s，INI 逐次寫檔）。安靜時整支約 20 s。處置：調高它的 TIMEOUT 或減少那段的寫檔次數（不改被測程式） | 筆電 0930 14:1x | 🔜 |
+ | 127 | 🔴 **跳出 Message／Note 時，誰在接收面板實體鍵？**（使用者 0930 14:4x：「在周末下班任務中，加入思考跳出Message和Note時候，是否有Timer專門接收面板訊息，在BCB6是有Scankey來接收訊息並做出反應」）——golden：框開著時框自己的 Timer（例 TfNote::Timer1Timer，10 ms）呼叫 `ScanKey`／`ScanPannelKey`，面板 START／PAUSE／RETRY…＝按畫面上那顆鈕（`KeyComp`／`ReturnCode`）。移植樹：阻塞型框的等待迴圈有輪詢 1203 IO（沒逐一對過 golden）；不阻塞的 kcode==0 通知（含撞機警報，INBOX 118／119）沒有人讀面板鍵；主畫面沒框時面板鍵也沒作用（INBOX 86）。要做：① 研究（唯讀 workflow）：golden 每一種框（fNote 通知／阻塞、MyMessageBox、YES/NO、ShowMyMessage…）開著時面板鍵的接收點、週期、對應表；移植樹每一種框現在實際怎麼接；缺口表。② 照 golden 補（跟 122／123／124、86 一起排；面板鍵答框＝機台會動的決定，照 golden 翻，不另加條件）。技能 `ht9045-alarm-dismissal` 有 ScanKey／ScanPannelKey／KeyComp 的整理 | 使用者 0930 14:4x | ✅ 第七批 `f474abc8`：golden `TfMain::FormShow` main.cpp:9659 `SystemInitialOK=true` 照翻進 wb_serve 開機（`FileRW/MainBoot.cpp` `W906_FRWBoot_SystemInitialOK`，型號讀取失敗時照 golden 不設）⇒ 三個等待迴圈（警報／ShowMyMessage／YES-NO）的實體面板鍵、`DoPanelLamp`、訊息框出現時 `StopAllMotor(true)` 從此照 golden；新 ctest `SysinitBoot`。兩組態全新 gate＝基準（出貨 273 支 4 項、模擬 273 支 19 項），main `beccfda4`＝GitHub 第 92 包 `05c15d1` |
+ | 128 | 🔴 **常溫模擬第二個停點：入料臂取完料後 `InArmTask` 停在 1100，入料飛梭不動**（筆電 0930 14:4x 用 INBOX 121 的模擬 wb_serve 重跑 S1 流程 amb0930b 量到）——121 之後 `InArmPickFromLoadTask` 走完 10→12→200→1000→2000→2100→1（入料臂真的從 Loader 取料了），但 `InArmTask` 從 14:40:16 起一直是 1100，`MInShutte1` 沒動、出料飛梭與出料臂從頭到尾沒動。要做：① 唯讀研究（workflow，筆電 0930 14:5x 派）：golden 的 InArm case 1100 在等哪個條件、移植樹那個條件由誰維護、是替身還是沒翻；② 照 golden 補，附 ctest，再重跑流程看有沒有走到放料／飛梭。可能相關：121 帶出來的兩個舊替身（`InArmLeftSideNoIC`、`IsPick*`／`IsSht*Finish` 恆回 true） | 筆電 0930 16:06 | 🔧 0930 16:1x 根因找到（研究 workflow，筆電獨立再比一次）：`DoPlaceToHotPlate_9045()` 是恆回 false 的替身，golden 派送器原文（`ainarm_SearchPlacePlate.cpp:4814-4948`，extern 24／24、本體 110／110 行 0 差異）被 `#if 0 // TODO(W7)` 包著；熱盤模式下每一種機型的 case 1100 只等這個函式 ⇒ 永遠出不去。W6.2c 解開了旁邊兩條同類派送（`ainarm9045.cpp` DoInArm_9045／_SuckerMap）卻沒回來解這一條。修正在 `v906/jimmy-hpdisp`（`AI(W906-HPDISP)`，同一行改、行數不變，canary 改成會失敗的路由見證），16:38 起兩組態建置＋反證測試中；過了進第五批，再重跑模擬流程看熱盤放料→浸溫→取料→飛梭；✅ **1001 第十四批上 main**（`b2937e19`）：canary 的 SegFault 用 gdb 查到是測試沒照開機建 `InArmOffSet[]`（產品碼沒問題），補了開機順序；反證（換回替身＝紅）成立；兩組態全新 gate＝基準（出貨 284 支 4 項、模擬 284 支 19 項），system／config 0／0／0。下一步重跑模擬流程看熱盤放料→浸溫→取料→飛梭 |
+-| 129 | 🔴 **全樹「空砲彈」普查，照 golden 把功能補齊**（使用者 0930 19:5x 補充：「在機台端測試功能時，發現很多功能是空砲彈，沒有功能，後來經過修改才解決，你能夠依此類推把其他功能也搜尋一遍，一併把功能補齊。這任務可以放在機台完整整合到主版後接著進行」）——「空砲彈」＝按了回 ok、畫面也沒報錯，但底下什麼都沒做。機台端 0022～0044 修掉的同一族：web 0010 SR-WIRE（State Record 鈕從沒送到 C++）、web 0019 TEACH-LED（教導頁十顆燈從不更新）、web 0020 TEACH-UNWIRED（按了沒反應的鈕）、cpp 0039（M36／M40 的煞車沒有 SW[] 物件，永遠不會被驅動）、cpp 0026（DS402 歸零沒寫卡片的歸零速度）。筆電這邊同族的前例：INBOX 121（`SetHTrayPanel` 空殼＋閘 ⇒ 盤面永遠 0 顆）、125（`CheckCanChangeRealDummy` 恆回 true）、127（`SystemInitialOK` 從沒設 true ⇒ 面板鍵沒作用）、128（`DoPlaceToHotPlate_9045` 恆回 false）、Jerry J-6（`CheckSocketSensor` 替身）、121 帶出的 `InArmLeftSideNoIC`／`IsPick*`／`IsSht*Finish` 恆回 true。**做法**：① 用工具普查（不靠人工 grep；分母要附）五類：(a) 函式本體是空的或只回常數，而 golden 同名函式有本體；(b) `#if 0`／`GATE`／`TODO(W…)` 閘住的 golden 行，閘的理由已過期（相依已存在）；(c) 網頁送出的命令在 C++ 沒有分派、或分派到替身；(d) 全域旗標只有定義、沒有任何寫入點；(e) golden 有的 SW[]／Sen[]／MOT 物件或登錄在移植樹沒有。② 每一筆分級（會動機台／改檔／只顯示）＋對 golden 逐行看；≥95% 確定就照 golden 補、附 ctest（會動機台的照「忠於翻譯」直接翻，加閘只因為相依不存在）。③ 每批兩組態 gate＝基準才推 main＋GitHub 包；跟 St01／St02 認領的檔先看 FROM_STEVEN §1 | 使用者 0930 19:5x | 🔧 **1001 普查結果**（唯讀；筆電 scratchpad `census129\`）：**(a)(b)** 空殼函式與過期的閘 944 列、手動讀 114 列、確認 56 個真的空砲彈；**(c)(d)** 網頁命令沒人接與從沒寫入的旗標 975 列、信心 ≥70 的 34 列，其中活 bug：`TempFuseLimitType` 從沒被設（Temp_Set 存檔被 WAR15194 擋、出貨組態加熱繼電器 41 秒後被關）；**(e)**（1001 06:2x 回來）缺的 SW／Sen／MOT 物件、計時器、開機步驟 360 列（STATE 194、IO 輸出 92、通訊 34、寫檔 15、畫面 13、運動 12），前 15 項與活 bug `SaveJamRateByDay`（換日時昨天的 JAM 次數沒存就被清掉；第十二批做了 `cprod.cpp` 的掛勾，裝上要 St01 的 `MainClose.cpp`）列在 NIGHT_REPORT §0b。幾乎都會讓機台多做動作 ⇒ 照夜間規則不自己補，分三組列在 NIGHT_REPORT §0 第 17、18 項與 §0b 等 Jimmy 決定 |
++| 129 | 🔴 **全樹「空砲彈」普查，照 golden 把功能補齊**（使用者 0930 19:5x 補充：「在機台端測試功能時，發現很多功能是空砲彈，沒有功能，後來經過修改才解決，你能夠依此類推把其他功能也搜尋一遍，一併把功能補齊。這任務可以放在機台完整整合到主版後接著進行」）——「空砲彈」＝按了回 ok、畫面也沒報錯，但底下什麼都沒做。機台端 0022～0044 修掉的同一族：web 0010 SR-WIRE（State Record 鈕從沒送到 C++）、web 0019 TEACH-LED（教導頁十顆燈從不更新）、web 0020 TEACH-UNWIRED（按了沒反應的鈕）、cpp 0039（M36／M40 的煞車沒有 SW[] 物件，永遠不會被驅動）、cpp 0026（DS402 歸零沒寫卡片的歸零速度）。筆電這邊同族的前例：INBOX 121（`SetHTrayPanel` 空殼＋閘 ⇒ 盤面永遠 0 顆）、125（`CheckCanChangeRealDummy` 恆回 true）、127（`SystemInitialOK` 從沒設 true ⇒ 面板鍵沒作用）、128（`DoPlaceToHotPlate_9045` 恆回 false）、Jerry J-6（`CheckSocketSensor` 替身）、121 帶出的 `InArmLeftSideNoIC`／`IsPick*`／`IsSht*Finish` 恆回 true。**做法**：① 用工具普查（不靠人工 grep；分母要附）五類：(a) 函式本體是空的或只回常數，而 golden 同名函式有本體；(b) `#if 0`／`GATE`／`TODO(W…)` 閘住的 golden 行，閘的理由已過期（相依已存在）；(c) 網頁送出的命令在 C++ 沒有分派、或分派到替身；(d) 全域旗標只有定義、沒有任何寫入點；(e) golden 有的 SW[]／Sen[]／MOT 物件或登錄在移植樹沒有。② 每一筆分級（會動機台／改檔／只顯示）＋對 golden 逐行看；≥95% 確定就照 golden 補、附 ctest（會動機台的照「忠於翻譯」直接翻，加閘只因為相依不存在）。③ 每批兩組態 gate＝基準才推 main＋GitHub 包；跟 St01／St02 認領的檔先看 FROM_STEVEN §1 | 使用者 0930 19:5x | 🔧 **1001 普查結果**（唯讀；筆電 scratchpad `census129\`）：**(a)(b)** 空殼函式與過期的閘 944 列、手動讀 114 列、確認 56 個真的空砲彈；**(c)(d)** 網頁命令沒人接與從沒寫入的旗標 975 列、信心 ≥70 的 34 列，其中活 bug：`TempFuseLimitType` 從沒被設（Temp_Set 存檔被 WAR15194 擋、出貨組態加熱繼電器 41 秒後被關）；**(e)**（1001 06:2x 回來）缺的 SW／Sen／MOT 物件、計時器、開機步驟 360 列（STATE 194、IO 輸出 92、通訊 34、寫檔 15、畫面 13、運動 12），前 15 項與活 bug `SaveJamRateByDay`（換日時昨天的 JAM 次數沒存就被清掉；第十二批做了 `cprod.cpp` 的掛勾，裝上要 St01 的 `MainClose.cpp`）列在 NIGHT_REPORT §0b。幾乎都會讓機台多做動作 ⇒ 照夜間規則不自己補，分三組列在 NIGHT_REPORT §0 第 17、18 項與 §0b 等 Jimmy 決定；✅ **1001 第十五批**（你 08:4x 裁決照 golden 全補）：(c)(d) D1-006 `TempFuseLimitType`（`037062cf`）、更正帶出來的 Motor Test 非 1203 軸回原點（`44ced20e`）上 main；第十六批（筆電 b16）：(a)(b) #13 三溫機門 6 鎖、#17 急停通知 ATC（連同放開 G-ATC-C 與 CheckATC6System G-ATC-A）、#11 BinCount.txt、#5 Auto 盤氣缸放開、I41 空 socket 檢查、#7 上料氣缸預推；✅ **1001 第十六批上 main**：(a)(b) #13、#17（＋G-ATC-A／C）、#11、#5、I41、#7；(e) E-BOOT-002 開機 Servo On 卡在 1203（§0 第 22 項）；#6 冷卻風扇委派 St02；加熱鏈（E-T2-008／E-TH-001／E-RT-007）交派 Ifor（等 Jimmy 轉）；第十七批：E-T1-012 安全門鎖、E-T2-001 大風扇、#16 SetLotState |
+ | 130 | 🟢 **機台新推的 tools 0001～0080（HTDESIGNER：VS Code 的 HTML 視覺設計工具，`tools/vscode-htdesigner`，0.79.0→0.82.0）**：機台 0930 19:19～19:31 推到 GitHub `machine/integ-ioweb`（`24100e6`..`3617712`），EastSun：「關於小工具部分，編譯沒問題就能commit and push 到github」。每一顆只碰 `tools/vscode-htdesigner`（第一顆建立整個資料夾），不影響 wb_serve、不碰機台設定。不在 RULINGS_20260930 第 11 條的範圍（那條是 cpp 0022～0044／web 0012～0033）⇒ **安全預設：照同一條精神（照機台）下一批收進 main**；收之前在筆電跑它自己的離線測試（機台報：程式庫 159、假 VS Code 166、面板、真 VS Code 148 四層全過）。⚠ 外掛新增事件時會「提議」改 `tools/wb_serve.cpp`／`CMakeLists.txt`／`HtdEvents/HtdEvents.gen.cpp`（編輯器裡未存檔的修改，存了才算）；patch 本身沒有改那幾個檔 | 筆電 0930 19:5x（fetch GitHub 分支時看到） | ✅ 第八批收 **tools 0001～0109**（機台推到 0109，HTDESIGNER 0.111.0；`HT9011UC_Cpp_V3.33.906.0/tools/vscode-htdesigner/`，109 顆照編號 `git am`、59 個檔、只動這個資料夾，不進 wb_serve 建置；EastSun：「編譯沒問題就能 commit and push」）。筆電測試：第 1 層（函式庫，直接對樹上的檔）162／0、第 3 層（假 VS Code）188／0；**第 2 層（無頭 Edge）1 項紅**（對齊線吸附 snaps to a line）、**第 3b 層 2 項沒結果**（這台 msedge 回「invalid option -d」）——機台端四層全過，差異已請 EastSun 看（第 93 包 README）；第 4 層（真的 VS Code）沒跑 |
+ | 131 | 🔴 **網頁更新太頻繁：筆電全部接手，「有開的網頁才更新資料」**（使用者 0930 20:4x：「1. 關於網頁更新過於頻繁問題，你能夠全部接手做嗎？後面通知st01按照我們做法 2. 有開的網頁才能更新資料 3. 參考duet3d做法，連上也會全部送？也是各頁輪詢資料？」＝RULINGS_20260930 第 12 條，取代第 10 條「St01 寫、筆電審」的分工）。**現況**（St01 評估 `.claude/skills/ht9050-st01-evaluations/references/stream-by-open-page.md` `0bfcf9e0`＋筆電 0930 20:3x 對第六批程式核對）：① C++ 每 0.2～0.5 秒整理約 7,100～8,100 個 tag、推給每個瀏覽器分頁（連上先送整張約 200～230 KB，之後只送變的），約 3/4（`pci1203.*` 約 5,900 個）只有平常關著的 1203 設定頁用；② hub（`ht9045_link.js`）把每個 patch 複製給分頁裡每一個 iframe——68 個視窗 65 個開站就載入（59 個藏著）；③ IO 頁每 200 ms 拿一整份 IO 狀態（約 11～16 萬位元組，`HW.IoSetView.html:449-450` 只看 `document.hidden`）、教導頁每 1 秒拿馬達狀態（`HW.teach.html:483-487`），視窗關著也照拿；golden `iosetview.cpp:162`／`uteach.cpp:1366` 第一行都是 `if(fShow==false) return;`。**Duet3D 對照**（`docs/DUET3D_REFERENCE_ANALYSIS.md` §3.2／§3.4／§5.2～5.4，當時逐行驗證）：SBC 模式連上第一則就是完整 Object Model、之後只送變更欄位的 patch，瀏覽器回 `OK` 才送下一包（慢的分頁收合併後的一包）；獨立模式是一條連線的輪詢，高頻 live 欄位每輪一包，其他區塊看「分區序號」變了才重抓；**兩種都不是各頁輪詢，也不是只送開著的頁面**——整個瀏覽器共用一份機台狀態，頁面只讀它（DSF 有訂閱過濾，但官方網頁自己訂整棵）；省量靠「寫入那一刻就知道變了（不比快照）」＋「高頻／低頻分流」＋「OK 背壓」。**做法**（先量後改；第 10 條的四個條件照舊）：第 1 階段 `[STREAM]` 計數（每 10 秒一行：整理幾個 tag、花幾毫秒、送幾位元組，HTTP 輪詢各端點次數），SIM 改前改後各量一次；第 2 階段 A 頁面表加「這頁有沒有開」的查詢（最小化算開，同 golden fShow）、B `pci1203.*` 在整理那一步就跳過（1203 設定頁沒開時）、C `motionView.trays.*`（Motion View 沒開時）、D hub 只扇出給開著的 iframe、視窗打開時補一份快取快照、E IO 頁／教導頁照 golden 視窗關著不拿；不能停的照送（SECS SV、事件記錄、REST 目錄公開的 io／motor、告警信箱、主畫面群）。第 3 階段（量完再跟你討論）：Duet 的 OK 背壓、分區序號。做完在 TO_STEVEN §4 寫做法，請 St01／St02 之後照做 | 使用者 0930 20:4x | ✅ 第 1 階段＋2A／2B／2C＋2E（`v906/jimmy-stream` `04fd5b04`）兩組態全新 gate＝基準（出貨 4 項＋`WB_F5Contract` 暫存目錄 EPERM 一次、單跑重過 9.14 秒；模擬 19 項＝基準，271 項），sysguard 整目錄 0 改／0 刪／0 新增，0930 23:4x 推 main＝GitHub 第 90 包；F（hub 只給開著的視窗）的藏著頁面審查已完成（71 列，只有 security／io／contact／motionview 在載入時看一次 tag）⇒ 做法改成：關著的視窗連上時只給一小份開機資料（`auth.level`、`machine.gpibModel`、`site.arm{1,2}.s{n}`），打開那一下補完整快照、之後才收更新——已做 `e977284a`（WB_WsLink +20 項）；瀏覽器實測另外抓到 Motion View 的馬達輪詢在視窗關著時還在拿（外框的開關通知它漏收），已修 `ec427cc5`（新 ctest `Stream2E_MvMotor`）；兩者＝第 91 包。**筆電模擬實測（無頭 Edge 開 background.html：40 秒全關、30 秒開 IO、30 秒再關；改前→改後）**：每次整理 tag 8,120→1,787、每次 27～32 ms→4～5 ms、伺服器差異比對 6.8→1.4 ms、連上快照 338 KB→147 KB；視窗全關 40 秒 `io/runtime` 200 次 29.2 MB→0、`motor/runtime` 120 次 5.5 MB→0；IO 開著 30 秒 300→151 次。沒動的（不能停的）：外框對話框信箱每秒 30 次、Production-update 每秒 4 次——第 3 階段再議；**1001 第九批 F2**（St01 00:39 三個 FYI）：外框一建 iframe 就告訴 hub 開關（`background.html` WIN_STATE 起點那一行）；Contact CT／Observer 的輪詢改看外框 `WIN_STATE`，**縮小照拍**（golden 縮小不跑 FormClose：TfContactCT bShow、TfObserver Timer1）；Smart Diagnostic 的 1 秒 timer **不改**（是 golden 的記錄計時器 `SmartDiagnosticTimer->Enabled = bStartRecord`，跟視窗開不開無關）；新 ctest `Stream2E_St01Polls` 18 項、對照組 3 紅；**1001 06:0x 第十一批**（NB2 問題 A：8.6 MB `Production-update.json` 每 250 ms 讓 socket 執行緒忙 115～132 ms）：伺服器檔案快取＋開機預讀＋瀏覽器 HEAD／ETag ✅ 上 main（第 96 包）；新舊兩版模擬 wb_serve 對同一支 8.6 MB 檔：回應位元組 MD5 相同（清過密碼的 General-config.json 也相同），伺服器首位元組 GET 98→19 ms、HEAD 86→6 ms；開機背景預讀 10 個大檔 21.7 MB 用 265 ms；兩次單獨跑 wb_serve 改到的 6 個 system／config 檔已從快照還原（MD5 核對）、新增的 lastdata_backup2.dat 搬到隔離區。**NB2 獨立重量（Q16，S9→S15）**：閒置停止命令 p95 155～285 → 29～42 ms、`sys.ping` 最大 → 7 ms、wb_serve 閒置 CPU 32～36% → 2.4～4.1%、閒置 HTTP 流量 25～33 MB/s → 27 KB/s。問題 B（開機後第一次載入卡約 4.9 秒）原因＝公司端點代理 IST Agent 的掛鉤（socket 執行緒 48 次取樣都在 `winahdcore32.dll`），筆電也有這支代理；根本解法（socket 執行緒上不做可能被掛鉤擋住的呼叫）列 NIGHT_REPORT §2 |
+ | 132 | 🔴 **IO 畫面的吸嘴（suck）那一塊沒有作用**（使用者 0930 22:0x 轉述 EastSun：「eastsun有提到io畫面的suck部分沒功能，需確認」）——INBOX 129「空砲彈」的具體案例，優先查。已知的線索（`JsonBridge/IoBtnPanelClick.cpp` 檔頭）：(h) golden 的吸嘴按鈕看的是**吸嘴感測器那一列的 Enable**（`iosetview.cpp:2159` `pTempSuck->Enable`），移植樹的**吸嘴綁定器 `cinitial.cpp:493-878` 整段 `#if 0`**，沒有吸嘴物件可問；(g) golden 有幾個元件不是一般的 BtnPanelClick（`btnAllVacuumClick` 等）；(b) Index 上有 IC 時 TestSuck 走 golden 的 Suck()／Destroy() 流程，移植樹沒翻、直接拒絕；HT9050 版控的 IO 表吸嘴列 Enable=0（RULINGS_20260929 第 11 條「硬體還沒接」），機台現在的表可能已經改了。要做：① 照 golden `iosetview.cpp` 逐行對吸嘴那一塊（按鈕的 OnClick、SetCompomentIO 的吸嘴分支、燈號從哪裡讀）與網頁 `HW.IoSetView.html` 的 Vacuum 分頁實際送什麼；② 吸嘴綁定器為什麼閘住、相依現在在不在（≥95% 就照 golden 解）；③ 附 ctest；④ 在 GitHub README 請 EastSun 說明「沒功能」是按了沒反應、真空沒起來、還是燈號不亮 | 使用者 0930 22:0x（EastSun 轉述） | ⛔ **1001 00:3x 更正：下面寫的 A／B 兩條路都作廢**——機台 cpp 0045（VACUNIT-1203，第八批收）：吸嘴照 golden 交給 Vacuum Unit（ECAT-VC8，`W906_VC8_SUCKER_REMAP`），而且 `BTestSuck` 在 0x50／0x51 的 DO 16～19 跟上料／Auto1 氣缸（`C_Load_Up`、`C_LoaderDrawerLock`、`C_Auto1_Up`、`C_Auto1DrawerLock`）同一條通道——**B（網頁不擋）會打到氣缸線圈**，A（改 Enable=1）也不是正確的路。真正原因：**這台 ring 1 上目前沒有 ECAT-VC8**（0045：全部 999.0／Error5、按鈕鎖住並寫原因）。GitHub 第 91 包 README 1001 00:3x 已更正（`46fb729`）；只剩「VC8 有沒有裝、接上 ring 1」要 EastSun 回。筆電自己的教訓在 NIGHT_REPORT §6。｜以下是 0930 23:5x 的原紀錄：🔎 **0930 23:5x 查完（只讀，筆電沒有機台的 IO 表，手上最新是 0925 那份 `machines/HT9050/IO_Table.csv`）**：頁面上吸嘴相關元件 313 個（211 顆按鈕、102 個燈，跟 golden `iosetview.dfm` 同數）。照那份表，**147 列吸嘴（Sucker／_On／_Off）全部 Enable=0**，所以 ① **網頁自己擋**：`web/page/ht9045_io_do.js:99`（`whyNotWritable` 回「IO 表 Enable=0」）＋`:276-280` 跳「不能輸出：IO 表 Enable=0」、什麼都不送——EastSun 0929 的「IO畫面一律不要卡控，讓我測試」（`JsonBridge/IoBtnPanelClick.cpp:215` `W906_IO_PAGE_NO_GUARDS 1`）**只改了 C++**，網頁這一層還在擋（128 顆按鈕是這樣）；② 燈：runtime 對 Enable=0 回 `quality:"disabled"`、`isOn:null`（`ChanIoPoints.cpp:139`），燈永遠不變（64 個）；③ 這台是 8 吸嘴（`USE_PICKER_COUNT=1`），16 吸嘴／Placement／OutArm2Suck 那幾塊 IO 表根本沒有列（74 顆按鈕、37 個燈），golden 會藏起來，網頁照畫；④ Tray Arm 的 CatchSuck 是 MotionNet（ISABase 0），1203 機台上本來就不會動；唯一會動的是 System 分頁的 `btnSwDieCleanSuck`（Enable=1、1203）。golden 對 Enable=0 的吸嘴也是按鈕反灰、燈藏起來（`iosetview.cpp:2255-2258`／`:2469-2473`），而且引擎在 Enable=0 時不寫閥、`Sensor()` 恆回 true——**所以現在自動流程取放時也沒有開真空、沒有檢查真空**。另外 INBOX 132 原先寫的「吸嘴綁定器 `cinitial.cpp:493-878` 整段 `#if 0`」**是錯的**：IO 表那一半 `:493-654` 從 0924 就是活的，只有 BDE 那一半 `:656-877` 圍著（`IoBtnPanelClick.cpp:106-110` 檔頭的 (h) 也寫錯，下一批 C++ 改註解）。**⇒ 決策題（NIGHT_REPORT §0）**：A 機台把真的有裝、有接線的吸嘴在 `system\IO_Table.csv` 改 Enable=1（照 golden；感測器列＋_On／_Off 列；改前先備份；之後 START 流程會真的開閥、等真空）；B 網頁也照「IO 畫面一律不要卡控」不擋 Enable=0、燈照 `raw` 顯示（約 8 行，改的是機台端的 `ht9045_io_do.js`／`HW.IoSetView.html`；風險：可以從網頁把「沒裝」的閥通電）。筆電建議先問 EastSun（第 91 包 README）：按哪幾顆、跳什麼字、`/api/struct/io/runtime` 裡 `InArmSuckA@I32.128` 是 `disabled`（有模組，只差 Enable）還是 `nosource`（卡片表沒有那個位元組，改 Enable 也沒用）。明細 `docs/INBOX132_IO_SUCKER_CONTROLS_20260930.tsv`（每顆元件一列：分頁、元件 id、alias、IO 表行號、Enable、為什麼不動） |
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index 9e8808f..d92a69f 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -1,4 +1,4 @@
+-# 夜間報告 2026-09-29（二）晚起 —— **進行中版本**（每推一批整份更新；最後更新 1001 09:2x，新帳號）
++# 夜間報告 2026-09-29（二）晚起 —— **進行中版本**（每推一批整份更新；最後更新 1001 11:0x，新帳號）
+ 
+ > 使用者 0929 17:5x 下班：「完成手頭任務且無任務情況下，自動切換到Loop周末下班任務」；18:0x：「不用限制，我如果需要停止Loop會主動說明白」
+ > ⇒ **沒有收尾時間**，一直做到使用者說停；早上使用者在也照跑。迴圈：舊帳號的 cron `4ca5c42b` 已隨帳號停掉；新帳號 0930 第六批推完後重掛 `/loop 20m /night-loop`（cron 編號見 §5 最後一列）。
+@@ -6,7 +6,7 @@
+ > 0924～0929 週末那一輪的舊報告在 git 歷史（`f455a765` 之前的版本）。
+ > **0930 09:3x 使用者不小心下了 `/clear`**：只清掉對話記憶；commit、各批 gate 紀錄（上一輪暫存區 `ef8cf4db…\scratchpad\iz3`／`aml3`／`flow4`）、NIGHT_REPORT／INBOX、cron 心跳 `4ca5c42b` 都還在，已從磁碟接回，**沒有遺失任何工作**。
+ 
+-## ★ 接手（1001 09:2x 更新：**你 08:4x 回完 §0 第 16～21 項與 §2 兩項**（`RULINGS_20261001.md`；第 0 條＝照 golden 翻、功能面全部接上、不用刻意問）；第 98 包 08:5x 照第 20 項 B 推上 GitHub；第十四批＝INBOX 128＋這些裁決的紀錄＝第 99 包；第十五批在做第 18 項（加熱保險絲上限）與 Motor Test 非 1203 軸回原點）
++## ★ 接手（1001 11:0x 更新：第十五批＝GitHub 第 100 包；**第十六批上 main＝第 101 包**：普查 (a)(b) 兩個安全缺口（三溫機門 6 鎖、急停通知 ATC＋放開＋ATC 6.0 錯誤訊息／重連）＋三個替身退役（BinCount 寫檔、Auto 盤氣缸放開、I41 空 socket 檢查）＋上料氣缸預推；**§0 第 22 項要你決定**（開機 Servo On 對 1203 軸）；冷卻風扇已委派 St02、加熱鏈的交派句子給你轉 Ifor；第十七批在做：安全門鎖跟 SystemStart、大風扇、SetLotState）
+ 
+ | 項目 | 在哪 | 狀態／下一步 |
+ |---|---|---|
+@@ -23,6 +23,8 @@
+ | ⛔ **INBOX 132 IO 畫面吸嘴沒作用——原因更正**（你 0930 22:0x 轉述 EastSun） | `docs/INBOX_QUEUE.md` 第 132 列、`docs/MACHINE_PATCHES_20261001.md` §3 | 機台自己的 cpp 0045（VACUNIT-1203，第八批收）查清楚了：吸嘴照 golden 交給 **VC8 真空模組**，而**這台 ring 1 上目前沒有 VC8**，所以按了沒作用（0045 讓畫面寫出原因）。筆電 0930 23:5x 給的 A（改 IO 表）／B（網頁不擋）**兩條都作廢**——`BTestSuck` 的輸出點跟上料／Auto1 氣缸同一條通道，B 會打到氣缸線圈。第 91 包 README 已更正（§0 第 16 項） |
+ | 🔜 INBOX 130 機台新推的 tools 0001～0080（HTDESIGNER，VS Code 設計工具） | GitHub `machine/integ-ioweb` `24100e6`..`3617712` | 只碰 `tools/vscode-htdesigner`，不影響 wb_serve；照「照機台」精神下一批收（先跑它自己的測試） |
+ | ✅ 第五批 | GitLab main `f5ad8ade`＝GitHub 第 88 包 `9e38ee3` | 0930 18:39 推上：INBOX 115 B＋Y pitch 防呆、St02 MR !6 到 `236adb8e`、St01 到 `ed4716f2`。gate：出貨 265 支 4 項＝基準；模擬 19 項＝基準 |
++| ✅ **第十六批：普查 (a)(b) 安全缺口＋三個替身退役＋上料氣缸預推** | GitLab main＝GitHub 第 101 包（hash 見 §5） | ①**#13**：三溫機（Gerneral.ini 有 Tri_Temp_Machine）的安全門 6 開著時照 golden 鎖住運轉（閘的兩個理由都過期了：本體在、旗標有讀）；②**#17**：急停按下／放開時照 golden 通知 ATC 溫控器（G-ATC-B／C，原註解就寫兩邊要成對），連同 ATC 6.0／3.0 的錯誤訊息與斷線重連（G-ATC-A）；③**#11**：一輪結束／換盤時照 golden 寫 `system\BinCount.txt`（ctest 一律轉到暫存檔）；④**#5**：一輪結束時 Auto 盤氣缸照 golden 放開（[EnableUnloadTrayFree] 開時，**氣缸會動**）；⑤**I41**：空 socket 檢查照 golden 啟動（[I41] 開時）；⑥**#7**：Initial／RT Start 照 golden 先把上料氣缸打兩下（**氣缸會動**）。每一支本體都跟 golden 逐行比過。gate：兩組態全新 gate＝基準（出貨 286 支 4 項、模擬 286 支 19 項），system／config 0／0／0 |
++| ✅ **第十五批：加熱保險絲上限＋Motor Test 非 1203 軸回原點＋St02 MR !22** | GitLab main＝GitHub 第 100 包（hash 見 §5） | ①**第 18 項**：golden 開機設的「加熱保險絲上限」`TempFuseLimitType`（250／200／170，看客戶碼、機型、`iTempLimitation`）移植樹從沒設過、一直是 0 ⇒ 每次讀設定都把 socket 溫度範圍夾成負數、設溫度頁每個溫度都被判超限、加熱檢查的「超過保險絲」分支幾乎一直成立。照 golden 原文補（逐字比對 0 差異），開機在 InitialHandler 之前呼叫（golden 的順序，開機那次讀設定才吃得到真的上限）；新 ctest `TempFuseLimit`（12 列判斷表＋開機順序；反證：順序放錯就紅）。②**另 B**：Motor Test 頁非 1203 軸按 HOME 照 golden 走 `ProcessSingleMotorHome`（原本拒絕，理由是早就退役的替身）；Light Scale 的回原點同一條；Galil Index 軸那一族另外補。③St02 MR !22：ART LOTCLEARED／LOTRETESTCLEARED 照 golden 清 2DID 條碼清單。gate：兩組態全新 gate＝基準（出貨 285 支 4 項、模擬 285 支 19 項），system／config 0／0／0 |
+ | ✅ **INBOX 128 入料臂卡 1100（第十四批）** | GitLab main＝GitHub 第 99 包（hash 見 §5） | 熱盤模式下每一種入料臂在 case 1100 只等 `DoPlaceToHotPlate_9045()`，而它是恆回 false 的替身 ⇒ 取完料就停住。golden 派送器照原文解開（24＋110 行 0 差異）。新 canary 先前 SegFault：**gdb 1001 08:2x 取到 backtrace**——`ARM_OFFSET::GetVariableY ← GetInArmPitchY_9045 ← MoveInArmXYToHotPlatePlace`，原因是測試沒照開機流程建 `InArmOffSet[]`（wb_serve 開機會建，`tools/wb_serve.cpp:4012`＝golden main.cpp:2121-2127），只改測試、產品碼不加防護。反證：換回舊的替身，見證檢查就紅。gate：兩組態全新 gate＝基準（出貨 284 支 4 項、模擬 284 支 19 項），system／config 0／0／0。**行為改變**：熱盤模式下入料臂取完料會照 golden 繼續去熱盤放料（會動）。下一步：重跑 INBOX 121 那條模擬流程，看熱盤放料→浸溫→取料→飛梭有沒有接上 |
+ | ✅ INBOX 125（auto9045 的 fMain 替身 → 真的 fMain） | 第六批 | 主機下的換溫度模式／切 tester 連線／查主畫面狀態／查目前工單照 golden 真的執行（換溫度模式會動到加熱）；換工單本身還是空的（要另外把 W906_RC_ChangeSetUpFile 接出來） |
+ | **INBOX 127**（`SystemInitialOK` 從沒設 true ⇒ 面板鍵在任何畫面都沒作用） | worktree `l2r`（分支 `v906/jimmy-sysinit`，**還沒 commit**，改到 `FileRW/MainBoot.cpp`、`FileRW/MainRecord.cpp`、`tools/wb_serve.cpp`、`tests/CMakeLists.txt`，新檔 `tests/test_sysinit_boot.cpp`） | 舊帳號的 agent 隨帳號結束；0930 20:1x 看過還是沒 commit。夜間迴圈線 B 先收成 WIP commit 保住，再照 golden `main.cpp:9659` 做完（HT9050 IO 表 31 個面板鍵點全 Enable=0，修完真機也要等 IO 表） |
+@@ -49,9 +51,10 @@
+ 
+ | # | 事項 | 為什麼需要你 | 預設（你沒回之前照這個做） | 在哪 |
+ |---|---|---|---|---|
++| 22 | **開機時要不要照 golden 對所有馬達下 Servo On（普查 (e) E-BOOT-002），1203 軸怎麼辦** | 白話：golden 開機最後會對每顆啟用的馬達下 Servo On（Index 的 Y 除外，golden Motor/mymotor.cpp:4609 `ServoOnAllMOT`，main.cpp:10165 呼叫）。移植樹是空的、也沒人呼叫，所以開機後馬達都沒 Servo On。**卡在 1203**：golden 這段對 1203 軸會直接呼叫 `Acm_AxSetSvOn`，失敗時跳 WAR16122，而它的按鍵碼是 0——wb_serve 的訊息框遇到 0 會一直等不回來，等於開機卡住；1203 的開卡與 Servo 現在是 EastSun 那一層在管（Motor Test 的 Motor Power On）。例：HT9050 開機後，Motor Test 不按 Motor Power On，1203 軸就沒有 Servo On；照 A 接的話，開機就會讓 HT9050 的 14 個啟用軸（repo 的 machines/HT9050/Mot_Table.csv，全部是 PCI1203）Servo On（要是 golden 那邊的軸 handle 沒開好，就卡在警報框）。**A** 照 golden 全接；**B** 非 1203 軸照 golden 接、1203 軸照現在交給 EastSun 的 Motor Power On（**建議**，並請 EastSun 確認 1203 開機要不要自動 Servo On）；**C** 先不接 | 預設 C（保持現行），你回 A／B 我就照做 | `NIGHT_REPORT` §0b（e）E-BOOT-002 |
+ | ~~16~~ | ~~**IO 畫面吸嘴：原因已更正，只剩「VC8 有沒有接」**~~ | ✅ **收到**：你自己轉問 EastSun（RULINGS_20261001 第 6 條）；筆電這邊不動 | — | `RULINGS_20261001.md 第 6 條` |
+-| ~~17~~ | ~~**INBOX 129 普查 (a)(b)：20 個確定的空砲彈要不要照 golden 補**~~ | ✅ **照筆電建議**：先安全缺口 2 項＋純資料 3 項，再運動類；(c)(d)(e) 同一原則（第 5 條）。加上第 0 條「現在所有功能都要接上」⇒ 運動類也補，只是排在後面。進行中，每批照常兩組態 gate | — | `RULINGS_20261001.md 第 0、5 條` |
+-| ~~18~~ | ~~**🔴 溫度：`TempFuseLimitType` 在移植樹永遠是 0（普查 (c)(d) 抓到的活 bug）**~~ | ✅ **照 golden 補**（第 4 條）：第十五批在做——新檔 `MainFormShow_TempFuse.cpp`＝golden main.cpp:9535-9551 逐字，開機在 InitialHandler 之前呼叫（golden 順序；開機那次 ReadLastSetIni 才會用到真的上限），附 ctest `TempFuseLimit` | — | `RULINGS_20261001.md 第 4 條` |
++| ~~17~~ | ~~**INBOX 129 普查 (a)(b)：20 個確定的空砲彈要不要照 golden 補**~~ | ✅ **照筆電建議**：先安全缺口 2 項＋純資料 3 項，再運動類；(c)(d)(e) 同一原則（第 5 條）。加上第 0 條「現在所有功能都要接上」⇒ 運動類也補，只是排在後面。進行中：第十六批做了 #13／#17／#11／#5／#7／I41，第十七批做安全門鎖、大風扇、SetLotState（#16） | — | `RULINGS_20261001.md 第 0、5 條` |
++| ~~18~~ | ~~**🔴 溫度：`TempFuseLimitType` 在移植樹永遠是 0（普查 (c)(d) 抓到的活 bug）**~~ | ✅ **照 golden 補**（第 4 條）：**第十五批已上 main**——新檔 `MainFormShow_TempFuse.cpp`＝golden main.cpp:9535-9551 逐字，開機在 InitialHandler 之前呼叫（golden 順序；開機那次 ReadLastSetIni 才會用到真的上限），附 ctest `TempFuseLimit` | — | `RULINGS_20261001.md 第 4 條` |
+ | ~~19~~ | ~~**St02 W58 第一階段：模擬組態要不要每次開機把網路類選項關掉**（Steven 0929 對 W58 全部回「要」；St02 向筆電認領 `cprod.cpp` 4 行、`wb_serve.cpp:4052`、`CMakeLists.txt:3321`）~~ | ✅ **照筆電建議**（第 3 條）：[N07-1] Enable SECS GEM、[N07-2] 主機啟動不遮，其他照遮；另請 St02 config.ini 回寫改原子寫入＋兩組態 ctest（TO_STEVEN §4） | — | `RULINGS_20261001.md 第 3 條` |
+ | ~~20~~ | ~~**🔴🔴 安全：公開的 GitHub 機台更新包 repo 裡有三組機台密碼**（NB2 0930 21:5x 發現、1001 02:1x 補充，標「今天要決定」；筆電 1001 06:1x 才讀到）~~ | ✅ **B＝維持公開**（第 1 條）：推送前的機台密碼掃描加白名單（golden 自己寫死的 15 支產品檔算允許，其他檔帶到照擋）；第 98 包 08:5x 已推 GitHub `7a7ec94` | — | `RULINGS_20261001.md 第 1 條` |
+ | ~~21~~ | ~~**St01 的 D-026：警報框的密碼（等級密碼／解鎖密碼）要不要讓網頁能輸入**（St01 07:10；golden TfNote::DoPassword／DoUnlockPassword；今天網頁上遇到要密碼的警報清不掉）~~ | ✅ **(b)(c) 照筆電建議**（第 2 條）：`dialog.auth` 不用權杖；要密碼的警報開著時面板 START／PAUSE 照 golden 被擋。(a) 筆電照舊審 St01 的分支、仍等 Steven Q64 | — | `RULINGS_20261001.md 第 2 條` |
+@@ -77,18 +80,18 @@
+ 
+ | 組 | # | 空在哪 | golden 做什麼 | 補了會怎樣 |
+ |---|---|---|---|---|
+-| **安全缺口** | 13 | `csystem.cpp:519` `IsSafeLockCheck` 少了 `IsTriSafeDoor6LockCheck()` | 三溫機（`Tri_Temp_Machine`，Gerneral.ini 讀進來）會檢查安全門 6 鎖 | 三溫機上門 6 沒鎖就不能動；原本註解說「Tri_Temp_Machine 從沒被設」是錯的（database.cpp:1639 會讀） |
+-| 安全缺口 | 17 | `csystem.cpp:19860` 急停路徑沒送 `SendCommToATC7(ATC_EMG_DOWN)`（golden :1442） | 急停時通知 ATC 溫控器 | ATC 在急停時會收到停止 |
+-| **IO 動作** | 5 | `csystem.cpp:4188` `AutoTrayCylinderFree` 是空的（golden csystem.cpp:12705） | 一輪結束時放開軌道夾與料盤壓缸（`bEnableUnloadTrayFree` 開時） | 那兩個氣缸會真的動 |
+-| IO 動作 | 6 | `DoSwCoolingFan` 的呼叫點全在 `#if 0`（csystem.cpp:19309 等、uHeaterThread.cpp:541），本體其實在 :24787 | 開冷卻風扇／冷卻閥 | 風扇與冷卻閥會真的開關 |
+-| IO 動作 | 7 | `csystem.cpp:9879` `PrePushLoaderCylinder` 恆回 true（本體 uhome.cpp:388） | 回原點前先推上料氣缸（選項 P05） | 那個氣缸會動 |
++| **安全缺口** | 13 | `csystem.cpp:519` `IsSafeLockCheck` 少了 `IsTriSafeDoor6LockCheck()` | 三溫機（`Tri_Temp_Machine`，Gerneral.ini 讀進來）會檢查安全門 6 鎖 | 三溫機上門 6 沒鎖就不能動；原本註解說「Tri_Temp_Machine 從沒被設」是錯的（database.cpp:1639 會讀）；✅ 第十六批 |
++| 安全缺口 | 17 | `csystem.cpp:19860` 急停路徑沒送 `SendCommToATC7(ATC_EMG_DOWN)`（golden :1442） | 急停時通知 ATC 溫控器 | ATC 在急停時會收到停止；✅ 第十六批（連同 G-ATC-A／C） |
++| **IO 動作** | 5 | `csystem.cpp:4188` `AutoTrayCylinderFree` 是空的（golden csystem.cpp:12705） | 一輪結束時放開軌道夾與料盤壓缸（`bEnableUnloadTrayFree` 開時） | 那兩個氣缸會真的動；✅ 第十六批 |
++| IO 動作 | 6 | `DoSwCoolingFan` 的呼叫點全在 `#if 0`（csystem.cpp:19309 等、uHeaterThread.cpp:541），本體其實在 :24787 | 開冷卻風扇／冷卻閥 | 風扇與冷卻閥會真的開關；**1001 10:1x 你指定委派 → St02**（RULINGS_20261001 第 9 條；工作卡 TO_STEVEN §4 10:3x） |
++| IO 動作 | 7 | `csystem.cpp:9879` `PrePushLoaderCylinder` 恆回 true（本體 uhome.cpp:388） | 回原點前先推上料氣缸（選項 P05） | 那個氣缸會動；✅ 第十六批 |
+ | **運動／流程** | 1 | 入料臂到除靜電示教位 `MoveInArm2XYToDecayTeach` 三處被閘，ESD 讓位假裝「到了」（ainarm9045.cpp:1387 等；本體在 ainarm2.cpp） | 手臂真的移過去 | 手臂會多一段移動；WAR2026 每 30 秒重跳的問題會消失 |
+ | 運動／流程 | 2 | Die Clean 被 `if(false)` 取代（ainarm2.cpp:3034，golden :3813） | 清潔流程往下走 | Die Clean 會真的做 |
+ | 運動／流程 | 3、4 | 上料／出料的軟體齒輪比 `TransferLoaderRatio`／`TransferAutoRatio` 被略過 | XY 位置照比例換算 | 位置會變（先前已問過你 Q-RATIO） |
+ | 運動／流程 | 8 | `aoutarm.cpp:575` `ClearFixTray` 是空的（標著「DO NOT SHIP」卻出貨了） | 滿的 Fix 盤會被清掉換盤 | Fix 盤流程會照 golden 走 |
+ | 運動／流程 | 9 | `SetShuttleToHasNullIC_9045` 空的，26 個呼叫點 | 標記飛梭上的空位 | IC 帳會照 golden |
+ | 運動／流程 | 10、12、18、19 | RestoreLoadeIC（E62）、自動重測游標、空 socket 檢查（I41）、主機 SetMapping（ChangeSite）、幾個選配馬達動作 | 各自的選項功能 | 只影響開了那些選項的機台 |
+-| **純資料／通訊** | 11 | `ReadWriteBinCountMode` 從不寫 `system\BinCount.txt`（本體 csystem.cpp:28971） | 一輪結束寫 Bin 計數檔 | 會多寫一個檔 |
++| **純資料／通訊** | 11 | `ReadWriteBinCountMode` 從不寫 `system\BinCount.txt`（本體 csystem.cpp:28971） | 一輪結束寫 Bin 計數檔 | 會多寫一個檔；✅ 第十六批 |
+ | 純資料／通訊 | 14 | 超豐 OLP 主機回報與查詢（含 MTBF／MUBF）都回 0 或空白（auto9045.cpp 的 W5FA 替身，真的資料其實都在） | 回真的數字 | 主機收到的數字會變成真的（客戶碼功能） |
+ | 純資料／通訊 | 15、16 | `RecordSafeDoorStates` 從沒被呼叫（門的 DB／SECS 事件，還會設 Err Bin 旗標）；`SetLotState` 是空的（tester 收不到 LOTSTART／LOTEND） | 記錄門狀態、通知 tester 批次開始／結束 | 15 會影響分 Bin；16 會多送 tester 訊息 |
+ 
+@@ -125,7 +128,7 @@
+ | E-FT1-001（新） | 警報框／訊息框開著時的工作（note.cpp:3143-3525；mymessbox.cpp:538-757） | `W906_ModalWaitTick` 只涵蓋約一半 | 框開著時照樣掃盤、記門、查加熱、查 PLC 安全、E84 暫停 |
+ | E-BOOT-002 | 開機 `ServoOnAllMOT`（main.cpp:10165） | 空替身（mymotor.cpp:2564） | 開機會 Servo On |
+ | E-TM-011 | Timer6 啟動檢查（main.cpp:31299-31548） | 沒有（WebStart.cpp:3684） | SECS／ChipMOS／GM-Test 的啟動觸發會作用 |
+-| （更正帶出來的，要你決定） | Motor Test 頁「非 1203 軸的單軸回原點」（`WebMotorAccess.cpp:1390`、Light Scale 回原點 `:2675`） | 以前拒絕，理由是「`ProcessSingleMotorHome` 在移植樹是替身」；普查 (e) 查到那支現在是真的 ⇒ 拒絕的理由過期了 | 解開＝網頁可以讓那幾軸自己回原點（**會動**），所以我沒改；你說可以我就照 golden `uhome.cpp:415` 接上、附測試 |
++| ~~（更正帶出來的）~~ | ~~Motor Test 頁「非 1203 軸的單軸回原點」（`WebMotorAccess.cpp:1390`、Light Scale 回原點 `:2675`）~~ | ✅ 你 08:4x「照golden接上」（RULINGS_20261001 第 8 條）＝第十五批已上 main（Light Scale 的回原點同一條） | — |
+ 
+ 另兩個活 bug 在這台不會發生：E-T1-030（ChipMOS 選項才有的卡死；這台 `SnEmptyTrayIsLock1` Enable=0）、E-T3-002（soak 位元的潛在卡死，出貨組態被遮住）。順帶更正三個舊說法：INBOX 132 的前提在 main 上已過期（吸嘴綁定是活的）；`ProcessSingleMotorHome` 是真的，但 `WebMotorAccess.cpp:1390`／`:2675` 兩個字串與 (c)(d) 表 C2-142 還寫它是替身（我排進第十二批改字）；TfTesterTCP 的計時器是活的。完整表在 scratchpad `census129\census129_e.md`／`.tsv`。
+ > 大模組沒翻（AutoAlignment、Magazine、AutoTeach、TrayMapping CCD、LoadCCD）不是「補一行」，是新的翻譯波，另外排。
+@@ -138,6 +141,9 @@
+ 
+ | 時間 | 事項 | 證據 |
+ |---|---|---|
++| 1001 10:1x～10:4x | **委派**：冷卻風扇（#6）→ St02 工作卡（RULINGS_20261001 第 9 條）；**加熱鏈 → 給你轉 Ifor 的交派句子**（golden Index16Heater／IndexHeatMode／HotplateHeatMode＋出貨組態建加熱執行緒；筆電不碰這幾支） | 交接檔 |
++| 1001 10:1x～11:0x | **第十六批上 main**：普查 (a)(b) #13／#17（＋G-ATC-A／C）／#11／#5／I41／#7（`10160e85`、`e22c42e3`、`b0efdd93`、`dd4609f0`、`75d9ea11`） | D7h（門 6 鎖）4 項＋AtcEmgBridge 新 ctest；三個替身的本體與 golden 逐行比過；兩組態全新 gate＝基準（出貨 286 支 4 項、模擬 286 支 19 項），system／config 0／0／0 |
++| 1001 09:2x～10:3x | **第十五批上 main**：第 18 項 `TempFuseLimitType`（`037062cf`）、Motor Test 非 1203 軸回原點（`44ced20e`）、St02 MR !22（`f3e86951`） | TempFuseLimit 反證成立；WebMotorAccess 591 項 0 失敗；兩組態全新 gate＝基準（出貨 285 支 4 項、模擬 285 支 19 項），system／config 0／0／0 |
+ | 1001 08:1x～09:1x | **INBOX 128 上 main（第十四批）**：派送器解開＋canary 的開機順序修正（`b2937e19`） | gdb backtrace 找到 NULL 的 `InArmOffSet[]`；出貨組態三支入料臂測試過；反證成立；兩組態全新 gate＝基準（出貨 284 支 4 項、模擬 284 支 19 項），system／config 0／0／0 |
+ | 1001 08:4x～09:2x | **你的 8 項裁決（`RULINGS_20261001.md`）**：第 20 項 B ⇒ 機台密碼掃描加白名單 `machine_pw_allow.txt`（15 支 golden 產品檔），補推第 98 包（GitHub `7a7ec94`）；另 A ⇒ 兩個 8.6 MB 舊樣本檔搬到 `D:\HT9045\backup\night_quarantine\20261001\`（MANIFEST 有記錄）；其他各項見 §0 第 16～21 列；`night-loop` 技能補註第 0 條（照 golden 補齊不再列 §0 等決定） | 掃描：允許 2 檔、其他 0 |
+ | 1001 05:4x～07:0x | **第十一批上 main＝GitHub 第 96 包**：`WebJsonScrubCache.{h,cpp}`（新檔）、`tools/wb_serve.cpp` 三處同一行改（行數不變）、`web/page/settings.js` refreshProduction（HEAD＋ETag）、D-027 註解 | 新 ctest `WebJsonScrubCache`（38 項，真實檔）、`ScrubCache_SettingsEtag`（node 18 項；改之前的 settings.js 紅 12 項＝活的對照組）；兩組態全新 gate＝基準（出貨 282 支 4 項、模擬 282 支 19 項，逐項同）；gate 前後 system／config 579 檔 0 變動；新舊兩版模擬 wb_serve 對同一支 8.6 MB 檔：回應位元組 MD5 相同（清過密碼的 General-config.json 也相同），伺服器首位元組 GET 98→19 ms、HEAD 86→6 ms；開機背景預讀 10 個大檔 21.7 MB 用 265 ms；兩次單獨跑 wb_serve 改到的 6 個 system／config 檔已從快照還原（MD5 核對）、新增的 lastdata_backup2.dat 搬到隔離區 |
+@@ -266,7 +272,9 @@
+ | `b25f6816`、`6f0d4302` | 96 `a7c2455` | 第十一批：`/JSON` 路由檔案快取＋開機預讀、settings.js HEAD／ETag、D-027 註解；§0 第 20 項（公開 repo 的機台密碼）＋推送前密碼掃描 |
+ | `a4ccc040`、`813ca9dd` | 97 `bff08c3` | 第十二批：JAMDAY（`cprod.cpp` 的 SaveJamRateByDay 本體掛勾＋ctest `JamDayHook`） |
+ | `6ae4d5a1`、`ae9f7d0d` | 98 `7a7ec94`（1001 08:5x 照 §0 第 20 項 B 推上；推之前掃描：允許 2 檔、其他 0） | St02 MR !19（R146 第 2 版）、!20（S-09 重掃）、!21（W58 第二階段 A 組）、本報告與交接檔；GitLab main `6ae4d5a1` 起的包含有 golden 預設密碼的原始碼，見 §0 第 20 項 |
+-| 本批（第十四批，含本份報告） | 99（hash 見下一批） | INBOX 128：DoPlaceToHotPlate_9045 派送器＋canary 開機順序；`RULINGS_20261001.md`、night-loop 技能補註、本報告與交接檔 |
++| `e240a3f4` | 99 `736814b` | INBOX 128：DoPlaceToHotPlate_9045 派送器＋canary 開機順序；`RULINGS_20261001.md`、night-loop 技能補註、本報告與交接檔 |
++| `de4249da` | 100 `9cd7708` | 第 18 項 TempFuseLimitType、Motor Test 非 1203 軸回原點、St02 MR !22、本報告與交接檔 |
++| 本批（第十六批，含本份報告） | 101（hash 見下一批） | 普查 (a)(b) #13／#17（＋G-ATC-A／C）／#11／#5／I41／#7、本報告與交接檔 |
+ | — | — | **夜間迴圈（新帳號）**：cron `f34a7ab2`（`7,27,47 * * * *`＝每 20 分鐘，session 閒置才觸發、7 天自動到期），0930 21:0x 掛上。⚠ session-scoped：視窗關掉或筆電被強制關機就沒了 |
+ 
+ ## §6 我自己犯的錯與更正
+diff --git a/docs/RULINGS_20261001.md b/docs/RULINGS_20261001.md
+index 0034675..51bbe88 100644
+--- a/docs/RULINGS_20261001.md
++++ b/docs/RULINGS_20261001.md
+@@ -59,3 +59,13 @@
+ 原話：「照golden接上，現在所有功能都要接上，不然我在機台端無法測試」
+ 
+ - `WebMotorAccess.cpp:1390`（以及 Light Scale 回原點 `:2675`）原本以「`ProcessSingleMotorHome` 是替身」拒絕；普查 (e) 查到那支已是真的 ⇒ 照 golden `uhome.cpp:415` 接上。
++
++## 9. 普查 #6 冷卻風扇（`DoSwCoolingFan`）：**委派給其他人做**（使用者 1001 10:1x）
++
++原話：「冷卻風扇模組還有涉及網頁畫面狀態的 H1-07／H1-08 內部閘待處理，規模較大，先排到後面->這委派給其他人做」
++
++- 交給 **St02**（工作卡在 `docs/handoff/TO_STEVEN.md` §4 1001 10:3x）：R146 第 2 版「設定視窗開著時照 golden 拒絕」用的頁面狀態表是 St02 做的，
++  H1-07（IO Set View 開著）／H1-08（設定頁的加熱器分頁開著）問的正是「哪一頁開著」。
++- 範圍：本體 `csystem.cpp:24787`（golden csystem.cpp:20434-20569）裡 8 個閘（H1-07、H1-08、H1-09a～f：冷氣機 `fAirCon` 的 PowerUp／PowerDown），
++  以及所有呼叫點的閘（csystem.cpp G04／G07／G08／G12／G12b、`uHeaterThread.cpp:540` GATE 5）。照第 0 條＝照 golden 補、會動 IO 也照補。
++- 筆電不做這一項；筆電第十六批改的 csystem.cpp 行號列在 TO_STEVEN §1，跟這張卡不重疊。
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 3d04744..1ac9a70 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -5809,3 +5809,30 @@ if(WIN32)
+ endif()
+ add_test(NAME JamDayHook COMMAND test_jamday_hook)
+ set_tests_properties(JamDayHook PROPERTIES TIMEOUT 60)
++
++# --- test_tempfuse_limit: AI(W906-FUSELIMIT) 20261001 -- RULINGS_20261001 #4: golden TfMain::FormShow main.cpp:9535-9551
++#   TempFuseLimitType (MainFormShow_TempFuse.cpp, ht9045_globals). Decision table + the wb_serve boot order (before
++#   InitialHandler and the boot W906_DoReadLastData). Memory only; reads tools/wb_serve.cpp, writes nothing.
++add_executable(test_tempfuse_limit test_tempfuse_limit.cpp)
++target_link_libraries(test_tempfuse_limit PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_tempfuse_limit PRIVATE ws2_32)
++endif()
++add_test(NAME TempFuseLimit COMMAND test_tempfuse_limit "${CMAKE_SOURCE_DIR}")
++set_tests_properties(TempFuseLimit PROPERTIES TIMEOUT 60)
++
++# --- test_atc_emg_bridge: AI(W906-ATCEMG) 20261001 -- RULINGS_20261001 #5 (census 129 (a)(b) #17): csystem.cpp's G-ATC-A / B / C
++#   (CheckATC6System, the ATC EMG down / up handshake) open through the bridges at the end of ATC/ATCInterface.cpp. Memory only;
++#   reads csystem.cpp (argv[1] = source root), writes nothing, opens no socket.
++add_executable(test_atc_emg_bridge test_atc_emg_bridge.cpp)
++target_include_directories(test_atc_emg_bridge PRIVATE ${CMAKE_SOURCE_DIR})
++target_link_libraries(test_atc_emg_bridge PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_atc_emg_bridge PRIVATE ws2_32)
++endif()
++add_test(NAME AtcEmgBridge COMMAND test_atc_emg_bridge "${CMAKE_SOURCE_DIR}")
++set_tests_properties(AtcEmgBridge PROPERTIES TIMEOUT 60)
+diff --git a/tests/test_atc_emg_bridge.cpp b/tests/test_atc_emg_bridge.cpp
+new file mode 100644
+index 0000000..c675b45
+--- /dev/null
++++ b/tests/test_atc_emg_bridge.cpp
+@@ -0,0 +1,94 @@
++// AI(W906-ATCEMG) 20261001: RULINGS_20261001 #5 (census 129 (a)(b) #17, safety gap) with its pair and its sibling: csystem.cpp's
++//   gates G-ATC-B (EMG pressed -> golden :1442-1443 SendCommToATC7(ATC_EMG_DOWN)), G-ATC-C (EMG released -> :1470 ATC_EMG_UP)
++//   and G-ATC-A (CheckATC6System, :1111-1129) are open through the bridges at the end of ATC/ATCInterface.cpp
++//   (csystem.cpp cannot include ATC/ATCInterface.h -- the clWhite collision at its G-ATC block).
++//   Part 1 calls the bridges: with no ATC client golden SendCommToATC7 writes its "No Client!" line into HandlerMemo -- one
++//   line per edge; W906_CheckATC6System_Body does nothing on a machine without ATC 6.0 / 3.0 and returns before any socket
++//   call on an ATC 6.0 machine whose SystemInitialOK is still false.
++//   Part 2 reads csystem.cpp: each gate's live arm calls its bridge, the three bridges are called exactly once each, and the
++//   golden statements that cannot compile there are no longer in a live arm.
++//   NOT COVERED: IsEMGPressed's edge logic around the calls (golden static bServoOff; its pressed path dereferences
++//   MOT[i].Motor of every motor, which a unit test has no objects for) and the ATC 6.0 socket calls (they open a real socket).
++//   Memory only; no file is written, no socket is opened.
++#include <cstdio>
++#include <fstream>
++#include <sstream>
++#include <string>
++#include "cmydef.h"
++#include "ATC/ATCInterface.h"
++
++void W906_ATC_SendEmgDown();
++void W906_ATC_SendEmgUp();
++void W906_CheckATC6System_Body();
++
++static int g_fail = 0;
++
++static void check(bool ok, const char* what)
++{
++    std::printf("%s %s\n", ok ? "PASS" : "FAIL", what);
++    if (!ok) ++g_fail;
++}
++
++static std::size_t CountOf(const std::string& s, const std::string& sub)
++{
++    std::size_t n = 0, p = 0;
++    while ((p = s.find(sub, p)) != std::string::npos) { ++n; p += sub.size(); }
++    return n;
++}
++
++static bool LastIsNoClient(TStringList* lines)
++{
++    if (lines->Count <= 0) return false;
++    const AnsiString last = lines->Strings[lines->Count - 1];
++    return std::string(last.c_str()).find("No Client!") != std::string::npos;
++}
++
++int main(int argc, char** argv)
++{
++    // ---- Part 1: the bridges ----
++    TStringList* lines = ATCInterfaceForm->HandlerMemo->Lines;
++    lines->Clear();
++    W906_ATC_SendEmgDown();
++    check(lines->Count == 1 && LastIsNoClient(lines),
++          "EMG down bridge -> golden SendCommToATC7(ATC_EMG_DOWN): no ATC client -> one \"No Client!\" line (SendCommToATC7's no-client arm)");
++    W906_ATC_SendEmgUp();
++    check(lines->Count == 2 && LastIsNoClient(lines), "EMG up bridge -> golden SendCommToATC7(ATC_EMG_UP): one more line");
++
++    const int oldAtc = ATC_SYSTEM;
++    const bool oldInit = SystemInitialOK;
++    ATC_SYSTEM = eATCUninstall;
++    W906_CheckATC6System_Body();
++    check(lines->Count == 2, "CheckATC6System on a machine without ATC 6.0 / 3.0 -> nothing (golden :1112-1113)");
++    ATC_SYSTEM = eATC60;
++    SystemInitialOK = false;
++    W906_CheckATC6System_Body();
++    check(lines->Count == 2, "ATC 6.0 but SystemInitialOK==false -> golden :1115-1116 returns before any socket call");
++    ATC_SYSTEM = oldAtc;
++    SystemInitialOK = oldInit;
++    lines->Clear();
++
++    // ---- Part 2: csystem.cpp's three gates call the bridges ----
++    const std::string src = argc > 1 ? argv[1] : ".";
++    std::ifstream f(src + "/csystem.cpp", std::ios::binary);
++    std::stringstream ss;
++    ss << f.rdbuf();
++    const std::string s = ss.str();
++    check(!s.empty(), "csystem.cpp read (argv[1] = the source root)");
++    check(CountOf(s, "W906_ATC_SendEmgDown(); }") == 1 && CountOf(s, "W906_ATC_SendEmgUp(); }") == 1 &&
++          CountOf(s, "W906_CheckATC6System_Body(); }") == 1, "each bridge is called exactly once in csystem.cpp");
++    const std::size_t gb = s.find("#if 1 // GATE G-ATC-B"), gc = s.find("#if 1 // GATE G-ATC-C");
++    const std::size_t cb = s.find("W906_ATC_SendEmgDown(); }"), cc = s.find("W906_ATC_SendEmgUp(); }");
++    check(gb != std::string::npos && cb != std::string::npos && gb < cb && s.find("#else", gb) > cb,
++          "G-ATC-B is #if 1 and its live arm (before #else) calls W906_ATC_SendEmgDown");
++    check(gc != std::string::npos && cc != std::string::npos && gc < cc && s.find("#else", gc) > cc,
++          "G-ATC-C is #if 1 and its live arm (before #else) calls W906_ATC_SendEmgUp");
++    const std::size_t ga = s.find("#if 0 // GATE G-ATC-A"), ca = s.find("W906_CheckATC6System_Body(); }");
++    const std::size_t ea = ga == std::string::npos ? ga : s.find("#else", ga);
++    const std::size_t xa = ea == std::string::npos ? ea : s.find("#endif", ea);
++    check(ga != std::string::npos && ea != std::string::npos && xa != std::string::npos && ea < ca && ca < xa,
++          "G-ATC-A keeps golden's text in #if 0 and its #else arm calls W906_CheckATC6System_Body");
++    check(CountOf(s, "#if 0 // GATE G-ATC-B") == 0 && CountOf(s, "#if 0 // GATE G-ATC-C") == 0, "no G-ATC-B / C arm is still #if 0");
++
++    std::printf("%s AtcEmgBridge (%d failure(s))\n", g_fail ? "FAILED" : "ALL PASS", g_fail);
++    return g_fail ? 1 : 0;
++}
+diff --git a/tests/test_tempfuse_limit.cpp b/tests/test_tempfuse_limit.cpp
+new file mode 100644
+index 0000000..131df1e
+--- /dev/null
++++ b/tests/test_tempfuse_limit.cpp
+@@ -0,0 +1,70 @@
++// AI(W906-FUSELIMIT) 20261001: W906_TfMain_FormShow_TempFuseLimit (MainFormShow_TempFuse.cpp) = golden TfMain::FormShow
++//   main.cpp:9535-9551.  Part 1 walks the golden decision table (each branch, both precedence overlaps, the "unset
++//   customer code is HONPREC QC" quirk).  Part 2 checks that wb_serve's boot calls it before InitialHandler and before
++//   the boot W906_DoReadLastData (whose ReadLastSetIni runs the cprod.cpp:3033 clamp) -- the order is the whole point:
++//   called after them, the boot clamp would still see 0.0.  Memory only; no file is written.
++//   NOT COVERED: the three readers themselves (cprod.cpp:3033, forms/fHS.cpp:857, uHeaterThread.cpp:1294).
++#include <cstdio>
++#include <fstream>
++#include <sstream>
++#include <string>
++#include "cmydef.h"
++
++void W906_TfMain_FormShow_TempFuseLimit();
++
++static int g_fail = 0;
++
++static void row(const char* name, int cc, int machine, int limit, double want)
++{
++    CUSTOMER_CODE = cc;
++    MachineTypeChoice = machine;
++    iTempLimitation = limit;
++    TempFuseLimitType = -1.0;
++    W906_TfMain_FormShow_TempFuseLimit();
++    const bool ok = TempFuseLimitType == want;
++    std::printf("%s %-44s cc=%d machine=%d limit=%d -> %.1f (want %.1f)\n", ok ? "PASS" : "FAIL", name, cc, machine,
++                limit, TempFuseLimitType, want);
++    if (!ok) ++g_fail;
++}
++
++int main(int argc, char** argv)
++{
++    const double L250 = TemperatureFuseLimit250, L200 = TemperatureFuseLimit200, L170 = TemperatureFuseLimit170;
++    if (L250 != 250.0 || L200 != 200.0 || L170 != 165.0) {   // golden cmydef.cpp:5408-5410
++        std::printf("FAIL constants 170/200/250 = %.1f/%.1f/%.1f (golden 165/200/250)\n", L170, L200, L250);
++        ++g_fail;
++    }
++    const int OTHER = CC_KYEC_LEE;   // any customer outside both lists
++    row("other customer, HT9045, 130", OTHER, Type_HT9045, tTemp130, L170);
++    row("HONPREC QC", CC_HONPREC_QC, Type_HT9045, tTemp130, L250);
++    row("EMemory", CC_EMemory, Type_HT9045, tTemp130, L250);
++    row("tTemp200", OTHER, Type_HT9045, tTemp200, L250);
++    row("SCC", CC_SCC, Type_HT9045, tTemp130, L200);
++    row("HT9046_LS", OTHER, Type_HT9046_LS, tTemp130, L200);
++    row("tTemp150", OTHER, Type_HT9045, tTemp150, L200);
++    row("tTemp155", OTHER, Type_HT9045, tTemp155, L200);
++    row("tTemp175", OTHER, Type_HT9045, tTemp175, L200);
++    row("SCC + tTemp200 (first branch wins)", CC_SCC, Type_HT9045, tTemp200, L250);
++    row("HONPREC QC + HT9046_LS + 150 (first wins)", CC_HONPREC_QC, Type_HT9046_LS, tTemp150, L250);
++    row("unset customer code 0 == CC_HONPREC_QC", 0, Type_HT9045, tTemp130, L250);
++
++    // Part 2: boot order in tools/wb_serve.cpp.
++    const std::string src = argc > 1 ? argv[1] : ".";   // CMAKE_SOURCE_DIR (add_test passes it)
++    std::ifstream f(src + "/tools/wb_serve.cpp", std::ios::binary);
++    std::stringstream ss;
++    ss << f.rdbuf();
++    const std::string s = ss.str();
++    const size_t call = s.find("W906_TfMain_FormShow_TempFuseLimit(); }");
++    const size_t ih = s.find("InitialHandler(); const bool okWP = true;");
++    const size_t rld = s.find("W906_DoReadLastData(true, binSelLoaded, tempLoaded);");
++    const size_t call2 = call == std::string::npos ? call : s.find("W906_TfMain_FormShow_TempFuseLimit(); }", call + 1);
++    const bool orderOk = !s.empty() && call != std::string::npos && ih != std::string::npos &&
++                         rld != std::string::npos && call < ih && ih < rld && call2 == std::string::npos;
++    std::printf("%s boot order: call@%lld < InitialHandler@%lld < W906_DoReadLastData(true)@%lld, one call site (%s)\n",
++                orderOk ? "PASS" : "FAIL", (long long)call, (long long)ih, (long long)rld,
++                call2 == std::string::npos ? "yes" : "no");
++    if (!orderOk) ++g_fail;
++
++    std::printf("%s TempFuseLimit (%d failure(s))\n", g_fail ? "FAILED" : "ALL PASS", g_fail);
++    return g_fail ? 1 : 0;
++}
+diff --git a/tests/test_w7_l2_ckernel.cpp b/tests/test_w7_l2_ckernel.cpp
+index 2bded3d..b740a13 100644
+--- a/tests/test_w7_l2_ckernel.cpp
++++ b/tests/test_w7_l2_ckernel.cpp
+@@ -1226,6 +1226,40 @@ int main()
+                   SW[SwSafeLock].OutValue   == false &&
+                   SW[SwRKSafeLock].OutValue == false,
+                   "PART D7g: Sen[SnRKCoverOpen].Enable==false -> golden :16496 else arm runs EVEN WITH bSafeLockComflag true: SW[SwSafeLock].Off() (:16498) and SW[SwRKSafeLock].Off() (:16499) both fire, then :16507 returns false -- these are the side effects the retired stand-in silently dropped");
++            //AI(W906-TRIDOOR6) 20261001: RULINGS_20261001 #5 (census 129 (a)(b) #13) -- golden :16502-16506 is live now:
++            //   `if(Tri_Temp_Machine==1) { if(IsTriSafeDoor6LockCheck()) return true; }` (TempCtrl/TriTemp.cpp:989).
++            //   D7h1: Tri_Temp_Machine==1, door-6 lock sensor IsOn()==false -> TriTemp :996-1000 SW[SwTriTempSafeDoor6Lock].On(),
++            //         false -> :16507 return false.
++            //   D7h2: the sensor IsOn() -> TriTemp :1004-1010 SW Off, WAR31003 once, true -> IsSafeLockCheck returns TRUE.
++            //   D7h3: Tri_Temp_Machine==0 again -> the arm is skipped (the D7g fall-through).
++            {
++                bool IsTriSafeDoor6LockCheck();     // TempCtrl/TriTemp.h:72 (body TempCtrl/TriTemp.cpp:989)
++                const int oldTri = Tri_Temp_Machine;
++                Tri_Temp_Machine = 1;
++                simSensorUnknown(SnRKCoverOpen);
++                simSensorOff(SnTriTempSafeDoor6Lock);
++                SW[SwTriTempSafeDoor6Lock].OutValue = false;
++                const bool r7h1 = IsSafeLockCheck();
++                CHECK(r7h1 == false && SW[SwTriTempSafeDoor6Lock].OutValue == true,
++                      "PART D7h1: Tri_Temp_Machine==1, door 6 lock IsOn()==false -> golden TriTemp :998 SW[SwTriTempSafeDoor6Lock].On(), IsSafeLockCheck false (:16507)");
++                const int nErr0 = W906_ShowErrorMessage_Count;
++                simSensorOn(SnTriTempSafeDoor6Lock);
++                const bool r7h2 = IsSafeLockCheck();
++                CHECK(r7h2 == true && SW[SwTriTempSafeDoor6Lock].OutValue == false &&
++                      W906_ShowErrorMessage_Count == nErr0 + 1 && W906_ShowErrorMessage_LastCode == "WAR31003",
++                      "PART D7h2: door 6 lock IsOn() -> golden TriTemp :1004 SW Off + WAR31003 once, IsSafeLockCheck TRUE (golden :16504-16505)");
++                const bool r7h2b = IsSafeLockCheck();
++                CHECK(r7h2b == true && W906_ShowErrorMessage_Count == nErr0 + 1,
++                      "PART D7h2b: still open -> true again, WAR31003 not repeated (golden TriTemp static blogWrite)");
++                Tri_Temp_Machine = 0;
++                const bool r7h3 = IsSafeLockCheck();
++                CHECK(r7h3 == false, "PART D7h3: Tri_Temp_Machine==0 -> the tri-temp arm is skipped, :16507 false");
++                simSensorOff(SnTriTempSafeDoor6Lock);
++                IsTriSafeDoor6LockCheck();          // resets TriTemp's static blogWrite for any later suite
++                simSensorUnknown(SnTriTempSafeDoor6Lock);
++                SW[SwTriTempSafeDoor6Lock].OutValue = false;
++                Tri_Temp_Machine = oldTri;
++            }
+         }
+ 
+         iControlPanelMode = 0;              // back to the suite baseline (golden :16466 else arm)
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index 40f9400..c0d8b54 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -149,7 +149,7 @@ public:
+     }
+     void Pci1203NoteRefusal(long long, const std::string&, const std::string& why) override { refusals.push_back(why); }
+     void GoldenStopAll(const std::string& source) override { stopAll.push_back(source); }
+-    void GoldenStopMotor(int mi) override { stopMotor.push_back(mi); }
++    void GoldenStopMotor(int mi) override { stopMotor.push_back(mi); }  std::vector<int> smBegin, smStep; std::map<int, int> smStepsLeft;  bool GoldenSingleHomeBegin(int mi) override { smBegin.push_back(mi); return true; }  bool GoldenSingleHomeStep(int mi) override { smStep.push_back(mi); std::map<int, int>::iterator it = smStepsLeft.find(mi); if (it == smStepsLeft.end() || it->second < 0) return false; if (it->second > 0) { --it->second; return false; } homeFlags[mi] = 1; return true; }   //AI(W906-MT-SMHOME) 20261001: golden InitProcessSingleMotorTask / one MainProc pass of ProcessSingleMotorHome && HomeFlag==1 (smStepsLeft[mi] = passes still homing; -1 = never)
+     bool GoldenServoOn(int mi, bool& known) override
+     {
+         std::map<int, bool>::const_iterator it = goldenSvon.find(mi);
+@@ -1247,7 +1247,7 @@ int main(int argc, char** argv)
+         const int n0 = (int)be.executed.size();
+         CHECK(!MotorAccessDispatch(ReqStart("uMotorTest", "home", "MInArmXScale", true), 1, be).ok && (int)be.executed.size() == n0,
+               "scale motor: golden ResetPos(0) -> EastSun forbids -> refused");
+-        CHECK(!MotorAccessDispatch(ReqStart("uMotorTest", "home", "MInArmPitch", true), 1, be).ok, "non-1203 home -> refused (ProcessSingleMotorHome is a stub)");
++        CHECK(MotorAccessDispatch(ReqStart("uMotorTest", "home", "MInArmPitch", true), 1, be).ok && be.smBegin.size() == 1 && be.smBegin[0] == 2, "non-1203 home -> golden InitProcessSingleMotorTask (RULINGS_20261001 #8; was refused while ProcessSingleMotorHome was a stub)");
+         o = MotorAccessDispatch(ReqStart("uMotorTest", "home", "MOutArmY", true), 27, be);
+         be.state[3] = 4; MotorAccessTick(be, 500);
+         MotorAccessDispatch(Req("uMotorTest", "stop", 0), 28, be);
+@@ -3501,6 +3501,57 @@ int main(int argc, char** argv)
+         MotorAccessResetJobs();
+     }
+ 
++    // ---------------------------------------------------------------- (SMHOME)
++    //AI(W906-MT-SMHOME) 20261001: RULINGS_20261001 #8 -- a non-1203 axis homes the golden way: btnHomeClick :1152-1158 ->
++    //  golden MainProc `ProcessSingleMotorHome(i) && MOT[i].HomeFlag==1` once per beat -> Timer1Timer :962-966
++    //  SetSpeed(scrlbrMotorSpeed->Position); release :1168-1171 PCIL132_StopMotor. NOT COVERED: Light Scale's case 0 on a
++    //  non-1203 row (LsStartGoldenHome) and the live backend's bodies (they call the golden functions).
++    printf("[SMHOME] non-1203 single home (golden ProcessSingleMotorHome)\n");
++    {
++        MotorAccessResetJobs();
++        MotorGolden g;
++        g.valid = true; g.enable = true; g.gearRatio = 1.0; g.softP = 999999; g.softN = -999999; g.homeFlag = 1;
++        FakeBackend be;
++        be.table["MInArmPitch"] = AxisOther(2, "MN200", true);
++        be.table["MInArmY"]     = AxisOther(3, "MN200", true);
++        be.golden[2] = g; be.golden[3] = g;
++        MotorAccessDispatch(Req("uMotorTest", "selectMotor", "MInArmPitch"), 1, be);
++        MotorAccessReq sq = Req("uMotorTest", "setSpeed", "MInArmPitch"); sq.num["pct"] = 37; sq.flag["jog"] = true;
++        CHECK(MotorAccessDispatch(sq, 2, be).ok, "speed bar 37 on the non-1203 axis (golden scrlbrMotorSpeed->Position)");
++        be.smStepsLeft[2] = 2;                                                  // two passes still homing, then HomeFlag==1
++        const std::size_t nStop0 = be.stopMotor.size(), nSpeed0 = be.speedCalls.size();
++        MotorAccessOutcome o = MotorAccessDispatch(ReqStart("uMotorTest", "home", "MInArmPitch", true), 3, be);
++        CHECK(o.ok && AckShapeOk(o.ackJson, 7) && Has(o.ackJson, "\"result\":\"homing\"") && Has(o.ackJson, "\"layer\":\"MOT\"") &&
++              Has(o.ackJson, "\"homeActive\":true"), "HOME down on MN200 -> accepted on the golden path (layer MOT), homeActive");
++        CHECK(be.smBegin.size() == 1 && be.smBegin[0] == 2 && MotorAccessJobs().homesActive == 1,
++              "golden InitProcessSingleMotorTask(2) + HomeFlag=0 once, one HOME job");
++        o = MotorAccessDispatch(ReqStart("uMotorTest", "home", "MInArmPitch", true), 4, be);
++        CHECK(o.ok && be.smBegin.size() == 1 && Has(o.ackJson, "\"homeActive\":true"), "HOME down again while homing -> not re-initialised");
++        MotorAccessTick(be, 500); MotorAccessTick(be, 500);
++        CHECK(be.smStep.size() == 2 && MotorAccessJobs().homesActive == 1 && be.speedCalls.size() == nSpeed0,
++              "two beats = two ProcessSingleMotorHome passes, still homing, no SetSpeed yet");
++        MotorAccessTick(be, 500);
++        CHECK(be.smStep.size() == 3 && MotorAccessJobs().homesActive == 0,
++              "third pass: ProcessSingleMotorHome && HomeFlag==1 -> golden bSingleHome=false, the job ends");
++        CHECK(be.speedCalls.size() == nSpeed0 + 1 && be.speedCalls.back().mi == 2 && be.speedCalls.back().pct == 37 && !be.speedCalls.back().jog,
++              "golden Timer1Timer: MOT[2].SetSpeed(scrlbrMotorSpeed->Position = 37), PTP family (jog=false)");
++        CHECK(be.stopMotor.size() == nStop0, "a home that ends by itself sends no stop");
++
++        be.smStepsLeft[3] = -1;                                                 // never HomeFlag==1 (golden: its own alarm already shown)
++        o = MotorAccessDispatch(ReqStart("uMotorTest", "home", "MInArmY", true), 5, be);
++        MotorAccessTick(be, 500); MotorAccessTick(be, 500);
++        CHECK(o.ok && MotorAccessJobs().homesActive == 1, "no HomeFlag==1 -> golden bSingleHome stays true, the job stays");
++        o = MotorAccessDispatch(ReqStart("uMotorTest", "home", "MInArmY", false), 6, be);
++        CHECK(o.ok && Has(o.ackJson, "\"result\":\"homeStopped\"") && MotorAccessJobs().homesActive == 0 &&
++              be.stopMotor.size() == nStop0 + 1 && be.stopMotor.back() == 3,
++              "HOME up -> golden bSingleHome=false + MOT[3].PCIL132_StopMotor, exactly once");
++        o = MotorAccessDispatch(ReqStart("uMotorTest", "home", "MInArmY", true), 7, be);
++        CHECK(o.ok && MotorAccessJobs().homesActive == 1, "HOME down again -> a new golden single home");
++        MotorAccessDispatch(Req("uMotorTest", "stop", "MInArmY"), 8, be);
++        CHECK(MotorAccessJobs().homesActive == 0, "STOP (golden AllBtnUp + bSingleHome=false) cancels the golden home too");
++        MotorAccessResetJobs();
++    }
++
+     printf("\n%d passed, %d failed\n", g_pass, g_fail);
+     return (g_fail == 0) ? 0 : 1;
+ }
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 6aff666..063b782 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -4063,7 +4063,7 @@ int main(int argc, char** argv)
+     { extern void FileRW_BinSelect_Boot(); FileRW_BinSelect_Boot(); }   //Steven 20260925 (S12-C BinSelect)：golden TfBinSel 替身＋收養 fBinSel 真元件；要在下面 fBinSel->ReadFile 之前   //Steven 20260925 (S12-C)：golden TfTrayAssignment 替身（HT9045.cpp:188；建構子讀 bUseAuto2Empty／CosFunction，要在 LoadMachineConfig 之後）；開機讀檔仍是 W906_BootReadTrayAssignment   //Steven 20260925 (S12-C)：golden TfYieldMonitoring 替身（HT9045.cpp:215 CreateForm，在 TfConfiguration 之後；讀檔仍是 fYieldMonitoring->ReadFile）   //Steven 20260924 (S12-C ArmSpeed_File)：golden TfSpeed 的替身（DFM 狀態＋建構子）；讀檔仍是 fSpeed->ReadFile   //Steven 20260924 (S12-C)：golden main.cpp:1532-1543 new 各 HTEditList ＋ TfConfiguration 建構子的註冊（InitConfigEdtList），要在 InitialHandler（golden FormShow）之前；見 FileRW/IniConfig.cpp
+     { extern void FileRW_BarCode_Boot(); FileRW_BarCode_Boot(); }  { extern void FileRW_Monitor_Boot(); FileRW_Monitor_Boot(); }  /* AI(W906-FRW-S110) 20260926 (Steven 團隊)：golden CreateForm(TfMonitor) HT9045.cpp:247（TfBarCode :243 之後）→ 建構子 MonitorInterface.cpp:32 LoadTCPIPParament()：只讀 D:\HT9045\system\MVData.ini（檔不在＝預設值，不建檔）；MVCtrl（TCP）不做。本體 FileRW/Monitor.cpp，冪等 */  { extern void FileRW_GroundMan_Boot(); FileRW_GroundMan_Boot(); }  { extern void FileRW_Rotate_Boot(); FileRW_Rotate_Boot(); }  { extern void W906_TrayMapping_BootFlags(); W906_TrayMapping_BootFlags(); }  { extern void FileRW_AutoAlignment_Boot(); FileRW_AutoAlignment_Boot(); }  { extern void FileRW_Winway_Boot(); FileRW_Winway_Boot(); }  /* AI(W906-FRW-S109) 20260926 (Steven 團隊)：golden CreateForm(TfWinway) HT9045.cpp:272（TfAutoAlignment :270 之後）→ 建構子 WinWaySetting.cpp:12：4 站 LoadCommData＋SaveCommData ⇒ 每次開機讀、並原樣寫回 D:\HT9045\config\ATCWinWay.ini（golden 同，不看 ATC_SYSTEM；檔不在會照預設值建）；不開 COM、不送 Modbus。本體 FileRW/Winway.cpp，冪等 */  { extern void FileRW_CounterSel_Boot(); FileRW_CounterSel_Boot(); }  { extern void FileRW_AutoCalSuckZ_Boot(); FileRW_AutoCalSuckZ_Boot(); }  /* AI(W906-FRW-S70) 20260926 (Steven 團隊)：golden CreateForm(TfProductionInfo) HT9045.cpp:257 → 建構子 ProductionInfo.cpp:52 的 AutoCalSuckZ 段（高度差陣列清零、Enable=false、elData 22 筆具名註冊、SearchStartZ=0）；不讀檔、不寫檔；要在 W906_DoReadLastData 之前，冪等 */  /* AI(W906-CRT-CounterSel) 20260926（Steven 團隊，S56）：golden CreateForm(TfCounterSel) HT9045.cpp:203 → 建構子 cCounterSel.cpp:23（NeedRef=false）；只建替身、不讀檔（[Visible] 由 ReadLastSetIni 讀），冪等 */   /* AI(W906-FRW-NoPage) 20260926 (Steven 團隊)：golden CreateForm(TFrmRotate) HT9045.cpp:227 → 建構子 fRotate.cpp:42（bShowRotateBySite 等；不讀檔）；CreateForm(TfTrayMapping) :252 → 建構子 cTrayMapping.cpp:92-104 的 bUseTrayMap 等五旗標（移植樹原本在靜態初始化算，看不到 Gerneral.ini）；CreateForm(TfAutoAlignment) :270 → 建構子 AutoAlignment.cpp:47（Gerneral.ini [Auto_Alignment] CCD 位址／埠，缺鍵照 golden 補寫）。三者與 BarCode／GroundMan 沒有共用狀態、也沒有 HTEditList，順序不影響；都要在 LoadMachineConfig 之後、W906_DoReadLastData 之前 */  { extern void FileRW_AGV_Boot(); FileRW_AGV_Boot(); }  /* AI(W906-B8-AG1) 20260930 [W906] St01：golden CreateForm(TfAGV) HT9045.cpp:278（TfVacuumUnit :275、TfWinway :272 之後）→ 只建替身（DFM 狀態＋存檔讀的替身＋父子）、裝開窗閘的 spbAGV 看得見判斷；不讀 AGV.ini、不寫檔（讀檔在 golden FormShow／spbSaveClick＝網頁開頁／存檔，與 DoReadLastData main.cpp:9378）。本體 FileRW/TestIF_File_AGV.cpp，冪等；接在同一行、行尾 // 之前，不移動行號 */   //Steven 團隊 20260925 (S12-C TestIF_File_BarCode)：golden CreateForm(TfBarCode) HT9045.cpp:243（TfQAMode :228 之後）；只建替身（DFM 狀態＋建構子），不讀檔（讀檔在 W906_DoReadLastData golden :9361）   //AI(W906-CRT-GroundMan) 20260926 (Steven 團隊)：golden CreateForm(TfGroundMan) HT9045.cpp:262（TfBarCode :243 之後）→ 建構子 GroundMan.cpp:24 → :136 ReadGroundOffset()：讀 D:\HT9045\system\GroundMan.ini（CheckAndReadIniData 缺鍵照 golden 補寫，路徑是 golden 寫死的字面值）；要在 LoadMachineConfig 之後（HSys.iGroundManScanPoint、CUSTOMER_CODE）
+     {   { extern void W906_InstallUpdateMainOperateMode(); W906_InstallUpdateMainOperateMode(); std::printf("UpdateMainOperateMode body installed = yes\n"); }  { extern void W906_BootInitialATC(); W906_BootInitialATC(); }  /* AI(W906-ATC1) 20260926: golden FormShow main.cpp:9357-9361 InitialATC＋ATCIniPath，在 InitialHandler（:9559）之前 —— 沒有它 USE_ATC_MODE=4 的機台 ChangeATCSiteUse 會對空的 ATC_SYS_PAL 取 [0]（NB2 R72 ATC-1，forms/fMain_ATCSiteUse.cpp 檔尾） */   // AI(W906-OPMODE) 20260926: 在 InitialHandler 之前裝 —— 它的 LoadMachineRecord（cinitial.cpp:10231）→ SetMainRunStartMode → UpdateMainOperateMode 在 golden 開機就會跑（切加熱器繼電器、送 ATC 命令、寫 lastdata），0922 裁決「都要，全部動作都要執行」；fTemp_Set 在 :3111 已建［⚠ 20260926 NB2 R72 OPM-4 更正：:3111 在 W906_DoReadLastData 裡，比 InitialHandler 晚 —— InitialHandler 裡那一次呼叫時 fTemp_Set 還沒讀檔］
+-        { extern void GetTimeInfo(); GetTimeInfo(); }   /* AI(W906-CLOCK) 20260924: golden TfMain ctor main.cpp:1683 在 InitialHandler（:9559）之前先更新一次掛鐘。沒有這一次，網頁命令在第一個 500 ms 拍子之前就被排空（每 50 ms 一圈）時會讀到哨兵 9999 —— 非模擬探針實測 lot.start 寫出 LotStartTime=9999-9999-00 9999:9999:9999 */  { extern void W906_CfgTrayPlate_MainFormShowFlags(); W906_CfgTrayPlate_MainFormShowFlags(); }  /* AI(W906-FRW-S98) 20260926 (Steven 團隊)：golden TfMain::FormShow main.cpp:9987-9988 bHasTrayCSV=FileExists(TrayTablePath); bHasPlateCSV=FileExists(PlateTablePath);（golden 緊接著 :9992 InitialHandler）。本體 FileRW/CfgTrayPlate.cpp，只查檔在不在。插在同一行，不移動行號 */  InitialHandler(); const bool okWP = true;  { extern void W906_BootSummary(bool); extern bool W906_WbServeHas1203(); W906_BootSummary(W906_WbServeHas1203()); }   /* AI(W906-BOOTSUM) 20260925: 開機摘要（BootSummary.cpp），純觀測 */   // AI(W906-A4-2) 20260924: golden main.cpp:9559 —— 完整 bring-up（InitialClass、InitHontechHardware〔InitSucker／InitialSwitch／InitialSensor／OpenPCI132Card／InitialMotorParameter／InitCylinder〕、LoadMachineRecord、ReadPassword、SetWorkParameter、SetMotorSpeed）取代這裡原本只叫 SetWorkParameter 的整合接縫；位置在 golden ctor 那段（吸嘴格數、ARM_OFFSET，上面）之後，順序與 golden 相同。U23／U24（A9）由此照 golden 順序接上
++        { extern void GetTimeInfo(); GetTimeInfo(); }   /* AI(W906-CLOCK) 20260924: golden TfMain ctor main.cpp:1683 在 InitialHandler（:9559）之前先更新一次掛鐘。沒有這一次，網頁命令在第一個 500 ms 拍子之前就被排空（每 50 ms 一圈）時會讀到哨兵 9999 —— 非模擬探針實測 lot.start 寫出 LotStartTime=9999-9999-00 9999:9999:9999 */  { extern void W906_TfMain_FormShow_TempFuseLimit(); W906_TfMain_FormShow_TempFuseLimit(); }  /* AI(W906-FUSELIMIT) 20261001: golden TfMain::FormShow main.cpp:9535-9551 TempFuseLimitType (250/200/170 by customer, machine and iTempLimitation; was never assigned = 0.0), right before :9553 bHasTrayCSV and :9559 InitialHandler as in golden; body MainFormShow_TempFuse.cpp */  { extern void W906_CfgTrayPlate_MainFormShowFlags(); W906_CfgTrayPlate_MainFormShowFlags(); }  /* AI(W906-FRW-S98) 20260926 (Steven 團隊)：golden TfMain::FormShow main.cpp:9987-9988 bHasTrayCSV=FileExists(TrayTablePath); bHasPlateCSV=FileExists(PlateTablePath);（golden 緊接著 :9992 InitialHandler）。本體 FileRW/CfgTrayPlate.cpp，只查檔在不在。插在同一行，不移動行號 */  InitialHandler(); const bool okWP = true;  { extern void W906_BootSummary(bool); extern bool W906_WbServeHas1203(); W906_BootSummary(W906_WbServeHas1203()); }   /* AI(W906-BOOTSUM) 20260925: 開機摘要（BootSummary.cpp），純觀測 */   // AI(W906-A4-2) 20260924: golden main.cpp:9559 —— 完整 bring-up（InitialClass、InitHontechHardware〔InitSucker／InitialSwitch／InitialSensor／OpenPCI132Card／InitialMotorParameter／InitCylinder〕、LoadMachineRecord、ReadPassword、SetWorkParameter、SetMotorSpeed）取代這裡原本只叫 SetWorkParameter 的整合接縫；位置在 golden ctor 那段（吸嘴格數、ARM_OFFSET，上面）之後，順序與 golden 相同。U23／U24（A9）由此照 golden 順序接上
+         std::printf("InitialHandler (golden main.cpp:9559) done -> %s   (Tech.iInArmPlate1Y=%d iInArmPlate2Y=%d)\n",
+                     okWP ? "true" : "false",
+                     (int)Tech.iInArmPlate1Y, (int)Tech.iInArmPlate2Y);
+-- 
+2.55.0.windows.5
+
