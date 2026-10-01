@@ -1,0 +1,1331 @@
+From 85285cddb2768add966e889427c7393b80854b45 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 09:59:43 +0800
+Subject: [PATCH] HTDESIGNER-123: the CSV table checked against Excel's own
+ help -- the silent wrong results fixed, the fill keys added (0.123.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20261001: "你看一下網路上 手冊還有哪些操作 或是細部操作 或是目前操作後的結果跟網路上結果不一樣".
+Compared with support.microsoft.com (Keyboard shortcuts in Excel, Enter data manually, Edit cell
+contents, Find or replace, Move or copy cells). Fixed (each wrote something other than meant):
+- one cell pasted on a selected column changed only its first cell -> fills it (lib/csvtable.js
+  pasteChanges: a block that fits a whole number of times repeats; a cut block moves) -- one edit
+- Ctrl+- deleted the row of any one cell (and VS Code zoomed out) -> only with whole rows selected
+- Shift+Space typed a space into the cell -> the whole row (Ctrl+Space: the column)
+- typed over a cell, Left / Right moved the caret -> all four arrows write it and move; F2 = the
+  caret at the end (not all selected), F2 again toggles Enter / Edit mode; a double click puts the
+  caret where it was clicked
+- Ctrl+X cleared at once -> moved when pasted (Esc forgets it)
+- Ctrl+R opened VS Code's Open Recent; Ctrl+Z while typing undid the FILE's last edit -> the table
+  handles them (package.json binds them to ht9045Designer.csvKey in the table only; csvEditing ctx)
+- a cell with a line break lost it when edited -> edited as text only
+Added: the active cell = where the selection started (Excel); Ctrl+Enter = the value into every
+selected cell; Ctrl+D / Ctrl+R fill; Enter / Tab inside a block; Tab..Tab then Enter back to the
+first column; Ctrl+H replace (whole cell, in the selection, replace all = one Ctrl+Z); Shift+Enter /
+Shift+F3 previous; Ctrl+arrow to the data's edge; Backspace = the cell from empty; an empty row under
+the last one (typing there adds a row); the status bar shows the row's first two columns (which axis)
+and sum / average / min / max of the numbers selected; a column click starts under the title row.
+
+Tests: 13 real-input checks (DevTools protocol: real keys / clicks) pass; synthetic: cut, paste
+block; lib: the four paste cases; smoke: column fill, repeat, cut move -- one edit each, the
+csvEditing context. run_all 3/3 layers (lib 168, smoke 197). The real VS Code layer not run
+(VS Code's own update still pending).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHANGELOG.md          |  17 +
+ tools/vscode-htdesigner/CHEATSHEET.md         |  16 +-
+ tools/vscode-htdesigner/README.md             |   3 +
+ tools/vscode-htdesigner/WPF_DIFF_LOG.md       |   4 +-
+ tools/vscode-htdesigner/extension.js          |  26 +-
+ tools/vscode-htdesigner/lib/csvtable.js       |  31 +-
+ tools/vscode-htdesigner/media/csv.css         |   8 +
+ tools/vscode-htdesigner/media/csv.js          | 499 ++++++++++++++----
+ tools/vscode-htdesigner/package.json          |  18 +-
+ tools/vscode-htdesigner/test/csv_driver.js    |  30 +-
+ tools/vscode-htdesigner/test/csv_realinput.js |  90 +++-
+ tools/vscode-htdesigner/test/probe_test.ps1   |  16 +-
+ tools/vscode-htdesigner/test/run_tests.js     |  14 +
+ .../vscode-htdesigner/test/smoke_extension.js |  25 +-
+ 14 files changed, 656 insertions(+), 141 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/CHANGELOG.md b/tools/vscode-htdesigner/CHANGELOG.md
+index b2c8267..8363896 100644
+--- a/tools/vscode-htdesigner/CHANGELOG.md
++++ b/tools/vscode-htdesigner/CHANGELOG.md
+@@ -2,6 +2,23 @@
+ 
+ 每一版多了什麼。怎麼操作看 [操作一覽](CHEATSHEET.md)，詳細說明看 README。
+ 
++## 0.123.0
++- **CSV 表格照 Excel 官方說明重新對過一次**（EastSun 1001：「你看一下網路上手冊還有哪些操作…結果跟網路上不一樣」）。
++  以前會**不知不覺改錯**的，都修了：
++  - 選一整欄、貼上一個值：以前只改到第一格 → 現在整欄都填（剛好整數倍的區塊會重複貼滿）。
++  - `Ctrl+－`：以前只選一格也刪掉整列，VS Code 還同時縮小 → 現在只有選了整列才刪，否則說明怎麼做；VS Code 不再跟著縮放。
++  - `Shift+空白鍵`：以前會打一個空白進格子 → 現在是選整列（`Ctrl+空白鍵`＝整欄）。
++  - 打字後按 ←／→：以前在格子裡移游標，沿著一列輸入會打進同一格 → 現在四個方向鍵都會寫入並移到下一格（F2 進去的照舊在格子裡移游標，F2 切換）。
++  - F2：以前整格選起來，一打字就蓋掉 → 現在游標停在最後；雙擊＝游標停在點的位置。
++  - `Ctrl+X`：以前馬上清空，沒貼就沒了 → 現在貼上時才搬過去（Esc 取消）。
++  - `Ctrl+R`：以前會跳出 VS Code 的「開啟最近的檔案」 → 現在是往右填滿。
++  - 有換行的格子：以前在表格裡改會把換行吃掉 → 現在不在表格裡改，請用「以文字開啟」。
++  - 打字中按 `Ctrl+Z`：以前會復原整個檔案的上一步（可能是別格） → 現在只取消這一格。
++- **新功能**：`Ctrl+Enter`＝每一格都填；`Ctrl+D`／`Ctrl+R`＝往下／往右填滿；選好範圍後 Enter／Tab 只在範圍裡移動；
++  `Ctrl+H` 取代（整格相符、只在選取範圍、全部取代＝一個 Ctrl+Z 復原）；Shift+Enter／Shift+F3＝上一個；
++  最後一列下面的空白列直接打字＝新增一列；`Ctrl+方向鍵` 跳到資料的邊緣；Backspace＝這一格清空重打。
++- 狀態列顯示這一列的前兩欄（例如 Mot_Table 的軸名和 Alias，改右邊的欄時也知道是哪一軸），選多格時顯示數字的加總、平均、最小、最大。
++- 點欄名選整欄時，從第一列資料開始，不包含標題列（`Ctrl+Enter` 不會蓋掉欄位名稱）。
+ ## 0.122.0
+ - 修正：**新增 C++ 事件之後 F5 建置失敗**（EastSun 1001：「你這邊建置時 可能有問題」）。08:46 在 main.html 的 Exit 鈕加了 OnMouseDown，
+   外掛一次改了 6 個檔、全部「還沒存檔」，其中產生檔 `HtdEvents.gen.cpp` 還是沒存的新分頁；存檔時只存到 4 個，
+diff --git a/tools/vscode-htdesigner/CHEATSHEET.md b/tools/vscode-htdesigner/CHEATSHEET.md
+index 5e59554..1c731d8 100644
+--- a/tools/vscode-htdesigner/CHEATSHEET.md
++++ b/tools/vscode-htdesigner/CHEATSHEET.md
+@@ -126,12 +126,16 @@
+ 
+ | 要做什麼 | 怎麼做 |
+ |---|---|
+-| 編輯一格 | 點一下直接打字（中文輸入法也可以），或雙擊／F2；Enter 確定並往下，Tab 往右，Esc 取消 |
+-| 選一塊 | Shift＋方向鍵，或按住拖曳；點欄名／列號＝整欄／整列；左上角＝全部 |
+-| 清除／複製／貼上 | Delete；`Ctrl+C`／`Ctrl+V`（跟 Excel 互通）；`Ctrl+X` 剪下 |
+-| 插入／刪除列 | 上面的按鈕，或 `Ctrl+Shift+＋`／`Ctrl+－` |
+-| 尋找 | `Ctrl+F`，Enter／F3 下一個 |
+-| 存檔／復原 | `Ctrl+S`／`Ctrl+Z`（只改動過的格子的文字會變） |
++| 編輯一格 | 點一下直接打字（中文輸入法也可以），或雙擊（游標停在點的位置）／F2（游標在最後）；Enter 確定並往下，Tab 往右，Esc 取消 |
++| 打字中 | 直接打的：方向鍵＝寫入並移動；F2 進去的：方向鍵在格子裡移游標；F2 切換兩種 |
++| 選一塊 | Shift＋方向鍵，或按住拖曳；點欄名／列號＝整欄／整列；`Shift+空白鍵`＝整列、`Ctrl+空白鍵`＝整欄；左上角＝全部 |
++| 一次填很多格 | 選好範圍、打值、`Ctrl+Enter`＝每一格都填；`Ctrl+D`＝第一列往下填、`Ctrl+R`＝第一欄往右填；複製一格貼到一整欄＝整欄都填 |
++| 在選取範圍裡逐格輸入 | 選好範圍後 Enter／Tab 只在範圍裡移動（Shift＝往回） |
++| 清除／複製／貼上 | Delete＝清除選取；Backspace＝這一格清空重打（Esc 還原）；`Ctrl+C`／`Ctrl+V`（跟 Excel 互通）；`Ctrl+X` 剪下＝貼上時才搬過去（Esc 取消） |
++| 插入／刪除列 | 上面的按鈕，或 `Ctrl+Shift+＋`；`Ctrl+－` 只在選了整列時才刪；最後一列下面的空白列直接打字＝新增一列 |
++| 尋找／取代 | `Ctrl+F`，Enter／F3 下一個、Shift+Enter／Shift+F3 上一個；`Ctrl+H` 取代（整格相符、只在選取範圍、全部取代＝一個 Ctrl+Z） |
++| 看是哪一列 | 下面狀態列顯示這一列的前兩欄（例如軸名、Alias）；選多格時顯示數字的加總、平均、最小、最大 |
++| 存檔／復原 | `Ctrl+S`／`Ctrl+Z`（只改動過的格子的文字會變）；打字中的 `Ctrl+Z`＝取消這一格 |
+ | 看原始文字 | 右上「以文字開啟」；從文字切回表格：編輯器標題列的表格圖示 |
+ 
+ ## 安全
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 66ce80e..87a26ae 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -447,6 +447,9 @@ GroupBox 的 `<legend>` 和 Panel 的標題永遠留在第一個；已經在最
+ 打開 `.csv`（例如 `D:\HT9045\system\Mot_Table.csv`）就是像 Excel 的表格：點格子直接打字（注音等中文輸入法也可以）、雙擊或 F2 編輯、Enter／Tab／方向鍵移動、
+ Shift＋方向鍵選一塊、Delete 清除、`Ctrl+C`／`Ctrl+V` 跟 Excel 互相複製貼上（Tab 分隔）、插入／刪除列、尋找（`Ctrl+F`）、
+ 第一列固定當標題（自動判斷，可以勾掉）、拉欄名右邊的線改欄寬。幾萬列的檔也順（只畫看得到的列）。
++照 Excel 的規則（0.123 起，對照 Excel 官方說明）：作用中的那一格是選取的起點；選好範圍打值按 `Ctrl+Enter`＝每格都填，`Ctrl+D`／`Ctrl+R` 往下／往右填，
++複製一格貼到一整欄＝整欄都填；`Ctrl+X` 剪下是貼上時才搬；`Shift+空白鍵`／`Ctrl+空白鍵` 選整列／整欄；`Ctrl+－` 只刪整列；`Ctrl+H` 取代；
++最後一列下面有一列空白可以直接打字新增；狀態列顯示這一列的前兩欄（是哪一軸）和選取數字的加總／最小／最大。
+ 
+ **只改你改的那幾格的文字**：其他的換行（CRLF）、引號、行尾空的欄位一個字都不動 —— 機台的設定檔就是 CSV，
+ 不能被「整檔重寫」。改的東西進 VS Code 的編輯緩衝區，**按 `Ctrl+S` 才存檔**，`Ctrl+Z` 復原。
+diff --git a/tools/vscode-htdesigner/WPF_DIFF_LOG.md b/tools/vscode-htdesigner/WPF_DIFF_LOG.md
+index 88387d3..978833d 100644
+--- a/tools/vscode-htdesigner/WPF_DIFF_LOG.md
++++ b/tools/vscode-htdesigner/WPF_DIFF_LOG.md
+@@ -15,6 +15,7 @@ EastSun 20260930：「你看還有那邊跟 wpf 不一樣，直接做修改，
+ - 〔MK〕[Artboard modifier keys in Blend](https://learn.microsoft.com/en-us/visualstudio/xaml-tools/artboard-modifier-keys-in-blend?view=vs-2022)
+ - 〔BK〕[Keyboard shortcuts in Blend for Visual Studio](https://learn.microsoft.com/en-us/visualstudio/xaml-tools/keyboard-shortcuts-in-blend?view=vs-2022)
+ - 〔CF〕[Configure XAML Designer in Visual Studio](https://learn.microsoft.com/en-us/visualstudio/ide/reference/xaml-designer?view=vs-2022)
++- 〔EX〕[Keyboard shortcuts in Excel](https://support.microsoft.com/en-us/office/keyboard-shortcuts-in-excel-1798d9d5-842a-42b8-9c99-9b7213f0040f)（CSV 表格照 Excel）
+ 
+ ## 還沒改的（照順序做，做完移到下面）
+ 
+@@ -100,4 +101,5 @@ EastSun 20260930 晚上：「先朝元件屬性和事件的操作先下手，先
+ | 1001 | 0.119.0 | 自訂控制項自己的屬性一樣出現在屬性視窗，有自己的類別（〔XD〕Properties window；EastSun「把舊版的功能架構仿造到現有架構」） | 舊版自製的 IO 燈（TALed 系列）、按鈕面板（TBtnPanel 系列）只看得到一般屬性，形狀、亮／按下、顏色要去 HTML 改 class 和 --led-on／--bp-true | 類別「IO 元件」：燈 LEDStyle／Value／Blink／TrueColor／FalseColor，按鈕 Style／Down／TrueColor／FalseColor／TrueFontColor／FalseFontColor；跟 .dfm 比對、改回、跳 .dfm／HTML；class 就地改（新 htmledit.setClass）、顏色寫 CSS 變數；全部改回 DFM 也包含 | lib：dfmEditValues io、setClass 就地、propRange；probe：假燈／假按鈕讀到的值、改形狀＝class、改顏色＝--led-off；面板：兩種元件的列、Down 和 DFM 不同、改 Style／重設 Down／打 clBlack、6 種形狀；smoke：class 寫回原地、拿掉＝原樣 | d2b77fa |
+ | 1001 | 0.120.0 | 工具箱列出專案自己的控制項（〔WE〕Toolbox：使用者控制項／自訂控制項也在工具箱） | 工具箱只有 7 種 VCL 標準元件，舊版自製的 IO 燈、按鈕面板沒有 | 加 MyLedLane／MyLed／ALed／BtnPanelLane／BtnPanel，樣板＝網頁產生器的寫法，BCB6 的名字，Alias 留空給屬性表挑 | lib：12 個樣板都是完整元素、IO 那幾個的寫法；smoke：工具箱 13 項、MyLedLane1／BtnPanelLane1 放進 Panel2 的原始碼 | f3a4f5b |
+ | 1001 | 0.121.0 | （修正）CSV 表格像 Excel 一樣能打字：雙擊、直接打字、中文輸入法（EastSun「表格我沒辦法寫入」） | 真的滑鼠雙擊沒反應（按下時重畫，雙擊落在整張表上）；開著注音打字什麼都沒有（焦點在表格 div，輸入法沒有輸入框） | 雙擊用第二下按下的點擊次數判斷；一個看不見的輸入框一直停在目前那一格接所有按鍵，打字／輸入法組字一開始它就是那格的編輯框；輸入法自己的 Enter（選字）不寫入 | 新的真輸入測試（DevTools 協定：真雙擊、真按鍵、輸入法組字「ㄨ」→「中」）：新版 4 項全過、舊版 4 項全失敗；模擬事件測試加雙擊、輸入法兩項 | 2fc6648 |
+-| 1001 | 0.122.0 | （修正）新增事件不會讓建置壞掉（〔EH〕WPF 新增的處理函式在程式碼後置檔裡、建置前 VS 會全部存檔；EastSun「你這邊建置時 可能有問題」） | 6 個檔都放在「沒存檔」，產生檔是沒存的新分頁、CMake 已經列了它：只存到一部分就建置失敗（08:46 Exit 鈕 OnMouseDown） | 建置要用的產生檔 → CMakeLists.txt → wb_serve.cpp 分支直接寫磁碟（逐位元組、這個順序）；產生檔每列用編譯時判斷「類別有這個函式才呼叫」，表單 .h／.cpp 沒存也編得過；那三個檔有沒存的分頁＝不寫、說原因；表單和網頁照舊不存檔可復原 | 產生檔用兩個編譯器對真的樹檢查（5 列、3 列函式不存在）＝ 0 錯誤；假表單實跑 8/8（有＝呼叫、沒有／private＝no-handler、表單 null＝no-form）；smoke：寫入順序、真的檔一個位元組都沒動、只插入那一段、沒存的分頁＝不寫；lib：產生檔形狀、spliceBytes | （本次） |
++| 1001 | 0.122.0 | （修正）新增事件不會讓建置壞掉（〔EH〕WPF 新增的處理函式在程式碼後置檔裡、建置前 VS 會全部存檔；EastSun「你這邊建置時 可能有問題」） | 6 個檔都放在「沒存檔」，產生檔是沒存的新分頁、CMake 已經列了它：只存到一部分就建置失敗（08:46 Exit 鈕 OnMouseDown） | 建置要用的產生檔 → CMakeLists.txt → wb_serve.cpp 分支直接寫磁碟（逐位元組、這個順序）；產生檔每列用編譯時判斷「類別有這個函式才呼叫」，表單 .h／.cpp 沒存也編得過；那三個檔有沒存的分頁＝不寫、說原因；表單和網頁照舊不存檔可復原 | 產生檔用兩個編譯器對真的樹檢查（5 列、3 列函式不存在）＝ 0 錯誤；假表單實跑 8/8（有＝呼叫、沒有／private＝no-handler、表單 null＝no-form）；smoke：寫入順序、真的檔一個位元組都沒動、只插入那一段、沒存的分頁＝不寫；lib：產生檔形狀、spliceBytes | 881b00e |
++| 1001 | 0.123.0 | CSV 表格照 Excel 官方說明（〔EX〕support.microsoft.com：Keyboard shortcuts in Excel、Enter data manually、Edit cell contents、Find or replace、Move or copy cells） | 貼一個值到一整欄只改第一格；Ctrl+－ 選一格就刪整列（VS Code 也縮小）；Shift+空白鍵打進空白；打字後 ←→ 不換格；F2 全選；Ctrl+X 馬上清空；Ctrl+R 開最近的檔案；有換行的格子被吃掉換行；打字中 Ctrl+Z 復原整個檔 | 作用中格子＝選取起點；Ctrl+Enter／Ctrl+D／Ctrl+R 填滿；貼上整數倍重複；剪下＝貼上時搬；Shift／Ctrl+空白鍵選列／欄；Ctrl+－ 只刪整列；輸入模式方向鍵寫入移動、F2 切換、游標在最後；範圍內 Enter／Tab；Ctrl+H 取代；最後一列下新增；Ctrl+方向鍵到資料邊緣；狀態列軸名＋加總；VS Code 同鍵（Ctrl+R、縮放、打字中 Ctrl+Z）由表格自己處理 | 真按鍵 13 項（DevTools 協定）全過；模擬事件：剪下＝貼上時帶來源、貼上帶選取範圍；lib：貼上的四種情況；smoke：一格貼整欄、1×2 貼 2×2 重複、剪下搬移各一個編輯、編輯中的 context | （本次） |
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index 7e89aa8..7b2e5bb 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -241,6 +241,10 @@ class Hub {
+       }),
+       // Ctrl+Z / Ctrl+Y while that text box is open: its typing, never the page's undo
+       reg('ht9045Designer.textUndo', a => { const d = this.active; if (d && d.textEditing) d.post({ type: 'textUndo', redo: !!(a && a.redo) }); return !!(d && d.textEditing); }),
++      // AI(W906-HTDESIGNER) 20261001: the CSV table's own Excel keys -- the table handles them; VS Code's binding of the
++      // same key must not run too (Ctrl+R = Open Recent, Ctrl+- / Ctrl+Shift+= = zoom, Ctrl+Z while a cell is edited
++      // = undo of the FILE). package.json binds them to this in the table only.
++      reg('ht9045Designer.csvKey', () => true),
+       // WPF: Alt+arrow = duplicate the selection (the copy moved 1 px that way; Shift = 10 px) -- the Ctrl+drag copy
+       reg('ht9045Designer.duplicate', a => {
+         const d = this.active;
+@@ -4975,7 +4979,9 @@ class CsvTableEditor {
+         t.timer = setTimeout(() => this.send(t), 60);
+       }),
+     ];
+-    panel.onDidDispose(() => { clearTimeout(t.timer); subs.forEach(s => s.dispose()); this.open.delete(t); });
++    panel.onDidDispose(() => { clearTimeout(t.timer); subs.forEach(s => s.dispose()); this.open.delete(t); if (t.editing) vscode.commands.executeCommand('setContext', 'ht9045Designer.csvEditing', false); });
++    // (another editor in front: no cell of this one is being edited for VS Code's keys)
++    subs.push(panel.onDidChangeViewState(e => { if (!e.webviewPanel.active && t.editing) { t.editing = false; vscode.commands.executeCommand('setContext', 'ht9045Designer.csvEditing', false); } }));
+   }
+ 
+   /** Whether the text can be written back: once per open (the bytes on disk vs what VS Code decoded). */
+@@ -5025,14 +5031,22 @@ class CsvTableEditor {
+         return this.apply(t, csvtable.cellEdits(t.p, ch), '修改');
+       }
+       case 'paste': {
+-        // Excel's clipboard (tab separated): the block from the top-left cell of the selection
++        // Excel's clipboard (tab separated) from the top-left cell of the selection; a bigger selection the block fits
++        // a whole number of times is filled with it; a cut block moves (lib/csvtable.js pasteChanges) -- one edit
+         const grid = csvtable.fromTsv(m.text);
+-        const r0 = Math.max(0, m.r | 0), c0 = Math.max(0, m.c | 0), ch = [];
+-        grid.forEach((row, i) => row.forEach((v, j) => ch.push({ r: r0 + i, c: c0 + j, v })));
+-        const ok = await this.apply(t, csvtable.cellEdits(t.p, ch), '貼上');
+-        if (ok) t.panel.webview.postMessage({ type: 'select', r: r0, c: c0, r1: r0 + grid.length - 1, c1: c0 + Math.max(...grid.map(g => g.length)) - 1 });
++        const int = (x, d) => (Number.isInteger(x) && x >= 0 ? x : d);
++        const r0 = int(m.r, 0), c0 = int(m.c, 0);
++        const sel = { r0, c0, r1: Math.max(r0, int(m.r1, r0)), c1: Math.max(c0, int(m.c1, c0)) };
++        const cut = m.cut && Number.isInteger(m.cut.r0) ? { r0: int(m.cut.r0, 0), c0: int(m.cut.c0, 0), r1: int(m.cut.r1, 0), c1: int(m.cut.c1, 0) } : null;
++        const pc = csvtable.pasteChanges(t.p, grid, sel, cut);
++        const ok = await this.apply(t, csvtable.cellEdits(t.p, pc.changes), cut ? '搬移' : '貼上');
++        if (ok) t.panel.webview.postMessage({ type: 'select', r: pc.rect.r0, c: pc.rect.c0, r1: pc.rect.r1, c1: pc.rect.c1 });
+         return ok;
+       }
++      case 'editing':
++        // a cell is being edited: VS Code's Ctrl+Z (the FILE's undo) is held off -- the table takes back the typing
++        t.editing = !!m.on;
++        return vscode.commands.executeCommand('setContext', 'ht9045Designer.csvEditing', t.editing).then(() => true, () => false);
+       case 'copy':
+         return vscode.env.clipboard.writeText(csvtable.toTsv(Array.isArray(m.grid) ? m.grid : [])).then(() => true, () => false);
+       case 'insertRows':
+diff --git a/tools/vscode-htdesigner/lib/csvtable.js b/tools/vscode-htdesigner/lib/csvtable.js
+index bdbd8e0..a6de268 100644
+--- a/tools/vscode-htdesigner/lib/csvtable.js
++++ b/tools/vscode-htdesigner/lib/csvtable.js
+@@ -172,6 +172,35 @@ function fromTsv(text) {
+   return parse(t, '\t').rows.map(r => r.cells.map(c => c.v));
+ }
+ 
++/**
++ * A paste, as Excel does it (AI 20261001: "一整欄改成同一個值" pasted only the first cell): the clipboard block goes
++ * in from the selection's top-left; a selection bigger than the block that the block fits a whole number of times
++ * (one cell into a whole column, a 1x2 into a 3x4...) is filled with it, repeated. A cut (Ctrl+X) block: its cells
++ * outside where it lands are emptied (only cells that exist). One list = one edit = one Ctrl+Z.
++ * sel / cut: { r0, c0, r1, c1 }. -> { changes: [{ r, c, v }], rect: { r0, c0, r1, c1 }, tiled }
++ */
++function pasteChanges(p, grid, sel, cut) {
++  const g = grid && grid.length ? grid : [['']];
++  const gh = g.length, gw = Math.max(1, ...g.map(x => x.length));
++  const h = sel.r1 - sel.r0 + 1, w = sel.c1 - sel.c0 + 1;
++  const tiled = (h > gh || w > gw) && h % gh === 0 && w % gw === 0;
++  const H = tiled ? h : gh, W = tiled ? w : gw;
++  const changes = [];
++  for (let i = 0; i < H; i++) {
++    const row = g[i % gh];
++    for (let j = 0; j < W; j++) if (j % gw < row.length) changes.push({ r: sel.r0 + i, c: sel.c0 + j, v: row[j % gw] });
++  }
++  const rect = { r0: sel.r0, c0: sel.c0, r1: sel.r0 + H - 1, c1: sel.c0 + W - 1 };
++  if (cut) {
++    for (let r = cut.r0; r <= cut.r1; r++) for (let c = cut.c0; c <= cut.c1; c++) {
++      if (r >= rect.r0 && r <= rect.r1 && c >= rect.c0 && c <= rect.c1) continue;
++      const pr = p && p.rows[r];
++      if (pr && c < pr.cells.length && pr.cells[c].v !== '') changes.push({ r, c, v: '' });
++    }
++  }
++  return { changes, rect, tiled };
++}
++
+ /**
+  * Could the text VS Code decoded be written back without damage? A file that is not UTF-8 (a Big5
+  * one) comes in with U+FFFD in place of what it could not read: saving it would destroy those bytes.
+@@ -185,4 +214,4 @@ function decodeSafe(bytes, text) {
+   return utf8 ? { ok: true } : { ok: false, why: '這個檔案不是 UTF-8（多半是 Big5），VS Code 用 UTF-8 讀，看不懂的字變成了 �。這樣存檔會把那些字毀掉，所以不能編輯。要編輯：按右下角的「UTF-8」→「以編碼重新開啟」→ 選「Traditional Chinese (Big5)」。' };
+ }
+ 
+-module.exports = { detectDelim, parse, parseDoc, fieldText, cellEdits, insertRows, deleteRows, toTsv, fromTsv, decodeSafe };
++module.exports = { detectDelim, parse, parseDoc, fieldText, cellEdits, insertRows, deleteRows, toTsv, fromTsv, pasteChanges, decodeSafe };
+diff --git a/tools/vscode-htdesigner/media/csv.css b/tools/vscode-htdesigner/media/csv.css
+index d331d3f..8565e67 100644
+--- a/tools/vscode-htdesigner/media/csv.css
++++ b/tools/vscode-htdesigner/media/csv.css
+@@ -26,6 +26,8 @@ body {
+   border: 1px solid var(--vscode-input-border, transparent); border-radius: 2px; outline: 0;
+ }
+ .bar input[type=text]:focus { border-color: var(--vscode-focusBorder); }
++.bar.repl { justify-content: flex-end; }
++.bar.repl[hidden] { display: none; }
+ .warn {
+   padding: 6px 10px; color: var(--vscode-editorWarning-foreground, #cca700);
+   background: var(--vscode-inputValidation-warningBackground, rgba(204,167,0,.12));
+@@ -46,6 +48,12 @@ body {
+ .cell.sel { background: var(--vscode-editor-selectionBackground, rgba(38,79,120,.45)); }
+ .cell.cur { outline: 2px solid var(--vscode-focusBorder, #0078d4); outline-offset: -2px; }
+ .cell.hit { background: var(--vscode-editor-findMatchHighlightBackground, rgba(234,92,0,.33)); }
++/* Ctrl+X: Excel's moving border -- the cells go when they are pasted */
++.cell.cut { outline: 1px dashed var(--vscode-focusBorder, #0078d4); outline-offset: -3px; }
++.cell.cut.cur { outline-style: solid; }
++/* the empty row under the last one: typing there adds a row */
++.row.phantom .rn { opacity: .55; }
++.row.phantom .cell { background: transparent; border-bottom-style: dashed; }
+ .cell.sel.hit { background: var(--vscode-editor-findMatchBackground, rgba(81,92,106,.6)); }
+ .hrow { z-index: 4; }
+ .hc, .rn {
+diff --git a/tools/vscode-htdesigner/media/csv.js b/tools/vscode-htdesigner/media/csv.js
+index 8104fa4..a29364d 100644
+--- a/tools/vscode-htdesigner/media/csv.js
++++ b/tools/vscode-htdesigner/media/csv.js
+@@ -4,7 +4,24 @@
+  * changed (lib/csvtable.js), into VS Code's document: Ctrl+S saves, Ctrl+Z undoes.
+  * Keys like Excel: arrows / Tab / Enter move, typing or F2 edits, Esc cancels, Delete clears,
+  * Ctrl+C / Ctrl+V copy / paste (tab separated, to and from Excel), Ctrl+A all, Ctrl+F find.
+- * Only the rows in sight are drawn (a log with 100 000 lines stays quick). */
++ * Only the rows in sight are drawn (a log with 100 000 lines stays quick).
++ *
++ * AI(W906-HTDESIGNER) 20261001 (EastSun: "你看一下網路上 手冊還有哪些操作…目前操作後的結果跟網路上結果不一樣"):
++ * checked against Excel's own help (support.microsoft.com "Keyboard shortcuts in Excel", "Enter data manually",
++ * "Edit cell contents", "Find or replace", "Move or copy cells"):
++ *   - the ACTIVE cell is where the selection started (Excel), not its far corner: typing, F2 and Ctrl+Enter go
++ *     there; Enter / Tab move it inside a selected block; Tab..Tab then Enter goes back to the first column
++ *   - Ctrl+Enter = the typed value into every selected cell; Ctrl+D / Ctrl+R = fill down / right
++ *   - a copied cell pasted on a block fills the block (a block a whole number of times: repeated)
++ *   - Ctrl+X moves the cells when they are pasted (not cleared at once); Esc forgets the cut
++ *   - typed over a cell: all four arrows write it and move (Enter mode); F2: the caret at the end, F2 again
++ *     toggles Enter / Edit mode; a double click puts the caret where it was clicked
++ *   - Shift+Space / Ctrl+Space = the whole rows / columns (a Shift+Space used to type a space into the cell)
++ *   - Ctrl+- deletes rows only when whole rows are selected (it used to take the row of any one cell)
++ *   - Backspace = edit the active cell from empty (Esc gives it back); Delete clears the selection
++ *   - Ctrl+arrow = the edge of the data (stops at empty cells); Ctrl+H = replace (whole cell, in the selection)
++ *   - an empty row under the last one: typing there adds a row
++ *   - the status bar: the row's first two columns (which axis), sum / min / max of the numbers selected */
+ (function () {
+   'use strict';
+   var api = acquireVsCodeApi();
+@@ -14,9 +31,12 @@
+   var D = { rows: [], readOnly: false, why: '', file: '', delim: ',' };
+   var header = st.header;      /* the first row is the column names (frozen): undefined = guess */
+   var widths = st.widths || {};
+-  var cur = { r: 0, c: 0 }, anchor = { r: 0, c: 0 };
+-  var editing = null;          /* { r, c, orig, typed } -- the editor is `kb` */
+-  var find = { q: '', hits: [], i: -1 };
++  /* the selection is the block anchor..cur; act = the active cell inside it (Excel's white cell) */
++  var cur = { r: 0, c: 0 }, anchor = { r: 0, c: 0 }, act = { r: 0, c: 0 };
++  var editing = null;          /* { r, c, orig, typed } -- the editor is `kb`; typed = Enter mode */
++  var find = { q: '', hits: [], i: -1, whole: false, rect: null };
++  var cut = null;              /* { r0, c0, r1, c1, text }: Ctrl+X, moved when pasted */
++  var tabStart = null;         /* the column a Tab..Tab run started in (Enter goes back to it) */
+   var ncols = 1;
+ 
+   var root = document.getElementById('root');
+@@ -25,20 +45,31 @@
+       '<span id="name" class="name"></span><span id="size" class="size"></span>' +
+       '<label class="chk" title="第一列是欄位名稱：固定在上面，捲動時一直看得到"><input type="checkbox" id="hdr">第一列是標題</label>' +
+       '<button id="insRow" title="在目前這列上面插入一列（Ctrl+Shift+＋）">插入列</button>' +
+-      '<button id="delRow" title="刪除選取的列（Ctrl+－）">刪除列</button>' +
++      '<button id="delRow" title="刪除選取的列（選整列後 Ctrl+－）">刪除列</button>' +
+       '<span class="sp"></span>' +
+-      '<input id="find" type="text" placeholder="尋找（Ctrl+F，Enter 下一個）" spellcheck="false">' +
++      '<input id="find" type="text" placeholder="尋找（Ctrl+F，Enter 下一個，Shift+Enter 上一個）" spellcheck="false">' +
+       '<span id="findN" class="findN"></span>' +
++      '<button id="replTog" title="取代（Ctrl+H）">取代…</button>' +
+       '<button id="asText" title="用文字編輯器開這個檔">以文字開啟</button>' +
+     '</div>' +
++    '<div id="repl" class="bar repl" hidden>' +
++      '<input id="replBox" type="text" placeholder="取代為" spellcheck="false">' +
++      '<label class="chk" title="只找整格就是這個值的（取代「1」不會改到 10、21）"><input type="checkbox" id="whole">整格相符</label>' +
++      '<label class="chk" id="inSelL" title="只在選取的範圍裡找、取代"><input type="checkbox" id="inSel">只在選取範圍<span id="inSelR"></span></label>' +
++      '<button id="replOne" title="取代目前這一格，再找下一個">取代</button>' +
++      '<button id="replAll" title="一次取代全部（一個 Ctrl+Z 全部復原）">全部取代</button>' +
++      '<span id="replN" class="findN"></span>' +
++    '</div>' +
+     '<div id="warn" class="warn" hidden></div>' +
+     '<div id="wrap" class="wrap" tabindex="-1"><div id="sizer" class="sizer"><div id="grid"></div>' +
+       '<input id="kb" class="ed idle" type="text" spellcheck="false" autocomplete="off" aria-label="儲存格"></div></div>' +
+     '<div id="status" class="status"></div>';
+   var wrap = document.getElementById('wrap'), sizer = document.getElementById('sizer'), grid = document.getElementById('grid');
+   var hdrBox = document.getElementById('hdr'), findBox = document.getElementById('find');
++  var replBar = document.getElementById('repl'), replBox = document.getElementById('replBox');
++  var wholeBox = document.getElementById('whole'), inSelBox = document.getElementById('inSel');
+   /* AI(W906-HTDESIGNER) 20261001: ONE input takes every key (EastSun 20261001 "表格我沒辦法寫入").
+-   * Idle it sits, invisible, on the current cell and has the focus; a character typed -- or the IME
++   * Idle it sits, invisible, on the active cell and has the focus; a character typed -- or the IME
+    * (注音／倉頡) starting a word -- goes into it, and that makes it the cell's editor (Excel: typing
+    * replaces the cell), so a Chinese word goes into a cell too and the first key is never lost.
+    * Before, the grid (a div) had the focus: a div takes no IME, so with a Chinese input method on
+@@ -50,14 +81,17 @@
+   function cell(r, c) { var row = D.rows[r]; return row && c < row.length ? row[c] : ''; }
+   function firstBody() { return header ? 1 : 0; }
+   function nrows() { return D.rows.length; }
++  /* the last row one can go to: the empty one under the data (typing there adds a row), none when read only */
++  function lastRow() { return D.readOnly ? nrows() - 1 : nrows(); }
+   function colW(c) { return widths[c] || 80; }
+   function colX(c) { var x = RNW; for (var i = 0; i < c; i++) x += colW(i); return x; }
+   function totalW() { var x = RNW; for (var i = 0; i < ncols; i++) x += colW(i); return x; }
+   function rowY(r) { return (r - firstBody()) * RH + RH * (header ? 2 : 1); }
++  function isNum(v) { return /^[-+]?\d+(\.\d+)?$/.test(v); }
+   function guessHeader() {
+     if (D.rows.length < 2) return false;
+     var a = D.rows[0], b = D.rows[1];
+-    var textual = a.filter(function (v) { return v !== ''; }).every(function (v) { return !/^[-+]?\d+(\.\d+)?$/.test(v); });
++    var textual = a.filter(function (v) { return v !== ''; }).every(function (v) { return !isNum(v); });
+     return textual && a.some(function (v) { return v !== ''; }) && b.some(function (v) { return /^[-+]?\d/.test(v); });
+   }
+   function autoWidths() {
+@@ -69,7 +103,8 @@
+       widths[c] = Math.max(44, Math.min(320, Math.round(mx * 7.2 + 18)));
+     }
+   }
+-  function save() { api.setState({ header: header, widths: widths, cur: cur }); }
++  function save() { api.setState({ header: header, widths: widths, cur: act }); }
++  function warnRo() { showWarn(D.why || '這個檔案現在不能編輯。'); }
+ 
+   /* --- drawing: only what is in sight --- */
+   var drawn = { a: -1, b: -1 };
+@@ -77,8 +112,8 @@
+     var top = wrap.scrollTop, h = wrap.clientHeight || 400;
+     var fb = firstBody();
+     var a = Math.max(fb, fb + Math.floor((top - RH * (header ? 2 : 1)) / RH) - 8);
+-    var b = Math.min(nrows() - 1, a + Math.ceil(h / RH) + 16);
+-    sizer.style.height = (rowY(nrows()) + RH) + 'px';
++    var b = Math.min(lastRow(), a + Math.ceil(h / RH) + 16);
++    sizer.style.height = (rowY(Math.max(lastRow(), 0) + 1) + RH) + 'px';
+     sizer.style.width = (totalW() + 40) + 'px';
+     var html = [];
+     /* the column letters (and the frozen first row) stay on top */
+@@ -99,31 +134,51 @@
+   }
+   function inSelC(c) { return c >= Math.min(cur.c, anchor.c) && c <= Math.max(cur.c, anchor.c); }
+   function inSelR(r) { return r >= Math.min(cur.r, anchor.r) && r <= Math.max(cur.r, anchor.r); }
++  function inRect(s, r, c) { return !!s && r >= s.r0 && r <= s.r1 && c >= s.c0 && c <= s.c1; }
+   function rowHtml(r, y, frozen) {
+-    var s = ['<div class="row' + (frozen ? ' frozen' : '') + '" style="top:' + y + 'px;width:' + totalW() + 'px">'];
+-    s.push('<div class="rn' + (inSelR(r) ? ' on' : '') + '" data-row="' + r + '" style="left:' + wrap.scrollLeft + 'px">' + (r + 1) + '</div>');
++    var phantom = r >= nrows();
++    var s = ['<div class="row' + (frozen ? ' frozen' : '') + (phantom ? ' phantom' : '') + '" style="top:' + y + 'px;width:' + totalW() + 'px">'];
++    s.push('<div class="rn' + (inSelR(r) ? ' on' : '') + '" data-row="' + r + '" style="left:' + wrap.scrollLeft + 'px"' +
++      (phantom ? ' title="最後一列下面的空白列：在這裡打字＝新增一列"' : '') + '>' + (phantom ? '＋' : r + 1) + '</div>');
+     var row = D.rows[r] || [];
+     for (var c = 0; c < ncols; c++) {
+       var v = c < row.length ? row[c] : '';
+-      var cls = 'cell' + (c >= row.length ? ' none' : '') + (inSel(r, c) ? ' sel' : '') + (r === cur.r && c === cur.c ? ' cur' : '') +
+-        (find.q && v.toLowerCase().indexOf(find.q) >= 0 ? ' hit' : '') + (/^[-+]?\d+(\.\d+)?$/.test(v) ? ' num' : '');
++      var cls = 'cell' + (c >= row.length ? ' none' : '') + (inSel(r, c) ? ' sel' : '') + (r === act.r && c === act.c ? ' cur' : '') +
++        (inRect(cut, r, c) ? ' cut' : '') + (find.q && match(v) ? ' hit' : '') + (isNum(v) ? ' num' : '');
+       s.push('<div class="' + cls + '" data-r="' + r + '" data-c="' + c + '" style="left:' + colX(c) + 'px;width:' + colW(c) + 'px" title="' + esc(v).replace(/"/g, '&quot;') + '">' + esc(v) + '</div>');
+     }
+     s.push('</div>');
+     return s.join('');
+   }
++  function fmtNum(x) { return Math.round(x * 1e6) / 1e6 + ''; }
+   function status() {
+     var el = document.getElementById('status');
+-    var n = (Math.abs(cur.r - anchor.r) + 1) * (Math.abs(cur.c - anchor.c) + 1);
+-    var name = header && D.rows[0] && D.rows[0][cur.c] ? '（' + D.rows[0][cur.c] + '）' : '';
+-    el.textContent = colName(cur.c) + (cur.r + 1) + name + '　' + (n > 1 ? '選了 ' + n + ' 格　' : '') +
+-      (D.readOnly ? '唯讀' : '雙擊、F2 或直接打字（中文輸入法也可以）＝編輯，Enter 確定，Esc 取消；Ctrl+S 存檔，Ctrl+Z 復原');
++    var s = selRect(), n = (s.r1 - s.r0 + 1) * (s.c1 - s.c0 + 1);
++    var name = header && D.rows[0] && D.rows[0][act.c] ? '（' + D.rows[0][act.c] + '）' : '';
++    /* which row it is: its first two columns (Mot_Table: Motorname + Alias -- the axis) */
++    var who = act.r >= firstBody() && act.r < nrows() ? [cell(act.r, 0), cell(act.r, 1)].filter(Boolean).join(' ') : '';
++    if (who.length > 40) who = who.slice(0, 40) + '…';
++    var sum = '';
++    if (n > 1 && n <= 200000) {
++      var k = 0, tot = 0, mn = Infinity, mx = -Infinity;
++      for (var r = s.r0; r <= s.r1; r++) for (var c = s.c0; c <= s.c1; c++) {
++        var v = cell(r, c);
++        if (isNum(v)) { var x = +v; k++; tot += x; if (x < mn) mn = x; if (x > mx) mx = x; }
++      }
++      if (k > 1) sum = '　數字 ' + k + ' 個：加總 ' + fmtNum(tot) + '　平均 ' + fmtNum(tot / k) + '　最小 ' + fmtNum(mn) + '　最大 ' + fmtNum(mx);
++    }
++    var hint = D.readOnly ? '唯讀' : act.r >= nrows() ? '最後一列下面的空白列：在這裡打字＝新增一列' :
++      editing ? (editing.typed ? '［輸入］方向鍵＝寫入並移動，F2＝改成在格子裡移游標' : '［編輯］方向鍵＝在格子裡移游標，F2＝改回輸入') + '；Enter 確定，Ctrl+Enter＝填入選取的格子，Esc 取消' :
++      '雙擊、F2 或直接打字（中文輸入法也可以）＝編輯；Ctrl+Enter／Ctrl+D／Ctrl+R＝填入；Ctrl+H 取代；Ctrl+S 存檔，Ctrl+Z 復原';
++    el.textContent = colName(act.c) + (act.r + 1) + name + (who ? '｜' + who : '') + '　' + (n > 1 ? '選了 ' + n + ' 格' + sum + '　' : '') +
++      (cut ? '剪下了（貼上＝搬過去，Esc 取消）　' : '') + hint;
+   }
+ 
+   /* --- moving --- */
++  function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
+   function clampCur() {
+-    cur.r = Math.max(0, Math.min(nrows() - 1, cur.r));
+-    cur.c = Math.max(0, Math.min(ncols - 1, cur.c));
++    var R = Math.max(0, lastRow()), C = Math.max(0, ncols - 1);
++    [cur, anchor, act].forEach(function (p) { p.r = clamp(p.r, 0, R); p.c = clamp(p.c, 0, C); });
+   }
+   function scrollTo(r, c) {
+     var y = rowY(r), top = wrap.scrollTop, hh = RH * (header ? 2 : 1);
+@@ -135,21 +190,74 @@
+     if (x - RNW < left) wrap.scrollLeft = x - RNW;
+     else if (x + colW(c) > left + wrap.clientWidth) wrap.scrollLeft = x + colW(c) - wrap.clientWidth;
+   }
++  /** One cell (the selection and the active cell there), or (extend) the block from the anchor to it. */
+   function go(r, c, extend) {
+     cur = { r: r, c: c };
++    if (!extend) { anchor = { r: r, c: c }; act = { r: r, c: c }; }
+     clampCur();
+-    if (!extend) anchor = { r: cur.r, c: cur.c };
+     scrollTo(cur.r, cur.c);
+     draw();
+     save();
+   }
++  function setRect(r0, c0, r1, c1, ar, ac) {
++    anchor = { r: r0, c: c0 }; cur = { r: r1, c: c1 }; act = { r: ar == null ? r0 : ar, c: ac == null ? c0 : ac };
++    clampCur();
++  }
++  function multi() { return cur.r !== anchor.r || cur.c !== anchor.c; }
++  /* Excel: Enter / Tab inside a selected block move the active cell and keep the block (down then the next
++     column / right then the next row; Shift = back; round at the end) */
++  function stepInSel(byRow, back) {
++    var s = selRect(), r = act.r, c = act.c, d = back ? -1 : 1;
++    if (byRow) {
++      c += d;
++      if (c > s.c1) { c = s.c0; r = r + 1 > s.r1 ? s.r0 : r + 1; }
++      else if (c < s.c0) { c = s.c1; r = r - 1 < s.r0 ? s.r1 : r - 1; }
++    } else {
++      r += d;
++      if (r > s.r1) { r = s.r0; c = c + 1 > s.c1 ? s.c0 : c + 1; }
++      else if (r < s.r0) { r = s.r1; c = c - 1 < s.c0 ? s.c1 : c - 1; }
++    }
++    act = { r: r, c: c };
++    scrollTo(r, c);
++    draw();
++    save();
++  }
++  /** Enter / Tab from the active cell: inside a block, or to the next cell (Tab..Tab, Enter = back to the first column). */
++  function enterMove(back) {
++    if (multi()) return stepInSel(false, back);
++    var c = tabStart != null && !back ? tabStart : act.c;
++    tabStart = null;
++    go(act.r + (back ? -1 : 1), c);
++  }
++  function tabMove(back) {
++    if (multi()) return stepInSel(true, back);
++    if (tabStart == null) tabStart = act.c;
++    var r = act.r, c = act.c + (back ? -1 : 1);
++    go(r, c);
++  }
++  /* Excel's Ctrl+arrow: to the edge of the data -- the last filled cell of this run, or the next filled one */
++  function edge(r, c, dr, dc) {
++    var R = nrows() - 1, C = ncols - 1;
++    var inb = function (y, x) { return y >= 0 && y <= R && x >= 0 && x <= C; };
++    var filled = function (y, x) { return cell(y, x) !== ''; };
++    var y = r + dr, x = c + dc;
++    if (!inb(y, x)) return { r: clamp(r, 0, Math.max(R, 0)), c: c };
++    if (filled(r, c) && filled(y, x)) {
++      while (inb(y + dr, x + dc) && filled(y + dr, x + dc)) { y += dr; x += dc; }
++      return { r: y, c: x };
++    }
++    while (!filled(y, x) && inb(y + dr, x + dc)) { y += dr; x += dc; }
++    return { r: y, c: x };
++  }
+ 
+   /* --- editing --- */
+   function send(m) { api.postMessage(m); }
+   function setCells(changes) {
+-    if (D.readOnly) { showWarn(D.why || '這個檔案現在不能編輯。'); return; }
+-    changes = changes.filter(function (ch) { return cell(ch.r, ch.c) !== ch.v || !D.rows[ch.r] || ch.c >= D.rows[ch.r].length; });
++    if (D.readOnly) { warnRo(); return; }
++    changes = changes.filter(function (ch) { return cell(ch.r, ch.c) !== ch.v || !D.rows[ch.r] || ch.c >= D.rows[ch.r].length; })
++      .filter(function (ch) { return ch.v !== '' || (D.rows[ch.r] && ch.c < D.rows[ch.r].length); });
+     if (!changes.length) return;
++    cut = null;   /* (Excel: an edit ends the cut) */
+     /* shown at once; the document's own change comes back and redraws */
+     changes.forEach(function (ch) {
+       while (D.rows.length <= ch.r) D.rows.push([]);
+@@ -162,42 +270,82 @@
+     draw();
+   }
+   function focusKb() { try { kb.focus({ preventScroll: true }); } catch (e) { kb.focus(); } }
+-  /** The input on its cell: the editing one's, or (idle) the current one's -- the IME's word box opens there. */
++  /** The input on its cell: the editing one's, or (idle) the active one's -- the IME's word box opens there. */
+   function placeKb() {
+-    var r = editing ? editing.r : cur.r, c = editing ? editing.c : cur.c;
++    var r = editing ? editing.r : act.r, c = editing ? editing.c : act.c;
+     var s = kb.style;
+-    s.left = colX(c) + 'px'; s.top = (header && r === 0 ? wrap.scrollTop + RH : rowY(r)) + 'px';
+-    s.width = (editing ? Math.max(colW(c), 120) : colW(c)) + 'px'; s.height = RH + 'px';
++    var w = editing ? Math.max(colW(c), 120) : colW(c);
++    var right = !!editing && isNum(editing.orig) && !editing.typed;   /* a number edits right-aligned, as the cell shows it */
++    s.left = (right ? colX(c) + colW(c) - w : colX(c)) + 'px'; s.top = (header && r === 0 ? wrap.scrollTop + RH : rowY(r)) + 'px';
++    s.width = w + 'px'; s.height = RH + 'px';
++    s.textAlign = right ? 'right' : '';
+   }
+-  function toIdle(refocus) {
++  /* the extension holds VS Code's own Ctrl+Z off while a cell is edited (that one takes back this cell's typing);
++     after a Ctrl+Z it says so a moment later -- VS Code reads the same key right after this page did */
++  var offTimer = 0;
++  function toIdle(refocus, late) {
+     kb.value = '';
+     kb.classList.add('idle');
+     placeKb();
++    clearTimeout(offTimer);
++    if (late) offTimer = setTimeout(function () { if (!editing) send({ type: 'editing', on: false }); }, 400);
++    else send({ type: 'editing', on: false });
+     if (refocus) focusKb();
+   }
+-  /** The input becomes the current cell's editor; `text` null = keep what was typed into it. */
++  /** The input becomes the active cell's editor; `text` null = keep what was typed into it. */
+   function begin(text, typed) {
+-    if (D.readOnly) { kb.value = ''; showWarn(D.why || '這個檔案現在不能編輯。'); return false; }
+-    editing = { r: cur.r, c: cur.c, orig: cell(cur.r, cur.c), typed: typed };
++    if (D.readOnly) { kb.value = ''; warnRo(); return false; }
++    var orig = cell(act.r, act.c);
++    /* (an <input> holds one line: a cell with a line break would lose it -- that one is edited as text) */
++    if (!typed && /[\r\n]/.test(orig)) { kb.value = ''; showWarn('這一格有換行：在表格裡改會把換行弄掉。請按「以文字開啟」改這一格。'); return false; }
++    editing = { r: act.r, c: act.c, orig: orig, typed: typed };
++    clearTimeout(offTimer);
+     if (text != null) kb.value = text;
+     kb.classList.remove('idle');
+     placeKb();
+     focusKb();
++    send({ type: 'editing', on: true });
++    status();
+     return true;
+   }
+-  /** F2 / a double click (initial null): the cell's text, all selected; else `initial` typed over it. */
++  /** F2 / a double click (initial null): the cell's text, the caret at its end (Excel); else `initial` typed over it. */
+   function startEdit(initial) {
+-    if (!begin(initial != null ? initial : cell(cur.r, cur.c), initial != null)) return;
+-    if (initial == null) kb.select(); else kb.setSelectionRange(kb.value.length, kb.value.length);
++    if (!begin(initial != null ? initial : cell(act.r, act.c), initial != null)) return false;
++    kb.setSelectionRange(kb.value.length, kb.value.length);
++    return true;
++  }
++  /* a double click: the caret where it was clicked (measured on the input's own font) */
++  var mctx = null;
++  function caretAt(clientX) {
++    var b = kb.getBoundingClientRect(), cs = getComputedStyle(kb);
++    if (!mctx) mctx = document.createElement('canvas').getContext('2d');
++    mctx.font = cs.font;
++    var t = kb.value, pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.borderLeftWidth) || 0);
++    var full = mctx.measureText(t).width;
++    var x0 = kb.style.textAlign === 'right' ? b.right - pad - full : b.left + pad;
++    var x = clientX - x0, best = x <= 0 ? 0 : t.length;
++    for (var i = 1; i <= t.length; i++) {
++      var w = mctx.measureText(t.slice(0, i)).width;
++      if (w >= x) { best = w - x > x - mctx.measureText(t.slice(0, i - 1)).width ? i - 1 : i; break; }
++    }
++    kb.setSelectionRange(best, best);
+   }
+   function editKey(e) {
+-    var k = e.key;
+-    if (k === 'Enter') { e.preventDefault(); commit(); go(cur.r + (e.shiftKey ? -1 : 1), cur.c); }
+-    else if (k === 'Tab') { e.preventDefault(); commit(); go(cur.r, cur.c + (e.shiftKey ? -1 : 1)); }
+-    else if (k === 'Escape') { e.preventDefault(); cancel(); }
+-    else if ((k === 'ArrowUp' || k === 'ArrowDown') && editing.typed) {
+-      /* typed over (not F2): an arrow commits and moves, like Excel */
+-      e.preventDefault(); commit(); go(cur.r + (k === 'ArrowUp' ? -1 : 1), cur.c);
++    var k = e.key, ctrl = e.ctrlKey || e.metaKey;
++    if (k === 'Enter' && e.altKey) { e.preventDefault(); showWarn('表格的格子不能換行（機台的 CSV 一格一行）'); return; }
++    if (k === 'Enter' && ctrl) { e.preventDefault(); return commitFill(); }
++    if (k === 'Enter') { e.preventDefault(); commit(); return enterMove(e.shiftKey); }
++    if (k === 'Tab') { e.preventDefault(); commit(); return tabMove(e.shiftKey); }
++    if (k === 'Escape') { e.preventDefault(); return cancel(); }
++    /* Ctrl+Z while editing = this cell's typing undone (VS Code's undo of the file is held off meanwhile) */
++    if (ctrl && (k === 'z' || k === 'Z' || k === 'y' || k === 'Y')) { e.preventDefault(); return cancel(true); }
++    if (k === 'F2') { e.preventDefault(); editing.typed = !editing.typed; placeKb(); return status(); }
++    if (editing.typed && /^Arrow/.test(k)) {
++      /* Enter mode (typed over): an arrow writes it and moves, like Excel */
++      e.preventDefault();
++      commit();
++      tabStart = null;
++      return go(act.r + (k === 'ArrowUp' ? -1 : k === 'ArrowDown' ? 1 : 0), act.c + (k === 'ArrowLeft' ? -1 : k === 'ArrowRight' ? 1 : 0));
+     }
+   }
+   function commit(refocus) {
+@@ -209,10 +357,21 @@
+     if (v !== e.orig) setCells([{ r: e.r, c: e.c, v: v }]);
+     else draw();
+   }
+-  function cancel() {
++  /* Ctrl+Enter: the value into every selected cell (ONE edit); the block and the active cell stay */
++  function commitFill() {
+     if (!editing) return;
++    var v = kb.value;
+     editing = null;
+     toIdle(true);
++    var s = selRect(), ch = [];
++    for (var r = s.r0; r <= s.r1; r++) for (var c = s.c0; c <= s.c1; c++) ch.push({ r: r, c: c, v: v });
++    setCells(ch);
++    draw();
++  }
++  function cancel(byUndoKey) {
++    if (!editing) return;
++    editing = null;
++    toIdle(true, byUndoKey);
+     draw();
+   }
+   function selRect() {
+@@ -223,35 +382,117 @@
+     for (var r = s.r0; r <= s.r1; r++) for (var c = s.c0; c <= s.c1; c++) if (D.rows[r] && c < D.rows[r].length && D.rows[r][c] !== '') ch.push({ r: r, c: c, v: '' });
+     setCells(ch);
+   }
+-  function copySel() {
+-    var s = selRect(), grid = [];
+-    for (var r = s.r0; r <= s.r1; r++) { var line = []; for (var c = s.c0; c <= s.c1; c++) line.push(cell(r, c)); grid.push(line); }
+-    send({ type: 'copy', grid: grid });
++  /* the block as Excel's clipboard text: tab between cells, CRLF between rows, quoted when it has to be */
++  function q(v) { return /[\t\r\n"]/.test(v) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v); }
++  function tsvOf(s) {
++    var rows = [];
++    for (var r = s.r0; r <= s.r1; r++) { var line = []; for (var c = s.c0; c <= s.c1; c++) line.push(q(cell(r, c))); rows.push(line.join('\t')); }
++    return rows.join('\r\n');
++  }
++  function gridOf(s) {
++    var g = [];
++    for (var r = s.r0; r <= s.r1; r++) { var line = []; for (var c = s.c0; c <= s.c1; c++) line.push(cell(r, c)); g.push(line); }
++    return g;
++  }
++  function copySel() { cut = null; send({ type: 'copy', grid: gridOf(selRect()) }); draw(); }
++  /* Ctrl+X: copied now, moved when pasted (Excel's "moving border"), Esc forgets it */
++  function cutSel() {
++    var s = selRect();
++    send({ type: 'copy', grid: gridOf(s) });
++    if (D.readOnly) { cut = null; warnRo(); return; }
++    cut = { r0: s.r0, c0: s.c0, r1: s.r1, c1: s.c1, text: tsvOf(s) };
++    draw();
+   }
++  var norm = function (t) { return String(t || '').replace(/\r\n|\r/g, '\n').replace(/\n$/, ''); };
+   function pasteText(t) {
+-    send({ type: 'paste', text: t, r: Math.min(cur.r, anchor.r), c: Math.min(cur.c, anchor.c) });
++    var s = selRect();
++    var m = { type: 'paste', text: t, r: s.r0, c: s.c0, r1: s.r1, c1: s.c1 };
++    if (cut && norm(t) === norm(cut.text)) m.cut = { r0: cut.r0, c0: cut.c0, r1: cut.r1, c1: cut.c1 };
++    cut = null;
++    send(m);
+   }
++  /* Ctrl+D / Ctrl+R: the first row (column) of the block into the rest; one row (column) = from the one above (left) */
++  function fill(down) {
++    var s = selRect(), ch = [];
++    var one = down ? s.r0 === s.r1 : s.c0 === s.c1;
++    var src = down ? (one ? s.r0 - 1 : s.r0) : (one ? s.c0 - 1 : s.c0);
++    if (src < 0) { showWarn(down ? '上面沒有列可以往下填' : '左邊沒有欄可以往右填'); return; }
++    if (down && header && src === 0) { showWarn('上面是標題列，不往下填'); return; }
++    if (down) { for (var r = one ? s.r0 : s.r0 + 1; r <= s.r1; r++) for (var c = s.c0; c <= s.c1; c++) ch.push({ r: r, c: c, v: cell(src, c) }); }
++    else { for (var r2 = s.r0; r2 <= s.r1; r2++) for (var c2 = one ? s.c0 : s.c0 + 1; c2 <= s.c1; c2++) ch.push({ r: r2, c: c2, v: cell(r2, src) }); }
++    setCells(ch);
++  }
++  function selectRows() { var s = selRect(); setRect(s.r0, 0, s.r1, ncols - 1, act.r, act.c); draw(); }
++  /* (the frozen title row is not part of a column: a Ctrl+Enter on a column never writes over the column names) */
++  function colTop() { return firstBody() < nrows() ? firstBody() : 0; }
++  function selectCols() { var s = selRect(); setRect(colTop(), s.c0, Math.max(nrows() - 1, 0), s.c1, Math.max(act.r, colTop()), act.c); draw(); }
+ 
+-  /* --- find --- */
+-  function runFind(q, next) {
+-    find.q = String(q || '').toLowerCase();
++  /* --- find / replace --- */
++  function match(v) {
++    v = String(v).toLowerCase();
++    return find.whole ? v === find.q : v.indexOf(find.q) >= 0;
++  }
++  function inScope(r, c) { return !find.rect || inRect(find.rect, r, c); }
++  function runFind(qs, dir) {
++    find.q = String(qs || '').toLowerCase();
++    find.whole = wholeBox.checked;
+     find.hits = [];
+     if (find.q) {
+       for (var r = 0; r < nrows(); r++) {
+         var row = D.rows[r];
+-        for (var c = 0; c < row.length; c++) if (row[c].toLowerCase().indexOf(find.q) >= 0) find.hits.push({ r: r, c: c });
++        for (var c = 0; c < row.length; c++) if (inScope(r, c) && match(row[c])) find.hits.push({ r: r, c: c });
+       }
+     }
+     var n = document.getElementById('findN');
+     if (!find.hits.length) { find.i = -1; n.textContent = find.q ? '找不到' : ''; draw(); return; }
+-    if (next) {
+-      var at = -1;
+-      for (var i = 0; i < find.hits.length; i++) { var h = find.hits[i]; if (h.r > cur.r || (h.r === cur.r && h.c > cur.c)) { at = i; break; } }
+-      find.i = at < 0 ? 0 : at;
+-      go(find.hits[find.i].r, find.hits[find.i].c);
++    if (dir) {
++      var at = -1, i;
++      if (dir > 0) { for (i = 0; i < find.hits.length; i++) { var h = find.hits[i]; if (h.r > act.r || (h.r === act.r && h.c > act.c)) { at = i; break; } } if (at < 0) at = 0; }
++      else { for (i = find.hits.length - 1; i >= 0; i--) { var g = find.hits[i]; if (g.r < act.r || (g.r === act.r && g.c < act.c)) { at = i; break; } } if (at < 0) at = find.hits.length - 1; }
++      find.i = at;
++      /* (inside the searched block: the block stays, only the active cell moves) */
++      if (find.rect) { setRect(find.rect.r0, find.rect.c0, find.rect.r1, find.rect.c1, find.hits[at].r, find.hits[at].c); scrollTo(act.r, act.c); draw(); save(); }
++      else go(find.hits[at].r, find.hits[at].c);
+     } else draw();
+     n.textContent = find.hits.length + ' 個' + (find.i >= 0 ? '（第 ' + (find.i + 1) + ' 個）' : '');
+   }
++  function replaced(v, by) {
++    if (find.whole) return by;
++    return String(v).replace(new RegExp(find.q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), function () { return by; });
++  }
++  function replaceOne() {
++    if (D.readOnly) return warnRo();
++    runFind(findBox.value, 0);
++    if (!find.q) return;
++    var v = cell(act.r, act.c), done = 0;
++    if (act.r < nrows() && inScope(act.r, act.c) && match(v)) { setCells([{ r: act.r, c: act.c, v: replaced(v, replBox.value) }]); done = 1; }
++    runFind(findBox.value, 1);
++    document.getElementById('replN').textContent = done ? '取代了 1 格' : '';
++  }
++  function replaceAll() {
++    if (D.readOnly) return warnRo();
++    runFind(findBox.value, 0);
++    if (!find.q || !find.hits.length) { document.getElementById('replN').textContent = '沒有可以取代的'; return; }
++    var by = replBox.value;
++    var ch = find.hits.map(function (h) { return { r: h.r, c: h.c, v: replaced(cell(h.r, h.c), by) }; });
++    var n = ch.filter(function (x) { return x.v !== cell(x.r, x.c); }).length;
++    setCells(ch);   /* ONE edit: one Ctrl+Z takes them all back */
++    document.getElementById('replN').textContent = '取代了 ' + n + ' 格';
++    runFind(findBox.value, 0);
++  }
++  function setScope(on) {
++    inSelBox.checked = on;
++    var s = selRect();
++    find.rect = on ? { r0: s.r0, c0: s.c0, r1: s.r1, c1: s.c1 } : null;
++    document.getElementById('inSelR').textContent = on ? '（' + colName(s.c0) + (s.r0 + 1) + ':' + colName(s.c1) + (s.r1 + 1) + '）' : '';
++  }
++  function openFind(withReplace) {
++    if (withReplace) replBar.hidden = false;
++    /* Excel: several cells selected = they are what is searched */
++    setScope(multi());
++    (withReplace && findBox.value ? replBox : findBox).focus();
++    (withReplace && findBox.value ? replBox : findBox).select();
++  }
+ 
+   function showWarn(t) {
+     var w = document.getElementById('warn');
+@@ -266,18 +507,33 @@
+     if (t.getAttribute('data-rs') != null) { rsCol = +t.getAttribute('data-rs'); rsX = e.clientX; rsW = colW(rsCol); e.preventDefault(); return; }
+     if (editing && t === kb) return;
+     if (editing) commit();
+-    if (t.getAttribute('data-all')) { e.preventDefault(); focusKb(); anchor = { r: 0, c: 0 }; cur = { r: nrows() - 1, c: ncols - 1 }; draw(); return; }
+-    if (t.getAttribute('data-col') != null) { e.preventDefault(); focusKb(); var cc = +t.getAttribute('data-col'); anchor = { r: 0, c: e.shiftKey ? anchor.c : cc }; cur = { r: nrows() - 1, c: cc }; draw(); return; }
+-    if (t.getAttribute('data-row') != null) { e.preventDefault(); focusKb(); var rr = +t.getAttribute('data-row'); anchor = { r: e.shiftKey ? anchor.r : rr, c: 0 }; cur = { r: rr, c: ncols - 1 }; draw(); return; }
++    tabStart = null;
++    /* a right click inside the selection keeps it (Excel) */
++    if (e.button === 2 && t.getAttribute('data-r') != null && inSel(+t.getAttribute('data-r'), +t.getAttribute('data-c'))) { e.preventDefault(); focusKb(); return; }
++    if (t.getAttribute('data-all')) { e.preventDefault(); focusKb(); setRect(0, 0, Math.max(nrows() - 1, 0), ncols - 1, act.r, act.c); draw(); return; }
++    if (t.getAttribute('data-col') != null) {
++      e.preventDefault(); focusKb();
++      var cc = +t.getAttribute('data-col');
++      var c0 = e.shiftKey ? anchor.c : cc;
++      setRect(colTop(), c0, Math.max(nrows() - 1, 0), cc, e.shiftKey ? act.r : colTop(), e.shiftKey ? act.c : cc);
++      draw(); return;
++    }
++    if (t.getAttribute('data-row') != null) {
++      e.preventDefault(); focusKb();
++      var rr = +t.getAttribute('data-row');
++      setRect(e.shiftKey ? anchor.r : rr, 0, rr, ncols - 1, e.shiftKey ? act.r : rr, e.shiftKey ? act.c : 0);
++      draw(); return;
++    }
+     if (t.getAttribute('data-r') == null) return;
+     e.preventDefault();
+     focusKb();
+-    cur = { r: +t.getAttribute('data-r'), c: +t.getAttribute('data-c') };
+-    if (!e.shiftKey) anchor = { r: cur.r, c: cur.c };
++    var p = { r: +t.getAttribute('data-r'), c: +t.getAttribute('data-c') };
++    cur = p;
++    if (!e.shiftKey) { anchor = { r: p.r, c: p.c }; act = { r: p.r, c: p.c }; }
+     /* a double click = edit, told by the click count right here: the browser's own dblclick never
+      * reaches the cell -- this mousedown redraws the grid, so the second click's target is a new
+      * element and Chromium aims the dblclick at what the two have in common (the grid) */
+-    if (e.detail >= 2 && !e.shiftKey) { dragSel = false; draw(); save(); startEdit(null); return; }
++    if (e.detail >= 2 && !e.shiftKey) { dragSel = false; draw(); save(); if (startEdit(null)) caretAt(e.clientX); return; }
+     dragSel = true;
+     draw();
+     save();
+@@ -317,66 +573,93 @@
+   function navKey(e) {
+     var k = e.key, ctrl = e.ctrlKey || e.metaKey, sh = e.shiftKey;
+     var page = Math.max(1, Math.floor(wrap.clientHeight / RH) - 2);
+-    var mv = function (dr, dc) { e.preventDefault(); go(cur.r + dr, cur.c + dc, sh); };
+-    if (k === 'ArrowUp') return mv(ctrl ? -cur.r : -1, 0);
+-    if (k === 'ArrowDown') return mv(ctrl ? nrows() : 1, 0);
+-    if (k === 'ArrowLeft') return mv(0, ctrl ? -cur.c : -1);
+-    if (k === 'ArrowRight') return mv(0, ctrl ? ncols : 1);
+-    if (k === 'PageUp') return mv(-page, 0);
+-    if (k === 'PageDown') return mv(page, 0);
+-    if (k === 'Home') { e.preventDefault(); return go(ctrl ? 0 : cur.r, 0, sh); }
+-    if (k === 'End') { e.preventDefault(); return go(ctrl ? nrows() - 1 : cur.r, ncols - 1, sh); }
+-    if (k === 'Tab') { e.preventDefault(); return go(cur.r, cur.c + (sh ? -1 : 1)); }
+-    if (k === 'Enter') { e.preventDefault(); return go(cur.r + (sh ? -1 : 1), cur.c); }
++    /* plain: from the active cell; Shift: the far corner of the block moves */
++    var from = sh ? cur : act;
++    var mv = function (dr, dc) {
++      e.preventDefault();
++      tabStart = null;
++      var to = ctrl ? edge(from.r, from.c, dr, dc) : { r: from.r + dr, c: from.c + dc };
++      go(to.r, to.c, sh);
++    };
++    if (k === 'ArrowUp') return mv(-1, 0);
++    if (k === 'ArrowDown') return mv(1, 0);
++    if (k === 'ArrowLeft') return mv(0, -1);
++    if (k === 'ArrowRight') return mv(0, 1);
++    if (k === 'PageUp') { e.preventDefault(); return go(from.r - page, from.c, sh); }
++    if (k === 'PageDown') { e.preventDefault(); return go(from.r + page, from.c, sh); }
++    if (k === 'Home') { e.preventDefault(); return go(ctrl ? 0 : from.r, 0, sh); }
++    if (k === 'End') { e.preventDefault(); return go(ctrl ? Math.max(nrows() - 1, 0) : from.r, ncols - 1, sh); }
++    if (k === 'Tab') { e.preventDefault(); return tabMove(sh); }
++    if (k === 'Enter' && !ctrl && !e.altKey) { e.preventDefault(); return enterMove(sh); }
+     if (k === 'F2') { e.preventDefault(); return startEdit(null); }
+-    if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); return clearSel(); }
++    if (k === 'Escape') { if (cut) { e.preventDefault(); cut = null; draw(); } return; }
++    if (k === 'Delete') { e.preventDefault(); return clearSel(); }
++    /* Excel: Backspace = the active cell edited from empty (Esc gives it back) */
++    if (k === 'Backspace') { e.preventDefault(); if (act.r < nrows() || !D.readOnly) begin('', true); return; }
++    if (k === ' ' && sh && !ctrl) { e.preventDefault(); return selectRows(); }
++    if (k === ' ' && ctrl && !sh) { e.preventDefault(); return selectCols(); }
+     if (ctrl && (k === 'c' || k === 'C')) { e.preventDefault(); return copySel(); }
+-    if (ctrl && (k === 'x' || k === 'X')) { e.preventDefault(); copySel(); return clearSel(); }
+-    if (ctrl && (k === 'a' || k === 'A')) { e.preventDefault(); anchor = { r: 0, c: 0 }; cur = { r: nrows() - 1, c: ncols - 1 }; return draw(); }
+-    if (ctrl && (k === 'f' || k === 'F')) { e.preventDefault(); findBox.focus(); findBox.select(); return; }
+-    if (k === 'F3') { e.preventDefault(); return runFind(findBox.value, true); }
++    if (ctrl && (k === 'x' || k === 'X')) { e.preventDefault(); return cutSel(); }
++    if (ctrl && (k === 'a' || k === 'A')) { e.preventDefault(); setRect(0, 0, Math.max(nrows() - 1, 0), ncols - 1, act.r, act.c); return draw(); }
++    if (ctrl && (k === 'd' || k === 'D')) { e.preventDefault(); return fill(true); }
++    if (ctrl && (k === 'r' || k === 'R')) { e.preventDefault(); return fill(false); }
++    if (ctrl && (k === 'f' || k === 'F')) { e.preventDefault(); return openFind(false); }
++    if (ctrl && (k === 'h' || k === 'H')) { e.preventDefault(); return openFind(true); }
++    if (k === 'F3') { e.preventDefault(); return runFind(findBox.value, sh ? -1 : 1); }
+     if (ctrl && sh && (k === '+' || k === '=')) { e.preventDefault(); return insRow(); }
+-    if (ctrl && !sh && k === '-') { e.preventDefault(); return delRow(); }
++    if (ctrl && !sh && k === '-') { e.preventDefault(); return delRow(true); }
+     /* (Ctrl+Z / Ctrl+Y / Ctrl+S: VS Code's own -- the undo stack and the saving are the document's) */
+     /* a character: it goes into the input, whose 'input' starts typing over the cell (Excel) */
+-    if (!ctrl && !e.altKey && k.length === 1 && D.readOnly) { e.preventDefault(); showWarn(D.why || '這個檔案現在不能編輯。'); }
++    if (!ctrl && !e.altKey && k.length === 1 && D.readOnly) { e.preventDefault(); warnRo(); }
+   }
+-  /* Ctrl+C when VS Code does the copy (it runs the webview's copy): the selection as tab separated text */
++  /* Ctrl+C when VS Code does the copy (it runs the webview's copy): the same text as the extension's copy */
+   document.addEventListener('copy', function (e) {
+-    if (editing || document.activeElement === findBox || !e.clipboardData) return;
+-    var s = selRect(), rows = [];
+-    for (var r = s.r0; r <= s.r1; r++) { var line = []; for (var c = s.c0; c <= s.c1; c++) line.push(cell(r, c)); rows.push(line.join('\t')); }
+-    e.clipboardData.setData('text/plain', rows.join('\r\n'));
++    if (editing || document.activeElement === findBox || document.activeElement === replBox || !e.clipboardData) return;
++    e.clipboardData.setData('text/plain', tsvOf(selRect()));
+     e.preventDefault();
+   });
+-  /* Ctrl+V: the clipboard text (from Excel: tab separated) goes in from the selected cell */
++  /* Ctrl+V: the clipboard text (from Excel: tab separated) goes in from the selected cell -- on a bigger block,
++     a block that fits into it a whole number of times fills it (Excel) */
+   document.addEventListener('paste', function (e) {
+-    if (editing || document.activeElement === findBox) return;
++    if (editing || document.activeElement === findBox || document.activeElement === replBox) return;
+     var t = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+     if (!t) return;
+     e.preventDefault();
++    if (D.readOnly) return warnRo();
+     pasteText(t);
+   });
+ 
+   function insRow() {
+-    if (D.readOnly) { showWarn(D.why || '這個檔案現在不能編輯。'); return; }
++    if (D.readOnly) { warnRo(); return; }
+     var s = selRect();
+     send({ type: 'insertRows', r: s.r0, count: s.r1 - s.r0 + 1 });
+   }
+-  function delRow() {
+-    if (D.readOnly) { showWarn(D.why || '這個檔案現在不能編輯。'); return; }
++  /* (by the key only with whole rows selected: Excel asks what to delete otherwise -- here it says how) */
++  function delRow(byKey) {
++    if (D.readOnly) { warnRo(); return; }
+     var s = selRect();
+-    send({ type: 'deleteRows', r: s.r0, count: s.r1 - s.r0 + 1 });
++    if (byKey && !(s.c0 === 0 && s.c1 === ncols - 1)) { showWarn('要刪除整列：先點列號（或按 Shift+空白鍵）選整列，再按 Ctrl+－。只選格子時不會刪。'); return; }
++    if (s.r0 >= nrows()) return;
++    send({ type: 'deleteRows', r: s.r0, count: Math.min(s.r1, nrows() - 1) - s.r0 + 1 });
+   }
+   document.getElementById('insRow').addEventListener('click', insRow);
+-  document.getElementById('delRow').addEventListener('click', delRow);
++  document.getElementById('delRow').addEventListener('click', function () { delRow(false); });
+   document.getElementById('asText').addEventListener('click', function () { send({ type: 'openText' }); });
++  document.getElementById('replTog').addEventListener('click', function () { if (replBar.hidden) openFind(true); else { replBar.hidden = true; setScope(false); wholeBox.checked = false; runFind(findBox.value, 0); focusKb(); } });
++  document.getElementById('replOne').addEventListener('click', replaceOne);
++  document.getElementById('replAll').addEventListener('click', replaceAll);
++  wholeBox.addEventListener('change', function () { runFind(findBox.value, 0); });
++  inSelBox.addEventListener('change', function () { setScope(inSelBox.checked); runFind(findBox.value, 0); });
+   hdrBox.addEventListener('change', function () { header = hdrBox.checked; save(); draw(); });
+-  findBox.addEventListener('input', function () { runFind(findBox.value, false); });
+-  findBox.addEventListener('keydown', function (e) {
+-    if (e.key === 'Enter' || e.key === 'F3') { e.preventDefault(); runFind(findBox.value, true); }
+-    else if (e.key === 'Escape') { e.preventDefault(); findBox.value = ''; runFind('', false); focusKb(); }
+-  });
++  findBox.addEventListener('input', function () { runFind(findBox.value, 0); });
++  var findKeys = function (e) {
++    if (e.isComposing || e.keyCode === 229) return;
++    if (e.key === 'Enter' || e.key === 'F3') { e.preventDefault(); if (e.target === replBox && e.key === 'Enter') return replaceOne(); runFind(findBox.value, e.shiftKey ? -1 : 1); }
++    else if (e.key === 'Escape') { e.preventDefault(); findBox.value = ''; replBar.hidden = true; setScope(false); wholeBox.checked = false; runFind('', 0); focusKb(); }
++    else if ((e.ctrlKey || e.metaKey) && (e.key === 'h' || e.key === 'H')) { e.preventDefault(); openFind(true); }
++  };
++  findBox.addEventListener('keydown', findKeys);
++  replBox.addEventListener('keydown', findKeys);
+ 
+   window.addEventListener('message', function (ev) {
+     var m = ev.data || {};
+@@ -390,23 +673,23 @@
+       document.getElementById('name').textContent = D.file;
+       document.getElementById('size').textContent = nrows() + ' 列 × ' + ncols + ' 欄　分隔：' + (D.delim === '\t' ? 'Tab' : D.delim);
+       showWarn(D.readOnly ? D.why : '');
+-      if (m.first && st.cur) { cur = { r: st.cur.r, c: st.cur.c }; anchor = { r: cur.r, c: cur.c }; }
++      if (m.first && st.cur) { cur = { r: st.cur.r, c: st.cur.c }; anchor = { r: cur.r, c: cur.c }; act = { r: cur.r, c: cur.c }; }
+       clampCur();
+-      if (find.q) runFind(find.q, false);
++      if (find.q) runFind(find.q, 0);
+       draw();
+-      if (m.first) { scrollTo(cur.r, cur.c); draw(); focusKb(); }
++      if (m.first) { scrollTo(act.r, act.c); draw(); focusKb(); }
+     } else if (m.type === 'select') {
+-      cur = { r: m.r | 0, c: m.c | 0 };
+-      anchor = { r: m.r1 != null ? m.r1 | 0 : cur.r, c: m.c1 != null ? m.c1 | 0 : cur.c };
+-      clampCur();
+-      scrollTo(cur.r, cur.c);
++      setRect(m.r | 0, m.c | 0, m.r1 != null ? m.r1 | 0 : m.r | 0, m.c1 != null ? m.c1 | 0 : m.c | 0);
++      scrollTo(act.r, act.c);
+       draw();
+-    }
++    } else if (m.type === 'say') showWarn(m.text || '');
+   });
+   /* for the tests */
+   window.__htdCsv = {
+-    state: function () { return { cur: cur, anchor: anchor, header: !!header, rows: nrows(), cols: ncols, editing: !!editing, drawnRows: drawn.b - drawn.a + 1 }; },
+-    cellText: function (r, c) { var el = sizer.querySelector('.cell[data-r="' + r + '"][data-c="' + c + '"]'); return el ? el.textContent : null; }
++    state: function () { return { cur: cur, anchor: anchor, act: act, header: !!header, rows: nrows(), cols: ncols, editing: !!editing, typed: !!(editing && editing.typed), cut: !!cut, drawnRows: drawn.b - drawn.a + 1 }; },
++    cellText: function (r, c) { var el = sizer.querySelector('.cell[data-r="' + r + '"][data-c="' + c + '"]'); return el ? el.textContent : null; },
++    status: function () { return document.getElementById('status').textContent; },
++    cutText: function () { return cut ? cut.text : null; }
+   };
+   send({ type: 'ready' });
+ })();
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index f96fe2a..9ef0ed2 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HTML 視覺設計工具",
+   "description": "BCB6 表單移植成 web HMI（網頁＋C++）的專案通用：像 WPF 設計工具一樣看、改頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.122.0",
++  "version": "0.123.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+@@ -277,6 +277,11 @@
+         "title": "直接在畫面上改選取元件的文字（F2）",
+         "category": "HTML設計"
+       },
++      {
++        "command": "ht9045Designer.csvKey",
++        "title": "CSV 表格：表格自己處理的按鍵",
++        "category": "HTML設計"
++      },
+       {
+         "command": "ht9045Designer.textUndo",
+         "title": "復原畫面上文字框裡的輸入",
+@@ -835,6 +840,7 @@
+         { "command": "ht9045Designer.zoomIn", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.zoomOut", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.textUndo", "when": "false" },
++        { "command": "ht9045Designer.csvKey", "when": "false" },
+         { "command": "ht9045Designer.cutComponent", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.copyComponent", "when": "ht9045Designer.active" },
+         { "command": "ht9045Designer.pasteComponent", "when": "ht9045Designer.active" },
+@@ -910,6 +916,16 @@
+       { "command": "ht9045Designer.duplicate", "args": { "dx": 10, "dy": 0 }, "key": "shift+alt+right", "when": "activeCustomEditorId == 'ht9045Designer.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !ht9045Designer.textEditing" },
+       { "command": "ht9045Designer.duplicate", "args": { "dx": 0, "dy": -10 }, "key": "shift+alt+up", "when": "activeCustomEditorId == 'ht9045Designer.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !ht9045Designer.textEditing" },
+       { "command": "ht9045Designer.duplicate", "args": { "dx": 0, "dy": 10 }, "key": "shift+alt+down", "when": "activeCustomEditorId == 'ht9045Designer.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !ht9045Designer.textEditing" },
++      { "command": "ht9045Designer.csvKey", "key": "ctrl+r", "when": "activeCustomEditorId == 'ht9045Designer.csv' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen" },
++      { "command": "ht9045Designer.csvKey", "key": "ctrl+d", "when": "activeCustomEditorId == 'ht9045Designer.csv' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen" },
++      { "command": "ht9045Designer.csvKey", "key": "ctrl+h", "when": "activeCustomEditorId == 'ht9045Designer.csv' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen" },
++      { "command": "ht9045Designer.csvKey", "key": "ctrl+-", "when": "activeCustomEditorId == 'ht9045Designer.csv' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen" },
++      { "command": "ht9045Designer.csvKey", "key": "ctrl+shift+=", "when": "activeCustomEditorId == 'ht9045Designer.csv' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen" },
++      { "command": "ht9045Designer.csvKey", "key": "ctrl+shift+numpad_add", "when": "activeCustomEditorId == 'ht9045Designer.csv' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen" },
++      { "command": "ht9045Designer.csvKey", "key": "ctrl+numpad_subtract", "when": "activeCustomEditorId == 'ht9045Designer.csv' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen" },
++      { "command": "ht9045Designer.csvKey", "key": "ctrl+z", "when": "activeCustomEditorId == 'ht9045Designer.csv' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && ht9045Designer.csvEditing" },
++      { "command": "ht9045Designer.csvKey", "key": "ctrl+y", "when": "activeCustomEditorId == 'ht9045Designer.csv' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && ht9045Designer.csvEditing" },
++      { "command": "ht9045Designer.csvKey", "key": "ctrl+shift+z", "when": "activeCustomEditorId == 'ht9045Designer.csv' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && ht9045Designer.csvEditing" },
+       { "command": "ht9045Designer.textUndo", "key": "ctrl+z", "when": "ht9045Designer.textEditing && activeCustomEditorId == 'ht9045Designer.editor'" },
+       { "command": "ht9045Designer.textUndo", "args": { "redo": true }, "key": "ctrl+y", "when": "ht9045Designer.textEditing && activeCustomEditorId == 'ht9045Designer.editor'" },
+       { "command": "ht9045Designer.textUndo", "args": { "redo": true }, "key": "ctrl+shift+z", "when": "ht9045Designer.textEditing && activeCustomEditorId == 'ht9045Designer.editor'" },
+diff --git a/tools/vscode-htdesigner/test/csv_driver.js b/tools/vscode-htdesigner/test/csv_driver.js
+index 8b89787..7f572cf 100644
+--- a/tools/vscode-htdesigner/test/csv_driver.js
++++ b/tools/vscode-htdesigner/test/csv_driver.js
+@@ -13,6 +13,11 @@
+     if (go && k.length === 1 && !(o && o.ctrlKey)) { w.value += k; w.dispatchEvent(new Event('input', { bubbles: true })); }
+   }
+   function edKey(k) { key(k); }
++  function press(r, c, n, shift) {
++    var el = document.querySelector('.cell[data-r="' + r + '"][data-c="' + c + '"]');
++    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, detail: n || 1, shiftKey: !!shift }));
++    window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
++  }
+   function editor() { return document.querySelector('.ed:not(.idle)'); }
+   function finish() {
+     var pre = document.createElement('pre');
+@@ -71,7 +76,16 @@
+         Object.defineProperty(pe, 'clipboardData', { value: { getData: function () { return 'a\tb\r\nc\td'; } } });
+         document.getElementById('wrap').dispatchEvent(pe);
+         var ps = out('paste').pop();
+-        R.pasteOk = !!ps && ps.text === 'a\tb\r\nc\td' && ps.r === 1 && ps.c === 1;
++        R.pasteOk = !!ps && ps.text === 'a\tb\r\nc\td' && ps.r === 1 && ps.c === 1 && ps.r1 === 2 && ps.c1 === 2 && !ps.cut;
++        /* Ctrl+X: copied now, moved when pasted -- the paste of that same text carries where it came from (20261001, Excel) */
++        key('x', { ctrlKey: true });
++        var cutT = window.__htdCsv.cutText();
++        var nE5 = out('edit').length;
++        var pe2 = new Event('paste', { bubbles: true, cancelable: true });
++        Object.defineProperty(pe2, 'clipboardData', { value: { getData: function () { return cutT; } } });
++        document.getElementById('wrap').dispatchEvent(pe2);
++        var ps2 = out('paste').pop();
++        R.cutOk = !!cutT && out('edit').length === nE5 && !!ps2 && !!ps2.cut && ps2.cut.r0 === 1 && ps2.cut.c1 === 2 && !window.__htdCsv.state().cut;
+         /* F2 then Esc: nothing written */
+         var nE2 = out('edit').length;
+         key('F2');
+@@ -79,11 +93,12 @@
+         if (inp2) inp2.value = 'zzz';
+         edKey('Escape');
+         R.escOk = !!inp2 && !editor() && out('edit').length === nE2;
+-        /* Tab moves right, Home goes to the first column */
++        /* one cell: Tab moves right, Home goes to the first column */
++        press(1, 1, 1);
+         key('Tab');
+-        var s1 = window.__htdCsv.state().cur;
++        var s1 = window.__htdCsv.state().act;
+         key('Home');
+-        var s2 = window.__htdCsv.state().cur;
++        var s2 = window.__htdCsv.state().act;
+         R.moveOk = s1.c === 2 && s2.c === 0;
+         /* find ("X10" is in row 13 -- X10, X100, X1000... -- the first one after the current cell) */
+         var fb = document.getElementById('find');
+@@ -95,15 +110,10 @@
+         R.findOk = s3.r === 13 && s3.c === 1 && /第 1 個/.test(document.getElementById('findN').textContent);
+         /* a double click = the editor, its text selected: told by the second press's click count (20261001:
+          * the browser's own dblclick never reached the cell -- the first press redraws it) */
+-        var press = function (r, c, n) {
+-          var el = document.querySelector('.cell[data-r="' + r + '"][data-c="' + c + '"]');
+-          el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, detail: n }));
+-          window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+-        };
+         press(5, 1, 1); press(5, 1, 2);
+         var de = editor();
+         R.dbl = de ? de.value + ' ' + de.selectionStart + '-' + de.selectionEnd + ' ' + (document.activeElement === de) : null;
+-        R.dblOk = !!de && de.value === 'X2' && de.selectionStart === 0 && de.selectionEnd === 2 && document.activeElement === de;
++        R.dblOk = !!de && de.value === 'X2' && de.selectionStart === de.selectionEnd && document.activeElement === de;
+         edKey('Escape');
+         /* the IME (注音): a word started = that cell's editor; the IME's own Enter (isComposing) picks the
+          * word, it does not write the cell; then Enter writes it */
+diff --git a/tools/vscode-htdesigner/test/csv_realinput.js b/tools/vscode-htdesigner/test/csv_realinput.js
+index ee10bf3..d64ff7c 100644
+--- a/tools/vscode-htdesigner/test/csv_realinput.js
++++ b/tools/vscode-htdesigner/test/csv_realinput.js
+@@ -52,11 +52,23 @@ setTimeout(() => { R.error = R.error || 'timeout'; finish(3); }, 40000);
+   const center = async (sel) => ev('(function(){var e=document.querySelector(' + JSON.stringify(sel) + ');if(!e)return null;var b=e.getBoundingClientRect();return {x:b.left+b.width/2,y:b.top+b.height/2};})()');
+   const mouse = (p, type, n) => call('Input.dispatchMouseEvent', { type, x: p.x, y: p.y, button: 'left', buttons: type === 'mousePressed' ? 1 : 0, clickCount: n });
+   const click = async (p, n) => { await mouse(p, 'mousePressed', n); await mouse(p, 'mouseReleased', n); await sleep(60); };
+-  const keyPress = async (key, code, vk, text) => {
+-    await call('Input.dispatchKeyEvent', Object.assign({ type: text ? 'keyDown' : 'rawKeyDown', key, code, windowsVirtualKeyCode: vk }, text ? { text } : {}));
+-    await call('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: vk });
++  // modifiers: 1 Alt, 2 Ctrl, 8 Shift
++  const keyPress = async (key, code, vk, text, modifiers) => {
++    const mod = modifiers || 0;
++    await call('Input.dispatchKeyEvent', Object.assign({ type: text ? 'keyDown' : 'rawKeyDown', key, code, windowsVirtualKeyCode: vk, modifiers: mod }, text ? { text } : {}));
++    await call('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: vk, modifiers: mod });
+     await sleep(40);
+   };
++  const ch = async c => keyPress(c, /\d/.test(c) ? 'Digit' + c : 'Key' + c.toUpperCase(), c.toUpperCase().charCodeAt(0), c);
++  const clickCell = async (r, c, shift) => {
++    const p = await center('.cell[data-r="' + r + '"][data-c="' + c + '"]');
++    await call('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'left', buttons: 1, clickCount: 1, modifiers: shift ? 8 : 0 });
++    await call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'left', buttons: 0, clickCount: 1, modifiers: shift ? 8 : 0 });
++    await sleep(60);
++  };
++  const stateOf = () => ev('window.__htdCsv.state()');
++  const lastMsg = type => ev('(function(){var a=window.__out.filter(function(m){return m.type===' + JSON.stringify(type) + ';});return a.length?a[a.length-1]:null;})()');
++  const count = type => ev('window.__out.filter(function(m){return m.type===' + JSON.stringify(type) + ';}).length');
+   const editorState = () => ev('(function(){var e=document.querySelector(".ed:not(.idle)");return e?{value:e.value,s:e.selectionStart,e:e.selectionEnd,focused:document.activeElement===e}:null;})()');
+   const edits = () => ev('window.__out.filter(function(m){return m.type==="edit";}).map(function(m){return m.changes;})');
+   await sleep(700);
+@@ -69,7 +81,7 @@ setTimeout(() => { R.error = R.error || 'timeout'; finish(3); }, 40000);
+   await click(c22, 2);
+   await sleep(100);
+   R.dbl = await editorState();
+-  R.dblOk = !!(R.dbl && R.dbl.value === '200000' && R.dbl.s === 0 && R.dbl.e === 6 && R.dbl.focused);
++  R.dblOk = !!(R.dbl && R.dbl.value === '200000' && R.dbl.s === R.dbl.e && R.dbl.focused);   // (Excel: the caret where it was clicked, nothing selected)
+   await keyPress('Escape', 'Escape', 27);
+   // 2. a click, then real keys: typed over the cell; Enter writes it (one edit), the next row
+   await click(c22, 1);
+@@ -102,6 +114,76 @@ setTimeout(() => { R.error = R.error || 'timeout'; finish(3); }, 40000);
+   await click(below, 1);
+   R.emptyClickFocus = await ev('document.activeElement && (document.activeElement.id || document.activeElement.tagName)');
+   R.emptyClickOk = R.emptyClickFocus === 'kb';
++  // 5. Excel (20261001): Ctrl+Enter = the typed value into every selected cell, the block and the active cell stay
++  await clickCell(1, 3); await clickCell(3, 3, true);
++  await ch('7');
++  await keyPress('Enter', 'Enter', 13, '\r', 2);
++  const ce = await lastMsg('edit'), cs = await stateOf();
++  R.ctrlEnterOk = !!(ce && ce.changes.length === 3 && ce.changes.every(x => x.c === 3 && x.v === '7') && cs.act.r === 1 && cs.act.c === 3 && cs.cur.r === 3 && !cs.editing);
++  // 6. Ctrl+D = the block's first row into the rest
++  await clickCell(1, 1); await clickCell(2, 1, true);
++  await keyPress('d', 'KeyD', 68, '', 2);
++  const fd = await lastMsg('edit');
++  R.fillDownOk = !!(fd && fd.changes.length === 1 && fd.changes[0].r === 2 && fd.changes[0].c === 1 && fd.changes[0].v === 'MInArmX');
++  // 7. Shift+Space = the whole row (it used to type a space into the cell); 8. Ctrl+- deletes it only then
++  await clickCell(2, 0);
++  await keyPress(' ', 'Space', 32, ' ', 8);
++  const sr = await stateOf();
++  const kbVal = await ev('document.getElementById("kb").value');
++  const del0 = await count('deleteRows');
++  await keyPress('-', 'Minus', 189, '', 2);
++  const del1 = await count('deleteRows'), dm = await lastMsg('deleteRows');
++  await clickCell(1, 0);
++  await keyPress('-', 'Minus', 189, '', 2);
++  const del2 = await count('deleteRows');
++  const warned = await ev('!document.getElementById("warn").hidden && /整列/.test(document.getElementById("warn").textContent)');
++  R.rowKeysOk = !!(sr.anchor.r === 2 && sr.anchor.c === 0 && sr.cur.r === 2 && sr.cur.c === 3 && !sr.editing && kbVal === '' &&
++    del1 === del0 + 1 && dm && dm.r === 2 && dm.count === 1 && del2 === del1 && warned);
++  // 9. typed over: an arrow writes it and moves (all four, Enter mode)
++  await clickCell(1, 0);
++  await ch('q');
++  await keyPress('ArrowRight', 'ArrowRight', 39);
++  const ta = await lastMsg('edit'), ts = await stateOf();
++  R.typedArrowOk = !!(ta && ta.changes.length === 1 && ta.changes[0].r === 1 && ta.changes[0].c === 0 && ta.changes[0].v === 'q' && ts.act.r === 1 && ts.act.c === 1 && !ts.editing);
++  // 10. F2 = the caret at the end (not all selected); F2 again = Enter mode / Edit mode
++  await clickCell(1, 2);
++  await keyPress('F2', 'F2', 113);
++  const f2 = await editorState(), f2s = await stateOf();
++  await keyPress('F2', 'F2', 113);
++  const f2t = await stateOf();
++  await keyPress('Escape', 'Escape', 27);
++  R.f2Ok = !!(f2 && f2.value === '100000' && f2.s === 6 && f2.e === 6 && f2s.editing && !f2s.typed && f2t.typed);
++  // 11. Backspace = the active cell from empty; Esc gives it back (nothing written)
++  const e11 = await count('edit');
++  await keyPress('Backspace', 'Backspace', 8);
++  const bs = await editorState();
++  await keyPress('Escape', 'Escape', 27);
++  R.backspaceOk = !!(bs && bs.value === '' && bs.focused && (await count('edit')) === e11 && !(await editorState()));
++  // 12. Enter inside a selected block: the active cell moves (down, then the next column), the block stays
++  await clickCell(1, 0); await clickCell(2, 1, true);
++  await keyPress('Enter', 'Enter', 13, '\r');
++  const en1 = await stateOf();
++  await keyPress('Enter', 'Enter', 13, '\r');
++  const en2 = await stateOf();
++  R.enterInBlockOk = en1.act.r === 2 && en1.act.c === 0 && en2.act.r === 1 && en2.act.c === 1 && en2.anchor.r === 1 && en2.cur.r === 2 && en2.cur.c === 1;
++  // 13. the empty row under the last one: typing there adds a row
++  await clickCell(3, 3);
++  await keyPress('ArrowDown', 'ArrowDown', 40);
++  const ph = await stateOf();
++  await ch('n');
++  await keyPress('Enter', 'Enter', 13, '\r');
++  const pe = await lastMsg('edit');
++  R.newRowOk = !!(ph.act.r === 4 && pe && pe.changes.length === 1 && pe.changes[0].r === 4 && pe.changes[0].c === 3 && pe.changes[0].v === 'n');
++  // 14. Ctrl+H: replace -- whole cell (7 -> X: the three 7s, not 100000 / 1), ONE edit
++  await clickCell(1, 0);
++  await keyPress('h', 'KeyH', 72, '', 2);
++  const replShown = await ev('!document.getElementById("repl").hidden && document.activeElement && document.activeElement.id === "find"');
++  await ch('7');
++  await ev('(function(){var r=document.getElementById("replBox");r.focus();r.value="X";var w=document.getElementById("whole");w.checked=true;w.dispatchEvent(new Event("change"));})()');
++  const e14 = await count('edit');
++  await ev('document.getElementById("replAll").click()');
++  const ra = await lastMsg('edit');
++  R.replaceOk = !!(replShown && (await count('edit')) === e14 + 1 && ra && ra.changes.length === 3 && ra.changes.every(x => x.c === 3 && x.v === 'X'));
+   R.pageErrors = await ev('window.__errs || []');
+   ws.close();
+   await finish(0);
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index 01e6b0d..3909f91 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -245,10 +245,11 @@ try {
+     'csv table: click + type + Enter = one edit of that cell, shown at once, down one row' = [bool]($C -and $C.editorOpen -and $C.editOk -and $C.shownNow -and $C.movedDown)
+     'csv table: Shift+arrows select a block, Ctrl+C = its rows x columns' = [bool]($C -and $C.copyOk)
+     'csv table: Delete clears the block in ONE edit' = [bool]($C -and $C.clearOk)
+-    'csv table: paste (Excel text) goes to the extension with the top-left cell' = [bool]($C -and $C.pasteOk)
++    'csv table: paste (Excel text) goes to the extension with the selected block (top-left and bottom-right)' = [bool]($C -and $C.pasteOk)
+     'csv table: F2 + Esc writes nothing; Tab / Home move' = [bool]($C -and $C.escOk -and $C.moveOk)
+     'csv table: find jumps to the match' = [bool]($C -and $C.findOk)
+-    'csv table: a double click (the second press''s click count) = the editor, its text selected' = [bool]($C -and $C.dblOk)
++    'csv table: a double click (the second press''s click count) = the editor, a caret (Excel: where it was clicked)' = [bool]($C -and $C.dblOk)
++    'csv table: Ctrl+X = copied now, moved when pasted (the paste carries the cut block), nothing edited before' = [bool]($C -and $C.cutOk)
+     'csv table: an IME word goes into the cell; the IME''s own Enter picks the word, a second Enter writes it' = [bool]($C -and $C.imeOk)
+     'csv table: a file that cannot be written back: typing edits nothing, says why' = [bool]($C -and $C.roOk)
+     'csv table: the driver ran' = [bool]($C -and -not $C.driverError)
+@@ -270,10 +271,19 @@ $env:ELECTRON_RUN_AS_NODE = $null
+ $Q = $null
+ if (Test-Path $realOut) { $raw = Get-Content $realOut -Raw -Encoding utf8; Write-Host "[csv real input] $raw"; $Q = $raw | ConvertFrom-Json } else { Write-Host "[csv real input] no result (exit $($rp.ExitCode))" }
+ $qmust = [ordered]@{
+-  'csv table, real input: a double click opens the cell''s editor, its text selected' = [bool]($Q -and $Q.dblOk)
++  'csv table, real input: a double click opens the cell''s editor, the caret where it was clicked' = [bool]($Q -and $Q.dblOk)
+   'csv table, real input: click + keys = typed over the cell, Enter = one edit, the keys stay with the table' = [bool]($Q -and $Q.typedOk)
+   'csv table, real input: an IME word (Chinese input method) goes into the cell, Enter writes it' = [bool]($Q -and $Q.imeOk)
+   'csv table, real input: a click on the empty part keeps the keys with the table' = [bool]($Q -and $Q.emptyClickOk)
++  'csv table, real input (Excel): Ctrl+Enter = the value into every selected cell, the block and the active cell stay' = [bool]($Q -and $Q.ctrlEnterOk)
++  'csv table, real input (Excel): Ctrl+D = the first row of the block into the rest' = [bool]($Q -and $Q.fillDownOk)
++  'csv table, real input (Excel): Shift+Space = the row (no space typed); Ctrl+- deletes only whole rows, else says how' = [bool]($Q -and $Q.rowKeysOk)
++  'csv table, real input (Excel): typed over, an arrow writes it and moves' = [bool]($Q -and $Q.typedArrowOk)
++  'csv table, real input (Excel): F2 = the caret at the end; F2 again = Enter / Edit mode' = [bool]($Q -and $Q.f2Ok)
++  'csv table, real input (Excel): Backspace = the cell from empty, Esc gives it back' = [bool]($Q -and $Q.backspaceOk)
++  'csv table, real input (Excel): Enter inside a block moves the active cell, the block stays' = [bool]($Q -and $Q.enterInBlockOk)
++  'csv table, real input: the empty row under the last one -- typing there adds a row' = [bool]($Q -and $Q.newRowOk)
++  'csv table, real input (Excel): Ctrl+H replace all, whole cell = only the exact ones, ONE edit' = [bool]($Q -and $Q.replaceOk)
+   'csv table, real input: the driver ran' = [bool]($Q -and -not $Q.error)
+ }
+ foreach ($k in $qmust.Keys) {
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index ac7e613..9fcddbe 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -843,6 +843,20 @@ async function main() {
+   ok(cvTsv === 'a\t"b\tc"\r\n1\t' && JSON.stringify(cvFrom) === '[["x","y"],["1","2\\t3"]]' && cv.detectDelim('a;b;c\n1;2;3') === ';' &&
+     cv.decodeSafe(cvBig5, 'A,\uFFFD\uFFFD\r\n').ok === false && cv.decodeSafe(Buffer.from('A,B'), 'A,B').ok && cv.decodeSafe(cvBig5, 'A,中\r\n').ok,
+     'csv clipboard: tab separated both ways (Excel\'s); ; detected; a Big5 file read as UTF-8 (U+FFFD) is not editable, read right it is');
++  // AI(W906-HTDESIGNER) 20261001: a paste as Excel does it -- one cell on a column fills it, a block that fits a whole
++  // number of times repeats, one that does not = the block once; a cut block moves (its other cells emptied)
++  const pcP = cv.parseDoc('N,A,B\r\nm0,1,2\r\nm1,3,4\r\nm2,5\r\n');
++  const pcOne = cv.pasteChanges(pcP, [['9']], { r0: 1, c0: 1, r1: 3, c1: 1 });
++  const pcRep = cv.pasteChanges(pcP, [['a', 'b']], { r0: 1, c0: 1, r1: 2, c1: 2 });
++  const pcOdd = cv.pasteChanges(pcP, [['a', 'b']], { r0: 1, c0: 0, r1: 1, c1: 2 });   // 1x2 into 1x3: not a whole number of times
++  const pcCut = cv.pasteChanges(pcP, [['m0', '1']], { r0: 3, c0: 0, r1: 3, c1: 0 }, { r0: 1, c0: 0, r1: 1, c1: 1 });
++  const pcText = cv.cellEdits(pcP, pcCut.changes).reduceRight((t, e) => t.slice(0, e.s) + e.text + t.slice(e.e), 'N,A,B\r\nm0,1,2\r\nm1,3,4\r\nm2,5\r\n');
++  ok(JSON.stringify(pcOne.changes) === '[{"r":1,"c":1,"v":"9"},{"r":2,"c":1,"v":"9"},{"r":3,"c":1,"v":"9"}]' && pcOne.tiled && pcOne.rect.r1 === 3 &&
++    pcRep.tiled && pcRep.changes.length === 4 && pcRep.changes.every(x => x.v === (x.c === 1 ? 'a' : 'b')) &&
++    !pcOdd.tiled && pcOdd.changes.length === 2 && pcOdd.rect.c1 === 1 &&
++    pcText === 'N,A,B\r\n,,2\r\nm1,3,4\r\nm0,1\r\n' && pcCut.rect.r0 === 3 && pcCut.rect.c1 === 1,
++    'csv paste (Excel): one cell on a column = every cell; a block that fits repeats, one that does not = once; a cut block moves (old cells emptied), one edit',
++    JSON.stringify([pcOne.changes.length, pcRep.changes.length, pcOdd.changes.length, pcText]));
+   // --- 事件表: the events of a VCL class (the Object Inspector's list), BCB6's handler names and signatures
+   const ve = require('../lib/vclevents');
+   const veBtn = ve.eventsOf('TButton');
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index af2d6ae..25a5a13 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -970,7 +970,7 @@ async function main() {
+         postMessage: m => { posted.push(m); return Promise.resolve(true); },
+         onDidReceiveMessage: fn => { box.recv = fn; return { dispose() {} }; },
+       },
+-      onDidDispose: () => ({ dispose() {} }),
++      onDidDispose: () => ({ dispose() {} }), onDidChangeViewState: () => ({ dispose() {} }),
+     };
+     csvProv.resolveCustomTextEditor(d, pnl);
+     box.html = pnl.webview.html;
+@@ -1007,6 +1007,29 @@ async function main() {
+   fake.env.clipboard.writeText = clipW;
+   ok(cbIns === 'Name,Acc,\r\n,,\r\nx,y,\r\nz,"w",\r\n' && cbDel === cbAfter3 && cbClip === 'a\tb\r\n1\t2' && cbClip0 >= 0,
+     'CSV 表格: insert / delete a row (the file\'s line end), copy = tab separated to the clipboard', JSON.stringify(cbIns));
++  // AI(W906-HTDESIGNER) 20261001 (Excel): one copied cell pasted on a selected column = every cell of it, ONE edit;
++  // a block that fits a whole number of times = repeated; a cut block = moved (its old cells emptied) in the same edit;
++  // a cell being edited = VS Code's Ctrl+Z held off (the context the keybinding reads)
++  const tl0 = 'Name,Acc,Dec\r\nM00,1,2\r\nM01,3,4\r\nM02,5,6\r\n';
++  const tl = mkCsv('Tile.csv', tl0, tl0);
++  await tl.recv({ type: 'ready' });
++  const tlCalls = fake._calls.length;
++  await tl.recv({ type: 'paste', text: '9\r\n', r: 1, c: 1, r1: 3, c1: 1 });
++  const tlCol = tl.doc.getText(), tlSel = tl.posted.filter(m => m.type === 'select').pop();
++  await tl.recv({ type: 'paste', text: 'a\tb', r: 1, c: 1, r1: 2, c1: 2 });   // 1x2 into 2x2: repeated
++  const tlRep = tl.doc.getText();
++  await tl.recv({ type: 'paste', text: 'M00\ta', r: 3, c: 0, r1: 3, c1: 0, cut: { r0: 1, c0: 0, r1: 1, c1: 1 } });   // M00,a moved to row 3
++  const tlCut = tl.doc.getText();
++  const tlEdits = fake._calls.slice(tlCalls).filter(c => c.name === 'applyEditCall').length;
++  const tlEx0 = fake._calls.length;
++  await tl.recv({ type: 'editing', on: true });
++  await tl.recv({ type: 'editing', on: false });
++  const tlCtx = fake._calls.slice(tlEx0).filter(c => c.name === 'exec' && c.args[0] === 'setContext' && c.args[1] === 'ht9045Designer.csvEditing').map(c => c.args[2]);
++  ok(tlCol === 'Name,Acc,Dec\r\nM00,9,2\r\nM01,9,4\r\nM02,9,6\r\n' && tlSel && tlSel.r === 1 && tlSel.r1 === 3 && tlSel.c1 === 1 &&
++    tlRep === 'Name,Acc,Dec\r\nM00,a,b\r\nM01,a,b\r\nM02,9,6\r\n' && tlCut === 'Name,Acc,Dec\r\n,,b\r\nM01,a,b\r\nM00,a,6\r\n' && tlEdits === 3 &&
++    JSON.stringify(tlCtx) === '["true","false"]',
++    'CSV 表格 (Excel): one cell pasted on a column fills it; a 1x2 on a 2x2 repeats; a cut block moves (old cells emptied) -- one edit each; editing = csvEditing context on / off',
++    JSON.stringify({ col: tlCol, rep: tlRep, cut: tlCut, edits: tlEdits, ctx: tlCtx }));
+   // a Big5 file VS Code read as UTF-8: shown, never edited (saving would destroy those bytes)
+   const cbBad = mkCsv('Lang.csv', Buffer.from([0x41, 0x2c, 0xa4, 0xa4, 0x0d, 0x0a]), 'A,��\r\n');
+   await cbBad.recv({ type: 'ready' });
+-- 
+2.55.0.windows.5
+
