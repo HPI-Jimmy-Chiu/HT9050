@@ -587,4 +587,8 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   cpp 0109 ec6a4e1 WORKLOG —— 工作紀錄補 10-02 第 66 項；第 4 節：警報 Note 的安全問題（網頁按鍵沒照原版的 IC 在座鎖、PTI 的 START）等。
   web 0074 812a16b COMPK-MOTORB (web) —— 29 頁 4,270 個元件逐一判定、修 457 個：小鍵盤照原版上下限、Speed 的 47 個微調鈕、ShowMessage 不再顯示假數字、testercomm Run Mode 照原版只在模擬時出現。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0110 58f1886 IOSV-FORMSHOW／SHOWALL／HSYS-EVT —— IO 頁照原版 FormShow（第二型 bridge FileRW/IoSetViewFormShow_File.cpp）、chkShowIndexAll、HandlerSys 點擊邏輯在 C++ 照做；ctest IoSetViewFormShowBridge。
+  cpp 0111 ab47c0a WORKLOG —— 工作紀錄補 10-02 第 67 項；第 4 節 IO 頁要決定的事。
+  web 0075 fd1d4e1 COMPK-IOS (web) —— 7 頁 4,411 個元件逐一判定：IO 頁開窗套用 C++ 算好的 FormShow、IO Table 篩選照原版、HandlerSys／LtcSensor、沒移植的硬體表單反灰＋原因。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
