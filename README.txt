@@ -580,4 +580,8 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   cpp 0106 745b8a8 WORKLOG —— 工作紀錄補 10-02 第 64 項；第 4 節資料頁要決定的事。
   web 0072 5e4a5bd COMPK-DATAS (web) —— 13 頁 3,392 個元件逐一判定：修 46 個、要決定 220 個、做不到 9 個；原版沒有確認框的存檔不再多問。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0107 2a06d6e SETUPA-N04／KB —— 設定頁全元件檢查的 C++ 半邊：Configuration 的 Host／IP（原版建構子）、Contact 小鍵盤執行期上下限與輸入後修正；ctest SetupA_KbExtraN04。
+  cpp 0108 3defd66 WORKLOG —— 工作紀錄補 10-02 第 65 項；第 4 節設定頁要決定的事。
+  web 0073 fa6aea5 COMPK-SETUPA (web) —— 12 頁 5,730 個元件逐一判定：Configuration 又存得進去（原版 Exit 的那一題）、ContactForce 接上、小鍵盤照原版、反灰欄位不開鍵盤。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
