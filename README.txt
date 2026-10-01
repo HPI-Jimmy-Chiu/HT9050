@@ -561,4 +561,9 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   cpp 0099 3d0dfee WORKLOG —— 工作紀錄補 10-01 第 61 項（Teach 全元件收尾）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0100 28ddd34 PKG-113-114 —— 整合筆電第 113～114 包（GitHub main e9f0fc7）：St01 D-026 警報 Note 密碼（dialog.auth）、St02 DIO 頁 Delete 鈕、cMyDB、TcpCmdServer 測試；
+                    3 檔衝突全部兩邊都留（wb_serve.cpp:671、WebBridgeServer.cpp:1448、tests/CMakeLists.txt）。設計外掛部分＝設計外掛工作階段。
+  cpp 0101 fb2db79 WORKLOG —— 工作紀錄補 10-02 第 62 項；第 3 節 113～114。
+  web 0070 840bed7 PKG-113-114 (web) —— DIO 頁 Delete 鈕（ht9045_dio_delete.js）、警報 Note 密碼（ht9045_dialog_host.js）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
