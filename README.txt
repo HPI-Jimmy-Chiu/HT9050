@@ -378,4 +378,12 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   tools 0133 HTDESIGNER-133c —— HANDOVER.md 更新分工：筆電包 100–101 已由機台整合工作階段整合完（沒有動到外掛）；整合的工作階段名稱會變，用 ListAgents 找。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0055 17016ef MERGE-0b3a0735 —— 筆電第 102～104 包（GitHub main 309a6d3、GitLab main 0b3a0735）併進機台樹。第 102 包：安全門鎖照 golden 跟著
+                    運轉狀態（運轉中鎖、停止放開；Magazine 門也一樣——IO 會動）、大風扇跟著 FAN 鈕、SetLotState 通知 TCP/IP tester／GPIB。
+                    第 103 包只有文件。第 104 包：fMain->Pause 照 golden 真的暫停機台（狀態機約 40 處、RemoteControl／RCMD:PAUSE）、SECS
+                    REMOTE_START、回原點後寫 config.ini（[I06]）、Jerry 的 CheckSocketSensor。20 檔：新 7、舊版 13（照收筆電的）、兩邊都改 0。
+                    o2 建置 0 錯誤、PE o2 28/28＋F5 目錄 178/178 完整；8 個 ctest 通過。⚠ WebMotorAccess、TempFuseLimit 這次在機台上沒跑：
+                    Windows 拒絕啟動那兩支 exe（Access is denied，檔案可讀、權限正常，疑似 Trend Micro 行為監控擋下）；它們的原始碼不在這三包裡，
+                    第 100～101 包那輪兩支都通過。production_audit 0 變更。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
