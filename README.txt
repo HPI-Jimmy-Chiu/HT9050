@@ -386,4 +386,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     Windows 拒絕啟動那兩支 exe（Access is denied，檔案可讀、權限正常，疑似 Trend Micro 行為監控擋下）；它們的原始碼不在這三包裡，
                     第 100～101 包那輪兩支都通過。production_audit 0 變更。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  tools 0134 HTDESIGNER-133d —— HANDOVER.md 更新：筆電包 102–104 已整合（沒有動到外掛）；筆電包 93 帶的外掛跟機台 0.111.0 逐檔相同（只差換行）；防毒會擋新建的測試 exe。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
