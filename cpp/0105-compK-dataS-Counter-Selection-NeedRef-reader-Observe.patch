@@ -1,0 +1,471 @@
+From 4570e45a18aaea254afc3f08ac1d6c471f5aaccd Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 2 Oct 2026 00:53:32 +0800
+Subject: [PATCH] compK dataS: Counter Selection NeedRef reader, Observer
+ tabVisible / Yield Chart open / Time Data, StartCondition alarm range
+
+Every-component check (EastSun 20261001), group dataS. C++ halves of web fixes:
+- FileRW/IniConfig_CounterSel.cpp: FileRW_CounterSel_NeedRefTick() = golden TfMain::Timer1Timer
+  NeedRef reader (906 main.cpp:3208-3213) + DoShowUserDefFrom fTestCategory branch (:8744-8752),
+  called after Exit's FormClose (C route) -- Tester Category mode / window now follow the radios.
+- cObserver.cpp: full response carries tabVisible (golden FormShow TabVisible :355-651);
+  open with arg 1 = ContactCT btYieldChartClick (iShowYieldChart=1, cContactCT.cpp:1071-1075);
+  msgTab / timeFile acts + timeData block = pgcMessageChange (:4766-4793) / lstTimeDataClick
+  (:4841-4844), read only; lstTimeData keeps the dfm design-time Items until the first tab change.
+- FileRW/StartCondition.cpp: extras carry contactCntAlmMax (InputLimit.iContactCntAlm) for the
+  editContactCountAlarm keypad range.
+- tests: new ctest CompK_DataS (44 checks).
+---
+ FileRW/IniConfig_CounterSel.cpp |  30 +++++-
+ FileRW/StartCondition.cpp       |   2 +-
+ cObserver.cpp                   | 106 ++++++++++++++++--
+ tests/CMakeLists.txt            |  26 +++++
+ tests/test_compk_datas.cpp      | 184 ++++++++++++++++++++++++++++++++
+ 5 files changed, 340 insertions(+), 8 deletions(-)
+ create mode 100644 tests/test_compk_datas.cpp
+
+diff --git a/FileRW/IniConfig_CounterSel.cpp b/FileRW/IniConfig_CounterSel.cpp
+index 0050121..6325d22 100644
+--- a/FileRW/IniConfig_CounterSel.cpp
++++ b/FileRW/IniConfig_CounterSel.cpp
+@@ -50,7 +50,7 @@
+ #include <cstdio>
+ 
+ #include "FileRW/_EditPage.h"
+-
++#include "forms/fTestCategory.h"   // AI(W906-CSEL-NEEDREF) 20261001: fTestCategory (golden main.cpp:3211 / :8744-8752, see FileRW_CounterSel_NeedRefTick)
+ namespace {
+ bool g_booted = false;
+ bool Booted() { return g_booted; }  void EvB10CSaveFlow();   //AI(W906-EVB10C) 20260929 [W906]: saveFlow 包一層（檔尾：golden FormClose＋記「這一次開窗 FormClose 跑過了」）；同一行附加
+@@ -98,11 +98,38 @@ void FileRW_CounterSel_Boot()
+ // ===========================================================================
+ #include "FileRW/WindowEdgeTails.h"
+ 
++// AI(W906-CSEL-NEEDREF) 20261001: golden TfMain::Timer1Timer (906 main.cpp:3208-3213) reads NeedRef on its next tick after this form
++//   closed: `if(fCounterSel->NeedRef){ fCounterSel->NeedRef=false; fTestCategory->SetShowCateMode(); DoShowUserDefFrom(); }`.
++//   The port had no reader (cTestCategory.cpp:639-641), so rgTestCategory (Normal / By Arm) and rbTestCategory_On/Off only took
++//   effect at the next boot. Run it here, right after FormClose (golden: the next 30 ms main tick). Only the halves that live in C++:
++//   SetShowCateMode (bCateByArm / Height -> tags tcat.cateByArm / tcat.height) and DoShowUserDefFrom's fTestCategory branch
++//   (906 main.cpp:8744-8752 -> FormShow / FormClose -> tag tcat.show). The main-screen windows DoShowUserDefFrom shows or closes
++//   (fSortCT / fTestCategory / fContactCT / fShowBinSelect, :8734-8774) are web windows: ht9045_countersel_c.js asks background.html
++//   to open / close them after the save; fTemperFrom Close/Show and fShowMessage->ShowMyMessage only re-place always-open windows.
++//   Exported (not in the anonymous namespace) so tests/test_compk_datas.cpp can drive it.
++void FileRW_CounterSel_NeedRefTick()
++{
++    if (!NeedRef || fTestCategory == nullptr)
++        return;
++    NeedRef=false;                                                              // golden main.cpp:3210
++    fTestCategory->SetShowCateMode();                                           // golden main.cpp:3211
++    if(IniConfig.bShowTestCate)                                                 // golden main.cpp:8744-8752 (DoShowUserDefFrom)
++    {
++        if(fTestCategory->bShow==false)
++            fTestCategory->FormShow(nullptr);                                   // Show() -> OnShow = FormShow
++    }
++    else
++    {
++        fTestCategory->FormClose();                                             // Close() -> OnClose = FormClose
++    }
++}
++
+ namespace {
+ void EvB10CSaveFlow()
+ {
+     CSL_FormClose();                                                            // golden cCounterSel.cpp:56（Exit → Close() → OnClose）
+     filerw::PageFormCloseRan("IniConfig_CounterSel");                           // 這一次開窗 FormClose 跑過了（關窗邊緣不再跑）
++    FileRW_CounterSel_NeedRefTick();                                            // AI(W906-CSEL-NEEDREF) 20261001: golden main.cpp:3208-3213
+ }
+ }  // namespace
+ 
+@@ -112,5 +139,6 @@ const char* FileRW_CounterSel_WindowEdge(bool open)
+     if (!g_booted) return "not run: TfCounterSel proxies are not booted";
+     if (const char* no = filerw::PageCloseEdgeRefused("IniConfig_CounterSel")) return no;
+     CSL_FormClose();                                                            // golden cCounterSel.cpp:56
++    FileRW_CounterSel_NeedRefTick();                                            // AI(W906-CSEL-NEEDREF) 20261001: golden main.cpp:3208-3213
+     return "ran golden TfCounterSel::FormClose (cCounterSel.cpp:56-109) with the server-side values read at open: IniConfig.bShow* -> config.ini [Visible] rewritten (ProcessLastSetIni_Visible), Tab_UPH, NeedRef=true";
+ }
+diff --git a/FileRW/StartCondition.cpp b/FileRW/StartCondition.cpp
+index e61c44f..b9b7c79 100644
+--- a/FileRW/StartCondition.cpp
++++ b/FileRW/StartCondition.cpp
+@@ -285,7 +285,7 @@ std::string ExtraJson()
+     w.Key("tabCaption").BeginObject();
+     for (const char* n : {"tsCondition01", "tsCondition02", "tsCondition03"}) w.Key(n).String(EL<TTabSheet>(kForm, n)->Caption.c_str());
+     w.EndObject();
+-    w.Key("amd").Bool(IniConfig.bAMDFunction != 0);
++    w.Key("amd").Bool(IniConfig.bAMDFunction != 0);   w.Key("contactCntAlmMax").Number((wb_int64)InputLimit.iContactCntAlm);   //AI(W906-SC-ALMRANGE) 20261001: golden editContactCountAlarmMouseDown (906 cStartCondition.cpp:1049-1054) keypad range 0..InputLimit.iContactCntAlm (GetLimitAuth in FormShow :109); the page had no range (only the KYEC/HiSilicon/head-count branch clamps on save :833-837 -- not the PTI HeadContactSet[4] one :843-846)
+     w.EndObject();
+     return w.Str();
+ }
+diff --git a/cObserver.cpp b/cObserver.cpp
+index 370ab61..9480399 100644
+--- a/cObserver.cpp
++++ b/cObserver.cpp
+@@ -7338,7 +7338,7 @@ void TfObserver::btnLot1Click(void *Sender)
+ 
+ struct sqlite3;                     // third_party/sqlite3/sqlite3.h: typedef struct sqlite3 sqlite3
+ extern sqlite3 *dbReadOnly;         // cMyDB.cpp:126 -- NULL unless MyDBOpenDB() ran
+-extern AnsiString W906_asObsGPIBVersion; extern AnsiString W906_asObsTTLRS232Version;   //AI(W906-H022-T3) 20260930: MessageDef.cpp end of file (ht9045_globals), which ht9045_sm already links -- no new link edge; on this blank file-scope line on purpose: :7342-:7922 is an anonymous namespace
++extern AnsiString W906_asObsGPIBVersion; extern AnsiString W906_asObsTTLRS232Version;  std::string W906_ObserverTabVisibleJson(TfObserver *f);  void W906_ObserverTimeDataHydrate(TfObserver *f); void W906_ObserverTimeDataAct(TfObserver *f, const std::string &act, int arg); std::string W906_ObserverTimeDataJson(TfObserver *f);   //AI(W906-OBS-TABVIS / W906-OBS-TIMEDATA) 20261001: forward declarations, body at the end of this file (same line).  AI(W906-H022-T3) 20260930: MessageDef.cpp end of file (ht9045_globals), which ht9045_sm already links -- no new link edge; on this blank file-scope line on purpose: :7342-:7922 is an anonymous namespace
+ namespace {
+ 
+ bool W906Obs_IsUtf8(const std::string &s)
+@@ -7931,14 +7931,14 @@ std::string W906_ObserverJson(const std::string &act, int arg, const std::string
+     if (!open && act != "timer" && act != "tab" && act != "rowNo" && act != "form" && act != "year" &&
+         act != "month" && act != "file" && act != "filter" && act != "query" &&
+         act != "ccKinds" && act != "ccKindsForm" && act != "ccHistory" && act != "ccHistoryForm" &&   // AI(W906-PROD-S116) 20260926：Counter 分頁四個 RadioGroup
+-        act != "yieldSite" && act != "yieldMax" && act != "yieldMin" && act != "yieldClear")          // AI(W906-PROD-S116Y) 20260927：Yield 分頁（見上面 W906Obs_YieldSiteClick 那段）
++        act != "yieldSite" && act != "yieldMax" && act != "yieldMin" && act != "yieldClear" && act != "msgTab" && act != "timeFile")          // AI(W906-PROD-S116Y) 20260927：Yield 分頁（見上面 W906Obs_YieldSiteClick 那段）。AI(W906-OBS-TIMEDATA) 20261001: msgTab / timeFile = System Message's Time Data (end of file)
+         throw std::invalid_argument("unknown act '" + act + "'");
+ 
+     W906Obs_HydrateRowTrays();                                              // AI(W906-PROD-S116) 20260926：mtRowA..D 補 dfm 的 11×9（見 helper 說明）
+-    W906Obs_HydrateYieldChart(f);                                           // AI(W906-PROD-S116) 20260927：ChartYield Y 軸、edYieldMax／edYieldMin 補 dfm 值（見 helper 說明）
++    W906Obs_HydrateYieldChart(f);   W906_ObserverTimeDataHydrate(f);        // AI(W906-PROD-S116) 20260927：ChartYield Y 軸、edYieldMax／edYieldMin 補 dfm 值（見 helper 說明）。AI(W906-OBS-TIMEDATA) 20261001: lstTimeData's dfm Items (end of file)
+ 
+     if (open || !f->bShow)   //AI(W906-FSHOW-B2) 20260929: 讀門面成員（C++ 這份 FormShow 跑過沒），不問頁面表：網頁視窗開著會跳過 FormShow
+-    {
++    {   if (open && arg == 1) f->iShowYieldChart = 1;   //AI(W906-OBS-YCHART) 20261001: open with arg 1 = golden TfContactCT::btYieldChartClick (cContactCT.cpp:1071-1075: fObserver->iShowYieldChart=1; ShowModal) -> FormShow :390-406 opens on the Yield page
+         f->FormShow(nullptr);
+         // golden :485 `rbHeadNumber->Checked=true;` (32-site arm): in VCL that
+         // also unchecks the other three radios of GroupBox8; the facade's
+@@ -8058,7 +8058,7 @@ std::string W906_ObserverJson(const std::string &act, int arg, const std::string
+     {
+         // AI(W906-PROD-S116Y) 20260927：按 SpeedButton1 'Clear' → golden SpeedButton1Click（:865-872，只清記憶體裡的 HistroyBin）
+         f->SpeedButton1Click(nullptr);
+-    }
++    }   else if (act == "msgTab" || act == "timeFile") W906_ObserverTimeDataAct(f, act, arg);   //AI(W906-OBS-TIMEDATA) 20261001: pgcMessage OnChange / lstTimeData OnClick (end of file)
+ 
+     // ---- captions (the golden panels, after golden wrote them) -------------
+     std::string j;
+@@ -8282,10 +8282,104 @@ std::string W906_ObserverJson(const std::string &act, int arg, const std::string
+     }
+     j += "]}";
+     // AI(W906-PROD-S116) 20260926：Counter（tab 0，開窗預設頁）、Yield（tab 4）、Test Information（tab 6）
+-    j += ",\"activePage\":" + W906Obs_Int(f->pgcObserv->ActivePageIndex);
++    j += ",\"activePage\":" + W906Obs_Int(f->pgcObserv->ActivePageIndex);   j += ",\"tabVisible\":" + W906_ObserverTabVisibleJson(f);   j += ",\"timeData\":" + W906_ObserverTimeDataJson(f);   //AI(W906-OBS-TABVIS) 20261001: the TabVisible golden FormShow writes (helper at the end of this file). AI(W906-OBS-TIMEDATA) 20261001: lstTimeData + strngrdTimeData (end of file)
+     j += ",\"counter\":" + W906Obs_CounterJson(f);
+     j += ",\"yield\":" + W906Obs_YieldJson(f);
+     j += ",\"testInfo\":" + W906Obs_TestInfoJson(f);
+     j += "}";
+     return j;
+ }
++
++//===========================================================================
++//  W906_ObserverTabVisibleJson -- AI(W906-OBS-TABVIS) 20261001 (every-component check, EastSun 20261001).
++//  The TabVisible golden TfObserver::FormShow writes (906 cObserver.cpp:347-652), for the page to apply:
++//    tsScanner :355 (always false); tsTemperature :378 (authObserver[0] || TC401HeaterControl!=NoHeater);
++//    tsMDB :379 (CosFunction.bUseMDB); tsLotInfo :381-388 (IniConfig.bSPILFunction);
++//    tsDataRecord / tsPrecautionsRecord / tsPrecautionLog / tsHanderMajorMaintenance :561-593 (config [PrecautionRecord] B01 / B02);
++//    and while bShowMajorMaintenanceRecord :595-618 the eight main sheets go false.
++//  Only those: every other sheet keeps its dfm TabVisible=True, which vclcompat's TTabSheet (constructor default false,
++//  vclcompat/Controls.h:510) does not hold -- reading those would hide every tab. Before this the page showed every sheet,
++//  so on this machine "Record" (B01=0, B02=0) and "Lot information" (bSPILFunction off) were visible although golden hides them.
++//===========================================================================
++std::string W906_ObserverTabVisibleJson(TfObserver *f)
++{
++    if (f == nullptr)
++        return "{}";
++    std::string tv = std::string("{\"tsScanner\":") + W906Obs_B(f->tsScanner->TabVisible) +
++                     ",\"tsTemperature\":" + W906Obs_B(f->tsTemperature->TabVisible) +
++                     ",\"tsMDB\":" + W906Obs_B(f->tsMDB->TabVisible) +
++                     ",\"tsLotInfo\":" + W906Obs_B(f->tsLotInfo->TabVisible) +
++                     ",\"tsDataRecord\":" + W906Obs_B(f->tsDataRecord->TabVisible) +
++                     ",\"tsPrecautionsRecord\":" + W906Obs_B(f->tsPrecautionsRecord->TabVisible) +
++                     ",\"tsPrecautionLog\":" + W906Obs_B(f->tsPrecautionLog->TabVisible) +
++                     ",\"tsHanderMajorMaintenance\":" + W906Obs_B(f->tsHanderMajorMaintenance->TabVisible);
++    if (f->bShowMajorMaintenanceRecord)                                         // golden :610-617
++        tv += ",\"tsCounter\":false,\"tsTestCate\":false,\"tsMDBQuery\":false,\"tsYield\":false,"
++              "\"tsTestInfo\":false,\"tsOEE_ProductionInfor\":false";            // tsTemperature (:616) / tsScanner (:612) already read false above
++    return tv + "}";
++}
++
++//===========================================================================
++//  System Message / Time Data (tsMsgTimeData) -- AI(W906-OBS-TIMEDATA) 20261001 (every-component check, EastSun 20261001).
++//  golden: pgcMessage OnChange = pgcMessageChange (cObserver.dfm:1336; 906 cObserver.cpp:4766-4793): EVERY pgcMessage tab change
++//  (not only to Time Data) lists D:\HT9045_Log\TimeData\<SystemYear>\ into lstTimeData, selects the last file and fills
++//  strngrdTimeData (GetTimeDataText :4795-4839); lstTimeData OnClick = lstTimeDataClick (:4841-4844). Read only -- no file written.
++//  Before the first pgcMessage tab change golden shows the dfm's design-time Items ('3333' and ten '1', cObserver.dfm:1798-1809;
++//  ItemIndex -1) -- golden-odd, reproduced: the facade's TListBox starts empty, so they are added once here.
++//  (btnTimeData's dfm OnClick is btnQueryEventLogTxtClick, cObserver.dfm:1820 -- the page sends the existing 'query' act.)
++//===========================================================================
++void W906_ObserverTimeDataHydrate(TfObserver *f)
++{
++    static bool done = false;                                                   // the dfm loads once, at form creation
++    if (done || f == nullptr)
++        return;
++    done = true;
++    if (f->lstTimeData->Items->Count != 0)
++        return;
++    f->lstTimeData->Items->Add(AnsiString("3333"));                            // cObserver.dfm:1799
++    for (int i = 0; i < 10; ++i)
++        f->lstTimeData->Items->Add(AnsiString("1"));                           // cObserver.dfm:1800-1809
++    f->lstTimeData->ItemIndex = -1;
++}
++
++void W906_ObserverTimeDataAct(TfObserver *f, const std::string &act, int arg)
++{
++    if (act == "msgTab")
++    {
++        if (arg < 0 || arg > 3)                                                 // dfm pgcMessage: tsMDB 0, tsEventLogTxt 1, tsMsgTimeData 2, tsSGJamCount 3
++            throw std::invalid_argument("msgTab: 0 (MDB), 1 (Text), 2 (Time Data) or 3 (SG_JamCount)");
++        f->pgcMessage->ActivePageIndex = arg;
++        f->pgcMessageChange(nullptr);
++    }
++    else
++    {
++        if (arg < 0 || arg >= f->lstTimeData->Items->Count)
++            throw std::invalid_argument("timeFile out of range for lstTimeData->Items");
++        f->lstTimeData->ItemIndex = arg;
++        f->lstTimeDataClick(nullptr);
++    }
++}
++
++std::string W906_ObserverTimeDataJson(TfObserver *f)
++{
++    if (f == nullptr)
++        return "{}";
++    std::string j = "{\"items\":" + W906Obs_Strings(f->lstTimeData->Items);
++    j += ",\"itemIndex\":" + W906Obs_Int(f->lstTimeData->ItemIndex);
++    j += ",\"msgPage\":" + W906Obs_Int(f->pgcMessage->ActivePageIndex);
++    const int rows = f->strngrdTimeData->RowCount, cols = f->strngrdTimeData->ColCount;
++    // dfm strngrdTimeData: ColCount=13, DefaultColWidth=68, FixedCols=0, FixedRows not set (VCL 1), Color=14670284, FixedColor=9534289
++    j += ",\"rows\":" + W906Obs_Int(rows) + ",\"cols\":" + W906Obs_Int(cols) + ",\"fixedRows\":" + W906Obs_Int(rows > 1 ? 1 : 0);
++    j += ",\"colWidth\":68,\"color\":" + W906Obs_Rgb(14670284) + ",\"fixedColor\":" + W906Obs_Rgb(9534289) + ",\"cells\":[";
++    for (int r = 0; r < rows; ++r)
++    {
++        j += r ? ",[" : "[";
++        for (int c = 0; c < cols; ++c)
++        {
++            if (c) j += ",";
++            j += W906Obs_QA(AnsiString(f->strngrdTimeData->Cells[c][r]));
++        }
++        j += "]";
++    }
++    return j + "]}";
++}
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 9e5fdaa..2a4175c 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -6421,3 +6421,29 @@ if(W906_NODE_EXECUTABLE)
+         "${CMAKE_SOURCE_DIR}/tools/webprobe/tif_kb_selftest.cjs" "${CMAKE_SOURCE_DIR}/../web/page")
+     set_tests_properties(TIF_KbGolden PROPERTIES TIMEOUT 60)
+ endif()
++
++# --- test_compk_datas: AI(W906-CSEL-NEEDREF / W906-OBS-TABVIS) 20261001 -- every-component check, Data / Status pages.
++#   A: Counter Selection's NeedRef reader (golden TfMain::Timer1Timer 906 main.cpp:3208-3213 + DoShowUserDefFrom's
++#   fTestCategory branch :8744-8752), FileRW/IniConfig_CounterSel.cpp FileRW_CounterSel_NeedRefTick -- SetShowCateMode and
++#   Show / Close of fTestCategory after the form closes. B: the Observer's tabVisible map (cObserver.cpp
++#   W906_ObserverTabVisibleJson: only the sheets golden FormShow writes). C: the Observer's Time Data (AI(W906-OBS-TIMEDATA):
++#   pgcMessageChange / lstTimeDataClick, reads the TimeData year folder only). FileRW/IniConfig_CounterSel.cpp is wb_serve-only
++#   (FileRW/_editlist_sources.cmake), so it is listed here with the C-route shared layer, as test_hsys_heater_mix does.
++#   Memory only (no golden FormShow, no file); the guard refuses outside the redirect roots. After the GLOBAL TEST TIMEOUT
++#   block => own TIMEOUT.
++add_executable(test_compk_datas
++    test_compk_datas.cpp
++    ${CMAKE_SOURCE_DIR}/FileRW/IniConfig_CounterSel.cpp
++    ${CMAKE_SOURCE_DIR}/FileRW/_EditList.cpp
++    ${CMAKE_SOURCE_DIR}/FileRW/_EditPage.cpp
++)
++target_include_directories(test_compk_datas PRIVATE ${CMAKE_SOURCE_DIR})
++target_link_libraries(test_compk_datas PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++    ht9045_webbridge
++)
++if(WIN32)
++    target_link_libraries(test_compk_datas PRIVATE ws2_32)
++endif()
++add_test(NAME CompK_DataS COMMAND test_compk_datas)
++set_tests_properties(CompK_DataS PROPERTIES TIMEOUT 120)
+diff --git a/tests/test_compk_datas.cpp b/tests/test_compk_datas.cpp
+new file mode 100644
+index 0000000..3d6f806
+--- /dev/null
++++ b/tests/test_compk_datas.cpp
+@@ -0,0 +1,184 @@
++// =============================================================================
++//  tests/test_compk_datas.cpp -- AI(W906-CSEL-NEEDREF / W906-OBS-TABVIS) 20261001: ctest CompK_DataS
++//
++//  Two C++ halves of the every-component check (EastSun 20261001) for the Data/Status pages:
++//    A  Counter Selection -> golden TfMain::Timer1Timer's NeedRef reader (906 main.cpp:3208-3213 + DoShowUserDefFrom's
++//       fTestCategory branch :8744-8752), FileRW/IniConfig_CounterSel.cpp FileRW_CounterSel_NeedRefTick():
++//       NeedRef=false, SetShowCateMode (bCateByArm / Height from IniConfig.iShowCateByArm), FormShow when bShowTestCate
++//       and not showing, FormClose when bShowTestCate is off; nothing at all while NeedRef is false.
++//    B  Observer -> the TabVisible golden FormShow writes, as the page's tabVisible map (cObserver.cpp
++//       W906_ObserverTabVisibleJson): only the sheets FormShow writes; the eight main sheets go false while
++//       bShowMajorMaintenanceRecord; nullptr -> {}.
++//    C  Observer Time Data -> AI(W906-OBS-TIMEDATA): lstTimeData's dfm Items until the first pgcMessage tab change, lstTimeDataClick
++//       on a non-file -> "No Record!!", argument checks, pgcMessageChange's last-file selection (reads the TimeData year folder only).
++//  Memory only: no golden FormShow of TfObserver / TfCounterSel runs (those read and seed machine files); nothing is
++//  written (part C only lists the TimeData year folder, golden's own read). The guard still refuses outside ctest's redirect roots, the same rule as every newer test.
++// =============================================================================
++#include "vclcompat/vcl_compat.h"
++#include "Config.h"                 // IniConfig.iShowCateByArm / bShowTestCate
++#include "forms/fCounterSel.h"      // fCounterSel->NeedRef
++#include "forms/fTestCategory.h"    // fTestCategory
++#include "forms/fObserver.h"        // fObserver / TfObserver
++#include "w906_ctest_guard.h"
++
++#include <cstdio>
++#include <stdexcept>
++#include <string>
++
++void FileRW_CounterSel_NeedRefTick();                     // FileRW/IniConfig_CounterSel.cpp
++std::string W906_ObserverTabVisibleJson(TfObserver *f);   // cObserver.cpp (end of file)
++void W906_ObserverTimeDataHydrate(TfObserver *f);                                 // cObserver.cpp (end of file)
++void W906_ObserverTimeDataAct(TfObserver *f, const std::string &act, int arg);    // cObserver.cpp (end of file)
++std::string W906_ObserverTimeDataJson(TfObserver *f);                             // cObserver.cpp (end of file)
++// the C-route shared layer (FileRW/_EditPage.cpp) takes wb_serve's form lock; single-threaded test -> no-op (as test_hsys_heater_mix.cpp:666)
++namespace ht9045 { namespace formjson { void FormLock() {} void FormUnlock() {} } }
++// link only (not under test): cprod.cpp (ht9045_globals) calls these two; the real ones are in FileRW/IniConfig.cpp / FileRW/HSys.cpp
++// (not compiled here). Without them the archive pulls FileRW/_fallback.cpp, whose other members collide with the
++// FileRW/_EditList.cpp compiled into this test (same as test_hsys_heater_mix.cpp:45-49).
++void FileRW_IniConfig_ChangeCBListProperty() {}
++vclcompat::AnsiString FileRW_HSys_CustomerName() { return vclcompat::AnsiString("HonPrec"); }
++
++static int g_fail = 0, g_checks = 0;
++static void check(bool ok, const char* what, int line)
++{
++    ++g_checks;
++    if (!ok) { ++g_fail; std::printf("  FAIL [test_compk_datas.cpp:%d]  %s\n", line, what); }
++    else     {           std::printf("  ok    %s\n", what); }
++}
++#define CHECK(c) check((c), #c, __LINE__)
++
++static bool Has(const std::string& s, const char* part) { return s.find(part) != std::string::npos; }
++
++static void PartA_CounterSelNeedRef()
++{
++    std::printf("A  Counter Selection NeedRef reader (golden main.cpp:3208-3213)\n");
++    CHECK(fCounterSel != nullptr && fTestCategory != nullptr);
++    if (fCounterSel == nullptr || fTestCategory == nullptr) return;
++
++    // A1: Exit with "By Arm" and Tester Category ON -> mode By Arm, window shown
++    fCounterSel->NeedRef = true;
++    IniConfig.iShowCateByArm = 1;
++    IniConfig.bShowTestCate = true;
++    fTestCategory->bShow = false;
++    fTestCategory->bCateByArm = false;
++    FileRW_CounterSel_NeedRefTick();
++    CHECK(fCounterSel->NeedRef == false);                 // :3210
++    CHECK(fTestCategory->bCateByArm == true);             // SetShowCateMode :3211
++    CHECK(fTestCategory->Height == 192);                  // golden cTestCategory.cpp:511-525 (#else arm)
++    CHECK(fTestCategory->bShow == true);                  // DoShowUserDefFrom :8746-8747 -> Show() -> FormShow
++
++    // A2: NeedRef already consumed -> a later tick changes nothing
++    IniConfig.iShowCateByArm = 0;
++    IniConfig.bShowTestCate = false;
++    FileRW_CounterSel_NeedRefTick();
++    CHECK(fTestCategory->bCateByArm == true);
++    CHECK(fTestCategory->bShow == true);
++
++    // A3: Exit with "Normal" and Tester Category OFF -> mode Normal, window closed
++    fCounterSel->NeedRef = true;
++    FileRW_CounterSel_NeedRefTick();
++    CHECK(fCounterSel->NeedRef == false);
++    CHECK(fTestCategory->bCateByArm == false);
++    CHECK(fTestCategory->Height == 105);
++    CHECK(fTestCategory->bShow == false);                 // :8751 Close() -> FormClose
++
++    // A4: Tester Category ON while already showing -> stays shown (golden: if(bShow==false) Show())
++    fCounterSel->NeedRef = true;
++    IniConfig.bShowTestCate = true;
++    fTestCategory->bShow = true;
++    FileRW_CounterSel_NeedRefTick();
++    CHECK(fTestCategory->bShow == true);
++}
++
++static void PartB_ObserverTabVisible()
++{
++    std::printf("B  Observer tabVisible (golden FormShow cObserver.cpp:355-651)\n");
++    CHECK(W906_ObserverTabVisibleJson(nullptr) == "{}");
++    TfObserver* f = fObserver;
++    CHECK(f != nullptr);
++    if (f == nullptr) return;
++    f->tsScanner->TabVisible = false;
++    f->tsTemperature->TabVisible = true;
++    f->tsMDB->TabVisible = true;
++    f->tsLotInfo->TabVisible = false;                     // bSPILFunction off
++    f->tsDataRecord->TabVisible = false;                  // B01 / B02 off
++    f->tsPrecautionsRecord->TabVisible = false;
++    f->tsPrecautionLog->TabVisible = false;
++    f->tsHanderMajorMaintenance->TabVisible = false;
++    f->bShowMajorMaintenanceRecord = false;
++    std::string s = W906_ObserverTabVisibleJson(f);
++    std::printf("     %s\n", s.c_str());
++    CHECK(Has(s, "\"tsScanner\":false"));
++    CHECK(Has(s, "\"tsTemperature\":true"));
++    CHECK(Has(s, "\"tsMDB\":true"));
++    CHECK(Has(s, "\"tsLotInfo\":false"));
++    CHECK(Has(s, "\"tsDataRecord\":false"));
++    CHECK(Has(s, "\"tsHanderMajorMaintenance\":false"));
++    CHECK(!Has(s, "tsCounter"));                          // never written by FormShow outside :595-618 -> dfm TabVisible=True stays
++    CHECK(!Has(s, "tsYield"));
++
++    f->tsDataRecord->TabVisible = true;                   // B01 on
++    f->tsPrecautionsRecord->TabVisible = true;
++    f->bShowMajorMaintenanceRecord = true;                // golden :595-618
++    s = W906_ObserverTabVisibleJson(f);
++    std::printf("     %s\n", s.c_str());
++    CHECK(Has(s, "\"tsDataRecord\":true"));
++    CHECK(Has(s, "\"tsPrecautionsRecord\":true"));
++    CHECK(Has(s, "\"tsCounter\":false"));
++    CHECK(Has(s, "\"tsTestCate\":false"));
++    CHECK(Has(s, "\"tsMDBQuery\":false"));
++    CHECK(Has(s, "\"tsYield\":false"));
++    CHECK(Has(s, "\"tsTestInfo\":false"));
++    CHECK(Has(s, "\"tsOEE_ProductionInfor\":false"));
++    f->bShowMajorMaintenanceRecord = false;
++}
++
++static bool Throws(TfObserver *f, const char *act, int arg)
++{
++    try { W906_ObserverTimeDataAct(f, act, arg); } catch (const std::invalid_argument &) { return true; }
++    return false;
++}
++
++static void PartC_ObserverTimeData()
++{
++    std::printf("C  Observer Time Data (golden pgcMessageChange cObserver.cpp:4766-4793, lstTimeDataClick :4841-4844)\n");
++    CHECK(W906_ObserverTimeDataJson(nullptr) == "{}");
++    TfObserver* f = fObserver;
++    if (f == nullptr) return;
++    // C1: before any pgcMessage tab change the list holds the dfm design-time Items (cObserver.dfm:1798-1809), none selected
++    W906_ObserverTimeDataHydrate(f);
++    CHECK(f->lstTimeData->Items->Count == 11);
++    CHECK(f->lstTimeData->Items->Count > 0 && std::string(f->lstTimeData->Items->Strings[0].c_str()) == "3333");
++    CHECK(f->lstTimeData->ItemIndex == -1);
++    // C2: clicking '3333' -> GetTimeDataText: not a file -> RowCount 2, Cells[1][1] "No Record!!" (golden :4830-4836)
++    W906_ObserverTimeDataAct(f, "timeFile", 0);
++    CHECK(f->lstTimeData->ItemIndex == 0);
++    std::string s = W906_ObserverTimeDataJson(f);
++    std::printf("     %s\n", s.substr(0, 200).c_str());
++    CHECK(Has(s, "\"rows\":2"));
++    CHECK(Has(s, "No Record!!"));
++    CHECK(Has(s, "\"cols\":13"));                                              // dfm ColCount=13
++    // C3: out-of-range arguments are refused, nothing runs
++    CHECK(Throws(f, "timeFile", 11));
++    CHECK(Throws(f, "timeFile", -1));
++    CHECK(Throws(f, "msgTab", 4));
++    // C4: a pgcMessage tab change re-lists the year folder (read only): last file selected, or -1 when there is none
++    W906_ObserverTimeDataAct(f, "msgTab", 2);
++    CHECK(f->pgcMessage->ActivePageIndex == 2);
++    const int n = f->lstTimeData->Items->Count;
++    CHECK(f->lstTimeData->ItemIndex == (n >= 1 ? n - 1 : -1));
++    // C5: the dfm Items are not put back afterwards (the dfm loads once)
++    W906_ObserverTimeDataHydrate(f);
++    CHECK(f->lstTimeData->Items->Count == n);
++}
++
++int main()
++{
++    if (!W906TestRequireCtestRedirects("CompK_DataS"))
++        return 2;
++    PartA_CounterSelNeedRef();
++    PartB_ObserverTabVisible();
++    PartC_ObserverTimeData();
++    std::printf("\n%d checks, %d failed\nRESULT: %s\n", g_checks, g_fail, g_fail ? "FAIL" : "ALL PASS");
++    return g_fail ? 1 : 0;
++}
+-- 
+2.55.0.windows.5
+
