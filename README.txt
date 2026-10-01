@@ -559,4 +559,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   web 0069 0f8a3ef TEACH-ALLCOMP (web) —— Teach：點「Active Motor」標籤切到 Axle Control 分頁（原版 Label2Click）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0099 3d0dfee WORKLOG —— 工作紀錄補 10-01 第 61 項（Teach 全元件收尾）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
