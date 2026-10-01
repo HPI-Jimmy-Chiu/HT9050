@@ -5,6 +5,7 @@
 
 ## ⚠⚠ 給機台端（20260929 18:1x 起，請先讀這一段）
 
+- ✅ **20261001 第 102 包（GitLab main `5ae25f4d`）——要重建 wb_serve**：照 golden 補的功能，**有兩項會讓 IO 動作**：① 安全門鎖（`SwSafeDoorLock`）照 golden 主計時器跟著運轉狀態——**運轉中鎖住、停止後放開**；CE PLC 非安全模式時一直鎖；IO 設定頁開著時不動它；Contact 手動量高度時放開；Magazine 機的兩道門鎖同一段；② 大風扇（`SwBigFan`）跟著主畫面 FAN 鈕；ASE_CL／HONPREC QC 另外驅動風向；③ `TfMain::SetLotState` 照 golden：TCP/IP tester 會收到 LOTNUMBER／LOTSTART／LOTEND，GPIB tester 的批次狀態送到橋接。
 - ✅ **20261001 第 101 包（GitLab main `985c44be`）——要重建 wb_serve**：照 golden 補的功能，**有幾項會讓氣缸／IO 動作**：① 三溫機（Tri_Temp_Machine）安全門 6 開著時鎖住運轉；② 急停按下／放開時通知 ATC 溫控器，ATC 6.0／3.0 的錯誤訊息與斷線重連；③ 一輪結束／換盤時寫 `system\BinCount.txt`；④ 一輪結束時 Auto 盤氣缸放開（[EnableUnloadTrayFree] 開時，**氣缸會動**）；⑤ [I41] 空 socket 檢查；⑥ Initial／RT Start 先把上料氣缸打兩下（**氣缸會動**）。
 - ✅ **20261001 第 100 包（GitLab main `de4249da`）——要重建 wb_serve**：① **加熱保險絲上限照 golden 設定**（以前一直是 0：設溫度頁每個溫度都被判超限、socket 溫度範圍被夾成負數）——開機會依客戶碼／機型／溫度上限設成 250／200／170；② **Motor Test 頁非 1203 軸按 HOME 會真的回原點**（照 golden 單軸回原點流程，**軸會動**；1203 軸不變）；③ ART LOTCLEARED／LOTRETESTCLEARED 照 golden 清 2DID 條碼清單。
 - ✅ **20261001 第 99 包（GitLab main `e240a3f4`）——要重建 wb_serve**：INBOX 128。**熱盤模式**下入料臂取完料以前會停在 InArm case 1100（等一個恆回 false 的替身）；現在照 golden 派送到各機型的熱盤放料流程（**行為改變：取完料會繼續去熱盤放料，手臂會動**）。沒開熱盤的機台不受影響。
@@ -147,6 +148,7 @@
 | 99 | `updates/e240a3f4/` | `e240a3f4` | `ae9f7d0d`（`updates/e240a3f4/_machine_ai/base_ae9f7d0d/`） | ⚠ **要重建 wb_serve**（8 檔；兩組態全新 gate＝基準：出貨 284 支 4 項、模擬 284 支 19 項）。INBOX 128：`ainarm_SearchPlacePlate.cpp` 的 `DoPlaceToHotPlate_9045()` 派送器照 golden 解開（熱盤模式取完料會去熱盤放料）；測試 `W6_2_InArmCanary` 照開機順序建手臂偏移物件。其餘是文件（裁決 20261001、夜間報告）。 |
 | 100 | `updates/de4249da/` | `de4249da` | `e240a3f4`（`updates/de4249da/_machine_ai/base_e240a3f4/`） | ⚠ **要重建 wb_serve**（13 檔；兩組態全新 gate＝基準：出貨 285 支 4 項、模擬 285 支 19 項）。① `MainFormShow_TempFuse.cpp`（新）＋`tools/wb_serve.cpp` 一行：golden 開機設 `TempFuseLimitType`；② `WebMotorAccess*.cpp`：非 1203 軸的 HOME 走 golden `ProcessSingleMotorHome`；③ St02 MR !22（`HandlerGpibMsg.cpp`）。新 ctest `TempFuseLimit`。 |
 | 101 | `updates/985c44be/` | `985c44be` | `de4249da`（`updates/985c44be/_machine_ai/base_de4249da/`） | ⚠ **要重建 wb_serve**（7 檔；兩組態全新 gate＝基準：出貨 286 支 4 項、模擬 286 支 19 項）。`csystem.cpp`：三溫機門 6 鎖、三個 W7C2 替身退役（BinCount／Auto 盤氣缸放開／I41）、上料氣缸預推、ATC 急停通知（`ATC/ATCInterface.cpp` 檔尾的橋接）；測試 D7h＋新 ctest `AtcEmgBridge`。 |
+| 102 | `updates/5ae25f4d/` | `5ae25f4d` | `985c44be`（`updates/5ae25f4d/_machine_ai/base_985c44be/`） | ⚠ **要重建 wb_serve**（14 檔；兩組態全新 gate＝基準（出貨 288 支 4 項、模擬 288 支 19 項，逐項同））。新檔 `MainTimerSegments.cpp`（安全門鎖跟運轉狀態、大風扇跟 FAN 鈕；每一拍由 `WebBridgeTags.cpp` 呼叫）、`forms/fMain_SetLotState.cpp`（SetLotState 照 golden）；`csystem.cpp`／`AutoRetest.cpp`／`Automation/SCK_ART_Remainder.cpp` 三個空巨集改呼叫它；新 ctest `MainTimerSegments`、`SetLotState`。 |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
