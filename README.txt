@@ -571,4 +571,9 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   cpp 0102 e4e61ee WORKLOG —— 第 3 節 113～114 補上設計外掛部分＝tools 0144（0.157.0）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0103 ba6e984 PKG-115-117 —— 整合筆電第 115～117 包（GitHub main 1dc9241）：Lot Info Tester TCP Show 照原版、St02 計時器修正、TesterIF 小鍵盤上下限照原版、G023 測試；
+                    沒有設計外掛檔。
+  cpp 0104 243df4c WORKLOG —— 工作紀錄補 10-02 第 63 項；第 3 節 115～117。
+  web 0071 d2b310c PKG-115-117 (web) —— Lot Info TCP Show（ht9045_lotinfo_testertcp.js；Data.LotInfo.html 與機台的截斷修正合併）、TesterIF 小鍵盤。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。

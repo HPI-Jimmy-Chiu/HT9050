@@ -1,0 +1,1758 @@
+From ba6e98403245606947509cd49fb33f2c42ee8876 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 2 Oct 2026 03:59:03 +0800
+Subject: [PATCH] PKG-115-117: laptop packages 115-117 (GitHub main 1dc9241,
+ GitLab 8b8209cc / 19e8826c / 95be5593) -- Lot Info Tester TCP Show as golden,
+ St02 timer fixes (Timer3 / minute temperature record run while their own box
+ is open; Observer temperature history as golden), TesterIF keyboard limits as
+ golden's generic branch, G023 test section 12
+
+C++ 18 files: new 3 (docs/D034_PLAN, docs/TESTERIF_FIELD_AUDIT, tools/webprobe/tif_kb_selftest.cjs), taken from the laptop 14,
+three-way merged 1 (tests/CMakeLists.txt: 0 conflicts, 0 duplicated lines). No tools/vscode-htdesigner files in these packages.
+Web part (Data.LotInfo.html merged with the machine's CLIPFIX, ht9045_lotinfo_testertcp.js, ht9045_testerif_c_wire.js): web repo.
+
+Verified: build_integ_ship_x86_o2 wb_serve + 6 test targets 0 errors; PE 72/72; ctest KitSuckPredicates, St02_MainTimers,
+St02_TimerESD, St02_Timer3, G023_OSReport, St02_Timer1 6/6 passed; production_audit 0 changes.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ Interface/TesterTCP_OSReport.cpp      |   2 +-
+ MainTimer3.cpp                        |  67 ++-
+ MainTimerESD.cpp                      |   4 +-
+ MainTimerESDFallback.cpp              |   4 +-
+ MainTimersSt02.cpp                    |  22 +-
+ docs/BU_PRE_POWER_CHECKLIST.md        |   6 +-
+ docs/D034_PLAN_20261002.md            | 563 ++++++++++++++++++++++++++
+ docs/INBOX_QUEUE.md                   |   7 +-
+ docs/NIGHT_REPORT.md                  |  32 +-
+ docs/TESTERCOMM_PORT_LEDGER.md        |   2 +-
+ docs/TESTERIF_FIELD_AUDIT_20261002.md | 336 +++++++++++++++
+ mykitsuck.cpp                         |   2 +-
+ mykitsuck.h                           |   2 +-
+ tests/CMakeLists.txt                  |  14 +-
+ tests/test_g023_os_report.cpp         | 103 ++++-
+ tests/test_st02_timer3.cpp            |  57 ++-
+ tools/webprobe/tif_kb_selftest.cjs    |  72 ++++
+ tools/websync/sync_web.py             |   2 +
+ 18 files changed, 1245 insertions(+), 52 deletions(-)
+ create mode 100644 docs/D034_PLAN_20261002.md
+ create mode 100644 docs/TESTERIF_FIELD_AUDIT_20261002.md
+ create mode 100644 tools/webprobe/tif_kb_selftest.cjs
+
+diff --git a/Interface/TesterTCP_OSReport.cpp b/Interface/TesterTCP_OSReport.cpp
+index 8a55c83..20accb5 100644
+--- a/Interface/TesterTCP_OSReport.cpp
++++ b/Interface/TesterTCP_OSReport.cpp
+@@ -6,7 +6,7 @@
+ //    P1  the golden literal "D:\\HT9045_Log" -> as9045LogPath (common.cpp:240, golden common.cpp:48
+ //        = "D:\\HT9045_Log"; W906_HT9045LOG_ROOT is the ctest seam, unset = the golden bytes).
+ //        Precedent: SortingBinTray.cpp:2702 / :2806 (W906-FLOW-2), common.cpp:244 / :295.
+-//    P2  golden's form widgets SourceMemo (TMemo, dfm :2846), RichEdit[] (TMemo, ctor :76) and
++//    P2  golden's form widgets SourceMemo (TMemo, dfm :2846), RichEdit[] (TMemo, ctor :90) and
+ //        redtSummary (TRichEdit, dfm :2877) are TU-local stand-ins below; SummaryHead is the real
+ //        facade member fTesterTCP->SummaryHead (forms/fTesterTCP.h:361, allocated by the active ctor).
+ //    P3  redtSummary->Lines->SaveToFile writes RTF, like golden: dfm :2877 sets no PlainText, so VCL
+diff --git a/MainTimer3.cpp b/MainTimer3.cpp
+index f138e33..be378cc 100644
+--- a/MainTimer3.cpp
++++ b/MainTimer3.cpp
+@@ -14,7 +14,7 @@
+ //    G1  :25197-25213  handler stop time label                                   GATED (S25 + display only)
+ //    G2  :25215-25268  2 s after start: FTP record, MES2108 Program Start, CCD   translated; UpdateLanguage / fShowMessage GATED
+ //    G3  :25271-25291  Fix3 full-place sensor not enabled -> message, 10 s       translated (golden: SHIP only)
+-//    G4  :25293-25294  ShowVacuumOnOffTime (main grid) ; RecordTemp               translated ; RecordTemp GATED
++//    G4  :25293-25294  ShowVacuumOnOffTime (main grid) ; RecordTemp               translated (RecordTemp: R126 M5, below)
+ //    G5  :25296-25307  CCD temperature > 55 -> MNetLog                            translated (MNetLog: Motor/myMN200motor.cpp:2516)
+ //    G6  :25309-25313  bNoNeedLoadSteupFile -> cbSetupFileName                    NOT HERE: WebRecipeChange.cpp:680-684 does it
+ //    G7  :25315-25319  bin display panels (NUMBER_PANEL_TYPE != 2 / 3 / 4)        translated (calls cShowBinSelect.cpp)
+@@ -42,11 +42,16 @@
+ //  S25 GATES WITH AN ELSE (G14, G18).  The customer `if` head and body are gated, golden's generic else stays live: every
+ //    other customer runs exactly golden; the customer's machine runs the generic branch (noted at each gate).
+ //  OTHER TfMain MEMBERS.  Fix3FullPlaceDelay (main.cpp:25183, file scope) and ShowVacuumOnOffTime (main.h member) live
+-//    here; TimerRecordLoaderDate() = W906_MainClose_TimerRecordLoaderDate (FileRW/MainClose.cpp:2879 -> :497 in that
++//    here; TimerRecordLoaderDate() = W906_MainClose_TimerRecordLoaderDate (FileRW/MainClose.cpp:2895 -> :500 in that
+ //    file's anonymous namespace, St01; other programs: MainTimerESDFallback.cpp, returns 0); StatusBar1 -> see G18.
++//    RecordTemp (golden main.cpp:2658-2689, only caller G4) is file-local below; it writes fObserver->dTempHistroy
++//    (forms/fObserver.h:790; the object is cObserver.cpp:3289, same archive) and calls fObserver->UpdateTempChart.
+ //  No waiting and no thread here: ShowMyMessage / ShowErrorMessage are the host's golden ShowModal waits (wb_serve
+-//    W906MbShowMyMessage / ForwardShowErrorMessage).  While such a box waits, the dispatcher skips Timer3 itself
+-//    (MainTimersSt02.cpp g_inTick; golden VCL would re-enter Timer3Timer, which has no re-entry flag) and runs the others.
++//    W906MbShowMyMessage / ForwardShowErrorMessage).  While such a box waits, the dispatcher keeps calling Timer3 on its
++//    deadline, as golden VCL re-enters Timer3Timer (no re-entry flag, :25184-25195); a nested ShowMyMessage returns at once
++//    (golden mymessbox.cpp:785, port tools/wb_serve.cpp:6859).  AI(W906-R126) 20261002 (St02-E): NB2 R126 M4 -- until then
++//    the dispatcher skipped Timer3 inside its own box, so the hourly LoaderData record, the yield alarms and the TTL lines
++//    stopped while it waited.
+ // ===========================================================================
+ #include "MachineType.h"          // SOFT_SIMULTE -- before the #ifndef below; CC_*, rsm*, Fix3K_ShortShuttle, ChangeToFloatNonPcnt
+ #include "cmydef.h"               // InitialOK, SystemStart, AccessLevel, NUMBER_PANEL_TYPE, FIX3_FULL_PLACE, iInZHomeCnt, SwClear*, ...
+@@ -68,9 +73,10 @@
+ #include "forms/fSCKART.h"        // fSCKART->iCurrent93KARTStep
+ #include "forms/fShowBinSelect.h" // fShowBinSelect->DoShowBinDigital / ChangeBinDispStatus (cShowBinSelect.cpp, called only)
+ #include "forms/fYieldMonitoring.h"   // fYieldMonitoring->Check*YieldAlarm (uYieldMonitoring.cpp, called only)
++#include "forms/fObserver.h"      // fObserver->dTempHistroy / bShow / UpdateTempChart (RecordTemp; cObserver.cpp)   AI(W906-R126) 20261002
+ 
+ void NewRecordProcess(AnsiString AlarmCode, AnsiString S, AnsiString Debug);   // cMyDB.h:129 (Debug default " "; body cMyDB.cpp:1868)
+-int  W906_MainClose_TimerRecordLoaderDate();     // FileRW/MainClose.cpp:2879 -> :497 (anonymous namespace) -- golden TfMain::TimerRecordLoaderDate
++int  W906_MainClose_TimerRecordLoaderDate();     // FileRW/MainClose.cpp:2895 -> :500 (anonymous namespace) -- golden TfMain::TimerRecordLoaderDate
+ bool MNetLog(AnsiString Message);                // Motor/myMN200motor.h:199 (body Motor/myMN200motor.cpp:2516; its golden body is gated there (g), returns true)
+ 
+ namespace ht9045 {
+@@ -155,6 +161,46 @@ void ShowVacuumOnOffTime()
+     StringGrid2->Cells[3][26]=LastSet.iUnLoaderTraySimulateTime[1];
+     StringGrid2->Cells[3][27]=LastSet.iUnLoaderTraySimulateTime[2];
+ }
++
++// golden TfMain::RecordTemp, main.cpp:2658-2689 (906_0625_Steven; only caller Timer3 G4 :25294).  AI(W906-R126) 20261002
++//   (St02-E): NB2 R126 M5 -- GATE G4 said the observer facade had no dTempHistroy, but forms/fObserver.h:790 carries it (and
++//   UpdateTempChart :823) and nothing else writes it, so every machine's Observer temperature history stayed all zeros.
++//   Not a customer branch (S25 does not apply).  SystemSec is refreshed by PumpTick, which does not run while a waiting box
++//   loops: inside a box this records nothing (golden Timer1 keeps SystemSec current there) -- noted, not changed.
++void RecordTemp()
++{
++    if(fObserver==0)                                                            // [W906] the facade object (cObserver.cpp:3289, static init)
++        return;
++    static int iOldMin=-1;
++    int i, j;
++    int comp;
++    if(     IniConfig.iL10TempRecordInterval==0)  comp=5;                       //30 sec
++    else if(IniConfig.iL10TempRecordInterval==2)  comp=30;                      //30 sec
++    else if(IniConfig.iL10TempRecordInterval==3)  comp=60;                      //1 min
++    else if(IniConfig.iL10TempRecordInterval==4)  comp=300;                     //5 min
++    else if(IniConfig.iL10TempRecordInterval==5)  comp=600;                     //10 min
++    else                                          comp=15;                      //15 sec
++
++    if(iOldMin!=SystemSec)
++    {
++        iOldMin=SystemSec;
++        if((iOldMin%comp)!=0)
++            return;
++
++        for(i=0; i<tcTotalCount; i++)
++        {
++            if(bUT150Install[i])
++            {
++                for(j=0; j<59; j++)                                             //Steven 20140923 : Index使用EJ1N版32組加熱器
++                    fObserver->dTempHistroy[i][j]=fObserver->dTempHistroy[i][j+1];
++                fObserver->dTempHistroy[i][59]=UN150Read[i];
++            }
++        }
++
++        if(W906_FormShowing("fObserver", fObserver->bShow))                    // [W906] golden fObserver->bShow (the port's page table, FShow_Audit)
++            fObserver->UpdateTempChart();
++    }
++}
+ }  // namespace
+ 
+ void W906_Timer3SetRecordLoaderDate(int (*fn)()) { g_recordLoaderDate = fn ? fn : &W906_MainClose_TimerRecordLoaderDate; }   // ctest only
+@@ -285,10 +331,7 @@ void W906_Timer3Timer()
+     }
+ 
+     ShowVacuumOnOffTime();
+-#if 0   // GATE G4 (AI(W906-S14) 20261001): TfMain::RecordTemp (golden :2658) feeds fObserver->dTempHistroy, which the port's
+-        //   observer facade does not carry (the port's temperature history is LastSet.fTempHistroy, LastSet.h:319).  golden :25294 VERBATIM:
+-    RecordTemp();                                                               //Steven 20110924 : 換位置,一秒作一次就好
+-#endif
++    RecordTemp();                                                               //Steven 20110924 : 換位置,一秒作一次就好   AI(W906-R126) 20261002: GATE G4 opened (NB2 R126 M5; file-local above)
+ 
+     if(dCCDTemperature>55.0)                                                    //Steven 20110924 : 紀錄CCD溫度過高的狀況
+     {
+@@ -316,7 +359,7 @@ void W906_Timer3Timer()
+     // [W906] golden :25321-25346 ([A01] iOperatorModeCount=0 while an engineer page is open) is St01's
+     //   FileRW/Main_A01AutoLogout.cpp (1), its own once-per-second tick (wb_serve main loop + W906_ModalWaitTick).
+ 
+-#if 0   // GATE G9 (AI(W906-S14) 20261001): S25 (CC_KYEC_LEE), and fQwertyKey is not in the port.  golden :25348-25363 VERBATIM:
++#if 0   // GATE G9 (AI(W906-S14) 20261001): S25 (CC_KYEC_LEE).  (AI(W906-R126) 20261002: fQwertyKey does exist, forms/fQwertyKey.h -- S25 is the only reason.)  golden :25348-25363 VERBATIM:
+     if(CUSTOMER_CODE==CC_KYEC_LEE)                                              //Ifor 20170803 add Offset (Steven) 頁面鍵盤小視窗 1分鐘後自動關閉
+     {
+         if(fQwertyKey->Visible==true)
+@@ -516,8 +559,8 @@ void W906_Timer3Timer()
+     fYieldMonitoring->CheckLowYieldAlarmSpecial();                              //Sam 20210505 : PTI 要求的兩段 Low Yeild
+     fYieldMonitoring->CheckByPickerYieldAlarm();                                //Steven 20230223 : 根據Index吸嘴比較良率
+ 
+-#if 0   // GATE G17 (AI(W906-S14) 20261001): S25 (CC_UNISEM_M); fShowBinSelect->Jamrate / fObserver->labMUBA are not on the
+-        //   facades.  golden :25607-25616 VERBATIM:
++#if 0   // GATE G17 (AI(W906-S14) 20261001): S25 (CC_UNISEM_M).  (AI(W906-R126) 20261002: fShowBinSelect->Jamrate and fObserver->labMUBA
++        //   do exist, forms/fShowBinSelect.h:970 / forms/fObserver.h:771 -- S25 is the only reason.)  golden :25607-25616 VERBATIM:
+     if(CUSTOMER_CODE==CC_UNISEM_M)                                              //Ifor 20171018 (wei) : add UNISEM 每五秒更新一次 Jam Rate 於畫面上
+     {
+         iCloseQwertyCount++;
+diff --git a/MainTimerESD.cpp b/MainTimerESD.cpp
+index 619ca4e..6d42036 100644
+--- a/MainTimerESD.cpp
++++ b/MainTimerESD.cpp
+@@ -21,7 +21,7 @@
+ //    tGPIBMsg (main.h:1395)                = AutoRetest.cpp:284 W906ART_fMain_tGPIBMsg (producers AutoRetest.cpp:1742 / :1754,
+ //                                            golden AutoRetest.cpp:1408 / :1420)
+ //    iSaveLogTimePeridCount (main.h:1159)  = file static below (ctor :2261 sets 0; only this timer uses it)
+-//    TimerRecordLoaderDate()               = W906_MainClose_TimerRecordLoaderDate (FileRW/MainClose.cpp:2879, St01) -> :497.  Programs other
++//    TimerRecordLoaderDate()               = W906_MainClose_TimerRecordLoaderDate (FileRW/MainClose.cpp:2895, St01) -> :500.  Programs other
+ //                                            than wb_serve get the fallback in MainTimerESDFallback.cpp (returns 0).
+ //  No waiting and no thread here: ShowErrorMessage / ShowMyMessage are the host's golden ShowModal waits (wb_serve
+ //  ForwardShowErrorMessage / W906MbShowMyMessage).  While such a box waits, bRun stays true, as golden.
+@@ -39,7 +39,7 @@
+ #include "forms/fContactCT.h"     // fContactCT->SaveSiteYield
+ 
+ extern TStringList W906ART_fMain_tGPIBMsg;   // AutoRetest.cpp:284 -- golden fMain->tGPIBMsg (main.h:1395)
+-int W906_MainClose_TimerRecordLoaderDate();  // FileRW/MainClose.cpp:2879 -> :497 (anonymous namespace) -- golden TfMain::TimerRecordLoaderDate
++int W906_MainClose_TimerRecordLoaderDate();  // FileRW/MainClose.cpp:2895 -> :500 (anonymous namespace) -- golden TfMain::TimerRecordLoaderDate
+ 
+ namespace ht9045 {
+ 
+diff --git a/MainTimerESDFallback.cpp b/MainTimerESDFallback.cpp
+index e41ec0b..94ccb23 100644
+--- a/MainTimerESDFallback.cpp
++++ b/MainTimerESDFallback.cpp
+@@ -1,7 +1,7 @@
+ // ===========================================================================
+ //  MainTimerESDFallback.cpp -- AI(W906-S13) 20261001 (St02-E): the fallback of W906_MainClose_TimerRecordLoaderDate
+-//  (golden TfMain::TimerRecordLoaderDate; the real body is FileRW/MainClose.cpp:497 in that file's anonymous namespace,
+-//  reached through the global entry at MainClose.cpp:2879, St01; compiled into wb_serve only)
++//  (golden TfMain::TimerRecordLoaderDate; the real body is FileRW/MainClose.cpp:500 in that file's anonymous namespace,
++//  reached through the global entry at MainClose.cpp:2895, St01; compiled into wb_serve only)
+ //  for every other program that links MainTimerESD.cpp (S-13 TimerESD E5 calls it; ht9045_sm).
+ //
+ //  ONE symbol in its own archive member, on purpose:
+diff --git a/MainTimersSt02.cpp b/MainTimersSt02.cpp
+index ed0fbc3..47fd08e 100644
+--- a/MainTimersSt02.cpp
++++ b/MainTimersSt02.cpp
+@@ -28,11 +28,14 @@
+ //    blocking boxes (alarm / yes-no / ShowMyMessage) loop in tools/wb_serve.cpp, where PumpTick does not run; their
+ //    W906_ModalWaitTick (:7621, St01's A01 segment, same line -- the laptop and St01 agreed) calls
+ //    W906_St02TimersTickFromModal (end of this file) every pass (<= 100 ms).  The deadlines are the same ones.
+-//  * RE-ENTRY GUARD g_inTick, PER TIMER.  When one of these handlers opens a waiting box (TimerESD's MES0731, Timer8's
+-//    MES0732 ...), the modal-wait tick comes back here.  The timer whose handler is still on the stack is skipped, its
+-//    deadline untouched (golden's own flag -- bTimerRunning / bRun -- would return at once; St01's A01 guard does the
+-//    same); the OTHER timers still fire, as VCL timers do while another one's ShowModal waits.  One flag for the whole
+-//    dispatcher would freeze Timer8 / TemperatureStorage while a TimerESD box is up, which golden does not do.
++//  * RE-ENTRY GUARD g_inTick, PER TIMER, ONLY WHERE GOLDEN HAS ONE.  When one of these handlers opens a waiting box
++//    (TimerESD's MES0731, Timer8's MES0732 ...), the modal-wait tick comes back here.  Timer8 (bTimerRunning,
++//    main.cpp:32156-32162), TimerESD (bRun, :30913) and Timer1 (bRunTimer1, :2698) return at once when re-entered, so
++//    while their handler is still on the stack they are skipped, deadline untouched (St01's A01 guard does the same).
++//    Timer3 (:25184-25195) and TimerTemperatureStorageMinute (:31175-31180) have NO running flag: VCL re-enters them
++//    inside their own box, so they fire on their deadline even then (AI(W906-R126) 20261002, NB2 R126 M4 -- the guard
++//    had been copied from Timer8 / TimerESD; a nested ShowMyMessage returns at once, golden mymessbox.cpp:785).  The
++//    OTHER timers always fire, as VCL timers do while another one's ShowModal waits.
+ //  * CLOSE.  golden FormClose disables TimerESD (main.cpp:11708, with Timer1-4 / TimerScanKey); Timer8 and
+ //    TimerTemperatureStorageMinute end with the form.  The port's FormClose is FileRW/MainClose.cpp, which sets
+ //    bSystemClose (:952, golden :12060) => nothing here fires after that.
+@@ -68,7 +71,7 @@ enum { kT8 = 0, kTS = 1, kESD = 2, kT3 = 3, kT1 = 4, kSlots = 5 };   // AI(W906-
+ unsigned long g_t8 = 0, g_tTS = 0, g_tESD = 0, g_t3 = 0;
+ unsigned long g_n8 = 0, g_nTS = 0, g_nESD = 0, g_n3 = 0;   // calls, for the ctest
+ unsigned long g_t1 = 0, g_n1 = 0, g_t1Old = 0;             // AI(W906-ET1022) 20261001 (St02-E): deadline / calls / golden dwOldTime (:2700)
+-bool g_inTick[kSlots] = { false, false, false, false, false };  // AI(W906-S13): this timer's handler is on the stack (header)
++bool g_inTick[kSlots] = { false, false, false, false, false };  // AI(W906-S13): this timer's handler is on the stack (header; kTS / kT3 unused, R126)
+ bool g_t3On = false;                              // AI(W906-S14): golden Timer3->Enabled (FormShow :10180), latched (header)
+ unsigned long g_reentries = 0;                    // nested calls that skipped a busy timer, for the ctest
+ 
+@@ -80,6 +83,7 @@ struct InTick
+ };
+ 
+ // AI(W906-S13): Due() unless this timer's handler is still running (a waiting box inside it): then skip, deadline untouched.
++// Only for the timers whose golden handler has a running flag (header); the others call Due() directly.
+ bool Fire(int slot, unsigned long& next, unsigned long now, unsigned long ms)
+ {
+     if (g_inTick[slot])
+@@ -129,10 +133,9 @@ void W906_St02TimersTickAt(unsigned long now)    // ctest drives this with its o
+         InTick busy(kT8);
+         W906_Timer8Timer();                       // golden main.dfm:17346 Timer8 (1000)
+     }
+-    if (Fire(kTS, g_tTS, now, 1000))
++    if (Due(g_tTS, now, 1000))                    // AI(W906-R126) 20261002: golden :31175-31180 has no running flag (header)
+     {
+         ++g_nTS;
+-        InTick busy(kTS);
+         W906_TimerTemperatureStorageMinuteTimer();   // golden main.dfm:17318 (1000)
+     }
+     if (Fire(kESD, g_tESD, now, 1000))
+@@ -143,10 +146,9 @@ void W906_St02TimersTickAt(unsigned long now)    // ctest drives this with its o
+     }
+     if (!g_t3On && InitialOK)                     // AI(W906-S14): golden FormShow :10180 Timer3->Enabled=true (header)
+         g_t3On = true;
+-    if (g_t3On && Fire(kT3, g_t3, now, 1000))
++    if (g_t3On && Due(g_t3, now, 1000))           // AI(W906-R126) 20261002: golden :25184-25195 has no running flag (header, NB2 R126 M4)
+     {
+         ++g_n3;
+-        InTick busy(kT3);
+         W906_Timer3Timer();                       // golden main.dfm:17301 Timer3 (1000)   AI(W906-S14) 20261001
+     }
+     Timer1BinTick(now);                           // AI(W906-ET1022) 20261001 (St02-E): every pass, golden's 30 ms deadline (header, option A)
+diff --git a/docs/BU_PRE_POWER_CHECKLIST.md b/docs/BU_PRE_POWER_CHECKLIST.md
+index 9864643..23bfbe4 100644
+--- a/docs/BU_PRE_POWER_CHECKLIST.md
++++ b/docs/BU_PRE_POWER_CHECKLIST.md
+@@ -274,9 +274,9 @@ shim 檔的 `.obj` 沒有它 ＝ shim 是死碼、真本體接手了。
+ | [ ] | shim | 宣稱 | golden 本體 |
+ |---|---|---|---:|
+ | [ ] | `ainarm9045.cpp:2383` `CheckShuttleSensor_9045` | **「飛梭上沒有浮料」** | `ainarm9045.cpp:2070`，160 行 |
+-| [ ] | `aHotPlateSubstrate.cpp:586` `IsPickSuckFinish` | 「取料完成」 | `mykitsuck.cpp:917`，12 行 |
+-| [ ] | `aHotPlateSubstrate.cpp:587` `IsPickDestroyFinish` | 「吹料完成」 | `mykitsuck.cpp:930`，12 行 |
+-| [ ] | `aHotPlateSubstrate.cpp:588` `IsPickFinish` | 「取料循環完成」 | golden 未找到定義 |
++| [x] | `aHotPlateSubstrate.cpp:586` `IsPickSuckFinish` | 「取料完成」 | `mykitsuck.cpp:917`，12 行 |  ⟵ **1002 NB2 R128（`v906/nb2-assist` `729192cc`）：這份已是 `#if 0` 死碼**（0924 W3-8 A4-6 `8ff6c754` 起連進去的是 `mykitsuck.cpp:949-999`＝golden 逐字；`IsPickFinish` golden 沒有本體也沒有呼叫者）
++| [x] | `aHotPlateSubstrate.cpp:587` `IsPickDestroyFinish` | 「吹料完成」 | `mykitsuck.cpp:930`，12 行 |  ⟵ **1002 NB2 R128（`v906/nb2-assist` `729192cc`）：這份已是 `#if 0` 死碼**（0924 W3-8 A4-6 `8ff6c754` 起連進去的是 `mykitsuck.cpp:949-999`＝golden 逐字；`IsPickFinish` golden 沒有本體也沒有呼叫者）
++| [x] | `aHotPlateSubstrate.cpp:588` `IsPickFinish` | 「取料循環完成」 | golden 未找到定義 |  ⟵ **1002 NB2 R128（`v906/nb2-assist` `729192cc`）：這份已是 `#if 0` 死碼**（0924 W3-8 A4-6 `8ff6c754` 起連進去的是 `mykitsuck.cpp:949-999`＝golden 逐字；`IsPickFinish` golden 沒有本體也沒有呼叫者）
+ 
+ ### ✅ 五個「多定義者」已全部定案（20260908 BU-V2，`objdump -t` ＋ 反組譯）
+ 
+diff --git a/docs/D034_PLAN_20261002.md b/docs/D034_PLAN_20261002.md
+new file mode 100644
+index 0000000..1307960
+--- /dev/null
++++ b/docs/D034_PLAN_20261002.md
+@@ -0,0 +1,563 @@
++> **parked: S25 (KYEC_LEE / JSCC_OS / SCC only) + SECS host not live** -- St02-M 20261002 00:3x agreed to close St02's half of todo D-034 without code; this plan is kept for a KYEC customer or for when the SECS host link goes live.
++
++# D-034 (St02 part): the SECS operator-ID password box -- research + plan
++
++Read-only research for St02-E, 2026-10-02. Nothing in the repo was edited.
++
++- Golden = 906 tree `D:\HT9045\HT9011UC_Code_V3.33.906.0_20260625_Steven` (Big5, decoded cp950). V912 (`..._912.0_20260908_Jimmy`) is cited only where it differs. RULINGS_20261001 #26 says 9050 uses 906.
++- Port = `HT9011UC_Cpp_V3.33.906.0` in worktree `D:\AI_TempFile\st02-s13` (HEAD 83238969, which contains origin/main 16debc74). Every code file cited here is the same at 16debc74 and at HEAD (only cMyDB.cpp differs). Line numbers are from HEAD. Repo paths are relative to the repo root (`D:\HT9045\` in the main checkout).
++- Todo row: `.claude/skills/ht9050-construction/references/todo.md` D-034 (St01 556df838): 「另外三種要密碼的框還沒接網頁：MyMessageBox::DoPassword_MBox、SpecialPanel、SECS 操作員 ID ... St02（SECS 操作員 ID）... D-026 進 main 後照同一套 W906_Reauth 做」.
++
++## 0. Summary
++
++- **What the box is:** golden `CheckEmployeeID(AnsiString S1)` (mymessbox.cpp:1353-1369, "SECS GEM Confirm the Employee ID", Ifor 20180227 (Steven), KYEC). It opens `fPassword` with two captions, waits modally for an ID and a password, puts both into SVs 37008 and 37012, and raises CEID 70 "Barcode Reader Enter". **The handler compares nothing.** The host (EAP) decides and answers with S2F41 RCMD `AUTHORITY_CHECK` (Action 0 = pass, 1 or 2 = ask again with a host Message). The web contract already names this kind: `web/JSON/Dialog-bridge-contract.json:92` `"employee-id": "CheckEmployeeID / SECS GEM S10F3"`.
++- **Port today:** `CheckEmployeeID` is not defined anywhere. Its only port call site, `WebStart.cpp:1452-1459`, sits inside `#if 0` (SAFETY-GATE W906-ST-W1-G). The gate's reason: the port's `fPassword->ShowModal()` is a no-op, so a straight translation would report **blank** credentials to the host. Nothing at runtime can reach the box anyway:
++  - the two writers of `bEnableEmployeeIDCheck=true` are not ported;
++  - the Timer1 state machine is not ported;
++  - **the SECS host link itself is not live in V906**: `THGem::Timer1Timer` has no caller, `EventReport` only bumps a sim counter (SECSGEM/SecsEventReport.cpp:15-19), and TFSECS is not translated;
++  - `fPassword` is NULL at runtime because nothing calls `InitForms()`.
++- **D-026 reuse:** reuse the `dialog.auth` command name, its token exemption, the `HT9045Recipe.dialogAuth` client method, `Alert.Password.html` / `login-page.js` (which already switch Label5/Label6 for `kind==='employee-id'`), and the WebLogin wipe/convert helpers. **Do not reuse** `W906_NoteAuthVerify` or `W906_Reauth`. They compare a password locally against the note's level or the book, they are bound to an alarm qid or to `editlist.save`, and the auth layer only opens when the operator presses a closing action on an Alarm/Message box. This box is opened by C++. It needs a small St02 adapter (new files), a blocking wait in wb_serve (an EOF append that needs the laptop's OK), and a little web glue.
++
++---
++
++## 1. GOLDEN (906)
++
++### 1.1 The box: `CheckEmployeeID` (mymessbox.cpp:1351-1369; declared mymessbox.h:61)
++
++```
++  1351: //V3.27W.561 Ifor 20180227 (Steven) add SECS GEM Confirm the Employee ID
++  1353: void CheckEmployeeID(AnsiString S1)
++  1354: {
++  1355:     bWaitSecsGemReply=false;
++  1356:     fPassword->Label6->Caption=S1;
++  1357:     fPassword->Label6->Visible=true;
++  1358:     fPassword->Label5->Caption="權限檢查!AUTHORITY CHECK!    ";
++  1359:     fPassword->Label5->Visible=true;
++  1360:     fPassword->ShowModal();
++  1361:     asSecsGemBarCode=fPassword->edUserName->Text;
++  1362:     asSecsGemBarCodePasswoed=fPassword->edPassword->Text;
++  1363:     EventReport(SECS_EVENT.BarcodeReaderEnter);
++  1364:     bWaitSecsGemReply=true;
++  1365:     fPassword->Label6->Visible=false;
++  1366:     fPassword->Label6->Caption="離線模式需要輸入 ID/Password";
++  1367:     fPassword->Label5->Visible=false;
++  1368:     fPassword->Label5->Caption="Off line mode need Input ID/Password";
++  1369: }
++```
++(Label5's caption ends in exactly 4 spaces. V912 :1373-1389 is identical.)
++
++**The form, `fPassword` (Password.dfm / Password.cpp):**
++- Caption `'Password'`; tab `tsPassword` `'Login'`.
++- `Label5`: `'Off line mode need Input ID/Password'` (dfm:58-70, Visible=False).
++- `Label6`: `'離線模式需要輸入 ID/Password'` (dfm:72-84, Visible=False).
++- `Label3` / `Label4` (`'Wrong ID or password or Insufficient privileges!!'` / `'錯誤的帳號密碼或是權限不足!!'`) are not used by this box.
++- `lblUserName` `' User Name'` (dfm:435-441), `edUserName` (dfm:613, OnKeyDown), `cbUserName` (dfm:628).
++- `Label2` `' Password'`, `edPassword` (dfm:597-610, `PasswordChar = '*'`, OnKeyDown).
++- `btnOK` `'OK'` (dfm:86, OnClick btnOKClick :318); `spbCancel` `'Cancel'` (dfm:320, OnClick :433).
++
++`TfPassword::FormShow` (Password.cpp:34-116) has an employee-ID branch:
++```
++    71:     if(bEnableEmployeeIDCheck==true)
++    72:     {
++    73:         cbUserName->Visible=false;
++    74:         edUserName->Visible=true;
++    75:         edUserName->Text="";        // name
++    76:         edPassword->Text="";        // password
++    77:     }
++```
++Other FormShow rules decide which fields show:
++- :46 `edPassword->Text=""`.
++- :58-69 `JCET_FOR_EVAN==1` shows the password only; otherwise the combo or the edit box follows `CosFunction.bTechComUseComboBox` (KYEC_LEE: true, CosFunction.cpp:283).
++- :105-115 `bLoginASECL` hides the user name; otherwise `lblUserName` and `edUserName` are made visible again. This is a golden quirk: on KYEC with `bEnableEmployeeIDCheck==false`, the combo and the edit box are both visible.
++
++**How the box closes.** Every exit lets `CheckEmployeeID` continue to :1361-1364.
++- `btnOKClick` (:385-388) calls `Close();`.
++- `edPasswordKeyDown` (:181-182): Enter calls `Close()`, even with an empty password.
++- `spbCancelClick` (:123-128) runs `edPassword->Text=""; edUserName->Text=""; Close();`. **Cancel therefore reports blank ID and password to the host.**
++- VTEST and SCC have barcode-only variants (:134-145, :169-177, `#ifndef SOFT_SIMULTE`).
++
++### 1.2 Who opens it, and when
++
++**T1. SECS alarm MyMessageBox, OK pressed.** `TMyMessageBox::pnlPauseClick` (mymessbox.cpp:444-535):
++```
++   446:     if(bWaitSecsGemReply==true)                                                 //Ifor 20180227 (Steven) add SECS GEM Confirm the Employee ID
++   447:     {
++   448:         return;
++   449:     }
++   ...
++   467:     if(bSECSGEMAlarm)                                                           //wei 20150817 S10F3 按鍵不能按
++   468:     {
++   469:         if(CosFunction.bUseN07_5==true)                                         //Steven 20200309 : [N07-5]改成by客戶開啟
++   470:         {
++   471:             if(iSECSMessageCanCloseByOperator!=1)                               //Ifor 20171024 (Steven) : add KYEC SECS GEM Can Close By Operator 0:一般流程 1:直接關閉Alarm 2:啟動工號檢查流程
++   472:             {
++   473:                 if(IniConfig.bN07_EnableEmployeeIdCheak==true)
++   474:                 {
++   475:                     if(iSECSMessageCanCloseByOperator==0)                       //一般帳密
++   476:                     {
++   477:                         if(DoPassword_MBox()==false)
++   478:                         {
++   479:                             return;
++   480:                         }
++   481:                     }
++   482:                     else if(iSECSMessageCanCloseByOperator==2)                  //啟動工號檢查流程
++   483:                     {
++   484:                         bEnableEmployeeIDCheck=true;
++   485:                         CheckEmployeeID("工號檢查:請輸入工號密碼");
++   486:                         return;
++   487:                     }
++```
++- When `bUseN07_5` is false, :515-521 calls `Barcode_Reader(bcSECSGEM)` instead. That is the barcode box `InputBarcodeNumber("Input Operator ID:")` (BarcodeReader.cpp:415-444, KYEC_LEE / KYEC_XILINX). It has no password, so it is not D-034.
++- `iSECSMessageCanCloseByOperator` comes from the host's S10F3 / S10F5 ACKC byte: `uHGemClass.cpp:2294` / `:2406` `iSECSMessageCanCloseByOperator=uint1EC;`.
++- The SECS alarm box itself is raised by the TFSECS timer: `SECSGEM/UsecegemMainFrom.cpp:1082-1100` (`bSECSGEMAlarm=true; ... ShowMyMessage(str);`).
++
++**T2. TfMain::Timer1Timer, the EAP wait state machine** (main.cpp:2861-2934). This is the main caller, and it is where host replies are consumed.
++```
++  2861:     if(IniConfig.bN07_EnableEmployeeIdCheak==true)                              //Ifor 20180227 (Steven) add SECS GEM Confirm the Employee ID
++  2862:     {
++  2863:         if(bEnableEmployeeIDCheck==true)                                        //Ifor 20180911 (Steven) : Add 啟動 Employee ID Check
++  2864:         {
++  2865:             if(bWaitSecsGemReply==true)
++  2866:             {
++  2867:                 if(bSECSGEM_WaitReply==false && iShowAUTHORITY==0)
++  2868:                 {
++  2869:                     bSECSGEM_WaitReply=true;
++  2870:                     SECSGEM_WaitReply.SetSecAndOn(IniConfig.iN07_EmployeeIdCheakTime);
++  2871:                     if(MyMessageBox->fShow==false)
++  2872:                     {
++  2873:                         ShowMyMessage("Waiting for EAP system judgment","等待EAP系統判斷");
++  2874:                     }
++  2875:                     else if(bSECSGEMAlarm)
++  2876:                     {
++  2877:                         MyMessageBox->palWaitEAP->Visible=true;
++  2878:                     }
++  2879:                 }
++  2880:
++  2881:                 if(bSECSGEM_WaitReply==true && SECSGEM_WaitReply.Off())
++  2882:                 {
++  2883:                     bSECSGEM_WaitReply=false;
++  2884:                     iTimeOutCount++;
++  2885:                     if(iTimeOutCount>=3)                                        //Ifor 20180911 : Add Time Out 3次後不等待EAP回覆，跑原本流程
++  2886:                     {
++  2887:                         iTimeOutCount=0;
++  2888:                         if(MyMessageBox->fShow)
++  2889:                             MyMessageBox->Close();
++  2890:                         MyMessageBox->palWaitEAP->Visible=false;
++  2891:                         iShowAUTHORITY=3;
++  2892:                     }
++  2893:                 }
++  2894:
++  2895:                 if(iShowAUTHORITY==2)
++  2896:                 {
++  2897:                     iShowAUTHORITY=3;
++  2898:                     bSECSGEM_WaitReply=false;
++  2899:                 }
++  2900:                 else if(iShowAUTHORITY==1)
++  2901:                 {
++  2902:                     iShowAUTHORITY=0;
++  2903:                     iTimeOutCount=0;
++  2904:                     CheckEmployeeID(strShowAUTHORITY);
++  2905:                 }
++  2906:
++  2907:                 if(bSECSGEMAlarm && iShowAUTHORITY==3)
++  2908:                 {
++  2909:                     if(MyMessageBox->fShow)
++  2910:                         MyMessageBox->Close();
++  2911:                     MyMessageBox->palWaitEAP->Visible=false;
++  2912:                 }
++  2913:
++  2914:                 if(MyMessageBox->fShow==false && iShowAUTHORITY==3)
++  2915:                 {
++  2916:                     iShowAUTHORITY=0;
++  2917:                     iTimeOutCount=0;
++  2918:                     bEnableEmployeeIDCheck=false;
++  2919:                     bWaitSecsGemReply=false;
++  2920:                     bSECSGEMAlarm=false;
++  2921:                 }
++  2922:             }
++  2923:             else
++  2924:             {
++  2925:                 bSECSGEM_WaitReply=false;
++  2926:                 MyMessageBox->palWaitEAP->Visible=false;
++  2927:             }
++  2928:             return;
++  2929:         }
++  2930:     }
++  2931:     else
++  2932:     {
++  2933:         iShowAUTHORITY=0;
++  2934:     }
++```
++- Statics: `static bool bSECSGEM_WaitReply=false;` (:2705), `static int iTimeOutCount=0;` (:2706), global `TQPF_Timer SECSGEM_WaitReply;` (:2692).
++- `palWaitEAP` is a panel on mymessbox.dfm:195-209, caption `'Waiting for EAP system judgment'`, red, Visible=False.
++- Golden runs Timer1 **inside** other modal boxes too: `TMyMessageBox::Timer1Timer` calls `fMain->Timer1Timer(fMain)` (mymessbox.cpp:542), and fNote does the same (note.cpp:3355).
++
++**T3. TfMain::Start** (main.cpp:4598-4604, inside `bool __fastcall TfMain::Start(AnsiString Func)` :4385):
++```
++  4598:     if(IniConfig.bN07_EnableEmployeeIdCheak==true)                              //Ifor 20180227 (Steven) add SECS GEM Confirm the Employee ID
++  4599:     {
++  4600:         if(bWaitSecsGemReply==true)
++  4601:         {
++  4602:             CheckEmployeeID(strShowAUTHORITY);
++  4603:         }
++  4604:     }
++```
++Start ignores what the box returns. Start continues after the box closes, so the box comes before the machine starts.
++
++**Entry flags, i.e. what starts the whole check:**
++- E1, a note alarm. In `ShowErrorMessage` (note.cpp:532; this block comes before `fNote->ShowModal()` at :991):
++```
++   953:     if(CUSTOMER_CODE==CC_KYEC_LEE && IniConfig.bN07_EnableEmployeeIdCheak)      //Ifor 20180911 (Steven) : Add 啟動 Employee ID Check
++   954:     {
++   955:         if(bSECSGEMAlarm==false)                                                //OMS Alarm 後的Note Alarm 不卡控 工號檢查流程
++   956:         {
++   957:             bEnableEmployeeIDCheck=true;
++   958:             bWaitSecsGemReply=true;
++   959:         }
++   960:     }
++```
++- E2, the SECS alarm: pnlPauseClick :484 (above).
++- `TfNote::FormShow` also has (note.cpp:1922-1925) `if(CUSTOMER_CODE==CC_KYEC_LEE && IniConfig.bN07_EnableEmployeeIdCheak) { bNeedPassWord=true; }` with the comment 「工號檢查完成或失敗都需登入權限」. So after the employee-ID check, the note still needs the normal `TfNote::DoPassword` login. That part is St01's D-026.
++
++**The host reply, S2F41 RCMD `AUTHORITY_CHECK`** (SECSGEM/uHGemHT9045.cpp:2851-2953, in `HT9045Gem::S2F42_Host_Command_Acknowledge`). Key lines:
++```
++  2851:         else if(S.AnsiPos("AUTHORITY_CHECK")==1)
++  2853:             unsigned char  uint1EC;
++  2854:             if(IniConfig.bN07_EnableEmployeeIdCheak==true)
++  2856:                 if(FormBarcodeReader->bShow)      { FormBarcodeReader->Close(); }
++  2861:                 if(fPassword->Visible==true)      { fPassword->Close(); }
++  2866:                 if(MyMessageBox->fShow && bSECSGEMAlarm==false)                 //Ifor 20180911 :Add 啟動 Employee ID Check
++  2868:                     MyMessageBox->Close();
++  2873:                     if(SVlen==0) { SECS_GEM_PPSIGNALTOWER_CONTROL_flag=false; HCACK=0; }
++  2888:                                 if(S1=="Action")   ... DataItemIn(1, HType.BINARY_TYPE, &uint1EC) ...
++  2895:                                 else if(S1=="Message") ... str2=CommandStr; ...
++  2909-2916:                          else HCACK=1;   (unknown name / bad list item)
++  2920:                     bWaitSecsGemReply=false;                                    //Ifor 20180302 Time Out 判斷旗標
++  2921:                     if(MyMessageBox->fShow || fNote->fShow)
++  2923:                         if(uint1EC==0)               { HCACK=0; iShowAUTHORITY=2; bWaitSecsGemReply=true; }
++  2929:                         else if(uint1EC==1 || uint1EC==2) { iShowAUTHORITY=1; bWaitSecsGemReply=true; strShowAUTHORITY=str2; }
++  2939-2942:                  else iShowAUTHORITY=0;
++  2946:                 else HCACK=1;     (not a LIST)
++  2951:             else HCACK=0;         ([N07-5] off)
++```
++Note :2861-2864. If the host replies while the box is open, `fPassword->Close()` makes `ShowModal` return, and `CheckEmployeeID` then reports whatever has been typed so far.
++
++### 1.3 What it compares against
++
++Nothing on the handler.
++- There is no `fSecurity`, no password book, no LevelSet, no `AccessLevel`.
++- The typed strings go to the host:
++  - SV 37008 `"Enter Barcode Reader"` reads `&asSecsGemBarCode` (uHGemHT9045_SV.cpp:696).
++  - SV 37012 `"Enter Barcode Reader Password"` reads `&asSecsGemBarCodePasswoed` (:699).
++  - CEID: `BarcodeReaderEnter, //70 Barcode Reader Enter` (uHGemHT9045.h:86); `EventDescription[SECS_EVENT.BarcodeReaderEnter] ="70 Barcode Reader Enter";` (uHGemHT9045.cpp:141).
++- Globals (cmydef.cpp):
++  - :4035 `asSecsGemBarCode`, :4036 `asSecsGemBarCodePasswoed`;
++  - :4135 `bEnableEmployeeIDCheck`;
++  - :4541 `iSECSMessageCanCloseByOperator`;
++  - :4730-4733 `bWaitSecsGemReply`, `bNeedAUTHORITYCheck` (unused), `iShowAUTHORITY`, `strShowAUTHORITY`.
++
++### 1.4 Pass, fail, cancel, timeout
++
++| Case | What golden does |
++|---|---|
++| Pass | Host `Action`=0. The HCACK=0 handler sets `iShowAUTHORITY=2` (only while MyMessageBox or fNote is shown). Next Timer1 tick: 2 becomes 3. For a SECS alarm, it closes MyMessageBox and hides `palWaitEAP`. Once MyMessageBox is not shown: `iShowAUTHORITY=0; iTimeOutCount=0; bEnableEmployeeIDCheck=false; bWaitSecsGemReply=false; bSECSGEMAlarm=false`. A KYEC note still asks for the D-026 login (note.cpp:1922-1925). |
++| Fail / ask again | Host `Action`=1 or 2 sets `iShowAUTHORITY=1; strShowAUTHORITY=Message`. Timer1 calls `CheckEmployeeID(Message)`, so the box comes back with the host's text in Label6. |
++| Timeout | No reply within `iN07_EmployeeIdCheakTime` seconds: `iTimeOutCount++` and the timer restarts. After 3: close MyMessageBox, hide `palWaitEAP`, `iShowAUTHORITY=3`, clear the flags. The machine then goes back to the normal flow (「Time Out 3次後不等待EAP回覆，跑原本流程」). |
++| Cancel | Blank ID and password are put in the SVs, CEID 70 is raised, `bWaitSecsGemReply=true` (spbCancelClick :125-127 runs, then the :1361-1364 tail). |
++| Replies to host | S2F42 HCACK. 0 = accepted, or [N07-5] off. 1 = not a LIST, a bad item or an unknown name. There is no "rejected" code: the verdict belongs to the host. |
++| Logs | None. No RecordProcess / MyDBIProcess in CheckEmployeeID or in the AUTHORITY_CHECK branch. The only trace is the SECS event. |
++
++**Locks while `bEnableEmployeeIDCheck` / `bWaitSecsGemReply` is set:**
++- ckernel.cpp:1773-1774: front/rear keys off.
++- ckernel.cpp:1946-1947: `ScanKey` returns -1.
++- main.cpp:4338-4339: OneCycle.
++- main.cpp:7240-7245: Reset.
++- main.cpp:32081-32082: TimerScanKey.
++- `ShowMyMessage` hides `pnlPause` (mymessbox.cpp:851-852, :862-863).
++- `TfNote::Start` returns at once while waiting (note.cpp:3532-3535).
++- `TfNote::DoPassword` returns true while waiting (note.cpp:5254-5257).
++- `pnlPauseClick` :446-449.
++
++**Customer-code conditions:**
++- The [N07-5] check box is live only when `CosFunction.bUseN07_5` is true. That is set for CC_KYEC_LEE (CosFunction.cpp:339), CC_JSCC_OS (:1005) and CC_SCC (:1114); the default is false (:4264).
++  - Live: cConfiguration.cpp:3229-3230 `elConfig->Add(cbN07_EnableEmployeeCheak,&IniConfig.bN07_EnableEmployeeIdCheak, ECBool, "SECS GEM", "Enable Employee ID Cheak", bShow, bEnable, bReadFromFile, 0);`.
++  - Otherwise it is `bNoShow, bDisable, bFixedValue, 0` (:3231-3232, :3254).
++- The wait time is editable only for CC_KYEC_LEE (:3239-3240): `elConfig->Add(edN07_5, &IniConfig.iN07_EmployeeIdCheakTime, ECInteger, "SECS GEM", "iEmployeeIdCheckTime", bShow, bEnable, bReadFromFile, 5, false, 10, 300);`. Golden quirk: the default 5 is below the minimum 10.
++- The note entry E1 and the FormShow login are CC_KYEC_LEE only.
++- T1 needs `bUseN07_5`; T2 and T3 need only [N07-5].
++
++**Golden defects and oddities to record:**
++- G1, 906 deadlock. main.cpp:2928 returns while the re-entry flag is still set (`bRunTimer1=true` at :2731; it is reset only at :2721). From the first pass through this branch, TfMain::Timer1Timer never runs again. V912 fixed it at main.cpp:3013 (`bRunTimer1=false; //AI(ht9045-secs-sem) 20260823 (RogerYang) ...`). The port already reads it per tick (MainTimerSegments.cpp:33, the V912 behaviour). Plan: keep that reading and note it in GOLDEN_DEFECT_LEDGER.
++- G2. `unsigned char uint1EC;` (uHGemHT9045.cpp:2853) is never initialised. It is read at :2923 even when the host sent no "Action" item. Translate as is (it is already ported that way).
++- G3. The [N07-5] time default 5 is below its minimum 10 (above).
++- V912 adds `fSecsAlarm` terms (main.cpp:2942-2945, :2966, :2989, :2994, :3008-3011) and a copy of the pnlPauseClick branch in `TSecsAlarmForm::btnOKClick` (mymessbox.cpp:1455-1490). In the port `fSecsAlarm` is NULL (SecsAlarmForm.h), so those terms would be inert.
++
++---
++
++## 2. PORT state
++
++| Golden piece | Port location | State | Owner |
++|---|---|---|---|
++| `CheckEmployeeID` body, mymessbox.cpp:1353-1369 | none | **not defined** (`git grep`: only the gated call in WebStart.cpp) | (St02 per D-034) |
++| T3, Start :4598-4604 | `WebStart.cpp:1452-1459` | `#if 0`, SAFETY-GATE(W906-ST-W1-G) (comment :1424-1451): "照翻會送空白憑證" | laptop: blame jimmychiu "ST-W7-F"; file header ST-W0/W1 (laptop) |
++| T2, Timer1 :2861-2934 | only the early-return guard, `MainTimerSegments.cpp:33` `if(IniConfig.bN07_EnableEmployeeIdCheak==true && bEnableEmployeeIDCheck==true) return;` (in W906_SafeDoorLockTick) | the body is **not ported**; `SECSGEM_WaitReply` / statics are not defined | laptop (jimmychiu 11a2480f) |
++| St02's Timer1 slot | `MainTimersSt02.cpp:94-119` `Timer1BinTick` (E-T1-022, golden :3439) | has the :2719 and :2938 guards but **not** golden's :2928 return | **St02-E** |
++| T1, pnlPauseClick :467-522 | `tools/wb_serve.cpp:6727-6736` `MbPauseClickPre` | not ported, only a printf: `⚠ [MyMessageBox] bSECSGEMAlarm=1：golden :471-526 要 DoPassword_MBox／Barcode_Reader 才關得掉，本樹未移植…` (banner :6503-6505 cites RULINGS 第 25 條「客戶專屬條件先暫時跳過」) | laptop |
++| pnlPauseClick :446-449 (`bWaitSecsGemReply` swallows OK) | `tools/wb_serve.cpp:6772` (MbWait) and `:7001` | ported | laptop |
++| ShowMyMessage hides pnlPause :851-852 | `tools/wb_serve.cpp:6884-6885` (`v.employeeIdCheck`, `v.pause.visible`); page `web/page/dialog-page.js:131` | ported | laptop / web |
++| SECS alarm box (TFSECS timer, UsecegemMainFrom.cpp:1082-1100) | none | not ported (TFSECS untranslated; `fSecsAlarm` link-only, SecsAlarmForm.h) | -- |
++| E1, ShowErrorMessage note.cpp:953-960 | `forms/fNote_ShowError.cpp` (the record path stops at golden :868, banner :43-47 "everything after :868 ... not in this item") | not ported | laptop (and in its current batch 28: fNote_ShowError.cpp:944) |
++| FormShow note.cpp:1922-1925 | `WebLogin.cpp:2155-2158` | ported (St01 D-026) | St01 (appended block) |
++| DoPassword :5254-5257 | `WebLogin.cpp:2213-2217` | ported | St01 |
++| TfNote::Start :3532-3535 | -- | **missing** (the note's START answer is not refused while `bWaitSecsGemReply`) | St01 / laptop (report only) |
++| TfPassword::FormShow :71-77 | `forms/fPassword.cpp:95-101` | ported, but `fPassword` is NULL at runtime: only `InitForms()` creates it (FormsBootstrap.cpp:205) and nobody calls `InitForms()` (FormsBootstrap.cpp:129; csystem.cpp:32638-32639) | laptop |
++| fPassword facade | `forms/fPassword.h:337-343`: `void ShowModal() {}`, `Close(){Visible=false;}`, `bool Visible`; **no Label5 / Label6** | -- | laptop |
++| AUTHORITY_CHECK branch | `SECSGEM/uHGemHT9045.cpp:6420-6560` | ported. G22 (FormBarcodeReader) gated; G23 :6455-6458, G24 :6465-6468 and G26 :6532 open; G25 flipped (St02 D1-PPCTL). **:6455 dereferences `fPassword` while it is NULL** (latent, reachable only once SECS is live). `MyMessageBox->Close()` is the no-op shim (`acatchtray_shims.cpp:104`, `mymessbox_shim.h`) | laptop (St02 has claimed lines here before) |
++| S10F3/S10F5 ACKC | `SECSGEM/uHGemClass.cpp:3497`, `:3622` | ported. The comment text was mis-copied as 「1:必須清除Alarm 2:啟動工站檢查流程」; golden says 「1:直接關閉Alarm 2:啟動工號檢查流程」 | laptop (comment only) |
++| SV 37008 / 37012 | `SECSGEM/uHGemHT9045_SV.cpp:1109`, `:1112` | ported | laptop |
++| CEID 70 | `SECSGEM/SecsEventType.h:113`; `uHGemHT9045.cpp:126` | ported; **`EventReport` is a sim counter only** (`SECSGEM/SecsEventReport.cpp:15-19`; lib ht9045_secsgem, linked by ht9045_sm) | -- |
++| SECS receive pump | `THGem::Timer1Timer` (`SECSGEM/uHGemEquipment.cpp:6403`) | **no caller in the port**, so host messages are never processed | -- |
++| [N07-5] config | `cConfiguration.cpp:3656-3667`, `FileRW/IniConfig.gen.inc:6248-6259`, `CosFunction.cpp:522/1188/1297/4481` | ported. Reauth point `"n07_5"` = vendor password, not offered on the web (WebLogin.cpp:1470, :1475; St01 B5) | -- |
++| Panel and key locks | `ckernel.cpp:2865`, `:3160`; `cCleanOut.cpp:299` | ported | -- |
++
++**What happens instead today.** Nothing reaches the box, and there is no auto-pass and no refusal. `bEnableEmployeeIDCheck` is never set true (E1 and E2 are not ported). `bWaitSecsGemReply` can only become true through AUTHORITY_CHECK, and with no SECS pump that never arrives. So the W1-G call site would be unreachable even if it were open. If SECS ever went live without T2: AUTHORITY_CHECK would leave `bWaitSecsGemReply=true` and `iShowAUTHORITY=1/2` with nobody consuming them. MbWait would then refuse MyMessageBox OK for good (wb_serve.cpp:6772), and G23 would hit the NULL `fPassword`.
++
++**Ownership.** "Steven" commits can come from either St01 or St02, so the comments decide:
++- **St02-E:** `WebLogin.cpp` lines 1-1419; `MainTimersSt02.cpp`; `BarcodeReader.cpp` D-013 parts.
++- **St01:** WebLogin.cpp tail blocks (B5 `W906_Reauth` :1421-1880, D-026 :1881-2741); `WebNoteAuth.h`; `WebReauth.h`; the D-026 block in `web/page/ht9045_dialog_host.js:283-352`.
++- **Laptop (Jimmy):** `tools/wb_serve.cpp` (St01 / St02 make same-line claims only); `WebStart.cpp`; `MainTimerSegments.cpp`; `forms/fNote_ShowError.cpp`; `forms/fPassword.*`; `SECSGEM/uHGemHT9045.cpp`; `acatchtray_shims.*`.
++- **Web side:** per `web/background.html:300-311`, "web 端是我們的責任範圍" (the Steven side). `login-page.js`, `Alert.Password.html` and `dialog-bridge.js` came in with Steven's bulk commits 0923-0924 (a016aa01, 66458981, 6c7d7d27) and the session is not recorded. Announce any edit to St01, since D-026 depends on them.
++- Active laptop claims (TO_STEVEN §1): batch 28 `forms/fNote_ShowError.cpp:944`; the STREAM row (`WebBridgeTags.cpp` PublishHandlerTags, `tools/wb_serve.cpp` `[STREAM]` lines and main-loop publish points, `WebPageTable.cpp`, `web/page/ht9045_link.js`). The plan below avoids all of these.
++
++---
++
++## 3. St01's D-026 mechanism, and whether this box can reuse it
++
++**Flow (alarm note):**
++1. Arm. `tools/wb_serve.cpp:445` calls `W906_NoteAuthArm(qid, code, kcode, motorNote)` (WebLogin.cpp:2416-2455), which runs golden `TfNote::FormShow`'s password block once per note (`requestId`).
++2. Tell the page. `tools/wb_serve.cpp:377` / `:381` puts an `"auth"` object into Alarm-dialog-request (`W906_NoteAuthRequestJson`, WebLogin.cpp:2457-2507; `tools/wb_dialog_mailbox.h:576` `AlarmRequestJson`). It holds no secret:
++   `{"required":true,"kind":"unlock-password"|"access-level","level":n,"title":"Password","prompt":"","userIdRequired":b,"defaultUserId":null,"mode":"book"|"select","unlock":b,"login":b,"logoutAfter":b,"actions":[...],"golden":"..."}`.
++   It returns "" when golden would not ask, so the bytes stay the same as before D-026.
++3. Page:
++   - `dialog-bridge.js` `needsAuth()` (:436-439) fires on a closing action when `request.auth.required && !authVerified`.
++   - `openAuth` (:469-477) opens the `#dialogAuth` iframe `page/Alert.Password.html` (login-page.js).
++   - `HT_DIALOG_AUTH_SUBMIT` goes to `submitAuth` (:486-521), which builds Dialog-auth-verify:
++     `{schemaVersion:"1.0.0",channel:"dialog-auth",seq,authId,state:"pending",target:{channel,requestId},pendingAction:{name,code,pressedButton},credentials:{userId,password}}`.
++   - `HTDialogHost.verifyAuth` (`ht9045_dialog_host.js:298-326`) sends WS **`dialog.auth`** (tag = authId, value = that JSON as a string) through `HT9045Recipe.dialogAuth` (`ht9045_recipe_client.js:666`). It blanks `credentials.password` right after.
++   - Cancel: `sendAuthCancel` (:327-339) sends `{... "cancelled":true}` (Q45-4 = A: blank = wrong).
++4. C++:
++   - Blocking note wait: else-chain `tools/wb_serve.cpp:671` calls `W906_NoteAuthVerify(authId, value, qid, true, &reply)`.
++   - Notices: main loop `:4889-4904` (`blocking=false`, `currentId` = current notice).
++   - The op token is not required for `dialog.auth` (`WebBridge/WebBridgeServer.cpp:1448`).
++   - **The compare** happens inside `W906_NoteAuthVerify` (WebLogin.cpp:2509-2634): `Press` runs `DoUnlockPassword` (:2177) and `DoPassword` (:2201), which call `WebLogin_BookCompare` (St02 :383) or `stOperatorClick` (:167). It is not `W906_Reauth`.
++   - Reply JSON (no password): `{schemaVersion,channel:"dialog-auth",authId,state:"completed",accepted,accessLevel,userId:null,message,verifiedAt:null,error:null,requestId,action,pressedButton,cancelled,asked,unlockAsked,stage,mode,required,levelBefore,level,loggedOut,alarm?,reason,golden,login}`.
++5. One-shot pass. On accept, the note stores `passValid/passK/passPressed`. The answer right after it uses the pass up: `W906_NoteAuthAnswerGate` (wb_serve.cpp:585, modal.answer / dialog.response) or `W906_NoteAuthNoticeGate` (:4889, dialog.notifyAck). A panel key is gated by `W906_NoteAuthIoGate` (:684). If golden would ask and there is no pass, the answer is refused with `auth-required`.
++6. `W906_Reauth` / `W906_ReauthTake` (WebReauth.h; WebLogin.cpp:1559-1880) belongs to B5. It is the `"reauth"` object inside **`editlist.save`**, for golden `TfSetup::DoPassword` / `TfConfiguration::DoPassword`. It does not apply to a C++-opened box.
++
++**Generic pieces, reusable as they are:**
++- the WS command name `dialog.auth` and its token exemption;
++- `HT9045Recipe.dialogAuth`;
++- the Dialog-auth-verify wrapper shape;
++- `Alert.Password.html` + `login-page.js`. login-page.js:26-27 already does `var employee = auth.kind === 'employee-id'; show($('Label5'), employee); show($('Label6'), employee);`;
++- `reauth::Typed` (UTF-8 to AnsiString) and `reauth::Wipe` / `WipeNode` (WebLogin.cpp:1488-1525), for zeroing the typed copies.
++
++**Note-specific pieces:**
++- `W906_NoteAuthVerify`'s `currentId` must be the waiting alarm qid;
++- KeyComp `SelOfName` / `KeyOf`;
++- `Press` / `DoPassword` / `DoUnlockPassword` (local compare);
++- the passes and the three gates;
++- the request `"auth"` built from note state;
++- dialog-bridge's trigger (a closing action on an Alarm/Message request).
++
++**Verdict: `dialog.auth` / `W906_Reauth` cannot be used as they are.**
++1. `CheckEmployeeID` does not verify. It forwards the strings to the host and always continues.
++2. The box is **opened by C++** (Timer1 when the host says Action 1/2, Start, or pnlPauseClick), not by a closing press. dialog-bridge never opens its auth layer by itself.
++3. `dialog.auth` is routed only in the note wait and the main loop. Inside the MyMessageBox wait (`MbWait`, wb_serve.cpp:6755-6822) it gets `modal-pending`. Golden `ShowModal` blocks its caller (Start, Timer1), and only wb_serve owns a pump (`g_modalServer` :304 and `g_pumpQueue` :321 are `static`).
++
++So the work needs a small **St02-owned adapter** (new files). It implements the golden body and the Timer1 state machine, and calls a **hook** for the modal part. The hook's blocking wait goes at the **EOF of `tools/wb_serve.cpp`**: the same TU, so it can use `MbCannotWait`, `g_modalServer->PostQueryOptions`, `W906ModalWaitScope` and `W906_ModalWaitTick` without touching existing lines. It needs the laptop's OK, as with the laptop's own AI(W906-ALMRST-SECS) EOF block. The web side needs a small new St02 page script plus a few same-line edits.
++
++**Which page shows the box:** `web/page/Alert.Password.html` (generated from Password.dfm by `.claude/skills/ht9045-html-version/scripts/_gen_dfm_abs.py:1283`, page script `login-page.js`). It should open in an overlay that a new St02 script `web/page/ht9045_employee_id.js` creates, not in dialog-bridge's `#dialogAuth` (that one stays bound to D-026). Web owner: the Steven side, with St01 to be told (D-026).
++
++---
++
++## 4. PLAN
++
++### 4(a) St02-owned new files and lines
++
++**A1. New `HT9011UC_Cpp_V3.33.906.0/WebEmployeeId.h`** (standard types plus the AnsiString declaration):
++```cpp
++struct W906EmployeeIdBox    { std::string label6, label5; bool userIdVisible = true; };   // UTF-8, no secret
++struct W906EmployeeIdAnswer { bool cancelled = false; std::string userId, password; };    // filled by the hook; wiped by the caller
++extern bool (*W906_EmployeeIdBoxHook)(const W906EmployeeIdBox& box, W906EmployeeIdAnswer* out);   // 0 = no web host (ctest)
++void CheckEmployeeID(AnsiString S1);                                   // golden mymessbox.h:61 / mymessbox.cpp:1353
++namespace ht9045 { bool W906_EmployeeIdTimer1Segment(); }              // golden main.cpp:2861-2934; true = golden returned at :2928
++bool W906_EmployeeIdBoxOpen();                                         // the box is up (golden fPassword->Visible while CheckEmployeeID waits)
++bool W906_EmployeeIdWaitEapPanel();                                    // golden MyMessageBox->palWaitEAP->Visible (display only)
++void W906_EmployeeIdResetForTest();
++```
++
++**A2. New `HT9011UC_Cpp_V3.33.906.0/WebEmployeeId.cpp`.** Library ht9045_sm, next to MainTimersSt02.cpp: same-line B3. It already links ht9045_secsgem, because BarcodeReader.cpp in ht9045_sm calls `EventReport`.
++- **`CheckEmployeeID`**, line for line with :1355-1368:
++  - `fPassword->Label5/Label6` become file-static caption and visible fields. The facade has no Label5/Label6, and `fPassword` is NULL at runtime, so **never dereference `fPassword`**.
++  - `fPassword->ShowModal()` becomes `W906_EmployeeIdBoxHook(box, &a)`.
++  - `box.userIdVisible` is golden FormShow's final `edUserName->Visible` (Password.cpp:58-115: JCET_FOR_EVAN, then `bEnableEmployeeIDCheck` :71-77, then `bLoginASECL` :105-115).
++  - :1361-1362: `asSecsGemBarCode` / `asSecsGemBarCodePasswoed` = `reauth::Typed`-style conversion of the answer, or `""` on cancel (golden spbCancelClick :125-126). Wipe the answer copies afterwards.
++  - Then `EventReport(SECS_EVENT.BarcodeReaderEnter)` and `bWaitSecsGemReply=true`.
++  - **[W906], two deviations, both stated in the code:**
++    1. No hook, or the hook returns false (no page can answer, the same reasons as `MbCannotWait`): print one line, restore the captions, and return **before** :1361-1364. No blank report, and `bWaitSecsGemReply` stays false (set at :1355). This is the W1-G reason, handled fail-safe.
++    2. Re-entry while the box is up returns at once with a printf. Golden would throw `EInvalidOperation` on a second ShowModal of a visible form.
++- **`W906_EmployeeIdTimer1Segment()`**, golden :2861-2934 line for line:
++  - file statics for `bSECSGEM_WaitReply` / `iTimeOutCount` (:2705-2706) and `TQPF_Timer SECSGEM_WaitReply` (:2692);
++  - `MyMessageBox->fShow` becomes `W906_FormShowing("MyMessageBox", MyMessageBox->fShow)` (the E3 convention);
++  - `MyMessageBox->Close()` calls the shim, which is a no-op today (comment it, see H5);
++  - `palWaitEAP` becomes a file-static flag;
++  - `ShowMyMessage("Waiting for EAP system judgment","等待EAP系統判斷")` goes through the canary `ShowMyMessage`, which blocks as golden does;
++  - returns true where golden `return`s (:2928), with the per-tick reading of G1;
++  - for the `else` at :2931-2934, set `iShowAUTHORITY=0` and return false.
++- `W906_EmployeeIdBoxOpen()` is true from the hook call until it returns.
++
++**A3. `MainTimersSt02.cpp` (St02's): the Timer1 slot in golden order.** In `Timer1BinTick` (:94-119), move `if (NUMBER_PANEL_TYPE != 2) return;` (:96-97) down to just before the `DoShowBinDigital` call. Then use: `Fire(kT1…30)` → `InitialOK` (:2719) → **`if (W906_EmployeeIdTimer1Segment()) return;   // golden :2861-2934`** → `bSECSGEMAlarm` (:2938) → `g_t1Old` (:3154-3171) → `SystemInitialOK` (:3172) → `NUMBER_PANEL_TYPE` (:3439) → `fShowBinSelect` → DoShowBinDigital.
++- This also fixes St02's own gap: golden :2928 returns before :3439.
++- The modal-wait path already runs this slot (`W906_St02TimersTickFromModal`, called by `W906_ModalWaitTick` wb_serve.cpp:7621). So the segment runs inside the note and MyMessageBox waits, as golden Timer1 does (mymessbox.cpp:542, note.cpp:3355).
++- `g_inTick[kT1]` stands in for golden `bRunTimer1`: a box opened from this slot does not re-enter it.
++- Update the header comment. Re-run E-T1-022.
++
++**A4. New `web/page/ht9045_employee_id.js` (St02).**
++- At `DOMContentLoaded`, call `HT9045Tags.onEvent`, the same subscription `ht9045_dialog_host.js:265-282` uses.
++- On `{type:"query", kind:"employee-id", qid, text}`, where `text` = JSON `{"label6","label5","userIdVisible"}`:
++  - Open its own overlay (z about 21100, above #dialogAuth) with an iframe `page/Alert.Password.html?kind=employee-id`, plus the mode parameter as `dialog-bridge.js` `withMode` does.
++  - Filter messages by `e.source`.
++  - On `HT_DIALOG_READY`, post `HT_DIALOG_AUTH_REQUEST {auth:{kind:"employee-id",label5,label6,userIdRequired:userIdVisible,defaultUserId:null}}`.
++  - Route `HT_DIALOG_INPUT` to `HTQwerty`, as dialog-bridge.js:456-461 does.
++- On SUBMIT, call `HT9045Recipe.dialogAuth(authId, JSON)` with
++  `{schemaVersion:"1.0.0",channel:"dialog-auth",authId,state:"pending",target:{channel:"employee-id",requestId:String(qid)},pendingAction:{name:"OK",code:null,pressedButton:null},credentials:{userId,password}}`.
++  On CANCEL send the same with `cancelled:true` and no credentials.
++- Close the overlay on an accepted ack, or when a newer query or a clear arrives. Never log, store or keep the password, and blank it after sending.
++
++**A5. New `HT9011UC_Cpp_V3.33.906.0/tests/test_d034_employee_id.cpp`**, plus its block at the EOF of tests/CMakeLists.txt (B4). See 4(c).
++
++**A6.** St02 skill, ChangeLog and human-review file, per memory: ChangeLog `D:\docs\ChangeLog\CHANGES_<date>_Steven02.md`, human review `docs/handoff/ST02_HUMAN_REVIEW_<date>.md` for ST01-M.
++
++### 4(b) Claim lines in other people's files
++
++All edits are same-line: line count unchanged, code before any `//`, CRLF kept. All these files are CRLF and UTF-8.
++
++**B1. `HT9011UC_Cpp_V3.33.906.0/WebStart.cpp` (laptop): lift W1-G.**
++- :1452
++  - old: `#if 0`
++  - new: `#if 1   //AI(W906-D034) 20261002 (St02-E, claim): SAFETY-GATE(W906-ST-W1-G) lifted -- CheckEmployeeID is a real web box now (WebEmployeeId.cpp, golden mymessbox.cpp:1353-1369): it waits like ShowModal and reports nothing when no page can answer`
++  - neighbours: :1451 `    //     要等 web 層的 show/dismiss 通道，屬 FW-W 指令通道，不是本戰役。`, :1453 `    if (IniConfig.bN07_EnableEmployeeIdCheak == true)                           // golden :4598  ...`
++- :1457
++  - old: `            CheckEmployeeID(strShowAUTHORITY);                                  // golden :4602`
++  - new: `            { void CheckEmployeeID(AnsiString S1); CheckEmployeeID(strShowAUTHORITY); }   // golden :4602  //AI(W906-D034) 20261002 (St02-E, claim): golden mymessbox.h:61 declaration, body WebEmployeeId.cpp`
++  - neighbours: :1456 `        {`, :1458 `        }`
++  - WebStart.cpp is in the global namespace (`TfMainWeb::StartFromWeb` :1145), so the block-scope declaration binds to `::CheckEmployeeID`.
++- `START_SitesCensus` (`tests/CMakeLists.txt:4721`, `--check 34 32 2`) counts **callers** of Start, so it should not change. Re-run it anyway.
++- The §5.3 row G in `docs/START_CAMPAIGN_PLAN.md` / `docs/W2_PROGRESS.md:43` is documentation only (laptop).
++
++**B2. `HT9011UC_Cpp_V3.33.906.0/tools/wb_serve.cpp` (laptop): EOF append only, after :8716.** No existing line changes and none of the laptop's STREAM claims are touched.
++```
++// AI(W906-D034) 20261002 (St02-E, EOF append, laptop OK): the blocking wait behind CheckEmployeeID (golden fPassword->ShowModal)
++#include "WebEmployeeId.h"
++static bool W906_EmployeeIdBoxWait(const W906EmployeeIdBox& box, W906EmployeeIdAnswer* out)
++  - if (MbCannotWait()) return false;
++  - qid = a number that cannot collide with alarm / msg qids (laptop's choice);
++    g_modalServer->PostQueryOptions(qid, "employee-id", <JSON label6/label5/userIdVisible>, {"OK","CANCEL"});
++  - W906ModalWaitScope scope(2);   loop shaped like MbWait (:6755-6822): waitForPush(100), DoAvoidIndexMotorFallDown(),
++    W906_ModalWaitTick(2), ::W906_TesterCommPoll(), W906_TakeCarry + drain;
++    * "dialog.auth" whose value has target.channel=="employee-id" && target.requestId==qid ->
++      parse cancelled / credentials (wipe the cJSON strings), CompleteCommand(id, true, {"accepted":true,...no password}),
++      ClearQuery(qid), carry the rest (g_carry, as MbWait :6779), return true;
++    * W906_EmployeeIdBoxOpen()==false (closed by the program, see B6) -> ClearQuery, return true with empty answer;
++    * the same exceptions as MbWait: W906_MsgBoxModelessAnswer, W906_SimDiCommand, cfg.resync, ui.windows.put, motor.stop,
++      io.btnPanelClick+W906_IoPageNoGuards; anything else -> "modal-pending".
++namespace { struct W906EidInstall { W906EidInstall() { W906_EmployeeIdBoxHook = &W906_EmployeeIdBoxWait; } } g_w906EidInstall; }
++```
++- This is a [W906] design (RULINGS_20261001 #0 item ⑤), so it needs the laptop's OK. Precedents: the laptop's own EOF blocks (AI(W906-ALMRST-SECS)); St01's appended blocks in St02's WebLogin.cpp.
++- Known nesting issue for the laptop: `pendingQueryFrame_` has one slot (WebBridgeServer.cpp:1767-1768). If this box opens on top of a note, the note's replay frame is replaced until the note posts again. YES/NO inside a note already has the same issue.
++
++**B3. `HT9011UC_Cpp_V3.33.906.0/CMakeLists.txt:2776` (shared): same line.**
++- old: `    uHeaterThread.cpp  HeaterSimTick.cpp  MainTimersSt02.cpp  MainTimer8.cpp  MainTimerESD.cpp  MainTimerESDFallback.cpp  MainTimer3.cpp   # AI(W906-S12) 20260929 (St02-E, claim): ...  AI(W906-S14) 20261001 (St02-E): + Timer3`
++- new: `... MainTimer3.cpp  WebEmployeeId.cpp   # AI(W906-S12) ... + Timer3.  AI(W906-D034) 20261002 (St02-E): + WebEmployeeId (golden CheckEmployeeID / Timer1 :2861-2934)`
++- This line is already St02's claimed line.
++- Before pushing, run the memory checks: nm the new global symbols, look for a clash with `_fallback`, check DLL imports.
++
++**B4. `HT9011UC_Cpp_V3.33.906.0/tests/CMakeLists.txt`: EOF block** (laptop's rule: 「main 的在前、你們的在後」). It is a new `add_executable` + `add_test(D034_EmployeeId)` that links ht9045_sm and the containment roots. Compare against the D026_NoteAuth block (:EOF-45) for the link set.
++
++**B5. Web, same-line edits.** Steven side; tell St01, because it is D-026's page.
++- `web/page/login-page.js:13`
++  - old: `  var kind = 'auth';`
++  - new: `  var kind = /[?&]kind=employee-id(?:&|$)/.test(location.search || '') ? 'employee-id' : 'auth';   // AI(W906-D034): the employee-ID overlay's own kind, so dialog-bridge / dialog_host (kind 'auth') never see its messages`
++  - Why: `ht9045_dialog_host.js:344` listens for `HT_DIALOG_AUTH_CANCEL` with `m.kind==='auth'` without a source check. Without this, a Cancel here could cancel an open D-026 login.
++- `web/page/login-page.js:27`
++  - old: `    show($('Label5'), employee); show($('Label6'), employee);`
++  - new: `    show($('Label5'), employee); show($('Label6'), employee); if (employee) { if (auth.label6 != null) $('Label6').textContent = auth.label6; if (auth.label5 != null) $('Label5').textContent = auth.label5; }   // AI(W906-D034): golden CheckEmployeeID :1356-1359 captions`
++- `web/page/login-page.js:36`
++  - old: `    if (!pwd) return;                                  // cpp：Enter 空密碼不送`
++  - new: `    if (!pwd && auth.kind !== 'employee-id') return;   // cpp：Enter 空密碼不送  //AI(W906-D034): golden edPasswordKeyDown :181-182 / btnOKClick close the employee-ID box with whatever was typed`
++- `web/page/ht9045_dialog_host.js:272` (St01, D-026 file)
++  - old: `      if (!m || m.type !== 'query') return;`
++  - new: `      if (!m || m.type !== 'query' || m.kind === 'employee-id') return;   // AI(W906-D034): the employee-ID box (ht9045_employee_id.js) must not replace the alarm's pendingQuery`
++- `web/background.html:313`
++  - old: `<script src="page/dialog-bridge.js"></script>`
++  - new: `<script src="page/dialog-bridge.js"></script><script src="page/ht9045_employee_id.js"></script>`
++  - It resolves `HT9045Recipe` / `HT9045Tags` at call time and subscribes at DOMContentLoaded, as dialog_host does.
++
++**B6 (Phase 2, only when SECS goes live). `HT9011UC_Cpp_V3.33.906.0/SECSGEM/uHGemHT9045.cpp:6455-6457` (laptop).** Golden :2861-2864: the host reply closes the box.
++- :6455
++  - old: `                if(W906_FormShowing("fPassword", fPassword->Visible)==true)   //AI(W906-FSHOW-E32) ...`
++  - new: `                if(W906_FormShowing("fPassword", W906_EmployeeIdBoxOpen())==true)   //AI(W906-FSHOW-E32) ...  //AI(W906-D034): the box CheckEmployeeID shows (fPassword is NULL at runtime: InitForms() is never called)`
++- :6457
++  - old: `                    fPassword->Close();`
++  - new: `                    W906_EmployeeIdBoxClose();   // golden fPassword->Close() -- ends the wait, CheckEmployeeID reports what was typed (nothing on the web)`
++- Also needs one `#include "WebEmployeeId.h"` on an existing include line (:4462, same line).
++- This fixes the latent NULL dereference.
++
++**Not in this change (owners named, for later):**
++- E1: the note entry, golden note.cpp:953-960, in the port's ShowErrorMessage path (laptop; `forms/fNote_ShowError.cpp` is in its batch 28).
++- T1: the SECS-alarm branch of pnlPauseClick (`tools/wb_serve.cpp:6727-6736`, shared with St01's `DoPassword_MBox`), together with the S10F3 window (TFSECS, `fSecsAlarm`).
++- TfNote::Start :3532-3535 guard (St01 / laptop).
++- `TMyMessageBoxShim::Close()` should end the blocking MyMessageBox wait (laptop, `acatchtray_shims.cpp:104` + MbWait).
++- All of these depend on the SECS host link being live (§2).
++
++### 4(c) ctest idea: `D034_EmployeeId` (memory only)
++
++- Containment first: `if (!W906TestInsideCtestRoots("D034_EmployeeId")) return 2;` (`tests/st02_test_containment.h`).
++- No files and no WS. Stub `W906_ShowMyMessage_Hook`. `EventReport` comes from the real sim counter `g_SimLastEventReportCeid` / `g_SimEventReportCount`.
++
++| Case | What it checks |
++|---|---|
++| [1] No hook | `CheckEmployeeID("x")` leaves the count unchanged and `bWaitSecsGemReply==false`; `asSecsGemBarCode` / `asSecsGemBarCodePasswoed` are unchanged. This is the W1-G reason. |
++| [2] Fake hook answers `E1234` / `pw1` | The hook saw `label6=="x"` and `label5=="權限檢查!AUTHORITY CHECK!    "` (exact bytes, 4 trailing spaces). The SVs hold `E1234` / `pw1`, the CEID equals `SECS_EVENT.BarcodeReaderEnter`, the count is +1, `bWaitSecsGemReply==true`, and the captions are back to the dfm defaults. |
++| [3] Hook answers cancelled | Both SVs are `""`, the CEID is still raised, `bWaitSecsGemReply==true` (golden spbCancelClick). |
++| [4] `userIdVisible` | `bEnableEmployeeIDCheck` true gives true; `CosFunction.bLoginASECL` gives false; `JCET_FOR_EVAN==1` gives false. |
++| [5] Segment, [N07] off | Returns false and `iShowAUTHORITY=0` (:2931-2934). [N07] on with `bEnableEmployeeIDCheck` false: false. |
++| [6] Segment, `bWaitSecsGemReply` false | Returns true and does not call ShowMyMessage (:2923-2927). |
++| [7] Segment, waiting, `iShowAUTHORITY==0`, MyMessageBox not shown | The stub got `("Waiting for EAP system judgment","等待EAP系統判斷")` once. `iN07_EmployeeIdCheakTime=0` makes `SECSGEM_WaitReply` fire every call. After 3 timeouts, `iShowAUTHORITY==3`. The next call clears all four flags. |
++| [8] `iShowAUTHORITY=1`, `strShowAUTHORITY="msg"` | The hook gets `label6=="msg"`; `iTimeOutCount` is reset. |
++| [9] `iShowAUTHORITY=2` | 3, then cleared (with `bSECSGEMAlarm` and MyMessageBox shown: the shim `Close` was called; the flag clears once fShow is false). |
++| [10] Re-entry | A hook that calls `CheckEmployeeID` again does not recurse (one hook call). |
++| [11] Timer1 slot (`W906_St02Timer1BinTickAt`, NUMBER_PANEL_TYPE=2) | With [N07] and `bEnableEmployeeIDCheck`, `DoShowBinDigital` is not called (count from `W906_St02TimersCountsT1` unchanged). With the flags off it is called. |
++| [12] No password in stdout | Redirect stdout to a temp buffer and grep for `pw1`. |
++
++Two-config build (SIM quick + ship) only on this machine. St01 runs it.
++
++Optional: `tools/webprobe/d034_employee_id_selftest.cjs` (offline node, fake DOM, like `d026_note_auth_selftest.cjs`). Its control file must turn red when pointed at the unmodified page. Not run here.
++
++### 4(d) Human-review items (register through ST01-M)
++
++1. **KYEC-only flow** (CC_KYEC_LEE; [N07-5] is visible only for KYEC_LEE / JSCC_OS / SCC). It cannot be tested on HT9050 without a KYEC EAP. **The SECS host link is not live in V906**: no `THGem::Timer1Timer` caller, `EventReport` is a sim counter, TFSECS is not translated. So CEID 70 goes nowhere today, and no AUTHORITY_CHECK will come back.
++2. The ID and password go to the host in clear text as SV 37008 / 37012. That is golden's design (RULINGS_20261001 #40: test passwords may be in git). `asSecsGemBarCodePasswoed` keeps the password in memory by golden design.
++3. Cancel sends blank credentials to the host (golden spbCancelClick → Close → tail). The START plan called blank credentials "a lie". With a real box, the blank comes from the operator's own Cancel, which is golden.
++4. [W906] When no page can answer, the box reports nothing and leaves `bWaitSecsGemReply` false. Golden would never be in that state.
++5. "Waiting for EAP system judgment" has no button (pnlPause is hidden while `bEnableEmployeeIDCheck`), and in golden only the host reply or 3 timeouts close it. Golden's timeout counter lives in Timer1, which is busy while that box blocks. So in golden a box with no host answer stays up forever, and the port would do the same. In the port, `TMyMessageBoxShim::Close()` is also a no-op. Before E1 or T1 are ported, the laptop must make Close() end the blocking wait.
++6. Latent NULL dereference: `SECSGEM/uHGemHT9045.cpp:6455` reads `fPassword->Visible` while `fPassword` is NULL (B6 fixes it). Reachable once SECS is live.
++7. Port gap to report to St01 / laptop: golden `TfNote::Start` :3532-3535 refuses the note while `bWaitSecsGemReply`. In the port only `DoPassword` (WebLogin.cpp:2213) knows the flag, so a KYEC note could be closed by START without a login while it waits for the EAP.
++8. Timer1 deadlock in 906 (G1) is translated per tick, as V912 :3013 and the existing MainTimerSegments.cpp:33 do. Record it in GOLDEN_DEFECT_LEDGER.
++9. Comment-only mismatch in `SECSGEM/uHGemClass.cpp:3497/:3622`: 「1:必須清除Alarm 2:啟動工站檢查流程」 should read golden 「1:直接關閉Alarm 2:啟動工號檢查流程」 (laptop).
++10. Minor [W906]: on KYEC with `bEnableEmployeeIDCheck==false` (only the Start path can reach this), golden shows the user combo with its first item filled in. The web box shows an empty ID field.
++
++### 4(e) Open questions (golden and rulings cannot answer these)
++
++1. **To the laptop: B2.** May St02 append the employee-ID wait at the EOF of `tools/wb_serve.cpp` (laptop reviews, no existing line moves)? Or will the laptop write it? Either way it is a new transport ([W906], RULINGS_20261001 #0 ⑤ "新設計照樣要問").
++2. **Scope.** Do this now as A1-A5 + B1-B5: the box, the Timer1 machine, W1-G lifted. Defer E1 (the note entry), T1 (the SECS-alarm branch) and B6 until the SECS host link is live. Reason: E1's only exits are the host reply or a closable "Waiting for EAP" box, and V906 has neither, so porting E1 now would leave KYEC_LEE + [N07-5] machines with a box that never closes. Under ruling #0, golden would be ported in full; this question is whether the dependency gap justifies the order.
+diff --git a/docs/INBOX_QUEUE.md b/docs/INBOX_QUEUE.md
+index 1199fb7..ae743a6 100644
+--- a/docs/INBOX_QUEUE.md
++++ b/docs/INBOX_QUEUE.md
+@@ -131,7 +131,7 @@
+ | 97 | 🟢 **`D:\RS232Log` 不在「驗證前要備份」的清單**（RS232Standard 引擎會寫，信件 17）；另外選配的整條生命週期測試（`HT9045_GPIB_FULL_TEST`／`HT9045_RS232_FULL_TEST`／`HT9045_TESTERCOMM_E2E`，信件 13／17／21）從沒跑過，要跑先備份 `D:\GPIBLOG`、`D:\GPIB9045\system`、`D:\RS232Log`、`D:\RS232Standard\System\Setup.ini` | 接手 session 0927 19:xx（9/26 信件逐封對帳／Steven 0927 問題整理）；信件 13／17／21 | 📌 排程中 |
+ | 98 | 🟢 **J1 剩下的偏離（低）**：閒置時 Teach iframe 開站預載仍會清 `fAllMotorHome`（HOME 完重新整理網頁就要再 HOME 一次）；golden 只在操作員點開 Teach 時清。St01 的 S122（視窗總表判斷開／關）合進來後一起看 | 接手 session 0927 19:xx（9/26 信件逐封對帳／Steven 0927 問題整理）；St01 16:00 J1 | 📌 排程中 |
+ | 99 | 🟢 **night-loop 技能引用的 `tools/nb2_assist/numcmp_census.py` 不在 main**，只在 `origin/v906/nb2-assist`（`1ddbded0`）；0927 晚是暫時放進樹裡跑完就移除。要嘛搬進 main，要嘛把技能改成 `git show origin/v906/nb2-assist:…` 的寫法 | 接手 session 0927 19:xx（9/26 信件逐封對帳／Steven 0927 問題整理）；夜間哨兵 0927 | 📌 排程中 |
+-| 100 | 🟡 **FLOW-1 B1 複驗的兩個 major（只影響開了該功能的機台）**：F1 `fMain->hanaART->IsHanaArtAvailable()` 是恆回 false 的樁（`forms/fMain.cpp:29`；真的在 `Automation/HANA_ART.cpp:890`）⇒ HANA ART 機台走進 golden 的 else、可能停在 GPIB 等待那一階；F2 `DoART_AfterCleanOut` 寫的是 TU 內影子 `W7C1_LS_*`／`W7C2_LS_*`（`csystem.cpp:2765`、`:3986`），前段讀真的 `LastSet.bWaitStartLotAutoRetestGPIB` ⇒ GPIB ART clean-out 後停住；真欄位 `LastSet.h:473-478` 已經有了（影子的前提過期）。0928 11:3x 派 agent 準備（暫存區 `art_seams`），順便修 `main.home` 教導框拒絕訊息寫成 START 的字 | 接手 session 0928（複驗 wf_24aa0af3） | ⏳ 準備中 |
++| 100 | 🟡 **FLOW-1 B1 複驗的兩個 major（只影響開了該功能的機台）**：F1 `fMain->hanaART->IsHanaArtAvailable()` 是恆回 false 的樁（`forms/fMain.cpp:29`；真的在 `Automation/HANA_ART.cpp:890`）⇒ HANA ART 機台走進 golden 的 else、可能停在 GPIB 等待那一階；F2 `DoART_AfterCleanOut` 寫的是 TU 內影子 `W7C1_LS_*`／`W7C2_LS_*`（`csystem.cpp:2765`、`:3986`），前段讀真的 `LastSet.bWaitStartLotAutoRetestGPIB` ⇒ GPIB ART clean-out 後停住；真欄位 `LastSet.h:473-478` 已經有了（影子的前提過期）。0928 11:3x 派 agent 準備（暫存區 `art_seams`），順便修 `main.home` 教導框拒絕訊息寫成 START 的字 | 接手 session 0928（複驗 wf_24aa0af3） | 🔧 1002 03:1x NB2 R130（`v906/nb2-assist` `ee27dee1`）更新：**F2 早就修好**（`d40faf8d` 0928，16 個 TU 內的 LastSet 影子退役，`csystem.cpp:2785-2788`、`:4010-4021` 都指到真的 `LastSet.*`）；**F1 的前提不對**：真的 `uHANA_ART::IsHanaArtAvailable`（`Automation/HANA_ART.cpp:890-902`）只看 4 個設定旗標、不用連線，但只有 `CC_HANA_MICRON`（865）開得到，HT9050 不受影響；整個 HANA 子系統「翻好了、沒接線」（沒有共用實例、狀態拆成三份私有副本、G26 與 SetLotState 的 HANA 臂在 `#if 0`），只翻那一行會更糟。建議 (b) 小改：樁保留、註解改成真理由，加 `W906_HanaArtConfigured()`，4 個旗標都開時在 START 明確拒絕並說原因（`CheckContinusStartIsReady` 每圈都輪詢，要照 golden 走 Pause、不能只跳一次）；(a) 另排「HANA-ART 接線」一波。⇒ 客戶專屬、動到 START 放行 ⇒ 白天、排在客戶碼功能後面 |
+ | 101 | 🟡 **良率警報閘解閘的配套**：`csystem.cpp` G11（:10761）／G12（:10860-10883，golden InitAllProcessTask :6492-6499）還閘在過期的「TfYieldMonitoring_2x4_16」前提 ⇒ Initial Start 不清計數；同檔還有 `W7C1_TfContactCTSeam`（ClearData 空樁，:3457／:3527 正是 E53 關 site 的消費端）、`W7C1_TfShowBinSelectSeam`、`W7C2_FCONTACTCT_CLEARAUTOCLEAN` 三個重複替身。GATE #5／F／G／I 的 patch 在暫存區 `flow1/yieldmon/`（兩組態 syncheck 0 錯），要跟這幾項一起落，否則 BinSelect 計數會跨批累計、新批第一顆 fail 可能提早報 WAR07357 | 接手 session 0928（yieldmon agent） | 📌 排在功能清單之後 |
+ | 102 | 🟢 **pagewire 實跑 14 項紅（main 上也一樣）**：12 支接線 js 在 `web/page` 被手改、跟 `tools/pagewire/wire/` 產生的不同；`tools/websync/sync_web.py` 的 OURS 少了 St01／St02 這幾天加的約 25 支接線 js（下次 sync 會刪掉）。web repo 那份 sync_web.py 是 Steven 的 ⇒ 我們這份補、他那份在 TO_STEVEN 講；之前幾晚只跑 `--selftest` 所以沒看到 | 接手 session 0928 哨兵 | 🔧 (b) ✅ 1001 22:1x 筆電這份 `tools/websync/sync_web.py` 的 OURS 補了 27 支（`4cf24749`，用 check_deployed 第 3 項的規則對 git 的 `web/page` 算，補完 0 支漏掉）；Steven 那份（client repo `tools/sync_web.py`）在 TO_STEVEN §4 請他補；(a) 12 支手改的接線 js 對產生器還開著；(c) 1001 22:5x 量到：頁面載入的 `ht9045_*.js` 共 107 支，其中 49 支非接線的輔助檔（例 `ht9045_busy_util.js`、`ht9045_config_trayplate.js`；St02 MR !83 會再加 `ht9045_dio_delete.js`）不在 OURS、也不在 `D:/HT9045_Client/web/page`。它們都被 git 追蹤，checkout 跟得上 main 時 `--apply` 會整次中止（`sync_web.py:514-524`），不會刪；checkout 落後時才會被刪。✅ 1001 23:0x 第二十七批補進 OURS（+50，含 St02 !83 的 `ht9045_dio_delete.js`；補完 108 支 0 支漏掉） |
+ | 103 | 🟢 **EDR 會把剛連結好的測試 exe 刪掉**：0928 ship `SjsonAlarm`／`WB_WsProto`、sim `WB_Crypto` 三支連結完 exe 就不見（BAD_COMMAND），Defender 近 3 天 0 筆紀錄 ⇒ 懷疑公司 EDR；重連結後都過。三支都連 webbridge（WebSocket／SHA1／base64）。要 IT 把 `Obj\V906\build_*\tests\` 加白名單，或在 gate 腳本裡偵測 BAD_COMMAND 自動重連結重跑 | 接手 session 0928 gate | 📌 排程中 |
+@@ -160,8 +160,8 @@
+ | 125 | 🟡 **`auto9045.cpp:207-216` `CheckCanChangeRealDummy` 是恆回 true 的替身**，真本體在 `cMainStatus.cpp:323`（St01 0930 13:40 B8 M-11 找到）——照 golden 改接真本體（FT／RT 切換、Real／Dummy 切換前的檢查） | St01 0930 13:40 | ✅ 0930 晚第六批上 main（`origin/v906/jimmy-i125` `5b0bab58`，`AI(W906-I125)`）：auto9045 的 11 個 `W5FA_TfMainExt` 替身退 7 個改接真的 TfMain（主機下的換溫度模式／切 tester 連線／查主畫面狀態／查目前工單照 golden 執行；換溫度模式會動到加熱），Command.cpp (S4)／(S10) 改回 golden 的 `CheckCanChangeRealDummy`；換工單本身仍空（`W906_RC_ChangeSetUpFile` 另接）。新 ctest `I125_RealDummy` |
+ | 126 | 🟢 **ctest `TesterComm_TcpCmdServer` 第 10 段（HTSET,322／323）寫檔太多，負載一高就逾時**：0930 第三批 gate 出貨組態逾時（201 s）、單獨重跑也逾時（180 s），放寬逾時單獨跑 116.5 s 全過——第 1～9 段 8.4 s，第 10 段 107 s（`HTSET,322,5` 一個指令 58.8 s，INI 逐次寫檔）。安靜時整支約 20 s。處置：調高它的 TIMEOUT 或減少那段的寫檔次數（不改被測程式） | 筆電 0930 14:1x | ✅ 1002 00:2x St02 MR !86（`33b545ac`）在 main（第二十八批）：照 NB2 R123 §3 只改測試（第 10 段兩個 Bin、段尾還原、補存檔內容檢查）；gate b28a 兩組態全新：出貨 316／4、模擬 316／19，失敗集合逐名＝基準（b20h）；sysguard 0／0／0 |
+ | 127 | 🔴 **跳出 Message／Note 時，誰在接收面板實體鍵？**（使用者 0930 14:4x：「在周末下班任務中，加入思考跳出Message和Note時候，是否有Timer專門接收面板訊息，在BCB6是有Scankey來接收訊息並做出反應」）——golden：框開著時框自己的 Timer（例 TfNote::Timer1Timer，10 ms）呼叫 `ScanKey`／`ScanPannelKey`，面板 START／PAUSE／RETRY…＝按畫面上那顆鈕（`KeyComp`／`ReturnCode`）。移植樹：阻塞型框的等待迴圈有輪詢 1203 IO（沒逐一對過 golden）；不阻塞的 kcode==0 通知（含撞機警報，INBOX 118／119）沒有人讀面板鍵；主畫面沒框時面板鍵也沒作用（INBOX 86）。要做：① 研究（唯讀 workflow）：golden 每一種框（fNote 通知／阻塞、MyMessageBox、YES/NO、ShowMyMessage…）開著時面板鍵的接收點、週期、對應表；移植樹每一種框現在實際怎麼接；缺口表。② 照 golden 補（跟 122／123／124、86 一起排；面板鍵答框＝機台會動的決定，照 golden 翻，不另加條件）。技能 `ht9045-alarm-dismissal` 有 ScanKey／ScanPannelKey／KeyComp 的整理 | 使用者 0930 14:4x | ✅ 第七批 `f474abc8`：golden `TfMain::FormShow` main.cpp:9659 `SystemInitialOK=true` 照翻進 wb_serve 開機（`FileRW/MainBoot.cpp` `W906_FRWBoot_SystemInitialOK`，型號讀取失敗時照 golden 不設）⇒ 三個等待迴圈（警報／ShowMyMessage／YES-NO）的實體面板鍵、`DoPanelLamp`、訊息框出現時 `StopAllMotor(true)` 從此照 golden；新 ctest `SysinitBoot`。兩組態全新 gate＝基準（出貨 273 支 4 項、模擬 273 支 19 項），main `beccfda4`＝GitHub 第 92 包 `05c15d1` |
+-| 128 | 🔴 **常溫模擬第二個停點：入料臂取完料後 `InArmTask` 停在 1100，入料飛梭不動**（筆電 0930 14:4x 用 INBOX 121 的模擬 wb_serve 重跑 S1 流程 amb0930b 量到）——121 之後 `InArmPickFromLoadTask` 走完 10→12→200→1000→2000→2100→1（入料臂真的從 Loader 取料了），但 `InArmTask` 從 14:40:16 起一直是 1100，`MInShutte1` 沒動、出料飛梭與出料臂從頭到尾沒動。要做：① 唯讀研究（workflow，筆電 0930 14:5x 派）：golden 的 InArm case 1100 在等哪個條件、移植樹那個條件由誰維護、是替身還是沒翻；② 照 golden 補，附 ctest，再重跑流程看有沒有走到放料／飛梭。可能相關：121 帶出來的兩個舊替身（`InArmLeftSideNoIC`、`IsPick*`／`IsSht*Finish` 恆回 true） | 筆電 0930 16:06 | 🔧 0930 16:1x 根因找到（研究 workflow，筆電獨立再比一次）：`DoPlaceToHotPlate_9045()` 是恆回 false 的替身，golden 派送器原文（`ainarm_SearchPlacePlate.cpp:4814-4948`，extern 24／24、本體 110／110 行 0 差異）被 `#if 0 // TODO(W7)` 包著；熱盤模式下每一種機型的 case 1100 只等這個函式 ⇒ 永遠出不去。W6.2c 解開了旁邊兩條同類派送（`ainarm9045.cpp` DoInArm_9045／_SuckerMap）卻沒回來解這一條。修正在 `v906/jimmy-hpdisp`（`AI(W906-HPDISP)`，同一行改、行數不變，canary 改成會失敗的路由見證），16:38 起兩組態建置＋反證測試中；過了進第五批，再重跑模擬流程看熱盤放料→浸溫→取料→飛梭；✅ **1001 第十四批上 main**（`b2937e19`）：canary 的 SegFault 用 gdb 查到是測試沒照開機建 `InArmOffSet[]`（產品碼沒問題），補了開機順序；反證（換回替身＝紅）成立；兩組態全新 gate＝基準（出貨 284 支 4 項、模擬 284 支 19 項），system／config 0／0／0。下一步重跑模擬流程看熱盤放料→浸溫→取料→飛梭 |
+-| 129 | 🔴 **全樹「空砲彈」普查，照 golden 把功能補齊**（使用者 0930 19:5x 補充：「在機台端測試功能時，發現很多功能是空砲彈，沒有功能，後來經過修改才解決，你能夠依此類推把其他功能也搜尋一遍，一併把功能補齊。這任務可以放在機台完整整合到主版後接著進行」）——「空砲彈」＝按了回 ok、畫面也沒報錯，但底下什麼都沒做。機台端 0022～0044 修掉的同一族：web 0010 SR-WIRE（State Record 鈕從沒送到 C++）、web 0019 TEACH-LED（教導頁十顆燈從不更新）、web 0020 TEACH-UNWIRED（按了沒反應的鈕）、cpp 0039（M36／M40 的煞車沒有 SW[] 物件，永遠不會被驅動）、cpp 0026（DS402 歸零沒寫卡片的歸零速度）。筆電這邊同族的前例：INBOX 121（`SetHTrayPanel` 空殼＋閘 ⇒ 盤面永遠 0 顆）、125（`CheckCanChangeRealDummy` 恆回 true）、127（`SystemInitialOK` 從沒設 true ⇒ 面板鍵沒作用）、128（`DoPlaceToHotPlate_9045` 恆回 false）、Jerry J-6（`CheckSocketSensor` 替身）、121 帶出的 `InArmLeftSideNoIC`／`IsPick*`／`IsSht*Finish` 恆回 true。**做法**：① 用工具普查（不靠人工 grep；分母要附）五類：(a) 函式本體是空的或只回常數，而 golden 同名函式有本體；(b) `#if 0`／`GATE`／`TODO(W…)` 閘住的 golden 行，閘的理由已過期（相依已存在）；(c) 網頁送出的命令在 C++ 沒有分派、或分派到替身；(d) 全域旗標只有定義、沒有任何寫入點；(e) golden 有的 SW[]／Sen[]／MOT 物件或登錄在移植樹沒有。② 每一筆分級（會動機台／改檔／只顯示）＋對 golden 逐行看；≥95% 確定就照 golden 補、附 ctest（會動機台的照「忠於翻譯」直接翻，加閘只因為相依不存在）。③ 每批兩組態 gate＝基準才推 main＋GitHub 包；跟 St01／St02 認領的檔先看 FROM_STEVEN §1 | 使用者 0930 19:5x | 🔧 **1001 普查結果**（唯讀；筆電 scratchpad `census129\`）：**(a)(b)** 空殼函式與過期的閘 944 列、手動讀 114 列、確認 56 個真的空砲彈；**(c)(d)** 網頁命令沒人接與從沒寫入的旗標 975 列、信心 ≥70 的 34 列，其中活 bug：`TempFuseLimitType` 從沒被設（Temp_Set 存檔被 WAR15194 擋、出貨組態加熱繼電器 41 秒後被關）；**(e)**（1001 06:2x 回來）缺的 SW／Sen／MOT 物件、計時器、開機步驟 360 列（STATE 194、IO 輸出 92、通訊 34、寫檔 15、畫面 13、運動 12），前 15 項與活 bug `SaveJamRateByDay`（換日時昨天的 JAM 次數沒存就被清掉；第十二批做了 `cprod.cpp` 的掛勾，裝上要 St01 的 `MainClose.cpp`）列在 NIGHT_REPORT §0b。幾乎都會讓機台多做動作 ⇒ 照夜間規則不自己補，分三組列在 NIGHT_REPORT §0 第 17、18 項與 §0b 等 Jimmy 決定；✅ **1001 第十五批**（你 08:4x 裁決照 golden 全補）：(c)(d) D1-006 `TempFuseLimitType`（`037062cf`）、更正帶出來的 Motor Test 非 1203 軸回原點（`44ced20e`）上 main；第十六批（筆電 b16）：(a)(b) #13 三溫機門 6 鎖、#17 急停通知 ATC（連同放開 G-ATC-C 與 CheckATC6System G-ATC-A）、#11 BinCount.txt、#5 Auto 盤氣缸放開、I41 空 socket 檢查、#7 上料氣缸預推；✅ **1001 第十六批上 main**：(a)(b) #13、#17（＋G-ATC-A／C）、#11、#5、I41、#7；(e) E-BOOT-002 開機 Servo On 卡在 1203（§0 第 22 項）；#6 冷卻風扇委派 St02；加熱鏈（E-T2-008／E-TH-001／E-RT-007）交派 Ifor（等 Jimmy 轉）；第十七批：E-T1-012 安全門鎖、E-T2-001 大風扇、#16 SetLotState；✅ **1001 第十七批上 main**：(e) E-T1-012 安全門鎖、E-T2-001 大風扇，(a)(b) #16 SetLotState；✅ **1001 第十八批上 main**：(a)(b) `csystem.cpp` W7C1／g4 寫檔替身退役（[I06] config.ini、ASE 高雄 ASM 計數變真的；休息模式還原 Contact 等 atester 那半）；另 TfMain::Pause 轉送（St01 D-032）、SECS RCMD REMOTE_START、Jerry MR !24；E-BOOT-005 `RunInfo.Factory` 改請 St01 先加 FileRW 的客戶名稱函式；✅ **1001 第十九批上 main**：(a)(b) #15 `RecordSafeDoorStates`（G11 呼叫點＋G25／G28a／G28b 開門時間戳記；G26／G27 理由更新後留著）；#6 冷卻風扇（St02 MR !34，H1-08 等 St01）；另 St02 MR !31（出貨組態真 TCP tester）、MR !33（GPIB 遠端 START）；gate 抓到 `fMotorTest` 從來沒建立（NULL）⇒ `HandlerGpibMsg.cpp:713` 讀它的成員會當，已修；同類還有 INBOX 134；✅ **1001 第二十批**：(e) E-BOOT-002 開機 Servo On（非 1203 軸，第 10 條 B）＋開機 GetHotPlateYHalfPos；✅ **1001 第二十三批**：(e) E-BOOT-005 開機寫 `RunInfo.Factory`＋Observer `labFactory`（golden FormShow :10615-10616；St01 D-037 的 helper） |
++| 128 | 🔴 **常溫模擬第二個停點：入料臂取完料後 `InArmTask` 停在 1100，入料飛梭不動**（筆電 0930 14:4x 用 INBOX 121 的模擬 wb_serve 重跑 S1 流程 amb0930b 量到）——121 之後 `InArmPickFromLoadTask` 走完 10→12→200→1000→2000→2100→1（入料臂真的從 Loader 取料了），但 `InArmTask` 從 14:40:16 起一直是 1100，`MInShutte1` 沒動、出料飛梭與出料臂從頭到尾沒動。要做：① 唯讀研究（workflow，筆電 0930 14:5x 派）：golden 的 InArm case 1100 在等哪個條件、移植樹那個條件由誰維護、是替身還是沒翻；② 照 golden 補，附 ctest，再重跑流程看有沒有走到放料／飛梭。可能相關：121 帶出來的兩個舊替身（`InArmLeftSideNoIC`、`IsPick*`／`IsSht*Finish` 恆回 true）（1002 01:3x NB2 R128（`v906/nb2-assist` `729192cc`） 更正：`IsPick*／IsSht*Finish` 早就是 golden 逐字，恆回 true 的是 `#if 0` 死碼；`InArmLeftSideNoIC／HasIC` 不是恆回 true，是看整支手臂、golden 只看左 2×2——見 NIGHT_REPORT §2 第 7 項） | 筆電 0930 16:06 | 🔧 0930 16:1x 根因找到（研究 workflow，筆電獨立再比一次）：`DoPlaceToHotPlate_9045()` 是恆回 false 的替身，golden 派送器原文（`ainarm_SearchPlacePlate.cpp:4814-4948`，extern 24／24、本體 110／110 行 0 差異）被 `#if 0 // TODO(W7)` 包著；熱盤模式下每一種機型的 case 1100 只等這個函式 ⇒ 永遠出不去。W6.2c 解開了旁邊兩條同類派送（`ainarm9045.cpp` DoInArm_9045／_SuckerMap）卻沒回來解這一條。修正在 `v906/jimmy-hpdisp`（`AI(W906-HPDISP)`，同一行改、行數不變，canary 改成會失敗的路由見證），16:38 起兩組態建置＋反證測試中；過了進第五批，再重跑模擬流程看熱盤放料→浸溫→取料→飛梭；✅ **1001 第十四批上 main**（`b2937e19`）：canary 的 SegFault 用 gdb 查到是測試沒照開機建 `InArmOffSet[]`（產品碼沒問題），補了開機順序；反證（換回替身＝紅）成立；兩組態全新 gate＝基準（出貨 284 支 4 項、模擬 284 支 19 項），system／config 0／0／0。下一步重跑模擬流程看熱盤放料→浸溫→取料→飛梭 |
++| 129 | 🔴 **全樹「空砲彈」普查，照 golden 把功能補齊**（使用者 0930 19:5x 補充：「在機台端測試功能時，發現很多功能是空砲彈，沒有功能，後來經過修改才解決，你能夠依此類推把其他功能也搜尋一遍，一併把功能補齊。這任務可以放在機台完整整合到主版後接著進行」）——「空砲彈」＝按了回 ok、畫面也沒報錯，但底下什麼都沒做。機台端 0022～0044 修掉的同一族：web 0010 SR-WIRE（State Record 鈕從沒送到 C++）、web 0019 TEACH-LED（教導頁十顆燈從不更新）、web 0020 TEACH-UNWIRED（按了沒反應的鈕）、cpp 0039（M36／M40 的煞車沒有 SW[] 物件，永遠不會被驅動）、cpp 0026（DS402 歸零沒寫卡片的歸零速度）。筆電這邊同族的前例：INBOX 121（`SetHTrayPanel` 空殼＋閘 ⇒ 盤面永遠 0 顆）、125（`CheckCanChangeRealDummy` 恆回 true）、127（`SystemInitialOK` 從沒設 true ⇒ 面板鍵沒作用）、128（`DoPlaceToHotPlate_9045` 恆回 false）、Jerry J-6（`CheckSocketSensor` 替身）、121 帶出的 `InArmLeftSideNoIC`／`IsPick*`／`IsSht*Finish` 恆回 true（1002 01:3x NB2 R128（`v906/nb2-assist` `729192cc`） 更正：`IsPick*／IsSht*Finish` 早就是 golden 逐字，恆回 true 的是 `#if 0` 死碼；`InArmLeftSideNoIC／HasIC` 不是恆回 true，是看整支手臂、golden 只看左 2×2——見 NIGHT_REPORT §2 第 7 項）。**做法**：① 用工具普查（不靠人工 grep；分母要附）五類：(a) 函式本體是空的或只回常數，而 golden 同名函式有本體；(b) `#if 0`／`GATE`／`TODO(W…)` 閘住的 golden 行，閘的理由已過期（相依已存在）；(c) 網頁送出的命令在 C++ 沒有分派、或分派到替身；(d) 全域旗標只有定義、沒有任何寫入點；(e) golden 有的 SW[]／Sen[]／MOT 物件或登錄在移植樹沒有。② 每一筆分級（會動機台／改檔／只顯示）＋對 golden 逐行看；≥95% 確定就照 golden 補、附 ctest（會動機台的照「忠於翻譯」直接翻，加閘只因為相依不存在）。③ 每批兩組態 gate＝基準才推 main＋GitHub 包；跟 St01／St02 認領的檔先看 FROM_STEVEN §1 | 使用者 0930 19:5x | 🔧 **1001 普查結果**（唯讀；筆電 scratchpad `census129\`）：**(a)(b)** 空殼函式與過期的閘 944 列、手動讀 114 列、確認 56 個真的空砲彈；**(c)(d)** 網頁命令沒人接與從沒寫入的旗標 975 列、信心 ≥70 的 34 列，其中活 bug：`TempFuseLimitType` 從沒被設（Temp_Set 存檔被 WAR15194 擋、出貨組態加熱繼電器 41 秒後被關）；**(e)**（1001 06:2x 回來）缺的 SW／Sen／MOT 物件、計時器、開機步驟 360 列（STATE 194、IO 輸出 92、通訊 34、寫檔 15、畫面 13、運動 12），前 15 項與活 bug `SaveJamRateByDay`（換日時昨天的 JAM 次數沒存就被清掉；第十二批做了 `cprod.cpp` 的掛勾，裝上要 St01 的 `MainClose.cpp`）列在 NIGHT_REPORT §0b。幾乎都會讓機台多做動作 ⇒ 照夜間規則不自己補，分三組列在 NIGHT_REPORT §0 第 17、18 項與 §0b 等 Jimmy 決定；✅ **1001 第十五批**（你 08:4x 裁決照 golden 全補）：(c)(d) D1-006 `TempFuseLimitType`（`037062cf`）、更正帶出來的 Motor Test 非 1203 軸回原點（`44ced20e`）上 main；第十六批（筆電 b16）：(a)(b) #13 三溫機門 6 鎖、#17 急停通知 ATC（連同放開 G-ATC-C 與 CheckATC6System G-ATC-A）、#11 BinCount.txt、#5 Auto 盤氣缸放開、I41 空 socket 檢查、#7 上料氣缸預推；✅ **1001 第十六批上 main**：(a)(b) #13、#17（＋G-ATC-A／C）、#11、#5、I41、#7；(e) E-BOOT-002 開機 Servo On 卡在 1203（§0 第 22 項）；#6 冷卻風扇委派 St02；加熱鏈（E-T2-008／E-TH-001／E-RT-007）交派 Ifor（等 Jimmy 轉）；第十七批：E-T1-012 安全門鎖、E-T2-001 大風扇、#16 SetLotState；✅ **1001 第十七批上 main**：(e) E-T1-012 安全門鎖、E-T2-001 大風扇，(a)(b) #16 SetLotState；✅ **1001 第十八批上 main**：(a)(b) `csystem.cpp` W7C1／g4 寫檔替身退役（[I06] config.ini、ASE 高雄 ASM 計數變真的；休息模式還原 Contact 等 atester 那半）；另 TfMain::Pause 轉送（St01 D-032）、SECS RCMD REMOTE_START、Jerry MR !24；E-BOOT-005 `RunInfo.Factory` 改請 St01 先加 FileRW 的客戶名稱函式；✅ **1001 第十九批上 main**：(a)(b) #15 `RecordSafeDoorStates`（G11 呼叫點＋G25／G28a／G28b 開門時間戳記；G26／G27 理由更新後留著）；#6 冷卻風扇（St02 MR !34，H1-08 等 St01）；另 St02 MR !31（出貨組態真 TCP tester）、MR !33（GPIB 遠端 START）；gate 抓到 `fMotorTest` 從來沒建立（NULL）⇒ `HandlerGpibMsg.cpp:713` 讀它的成員會當，已修；同類還有 INBOX 134；✅ **1001 第二十批**：(e) E-BOOT-002 開機 Servo On（非 1203 軸，第 10 條 B）＋開機 GetHotPlateYHalfPos；✅ **1001 第二十三批**：(e) E-BOOT-005 開機寫 `RunInfo.Factory`＋Observer `labFactory`（golden FormShow :10615-10616；St01 D-037 的 helper） |
+ | 130 | 🟢 **機台新推的 tools 0001～0080（HTDESIGNER：VS Code 的 HTML 視覺設計工具，`tools/vscode-htdesigner`，0.79.0→0.82.0）**：機台 0930 19:19～19:31 推到 GitHub `machine/integ-ioweb`（`24100e6`..`3617712`），EastSun：「關於小工具部分，編譯沒問題就能commit and push 到github」。每一顆只碰 `tools/vscode-htdesigner`（第一顆建立整個資料夾），不影響 wb_serve、不碰機台設定。不在 RULINGS_20260930 第 11 條的範圍（那條是 cpp 0022～0044／web 0012～0033）⇒ **安全預設：照同一條精神（照機台）下一批收進 main**；收之前在筆電跑它自己的離線測試（機台報：程式庫 159、假 VS Code 166、面板、真 VS Code 148 四層全過）。⚠ 外掛新增事件時會「提議」改 `tools/wb_serve.cpp`／`CMakeLists.txt`／`HtdEvents/HtdEvents.gen.cpp`（編輯器裡未存檔的修改，存了才算）；patch 本身沒有改那幾個檔 | 筆電 0930 19:5x（fetch GitHub 分支時看到） | ✅ 第八批收 **tools 0001～0109**（機台推到 0109，HTDESIGNER 0.111.0；`HT9011UC_Cpp_V3.33.906.0/tools/vscode-htdesigner/`，109 顆照編號 `git am`、59 個檔、只動這個資料夾，不進 wb_serve 建置；EastSun：「編譯沒問題就能 commit and push」）。筆電測試：第 1 層（函式庫，直接對樹上的檔）162／0、第 3 層（假 VS Code）188／0；**第 2 層（無頭 Edge）1 項紅**（對齊線吸附 snaps to a line）、**第 3b 層 2 項沒結果**（這台 msedge 回「invalid option -d」）——機台端四層全過，差異已請 EastSun 看（第 93 包 README）；第 4 層（真的 VS Code）沒跑 |
+ | 131 | 🔴 **網頁更新太頻繁：筆電全部接手，「有開的網頁才更新資料」**（使用者 0930 20:4x：「1. 關於網頁更新過於頻繁問題，你能夠全部接手做嗎？後面通知st01按照我們做法 2. 有開的網頁才能更新資料 3. 參考duet3d做法，連上也會全部送？也是各頁輪詢資料？」＝RULINGS_20260930 第 12 條，取代第 10 條「St01 寫、筆電審」的分工）。**現況**（St01 評估 `.claude/skills/ht9050-st01-evaluations/references/stream-by-open-page.md` `0bfcf9e0`＋筆電 0930 20:3x 對第六批程式核對）：① C++ 每 0.2～0.5 秒整理約 7,100～8,100 個 tag、推給每個瀏覽器分頁（連上先送整張約 200～230 KB，之後只送變的），約 3/4（`pci1203.*` 約 5,900 個）只有平常關著的 1203 設定頁用；② hub（`ht9045_link.js`）把每個 patch 複製給分頁裡每一個 iframe——68 個視窗 65 個開站就載入（59 個藏著）；③ IO 頁每 200 ms 拿一整份 IO 狀態（約 11～16 萬位元組，`HW.IoSetView.html:449-450` 只看 `document.hidden`）、教導頁每 1 秒拿馬達狀態（`HW.teach.html:483-487`），視窗關著也照拿；golden `iosetview.cpp:162`／`uteach.cpp:1366` 第一行都是 `if(fShow==false) return;`。**Duet3D 對照**（`docs/DUET3D_REFERENCE_ANALYSIS.md` §3.2／§3.4／§5.2～5.4，當時逐行驗證）：SBC 模式連上第一則就是完整 Object Model、之後只送變更欄位的 patch，瀏覽器回 `OK` 才送下一包（慢的分頁收合併後的一包）；獨立模式是一條連線的輪詢，高頻 live 欄位每輪一包，其他區塊看「分區序號」變了才重抓；**兩種都不是各頁輪詢，也不是只送開著的頁面**——整個瀏覽器共用一份機台狀態，頁面只讀它（DSF 有訂閱過濾，但官方網頁自己訂整棵）；省量靠「寫入那一刻就知道變了（不比快照）」＋「高頻／低頻分流」＋「OK 背壓」。**做法**（先量後改；第 10 條的四個條件照舊）：第 1 階段 `[STREAM]` 計數（每 10 秒一行：整理幾個 tag、花幾毫秒、送幾位元組，HTTP 輪詢各端點次數），SIM 改前改後各量一次；第 2 階段 A 頁面表加「這頁有沒有開」的查詢（最小化算開，同 golden fShow）、B `pci1203.*` 在整理那一步就跳過（1203 設定頁沒開時）、C `motionView.trays.*`（Motion View 沒開時）、D hub 只扇出給開著的 iframe、視窗打開時補一份快取快照、E IO 頁／教導頁照 golden 視窗關著不拿；不能停的照送（SECS SV、事件記錄、REST 目錄公開的 io／motor、告警信箱、主畫面群）。第 3 階段（量完再跟你討論）：Duet 的 OK 背壓、分區序號。做完在 TO_STEVEN §4 寫做法，請 St01／St02 之後照做 | 使用者 0930 20:4x | ✅ 第 1 階段＋2A／2B／2C＋2E（`v906/jimmy-stream` `04fd5b04`）兩組態全新 gate＝基準（出貨 4 項＋`WB_F5Contract` 暫存目錄 EPERM 一次、單跑重過 9.14 秒；模擬 19 項＝基準，271 項），sysguard 整目錄 0 改／0 刪／0 新增，0930 23:4x 推 main＝GitHub 第 90 包；F（hub 只給開著的視窗）的藏著頁面審查已完成（71 列，只有 security／io／contact／motionview 在載入時看一次 tag）⇒ 做法改成：關著的視窗連上時只給一小份開機資料（`auth.level`、`machine.gpibModel`、`site.arm{1,2}.s{n}`），打開那一下補完整快照、之後才收更新——已做 `e977284a`（WB_WsLink +20 項）；瀏覽器實測另外抓到 Motion View 的馬達輪詢在視窗關著時還在拿（外框的開關通知它漏收），已修 `ec427cc5`（新 ctest `Stream2E_MvMotor`）；兩者＝第 91 包。**筆電模擬實測（無頭 Edge 開 background.html：40 秒全關、30 秒開 IO、30 秒再關；改前→改後）**：每次整理 tag 8,120→1,787、每次 27～32 ms→4～5 ms、伺服器差異比對 6.8→1.4 ms、連上快照 338 KB→147 KB；視窗全關 40 秒 `io/runtime` 200 次 29.2 MB→0、`motor/runtime` 120 次 5.5 MB→0；IO 開著 30 秒 300→151 次。沒動的（不能停的）：外框對話框信箱每秒 30 次、Production-update 每秒 4 次——第 3 階段再議；**1001 第九批 F2**（St01 00:39 三個 FYI）：外框一建 iframe 就告訴 hub 開關（`background.html` WIN_STATE 起點那一行）；Contact CT／Observer 的輪詢改看外框 `WIN_STATE`，**縮小照拍**（golden 縮小不跑 FormClose：TfContactCT bShow、TfObserver Timer1）；Smart Diagnostic 的 1 秒 timer **不改**（是 golden 的記錄計時器 `SmartDiagnosticTimer->Enabled = bStartRecord`，跟視窗開不開無關）；新 ctest `Stream2E_St01Polls` 18 項、對照組 3 紅；**1001 06:0x 第十一批**（NB2 問題 A：8.6 MB `Production-update.json` 每 250 ms 讓 socket 執行緒忙 115～132 ms）：伺服器檔案快取＋開機預讀＋瀏覽器 HEAD／ETag ✅ 上 main（第 96 包）；新舊兩版模擬 wb_serve 對同一支 8.6 MB 檔：回應位元組 MD5 相同（清過密碼的 General-config.json 也相同），伺服器首位元組 GET 98→19 ms、HEAD 86→6 ms；開機背景預讀 10 個大檔 21.7 MB 用 265 ms；兩次單獨跑 wb_serve 改到的 6 個 system／config 檔已從快照還原（MD5 核對）、新增的 lastdata_backup2.dat 搬到隔離區。**NB2 獨立重量（Q16，S9→S15）**：閒置停止命令 p95 155～285 → 29～42 ms、`sys.ping` 最大 → 7 ms、wb_serve 閒置 CPU 32～36% → 2.4～4.1%、閒置 HTTP 流量 25～33 MB/s → 27 KB/s。問題 B（開機後第一次載入卡約 4.9 秒）原因＝公司端點代理 IST Agent 的掛鉤（socket 執行緒 48 次取樣都在 `winahdcore32.dll`），筆電也有這支代理；根本解法（socket 執行緒上不做可能被掛鉤擋住的呼叫）列 NIGHT_REPORT §2 |
+ | 132 | 🔴 **IO 畫面的吸嘴（suck）那一塊沒有作用**（使用者 0930 22:0x 轉述 EastSun：「eastsun有提到io畫面的suck部分沒功能，需確認」）——INBOX 129「空砲彈」的具體案例，優先查。已知的線索（`JsonBridge/IoBtnPanelClick.cpp` 檔頭）：(h) golden 的吸嘴按鈕看的是**吸嘴感測器那一列的 Enable**（`iosetview.cpp:2159` `pTempSuck->Enable`），移植樹的**吸嘴綁定器 `cinitial.cpp:493-878` 整段 `#if 0`**，沒有吸嘴物件可問；(g) golden 有幾個元件不是一般的 BtnPanelClick（`btnAllVacuumClick` 等）；(b) Index 上有 IC 時 TestSuck 走 golden 的 Suck()／Destroy() 流程，移植樹沒翻、直接拒絕；HT9050 版控的 IO 表吸嘴列 Enable=0（RULINGS_20260929 第 11 條「硬體還沒接」），機台現在的表可能已經改了。要做：① 照 golden `iosetview.cpp` 逐行對吸嘴那一塊（按鈕的 OnClick、SetCompomentIO 的吸嘴分支、燈號從哪裡讀）與網頁 `HW.IoSetView.html` 的 Vacuum 分頁實際送什麼；② 吸嘴綁定器為什麼閘住、相依現在在不在（≥95% 就照 golden 解）；③ 附 ctest；④ 在 GitHub README 請 EastSun 說明「沒功能」是按了沒反應、真空沒起來、還是燈號不亮 | 使用者 0930 22:0x（EastSun 轉述） | ⛔ **1001 00:3x 更正：下面寫的 A／B 兩條路都作廢**——機台 cpp 0045（VACUNIT-1203，第八批收）：吸嘴照 golden 交給 Vacuum Unit（ECAT-VC8，`W906_VC8_SUCKER_REMAP`），而且 `BTestSuck` 在 0x50／0x51 的 DO 16～19 跟上料／Auto1 氣缸（`C_Load_Up`、`C_LoaderDrawerLock`、`C_Auto1_Up`、`C_Auto1DrawerLock`）同一條通道——**B（網頁不擋）會打到氣缸線圈**，A（改 Enable=1）也不是正確的路。真正原因：**這台 ring 1 上目前沒有 ECAT-VC8**（0045：全部 999.0／Error5、按鈕鎖住並寫原因）。GitHub 第 91 包 README 1001 00:3x 已更正（`46fb729`）；只剩「VC8 有沒有裝、接上 ring 1」要 EastSun 回。筆電自己的教訓在 NIGHT_REPORT §6。｜以下是 0930 23:5x 的原紀錄：🔎 **0930 23:5x 查完（只讀，筆電沒有機台的 IO 表，手上最新是 0925 那份 `machines/HT9050/IO_Table.csv`）**：頁面上吸嘴相關元件 313 個（211 顆按鈕、102 個燈，跟 golden `iosetview.dfm` 同數）。照那份表，**147 列吸嘴（Sucker／_On／_Off）全部 Enable=0**，所以 ① **網頁自己擋**：`web/page/ht9045_io_do.js:99`（`whyNotWritable` 回「IO 表 Enable=0」）＋`:276-280` 跳「不能輸出：IO 表 Enable=0」、什麼都不送——EastSun 0929 的「IO畫面一律不要卡控，讓我測試」（`JsonBridge/IoBtnPanelClick.cpp:215` `W906_IO_PAGE_NO_GUARDS 1`）**只改了 C++**，網頁這一層還在擋（128 顆按鈕是這樣）；② 燈：runtime 對 Enable=0 回 `quality:"disabled"`、`isOn:null`（`ChanIoPoints.cpp:139`），燈永遠不變（64 個）；③ 這台是 8 吸嘴（`USE_PICKER_COUNT=1`），16 吸嘴／Placement／OutArm2Suck 那幾塊 IO 表根本沒有列（74 顆按鈕、37 個燈），golden 會藏起來，網頁照畫；④ Tray Arm 的 CatchSuck 是 MotionNet（ISABase 0），1203 機台上本來就不會動；唯一會動的是 System 分頁的 `btnSwDieCleanSuck`（Enable=1、1203）。golden 對 Enable=0 的吸嘴也是按鈕反灰、燈藏起來（`iosetview.cpp:2255-2258`／`:2469-2473`），而且引擎在 Enable=0 時不寫閥、`Sensor()` 恆回 true——**所以現在自動流程取放時也沒有開真空、沒有檢查真空**。另外 INBOX 132 原先寫的「吸嘴綁定器 `cinitial.cpp:493-878` 整段 `#if 0`」**是錯的**：IO 表那一半 `:493-654` 從 0924 就是活的，只有 BDE 那一半 `:656-877` 圍著（`IoBtnPanelClick.cpp:106-110` 檔頭的 (h) 也寫錯，下一批 C++ 改註解）。**⇒ 決策題（NIGHT_REPORT §0）**：A 機台把真的有裝、有接線的吸嘴在 `system\IO_Table.csv` 改 Enable=1（照 golden；感測器列＋_On／_Off 列；改前先備份；之後 START 流程會真的開閥、等真空）；B 網頁也照「IO 畫面一律不要卡控」不擋 Enable=0、燈照 `raw` 顯示（約 8 行，改的是機台端的 `ht9045_io_do.js`／`HW.IoSetView.html`；風險：可以從網頁把「沒裝」的閥通電）。筆電建議先問 EastSun（第 91 包 README）：按哪幾顆、跳什麼字、`/api/struct/io/runtime` 裡 `InArmSuckA@I32.128` 是 `disabled`（有模組，只差 Enable）還是 `nosource`（卡片表沒有那個位元組，改 Enable 也沒用）。明細 `docs/INBOX132_IO_SUCKER_CONTROLS_20260930.tsv`（每顆元件一列：分頁、元件 id、alias、IO 表行號、Enable、為什麼不動） |
+@@ -171,6 +171,7 @@
+ | 136 | 🟢 **`Tfiosetview` 沒有可用的全域物件**（ES02 1001 14:23 §3，e2e 實測）：`fiosetview` 這個名字被 `atester_shims.h` 的 `TfiosetviewShim` 佔走（`forms/fIoSetView.h:80-96`），設計工具在 HW.IoSetView 新增的事件編得過、網頁叫不到。**筆電 15:1x 預設：先不改名**，跟 St02 的 IO 頁一起看 | ES02 1001 14:23 §3（e2e 實測） | ⏸ 筆電＋St02 |
+ | 137 | 🟢 **通知型告警框關不掉**（使用者 1001 10:0x 截圖「沒辦法關閉」：Note 框 WAR07324、PAUSE 沒反應、紅條 `C++ dialog response transport is not connected`）。根因（`/api/struct/alarm.tail` 的 16 筆事件）：模擬機 `ShowLoadingIC`（`cSortCT.cpp:169`，Continuous Loader 到數）在 09:59:54～58 連貼 8 則 kCode=0 通知（requestId 1～8），單槽信箱最後只留第 8 則；頁面（`dialog-bridge.js` queueStop，FIFO、永不丟）先畫第 1 則，按確認送 `dialog.notifyAck tag=1`，C++ 回 `request-mismatch:current=8`，`ht9045_dialog_host.js` 對這個錯照約定「框留著」⇒ 第 1 框永遠關不掉、第 8 框排在後面七框之後。紅條那句是 bridge 四段 fallthrough 的最後一段，真正的拒絕理由只在 console.warn。C++ 這一半驗證過是好的（WS 直送 `tag=8` → ok、信箱退役；用 Node 載入外框的 `ht9045_recipe_client.js`＋`ht9045_dialog_host.js` 對活的伺服器重跑 → `notice-already-closed`）。**修法（C++，`AI(W906-J5-ACK-2)`）**：`tools/wb_dialog_mailbox.h` 的 `AlarmSlot` 記下被覆蓋的通知 id（`superseded`，上限 64），`NotifyAckDecide` 對這些 id 回 `no-pending-notice:superseded-by=<現在的 id>`（同前綴 ⇒ host 關框、換下一則），不寫檔、不套 golden 關框副作用；沒貼過的 id 照舊 `request-mismatch`；ctest `NoticeAck` 加 [K2]。網頁不用改。**後續**：(a) 通知框只顯示代碼——`AlarmRequestJson` 把 `display.description` 固定寫成空字串，golden fNote 是從說明檔查描述（`AlarmCodeCatalog.cpp:398` 有「Loading count exceed seting value」）；(b) **決策題**：連續同碼的通知要不要合併成一則——golden 的 note 是 modal、同一處只會跳一次，移植樹 0923 裁決通知不阻塞，所以每個 loader 週期都再貼一則；(c) `dialog-bridge.js` 的狀態列應該印第一段（HTDialogHost）的拒絕理由，不是最後一段的通用字——Steven 的檔，已寫進 TO_STEVEN §2 | 使用者 1001 10:0x（截圖） | 🔧 C++ 一半（`e62ca6c1`）筆電第二十一批 cherry-pick；同類問題＝TO_STEVEN S-17（St01）；原 NB2 INBOX 133，1001 18:1x 改號 |
+ | 138 | 🟡 **網頁開站 X/68 進度條慢，C++ 沒重啟、只重開網頁也要等**（使用者 1001 10:3x）。根因與數字在 RULINGS_20261001 第 32 條：68 個 iframe 全載、876 個請求／22.0 MB、`HttpStatic.cpp` 的 `no-store`＋`Connection: close`、7 秒下限、單執行緒伺服器——跟 C++ 的運轉狀態無關。使用者 10:4x 選 **D（視窗開了才載入）** ⇒ TO_STEVEN **S-16**，派 St01（St02 第一順位但 S-09～S-12＋GB 未清）。C++ 這邊不動；A（ETag／304）／B（keep-alive）日後需要再做 | 使用者 1001 10:3x／10:4x | 📨 1001 18:1x S-16 已開卡（St01），等 Steven 認領；原 NB2 INBOX 134 |
++| 140 | 🔴 **接線產生器 `tools/pagewire/gen_wire.py` 每個處理器只取第一個 ShowQwertyKey 呼叫，常取到客戶專屬分支**（St02 TesterIF 欄位盤點 `docs/TESTERIF_FIELD_AUDIT_20261002.md` P1／P2，MR !92）：Setup.TesterIF 最長測試時間 6 欄（edMaxTestTime／edInitialMaxTest 與 _RT／_EQC）的鍵盤被夾成整數 60～9999＝golden 第一個分支 CC_ASE_M（`cTesterIF.cpp:1384`），通用分支是小數 2 位、0～15000（`:1401`）⇒ **輸入 10 會存成 60**；三個 Initial Start Delay 最小 30＝HiSilicon＋ASE 高雄分支（`:1413`），通用沒有範圍（`:1415`）。`ht9045_wire_setuptesterif.js:100-106` 等都是這樣產出來的。附帶：①`web/page/ht9045_testerif_wire.js` 執行時已沒有頁面載入，但仍是 `tools/pagewire/merge_all.py:35` 產生 `ht9045_wire_testerif.js` 的來源，先改管線才能刪（連同 `tools/websync/sync_web.py:173`）；②P6：遠端 SETMAXTEST／SETINITIALMAXTEST（`Command.cpp:3691`／`:3718`）只改 FTestIF、不改頁面存檔用的值，頁面開著存檔會蓋回舊值 | St02 1002 02:21 | 🔜 白天：產生器改成取通用（else）分支（或依客戶碼在執行時選分支），**只重產受影響的檔、逐檔看 diff**——INBOX 102 (a) 那 12 支手改過的接線 js 不能被重產蓋掉。在那之前 St02 先用自己的 `ht9045_testerif_c_wire.js` 把那 9 個欄位改回 golden 通用分支的限制（他的小 MR） |
+ 
+ ---
+ 
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index 8371ded..4062757 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -1,4 +1,4 @@
+-# 夜間報告 2026-09-29（二）晚起 —— **進行中版本**（每推一批整份更新；最後更新 1002 00:2x，新帳號）
++# 夜間報告 2026-09-29（二）晚起 —— **進行中版本**（每推一批整份更新；最後更新 1002 03:1x，新帳號）
+ 
+ > 使用者 0929 17:5x 下班：「完成手頭任務且無任務情況下，自動切換到Loop周末下班任務」；18:0x：「不用限制，我如果需要停止Loop會主動說明白」
+ > ⇒ **沒有收尾時間**，一直做到使用者說停；早上使用者在也照跑。迴圈：舊帳號的 cron `4ca5c42b` 已隨帳號停掉；新帳號 0930 第六批推完後重掛 `/loop 20m /night-loop`（cron 編號見 §5 最後一列）。
+@@ -6,7 +6,7 @@
+ > 0924～0929 週末那一輪的舊報告在 git 歷史（`f455a765` 之前的版本）。
+ > **0930 09:3x 使用者不小心下了 `/clear`**：只清掉對話記憶；commit、各批 gate 紀錄（上一輪暫存區 `ef8cf4db…\scratchpad\iz3`／`aml3`／`flow4`）、NIGHT_REPORT／INBOX、cron 心跳 `4ca5c42b` 都還在，已從磁碟接回，**沒有遺失任何工作**。
+ 
+-## ★ 接手（1002 00:2x 更新：**第二十八批上 main＝GitHub 第 114 包**：St02 MR !86（INBOX 126：TcpCmdServer 第 10 段改成兩個 Bin＋檢查存檔內容，只動測試）、MR !87（生產資料紀錄照 golden 呼叫 TimerRecordLoaderDate）、筆電 `forms/fNote_ShowError.cpp:944` 註解更正。第二十七批＝第 113 包（St01 D-026 警報框密碼、St02 DIO Delete 鈕、外掛 0.157）；**§0 第 30～37、39～41 項等你（第 41 項＝給 Eastsun 的信等你說「寄出」）**；佇列：`atester.cpp:4221-4234` [I49]（改寫量產配方）、GM-2 接地監測（安全）、CT-3c 要的 contact 狀態機（運動）——都白天做）
++## ★ 接手（1002 03:1x 更新：**第三十二批上 main＝GitHub 第 117 包**：St02 MR !93（TesterIF 頁 9 個欄位的鍵盤範圍改回 golden 通用分支：最長測試時間可以輸入小數、0～15000；Initial Start Delay 不再有最小 30）、MR !91 修正版（G023_OSReport 第 12 段，只動測試）；其間只動文件的：St02 MR !92（TesterIF 盤點）、INBOX 140。St02 MR !91 第一次在筆電紅、退回，修正版（`9dea9902`，第 12 段先準備 ArmDataLot）兩組態重跑都過、併進這一批。第三十批＝第 116 包（St02 計時器修正）；**§0 第 30～37、39～43 項等你（第 41 項＝給 Eastsun 的信等你說「寄出」）**；佇列：[I49]、GM-2、CT-3c、InArmLeftSide、INBOX 140 產生器——都白天做）
+ 
+ | 項目 | 在哪 | 狀態／下一步 |
+ |---|---|---|
+@@ -23,6 +23,9 @@
+ | ⛔ **INBOX 132 IO 畫面吸嘴沒作用——原因更正**（你 0930 22:0x 轉述 EastSun） | `docs/INBOX_QUEUE.md` 第 132 列、`docs/MACHINE_PATCHES_20261001.md` §3 | 機台自己的 cpp 0045（VACUNIT-1203，第八批收）查清楚了：吸嘴照 golden 交給 **VC8 真空模組**，而**這台 ring 1 上目前沒有 VC8**，所以按了沒作用（0045 讓畫面寫出原因）。筆電 0930 23:5x 給的 A（改 IO 表）／B（網頁不擋）**兩條都作廢**——`BTestSuck` 的輸出點跟上料／Auto1 氣缸同一條通道，B 會打到氣缸線圈。第 91 包 README 已更正（§0 第 16 項） |
+ | 🔜 INBOX 130 機台新推的 tools 0001～0080（HTDESIGNER，VS Code 設計工具） | GitHub `machine/integ-ioweb` `24100e6`..`3617712` | 只碰 `tools/vscode-htdesigner`，不影響 wb_serve；照「照機台」精神下一批收（先跑它自己的測試） |
+ | ✅ 第五批 | GitLab main `f5ad8ade`＝GitHub 第 88 包 `9e38ee3` | 0930 18:39 推上：INBOX 115 B＋Y pitch 防呆、St02 MR !6 到 `236adb8e`、St01 到 `ed4716f2`。gate：出貨 265 支 4 項＝基準；模擬 19 項＝基準 |
++| ✅ **第三十二批：St02 MR !93（TesterIF 頁 9 個欄位的鍵盤範圍改回 golden 通用分支：最長測試時間可以輸入小數、0～15000；Initial Start Delay 不再有最小 30）、MR !91 修正版（G023_OSReport 第 12 段，只動測試）** | GitLab main＝GitHub 第 117 包（hash 見 §5） | St02 盤點 P1／P2 的暫時修正，改在 St02 自己的 `ht9045_testerif_c_wire.js`：最長測試時間 6 欄照 golden 通用分支（`cTesterIF.cpp:1401`：小數 2 位、0～15000），三個 Initial Start Delay 照 `:1415`（沒有範圍）。原本產生器取到的是客戶分支（CC_ASE_M 的整數 60～9999、HiSilicon 的最小 30），輸入 10 會存成 60。新 node 測試 `tif_kb_selftest.cjs`。源頭（產生器）在 INBOX 140，白天修。gate：b32a 兩組態全新：出貨 317／4、模擬 317／19，失敗集合逐名＝基準（b20h）；新 node 測試 TIF_KbGolden 兩組態都過；!91 修正版在保留的建置目錄增量重跑 G023_OSReport 兩組態都過；sysguard 0／0／0 |
++| ✅ **第三十批：St02 MR !90（NB2 R126 的 M4／M5：Timer3 與每分鐘溫度紀錄在自己的框開著時照 golden 繼續跑；照 golden 翻 RecordTemp，Observer 的溫度歷史有值了）、筆電 `mykitsuck.h`／`.cpp` 檔頭的過期註解（NB2 R128）** | GitLab main＝GitHub 第 116 包（hash 見 §5） | ①St02 !90：派發器的防重入只留給 golden 自己有「執行中」旗標的計時器（Timer8 `bTimerRunning`、TimerESD `bRun`、Timer1 `bRunTimer1`）；Timer3 與每分鐘溫度紀錄 golden 沒有這個旗標，框開著時照樣到點就跑（M4）。照 golden 翻 `RecordTemp`、開 `MainTimer3.cpp` 的 G4，Observer 的 `dTempHistroy` 有人寫了，溫度歷史不再全是 0（M5）。另修 G9／G17 的理由、行號、G-023 測試的幾個盲點、台帳一行。②筆電：`mykitsuck.h:10`、`mykitsuck.cpp:9` 同一行附註——檔頭說「這一對還沒連進建置」從 0924 起就過期了（現在連進去的就是它）。gate：b30a 兩組態全新：出貨 316／4、模擬 316／19，失敗集合逐名＝基準（b20h）；St02_Timer1／Timer3、G023_OSReport 兩組態都過；sysguard 0／0／0 |
++| ✅ **第二十九批：St02 MR !89（Lot Info 頁 Tester Log 分頁的「Tester TCP Show」鈕照 golden：開 Tester 通訊視窗的 TCP/IP 分頁）、筆電 `sync_web.py` OURS 補 `ht9045_lotinfo_testertcp.js`** | GitLab main＝GitHub 第 115 包（hash 見 §5） | ①St02 !89：golden `uLotInfo.cpp:13841-13844` 一按就開 Tester TCP 視窗；網頁照 St02 用過的 Q41 TI-3 做法——寫 localStorage `ht9045.testercomm.tab`＝TCP/IP 分頁，再請外框開 testercomm 視窗（只有 TCP_IP_MODE 才有那個分頁）。St01 同意改他頁上的 `Data.LotInfo.html:417`（同一行，498 行不變）；不動 C++。②筆電：OURS 補那支新的 js（頁面載入的 109 支 0 支漏掉）。gate：b29a 兩組態全新：出貨 316／4、模擬 316／19，失敗集合逐名＝基準（b20h）；sysguard 0／0／0 |
+ | ✅ **第二十八批：St02 MR !86（INBOX 126：TcpCmdServer 第 10 段改成兩個 Bin＋檢查存檔內容，只動測試）、MR !87（生產資料紀錄照 golden 呼叫 TimerRecordLoaderDate）、筆電 `forms/fNote_ShowError.cpp:944` 註解更正** | GitLab main＝GitHub 第 114 包（hash 見 §5） | ①St02 !86：INBOX 126 照 NB2 R123 §3 只改測試——第 10 段 `iTestBinCount=2`、段尾還原，補 BinasgnOff.Data／Binasgn.Data 的 [Category] Scan 檢查（負載一高就逾時的那段變短）。②St02 !87：`cMyDB.cpp` 的 MyDBIProductionData 照 golden :504 呼叫 TimerRecordLoaderDate（接到已翻好的 `W906_MainClose_TimerRecordLoaderDate`，GATE GA1-B4 退役；wb_serve 上 MyDBExecSQL 回 0，所以 rowID 仍是 0），行數不變。③筆電：`forms/fNote_ShowError.cpp:944` GATE B3 的理由在 D-026 之後過期——同一行附註：閘照舊關著，因為 KeyCode==0 的密碼現在在這條路之前就問過了（開了會問兩次）。gate：b28a 兩組態全新：出貨 316／4、模擬 316／19，失敗集合逐名＝基準（b20h）；sysguard 0／0／0 |
+ | ✅ **第二十七批：St02 MR !82（E-019 Data／Status 頁事件盤點，只有文件）、MR !83（DIO 設定頁的 Delete 鈕照 golden）、St01 D-026（警報框密碼照 golden TfNote::DoPassword／DoUnlockPassword）、ES02 外掛 0.157、筆電 `sync_web.py` OURS +50** | GitLab main＝GitHub 第 113 包（hash 見 §5） | ①St01 D-026：告警要密碼時（JAM0000.dat 的等級≠0，或 golden 會叫 DoUnlockPassword），網頁的告警框按 START／PAUSE 先跳登入框，密碼對了才照按的鍵關；實體面板鍵在密碼過之前關不掉（照 golden）；`dialog.auth` 不用操作權杖（第 2 條 (b)）；比對只在 C++、回覆不帶密碼。筆電審了自己的行：`wb_serve.cpp` 23 行全是同一行內修改（8716 行不變）、`wb_dialog_mailbox.h` 5 行（空字串＝原本的位元組）、`WebBridgeServer.cpp:1448` 豁免；Steven Q64 三點都同意（09:4x）。②St02 !83：DIO 設定頁的 Delete 鈕照 golden spbDeleteClick——檔案對話框選 DIO 資料夾裡的 *.ini、按 Open 就刪、沒有確認框、刪完不重讀（C++ 那一半 `ttlcfg.op` 0926 就在）。③St02 !82：E-019 盤點（17 頁、332 個 golden 事件：已接 96、待做 46 列），點出 GM-2、LI-1 兩件筆電的檔（見 §2）。④筆電：`sync_web.py` OURS 補 50 支頁面會載入的輔助 js（INBOX 102 (c)）、pagewire 副本跟 DIO 頁同步。⑤ES02 外掛 0.157（`a3358d74`）。合併：D-026 分支底是 `caae69bb`，`tests/CMakeLists.txt` 四段衝突都是它重帶 main 已有的 TA5／S98 區塊——改成 main 的檔＋D026 區塊原文（+45／-0）。新 ctest `D026_NoteAuth`、`D026_NoteAuthPage`。gate：b27a 兩組態全新：出貨 316／4、模擬 316／19，失敗集合逐名＝基準（b20h）；sysguard 0／0／0 |
+ | ✅ **第二十六批：St02 MR !79（H-013 第一部分，執行時的值不變）、Jerry MR !81（含 !80：J-7 修 WAR0154、J-10 `DoCheckSocketHasIC` 解閘修 DoTestY 卡在 case 20）、ES02 外掛 0.154** | GitLab main＝GitHub 第 112 包（hash 見 §5） | ①Jerry J-7：`ainarm9045.cpp` 的 GetShtRowColStartPos 照 golden :9095-9096 讀 `TestSocket.iShtRow／iShtCol`（原本固定 0×0，入料手臂的目標跑出軟體極限、模擬時跳 WAR0154）。②Jerry J-10：`atester.cpp` 的 DoCheckSocketHasIC 解閘——golden :4305-4781 共 477 行照原文變成活的，恆回 false 的替身刪掉（DoTestY case 20 只在它回 true 時往前走，所以原本永遠卡在 20）；計時器照 golden 只留一個 `CheckSocketHasICDelay`；⚠ 這一段會下 index Z／Y 軸與真空的命令，出貨組態（沒開 SOFT_SIMULTE）的機台會真的動。③St02 H-013 第一部分：`Command.cpp` 四支方法照 912 加 `fSecsAlarm->Visible` 檢查（3 處）與 `IsSafePLCIOInstall()`（1 處），執行時的值不變。④ES02 外掛 0.154（`51c6112a`）。合併：`tests/CMakeLists.txt` 檔尾 Jerry 分支自己帶的那份 J-6 `SocketSensor` 區塊跟 main 重複，留 main 的（多了 `ht9045_automation`／`ws2_32`）。新 ctest `SocketCheck`、`H013_Terms`。gate：b26a 兩組態全新：出貨 314／4、模擬 314／19，失敗集合逐名＝基準（b20h）；sysguard 0／0／0 |
+@@ -95,7 +98,7 @@
+ | ~~6~~ | ~~HT9050 的 Loader／Empty／Auto1～3 升降 Z 軸：馬達還是氣缸~~ | ✅ **已決定**（你 0930 13:0x：「Z軸是氣缸，維持A」＝RULINGS_20260930 第 2 條）：不改設定，模擬裡那 5 個軸不動是對的。馬達表那 5 列 `Enable=1` 跟「是氣缸」不一致，寫進 GitHub README 請 EastSun 看 | — | `RULINGS_20260930.md` 第 2 條【1001 14:2x 更正：Loader／Empty＝馬達、Auto1～3＝氣缸＋馬達（Frank 本人 14:0x；RULINGS_20261001 第 22 條）；機台正本的表等 ES02 上機確認（TO_ES02 E-03）】 |
+ | 30 | **HTDESIGNER（HTML 視覺設計工具外掛）以後誰改**（ES02 1001 14:23 問） | ES02 從 0.134 接手（EastSun 要的功能），機台端的 Claude 到 12:06 還在推同一個外掛，兩邊同時改會打架。**A（建議）**：ES02 改，機台端停手、有需求寫給 ES02（或寫給筆電轉）；B：機台端改，ES02 停手。回覆前照 A 的做法（ES02 每次開工先接機台端的新 patch） | FROM_ES02 §3、TO_ES02 §4 |
+ | 31 | **磁碟：每批推完移除那批的 worktree＋夜間哨兵（`.claude\worktrees` 總量 >50 GB 就清已推上 main 那幾棵的 build_*）**（你 1001 15:0x 問「每次測試都需要那麼多？」） | 不需要：一次 gate 峰值約 8 GB、綠了就歸零；累積到 686 GB 是因為一批一棵 worktree、gate 跑完不刪。**我先照這兩件做**，你不同意再說 | RULINGS_20261001 第 27 條；night-loop 線 A／D |
+-| 32 | **SetTemp 要真的存溫度：存檔走哪一份翻譯**（Ifor01 1001 15:5x 問；I-01 第一階段已交 MR !54，hook 還沒裝） | golden `SetTemp` 經 `fTemp_Set->spbSaveClick` 存配方再讀回。移植樹那支存檔的寫檔段還閘著（`uTemp_Set.cpp:4653` S2、`:4853` S1），現在接上會「回成功、溫度其實沒存」。(a) 照第 0 條拆那兩個閘（筆電的檔；同一段 golden 會有兩份活的翻譯）；(b) 讓 `spbSaveClick` 改走 St01 網頁溫度頁已經在用的 C 路存檔（`FileRW/Temperature.cpp`，要動 St01 的檔、算設計決定）。**1001 17:2x 改：先請 Ifor 本人判定兩條存檔是否等價**（你 17:1x：「溫度有問題可以請教Ifor，他是溫度專家，尤其是ATC」）：等價 ⇒ (b)（St01 同意後）；不等價 ⇒ (a)。回覆前維持現況：hook 不裝 | FROM_IFOR §3 15:5x；TO_IFOR §4；WAITING_REPLIES W-05 |
++| 32 | **SetTemp 要真的存溫度：存檔走哪一份翻譯**（Ifor01 1001 15:5x 問；I-01 第一階段已交 MR !54，hook 還沒裝） | golden `SetTemp` 經 `fTemp_Set->spbSaveClick` 存配方再讀回。移植樹那支存檔的寫檔段還閘著（`uTemp_Set.cpp:4653` S2、`:4853` S1），現在接上會「回成功、溫度其實沒存」。(a) 照第 0 條拆那兩個閘（筆電的檔；同一段 golden 會有兩份活的翻譯）；(b) 讓 `spbSaveClick` 改走 St01 網頁溫度頁已經在用的 C 路存檔（`FileRW/Temperature.cpp`，要動 St01 的檔、算設計決定）。**1001 17:2x 改：先請 Ifor 本人判定兩條存檔是否等價**（你 17:1x：「溫度有問題可以請教Ifor，他是溫度專家，尤其是ATC」）：等價 ⇒ (b)（St01 同意後）；不等價 ⇒ (a)。回覆前維持現況：hook 不裝 **02:1x 加**：給 Ifor 本人的這題 git 上追了兩次都沒回（W-05；Ifor01 1001 18:11 起沒有推送，看不到 git 的留言）——要不要打電話問他由你決定；回覆前照上面的預設 | FROM_IFOR §3 15:5x；TO_IFOR §4；WAITING_REPLIES W-05 |
+ | 33 | **Steven 16:05～16:54 在 GitLab 網頁直接合了 18 張 MR（沒經過筆電的 gate）**，其中 RogerYang 的 7 支技能分支是你 15:0x 才裁「繼續放著」的（第 28 條） | 技能檔不進建置；有程式碼的四張（St02 三張、NB2 MR !57）已跟第二十批一起重跑兩組態 gate（b20j 1001 17:15-18:14 (HEAD c9cc2aaa): SHIP 4 = baseline, SIM 19 = baseline, ELA_Ftp passes in both）才推——**其中 St02 W58 讓 ELA_Ftp 在兩種組態都紅**（筆電已修 `c9cc2aaa`，這就是要過筆電 gate 的原因）。**A（建議）**：保留現狀，請 Steven 以後有程式碼的 MR 留給筆電跑 gate，並問他 RogerYang 那批是不是他決定合的；B：照第 28 條把那 7 支用 revert 撤掉（新增還原 commit，不改歷史，可再恢復）。回覆前：保留，不撤 | TO_STEVEN §4；`git log --merges 1f24f025..c540f73e` |
+ | 34 | **Frank01 的 9050 流程（F-01b）一串要你定的**（FROM_FRANK §3 14:38、16:07；A 批零行為變化已同意先做） | ①910 的缺陷 (a) 層數越界（Loader 的 `TrayZ_Up/Down` 只有 9 格、層數最高 19；Empty／Auto 第一次讀 `[-1]`）(b) `DoPlaceTrayToAuto_9050(0)` 永遠做不完——**建議等 Frank 本人回答意圖（TO_FRANK §4 Q1～Q3）後照他的意思修 (a)(b)**，其餘照翻註明；②`machines/HT9050/Mot_Table.csv` 的 M35／M36／M38～M40 要不要開——**建議等 ES02 上機確認（E-03）**，開了 HOME 會動這幾軸；③V906 自己加的 12 處 `\|\| Type_HT9050`——**Frank 本人 17:1x 說 9050 的 Carry kit／Index 吸嘴是 2×4 ⇒ 改建議照 910 拿掉**（Frank01 17:19 也改建議；要一起處理 `cinitial.cpp:10933` GRID 註解記的 2×4 ChangeSite 風險〔NB2 R12 RA-01〕與 `tests/test_machine_suckers.cpp:241`／`:260`／`:266` 釘的 2×8 答案）；④切換機型後 GPIB 橋接要加 9050 臂（`HandlerBridgeCtl.cpp:233`，St02 的檔）——**建議 St02 加**，Frank01 給 910 對照；⑤機台 `D:\GPIB9045\system\general.ini` 的 `Model` 要改成 `9050GPIB` 才會走 9050——**建議 B 批上線時請 ES02 改**；⑥C 批：`MoveIndexZ` 照 910 放 `Motor/mymotor.cpp` 檔尾（第二十批上 main 後就可以接）、FP 的 3 個 Task 照 910 不登錄 State Record——**建議照 910**；`InitTestYFPTask`（910 沒有呼叫點）**Frank 本人 17:1x 說「補上」⇒ 建議同意**（偏離 910、作者決定），加在 `InitAllProcessTask()`、只有 `Type_HT9050` 才呼叫。Frank 17:1x 另答：16 站、`DoCatchFromEmpty_9050` 暫時不接（D 批照 910）。⑦（知悉，不用定）Frank 18:0x：`CheckIndexStatusERRSH1()` 的 Y1 改用 `Prod.TestY1_Front`——**偏離 910**，作者決定，已進 MR !63；`Do_Auto_OutSH` 的殘料檢查照 910 不執行（9050 用別的方式檢查）。Q1～Q3 19:02 已寄信請 Frank 本人回（WAITING W-01） | FROM_FRANK §3 14:38／16:07／17:19；TO_FRANK §4 |
+ | 35 | **出貨組態的加熱要多久跑一拍**（Ifor01 1001 16:5x I-03 題 A；要動 `tools/wb_serve.cpp` 的 serve loop，所以轉你） | golden 的加熱執行緒約每 20 ms 在主執行緒跑一拍（`DoThermo`／`CheckHeater`…；等溫控器回應靠 0.5 秒計時器，不卡住）。移植樹的 PumpTick 是 500 ms、而且不能調快（B13）；**出貨組態現在完全沒有人呼叫 `DoThermo`**，溫控器一台都沒在講話。(a) serve loop 另加一個加熱時鐘（20 ms＝golden，或 50 ms），同一條執行緒跑，PumpTick 不動——Ifor01 建議 (a)＋20 ms；(b) 每個 PumpTick 連跑多拍（簡單，但通訊全擠在 500 ms 的格子上）；(c) 每個 PumpTick 一拍（慢 25 倍）。**建議 (a)＋20 ms**，條件是先在模擬組態量一拍的時間（每拍要遠小於 20 ms）：這條執行緒卡一次，整台就停止輪詢。回覆前：不接（維持現況） **1001 20:0x 加**：St02 的 E-T1-022 也要同一種東西——在 serve loop 每一圈跑一個 30 ms 的時鐘（`tools/wb_serve.cpp:4575`），讓 type 2 的 Bin 號碼面板照 golden 的 30 ms 打脈衝（不加就每 0.5 秒一下，整串從 29 秒變 113 秒）；筆電已請 St02 先用不動筆電檔的方案 A，並寫明 `DoShowBinDigital()` 會不會等、一次多久。**你定第 35 項時一起定這一個** **1001 21:2x 加（NB2 R123，唯讀量過）**：兩種快時鐘每一拍都**不會等設備**（golden 本來就是每 20 ms 在主執行緒跑一拍；移植樹那一拍沒有 Sleep、沒有等待迴圈、沒有串列 I/O）；但加熱那一拍會跟 HTTP 執行緒搶同一把鎖——冷卻風扇在 Configuration 頁開著時每拍都拿 `FormLock`，20 ms 碰撞機會是 500 ms 的 25 倍。NB2 建議：**筆電開一個共用的快時鐘掛點**（`wb_serve.cpp:4575` 同一行，每個掛上去的工作記最長／平均耗時），加熱 20 ms 與 Bin 面板 30 ms 都掛在上面，不要一支一支加；**冷卻風扇的鎖先改**（主迴圈不該等 HTTP 執行緒）。筆電同意這兩點 **1001 23:1x 加**：St02 的 E-019 盤點又找到一個要每拍跑的——GM-2 接地監測（golden 每 30 ms，安全相關，見 §2）；共用快時鐘的掛點定了，它也掛上去 | FROM_IFOR §3 16:5x；TO_IFOR §4 |
+@@ -104,7 +107,9 @@
+ | ~~38~~ | ~~**Jerry 兩次追問都沒回**（`atester.cpp:4221-4234` [I49] 清料拉高 Contact 高度那段，12:3x 問、17:2x 與 21:1x 各追一次）~~ ✅ **不用打電話了**：Jerry 1001 21:04 已回「筆電動沒問題」（比筆電的第 2 次追問早，筆電沒先看他的分支） | 照第 37 條：追兩次（8 小時）還沒回就交你決定要不要打電話。白話：重置結束時「還原 Contact 高度」那一半（`csystem.cpp`）已經是真的會寫配方，另一半「拉高」（`atester.cpp:4221`）還閘著，所以今天兩半都不會跑；筆電想照 golden 把兩半一起解開，但 `atester.cpp` 是 Jerry 0930 為 J-6 認領過的檔，所以先問他。**A（建議）**：你打個電話問他一句；B：等他自己回。回覆前：不動 | TO_JERRY §4；WAITING W-02 |
+ | 39 | **網頁斷線後不會自己接回（Jerry J-11）** | 白話：wb_serve 停住一下（例：中斷點、卡住），瀏覽器的 WebSocket 斷了就不會自己重連，之後按什麼都「沒反應」，要按 Ctrl+Shift+R 才好。Jerry 1001 今天因此連吃兩個症狀（停機 MES16441、對話框按 RETRY／PAUSE 沒反應）。要加「閒置看門狗＋自動重連」（`web/page/ht9045_link.js`，筆電 0930 接手的 hub 區域），但有三件事要你定：① 重連後要不要自動拿回操作權——Jerry 建議**不要**（只恢復資料，拿不回就在畫面上說「控制權已失去」）；但第 31 條 ① 是「最新的畫面贏、一連上就 takeover」，兩者要擇一；② 停機對話框（modal）在重連後怎麼重推給畫面（重新整理會走檔案信箱，純重連不會）；③ 跟「10 秒沒畫面就停機」（`kPageNoScreenGraceMs`，安全規則）的互動——Jerry 認為自動重連會讓這個訊號更準。**建議**：A＝做自動重連，權杖照第 31 條（重連的畫面就是「最新的畫面」→ takeover），對話框重連時由 C++ 重推一次；誰做：Jerry 說他可以做（先在 §1 申告）。B＝先不做，只在除錯文件寫「停在中斷點後先 Ctrl+Shift+R」（已寫進 TO_JERRY §2）。回覆前：B **1001 22:1x 加（NB2 R124，實測）**：wb_serve 凍住 55 秒（＝停在中斷點）恢復時，伺服器主動關掉**所有** WebSocket（20 秒不會）⇒ 斷線一定看得到，只是 hub 沒重連。Jerry 的三點現有程式都已答：① 權杖走 SCREEN-TOKEN 的 `takeNext`；② 對話框：伺服器本來就對每條新連線補送，C++ 不用改；③ 10 秒寬限從恢復後才算，10 秒內重連就不會誤停。⇒ **A 只要改網頁的 JS（共用的退避重連＋外框重連），不動 C++**；NB2 也建議 A | `v906/jerry-handoff` FROM_JERRY J-11；NB2 README R124、工具 #40 `webhmi_freeze_probe.py` |
+ | 40 | **網頁主畫面的 START 要不要先經過 golden 的 `BtnStartClick`**（St01 1001 22:12 問） | 白話：golden 的「畫面上的 START 按鈕」（`BtnStartClick`，main.cpp:6529-6593）只有客戶開了「軟體控制按鈕」（`CosFunction.bEnableSoftWareControlButton`：TSMC 台南、SIGURD 北興、UTAC TW）或模擬組態才會真的啟動，否則只把扭力框設成 10；實體的 START 鍵走另一條（ScanKey → Start）。移植樹網頁的 START（`start.run`）直接走 `StartFromWeb`，等於當成實體 START 鍵；St01 剛把 Contact 頁的 START 改成照 golden 走 `BtnStartClick`。**A（建議）**：維持現狀——網頁 HMI 取代的是操作面板，網頁 START＝實體 START 鍵（否則沒開那個旗標的客戶，網頁上就啟動不了機台）；B：改走 `BtnStartClick`（網頁 START 變成「畫面按鈕」，大部分客戶按了只設扭力框）。回覆前：A（現狀） | FROM_STEVEN s3 22:12；TO_STEVEN §4 |
+-| 41 | **給 Eastsun 的信已擬好，等你說「寄出」**（GitHub 第 107～113 包、E-04／E-05 上機驗收卡、St01 D-026 的 11 項驗收、HT9050 有沒有裝接地監測板、aliasedit） | 你 1001 交代「整合後推上去記得要寄信給 Eastsun，必須先擬稿給我確認」。稿子在這個 session 的 scratchpad（`mail_es02b_subject.txt`／`mail_es02b_body.txt`），全文也貼在終端回覆裡。你說「寄出」就用 Outlook 寄；要改哪裡直接講。之後再推的包，寄之前會先補進稿子 **23:4x 加**：W-03（ES02 的 aliasedit）追了兩次都沒回（`WAITING_REPLIES`），信的第五節已再問一次——寄出就等於第三次問，不用另外打電話 | 終端回覆；scratchpad |
++| 41 | **給 Eastsun 的信已擬好，等你說「寄出」**（GitHub 第 107～113 包、E-04／E-05 上機驗收卡、St01 D-026 的 11 項驗收、HT9050 有沒有裝接地監測板、aliasedit） | 你 1001 交代「整合後推上去記得要寄信給 Eastsun，必須先擬稿給我確認」。稿子在這個 session 的 scratchpad（`mail_es02b_subject.txt`／`mail_es02b_body.txt`），全文也貼在終端回覆裡。你說「寄出」就用 Outlook 寄；要改哪裡直接講。之後再推的包，寄之前會先補進稿子 **23:4x 加**：W-03（ES02 的 aliasedit）追了兩次都沒回（`WAITING_REPLIES`），信的第五節已再問一次——寄出就等於第三次問，不用另外打電話 **02:1x 加**：E-05（W-06，溫控硬體上機確認）也追了兩次沒回，信的第三節已再問一次 | 終端回覆；scratchpad |
++| 42 | **SECS 會報的客戶名稱（`RunInfo.Factory`，SV 1005）要用 912 還是 906 的清單**（NB2 R126 Q-R1，St01 D-037） | 白話：開機時寫進 `RunInfo.Factory` 的客戶名，現在是照 **V912** 的清單轉的；它跟 906（移植樹的 golden）在 807、808、898 三個客戶碼不一樣（例：807 在 906 是 HonPrec，現在變成 TFAMD_M）。SECS 主機會看到這個值。照 RULINGS_20260926 Q2 後半句「畫面寫進底層共用結構的欄位以底層為準」應該用 906。**A（NB2 建議）**：改用 906 的清單（St01 改 `FileRW/HSys.cpp`）；B：維持 912。回覆前：B（現狀） | NB2 R126 §3；TO_STEVEN §4 |
++| 43 | **網頁的 Lot Start 要不要改走 golden 的完整檢查**（St01 LI-1 做好了，等筆電改一行） | 白話：現在網頁按 Lot Start（`lot.start`）只設 Lot ID／Operator ID 就開批；golden 的 sbSECSLotStartClick 有 1000 多行檢查（必填與字元、TCP 測試機要先開 SECS、讀碼器開時 Barcode Recipe 必填、送 SECS 開批事件、首盤檢查）。St01 照 golden 翻成一支函式（`v906/st01-q59` `b7946fb0`，他的 gate 還在跑），筆電把 `tools/wb_serve.cpp` 的 `lot.start` 那一行改去呼叫它就生效。**接上之後會變的**：①有些以前開得了的批會被擋（例：沒選 Run Mode 會跳「Please select run mode!!」；XINYUN／超豐／JCET 的必填比現在寬）；②檢查沒過會跳 golden 的框，**等操作員按的那段時間機台的輪詢只跑一部分**（跟 START 一樣的已知限制，§0b E-FT1-001）；③運轉中誤按 Lot Start 的框會照 golden 把 SystemStart 設 false、StopAllMotor（停機）。**A（建議）**：St01 的 gate 綠了就接（照 golden；Eastsun 上機前先看 `b7946fb0` 的操作員清單）；B：先不接，等 E-FT1-001（框開著時輪詢照跑）做完。回覆前：B（不接，行為不變；St01 的函式可以先合進來，沒人呼叫就不影響） | FROM_STEVEN s3 1002 01:21；St01 `b7946fb0` |
+ 
+ ### §0b INBOX 129 普查 (a)(b) 待決定清單（1001 01:2x；每項都附 golden 位置，細節在 census129_ab.md §4）
+ 
+@@ -171,6 +176,9 @@
+ 
+ | 時間 | 事項 | 證據 |
+ |---|---|---|
++| 1002 03:1x | **第三十二批上 main**：St02 MR !93（TesterIF 頁 9 個欄位的鍵盤範圍改回 golden 通用分支：最長測試時間可以輸入小數、0～15000；Initial Start Delay 不再有最小 30）、MR !91 修正版（G023_OSReport 第 12 段，只動測試） | b32a 兩組態全新：出貨 317／4、模擬 317／19，失敗集合逐名＝基準（b20h）；新 node 測試 TIF_KbGolden 兩組態都過；!91 修正版在保留的建置目錄增量重跑 G023_OSReport 兩組態都過；sysguard 0／0／0 |
++| 1002 02:1x | **第三十批上 main**：St02 MR !90（NB2 R126 的 M4／M5：Timer3 與每分鐘溫度紀錄在自己的框開著時照 golden 繼續跑；照 golden 翻 RecordTemp，Observer 的溫度歷史有值了）、筆電 `mykitsuck.h`／`.cpp` 檔頭的過期註解（NB2 R128） | b30a 兩組態全新：出貨 316／4、模擬 316／19，失敗集合逐名＝基準（b20h）；St02_Timer1／Timer3、G023_OSReport 兩組態都過；sysguard 0／0／0 |
++| 1002 01:3x | **第二十九批上 main**：St02 MR !89（Lot Info 頁 Tester Log 分頁的「Tester TCP Show」鈕照 golden：開 Tester 通訊視窗的 TCP/IP 分頁）、筆電 `sync_web.py` OURS 補 `ht9045_lotinfo_testertcp.js` | b29a 兩組態全新：出貨 316／4、模擬 316／19，失敗集合逐名＝基準（b20h）；sysguard 0／0／0 |
+ | 1002 00:2x | **第二十八批上 main**：St02 MR !86（INBOX 126：TcpCmdServer 第 10 段改成兩個 Bin＋檢查存檔內容，只動測試）、MR !87（生產資料紀錄照 golden 呼叫 TimerRecordLoaderDate）、筆電 `forms/fNote_ShowError.cpp:944` 註解更正 | b28a 兩組態全新：出貨 316／4、模擬 316／19，失敗集合逐名＝基準（b20h）；sysguard 0／0／0 |
+ | 1001 23:0x～23:3x | **第二十七批上 main**：St02 MR !82（E-019 Data／Status 頁事件盤點，只有文件）、MR !83（DIO 設定頁的 Delete 鈕照 golden）、St01 D-026（警報框密碼照 golden TfNote::DoPassword／DoUnlockPassword）、ES02 外掛 0.157、筆電 `sync_web.py` OURS +50 | b27a 兩組態全新：出貨 316／4、模擬 316／19，失敗集合逐名＝基準（b20h）；sysguard 0／0／0 |
+ | 1001 22:1x～23:0x | **第二十六批上 main**：St02 MR !79（H-013 第一部分，執行時的值不變）、Jerry MR !81（含 !80：J-7 修 WAR0154、J-10 `DoCheckSocketHasIC` 解閘修 DoTestY 卡在 case 20）、ES02 外掛 0.154 | b26a 兩組態全新：出貨 314／4、模擬 314／19，失敗集合逐名＝基準（b20h）；sysguard 0／0／0 |
+@@ -236,6 +244,10 @@
+ 
+ | 順序 | 項目 | 狀態 |
+ |---|---|---|
++| 1002 02:3x | **INBOX 140：接線產生器只取第一個客戶分支的鍵盤範圍**（St02 TesterIF 盤點 P1／P2）——TesterIF 頁「最長測試時間」輸入 10 會存成 60、Initial Start Delay 最小被設成 30 | 改產生器會動到每個有鍵盤的頁面，還有 12 支手改過的接線 js 不能被重產蓋掉 ⇒ 白天做、逐檔看 diff；St02 先用他自己的檔把那 9 個欄位改回 golden 通用分支（他的小 MR，送來就合） |
++| 1002 02:2x | **St02 MR !91（G023_OSReport 第 12 段，只動測試）退回** | 在筆電兩組態都紅（BY SITE 的 Total／PASS／FAIL 那幾列對不上）；放回它自己的底 `8b8209cc`（沒有 !90）也一樣紅 ⇒ 不是兩張 MR 互相影響。沒合進 main，數字與行號寫在 TO_STEVEN §4，等 St02 修好再送 |
++| 1002 01:3x | **St01 LI-1（網頁 Lot Start 走 golden 檢查）：函式做好了，接不接等你**（§0 第 43 項） | 會改變 Eastsun 上機時 Lot Start 的行為，而且檢查沒過的框會在輪詢執行緒上等操作員（記憶裡的規則：會擋住輪詢的整合要先問）⇒ 筆電先不改 `lot.start` 那一行 |
++| 1002 00:3x | **NB2 R126 覆核昨晚 8 批 C++：5 條中度、0 條高度，全部轉給作者**（M1 Jerry、M2／M3 Ifor01、M4／M5 St02；帳本 W-08～W-10） | 都不是筆電的檔。另：Frank01 的 9050 飛梭流程正確，但 **`database.cpp:517` 改成 `Type_HT9050` 要等 B／C 批（`DoTestHeadMotorFP`）落地、先補 SHIP 組態的互鎖測試**（TO_FRANK §4）；St01 D-037 的棘輪 R5 在筆電第二十三批把呼叫搬到 `tools/wb_boot_factory.cpp` 之後就不會紅了（TO_STEVEN §4 請 St01 改）|
+ | 1001 23:4x | **St01 CT-3c（Contact 頁 Index Z 寸動）卡在筆電**：寸動的閘 `iIndexStatus` 只在 golden 的 Do_Z1_AutoGetHeight case 3010（cContact.cpp:7702）、Do_Z2_AutoGetHeight（:10213）、Do_ContactTest_32Site（:11149）裡寫，三支都還沒翻；另要 `WB_ENGINE_INDEXZ_1203` 開關（St01 review6 `22c3e57a`，關著） | ⛔ 會下 index Z 軸命令＝運動控制 ⇒ 夜間不做；白天照 golden 翻那三支狀態機、開關要有人在機台旁才開。在這之前 St01 不接寸動（接了也不會動） |
+ | 1001 23:1x | **GM-2 接地監測從來沒跑**（St02 E-019 點出；`forms/fGroundMan.cpp:303` Timer1Timer 有本體、監測本體 DoGroundMasterMonitor 在 `#if 0`、沒人每拍呼叫、開機也沒開 RS232） | ⛔ 安全關鍵（golden 每 30 ms 看接地板，超限就停所有馬達、跳 WAR1609、SystemStart=false）⇒ 夜間不做。只影響 `Gerneral.ini [Ground_Man] USE_GROUND_MAN=1`（裝了接地板）的機台；這台筆電是 0，HT9050 不知道（`machines/HT9050` 沒有 Gerneral.ini）⇒ 已問 ES02（W-07）。要做時：照 golden 解閘＋開機 Init_GM_RS232＋掛在 §0 第 35 項的共用快時鐘上（30 ms，跟加熱 20 ms、Bin 面板 30 ms 同一個掛點） |
+ | 1001 23:1x | **LI-1 主畫面 Lot Start 沒跑 golden 的檢查**（St02 E-019；`tools/wb_serve.cpp:5757-5789` 的 `lot.start` 只設 Lot ID／Operator ID 就呼叫 SetLotStart） | golden `uLotInfo.cpp:7382-8416` sbSECSLotStartClick 1035 行（字元與必填檢查、TCP 測試機要先開 SECS、讀碼器開時 Barcode Recipe 必填、SECS 開批事件、首盤檢查）都沒翻。⇒ 開卡給 St01（頁與 LotInfo 是他的；TO_STEVEN §4）：St01 照 golden 翻成一支可呼叫的函式，筆電再把 `lot.start` 那一臂同一行改去呼叫它。不動機台，但翻完之後檢查沒過就不能開批 |
+@@ -248,7 +260,7 @@
+ | 4 | **INBOX 128 常溫模擬第二個停點**（入料臂取完料 `InArmTask` 停在 1100、入料飛梭不動） | 🔧 唯讀研究 workflow 在跑，出來照 golden 補＋ctest，再重跑流程 |
+ | 5 | **INBOX 127 跳出 Message／Note 時面板實體鍵誰接**（你 14:4x） | 🔧 唯讀研究 workflow 在跑；出來跟 122（按 START 關通知框）、123（阻塞型 PAUSE 少送事件報告／ESD 停止）、124（面板 PAUSE 鍵）、86 一起照 golden 補 |
+ | 6 | INBOX 125 `CheckCanChangeRealDummy` 恆回 true 的替身、126 `TcpCmdServer` 第 10 段寫檔太多 | 🔜 |
+-| 7 | 121 帶出來的兩個舊替身（`InArmLeftSideNoIC`、`IsPick*／IsSht*Finish` 恆回 true） | 🔜 看 128 的研究結果一起排 |
++| 7 | 121 帶出來的兩個舊替身——**1002 01:3x NB2 R128（`v906/nb2-assist` `729192cc`） 更正**：`IsPick*／IsSht*Finish` 那組早就是 golden 逐字（恆回 true 的是 `aHotPlateSubstrate.cpp:79-929` `#if 0` 裡的死碼；連進去的是 `mykitsuck.cpp:949-999`＝golden :891-941），不用改程式；`InArmLeftSideNoIC／HasIC` 不是恆回 true，但看的是整支手臂，golden 只看左邊 2×2 ⇒ 10 欄熱板（ATK 10X16）的機種每輪掃到第 8 欄會在 DoPlaceToHotPlate 安靜繞圈（沒動作、沒警報）；HT9050 的熱板是 2 欄，碰不到 | 🔜 會影響放料用哪幾支吸嘴＝運動流程 ⇒ 白天：`ainarm9045.cpp:746-764` 換成 golden `:4193-4229` 逐字（相依都在，`:764` 之後行號位移約 18 行），加 NB2 設計好的 `test_inarm_leftside_golden.cpp`（把舊本體放回去要變紅） |
+ | — | St02：GetBundleInfo 5 列＋asendic 替身 | **不做**（St02 14:37 更正：真本體 `cpublic.cpp:2336-2505` 還是 `#if 0`，GA1-B3 翻好再一起做）；另 6 列（1525／1530／1538／1539／N8／1551）等 St02 列 OLD／NEW 我逐行看；1532 維持閘住 |
+ | — | INBOX 111b 剩下的 ④⑥ | ④ 要連 golden 2DID 檢查流程一起翻（F33 選配，排後面） |
+ | — | HT9050 版 Motion View 接即時資料 | 已請 St02 看 |
+@@ -351,7 +363,15 @@
+ | `65330849` | 112 `2787258` | St02 MR !79（H-013 第一部分，執行時的值不變）、Jerry MR !81（含 !80：J-7 修 WAR0154、J-10 `DoCheckSocketHasIC` 解閘修 DoTestY 卡在 case 20）、ES02 外掛 0.154、本報告與交接檔 |
+ | `16debc74` | 113 `b6dcba2` | St02 MR !82（E-019 Data／Status 頁事件盤點，只有文件）、MR !83（DIO 設定頁的 Delete 鈕照 golden）、St01 D-026（警報框密碼照 golden TfNote::DoPassword／DoUnlockPassword）、ES02 外掛 0.157、筆電 `sync_web.py` OURS +50、本報告與交接檔 |
+ | `00709641`、`1f7c9b03` | —（只動文件，併入第 114 包） | W-03 第 2 次追問（附量到的原因）、回 St01 23:45、W-07 補問 USE_OTD、第二十八批登記 |
+-| 本批（第二十八批，含本份報告） | 114（hash 見下一批） | St02 MR !86（INBOX 126：TcpCmdServer 第 10 段改成兩個 Bin＋檢查存檔內容，只動測試）、MR !87（生產資料紀錄照 golden 呼叫 TimerRecordLoaderDate）、筆電 `forms/fNote_ShowError.cpp:944` 註解更正、本報告與交接檔 |
++| `2138c080` | 114 `e9f0fc7` | St02 MR !86（INBOX 126：TcpCmdServer 第 10 段改成兩個 Bin＋檢查存檔內容，只動測試）、MR !87（生產資料紀錄照 golden 呼叫 TimerRecordLoaderDate）、筆電 `forms/fNote_ShowError.cpp:944` 註解更正、本報告與交接檔 |
++| `c1c84b36` | —（只動文件，併入第 115 包） | NB2 R126 轉給各作者、§0 第 42 項 |
++| `9aa00f3b`、`4649cafb` | —（St02 MR !88 只有文件，不用 gate；併入第 115 包） | D-034 計畫歸檔、W-10 已回、請 NB2 列 G-023 測試盲點 |
++| `89a3c32e` | —（只動文件，併入第 115 包） | 第二十九批登記 |
++| `8b8209cc` | 115 `757a15d` | St02 MR !89（Lot Info 頁 Tester Log 分頁的「Tester TCP Show」鈕照 golden：開 Tester 通訊視窗的 TCP/IP 分頁）、筆電 `sync_web.py` OURS 補 `ht9045_lotinfo_testertcp.js`、本報告與交接檔 |
++| `19e8826c` | 116 `9724e6b` | St02 MR !90（NB2 R126 的 M4／M5：Timer3 與每分鐘溫度紀錄在自己的框開著時照 golden 繼續跑；照 golden 翻 RecordTemp，Observer 的溫度歷史有值了）、筆電 `mykitsuck.h`／`.cpp` 檔頭的過期註解（NB2 R128）、本報告與交接檔、W-05／W-06 第 2 次追問 |
++| `b34eebbf` | —（只動文件，併入第 117 包） | St02 MR !91 退回（第 12 段在筆電紅） |
++| `60b56ea1`、`ea3b1f96` | —（St02 MR !92 只有文件，不用 gate；併入第 117 包） | TesterIF 欄位盤點、INBOX 140 |
++| 本批（第三十二批，含本份報告） | 117（hash 見下一批） | St02 MR !93（TesterIF 頁 9 個欄位的鍵盤範圍改回 golden 通用分支：最長測試時間可以輸入小數、0～15000；Initial Start Delay 不再有最小 30）、MR !91 修正版（G023_OSReport 第 12 段，只動測試）、本報告與交接檔、INBOX 100 依 NB2 R130 更新 |
+ | — | — | **夜間迴圈（新帳號）**：cron `f34a7ab2`（`7,27,47 * * * *`＝每 20 分鐘，session 閒置才觸發、7 天自動到期），0930 21:0x 掛上。⚠ session-scoped：視窗關掉或筆電被強制關機就沒了 |
+ 
+ ## §6 我自己犯的錯與更正
+diff --git a/docs/TESTERCOMM_PORT_LEDGER.md b/docs/TESTERCOMM_PORT_LEDGER.md
+index 24b42c3..55781aa 100644
+--- a/docs/TESTERCOMM_PORT_LEDGER.md
++++ b/docs/TESTERCOMM_PORT_LEDGER.md
+@@ -508,7 +508,7 @@ ctest `TesterComm_Handler`（`tests/test_testercomm_handler.cpp`）：預設部
+ | ~~② ckernel.cpp：golden 912 :744-749、:2144-2148／:2158-2162（Qorvo Tester Pause 等 MaxTestTime 到了才響，RogerYang 20260626），搬完同時打開 G15~~ ✅ 20260926 晚上已做 | `IMPLEMENTED` | St02 | 使用者：「加到代辦事項，目前不改沒關係」；diff 草稿在 FROM_STEVEN §3 14:29 | 使用者裁決 20260926 15:xx；帳本 P2c |
+ | ATC 接好後把 `W906_ATC_PORTED` 改 1（SET_SLOPE_OFFSET／RESET_ATCALARM 回 golden 的 SETTINGOK），同時拿掉 G23 | `BLOCKED` | St02 | 要等 ATC（`ATC_InterfaceForm` 真的類別，fATCHandlerSide.h:709）移進 V906 並有全域 | 裁決 7；HandlerGpibMsg.cpp G23 |
+ | 真的啟動接好後把 `W906_REMOTE_START_WIRED` 改 1（遠端 START 回 golden） | `BLOCKED` | St02 | `TfMain::Start` 還是離線 no-op（forms/fMain.cpp:411） | 裁決 8；HandlerGpibMsg.cpp G16 |
+-| 912 補充：S10F3 SECS 警報視窗 `fSecsAlarm`（TSecsAlarmForm）、安全 PLC `IsSafePLCIOInstall`（MachineStatus）、HANA RMS `PrepareHANARMSConnect`（拿掉 G9） | `NOT_STARTED` | St02 | 使用者：「測試通訊這邊一起補，先不做」 | 裁決 11；上方「P2a 的 912 補充清單」 |
++| 912 補充：S10F3 SECS 警報視窗 `fSecsAlarm`（TSecsAlarmForm）、安全 PLC `IsSafePLCIOInstall`（MachineStatus）、HANA RMS `PrepareHANARMSConnect`（拿掉 G9） | `IN_PROGRESS`（20261002：第 1、2 項 `IsSafePLCIOInstall`／`fSecsAlarm` 已做，H-013 MR !79，main `3184703d`；第 3 項 HANA RMS（G9）等 W64 Q1） | St02 | 使用者：「測試通訊這邊一起補，先不做」；St02-M 20261001 同意 K1-K7 | 裁決 11；上方「P2a 的 912 補充清單」 |
+ | TCP 真 socket 的 connect 移出 Handler 執行緒 | `DONE`（H-008，20261001：vclcompat TClientSocket POLLED 模式，Open() 不阻塞、Poll() 在 tick 執行緒發事件；出貨版真、模擬版模擬） | St02 | RULINGS_20261001 #0 起不等 P8 | 裁決 10；P5 |
+ | 兩塊 TTL 板的行為、16BinGS／256 bin 判定 | `NOT_STARTED` | St02 | 照 golden，等實機驗證再決定 | 裁決 3、4；P8 |
+ 
+diff --git a/docs/TESTERIF_FIELD_AUDIT_20261002.md b/docs/TESTERIF_FIELD_AUDIT_20261002.md
+new file mode 100644
+index 0000000..dd84f32
+--- /dev/null
++++ b/docs/TESTERIF_FIELD_AUDIT_20261002.md
+@@ -0,0 +1,336 @@
++# Setup.TesterIF（golden TFTestIF）欄位稽核 20261002
++
++> census 129 C3-119 備註那一句（「TesterIF 28 個 PENDING 已過時（UNDECIDED）」）的查核。
++> 唯讀稽核：只讀檔、沒有建置、沒有執行（STEVEN-NB3 只編譯不執行）。St02-E 的 helper 寫，給 Steven／St02-M／St01 看。
++> 基準：worktree `D:\AI_TempFile\st02-s14`（`v906/st02-board-1002`＝origin/main `8b8209cc`＋一個現況板 commit）。
++> golden：`906_0625_Steven`＝`D:\HT9045\HT9011UC_Code_V3.33.906.0_20260625_Steven`（cp950）。本文 golden 行號一律是 906 的 `cTesterIF.cpp`（寫成 `G:行`）；
++> 移植的產生檔是從 **912** 轉的（`tools/editlist/TestIF_File_TesterIF.py:28`，RULINGS_20260925 第 37 條「一律照 V912」），所以 `.gen.inc` 註解裡的「golden cTesterIF.cpp:NNN」是 912 行號；兩版差異見 §8。
++> 移植檔路徑都相對 `HT9011UC_Cpp_V3.33.906.0/`；`N:行`＝`FileRW/TestIF_File_TesterIF.gen.inc` 的行號。
++
++---
++
++## 摘要（先看這裡）
++
++**結論一句話：C 路（St01 `8af13c07`）的讀檔與存檔跟 golden 逐行相同，88 個存設定的元件沒有錯鍵、錯區段、錯預設、錯型別；舊的 28 個 PENDING 全部是死的。真正的問題在頁面端的小鍵盤：22 個欄位打進去的值會被改掉。**
++
++### 數字
++
++| 項目 | 數量 | 說明 |
++|---|---|---|
++| golden 表單上存設定的元件（edit／combo／check／radio group） | **105** | DFM 110 個輸入類元件，扣掉 lstTTL（顯示）、btTesterTCPShow、spbSave、sbtExit、rbTemp（只拿焦點用） |
++| 其中 golden 有讀有寫（`<配方>\Tester.Data`） | **88** | 讀＝ReadTestIFFile G:562＋DoIniDataToForm G:979；寫＝SaveSetupFile G:336 |
++| 其中 golden 自己就不讀不寫 | **17** | SLT 分頁 15 個＋cb_NeedSendVSOT＋rgBaudRate（§4），移植也不讀不寫＝一致 |
++| C 路讀檔一致 | **88／88** | 區段、鍵、預設值、struct 欄位型別逐字相同（§3、§附錄） |
++| C 路存檔一致 | **88／88** | WriteIniData 的區段、鍵、格式（FormatFloat／Text／ItemIndex／Checked）逐字相同 |
++| 讀檔漏掉 | **0** | |
++| 存檔漏掉 | **0** | |
++| 頁面上沒有 | **0** | 110 個 DFM 元件的 id 全在 `web/page/Setup.TesterIF.html:56`；存檔必送（mustSend）88 個全在 |
++| 頁面端不一致（不是 C++ 讀寫） | **22 個欄位會被改值**＋4 項較小 | §6 P1～P8 |
++| 舊 PENDING（`web/page/ht9045_testerif_wire.js:101-130`） | **28：26 已由 C 路讀寫、2 條本來就寫錯；真缺口 0** | §5；而且這支 js **沒有任何頁面載入** |
++
++### 不一致清單（照嚴重度排）
++
++C++ 端「寫錯鍵／錯預設／錯型別」：**0 筆**。以下都在頁面端或旁路：
++
++1. **P1（高）小鍵盤範圍抄錯分支，6 個「最長測試時間」欄位**：edMaxTestTime、edInitialMaxTest 與兩者的 `_RT`／`_EQC`。網頁是 `INTEGER 60～9999`（`web/page/ht9045_wire_setuptesterif.js:100-102`、`:104-106`），那是 golden `edInitialMaxTestClick` 的 **CC_ASE_M 分支**（G:1382-1385）；一般客戶走 G:1399-1402＝`N_DOUBLE 2 位、0～15000`（`IniConfig.bVTESTFunction` 時 0～36000，G:1395-1398）。網頁小鍵盤按 OK 會夾限（`web/page/qwerty.js:68-71`）：打 10 或 12.5 都變 60、打 20000 變 9999、範圍內的小數也被捨成整數 —— **寫進 Tester.Data 的不是操作員打的值**。
++2. **P2（高）Initial Start Delay 三個欄位下限 30**：edtInitStartDelay（＋`_RT`／`_EQC`）網頁是 `DOUBLE 2、30～3000`（`ht9045_wire_setuptesterif.js:115,119,120`），那是 `CosFunction.bHiSiliconFunction && CC_ASE_KaohSiung` 分支（G:1412-1413）；golden 一般是 `N_DOUBLE 2、不檢查範圍`（G:1415）。打 0～29.99 會被改成 30。
++3. **P3（中，共用檔）小鍵盤把小數吃掉，13 個欄位**：golden 給 `N_DOUBLE, 0` 的欄位（edDummyTestTime、edStartDelayTime 與兩者 `_RT`／`_EQC`、edtAfterTestedDelay、edtInitWaitTime、edtTestingWaitTime、edtInitialDec1～4），網頁 `qwerty.js:71` 用 `toFixed(dp)`＝`toFixed(0)` 四捨五入成整數；golden 的 dp 只決定 ±鍵的級距（`myQwertyKeyBoard.cpp:379-418`），OK 後是 `AnsiString(CheckRange(d,min,max))` 不改小數（`myQwertyKeyBoard.cpp:290`）。Start Delay 打 0.5 秒會被四捨五入成整數秒。
++4. **P6（中低）遠端 SETMAXTEST／SETINITIALMAXTEST 沒更新頁面替身**：`Command.cpp:3691`、`:3718` 寫的是 facade `FTestIF`（`forms/fTesterIF.cpp`）的 TEdit，不是 C 路替身 `EL<TEdit>("TFTestIF","edMaxTestTime")`。頁面開著時收到指令、操作員再按存檔，會把舊值寫回去；golden 改的是同一個表單元件（golden `Command.cpp:12474`、`:12495`），存檔會帶新值。
++5. **P4（中，已知，不寫錯檔）RS232 那組在 golden 停用時網頁仍可點**：Ifor01 的探針（`docs/handoff/TO_STEVEN.md:347`，`tools/webprobe/s12c_page_probe.py` 3／3 FAIL）。伺服器存檔時照 ELEditable 丟掉，不會寫錯，但操作員會以為改到了。
++6. **P5（低）下拉不能自己打字**：golden 五個 TComboBox 都沒設 Style＝預設 csDropDown（可打字）；網頁是 `<select>`。實際有影響的只有 cbbBaudRate（golden 存 `->Text`，G:397，可以打 38400／57600；網頁只能選 6 個值，檔案本來就有的非清單值會照原樣帶回）。
++7. **P8（低）Exit 鈕少一個檢查**：golden sbtExitClick（G:1358-1366）看「畫面上選的」rgInterfaceType==0 就先 CheckTTLBoardBitMode；網頁關頁掛勾 `FileRW/TestIF_File_TesterIF.cpp:590-604` 只跑 FormClose 那段（看檔案值 TTL_MODE）。
++8. 已裁決的偏離（不算錯，列出來免得被當成缺口）：W6（GPIB 模式也能改 RS232 四個，Steven 20260927 W6＝A，`FileRW/TestIF_File_TesterIF.cpp:330-334`）、5B（RS232 多 5/6 Bits、1.5 Bits、Mark/Space 選項，`FileRW/TestIF_File_TesterIF.cpp:258-265`，註記仍是「暫照建議，待使用者確認」）、數字預檢與 DIO 檔遺失拒存（`FileRW/TestIF_File_TesterIF.cpp:33-37`、`:76-91`）。
++
++### PENDING 結論
++
++**全部死掉，真缺口 0。** 26 條現在由 C 路 `editlist.get／editlist.save tag=TestIF_File_TesterIF` 讀寫（key 與 golden 相同）；另外 2 條（rgBaudRate、cb_NeedSendVSOT）是當初抽錯，golden 本來就不存這兩個元件。舊檔 FIELD_MAP／PENDING 還漏了 AntiSignalCBox（`[DIO] Anti Signal`）與 cbRs232Type（`[RS-232C] Type`），C 路也都有。
++更根本的是：`ht9045_testerif_wire.js` **沒有任何頁面載入**（`Setup.TesterIF.html:118-128` 載的是 `ht9045_wire_testerif.js`、`ht9045_wire_setuptesterif.js`、`ht9045_testerif_c_wire.js`），只靠筆電的 `tools/websync/sync_web.py:173` OURS 清單留在部署裡。
++
++### 下一步
++
++- **St01（FileRW，認領行）**：TestIF_File_TesterIF.* 本身**不用改**。兩個「別的頁存檔後 golden 會重讀 TesterIF」的子集／閘，現在可以改呼叫現成的 `FileRW_TesterIF_ReadTestIFFile()`（`FileRW/TestIF_File_TesterIF.cpp:276-280`，檔頭 :20-21 已預留）：
++  1. `FileRW/IniConfig.gen.inc:7974-7977`（改 `tools/editlist/IniConfig.py` 的 replace）：golden `cConfiguration.cpp:7287`（912 `:7400`）`FTestIF->ReadTestIFFile()` 目前只記 ELTodo。
++  2. `FileRW/Temperature.gen.inc:4224`、`:6205`（改 `tools/editlist/Temperature.py`）：golden `uTemp_Set.cpp:3149`、`:5088` 是完整 ReadTestIFFile，移植只重讀 `[InitialMode]` 子集（census C2-057／C2-058）。
++- **St02（頁面／js）**：
++  1. P1＋P2：在手寫補件 `web/page/ht9045_testerif_c_wire.js`（St01 建、St02 Q41 改過）覆寫 9 個欄位的小鍵盤設定成 golden 一般分支（產生檔 `ht9045_wire_*.js` 不能手改）；要連 `IniConfig.bVTESTFunction`（不是客戶碼）一起照，就由 `FileRW/TestIF_File_TesterIF.cpp` ExtraJson（:217-239）多帶一個 `extra.kb`。CC_ASE_M／AMKOR_Korea／SCK／GIGAS／HiSilicon+ASE_KaohSiung 是客戶專屬，S25 只註記。
++  2. P3：`web/page/qwerty.js:68-71` 的 `toFixed(dp)` 改成照 golden（夾限後不改小數位）—— 共用檔，所有頁都受影響，先認領。
++  3. P4：`ht9045_testerif_c_wire.js:135-145`（applyEditable）／`:187-214`（W6）讓 golden 停用的 RS232 元件在網頁也停用（照 Ifor01 的探針重測）。
++  4. P6：`Command.cpp:3691`、`:3718`（St02 `329b6f18` 解的閘）同時更新 C 路替身（FileRW 只編進 wb_serve，比照 `FileRW/TestIF_File_TesterIF.cpp:292-293` 的掛勾做法）。
++  5. P5、P8 低優先，可等。
++- **筆電（jimmychiu）**：
++  1. 退役 `web/page/ht9045_testerif_wire.js`（產生器 `tools/pagewire/make_wire.py`，唯一 commit `55302732`），同時拿掉 `tools/websync/sync_web.py:173` 那一行；census 129 C3-119 備註裡「TesterIF 28」可以關。
++  2. 順手：`Setup.TesterIF.html:121` 與 `:125` 兩支產生檔內容幾乎一樣，後註冊的蓋掉前一支（`ht9045_wire_engine.js:2154-2155` `CFG = cfg`），留一支即可；產生器（`scratchpad/gen_wire.py`）抽小鍵盤時拿「處理函式裡第一個 ShowQwertyKey」，遇到客戶碼分支就抽錯（P1／P2 的來源），其他頁可能也有。
++- **只有 Steven 能答（一題）**：5B（RS232 加 golden 沒有的 5/6 Bits、1.5 Bits、Mark/Space）程式註記仍是「暫照建議，待使用者確認 decision #5」，要正式確認嗎？在哪看：`D:\AI_TempFile\st02-s14\HT9011UC_Cpp_V3.33.906.0\FileRW\TestIF_File_TesterIF.cpp:258-265`、`D:\AI_TempFile\st02-s14\web\page\Setup.TesterIF.html:56`（rgBitLength／rgStopBit／rgParity 後面的選項）。其餘都照 RULINGS_20261001 第 0 條「照 golden 翻」自己定。
++
++---
++
++## 1. golden 的讀寫路徑（906 `cTesterIF.cpp`）
++
++- 檔案：`DataPath + GetLastOpenFN() + "\\Tester.Data"`（讀 G:566-569，寫 G:1311-1316＋G:338-339）。RS232 模式另外同步 `D:\RS232Standard\System\Setup.ini`（CheckRs232StandardIni G:496-558）。
++- **開頁**：FormShow G:108 → InitcbDIOType G:117（列 `DIOCFGPath\*.ini`）→ ReadTestIFFile G:118 → DoIniDataToForm G:119（ReadTestIFFile 尾端 G:976 也呼叫一次）→ 顯示／權限（G:124-331）。
++- **讀檔器** ReadTestIFFile G:562-977：讀進 `TestIF_File`（cprod.h `SYSTEM_TEST_IF`）。**讀的時候也會寫**：Tester Type 超出範圍改 GPIB 並回寫（G:574-578）、缺 TypeName 時由 Type 反查回寫（G:797-827）、缺 BaudRate 時由舊鍵 Baud Rate 換算回寫（G:883-893）、RS232 模式同步 Setup.ini（G:945-948）。
++- **表單填值** DoIniDataToForm G:979-1124：`TestIF_File` → 元件。
++- **存檔** spbSaveClick G:1302-1356 → SaveSetupFile G:336-492（全部寫 Tester.Data）→ SECS SaveRecipe → ReadTestIFFile → Recipe Parameter Default（CosFunction.bRecipeParameterDefault，客戶 Greatek 用）→ BackupSetupFile → SetWorkParameter。
++- **關頁** FormClose G:1197-1217：ReadTestIFFile（丟掉沒存的改動）、oldLastiTestMode、TTL 收尾；呼叫端主畫面 sbTesterClick 尾段（golden `main.cpp:27425-27432`）。
++- **其他 golden 呼叫點**：開機／換配方 `main.cpp:8904`（ReadTestIFFile）、`:8962`（DoIniDataToForm）；設定頁存檔後 `cConfiguration.cpp:7287`；溫度頁 `uTemp_Set.cpp:3149`、`:5088`；整份另存 `cBuilder.cpp:517-563`、`csystem.cpp:22562-22563`。
++
++## 2. 移植的讀寫路徑（C 路）
++
++- 產生器 `tools/editlist/TestIF_File_TesterIF.py`（golden 912，METHODS :32-34，replace 清單 :95-197）→ `FileRW/TestIF_File_TesterIF.gen.inc`（替身 EL<T>("TFTestIF", 名稱)，名稱＝HTML id）。
++- 頁面登記 `FileRW/TestIF_File_TesterIF.cpp:241-248`：開頁＝TIF_FormShow（N:629），存檔＝SaveFlow（`:76-118`）→ TIF_spbSaveClick（N:1873）→ TIF_SaveSetupFile（N:869），重讀＝TIF_ReadTestIFFile（N:1107）→ TIF_DoIniDataToForm（N:1565）。
++- 存檔前重播 golden 畫面事件 BeforeApply（`:126-184`：rgInterfaceTypeClick、cbRs232TypeChange、cbDIOTypeChange、AntiSignalCBoxClick×2，W6）。
++- 網頁版多的兩道檢查（golden 沒有，已寫在檔頭 `:33-37`）：DIO 檔遺失拒存、33 個 ToDouble 欄位先試轉（全有或全無）。
++- 開機／換配方：`tools/wb_serve.cpp:4059`（Boot）、`:2995`（ReadTestIFFile）、`:3460`（DoIniDataToForm）。
++- 關頁：`FileRW/TestIF_File_TesterIF.cpp:590-604`（St01 視窗邊緣 API，Q41 (d)）。
++- 頁面：`web/page/Setup.TesterIF.html`；引擎 `ht9045_wire_engine.js:1066` 把這頁登記成 C 路（GOLDEN_BRIDGE），load＝gbLoad（`:1313-1314`）、save＝gbSave（`:1790-1791` → `:1264`）；補件 `ht9045_testerif_c_wire.js`。
++- `forms/fTesterIF.cpp` 的 TFTestIF 是另一份 facade，讀寫本體全部 `#if 0`（GATE F-1～F-17，`:236` 起），**不是**活的讀寫者。
++
++逐行比對結果（腳本見附錄）：
++
++| 函式 | golden 906 | 移植 | 差別 |
++|---|---|---|---|
++| ReadTestIFFile | G:562-977 | N:1107-1562 | 只有：TCP/IP 計時器 3 處改 ELTodo／空敘述（門面沒有 TTimer，census C2-085／086）、912 才有的 [AMR] 四鍵（沒有元件）、MyList 越界保護、AMD 判斷照 912、KYEC_LEE AOI 照 912、1Arm/2Arm 訊息照 912、ATKRecipeInfo 空指標保護 |
++| DoIniDataToForm | G:979-1124 | N:1565-1715 | 119／119 行相同（只有函式頭） |
++| SaveSetupFile | G:336-492 | N:869-1028 | 116 行相同，多一行 trace（N:871） |
++| spbSaveClick | G:1302-1356 | N:1873-1937 | A02 分支多 `return`（照 912）、Recipe Parameter Default 改 ELTodo（N:1906，census C2-056） |
++| FormShow | G:108-334 | N:629-866 | Caption／Left／Top／ActivePage 交給頁面；rgTime2 頁籤條件照 912 |
++| CheckRs232StandardIni | G:496-558 | N:1031-1104 | Bit/Stop/Parity 換算改 `W906_Rs232*Code`（5B，原有值對應不變） |
++
++ReadIniData／WriteIniData／CheckIniData 呼叫逐條比：golden 205 條、移植 206 條；只有 912 [AMR] 四條讀（N:1184-1187）多、RPDefault 三條（G:1439、:1468、:1499，Greatek 專用）少。struct 欄位型別 89 個全部與 golden `cprod.h` 相同。
++
++## 3. 逐元件對照表（golden 有讀寫的 88 個）
++
++欄位說明：
++- **golden 讀**：`R:`＝ReadTestIFFile 讀 ini 的行、`F:`＝DoIniDataToForm 填元件的行，括號是預設值，分號後是 `TestIF_File` 欄位與型別。
++- **golden 寫**：區段／鍵、SaveSetupFile 行、寫入格式。
++- **移植讀／寫**：`N:` 行號（R／F／W 同上）。
++- 檔案一律是 `<配方>\Tester.Data`。
++- **頁面**：`Setup.TesterIF.html:56` 的 id（全部存在），再加 golden FormShow 決定的顯示／可改條件（移植由後端照同一段 golden 算，頁面照套）。
++- **PENDING**：是否在舊 `ht9045_testerif_wire.js` 的 PENDING。
++
++| 元件 | golden 讀 | golden 寫 | 移植讀 | 移植寫 | 一致？ | 頁面 | 舊 PENDING？ |
++|---|---|---|---|---|---|---|---|
++| rgInterfaceType | R:572 F:981（預設 0；超出範圍改 1 並回寫 G:574-578）；iTestType int | [Mode] Tester Type W:341（int 索引） | R:1118 F:1568 | W:876 | 是 | id 在 :56；grpIFType 可改條件 G:130-142／:243-259／:316；SCC/SCK RMS G:205 | 是 |
++| cbDIOType | R:684,830 F:1073,1075,1077,1086（預設 0／""；缺 TypeName 時 G:797-827 反查回寫）；iDioMode int、sDioName AnsiString | [DIO] Type／[DIO] TypeName W:371,372（Type＝ItemIndex、TypeName＝Text） | R:1264,1413 F:1660,1662,1664,1673 | W:906,907 | 是 | id 在 :56；tsDio（只在 DIO 模式 G:1174-1183） | 是 |
++| AntiSignalCBox | R:834（預設 0）；畫面值＝FormShow G:125 的執行期 TestIF.bAntiSignal（不是 TestIF_File）；bAntiSignal bool | [DIO] Anti Signal W:373（bool 0/1） | R:1417；FormShow N:650 同 golden | W:908 | 是 | id 在 :56；tsDio；Visible=LastSet.bUseNewTTLBoard G:124 | 否（兩邊都沒有） |
++| cbASEJPMode | R:781 F:1070（預設 false）；bTTLUseASEJPMode bool | [InitialMode] bTTLUseASEJPMode W:482（bool 0/1） | R:1361 F:1657 | W:1017 | 是 | id 在 :56；tsDio | 是 |
++| cbGPIBType | R:835 F:1090（預設 0；ATK ART 時改用 Config 值 G:838-844）；iGpibMode int | [GP-IB] Type W:385（int 索引；ATK ART 條件 G:376-386 不寫） | R:1418 F:1677 | W:920 | 是 | id 在 :56；tsGpib（只在 GPIB 模式） | 是 |
++| edGPIBAddress | R:850 F:1091（預設 0）；iGpibAddress int | [GP-IB] Address W:390（原字串） | R:1433 F:1678 | W:925 | 是 | id 在 :56；tsGpib（只在 GPIB 模式） | 否（FIELD_MAP） |
++| cbSpiroxTesterLotEnd | R:771 F:1104（預設 false；非 bI39 固定 false G:770-773）；bSpiroxTesterLotEnd bool | [InitialMode] bSpiroxTesterLotEnd W:458（bool 0/1；非 bI39 時寫 false G:457-460） | R:1351 F:1691 | W:993 | 是 | id 在 :56；tsGpib；Visible=IniConfig.bI39SpiroxTesterLotEnd G:291-294 | 是 |
++| rg2DID_Format | R:872,876 F:1092（預設 1／int(bAMDFunction)）；i2DIDFormat int | [GP-IB] 2DIDFormat W:391（int 索引） | R:1446,1450 F:1679 | W:926 | 是（照 912；906 的預設條件是 CC_AMD_M，§8，S25） | id 在 :56；tsGpib（只在 GPIB 模式） | 是 |
++| cbAutoOnecycleHomStart | R:788 F:1118（預設 false；非 GIGAS 固定 false G:791-795）；bAutoOnecycleHomStart bool | [Time] bAutoOnecycleHomStart W:485（bool 0/1；只 CC_GIGAS G:483-487） | R:1368 F:1705 | W:1020 | 是 | id 在 :56；tsGpib；DFM 隱藏，只 CC_GIGAS 顯示 G:318-323（S25） | 是 |
++| edtAutoOnecycleHomStartTime | R:789 F:1119（預設 0）；iAutoOnecycleHomStartTime int | [Time] iAutoOnecycleHomStartTime W:486（原字串；只 CC_GIGAS G:483-487） | R:1369 F:1706 | W:1021 | 是 | id 在 :56；tsGpib；DFM 隱藏，只 CC_GIGAS 顯示 G:318-323（S25） | 否（FIELD_MAP） |
++| cbRs232Type | R:879 F:1094（預設 0）；iRs232Mode eRs232Mode | [RS-232C] Type W:394（int 索引） | R:1453 F:1681 | W:929 | 是 | id 在 :56；tsRs232（只在 RS232 模式） | 否（兩邊都沒有） |
++| cbForEgistec | R:904 F:1103（預設 false；非 bArm2ForFingerPrintTest 固定 false G:903-906）；bForEgisTecTest bool | [RS-232C] ForEgisTecTest W:404（bool 0/1；非 bArm2ForFingerPrintTest 時寫 false G:403-406） | R:1478 F:1690 | W:939 | 是 | id 在 :56；tsRs232；非 SOFT_SIMULTE 一律隱藏 G:187-191 | 是 |
++| rgParity | R:900（預設 0）F:1100；Rs232_Data.Parity int | [RS-232C] Parity W:400（int 索引） | R:1474 F:1687 | W:935 | 是（另有 5B 補選項＋W6，裁決偏離，§6 P7） | id 在 :56；tsRs232（只在 RS232 模式）；網頁 W6：GPIB 模式也可改 | 是 |
++| rgStopBit | R:899（預設 0）F:1099；Rs232_Data.Stop_Bit int | [RS-232C] Stop Bit W:399（int 索引） | R:1473 F:1686 | W:934 | 是（另有 5B 補選項＋W6，裁決偏離，§6 P7） | id 在 :56；tsRs232（只在 RS232 模式）；網頁 W6：GPIB 模式也可改 | 是 |
++| rgBitLength | R:898（預設 0）F:1098；Rs232_Data.Bit_Length int | [RS-232C] Bit Length W:398（int 索引） | R:1472 F:1685 | W:933 | 是（另有 5B 補選項＋W6，裁決偏離，§6 P7） | id 在 :56；tsRs232（只在 RS232 模式）；網頁 W6：GPIB 模式也可改 | 是 |
++| cbbBaudRate | R:883-897（缺 BaudRate 時由舊鍵 Baud Rate 索引 0/1/2→19200/9600/4800 換算並回寫）F:1097；Rs232_Data.Baud_Rate int | [RS-232C] BaudRate W:397（原字串＝Text） | R:1457-1471 F:1684 | W:932 | 是（W6 裁決偏離；golden 可打字，網頁不行 §6 P5） | id 在 :56；tsRs232（只在 RS232 模式）；網頁 W6：GPIB 模式也可改 | 是 |
++| edTCPIP_Address | R:778 F:1067（預設 "172.16.8.150"）；asTester_Address AnsiString | [Tester TCPIP] Address W:480（原字串） | R:1358 F:1654 | W:1015 | 是 | id 在 :56；tsTCPIP（只在 TCP/IP 模式） | 否（FIELD_MAP） |
++| edTCPIP_Port | R:779 F:1068（預設 6000）；iTester_Port int | [Tester TCPIP] Port W:481（原字串） | R:1359 F:1655 | W:1016 | 是 | id 在 :56；tsTCPIP（只在 TCP/IP 模式） | 否（FIELD_MAP） |
++| edtTestingWaitTime | R:679 F:1018（預設 3.0）；dTestingWaitTime double | [Time] Testing Wait Time W:366（"0.00"，ToDouble） | R:1259 F:1605 | W:901 | 讀寫是；小鍵盤吃掉小數 §6 P3 | id 在 :56；grpTestingStopTime Visible=bEnableTestingNeedStopAllMotor&&bI24 G:237 | 否（FIELD_MAP） |
++| edtInitWaitTime | R:678 F:1017（預設 1.0）；dInitWaitTime double | [Time] Init Wait Time W:365（"0.00"，ToDouble） | R:1258 F:1604 | W:900 | 讀寫是；小鍵盤吃掉小數 §6 P3 | id 在 :56；grpTestingStopTime Visible=bEnableTestingNeedStopAllMotor&&bI24 G:237 | 否（FIELD_MAP） |
++| edMaxBinCount | R:881 F:1095（預設 32）；iRs232MaxBinCount int | [RS-232C] Bin Count W:395（原字串） | R:1455 F:1682 | W:930 | 是 | id 在 :56；gbRs232BinCount 只在 cbRs232Type≠0 顯示 G:1294-1300 | 否（FIELD_MAP） |
++| cbEveryFirstDeviceUseInitialDelay | R:690 F:1021（預設 false）；bool | [InitialMode] bEveryFirstDeviceUseInitialDelay W:409（bool 0/1） | R:1270 F:1608 | W:944 | 是 | id 在 :56；gbInitialDelay（註 A） | 是 |
++| edtInitialDelay_1 | R:713 F:1028（預設 1.00；註 B）；iInitialDelay double | [InitialMode] iInitialDelay W:419（"0.00"，ToDouble） | R:1293 F:1615 | W:954 | 是 | id 在 :56；gbInitialDelay（註 A） | 否（FIELD_MAP） |
++| edtInitialDelay_1_RT | R:747 F:1054（預設 0.0）；dInitialDelay_1_RT double | [InitialMode] dInitialDelay_1_RT W:467（"0.00"，ToDouble） | R:1327 F:1641 | W:1002 | 是 | id 在 :56；gbInitialDelay（註 A）；Visible=IniConfig.bI13InitStartDelayHasFTandRT G:299-311 | 否（FIELD_MAP） |
++| cbWhenPressStopOverUseInitialDelay | R:735 F:1035（預設 false）；bool | [InitialMode] bWhenPressStopOverUseInitialDelay W:426（bool 0/1） | R:1315 F:1622 | W:961 | 是 | id 在 :56；gbInitialDelay（註 A） | 是 |
++| edtInitialDelay_6 | R:718 F:1037（預設 1.00；註 B）；iInitialDelay_6 double | [InitialMode] iInitialDelay_6 W:424（"0.00"，ToDouble） | R:1298 F:1624 | W:959 | 是 | id 在 :56；gbInitialDelay（註 A） | 否（FIELD_MAP） |
++| edOverSec | R:736 F:1036（預設 1.00）；iWhenPressStopOver double | [InitialMode] iWhenPressStopOver W:427（原字串） | R:1316 F:1623 | W:962 | 是 | id 在 :56；gbInitialDelay（註 A） | 否（FIELD_MAP） |
++| edtInitialDelay_6_RT | R:752 F:1059（預設 0.0）；double | [InitialMode] dInitialDelay_6_RT W:472（"0.00"，ToDouble） | R:1332 F:1646 | W:1007 | 是 | id 在 :56；gbInitialDelay（註 A）；Visible=bI13 G:299-311 | 否（FIELD_MAP） |
++| cbWhenHappenTestedTimeBelowUseInitialDelay | R:698 F:1024（預設 false）；bool | [InitialMode] bWhenHappenTestedTimeBelowUseInitialDelay W:417（bool 0/1） | R:1278 F:1611 | W:952 | 是 | id 在 :56；gbInitialDelay（註 A） | 是 |
++| edtInitialDelay_4 | R:716 F:1031（預設 1.00；註 B）；double | [InitialMode] iInitialDelay_4 W:422（"0.00"，ToDouble） | R:1296 F:1618 | W:957 | 是 | id 在 :56；gbInitialDelay（註 A） | 否（FIELD_MAP） |
++| edBelowSec | R:699 F:1027（預設 1.00）；iEveryFirstDeviceUseInitialDelay double | [InitialMode] iEveryFirstDeviceUseInitialDelay W:418（原字串） | R:1279 F:1614 | W:953 | 是 | id 在 :56；gbInitialDelay（註 A） | 否（FIELD_MAP） |
++| edtInitialDelay_4_RT | R:750 F:1057（預設 0.0）；double | [InitialMode] dInitialDelay_4_RT W:470（"0.00"，ToDouble） | R:1330 F:1644 | W:1005 | 是 | id 在 :56；gbInitialDelay（註 A）；Visible=bI13 G:299-311 | 否（FIELD_MAP） |
++| cbAfterOpenHeatDoorUseInitialDelay | R:741 F:1026（預設 false）；bool | [InitialMode] bAfterOpenHeatDoorUseInitialDelay W:435（bool 0/1） | R:1321 F:1613 | W:970 | 是 | id 在 :56；gbInitialDelay（註 A） | 是 |
++| edtInitialDelay_5 | R:717 F:1032（預設 1.00；註 B）；double | [InitialMode] iInitialDelay_5 W:423（"0.00"，ToDouble） | R:1297 F:1619 | W:958 | 是 | id 在 :56；gbInitialDelay（註 A） | 否（FIELD_MAP） |
++| edtInitialDelay_5_RT | R:751 F:1058（預設 0.0）；double | [InitialMode] dInitialDelay_5_RT W:471（"0.00"，ToDouble） | R:1331 F:1645 | W:1006 | 是 | id 在 :56；gbInitialDelay（註 A）；Visible=bI13 G:299-311 | 否（FIELD_MAP） |
++| edtInitialDelay_3 | R:715 F:1030（預設 1.00；註 B）；double | [InitialMode] iInitialDelay_3 W:421（"0.00"，ToDouble） | R:1295 F:1617 | W:956 | 是 | id 在 :56；gbInitialDelay（註 A） | 否（FIELD_MAP） |
++| cbAfterAutoCleanFunctionUseInitialDelay | R:738 F:1025（預設 false）；bool | [InitialMode] bAfterAutoCleanFunctionUseInitialDelay W:433（bool 0/1） | R:1318 F:1612 | W:968 | 是 | id 在 :56；gbInitialDelay（註 A） | 是 |
++| edtInitialDelay_3_RT | R:749 F:1056（預設 0.0）；double | [InitialMode] dInitialDelay_3_RT W:469（"0.00"，ToDouble） | R:1329 F:1643 | W:1004 | 是 | id 在 :56；gbInitialDelay（註 A）；Visible=bI13 G:299-311 | 否（FIELD_MAP） |
++| cbAfterShowAlarmMessageUseInitialDelay | R:697 F:1023（預設 false）；bool | [InitialMode] bAfterShowAlarmMessageUseInitialDelay W:416（bool 0/1） | R:1277 F:1610 | W:951 | 是 | id 在 :56；gbInitialDelay（註 A） | 是 |
++| edtInitialDelay_2 | R:714 F:1029（預設 1.00；註 B）；double | [InitialMode] iInitialDelay_2 W:420（"0.00"，ToDouble） | R:1294 F:1616 | W:955 | 是 | id 在 :56；gbInitialDelay（註 A） | 否（FIELD_MAP） |
++| edtInitialDelay_2_RT | R:748 F:1055（預設 0.0）；double | [InitialMode] dInitialDelay_2_RT W:468（"0.00"，ToDouble） | R:1328 F:1642 | W:1003 | 是 | id 在 :56；gbInitialDelay（註 A）；Visible=bI13 G:299-311 | 否（FIELD_MAP） |
++| cbOTDUnlockDelay | R:734 F:1046（預設 false）；bool | [InitialMode] bOTDUnlockDelay W:441（bool 0/1） | R:1314 F:1633 | W:976 | 是 | id 在 :56；gbInitialDelay（註 A） | 是 |
++| edtInitialDelay_9 | R:721 F:1047（預設 1.00；註 B）；double | [InitialMode] iInitialDelay_9 W:442（"0.00"，ToDouble） | R:1301 F:1634 | W:977 | 是 | id 在 :56；gbInitialDelay（註 A） | 否（FIELD_MAP） |
++| edtInitialDelay_9_RT | R:755 F:1062（預設 0.0）；double | [InitialMode] dInitialDelay_9_RT W:475（"0.00"，ToDouble） | R:1335 F:1649 | W:1010 | 是 | id 在 :56；gbInitialDelay（註 A）；Visible=bI13 G:299-311 | 否（FIELD_MAP） |
++| cbTestFinishToNextTestOver | R:739 F:1042（預設 false）；bool | [InitialMode] bTestFinishToNextTestOver W:437（bool 0/1） | R:1319 F:1629 | W:972 | 是 | id 在 :56；gbInitialDelay（註 A） | 是 |
++| iTestFinishToNextTestOver | R:740 F:1043（預設 1.00）；double | [InitialMode] iTestFinishToNextTestOver W:438（"0.00"，ToDouble） | R:1320 F:1630 | W:973 | 是 | id 在 :56；gbInitialDelay（註 A） | 否（FIELD_MAP） |
++| edtInitialDelay_8 | R:720 F:1044（預設 1.00；註 B）；double | [InitialMode] iInitialDelay_8 W:439（"0.00"，ToDouble） | R:1300 F:1631 | W:974 | 是 | id 在 :56；gbInitialDelay（註 A） | 否（FIELD_MAP） |
++| edtInitialDelay_8_RT | R:754 F:1061（預設 0.0）；double | [InitialMode] dInitialDelay_8_RT W:474（"0.00"，ToDouble） | R:1334 F:1648 | W:1009 | 是 | id 在 :56；gbInitialDelay（註 A）；Visible=bI13 G:299-311 | 否（FIELD_MAP） |
++| cbWhenNoFullSiteUseInitialDelay | R:737 F:1039（預設 false）；bool | [InitialMode] bWhenNoFullSiteUseInitialDelay W:429（bool 0/1） | R:1317 F:1626 | W:964 | 是 | id 在 :56；gbInitialDelay（註 A）；pnlNoFullsite 只 CC_TSMC_TAINAN G:281-284（S25） | 是 |
++| edtInitialDelay_7 | R:719 F:1040（預設 1.00；註 B）；double | [InitialMode] iInitialDelay_7 W:430（原字串） | R:1299 F:1627 | W:965 | 是 | id 在 :56；gbInitialDelay（註 A）；pnlNoFullsite 只 CC_TSMC_TAINAN G:281-284（S25） | 否（FIELD_MAP） |
++| edtInitialDelay_7_RT | R:753 F:1060（預設 0.0）；double | [InitialMode] dInitialDelay_7_RT W:473（"0.00"，ToDouble） | R:1333 F:1647 | W:1008 | 是 | id 在 :56；gbInitialDelay（註 A）；Visible=bI13 G:299-311 | 否（FIELD_MAP） |
++| cbUseOtherArmToTestAfterInitialDelay | R:693 F:1022（預設 false；非 bAfterInitialDelayUseOtherArm 固定 false G:692-695；單 ARM 再清 G:964-967）；bool | [InitialMode] bUseOtherArmToTestAfterInitialDelay W:412（bool 0/1；非 bAfterInitialDelayUseOtherArm 時寫 false G:411-414） | R:1273 F:1609 | W:947 | 是 | id 在 :56；gbInitialDelay（註 A）；Visible=CosFunction.bAfterInitialDelayUseOtherArm G:286-289 | 是 |
++| cbTestStartToNextTestStart | R:742 F:1048（預設 false）；bool | [InitialMode] bTestStartToNextTestStart W:443（bool 0/1） | R:1322 F:1635 | W:978 | 是 | id 在 :56；gbInitialDelay（註 A） | 是 |
++| iTeststartToNextTestStart | R:743 F:1049（預設 1.00）；dTeststartToNextTestStart double | [InitialMode] dTeststartToNextTestStart W:444（"0.00"，ToDouble） | R:1323 F:1636 | W:979 | 是 | id 在 :56；gbInitialDelay（註 A） | 否（FIELD_MAP） |
++| edtInitialDelay_10 | R:722 F:1050（預設 0.0；註 B）；dInitialDelay_10 double | [InitialMode] dInitialDelay_10 W:445（"0.00"，ToDouble） | R:1302 F:1637 | W:980 | 是 | id 在 :56；gbInitialDelay（註 A） | 否（FIELD_MAP） |
++| edtInitialDelay_10_RT | R:756 F:1063（預設 0.0）；double | [InitialMode] dInitialDelay_10_RT W:476（"0.00"，ToDouble） | R:1336 F:1650 | W:1011 | 是 | id 在 :56；gbInitialDelay（註 A）；Visible=bI13 G:299-311 | 否（FIELD_MAP） |
++| cbUseSocketHeating | R:974 F:1121（預設＝目前值）；bUseSocketHeating bool | [Time] bUseSocketHeating W:489（bool 0/1） | R:1558 F:1708 | W:1024 | 是 | id 在 :56；gbInitialDelay（註 A） | 是 |
++| edt_UseSocketHeating | R:975 F:1122（預設 0）；iUseSocketHeating int | [Time] iUseSocketHeating W:490（原字串） | R:1559 F:1709 | W:1025 | 是 | id 在 :56；gbInitialDelay（註 A） | 否（FIELD_MAP） |
++| edMaxTestTime | R:620（預設 0.0）＋R:629 FT 份 F:995／986（註 C）；iMaxTime、iFTMaxTime double | [Time] MAX Time W:344（"0.00"，ToDouble） | R:1178,1209 F:1582,1573 | W:879 | 讀寫是；小鍵盤範圍錯 §6 P1；遠端 SETMAXTEST §6 P6 | id 在 :56；rgTime1；PageControl1 權限 [91] G:227 | 否（FIELD_MAP） |
++| edInitialMaxTest | R:621（預設＝iMaxTime）＋R:630 F:994／985（註 C）；double | [Time] Initial MAX Time W:343（"0.00"，ToDouble） | R:1179,1210 F:1581,1572 | W:878 | 讀寫是；小鍵盤範圍錯 §6 P1；遠端 SETINITIALMAXTEST §6 P6 | id 在 :56；rgTime1；PageControl1 權限 [91] G:227 | 否（FIELD_MAP） |
++| edDummyTestTime | R:622（預設 0.0）＋R:631 F:996／987（註 C）；double | [Time] Dummy Time W:345（"0.00"，ToDouble） | R:1180,1211 F:1583,1574 | W:880 | 讀寫是；小鍵盤吃掉小數 §6 P3 | id 在 :56；rgTime1；PageControl1 權限 [91] G:227 | 否（FIELD_MAP） |
++| edStartDelayTime | R:623（預設 0.0）＋R:632 F:997／988（註 C）；double | [Time] Stary Delay W:346（"0.00"，ToDouble） | R:1181,1212 F:1584,1575 | W:881 | 讀寫是；小鍵盤吃掉小數 §6 P3 | id 在 :56；rgTime1；PageControl1 權限 [91] G:227 | 否（FIELD_MAP） |
++| edtInitStartDelay | R:625（預設 0.0；HiSilicon+ASE_KaohSiung 下限 30 G:725-732，S25）＋R:633 F:999／989（註 C）；double | [Time] Initial Stary Delay W:348（"0.00"，ToDouble） | R:1205,1213 F:1586,1576 | W:883 | 讀寫是；小鍵盤下限 30 錯 §6 P2 | id 在 :56；rgTime1；Visible=IniConfig.bInitialStartDelayCount G:230-235 | 否（FIELD_MAP） |
++| edtInitStartDelayCT | R:626（預設 0）＋R:634 F:1000／990（註 C）；int | [Time] Initial Stary Delay CT W:349（原字串） | R:1206,1214 F:1587,1577 | W:884 | 是 | id 在 :56；rgTime1；Visible=IniConfig.bInitialStartDelayCount G:230-235 | 否（FIELD_MAP） |
++| edtAfterTestedDelay | R:682 F:1033（預設 0.0）；dAfterTestedDelay double | [Time] After Tested Delay W:369（"0.00"，ToDouble） | R:1262 F:1620 | W:904 | 讀寫是；小鍵盤吃掉小數 §6 P3 | id 在 :56；rgTime1；Visible=CosFunction.bEnableAfterTestedDelay G:239-241 | 否（FIELD_MAP） |
++| iStartDelayCount | R:760 F:1106（預設 0）；iEnStartDelayCount int | [InitialMode] iEnStartDelayCount W:447（int 索引） | R:1340 F:1693 | W:982 | 是 | id 在 :56；rgTime2（註 D） | 是 |
++| edtInitialDec1 | R:761 F:1107（預設 0.00）；dInitialStartDelayDec[0] double | [InitialMode] dInitialStartDelayDec1 W:448（"0.00"，ToDouble） | R:1341 F:1694 | W:983 | 讀寫是；小鍵盤吃掉小數 §6 P3 | id 在 :56；rgTime2（註 D） | 否（FIELD_MAP） |
++| edtInitialDecCount1 | R:762 F:1108（預設 0）；iStartDelayCount[0] int | [InitialMode] iStartDelayCount1 W:449（原字串） | R:1342 F:1695 | W:984 | 是 | id 在 :56；rgTime2（註 D） | 否（FIELD_MAP） |
++| edtInitialDec2 | R:763 F:1109（預設 0.00）；dInitialStartDelayDec[1] double | [InitialMode] dInitialStartDelayDec2 W:450（"0.00"，ToDouble） | R:1343 F:1696 | W:985 | 讀寫是；小鍵盤吃掉小數 §6 P3 | id 在 :56；rgTime2（註 D） | 否（FIELD_MAP） |
++| edtInitialDecCount2 | R:764 F:1110（預設 0）；iStartDelayCount[1] int | [InitialMode] iStartDelayCount2 W:451（原字串） | R:1344 F:1697 | W:986 | 是 | id 在 :56；rgTime2（註 D） | 否（FIELD_MAP） |
++| edtInitialDec3 | R:765 F:1111（預設 0.00）；dInitialStartDelayDec[2] double | [InitialMode] dInitialStartDelayDec3 W:452（"0.00"，ToDouble） | R:1345 F:1698 | W:987 | 讀寫是；小鍵盤吃掉小數 §6 P3 | id 在 :56；rgTime2（註 D） | 否（FIELD_MAP） |
++| edtInitialDecCount3 | R:766 F:1112（預設 0）；iStartDelayCount[2] int | [InitialMode] iStartDelayCount3 W:453（原字串） | R:1346 F:1699 | W:988 | 是 | id 在 :56；rgTime2（註 D） | 否（FIELD_MAP） |
++| edtInitialDec4 | R:767 F:1113（預設 0.00）；dInitialStartDelayDec[3] double | [InitialMode] dInitialStartDelayDec4 W:454（"0.00"，ToDouble） | R:1347 F:1700 | W:989 | 讀寫是；小鍵盤吃掉小數 §6 P3 | id 在 :56；rgTime2（註 D） | 否（FIELD_MAP） |
++| edtInitialDecCount4 | R:768 F:1114（預設 0）；iStartDelayCount[3] int | [InitialMode] iStartDelayCount4 W:455（原字串） | R:1348 F:1701 | W:990 | 是 | id 在 :56；rgTime2（註 D） | 否（FIELD_MAP） |
++| cbPurgeAir | R:775 F:1116（預設 false）；bPurgeAirAfterContract bool | [InitialMode] bPurgeAir W:462（bool 0/1） | R:1355 F:1703 | W:997 | 是 | id 在 :56；rgPurgeAir 頁籤只 ASE_KaohSiung 或 bSPILFunction G:276-277，且 SW[SwPurgeAir] G:325-328 | 是 |
++| edPurgeAir | R:776 F:1117（預設 0）；iPurgeAirContract int | [InitialMode] iPurgeAir W:463（原字串） | R:1356 F:1704 | W:998 | 是 | id 在 :56；rgPurgeAir 頁籤只 ASE_KaohSiung 或 bSPILFunction G:276-277，且 SW[SwPurgeAir] G:325-328 | 否（FIELD_MAP） |
++| edMaxTestTime_RT | R:636（預設＝iMaxTime；註 E）F:1004；iRTMaxTime double | [Time] RT MAX Time W:352（原字串） | R:1216 F:1591 | W:887 | 讀寫是；小鍵盤範圍錯 §6 P1 | id 在 :56；tsRT 頁籤 Visible=IniConfig.bSPILFunction G:160-169 | 否（FIELD_MAP） |
++| edInitialMaxTest_RT | R:637（預設＝iInitialMaxTime；註 E）F:1003；double | [Time] RT Initial MAX Time W:351（原字串） | R:1217 F:1590 | W:886 | 讀寫是；小鍵盤範圍錯 §6 P1 | id 在 :56；tsRT（同上） | 否（FIELD_MAP） |
++| edDummyTestTime_RT | R:638（預設＝iDummyTime；註 E）F:1005；double | [Time] RT Dummy Time W:353（原字串） | R:1218 F:1592 | W:888 | 讀寫是；小鍵盤吃掉小數 §6 P3 | id 在 :56；tsRT（同上） | 否（FIELD_MAP） |
++| edStartDelayTime_RT | R:639（預設＝dStartDelayTime；註 E）F:1006；double | [Time] RT Stary Delay W:354（原字串） | R:1219 F:1593 | W:889 | 讀寫是；小鍵盤吃掉小數 §6 P3 | id 在 :56；tsRT（同上） | 否（FIELD_MAP） |
++| edtInitStartDelay_RT | R:640（預設＝dInitStartDelayTime；註 E）F:1007；double | [Time] RT Initial Stary Delay W:355（原字串） | R:1220 F:1594 | W:890 | 讀寫是；小鍵盤下限 30 錯 §6 P2 | id 在 :56；tsRT（同上） | 否（FIELD_MAP） |
++| edtInitStartDelayCT_RT | R:641（預設＝iInitStartDelayTimeCT；註 E）F:1008；int | [Time] RT Initial Stary Delay CT W:356（原字串） | R:1221 F:1595 | W:891 | 是 | id 在 :56；tsRT（同上） | 否（FIELD_MAP） |
++| edMaxTestTime_EQC | R:643（預設＝iMaxTime；註 E）F:1011；iEQCMaxTime double | [Time] EQC MAX Time W:359（原字串） | R:1223 F:1598 | W:894 | 讀寫是；小鍵盤範圍錯 §6 P1 | id 在 :56；tsEQC 頁籤 Visible=IniConfig.bSPILFunction G:160-169 | 否（FIELD_MAP） |
++| edInitialMaxTest_EQC | R:644（預設＝iInitialMaxTime；註 E）F:1010；double | [Time] EQC Initial MAX Time W:358（原字串） | R:1224 F:1597 | W:893 | 讀寫是；小鍵盤範圍錯 §6 P1 | id 在 :56；tsEQC（同上） | 否（FIELD_MAP） |
++| edDummyTestTime_EQC | R:645（預設＝iDummyTime；註 E）F:1012；double | [Time] EQC Dummy Time W:360（原字串） | R:1225 F:1599 | W:895 | 讀寫是；小鍵盤吃掉小數 §6 P3 | id 在 :56；tsEQC（同上） | 否（FIELD_MAP） |
++| edStartDelayTime_EQC | R:646（預設＝dStartDelayTime；註 E）F:1013；double | [Time] EQC Stary Delay W:361（原字串） | R:1226 F:1600 | W:896 | 讀寫是；小鍵盤吃掉小數 §6 P3 | id 在 :56；tsEQC（同上） | 否（FIELD_MAP） |
++| edtInitStartDelay_EQC | R:647（預設＝dInitStartDelayTime；註 E）F:1014；double | [Time] EQC Initial Stary Delay W:362（原字串） | R:1227 F:1601 | W:897 | 讀寫是；小鍵盤下限 30 錯 §6 P2 | id 在 :56；tsEQC（同上） | 否（FIELD_MAP） |
++| edtInitStartDelayCT_EQC | R:648（預設＝iInitStartDelayTimeCT；註 E）F:1015；int | [Time] EQC Initial Stary Delay CT W:363（原字串） | R:1228 F:1602 | W:898 | 是 | id 在 :56；tsEQC（同上） | 否（FIELD_MAP） |
++
++註：
++- **A** gbInitialDelay：Visible＝熱或恆溫模式或 CC_KYEC_LEE（G:195-197）；可改＝AccessLevel>=LevelSet.AccessLevel[123]（G:279）。Boost 功能開時 10 個勾選在讀檔後被清成 false（G:950-962），移植同（N:1531-1543）。
++- **B** SOFT_SIMULTE 編譯時 iInitialDelay～dInitialDelay_10 讀檔改成固定 5（G:701-712），移植同（N:1281-1291）。
++- **C** CosFunction.bFTRTDiffInitStartDelayTime 時，畫面顯示的是 FT 那一份（G:983-991），執行值依 RT／QC／FT 換（G:649-675）；移植同（N:1207-1256、N:1570-1578）。
++- **D** rgTime2 頁籤：906 是 CC_ASE_KaohSiung 或 CC_AMD_M（G:275），912／移植是 CC_ASE_KaohSiung 或 IniConfig.bAMDFunction（N:806）；客戶專屬（S25）。
++- **E** RT／EQC 這 12 個只在 CosFunction.bFTRTDiffInitStartDelayTime 時才從檔案讀（G:627），但存檔一律寫（G:351-363，而且寫原字串不是 FormatFloat）—— golden 本身的怪處，移植照搬（§9）。
++
++## 4. golden 表單上有、但 golden 自己不讀不寫的元件（17 個）＋按鈕
++
++| 元件 | DFM | golden 讀寫 | 頁面 | 結論 |
++|---|---|---|---|---|
++| cb_NeedSendVSOT（TCheckBox） | `cTesterIF.dfm:340`，Visible=False | 讀 G:902、寫 G:402、填 G:1101 全部註解掉 | id 在 :56，display:none | 一致（不讀不寫）；舊 PENDING 把它列成 `[RS-232C] NeedVSOT` 是錯的 |
++| rgBaudRate（TRadioGroup） | `:425`，Visible=False | 寫 G:396、填 G:1096 註解掉；G:885 只在缺 BaudRate 時讀舊鍵 "Baud Rate" 做換算，不碰元件 | id 在 :56，display:none | 一致；舊 PENDING 把它對到 `[RS-232C] BaudRate`（其實是 cbbBaudRate 的鍵）是錯的 |
++| SLT 分頁 tsSLTSetting 的 15 個：cbRunCheckProgramUse、edtRunCheckProgramName、edtRunCheckProgramNameErrCode、cbMaxBIOSWaitTimeAlm、cbMinTestTimeAlm、cbMaxTestTimeAlm、edMinTestTimeErrCode、edBIOSErrCode、edMaxTestTimeErrCode、edTestOKWaitTime、edSendNEXTDelay、edMaxBIOSWaitTime、edMinTestTime、edPowerSwitchDelay、edSLTMaxTestTime | `:490-936` | cTesterIF.cpp 沒有任何讀寫（只有小鍵盤 G:1535-1548）；`SendSLTState` 只在 `cTesterIF.h:306` 宣告、906 沒有本體；全樹沒有 `FTestIF->` 參照；`cTesterIF.h:244-248` 自己註「沒用到的edit」 | id 都在 :56，分頁看得到，改了不會存 | 一致（golden 是死畫面） |
++
++按鈕（只列會寫檔的）：
++- **spbSave**（spbSaveClick G:1302-1356）：寫 Tester.Data（SaveSetupFile）、`#ifdef ASE_KaohSiung` 另存 JOBFILE（G:1317-1319，移植 N:1894-1896 原樣保留）、SECS SaveRecipe、ReadTestIFFile（會寫，見 §1）、Recipe Parameter Default（Greatek，移植 ELTodo N:1906）、BackupSetupFile、SetWorkParameter。移植＝`FileRW/TestIF_File_TesterIF.cpp:76-118`＋N:1873-1937，存檔成功後再跑 FormClose＋sbTesterClick 尾段（`:540-569`，Q41 TI-4／TI-5，時機 S88 Q1 待決）。
++- **sbtExit**（sbtExitClick G:1358-1366）：TTL 時 CheckTTLBoardBitMode，Close → FormClose（G:1197-1217，ReadTestIFFile 會寫）。移植＝關頁掛勾 `FileRW/TestIF_File_TesterIF.cpp:590-604`（§6 P8 的小差別）。
++- **btTesterTCPShow**（G:1516-1519）：只開 fTesterTCP，不寫檔；移植 `ht9045_testerif_c_wire.js:176-182`。
++- DoSetRPDefault（G:1418-1442，寫 `D:\HT9045\IniData\RPDefault.ini`）不是這頁的按鈕（由 RPDefault 表單呼叫），Greatek 專用，未移植。
++
++## 5. 舊 PENDING 逐條（`web/page/ht9045_testerif_wire.js:101-130`）
++
++這支檔的 FIELD_MAP（`:32-98`，60 個純文字欄位）與 PENDING（28 個）是 `make_wire.py` 從 golden 機械抽的 B 路接線，**現在完全不用**：頁面不載入它（`Setup.TesterIF.html:118-128`），而且引擎對這頁一律走 C 路（`ht9045_wire_engine.js:1066`、`:1314`、`:1791`）。
++
++| 行 | PENDING 寫的 | golden 實際 | C 路有沒有 | 結論 |
++|---|---|---|---|---|
++| :102 | cbDIOType [DIO] Type select | [DIO] Type＋TypeName（G:371-372） | 有（N:906-907） | 死 |
++| :103 | rg2DID_Format [GP-IB] 2DIDFormat | 同（G:391） | 有（N:926） | 死 |
++| :104 | cbGPIBType [GP-IB] Type | 同（G:385） | 有（N:920） | 死 |
++| :105-118 | 14 個 InitialMode 勾選（cbAfterAutoClean…、cbAfterOpenHeatDoor…、cbAfterShowAlarm…、cbEveryFirstDevice…、cbOTDUnlockDelay、cbPurgeAir、cbSpiroxTesterLotEnd、cbASEJPMode、cbTestFinishToNextTestOver、cbTestStartToNextTestStart、cbUseOtherArm…、cbWhenHappenTestedTimeBelow…、cbWhenNoFullSite…、cbWhenPressStopOver…） | 鍵名都對（G:409-482） | 都有（N:944-1017） | 死 |
++| :119 | iStartDelayCount [InitialMode] iEnStartDelayCount | 同（G:447） | 有（N:982） | 死 |
++| :120 | rgInterfaceType [Mode] Tester Type | 同（G:341） | 有（N:876） | 死 |
++| :121 | rgBaudRate [RS-232C] BaudRate | **錯**：golden 不存 rgBaudRate（§4） | 不需要 | 死（抽錯） |
++| :122 | cbbBaudRate [RS-232C] BaudRate | 同（G:397，存 Text） | 有（N:932） | 死 |
++| :123 | rgBitLength [RS-232C] Bit Length | 同（G:398） | 有（N:933） | 死 |
++| :124 | cbForEgistec [RS-232C] ForEgisTecTest | 同（G:403-406） | 有（N:938-941） | 死 |
++| :125 | cb_NeedSendVSOT [RS-232C] NeedVSOT | **錯**：golden 讀寫都註解掉（§4） | 不需要 | 死（抽錯） |
++| :126 | rgParity [RS-232C] Parity | 同（G:400） | 有（N:935） | 死 |
++| :127 | rgStopBit [RS-232C] Stop Bit | 同（G:399） | 有（N:934） | 死 |
++| :128 | cbAutoOnecycleHomStart [Time] bAutoOnecycleHomStart | 同（G:485，只 GIGAS） | 有（N:1020） | 死 |
++| :129 | cbUseSocketHeating [Time] bUseSocketHeating | 同（G:489） | 有（N:1024） | 死 |
++
++舊檔兩邊都沒列、C 路有的：AntiSignalCBox（G:373／N:908）、cbRs232Type（G:394／N:929）。
++census C3-228（AntiSignalCBoxClick「沒接」）也可以關：存檔前 BeforeApply 照 golden 重播（`FileRW/TestIF_File_TesterIF.cpp:173-182`），cbASEJPMode 照 DFM 綁同一支。
++
++## 6. 頁面端的問題（C++ 讀寫以外）
++
++頁面 `Setup.TesterIF.html` 載入順序（`:118-128`）：qwerty.js → recipe_client → wire_engine → `ht9045_wire_testerif.js`（:121）→ `ht9045_wire_setuptesterif.js`（:125，後註冊者生效）→ `ht9045_testerif_c_wire.js`（:128）。值與可見／可改由後端 golden FormShow 給（gbApply），**小鍵盤設定（kb）則來自產生的 `ht9045_wire_*.js`**，而且機台上小鍵盤是唯一輸入方式（`ht9045_wire_engine.js:2027-2047` 設 readonly）。
++
++**P1 最長測試時間 6 欄（edMaxTestTime、edInitialMaxTest，＋_RT、_EQC）**
++- golden：OnClick＝edInitialMaxTestClick（`cTesterIF.dfm:2348-2366`、`:3100-3118`、`:3380-3398`），G:1380-1403：CC_ASE_M `N_INTEGER 60～9999`（:1384）；CC_AMKOR_Korea／CC_SCK `N_INTEGER` 不限（:1389）；CC_GIGAS `N_DOUBLE 2、0～50000`（:1393）；IniConfig.bVTESTFunction `N_DOUBLE 2、0～36000`（:1397）；其他 `N_DOUBLE 2、0～15000`（:1401）。
++- 網頁：`['INTEGER', 0, true, 60, 9999]`（`ht9045_wire_setuptesterif.js:100-102`、`:104-106`；`ht9045_wire_testerif.js:97-99`、`:101-103` 同）＝抄到 CC_ASE_M 那支。
++- 後果：`qwerty.js:68-71` OK 時夾限＋整數化 → 寫入值≠輸入值。
++- 修法：一般分支 `['DOUBLE', 2, true, 0, 15000]`；bVTESTFunction 要後端帶旗標（ExtraJson）。四個客戶分支 S25 只註記。
++
++**P2 Initial Start Delay 3 欄（edtInitStartDelay，＋_RT、_EQC）**
++- golden：OnClick＝edtInitStartDelayClick，G:1410-1416：HiSilicon 且 CC_ASE_KaohSiung `30～3000`（:1413），其他 `N_DOUBLE 2、不檢查`（:1415）。
++- 網頁：`['DOUBLE', 2, true, 30.0, 3000.0]`（`ht9045_wire_setuptesterif.js:115`、`:119`、`:120`）。
++- 修法：`['DOUBLE', 2, false, 0, 0]`（客戶分支 S25 註記）。
++
++**P3 N_DOUBLE、dp＝0 的 13 欄（edMaxTestTimeMouseDown G:1185-1189：`N_DOUBLE, 0, true, 0.0, 5000.0`）**
++- 欄位：edDummyTestTime、edDummyTestTime_RT、edDummyTestTime_EQC、edStartDelayTime、edStartDelayTime_RT、edStartDelayTime_EQC、edtAfterTestedDelay、edtInitWaitTime、edtTestingWaitTime、edtInitialDec1～4。網頁 kb 照抄 `['DOUBLE', 0, true, 0.0, 5000.0]`（對），問題在 `qwerty.js:71` `toFixed(opt.dp || 0)`。
++- golden：dp 只設定 ±鍵是 ±10／±1／±0.1…（`myQwertyKeyBoard.cpp:368-418`），OK 後 `AnsiString(CheckRange(d, min, max))`（`:290`）不動小數。
++- 修法（共用檔，影響所有頁）：夾限後照 golden 輸出數字字串，不用 dp 去 toFixed。
++
++**P4 RS232 那組該停用沒停用（已知）**：`docs/handoff/TO_STEVEN.md:347`（Ifor01 → Steven，20261001 11:2x）：golden 依條件停用 tsRs232／grpIFType、後端也回 not editable，但頁面 8 個元件還能點；存檔時伺服器丟值（ELEditable），不寫錯檔。相關碼：`ht9045_testerif_c_wire.js:135-145`（applyEditable）、`:187-214`（W6 的 w6Rs232InGpib／w6ApplyEditable）。本稽核沒有重跑探針。
++
++**P5 下拉不能打字**：DFM 五個 TComboBox 都沒有 Style（`cTesterIF.dfm:85`、`:181`、`:318`、`:459`、`:2776`）＝csDropDown；頁面是 `<select>`。只有 cbbBaudRate 有實質影響（存 Text）；引擎讀到清單外的值會補一個選項原樣帶回（`ht9045_wire_engine.js:1155-1157`），所以不會改壞檔案，只是新的非清單值打不進去。
++
++**P6 遠端設定最長時間沒更新頁面**：`Command.cpp:3675-3696`（SetMaxTest）、`:3707-3723`（SetMaxInitialTest）寫 `TestIF_File`、Tester.Data，以及 `FTestIF->edMaxTestTime->Text`／`->edInitialMaxTest->Text`——這個 FTestIF 是 `forms/fTesterIF.cpp:52` 的 facade，它的兩個 TEdit 是自己 `new` 的（`forms/fTesterIF.h:428-429`），不是頁面用的 C 路替身。golden（`Command.cpp:12474`、`:12495`）改的是表單自己的 edit。頁面開著時：畫面舊值 → 存檔 → 舊值蓋回去。另外 `Automation/auto9045.cpp:1285`、`:1297`、`:1310`、`:1322` 也遠端寫同幾個鍵，但 golden 那邊本來就不更新表單，移植一致。
++
++**P7 已裁決的偏離**（列給審查參考，不用修）：W6（`FileRW/TestIF_File_TesterIF.cpp:330-388`、`ht9045_testerif_c_wire.js:184-214`）；5B 新選項（`FileRW/TestIF_File_TesterIF.cpp:258-265`、`Setup.TesterIF.html:56`、`TesterComm/Rs232SetupCodes.h`）；RS232 不合法組合拒存（`:92-106`）；數字預檢、DIO 遺失拒存（`:61-91`）。
++
++**P8 Exit 少一個檢查**：golden sbtExitClick（G:1358-1366）在畫面選 DIO（rgInterfaceType==0，可能還沒存）時先 CheckTTLBoardBitMode；移植關頁只跑 FormClose 那段（檢查檔案值）。census C3-260 已列 sbtExitClick。
++
++## 7. 其他會讀寫同一批鍵的地方
++
++| 位置 | 讀／寫 | golden 對應 | 狀態 |
++|---|---|---|---|
++| `FileRW/Temperature.gen.inc:6146-6186` | 寫 Tester.Data [InitialMode] 一部分（TfTemp_Set 自己那份元件） | `uTemp_Set.cpp:5029-5069` | 一致（golden 也是兩個寫者） |
++| `FileRW/Temperature.gen.inc:89-146`、`:4224`、`:6205` | 存檔後只重讀 [InitialMode] 子集 | `uTemp_Set.cpp:3149`、`:5088` 完整 ReadTestIFFile | 子集（census C2-057／058）→ St01 可改呼叫 FileRW_TesterIF_ReadTestIFFile |
++| `FileRW/IniConfig.gen.inc:7974-7977` | 設定頁存檔後應重讀，現為 ELTodo | `cConfiguration.cpp:7287` | 閘 → St01 同上 |
++| `FileRW/TTLCfg.cpp:181`、`:236` | 讀 [DIO] TypeName | golden G:797／:830 | 一致（[DIO] 子集，開機已改用完整版 `tools/wb_serve.cpp:2995`） |
++| `Command.cpp:3693`、`:3720` | 寫 [Time] MAX Time／Initial MAX Time | `Command.cpp:12475`、`:12496` | 寫檔一致；畫面替身沒更新（§6 P6） |
++| `Automation/auto9045.cpp:1285-1322` | 寫 [Time] 四鍵 | golden `Automation/auto9045.cpp` | 一致 |
++| `TesterComm/Handler/HandlerGpibAux.cpp:150-154` | GPIB 模式配方第一次由 Setup.ini 種 [RS-232C] BaudRate／Bit Length／Stop Bit／Parity，另寫標記鍵 `W906_SeededFromSetupIni`（`HandlerGpibAux.h:27`，golden 沒有的鍵）；之後叫 `FileRW_TesterIF_DoIniDataToForm` 刷新替身（`FileRW/TestIF_File_TesterIF.cpp:292-293`） | 無（P6 裁決 2A／Q2 (a)） | 裁決過的移植專屬寫者 |
++| `csystem.cpp:27297-27298`（GATE H3-6）、`forms/fBuilder.cpp:859-905`（GATE B-9）、`ProductionInfo/uPAT_Function.cpp:2063-2073`（GATE G12） | 整份另存時 DoIniDataToForm＋SaveSetupFile | `csystem.cpp:22562-22563`、`cBuilder.cpp:517-563` | 全部 `#if 0`；之後誰解閘，要對 C 路替身提供一個公開的 SaveSetupFile 入口（現在 TIF_SaveSetupFile 是 static） |
++| `forms/fTesterIF.cpp` | 整份 golden 讀寫本體 | cTesterIF.cpp | 全部 `#if 0`（GATE F-1～F-17），不是活的 |
++
++## 8. 906 與 912 的差異（產生器用 912）
++
++`cTesterIF.h`、`cTesterIF.dfm` 906／912 逐位元相同；`cTesterIF.cpp` 只差 81 行 diff：
++1. rgTime2 頁籤條件 CC_AMD_M → IniConfig.bAMDFunction（906 G:275／912 :276）——客戶專屬（S25）。
++2. 「AMD Function」與 2DIDFormat 的預設條件 CC_AMD_M → IniConfig.bAMDFunction（906 G:861、G:870／912 :875、:884）——rg2DID_Format 的**預設值**在「不是 CC_AMD_M 但 bAMDFunction 開著」的機台上兩版不同；移植照 912（第 37 條）。
++3. 912 多讀 [AMR] 四鍵（912 :626-646），表單沒有對應元件（Lot 頁用）；移植照 912（RULINGS_20260926 第 10 條補了 cprod.h 欄位）。
++4. 912 iTestBinCount 多 KYEC_LEE AOI（:937）、bD58 時多送 1Arm／2Arm 訊息（:956-959）。
++5. 912 spbSaveClick 在 A02 權限不足時 Close 後 `return`（:1327）；906 會繼續存檔。移植照 912（不寫）。
++
++## 9. golden 本身的怪處（照搬，不算移植錯）
++
++- RT／EQC 12 欄只有 bFTRTDiffInitStartDelayTime 時才讀，但每次存檔都寫（註 E）：bSPILFunction 開、bFTRTDiff… 關的機台，存一次就會把 RT／EQC 鍵寫成 struct 現值（通常 0.00）。
++- ReadTestIFFile 名字是讀，實際會寫 Tester.Data 三處與 Setup.ini（§1）；開頁、關頁、存檔後都會跑。
++- AntiSignalCBox 顯示的是執行期 TestIF.bAntiSignal，不是檔案值（G:125）。
++- edt_UseSocketHeating 用 N_DOUBLE 小鍵盤（edtInitialDelay_1Click），存原字串，讀回是 int（G:975）。
++- SLT 分頁 15 個元件不讀不寫（§4）。
++
++## 10. 檔案擁有者
++
++`git log --format='%h %an %s' -- <file>`（作者欄都是 "Steven" 的，用 commit 標題判斷是 St01 還是 St02）：
++
++| 檔案 | 最近 commit | 擁有者 |
++|---|---|---|
++| `FileRW/TestIF_File_TesterIF.cpp` | `64738609`、`f88b9ffd`、`102ed625`、`38971aab`、`e6e90401`（St02-E helper，Q41／ELA），`7aa13ca3`（St02 P6），建立 `8af13c07`（St01） | St01 建立；20260926 起 St01 同意 St02 直接改（`docs/handoff/FROM_STEVEN.md:151`） |
++| `FileRW/TestIF_File_TesterIF.gen.inc`、`tools/editlist/TestIF_File_TesterIF.py` | `29554f87`（合併）、`7aa13ca3`（St02 P6）、`3e0ebb92`（產生器改 912）、`551c7398`（jimmychiu，第 10 條 [AMR]）、`8af13c07`（St01） | 產生檔；改 .py 要一起重產並 commit（`docs/handoff/CHAT_ST01.md:21`） |
++| `web/page/Setup.TesterIF.html` | `5d87abcd`（NOOVERLAP-C，作者 HT9045 Machine，jimmychiu commit）、`e6e90401`（St02 W6 選項）、`8af13c07`（St01）、`a016aa01`（Steven 0923 匯入） | 共用 |
++| `web/page/ht9045_testerif_c_wire.js` | `e6e90401`（St02 Q41）、`8af13c07`（St01 建立，手寫） | St01 建立，St02 改過 |
++| `web/page/ht9045_testerif_wire.js` | `55302732`（jimmychiu，0923 web 進版控的三方合併） | **筆電合併的產生檔**：檔頭 `:3`「機器產生（scratchpad/make_wire.py）」，產生器 `tools/pagewire/make_wire.py`（jimmychiu `59444a0c`／`119a51d0`），部署清單 `tools/websync/sync_web.py:173`；沒有頁面載入 |
++| `web/page/ht9045_wire_testerif.js`、`ht9045_wire_setuptesterif.js` | `a016aa01`（Steven 0923 匯入） | 產生檔（檔頭「這個檔是產生的；標記由 gen_wire.py 的樣板寫入」，`scratchpad/gen_wire.py`） |
++| `forms/fTesterIF.cpp`／`.h` | `18a49487`、`b51f6ab5`（jimmychiu，0828 FW3-TIF1） | 筆電；全部閘住 |
++| `web/page/qwerty.js` | `a016aa01`（Steven 0923 匯入，之後沒人改） | 共用，改之前先認領 |
++
++## 附錄：方法與重跑
++
++腳本都在 `C:\Users\steven\AppData\Local\Temp\claude\d---github\c8311755-ee3b-4c2b-9f5f-bc5682ac9613\scratchpad\tif\`，用 `D:\HT9045\.venv\Scripts\python.exe` 跑：
++- `dec.py`／`dec912.py`：golden cp950 轉 UTF-8、906 對 912 的 diff。
++- `dfm_scan.py`：DFM 110 個輸入類元件與事件、Visible／Enabled。
++- `cmp_calls.py`：ReadIniData／WriteIniData／CheckIniData 逐條比（替身寫法正規化後）。
++- `cmp_body.py`：ReadTestIFFile／DoIniDataToForm／SaveSetupFile／spbSaveClick／FormShow／CheckRs232StandardIni 逐行比。
++- `fieldtypes.py`：`SYSTEM_TEST_IF` 欄位型別 golden 對移植。
++- `rows.py`／`mdrows.py`／`finalize.py`：§3 的行號。
++- `presence.py`、`html_scan.py`：頁面 id、mustSend、舊 FIELD_MAP／PENDING 對照。
++- `keyscan.py`、`goldscan.py`、`ftestif_refs.py`、`gatecheck.py`：同一批鍵的其他讀寫者與 `#if 0` 判斷。
++
++限制：純靜態。P4 引用 Ifor01 的探針結果，本次沒重跑；qwerty／kb 的行為是讀碼推論，沒有在瀏覽器實測。
+diff --git a/mykitsuck.cpp b/mykitsuck.cpp
+index 52fcc68..5999fd7 100644
+--- a/mykitsuck.cpp
++++ b/mykitsuck.cpp
+@@ -6,7 +6,7 @@
+ //  Translator: AI(W906-PT-W3) 20260807
+ //  Translation wave: W906-PT-W3, group "kitsuck".
+ //
+-//  See mykitsuck.h's banner FIRST -- it explains this file's relationship to
++//  See mykitsuck.h's banner FIRST -- it explains this file's relationship to   [AI(W906-B30-KITSUCK) 20261002: STALE since 0924 W3-8 A4-6 (8ff6c754) -- this pair IS the linked TMySucker / TMyKitSuck now (CMakeLists.txt:2010 `aHotPlateSubstrate.cpp  mykitsuck.cpp`); aHotPlateSubstrate.cpp:79-929's mirror is in #if 0 (NB2 R128). The banner text is history.]
+ //  the already-wired-in aHotPlateSubstrate.h/.cpp TMyKitSuck/TMySucker
+ //  substrate (same class/global names, a DIFFERENT, PARALLEL, not-yet-linked
+ //  translation unit; NOT added to CMakeLists.txt, per HARD RULE 7).
+diff --git a/mykitsuck.h b/mykitsuck.h
+index f2a125b..596dbaf 100644
+--- a/mykitsuck.h
++++ b/mykitsuck.h
+@@ -7,7 +7,7 @@
+ //  Translation wave: W906-PT-W3, group "kitsuck".
+ //
+ //  ============================================================================
+-//  RELATIONSHIP TO aHotPlateSubstrate.h's TMyKitSuck/TMySucker -- READ FIRST
++//  RELATIONSHIP TO aHotPlateSubstrate.h's TMyKitSuck/TMySucker -- READ FIRST   [AI(W906-B30-KITSUCK) 20261002: STALE since 0924 W3-8 A4-6 (8ff6c754) -- this pair IS the linked TMySucker / TMyKitSuck now (CMakeLists.txt:2010 `aHotPlateSubstrate.cpp  mykitsuck.cpp`); aHotPlateSubstrate.cpp:79-929's mirror is in #if 0 (NB2 R128). The banner text is history.]
+ //  ============================================================================
+ //  This tree ALREADY has a class named TMyKitSuck (and TMySucker) wired into
+ //  the live build: aHotPlateSubstrate.h/.cpp (W6.2, 20260626-onward), grown
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index b45802b..9e5fdaa 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -6245,7 +6245,7 @@ set_tests_properties(St02_Timer3 PROPERTIES TIMEOUT 60)
+ 
+ # --- test_g023_os_report: AI(W906-G023) 20261001 (St02-E) -- todo G-023 / ST02-C1: golden TfTesterTCP's Open / Short report
+ #   trio (golden 906_0625_Steven Interface/TesterTCP.cpp:699-1056) as Interface/TesterTCP_OSReport.cpp, and its two callers
+-#   (aoutarm9045.cpp:4744; Automation/SCK_ART_Remainder.cpp:243 gate #6 <- W906_SckArt_SaveTestSummary).  CONTAINED: refuses
++#   (aoutarm9045.cpp:4757; Automation/SCK_ART_Remainder.cpp:243 gate #6 <- W906_SckArt_SaveTestSummary).  CONTAINED: refuses
+ #   (exit 2) unless W906_HT9045LOG_ROOT and the four log roots are this directory's machine_log_scratch (_ht9045_env_extra, given
+ #   to every test by the deferred _w906_env_all_tests); writes only under <machine_log_scratch>/G023_OSReport_<tick> (as9045LogPath,
+ #   sJamRatePath, the B05 share, asSummaryPath, the N09 folder all redirected there; the SIM UNC case is a string check, no network);
+@@ -6409,3 +6409,15 @@ if(W906_NODE_EXECUTABLE)
+         "${CMAKE_SOURCE_DIR}/tools/webprobe/d026_note_auth_selftest.cjs" "${CMAKE_SOURCE_DIR}/../web/page")
+     set_tests_properties(D026_NoteAuthPage PROPERTIES TIMEOUT 60)
+ endif()
++
++# AI(W906-TIF-KB) 20261002 (St02-E) -- TIF_KbGolden (node, offline): Setup.TesterIF's keyboard limits for the six
++#   max-test-time fields and the three Initial Start Delay fields = golden 906_0625_Steven cTesterIF.cpp's generic branch
++#   (:1401 DOUBLE 2, 0..15000; :1415 DOUBLE 2, no range), set by web/page/ht9045_testerif_c_wire.js block (8) over the
++#   generated ht9045_wire_setuptesterif.js (docs/TESTERIF_FIELD_AUDIT_20261002.md P1 / P2).  Fake window / document, the
++#   real wire data and c_wire files; Setup.TesterIF.html read only.  CONTROL: W906_TIF_C_WIRE pointing at the file before
++#   block (8) must be red.
++if(W906_NODE_EXECUTABLE)
++    add_test(NAME TIF_KbGolden COMMAND "${W906_NODE_EXECUTABLE}"
++        "${CMAKE_SOURCE_DIR}/tools/webprobe/tif_kb_selftest.cjs" "${CMAKE_SOURCE_DIR}/../web/page")
++    set_tests_properties(TIF_KbGolden PROPERTIES TIMEOUT 60)
++endif()
+diff --git a/tests/test_g023_os_report.cpp b/tests/test_g023_os_report.cpp
+index 26f84d4..551c6e6 100644
+--- a/tests/test_g023_os_report.cpp
++++ b/tests/test_g023_os_report.cpp
+@@ -2,7 +2,7 @@
+ //  tests/test_g023_os_report.cpp -- todo G-023 / work card ST02-C1: golden TfTesterTCP's Open / Short report trio
+ //  (golden 906_0625_Steven Interface/TesterTCP.cpp:699-739 PlaceOSTestResultToTray, :741-962 ProcessOSPrint,
+ //  :964-1056 ProcessOSTrayData; V912 identical) as the free functions in Interface/TesterTCP_OSReport.cpp, and their two
+-//  callers (aoutarm9045.cpp:4744, Automation/SCK_ART_Remainder.cpp:243 gate #6).  AI(W906-G023) 20261001 (St02-E).
++//  callers (aoutarm9045.cpp:4757, Automation/SCK_ART_Remainder.cpp:243 gate #6).  AI(W906-G023) 20261001 (St02-E).
+ //  Suite: G023_OSReport.  Claim doc: ST02_G023_CLAIMS_20261001.md section 6.1.
+ //
+ //  0. CONTAINMENT FIRST (the b12ab375 rule): refuses (exit 2) before any Handler code unless W906_HT9045LOG_ROOT and the four
+@@ -37,6 +37,12 @@
+ //     NOT driven); (b) in the source, comments stripped, anchored by text: the code right after `LotSummary.ClearAllData();`
+ //     is that `if` and that skip call, then the function's closing brace.
+ // 11. Source pins: the two callers are live (not under #if 0) and call the new functions.
++// 12. AI(W906-U1) 20261002 (St02-E): SaveSummaryTrayFeed's BY SITE rows (G-023 group C, SCK_ART_Remainder.cpp:2657-2659;
++//     golden SCK_ART.cpp:3253-3255) -- the summary folder (W906_SUMMARYLOT_ROOT) points into the private folder; per-site
++//     counts seeded in ArmDataLot (the function's real TastCategory.UpdataCount(false) rebuilds them from there) come out as
++//     the numbers in golden's " %-20s" columns, then (U4) a disabled site and a site with no count print golden's defaults
++//     "0" / "0(0.00%)".  On a mismatch the BY SITE lines as written are printed.  N10 off, bLotStart false: nothing else
++//     is written.
+ //  Every global it changes is saved and restored; the private folder is removed on a green run.
+ // =============================================================================
+ #include "Interface/TesterTCP_OSReport.h"
+@@ -59,6 +65,14 @@
+ #include <windows.h>
+ #include <cstdio>
+ #include <cstdlib>
++// AI(W906-U1) 20261002: _putenv -- MinGW.org declares no POSIX / _ names in strict mode (CXX_EXTENSIONS OFF); the tree's
++//   pattern, tests/test_agv_e84.cpp:158-163.  A CRT call on purpose: the code under test reads the CRT copy with getenv.
++#if defined(__MINGW32__) && !defined(__MINGW64_VERSION_MAJOR)
++extern "C" int _putenv(const char*);
++#define HT9045_TEST_PUTENV _putenv
++#else
++#define HT9045_TEST_PUTENV putenv
++#endif
+ #include <cstdarg>
+ #include <cstring>
+ #include <string>
+@@ -284,7 +298,8 @@ int main()
+         "D:\\HT9045_Log\\OS_TestReport\\Auto3_TestReport.TXT", "D:\\HT9045_Log\\OS_TestReport\\Fix1_TestReport.TXT",
+         "D:\\HT9045_Log\\OSTestResult\\Device000005_01.TXT", "D:\\HT9045_Log\\OSTestResult\\Device000006_01.TXT",
+         "D:\\HT9045_Log\\OSTestResult\\Device000007_01.TXT", "D:\\HT9045_Log\\OSTestResult\\Device000008_01.TXT",
+-        "D:\\HT9045_Log\\OSTestResult\\Device000009_01.TXT", "D:\\HT9045_Log\\OS_Summary\\202610", "D:\\HT9045_Log\\JamRate" };
++        "D:\\HT9045_Log\\OSTestResult\\Device000009_01.TXT", "D:\\HT9045_Log\\OS_Summary\\202610", "D:\\HT9045_Log\\JamRate",
++        "D:\\HT9045_Log\\Summary_Lot\\202610" };   // AI(W906-U1) 20261002: + golden's SaveSummaryTrayFeed folder (section 12)
+     const int nMachine = (int)(sizeof(machine) / sizeof(machine[0]));
+     std::vector<std::string> before;
+     for (int i = 0; i < nMachine; ++i) before.push_back(Stamp(machine[i]));
+@@ -378,6 +393,8 @@ int main()
+ 
+     // ---- 4. ProcessOSPrint(false) -----------------------------------------------------------------------------------
+     std::printf("\n-- 4. ProcessOSPrint(false): RTF summary, Pin reports, TestReports emptied --\n");
++    ForceDirectories(AnsiString((root + "\\B05_share").c_str()));    // AI(W906-R126) 20261002: the (sandboxed) share exists from here on,
++                                                                     //   so the B05-off check below can fail (vclcompat SaveToFile never creates folders)
+     for (int i = 0; i < eTrayCount; ++i) Prod.iTrayType[i] = tNotUse;
+     Prod.iTrayType[eAuto1] = tTrayAuto; Prod.iTrayType[eAuto2] = tTrayAuto; Prod.iTrayType[eAuto3] = tTrayAuto;
+     Prod.iTrayType[eFix1] = tTrayFix;
+@@ -485,7 +502,7 @@ int main()
+ 
+     // ---- 5. B05 on --------------------------------------------------------------------------------------------------
+     std::printf("\n-- 5. B05 on: only Auto2 / Auto3 go to the (sandboxed) share --\n");
+-    ForceDirectories(AnsiString((root + "\\B05_share").c_str()));    // the share exists (golden does not create it)
++    ForceDirectories(AnsiString((root + "\\B05_share").c_str()));    // the share exists (golden does not create it; already made in section 4)
+     IniConfig.bB05_OSReport = true;
+     SetTime(12, 34, 57);
+     TesterTCP_ProcessOSPrint(false);
+@@ -603,6 +620,86 @@ int main()
+     CHECK(LiveLineContaining("Automation/SCK_ART_Remainder.cpp", "#define W5SCKARTREM_FTESTERTCP_PROCESSOSPRINT()   TesterTCP_ProcessOSPrint()"));
+     CHECK(LiveLineContaining("Automation/SCK_ART_Remainder.cpp", "W5SCKARTREM_FTESTERTCP_PROCESSOSPRINT();"));
+ 
++    // ---- 12. U1: SaveSummaryTrayFeed's BY SITE rows (G-023 group C) ---------------------------------------------------
++    // AI(W906-U1) 20261002 (St02-E): St02-M card (our G-023 pass, U1 + U4).  SaveSummaryTrayFeed runs at every Lot End on a
++    //   non-TCP tester (SCK_ART_Remainder.cpp:936); its three BY SITE rows had no test.  Its first act is the REAL
++    //   TastCategory.UpdataCount(false) (SCK_ART_Remainder.cpp:2545; cSocket.cpp:1258: ClearCount(), then per site from
++    //   ArmDataLot[arm]->ArmSKET[row][col] Pass / Fail, only where TestIF.iSiteMap > 0), so the counts are seeded there
++    //   (the first push of this section seeded TastCategory directly and went red: UpdataCount overwrote them).
++    //   Mutation (by reasoning): without the AnsiString(...) wrap at :2657-2659 the StringsProxy goes through '...' and its
++    //   own bytes are printed, so none of the exact rows below is in the file.
++    std::printf("\n-- 12. U1: SaveSummaryTrayFeed BY SITE rows (numbers in golden's \" %%-20s\" columns), U4 defaults --\n");
++    {
++        const char* e0 = std::getenv("W906_SUMMARYLOT_ROOT");
++        const bool hadRoot = (e0 != 0);
++        const std::string oldRoot = e0 ? e0 : "";
++        const std::string sumRoot = root + "\\SummaryLot";
++        static std::string kvSet, kvOld;                                 // the CRT may keep the pointer: the text stays alive
++        kvSet = "W906_SUMMARYLOT_ROOT=" + sumRoot;
++        HT9045_TEST_PUTENV(kvSet.c_str());             // else golden's literal D:\HT9045_Log\Summary_Lot (SCK_ART_Remainder.cpp:2730-2732)
++        IniConfig.bN10_UploadSummaryToFTP = false;
++        RunInfo.bLotStart = false;
++        const int jam0 = CountFiles(root + "\\JamRate\\*");          // section 8 left one there
++        TestIF.iSiteMap[0][0] = 1; TestIF.iSiteMap[0][1] = 2;
++        // DUT1 = (0,0): arm 0 30 / 5 + arm 1 15 / 0 -> 50 / 45 / 5; DUT2 = (0,1): arm 0 2 / 6 + arm 1 0 / 0 -> 8 / 2 / 6
++        // (GetTotal() = Pass + Fail, cSocket.cpp:383-386); all 58 / 47 / 11
++        ArmDataLot[0]->ArmSKET[0][0]->Pass = 30; ArmDataLot[0]->ArmSKET[0][0]->Fail = 5; ArmDataLot[0]->ArmSKET[0][0]->Total = 35;
++        ArmDataLot[1]->ArmSKET[0][0]->Pass = 15; ArmDataLot[1]->ArmSKET[0][0]->Fail = 0; ArmDataLot[1]->ArmSKET[0][0]->Total = 15;
++        ArmDataLot[0]->ArmSKET[0][1]->Pass =  2; ArmDataLot[0]->ArmSKET[0][1]->Fail = 6; ArmDataLot[0]->ArmSKET[0][1]->Total =  8;
++        ArmDataLot[1]->ArmSKET[0][1]->Pass =  0; ArmDataLot[1]->ArmSKET[0][1]->Fail = 0; ArmDataLot[1]->ArmSKET[0][1]->Total =  0;
++        std::string sum;
++        // the BY SITE rows as they are in the file, every line in <>, on a mismatch only
++        auto showRows = [](const std::string& text) {
++            const size_t at = text.find("BY SITE COUNT");
++            std::printf("  BY SITE section as written (%s):\n", at == std::string::npos ? "header NOT found" : "from the header");
++            size_t p = (at == std::string::npos) ? 0 : at;
++            for (int k = 0; k < 7 && p < text.size(); ++k) {
++                const size_t e = text.find("\r\n", p);
++                const std::string ln = text.substr(p, (e == std::string::npos ? text.size() : e) - p);
++                std::printf("    <%s> (%u chars)\n", ln.c_str(), (unsigned)ln.size());
++                if (e == std::string::npos) break;
++                p = e + 2;
++            }
++        };
++        auto row = [&](const std::string& text, const std::string& want, const char* what, int line) {
++            const bool ok = text.find("\r\n" + want + "\r\n") != std::string::npos;
++            check(ok, what, line);
++            if (!ok) { std::printf("    expected <%s> (%u chars)\n", want.c_str(), (unsigned)want.size()); showRows(text); }
++        };
++        auto feed = [&](int s, std::string& out) {
++            SetTime(12, 40, s);
++            { SckArtRemainderState st; SckArtRem_SaveSummaryTrayFeed(st); }
++            return ReadAll(sumRoot + "\\202610\\" + Fmt("W906G023HANDLER 20261001-1240%02d ", s) + kLot + " Summary.txt", out);
++        };
++        // golden SCK_ART.cpp:3247-3266: "%-34s" head, one " %-20s" per DUT (:3253-3255), then the SUM column (:3264-3266)
++        CHECK(feed(0, sum));
++        CHECK(TastCategory.iBySiteTotal[0] == 50 && TastCategory.iBySiteTotal[1] == 8 && TastCategory.iTotalSocket == 58);   // what UpdataCount made of the seeds
++        row(sum, Fmt("%-34s", "Total") + Fmt(" %-20s", "50") + Fmt(" %-20s", "8") + Fmt(" %-20d", 58), "12. Total row: 50 / 8 / sum 58", __LINE__);
++        row(sum, Fmt("%-34s", "PASS") + Fmt(" %-20s", "45(90.00%)") + Fmt(" %-20s", "2(25.00%)") + Fmt(" %-20s", "47(81.03%)"),
++            "12. PASS row: 45(90.00%) / 2(25.00%) / sum 47(81.03%)", __LINE__);
++        row(sum, Fmt("%-34s", "FAIL") + Fmt(" %-20s", "5(10.00%)") + Fmt(" %-20s", "6(75.00%)") + Fmt(" %-20s", "11(18.97%)"),
++            "12. FAIL row: 5(10.00%) / 6(75.00%) / sum 11(18.97%)", __LINE__);
++        // U4 (a): DUT2 disabled in the site map (golden :3228 iSiteMap > 0 false) -> its column keeps the defaults (:3218-3220);
++        //   UpdataCount skips the same site (cSocket.cpp:1258 the iSiteMap test), so the sum is DUT1's alone
++        TestIF.iSiteMap[0][1] = 0;
++        CHECK(feed(1, sum));
++        row(sum, Fmt("%-34s", "Total") + Fmt(" %-20s", "50") + Fmt(" %-20s", "0") + Fmt(" %-20d", 50), "12. U4 (a) Total: DUT2 disabled -> \"0\"", __LINE__);
++        row(sum, Fmt("%-34s", "PASS") + Fmt(" %-20s", "45(90.00%)") + Fmt(" %-20s", "0(0.00%)") + Fmt(" %-20s", "45(90.00%)"),
++            "12. U4 (a) PASS: DUT2 disabled -> \"0(0.00%)\"", __LINE__);
++        row(sum, Fmt("%-34s", "FAIL") + Fmt(" %-20s", "5(10.00%)") + Fmt(" %-20s", "0(0.00%)") + Fmt(" %-20s", "5(10.00%)"),
++            "12. U4 (a) FAIL: DUT2 disabled -> \"0(0.00%)\"", __LINE__);
++        // U4 (b): DUT2 enabled but nothing counted (golden :3235 iSiteTotalCt > 0 false) -> the same defaults
++        TestIF.iSiteMap[0][1] = 2;
++        ArmDataLot[0]->ArmSKET[0][1]->Pass = 0; ArmDataLot[0]->ArmSKET[0][1]->Fail = 0; ArmDataLot[0]->ArmSKET[0][1]->Total = 0;
++        CHECK(feed(2, sum));
++        row(sum, Fmt("%-34s", "Total") + Fmt(" %-20s", "50") + Fmt(" %-20s", "0") + Fmt(" %-20d", 50), "12. U4 (b) Total: DUT2 no count -> \"0\"", __LINE__);
++        row(sum, Fmt("%-34s", "FAIL") + Fmt(" %-20s", "5(10.00%)") + Fmt(" %-20s", "0(0.00%)") + Fmt(" %-20s", "5(10.00%)"),
++            "12. U4 (b) FAIL: DUT2 no count -> \"0(0.00%)\"", __LINE__);
++        CHECK(CountFiles(root + "\\JamRate\\*") == jam0);                                                          // bLotStart false: SaveJamRateByLot wrote nothing
++        kvOld = "W906_SUMMARYLOT_ROOT=" + (hadRoot ? oldRoot : std::string());   // Windows: "K=" removes K
++        HT9045_TEST_PUTENV(kvOld.c_str());
++    }
++
+     // ---- restore ---------------------------------------------------------------------------------------------------
+     // NOT deleted: ~TArm calls WriteFile() (cSocket.cpp:709-713), a file write this test must not make -- the same
+     // two-object leak test_SCK_ART_Remainder PART 13 accepts.
+diff --git a/tests/test_st02_timer3.cpp b/tests/test_st02_timer3.cpp
+index be79e10..ee73919 100644
+--- a/tests/test_st02_timer3.cpp
++++ b/tests/test_st02_timer3.cpp
+@@ -1,6 +1,7 @@
+ // =============================================================================
+ //  tests/test_st02_timer3.cpp -- S-14: golden TfMain::Timer3Timer (906_0625_Steven main.cpp:25184-25820) = MainTimer3.cpp, and
+-//  the dispatcher's Timer3 slot (MainTimersSt02.cpp: latched on by InitialOK, 1000 ms, per-timer re-entry guard, close guard).
++//  the dispatcher's Timer3 slot (MainTimersSt02.cpp: latched on by InitialOK, 1000 ms, no re-entry guard -- golden has no
++//  running flag (NB2 R126 M4) --, close guard).
+ //  AI(W906-S14) 20261001 (St02-E).  Suite: St02_Timer3.  Built and run in both configurations.
+ //
+ //  CONTAINMENT FIRST (st02_test_containment.h): RecordProcess / NewRecordProcess write through ctest's redirect roots only;
+@@ -25,11 +26,15 @@
+ //    9. G26: 1 -> WAR1684, 2 -> WAR16500 (K_SKIP, MMSystem, errPart = asChangeSetupFileName), back to 0; Note box up -> waits.
+ //   10. the gated parts with their flags on: KYEC barcode (golden's else runs: cleared), JCET (the hourly line only), UNISEM,
+ //       stop-time label, direction images, Renesas FT-CT (no message), CCD temperature over 55 (MNetLog, a no-op).
+-//   11. the dispatcher: a box inside Timer3 (G26) -> the modal-wait tick skips Timer3 only, Timer8 fires inside it;
+-//       bSystemClose -> Timer3 does not fire.
++//   11. the dispatcher: a box inside Timer3 (G26) -> the modal-wait tick calls Timer3 again on its deadline, as golden VCL
++//       re-enters Timer3Timer (no running flag, :25184-25195; AI(W906-R126) 20261002, NB2 R126 M4); G26 cleared its flag
++//       before the box, so the nested call shows nothing; Timer8 fires inside it too; bSystemClose -> Timer3 does not fire.
+ //   12. the hook-up lines are code, not comment (argv[1] = the tree root; ctest passes it): MainTimersSt02.cpp calls
+ //       W906_Timer3Timer once, CMakeLists.txt lists MainTimer3.cpp after MainTimerESDFallback.cpp, the G25 lines are comment.
+ //   13. the real TfYieldMonitoring back in place: three calls, no crash (ctest defaults: nothing to alarm on).
++//   14. G4 RecordTemp (golden main.cpp:2658-2689; AI(W906-R126) 20261002, NB2 R126 M5): on a SystemSec that is a multiple of
++//       the [L10] interval, every installed channel's fObserver->dTempHistroy row shifts left and UN150Read lands in [59];
++//       other seconds, the same second again and channels not installed leave it alone.  Memory only.
+ // =============================================================================
+ #include "MachineType.h"
+ #include "cmydef.h"
+@@ -51,6 +56,7 @@
+ #include "forms/fSCKART.h"
+ #include "forms/fShowBinSelect.h"
+ #include "forms/fYieldMonitoring.h"
++#include "forms/fObserver.h"      // fObserver->dTempHistroy (section 14)   AI(W906-R126) 20261002
+ #include "st02_test_containment.h"
+ 
+ #include <windows.h>
+@@ -594,9 +600,9 @@ int main(int argc, char** argv)
+         ht9045::W906_St02TimersCountsESD(&nesd, &re);
+         ht9045::W906_St02TimersCountsT3(&n3, 0);
+         CHECK(iChangeFileHasErr == 0 && g_nestAt == 0);
+-        CHECK(n3 == 1 && g_n3InBox == 1);                 // inside its own box Timer3 is skipped ...
+-        CHECK(g_reInBox == 1 && re == 1);
+-        CHECK(g_n8InBox == 2 && n8 == 2);                 // ... while Timer8 fires inside it
++        CHECK(n3 == 2 && g_n3InBox == 2);                 // inside its own box Timer3 runs again (golden: no running flag, R126 M4) ...
++        CHECK(g_reInBox == 0 && re == 0);                 // ... so nothing is skipped
++        CHECK(g_n8InBox == 2 && n8 == 2);                 // ... and Timer8 fires inside it too
+         bSystemClose = true;
+         ht9045::W906_St02TimersTickAt(t0 + 100000);
+         W906_St02TimersTickFromModal();
+@@ -614,6 +620,9 @@ int main(int argc, char** argv)
+         const std::string mt3 = ReadAll(root + "/MainTimer3.cpp"), wt = ReadAll(root + "/WebBridgeTags.cpp");
+         CHECK(!ds.empty() && !cm.empty() && !mt3.empty() && !wt.empty());
+         CHECK(CodeCount(ds, "W906_Timer3Timer();") == 2 && CodeCount(ds, "void W906_Timer3Timer();") == 1);   // the declaration + one call
++        CHECK(CodeCount(ds, "InTick busy(kT3)") == 0 && CodeCount(ds, "InTick busy(kTS)") == 0 &&
++              CodeCount(ds, "Due(g_t3, now, 1000)") == 1 && CodeCount(ds, "Due(g_tTS, now, 1000)") == 1);   // R126 M4: no guard where golden has none
++        CHECK(CodeCount(mt3, "RecordTemp();") == 1 && CodeCount(mt3, "fObserver->dTempHistroy[i][59]=UN150Read[i];") == 1);   // R126 M5: G4 open
+         CHECK(CodeCount(wt, "{ extern void W906_St02TimersTick(); W906_St02TimersTick(); }") == 1);   // PumpTick (S-15)
+         const std::string cl = LineWith(cm, "MainTimer3.cpp");
+         CHECK(!cl.empty() && cl.find("MainTimer3.cpp") < cl.find("#") && cl.find("MainTimerESDFallback.cpp  MainTimer3.cpp") != std::string::npos);
+@@ -633,6 +642,42 @@ int main(int argc, char** argv)
+         delete counting;
+     }
+ 
++    std::printf(" 14. G4 RecordTemp: the Observer temperature history\n");
++    {
++        CHECK(fObserver != 0);
++        const bool inst0 = bUT150Install[0], inst1 = bUT150Install[1];
++        const double read0 = UN150Read[0];
++        const int ivSaved = IniConfig.iL10TempRecordInterval;
++        const Word secSaved = SystemSec;
++        double h0[60], h1[60];
++        for (int j = 0; j < 60; ++j) { h0[j] = fObserver->dTempHistroy[0][j]; h1[j] = fObserver->dTempHistroy[1][j]; }
++        for (int j = 0; j < 60; ++j) { fObserver->dTempHistroy[0][j] = j; fObserver->dTempHistroy[1][j] = -1.0; }
++        bUT150Install[0] = true;
++        bUT150Install[1] = false;
++        IniConfig.iL10TempRecordInterval = 1;             // golden's else: every 15 s
++        UN150Read[0] = 123.5;
++        SystemSec = 7;
++        T3();                                             // 7 % 15 != 0 -> nothing
++        CHECK(fObserver->dTempHistroy[0][0] == 0.0 && fObserver->dTempHistroy[0][59] == 59.0);
++        SystemSec = 15;
++        T3();                                             // a multiple of 15 -> shift left, the reading at [59]
++        CHECK(fObserver->dTempHistroy[0][0] == 1.0 && fObserver->dTempHistroy[0][58] == 59.0 && fObserver->dTempHistroy[0][59] == 123.5);
++        CHECK(fObserver->dTempHistroy[1][0] == -1.0 && fObserver->dTempHistroy[1][59] == -1.0);   // channel 1 not installed
++        UN150Read[0] = 200.0;
++        T3();                                             // the same second again -> no second record (golden iOldMin)
++        CHECK(fObserver->dTempHistroy[0][59] == 123.5);
++        IniConfig.iL10TempRecordInterval = 0;             // every 5 s
++        SystemSec = 20;
++        T3();
++        CHECK(fObserver->dTempHistroy[0][58] == 123.5 && fObserver->dTempHistroy[0][59] == 200.0);
++        for (int j = 0; j < 60; ++j) { fObserver->dTempHistroy[0][j] = h0[j]; fObserver->dTempHistroy[1][j] = h1[j]; }
++        bUT150Install[0] = inst0;
++        bUT150Install[1] = inst1;
++        UN150Read[0] = read0;
++        IniConfig.iL10TempRecordInterval = ivSaved;
++        SystemSec = secSaved;
++    }
++
+     W906_ShowErrorMessage_Hook = 0;
+     ht9045::W906_Timer3SetRecordLoaderDate(0);
+     ht9045::W906_Timer3SetStatusBarTime(0);
+diff --git a/tools/webprobe/tif_kb_selftest.cjs b/tools/webprobe/tif_kb_selftest.cjs
+new file mode 100644
+index 0000000..db2373c
+--- /dev/null
++++ b/tools/webprobe/tif_kb_selftest.cjs
+@@ -0,0 +1,72 @@
++'use strict';
++// =============================================================================
++//  tools/webprobe/tif_kb_selftest.cjs -- ctest TIF_KbGolden.  AI(W906-TIF-KB) 20261002 (St02-E).
++//
++//  docs/TESTERIF_FIELD_AUDIT_20261002.md P1 / P2: Setup.TesterIF's keyboard limits for 9 fields must be golden
++//  906_0625_Steven cTesterIF.cpp's generic branch, not the customer branch the generated wire data took:
++//    the six max-test-time fields   DOUBLE, 2, true, 0..15000   (:1401; generated INTEGER 60..9999 = CC_ASE_M :1384)
++//    the three Initial Start Delay  DOUBLE, 2, false            (:1415; generated 30..3000 = HiSilicon + ASE_KaohSiung :1413)
++//  Offline, no browser, no server: a fake window / document; the REAL ht9045_wire_setuptesterif.js registers its cfg
++//  through a stub HT9045Wire.register (the engine's own register sets window.HT9045Page.cfg to that object), then the
++//  REAL ht9045_testerif_c_wire.js runs (without HT9045Recipe its main block returns at once; block (8) does not need it).
++//  Checks: the 9 entries are golden's; every other kb entry is untouched; nothing is applied (and a warning is logged) once
++//  the keyboards are already attached; Setup.TesterIF.html loads the c_wire file after the wire data (read only).
++//  argv[2] = web/page.  CONTROL: W906_TIF_C_WIRE pointing at the file before (8) must turn the 9 checks red.
++// =============================================================================
++const fs = require('fs');
++const path = require('path');
++const vm = require('vm');
++
++const pageDir = process.argv[2] || path.join(__dirname, '..', '..', '..', 'web', 'page');
++const cwire = process.env.W906_TIF_C_WIRE || path.join(pageDir, 'ht9045_testerif_c_wire.js');
++let pass = 0, fail = 0;
++function check(c, m) { if (c) { pass++; console.log('  ok   ' + m); } else { fail++; console.log('  FAIL ' + m); } }
++const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
++
++function load(attached) {
++  const warns = [];
++  const sb = {
++    console: { log() {}, info() {}, warn(m) { warns.push(String(m)); }, error() {} },
++    document: { readyState: 'loading', addEventListener() {}, getElementById() { return null; } }
++  };
++  sb.window = sb;
++  let cfg = null;
++  sb.HT9045Wire = { register(c) { cfg = c; sb.HT9045Page = { cfg: c }; }, say() {} };
++  if (attached) sb.HT9045KbAudit = { page: 'Setup.TesterIF', bound: 1, unmapped: [] };
++  vm.createContext(sb);
++  vm.runInContext(fs.readFileSync(path.join(pageDir, 'ht9045_wire_setuptesterif.js'), 'utf8'), sb,
++                  { filename: 'ht9045_wire_setuptesterif.js' });
++  const before = cfg && cfg.kb ? JSON.parse(JSON.stringify(cfg.kb)) : null;
++  vm.runInContext(fs.readFileSync(cwire, 'utf8'), sb, { filename: path.basename(cwire) });
++  return { sb, cfg, before, warns };
++}
++
++const MAX = ['edMaxTestTime', 'edMaxTestTime_RT', 'edMaxTestTime_EQC', 'edInitialMaxTest', 'edInitialMaxTest_RT', 'edInitialMaxTest_EQC'];
++const DLY = ['edtInitStartDelay', 'edtInitStartDelay_RT', 'edtInitStartDelay_EQC'];
++
++console.log('-- 1. the 9 entries are golden cTesterIF.cpp\'s generic branch');
++const a = load(false);
++check(a.cfg && a.cfg.kb && a.before, 'the generated wire data registered a kb table');
++const kb = (a.cfg && a.cfg.kb) || {};
++for (const id of MAX) check(same(kb[id], ['DOUBLE', 2, true, 0, 15000]), id + ': DOUBLE, 2 decimals, 0..15000 (golden :1401), not INTEGER 60..9999 (:1384)');
++for (const id of DLY) check(Array.isArray(kb[id]) && kb[id][0] === 'DOUBLE' && kb[id][1] === 2 && kb[id][2] === false,
++                            id + ': DOUBLE, 2 decimals, no range (golden :1415), not 30..3000 (:1413)');
++
++console.log('-- 2. nothing else changes');
++const others = Object.keys(a.before || {}).filter(k => !MAX.includes(k) && !DLY.includes(k));
++check(others.length > 20 && others.every(k => same(kb[k], a.before[k])), 'the other ' + others.length + ' kb entries are untouched');
++check(a.sb.HT9045TesterIfKb && same(a.sb.HT9045TesterIfKb.applied.slice().sort(), MAX.concat(DLY).sort()), 'exactly the 9 ids applied');
++check(a.warns.length === 0, 'no warning while the page is still parsing');
++
++console.log('-- 3. too late once the keyboards are attached');
++const b = load(true);
++check(b.sb.HT9045TesterIfKb && b.sb.HT9045TesterIfKb.applied.length === 0, 'attached already: nothing applied');
++check(b.warns.some(w => w.indexOf('already attached') >= 0), 'attached already: a warning is logged');
++
++console.log('-- 4. load order (Setup.TesterIF.html, read only)');
++const html = fs.readFileSync(path.join(pageDir, 'Setup.TesterIF.html'), 'utf8');
++const iE = html.indexOf('src="ht9045_wire_engine.js"'), iW = html.indexOf('src="ht9045_wire_setuptesterif.js"'), iC = html.indexOf('src="ht9045_testerif_c_wire.js"');
++check(iE >= 0 && iW > iE && iC > iW, 'engine, then the wire data, then ht9045_testerif_c_wire.js');
++
++console.log((fail ? 'FAIL' : 'PASS') + ': ' + pass + '/' + (pass + fail) + ' checks');
++process.exit(fail ? 1 : 0);
+diff --git a/tools/websync/sync_web.py b/tools/websync/sync_web.py
+index 655f7c8..e3bea16 100644
+--- a/tools/websync/sync_web.py
++++ b/tools/websync/sync_web.py
+@@ -293,6 +293,8 @@ OURS = {
+     "page/ht9045_wire_trayassignment.js",
+     "page/ht9045_wire_trayform.js",
+     "page/ht9045_wire_yieldmonitoring.js",
++    # AI(W906-B29-OURS) 20261002: St02 MR !89 (LI-12) -- Data.LotInfo.html now loads it.
++    "page/ht9045_lotinfo_testertcp.js",
+     # AI(W906-WIRE-SYS) 20260917：Steven 0916-0917 新增／改名的 12 支。
+     #   少一筆 = 下次 --apply 靜默刪掉線上那個檔（check_deployed.py 第 3 項就是
+     #   在報這個）。本檔第 170 行自己寫著「OURS 必須是聯集」。
+-- 
+2.55.0.windows.5
+
