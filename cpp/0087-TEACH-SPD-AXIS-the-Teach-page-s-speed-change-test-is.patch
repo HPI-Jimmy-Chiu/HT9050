@@ -1,0 +1,95 @@
+From cdd98ed0d53db689a3bab2ccb662ad372db1b840 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 22:16:44 +0800
+Subject: [PATCH] TEACH-SPD-AXIS: the Teach page's speed change test is per
+ axis -- after picking another axis its jog speed always follows what the page
+ shows
+
+The teach audit (oplog 10-01 20:21:36-47, 21:55:38): g_teachEdt was ONE value for the whole page, so a speed equal to the
+previous axis' was "no change" and the new axis' jog family was never written -- MInArmX jogged at 1% with the bar at
+100, MInArmY at Motor Test's 100% while Teach showed 1. golden's UpdateMotorTeachMonitor puts ScrollBar1 at 1 on every
+pick, so its next move IS a change; tracking the axis (g_teachEdtMi) gives the same result: TeachSpeedEvent /
+TeachEdtSpeed write the jog family when the value OR the axis changed. Reset with the other teach state.
+Test: MInArmX speed event 50, then MInArmY's speed event 50 -> MInArmY's jog runs at its own 50/3 = 16%.
+ctest WebMotorAccess, GaliRouteEngine, TeachButtonsGen, WebTeachLeave pass.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebMotorAccess.cpp              | 13 +++++++++++--
+ tests/test_web_motor_access.cpp | 13 +++++++++++++
+ 2 files changed, 24 insertions(+), 2 deletions(-)
+
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index 7d310c4..b7690ea 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -179,6 +179,7 @@ std::set<int> g_encBase;
+ //AI(W906-MERGE-56bbf785) 20260926: 1203 軸的教導頁 jog 不再用這裡（改用 DoJog 的 g_jogSpd／JogPctOf，見 DoTeachJog）；這裡只剩移動（Move1203）用。
+ std::map<int, int> g_goldenPct;
+ int                g_teachEdt = -1;       // golden edtSpeed->Text 的鏡像（-1＝不知道；VCL Text 沒變不觸發 OnChange）
++int                g_teachEdtMi = -1;     //AI(W906-TEACH-SPD-AXIS) 20261001: the motor g_teachEdt was last applied to (-1 = none)
+ std::string        g_teachHomeUnknown;    // 最近一次 MotorAccessTeachHomeLed 回 -1 的原因（W5B-R2）
+ 
+ // W4B-4：正在 jog 的軸（放開／STOP 清掉；操作員連線消失時由 MotorAccessTick 停下）
+@@ -3045,8 +3046,9 @@ void TeachJogFamily(IMotorAccessBackend& be, int mi, int v)
+ }
+ void TeachEdtSpeed(IMotorAccessBackend& be, int ami, int v)
+ {
+-    if (g_teachEdt == v) return;
++    if (g_teachEdt == v && g_teachEdtMi == ami) return;                          //AI(W906-TEACH-SPD-AXIS) 20261001: per axis (see TeachSpeedEvent)
+     g_teachEdt = v;
++    g_teachEdtMi = ami;
+     TeachSpeedSet(be, ami, v);
+     TeachJogFamily(be, ami, v);                                                 //AI(W906-MERGE-56bbf785) 20260926: golden ScrollBar1Change's SetSpeed(Speed/3, true)
+ }
+@@ -3764,8 +3766,14 @@ void TeachSpeedEvent(const MotorAccessReq& r, IMotorAccessBackend& be)
+     const int ami = PageAmi(r, be);
+     if (ami < 0) return;                                                        // golden edtSpeedChange：ActiveMotorIndex==-1 → return
+     int s = (v > 100.0) ? 100 : (v < 1.0) ? 1 : (int)v;
+-    const bool changed = (g_teachEdt != s);                                     //AI(W906-MERGE-56bbf785) 20260926: golden OnChange fires only on a change
++    //AI(W906-TEACH-SPD-AXIS) 20261001: a change OR another axis. The teach audit (oplog 10-01 20:21:36-47, 21:55:38): g_teachEdt was ONE
++    //  value for the whole page, so after picking another axis a speed equal to the previous axis' was "no change" and that axis' jog
++    //  family was never written -- MInArmX jogged at 1% with the bar at 100, MInArmY at Motor Test's 100% while Teach showed 1.
++    //  golden's UpdateMotorTeachMonitor puts ScrollBar1 at 1 on every pick, so its next move IS a change; per axis here = the jog
++    //  family always matches what the page shows for the selected axis (EastSun 1001 「每次我使用不是被鎖住 就是沒有功能」).
++    const bool changed = (g_teachEdt != s || g_teachEdtMi != ami);              //AI(W906-MERGE-56bbf785) 20260926: golden OnChange fires only on a change
+     g_teachEdt = s;
++    g_teachEdtMi = ami;
+     TeachSpeedSet(be, ami, s);
+     if (changed) TeachJogFamily(be, ami, s);                                    //AI(W906-MERGE-56bbf785) 20260926: golden ScrollBar1Change's SetSpeed(Speed/3, true)
+ }
+@@ -4194,6 +4202,7 @@ void MotorAccessResetJobs()
+     g_encBase.clear();                                                          // AI(W906-W5-b) 20260925
+     g_goldenPct.clear();                                                        // AI(W906-W5-b) 20260925: R-W5B-4
+     g_teachEdt = -1;
++    g_teachEdtMi = -1;                                                          //AI(W906-TEACH-SPD-AXIS) 20261001
+     g_teachHomeUnknown.clear();
+ }
+ 
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index 0832771..95873e3 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -3216,6 +3216,19 @@ int main(int argc, char** argv)
+         CHECK(o.ok && be.executed.back().kind == kCmdAxJogStart && LastJogRunSpeed(be) == 1600.0 && LastRunSpeed(be) == 5000.0,
+               "R-W5B-4 + review 2: teach jog ignores its speed 80; the jog family is the teach edtSpeed 50 / 3 = 16% (golden ScrollBar1Change), PTP untouched");
+         { MotorAccessReq rs = Req("uteach", "stop", "MInArmX"); rs.button = "btnJogP"; MotorAccessDispatch(rs, 1, be); }
++        //AI(W906-TEACH-SPD-AXIS) 20261001: the SAME speed event value on ANOTHER axis is a change for that axis: MInArmX's 50 above, then
++        //  the operator picks MInArmY and its speed is 50 too -> MInArmY's jog family must be written (50/3 = 16%), not skipped as "no change".
++        {
++            MotorAccessReq ye = Req("uteach", "moveRelative", "MInArmY"); ye.button = "btnMoveP"; ye.num["interval"] = 10;
++            ye.num["speed"] = 50; ye.flag["speedEvent"] = true;
++            CHECK(MotorAccessDispatch(ye, 1, be).ok, "TEACH-SPD-AXIS setup: MInArmY MoveP carrying the speed event 50 (same value as MInArmX's)");
++            MotorAccessReq jy = Req("uteach", "jogP", "MInArmY"); jy.num["speed"] = 80;
++            o = MotorAccessDispatch(jy, 1, be);
++            const double expY = MotorSpeedFromPct(16, be.golden[mY]).velHigh;
++            CHECK(o.ok && be.executed.back().kind == kCmdAxJogStart && LastJogRunSpeed(be) == expY,
++                  "TEACH-SPD-AXIS: MInArmY's jog runs at ITS 50/3 = 16% (the per-axis change test), not whatever its jog family held");
++            { MotorAccessReq rs = Req("uteach", "stop", "MInArmY"); rs.button = "btnJogP"; MotorAccessDispatch(rs, 1, be); }
++        }
+         //AI(W906-MERGE-56bbf785) 20260926: review finding -- after a Motor Test speed bar (golden SetSpeed(30, true)) the teach jog runs at the
+         //  values that bar WROTE (g_jogSpd), even when JogHighSpeed changed in memory since (golden: the card keeps CFG_AxJog*).
+         CHECK(MotorAccessDispatch(Req("uMotorTest", "selectMotor", "MInArmX"), 1, be).ok, "setup: Motor Test selects MInArmX (golden lM00Click: bar at 1)");
+-- 
+2.55.0.windows.5
+

@@ -515,4 +515,13 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     所有頁面上方的「讀取完成」狀態條改成滑鼠點穿（theme.css）。無頭瀏覽器量過不重疊。
   cpp 0086 58a2141 WORKLOG —— 工作紀錄補 10-01 第 44～47 項（含馬達頁全面檢查的結果）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0087 cdd98ed TEACH-SPD-AXIS —— Teach 的速度「有沒有變」改成每一軸各自記：換軸後 JOG 速度一定照畫面顯示的寫進去（Teach 檢查：21:55:38 MInArmY 畫面 1%
+                    實際用 Motor Test 留下的 100%）。ctest WebMotorAccess（新增換軸段）、GaliRouteEngine、TeachButtonsGen、WebTeachLeave 通過。
+  cpp 0088 c93a3bf PKG-111 —— 筆電第 111 包（GitHub main e8c4536、GitLab bdc0f1ba）的 C++ 部分：St02 G-023 TesterTCP Open／Short 報告、E-T1-022 第二型 Bin 編號面板。
+                    14 檔（新 4、照收 9、合併 1，0 衝突、0 重複列）；o2 建置 0 錯誤、PE 56/56、6 個相關 ctest 通過、production_audit 0 變更。
+                    設計外掛 16 檔（0.150）不在這裡，由設計外掛工作階段整合。
+  cpp 0089 938605c WORKLOG —— 工作紀錄補 10-01 第 48～51 項：21:58 撞機調查（Loader Go 照原版 X、Y 同時走直線；SHT1 畫面上的值沒存）、Teach 換軸速度、
+                    Teach／馬達頁全面檢查（含 1203 頁可在伺服關時放開垂直軸煞車）、第 111 包。
+  ⚠ 給筆電：撞機調查與全面檢查的結果在 docs/WORKLOG_MACHINE.md 第 48～50 項，修正要等 EastSun 決定（Go 要不要走安全路徑、1203 頁煞車互鎖）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
