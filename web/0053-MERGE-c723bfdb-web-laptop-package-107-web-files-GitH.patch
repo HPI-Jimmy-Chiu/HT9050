@@ -1,0 +1,1031 @@
+From 0287f8e33ca836dfff61bfe3e6bb9dbcae1ae4f0 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 19:03:13 +0800
+Subject: [PATCH] MERGE-c723bfdb (web): laptop package 107 web files (GitHub
+ main 5378c8c) into the machine web tree
+
+7 web files (OLD: the machine had an older laptop version, taken as is): js/pci1203.js, js/transport/ws.js, page/ht9045_link.js,
+page/ht9045_main_close.js, page/ht9045_recipe_client.js, page/ht9045_wire_engine.js, page/testercomm.html -- the web control
+token (newest screen wins) and St02's testercomm shared panel. Stored with the line endings they had in HEAD.
+See the C++ commit of the same name for the tests.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ js/pci1203.js                |  46 ++++-
+ js/transport/ws.js           |   3 +
+ page/ht9045_link.js          | 204 +++++++++++++++++++---
+ page/ht9045_main_close.js    |   7 +-
+ page/ht9045_recipe_client.js |   2 +-
+ page/ht9045_wire_engine.js   |  16 +-
+ page/testercomm.html         | 324 +++++++++++++++++++++++++++++------
+ 7 files changed, 513 insertions(+), 89 deletions(-)
+
+diff --git a/js/pci1203.js b/js/pci1203.js
+index 6d2f571..8062b5a 100644
+--- a/js/pci1203.js
++++ b/js/pci1203.js
+@@ -902,7 +902,9 @@ function onStageClick(ev) {
+   //  written defensively because "equivalent today" is how the acquire latch got
+   //  in.
+   if (TOKEN_CMDS.indexOf(cmd) !== -1 && btn.dataset.confirm === undefined) {
+-    pendingAcks.set(cmd, Date.now());
++    //  AI(W906-SCREEN-TOKEN) 20261001: a hand press of 取得操作權 goes out as control.takeover (below) and is tracked under
++    //  its own key, so an automatic acquire still in flight is not mistaken for its answer (review R3).
++    pendingAcks.set(cmd === "control.acquire" ? "control.takeover" : cmd, Date.now());
+   }
+ 
+   /*  AI(W906-1203WHYBOX-1) 20260918: remember the name of the last command this
+@@ -926,7 +928,13 @@ function onStageClick(ev) {
+     return;
+   }
+ 
+-  transport.send({ cmd, tag, value });
++  /*  AI(W906-SCREEN-TOKEN) 20261001 (RULINGS_20261001, Jimmy 1001 12:3x "1->A": the newest screen wins). A hand
++      press of 取得操作權 / TAKE CONTROL goes out as control.takeover: the HMI screen now holds the token for as long
++      as it is connected (web/page/ht9045_link.js), so an acquire from a standalone /pci1203.html would be refused
++      forever. The answer is the same shape (ok = this connection owns it), so pendingAcks keeps the
++      "control.acquire" entry and onAck() is unchanged. The automatic acquire (maybeAutoAcquire) stays an acquire:
++      it never takes the token from anyone. */
++  transport.send({ cmd: cmd === "control.acquire" ? "control.takeover" : cmd, tag, value });
+   note(`sent ${cmd} ${tag || ""} ${value === undefined ? "" : JSON.stringify(value)} ` +
+        `— watch “last command” in the Control section for what the machine did ` +
+        `with it. This line only means the browser sent it.`);
+@@ -1018,8 +1026,32 @@ function maybeAutoAcquire() {
+ }
+ 
+ function onAck(msg) {
++  /*  AI(W906-SCREEN-TOKEN) 20261001: the frame hub (page/ht9045_link.js) tells every page when the token is gone
++      (another screen took it over, or the server took it back). Forget it here too, so the header stops claiming
++      已取得操作權 and the 取得操作權 button (a takeover) comes back. transport/ws.js forwards the frame. */
++  if (msg && msg.type === "link.token") {
++    if (msg.owner === false && hasControl) {
++      hasControl = false; dirty = true;
++      note("操作權被另一個畫面拿走了（較新開啟的 HMI 視窗或另一個分頁）。要在這裡操作，按「取得操作權」。");
++    }
++    return;
++  }
+   if (!msg || msg.type !== "ack") return;
+ 
++  /*  AI(W906-SCREEN-TOKEN) 20261001: the hand press (control.takeover on the wire). Acks come back in send order, so
++      the press answers this ack when it went out before any automatic acquire still pending (review R3). */
++  {
++    const tT = pendingAcks.get("control.takeover"), tA = pendingAcks.get("control.acquire");
++    if (tT !== undefined && (tA === undefined || tT < tA)) {
++      pendingAcks.delete("control.takeover");
++      hasControl = (msg.ok === true);
++      dirty = true;
++      if (hasControl) { lastAcqRefusal = null; nextAcqAt = 0; note("已取得操作權 — this page holds the operator token."); }
++      else note(`取得操作權 refused: ${msg.error || "(no reason given)"}.`);
++      return;
++    }
++  }
++
+   if (pendingAcks.has("control.acquire")) {
+     pendingAcks.delete("control.acquire");
+     hasControl = (msg.ok === true);
+@@ -1033,6 +1065,10 @@ function onAck(msg) {
+           bury everything else -- including the answer the operator is waiting
+           for. Repeat only when the REASON changes. */
+       const why = msg.error || "(no reason given)";
++      /*  AI(W906-SCREEN-TOKEN) 20261001: the HMI screen now keeps the token while it is connected, so a refusal
++          with control-held stays true for a long time: ask again only once a minute (each refusal is a line in
++          wb_serve's op log). The hand press is a takeover and is not held back by this. */
++      if (why === "control-held") nextAcqAt = Date.now() + 60000;
+       if (why !== lastAcqRefusal) {
+         lastAcqRefusal = why;
+         note(`取得操作權 refused: ${why}. ` +
+@@ -1053,6 +1089,7 @@ function onAck(msg) {
+       autoControl = false;
+       note("已釋放操作權 — 自動取得已關閉，按「取得操作權」會重新開啟。");
+     } else {
++      if (msg.error === "not-operator" && hasControl) { hasControl = false; dirty = true; }   // AI(W906-SCREEN-TOKEN) 20261001: not ours any more either way
+       note(`RELEASE refused: ${msg.error || "(no reason given)"}`);
+     }
+     return;
+@@ -1062,6 +1099,10 @@ function onAck(msg) {
+      never reached the publisher, so the machine's last-command tags will NOT
+      change and the operator would otherwise see nothing at all. */
+   if (msg.ok === false) {
++    /*  AI(W906-SCREEN-TOKEN) 20261001: not-operator = the token is no longer ours (another screen took it over, or the
++        server took it back). Forget it, so the header stops claiming 已取得操作權, the 取得操作權 button comes back
++        (a press = takeover, above) and the automatic acquire re-arms (it only succeeds when nobody holds it). */
++    if (msg.error === "not-operator" && hasControl) { hasControl = false; dirty = true; }
+     note(`the gateway refused that command: ${msg.error || "(no reason given)"} ` +
+          `— it did not reach the machine, so “last command” below is unchanged.`);
+     /*  AI(W906-1203WHYBOX-1) 20260918: ⚠ THIS PATH NEEDS ITS OWN DIALOG AND IS
+@@ -1157,6 +1198,7 @@ function boot() {
+           that bites is precisely the one where we did NOT have it yet. */
+       if (status && status.state !== "online") {
+         pendingAcks.delete("control.acquire");
++        pendingAcks.delete("control.takeover");   // AI(W906-SCREEN-TOKEN) 20261001: the hand press dies with the connection too
+       }
+       if (hasControl && status && status.state !== "online") {
+         hasControl = false;
+diff --git a/js/transport/ws.js b/js/transport/ws.js
+index 95a8248..883457c 100644
+--- a/js/transport/ws.js
++++ b/js/transport/ws.js
+@@ -84,6 +84,9 @@ export function createWebSocketTransport({ url } = {}) {
+         case "alarm":
+           onStatus({ state: "alarm", alarm: msg });
+           break;
++        case "link.token":   // AI(W906-SCREEN-TOKEN) 20261001: the frame hub says the token is gone (page/ht9045_link.js); pci1203.js onAck handles it
++          onAck(msg);
++          break;
+         default:
+           console.info("[ws] unhandled frame type:", msg.type);
+       }
+diff --git a/page/ht9045_link.js b/page/ht9045_link.js
+index 3b43aeb..174d8a7 100644
+--- a/page/ht9045_link.js
++++ b/page/ht9045_link.js
+@@ -37,6 +37,20 @@
+ //     cancels nothing (one in flight at a time, the others wait on it).
+ //     control.release is forwarded only when the last holder releases.
+ //     A `not-operator` ack means the token is gone: every client gets {"type":"link.token","owner":false};
++//   * the SCREEN holds the token (AI(W906-SCREEN-TOKEN) 20261001, RULINGS_20261001: Jimmy 1001 12:3x "1->A", the newest
++//     screen wins): when the hub's real socket opens for the FIRST time it sends ONE control.takeover of its own, so a
++//     window opened again (HMI-KEEP, the user, F5) owns the token at once and a stale window / tab left connected becomes
++//     view-only (a later reconnect takes over only if this screen held the token when its socket dropped -- review R1; its
++//     automatic acquires get control-held; an operator press there -- takeover -- still takes it back). Once held, the
++//     screen keeps it (pseudo-holder 0): a page's release is answered locally and never reaches the server, so the
++//     token is freed only when this socket closes or another connection takes it over. Every SCREEN_KEEP_MS (10 s; 60 s
++//     SCREEN_REGAIN_MS while not held) the hub
++//     sends control.acquire: it renews the server's 10-minute idle timer while held, reports a takeover by another
++//     connection (control-held -> link.token owner:false), and regains the token when the other holder has gone
++//     (acquire never takes it from a live holder). HT9045LinkConfig.screenTakeover:false restores the per-page rules;
++//   * one connection per screen: an iframe whose parent HAS a hub for the URL never opens a direct socket on a hello
++//     timeout (the frame is only busy, e.g. loading 68 windows); it asks again on a new channel and waits. Only a
++//     parent without a hub ('nohub', or no HT9045Link at all) still makes the socket direct;
+ //   * dead-man: a client that goes away (bye, closed, 3 pings missed) while it HOLDS a jog (motor.access
+ //     jogP / jogN not yet released) makes the hub release that jog -- motor.stop with the jog's own button,
+ //     the server's DoJogRelease (that axis only). The hub NEVER sends a STOP: 20260930 M1 (St02-E2 review B)
+@@ -64,6 +78,11 @@
+   var PING_MS = CFG.pingMs || 5000;                     // hub -> iframe liveness
+   var PING_LOSS = CFG.pingLoss || 3;                    // missed pings before the client counts as gone
+   var IDLE_CLOSE_MS = CFG.idleCloseMs || 1500;          // no client left -> close the real socket (grace for an iframe reload)
++  var SCREEN_TAKE = CFG.screenTakeover !== false;       // AI(W906-SCREEN-TOKEN) 20261001: the screen takes the token on connect and keeps it
++  var SCREEN_KEEP_MS = CFG.screenKeepMs || 10000;       // AI(W906-SCREEN-TOKEN) 20261001: keep-alive acquire while held (server idle forfeit is 10 min; a
++                                                        //   takeover elsewhere is noticed within this -- review R1: a stale screen that still believes it holds
++                                                        //   the token would take it back on a reconnect). A held acquire is not op-logged (wb_serve OpQuiet).
++  var SCREEN_REGAIN_MS = CFG.screenRegainMs || 60000;   // AI(W906-SCREEN-TOKEN) 20261001: while NOT held, try to regain this often (a refusal is op-logged)
+   var CONNECTING = 0, OPEN = 1, CLOSING = 2, CLOSED = 3;
+ 
+   function now() { return Date.now(); }
+@@ -152,25 +171,35 @@
+     this.token = { held: false, holders: {}, pend: {} };   // pend: cmd name -> {gid, waiters:[{cid, lid}]}
+     this.idleTimer = null;
+     this.pingTimer = null;
+-    this.stats = { realOpens: 0, up: 0, down: 0, fanout: 0, localAcks: 0, releasesSent: 0, tagSkipped: 0, tagResync: 0 };   // AI(W906-STREAM-F) 20260930: tagSkipped / tagResync
++    this.keepTimer = null;          // AI(W906-SCREEN-TOKEN) 20261001: screen keep-alive (SCREEN_KEEP_MS)
++    this.takeNext = true;           // AI(W906-SCREEN-TOKEN) 20261001: review R1 / R3 -- the next socket open sends takeover (else acquire); see _screenStart
++    this.lastHeldOkAt = 0;          //   time of the last ok answer that proved this screen holds the token (screen / keep / page acquire or takeover)
++    this.stats = { realOpens: 0, up: 0, down: 0, fanout: 0, localAcks: 0, releasesSent: 0, tagSkipped: 0, tagResync: 0,   // AI(W906-STREAM-F) 20260930: tagSkipped / tagResync
++                   screenTakes: 0, screenRejoins: 0, screenTakeRefused: 0, screenKeeps: 0, screenLost: 0, screenRegained: 0 };   // AI(W906-SCREEN-TOKEN) 20261001
+   }
+ 
+   Hub.prototype.connect = function () {
+     if (this.state !== 'idle') return;
+-    var self = this, ws;
++    var self = this, ws, opened = false;   // opened: AI(W906-SCREEN-TOKEN) 20261001 review R3 -- a connect attempt that never opened says nothing about the token
+     this.state = 'connecting';
+     try { ws = new this.WS(this.url); } catch (e) { this.state = 'idle'; this._allClosed(1006, 'cannot open ' + this.url); return; }
+     this.sock = ws;
+     this.stats.realOpens++;
+     ws.onopen = function () {
+       if (self.sock !== ws) return;
+-      self.state = 'open';
++      self.state = 'open'; opened = true;
++      self._screenStart();          // AI(W906-SCREEN-TOKEN) 20261001: FIRST on the socket, so every page command after it finds this connection the owner
+       Object.keys(self.clients).forEach(function (cid) { self._clientOpen(self.clients[cid]); });
+     };
+     ws.onmessage = function (ev) { if (self.sock === ws) self._fromServer(String(ev.data)); };
+     ws.onclose = function (ev) {
+       if (self.sock !== ws) return;
+       self.sock = null; self.state = 'idle';
++      // AI(W906-SCREEN-TOKEN) 20261001: review R1 / R3 (read before _allClosed resets the token): an OPENED socket that drops while
++      //   this screen holds the token -- proven by an answer within 1.5 keep periods (a throttled hidden tab's belief is older) --
++      //   takes it back on the next open (a wb_serve restart). Failed attempts in between change nothing.
++      if (opened && self.token.held && now() - self.lastHeldOkAt <= SCREEN_KEEP_MS * 1.5) self.takeNext = true;
++      self._screenStop();           // AI(W906-SCREEN-TOKEN) 20261001
+       self._allClosed(ev && ev.code, ev && ev.reason);
+     };
+     ws.onerror = function () {};
+@@ -319,6 +348,69 @@
+     this._up(JSON.stringify({ type: 'cmd', id: gid, cmd: 'control.release' }));
+   };
+ 
++  // AI(W906-SCREEN-TOKEN) 20261001: the screen's own token traffic (header: "the SCREEN holds the token").
++  //   kind 'screen' = the one control.takeover when the real socket opens; kind 'keep' = the control.acquire every
++  //   SCREEN_KEEP_MS. Both are answered on the server's socket thread (WebBridgeServer.cpp control.acquire branch), in
++  //   order with the page commands on this one socket. The takeover goes first, so a page's acquire right behind it
++  //   finds this connection the owner. Pseudo-holder 0 = the screen itself: with it in T.holders a page's release (or
++  //   a page going away) is answered locally and never releases the server's token.
++  //   Review R1 / R3 (20261001): takeover ONLY while takeNext is set: from the hub's start (this screen was just opened /
++  //   reloaded = the newest) until a screen takeover is answered ok, and again after an opened socket dropped while this
++  //   screen held the token with a fresh proof (a wb_serve restart: give it back to the screen that had it).
++  //   Any other reconnect sends control.acquire: after a restart a stale tab that reconnects last must not take the token
++  //   from the newest screen (control-held leaves it view-only; its keep-alive regains the token only if nobody holds it).
++  Hub.prototype._screenSend = function (name, kind) {
++    if (this.state !== 'open' || !this.sock) return;
++    var gid = this.nextGid++;
++    this.inflight[gid] = { cid: 0, lid: 0, kind: kind, name: name };
++    this._up(JSON.stringify({ type: 'cmd', id: gid, cmd: name }));
++  };
++  Hub.prototype._screenStart = function () {
++    if (!SCREEN_TAKE) return;
++    this._screenStop();
++    var take = this.takeNext;
++    if (take) this.stats.screenTakes++; else this.stats.screenRejoins++;
++    this._screenSend(take ? 'control.takeover' : 'control.acquire', 'screen');
++    var self = this;
++    this.lastRegainAt = 0;
++    this.keepTimer = setInterval(function () {
++      if (self.state !== 'open' || self.keepBusy) return;
++      if (!self.token.held) {                                          // view-only: ask now and then, never take
++        var t = now();
++        if (t - self.lastRegainAt < SCREEN_REGAIN_MS) return;
++        self.lastRegainAt = t;
++      }
++      self.keepBusy = true;
++      self.stats.screenKeeps++;
++      self._screenSend('control.acquire', 'keep');
++    }, SCREEN_KEEP_MS);
++  };
++  Hub.prototype._screenStop = function () {
++    if (this.keepTimer) { clearInterval(this.keepTimer); this.keepTimer = null; }
++    this.keepBusy = false;
++  };
++  Hub.prototype._screenAck = function (r, m) {
++    var T = this.token;
++    if (r.kind === 'keep') this.keepBusy = false;
++    if (m.ok) {
++      if (r.kind === 'keep' && !T.held) this.stats.screenRegained++;   // the other holder went away: this screen operates again
++      if (r.kind === 'screen' && r.name === 'control.takeover') this.takeNext = false;   // spent only when it worked (review R3)
++      this.lastHeldOkAt = now();
++      T.held = true;
++      T.holders[0] = true;
++      return;
++    }
++    if (r.kind === 'screen') {
++      if (r.name === 'control.acquire') return;                        // a reconnect while another connection holds it: view-only, the keep-alive watches
++      this.stats.screenTakeRefused++;                                  // a read-only bridge / no command queue: nothing to hold
++      try { if (g.console && g.console.warn) g.console.warn('[HT9045Link] screen control.takeover refused: ' + (m.error || '?')); } catch (ew) {}
++      return;
++    }
++    // keep refused (control-held): another connection took the token over -- view-only here until an operator press
++    //   (takeover) or that connection goes; the pages are told once (link.token owner:false), as for not-operator
++    if (T.held || Object.keys(T.holders).length) { this.stats.screenLost++; this._tokenLost(); }
++  };
++
+   // a frame from one client
+   Hub.prototype.fromClient = function (cid, text) {
+     var c = this.clients[cid];
+@@ -437,6 +529,7 @@
+         if (P && P.gid === m.id) delete T.pend[r.name];
+         if (m.ok) {
+           T.held = true;
++          if (SCREEN_TAKE) { T.holders[0] = true; this.lastHeldOkAt = now(); }   // AI(W906-SCREEN-TOKEN) 20261001: regained by a page (e.g. an operator press after a takeover elsewhere) -> the screen keeps it again
+           ws.forEach(function (w) { if (self.clients[w.cid]) T.holders[w.cid] = true; });
+         }
+         ws.forEach(function (w) {
+@@ -448,6 +541,7 @@
+         return;
+       }
+       if (r.kind === 'hubrelease') { this._hubReleaseAck(r, m); return; }
++      if (r.kind === 'screen' || r.kind === 'keep') { this._screenAck(r, m); return; }   // AI(W906-SCREEN-TOKEN) 20261001
+       if (!m.ok && m.error === 'not-operator') this._tokenLost();
+       if (!r.cid) return;
+       var c = this.clients[r.cid];
+@@ -474,7 +568,8 @@
+     var self = this;
+     return { url: this.url, state: this.state, clients: Object.keys(this.clients).map(function (cid) {
+                var c = self.clients[cid]; return { id: +cid, name: c.name, port: !!c.port, holder: !!self.token.holders[cid] }; }),
+-             tokenHeld: this.token.held, inflight: Object.keys(this.inflight).length, cachedTags: Object.keys(this.cache).length,  tagsOff: Object.keys(this.clients).filter(function (cid) { return self.clients[cid].tagsOff; }).length,   // AI(W906-STREAM-F) 20260930
++             tokenHeld: this.token.held, screen: SCREEN_TAKE, screenHeld: !!this.token.holders[0], takeNext: this.takeNext,   // AI(W906-SCREEN-TOKEN) 20261001
++             inflight: Object.keys(this.inflight).length, cachedTags: Object.keys(this.cache).length,  tagsOff: Object.keys(this.clients).filter(function (cid) { return self.clients[cid].tagsOff; }).length,   // AI(W906-STREAM-F) 20260930
+              stats: this.stats };
+   };
+ 
+@@ -489,6 +584,15 @@
+   var relayState = {};
+   var relayMisses = 0;     // hello timeouts so far (status())
+   var mySocks = [];        // iframe: virtual sockets that ride the relay (for bye on pagehide)
++  var looseTries = [];     // iframe: hello channels not (or no longer) bound -- bye on pagehide too (AI(W906-SCREEN-TOKEN) 20261001, review R2)
++  // AI(W906-SCREEN-TOKEN) 20261001: review R2 -- a hello channel we give up on gets a bye BEFORE it goes: if the frame handles that
++  //   hello later, hub.add() runs and the queued bye removes the client at once (no ghost client fed every patch until ping
++  //   loss, ~20 s). The port is closed only later, so the queued bye is never lost with it.
++  function dropTry(p) {
++    looseTries = looseTries.filter(function (x) { return x !== p; });
++    try { p.postMessage({ k: 'bye' }); } catch (e) {}
++    setTimeout(function () { try { p.close(); } catch (e2) {} }, 30000);
++  }
+ 
+   function WSClass() { return g.WebSocket; }
+ 
+@@ -545,48 +649,96 @@
+     return hubs[key];
+   }
+ 
+-  // iframe: one MessageChannel per virtual socket
++  // AI(W906-SCREEN-TOKEN) 20261001: does the parent (the frame) run a hub for this URL? Same-origin read of its
++  //   HT9045Link.hub(url); false for a cross-origin parent, a parent without HT9045Link, or one without that hub.
++  function parentHasHub(url) {
++    try { var L = g.parent && g.parent !== g && g.parent.HT9045Link; return !!(L && typeof L.hub === 'function' && L.hub(url)); }
++    catch (e) { return false; }
++  }
++
++  // iframe: one MessageChannel per virtual socket (one more per re-asked hello, see late())
+   function attachRelay(vs, name) {
+     var MC = g.MessageChannel;
+     if (!MC) { bindDirect(vs, WSClass()); return; }
+-    var ch = new MC(), port = ch.port1, welcomed = false, key = normUrl(vs.url);
+-    var timer = setTimeout(function () {
+-      if (welcomed) return;
++    var key = normUrl(vs.url), bound = null, tries = [], timer = null, warned = false, wait = HELLO_WAIT_MS;
++    function closeTries() { tries.forEach(dropTry); tries = []; }
++    function gone() { return vs.readyState === CLOSING || vs.readyState === CLOSED; }   // the caller gave up (e.g. the recipe client's open timeout)
++    function late() {
++      timer = null;
++      if (bound || vs.via === 'direct') return;
++      if (gone()) { closeTries(); return; }           // no socket for a closed virtual socket (it would stay open, unowned)
+       relayMisses++;                                  // not sticky: the next open() asks the parent again
++      // AI(W906-SCREEN-TOKEN) 20261001: the frame HAS a hub for this URL -> its answer is only late (busy frame). A direct
++      //   socket here would be a second server connection with its own token holder (the 'control-held' of 1001), so ask
++      //   again on a new channel and keep waiting. Earlier channels stay open: whichever welcome comes first binds, any
++      //   later welcome is answered with bye at once (no ghost client in the hub).
++      if (parentHasHub(vs.url)) {
++        if (!warned) {
++          warned = true;
++          try { if (g.console && g.console.warn) g.console.warn('[HT9045Link] the frame hub did not answer within ' + HELLO_WAIT_MS + ' ms for ' + vs.url +
++            ': asking again and waiting (no direct socket: one connection per screen)'); } catch (ew) {}
++        }
++        wait = Math.min(wait * 2, HELLO_WAIT_MS * 8);  // back off: a few channels a minute at most
++        hello();
++        return;
++      }
+       try { if (g.console && g.console.warn) g.console.warn('[HT9045Link] no hub answered within ' + HELLO_WAIT_MS + ' ms for ' + vs.url +
+-        ': this socket opens directly (one more server connection); the next open() asks the frame again'); } catch (ew) {}
+-      try { port.close(); } catch (e) {}
++        ': this socket opens directly (one more server connection); the next open() asks the frame again'); } catch (ew2) {}
++      closeTries();
+       bindDirect(vs, WSClass());
+-    }, HELLO_WAIT_MS);
+-    port.onmessage = function (e) {
+-      var x = e.data || {};
++    }
++    function onPort(port, x) {
+       if (x.k === 'welcome') {
+-        welcomed = true; relayState[key] = true; clearTimeout(timer);
++        if (bound || vs.via === 'direct' || gone()) { // a later answer to an earlier hello (or the socket was given up): leave the hub at once
++          dropTry(port);
++          return;
++        }
++        bound = port; relayState[key] = true; clearTimeout(timer); timer = null;
++        tries = tries.filter(function (p) { return p !== port; });   // the others stay open until their welcome (-> bye) or close
++        looseTries = looseTries.filter(function (p) { return p !== port; });
+         vs.via = 'relay';
+         vs._up = function (t) { port.postMessage({ k: 'send', data: t }); };
+-        vs._down = function () { try { port.postMessage({ k: 'bye' }); } catch (e2) {} try { port.close(); } catch (e3) {} forget(vs); };
++        vs._down = function () { try { port.postMessage({ k: 'bye' }); } catch (e2) {} try { port.close(); } catch (e3) {} forget(vs); closeTries(); };
+         mySocks.push({ vs: vs, port: port });
+-      } else if (x.k === 'nohub') {
+-        clearTimeout(timer); relayState[key] = 'nohub'; try { port.close(); } catch (e4) {}
++        return;
++      }
++      if (x.k === 'nohub') {
++        if (bound || vs.via === 'direct') return;
++        clearTimeout(timer); timer = null; relayState[key] = 'nohub'; closeTries();
++        if (gone()) return;                           // AI(W906-SCREEN-TOKEN) 20261001: review R3 -- no socket for a closed virtual socket
+         bindDirect(vs, WSClass());
+-      } else if (x.k === 'open') vs._opened();
++        return;
++      }
++      if (port !== bound) return;                     // traffic for a channel that did not bind
++      if (x.k === 'open') vs._opened();
+       else if (x.k === 'msg') vs._message(x.data);
+       else if (x.k === 'ping') port.postMessage({ k: 'pong' });
+-      else if (x.k === 'close') { forget(vs); try { port.close(); } catch (e5) {} vs._closed(x.code, x.reason, false); }
+-    };
+-    if (port.start) port.start();
+-    try {
+-      g.parent.postMessage({ ht9045link: 'hello', v: 1, url: vs.url, name: name || (g.location && g.location.pathname) || 'iframe' },
+-                           '*', [ch.port2]);
+-    } catch (e) {
+-      clearTimeout(timer); relayState[key] = 'nohub'; bindDirect(vs, WSClass());   // the parent is not reachable at all
++      else if (x.k === 'close') { forget(vs); try { port.close(); } catch (e5) {} closeTries(); vs._closed(x.code, x.reason, false); }
++    }
++    function hello() {
++      var ch = new MC(), port = ch.port1;
++      tries.push(port); looseTries.push(port);
++      port.onmessage = function (e) { onPort(port, e.data || {}); };
++      if (port.start) port.start();
++      try {
++        g.parent.postMessage({ ht9045link: 'hello', v: 1, url: vs.url, name: name || (g.location && g.location.pathname) || 'iframe' },
++                             '*', [ch.port2]);
++      } catch (e) {
++        if (bound) return;
++        clearTimeout(timer); timer = null; relayState[key] = 'nohub'; closeTries(); bindDirect(vs, WSClass());   // the parent is not reachable at all
++        return;
++      }
++      timer = setTimeout(late, wait);
+     }
++    hello();
+   }
+   function forget(vs) { mySocks = mySocks.filter(function (x) { return x.vs !== vs; }); }
+ 
+   function onPageHide() {
+     mySocks.slice().forEach(function (x) { try { x.port.postMessage({ k: 'bye' }); } catch (e) {} });
+     mySocks = [];
++    looseTries.slice().forEach(function (p) { try { p.postMessage({ k: 'bye' }); } catch (e) {} });   // AI(W906-SCREEN-TOKEN) 20261001: review R2
++    looseTries = [];
+   }
+ 
+   function open(url, name) {
+diff --git a/page/ht9045_main_close.js b/page/ht9045_main_close.js
+index c266627..8e0d0a3 100644
+--- a/page/ht9045_main_close.js
++++ b/page/ht9045_main_close.js
+@@ -211,7 +211,7 @@
+     if (!q44.timer) q44.timer = setTimeout(q44Poll, Q44_POLL_MS);
+   }
+   function q44Send(v) {
+-    var pre = clientHolds() ? Promise.resolve() : raw('control.acquire').then(function () { q44.took = true; }, function () { /* 別人持有：下面的指令自己會回 not-operator */ });
++    var pre = clientHolds() ? Promise.resolve() : raw(v && v.op !== 'status' ? 'control.takeover' : 'control.acquire').then(function () { q44.took = true; }, function () { /* 別人持有：下面的指令自己會回 not-operator */ });   // AI(W906-SCREEN-TOKEN) 20261001: 重試／強制關閉是操作員按的 ⇒ takeover；輪詢狀態（status）是自動的 ⇒ 照舊 acquire、不搶
+     return pre.then(function () { return raw(CMD, { value: JSON.stringify(v) }); }).then(unwrap, function (e) {
+       var t = (e && e.message) || String(e);
+       if (/socket closed before ack|cannot open/.test(t)) return { closedBeforeAck: true };
+@@ -358,7 +358,10 @@
+     }
+     busy = true; setBusy(b, true);
+     var had = clientHolds(), took = false;
+-    return raw('control.acquire').then(function () { if (!had) took = true; }, function () { /* 已持有或他人持有：後面的指令自己會回錯 */ })
++    // AI(W906-SCREEN-TOKEN) 20261001（RULINGS_20261001，Jimmy 1001 12:3x「3→要」）：Exit／HMI 程式視窗 Alt+F4 是操作員親手按的 ⇒ takeover，
++    //   不再 acquire：別的連線（舊視窗／殘留分頁）握著權杖時，原本這裡得 control-held、step 0 就 not-operator，連關程式都關不了。
++    //   同一個畫面（hub）裡 takeover 不換 owner，伺服器那邊什麼都不變（ht9045_link.js 檔頭）。
++    return raw('control.takeover').then(function () { if (!had) took = true; }, function () { /* 讀唯讀 bridge 等：後面的指令自己會回錯 */ })
+       .then(function () { return send(0); })
+       .then(function (r) {
+         showMessages(r);
+diff --git a/page/ht9045_recipe_client.js b/page/ht9045_recipe_client.js
+index b752397..a0ac507 100644
+--- a/page/ht9045_recipe_client.js
++++ b/page/ht9045_recipe_client.js
+@@ -131,7 +131,7 @@
+   //   null = 還沒問過（或剛重連）、true = 送得進去、false = 被拒過。
+   // 斷線時要歸回 null —— 換一個伺服器版本上來就該重新問一次，
+   // 而不是因為上一代不支援就永遠不再嘗試。
+-  var winSupported = null, winRefusal = '';  var linkWait = (function () { try { if (global.HT9045Link || global.parent === global || !document.currentScript || !document.currentScript.src) return null; var el = document.createElement('script'); el.src = document.currentScript.src.replace(/[^\/?#]*([?#].*)?$/, 'ht9045_link.js'); return new Promise(function (res) { var t = setTimeout(res, 2000); el.onload = el.onerror = function () { clearTimeout(t); res(); }; (document.head || document.documentElement).appendChild(el); }); } catch (e) { return null; } })();   // AI(W906-WSLINK) 20260929 [W906] ST01-E3：一個瀏覽器分頁只開一條 WebSocket —— 在外框（background.html）的 iframe 裡，這一頁的連線經外框的 hub（同資料夾的 ht9045_link.js）；頁面沒載它就在這裡載一次，connect() 等它（最多 2 秒），載不到／外框沒有 hub ＝照舊直接開 WebSocket
++  var winSupported = null, winRefusal = '';  var linkWait = (function () { try { if (global.HT9045Link || global.parent === global || !document.currentScript || !document.currentScript.src) return null; var src = document.currentScript.src.replace(/[^\/?#]*([?#].*)?$/, 'ht9045_link.js'); var hubParent = (function () { try { var L = global.parent.HT9045Link; return !!(L && typeof L.hub === 'function' && L.hub(wsUrl())); } catch (e2) { return false; } })(); return new Promise(function (res) { var tries = 0; (function attempt() { var el = document.createElement('script'); el.src = src; var t = setTimeout(res, hubParent ? 30000 : 2000); el.onload = function () { clearTimeout(t); res(); }; el.onerror = function () { clearTimeout(t); if (hubParent && ++tries < 2) attempt(); else res(); }; (document.head || document.documentElement).appendChild(el); })(); }); } catch (e) { return null; } })();   // AI(W906-WSLINK) 20260929 [W906] ST01-E3：一個瀏覽器分頁只開一條 WebSocket —— 在外框（background.html）的 iframe 裡，這一頁的連線經外框的 hub（同資料夾的 ht9045_link.js）；頁面沒載它就在這裡載一次，connect() 等它（最多 2 秒），載不到／外框沒有 hub ＝照舊直接開 WebSocket。AI(W906-SCREEN-TOKEN) 20261001（RULINGS_20261001，Jimmy 1001 12:3x「1→A」一個畫面一條連線）：外框**有** hub（同來源讀得到 parent.HT9045Link.hub(url)）時不再 2 秒就放棄——載得慢就等（上限 30 秒），載入失敗再試一次，兩次都失敗才直連；讀不到外框的 hub 照舊 2 秒
+ 
+   function wsUrl() {
+     if (cfg.base) return cfg.base.replace(/^http/, 'ws') + cfg.wsPath;
+diff --git a/page/ht9045_wire_engine.js b/page/ht9045_wire_engine.js
+index 9564a62..599ff88 100644
+--- a/page/ht9045_wire_engine.js
++++ b/page/ht9045_wire_engine.js
+@@ -101,6 +101,14 @@
+     } catch (e) { return false; }       // 極端情況（沒有 documentElement）當 release
+   }
+ 
++  // AI(W906-SCREEN-TOKEN) 20261001（RULINGS_20261001，Jimmy 1001 的截圖「C 路讀取失敗（editlist.get TestIF_File_YieldMonitoring）：control-held」）：
++  //   伺服器的權杖錯誤原樣印出來看不懂。control-held／not-operator ＝ 操作權在另一條連線（另一個畫面或分頁）——一個畫面裡的視窗共用一條連線、不會互搶
++  //   （ht9045_link.js），所以補一行白話與怎麼辦；原本的錯誤字串照留（探針與 log 認它）。
++  function tokenHint(msg) {
++    return /^(control-held|not-operator)$/.test(String(msg || '')) ?
++      '\n   → 操作權在另一個畫面（較新開啟的 HMI 視窗或另一個瀏覽器分頁），這個畫面現在只能看。要在這裡操作：在這個畫面按一下存檔、馬達或 IO 輸出這類操作按鈕（會把操作權拿回來），或關掉另一個畫面；之後再按重讀。' : '';
++  }
++
+   function say(msg, colour, kind) {
+     kind = kind || 'sticky';
+     if (kind === 'startup' && !isDebug()) return msg;   // 連 bar 都不建
+@@ -870,7 +878,7 @@
+           return w;
+         });
+       });
+-    }).catch(function (e) { say('❌ ' + what + '失敗：' + e.message, '#f88'); throw e; });
++    }).catch(function (e) { say('❌ ' + what + '失敗：' + e.message + tokenHint(e.message), '#f88'); throw e; });   // AI(W906-SCREEN-TOKEN) 20261001: tokenHint
+   }
+ 
+   function gridAddRow() {
+@@ -1224,7 +1232,7 @@
+       say(lines.join('\n'), prefixColour || ((mustMiss.length || unf.length) ? '#ffcc66' : '#9f9'));
+       return d;
+     }, function (e) {
+-      say('❌ C 路讀取失敗（editlist.get ' + st + '）：' + e.message, '#f88');
++      say('❌ C 路讀取失敗（editlist.get ' + st + '）：' + e.message + tokenHint(e.message), '#f88');   // AI(W906-SCREEN-TOKEN) 20261001: tokenHint
+       return null;
+     });
+   }
+@@ -1297,7 +1305,7 @@
+       return gbLoad(lines.join('\n'), a.saved ? ((s.todo || []).length ? '#ffcc66' : '#9f9') : '#f88');   // 規則 3：寫完一定重讀
+     }, function (e) {
+       GB_LAST = { saved: false, error: e.message };
+-      say('❌ 寫入失敗：' + e.message + (/reload page/.test(e.message) ? '\n→ 請先按重讀（權限或登入狀態變了）' : ''), '#f88');
++      say('❌ 寫入失敗：' + e.message + (/reload page/.test(e.message) ? '\n→ 請先按重讀（權限或登入狀態變了）' : '') + tokenHint(e.message), '#f88');   // AI(W906-SCREEN-TOKEN) 20261001: tokenHint
+       return null;
+     });
+   }
+@@ -1774,7 +1782,7 @@
+       say(lines.join('\n'), a.saved === false ? '#f88' : ((a.todo || []).length ? '#ffcc66' : '#9f9'));
+       return load();                                   // 規則 3：寫完一定重讀
+     }, function (e) {
+-      say('❌ 寫入失敗：' + e.message, '#f88');
++      say('❌ 寫入失敗：' + e.message + tokenHint(e.message), '#f88');   // AI(W906-SCREEN-TOKEN) 20261001: tokenHint
+       return null;
+     });
+   }
+diff --git a/page/testercomm.html b/page/testercomm.html
+index 42152aa..e186c43 100644
+--- a/page/testercomm.html
++++ b/page/testercomm.html
+@@ -11,10 +11,33 @@
+   TCPIP（Handler 內建 TfTesterTCP，P5 接上後才有資料）。32 站面板四種模式共用 HTWidgets.makeDutPanel（裁決 10）。
+ 
+   資料通道（wb_serve 側由 P3 接上；未接時本頁顯示「離線」並可切到 Demo）：
++    GET  /api/testercomm/home                 -> AI(W906-TC-SHARED) 20261001 (St02-E)：Test Result 分頁唯一的 JSON（各模式同一個形狀，TesterComm/UiHome.h）：
++                                                 {schema:"testercomm.home/1", testType, testTypeName, source, up, siteCount,
++                                                  binItems[], binEditable, enabledEditable,
++                                                  sites[32]{no, caption, text, state, color, enabled, bin, binText, ocr},
++                                                  log{tag, from, seq, lines[最後 ≤200 行，golden 原文]}}
++    POST /api/testercomm/home?cmd=site <0..31> on 0|1 ／ site <0..31> bin <index> -> 轉給目前介面的引擎
++                                                 （on 只在 enabledEditable、bin 只在 binEditable 時送；Demo 一律不送）
+     GET  /api/testercomm/<gpib|rs232|tcpip>   -> 引擎快照 JSON（TesterComm/UiChannel::Read，約 200 ms 更新一次）
+     POST /api/testercomm/<key>?cmd=<一行指令，URL 編碼> -> UiChannel::Post（引擎在 TesterComm 執行緒上套用並呼叫 golden 處理函式）
+   指令格式見 TesterComm/Gpib/GpibUiSnapshot.cpp 與 TesterComm/Rs232/Rs232UiSnapshot.cpp 檔頭。
+   裁決 1：IO 必須即時、畫面可以略有延遲 —— 本頁只讀快照、只送指令，不會拖慢通訊執行緒。
++  AI(W906-TC-SHARED) 20261001 (St02-E)：Steven 1001「我以為site01~32的面板是共用的!」「然後通訊Log的memo也是共用的」——
++    golden 一台機台只跑一個介面的程式，每支程式一個站台面板、一個通訊 memo：RS232Standard MainForm.dfm:3893 palSite＋:3865 MemoLog
++    （RS232／TTL1／TTL2 都寫進同一個，帶 [RS232]／[TTL1]／[TTL2] 標籤，MainForm.cpp:2231-2249）、H9046_32GPIB Main.dfm:198 palSite＋
++    :818 lstRecord（Main.cpp:701-724 WriteLog）、Handler 的 TfTesterTCP（TesterTCP.dfm:116 plSite01～32、:37 mmTCPIPCommLog）。
++    ⇒ Steven：「截圖的元件只有一份, 在首頁」「主要通訊log也是只有一份, 在首頁」「其他的設定值可以根據不同的測試模式進行分頁」
++    「C++端在 32site 與 通訊log部分, 也是整合一個JSON進行發送」「不需要根據不同的格式呼叫不同的JSON」——
++    「Test Result」分頁（Steven 20261001 14:5x：「應該是要新增一個分頁叫做 test result」「裡面放 gpsite00~31的面板, 跟 MemoLog」
++    「然後另外三頁gpib / rs232 / tcpip 裡面就不需要上面兩項」）放唯一的 Site01～32 面板（gpSite00～31）＋唯一的 MemoLog，顯示配方選的介面（Tester.Data [Mode] Tester Type＝TestIF_File.iTestType，
++    TCP/IP 快照的 testType：TTL 0／GPIB 1／RS232 2／TCP_IP 3，golden cTesterIF.cpp:572-578）。
++    AI(W906-TC-SHARED) 20261001 (St02-E)：St02-M 裁決——Log 行照 golden 原文顯示（不補標籤、不解析），標籤與來源 memo 只在
++    Log 標題列顯示一次（例：MemoLog　[GPIB] lstRecord）。分頁（Steven 20261001 15:0x：「debug模式顯示上面的tab沒問題」
++    「release模式下, 只留目前使用中的通訊格式就好」）：JSON 的 build＝"sim"（模擬／debug 組態）全部分頁都顯示；"ship"（出貨／release）
++    只留 Test Result＋目前使用中的那一頁（source：gpib／rs232（含 TTL）／tcpip）＋那支程式自己的 Version（TCP/IP 沒有版本紀錄，就不留）；站台格子不依 state 上色（golden 從不改 plSite->Color，一律 clSilver），
++    只用 color。GPIB／RS232・TTL／TCP/IP 分頁只放各模式的設定與專屬 memo（沒有站台格子、沒有主 Log）；兩支程式的版本紀錄
++    （GPIB Memo1、RS232 MemoVer）放 Version 分頁（golden 兩支都有 Version 分頁）。log 檔照舊各自寫（D:\GPIBLOG、D:\RS232Log、Test_TCPIP），只改畫面。
++    只在視窗開著時輪詢（HT_WIN，同 HW.IoSetView.html:445-456）。
+ -->
+ <style>
+   body.winpage{padding:0;margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden;background:#A6B8C2;}
+@@ -37,6 +60,9 @@
+   .btn3d{background:#ece9d8;border:2px outset #cfcfcf;border-radius:3px;padding:2px 8px;cursor:pointer;font:12px sans-serif;}
+   .btn3d:active{border-style:inset;}
+   .sites{position:relative;width:1232px;height:440px;margin-bottom:6px;}
++  /* AI(W906-TC-SHARED) 20261001 (St02-E): the Home tab's one main comm log */
++  #pane-home .logs{grid-template-columns:1fr;}
++  #pane-home .logs pre{height:260px;}
+   .logs{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
+   .logs pre{height:180px;overflow:auto;margin:0;background:#CCD9DF;border:1px inset #8a9aa8;
+     font:11px Consolas,"Courier New",monospace;padding:3px;white-space:pre-wrap;}
+@@ -47,13 +73,28 @@
+ <body class="winpage">
+ <div class="tcWrap">
+   <div class="tabs">
+-    <div class="tab act" data-tab="gpib">GPIB</div>
++    <div class="tab act" data-tab="home">Test Result</div>
++    <div class="tab" data-tab="gpib">GPIB</div>
+     <div class="tab" data-tab="rs232">RS232 / TTL（DIO）</div>
+     <div class="tab" data-tab="tcpip">TCP/IP</div>
++    <div class="tab" data-tab="version">Version</div>
++  </div>
++
++  <!-- ================= Test Result (AI(W906-TC-SHARED) 20261001 (St02-E)): the ONE Site01~32 grid + the ONE main comm log, for the active interface ================= -->
++  <div class="tcPane act" id="pane-home">
++    <div class="tcBar">
++      <span class="kv">測試介面</span> <span class="tcState off" id="s-iface">-</span>
++      <span class="kv">Tester Type（Tester.Data [Mode]）<span id="s-type">-</span></span>
++      <span class="kv">來源 <span id="s-source">-</span></span>
++      <label class="kv"><input type="checkbox" id="s-demo"> Demo（離線看版面）</label>
++      <select id="s-demoType"><option value="1">GPIB</option><option value="2">RS232</option><option value="0">TTL</option><option value="3">TCP/IP</option></select>
++    </div>
++    <div class="sites" id="s-sites"></div>
++    <div class="logs"><div><b class="kv">MemoLog<span id="s-logname"></span></b><pre id="s-log"></pre></div></div>
+   </div>
+ 
+   <!-- ================= GPIB ================= -->
+-  <div class="tcPane act" id="pane-gpib">
++  <div class="tcPane" id="pane-gpib">
+     <div class="tcBar">
+       <span class="tcState off" id="g-state">離線</span>
+       <span class="kv">版本 <span id="g-version">-</span></span>
+@@ -103,10 +144,7 @@
+       </div>
+       <div class="logs" style="grid-template-columns:1fr;margin-top:4px"><div><b class="kv">COM Log（MemoLog）</b><pre id="g-MemoLog" style="height:120px"></pre></div></div>
+     </div>
+-    <div class="sites" id="g-sites"></div>
+     <div class="logs">
+-      <div><b class="kv">Memo1（GPIB log）</b><pre id="g-Memo1"></pre></div>
+-      <div><b class="kv">lstRecord</b><pre id="g-lstRecord"></pre></div>
+       <div><b class="kv">mmoBINON</b><pre id="g-mmoBINON"></pre></div>
+       <div><b class="kv">memoAlarmCode</b><pre id="g-memoAlarmCode"></pre></div>
+     </div>
+@@ -151,12 +189,9 @@
+         <button class="btn3d" data-click="Button11">Open TTL</button>
+         <button class="btn3d" data-click="btnEnableSOTCSOT">Enable SOT/CSOT</button></div>
+     </div>
+-    <div class="sites" id="r-sites"></div>
+     <div class="logs">
+-      <div><b class="kv">MemoLog</b><pre id="r-MemoLog"></pre></div>
+       <div><b class="kv">MemoBinData</b><pre id="r-MemoBinData"></pre></div>
+       <div><b class="kv">MemoBinData_TTL</b><pre id="r-MemoBinData_TTL"></pre></div>
+-      <div><b class="kv">MemoVer</b><pre id="r-MemoVer"></pre></div>
+     </div>
+   </div>
+ 
+@@ -167,10 +202,17 @@
+       <span class="kv">Tester <span id="t-addr">-</span></span>
+       <span class="kv">連線 <span id="t-conn">-</span></span>
+       <span class="notice" id="t-err"></span></div>
+-    <div class="sites" id="t-sites"></div>
+     <div class="logs"><div><b class="kv">收到的資料（SocketTCPIPReceiveList）</b><pre id="t-receive"></pre></div>
+       <div><b class="kv">最後一筆</b><pre id="t-last"></pre></div></div>
+   </div>
++
++  <!-- ================= Version (AI(W906-TC-SHARED) 20261001 (St02-E)): both golden programs' Version tabs ================= -->
++  <div class="tcPane" id="pane-version">
++    <div class="logs">
++      <div><b class="kv">GPIB（H9046_32GPIB Version 分頁 Memo1，Main.dfm:1510-1525）</b><pre id="g-Memo1"></pre></div>
++      <div><b class="kv">RS232Standard（tsVersion MemoVer，MainForm.dfm:3398-3401）</b><pre id="r-MemoVer"></pre></div>
++    </div>
++  </div>
+ </div>
+ 
+ <script src="hwidgets.js"></script>
+@@ -179,7 +221,7 @@
+   'use strict';
+   var PERIOD = 300;                 // 快照輪詢（引擎 200 ms 發布一次）
+   var API = '/api/testercomm/';
+-  var cur = 'gpib';
++  var cur = 'home';
+   var demo = { gpib: false, rs232: false, tcpip: false };
+ 
+   // ---------- tabs ----------
+@@ -197,21 +239,46 @@
+   //   寫進 localStorage 'ht9045.testercomm.tab'（ht9045_testerif_c_wire.js）。本頁剛載入就讀；已開著時靠 storage 事件。
+   //   單獨開頁時也接受 #gpib／#rs232／#tcpip。
+   var TAB_KEY = 'ht9045.testercomm.tab';
++  // AI(W906-TC-SHARED) 20261001 (St02-E): Steven 1001 15:0x「debug模式顯示上面的tab沒問題」「release模式下, 只留目前使用中的通訊格式就好」.
++  //   The home JSON's build decides (TesterComm/UiHome.h HomeBuild): "sim" (or no data yet, or the demo) -> every tab;
++  //   "ship" -> Test Result, the tab of the interface in use (source) and Version with that program's own memo only
++  //   (golden: one program per machine, each with its own tabs).  Updated whenever a live home JSON arrives.
++  var tabKeep = null, verKeys = ['gpib', 'rs232'], buildView = 'all';
++  function applyBuildTabs(h) {
++    var ship = !!(h && h.build === 'ship');
++    var src = ship ? String(h.source || 'none') : '';
++    var view = ship ? 'ship:' + src : 'all';
++    if (view === buildView) return;
++    buildView = view;
++    tabKeep = !ship ? null : { home: true, gpib: src === 'gpib', rs232: src === 'rs232', tcpip: src === 'tcpip',
++                               version: src === 'gpib' || src === 'rs232' };
++    Array.prototype.forEach.call(document.querySelectorAll('.tabs .tab'), function (t) {
++      t.style.display = !tabKeep || tabKeep[t.getAttribute('data-tab')] ? '' : 'none';
++    });
++    document.getElementById('g-Memo1').parentNode.style.display = !ship || src === 'gpib' ? '' : 'none';
++    document.getElementById('r-MemoVer').parentNode.style.display = !ship || src === 'rs232' ? '' : 'none';
++    verKeys = !ship ? ['gpib', 'rs232'] : (src === 'gpib' ? ['gpib'] : (src === 'rs232' ? ['rs232'] : []));
++    if (tabKeep && !tabKeep[cur]) selectTab('home');
++  }
+   function selectTab(k) {
++    if (tabKeep && !tabKeep[k]) k = 'home';   // release: a hidden tab opens Test Result instead
+     var t = document.querySelector('.tabs .tab[data-tab="' + k + '"]');
+     if (t && !t.classList.contains('act')) t.click();
+   }
+   function takeTabRequest() {
+     var k = null;
+     try { k = localStorage.getItem(TAB_KEY); if (k) localStorage.removeItem(TAB_KEY); } catch (e) { k = null; }
+-    if (!k && /^#(gpib|rs232|tcpip)$/.test(location.hash)) k = location.hash.slice(1);
+-    if (k === 'gpib' || k === 'rs232' || k === 'tcpip') selectTab(k);
++    if (!k && /^#(home|gpib|rs232|tcpip|version)$/.test(location.hash)) k = location.hash.slice(1);
++    if (k === 'home' || k === 'gpib' || k === 'rs232' || k === 'tcpip' || k === 'version') selectTab(k);
+   }
+   window.addEventListener('storage', function (e) { if (e.key === TAB_KEY && e.newValue) takeTabRequest(); });
+   takeTabRequest();
+ 
+   // ---------- 32 site panels (shared maker, ruling 10) ----------
+-  function buildSites(hostId, key) {
++  // AI(W906-TC-SHARED) 20261001 (St02-E): what the last home JSON allows (testercomm.home/1 binEditable / enabledEditable);
++  //   a cell's checkbox / dropdown only posts while its flag is true (TCP/IP: golden never reads cbSiteOn -> enabledEditable false)
++  var homeEdit = { on: false, bin: false };
++  function buildSites(hostId) {   // AI(W906-TC-SHARED) 20261001 (St02-E): the ONE grid; its commands go to home (C++ forwards them to the active engine)
+     var host = document.getElementById(hostId), arr = [];
+     for (var i = 0; i < 32; i++) {
+       var p = HTWidgets.makeDutPanel({ index: i, left: (i % 8) * 154, top: Math.floor(i / 8) * 110 });
+@@ -219,32 +286,68 @@
+       arr.push(p);
+       (function (idx, panel) {
+         var on = panel.querySelector('input[type=checkbox]'), bin = panel.querySelector('select');
+-        if (key) {
+-          on.addEventListener('change', function () { post(key, 'site ' + idx + ' on ' + (on.checked ? 1 : 0)); });
+-          bin.addEventListener('change', function () { post(key, 'site ' + idx + ' bin ' + bin.selectedIndex); });
+-        }
++        panel._on = on; panel._bin = bin; panel._cap = panel.querySelector('span');   // the group title (gpSite Caption)
++        panel._defCap = 'Site ' + (idx < 9 ? '0' : '') + (idx + 1);
++        on.addEventListener('change', function () { if (homeEdit.on) post('home', 'site ' + idx + ' on ' + (on.checked ? 1 : 0)); });
++        bin.addEventListener('change', function () { if (homeEdit.bin) post('home', 'site ' + idx + ' bin ' + bin.selectedIndex); });
+       })(i, p);
+     }
+     return arr;
+   }
+-  var sites = { gpib: buildSites('g-sites', 'gpib'), rs232: buildSites('r-sites', 'rs232'), tcpip: buildSites('t-sites', null) };
++  var shared = buildSites('s-sites');
+ 
+   function bgr(c) {   // VCL TColor (BGR) -> CSS
+     if (c == null || c <= 0) return null;
+     var r = c & 0xff, g = (c >> 8) & 0xff, b = (c >> 16) & 0xff;
+     return 'rgb(' + r + ',' + g + ',' + b + ')';
+   }
+-  function applySites(key, list) {
+-    if (!list) return;
+-    for (var i = 0; i < 32 && i < list.length; i++) {
+-      var s = list[i], p = sites[key][i];
+-      if (!s || !p) continue;
+-      p.setSite(s.site, bgr(s.color));
+-      if (s.binText) p.setBin(s.binText);
+-      p.setOn(s.on);
+-      p.setOcr(s.ocr);
++  var CL_SILVER = 12632256;   // golden plSite->Color (clSilver; golden never changes it)
++  // AI(W906-TC-SHARED) 20261001 (St02-E): the dropdown's items are this mode's golden list (binItems); rebuilt only when the list changes
++  function setBinItems(sel, items) {
++    var key = items.join('\u0001');
++    if (sel._items === key) return;
++    sel._items = key;
++    sel.innerHTML = '';
++    items.forEach(function (t) { var o = document.createElement('option'); o.value = t; o.textContent = t; sel.appendChild(o); });
++  }
++  // AI(W906-TC-SHARED) 20261001 (St02-E): one cell, testercomm.home/1 shape. text verbatim; colour only from `color` (St02-M ruling (a):
++  //   never from `state`); checkbox checked = (enabled === true), disabled when !enabledEditable or enabled === null;
++  //   dropdown selects index `bin` (-1 = none), disabled when !binEditable.
++  function applySite(p, s, items, h) {
++    p._cap.textContent = s.caption != null ? String(s.caption) : p._defCap;
++    p.setSite(s.text == null ? '' : String(s.text), bgr(s.color));
++    p._on.checked = s.enabled === true;
++    p._on.disabled = !h.enabledEditable || s.enabled == null;
++    var sel = p._bin;
++    if (items) setBinItems(sel, items);
++    if (document.activeElement !== sel) {
++      var bi = typeof s.bin === 'number' ? s.bin : -1;
++      if (!(bi >= 0 && bi < sel.options.length) && s.binText != null)   // no ItemIndex yet: golden shows cbBin->Text ("1", MyDutPanel.cpp:69)
++        for (var k = 0; k < sel.options.length; k++) if (sel.options[k].value === String(s.binText)) { bi = k; break; }
++      sel.selectedIndex = bi >= 0 && bi < sel.options.length ? bi : -1;
++    }
++    sel.disabled = !h.binEditable;
++    p.setOcr(s.ocr);
++  }
++  function clearSite(p) {
++    p._cap.textContent = p._defCap;
++    p.setSite('--', bgr(CL_SILVER));
++    p.setOcr('');
++    p._on.checked = false; p._on.disabled = true;
++    if (document.activeElement !== p._bin) p._bin.selectedIndex = -1;
++    p._bin.disabled = true;
++  }
++  function applySites(h) {   // the cells this JSON carries; the rest (sites shorter than 32) are cleared (ruling (e))
++    var list = h.sites || [], items = Array.isArray(h.binItems) ? h.binItems.map(String) : null;
++    var n = Math.min(32, list.length, typeof h.siteCount === 'number' ? h.siteCount : 32);
++    for (var i = 0; i < 32; i++) {
++      if (i < n && list[i]) applySite(shared[i], list[i], items, h);
++      else clearSite(shared[i]);
+     }
+   }
++  function clearSites() {
++    for (var i = 0; i < 32; i++) clearSite(shared[i]);
++  }
+ 
+   // ---------- helpers ----------
+   function $(id) { return document.getElementById(id); }
+@@ -297,7 +400,8 @@
+     e.textContent = !ok ? '離線（/api/testercomm 未接）' : (snap && snap.up ? '連線中' : ('已停止' + (snap && snap.closeReason ? '：' + snap.closeReason : '')));
+   }
+   function post(key, cmd) {
+-    if (demo[key]) { console.log('[demo] ' + key + ': ' + cmd); return; }
++    // AI(W906-TC-SHARED) 20261001 (St02-E): the Home demo (s-demo) never posts either
++    if (demo[key] || (key === 'home' && sharedDemo)) { console.log('[demo] ' + key + ': ' + cmd); return; }
+     // wb_serve's HTTP route hook sees no request body, so the command travels in the query (URL-encoded)
+     fetch(API + key + '?cmd=' + encodeURIComponent(cmd), { method: 'POST' }).catch(function () {});
+   }
+@@ -377,8 +481,7 @@
+       if (document.activeElement !== ri) ri.value = ra.edReadIntervalTimeout || '';
+       tail('g-MemoLog', ra.MemoLog);
+     }
+-    applySites('gpib', s.sites);
+-    if (s.logs) { tail('g-Memo1', s.logs.Memo1); tail('g-lstRecord', s.logs.lstRecord); tail('g-mmoBINON', s.logs.mmoBINON); tail('g-memoAlarmCode', s.logs.memoAlarmCode); }
++    if (s.logs) { tail('g-mmoBINON', s.logs.mmoBINON); tail('g-memoAlarmCode', s.logs.memoAlarmCode); }
+   }
+ 
+   // ---------- RS232 / TTL ----------
+@@ -399,8 +502,7 @@
+       var v = s.checks && s.checks[c.getAttribute('data-check')];
+       if (v) { c.checked = v.checked; c.disabled = v.enabled === false; }
+     });
+-    applySites('rs232', s.sites);
+-    if (s.logs) { tail('r-MemoLog', s.logs.MemoLog); tail('r-MemoBinData', s.logs.MemoBinData); tail('r-MemoBinData_TTL', s.logs.MemoBinData_TTL); tail('r-MemoVer', s.logs.MemoVer); }
++    if (s.logs) { tail('r-MemoBinData', s.logs.MemoBinData); tail('r-MemoBinData_TTL', s.logs.MemoBinData_TTL); }
+   }
+ 
+   // ---------- TCP/IP ----------
+@@ -410,23 +512,105 @@
+     e.textContent = !ok ? '離線（/api/testercomm 未接）' : (s && s.up ? 'TCP/IP 模式 ON-LINE' : '不是 TCP/IP 模式或 OFF-LINE');
+     if (!s || !s.sites) return;
+     setText('t-addr', s.address + ':' + s.port);
++    /* AI(W906-TC-SHARED) 20261001 (St02-E): the 32 sites moved to the shared panel */
+     setText('t-conn', s.connected ? 'ON-LINE' : (s.connecting ? '連線中' : 'OFF-LINE'));
+     setText('t-err', s.error ? s.errorMessage : '');
+-    for (var i = 0; i < 32 && i < s.sites.length; i++) {
+-      var p = sites.tcpip[i], t = s.sites[i];
+-      if (!p || !t) continue;
+-      p.setSite(t.site); p.setOcr(t.ocr);
+-    }
+     tail('t-receive', s.receive);
+     setText('t-last', s.lastReceive);
+   }
+ 
++  // ---------- AI(W906-TC-SHARED) 20261001 (St02-E): Test Result = the ONE JSON (GET /api/testercomm/home, TesterComm/UiHome.h) ----------
++  // The same shape for every interface (schema "testercomm.home/1", see the file header). The log lines are golden's text
++  // VERBATIM (St02-M ruling (b): no tags added, no parsing); the tag and the source memo show once, in the log header.
++  // The memo is incremental by log.seq (lines added so far): the page keeps its own buffer (HOME_LOG_CAP lines).
++  var HOME_LOG_CAP = 2000;
++  var homeLog = { lines: [], seq: 0, tag: null, from: null };
++  function homeLogHeader(tag, from) {
++    var parts = [];
++    if (tag) parts.push('[' + tag + ']');
++    if (from) parts.push(from);
++    setText('s-logname', parts.length ? '　' + parts.join(' ') : '');
++  }
++  function resetHomeLog() {   // no data / error: empty memo, header without a tag (ruling (j))
++    homeLog.lines = []; homeLog.seq = 0; homeLog.tag = null; homeLog.from = null;
++    homeLogHeader('', '');
++    tail('s-log', []);
++  }
++  function applyHomeLog(lg) {
++    var tag = lg && lg.tag ? String(lg.tag) : '', from = lg && lg.from ? String(lg.from) : '';
++    var seq = lg && typeof lg.seq === 'number' ? lg.seq : 0;
++    var lines = lg && Array.isArray(lg.lines) ? lg.lines : [];
++    var changed = false;
++    if (tag !== homeLog.tag || from !== homeLog.from || seq < homeLog.seq) {
++      homeLog.lines = lines.slice(); changed = true;            // another interface / memo, or the counter restarted
++    } else {
++      var k = seq - homeLog.seq;
++      if (k > lines.length) { homeLog.lines = lines.slice(); changed = true; }                 // missed more than the JSON carries
++      else if (k > 0) { Array.prototype.push.apply(homeLog.lines, lines.slice(lines.length - k)); changed = true; }
++    }
++    if (homeLog.lines.length > HOME_LOG_CAP) homeLog.lines.splice(0, homeLog.lines.length - HOME_LOG_CAP);
++    homeLog.seq = seq; homeLog.tag = tag; homeLog.from = from;
++    homeLogHeader(tag, from);
++    if (changed) tail('s-log', homeLog.lines);   // tail() keeps the bottom only when the user was already there
++  }
++  function renderHome(h, ok) {
++    var b = $('s-iface');
++    if (!ok || !h) {
++      b.className = 'tcState off';
++      b.textContent = '離線（/api/testercomm 未接）';
++      b.title = '';
++      setText('s-type', '-'); setText('s-source', '-');
++      homeEdit.on = false; homeEdit.bin = false;
++      clearSites();
++      resetHomeLog();
++      return;
++    }
++    b.className = 'tcState ' + (h.up ? 'up' : 'down');
++    b.textContent = (h.testTypeName || ('沒有對應的面板（Tester Type ' + h.testType + '）')) + '　' + (h.up ? '連線中' : '已停止');
++    b.title = 'schema ' + (h.schema || '?');
++    setText('s-type', typeof h.testType === 'number' ? String(h.testType) : '-');
++    setText('s-source', h.source || '-');
++    homeEdit.on = !!h.enabledEditable; homeEdit.bin = !!h.binEditable;
++    if (h.sites && h.sites.length) applySites(h); else clearSites();
++    applyHomeLog(h.log);
++  }
++
++  function renderVersion(g, r) {   // AI(W906-TC-SHARED) 20261001 (St02-E): golden's two Version tabs
++    tail('g-Memo1', g && g.logs ? g.logs.Memo1 : null);
++    tail('r-MemoVer', r && r.logs ? r.logs.MemoVer : null);
++  }
++
+   // ---------- demo snapshots (offline layout check only; never sent anywhere) ----------
+-  function demoSites(prefix) {
+-    var a = [];
+-    for (var i = 0; i < 32; i++) a.push({ caption: 'Site ' + (i < 9 ? '0' : '') + (i + 1), site: i % 5 === 0 ? String(i % 16) : (i < 9 ? '0' : '') + (i + 1),
+-      color: i % 5 === 0 ? 0x00c000 : 0xc0c0c0, bin: 1, binText: '1', on: i < 16, ocr: i % 7 === 0 ? prefix + 'DEMO2D' + i : '' });
+-    return a;
++  // AI(W906-TC-SHARED) 20261001 (St02-E): Home demo objects in the testercomm.home/1 shape, one per Tester Type (s-demoType).
++  //   binItems = each golden program's cbBin list; log lines = golden line formats, verbatim (no added tags):
++  //   GPIB lstRecord "YYYY-MM-DD, hh:mm:ss.zzz, text"; RS232/TTL MemoLog 'YYYY-MM-DD, hh:mm:ss.zzz, [unit], "m1","m2"'
++  //   (RS232Standard TMyStringList::AddText); TCP mmTCPIPCommLog "YYYY-MM-DD,hh:mm:ss.zzz,TCPIP,text" (TfTesterTCP::AddTCPIPCommunicationLog).
++  var BIN_GPIB = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '1..6', '0..16', '0..255'];
++  var BIN_RS232 = ['1', '2', '3', '4', '5', '6', '1..5', '0..11'];
++  var BIN_TCP = ['1', '2', '3', '4', '5', '6', '1..5', '1..10', '1..16'];
++  var HOME_DEMO = {
++    0: { name: 'TTL', source: 'rs232', tag: 'TTL', from: 'MemoLog', items: BIN_RS232, enabledEditable: true,
++         lines: ['2026-10-01, 13:05:02.001, [Tester], "BINON 1","OK"', '2026-10-01, 13:05:02.020, [TTL1], "Double SOT error!",""'] },
++    1: { name: 'GPIB', source: 'gpib', tag: 'GPIB', from: 'lstRecord', items: BIN_GPIB, enabledEditable: true,
++         lines: ['2026-10-01, 13:05:01.123, LISTEN:FULLSITES?', '2026-10-01, 13:05:01.130, TALK:Fullsites 0000FFFF'] },
++    2: { name: 'RS232', source: 'rs232', tag: 'RS232', from: 'MemoLog', items: BIN_RS232, enabledEditable: true,
++         lines: ['2026-10-01, 13:05:02.001, [Tester], "BINON 1","OK"', '2026-10-01, 13:05:02.010, [T->H], "[STX]CF[ETX]",""'] },
++    3: { name: 'TCP/IP', source: 'tcpip', tag: 'TCPIP', from: 'mmTCPIPCommLog', items: BIN_TCP, enabledEditable: false,
++         lines: ['2026-10-01,13:05:02.900,TCPIP,Connect to tester OK', '2026-10-01,13:05:03.000,TCPIP,Send, TEST 1;'] }
++  };
++  function demoHome(tt) {
++    var f = HOME_DEMO[tt], sites = [];
++    for (var i = 0; i < 32; i++) {
++      var nn = (i < 9 ? '0' : '') + (i + 1), bin = i % 11 === 10 ? -1 : i % f.items.length;
++      var en = f.enabledEditable ? i < 16 : null;   // TCP/IP: golden never reads cbSiteOn
++      var st = en === false ? 'off' : (i % 4 === 0 ? 'bin' : (i % 4 === 1 ? 'testing' : 'idle'));
++      var bt = bin < 0 ? '' : f.items[bin];
++      sites.push({ no: i + 1, caption: 'Site ' + nn, text: st === 'bin' ? bt : (st === 'testing' ? 'T' : nn), state: st,
++                   color: CL_SILVER, enabled: en, bin: bin, binText: bt, ocr: i % 7 === 0 ? 'DEMO2D' + nn : '' });
++    }
++    return { schema: 'testercomm.home/1', testType: tt, testTypeName: f.name, source: f.source, up: true, siteCount: 32,
++             binItems: f.items, binEditable: true, enabledEditable: f.enabledEditable, sites: sites,
++             log: { tag: f.tag, from: f.from, seq: f.lines.length, lines: f.lines } };
+   }
+   var DEMO = {
+     gpib: { up: true, driver: 'sim', version: 'V12.13.905.0', caption: '9045GPIB', closeReason: '', notice: '',
+@@ -437,36 +621,68 @@
+         cbBinonEcho: { checked: false, visible: true, caption: 'BINON Echo' }, cbFullSiteTimeOut: { checked: false, visible: true, caption: 'Full Site TimeOut' },
+         cbGPIBWriteWithout_r_n: { checked: false, visible: true, caption: 'Write without \\r\\n' } },
+       combos: { cbbGPIBTimo: { index: 3, items: ['T30ms', 'T100ms', 'T300ms', 'T1s', 'T3s'] }, cbbRunMode: { index: -1, items: ['TRAYFEED', 'RETEST'] } },
+-      rgController: 0, spbAutoRetest: false, panels: { pnlAMDCmd: false, pnlHanaART: false, tsRS232: true }, sites: demoSites('G'),
++      rgController: 0, spbAutoRetest: false, panels: { pnlAMDCmd: false, pnlHanaART: false, tsRS232: true },
+       rs232Aux: { connected: true, fromRecipe: true, edReadIntervalTimeout: '70', MemoLog: ['RS232 ==> Connect : OK'],
+         combos: { cbDevice: { index: -1, text: 'COM3', items: ['COM1', 'COM2', 'COM3', 'COM4'] },
+           cbBaudRate: { index: -1, text: '19200', enabled: false, items: ['4800', '7200', '9600', '14400', '19200'] },
+           cbByteSize: { index: 2, enabled: false, items: ['5', '6', '7', '8'] }, cbStopBit: { index: 0, enabled: false, items: ['1', '1.5', '2'] },
+           cbParity: { index: 2, enabled: false, items: ['None', 'Odd', 'Even', 'Mark', 'Space'] } } },
+-      logs: { Memo1: ['0001 LISTEN:FULLSITES?', '0100 TALK:Fullsites 0000FFFF'], lstRecord: [], mmoBINON: ['Byte=42 str=BINON:00000000,00000000,00000000,00001111;'], memoAlarmCode: [] } },
++      // Memo1 = golden's Version notes only (Main.cpp Memo1->Lines->Add("2026.09.26") ...); lstRecord comm lines live on Home
++      logs: { Memo1: ['2026.09.26', '* Add Handler Type : HT-9050.'],
++        mmoBINON: ['Byte=42 str=BINON:00000000,00000000,00000000,00001111;'], memoAlarmCode: [] } },
+     rs232: { up: true, version: 'V12.13.902.0', mode: 0, ttlCardType: 0, comm: [true, false, false], closeReason: '', notice: '',
+       status: ['COM3 9600,7,E,1', '', '', '', '', '', '', ''], checks: { cbShowLog: { checked: true }, cbSaveLog: { checked: true } },
+       combos: { cbDevice: { index: 2, items: ['COM1', 'COM2', 'COM3', 'COM4'] }, cbBaudRate: { index: 2, items: ['4800', '7200', '9600', '14400', '19200'] } },
+-      edits: { edReadIntervalTimeout: '70' }, sites: demoSites('R'),
+-      logs: { MemoLog: ['[T->H] [STX]CF[ETX]', '[H->T] [STX]8|1,2,3,4[ETX]'], MemoBinData: [], MemoBinData_TTL: [], MemoVer: [] } }
++      edits: { edReadIntervalTimeout: '70' },
++      logs: { MemoBinData: [], MemoBinData_TTL: [], MemoVer: ['Rev12.13.902.0 2026.04.10'] } },
++    tcpip: { up: true, testType: 3, address: '172.16.8.150', port: 6000, connected: true, connecting: false, error: false, errorMessage: '',
++      sites: [], receive: ['PASS,1'], lastReceive: 'PASS,1' }   // sites: renderTcp's guard only (the cells live on Home)
+   };
+   $('g-demo').addEventListener('change', function () { demo.gpib = this.checked; });
+   $('r-demo').addEventListener('change', function () { demo.rs232 = this.checked; });
++  var sharedDemo = false;
++  // Home / Version offline layout; the Home log buffer restarts so demo lines never mix with live ones (St02-E 20261001)
++  $('s-demo').addEventListener('change', function () { sharedDemo = this.checked; resetHomeLog(); });
+ 
+   // ---------- poll ----------
+   var render = { gpib: renderGpib, rs232: renderRs232, tcpip: renderTcp };
+   var inflight = false;
++  // AI(W906-TC-SHARED) 20261001 (St02-E): poll only while the window is open (HT_WIN, same as HW.IoSetView.html:445-456): a minimised window counts as
++  //   open; a page that never got HT_WIN (opened on its own) keeps polling; the moment it opens, one poll at once.
++  var winHosted = false, winShown = false;
++  function pollAllowed() { return !document.hidden && (!winHosted || winShown); }
++  window.addEventListener('message', function (ev) {
++    var m = ev && ev.data;
++    if (!m || m.type !== 'HT_WIN' || ev.source !== window.parent || window.parent === window) return;
++    var was = winShown;
++    winHosted = true; winShown = !!m.open;
++    if (winShown && !was) poll();
++  });
++  function getJson(key) {
++    return fetch(API + key, { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); });
++  }
++  var TYPE_OF_TAB = { gpib: 1, rs232: 2, tcpip: 3 };
+   function poll() {
+-    var key = cur;
+-    if (demo[key]) { render[key](DEMO[key], true); return; }
++    if (!pollAllowed()) return;
++    if (sharedDemo || demo[cur]) {   // offline layout only
++      if (cur === 'home') renderHome(demoHome(Number($('s-demoType').value)), true);
++      else if (cur === 'version') renderVersion(DEMO.gpib, DEMO.rs232);
++      else render[cur](DEMO[cur], true);
++      return;
++    }
+     if (inflight) return;
+     inflight = true;
+-    fetch(API + key, { cache: 'no-store' }).then(function (r) {
+-      if (!r.ok) throw new Error(r.status);
+-      return r.json();
+-    }).then(function (s) { render[key](s, true); })
+-      .catch(function () { render[key](null, false); })
+-      .then(function () { inflight = false; });
++    // only what the open tab shows: Test Result -> the ONE home JSON; a mode tab -> its engine; Version -> the two programs
++    var need = cur === 'home' ? ['home'] : (cur === 'version' ? verKeys : [cur]);
++    Promise.all(need.map(function (k) {
++      return getJson(k).then(function (s) { return [k, s]; }, function () { return [k, null]; });
++    })).then(function (res) {
++      var snaps = {};
++      res.forEach(function (r) { snaps[r[0]] = r[1]; });
++      if (cur === 'home') { renderHome(snaps.home, snaps.home != null); if (snaps.home) applyBuildTabs(snaps.home); }
++      else if (cur === 'version') renderVersion(snaps.gpib, snaps.rs232);
++      else render[cur](snaps[cur], snaps[cur] != null);
++    }).catch(function () {}).then(function () { inflight = false; });
+   }
+   setInterval(poll, PERIOD);
+   poll();
+-- 
+2.55.0.windows.5
+

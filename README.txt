@@ -429,4 +429,12 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     原因是 14px 的 SVG 圖示被拉成 21px、尺寸帶小數像素。改成圖示 24px 整數格、字 17px、框 2px；整體大小不變，項目／順序／灰字規則不變。
   cpp 0062 c016e87 WORKLOG —— 工作紀錄補 10-01 第 18 項（上面這件）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0063 9eabe4f MERGE-c723bfdb —— 筆電第 107 包（GitHub main 5378c8c、GitLab main c723bfdb）的 C++ 部分：開機照 golden 對非 1203 軸下 Servo On（這台全是 1203
+                    軸，不受影響）、開機 GetHotPlateYHalfPos、fMotorTest 空指標保護、St02 測試機通訊共用面板／W58（只在模擬組態）、ELA_Ftp 連結修正。
+                    C++ 70 檔（新 10、舊版照收、兩邊都改 2 檔：mymotor.cpp 保留 HT9050 原點程式碼、wb_serve.cpp）；三方合併 0 衝突、0 重複列。
+                    包又是 LF 行尾，已照每個檔在機台樹原本的行尾存（新檔 CRLF），diff 只有內容。o2 建置 0 錯誤、PE 38/38、10 個相關 ctest 通過、
+                    production_audit 0 變更。設計外掛的 10 檔（0.143）不在這裡，由設計外掛工作階段整合。
+  web 0053 0287f8e MERGE-c723bfdb (web) —— 同一包的 7 個網頁檔（網頁操作權杖：最新的畫面優先；測試機通訊共用面板），照收筆電的版本。
+  cpp 0064 d534e18 WORKLOG —— 工作紀錄補 10-01 第 19 項（第 107 包）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
