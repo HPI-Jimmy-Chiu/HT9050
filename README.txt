@@ -557,4 +557,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   web 0068 d50fd77 TEACH-LOCK (web) —— Teach 照原版顯示鎖定：選取的那一軸在動時「*Lock by … moveing」、pnlStop 變黃、MoveN／MoveP／Home／MoveTo 鎖住（每軸獨立，同 Motor Test）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  web 0069 0f8a3ef TEACH-ALLCOMP (web) —— Teach：點「Active Motor」標籤切到 Axle Control 分頁（原版 Label2Click）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
