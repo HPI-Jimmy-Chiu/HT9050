@@ -1,0 +1,151 @@
+From 345184da472effc9f5ec2c009700c56042071635 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 22:35:18 +0800
+Subject: [PATCH] TEACH-GOHINT / SIDECMD (web): Teach -- every Set / Go shows
+ which cells it will use before it moves; background page commands no longer
+ swallow the operator's clicks during the ~30 s after a start
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 1001 21:58 collision: 「我在textbox輸入數值後 按下go 沒跑我輸入的數值 直接撞擊」. The Go sent was GoButton020 under
+"Loader" on the Input Arm picture (Loader cells X 21301 / Y -55884); that Go sits right above the SHT1 / SHT2 columns of
+the value table, while SHT1's own Go is higher up under "Shuttle 1" -- the picture and the table do not line up (golden
+dfm layout). Without changing the layout and without a confirm box: hovering / pressing a Set or Go outlines the exact
+cells it sends (teach-access.json edits) and the status line says "Go -> Loader: MInArmX=..., MInArmY=... [GoButton020]".
+Headless: GoButton020 -> setEditLoaderX/Y, GoButton040 -> setEditInSht1X/Y, GoButton042 -> setEditInSht2X/Y.
+SIDECMD: motor-access.js sendSide() (no pending lock, non-motion only); Teach's hand-teach query and Motor Test's
+formShow / formClose use it, so the start-up stall no longer drops every click with "Busy: ... running" (audit).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ page/HW.MotorTest.html |  4 +++-
+ page/HW.teach.html     | 44 +++++++++++++++++++++++++++++++++++++++++-
+ page/motor-access.js   | 25 +++++++++++++++++++++++-
+ 3 files changed, 70 insertions(+), 3 deletions(-)
+
+diff --git a/page/HW.MotorTest.html b/page/HW.MotorTest.html
+index ed1657f..3fe91d3 100644
+--- a/page/HW.MotorTest.html
++++ b/page/HW.MotorTest.html
+@@ -1038,7 +1038,9 @@ document.querySelectorAll('.traypos').forEach(function(ph){
+     if(cppFormAcked===want || cppFormInFlight) return;
+     if(!(window.HTMotorAccess && accessBound)) return;   // 指令表載入後（bindAccessButtons 尾端）會再呼叫一次
+     cppFormInFlight=true;
+-    HTMotorAccess.sendLater(want==='show' ? 'FormShow' : 'FormClose', {}, [], want==='show' ? 'formShow' : 'formClose');
++    // AI(W906-SIDECMD) 20261001：走背景通道（不佔按鈕的互斥）—— 程式剛開那 30 秒 C++ 不回應時，formShow／formClose 不再把操作員按的鈕全部擋掉
++    if(HTMotorAccess.sendSide) HTMotorAccess.sendSide(want==='show' ? 'FormShow' : 'FormClose', {}, []);
++    else HTMotorAccess.sendLater(want==='show' ? 'FormShow' : 'FormClose', {}, [], want==='show' ? 'formShow' : 'formClose');
+   }
+   function onCppFormAck(req, ack, err){
+     cppFormInFlight=false;
+diff --git a/page/HW.teach.html b/page/HW.teach.html
+index 1822f96..e8001b8 100644
+--- a/page/HW.teach.html
++++ b/page/HW.teach.html
+@@ -843,7 +843,10 @@ function teachShowHand(btn, why){                  // golden fTeachShow：伺服
+ var teachQueryTries=0;
+ function teachQueryHand(){                         // AI(W906-W5-b) 20260925：W5B-5 —— C++ 還在手動教導（伺服是關的）就把對話框叫回來
+   if(teachOfflineEnabled()) return;
+-  HTMotorAccess.send('SetButton*',{query:true});
++  // AI(W906-SIDECMD) 20261001：查詢走背景通道（motor-access.js sendSide）—— 程式剛開那 30 秒 C++ 不回應時，這個開頁查詢原本佔著互斥，
++  //   操作員按的每一顆都被丟掉（幫手實測重現）；現在不擋按鈕，回覆照樣進 teachOnAck。
++  if(HTMotorAccess.sendSide) HTMotorAccess.sendSide('SetButton*',{query:true});
++  else HTMotorAccess.send('SetButton*',{query:true});
+ }
+ function teachOnAck(req, ack, err){
+   var p=req.params||{};
+@@ -951,8 +954,47 @@ function teachBindTechButtons(){
+       }
+     })(pts[i]);
+   }
++  teachBindGoHints(pts, elByTitle);                  // AI(W906-TEACH-GOHINT) 20261001
+   teachSetInfo('Teach access bound ('+pts.length+' Set/Go points)', 'ok');
+ }
++// AI(W906-TEACH-GOHINT) 20261001：EastSun 1001 21:58 撞機（「我在textbox輸入數值後 按下go 沒跑我輸入的數值 直接撞擊」）。查證：送出的是
++//   Input Arm 機構圖上「Loader」下面那顆 Go（GoButton020，送 Loader 欄 X 21301／Y -55884）；那顆 Go 畫在下方數值表 SHT1／SHT2 兩欄的
++//   正上方，SHT1 自己的 Go 在更上面「Shuttle 1」的下方 —— 機構圖跟數值表的欄沒有對齊（golden dfm 的排法），很容易按到別人的 Go。
++//   不改 golden 的排法、不加確認框（EastSun 不要視窗）：滑鼠停在／手指按下任何一顆 Set／Go，它真正會用的那幾格（teach-access.json 的
++//   edits）立刻黃框標出來，狀態列寫「Go → Loader：MInArmX=21301、MInArmY=-55884」—— 按之前就看得到它要去哪裡、拿哪幾格的值。
++function teachBindGoHints(pts, elByTitle){
++  if(!document.getElementById('teachGoHintCss')){
++    var st=document.createElement('style'); st.id='teachGoHintCss';
++    st.textContent='.teach-gohint{outline:3px solid #ff9800!important;outline-offset:-1px;background:#fff3c4!important;}';
++    document.head.appendChild(st);
++  }
++  var byBtn={};
++  pts.forEach(function(pt){
++    [[pt.setButton,'Set'],[pt.goButton,'Go']].forEach(function(p){
++      if(!p[0]) return;
++      var o=byBtn[p[0]]||(byBtn[p[0]]={kind:p[1], setBtn:pt.setButton, edits:[], motors:[]});
++      (pt.edits||[]).forEach(function(id,k){ if(o.edits.indexOf(id)<0){ o.edits.push(id); o.motors.push((pt.motorIds||[])[k]||''); } });
++    });
++  });
++  Object.keys(byBtn).forEach(function(b){
++    var el=elByTitle(b); if(!el || el.getAttribute('data-gohint')) return;
++    el.setAttribute('data-gohint','1');
++    var o=byBtn[b];
++    var se=o.setBtn?elByTitle(o.setBtn):null;
++    var label=((se && se.textContent) || o.setBtn || b).replace(/\s+/g,' ').trim();
++    var cells=function(){ return o.edits.map(function(id){ return document.getElementById(id); }).filter(Boolean); };
++    var show=function(){
++      cells().forEach(function(e){ e.classList.add('teach-gohint'); });
++      var parts=o.edits.map(function(id,k){ var e=document.getElementById(id); return (o.motors[k]||id)+'='+(e?String(e.value):'?'); });
++      teachSetInfo(o.kind+' → '+label+'：'+(parts.join('、')||'（沒有欄位）')+'　['+b+']', 'warn');
++    };
++    var hide=function(){ cells().forEach(function(e){ e.classList.remove('teach-gohint'); }); };
++    el.addEventListener('mouseenter', show);
++    el.addEventListener('mouseleave', hide);
++    el.addEventListener('pointerdown', show, true);
++    el.addEventListener('pointerup', function(){ setTimeout(hide, 1500); }, true);
++  });
++}
+ // View-rules.json blocks（teach:ts*）：依 USE_IN_OUT_ARM_X_PITCH / USE_IN_OUT_ARM_Y_PITCH /
+ //   USE_CATCH_TRAY_MODEL / USE_LOADER_HINGE 決定選配頁籤要不要出現。
+ // Steven 20260918：規則式照舊（View-rules.json 是設計期產物，沒有機台值，
+diff --git a/page/motor-access.js b/page/motor-access.js
+index 69d1a72..af09d5f 100644
+--- a/page/motor-access.js
++++ b/page/motor-access.js
+@@ -286,6 +286,29 @@
+     return req;
+   }
+ 
++  // AI(W906-SIDECMD) 20261001：EastSun「每次我使用不是被鎖住 就是沒有功能」—— 幫手查證（Teach／Motor Test oplog）：每次 wb_serve 剛開的
++  //   約 30 秒 C++ 不回應，這時頁面開窗自己送的背景命令（Teach 的手動教導查詢 teachSet {query}、Motor Test 的 formShow／formClose）
++  //   佔著上面 send() 的互斥（pending），操作員按的每一顆都被 `Busy: … running` 丟掉，只在角落一行小字。
++  //   背景命令改走這一條：不設 pending、不鎖畫面、不擋按鈕；回覆照樣交給 cfg.onAck。只准非運動的命令（motion 一律拒絕，照舊走 send）。
++  function sendSide(button, extraParams, motorsOverride) {
++    var c = catalogOf(button);
++    if (!c) { say('No command catalog for ' + button, 'err'); return null; }
++    if (c.kind === 'motion' || c.action === 'stop') { say('sendSide: ' + button + ' 是運動／停止命令，不走背景通道', 'err'); return null; }
++    var params = {};
++    if (cfg.getParams) params = cfg.getParams() || {};
++    if (extraParams) for (var k in extraParams) params[k] = extraParams[k];
++    var req = {
++      seq: ++seq, id: 'cmd-' + seq, source: cfg.source, button: button,
++      action: c.action, kind: c.kind, motors: motorsOverride || (cfg.getMotors ? cfg.getMotors() : []), params: params,
++      issuedAt: nowIso(), state: 'requested'
++    };
++    publish(req);
++    if (cfg.offline) return req;
++    toCpp(req).then(function (ack) { if (cfg.onAck) cfg.onAck(req, ack, null); },
++                    function (e) { if (cfg.onAck) cfg.onAck(req, null, e); });
++    return req;
++  }
++
+   // jog 放開 → 停止。golden 的 MouseUp 呼叫 PCIL132_StopMotor（只停那一軸，uMotorTest.cpp:900）。
+   // AI(W906-W4-MOTOR) 20260925：**不看 pending 一律送**—— C++ 的 ack 可能在放開之前就回來把 pending 清掉，
+   //   那時軸還在跑；原本這裡 `if (!pending) return;` 然後只 finish('aborted')，什麼都沒送。
+@@ -324,7 +347,7 @@
+   }
+ 
+   global.HTMotorAccess = {
+-    init: init, send: send, sendLater: sendLater, release: release, releaseHeld: releaseHeld, loadJson: loadJson,
++    init: init, send: send, sendLater: sendLater, sendSide: sendSide, release: release, releaseHeld: releaseHeld, loadJson: loadJson,   // AI(W906-SIDECMD) 20261001: + sendSide
+     isBusy: function () { return !!pending; },
+     queued: function () { return later.length; },   // AI(W906-MT-E2) 20260925
+     current: function () { return pending; },
+-- 
+2.55.0.windows.5
+
