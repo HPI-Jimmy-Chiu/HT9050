@@ -392,4 +392,9 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     機台設定檔每一次改動（不進 git）與備份位置、09-25～10-01 每天做了什麼（對到這裡的 patch 編號）、筆電包整合紀錄、
                     還在等 EastSun 的事、機台端做事的規矩。每顆 patch 的長說明仍以本檔（README.txt）為準。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  web 0049 28bd17e VACUNIT-OPENFAIL —— Vacuum Unit 開頁被 C++ 拒絕時（例：登入 Operator，golden 規定 Tools 要 Engineer 以上），頁面照實寫原因、鎖鈕，
+                    不再一直停在「等 C++ 的即時快照」（EastSun 1001 14:49 截圖「這是在鎖啥?」）。重開視窗就生效，不用重開 wb_serve。
+  cpp 0057 8556530 WORKLOG —— 工作紀錄補 10-01 第 10～12 項：上面這個修正，以及唯讀確認 0xA0／0xA1／0xA2 三站都在 ring 上，
+                    但卡片對應表只有 DO 通道 16～23，沒有 DO 24～31、沒有 DI 128～135（跟 golden VC8 版面不同，等模組名稱）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
