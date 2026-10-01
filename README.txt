@@ -297,4 +297,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   tools 0118 HTDESIGNER-120（0.120.0）—— 工具箱多 5 種 IO 元件（MyLedLane／MyLed／ALed／BtnPanelLane／BtnPanel），寫法同網頁產生器、Alias 留空給屬性表挑。程式庫／smoke／面板三層全過；真 VS Code 那層等 VS Code 重開（更新鎖住）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  web 0046 IOWIDGET-2（web 2f86a2f）—— IO 設定頁的燈／按鈕提示前面加上舊版格式「(Lane,IP,Port,Bit) Alias」（golden SetCompomentHint），頁面自己的讀取和上色不動；共用檔的燈號樣式改成跟 IO 頁一字不差（只在框內、沒有外圈光暈）。只做離線測試。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
