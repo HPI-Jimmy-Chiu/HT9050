@@ -376,4 +376,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     三方合併 0 衝突、0 重複列，機台的 HT9050-ORG 原點程式碼全部保留。o2 建置 0 錯誤、PE 24/24 完整；8 個相關 ctest 全過；
                     production_audit 0 變更。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  tools 0133 HTDESIGNER-133c —— HANDOVER.md 更新分工：筆電包 100–101 已由機台整合工作階段整合完（沒有動到外掛）；整合的工作階段名稱會變，用 ListAgents 找。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
