@@ -532,4 +532,11 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     （motor-access.js sendSide：Teach 開頁查詢、Motor Test formShow／formClose）。無頭瀏覽器實測。
   cpp 0090 cd86928 WORKLOG —— 工作紀錄補 10-01 第 52 項；第 3 節 111 補設計外掛部分（tools 0142，0.150.0）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  web 0062 34ee63e MOTORVIEW-LED (web) —— Motor View 的 11 顆燈照原版（Ready＝HomeFlag 綠燈，其他 10 顆＝MOT[].Led[] 紅燈），讀不到畫斜線，
+                    數字欄讀不到顯示「---」（不再假裝是 0）。
+  web 0063 d0b4ddb TEACH-HIDEPT／TABS／UNWIRED-2／TYPED (web) —— Teach 1491 個元件逐一檢查（不抽樣）：這台沒有或 Enable=0 的軸的 Set／Go 藏起來
+                    （515 顆、欄位 219 格、空群組一起收）；原版在這台會藏的 5 個分頁照 Gerneral.ini 藏；沒接功能的按鈕變灰＋按了說原因；
+                    打過字的格子一定照送（原版 GoButton020Click 讀畫面上的字）。
+  cpp 0091 0d1d592 WORKLOG —— 工作紀錄補 10-01 第 53～54 項（撞機：不是原版沒寫入也不是沒合好——按到 Loader 的 Go；Teach 逐一檢查結果）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。

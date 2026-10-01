@@ -1,0 +1,195 @@
+From 34ee63e6bfcbf755d69b6596ff13584df848c268 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 22:38:26 +0800
+Subject: [PATCH] MOTORVIEW-LED (web): Motor View -- the 11 lamps are golden's
+ (Ready = MotorHomeLed green from HomeFlag; the other 10 = MOT[].Led[] red
+ from the runtime led{}), unknown values hatched, and number columns show
+ "---" instead of a fake 0
+
+Teach / motor pages audit: Ready was "not alarm" (red on every healthy axis), Home was HomeFlag, CW/CCW were the speed
+sign, EMG / soft limits hard-coded false, S Alarm copied Alarm; Target / Can / L / M / R always 0. Now
+[homeDone, led.cw, led.home, led.ccw, led.emg, led.alarm, led.softCw, led.softCcw, led.sAlarm, led.inPos, led.servoOn]
+(golden SetMotorMonitor main.cpp:22495-22524, MotorHomeLed :14321-14326); Target = position.targetPos; Can/L/M/R "---"
+(no such fields in the runtime JSON -- nothing invented); Speed = cur.readSpeed (golden GetSpeed). Headless with a
+48-row fixture: 343/343 checks (the old page 26/343).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ page/Main.MotorView.html | 110 ++++++++++++++++++++++++++++-----------
+ 1 file changed, 80 insertions(+), 30 deletions(-)
+
+diff --git a/page/Main.MotorView.html b/page/Main.MotorView.html
+index 119fec9..d0e431c 100644
+--- a/page/Main.MotorView.html
++++ b/page/Main.MotorView.html
+@@ -32,6 +32,11 @@
+   .mvInfo.warn{background:#d9c27a;color:#222;}
+   .mvInfo.err{background:#a33;color:#fff;}
+   .srcnote{padding:4px 8px;}
++  /* AI(W906-MOTORVIEW-LED) 20261001：「---」＝C++ 沒有這個值（不是 0）；#mvLegend＝欄位說明列（release 模式 theme.js 會拿掉表頭的 title，所以意義寫在看得到的地方） */
++  table.mvGrid td.unk{color:#6a7b86;}
++  .mvLegend{flex:none;padding:2px 8px;font-size:11px;line-height:16px;border-top:1px solid #9aa;background:#e9eef2;color:#234;}
++  .mvLegend .aled{margin:0 2px 0 8px;}
++  .mvLegend .aled:first-child{margin-left:0;}
+ </style>
+ </head>
+ <body class="winpage">
+@@ -50,6 +55,8 @@
+     <tbody id="mvRows"></tbody>
+   </table>
+ </div>
++<!-- AI(W906-MOTORVIEW-LED) 20261001：欄位說明（golden 沒有這一列；表頭字照 golden，每一欄是什麼寫在這裡，滑鼠停在燈／格子上也看得到） -->
++<div class="mvLegend" id="mvLegend"><span class="aled LEDSqSmall on" style="--led-on:#008000"></span><b>Ready</b>＝回原點完成（HomeFlag=1）<span class="aled LEDSqSmall on" style="--led-on:#ff0000"></span>其餘＝感測器／驅動器：<b>CW</b>／<b>CCW</b> 極限、<b>Home</b> 原點感測器（不是回原點完成）、<b>EM Stop</b> 緊停、<b>SoftCW</b>／<b>SoftCCW</b> 軟體極限、<b>ServoOn</b> 激磁<span class="aled LEDSqSmall unknown"></span>／<b>---</b>＝讀不到（不是 0、不是沒亮）<br><b>Current</b> 命令位置（光學尺軸＝編碼器）　<b>Target</b> 目標位置　<b>Speed</b> 設定速度（不是實際轉速）　<b>Can</b>／<b>L</b>／<b>M</b>／<b>R</b> 引擎的可移動旗標（C++ 還沒送 ⇒ ---）</div>
+ 
+ <div class="srcnote">程式碼對應：<code>main.dfm tsMotorView</code>（<code>StringGrid1</code> 位置＋<code>StringGrid3</code> LED）／<code>main.cpp TfMain::UpdateMotorScreen()</code>。列＝<code>fMotorTest-&gt;MotorTestClass</code> 中 <code>Visible==true</code> 的馬達（依機台選配 <code>enable</code> 動態增減）；每列 11 顆狀態 LED（<code>MOT[i].Led[]</code>）由程式動態生成</div>
+ <div id="mvRuntimeInfo" class="mvInfo">Motor runtime loading...</div>
+@@ -59,6 +66,29 @@
+ (function(){
+   var POS=['Current','Target','Speed','Can','L','M','R'];
+   var LED=['Ready','CW','Home','CCW','EM Stop','Alarm','SoftCW','SoftCCW','S Alarm','In Pos','ServoOn'];
++  // AI(W906-MOTORVIEW-LED) 20261001：每一欄的意義（表頭 title／格子 title 用；release 模式表頭 title 會被 theme.js 搬走，看得到的版本在 #mvLegend）。
++  //   位置欄＝golden TfMain::UpdateMotorScreen（main.cpp:8342-8432）；燈＝golden SetMotorMonitor（main.cpp:22495-22524）搬進來的
++  //   fMotorTest MotorPanel：MotorHomeLed（uMotorTest.cpp:109-116）＋MotorLed[0..9]（:117-127）＝MOT[].Led[0..9]（main.cpp:8454-8457）。
++  //   LED_KEY＝C++ runtime state.led 的 key（JsonBridge/ChanMotorPoints.cpp:315-334）；[0] Ready 不在 state.led 裡，見 readyOf。
++  var POS_TIP=['目前位置＝MOT[].ReadPos() 命令位置；光學尺軸＝ReadEncoderPos()（position.cmdPos／encPos）',
++               '目標位置＝MOT[].TargetPosition（position.targetPos；出貨版沒有來源）',
++               '設定速度＝MOT[].GetSpeed()，最後一次 SetSpeed 的值，不是實際轉速；光學尺軸固定 0（cur.readSpeed）',
++               '引擎的可移動旗標 MOT[].fCanMove（C++ runtime 沒有這個欄位）',
++               '引擎的可移動旗標 MOT[].fCanMoveL（C++ runtime 沒有這個欄位）',
++               '引擎的可移動旗標 MOT[].fCanMoveM（C++ runtime 沒有這個欄位）',
++               '引擎的可移動旗標 MOT[].fCanMoveR（C++ runtime 沒有這個欄位）'];
++  var LED_KEY=[null,'cw','home','ccw','emg','alarm','softCw','softCcw','sAlarm','inPos','servoOn'];
++  var LED_TIP=['回原點完成＝MOT[].HomeFlag==1（MotorHomeLed，綠）',
++               '負極限感測器 LMT-（Led[0]）',
++               '原點感測器 ORG（Led[1]；不是回原點完成）',
++               '正極限感測器 LMT+（Led[2]）',
++               '緊急停止 EMG（Led[3]）',
++               '驅動器警報 ALM 或 ERROR_STOP（Led[4]）',
++               '軟體極限 SLMT+（Led[5]）',
++               '軟體極限 SLMT-（Led[6]）',
++               '伺服警報（Led[7]；golden 1203 軸不設這一顆，永遠不亮）',
++               '到位（Led[8]；golden 1203 軸這一顆被註解掉，永遠不亮）',
++               '伺服激磁 SVON（Led[9]）'];
+   var MOTORS=[];
+   var RUNTIME={runtime:{connected:false,pollIntervalMs:200,provider:'TBD'},motors:[]};
+ 
+@@ -173,11 +203,10 @@
+   // 表頭
+   var head=document.getElementById('mvHead');
+   head.appendChild(th('Motor'));
+-  POS.forEach(function(c,i){ head.appendChild(th(c, i===3?'sep':'')); });   // Can 前加分隔線
+-  LED.forEach(function(c,i){ head.appendChild(th(c, i===0?'sep':'ledCol')); });
++  POS.forEach(function(c,i){ head.appendChild(th(c, i===3?'sep':'', POS_TIP[i])); });   // Can 前加分隔線
++  LED.forEach(function(c,i){ head.appendChild(th(c, i===0?'sep':'ledCol', LED_TIP[i])); });   // AI(W906-MOTORVIEW-LED) 20261001：表頭帶意義（title）
+ 
+   var body=document.getElementById('mvRows');
+-  function b01(v){ return v?1:0; }
+   // AI(W906-MV-LIVE) 20260929 [W906]：Current 欄＝golden TfMain::UpdateMotorScreen（main.cpp:8363-8384）——
+   //   Index 軸在 INDEX_MOTION_CARD==0（Galil）時是 Gali_ReadEncoderPos()；四個光學尺軸（MInArmXScale／MInArmYScale／
+   //   MOutArmXScale／MOutArmYScale）是 ReadEncoderPos()；其餘一律 ReadPos()＝命令位置（C++ 的 cmdPos）。
+@@ -188,7 +217,25 @@
+   function curPos(alias, drv, pos){
+     var enc=!!MV_SCALE[alias] || (!!MV_INDEX[alias] && /galil/i.test(drv||''));
+     var a=enc?pos.encPos:pos.cmdPos, b=enc?pos.cmdPos:pos.encPos;
+-    return a!=null?a:(b!=null?b:0);
++    return a!=null?a:(b!=null?b:null);   // AI(W906-MOTORVIEW-LED) 20261001：兩個都 null（nosource 列）＝null ⇒「---」，原本退回 0（0 是合法座標，看起來像真的在 0）
++  }
++  // AI(W906-MOTORVIEW-LED) 20261001：Speed 欄＝golden main.cpp:8390-8407 —— 光學尺軸固定 0、Galil 的 Index 軸是 MOT[].GailSpeed、
++  //   其餘 MOT[].GetSpeed()＝最後一次 SetSpeed 的值（不是卡片正在跑的速度；同 HW.MotorTest.html lblRealSpeed 的 AI(W906-MT-E2) 更正）。
++  //   C++ runtime 的 cur.readSpeed 就是 GetSpeed()（ChanMotorPoints.cpp:385）；原本顯示的 motion.speed 是 1203 卡的命令速度（:273），停著就是 0。
++  //   GailSpeed runtime 沒有 ⇒ null。⚠ golden 只在第一次刷新（static flag）寫這一欄、之後不再更新；這裡每次輪詢照 cur.readSpeed 重畫。
++  function speedOf(alias, drv, rr){
++    if(MV_SCALE[alias]) return 0;
++    if(MV_INDEX[alias] && /galil/i.test(drv||'')) return null;
++    return (rr.cur && rr.cur.readSpeed!=null)?rr.cur.readSpeed:null;
++  }
++  // AI(W906-MOTORVIEW-LED) 20261001：Ready 燈＝golden MotorHomeLed —— TfMain::UpdateMotorHomeLed（main.cpp:14321-14326）HomeFlag==1 才亮，
++  //   TrueColor=clGreen（uMotorTest.cpp:116）。C++ state.homeDone＝(MOT[].HomeFlag==1)（ChanMotorPoints.cpp:302）；沒有就看 diag.homeFlag（:347）；
++  //   兩個都沒有＝null（不知道）。原本是 !state.alarm：每一軸只要沒警報就亮，而且是紅色。
++  function readyOf(rr){
++    var st=rr.state||{}, dg=rr.diag||{};
++    if(typeof st.homeDone==='boolean') return st.homeDone;
++    if(typeof dg.homeFlag==='number') return dg.homeFlag===1;
++    return null;
+   }
+   function render(showDisabled){
+     body.innerHTML='';
+@@ -203,46 +250,49 @@
+ 
+       var rr=rm[m[0]]||{};
+       var pos=rr.position||{};
+-      var mot=rr.motion||{};
+       var st=rr.state||{};
++      var why=(rr.diag&&(rr.diag.why||rr.diag.errText))||'';   // AI(W906-MOTORVIEW-LED) 20261001：C++ 說的「為什麼沒有值」，放進「---」格的 title
++      // AI(W906-MOTORVIEW-LED) 20261001：null＝沒有來源 ⇒「---」，不寫 0（golden StringGrid1 欄位見 POS_TIP）。原本：Target 永遠 0（出貨版 targetPos 是 null）、
++      //   Speed 是卡的命令速度、Can 是卡的 busy（golden 是引擎的 fCanMove）、L／R 讀 state.isOn／isOff（那是 IO 點的欄位，馬達永遠 null ⇒ 0）、M 寫死 0。
++      //   C++ runtime 沒有 fCanMove／fCanMoveL／M／R（ChanMotorPoints.cpp:271-305）⇒ 四欄一律「---」；C++ 補上欄位之前不要在這裡猜。
+       var rowPos=[
+         curPos(m[0], m[3], pos),   // AI(W906-MV-LIVE) 20260929 [W906]：原本 encPos 優先；golden 是 ReadPos()（命令位置），見 curPos
+-        (pos.targetPos!=null?pos.targetPos:0),
+-        (mot.speed!=null?mot.speed:0),
+-        b01(!!mot.busy),
+-        b01(st.isOn===true),
+-        0,
+-        b01(st.isOff===true)
++        (pos.targetPos!=null?pos.targetPos:null),
++        speedOf(m[0], m[3], rr),
++        null,
++        null,
++        null,
++        null
+       ];
+ 
+       // 位置/移動旗標欄（StringGrid1）
+-      POS.forEach(function(c,i){var td=document.createElement('td');
+-        if(i===3)td.className='sep'; td.textContent=String(rowPos[i]); tr.appendChild(td);});
++      POS.forEach(function(c,i){var td=document.createElement('td'); var v=rowPos[i];
++        td.className=(i===3?'sep':'')+(v==null?' unk':'');
++        td.textContent=(v==null?'---':String(v));
++        if(v==null) td.title=m[0]+' '+c+'：讀不到 —— '+POS_TIP[i]+(why?'；'+why:'');
++        tr.appendChild(td);});
+ 
+-      var ledVals=[
+-        !st.alarm,
+-        (mot.speed||0)>0,
+-        !!st.homeDone,
+-        (mot.speed||0)<0,
+-        false,
+-        !!st.alarm,
+-        false,
+-        false,
+-        !!st.alarm,
+-        !!st.inPos,
+-        !!st.servoOn
+-      ];
+       // LED 狀態欄（StringGrid3）：每欄一顆動態生成的 LED
++      // AI(W906-MOTORVIEW-LED) 20261001：[0] Ready＝readyOf（golden MotorHomeLed，clGreen），[1..10]＝state.led 的 cw／home／ccw／emg／alarm／
++      //   softCw／softCcw／sAlarm／inPos／servoOn＝golden MOT[].Led[0..9]（clRed）—— C++ 已照 TMyEtherCatMotor::ScanMotorStatus 解好，HT9050 的 ORG 反相也在
++      //   C++ 那邊處理（ChanMotorPoints.cpp:320-322），頁面不再翻。原本：Ready＝!alarm（健康的軸全亮紅）、Home＝HomeFlag、CW／CCW＝速度正負、
++      //   EM Stop／SoftCW／SoftCCW 寫死 false、S Alarm 抄 Alarm。FalseColor golden 沒設＝TALed 預設 clSilver（同 HW.MotorTest.html ALed1..10）。
++      //   不是 true/false（state.led 是 null＝這一軸沒有卡片樣本）＝斜線「不知道」，不畫成「沒亮」（同 HW.teach.html teachSetLeds）。
++      var led=st.led||null;
+       LED.forEach(function(c,i){
++        var v=(i===0)?readyOf(rr):(led?led[LED_KEY[i]]:null);
++        var known=(typeof v==='boolean');
+         var td=document.createElement('td'); td.className='ledCell'+(i===0?' sep':'');
+-        var led=HTWidgets.makeALed({name:m[0]+'_'+c.replace(/\s/g,''),ledStyle:'LEDSqSmall',
+-          value:!!ledVals[i], trueColor:(c==='Home')?'#00c000':'#ff0000', falseColor:'#9fb0ba'});
+-        td.appendChild(led); tr.appendChild(td);
++        var el=HTWidgets.makeALed({name:m[0]+'_'+c.replace(/\s/g,''),ledStyle:'LEDSqSmall',
++          value:v===true, trueColor:(i===0)?'#008000':'#ff0000'});
++        if(!known) el.classList.add('unknown');
++        el.title=m[0]+' '+c+'：'+(known?(v?'ON':'OFF'):'不知道')+' —— '+LED_TIP[i]+(!known&&why?'；'+why:'');
++        td.appendChild(el); tr.appendChild(td);
+       });
+       body.appendChild(tr);
+     });
+   }
+-  function th(txt,cls){var e=document.createElement('th'); if(cls)e.className=cls; e.textContent=txt; return e;}
++  function th(txt,cls,tip){var e=document.createElement('th'); if(cls)e.className=cls; if(tip)e.title=txt+'：'+tip; e.textContent=txt; return e;}   // AI(W906-MOTORVIEW-LED) 20261001：tip＝欄位意義
+ 
+   // AI(W906-MV-LIVE) 20260929 [W906]：INBOX 117（使用者 0929 19:1x「確認 motor view 畫面是否能正常顯示並且更新數據」）。
+   //   由 wb_serve 供應時，改讀 C++ 的 MOT[] 即時值（/api/struct/motor/config|runtime，形狀同 Motor-config.json／Motor-runtime.json，
+-- 
+2.55.0.windows.5
+
