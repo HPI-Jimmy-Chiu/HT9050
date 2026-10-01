@@ -1,0 +1,613 @@
+From 2fc66489b82dbb6b5e95e9eb349ded481266d4ea Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 08:57:10 +0800
+Subject: [PATCH] HTDESIGNER-121: the CSV table takes typing again -- a real
+ double click, and a Chinese input method (0.121.0)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20261001: "表格我沒辦法寫入" (screenshot: Mot_Table.csv in the table, a cell selected, nothing
+could be written). Reproduced with REAL input (DevTools protocol), which the synthetic-event test
+had missed:
+- a real double click opened nothing: the first press redraws the grid, so the second click's
+  target is a new element and Chromium aims the dblclick at the common ancestor (#grid). Now the
+  second press's click count (e.detail >= 2) opens the editor, its text selected.
+- with an IME on (注音 / 倉頡) typing did nothing: the keys went to the grid div, which takes no IME.
+  Now ONE input (#kb) always holds the keys: idle it sits, invisible, on the current cell; a typed
+  character or an IME word starting goes into it and makes it that cell's editor (Excel: typing
+  replaces the cell). The IME's own Enter (isComposing / 229) picks the word, it does not write.
+  A click on the table's empty part / VS Code focusing the editor hands the focus back to it.
+
+Tests: new test/csv_realinput.js (headless Edge + CDP Input.*: real double click, real keys, an IME
+composition "ㄨ" -> "中", a click on the empty part) -- 4/4 on this version, 4/4 FAIL on 0.120.0;
+csv_driver.js adds a double click (detail 2) and an IME composition. run_all: 3/3 layers pass
+(lib 166, smoke 194). The real VS Code layer not run: VS Code's own update (since 05:41) still
+holds its lock.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHANGELOG.md          |   8 +
+ tools/vscode-htdesigner/CHEATSHEET.md         |   2 +-
+ tools/vscode-htdesigner/README.md             |   2 +-
+ tools/vscode-htdesigner/WPF_DIFF_LOG.md       |   3 +-
+ tools/vscode-htdesigner/media/csv.css         |   2 +
+ tools/vscode-htdesigner/media/csv.js          | 140 +++++++++++-------
+ tools/vscode-htdesigner/package.json          |   2 +-
+ tools/vscode-htdesigner/test/csv_driver.js    |  50 +++++--
+ tools/vscode-htdesigner/test/csv_realinput.js | 108 ++++++++++++++
+ tools/vscode-htdesigner/test/probe_test.ps1   |  22 +++
+ 10 files changed, 270 insertions(+), 69 deletions(-)
+ create mode 100644 tools/vscode-htdesigner/test/csv_realinput.js
+
+diff --git a/tools/vscode-htdesigner/CHANGELOG.md b/tools/vscode-htdesigner/CHANGELOG.md
+index c64c0d2..6b2ae75 100644
+--- a/tools/vscode-htdesigner/CHANGELOG.md
++++ b/tools/vscode-htdesigner/CHANGELOG.md
+@@ -2,6 +2,14 @@
+ 
+ 每一版多了什麼。怎麼操作看 [操作一覽](CHEATSHEET.md)，詳細說明看 README。
+ 
++## 0.121.0
++- 修正：**CSV 表格打不進字**（EastSun 1001：「表格我沒辦法寫入」）。兩個原因，都改好了：
++  - **雙擊格子沒反應**：按下滑鼠時表格會重畫，第二下點到的已經是新畫的格子，瀏覽器就把「雙擊」算在整張表上、不算那一格。
++    現在用「第二下按下」來判斷，雙擊就會打開那一格的編輯框（原本的字選好）。
++  - **開著中文輸入法（注音、倉頡…）打字沒反應**：以前鍵盤是交給表格本身，表格不是輸入框，輸入法沒地方打。
++    現在一直有一個看不見的輸入框停在目前那一格，一打字（或輸入法一開始組字）它就變成那一格的編輯框，
++    所以中文也打得進去；選字時按的 Enter 是輸入法的，不會跳到下一格，選好之後再按 Enter 才寫進去。
++- 狀態列的提示改成「雙擊、F2 或直接打字（中文輸入法也可以）＝編輯」。
+ ## 0.120.0
+ - **工具箱多了 5 種 IO 元件**（舊版的自製元件）：`MyLedLane`、`MyLed`（IO 燈）、`ALed`（燈，沒有 Alias）、
+   `BtnPanelLane`、`BtnPanel`（IO 按鈕）。放上去的樣子跟網頁產生器做的一模一樣（大小、顏色用 .dfm 最常見的），
+diff --git a/tools/vscode-htdesigner/CHEATSHEET.md b/tools/vscode-htdesigner/CHEATSHEET.md
+index 426ba74..5e59554 100644
+--- a/tools/vscode-htdesigner/CHEATSHEET.md
++++ b/tools/vscode-htdesigner/CHEATSHEET.md
+@@ -126,7 +126,7 @@
+ 
+ | 要做什麼 | 怎麼做 |
+ |---|---|
+-| 編輯一格 | 點一下直接打字，或雙擊／F2；Enter 確定並往下，Tab 往右，Esc 取消 |
++| 編輯一格 | 點一下直接打字（中文輸入法也可以），或雙擊／F2；Enter 確定並往下，Tab 往右，Esc 取消 |
+ | 選一塊 | Shift＋方向鍵，或按住拖曳；點欄名／列號＝整欄／整列；左上角＝全部 |
+ | 清除／複製／貼上 | Delete；`Ctrl+C`／`Ctrl+V`（跟 Excel 互通）；`Ctrl+X` 剪下 |
+ | 插入／刪除列 | 上面的按鈕，或 `Ctrl+Shift+＋`／`Ctrl+－` |
+diff --git a/tools/vscode-htdesigner/README.md b/tools/vscode-htdesigner/README.md
+index 1235b46..55e5e2c 100644
+--- a/tools/vscode-htdesigner/README.md
++++ b/tools/vscode-htdesigner/README.md
+@@ -439,7 +439,7 @@ GroupBox 的 `<legend>` 和 Panel 的標題永遠留在第一個；已經在最
+ 
+ ## CSV 表格
+ 
+-打開 `.csv`（例如 `D:\HT9045\system\Mot_Table.csv`）就是像 Excel 的表格：點格子打字或 F2 編輯、Enter／Tab／方向鍵移動、
++打開 `.csv`（例如 `D:\HT9045\system\Mot_Table.csv`）就是像 Excel 的表格：點格子直接打字（注音等中文輸入法也可以）、雙擊或 F2 編輯、Enter／Tab／方向鍵移動、
+ Shift＋方向鍵選一塊、Delete 清除、`Ctrl+C`／`Ctrl+V` 跟 Excel 互相複製貼上（Tab 分隔）、插入／刪除列、尋找（`Ctrl+F`）、
+ 第一列固定當標題（自動判斷，可以勾掉）、拉欄名右邊的線改欄寬。幾萬列的檔也順（只畫看得到的列）。
+ 
+diff --git a/tools/vscode-htdesigner/WPF_DIFF_LOG.md b/tools/vscode-htdesigner/WPF_DIFF_LOG.md
+index 92fe9c0..8c34d1c 100644
+--- a/tools/vscode-htdesigner/WPF_DIFF_LOG.md
++++ b/tools/vscode-htdesigner/WPF_DIFF_LOG.md
+@@ -98,4 +98,5 @@ EastSun 20260930 晚上：「先朝元件屬性和事件的操作先下手，先
+ | 1001 | 0.117.0 | 選取元素時的邊距標示（margin adorners：元素到容器邊緣的線和數字，〔WE〕） | 只有選取框和控制點，要看距離得看屬性表 | 選一個元件＝容器左邊、上邊各一條細線＋距離（＝Left／Top，拖曳時跟著變）；設計模式、單選才有；選表單、F9 就沒有 | probe：spbSave 標 61／8＝它的 style；F9 後沒有；選表單沒有 | e580397 |
+ | 1001 | 0.118.0 | （修正）畫面左下的工具列（縮放、符合、格線…）一直看得到、按得到（〔XD〕artboard toolbar） | 視窗不夠寬時，右下的操作提示整行蓋住工具列，－／100%／＋ 按不到 | 提示只用工具列右邊的空間、往上換行，視窗改大小跟著調；－／＋ 的提示照 zoomWheel 設定寫鍵 | probe：976 寬時工具列右邊 355、提示左邊 367；設成 alt 時 ＋ 的提示寫 Alt、回 ctrl 寫 Ctrl；截圖確認 | bf4aade |
+ | 1001 | 0.119.0 | 自訂控制項自己的屬性一樣出現在屬性視窗，有自己的類別（〔XD〕Properties window；EastSun「把舊版的功能架構仿造到現有架構」） | 舊版自製的 IO 燈（TALed 系列）、按鈕面板（TBtnPanel 系列）只看得到一般屬性，形狀、亮／按下、顏色要去 HTML 改 class 和 --led-on／--bp-true | 類別「IO 元件」：燈 LEDStyle／Value／Blink／TrueColor／FalseColor，按鈕 Style／Down／TrueColor／FalseColor／TrueFontColor／FalseFontColor；跟 .dfm 比對、改回、跳 .dfm／HTML；class 就地改（新 htmledit.setClass）、顏色寫 CSS 變數；全部改回 DFM 也包含 | lib：dfmEditValues io、setClass 就地、propRange；probe：假燈／假按鈕讀到的值、改形狀＝class、改顏色＝--led-off；面板：兩種元件的列、Down 和 DFM 不同、改 Style／重設 Down／打 clBlack、6 種形狀；smoke：class 寫回原地、拿掉＝原樣 | d2b77fa |
+-| 1001 | 0.120.0 | 工具箱列出專案自己的控制項（〔WE〕Toolbox：使用者控制項／自訂控制項也在工具箱） | 工具箱只有 7 種 VCL 標準元件，舊版自製的 IO 燈、按鈕面板沒有 | 加 MyLedLane／MyLed／ALed／BtnPanelLane／BtnPanel，樣板＝網頁產生器的寫法，BCB6 的名字，Alias 留空給屬性表挑 | lib：12 個樣板都是完整元素、IO 那幾個的寫法；smoke：工具箱 13 項、MyLedLane1／BtnPanelLane1 放進 Panel2 的原始碼 | （本次） |
++| 1001 | 0.120.0 | 工具箱列出專案自己的控制項（〔WE〕Toolbox：使用者控制項／自訂控制項也在工具箱） | 工具箱只有 7 種 VCL 標準元件，舊版自製的 IO 燈、按鈕面板沒有 | 加 MyLedLane／MyLed／ALed／BtnPanelLane／BtnPanel，樣板＝網頁產生器的寫法，BCB6 的名字，Alias 留空給屬性表挑 | lib：12 個樣板都是完整元素、IO 那幾個的寫法；smoke：工具箱 13 項、MyLedLane1／BtnPanelLane1 放進 Panel2 的原始碼 | f3a4f5b |
++| 1001 | 0.121.0 | （修正）CSV 表格像 Excel 一樣能打字：雙擊、直接打字、中文輸入法（EastSun「表格我沒辦法寫入」） | 真的滑鼠雙擊沒反應（按下時重畫，雙擊落在整張表上）；開著注音打字什麼都沒有（焦點在表格 div，輸入法沒有輸入框） | 雙擊用第二下按下的點擊次數判斷；一個看不見的輸入框一直停在目前那一格接所有按鍵，打字／輸入法組字一開始它就是那格的編輯框；輸入法自己的 Enter（選字）不寫入 | 新的真輸入測試（DevTools 協定：真雙擊、真按鍵、輸入法組字「ㄨ」→「中」）：新版 4 項全過、舊版 4 項全失敗；模擬事件測試加雙擊、輸入法兩項 | （本次） |
+diff --git a/tools/vscode-htdesigner/media/csv.css b/tools/vscode-htdesigner/media/csv.css
+index 3cd0701..d331d3f 100644
+--- a/tools/vscode-htdesigner/media/csv.css
++++ b/tools/vscode-htdesigner/media/csv.css
+@@ -66,6 +66,8 @@ body {
+   color: var(--vscode-input-foreground); background: var(--vscode-input-background);
+   border: 2px solid var(--vscode-focusBorder, #0078d4); outline: 0;
+ }
++/* idle: the same input waits on the current cell for the keys (and the IME), unseen, clicks go through */
++.ed.idle { opacity: 0; pointer-events: none; caret-color: transparent; }
+ .status {
+   padding: 3px 10px; color: var(--vscode-descriptionForeground);
+   border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.35));
+diff --git a/tools/vscode-htdesigner/media/csv.js b/tools/vscode-htdesigner/media/csv.js
+index bff510c..8104fa4 100644
+--- a/tools/vscode-htdesigner/media/csv.js
++++ b/tools/vscode-htdesigner/media/csv.js
+@@ -15,7 +15,7 @@
+   var header = st.header;      /* the first row is the column names (frozen): undefined = guess */
+   var widths = st.widths || {};
+   var cur = { r: 0, c: 0 }, anchor = { r: 0, c: 0 };
+-  var editing = null;          /* { r, c, input } */
++  var editing = null;          /* { r, c, orig, typed } -- the editor is `kb` */
+   var find = { q: '', hits: [], i: -1 };
+   var ncols = 1;
+ 
+@@ -32,10 +32,19 @@
+       '<button id="asText" title="用文字編輯器開這個檔">以文字開啟</button>' +
+     '</div>' +
+     '<div id="warn" class="warn" hidden></div>' +
+-    '<div id="wrap" class="wrap" tabindex="0"><div id="sizer" class="sizer"><div id="grid"></div></div></div>' +
++    '<div id="wrap" class="wrap" tabindex="-1"><div id="sizer" class="sizer"><div id="grid"></div>' +
++      '<input id="kb" class="ed idle" type="text" spellcheck="false" autocomplete="off" aria-label="儲存格"></div></div>' +
+     '<div id="status" class="status"></div>';
+   var wrap = document.getElementById('wrap'), sizer = document.getElementById('sizer'), grid = document.getElementById('grid');
+   var hdrBox = document.getElementById('hdr'), findBox = document.getElementById('find');
++  /* AI(W906-HTDESIGNER) 20261001: ONE input takes every key (EastSun 20261001 "表格我沒辦法寫入").
++   * Idle it sits, invisible, on the current cell and has the focus; a character typed -- or the IME
++   * (注音／倉頡) starting a word -- goes into it, and that makes it the cell's editor (Excel: typing
++   * replaces the cell), so a Chinese word goes into a cell too and the first key is never lost.
++   * Before, the grid (a div) had the focus: a div takes no IME, so with a Chinese input method on
++   * typing did nothing at all. */
++  var kb = document.getElementById('kb');
++  var composing = false;
+ 
+   function colName(c) { var s = ''; c++; while (c > 0) { var m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = Math.floor((c - 1) / 26); } return s; }
+   function cell(r, c) { var row = D.rows[r]; return row && c < row.length ? row[c] : ''; }
+@@ -81,7 +90,7 @@
+     for (var r = a; r <= b; r++) html.push(rowHtml(r, rowY(r), false));
+     grid.innerHTML = html.join('');   /* (the cell editor lives beside the grid: a redraw keeps it) */
+     drawn = { a: a, b: b };
+-    if (editing) placeEditor();
++    placeKb();
+     status();
+   }
+   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+@@ -108,7 +117,7 @@
+     var n = (Math.abs(cur.r - anchor.r) + 1) * (Math.abs(cur.c - anchor.c) + 1);
+     var name = header && D.rows[0] && D.rows[0][cur.c] ? '（' + D.rows[0][cur.c] + '）' : '';
+     el.textContent = colName(cur.c) + (cur.r + 1) + name + '　' + (n > 1 ? '選了 ' + n + ' 格　' : '') +
+-      (D.readOnly ? '唯讀' : '雙擊或直接打字＝編輯，Enter 確定，Esc 取消；Ctrl+S 存檔，Ctrl+Z 復原');
++      (D.readOnly ? '唯讀' : '雙擊、F2 或直接打字（中文輸入法也可以）＝編輯，Enter 確定，Esc 取消；Ctrl+S 存檔，Ctrl+Z 復原');
+   }
+ 
+   /* --- moving --- */
+@@ -152,52 +161,59 @@
+     send({ type: 'edit', changes: changes });
+     draw();
+   }
++  function focusKb() { try { kb.focus({ preventScroll: true }); } catch (e) { kb.focus(); } }
++  /** The input on its cell: the editing one's, or (idle) the current one's -- the IME's word box opens there. */
++  function placeKb() {
++    var r = editing ? editing.r : cur.r, c = editing ? editing.c : cur.c;
++    var s = kb.style;
++    s.left = colX(c) + 'px'; s.top = (header && r === 0 ? wrap.scrollTop + RH : rowY(r)) + 'px';
++    s.width = (editing ? Math.max(colW(c), 120) : colW(c)) + 'px'; s.height = RH + 'px';
++  }
++  function toIdle(refocus) {
++    kb.value = '';
++    kb.classList.add('idle');
++    placeKb();
++    if (refocus) focusKb();
++  }
++  /** The input becomes the current cell's editor; `text` null = keep what was typed into it. */
++  function begin(text, typed) {
++    if (D.readOnly) { kb.value = ''; showWarn(D.why || '這個檔案現在不能編輯。'); return false; }
++    editing = { r: cur.r, c: cur.c, orig: cell(cur.r, cur.c), typed: typed };
++    if (text != null) kb.value = text;
++    kb.classList.remove('idle');
++    placeKb();
++    focusKb();
++    return true;
++  }
++  /** F2 / a double click (initial null): the cell's text, all selected; else `initial` typed over it. */
+   function startEdit(initial) {
+-    if (D.readOnly) { showWarn(D.why || '這個檔案現在不能編輯。'); return; }
+-    var inp = document.createElement('input');
+-    inp.className = 'ed';
+-    inp.spellcheck = false;
+-    inp.value = initial != null ? initial : cell(cur.r, cur.c);
+-    editing = { r: cur.r, c: cur.c, input: inp, orig: cell(cur.r, cur.c) };
+-    placeEditor();
+-    inp.focus();
+-    if (initial == null) inp.select(); else inp.setSelectionRange(inp.value.length, inp.value.length);
+-    inp.addEventListener('keydown', function (e) {
+-      if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); commit(); go(cur.r + (e.shiftKey ? -1 : 1), cur.c); }
+-      else if (e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); commit(); go(cur.r, cur.c + (e.shiftKey ? -1 : 1)); }
+-      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); }
+-      else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && initial != null) {
+-        /* typed over (not F2): an arrow commits and moves, like Excel */
+-        e.preventDefault(); e.stopPropagation(); commit(); go(cur.r + (e.key === 'ArrowUp' ? -1 : 1), cur.c);
+-      } else e.stopPropagation();
+-    });
+-    inp.addEventListener('blur', function () { if (editing && editing.input === inp) commit(); });
++    if (!begin(initial != null ? initial : cell(cur.r, cur.c), initial != null)) return;
++    if (initial == null) kb.select(); else kb.setSelectionRange(kb.value.length, kb.value.length);
+   }
+-  function placeEditor() {
+-    if (!editing) return;
+-    var y = header && editing.r === 0 ? wrap.scrollTop + RH : rowY(editing.r);
+-    var s = editing.input.style;
+-    s.left = colX(editing.c) + 'px'; s.top = y + 'px';
+-    s.width = Math.max(colW(editing.c), 120) + 'px'; s.height = RH + 'px';
+-    if (editing.input.parentNode !== sizer) sizer.appendChild(editing.input);
++  function editKey(e) {
++    var k = e.key;
++    if (k === 'Enter') { e.preventDefault(); commit(); go(cur.r + (e.shiftKey ? -1 : 1), cur.c); }
++    else if (k === 'Tab') { e.preventDefault(); commit(); go(cur.r, cur.c + (e.shiftKey ? -1 : 1)); }
++    else if (k === 'Escape') { e.preventDefault(); cancel(); }
++    else if ((k === 'ArrowUp' || k === 'ArrowDown') && editing.typed) {
++      /* typed over (not F2): an arrow commits and moves, like Excel */
++      e.preventDefault(); commit(); go(cur.r + (k === 'ArrowUp' ? -1 : 1), cur.c);
++    }
+   }
+-  function commit() {
++  function commit(refocus) {
+     if (!editing) return;
+     var e = editing;
+     editing = null;
+-    var v = e.input.value;
+-    if (e.input.parentNode) e.input.parentNode.removeChild(e.input);
++    var v = kb.value;
++    toIdle(refocus !== false);
+     if (v !== e.orig) setCells([{ r: e.r, c: e.c, v: v }]);
+     else draw();
+-    wrap.focus();
+   }
+   function cancel() {
+     if (!editing) return;
+-    var e = editing;
+     editing = null;
+-    if (e.input.parentNode) e.input.parentNode.removeChild(e.input);
++    toIdle(true);
+     draw();
+-    wrap.focus();
+   }
+   function selRect() {
+     return { r0: Math.min(cur.r, anchor.r), r1: Math.max(cur.r, anchor.r), c0: Math.min(cur.c, anchor.c), c1: Math.max(cur.c, anchor.c) };
+@@ -248,16 +264,20 @@
+   sizer.addEventListener('mousedown', function (e) {
+     var t = e.target;
+     if (t.getAttribute('data-rs') != null) { rsCol = +t.getAttribute('data-rs'); rsX = e.clientX; rsW = colW(rsCol); e.preventDefault(); return; }
+-    if (editing && t === editing.input) return;
++    if (editing && t === kb) return;
+     if (editing) commit();
+-    if (t.getAttribute('data-all')) { anchor = { r: 0, c: 0 }; cur = { r: nrows() - 1, c: ncols - 1 }; draw(); return; }
+-    if (t.getAttribute('data-col') != null) { var cc = +t.getAttribute('data-col'); anchor = { r: 0, c: e.shiftKey ? anchor.c : cc }; cur = { r: nrows() - 1, c: cc }; draw(); return; }
+-    if (t.getAttribute('data-row') != null) { var rr = +t.getAttribute('data-row'); anchor = { r: e.shiftKey ? anchor.r : rr, c: 0 }; cur = { r: rr, c: ncols - 1 }; draw(); return; }
++    if (t.getAttribute('data-all')) { e.preventDefault(); focusKb(); anchor = { r: 0, c: 0 }; cur = { r: nrows() - 1, c: ncols - 1 }; draw(); return; }
++    if (t.getAttribute('data-col') != null) { e.preventDefault(); focusKb(); var cc = +t.getAttribute('data-col'); anchor = { r: 0, c: e.shiftKey ? anchor.c : cc }; cur = { r: nrows() - 1, c: cc }; draw(); return; }
++    if (t.getAttribute('data-row') != null) { e.preventDefault(); focusKb(); var rr = +t.getAttribute('data-row'); anchor = { r: e.shiftKey ? anchor.r : rr, c: 0 }; cur = { r: rr, c: ncols - 1 }; draw(); return; }
+     if (t.getAttribute('data-r') == null) return;
+     e.preventDefault();
+-    wrap.focus();
++    focusKb();
+     cur = { r: +t.getAttribute('data-r'), c: +t.getAttribute('data-c') };
+     if (!e.shiftKey) anchor = { r: cur.r, c: cur.c };
++    /* a double click = edit, told by the click count right here: the browser's own dblclick never
++     * reaches the cell -- this mousedown redraws the grid, so the second click's target is a new
++     * element and Chromium aims the dblclick at what the two have in common (the grid) */
++    if (e.detail >= 2 && !e.shiftKey) { dragSel = false; draw(); save(); startEdit(null); return; }
+     dragSel = true;
+     draw();
+     save();
+@@ -272,19 +292,29 @@
+     }
+   });
+   window.addEventListener('mouseup', function () { if (rsCol >= 0) save(); rsCol = -1; dragSel = false; });
+-  sizer.addEventListener('dblclick', function (e) {
+-    var t = e.target;
+-    if (t.getAttribute('data-r') == null) return;
+-    cur = anchor = { r: +t.getAttribute('data-r'), c: +t.getAttribute('data-c') };
+-    startEdit(null);
+-  });
+   var raf = 0;
+   wrap.addEventListener('scroll', function () { if (drawn.a >= 0 && !raf) raf = requestAnimationFrame(function () { raf = 0; draw(); }); });
+   window.addEventListener('resize', draw);
++  /* the keys always go to the input: a click on the table's empty part / its scroll bar, or VS Code
++   * focusing the editor, hands the focus back to it */
++  wrap.addEventListener('focus', function (e) { if (e.target === wrap) focusKb(); });
++  window.addEventListener('focus', function () { var a = document.activeElement; if (!a || a === document.body || a === wrap) focusKb(); });
+ 
+   /* --- keys --- */
+-  wrap.addEventListener('keydown', function (e) {
+-    if (editing) return;
++  kb.addEventListener('keydown', function (e) {
++    if (e.isComposing || e.keyCode === 229) return;   /* the IME's own keys: its Enter picks the word, not the next cell */
++    if (editing) return editKey(e);
++    navKey(e);
++  });
++  /* a character typed into the idle input (or an IME word started in it): that cell's editor now */
++  kb.addEventListener('input', function (e) {
++    if (editing || composing || e.isComposing || kb.value === '') return;
++    begin(null, true);
++  });
++  kb.addEventListener('compositionstart', function () { composing = true; if (!editing) begin(null, true); });
++  kb.addEventListener('compositionend', function () { composing = false; if (!editing) kb.value = ''; });
++  kb.addEventListener('blur', function () { if (editing) commit(false); });
++  function navKey(e) {
+     var k = e.key, ctrl = e.ctrlKey || e.metaKey, sh = e.shiftKey;
+     var page = Math.max(1, Math.floor(wrap.clientHeight / RH) - 2);
+     var mv = function (dr, dc) { e.preventDefault(); go(cur.r + dr, cur.c + dc, sh); };
+@@ -308,9 +338,9 @@
+     if (ctrl && sh && (k === '+' || k === '=')) { e.preventDefault(); return insRow(); }
+     if (ctrl && !sh && k === '-') { e.preventDefault(); return delRow(); }
+     /* (Ctrl+Z / Ctrl+Y / Ctrl+S: VS Code's own -- the undo stack and the saving are the document's) */
+-    /* a character: start typing over the cell (Excel) */
+-    if (!ctrl && !e.altKey && k.length === 1) { e.preventDefault(); return startEdit(k); }
+-  });
++    /* a character: it goes into the input, whose 'input' starts typing over the cell (Excel) */
++    if (!ctrl && !e.altKey && k.length === 1 && D.readOnly) { e.preventDefault(); showWarn(D.why || '這個檔案現在不能編輯。'); }
++  }
+   /* Ctrl+C when VS Code does the copy (it runs the webview's copy): the selection as tab separated text */
+   document.addEventListener('copy', function (e) {
+     if (editing || document.activeElement === findBox || !e.clipboardData) return;
+@@ -345,7 +375,7 @@
+   findBox.addEventListener('input', function () { runFind(findBox.value, false); });
+   findBox.addEventListener('keydown', function (e) {
+     if (e.key === 'Enter' || e.key === 'F3') { e.preventDefault(); runFind(findBox.value, true); }
+-    else if (e.key === 'Escape') { e.preventDefault(); findBox.value = ''; runFind('', false); wrap.focus(); }
++    else if (e.key === 'Escape') { e.preventDefault(); findBox.value = ''; runFind('', false); focusKb(); }
+   });
+ 
+   window.addEventListener('message', function (ev) {
+@@ -364,7 +394,7 @@
+       clampCur();
+       if (find.q) runFind(find.q, false);
+       draw();
+-      if (m.first) { scrollTo(cur.r, cur.c); draw(); wrap.focus(); }
++      if (m.first) { scrollTo(cur.r, cur.c); draw(); focusKb(); }
+     } else if (m.type === 'select') {
+       cur = { r: m.r | 0, c: m.c | 0 };
+       anchor = { r: m.r1 != null ? m.r1 | 0 : cur.r, c: m.c1 != null ? m.c1 | 0 : cur.c };
+diff --git a/tools/vscode-htdesigner/package.json b/tools/vscode-htdesigner/package.json
+index a69f8d8..f372690 100644
+--- a/tools/vscode-htdesigner/package.json
++++ b/tools/vscode-htdesigner/package.json
+@@ -2,7 +2,7 @@
+   "name": "ht9045-html-designer",
+   "displayName": "HTML 視覺設計工具",
+   "description": "BCB6 表單移植成 web HMI（網頁＋C++）的專案通用：像 WPF 設計工具一樣看、改頁面：點元件看屬性與事件，雙擊事件跳到程式碼（網頁 JS／C++ 移植樹／BCB6 原始碼），拖曳、控制點、方向鍵、屬性面板直接改 HTML。",
+-  "version": "0.120.0",
++  "version": "0.121.0",
+   "publisher": "ht9045",
+   "license": "UNLICENSED",
+   "private": true,
+diff --git a/tools/vscode-htdesigner/test/csv_driver.js b/tools/vscode-htdesigner/test/csv_driver.js
+index da960a0..8b89787 100644
+--- a/tools/vscode-htdesigner/test/csv_driver.js
++++ b/tools/vscode-htdesigner/test/csv_driver.js
+@@ -4,15 +4,16 @@
+   var R = {};
+   function out(t) { return (window.__out || []).filter(function (m) { return m.type === t; }); }
+   function send(m) { window.postMessage(m, '*'); }
++  /* a key into the focused input (the table's one: idle or editing), as a browser does it: a
++   * character not taken by the keydown lands in the input and fires 'input' */
+   function key(k, o) {
+-    var w = document.getElementById('wrap');
++    var w = document.getElementById('kb');
+     var ev = new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ctrlKey: !!(o && o.ctrlKey), shiftKey: !!(o && o.shiftKey) });
+-    w.dispatchEvent(ev);
+-  }
+-  function edKey(k) {
+-    var inp = document.querySelector('.ed');
+-    if (inp) inp.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
++    var go = w.dispatchEvent(ev);
++    if (go && k.length === 1 && !(o && o.ctrlKey)) { w.value += k; w.dispatchEvent(new Event('input', { bubbles: true })); }
+   }
++  function edKey(k) { key(k); }
++  function editor() { return document.querySelector('.ed:not(.idle)'); }
+   function finish() {
+     var pre = document.createElement('pre');
+     pre.id = 'HTDTEST';
+@@ -43,7 +44,7 @@
+         c.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+         window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+         key('5');
+-        var inp = document.querySelector('.ed');
++        var inp = editor();
+         R.editorOpen = !!inp && inp.value === '5';
+         if (inp) inp.value = '555';
+         edKey('Enter');
+@@ -74,10 +75,10 @@
+         /* F2 then Esc: nothing written */
+         var nE2 = out('edit').length;
+         key('F2');
+-        var inp2 = document.querySelector('.ed');
++        var inp2 = editor();
+         if (inp2) inp2.value = 'zzz';
+         edKey('Escape');
+-        R.escOk = !!inp2 && !document.querySelector('.ed') && out('edit').length === nE2;
++        R.escOk = !!inp2 && !editor() && out('edit').length === nE2;
+         /* Tab moves right, Home goes to the first column */
+         key('Tab');
+         var s1 = window.__htdCsv.state().cur;
+@@ -92,6 +93,35 @@
+         var s3 = window.__htdCsv.state().cur;
+         R.find = s3.r + ',' + s3.c + ' ' + document.getElementById('findN').textContent;
+         R.findOk = s3.r === 13 && s3.c === 1 && /第 1 個/.test(document.getElementById('findN').textContent);
++        /* a double click = the editor, its text selected: told by the second press's click count (20261001:
++         * the browser's own dblclick never reached the cell -- the first press redraws it) */
++        var press = function (r, c, n) {
++          var el = document.querySelector('.cell[data-r="' + r + '"][data-c="' + c + '"]');
++          el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, detail: n }));
++          window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
++        };
++        press(5, 1, 1); press(5, 1, 2);
++        var de = editor();
++        R.dbl = de ? de.value + ' ' + de.selectionStart + '-' + de.selectionEnd + ' ' + (document.activeElement === de) : null;
++        R.dblOk = !!de && de.value === 'X2' && de.selectionStart === 0 && de.selectionEnd === 2 && document.activeElement === de;
++        edKey('Escape');
++        /* the IME (注音): a word started = that cell's editor; the IME's own Enter (isComposing) picks the
++         * word, it does not write the cell; then Enter writes it */
++        press(6, 1, 1);
++        var kbi = document.getElementById('kb'), nE4 = out('edit').length;
++        R.kbFocused = document.activeElement === kbi;
++        kbi.dispatchEvent(new KeyboardEvent('keydown', { key: 'Process', keyCode: 229, bubbles: true, cancelable: true }));
++        kbi.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }));
++        var imeOpen = !!editor();
++        kbi.value = '中';
++        kbi.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true, data: '中' }));
++        kbi.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 229, isComposing: true, bubbles: true, cancelable: true }));
++        var stillEd = !!editor() && out('edit').length === nE4;
++        kbi.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '中' }));
++        edKey('Enter');
++        var e4 = out('edit').pop();
++        R.ime = imeOpen + ' ' + stillEd + ' ' + (e4 ? JSON.stringify(e4.changes) : null);
++        R.imeOk = R.kbFocused && imeOpen && stillEd && out('edit').length === nE4 + 1 && e4.changes[0].r === 6 && e4.changes[0].c === 1 && e4.changes[0].v === '中';
+         /* read only (a Big5 file read as UTF-8): typing does nothing but say why */
+         send({ type: 'data', rows: rows.slice(0, 3), delim: ',', readOnly: true, why: 'not UTF-8', file: 'x.csv', first: false });
+       } catch (e) { R.driverError = String(e && e.stack || e); finish(); return; }
+@@ -100,7 +130,7 @@
+           var nE3 = out('edit').length;
+           document.getElementById('wrap').focus();
+           key('7');
+-          R.roOk = out('edit').length === nE3 && !document.querySelector('.ed') && !document.getElementById('warn').hidden &&
++          R.roOk = out('edit').length === nE3 && !editor() && document.getElementById('kb').value === '' && !document.getElementById('warn').hidden &&
+             /UTF-8/.test(document.getElementById('warn').textContent);
+         } catch (e) { R.driverError = String(e); }
+         finish();
+diff --git a/tools/vscode-htdesigner/test/csv_realinput.js b/tools/vscode-htdesigner/test/csv_realinput.js
+new file mode 100644
+index 0000000..ee10bf3
+--- /dev/null
++++ b/tools/vscode-htdesigner/test/csv_realinput.js
+@@ -0,0 +1,108 @@
++// AI(W906-HTDESIGNER) 20261001: the CSV table (media/csv.js) in a headless Edge driven with REAL input --
++// the DevTools protocol's Input.* (a real double click, real keys, an IME composition) -- not synthetic
++// events. The synthetic test (csv_driver.js) passed while EastSun could not write a cell (20261001
++// "表格我沒辦法寫入"): a dispatched dblclick hits the cell, a real one never did; a dispatched keydown
++// does not need the IME. Run by test\probe_test.ps1 with VS Code's Electron as Node (global fetch / WebSocket).
++// usage: Code.exe csv_realinput.js <media dir> <out.json>   (with ELECTRON_RUN_AS_NODE=1)
++// Writes only under %TEMP% (the page and the Edge profile) and <out.json>.
++'use strict';
++const fs = require('fs'), path = require('path'), os = require('os'), cp = require('child_process');
++const media = process.argv[2], outFile = process.argv[3];
++const R = {};
++const done = () => { try { fs.writeFileSync(outFile, JSON.stringify(R)); } catch (e) { } };
++const edgeExe = ['C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/Microsoft/Edge/Application/msedge.exe'].find(p => fs.existsSync(p));
++if (!edgeExe) { R.error = 'msedge.exe not found'; done(); process.exit(2); }
++const work = fs.mkdtempSync(path.join(os.tmpdir(), 'htd_csv_real_'));
++const u = p => 'file:///' + path.resolve(p).replace(/\\/g, '/');
++const page = path.join(work, 'csv.html');
++fs.writeFileSync(page, '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
++  '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src file: \'unsafe-inline\'; script-src file: \'unsafe-inline\'">' +
++  '<link rel="stylesheet" href="' + u(path.join(media, 'csv.css')) + '"></head><body><div id="root"></div>' +
++  '<script>window.__out=[];window.acquireVsCodeApi=function(){return{postMessage:function(m){window.__out.push(JSON.parse(JSON.stringify(m)));},getState:function(){return null;},setState:function(){}};};</script>' +
++  '<script src="' + u(path.join(media, 'csv.js')) + '"></script>' +
++  '<script>setTimeout(function(){window.postMessage({type:"data",rows:[["Motorname","Alias","Acc","Rate"],["M00","MInArmX","100000","1"],["M01","MInArmY","200000","2"],["M02","MInArmZ","300000"]],delim:",",readOnly:false,file:"Mot_Table.csv",first:true},"*");},50);</script>' +
++  '</body></html>');
++const prof = path.join(work, 'prof');
++const edge = cp.spawn(edgeExe, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--user-data-dir=' + prof,
++  '--allow-file-access-from-files', '--remote-debugging-port=0', '--window-size=1000,700', 'about:blank'], { stdio: 'ignore' });
++const sleep = ms => new Promise(r => setTimeout(r, ms));
++let finished = false;
++const finish = async code => {
++  if (finished) return;
++  finished = true;
++  done();
++  try { edge.kill(); } catch (e) { }
++  await sleep(400);
++  try { fs.rmSync(work, { recursive: true, force: true }); } catch (e) { }
++  process.exit(code);
++};
++setTimeout(() => { R.error = R.error || 'timeout'; finish(3); }, 40000);
++(async () => {
++  let port = 0;
++  for (let i = 0; i < 150 && !port; i++) { await sleep(100); try { port = +fs.readFileSync(path.join(prof, 'DevToolsActivePort'), 'utf8').split('\n')[0]; } catch (e) { } }
++  if (!port) throw new Error('no DevToolsActivePort');
++  const t = await (await fetch('http://127.0.0.1:' + port + '/json/new?' + encodeURI(u(page)), { method: 'PUT' })).json();
++  const ws = new WebSocket(t.webSocketDebuggerUrl);
++  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
++  let id = 0;
++  const wait = new Map();
++  ws.onmessage = ev => { const m = JSON.parse(ev.data); if (m.id && wait.has(m.id)) { wait.get(m.id)(m); wait.delete(m.id); } };
++  const call = (method, params) => new Promise(res => { const i = ++id; wait.set(i, res); ws.send(JSON.stringify({ id: i, method, params: params || {} })); });
++  const ev = async expr => { const r = await call('Runtime.evaluate', { expression: expr, returnByValue: true }); return r.result && r.result.result ? r.result.result.value : null; };
++  const center = async (sel) => ev('(function(){var e=document.querySelector(' + JSON.stringify(sel) + ');if(!e)return null;var b=e.getBoundingClientRect();return {x:b.left+b.width/2,y:b.top+b.height/2};})()');
++  const mouse = (p, type, n) => call('Input.dispatchMouseEvent', { type, x: p.x, y: p.y, button: 'left', buttons: type === 'mousePressed' ? 1 : 0, clickCount: n });
++  const click = async (p, n) => { await mouse(p, 'mousePressed', n); await mouse(p, 'mouseReleased', n); await sleep(60); };
++  const keyPress = async (key, code, vk, text) => {
++    await call('Input.dispatchKeyEvent', Object.assign({ type: text ? 'keyDown' : 'rawKeyDown', key, code, windowsVirtualKeyCode: vk }, text ? { text } : {}));
++    await call('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: vk });
++    await sleep(40);
++  };
++  const editorState = () => ev('(function(){var e=document.querySelector(".ed:not(.idle)");return e?{value:e.value,s:e.selectionStart,e:e.selectionEnd,focused:document.activeElement===e}:null;})()');
++  const edits = () => ev('window.__out.filter(function(m){return m.type==="edit";}).map(function(m){return m.changes;})');
++  await sleep(700);
++  await call('Page.bringToFront');
++  const c22 = await center('.cell[data-r="2"][data-c="2"]');
++  if (!c22) throw new Error('the table was not drawn');
++  await mouse(c22, 'mouseMoved', 0);
++  // 1. a real double click opens the cell's editor, its text selected
++  await click(c22, 1);
++  await click(c22, 2);
++  await sleep(100);
++  R.dbl = await editorState();
++  R.dblOk = !!(R.dbl && R.dbl.value === '200000' && R.dbl.s === 0 && R.dbl.e === 6 && R.dbl.focused);
++  await keyPress('Escape', 'Escape', 27);
++  // 2. a click, then real keys: typed over the cell; Enter writes it (one edit), the next row
++  await click(c22, 1);
++  await keyPress('7', 'Digit7', 55, '7');
++  await keyPress('8', 'Digit8', 56, '8');
++  R.typed = await editorState();
++  await keyPress('Enter', 'Enter', 13, '\r');
++  R.typedEdits = await edits();
++  R.typedOk = !!(R.typed && R.typed.value === '78' && JSON.stringify(R.typedEdits) === '[[{"r":2,"c":2,"v":"78"}]]' &&
++    await ev('!document.querySelector(".ed:not(.idle)") && document.activeElement && document.activeElement.id === "kb"'));
++  // 3. the IME (a Chinese input method): the key is "Process" (229), a word is composed, then committed
++  const c31 = await center('.cell[data-r="3"][data-c="1"]');
++  await click(c31, 1);
++  await call('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Process', code: 'KeyJ', windowsVirtualKeyCode: 229 });
++  await call('Input.imeSetComposition', { text: '\u3128', selectionStart: 1, selectionEnd: 1 });
++  await call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Process', code: 'KeyJ', windowsVirtualKeyCode: 229 });
++  await sleep(60);
++  R.imeComposing = await editorState();
++  await call('Input.insertText', { text: '\u4e2d' });
++  await sleep(60);
++  R.imeCommitted = await editorState();
++  const nBefore = (await edits()).length;
++  await keyPress('Enter', 'Enter', 13, '\r');
++  const ed3 = (await edits()).slice(nBefore);
++  R.imeEdits = ed3;
++  R.imeOk = !!(R.imeComposing && R.imeCommitted && R.imeCommitted.value === '\u4e2d' && ed3.length === 1 &&
++    JSON.stringify(ed3[0]) === JSON.stringify([{ r: 3, c: 1, v: '\u4e2d' }]));
++  // 4. a click on the table's empty part: the keys still go to the input
++  const below = await ev('(function(){var w=document.getElementById("wrap").getBoundingClientRect();return {x:w.left+300,y:w.bottom-20};})()');
++  await click(below, 1);
++  R.emptyClickFocus = await ev('document.activeElement && (document.activeElement.id || document.activeElement.tagName)');
++  R.emptyClickOk = R.emptyClickFocus === 'kb';
++  R.pageErrors = await ev('window.__errs || []');
++  ws.close();
++  await finish(0);
++})().catch(async e => { R.error = String(e && e.stack || e); await finish(1); });
+diff --git a/tools/vscode-htdesigner/test/probe_test.ps1 b/tools/vscode-htdesigner/test/probe_test.ps1
+index a0c202c..01e6b0d 100644
+--- a/tools/vscode-htdesigner/test/probe_test.ps1
++++ b/tools/vscode-htdesigner/test/probe_test.ps1
+@@ -248,6 +248,8 @@ try {
+     'csv table: paste (Excel text) goes to the extension with the top-left cell' = [bool]($C -and $C.pasteOk)
+     'csv table: F2 + Esc writes nothing; Tab / Home move' = [bool]($C -and $C.escOk -and $C.moveOk)
+     'csv table: find jumps to the match' = [bool]($C -and $C.findOk)
++    'csv table: a double click (the second press''s click count) = the editor, its text selected' = [bool]($C -and $C.dblOk)
++    'csv table: an IME word goes into the cell; the IME''s own Enter picks the word, a second Enter writes it' = [bool]($C -and $C.imeOk)
+     'csv table: a file that cannot be written back: typing edits nothing, says why' = [bool]($C -and $C.roOk)
+     'csv table: the driver ran' = [bool]($C -and -not $C.driverError)
+   }
+@@ -257,4 +259,24 @@ try {
+ } finally {
+   Remove-Item $csvHtml -Force -ErrorAction SilentlyContinue
+ }
++
++# the CSV table with REAL input (DevTools protocol: a real double click, real keys, an IME word) -- the
++# synthetic events above passed while a real double click / a Chinese input method wrote nothing (20261001)
++$realOut = Join-Path $work 'csv_realinput.json'
++Remove-Item $realOut -Force -ErrorAction SilentlyContinue
++$env:ELECTRON_RUN_AS_NODE = '1'
++$rp = Start-Process -FilePath $code -ArgumentList "`"$(Join-Path $here 'csv_realinput.js')`"", "`"$media`"", "`"$realOut`"" -Wait -PassThru -NoNewWindow
++$env:ELECTRON_RUN_AS_NODE = $null
++$Q = $null
++if (Test-Path $realOut) { $raw = Get-Content $realOut -Raw -Encoding utf8; Write-Host "[csv real input] $raw"; $Q = $raw | ConvertFrom-Json } else { Write-Host "[csv real input] no result (exit $($rp.ExitCode))" }
++$qmust = [ordered]@{
++  'csv table, real input: a double click opens the cell''s editor, its text selected' = [bool]($Q -and $Q.dblOk)
++  'csv table, real input: click + keys = typed over the cell, Enter = one edit, the keys stay with the table' = [bool]($Q -and $Q.typedOk)
++  'csv table, real input: an IME word (Chinese input method) goes into the cell, Enter writes it' = [bool]($Q -and $Q.imeOk)
++  'csv table, real input: a click on the empty part keeps the keys with the table' = [bool]($Q -and $Q.emptyClickOk)
++  'csv table, real input: the driver ran' = [bool]($Q -and -not $Q.error)
++}
++foreach ($k in $qmust.Keys) {
++  if ($qmust[$k]) { Write-Host "PASS  $k" } else { Write-Host "FAIL  $k"; $bad++ }
++}
+ exit $bad
+-- 
+2.55.0.windows.5
+
