@@ -555,4 +555,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   cpp 0098 e5551f2 WORKLOG —— 工作紀錄補 10-01 第 60 項（畫面截掉全站修正）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  web 0068 d50fd77 TEACH-LOCK (web) —— Teach 照原版顯示鎖定：選取的那一軸在動時「*Lock by … moveing」、pnlStop 變黃、MoveN／MoveP／Home／MoveTo 鎖住（每軸獨立，同 Motor Test）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
