@@ -317,4 +317,18 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   tools 0123 HTDESIGNER-125（0.125.0）—— 設計畫面照 VS／Blend／WinForms 說明再對一次：按住 Alt 拖曳（不吸附）放開時不再被搬進 Panel（拖到一半才按 Alt 才換容器）；滾輪縮放以滑鼠為中心；左／上控制點拉過頭不再滑走；拖曳中 Esc＝取消；工具箱放置會吸格線；Ctrl+A 不選隱藏、鎖定的。三層測試全過。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0049 f0008c6 + web 0048 f059d13 MERGE-e240a3f4 —— 機台套到筆電第 99 包（GitHub main 736814b／GitLab main e240a3f4），第 86～99 包一次合：
+                    335 檔＝相同 119、新檔 45、機台舊版 129（換筆電版）、兩邊都改 42。兩邊都改的 18 檔三方合併（10 檔自動、8 檔 20 處人工）：
+                    TOKEN-OFF（W906_WEB_TOKEN_ENFORCE 0、cfg.enforceControlToken）照舊留機台的；IOWIDGET-3 的 TestSuck Suck()／Destroy() 留機台的；
+                    其餘收筆電的（notifyAck、A01 自動登出、STREAM、MinGW 相容寫法、新測試）。wb_serve.cpp 筆電那段 HMI-KEEP／STOPBTN 跟機台原有的
+                    一字不差，只收 notifyAck 本體，不重複。WebMotorAccessLive.cpp 自動合併多出一行 g_W906BrakeNote，已刪成一份（掃過 18 檔沒有別處）。
+                    tools/vscode-htdesigner 的 24 檔不收（設計外掛工作階段的，機台版比較新）。web：新 2、舊版 17、合併 3。
+                    沒套的：第 86 包要機台改 Mot_Table M35／M36／M38～M40 Enable=0（機台設定檔，EastSun 決定）。
+                    o2 建置 0 錯誤、PE 13/13 完整。
+  cpp 0050 b3c612a HT9050-ORG —— HT9050（9050GPIB）＋1203 分支：1203 軸「在原點」＝1203 回來的原點訊號 LOW（EastSun 1001「home 是 high
+                    代表沒偵測到、low 代表有偵測到」）。Teach 頁 IsCanQuickJogMove 的 Z 軸原點檢查（以前一律「不明＝不在原點」，跳「Please let InArm Z
+                    at home position first!!」）與 Motor Test／Teach 的 HOME 燈都改用這條；只讀，不寫卡片／驅動器。原本計畫的「SensorType 開機寫
+                    CFG_AxOrgLogic」取消（會把訊號意思反過來）。⚠ 給筆電：Motor/myEthercatmotor.cpp 的 ScanMotorStatus／GetHomeIO（筆電擁有）
+                    仍把 ORG=1 當在原點，WB_ENGINE_MOTOR_1203 武裝時要照這條規則。ctest WebMotorAccess 通過（多 3 項）、production_audit 0 變更。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（0049 的 16 處命中都是 bNeedPassword 之類的變數名與註解）；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。

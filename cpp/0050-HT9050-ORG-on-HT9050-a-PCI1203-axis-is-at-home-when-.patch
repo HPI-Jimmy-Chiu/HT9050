@@ -1,0 +1,137 @@
+From b3c612ab1d57d8d2d07e92bbb455f60dffc7417d Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 10:23:56 +0800
+Subject: [PATCH] HT9050-ORG: on HT9050 a PCI1203 axis is "at home" when the
+ 1203 ORG signal is LOW (Teach Z checks and the HOME lamps)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20261001 (Teach showed "Please let InArm Z at home position first!!"): "我需要你分支 使用9050
+並且使用1203 偵測全部都要改用1203回來的home訊號 不是用IO了 並且home 是hight時 代表沒偵測到
+是low時 代表有偵測到".
+Before: the axes are opened by the 1203 monitor, which never sets CFG_AxOrgLogic, so the ORG
+bit's meaning was unknown (kPci1203CardOrgLogic = -1) and every 1203 Z was "home unknown ->
+not at home": the Teach page refused InArm X/Y jogs. No IO_Table sensor is involved (no Z home
+sensor row is enabled on this machine).
+Now, the HT9050 + 1203 branch (W906_GpibModel == "9050GPIB"):
+- WebMotorAccess.cpp MotorAccessTeachHomeLed (forms/fTeach.cpp IsCanQuickJogMove's 1203 source):
+  ORG bit (motionIO bit 4) 0 = at home, 1 = not; SensorType / card OrgLogic not consulted.
+  No sample / no fresh sample after a command stays -1 (fail-closed). Hook g_W906OrgActiveLow,
+  installed by WebMotorAccessLive.cpp (null = the old rule, so other machines are unchanged).
+- JsonBridge/ChanMotorPoints.cpp led.home (Motor Test / Teach HOME lamps): the same rule.
+Read-only: nothing is written to the card or the drives. The planned "SensorType -> write
+CFG_AxOrgLogic at boot" is dropped: it would flip the ORG bit's meaning under this rule.
+Not covered (laptop-owned): Motor/myEthercatmotor.cpp ScanMotorStatus / GetHomeIO still take the
+ORG bit as "at home" (golden, relying on CFG_AxOrgLogic) -- it matters once WB_ENGINE_MOTOR_1203
+is armed.
+ctest WebMotorAccess passes (3 new checks: high -> not home, low -> home, no sample -> -1);
+production_audit 0 changes.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ JsonBridge/ChanMotorPoints.cpp  |  4 +++-
+ WebMotorAccess.cpp              |  5 +++++
+ WebMotorAccess.h                |  5 +++++
+ WebMotorAccessLive.cpp          |  2 ++
+ tests/test_web_motor_access.cpp | 10 ++++++++++
+ 5 files changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/JsonBridge/ChanMotorPoints.cpp b/JsonBridge/ChanMotorPoints.cpp
+index ef88c90..ebb27b1 100644
+--- a/JsonBridge/ChanMotorPoints.cpp
++++ b/JsonBridge/ChanMotorPoints.cpp
+@@ -317,7 +317,9 @@ std::string MotorRuntimeJson()
+             const unsigned long io = ov.motionIO;
+             w.BeginObject();
+             w.Key("cw").Bool((io & 0x00000008ul) != 0);
+-            w.Key("home").Bool((io & 0x00000010ul) != 0);
++            //AI(W906-HT9050-ORG) 20261001: HT9050（9050GPIB）＋1203 分支 —— EastSun「home 是 high 時 代表沒偵測到 是 low 時 代表有偵測到」：
++            //  HOME 燈＝在原點＝ORG 位元 0（low）。同 WebMotorAccess.cpp MotorAccessTeachHomeLed 的規則（Teach 的「Z 在原點」判斷）。
++            w.Key("home").Bool((W906_GpibModel == "9050GPIB") ? (io & 0x00000010ul) == 0 : (io & 0x00000010ul) != 0);
+             w.Key("ccw").Bool((io & 0x00000004ul) != 0);
+             w.Key("emg").Bool((io & 0x00000040ul) != 0);
+             w.Key("alarm").Bool((io & 0x00000002ul) != 0 || (ov.state & 0xFFu) == 3u);
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index 6713fbd..e230a36 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -3803,6 +3803,7 @@ std::string MotorAccessResolveTeachButton(const TeachRegistry& reg, const std::s
+ // AI(W906-W5-b) 20260925: 覆核 W5B-R2 —— 在機台上量到的卡片 CFG_AxOrgLogic（-1＝還沒量）。量法：Z 軸停在原點、離開原點，各讀一次
+ //   監看器 motionIO bit 4（1203 監看頁或 /api），再讀一次卡片的 CFG_AxOrgLogic（EastSun 監看器目前不讀這個屬性）。量到之前 1203 軸的「在原點」一律不明。
+ const int kPci1203CardOrgLogic = -1;
++bool (*g_W906OrgActiveLow)() = 0;   //AI(W906-HT9050-ORG) 20261001: 見 WebMotorAccess.h（HT9050＝1203 ORG low 才是在原點）
+ 
+ int MotorAccessOrgHomeLed(bool orgBit, bool sensorType, int cardOrgLogic)
+ {
+@@ -3821,6 +3822,10 @@ int MotorAccessTeachHomeLed(IMotorAccessBackend& be, int mi)
+     unsigned long io = 0;
+     if (!be.Pci1203MotionIO(a.axis, io)) { g_teachHomeUnknown = alias + "：監看器沒有這一軸的樣本"; return -1; }
+     if (SampleStale(be, a.axis)) { g_teachHomeUnknown = alias + "：命令之後監看器還沒有新樣本"; return -1; }   // 命令之後還沒新樣本
++    //AI(W906-HT9050-ORG) 20261001: HT9050＋1203 分支 —— EastSun「偵測全部都要改用1203回來的home訊號 不是用IO了，home 是 high 時 代表沒偵測到、
++    //  是 low 時 代表有偵測到」。卡片 ORG 位元（motionIO bit 4）＝0（low）＝在原點；不再看 SensorType／kPci1203CardOrgLogic（不明＝不在原點那條）。
++    //  沒樣本／命令後沒新樣本照上面兩行仍是 -1（fail-closed）。掛勾由 WebMotorAccessLive.cpp 依 W906_GpibModel=="9050GPIB" 裝上。
++    if (g_W906OrgActiveLow && g_W906OrgActiveLow()) return ((io & 0x00000010ul) != 0) ? 0 : 1;
+     MotorGolden g;
+     if (!be.GoldenMotor(mi, g)) { g_teachHomeUnknown = alias + "：沒有 golden 馬達物件（讀不到 SensorType）"; return -1; }
+     // AX_MOTION_IO_ORG（golden myEthercatmotor.cpp:860 ScanMotorStatus `(Status>>4)&0x1`）；極性見 kPci1203CardOrgLogic（W5B-R2）
+diff --git a/WebMotorAccess.h b/WebMotorAccess.h
+index eecaa89..d343eaa 100644
+--- a/WebMotorAccess.h
++++ b/WebMotorAccess.h
+@@ -558,6 +558,11 @@ bool MotorAccessStartBlocked(std::string& why);
+ //    （-1 未量、0 ORG_ACT_LOW、1 ORG_ACT_HIGH）；未量 ⇒ 1203 軸的「在原點」一律 -1（不明 ⇒ 不在原點，fail-closed）。
+ //    量到之後：卡片值 == golden 的 (SensorType ? 0 : 1) ⇒ 位元照讀；不同 ⇒ 反相。
+ extern const int kPci1203CardOrgLogic;
++//AI(W906-HT9050-ORG) 20261001: HT9050＋1203 分支（EastSun 20261001「我需要你分支 使用9050 並且使用1203 偵測全部都要改用1203回來的home訊號
++//  不是用IO了 並且home 是hight時 代表沒偵測到 是low時 代表有偵測到」）。掛勾回 true（WebMotorAccessLive.cpp 裝的：W906_GpibModel=="9050GPIB"）時，
++//  1203 軸「在原點」＝卡片 ORG 位元 0（low），不看 SensorType 與 kPci1203CardOrgLogic。null／false＝原本的規則。
++//  同一條規則也在 JsonBridge/ChanMotorPoints.cpp 的 led.home（Motor Test／Teach 頁的 HOME 燈）。
++extern bool (*g_W906OrgActiveLow)();
+ // 純函式（測試直接驗）：orgBit＝motionIO bit 4；sensorType＝Motor->bSensorType；cardOrgLogic＝卡片的 CFG_AxOrgLogic（不是 0／1 ⇒ -1 不明）
+ int  MotorAccessOrgHomeLed(bool orgBit, bool sensorType, int cardOrgLogic);
+ int  MotorAccessTeachHomeLed(IMotorAccessBackend& be, int motIndex);
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index 1725d51..1e76793 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -111,6 +111,7 @@ bool RelayCardBit(int sw, bool& bit)
+ //  1203 軸的「Z 在原點」讀監看器 ORG、SOFT_SIMULTE 下被移動的是真的會動的 1203 軸就跑本體。邏輯在 WebMotorAccess.cpp（有單元測試）。
+ bool TeachLive1203Thunk(int mi) { return MotorAccessTeachLive1203(MotorAccessLiveBackend(), mi); }
+ int  TeachHomeLedThunk(int mi)  { return MotorAccessTeachHomeLed(MotorAccessLiveBackend(), mi); }
++bool OrgActiveLowHT9050()        { return W906_GpibModel == "9050GPIB"; }   //AI(W906-HT9050-ORG) 20261001: HT9050＋1203＝ORG low 才是在原點（WebMotorAccess.h）
+ 
+ //AI(W906-BRAKE-AXIS) 20260929: EastSun 20260929「只要SERVO ON 就必須要先激磁 0.5秒後 觸發io的煞車」／「寫在激磁 只要有激磁做動 0.5秒
+ //  就要觸發對應io煞車 如果有煞車io的話」. One brake output per axis (IO_Table.csv names; output ON = release, EastSun R1):
+@@ -665,6 +666,7 @@ public:
+         if (!fTeach) return false;                                              // 教導頁的 facade 沒建（wb_serve 開機會建）
+         W906_TeachLive1203Hook = &TeachLive1203Thunk;                            // AI(W906-W5-b) 20260925: W5B-3（forms/fTeach.h 檔尾）
+         W906_TeachHomeLedHook  = &TeachHomeLedThunk;
++        g_W906OrgActiveLow     = &OrgActiveLowHT9050;                            //AI(W906-HT9050-ORG) 20261001
+         fTeach->ActiveMotorIndex = mi;                                         // golden：按運動鈕時的選取軸
+         return fTeach->CheckCanMove() && fTeach->IsCanQuickJogMove();          // forms/fTeach.cpp:330／:135
+     }
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index a1878f1..40f9400 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -3012,6 +3012,16 @@ int main(int argc, char** argv)
+               MotorAccessOrgHomeLed(true, false, 0) == 0 && MotorAccessOrgHomeLed(false, false, 0) == 1 &&
+               MotorAccessOrgHomeLed(true, true, 0) == 1 && MotorAccessOrgHomeLed(false, true, 1) == 1 && MotorAccessOrgHomeLed(true, false, -1) == -1,
+               "W5B-R2: card logic == golden (SensorType ? 0 : 1) -> bit as-is; different -> inverted; unknown -> -1");
++        //AI(W906-HT9050-ORG) 20261001: HT9050＋1203 分支 —— EastSun「home 是 high 時 代表沒偵測到 是 low 時 代表有偵測到」
++        g_W906OrgActiveLow = []() { return true; };
++        be.motionIO[1] = 0x10;
++        CHECK(MotorAccessTeachHomeLed(be, mZA) == 0, "HT9050-ORG: ORG bit high -> NOT at home (no SensorType / card-logic guess)");
++        be.motionIO[1] = 0x00;
++        CHECK(MotorAccessTeachHomeLed(be, mZA) == 1, "HT9050-ORG: ORG bit low -> at home");
++        be.motionIO.erase(1);
++        CHECK(MotorAccessTeachHomeLed(be, mZA) == -1, "HT9050-ORG: no monitor sample -> still -1 (fail-closed)");
++        g_W906OrgActiveLow = 0;
++        be.motionIO[1] = 0x10;                                                  // 回到上面 W5B-R2 那一段的狀態
+         be.freezePolls = true;
+         MotorAccessDispatch(mv, 1, be);                                         // 下一個命令，輪詢不前進
+         CHECK(MotorAccessTeachHomeLed(be, mZA) == -1 && Has(MotorAccessTeachHomeUnknownWhy(), "新樣本"), "W5B-3: sample older than the last command -> unknown (fail-closed)");
+-- 
+2.55.0.windows.5
+
