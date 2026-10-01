@@ -5,6 +5,7 @@
 
 ## ⚠⚠ 給機台端（20260929 18:1x 起，請先讀這一段）
 
+- ✅ **20261002 第 118 包（GitLab main `3ff4a55a`）——要重建 wb_serve**：開了 VTEST 的機台，TesterIF 頁最長測試時間照 golden 用 0～36000 的範圍（沒開的照第 117 包，0～15000）。
 - ✅ **20261002 第 117 包（GitLab main `95be5593`）——只動網頁與測試，不用重建 wb_serve**：Setup.TesterIF 頁 9 個欄位的鍵盤範圍照 golden 通用分支（最長測試時間可以輸入小數、0～15000；原本被夾成整數 60～9999，輸入 10 會存成 60。三個 Initial Start Delay 不再有最小 30）。**之前在那頁存過的最長測試時間請再看一下。**
 - ✅ **20261002 第 116 包（GitLab main `19e8826c`）——要重建 wb_serve**：St02 的計時器修正——Timer3 與每分鐘溫度紀錄在自己的框開著時照 golden 繼續跑；Observer 頁的溫度歷史照 golden 記錄（原本全是 0）。
 - ✅ **20261002 第 115 包（GitLab main `8b8209cc`）——只動網頁，不用重建 wb_serve**：Lot Info 頁 Tester Log 分頁的「Tester TCP Show」鈕照 golden，開 Tester 通訊視窗的 TCP/IP 分頁（只有 TCP_IP_MODE 才有那個分頁）；`tools/websync/sync_web.py` 的保留清單補那支新的 js。
@@ -179,6 +180,7 @@
 | 115 | `updates/8b8209cc/` | `8b8209cc` | `2138c080`（`updates/8b8209cc/_machine_ai/base_2138c080/`） | 只動網頁（7 檔；gate b29a 兩組態全新：出貨 316／4、模擬 316／19＝基準）。St02 MR !89（新檔 `web/page/ht9045_lotinfo_testertcp.js`＋`web/page/Data.LotInfo.html` 一行）；`tools/websync/sync_web.py`。 |
 | 116 | `updates/19e8826c/` | `19e8826c` | `8b8209cc`（`updates/19e8826c/_machine_ai/base_8b8209cc/`） | ⚠ **要重建 wb_serve**（12 檔；gate b30a 兩組態全新：出貨 316／4、模擬 316／19＝基準）。St02 MR !90（`MainTimersSt02.cpp`、`MainTimer3.cpp`、`MainTimerESD*.cpp`、`Interface/TesterTCP_OSReport.cpp`、測試）；筆電 `mykitsuck.h`／`.cpp`（註解）。 |
 | 117 | `updates/95be5593/` | `95be5593` | `19e8826c`（`updates/95be5593/_machine_ai/base_19e8826c/`） | 只動網頁與測試（7 檔；gate b32a 兩組態全新：出貨 317／4、模擬 317／19＝基準）。St02 MR !93（`web/page/ht9045_testerif_c_wire.js`、新 node 測試）、MR !91（`tests/test_g023_os_report.cpp`）、MR !92（文件）。 |
+| 118 | `updates/3ff4a55a/` | `3ff4a55a` | `95be5593`（`updates/3ff4a55a/_machine_ai/base_95be5593/`） | ⚠ **要重建 wb_serve**（6 檔；gate b33a 兩組態全新：出貨 317／4、模擬 317／19＝基準）。St02 MR !94（`FileRW/TestIF_File_TesterIF.cpp` 一行、`web/page/ht9045_testerif_c_wire.js`、測試）。 |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
