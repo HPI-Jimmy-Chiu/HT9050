@@ -464,4 +464,15 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   tools 0139 HTDESIGNER-145（0.145.0）—— 筆電包 108 的外掛部分合進機台：ES02 的 0.144–0.145（尋找框 Ctrl+Shift+F：一個框、選範圍〔這個檔／專案／整個方案／C++／網頁／BCB6，Big5 照讀〕；Ctrl+F 也開這個框，預設「這個檔案」，設定 ht9045Designer.ctrlFFind 可關）。三方合併（基準＝包 107）：4 個只有 ES02 改、2 個兩邊都改都沒有衝突；機台的 tools 0136 Alias 補丁保留。包說明寫 0.144，package.json 是 0.145。C++ 部分＝整合工作階段的 cpp 0071。機台測試：程式庫 176/176、探針 7/7＋分頁樹 7/7、假 VS Code 211/211、面板全過；e2e_build.ps1 沒跑。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0073 8979fea TEACH-3AXES —— MOutShuttle1／2 左右、MCCDY 檢測／校正的教導點（W906 擴充，原版沒有；EastSun 1001「三軸都幫我加 在合適的地方」）：
+                    產生器加 6 列（只在 IO_CARD_TYPE==PCI1203_IO）、teach.ini 鍵＝欄位名；Teach 互鎖照原版 In Shuttle／Index Y 寫法
+                    （出料飛梭：MTestZ1／Z2＋所有入出料手臂 Z 在原點；CCD Y：MTestZ1／Z2）。ctest TeachButtonsGen、WebMotorAccess、GaliRouteEngine 通過。
+  cpp 0074 e696967 1203-LINKLOST —— 1203 斷線 10 秒跳原版 WAR16152（EastSun 1001「1203 如果斷線10秒 要跳出異常」）：看過 OP 的站連續 10 秒不在 OP／讀失敗、
+                    或卡片不回／沒開 → 一次 WAR16152（照原版停馬達、記事件），恢復後重新計時；開機還沒連上過不跳。只用輪詢已經在讀的資料，沒有新的 SDK 呼叫。
+                    ctest Pci1203LinkWatch 43/43；pci1203_readonly_gate PASS。⚠ 實機拔線測試還沒做。
+  web 0057 530fd74 TEACH-HIDEAXIS／TEACH-SPEEDBAR／TEACH-3AXES (web) —— Teach 頁：馬達表沒有或 Enable=0 的軸全部藏（整框藏光就藏框）；
+                    Speed Adjust 照原版橫捲軸能用（1～100，跟 Now Speed 互相同步，下一個命令帶給 C++）；三軸教導點的畫面。無頭瀏覽器實測。
+  cpp 0075 2bae95f WORKLOG —— 工作紀錄補 10-01 第 28～32 項。
+  ⓘ 測試前後 production_audit 0 變更（第一次的變動是 EastSun 20:46 關站寫的，重拍快照再跑一次 0 變更）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。

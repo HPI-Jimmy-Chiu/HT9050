@@ -1,0 +1,544 @@
+From 8979fea523711dcc48ccfe0e900ed0b9d663d5c0 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 20:32:34 +0800
+Subject: [PATCH] TEACH-3AXES: teach points for MOutShuttle1 / MOutShuttle2 /
+ MCCDY (W906 extension, not golden) + their Teach interlock
+
+EastSun 1001: the three axes are enabled PCIE-1203 axes with no teach points. Six TECH_PARA rows appended at the very
+end of the registry (before golden :993, so every golden TechPara index / button Tag is unchanged), registered only
+when IO_CARD_TYPE==PCI1203_IO (other machines' teach.ini get no new keys):
+  [MOutShuttle1] setEditOutSht1Left / setEditOutSht1Right -> Tech.iOutShuttle1Left / 1Right (Prod.OutSHT[0])
+  [MOutShuttle2] setEditOutSht2Left / setEditOutSht2Right -> Tech.iOutShuttle2Left / 2Right (Prod.OutSHT[1])
+  [MCCDY]        setEditCCDYSite1x1 / setEditCCDYCal1x1   -> Tech.iCCDYSite1x1 / Tech.iCalY1x1
+Buttons btnSet*/btnGo* (new names, not in golden's dfm), handlers SetButton140Click / GoButton140Click.
+
+- tools/gen_teach_registry.py: EXT_ROWS (one definition) emitted before golden :993; forms/fTeachRegistry.cpp
+  re-spliced from a fresh run (golden part byte-identical).
+- tools/gen_teach_editlist.py: golden prefix still compared row by row with golden (312 / 624 unchanged); the tail
+  must equal EXT_ROWS; extension buttons must not be golden dfm names, not Motor*, keys not colliding with a golden
+  row of the same section, not elTeach widgets. WebTeachButtons.gen.inc / FileRW/Teach.gen.inc regenerated;
+  --check passes.
+- forms/fTeach.cpp: IsCanQuickJogMove's last `return true` (same line) -> W906_Teach3AxesHomeOk: MOutShuttle1/2 need
+  MTestZ1, MTestZ2, In/Out Arm Z at home (golden In Shuttle branch shape); MCCDY needs MTestZ1, MTestZ2 (golden
+  Index Y branch shape); same W906_TeachHomeLed predicate (Enable=0 non-1203 axes not checked); other axes unchanged.
+- tests: test_web_motor_access (312+6 rows; PCI1203_IO registry resolves the six buttons, own rows, not quirks);
+  test_gali_route_engine part 16 (the real IsCanQuickJogMove for the three axes).
+
+First boot on the machine writes the six keys into teach.ini (golden CheckAndReadIniData, value = current Tech, 0).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ FileRW/Teach.gen.inc             |  8 +++-
+ WebTeachButtons.gen.inc          |  7 ++++
+ forms/fTeach.cpp                 | 66 +++++++++++++++++++++++++++++++-
+ forms/fTeach.h                   |  2 +
+ forms/fTeachRegistry.cpp         | 19 ++++++++-
+ tests/test_gali_route_engine.cpp | 63 ++++++++++++++++++++++++++++++
+ tests/test_web_motor_access.cpp  | 30 ++++++++++++++-
+ tools/gen_teach_editlist.py      | 51 +++++++++++++++++++-----
+ tools/gen_teach_registry.py      | 59 ++++++++++++++++++++++++++++
+ 9 files changed, 290 insertions(+), 15 deletions(-)
+
+diff --git a/FileRW/Teach.gen.inc b/FileRW/Teach.gen.inc
+index e921736..2912e2f 100644
+--- a/FileRW/Teach.gen.inc
++++ b/FileRW/Teach.gen.inc
+@@ -3,7 +3,7 @@
+ //  golden：D:\HT9045\HT9011UC_Code_V3.33.906.0_20260618\uteach.cpp（cp950 → UTF-8）
+ //  1. IC_InitialTeachEditList = golden TfTeach::InitialTeachEditList（:3131-3358），203 筆 elTeach->Add，
+ //     元件引數改寫成具名替身 filerw::EL<TEdit>("TfTeach", 名稱)，其餘逐字。
+-//  2. kTeachKeyWidget：TECH_PARA 267 筆＋TECH_TWOPARA 52 筆的 Key → 畫面元件名稱（fTeachRegistry.cpp 的註解）。
++//  2. kTeachKeyWidget：TECH_PARA 273 筆＋TECH_TWOPARA 52 筆的 Key → 畫面元件名稱（fTeachRegistry.cpp 的註解）。
+ //  3. kTeInArm／kTeOutArm／kTeSortArm：TECH_SUCKPARA 的元件（golden :286／:289／:292）。
+ // ===========================================================================
+ static void IC_InitialTeachEditList()   // golden uteach.cpp:3131
+@@ -397,6 +397,8 @@ static const char* const kTeachKeyWidget[][2] = {   // {Key, 元件名稱}
+     { "setEditBuffer8Z", "setEditBuffer8Z" },
+     { "setEditBuffer9X", "setEditBuffer9X" },
+     { "setEditBuffer9Z", "setEditBuffer9Z" },
++    { "setEditCCDYCal1x1", "setEditCCDYCal1x1" },
++    { "setEditCCDYSite1x1", "setEditCCDYSite1x1" },
+     { "setEditCatchMagFront", "setEditCatchMagFront" },
+     { "setEditCatchMagRear", "setEditCatchMagRear" },
+     { "setEditFix1X", "setEditFix1X" },
+@@ -481,11 +483,15 @@ static const char* const kTeachKeyWidget[][2] = {   // {Key, 元件名稱}
+     { "setEditOutRG", "setEditOutRG" },
+     { "setEditOutRH", "setEditOutRH" },
+     { "setEditOutSht1KitPos", "setEditOutSht1KitPos" },
++    { "setEditOutSht1Left", "setEditOutSht1Left" },
+     { "setEditOutSht1OneRowKit", "setEditOutSht1OneRowKit" },
++    { "setEditOutSht1Right", "setEditOutSht1Right" },
+     { "setEditOutSht1X", "setEditOutSht1X" },
+     { "setEditOutSht1Y", "setEditOutSht1Y" },
+     { "setEditOutSht2KitPos", "setEditOutSht2KitPos" },
++    { "setEditOutSht2Left", "setEditOutSht2Left" },
+     { "setEditOutSht2OneRowKit", "setEditOutSht2OneRowKit" },
++    { "setEditOutSht2Right", "setEditOutSht2Right" },
+     { "setEditOutSht2X", "setEditOutSht2X" },
+     { "setEditOutSht2Y", "setEditOutSht2Y" },
+     { "setEditOutX2120", "setEditOutX2120" },
+diff --git a/WebTeachButtons.gen.inc b/WebTeachButtons.gen.inc
+index ec3b535..f22fe5b 100644
+--- a/WebTeachButtons.gen.inc
++++ b/WebTeachButtons.gen.inc
+@@ -2,6 +2,7 @@
+ //  WebTeachButtons.gen.inc  --  產生的，不要手改（tools/gen_teach_editlist.py 第 4 段）。AI(W906-W5-b) 20260925
+ //  golden：D:\HT9045\HT9011UC_Code_V3.33.906.0_20260618\uteach.cpp 的 TfTeach 建構子登錄表（與 forms/fTeachRegistry.cpp 逐列相同，產生器驗過）
+ //  312 列登錄（TechPara 260＋TechTwoPara 52），Set／Go 按鈕 624 顆；處理函式 = uteach.dfm 的 OnClick 再套建構子覆寫 4 顆（:271-274）。
++//  ＋最後 6 列是 W906 擴充（不是 golden；AI(W906-TEACH-3AXES) 20261001：tools/gen_teach_registry.py EXT_ROWS，條件 IO_CARD_TYPE==PCI1203_IO；按鈕不在 .dfm、處理函式 SetButton140Click／GoButton140Click、沒有 W5B_BTN 列）。
+ //  W5B_ROW(owner, live, atoms, p0, p1, mot0, mot1, key0, key1, edit0, edit1, setBtn, setHandler, goBtn, goHandler, vis)
+ //    owner  P＝TECH_PARA（TechPara.push_back）、T＝TECH_TWOPARA（TechTwoPara.push_back）
+ //    live   W5B_COND(外層 if／else 條件的 C++ 式) —— 執行期在這台機台上求值（WebMotorAccessLive.cpp）
+@@ -329,6 +330,12 @@ W5B_ROW('T', W5B_COND((USE_OUT_SORT_ARM!=eartUninstall)), "USE_OUT_SORT_ARM!=ear
+ W5B_ROW('T', W5B_COND((USE_OUT_SORT_ARM!=eartUninstall)), "USE_OUT_SORT_ARM!=eartUninstall", W5B_PTR(Tech.iSortArmAuto5X), W5B_PTR(Tech.iSortArmAuto5Y), W5B_MOT(MOutSortX), W5B_MOT(MOutSortY), "edtOutSortArmAuto5_X", "edtOutSortArmAuto5_Y", "edtOutSortArmAuto5_X", "edtOutSortArmAuto5_Y", "btnSetSortArmToAuto5", "SetButton020Click", "btnGoSortArmToAuto5", "GoButton020Click", 1)
+ W5B_ROW('T', W5B_COND((USE_OUT_SORT_ARM!=eartUninstall)), "USE_OUT_SORT_ARM!=eartUninstall", W5B_PTR(Tech.iSortArmAuto6X), W5B_PTR(Tech.iSortArmAuto6Y), W5B_MOT(MOutSortX), W5B_MOT(MOutSortY), "edtOutSortArmAuto6_X", "edtOutSortArmAuto6_Y", "edtOutSortArmAuto6_X", "edtOutSortArmAuto6_Y", "btnSetSortArmToAuto6", "SetButton020Click", "btnGoSortArmToAuto6", "GoButton020Click", 1)
+ W5B_ROW('T', W5B_COND((USE_OUT_SORT_ARM!=eartUninstall)), "USE_OUT_SORT_ARM!=eartUninstall", W5B_PTR(Tech.iOutArmSortShtX), W5B_PTR(Tech.iOutArmSortShtY), W5B_MOT(MOutArmX), W5B_MOT(MOutArmY), "edtOuttArmShtR_X", "edtOuttArmShtR_Y", "edtOuttArmShtR_X", "edtOuttArmShtR_Y", "btnSetOutArmToSHT", "SetButton020Click", "btnGoOutArmToSHT", "GoButton020Click", 1)
++W5B_ROW('P', W5B_COND((IO_CARD_TYPE==PCI1203_IO)), "IO_CARD_TYPE==PCI1203_IO", W5B_PTR(Tech.iOutShuttle1Left), W5B_NOPTR, W5B_MOT(MOutShuttle1), W5B_NOMOT, "setEditOutSht1Left", "", "setEditOutSht1Left", "", "btnSetOutSht1Left", "SetButton140Click", "btnGoOutSht1Left", "GoButton140Click", 1)
++W5B_ROW('P', W5B_COND((IO_CARD_TYPE==PCI1203_IO)), "IO_CARD_TYPE==PCI1203_IO", W5B_PTR(Tech.iOutShuttle1Right), W5B_NOPTR, W5B_MOT(MOutShuttle1), W5B_NOMOT, "setEditOutSht1Right", "", "setEditOutSht1Right", "", "btnSetOutSht1Right", "SetButton140Click", "btnGoOutSht1Right", "GoButton140Click", 1)
++W5B_ROW('P', W5B_COND((IO_CARD_TYPE==PCI1203_IO)), "IO_CARD_TYPE==PCI1203_IO", W5B_PTR(Tech.iOutShuttle2Left), W5B_NOPTR, W5B_MOT(MOutShuttle2), W5B_NOMOT, "setEditOutSht2Left", "", "setEditOutSht2Left", "", "btnSetOutSht2Left", "SetButton140Click", "btnGoOutSht2Left", "GoButton140Click", 1)
++W5B_ROW('P', W5B_COND((IO_CARD_TYPE==PCI1203_IO)), "IO_CARD_TYPE==PCI1203_IO", W5B_PTR(Tech.iOutShuttle2Right), W5B_NOPTR, W5B_MOT(MOutShuttle2), W5B_NOMOT, "setEditOutSht2Right", "", "setEditOutSht2Right", "", "btnSetOutSht2Right", "SetButton140Click", "btnGoOutSht2Right", "GoButton140Click", 1)
++W5B_ROW('P', W5B_COND((IO_CARD_TYPE==PCI1203_IO)), "IO_CARD_TYPE==PCI1203_IO", W5B_PTR(Tech.iCCDYSite1x1), W5B_NOPTR, W5B_MOT(MCCDY), W5B_NOMOT, "setEditCCDYSite1x1", "", "setEditCCDYSite1x1", "", "btnSetCCDYSite1x1", "SetButton140Click", "btnGoCCDYSite1x1", "GoButton140Click", 1)
++W5B_ROW('P', W5B_COND((IO_CARD_TYPE==PCI1203_IO)), "IO_CARD_TYPE==PCI1203_IO", W5B_PTR(Tech.iCalY1x1), W5B_NOPTR, W5B_MOT(MCCDY), W5B_NOMOT, "setEditCCDYCal1x1", "", "setEditCCDYCal1x1", "", "btnSetCCDYCal1x1", "SetButton140Click", "btnGoCCDYCal1x1", "GoButton140Click", 1)
+ W5B_TAGOVR("SetButtonInSh1LtcSenZ1", "MotorInSh1LtcZ1", W5B_MOT(MInSh1LtcSenZ1))
+ W5B_TAGOVR("SetButtonInSh1LtcSenZ2", "MotorInSh1LtcZ2", W5B_MOT(MInSh1LtcSenZ2))
+ W5B_TAGOVR("SetButtonInSh2LtcSenZ1", "MotorInSh2LtcZ1", W5B_MOT(MInSh2LtcSenZ1))
+diff --git a/forms/fTeach.cpp b/forms/fTeach.cpp
+index 2624f91..25aa18f 100644
+--- a/forms/fTeach.cpp
++++ b/forms/fTeach.cpp
+@@ -320,7 +320,7 @@ bool TfTeach::IsCanQuickJogMove()
+             }
+         }
+ 
+-        return true;                                                            // golden :1218
++        return W906_Teach3AxesHomeOk(ActiveMotorIndex);                         // golden :1218 `return true;` —— //AI(W906-TEACH-3AXES) 20261001: EastSun 1001「三軸都幫我加 在合適的地方」：MOutShuttle1／2、MCCDY 的非 golden 互鎖（本檔檔尾；其他軸＝true，與 golden 相同）
+     }
+     // golden :1219 #endif —— AI(W906-W5-b) 20260925: 移到 :139（本體兩種組態都編）
+ }
+@@ -956,3 +956,67 @@ bool W906_TeachHomeLed(int motIndex)
+     if (s == -2) return MOT[motIndex].Led[iHomeLed];                            // 非 1203：golden 原本讀的
+     return s == 1;                                                              // 1203：監看器 ORG；不明（-1）＝不在原點（fail-closed）
+ }
++
++//==============================================================================
++//  AI(W906-TEACH-3AXES) 20261001: EastSun 1001「三軸都幫我加 在合適的地方」—— 非 golden 的互鎖（宣告在 forms/fTeach.h 檔尾）。
++//  教導頁新增了 MOutShuttle1／MOutShuttle2／MCCDY 的教導點（forms/fTeachRegistry.cpp E1，W906 擴充），這三軸從此會在教導頁被
++//  jog／Move／Go。golden IsCanQuickJogMove 沒有它們的分支（一路掉到 :1218 `return true;`）⇒ 在 golden 每一道檢查（含
++//  CheckShuttleCanMove 的飛梭閘門）都過了之後，再加這一道（IsCanQuickJogMove 那一行同行替換，本檔行號不動）：
++//    * MOutShuttle1／MOutShuttle2：MTestZ1、MTestZ2、In Arm Z、Out Arm Z 都要在原點 —— 照 golden 同函式 In Shuttle 分支（:1077-1108）的寫法；
++//    * MCCDY：MTestZ1、MTestZ2 在原點 —— 照 golden 同函式 Index Y 分支（:1112-1125）的寫法。
++//  原點判斷是同一支 W906_TeachHomeLed：1203 軸讀監看器 ORG（套 HT9050 的 1203 ORG 規則）、狀態不明＝不在原點（fail-closed）；
++//  Mot_Table Enable=0 的非 1203 軸不檢查（AI(W906-TEACH-ZDISABLED)，所以 HT9050 的 MTestZ2／MN200 Z 不擋）。訊息照 golden 的原字串。
++//  其他軸一律 true（＝golden）。
++//==============================================================================
++bool W906_Teach3AxesHomeOk(int motIndex)
++{
++    if (motIndex == MOutShuttle1 || motIndex == MOutShuttle2)
++    {
++        W906_TeachGaliScanMotStatus(MTestZ1);
++        if (W906_TeachHomeLed(MTestZ1) == false)
++        {
++            ShowMyMessage("Please let MTestZ1 at home position first!!", "請先讓MTestZ1在home的位置上!!", "Teach");
++            return false;
++        }
++        W906_TeachGaliScanMotStatus(MTestZ2);
++        if (W906_TeachHomeLed(MTestZ2) == false)
++        {
++            ShowMyMessage("Please let MTestZ2 at home position first!!", "請先讓MTestZ2在home的位置上!!", "Teach");
++            return false;
++        }
++        for (int i = 0; i < MAX_ARM_Row; i++)
++        {
++            for (int j = 0; j < MAX_ARM_Col; j++)
++            {
++                W906_TeachScanMotorStatus(InArmZIndex[i][j]);
++                if (W906_TeachHomeLed(InArmZIndex[i][j]) == false)
++                {
++                    ShowMyMessage("Please let InArm Z at home position first!!", "請先讓InArm的Z軸在home的位置上!!", "Teach");
++                    return false;
++                }
++                W906_TeachScanMotorStatus(OutArmZIndex[i][j]);
++                if (W906_TeachHomeLed(OutArmZIndex[i][j]) == false)
++                {
++                    ShowMyMessage("Please let OutArm Z at home position first!!", "請先讓OutArm的Z軸在home的位置上!!", "Teach");
++                    return false;
++                }
++            }
++        }
++    }
++    if (motIndex == MCCDY)
++    {
++        W906_TeachGaliScanMotStatus(MTestZ1);
++        if (W906_TeachHomeLed(MTestZ1) == false)
++        {
++            ShowMyMessage("Please let MTestZ1 at home position first!!", "請先讓MTestZ1在home的位置上!!", "Teach");
++            return false;
++        }
++        W906_TeachGaliScanMotStatus(MTestZ2);
++        if (W906_TeachHomeLed(MTestZ2) == false)
++        {
++            ShowMyMessage("Please let MTestZ2 at home position first!!", "請先讓MTestZ2在home的位置上!!", "Teach");
++            return false;
++        }
++    }
++    return true;
++}
+diff --git a/forms/fTeach.h b/forms/fTeach.h
+index fc52088..c735529 100644
+--- a/forms/fTeach.h
++++ b/forms/fTeach.h
+@@ -844,5 +844,7 @@ bool W906_TeachBodyInSim(int motIndex);                 // SOFT_SIMULTE 組態
+ void W906_TeachScanMotorStatus(int motIndex);           // golden MOT[i].ScanMotorStatus()（1203 軸不打 golden handle）
+ void W906_TeachGaliScanMotStatus(int motIndex);         // golden MOT[i].Gali_ScanMotStatus()（同上）
+ bool W906_TeachHomeLed(int motIndex);                   // golden MOT[i].Led[iHomeLed]（1203 軸讀監看器 ORG；不明 = false）
++//AI(W906-TEACH-3AXES) 20261001: IsCanQuickJogMove 最後一道（非 golden）：MOutShuttle1／2 要 Index Z＋In/Out Arm Z 在原點、MCCDY 要 Index Z 在原點；其他軸 true（forms/fTeach.cpp 檔尾）
++bool W906_Teach3AxesHomeOk(int motIndex);
+ 
+ #endif // FORMS_FTEACH_H
+diff --git a/forms/fTeachRegistry.cpp b/forms/fTeachRegistry.cpp
+index 5ae3570..94451d0 100644
+--- a/forms/fTeachRegistry.cpp
++++ b/forms/fTeachRegistry.cpp
+@@ -21,7 +21,7 @@
+ //    T1  widget 建構子引數 -> `/*原識別字*/0`      1,129 處
+ //    T2  純 widget 敘述（`X->Caption=` …）整行註解      8 處
+ //    T3  控制流 / 註解 / 空白 / golden 的死碼 -> 原樣保留
+-//    T4  `X.SetEdit[..] = <widget>;` 成員賦值 -> 賦 0    4 處
++//    T4  `X.SetEdit[..] = <widget>;` 成員賦值 -> 賦 0    4 處   //AI(W906-TEACH-3AXES) 20261001: 另有 E1 —— golden :993 之前的 W906 擴充 6 列（不是 golden，if(IO_CARD_TYPE==PCI1203_IO)；來源 tools/gen_teach_registry.py EXT_ROWS）
+ //  ⇒ 引數位置、順序、欄寬全部保持，所以這個檔可以跟 golden **逐行機械比對**。
+ //
+ //  偏離的完整說明在 `forms/fTeachPara.h` 的檔頭，不在這裡重複。
+@@ -757,6 +757,23 @@ void TfTeach::BuildTechRegistry()
+     }
+     // golden :992
+ 
++    //AI(W906-TEACH-3AXES) 20261001: EastSun 1001「三軸都幫我加 在合適的地方」—— W906 擴充，不是 golden（tools/gen_teach_registry.py EXT_ROWS）。
++    //  MOutShuttle1／MOutShuttle2／MCCDY 在 HT9050 是 Enable=1 的 PCIE-1203 軸，golden 沒有它們的教導點：
++    //  * golden 引擎讀 Tech.iOutShuttle1Left／1Right／2Left／2Right（cinitial.cpp:6222-6225 → Prod.OutSHT[0／1].iLeft／iRight），
++    //    以前從沒從 teach.ini 讀過（＝0）；golden uteach.dfm Panel28 有四個保留的隱藏欄位 setEditOutSht*（:4349-4400），沒有 Set／Go 鈕。
++    //  * MCCDY 沒有 golden 點位；用 FinePitch 已有的 Tech.iCCDYSite1x1（檢查位）／Tech.iCalY1x1（校正位）（LastSet.h:978／:982）。
++    //  * 放在 golden 登錄表最後 ⇒ golden 每一列的 TechPara 索引（按鈕 Tag）都不動；只在 PCI1203_IO 機台登錄 ⇒ 別台的 teach.ini 不多鍵。
++    //  * 第一次開機 ReadFromFile 的 CheckAndReadIniData 會把這 6 個鍵補寫進 teach.ini（值＝目前的 Tech 值，通常 0）—— golden 行為。
++    if(IO_CARD_TYPE==PCI1203_IO)
++    {
++        TechPara.push_back(new TECH_PARA(&Tech.iOutShuttle1Left              , MOutShuttle1  , /*setEditOutSht1Left*/0   , "setEditOutSht1Left"  , /*btnSetOutSht1Left*/0   , /*btnGoOutSht1Left*/0));  // Out Shuttle 1 left  (Prod.OutSHT[0].iLeft,  cinitial.cpp:6224)
++        TechPara.push_back(new TECH_PARA(&Tech.iOutShuttle1Right             , MOutShuttle1  , /*setEditOutSht1Right*/0  , "setEditOutSht1Right" , /*btnSetOutSht1Right*/0  , /*btnGoOutSht1Right*/0));  // Out Shuttle 1 right (Prod.OutSHT[0].iRight, cinitial.cpp:6222)
++        TechPara.push_back(new TECH_PARA(&Tech.iOutShuttle2Left              , MOutShuttle2  , /*setEditOutSht2Left*/0   , "setEditOutSht2Left"  , /*btnSetOutSht2Left*/0   , /*btnGoOutSht2Left*/0));  // Out Shuttle 2 left  (Prod.OutSHT[1].iLeft,  cinitial.cpp:6225)
++        TechPara.push_back(new TECH_PARA(&Tech.iOutShuttle2Right             , MOutShuttle2  , /*setEditOutSht2Right*/0  , "setEditOutSht2Right" , /*btnSetOutSht2Right*/0  , /*btnGoOutSht2Right*/0));  // Out Shuttle 2 right (Prod.OutSHT[1].iRight, cinitial.cpp:6223)
++        TechPara.push_back(new TECH_PARA(&Tech.iCCDYSite1x1                  , MCCDY         , /*setEditCCDYSite1x1*/0   , "setEditCCDYSite1x1"  , /*btnSetCCDYSite1x1*/0   , /*btnGoCCDYSite1x1*/0));  // CCD Y inspection position (FinePitch Tech.iCCDYSite1x1, LastSet.h:978)
++        TechPara.push_back(new TECH_PARA(&Tech.iCalY1x1                      , MCCDY         , /*setEditCCDYCal1x1*/0    , "setEditCCDYCal1x1"   , /*btnSetCCDYCal1x1*/0    , /*btnGoCCDYCal1x1*/0));  // CCD Y calibration position (FinePitch Tech.iCalY1x1, LastSet.h:982)
++    }
++
+     TECH_MAX_ITEM=TechPara.size();
+     TechTwoItem=TechTwoPara.size();
+ }
+diff --git a/tests/test_gali_route_engine.cpp b/tests/test_gali_route_engine.cpp
+index a35e236..3f39426 100644
+--- a/tests/test_gali_route_engine.cpp
++++ b/tests/test_gali_route_engine.cpp
+@@ -541,6 +541,69 @@ int main()
+         W906_ShowMyMessage_Reset();
+     }
+ 
++    // ---- 16: Teach interlock for the three axes that got teach points (W906 extension, not golden) ----------------------
++    //AI(W906-TEACH-3AXES) 20261001: EastSun 1001「三軸都幫我加 在合適的地方」. The REAL TfTeach body: golden has no branch for
++    //  MOutShuttle1/2 or MCCDY (falls through to `return true`); the port's last check W906_Teach3AxesHomeOk (forms/fTeach.cpp EOF)
++    //  makes MOutShuttle1/2 wait for MTestZ1 + MTestZ2 + every In/Out Arm Z, and MCCDY for MTestZ1 + MTestZ2, with the same home
++    //  predicate (hook codes as part 15: 1 home, 0 not home, -1 unknown, -3 Enable=0 non-1203 = not checked). Other axes unchanged.
++    std::printf("-- 16. Teach IsCanQuickJogMove: MOutShuttle1/2 need Index Z + In/Out Arm Z at home; MCCDY needs Index Z; others unchanged\n");
++    {
++        static std::map<int, int> code;                     // MOT index -> hook code (absent = 1, at home)
++        code.clear();
++        const int sf0 = SHUTTLE_FLOODGATE;
++        SHUTTLE_FLOODGATE = 0;                              // CheckShuttleCanMove answers true: only the Z checks are under test
++        W906_TeachLive1203Hook = [](int) { return true; };
++        W906_TeachHomeLedHook  = [](int mi) { std::map<int, int>::const_iterator it = code.find(mi); return it == code.end() ? 1 : it->second; };
++        TfTeach* t = new TfTeach();
++        const int se0 = W906_ShowErrorMessage_Count;
++        const int inZ = InArmZIndex[0][0], outZ = OutArmZIndex[MAX_ARM_Row - 1][MAX_ARM_Col - 1];
++        const int shuttles[2] = { MOutShuttle1, MOutShuttle2 };
++        for (int k = 0; k < 2; ++k) {
++            t->ActiveMotorIndex = shuttles[k];
++            code.clear(); code[MTestZ2] = -3;               // HT9050: Z2 not fitted (Enable=0) -> not checked
++            W906_ShowMyMessage_Reset();
++            CHECK(t->IsCanQuickJogMove() == true && W906_ShowMyMessage_Count == 0);           // everything at home
++            code[MTestZ1] = -1;                             // Index Z1 home unknown -> refused (fail-closed)
++            W906_ShowMyMessage_Reset();
++            CHECK(t->IsCanQuickJogMove() == false);
++            CHECK(W906_ShowMyMessage_Count == 1 && std::string(W906_ShowMyMessage_LastS1.c_str()) == "Please let MTestZ1 at home position first!!");
++            code[MTestZ1] = 1; code[MTestZ2] = 0;           // a fitted Z2 (1203) not at home -> refused
++            W906_ShowMyMessage_Reset();
++            CHECK(t->IsCanQuickJogMove() == false && std::string(W906_ShowMyMessage_LastS1.c_str()) == "Please let MTestZ2 at home position first!!");
++            code[MTestZ2] = -3; code[inZ] = 0;              // an In Arm Z not at home -> refused
++            W906_ShowMyMessage_Reset();
++            CHECK(t->IsCanQuickJogMove() == false && std::string(W906_ShowMyMessage_LastS1.c_str()) == "Please let InArm Z at home position first!!");
++            code[inZ] = 1; code[outZ] = -1;                 // an Out Arm Z unknown -> refused
++            W906_ShowMyMessage_Reset();
++            CHECK(t->IsCanQuickJogMove() == false && std::string(W906_ShowMyMessage_LastS1.c_str()) == "Please let OutArm Z at home position first!!");
++            code[outZ] = 1;                                 // back at home -> allowed (a 1203 code: no golden ScanMotorStatus on the test's motor objects)
++            W906_ShowMyMessage_Reset();
++            CHECK(t->IsCanQuickJogMove() == true && W906_ShowMyMessage_Count == 0);
++        }
++        t->ActiveMotorIndex = MCCDY;
++        code.clear(); code[MTestZ2] = -3; code[inZ] = 0; code[outZ] = 0;   // the arm Z are not MCCDY's business
++        W906_ShowMyMessage_Reset();
++        CHECK(t->IsCanQuickJogMove() == true && W906_ShowMyMessage_Count == 0);
++        code[MTestZ1] = 0;                                  // Index Z1 not at home -> refused
++        W906_ShowMyMessage_Reset();
++        CHECK(t->IsCanQuickJogMove() == false && W906_ShowMyMessage_Count == 1 &&
++              std::string(W906_ShowMyMessage_LastS1.c_str()) == "Please let MTestZ1 at home position first!!");
++        code[MTestZ1] = 1; code[MTestZ2] = -1;              // a fitted Z2 unknown -> refused
++        W906_ShowMyMessage_Reset();
++        CHECK(t->IsCanQuickJogMove() == false && std::string(W906_ShowMyMessage_LastS1.c_str()) == "Please let MTestZ2 at home position first!!");
++        t->ActiveMotorIndex = MTrayZ;                       // an axis with no golden branch: still golden's `return true`
++        code.clear(); code[MTestZ1] = -1; code[inZ] = 0;
++        W906_ShowMyMessage_Reset();
++        CHECK(t->IsCanQuickJogMove() == true && W906_ShowMyMessage_Count == 0);
++        CHECK(W906_Teach3AxesHomeOk(MOutArmX) == true && W906_Teach3AxesHomeOk(-1) == true);
++        CHECK(W906_ShowErrorMessage_Count == se0);          // no floodgate prompt took part
++        delete t;
++        W906_TeachHomeLedHook = 0;
++        W906_TeachLive1203Hook = 0;
++        SHUTTLE_FLOODGATE = sf0;
++        W906_ShowMyMessage_Reset();
++    }
++
+     std::printf("%s: %d/%d checks passed\n", g_fail ? "FAIL" : "PASS", g_checks - g_fail, g_checks);
+     return g_fail ? 1 : 0;
+ }
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index 6191d4c..e81860c 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -2589,9 +2589,35 @@ int main(int argc, char** argv)
+         std::set<std::string> ax3;  ax3.insert("USE_INDEX_ARM_AXES==IndexArm_3_Axis");
+         std::set<std::string> ep16; ep16.insert("USE_PICKER_COUNT==ep16Picker"); ep16.insert("USE_PICKER_COUNT==ep16Picker||SubMachineType==Type_HT9046AU");
+         const TeachRegistry R0 = BuildTeachRegistry(none), R3 = BuildTeachRegistry(ax3), R16 = BuildTeachRegistry(ep16);
+-        CHECK(GenRows().size() == 312 && R0.P.size() == 212 && R0.T.size() == 45 && R3.P.size() == 212 && R3.T.size() == 45 &&
++        CHECK(GenRows().size() == 312 + 6 && R0.P.size() == 212 && R0.T.size() == 45 && R3.P.size() == 212 && R3.T.size() == 45 &&
+               R16.P.size() == 226 && R16.T.size() == 45 && R0.selectOnly.size() == 4,
+-              "real table: 312 golden registrations; default config TechPara 212 / TechTwoPara 45, ep16Picker 226 / 45; 4 FormShow Tag overrides");
++              "real table: 312 golden registrations + 6 W906 extension rows (AI(W906-TEACH-3AXES), IO_CARD_TYPE==PCI1203_IO only); default config TechPara 212 / TechTwoPara 45, ep16Picker 226 / 45; 4 FormShow Tag overrides");
++        //AI(W906-TEACH-3AXES) 20261001: EastSun 1001「三軸都幫我加 在合適的地方」—— the six W906 extension rows (tools/gen_teach_registry.py EXT_ROWS)
++        //  are the LAST rows of the table (golden's TechPara indices = button Tags unchanged) and live only on a PCI1203_IO machine.
++        {
++            std::set<std::string> io1203; io1203.insert("IO_CARD_TYPE==PCI1203_IO");
++            const TeachRegistry RX = BuildTeachRegistry(io1203);
++            bool prefix = RX.P.size() == R0.P.size() + 6 && RX.T.size() == R0.T.size();
++            for (std::size_t i = 0; prefix && i < R0.P.size(); ++i) prefix = RX.P[i].key0 == R0.P[i].key0 && RX.P[i].setBtn == R0.P[i].setBtn;
++            CHECK(prefix && RX.P[212].name0 == "MOutShuttle1" && RX.P[212].key0 == "setEditOutSht1Left" && RX.P[217].name0 == "MCCDY" &&
++                  RX.P[217].key0 == "setEditCCDYCal1x1",
++                  "W906 extension: PCI1203_IO config TechPara 212 + 6 (golden rows first, unchanged; MOutShuttle1 left .. MCCDY calibration last)");
++            const char* xs[6] = { "btnSetOutSht1Left", "btnGoOutSht1Right", "btnSetOutSht2Left", "btnGoOutSht2Right", "btnSetCCDYSite1x1", "btnGoCCDYCal1x1" };
++            const char* xm[6] = { "MOutShuttle1", "MOutShuttle1", "MOutShuttle2", "MOutShuttle2", "MCCDY", "MCCDY" };
++            const char* xe[6] = { "setEditOutSht1Left", "setEditOutSht1Right", "setEditOutSht2Left", "setEditOutSht2Right", "setEditCCDYSite1x1", "setEditCCDYCal1x1" };
++            bool okX = true;
++            for (int i = 0; i < 6; ++i) {
++                TeachTarget x;
++                const bool isSet = std::string(xs[i]).compare(0, 6, "btnSet") == 0;
++                okX = okX && MotorAccessResolveTeachButton(RX, xs[i], kTeachQuirkPolicy, x).empty() && !x.quirk && !x.unregistered &&
++                      x.kind == (isSet ? kTkSet140 : kTkGo140) && x.handler == (isSet ? "SetButton140Click" : "GoButton140Click") &&
++                      x.ownList == 'P' && x.ownIndex == 212 + i && x.row.name0 == xm[i] && x.row.edit0 == xe[i];
++            }
++            CHECK(okX, "W906 extension buttons resolve (PCI1203_IO): Set -> SetButton140Click / Go -> GoButton140Click on their own TECH_PARA row (Tag 212..217), not quirks");
++            TeachTarget x0;
++            CHECK(Has(MotorAccessResolveTeachButton(R0, "btnGoCCDYSite1x1", kTeachQuirkPolicy, x0), "沒有這顆教導按鈕"),
++                  "W906 extension buttons on a non-PCI1203_IO machine: not registered, not in golden's dfm -> refused (unknown button)");
++        }
+ 
+         // ---- W5B-1：建構子 OnClick 覆寫、W5B-8：死登錄
+         TeachTarget t;
+diff --git a/tools/gen_teach_editlist.py b/tools/gen_teach_editlist.py
+index a112f73..8efae7f 100644
+--- a/tools/gen_teach_editlist.py
++++ b/tools/gen_teach_editlist.py
+@@ -302,11 +302,31 @@ def rkey(r):
+     return (r['owner'], tuple(r['p']), tuple(r['mot']), tuple(r['edit']), tuple(r['key']), tuple(r['btn']), tuple(r['cond']), r['vis'])
+ 
+ 
+-assert len(port_rows) == len(gold_rows), ('registry row count port vs golden', len(port_rows), len(gold_rows))
+-bad = [i for i, (x, y) in enumerate(zip(port_rows, gold_rows)) if rkey(x) != rkey(y)]
++# AI(W906-TEACH-3AXES) 20261001: 移植樹＝golden 前綴（逐列等於 golden，照舊）＋ W906 擴充尾端（gen_teach_registry.py E1／EXT_ROWS，
++#   不是 golden；逐列等於 EXT_ROWS）。擴充列一律在 golden 最後一列之後 ⇒ golden 每一列的 TechPara／TechTwoPara 索引（按鈕 Tag）不變。
++sys.path.insert(0, HERE)
++sys.dont_write_bytecode = True                   # ctest 跑 --check 時不在 tools/ 留 __pycache__
++import gen_teach_registry as _gtr               # 同一份 EXT_ROWS（產生 fTeachRegistry.cpp 的那一支）
++EXT_ROWS, EXT_COND = _gtr.EXT_ROWS, _gtr.EXT_COND
++assert len(port_rows) == len(gold_rows) + len(EXT_ROWS), ('registry row count port vs golden + W906 extension', len(port_rows), len(gold_rows), len(EXT_ROWS))
++ext_rows = port_rows[len(gold_rows):]
++port_rows_gold = port_rows[:len(gold_rows)]
++bad = [i for i, (x, y) in enumerate(zip(port_rows_gold, gold_rows)) if rkey(x) != rkey(y)]
+ assert not bad, ('registry rows differ port vs golden at', bad[:5], rkey(port_rows[bad[0]]), rkey(gold_rows[bad[0]]))
+-n_btn = sum(1 for r in port_rows for b in r['btn'] if b)
+-assert len(port_rows) == EXPECT_REGS and n_btn == EXPECT_BTNS, ('exact counts', len(port_rows), n_btn)
++n_btn = sum(1 for r in port_rows_gold for b in r['btn'] if b)
++assert len(port_rows_gold) == EXPECT_REGS and n_btn == EXPECT_BTNS, ('exact counts', len(port_rows_gold), n_btn)
++for r, (fld, mot_, edit_, setb, gob, _why) in zip(ext_rows, EXT_ROWS):
++    want = ('P', ('&Tech.' + fld, None), (mot_, None), (edit_, None), ('"%s"' % edit_, None), (setb, gob), (EXT_COND,), True)
++    assert rkey(r) == want, ('W906 extension row differs from gen_teach_registry.py EXT_ROWS (rerun it and splice forms/fTeachRegistry.cpp)', rkey(r), want)
++    assert not any(g['key'][0] == '"%s"' % edit_ and g['mot'][0] == mot_ for g in gold_rows), ('W906 extension key collides with a golden row in the same teach.ini section', edit_, mot_)
++    for b in (setb, gob):
++        assert not b.startswith('Motor'), ('W906 extension button named Motor* (the web page treats Motor* TSpeedButtons as axis selects)', b)
++        assert not any(b in g['btn'] for g in gold_rows), ('W906 extension button is a golden registered button', b)
++ext_keys = [e[2] for e in EXT_ROWS]
++ext_btns = [b for e in EXT_ROWS for b in (e[3], e[4])]
++assert len(set(ext_keys)) == len(ext_keys) and len(set(ext_btns)) == len(ext_btns), ('duplicate W906 extension key / button', ext_keys, ext_btns)
++el_widgets = set(re.findall(r'filerw::EL<TEdit>\("TfTeach", "(\w+)"\)', '\n'.join(out_body)))
++assert not (set(ext_keys) & el_widgets), ('W906 extension field is an elTeach widget (FileRW/Teach.cpp would not mirror it)', sorted(set(ext_keys) & el_widgets))
+ 
+ # (c) 交叉比對：正則法（不解析控制流）再數一次 golden 建構子 —— 數量與按鈕多重集合都要一致
+ g_ctor = gcode[gcode.index('TfTeach::TfTeach(TComponent'):]
+@@ -352,11 +372,19 @@ for ln in dfm.split(chr(10)):
+         dfm_prop[stack[-1]][m.group(1)] = m.group(2)
+ assert not stack, stack
+ handler = {}
+-for r in port_rows:
++for r in port_rows_gold:
+     for b in r['btn']:
+         if b:
+             assert b in dfm_obj and dfm_obj[b][1], ('button without dfm OnClick', b)
+             handler[b] = ovr.get(b, dfm_obj[b][1])
++# AI(W906-TEACH-3AXES) 20261001: W906 擴充列的按鈕不在 golden .dfm（名字必須是新的），處理函式明確指定（golden SetButton140Click／GoButton140Click）
++for r in ext_rows:
++    s0, s1 = r['btn']
++    for b in (s0, s1):
++        assert b not in dfm_obj and b not in ovr, ('W906 extension button name is a golden uteach.dfm object', b)
++    handler[s0] = _gtr.EXT_SET_HANDLER
++    handler[s1] = _gtr.EXT_GO_HANDLER
++assert (_gtr.EXT_SET_HANDLER, _gtr.EXT_GO_HANDLER) == ('SetButton140Click', 'GoButton140Click'), 'W906 extension rows are single-axis TECH_PARA rows: 140 handlers'
+ 
+ # (f) golden FormShow 的 Tag 覆寫（uteach.cpp:1518-1521 `SetButtonInSh1LtcSenZ1->Tag=MotorInSh1LtcZ1->Tag;`）
+ fs = gcode[gcode.index('void __fastcall TfTeach::FormShow('):]
+@@ -494,7 +522,7 @@ def self_other(b):
+     return 'hide' if any(not c and init for v, c, init, _ in a) else 'hideCond'
+ 
+ 
+-registered_btns = set(b for r in port_rows for b in r['btn'] if b)
++registered_btns = set(b for r in port_rows_gold for b in r['btn'] if b)   # AI(W906-TEACH-3AXES) 20261001: golden 前綴（擴充列的按鈕不在 .dfm，不進 W5B_BTN）
+ # golden TfTeach::InitialFormOncetime（uteach.cpp:5998-6014）在 USE_Scanner_AOI_Inspection==TopBottomInstall 時另外 push_back
+ #   7 列 TECH_TWOPARA＋2 列 TECH_PARA（AOI 上下檢查，參數在 FrmAOI->ttbInsp）；移植樹沒有 FrmAOI（fTeach.h [DEP]）⇒ 這 18 顆按鈕在移植樹一律沒登錄
+ ifo = gcode[body_range(gcode, 'void TfTeach::InitialFormOncetime(')[0]:body_range(gcode, 'void TfTeach::InitialFormOncetime(')[1]]
+@@ -551,7 +579,9 @@ bl = ['// ======================================================================
+       '//  WebTeachButtons.gen.inc  --  產生的，不要手改（tools/gen_teach_editlist.py 第 4 段）。AI(W906-W5-b) 20260925',
+       '//  golden：%s\\uteach.cpp 的 TfTeach 建構子登錄表（與 forms/fTeachRegistry.cpp 逐列相同，產生器驗過）' % GOLDEN_SHOWN,
+       '//  %d 列登錄（TechPara %d＋TechTwoPara %d），Set／Go 按鈕 %d 顆；處理函式 = uteach.dfm 的 OnClick 再套建構子覆寫 %d 顆（:271-274）。'
+-      % (len(port_rows), sum(1 for r in port_rows if r['owner'] == 'P'), sum(1 for r in port_rows if r['owner'] == 'T'), n_btn, len(ovr)),
++      % (len(port_rows_gold), sum(1 for r in port_rows_gold if r['owner'] == 'P'), sum(1 for r in port_rows_gold if r['owner'] == 'T'), n_btn, len(ovr)),
++      '//  ＋最後 %d 列是 W906 擴充（不是 golden；%s：tools/gen_teach_registry.py EXT_ROWS，條件 %s；按鈕不在 .dfm、處理函式 %s／%s、沒有 W5B_BTN 列）。'
++      % (len(ext_rows), _gtr.EXT_TAG, EXT_COND, _gtr.EXT_SET_HANDLER, _gtr.EXT_GO_HANDLER),
+       '//  W5B_ROW(owner, live, atoms, p0, p1, mot0, mot1, key0, key1, edit0, edit1, setBtn, setHandler, goBtn, goHandler, vis)',
+       '//    owner  P＝TECH_PARA（TechPara.push_back）、T＝TECH_TWOPARA（TechTwoPara.push_back）',
+       '//    live   W5B_COND(外層 if／else 條件的 C++ 式) —— 執行期在這台機台上求值（WebMotorAccessLive.cpp）',
+@@ -582,10 +612,11 @@ bl += ['#undef W5B_ROW', '#undef W5B_TAGOVR', '#undef W5B_BTN', '#undef W5B_COND
+ btn_bytes = ('\r\n'.join(bl) + '\r\n').encode('utf-8')
+ 
+ summary = ('%d registrations (P %d / T %d), %d buttons, %d ctor OnClick overrides, %d FormShow Tag overrides, %d condition atoms, '
+-           '%d teach-handler buttons in the dfm (%d never registered in any config, %d statically unreachable, %d registered Visible=false)') % (
+-    len(port_rows), sum(1 for r in port_rows if r['owner'] == 'P'), sum(1 for r in port_rows if r['owner'] == 'T'),
++           '%d teach-handler buttons in the dfm (%d never registered in any config, %d statically unreachable, %d registered Visible=false); '
++           '+%d W906 extension rows (%s, not golden)') % (
++    len(port_rows_gold), sum(1 for r in port_rows_gold if r['owner'] == 'P'), sum(1 for r in port_rows_gold if r['owner'] == 'T'),
+     n_btn, len(ovr), len(tagovr_rows), len(atoms), len(btn_info), n_unreg, sum(1 for x in btn_info if x[5]),
+-    len(set(b for r in port_rows if not r['vis'] for b in r['btn'] if b)))
++    len(set(b for r in port_rows_gold if not r['vis'] for b in r['btn'] if b)), len(ext_rows), EXT_COND)
+ if '--report' in sys.argv[1:]:
+     for b, h, tag, dv, so, hw, lr in btn_info:
+         regs = [(i, r['owner'], r['vis'], catoms(r['cond'])) for i, r in enumerate(port_rows) if b in r['btn']]
+diff --git a/tools/gen_teach_registry.py b/tools/gen_teach_registry.py
+index 7787c21..4ed9b46 100644
+--- a/tools/gen_teach_registry.py
++++ b/tools/gen_teach_registry.py
+@@ -34,6 +34,15 @@
+ #  T3  控制流、註解、空白行、golden 的 /* */ 死碼 -> **原樣保留**。
+ #
+ #  輸出每 25 行插一個 `// golden :NNNN` 錨點，方便日後對帳。
++#
++#  E1  AI(W906-TEACH-3AXES) 20261001：W906 擴充列（**不是 golden**）—— EXT_ROWS。
++#      EastSun 1001「三軸都幫我加 在合適的地方」：MOutShuttle1／MOutShuttle2／MCCDY 在 HT9050 是 Enable=1 的
++#      PCIE-1203 軸，golden 沒有它們的教導點。這幾列插在 golden :993（`TECH_MAX_ITEM=TechPara.size();`）
++#      之前、包在 `if(EXT_COND)` 裡：
++#        * 放最後 ⇒ golden 每一列的 TechPara 索引（＝ golden FormShow 給按鈕的 Tag）都不動；
++#        * 條件 ⇒ 只有 PCI1203_IO 機台登錄，別台機台的 teach.ini 不會被 CheckAndReadIniData 補鍵。
++#      tools/gen_teach_editlist.py import 同一份 EXT_ROWS：golden 前綴照舊逐列比對 golden，尾端逐列比對 EXT_ROWS
++#      （按鈕名必須不是 golden .dfm 的名字、處理函式明確指定）。改這裡就要重跑兩支產生器。
+ # =============================================================================
+ import io
+ import os
+@@ -55,6 +64,48 @@ WIDGET_ARGS = {
+     "TECH_MotorAxle":  (1,),               # SPB
+ }
+ 
++# E1：W906 擴充列（見檔頭 E1）。欄位：Tech 欄位、馬達列舉名、畫面欄位（＝ teach.ini 鍵）、Set 鈕、Go 鈕、處理函式、說明。
++#   * 畫面欄位：OutShuttle 四個是 golden uteach.dfm Panel28 的保留隱藏欄位（:4349-4400），CCDY 兩個是新名字。
++#   * 按鈕：新名字（golden .dfm 沒有），不可以用 Motor 開頭（網頁把 `Motor*` 的 TSpeedButton 當軸選取鈕）。
++#   * 處理函式：golden SetButton140Click／GoButton140Click（單軸 TECH_PARA 的 Set／Go，讀 TechPara[Tag]）。
++#   * teach.ini 區段＝MOT[馬達].Alias（TECH_PARA::ReadFromFile）⇒ [MOutShuttle1]／[MOutShuttle2]／[MCCDY]。
++EXT_TAG = "AI(W906-TEACH-3AXES) 20261001"
++EXT_COND = "IO_CARD_TYPE==PCI1203_IO"
++EXT_ROWS = [
++    # Tech 欄位              馬達            畫面欄位／鍵             Set 鈕                 Go 鈕                說明
++    ("iOutShuttle1Left",  "MOutShuttle1", "setEditOutSht1Left",  "btnSetOutSht1Left",  "btnGoOutSht1Left",  "Out Shuttle 1 left  (Prod.OutSHT[0].iLeft,  cinitial.cpp:6224)"),
++    ("iOutShuttle1Right", "MOutShuttle1", "setEditOutSht1Right", "btnSetOutSht1Right", "btnGoOutSht1Right", "Out Shuttle 1 right (Prod.OutSHT[0].iRight, cinitial.cpp:6222)"),
++    ("iOutShuttle2Left",  "MOutShuttle2", "setEditOutSht2Left",  "btnSetOutSht2Left",  "btnGoOutSht2Left",  "Out Shuttle 2 left  (Prod.OutSHT[1].iLeft,  cinitial.cpp:6225)"),
++    ("iOutShuttle2Right", "MOutShuttle2", "setEditOutSht2Right", "btnSetOutSht2Right", "btnGoOutSht2Right", "Out Shuttle 2 right (Prod.OutSHT[1].iRight, cinitial.cpp:6223)"),
++    ("iCCDYSite1x1",      "MCCDY",        "setEditCCDYSite1x1",  "btnSetCCDYSite1x1",  "btnGoCCDYSite1x1",  "CCD Y inspection position (FinePitch Tech.iCCDYSite1x1, LastSet.h:978)"),
++    ("iCalY1x1",          "MCCDY",        "setEditCCDYCal1x1",   "btnSetCCDYCal1x1",   "btnGoCCDYCal1x1",   "CCD Y calibration position (FinePitch Tech.iCalY1x1, LastSet.h:982)"),
++]
++EXT_SET_HANDLER = "SetButton140Click"
++EXT_GO_HANDLER = "GoButton140Click"
++EXT_BEFORE_GOLDEN_LINE = 993           # golden :993 `TECH_MAX_ITEM=TechPara.size();` —— 擴充列插在它前面
++
++
++def ext_block():
++    """E1：擴充列的 C++ 原始碼（行的串列）。註解裡不可以出現 push_back 呼叫的字樣（gen_teach_editlist.py 用正則數它）。"""
++    out = []
++    out.append("    //%s: EastSun 1001「三軸都幫我加 在合適的地方」—— W906 擴充，不是 golden（tools/gen_teach_registry.py EXT_ROWS）。" % EXT_TAG)
++    out.append("    //  MOutShuttle1／MOutShuttle2／MCCDY 在 HT9050 是 Enable=1 的 PCIE-1203 軸，golden 沒有它們的教導點：")
++    out.append("    //  * golden 引擎讀 Tech.iOutShuttle1Left／1Right／2Left／2Right（cinitial.cpp:6222-6225 → Prod.OutSHT[0／1].iLeft／iRight），")
++    out.append("    //    以前從沒從 teach.ini 讀過（＝0）；golden uteach.dfm Panel28 有四個保留的隱藏欄位 setEditOutSht*（:4349-4400），沒有 Set／Go 鈕。")
++    out.append("    //  * MCCDY 沒有 golden 點位；用 FinePitch 已有的 Tech.iCCDYSite1x1（檢查位）／Tech.iCalY1x1（校正位）（LastSet.h:978／:982）。")
++    out.append("    //  * 放在 golden 登錄表最後 ⇒ golden 每一列的 TechPara 索引（按鈕 Tag）都不動；只在 PCI1203_IO 機台登錄 ⇒ 別台的 teach.ini 不多鍵。")
++    out.append("    //  * 第一次開機 ReadFromFile 的 CheckAndReadIniData 會把這 6 個鍵補寫進 teach.ini（值＝目前的 Tech 值，通常 0）—— golden 行為。")
++    out.append("    if(%s)" % EXT_COND)
++    out.append("    {")
++    for fld, mot, edit, setb, gob, why in EXT_ROWS:
++        out.append("        TechPara.push_back(new TECH_PARA(%s, %s, %s, %s, %s, %s));  // %s" % (
++            ("&Tech." + fld).ljust(36), mot.ljust(14), ("/*%s*/0" % edit).ljust(26),
++            ('"%s"' % edit).ljust(22), ("/*%s*/0" % setb).ljust(25), "/*%s*/0" % gob, why))
++    out.append("    }")
++    out.append("")
++    return out
++
++
+ WIDGET_ONLY = re.compile(
+     r"^\s*[A-Za-z_][A-Za-z0-9_\[\]]*\s*->\s*"
+     r"(Caption|Visible|Left|Top|Width|Height|Enabled|Text|Picture|Color|Font)\b")
+@@ -208,10 +259,16 @@ def main():
+     # ---- 第二趟：輸出 ------------------------------------------------------
+     body = []
+     n_widget_args = n_widget_only = n_push = n_setedit = n_incomment = 0
++    n_ext = 0
+     for i, raw in enumerate(seg):
+         gl = START + i
+         line = raw.rstrip()
+ 
++        if gl == EXT_BEFORE_GOLDEN_LINE:                # E1：W906 擴充列（AI(W906-TEACH-3AXES) 20261001）
++            assert line.strip() == "TECH_MAX_ITEM=TechPara.size();" and not incomment[i], ("E1 anchor moved", gl, line)
++            body.extend(ext_block())
++            n_ext = len(EXT_ROWS)
++
+         if incomment[i]:
+             # golden 自己註解掉的東西：原樣搬過來，一個字不動。
+             n_incomment += 1
+@@ -255,6 +312,8 @@ def main():
+     print("  .SetEdit 成員賦值改成 0    %d" % n_setedit)
+     print("  golden 自己的註解區塊（原樣搬） %d 行" % n_incomment)
+     print("  收集到的 widget 識別字      %d" % len(widgets))
++    print("  E1 W906 擴充列（不是 golden，golden :%d 之前） %d" % (EXT_BEFORE_GOLDEN_LINE, n_ext))
++    assert n_ext == len(EXT_ROWS), "E1 anchor line not reached"
+     if out_path:
+         io.open(out_path, "w", encoding="utf-8", newline="\n").write(text)
+         print("  寫到 %s（%d 行）" % (out_path, text.count("\n")))
+-- 
+2.55.0.windows.5
+

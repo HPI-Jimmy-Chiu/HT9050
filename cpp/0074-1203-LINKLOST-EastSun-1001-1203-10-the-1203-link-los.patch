@@ -1,0 +1,955 @@
+From e69696739a9ede66fd442bbb17508548ddaad60c Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 20:35:51 +0800
+Subject: [PATCH] =?UTF-8?q?1203-LINKLOST:=20EastSun=201001=E3=80=8C1203=20?=
+ =?UTF-8?q?=E5=A6=82=E6=9E=9C=E6=96=B7=E7=B7=9A10=E7=A7=92=20=E8=A6=81?=
+ =?UTF-8?q?=E8=B7=B3=E5=87=BA=E7=95=B0=E5=B8=B8=E3=80=8D--=20the=201203=20?=
+ =?UTF-8?q?link=20lost=20for=2010=20s=20raises=20golden=20WAR16152=20once?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EtherCAT/Pci1203LinkWatch.h (new, header-only, pure): the decision. Signal = what the read-only monitor
+already samples every Poll -- each scanned station's Acm_DevGetSlaveStates (down = read failed or not
+EC_SLAVE_STATE_OP, golden MyEtherCAT.cpp:531's strict OP), the monitor's self-disable (card not answering),
+card().open false, an empty scan / a re-learnt ring with nothing in OP. No new vendor call;
+pci1203_readonly_gate PASS. Arms only after the link was up once (open, not disabled, a station in OP), so
+the initial open / cold-boot scan / a never-linked build never alarm. Stations are watched once seen in OP;
+unaddressable twins skipped; a changed scan (Refresh) re-learns the ring. First lost sample starts the timer;
+kPci1203LinkLostAlarmMs (10000, the one place) of continuous loss -> kAlarm ONCE with the reason (signal,
+since when, per-ring tally, first stations not in OP; CSV/quote safe, <= 400 bytes); one UP sample resets.
+
+tools/wb_serve.cpp: after both Poll() sites (main IO clock; native-forms drag keepalive) one call to
+W906_Pci1203LinkWatchTick (EOF). On kAlarm it calls golden's own ShowErrorMessage(WAR16152, 0, MMSystem,
+0, reason) (golden MyEtherCAT.cpp:333): the existing kcode==0 notice path -- StopAllMotor + SoftStop/
+SoftStart/SystemStart=false + 1203 DecStop (W906_AlarmStopLikeGolden), the golden alarm record, the popup
+notice. No card re-open (golden's OpenEtherCatMastCard after WAR16152 is not done). stdout + oplog LINK lines.
+
+tests/test_pci1203_linkwatch.cpp + tests/CMakeLists.txt (ctest Pci1203LinkWatch, built like Pci1203Pure):
+fake monitor + fake clock, 43 checks (9.9 s none / 10 s one / still lost none / restored reset / again /
+never linked / card-level signals / tick wrap); 5 mutations of the watch all caught.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203LinkWatch.h      | 403 +++++++++++++++++++++++++++++++
+ tests/CMakeLists.txt             |  15 ++
+ tests/test_pci1203_linkwatch.cpp | 370 ++++++++++++++++++++++++++++
+ tools/wb_serve.cpp               |  79 +++++-
+ 4 files changed, 864 insertions(+), 3 deletions(-)
+ create mode 100644 EtherCAT/Pci1203LinkWatch.h
+ create mode 100644 tests/test_pci1203_linkwatch.cpp
+
+diff --git a/EtherCAT/Pci1203LinkWatch.h b/EtherCAT/Pci1203LinkWatch.h
+new file mode 100644
+index 0000000..d9f7c9c
+--- /dev/null
++++ b/EtherCAT/Pci1203LinkWatch.h
+@@ -0,0 +1,403 @@
++// =============================================================================
++//  EtherCAT/Pci1203LinkWatch.h -- "1203 斷線 10 秒 -> 跳異常": the link-lost watch.
++//
++//  //AI(W906-1203-LINKLOST) 20261001: EastSun 1001「1203 如果斷線10秒 要跳出異常」
++//    -- if the PCIE-1203 EtherCAT link stays lost for 10 s, the HMI must show an
++//    alarm. This header is the DECISION (pure, header-only, no vendor header, no
++//    <windows.h>, no clock of its own); the host (tools/wb_serve.cpp EOF,
++//    W906_Pci1203LinkWatchTick) feeds it one sample after every monitor Poll()
++//    and raises the alarm it asks for.
++//
++//  ## WHICH SIGNAL (only what TPci1203Monitor already samples; no new vendor call)
++//    1. Per-station EtherCAT AL state. Poll() re-reads EVERY discovered station
++//       with Acm_DevGetSlaveStates on every IO tick (Pci1203Monitor.cpp Poll(),
++//       the "EtherCAT ring" loop) and keeps stateValid / state / lastError in
++//       Pci1203SlaveSample. A station counts as UP only when that read succeeded
++//       AND its state is EC_SLAVE_STATE_OP (0x08, vendor AdvMotDrv.h). Read failed,
++//       INIT, PREOP, BOOT or SAFEOP = down. Strict OP is golden's own per-slave test
++//       (golden EtherCAT/MyEtherCAT.cpp `if(SlaveState!=EC_SLAVE_STATE_OP)` ->
++//       WAR16151, port EtherCAT/MyEtherCAT.cpp:531).
++//    2. The card stopped answering: the monitor auto-disables itself after
++//       kMaxConsecutiveFailures (10) polls in which EVERY read failed
++//       (Pci1203Monitor.cpp Poll() "self-disable"), and then Poll() returns at
++//       once and the station samples freeze -- so Disabled() is a loss by itself.
++//    3. The card is not open (card().open == false): production closed it
++//       (attached mode "detached"), or an operator Refresh (Rescan) failed and left
++//       the monitor closed (Pci1203Monitor.cpp Rescan()).
++//    4. The scan finds no station at all while the card is open (a Refresh / the
++//       zero-scan retry swept an empty ring), or it finds stations but none of
++//       them is in OP (a Refresh re-learnt a ring that is not up -- see below).
++//    NOT used: Acm_DevCheckEvent (golden's EVT_DEV_DISCONNET, needs
++//    Acm_DevEnableEvent -- a write) and FT_MasCyclicCnt_R0/_R1 (read once in
++//    Open(), not per Poll). Both would be new vendor calls in the read-only TU.
++//
++//  ## WHICH STATIONS ARE WATCHED
++//    A station is watched once it has been seen UP (OP) -- so a module that never
++//    reached OP since boot (wrong ID, no power, a drive parked in SAFEOP+ERR) is
++//    shown by the 1203 page as it is today but never alarms here. "Unaddressable"
++//    stations are skipped: their state read lands on their address twin
++//    (Pci1203Monitor.h Pci1203SlaveSample::unaddressable).
++//    ⚠ A SCAN IS THE TOPOLOGY OF RECORD. When the set of scanned stations changes
++//    (an operator Refresh, the zero-scan retry, an attached-mode re-attach -- the
++//    only places ScanSlaves_() runs), watched stations that the new scan no
++//    longer finds stop being watched. So "remove a module, press Refresh" re-learns
++//    the ring instead of alarming forever; the price is that a Refresh pressed
++//    while a mid-ring cable is out also re-learns the shorter ring. A Refresh that
++//    finds NO station, or fails, is still a loss (signals 3 / 4).
++//
++//  ## WHEN IT STARTS WATCHING
++//    Not before the link has been UP once since boot: the card open, not disabled,
++//    and at least one station in OP. The monitor's initial Open() / scan runs
++//    synchronously before the tick loop (tools/wb_serve.cpp Pci1203MonitorEnable)
++//    and a cold-boot ring that comes up late is only swept again by the zero-scan
++//    retry -- none of that alarms. A build without the vendor SDK (Open() says "not
++//    linked", disabled from the start) and a machine whose ring never comes up
++//    never arm, so they never alarm. Once armed it stays armed for the process.
++//
++//  ## THE TIMER AND "ONCE"
++//    The first lost sample starts the timer (the caller's tick, wrap-safe 32-bit
++//    subtraction like the monitor's own GetTickCount arithmetic). If every sample
++//    after it is still lost and kPci1203LinkLostAlarmMs has passed, Step() returns
++//    kAlarm ONCE. Still lost -> nothing more. One UP sample (every watched station
++//    in OP and the card answering) ends the episode and clears the timer and the
++//    "raised" mark; a new loss needs another full kPci1203LinkLostAlarmMs.
++//    ⓘ "Continuous" means: every sample we took said lost. While the tick thread
++//    is held elsewhere (a blocking alarm dialog does not Poll) no sample is taken;
++//    a gap is not evidence that the link came back.
++//    The alarm itself is the golden one and is cleared the golden way (the
++//    operator acknowledges the note); this class never clears or re-raises it.
++// =============================================================================
++#ifndef HT9045_ETHERCAT_PCI1203LINKWATCH_H
++#define HT9045_ETHERCAT_PCI1203LINKWATCH_H
++
++#include <algorithm>
++#include <cstdio>
++#include <map>
++#include <string>
++#include <utility>
++#include <vector>
++
++namespace ht9045 {
++
++//  ★ THE ONE PLACE the 10 s lives (EastSun 1001「斷線10秒」).
++enum { kPci1203LinkLostAlarmMs = 10000 };
++//  How many down stations the reason names one by one; the rest are counted.
++enum { kPci1203LinkLostListMax = 4 };
++//  The reason goes into golden ShowErrorMessage's errPart (event log / HANDLER
++//  LOG csv / the note's message), so it is kept short and CSV / SQL-quote safe.
++enum { kPci1203LinkLostTextMax = 400 };
++
++// One scanned station as this watch sees it.
++struct Pci1203LinkStation {
++    int            ring;
++    int            addr;         // the SlaveIP the monitor reads it with
++    bool           aliasValid;
++    unsigned short alias;        // the module's dial setting (ESC 0x0012)
++    bool           readOk;       // this Poll's Acm_DevGetSlaveStates succeeded
++    unsigned short state;        // raw EC_SLAVE_STATE_* (meaningful when readOk)
++    unsigned long  err;          // the failed read's return code (when !readOk)
++    Pci1203LinkStation()
++        : ring(-1), addr(-1), aliasValid(false), alias(0)
++        , readOk(false), state(0), err(0) {}
++};
++
++// One sample: what the monitor says right after a Poll().
++struct Pci1203LinkInput {
++    bool          open;          // card().open -- we hold a device handle
++    bool          disabled;      // Disabled() -- the monitor stopped polling
++    std::string   disabledWhy;   // disabledReason()
++    std::string   lastErrorText; // card().lastErrorText
++    std::vector<Pci1203LinkStation> stations;   // present + addressable, scan order
++    Pci1203LinkInput() : open(false), disabled(false) {}
++};
++
++inline bool Pci1203LinkStationUp(const Pci1203LinkStation& s)
++{
++    return s.readOk && (s.state & 0x0Fu) == 0x08u;           // EC_SLAVE_STATE_OP
++}
++
++inline const char* Pci1203LinkStateName(unsigned short state)
++{
++    switch (state & 0x0Fu) {                                 // EC_SLAVE_STATE_* low nibble (AdvMotDrv.h)
++        case 0x01u: return "INIT";
++        case 0x02u: return "PREOP";
++        case 0x03u: return "BOOT";
++        case 0x04u: return "SAFEOP";
++        case 0x08u: return "OP";
++        default:    return "NONE";
++    }
++}
++
++//  Wrap-safe elapsed milliseconds on a 32-bit tick (GetTickCount), whatever the
++//  width of unsigned long on the build.
++inline unsigned long Pci1203LinkElapsedMs(unsigned long nowMs, unsigned long sinceMs)
++{
++    return static_cast<unsigned long>(static_cast<unsigned int>(
++        static_cast<unsigned int>(nowMs) - static_cast<unsigned int>(sinceMs)));
++}
++
++//  ',' -> ';', quotes -> '`', control characters -> ' ', clipped to `max` bytes
++//  without splitting a UTF-8 sequence. Applied to every text this watch hands out.
++inline std::string Pci1203LinkSafeText(const std::string& s, std::size_t max)
++{
++    std::string t;
++    t.reserve(s.size() < max ? s.size() : max);
++    for (std::size_t i = 0; i < s.size(); ++i) {
++        char c = s[i];
++        if (c == ',') c = ';';
++        else if (c == '\'' || c == '"') c = '`';
++        else if ((unsigned char)c < 0x20u) c = ' ';
++        t += c;
++    }
++    if (t.size() > max) {
++        std::size_t k = max;
++        while (k > 0 && ((unsigned char)t[k] & 0xC0u) == 0x80u) --k;   // never cut inside a character
++        t.resize(k);
++        if (t.size() >= 3) t.replace(t.size() - 3, 3, "...");
++    }
++    return t;
++}
++
++//  The monitor -> sample adapter. A template so the test can hand it a fake with
++//  the same five members TPci1203Monitor has (card() / Disabled() /
++//  disabledReason() / slaveCount() / slave(i)). Reads only what Poll() already
++//  stored; calls nothing on the card.
++template <class Mon>
++inline Pci1203LinkInput Pci1203LinkInputFromMonitor(const Mon& mon)
++{
++    Pci1203LinkInput in;
++    in.open          = mon.card().open;
++    in.disabled      = mon.Disabled();
++    if (in.disabled) in.disabledWhy = mon.disabledReason();
++    in.lastErrorText = mon.card().lastErrorText;
++    const int n = mon.slaveCount();
++    for (int i = 0; i < n; ++i) {
++        const auto& s = mon.slave(i);
++        if (!s.present || s.unaddressable) continue;
++        Pci1203LinkStation st;
++        st.ring       = s.ring;
++        st.addr       = s.addr;
++        st.aliasValid = s.aliasValid;
++        st.alias      = s.alias;
++        st.readOk     = s.stateValid;
++        st.state      = s.state;
++        st.err        = s.lastError;
++        in.stations.push_back(st);
++    }
++    return in;
++}
++
++class Pci1203LinkWatch {
++public:
++    enum Event {
++        kNone = 0,
++        kArmed,       // the link is up for the first time since boot: watching starts
++        kLost,        // first lost sample of an episode: the timer starts
++        kAlarm,       // lost for kPci1203LinkLostAlarmMs: raise the alarm NOW (once per episode)
++        kRestored     // the episode ended: every watched station is in OP again
++    };
++    struct Result {
++        Event         event;
++        bool          lost;        // this sample says the link is lost (armed only)
++        unsigned long lostForMs;   // since the first lost sample (0 when not lost)
++        std::string   text;        // kAlarm: the alarm's errPart; others: a log line
++        Result() : event(kNone), lost(false), lostForMs(0) {}
++    };
++
++    Pci1203LinkWatch() : armed_(false), lost_(false), raised_(false), lostSince_(0), alarms_(0) {}
++
++    // One sample. `nowMs` = the caller's millisecond tick; `clock` = the same
++    // instant as wall-clock text (only stored, for "since when").
++    Result Step(const Pci1203LinkInput& in, unsigned long nowMs, const std::string& clock)
++    {
++        Result r;
++
++        // 1. The scanned set; a change means a scan ran: keep only watched stations it still found.
++        std::vector<Key> keys;
++        for (std::size_t i = 0; i < in.stations.size(); ++i)
++            keys.push_back(Key(in.stations[i].ring, in.stations[i].addr));
++        std::sort(keys.begin(), keys.end());
++        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
++        if (keys != scanKeys_) {
++            std::vector<Key> keep;
++            for (std::size_t i = 0; i < watched_.size(); ++i)
++                if (std::binary_search(keys.begin(), keys.end(), watched_[i])) keep.push_back(watched_[i]);
++            watched_.swap(keep);
++            scanKeys_ = keys;
++        }
++
++        // 2. Learn every station in OP while the card answers.
++        const bool cardOk = in.open && !in.disabled;
++        int upNow = 0;
++        if (cardOk) {
++            for (std::size_t i = 0; i < in.stations.size(); ++i) {
++                if (!Pci1203LinkStationUp(in.stations[i])) continue;
++                ++upNow;
++                const Key k(in.stations[i].ring, in.stations[i].addr);
++                std::vector<Key>::iterator it = std::lower_bound(watched_.begin(), watched_.end(), k);
++                if (it == watched_.end() || *it != k) watched_.insert(it, k);
++            }
++        }
++
++        // 3. Arm on the first UP sample; until then there is nothing to lose.
++        bool justArmed = false;
++        if (!armed_ && cardOk && upNow > 0) { armed_ = true; justArmed = true; }
++        if (!armed_) return r;
++
++        // 4. Lost? Card-level reasons first, then the stations.
++        std::string why;
++        bool lost = false;
++        if (in.disabled) {
++            lost = true;
++            why = "card not answering - monitor auto-disabled: " + in.disabledWhy;
++        } else if (!in.open) {
++            lost = true;
++            why = "card not open" + (in.lastErrorText.empty() ? std::string() : " - " + in.lastErrorText);
++        } else if (keys.empty()) {
++            lost = true;
++            why = "the scan finds no EtherCAT station";
++        } else {
++            lost = StationsDown_(in, why);
++            if (!lost && upNow == 0) {
++                //  Nothing watched is down, yet nothing scanned is in OP either: a
++                //  Refresh / re-attach re-learnt the ring (step 1) while it is not up.
++                char b[96];
++                std::snprintf(b, sizeof(b), "none of the %d scanned station%s is in OP",
++                              (int)keys.size(), keys.size() == 1 ? "" : "s");
++                lost = true;
++                why = b;
++            }
++        }
++
++        // 5. Transitions.
++        if (lost) {
++            const bool newlyLost = !lost_;
++            if (newlyLost) { lost_ = true; lostSince_ = nowMs; lostClock_ = clock; }
++            r.lost      = true;
++            r.lostForMs = Pci1203LinkElapsedMs(nowMs, lostSince_);
++            if (!raised_ && r.lostForMs >= (unsigned long)kPci1203LinkLostAlarmMs) {
++                raised_ = true;
++                ++alarms_;
++                char head[96];
++                std::snprintf(head, sizeof(head), "1203 link lost %lu.%lu s since %s - ",
++                              r.lostForMs / 1000ul, (r.lostForMs % 1000ul) / 100ul, lostClock_.c_str());
++                r.event = kAlarm;
++                r.text  = Pci1203LinkSafeText(head + why, kPci1203LinkLostTextMax);
++            } else if (newlyLost) {
++                char tail[96];
++                std::snprintf(tail, sizeof(tail), " (alarm WAR16152 if still lost after %d s)",
++                              (int)(kPci1203LinkLostAlarmMs / 1000));
++                r.event = kLost;
++                r.text  = Pci1203LinkSafeText("1203 link lost - " + why + tail, kPci1203LinkLostTextMax);
++            }
++        } else {
++            if (lost_) {
++                char buf[160];
++                std::snprintf(buf, sizeof(buf), "1203 link restored after %lu ms (lost since %s; %s)",
++                              Pci1203LinkElapsedMs(nowMs, lostSince_), lostClock_.c_str(),
++                              raised_ ? "WAR16152 was raised - the operator acknowledges it"
++                                      : "under the limit - no alarm");
++                r.event = kRestored;
++                r.text  = Pci1203LinkSafeText(buf, kPci1203LinkLostTextMax);
++            }
++            lost_ = false; raised_ = false; lostSince_ = 0; lostClock_.clear();
++        }
++        if (r.event == kNone && justArmed) {
++            char tail[64];
++            std::snprintf(tail, sizeof(tail), " (alarm WAR16152 if lost for %d s)",
++                          (int)(kPci1203LinkLostAlarmMs / 1000));
++            r.event = kArmed;
++            r.text  = Pci1203LinkSafeText("1203 link up - watching " + RingSummary_(in) + tail,
++                                          kPci1203LinkLostTextMax);
++        }
++        return r;
++    }
++
++    bool          armed()   const { return armed_; }
++    bool          lost()    const { return lost_; }
++    bool          raised()  const { return raised_; }
++    unsigned long alarms()  const { return alarms_; }   // alarms raised since construction
++    std::size_t   watched() const { return watched_.size(); }
++
++private:
++    typedef std::pair<int, int> Key;   // (ring, addr)
++
++    bool IsWatched_(int ring, int addr) const
++    {
++        return std::binary_search(watched_.begin(), watched_.end(), Key(ring, addr));
++    }
++
++    // "ring 0: 9/9 in OP; ring 1: 18/18 in OP" over the WATCHED stations.
++    std::string RingSummary_(const Pci1203LinkInput& in) const
++    {
++        std::map<int, std::pair<int, int> > rings;   // ring -> (up, watched)
++        for (std::size_t i = 0; i < in.stations.size(); ++i) {
++            const Pci1203LinkStation& s = in.stations[i];
++            if (!IsWatched_(s.ring, s.addr)) continue;
++            std::pair<int, int>& t = rings[s.ring];
++            ++t.second;
++            if (in.open && !in.disabled && Pci1203LinkStationUp(s)) ++t.first;
++        }
++        std::string out;
++        for (std::map<int, std::pair<int, int> >::const_iterator it = rings.begin(); it != rings.end(); ++it) {
++            char b[64];
++            std::snprintf(b, sizeof(b), "%sring %d: %d/%d in OP", out.empty() ? "" : "; ",
++                          it->first, it->second.first, it->second.second);
++            out += b;
++        }
++        return out.empty() ? std::string("no station") : out;
++    }
++
++    // True when a watched station is down; `why` = the per-ring tally + the first few down stations.
++    bool StationsDown_(const Pci1203LinkInput& in, std::string& why) const
++    {
++        std::string list;
++        int down = 0;
++        for (std::size_t i = 0; i < in.stations.size(); ++i) {
++            const Pci1203LinkStation& s = in.stations[i];
++            if (!IsWatched_(s.ring, s.addr) || Pci1203LinkStationUp(s)) continue;
++            if (++down > (int)kPci1203LinkLostListMax) continue;
++            char b[96];
++            if (s.readOk)
++                std::snprintf(b, sizeof(b), "r%d addr 0x%03X%s state 0x%02X %s%s", s.ring, (unsigned)s.addr,
++                              AliasText_(s).c_str(), (unsigned)s.state, Pci1203LinkStateName(s.state),
++                              (s.state & 0x10u) ? "+ERR" : "");
++            else
++                std::snprintf(b, sizeof(b), "r%d addr 0x%03X%s read failed 0x%08lX", s.ring, (unsigned)s.addr,
++                              AliasText_(s).c_str(), s.err);
++            if (!list.empty()) list += " / ";
++            list += b;
++        }
++        if (down == 0) return false;
++        if (down > (int)kPci1203LinkLostListMax) {
++            char b[32];
++            std::snprintf(b, sizeof(b), " (+%d more)", down - (int)kPci1203LinkLostListMax);
++            list += b;
++        }
++        char cnt[48];
++        std::snprintf(cnt, sizeof(cnt), " - %d station%s not in OP: ", down, down == 1 ? "" : "s");
++        why = RingSummary_(in) + cnt + list;
++        return true;
++    }
++
++    static std::string AliasText_(const Pci1203LinkStation& s)
++    {
++        if (!s.aliasValid) return std::string();
++        char b[24];
++        std::snprintf(b, sizeof(b), " alias 0x%04X", (unsigned)s.alias);
++        return b;
++    }
++
++    bool              armed_;
++    bool              lost_;
++    bool              raised_;
++    unsigned long     lostSince_;
++    std::string       lostClock_;
++    unsigned long     alarms_;
++    std::vector<Key>  scanKeys_;   // the scanned set of the last sample (sorted)
++    std::vector<Key>  watched_;    // stations seen in OP, still in the scan (sorted)
++};
++
++}  // namespace ht9045
++
++#endif  // HT9045_ETHERCAT_PCI1203LINKWATCH_H
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 7938456..10819dd 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -6143,3 +6143,18 @@ set_tests_properties(St02_TimerESD PROPERTIES TIMEOUT 60)
+ add_executable(test_d028_jamday_body test_d028_jamday_body.cpp)
+ add_test(NAME D028_JamDayBody COMMAND test_d028_jamday_body "${CMAKE_SOURCE_DIR}")
+ set_tests_properties(D028_JamDayBody PROPERTIES TIMEOUT 60)
++
++# --- test_pci1203_linkwatch: AI(W906-1203-LINKLOST) 20261001 -- EastSun 1001「1203 如果斷線10秒 要跳出異常」:
++#   EtherCAT/Pci1203LinkWatch.h (the decision behind tools/wb_serve.cpp EOF W906_Pci1203LinkWatchTick -> golden WAR16152)
++#   against a fake monitor + fake clock: never linked -> no alarm; lost 9.9 s -> none; 10 s -> one, with the reason;
++#   still lost -> no second; restored -> reset; lost again 10 s -> again; card-level signals; tick wrap.  Built like
++#   Pci1203Pure (Pci1203Monitor.cpp / Pci1203Control.cpp without HAVE_PCI1203: case [1e] runs the adapter on the REAL
++#   monitor class, which cannot open a card here).  Memory only, reads and writes no file; at the end, so it has its own TIMEOUT.
++add_executable(test_pci1203_linkwatch
++    test_pci1203_linkwatch.cpp
++    ../EtherCAT/Pci1203Monitor.cpp
++    ../EtherCAT/Pci1203Control.cpp)
++target_include_directories(test_pci1203_linkwatch PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
++target_link_libraries(test_pci1203_linkwatch PRIVATE vclcompat)
++add_test(NAME Pci1203LinkWatch COMMAND test_pci1203_linkwatch)
++set_tests_properties(Pci1203LinkWatch PROPERTIES TIMEOUT 60)
+diff --git a/tests/test_pci1203_linkwatch.cpp b/tests/test_pci1203_linkwatch.cpp
+new file mode 100644
+index 0000000..57e80aa
+--- /dev/null
++++ b/tests/test_pci1203_linkwatch.cpp
+@@ -0,0 +1,370 @@
++// =============================================================================
++//  test_pci1203_linkwatch.cpp -- EtherCAT/Pci1203LinkWatch.h, the 1203 link-lost
++//  watch behind golden WAR16152 (tools/wb_serve.cpp EOF W906_Pci1203LinkWatchTick).
++//
++//  //AI(W906-1203-LINKLOST) 20261001: EastSun 1001「1203 如果斷線10秒 要跳出異常」.
++//  A FAKE MONITOR (the five members the adapter reads) and a FAKE CLOCK (the test
++//  hands Step() its milliseconds and its wall-clock text) -- so every rule is
++//  walked without a card:
++//    [1] never linked at boot (card never opens / ring never reaches OP) -> no alarm,
++//        also with the REAL TPci1203Monitor of a build without the vendor SDK;
++//    [2] lost 9.9 s -> no alarm; lost 10 s -> ONE alarm carrying the reason;
++//        still lost for a minute -> no second alarm;
++//    [3] restored -> the timer resets; lost again 10 s -> the alarm again;
++//    [4] one good sample inside a loss restarts the 10 s;
++//    [5] the card-level signals: monitor auto-disabled, card not open, empty scan,
++//        a re-learnt ring with nothing in OP;
++//    [6] which stations are watched: never-OP and unaddressable stations are not;
++//        a scan that drops a station re-learns the ring;
++//    [7] SAFEOP counts as down; the reason is CSV / quote safe and bounded;
++//    [8] the tick counter wraps (GetTickCount after 49.7 days).
++//  ⚠ WHAT IT DOES NOT PROVE: what Acm_DevGetSlaveStates actually returns for a
++//  station behind a pulled cable -- built WITHOUT HAVE_PCI1203 like every ctest
++//  target. That is the on-machine check (pull a ring-1 cable for > 10 s, watch the
++//  oplog LINK lines and pci1203.slaveN.state). Reads and writes no file.
++// =============================================================================
++#include "EtherCAT/Pci1203LinkWatch.h"
++#include "EtherCAT/Pci1203Monitor.h"
++
++#include <cstdio>
++#include <cstring>
++#include <string>
++#include <vector>
++
++using namespace ht9045;
++
++static int g_total = 0;
++static int g_fail  = 0;
++
++static void check(bool ok, const char* what)
++{
++    ++g_total;
++    std::printf("%s: %s\n", ok ? "PASS" : "FAIL", what);
++    if (!ok) ++g_fail;
++}
++
++static bool has(const std::string& s, const char* part) { return s.find(part) != std::string::npos; }
++
++// ---------------------------------------------------------------------------
++//  The fake monitor: the same five members Pci1203LinkInputFromMonitor reads on
++//  TPci1203Monitor, holding the real sample structs.
++// ---------------------------------------------------------------------------
++struct FakeMon {
++    Pci1203CardSample               c;
++    bool                            dis;
++    std::string                     disWhy;
++    std::vector<Pci1203SlaveSample> s;
++    FakeMon() : dis(false) { s.resize(8); }
++    const Pci1203CardSample&  card() const { return c; }
++    bool                      Disabled() const { return dis; }
++    const std::string&        disabledReason() const { return disWhy; }
++    int                       slaveCount() const { return (int)s.size(); }
++    const Pci1203SlaveSample& slave(int i) const { return s[i]; }
++
++    // A station in slot i that the scan found.
++    void Station(int i, int ring, int addr, unsigned short state, bool readOk = true, unsigned long err = 0)
++    {
++        Pci1203SlaveSample& x = s[i];
++        x.present = true; x.ring = ring; x.addr = addr; x.unaddressable = false;
++        x.stateValid = readOk; x.state = readOk ? state : 0; x.lastError = readOk ? 0 : err;
++        x.aliasValid = false; x.alias = 0;
++    }
++    void Up(int i)                       { s[i].stateValid = true;  s[i].state = 0x08; s[i].lastError = 0; }
++    void Fail(int i, unsigned long err)  { s[i].stateValid = false; s[i].lastError = err; }
++    void State(int i, unsigned short st) { s[i].stateValid = true;  s[i].state = st; s[i].lastError = 0; }
++};
++
++//  The "machine" most cases start from: card open, ring 0 two drives, ring 1 two IO modules, all in OP.
++static FakeMon Healthy()
++{
++    FakeMon m;
++    m.c.open = true;
++    m.Station(0, 0, 0x00E, 0x08);
++    m.Station(1, 0, 0x001, 0x08);
++    m.Station(2, 1, 0x009, 0x08);
++    m.Station(3, 1, 0x00A, 0x08);
++    m.s[2].aliasValid = true; m.s[2].alias = 0x0050;
++    return m;
++}
++
++//  Run the watch from t0 to t1 inclusive, one sample every `stepMs` (the 200 ms IO clock); count events.
++struct Run { int armed, lost, alarm, restored; std::string lastAlarm, lastLost, lastRestored; Run() : armed(0), lost(0), alarm(0), restored(0) {} };
++static void Feed(Pci1203LinkWatch& w, const FakeMon& m, unsigned long t0, unsigned long t1,
++                 unsigned long stepMs, Run& run, const char* clock = "10:00:00")
++{
++    for (unsigned long t = t0; ; t += stepMs) {
++        if (t - t0 > t1 - t0) break;   // wrap-safe "t > t1"
++        const Pci1203LinkWatch::Result r = w.Step(Pci1203LinkInputFromMonitor(m), t, clock);
++        if (r.event == Pci1203LinkWatch::kArmed)    { ++run.armed; }
++        if (r.event == Pci1203LinkWatch::kLost)     { ++run.lost;     run.lastLost = r.text; }
++        if (r.event == Pci1203LinkWatch::kAlarm)    { ++run.alarm;    run.lastAlarm = r.text; }
++        if (r.event == Pci1203LinkWatch::kRestored) { ++run.restored; run.lastRestored = r.text; }
++        if (t1 - t < stepMs) break;
++    }
++}
++
++int main()
++{
++    std::printf("== test_pci1203_linkwatch (AI(W906-1203-LINKLOST) 20261001) ==\n");
++    check(kPci1203LinkLostAlarmMs == 10000, "[0] the limit is 10 s, in one place (kPci1203LinkLostAlarmMs)");
++
++    // -----------------------------------------------------------------------
++    //  [1] never linked at boot
++    // -----------------------------------------------------------------------
++    {
++        Pci1203LinkWatch w; Run run;
++        FakeMon m;                                    // card never opens, nothing scanned
++        Feed(w, m, 1000, 61000, 200, run);
++        check(!w.armed() && run.alarm == 0 && run.lost == 0 && run.armed == 0,
++              "[1a] card never opened for 60 s: not armed, no lost event, no alarm");
++        m.c.open = true; m.dis = true; m.disWhy = "not linked";   // the no-SDK Open(): disabled from the start
++        Feed(w, m, 61200, 121200, 200, run);
++        check(!w.armed() && run.alarm == 0, "[1b] disabled from the start (\"not linked\"): not armed, no alarm");
++        m.dis = false; m.disWhy.clear();
++        m.Station(0, 0, 0x00E, 0x02);                 // the ring came up to PREOP and stays there
++        m.Station(1, 1, 0x009, 0x04);                 // SAFEOP
++        m.Station(2, 1, 0x00A, 0, false, 0x8300000Ful);
++        Feed(w, m, 121400, 181400, 200, run);
++        check(!w.armed() && run.alarm == 0 && w.watched() == 0,
++              "[1c] stations scanned but none ever in OP for 60 s: not armed, nothing watched, no alarm");
++        m.Up(0);                                      // the first station reaches OP: armed now
++        Feed(w, m, 181600, 181600, 200, run);
++        check(w.armed() && run.armed == 1 && run.alarm == 0 && run.lost == 0 && w.watched() == 1,
++              "[1d] first station in OP -> armed once, watching only that one, not lost");
++    }
++    {
++        //  The REAL monitor of this build (no HAVE_PCI1203): constructed, Open() refused -- the adapter compiles
++        //  against TPci1203Monitor and the watch never arms on it.
++        TPci1203Monitor real;
++        std::string why;
++        const bool opened = real.Open(16, 32, why);
++        Pci1203LinkWatch w;
++        int events = 0;
++        for (unsigned long t = 0; t <= 60000; t += 200) {
++            real.Poll();
++            if (w.Step(Pci1203LinkInputFromMonitor(real), t, "10:00:00").event != Pci1203LinkWatch::kNone) ++events;
++        }
++        check(!opened && !w.armed() && events == 0 && w.alarms() == 0,
++              "[1e] real TPci1203Monitor without the vendor SDK: Open refused, 60 s of samples, never armed, no event");
++    }
++
++    // -----------------------------------------------------------------------
++    //  [2] 9.9 s -> nothing; 10 s -> one alarm with the reason; still lost -> no second one
++    // -----------------------------------------------------------------------
++    {
++        Pci1203LinkWatch w; Run run;
++        FakeMon m = Healthy();
++        Feed(w, m, 0, 5000, 200, run);
++        check(w.armed() && run.armed == 1 && w.watched() == 4 && run.lost == 0,
++              "[2a] healthy ring: armed once, 4 stations watched, never lost");
++
++        m.Fail(2, 0x8300000Ful);                      // ring 1 addr 0x009 stops answering at t=10000
++        m.State(3, 0x01);                             // ring 1 addr 0x00A drops to INIT
++        Run lostRun;
++        Feed(w, m, 10000, 10000, 200, lostRun, "14:03:22");
++        check(lostRun.lost == 1 && lostRun.alarm == 0 && w.lost() && !w.raised(),
++              "[2b] first lost sample: one kLost event, timer started, no alarm");
++        check(has(lostRun.lastLost, "r1 addr 0x009") && has(lostRun.lastLost, "WAR16152"),
++              "[2b] the kLost log line names the station and the alarm to come");
++        Feed(w, m, 10200, 19900, 100, lostRun, "14:03:31");   // up to 9.9 s after the first lost sample
++        check(lostRun.alarm == 0 && w.alarms() == 0, "[2c] lost 9.9 s: NO alarm");
++        Feed(w, m, 20000, 20000, 100, lostRun, "14:03:32");
++        check(lostRun.alarm == 1 && w.alarms() == 1 && w.raised(), "[2d] lost 10.0 s: ONE alarm");
++        const std::string& a = lostRun.lastAlarm;
++        std::printf("      alarm text: %s\n", a.c_str());
++        check(has(a, "1203 link lost 10.0 s since 14:03:22"), "[2d] reason: how long and SINCE WHEN (the first lost sample's clock)");
++        check(has(a, "ring 1: 0/2 in OP") && has(a, "ring 0: 2/2 in OP"), "[2d] reason: per-ring tally of watched stations");
++        check(has(a, "2 stations not in OP"), "[2d] reason: how many stations are down");
++        check(has(a, "r1 addr 0x009 alias 0x0050 read failed 0x8300000F"), "[2d] reason: the failed read, with its alias and error");
++        check(has(a, "r1 addr 0x00A state 0x01 INIT"), "[2d] reason: the station that left OP, with its state");
++        Feed(w, m, 20200, 80000, 200, lostRun);
++        check(lostRun.alarm == 1 && w.alarms() == 1 && lostRun.lost == 1,
++              "[2e] still lost for another minute: no second alarm, no second kLost");
++
++        // -------------------------------------------------------------------
++        //  [3] restored -> the timer resets; a new 10 s loss alarms again
++        // -------------------------------------------------------------------
++        m.Up(2); m.Up(3);
++        Run back;
++        Feed(w, m, 80200, 80200, 200, back);
++        check(back.restored == 1 && !w.lost() && !w.raised() && w.alarms() == 1,
++              "[3a] every watched station in OP again: one kRestored, timer and raised mark cleared");
++        check(has(back.lastRestored, "WAR16152 was raised"), "[3a] the restore line says the alarm had been raised");
++        Feed(w, m, 80400, 90000, 200, back);
++        check(back.restored == 1 && back.lost == 0 && back.alarm == 0, "[3b] healthy afterwards: no event");
++        m.Fail(0, 0x80000001ul);                      // ring 0 addr 0x00E drops at t=100000
++        Run again;
++        Feed(w, m, 100000, 109999, 200, again);
++        check(again.lost == 1 && again.alarm == 0, "[3c] lost again: kLost, and no alarm before 10 s");
++        Feed(w, m, 110000, 110000, 200, again);
++        check(again.alarm == 1 && w.alarms() == 2 && has(again.lastAlarm, "r0 addr 0x00E read failed 0x80000001")
++              && has(again.lastAlarm, "ring 0: 1/2 in OP"),
++              "[3d] lost again for 10 s: the alarm AGAIN (second one), naming the new station");
++    }
++
++    // -----------------------------------------------------------------------
++    //  [4] one good sample inside a loss restarts the 10 s
++    // -----------------------------------------------------------------------
++    {
++        Pci1203LinkWatch w; Run run;
++        FakeMon m = Healthy();
++        Feed(w, m, 0, 1000, 200, run);
++        m.Fail(1, 0x8300000Ful);
++        Feed(w, m, 2000, 11000, 200, run);            // 9 s lost
++        m.Up(1);
++        Feed(w, m, 11200, 11200, 200, run);           // one good sample
++        m.Fail(1, 0x8300000Ful);
++        Feed(w, m, 11400, 20400, 200, run);           // 9 s lost again
++        check(run.alarm == 0 && run.lost == 2 && run.restored == 1,
++              "[4] 9 s lost + one good sample + 9 s lost: two short episodes, NO alarm");
++        Feed(w, m, 20600, 21400, 200, run);           // the second episode reaches 10 s at 21400
++        check(run.alarm == 1, "[4] ... and the second episode alarms once it has lasted 10 s by itself");
++    }
++
++    // -----------------------------------------------------------------------
++    //  [5] the card-level signals
++    // -----------------------------------------------------------------------
++    {
++        Pci1203LinkWatch w; Run run;
++        FakeMon m = Healthy();
++        Feed(w, m, 0, 1000, 200, run);
++        m.dis = true;
++        m.disWhy = "auto-disabled after 10 consecutive polls in which every read failed (last error 0x8300000F)";
++        Feed(w, m, 2000, 12000, 200, run);
++        check(run.alarm == 1 && has(run.lastAlarm, "card not answering - monitor auto-disabled: auto-disabled after 10"),
++              "[5a] monitor auto-disabled (card stopped answering): alarm after 10 s with the monitor's own reason");
++    }
++    {
++        Pci1203LinkWatch w; Run run;
++        FakeMon m = Healthy();
++        Feed(w, m, 0, 1000, 200, run);
++        m.c.open = false; m.c.lastErrorText = "detached: production closed the card (uiDevhand went to 0)";
++        Feed(w, m, 2000, 12000, 200, run);
++        check(run.alarm == 1 && has(run.lastAlarm, "card not open - detached: production closed the card"),
++              "[5b] card not open: alarm after 10 s naming why");
++    }
++    {
++        //  A failed Refresh: Close() clears the slave list, the card stays closed.
++        Pci1203LinkWatch w; Run run;
++        FakeMon m = Healthy();
++        Feed(w, m, 0, 1000, 200, run);
++        FakeMon closed;                               // everything default: open=false, nothing present
++        Feed(w, closed, 2000, 12000, 200, run);
++        check(run.alarm == 1 && has(run.lastAlarm, "card not open"), "[5c] Refresh failed (monitor closed, list cleared): alarm");
++        //  A later Refresh opens the card but sweeps an empty ring.
++        FakeMon empty; empty.c.open = true;
++        Run run2;
++        Feed(w, empty, 12200, 40000, 200, run2);
++        check(run2.alarm == 0 && run2.restored == 0 && w.lost(),
++              "[5d] Refresh opens the card on an empty ring: still the SAME episode (no restore, no second alarm)");
++        //  ... the ring comes back but every station is still PREOP.
++        FakeMon pre; pre.c.open = true;
++        pre.Station(0, 0, 0x00E, 0x02); pre.Station(1, 1, 0x009, 0x02);
++        Feed(w, pre, 40200, 50000, 200, run2);
++        check(run2.restored == 0 && w.lost(), "[5e] ring scanned again but nothing in OP yet: still lost, not restored");
++        pre.Up(0); pre.Up(1);
++        Feed(w, pre, 50200, 50200, 200, run2);
++        check(run2.restored == 1 && !w.lost() && w.watched() == 2, "[5f] stations reach OP: restored, the new ring is watched");
++    }
++    {
++        Pci1203LinkWatch w; Run run;
++        FakeMon m = Healthy();
++        Feed(w, m, 0, 1000, 200, run);
++        FakeMon empty; empty.c.open = true;           // an open card whose rescan found no station
++        Feed(w, empty, 2000, 12000, 200, run);
++        check(run.alarm == 1 && has(run.lastAlarm, "the scan finds no EtherCAT station"),
++              "[5g] open card, empty scan: alarm after 10 s");
++    }
++
++    // -----------------------------------------------------------------------
++    //  [6] which stations are watched
++    // -----------------------------------------------------------------------
++    {
++        Pci1203LinkWatch w; Run run;
++        FakeMon m = Healthy();
++        m.State(3, 0x02);                             // ring 1 0x00A never reaches OP (stuck PREOP)
++        m.Station(4, 0, 0x00A, 0x08);                 // an unaddressable twin: its state is someone else's
++        m.s[4].unaddressable = true;
++        Feed(w, m, 0, 30000, 200, run);
++        check(run.alarm == 0 && run.lost == 0 && w.watched() == 3,
++              "[6a] a station stuck in PREOP since boot is not watched; an unaddressable one is skipped: no alarm");
++        m.Fail(4, 0x8300000Ful);
++        Feed(w, m, 30200, 60000, 200, run);
++        check(run.alarm == 0 && run.lost == 0, "[6b] the unaddressable station's read failing does not count");
++        m.Up(3);                                      // it reaches OP -> watched from now on
++        Feed(w, m, 60200, 60200, 200, run);
++        check(w.watched() == 4, "[6c] the late station reaches OP: watched from then on");
++        m.State(3, 0x02);
++        Feed(w, m, 60400, 70400, 200, run);
++        check(run.alarm == 1 && has(run.lastAlarm, "r1 addr 0x00A state 0x02 PREOP"),
++              "[6d] ... and leaving OP again now alarms after 10 s");
++    }
++    {
++        //  A Refresh that no longer finds a module (removed on purpose): the ring is re-learnt, no alarm.
++        Pci1203LinkWatch w; Run run;
++        FakeMon m = Healthy();
++        Feed(w, m, 0, 1000, 200, run);
++        FakeMon after = Healthy();
++        after.s[3] = Pci1203SlaveSample();            // ring 1 0x00A gone from the scan
++        Feed(w, after, 1200, 30000, 200, run);
++        check(run.alarm == 0 && run.lost == 0 && w.watched() == 3,
++              "[6e] a scan without a module re-learns the ring (3 watched): no loss, no alarm");
++    }
++
++    // -----------------------------------------------------------------------
++    //  [7] SAFEOP is down; the text is safe
++    // -----------------------------------------------------------------------
++    {
++        Pci1203LinkWatch w; Run run;
++        FakeMon m = Healthy();
++        Feed(w, m, 0, 1000, 200, run);
++        m.State(0, 0x14);                             // SAFEOP + ERR
++        Feed(w, m, 2000, 12000, 200, run);
++        check(run.alarm == 1 && has(run.lastAlarm, "r0 addr 0x00E state 0x14 SAFEOP+ERR"),
++              "[7a] a station that drops to SAFEOP(+ERR) is down (strict OP, golden MyEtherCAT.cpp:531)");
++    }
++    {
++        Pci1203LinkWatch w; Run run;
++        FakeMon m = Healthy();
++        Feed(w, m, 0, 1000, 200, run);
++        m.c.open = false;
++        m.c.lastErrorText = std::string("vendor says: \"cable, unplugged\"; it's ") + std::string(600, 'x');
++        Feed(w, m, 2000, 12000, 200, run);
++        const std::string& a = run.lastAlarm;
++        check(run.alarm == 1 && a.find(',') == std::string::npos && a.find('"') == std::string::npos &&
++              a.find('\'') == std::string::npos, "[7b] the alarm text has no comma / double / single quote (csv + SQL errPart)");
++        check(a.size() <= (std::size_t)kPci1203LinkLostTextMax && has(a, "..."), "[7b] ... and is clipped to kPci1203LinkLostTextMax");
++    }
++    {
++        //  Many stations down: the first four are named, the rest counted.
++        Pci1203LinkWatch w; Run run;
++        FakeMon m; m.c.open = true;
++        for (int i = 0; i < 8; ++i) m.Station(i, 1, 0x010 + i, 0x08);
++        Feed(w, m, 0, 1000, 200, run);
++        for (int i = 0; i < 7; ++i) m.Fail(i, 0x8300000Ful);
++        Feed(w, m, 2000, 12000, 200, run);
++        check(run.alarm == 1 && has(run.lastAlarm, "7 stations not in OP") && has(run.lastAlarm, "(+3 more)")
++              && has(run.lastAlarm, "ring 1: 1/8 in OP"),
++              "[7c] 7 of 8 down: the tally, four named, \"+3 more\"");
++    }
++
++    // -----------------------------------------------------------------------
++    //  [8] the tick wraps
++    // -----------------------------------------------------------------------
++    {
++        check(Pci1203LinkElapsedMs(0x00001710ul, 0xFFFFF000ul) == 10000ul, "[8a] elapsed across the 32-bit wrap = 10000 ms");
++        Pci1203LinkWatch w; Run run;
++        FakeMon m = Healthy();
++        Feed(w, m, 0xFFFFE000ul, 0xFFFFEC80ul, 200, run);
++        m.Fail(2, 0x8300000Ful);
++        Feed(w, m, 0xFFFFF000ul, 0xFFFFFF00ul, 256, run);   // lost just before the wrap
++        Feed(w, m, 0x00000000ul, 0x00001700ul, 256, run);   // 9.98 s after the first lost sample
++        check(run.alarm == 0, "[8b] lost across the wrap, under 10 s: no alarm");
++        Feed(w, m, 0x00001710ul, 0x00001710ul, 256, run);
++        check(run.alarm == 1 && has(run.lastAlarm, "10.0 s"), "[8c] ... and at 10 s after the first lost sample: the alarm");
++    }
++
++    std::printf("== %d checks, %d failed ==\n", g_total, g_fail);
++    if (g_fail == 0) std::printf("RESULT: ALL PASS\n");
++    return g_fail == 0 ? 0 : 1;
++}
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 047b319..3b6db8f 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -4653,7 +4653,7 @@ int main(int argc, char** argv)
+                 //   Poll 之後改回 "tick"，後面 drain／發布卡住時的報法與改動前相同。
+                 WdMark("1203 Poll");
+                 { extern void W906_IoTiming(int); W906_IoTiming(3); mon->Poll(); W906_IoTiming(4); }  { extern void W906_MotorAccessPollTick(bool); extern bool W906_OwnerHeldSince(unsigned long long, unsigned long long&); static unsigned long long s_w906OwnerPoll = 0; W906_MotorAccessPollTick(W906_OwnerHeldSince(server.ControlOwner(), s_w906OwnerPoll)); }   //AI(W906-MERGE-0929) 20260929: review TK-1: a takeover (owner X -> Y) counts as "operator gone" for X for one beat, see W906_OwnerHeldSince at EOF   // AI(W906-IOWEB-P21) 20260925: phase mark for the click-latency log  //AI(W906-MT-E2) 20260925: right after Poll -- a 1203 LoopMove sees its arrival on the fresh sample (golden leg times), the Motor Test copy is refreshed (WebMotorAccessLive.cpp). Same line, so no line below moves
+-                WdMark("tick");
++                { extern void W906_Pci1203LinkWatchTick(); W906_Pci1203LinkWatchTick(); }  WdMark("tick");   //AI(W906-1203-LINKLOST) 20261001: EastSun 1001「1203 如果斷線10秒 要跳出異常」-- one link sample after every Poll; lost 10 s -> golden WAR16152 (EOF W906_Pci1203LinkWatchTick, EtherCAT/Pci1203LinkWatch.h). Same line, no line moves
+                 ioPolled = wasOpen || mon->card().open;  g_apiCacheDirty = true;   // AI(W906-IOWEB-P6) 20260924: right after Poll(), same thread  // AI(W906-IOWEB-P25) 20260925: was rebuilt HERE, before the drain, so every click queued during the Poll also waited 20-160 ms for four JSON strings; now marked, rebuilt after the drain
+             }
+         }
+@@ -8090,7 +8090,7 @@ void W906_NativeKeepaliveMain()
+             if (ht9045::TPci1203Monitor* mon = ht9045::Pci1203Monitor()) {
+                 WdMark("1203 Poll");
+                 { extern void W906_IoTiming(int); W906_IoTiming(3); mon->Poll(); W906_IoTiming(4); }  { extern void W906_MotorAccessPollTick(bool); extern bool W906_OwnerHeldSince(unsigned long long, unsigned long long&); static unsigned long long s_keepOwnerPoll = 0; W906_MotorAccessPollTick(W906_OwnerHeldSince(g_modalServer ? g_modalServer->ControlOwner() : 0ull, s_keepOwnerPoll)); }   //AI(W906-MERGE-NATIVE) 20260929: TK-1, same as the main loop's Poll line
+-                WdMark("tick (native window drag keepalive)");
++                { extern void W906_Pci1203LinkWatchTick(); W906_Pci1203LinkWatchTick(); }  WdMark("tick (native window drag keepalive)");   //AI(W906-1203-LINKLOST) 20261001: same as the main loop's Poll -- the drag keepalive Polls too, so it samples too (one watch, EOF). Same line
+                 g_apiCacheDirty = true;
+             }
+         }
+@@ -8713,4 +8713,77 @@ void W906_HmiShellQuit()
+     const UINT m = ::RegisterWindowMessageW(L"HT9045_HMI_SHELL_QUIT");
+     const BOOL ok = ::PostMessageW(h, m, 0, 0);
+     std::printf("[hmi-shell] program closing -> HMI window asked to close (%s)\n", ok ? "posted" : "PostMessage failed");
+-}
+\ No newline at end of file
++}
++
++// =============================================================================
++//  AI(W906-1203-LINKLOST) 20261001: EastSun 1001「1203 如果斷線10秒 要跳出異常」-- the host of
++//    EtherCAT/Pci1203LinkWatch.h. The DECISION (which signal, which stations, when it arms, the 10 s timer, "once")
++//    and the reason for every rule are in that header; this only feeds it and does what it asks.
++//
++//  WHERE: called right after every Pci1203Monitor()->Poll() -- the main loop's IO clock (kIoTickMs) and the native
++//    window drag keepalive (W906_NativeKeepaliveMain) -- on the tick thread. One sample per call, one static watch.
++//    Not called while a blocking dialog waits (no Poll runs there either); see the header on gaps.
++//
++//  RAISING = golden's own call for an EtherCAT ring disconnect, same arguments:
++//      ShowErrorMessage("WAR16152", 0, MMSystem, 0, S)        golden EtherCAT/MyEtherCAT.cpp:333 (port :511)
++//    (AlarmCodeList.txt WAR16152 "EtherCAT ring 1 was disconnected."; golden raises the same code for ring 0 and
++//    for "Ring Error" too, with the detail in errPart S. errPart here = the watch's reason: the signal, since when,
++//    the per-ring tally, the first stations not in OP.)  KCode 0 = a NOTICE, so through canary_support.cpp
++//    ShowErrorMessage -> W906_ShowErrorMessage_Hook = ForwardShowErrorMessage (this file) it does exactly what every
++//    kcode==0 alarm in this tree does, nothing more:
++//      * W906_AlarmStopLikeGolden (this file): StopAllMotor(true), SoftStop = SoftStart = SystemStart = false
++//        (golden note.cpp:795-801), W906_MotorAccessOnAlarm (DecStop to every 1203 axis the monitor opened,
++//        Motor Test HOME / LoopMove / jog cancelled -- WebMotorAccess.cpp MotorAccessOnAlarm);
++//      * the golden alarm record (forms/fNote_ShowError.cpp W906_ShowErrorMessageRecordLikeGolden: bOpenAllDoor,
++//        MyDBIEvent -> event log / HANDLER LOG / EventTracker WITH errPart, ProductionLog, fNote->ErrShowToForm);
++//      * the dialog-mailbox notice = the HMI popup (one 確認 button, WS dialog.notifyAck) + the alarm.* ring entry;
++//      * it returns at once (AI(W906-Q30-KZERO): no wait loop; no buzzer / Alarm Reset lamp -- that is the blocking
++//        path's W906ModalWaitScope).
++//    NOT done: golden follows WAR16152 with OpenEtherCatMastCard() (MyEtherCAT.cpp:584-591, close + re-open the
++//    card). The monitor is read-only and a re-open is the operator's Refresh (kCmdCardRescan). No START latch other
++//    than SystemStart=false (golden: the operator presses START again).
++//  GOLDEN DIFFERENCES, both from EastSun's request: golden alarms on the FIRST disconnect event its Timer1 check sees
++//    (main.cpp:3033-3040, every 200 x 30 ms), this one after kPci1203LinkLostAlarmMs of continuous loss; golden asks
++//    Acm_DevCheckEvent, this reads what the read-only monitor already samples (no new vendor call).
++//  LOG: stdout "[1203-link] ..." and an oplog LINK line (runcfg\logs\oplog_YYYYMMDD.txt) on arm / first lost sample /
++//    alarm / restore, Chinese + English. The alarm's own text (errPart) stays ASCII: it lands in the csv logs.
++// =============================================================================
++#ifdef INSTALL_1203_MONITOR
++#include "EtherCAT/Pci1203LinkWatch.h"
++void W906_Pci1203LinkWatchTick()
++{
++    ht9045::TPci1203Monitor* mon = ht9045::Pci1203Monitor();
++    if (!mon) return;
++    static ht9045::Pci1203LinkWatch s_watch;
++    SYSTEMTIME st;
++    ::GetLocalTime(&st);
++    char clock[16];
++    std::snprintf(clock, sizeof(clock), "%02d:%02d:%02d", st.wHour, st.wMinute, st.wSecond);
++    const ht9045::Pci1203LinkWatch::Result r =
++        s_watch.Step(ht9045::Pci1203LinkInputFromMonitor(*mon), (unsigned long)::GetTickCount(), clock);
++    const std::string sec = std::to_string((int)(ht9045::kPci1203LinkLostAlarmMs / 1000));   // the header's one constant
++    switch (r.event) {
++    case ht9045::Pci1203LinkWatch::kArmed:
++        std::printf("[1203-link] %s\n", r.text.c_str());
++        OpLine("LINK", "1203 連線正常，開始監看（斷線 " + sec + " 秒跳 WAR16152） / " + r.text);
++        break;
++    case ht9045::Pci1203LinkWatch::kLost:
++        std::printf("[1203-link] %s\n", r.text.c_str());
++        OpLine("LINK", "1203 斷線，開始計時（滿 " + sec + " 秒跳 WAR16152） / " + r.text);
++        break;
++    case ht9045::Pci1203LinkWatch::kAlarm:
++        std::printf("[1203-link] ALARM WAR16152: %s\n", r.text.c_str());
++        std::fflush(stdout);
++        OpLine("LINK", "1203 斷線滿 " + sec + " 秒 -> 跳 WAR16152（停機同其他告警） / " + r.text);
++        WdMark("1203 link lost -> ShowErrorMessage(WAR16152)");
++        ShowErrorMessage("WAR16152", 0, MMSystem, false, AnsiString(r.text.c_str()));   // golden EtherCAT/MyEtherCAT.cpp:333
++        break;
++    case ht9045::Pci1203LinkWatch::kRestored:
++        std::printf("[1203-link] %s\n", r.text.c_str());
++        OpLine("LINK", "1203 連線恢復 / " + r.text);
++        break;
++    default:
++        break;
++    }
++}
++#endif
+\ No newline at end of file
+-- 
+2.55.0.windows.5
+
