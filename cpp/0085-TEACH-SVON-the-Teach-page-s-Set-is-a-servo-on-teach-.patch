@@ -1,0 +1,101 @@
+From fa7e281cdcee91a53907895fbc1ed1c7e6913e43 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 21:59:05 +0800
+Subject: [PATCH] =?UTF-8?q?TEACH-SVON:=20the=20Teach=20page's=20Set=20is?=
+ =?UTF-8?q?=20a=20servo-on=20teach=20by=20default=20(no=20servo=20off,=20n?=
+ =?UTF-8?q?o=20dialog,=20the=20position=20at=20once);=20the=20hand=20teach?=
+ =?UTF-8?q?=20only=20with=20the=20page's=20=E6=89=8B=E5=8B=95=E6=95=99?=
+ =?UTF-8?q?=E5=B0=8E=20tick?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 1001 (screenshot of the hand-teach dialog): 「我這邊預設值是 激磁教導 如果要手動教導 旁邊請新增勾選 是否手動教導」.
+Changed from golden (SetButton*Click always: servo off -> fTeachShow -> GetTechPos -> servo on). TeachSetBegin reads
+params.hand: false / absent = the checks as before (motor, HomeFlag), no servo command, GetTechPos now (the dialog OK's
+read, servo staying on) -> result "taught" with positions for EditPtr; golden GetTechPos :3476 (ActiveMotorIndex==-1 ->
+nothing written) kept. hand true = the golden hand teach, unchanged.
+Test: TeachReq marks every teachSet start hand=true (the existing hand-teach cases); a new block checks the default:
+encoder 222 -> positions [222], no SvOn, no job. ctest WebMotorAccess, GaliRouteEngine, TeachButtonsGen, WebTeachLeave pass.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebMotorAccess.cpp              | 24 ++++++++++++++++++++++++
+ tests/test_web_motor_access.cpp | 19 +++++++++++++++++++
+ 2 files changed, 43 insertions(+)
+
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index 780531e..7d310c4 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -3555,6 +3555,30 @@ MotorAccessOutcome TeachSetBegin(const MotorAccessReq& r, long long wireId, IMot
+         job.servoOnAtEnd.push_back(t.kind == kTkSet064 ? !m.g.indexY : true);
+     }
+     if (t.kind == kTkSet064) TeachTwoMonitor(be, pageAmi, w.mot0, w.mot1);     // golden :3686（迴圈之後）UpdateMotorTeachTwoMonitor（R-W5B-4）
++    //AI(W906-TEACH-SVON) 20261001: EastSun 1001 (screenshot of the hand-teach dialog): 「我這邊預設值是 激磁教導 如果要手動教導
++    //  旁邊請新增勾選 是否手動教導」. Changed from golden (SetButton*Click ALWAYS does servo off -> fTeachShow -> GetTechPos -> servo
++    //  on): the page sends params.hand (its 手動教導 checkbox). hand false / absent = 激磁教導: the checks above (motor, HomeFlag)
++    //  as before, NO servo off, NO dialog -- GetTechPos at once (the same read as the dialog's OK, with the servo staying on)
++    //  into EditPtr; golden GetTechPos :3476 (ActiveMotorIndex==-1 -> nothing written) kept. hand true = golden's hand teach below.
++    {
++        std::map<std::string, bool>::const_iterator hf = r.flag.find("hand");
++        if (hf == r.flag.end() || !hf->second) {
++            std::vector<int> pos;
++            std::string err;
++            const bool write = job.amiValid;
++            if (write)
++                for (std::size_t i = 0; i < job.m.size(); ++i) {
++                    int p = 0;
++                    if (!TeachTechPos(be, job.m[i], job.kind == kTkSet140, p)) err += " 第 " + std::to_string(i + 1) + " 軸位置讀不到;";
++                    pos.push_back(p);
++                }
++            if (!err.empty()) return RefuseT(who + ": 激磁教導:" + err + "（位置沒有寫進欄位）", ec);
++            return TeachOk(r, write ? "taught" : "taughtNothing",
++                           write ? "激磁教導（伺服保持開）：讀編碼器位置寫進欄位 —— W906，EastSun 1001；勾「手動教導」才關伺服用手推"
++                                 : "golden GetTechPos：ActiveMotorIndex==-1 → return（SetButton020／064 不設 ActiveMotorIndex，按的時候頁面沒有選馬達）—— 什麼都不寫",
++                           write ? &pos : 0, true, false, &ec);
++        }
++    }
+     for (std::size_t i = 0; i < job.m.size(); ++i) {
+         std::string why;
+         if (!job.servoOff[i] || TeachServo(be, wireId, job.m[i], false, why)) continue;
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index f814d17..0832771 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -638,6 +638,9 @@ static MotorAccessReq TeachReq(const char* action, const char* btn, bool hasStar
+     r.button = std::string(action) == "teachSet" ? "SetButton*" : "GoButton*";
+     r.str["btn"] = btn;
+     if (hasStart) r.flag["start"] = start;
++    //AI(W906-TEACH-SVON) 20261001: a teachSet start without params.hand is now the servo-on teach (EastSun 1001); the hand-teach
++    //  cases below are the page's 手動教導 checkbox ticked -> hand=true. The servo-on case clears it (W906-TEACH-SVON block).
++    if (hasStart && start && std::string(action) == "teachSet") r.flag["hand"] = true;
+     return r;
+ }
+ // AI(W906-W5-b) 20260925: 最近一次送到卡上的「運轉速度」（kCmdAxSetSpeed＋kSpeedRun 的值；-1＝沒有）
+@@ -2861,6 +2864,22 @@ int main(int argc, char** argv)
+         MotorAccessDispatch(ma, 1, be);
+         CHECK(be.lastDirP[mRot] == true, "W5B-9: uMotorTest moveAbsolute (Move1203) records iLastRotatorDirP too");
+ 
++        // ---- AI(W906-TEACH-SVON) 20261001: 激磁教導（the default, no 手動教導 tick): no servo off, no dialog, the position at once
++        {
++            MotorAccessReq sv = TeachReq("teachSet", "SetButton030", true, true); sv.flag.erase("hand");
++            be.actPos[1] = 222.0;
++            const std::size_t x0s = be.executed.size();
++            o = MotorAccessDispatch(sv, 1, be);
++            bool svCmd = false;
++            for (std::size_t k = x0s; k < be.executed.size(); ++k) if (be.executed[k].kind == kCmdAxSvOn) svCmd = true;
++            CHECK(o.ok && Has(o.ackJson, "\"result\":\"taught\"") && Has(o.ackJson, "\"positions\":[222]") && !svCmd &&
++                  !Has(o.ackJson, "\"teachActive\":true") && !MotorAccessJobs().teachActive && Has(o.ackJson, "\"editPtr\":\"setEditInZSafeHeight\""),
++                  "TEACH-SVON: Set without the hand-teach tick -> the encoder 222 written to EditPtr at once, no servo command, no hand-teach job");
++            sv.flag["hand"] = false;
++            o = MotorAccessDispatch(sv, 1, be);
++            CHECK(o.ok && Has(o.ackJson, "\"positions\":[222]") && !MotorAccessJobs().teachActive, "TEACH-SVON: hand=false is the same servo-on teach");
++            be.actPos[1] = 0.0;
++        }
+         // ---- 手動教導 SetButton140（SetButton030 → MInArmZA 軸槽 1，ServoAlarmOn）
+         MotorAccessReq qs = TeachReq("teachSet", "SetButton030", true, true);
+         n0 = (int)be.executed.size();
+-- 
+2.55.0.windows.5
+

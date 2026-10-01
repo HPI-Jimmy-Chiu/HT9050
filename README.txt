@@ -509,4 +509,10 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   web 0059 b9f3566 MT-SAVEMOT-2 (web) —— Motor Test「回寫 Mot_Table」寫成功不再跳結果視窗，結果寫在狀態列（EastSun 1001「這視窗不要出現了」）；沒寫進去照舊跳視窗。
   cpp 0084 93794ab WORKLOG —— 工作紀錄補 10-01 第 42～43 項；第 3 節 110 補設計外掛部分（tools 0141，0.148.0）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0085 fa7e281 TEACH-SVON —— Teach 的 Set 預設改成激磁教導（伺服保持開、直接讀位置），勾「手動教導」才關伺服用手推（EastSun 1001「我這邊預設值是 激磁教導」）；
+                    跟原版不同（原版 Set 一律手動教導）。ctest WebMotorAccess（新增激磁教導段）、GaliRouteEngine、TeachButtonsGen、WebTeachLeave 通過。
+  web 0060 f56a47b TEACH-SVON／TEACH-HOMEOK／WIREBAR-THRU (web) —— Teach 右邊加「手動教導」勾選與第 11 顆燈「Home OK」（回原點完成）；
+                    所有頁面上方的「讀取完成」狀態條改成滑鼠點穿（theme.css）。無頭瀏覽器量過不重疊。
+  cpp 0086 58a2141 WORKLOG —— 工作紀錄補 10-01 第 44～47 項（含馬達頁全面檢查的結果）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
