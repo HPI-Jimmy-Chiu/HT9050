@@ -331,4 +331,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     CFG_AxOrgLogic」取消（會把訊號意思反過來）。⚠ 給筆電：Motor/myEthercatmotor.cpp 的 ScanMotorStatus／GetHomeIO（筆電擁有）
                     仍把 ORG=1 當在原點，WB_ENGINE_MOTOR_1203 武裝時要照這條規則。ctest WebMotorAccess 通過（多 3 項）、production_audit 0 變更。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（0049 的 16 處命中都是 bNeedPassword 之類的變數名與註解）；沒有機台設定檔。
+  tools 0124 HTDESIGNER-126（0.126.0）—— 屬性視窗用真的滑鼠、按鍵測出兩個會不知不覺改值的問題並修好：數值欄有焦點時滾輪會改值（Left 54→52）、下拉選單按 ↑↓ 會改值；現在滾輪只捲動、↑↓＝換列（Alt+↓ 打開清單）。切到事件分頁時預設事件有焦點；網頁事件空白 Enter／雙擊＝預設名稱。方向鍵規則照 EastSun 裁決維持 XAML 風格。三層測試全過。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
