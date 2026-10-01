@@ -1,0 +1,365 @@
+From 5b766a4121a6ac21feade104577e21eb9d4afa1e Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 19:55:17 +0800
+Subject: [PATCH] CLOSE-BUSY: Exit closes when every 1203 axis is servo OFF /
+ in alarm with command velocity 0, even if the card reads BUSY and refuses the
+ stop
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20261001 19:11 "我關軟體的時候 關不了 你要想辦法": after the 16:36:20 power loss (every axis alm, cardErr 0x80005115) all 19
+axes went ERROR_STOP -> BUSY (state 11) at 16:39:03 with servo OFF and cmd velocity 0; at Exit the decel stop + ExtDrive 0 drew
+38 vendor errors and the read-back stayed BUSY, so Q44 blocked the close -- and [強制關閉] needs golden Exit's level (Operator had
+none), so the program could not be closed.
+FileRW/MainClose.cpp: new w906q44::AxisUndrivable -- monitor sample valid, command velocity 0, SVON bit off or ALM bit on, state
+DISABLE / READY / ERROR_STOP / BUSY -> the card cannot drive it, it counts as stopped; a failed stop on such an axis is "not
+needed", not "not sent". Still holds as before: servo ON without alarm, velocity != 0, any motion state (HOMING included, even
+at velocity 0), servo reading invalid (ioValid defaults false). Reason text puts the conclusion first (the oplog keeps 400
+bytes) and names the first vendor return code. The [強制關閉] level rule is unchanged.
+tests/test_mainclose_stop.cpp [20]: the 19:11 case closes; servo ON / PTP / HOMING / velocity / invalid-read cases still hold;
+T1-T19 unchanged. ctest MainCloseStop passes.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ FileRW/MainClose.cpp          |  69 ++++++++++++---
+ tests/test_mainclose_stop.cpp | 161 ++++++++++++++++++++++++++++++++++
+ 2 files changed, 218 insertions(+), 12 deletions(-)
+
+diff --git a/FileRW/MainClose.cpp b/FileRW/MainClose.cpp
+index 09e3f36..18eeede 100644
+--- a/FileRW/MainClose.cpp
++++ b/FileRW/MainClose.cpp
+@@ -1568,7 +1568,8 @@ struct AxisFact {
+     bool     valid;        // 這一次輪詢讀到了
+     unsigned state;        // Acm_AxGetState（STA_AX_*，EtherCAT/vendor/AdvMotDrv.h:793-806）
+     double   cmdVel;       // Acm_AxGetCmdVelocity
+-    AxisFact() : index(-1), station(-1), valid(false), state(0), cmdVel(0.0) {}
++    bool ioValid; unsigned long motionIO; unsigned long driveErr; std::string driveErrText;   //AI(W906-CLOSE-BUSY) 20261001: EastSun 1001「我關軟體的時候 關不了」—— ioValid＝Acm_AxGetMotionIO 這一次讀到了（預設 false＝伺服／警報不知道 ⇒ 照舊擋，fail-safe）；motionIO 原始值（SVON 0x4000、ALM 0x2）；driveErr／driveErrText＝卡片最後錯誤（Acm_GetLastError＋廠商字，Pci1203Monitor.h Pci1203AxisSample）
++    AxisFact() : index(-1), station(-1), valid(false), state(0), cmdVel(0.0), ioValid(false), motionIO(0), driveErr(0) {}
+ };
+ 
+ struct WriteFact {                 // 關加熱器繼電器的那一筆 1203 輸出寫入
+@@ -1593,7 +1594,7 @@ struct Facts {
+     // 1203 軸的停止命令（W906_Stop1203AllHook 前後的命令面計數差）
+     bool stopHook, ctlArmed, ctlDry;
+     unsigned long stopIssued, stopRefused, stopDry;
+-    int stopVendorErr;
++    int stopVendorErr; unsigned long stopVendorRet;   //AI(W906-CLOSE-BUSY) 20261001: stopVendorRet＝第一筆廠商回錯的碼（命令面 log「ISSUED … -> 0x…」，Pci1203Control.cpp:2155；0＝沒有）
+     std::vector<AxisFact> axes;    // 只放監看器開成功的軸
+     // 加熱器繼電器 SW[SwHeaterRelay]
+     bool relayEnable, relayIs1203;
+@@ -1603,7 +1604,7 @@ struct Facts {
+     bool relayByteValid;
+     int  relayBit;                 // 讀回的那一位元（0／1）
+     Facts() : simBuild(false), monPresent(false), cardEverOpen(false), cardUsable(false), pollsSinceIssue(0),
+-              stopHook(false), ctlArmed(false), ctlDry(false), stopIssued(0), stopRefused(0), stopDry(0), stopVendorErr(0),
++              stopHook(false), ctlArmed(false), ctlDry(false), stopIssued(0), stopRefused(0), stopDry(0), stopVendorErr(0), stopVendorRet(0),
+               relayEnable(false), relayIs1203(false), relayIsaBase(-1), relayRing(-1), relayIp(-1), relayPort(-1),
+               relaySlot(-1), relayByteValid(false), relayBit(0) {}
+ };
+@@ -1641,6 +1642,23 @@ inline bool AxisStopped(unsigned state, double cmdVel)
+     const unsigned s = state & 0xFFu;
+     return (s == 0u || s == 1u || s == 3u) && std::fabs(cmdVel) < 1e-9;
+ }
++//  AI(W906-CLOSE-BUSY) 20261001: EastSun 1001「我關軟體的時候 關不了」—— 卡片驅動不了的軸，關站時算已停（停止命令是「不需要」，不是「沒送出」）。
++//    實測 runcfg\logs\oplog_20261001.txt：16:36:20 每一軸 alm 0->1、READY->ERROR_STOP（cardErr 0x80005115 "Alarm happened."，馬達／驅動器電源掉了），
++//    伺服 OFF；16:39:03 每一軸 ERROR_STOP->BUSY（STA_AX_BUSY 11，AdvMotDrv.h:803）、命令速度 0，一直到 19:11 關站。減速停止＋ExtDrive 0 共
++//    38 筆全部廠商回錯 ⇒ 上面的 AxisStopped 不認 BUSY ⇒ motor1203 擋下；［強制關閉］要 Exit 的等級（Operator 0 不夠）⇒ 關不了。
++//    規則（每一條都要成立，否則照舊由 AxisStopped 判、照舊擋）：這次輪詢讀到了 motionIO（ioValid；呼叫端另外要求 valid）、命令速度 0、
++//    伺服 OFF（AX_MOTION_IO_SVON 0）或驅動器警報（AX_MOTION_IO_ALM 1）、而且狀態不是運動中 —— 只認 DISABLE 0／READY 1／ERROR_STOP 3／BUSY 11；
++//    STOPPING／HOMING／PTP／CONTI／SYNC／EXT_JOG／EXT_MPG／PAUSE／WAIT_*／EXT_JOG_READY 一律照舊擋（驅動器自己回原點，6098h 方法 24／28，
++//    卡片的命令速度可能是 0）。伺服 ON 又沒有警報 ⇒ 卡片還能驅動它 ⇒ 照舊擋。
++const unsigned long kQ44IoAlm  = 0x00000002ul;   // AX_MOTION_IO_ALM （EtherCAT/vendor/AdvMotDrv.h:2024）
++const unsigned long kQ44IoSvon = 0x00004000ul;   // AX_MOTION_IO_SVON（EtherCAT/vendor/AdvMotDrv.h:2037）
++inline bool AxisUndrivable(bool ioValid, unsigned long motionIO, unsigned state, double cmdVel)
++{
++    const unsigned s = state & 0xFFu;
++    const bool noMotionState = (s == 0u || s == 1u || s == 3u || s == 11u);
++    const bool cardCannotDrive = (motionIO & kQ44IoSvon) == 0 || (motionIO & kQ44IoAlm) != 0;
++    return ioValid && noMotionState && cardCannotDrive && std::fabs(cmdVel) < 1e-9;
++}
+ 
+ inline std::string Fmt(const char* f, ...)
+ {
+@@ -1686,25 +1704,44 @@ inline Result Evaluate(const Facts& f, unsigned long elapsedMs, unsigned long se
+             else if (f.stopRefused > 0 || f.stopVendorErr > 0) cmd = Fmt("停止命令被拒 %lu 筆、廠商回錯 %d 筆", f.stopRefused, f.stopVendorErr);
+             else if (f.ctlDry)                                 cmd = "1203 命令面是 DRY RUN：停止命令只記錄、沒有送到卡";
+             else { cmd = Fmt("停止命令已送到卡（ISSUED %lu 筆）", f.stopIssued); cannot = false; }
+-            std::string moving, unknown;
+-            int nMov = 0, nUnk = 0;
++            std::string moving, unknown, dead;                                  //AI(W906-CLOSE-BUSY) 20261001: + dead＝卡片驅動不了、視為已停的軸（AxisUndrivable）
++            int nMov = 0, nUnk = 0, nDead = 0;
+             for (std::size_t i = 0; i < f.axes.size(); ++i) {
+                 const AxisFact& a = f.axes[i];
+                 if (!a.valid) {
+                     unknown += (nUnk++ ? "、" : "") + Fmt("軸 %d（站 %d）", a.index, a.station);
+-                } else if (!AxisStopped(a.state, a.cmdVel)) {
+-                    moving += (nMov++ ? "、" : "") + Fmt("軸 %d（站 %d）狀態 %u %s、命令速度 %g", a.index, a.station, a.state & 0xFFu, AxisStateName(a.state), a.cmdVel);
++                } else if (AxisStopped(a.state, a.cmdVel)) {
++                    // 停了（READY／DISABLE／ERROR_STOP，命令速度 0）
++                } else if (AxisUndrivable(a.ioValid, a.motionIO, a.state, a.cmdVel)) {   //AI(W906-CLOSE-BUSY) 20261001: 伺服 OFF／驅動器警報、命令速度 0、不在運動狀態 ⇒ 視為已停
++                    const bool svoOff = (a.motionIO & kQ44IoSvon) == 0, alm = (a.motionIO & kQ44IoAlm) != 0;
++                    dead += (nDead++ ? "、" : "") + Fmt("軸 %d（站 %d）%s%s%s、狀態 %u %s、命令速度 0", a.index, a.station, svoOff ? "伺服 OFF" : "",
++                                                       svoOff && alm ? "、" : "", alm ? "驅動器警報" : "", a.state & 0xFFu, AxisStateName(a.state)) +
++                            (a.driveErr ? Fmt("、卡片錯誤 0x%08lX", a.driveErr) + Paren(a.driveErrText) : std::string());
++                } else {
++                    const bool wouldBeIdle = std::fabs(a.cmdVel) < 1e-9 && ((a.state & 0xFFu) == 11u);   //AI(W906-CLOSE-BUSY) 20261001: BUSY、命令速度 0 卻沒有視為已停 ⇒ 說為什麼
++                    moving += (nMov++ ? "、" : "") + Fmt("軸 %d（站 %d）狀態 %u %s、命令速度 %g", a.index, a.station, a.state & 0xFFu, AxisStateName(a.state), a.cmdVel) +
++                              (!wouldBeIdle ? std::string() : !a.ioValid ? "（伺服／警報讀不到，不能視為已停）" : "（伺服 ON、沒有警報：卡片還能驅動它，不能視為已停）");
+                 }
+             }
+-            const bool allStopped = fresh && nMov == 0 && nUnk == 0;
++            const bool allStopped = fresh && nMov == 0 && nUnk == 0;            // dead 算停
++            const int  nAx = (int)f.axes.size();
+             std::string rb;                                                     // 讀回：只當說明
+             if (!fresh)          rb = "讀回還沒更新";
+-            else if (allStopped) rb = Fmt("%d 軸讀回都已停（READY／DISABLE／ERROR_STOP，命令速度 0）", (int)f.axes.size());
++            else if (allStopped) rb = nDead ? Fmt("%d 軸讀回都已停；視為已停的 %d 軸：", nAx, nDead) + dead +
++                                              (nDead < nAx ? Fmt("；其餘 %d 軸 READY／DISABLE／ERROR_STOP，命令速度 0", nAx - nDead) : std::string())
++                                            : Fmt("%d 軸讀回都已停（READY／DISABLE／ERROR_STOP，命令速度 0）", nAx);
+             else                 rb = (nMov ? "讀回還在減速：" + moving : std::string()) + (nMov && nUnk ? "；" : "") +
+-                                      (nUnk ? "讀不回軸狀態：" + unknown : std::string());
++                                      (nUnk ? "讀不回軸狀態（伺服／命令速度都沒讀到，讀回不能證明它停了）：" + unknown : std::string()) +
++                                      (nDead ? Fmt("；視為已停的 %d 軸（伺服 OFF／驅動器警報、命令速度 0）：", nDead) + dead : std::string());
+             if (!cannot) {
+                 it.state  = kOk;
+                 it.reason = cmd + "——送到了就算停（Steven 20260929）；" + rb;
++            } else if (allStopped && nDead > 0) {                               //AI(W906-CLOSE-BUSY) 20261001: 結論放最前面（oplog 的 OK 行只留回覆前 400 字，tools/wb_serve.cpp:8272 OpClip(a, 400)）
++                it.state  = kOk;
++                it.reason = Fmt("%d 軸伺服 OFF／驅動器警報、命令速度 0 → 視為已停（", nDead) + cmd +
++                            (f.stopVendorRet ? Fmt("，第一筆 0x%08lX", f.stopVendorRet) : std::string()) +
++                            (f.stopVendorErr > 0 ? "：伺服 OFF／警報中卡片不收命令" : "") +
++                            "；卡片驅動不了的軸，停止命令是「不需要」，不是「沒送出」）；" + rb;
+             } else if (allStopped) {
+                 it.state  = kOk;
+                 it.reason = rb + "——停止命令沒送到，但讀回確定停了；" + cmd;
+@@ -2073,7 +2110,7 @@ std::chrono::steady_clock::time_point s_q44T0, s_q44DoneAt;
+ w906q44::Result    s_q44Last;
+ w906q44::WriteFact s_q44Relay;
+ unsigned long      s_q44StopIssued = 0, s_q44StopRefused = 0, s_q44StopDry = 0;
+-int                s_q44StopVendorErr = 0;
++int                s_q44StopVendorErr = 0;  unsigned long s_q44StopVendorRet = 0;   //AI(W906-CLOSE-BUSY) 20261001: + 第一筆廠商回錯的碼（Q44Issue 從命令面 log 取）
+ std::string        s_q44ForceText;
+ 
+ // AI(W906-D012) 20260929 [W906] Q44 A3：主控台事件。W906_ConsoleQuit 跑在系統另開的執行緒（見檔尾），只碰這幾個 atomic；
+@@ -2168,6 +2205,13 @@ void Q44Issue()
+     const IoSnap b = TakeSnap();
+     const IoDelta d = TakeDelta(a, b);
+     s_q44StopIssued = d.issued; s_q44StopRefused = d.refused; s_q44StopDry = d.dry; s_q44StopVendorErr = d.vendorErr;
++    s_q44StopVendorRet = 0;                                                     //AI(W906-CLOSE-BUSY) 20261001: 第一筆廠商回錯的碼（同 TakeDelta 數 vendorErr 的那幾行；格式 Pci1203Control.cpp:2155「ISSUED   %s  -> 0x%08lX」）
++    for (std::size_t i = 0; i < d.lines.size() && s_q44StopVendorRet == 0; ++i) {
++        const std::string& L = d.lines[i];
++        const std::string::size_type p = L.rfind("-> 0x");
++        unsigned long v = 0;
++        if (L.compare(0, 6, "ISSUED") == 0 && p != std::string::npos && std::sscanf(L.c_str() + p + 3, "0x%lx", &v) == 1) s_q44StopVendorRet = v;
++    }
+ 
+     // ③ golden SW[SwHeaterRelay].Off()（golden :12157）
+     TMySwitch& sw = SW[SwHeaterRelay];
+@@ -2261,6 +2305,7 @@ w906q44::Facts Q44Facts()
+                 a.valid   = s.valid;
+                 a.state   = s.state;
+                 a.cmdVel  = s.cmdVel;
++                a.ioValid = s.valid; a.motionIO = s.motionIO; a.driveErr = s.driveErr; a.driveErrText = s.driveErrText;   //AI(W906-CLOSE-BUSY) 20261001: motionIO 跟 state／cmdVel 同一個 valid（Pci1203Monitor.cpp Poll：五個讀取都成功才 valid）
+                 f.axes.push_back(a);
+             }
+         }
+@@ -2272,7 +2317,7 @@ w906q44::Facts Q44Facts()
+     f.stopIssued    = s_q44StopIssued;
+     f.stopRefused   = s_q44StopRefused;
+     f.stopDry       = s_q44StopDry;
+-    f.stopVendorErr = s_q44StopVendorErr;
++    f.stopVendorErr = s_q44StopVendorErr;  f.stopVendorRet = s_q44StopVendorRet;   //AI(W906-CLOSE-BUSY) 20261001
+ 
+     const TMySwitch& sw = SW[SwHeaterRelay];
+     f.relayEnable  = sw.Enable;
+diff --git a/tests/test_mainclose_stop.cpp b/tests/test_mainclose_stop.cpp
+index 4e46140..37861c5 100644
+--- a/tests/test_mainclose_stop.cpp
++++ b/tests/test_mainclose_stop.cpp
+@@ -37,6 +37,11 @@
+ //    [19] 隱藏視窗：WM_QUERYENDSESSION 一律回 TRUE；WM_ENDSESSION(TRUE) 對到主控台登出（5）／關機（6）、(FALSE) 不動作；登出／關機＝送停機、
+ //         不寫 MES2109、不寫 Program Close（[16][18] 原本 5／6 的兩條改了，⛔ 標在該行）；X 與第二次 Ctrl-C 照舊；結束行程的 owner 先到先得、
+ //         後到的不寫、不結束行程（五種到達順序）。真的 WM_QUERYENDSESSION／WM_ENDSESSION 在 ctest 裡來不了（要真的登出／關機）。
++//  AI(W906-CLOSE-BUSY) 20261001: EastSun 1001「我關軟體的時候 關不了」（oplog_20261001 19:11：19 軸 BUSY、伺服 OFF、驅動器警報、命令速度 0，
++//    停止命令 38 筆廠商回錯 ⇒ motor1203 blocked；Operator 按不了［強制關閉］）：
++//    [20] 卡片驅動不了的軸（讀到了、命令速度 0、伺服 OFF 或驅動器警報、狀態 DISABLE／READY／ERROR_STOP／BUSY）視為已停 ⇒ 不擋，理由列出哪幾軸、為什麼、
++//         第一筆廠商回錯碼，結論在理由最前面（oplog 只留回覆前 400 字）；伺服 ON 在動／伺服 ON 的 BUSY／運動狀態／命令速度不是 0 ⇒ 照舊擋；
++//         伺服讀不到（ioValid=false）或整個樣本讀不到（valid=false）⇒ 照舊擋，理由說讀不到。［強制關閉］的等級規則不動（[12]）。
+ //    NOT COVERED（A2／A3 機台那一半）：wb_serve 兩個分派入口的呼叫、W906_ConsoleQuit 的執行緒互動、Q44ConsoleTick 送命令 —— 要 wb_serve 探針或機邊驗。
+ //    NOT COVERED（A3W）：建窗、視窗執行緒、真的登出／關機訊息、ExitProcess、兩條執行緒真的同時到 —— 機邊驗（Steven01／HT9050 真的登出、關機）。
+ //  NOT COVERED：送兩個命令本身（Q44Issue：golden StopAllMotor、W906_Stop1203AllHook、SW[].Off()、命令面 DO 寫 0）、主迴圈的
+@@ -662,6 +667,161 @@ void T19_SessionEnd()
+     CHECK(!SessionEndWindowExits(kExitNotMine, false));
+ }
+ 
++// ---- AI(W906-CLOSE-BUSY) 20261001: EastSun 1001「我關軟體的時候 關不了」—— 卡片驅動不了的軸（伺服 OFF／驅動器警報、命令速度 0、
++//      不在運動狀態）關站時視為已停；停止命令回錯在這種軸上是「不需要」，不是「沒送出」。
++//      現場（runcfg\logs\oplog_20261001.txt）：16:36:20 alm 0->1 READY->ERROR_STOP（cardErr 0x80005115 "Alarm happened."）、svo 0；
++//      16:39:03 ERROR_STOP->BUSY、命令速度 0；19:11 Exit：停止命令「被拒 0 筆、廠商回錯 38 筆」、19 軸讀回 BUSY ⇒ blocked。
++const unsigned long kSvon = 0x00004000ul, kAlm = 0x00000002ul;   // AX_MOTION_IO_SVON／AX_MOTION_IO_ALM（EtherCAT/vendor/AdvMotDrv.h:2037／:2024）
++
++AxisFact IoAxis(int index, unsigned state, double vel, unsigned long motionIO, bool ioValid = true)
++{
++    AxisFact a = Axis(index, state, vel);
++    a.ioValid = ioValid; a.motionIO = motionIO;
++    return a;
++}
++
++// 19:11 那一刻的 Facts：卡開著、命令面 LIVE、停止命令 38 筆全部廠商回錯；19 軸 BUSY（11）、伺服 OFF、驅動器警報、命令速度 0；繼電器正常關掉
++Facts BusyAfterPowerLoss()
++{
++    Facts f = Base1203();
++    f.axes.clear();
++    for (int i = 0; i < 19; ++i) {
++        AxisFact a = IoAxis(i, 11, 0.0, kAlm);                       // SVON 0、ALM 1
++        a.driveErr = 0x80005115ul; a.driveErrText = "Alarm happened.";
++        f.axes.push_back(a);
++    }
++    f.axes[0].station = 14;
++    f.stopIssued = 38; f.stopVendorErr = 38; f.stopRefused = 0;
++    f.stopVendorRet = 0x80001234ul;                                  // 測試值（現場那 38 筆的碼沒有留在 oplog）
++    return f;
++}
++
++void T20_CloseBusyServoOff()
++{
++    // 純判斷
++    CHECK(AxisUndrivable(true, 0, 11, 0.0));                         // BUSY、伺服 OFF、命令速度 0
++    CHECK(AxisUndrivable(true, kSvon | kAlm, 11, 0.0));              // BUSY、伺服 ON 但驅動器警報
++    CHECK(AxisUndrivable(true, kAlm, 0x010Bu, 0.0));                 // 高位元不看（同 AxisStopped）
++    CHECK(!AxisUndrivable(true, kSvon, 11, 0.0));                    // 伺服 ON、沒有警報 ⇒ 卡片還能驅動
++    CHECK(!AxisUndrivable(false, 0, 11, 0.0));                       // 伺服讀不到 ⇒ 不知道 ⇒ 不算
++    CHECK(!AxisUndrivable(true, 0, 11, 25.0));                       // 命令速度不是 0
++    CHECK(!AxisUndrivable(true, 0, 11, -0.5));
++    const unsigned motion[] = { 2, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15 };   // STOPPING／HOMING／PTP／CONTI／SYNC／EXT_JOG／EXT_MPG／PAUSE／WAIT_*／EXT_JOG_READY
++    for (unsigned k = 0; k < sizeof(motion) / sizeof(motion[0]); ++k) CHECK(!AxisUndrivable(true, kAlm, motion[k], 0.0));
++    CHECK(AxisFact().ioValid == false);                              // 預設＝伺服不知道（fail-safe：沒填的呼叫端照舊）
++
++    // (a) 現場那一刻：全部伺服 OFF＋警報、BUSY、命令速度 0，停止命令全部廠商回錯 ⇒ 不擋、關站繼續
++    {
++        Facts f = BusyAfterPowerLoss();
++        f.pollsSinceIssue = 0;                                       // 送完第一圈（19:11:26.765 elapsed 59 ms）：讀回還沒來 ⇒ 等（照舊）
++        Result r = Evaluate(f, 59, kSettleMs);
++        CHECK(StateOf(r, "motor1203") == kWait);
++        CHECK(r.verdict == kPending);
++        f.pollsSinceIssue = 3;                                       // 讀回來了（19:11:30.127 elapsed 874 ms：今天這裡 blocked）
++        r = Evaluate(f, 874, kSettleMs);
++        CHECK(StateOf(r, "motor1203") == kOk);
++        CHECK(!Holds(StateOf(r, "motor1203")));
++        CHECK(StateOf(r, "heaterRelay") == kOk);
++        CHECK(r.verdict == kConfirmed);
++        const Item* it = Find(r, "motor1203");
++        CHECK(it != 0 && it->reason.compare(0, std::string("19 軸伺服 OFF／驅動器警報、命令速度 0 → 視為已停").size(),
++                                            "19 軸伺服 OFF／驅動器警報、命令速度 0 → 視為已停") == 0);   // 結論在最前面
++        CHECK(it != 0 && it->reason.find("廠商回錯 38 筆") != std::string::npos &&
++              it->reason.find("廠商回錯 38 筆") + std::string("廠商回錯 38 筆").size() <= 130);   // oplog 的 OK 行只留回覆前 400 字（理由大約剩 140 字節）
++        CHECK(Has(r, "motor1203", "第一筆 0x80001234"));
++        CHECK(Has(r, "motor1203", "停止命令是「不需要」，不是「沒送出」"));
++        CHECK(Has(r, "motor1203", "19 軸讀回都已停；視為已停的 19 軸："));
++        CHECK(Has(r, "motor1203", "軸 0（站 14）伺服 OFF、驅動器警報、狀態 11 BUSY、命令速度 0、卡片錯誤 0x80005115（Alarm happened.）"));
++        CHECK(Has(r, "motor1203", "軸 18（站 19）伺服 OFF、驅動器警報、狀態 11 BUSY"));
++        CHECK(!Has(r, "motor1203", "讀回還在減速"));
++
++        Facts g = BusyAfterPowerLoss();                              // 伺服 OFF、沒有警報（只關了伺服）也算；混著 ERROR_STOP／READY 的軸
++        g.pollsSinceIssue = 3;
++        for (std::size_t i = 0; i < g.axes.size(); ++i) g.axes[i].motionIO = 0;
++        g.axes[3] = IoAxis(3, 3, 0.0, kAlm);                         // ERROR_STOP（本來就算停）
++        g.axes[4] = IoAxis(4, 1, 0.0, kSvon);                        // READY、伺服 ON、命令速度 0（本來就算停）
++        g.stopVendorRet = 0;
++        r = Evaluate(g, 900, kSettleMs);
++        CHECK(StateOf(r, "motor1203") == kOk);
++        CHECK(r.verdict == kConfirmed);
++        CHECK(Has(r, "motor1203", "17 軸伺服 OFF／驅動器警報、命令速度 0 → 視為已停"));
++        CHECK(Has(r, "motor1203", "其餘 2 軸 READY／DISABLE／ERROR_STOP，命令速度 0"));
++        CHECK(Has(r, "motor1203", "軸 1（站 2）伺服 OFF、狀態 11 BUSY"));
++        CHECK(!Has(r, "motor1203", "第一筆"));                       // 沒有碼就不寫
++
++        Facts h = BusyAfterPowerLoss();                              // 停止命令有送到卡（沒有回錯）＋BUSY 伺服 OFF ⇒ 照舊 ok（送到了就算停），讀回照樣列出
++        h.pollsSinceIssue = 3; h.stopVendorErr = 0; h.stopVendorRet = 0;
++        r = Evaluate(h, 900, kSettleMs);
++        CHECK(StateOf(r, "motor1203") == kOk);
++        CHECK(Has(r, "motor1203", "送到了就算停"));
++        CHECK(Has(r, "motor1203", "視為已停的 19 軸"));
++    }
++
++    // (b) 有一軸伺服 ON 而且命令速度不是 0 ⇒ 照舊擋（理由同時列出其他視為已停的軸）
++    {
++        Facts f = BusyAfterPowerLoss();
++        f.pollsSinceIssue = 3;
++        f.axes[5] = IoAxis(5, 5, 1200.0, kSvon);                     // PTP_MOT、伺服 ON
++        Result r = Evaluate(f, 874, kSettleMs);
++        CHECK(StateOf(r, "motor1203") == kBlocked);
++        CHECK(r.verdict == kBlock);
++        CHECK(Has(r, "motor1203", "停止命令被拒 0 筆、廠商回錯 38 筆"));
++        CHECK(Has(r, "motor1203", "讀回還在減速：軸 5（站 6）狀態 5 PTP_MOT、命令速度 1200"));
++        CHECK(Has(r, "motor1203", "視為已停的 18 軸"));
++
++        Facts g = BusyAfterPowerLoss();                              // 伺服 ON、沒有警報、BUSY、命令速度 0 ⇒ 卡片還能驅動它 ⇒ 擋，說為什麼
++        g.pollsSinceIssue = 3;
++        g.axes[2] = IoAxis(2, 11, 0.0, kSvon);
++        r = Evaluate(g, 874, kSettleMs);
++        CHECK(StateOf(r, "motor1203") == kBlocked);
++        CHECK(Has(r, "motor1203", "軸 2（站 3）狀態 11 BUSY、命令速度 0（伺服 ON、沒有警報：卡片還能驅動它，不能視為已停）"));
++
++        Facts m = BusyAfterPowerLoss();                              // 伺服 OFF 但在運動狀態（HOMING，驅動器回原點時卡片命令速度可能是 0）⇒ 照舊擋
++        m.pollsSinceIssue = 3;
++        m.axes[7] = IoAxis(7, 4, 0.0, kAlm);
++        r = Evaluate(m, 874, kSettleMs);
++        CHECK(StateOf(r, "motor1203") == kBlocked);
++        CHECK(Has(r, "motor1203", "軸 7（站 8）狀態 4 HOMING"));
++
++        Facts v = BusyAfterPowerLoss();                              // 伺服 OFF、BUSY，但命令速度不是 0 ⇒ 照舊擋
++        v.pollsSinceIssue = 3;
++        v.axes[9].cmdVel = 30.0;
++        r = Evaluate(v, 874, kSettleMs);
++        CHECK(StateOf(r, "motor1203") == kBlocked);
++        CHECK(Has(r, "motor1203", "軸 9（站 10）狀態 11 BUSY、命令速度 30"));
++    }
++
++    // (c) 伺服讀不到 ⇒ 照舊擋（fail-safe），理由說讀不到
++    {
++        Facts f = BusyAfterPowerLoss();
++        f.pollsSinceIssue = 3;
++        f.axes[4].ioValid = false;                                   // motionIO 沒讀到（state／命令速度讀到了）
++        Result r = Evaluate(f, 874, kSettleMs);
++        CHECK(StateOf(r, "motor1203") == kBlocked);
++        CHECK(r.verdict == kBlock);
++        CHECK(Has(r, "motor1203", "軸 4（站 5）狀態 11 BUSY、命令速度 0（伺服／警報讀不到，不能視為已停）"));
++        r = Evaluate(f, kSettleMs + 1000, kSettleMs);                // 等多久都一樣
++        CHECK(StateOf(r, "motor1203") == kBlocked);
++
++        Facts g = BusyAfterPowerLoss();                              // 整個樣本讀不到（valid=false：伺服、命令速度都沒有）
++        g.pollsSinceIssue = 3;
++        g.axes[6].valid = false;
++        r = Evaluate(g, 874, kSettleMs);
++        CHECK(StateOf(r, "motor1203") == kBlocked);
++        CHECK(Has(r, "motor1203", "讀不回軸狀態（伺服／命令速度都沒讀到，讀回不能證明它停了）：軸 6（站 7）"));
++        CHECK(Has(r, "motor1203", "視為已停的 18 軸"));
++    }
++
++    // SIM 建置照舊不設限；［強制關閉］的等級規則不動（同 [12]）
++    {
++        Facts f = BusyAfterPowerLoss();
++        f.simBuild = true; f.pollsSinceIssue = 3;
++        f.axes[5] = IoAxis(5, 5, 1200.0, kSvon);
++        CHECK(Evaluate(f, 874, kSettleMs).verdict == kConfirmed);
++        CHECK(!ForceAllowed(0, 5));                                  // Operator 0 照樣按不了（要 Exit 的等級 LevelSet.AccessLevel[6]）
++    }
++}
++
+ }  // namespace
+ 
+ int main()
+@@ -685,6 +845,7 @@ int main()
+     T17_ShutdownStepStatus();  // AI(W906-D012) 20260929 B
+     T18_CloseRecord();         // AI(W906-D012-A8) 20260930
+     T19_SessionEnd();          // AI(W906-D012-A3W) 20260930
++    T20_CloseBusyServoOff();   // AI(W906-CLOSE-BUSY) 20261001
+     std::printf("test_mainclose_stop: %s (%d check(s), %d failure(s))\n", g_fail ? "FAIL" : "PASS", g_checks, g_fail);
+     return g_fail ? 1 : 0;
+ }
+-- 
+2.55.0.windows.5
+

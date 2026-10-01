@@ -1,0 +1,1298 @@
+From 3e8ceffc10c20fa0f983557eb94978e0dc9162d5 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 19:55:44 +0800
+Subject: [PATCH] VC4: the ECAT-VC4-ODM1 vacuum module gets its own branch (4
+ VCs; make vacuum on the EVEN channel, as measured), the ECAT-VC8 unchanged
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The modules on ring 1 stations 160 / 161 / 162 report "ECAT-VC4-ODM1" (VendorID 0x00494350, ProductID 0x00A20401; card map DI 9 /
+DO 3 bytes). EastSun 20261001 measured: "開真空是16bit 破真空17bit ... 開真空是22bit 破真空23bit" (VC n: make 16+2n, break 17+2n --
+the opposite parity of the VC8 manual) and ruled "VC8 和 VC4 要不同分支".
+EtherCAT/Pci1203Vc8.h: the identity table returns a model (ECAT-VC8 / ECAT-VC4 with ICP's VendorID); per-model layout (VCs 8/4, DI
+bytes 17/9, vacuum-OK base 128/64, DO 16..31 / 16..23, SDO VC 0..7 / 0..3, make parity odd / even); new *For checks. The route
+(Pci1203Vc8Route.inc) and Pci1203Control's re-check use the station's model; VC4 SDO writes are refused unless
+W906_VC4_SDO_WRITE (Pci1203Vc8.h, off: the VC4 object dictionary is unverified); SDO reads allowed.
+Panels (MyVacuumPanel): on a VC4 the make / break / OK channels come from the VC (16+2VC / 17+2VC / 64+VC), golden's ports
+otherwise; a refused VC4 mode write does not set golden's Error5 (deviation, recorded).
+Sucker gate (Vc8Route.h): each registered alias carries its role and Port; on a VC4 a row must have the sensor at 64..67, _On even
+and _Off odd in 16..23 and the DO pair on the sensor's VC -- today's VC8-style IO_Table rows on 160..162 are therefore refused (the
+IO_Table proposal is in the work log, pending EastSun). VC8 rules unchanged.
+Tests: VacuumVc8 (identity -> model, both layouts, VC4 panel writes 20 / 21 and reads 66, SDO write refused, gate cases; every VC8
+check unchanged). pci1203_readonly_gate PASS; pci1203_control_gate VC8 checks pass (its 2 old FAILs are elsewhere).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203Control.cpp   |   6 +-
+ EtherCAT/Pci1203Vc8.h         | 211 +++++++++++++++++++++++++---
+ EtherCAT/Pci1203Vc8Route.inc  | 103 +++++++++++---
+ VacuumUnit/MyVacuumPanel.cpp  |  14 +-
+ VacuumUnit/MyVacuumPanel.h    |  21 +++
+ VacuumUnit/VacuumUnit.cpp     |   6 +-
+ VacuumUnit/VacuumUnitLive.h   |   7 +-
+ VacuumUnit/VacuumUnitLive.inc |   4 +-
+ VacuumUnit/Vc8Route.h         | 121 ++++++++++++++---
+ tests/test_vacuum_vc8.cpp     | 249 ++++++++++++++++++++++++++++++++--
+ 10 files changed, 658 insertions(+), 84 deletions(-)
+
+diff --git a/EtherCAT/Pci1203Control.cpp b/EtherCAT/Pci1203Control.cpp
+index 55b46ca..d9c8035 100644
+--- a/EtherCAT/Pci1203Control.cpp
++++ b/EtherCAT/Pci1203Control.cpp
+@@ -3446,7 +3446,7 @@ bool Vc8Validate_(const Pci1203Cmd& c, TPci1203Monitor* mon, char* call, std::si
+         const int chan = d.stationChan * 8 + c.bit;
+         if (!Pci1203Vc8DoChanOk(chan, why)) return false;
+         int slot = -1;
+-        if (!Pci1203Vc8StationOkOn(*mon, d.ring, d.station, kVc8UseWrite, &slot, why)) return false;
++        int model = kPci1203VacNone; if (!Pci1203Vc8StationOkOn(*mon, d.ring, d.station, kVc8UseWrite, &slot, why, &model) || !Pci1203Vc8DoChanOkFor(model, chan, why)) return false;   //AI(W906-VC4) 20261001: EastSun 1001 measured the ECAT-VC4 (DO 16..23) ; 「VC8 和 VC4 要不同分支」 -- the station's own model's DO list, after the VC8 (widest) list above. Same line
+         if (c.value != 0.0 && c.value != 1.0) { why = "ECAT-VC8 DO：值要 0 或 1——拒絕"; return false; }
+         std::snprintf(call, callSize, "Acm_DaqDoSetBitEx(ring=%d, station=0x%02X, chan=%d, %d)   [ECAT-VC8 %s (internal)]",
+                       d.ring, d.station, chan, (c.value != 0.0) ? 1 : 0, mon->slave(slot).name.c_str());
+@@ -3459,7 +3459,7 @@ bool Vc8Validate_(const Pci1203Cmd& c, TPci1203Monitor* mon, char* call, std::si
+     }
+     const Pci1203SlaveSample& v = mon->slave(c.vc8Slave);
+     int slot = -1;
+-    if (!Pci1203Vc8StationOkOn(*mon, v.ring, v.addr, kVc8UseWrite, &slot, why)) return false;
++    int model = kPci1203VacNone; if (!Pci1203Vc8StationOkOn(*mon, v.ring, v.addr, kVc8UseWrite, &slot, why, &model)) return false;   //AI(W906-VC4) 20261001: + the station's model (VC8 / VC4). Same line
+     if (slot != c.vc8Slave) {
+         why = "ECAT-VC8 SDO：站的掃描位置變了（重新掃描過）——拒絕，請再按一次";
+         return false;
+@@ -3467,7 +3467,7 @@ bool Vc8Validate_(const Pci1203Cmd& c, TPci1203Monitor* mon, char* call, std::si
+     if (c.vc8Vc < 0 || c.vc8Vc >= (int)kPci1203Vc8Units) { why = "ECAT-VC8 SDO：VC 要 0..7——拒絕"; return false; }
+     const int index = (int)kPci1203Vc8SdoBase + (int)kPci1203Vc8SdoStep * c.vc8Vc;
+     int vc = -1;
+-    if (!Pci1203Vc8SdoAddrOk(index, c.vc8Sub, &vc, why)) return false;
++    if (!Pci1203Vc8SdoAddrOkFor(model, index, c.vc8Sub, &vc, why) || !Pci1203Vc8SdoWriteOk(model, why)) return false;   //AI(W906-VC4) 20261001: the model's SDO list (VC4 VC 0..3), and a VC4 SDO write only with EtherCAT/Pci1203Vc8.h W906_VC4_SDO_WRITE (unverified object dictionary). Same line
+     if (c.value != (double)(long)c.value) { why = "ECAT-VC8 SDO：值要是整數（I16 原始值）——拒絕"; return false; }
+     if (!Pci1203Vc8SdoValueOk(c.vc8Sub, (long)c.value, why)) return false;
+     std::snprintf(call, callSize, "Acm_DevWriteSDOData(ring=%d, station=0x%02X, %04Xh:%02Xh, I16, 2) = %ld   [ECAT-VC8 VC%d %s (internal)]",
+diff --git a/EtherCAT/Pci1203Vc8.h b/EtherCAT/Pci1203Vc8.h
+index d026c07..a2d765a 100644
+--- a/EtherCAT/Pci1203Vc8.h
++++ b/EtherCAT/Pci1203Vc8.h
+@@ -23,6 +23,25 @@
+ //  themselves "ECAT-xxxx" -- hence "ECAT-VC8". vendorId / productId 0 = not pinned yet. A module that answers
+ //  with any other name is REFUSED, and the refusal quotes the name it did answer with, so EastSun can tell us
+ //  which line to add (and its VendorID / ProductID, which the pci1203 page shows for every station).
++//
++//  AI(W906-VC4) 20261001: THE TABLE IS TWO LINES NOW, AND EACH LINE NAMES A MODEL. The modules EastSun fitted on
++//  ring 1 at 160 / 161 / 162 (0xA0..0xA2) answer "ECAT-VC4-ODM1" (ICP DAS, VendorID 0x00494350, ProductID
++//  0x00A20401 -- runcfg/logs/oplog_20261001.txt ~:2304, the refusal that quoted it). EastSun 20261001 measured on
++//  the machine: 「開真空是16bit 破真空17bit / 開真空是18bit 破真空19bit / 開真空是20bit 破真空21bit /
++//  開真空是22bit 破真空23bit」 -- on the VC4, VC n MAKES vacuum on DO 16+2n (EVEN) and BREAKS it on 17+2n (ODD),
++//  the opposite of the VC8 manual (DO even = break, odd = make) -- and ruled 「VC8 和 VC4 要不同分支」.
++//  So the identity check returns a MODEL, and every closed list below is the model's (Pci1203VacLayoutOf):
++//                       VC8 (golden, unchanged)          VC4 (EastSun 20261001; half of the VC8)
++//      VC / SDO VC      0..7                             0..3
++//      DI bytes         17 (0..15 pressures, 16 OK bits) 9 (0..7 pressures, 8 OK bits)
++//      vacuum-OK DI     128+VC                           64+VC
++//      DO channels      16..31 (DO bytes 2..3)           16..23 (DO byte 2)
++//      make vacuum      ODD  of the VC's pair (17+2VC)   EVEN of the VC's pair (16+2VC)
++//      SDO writes       allowed                          REFUSED unless W906_VC4_SDO_WRITE (below) -- no VC4 manual
++//                                                        here, the object dictionary is unverified; reads allowed
++//  The 4-argument / 2-argument checks that predate the VC4 (Pci1203Vc8SdoAddrOk, Pci1203Vc8DoChanOk) are the VC8
++//  table, word for word as before; EtherCAT/Pci1203Monitor.cpp keeps calling them (its SDO read is reached only
++//  through the route, which checks the station's own model first).
+ // =============================================================================
+ #ifndef ETHERCAT_PCI1203VC8_H
+ #define ETHERCAT_PCI1203VC8_H
+@@ -33,19 +52,36 @@
+ 
+ #include "EtherCAT/Pci1203Monitor.h"   // Pci1203SlaveSample, TPci1203Monitor (public accessors only)
+ 
++// ---------------------------------------------------------------------------------------------------------
++//  AI(W906-VC4) 20261001: the ECAT-VC4's SDO WRITE switch. OFF by default (commented out): the threshold MODE
++//  (8000h+10h*VC :02h) and THRESHOLD (:13h) writes are refused for a VC4 station, with the reason, by the route
++//  (EtherCAT/Pci1203Vc8Route.inc) and again by Pci1203Control (Vc8Validate_). Reads of the same objects are allowed.
++//  Uncomment it HERE, not with -D: every TU that includes this header must see the same Pci1203Vc8SdoWriteOk.
++//  Only after EastSun has confirmed on a VC4 that 8000h+10h*VC :02h / :13h are its threshold-mode / threshold
++//  objects (the VC8 manual's layout, assumed per channel for VC 0..3).
++// ---------------------------------------------------------------------------------------------------------
++//#define W906_VC4_SDO_WRITE
++
+ namespace ht9045 {
+ 
++// AI(W906-VC4) 20261001: the vacuum-unit MODEL a station's identity names. The value is the VC count.
++enum { kPci1203VacNone = 0, kPci1203VacVc4 = 4, kPci1203VacVc8 = 8 };
++
+ struct Pci1203Vc8Identity {
+     const char*   nameHas;     // case-insensitive substring of ADV_SLAVE_INFO.Name
+     unsigned long vendorId;    // 0 = not checked (not pinned yet)
+     unsigned long productId;   // 0 = not checked
+     const char*   source;      // why this line is here
++    int           model;       // AI(W906-VC4) 20261001: kPci1203VacVc8 / kPci1203VacVc4 -- which layout table applies
+ };
+ 
+ inline const Pci1203Vc8Identity* Pci1203Vc8Identities(int* n)
+ {
+     static const Pci1203Vc8Identity k[] = {
+-        { "ECAT-VC8", 0ul, 0ul, "golden rgVacuUnitType item 'ECAT-VC8_ODM1' (FileRW/HSys.gen.inc); unconfirmed on a real module" },
++        { "ECAT-VC8", 0ul, 0ul, "golden rgVacuUnitType item 'ECAT-VC8_ODM1' (FileRW/HSys.gen.inc); unconfirmed on a real module", kPci1203VacVc8 },
++        //AI(W906-VC4) 20261001: EastSun 1001 measured ... ; 「VC8 和 VC4 要不同分支」. VendorID pinned (ICP DAS, as 0xA0
++        //  answered); ProductID 0x00A20401 seen on 0xA0 only, so not pinned (161 / 162 were not quoted yet).
++        { "ECAT-VC4", 0x00494350ul, 0ul, "ring 1 0xA0 'ECAT-VC4-ODM1' VendorID 0x00494350 ProductID 0x00A20401 (oplog_20261001 ~:2304); EastSun 20261001", kPci1203VacVc4 },
+     };
+     if (n) *n = (int)(sizeof(k) / sizeof(k[0]));
+     return k;
+@@ -66,14 +102,53 @@ enum {
+     kPci1203Vc8RawMax   = 32767,   // KpaToVC8's output range 0..32767 (cpublic.cpp:2544) = -116..148 kPa
+     kPci1203EcStatePreOp  = 0x02,  // EC_SLAVE_STATE_* (EtherCAT/vendor/AdvMotDrv.h:2168-2173), low nibble
+     kPci1203EcStateSafeOp = 0x04,
+-    kPci1203EcStateOp     = 0x08
++    kPci1203EcStateOp     = 0x08,
++    //AI(W906-VC4) 20261001: the ECAT-VC4 (EastSun 1001 measured ... ; 「VC8 和 VC4 要不同分支」): half of the VC8.
++    kPci1203Vc4Units    = 4,       // VC 0..3 (the card map holds DI stationChan 0..8 and DO stationChan 0..2 for 0xA0..0xA2)
++    kPci1203Vc4DoLast   = 23,      // DO 16..23 = station byte 2 (make 16+2VC / break 17+2VC)
++    kPci1203Vc4DiOkChan = 64,      // 64+VC = station byte 8 (DI0..DI3 threshold bits)
++    kPci1203Vc4DiBytes  = 9        // bytes 0..7 = the four pressures (VC n in bytes 2n / 2n+1), byte 8 = the OK bits
+ };
+ 
++// AI(W906-VC4) 20261001: ONE MODEL'S CLOSED LISTS. Every route / control check takes its numbers from here.
++//   The DO bytes the card map must hold are doFirst/8 .. doLast/8 (VC8 2..3, VC4 2); the SDO VC range is 0..units-1.
++struct Pci1203VacLayout {
++    int         model;       // kPci1203VacVc8 / kPci1203VacVc4
++    const char* name;        // "ECAT-VC8" / "ECAT-VC4" (messages)
++    int         units;       // VCs per module = the SDO VC range
++    int         diBytes;     // station DI bytes: 2 per VC (pressure, low / high) + 1 (the vacuum-OK bits)
++    int         diOkChan;    // first vacuum-OK DI channel (VC n -> diOkChan+n) = 8 * (diBytes-1)
++    int         doFirst;     // vacuum / blow DO channels doFirst..doLast; VC n owns doFirst+2n and doFirst+2n+1
++    int         doLast;
++    int         makeOdd;     // 1: the ODD channel of a VC's pair MAKES vacuum (VC8 manual: even = break, odd = make)
++                             // 0: the EVEN one makes it (VC4, EastSun 20261001 measured)
++    const char* source;
++};
++
++// The layout of `model`. Callers pass a model the identity check returned; anything else gets the VC8 table, which is
++// what every check written before the VC4 assumed (so the old entry points below are exactly what they were).
++inline const Pci1203VacLayout& Pci1203VacLayoutOf(int model)
++{
++    static const Pci1203VacLayout kVc8 = { kPci1203VacVc8, "ECAT-VC8", kPci1203Vc8Units, kPci1203Vc8DiBytes, kPci1203Vc8DiOkChan,
++                                           kPci1203Vc8DoFirst, kPci1203Vc8DoLast, 1,
++                                           "golden MyVacuumPanel.cpp:206 128+VC / :231 :250 16+VC*2+swap (swap 1: On = odd); VC8 manual" };
++    static const Pci1203VacLayout kVc4 = { kPci1203VacVc4, "ECAT-VC4", kPci1203Vc4Units, kPci1203Vc4DiBytes, kPci1203Vc4DiOkChan,
++                                           kPci1203Vc8DoFirst, kPci1203Vc4DoLast, 0,
++                                           "EastSun 20261001 measured: make 16+2VC (even) / break 17+2VC (odd); DI 9 / DO 3 bytes in the card map" };
++    return model == (int)kPci1203VacVc4 ? kVc4 : kVc8;
++}
++
++// The DO channel that MAKES / BREAKS vacuum on VC `vc`, and the vacuum-OK DI channel, for `model`.
++inline int Pci1203Vc8MakeChan(int model, int vc)  { const Pci1203VacLayout& L = Pci1203VacLayoutOf(model); return L.doFirst + 2 * vc + (L.makeOdd ? 1 : 0); }
++inline int Pci1203Vc8BreakChan(int model, int vc) { const Pci1203VacLayout& L = Pci1203VacLayoutOf(model); return L.doFirst + 2 * vc + (L.makeOdd ? 0 : 1); }
++inline int Pci1203Vc8OkChan(int model, int vc)    { return Pci1203VacLayoutOf(model).diOkChan + vc; }
++
+ // What the caller is about to do with the station: it decides the EtherCAT state required.
+ enum Pci1203Vc8Use {
+     kVc8UseReadIo  = 0,   // a DI / DO sample: SAFEOP or OP (inputs update, Pci1203SlaveInputsLive's rule)
+     kVc8UseReadSdo = 1,   // an SDO read: PREOP / SAFEOP / OP (CoE mailbox, Pci1203SlaveMailboxOk's rule)
+-    kVc8UseWrite   = 2    // any write: OP only (outputs update only in OP)
++    kVc8UseWrite   = 2,   // any write: OP only (outputs update only in OP)
++    kVc8UseIdentity = 3   // AI(W906-VC4) 20261001: only WHICH model the station is (no state asked; nothing is sent)
+ };
+ 
+ inline bool Pci1203Vc8NameHas(const std::string& name, const char* has)
+@@ -97,7 +172,7 @@ inline bool Pci1203Vc8NameHas(const std::string& name, const char* has)
+ 
+ inline std::string Pci1203Vc8Fmt(const char* f, ...)
+ {
+-    char b[400];
++    char b[640];   // AI(W906-VC4) 20261001: 400 -> 640, the identity refusal now lists both table lines (UTF-8 text)
+     va_list ap;
+     va_start(ap, f);
+     std::vsnprintf(b, sizeof(b), f, ap);
+@@ -107,8 +182,11 @@ inline std::string Pci1203Vc8Fmt(const char* f, ...)
+ 
+ // Is this ONE sample an ECAT-VC8? The drive tests come first because they are the ones that must never be
+ // argued with: a CiA 402 profile or a SERVOPACK name is a motion drive whatever else it says.
+-inline bool Pci1203Vc8IdentityOk(const Pci1203SlaveSample& s, std::string& why)
++// AI(W906-VC4) 20261001: ... or an ECAT-VC4 -- `model` (optional) gets the matched line's model, kPci1203VacNone
++// on a refusal. The first matching line wins (the two names cannot both match: "ECAT-VC8" / "ECAT-VC4").
++inline bool Pci1203Vc8IdentityOk(const Pci1203SlaveSample& s, std::string& why, int* model = 0)
+ {
++    if (model) *model = kPci1203VacNone;
+     if (!s.infoValid) {
+         why = Pci1203Vc8Fmt("ring %d 站 0x%02X 的身分（ADV_SLAVE_INFO）沒有讀到，無法確認它是 ECAT-VC8——拒絕", s.ring, s.addr);
+         return false;
+@@ -124,11 +202,16 @@ inline bool Pci1203Vc8IdentityOk(const Pci1203SlaveSample& s, std::string& why)
+         if (!Pci1203Vc8NameHas(s.name, t[i].nameHas)) continue;
+         if (t[i].vendorId  != 0ul && t[i].vendorId  != s.vendorId)  continue;
+         if (t[i].productId != 0ul && t[i].productId != s.productId) continue;
++        if (model) *model = t[i].model;   // AI(W906-VC4) 20261001
+         return true;
+     }
+-    why = Pci1203Vc8Fmt("ring %d 站 0x%02X 回報的模組是「%s」（VendorID 0x%08lX, ProductID 0x%08lX），不在 ECAT-VC8 身分表"
+-                        "（EtherCAT/Pci1203Vc8.h：名稱要含「%s」）——拒絕。若這真的是真空單元，請把上面這個名稱告訴我們",
+-                        s.ring, s.addr, s.name.c_str(), s.vendorId, s.productId, n > 0 ? t[0].nameHas : "?");
++    std::string names;   // AI(W906-VC4) 20261001: every line of the table, so the refusal says what WOULD be accepted
++    for (int i = 0; i < n; ++i)
++        names += Pci1203Vc8Fmt("%s「%s」%s", i ? "或" : "", t[i].nameHas,
++                               t[i].vendorId != 0ul ? Pci1203Vc8Fmt("（VendorID 0x%08lX）", t[i].vendorId).c_str() : "");
++    why = Pci1203Vc8Fmt("ring %d 站 0x%02X 回報的模組是「%s」（VendorID 0x%08lX, ProductID 0x%08lX），不在 ECAT-VC8／VC4 身分表"
++                        "（EtherCAT/Pci1203Vc8.h：名稱要含%s）——拒絕。若這真的是真空單元，請把上面這個名稱告訴我們",
++                        s.ring, s.addr, s.name.c_str(), s.vendorId, s.productId, names.empty() ? "?" : names.c_str());
+     return false;
+ }
+ 
+@@ -138,6 +221,7 @@ inline bool Pci1203Vc8StateOk(const Pci1203SlaveSample& s, int use, std::string&
+     const unsigned st = (unsigned)s.state & 0x0Fu;
+     bool ok = false;
+     const char* need = "";
++    if (use == kVc8UseIdentity) return true;   // AI(W906-VC4) 20261001: no state asked (nothing is sent)
+     if (!s.stateValid) {
+         why = Pci1203Vc8Fmt("ring %d 站 0x%02X 這一輪的 EtherCAT 狀態沒有讀到——拒絕", s.ring, s.addr);
+         return false;
+@@ -182,10 +266,12 @@ inline int Pci1203Vc8FindSlaveBy(Get get, int n, int ring, int addr, std::string
+ }
+ 
+ // Everything about the STATION: ring 1, found once, addressable, a VC8 by identity, in the state `use` needs.
++// AI(W906-VC4) 20261001: ... or a VC4; `model` (optional) gets which, kPci1203VacNone on any refusal.
+ template <class Get>
+-inline bool Pci1203Vc8StationOkBy(Get get, int n, int ring, int addr, int use, int* slot, std::string& why)
++inline bool Pci1203Vc8StationOkBy(Get get, int n, int ring, int addr, int use, int* slot, std::string& why, int* model = 0)
+ {
+     if (slot) *slot = -1;
++    if (model) *model = kPci1203VacNone;
+     if (ring != kPci1203Vc8Ring) {
+         why = Pci1203Vc8Fmt("ECAT-VC8 只在 ring %d（golden MyVacuumPanel.cpp:42-44），這裡要的是 ring %d——拒絕", kPci1203Vc8Ring, ring);
+         return false;
+@@ -201,30 +287,69 @@ inline bool Pci1203Vc8StationOkBy(Get get, int n, int ring, int addr, int use, i
+         why = Pci1203Vc8Fmt("ring %d 站 0x%02X 在線上但這個位址指到的是另一個模組（站號衝突，unaddressable）——拒絕", ring, addr);
+         return false;
+     }
+-    if (!Pci1203Vc8IdentityOk(s, why)) return false;
++    int m = kPci1203VacNone;
++    if (!Pci1203Vc8IdentityOk(s, why, &m)) return false;
+     if (!Pci1203Vc8StateOk(s, use, why)) return false;
+     if (slot) *slot = k;
++    if (model) *model = m;
+     return true;
+ }
+ 
+-inline bool Pci1203Vc8StationOk(const Pci1203SlaveSample* sl, int n, int ring, int addr, int use, int* slot, std::string& why)
++inline bool Pci1203Vc8StationOk(const Pci1203SlaveSample* sl, int n, int ring, int addr, int use, int* slot, std::string& why, int* model = 0)
+ {
+-    return Pci1203Vc8StationOkBy([sl](int i) -> const Pci1203SlaveSample& { return sl[i]; }, n, ring, addr, use, slot, why);
++    return Pci1203Vc8StationOkBy([sl](int i) -> const Pci1203SlaveSample& { return sl[i]; }, n, ring, addr, use, slot, why, model);
+ }
+ 
+-inline bool Pci1203Vc8StationOkOn(const TPci1203Monitor& mon, int ring, int addr, int use, int* slot, std::string& why)
++inline bool Pci1203Vc8StationOkOn(const TPci1203Monitor& mon, int ring, int addr, int use, int* slot, std::string& why, int* model = 0)
+ {
+     return Pci1203Vc8StationOkBy([&mon](int i) -> const Pci1203SlaveSample& { return mon.slave(i); },
+-                                 mon.slaveCount(), ring, addr, use, slot, why);
++                                 mon.slaveCount(), ring, addr, use, slot, why, model);
++}
++
++// AI(W906-VC4) 20261001: WHICH MODEL the station at (ring, addr) is, by identity only -- for the panel side to pick
++// its channel layout before it asks (VacuumUnit/Vc8Route.h W906_Vc8Model). The same station rules as above (ring 1,
++// one present sample, addressable, not a drive, in the table), no EtherCAT state, no reason string built on the way
++// in (it runs per panel per tick). kPci1203VacNone for anything that would be refused. Every read / write that
++// follows is checked in full again.
++template <class Get>
++inline int Pci1203Vc8StationModelBy(Get get, int n, int ring, int addr)
++{
++    if (ring != (int)kPci1203Vc8Ring || addr <= 0) return kPci1203VacNone;
++    int found = -1, count = 0;
++    for (int i = 0; i < n; ++i) {
++        const Pci1203SlaveSample& s = get(i);
++        if (!s.present || s.ring != ring || s.addr != addr) continue;
++        ++count;
++        if (found < 0) found = i;
++    }
++    if (count != 1) return kPci1203VacNone;
++    const Pci1203SlaveSample& s = get(found);
++    if (s.unaddressable) return kPci1203VacNone;
++    std::string why;
++    int m = kPci1203VacNone;
++    return Pci1203Vc8IdentityOk(s, why, &m) ? m : (int)kPci1203VacNone;
++}
++
++inline int Pci1203Vc8StationModel(const Pci1203SlaveSample* sl, int n, int ring, int addr)
++{
++    return Pci1203Vc8StationModelBy([sl](int i) -> const Pci1203SlaveSample& { return sl[i]; }, n, ring, addr);
++}
++
++inline int Pci1203Vc8StationModelOn(const TPci1203Monitor& mon, int ring, int addr)
++{
++    return Pci1203Vc8StationModelBy([&mon](int i) -> const Pci1203SlaveSample& { return mon.slave(i); }, mon.slaveCount(), ring, addr);
+ }
+ 
+ // The SDO closed list: 8000h + VC*10h (VC 0..7), subindex 02h (mode) or 13h (threshold). `vc` out.
+-inline bool Pci1203Vc8SdoAddrOk(int index, int sub, int* vc, std::string& why)
++// AI(W906-VC4) 20261001: ...of `model` (VC8 0..7, VC4 0..3 -- the VC8's objects assumed per channel, no VC4 manual).
++inline bool Pci1203Vc8SdoAddrOkFor(int model, int index, int sub, int* vc, std::string& why)
+ {
++    const Pci1203VacLayout& L = Pci1203VacLayoutOf(model);
+     if (vc) *vc = -1;
+     const int off = index - (int)kPci1203Vc8SdoBase;
+-    if (off < 0 || (off % (int)kPci1203Vc8SdoStep) != 0 || off / (int)kPci1203Vc8SdoStep >= (int)kPci1203Vc8Units) {
+-        why = Pci1203Vc8Fmt("SDO 物件 %04Xh 不在 ECAT-VC8 的清單（8000h..8070h，每 10h 一個 VC）——拒絕", (unsigned)index & 0xFFFFu);
++    if (off < 0 || (off % (int)kPci1203Vc8SdoStep) != 0 || off / (int)kPci1203Vc8SdoStep >= L.units) {
++        why = Pci1203Vc8Fmt("SDO 物件 %04Xh 不在 %s 的清單（8000h..%04Xh，每 10h 一個 VC）——拒絕", (unsigned)index & 0xFFFFu, L.name,
++                            (unsigned)((int)kPci1203Vc8SdoBase + (int)kPci1203Vc8SdoStep * (L.units - 1)));
+         return false;
+     }
+     if (sub != (int)kPci1203Vc8SubMode && sub != (int)kPci1203Vc8SubThr) {
+@@ -235,6 +360,26 @@ inline bool Pci1203Vc8SdoAddrOk(int index, int sub, int* vc, std::string& why)
+     return true;
+ }
+ 
++// The VC8's list, as before the VC4 (EtherCAT/Pci1203Monitor.cpp Vc8SdoReadI16; the route's pre-check).
++inline bool Pci1203Vc8SdoAddrOk(int index, int sub, int* vc, std::string& why)
++{
++    return Pci1203Vc8SdoAddrOkFor(kPci1203VacVc8, index, sub, vc, why);
++}
++
++// AI(W906-VC4) 20261001: may an SDO WRITE go to a station of `model`? VC8 yes; VC4 only with W906_VC4_SDO_WRITE.
++inline bool Pci1203Vc8SdoWriteOk(int model, std::string& why)
++{
++    if (model != (int)kPci1203VacVc4) return true;
++#ifdef W906_VC4_SDO_WRITE
++    (void)why;
++    return true;
++#else
++    why = "ECAT-VC4 的 SDO 寫入（閥值模式 02h／閥值 13h）預設關閉：這裡沒有 VC4 手冊，物件表沒有驗證過"
++          "（EtherCAT/Pci1203Vc8.h 的 W906_VC4_SDO_WRITE 沒有定義）——拒絕，沒有送出；讀取照常";
++    return false;
++#endif
++}
++
+ // The value a WRITE may carry: 02h -> exactly 1 (golden :561); 13h -> 0..32767 (KpaToVC8 of -116..148 kPa).
+ inline bool Pci1203Vc8SdoValueOk(int sub, long value, std::string& why)
+ {
+@@ -252,15 +397,43 @@ inline bool Pci1203Vc8SdoValueOk(int sub, long value, std::string& why)
+     return false;
+ }
+ 
++// AI(W906-VC4) 20261001: the DO closed list of `model` (VC8 16..31, VC4 16..23).
++inline bool Pci1203Vc8DoChanOkFor(int model, int chan, std::string& why)
++{
++    const Pci1203VacLayout& L = Pci1203VacLayoutOf(model);
++    if (chan >= L.doFirst && chan <= L.doLast) return true;
++    why = Pci1203Vc8Fmt("DO 通道 %d 不是 %s 的吸／破真空通道（%d..%d）——拒絕", chan, L.name, L.doFirst, L.doLast);
++    return false;
++}
++
++// The VC8's list, as before the VC4 (also the widest: every model's DO channels are inside 16..31).
+ inline bool Pci1203Vc8DoChanOk(int chan, std::string& why)
+ {
+-    if (chan >= (int)kPci1203Vc8DoFirst && chan <= (int)kPci1203Vc8DoLast) return true;
+-    why = Pci1203Vc8Fmt("DO 通道 %d 不是 ECAT-VC8 的吸／破真空通道（16..31）——拒絕", chan);
++    return Pci1203Vc8DoChanOkFor(kPci1203VacVc8, chan, why);
++}
++
++// AI(W906-VC4) 20261001: the vacuum-OK DI channels of `model` (VC8 128..135, VC4 64..67) -- golden ReadVaccumIO.
++inline bool Pci1203Vc8DiChanOkFor(int model, int chan, std::string& why)
++{
++    const Pci1203VacLayout& L = Pci1203VacLayoutOf(model);
++    if (chan >= L.diOkChan && chan < L.diOkChan + L.units) return true;
++    why = Pci1203Vc8Fmt("%s 的真空 OK 輸入是 DI 通道 %d..%d，要的是 %d", L.name, L.diOkChan, L.diOkChan + L.units - 1, chan);
++    return false;
++}
++
++// AI(W906-VC4) 20261001: the pressure DI bytes of `model` (VC8 0..15, VC4 0..7) -- golden GetIOValue Port*2 / Port*2+1.
++inline bool Pci1203Vc8AiPortOkFor(int model, int port, std::string& why)
++{
++    const Pci1203VacLayout& L = Pci1203VacLayoutOf(model);
++    if (port >= 0 && port < 2 * L.units) return true;
++    why = Pci1203Vc8Fmt("%s 壓力值只在 DI byte 0..%d，要的是 byte %d", L.name, 2 * L.units - 1, port);
+     return false;
+ }
+ 
+ // The other DO channel of the same VC: golden gives VC n the pair 16+2n / 17+2n (one vacuum, one blow; which is
+ // which depends on iVacuOnOffSwap), so the partner is the channel with the low bit flipped.
++// AI(W906-VC4) 20261001: the VC4's pair is the same 16+2n / 17+2n (only which one makes vacuum differs), so the
++// partner rule is the same for both models.
+ inline int Pci1203Vc8DoPartner(int chan) { return chan ^ 1; }
+ 
+ }  // namespace ht9045
+diff --git a/EtherCAT/Pci1203Vc8Route.inc b/EtherCAT/Pci1203Vc8Route.inc
+index d2fb1be..01fc29c 100644
+--- a/EtherCAT/Pci1203Vc8Route.inc
++++ b/EtherCAT/Pci1203Vc8Route.inc
+@@ -33,6 +33,19 @@
+ //    Pci1203Control's audit log.
+ //    R1 (EastSun 20260930): there is no ECAT-VC8 on this machine's ring today, so every entry here is expected
+ //    to refuse, with the station's own reason, until one is fitted.
++//
++//  AI(W906-VC4) 20261001: THE ECAT-VC4 BRANCH. EastSun 1001 measured 「開真空是16bit 破真空17bit / ... /
++//    開真空是22bit 破真空23bit」 on the ECAT-VC4-ODM1 modules at ring 1 160 / 161 / 162 and ruled 「VC8 和 VC4 要不同分支」.
++//    The station check now also returns the MODEL (EtherCAT/Pci1203Vc8.h identity table), and every closed list
++//    above is that model's (Pci1203VacLayoutOf): VC4 = DO 16..23 (byte 2), DI 64..67 and bytes 0..7 (DI 0..8 in the
++//    map), SDO VC 0..3. Each entry first applies the VC8's (= the widest) list as before -- so a VC8 is refused or
++//    accepted exactly as before, with the same reason -- then the station's own model's list. The vacuum+blow
++//    interlock is the same for both (the partner is chan^1: the VC4's pair is also 16+2n / 17+2n).
++//    VC4 SDO WRITES are refused (kVc8RcVc4SdoOff, before anything else is asked) unless W906_VC4_SDO_WRITE is
++//    defined in EtherCAT/Pci1203Vc8.h; reads are allowed. Which DO channel MAKES vacuum on a VC4 (16+2VC) is the
++//    PANEL's choice (VacuumUnit/MyVacuumPanel.h W906_OnChan) and the sucker gate's (VacuumUnit/Vc8Route.h): the
++//    route takes the channel it is given, as for the VC8.
++//    New entry Vc8Model (TVc8Route::model): the station's model by identity, no state, no vendor call.
+ // =============================================================================
+ #include "VacuumUnit/Vc8Route.h"
+ #include "EtherCAT/Pci1203Vc8.h"
+@@ -84,38 +97,55 @@ TPci1203Monitor* Vc8Mon_(std::string& why)
+ }
+ 
+ // The station, for `use`. 0 or a kVc8Rc code with `why`.
+-int Vc8Station_(int ring, int ip, int use, int* slot, std::string& why)
++// AI(W906-VC4) 20261001: + `model` (optional): kPci1203VacVc8 / kPci1203VacVc4 on success.
++int Vc8Station_(int ring, int ip, int use, int* slot, std::string& why, int* model = 0)
+ {
+     if (slot) *slot = -1;
++    if (model) *model = kPci1203VacNone;
+     TPci1203Monitor* mon = Vc8Mon_(why);
+     if (mon == 0) return kVc8RcNoCard;
+-    if (!Pci1203Vc8StationOkOn(*mon, ring, ip, use, slot, why))
++    if (!Pci1203Vc8StationOkOn(*mon, ring, ip, use, slot, why, model))
+         return (ring != (int)kPci1203Vc8Ring || ip <= 0) ? kVc8RcBadAddr : kVc8RcNotVc8;
+     return 0;
+ }
+ 
+ // The station's bytes are where the card map says a VC8's are: DI 0..16, DO 2..3.
+-int Vc8Maps_(int ring, int ip, std::string& why)
++// AI(W906-VC4) 20261001: ... `model`'s: VC8 DI 0..16 / DO 2..3; VC4 DI 0..8 / DO 2.
++int Vc8Maps_(int ring, int ip, int model, std::string& why)
+ {
++    const Pci1203VacLayout& L = Pci1203VacLayoutOf(model);
+     TPci1203Monitor* mon = Vc8Mon_(why);
+     if (mon == 0) return kVc8RcNoCard;
+     FillDi(mon);
+-    for (int b = 0; b < (int)kPci1203Vc8DiBytes; ++b) {
++    for (int b = 0; b < L.diBytes; ++b) {
+         if (sjson::PickIoSample(s_di, ring, ip, b, 0) < 0) {
+-            why = Fmt("卡片的 DI 對應表沒有 ring %d 站 0x%02X 的第 %d 個 byte（ECAT-VC8 要 0..16：八個壓力值＋真空 OK 位元）", ring, ip, b);
++            why = (model == (int)kPci1203VacVc4)
++                ? Fmt("卡片的 DI 對應表沒有 ring %d 站 0x%02X 的第 %d 個 byte（ECAT-VC4 要 0..8：四個壓力值＋真空 OK 位元）", ring, ip, b)
++                : Fmt("卡片的 DI 對應表沒有 ring %d 站 0x%02X 的第 %d 個 byte（ECAT-VC8 要 0..16：八個壓力值＋真空 OK 位元）", ring, ip, b);
+             return kVc8RcNoByte;
+         }
+     }
+     FillDo(mon);
+-    for (int b = kPci1203Vc8DoFirst / 8; b <= kPci1203Vc8DoLast / 8; ++b) {
++    for (int b = L.doFirst / 8; b <= L.doLast / 8; ++b) {
+         if (sjson::PickIoSample(s_do, ring, ip, b, 0) < 0) {
+-            why = Fmt("卡片的 DO 對應表沒有 ring %d 站 0x%02X 的第 %d 個 byte（ECAT-VC8 的吸／破真空在 byte 2..3）", ring, ip, b);
++            why = (model == (int)kPci1203VacVc4)
++                ? Fmt("卡片的 DO 對應表沒有 ring %d 站 0x%02X 的第 %d 個 byte（ECAT-VC4 的吸／破真空在 byte 2）", ring, ip, b)
++                : Fmt("卡片的 DO 對應表沒有 ring %d 站 0x%02X 的第 %d 個 byte（ECAT-VC8 的吸／破真空在 byte 2..3）", ring, ip, b);
+             return kVc8RcNoByte;
+         }
+     }
+     return 0;
+ }
+ 
++// AI(W906-VC4) 20261001: the station's model by identity (no state asked, no reason kept) -- TVc8Route::model.
++int Vc8ModelOf_(int ring, int ip)
++{
++    std::string why;
++    TPci1203Monitor* mon = Vc8Mon_(why);
++    if (mon == 0) return kPci1203VacNone;
++    return Pci1203Vc8StationModelOn(*mon, ring, ip);
++}
++
+ // The machine side of a write.
+ int Vc8Machine_(std::string& why)
+ {
+@@ -222,8 +252,10 @@ int Vc8ReadAi(int ring, int ip, int port, unsigned char* v)
+     std::string why;
+     if (port < 0 || port >= 2 * (int)kPci1203Vc8Units)
+         return Vc8Rc_(kVc8RcBadAddr, Fmt("ECAT-VC8 壓力值只在 DI byte 0..15，要的是 byte %d", port, 0, 0));
+-    const int rc = Vc8Station_(ring, ip, kVc8UseReadIo, 0, why);
++    int model = kPci1203VacNone;
++    const int rc = Vc8Station_(ring, ip, kVc8UseReadIo, 0, why, &model);
+     if (rc != 0) return Vc8Rc_(rc, why);
++    if (!Pci1203Vc8AiPortOkFor(model, port, why)) return Vc8Rc_(kVc8RcBadAddr, why);   // AI(W906-VC4) 20261001: VC4 bytes 0..7
+     unsigned char b = 0;
+     const int rr = ReadDi_(ring, ip, port, &b);
+     if (rr != 0) return Vc8Rc_(Vc8RouteRc_(rr), Fmt("ring %d 站 0x%02X 的 DI byte %d 讀不到（不在卡片對應表，或 valid=false）", ring, ip, port));
+@@ -235,10 +267,15 @@ int Vc8ReadDi(int ring, int ip, int chan, unsigned char* v)
+ {
+     if (v) *v = 0;
+     std::string why;
+-    if (chan < (int)kPci1203Vc8DiOkChan || chan >= (int)kPci1203Vc8DiOkChan + (int)kPci1203Vc8Units)
+-        return Vc8Rc_(kVc8RcBadAddr, Fmt("ECAT-VC8 的真空 OK 輸入是 DI 通道 128..135，要的是 %d", chan, 0, 0));
+-    const int rc = Vc8Station_(ring, ip, kVc8UseReadIo, 0, why);
++    //  AI(W906-VC4) 20261001: the pre-check is the union of the two models' vacuum-OK channels (VC8 128..135, VC4
++    //  64..67) -- 64..67 is not inside the VC8's list, unlike every other list here -- then the station's own below.
++    if ((chan < (int)kPci1203Vc8DiOkChan || chan >= (int)kPci1203Vc8DiOkChan + (int)kPci1203Vc8Units) &&
++        (chan < (int)kPci1203Vc4DiOkChan || chan >= (int)kPci1203Vc4DiOkChan + (int)kPci1203Vc4Units))
++        return Vc8Rc_(kVc8RcBadAddr, Fmt("ECAT-VC8 的真空 OK 輸入是 DI 通道 128..135（ECAT-VC4 是 64..67），要的是 %d", chan, 0, 0));
++    int model = kPci1203VacNone;
++    const int rc = Vc8Station_(ring, ip, kVc8UseReadIo, 0, why, &model);
+     if (rc != 0) return Vc8Rc_(rc, why);
++    if (!Pci1203Vc8DiChanOkFor(model, chan, why)) return Vc8Rc_(kVc8RcBadAddr, why);   // AI(W906-VC4) 20261001
+     unsigned char b = 0;
+     const int rr = ReadDi_(ring, ip, chan / 8, &b);
+     if (rr != 0) return Vc8Rc_(Vc8RouteRc_(rr), Fmt("ring %d 站 0x%02X 的 DI byte %d 讀不到（不在卡片對應表，或 valid=false）", ring, ip, chan / 8));
+@@ -269,8 +306,10 @@ int Vc8ReadDo(int ring, int ip, int chan, unsigned char* v)
+     if (v) *v = 0;
+     std::string why;
+     if (!Pci1203Vc8DoChanOk(chan, why)) return Vc8Rc_(kVc8RcBadAddr, why);
+-    const int rc = Vc8Station_(ring, ip, kVc8UseReadIo, 0, why);
++    int model = kPci1203VacNone;
++    const int rc = Vc8Station_(ring, ip, kVc8UseReadIo, 0, why, &model);
+     if (rc != 0) return Vc8Rc_(rc, why);
++    if (!Pci1203Vc8DoChanOkFor(model, chan, why)) return Vc8Rc_(kVc8RcBadAddr, why);   // AI(W906-VC4) 20261001: VC4 16..23
+     TPci1203Monitor* mon = Vc8Mon_(why);
+     if (mon == 0) return Vc8Rc_(kVc8RcNoCard, why);
+     int rk = 0;
+@@ -288,10 +327,11 @@ int Vc8WriteDo(int ring, int ip, int chan, unsigned char v)
+     int rc = Vc8Machine_(why);
+     if (rc != 0) return Vc8Done_(w, rc, why);
+     if (!Pci1203Vc8DoChanOk(chan, why)) return Vc8Done_(w, kVc8RcBadAddr, why);
+-    int slot = -1;
+-    rc = Vc8Station_(ring, ip, kVc8UseWrite, &slot, why);
++    int slot = -1, model = kPci1203VacNone;
++    rc = Vc8Station_(ring, ip, kVc8UseWrite, &slot, why, &model);
+     if (rc != 0) return Vc8Done_(w, rc, why);
+-    rc = Vc8Maps_(ring, ip, why);
++    if (!Pci1203Vc8DoChanOkFor(model, chan, why)) return Vc8Done_(w, kVc8RcBadAddr, why);   // AI(W906-VC4) 20261001: VC4 16..23
++    rc = Vc8Maps_(ring, ip, model, why);
+     if (rc != 0) return Vc8Done_(w, rc, why);
+     TPci1203Monitor* mon = Vc8Mon_(why);
+     if (mon == 0) return Vc8Done_(w, kVc8RcNoCard, why);
+@@ -320,6 +360,11 @@ int Vc8ReadSdoI16(int ring, int ip, int index, int sub, short* v)
+     if (!Pci1203Vc8SdoAddrOk(index, sub, &vc, why)) return Vc8Rc_(kVc8RcBadAddr, why);
+     TPci1203Monitor* mon = Vc8Mon_(why);
+     if (mon == 0) return Vc8Rc_(kVc8RcNoCard, why);
++    //  AI(W906-VC4) 20261001: a VC4's list is VC 0..3 -- the station's model first (the monitor's own read checks the
++    //  station and the VC8's list again). A refused station is kVc8RcRefused, as when the monitor refused it before.
++    int model = kPci1203VacNone;
++    if (Vc8Station_(ring, ip, kVc8UseReadSdo, 0, why, &model) != 0) return Vc8Rc_(kVc8RcRefused, why);
++    if (!Pci1203Vc8SdoAddrOkFor(model, index, sub, &vc, why)) return Vc8Rc_(kVc8RcBadAddr, why);
+     short val = 0;
+     unsigned long err = 0;
+     if (!mon->Vc8SdoReadI16(ring, ip, index, sub, val, err, why))
+@@ -334,14 +379,20 @@ int Vc8WriteSdoI16(int ring, int ip, int index, int sub, short v)
+     std::snprintf(w.call, sizeof(w.call), "Acm_DevWriteSDOData(ring=%d, station=0x%02X, %04Xh:%02Xh, I16, 2) = %d",
+                   ring, ip, (unsigned)index & 0xFFFFu, (unsigned)sub & 0xFFu, (int)v);
+     std::string why;
++    //  AI(W906-VC4) 20261001: an ECAT-VC4 (by identity) with W906_VC4_SDO_WRITE undefined is refused FIRST, with its
++    //  own code, whatever the machine state -- golden's panels retry the mode write every tick and must be able to tell
++    //  "switched off by policy" from "failed" (VacuumUnit/MyVacuumPanel.cpp InitialThresholdMode).
++    if (!Pci1203Vc8SdoWriteOk(Vc8ModelOf_(ring, ip), why)) return Vc8Done_(w, kVc8RcVc4SdoOff, why);
+     int rc = Vc8Machine_(why);
+     if (rc != 0) return Vc8Done_(w, rc, why);
+     int vc = -1;
+     if (!Pci1203Vc8SdoAddrOk(index, sub, &vc, why)) return Vc8Done_(w, kVc8RcBadAddr, why);
+     if (!Pci1203Vc8SdoValueOk(sub, (long)v, why)) return Vc8Done_(w, kVc8RcBadValue, why);
+-    int slot = -1;
+-    rc = Vc8Station_(ring, ip, kVc8UseWrite, &slot, why);
++    int slot = -1, model = kPci1203VacNone;
++    rc = Vc8Station_(ring, ip, kVc8UseWrite, &slot, why, &model);
+     if (rc != 0) return Vc8Done_(w, rc, why);
++    if (!Pci1203Vc8SdoAddrOkFor(model, index, sub, &vc, why)) return Vc8Done_(w, kVc8RcBadAddr, why);   // AI(W906-VC4) 20261001: VC4 VC 0..3
++    if (!Pci1203Vc8SdoWriteOk(model, why)) return Vc8Done_(w, kVc8RcVc4SdoOff, why);
+     Pci1203Cmd c;
+     c.kind     = kCmdVc8SdoWriteI16;
+     c.vc8Slave = slot;
+@@ -357,13 +408,18 @@ int Vc8WriteSdoI16(int ring, int ip, int index, int sub, short v)
+ int Vc8Check(int ring, int ip, int forWrite, char* whyOut, int whyLen)
+ {
+     std::string why;
++    int model = kPci1203VacNone;
+     int rc = (forWrite == 1) ? Vc8Machine_(why) : 0;
+-    if (rc == 0) rc = Vc8Station_(ring, ip, forWrite ? kVc8UseWrite : kVc8UseReadIo, 0, why);
+-    if (rc == 0) rc = Vc8Maps_(ring, ip, why);
++    if (rc == 0) rc = Vc8Station_(ring, ip, forWrite ? kVc8UseWrite : kVc8UseReadIo, 0, why, &model);
++    if (rc == 0) rc = Vc8Maps_(ring, ip, model, why);   // AI(W906-VC4) 20261001: the station's model's bytes
+     Vc8Copy_(whyOut, whyLen, why);
+     return rc;
+ }
+ 
++// AI(W906-VC4) 20261001: TVc8Route::model -- kVc8ModelVc8 / kVc8ModelVc4 / kVc8ModelNone (the values are the same
++// numbers as kPci1203VacVc8 / kPci1203VacVc4 / kPci1203VacNone; tests/test_vacuum_vc8.cpp pins that).
++int Vc8Model(int ring, int ip) { return Vc8ModelOf_(ring, ip); }
++
+ const char*   Vc8LastWhy() { return s_vc8Why; }
+ unsigned long Vc8LastSeq() { return s_vc8Seq; }
+ 
+@@ -381,7 +437,7 @@ int Vc8WritesSince(unsigned long afterSeq, TVc8Write* out, int max)
+ }
+ 
+ const TVc8Route s_vc8Route = { Vc8ReadAi, Vc8ReadDi, Vc8ReadDo, Vc8WriteDo, Vc8ReadSdoI16, Vc8WriteSdoI16,
+-                               Vc8Check, Vc8LastWhy, Vc8LastSeq, Vc8WritesSince };
++                               Vc8Check, Vc8LastWhy, Vc8LastSeq, Vc8WritesSince, Vc8Model };   // AI(W906-VC4) 20261001: + Vc8Model
+ 
+ }  // namespace
+ 
+@@ -390,12 +446,15 @@ void Vc8RouteInstall_()
+ {
+     SetVc8Route(&s_vc8Route);
+     TPci1203Control* ctl = Pci1203Control();
++    std::string vc4Sdo;   // AI(W906-VC4) 20261001
++    const bool vc4SdoOn = Pci1203Vc8SdoWriteOk(kPci1203VacVc4, vc4Sdo);
+     std::printf("vacuum VC8 -> 1203: ROUTED -- golden MyLaneIO / TMyVacuumPanel VC8 calls read the monitor and write through "
+-                "Pci1203Control (%s); every station is identity-checked as an ECAT-VC8 first, VacuUnitType=%d\n",
++                "Pci1203Control (%s); every station is identity-checked as an ECAT-VC8 or ECAT-VC4 first (VC4: DO 16..23, "
++                "make 16+2VC; SDO writes %s), VacuUnitType=%d\n",
+                 ctl == 0 ? "control NOT armed: every VC8 write is refused"
+                          : ctl->IsDryRun() ? "DRY RUN: validated and recorded, nothing issued"
+                                            : "*** LIVE: a press on HW.VacuumUnit reaches the card ***",
+-                VCCU_UNIT_TYPE);
++                vc4SdoOn ? "ON (W906_VC4_SDO_WRITE)" : "OFF", VCCU_UNIT_TYPE);
+ }
+ 
+ }  // namespace ht9045
+diff --git a/VacuumUnit/MyVacuumPanel.cpp b/VacuumUnit/MyVacuumPanel.cpp
+index 3d0d834..220e647 100644
+--- a/VacuumUnit/MyVacuumPanel.cpp
++++ b/VacuumUnit/MyVacuumPanel.cpp
+@@ -642,7 +642,7 @@ void TMyVacuumPanel::RefreshDOIO()
+     Result1=(int)Acm_DaqDoGetBitEx(uiDevhand, OnRing, OnIP, OnPort,  &Value1);
+     Result2=(int)Acm_DaqDoGetBitEx(uiDevhand, OffRing, OffIP, OffPort, &Value2);
+ #else
+-    Result1=W906_Vc8ReadDo(OnRing, OnIP, OnPort,  &Value1); Result2=W906_Vc8ReadDo(OffRing, OffIP, OffPort, &Value2);   //AI(W906-VACUNIT-1203) 20260930: the two Acm_DaqDoGetBitEx, asked of the ECAT-VC8 route (the monitor's DO read-back of an identity-checked VC8); no route -> non-zero, as the old -1. Same line
++    Result1=W906_Vc8ReadDo(OnRing, OnIP, W906_OnChan(),  &Value1); Result2=W906_Vc8ReadDo(OffRing, OffIP, W906_OffChan(), &Value2);   //AI(W906-VACUNIT-1203) 20260930: the two Acm_DaqDoGetBitEx, asked of the ECAT-VC8 route (the monitor's DO read-back of an identity-checked VC8); no route -> non-zero, as the old -1. Same line   //AI(W906-VC4) 20261001: EastSun 1001 measured make 16+2VC / break 17+2VC on the ECAT-VC4 ; 「VC8 和 VC4 要不同分支」 -- W906_OnChan / W906_OffChan (MyVacuumPanel.h) = OnPort / OffPort on a VC8, the VC4 layout on a VC4. Same line
+ #endif
+ 
+     //AI(W906-PT-W3) 20260807: GATE (2) -- golden's `bplOn->Down=...`/
+@@ -752,7 +752,7 @@ bool TMyVacuumPanel::ReadVaccumIO()
+     //  (or a refusal: not a VC8, not in the map) -> non-zero -> golden's Error3, as before.
+     int Result=0;
+     unsigned char Value=0;
+-    Result=W906_Vc8ReadDi(SenRing, SenIP, SenPort, &Value);
++    Result=W906_Vc8ReadDi(SenRing, SenIP, W906_SenChan(), &Value);   //AI(W906-VC4) 20261001: EastSun 1001 measured ... ; 「VC8 和 VC4 要不同分支」 -- SenPort (128+VC) on a VC8, 64+VC on an ECAT-VC4 (MyVacuumPanel.h W906_SenChan). Same line
+     if(Result==0)
+     {
+         if(Value>0)
+@@ -801,7 +801,7 @@ void TMyVacuumPanel::InitialThresholdMode()
+         Result=(unsigned long)W906_Vc8WriteSdoI16(SenRing, SenIP, Threshold_Index+SenVCNo*0x0010, ThresholdMode_SubIndex, iValue);
+         if(Result==0)
+             bInitialThresholdModeOK=true;
+-        else
++        else if(Result!=(unsigned long)kVc8RcVc4SdoOff)   //AI(W906-VC4) 20261001: DEVIATION -- an ECAT-VC4 with EtherCAT/Pci1203Vc8.h W906_VC4_SDO_WRITE undefined (VC4 object dictionary unverified) refuses the MODE write by policy, nothing sent: not golden's Error5, which would freeze the panel (RefreshCurrectVal / RefreshThresholdVal / RefreshVaccumIO return while sEvent!=""), so the pressure / threshold / OK bit stay live; bInitialThresholdModeOK stays false and the route records the reason (once a minute on the console / oplog). Same line count
+             sEvent="Error5";
+ #endif
+     }
+@@ -1025,13 +1025,13 @@ int TMyVacuumPanel::W906_VaccumOnOff(bool bOnButton, bool bDown)
+ #if HAVE_PCI1203
+             ret=(int)Acm_DaqDoSetBitEx(uiDevhand, OnRing, OnIP, OnPort, (OnType==1)?1:0);
+ #else
+-            ret=W906_Vc8WriteDo(OnRing, OnIP, OnPort, (unsigned char)((OnType==1)?1:0));
++            ret=W906_Vc8WriteDo(OnRing, OnIP, W906_OnChan(), (unsigned char)((OnType==1)?1:0));     //AI(W906-VC4) 20261001: EastSun 1001 measured make 16+2VC on the ECAT-VC4 ; 「VC8 和 VC4 要不同分支」 -- OnPort on a VC8 (MyVacuumPanel.h W906_OnChan)
+ #endif
+         else            //破真空開
+ #if HAVE_PCI1203
+             ret=(int)Acm_DaqDoSetBitEx(uiDevhand, OffRing, OffIP, OffPort, (OffType==1)?1:0);
+ #else
+-            ret=W906_Vc8WriteDo(OffRing, OffIP, OffPort, (unsigned char)((OffType==1)?1:0));
++            ret=W906_Vc8WriteDo(OffRing, OffIP, W906_OffChan(), (unsigned char)((OffType==1)?1:0));  //AI(W906-VC4) 20261001: break 17+2VC on the ECAT-VC4; OffPort on a VC8 (W906_OffChan)
+ #endif
+     }
+     else
+@@ -1040,13 +1040,13 @@ int TMyVacuumPanel::W906_VaccumOnOff(bool bOnButton, bool bDown)
+ #if HAVE_PCI1203
+             ret=(int)Acm_DaqDoSetBitEx(uiDevhand, OnRing, OnIP, OnPort, (OnType==1)?0:1);
+ #else
+-            ret=W906_Vc8WriteDo(OnRing, OnIP, OnPort, (unsigned char)((OnType==1)?0:1));
++            ret=W906_Vc8WriteDo(OnRing, OnIP, W906_OnChan(), (unsigned char)((OnType==1)?0:1));     //AI(W906-VC4) 20261001: as above
+ #endif
+         else            //破真空關
+ #if HAVE_PCI1203
+             ret=(int)Acm_DaqDoSetBitEx(uiDevhand, OffRing, OffIP, OffPort, (OffType==1)?0:1);
+ #else
+-            ret=W906_Vc8WriteDo(OffRing, OffIP, OffPort, (unsigned char)((OffType==1)?0:1));
++            ret=W906_Vc8WriteDo(OffRing, OffIP, W906_OffChan(), (unsigned char)((OffType==1)?0:1));  //AI(W906-VC4) 20261001: as above
+ #endif
+     }
+     //  golden: ChangeBtnPanelLane(Ptr); if(ret!=0){} -- see DEVIATIONS above.
+diff --git a/VacuumUnit/MyVacuumPanel.h b/VacuumUnit/MyVacuumPanel.h
+index 2ea4c97..7cd2694 100644
+--- a/VacuumUnit/MyVacuumPanel.h
++++ b/VacuumUnit/MyVacuumPanel.h
+@@ -307,5 +307,26 @@ class TMyVacuumPanel : public TComponent
+         bool          W906_NeedReadThreshold() const { return bNeedReadVaccumThreshold; }
+         int           W906_Kind() const { return iKind; }
+         int           W906_Swap() const { return iVacuOnOffSwap; }
++        //AI(W906-VC4) 20261001: EastSun 1001 measured 「開真空是16bit 破真空17bit / 開真空是18bit 破真空19bit /
++        //  開真空是20bit 破真空21bit / 開真空是22bit 破真空23bit」 on the ECAT-VC4 ; 「VC8 和 VC4 要不同分支」.
++        //  THE CHANNEL each of golden's three calls uses (the non-HAVE_PCI1203 arms of RefreshDOIO / ReadVaccumIO /
++        //  W906_VaccumOnOff, and what the page shows). golden has only the VC8, so:
++        //    * the station is NOT an ECAT-VC4 (a VC8, no route, not a vacuum unit): golden's own member, unchanged --
++        //      OnPort / OffPort / SenPort as the ctor computed them (16+VC*2+swap, 128+VC) or the IO_Table row copied
++        //      them (VaccumCopyFormSuck, the DB wins);
++        //    * the station IS an ECAT-VC4 (the route's identity check, W906_Vc8Model): the VC4 layout from the VC
++        //      (OnVCNo / OffVCNo / SenVCNo = golden's VC, or the IO_Table row's Bit after VaccumCopyFormSuck):
++        //        On  (bplOn  "^", 吸真空 make)   16 + 2*VC
++        //        Off (bplOff "v", 破真空 break)  17 + 2*VC
++        //        Sen (myld1, 真空 OK)            64 + VC
++        //      whatever the row's Port says -- an IO_Table row still in the VC8 layout (InArmSuckA_On Port 17) would
++        //      otherwise BLOW where the page says vacuum. golden's iVacuOnOffSwap is not applied on a VC4: it is 1 for
++        //      every kind that sits on 160 / 161 / 162 (InArm 2, OutArm 3, IndexArm1 0), and 0 only for IndexArm2
++        //      HT9046LS (kind 1, stations 0x50 / 0x51 -- ECx-P32 DI modules here). A VC above 3 gives a channel outside
++        //      the VC4's lists and the route refuses it (24.. / 68..), as golden's vendor error.
++        int           W906_Model() const   { return W906_Vc8Model(SenRing, SenIP); }
++        int           W906_OnChan() const  { return W906_Vc8Model(OnRing,  OnIP)  == (int)kVc8ModelVc4 ? W906_Vc4MakeChan(OnVCNo)   : OnPort;  }
++        int           W906_OffChan() const { return W906_Vc8Model(OffRing, OffIP) == (int)kVc8ModelVc4 ? W906_Vc4BreakChan(OffVCNo) : OffPort; }
++        int           W906_SenChan() const { return W906_Vc8Model(SenRing, SenIP) == (int)kVc8ModelVc4 ? W906_Vc4OkChan(SenVCNo)    : SenPort; }
+ };
+ #endif
+diff --git a/VacuumUnit/VacuumUnit.cpp b/VacuumUnit/VacuumUnit.cpp
+index 92f7f8d..62e6063 100644
+--- a/VacuumUnit/VacuumUnit.cpp
++++ b/VacuumUnit/VacuumUnit.cpp
+@@ -920,9 +920,9 @@ void VaccumCopyFormSuck(class TMyVacuumPanel &Target, class TMySucker &Source)
+     Target.myld1->Hint=str;
+ #endif
+     (void)str;
+-    W906_Vc8GuardSucker(Source.OnRing,  Source.OnIP,  Source.OnPortName.c_str());    //AI(W906-VACUNIT-1203) 20260930: the sucker gate
+-    W906_Vc8GuardSucker(Source.OffRing, Source.OffIP, Source.OffPortName.c_str());
+-    W906_Vc8GuardSucker(Source.SenRing, Source.SenIP, Source.SensorName.c_str());
++    W906_Vc8GuardSuckerAs(Source.OnRing,  Source.OnIP,  Source.OnPortName.c_str(),  kVc8RoleMake,   Source.OnPort,  Source.SenPort);   //AI(W906-VACUNIT-1203) 20260930: the sucker gate   //AI(W906-VC4) 20261001: + the alias's role and its IO_Table Port, so an ECAT-VC4 station refuses a row that is not in the VC4 layout (EastSun 1001 measured _On 16+2VC / _Off 17+2VC / sensor 64+VC ; 「VC8 和 VC4 要不同分支」; VacuumUnit/Vc8Route.h W906_Vc4SuckerRowOk). A VC8 is checked as before. Same line
++    W906_Vc8GuardSuckerAs(Source.OffRing, Source.OffIP, Source.OffPortName.c_str(), kVc8RoleBreak,  Source.OffPort, Source.SenPort);
++    W906_Vc8GuardSuckerAs(Source.SenRing, Source.SenIP, Source.SensorName.c_str(),  kVc8RoleSensor, Source.SenPort, Source.SenPort);
+ #endif
+ }
+ //---------------------------------------------------------------------------
+diff --git a/VacuumUnit/VacuumUnitLive.h b/VacuumUnit/VacuumUnitLive.h
+index 64162bb..791476e 100644
+--- a/VacuumUnit/VacuumUnitLive.h
++++ b/VacuumUnit/VacuumUnitLive.h
+@@ -67,8 +67,9 @@ struct TVuLivePanel {
+     int           kind;            // golden _iKind (0/1 HT9046LS Index, 2 InArm, 3 OutArm, 4/5 HT9045 Index)
+     bool          visible;         // golden GroupBox->Visible (from the page: SetPanelPos / ShowSuckMode)
+     int           ring, ip, vc;    // golden SenRing / SenIP / SenVCNo
+-    int           senPort;         // 128 + VC       (vacuum-OK DI channel)
+-    int           onPort, offPort; // 16 + VC*2 + swap (vacuum / blow DO channel)
++    int           senPort;         // 128 + VC       (vacuum-OK DI channel)      AI(W906-VC4) 20261001: 64 + VC on an ECAT-VC4
++    int           onPort, offPort; // 16 + VC*2 + swap (vacuum / blow DO channel)  AI(W906-VC4) 20261001: 16+2VC / 17+2VC on a VC4
++                                   //   (the channels the panel USES -- TMyVacuumPanel::W906_SenChan / W906_OnChan / W906_OffChan)
+     int           onType, offType;
+     int           swap;            // golden iVacuOnOffSwap
+     char          cur[24], thr[24], evt[24];   // what golden paints
+@@ -78,6 +79,8 @@ struct TVuLivePanel {
+     bool          needThr;         // golden bNeedReadVaccumThreshold
+     bool          modeOk;          // golden bInitialThresholdModeOK
+     char          sEvent[24];      // golden sEvent ("" = no error)
++    int           model;           // AI(W906-VC4) 20261001: the station's vacuum unit, 8 = ECAT-VC8, 4 = ECAT-VC4, 0 = none /
++                                   //   unknown / no route (Vc8Route.h kVc8Model*)
+ };
+ 
+ struct TVuLiveState {
+diff --git a/VacuumUnit/VacuumUnitLive.inc b/VacuumUnit/VacuumUnitLive.inc
+index 90cbaa9..f29b8a3 100644
+--- a/VacuumUnit/VacuumUnitLive.inc
++++ b/VacuumUnit/VacuumUnitLive.inc
+@@ -175,8 +175,8 @@ bool W906_VacuumLivePanel(int i, TVuLivePanel* out)
+     out->arm = g_vu[i].arm; out->col = g_vu[i].col; out->row = g_vu[i].row;
+     out->kind = p->W906_Kind();
+     out->visible = p->GroupBox && p->GroupBox->Visible;
+-    out->ring = p->SenRing; out->ip = p->SenIP; out->vc = p->SenVCNo; out->senPort = p->SenPort;
+-    out->onPort = p->OnPort; out->offPort = p->OffPort; out->onType = p->OnType; out->offType = p->OffType;
++    out->ring = p->SenRing; out->ip = p->SenIP; out->vc = p->SenVCNo; out->senPort = p->W906_SenChan(); out->model = p->W906_Model();   //AI(W906-VC4) 20261001: the channel the panel USES (SenPort on a VC8, 64+VC on an ECAT-VC4 -- MyVacuumPanel.h) and the station's model. Same line
++    out->onPort = p->W906_OnChan(); out->offPort = p->W906_OffChan(); out->onType = p->OnType; out->offType = p->OffType;            //AI(W906-VC4) 20261001: OnPort / OffPort on a VC8; 16+2VC / 17+2VC on an ECAT-VC4. Same line
+     out->swap = p->W906_Swap();
+     VuCopy_(out->cur, (int)sizeof(out->cur), p->sW906Cur.c_str());
+     VuCopy_(out->thr, (int)sizeof(out->thr), p->sW906Thr.c_str());
+diff --git a/VacuumUnit/Vc8Route.h b/VacuumUnit/Vc8Route.h
+index d0a1c9d..b6d981e 100644
+--- a/VacuumUnit/Vc8Route.h
++++ b/VacuumUnit/Vc8Route.h
+@@ -60,9 +60,27 @@ enum {
+     kVc8RcRefused   = 0x7E000208,   // a machine precondition (VacuUnitType, SystemStart, the vacuum/blow
+                                     //   interlock) or Execute refused it, or a DRY RUN (nothing issued)
+     kVc8RcRateLimit = 0x7E000209,   // SDO read deferred by the monitor's rate limit / failure backoff
+-    kVc8RcBadValue  = 0x7E00020A    // value outside the object's range
++    kVc8RcBadValue  = 0x7E00020A,   // value outside the object's range
++    kVc8RcVc4SdoOff = 0x7E00020B    // AI(W906-VC4) 20261001: an SDO WRITE to an ECAT-VC4, refused because
++                                    //   EtherCAT/Pci1203Vc8.h W906_VC4_SDO_WRITE is not defined (VC4 object dictionary
++                                    //   unverified). A policy refusal, not a module failure: nothing was sent.
+ };
+ 
++// ---------------------------------------------------------------------------
++//  AI(W906-VC4) 20261001: THE VACUUM UNIT'S MODEL, AND THE VC4'S CHANNELS.
++//  EastSun 1001 measured 「開真空是16bit 破真空17bit / 開真空是18bit 破真空19bit / 開真空是20bit 破真空21bit /
++//  開真空是22bit 破真空23bit」 on the ECAT-VC4 at ring 1 160 / 161 / 162 -- VC n makes vacuum on DO 16+2n (EVEN)
++//  and breaks it on 17+2n (ODD), the opposite of the VC8 -- and ruled 「VC8 和 VC4 要不同分支」.
++//  The authoritative per-model tables are EtherCAT/Pci1203Vc8.h (Pci1203VacLayoutOf); this header cannot include it
++//  (no EtherCAT header in ht9045_io / ht9045_sm), so the three VC4 numbers the PANEL side needs are repeated here and
++//  tests/test_vacuum_vc8.cpp asserts they equal that table. The VC8 needs none here: golden's own arithmetic stands.
++// ---------------------------------------------------------------------------
++enum { kVc8ModelNone = 0, kVc8ModelVc4 = 4, kVc8ModelVc8 = 8 };    // = ht9045::kPci1203Vac* (the VC count)
++enum { kVc4Units = 4, kVc4DoFirst = 16, kVc4DoLast = 23, kVc4DiOkChan = 64 };
++inline int W906_Vc4MakeChan(int vc)  { return kVc4DoFirst + 2 * vc; }       // 吸真空 (make): 16 / 18 / 20 / 22
++inline int W906_Vc4BreakChan(int vc) { return kVc4DoFirst + 2 * vc + 1; }   // 破真空 (break): 17 / 19 / 21 / 23
++inline int W906_Vc4OkChan(int vc)    { return kVc4DiOkChan + vc; }          // 真空 OK DI: 64..67
++
+ // One write that went through the route, for the page's ack (golden's WriteVaccumThreshold / the DO click
+ // return void or discard `ret`, so the answer has nowhere else to go). Kept in a small ring by the route.
+ struct TVc8Write {
+@@ -94,6 +112,9 @@ struct TVc8Route {
+     const char*   (*lastWhy)();                                         // reason of the last non-zero return
+     unsigned long (*lastSeq)();                                         // seq of the newest TVc8Write
+     int           (*writesSince)(unsigned long afterSeq, TVc8Write* out, int max);   // oldest first
++    int           (*model)(int ring, int ip);                           // AI(W906-VC4) 20261001: kVc8ModelVc8 / kVc8ModelVc4
++                                                                        //   by the station's identity (no state, no vendor
++                                                                        //   call), kVc8ModelNone for anything refused
+ };
+ 
+ inline const TVc8Route*& W906_Vc8RouteSlot_() { static const TVc8Route* s = 0; return s; }
+@@ -170,6 +191,13 @@ inline int W906_Vc8WritesSince(unsigned long afterSeq, TVc8Write* out, int max)
+     const TVc8Route* r = Vc8Route();
+     return (r && r->writesSince) ? r->writesSince(afterSeq, out, max) : 0;
+ }
++// AI(W906-VC4) 20261001: which vacuum unit answers at (ring, ip) -- kVc8ModelNone with no route (every test, a SIM
++// build: golden's VC8 arithmetic then stands, and the call that follows fails as before).
++inline int W906_Vc8Model(int ring, int ip)
++{
++    const TVc8Route* r = Vc8Route();
++    return (r && r->model) ? r->model(ring, ip) : (int)kVc8ModelNone;
++}
+ 
+ // ---------------------------------------------------------------------------
+ //  THE REMAPPED SUCKERS' GUARD -- EastSun ruling R3 20260930 (follow golden: SetIOTableByECAT_VC8_Sucker).
+@@ -189,43 +217,102 @@ inline int W906_Vc8WritesSince(unsigned long afterSeq, TVc8Write* out, int max)
+ //  cylinders that share the station are untouched.
+ //  Empty (nothing registered) unless MachineType.h W906_VC8_SUCKER_REMAP is defined and VCCU_UNIT_TYPE==1.
+ // ---------------------------------------------------------------------------
++//
++//  AI(W906-VC4) 20261001: EACH ALIAS ALSO CARRIES ITS ROLE AND ITS IO_Table PORT, and on an ECAT-VC4 station the
++//  gate checks them against the VC4 layout (EastSun 1001 measured ... ; 「VC8 和 VC4 要不同分支」):
++//      the sensor (SensorName)    Port 64+VC
++//      the make   (OnPortName)    Port 16+2VC  (EVEN)   -- the IO_Table "_On" row, TMySucker's vacuum
++//      the break  (OffPortName)   Port 17+2VC  (ODD)    -- the "_Off" row, TMySucker's blow
++//  with the DO pair's VC equal to the sensor's VC. WHY: the engine and the IO page switch a sucker at its IO_Table
++//  Port verbatim (MyLaneIO ePCI1203 IOBitOn: channel = Port), and IO_Table.csv's rows are the VC8's layout today
++//  (InArmSuckA_On Port 17) -- on a VC4, channel 17 BREAKS vacuum. Without this check, accepting the VC4's identity
++//  would turn "vacuum on" into "blow" for every sucker on 160 / 161 / 162. A row that does not fit is refused (the
++//  call fails as golden's vendor error), with the alias, its Port and what the VC4 wants; fix the row
++//  (scratchpad vc4_iotable_proposal.csv). On an ECAT-VC8 nothing new is checked (as before).
++// ---------------------------------------------------------------------------
++enum { kVc8RoleUnknown = 0, kVc8RoleSensor = 1, kVc8RoleMake = 2, kVc8RoleBreak = 3 };   // AI(W906-VC4) 20261001
+ struct TVc8SuckerGuard {
+     int n;
+-    struct E { int ring, ip; char name[40]; } e[192];   // 16+16 Index + 8+8 In/Out suckers x 3 aliases = 144
++    struct E { int ring, ip; char name[40]; int role, port, senPort; } e[192];   // 16+16 Index + 8+8 In/Out suckers x 3 aliases = 144
++                                                                                //   AI(W906-VC4) 20261001: + role / IO_Table Port / the sucker's sensor Port
+ };
+ inline TVc8SuckerGuard& W906_Vc8SuckerGuard_() { static TVc8SuckerGuard g; return g; }   // zero-initialised (static POD)
+-inline void W906_Vc8GuardSucker(int ring, int ip, const char* name)
+-{
+-    TVc8SuckerGuard& g = W906_Vc8SuckerGuard_();
+-    if (!name || !*name || g.n >= (int)(sizeof(g.e) / sizeof(g.e[0]))) return;
+-    TVc8SuckerGuard::E& x = g.e[g.n++];
+-    x.ring = ring; x.ip = ip;
+-    int i = 0;
+-    for (; name[i] && i < (int)sizeof(x.name) - 1; ++i) x.name[i] = name[i];
+-    x.name[i] = '\0';
+-}
+-inline int W906_Vc8GuardedSuckers() { return W906_Vc8SuckerGuard_().n; }
+-inline bool W906_Vc8IsGuardedSucker(int ring, int ip, const char* name)
++// The entry for (ring, ip, name), -1 = not registered.
++inline int W906_Vc8GuardedSuckerAt_(int ring, int ip, const char* name)
+ {
+     const TVc8SuckerGuard& g = W906_Vc8SuckerGuard_();
+     for (int k = 0; name && k < g.n; ++k) {
+         if (g.e[k].ring != ring || g.e[k].ip != ip) continue;
+         int i = 0;
+         while (name[i] && name[i] == g.e[k].name[i]) ++i;
+-        if (name[i] == '\0' && g.e[k].name[i] == '\0') return true;
++        if (name[i] == '\0' && g.e[k].name[i] == '\0') return k;
++    }
++    return -1;
++}
++// AI(W906-VC4) 20261001: register with the role and the row's Port (VacuumUnit.cpp VaccumCopyFormSuck). A second
++// registration of the same (ring, ip, name) updates it (golden SetIOTableByECAT_VC8_Sucker may run again).
++inline void W906_Vc8GuardSuckerAs(int ring, int ip, const char* name, int role, int port, int senPort)
++{
++    TVc8SuckerGuard& g = W906_Vc8SuckerGuard_();
++    if (!name || !*name) return;
++    int k = W906_Vc8GuardedSuckerAt_(ring, ip, name);
++    if (k < 0) {
++        if (g.n >= (int)(sizeof(g.e) / sizeof(g.e[0]))) return;
++        k = g.n++;
++        TVc8SuckerGuard::E& y = g.e[k];
++        y.ring = ring; y.ip = ip;
++        int i = 0;
++        for (; name[i] && i < (int)sizeof(y.name) - 1; ++i) y.name[i] = name[i];
++        y.name[i] = '\0';
++    }
++    TVc8SuckerGuard::E& x = g.e[k];
++    x.role = role; x.port = port; x.senPort = senPort;
++}
++inline void W906_Vc8GuardSucker(int ring, int ip, const char* name)   // no role: refused on a VC4 (cannot be checked)
++{
++    W906_Vc8GuardSuckerAs(ring, ip, name, kVc8RoleUnknown, -1, -1);
++}
++inline int W906_Vc8GuardedSuckers() { return W906_Vc8SuckerGuard_().n; }
++inline bool W906_Vc8IsGuardedSucker(int ring, int ip, const char* name)
++{
++    return W906_Vc8GuardedSuckerAt_(ring, ip, name) >= 0;
++}
++// AI(W906-VC4) 20261001: on an ECAT-VC4, does this alias's IO_Table Port fit the VC4 layout for its role? (see above)
++inline bool W906_Vc4SuckerRowOk(const TVc8SuckerGuard::E& x, char* why, int whyLen)
++{
++    const int  senVc = x.senPort - (int)kVc4DiOkChan;
++    const bool senOk = senVc >= 0 && senVc < (int)kVc4Units;
++    const char* bad = 0;
++    if (x.role == kVc8RoleSensor) {
++        if (x.port < (int)kVc4DiOkChan || x.port >= (int)kVc4DiOkChan + (int)kVc4Units) bad = "不是 VC4 的真空 OK 輸入（DI 64..67）";
++    } else if (x.role == kVc8RoleMake || x.role == kVc8RoleBreak) {
++        const bool make = (x.role == kVc8RoleMake);
++        if (x.port < (int)kVc4DoFirst || x.port > (int)kVc4DoLast)       bad = "不是 VC4 的吸／破真空輸出（DO 16..23）";
++        else if (((x.port - (int)kVc4DoFirst) & 1) != (make ? 0 : 1))    bad = make ? "在 VC4 上是「破真空」通道（_On 是吸真空）" : "在 VC4 上是「吸真空」通道（_Off 是破真空）";
++        else if (!senOk || (x.port - (int)kVc4DoFirst) / 2 != senVc)      bad = "和同一個吸嘴的感測（真空 OK）不是同一個 VC";
++    } else {
++        bad = "沒有登記它是吸嘴的哪一點（感測／吸／破），無法照 VC4 版面檢查";
+     }
++    if (!bad) return true;
++    if (why && whyLen > 0)
++        std::snprintf(why, (std::size_t)whyLen, "ring %d 站 0x%02X 是 ECAT-VC4，IO_Table 的 %s（Port %d）%s——VC4 的列要是 感測 64+VC、"
++                      "_On 16+2VC、_Off 17+2VC（EastSun 20261001 實測），沒有送出", x.ring, x.ip, x.name, x.port, bad);
+     return false;
+ }
+ // true = go ahead with the backend call. false = a registered sucker whose station is not a usable ECAT-VC8:
+ // the caller fails the call the way golden fails a vendor error; the reason is printed (rate-limited: the first
+ // refusal, then one in 200, per hash slot -- an enabled sucker is polled every tick).
++// AI(W906-VC4) 20261001: ... or an ECAT-VC4 whose IO_Table row does not fit the VC4 layout (W906_Vc4SuckerRowOk).
+ inline char* W906_Vc8SuckerGateWhy() { static char s[320] = ""; return s; }   // the last refusal's reason
+ inline bool W906_Vc8SuckerGate(int ring, int ip, const char* name, bool write)
+ {
+-    if (W906_Vc8SuckerGuard_().n == 0 || !W906_Vc8IsGuardedSucker(ring, ip, name)) return true;
++    const int at = (W906_Vc8SuckerGuard_().n == 0) ? -1 : W906_Vc8GuardedSuckerAt_(ring, ip, name);
++    if (at < 0) return true;
+     char* why = W906_Vc8SuckerGateWhy();
+     why[0] = '\0';
+-    if (W906_Vc8Check(ring, ip, write ? kVc8CheckEngineWrite : kVc8CheckRead, why, 320) == 0) return true;
++    if (W906_Vc8Check(ring, ip, write ? kVc8CheckEngineWrite : kVc8CheckRead, why, 320) == 0 &&
++        (W906_Vc8Model(ring, ip) != (int)kVc8ModelVc4 || W906_Vc4SuckerRowOk(W906_Vc8SuckerGuard_().e[at], why, 320)))   // AI(W906-VC4) 20261001
++        return true;
+     static unsigned long s_last[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+     static unsigned long s_count = 0;
+     const unsigned long slot = (unsigned long)(((unsigned)ip * 31u + (unsigned)(name[0] ? name[1] : 0)) % 8u);
+diff --git a/tests/test_vacuum_vc8.cpp b/tests/test_vacuum_vc8.cpp
+index 87ec58a..aa36e38 100644
+--- a/tests/test_vacuum_vc8.cpp
++++ b/tests/test_vacuum_vc8.cpp
+@@ -31,6 +31,19 @@
+ //        20261001: the station is the sucker row's (InArm 160 = 0xA0, OutArm 161, Index 162) -- panel, gate, DO write
+ //   [11] Pci1203Control: the two VC8 kinds are INTERNAL (no wire name, audit name "(internal)"), refused on a
+ //        closed control
++//
++//  AI(W906-VC4) 20261001: THE ECAT-VC4 BRANCH (EastSun 1001 measured 「開真空是16bit 破真空17bit / ... /
++//  開真空是22bit 破真空23bit」 on the ECAT-VC4-ODM1 at ring 1 160 / 161 / 162 ; 「VC8 和 VC4 要不同分支」):
++//    [2]  + identity -> model (VC8 / VC4; a VC4 name with another VendorID, a drive, ECx-P32 refused, the refusal
++//         names both table lines); the model by identity only (no state); the two layout tables; make / break / OK
++//         channels; Vc8Route.h's pure VC4 copy equals Pci1203Vc8.h's table; the VC4 closed lists (DO 16..23 yes,
++//         24 no; DI 64..67 yes, 128 no; pressure bytes 0..7; SDO VC 0..3); VC4 SDO writes refused by default
++//   [12] a panel whose station answers as an ECAT-VC4: the same panel on a VC8 keeps golden's ports; on the VC4,
++//        vacuum ON writes 16+2VC, blow 17+2VC, the DO read-back and the D3 interlock use them, the vacuum-OK bit is
++//        read at 64+VC; the VC4 mode write is refused by policy without golden's Error5 (no freeze), the threshold
++//        write fails, the threshold read works; the sucker gate refuses a VC8-layout IO_Table row on a VC4 and passes
++//        the VC4 row; a VC8 there keeps the old rule
++//  The fake route mirrors the real route's per-model lists by calling the real EtherCAT/Pci1203Vc8.h functions.
+ // ===========================================================================
+ #include <cmath>
+ #include <cstdio>
+@@ -70,37 +83,47 @@ static bool Has(const std::string& s, const char* sub) { return s.find(sub) != s
+ // ---------------------------------------------------------------------------------------------------------
+ struct FakeWrite { int kind, ring, ip, chan, sub, value, rc; };
+ static struct Fake {
+-    bool          vc8[256];
++    bool          vc8[256];            // a vacuum unit answers at this station (an ECAT-VC8, unless vc4[] says VC4)
++    bool          vc4[256];            // AI(W906-VC4) 20261001: ... and it is an ECAT-VC4
+     unsigned char di[256][17];
+     unsigned char dout[256][4];
+     short         sdo[256][8][2];      // [station][vc][0 = mode 02h, 1 = threshold 13h]
+     std::vector<FakeWrite> writes;
+     unsigned long seq;
+     TVc8Write     ring[128];
++    int           lastDiChan;          // AI(W906-VC4) 20261001: the channel the last DI read asked
+ } g;
+ 
+ static void FakeReset()
+ {
+     std::memset(g.vc8, 0, sizeof(g.vc8)); std::memset(g.di, 0, sizeof(g.di)); std::memset(g.dout, 0, sizeof(g.dout));
+     std::memset(g.sdo, 0, sizeof(g.sdo)); g.writes.clear(); g.seq = 0; std::memset(g.ring, 0, sizeof(g.ring));
++    std::memset(g.vc4, 0, sizeof(g.vc4)); g.lastDiChan = -1;
+ }
+ static int FRc(int ring, int ip) { return (ring == 1 && ip > 0 && ip < 256 && g.vc8[ip]) ? 0 : (int)kVc8RcNotVc8; }
++static int FModel(int ring, int ip) { return FRc(ring, ip) ? (int)kVc8ModelNone : g.vc4[ip] ? (int)kVc8ModelVc4 : (int)kVc8ModelVc8; }   // AI(W906-VC4)
+ static int FReadAi(int ring, int ip, int port, unsigned char* v)
+ {
+     const int rc = FRc(ring, ip); if (rc) return rc;
+-    if (port < 0 || port > 15) return (int)kVc8RcBadAddr;
++    std::string why;
++    if (!Pci1203Vc8AiPortOkFor(FModel(ring, ip), port, why)) return (int)kVc8RcBadAddr;   // VC8 0..15, VC4 0..7
+     *v = g.di[ip][port]; return 0;
+ }
+ static int FReadDi(int ring, int ip, int chan, unsigned char* v)
+ {
+     const int rc = FRc(ring, ip); if (rc) return rc;
+-    if (chan < 128 || chan > 135) return (int)kVc8RcBadAddr;
+-    *v = (unsigned char)((g.di[ip][16] >> (chan - 128)) & 1); return 0;
++    g.lastDiChan = chan;
++    std::string why;
++    const int m = FModel(ring, ip);
++    if (!Pci1203Vc8DiChanOkFor(m, chan, why)) return (int)kVc8RcBadAddr;                  // VC8 128..135, VC4 64..67
++    const Pci1203VacLayout& L = Pci1203VacLayoutOf(m);
++    *v = (unsigned char)((g.di[ip][L.diBytes - 1] >> (chan - L.diOkChan)) & 1); return 0;
+ }
+ static int FReadDo(int ring, int ip, int chan, unsigned char* v)
+ {
+     const int rc = FRc(ring, ip); if (rc) return rc;
+-    if (chan < 16 || chan > 31) return (int)kVc8RcBadAddr;
++    std::string why;
++    if (!Pci1203Vc8DoChanOkFor(FModel(ring, ip), chan, why)) return (int)kVc8RcBadAddr;   // VC8 16..31, VC4 16..23
+     *v = (unsigned char)((g.dout[ip][chan / 8] >> (chan % 8)) & 1); return 0;
+ }
+ static void FRecord(int kind, int ring, int ip, int chan, int sub, int value, int rc)
+@@ -114,7 +137,9 @@ static void FRecord(int kind, int ring, int ip, int chan, int sub, int value, in
+ }
+ static int FWriteDo(int ring, int ip, int chan, unsigned char v)
+ {
+-    const int rc = FRc(ring, ip);
++    std::string why;
++    int rc = FRc(ring, ip);
++    if (rc == 0 && !Pci1203Vc8DoChanOkFor(FModel(ring, ip), chan, why)) rc = (int)kVc8RcBadAddr;   // AI(W906-VC4)
+     FRecord(0, ring, ip, chan, -1, v, rc);
+     if (rc) return rc;
+     if (v) g.dout[ip][chan / 8] |= (unsigned char)(1u << (chan % 8)); else g.dout[ip][chan / 8] &= (unsigned char)~(1u << (chan % 8));
+@@ -123,12 +148,16 @@ static int FWriteDo(int ring, int ip, int chan, unsigned char v)
+ static int FReadSdo(int ring, int ip, int index, int sub, short* v)
+ {
+     const int rc = FRc(ring, ip); if (rc) return rc;
+-    const int vc = (index - 0x8000) / 0x10;
++    std::string why;
++    int vc = -1;
++    if (!Pci1203Vc8SdoAddrOkFor(FModel(ring, ip), index, sub, &vc, why)) return (int)kVc8RcBadAddr;   // AI(W906-VC4): VC4 0..3
+     *v = g.sdo[ip][vc][sub == 0x02 ? 0 : 1]; return 0;
+ }
+ static int FWriteSdo(int ring, int ip, int index, int sub, short v)
+ {
+-    const int rc = FRc(ring, ip);
++    std::string why;
++    int rc = FRc(ring, ip);
++    if (rc == 0 && !Pci1203Vc8SdoWriteOk(FModel(ring, ip), why)) rc = (int)kVc8RcVc4SdoOff;          // AI(W906-VC4): as the route
+     FRecord(1, ring, ip, index, sub, v, rc);
+     if (rc) return rc;
+     g.sdo[ip][(index - 0x8000) / 0x10][sub == 0x02 ? 0 : 1] = v;
+@@ -148,7 +177,7 @@ static int FWritesSince(unsigned long after, TVc8Write* out, int max)
+     for (unsigned long s = after + 1; s <= g.seq && n < max; ++s) out[n++] = g.ring[(s - 1) % 128];
+     return n;
+ }
+-static const TVc8Route kFake = { FReadAi, FReadDi, FReadDo, FWriteDo, FReadSdo, FWriteSdo, FCheck, FLastWhy, FLastSeq, FWritesSince };
++static const TVc8Route kFake = { FReadAi, FReadDi, FReadDo, FWriteDo, FReadSdo, FWriteSdo, FCheck, FLastWhy, FLastSeq, FWritesSince, FModel };
+ 
+ static Pci1203SlaveSample Slave(int ring, int addr, const char* name, unsigned short state)
+ {
+@@ -254,6 +283,91 @@ int main(int argc, char** argv)
+         CHECK(Pci1203Vc8DoChanOk(16, why) && Pci1203Vc8DoChanOk(31, why) && !Pci1203Vc8DoChanOk(15, why) && !Pci1203Vc8DoChanOk(32, why));
+         CHECK(Pci1203Vc8DoPartner(16) == 17 && Pci1203Vc8DoPartner(31) == 30);
+         CHECK(KpaToVC8(-116.0) == 0 && KpaToVC8(148.0) == 32767);
++
++        //  AI(W906-VC4) 20261001: identity -> model. The existing VC8 rows above still answer VC8.
++        int m = -1;
++        CHECK(Pci1203Vc8StationOk(&sl[0], n, 1, 0x20, kVc8UseWrite, &slot, why, &m) && m == kPci1203VacVc8);
++        CHECK(!Pci1203Vc8StationOk(&sl[0], n, 1, 0x50, kVc8UseReadIo, &slot, why, &m) && m == kPci1203VacNone);
++        std::vector<Pci1203SlaveSample> s4;
++        Pci1203SlaveSample a0 = Slave(1, 0xA0, "ECAT-VC4-ODM1", 0x08); a0.vendorId = 0x00494350ul; a0.productId = 0x00A20401ul; s4.push_back(a0);
++        Pci1203SlaveSample a1 = Slave(1, 0xA1, "ECAT-VC4-ODM1", 0x08); a1.vendorId = 0x12345678ul; s4.push_back(a1);   // the VC4 name, another vendor
++        Pci1203SlaveSample a2 = Slave(1, 0xA2, "ecat-vc4-odm1", 0x02); a2.vendorId = 0x00494350ul; s4.push_back(a2);   // PREOP, lower case
++        Pci1203SlaveSample a3 = Slave(1, 0xA3, "ECAT-VC4-ODM1", 0x08); a3.vendorId = 0x00494350ul; a3.profileValid = true; a3.profile = 402; s4.push_back(a3);
++        Pci1203SlaveSample a4 = Slave(1, 0xA4, "ECAT-VC4-ODM1", 0x08); a4.vendorId = 0x00494350ul; a4.stateValid = false; s4.push_back(a4);
++        s4.push_back(Slave(1, 0x20, "ECAT-VC8_ODM1", 0x08));
++        s4.push_back(Slave(1, 0x50, "ECx-P32-HON 32DI 32 Ch. Dig. In.", 0x08));
++        const int n4 = (int)s4.size();
++        CHECK(Pci1203Vc8StationOk(&s4[0], n4, 1, 0xA0, kVc8UseWrite, &slot, why, &m) && m == kPci1203VacVc4 && slot == 0);
++        CHECK(Pci1203Vc8StationOk(&s4[0], n4, 1, 0x20, kVc8UseWrite, &slot, why, &m) && m == kPci1203VacVc8 && slot == 5);
++        why.clear();
++        CHECK(!Pci1203Vc8StationOk(&s4[0], n4, 1, 0xA1, kVc8UseReadIo, &slot, why, &m) && m == kPci1203VacNone);
++        CHECK(Has(why, "ECAT-VC4-ODM1") && Has(why, "0x12345678") && Has(why, "ECAT-VC8") && Has(why, "0x00494350"));
++        std::printf("   0xA1 -> %s\n", why.c_str());
++        CHECK(Pci1203Vc8StationOk(&s4[0], n4, 1, 0xA2, kVc8UseReadSdo, &slot, why, &m) && m == kPci1203VacVc4);   // case-insensitive
++        CHECK(!Pci1203Vc8StationOk(&s4[0], n4, 1, 0xA2, kVc8UseWrite, &slot, why, &m) && m == kPci1203VacNone);   // PREOP: no write
++        CHECK(!Pci1203Vc8StationOk(&s4[0], n4, 1, 0xA3, kVc8UseReadIo, &slot, why, &m) && Has(why, "402"));       // a drive is a drive
++        CHECK(!Pci1203Vc8StationOk(&s4[0], n4, 1, 0xA4, kVc8UseReadIo, &slot, why, &m));                           // state not read
++        why.clear();
++        CHECK(!Pci1203Vc8StationOk(&s4[0], n4, 1, 0x50, kVc8UseReadIo, &slot, why, &m) && Has(why, "ECx-P32-HON") && Has(why, "ECAT-VC4"));
++        CHECK(Pci1203Vc8StationOk(&s4[0], n4, 1, 0xA4, kVc8UseIdentity, &slot, why, &m) && m == kPci1203VacVc4);  // identity only: no state
++        CHECK(Pci1203Vc8StationModel(&s4[0], n4, 1, 0xA0) == kPci1203VacVc4 && Pci1203Vc8StationModel(&s4[0], n4, 1, 0xA4) == kPci1203VacVc4);
++        CHECK(Pci1203Vc8StationModel(&s4[0], n4, 1, 0x20) == kPci1203VacVc8 && Pci1203Vc8StationModel(&s4[0], n4, 1, 0x50) == kPci1203VacNone);
++        CHECK(Pci1203Vc8StationModel(&s4[0], n4, 1, 0xA1) == kPci1203VacNone && Pci1203Vc8StationModel(&s4[0], n4, 1, 0xA3) == kPci1203VacNone);
++        CHECK(Pci1203Vc8StationModel(&s4[0], n4, 1, 0x99) == kPci1203VacNone && Pci1203Vc8StationModel(&s4[0], n4, 0, 0xA0) == kPci1203VacNone);
++        CHECK(Pci1203Vc8StationModel(&sl[0], n, 1, 0x70) == kPci1203VacNone && Pci1203Vc8StationModel(&sl[0], n, 1, 0x60) == kPci1203VacNone);   // two answer / unaddressable
++        std::string w2;
++        CHECK(Pci1203Vc8IdentityOk(a0, w2, &m) && m == kPci1203VacVc4 && Pci1203Vc8IdentityOk(sl[1], w2, &m) && m == kPci1203VacVc8);
++
++        //  the two layout tables (Pci1203VacLayoutOf), and anything else = the VC8 table (the pre-VC4 entry points)
++        const Pci1203VacLayout& L8 = Pci1203VacLayoutOf(kPci1203VacVc8);
++        const Pci1203VacLayout& L4 = Pci1203VacLayoutOf(kPci1203VacVc4);
++        CHECK(L8.units == 8 && L8.diBytes == 17 && L8.diOkChan == 128 && L8.doFirst == 16 && L8.doLast == 31 && L8.makeOdd == 1);
++        CHECK(L4.units == 4 && L4.diBytes == 9  && L4.diOkChan == 64  && L4.doFirst == 16 && L4.doLast == 23 && L4.makeOdd == 0);
++        CHECK(L8.doFirst / 8 == 2 && L8.doLast / 8 == 3 && L4.doFirst / 8 == 2 && L4.doLast / 8 == 2);       // DO bytes 2..3 / 2
++        CHECK(L8.diOkChan == 8 * (L8.diBytes - 1) && L4.diOkChan == 8 * (L4.diBytes - 1));
++        CHECK(&Pci1203VacLayoutOf(kPci1203VacNone) == &L8 && L4.model == kPci1203VacVc4 && L8.model == kPci1203VacVc8);
++        for (int v = 0; v < 4; ++v) {   // EastSun 1001: 開真空 16/18/20/22, 破真空 17/19/21/23
++            CHECK(Pci1203Vc8MakeChan(kPci1203VacVc4, v) == 16 + 2 * v && Pci1203Vc8BreakChan(kPci1203VacVc4, v) == 17 + 2 * v);
++            CHECK(Pci1203Vc8OkChan(kPci1203VacVc4, v) == 64 + v);
++            CHECK(W906_Vc4MakeChan(v) == Pci1203Vc8MakeChan(kPci1203VacVc4, v) && W906_Vc4BreakChan(v) == Pci1203Vc8BreakChan(kPci1203VacVc4, v));
++            CHECK(W906_Vc4OkChan(v) == Pci1203Vc8OkChan(kPci1203VacVc4, v));
++        }
++        CHECK(Pci1203Vc8MakeChan(kPci1203VacVc8, 0) == 17 && Pci1203Vc8BreakChan(kPci1203VacVc8, 0) == 16);  // the VC8 manual: odd = make
++        CHECK(Pci1203Vc8MakeChan(kPci1203VacVc8, 7) == 31 && Pci1203Vc8OkChan(kPci1203VacVc8, 7) == 135);
++        CHECK((int)kVc8ModelVc4 == (int)kPci1203VacVc4 && (int)kVc8ModelVc8 == (int)kPci1203VacVc8 && (int)kVc8ModelNone == (int)kPci1203VacNone);
++        CHECK((int)kVc4Units == L4.units && (int)kVc4DoFirst == L4.doFirst && (int)kVc4DoLast == L4.doLast && (int)kVc4DiOkChan == L4.diOkChan);
++
++        //  the VC4's closed lists; the VC8's unchanged
++        CHECK(Pci1203Vc8DoChanOkFor(kPci1203VacVc4, 16, why) && Pci1203Vc8DoChanOkFor(kPci1203VacVc4, 23, why));
++        why.clear();
++        CHECK(!Pci1203Vc8DoChanOkFor(kPci1203VacVc4, 24, why) && Has(why, "ECAT-VC4") && Has(why, "16..23"));
++        CHECK(!Pci1203Vc8DoChanOkFor(kPci1203VacVc4, 15, why) && !Pci1203Vc8DoChanOkFor(kPci1203VacVc4, 31, why));
++        CHECK(Pci1203Vc8DoChanOkFor(kPci1203VacVc8, 24, why) && Pci1203Vc8DoChanOkFor(kPci1203VacVc8, 31, why));
++        why.clear();
++        CHECK(!Pci1203Vc8DoChanOk(32, why) && Has(why, "ECAT-VC8") && Has(why, "16..31"));                    // the old text
++        for (int ch = 64; ch <= 67; ++ch) CHECK(Pci1203Vc8DiChanOkFor(kPci1203VacVc4, ch, why));
++        CHECK(!Pci1203Vc8DiChanOkFor(kPci1203VacVc4, 68, why) && !Pci1203Vc8DiChanOkFor(kPci1203VacVc4, 63, why));
++        CHECK(!Pci1203Vc8DiChanOkFor(kPci1203VacVc4, 128, why) && Has(why, "64..67"));
++        CHECK(Pci1203Vc8DiChanOkFor(kPci1203VacVc8, 128, why) && Pci1203Vc8DiChanOkFor(kPci1203VacVc8, 135, why));
++        CHECK(!Pci1203Vc8DiChanOkFor(kPci1203VacVc8, 64, why) && !Pci1203Vc8DiChanOkFor(kPci1203VacVc8, 136, why));
++        CHECK(Pci1203Vc8AiPortOkFor(kPci1203VacVc4, 0, why) && Pci1203Vc8AiPortOkFor(kPci1203VacVc4, 7, why));   // VC n = bytes 2n / 2n+1
++        CHECK(!Pci1203Vc8AiPortOkFor(kPci1203VacVc4, 8, why) && !Pci1203Vc8AiPortOkFor(kPci1203VacVc4, -1, why));
++        CHECK(Pci1203Vc8AiPortOkFor(kPci1203VacVc8, 15, why) && !Pci1203Vc8AiPortOkFor(kPci1203VacVc8, 16, why));
++        CHECK(Pci1203Vc8SdoAddrOkFor(kPci1203VacVc4, 0x8030, 0x13, &vc, why) && vc == 3);
++        CHECK(Pci1203Vc8SdoAddrOkFor(kPci1203VacVc4, 0x8000, 0x02, &vc, why) && vc == 0);
++        why.clear();
++        CHECK(!Pci1203Vc8SdoAddrOkFor(kPci1203VacVc4, 0x8040, 0x13, &vc, why) && Has(why, "ECAT-VC4") && Has(why, "8030h"));
++        CHECK(Pci1203Vc8SdoAddrOkFor(kPci1203VacVc8, 0x8040, 0x02, &vc, why) && vc == 4);
++        why.clear();
++        CHECK(!Pci1203Vc8SdoAddrOk(0x8080, 0x13, &vc, why) && Has(why, "8000h..8070h"));                   // the old text
++        CHECK(Pci1203Vc8SdoWriteOk(kPci1203VacVc8, why) && Pci1203Vc8SdoWriteOk(kPci1203VacNone, why));
++#ifdef W906_VC4_SDO_WRITE
++        CHECK(Pci1203Vc8SdoWriteOk(kPci1203VacVc4, why));
++#else
++        why.clear();
++        CHECK(!Pci1203Vc8SdoWriteOk(kPci1203VacVc4, why) && Has(why, "W906_VC4_SDO_WRITE"));                 // VC4 SDO writes: OFF
++#endif
++        CHECK(Pci1203Vc8DoPartner(20) == 21 && Pci1203Vc8DoPartner(23) == 22);                                   // the VC4's pairs
+     }
+ 
+     // ---------------------------------------------------------------- [3]
+@@ -497,6 +611,123 @@ int main(int argc, char** argv)
+         CHECK(!r.accepted && !r.issued);
+     }
+ 
++    // ---------------------------------------------------------------- [12]
++    //  AI(W906-VC4) 20261001: a panel on a station that answers as an ECAT-VC4 (EastSun 1001 measured
++    //  開真空 16+2VC / 破真空 17+2VC ; 「VC8 和 VC4 要不同分支」).
++    std::printf("-- [12] an ECAT-VC4 panel: make 16+2VC, break 17+2VC, vacuum OK 64+VC\n");
++    {
++        FakeReset();
++        SetVc8Route(&kFake);
++        VCCU_UNIT_TYPE = 1;
++        TMyVacuumPanel* p = fVacuumUnit->myPalInArm[2][0];          // golden InArm "E": iInOutVCSort[0][2] = VC2
++        //  the row exactly as IO_Table.csv has it today, i.e. the VC8 layout (InArmSuckE: sensor 130, _On 21, _Off 20, Bit 2)
++        p->OnRing = p->OffRing = p->SenRing = 1;
++        p->OnIP = p->OffIP = p->SenIP = 0xA0;
++        p->OnVCNo = p->OffVCNo = p->SenVCNo = 2;
++        p->OnPort = 21; p->OffPort = 20; p->SenPort = 130;
++        p->OnType = p->OffType = p->SenType = 1;
++        p->OnISABase = p->OffISABase = p->SenISABase = ePCI1203;
++        p->sEvent = "";
++        const int i = Find("myPalInArm_2_0");
++        CHECK(i >= 0);
++        char why[320] = "";
++
++        //  (a) nothing answers at 0xA0: golden's / the DB's ports, untouched
++        CHECK(p->W906_Model() == (int)kVc8ModelNone && p->W906_OnChan() == 21 && p->W906_OffChan() == 20 && p->W906_SenChan() == 130);
++
++        //  (b) an ECAT-VC8 there: exactly as before
++        g.vc8[0xA0] = true;
++        CHECK(p->W906_Model() == (int)kVc8ModelVc8 && p->W906_OnChan() == 21 && p->W906_OffChan() == 20 && p->W906_SenChan() == 130);
++        std::size_t before = g.writes.size();
++        CHECK(W906_VacuumLiveDo(i, true, true, why, (int)sizeof(why)) == 0);
++        CHECK(g.writes.size() == before + 1 && g.writes.back().chan == 21 && g.writes.back().value == 1);
++        CHECK(W906_VacuumLiveDo(i, true, false, why, (int)sizeof(why)) == 0 && g.writes.back().chan == 21 && g.writes.back().value == 0);
++        g.di[0xA0][16] = 0x04;
++        CHECK(p->ReadVaccumIO() && g.lastDiChan == 130);
++        g.di[0xA0][16] = 0x00;
++
++        //  (c) the same station answering as an ECAT-VC4
++        g.vc4[0xA0] = true;
++        CHECK(p->W906_Model() == (int)kVc8ModelVc4 && p->W906_OnChan() == 20 && p->W906_OffChan() == 21 && p->W906_SenChan() == 66);
++        TVuLivePanel lp = P("myPalInArm_2_0");
++        CHECK(lp.model == (int)kVc8ModelVc4 && lp.vc == 2 && lp.onPort == 20 && lp.offPort == 21 && lp.senPort == 66);
++        before = g.writes.size();
++        CHECK(W906_VacuumLiveDo(i, true, true, why, (int)sizeof(why)) == 0);                                 // ^ vacuum ON
++        CHECK(g.writes.size() == before + 1 && g.writes.back().kind == 0 && g.writes.back().ip == 0xA0);
++        CHECK(g.writes.back().chan == 20 && g.writes.back().value == 1 && g.writes.back().rc == 0);
++        lp = P("myPalInArm_2_0");
++        CHECK(lp.onDown == 1 && lp.offDown == 0);                                                              // read back on 20 / 21
++        before = g.writes.size();
++        CHECK(W906_VacuumLiveDo(i, false, true, why, (int)sizeof(why)) == (int)kVc8RcRefused && g.writes.size() == before);   // D3
++        CHECK(W906_VacuumLiveDo(i, true, false, why, (int)sizeof(why)) == 0 && g.writes.back().chan == 20 && g.writes.back().value == 0);
++        CHECK(W906_VacuumLiveDo(i, false, true, why, (int)sizeof(why)) == 0 && g.writes.back().chan == 21 && g.writes.back().value == 1);   // v blow ON
++        lp = P("myPalInArm_2_0");
++        CHECK(lp.offDown == 1 && lp.onDown == 0);
++        CHECK(W906_VacuumLiveDo(i, false, false, why, (int)sizeof(why)) == 0 && g.writes.back().chan == 21 && g.writes.back().value == 0);
++        CHECK(g.dout[0xA0][2] == 0x00 && g.dout[0xA0][3] == 0x00);                                            // nothing left on; byte 3 never touched
++        //  the vacuum-OK bit: DI 64+VC = byte 8 bit 2 (not 128+VC)
++        g.di[0xA0][8] = 0x04;
++        CHECK(p->ReadVaccumIO() && g.lastDiChan == 66 && p->sEvent == "");
++        g.di[0xA0][8] = 0x00;
++        CHECK(!p->ReadVaccumIO() && p->sEvent == "");
++        //  the pressure: VC2 = DI bytes 4 / 5 (golden GetIOValue Port*2 / Port*2+1 -- the same arithmetic on a VC4)
++        g.di[0xA0][4] = 0x00; g.di[0xA0][5] = 0x40;
++        CHECK(std::fabs(p->ReadVaccumCurrect() - VC8ToKpa(16384)) < 1e-9);
++        CHECK(MyLaneIO.GetIOValue(1, 0xA0, 4, 0, ePCI1203) == 999.0);                                         // a VC4 has no VC 4: bytes 8 / 9 refused
++        //  the threshold READ is allowed (VC 0..3)
++        g.sdo[0xA0][2][1] = (short)KpaToVC8(-40.0);
++        CHECK(std::fabs(MyLaneIO.GetIOValueThread(1, 0xA0, 2, 0, ePCI1203) - VC8ToKpa(KpaToVC8(-40.0))) < 1e-9);
++        CHECK(MyLaneIO.GetIOValueThread(1, 0xA0, 4, 0, ePCI1203) == 999.0);                                   // 8040h: not on a VC4's list
++        //  SDO WRITES: refused by default, and the mode write is NOT golden's Error5 (the panel does not freeze)
++        p->bInitialThresholdModeOK = false;
++        before = g.writes.size();
++        p->InitialThresholdMode();
++        CHECK(g.writes.size() == before + 1 && g.writes.back().kind == 1 && g.writes.back().chan == 0x8020 && g.writes.back().sub == 0x02);
++#ifdef W906_VC4_SDO_WRITE
++        CHECK(p->bInitialThresholdModeOK && g.writes.back().rc == 0);
++#else
++        CHECK(!p->bInitialThresholdModeOK && p->sEvent == "" && g.writes.back().rc == (int)kVc8RcVc4SdoOff);
++        CHECK(!MyLaneIO.SetIOValueThread(-50.0, 1, 0xA0, 2, 0, ePCI1203));                                    // btnSVClick's write
++        CHECK(g.writes.back().kind == 1 && g.writes.back().chan == 0x8020 && g.writes.back().sub == 0x13 && g.writes.back().rc == (int)kVc8RcVc4SdoOff);
++        CHECK(g.sdo[0xA0][2][0] == 0 && g.sdo[0xA0][2][1] == (short)KpaToVC8(-40.0));                          // nothing written
++#endif
++        //  a VC above 3 on the VC4: channels outside its lists -- the read-back fails, so the press is refused unsent
++        p->OnVCNo = p->OffVCNo = p->SenVCNo = 5;
++        CHECK(p->W906_OnChan() == 26 && p->W906_OffChan() == 27 && p->W906_SenChan() == 69);
++        before = g.writes.size();
++        CHECK(W906_VacuumLiveDo(i, true, true, why, (int)sizeof(why)) != 0 && g.writes.size() == before);
++        CHECK(!p->ReadVaccumIO() && p->sEvent == "Error3");                                                   // golden's own failure arm
++        p->sEvent = "";
++        p->OnVCNo = p->OffVCNo = p->SenVCNo = 2;
++
++        //  the sucker gate on a VC4 (the engine and the IO page switch a sucker at its IO_Table Port verbatim)
++        W906_Vc8GuardSuckerAs(1, 0xA0, "VC4T_E_On",  kVc8RoleMake,   21, 130);    // today's IO_Table rows: the VC8 layout
++        W906_Vc8GuardSuckerAs(1, 0xA0, "VC4T_E_Off", kVc8RoleBreak,  20, 130);
++        W906_Vc8GuardSuckerAs(1, 0xA0, "VC4T_E",     kVc8RoleSensor, 130, 130);
++        CHECK(!W906_Vc8SuckerGate(1, 0xA0, "VC4T_E_On", true));                                               // 21 BREAKS on a VC4
++        CHECK(Has(W906_Vc8SuckerGateWhy(), "ECAT-VC4") && Has(W906_Vc8SuckerGateWhy(), "Port 21"));
++        std::printf("   VC4T_E_On (Port 21) -> %s\n", W906_Vc8SuckerGateWhy());
++        CHECK(!W906_Vc8SuckerGate(1, 0xA0, "VC4T_E_Off", true) && !W906_Vc8SuckerGate(1, 0xA0, "VC4T_E", false));
++        const int nGuard = W906_Vc8GuardedSuckers();
++        W906_Vc8GuardSuckerAs(1, 0xA0, "VC4T_E_On",  kVc8RoleMake,   20, 66);     // the VC4 rows (vc4_iotable_proposal.csv)
++        W906_Vc8GuardSuckerAs(1, 0xA0, "VC4T_E_Off", kVc8RoleBreak,  21, 66);
++        W906_Vc8GuardSuckerAs(1, 0xA0, "VC4T_E",     kVc8RoleSensor, 66, 66);
++        CHECK(W906_Vc8GuardedSuckers() == nGuard);                                                             // re-registered in place
++        CHECK(W906_Vc8SuckerGate(1, 0xA0, "VC4T_E_On", true) && W906_Vc8SuckerGate(1, 0xA0, "VC4T_E_Off", true));
++        CHECK(W906_Vc8SuckerGate(1, 0xA0, "VC4T_E", false));
++        W906_Vc8GuardSuckerAs(1, 0xA0, "VC4T_X_On", kVc8RoleMake, 22, 64);        // DO pair of VC3, sensor of VC0 (the OutArm crossing)
++        CHECK(!W906_Vc8SuckerGate(1, 0xA0, "VC4T_X_On", true) && Has(W906_Vc8SuckerGateWhy(), "VC"));
++        W906_Vc8GuardSuckerAs(1, 0xA0, "VC4T_Y", kVc8RoleSensor, 68, 68);          // sensor of a VC4's VC4 (does not exist)
++        CHECK(!W906_Vc8SuckerGate(1, 0xA0, "VC4T_Y", false));
++        W906_Vc8GuardSucker(1, 0xA0, "VC4T_N_On");                                 // no role: cannot be checked on a VC4
++        CHECK(!W906_Vc8SuckerGate(1, 0xA0, "VC4T_N_On", true));
++        CHECK(W906_Vc8SuckerGate(1, 0xA0, "VC4T_unregistered", true));             // an alias nobody registered: untouched
++        g.vc4[0xA0] = false;                                                       // an ECAT-VC8 there: the old rule (the station only)
++        CHECK(W906_Vc8SuckerGate(1, 0xA0, "VC4T_N_On", true) && W906_Vc8SuckerGate(1, 0xA0, "VC4T_X_On", true));
++        g.vc8[0xA0] = false;                                                       // nothing there: every registered alias refused
++        CHECK(!W906_Vc8SuckerGate(1, 0xA0, "VC4T_E_On", true));
++    }
++
+     W906_VacuumLiveClose();
+     SetVc8Route(0);
+     std::printf("\n%d / %d checks passed\n", g_total - g_fail, g_total);
+-- 
+2.55.0.windows.5
+

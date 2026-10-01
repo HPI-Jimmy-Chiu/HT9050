@@ -442,4 +442,13 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   cpp 0065 608de7e WORKLOG —— 工作紀錄第 3 節補第 107 包的設計外掛部分（tools 0138，設計外掛工作階段整合，0.143.0）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0066 7eb2008 LOGIN-HONPREC —— MachineType.h 新開關 W906_LOGIN_HONPREC_ALWAYS（打開）：出貨組態開機就登入 HonPrec、A01 閒置不切回 Operator
+                    （EastSun 1001 現場測試「權限 一開始直接調成 最高」）。⚠ 交機前要註解掉。
+  cpp 0067 5b766a4 CLOSE-BUSY —— 關站：伺服 OFF／警報、命令速度 0 的 1203 軸，就算卡片讀成 BUSY、停止命令回錯也視為已停（1001 19:11 斷電後關不了）。
+                    伺服 ON 有速度、回原點中、讀不到的照樣擋；強制關閉的等級規則沒動。
+  cpp 0068 518faa2 TEACH-ZDISABLED —— Teach 的 Z 軸在原點檢查跳過「非 1203 而且 Mot_Table Enable=0」的軸（MTestZ2 不再擋 Shuttle）。
+  cpp 0069 3e8ceff VC4 —— ECAT-VC4-ODM1 真空模組獨立分支（4 通道；EastSun 實測開真空在偶數通道 16+2n、破真空 17+2n）；VC8 不變；
+                    VC4 閥值 SDO 寫入預設關（W906_VC4_SDO_WRITE）。⚠ 給筆電：IO_Table 的吸嘴列要改成 VC4 格式才會動（方案在工作紀錄）。
+  cpp 0070 e7c5e06 WORKLOG —— 工作紀錄補 10-01 第 20～23 項。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。

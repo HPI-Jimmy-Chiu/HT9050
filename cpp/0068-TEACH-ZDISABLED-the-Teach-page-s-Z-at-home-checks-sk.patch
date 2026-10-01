@@ -1,0 +1,229 @@
+From 518faa2e39a95569c9999428bbd01e599f14429e Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 19:55:43 +0800
+Subject: [PATCH] TEACH-ZDISABLED: the Teach page's Z-at-home checks skip a
+ non-1203 axis whose Mot_Table Enable is 0 (MTestZ2 no longer blocks the
+ shuttles)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20261001: "shuttle 被擋 如果 testz2 enable 是0 那就不要擋testz2". On this HT9050 MTestZ2 is an SMC row with Enable=0; with
+IO_CARD_TYPE=4 / INDEX_MOTION_CARD=0 golden builds it as a TMyGALILMotor with Motor->Enable=true (cinitial.cpp:3943-3975), and with
+no card the Galil scan never writes its home LED -> IsCanQuickJogMove refused every shuttle move with "Please let MTestZ2 at home
+position first!!". golden's other drivers (SMC / MN200 / EtherCAT) already report a disabled axis as home; only the Galil arm does not.
+New MotorAccessTeachInterlockHome (WebMotorAccess.cpp, end of file): a non-1203 axis with Mot_Table Enable 0 returns -3 -> fTeach
+W906_TeachHomeLed treats it as at home (deviation, commented); everything else is MotorAccessTeachHomeLed as before (1203 ORG
+LOW = home on HT9050, no sample = not home). The engine's W906_HookHt9050OrgHome is untouched. An enabled axis with an unknown home
+state is still refused.
+Tests: WebMotorAccess (the -3 / -2 / 1203 cases) and GaliRouteEngine part 15 (the real TfTeach::IsCanQuickJogMove: Z2 disabled
+-> allowed; Z2 enabled + LED false -> the golden message; Z1 unknown -> refused). Both pass.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebMotorAccess.cpp               | 13 +++++++++
+ WebMotorAccess.h                 |  4 +++
+ WebMotorAccessLive.cpp           |  2 +-
+ forms/fTeach.cpp                 |  3 +-
+ forms/fTeach.h                   |  2 +-
+ tests/test_gali_route_engine.cpp | 48 ++++++++++++++++++++++++++++++++
+ tests/test_web_motor_access.cpp  | 27 ++++++++++++++++++
+ 7 files changed, 96 insertions(+), 3 deletions(-)
+
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index d837148..06c3d2b 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -5066,3 +5066,16 @@ bool LsStartGoldenHome(IMotorAccessBackend& be, int mi, const std::string& alias
+ 
+ }  // namespace
+ }  // namespace ht9045
++
++//AI(W906-TEACH-ZDISABLED) 20261001: EastSun 1001「如果 testz2 enable 是0 那就不要擋testz2」—— 合約在 WebMotorAccess.h（MotorAccessTeachInterlockHome）。
++//  放在檔尾：本檔行號被別處引用（docs、WebCmdGuard.cpp），不推動它們。
++namespace ht9045 {
++int MotorAccessTeachInterlockHome(IMotorAccessBackend& be, int mi)
++{
++    std::string alias;
++    MotorAccessAxis a;
++    if (be.AliasOfMotIndex(mi, alias) && be.Resolve(alias, a) && !a.Is1203() && !a.tableEnable)
++        return -3;                                                              // 這台沒裝這一軸（Mot_Table 的 Enable 欄，同 1203 路徑用的 tableEnable）⇒ Teach 互鎖不檢查它
++    return MotorAccessTeachHomeLed(be, mi);                                     // 其餘一格不變：1203 軸（ORG 規則、Enable=0＝1）、Enable=1 的非 1203 軸（-2＝golden HOME 燈，false 照樣擋）、表上沒有（-2）
++}
++}  // namespace ht9045
+diff --git a/WebMotorAccess.h b/WebMotorAccess.h
+index 53dc28f..a64cf3d 100644
+--- a/WebMotorAccess.h
++++ b/WebMotorAccess.h
+@@ -566,6 +566,10 @@ extern bool (*g_W906OrgActiveLow)();
+ // 純函式（測試直接驗）：orgBit＝motionIO bit 4；sensorType＝Motor->bSensorType；cardOrgLogic＝卡片的 CFG_AxOrgLogic（不是 0／1 ⇒ -1 不明）
+ int  MotorAccessOrgHomeLed(bool orgBit, bool sensorType, int cardOrgLogic);
+ int  MotorAccessTeachHomeLed(IMotorAccessBackend& be, int motIndex);
++//AI(W906-TEACH-ZDISABLED) 20261001: EastSun 1001「如果 testz2 enable 是0 那就不要擋testz2」—— Teach 互鎖（forms/fTeach.cpp W906_TeachHomeLedHook）用這支：
++//  Mot_Table Enable=0 而且不是 PCI1203 的軸 → -3（不檢查＝當成在原點；golden 的 SMC／MN200／EtherCAT Enable=false 也是 HOME 燈＝true，只有 INDEX_MOTION_CARD==0
++//  的 Galil 分支不管表上 Enable 一律開 MTestY1/Z2/Y2，無卡時 HOME 燈永遠不寫）。其餘＝MotorAccessTeachHomeLed 原樣（1203 軸、Enable=1、表上沒有）。引擎的掛勾不用這支。
++int  MotorAccessTeachInterlockHome(IMotorAccessBackend& be, int motIndex);
+ bool MotorAccessTeachLive1203(IMotorAccessBackend& be, int motIndex);
+ // 最近一次 MotorAccessTeachHomeLed 回 -1 的原因（TeachPrelude 用來把「不明」講清楚；空＝沒有）
+ std::string MotorAccessTeachHomeUnknownWhy();
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index 5ff90e2..661744c 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -110,7 +110,7 @@ bool RelayCardBit(int sw, bool& bit)
+ //AI(W906-W5-b) 20260925: W5B-3 —— forms/fTeach.cpp IsCanQuickJogMove 本體的兩個掛鉤（GoldenTeachCanMove 呼叫本體之前裝上）：
+ //  1203 軸的「Z 在原點」讀監看器 ORG、SOFT_SIMULTE 下被移動的是真的會動的 1203 軸就跑本體。邏輯在 WebMotorAccess.cpp（有單元測試）。
+ bool TeachLive1203Thunk(int mi) { return MotorAccessTeachLive1203(MotorAccessLiveBackend(), mi); }
+-int  TeachHomeLedThunk(int mi)  { return MotorAccessTeachHomeLed(MotorAccessLiveBackend(), mi); }
++int  TeachHomeLedThunk(int mi)  { return MotorAccessTeachInterlockHome(MotorAccessLiveBackend(), mi); }   //AI(W906-TEACH-ZDISABLED) 20261001: was MotorAccessTeachHomeLed; + Mot_Table Enable=0 的非 1203 軸＝-3 不檢查（EastSun 1001「如果 testz2 enable 是0 那就不要擋testz2」；引擎 W906_HookHt9050OrgHome 仍用 MotorAccessTeachHomeLed）
+ bool OrgActiveLowHT9050()        { return W906_GpibModel == "9050GPIB"; }   //AI(W906-HT9050-ORG) 20261001: HT9050＋1203＝ORG low 才是在原點（WebMotorAccess.h）
+ 
+ //AI(W906-BRAKE-AXIS) 20260929: EastSun 20260929「只要SERVO ON 就必須要先激磁 0.5秒後 觸發io的煞車」／「寫在激磁 只要有激磁做動 0.5秒
+diff --git a/forms/fTeach.cpp b/forms/fTeach.cpp
+index 11a0bb7..2624f91 100644
+--- a/forms/fTeach.cpp
++++ b/forms/fTeach.cpp
+@@ -936,7 +936,7 @@ bool W906_TeachBodyInSim(int motIndex)
+ 
+ static bool W906_TeachIs1203(int motIndex)
+ {
+-    return W906_TeachHomeLedHook != 0 && W906_TeachHomeLedHook(motIndex) != -2;
++    return W906_TeachHomeLedHook != 0 && W906_TeachHomeLedHook(motIndex) >= -1;   //AI(W906-TEACH-ZDISABLED) 20261001: was `!= -2`; -3（表上 Enable=0 的非 1203 軸）也不是 1203 ⇒ golden 掃描照跑
+ }
+ 
+ void W906_TeachScanMotorStatus(int motIndex)
+@@ -952,6 +952,7 @@ void W906_TeachGaliScanMotStatus(int motIndex)
+ bool W906_TeachHomeLed(int motIndex)
+ {
+     const int s = W906_TeachHomeLedHook ? W906_TeachHomeLedHook(motIndex) : -2;
++    if (s == -3) return true;                                                   //AI(W906-TEACH-ZDISABLED) 20261001: EastSun 1001「如果 testz2 enable 是0 那就不要擋testz2」—— Mot_Table Enable=0 的非 1203 軸不檢查（偏離 golden：golden 讀 Led[iHomeLed]，而 INDEX_MOTION_CARD==0 的 Galil 分支不管表上 Enable 一律開 MTestZ2、無卡時 HOME 燈永遠不寫 ⇒ 飛梭永遠被擋）。Enable=1 的軸、表上沒有的軸照舊（fail-closed）
+     if (s == -2) return MOT[motIndex].Led[iHomeLed];                            // 非 1203：golden 原本讀的
+     return s == 1;                                                              // 1203：監看器 ORG；不明（-1）＝不在原點（fail-closed）
+ }
+diff --git a/forms/fTeach.h b/forms/fTeach.h
+index 7695574..fc52088 100644
+--- a/forms/fTeach.h
++++ b/forms/fTeach.h
+@@ -839,7 +839,7 @@ bool VerifyMotorAction();
+ //    非 1203 軸照 golden 原本讀的。
+ //  * 掛鉤沒裝（單元測試、其他執行檔）⇒ 行為與 golden 完全相同。
+ extern bool (*W906_TeachLive1203Hook)(int motIndex);   // 1203 且控制層可用（真的會動）
+-extern int  (*W906_TeachHomeLedHook)(int motIndex);    // -2 不是 1203（走 golden）；1 在原點；0 不在；-1 不明
++extern int  (*W906_TeachHomeLedHook)(int motIndex);    // -2 不是 1203（走 golden）；1 在原點；0 不在；-1 不明；-3 表上 Enable=0 的非 1203 軸＝不檢查（AI(W906-TEACH-ZDISABLED) 20261001，WebMotorAccess.h MotorAccessTeachInterlockHome）
+ bool W906_TeachBodyInSim(int motIndex);                 // SOFT_SIMULTE 組態要不要跑本體
+ void W906_TeachScanMotorStatus(int motIndex);           // golden MOT[i].ScanMotorStatus()（1203 軸不打 golden handle）
+ void W906_TeachGaliScanMotStatus(int motIndex);         // golden MOT[i].Gali_ScanMotStatus()（同上）
+diff --git a/tests/test_gali_route_engine.cpp b/tests/test_gali_route_engine.cpp
+index ff5381b..a35e236 100644
+--- a/tests/test_gali_route_engine.cpp
++++ b/tests/test_gali_route_engine.cpp
+@@ -35,6 +35,8 @@
+ //   AI(W906-INDEXZ-1203) 20260930: part 10 how==2 -- StopAllMotor(true) during the home now HALTS it (D1) and
+ //       DoSystem's VS/SP string restarts it to completion; part 14 -- golden TestZ1SetPos's "DP" (B) defines the
+ //       command position (aTester_Front.cpp:314-320, the real function).
++//   AI(W906-TEACH-ZDISABLED) 20261001: part 15 -- the Teach interlock (forms/fTeach.cpp IsCanQuickJogMove, the real body) for the
++//       shuttle and Index Y movers: MTestZ2 with Mot_Table Enable=0 is not checked; Enable=1 + LED false keeps golden's refusal.
+ //  Reads and writes no file (ShowMotorErrorMessage / ShowMyMessage are the   [AI(W906-JAM-STOP) 20260930: no longer so -- ShowMotorErrorMessage is the golden body now (forms/fNote_ShowError.cpp EOF):
+ //  canary recorders; InitialOK=false takes their early return).              its InitialOK==false arm still returns before the note, after the stop half (StopAllMotor / "ST" / brake), and writes MyDBIProcess("Exception") into the redirect roots -- main() refuses to run outside ctest (w906_ctest_guard.h)]
+ // =============================================================================
+@@ -51,6 +53,7 @@
+ #include "EtherCAT/Pci1203GaliRouteCore.h"
+ #include "aTester_Front.h"          // AI(W906-INDEXZ-1203) 20260930: TestZ1SetPos (part 14)
+ #include "w906_test_motors.h"
++#include "forms/fTeach.h"           //AI(W906-TEACH-ZDISABLED) 20261001: TfTeach::IsCanQuickJogMove + W906_TeachHomeLedHook / W906_TeachLive1203Hook (part 15)
+ #include "w906_ctest_guard.h"   //AI(W906-JAM-STOP) 20260930: W906TestRequireCtestRedirects (the JAM's Exception record writes; on the old blank line, no line moves)
+ #include <cmath>
+ #include <cstdio>
+@@ -493,6 +496,51 @@ int main()
+         CHECK(g_io.cmds.size() == n);
+     }
+ 
++    // ---- 15: Teach interlock (forms/fTeach.cpp IsCanQuickJogMove) with Z2 not fitted ---------------------------------
++    //AI(W906-TEACH-ZDISABLED) 20261001: EastSun 1001「如果 testz2 enable 是0 那就不要擋testz2」. The REAL TfTeach body, no route (HT9050
++    //  today): MOT[MTestZ2] is the Galil arm's ENABLED TMyGALILMotor and nothing writes its HOME LED (no card, not routed). The hook
++    //  stands in for WebMotorAccess.cpp MotorAccessTeachInterlockHome (its Mot_Table half is pinned in tests/test_web_motor_access.cpp):
++    //  Z2 -3 = Mot_Table Enable 0 (not checked) / -2 = Enable 1 (golden LED); Z1 = a 1203 axis (1 home, -1 unknown); others 1.
++    std::printf("-- 15. Teach IsCanQuickJogMove: MTestZ2 Enable=0 -> not checked; Enable=1 + LED false -> golden refusal; Z1 unknown still refuses\n");
++    {
++        static int z1Code = 1, z2Code = -2;
++        const int sf0 = SHUTTLE_FLOODGATE;
++        SHUTTLE_FLOODGATE = 0;                              // CheckShuttleCanMove (golden :5428) answers true: only the Z checks are under test
++        MOT[MTestZ2].Motor->Enable = true;                  // golden's Galil arm (part 0); the route's D1 is not there on HT9050 today
++        MOT[MTestZ2].MovFlag = false;
++        MOT[MTestZ2].Led[iAlarmLed] = false;
++        MOT[MTestZ2].Led[iHomeLed] = false;
++        W906_TeachLive1203Hook = [](int) { return true; };  // a SOFT_SIMULTE build runs the body too (W906_TeachBodyInSim)
++        W906_TeachHomeLedHook  = [](int mi) { return mi == MTestZ2 ? z2Code : (mi == MTestZ1 ? z1Code : 1); };
++        TfTeach* t = new TfTeach();
++        const int se0 = W906_ShowErrorMessage_Count;
++        const int movers[2] = { MInShuttle1, MTestY1 };     // golden :1077 (shuttle) and :1112 (INDEX_MOTION_CARD==0 Index Y) both check Z2
++        for (int k = 0; k < 2; ++k) {
++            t->ActiveMotorIndex = movers[k];
++            z1Code = 1;
++            z2Code = -2;                                    // (b) Enable=1, LED false -> refused, golden's own message
++            W906_ShowMyMessage_Reset();
++            CHECK(t->IsCanQuickJogMove() == false);
++            CHECK(MOT[MTestZ2].Led[iHomeLed] == false);     // Gali_ScanMotStatus ran (golden) and wrote nothing (no card, not routed)
++            CHECK(W906_ShowMyMessage_Count == 1 && std::string(W906_ShowMyMessage_LastS1.c_str()) == "Please let MTestZ2 at home position first!!");
++            z2Code = -3;                                    // (a) Mot_Table Enable=0 -> that check passes, the move is allowed
++            W906_ShowMyMessage_Reset();
++            CHECK(t->IsCanQuickJogMove() == true);
++            CHECK(W906_ShowMyMessage_Count == 0);
++            z1Code = -1;                                    // (c) an enabled 1203 axis whose home is unknown still refuses (fail-closed)
++            W906_ShowMyMessage_Reset();
++            CHECK(t->IsCanQuickJogMove() == false);
++            CHECK(W906_ShowMyMessage_Count == 1 && std::string(W906_ShowMyMessage_LastS1.c_str()) == "Please let MTestZ1 at home position first!!");
++        }
++        CHECK(W906_ShowErrorMessage_Count == se0);          // no floodgate prompt took part
++        delete t;
++        W906_TeachHomeLedHook = 0;
++        W906_TeachLive1203Hook = 0;
++        MOT[MTestZ2].Motor->Enable = false;                 // as D1 left it above
++        SHUTTLE_FLOODGATE = sf0;
++        W906_ShowMyMessage_Reset();
++    }
++
+     std::printf("%s: %d/%d checks passed\n", g_fail ? "FAIL" : "PASS", g_checks - g_fail, g_checks);
+     return g_fail ? 1 : 0;
+ }
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index c0d8b54..6191d4c 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -3034,6 +3034,33 @@ int main(int argc, char** argv)
+         be.ready = false;
+         CHECK(!MotorAccessTeachLive1203(be, mZA), "W5B-3: 1203 control not armed -> not live");
+         be.ready = true;
++        //AI(W906-TEACH-ZDISABLED) 20261001: EastSun 1001「如果 testz2 enable 是0 那就不要擋testz2」—— Teach 互鎖的掛勾（MotorAccessTeachInterlockHome）。
++        //  -3 進 forms/fTeach.cpp W906_TeachHomeLed＝不檢查；-2＝golden Led[iHomeLed]（false 照樣擋，訊息照 golden）。本體那一半在 tests/test_gali_route_engine.cpp part 15。
++        {
++            const MotorAccessAxis z2Saved = be.table["MTestZ2"];
++            be.table["MTestZ2"] = AxisOther(mZ2, "SMC", true);                  // HT9050 Mot_Table M15：CardModel SMC、Enable 0（golden Galil 分支照樣 Enable=true）
++            be.table["MTestZ2"].tableEnable = false;
++            CHECK(MotorAccessTeachInterlockHome(be, mZ2) == -3, "TEACH-ZDISABLED (a): MTestZ2 non-1203 with Mot_Table Enable=0 -> -3 (the teach interlock does not check it)");
++            CHECK(MotorAccessTeachHomeLed(be, mZ2) == -2, "TEACH-ZDISABLED: the engine's MotorAccessTeachHomeLed is unchanged for that row (-2 = golden Led)");
++            be.table["MTestZ2"].tableEnable = true;
++            CHECK(MotorAccessTeachInterlockHome(be, mZ2) == -2, "TEACH-ZDISABLED (b): MTestZ2 non-1203 with Enable=1 -> -2 (golden Led[iHomeLed]; LED false still refuses)");
++            CHECK(MotorAccessTeachInterlockHome(be, 999) == -2, "TEACH-ZDISABLED: no Mot_Table row -> -2 (golden, as before)");
++            be.table["MTestZ2"] = z2Saved;
++            CHECK(MotorAccessTeachInterlockHome(be, mSh2) == -2, "TEACH-ZDISABLED: an enabled MN200 row -> -2 as before");
++            // (c) 1203 軸：跟 MotorAccessTeachHomeLed 一模一樣（HT9050 ORG 規則、Enable=0＝1 不是 -3、沒樣本＝-1 fail-closed）
++            g_W906OrgActiveLow = []() { return true; };
++            be.motionIO[1] = 0x10;
++            CHECK(MotorAccessTeachInterlockHome(be, mZA) == 0 && MotorAccessTeachHomeLed(be, mZA) == 0, "TEACH-ZDISABLED (c): 1203 ORG bit high -> 0 (unchanged)");
++            be.motionIO[1] = 0x00;
++            CHECK(MotorAccessTeachInterlockHome(be, mZA) == 1 && MotorAccessTeachHomeLed(be, mZA) == 1, "TEACH-ZDISABLED (c): 1203 ORG bit low -> 1 (unchanged)");
++            be.motionIO.erase(1);
++            CHECK(MotorAccessTeachInterlockHome(be, mZA) == -1, "TEACH-ZDISABLED (c): enabled 1203 axis without a sample -> -1 (still fail-closed)");
++            be.table["MInArmZA"].tableEnable = false;
++            CHECK(MotorAccessTeachInterlockHome(be, mZA) == 1, "TEACH-ZDISABLED (c): 1203 Enable=0 -> 1 as before (not -3)");
++            be.table["MInArmZA"].tableEnable = true;
++            g_W906OrgActiveLow = 0;
++            be.motionIO[1] = 0x10;                                              // 回到上面那一段的狀態
++        }
+ 
+         // ---- 教導頁 jog／移動／歸零
+         be.cmdPos[8] = 0.0;
+-- 
+2.55.0.windows.5
+
