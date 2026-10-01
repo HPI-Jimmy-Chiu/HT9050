@@ -419,4 +419,10 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     機台每 30 分鐘自動查 GitHub main，看到帶外掛的新包就逐檔比對、測試後合進來（不跑 e2e_build.ps1：它會啟動 wb_serve）。
                     這份交接也記在 tools/vscode-htdesigner/HANDOVER.md §5。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  web 0051 fd75fc8 TEACH-TRAYZ —— Teach 頁照 golden FormShow 顯示 Tray Z 校正點（Loader／Empty／Auto1～3…，Tray Arm 頁「Tray Z Motor」群組＋Axle Control 的 Tray Z jog）：
+                    每次開 Teach 視窗讀 Gerneral.ini [TrayZ] *_Z_USE_MOTOR（唯讀），只顯示有勾的；讀不到＝全部隱藏並寫原因。今天九個旗標都是 0，
+                    要 EastSun 在 HandlerSys「Tray Z Use Motor」勾了才會出現。新檔 page/ht9045_teach_trayz_c.js＋HW.teach.html 一行 include。離線測試三種情況都對。
+  cpp 0061 c50e99a WORKLOG —— 工作紀錄補 10-01 第 16～17 項：Teach 校正點位功能檢查結果（Set／Save／GO 的接線對、但從沒真的校正過；
+                    手推教導重新激磁前沒有照 golden 同步命令位置等 6 項問題），以及 Tray Z 校正畫面；第 4 節補等 EastSun 的事。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
