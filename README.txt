@@ -547,4 +547,5 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   web 0064 5d2800f TEACH-ZALLUP (web) —— 那 6 顆按鈕的網頁半邊（ht9045_teach_zallup_c.js、motor-access.json 6 列）。
   web 0065 d758607 HOMEMON (web) —— Home Monitor 不再是假資料（列、燈、位置、紀錄來自 C++）；Abort Home 沒有確認視窗；視窗改成不擋其他視窗。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0096 af53dc4 TEACH-FORMSHOW —— Teach 照原版 FormShow 顯示／隱藏：C++ 用原版條件式、機台真正的設定算出約 150 個元件的 Visible／分頁／標題／顏色／Enabled／開在哪一頁`n                    （FileRW/TeachFormShow_File.cpp，第二型 bridge，只顯示）；FormState 加顏色與依名字切分頁；ctest TeachFormShowBridge 28/28。`n  cpp 0097 826d04b WORKLOG —— 工作紀錄補 10-01 第 59 項。`n  web 0066 e34f7df TEACH-FORMSHOW／ALLCOMP (web) —— 開頁與每次開窗套用 C++ 算好的 FormShow（無頭瀏覽器 186 項全部套上）；TTL 勾選框灰掉＋說明。`n  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。`n
 MD5 清單在 MANIFEST_MD5.tsv。
