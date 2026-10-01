@@ -1,0 +1,279 @@
+From 407ce3ff32abfce8f967d12472a6ec7ac629c7a7 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 09:03:37 +0800
+Subject: [PATCH] IOWIDGET-3: the IO buttons that need the safe door are
+ coloured like golden; TestSuck with an IC on the Index runs golden's Suck() /
+ Destroy()
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20261001 picked both: 「填安全門表＋橘黃色」, 「TestSuck 走 Suck() 流程」.
+
+- JsonBridge/ChanIoPoints.cpp: /api/struct/io/config gives every output hw.needSafeDoor =
+  golden's bIdleNeedCheckSafeDoor (filled by InitCylinder, which wb_serve runs through
+  InitialHandler). Read by golden's own arithmetic: the ISA family [0][Port/32][Port%32][Bit],
+  MotionNet / 1203 [Ring][IP][Port][Bit] NOT range-checked -- golden's writer (cinitial.cpp:5451)
+  and the reader that blocks the output (IdleCheckSafeDoorByCylinder via MyLaneIo.cpp:261/:326)
+  both index it raw, so a 1203 row past [64][32] (HT9050: IP 176) is read at the same cell of the
+  64 KB block; past the block = not marked. The page (web ht9045_io_widgets.js) paints such a
+  button golden's orange / yellow with black text (iosetview.cpp:2244-2258).
+- JsonBridge/IoBtnPanelClick.cpp: TestSuck *_On / *_Off while the Index holds an IC = golden
+  iosetview.cpp:1040-1083: the sucker of that name (FTestSuck rows x cols; F_On, B_On, F_Off,
+  B_Off) gets its Suck() / Destroy() sequence instead of a raw coil write; no such sucker = refused
+  (golden does nothing). W906_IoTestSuckTick() = golden Timer1Timer :159-173, run every pass.
+  Not a guard, so W906_IO_PAGE_NO_GUARDS does not skip it. DEVIATION (b) retired.
+- tools/wb_serve.cpp: W906_IoTestSuckTick() at the two PumpTick lines (same line, no line moves).
+
+Offline test (scratch, the versioned machines/HT9050/IO_Table.csv, no card, no wb_serve, writes
+nothing; production_audit before / after: every machine file's MD5 unchanged): 17/17.
+  needSafeDoor follows the table, an input never; a golden-style mark on a 1203 row at IP 176 is
+  read; InitCylinder on the HT9050 table marks no cell at all (the 7 enabled cylinders all sit on
+  golden's bypass list, none past the table) -> on this machine no button is door-gated today.
+  TestSuck: FTestSuckAA_On -> Suck() done after 7 ticks (DUMMY run), FTestSuckAB_Off -> Destroy(),
+  an unknown TestSuck alias refused, no IC -> the ordinary path.
+A scratch wb_serve links (W906_IoTestSuckTick, NeedSafeDoor in the image). The running machine
+build was not touched: it needs F5 (rebuild + restart) to take this.
+Note: the HT9050 TestSuck *_On / *_Off rows are Enable=0, and Sensor() answers true for a
+disabled sucker, so Destroy() ends at once there -- faithful.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ JsonBridge/ChanIoPoints.cpp    |  28 +++++++++
+ JsonBridge/IoBtnPanelClick.cpp | 106 +++++++++++++++++++++++++++++----
+ tools/wb_serve.cpp             |   4 +-
+ 3 files changed, 125 insertions(+), 13 deletions(-)
+
+diff --git a/JsonBridge/ChanIoPoints.cpp b/JsonBridge/ChanIoPoints.cpp
+index 984bbea..69f84db 100644
+--- a/JsonBridge/ChanIoPoints.cpp
++++ b/JsonBridge/ChanIoPoints.cpp
+@@ -21,12 +21,37 @@
+ #include "database.h"     // HSys.IOTable / TIODATA
+ #include "common.h"       // IoTablePath
+ 
++// golden cmydef.h:5577 -- the outputs that need the safe door closed while idle (filled by InitCylinder,
++// cinitial.cpp:5418-5452, which wb_serve runs through InitialHandler since AI(W906-A4-2) 20260924).
++// AI(W906-IOWIDGET-3) 20261001: read here for the IO page's colours (golden SetCompomentIO, iosetview.cpp:2244-2258).
++extern bool bIdleNeedCheckSafeDoor[4][64][32][8];
++
+ namespace ht9045 {
+ namespace sjson {
+ 
+ namespace {
+ 
+ const int kIsaPci1203 = 3;          // MachineType.h eIOType：ePCI1203 = 3
++const int kIsaMotionNet = 0;        // MachineType.h eIOType：eMotionNet = 0
++
++// golden SetCompomentIO (iosetview.cpp:2244-2258 TBtnPanelLane, :2322-2330 TBtnPanel): the button's address in
++// bIdleNeedCheckSafeDoor -- MotionNet / 1203 [Ring][IP][Port][Bit], the ISA family [0][Port/32][Port%32][Bit]
++// ("Steven 20240103 : 加入保護" is that ISA split only). The MotionNet / 1203 tuple is NOT range-checked in golden: the
++// writer (cinitial.cpp:5435/:5451) and the reader that blocks the output (IdleCheckSafeDoorByCylinder, csystem.cpp:21375,
++// via MyLaneIo.cpp:261/:326) both index it raw, so a 1203 row past [64][32] (HT9050: IP 176, Port up to 135) lands on
++// the cell ring*16384 + ip*256 + port*8 + bit of the same 64 KB block. The same cell is read here, so the colour says
++// what the interlock will do; past the whole block = not marked (golden would read another variable there).
++// (20261001 offline check: on the HT9050 IO_Table InitCylinder marks no cell at all -- the 7 enabled cylinders all sit
++//  on golden's bypass list -- and none of them is past the block.)
++bool NeedSafeDoor(const TIODATA* r)
++{
++    long ring, ip, port;
++    if (r->iISABase == kIsaMotionNet || r->iISABase == kIsaPci1203) { ring = r->iLane; ip = r->iIP; port = r->iPort; }
++    else { ring = 0; ip = r->iPort / 32; port = r->iPort % 32; }
++    const long off = ((ring * 64 + ip) * 32 + port) * 8 + r->iBit;
++    if (ring < 0 || ip < 0 || port < 0 || r->iBit < 0 || off < 0 || off >= (long)sizeof(bIdleNeedCheckSafeDoor)) return false;
++    return (&bIdleNeedCheckSafeDoor[0][0][0][0])[off];
++}
+ const int kPollIntervalMs = 200;    // AI(W906-MT-E3a) 20260925: 500 -> 200 = 1203 監看器 Poll 的節拍（wb_serve kIoTickMs）。原本寫「wb_serve 一個 tick」的 500 是引擎的拍子不是卡片資料的更新頻率，頁面照它等就等於每 500 ms 才看一次每 200 ms 就更新的值（batchinput 報告）；網頁端已經照 pollIntervalMs 走（HW.IoSetView／IoLive，AI(W906-MT-E3)）
+ 
+ unsigned long long g_rtSeq = 0;
+@@ -207,6 +232,9 @@ std::string IoConfigJson()
+         w.Key("isaBase").Number((wb_int64)r->iISABase);
+         w.Key("inType").Number((wb_int64)r->iInType);
+         w.Key("enable").Number((wb_int64)r->iEnable);
++        // AI(W906-IOWIDGET-3) 20261001: an output that needs the safe door closed while idle -- golden paints its
++        // button orange / yellow with black text (iosetview.cpp:2244-2258); the interlock itself is MyLaneIO's
++        w.Key("needSafeDoor").Bool(dir == kIoDirOut && NeedSafeDoor(r));
+         w.EndObject();
+         w.Key("timing").BeginObject();
+         NumOrNull(w, "onAlarmTime", r->iOnAlarmTime);
+diff --git a/JsonBridge/IoBtnPanelClick.cpp b/JsonBridge/IoBtnPanelClick.cpp
+index 4a53683..7f99a84 100644
+--- a/JsonBridge/IoBtnPanelClick.cpp
++++ b/JsonBridge/IoBtnPanelClick.cpp
+@@ -27,7 +27,8 @@
+ //    repaint from Down                     :1120     the page paints from the card read-back
+ //    SwFMotorBreaker/SwBMotorBreaker/      :1155-1205 same four address matches, same
+ //      SwMotorRelay/SwServerON side effects           fAllMotorHome / HomeFlag resets
+-//    TestSuck + IndexHasIC() -> Suck()     :1040     refused (DEVIATION b)
++//    TestSuck + IndexHasIC() -> Suck()     :1040     the sucker's Suck() / Destroy() run by W906_IoTestSuckTick
++//                                                      (golden Timer1Timer :159-173) -- AI(W906-IOWIDGET-3) 20261001
+ //
+ //  and the checks golden made OUTSIDE the click, because a modal VCL form made
+ //  them sufficient there and a browser page does not:
+@@ -53,9 +54,9 @@
+ //  DEVIATIONS (each deliberate, each recorded here so the next reader does not
+ //  "restore" golden by accident):
+ //    (a) SendSwitchStatus: fPadInterface is not ported in this tree.
+-//    (b) TestSuck with an IC on the Index is golden's Suck()/Destroy() sequence
+-//        run by Timer1Timer; not ported, so it is refused rather than turned into
+-//        a raw write that golden never makes in that state.
++//    (b) RETIRED 20261001 (AI(W906-IOWIDGET-3), EastSun "TestSuck 走 Suck() 流程"): TestSuck with an IC on
++//        the Index now runs golden's Suck()/Destroy() sequence (Click_ picks the sucker, W906_IoTestSuckTick
++//        is golden's Timer1Timer part). It was refused here (and with NO_GUARDS turned into a raw write).
+ //    (c) The row is found through HSys.mapIOTable, not through SW[] -> sucker ->
+ //        Cylinder[] names (iosetview.cpp:2116-2226). Same address either way for
+ //        a row that HAS an engine object -- those objects are bound from
+@@ -104,10 +105,11 @@
+ //        could not have restored a 1203 point anyway: RestoreOutputData walks rings
+ //        0-1, IP<64, port<4 with the MotionNet default ISABase, MyLaneIo.cpp:520-535.)
+ //    (h) Sucker_On / Sucker_Off rows use their OWN row's Enable. golden uses the
+-//        sucker SENSOR row's Enable (pTempSuck->Enable, iosetview.cpp:2159), but
+-//        the sucker binder is `#if 0` in this port (cinitial.cpp:493-878), so
+-//        there is no pTempSuck to ask. Latent: every 1203 Sucker_On/Off row on
+-//        this machine is Enable=0, so none can be clicked.
++//        sucker SENSOR row's Enable (pTempSuck->Enable, iosetview.cpp:2159).
++//        ⚠ 20261001: "the sucker binder is #if 0 in this port" is no longer true -- its
++//        IO_Table half was un-gated by AI(W906-W3-9) 20260924 (cinitial.cpp:493-505, IO_CARD_TYPE
++//        2/3/PCI1203_IO), so pTempSuck exists; this file still asks the row (not yet changed).
++//        Latent: every 1203 Sucker_On/Off row on this machine is Enable=0, so none can be clicked.
+ //    (f) A click whose address cannot be written (no card byte, byte unreadable,
+ //        station is a drive, control not armed) is refused BEFORE IOBitOn, and so
+ //        before golden's side effects. golden would run IOBitOn into a failure it
+@@ -133,6 +135,7 @@
+ #include "myswitch.h"             // SW[] / MAX_SWITCH_ITEM
+ #include "mycylin.h"              // Cylinder[] / MaxCylinderItem
+ #include "Motor/mymotor.h"        // MOT[]
++#include "mykitsuck.h"            // TMySucker, FTestSuck / BTestSuck -- AI(W906-IOWIDGET-3) 20261001: golden's TestSuck sequence
+ #include "canary_support.h"       // ShowMyMessage
+ #include "JsonBridge/ChanIo.h"    // IoDirectionOfType
+ #include "EtherCAT/Pci1203IoRoute.h"
+@@ -149,6 +152,18 @@ bool SameAddress(int sw, const TIODATA* r)
+ 
+ std::string Str(const AnsiString& s) { return std::string(s.c_str()); }
+ 
++// ---------------------------------------------------------------------------
++//  AI(W906-IOWIDGET-3) 20261001: golden's TestSuck sequence (EastSun 20261001 "TestSuck 走 Suck() 流程").
++//  golden iosetview.cpp:47 `TMySucker *mySuckerTemp;` + the form's bChangeSuckStatus: a TestSuck button pressed
++//  while the Index holds an IC does not write its coil -- it picks the test sucker it is the _On / _Off of and
++//  the IO screen's 50 ms timer runs that sucker's own Suck() / Destroy() until it is done or in error
++//  (Timer1Timer :159-173, Interval = 50 in iosetview.dfm). Here: the click picks it (Click_), wb_serve's loop
++//  calls W906_IoTestSuckTick() every pass (~50 ms). Both on the tick thread: no lock.
++// ---------------------------------------------------------------------------
++TMySucker*  s_suckerTemp = 0;
++int         s_changeSuckStatus = SStatusOff;   // MachineType.h eSuckerStatus: SStatusOff / SStatusSuck / SStatusDestory
++std::string s_suckAlias;
++
+ // ---------------------------------------------------------------------------
+ //  AI(W906-IOWEB-P21) 20260925: CLICK-LATENCY LOG. User: "我點擊按鈕 有時候需要等上
+ //  2秒線圈才會有反應 這是json 的問題 還是1203的問題?" / "你寫個LOG 給我測測看不就知道了?"
+@@ -285,9 +300,48 @@ static bool Click_(const std::string& alias, int desiredDown, std::string& out,
+         }
+     }
+     const bool indexHasIC = IndexHasIC();
+-    if (indexHasIC && alias.find("TestSuck") != std::string::npos && W906_IO_PAGE_NO_GUARDS) bypassed.push_back("Index 上有 IC（TestSuck 走 Suck()/Destroy()）");  else if (indexHasIC && alias.find("TestSuck") != std::string::npos) {   // golden :1040, DEVIATION (b)   //AI(W906-IO-NOGUARD) 20260929
+-        out = "Index 上有 IC：golden 對 TestSuck 走 Suck()／Destroy() 流程（iosetview.cpp:1040-1083），這條還沒移植，所以不送";
+-        return false;
++    if (indexHasIC && alias.find("TestSuck") != std::string::npos) {   // golden :1040-1083 -- AI(W906-IOWIDGET-3) 20261001: ported (was DEVIATION (b), refused / with NO_GUARDS a raw write)
++        //  not a guard (it is golden's OTHER way to do the click), so W906_IO_PAGE_NO_GUARDS does not skip it.
++        //  golden's loop, its order and its stop: F_On, B_On, F_Off, B_Off at each [i][j], the first hit wins.
++        const AnsiString a(alias.c_str());
++        bool bOk = false;
++        TMySucker* pick = 0;
++        int status = SStatusOff;
++        for (int i = 0; i < FTestSuck.iShtRow && !bOk; i++) {
++            for (int j = 0; j < FTestSuck.iShtCol && !bOk; j++) {
++                if ((FTestSuck.Suck[i][j].SuckerName + "_On") == a)       { pick = &FTestSuck.Suck[i][j]; bOk = true; status = SStatusSuck; }
++                else if ((BTestSuck.Suck[i][j].SuckerName + "_On") == a)  { pick = &BTestSuck.Suck[i][j]; bOk = true; status = SStatusSuck; }
++                else if ((FTestSuck.Suck[i][j].SuckerName + "_Off") == a) { pick = &FTestSuck.Suck[i][j]; bOk = true; status = SStatusDestory; }
++                else if ((BTestSuck.Suck[i][j].SuckerName + "_Off") == a) { pick = &BTestSuck.Suck[i][j]; bOk = true; status = SStatusDestory; }
++            }
++        }
++        if (!bOk) {   // golden: nothing happens (no write; only lbSuckEnabled shows)
++            out = "Index 上有 IC：「" + alias + "」不是測試座吸嘴的 _On／_Off（golden 對 TestSuck 走 Suck()／Destroy()，找不到對應的吸嘴就什麼都不做）";
++            return false;
++        }
++        s_suckerTemp = pick;
++        s_changeSuckStatus = status;
++        s_suckAlias = alias;
++        std::printf("io.btnPanelClick %s -> TestSuck sequence %s on %s (Index has IC; golden iosetview.cpp:1040-1083 + Timer1Timer :159-173)\n",
++                    alias.c_str(), status == SStatusSuck ? "Suck()" : "Destroy()", pick->SuckerName.c_str());
++        webbridge::JsonWriter j;
++        j.BeginObject();
++        j.Key("alias").String(alias);
++        j.Key("down").Number((wb_int64)desiredDown);
++        j.Key("sequence").String(status == SStatusSuck ? "suck" : "destroy");
++        j.Key("sucker").String(Str(pick->SuckerName));
++        j.Key("accepted").Bool(true);
++        j.Key("issued").Bool(false);
++        j.Key("dryRun").Bool(false);
++        j.Key("why").String(status == SStatusSuck
++            ? "Index 上有 IC：照 golden 走 Suck() 流程（開真空、等到吸住或出錯），不是直接切線圈"
++            : "Index 上有 IC：照 golden 走 Destroy() 流程（破真空吹氣、等到放開或出錯），不是直接切線圈");
++        j.Key("address").BeginObject().EndObject();
++        j.Key("sideEffects").BeginArray().EndArray();
++        j.Key("golden").String("iosetview.cpp:1040-1083 + Timer1Timer :159-173");
++        j.EndObject();
++        out = j.Ok() ? j.Str() : std::string("{\"error\":\"json writer misuse\"}");
++        return true;
+     }
+     if (indexHasIC) {   // golden iosetview.cpp:253-255 (tempBtn[8]) + :404-411 (+ bplEpSwitch1/2)
+         static const char* const kLocked[] = {
+@@ -566,3 +620,33 @@ bool W906_IoBtnPanelClick(const std::string& alias, int desiredDown, std::string
+ //  YesNo / MyMessageBox waits): with the IO page unguarded, an io.btnPanelClick is served while a dialog is open too, instead of
+ //  "modal-pending" (golden's ShowModal made the IO form unreachable). 0 in W906_IO_PAGE_NO_GUARDS restores that.
+ bool W906_IoPageNoGuards() { return W906_IO_PAGE_NO_GUARDS != 0; }
++
++// ---------------------------------------------------------------------------
++//  AI(W906-IOWIDGET-3) 20261001: golden Tfiosetview::Timer1Timer :159-173, the TestSuck part -- every pass of
++//  wb_serve's loop (golden: the IO form's 50 ms timer). Idle = one compare.
++//    SStatusSuck:    Suck() done or Error -> off
++//    SStatusDestory: Sensor() on -> off; else Destroy() done or Error -> off
++//  The sucker's own Suck() / Destroy() write its coils through MyLaneIO as the engine does (source "engine": a
++//  write of the value the card already reads back is skipped, so the coil is not re-sent every 50 ms).
++//  ⚠ NOT PORTED from the same timer: CheckIndexSuck / ProcessIndexSuckDestroy1/2 (INDEX_SUCKER_TYPE==1) and
++//    CheckIndexAllSuckICFallDown -- golden runs them only while the IO form is shown; the web IO page is never
++//    "closed" (the iframe is hidden), so running them here would run them all the time.
++// ---------------------------------------------------------------------------
++void W906_IoTestSuckTick()
++{
++    if (s_changeSuckStatus == SStatusOff || s_suckerTemp == 0) return;
++    const int was = s_changeSuckStatus;
++    if (s_changeSuckStatus == SStatusSuck) {                                   // golden :159 手動開啟Index吸嘴
++        if (s_suckerTemp->Suck() == true || s_suckerTemp->Error == true)
++            s_changeSuckStatus = SStatusOff;
++    } else if (s_changeSuckStatus == SStatusDestory) {                         // golden :164 手動吹氣
++        if (s_suckerTemp->Sensor() == true)
++            s_changeSuckStatus = SStatusOff;
++        else if (s_suckerTemp->Destroy() == true || s_suckerTemp->Error == true)
++            s_changeSuckStatus = SStatusOff;
++    }
++    if (s_changeSuckStatus == SStatusOff)
++        std::printf("io.btnPanelClick %s -> TestSuck %s finished on %s%s\n", s_suckAlias.c_str(),
++                    was == SStatusSuck ? "Suck()" : "Destroy()", s_suckerTemp->SuckerName.c_str(),
++                    s_suckerTemp->Error ? " (Error)" : "");
++}
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 913c019..341971a 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -4594,7 +4594,7 @@ int main(int argc, char** argv)
+         //AI(W906-Q34-7) 20260923: 只在 500 ms 的拍子上跑 —— 見迴圈前的說明。
+         //  ⓘ rebase 到 bafb25e 之後：WdMark("tick") 放在 if 外面，**每一圈都執行**
+         //    （它只是停擺看門狗的心跳；雙時鐘之後一圈最長 50 ms，比 500 ms 更密，不會誤報）。
+-        { extern void W906_IoTiming(int); if (pumpBeat) { W906_IoTiming(1); ht9045::PumpTick(); W906_IoTiming(2); extern void W906_ServiceOutputs(int); W906_ServiceOutputs(0); }  if (pumpBeat) g_apiCacheDirty = true; }   // AI(W906-IOWEB-P6) 20260924: rebuild on the tick thread (covers builds without INSTALL_1203_MONITOR and IO_Table reloads)  // AI(W906-IOWEB-P21) 20260925: W906_IoTiming marks the phase for the click-latency log (JsonBridge/IoBtnPanelClick.cpp)  // AI(W906-IOWEB-P25) 20260925: outputs right after PumpTick, before INI/Poll; the api cache is only MARKED here and rebuilt after the drain
++        { extern void W906_IoTestSuckTick(); W906_IoTestSuckTick(); }  /* AI(W906-IOWIDGET-3) 20261001: golden iosetview Timer1Timer :159-173 (Interval 50) -- the TestSuck Suck()/Destroy() sequence, every pass (JsonBridge/IoBtnPanelClick.cpp); idle = one compare. Same line */  { extern void W906_IoTiming(int); if (pumpBeat) { W906_IoTiming(1); ht9045::PumpTick(); W906_IoTiming(2); extern void W906_ServiceOutputs(int); W906_ServiceOutputs(0); }  if (pumpBeat) g_apiCacheDirty = true; }   // AI(W906-IOWEB-P6) 20260924: rebuild on the tick thread (covers builds without INSTALL_1203_MONITOR and IO_Table reloads)  // AI(W906-IOWEB-P21) 20260925: W906_IoTiming marks the phase for the click-latency log (JsonBridge/IoBtnPanelClick.cpp)  // AI(W906-IOWEB-P25) 20260925: outputs right after PumpTick, before INI/Poll; the api cache is only MARKED here and rebuilt after the drain
+         if (pumpBeat) { extern void W906_HmiKeeperTick(); W906_HmiKeeperTick(); }  /*AI(W906-HMI-KEEP) 20260929: reopen the HMI page when it is closed (end of file)*/  if (pumpBeat) { extern void W906_StateRecordTimer2Pump(); W906_StateRecordTimer2Pump(); }  if (pumpBeat) { extern void W906_MotorAccessTick(bool); extern bool W906_OwnerHeldSince(unsigned long long, unsigned long long&); static unsigned long long s_w906OwnerTick = 0; W906_MotorAccessTick(W906_OwnerHeldSince(server.ControlOwner(), s_w906OwnerTick)); }  // AI(W906-STATEREC) 20260924: golden Timer2Timer 的 State Record 段（main.cpp:21142-21153，本體 cStateRecord.cpp，內部限每秒一次）—— 推 StateRecordImage 的格 1～6，格 6 發延後警報 JAM0316/JAM0317（會像其他警報一樣等瀏覽器回答）。佔用原本的空行，不移動行號
+ #ifdef WB_PUMP_1203_CONTROL
+         //AI(W906-Q34-5b) 20260923: 把 Pci1203Axis.ini 記下的卡片設定放回去（1203INI-1）
+@@ -8072,7 +8072,7 @@ void W906_NativeKeepaliveMain()
+     }
+     WdMark("tick (native window drag keepalive)");
+     const bool owner = (g_modalServer != 0) && g_modalServer->ControlOwner() != 0;  (void)owner;   //AI(W906-MERGE-NATIVE) 20260929: the two motor ticks below now take W906_OwnerHeldSince (TK-1); kept for the comment above
+-    { extern void W906_IoTiming(int); if (pumpBeat) { W906_IoTiming(1); ht9045::PumpTick(); W906_IoTiming(2); extern void W906_ServiceOutputs(int); W906_ServiceOutputs(0); }  if (pumpBeat) g_apiCacheDirty = true; }
++    { extern void W906_IoTestSuckTick(); W906_IoTestSuckTick(); }  /* AI(W906-IOWIDGET-3) 20261001: golden iosetview Timer1Timer :159-173 (Interval 50) -- the TestSuck Suck()/Destroy() sequence, every pass (JsonBridge/IoBtnPanelClick.cpp); idle = one compare. Same line */  { extern void W906_IoTiming(int); if (pumpBeat) { W906_IoTiming(1); ht9045::PumpTick(); W906_IoTiming(2); extern void W906_ServiceOutputs(int); W906_ServiceOutputs(0); }  if (pumpBeat) g_apiCacheDirty = true; }
+     if (pumpBeat) { extern void W906_StateRecordTimer2Pump(); W906_StateRecordTimer2Pump(); }  if (pumpBeat) { extern void W906_MotorAccessTick(bool); extern bool W906_OwnerHeldSince(unsigned long long, unsigned long long&); static unsigned long long s_keepOwnerTick = 0; W906_MotorAccessTick(W906_OwnerHeldSince(g_modalServer ? g_modalServer->ControlOwner() : 0ull, s_keepOwnerTick)); }   //AI(W906-MERGE-NATIVE) 20260929: TK-1 (8c6ac9a0): the main loop's motor ticks use W906_OwnerHeldSince (a takeover = operator gone for the old holder, one beat)
+ #ifdef WB_PUMP_1203_CONTROL
+     {
+-- 
+2.55.0.windows.5
+
