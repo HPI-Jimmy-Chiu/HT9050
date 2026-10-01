@@ -1,0 +1,265 @@
+From 6be18ded4dfb97dda2b8cbc26e0b916e60f6bdf3 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 2 Oct 2026 05:16:42 +0800
+Subject: [PATCH] NOTE-KEYGATE: the alarm note's on-screen keys follow golden's
+ key lock -- an IC fallen into the test site (open the Index door, press Z1),
+ contact over, auto-clean door, clean pad, safe lock, index jam door,
+ auto-retest door refuse the press, as the physical keys already did
+
+The every-component check (helper motorB) found that the web answer path (tools/wb_serve.cpp modal.answer / dialog.response)
+accepted SKIP / RETRY / TRAY FEED / TRAY END / CLEAN OUT / HOME / TRAIN / ONE CYCLE whatever the machine state, while golden V906
+note.cpp:2843-2870 TfNote::BtnSkipClick (those 8 keys' OnClick, note.dfm) + UpdateButtonStatus :2764-2873 ignore the press. So the
+screen could RETRY + START with an IC still in the socket. The physical panel keys (W906_AlarmIoAnswer) already had the lock.
+
+* forms/fNote_WebKeyGate.cpp (new, ht9045_sm): W906_NoteWebKeyGate(bOpenChamberDoor, why) -- the golden conditions, each with a reason
+  (golden only ignores the press; the web needs the reason). Not ported members stay as the panel path treats them
+  (iICFloattingCheckStep = 0, bOpenSixDoor = false).
+* tools/wb_serve.cpp: the gate runs for every key but RESET (BtnResetClick, whose main half is not wired) on the line before the
+  D-026 password gate -- golden: a locked key cannot be chosen, so DoPassword never runs for it (and that gate uses up the one-shot
+  pass); refused = CompleteCommand(false, reason) and the wait goes on. W906_AlarmIoAnswer shares its bOpenChamberDoor (TfNote
+  member, golden Timer1Timer :3187-3205) through g_w906NoteChamberDoorPtr, like g_w906NoteSelPtr. All line-neutral.
+* tests/test_note_webkeygate.cpp (ctest NoteWebKeyGate, 13 checks): each condition refuses with its reason and passes when cleared;
+  CC_SCK exempt; source pins (gate before the D-026 gate, the shared flag, the IC-fall arm).
+
+Verified: o2 wb_serve 0 errors; ctest NoteWebKeyGate 13/13, D026_NoteAuth (its source pin on the next line intact),
+WB_DialogMailbox, MainCloseStop, WebCmdGuard 5/5; PE 80/80; production_audit 0 changes.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ CMakeLists.txt                 |  2 +-
+ forms/fNote_WebKeyGate.cpp     | 59 +++++++++++++++++++++++++
+ tests/CMakeLists.txt           | 14 ++++++
+ tests/test_note_webkeygate.cpp | 79 ++++++++++++++++++++++++++++++++++
+ tools/wb_serve.cpp             |  8 ++--
+ 5 files changed, 157 insertions(+), 5 deletions(-)
+ create mode 100644 forms/fNote_WebKeyGate.cpp
+ create mode 100644 tests/test_note_webkeygate.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 754a653..ce67ea8 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -2768,7 +2768,7 @@ add_library(ht9045_sm STATIC
+     #   (golden RotateKit/fRotate.cpp:1170/:1203). Needs ProcessSingleMotorHome (acatchtray_shims.cpp,
+     #   this target), so it lives here, not in forms/fRotate.cpp (ht9045_forms) -- same split as cTrayForm.cpp.
+     RotateKit/fRotate.cpp
+-    TempCtrl/TriTemp.cpp  forms/fMain_OperateMode.cpp  forms/fMain_ATCSiteUse.cpp  forms/fNote_JamCount.cpp  forms/fMain_TestSeconds.cpp  forms/fNote_ShowError.cpp   forms/fMain_SetLotState.cpp   forms/fMain_Heater.cpp   # AI(W906-I01) 20261001 (Ifor01): fMain_Heater.cpp = golden TfMain::Index16Heater / IndexHeatMode / HotplateHeatMode / SetTemp body (main.cpp:18613-20847, :23890-23981; needs sm symbols).  # AI(W906-SETLOTSTATE) 20261001: fMain_SetLotState.cpp = golden TfMain::SetLotState (main.cpp:15160-15407; needs sm / automation / secsgem symbols).  # AI(W906-J12) 20260926: fMain_TestSeconds.cpp = golden Timer2Timer test seconds (uses RecordProcess, sm).  # AI(W906-J2) 20260926: fNote_JamCount.cpp = golden note.cpp CheckRecordJamType + the FormClose Jam count; in ht9045_sm because it reads canary_support's bDuplicateErr.  # AI(W906-OPMODE) 20260926: golden TfMain::UpdateMainOperateMode／TemperatureEditDisable／SetNormalOrPrime／ChangeATCSiteUse 的本體。放 ht9045_sm 不放 ht9045_forms：它們用 ATCInterfaceForm／fTemp_Set／IsNNMode 等 sm 符號，放 forms 會造出 :683-690 禁止的 forms->sm 反向相依  # AI(W906-SHOWERR) 20260929: fNote_ShowError.cpp = golden ShowErrorMessage's alarm record (note.cpp:839-868) + TfNote::ErrShowToForm + the FormShow alarm servo-off; ht9045_sm like fNote_JamCount.cpp -- it reads W906_FormShowing / fContact (sm side), so it cannot be in ht9045_forms
++    TempCtrl/TriTemp.cpp  forms/fMain_OperateMode.cpp  forms/fMain_ATCSiteUse.cpp  forms/fNote_JamCount.cpp  forms/fMain_TestSeconds.cpp  forms/fNote_ShowError.cpp   forms/fMain_SetLotState.cpp   forms/fMain_Heater.cpp   forms/fNote_WebKeyGate.cpp   # AI(W906-NOTE-KEYGATE) 20261002: fNote_WebKeyGate.cpp = golden TfNote::BtnSkipClick + UpdateButtonStatus key lock for a key chosen on the screen (note.cpp:2764-2870; reads csystem IsSafeLockCheck / fNote, sm side like fNote_ShowError.cpp).  # AI(W906-I01) 20261001 (Ifor01): fMain_Heater.cpp = golden TfMain::Index16Heater / IndexHeatMode / HotplateHeatMode / SetTemp body (main.cpp:18613-20847, :23890-23981; needs sm symbols).  # AI(W906-SETLOTSTATE) 20261001: fMain_SetLotState.cpp = golden TfMain::SetLotState (main.cpp:15160-15407; needs sm / automation / secsgem symbols).  # AI(W906-J12) 20260926: fMain_TestSeconds.cpp = golden Timer2Timer test seconds (uses RecordProcess, sm).  # AI(W906-J2) 20260926: fNote_JamCount.cpp = golden note.cpp CheckRecordJamType + the FormClose Jam count; in ht9045_sm because it reads canary_support's bDuplicateErr.  # AI(W906-OPMODE) 20260926: golden TfMain::UpdateMainOperateMode／TemperatureEditDisable／SetNormalOrPrime／ChangeATCSiteUse 的本體。放 ht9045_sm 不放 ht9045_forms：它們用 ATCInterfaceForm／fTemp_Set／IsNNMode 等 sm 符號，放 forms 會造出 :683-690 禁止的 forms->sm 反向相依  # AI(W906-SHOWERR) 20260929: fNote_ShowError.cpp = golden ShowErrorMessage's alarm record (note.cpp:839-868) + TfNote::ErrShowToForm + the FormShow alarm servo-off; ht9045_sm like fNote_JamCount.cpp -- it reads W906_FormShowing / fContact (sm side), so it cannot be in ht9045_forms
+     bthermo.cpp
+     AutoRetest.cpp
+     OCRInsp.cpp
+diff --git a/forms/fNote_WebKeyGate.cpp b/forms/fNote_WebKeyGate.cpp
+new file mode 100644
+index 0000000..722e82b
+--- /dev/null
++++ b/forms/fNote_WebKeyGate.cpp
+@@ -0,0 +1,59 @@
++// ===========================================================================
++//  forms/fNote_WebKeyGate.cpp -- AI(W906-NOTE-KEYGATE) 20261002: the alarm note's key lock for a key chosen ON THE SCREEN.
++//
++//  The every-component check (EastSun 20261001「不是只有檢查按鈕喔 我說的是所有元件」, helper motorB) found that the web
++//  answer path (tools/wb_serve.cpp, modal.answer / dialog.response) accepted SKIP / RETRY / TRAY FEED / TRAY END / CLEAN OUT /
++//  HOME / TRAIN / ONE CYCLE whatever the machine state, while golden ignores the press:
++//    golden V906 note.cpp:2843-2870 TfNote::BtnSkipClick (the OnClick of those 8 keys, note.dfm), non-SIM:
++//      IsTestSitICFallDown()                                   -> return   (jou 2011-12-20: an IC fell into the test site)
++//      bContactCTOverCHK || bAutoCleanCheckOpenDoor || bChangeCleanPad -> return
++//      bP59UnloaderICFloattingAlarmAfterExit && iICFloattingCheckStep!=0 -> return   (iICFloattingCheckStep: TfNote member
++//                                                                         not ported -> 0, the clause is false; as the panel path)
++//    then UpdateButtonStatus :2764-2873:
++//      IsSafeLockCheck()                                       -> return
++//      IsTestSitICFallDown() (non-SIM)                         -> return   (「有掉料的話，要開Chamber門和按Z1才能接收按鍵」)
++//      CUSTOMER_CODE!=CC_SCK && bIndexJamInArmAway && bD40IndexICFallDownMustPressFMotorDown &&
++//        bOpenChamberDoor==false && bIsTestSitICFallDown==true -> return
++//      bAutoRetestJam && bOpenAllDoor==false                   -> return
++//      BinBox (bOpenSixDoor && bBinError[]): bOpenSixDoor is only set by golden ShowErrorMessage (not ported) -> always false,
++//        not checked -- same as the physical-key path.
++//  The physical panel keys already apply the same lock (tools/wb_serve.cpp W906_AlarmIoAnswer, golden :2793-2811); this is the
++//  screen side, so the screen can no longer RETRY + START with an IC still in the socket.
++//  Golden gives no message (the press is just ignored); the web gets the reason as the refusal text so the operator knows why.
++//  RESET is not gated here: its OnClick is BtnResetClick (runs the main Reset first), whose main half is not wired yet.
++//  bOpenChamberDoor is the TfNote member W906_AlarmIoAnswer keeps (golden Timer1Timer :3187-3205); the caller passes it.
++// ===========================================================================
++#include <string>
++
++#include "cmydef.h"
++#include "Config.h"
++#include "MachineType.h"
++#include "csystem.h"
++#include "forms/fNote.h"
++
++bool W906_NoteWebKeyGate(bool bOpenChamberDoor, std::string* why)
++{
++    std::string w;
++#ifdef SOFT_SIMULTE
++    if (IsSafeLockCheck())                                                      // golden :2847-2849 (SIM arm of BtnSkipClick)
++        w = "Safe Lock（golden IsSafeLockCheck）";
++#else
++    if (fNote && fNote->IsTestSitICFallDown())                                  // golden :2851-2852
++        w = "測試座有掉料：要先開 Index 門並按 Z1 才能選鍵（golden IsTestSitICFallDown）";
++    else if (bContactCTOverCHK || bAutoCleanCheckOpenDoor || bChangeCleanPad)   // golden :2853-2858
++        w = bContactCTOverCHK ? "接觸次數超過（golden bContactCTOverCHK）"
++          : bAutoCleanCheckOpenDoor ? "Auto Clean 警報要先開後門（golden bAutoCleanCheckOpenDoor）"
++          : "要先換清潔墊（golden bChangeCleanPad）";
++#endif
++    if (w.empty() && IsSafeLockCheck())                                         // UpdateButtonStatus :2773
++        w = "Safe Lock（golden IsSafeLockCheck）";
++    if (w.empty() && CUSTOMER_CODE != CC_SCK && IniConfig.bIndexJamInArmAway == true &&
++        IniConfig.bD40IndexICFallDownMustPressFMotorDown == true &&
++        bOpenChamberDoor == false && bIsTestSitICFallDown == true)              // UpdateButtonStatus :2781-2789
++        w = "Index 掉料：要先開 Chamber 門（golden bOpenChamberDoor）";
++    if (w.empty() && bAutoRetestJam && bOpenAllDoor == false)                   // UpdateButtonStatus :2791-2792
++        w = "Auto Retest Jam：要先開門確認（golden bOpenAllDoor）";
++    if (w.empty()) return true;
++    if (why) *why = "note-key-locked: golden 不接受這個按鍵 —— " + w;
++    return false;
++}
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index bf1ec1b..8cda8d7 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -6488,3 +6488,17 @@ if(WIN32)
+ endif()
+ add_test(NAME IoSetViewFormShowBridge COMMAND test_iosetview_formshow_bridge)
+ set_tests_properties(IoSetViewFormShowBridge PROPERTIES TIMEOUT 120)
++
++# --- test_note_webkeygate: AI(W906-NOTE-KEYGATE) 20261002 -- the alarm note's key lock for a key chosen on the screen
++#   (forms/fNote_WebKeyGate.cpp = golden note.cpp:2843-2870 BtnSkipClick + :2764-2873 UpdateButtonStatus): each golden condition
++#   refuses with its reason and passes once cleared; source pins on tools/wb_serve.cpp (argv[1] = the port root, read only).
++#   Memory only: no IO table, no card, no machine file.  After the GLOBAL TEST TIMEOUT block => own TIMEOUT.
++add_executable(test_note_webkeygate test_note_webkeygate.cpp)
++target_link_libraries(test_note_webkeygate PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_note_webkeygate PRIVATE ws2_32)
++endif()
++add_test(NAME NoteWebKeyGate COMMAND test_note_webkeygate "${CMAKE_SOURCE_DIR}")
++set_tests_properties(NoteWebKeyGate PROPERTIES TIMEOUT 120)
+diff --git a/tests/test_note_webkeygate.cpp b/tests/test_note_webkeygate.cpp
+new file mode 100644
+index 0000000..b501a65
+--- /dev/null
++++ b/tests/test_note_webkeygate.cpp
+@@ -0,0 +1,79 @@
++// ===========================================================================
++//  tests/test_note_webkeygate.cpp -- AI(W906-NOTE-KEYGATE) 20261002: the alarm note's key lock for a key chosen on the screen
++//  (forms/fNote_WebKeyGate.cpp = golden V906 note.cpp:2843-2870 TfNote::BtnSkipClick + :2764-2873 UpdateButtonStatus).
++//  Each case sets one golden condition and checks the press is refused with its reason, then clears it and checks it passes.
++//  Memory only: no IO table is loaded (IsSafeLockCheck reads disabled sensors -> false), fNote is NULL (the IsTestSitICFallDown
++//  arm is covered by the source pin below); no machine file, no card.
++// ===========================================================================
++#include <cstdio>
++#include <cstring>
++#include <fstream>
++#include <sstream>
++#include <string>
++
++#include "cmydef.h"
++#include "Config.h"
++#include "MachineType.h"
++
++bool W906_NoteWebKeyGate(bool bOpenChamberDoor, std::string* why);
++
++static int g_fail = 0, g_pass = 0;
++static void check(bool ok, const char* what) {
++    std::printf("  %s  %s\n", ok ? "PASS" : "FAIL", what);
++    if (ok) ++g_pass; else ++g_fail;
++}
++static bool has(const std::string& s, const char* sub) { return s.find(sub) != std::string::npos; }
++
++int main(int argc, char** argv) {
++    std::string why;
++    bContactCTOverCHK = false; bAutoCleanCheckOpenDoor = false; bChangeCleanPad = false;
++    bAutoRetestJam = false; bOpenAllDoor = false; bIsTestSitICFallDown = false;
++    IniConfig.bIndexJamInArmAway = false; IniConfig.bD40IndexICFallDownMustPressFMotorDown = false;
++    check(W906_NoteWebKeyGate(false, &why), "nothing set -> the press is accepted");
++
++    bContactCTOverCHK = true; why.clear();
++    check(!W906_NoteWebKeyGate(false, &why) && has(why, "bContactCTOverCHK") && has(why, "note-key-locked"),
++          ":2853 bContactCTOverCHK -> refused, reason names it");
++    bContactCTOverCHK = false;
++    bAutoCleanCheckOpenDoor = true; why.clear();
++    check(!W906_NoteWebKeyGate(false, &why) && has(why, "bAutoCleanCheckOpenDoor"), ":2856 bAutoCleanCheckOpenDoor -> refused");
++    bAutoCleanCheckOpenDoor = false;
++    bChangeCleanPad = true; why.clear();
++    check(!W906_NoteWebKeyGate(false, &why) && has(why, "bChangeCleanPad"), ":2857 bChangeCleanPad -> refused");
++    bChangeCleanPad = false;
++
++    bAutoRetestJam = true; bOpenAllDoor = false; why.clear();
++    check(!W906_NoteWebKeyGate(false, &why) && has(why, "bOpenAllDoor"), ":2791 bAutoRetestJam && !bOpenAllDoor -> refused");
++    bOpenAllDoor = true;
++    check(W906_NoteWebKeyGate(false, &why), ":2791 bAutoRetestJam with the doors opened -> accepted");
++    bAutoRetestJam = false; bOpenAllDoor = false;
++
++    CUSTOMER_CODE = 0;
++    IniConfig.bIndexJamInArmAway = true; IniConfig.bD40IndexICFallDownMustPressFMotorDown = true; bIsTestSitICFallDown = true;
++    why.clear();
++    check(!W906_NoteWebKeyGate(false, &why) && has(why, "bOpenChamberDoor"), ":2781-2789 index jam, chamber door not opened -> refused");
++    check(W906_NoteWebKeyGate(true, &why), ":2781-2789 index jam, chamber door opened (TfNote member passed in) -> accepted");
++    CUSTOMER_CODE = CC_SCK;
++    check(W906_NoteWebKeyGate(false, &why), ":2781 CC_SCK is exempt -> accepted");
++    CUSTOMER_CODE = 0; IniConfig.bIndexJamInArmAway = false; IniConfig.bD40IndexICFallDownMustPressFMotorDown = false;
++    bIsTestSitICFallDown = false;
++    check(W906_NoteWebKeyGate(false, &why), "all cleared again -> accepted");
++
++    // source pins (argv[1] = the port root): the web answer path calls the gate for every key but RESET, before the D-026 gate,
++    // and refuses with the reason; the physical-key path keeps its own lock; the IC-fall arm is in the gate
++    if (argc > 1) {
++        std::ifstream f((std::string(argv[1]) + "/tools/wb_serve.cpp").c_str(), std::ios::binary);
++        std::stringstream ss; ss << f.rdbuf(); const std::string src = ss.str();
++        const std::size_t a = src.find("if (k != 0 && (k & kcode) != 0 && k != K_RESET) { std::string kgWhy; if (!W906_NoteWebKeyGate(");
++        const std::size_t b = src.find("extern bool W906_NoteAuthAnswerGate(");
++        check(a != std::string::npos && b != std::string::npos && a < b, "wb_serve.cpp: the web answer path gates the key before the D-026 password gate");
++        check(src.find("g_w906NoteChamberDoorPtr = &bOpenChamberDoor;") != std::string::npos, "wb_serve.cpp: W906_AlarmIoAnswer shares its bOpenChamberDoor");
++        std::ifstream g((std::string(argv[1]) + "/forms/fNote_WebKeyGate.cpp").c_str(), std::ios::binary);
++        std::stringstream gs; gs << g.rdbuf();
++        check(gs.str().find("fNote && fNote->IsTestSitICFallDown()") != std::string::npos, "fNote_WebKeyGate.cpp: the IC-fell-into-the-site arm (golden :2851)");
++    } else {
++        check(false, "argv[1] (the port root) missing: source pins not run");
++    }
++    std::printf("RESULT: %d passed, %d failed\n", g_pass, g_fail);
++    return g_fail ? 1 : 0;
++}
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 72eb6d6..8b48739 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -436,7 +436,7 @@ static bool DialogMailboxRetire()   //AI(W906-J5-ACK) 20260930: returns true = b
+         std::printf("  ⚠ dialog mailbox retire FAILED -- 下次重整會再彈一次\n");
+     return ok;
+ }
+-std::size_t W906_StageHomeMonitor(webbridge::TagSnapshot& snap, bool streamWanted);  void W906_HomeAbortCommand(webbridge::WebBridgeServer& server, const webbridge::WebCommand& wc);  /*AI(W906-HOMEMON) 20261001: JsonBridge/ChanHome.cpp -- the web Home Monitor's home.* tags (PublishExtraTags) and act.home.abort = golden TfHome::sbAbortHomeClick (main drain + the three blocking-dialog waits); declared here at file scope, before every caller (two of them sit in anonymous namespaces); same line*/  struct W906ModalWaitScope { explicit W906ModalWaitScope(int k, const char* code = 0); ~W906ModalWaitScope(); int kind; };  void W906_ModalWaitTick(int kind, int kcode = 0);  void W906_ModalOutputsRefresh();  int W906_YesNoPreCloseLikeGolden();  extern int* g_w906NoteSelPtr;  void W906_TesterCommPoll(); bool W906_TesterCommHttp(const std::string&, const std::string&, const std::string&, bool, int*, std::string*, std::string*);  bool W906_ElaHttp(const std::string&, const std::string&, const std::string&, bool, int*, std::string*, std::string*);  /* AI(W906-ELA-P3) 20260927: EventLogAnalysis/ElaService.cpp */  bool W906_SimDiCommand(const webbridge::WebCommand& wc);  /* AI(W906-R70) 20260926 YN-3（本體在檔尾，同 :6527）*/  bool CheckIndexAllSuckICFallDown(bool bCheckArm1, bool bCheckArm2);  extern bool SECS_GEM_PPMUSIC_CONTROL_flag;  extern bool SECS_GEM_PPSIGNALTOWER_CONTROL_flag;  /* AI(W906-R70) 20260926 MW-F／YN-4：csystem.h:209、ckernel.cpp:1272／:1275 */  std::size_t W906_StageMotionViewTrays(webbridge::TagSnapshot& snap);  /* AI(W906-S118) 20260928 (St02-E, laptop-approved claim): JsonBridge/ChanMvTrays.cpp, called from PublishExtraTags */   // AI(W906-MODAL-WAKE) 20260926: RULINGS #9 —— 三個阻塞等待迴圈進迴圈前建一個（0 告警、1 是／否、2 ShowMyMessage），任何 return 都經過解構；每一圈呼叫 W906_ModalWaitTick。本體在檔尾
++std::size_t W906_StageHomeMonitor(webbridge::TagSnapshot& snap, bool streamWanted);  void W906_HomeAbortCommand(webbridge::WebBridgeServer& server, const webbridge::WebCommand& wc);  /*AI(W906-HOMEMON) 20261001: JsonBridge/ChanHome.cpp -- the web Home Monitor's home.* tags (PublishExtraTags) and act.home.abort = golden TfHome::sbAbortHomeClick (main drain + the three blocking-dialog waits); declared here at file scope, before every caller (two of them sit in anonymous namespaces); same line*/  struct W906ModalWaitScope { explicit W906ModalWaitScope(int k, const char* code = 0); ~W906ModalWaitScope(); int kind; };  void W906_ModalWaitTick(int kind, int kcode = 0);  void W906_ModalOutputsRefresh();  int W906_YesNoPreCloseLikeGolden();  extern int* g_w906NoteSelPtr;  extern bool* g_w906NoteChamberDoorPtr;  bool W906_NoteWebKeyGate(bool bOpenChamberDoor, std::string* why);  /*AI(W906-NOTE-KEYGATE) 20261002: forms/fNote_WebKeyGate.cpp (golden BtnSkipClick + UpdateButtonStatus); the chamber-door flag is W906_AlarmIoAnswer's TfNote member*/  void W906_TesterCommPoll(); bool W906_TesterCommHttp(const std::string&, const std::string&, const std::string&, bool, int*, std::string*, std::string*);  bool W906_ElaHttp(const std::string&, const std::string&, const std::string&, bool, int*, std::string*, std::string*);  /* AI(W906-ELA-P3) 20260927: EventLogAnalysis/ElaService.cpp */  bool W906_SimDiCommand(const webbridge::WebCommand& wc);  /* AI(W906-R70) 20260926 YN-3（本體在檔尾，同 :6527）*/  bool CheckIndexAllSuckICFallDown(bool bCheckArm1, bool bCheckArm2);  extern bool SECS_GEM_PPMUSIC_CONTROL_flag;  extern bool SECS_GEM_PPSIGNALTOWER_CONTROL_flag;  /* AI(W906-R70) 20260926 MW-F／YN-4：csystem.h:209、ckernel.cpp:1272／:1275 */  std::size_t W906_StageMotionViewTrays(webbridge::TagSnapshot& snap);  /* AI(W906-S118) 20260928 (St02-E, laptop-approved claim): JsonBridge/ChanMvTrays.cpp, called from PublishExtraTags */   // AI(W906-MODAL-WAKE) 20260926: RULINGS #9 —— 三個阻塞等待迴圈進迴圈前建一個（0 告警、1 是／否、2 ShowMyMessage），任何 return 都經過解構；每一圈呼叫 W906_ModalWaitTick。本體在檔尾
+ static int ForwardShowErrorMessage(const char* code, int kcode, int pos)
+ {
+     if (!g_w906MotorNoteMsg) { extern void W906_AlarmStopLikeGolden(const char*); W906_AlarmStopLikeGolden(code); }  if (!g_w906MotorNoteMsg) /* AI(W906-JAM-STOP) 20260930: both skipped only for golden ShowMotorErrorMessage's note (EOF ForwardShowMotorErrorMessage) -- golden note.cpp:795-868 are ShowErrorMessage's, the motor body did its own stop + record (golden :1054-1092) */ { extern bool W906_ShowErrorMessageRecordLikeGolden(AnsiString, bool, AnsiString); extern AnsiString W906_ShowErrorMessage_LastErrPart; extern bool W906_ShowErrorMessage_LastDuplicate; W906_ShowErrorMessageRecordLikeGolden(AnsiString(code ? code : ""), W906_ShowErrorMessage_LastDuplicate, W906_ShowErrorMessage_LastErrPart); }  if (!g_modalServer || !g_pumpQueue) return 0;   // unattended -> sim answer  // AI(W906-ALARMSTOP) 20260924: 先照 golden note.cpp:795-801 停機（使用者 20260924：kcode≠0 與 kcode==0 都停；kcode==0 仍依 0923 不阻塞）—— 本體在檔尾  //AI(W906-SHOWERR) 20260929: then golden ShowErrorMessage's alarm record (note.cpp:538 / :794 / :802-818 / :839-868 -- MyDBIEvent -> EventTracker / HANDLER LOG csv, ProductionLog, ErrShowToForm -> fNote->edErrorCode / Edit3 / edUnitName / AlarmType; forms/fNote_ShowError.cpp) with the errPart / bDuplicateErr canary_support.cpp recorded; before the unattended return because golden records every alarm (RULINGS_20260929 section 5 item 7)
+@@ -581,7 +581,7 @@ static int ForwardShowErrorMessage(const char* code, int kcode, int pos)
+                 else if (ans == "RESET")     k = K_RESET;
+                 else if (ans == "HOME")      k = K_HOME;
+                 else if (ans == "TRAIN")     k = K_TRAIN;
+-                else if (ans == "ONECYCLE")  k = K_ONECYCLE;
++                else if (ans == "ONECYCLE")  k = K_ONECYCLE;  if (k != 0 && (k & kcode) != 0 && k != K_RESET) { std::string kgWhy; if (!W906_NoteWebKeyGate(g_w906NoteChamberDoorPtr ? *g_w906NoteChamberDoorPtr : false, &kgWhy)) { g_modalServer->CompleteCommand((unsigned long long)wc.id, false, kgWhy); std::printf("query qid=%s: %s refused (%s)\n", qidStr, ans.c_str(), kgWhy.c_str()); continue; } }   /*AI(W906-NOTE-KEYGATE) 20261002: golden TfNote::BtnSkipClick note.cpp:2843-2870 + UpdateButtonStatus :2764-2873 -- a key chosen on the screen is ignored while an IC fell into the test site / contact over / auto-clean door / clean pad / safe lock / index jam door / auto-retest door, as the physical keys already are (W906_AlarmIoAnswer). BEFORE the D-026 password gate on the next line (golden: a locked key cannot be chosen, so DoPassword never runs for it -- and the gate there uses up the one-shot pass). RESET (BtnResetClick) not gated; refused = the wait goes on*/
+                 if (k != 0 && (k & kcode) != 0) {  { extern bool W906_NoteAuthAnswerGate(const char*, int, const std::string&, std::string*); std::string noteAuthWhy; if (!W906_NoteAuthAnswerGate(qidStr, k, pressed, &noteAuthWhy)) { g_modalServer->CompleteCommand((unsigned long long)wc.id, false, noteAuthWhy); continue; } }   /*AI(W906-D026) 20261001 St01: golden TfNote::Start() :3599-3607 / BtnPauseClick() :3921-3929 -- DoUnlockPassword / DoPassword must have returned true (the dialog.auth pass) before the note closes; otherwise refused and the wait goes on (golden: return). Same line, no line moves*/
+                     g_modalServer->CompleteCommand((unsigned long long)wc.id, true, std::string());
+                     // AI(W906-Q30-REPLAY) 20260921: 問題已經被回答 ⇒ 清掉待答狀態。
+@@ -7286,7 +7286,7 @@ int W906_AlarmIoAnswer(const char* qid, int kcode, std::string* ans, std::string
+     static std::string curQid;
+     static int  sel = -1;  g_w906NoteSelPtr = &sel;   // TfNote::Select[]（互斥，只記一顆）  // AI(W906-MODAL-WAKE) 20260926: W906_NoteFlushLabel 讀它（檔尾）
+     static int  iOldKey = -1;                // TfNote::iOldKey（FormShow :2365 設 -1）
+-    static bool bOpenChamberDoor = false;    // TfNote 成員（Timer :3187-3205 維護）
++    static bool bOpenChamberDoor = false;  g_w906NoteChamberDoorPtr = &bOpenChamberDoor;   // TfNote 成員（Timer :3187-3205 維護）  // AI(W906-NOTE-KEYGATE) 20261002: 網頁選鍵的閘（W906_NoteWebKeyGate）讀同一份
+     static bool bOpenLeftDoor = false;       // TfNote 成員（Timer :3345-3362 維護）
+     if (curQid != (qid ? qid : "")) {        // 新的一則 = FormShow
+         curQid = qid ? qid : ""; sel = -1; iOldKey = -1; bOpenChamberDoor = false; bOpenLeftDoor = false;
+@@ -7481,7 +7481,7 @@ bool W906_WbServeHas1203() { return false; }
+ void DoSystemMessage();                                   // ckernel.cpp（ckernel.h:99；本檔不 include ckernel.h，慣例是本地宣告）
+ namespace ht9045 { void W906_FlushFlagTick(); }           // WebBridgeTags.cpp（只有 namespace ht9045 裡的定義，沒有標頭）
+ 
+-int* g_w906NoteSelPtr = 0;                                // W906_AlarmIoAnswer 的 sel（TfNote::Select[]）；:7286 那一行掛上
++int* g_w906NoteSelPtr = 0;  bool* g_w906NoteChamberDoorPtr = 0;   // W906_AlarmIoAnswer 的 sel（TfNote::Select[]）；:7286 那一行掛上  // AI(W906-NOTE-KEYGATE) 20261002: + W906_AlarmIoAnswer 的 bOpenChamberDoor（TfNote 成員，golden Timer1Timer :3187-3205），同一處掛上，網頁選鍵的閘讀它
+ 
+ namespace {
+ ht9045::ModalWake g_modalWake;
+-- 
+2.55.0.windows.5
+

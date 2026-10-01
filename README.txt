@@ -593,4 +593,8 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   web 0076 6510023 COMPK-KB-MERGE (web) —— 兩支原版小鍵盤表合成一支（ht9045_golden_kb_unwired.js），原本兩支都攔同一個事件、互相蓋掉；7 頁改載入合併後那支，舊檔移除。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0112 6be18de NOTE-KEYGATE —— ⚠ 警報 Note 畫面上的選擇鍵照原版上鎖（IC 掉進測試座要先開 Index 門按 Z1、接觸過壓、Auto Clean 門、換清潔墊、Safe Lock、Index Jam、Auto Retest Jam）；
+                    原版 BtnSkipClick＋UpdateButtonStatus（note.cpp:2764-2870）；面板實體鍵本來就有，網頁路徑以前沒有。ctest NoteWebKeyGate。
+  cpp 0113 c3df6a2 WORKLOG —— 工作紀錄補 10-02 第 68 項。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
