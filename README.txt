@@ -307,4 +307,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   cpp 0048 407ce3f IOWIDGET-3 —— IO 頁按鈕照舊版上色：閒置時要先關安全門才能動的輸出＝橘／黃、黑字（舊版 bIdleNeedCheckSafeDoor，讀法跟舊版一模一樣，1203 超出 [64][32] 的位址也照舊版算法讀）；
                     Index 上有 IC 時按 TestSuck 的 _On／_Off＝照舊版跑那顆吸嘴的 Suck()／Destroy() 流程，不是直接切線圈。離線測試 17/17、機台檔案 MD5 不變；這台 HT9050 的 IO 表目前沒有任何按鈕需要先關門。要 F5 重建才生效。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  web 0047 IOWIDGET-3（web b76649b）—— 配合 cpp 0048：要先關安全門的 IO 按鈕畫成舊版的橘／黃、黑字，提示多一行說明；其他接上的按鈕＝舊版的藍／淺藍、白字（只改元素、不改原始碼）。TestSuck 走 Suck()／Destroy() 時，訊息寫「照 golden 走 Suck() 流程、吸嘴：…」。teach 頁、IO 設定頁離線測試都對。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
