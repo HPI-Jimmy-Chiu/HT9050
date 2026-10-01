@@ -1,0 +1,807 @@
+From 37117e3adabaed2b4fe1e3a8d6aca72684427c7f Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 23:19:26 +0800
+Subject: [PATCH] HOMEMON: the web Home Monitor is live -- home.* tags from
+ golden's runtime TfHome, and Abort Home runs golden sbAbortHomeClick
+
+- JsonBridge/ChanHome.{h,cpp} (new, wb_serve): W906_StageHomeMonitor stages home.fShow / home.fAbort / home.step /
+  home.resetOk / home.rows / home.log / home.log.count, only while some browser has the Home Monitor open or minimized
+  (W906_PageStreamWanted("home"), RULINGS_20260930 #12) or the home sequence shows it (fHome->fShow).  home.rows = the
+  Visible THomeClass rows in vector order (labName Caption / Left / Top, edPos Text, ShowLed's lamp from W906_HomeLedState);
+  home.log = the newest ListBox1 lines (newest first, capped at 100).  JSON through webbridge::JsonWriter (escapes, UTF-8 repair).
+- act.home.abort -> golden TfHome::sbAbortHomeClick (uhome.cpp:4980-4986: GaliMotorServoOff + fAbort + Close), on the tick
+  thread, only while fHome->fShow; otherwise refused "not-open: ..." with nothing called.  Dispatched in the main drain (ahead
+  of the act.* catch-all) and in the three blocking-dialog waits like motor.stop; allowed while closing (CmdAllowedWhileClosing),
+  exempt from the operator token (WebBridgeServer) and the anti-double-click guard (WebCmdGuard, stop direction).
+- TfHome carries Panel2 (golden uhome.dfm "Reset OK" panel): GATE(W906-HOME-C2-PANEL2) lifted in Show() (golden :4846) and
+  ProcessMotorHome case 1100 (golden :3516); display only.  Line counts of uhome.cpp / fHome.h / fHome.cpp / wb_serve.cpp /
+  MainClose.cpp unchanged (same-line edits).
+- ctest HomeMonitor (54 checks: rows / log JSON, escaping, the stage gate, abort happy path / not-open refusal / second press);
+  MainCloseStop and WebCmdGuard pin the two allow-lists; FShow_Audit baseline +1 for the one deliberate direct fShow read.
+- The web half (page/HW.home.html, page/ht9045_home_c.js, background.html MODAL_POLICY.home modeless) is delivered
+  separately (the web tree is its own repository).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ CMakeLists.txt                  |   2 +-
+ FileRW/MainClose.cpp            |   2 +-
+ JsonBridge/ChanHome.cpp         | 155 ++++++++++++++++++
+ JsonBridge/ChanHome.h           |  67 ++++++++
+ WebBridge/WebBridgeServer.cpp   |   2 +-
+ WebCmdGuard.cpp                 |   2 +-
+ forms/fHome.cpp                 |   2 +-
+ forms/fHome.h                   |   4 +-
+ tests/CMakeLists.txt            |  24 +++
+ tests/test_home_monitor.cpp     | 271 ++++++++++++++++++++++++++++++++
+ tests/test_mainclose_stop.cpp   |   2 +-
+ tests/test_webcmdguard.cpp      |   2 +-
+ tools/fshow_audit_baseline.json |   3 +-
+ tools/wb_serve.cpp              |  12 +-
+ uhome.cpp                       |  10 +-
+ 15 files changed, 539 insertions(+), 21 deletions(-)
+ create mode 100644 JsonBridge/ChanHome.cpp
+ create mode 100644 JsonBridge/ChanHome.h
+ create mode 100644 tests/test_home_monitor.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c43a0ca..c4e9921 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -3395,7 +3395,7 @@ add_executable(wb_serve
+     #   RecordChangeLogProcess（cMyDB.h），那三個符號在 wb_serve 已經連得到
+     #   （nm 實測），所以不需要多加任何 lib。
+     JsonBridge/EventLog.cpp
+-    JsonBridge/actions/MainTesterConnect.cpp JsonBridge/ChanMvTrays.cpp FileRW/TempSet_Ts9.cpp TesterComm/Handler/TimeDataRecordRefresh.cpp   # AI(W906-ELA-W48B-A3) 20260928 (St02-E): the hourly record refresh seat; AI(W906-GB-P2e) 20260926: act.main.testerConnect（golden imgTesterClick main.cpp:29732-29794）  AI(W906-S118) 20260928 (St02-E): ChanMvTrays = motionView.trays.* (main-screen trays for Main.MotionView); same line, no line moves  AI(W906-Q41-TS9) 20260928 (St02-E helper): FileRW/TempSet_Ts9.cpp = the Setup.Temp_Set TS-9 editlist.get extra (FileRW/Temperature.cpp kPage :245); same line
++    JsonBridge/actions/MainTesterConnect.cpp JsonBridge/ChanMvTrays.cpp JsonBridge/ChanHome.cpp FileRW/TempSet_Ts9.cpp TesterComm/Handler/TimeDataRecordRefresh.cpp   # AI(W906-HOMEMON) 20261001: ChanHome = the web Home Monitor's home.* tags + act.home.abort (golden TfHome::sbAbortHomeClick); ctest HomeMonitor; same line.  AI(W906-ELA-W48B-A3) 20260928 (St02-E): the hourly record refresh seat; AI(W906-GB-P2e) 20260926: act.main.testerConnect（golden imgTesterClick main.cpp:29732-29794）  AI(W906-S118) 20260928 (St02-E): ChanMvTrays = motionView.trays.* (main-screen trays for Main.MotionView); same line, no line moves  AI(W906-Q41-TS9) 20260928 (St02-E helper): FileRW/TempSet_Ts9.cpp = the Setup.Temp_Set TS-9 editlist.get extra (FileRW/Temperature.cpp kPage :245); same line
+     JsonBridge/actions/MainRecordClear.cpp   # AI(W906-S119) 20260927: act.main.clearRecord／meShuttle2Dbl（golden spbClearRecordClick／meShuttle2DblClick）
+     # AI(W906-JSONBRIDGE-S2/S3) 20260923: 結構欄位表（產生）＋ 實例綁定（手寫）
+     #   ＋ 依表讀成 JSON。gen/ 底下的檔由 tools/gen_sjson.py 產生，不要手改。
+diff --git a/FileRW/MainClose.cpp b/FileRW/MainClose.cpp
+index e05990b..2b8c907 100644
+--- a/FileRW/MainClose.cpp
++++ b/FileRW/MainClose.cpp
+@@ -1873,7 +1873,7 @@ inline bool CmdAllowedWhileClosing(const std::string& cmd, const std::string& su
+     // (2) 停
+     if (cmd == "motor.stop") return true;                                       // 本身只收 action=stop（WebMotorAccessLive.cpp:985）
+     if (cmd == "pci1203.ax.stop" || cmd == "pci1203.ax.emgStop") return true;   // 1203 頁的軸停止／緊急停止
+-    if (cmd == "pause.run") return true;                                        // 主畫面 PAUSE：TfMainWeb::PauseFromWeb（WebStart.cpp:3810，golden TfMain::Pause main.cpp:6325）＝SoftStop=true＋StopAllMotor
++    if (cmd == "pause.run" || cmd == "act.home.abort") return true;             // 主畫面 PAUSE：TfMainWeb::PauseFromWeb（WebStart.cpp:3810，golden TfMain::Pause main.cpp:6325）＝SoftStop=true＋StopAllMotor  //AI(W906-HOMEMON) 20261001: + Home Monitor 的 Abort Home＝golden TfHome::sbAbortHomeClick（uhome.cpp:4980-4986：StopAllMotor＋切馬達電源＋抓煞車＋fAbort＋Close；只在回原點畫面開著時才做，JsonBridge/ChanHome.cpp）＝停的方向；同一行，行號不動
+     if (cmd == "motor.access") {
+         if (sub == "stop") return true;
+         if (sub == "lightScale" && lightScaleActive) return true;   //AI(W906-D012-M2) 20260929: St02-E2 review M2 -- Light Scale 在掃描時，網頁唯一能停它的就是這一條（golden BitBtn2Click 切掉 Timer2，uMotorTest.cpp:2096-2099；Q44 的停機不碰 Light Scale）⇒ 掃描中放行；沒在掃描時這一條＝開始掃描（會歸零、移動手臂）⇒ 照樣擋。判斷同 WebMotorAccess.cpp MotorTestStopDirection（lightScale → g_ls.timer）
+diff --git a/JsonBridge/ChanHome.cpp b/JsonBridge/ChanHome.cpp
+new file mode 100644
+index 0000000..ad8bd31
+--- /dev/null
++++ b/JsonBridge/ChanHome.cpp
+@@ -0,0 +1,155 @@
++// ===========================================================================
++//  JsonBridge/ChanHome.cpp -- the web Home Monitor: home.* tags + act.home.abort.
++//  AI(W906-HOMEMON) 20261001.  The shape, the golden bindings and the gates are in ChanHome.h.
++//
++//  Tick thread only (PublishExtraTags inside PublishHandlerTags; the command drain and the blocking-dialog waits of
++//  tools/wb_serve.cpp) -- the thread that runs ProcessMotorHome, which writes everything read here, so no lock.
++//  Pure reads + stage on the tag side: no I/O, no wait.  Global functions (wb_serve declares them at file scope,
++//  outside its anonymous namespaces).
++// ===========================================================================
++#include "JsonBridge/ChanHome.h"
++
++#include "forms/fHome.h"                // TfHome / fHome / THomeClass / W906_HomeLedState
++#include "vclcompat/Controls.h"         // TLabel / TEdit / TListBox / TPanel (full types)
++#include "cmydef.h"                     // SystemStart / fAllMotorHome / SoftStop / bMotorPowerState
++#include "Motor/mymotor.h"              // MAX_TRAY_MOTOR (the size of W906_HomeLedState, forms/fHome.cpp:505)
++#include "WebBridge/TagSnapshot.h"
++#include "WebBridge/TagValue.h"
++#include "WebBridge/JsonWriter.h"       // escapes + UTF-8 repair (a bad byte must never drop the frame)
++#include "WebBridge/WebBridgeServer.h"
++#include "WebBridge/CommandQueue.h"     // WebCommand
++
++#include <cstdio>
++#include <cstdint>
++#include <string>
++
++namespace ht9045 { namespace homemon {
++
++bool HomeShown() { return fHome != 0 && fHome->fShow; }   //AI(W906-HOMEMON) 20261001: stays DIRECT on purpose (R142 = A, as csystem.cpp's MainProc stop arm `if(fHome->fShow) fHome->sbAbortHomeClick(fHome);`): golden's Home Monitor on screen = the home sequence showed it (ProcessMotorHome case 20 Show()); a page the operator opened on the web is not "shown" for the abort, and its stream is the streamWanted argument.  FShow_Audit baseline raised for this one line in the same commit
++
++std::string RowsJson(const TfHome& h, const int* lamp, int lampCount)
++{
++    webbridge::JsonWriter w;
++    w.BeginArray();
++    for (std::size_t i = 0; i < h.HomeClass.size(); ++i) {
++        const THomeClass* c = h.HomeClass[i];
++        if (c == 0 || !c->Visible) continue;                                   // golden layout loop :357-375 places Visible rows only
++        w.BeginObject();
++        w.Key("slot").Number((wb_int64)i);
++        w.Key("motor").Number((wb_int64)c->index);
++        if (c->labName != 0) {
++            w.Key("name").String(c->labName->Caption.c_str());                // golden :82 MOT[MotNo].NumberAlias
++            w.Key("x").Number((wb_int64)c->labName->Left);                     // golden :361-362 (forms/fHome.cpp:430-431)
++            w.Key("y").Number((wb_int64)c->labName->Top);
++        } else {
++            w.Key("name").Null(); w.Key("x").Null(); w.Key("y").Null();
++        }
++        if (c->edPos != 0) w.Key("pos").String(c->edPos->Text.c_str());        // golden :90 "0", then ShowMotorHomePos :694/:696
++        else               w.Key("pos").Null();
++        if (lamp != 0 && (int)i < lampCount) w.Key("lamp").Number((wb_int64)lamp[i]);   // ShowLed's attr (forms/fHome.cpp:487)
++        else                                 w.Key("lamp").Null();
++        w.EndObject();
++    }
++    w.EndArray();
++    return w.Str();
++}
++
++std::string LogJson(const TfHome& h, int maxLines)
++{
++    webbridge::JsonWriter w;
++    w.BeginArray();
++    const vclcompat::TStringList* items = h.ListBox1 ? h.ListBox1->Items : 0;
++    const int n = items ? items->GetCount() : 0;
++    for (int k = 0; k < n && k < maxLines; ++k)                               // Items[0] = newest (golden Insert(0, ...))
++        w.String(items->GetString(k).c_str());
++    w.EndArray();
++    return w.Str();
++}
++
++} }   // namespace ht9045::homemon
++
++std::size_t W906_StageHomeMonitor(webbridge::TagSnapshot& snap, bool streamWanted)
++{
++    using namespace ht9045::homemon;
++    using webbridge::TagValue;
++    if (fHome == 0) return 0;
++    const bool shown = HomeShown();
++    if (!shown && !streamWanted) return 0;                                     // no window anywhere: the family leaves the snapshot
++
++    static std::string rows;                                                   // tick thread only
++    rows = RowsJson(*fHome, W906_HomeLedState, MAX_TRAY_MOTOR);
++
++    // log: rebuilt only when the count, the newest or the oldest line changed (else two AnsiString copies per tick)
++    static std::string log = "[]", logFirst, logLast;
++    static int logCount = -1;
++    const vclcompat::TStringList* items = fHome->ListBox1 ? fHome->ListBox1->Items : 0;
++    const int cnt = items ? items->GetCount() : 0;
++    const std::string first = cnt > 0 ? std::string(items->GetString(0).c_str()) : std::string();
++    const std::string last  = cnt > 0 ? std::string(items->GetString(cnt - 1).c_str()) : std::string();
++    if (cnt != logCount || first != logFirst || last != logLast) {
++        log = LogJson(*fHome, kHomeLogMax);
++        logCount = cnt; logFirst = first; logLast = last;
++    }
++
++    snap.stage("home.fShow",     TagValue::makeBool(shown));
++    snap.stage("home.fAbort",    TagValue::makeBool(fHome->fAbort));
++    snap.stage("home.step",      TagValue::makeInt((std::int64_t)fHome->iHomeStep));
++    snap.stage("home.resetOk",   fHome->Panel2 ? TagValue::makeBool(fHome->Panel2->Visible) : TagValue::makeNull());
++    snap.stage("home.rows",      TagValue::makeString(rows));
++    snap.stage("home.log",       TagValue::makeString(log));
++    snap.stage("home.log.count", TagValue::makeInt((std::int64_t)cnt));
++    return 7;
++}
++
++static std::string HomeAbortAck()
++{
++    webbridge::JsonWriter w;
++    w.BeginObject();
++    w.Key("accepted").Bool(true);
++    w.Key("fShow").Bool(ht9045::homemon::HomeShown());                          // false after golden Close()
++    w.Key("fAbort").Bool(fHome != 0 && fHome->fAbort);
++    w.Key("homeStep").Number((wb_int64)(fHome ? fHome->iHomeStep : -1));
++    w.Key("systemStart").Bool(SystemStart != 0);
++    w.Key("fAllMotorHome").Bool(fAllMotorHome != 0);
++    w.Key("motorPower").Bool(bMotorPowerState != 0);                            // GaliMotorServoOff cut it (golden)
++    w.EndObject();
++    return w.Str();
++}
++
++bool W906_HomeAbortWire(const std::string& valueJson, std::string& ack)
++{
++    (void)valueJson;   // golden sbAbortHomeClick takes nothing from the page; the request itself is in the oplog (CMD line)
++    if (fHome == 0) {
++        ack = "act.home.abort: fHome is null -- no Home Monitor in this binary";
++        return false;
++    }
++    if (!ht9045::homemon::HomeShown()) {
++        ack = "not-open: the Home Monitor is not shown by the home sequence (fHome->fShow is false) -- golden's Abort Home "
++              "button is on that form only; nothing was done（回原點畫面沒有在回原點中，沒有執行）";
++        std::printf("act.home.abort REFUSED: fHome->fShow is false (iHomeStep=%d)\n", fHome->iHomeStep);
++        std::fflush(stdout);
++        return false;
++    }
++    std::printf("act.home.abort: golden TfHome::sbAbortHomeClick (uhome.cpp:4980-4986)  iHomeStep=%d SystemStart=%d SoftStart=%d\n",
++                fHome->iHomeStep, (int)SystemStart, (int)SoftStart);
++    try {
++        fHome->sbAbortHomeClick(fHome);                                        // GaliMotorServoOff("sbAbortHomeClick") + fAbort=true + Close()
++    } catch (...) {
++        ack = "exception in golden TfHome::sbAbortHomeClick";
++        std::printf("act.home.abort: %s\n", ack.c_str());
++        std::fflush(stdout);
++        return false;
++    }
++    ack = HomeAbortAck();
++    std::printf("act.home.abort -> %s\n", ack.c_str());
++    std::fflush(stdout);
++    return true;
++}
++
++void W906_HomeAbortCommand(webbridge::WebBridgeServer& server, const webbridge::WebCommand& wc)
++{
++    std::string ack;
++    const std::string v = (wc.hasValue && wc.value.isString()) ? wc.value.asString() : std::string();
++    const bool ok = W906_HomeAbortWire(v, ack);
++    server.CompleteCommand((unsigned long long)wc.id, ok, ack);
++}
+diff --git a/JsonBridge/ChanHome.h b/JsonBridge/ChanHome.h
+new file mode 100644
+index 0000000..9c5a3d0
+--- /dev/null
++++ b/JsonBridge/ChanHome.h
+@@ -0,0 +1,67 @@
++// ===========================================================================
++//  JsonBridge/ChanHome.h -- the web Home Monitor (web/page/HW.home.html, golden TfHome uhome.dfm / uhome.cpp).
++//  AI(W906-HOMEMON) 20261001.
++//
++//  TWO THINGS, both on the tick thread (the thread that runs MainProc -> ProcessMotorHome, so no lock is needed):
++//
++//  1. TAGS  W906_StageHomeMonitor(snap, streamWanted), called from PublishExtraTags (tools/wb_serve.cpp), i.e. inside
++//     PublishHandlerTags before commitPublish().  Staged ONLY while the window is open: some browser has the Home Monitor
++//     open or minimized (streamWanted = W906_PageStreamWanted("home"), RULINGS_20260930 #12, the same gate as
++//     motionView.trays.*), or the home sequence has it on screen (fHome->fShow, golden FormShow).  Otherwise nothing is
++//     staged: the family leaves the snapshot, the server sends each tag once as null, and the page is closed anyway.
++//       home.fShow       bool    fHome->fShow   (golden uhome.h:70; FormShow :4847 / FormClose :4870)
++//       home.fAbort      bool    fHome->fAbort  (golden uhome.h:71; sbAbortHomeClick :4983)
++//       home.step        int     fHome->iHomeStep (golden uhome.h:69; 1 = idle)
++//       home.resetOk     bool    fHome->Panel2->Visible -- the "Reset OK" panel (golden FormShow :4846 false, case 1100 :3516 true)
++//       home.rows        string  JSON array, one object per Visible THomeClass in vector order (golden layout loop :357-375):
++//                                {"slot":i,"motor":index,"name":labName->Caption,"x":labName->Left,"y":labName->Top,
++//                                 "pos":edPos->Text,"lamp":W906_HomeLedState[i]}
++//                                name = golden :82 MOT[MotNo].NumberAlias; pos = golden :90 "0" then ShowMotorHomePos (:694/:696);
++//                                lamp = golden ShowLed's attr (:664-680): 0 off (clSilver) / 1 clLime / 2 clRed / 3 clYellow
++//       home.log         string  JSON array of the newest ListBox1 lines, newest first (golden only Insert(0, ...) and
++//                                Clear()), at most kHomeLogMax
++//       home.log.count   int     ListBox1->Items->Count (all lines, also those beyond kHomeLogMax)
++//
++//  2. COMMAND  act.home.abort -> golden TfHome::sbAbortHomeClick (uhome.cpp:4980-4986: GaliMotorServoOff("sbAbortHomeClick")
++//     + fAbort=true + Close()), only while fHome->fShow -- golden's button is on the form, and golden shows that form only
++//     from the home sequence (ProcessMotorHome case 20, uhome.cpp:2368).  Not shown -> refused ("not-open: ..."), nothing
++//     is called.  No confirm box (golden has none).  W906_HomeAbortWire is the testable core; W906_HomeAbortCommand
++//     completes the WebBridge command.  Dispatched by tools/wb_serve.cpp in the main drain and, [W906] like motor.stop
++//     (AI(W906-W4D) 20260925: a stop is never held behind a box), in the three blocking-dialog waits; allowed while closing
++//     (FileRW/MainClose.cpp CmdAllowedWhileClosing); exempt from the operator token (WebBridge/WebBridgeServer.cpp, as
++//     motor.stop) and from the anti-double-click guard (WebCmdGuard.cpp, "stop direction", as pause.run).
++//     ⚠ The modal-wait part is NOT golden: under a VCL ShowModal box the modeless Home Monitor's button cannot be clicked.
++//       What golden does have during a box is TfHome::Timer1 (10 ms, uhome.dfm) -> ScanKey: the panel PAUSE key calls
++//       sbAbortHomeClick (uhome.cpp:4874-4889) -- timers run in the modal loop.  (That timer is switched off by FormClose,
++//       :4871, and nothing switches it on again, so golden has it only until the first close after boot.)
++// ===========================================================================
++#ifndef JSONBRIDGE_CHANHOME_H
++#define JSONBRIDGE_CHANHOME_H
++
++#include <cstddef>
++#include <string>
++
++namespace webbridge { class TagSnapshot; class WebBridgeServer; struct WebCommand; }
++class TfHome;
++
++namespace ht9045 { namespace homemon {
++
++const int kHomeLogMax = 100;     // newest ListBox1 lines sent as home.log (golden's list box scrolls; ~38 Insert sites per run)
++
++// The two JSON strings, from the given form (tests pass the global fHome).  lamp may be 0 (every lamp null).
++std::string RowsJson(const TfHome& h, const int* lamp, int lampCount);
++std::string LogJson(const TfHome& h, int maxLines);
++
++// golden "the Home Monitor is on screen" = fHome->fShow (the C++ member, program state; R142 = A).
++bool HomeShown();
++
++} }
++
++// Stages the home.* family when streamWanted or the home sequence shows the form; returns the number of tags staged (0 or 7).
++std::size_t W906_StageHomeMonitor(webbridge::TagSnapshot& snap, bool streamWanted);
++
++// act.home.abort.  true = golden sbAbortHomeClick ran (ack = JSON object); false = refused / failed (ack = the reason).
++bool W906_HomeAbortWire(const std::string& valueJson, std::string& ack);
++void W906_HomeAbortCommand(webbridge::WebBridgeServer& server, const webbridge::WebCommand& wc);
++
++#endif // JSONBRIDGE_CHANHOME_H
+diff --git a/WebBridge/WebBridgeServer.cpp b/WebBridge/WebBridgeServer.cpp
+index 4d8cb38..b83eb62 100644
+--- a/WebBridge/WebBridgeServer.cpp
++++ b/WebBridge/WebBridgeServer.cpp
+@@ -1445,7 +1445,7 @@ void WebBridgeServer::Impl::HandleTextMessage(Conn& c, const std::string& text)
+         && cmdName.compare(0, 5, "auth.") != 0
+         && cmdName != "ui.windows.put"
+         && cmdName != "cfg.resync"
+-        && cmdName != "log.event" && cmdName != "modal.answer" && cmdName != "dialog.response" && cmdName != "dialog.notifyAck" && cmdName != "motor.stop" && cmdName != "contactct.get" && cmdName != "counterclear.get" && cmdName != "observer.get"
++        && cmdName != "log.event" && cmdName != "modal.answer" && cmdName != "dialog.response" && cmdName != "dialog.notifyAck" && cmdName != "motor.stop" && cmdName != "act.home.abort" && cmdName != "contactct.get" && cmdName != "counterclear.get" && cmdName != "observer.get"   //AI(W906-HOMEMON) 20261001: act.home.abort exempt with motor.stop -- the Home Monitor's Abort Home (golden sbAbortHomeClick, stop direction) must not be held by a token in another tab; wb_serve runs it only while the home sequence shows the form (JsonBridge/ChanHome.cpp)
+         && cmdName != "vacuum.get" && cmdName != "vacuum.open" && cmdName != "vacuum.close") {   //AI(W906-VACUNIT-1203) 20260930: HW.VacuumUnit's live view (golden tmr1Timer, polled every 1 s) is a READ -- exempt like observer.get, so the poll never takes the operator token (Motor Test's jog/HOME watchdog follows the holder). vacuum.setSV / do / setAll / reset are presses and stay behind the token.  // AI(W906-ALARM-ANSWER-TOKEN) 20260924: 告警回答豁免權杖 —— 使用者 F5 實測：MES0920 框上按 PAUSE 回 not-operator。ht9045_recipe_client.js:532-537 的 modalAnswer 刻意不 acquire（「警報一定要答得掉」，權杖可能在別的分頁），這裡卻沒豁免 ⇒ 告警框 iframe 的連線永遠答不掉。安全性不靠權杖：wb_serve 等待迴圈只收當前 qid＋有提供的選項（tools/wb_serve.cpp 回答處理），沒有告警時回 no query pending。⚠ c3c459f 起回答 START 會重走 StartFromWeb ⇒ 任何連上的瀏覽器答 START 都能讓機台繼續（golden 也是誰在框前誰按）  AI(W906-W4-MOTOR) 20260925: `motor.stop` 同列豁免 —— 停機不能被「權杖在別的分頁」擋住（golden 任何畫面的 STOP 都停得了；EastSun 的停止也不看控制權）。安全性不靠權杖：wb_serve 的 W906_MotorAccessWire 把 motor.stop 鎖死在 action=="stop"，其他動作走 motor.access 照樣要權杖。  AI(W906-Q2-S124) 20260927 (St02): Steven S124 = B -- the three read-only queries by exact name, no prefix (the laptop 20260927 10:2x: a `*.get` prefix would also pass a future `xxx.get` that writes). contactct.get / counterclear.get read, write no file and move nothing; observer.get is exempt HERE by name, but its four Yield acts (yieldSite / yieldMax / yieldMin / yieldClear) change memory, so wb_serve checks the token for them per act (WebCmdGuard::Exempt, AI(W906-Q2-OBS) 20260927, St02-E) -- the earlier "only read" wording was wrong. editlist.get stays token-gated (it is not read-only). ctest: tests/test_wb_server.cpp section 7.   AI(W906-J5-ACK) 20260930: `dialog.notifyAck` (INBOX 119) exempt by exact name with the two alarm answers -- the operator acknowledges a kCode==0 notice from the alarm iframe, which never acquires the token (same reason as AI(W906-ALARM-ANSWER-TOKEN)); it only retires a notice whose requestId matches (tools/wb_dialog_mailbox.h NotifyAckHandle), never starts anything.  ctest: tests/test_wb_server.cpp section 7
+         if (ctrlOwner_.load() != c.id && cfg.enforceControlToken) reject = "not-operator";   //AI(W906-TOKEN-OFF) 20260928: EastSun「先不要在機台端卡控」-- not enforced: nobody is refused
+         else                           { ctrlOwner_.store(c.id); ctrlLastCmdMs_ = NowMs(); }   //AI(W906-TOKEN-OFF) 20260928: ...and the sender becomes the holder (a no-op when it already is), so the page that presses the buttons is the "operator connected" that Motor Test's jog/HOME watchdog follows (W906_MotorAccessPollTick)
+diff --git a/WebCmdGuard.cpp b/WebCmdGuard.cpp
+index b66a7d2..6105ba2 100644
+--- a/WebCmdGuard.cpp
++++ b/WebCmdGuard.cpp
+@@ -84,7 +84,7 @@ const char* const kExemptNames[] = {
+     // 連續操作與輸出（AI(W906-R0927-8) 20260927: motor.access 移到 op 級；io.btnPanelClick 由 W906IoClickGuardScope 擋）
+     "motor.stop", "io.btnPanelClick", "sim.di.set",
+     // 停機方向
+-    "pause.run",
++    "pause.run", "act.home.abort",   //AI(W906-HOMEMON) 20261001: + Abort Home（golden sbAbortHomeClick，停的方向；第二下時 fShow 已經 false，本體自己回 not-open）；同一行
+     // 純讀
+     "editlist.get", "contactct.get", "counterclear.get", "auth.mode",   // AI(W906-PROD-S116Y) 20260927: observer.get 改到下面的 op 級表（Yield 分頁的四個 act 會改記憶體狀態）
+     "vacuum.get",   // AI(W906-VACUNIT-1203) 20260930: HW.VacuumUnit 即時畫面（golden tmr1Timer）每秒同一個 value；按鈕 vacuum.setSV／do／setAll／reset 照擋
+diff --git a/forms/fHome.cpp b/forms/fHome.cpp
+index 77d14e4..b33682a 100644
+--- a/forms/fHome.cpp
++++ b/forms/fHome.cpp
+@@ -23,7 +23,7 @@ TfHome::TfHome() : iHomeStep(1), fShow(false), fAbort(false),
+                    //   由 VCL 在表單載入時建立。本樹沒有表單載入，所以在 ctor 建。
+                    //   golden 的表單是在 HT9045.cpp:175 CreateForm 時無條件建立的，
+                    //   所以「fHome 活著 ⇒ ListBox1 活著」在兩邊是同一個事實。
+-                   ListBox1(new vclcompat::TListBox()) {}
++                   ListBox1(new vclcompat::TListBox()), Panel2(new vclcompat::TPanel()) {}   //AI(W906-HOMEMON) 20261001: + Panel2 = golden uhome.dfm Panel2 (forms/fHome.h), same "fHome alive => its .dfm widgets alive" rule as ListBox1; same line, so :487 / :505 stay where they are cited
+ 
+ // Golden creates this form UNCONDITIONALLY at startup -- HT9045.cpp:175
+ // `Application->CreateForm(__classid(TfHome), &fHome);`, inside the flat
+diff --git a/forms/fHome.h b/forms/fHome.h
+index effb780..3e866b9 100644
+--- a/forms/fHome.h
++++ b/forms/fHome.h
+@@ -62,7 +62,7 @@
+ //   兩者同時被 include 的 TU 裡重複宣告。成員一律寫完整的 `vclcompat::TEdit *`。
+ #include <vector>
+ 
+-namespace vclcompat { class TLabel; class TEdit; class TListBox; }
++namespace vclcompat { class TLabel; class TEdit; class TListBox; class TPanel; }   //AI(W906-HOMEMON) 20261001: + TPanel (Panel2 below), forward declaration only like the other three
+ // AI(W906-MT-E3b) 20260925: forward declaration only (same rule as the three above) --
+ //   GaliMotorServoOff takes golden's `AnsiString sFunc` by value; a declaration may name an
+ //   incomplete parameter type, and every caller already has the full type.
+@@ -225,7 +225,7 @@ public:
+     //    home 進度」。這個清單正是那個進度的資料來源；把它存起來，
+     //    web HMI 之後要顯示歸零進度時就有東西可取。
+     // -----------------------------------------------------------------------
+-    vclcompat::TListBox *ListBox1;
++    vclcompat::TListBox *ListBox1;  vclcompat::TPanel *Panel2;   //AI(W906-HOMEMON) 20261001: Panel2 = golden uhome.dfm `object Panel2: TPanel`, the "Reset OK" panel (Label26 'Reset OK' + SpeedButton1 'Exit' = golden SpeedButton1Click Close(), uhome.cpp:4863-4866). golden writes only its Visible: FormShow hides it (uhome.cpp:4846), ProcessMotorHome case 1100 shows it (uhome.cpp:3516) -- the UN-GATE of GATE(W906-HOME-C2-PANEL2), because the web Home Monitor shows it (tag home.resetOk, JsonBridge/ChanHome.cpp). Display only, no golden code reads it. Created in the ctor like ListBox1; Visible starts false (vclcompat TControl default; golden's dfm keeps the VCL default true, but FormShow hides it before anything is seen). Same line, so fHome.h:278 below stays where it is cited
+ 
+     // -----------------------------------------------------------------------
+     //  AI(W906-HOME-C2) 20260920: ★ `Show()` / `Close()` 是**承重的**，不是版面
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 7b2b592..33e6f9b 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -6323,3 +6323,27 @@ if(WIN32)
+ endif()
+ add_test(NAME SocketCheck COMMAND test_socket_check)
+ set_tests_properties(SocketCheck PROPERTIES TIMEOUT 120)
++
++# --- test_home_monitor: AI(W906-HOMEMON) 20261001 -- the web Home Monitor's C++ half (JsonBridge/ChanHome.cpp).
++#   A: home.rows (golden runtime THomeClass: Visible rows, vector order, labName Caption / Left / Top, edPos Text, ShowLed lamp)
++#   and home.log (ListBox1 newest first, capped) as JSON, escaping and UTF-8 repair; B: staged only while a browser has the
++#   window open (streamWanted) or the home sequence shows it (fHome->Show), home.resetOk = Panel2->Visible; C: act.home.abort
++#   refused while fHome->fShow is false (nothing called), the happy path = golden TfHome::sbAbortHomeClick (fake 1203 stop
++#   hook called once, SystemStart / fAllMotorHome / motor power false, relay off, form closed), a second press refused.
++#   ChanHome.cpp is wb_serve-only (root CMakeLists.txt), so it is listed here.  No card, no machine file: RecordProcess
++#   (GaliMotorServoOff) writes only under the redirect roots -- no own ENVIRONMENT, _w906_env_all_tests gives it, and the
++#   guard (w906_ctest_guard.h) refuses outside them.  After the GLOBAL TEST TIMEOUT block => own TIMEOUT.
++add_executable(test_home_monitor test_home_monitor.cpp ${CMAKE_SOURCE_DIR}/JsonBridge/ChanHome.cpp)
++target_include_directories(test_home_monitor PRIVATE ${CMAKE_SOURCE_DIR})
++target_link_libraries(test_home_monitor PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++    ht9045_webbridge
++)
++if(WIN32)
++    target_link_libraries(test_home_monitor PRIVATE ws2_32)
++endif()
++if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
++    set_source_files_properties(test_home_monitor.cpp ${CMAKE_SOURCE_DIR}/JsonBridge/ChanHome.cpp PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
++endif()
++add_test(NAME HomeMonitor COMMAND test_home_monitor)
++set_tests_properties(HomeMonitor PROPERTIES TIMEOUT 120)
+diff --git a/tests/test_home_monitor.cpp b/tests/test_home_monitor.cpp
+new file mode 100644
+index 0000000..4262352
+--- /dev/null
++++ b/tests/test_home_monitor.cpp
+@@ -0,0 +1,271 @@
++// =============================================================================
++//  tests/test_home_monitor.cpp -- AI(W906-HOMEMON) 20261001: ctest HomeMonitor
++//
++//  The web Home Monitor's C++ half (JsonBridge/ChanHome.cpp):
++//    A  the tag JSON -- home.rows from golden's runtime THomeClass (Visible rows only, vector order, labName->Caption /
++//       Left / Top, edPos->Text, ShowLed's lamp), home.log from ListBox1 (newest first, at most kHomeLogMax), escaping.
++//    B  the stage gate -- nothing staged while the window is closed everywhere and the home sequence does not show it;
++//       7 tags when a browser has it open (streamWanted) or when fHome->Show() ran (golden FormShow); home.resetOk follows
++//       Panel2->Visible (FormShow hides it, case 1100 shows it).
++//    C  act.home.abort -- refused (nothing called, nothing changed) while fHome->fShow is false; the happy path runs golden
++//       TfHome::sbAbortHomeClick (GaliMotorServoOff + fAbort + Close): the fake 1203 stop hook is called once with golden's
++//       reason, SystemStart / fAllMotorHome / motor power go false, the relay output goes off, the form closes; a second
++//       press is refused again (the form is closed).
++//  Memory only: FAKE 1203 hook (the real one is installed by wb_serve), no card, no file of the machine.  RecordProcess
++//  (GaliMotorServoOff's last line) writes only under ctest's redirect roots -- refused (exit 2) outside them.
++// =============================================================================
++#include "vclcompat/vcl_compat.h"
++#include "cmydef.h"                 // SystemStart / fAllMotorHome / bMotorPowerState
++#include "csystem.h"                // W906_Stop1203AllHook
++#include "common.h"                 // as9045LogPath / asSaveEventLogPath (runtime paths for the guard)
++#include "Motor/mymotor.h"          // MOT[] / MAX_TRAY_MOTOR
++#include "myswitch.h"               // SW[] / SwMotorRelay
++#include "forms/fHome.h"
++#include "vclcompat/Controls.h"
++#include "w906_test_motors.h"
++#include "w906_ctest_guard.h"
++
++#include "JsonBridge/ChanHome.h"
++#include "WebBridge/TagSnapshot.h"
++#include "WebBridge/TagValue.h"
++#include "WebBridge/JsonWriter.h"   // IsValidUtf8
++#include "Public/cJSON.h"
++
++#include <cstdio>
++#include <cstring>
++#include <string>
++
++static int g_fail = 0, g_checks = 0;
++static void check(bool ok, const char* what, int line)
++{
++    ++g_checks;
++    if (!ok) { ++g_fail; std::printf("  FAIL [test_home_monitor.cpp:%d]  %s\n", line, what); }
++    else     {           std::printf("  ok    %s\n", what); }
++}
++#define CHECK(c) check((c), #c, __LINE__)
++
++static int         g_stopCalls = 0;
++static std::string g_stopWhy;
++static void FakeStop1203(const char* why) { ++g_stopCalls; g_stopWhy = why ? why : ""; }
++
++// one publish of the home.* family; returns what W906_StageHomeMonitor said it staged, and the published map
++static std::size_t Publish(webbridge::TagSnapshot& snap, bool wanted, webbridge::TagMap& out)
++{
++    snap.beginPublish();
++    const std::size_t n = W906_StageHomeMonitor(snap, wanted);
++    snap.commitPublish();
++    out = snap.read().tags;
++    return n;
++}
++static const webbridge::TagValue* Tag(const webbridge::TagMap& m, const char* k)
++{
++    webbridge::TagMap::const_iterator it = m.find(k);
++    return it == m.end() ? 0 : &it->second;
++}
++static int HomeKeys(const webbridge::TagMap& m)
++{
++    int n = 0;
++    for (webbridge::TagMap::const_iterator it = m.begin(); it != m.end(); ++it)
++        if (it->first.compare(0, 5, "home.") == 0) ++n;
++    return n;
++}
++static int Int(const cJSON* o, const char* k)
++{
++    const cJSON* v = cJSON_GetObjectItemCaseSensitive(o, k);
++    return cJSON_IsNumber(v) ? v->valueint : -9999;
++}
++static std::string Str(const cJSON* o, const char* k)
++{
++    const cJSON* v = cJSON_GetObjectItemCaseSensitive(o, k);
++    return (cJSON_IsString(v) && v->valuestring) ? std::string(v->valuestring) : std::string("<not a string>");
++}
++static bool Bool(const cJSON* o, const char* k, bool want)
++{
++    const cJSON* v = cJSON_GetObjectItemCaseSensitive(o, k);
++    return want ? cJSON_IsTrue(v) != 0 : cJSON_IsFalse(v) != 0;
++}
++
++int main()
++{
++    const char* const rt[] = { "as9045LogPath", as9045LogPath.c_str(), "asSaveEventLogPath", asSaveEventLogPath.c_str(), 0 };
++    if (!W906TestRequireCtestRedirects("HomeMonitor", rt))
++        return 2;
++    std::printf("=== test_home_monitor (AI(W906-HOMEMON)) ===\n");
++    W906_TestEnsureSimMotors();
++    W906_Stop1203AllHook = 0;
++    CHECK(fHome != 0 && fHome->Panel2 != 0 && fHome->ListBox1 != 0);
++    if (fHome == 0) return 1;
++    fHome->InitialHomeClass();
++
++    int nVis = 0, firstVis = -1, secondVis = -1;
++    for (std::size_t i = 0; i < fHome->HomeClass.size(); ++i)
++        if (fHome->HomeClass[i] && fHome->HomeClass[i]->Visible) {
++            if (firstVis < 0) firstVis = (int)i; else if (secondVis < 0) secondVis = (int)i;
++            ++nVis;
++        }
++    std::printf("  HomeClass %u, Visible %d (first slot %d, second %d)\n", (unsigned)fHome->HomeClass.size(), nVis, firstVis, secondVis);
++    CHECK(nVis >= 2 && firstVis >= 0 && secondVis > firstVis);
++    if (nVis < 2) return 1;
++
++    // -----------------------------------------------------------------------
++    //  PART A -- the JSON
++    // -----------------------------------------------------------------------
++    std::printf("\n-- PART A: home.rows / home.log JSON --\n");
++    fHome->ResetAllMotorLed();
++    fHome->ShowLed(secondVis, 2);                                              // golden ShowLed: 2 = clRed
++    fHome->HomeClass[firstVis]->edPos->Text = AnsiString("1234");             // as ShowMotorHomePos writes it (golden :694/:696)
++    {
++        const std::string rows = ht9045::homemon::RowsJson(*fHome, W906_HomeLedState, MAX_TRAY_MOTOR);
++        cJSON* a = cJSON_Parse(rows.c_str());
++        CHECK(cJSON_IsArray(a));
++        CHECK(a != 0 && cJSON_GetArraySize(a) == nVis);                         // Visible rows only
++        const cJSON* r0 = a ? cJSON_GetArrayItem(a, 0) : 0;
++        const cJSON* r1 = a ? cJSON_GetArrayItem(a, 1) : 0;
++        CHECK(r0 != 0 && Int(r0, "slot") == firstVis && Int(r0, "motor") == fHome->HomeClass[firstVis]->index);
++        CHECK(r0 != 0 && Str(r0, "name") == std::string(MOT[firstVis].NumberAlias.c_str()));   // golden :82
++        CHECK(r0 != 0 && Int(r0, "x") == 5 && Int(r0, "y") == 8);               // golden layout loop: iLabelL 5, iLabelT 8
++        CHECK(r1 != 0 && Int(r1, "slot") == secondVis && Int(r1, "y") == 38);   // next row: + iTPitch 30
++        CHECK(r0 != 0 && Str(r0, "pos") == "1234");
++        CHECK(r1 != 0 && Str(r1, "pos") == "0");                                // golden :90 edPos->Text=0
++        CHECK(r0 != 0 && Int(r0, "lamp") == 0);
++        CHECK(r1 != 0 && Int(r1, "lamp") == 2);                                 // ShowLed(secondVis, 2)
++        cJSON_Delete(a);
++        std::printf("  rows: %u bytes\n", (unsigned)rows.size());
++    }
++    {
++        // a caption the page must still parse: quote, backslash, a control byte, a lone Big5 byte pair
++        THomeClass* c = fHome->HomeClass[firstVis];
++        const AnsiString save = c->labName->Caption;
++        c->labName->Caption = AnsiString("[M00] a\"b\\c\td \xB4\xFA");
++        const std::string rows = ht9045::homemon::RowsJson(*fHome, W906_HomeLedState, MAX_TRAY_MOTOR);
++        cJSON* a = cJSON_Parse(rows.c_str());
++        CHECK(cJSON_IsArray(a) && cJSON_GetArraySize(a) == nVis);
++        const std::string nm = a ? Str(cJSON_GetArrayItem(a, 0), "name") : std::string();
++        CHECK(nm.compare(0, 13, "[M00] a\"b\\c\td") == 0);                      // escaped by JsonWriter, decoded back by cJSON
++        CHECK(webbridge::IsValidUtf8(rows));                                    // the Big5 pair was transcoded, not passed raw
++        cJSON_Delete(a);
++        c->labName->Caption = save;
++    }
++    {
++        fHome->ListBox1->Clear();
++        fHome->ListBox1->Items->Insert(0, AnsiString("M01 home finish."));
++        fHome->ListBox1->Items->Insert(0, AnsiString("M02 home finish."));
++        cJSON* a = cJSON_Parse(ht9045::homemon::LogJson(*fHome, ht9045::homemon::kHomeLogMax).c_str());
++        CHECK(cJSON_IsArray(a) && cJSON_GetArraySize(a) == 2);
++        CHECK(a != 0 && std::string(cJSON_GetArrayItem(a, 0)->valuestring) == "M02 home finish.");   // newest first
++        CHECK(a != 0 && std::string(cJSON_GetArrayItem(a, 1)->valuestring) == "M01 home finish.");
++        cJSON_Delete(a);
++        for (int i = 0; i < 150; ++i) { char b[32]; std::snprintf(b, sizeof(b), "line %03d", i); fHome->ListBox1->Items->Insert(0, AnsiString(b)); }
++        a = cJSON_Parse(ht9045::homemon::LogJson(*fHome, ht9045::homemon::kHomeLogMax).c_str());
++        CHECK(cJSON_IsArray(a) && cJSON_GetArraySize(a) == ht9045::homemon::kHomeLogMax);   // capped
++        CHECK(a != 0 && std::string(cJSON_GetArrayItem(a, 0)->valuestring) == "line 149");
++        cJSON_Delete(a);
++    }
++
++    // -----------------------------------------------------------------------
++    //  PART B -- the stage gate
++    // -----------------------------------------------------------------------
++    std::printf("\n-- PART B: staged only while the window is open --\n");
++    webbridge::TagSnapshot snap;
++    webbridge::TagMap m;
++    fHome->Close();                                                            // golden FormClose: fShow=false
++    CHECK(fHome->fShow == false);
++    CHECK(Publish(snap, false, m) == 0 && HomeKeys(m) == 0);                    // closed everywhere: nothing
++    CHECK(Publish(snap, true, m) == 7 && HomeKeys(m) == 7);                     // a browser has the window open
++    {
++        const webbridge::TagValue* v = Tag(m, "home.fShow");
++        CHECK(v && v->isBool() && v->asBool(true) == false);
++        v = Tag(m, "home.step");
++        CHECK(v && v->isInt() && v->asInt(-1) == fHome->iHomeStep);
++        v = Tag(m, "home.log.count");
++        CHECK(v && v->isInt() && v->asInt(-1) == 152);                          // every line, also those beyond the cap
++        v = Tag(m, "home.rows");
++        cJSON* a = v && v->isString() ? cJSON_Parse(v->asString().c_str()) : 0;
++        CHECK(cJSON_IsArray(a) && cJSON_GetArraySize(a) == nVis);
++        cJSON_Delete(a);
++        v = Tag(m, "home.log");
++        a = v && v->isString() ? cJSON_Parse(v->asString().c_str()) : 0;
++        CHECK(cJSON_IsArray(a) && cJSON_GetArraySize(a) == ht9045::homemon::kHomeLogMax);
++        cJSON_Delete(a);
++    }
++    fHome->Panel2->Visible = true;
++    fHome->Show();                                                             // golden FormShow: Panel2 hidden, fShow, fAbort=false
++    CHECK(fHome->fShow == true && fHome->Panel2->Visible == false && fHome->fAbort == false);
++    CHECK(Publish(snap, false, m) == 7 && HomeKeys(m) == 7);                    // the home sequence shows it: staged without a browser
++    {
++        const webbridge::TagValue* v = Tag(m, "home.fShow");
++        CHECK(v && v->asBool(false) == true);
++        v = Tag(m, "home.resetOk");
++        CHECK(v && v->isBool() && v->asBool(true) == false);
++    }
++    fHome->Panel2->Visible = true;                                             // golden ProcessMotorHome case 1100 (uhome.cpp:3516)
++    Publish(snap, false, m);
++    {
++        const webbridge::TagValue* v = Tag(m, "home.resetOk");
++        CHECK(v && v->asBool(false) == true);
++    }
++    fHome->ListBox1->Items->Insert(0, AnsiString("Reset OK"));
++    Publish(snap, false, m);
++    {
++        const webbridge::TagValue* v = Tag(m, "home.log");
++        cJSON* a = v && v->isString() ? cJSON_Parse(v->asString().c_str()) : 0;
++        CHECK(a != 0 && std::string(cJSON_GetArrayItem(a, 0)->valuestring) == "Reset OK");   // a new newest line is picked up
++        cJSON_Delete(a);
++    }
++
++    // -----------------------------------------------------------------------
++    //  PART C -- act.home.abort
++    // -----------------------------------------------------------------------
++    std::printf("\n-- PART C: act.home.abort --\n");
++    W906_Stop1203AllHook = &FakeStop1203;
++    std::string ack;
++
++    // C1 not open: refused, nothing called
++    fHome->Close(); fHome->fAbort = false;
++    SystemStart = true; fAllMotorHome = true; bMotorPowerState = true; SW[SwMotorRelay].On();
++    g_stopCalls = 0;
++    CHECK(W906_HomeAbortWire("{\"source\":\"HW.home\",\"button\":\"sbAbortHome\"}", ack) == false);
++    CHECK(ack.compare(0, 9, "not-open:") == 0);
++    CHECK(g_stopCalls == 0);
++    CHECK(SystemStart == true && fAllMotorHome == true && bMotorPowerState == true && SW[SwMotorRelay].OutValue == true);
++    CHECK(fHome->fAbort == false && fHome->fShow == false);
++
++    // C2 happy path: the home sequence shows the form -> golden sbAbortHomeClick
++    fHome->Show();
++    fHome->iHomeStep = 600;                                                    // somewhere inside ProcessMotorHome
++    SystemStart = true; fAllMotorHome = true; bMotorPowerState = true; SW[SwMotorRelay].On(); SW[SwServerON].On();
++    g_stopCalls = 0; g_stopWhy.clear(); ack.clear();
++    CHECK(W906_HomeAbortWire("{\"source\":\"HW.home\",\"button\":\"sbAbortHome\"}", ack) == true);
++    CHECK(g_stopCalls == 1 && g_stopWhy == "GaliMotorServoOff - sbAbortHomeClick");   // GaliMotorServoOff("sbAbortHomeClick")
++    CHECK(fHome->fShow == false && fHome->fAbort == true);                     // fAbort=true; Close()
++    CHECK(SystemStart == false && fAllMotorHome == false && bMotorPowerState == false);
++    CHECK(SW[SwMotorRelay].OutValue == false && SW[SwServerON].OutValue == false);
++    CHECK(fHome->iHomeStep == 600);                                            // golden leaves the cursor; ProcessMotorHome's fAbort arm resets it
++    {
++        cJSON* o = cJSON_Parse(ack.c_str());
++        CHECK(cJSON_IsObject(o));
++        CHECK(o != 0 && Bool(o, "accepted", true) && Bool(o, "fShow", false) && Bool(o, "fAbort", true));
++        CHECK(o != 0 && Bool(o, "systemStart", false) && Bool(o, "fAllMotorHome", false) && Bool(o, "motorPower", false));
++        CHECK(o != 0 && Int(o, "homeStep") == 600);
++        cJSON_Delete(o);
++        std::printf("  ack: %s\n", ack.c_str());
++    }
++    CHECK(Publish(snap, true, m) == 7);
++    {
++        const webbridge::TagValue* v = Tag(m, "home.fShow");
++        CHECK(v && v->asBool(true) == false);
++        v = Tag(m, "home.fAbort");
++        CHECK(v && v->asBool(false) == true);
++    }
++
++    // C3 a second press: the form is closed -> refused, nothing called again
++    SystemStart = true;
++    CHECK(W906_HomeAbortWire("{}", ack) == false && ack.compare(0, 9, "not-open:") == 0);
++    CHECK(g_stopCalls == 1 && SystemStart == true);
++
++    W906_Stop1203AllHook = 0;
++    SystemStart = false; fHome->fAbort = false; fHome->iHomeStep = 1;
++    fHome->ListBox1->Clear();
++    std::printf("\n=== %d checks, %d FAIL ===\n", g_checks, g_fail);
++    return g_fail ? 1 : 0;
++}
+diff --git a/tests/test_mainclose_stop.cpp b/tests/test_mainclose_stop.cpp
+index 37861c5..7f77ada 100644
+--- a/tests/test_mainclose_stop.cpp
++++ b/tests/test_mainclose_stop.cpp
+@@ -369,7 +369,7 @@ void T15_ClosingAllowList()
+     const char* allow[] = { "act.main.closeProgram", "motor.stop", "pci1203.ax.stop", "pci1203.ax.emgStop", "pause.run",
+                             "sys.ping", "cfg.resync", "log.event", "ui.windows.put", "stream.resync",
+                             "contactct.get", "counterclear.get", "modal.answer", "dialog.response", "dialog.notifyAck",   /* AI(W906-J5-ACK) 20260930 */
+-                            "auth.login", "auth.logout", "auth.mode", "auth.select", "dialog.auth", 0 };
++                            "auth.login", "auth.logout", "auth.mode", "auth.select", "dialog.auth", "act.home.abort", 0 };   //AI(W906-HOMEMON) 20261001: + act.home.abort (Abort Home = golden sbAbortHomeClick, a stop)
+     for (int i = 0; allow[i]; ++i) CHECK(CmdAllowedWhileClosing(allow[i], "", -1));
+     // 擋：開輸出、動馬達、寫檔、開始生產、其他 act.*、模擬 DI、echo 框、未來的新指令
+     const char* deny[] = { "io.btnPanelClick", "pci1203.do.setBit", "pci1203.do.setByte", "pci1203.ax.svOn", "pci1203.ax.jog",
+diff --git a/tests/test_webcmdguard.cpp b/tests/test_webcmdguard.cpp
+index 5d19dfe..1ffc8f0 100644
+--- a/tests/test_webcmdguard.cpp
++++ b/tests/test_webcmdguard.cpp
+@@ -305,7 +305,7 @@ int main()
+             { "ui.windows.put", "{}", true }, { "stream.resync", 0, true },
+             { "modal.answer", "BtnStart", true }, { "dialog.response", "{}", true }, { "dialog.auth", "{}", true }, { "dialog.notifyAck", 0, true },   // AI(W906-J5-ACK) 20260930
+             { "motor.access", "{\"action\":\"moveRelative\"}", false }, { "motor.stop", "{}", true },   // AI(W906-R0927-8) 20260927: motor.access 改到 op 級（[16]）
+-            { "io.btnPanelClick", "1", true }, { "sim.di.set", "1", true }, { "pause.run", 0, true },
++            { "io.btnPanelClick", "1", true }, { "sim.di.set", "1", true }, { "pause.run", 0, true }, { "act.home.abort", "{}", true },   //AI(W906-HOMEMON) 20261001
+             { "editlist.get", 0, true }, { "contactct.get", 0, true }, { "observer.get", 0, true },
+             { "counterclear.get", 0, true }, { "auth.mode", 0, true },
+             { "pci1203.do.setBit", "{}", true }, { "olp.setMode", "1", true },
+diff --git a/tools/fshow_audit_baseline.json b/tools/fshow_audit_baseline.json
+index 07c543e..05856ba 100644
+--- a/tools/fshow_audit_baseline.json
++++ b/tools/fshow_audit_baseline.json
+@@ -1,9 +1,10 @@
+ {
+  "about": "tools/fshow_audit.py ratchet: bare reads of a form show-state member per file; may only go down (AI(W906-PAGETAB-Q51) 20260928)",
+- "total": 50,
++ "total": 51,
+  "bare": {
+   "BarcodeReader.cpp": 2,
+   "Command.cpp": 0,
++  "JsonBridge/ChanHome.cpp": 1,
+   "FileRW/ContactForce.cpp": 4,
+   "FileRW/TestIF_File_SetUp.gen.inc": 1,
+   "WebBridgeTags.cpp": 1,
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index ed837b5..1c51682 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -436,7 +436,7 @@ static bool DialogMailboxRetire()   //AI(W906-J5-ACK) 20260930: returns true = b
+         std::printf("  ⚠ dialog mailbox retire FAILED -- 下次重整會再彈一次\n");
+     return ok;
+ }
+-struct W906ModalWaitScope { explicit W906ModalWaitScope(int k, const char* code = 0); ~W906ModalWaitScope(); int kind; };  void W906_ModalWaitTick(int kind, int kcode = 0);  void W906_ModalOutputsRefresh();  int W906_YesNoPreCloseLikeGolden();  extern int* g_w906NoteSelPtr;  void W906_TesterCommPoll(); bool W906_TesterCommHttp(const std::string&, const std::string&, const std::string&, bool, int*, std::string*, std::string*);  bool W906_ElaHttp(const std::string&, const std::string&, const std::string&, bool, int*, std::string*, std::string*);  /* AI(W906-ELA-P3) 20260927: EventLogAnalysis/ElaService.cpp */  bool W906_SimDiCommand(const webbridge::WebCommand& wc);  /* AI(W906-R70) 20260926 YN-3（本體在檔尾，同 :6527）*/  bool CheckIndexAllSuckICFallDown(bool bCheckArm1, bool bCheckArm2);  extern bool SECS_GEM_PPMUSIC_CONTROL_flag;  extern bool SECS_GEM_PPSIGNALTOWER_CONTROL_flag;  /* AI(W906-R70) 20260926 MW-F／YN-4：csystem.h:209、ckernel.cpp:1272／:1275 */  std::size_t W906_StageMotionViewTrays(webbridge::TagSnapshot& snap);  /* AI(W906-S118) 20260928 (St02-E, laptop-approved claim): JsonBridge/ChanMvTrays.cpp, called from PublishExtraTags */   // AI(W906-MODAL-WAKE) 20260926: RULINGS #9 —— 三個阻塞等待迴圈進迴圈前建一個（0 告警、1 是／否、2 ShowMyMessage），任何 return 都經過解構；每一圈呼叫 W906_ModalWaitTick。本體在檔尾
++std::size_t W906_StageHomeMonitor(webbridge::TagSnapshot& snap, bool streamWanted);  void W906_HomeAbortCommand(webbridge::WebBridgeServer& server, const webbridge::WebCommand& wc);  /*AI(W906-HOMEMON) 20261001: JsonBridge/ChanHome.cpp -- the web Home Monitor's home.* tags (PublishExtraTags) and act.home.abort = golden TfHome::sbAbortHomeClick (main drain + the three blocking-dialog waits); declared here at file scope, before every caller (two of them sit in anonymous namespaces); same line*/  struct W906ModalWaitScope { explicit W906ModalWaitScope(int k, const char* code = 0); ~W906ModalWaitScope(); int kind; };  void W906_ModalWaitTick(int kind, int kcode = 0);  void W906_ModalOutputsRefresh();  int W906_YesNoPreCloseLikeGolden();  extern int* g_w906NoteSelPtr;  void W906_TesterCommPoll(); bool W906_TesterCommHttp(const std::string&, const std::string&, const std::string&, bool, int*, std::string*, std::string*);  bool W906_ElaHttp(const std::string&, const std::string&, const std::string&, bool, int*, std::string*, std::string*);  /* AI(W906-ELA-P3) 20260927: EventLogAnalysis/ElaService.cpp */  bool W906_SimDiCommand(const webbridge::WebCommand& wc);  /* AI(W906-R70) 20260926 YN-3（本體在檔尾，同 :6527）*/  bool CheckIndexAllSuckICFallDown(bool bCheckArm1, bool bCheckArm2);  extern bool SECS_GEM_PPMUSIC_CONTROL_flag;  extern bool SECS_GEM_PPSIGNALTOWER_CONTROL_flag;  /* AI(W906-R70) 20260926 MW-F／YN-4：csystem.h:209、ckernel.cpp:1272／:1275 */  std::size_t W906_StageMotionViewTrays(webbridge::TagSnapshot& snap);  /* AI(W906-S118) 20260928 (St02-E, laptop-approved claim): JsonBridge/ChanMvTrays.cpp, called from PublishExtraTags */   // AI(W906-MODAL-WAKE) 20260926: RULINGS #9 —— 三個阻塞等待迴圈進迴圈前建一個（0 告警、1 是／否、2 ShowMyMessage），任何 return 都經過解構；每一圈呼叫 W906_ModalWaitTick。本體在檔尾
+ static int ForwardShowErrorMessage(const char* code, int kcode, int pos)
+ {
+     if (!g_w906MotorNoteMsg) { extern void W906_AlarmStopLikeGolden(const char*); W906_AlarmStopLikeGolden(code); }  if (!g_w906MotorNoteMsg) /* AI(W906-JAM-STOP) 20260930: both skipped only for golden ShowMotorErrorMessage's note (EOF ForwardShowMotorErrorMessage) -- golden note.cpp:795-868 are ShowErrorMessage's, the motor body did its own stop + record (golden :1054-1092) */ { extern bool W906_ShowErrorMessageRecordLikeGolden(AnsiString, bool, AnsiString); extern AnsiString W906_ShowErrorMessage_LastErrPart; extern bool W906_ShowErrorMessage_LastDuplicate; W906_ShowErrorMessageRecordLikeGolden(AnsiString(code ? code : ""), W906_ShowErrorMessage_LastDuplicate, W906_ShowErrorMessage_LastErrPart); }  if (!g_modalServer || !g_pumpQueue) return 0;   // unattended -> sim answer  // AI(W906-ALARMSTOP) 20260924: 先照 golden note.cpp:795-801 停機（使用者 20260924：kcode≠0 與 kcode==0 都停；kcode==0 仍依 0923 不阻塞）—— 本體在檔尾  //AI(W906-SHOWERR) 20260929: then golden ShowErrorMessage's alarm record (note.cpp:538 / :794 / :802-818 / :839-868 -- MyDBIEvent -> EventTracker / HANDLER LOG csv, ProductionLog, ErrShowToForm -> fNote->edErrorCode / Edit3 / edUnitName / AlarmType; forms/fNote_ShowError.cpp) with the errPart / bDuplicateErr canary_support.cpp recorded; before the unattended return because golden records every alarm (RULINGS_20260929 section 5 item 7)
+@@ -668,7 +668,7 @@ static int ForwardShowErrorMessage(const char* code, int kcode, int pos)
+                 g_modalServer->CompleteCommand((unsigned long long)wc.id, true,
+                                                ht9045::sjson::ConfigResyncJson(since));
+             } else {
+-                extern bool W906_IoPageNoGuards(); extern void W906_DispatchIoClick(webbridge::WebBridgeServer&, const webbridge::WebCommand&);   /*AI(W906-IO-NOGUARD) 20260929: EastSun「IO畫面一律不要卡控」-- an IO click is served during this dialog too (JsonBridge/IoBtnPanelClick.cpp W906_IO_PAGE_NO_GUARDS)*/  if (wc.cmd == "io.btnPanelClick" && W906_IoPageNoGuards()) W906_DispatchIoClick(*g_modalServer, wc); else if (wc.cmd == "dialog.notifyAck") { g_modalServer->CompleteCommand((unsigned long long)wc.id, false, std::string("not-a-notice:current=") + qidStr); } else if (wc.cmd == "motor.stop") { extern bool W906_MotorAccessWire(const std::string&, long long, std::string&, bool); std::string msAck; const bool msOk = W906_MotorAccessWire((wc.hasValue && wc.value.isString()) ? wc.value.asString() : std::string(), (long long)wc.id, msAck, true); g_modalServer->CompleteCommand((unsigned long long)wc.id, msOk, msAck); } else { extern bool W906_MsgBoxModelessAnswer(const webbridge::WebCommand&); extern bool W906_SimDiCommand(const webbridge::WebCommand&); if (!W906_MsgBoxModelessAnswer(wc) && !W906_SimDiCommand(wc)) g_modalServer->CompleteCommand((unsigned long long)wc.id, false, "modal-pending"); }   /*AI(W906-SMM) 20260925: 告警框開著時，網頁上不停機的 MyMessageBox 仍按得掉（dialog-bridge.js 不停機那一層在最上層、可單獨按）—— C++ 這側也要收，否則網頁關了、C++ 的 fShow／iUnLoaderCount 還留著（檔尾 W906_MsgBoxModelessAnswer）*/   /*AI(W906-W4D) 20260925: NB2 R23 §2 -- motor.stop answered even under a modal alarm: STOP never starts motion, golden keeps the physical STOP live during a modal, and for 1203 axes opened by the EastSun monitor this is the only stop there is (motor.stop is locked to action=stop)*/   /*AI(W906-J5-ACK) 20260930: dialog.notifyAck while this blocking alarm waits = not-a-notice: this alarm owns the mailbox (a notice under it, kShown==0, is retired by this alarm's DialogMailboxRetire) -- nothing retired, nothing applied, answered at once*/
++                extern bool W906_IoPageNoGuards(); extern void W906_DispatchIoClick(webbridge::WebBridgeServer&, const webbridge::WebCommand&);   /*AI(W906-IO-NOGUARD) 20260929: EastSun「IO畫面一律不要卡控」-- an IO click is served during this dialog too (JsonBridge/IoBtnPanelClick.cpp W906_IO_PAGE_NO_GUARDS)*/  if (wc.cmd == "io.btnPanelClick" && W906_IoPageNoGuards()) W906_DispatchIoClick(*g_modalServer, wc); else if (wc.cmd == "dialog.notifyAck") { g_modalServer->CompleteCommand((unsigned long long)wc.id, false, std::string("not-a-notice:current=") + qidStr); } else if (wc.cmd == "motor.stop") { extern bool W906_MotorAccessWire(const std::string&, long long, std::string&, bool); std::string msAck; const bool msOk = W906_MotorAccessWire((wc.hasValue && wc.value.isString()) ? wc.value.asString() : std::string(), (long long)wc.id, msAck, true); g_modalServer->CompleteCommand((unsigned long long)wc.id, msOk, msAck); } else if (wc.cmd == "act.home.abort") { W906_HomeAbortCommand(*g_modalServer, wc); } else { extern bool W906_MsgBoxModelessAnswer(const webbridge::WebCommand&); extern bool W906_SimDiCommand(const webbridge::WebCommand&); if (!W906_MsgBoxModelessAnswer(wc) && !W906_SimDiCommand(wc)) g_modalServer->CompleteCommand((unsigned long long)wc.id, false, "modal-pending"); }   /*AI(W906-HOMEMON) 20261001: act.home.abort (Home Monitor's Abort Home = golden sbAbortHomeClick, JsonBridge/ChanHome.cpp) answered under this alarm like motor.stop -- a stop is not held behind a box ([W906]; see ChanHome.h for what golden has here)*/   /*AI(W906-SMM) 20260925: 告警框開著時，網頁上不停機的 MyMessageBox 仍按得掉（dialog-bridge.js 不停機那一層在最上層、可單獨按）—— C++ 這側也要收，否則網頁關了、C++ 的 fShow／iUnLoaderCount 還留著（檔尾 W906_MsgBoxModelessAnswer）*/   /*AI(W906-W4D) 20260925: NB2 R23 §2 -- motor.stop answered even under a modal alarm: STOP never starts motion, golden keeps the physical STOP live during a modal, and for 1203 axes opened by the EastSun monitor this is the only stop there is (motor.stop is locked to action=stop)*/   /*AI(W906-J5-ACK) 20260930: dialog.notifyAck while this blocking alarm waits = not-a-notice: this alarm owns the mailbox (a notice under it, kShown==0, is retired by this alarm's DialogMailboxRetire) -- nothing retired, nothing applied, answered at once*/
+             }
+         }
+         // ===== AI(W906-SMM-IO) 20260925 BEGIN -- 框開著時的實體面板鍵（RULINGS_20260925 第 42 條）=====
+@@ -852,7 +852,7 @@ static int ForwardShowMyMessageBoxYesNo(const char* s1, const char* s2, const ch
+                 const bool msOk = W906_MotorAccessWire((wc.hasValue && wc.value.isString()) ? wc.value.asString() : std::string(),
+                                                        (long long)wc.id, msAck, true);
+                 g_modalServer->CompleteCommand((unsigned long long)wc.id, msOk, msAck);
+-            } else if (W906_SimDiCommand(wc)) { } else if (wc.cmd == "io.btnPanelClick" && []() { extern bool W906_IoPageNoGuards(); return W906_IoPageNoGuards(); }()) { extern void W906_DispatchIoClick(webbridge::WebBridgeServer&, const webbridge::WebCommand&); W906_DispatchIoClick(*g_modalServer, wc); } else {   /*AI(W906-IO-NOGUARD) 20260929: IO click served during the YesNo dialog too*/   // AI(W906-R70) 20260926 YN-3：是／否框也收模擬 DI（另外兩種框 :671／:6782 都收；同一行寫完，行數不變），SOFT_SIMULTE 下才驗得到第 26 條 Q3 的「面板 Alarm Reset 消音」
++            } else if (wc.cmd == "act.home.abort") { W906_HomeAbortCommand(*g_modalServer, wc);   /*AI(W906-HOMEMON) 20261001: Abort Home answered during the YES/NO box too, like motor.stop above (JsonBridge/ChanHome.cpp)*/ } else if (W906_SimDiCommand(wc)) { } else if (wc.cmd == "io.btnPanelClick" && []() { extern bool W906_IoPageNoGuards(); return W906_IoPageNoGuards(); }()) { extern void W906_DispatchIoClick(webbridge::WebBridgeServer&, const webbridge::WebCommand&); W906_DispatchIoClick(*g_modalServer, wc); } else {   /*AI(W906-IO-NOGUARD) 20260929: IO click served during the YesNo dialog too*/   // AI(W906-R70) 20260926 YN-3：是／否框也收模擬 DI（另外兩種框 :671／:6782 都收；同一行寫完，行數不變），SOFT_SIMULTE 下才驗得到第 26 條 Q3 的「面板 Alarm Reset 消音」
+                 g_modalServer->CompleteCommand((unsigned long long)wc.id, false, "modal-pending");
+             }
+         }
+@@ -2892,7 +2892,7 @@ std::size_t PublishExtraTags(webbridge::TagSnapshot& snap) {
+     n += ht9045::sjson::StageProduction(snap);   // S8  prod.*   （含差量）
+     n += ht9045::sjson::StageIo(snap);           // S9  io.di / io.do
+     n += ht9045::sjson::StageMotor(snap);  { if (::W906_PageStreamWanted("motionview")) n += ::W906_StageMotionViewTrays(snap); }   //AI(W906-STREAM-2C) 20260930: RULINGS_20260930 #12 -- motionView.trays.* / motionView.screenScale* only while some browser has Motion View (background.html id motionview) open or minimized; its only reader is Main.MotionView.html (ht9045_mv_trays.js); uncertain = send.        // S9  motor.axes; AI(W906-S118) 20260928 (St02-E, laptop-approved claim): + the main-screen trays motionView.trays.* (34, W54 = A)
+-    n += ht9045::sjson::PublishAlarmTags(snap);  // S10 alarm.*  （只送游標）
++    n += ht9045::sjson::PublishAlarmTags(snap);  n += ::W906_StageHomeMonitor(snap, ::W906_PageStreamWanted("home"));  // S10 alarm.*  （只送游標）  //AI(W906-HOMEMON) 20261001: + the Home Monitor's home.* (JsonBridge/ChanHome.cpp) only while some browser has Home Monitor (background.html id home) open or minimized, or the home sequence shows it (fHome->fShow); same rule as motionview above (RULINGS_20260930 #12); same line
+     // ===== AI(W906-SJSON-S8S9S10) 20260923 END =====
+     return n;
+ }
+@@ -4830,7 +4830,7 @@ int main(int argc, char** argv)
+                 bool rcOk = false; std::string rcRes;
+                 try { rcRes = W906_RecipeChangeOp(payload, &rcOk); } catch (...) { rcOk = false; rcRes = "exception in golden TfMain::cbSetupFileNameChange"; }
+                 server.CompleteCommand((unsigned long long)wc.id, rcOk, rcRes);
+-            } else if (wc.cmd == "lotinfo.op") { extern std::string W906_LotInfoOp(const std::string& payloadJson, bool* ok); const std::string payload = (wc.hasValue && wc.value.isString()) ? wc.value.asString() : std::string(); bool liOk = false; std::string liRes; try { liRes = W906_LotInfoOp(payload, &liOk); } catch (...) { liOk = false; liRes = "exception in golden TfLotInfo"; } std::printf("lotinfo.op -> %s\n", liOk ? "ok" : liRes.substr(0, 160).c_str()); server.CompleteCommand((unsigned long long)wc.id, liOk, liRes); } else if (ht9045::sjson::IsActionCommand(wc.cmd)) {   //Steven 20260925 (Data.LotInfo 其餘分頁)：前面那一臂 lotinfo.op ＝ golden TfLotInfo（WebLotInfo.cpp，只在 wb_serve，自己持 FormLock）；barcode.clearCount／testerLog.get／selection.get／selection.save。寫在同一行，不移動本檔行號
++            } else if (wc.cmd == "act.home.abort") { W906_HomeAbortCommand(server, wc);   /*AI(W906-HOMEMON) 20261001: Home Monitor's Abort Home = golden TfHome::sbAbortHomeClick (uhome.cpp:4980-4986), only while the home sequence shows the form (JsonBridge/ChanHome.cpp); ahead of the act.* catch-all (IsActionCommand) at the end of this line; same line*/ } else if (wc.cmd == "lotinfo.op") { extern std::string W906_LotInfoOp(const std::string& payloadJson, bool* ok); const std::string payload = (wc.hasValue && wc.value.isString()) ? wc.value.asString() : std::string(); bool liOk = false; std::string liRes; try { liRes = W906_LotInfoOp(payload, &liOk); } catch (...) { liOk = false; liRes = "exception in golden TfLotInfo"; } std::printf("lotinfo.op -> %s\n", liOk ? "ok" : liRes.substr(0, 160).c_str()); server.CompleteCommand((unsigned long long)wc.id, liOk, liRes); } else if (ht9045::sjson::IsActionCommand(wc.cmd)) {   //Steven 20260925 (Data.LotInfo 其餘分頁)：前面那一臂 lotinfo.op ＝ golden TfLotInfo（WebLotInfo.cpp，只在 wb_serve，自己持 FormLock）；barcode.clearCount／testerLog.get／selection.get／selection.save。寫在同一行，不移動本檔行號
+                 const std::string payload = (wc.hasValue && wc.value.isString())
+                                           ? wc.value.asString() : std::string();
+                 const std::string res = ht9045::sjson::HandleActionWithTag(
+@@ -6794,7 +6794,7 @@ std::string MbWait(const std::string& qid, const char* const* opts, int nOpts)
+                 const bool msOk = W906_MotorAccessWire((wc.hasValue && wc.value.isString()) ? wc.value.asString() : std::string(),
+                                                        (long long)wc.id, msAck, true);
+                 g_modalServer->CompleteCommand((unsigned long long)wc.id, msOk, msAck);
+-            } else if (wc.cmd == "io.btnPanelClick" && ::W906_IoPageNoGuards()) { ::W906_DispatchIoClick(*g_modalServer, wc); } else {   //AI(W906-IO-NOGUARD) 20260929: IO click served during the MyMessageBox wait too
++            } else if (wc.cmd == "act.home.abort") { ::W906_HomeAbortCommand(*g_modalServer, wc);   /*AI(W906-HOMEMON) 20261001: Abort Home answered during the MyMessageBox wait too, like motor.stop above (JsonBridge/ChanHome.cpp; :: = the file-scope declaration at :439, this wait is in an anonymous namespace)*/ } else if (wc.cmd == "io.btnPanelClick" && ::W906_IoPageNoGuards()) { ::W906_DispatchIoClick(*g_modalServer, wc); } else {   //AI(W906-IO-NOGUARD) 20260929: IO click served during the MyMessageBox wait too
+                 if (wc.cmd == "modal.answer" || wc.cmd == "dialog.response")   // 答錯對象（例如舊的一則）—— 印出來，現場查「按了沒反應」用
+                     std::printf("  [MyMessageBox] %s 等待中收到給 %s 的回答 -> modal-pending\n", qid.c_str(),
+                                 wc.hasTag ? wc.tag.c_str() : "(no tag)");
+diff --git a/uhome.cpp b/uhome.cpp
+index 9a81297..d4ba410 100644
+--- a/uhome.cpp
++++ b/uhome.cpp
+@@ -640,9 +640,9 @@ void TfHome::Show()
+     // 缺相依：`TfHome::Panel2`（golden uhome.h 的 .dfm TPanel）。
+     // 行為：歸零畫面上那塊面板不會被藏起來。純版面，零控制流。
+     // UN-GATE：等 TfHome 門面帶進 Panel2（或 web HMI 有對應的區塊）。
+-#if 0 // GATE (W906-HOME-C2-PANEL2): 缺相依，見上面的就地註解
++    //AI(W906-HOMEMON) 20261001: UN-GATED -- TfHome carries Panel2 now (forms/fHome.h) and the web Home Monitor shows it (tag home.resetOk, JsonBridge/ChanHome.cpp)
+     Panel2->Visible=false;                                                      // golden :4846
+-#endif // GATE (W906-HOME-C2-PANEL2)
++    //AI(W906-HOMEMON) 20261001: the #if 0 / #endif pair of GATE (W906-HOME-C2-PANEL2) removed; comment lines keep the line count (uhome.cpp:646 / :652 are cited elsewhere)
+     fShow =true;  if (W906_FormProgramShowHook) W906_FormProgramShowHook("fHome", true, "uhome.cpp:646 TfHome::Show (golden uhome.cpp:4847)");  /*AI(W906-PAGETAB-Q51) 20260928 [W906] 程式開畫面 ⇒ 頁面表（每個 HMI 自動跳出 Home Monitor，Steven Q-P2=A）；hook 是 0（ctest）＝不做*/                                                                // golden :4847
+     fAbort=false;                                                               // golden :4848
+ }
+@@ -3419,9 +3419,9 @@ bool ProcessMotorHome(bool Flag2)
+             // 缺相依：`TfHome::Panel2`（golden uhome.h 的 .dfm TPanel）。同 TfHome::Show()
+             // 那一格。純版面：golden 在歸零走到 case 1100 時把那塊面板顯示出來。
+             // 行為：歸零畫面上那塊面板不會出現。零控制流。
+-            #if 0 // GATE (W906-HOME-C2-PANEL2): 缺相依，見上面的就地註解
+-            fHome->Panel2->Visible=true;
+-            #endif // GATE (W906-HOME-C2-PANEL2)
++            //AI(W906-HOMEMON) 20261001: UN-GATED (same as TfHome::Show()) -- the "Reset OK" panel of the web Home Monitor, tag home.resetOk
++            fHome->Panel2->Visible=true;                                        // golden :3516
++            //AI(W906-HOMEMON) 20261001: the #if 0 / #endif pair removed; this comment keeps the line count
+             fHome->iHomeStep=1200;
+             ResetOKDeleyTime.SetSecAndOn(0.1);
+             fLtcSensor->ClearLtcSensor(1);                                      //Sam 20221101 : Latch 清除都要確認是否清清乾淨
+-- 
+2.55.0.windows.5
+

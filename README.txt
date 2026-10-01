@@ -539,4 +539,12 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     打過字的格子一定照送（原版 GoButton020Click 讀畫面上的字）。
   cpp 0091 0d1d592 WORKLOG —— 工作紀錄補 10-01 第 53～54 項（撞機：不是原版沒寫入也不是沒合好——按到 Loader 的 Go；Teach 逐一檢查結果）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0092 ae813b6 PKG-112 —— 整合筆電第 112 包（GitHub main 2787258、GitLab 65330849）：Jerry J-7 TestSocket 起始位置、J-10 DoCheckSocketHasIC 解開閘門
+                    （只在生產流程 DoTestY case 20 呼叫，非模擬機台上會動 Index）、St02 H-013 第 1 部分、sync_web.py。設計外掛部分＝tools 0143（設計外掛工作階段）。
+  cpp 0093 77a1741 TEACH-ZALLUP —— Teach 的 In/Out Z All Up（golden uteach.cpp:4466／:4480）與 Index 分頁四顆 Servo（:4253／:4270／:2919）照原版接上。
+  cpp 0094 37117e3 HOMEMON —— Home Monitor 的 C++ 半邊：JsonBridge/ChanHome（home.* 標籤）＋ act.home.abort＝golden sbAbortHomeClick（只在 fHome->fShow 時）。
+  cpp 0095 cc8183f WORKLOG —— 工作紀錄補 10-01 第 55～58 項；第 3 節 112；第 4 節兩件待決定。
+  web 0064 5d2800f TEACH-ZALLUP (web) —— 那 6 顆按鈕的網頁半邊（ht9045_teach_zallup_c.js、motor-access.json 6 列）。
+  web 0065 d758607 HOMEMON (web) —— Home Monitor 不再是假資料（列、燈、位置、紀錄來自 C++）；Abort Home 沒有確認視窗；視窗改成不擋其他視窗。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。

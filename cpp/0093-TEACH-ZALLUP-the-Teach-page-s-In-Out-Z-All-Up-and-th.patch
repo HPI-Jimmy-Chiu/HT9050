@@ -1,0 +1,708 @@
+From 77a17414e763aed7b68fb95a79657310d502d069 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 23:13:33 +0800
+Subject: [PATCH] TEACH-ZALLUP: the Teach page's In / Out Z All Up and the
+ Index tab's four Servo buttons (golden uteach) -- they were on the page with
+ no handler
+
+motor.access gets two uteach actions (kActions rows, dispatch, bodies at the EOF of WebMotorAccess.cpp):
+  teachZAllUp      golden btnInZAllUpClick :4466 / btnOutZAllUpClick :4480 -- every Z of that arm (InArmZIndex /
+                   OutArmZIndex over In/OutArmSuck.iMotRow x iMotCol, the backend's GoldenTeachFixedMotors) gets the
+                   single home Teach's / Motor Test's HOME already starts (DoHome: 1203 DS402 home + case 500 ZSafePos,
+                   non-1203 golden ProcessSingleMotorHome); Enable=0 rows -> golden case 200 HomeFlag=1, nothing sent;
+                   no CheckCanMove / IsCanQuickJogMove (golden has none); a home already running is not re-issued;
+                   ack caption Homeing... (golden DoZHome).
+  teachIndexServo  golden btnZ1ServoClick :4253 / btnZ2ServoClick :4270 / btnArm1YServoClick :2919 (btnArm2YServo
+                   shares the handler) -- golden's fixed motor (MTestZ1 / MTestZ2 / MTestY1 [+MTestY2 on a 4-axis
+                   Index]), target = actual servo state inverted, else golden's static; a 1203 row goes through
+                   DoServo (Enable=0 refusal, brake hold, SvOn), another row is refused (golden Gali_Command has no
+                   path here); fAllMotorHome=false.
+SystemStart and an open hand teach refuse both (dispatcher). Live backend: GoldenTeachFixedMotors ->
+W906_TeachFixedMotorsLive (EOF). ctest WebMotorAccess: section [ZALLUP] (+38 checks) and the catalog section
+now expects the web JSON with the six new uteach rows (57 commands, 41 actions, live 36) -- deploy
+web/JSON/motor-access.json (+ JSON/js/motor-access.js) with this commit.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebMotorAccess.cpp              | 243 +++++++++++++++++++++++++++++--
+ WebMotorAccess.h                |  17 ++-
+ WebMotorAccessLive.cpp          |  43 +++++-
+ tests/test_web_motor_access.cpp | 244 +++++++++++++++++++++++++++++++-
+ 4 files changed, 533 insertions(+), 14 deletions(-)
+
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index b7690ea..c0640b0 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -92,7 +92,7 @@ const ActionRow kActions[] = {
+     { "setTeachFromCurrent", "ui",     "",     "uteach.cpp:2098 btnSetToClick（只做 EditPtr->Text=edtNowPosition->Text，頁面自己做）" },
+     { "setTeachFromOffset",  "ui",     "",     "uteach.cpp:2200 btnSetToOffsetClick（只做 EditPtr->Text=edtSetToOffset->Text，頁面自己做）" },
+     { "teachSet",            "live",   "",     "uteach.cpp:3360 SetButton140Click／:3517 SetButton020Click／:3650 SetButton064Click（手動教導：關伺服→對話框→讀編碼器→開伺服）" },
+-    { "teachGo",             "live",   "",     "uteach.cpp:3401 GoButton140Click／:3559 GoButton020Click" },
++    { "teachGo",             "live",   "",     "uteach.cpp:3401 GoButton140Click／:3559 GoButton020Click" },  { "teachZAllUp", "live", "", "uteach.cpp:4466 btnInZAllUpClick／:4480 btnOutZAllUpClick（那一臂每一個 Z：bIn/OutArmZHome=false＋InitProcessSingleMotorTask；Timer1Timer :1374 DoZHome :4505 推進）AI(W906-TEACH-ZALLUP) 20261001" },  { "teachIndexServo", "live", "", "uteach.cpp:4253 btnZ1ServoClick／:4270 btnZ2ServoClick／:2919 btnArm1YServoClick（btnArm2YServo 同一個處理函式）：Gali_Command(\"MO?\"／\"SH?\") 函式內 static 輪流、fAllMotorHome=false AI(W906-TEACH-ZALLUP) 20261001" },
+ };
+ const int kActionCount = (int)(sizeof(kActions) / sizeof(kActions[0]));
+ 
+@@ -956,9 +956,9 @@ struct HomeJob {
+     //  bSingleHome WITHOUT btnHome->Down). Such a job is golden's bSingleHome only: an AllBtnUp (btnHome->Down=false) does not
+     //  end it, VerifyMotorAction's "Homeing" lock does not see it (golden sees it through MotionDone instead), and the motion
+     //  buttons' `btnHome->Down` guard does not refuse for it.
+-    bool        fromLS;  int kind;   //AI(W906-MT-SMHOME) 20261001: 0 = 1203 (this file's home), 1 = golden ProcessSingleMotorHome (a non-1203 row; axis stays -1)
++    bool        fromLS;  int kind;  bool zAllUp;   //AI(W906-MT-SMHOME) 20261001: 0 = 1203 (this file's home), 1 = golden ProcessSingleMotorHome (a non-1203 row; axis stays -1)  //AI(W906-TEACH-ZALLUP) 20261001: zAllUp = started by Teach's In/Out Z All Up (golden DoZHome: no SetSpeed when it ends)
+     HomeJob() : active(false), mi(-1), axis(-1), phase(0), sawHoming(false), elapsedMs(0), readyMs(0), zTarget(0), zIssued(false),
+-                cardSide(false), zeroed(false), zeroWaitMs(-1), fromLS(false), kind(0) {}
++                cardSide(false), zeroed(false), zeroWaitMs(-1), fromLS(false), kind(0), zAllUp(false) {}
+ };
+ //AI(W906-MT-E3c) 20260925: golden TMyMotor's MotorMove state (iOldPos, fCMD -- members of MOT[i], golden mymotor.cpp:871-962),
+ //  for a 1203 axis driven the golden way by the All-mode loop and Light Scale (GoldenMove1203). One per motor, like golden's
+@@ -1001,7 +1001,7 @@ struct LoopJob {
+     LoopJob() : active(false), pos1(0), pos2(0), waitMs(0), task(1), cmdIssued(false), legStartMs(0.0), waitUntilMs(0.0),
+                 wrongReady(0), wrongPoll(0), count(0), all(false) {}
+ };
+-std::vector<HomeJob> g_homes;  MotorAccessOutcome DoHomeGolden(const MotorAccessReq& r, IMotorAccessBackend& be, const MotionCtx& m, const std::string& who, bool wantStart);  void TickGoldenHome(IMotorAccessBackend& be, HomeJob& h);  bool LsStartGoldenHome(IMotorAccessBackend& be, int mi, const std::string& alias, const MotionCtx& m);   //AI(W906-MT-SMHOME) 20261001: bodies at the end of this file
++std::vector<HomeJob> g_homes;  MotorAccessOutcome DoHomeGolden(const MotorAccessReq& r, IMotorAccessBackend& be, const MotionCtx& m, const std::string& who, bool wantStart);  void TickGoldenHome(IMotorAccessBackend& be, HomeJob& h);  bool LsStartGoldenHome(IMotorAccessBackend& be, int mi, const std::string& alias, const MotionCtx& m);  MotorAccessOutcome DoTeachZAllUp(const MotorAccessReq& r, long long wireId, IMotorAccessBackend& be);  MotorAccessOutcome DoTeachIndexServo(const MotorAccessReq& r, long long wireId, IMotorAccessBackend& be);  void TeachZAllUpResetState();   //AI(W906-MT-SMHOME) 20261001: bodies at the end of this file  //AI(W906-TEACH-ZALLUP) 20261001: + DoTeachZAllUp / DoTeachIndexServo (bodies at the end of this file too)
+ LoopJob              g_loop;
+ std::string          g_lastJobNote;
+ bool                 g_lastSafeLock = false;   //AI(W906-MT-FIX1) 20260926: the beat's IsSafeLockCheck() result, for the post-Poll gate
+@@ -4203,7 +4203,7 @@ void MotorAccessResetJobs()
+     g_goldenPct.clear();                                                        // AI(W906-W5-b) 20260925: R-W5B-4
+     g_teachEdt = -1;
+     g_teachEdtMi = -1;                                                          //AI(W906-TEACH-SPD-AXIS) 20261001
+-    g_teachHomeUnknown.clear();
++    g_teachHomeUnknown.clear();  TeachZAllUpResetState();   //AI(W906-TEACH-ZALLUP) 20261001: the Index Servo buttons' golden statics
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -4407,8 +4407,8 @@ MotorAccessOutcome MotorAccessDispatch(const MotorAccessReq& r, long long wireId
+         if (r.action == "moveAbsolute")                 return DoTeachMoveTo(r, wireId, be);
+         if (r.action == "home")                         return DoTeachHome(r, wireId, be);
+         if (r.action == "teachGo")                      return DoTeachButton(r, wireId, be);   // golden 按鈕的處理函式決定做什麼（W5B-2）
+-        if (r.action == "teachSet")                     return DoTeachSet(r, wireId, be);
+-    }
++        if (r.action == "teachSet")                     return DoTeachSet(r, wireId, be);  if (r.action == "teachZAllUp") return DoTeachZAllUp(r, wireId, be);  if (r.action == "teachIndexServo") return DoTeachIndexServo(r, wireId, be);   //AI(W906-TEACH-ZALLUP) 20261001: golden uteach btnIn/OutZAllUp, btnZ1/Z2/Arm1Y/Arm2YServo (EOF)
++    }  if (r.action == "teachZAllUp" || r.action == "teachIndexServo") return Refuse("motor.access " + r.action + "（" + r.source + "）: 這是 golden uteach 教導頁的按鈕（" + row->golden + "），MotorTest 沒有");   //AI(W906-TEACH-ZALLUP) 20261001
+     if (r.action == "jogP" || r.action == "jogN") return DoJog(r, wireId, be);
+     if (r.action == "moveRelative")                 return DoMoveRelative(r, wireId, be);
+     if (r.action == "moveAbsolute")                 return DoMoveAbsolute(r, wireId, be);
+@@ -5126,7 +5126,7 @@ void TickGoldenHome(IMotorAccessBackend& be, HomeJob& h)
+ {
+     if (!be.GoldenSingleHomeStep(h.mi)) return;                                 // golden: bSingleHome stays true, the next MainProc steps again
+     SingleHomeSucceeded();                                                      // golden bSingleHome=false (also releases Light Scale's case 1)
+-    if (!h.fromLS) {                                                            // golden Timer1Timer :962-966 (btnHome->Down only)
++    if (!h.fromLS && !h.zAllUp) {                                               // golden Timer1Timer :962-966 (btnHome->Down only)  //AI(W906-TEACH-ZALLUP) 20261001: + !zAllUp (golden DoZHome sets no speed)
+         const int pct = JogPctOf(h.mi);                                         // scrlbrMotorSpeed->Position (non-Galil rows: only the bar / the selection set it)
+         be.GoldenSetSpeed(h.mi, pct, false);                                    // MOT[ActiveIndex].SetSpeed(Position) -- PTP family
+         g_ptpPct[h.mi] = pct;
+@@ -5160,3 +5160,230 @@ int MotorAccessTeachInterlockHome(IMotorAccessBackend& be, int mi)
+     return MotorAccessTeachHomeLed(be, mi);                                     // 其餘一格不變：1203 軸（ORG 規則、Enable=0＝1）、Enable=1 的非 1203 軸（-2＝golden HOME 燈，false 照樣擋）、表上沒有（-2）
+ }
+ }  // namespace ht9045
++
++// =============================================================================
++//  AI(W906-TEACH-ZALLUP) 20261001: Teach buttons that were on the page with no handler (the 10-01 Teach audit): In / Out Z All Up
++//  and the Index tab's four Servo buttons. Contract in WebMotorAccess.h EOF. At the end of the file: this file's line numbers
++//  are cited elsewhere (docs, WebCmdGuard.cpp), nothing above moves.
++//
++//  teachZAllUp -- golden uteach.cpp (verbatim):
++//      :4466 void __fastcall TfTeach::btnInZAllUpClick(TObject *Sender)
++//            {   for(int i=0; i<InArmSuck.iMotRow; i++)
++//                    for(int j=0; j<InArmSuck.iMotCol; j++)
++//                    {   bInArmZHome[i][j]=false;
++//                        InitProcessSingleMotorTask(InArmZIndex[i][j]);   }
++//            //    bInArmAllUp=true;
++//            }
++//      :4480 btnOutZAllUpClick = the same with OutArmSuck / bOutArmZHome / OutArmZIndex.
++//    Stepped by Timer1Timer :1374 `if(DoZHome()==false) return;` -- DoZHome :4505-4540 calls ProcessSingleMotorHome(index) for every
++//    flag still false until it returns true (uhome.cpp:415: case 200 `MotorInitial(); if(Motor->Enable==false) { HomeFlag=1;
++//    Position=0; return true; }`; case 300/400 MotorHome; an arm Z then case 500 `if(MOT[Index].MotorMove(ZSafePos)) HomeFlag=true`),
++//    and shows btnInZAllUp / btnOutZAllUp->Caption="Homeing..." meanwhile.
++//    golden has NO interlock here: no CheckCanMove / IsCanQuickJogMove / motor-power test / ActiveMotorIndex (Teach cannot be open
++//    while SystemStart, main.cpp:27827). The checks that do apply are the ones inside the home itself (TMyMotor::Home's safe door,
++//    case 500's MotorMove door / soft limit / lock) -- the same ones StartHome1203 / TickHomes already carry.
++//  Port, per Z of that arm in golden order (backend GoldenTeachFixedMotors "inZ" / "outZ"):
++//    * no Mot_Table row or no MOT object -> skipped, said in the ack (golden would step MOT[i] anyway);
++//    * Enable=0 (a PCI1203 row: the Mot_Table column = tableEnable, as every 1203 path here; another row: Motor->Enable) ->
++//      golden case 200: HomeFlag=1, nothing sent (MOT[].Position=0 is not reachable from here; the row is not installed);
++//    * otherwise the very single home Teach's / Motor Test's HOME starts (DoHome): a 1203 row -> StartHome1203 (DS402 124/128 or
++//      the card-side MODE12 by the drive; safe door, stale sample, home speeds) + TickHomes' case 500 (MotorMove(ZSafePos), then
++//      HomeFlag=1); another row -> golden InitProcessSingleMotorTask + ProcessSingleMotorHome every beat (DoHomeGolden, no SetSpeed
++//      at the end: zAllUp). A home already running on that axis keeps running (no second command; golden's InitProcessSingleMotorTask
++//      would restart its state machine).
++//    Result: something started / already running -> ok "homing" (partial when another Z was refused); nothing started and something
++//    refused -> refused with every reason; nothing to home (every Z skipped or Enable=0) -> ok "zAllUpDone" (golden: the next DoZHome
++//    pass finds every flag true at once).
++//    Refused before anything (dispatcher): SystemStart, a hand teach open (golden fTeachShow is modal), a Motor Test source.
++//  ⚠ Not reproduced: (1) golden DoZHome steps BOTH arms with InArmSuck's iMotRow/iMotCol (:4508-4510) -- an Out grid larger than
++//    the In grid leaves golden on "Homeing..." for ever; here each arm's own grid (:4482) is armed and every armed job is stepped.
++//    (2) while golden DoZHome runs, Timer1Timer returns before its btnHome / DoPitch_Home steps; here a HOME pressed meanwhile on
++//    another axis starts at once (EastSun 20260929: axes independent). (3) STOP, closing Teach, the operator gone, the safe lock and
++//    an alarm cancel these jobs like every HOME job of this file (HomeFlag stays 0); golden stops the motors and DoZHome keeps
++//    stepping a stopped home. (4) fHome->iHomeStep=1 (inside InitProcessSingleMotorTask) only for the non-1203 rows, as Teach's HOME.
++//
++//  teachIndexServo -- golden uteach.cpp (verbatim):
++//      :4253 void __fastcall TfTeach::btnZ1ServoClick(TObject *Sender)
++//            {   static bool bflag=false;
++//                if(bflag==false) {   MOT[MTestZ1].Gali_Command("MOY", __FUNC__);  btnZ1Servo->Caption="Server OFF";   }
++//                else             {   MOT[MTestZ1].Gali_Command("SHY", __FUNC__);  btnZ1Servo->Caption="Server ON";    }
++//                bflag=!bflag;
++//                fAllMotorHome=false;   }
++//      :4270 btnZ2ServoClick = MTestZ2 "MOZ" / "SHZ".  :2919 btnArm1YServoClick = MTestY1 "MOX" / "SHX", plus MTestY2 "MOW" / "SHW"
++//            when USE_INDEX_ARM_AXES==IndexArm_4_Axis, and it sets the Caption of BOTH btnArm1YServo and btnArm2YServo (uteach.dfm
++//            gives btnArm2YServo the same OnClick). Galil "MO" = motor off, "SH" = servo here (on).
++//  Port: the motors come from golden (GoldenTeachFixedMotors "z1" / "z2" / "arm1y"), never from the page's selected motor.
++//    target = the button's first motor's actual servo state inverted when it is known (1203 SVON bit / MOT Led[iServoOn]) -- the
++//    rule of DoServo (落差清單 1) -- else golden's static (first press = OFF); one static per golden handler, it then follows the
++//    target. A PCI1203 row -> DoServo's own path (Enable=0 refusal, brake HOLD before a servo off, kCmdAxSvOn; the Index Z1 Gali
++//    route EtherCAT/Pci1203GaliRoute.cpp maps the same "MO" / "SH" onto that SvOn). Another row -> refused: golden's Gali_Command
++//    talks to the Galil card and motor.access has no Galil path (an Enable=0 row gets the Enable=0 refusal first). Then
++//    fAllMotorHome=false (golden; the dispatcher clears it on every Teach command while idle anyway).
++//    Ack: servoOn, basis, caption ("Server OFF" / "Server ON" = golden's Caption after the press), captionButtons, per motor.
++// =============================================================================
++namespace ht9045 {
++namespace {
++
++bool g_idxServoStatic[3] = { false, false, false };   // golden `static bool bflag=false;` of btnZ1ServoClick / btnZ2ServoClick / btnArm1YServoClick
++
++std::string AckField(const std::string& ack, const char* key)                  // a string member of a sub-ack (empty if none)
++{
++    std::string out;
++    cJSON* j = cJSON_Parse(ack.c_str());
++    const cJSON* v = j ? cJSON_GetObjectItemCaseSensitive(j, key) : 0;
++    if (cJSON_IsString(v) && v->valuestring) out = v->valuestring;
++    cJSON_Delete(j);
++    return out;
++}
++bool HomeJobOnMotor(int mi)
++{
++    for (std::size_t i = 0; i < g_homes.size(); ++i) if (g_homes[i].active && g_homes[i].mi == mi) return true;
++    return false;
++}
++std::string JoinList(const std::vector<std::string>& v)
++{
++    std::string s;
++    for (std::size_t i = 0; i < v.size(); ++i) s += (i ? "; " : "") + v[i];
++    return s;
++}
++void WriteList(webbridge::JsonWriter& w, const char* key, const std::vector<std::string>& v)
++{
++    w.Key(key).BeginArray();
++    for (std::size_t i = 0; i < v.size(); ++i) w.String(v[i]);
++    w.EndArray();
++}
++void TeachZAllUpResetState()                                                    // MotorAccessResetJobs (tests): golden's statics start false
++{
++    for (int i = 0; i < 3; ++i) g_idxServoStatic[i] = false;
++}
++
++MotorAccessOutcome DoTeachZAllUp(const MotorAccessReq& r, long long wireId, IMotorAccessBackend& be)
++{
++    const bool in = (r.button == "btnInZAllUp");
++    if (!in && r.button != "btnOutZAllUp")
++        return Refuse("teachZAllUp: 按鈕 '" + r.button + "' 不是 golden 的 btnInZAllUp／btnOutZAllUp");
++    const std::string who = std::string(in ? "In Z All Up（golden btnInZAllUpClick :4466）" : "Out Z All Up（golden btnOutZAllUpClick :4480）");
++    std::vector<int> mis;
++    std::string why;
++    if (!be.GoldenTeachFixedMotors(in ? "inZ" : "outZ", mis, why)) return Refuse(who + ": " + why);
++    std::vector<std::string> started, already, enable0, skipped, refused;
++    for (std::size_t k = 0; k < mis.size(); ++k) {
++        const int mi = mis[k];
++        std::string alias;
++        MotorAccessAxis a;
++        MotorGolden g;
++        if (!be.AliasOfMotIndex(mi, alias) || !be.Resolve(alias, a)) { skipped.push_back("MOT[" + std::to_string(mi) + "]: Mot_Table 沒有這一軸"); continue; }
++        if (a.motIndex < 0 || !be.GoldenMotor(a.motIndex, g)) { skipped.push_back(alias + ": 沒有 golden 馬達物件（MOT[].Motor 為 NULL）"); continue; }
++        if (a.Is1203() ? !a.tableEnable : !g.enable) {                          // golden ProcessSingleMotorHome case 200 (uhome.cpp:429-437)
++            be.GoldenSetHomeFlag(a.motIndex, 1);
++            enable0.push_back(alias);
++            continue;
++        }
++        if (HomeJobOnMotor(a.motIndex)) { already.push_back(alias); continue; }
++        MotorAccessReq h = r;                                                   // the single home of Teach's / Motor Test's HOME (DoHome)
++        h.action = "home"; h.motors.assign(1, alias); h.flag["start"] = true;
++        const MotorAccessOutcome o = DoHome(h, wireId, be);
++        if (!o.ok) { refused.push_back(alias + ": " + o.ackJson); continue; }
++        for (std::size_t i = 0; i < g_homes.size(); ++i)
++            if (g_homes[i].active && g_homes[i].mi == a.motIndex) g_homes[i].zAllUp = true;
++        started.push_back(alias + "（" + AckField(o.ackJson, "message") + "）");
++    }
++    std::string msg = who + ":";
++    if (!started.empty()) msg += " 歸零 " + JoinList(started) + "；";
++    if (!already.empty()) msg += " 已在歸零中（不重下命令）" + JoinList(already) + "；";
++    if (!enable0.empty()) msg += " Enable=0 → HomeFlag=1（golden case 200）" + JoinList(enable0) + "；";
++    if (!skipped.empty()) msg += " 略過 " + JoinList(skipped) + "；";
++    if (!refused.empty()) msg += " 拒絕 " + JoinList(refused) + "；";
++    const bool active = !started.empty() || !already.empty();
++    if (!active && !refused.empty())
++        return Refuse(who + ": 沒有一個 Z 開始歸零 —— " + JoinList(refused));
++    if (mis.empty()) msg += " 這一臂沒有 Z 軸（golden iMotRow／iMotCol 是 0，迴圈不做）";
++    webbridge::JsonWriter w;
++    w.BeginObject();
++    AckHead(w, r, active ? "homing" : "zAllUpDone", "uteach", msg);
++    w.Key("arm").String(in ? "in" : "out");
++    w.Key("homeActive").Bool(active);
++    w.Key("caption").String(active ? "Homeing..." : (in ? "In Z All Up" : "Out Z All Up"));   // golden DoZHome :4526-4534
++    WriteList(w, "started", started);
++    WriteList(w, "already", already);
++    WriteList(w, "enable0", enable0);
++    WriteList(w, "skipped", skipped);
++    WriteList(w, "refused", refused);
++    w.Key("partial").Bool(!refused.empty());
++    MotorAccessOutcome o; o.ok = true; o.ackJson = Finish(w); return o;
++}
++
++MotorAccessOutcome DoTeachIndexServo(const MotorAccessReq& r, long long wireId, IMotorAccessBackend& be)
++{
++    int hd = -1;
++    const char* which = 0;
++    std::vector<std::string> capBtns;
++    if (r.button == "btnZ1Servo")      { hd = 0; which = "z1"; capBtns.push_back("btnZ1Servo"); }
++    else if (r.button == "btnZ2Servo") { hd = 1; which = "z2"; capBtns.push_back("btnZ2Servo"); }
++    else if (r.button == "btnArm1YServo" || r.button == "btnArm2YServo") {      // the .dfm gives both the same OnClick
++        hd = 2; which = "arm1y"; capBtns.push_back("btnArm1YServo"); capBtns.push_back("btnArm2YServo");
++    } else {
++        return Refuse("teachIndexServo: 按鈕 '" + r.button + "' 不是 golden 的 btnZ1Servo／btnZ2Servo／btnArm1YServo／btnArm2YServo");
++    }
++    static const char* const kH[3] = { "golden btnZ1ServoClick :4253", "golden btnZ2ServoClick :4270", "golden btnArm1YServoClick :2919" };
++    const std::string who = r.button + "（" + kH[hd] + "）";
++    std::vector<int> mis;
++    std::string why;
++    if (!be.GoldenTeachFixedMotors(which, mis, why)) return Refuse(who + ": " + why);
++    if (mis.empty()) return Refuse(who + ": golden 沒有對應的馬達");
++    struct One { int mi; std::string alias; MotorAccessAxis a; std::string bad; };
++    std::vector<One> ms;
++    for (std::size_t k = 0; k < mis.size(); ++k) {
++        One x; x.mi = mis[k];
++        if (!be.AliasOfMotIndex(x.mi, x.alias) || !be.Resolve(x.alias, x.a)) {
++            x.bad = "MOT[" + std::to_string(x.mi) + "]: Mot_Table 沒有這一軸";
++        } else if (!x.a.Is1203()) {
++            MotorGolden g;
++            const bool hasG = x.a.motIndex >= 0 && be.GoldenMotor(x.a.motIndex, g);
++            if (!x.a.tableEnable || (hasG && !g.selectable))                     // the existing Enable=0 refusal (DoServo / lM00Click)
++                x.bad = NotSelectable(x.alias + "（" + x.a.cardModel + "）");
++            else
++                x.bad = x.alias + "（" + x.a.cardModel + "）: golden Gali_Command(\"MO?\"／\"SH?\") 走 Galil 卡，motor.access 沒有 Galil 的路（只接 PCI1203 軸）";
++        }
++        ms.push_back(x);
++    }
++    // the target: the first motor's actual state inverted when known (DoServo's rule), else golden's static
++    bool target = g_idxServoStatic[hd];                                        // golden: bflag==false -> "MO" (OFF)
++    std::string basis = "golden-static";
++    if (ms[0].bad.empty()) {
++        bool known = false, cur = false;
++        std::string w2;
++        if (ms[0].a.Is1203()) { if (be.Pci1203Ready(w2) && ms[0].a.axis >= 0) cur = be.Pci1203ServoOn(ms[0].a.axis, known); }
++        else cur = be.GoldenServoOn(ms[0].a.motIndex, known);
++        if (known) { target = !cur; basis = "toggle-actual"; }
++    }
++    std::vector<std::string> done, bad;
++    for (std::size_t k = 0; k < ms.size(); ++k) {
++        if (!ms[k].bad.empty()) { bad.push_back(ms[k].bad); continue; }
++        MotorAccessReq s = r;                                                   // DoServo's 1203 path with the target spelled out
++        s.action = "servoToggle"; s.motors.assign(1, ms[k].alias); s.flag["servoOn"] = target;
++        const MotorAccessOutcome o = DoServo(s, wireId, be);
++        if (o.ok) done.push_back(ms[k].alias + "（" + AckField(o.ackJson, "message") + "）");
++        else      bad.push_back(o.ackJson);
++    }
++    be.GoldenClearAllMotorHome();                                               // golden :4267 / :4284 / :2939 fAllMotorHome=false
++    if (done.empty()) return Refuse(who + ": " + JoinList(bad));
++    g_idxServoStatic[hd] = !target;                                             // golden bflag=!bflag (the next golden-static press is the other way)
++    const std::string caption = target ? "Server ON" : "Server OFF";           // golden's Caption after the press
++    webbridge::JsonWriter w;
++    w.BeginObject();
++    AckHead(w, r, target ? "servoOn" : "servoOff", "uteach",
++            who + ": " + (target ? "Servo ON（golden \"SH\"）" : "Servo OFF（golden \"MO\"）") + " " + JoinList(done) +
++            (bad.empty() ? std::string() : "；拒絕 " + JoinList(bad)));
++    w.Key("servoOn").Bool(target);
++    w.Key("basis").String(basis);
++    w.Key("caption").String(caption);
++    WriteList(w, "captionButtons", capBtns);
++    WriteList(w, "done", done);
++    WriteList(w, "refused", bad);
++    w.Key("partial").Bool(!bad.empty());
++    MotorAccessOutcome o; o.ok = true; o.ackJson = Finish(w); return o;
++}
++
++}  // namespace
++}  // namespace ht9045
+diff --git a/WebMotorAccess.h b/WebMotorAccess.h
+index a64cf3d..d30cd45 100644
+--- a/WebMotorAccess.h
++++ b/WebMotorAccess.h
+@@ -412,7 +412,7 @@ public:
+     //  (column token, new cell text) of the changed cells only), so a later read in the same run agrees with the file.
+     virtual void        MotTableRowSaved(const std::string& alias, const std::string& rowText,
+                                          const std::vector<std::pair<std::string, std::string> >& cells) { (void)alias; (void)rowText; (void)cells; }
+-    virtual bool GoldenSingleHomeBegin(int motIndex) { (void)motIndex; return false; }  virtual bool GoldenSingleHomeStep(int motIndex) { (void)motIndex; return false; }  };   //AI(W906-MT-SMHOME) 20261001: RULINGS_20261001 #8 -- a non-1203 axis homes the golden way. Begin = golden btnHomeClick :1154-1158 `fHome->iHomeStep=1; InitProcessSingleMotorTask(i); MOT[i].HomeFlag=0;` (false = this backend cannot); Step = one golden MainProc pass (csystem.cpp:16954-16960) `ProcessSingleMotorHome(i) && MOT[i].HomeFlag==1` (true = golden drops bSingleHome). Defaults keep the older fakes unchanged.
++    virtual bool GoldenSingleHomeBegin(int motIndex) { (void)motIndex; return false; }  virtual bool GoldenSingleHomeStep(int motIndex) { (void)motIndex; return false; }  virtual bool GoldenTeachFixedMotors(const std::string& which, std::vector<int>& mis, std::string& why) { (void)which; mis.clear(); why = "這個後端沒有 golden 教導頁固定馬達表（GoldenTeachFixedMotors）"; return false; }  };   //AI(W906-MT-SMHOME) 20261001: RULINGS_20261001 #8 -- a non-1203 axis homes the golden way. Begin = golden btnHomeClick :1154-1158 `fHome->iHomeStep=1; InitProcessSingleMotorTask(i); MOT[i].HomeFlag=0;` (false = this backend cannot); Step = one golden MainProc pass (csystem.cpp:16954-16960) `ProcessSingleMotorHome(i) && MOT[i].HomeFlag==1` (true = golden drops bSingleHome). Defaults keep the older fakes unchanged.
+ 
+ struct MotorAccessOutcome {
+     bool        ok;
+@@ -656,6 +656,21 @@ struct MotTableSaveResult {
+ MotTableSaveResult MotTableSaveRow(const std::string& path, const std::string& stamp, const std::string& alias, int motIndex,
+                                    const std::vector<MotTableSaveField>& fields, bool indexMotionCard0, const std::string& expectCard);
+ 
++//AI(W906-TEACH-ZALLUP) 20261001: the Teach page's fixed-motor buttons that had no handler (golden uteach.cpp; bodies at the EOF
++//  of WebMotorAccess.cpp, rules there). Two actions (kActions):
++//    teachZAllUp      btnInZAllUp :4466-4478 / btnOutZAllUp :4480-4492 -- every Z of that arm: bInArmZHome[i][j]=false;
++//                     InitProcessSingleMotorTask(InArmZIndex[i][j]) (stepped by Timer1Timer :1374 DoZHome :4505-4540).
++//    teachIndexServo  btnZ1Servo :4253-4268 / btnZ2Servo :4270-4285 / btnArm1YServo :2919-2940 (btnArm2YServo's OnClick is the
++//                     same btnArm1YServoClick, uteach.dfm) -- Gali_Command("MO?"/"SH?") toggled by a function-local static,
++//                     fAllMotorHome=false.
++//  IMotorAccessBackend::GoldenTeachFixedMotors(which, mis, why) (declared in the class, default = false: the older fakes refuse):
++//    which "inZ"   -> InArmZIndex[i][j]  for i < InArmSuck.iMotRow,  j < InArmSuck.iMotCol   (golden :4468-4475, that order)
++//          "outZ"  -> OutArmZIndex[i][j] for i < OutArmSuck.iMotRow, j < OutArmSuck.iMotCol  (golden :4482-4489)
++//          "z1"    -> MTestZ1 (:4258/:4263); "z2" -> MTestZ2 (:4275/:4280)
++//          "arm1y" -> MTestY1, then MTestY2 when USE_INDEX_ARM_AXES==IndexArm_4_Axis (:2924-2926 / :2932-2934)
++//    mis = MOT[] indexes; false + why = cannot say (unknown which, grid larger than the golden [2][8] tables).
++//    The live body is W906_TeachFixedMotorsLive (WebMotorAccessLive.cpp EOF).
++
+ }  // namespace ht9045
+ 
+ #endif  // HT9045_WEBMOTORACCESS_H
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index 661744c..b0aee90 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -50,7 +50,7 @@ extern void StopAllMotor(bool bIndexCanStop);   // Motor/myGALILmotor.cpp（gold
+ void SetMotorAccelSpeed(int Index, int ADCSpeed);   //AI(W906-MT-E2) 20260925: cinitial.cpp:16730 (golden cinitial.h:51) -- Reload Motor Data
+ #include "EtherCAT/Pci1203GaliRoute.h"   //AI(W906-INDEXZ) 20260930: INBOX 113 -- the Index Z1 route's foreign-stop entry (W906_EngineRouteForeignStop, EOF) and its fault text (OverlaySnapshot). Was a blank line: no line below moves
+ void (*g_W906BrakeNote)(const char*) = 0;           //AI(W906-BRAKE-AXIS) 20260929: the op log's BRAKE line (tools/wb_serve.cpp W906_OpLogInit registers it)
+-void InitProcessSingleMotorTask(int iMot);  bool ProcessSingleMotorHome(int iMot);   //AI(W906-MT-SMHOME) 20261001: acatchtray_shims.h:423-424 (golden uhome.cpp:397 / :415; translated at the end of uhome.cpp, AI(W906-SMHOME))
++void InitProcessSingleMotorTask(int iMot);  bool ProcessSingleMotorHome(int iMot);  bool W906_TeachFixedMotorsLive(const std::string& which, std::vector<int>& mis, std::string& why);   //AI(W906-TEACH-ZALLUP) 20261001: + W906_TeachFixedMotorsLive (body at EOF)  //AI(W906-MT-SMHOME) 20261001: acatchtray_shims.h:423-424 (golden uhome.cpp:397 / :415; translated at the end of uhome.cpp, AI(W906-SMHOME))
+ namespace ht9045 {
+ 
+ namespace {
+@@ -692,7 +692,7 @@ public:
+     //  were dropped here: the machine's MT-E2 block below has the identical Pci1203MotionIO, and GoldenSetSpeed(mi, pct, jog=false)
+     //  is golden SetSpeed(pct) (the teach page now calls that; see WebMotorAccess.h).
+     void GoldenClearAllMotorHome() override { fAllMotorHome = false; }         // AI(W906-W5-b) 20260925: W5B-R3（golden uteach.cpp:1606／:2439、main.cpp:27845）
+-    bool GoldenIndexArm3Axis() override { return USE_INDEX_ARM_AXES == IndexArm_3_Axis; }
++    bool GoldenIndexArm3Axis() override { return USE_INDEX_ARM_AXES == IndexArm_3_Axis; }  bool GoldenTeachFixedMotors(const std::string& which, std::vector<int>& mis, std::string& why) override { return ::W906_TeachFixedMotorsLive(which, mis, why); }   //AI(W906-TEACH-ZALLUP) 20261001: golden uteach's fixed motors (body at EOF)
+     int  GoldenTeachRemap(int mi) override
+     {
+         if (USE_PICKER_COUNT == ep1Picker && (mi == 7 || mi == 26)) return mi - 4;   // Ifor 20260109 fix 單一吸嘴模組顯示異常問題（uteach.cpp:3372／:3409）
+@@ -1479,3 +1479,42 @@ void W906_MotorAccessPageEdges()
+ //  TPci1203Control::Execute WITHOUT the engine motor route or the Index Z1 Gali route) MOVED to EtherCAT/Pci1203GaliRoute.cpp EOF
+ //  (review round 2 of INBOX 113, E(a): a ctest links that TU, not this one). Callers unchanged: LiveBackend::Pci1203Execute above
+ //  and tools/wb_serve.cpp W906_Dispatch1203Ex; declaration EtherCAT/Pci1203MotorRoute.h.
++
++//AI(W906-TEACH-ZALLUP) 20261001: LiveBackend::GoldenTeachFixedMotors -- the MOT[] indexes golden uteach's fixed-motor buttons act on,
++//  computed the golden way at the moment of the press (contract: WebMotorAccess.h EOF; dispatch rules: WebMotorAccess.cpp EOF).
++//    "inZ"  golden btnInZAllUpClick  :4468-4475  for(i<InArmSuck.iMotRow) for(j<InArmSuck.iMotCol)  InArmZIndex[i][j]
++//    "outZ" golden btnOutZAllUpClick :4482-4489  for(i<OutArmSuck.iMotRow) for(j<OutArmSuck.iMotCol) OutArmZIndex[i][j]
++//    "z1" MTestZ1 (:4258), "z2" MTestZ2 (:4275), "arm1y" MTestY1 + MTestY2 when USE_INDEX_ARM_AXES==IndexArm_4_Axis (:2924-2926)
++//  InArmSuck / OutArmSuck through aHotPlateSubstrate.h -- the header forms/fTeach.cpp and WebStart.cpp read them through
++//  (the live definitions are mykitsuck.cpp's, AI(W906-A4-6)). InArmZIndex / OutArmZIndex are [2][8] (cmydef.cpp:3333 / :3335):
++//  a grid larger than that would make golden read past the table, so it is refused here instead of read.
++#include "aHotPlateSubstrate.h"
++bool W906_TeachFixedMotorsLive(const std::string& which, std::vector<int>& mis, std::string& why)
++{
++    mis.clear();
++    why.clear();
++    if (which == "inZ" || which == "outZ") {
++        const bool in = (which == "inZ");
++        const TMyKitSuck& k = in ? InArmSuck : OutArmSuck;
++        if (k.iMotRow < 0 || k.iMotRow > 2 || k.iMotCol < 0 || k.iMotCol > 8) {
++            char b[320];
++            std::snprintf(b, sizeof(b), "%s.iMotRow=%d／iMotCol=%d 超出 golden %s[2][8]（cmydef.cpp）—— 不讀表外的值",
++                          in ? "InArmSuck" : "OutArmSuck", k.iMotRow, k.iMotCol, in ? "InArmZIndex" : "OutArmZIndex");
++            why = b;
++            return false;
++        }
++        for (int i = 0; i < k.iMotRow; i++)
++            for (int j = 0; j < k.iMotCol; j++)
++                mis.push_back(in ? InArmZIndex[i][j] : OutArmZIndex[i][j]);
++        return true;
++    }
++    if (which == "z1") { mis.push_back(MTestZ1); return true; }
++    if (which == "z2") { mis.push_back(MTestZ2); return true; }
++    if (which == "arm1y") {
++        mis.push_back(MTestY1);
++        if (USE_INDEX_ARM_AXES == IndexArm_4_Axis) mis.push_back(MTestY2);    // JimmyChiu 20220708 : add Index Arm Axis (golden :2925 / :2933)
++        return true;
++    }
++    why = "不認得的 golden 固定馬達組 '" + which + "'";
++    return false;
++}
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index 95873e3..3737f73 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -38,6 +38,10 @@
+ //       IsCanQuickJogMove 本體的 1203 狀態來源（MotorAccessTeachHomeLed／Live1203）。
+ //       AI(W906-MERGE-56bbf785) 20260926: 合併後覆核 —— 手動教導中 MotorTest 的整頁動作（Reload／Light Scale 開始／Motor Power／FormShow／
+ //       All 模式來回）與請求裡每一軸都擋、放開類（HOME／Loop 抬起、關掉進行中的 Light Scale）在運轉閘與手動教導都放行、教導頁 jog 的速度＝DoJog 的來源。
++//  (ZALLUP) AI(W906-TEACH-ZALLUP) 20261001: Teach In/Out Z All Up (golden btnInZAllUpClick / btnOutZAllUpClick: every Z of the arm homes,
++//       Enable=0 -> HomeFlag=1, case 500 ZSafePos, re-home when already homed, no second command while homing, the door interlock inside
++//       the home, partial, STOP) and the Index tab Servo buttons (btnZ1/Z2/Arm1Y/Arm2YServo: actual state / golden static, brake hold,
++//       Enable=0 refusal, 4-axis Y pair); SystemStart / hand teach / Motor Test source refused. Catalog (2): 57 commands, 41 actions, live 36.
+ //
+ //  NOT COVERED：真實後端（WebMotorAccessLive.cpp：HSys.MotTable／MOT[]／監看器的對號）—— 那一半要
+ //  wb_serve 起來後用 WS 探針量；1203 那一段要有卡的機台。
+@@ -464,6 +468,16 @@ public:
+         for (std::size_t i = 0; i < cells.size(); ++i) s += cells[i].first + "=" + cells[i].second + ";";
+         motSaved.push_back(s);
+     }
++    //AI(W906-TEACH-ZALLUP) 20261001: golden uteach's fixed motors ("inZ" / "outZ" / "z1" / "z2" / "arm1y" -> MOT indexes); a missing key
++    //  = the interface default (false: "this backend has none"), as the older fakes see it.
++    std::map<std::string, std::vector<int> > fixedMots;
++    bool GoldenTeachFixedMotors(const std::string& which, std::vector<int>& mis, std::string& why) override
++    {
++        std::map<std::string, std::vector<int> >::const_iterator it = fixedMots.find(which);
++        if (it == fixedMots.end()) return IMotorAccessBackend::GoldenTeachFixedMotors(which, mis, why);
++        mis = it->second;
++        return true;
++    }
+ };
+ 
+ static MotorAccessAxis Axis1203(int mi, int board, int port, int axisSlot, const char* why = "")
+@@ -777,12 +791,32 @@ int main(int argc, char** argv)
+         for (int k = 0; k < 6; ++k) { if (contract3[k].seen == 1) ++contractSeen; else printf("    contract button %s seen %d time(s)\n", contract3[k].button, contract3[k].seen); }
+         CHECK(contractSeen == 11 && contractBad == 0,
+               "AI(W906-MT-E2/E3c): the 5 + 6 contract commands are in the catalog exactly once, with the agreed action/params/kind, source uMotorTest");
+-        CHECK(n == 51, "51 catalog commands (38 + 5 MT-E2 + 5 MT-E3c: FormShow/FormClose/BitBtn2/BitBtn3/btnSaveLogLightScaleData + AI(W906-MT-ALMRST) 20260929 btnAlarmReset + AI(W906-TEACH-ALMRST) 20260930 uteach btnAlarmReset + AI(W906-MT-SAVEMOT) 20260930 btnSaveMotTable)");
+-        CHECK(actions.size() == 39, "39 distinct actions (28 + 4 MT-E2 + formShow/formClose/lightScale/lightScaleSave/lightScaleDataSave + resetAlarm + AI(W906-MT-SAVEMOT) saveMotTable)");
++        CHECK(n == 57, "57 catalog commands (38 + 5 MT-E2 + 5 MT-E3c: FormShow/FormClose/BitBtn2/BitBtn3/btnSaveLogLightScaleData + AI(W906-MT-ALMRST) 20260929 btnAlarmReset + AI(W906-TEACH-ALMRST) 20260930 uteach btnAlarmReset + AI(W906-MT-SAVEMOT) 20260930 btnSaveMotTable + AI(W906-TEACH-ZALLUP) 20261001 uteach btnInZAllUp/btnOutZAllUp/btnZ1Servo/btnZ2Servo/btnArm1YServo/btnArm2YServo)");
++        CHECK(actions.size() == 41, "41 distinct actions (28 + 4 MT-E2 + formShow/formClose/lightScale/lightScaleSave/lightScaleDataSave + resetAlarm + AI(W906-MT-SAVEMOT) saveMotTable + AI(W906-TEACH-ZALLUP) teachZAllUp/teachIndexServo)");
++        {   //AI(W906-TEACH-ZALLUP) 20261001: the six Teach rows -- source uteach; the two Z All Up are kind motion (the page locks while the C++ answer is pending), the four Servo control
++            const char* zb[6] = { "btnInZAllUp", "btnOutZAllUp", "btnZ1Servo", "btnZ2Servo", "btnArm1YServo", "btnArm2YServo" };
++            int zseen = 0;
++            cJSON* cat2 = cJSON_Parse(ss.str().c_str());
++            const cJSON* cm2 = cat2 ? cJSON_GetObjectItemCaseSensitive(cat2, "commands") : 0;
++            const cJSON* e = 0;
++            if (cJSON_IsArray(cm2)) cJSON_ArrayForEach(e, cm2) {
++                const cJSON* bt = cJSON_GetObjectItemCaseSensitive(e, "button");
++                const cJSON* src = cJSON_GetObjectItemCaseSensitive(e, "source");
++                const cJSON* ac = cJSON_GetObjectItemCaseSensitive(e, "action");
++                const cJSON* kd = cJSON_GetObjectItemCaseSensitive(e, "kind");
++                if (!cJSON_IsString(bt) || !cJSON_IsString(src) || !cJSON_IsString(ac) || !cJSON_IsString(kd)) continue;
++                for (int k = 0; k < 6; ++k)
++                    if (std::string(bt->valuestring) == zb[k] && std::string(src->valuestring) == "uteach" &&
++                        std::string(ac->valuestring) == (k < 2 ? "teachZAllUp" : "teachIndexServo") &&
++                        std::string(kd->valuestring) == (k < 2 ? "motion" : "control")) ++zseen;
++            }
++            cJSON_Delete(cat2);
++            CHECK(zseen == 6, "AI(W906-TEACH-ZALLUP): the six Teach rows (uteach btnIn/OutZAllUp -> teachZAllUp motion; btnZ1/Z2/Arm1Y/Arm2YServo -> teachIndexServo control)");
++        }
+         CHECK(unknown == 0, "every catalog action has a status");
+         //AI(W906-MERGE-56bbf785) 20260926: machine live 30 (MT-E1..E3c) + laptop W5-b teachSet/teachGo = 32; ui = machine 3 + the laptop's
+         //  setTeachFromCurrent/Offset = 5; 32 + 5 = the 37 actions -- nothing queued or blocked any more.
+-        CHECK(live.size() == 34 && live.count("saveMotTable") && live.count("resetAlarm") && live.count("reloadMotorData") && live.count("stop") && live.count("servoToggle") && live.count("jogP") &&   //AI(W906-MT-ALMRST) 20260929: + resetAlarm  //AI(W906-MT-SAVEMOT) 20260930: + saveMotTable (live 34)
++        CHECK(live.size() == 36 && live.count("teachZAllUp") && live.count("teachIndexServo") && live.count("saveMotTable") && live.count("resetAlarm") && live.count("reloadMotorData") && live.count("stop") && live.count("servoToggle") && live.count("jogP") &&   //AI(W906-MT-ALMRST) 20260929: + resetAlarm  //AI(W906-MT-SAVEMOT) 20260930: + saveMotTable (live 34)  //AI(W906-TEACH-ZALLUP) 20261001: + teachZAllUp / teachIndexServo (live 36)
+               live.count("moveRelative") && live.count("moveAbsolute") && live.count("moveSoftLimitN") &&
+               live.count("setJogHighSpeed") && live.count("setSoftLimitP") && live.count("home") &&
+               live.count("loopMove") && live.count("resetMNet") && live.count("setRangeAndInit") &&
+@@ -3650,6 +3684,210 @@ int main(int argc, char** argv)
+         MotorAccessResetJobs();
+     }
+ 
++    // ---------------------------------------------------------------- (ZALLUP)
++    //AI(W906-TEACH-ZALLUP) 20261001: Teach buttons that had no handler -- golden uteach btnInZAllUpClick :4466 / btnOutZAllUpClick :4480
++    //  (every Z of the arm: InitProcessSingleMotorTask, stepped by Timer1Timer's DoZHome; no interlock in golden) and btnZ1ServoClick
++    //  :4253 / btnZ2ServoClick :4270 / btnArm1YServoClick :2919 (Gali "MO"/"SH" toggled by a static, fAllMotorHome=false).
++    printf("[ZALLUP] Teach In/Out Z All Up + the Index tab Servo buttons (golden uteach)\n");
++    {
++        MotorAccessResetJobs();
++        MotorGolden g;
++        g.valid = true; g.enable = true; g.gearRatio = 1.0; g.softP = 999999; g.softN = -999999; g.homeFlag = 1;
++        g.jogHigh = 10000; g.initSpeed = 500; g.homeHigh = 2000; g.homeLow = 500; g.accDb = 3000; g.decDb = 3100;
++        MotorGolden gz = g;  gz.armZ = true;
++        MotorGolden g0 = g;  g0.enable = false; g0.selectable = false;           // Enable=0, real-machine build (lM00Click :740-743)
++        FakeBackend be;
++        be.reg = BuildTeachRegistry(std::set<std::string>());
++        const int zA = Add1203(be, "MInArmZA", 1, gz);                          // the HT9050 picture: In Arm ZA is the one live 1203 Z
++        const int zC = Add1203(be, "MInArmZC", 2, gz);  be.table["MInArmZC"].tableEnable = false;   // a PCI1203 row with Enable=0
++        const int zB = TestMot("MInArmZB");                                     // MN200, Enable=0 (Mot_Table on this machine)
++        be.table["MInArmZB"] = AxisOther(zB, "MN200", true); be.table["MInArmZB"].tableEnable = false; be.golden[zB] = g0; be.aliasOf[zB] = "MInArmZB";
++        const int zG = TestMot("MInArmZG");                                     // golden InArmZIndex has it, this Mot_Table does not
++        const int oA = Add1203(be, "MOutArmZA", 3, gz);
++        std::vector<int> inZ;  inZ.push_back(zA); inZ.push_back(zC); inZ.push_back(zB); inZ.push_back(zG);
++        be.fixedMots["inZ"] = inZ;
++        be.fixedMots["outZ"] = std::vector<int>(1, oA);
++        be.cmdPos[1] = 500.0;
++        MotorAccessReq zin = Req("uteach", "teachZAllUp", "MInArmX"); zin.button = "btnInZAllUp"; zin.kind = "motion";   // motors = the page's selection (ignored, golden)
++        MotorAccessReq zout = zin; zout.button = "btnOutZAllUp";
++
++        // ---- happy path: only the live 1203 Z homes; Enable=0 rows -> golden case 200 HomeFlag=1; no row -> skipped
++        std::size_t x0 = be.executed.size();
++        MotorAccessOutcome o = MotorAccessDispatch(zin, 41, be);
++        CHECK(o.ok && AckShapeOk(o.ackJson, 7) && Has(o.ackJson, "\"result\":\"homing\"") && Has(o.ackJson, "\"homeActive\":true") &&
++              Has(o.ackJson, "\"caption\":\"Homeing...\"") && Has(o.ackJson, "\"arm\":\"in\"") && Has(o.ackJson, "\"partial\":false"),
++              "In Z All Up -> ok homing, caption Homeing... (golden DoZHome :4527)");
++        CHECK(CountKind(be, x0, kCmdAxHome) == 1 && be.executed.back().kind == kCmdAxHome && be.executed.back().axis == 1,
++              "exactly one DS402 home, on MInArmZA's 1203 axis (golden InitProcessSingleMotorTask -> ProcessSingleMotorHome)");
++        CHECK(be.homeFlags.count(zB) && be.homeFlags[zB] == 1 && be.homeFlags.count(zC) && be.homeFlags[zC] == 1 && be.homeFlags[zA] == 0,
++              "Enable=0 (MN200 ZB, PCI1203 ZC) -> golden ProcessSingleMotorHome case 200: HomeFlag=1, nothing sent; ZA HomeFlag=0 at the start");
++        CHECK(Has(o.ackJson, "MInArmZB") && Has(o.ackJson, "MInArmZC") && Has(o.ackJson, "MOT[" + std::to_string(zG) + "]") && be.smBegin.empty(),
++              "the ack names the Enable=0 rows and the Z this Mot_Table does not have; no golden single home for a 1203 row");
++        CHECK(be.teachCanMoveCalls.empty() && be.Calls() == (int)be.executed.size(),
++              "golden btnInZAllUpClick has no CheckCanMove / IsCanQuickJogMove -> not asked; no golden stop / servo call");
++        CHECK(MotorAccessJobs().homesActive == 1 && MotorAccessJobs().homeMotors.size() == 1 && MotorAccessJobs().homeMotors[0] == "MInArmZA",
++              "one HOME job (MInArmZA) -- what the runtime's motion.homeJob shows the page");
++        be.state[1] = 4; MotorAccessTick(be, 500);
++        be.state[1] = 1; be.cmdPos[1] = 0.0; MotorAccessTick(be, 500);
++        MotorAccessTick(be, 500);
++        CHECK(be.executed.back().kind == kCmdAxMoveAbs && be.executed.back().axis == 1 && be.executed.back().value == 20.0 && be.homeFlags[zA] == 0,
++              "after the home: golden case 500 MotorMove(ZSafePos 20), HomeFlag still 0");
++        const std::size_t sp0 = be.speedCalls.size();
++        be.cmdPos[1] = 20.0; MotorAccessTick(be, 500);
++        CHECK(be.homeFlags[zA] == 1 && MotorAccessJobs().homesActive == 0 && be.speedCalls.size() == sp0,
++              "Z at ZSafePos -> HomeFlag=1, the job ends (golden DoZHome -> caption back to In Z All Up), no SetSpeed");
++
++        // ---- the Z is at home already: golden has no shortcut, it homes again; while it homes, no second command
++        x0 = be.executed.size();
++        o = MotorAccessDispatch(zin, 42, be);
++        CHECK(o.ok && CountKind(be, x0, kCmdAxHome) == 1 && be.homeFlags[zA] == 0,
++              "pressed with ZA already homed (HomeFlag=1) -> homed again (golden InitProcessSingleMotorTask, no 'already at home' test), HomeFlag=0");
++        x0 = be.executed.size();
++        o = MotorAccessDispatch(zin, 43, be);
++        CHECK(o.ok && Has(o.ackJson, "\"already\":[\"MInArmZA\"]") && be.executed.size() == x0 && MotorAccessJobs().homesActive == 1,
++              "pressed again while ZA homes -> ok, 'already', no second command");
++        MotorAccessDispatch(Req("uteach", "stop", 0), 44, be);
++        CHECK(MotorAccessJobs().homesActive == 0 && be.homeFlags[zA] == 0, "STOP (golden btnStopClick: StopAllMotor + AllBtnUp) cancels it, HomeFlag stays 0");
++
++        // ---- Out Z All Up: OutArmSuck's Z (golden :4480-4489)
++        x0 = be.executed.size();
++        o = MotorAccessDispatch(zout, 45, be);
++        CHECK(o.ok && Has(o.ackJson, "\"arm\":\"out\"") && CountKind(be, x0, kCmdAxHome) == 1 && be.executed.back().axis == 3 && be.homeFlags[oA] == 0,
++              "Out Z All Up -> MOutArmZA's 1203 axis homes (golden btnOutZAllUpClick)");
++        MotorAccessDispatch(Req("uteach", "stop", 0), 46, be);
++
++        // ---- the interlocks inside the home (golden TMyMotor::Home's safe door): nothing started -> refused with the reason
++        be.doorOpen.insert(zA);
++        x0 = be.executed.size();
++        o = MotorAccessDispatch(zin, 47, be);
++        CHECK(!o.ok && Has(o.ackJson, "沒有一個 Z 開始歸零") && Has(o.ackJson, "安全門") && CountKind(be, x0, kCmdAxHome) == 0 && be.homeFlags[zA] == 0 &&
++              MotorAccessJobs().homesActive == 0,
++              "safe door open on ZA (golden TMyMotor::Home CheckIsSafeDoorOpen) -> nothing homes -> refused, says why; HomeFlag=0 (golden :1158)");
++        const int zE = Add1203(be, "MInArmZE", 4, gz);                          // a second live In Z: the other one still homes
++        inZ.push_back(zE); be.fixedMots["inZ"] = inZ;
++        x0 = be.executed.size();
++        o = MotorAccessDispatch(zin, 48, be);
++        CHECK(o.ok && Has(o.ackJson, "\"partial\":true") && Has(o.ackJson, "安全門") && CountKind(be, x0, kCmdAxHome) == 1 && be.executed.back().axis == 4,
++              "two live Z, one behind the open door -> the other homes, ok partial, the refusal is in the ack");
++        MotorAccessDispatch(Req("uteach", "stop", 0), 49, be);
++        be.doorOpen.clear();
++        be.ready = false; be.notReadyWhy = "fake: no 1203";
++        o = MotorAccessDispatch(zin, 50, be);
++        CHECK(!o.ok && Has(o.ackJson, "1203 控制層不可用") && MotorAccessJobs().homesActive == 0, "1203 control not ready -> refused, nothing started");
++        be.ready = true;
++
++        // ---- a non-1203 Z with Enable=1: golden InitProcessSingleMotorTask + ProcessSingleMotorHome, no SetSpeed at the end (DoZHome)
++        {
++            FakeBackend gb;
++            const int zN = TestMot("MInArmZH");
++            gb.table["MInArmZH"] = AxisOther(zN, "MN200", true); gb.golden[zN] = gz; gb.aliasOf[zN] = "MInArmZH";
++            gb.fixedMots["inZ"] = std::vector<int>(1, zN);
++            gb.smStepsLeft[zN] = 1;
++            o = MotorAccessDispatch(zin, 51, gb);
++            CHECK(o.ok && gb.smBegin.size() == 1 && gb.smBegin[0] == zN && MotorAccessJobs().homesActive == 1,
++                  "non-1203 Z (Enable=1) -> golden InitProcessSingleMotorTask (DoHomeGolden), one HOME job");
++            MotorAccessTick(gb, 500); MotorAccessTick(gb, 500);
++            CHECK(MotorAccessJobs().homesActive == 0 && gb.homeFlags[zN] == 1 && gb.speedCalls.empty(),
++                  "ProcessSingleMotorHome && HomeFlag==1 -> the job ends; no SetSpeed (golden DoZHome sets none; Motor Test's btnHome would)");
++            MotorAccessResetJobs();
++        }
++
++        // ---- refused before anything: SystemStart, hand teach, Motor Test source, unknown button, a backend without the table
++        int c0 = be.Calls();
++        be.systemStart = true;
++        o = MotorAccessDispatch(zin, 52, be);
++        CHECK(!o.ok && Has(o.ackJson, "SystemStart") && be.Calls() == c0 && MotorAccessJobs().homesActive == 0,
++              "SystemStart -> refused (golden: Teach cannot be open during a run, main.cpp:27827), nothing sent");
++        be.systemStart = false;
++        be.golden[zA].homeFlag = 1;                                             // SetButton140 wants a homed axis (golden :3385)
++        o = MotorAccessDispatch(TeachReq("teachSet", "SetButton030", true, true), 53, be);   // hand teach on MInArmZA (golden fTeachShow modal)
++        CHECK(o.ok && MotorAccessJobs().teachActive, "setup: hand teach open on MInArmZA");
++        c0 = be.Calls();
++        o = MotorAccessDispatch(zin, 54, be);
++        CHECK(!o.ok && Has(o.ackJson, "手動教導中") && be.Calls() == c0 && MotorAccessJobs().homesActive == 0,
++              "hand teach open -> In Z All Up refused (golden fTeachShow is ShowModal), nothing sent");
++        MotorAccessReq z1h = Req("uteach", "teachIndexServo", 0); z1h.button = "btnZ1Servo";
++        o = MotorAccessDispatch(z1h, 55, be);
++        CHECK(!o.ok && Has(o.ackJson, "手動教導中") && be.Calls() == c0, "hand teach open -> Index servo refused too");
++        MotorAccessReq hend = TeachReq("teachSet", "SetButton030", true, false); hend.flag["accept"] = false;
++        CHECK(MotorAccessDispatch(hend, 56, be).ok && !MotorAccessJobs().teachActive, "setup: hand teach cancelled");
++        MotorAccessReq zmt = zin; zmt.source = "uMotorTest";
++        CHECK(!MotorAccessDispatch(zmt, 57, be).ok && Has(MotorAccessDispatch(zmt, 57, be).ackJson, "MotorTest 沒有"), "Motor Test source -> refused (a Teach button)");
++        MotorAccessReq zbad = zin; zbad.button = "btnSortZAllUp";
++        CHECK(!MotorAccessDispatch(zbad, 58, be).ok, "another button name -> refused (btnSortZAllUp is not wired)");
++        FakeBackend nb;
++        nb.table["MInArmZA"] = Axis1203(1, 3, 0, 1);
++        o = MotorAccessDispatch(zin, 59, nb);
++        CHECK(!o.ok && Has(o.ackJson, "GoldenTeachFixedMotors") && nb.Calls() == 0, "a backend without golden's fixed-motor table -> refused honestly, nothing sent");
++        MotorAccessResetJobs();
++
++        // ---- Index Servo: btnZ1Servo on the live 1203 MTestZ1
++        FakeBackend sb;
++        MotorGolden gi = g;  gi.indexZ = true; gi.indexMotor = true;
++        const int z1 = Add1203(sb, "MTestZ1", 2, gi);
++        const int z2 = TestMot("MTestZ2");
++        sb.table["MTestZ2"] = AxisOther(z2, "SMC", true); sb.table["MTestZ2"].tableEnable = false; sb.golden[z2] = g0; sb.aliasOf[z2] = "MTestZ2";
++        const int y1 = TestMot("MTestY1");
++        sb.table["MTestY1"] = AxisOther(y1, "SMC", true); sb.table["MTestY1"].tableEnable = false; sb.golden[y1] = g0; sb.aliasOf[y1] = "MTestY1";
++        sb.fixedMots["z1"] = std::vector<int>(1, z1);
++        sb.fixedMots["z2"] = std::vector<int>(1, z2);
++        sb.fixedMots["arm1y"] = std::vector<int>(1, y1);                         // a 3-axis Index (no MTestY2)
++        sb.brakeAlias = "MTestZ1"; sb.brakeReleased = true;
++        sb.svon[2] = true;
++        MotorAccessReq z1s = Req("uteach", "teachIndexServo", "MInArmX"); z1s.button = "btnZ1Servo";   // motors = the page's selection (ignored)
++        const int ca0 = sb.clearAllHome;
++        o = MotorAccessDispatch(z1s, 61, sb);
++        CHECK(o.ok && AckShapeOk(o.ackJson, 7) && Has(o.ackJson, "\"result\":\"servoOff\"") && Has(o.ackJson, "\"caption\":\"Server OFF\"") &&
++              Has(o.ackJson, "\"basis\":\"toggle-actual\"") && Has(o.ackJson, "\"captionButtons\":[\"btnZ1Servo\"]"),
++              "btnZ1Servo with MTestZ1's servo ON -> Servo OFF (golden \"MOY\"), caption Server OFF");
++        CHECK(sb.executed.back().kind == kCmdAxSvOn && sb.executed.back().axis == 2 && sb.executed.back().value == 0.0 && sb.brakeHoldAt >= 0 &&
++              !sb.sleeps.empty() && sb.sleeps.back() == 100,
++              "the SvOn(0) goes to MTestZ1's 1203 axis, after its brake is held (BRAKE-AXIS, as DoServo)");
++        CHECK(sb.clearAllHome > ca0, "golden fAllMotorHome=false (:4267)");
++        sb.svon[2] = false;
++        o = MotorAccessDispatch(z1s, 62, sb);
++        CHECK(o.ok && Has(o.ackJson, "\"caption\":\"Server ON\"") && sb.executed.back().kind == kCmdAxSvOn && sb.executed.back().value == 1.0,
++              "servo OFF -> the next press turns it ON (golden \"SHY\"), caption Server ON");
++        sb.svon.erase(2);                                                       // state unreadable: golden's own static decides
++        o = MotorAccessDispatch(z1s, 63, sb);
++        CHECK(o.ok && Has(o.ackJson, "\"basis\":\"golden-static\"") && sb.executed.back().value == 0.0,
++              "state unknown -> golden static: after an ON the next is OFF (bflag=!bflag)");
++        o = MotorAccessDispatch(z1s, 64, sb);
++        CHECK(o.ok && Has(o.ackJson, "\"basis\":\"golden-static\"") && sb.executed.back().value == 1.0, "... and then ON again");
++        int s0 = sb.Calls();
++        MotorAccessReq z2s = z1s; z2s.button = "btnZ2Servo";
++        o = MotorAccessDispatch(z2s, 65, sb);
++        CHECK(!o.ok && Has(o.ackJson, "Enable=0") && sb.Calls() == s0, "btnZ2Servo: MTestZ2 is SMC Enable=0 here -> the existing Enable=0 refusal, nothing sent");
++        MotorAccessReq y1s = z1s; y1s.button = "btnArm1YServo";
++        o = MotorAccessDispatch(y1s, 66, sb);
++        MotorAccessReq y2s = z1s; y2s.button = "btnArm2YServo";
++        const MotorAccessOutcome o2 = MotorAccessDispatch(y2s, 67, sb);
++        CHECK(!o.ok && Has(o.ackJson, "Enable=0") && !o2.ok && Has(o2.ackJson, "Enable=0") && Has(o2.ackJson, "btnArm1YServoClick") && sb.Calls() == s0,
++              "btnArm1YServo / btnArm2YServo (one golden handler): MTestY1 Enable=0 -> refused, nothing sent");
++        // a 4-axis Index with both Y on 1203: one target for both, both captions
++        const int y1b = Add1203(sb, "MTestY1", 5, gi);
++        const int y2b = Add1203(sb, "MTestY2", 6, gi);
++        std::vector<int> a4; a4.push_back(y1b); a4.push_back(y2b);
++        sb.fixedMots["arm1y"] = a4;
++        sb.svon[5] = true; sb.svon[6] = true;
++        x0 = sb.executed.size();
++        o = MotorAccessDispatch(y2s, 68, sb);
++        CHECK(o.ok && CountKind(sb, x0, kCmdAxSvOn) == 2 && sb.executed[sb.executed.size() - 2].axis == 5 && sb.executed.back().axis == 6 &&
++              sb.executed.back().value == 0.0 && Has(o.ackJson, "\"captionButtons\":[\"btnArm1YServo\",\"btnArm2YServo\"]") && Has(o.ackJson, "\"partial\":false"),
++              "IndexArm_4_Axis: MTestY1 then MTestY2 (golden :2924-2926), the same target, both buttons' captions");
++        // refused before anything
++        s0 = sb.Calls();
++        sb.systemStart = true;
++        o = MotorAccessDispatch(z1s, 69, sb);
++        CHECK(!o.ok && Has(o.ackJson, "SystemStart") && sb.Calls() == s0, "SystemStart -> Index servo refused, nothing sent");
++        sb.systemStart = false;
++        MotorAccessReq zms = z1s; zms.source = "uMotorTest";
++        CHECK(!MotorAccessDispatch(zms, 70, sb).ok && sb.Calls() == s0, "Motor Test source -> refused");
++        MotorAccessReq zub = z1s; zub.button = "btnServo";
++        CHECK(!MotorAccessDispatch(zub, 71, sb).ok && sb.Calls() == s0, "a button that is not one of the four -> refused");
++        MotorAccessResetJobs();
++    }
++
+     printf("\n%d passed, %d failed\n", g_pass, g_fail);
+     return (g_fail == 0) ? 0 : 1;
+ }
+-- 
+2.55.0.windows.5
+
