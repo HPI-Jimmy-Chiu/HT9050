@@ -5,6 +5,7 @@
 
 ## ⚠⚠ 給機台端（20260929 18:1x 起，請先讀這一段）
 
+- ✅ **20261002 第 116 包（GitLab main `19e8826c`）——要重建 wb_serve**：St02 的計時器修正——Timer3 與每分鐘溫度紀錄在自己的框開著時照 golden 繼續跑；Observer 頁的溫度歷史照 golden 記錄（原本全是 0）。
 - ✅ **20261002 第 115 包（GitLab main `8b8209cc`）——只動網頁，不用重建 wb_serve**：Lot Info 頁 Tester Log 分頁的「Tester TCP Show」鈕照 golden，開 Tester 通訊視窗的 TCP/IP 分頁（只有 TCP_IP_MODE 才有那個分頁）；`tools/websync/sync_web.py` 的保留清單補那支新的 js。
 - ✅ **20261002 第 114 包（GitLab main `2138c080`）——要重建 wb_serve**：① St02：生產資料紀錄照 golden 呼叫 TimerRecordLoaderDate（wb_serve 上值不變）；② 一支測試（TcpCmdServer 第 10 段）變短；③ 一句註解更正。機台上沒有可見的改變。
 - ✅ **20261001 第 113 包（GitLab main `16debc74`）——要重建 wb_serve**：① St01 的 D-026：要密碼的告警（JAM0000.dat 等級≠0），網頁上按 START／PAUSE 先跳登入框，密碼對了才照按的鍵關；實體面板鍵在密碼過之前關不掉（照 golden）。上機驗收 11 項在 GitLab commit `87e75615` 的訊息最後，會讓機台照按的鍵動作，請在機台旁；② St02 的 DIO 設定頁 Delete 鈕照 golden：選了檔按 Open 就刪（沒有確認框），只能刪 DIO 資料夾裡的 *.ini——測之前先備份那個資料夾；③ HTML 視覺設計工具外掛 0.154 → 0.157（要重新安裝，步驟同第 106 包）；④ 工具：`tools/websync/sync_web.py` 的保留清單再補 50 支頁面會載入的輔助 js。
@@ -175,6 +176,7 @@
 | 113 | `updates/16debc74/` | `16debc74` | `65330849`（`updates/16debc74/_machine_ai/base_65330849/`） | ⚠ **要重建 wb_serve**（31 檔；gate b27a 兩組態全新：出貨 316／4、模擬 316／19＝基準）。St01 D-026（`tools/wb_serve.cpp`、`tools/wb_dialog_mailbox.h`、`WebBridge/WebBridgeServer.cpp`、`WebLogin.cpp`、新檔 `WebNoteAuth.h`、`web/page/ht9045_dialog_host.js`）、St02 MR !83（新檔 `web/page/ht9045_dio_delete.js`＋兩頁各一行）、MR !82（文件）；HTDESIGNER 0.157（ES02）；`tools/websync/sync_web.py`。新 ctest `D026_NoteAuth`、`D026_NoteAuthPage`。 |
 | 114 | `updates/2138c080/` | `2138c080` | `16debc74`（`updates/2138c080/_machine_ai/base_16debc74/`） | ⚠ **要重建 wb_serve**（6 檔；gate b28a 兩組態全新：出貨 316／4、模擬 316／19＝基準）。St02 MR !87（`cMyDB.cpp`）、MR !86（`tests/test_tcp_cmd_server.cpp`）；筆電 `forms/fNote_ShowError.cpp`（註解）。 |
 | 115 | `updates/8b8209cc/` | `8b8209cc` | `2138c080`（`updates/8b8209cc/_machine_ai/base_2138c080/`） | 只動網頁（7 檔；gate b29a 兩組態全新：出貨 316／4、模擬 316／19＝基準）。St02 MR !89（新檔 `web/page/ht9045_lotinfo_testertcp.js`＋`web/page/Data.LotInfo.html` 一行）；`tools/websync/sync_web.py`。 |
+| 116 | `updates/19e8826c/` | `19e8826c` | `8b8209cc`（`updates/19e8826c/_machine_ai/base_8b8209cc/`） | ⚠ **要重建 wb_serve**（12 檔；gate b30a 兩組態全新：出貨 316／4、模擬 316／19＝基準）。St02 MR !90（`MainTimersSt02.cpp`、`MainTimer3.cpp`、`MainTimerESD*.cpp`、`Interface/TesterTCP_OSReport.cpp`、測試）；筆電 `mykitsuck.h`／`.cpp`（註解）。 |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
