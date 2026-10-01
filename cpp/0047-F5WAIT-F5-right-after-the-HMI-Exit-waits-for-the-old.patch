@@ -1,0 +1,65 @@
+From 3eab632cb4f38c5d9e111794e13a2e4e35880bea Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 1 Oct 2026 08:49:59 +0800
+Subject: [PATCH] F5WAIT: F5 right after the HMI Exit waits for the old
+ wb_serve to finish closing (up to 30 s) instead of failing
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20261001: "preLaunchTask 'IOWEB(這台): 檢查舊程式 + 等待畫面 + build wb_serve' 後存在錯誤".
+oplog: 08:46:01 act.main.closeProgram executed (Q44 settle 5 s, brakes,
+save); F5 came while that wb_serve was still closing, so the first step
+("is an old wb_serve still running?") failed at once. Now a running
+wb_serve gets up to 30 s to exit by itself; only then does the step fail
+with the old message. Still read-only: it waits and looks, never stops a
+process. Checked with a dummy process: exits after 4 s -> OK after 4 s;
+still running at 30 s -> exit 1 with the PID.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/check_wb_serve_not_running.ps1 | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/tools/check_wb_serve_not_running.ps1 b/tools/check_wb_serve_not_running.ps1
+index 6b82ff0..e440825 100644
+--- a/tools/check_wb_serve_not_running.ps1
++++ b/tools/check_wb_serve_not_running.ps1
+@@ -2,16 +2,33 @@
+ # Without gdb the red STOP button does not end wb_serve, so pressing F5 again while it runs would fail late and unclearly
+ # (the build cannot replace the running exe, the new one cannot bind port 8055). This step fails early and says so.
+ # Read-only: it lists processes and never stops one.
++# AI(W906-F5WAIT) 20261001: EastSun pressed F5 right after the HMI Exit (oplog 08:46:01 closeProgram executed) and got
++#   "preLaunchTask ... 後存在錯誤": the old wb_serve was still closing (Q44 settle 5 s, brakes, save) when this step looked.
++#   So a running wb_serve is now given up to $WaitSec to exit by itself before this step fails. Still read-only: it only
++#   waits and looks, it never stops a process. A wb_serve that is NOT closing still fails here, just $WaitSec later.
+ $ErrorActionPreference = 'Stop'
++$WaitSec = 30
+ $procs = @(Get-Process -Name 'wb_serve' -ErrorAction SilentlyContinue)
+ if ($procs.Count -eq 0) {
+     Write-Output 'OK: no wb_serve.exe running'
+     exit 0
+ }
++Write-Output ("wb_serve.exe still running (PID {0}) -- waiting up to {1} s for it to finish closing ..." -f (($procs | ForEach-Object { $_.Id }) -join ','), $WaitSec)
++Write-Output ("舊的 wb_serve 還在（可能正在關站），最多等 {0} 秒讓它自己關完 ..." -f $WaitSec)
++$deadline = (Get-Date).AddSeconds($WaitSec)
++while ((Get-Date) -lt $deadline) {
++    Start-Sleep -Milliseconds 500
++    $procs = @(Get-Process -Name 'wb_serve' -ErrorAction SilentlyContinue)
++    if ($procs.Count -eq 0) {
++        Write-Output 'OK: the old wb_serve.exe has exited'
++        Write-Output 'OK：舊的 wb_serve 已經關完'
++        exit 0
++    }
++}
+ foreach ($p in $procs) {
+     $path = ''
+     try { $path = $p.Path } catch { $path = '' }
+-    Write-Output ("wb_serve.exe is still running: PID {0}, started {1}, {2}" -f $p.Id, $p.StartTime, $path)
++    Write-Output ("wb_serve.exe is still running after {3} s: PID {0}, started {1}, {2}" -f $p.Id, $p.StartTime, $path, $WaitSec)
+ }
+ Write-Output 'Close it first: the HMI Exit button, or Ctrl+C in its terminal tab (named after the exe). Then press F5 again.'
+ Write-Output '舊的 wb_serve 還在跑：請先關掉（HMI 的 Exit，或在它的終端機分頁按 Ctrl+C），再按 F5。'
+-- 
+2.55.0.windows.5
+
