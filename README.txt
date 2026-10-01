@@ -601,4 +601,7 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   web 0077 5968853 PKG-118-119 —— 同上（ht9045_testerif_c_wire.js）。
   cpp 0115 54115e4 WORKLOG —— 工作紀錄補 10-02 第 69 項、§3 一列、§4 Teach 頁教導值上下限。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0116 8dd3860 TEACH-KB-AUDIT —— ⚠ Teach 小鍵盤範圍在這台的實測（唯讀，沒改程式）：照 golden 補會把 11 個真實教導位置改掉（這台解成 9046LS，但尺寸像 HT9045）；
+                    523 欄全部列舉，全文 docs/TEACH_KB_RANGE_HT9050_20261002.md，要 EastSun 選 A／B／C。工作紀錄第 70 項。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
