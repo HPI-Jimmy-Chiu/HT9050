@@ -591,4 +591,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   cpp 0111 ab47c0a WORKLOG —— 工作紀錄補 10-02 第 67 項；第 4 節 IO 頁要決定的事。
   web 0075 fd1d4e1 COMPK-IOS (web) —— 7 頁 4,411 個元件逐一判定：IO 頁開窗套用 C++ 算好的 FormShow、IO Table 篩選照原版、HandlerSys／LtcSensor、沒移植的硬體表單反灰＋原因。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  web 0076 6510023 COMPK-KB-MERGE (web) —— 兩支原版小鍵盤表合成一支（ht9045_golden_kb_unwired.js），原本兩支都攔同一個事件、互相蓋掉；7 頁改載入合併後那支，舊檔移除。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
