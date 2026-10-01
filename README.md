@@ -5,6 +5,7 @@
 
 ## ⚠⚠ 給機台端（20260929 18:1x 起，請先讀這一段）
 
+- ✅ **20261001 第 104 包（GitLab main `0b3a0735`）——要重建 wb_serve**：照 golden 補的功能，**有一項會讓機台停下來**：① 程式裡的 `fMain->Pause(...)`（狀態機約 40 處、RemoteControl／RCMD:PAUSE 遠端暫停）現在會照 golden **真的暫停機台**（SoftStop、所有馬達停、SECS DoPause、ESD 停機）——以前它們回 false、機台照跑；② SECS 遠端 START 改走跟 HTSET,333 同一個入口（SECS 引擎還沒啟動，今天跑不到）；③ 回原點完成後 [I06] 強制開 I01 時，照 golden 寫 config.ini；④ Jerry 的 CheckSocketSensor 照 golden（舊的替身永遠回「有錯」）。
 - ✅ **20261001 第 103 包（GitLab main `7ea471cf`）——只有文件，不用重建 wb_serve**：夜間報告 §0 多了 6 題給 Jimmy（HT9050 機型代號、共用 9050 模擬組、Frank 的 910 樹、RotateKit 重試卡死等）、INBOX 133（Frank 的 9050 動作流程整合）、golden 缺陷台帳加 RotateKit 一筆。
 - ✅ **20261001 第 102 包（GitLab main `5ae25f4d`）——要重建 wb_serve**：照 golden 補的功能，**有兩項會讓 IO 動作**：① 安全門鎖（`SwSafeDoorLock`）照 golden 主計時器跟著運轉狀態——**運轉中鎖住、停止後放開**；CE PLC 非安全模式時一直鎖；IO 設定頁開著時不動它；Contact 手動量高度時放開；Magazine 機的兩道門鎖同一段；② 大風扇（`SwBigFan`）跟著主畫面 FAN 鈕；ASE_CL／HONPREC QC 另外驅動風向；③ `TfMain::SetLotState` 照 golden：TCP/IP tester 會收到 LOTNUMBER／LOTSTART／LOTEND，GPIB tester 的批次狀態送到橋接。
 - ✅ **20261001 第 101 包（GitLab main `985c44be`）——要重建 wb_serve**：照 golden 補的功能，**有幾項會讓氣缸／IO 動作**：① 三溫機（Tri_Temp_Machine）安全門 6 開著時鎖住運轉；② 急停按下／放開時通知 ATC 溫控器，ATC 6.0／3.0 的錯誤訊息與斷線重連；③ 一輪結束／換盤時寫 `system\BinCount.txt`；④ 一輪結束時 Auto 盤氣缸放開（[EnableUnloadTrayFree] 開時，**氣缸會動**）；⑤ [I41] 空 socket 檢查；⑥ Initial／RT Start 先把上料氣缸打兩下（**氣缸會動**）。
@@ -151,6 +152,7 @@
 | 101 | `updates/985c44be/` | `985c44be` | `de4249da`（`updates/985c44be/_machine_ai/base_de4249da/`） | ⚠ **要重建 wb_serve**（7 檔；兩組態全新 gate＝基準：出貨 286 支 4 項、模擬 286 支 19 項）。`csystem.cpp`：三溫機門 6 鎖、三個 W7C2 替身退役（BinCount／Auto 盤氣缸放開／I41）、上料氣缸預推、ATC 急停通知（`ATC/ATCInterface.cpp` 檔尾的橋接）；測試 D7h＋新 ctest `AtcEmgBridge`。 |
 | 102 | `updates/5ae25f4d/` | `5ae25f4d` | `985c44be`（`updates/5ae25f4d/_machine_ai/base_985c44be/`） | ⚠ **要重建 wb_serve**（14 檔；兩組態全新 gate＝基準（出貨 288 支 4 項、模擬 288 支 19 項，逐項同））。新檔 `MainTimerSegments.cpp`（安全門鎖跟運轉狀態、大風扇跟 FAN 鈕；每一拍由 `WebBridgeTags.cpp` 呼叫）、`forms/fMain_SetLotState.cpp`（SetLotState 照 golden）；`csystem.cpp`／`AutoRetest.cpp`／`Automation/SCK_ART_Remainder.cpp` 三個空巨集改呼叫它；新 ctest `MainTimerSegments`、`SetLotState`。 |
 | 103 | `updates/7ea471cf/` | `7ea471cf` | `5ae25f4d`（`updates/7ea471cf/_machine_ai/base_5ae25f4d/`） | 只有文件（3 檔：`docs/NIGHT_REPORT.md`、`docs/INBOX_QUEUE.md`、`docs/GOLDEN_DEFECT_LEDGER.md`），**不用重建**。 |
+| 104 | `updates/0b3a0735/` | `0b3a0735` | `7ea471cf`（`updates/0b3a0735/_machine_ai/base_7ea471cf/`） | ⚠ **要重建 wb_serve**（10 檔；兩組態全新 gate＝基準（出貨 290 支 4 項、模擬 290 支 19 項，逐項同））。`forms/fMain.cpp`（基底 Pause 轉到 PauseFromWeb）、`SECSGEM/uHGemHT9045.cpp`（REMOTE_START）、`csystem.cpp`（寫檔替身退役）、`atester.cpp`（Jerry J-6）；新 ctest `PauseForward`、`SocketSensor`；文件 `docs/FLOW9050_PORT_LEDGER.md`（Frank01）。 |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
