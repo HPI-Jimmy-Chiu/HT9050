@@ -462,4 +462,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   cpp 0072 dedea08 WORKLOG —— 工作紀錄補 10-01 第 24～28 項（含機台 IO_Table 吸／破真空 Port 對調，設定檔不推）。
   ⓘ 機台樹另有 8979fea（TEACH-3AXES）、e696967（1203-LINKLOST）已 commit、還在建置測試，下一次推。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  tools 0139 HTDESIGNER-145（0.145.0）—— 筆電包 108 的外掛部分合進機台：ES02 的 0.144–0.145（尋找框 Ctrl+Shift+F：一個框、選範圍〔這個檔／專案／整個方案／C++／網頁／BCB6，Big5 照讀〕；Ctrl+F 也開這個框，預設「這個檔案」，設定 ht9045Designer.ctrlFFind 可關）。三方合併（基準＝包 107）：4 個只有 ES02 改、2 個兩邊都改都沒有衝突；機台的 tools 0136 Alias 補丁保留。包說明寫 0.144，package.json 是 0.145。C++ 部分＝整合工作階段的 cpp 0071。機台測試：程式庫 176/176、探針 7/7＋分頁樹 7/7、假 VS Code 211/211、面板全過；e2e_build.ps1 沒跑。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
