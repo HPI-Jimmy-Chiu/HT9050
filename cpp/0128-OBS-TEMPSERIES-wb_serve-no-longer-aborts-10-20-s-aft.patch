@@ -1,0 +1,66 @@
+From 3b2dfcf910d22cfc0f028edff2fc465bdc677881 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 2 Oct 2026 10:31:33 +0800
+Subject: [PATCH] OBS-TEMPSERIES: wb_serve no longer aborts 10-20 s after start
+ (std::out_of_range in TfObserver::UpdateTempChart)
+
+EastSun 20261002: right after the program opens, Teach cannot be entered.  Measured: every F5 start today ended 10-20 s in; WER 09:46:11
+wb_serve.exe 0x40000015 at __gnu_cxx::__verbose_terminate_handler; reproduced outside VS Code with stderr captured:
+'terminate called after throwing an instance of std::out_of_range -- vector::_M_range_check: __n (which is 0) >= this->size() (which
+is 0)'; gdb (break std::__throw_out_of_range_fmt): PumpTick -> W906_St02TimersTick -> W906_Timer3Timer -> RecordTemp ->
+TfObserver::UpdateTempChart -> TempChart->Series[0].  Since laptop package 116 (St02: the per-minute temperature record runs, MainTimer3.cpp:201)
+the chart is drawn while the Observer page counts as open, but the ctor loop that adds one series per heater (cObserver.cpp:656-661, golden
+ctor) is skipped at static init (INIFileGeneral==0), so TempChart had no series.  The page then lost its server and Teach was refused.
+
+* cObserver.cpp UpdateTempChart: on first use, the series and the combo items the golden ctor adds (one per heater, asTempCtrl titles);
+  the single-series branch returns when ItemIndex-1 is out of range (golden reaches it only after FormShow :3888 ItemIndex=0).
+* forms/fObserver.h: TfObserverChart::SeriesCount().  Both edits line-neutral.
+
+Verified (o2): wb_serve 0 errors; ctest St02_Timer3, St02_Timer1, St02_TimerESD, St02_Timers, ObserverCore, LastDataSandbox, CompK_DataS 7/7.
+Runtime check needs the -O0 ship build (the operator's F5): the o2 exe crashes earlier in SetTechDataToProd at boot (0xC0000005, a
+separate -O2-only problem, not this change).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ cObserver.cpp     | 4 ++--
+ forms/fObserver.h | 2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/cObserver.cpp b/cObserver.cpp
+index fa076ae..8e6fbf2 100644
+--- a/cObserver.cpp
++++ b/cObserver.cpp
+@@ -2320,7 +2320,7 @@ void TfObserver::Close()
+ // =============================================================================
+ void TfObserver::UpdateTempChart()   //Steven 20090827
+ {
+-    AnsiString S;
++    AnsiString S;  if (TempChart->SeriesCount() < tcTotalCount) { for (int j = TempChart->SeriesCount(); j < tcTotalCount; j++) { TfObserverChartSeries *series = TempChart->AddSeries(new TfObserverChartSeries()); series->Title = asTempCtrl[j]; } if (cbbTempChart->Items->Count <= 1) { cbbTempChart->Items->Clear(); cbbTempChart->Items->Add("All"); for (int j = 0; j < tcTotalCount; j++) cbbTempChart->Items->Add(asTempCtrl[j]); } }   //AI(W906-OBS-TEMPSERIES) 20261002: wb_serve aborted (std::out_of_range, vector::at(0) on 0 series) ~10-20 s after every F5 start since laptop package 116 (MainTimer3.cpp RecordTemp -> UpdateTempChart): the ctor loop :656-661 that adds one series per heater (golden ctor) is skipped at static init (INIFileGeneral==0), so TempChart had none. Golden's form is created after the ini is open -- the same series / combo items are added here on first use. Same line
+     if      (IniConfig.iL10TempRecordInterval == 0) S = " (5  Sec)";
+     else if (IniConfig.iL10TempRecordInterval == 2) S = " (30 Sec)";
+     else if (IniConfig.iL10TempRecordInterval == 3) S = " (1  Min)";
+@@ -2350,7 +2350,7 @@ void TfObserver::UpdateTempChart()   //Steven 20090827
+         for (int j = 0; j < tcTotalCount; j++)
+             TempChart->Series[j]->Clear();
+ 
+-        int index = cbbTempChart->ItemIndex - 1;
++        int index = cbbTempChart->ItemIndex - 1;  if (index < 0 || index >= TempChart->SeriesCount()) return;   //AI(W906-OBS-TEMPSERIES) 20261002: golden reaches this only after FormShow :3888 ItemIndex=0 (its timer tests fObserver->bShow); the port's page-table test can come earlier (dfm ItemIndex -1 -> index -2); same line
+         for (int i = 0; i < 60; i++)
+         {
+             TempChart->Series[index]->AddY(dTempHistroy[index][i], AnsiString(" "), TC[index]);   //Steven 20140923 : Index使用EJ1N版32組加熱器
+diff --git a/forms/fObserver.h b/forms/fObserver.h
+index 9eaf2a8..a771464 100644
+--- a/forms/fObserver.h
++++ b/forms/fObserver.h
+@@ -391,7 +391,7 @@ public:
+ 
+     // golden ->Repaint()/->Refresh() -- GDI, no-op (see TfObserverGrid note).
+     void Repaint() {}
+-    void Refresh() {}
++    void Refresh() {}  int SeriesCount() const { return (int)seriesList_.size(); }   // AI(W906-OBS-TEMPSERIES) 20261002: TfObserver::UpdateTempChart checks it (cObserver.cpp); same line
+ 
+ private:
+     std::vector<TfObserverChartSeries *> seriesList_;
+-- 
+2.55.0.windows.5
+
