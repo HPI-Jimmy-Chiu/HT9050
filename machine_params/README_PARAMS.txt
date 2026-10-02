@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-02 21:56
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ b0c82ac WORKLOG: 10-02 items 81-85 -- package 128, all-axes HOME live, HOME lamp inverted,／web 365189d。
+HT9050 機台參數快照（machine_params\）—— 2026-10-02 22:16
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ f2d5c3f Revert ZHOME-200 (71e7d7b): the Z axes home as golden again -- EastSun 1002「你幫我把往回／web 365189d。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置

@@ -700,4 +700,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   ★ 快照新增 machine_params\D_GPIB9045_system（只收 *.ini／*.dat）。
   ⚠ 給筆電：哪一支 GPIB 程式會把 Model 寫成 9045GPIB？HT9050 機台要 9050GPIB，被蓋掉 HT9050 分支就失效。
   掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
+  cpp 0140 f2d5c3f Revert ZHOME-200 —— EastSun 1002「你幫我把往回跑200流程刪掉好了」：cpp 0138 整顆反做。實測 MInArmZA：+200 往下走，接著原版 case 500 移到 ZSafePos=50 又往上；改成「往上 200 就停」的版本只在 o2 編過、沒 commit，之後 EastSun 決定整段刪掉。Z 軸回原點＝驅動器回原點 → 手臂 Z 去 ZSafePos → HomeFlag=1（原版）。o2 乾淨重編；ctest WebMotorAccess、Pci1203MotorRoute 過。
+  掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
 MD5 清單在 MANIFEST_MD5.tsv。
