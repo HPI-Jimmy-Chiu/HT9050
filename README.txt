@@ -682,4 +682,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      推送工具也放進來了：_tools\push_stage.ps1。
   ⚠ 給筆電：第 128 包機台還沒套（EastSun 先不套）；機台現在 = GitHub main bce78fd（第 127 包）＋機台修改。
   掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
+  cpp 0134 0a7f2de WORKLOG —— 工作紀錄第 80 項（第 127 包、machine_params／workorder 快照、推送規矩改成「編譯過就推、附參數與工單」）。
+  掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
 MD5 清單在 MANIFEST_MD5.tsv。
