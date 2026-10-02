@@ -696,4 +696,8 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   cpp 0138 71e7d7b ZHOME-200 —— EastSun 1002「Z軸歸原點 … 往回 200 就好」：所有軸照舊由驅動器回原點（124／128，驅動器設原點）；名稱以 Z 或 Z＋一個字結尾的 1203 軸（MLoaderZ、MEmptyZ、MAuto1～3Z、MInArmZA、MOutArmZA、MTestZ1）回完後用 HomeLowSpeed 朝回原點的同一方向再走 200 pulse，走完才算回原點完成（arm Z 之後照舊去 ZSafePos）。Motor Test 單軸與主畫面全機 HOME 都有。開關 MachineType.h W906_Z_HOME_BACKOFF_PULSE（負數＝反方向＝原版 SYNTEK 的 iHomePitch 方向）。o2 編過；ctest WebMotorAccess、Pci1203MotorRoute 過。
   ⚠ 給筆電：fc2fe83 的 SensorType=1 更正機台沒照做——EastSun 1002 實測沒遮到時 1203 讀值會變，機台現在是 SensorType 全 0＋ORG-INV（cpp 0137）。
   掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
+  cpp 0139 b0c82ac WORKLOG —— 工作紀錄第 81～85 項。★ 機台設定檔：D:\GPIB9045\system\general.ini 的 [Version] Model 9045GPIB→9050GPIB（EastSun 1002）。0930 已是 9050GPIB，10-02 21:46:58 被一支 GPIB 程式整檔寫回 9045GPIB（同秒 LastFile=…\2026-10-02 21 46 58.txt），HT9050 原點規則整段沒啟動、燈號＝1203 原始位元——這就是「反向了燈還亮」的原因。1203 原始 ORG 位元：沒遮到＝1。
+  ★ 快照新增 machine_params\D_GPIB9045_system（只收 *.ini／*.dat）。
+  ⚠ 給筆電：哪一支 GPIB 程式會把 Model 寫成 9045GPIB？HT9050 機台要 9050GPIB，被蓋掉 HT9050 分支就失效。
+  掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
 MD5 清單在 MANIFEST_MD5.tsv。

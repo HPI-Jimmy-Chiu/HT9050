@@ -26,8 +26,8 @@ function NextNum($dir) {
   $m = (Get-ChildItem (Join-Path $PUSHDIR $dir) -Filter '*.patch' | ForEach-Object { [int]$_.Name.Substring(0, 4) } | Measure-Object -Maximum).Maximum
   return [int]$m + 1
 }
-function Mirror($from, $to, [string[]]$xd = @()) {
-  $a = @($from, $to, '/MIR', '/R:1', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
+function Mirror($from, $to, [string[]]$xd = @(), [string[]]$pat = @()) {
+  $a = @($from, $to) + $pat + @('/MIR', '/R:1', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
   if ($xd.Count) { $a += '/XD'; $a += $xd }
   & robocopy @a | Out-Null
   if ($LASTEXITCODE -ge 8) { throw "robocopy $from -> $to failed ($LASTEXITCODE)" }
@@ -49,6 +49,7 @@ if (-not $NoParams) {
   Mirror 'D:\HT9045\system' (Join-Path $MP 'D_HT9045_system')
   Mirror 'D:\HT9045\config' (Join-Path $MP 'D_HT9045_config')
   Mirror $RUNCFG (Join-Path $MP 'runcfg') @('logs')
+  Mirror 'D:\GPIB9045\system' (Join-Path $MP 'D_GPIB9045_system') @() @('*.ini', '*.dat')   # AI(W906-PARAMS-PUSH) 20261002: the GPIB general.ini ([Version] Model) -- settings only, not the .obj build junk
   $recipe = ([IO.File]::ReadAllText((Join-Path $RUNCFG 'SetUp.inf'))).Trim()
   if (-not $recipe -or $recipe -match '[\\/:*?"<>|]') { throw "SetUp.inf recipe name not usable: '$recipe'" }
   $rsrc = Join-Path 'D:\HT9045\IniData\Data' $recipe
@@ -69,6 +70,7 @@ HT9050 機台參數快照（machine_params\）—— $ts
   D_HT9045_system\  ($(& $cnt (Join-Path $MP 'D_HT9045_system')) 檔)  → D:\HT9045\system\      機台正本：Gerneral.ini、IO_Table.csv、Mot_Table.csv（wb_serve 直接讀這三個）
   D_HT9045_config\  ($(& $cnt (Join-Path $MP 'D_HT9045_config')) 檔)  → D:\HT9045\config\
   runcfg\           ($(& $cnt (Join-Path $MP 'runcfg')) 檔)  → D:\HT9045\_integ_ioweb\runcfg\   SetUp.inf（目前工單）、system\teach.ini（教導值）、config\（config.ini、LastSet.ini、Pci1203*.ini …）；logs\ 沒放
+  D_GPIB9045_system\ ($(& $cnt (Join-Path $MP 'D_GPIB9045_system')) 檔) → D:\GPIB9045\system\   只收 *.ini／*.dat；general.ini 的 [Version] Model＝機種（HT9050＝9050GPIB，程式靠它啟動 HT9050 分支）
 
 注意
   * 這是 HT9050 這一台的設定。別台機台不要整包覆蓋：IO 對照或馬達表錯了，程式會照錯的對照推線圈、動馬達。
