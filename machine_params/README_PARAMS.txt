@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-02 22:16
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ f2d5c3f Revert ZHOME-200 (71e7d7b): the Z axes home as golden again -- EastSun 1002「你幫我把往回／web 365189d。
+HT9050 機台參數快照（machine_params\）—— 2026-10-03 03:02
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 43580b0 PKG-129: GitHub main aab3911 (GitLab main 13a57384) on the machine -- laptop batch／web 80cccd7。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置

@@ -705,4 +705,10 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   tools 0147 HTDESIGNER-161a（0.161.0，版本號不變，機台補丁）—— 按 F5 編譯時 VS Code 右下角有進度條（EastSun 1002：「編譯進度可以有個進度條嗎?」）：讀 CMake 自己在建置資料夾的 CMakeFiles\Progress（跟終端機 [ 45%] 同一個數），F5 的工作一行都沒改（早上包一層的做法讓 F5 不動、已退回）。編完說「建置完成」，沒編完跳訊息。程式庫 181/181、假 VS Code 223/223、探針與分頁樹 7/7、面板全過。
   ⚠ 給筆電：請收機台的 tools 0136、0143、0145、0147 外掛補丁。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0141 43580b0 PKG-129 —— 機台整合筆電第 129 包（GitHub main aab3911、GitLab 13a57384）：Teach「Arm Cell」分頁、Motion View 9050、DTME08（未啟用）、St02 ADAM-6024（連線開關關）、LI-9 FTP、Jerry J-12／J-14、St01 q59、MES16441。設計外掛 8 檔沒碰（設計外掛工作階段 tools 0148）。
+                    11 個兩邊都改的檔：7 個乾淨三方合併；4 個兩邊都在檔尾各接一段（MachineType.h、WebMotorAccess.cpp/.h、WebMotorAccessLive.cpp），兩段都留、機台在前。機台的 SensorType 全 0＋W906_HT9050_ORG_INVERT、全機 HOME 開關、HonPrec 都保留；Mot_Table 沒動。
+                    o2 全部編過；挑 35 支測試 30 過。
+  web 0086 80cccd7 PKG-129 (web) —— 同一包的 17 個網頁檔（HW.teach.html 三方合併乾淨）。
+  ⚠ 給筆電：(1) 4 支 *_HT9050 測試讀 repo 的 machines/HT9050，機台這份還是 9/24 的；改餵 D:\HT9045\system 正本 3 支過，MachineMotors 93/94（它要某軸 SensorType=1，EastSun 1002 已全改 0）——請把 test_machine_motors 的 SensorType 期望改成 0。(2) 新的 Adam6024_Pressure 在機台失敗：KpaTransferKG 4q 78.36 vs 76.85、MultiTransferKG 5e／5f 3533.27 vs 34.98、9t；ADAM 連線開關關著所以不影響執行，請查是不是機台多了哪個開關。
+  掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
 MD5 清單在 MANIFEST_MD5.tsv。
