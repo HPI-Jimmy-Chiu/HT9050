@@ -1,0 +1,376 @@
+From 3604e7b8f9b18f53dd29740df244be844e44167e Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 2 Oct 2026 22:27:48 +0800
+Subject: [PATCH] HTDESIGNER-161a: a progress bar while F5 builds -- from
+ CMake's own progress folder, F5 itself unchanged (0.161.0, no version change)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20261002: 「編譯進度可以有個進度條嗎?」. The designer's own green play button had one; F5 did not.
+F5's preLaunchTask calls cmake directly (the 08:31 wrapper tools\build_with_status.ps1 on the F5 path made F5 not
+start on this machine and was reverted at 09:40, 0192f29) -- so nothing on the F5 path is touched here:
+- lib/buildwatch.js: CMake's Makefile generators keep <build>\CMakeFiles\Progress\ during a build (count.txt = the
+  target's steps, one file per finished step; make's "[ 45%]" is counted from it); a build that ends removes it, a
+  failed / stopped one leaves it. cmakeProgress(dir), runningCMake(root, since). Also reads the wrapper's
+  web\JSON\runtime\boot_build.js if it is ever written again.
+- extension.js: a build task's start / end (vscode.tasks.onDidStart/EndTaskProcess, not the designer's own); every
+  second while one runs, the newest build* folder's progress -> a VS Code notification bar (no Cancel: F5's build is
+  VS Code's task); the folder gone = "建置完成" in the status bar; the task ended with it left = "建置沒有完成", said.
+  Read only: it never starts, stops or changes a build.
+Tests: lib 181/181 (status file; a temporary build folder 9/20 = 45%), extension 223/223 (a simulated F5 build task:
+25% -> 75%, done; a second one failing), probe 7/7 + tab tree 7/7, panels all pass.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHANGELOG.md          |  1 +
+ tools/vscode-htdesigner/HANDOVER.md           |  1 +
+ tools/vscode-htdesigner/extension.js          | 72 ++++++++++++++
+ tools/vscode-htdesigner/lib/buildwatch.js     | 94 +++++++++++++++++++
+ tools/vscode-htdesigner/test/run_tests.js     | 31 ++++++
+ .../vscode-htdesigner/test/smoke_extension.js | 65 +++++++++++++
+ 6 files changed, 264 insertions(+)
+ create mode 100644 tools/vscode-htdesigner/lib/buildwatch.js
+
+diff --git a/tools/vscode-htdesigner/CHANGELOG.md b/tools/vscode-htdesigner/CHANGELOG.md
+index 946e696..e8babbb 100644
+--- a/tools/vscode-htdesigner/CHANGELOG.md
++++ b/tools/vscode-htdesigner/CHANGELOG.md
+@@ -3,6 +3,7 @@
+ 每一版多了什麼。怎麼操作看 [操作一覽](CHEATSHEET.md)，詳細說明看 README。
+ 
+ ## 0.161.0
++- 機台端補丁（tools 0147，版本號不變）：**按 F5 編譯時，右下角有進度條**（EastSun 1002：「編譯進度可以有個進度條嗎?」）。百分比跟終端機的 `[ 45%]` 一樣：外掛讀 CMake 自己在建置資料夾裡的 `CMakeFiles\Progress`（只讀），**F5 的工作完全沒改**（早上包一層寫進度的做法讓 F5 不動，已退回）。編完右下角說「建置完成」；沒編完（失敗或被停）跳訊息說原因在終端機。沒有「取消」：F5 的編譯是 VS Code 的工作，要停在終端機停。外掛自己的綠色 ▶ 照舊用它自己的進度條。
+ - 新功能：**選取元件時四邊都標出邊距**（WPF 的 margin adorner；對照 WPF 手冊的缺漏清單第 9 項）：以前只有到容器左邊、上邊的距離，
+   現在右邊、下邊也有（到容器內緣的距離，數字是 px），拖曳時跟著動；距離是 0 的那一邊不畫。
+ ## 0.160.0
+diff --git a/tools/vscode-htdesigner/HANDOVER.md b/tools/vscode-htdesigner/HANDOVER.md
+index e350d0a..51c3d5a 100644
+--- a/tools/vscode-htdesigner/HANDOVER.md
++++ b/tools/vscode-htdesigner/HANDOVER.md
+@@ -124,6 +124,7 @@
+       - 機台補丁（同一顆 tools 0143）：`lib/cppindex.js`／`lib/projectsearch.js` 的 SKIP_DIR 加 `.claude`（別人的幫手在樹裡 `.claude\worktrees\` 開 worktree＝整份原始碼的複本，索引變慢 10 倍、每個結果兩份、smoke 逾時）；smoke 的「檢查所有頁面」改成自己數同一批頁面（HW.home.html 23:43 被修好，297→264，寫死的 290 誤判）。⚠ 筆電還沒收。
+     - 包 113（20261001 23:41，GitLab 16debc74，0.155–0.157：機台螢幕大小框線、用點的設定 Tab 順序、Items／Lines 清單編輯器）→ tools 0144；包 114（2138c080）沒有外掛。這次 ES02 也改了 `test/smoke_extension.js`，合併後機台的頁面檢查改法照樣在。
+     - 包 126（20261002 13:58，GitLab 8f3cdc53，0.158–0.161：圖片 Picture、方案總管外框到底、群組到 Panel／GroupBox、四邊邊距）→ tools 0146；包 114–125 沒有外掛。這次 ES02 也改了 `extension.js`，合併後機台的 panelColumn 照樣在。
++    - 機台補丁 tools 0147：F5 編譯進度條（`lib/buildwatch.js`＋`extension.js` 的 `buildWatchTick`）。讀 CMake 的 `<build*>\CMakeFiles\Progress`（count.txt＋每完成一步一個檔；正常結束會刪掉、失敗留著），建置工作開始／結束用 `vscode.tasks.onDidStart/EndTaskProcess`。**不要把它改成包住 F5 的建置**：20261002 早上 `tools\build_with_status.ps1` 接到 F5 上讓 F5 整個不動（0192f29 退回）。`boot_build.js` 那個來源也還讀著（萬一以後又接回去）。⚠ 筆電還沒收。
+     - ⚠ **只有包裡改的檔、新檔要「原樣複製位元組」**（`[IO.File]::ReadAllBytes`／`WriteAllBytes`），不要讀成文字再寫：讀成文字會把 BOM 拿掉，而 `test\panels_render.ps1` 有中文，PowerShell 5.1 沒有 BOM 就讀錯。兩邊都改的才用 `git merge-file` 的結果（那幾個是 .md／.js）。
+     - 操作員在跑 `wb_serve` 的時候也可以跑外掛的測試：測試頁有 CSP 封網路（探針測試會驗證），只用隨機的 DevTools 埠。會連 `wb_serve` 的只有 `e2e_*`，不跑。
+   - **機台要新版的時候**：這台聯絡不到筆電端的工作階段（`ListAgents` 看不到），也讀不到 GitLab。
+diff --git a/tools/vscode-htdesigner/extension.js b/tools/vscode-htdesigner/extension.js
+index f3982db..8f849a5 100644
+--- a/tools/vscode-htdesigner/extension.js
++++ b/tools/vscode-htdesigner/extension.js
+@@ -50,6 +50,7 @@ const cppbridge = require('./lib/cppbridge');
+ const CSV_VIEW = 'ht9045Designer.csv';
+ const LINT_SOURCE = 'HTML 頁面檢查';
+ const htmledit = require('./lib/htmledit');
++const buildwatch = require('./lib/buildwatch');
+ const lex = require('./lib/cpplex');
+ 
+ const sleep = ms => new Promise(r => setTimeout(r, ms));
+@@ -172,6 +173,24 @@ class Hub {
+     if (vscode.window.onDidChangeWindowState) ctx.subscriptions.push(vscode.window.onDidChangeWindowState(e => { if (e.focused) this.checkUpdate(); }));
+     const updFirst = setTimeout(() => this.checkUpdate(), 3000);
+     if (updFirst && updFirst.unref) updFirst.unref();
++    // AI(W906-HTDESIGNER) 20261002 (machine; EastSun「編譯進度可以有個進度條嗎?」): F5's build writes its progress to
++    // <web>\JSON\runtime\boot_build.js (tools\build_with_status.ps1) -- a progress bar here from it, read only
++    this.buildBar = null;
++    // (and, the F5 path being VS Code's own task calling cmake directly, CMake's progress in the build folder while a
++    //  build task runs: the task's start and end only, nothing about it is changed)
++    this.bwTask = null;
++    const isBuildTask = t => /build|建置|cmake|編譯/i.test((t && (t.name || '')) + ' ' + JSON.stringify((t && t.definition) || {}));
++    if (vscode.tasks && vscode.tasks.onDidStartTaskProcess) ctx.subscriptions.push(vscode.tasks.onDidStartTaskProcess(e => {
++      const t = e && e.execution && e.execution.task;
++      if (isBuildTask(t) && !(t.definition && t.definition.type === 'ht9045Designer')) this.bwTask = { name: t.name, t: Date.now(), ended: false, code: null, dir: null };
++    }));
++    if (vscode.tasks && vscode.tasks.onDidEndTaskProcess) ctx.subscriptions.push(vscode.tasks.onDidEndTaskProcess(e => {
++      const t = e && e.execution && e.execution.task;
++      if (this.bwTask && t && t.name === this.bwTask.name) { this.bwTask.ended = true; this.bwTask.code = e.exitCode; }
++    }));
++    const bwTimer = setInterval(() => this.buildWatchTick(), 1000);
++    if (bwTimer && bwTimer.unref) bwTimer.unref();
++    ctx.subscriptions.push({ dispose: () => { clearInterval(bwTimer); if (this.buildBar) this.buildBar.end(); } });
+     // CSV 表格: a .csv open as text -- a tab from before the update comes back as text (VS Code keeps the kind
+     // of editor a tab had): the table one click away, and asked once per file
+     // (EastSun 20260930: "依照圖片 表格沒有出現阿 我已經有更新過")
+@@ -1000,6 +1019,59 @@ class Hub {
+    * Then: the status bar says so with a button, the 頁面 title too, and once a message with「現在更新」.
+    * Returns the newer version or null. A copy run from the source tree (no extensions folder) finds nothing.
+    */
++  /**
++   * One look at F5's build status file (lib/buildwatch.js): a running build = a progress bar (VS Code's notification,
++   * like the green ▶'s), its % from make; done / failed = the bar closes and the status bar says so. Read only: the
++   * bar has no Cancel -- F5's build is VS Code's task (stop it there). The designer's own ▶ build has its own bar.
++   * `file` / `now`: for the tests.
++   */
++  buildWatchTick(file, now, portRoot) {
++    if (this.runBar && this.runBar.building) return null;   // (the designer's own ▶ build shows its own bar)
++    const tNow = now || Date.now();
++    let f = file, port = portRoot;
++    if (!f || !port) {
++      let r = this.active && this.active.r;
++      if (!r || !r.webRoot || !r.portRoot) { try { r = roots.resolveRoots(null, this.wsFolders(), this.over()); } catch (e) { r = {}; } }
++      if (!f) f = buildwatch.statusFile(r.webRoot);
++      if (!port) port = r.portRoot;
++    }
++    let st = buildwatch.read(f);
++    // no fresh status file (F5 calls cmake directly): CMake's progress while a build task runs
++    if (!(st && typeof st.t === 'number' && tNow - st.t < 15000) && this.bwTask) {
++      const bt = this.bwTask;
++      const run = port ? buildwatch.runningCMake(port, bt.t - 5000) : [];
++      const pr = (bt.dir && run.find(x => x.dir === bt.dir)) || (!bt.dir && run[0]) || null;
++      if (pr) bt.dir = pr.dir;
++      const el = Math.round((tNow - bt.t) / 1000);
++      const base = { target: bt.name, dir: bt.dir ? path.basename(bt.dir) : '', file: '', errors: 0, lastError: '', elapsed: el, t: tNow };
++      if (pr && !bt.ended) st = Object.assign(base, { state: 'building', pct: pr.pct, n: pr.steps });
++      else if (bt.dir && (!pr || bt.ended)) {
++        // the folder gone = the build ended; still there when the task ended = it failed (or was stopped)
++        st = Object.assign(base, { state: !pr || bt.code === 0 ? 'done' : 'failed', pct: 100, n: pr ? pr.steps : 0, errors: 0 });
++        if (bt.ended || !pr) this.bwTask = null;
++      } else if (bt.ended) { this.bwTask = null; st = null; }   // (nothing to build: up to date)
++      else st = null;
++    }
++    const what = buildwatch.decide(st, !!this.buildBar, tNow);
++    if (what === 'open') {
++      const bar = { pct: 0, report: null, end: null };
++      bar.done = new Promise(res => { bar.end = res; });
++      this.buildBar = bar;
++      vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '建置 ' + (st.target || 'wb_serve') + '（' + (st.dir || 'F5') + '）', cancellable: false },
++        prog => { bar.report = prog; prog.report({ increment: st.pct | 0, message: buildwatch.message(st) }); bar.pct = st.pct | 0; return bar.done; });
++    } else if (what === 'update') {
++      const bar = this.buildBar, p = st.pct | 0;
++      if (bar.report) bar.report.report(p > bar.pct ? { increment: p - bar.pct, message: buildwatch.message(st) } : { message: buildwatch.message(st) });
++      if (p > bar.pct) bar.pct = p;
++    } else if (/^close/.test(what)) {
++      this.buildBar.end();
++      this.buildBar = null;
++      if (what === 'close-done') vscode.window.setStatusBarMessage('$(check) 建置完成：' + (st.dir || '') + '（' + buildwatch.message(st).replace(/^\d+%　/, '') + '）', 8000);
++      else if (what === 'close-failed') vscode.window.showErrorMessage('建置沒有完成（' + (st.dir || '') + '）' + (st.errors ? '：錯誤 ' + st.errors + ' 個' : '') + (st.lastError ? '，第一個：' + st.lastError : '') + '。原因在終端機和「問題」。');
++    }
++    return what;
++  }
++
+   checkUpdate(extDir) {
+     const ext = this.ctx.extension;
+     const dir = extDir || (ext && ext.extensionPath ? path.dirname(ext.extensionPath) : null);
+diff --git a/tools/vscode-htdesigner/lib/buildwatch.js b/tools/vscode-htdesigner/lib/buildwatch.js
+new file mode 100644
+index 0000000..84cb6ba
+--- /dev/null
++++ b/tools/vscode-htdesigner/lib/buildwatch.js
+@@ -0,0 +1,94 @@
++'use strict';
++// AI(W906-HTDESIGNER) 20261002 (machine), EastSun: 「編譯進度可以有個進度條嗎?」
++// F5's preLaunchTask builds through tools\build_with_status.ps1 (the port tree's), which every 0.5 s writes
++// <web>\JSON\runtime\boot_build.js:  window.__HT_BUILD={"state":"building"|"done"|"failed","pct":N,"file":"...","n":N,
++// "errors":N,"lastError":"...","target":"wb_serve","dir":"build_...","elapsed":S,"t":<ms since 1970>};
++// The boot wait page reads it; this reads the same file so VS Code shows a progress bar too. READ ONLY: nothing here
++// starts, stops or changes a build.
++const fs = require('fs');
++const path = require('path');
++
++/** The status file of a web root (null without one). */
++function statusFile(webRoot) {
++  return webRoot ? path.join(webRoot, 'JSON', 'runtime', 'boot_build.js') : null;
++}
++
++/** The status object from the file's text, or null. */
++function parse(text) {
++  const s = String(text || '');
++  const a = s.indexOf('{'), b = s.lastIndexOf('}');
++  if (a < 0 || b <= a) return null;
++  try {
++    const o = JSON.parse(s.slice(a, b + 1));
++    if (!o || typeof o.state !== 'string') return null;
++    return o;
++  } catch (e) { return null; }
++}
++
++/** The status in `file`, or null (no file, half-written, not ours). */
++function read(file) {
++  if (!file) return null;
++  try { return parse(fs.readFileSync(file, 'utf8')); } catch (e) { return null; }
++}
++
++/**
++ * What the progress bar does now: 'open' (a build is running and no bar yet), 'update', 'close-done', 'close-failed',
++ * 'close-stale' (the writer stopped -- killed, or VS Code was closed), or 'none'.
++ * `shown` = a bar is open; `now` = Date.now(). A status older than `staleMs` is not a running build (the file stays
++ * on disk after every build: an old "building" must not open a bar when VS Code starts).
++ */
++function decide(st, shown, now, staleMs) {
++  const stale = staleMs || 15000;
++  const fresh = !!(st && typeof st.t === 'number' && now - st.t < stale);
++  if (!shown) return st && st.state === 'building' && fresh ? 'open' : 'none';
++  if (!st) return 'close-stale';
++  if (st.state === 'done') return 'close-done';
++  if (st.state === 'failed') return 'close-failed';
++  return fresh ? 'update' : 'close-stale';
++}
++
++/** The bar's text: "45%　cmydef.cpp　(120 個檔，2 分 05 秒)" -- and the errors when there are some. */
++function message(st) {
++  if (!st) return '';
++  const el = Math.max(0, st.elapsed | 0);
++  const mm = Math.floor(el / 60), ss = el % 60;
++  const t = mm ? mm + ' 分 ' + String(ss).padStart(2, '0') + ' 秒' : ss + ' 秒';
++  return (st.pct | 0) + '%' + (st.file ? '　' + st.file : '') + '　（' + (st.n | 0) + ' 個檔，' + t + '）' +
++    (st.errors ? '　錯誤 ' + st.errors : '');
++}
++
++/**
++ * CMake's own progress (the Makefile generators -- MinGW / Unix Makefiles): at the start of a build
++ * `cmake -E cmake_progress_start <dir>/CMakeFiles <count>` makes CMakeFiles\Progress\ with count.txt (the steps of the
++ * target); every finished step drops one more file in it (make's "[ 45%]" = those files / count); a build that ENDS
++ * removes the folder (`cmake_progress_start ... 0`); one that fails or is killed leaves it. Nothing in the build is
++ * changed to get it: F5's tasks stay exactly as they are (EastSun 20261002 09:3x: a wrapper on the F5 path stopped F5).
++ * -> { dir, pct, steps, total, since } or null.
++ */
++function cmakeProgress(buildDir) {
++  const p = path.join(buildDir, 'CMakeFiles', 'Progress');
++  let names, cnt;
++  try {
++    cnt = fs.statSync(path.join(p, 'count.txt'));
++    names = fs.readdirSync(p);
++  } catch (e) { return null; }
++  let total = 0;
++  try { total = parseInt(fs.readFileSync(path.join(p, 'count.txt'), 'utf8'), 10) || 0; } catch (e) { total = 0; }
++  const steps = names.filter(n => n !== 'count.txt').length;
++  return { dir: buildDir, pct: total ? Math.min(100, Math.floor(steps * 100 / total)) : 0, steps, total, since: cnt.mtimeMs };
++}
++
++/** The build folders right under `root` (build*) whose CMake progress started at or after `sinceMs`, newest first. */
++function runningCMake(root, sinceMs) {
++  let names = [];
++  try { names = fs.readdirSync(root); } catch (e) { return []; }
++  const out = [];
++  for (const n of names) {
++    if (!/^build/i.test(n)) continue;
++    const pr = cmakeProgress(path.join(root, n));
++    if (pr && pr.since >= (sinceMs || 0)) out.push(pr);
++  }
++  return out.sort((a, b) => b.since - a.since);
++}
++
++module.exports = { statusFile, parse, read, decide, message, cmakeProgress, runningCMake };
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index 93c25c4..1d53254 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -1247,6 +1247,37 @@ async function main() {
+   const alMk = al.ioAliases(alTmp);
+   fs.rmSync(alDir, { recursive: true, force: true });
+   ok(JSON.stringify(alMk) === '["C_A","C_B"]', 'aliasedit: the IO table\'s "#..." marker row is not offered as an Alias; each name once', JSON.stringify(alMk));
++  // AI(W906-HTDESIGNER) 20261002 (machine): F5's build status (tools\build_with_status.ps1 -> boot_build.js) -> the bar
++  {
++    const bw = require('../lib/buildwatch');
++    const now = 1000000;
++    const st = bw.parse('window.__HT_BUILD={"state":"building","pct":45,"file":"cmydef.cpp","n":120,"errors":0,"lastError":"","target":"wb_serve","dir":"build_x","elapsed":125,"t":' + (now - 1000) + '};');
++    const old = Object.assign({}, st, { t: now - 60000 });
++    ok(!!st && st.pct === 45 && bw.parse('garbage') === null && bw.parse('') === null &&
++      bw.decide(st, false, now) === 'open' && bw.decide(old, false, now) === 'none' && bw.decide(st, true, now) === 'update' &&
++      bw.decide(Object.assign({}, st, { state: 'done' }), true, now) === 'close-done' && bw.decide(Object.assign({}, st, { state: 'failed' }), true, now) === 'close-failed' &&
++      bw.decide(old, true, now) === 'close-stale' && bw.decide(null, true, now) === 'close-stale' && bw.decide(Object.assign({}, st, { state: 'done' }), false, now) === 'none' &&
++      bw.message(st) === '45%　cmydef.cpp　（120 個檔，2 分 05 秒）' && /錯誤 3/.test(bw.message(Object.assign({}, st, { errors: 3 }))) &&
++      /JSON[\\/]runtime[\\/]boot_build\.js$/.test(bw.statusFile('W')) && bw.statusFile(null) === null,
++      'buildwatch: F5\'s build status file -> a bar opens only for a fresh "building", updates, closes on done / failed / a writer gone silent; its text',
++      bw.message(st));
++    // CMake's own progress folder (what make's "[ 45%]" is counted from): 9 of 20 steps = 45%; a folder without it ignored
++    const cmRoot = fs.mkdtempSync(path.join(require('os').tmpdir(), 'htd-cmp-'));
++    const cmProg = path.join(cmRoot, 'build_a', 'CMakeFiles', 'Progress');
++    fs.mkdirSync(cmProg, { recursive: true });
++    fs.mkdirSync(path.join(cmRoot, 'build_b', 'CMakeFiles'), { recursive: true });
++    fs.mkdirSync(path.join(cmRoot, 'src', 'CMakeFiles', 'Progress'), { recursive: true });
++    fs.writeFileSync(path.join(cmRoot, 'src', 'CMakeFiles', 'Progress', 'count.txt'), '5\n');
++    fs.writeFileSync(path.join(cmProg, 'count.txt'), '20\n');
++    for (let i = 1; i <= 9; i++) fs.writeFileSync(path.join(cmProg, String(i)), '');
++    const cmOne = bw.cmakeProgress(path.join(cmRoot, 'build_a'));
++    const cmRun = bw.runningCMake(cmRoot, 0), cmLater = bw.runningCMake(cmRoot, Date.now() + 60000);
++    fs.rmSync(cmRoot, { recursive: true, force: true });
++    ok(!!cmOne && cmOne.pct === 45 && cmOne.steps === 9 && cmOne.total === 20 && cmRun.length === 1 && path.basename(cmRun[0].dir) === 'build_a' && cmLater.length === 0 &&
++      bw.cmakeProgress(path.join(cmRoot, 'nope')) === null,
++      'buildwatch: CMake\'s CMakeFiles\\Progress (count.txt + one file per step) -> 9 / 20 = 45%; only build* folders; an older one than the task ignored',
++      JSON.stringify({ one: cmOne && cmOne.pct, run: cmRun.length, later: cmLater.length }));
++  }
+   // AI(W906-HTDESIGNER) 20261002 (machine): agents' git worktrees in <tree>\.claude\worktrees\ (whole copies of the tree)
+   // are not part of the project -- not indexed, not searched, not in the Solution Explorer
+   {
+diff --git a/tools/vscode-htdesigner/test/smoke_extension.js b/tools/vscode-htdesigner/test/smoke_extension.js
+index b4c2f6a..cd3dd9c 100644
+--- a/tools/vscode-htdesigner/test/smoke_extension.js
++++ b/tools/vscode-htdesigner/test/smoke_extension.js
+@@ -1857,6 +1857,71 @@ async function main() {
+   }
+   ok(lnAll && lnCut > 0 && lnAll.byKind['quote-cut'] === lnCut && lnAll.withIssues >= lnCutPages && lnAll.info > 0 && lnAll.info === lnAll.byKind['dfm-gap'],
+     'lint all pages: ' + (lnAll ? lnAll.byKind['quote-cut'] + ' cut attributes on ' + lnAll.withIssues + ' pages; ' + lnAll.info + ' labels / panels differ from their .dfm (information)' : '-'));
++  // AI(W906-HTDESIGNER) 20261002 (machine; EastSun「編譯進度可以有個進度條嗎?」): F5's build status file -> a progress bar
++  // that follows make's %, closes when the build ends; nothing else is touched (a temporary file, not the real one)
++  {
++    const bwDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'htd-bw-'));
++    const bwF = path.join(bwDir, 'boot_build.js');
++    const bwW = (o) => fs.writeFileSync(bwF, 'window.__HT_BUILD=' + JSON.stringify(Object.assign({ target: 'wb_serve', dir: 'build_t', n: 3, errors: 0, lastError: '', elapsed: 4 }, o)) + ';');
++    const bwReps = [], bwTitles = [];
++    let bwEnded = false;
++    const bwWP = fake.window.withProgress;
++    fake.window.withProgress = (o, fn) => { bwTitles.push(o.title + (o.cancellable ? ' (cancellable)' : '')); return Promise.resolve(fn({ report: r => bwReps.push(r) })).then(v => { bwEnded = true; return v; }); };
++    const now = Date.now();
++    bwW({ state: 'building', pct: 10, file: 'a.cpp', t: now - 60000 });
++    const bwOld = api.hub.buildWatchTick(bwF, now);
++    bwW({ state: 'building', pct: 10, file: 'a.cpp', t: now });
++    const bwOpen = api.hub.buildWatchTick(bwF, now);
++    bwW({ state: 'building', pct: 55, file: 'b.cpp', t: now + 1000 });
++    const bwUpd = api.hub.buildWatchTick(bwF, now + 1000);
++    bwW({ state: 'done', pct: 100, file: 'link wb_serve.exe', t: now + 2000 });
++    const bwDone = api.hub.buildWatchTick(bwF, now + 2000);
++    await new Promise(r => setTimeout(r, 20));
++    const bwAfter = api.hub.buildWatchTick(bwF, now + 3000);
++    fake.window.withProgress = bwWP;
++    fs.rmSync(bwDir, { recursive: true, force: true });
++    const bwInc = bwReps.reduce((s, r) => s + (r.increment || 0), 0);
++    ok(bwOld === 'none' && bwOpen === 'open' && bwUpd === 'update' && bwDone === 'close-done' && bwAfter === 'none' && bwEnded &&
++      bwTitles.length === 1 && /建置 wb_serve（build_t）$/.test(bwTitles[0]) && bwInc === 55 && /55%　b\.cpp/.test((bwReps[1] || {}).message || '') && !api.hub.buildBar,
++      'F5 build progress bar: an old status file opens nothing; a fresh "building" opens one bar (no Cancel: F5\'s build is VS Code\'s task), it follows make\'s % (10 -> 55), closes when done',
++      JSON.stringify({ old: bwOld, open: bwOpen, upd: bwUpd, done: bwDone, after: bwAfter, titles: bwTitles, inc: bwInc }));
++    // the F5 path as it is (its task calls cmake directly): while the build task runs, CMake's progress folder; the
++    // folder gone = done; still there when the task ends = failed
++    const cmRoot = fs.mkdtempSync(path.join(require('os').tmpdir(), 'htd-bwc-'));
++    const cmProg = path.join(cmRoot, 'build_integ_ship_x86', 'CMakeFiles', 'Progress');
++    const cmNoFile = path.join(cmRoot, 'no_status.js');
++    const cmReps = [], cmErr0 = fake._calls.length;
++    fake.window.withProgress = (o, fn) => Promise.resolve(fn({ report: r => cmReps.push(r) }));
++    const cmT = Date.now();
++    api.hub.bwTask = { name: 'IOWEB(這台): build wb_serve（出貨組態, WinLibs 32-bit）', t: cmT, ended: false, code: null, dir: null };
++    const cmNone = api.hub.buildWatchTick(cmNoFile, cmT + 500, cmRoot);
++    fs.mkdirSync(cmProg, { recursive: true });
++    fs.writeFileSync(path.join(cmProg, 'count.txt'), '40\n');
++    for (let i = 1; i <= 10; i++) fs.writeFileSync(path.join(cmProg, String(i)), '');
++    const cmOpen = api.hub.buildWatchTick(cmNoFile, cmT + 1000, cmRoot);
++    for (let i = 11; i <= 30; i++) fs.writeFileSync(path.join(cmProg, String(i)), '');
++    const cmUpd = api.hub.buildWatchTick(cmNoFile, cmT + 2000, cmRoot);
++    fs.rmSync(path.join(cmRoot, 'build_integ_ship_x86', 'CMakeFiles', 'Progress'), { recursive: true, force: true });
++    const cmDone = api.hub.buildWatchTick(cmNoFile, cmT + 3000, cmRoot);
++    // a second build that fails: the task ends, the folder stays
++    api.hub.bwTask = { name: 'b2', t: cmT + 4000, ended: false, code: null, dir: null };
++    fs.mkdirSync(cmProg, { recursive: true });
++    fs.writeFileSync(path.join(cmProg, 'count.txt'), '40\n');
++    fs.writeFileSync(path.join(cmProg, '1'), '');
++    const cmOpen2 = api.hub.buildWatchTick(cmNoFile, cmT + 5000, cmRoot);
++    api.hub.bwTask.ended = true; api.hub.bwTask.code = 2;
++    const cmFail = api.hub.buildWatchTick(cmNoFile, cmT + 6000, cmRoot);
++    const cmErr = fake._calls.slice(cmErr0).find(c => c.name === 'error' && /建置沒有完成（build_integ_ship_x86）/.test(c.args[0]));
++    // (this one is expected: out of the record, so the final "no error messages shown" still means what it says)
++    if (cmErr) fake._calls.splice(fake._calls.indexOf(cmErr), 1);
++    fake.window.withProgress = bwWP;
++    fs.rmSync(cmRoot, { recursive: true, force: true });
++    const cmInc = cmReps.slice(0, 2).reduce((s, r) => s + (r.increment || 0), 0);
++    ok(cmNone === 'none' && cmOpen === 'open' && cmUpd === 'update' && cmDone === 'close-done' && cmInc === 75 && cmOpen2 === 'open' && cmFail === 'close-failed' && !!cmErr &&
++      !api.hub.bwTask && !api.hub.buildBar,
++      'F5 build progress bar from CMake\'s own progress folder (F5 unchanged): opens when the build starts, 25% -> 75%, the folder gone = done; a task ending with the folder left = "not finished", said',
++      JSON.stringify({ none: cmNone, open: cmOpen, upd: cmUpd, done: cmDone, inc: cmInc, open2: cmOpen2, fail: cmFail, err: !!cmErr }));
++  }
+   // the 頁面 list shows the counts: a page "⚠ 1", its group the sum
+   const lnGroups = pv.provider.getChildren();
+   const lnSetup = lnGroups.find(g => g.name === 'Setup'), lnAlert = lnGroups.find(g => g.name === 'Alert');
+-- 
+2.55.0.windows.5
+
