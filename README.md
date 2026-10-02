@@ -5,6 +5,7 @@
 
 ## ⚠⚠ 給機台端（20260929 18:1x 起，請先讀這一段）
 
+- ✅ **20261002 第 124 包（GitLab main `58cb0888`）——要重建 wb_serve；⚠ 會動機構，請在機台旁**：Teach 頁照 golden 接上 **In Z All Up／Out Z All Up**（每一顆 Z 回原點，按鈕顯示 Homeing…，按 STOP 會停）、**Out Z All Down**（出料臂每一顆 Z 用 10% 速度下到 Pick Out Shuttle 高度＋那顆吸嘴的 Z 教導值，軟體極限／安全門照舊擋）、**Set All In／Out Arm Z**（只把各吸嘴 Z 位置差填進畫面，不會動、要按存檔才寫檔）。上機驗收卡 E-06 在 TO_ES02。另：**HTDESIGNER（VS Code 外掛）以後只由 ES02 改，機台端請停手**（使用者 1002 裁決）。
 - ✅ **20261002 第 123 包（GitLab main `8c1afb11`）——要重建 wb_serve**：①**Teach 頁**：點了沒反應的鈕現在**變灰，點一下右下角會說原因與誰在做**（例：Pitch 一族排在 St02、Z All Up 下一包）；Pitch 頁 btnInXPitch1～4 等 13 顆選軸鈕照 golden 會選到那一軸；Clear Memo 可以按（Teach 頁要重新整理）；②St02：Main CommView 的 Set Z1／Z2 小鍵盤照 golden 依 INDEX_DRIVER_TYPE 給範圍（三菱 0～100，其他 0～300）；③St02：每天 08:00 的 O19 生產摘要報表照 golden 產生。
 - ✅ **20261002 第 122 包（GitLab main `52d95eec`）——要重建 wb_serve**：普查照 golden 補齊——①飛梭上關掉的站，格子照 golden 標成空料；②**Die Clean**：`USE_DIE_CLEAN=1` 且配方開了 Die Clean 的機台，以前入料臂會停在 case 10000，現在照 golden 先移到 Die Clean 位置再吹；③滿的 Fix 盤照 golden 會被換掉；④**除靜電（ESD／離子風扇）三處**：入料臂現在會照 golden **真的移到 Decay 教導點**（以前沒移就當成到了）——⚠ 有 ESD／離子風扇的機台，Decay 教導點要先教好，上機時請在機台旁。Teach 頁仍然沒有範圍，輸入教導值請人工確認。
 - ✅ **20261002 第 121 包（GitLab main `40ea4392`）——要重建 wb_serve**：①入料臂判斷「左邊吸嘴有沒有料」照 golden 只看左邊 2×2（只影響 10 欄熱板的機種，HT9050 的熱板是 2 欄、碰不到）；②網頁小鍵盤：小數照 golden 不再四捨五入、Setup.SetUp 的 pitch 可以輸入 3 位小數；③Contact CT 清數量時照 golden 一併更新 Control Bin（只有超豐的機台有作用）；St01 開機客戶名檢查（行為不變）。Teach 頁仍然沒有範圍——輸入教導值請人工確認。
@@ -191,6 +192,7 @@
 | 121 | `updates/40ea4392/` | `40ea4392` | `269cb13b`（`updates/40ea4392/_machine_ai/base_269cb13b/`） | ⚠ **要重建 wb_serve**（16 檔；gate b36a 兩組態＝基準）。`ainarm9045.cpp`、`cContactCT.cpp`、St01 `FileRW/HSys.cpp`＋`cObserver.cpp` 一處訊息；網頁 `qwerty.js`、4 支接線檔；新測試 2 支（`InArmLeftSideGolden`、node `QWERTY_P3`）。 |
 | 122 | `updates/52d95eec/` | `52d95eec` | `40ea4392`（`updates/52d95eec/_machine_ai/base_40ea4392/`） | ⚠ **要重建 wb_serve**（8 檔；gate b37a 兩組態＝基準）。`ainarm9045.cpp`、`ainarm2.cpp`、`aoutarm.cpp`、`csystem.cpp`；新測試 `I129_Batch37`。 |
 | 123 | `updates/8c1afb11/` | `8c1afb11` | `52d95eec`（`updates/8c1afb11/_machine_ai/base_52d95eec/`） | ⚠ **要重建 wb_serve**（16 檔；gate b38a 兩組態＝基準）。`cMyDB.cpp`、新 `O19SummaryReport.cpp`（St02 MR !98）；網頁 `HW.teach.html`、`Main.CommView.html`、新 `ht9045_kb_generic.js`；新測試 `KB_MachineSetting`、`MyDB_O19_Summary`。 |
+| 124 | `updates/58cb0888/` | `58cb0888` | `8c1afb11`（`updates/58cb0888/_machine_ai/base_8c1afb11/`） | ⚠ **要重建 wb_serve**（9 檔；gate b39a 兩組態＝基準）。`WebMotorAccess.cpp`／`.h`、`WebMotorAccessLive.cpp`；網頁 `HW.teach.html`、`motor-access.json`（＋file:// 墊片）；測試 `WebMotorAccess` 加 [B39]。 |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
