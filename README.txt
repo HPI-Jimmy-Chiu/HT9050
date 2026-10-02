@@ -633,4 +633,11 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   cpp 0128 3b2dfcf OBS-TEMPSERIES —— 修正 wb_serve 開機 10～20 秒後自己中止（筆電第 116 包的每分鐘溫度紀錄去畫 Observer 溫度圖，圖上一條曲線都沒建，取第 0 條就丟例外）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0129 09ba9e9 WORKLOG —— 工作紀錄第 77 項：Teach 打不開的原因與修正（EastSun 1002 按 F5 實測，Teach 可以進入）。
+  ⚠⚠ 給筆電（EastSun 1002：「通知main更新」）：**請盡快把 cpp 0128（OBS-TEMPSERIES）收進 GitLab main**。從第 116 包起，只要 Observer 視窗算開著，
+     每分鐘的溫度紀錄（MainTimer3.cpp RecordTemp）就會呼叫 TfObserver::UpdateTempChart，但 TempChart 在靜態初始化時沒有曲線（cObserver.cpp 建構子的
+     AddSeries 迴圈因 INIFileGeneral==0 跳過），Series[0] 丟 std::out_of_range、沒人接 → wb_serve 開機 10～20 秒就 terminate（WER 0x40000015），
+     網頁斷線、Teach 等頁被擋。修法只動 cObserver.cpp（第一次用到時照原版補建曲線與下拉選項、ItemIndex-1 超出範圍就不畫）與 forms/fObserver.h（SeriesCount()），
+     不移動行號。也請一起收 web 0082（TAGS-RECONNECT：background.html 的 tag 連線斷了每 2 秒重連）。cpp 0127（F5-EXTCON）只改 .vscode/launch.json，main 不用收。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
