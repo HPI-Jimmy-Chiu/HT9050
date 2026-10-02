@@ -618,4 +618,7 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   web 0079 fa21814 F5-PROGRESS —— boot_wait.html 每秒讀進度：編譯 NN%／目前檔案／完成／失敗＋第一個錯誤。
   cpp 0122 0b4c97d WORKLOG —— 工作紀錄第 74 項。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0123 637123a NONSTOP-SEM —— 測試：C++ 的 ShowErrorMessage 告警一律走停機頁（ctest NonStopRoute）。
+  web 0080 006f2b2 NONSTOP-SEM —— 不停機小窗不再把 C++ 的停機告警（WAR1676 權限不足、WAR1677、WAR1681）畫成「機台未停機，仍在運轉」。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
