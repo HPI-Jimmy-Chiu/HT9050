@@ -647,4 +647,23 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   web 0084 9253691 GRIDKB —— Motor Database 與 IO Table 表格的小鍵盤照原版：名稱欄只能英數字、GearRatio／Acc／Dec 小數、其他整數（以前每一格都開完整英文鍵盤，可以打出 0.0.071425 這種數字；M37 MColorZ 的 GearRatio 現在就是這個值，程式讀成 0）。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0130 7f05533 PKG-125-126 —— 機台整合筆電第 125～126 包（GitHub main 2efc840）。TEACH-KB 筆電暫不收，機台照舊保留自己的（CMakeLists 的 FileRW/TeachKb.cpp、HW.teach.html 那一行、tests/CMakeLists.txt 的 TeachKb 測試段）。
+                    tests/CMakeLists.txt：第 125 包的基底比機台舊，三方合併會把機台的測試段重複一次（109 行），所以改用筆電版＋機台的 TeachKb 段。設計外掛 13 檔沒碰（ES02 的；機台端已停手）。
+                    o2 編過；ctest 11/11；網頁 E021_ObserverPage 30/0、KbMachineSetting 138/138、Stream2e 27/0、NonStopRoute 8/8；PE 92/92。
+  web 0085 365189d PKG-125-126 (web) —— 同一包的 5 個網頁檔（Data.Observer 保養分頁、TrayForm、kb_generic、observer_wire；新檔 ht9045_observer_ev.js）。
+  cpp 0131 0c87d87 WORKLOG —— 工作紀錄第 78～79 項。
+  ⚠ 給筆電（第 125 包請機台回答的兩題，只讀，沒有改任何設定）：
+     ① W-07  D:\HT9045\system\Gerneral.ini：[Ground_Man] USE_GROUND_MAN=0、Ground_Man_COM_PORT=COM18（Ground_Man_ScanPoint=0、Ground_Man_AlarmOhm=0）；USE_OTD=0。
+     ② W-13  D:\HT9045\config\config.ini（09/28 11:28）：
+          [In/Out Arm] bE33InOutArmZOffsetSameOne=1、bE34InOutArmPitchZOffsetSameOne=0、bAutoCleanUseHotplate(E43)=0、bE43_1_AutoCleanCountSaveFolder=0、
+          bE46_LoaderUse2Offset=0、bE47_ShuttleUse4Offset=0；bE30InArmUseDifferentScale／bE30_1…_Hot／bE30_2…_Cold、bE75_InArmHeightFollow7000(E88)：檔裡沒有這幾個鍵（用程式預設）；
+          [Tray] P06_LoaderUseCarrierTray=0、bE74_InspectArmPosition：檔裡沒有；[Function] bA27EnableLightScale=0。
+          bUseTrayBlockMode、bHotPlateMove1CM：不是 config.ini 的鍵，由 CosFunction.cpp 依客戶碼設定（不在檔裡）。
+        teach.ini（機台實際用的是 D:\HT9045\_integ_ioweb\runcfg\system\teach.ini，10/02 14:06）：
+          In  X：Loader 21301、HP2 1892、InSht1 32441、AutoClean 11284（InPick 20903）；Y：Loader -55884、HP2 -6723、InSht1 -37718、AutoClean -85342（InPick -57992）；
+              Z：[MInArmZE] SetEditPickLoader=-1600、SetEditAutoClean=0，[InArm] AutoCleanPick=-1220；HP2／InSht1 的 Z 鍵檔裡沒有。
+          Out X：Auto1 -53595、Auto2 -35078、Auto3 -16538、Fix1 -35657、Fix2 -21371、Fix3 -7061、OutSht1 -48846（OutPick -53548）；
+              Y：Auto1 -55618、Auto2 -55633、Auto3 -55601、Fix1 -10234、Fix2 -10219、Fix3 -10233、OutSht1 -37595（OutPick -57881）；Z：只有 [MOutArmZE] SetEditPlaceFix2=0。
+          [InArmZSub] Picker Aa=50、[OutArmZSub] Picker Aa=30。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔（上面只是抄數值）。
 MD5 清單在 MANIFEST_MD5.tsv。
