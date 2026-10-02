@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>Tester Comm（GPIB／RS232・TTL／TCPIP）</title>
+<link rel="stylesheet" href="ht9xxx.css">
+<link rel="stylesheet" href="theme.css">
+<!--
+  AI(W906-GB-P7) 20260926：測試通訊畫面（計畫 docs/GPIB_20260926_INTEGRATION_PROPOSAL.md §2.5）。
+  一頁三分頁：GPIB（golden H9046_32GPIB Main.dfm）、RS232／TTL（golden RS232Standard MainForm.dfm，DIO＝TTL 板）、
+  TCPIP（Handler 內建 TfTesterTCP，P5 接上後才有資料）。32 站面板四種模式共用 HTWidgets.makeDutPanel（裁決 10）。
+
+  資料通道（wb_serve 側由 P3 接上；未接時本頁顯示「離線」並可切到 Demo）：
+    GET  /api/testercomm/home                 -> AI(W906-TC-SHARED) 20261001 (St02-E)：Test Result 分頁唯一的 JSON（各模式同一個形狀，TesterComm/UiHome.h）：
+                                                 {schema:"testercomm.home/1", testType, testTypeName, source, up, siteCount,
+                                                  binItems[], binEditable, enabledEditable,
+                                                  sites[32]{no, caption, text, state, color, enabled, bin, binText, ocr},
+                                                  log{tag, from, seq, lines[最後 ≤200 行，golden 原文]}}
+    POST /api/testercomm/home?cmd=site <0..31> on 0|1 ／ site <0..31> bin <index> -> 轉給目前介面的引擎
+                                                 （on 只在 enabledEditable、bin 只在 binEditable 時送；Demo 一律不送）
+    GET  /api/testercomm/<gpib|rs232|tcpip>   -> 引擎快照 JSON（TesterComm/UiChannel::Read，約 200 ms 更新一次）
+    POST /api/testercomm/<key>?cmd=<一行指令，URL 編碼> -> UiChannel::Post（引擎在 TesterComm 執行緒上套用並呼叫 golden 處理函式）
+  指令格式見 TesterComm/Gpib/GpibUiSnapshot.cpp 與 TesterComm/Rs232/Rs232UiSnapshot.cpp 檔頭。
+  裁決 1：IO 必須即時、畫面可以略有延遲 —— 本頁只讀快照、只送指令，不會拖慢通訊執行緒。
+  AI(W906-TC-SHARED) 20261001 (St02-E)：Steven 1001「我以為site01~32的面板是共用的!」「然後通訊Log的memo也是共用的」——
+    golden 一台機台只跑一個介面的程式，每支程式一個站台面板、一個通訊 memo：RS232Standard MainForm.dfm:3893 palSite＋:3865 MemoLog
+    （RS232／TTL1／TTL2 都寫進同一個，帶 [RS232]／[TTL1]／[TTL2] 標籤，MainForm.cpp:2231-2249）、H9046_32GPIB Main.dfm:198 palSite＋
+    :818 lstRecord（Main.cpp:701-724 WriteLog）、Handler 的 TfTesterTCP（TesterTCP.dfm:116 plSite01～32、:37 mmTCPIPCommLog）。
+    ⇒ Steven：「截圖的元件只有一份, 在首頁」「主要通訊log也是只有一份, 在首頁」「其他的設定值可以根據不同的測試模式進行分頁」
+    「C++端在 32site 與 通訊log部分, 也是整合一個JSON進行發送」「不需要根據不同的格式呼叫不同的JSON」——
+    「Test Result」分頁（Steven 20261001 14:5x：「應該是要新增一個分頁叫做 test result」「裡面放 gpsite00~31的面板, 跟 MemoLog」
+    「然後另外三頁gpib / rs232 / tcpip 裡面就不需要上面兩項」）放唯一的 Site01～32 面板（gpSite00～31）＋唯一的 MemoLog，顯示配方選的介面（Tester.Data [Mode] Tester Type＝TestIF_File.iTestType，
+    TCP/IP 快照的 testType：TTL 0／GPIB 1／RS232 2／TCP_IP 3，golden cTesterIF.cpp:572-578）。
+    AI(W906-TC-SHARED) 20261001 (St02-E)：St02-M 裁決——Log 行照 golden 原文顯示（不補標籤、不解析），標籤與來源 memo 只在
+    Log 標題列顯示一次（例：MemoLog　[GPIB] lstRecord）。分頁（Steven 20261001 15:0x：「debug模式顯示上面的tab沒問題」
+    「release模式下, 只留目前使用中的通訊格式就好」）：JSON 的 build＝"sim"（模擬／debug 組態）全部分頁都顯示；"ship"（出貨／release）
+    只留 Test Result＋目前使用中的那一頁（source：gpib／rs232（含 TTL）／tcpip）＋那支程式自己的 Version（TCP/IP 沒有版本紀錄，就不留）；站台格子不依 state 上色（golden 從不改 plSite->Color，一律 clSilver），
+    只用 color。GPIB／RS232・TTL／TCP/IP 分頁只放各模式的設定與專屬 memo（沒有站台格子、沒有主 Log）；兩支程式的版本紀錄
+    （GPIB Memo1、RS232 MemoVer）放 Version 分頁（golden 兩支都有 Version 分頁）。log 檔照舊各自寫（D:\GPIBLOG、D:\RS232Log、Test_TCPIP），只改畫面。
+    只在視窗開著時輪詢（HT_WIN，同 HW.IoSetView.html:445-456）。
+-->
+<style>
+  body.winpage{padding:0;margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden;background:#A6B8C2;}
+  .tcWrap{flex:1;display:flex;flex-direction:column;min-height:0;padding:6px;box-sizing:border-box;}
+  .tcPane{flex:1;min-height:0;overflow:auto;border:1px solid #888;background:#d4dde2;padding:6px;box-sizing:border-box;
+    border-radius:0 4px 4px 4px;display:none;}
+  .tcPane.act{display:block;}
+  .tcBar{display:flex;gap:10px;align-items:center;font:13px "MS Sans Serif",sans-serif;margin-bottom:6px;flex-wrap:wrap;}
+  .tcState{padding:2px 8px;border-radius:3px;color:#fff;background:#888;font-weight:bold;}
+  .tcState.up{background:#1a8a3a;} .tcState.down{background:#b03030;} .tcState.off{background:#777;}
+  .status{display:grid;grid-template-columns:repeat(8,1fr);gap:2px;margin-bottom:6px;}
+  .status div{background:#ece9d8;border:1px inset #aaa;font:12px monospace;padding:1px 4px;min-height:16px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .leds{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;}
+  .leds label{display:flex;align-items:center;gap:3px;font:12px sans-serif;}
+  .grp{border:1px solid #8a9aa8;border-radius:3px;padding:6px;margin-bottom:6px;background:#e4eaee;}
+  .grp>b{display:block;font:bold 12px sans-serif;margin-bottom:4px;color:#234;}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font:12px sans-serif;}
+  .row select,.row input[type=text]{font:12px sans-serif;}
+  .btn3d{background:#ece9d8;border:2px outset #cfcfcf;border-radius:3px;padding:2px 8px;cursor:pointer;font:12px sans-serif;}
+  .btn3d:active{border-style:inset;}
+  .sites{position:relative;width:1232px;height:440px;margin-bottom:6px;}
+  /* AI(W906-TC-SHARED) 20261001 (St02-E): the Home tab's one main comm log */
+  #pane-home .logs{grid-template-columns:1fr;}
+  #pane-home .logs pre{height:260px;}
+  .logs{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
+  .logs pre{height:180px;overflow:auto;margin:0;background:#CCD9DF;border:1px inset #8a9aa8;
+    font:11px Consolas,"Courier New",monospace;padding:3px;white-space:pre-wrap;}
+  .kv{font:12px sans-serif;color:#123;}
+  .notice{color:#a00;font:bold 12px sans-serif;}
+</style>
+</head>
+<body class="winpage">
+<div class="tcWrap">
+  <div class="tabs">
+    <div class="tab act" data-tab="home">Test Result</div>
+    <div class="tab" data-tab="gpib">GPIB</div>
+    <div class="tab" data-tab="rs232">RS232 / TTL（DIO）</div>
+    <div class="tab" data-tab="tcpip">TCP/IP</div>
+    <div class="tab" data-tab="version">Version</div>
+  </div>
+
+  <!-- ================= Test Result (AI(W906-TC-SHARED) 20261001 (St02-E)): the ONE Site01~32 grid + the ONE main comm log, for the active interface ================= -->
+  <div class="tcPane act" id="pane-home">
+    <div class="tcBar">
+      <span class="kv">測試介面</span> <span class="tcState off" id="s-iface">-</span>
+      <span class="kv">Tester Type（Tester.Data [Mode]）<span id="s-type">-</span></span>
+      <span class="kv">來源 <span id="s-source">-</span></span>
+      <label class="kv"><input type="checkbox" id="s-demo"> Demo（離線看版面）</label>
+      <select id="s-demoType"><option value="1">GPIB</option><option value="2">RS232</option><option value="0">TTL</option><option value="3">TCP/IP</option></select>
+    </div>
+    <div class="sites" id="s-sites"></div>
+    <div class="logs"><div><b class="kv">MemoLog<span id="s-logname"></span></b><pre id="s-log"></pre></div></div>
+  </div>
+
+  <!-- ================= GPIB ================= -->
+  <div class="tcPane" id="pane-gpib">
+    <div class="tcBar">
+      <span class="tcState off" id="g-state">離線</span>
+      <span class="kv">版本 <span id="g-version">-</span></span>
+      <span class="kv">機型 <span id="g-caption">-</span></span>
+      <span class="kv">驅動 <span id="g-driver">-</span></span>
+      <span class="kv" id="g-wnd"></span>
+      <span class="notice" id="g-notice"></span>
+      <label class="kv"><input type="checkbox" id="g-demo"> Demo（離線看版面）</label>
+    </div>
+    <div class="status" id="g-status"></div>
+    <div class="leds" id="g-leds"></div>
+    <div class="grp"><b>選項</b>
+      <div class="row" id="g-checks"></div>
+      <div class="row" style="margin-top:4px">
+        GPIB Timeout <select id="g-cbbGPIBTimo"></select>
+        Full Site Timeout <select id="g-cbbFullsiteTimeOut"></select>
+        Run Mode <select id="g-cbbRunMode"></select> <button class="btn3d" data-click="btnRunMode">Run Mode</button>
+        <button class="btn3d" data-click="btnManualStart">Manual Start</button>
+        <button class="btn3d" data-click="spbAutoRetest" id="g-spbAutoRetest">Auto Retest（SCK ART）</button>
+        <button class="btn3d" data-click="btnSaveLog">Save Log</button>
+        <button class="btn3d" data-click="btnDiagZip">Diag Zip</button>
+      </div>
+    </div>
+    <div class="grp" id="g-amd"><b>AMD／ATC 溫控（pnlAMDCmd）</b>
+      <div class="row">Controller <select id="g-rgController"><option value="0">0</option><option value="1">1</option></select>
+        Mode <select id="g-cbMode"></select> <button class="btn3d" data-click="btnSendTemp">Send Temp</button></div>
+    </div>
+    <div class="grp" id="g-hana"><b>HANA ART（pnlHanaART）</b>
+      <div class="row">To Handler <select id="g-cbCmdHANAART"></select> <button class="btn3d" data-click="btnHANA_SendCB">Send</button>
+        <input type="text" id="g-edCmdHANAART" size="16"> <button class="btn3d" data-click="btnSend_ED" data-edit="edCmdHANAART">Send Text</button></div>
+      <div class="row">To Tester <select id="g-cbCmdHANAARTtoTester"></select> <button class="btn3d" data-click="btnHANA_SendCBTotester">Send</button>
+        <input type="text" id="g-edCmdHANAARTtoTester" size="16"> <button class="btn3d" data-click="btnSend_EDToTester" data-edit="edCmdHANAARTtoTester">Send Text</button></div>
+    </div>
+    <!-- AI(W906-GB-P6) 20260926: golden Main.dfm tsRS232 (ts_STD_Setup + ts_STD_Log) -- the GPIB program's extra COM port
+         (golden RS232.cpp TfRS232Main).  Shown when golden shows the tab (customer code 0/860-863/943/985 or general.ini
+         [OpenTesterComm] RS232=1).  Ruling 2A + Q2 (a): its framing follows the recipe, so those four boxes are read-only. -->
+    <div class="grp" id="g-rs232" style="display:none"><b>RS232（tsRS232：GPIB 程式另外開的 COM port）</b>
+      <div class="row"><span class="tcState off" id="g-rsConn">-</span> <span class="kv" id="g-rsSrc"></span></div>
+      <div class="row" style="margin-top:4px">
+        Device <input type="text" id="g-cbDevice" list="g-cbDevice-l" size="7"><datalist id="g-cbDevice-l"></datalist>
+        Baud Rate <input type="text" id="g-cbBaudRate" list="g-cbBaudRate-l" size="7"><datalist id="g-cbBaudRate-l"></datalist>
+        Byte Size <select id="g-cbByteSize"></select>
+        Stop Bit <select id="g-cbStopBit"></select>
+        Parity <select id="g-cbParity"></select>
+        ReadIntervalTimeout <input type="text" id="g-edReadIntervalTimeout" size="4">
+        <button class="btn3d" id="g-btnUpdate">Update</button>
+      </div>
+      <div class="logs" style="grid-template-columns:1fr;margin-top:4px"><div><b class="kv">COM Log（MemoLog）</b><pre id="g-MemoLog" style="height:120px"></pre></div></div>
+    </div>
+    <div class="logs">
+      <div><b class="kv">mmoBINON</b><pre id="g-mmoBINON"></pre></div>
+      <div><b class="kv">memoAlarmCode</b><pre id="g-memoAlarmCode"></pre></div>
+    </div>
+  </div>
+
+  <!-- ================= RS232 / TTL ================= -->
+  <div class="tcPane" id="pane-rs232">
+    <div class="tcBar">
+      <span class="tcState off" id="r-state">離線</span>
+      <span class="kv">版本 <span id="r-version">-</span></span>
+      <span class="kv">模式 <span id="r-mode">-</span></span>
+      <span class="kv">TTL_CARD_TYPE <span id="r-ttl">-</span></span>
+      <span class="kv">連線 <span id="r-comm">-</span></span>
+      <span class="notice" id="r-notice"></span>
+      <label class="kv"><input type="checkbox" id="r-demo"> Demo（離線看版面）</label>
+    </div>
+    <div class="status" id="r-status"></div>
+    <div class="grp"><b>Standard（ts_STD）</b>
+      <div class="row">COM <select id="r-cbDevice"></select> Baud <select id="r-cbBaudRate"></select>
+        Byte <select id="r-cbByteSize"></select> Stop <select id="r-cbStopBit"></select> Parity <select id="r-cbParity"></select>
+        ReadInterval <input type="text" id="r-edReadIntervalTimeout" size="5">
+        <button class="btn3d" data-click="btnUpdate" data-edit="edReadIntervalTimeout">Update</button></div>
+      <div class="row"><label><input type="checkbox" data-check="cbShowLog"> Show Log</label>
+        <label><input type="checkbox" data-check="cbSaveLog"> Save Log</label>
+        <button class="btn3d" data-click="btClear">Clear</button>
+        <button class="btn3d" data-click="btManualTest">Manual Test</button>
+        <button class="btn3d" data-click="btnAllUse">All Use</button>
+        <button class="btn3d" data-click="btnAllNoUse">All No Use</button></div>
+    </div>
+    <div class="grp"><b>TTL 板（tsTTL，DIO）</b>
+      <div class="row">COM1 <select id="r-cbDevice_TTL"></select> COM2 <select id="r-cbDevice_TTL_2"></select>
+        Baud <select id="r-cbBaudRate_TTL"></select> Byte <select id="r-cbByteSize_TTL"></select>
+        Stop <select id="r-cbStopBit_TTL"></select> Parity <select id="r-cbParity_TTL"></select>
+        ReadInterval <input type="text" id="r-edReadIntervalTimeout_TTL" size="5">
+        <button class="btn3d" data-click="btnUpdate_TTL" data-edit="edReadIntervalTimeout_TTL">Update</button></div>
+      <div class="row"><label><input type="checkbox" data-check="cbShowLog_TTL"> Show Log</label>
+        <label><input type="checkbox" data-check="cbSaveLog_TTL"> Save Log</label>
+        <button class="btn3d" data-click="btClear_TTL">Clear</button>
+        <button class="btn3d" data-click="btnTTL_Manual">TTL Manual（WSOTS）</button>
+        <button class="btn3d" data-click="btnClearSot">Clear SOT（WCSOT）</button>
+        <button class="btn3d" data-click="Button10">Close TTL</button>
+        <button class="btn3d" data-click="Button11">Open TTL</button>
+        <button class="btn3d" data-click="btnEnableSOTCSOT">Enable SOT/CSOT</button></div>
+    </div>
+    <div class="logs">
+      <div><b class="kv">MemoBinData</b><pre id="r-MemoBinData"></pre></div>
+      <div><b class="kv">MemoBinData_TTL</b><pre id="r-MemoBinData_TTL"></pre></div>
+    </div>
+  </div>
+
+  <!-- ================= TCPIP ================= -->
+  <div class="tcPane" id="pane-tcpip">
+    <div class="tcBar"><span class="tcState off" id="t-state">離線</span>
+      <span class="kv">TCP/IP 在 Handler 內建（golden TfTesterTCP，P5 pump 在 Handler 執行緒上跑）</span>
+      <span class="kv">Tester <span id="t-addr">-</span></span>
+      <span class="kv">連線 <span id="t-conn">-</span></span>
+      <span class="notice" id="t-err"></span></div>
+    <div class="logs"><div><b class="kv">收到的資料（SocketTCPIPReceiveList）</b><pre id="t-receive"></pre></div>
+      <div><b class="kv">最後一筆</b><pre id="t-last"></pre></div></div>
+  </div>
+
+  <!-- ================= Version (AI(W906-TC-SHARED) 20261001 (St02-E)): both golden programs' Version tabs ================= -->
+  <div class="tcPane" id="pane-version">
+    <div class="logs">
+      <div><b class="kv">GPIB（H9046_32GPIB Version 分頁 Memo1，Main.dfm:1510-1525）</b><pre id="g-Memo1"></pre></div>
+      <div><b class="kv">RS232Standard（tsVersion MemoVer，MainForm.dfm:3398-3401）</b><pre id="r-MemoVer"></pre></div>
+    </div>
+  </div>
+</div>
+
+<script src="hwidgets.js"></script>
+<script>
+(function () {
+  'use strict';
+  var PERIOD = 300;                 // 快照輪詢（引擎 200 ms 發布一次）
+  var API = '/api/testercomm/';
+  var cur = 'home';
+  var demo = { gpib: false, rs232: false, tcpip: false };
+
+  // ---------- tabs ----------
+  Array.prototype.forEach.call(document.querySelectorAll('.tabs .tab'), function (t) {
+    t.addEventListener('click', function () {
+      Array.prototype.forEach.call(document.querySelectorAll('.tabs .tab'), function (x) { x.classList.remove('act'); });
+      Array.prototype.forEach.call(document.querySelectorAll('.tcPane'), function (x) { x.classList.remove('act'); });
+      t.classList.add('act');
+      cur = t.getAttribute('data-tab');
+      document.getElementById('pane-' + cur).classList.add('act');
+    });
+  });
+  // AI(W906-Q41) 20260927 (St02-E): Q41 TI-3 —— golden TFTestIF::btTesterTCPShowClick（906_0625_Steven cTesterIF.cpp:1516-1519；
+  //   912 :1535-1538）fTesterTCP->Show()：Setup.TesterIF 的「Tester TCP」鈕開本視窗（background.html id 'testercomm'），並把要看的分頁
+  //   寫進 localStorage 'ht9045.testercomm.tab'（ht9045_testerif_c_wire.js）。本頁剛載入就讀；已開著時靠 storage 事件。
+  //   單獨開頁時也接受 #gpib／#rs232／#tcpip。
+  var TAB_KEY = 'ht9045.testercomm.tab';
+  // AI(W906-TC-SHARED) 20261001 (St02-E): Steven 1001 15:0x「debug模式顯示上面的tab沒問題」「release模式下, 只留目前使用中的通訊格式就好」.
+  //   The home JSON's build decides (TesterComm/UiHome.h HomeBuild): "sim" (or no data yet, or the demo) -> every tab;
+  //   "ship" -> Test Result, the tab of the interface in use (source) and Version with that program's own memo only
+  //   (golden: one program per machine, each with its own tabs).  Updated whenever a live home JSON arrives.
+  var tabKeep = null, verKeys = ['gpib', 'rs232'], buildView = 'all';
+  function applyBuildTabs(h) {
+    var ship = !!(h && h.build === 'ship');
+    var src = ship ? String(h.source || 'none') : '';
+    var view = ship ? 'ship:' + src : 'all';
+    if (view === buildView) return;
+    buildView = view;
+    tabKeep = !ship ? null : { home: true, gpib: src === 'gpib', rs232: src === 'rs232', tcpip: src === 'tcpip',
+                               version: src === 'gpib' || src === 'rs232' };
+    Array.prototype.forEach.call(document.querySelectorAll('.tabs .tab'), function (t) {
+      t.style.display = !tabKeep || tabKeep[t.getAttribute('data-tab')] ? '' : 'none';
+    });
+    document.getElementById('g-Memo1').parentNode.style.display = !ship || src === 'gpib' ? '' : 'none';
+    document.getElementById('r-MemoVer').parentNode.style.display = !ship || src === 'rs232' ? '' : 'none';
+    verKeys = !ship ? ['gpib', 'rs232'] : (src === 'gpib' ? ['gpib'] : (src === 'rs232' ? ['rs232'] : []));
+    if (tabKeep && !tabKeep[cur]) selectTab('home');
+  }
+  function selectTab(k) {
+    if (tabKeep && !tabKeep[k]) k = 'home';   // release: a hidden tab opens Test Result instead
+    var t = document.querySelector('.tabs .tab[data-tab="' + k + '"]');
+    if (t && !t.classList.contains('act')) t.click();
+  }
+  function takeTabRequest() {
+    var k = null;
+    try { k = localStorage.getItem(TAB_KEY); if (k) localStorage.removeItem(TAB_KEY); } catch (e) { k = null; }
+    if (!k && /^#(home|gpib|rs232|tcpip|version)$/.test(location.hash)) k = location.hash.slice(1);
+    if (k === 'home' || k === 'gpib' || k === 'rs232' || k === 'tcpip' || k === 'version') selectTab(k);
+  }
+  window.addEventListener('storage', function (e) { if (e.key === TAB_KEY && e.newValue) takeTabRequest(); });
+  takeTabRequest();
+
+  // ---------- 32 site panels (shared maker, ruling 10) ----------
+  // AI(W906-TC-SHARED) 20261001 (St02-E): what the last home JSON allows (testercomm.home/1 binEditable / enabledEditable);
+  //   a cell's checkbox / dropdown only posts while its flag is true (TCP/IP: golden never reads cbSiteOn -> enabledEditable false)
+  var homeEdit = { on: false, bin: false };
+  function buildSites(hostId) {   // AI(W906-TC-SHARED) 20261001 (St02-E): the ONE grid; its commands go to home (C++ forwards them to the active engine)
+    var host = document.getElementById(hostId), arr = [];
+    for (var i = 0; i < 32; i++) {
+      var p = HTWidgets.makeDutPanel({ index: i, left: (i % 8) * 154, top: Math.floor(i / 8) * 110 });
+      host.appendChild(p);
+      arr.push(p);
+      (function (idx, panel) {
+        var on = panel.querySelector('input[type=checkbox]'), bin = panel.querySelector('select');
+        panel._on = on; panel._bin = bin; panel._cap = panel.querySelector('span');   // the group title (gpSite Caption)
+        panel._defCap = 'Site ' + (idx < 9 ? '0' : '') + (idx + 1);
+        on.addEventListener('change', function () { if (homeEdit.on) post('home', 'site ' + idx + ' on ' + (on.checked ? 1 : 0)); });
+        bin.addEventListener('change', function () { if (homeEdit.bin) post('home', 'site ' + idx + ' bin ' + bin.selectedIndex); });
+      })(i, p);
+    }
+    return arr;
+  }
+  var shared = buildSites('s-sites');
+
+  function bgr(c) {   // VCL TColor (BGR) -> CSS
+    if (c == null || c <= 0) return null;
+    var r = c & 0xff, g = (c >> 8) & 0xff, b = (c >> 16) & 0xff;
+    return 'rgb(' + r + ',' + g + ',' + b + ')';
+  }
+  var CL_SILVER = 12632256;   // golden plSite->Color (clSilver; golden never changes it)
+  // AI(W906-TC-SHARED) 20261001 (St02-E): the dropdown's items are this mode's golden list (binItems); rebuilt only when the list changes
+  function setBinItems(sel, items) {
+    var key = items.join('\u0001');
+    if (sel._items === key) return;
+    sel._items = key;
+    sel.innerHTML = '';
+    items.forEach(function (t) { var o = document.createElement('option'); o.value = t; o.textContent = t; sel.appendChild(o); });
+  }
+  // AI(W906-TC-SHARED) 20261001 (St02-E): one cell, testercomm.home/1 shape. text verbatim; colour only from `color` (St02-M ruling (a):
+  //   never from `state`); checkbox checked = (enabled === true), disabled when !enabledEditable or enabled === null;
+  //   dropdown selects index `bin` (-1 = none), disabled when !binEditable.
+  function applySite(p, s, items, h) {
+    p._cap.textContent = s.caption != null ? String(s.caption) : p._defCap;
+    p.setSite(s.text == null ? '' : String(s.text), bgr(s.color));
+    p._on.checked = s.enabled === true;
+    p._on.disabled = !h.enabledEditable || s.enabled == null;
+    var sel = p._bin;
+    if (items) setBinItems(sel, items);
+    if (document.activeElement !== sel) {
+      var bi = typeof s.bin === 'number' ? s.bin : -1;
+      if (!(bi >= 0 && bi < sel.options.length) && s.binText != null)   // no ItemIndex yet: golden shows cbBin->Text ("1", MyDutPanel.cpp:69)
+        for (var k = 0; k < sel.options.length; k++) if (sel.options[k].value === String(s.binText)) { bi = k; break; }
+      sel.selectedIndex = bi >= 0 && bi < sel.options.length ? bi : -1;
+    }
+    sel.disabled = !h.binEditable;
+    p.setOcr(s.ocr);
+  }
+  function clearSite(p) {
+    p._cap.textContent = p._defCap;
+    p.setSite('--', bgr(CL_SILVER));
+    p.setOcr('');
+    p._on.checked = false; p._on.disabled = true;
+    if (document.activeElement !== p._bin) p._bin.selectedIndex = -1;
+    p._bin.disabled = true;
+  }
+  function applySites(h) {   // the cells this JSON carries; the rest (sites shorter than 32) are cleared (ruling (e))
+    var list = h.sites || [], items = Array.isArray(h.binItems) ? h.binItems.map(String) : null;
+    var n = Math.min(32, list.length, typeof h.siteCount === 'number' ? h.siteCount : 32);
+    for (var i = 0; i < 32; i++) {
+      if (i < n && list[i]) applySite(shared[i], list[i], items, h);
+      else clearSite(shared[i]);
+    }
+  }
+  function clearSites() {
+    for (var i = 0; i < 32; i++) clearSite(shared[i]);
+  }
+
+  // ---------- helpers ----------
+  function $(id) { return document.getElementById(id); }
+  function setText(id, v) { var e = $(id); if (e) e.textContent = v == null ? '' : v; }
+  function fillCombo(sel, c, key, name) {
+    if (!sel || !c) return;
+    if (sel.options.length !== (c.items || []).length) {
+      sel.innerHTML = '';
+      (c.items || []).forEach(function (t, i) { var o = document.createElement('option'); o.value = i; o.textContent = t; sel.appendChild(o); });
+    }
+    if (document.activeElement !== sel) sel.selectedIndex = c.index;
+    sel.disabled = c.enabled === false;
+    if (!sel._wired) {
+      sel._wired = true;
+      sel.addEventListener('change', function () { post(key, 'combo ' + name + ' ' + sel.selectedIndex); });
+    }
+  }
+  // AI(W906-GB-P6) 20260926: a VCL csDropDown combo (golden reads its Text): free text plus the item list.
+  function fillText(inp, list, c) {
+    if (!inp || !c) return;
+    var items = c.items || [];
+    if (list && list.children.length !== items.length) {
+      list.innerHTML = '';
+      items.forEach(function (t) { var o = document.createElement('option'); o.value = t; list.appendChild(o); });
+    }
+    if (document.activeElement !== inp) inp.value = c.text == null ? '' : c.text;
+    inp.disabled = c.enabled === false;
+  }
+  // several commands whose order matters (separate fetches may reach the server in any order)
+  function postChain(key, cmds) {
+    if (demo[key]) { cmds.forEach(function (c) { console.log('[demo] ' + key + ': ' + c); }); return; }
+    cmds.reduce(function (p, c) {
+      return p.then(function () { return fetch(API + key + '?cmd=' + encodeURIComponent(c), { method: 'POST' }); });
+    }, Promise.resolve()).catch(function () {});
+  }
+  function tail(id, lines) {
+    var e = $(id); if (!e || !lines) return;
+    var atEnd = e.scrollTop + e.clientHeight >= e.scrollHeight - 4;
+    e.textContent = lines.join('\n');
+    if (atEnd) e.scrollTop = e.scrollHeight;
+  }
+  function statusRow(id, arr) {
+    var host = $(id);
+    if (host.children.length !== 8) { host.innerHTML = ''; for (var i = 0; i < 8; i++) host.appendChild(document.createElement('div')); }
+    for (var j = 0; j < 8; j++) { host.children[j].textContent = (arr && arr[j]) || ''; host.children[j].title = host.children[j].textContent; }
+  }
+  function stateBadge(id, snap, ok) {
+    var e = $(id);
+    e.className = 'tcState ' + (!ok ? 'off' : (snap && snap.up ? 'up' : 'down'));
+    e.textContent = !ok ? '離線（/api/testercomm 未接）' : (snap && snap.up ? '連線中' : ('已停止' + (snap && snap.closeReason ? '：' + snap.closeReason : '')));
+  }
+  function post(key, cmd) {
+    // AI(W906-TC-SHARED) 20261001 (St02-E): the Home demo (s-demo) never posts either
+    if (demo[key] || (key === 'home' && sharedDemo)) { console.log('[demo] ' + key + ': ' + cmd); return; }
+    // wb_serve's HTTP route hook sees no request body, so the command travels in the query (URL-encoded)
+    fetch(API + key + '?cmd=' + encodeURIComponent(cmd), { method: 'POST' }).catch(function () {});
+  }
+
+  // buttons / edits / checks declared in the markup
+  Array.prototype.forEach.call(document.querySelectorAll('[data-click]'), function (b) {
+    var key = b.closest('#pane-rs232') ? 'rs232' : 'gpib';
+    b.addEventListener('click', function () {
+      var ed = b.getAttribute('data-edit');
+      if (ed) { var box = $((key === 'gpib' ? 'g-' : 'r-') + ed); if (box) post(key, 'edit ' + ed + ' ' + box.value); }
+      post(key, 'click ' + b.getAttribute('data-click'));
+    });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('#pane-rs232 [data-check]'), function (c) {
+    c.addEventListener('change', function () { post('rs232', 'check ' + c.getAttribute('data-check') + ' ' + (c.checked ? 1 : 0)); });
+  });
+  $('g-rgController').addEventListener('change', function () { post('gpib', 'radio rgController ' + this.selectedIndex); });
+  $('g-btnUpdate').addEventListener('click', function () {   // AI(W906-GB-P6) 20260926: golden btnUpdateClick (SetFormToData)
+    var cmds = [];
+    ['cbDevice', 'cbBaudRate'].forEach(function (n) { var e = $('g-' + n); if (!e.disabled) cmds.push('edit ' + n + ' ' + e.value); });
+    cmds.push('edit edReadIntervalTimeout ' + $('g-edReadIntervalTimeout').value);
+    cmds.push('click btnUpdate');
+    postChain('gpib', cmds);
+  });
+
+  // ---------- GPIB ----------
+  var gChecks = {};
+  function renderGpib(s, ok) {
+    stateBadge('g-state', s, ok);
+    if (!s || !s.leds) return;
+    setText('g-version', s.version); setText('g-caption', s.caption); setText('g-driver', s.driver);
+    setText('g-wnd', s.labels && s.labels.lblGPIBWnd ? s.labels.lblGPIBWnd.caption : '');
+    setText('g-notice', s.notice);
+    statusRow('g-status', s.status);
+    var lh = $('g-leds');
+    if (lh.children.length !== s.leds.length) {
+      lh.innerHTML = '';
+      s.leds.forEach(function (l, i) {
+        var lab = document.createElement('label'), led = HTWidgets.makeALed({ name: 'ALed' + (i + 1) });
+        lab.appendChild(led); lab.appendChild(document.createTextNode(l.label)); lab._led = led; lh.appendChild(lab);
+      });
+    }
+    s.leds.forEach(function (l, i) { lh.children[i]._led.setValue(l.on); lh.children[i].lastChild.textContent = l.label; });
+    var ch = $('g-checks');
+    Object.keys(s.checks || {}).forEach(function (n) {
+      var c = s.checks[n]; if (!c) return;
+      if (!gChecks[n]) {
+        var lab = document.createElement('label'), box = document.createElement('input');
+        box.type = 'checkbox';
+        box.addEventListener('change', function () { post('gpib', 'check ' + n + ' ' + (box.checked ? 1 : 0)); });
+        lab.appendChild(box); lab.appendChild(document.createTextNode(' ' + (c.caption || n)));
+        ch.appendChild(lab); gChecks[n] = { lab: lab, box: box };
+      }
+      gChecks[n].box.checked = c.checked; gChecks[n].box.disabled = c.enabled === false;
+      gChecks[n].lab.style.display = c.visible === false ? 'none' : '';
+    });
+    ['cbbGPIBTimo', 'cbbFullsiteTimeOut', 'cbbRunMode', 'cbMode', 'cbCmdHANAART', 'cbCmdHANAARTtoTester'].forEach(function (n) {
+      fillCombo($('g-' + n), s.combos && s.combos[n], 'gpib', n);
+    });
+    if (document.activeElement !== $('g-rgController')) $('g-rgController').selectedIndex = Math.max(0, s.rgController);
+    $('g-spbAutoRetest').style.borderStyle = s.spbAutoRetest ? 'inset' : 'outset';
+    $('g-amd').style.display = s.panels && s.panels.pnlAMDCmd ? '' : 'none';
+    $('g-hana').style.display = s.panels && s.panels.pnlHanaART ? '' : 'none';
+    var ra = s.rs232Aux;   // AI(W906-GB-P6) 20260926: tsRS232
+    $('g-rs232').style.display = s.panels && s.panels.tsRS232 && ra ? '' : 'none';
+    if (ra) {
+      var rc = $('g-rsConn');
+      rc.className = 'tcState ' + (ra.connected ? 'up' : 'down');
+      rc.textContent = ra.connected ? 'RS232 Connect : OK' : 'RS232 未連線';
+      setText('g-rsSrc', ra.fromRecipe
+        ? 'Baud／Byte／Stop／Parity 跟配方走（Tester.Data [RS-232C]，裁決 2A＋Q2 (a)；在 TesterIF 配方頁改）；Device、ReadIntervalTimeout 照 Setup.ini'
+        : '全部照 D:\\RS232Standard\\System\\Setup.ini [COMPort]（golden）');
+      fillText($('g-cbDevice'), $('g-cbDevice-l'), ra.combos && ra.combos.cbDevice);
+      fillText($('g-cbBaudRate'), $('g-cbBaudRate-l'), ra.combos && ra.combos.cbBaudRate);
+      ['cbByteSize', 'cbStopBit', 'cbParity'].forEach(function (n) { fillCombo($('g-' + n), ra.combos && ra.combos[n], 'gpib', n); });
+      var ri = $('g-edReadIntervalTimeout');
+      if (document.activeElement !== ri) ri.value = ra.edReadIntervalTimeout || '';
+      tail('g-MemoLog', ra.MemoLog);
+    }
+    if (s.logs) { tail('g-mmoBINON', s.logs.mmoBINON); tail('g-memoAlarmCode', s.logs.memoAlarmCode); }
+  }
+
+  // ---------- RS232 / TTL ----------
+  var MODES = { 0: 'Standard', 1: 'SLT', 1000: 'TTL' };
+  function renderRs232(s, ok) {
+    stateBadge('r-state', s, ok);
+    if (!s || !s.status) return;
+    setText('r-version', s.version);
+    setText('r-mode', (MODES[s.mode] || s.mode) + '（iTesterMode=' + s.mode + '）');
+    setText('r-ttl', s.ttlCardType);
+    setText('r-comm', (s.comm || []).map(function (b, i) { return ['STD', 'TTL1', 'TTL2'][i] + (b ? '●' : '○'); }).join('  '));
+    setText('r-notice', s.notice);
+    statusRow('r-status', s.status);
+    ['cbBaudRate', 'cbByteSize', 'cbStopBit', 'cbParity', 'cbDevice', 'cbBaudRate_TTL', 'cbByteSize_TTL', 'cbStopBit_TTL',
+     'cbParity_TTL', 'cbDevice_TTL', 'cbDevice_TTL_2'].forEach(function (n) { fillCombo($('r-' + n), s.combos && s.combos[n], 'rs232', n); });
+    Object.keys(s.edits || {}).forEach(function (n) { var e = $('r-' + n); if (e && document.activeElement !== e) e.value = s.edits[n]; });
+    Array.prototype.forEach.call(document.querySelectorAll('#pane-rs232 [data-check]'), function (c) {
+      var v = s.checks && s.checks[c.getAttribute('data-check')];
+      if (v) { c.checked = v.checked; c.disabled = v.enabled === false; }
+    });
+    if (s.logs) { tail('r-MemoBinData', s.logs.MemoBinData); tail('r-MemoBinData_TTL', s.logs.MemoBinData_TTL); }
+  }
+
+  // ---------- TCP/IP ----------
+  function renderTcp(s, ok) {
+    var e = $('t-state');
+    e.className = 'tcState ' + (!ok ? 'off' : (s && s.up ? 'up' : 'down'));
+    e.textContent = !ok ? '離線（/api/testercomm 未接）' : (s && s.up ? 'TCP/IP 模式 ON-LINE' : '不是 TCP/IP 模式或 OFF-LINE');
+    if (!s || !s.sites) return;
+    setText('t-addr', s.address + ':' + s.port);
+    /* AI(W906-TC-SHARED) 20261001 (St02-E): the 32 sites moved to the shared panel */
+    setText('t-conn', s.connected ? 'ON-LINE' : (s.connecting ? '連線中' : 'OFF-LINE'));
+    setText('t-err', s.error ? s.errorMessage : '');
+    tail('t-receive', s.receive);
+    setText('t-last', s.lastReceive);
+  }
+
+  // ---------- AI(W906-TC-SHARED) 20261001 (St02-E): Test Result = the ONE JSON (GET /api/testercomm/home, TesterComm/UiHome.h) ----------
+  // The same shape for every interface (schema "testercomm.home/1", see the file header). The log lines are golden's text
+  // VERBATIM (St02-M ruling (b): no tags added, no parsing); the tag and the source memo show once, in the log header.
+  // The memo is incremental by log.seq (lines added so far): the page keeps its own buffer (HOME_LOG_CAP lines).
+  var HOME_LOG_CAP = 2000;
+  var homeLog = { lines: [], seq: 0, tag: null, from: null };
+  function homeLogHeader(tag, from) {
+    var parts = [];
+    if (tag) parts.push('[' + tag + ']');
+    if (from) parts.push(from);
+    setText('s-logname', parts.length ? '　' + parts.join(' ') : '');
+  }
+  function resetHomeLog() {   // no data / error: empty memo, header without a tag (ruling (j))
+    homeLog.lines = []; homeLog.seq = 0; homeLog.tag = null; homeLog.from = null;
+    homeLogHeader('', '');
+    tail('s-log', []);
+  }
+  function applyHomeLog(lg) {
+    var tag = lg && lg.tag ? String(lg.tag) : '', from = lg && lg.from ? String(lg.from) : '';
+    var seq = lg && typeof lg.seq === 'number' ? lg.seq : 0;
+    var lines = lg && Array.isArray(lg.lines) ? lg.lines : [];
+    var changed = false;
+    if (tag !== homeLog.tag || from !== homeLog.from || seq < homeLog.seq) {
+      homeLog.lines = lines.slice(); changed = true;            // another interface / memo, or the counter restarted
+    } else {
+      var k = seq - homeLog.seq;
+      if (k > lines.length) { homeLog.lines = lines.slice(); changed = true; }                 // missed more than the JSON carries
+      else if (k > 0) { Array.prototype.push.apply(homeLog.lines, lines.slice(lines.length - k)); changed = true; }
+    }
+    if (homeLog.lines.length > HOME_LOG_CAP) homeLog.lines.splice(0, homeLog.lines.length - HOME_LOG_CAP);
+    homeLog.seq = seq; homeLog.tag = tag; homeLog.from = from;
+    homeLogHeader(tag, from);
+    if (changed) tail('s-log', homeLog.lines);   // tail() keeps the bottom only when the user was already there
+  }
+  function renderHome(h, ok) {
+    var b = $('s-iface');
+    if (!ok || !h) {
+      b.className = 'tcState off';
+      b.textContent = '離線（/api/testercomm 未接）';
+      b.title = '';
+      setText('s-type', '-'); setText('s-source', '-');
+      homeEdit.on = false; homeEdit.bin = false;
+      clearSites();
+      resetHomeLog();
+      return;
+    }
+    b.className = 'tcState ' + (h.up ? 'up' : 'down');
+    b.textContent = (h.testTypeName || ('沒有對應的面板（Tester Type ' + h.testType + '）')) + '　' + (h.up ? '連線中' : '已停止');
+    b.title = 'schema ' + (h.schema || '?');
+    setText('s-type', typeof h.testType === 'number' ? String(h.testType) : '-');
+    setText('s-source', h.source || '-');
+    homeEdit.on = !!h.enabledEditable; homeEdit.bin = !!h.binEditable;
+    if (h.sites && h.sites.length) applySites(h); else clearSites();
+    applyHomeLog(h.log);
+  }
+
+  function renderVersion(g, r) {   // AI(W906-TC-SHARED) 20261001 (St02-E): golden's two Version tabs
+    tail('g-Memo1', g && g.logs ? g.logs.Memo1 : null);
+    tail('r-MemoVer', r && r.logs ? r.logs.MemoVer : null);
+  }
+
+  // ---------- demo snapshots (offline layout check only; never sent anywhere) ----------
+  // AI(W906-TC-SHARED) 20261001 (St02-E): Home demo objects in the testercomm.home/1 shape, one per Tester Type (s-demoType).
+  //   binItems = each golden program's cbBin list; log lines = golden line formats, verbatim (no added tags):
+  //   GPIB lstRecord "YYYY-MM-DD, hh:mm:ss.zzz, text"; RS232/TTL MemoLog 'YYYY-MM-DD, hh:mm:ss.zzz, [unit], "m1","m2"'
+  //   (RS232Standard TMyStringList::AddText); TCP mmTCPIPCommLog "YYYY-MM-DD,hh:mm:ss.zzz,TCPIP,text" (TfTesterTCP::AddTCPIPCommunicationLog).
+  var BIN_GPIB = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '1..6', '0..16', '0..255'];
+  var BIN_RS232 = ['1', '2', '3', '4', '5', '6', '1..5', '0..11'];
+  var BIN_TCP = ['1', '2', '3', '4', '5', '6', '1..5', '1..10', '1..16'];
+  var HOME_DEMO = {
+    0: { name: 'TTL', source: 'rs232', tag: 'TTL', from: 'MemoLog', items: BIN_RS232, enabledEditable: true,
+         lines: ['2026-10-01, 13:05:02.001, [Tester], "BINON 1","OK"', '2026-10-01, 13:05:02.020, [TTL1], "Double SOT error!",""'] },
+    1: { name: 'GPIB', source: 'gpib', tag: 'GPIB', from: 'lstRecord', items: BIN_GPIB, enabledEditable: true,
+         lines: ['2026-10-01, 13:05:01.123, LISTEN:FULLSITES?', '2026-10-01, 13:05:01.130, TALK:Fullsites 0000FFFF'] },
+    2: { name: 'RS232', source: 'rs232', tag: 'RS232', from: 'MemoLog', items: BIN_RS232, enabledEditable: true,
+         lines: ['2026-10-01, 13:05:02.001, [Tester], "BINON 1","OK"', '2026-10-01, 13:05:02.010, [T->H], "[STX]CF[ETX]",""'] },
+    3: { name: 'TCP/IP', source: 'tcpip', tag: 'TCPIP', from: 'mmTCPIPCommLog', items: BIN_TCP, enabledEditable: false,
+         lines: ['2026-10-01,13:05:02.900,TCPIP,Connect to tester OK', '2026-10-01,13:05:03.000,TCPIP,Send, TEST 1;'] }
+  };
+  function demoHome(tt) {
+    var f = HOME_DEMO[tt], sites = [];
+    for (var i = 0; i < 32; i++) {
+      var nn = (i < 9 ? '0' : '') + (i + 1), bin = i % 11 === 10 ? -1 : i % f.items.length;
+      var en = f.enabledEditable ? i < 16 : null;   // TCP/IP: golden never reads cbSiteOn
+      var st = en === false ? 'off' : (i % 4 === 0 ? 'bin' : (i % 4 === 1 ? 'testing' : 'idle'));
+      var bt = bin < 0 ? '' : f.items[bin];
+      sites.push({ no: i + 1, caption: 'Site ' + nn, text: st === 'bin' ? bt : (st === 'testing' ? 'T' : nn), state: st,
+                   color: CL_SILVER, enabled: en, bin: bin, binText: bt, ocr: i % 7 === 0 ? 'DEMO2D' + nn : '' });
+    }
+    return { schema: 'testercomm.home/1', testType: tt, testTypeName: f.name, source: f.source, up: true, siteCount: 32,
+             binItems: f.items, binEditable: true, enabledEditable: f.enabledEditable, sites: sites,
+             log: { tag: f.tag, from: f.from, seq: f.lines.length, lines: f.lines } };
+  }
+  var DEMO = {
+    gpib: { up: true, driver: 'sim', version: 'V12.13.905.0', caption: '9045GPIB', closeReason: '', notice: '',
+      leds: 'ERR TIMO END SRQI RQS CMPL LOK REM CIC ATN TACS LACS DTAS'.split(' ').map(function (n, i) { return { label: n, on: i === 5 || i === 11 }; }),
+      status: ['GPIB0 ADDR 5', 'T1s', 'Task 0001', '', '', '', '', ''],
+      labels: { lblGPIBWnd: { caption: 'Handler : 1 ; GPIB : 2' } },
+      checks: { chkUpperCase: { checked: true, visible: true, caption: 'Upper Case' }, chkStrLengthCheck: { checked: true, visible: true, caption: 'String Length' },
+        cbBinonEcho: { checked: false, visible: true, caption: 'BINON Echo' }, cbFullSiteTimeOut: { checked: false, visible: true, caption: 'Full Site TimeOut' },
+        cbGPIBWriteWithout_r_n: { checked: false, visible: true, caption: 'Write without \\r\\n' } },
+      combos: { cbbGPIBTimo: { index: 3, items: ['T30ms', 'T100ms', 'T300ms', 'T1s', 'T3s'] }, cbbRunMode: { index: -1, items: ['TRAYFEED', 'RETEST'] } },
+      rgController: 0, spbAutoRetest: false, panels: { pnlAMDCmd: false, pnlHanaART: false, tsRS232: true },
+      rs232Aux: { connected: true, fromRecipe: true, edReadIntervalTimeout: '70', MemoLog: ['RS232 ==> Connect : OK'],
+        combos: { cbDevice: { index: -1, text: 'COM3', items: ['COM1', 'COM2', 'COM3', 'COM4'] },
+          cbBaudRate: { index: -1, text: '19200', enabled: false, items: ['4800', '7200', '9600', '14400', '19200'] },
+          cbByteSize: { index: 2, enabled: false, items: ['5', '6', '7', '8'] }, cbStopBit: { index: 0, enabled: false, items: ['1', '1.5', '2'] },
+          cbParity: { index: 2, enabled: false, items: ['None', 'Odd', 'Even', 'Mark', 'Space'] } } },
+      // Memo1 = golden's Version notes only (Main.cpp Memo1->Lines->Add("2026.09.26") ...); lstRecord comm lines live on Home
+      logs: { Memo1: ['2026.09.26', '* Add Handler Type : HT-9050.'],
+        mmoBINON: ['Byte=42 str=BINON:00000000,00000000,00000000,00001111;'], memoAlarmCode: [] } },
+    rs232: { up: true, version: 'V12.13.902.0', mode: 0, ttlCardType: 0, comm: [true, false, false], closeReason: '', notice: '',
+      status: ['COM3 9600,7,E,1', '', '', '', '', '', '', ''], checks: { cbShowLog: { checked: true }, cbSaveLog: { checked: true } },
+      combos: { cbDevice: { index: 2, items: ['COM1', 'COM2', 'COM3', 'COM4'] }, cbBaudRate: { index: 2, items: ['4800', '7200', '9600', '14400', '19200'] } },
+      edits: { edReadIntervalTimeout: '70' },
+      logs: { MemoBinData: [], MemoBinData_TTL: [], MemoVer: ['Rev12.13.902.0 2026.04.10'] } },
+    tcpip: { up: true, testType: 3, address: '172.16.8.150', port: 6000, connected: true, connecting: false, error: false, errorMessage: '',
+      sites: [], receive: ['PASS,1'], lastReceive: 'PASS,1' }   // sites: renderTcp's guard only (the cells live on Home)
+  };
+  $('g-demo').addEventListener('change', function () { demo.gpib = this.checked; });
+  $('r-demo').addEventListener('change', function () { demo.rs232 = this.checked; });
+  var sharedDemo = false;
+  // Home / Version offline layout; the Home log buffer restarts so demo lines never mix with live ones (St02-E 20261001)
+  $('s-demo').addEventListener('change', function () { sharedDemo = this.checked; resetHomeLog(); });
+
+  // ---------- poll ----------
+  var render = { gpib: renderGpib, rs232: renderRs232, tcpip: renderTcp };
+  var inflight = false;
+  // AI(W906-TC-SHARED) 20261001 (St02-E): poll only while the window is open (HT_WIN, same as HW.IoSetView.html:445-456): a minimised window counts as
+  //   open; a page that never got HT_WIN (opened on its own) keeps polling; the moment it opens, one poll at once.
+  var winHosted = false, winShown = false;
+  function pollAllowed() { return !document.hidden && (!winHosted || winShown); }
+  window.addEventListener('message', function (ev) {
+    var m = ev && ev.data;
+    if (!m || m.type !== 'HT_WIN' || ev.source !== window.parent || window.parent === window) return;
+    var was = winShown;
+    winHosted = true; winShown = !!m.open;
+    if (winShown && !was) poll();
+  });
+  function getJson(key) {
+    return fetch(API + key, { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); });
+  }
+  var TYPE_OF_TAB = { gpib: 1, rs232: 2, tcpip: 3 };
+  function poll() {
+    if (!pollAllowed()) return;
+    if (sharedDemo || demo[cur]) {   // offline layout only
+      if (cur === 'home') renderHome(demoHome(Number($('s-demoType').value)), true);
+      else if (cur === 'version') renderVersion(DEMO.gpib, DEMO.rs232);
+      else render[cur](DEMO[cur], true);
+      return;
+    }
+    if (inflight) return;
+    inflight = true;
+    // only what the open tab shows: Test Result -> the ONE home JSON; a mode tab -> its engine; Version -> the two programs
+    var need = cur === 'home' ? ['home'] : (cur === 'version' ? verKeys : [cur]);
+    Promise.all(need.map(function (k) {
+      return getJson(k).then(function (s) { return [k, s]; }, function () { return [k, null]; });
+    })).then(function (res) {
+      var snaps = {};
+      res.forEach(function (r) { snaps[r[0]] = r[1]; });
+      if (cur === 'home') { renderHome(snaps.home, snaps.home != null); if (snaps.home) applyBuildTabs(snaps.home); }
+      else if (cur === 'version') renderVersion(snaps.gpib, snaps.rs232);
+      else render[cur](snaps[cur], snaps[cur] != null);
+    }).catch(function () {}).then(function () { inflight = false; });
+  }
+  setInterval(poll, PERIOD);
+  poll();
+})();
+</script>
+</body>
+</html>
