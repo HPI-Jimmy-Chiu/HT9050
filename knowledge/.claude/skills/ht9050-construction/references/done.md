@@ -1,0 +1,118 @@
+# HT9050 施工完成紀錄
+
+> 權威完成台帳。只記錄已合入目標 HEAD 且具可追溯證據的工作；最後盤點：2026-09-26。
+
+## 維護規則
+
+- 項目必須由 `todo.md` 搬入，不得在兩檔同時存在；保留原 ID 與主分類。
+- `IMPLEMENTED`＝程式／文件已在目標 HEAD，但尚未取得完整環境實測；`VERIFIED`＝指定環境與範圍的實測通過。
+- `VERIFIED` 必填日期、commit、環境／模式、測試輸出；歷史證據要明寫「歷史」，不得冒充目前 HEAD 的新回歸。
+- 旁支、其他 worktree、未合入 commit 與口頭宣告不能列入本檔。
+- 若後續回歸失敗或需求擴大，保留本列並以新 ID 在 `todo.md` 建立修正工作，互相引用。
+
+## A — 需求與產品
+
+尚無可列完成項。
+
+## B — 機構與料流
+
+尚無可列完成項。
+
+## C — 電控與硬體
+
+| ID | 完成項目 | 最終狀態 | 日期 | commit／檔案 | 驗證證據 | 環境／限制 |
+|---|---|---|---|---|---|---|
+| C-101 | 機台端（EastSun）修改合進 main：MotorTest MT-E1～E3c、IO 頁 IOWEB、1203 IO route（TEMP-DOORS 不含） | `IMPLEMENTED` | 2026-09-26 | `20494aea` | 筆電兩組態 gate（出貨＋模擬）；機台上的行為是 EastSun 驗過的 | Jimmy（筆電）；5 個 HT9050 IO 測試等機台送現場 IO 表（INBOX 第 50 列） |
+
+## D — C++ 控制
+
+| ID | 完成項目 | 最終狀態 | 日期 | commit／檔案 | 驗證證據 | 環境／限制 |
+|---|---|---|---|---|---|---|
+| D-101 | 換配方依 golden 呼叫 `SetTestRunMode()` | `VERIFIED` | 2026-09-26 | `a97739ae` | 換配方來回 e2e，14 結構 | 歷史筆電 `SOFT_SIMULTE` 證據；不代表目前 HEAD 全回歸 |
+| D-102 | 開機讀回 BinCount、寫入 `[Version] Ver` 戳記與 Jam LoaderCount | `IMPLEMENTED` | 2026-09-26 | `4dee7107`；相關 `212c8e1d`、`c55e2954` | 目標程式與觸發點已落地 | 尚待目前 HEAD build／e2e |
+| D-103 | 開機／換配方接入 LaserSensor、TrayMapping flag、FixAICCD、AOI 等讀檔呼叫 | `IMPLEMENTED` | 2026-09-26 | `c675594d`、`c79ee4e9`、`9ec84450`、`e6a8e0fc`、`4e8c93af` | 程式與 reload hook 已落地 | 部分結構仍無頁面端點；閉環另見 `todo.md` G-002 |
+| D-104 | PE 模式、DUT on/off ATC7 通道、TC401 Heater 逐通道後端 | `IMPLEMENTED` | 2026-09-26 | `c913d5e5`、`a83d7f22` | 程式已落地 | DUT on/off 尚待 UI 呼叫端；不代表硬體已驗證 |
+| D-105 | Jam 匯出改背景執行緒；Security 名單可回傳且不送密碼 | `IMPLEMENTED` | 2026-09-26 | `d082c0be`、`a83d7f22` | 程式與安全資料邊界已落地 | 尚待目前 HEAD runtime 回歸 |
+| D-106 | cMyDB P0：CSV 版（`W906_CMYDB_SQLITE` 預設 0，sqlite 退場） | `IMPLEMENTED` | 2026-09-26 | `310eb411`、修正 `2528799c`、帳本 `51ef6e9c` | 筆電兩組態 gate 全綠；`cMyDB.cpp.obj` 的 `sqlite3_*` 未解析 0 個 | 已合入 main（TO_STEVEN §4，`0b506e82`）；St02 回報為 VERIFIED（建置／ctest），依本檔定義 ctest 屬自動測試故記 `IMPLEMENTED` |
+| D-107 | cMyDB P2：MDB Updater 轉檔（AlarmCode 靜態目錄＋出貨 `ship/Error/AlarmCodeList.txt`，2993 碼） | `IMPLEMENTED` | 2026-09-26 | `fb40dd31`、`de2c1b9d` | ctest `MyDB_CSV_AlarmCode` 兩組態通過 | 已合入 main；St02；同上，依本檔定義記 `IMPLEMENTED` |
+| D-108 | HAlarm：golden `TfNote::FormClose` 的 `Alarm->Clear()`（一次 drain 只跳一個警報框） | `IMPLEMENTED` | 2026-09-26 | `0c0dd4ba` | `test_halarm` [I] 跑真的 `ProcessAlarm`＋對照組 | Jimmy（筆電）；筆電回報為 VERIFIED，依本檔定義 ctest 屬自動測試故記 `IMPLEMENTED`；NB2 R66 §5 |
+| D-109 | J2 Jam 次數照 golden 在關警報框時累加（golden `TfNote::FormClose` note.cpp:2528-2529 → `CheckRecordJamType`） | `IMPLEMENTED` | 2026-09-26 | `0cc90186`（main） | 見 commit 本文（筆電） | Jimmy（筆電）；原 todo D-011 的 J2 |
+| D-110 | J3 UPH 表寫進真的 `fShowBinSelect`（ainarm9045.cpp SEAM k7-S1 退役） | `IMPLEMENTED` | 2026-09-26 | `58b01200`（main） | 見 commit 本文（筆電） | Jimmy（筆電）；原 todo D-011 的 J3；S114 UPH 分頁可接真值 |
+| D-111 | J4 one cycle 結束照 golden 存各 Site 計數 `Arm*.dat`（`W7C2_FCOUNTER_WRITECTINFO` → `fCounterClear->WriteCTInfo`） | `IMPLEMENTED` | 2026-09-26 | `bb6857e2`（main） | 見 commit 本文（筆電） | Jimmy（筆電）；原 todo D-011 的 J4 |
+| D-112 | J6 GATE H1-02 退役：Index 時間平均照 golden 累計（`fObserver->RecordIndexTime`） | `IMPLEMENTED` | 2026-09-26 | `d8e9d553`（main） | 見 commit 本文（筆電） | Jimmy（筆電）；原 todo D-011 的 J6；S116 Observer Test Information 可接真值 |
+| D-113 | J12 測試中的秒數照 golden 每秒加一（golden `TfMain::Timer2Timer` main.cpp:21157-21205 → `forms/fMain_TestSeconds.cpp`） | `IMPLEMENTED` | 2026-09-26 | `57027ca3`（main） | 見 commit 本文（筆電） | Jimmy（筆電）；原 todo D-011 的 J12 |
+| D-114 | cMyDB P1：golden log 物件（暫建 4／27：EventLogTxt、TimeData、ProdRecord、JamAlarm）＋SaveEventLog＋CSV gate＋ctest `MyDB_CSV_EventLog` | `IMPLEMENTED` | 2026-09-26 | `80bcd1fb`、`5368493b`；合入 main | ctest `MyDB_CSV_EventLog`（筆電 gate） | St02；建 4 個還是 27 個待 Steven（★ W7） |
+| D-002 | 補 `TestIF_File` A 路 `ReadTestIFFile()` GATE F-5 | `RETIRED` | 2026-09-26 | `f89be4ce`（A 形狀 `FileRW/TestIF_File.cpp`、`kBridge_TFTestIF`、ctest `FormBridgeTesterIF` 退役；設定移到 `tools/formbridge/_retired/`） | Steven 裁決「應該可以退役了」（經 github-02）；C 路 `FileRW/TestIF_File_TesterIF.*` 已翻 golden `ReadTestIFFile`（cTesterIF.cpp:563）並接開機／換配方（`8af13c07`，wb_serve.cpp:3231）；頁面經 wire_engine GOLDEN_BRIDGE 走 C 路 | A／C 路 ownership 已定：C 路唯一接管。C 路本身的 build／真檔閉環不在本列，隨各頁驗證債 |
+
+## E — HTML HMI
+
+| ID | 完成項目 | 最終狀態 | 日期 | commit／檔案 | 驗證證據 | 環境／限制 |
+|---|---|---|---|---|---|---|
+| E-101 | S49／RULINGS_20260926 第 9 條：阻塞框等待中塔燈／蜂鳴器／面板鍵燈照 golden、30 秒沒網頁自動開 Edge、是否框 Alarm Reset 消音、等待中 Poll 1203 監看器 | `IMPLEMENTED` | 2026-09-26 | `66c2480e` | ModalWake 純邏輯 ctest（`test_modal_wake`） | Jimmy（筆電）；框的狀態與燈號只能上機看；原 todo E-004 的 S49 那一半 |
+| E-102 | ELA P1（St02）：`ElaCore`（golden Rev891.0 多日 GetEventLogText 統計、BCB6 CommaText、Jam ini、日期）、表格／summary／Production_Log／掃檔（UpdateSg*、SetTotalSummary、ListProductionLog、LoadFavorite）、日期照 Delphi 6 `DateTimeToTimeStamp` 修正；新 library `ht9045_ela`＋ctest `ELA_Core`（還沒連進 wb_serve） | `IMPLEMENTED` | 2026-09-27 | `0e947e45`（P1a）、`9b4b33dc`（P1b）、`58643309`（日期修正）、`7f25b4df`（合 main 衝突處理）；筆電合入 main `cb58ed9f` | ctest `ELA_Core` **65 過 0 敗**（模擬／出貨兩組態；筆電全量 gate 其餘失敗集合＝基準；github-02 獨立 worktree 代編同結果）；ELA 的檔只寫在 `%TEMP%\ht9045_ela_core`，`D:\HT9045_Log`／system／config／IniData 0 變動 | MinGW、未上機；沒連進 wb_serve（E-013）；#15～#19 暫照 golden A，待 ★ W 組裁決 |
+| E-103 | ELA P3（St02）：進程內分析器 `ElaHub`（`EventLogAnalysis/ElaService.cpp`，`W906_ElaStart`／`Stop`／`Post`／`Http`）＋wb_serve `/api/ela`（GET 快照、`?since` 輪詢減量、POST 查詢）、開機 Start／關站 Stop、`SendCommand_EventLog` 有 hook 就送進程內 Hub（golden 往外部 EventlogAnalyzer.exe 的 WM_COPYDATA 保留）；分析器預設路徑走 Handler 的 seam（原 todo E-013） | `IMPLEMENTED` | 2026-09-27 | `9e16fce9`（P3／P4 新檔）、`3e4ce1de`（接線）、`5ae43366`（ctest `ELA_Service`＋路徑 seam）、`f0097186`（輪詢減量）、`507784e9`（網頁外殼視窗）；筆電合入 main `8ed776ad` | 筆電兩組態全量 gate：失敗集合＝基準，`ELA_Hub` 15／15、`ELA_Service` 30／30、`ELA_Core` 65／65，sysguard system／config／IniData 0 變動；github-02 獨立 worktree 代編 `507784e9` 兩組態 0 錯、`ELA_Hub`／`ELA_Core`／`MyDB_CSV_EventLog` 3／3 | MinGW、未上機；SIM 開機實跑：筆電 20260927 05:2x 在 main `231fffa6` 做了（hub started 有印、GET `/api/ela` 三次 200、`HT9045_ELA=0`⇒503、ELA 開／關真檔逐檔相同＝沒多寫檔；**POST 查詢沒測**）；開機會照 golden 寫 `config.ini` 缺的鍵、`Gerneral.ini` Machine ID、`JAM0000.dat` 缺的碼（#17 暫定 A，`HT9045_ELA=0` 可關）；wb_serve `allowCmd` 預設 true，POST 的 403 分支只在 ctest 走得到（St02 後續文件更正 `0d4811dc`、合 main `30bce5b8`、wb_serve :2836／:4351 註解 `5aed449f`，已隨 `0faa75be` 合入 main）；排程放哪＝★ W21；要不要叫起舊 exe＝★ W31 |
+| E-104 | S119 Main.Record 分頁（St02；原派 St01）：`act.main.clearRecord`（golden `spbClearRecordClick` main.cpp:31109-31138）、`act.main.meShuttle2Dbl`（meShuttle2DblClick）、頁面接線、ChanAction 分派；CLEAR 裡的 `UpdateRecordScreen(true)` 先 gate（R1＝原 todo E-011，已做、見 done E-105） | `IMPLEMENTED` | 2026-09-27 | `2e58459b`（本體＋ctest `MainRecord_Clear`）、`1c9a99fc`（共用檔接線；同顆含 `.github/skills` extract_page_map.py 的 `\b` 還原）；筆電合入 main `0faa75be` | 筆電兩組態全量 gate：失敗集合＝基準（出貨 3、模擬 18），`MainRecord_Clear` 10／10，`SjsonChan`、`TesterComm_Handler` 照舊全過，sysguard 0 變動；github-02 獨立 worktree 代編 `0d4811dc` 兩組態 7／7 | MinGW、未上機、瀏覽器未看；R1 等 St01 S113 進 main |
+| E-105 | S119 R1：Main.Record 的 CLEAR 照 golden 呼叫 `UpdateRecordScreen(true)`（golden 912 `spbClearRecordClick` main.cpp:31137）——St02 的函式指標 `W906_UpdateRecordScreenBody`＋St01 開機時裝上（原 todo E-011） | `IMPLEMENTED` | 2026-09-30 | St02 `2e7e3e15`（筆電合入 main `2a75350d`）；St01 `519b931a`（合入 main `53a55b35`）；呼叫 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\JsonBridge\actions\MainRecordClear.cpp`:55、安裝 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\wb_serve.cpp`:4111、本體 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\MainRecord.cpp`:132 | St02 對照表（main `35f9df34`）與 St02-E2 審查查過呼叫、安裝（不在 `#if` 裡）、本體是真的翻譯；ST01-M 20260930 用 git 在 origin/main `48240128` 重查同三處；筆電合 `2a75350d` 時兩組態全量 gate＝基準（`MainRecord_Clear` 10→16） | St02＋St01；MinGW、未上機；**SIM 還沒按過 CLEAR 看 Record 分頁照 golden 立即重畫**；ctest 不裝指標＝照舊略過 |
+| E-106 | C++ 原生畫面剩下四頁：HW.MotorTest、HW.teach（先用表列）、HW.home、HW.ShuttleMove——第一版只顯示、按鈕停用、不連任何動作（Steven 20260929 11:31 派給 St02）（原 todo E-016） | `IMPLEMENTED` | 2026-09-30 | `449c5cd7`（合入 main `a0c0df88`）；MR !7 `c3161cb1`（合入 main `99e3c3fc`）；`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\ui\native\` 的 NativeHome／NativeMotorTest／NativeShuttleMove／NativeTeach（.cpp／.h）；開關 `option(W906_NATIVE_FORMS … OFF)`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\ui\native\NativeForms.cmake`:17） | ctest 登記 NativeForms.cmake:70／:80／:90／:101；`ctest -R Native` 8/8（238 項）與 OFF 證明（nm 0、0 個旗標），紀錄在 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\ui\native\README.md` §11.6（:367-372）；St02 對照表與 St02-E2 審查查過四頁都在 main；ST01-M 20260930 用 git 在 origin/main `48240128` 重查 | St02；**全量 ctest 沒跑**（README.md:370-376）；畫面沒人在瀏覽器或機台上實際看過；預設 OFF，不加 `-DW906_NATIVE_FORMS=ON` 的 wb_serve 不含原生碼；Q54「只有馬達移動相關的六頁」 |
+
+## F — 橋接契約
+
+| ID | 完成項目 | 最終狀態 | 日期 | commit／檔案 | 驗證證據 | 環境／限制 |
+|---|---|---|---|---|---|---|
+| F-101 | C 路 FileRW／JsonBridge 整合 30 個結構，目標後端可存取端點 24 個 | `IMPLEMENTED` | 2026-09-26 | `tools/editlist/_integrated.txt`、`FileRW/_editlist_sources.cmake` | 原始碼盤點：20 個 `PageRegistrar`＋4 個手寫端點 | 尚有 6 個結構無頁面端點；目前 HEAD 未跑完整 S-01／S-03 |
+| F-102 | C 路 ownership 阻擋直接 `system.file.put`／`recipe.doc.put` 真寫入 | `IMPLEMENTED` | 2026-09-26 | `tools/wb_serve.cpp` | 非預演寫入回 `409 owned by C route` 的程式證據 | Web API `dryRun` 是存檔預覽；不是模擬／真機開關 |
+| F-103 | 網頁權杖：閒置 30 秒自動還、伺服器收回後重拿重送（非運動指令）、HOME／Loop／Light Scale／按住中的 jog 不還；`motor.access` 被拒不自動重送 | `IMPLEMENTED` | 2026-09-26 | `410d27d9`、`20494aea`、`31d643e3` | `token_idle_selftest` 33 項＋對照組 | Jimmy（筆電）；筆電回報為 VERIFIED，依本檔定義記 `IMPLEMENTED`；NB2 R68／R69 B1／B2；B4（教導頁）待做 |
+| F-104 | 教導頁 HOME 的權杖（NB2 R69 B4）：`holdToken`＋HOME 做完照 golden 彈起 | `IMPLEMENTED` | 2026-09-26 | `378fbb77` | `token_idle_selftest.cjs` [8]／[9] | Jimmy（筆電）；補完 F-103 備註裡「B4（教導頁）待做」 |
+
+## G — 設定與 Recipe
+
+| ID | 完成項目 | 最終狀態 | 日期 | commit／檔案 | 驗證證據 | 環境／限制 |
+|---|---|---|---|---|---|---|
+| G-101 | Setup.BarCode、Status.TowerLight、HW.ShuttleMove、Status.Security Jam 分頁整合 | `VERIFIED` | 2026-09-26 | `0609a14f` | 歷史 34 項回歸 PASS | 筆電 `SOFT_SIMULTE`；不是目前 dirty HEAD 的新回歸 |
+| G-102 | `GroundMan.ini` 頁面讀寫 | `VERIFIED` | 2026-09-26 | `7a84e018` | `s12c_page_probe` 16 項 ALL PASS，含 SHA256 還原 | 歷史真檔 R/W/L 證據；commit 為目前 HEAD 祖先 |
+| G-103 | StartCondition 讀寫 | `VERIFIED` | 2026-09-26 | `e7e8f5f0` | 歷史真檔 R/W 證據 | commit 為目前 HEAD 祖先；仍需全頁新回歸 |
+| G-104 | AOA offset 38 鍵讀寫 | `IMPLEMENTED` | 2026-09-26 | `611edb7e` | 程式已落地 | golden 輸入框隱藏；可編輯性與零值覆寫風險尚待裁決 |
+| G-105 | Rotate、AutoAlignment、Magazine、FixAICCD、AutoCalSuckZ、AOI Data 等結構讀寫 | `IMPLEMENTED` | 2026-09-26 | `c675594d`、`c79ee4e9`、`58bd9425`、`9ec84450` | 讀寫函式／來源清冊已落地 | 其中多項無頁面存檔觸發；閉環另見 G-002 |
+| G-106 | CounterSel、Configuration、levelset.dat、lastdata.dat 相關存檔邏輯 | `IMPLEMENTED` | 2026-09-26 | `0b1f4204`、`5bbbb31f`、`8c5ea501`、`1ba00a68`、`c317ca30` | 程式與觸發點已落地 | 尚待目前 HEAD build 與真檔 R/W/L |
+
+## H — 外部整合
+
+| ID | 完成項目 | 最終狀態 | 日期 | commit／檔案 | 驗證證據 | 環境／限制 |
+|---|---|---|---|---|---|---|
+| H-101 | TesterComm P0 行程內骨架：mailbox、thread、hub、engine interface、CMake 與 `TesterComm_IPC` | `IMPLEMENTED` | 2026-09-26 | `299283bc`；`TesterComm/`、`tests/test_testercomm_ipc.cpp` | 歷史出貨／模擬雙組態 gate 通過 | 測試使用 `TestEngine`；不證明 GPIB／RS232／真 Tester。P1 `3e8534c9` 不在目標 HEAD |
+| H-001 | TesterComm P1：GPIB 引擎（H9046_32GPIB V12.13.905.0＋HT9050，namespace `gpibbridge`） | `IMPLEMENTED` | 2026-09-26 | `46e1e2c7`、`3e8534c9`、`7515834a`；合入 main `79060249` | 筆電兩組態 gate：ctest `TesterComm_GPIB` 兩組態通過（St01 本機預設組態也通過） | St02；未上真卡（見 H-005）；wb_serve 開機約 1 秒自動啟動引擎，`HT9045_TESTERCOMM=0` 可關 |
+| H-002 | TesterComm P2a：Handler 端 `THandlerTesterSide`（golden 912 main.cpp 的 `WM_GPIB_Program`、SendMSG_CMD、SendMSG_TestMode、RunTestProgram、CloseGpibProgram、ProcessHVisionConnect、WakeupGPIB） | `IMPLEMENTED` | 2026-09-26 | `8104678c`；合入 main `79060249` | 筆電兩組態 gate：ctest `TesterComm_Handler` 兩組態通過 | St02；26 組 gate 登記在 `HandlerGpibMsg.cpp` 檔頭；正常／timeout／格式錯誤／重送的 replay 矩陣併入 H-005 |
+| H-004 | TesterComm P4：RS232Standard／TTL 板引擎（DIO，Rev12.13.902.0，namespace `rs232std`）；含裁決 1＝A（出貨版關 DEBUG）、裁決 2＝B（`BARCODE?`／`GET2DID?` 改成會回答） | `IMPLEMENTED` | 2026-09-26 | `7c6bcd5a`、`7515834a`、`4bfd20db`、`11411556`；合入 main `79060249` | 筆電兩組態 gate：ctest `TesterComm_RS232` 兩組態通過 | St02；硬體 replay 未做（見 H-005、H-014） |
+| H-007 | TesterComm P2c：912 補充（`cmydef` 的 `bPauseAlarmDelayActive`／`hPauseAlarmDelay`／`bP65QAING`、`fLotInfo.cpp`、`MSG_CMD_RemoteStart` 204／`RemoteStop` 205、`TfiosetviewShim::fShow`；拿掉 gate G12／G16／G22）＋裁決 6＝B（G3，`SCKART_LOTRTCLEAR` 照 golden 寫 `lastdata.dat`） | `IMPLEMENTED` | 2026-09-26 | `6fff0960`（含之後補的 3 個 include）；合入 main `79060249` | 筆電兩組態 gate 綠、TesterComm 四個 ctest 兩組態通過 | St02；G15 維持關著、`ckernel.cpp` ② 延後（H-015）；St01 代編 `6fff0960` 時抓到的 `HandlerGpibMsg.cpp` 缺 include 已在 `4a69ebe3` 補上 |
+| H-006 | TesterComm P2b 接線：(a) `forms/fMain.cpp` 的 `SendMSG_CMD` 轉給 `fTesterSide`（`801f3a0d`）；(b) `atester.cpp` 四個 tester 區段解閘（使用者裁決 C-1 由 St02 直接移植；`TTL_CARD_TYPE<2` 直讀卡分支保持 gate） | `IMPLEMENTED` | 2026-09-26 | `801f3a0d`、`979eac6b`；合入 main `79060249`、`7f332938` | 筆電兩組態 gate：出貨 192 項＝基準 3＋5 Disabled、模擬 192 項＝基準 18＋5 Disabled，基準內子檢查 0 差異 | St02；`INSTALL_OCR≠0` 的機台開機／換配方／開 OCR 頁會送 4 個指令（golden 行為）；SIM 下 Tester 訊息來回尚未實跑 |
+| H-102 | TesterComm P2d：`TfMain::ChangeTesterConnect` 本體（切到 Off-Line、直接給模式、Off-Line → On-Line 的基本路徑、共用尾段含 golden :12698 `SaveTestMode`）＋Off-Line 一律走 GPIB 引擎 simulate＋W7 探針；同一顆另含 P2e 主畫面 Tester 鈕 | `IMPLEMENTED` | 2026-09-26 | `979eac6b`；合入 main `7f332938`（筆電補 `tests/test_w7_f1_wall2_probe.cpp` 的 `LastSet.h` include） | 筆電兩組態 gate 同 H-006 | St02；其餘分支 D1～D7：原寫「使用者裁決先不做（todo H-016～H-021）」已過時——D1～D4、D6、D7 已做並合入 main（done H-111～H-116，W53）；RTC 重開訊息依裁決不做 |
+| H-015 | GB P2c ② `ckernel.cpp`：Qorvo「Tester Pause」改成 912 的「超過 MaxTestTime 才響、Alarm Reset 後仍在 Pause 就重新計時」（golden 912 `ckernel.cpp:744-748`、`:2144-2148`／`:2158-2162`） | `IMPLEMENTED` | 2026-09-26 | `1bf262c5`；合入 main | 筆電合併時兩組態 gate；St01 代編 `1bf262c5` 修 :1133 後 TesterComm 4／4 | St02；使用者 20:3x「待辦裡面你可以做的就先做」；原 14:53 裁決延後已解除；★ W8 請 Steven 確認保留 |
+| H-023 | TesterComm P2f：Timer2 的 Handler → 橋接設定同步（`SendMessageToGpibProg`／`ChangeGpib`） | `IMPLEMENTED` | 2026-09-26 | `0ebd3ba6`；合入 main（筆電修 `HandlerBridgeCtl.cpp:1133`，`04c72d84`） | 筆電兩組態 gate；St01 代編 TesterComm 4／4 | St02；`FTestIF->fShow` 改 `W906_FormFShow` 另見 todo H-026 |
+| H-024 | `POST /api/testercomm` 400 ms 防重送（比照 S107，WS guard 蓋不到的 HTTP 寫入） | `IMPLEMENTED` | 2026-09-26 | `a5b2de62`；合入 main | 筆電兩組態 gate | St02 |
+| H-025 | GB 待辦：R06／R09／F2 解閘（F2＝`hanaART->DoRunHanaART`）、T3 TTL 板版本存放 | `IMPLEMENTED` | 2026-09-26 | `5fb02622`；合入 main | 筆電兩組態 gate | St02 |
+| H-103 | `SetTestTimeOutTimer` 照 golden 翻＋T16 打開（修 On-Line 立刻判成逾時） | `IMPLEMENTED` | 2026-09-26 | `a54633b4`；合入 main | ctest `TesterComm_TestTimeOutTimer`（筆電 gate） | St02 |
+| H-104 | `atester_32Site.cpp:337-338` 替身計時器換成真全域（32 站雙臂 On-Line 不再立刻逾時） | `IMPLEMENTED` | 2026-09-26 | `df1a4fca`；合入 main | 筆電 gate | St02；照 Jimmy :327-336 註解的方向只改兩行 |
+| H-105 | ESD G3（St02）：`ProcessHVisionConnect` 照 golden FindWindow `ESD_Monitor`，所有 `SendCommand_ESD`（含 St01 S121 的 `ESD_SYSTEM_CLOSE`）送得到已開著的 ESD 程式 | `IMPLEMENTED` | 2026-09-27 | `3ce47956`；筆電合入 main `8ed776ad` | 筆電兩組態全量 gate：失敗集合＝基準，`TesterComm_Handler` 30／30 | MinGW、未上機；只 FindWindow，不啟動 ESD 程式、不跑 IonBar 上電（G5＝★ W32）；St01 `88e5c489` 已把 S121 停機清單的 ESD 狀態改看當下的 `fMain->HESDWnd`；**wb_serve 有沒有在開機或定時呼叫 `ProcessHVisionConnect` 待 St02 確認**（沒呼叫的話 `HESDWnd` 仍是 NULL） |
+| H-106 | NUMCMP（筆電 NB2 R89，St02 部分）：`TesterComm/Rs232/Rs232Support.cpp:840` `uSocketClient::MatchClientSetting` 改成 `ClientSocket->Port!=atof(GetSocketPort().c_str())`＝BCB6 的 Variant 數值比較（golden uSocketServerClient.h:80），port 寫成 "05000"／"5000 " 不再每拍重連（原 todo H-027） | `IMPLEMENTED` | 2026-09-27 | `2e7e3e15`；筆電合入 main `2a75350d` | 筆電兩組態全量 gate＝基準（出貨 3、模擬 18），sysguard 0 變動；github-02 獨立 worktree 代編 `2e7e3e15`（模擬 8／8：TesterComm_* 6 支、MainRecord_Clear、SjsonChan） | MinGW、未上機；沒加 ctest（私有成員＋要真 socket，理由在帳本）；:700 `MatchServerPort` 照舊（NB2 R89「可不改」） |
+| H-107 | P2f：`FTestIF->fShow` 改用 `W906_FormFShow`（原 todo H-026） | `IMPLEMENTED` | 2026-09-27 | `484e26b5`；隨 St02 分支合入 main | 筆電合入 main `ed7df426`（20260927 14:07，合到 St02 `014e9094`），兩組態全量 gate 綠：ship 失敗＝基準 3 項（config_db／config_loaders／GA1_ReadGeneralIni）、sim＝既有 18 項，測試數 211→214；sysguard opmode 0 變動（TO_STEVEN 20260927 14:3x） | St02；MinGW、未上機 |
+| H-108 | ESD G5＝B（RULINGS_20260927 #24／★ W32）：HT IonBar 上電流程照 golden `ProcessHVisionConnect` 翻（ESD 程式開著時，計數 450→500 後感測器 on 就送 `ESD_HT_IONBAR_ControllerN_PowerOn`），拿掉 `WakeupESD()`（不啟動 ESD_Program.exe）（原 todo H-028） | `IMPLEMENTED` | 2026-09-27 | `20829c7a`；合入 main（`02954932`／`ed7df426`） | 筆電合入 main `ed7df426`（20260927 14:07，合到 St02 `014e9094`），兩組態全量 gate 綠：ship 失敗＝基準 3 項（config_db／config_loaders／GA1_ReadGeneralIni）、sim＝既有 18 項，測試數 211→214；sysguard opmode 0 變動（TO_STEVEN 20260927 14:3x）；ctest `TesterComm_Handler` 在全量 gate 內 | St02；MinGW、未上機；**會對 IonBar 控制器送上電指令**（ESD 程式開著時），上機要看的清單在 FROM_STEVEN §2 20260927 08:10 |
+| H-109 | W9＝A：GPIB／SECS 遠端溫度 offset 寫進配方（`uTemp_Set.cpp` 打開 SAFETY GATE S3、補 912 `:6142-6163` 寫完重載、`SECSGEM/uHGemHT9045.cpp` G34 打開）（原 todo H-029） | `IMPLEMENTED` | 2026-09-27 | `014e9094`；合入 main `ed7df426` | 筆電合入 main `ed7df426`（20260927 14:07，合到 St02 `014e9094`），兩組態全量 gate 綠：ship 失敗＝基準 3 項（config_db／config_loaders／GA1_ReadGeneralIni）、sim＝既有 18 項，測試數 211→214；sysguard opmode 0 變動（TO_STEVEN 20260927 14:3x）；新 ctest `TesterComm_W9RemoteTempOffset` 兩組態都過；另 ST01-M 代編 `014e9094` SIM／SHIP 13／13（log `D:\AI_TempFile\st02-014e9094-build.log`） | St02；MinGW、未上機；仍 GATE `SetATCOffset`；**上機會改機台配方** `D:\HT9045\IniData\Data\<配方>\Temperature.Data`，上機 10 點在 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\TESTERCOMM_PORT_LEDGER.md` 的「W9 = A」節 |
+| H-111 | ChangeTesterConnect D1：按 Tester 鈕切換連線前的權限檢查（golden V912 `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\main.cpp`:12589-12592；906_0625_Steven :12072-12074）（原 todo H-016） | `IMPLEMENTED` | 2026-09-30 | 本體＋ctest `33a7e519`、呼叫點 `c4700fd6`，經 MR !3 合入 main `c7a9a342`（St02 對照表寫的 `8ff2854c` 是當時分支頂的 skill 文件 commit，也在 main）；呼叫 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\forms\fMain.cpp`:1113；本體 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\TesterComm\Handler\HandlerTesterConnect.cpp`:49-54，安裝 :147；開機由 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\TesterComm\Handler\TesterCommWiring.cpp`:98 裝上 | St02 對照表（main `35f9df34`）與 St02-E2 審查：本體對 golden、安裝點、呼叫點都查過；ctest `TesterConnect_Rules`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tests\test_tester_connect_rules.cpp`）；ST01-M 20260930 用 git 在 origin/main `48240128` 重查呼叫與安裝行 | St02；Steven 20260928 W53＝A；MinGW、未上機；**TesterConnect_Rules 合進 main 後沒有執行紀錄**（`D:\HT9045\.claude\skills\ht9045-st02-workflow\references\current-state.md`:212 還列在「St01 要重跑」） |
+| H-112 | ChangeTesterConnect D2：MES1646 機台內有 IC 不能切換（golden V912 main.cpp:12593-12604；906_0625_Steven :12076-12087）（原 todo H-017） | `IMPLEMENTED` | 2026-09-30 | 同 H-111（`33a7e519`、`c4700fd6`，合入 main `c7a9a342`）；呼叫 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\forms\fMain.cpp`:1115；本體 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\TesterComm\Handler\HandlerTesterConnect.cpp`:59-77（保留 `#ifndef SOFT_SIMULTE`），安裝 :148 | 同 H-111；ctest `TesterConnect_Rules` | St02；Steven 20260928 W53＝A；**D2 只在出貨組態有作用**（`#ifndef SOFT_SIMULTE`）；MinGW、未上機；TesterConnect_Rules 合進 main 後沒有執行紀錄 |
+| H-113 | ChangeTesterConnect D3：I27 手動分類（Manual Sort）——I27 機台第一次按 Tester 鈕進手動分類、不切連線（golden V912 main.cpp:12610-12615；906_0625_Steven :12093-12097）（原 todo H-018） | `IMPLEMENTED` | 2026-09-30 | 同 H-111（`33a7e519`、`c4700fd6`，合入 main `c7a9a342`）；呼叫 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\forms\fMain.cpp`:1134；本體 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\TesterComm\Handler\HandlerTesterConnect.cpp`:82-91，安裝 :149 | 同 H-111；St02-E2 另查過 golden 讀 bRunManualSortMode 的地方在移植樹都是活的；ctest `TesterConnect_Rules` | St02；Steven 20260928 W55「請參照bcb修改」；MinGW、未上機；TesterConnect_Rules 合進 main 後沒有執行紀錄 |
+| H-114 | ChangeTesterConnect D4：切回連線時強制登出成 Operator＋`TemperatureEditDisable`（golden V912 main.cpp:12621-12648；906_0625_Steven :12104-12131）（原 todo H-019） | `IMPLEMENTED` | 2026-09-30 | 本體＋ctest `78e8bf51`（經 `08ee9c9c` 合進 St02 分支）、呼叫點 `c4700fd6`，經 MR !3 合入 main `c7a9a342`；呼叫 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\forms\fMain.cpp`:1148 → `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\WebLogin.cpp`:531-561（:560 TemperatureEditDisable），靜態初始化安裝 :565 | St02 對照表與 St02-E2 審查（含 TemperatureEditDisable 是真的本體、FormLock 同執行緒可重入不會自鎖）；ctest `WebLogin_ForceOperator` 跑過（`D:\HT9045\.claude\skills\ht9050-st01-evaluations\references\q45-web-password.md`:603）；ST01-M 20260930 用 git 在 origin/main `48240128` 重查 | St02；Steven 20260928 W49＝A（所有客戶都做）；MinGW、**沒上機看切一次連線後登入鈕回「Login」** |
+| H-115 | ChangeTesterConnect D6：ON_LINE → 2D_SORT（golden V912 main.cpp:12658-12670；906_0625_Steven :12144-12152）（原 todo H-020；原寫「使用者裁決先不做」已過時：W53 寫明 D3、D6、D7「照舊程式，不另外問」） | `IMPLEMENTED` | 2026-09-30 | 同 H-111（`33a7e519`、`c4700fd6`，合入 main `c7a9a342`）；呼叫 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\forms\fMain.cpp`:1191；本體 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\TesterComm\Handler\HandlerTesterConnect.cpp`:96-107，安裝 :150 | St02 對照表與 St02-E2 審查（本體對 golden）；ctest `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tests\test_tester_connect_rules.cpp`:182-208；W53 在 `D:\HT9045\.claude\skills\ht9050-construction\references\decisions-decided.md` | St02；MinGW、未上機；要 Test IF 開 bSortingBy2DIDList 才會走到；TesterConnect_Rules 合進 main 後沒有執行紀錄 |
+| H-116 | ChangeTesterConnect D7：ASM 機台的 On-Line 分支（golden V912 main.cpp:12727-12757；906_0625_Steven :12212-12237）（原 todo H-021；原寫「使用者裁決先不做」已過時，同 H-115） | `IMPLEMENTED` | 2026-09-30 | 同 H-111（`33a7e519`、`c4700fd6`，合入 main `c7a9a342`）；呼叫 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\forms\fMain.cpp`:1261；本體 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\TesterComm\Handler\HandlerTesterConnect.cpp`:112-142（多了 912 的 RecordProcess 一行），安裝 :151 | 同 H-115 | St02；MinGW、未上機；要 I21 ASM＋自動 site map 的旗標才會走到；TesterConnect_Rules 合進 main 後沒有執行紀錄 |
+
+## I — 安全與上機
+
+| ID | 完成項目 | 最終狀態 | 日期 | commit／檔案 | 驗證證據 | 環境／限制 |
+|---|---|---|---|---|---|---|
+| I-101 | 安全 PLC 閘 G12／G14／G23／G-PLC-A／G-PLC-B、`bSafePLCThread` 替身退役、W7a-I3、ckernel 心跳燈（SafePlcIO=0 行為不變） | `IMPLEMENTED` | 2026-09-26 | `4abcdf0b` | PlcGates ctest＋nm | Jimmy（筆電）；SafePlcIO=1 端到端還差輪詢與 Real socket；INBOX 第 41、54 列 |
+
+## J — 驗證與交付
+
+| ID | 完成項目 | 最終狀態 | 日期 | commit／檔案 | 驗證證據 | 環境／限制 |
+|---|---|---|---|---|---|---|
+| J-005 | 20 個散落各地的 skill 複製進 `D:\HT9045\.claude\skills`（ht9045-atc、-code-merge、-customer-code-manager、-general-ini、-motor-spatial-layout、-secs-sem、-state-record-analysis、-uph-model；gpib-93k-art、-command-list、-hana、-program-manual、-qrovo、-rs232-merge；rs232-standard-interface、rs232-ttl-communication；debug-knowledge-base、gpib-ht9045-sync、pre-release-check、make-ht9045-installer） | `IMPLEMENTED` | 2026-09-26 | `72bec5a0`；合入 main `79060249` | harness 看得到全部 20 個 | St02；只有文字檔 201 檔，23 個二進位檔留在原處；UTF-8 無 BOM；不含 ht9050-construction |
+| J-101 | pagewire 分母查核：`fields` 119 筆三元組在 64 份配方全部都在，不用重分類（night-loop skill 那一段） | `VERIFIED` | 2026-09-26 | night-loop skill（筆電） | 筆電對 64 份實際配方量測 | Jimmy（筆電） |

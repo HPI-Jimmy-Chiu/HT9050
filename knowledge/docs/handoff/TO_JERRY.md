@@ -1,0 +1,67 @@
+# 給 Jerry：回答與工作卡（Jimmy／筆電 → Jerry）
+
+> **這個檔只有 Jimmy 這邊（Jimmy 本人或筆電的 Claude）會寫。** Jerry 請不要改這個檔，回覆一律寫在你分支
+> `v906/jerry-handoff` 的 `docs/handoff/FROM_JERRY.md`。兩個檔各自只有一個寫者，git 合併永遠不會衝突。
+> 開始：20260930（筆電 10:2x）。規則比照 `TO_STEVEN.md` §0 與 `TO_KEVIN.md` §0。
+> ⚠ 先說聲抱歉：你 0929 18:24 推的 J-1～J-5，筆電的夜間迴圈當時只讀 Steven 與 Kevin 的交接分支，**漏讀了你的**，隔了 16 小時才回。已經把 `v906/jerry-handoff` 加進每一輪的讀取清單。
+
+## 0. 規則
+
+1. **每次開工先 `git fetch`**（你 J-1 §3 已經講到這條了），讀這個檔 §1 與 `TO_STEVEN.md` §1（筆電與 Steven 正在改的檔都不要碰）。
+2. **開工前先認領**：`FROM_JERRY.md` §1 寫一行「我要改哪些檔」，先推再做（你第一份就是這樣做的，很好）。
+3. 程式碼走 `v906/jerry-*` 工作分支＋MR；筆電兩組態 gate 綠了才合進 main（GitLab 沒有 CI，網頁按 Merge 不會跑 gate，請不要在網頁上直接按）。
+4. 急的事打電話給 Jimmy；這條管道一次來回大約幾十分鐘到幾小時。
+
+## 1. 筆電正在改的檔（這些先不要動）
+
+| 檔 | 為什麼 | 到什麼時候 |
+|---|---|---|
+| 移植樹 `canary_support.cpp`、`forms/fNote_ShowError.cpp`、`EtherCAT/Pci1203GaliRoute.h`、`tools/wb_serve.cpp`（ForwardShowErrorMessage 一帶） | INBOX 118：馬達撞到時照 golden 停機＋煞車＋警報；接著 INBOX 119（你的 J-5） | 推上 main 後 |
+| `web/page/ht9045_recipe_client.js` 的 `cmd0()`／`connect()` | 你的 J-2（見 §4） | 推上 main 後 |
+| `tools/gen_teach_editlist.py`（讀 golden 路徑那幾行） | 你的 J-4（見 §4） | 推上 main 後 |
+
+## 2. 須知（不用回）
+
+- **共用區交付包的 7z 密碼（Jimmy 1001 13:4x：「未來統一用一個密碼」「所有人都要知道密碼，這不是機密，也不會有任何風險，否則無法多人協作」）：`〔交付 7z 密碼：已遮，不放 GitHub（RULINGS_20261001 第 40 條）〕`**。以後所有共用區（`U:\共用區\`）的交付包都用這一組。例外：9/25～10/01 打的包（例 0930 的 K-01 兩包 `U:\共用區\HT-9050\K01_golden0618_HT9050snapshot_20260930\`）用的是退役的那組 `〔交付 7z 密碼：已遮，不放 GitHub（RULINGS_20261001 第 40 條）〕`。這兩組只寫在交接檔（公司 GitLab）；公開的 GitHub 機台包不放。
+- **20260930 14:5x 起 GitLab 的預設分支改成 `main`**（原本是 0925 起凍結的 `feat/v912-port`）：新開的 MR（網頁或 push option `-o merge_request.create`）預設就指向 `main`；`main` 跟原本的 feat 一樣受保護（Developer＋Maintainer 可推／可合，**禁止 force push**）。你自己的 clone 請跑一次 `git remote set-head origin -a`。
+- 以 GitLab `main` 為準；`feat/v912-port` 0925 起停用。
+- 模擬與真機只由建置期的 `SOFT_SIMULTE` 決定（出貨組態 `-DW906_NO_SOFT_SIMULTE=ON`）；`--dry` 已經完全拿掉，請不要再加。
+- 筆電 gate 的基準：出貨組態 4 項（`config_db`、`ini_helpers`、`config_loaders`、`GA1_ReadGeneralIni`），模擬組態 19 項（清單在 `D:\HT9045\backup\night_tools_20260928\sim_base_9050.txt`）。你那台 23／8 的差別見 §4 J-3、J-4。
+- **除錯提示（Jerry 1001 21:04，J-11）**：在中斷點停超過 10 秒再繼續，wb_serve 會照 `kPageNoScreenGraceMs`（10 秒沒有畫面就停機，`WebPageTable.cpp:468-500`）停機並跳 MES16441，瀏覽器的 WebSocket 也已經斷了、不會自己接回（J-11）⇒ **繼續之前先在瀏覽器按 Ctrl+Shift+R**，省得去查 MES16441／按 RETRY、PAUSE 沒反應。
+
+## 3. 工作卡
+
+目前沒有派給你的卡；你自己找到的問題照 J-1～J-5 的格式寫就很好（重現、實際、預期、根因、建議，每一項都附版本）。
+
+## 4. 回答你的問題
+
+| 時間 | 你的項目 | 回答 |
+|---|---|---|
+| 20260930 10:3x | **J-1** `background.html` 生產輪詢的 in-flight 閘門（`v906/jerry-webpoll` `0ef1d36d`） | **同意，會合進 main**（跟筆電下一批一起跑兩組態 gate，大約今天中午前）。程式碼看過：跳拍、同步 throw 接住、第一次失敗講一次都對。**建議再補一個保險**（可以跟這顆一起、或下一顆）：如果某次 `refreshProduction()` 永遠不回（例如 XHR 卡住、沒有逾時），`prodPollBusy` 會一直是 true，輪詢就永久停住、而且看不出來——跟你修的是同一類靜默故障。做法例：記下送出時間，超過 10 秒還沒回就當它失敗、放掉旗標（只放掉旗標，不要再發一個）。 |
+| 20260930 10:3x | **J-2** `cmd0()` 的逾時沒包住 `connect()` | **根因同意，筆電修**（`ht9045_recipe_client.js` 在筆電的 §1；St01 0929 15:00 的 WSLINK 也動過這支，筆電會在他的版本上改）：讓逾時從 `cmd0()` 一進來就開始算，`connect()` 卡在 CONNECTING 也會在 `cfg.timeoutMs` 後 reject，畫面走「被拒絕或逾時」那一支。INBOX 120。 |
+| 20260930 10:3x | **J-3** `FTPClient_Transfer` 你那台兩種組態都失敗 | **筆電這台會過**：今天 0930 的全新 build dir 出貨組態 gate（255 個測試）它是通過的，模擬組態也在歷次基準之外。所以比較像你那台的環境（三套網路過濾產品都可能攔 127.0.0.1 的資料通道 port 5001）。要確認可以先用系統管理員身分暫時把 `test_FTPClient_Transfer.exe` 加進 Defender／WithSecure 的例外再跑一次；不要改測試。 |
+| 20260930 10:3x | **J-4** golden 路徑寫死 | **同意，筆電做，而且用既有的變數名 `HT9045_GOLDEN_ROOT`**（不另開新名字）：查了才發現 **dfm2rc 早就認它**（`tools/dfm2rc/dfm_parse.py:687` 起 `_golden_root_candidates()`：先看 `HT9045_GOLDEN_ROOT`，再從移植樹往上每一層找同名資料夾，找不到會明講）——所以 `dfm2rc_fidelity`／`dfm2rc_idempotent` 你那台現在設這個變數就會過。真正寫死的只有 `tools/gen_teach_editlist.py:31`（`TeachButtonsGen`）：筆電改成先看同一個變數，**而且產生檔裡註解印的 golden 路徑固定印預設值**（不然換了路徑，`--check` 會因為那一行註解不同而紅）。做好會在這裡寫；之後你那台設 `HT9045_GOLDEN_ROOT=D:\Work-jerryyang\HT9045_code\Code_Test\HT9011UC_Code_V3.33.906.0_20260618` 就好。INBOX 120。 |
+| 20260930 10:3x | **J-5** `kCode==0` 通知型告警框關不掉、馬達已經停了 | **謝謝現場證據，優先順序提前**：排成 INBOX 119，**緊接在 INBOX 118 後面**（118 讓馬達撞到的警報照 golden 顯示，如果走同一條通知路徑，每次撞機都會卡在這個框）。分工照你的三塊：① **C++（筆電）**：新 WS 指令 `dialog.notifyAck`，`tag`＝requestId，只做「信箱裡是這一個 requestId 的 kcode==0 通知 ⇒ `DialogMailboxRetire()`」，不進等待迴圈、不碰 `g_modalServer`；requestId 對不上或信箱不是通知型 ⇒ 回 `ok:false` 並寫原因。② **web**：`ht9045_dialog_host.js` 是 St01 的檔，筆電會在 `TO_STEVEN.md` §4 請 St01 照你的建議改（`closePolicy==='acknowledge-only'`＋`buttons` 空＋`kCode===0` ⇒ 送 `dialog.notifyAck` 並 resolve）。③ **畫面**：通知型只給一顆「確認」——同樣請 St01。契約定了會寫在這裡。 |
+| 20260930 10:3x | §3 重工的 `maxConnections` | 了解，謝謝記錄。0929 一天進了 50 顆，動共用層前先 fetch 是對的。 |
+| 20260930 12:3x | J-1／J-2／J-4 上 main | **都已經在 GitLab main `0b8480c5`**（筆電兩組態 gate＝基準）：J-1 你的 `0ef1d36d` 原樣合進來（MR 會自動標成已合併）；J-2 `connect()` 自己帶 15 秒逾時，卡在 CONNECTING 的連線到時會被關掉、`opening` 放掉，下一個指令會重開新連線（只在 `cmd0()` 包逾時的話，共用的 `opening` 會讓之後每個指令都白等）；J-4 `tools/gen_teach_editlist.py` 改認 `HT9045_GOLDEN_ROOT`，產生檔註解裡的路徑固定印預設值——你那台設好變數後 `TeachButtonsGen`／`dfm2rc_*` 應該都會過，有不過的請照原格式回報。J-5 的 C++ 那一半（INBOX 119）正在做。 |
+| 20260930 14:3x | J-5 的 C++ 那一半上 main | **INBOX 119 在 GitLab main `99e3c3fc`**：新 WS 指令 `dialog.notifyAck`（`tag`＝那則通知的 requestId）把 kcode==0 的通知從信箱退掉，並照 golden 補上按 PAUSE 關框時做的事（Jam 次數、停機秒數、Recovery；機台還停在通知的停機狀態時才套用暫停／ESD 停止）。網頁那一半（`ht9045_dialog_host.js`：通知型只給一顆「確認」、按了送 `dialog.notifyAck`）是 St01 的檔，契約已寫在 `TO_STEVEN.md` §4。你那邊要驗的話，等 St01 的網頁推上來再測最準。 |
+| 20260930 14:3x | **J-6** `CheckSocketSensor()` 替身恆回 true（＝golden 的「有錯誤」）→ 模擬死結；你認領 `atester.cpp` | **根因同意，請照你的計畫做**（`atester.cpp` 不在筆電或 Steven 的 §1，沒有重疊）。**`ScanBtnThd` 照 `aTester_Front.cpp` GATE F-G2 的先例，只把那兩行單獨閘住、其餘 341 行照 golden 解開**：移植樹沒有任何地方建立那個執行緒物件，補一個空的全域 `ScanBtnThd` 反而會在 `->Stop()` 解參考 NULL；等 ScanBtn 執行緒真的接上時再一起放。做完請附一支 ctest（例：替身換成本體後，沒有殘料時 `CheckSocketSensor` 回 false、DoTestYFront 不再跳 case 50），推 `v906/jerry-socketsensor` 開 MR，筆電兩組態 gate 後合進 main（筆電每輪會掃 GitLab 的 MR）。 |
+| 20261001 12:0x | 09:44 §4.1 J-6 MR !24（`v906/jerry-socketsensor` `f476137e`）、§4.2 J-4、`atester.cpp:11434` 的 -Wmisleading-indentation | ① **MR !24 排進筆電第十八批**：筆電自己的兩組態全新 gate＝基準才推 main，GitLab 會自動標成已合併（不用在網頁按）。② `atester.cpp:11434` 的縮排警告：**照翻、不改**——行為正確（那一行本來就是無條件執行），只是縮排誤導人；改縮排等於改 golden 原文的樣子，沒有好處。③ J-4 收到，謝謝（你那台設了 `HT9045_GOLDEN_ROOT` 之後基準 5 項，跟筆電只差 `FTPClient_Transfer`）。 |
+| 20261001 12:3x | 12:03 §1 J-7（`ainarm9045.cpp:637-642`，GetShtRowColStartPos 的 TestSocket 兩行） | **同意**，筆電現在不碰 `ainarm9045.cpp`。`TestSocket` 在移植樹已經有家：`aHotPlateSubstrate.cpp:91`（`aHotPlateSubstrate.h:659` 宣告，`iShtRow`／`iShtCol` 在 :415／:447），`ainarm9045.cpp:70` include 的正是這個標頭——注意 `mykitsuck.cpp:216` 也定義了一個版面不同的 `TestSocket`，但那支沒註冊進建置（同名類別兩個標頭的陷阱），不要改 include。那個閘的理由（"TestSocket no home"）過期了。這兩行會改變飛梭放料的起始行列計算（手臂會照 golden 的位置動），照 RULINGS_20261001 第 0 條補；附 ctest、`v906/jerry-testsocket`＋MR。另外 **MR !24 已排進筆電第十八批（gate 中）**，合併時 `tests/CMakeLists.txt` 檔尾兩邊都有新增，筆電照「main 的在前、你的在後」都留，並把你那支的連結清單補成跟其他測試一樣（加 `ht9045_automation`、`ws2_32`）。 |
+| 20261001 12:3x | （筆電要問你）`atester.cpp:4221-4234` 的 [I49] 清料拉高 Contact 高度 | 第十八批把 `csystem.cpp` 的 W7C1 寫檔替身退役了，所以重置結束時的「還原 Contact 高度」（`csystem.cpp:3111-3116`）變成真的會寫配方；它的另一半「拉高」在 `atester.cpp:4221` 還閘著（`TODO(W906-GB-P2b)`，唯一會把 `bRestModeBackupParm` 設成 true 的地方），所以今天兩半都不會跑。筆電想在第十九批照 golden 把 :4221 那一段解開（兩半一起活）。`atester.cpp` 你 0930 為 J-6 認領過——**MR !24 合進去之後，這一段可以由筆電動嗎？**還是你要自己做？ |
+| 20261001 13:0x | MR !24 | **已合進 main**（筆電第十八批，兩組態全新 gate＝基準；新 ctest `SocketSensor` 在 gate 裡通過）。GitLab 會自動把 MR !24 標成已合併。 |
+| 20261001 17:2x | ⏰ 追問（第 1 次；`docs/handoff/WAITING_REPLIES.md` W-02） | 12:3x 那題（`atester.cpp:4221-4234` 的 [I49] 清料拉高 Contact 高度）4 小時沒看到回覆，再問一次：**MR !24 已經合進 main（13:0x），這一段可以由筆電照 golden 解開嗎（兩半一起活：:4221 的「拉高」與 `csystem.cpp:3111-3116` 的「還原」），還是你要自己做？** 請回在 FROM_JERRY §3（或你要做就寫 §1 認領）；回「之後再說」也可以，筆電就不再追。（Jimmy 1001 17:1x 定的規則：要對方回的事，4 小時沒回就再問一次。） |
+| 20261001 21:1x | ⏰ 追問（第 2 次；`docs/handoff/WAITING_REPLIES.md` W-02） | 12:3x 那題（`atester.cpp:4221-4234` [I49] 清料拉高 Contact 高度：筆電照 golden 解開，還是你自己做）17:2x 追過一次，到現在 8 小時多還沒看到回覆。照 Jimmy 1001 17:1x 的規則，追第二次之後就列給 Jimmy 決定要不要打電話。**回一句就好**：「筆電做」、「我做」或「之後再說」，寫在 FROM_JERRY §3。 |
+| 20261001 21:2x | 21:04 §2／§1：J-10、J-11、回 12:3x 那題 | **謝謝**。① 12:3x 那題你說「筆電動沒問題」——收到；**筆電 21:1x 的第 2 次追問是在看到你這句之前送的，抱歉**（帳本 W-02 已改成已回）。筆電之後照 golden 把 `atester.cpp:4221-4234` 那一段解開（兩半一起活：:4221 的「拉高」與 `csystem.cpp` 的「還原」），開工前在 §1 登記。② J-10（`DoCheckSocketHasIC` 解閘）：等你 `v906/jerry-socketcheck` 推上來、開 MR，筆電兩組態 gate 後合；`forms/fMain.h:194` 同一行那一處筆電這邊沒有在改，可以。③ J-11（WSLINK 不會重連）：**已轉 Jimmy**（NIGHT_REPORT §0 第 39 項，你的三點原文照轉）；回覆前不動。你建議的除錯提示已寫進本檔 §2。 |
+| 20261001 21:2x | （筆電通知）`atester.cpp:4221-4234` [I49] | 你 21:04 說「筆電動沒問題」——收到。這一段的 O07 會改寫量產配方的 `Contact.Data`（拉高 Contact 高度、重置結束時還原），**屬於夜間迴圈不做的「寫入路徑」**，所以排在白天、Jimmy 在的時候做（另一道 O08 `fContact->ReadFile()` 要改走真的 `fContactForm`），做之前會先在 §1 登記，也會先加一個用 `W906_INIDATA_ROOT` 沙盒的測試，確保 ctest 不碰真配方。 |
+| 20261001 22:1x | 22:00 §0b 兩組態 gate（`80c7d385`＝J-6＋J-7＋J-10）；MR !80／!81 | **收到**，MR !81（已包含 !80 的 J-7）排進筆電第二十六批，筆電自己的兩組態全新 gate 跟基準逐名比對後合；GitLab 會把 !80／!81 標成已合併。你提醒的「沒開那個巨集的機器上 index 會真的動」會寫進給 ES02 的上機說明。 |
+| 20261001 23:0x | （筆電通知）MR !81（含 !80） | **已上 main**（第二十六批＝GitHub 第 112 包；兩組態全新 gate：b26a 兩組態全新：出貨 314／4、模擬 314／19，失敗集合逐名＝基準（b20h）；sysguard 0／0／0）。合併時兩件事：① `tests/CMakeLists.txt` 檔尾：你分支自己帶的那份 J-6 `SocketSensor` 區塊（bb2e0bd8）跟 main 上的重複，main 那份多了 `ht9045_automation` 與 `ws2_32`，所以留 main 的、拿掉你那份，`SocketCheck` 接在最後；② 你註解裡的行號在你自己的樹上就差幾行（`atester.cpp` :4782→:4780、:5429→:5437、:9015／:9019／:9072／:9076→:9026／:9030／:9083／:9087；合併後 `atester.cpp` 跟你的分支逐位元組相同）——筆電沒改你的註解，下次你動到那幾行時順手更正即可。「沒開 SOFT_SIMULTE 的機台 index 會真的動」已寫進給 ES02 的上機說明與 GitHub 第 112 包的 README。 |
+| 20261002 00:3x | 🔎 覆核意見（NB2 R126（`v906/nb2-assist` `32779f33` 的 `docs/nb2_assist/README.md` R126）；**中度 M1**，NB2 在 main 上核過） | **MR !81 新開的 `DoCheckSocketHasIC` 有一條路會卡在 1056／2056**：它在 `atester.cpp:4971`、`:5188` 等等 `IndexCheck4Site(...)` 回 true，但移植樹活的 `IndexCheck4Site` 是恆回 false 的替身（`atester.cpp:10544-10549`），golden 本體（:9944-10060，逐字 117 行已在樹裡）還閘在 `GATE G-PTk3-IndexCheck4Site`。走到這條路要 `bDevicConfirm && INDEX_SUCKER_TYPE==1`（`:4898`、`:4947`），`bDevicConfirm` 只有 `CC_ASE_KaohSiung` 會是 true（`cSpeed.cpp:506-509`）⇒ ASE 高雄、Index DevicConfirm 開、負壓吸嘴的機台會停在那裡，只有 300 秒 HangUpCheck 記一筆；HT9050（CUSTOMER_CODE=0）不受影響、不會多出動作。**建議**：同一波把 `G-PTk3-IndexCheck4Site` 照 golden 打開；或在 `DoCheckSocketHasIC` 加 [W906] 註記說這條路還會卡。commit 訊息「自由函式全部到位、不需要新的替身」是用「符號存在」算的，不是「本體是活的」。低度（不急）：SocketCheck 的 [5] 證明不了預設參數、[4a] 沒釘住 arm 1；`GetShtRowColStartPos` 的改動沒有 ctest；註解行號差 5～6 行（筆電 1001 23:0x 已列）。改好開一張 MR，筆電照舊 gate 後合 |
+| 20261002 04:4x | ⏰ 追問（第 1 次；`WAITING_REPLIES` W-08） | 1002 00:3x 轉給你的 NB2 R126 **M1**（MR !81 的 `DoCheckSocketHasIC` 在 ASE 高雄＋Index DevicConfirm＋負壓吸嘴時會卡在 1056／2056，因為 `IndexCheck4Site` 還是恆回 false 的替身）還沒看到回覆。照 golden 打開 `G-PTk3-IndexCheck4Site`，或在 `DoCheckSocketHasIC` 加 [W906] 註記，選一個即可；回一句「之後再說」也算。HT9050 不受影響、不急。 |
+| 20261002 08:5x | ⏰ 追問（第 2 次；`WAITING_REPLIES` W-08） | 還在等 1002 00:3x 轉給你的 NB2 R126 **M1**：MR !81 的 `DoCheckSocketHasIC` 在 ASE 高雄＋Index DevicConfirm＋負壓吸嘴時會卡在 1056／2056（`IndexCheck4Site` 還是恆回 false 的替身）——照 golden 開閘，或加 [W906] 註記說明為什麼不開。寫在 FROM_JERRY §3 就好；回一句「今天看不到」也算回了。再 4 小時沒回列 NIGHT_REPORT §0 |
+| 20261002 09:3x | 📌 Jimmy 1002 09:1x 裁決（`RULINGS_20261002.md` 第 8 條） | **J-11 網頁斷線自動重連＝A，請 Jerry 做**：只改網頁 JS（共用的退避重連＋外框重連，`web/page/ht9045_link.js` 那一帶）；重連的畫面就是「最新的畫面」→ 照第 31 條 takeover；停機對話框伺服器本來就對每條新連線補送，C++ 不用改（NB2 R124 實測）。開工前在 FROM_JERRY §1 逐行認領。 |
+| 20261002 15:0x | 回 MR !107（`600cbcaa`，J-12／J-13／J-14） | **收進筆電第四十五批**（`414a74f9`，第四十四批推上 main 之後 gate）：**J-12** `IndexCheck4Site` 照 golden 開閘（atester.cpp :9944-10060）＋socket 檢查的測試修正＋ShtRowColStartPos ctest——這就是 `WAITING_REPLIES` W-08（NB2 R126 M1）的答案，謝謝；**J-14** Sort Count 右鍵照收。**J-13（UpdateTempChart 丟 out_of_range）沒收**：機台端 cpp 0128 的 OBS-TEMPSERIES（`f09c5208`，第 125 包起在 main）已經修了同一處（第一次用時補 series＋範圍檢查），照「機台為準」（RULINGS_20260930 第 11 條）；合併時 `cObserver.cpp` 取機台那一份。St02 的 MR !108 另加了釘住它的 ctest（test_st02_timer3 第 15 段）。 |
+| 20261002 15:4x | 📌 Jimmy 1002 15:4x（`RULINGS_20261002.md` 第 19 條）＋請推 J-15 的節拍修改（`WAITING_REPLIES` W-15） | **Jimmy 說：你測過的項目可以直接整合——筆電確認修改邏輯、兩組態編譯成功就合**（不必等完整 gate）。他特別提到 **Timetick**：「數值太大導致程式執行效率差，他實驗沒問題」。但 GitLab 上現在只有 J-15 的量測（`v906/jerry-handoff` `35b7851b`，而且寫「我們不動 `kServeTickMs`」），**沒有改節拍的程式**。請把你實驗過的那一版推成 `v906/jerry-tick`（或你習慣的名字）＋MR，說明：①改成多少（`tools/wb_serve.cpp:2931` `kServeTickMs`，或你改的是別處）；②怎麼測的、前後對照（例：你 J-15 的 InArmTask 一輪 18.5 s、50／400 各 2 拍，改完變多少；CPU 占用）；③`wb_serve.cpp:4496-4530` 雙時鐘迴圈那段註解要不要跟著改（B13 與 ⚠⚠ 的理由現在被 Jimmy 這條蓋過，註解請一起更新成新的值與理由）。推上來筆電就照第 19 條收。 |
+| 20261002 21:4x | 📌 Jimmy 1002 20:2x（`RULINGS_20261002.md` 第 21 條）：**HT9050 的開發／測試一律用機台推上來的工作檔**（工單＋機台參數） | 原話：「機台端有透過github把工單和機台設定檔放上去，你放到gitlab後，未來要求其他人要協助開發或測試時，都要用此工作檔，這樣才能有效同步問題」。機台 1002 19:29 的快照（GitHub `machine/integ-ioweb` `ca828068`）筆電已逐位元組放進 GitLab main `machines/HT9050/snapshot/`（`c84209ad`，694 檔；目前工單 IOWEB_TEST_R003，料盤 7×17、熱盤 8×16）。Jerry：**之後重現、量測、測試 HT9050 的行為，先照 `machines/HT9050/snapshot/SNAPSHOT_SOURCE.md` 裝好**（先備份 → 複製到自己的 `D:\HT9045\system\`／`config\`／`IniData\Data\` → 比 MD5 → 做完還原），回報時寫明用的是哪一版（`git log -1 --format=%h -- machines/HT9050/snapshot`）。機種身分不在快照裡：`D:\GPIB9045\system\general.ini` 的 `[Version] Model` 要是 `9050GPIB`（網頁也可以加 `?machine=HT9050`）。只裝在開發機／模擬，不要裝到別台真機台。ctest 用的主表（`machines/HT9050/IO_Table.csv`、`Mot_Table.csv`…）來自同一份快照（NB2 MR !123，今晚跟筆電第四十六批一起上 main）。機台每次推新快照，筆電會更新並在這裡通知。 |
+| 20261002 22:4x | ⏰ 追問（第 1 次；`WAITING_REPLIES` W-15） | Timetick（`kServeTickMs`）那個你實驗過的修改，還沒看到分支／MR。Jimmy 1002 15:4x 說測過的直接收（RULINGS_20261002 第 19 條：筆電確認邏輯＋兩組態編譯成功就整合），請推成 `v906/jerry-*` 分支＋MR，說明寫「改成多少、怎麼測、前後對照」。 |
+| 20261002 22:5x | 📌 Jimmy 1002 22:4x 回 §0 第 64 項（`RULINGS_20261002.md` 第 23 條） | **J-11 選 A：讓畫面活過重連**（新增「重連中」狀態，重連成功就恢復；打到一半的輸入不會不見）。請照 A 做，動 `web/page/ht9045_link.js` 狀態機之前在 FROM_JERRY §1 重新申告範圍；記得加「連線逾時」（wb_serve 停著時重連會卡在 connecting）。 |

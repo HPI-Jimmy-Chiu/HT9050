@@ -1,0 +1,29 @@
+# 等對方回覆的事（筆電寫；20261001 17:2x 起）
+
+> **規則（Jimmy 1001 17:1x：「關於需要對方回覆的，如果超過4小時沒有收到，你能夠主動通知對方的AI繼續詢問嗎」）**
+> - 筆電在 `TO_<對象>.md` §4（或 `CHAT_JIMMY.md`）問了、要對方回的，**同一顆 commit 在下表加一列**。
+> - 夜間迴圈每一輪跑 `python D:/HT9045/backup/night_tools_20260927/followup_due.py`（只讀）：距離「問的時間」或「上次追問」**滿 4 小時**、
+>   對方分支也沒有看得出是回覆的推送 ⇒ 在同一個 `TO_<對象>.md` §4 寫一列「⏰ 追問（第 N 次；W-編號）」並推 main，下表「上次追問／次數」跟著改。
+> - 對方回了（FROM 檔、CHAT 檔、MR 說明都算）⇒ 狀態改「✅ 已回」並寫在哪裡；之後不再追。對方回「之後再說」也算回了。
+> - **限制**：git 只能留言，叫不醒沒在跑的 AI——對方的 Claude 有在跑、而且會讀 main 的 `TO_<對象>.md`，才看得到。
+>   這台的 `SendMessage` 只到得了本機的 session，同事的 AI 不在清單上（1001 17:1x 量：本機 3 個 session，沒有同事的）。
+> - **追兩次（8 小時）還沒回**：列進 `NIGHT_REPORT.md` §0，請 Jimmy 決定要不要打電話或寄信。寄信只在 Jimmy 對那個人、那件事授權過才寄
+>   （例：W-01 Frank，Jimmy 1001 17:0x「如果今天晚上七點前還沒收到回覆，可直接擬稿並且寄給他」）。
+
+| # | 對象 | 等什麼（一句） | 問的時間 | 問在哪 | 對方分支 | 上次追問 | 次數 | 狀態 |
+|---|---|---|---|---|---|---|---|---|
+| W-01 | Frank 本人 | 910 程式三處的原意：Q1 `DoPlaceTrayToAuto_9050(0)`（函式從 1 起算）、Q2 Empty／Auto 層數計數器從 -1 開始沒人設、Q3 放 Auto 後 `MOutArmY` 還原兩次 | 20261001 15:5x | TO_FRANK §4 | `v906/frank-handoff` | 20261001 19:29 | 1 | 部分回覆：Frank 本人 19:2x 第一輪（FROM_FRANK §3 19:29：Q1「會走到、還在修正」）；Q2／Q3 由 Frank01 追問中，Frank 再回就結案；**1002 07:47 Frank 本人回 Q1**：9050 會用 [3]AUTO1 ⇒ `DoPlaceTrayToAuto_9050(0)` 一定要修（修法 Frank 還沒回）；Q2／Q3 還在等 |
+| W-02 | Jerry | `atester.cpp:4221-4234` [I49] 清料拉高 Contact 高度那段：MR !24 合進去之後可以由筆電照 golden 解開嗎，還是 Jerry 自己做 | 20261001 12:3x | TO_JERRY §4 | `v906/jerry-handoff` | 20261001 21:1x | 2 | ✅ 已回：FROM_JERRY 1001 21:04「`atester.cpp:4221-4234`（[I49]）筆電動沒問題」（跟他 J-10 動的 :4780-5290／:5881 不重疊）。⚠ 筆電 21:1x 的第 2 次追問是在看到這個回答之前送出的 |
+| W-03 | ES02 | HTDESIGNER `ioAliases()` 跳過 `#` 開頭的列（HT9050 IO 表有 `#NEW_FROM_9050_DRAWING_20260923`；外掛 lib 測試因此 174／175） | 20261001 15:1x | TO_ES02 §4 | `v906/es02-handoff` | 20261001 23:4x | 2 | ✅ **結案（不是 ES02 回的）**：機台端 1001 15:44 早就做了（GitHub `machine/integ-ioweb` `tools/0136` HTDESIGNER-138a）；照 RULINGS_20261002 第 14 條請 ES02 收進他的分支（TO_ES02 §4 1002 11:1x） |
+| W-04 | St01 | census 129 (e) E-BOOT-005：`FileRW_HSys_CustomerName()` | 20261001 12:3x | TO_STEVEN §4 | `v906/steven-handoff` | — | 0 | ✅ 已回：FROM_STEVEN 1001 15:26（`f6f34e69` D-037，下一次 q59 gate） |
+| W-05 | Ifor 本人 | NIGHT_REPORT §0 第 32 項：對 SetTemp 來說，St01 的 C 路存檔（`FileRW/Temperature.cpp`）跟 golden `fTemp_Set->spbSaveClick` 是否等價（等價就走 (b)） | 20261001 18:1x | TO_IFOR §4 | `v906/ifor-handoff` | 20261002 02:1x | 2 | ✅ 已回：FROM_IFOR 1002 08:4x（Ifor 本人判：不等價 ⇒ (a)；Ifor01 接 I-01 第二階段（二））|
+| W-06 | ES02 | E-05 溫控硬體上機確認（第 3 站 DTME08／DTMN08 與旋鈕、SLK-1～8 順序、第 2 站感測器型別；Ifor 的題） | 20261001 18:1x | TO_ES02 §3 E-05 | `v906/es02-handoff` | 20261002 02:1x | 2 | 等回覆；**22:1x、02:1x 追問共 2 次** ⇒ NIGHT_REPORT §0 第 41 項附註：給 Eastsun 的信第三節已再問一次，寄出就等於第三次問 |
+| W-07 | ES02 | HT9050 機台 `Gerneral.ini [Ground_Man] USE_GROUND_MAN` 是 0 還是 1（有沒有裝接地監測板；決定 GM-2 的急迫性）；23:4x 補問 `[System] USE_OTD`（St01 23:45：有沒有 OTD 硬體） | 20261001 23:3x | TO_ES02 §4 | `v906/es02-handoff` | 20261002 07:2x | 2 | ✅ 已回（機台端代答）：GitHub `machine/integ-ioweb` cpp 0131 的 README——`[Ground_Man] USE_GROUND_MAN=0`、`Ground_Man_COM_PORT=COM18`（ScanPoint／AlarmOhm=0）；`USE_OTD=0` |
+| W-08 | Jerry | R126 M1：`DoCheckSocketHasIC` 在 ASE 高雄＋DevicConfirm＋負壓吸嘴會卡 1056／2056（`IndexCheck4Site` 還是替身）——照 golden 開閘或加 [W906] 註記 | 20261002 00:3x | TO_JERRY §4 | `v906/jerry-handoff` | 20261002 08:5x | 2 | ✅ 已回：Jerry MR !107（1002 13:25）J-12 照 golden 開閘 `IndexCheck4Site`；筆電第四十五批收（TO_JERRY §4 1002 15:0x） |
+| W-09 | Ifor01 | R126 M2（Timer2 QA 分支閘的理由過期，HT9050 會走到）、M3（加熱段少 InitialOK 檢查） | 20261002 00:3x | TO_IFOR §4 | `v906/ifor-handoff` | 20261002 08:5x | 2 | ✅ 已回：Ifor MR !102（R126 M2／M3），筆電第四十三批收進 main（TO_IFOR §4 1002 15:0x） |
+| W-10 | St02 | R126 M4（Timer3 被 g_inTick 跳過）、M5（`RecordTemp` 閘的理由錯，Observer 溫度歷史全 0） | 20261002 00:3x | TO_STEVEN §4 | `v906/steven-handoff` | — | 0 | ✅ 已回：CHAT_ST02 1002 00:37「take NB2 R126 M4 / M5 + lows on MR !69 S-14 as one St02 MR」 |
+| W-11 | Frank01 | HT9050 的 Teach 頁範圍：教導是移動後按 Set 還是手打、910 手打會不會被夾、各軸行程（能不能用 Mot_Table 軟體極限當範圍）——NIGHT_REPORT §0 第 44 項的依據 | 20261002 05:5x | TO_FRANK §4 | `v906/frank-handoff` | 20261002 15:3x | 2 | ✅ 不用回了：Jimmy 1002 22:4x 第 15 題「一切用+-99999，拉最大，測試中先不要卡」（RULINGS_20261002 第 23 條）；TO_FRANK §4 已通知 |
+| W-12 | Frank 本人（經 Frank01） | 2×4 再確認：Carry kit 與 Index 吸嘴是不是 2×4、12 處 `|| Type_HT9050` 是否照 910 拿掉（Jimmy 1002 09:1x 要 double check） | 20261002 09:3x | TO_FRANK §4 | `v906/frank-handoff` | — | 0 | 等回覆 |
+| W-13 | ES02（＋EastSun） | Arm Cell 要的機台資料：1203 ORG 極性、Z 在 ZSafePos／0 時 ORG 亮不亮、真實軟極限（M00／M01／M03／M19／M20／M22）、`USE_PICKER_COUNT`、config.ini 旗標、teach.ini 教導值（NB2 規格 §6） | 20261002 12:2x | TO_ES02 §4 | `v906/es02-handoff` | 20261002 16:3x | 1 | 部分已回（機台端）：cpp 0131 README 給了 config.ini 旗標與 teach.ini 教導值；ORG 極性＝cpp 0135／0137／0139（原始位元「沒遮到＝1」，SensorType 全 0＋ORG-INV）；**③真實軟極限仍缺**（Mot_Table 還是 ±999999），`USE_PICKER_COUNT` 照 0928 正本＝1（ep8）；③真實軟極限 **Jimmy 1002 22:4x 第 15 題：測試中不用**（拉最大、不卡）⇒ 這題只剩可有可無 |
+| W-14 | 機台端（HT9050 的 AI） | ①ADAM-6024：`ADAMTCP.dll` 在哪（跟 wb_serve.exe 同目錄嗎）、`Gerneral.ini` 的 `EP_Install`／`INSTALL_DOUBLE_EP`、172.16.8.110 有沒有回 ping；②Bin 顯示器：`NUMBER_PANEL_TYPE`、顯示器用哪個 COM 埠（NIGHT_REPORT §0 第 56 項與 St02 卡 C14 的依據；唯讀） | 20261002 15:0x | GitHub 第 127 包 README 的機台通知 | `machine/integ-ioweb` | 20261002 22:4x | 1 | 等回覆；**22:4x 第 1 次**：GitHub 首頁機台段加了一條追問（機台端今晚 20:5x～21:5x 推了 5 次都沒回這三題），第 129 包說明再寫一次 |
+| W-15 | Jerry | 把實驗過的 Timetick（`kServeTickMs`）修改推成分支＋MR（改成多少、怎麼測、前後對照）；Jimmy 1002 15:4x 授權測過就收（RULINGS_20261002 第 19 條） | 20261002 15:4x | TO_JERRY §4 | `v906/jerry-handoff`／`v906/jerry-*` | 20261002 22:4x | 1 | 等回覆；**22:4x 第 1 次**（TO_JERRY §4 ⏰） |

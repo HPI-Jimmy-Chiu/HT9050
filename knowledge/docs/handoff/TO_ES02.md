@@ -1,0 +1,143 @@
+# 給 ES02（EastSun 的筆電）：工作卡與回答（Jimmy／筆電 → ES02）
+
+> **這個檔只有 Jimmy 這邊（Jimmy 本人或筆電的 Claude）會寫。** ES02 請不要改這個檔，回覆一律寫在你自己開的分支
+> `v906/es02-handoff` 的 `docs/handoff/FROM_ES02.md`（聊天寫 `CHAT_ES02.md`）。兩個檔各自只有一個寫者，git 合併永遠不會衝突。
+> 開始：20261001（Jimmy 1001 13:5x：「Eastsun的筆電，簡稱ES02，也要加入協作，但是他的角色是在筆電測試有問題，修改後需要給我們整合，並推到gitlab和github」）。
+> 規則比照 `TO_IFOR.md` §0。`FROM_ES02.md` 的格式照抄 `TO_IFOR.md` 的四節（§1 認領中／§2 完成／§3 問題／§4 留空），每列開頭寫 `YYYYMMDD HH:MM`。
+
+## 0. 你的角色與規則
+
+**角色**：在你的筆電上測試；測到問題就修，修好交給筆電整合。**筆電**跑兩組態全新 gate、合進 `main`、推 GitLab `main`，
+接著照常設規則推 GitHub 機台更新包（`github.com/HPI-Jimmy-Chiu/HT9050` 的 `updates/<版號>/`，機台用它更新）。**你不推 `main`，也不推 GitHub。**
+另外，Steven 1001 09:4x 的常設規則是「需要上機驗證的，都是請 Eastsun 處理」——St01／St02 要上機看的項目，由筆電整理成本檔 §3 的卡轉給你。
+
+1. **每次開工先 `git fetch`**，讀本檔 §1「我們正在改的檔」，以及 `TO_STEVEN.md`、`TO_IFOR.md`、`TO_KEVIN.md`、`TO_JERRY.md`、`TO_FRANK.md` 的 §1（別人正在改的也不要碰）。
+2. **測到問題**：先在 `FROM_ES02.md` §3 寫一列：現象、怎麼重現、哪個組態（模擬／出貨）、哪個 commit（`git rev-parse --short HEAD`）、log 或照片放哪。
+   - 要自己修：先在 §1 認領（會動哪些檔、哪幾行），推一顆小 commit，再開工。
+   - 檔案是別人認領中的（看第 1 條那些 §1）：只寫 §3，筆電轉給那個人，不要直接改。
+3. **修正**走 `v906/es02-<主題>` 工作分支（從最新的 `origin/main` 開）＋MR（目標 `main`）。MR 說明寫：現象、根因、改了什麼、你怎麼驗（哪個組態、哪支 ctest）。
+   筆電跑兩組態全新 gate（出貨＋模擬，失敗清單要等於基準）綠了才合。可以只推分支、不開 MR，在 §2 寫分支名，筆電合的時候幫你開。
+4. **照 `HT9011UC_Cpp_V3.33.906.0/docs/RULINGS_20261001.md` 第 0 條**：golden 會做、移植樹空著或閘著的，照 golden 補齊（包括運動／IO／加熱），附 ctest；
+   要「改得跟 golden 不一樣」（新設計、修 golden 的怪處）先在 §3 問 Jimmy。翻譯以忠實優先。1203 底層照你的做法（Jimmy 的既有裁決），一樣走 MR＋gate。
+5. 動到真實檔（`system\`、`config\`、配方、`D:\HT9045_Log\`）照「備份→驗證→刪備份」（`tools/webprobe/wbrun_guard.py`）。
+6. **commit 裡不要放任何密碼、權杖、私鑰**：合進 `main` 的東西會打包推到**公開的** GitHub（筆電推之前會掃，掃到就退回）。
+7. commit 作者用你自己的公司信箱。**急的事打電話給 Jimmy**；這條管道一次來回大約幾十分鐘（筆電迴圈每 20 分鐘讀一次 `origin/v906/es02-handoff`）。
+8. ⚠ **武裝**：你的筆電如果裝了 Advantech SDK，建出來的 `wb_serve` 會開 `HAVE_PCI1203`（0923 Q34 裁決；RULINGS_20260925 第 34 條），接上 PCIE-1203 卡跟機台時，網頁上點一下伺服就會轉。
+   上機前先確認機台周圍有沒有人。模擬／真機只看建置組態（`SOFT_SIMULTE`；出貨組態 `-DW906_NO_SOFT_SIMULTE=ON`），不要加 `--dry`（會被拒絕、exit 2）。
+
+## 1. 我們正在改的檔（這些先不要動）
+
+| 誰 | 檔 |
+|---|---|
+| ~~筆電（第十九批）~~ | ✅ 1001 14:4x 已上 main，可以動了 —— ~~`csystem.cpp` :2577、:16550、:21452、:21560、:21667、:21686（RecordSafeDoorStates 一段）；`tests/CMakeLists.txt:4687` 與檔尾；`WebStart.h:36`；St02 的冷卻風扇（`csystem.cpp` 的 G04／G07／G08／G12b 與 `:24812`、`uHeaterThread.cpp:540`）；1001 14:0x 起另有 `TesterComm/Handler/HandlerGpibMsg.cpp:713-714`、`tests/test_testercomm_handler.cpp` 第 12 段（gate 抓到的空指標修正）~~ |
+| ~~筆電（第二十批）~~ | ✅ 1001 18:1x 已上 main，可以動了 —— ~~①E-BOOT-002 開機 Servo On（RULINGS_20261001 第 10 條：非 1203 軸照 golden、1203 軸跳過）＋golden :10164 開機那一次的 `GetHotPlateYHalfPos`（`Motor/mymotor.cpp:2564` 空殼換本體、`tools/wb_serve.cpp:4163` 同一行附加）；②INBOX 134：`Motor/mymotor.cpp:4105`／`:4117`／`:4130`／`:4142`／`:5017`／`:5027`／`:5038`／`:5048` 光學尺紀錄讀 `fMotorTest` 前先檢查；③待審：NB2 MR !47（SCREEN-TOKEN：`web/js/…`、`web/page/ht9045_link.js`／`ht9045_main_close.js`／`ht9045_recipe_client.js`／`ht9045_wire_engine.js`、`HT9045_Web.cmd`、`server/check_env.cmd`）、Ifor MR !23（`tools/webprobe/f5_contract_probe.cjs`）~~ |
+| ~~筆電（第二十一批）~~ | ✅ 1001 19:4x 已上 main，可以動了 —— ~~合 Ifor MR !54（新檔 `forms/fMain_Heater.cpp`、`forms/fMain.cpp`／`fMain.h` 的宣告、`CMakeLists.txt`、`tests/test_heater_chain.cpp`）、NB2 `e62ca6c1` 的程式部分（`tools/wb_dialog_mailbox.h`、`tools/wb_serve.cpp` 4 行、`tests/test_notice_ack.cpp`；文件部分已改號寫進第 33 條／S-17／INBOX 137）、St01 `v906/st01-q59` 到 `67dddc93`（TA-5、S98、D-028、技能）、St02 MR !48（`v906/st02-s15` `e78edd3f`：S-15 Timer8＋溫度紀錄計時器）~~ |
+| 其他人 | 見 `TO_STEVEN.md`（St01／St02）、`TO_IFOR.md`、`TO_KEVIN.md`、`TO_JERRY.md`、`TO_FRANK.md` 的 §1，以及他們 FROM 檔的 §1 |
+
+## 2. 須知（不用回）
+
+- **共用區交付包的 7z 密碼（Jimmy 1001 13:4x：「未來統一用一個密碼」「所有人都要知道密碼，這不是機密，也不會有任何風險，否則無法多人協作」）：`〔交付 7z 密碼：已遮，不放 GitHub（RULINGS_20261001 第 40 條）〕`**。以後所有共用區（`U:\共用區\`）的交付包都用這一組。例外：9/25～10/01 打的包（例 0930 的 K-01 兩包 `U:\共用區\HT-9050\K01_golden0618_HT9050snapshot_20260930\`）用的是退役的那組 `〔交付 7z 密碼：已遮，不放 GitHub（RULINGS_20261001 第 40 條）〕`。這兩組只寫在交接檔（公司 GitLab）；公開的 GitHub 機台包不放。
+- 移植樹以 **`main`** 為準。HT9050 ＝ golden 的 `Type_HT9046_LS`＋PCIE-1203 運動卡（RULINGS_20260926 第 25 條；之後會換成 Frank01 搬進來的 `Type_HT9050`＝800，RULINGS_20261001 第 11 條，隨第十九批的文件進 `main`）。
+- **GitHub 機台更新包**：筆電每推一次 `main` 就推一包到 `updates/<版號>/`（相對上一包；附 `check_and_copy`、base、`README_MACHINE_AI`），舊包不動；根目錄 `README.md` 有「更新包清單」。
+  機台要不要套、什麼時候套，由 Jimmy 決定——推上去不代表機台馬上要 pull。你在機台上驗證時，請在 §2 寫你套的是哪一包（版號）。
+- 「畫面開著嗎」（golden `fXxx->fShow`）在移植樹由網頁頁面表回答：用 `W906_FormShowing("表單名", 成員)`（`csystem.h`）。**移植樹沒有建立 `fMotorTest`（永遠是 NULL）**，讀它的成員前要先檢查（第十九批 gate 就是當在這裡）。
+- 測試用的 ctest 會寫暫存資料夾；跑 `wb_serve` 或 ctest 前後，`system\`、`config\`、`IniData\` 要比對一次（筆電用 `D:\HT9045\backup\night_tools_20260927\sysguard.py`）。
+
+## 3. 工作卡
+
+### E-01　上機驗證清單（Steven 1001 09:4x「需要上機驗證的，都是請 Eastsun 處理」；St01 09:43、St02 10:07 請筆電轉）
+
+1. **St02 的清單（現在就能測）**：`git show origin/v906/steven-handoff:docs/handoff/ST02_EASTSUN_CHECKLIST_20261001.md`（繁中、寫給你的，不含密碼）。
+   「一、可以上機測」12 項（A1 Tray Edit、A4 Motion View 手臂位置、A5 TCP/IP「TEST …;」只看紀錄、A7、B1～B5、B7、C2、E1）；「二、還不能測」2 項先跳過；「三、不用上機」8 項不用做。
+   每一項都寫了怎麼做、應該看到什麼（照舊程式）、哪一台適用、出問題看哪個 log。**測之前先備份 `D:\HT9045\`。**
+2. **St02 的 A8、A9（第十九批上 main 之後才測）**：A8＝出貨組態 TCP tester 真的連線（H-008，TesterIF＝TCP_IP_MODE）；A9＝GPIB 遠端 START／STOP（H-012，客戶有開 bGPIBRemoteStartStop）。
+   說明在 `origin/v906/steven-handoff` 的 `docs/handoff/ST02_HUMAN_REVIEW_20260930.md` 第 19、20 列。第十九批進 `main` 時本檔 §4 會寫一列，並告訴你是 GitHub 第幾包。
+3. **St01 的第一批（Q62／Q63；在 St01 分支，還沒進 `main`）**：A16／D-021、A17／D-022、A18／D-023、A19／D-025，順便看 B24／TA-5。
+   程式在 St01 的 `v906/steven-cbridge-review6`（`be065d1e` 以後），清單在那個分支的 `.claude/skills/ht9050-construction/references/human-review.md` 的 A 表。
+   St01 說「EastSun 回報 OK 之前不進 `main`」。**St01 1001 13:48 已公布那個分支的 gate（兩組態＝基準，另有 St02 的 ELA_Schedule 逾時；真實檔 0 差異）⇒ 現在可以建**：`git fetch` 之後在另一個資料夾 `git worktree add <資料夾> be065d1e`，用出貨組態建置再上機。
+4. **回報**：每一項在 `FROM_ES02.md` §2 寫一列：項目代號、OK／NG、用的是哪個 commit 或哪一包、照片／log 放哪（共用區路徑）。
+   NG 的另外在 §3 寫現象；筆電轉給 St01／St02，或照 §0 第 3 條你自己修。
+
+### E-03　HT9050 的 Loader／Empty／Auto1～3 的 Z：上機確認馬達軸（Jimmy 1001 14:2x，照 Frank 14:0x 的回答）
+
+- Frank 本人 14:0x：「`MLoaderZ` 這個是 Loader 的馬達」「`MEmptyZ` 這個是 Empty 的馬達」，Auto1～3 的 Z「目前是有汽缸以及馬達雙複合的機構」。⇒ 910 的 9050 流程照馬達寫的那段要照翻（F-01b，Frank01）；0930 的第 2、3 條（Z 是氣缸、M35／M36／M38～M40 關掉）改成「Loader／Empty＝馬達、Auto1～3＝氣缸＋馬達」（RULINGS_20261001 第 22 條，隨第十九批的文件進 `main`）。
+- 請在 HT9050 上確認：① `MLoaderZ`（M35）、`MEmptyZ`（M36）、Auto1～3 的 Z（M38～M40）實機各接在 PCIE-1203 的哪一軸（或不是接 1203）；② `machines/HT9050/Mot_Table.csv` 這幾軸的 `Enable`、`CardModel`、軸號該怎麼填，`Pci1203Axis.ini` 要不要加；③ Auto1～3 的氣缸和馬達各在什麼時候動。
+- 回報寫在 `FROM_ES02.md` §2；機台正本的表由筆電照你的回報改（改之前先備份），你也可以直接在 `v906/es02-*` 改好開 MR。
+- ⚠ 確認之前，不要在機台上把這幾軸打開去跑 HOME（軸號對錯時會跳警報，或動到不該動的軸）。
+
+### E-02　你自己測到的問題
+
+- 不用等派卡：在筆電或機台上測到的任何問題，照 §0 第 2、3 條處理（先 §3 記下來；要修就先 §1 認領）。
+- 修好的分支名寫在 §2，筆電會在下一批合進 `main`、推 GitLab 與 GitHub，並在本檔 §4 回你是哪一批、哪一包。
+
+### E-04　網頁操作權「最新的畫面贏」與 HMI 啟動器：上機驗收（NB2 MR !47，RULINGS_20261001 第 31 條；第 107 包）
+
+- 出處：NB2 `v906/nb2-assist` 的 `docs/nb2_assist/README.md` R120 第 5 節（NB2 沒有真機、也沒起 wb_serve＋兩個畫面）。要先套第 107 包並重建 wb_serve。
+- 1. 開 HMI 視窗 → 再開一個 Chrome 分頁到同一網址 → Chrome 那個可操作，HMI 視窗開 Yield Monitoring 會出現 control-held＋白話提示；在 HMI 視窗按存檔 → 拿回來。
+- 2. 關掉 Chrome 分頁 → 10 秒內 HMI 視窗自動恢復可操作（保活重新拿到）。
+- 3. 運轉中警報框 → 按回答鍵可以清（免權杖）→ 其他按鈕恢復。
+- 4. HMI 視窗 Alt+F4 → 一次確認 → 正常關機（另一個分頁握著權杖時也要能關）。
+- 5. 重啟 wb_serve（F5）→ HMI 視窗重連後仍可操作；有舊分頁開著時權杖仍回到 HMI 視窗。
+- 6. 雙擊 `HT9045_Web.cmd`：有 build_hmi_shell 時開 HMI 視窗、沒有時開 Edge；`set W906_HMI_SHELL=0` 時開 Edge。⚠ `HT9045_Web.cmd`（和 `server/check_env.cmd`）在 repo 根目錄，**GitHub 包不帶**（包只帶 906 樹與 `web`）：要測這一項請從 GitLab main 取新的那支（cmd 檔要 CRLF），或先跳過、在 §2 註明。
+- 結果照 E-01 第 4 點寫在 FROM_ES02 §2（每項 OK／NG、哪一包）。
+
+### E-05　溫控硬體上機確認（Ifor01 1001 16:5x I-03 題 C；溫度專家是 Ifor）
+
+- 出處：`v906/ifor-handoff` 的 FROM_IFOR §3 16:5x。這三項程式碼回答不了，要看機台。溫度的事看不懂可以直接問 Ifor（RULINGS_20261001 第 38 條）。
+- 1. **第 3 站的溫控主機**：圖上寫 DTME08，但依 DTM 手冊一個群組只有一台主機（內部站號固定 0）；第二台 DTME08＝另一個 IP，golden 只有一條連線（`uDTME08Control`）定址不到。請看機台上第 3 站實際是 **DTME08 還是 DTMN08**，以及每台的**站號旋鈕**設在幾（如果是 DTMN08：第 3 站要設 2、第 2 站的 DTMN08 設 1，才對得上程式的 `iCh/8`）。
+- 2. **SLK-1～8 的接線順序**：是一排一排（`tcAa1`…`tcBd1`＝11～18），還是前後排交錯（11、15、12、16…）？`temp-dtm-map.md` §3 寫了不能猜。看接線標籤或量一個通道都可以。
+- 3. **第 2 站的感測器型別**：Chamber 是 PT100、熱風槍是 K-type 嗎？（golden 每站只寫一種型別。）
+- 拍照或寫下標籤就好；結果照 E-01 第 4 點寫在 FROM_ES02 §2（註明是 E-05），筆電轉給 Ifor。
+
+## 4. 回答
+
+| 時間 | 你的問題／回報 | 回答 |
+|---|---|---|
+| 20261001 14:3x | （筆電通知） | E-01 第 3 項：St01 的 review6 `be065d1e` **現在可以建**（St01 1001 13:48 公布 gate）。新卡 **E-03**（Loader／Empty／Auto 的 Z 軸上機確認）。Jimmy 1001 14:2x：HT9050 用的是 906 C++ 版；912 是 9046 量產機的版本，跟 9050 無關。 |
+| 20261001 14:4x | （筆電通知） | **第十九批已上 main**（GitHub 第 105 包，版號見 GitHub 根目錄 `README.md` 的更新包清單）⇒ E-01 第 2 項的 **A8（出貨組態 TCP tester）、A9（GPIB 遠端 START／STOP）現在可以測**。A9 注意：這一批同時修了 GPIB 遠端 START 會讀空指標當掉的問題，請用第 105 包以後的版本測。 |
+| 20261001 15:1x | 14:23～14:55 §1 認領、§2 三列（`v906/es02-htdesigner` @ `eebf3e4f`） | **§1 同意**（`tools/vscode-htdesigner/**` 歸你）。**§2 已合進 main `dac2adfc`（MR !53）＝GitHub 第 106 包 `b1ec57c`（`updates/dac2adfc/`）**——Jimmy 1001 15:0x：「優先整合，編譯成功推git main and github，他急需現場機台端測試」。機台套這一包**不用重建 wb_serve**，重新安裝外掛就好（`pack.ps1` → `code --install-extension …0.138.0.vsix --force`）。筆電在合併後的樹跑 `test/run_all.ps1`：lib 173／174、探針 7／7、擴充 207／207、面板全過；**唯一沒過的是 `aliasedit`**：它讀 `D:\HT9045\system\IO_Table.csv`，這台的表（＝`machines/HT9050/IO_Table.csv`，MD5 相同，也就是機台正本）有一列標記 `#NEW_FROM_9050_DRAWING_20260923` ⇒ 請讓 `ioAliases()` 跳過 `#` 開頭的列，不然機台上也會失敗、別名清單也會多一個假名字。另外兩件：①合併時修了你的 `HANDOVER.md:243`：兩個 `v906/es02-…` 的 `v` 變成 0x0B（`\v` 被當成跳脫字元），已改回，請看一下寫檔的方式（路徑用正斜線或原始字串）；②`dev/push_series.ps1`、`dev/push_tools.ps1` 掃描用的正規式裡有字面 `github＿pat＿`，筆電推 GitHub 前的掃描每次都會命中（已人工確認不是權杖），請把字面拆開（例 `'github' + '_pat_'`）。 |
+| 20261001 15:1x | 14:23 §3 四題 | ① **外掛以後誰改**：已問 Jimmy（NIGHT_REPORT §0 第 30 項）；回覆前照你提的做——你繼續改，每次開工先接 `machine/integ-ioweb` 有沒有新的 HTDESIGNER patch。② **vclcompat 補 `TPoint`／`TRect`／`TDragState`／`TDragObject`／`TOwnerDrawState`**：先不補（全樹共用的底層）；等翻譯真的用到那類事件時由筆電照 golden 補，外掛照舊擋下並說明（INBOX 135）。③ **`Tfiosetview` 沒有全域物件**：先不改名，記在 INBOX 136，跟 St02 的 IO 頁一起處理。④ 試推 GitHub 失敗：收到，謝謝說明；照 §0 只推 GitLab 的 `v906/es02-*` 就對了。上機時請在 §2 寫套的是哪一包：A8／A9 在第 105 包（`372dcd1`），你的外掛在第 106 包（`b1ec57c`）。 |
+| 20261001 18:1x | （筆電通知） | ① 15:20 已寄信給你（0.138 整合、第 106 包怎麼套、測試結果與四題回覆，跟本檔 §4 上面兩列同內容）。② **你 15:20～16:48 推的 0.139～0.143（到 `ee34c2d4`）已跟第二十批一起合進 main（`76820a0f`）＝GitHub 第 107 包**；這一包有 C++ 改動，**要重建 wb_serve**（開機 Servo On 只對非 1203 軸，HT9050 開機行為不變），外掛照舊重新安裝。③ 新卡 **E-04**（NB2 的網頁操作權／HMI 啟動器上機驗收）。 |
+| 20261001 18:1x | （筆電通知） | ④ 新卡 **E-05**（溫控硬體上機確認：第 3 站 DTME08／DTMN08 與旋鈕、SLK-1～8 順序、第 2 站感測器型別；Ifor 的題）。⑤ 你 14:23 §3 外掛那幾題之外，`ioAliases()` 跳過 `#` 開頭的列那一項還開著（`docs/handoff/WAITING_REPLIES.md` W-03；筆電這邊的外掛 lib 測試還是 174／175）。 |
+| 20261001 18:3x | （轉 St01 1001 17:45） | **St01 的第二批可以建來上機測：`v906/steven-cbridge-review6` `05e3f181`**（B8 OS-1b＋St02 的 D-032 整機暫停；St01 自己兩組態 gate＝基準，真檔比對 0 差異）。**它也包含第一批 `be065d1e`**（E-01 第 3 項），兩批可以在 `05e3f181` 一起測。10 項檢查清單在 `06148ea1` 的 commit 訊息（`git show 06148ea1`）：在啟用 `IniConfig.bUseAutoOffsetFunction` 的客戶碼上，Offset 頁勾「Auto Offset Position Check」，四個微調鈕；START 後手臂停在勾選的那一段、整台機台在那裡暫停（D-032）。**這一項會讓機台動**：請在機台旁、照你的判斷做。⚠ 這是 St01 的分支，不是 GitHub 更新包：從 GitLab 取那個 commit 建。結果寫 FROM_ES02 §2（註明 `05e3f181`），St01 從那裡收。 |
+| 20261001 19:0x | 17:20 §2 0.144.0（尋找 Ctrl+Shift+F，`v906/es02-htdesigner` `459c2772`） | **收到**，會跟第二十一批一起合進 main＝GitHub 第 108 包（只動外掛，C++ 的 gate 照第二十一批的）。 |
+| 20261001 19:4x | （筆電通知） | **第二十一批上 main＝GitHub 第 108 包**（hash 見根目錄 README 的更新包清單），**要重建 wb_serve**。上機時會看到的變化：① St02 的計時器照 golden 每 1 秒跑——出貨組態的 TimerESD 會處理測試機警報佇列、GPIB 訊息（會跳 ShowMyMessage）、依間隔記站良率、每 10／30 分寫一行生產紀錄；② SECS PP_MUSIC／PP_SIGNALTOWER；③ Configuration 的溫控通訊頁開著時冷卻風扇不動；④ Configuration 的 Tray／Hot Plate 分頁可以改、可以存；Setup.TrayAssignment 圖形模式的捲軸可以用；⑤ 被新通知蓋掉的舊通知框會自己關。⑥ 加熱鏈（Ifor）翻進來但還沒接，行為不變。⑦ 你的外掛 0.144 也在這一包（重新安裝，步驟同第 106 包）。看到不對照 E-01 第 4 點寫 FROM_ES02 §2，註明第 108 包。 |
+| 20261001 19:5x | ⏰ 追問（第 1 次；`docs/handoff/WAITING_REPLIES.md` W-03） | 15:1x 那項 4 小時多沒看到回覆，再提一次：**HTDESIGNER 的 `ioAliases()` 請跳過 `#` 開頭的列**——機台與筆電的 `system\IO_Table.csv`（＝`machines/HT9050/IO_Table.csv`）有一列 `#NEW_FROM_9050_DRAWING_20260923`，筆電這邊外掛 lib 測試因此一直是 174／175（`aliasedit` 那一項）。你那邊 175／0 可能是 IO 表沒有這一列。要改請在 §2 寫哪一版；不改也請回一句（例：「那是測試資料的問題，外掛不改」），筆電就不再追。（Jimmy 1001 17:1x 的規則：要對方回的事，4 小時沒回就再問一次。） |
+| 20261001 19:5x | 19:31／19:45 §2 0.145.0（Ctrl+F＝尋找，`25f10c1f`）、0.146.0（搜尋方案總管，`b27742d8`） | **收到**，跟第二十二批一起合進 main（只動外掛；C++ 的 gate 照第二十二批的，現在正在跑）。 |
+| 20261001 20:2x | （筆電通知） | **第二十二批上 main＝GitHub 第 109 包**（hash 見根目錄 README 的更新包清單），**要重建 wb_serve**；你的外掛 0.146／0.147 在這一包（重新安裝）。**更正**：第 108 包裡的外掛其實是 0.145（筆電合併時你剛推了 0.145），不是之前寫的 0.144。上機會看到的：① 主畫面 Timer2 的加熱段每秒跑（Ifor；SetTemp 還沒接）；② RotateKit 取料失敗重試先把 Z 移到安全高度再回 4000；③ Frank01 的 HT9050 Shuttle 流程翻進來但包在 `Type_HT9050` 裡，今天機台解成 HT9046_LS，**行為不變**。依序套 107→108→109。 |
+| 20261001 21:1x | （筆電通知） | **第二十三批上 main＝GitHub 第 110 包**，**要重建 wb_serve**：開機照 golden 寫 `RunInfo.Factory`（客戶名稱，SECS 會報）與 Observer 頁的工廠名稱；St02 的 Timer3 照 golden 跑。依序套 107→108→109→110。 |
+| 20261001 21:5x | （筆電通知） | **第二十四批上 main＝GitHub 第 111 包**（要重建 wb_serve）：St02 的 G-023 Open／Short 報表（只有 TesterTCP 的 O/S 測試模式會走到）、type 2 Bin 號碼面板；你的外掛 0.150 在這一包。依序套到 111。 |
+| 20261001 22:1x | ⏰ 追問（第 1 次；`WAITING_REPLIES` W-06）＋（轉 St01 1001 21:29） | ① **E-05**（溫控硬體上機確認：第 3 站 DTME08／DTMN08 與旋鈕、SLK-1～8 順序、第 2 站感測器型別）18:1x 開的卡，4 小時沒看到回覆——上機有空時拍照或寫標籤就好；還沒空請回一句「之後」。② **St01 第三批可以建來上機測：`v906/steven-cbridge-review6` `6dd4a772`**（B8 CL-4：Cleaning 頁的 Clean 鈕，golden `TfCleaning::btnStartAutoCleanClick` → `TfShowBinSelect::btnAutoCleanClick`；St01 兩組態 gate＝基準＋ELA_Ftp〔那支 W58 回歸 main 已修，這個 head 還沒有〕，真檔比對 0 差異）。**它包含第一、二批**，三批可以在 `6dd4a772` 一起測。11 項檢查清單在 `413cf6da` 的 commit 訊息：按 Clean 再 START，第一次真的 Auto Clean 照 golden 跑；機台裡有料時先跑 One Cycle。**會讓機台動**，請在機台旁照你的判斷做；結果寫 FROM_ES02 §2（註明 `6dd4a772`）。 |
+| 20261001 23:0x | （筆電通知） | **第二十六批上 main＝GitHub 第 112 包**（要重建 wb_serve）：Jerry 的 J-7（入料手臂把 IC 放進 Socket 的起點照 golden，修 WAR0154）＋J-10（`DoCheckSocketHasIC` 解閘，DoTestY 不再卡在 case 20）——⚠ **沒開 SOFT_SIMULTE 的機台上，這一段會真的動 index 的 Z／Y 軸與真空**（Jerry 提醒），上機時請在機台旁；St02 的 H-013 第一部分（執行時的值不變）；你的外掛 0.154 在這一包（筆電這台外掛 lib 測試 176 過、1 敗＝aliasedit，就是 W-03 那一項）。依序套到 112。 |
+| 20261001 23:3x | （筆電通知） | **第二十七批上 main＝GitHub 第 113 包**（要重建 wb_serve）：① St01 的 D-026——要密碼的告警，網頁上按 START／PAUSE 會先跳登入框，密碼對了才照按的鍵關；**上機驗收 11 項在 GitLab commit `87e75615` 的訊息最後**（St01 寫的，請照順序；會讓機台照按的鍵動作，請在機台旁）。② St02 的 DIO 設定頁 Delete 鈕：照 golden，選了檔按 Open 就刪（**沒有確認框**），只能刪 DIO 資料夾裡的 *.ini——測的時候請先備份那個資料夾。③ 你的外掛 0.157（筆電 lib 測試 177 過、1 敗＝aliasedit）。依序套到 113。 |
+| 20261001 23:3x | ❓ 問題（`WAITING_REPLIES` W-07） | **HT9050 機台有沒有裝接地監測板（Ground Man）？** 請看機台的 `D:\HT9045\system\Gerneral.ini` 的 `[Ground_Man]` 那一段，`USE_GROUND_MAN=` 是 0 還是 1（還有 `Ground_Man_COM_PORT=`），寫在 FROM_ES02 §3。為什麼問：golden 每 30 ms 看接地板、接地異常就停所有馬達；移植樹那一段還沒接（St02 E-019 的 GM-2）。是 1 的話這件要排在前面。 |
+| 20261001 23:4x | ⏰ 追問（第 2 次；`WAITING_REPLIES` W-03） | **aliasedit 那一項**（1001 15:1x 開、19:5x 追問第 1 次）：筆電這台外掛 lib 測試還是只差這一項（0.157：177 過、1 敗＝`aliasedit`，訊息「967 IO names」）。**原因量到了**：這台的 `D:\HT9045\system\IO_Table.csv` 跟 git 的 `machines/HT9050/IO_Table.csv` 逐位元組相同，第 944 列是 `,#NEW_FROM_9050_DRAWING_20260923,,,,,,0,0,0,,,,`（名稱欄以 `#` 開頭，是分段用的註記列，不是 IO）。你那邊回報 lib 177／0，多半是你機台的 IO 表沒有這一列——用 `machines/HT9050/IO_Table.csv` 就能重現。請讓 `ioAliases()` 跳過名稱以 `#` 開頭的列；不改也請在 FROM_ES02 §3 回一句原因。 |
+| 20261001 23:4x | ❓ 補充 W-07（St01 1001 23:45 問） | 看 `Gerneral.ini` 時請順便看 **`[System]` 的 `USE_OTD=`**（0／1／2）：HT9050 有沒有 OTD 硬體——決定 Contact 頁 240KG／360KG 那兩塊（St01 剛照 golden 接好，`d6cda69d`）要不要顯示。筆電這台是 0，St01 的開發機是 2。跟 `USE_GROUND_MAN` 一起寫在 FROM_ES02 §3 就好。 |
+| 20261002 00:2x | （轉 St01 1002 00:07） | **St01 第四批可以建來上機測**：GitLab 分支 `v906/steven-cbridge-review6` 的 `91e136d4`（Contact 頁：CT-3a 模式切換／T.Start／T.Step／One Cycle＋CT-3b' 的 START／PAUSE 照 golden），包含第一～三批（`be065d1e`、`05e3f181`、`6dd4a772`），四批可以一起測。檢查清單：`0a0c53fd` 的 10 項＋`91e136d4` 的 9 項（Contact 的 START：客戶碼開了軟體控制按鈕的才是完整的主 START，其他只把扭力框設成 10；Contact 的 PAUSE 會讓運轉中的機台停下）。會讓機台動，請在機台旁。結果寫 FROM_ES02 §2 並註明 `91e136d4`。 |
+| 20261002 00:2x | （筆電通知） | **第二十八批上 main＝GitHub 第 114 包**（要重建 wb_serve）：St02 的生產資料紀錄照 golden 呼叫 TimerRecordLoaderDate（wb_serve 上值不變）、一支測試變短、一句註解。機台上的行為沒有可見的改變。依序套到 114。 |
+| 20261002 01:3x | （筆電通知） | **第二十九批上 main＝GitHub 第 115 包**（只動網頁，不用重建 wb_serve）：Lot Info 頁 Tester Log 分頁的「Tester TCP Show」鈕照 golden——開 Tester 通訊視窗的 TCP/IP 分頁（只有 TCP_IP_MODE 才有那個分頁）。依序套到 115。 |
+| 20261002 02:1x | （筆電通知）＋（轉 St01 1002 01:30） | **第三十批上 main＝GitHub 第 116 包**（要重建 wb_serve）：St02 的計時器修正——Timer3 與每分鐘溫度紀錄在自己的框開著時照 golden 繼續跑；Observer 頁的溫度歷史照 golden 記錄（原本全是 0）。依序套到 116。**St01 第五批**：GitLab `v906/steven-cbridge-review6` 的 `d6cda69d`（Contact 頁 240KG／360KG 的 OTD 汽缸，疊在第四批 `91e136d4` 上，第一～四批都包含在內）；檢查清單＝`d6cda69d` commit 訊息的 9 項，**只有 USE_OTD=1 的機台測得到**，沒有 OTD 就跳過，但這個 commit 可以拿來一起測第一～四批。 |
+| 20261002 02:1x | ⏰ 追問（第 2 次；`WAITING_REPLIES` W-06） | **E-05 溫控硬體上機確認**（1001 18:1x 開卡、22:1x 追問第 1 次）還沒看到回覆：第 3 站是 DTME08 還是 DTMN08、站號旋鈕、SLK-1～8 的接線順序、第 2 站 Chamber／熱風槍的感測器型別。拍照或寫下標籤就好，寫在 FROM_ES02 §3；看不懂可以直接問 Ifor。另外 W-07（`Gerneral.ini` 的 `USE_GROUND_MAN`／`USE_OTD`）也一起看就好。 |
+| 20261002 03:1x | （筆電通知） | **第三十二批上 main＝GitHub 第 117 包**（只動網頁與測試，不用重建 wb_serve）：Setup.TesterIF 頁 9 個欄位的鍵盤範圍照 golden 通用分支——最長測試時間可以輸入小數、0～15000（原本被夾成整數 60～9999，輸入 10 會存成 60）；三個 Initial Start Delay 不再有最小 30。**之前在那頁存過的最長測試時間請再看一下**，可能被存成 60。依序套到 117。 |
+| 20261002 03:2x | ⏰ 追問（第 1 次；`WAITING_REPLIES` W-07） | 1001 23:3x 問的還沒看到回覆：HT9050 機台的 `D:\HT9045\system\Gerneral.ini`，`[Ground_Man]` 的 `USE_GROUND_MAN=`（0 或 1，裝了接地監測板就是 1）和 `[System]` 的 `USE_OTD=`（0／1／2）。兩個數字寫在 FROM_ES02 §3 就好，一分鐘的事；`USE_GROUND_MAN=1` 的話接地監測（golden 會在接地異常時停機）要排在前面。 |
+| 20261002 03:5x | （筆電通知） | **第三十三批上 main＝GitHub 第 118 包**（要重建 wb_serve）：開了 VTEST 的機台，TesterIF 頁最長測試時間照 golden 用 0～36000 的範圍（沒開的照第 117 包，0～15000）。依序套到 118。 |
+| 20261002 04:4x | （筆電通知） | **第三十四批上 main＝GitHub 第 119 包**（要重建 wb_serve）：St01 把 golden 的 Lot Start 檢查翻成一支函式，**但還沒接上網頁的 Lot Start**，所以機台上的行為不變。依序套到 119。 |
+| 20261002 04:4x | ⚠⚠ **安全提醒（NB2 URGENT U4）——請上機的人一定要看** | **網頁的 Teach 頁（教導位置）幾乎沒有輸入範圍保護**：521 個小鍵盤欄位只有 4 個有上下限。golden 會擋下或自動修正的教導值（例：Z 安全高度 -1500～1500、「等待下降位置」必須小於 0、各手臂的 X 位置），網頁照存、伺服器也不檢查。原因是接線產生器的兩個錯（INBOX 140），筆電白天會修。**在那之前：在 Teach 頁輸入或修改教導值時，請人工確認數值合理再存；存完先用低速或手動確認位置，再讓機台自動跑。** 另外三個頁面的欄位範圍也不對（一般機台會被夾錯）：Main.CommView 的 edtSetZ1／2（應 0～300）、Setup.Speed 的 edInArmDieCleanHeight（應 -20～0.1）、Setup.Temp_Set 的 edAmbTemp（應 10～50）。 |
+| 20261002 05:5x | （筆電通知；⚠ 更新 04:4x 的安全提醒） | **第三十五批上 main＝GitHub 第 120 包（只動網頁）**：網頁 19 支接線檔的小鍵盤範圍照 golden 補了 205 欄——例：Setup.Speed 的 edInArmDieCleanHeight 可以輸入負值（-20～0.1）、Setup.Temp_Set 的環境溫度 10～50（原本被夾在 23～30）、重試次數 0～10、TrayForm 尺寸最小 0.001。**Teach 頁沒有照抄 golden 的範圍**：golden 的範圍是照 HT9045 的機構訂的，HT9050 的實際教導值（例 Auto1～3 的 Y 約 -72700，golden 範圍 -53000～-59000）落在外面，照抄會把正確的值夾成錯的位置。所以 04:4x 的提醒照舊：**在 Teach 頁輸入或修改教導值請人工確認，存完先低速或手動確認位置再自動跑**。Main.CommView 的 edtSetZ1／2、Setup.SetUp 的 pitch 小數位要看機台設定，還沒改。 |
+| 20261002 06:4x | （筆電通知） | **第三十六批上 main＝GitHub 第 121 包（要重建 wb_serve）**：①入料臂判斷「左邊吸嘴有沒有料」照 golden 只看左邊 2×2（只影響 10 欄熱板的機種，HT9050 的熱板是 2 欄，碰不到）；②網頁小鍵盤的小數照 golden 不再四捨五入、Setup.SetUp 的 pitch 可以輸入 3 位小數；③Contact CT 清數量時照 golden 一併更新 Control Bin（只對超豐的機台有作用）；St01 開機客戶名檢查（行為不變）。Teach 頁仍然沒有範圍，輸入教導值照舊人工確認。依序套到 121。 |
+| 20261002 07:1x | （筆電通知；Teach 頁現況） | Jimmy 07:0x 問 Teach 頁能不能運作，筆電量了：**已經能用的**——選軸、Jog、Move±、MoveTo、Home（單軸回原點）、Stop、Servo、Alarm Reset、手動教導的 Set／Go、位置與燈號顯示、存檔。**還沒接的**——「In／Out／Sort Z All Up」（全部 Z 回原點）與「Out Z All Down」：筆電第三十八批現在做；Pitch 那一排、旋轉 ±90、Shuttle Latch、Set All Z Move、TTL、Galil 伺服鈕：交給 St02（卡 ST02-C9）。那些還沒接的鈕下一包會先變灰、點了會說明原因（現在按了不會有反應）。在那之前：Z 要一軸一軸選了按 Home。做好後會開上機驗收卡給你。 |
+| 20261002 07:2x | （筆電通知） | **第三十七批上 main＝GitHub 第 122 包（要重建 wb_serve）**：普查照 golden 補齊四件——①飛梭上關掉的站，格子照 golden 標成「空料」；②**Die Clean**：`USE_DIE_CLEAN=1`、配方又開了 Die Clean 的機台，以前入料臂會停在 case 10000 不動，現在照 golden 先移到 Die Clean 位置再吹；③滿的 Fix 盤照 golden 會被換掉；④**除靜電（ESD／離子風扇）**：入料臂讓位、離子風扇清潔、ESD Decay 檢查三處，入料臂現在會照 golden **真的移到 Decay 教導點**（以前沒移就當成到了）——⚠ 有 ESD／離子風扇的機台，Decay 教導點要先教好，上機時請在機台旁。依序套到 122。 |
+| 20261002 07:2x | ⏰ 追問（第 2 次；`WAITING_REPLIES` W-07） | 還在等：HT9050 機台 `D:\HT9045\system\Gerneral.ini` 的 `[Ground_Man] USE_GROUND_MAN=`（0 或 1，還有 `Ground_Man_COM_PORT=`）與 `[System] USE_OTD=`（0／1／2）。同一題 07:01 寄給 Eastsun 的信第六節也有寫。寫在 FROM_ES02 §3 就好；回一句「今天看不到機台」也算回了。 |
+| 20261002 08:4x | （筆電通知） | **第三十八批上 main＝GitHub 第 123 包（只改網頁＋St02 的兩張 MR，Teach 頁要重新整理）**：①Teach 頁上「點了沒反應」的鈕現在**變灰，點一下右下角會說為什麼**（例：Pitch 一族排在 St02、Z All Up 筆電下一包、AOI 頁的教導點還沒進對照表）；②Pitch 頁的 btnInXPitch1～4 等 13 顆選軸鈕照 golden 會選到那一軸（這台馬達表沒有的軸照舊變灰）；③Clear Memo 可以按；④St02 MR !97：Main CommView 的 Set Z1／Z2 小鍵盤照 golden 依 INDEX_DRIVER_TYPE 給範圍（三菱 0～100，其他 0～300）；⑤St02 MR !98：每天 08:00 的生產摘要報表（O19）照 golden 產生（要重建 wb_serve）。依序套到 123。 |
+| 20261002 09:2x | 🔧 **上機卡 E-06（第三十九批＝GitHub 第 124 包，要重建 wb_serve；⚠ 會動機構，請在機台旁）** | Teach 頁照 golden 接上 4 顆：①**In Z All Up／Out Z All Up**：入料臂／出料臂每一顆 Z 回原點（PCI1203 軸走跟 HOME 鈕同一條歸零，回完再到 ZSafePos）；按鈕會顯示 Homeing…，全部回完才變回原字。按 STOP 會停掉（golden 不會，§0 第 46 項）。②**Out Z All Down**：出料臂每一顆 Z 用 10% 速度下到「Pick Out Shuttle 高度（SetEditPickOutSht）＋那顆吸嘴的 Z 教導值」；軟體極限、安全門照舊會擋。③**Set All In／Out Arm Z**：只把各吸嘴 Z 目前位置減基準吸嘴填進畫面，不會動、要按存檔才寫檔。**請驗**：(1) 先手動把 Z 往下移一點，按 In Z All Up → 每一顆 Z 回原點、HomeFlag 變 1、按鈕字變回來；(2) 回原點途中按 STOP → 全部停住；(3) Out Z All Down → 出料臂 Z 停在預期高度（先把 SetEditPickOutSht 設成安全的值）；(4) Set All In Arm Z → 畫面的 Z 欄位＝各吸嘴位置差。結果寫在 FROM_ES02 §2／§3 |
+| 20261002 09:3x | 📌 Jimmy 1002 09:1x 裁決（`RULINGS_20261002.md`） | ①**HTDESIGNER 以後只由 ES02 改，機台端停手**（第 30 項＝A；GitHub 第 124 包的機台通知也寫了）。②馬達表 19 軸的軟體極限 ±999999 **先不改**（第 1b 項）——武裝引擎路由前仍要量實際行程填好。③Teach 頁的小鍵盤先不夾限，上機輸入教導值請人工確認（第 44 項＝A）。 |
+| 20261002 11:1x | （筆電通知；`WAITING_REPLIES` W-03 結案） | **W-03（外掛 `ioAliases()` 跳過 `#` 開頭的列）機台端早就做了**：GitHub `machine/integ-ioweb` 的 `tools/0136-HTDESIGNER-138a-...patch`（1001 15:44：`lib/aliasedit.js` 4 行、`test/run_tests.js` 8 行，外加 CHANGELOG／HANDOVER）。照 RULINGS_20261002 第 14 條（外掛只由 ES02 改），這一顆**沒有**收進 main —— **請你收進 `v906/es02-htdesigner`**（`git am` 那顆 patch，或照著改）；`tools/0137`（HANDOVER.md 一段：機台怎麼跟筆電要新版）要不要收你決定。你的 0.158～0.161（`9971b57f`）排進機台整合之後的下一批合 main。 |
+| 20261002 11:1x | ⛔ **上機卡 E-06 作廢**（筆電通知） | 第 124 包（筆電第 39 批：Teach In／Out Z All Up、Out Z All Down、Set All In／Out Arm Z）跟機台端自己的 TEACH-ZALLUP（機台 cpp 0093／web 0064，機台上早就有了）重疊，照「機台為準」**撤回**；**請不要照 E-06 測第 124 包**。Z All Up 用機台的版本；Out Z All Down、Set All In／Out Arm Z 之後照機台的寫法重做，再發新卡。 |
+| 20261002 11:1x | （筆電通知） | **機台端 10/01～10/02 推的 patch（C++ 0047～0129、網頁 0045～0082）收進 main**（gate 綠了就推＝GitHub 第 125 包，以第 123 包為底、第 124 包作廢）。重點：wb_serve 開機 10～20 秒自己結束的修正（機台 cpp 0128）、網頁斷線自動重連（web 0082）、Teach／IO／Home Monitor／Vacuum Unit 等頁。**沒收、等 Jimmy 決定**：LOGIN-HONPREC（開機就最高權限）、TEACH-KB（Teach 小鍵盤照 golden 範圍）。紀錄 `docs/MACHINE_PATCHES_20261002.md`。 |
+| 20261002 12:2x | ❓ **問題（W-13；Teach 頁新分頁 Arm Cell，RULINGS_20261002 第 18 條，Jimmy：「ES02手頭已經有ORG極限和真正軟極限」）** | 請回 FROM_ES02：①**1203 軸的 ORG 極性**（CFG_AxOrgLogic；各軸不同就分別寫）——筆電會填進程式（`kPci1203CardOrgLogic`），**不要**放 Pci1203Axis.ini（它的 tick 會寫進卡片）；②**Z 停在 ZSafePos（50）時 ORG 燈亮不亮？Z=0 時呢？**；③**真實軟極限**（M00／M01／M03／M19／M20／M22）請直接填進機台的 Mot_Table（機台設定，筆電不動），再照 `machines/README.md` 同步 git 的 `machines/HT9050/Mot_Table.csv`；④`USE_PICKER_COUNT` 該是 1（ep8）還是 4（ep1）——請 EastSun 確認；⑤機台 config.ini 的 bE33／E34／E43／E46／E47／E88、E30 系列、bP06＋bUseTrayBlockMode、bHotPlateMove1CM、bA27EnableLightScale、bE74；⑥機台 teach.ini 的 In（Loader／HP2／InShuttle1／AutoClean）與 Out（Auto1-3／Fix1-3／OutShuttle1）X/Y/Z，以及 `[InArmZSub]`／`[OutArmZSub]` 的 Picker Aa、InArmOffSet／OutArmOffSet。細節在 NB2 規格 §6。上機時機構會動，要有人在機台旁。 |
+| 20261002 12:2x | （轉 St01 1002 11:58 信）**St01 review6 第一～六批的上機結果還沒回** | 第一批 `be065d1e`、第二批 `05e3f181`、第三批 `6dd4a772`（Cleaning 頁 Clean 鈕）、第四批 `91e136d4`（Contact 頁）、第五批 `d6cda69d`（OTD 對接氣缸，要 `USE_OTD==1` 的機台）、第六批 `39293c0f`（Contact Counter 清除等）；後面的版本都包含前面的批次，用最新一版一起測即可。上機項目在各 commit 本文與 St01 的 `.claude/skills/ht9050-construction/references/human-review.md` A 區。⚠ 這幾批**還不在 main**，所以 GitHub 機台更新包裡沒有：ES02 筆電可以先在模擬組態看畫面；要上機台，得等 St01／Steven 同意先合進 main（筆電已在 TO_STEVEN §4 12:2x 提議）。結果請寫 FROM_ES02（筆電轉 St01）。 |
+| 20261002 13:5x | （轉機台端 1002 13:43 的請求；RULINGS_20261002 第 14 條：外掛只由 ES02 改） | **機台端請筆電收它的三顆設計外掛 patch，照裁決轉給你合**（都在 GitHub `machine/integ-ioweb` 的 `tools/`，可用 `git am` 套）：①`tools/0136-HTDESIGNER-138a-...`：Alias 清單略過 IO 表 `#...` 開頭的列（就是 W-03，`lib/aliasedit.js`＋測試）；②`tools/0143-HTDESIGNER-154-...`：機台合筆電第 112 包外掛那一段時的合併（看有沒有機台自己的改動，沒有就略過）；③`tools/0145-HTDESIGNER-157a-...`（0.157.0 機台補丁）：第一次用真的 VS Code 跑第 4 層抓到——0.140 的版面在開 C++ 檔時會關掉設計頁面，之後從屬性面板「跳到程式碼／HTML」讀到已關掉的頁面就整個中斷（Webview is disposed），已修；第 4 層時限 180 秒改 600。機台另外請你：第 4 層照方案總管重寫「頁面」清單那 3 項，並替 0.140 的 wpf 版面加檢查。你的分支已經是 0.161（筆電第四十三批合進 main），這三顆是照 0.157 做的，請你判斷怎麼併。機台那邊筆電會在第 126 包的通知再說一次「外掛改動走 ES02」。 |
+| 20261002 16:3x | ⏰ 追問（第 1 次；`WAITING_REPLIES` W-13） | 12:2x 請你（或 EastSun 在機台上）查的 **Arm Cell 機台資料**還沒看到回答：①1203 各軸 ORG 極性；②Z 在 ZSafePos／0 時 ORG 燈亮不亮；③**真實軟極限**（M00 MInArmX／M01 MInArmY／M03 MInArmZA／M19 MOutArmX／M20 MOutArmY／M22 MOutArmZA）；④`USE_PICKER_COUNT`；⑤config.ini 相關旗標；⑥teach.ini 的教導值（NB2 規格 §6）。⚠ **③現在最要緊**：Arm Cell 的獨立審查（1002 16:0x）量到 HT9050 的 `Mot_Table` 軟極限全是 ±999999 佔位值，所以軟體完全不限制 X/Y 能走多遠——配方的 pitch 或教導點錯一個，X/Y 會一路走到硬體極限。在填進真實值之前，Arm Cell 第一次上機只走 Loader (1,1)／(3,8)、不勾 Z Down、人在機台旁（RULINGS_20261002 第 18 條）。寫在 FROM_ES02 §3 就好，知道幾項回幾項。 |
+| 20261002 17:0x | 🔴 **上機確認：HT9050-ORG-ST（GitHub 第 128 包；NB2 MR !119）** | 1203 軸的「在原點」改成逐軸照 Mot_Table 的 SensorType（1＝ORG low 在原點、0＝high 在原點）。**套用前先改機台的 `D:\HT9045\system\Mot_Table.csv`（先備份）**：`CardModel=PCI1203` 而且 `Enable=1` 的列 SensorType 改成 1（repo 改了 M01／M03／M11／M14／M20／M22／M30／M41／M42／M108 這 10 列，M00 本來就是 1）。改完重開 wb_serve，**看 MInArmY：遮住 sensor ⇒ HOME 燈亮、放開 ⇒ 滅**；再看 MInArmZA 在 ZSafePos／原點各一次。若相反＝卡片依 `CFG_AxOrgLogic` 把 bit 4 反相了 ⇒ 先把 Mot_Table 改回、回報（FROM_ES02 §3）。這一項也是 Arm Cell（第四十六批）S2「Z 在原點」檢查的前提。說明文件 `HT9011UC_Cpp_V3.33.906.0/docs/RD5軟體_HT9050_1203原點極性與回HOME_20261002_163000.md`。 |
+| 20261002 21:4x | 📌 Jimmy 1002 20:2x（`RULINGS_20261002.md` 第 21 條）：**HT9050 的開發／測試一律用機台推上來的工作檔**（工單＋機台參數） | 原話：「機台端有透過github把工單和機台設定檔放上去，你放到gitlab後，未來要求其他人要協助開發或測試時，都要用此工作檔，這樣才能有效同步問題」。**ES02 沒有 GitLab，用 GitHub `HT9050` 的 `machine/integ-ioweb` 分支的 `machine_params/`＋`workorder/`**（機台自己推的，`ca828068`＝1002 19:29；GitLab `machines/HT9050/snapshot/` 是它的逐位元組鏡像）。在 ES02 筆電上重現或測 HT9050 的問題，先照 `machine_params/README_PARAMS.txt` 的對照裝好（先備份 → 複製 → 比 MD5 → 做完還原），`D:\GPIB9045\system\general.ini` 的 `[Version] Model` 要是 `9050GPIB`；回報時寫明用的是哪一個機台快照 commit。NIGHT_REPORT §0 第 61 項（ES02 推送時也上傳工單與機台參數）改成：機台端每次推送時已經會重拍整份快照，ES02 不用另外上傳。 |
+| 20261002 22:5x | 📌 Jimmy 1002 22:4x（`RULINGS_20261002.md` 第 23 條） | ①**軟體極限：測試中一律拉最大、不卡**（Jimmy：「一切用+-99999，拉最大，測試中先不要卡，我自行降速驗證功能」）——Mot_Table 維持 ±999999、網頁不夾；上機時請自己把速度降下來驗功能。W-13 ③（真實軟極限）先不用回。②ENGHOME（START_RING＋引擎馬達走 1203）與 LOGIN-HONPREC（開機最高權限，交機前要關）收進 main（第四十八批＝GitHub 第 130 包）。③筆電的 skill／CLAUDE.md／交接檔之後會明文放上 GitHub（ES02 在 GitHub 就看得到同一份知識）。 |
