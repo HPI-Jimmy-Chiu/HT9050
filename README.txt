@@ -693,4 +693,7 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
   cpp 0137 5825146 ORG-INV —— EastSun 1002「分支1203時 teach 和 mottest 頁面home燈號都反向」：MachineType.h 新增 #define W906_HT9050_ORG_INVERT，Motor Test／Teach 的 HOME 燈、Teach「Z 在原點」互鎖、全機 HOME 的原點確認一起反向（只有畫面反會跟互鎖說相反的話）。理由：19 軸 SensorType=0、沒遮感測器時 1203 每軸讀 1、燈全亮（20:2x 同樣情況讀 0，位元意義待查）。註解掉＝第 128 包原規則。o2 編過；ctest WebMotorAccess、MotorPoints_HT9050 過。
   掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
+  cpp 0138 71e7d7b ZHOME-200 —— EastSun 1002「Z軸歸原點 … 往回 200 就好」：所有軸照舊由驅動器回原點（124／128，驅動器設原點）；名稱以 Z 或 Z＋一個字結尾的 1203 軸（MLoaderZ、MEmptyZ、MAuto1～3Z、MInArmZA、MOutArmZA、MTestZ1）回完後用 HomeLowSpeed 朝回原點的同一方向再走 200 pulse，走完才算回原點完成（arm Z 之後照舊去 ZSafePos）。Motor Test 單軸與主畫面全機 HOME 都有。開關 MachineType.h W906_Z_HOME_BACKOFF_PULSE（負數＝反方向＝原版 SYNTEK 的 iHomePitch 方向）。o2 編過；ctest WebMotorAccess、Pci1203MotorRoute 過。
+  ⚠ 給筆電：fc2fe83 的 SensorType=1 更正機台沒照做——EastSun 1002 實測沒遮到時 1203 讀值會變，機台現在是 SensorType 全 0＋ORG-INV（cpp 0137）。
+  掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
 MD5 清單在 MANIFEST_MD5.tsv。

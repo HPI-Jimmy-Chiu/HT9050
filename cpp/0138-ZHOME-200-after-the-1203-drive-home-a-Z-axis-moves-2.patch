@@ -1,0 +1,293 @@
+From 71e7d7bb9e823f0494df27ef64fcd3407aa76191 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 2 Oct 2026 21:37:09 +0800
+Subject: [PATCH] ZHOME-200: after the 1203 drive home a Z axis moves 200
+ pulses in the home direction at HomeLowSpeed -- MachineType.h
+ W906_Z_HOME_BACKOFF_PULSE
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 1002「Z軸歸原點我需要更改動作 不是往回找home偵測到停下 是往回 200 就好」, his picks: the SAME
+direction as the home search (Mot_Table HomeDirectior), 200 pulses, HomeLowSpeed. Every axis still homes
+with the drive (Acm_AxHome 124/128, the drive sets the origin); only a Z axis -- alias ending in Z or Z+one
+char (Motor/EcatMotorRoute.h W906_IsZAxisAlias: MLoaderZ, MEmptyZ, MAuto1-3Z, MInArmZA, MOutArmZA,
+MTestZ1) -- then moves the back-off, and the home ends when that move is done.
+  * Motor Test single HOME (WebMotorAccess.cpp TickHomes): new phase 2 after READY-after-HOMING:
+    SetSpeed Init/Run = HomeLowSpeed, kCmdAxMoveRel(+-200), done = READY on a fresh sample with the
+    command position at the target (+-2); door open -> stop, HomeFlag=2; timeout -> HomeFlag=2; then
+    the home seed Run speed again and an arm Z goes to ZSafePos (phase 1) as before.
+    g_W906ZHomeBackoff (pure module), set at boot by WebMotorAccessLive.cpp from the macro.
+  * Engine HOME (Motor/myEthercatmotor.cpp EtherCatMotHome #else, the route): case 20 issues
+    W906_EcSetSpeed(low, low) + kEcMoveRel and goes to new Task 30, which returns true on MotionDone()
+    (never from a pending sample); TMyMotor::Home sets TMyEtherCatMotor::iW906ZHomeBackoff from the
+    alias. MotorHome's 90 s ResetTime bounds it.
+  ! golden's own home pitch (mySYNTEKmotor.cpp:684-692, iHomePitch=200 from TMyMotor::Home) moves the
+    OPPOSITE way; a negative W906_Z_HOME_BACKOFF_PULSE does that. Comment the #define out = no move.
+  MTestZ1 in the engine homes through the Index Z1 route only with WB_ENGINE_INDEXZ_1203 (off) -- not changed.
+
+tests/test_web_motor_access.cpp: + ZHOME-200 block (SetSpeed x2 + MoveRel +-200, waits, then ZSafePos, HomeFlag=1).
+o2: wb_serve + test_web_motor_access + test_pci1203_motor_route build; ctest WebMotorAccess, Pci1203MotorRoute pass.
+---
+ MachineType.h                   |  1 +
+ Motor/EcatMotorRoute.h          | 11 ++++++++
+ Motor/myEthercatmotor.cpp       |  7 +++++
+ Motor/myEthercatmotor.h         |  1 +
+ Motor/mymotor.cpp               |  8 ++++++
+ WebMotorAccess.cpp              | 50 ++++++++++++++++++++++++++++++++-
+ WebMotorAccess.h                |  4 +++
+ WebMotorAccessLive.cpp          |  3 ++
+ tests/test_web_motor_access.cpp | 22 +++++++++++++++
+ 9 files changed, 106 insertions(+), 1 deletion(-)
+
+diff --git a/MachineType.h b/MachineType.h
+index 05d996b..c68aef1 100644
+--- a/MachineType.h
++++ b/MachineType.h
+@@ -1776,6 +1776,7 @@ inline void vec_clr(vector<T> & v)
+ #define WB_ENGINE_IO_1203
+ #define WB_ENGINE_MOTOR_1203   //AI(W906-ENGHOME) 20261002: ON -- EastSun 1002 "main-page all-axes HOME does not reach the card -> fix it", chose "both on" (with WB_PUMP_1203_START_RING above): ProcessMotorHome / every engine move reaches the card. Was: //AI(W906-ECAT-ROUTE) 20260929: OFF by default (docs/ENGINE_1203_MOTOR_ROUTE_DESIGN.md 7.1 "預設關"). ON = wb_serve installs EtherCAT/Pci1203MotorRoute.cpp: the ENGINE's (MainProc) TMyEtherCatMotor moves / stops / homes reach the card through Pci1203Control::Execute with NO click (with :106 _LIVE they really move). Also needs INSTALL_1203_MONITOR (:121) + WB_PUMP_1203_CONTROL (:105) + WB_PUMP_1203_START_RING (:159, Q9), a build without SOFT_SIMULTE, and an armed control. To arm: uncomment here AND set WB_ENGINE_MOTOR_1203 = $true in tools/pci1203_control_gate.ps1 $expectActive -- both, or the gate and the tree disagree.
+ #define W906_HT9050_ORG_INVERT   //AI(W906-ORG-INV) 20261002: EastSun 1002 "invert the HOME lamp of the Teach and Motor Test pages on the 1203 branch" -- the HT9050 (9050GPIB) + 1203 ORG rule (per-axis SensorType, AI(W906-HT9050-ORG-ST)) answers the OPPOSITE: Motor Test led.home (JsonBridge/ChanMotorPoints.cpp), Teach HOME lamp + Teach Z-at-home interlock + engine home ORG check (WebMotorAccess.cpp g_W906OrgInvert, set in WebMotorAccessLive.cpp). Why: measured 1002 21:0x, no sensor covered, every 1203 axis read ORG bit 1 with SensorType=0. Comment out = package 128's rule as is.
++#define W906_Z_HOME_BACKOFF_PULSE  200   //AI(W906-ZHOME-200) 20261002: EastSun 1002 "Z home: after the 1203 home just go back 200", his picks: the SAME direction as the home search (Mot_Table HomeDirectior), 200 pulses, HomeLowSpeed. Every 1203 axis whose alias ends in Z or Z+one char (MLoaderZ, MEmptyZ, MAuto1-3Z, MInArmZA, MOutArmZA, MTestZ1; Motor/EcatMotorRoute.h W906_IsZAxisAlias) moves this many pulses after the drive home, in Motor Test's single HOME (WebMotorAccess.cpp TickHomes phase 2) and the engine's HOME (Motor/myEthercatmotor.cpp EtherCatMotHome Task 30); then an arm Z still goes to ZSafePos. Negative = the opposite direction (golden's own home pitch, mySYNTEKmotor.cpp:684-692). Comment out = no move after the home.
+ //#define WB_ENGINE_INDEXZ_1203   //AI(W906-INDEXZ) 20260930: OFF by default (INBOX 113 redo of cc426093; RULINGS_20260929 section 5 D2 was ON, this redo keeps it OFF like WB_ENGINE_MOTOR_1203 above). ON = wb_serve installs EtherCAT/Pci1203GaliRoute.cpp: HT9050's Index Z1 (M14 MTestZ1, PCIE-1203) answers golden's Galil strings from the 1203 monitor and moves through Pci1203Control::Execute -- the golden Index flow (DoTestHeadMotor, AutoClean, ProcessMotorHome) presses Z1 with NO click; at install M13/M15/M16 are disabled from Mot_Table (D1), IndexZCanMove={1,1} (D3), the torque hook goes in (D4). Also needs INSTALL_1203_MONITOR (:121) + WB_PUMP_1203_CONTROL (:105) + WB_PUMP_1203_START_RING (:159), a build without SOFT_SIMULTE, an armed control and an OPEN card; first automatic Index run with EastSun present; D13 / D63 must stay 0. To arm: uncomment here AND set WB_ENGINE_INDEXZ_1203 = $true in tools/pci1203_control_gate.ps1 $expectActive -- both, or the gate and the tree disagree.
+ //------------------------------------------------------------------------------
+ //  AI(W906-TOKEN-OFF) 20260928: 網頁操作權杖要不要擋人（wb_serve 開 bridge 時讀，tools/wb_serve.cpp 的 cfg.maxConnections 那一行）。
+diff --git a/Motor/EcatMotorRoute.h b/Motor/EcatMotorRoute.h
+index 32b5b09..0025f21 100644
+--- a/Motor/EcatMotorRoute.h
++++ b/Motor/EcatMotorRoute.h
+@@ -194,4 +194,15 @@ int W906_EcForeignStopResetFcmd(int board, int port);
+ // (tests/test_machine_motors.cpp part (5)). Pure MOT[] read, route installed or not.
+ int W906_EcEngineMotorsAt(int board, int port);
+ 
++//AI(W906-ZHOME-200) 20261002: EastSun「Z軸歸原點 ... 往回 200 就好」-- which motors are "Z": the alias's last 'Z' is its last
++//  character or is followed by exactly one more (MLoaderZ / MEmptyZ / MAuto1Z.., MInArmZA / MOutArmZA, MTestZ1). Shared by
++//  Motor Test (WebMotorAccess.cpp TickHomes) and the engine (Motor/mymotor.cpp TMyMotor::Home -> TMyEtherCatMotor).
++inline bool W906_IsZAxisAlias(const char* s)
++{
++    if (!s) return false;
++    int n = 0;
++    while (s[n]) ++n;
++    return (n >= 2 && s[n - 1] == 'Z') || (n >= 3 && s[n - 2] == 'Z');
++}
++
+ #endif  // MOTOR_ECATMOTORROUTE_H
+diff --git a/Motor/myEthercatmotor.cpp b/Motor/myEthercatmotor.cpp
+index 1d285d5..36424eb 100644
+--- a/Motor/myEthercatmotor.cpp
++++ b/Motor/myEthercatmotor.cpp
+@@ -294,6 +294,7 @@ __fastcall TMyEtherCatMotor::TMyEtherCatMotor(int addr)
+         cDeviceName.sprintf("%s,Board_Port:%02d_%02d","PCI1203", iBoardID, iPortID);
+     }
+     bAxisOpen=false; //RogerYang 20250403
++    iW906ZHomeBackoff=0;   //AI(W906-ZHOME-200) 20261002
+ }
+ // ------------------------------------------------------------------------
+ 
+@@ -1764,7 +1765,13 @@ bool TMyEtherCatMotor::EtherCatMotHome()
+         SetSoftLimit(999999,-999999); W906_EcHomeStart(iBoardID, iPortID, HomeDirection, PHomeHighSpeed, PHomeLowSpeed, dAcc, dDec); Task=10; break;   // result ignored like golden's MoveHome WAR16122: Task 10 regardless
+       case 10: if(W906_EcHomeDone(iBoardID, iPortID)==1) { HomeDelay.SetSecAndOn(0.3); Task=20; } break;   // a HOMING sample, then a READY one, both after the command
+       case 20: if(HomeDelay.Off()) { LastHomePos=-ReadPos(); if(W906_EcHomeCardSide(iBoardID, iPortID)) { SetCommand(0); MySleep(10); SetPosition(0); }   // DS402: no zeroing (EastSun)
++            //AI(W906-ZHOME-200) 20261002: EastSun「Z軸歸原點 ... 往回 200 就好」-- a Z axis then moves iW906ZHomeBackoff pulses (+ = the home
++            //  direction, his pick) at PHomeLowSpeed through the route's MoveRel, and the home ends when that move is done (Task 30).
++            //  golden's own home pitch (mySYNTEKmotor.cpp:684-692, iHomePitch=200 from TMyMotor::Home) moves the OPPOSITE way.
++            if(iW906ZHomeBackoff!=0) { W906_EcSetSpeed(iBoardID, iPortID, PHomeLowSpeed, PHomeLowSpeed, dAcc, dDec, false);
++                W906_EcCall(iBoardID, iPortID, kEcMoveRel, 0, (double)(HomeDirection ? iW906ZHomeBackoff : -iW906ZHomeBackoff)); Task=30; break; }
+             SetSpeed(OldSpeed); SetSoftLimit(PSoftLimitP, PSoftLimitN); Task=1; return true; } break;
++      case 30: if(MotionDone()) { SetSpeed(OldSpeed); SetSoftLimit(PSoftLimitP, PSoftLimitN); Task=1; return true; } break;   //AI(W906-ZHOME-200) 20261002: MotionDone never answers from a pending sample (design 4.2); golden MotorHome's 90 s ResetTime bounds it
+       default: Task=1; return false; }
+     return false;
+ #endif
+diff --git a/Motor/myEthercatmotor.h b/Motor/myEthercatmotor.h
+index 4db5755..48c854e 100644
+--- a/Motor/myEthercatmotor.h
++++ b/Motor/myEthercatmotor.h
+@@ -132,6 +132,7 @@ class TMyEtherCatMotor:public HTMotor
+ //        bool HomeType90();
+ 
+     public:
++        int  iW906ZHomeBackoff;                                                 //AI(W906-ZHOME-200) 20261002: pulses to move after the drive home (+ = home direction), 0 = none; set by TMyMotor::Home for Z aliases (public: TMyMotor sets it)
+         __fastcall TMyEtherCatMotor(int addr);
+         ~TMyEtherCatMotor();
+ 
+diff --git a/Motor/mymotor.cpp b/Motor/mymotor.cpp
+index d4c8407..d281e57 100644
+--- a/Motor/mymotor.cpp
++++ b/Motor/mymotor.cpp
+@@ -53,6 +53,8 @@
+ //   below (golden :43) can live where golden puts it.  Same relative order as golden
+ //   (after cmydef.h, golden :19).
+ #include "Motor/myMN200motor.h"   // MyMNetLine, MAXRing (golden myMN200motor.h:78-92 / :96)
++#include "Motor/myEthercatmotor.h"   //AI(W906-ZHOME-200) 20261002: TMyEtherCatMotor::iW906ZHomeBackoff (TMyMotor::Home below)
++#include "Motor/EcatMotorRoute.h"    //AI(W906-ZHOME-200) 20261002: W906_IsZAxisAlias
+ 
+ // ---------------------------------------------------------------------------
+ //  AI(W906-PT-W3-integrate) 20260808: RETIRED the local
+@@ -1084,6 +1086,12 @@ bool TMyMotor::Home(void)
+     GetRealPos(&Motor->iHomePitch);
+     fCMD = false;
+     SetADCRate(100);
++#ifdef W906_Z_HOME_BACKOFF_PULSE
++    //AI(W906-ZHOME-200) 20261002: EastSun「Z軸歸原點 ... 往回 200 就好」-- a 1203 Z axis moves W906_Z_HOME_BACKOFF_PULSE after the drive home
++    //  (TMyEtherCatMotor::EtherCatMotHome Task 30); every other axis homes as before.
++    if (TMyEtherCatMotor* E = dynamic_cast<TMyEtherCatMotor*>(Motor))
++        E->iW906ZHomeBackoff = W906_IsZAxisAlias(Alias.c_str()) ? (W906_Z_HOME_BACKOFF_PULSE) : 0;
++#endif
+     return Motor->HomeObject();
+ }
+ 
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index a43965a..1fa0f4e 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -6,6 +6,7 @@
+ //  ctest（tests/test_web_motor_access.cpp）直接把本檔＋cJSON＋JsonWriter 編進去配假後端。
+ // =============================================================================
+ #include "WebMotorAccess.h"
++#include "Motor/EcatMotorRoute.h"   //AI(W906-ZHOME-200) 20261002: W906_IsZAxisAlias (header-only, shared with the engine)
+ 
+ #include <chrono>
+ #include <cmath>      // AI(W906-W5-b) 20260925: std::isfinite／floor（W5B-4 目標值驗證）
+@@ -957,8 +958,10 @@ struct HomeJob {
+     //  end it, VerifyMotorAction's "Homeing" lock does not see it (golden sees it through MotionDone instead), and the motion
+     //  buttons' `btnHome->Down` guard does not refuse for it.
+     bool        fromLS;  int kind;  bool zAllUp;   //AI(W906-MT-SMHOME) 20261001: 0 = 1203 (this file's home), 1 = golden ProcessSingleMotorHome (a non-1203 row; axis stays -1)  //AI(W906-TEACH-ZALLUP) 20261001: zAllUp = started by Teach's In/Out Z All Up (golden DoZHome: no SetSpeed when it ends)
++    bool        zBackIssued, zBackDone;  double zBackTarget;   //AI(W906-ZHOME-200) 20261002: phase 2 = a Z axis moves g_W906ZHomeBackoff pulses after the drive home
+     HomeJob() : active(false), mi(-1), axis(-1), phase(0), sawHoming(false), elapsedMs(0), readyMs(0), zTarget(0), zIssued(false),
+-                cardSide(false), zeroed(false), zeroWaitMs(-1), fromLS(false), kind(0), zAllUp(false) {}
++                cardSide(false), zeroed(false), zeroWaitMs(-1), fromLS(false), kind(0), zAllUp(false),
++                zBackIssued(false), zBackDone(false), zBackTarget(0.0) {}
+ };
+ //AI(W906-MT-E3c) 20260925: golden TMyMotor's MotorMove state (iOldPos, fCMD -- members of MOT[i], golden mymotor.cpp:871-962),
+ //  for a 1203 axis driven the golden way by the All-mode loop and Light Scale (GoldenMove1203). One per motor, like golden's
+@@ -2333,6 +2336,11 @@ void TickHomes(IMotorAccessBackend& be, int ms)
+                 //  —— 在 ProcessSingleMotorHome 的 case 500（arm Z 去 ZSafePos）之前，所以每一軸都設（旋轉站的背隙補償讀它，:2012-2045）
+                 //AI(W906-MERGE-56bbf785) 20260926: machine's card-side block + LastHomePos above, then the laptop's line (both kept).
+                 be.GoldenSetRotatorLastDirP(h.mi, true);
++                //AI(W906-ZHOME-200) 20261002: EastSun「Z軸歸原點 ... 往回 200 就好」-- a Z axis first moves g_W906ZHomeBackoff pulses (phase 2), then as before
++                if (g_W906ZHomeBackoff != 0 && !h.zBackDone && W906_IsZAxisAlias(h.motorId.c_str())) {
++                    h.phase = 2; h.elapsedMs = 0; h.zBackIssued = false;
++                    continue;
++                }
+                 if (h.g.armZ) {                                                 // golden ProcessSingleMotorHome case 500：MotorMove(ZSafePos)（下一段）
+                     h.phase = 1; h.elapsedMs = 0; h.zIssued = false;
+                     continue;
+@@ -2342,6 +2350,45 @@ void TickHomes(IMotorAccessBackend& be, int ms)
+                 continue;
+             }
+             if (h.elapsedMs > kHomeTimeoutMs) { be.GoldenSetHomeFlag(h.mi, 2); CancelHome(be, h, true, "home timeout -> HomeFlag=2"); }
++        } else if (h.phase == 2) {
++            //AI(W906-ZHOME-200) 20261002: EastSun 1002 -- after the drive home a Z axis moves g_W906ZHomeBackoff pulses (+ = the home
++            //  direction, his pick; golden's own home pitch mySYNTEKmotor.cpp:684-692 goes the other way) at HomeLowSpeed, kCmdAxMoveRel.
++            //  Done = READY on a fresh sample with the command position at the target (±2); then an arm Z goes to ZSafePos (phase 1)
++            //  as before, any other Z is homed. Door open -> stop, HomeFlag=2. Bounded move: a cancel without stop still ends 200 pulses on.
++            if (be.GoldenSafeDoorOpen(h.mi)) { Stop1203(be, h.axis, -1); be.GoldenSetHomeFlag(h.mi, 2); CancelHome(be, h, false, "Z back-off: safe door open -> stopped, HomeFlag=2"); continue; }
++            if (!h.zBackIssued) {
++                double card0 = 0;
++                if (!IsReadyState(st) || SampleStale(be, h.axis) || !be.Pci1203CmdPos(h.axis, card0)) {
++                    if (h.elapsedMs > kZSafeTimeoutMs) { be.GoldenSetHomeFlag(h.mi, 2); CancelHome(be, h, true, "Z back-off: never READY -> HomeFlag=2"); }
++                    continue;
++                }
++                const struct { Pci1203SpeedParam which; double v; } seq[2] = { { kSpeedInit, (double)h.g.homeLow }, { kSpeedRun, (double)h.g.homeLow } };
++                bool spdOk = true;
++                for (int k = 0; k < 2 && spdOk; ++k) {
++                    Pci1203Cmd sc; sc.kind = kCmdAxSetSpeed; sc.axis = h.axis; sc.speed = seq[k].which; sc.value = seq[k].v;
++                    const Pci1203CmdResult sr = be.Pci1203Execute(sc);
++                    if (CmdFailed(sr)) { spdOk = false; be.GoldenSetHomeFlag(h.mi, 2); CancelHome(be, h, false, "Z back-off: speed write failed -- " + CmdWhy(sr)); }
++                }
++                if (!spdOk) continue;
++                const double dist = (h.g.homeDirection ? 1.0 : -1.0) * (double)g_W906ZHomeBackoff;
++                Pci1203Cmd c; c.kind = kCmdAxMoveRel; c.axis = h.axis; c.value = dist;
++                const Pci1203CmdResult res = be.Pci1203Execute(c);
++                if (CmdFailed(res)) { be.GoldenSetHomeFlag(h.mi, 2); CancelHome(be, h, false, "Z back-off move failed: " + CmdWhy(res)); continue; }
++                NoteIssued(be, h.axis);
++                h.zBackTarget = card0 + dist; h.zBackIssued = true;
++                continue;
++            }
++            double card = 0;
++            if (IsReadyState(st) && !SampleStale(be, h.axis) && be.Pci1203CmdPos(h.axis, card) && card - h.zBackTarget <= 2.0 && h.zBackTarget - card <= 2.0) {
++                Pci1203Cmd sc; sc.kind = kCmdAxSetSpeed; sc.axis = h.axis; sc.speed = kSpeedRun; sc.value = (double)h.g.homeHigh;   // the home seed again (StartHome1203), so ZSafePos runs as before
++                (void)be.Pci1203Execute(sc);
++                h.zBackDone = true;
++                if (h.g.armZ) { h.phase = 1; h.elapsedMs = 0; h.zIssued = false; continue; }
++                be.GoldenSetHomeFlag(h.mi, 1); SingleHomeSucceeded();
++                CancelHome(be, h, false, "home done, Z back-off done -> HomeFlag=1");
++                continue;
++            }
++            if (h.elapsedMs > kZSafeTimeoutMs) { be.GoldenSetHomeFlag(h.mi, 2); CancelHome(be, h, true, "Z back-off timeout -> HomeFlag=2"); }
+         } else {
+             // NB2 R23 W4C-2：golden uhome.cpp:597-603 case 500 `if(MOT[Index].MotorMove(ZSafePos)) { HomeFlag=true; … }`，每拍重呼叫。
+             //   MotorMove 的互鎖（mymotor.cpp:5906 起）與它的回傳值照翻：
+@@ -3885,6 +3932,7 @@ std::string MotorAccessResolveTeachButton(const TeachRegistry& reg, const std::s
+ const int kPci1203CardOrgLogic = -1;
+ bool (*g_W906OrgActiveLow)() = 0;   //AI(W906-HT9050-ORG) 20261001: 見 WebMotorAccess.h（HT9050＝1203 ORG low 才是在原點）
+ bool g_W906OrgInvert = false;       //AI(W906-ORG-INV) 20261002: 見 WebMotorAccess.h（MachineType.h W906_HT9050_ORG_INVERT）
++int  g_W906ZHomeBackoff = 0;        //AI(W906-ZHOME-200) 20261002: 見 WebMotorAccess.h（MachineType.h W906_Z_HOME_BACKOFF_PULSE）
+ 
+ int MotorAccessOrgHomeLed(bool orgBit, bool sensorType, int cardOrgLogic)
+ {
+diff --git a/WebMotorAccess.h b/WebMotorAccess.h
+index 628ffa3..7f9db28 100644
+--- a/WebMotorAccess.h
++++ b/WebMotorAccess.h
+@@ -567,6 +567,10 @@ extern bool (*g_W906OrgActiveLow)();
+ //  opposite (Teach HOME lamp, Teach Z-at-home interlock, engine home ORG check). Set at boot by WebMotorAccessLive.cpp when
+ //  MachineType.h defines W906_HT9050_ORG_INVERT; the Motor Test lamp (ChanMotorPoints.cpp led.home) reads the same macro.
+ extern bool g_W906OrgInvert;
++//AI(W906-ZHOME-200) 20261002: EastSun「Z軸歸原點 ... 往回 200 就好」-- pulses a Z axis (W906_IsZAxisAlias) moves after the drive home in
++//  Motor Test's single HOME (TickHomes phase 2); + = the home direction, 0 = none. Set at boot by WebMotorAccessLive.cpp from
++//  MachineType.h W906_Z_HOME_BACKOFF_PULSE (the engine reads the macro itself, Motor/mymotor.cpp TMyMotor::Home).
++extern int g_W906ZHomeBackoff;
+ // 純函式（測試直接驗）：orgBit＝motionIO bit 4；sensorType＝Motor->bSensorType；cardOrgLogic＝卡片的 CFG_AxOrgLogic（不是 0／1 ⇒ -1 不明）
+ int  MotorAccessOrgHomeLed(bool orgBit, bool sensorType, int cardOrgLogic);
+ int  MotorAccessTeachHomeLed(IMotorAccessBackend& be, int motIndex);
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index 81b3203..0d506ef 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -1405,6 +1405,9 @@ void W906_MotorAccessEngineHooks()
+     ht9045::g_W906OrgActiveLow = &ht9045::OrgActiveLowHT9050;                   //AI(W906-HT9050-ORG) 20261001: Teach 的也在開機就裝（不等第一個 teach 命令）
+ #ifdef W906_HT9050_ORG_INVERT
+     ht9045::g_W906OrgInvert = true;                                             //AI(W906-ORG-INV) 20261002: MachineType.h -- the HT9050 branch answers the opposite
++#endif
++#ifdef W906_Z_HOME_BACKOFF_PULSE
++    ht9045::g_W906ZHomeBackoff = (W906_Z_HOME_BACKOFF_PULSE);                   //AI(W906-ZHOME-200) 20261002: MachineType.h -- Motor Test's Z home back-off
+ #endif
+     s_done = true;  { extern void W906_MotorAccessPageEdges(); W906_MotorAccessPageEdges(); }   //AI(W906-WSLINK-B) 20260929: page-table close edges of fMotorTest / fTeach (EOF)
+     std::printf("motor.access: engine hooks registered (Motor Test / Teach fShow, 1203 motion, HOME, AllBtnUp, Stop1203All)\n");
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index 0ecec18..5a4773a 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -1280,6 +1280,28 @@ int main(int argc, char** argv)
+               "arm Z: after homing -> moveAbs to ZSafePos 20 (card 8), HomeFlag still 0 (golden case 500)");
+         be.cmdPos[5] = 8.0; MotorAccessTick(be, 500);
+         CHECK(be.homeFlags[22] == 1 && MotorAccessJobs().homesActive == 0, "arm Z at ZSafePos -> HomeFlag=1");
++        {   //AI(W906-ZHOME-200) 20261002: EastSun「Z軸歸原點 ... 往回 200 就好」-- drive home, then MoveRel ±200 at HomeLowSpeed, then ZSafePos
++            g_W906ZHomeBackoff = 200;
++            const double dist = be.golden[22].homeDirection ? 200.0 : -200.0;
++            o = MotorAccessDispatch(ReqStart("uMotorTest", "home", "MOutArmZA", true), 27, be);
++            be.state[5] = 4; MotorAccessTick(be, 500);
++            be.state[5] = 1; be.cmdPos[5] = 0.0; MotorAccessTick(be, 500);             // READY after HOMING -> phase 2
++            MotorAccessTick(be, 500);                                                   // phase 2 issues on a fresh READY sample
++            const std::size_t nb = be.executed.size();
++            CHECK(nb >= 3 && be.executed[nb - 1].kind == kCmdAxMoveRel && be.executed[nb - 1].value == dist &&
++                  be.executed[nb - 2].kind == kCmdAxSetSpeed && be.executed[nb - 2].value == (double)be.golden[22].homeLow &&
++                  be.executed[nb - 3].kind == kCmdAxSetSpeed && be.executed[nb - 3].value == (double)be.golden[22].homeLow && be.homeFlags[22] == 0,
++                  "ZHOME-200: after the drive home a Z axis gets SetSpeed(HomeLow) x2 + MoveRel(+-200 in the home direction), HomeFlag still 0");
++            MotorAccessTick(be, 500);
++            CHECK(be.executed.back().kind == kCmdAxMoveRel && be.homeFlags[22] == 0, "ZHOME-200: not at the target yet -> waits (no new command)");
++            be.cmdPos[5] = dist; MotorAccessTick(be, 500);                              // back-off done -> arm Z -> phase 1
++            MotorAccessTick(be, 500);
++            CHECK(be.executed.back().kind == kCmdAxMoveAbs && be.executed.back().value == 8.0 && be.homeFlags[22] == 0,
++                  "ZHOME-200: back-off done -> arm Z goes to ZSafePos (golden case 500) as before");
++            be.cmdPos[5] = 8.0; MotorAccessTick(be, 500);
++            CHECK(be.homeFlags[22] == 1 && MotorAccessJobs().homesActive == 0, "ZHOME-200: Z at ZSafePos -> HomeFlag=1");
++            g_W906ZHomeBackoff = 0;
++        }
+ 
+         const int n0 = (int)be.executed.size();
+         CHECK(!MotorAccessDispatch(ReqStart("uMotorTest", "home", "MInArmXScale", true), 1, be).ok && (int)be.executed.size() == n0,
+-- 
+2.55.0.windows.5
+
