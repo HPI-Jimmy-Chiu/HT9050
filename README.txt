@@ -645,4 +645,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   tools 0145 HTDESIGNER-157a（0.157.0，版本號不變，機台補丁）—— 第一次用真的 VS Code 跑第 4 層（0.79 之後一直被 VS Code 更新擋住）抓到：0.140 的版面在開 C++ 檔時會關掉頁面，之後從屬性面板「跳到程式碼／HTML」會讀到已關掉的設計畫面而整個中斷（Webview is disposed），已修；第 4 層的時限 180 秒太短改 600、測試用 design 版面跑原本的檢查：159 項 156 過，失敗的 3 項是 0.139 已經併進方案總管的「頁面」清單檢查（測試過期）。另外 head 裡第一句就 location.replace 的頁面認得是轉址頁（Setup.Configuration／Setup.DIOInterFaceCFG）。三層全過（程式庫 179、假 VS Code 219）。
   ⚠ 給筆電：(1) 請收機台的 tools 0136、0143、0145；(2) 第 4 層要照方案總管重寫「頁面」清單那 3 項，並替 0.140 的 wpf 版面（上下兩格、開 C++ 會關頁面）加檢查。機台現在外掛 0.157.0。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  web 0084 9253691 GRIDKB —— Motor Database 與 IO Table 表格的小鍵盤照原版：名稱欄只能英數字、GearRatio／Acc／Dec 小數、其他整數（以前每一格都開完整英文鍵盤，可以打出 0.0.071425 這種數字；M37 MColorZ 的 GearRatio 現在就是這個值，程式讀成 0）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
