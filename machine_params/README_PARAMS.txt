@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-02 20:57
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 5472554 ENGHOME: the main page's all-axes HOME reaches the 1203 card -- WB_ENGINE_MOTOR_12／web 365189d。
+HT9050 機台參數快照（machine_params\）—— 2026-10-02 21:18
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 5825146 ORG-INV: on the 1203 branch the HOME lamp of Motor Test and Teach is inverted (and／web 365189d。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置

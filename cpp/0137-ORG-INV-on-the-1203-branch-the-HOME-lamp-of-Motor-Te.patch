@@ -1,0 +1,142 @@
+From 58251465f5544ac6def734cfba59575c8aba9bae Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 2 Oct 2026 21:18:35 +0800
+Subject: [PATCH] ORG-INV: on the 1203 branch the HOME lamp of Motor Test and
+ Teach is inverted (and with it the Teach Z-at-home interlock and the engine
+ home ORG check) -- MachineType.h W906_HT9050_ORG_INVERT
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 1002「分支1203時 teach 和 mottest 頁面home燈號都反向」: with package 128's per-axis SensorType rule
+and all 19 enabled 1203 rows at SensorType=0, every HOME lamp was lit with no sensor covered (the
+1203 ORG bit read 1 on every axis at 21:0x; at 20:2x the same axes read 0 -- the bit's meaning is not
+settled, see WORKLOG). One switch, both consumers:
+  * JsonBridge/ChanMotorPoints.cpp led.home (Motor Test / Teach lamp): #ifdef W906_HT9050_ORG_INVERT, 9050GPIB arm only.
+  * WebMotorAccess.cpp MotorAccessTeachHomeLed (Teach HOME lamp, Teach Z-at-home interlock, the engine's
+    W906_Ht9050OrgHome): new g_W906OrgInvert (WebMotorAccess is a pure module without MachineType.h),
+    set true at boot by WebMotorAccessLive.cpp under the same #define.
+Inverting the lamp alone would leave the interlock saying the opposite of the screen; with both
+flipped a Z that reads 1 is "not at home", which blocks Teach X/Y (the safe side).
+Comment the #define out = package 128's rule unchanged.
+
+tests/test_web_motor_access.cpp: + 4 checks (inverted SensorType 0/1, back to normal).
+o2: wb_serve + test_web_motor_access + test_motor_points build; ctest WebMotorAccess, MotorPoints_HT9050 pass.
+---
+ JsonBridge/ChanMotorPoints.cpp  | 11 ++++++++++-
+ MachineType.h                   |  1 +
+ WebMotorAccess.cpp              |  3 ++-
+ WebMotorAccess.h                |  4 ++++
+ WebMotorAccessLive.cpp          |  3 +++
+ tests/test_web_motor_access.cpp | 11 +++++++++++
+ 6 files changed, 31 insertions(+), 2 deletions(-)
+
+diff --git a/JsonBridge/ChanMotorPoints.cpp b/JsonBridge/ChanMotorPoints.cpp
+index 0ac67ea..68a03d5 100644
+--- a/JsonBridge/ChanMotorPoints.cpp
++++ b/JsonBridge/ChanMotorPoints.cpp
+@@ -319,7 +319,16 @@ std::string MotorRuntimeJson()
+             w.Key("cw").Bool((io & 0x00000008ul) != 0);
+             //AI(W906-HT9050-ORG) 20261001: HT9050（9050GPIB）＋1203 分支 —— EastSun「home 是 high 時 代表沒偵測到 是 low 時 代表有偵測到」：
+             //  HOME 燈＝在原點。同 WebMotorAccess.cpp MotorAccessTeachHomeLed 的規則。//AI(W906-HT9050-ORG-ST) 20261002 (NB2): 逐軸照 Mot_Table SensorType（1＝ORG 0／low 在原點，0＝ORG 1／high 在原點；沒有馬達物件時照舊 low）
+-            w.Key("home").Bool((W906_GpibModel == "9050GPIB") ? (((motObj && !MOT[mi].Motor->bSensorType) ? (io & 0x00000010ul) != 0 : (io & 0x00000010ul) == 0)) : (io & 0x00000010ul) != 0);
++            {
++                bool home = (io & 0x00000010ul) != 0;
++                if (W906_GpibModel == "9050GPIB") {
++                    home = (motObj && !MOT[mi].Motor->bSensorType) ? (io & 0x00000010ul) != 0 : (io & 0x00000010ul) == 0;   //AI(W906-HT9050-ORG-ST) 20261002
++#ifdef W906_HT9050_ORG_INVERT
++                    home = !home;                                               //AI(W906-ORG-INV) 20261002: EastSun「分支1203時 teach 和 mottest 頁面home燈號都反向」(MachineType.h)
++#endif
++                }
++                w.Key("home").Bool(home);
++            }
+             w.Key("ccw").Bool((io & 0x00000004ul) != 0);
+             w.Key("emg").Bool((io & 0x00000040ul) != 0);
+             w.Key("alarm").Bool((io & 0x00000002ul) != 0 || (ov.state & 0xFFu) == 3u);
+diff --git a/MachineType.h b/MachineType.h
+index d04c960..05d996b 100644
+--- a/MachineType.h
++++ b/MachineType.h
+@@ -1775,6 +1775,7 @@ inline void vec_clr(vector<T> & v)
+ //    SOFT_SIMULTE 組態不接（MyLaneIO 在那裡維持模擬後端）。
+ #define WB_ENGINE_IO_1203
+ #define WB_ENGINE_MOTOR_1203   //AI(W906-ENGHOME) 20261002: ON -- EastSun 1002 "main-page all-axes HOME does not reach the card -> fix it", chose "both on" (with WB_PUMP_1203_START_RING above): ProcessMotorHome / every engine move reaches the card. Was: //AI(W906-ECAT-ROUTE) 20260929: OFF by default (docs/ENGINE_1203_MOTOR_ROUTE_DESIGN.md 7.1 "預設關"). ON = wb_serve installs EtherCAT/Pci1203MotorRoute.cpp: the ENGINE's (MainProc) TMyEtherCatMotor moves / stops / homes reach the card through Pci1203Control::Execute with NO click (with :106 _LIVE they really move). Also needs INSTALL_1203_MONITOR (:121) + WB_PUMP_1203_CONTROL (:105) + WB_PUMP_1203_START_RING (:159, Q9), a build without SOFT_SIMULTE, and an armed control. To arm: uncomment here AND set WB_ENGINE_MOTOR_1203 = $true in tools/pci1203_control_gate.ps1 $expectActive -- both, or the gate and the tree disagree.
++#define W906_HT9050_ORG_INVERT   //AI(W906-ORG-INV) 20261002: EastSun 1002 "invert the HOME lamp of the Teach and Motor Test pages on the 1203 branch" -- the HT9050 (9050GPIB) + 1203 ORG rule (per-axis SensorType, AI(W906-HT9050-ORG-ST)) answers the OPPOSITE: Motor Test led.home (JsonBridge/ChanMotorPoints.cpp), Teach HOME lamp + Teach Z-at-home interlock + engine home ORG check (WebMotorAccess.cpp g_W906OrgInvert, set in WebMotorAccessLive.cpp). Why: measured 1002 21:0x, no sensor covered, every 1203 axis read ORG bit 1 with SensorType=0. Comment out = package 128's rule as is.
+ //#define WB_ENGINE_INDEXZ_1203   //AI(W906-INDEXZ) 20260930: OFF by default (INBOX 113 redo of cc426093; RULINGS_20260929 section 5 D2 was ON, this redo keeps it OFF like WB_ENGINE_MOTOR_1203 above). ON = wb_serve installs EtherCAT/Pci1203GaliRoute.cpp: HT9050's Index Z1 (M14 MTestZ1, PCIE-1203) answers golden's Galil strings from the 1203 monitor and moves through Pci1203Control::Execute -- the golden Index flow (DoTestHeadMotor, AutoClean, ProcessMotorHome) presses Z1 with NO click; at install M13/M15/M16 are disabled from Mot_Table (D1), IndexZCanMove={1,1} (D3), the torque hook goes in (D4). Also needs INSTALL_1203_MONITOR (:121) + WB_PUMP_1203_CONTROL (:105) + WB_PUMP_1203_START_RING (:159), a build without SOFT_SIMULTE, an armed control and an OPEN card; first automatic Index run with EastSun present; D13 / D63 must stay 0. To arm: uncomment here AND set WB_ENGINE_INDEXZ_1203 = $true in tools/pci1203_control_gate.ps1 $expectActive -- both, or the gate and the tree disagree.
+ //------------------------------------------------------------------------------
+ //  AI(W906-TOKEN-OFF) 20260928: 網頁操作權杖要不要擋人（wb_serve 開 bridge 時讀，tools/wb_serve.cpp 的 cfg.maxConnections 那一行）。
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index 37fd426..a43965a 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -3884,6 +3884,7 @@ std::string MotorAccessResolveTeachButton(const TeachRegistry& reg, const std::s
+ //   監看器 motionIO bit 4（1203 監看頁或 /api），再讀一次卡片的 CFG_AxOrgLogic（EastSun 監看器目前不讀這個屬性）。量到之前 1203 軸的「在原點」一律不明。
+ const int kPci1203CardOrgLogic = -1;
+ bool (*g_W906OrgActiveLow)() = 0;   //AI(W906-HT9050-ORG) 20261001: 見 WebMotorAccess.h（HT9050＝1203 ORG low 才是在原點）
++bool g_W906OrgInvert = false;       //AI(W906-ORG-INV) 20261002: 見 WebMotorAccess.h（MachineType.h W906_HT9050_ORG_INVERT）
+ 
+ int MotorAccessOrgHomeLed(bool orgBit, bool sensorType, int cardOrgLogic)
+ {
+@@ -3907,7 +3908,7 @@ int MotorAccessTeachHomeLed(IMotorAccessBackend& be, int mi)
+     //  沒樣本／命令後沒新樣本照上面兩行仍是 -1（fail-closed）。掛勾由 WebMotorAccessLive.cpp 依 W906_GpibModel=="9050GPIB" 裝上。
+     //AI(W906-HT9050-ORG-ST) 20261002 (NB2, 使用者 1002 16:1x「照該軸 SensorType 決定」): 逐軸＝golden InitMotor :492 `uOrgLogic=bSensorType?0:1`——SensorType=1 ⇒ ORG 0（low）＝在原點，0 ⇒ ORG 1（high）＝在原點；前提與 Mot_Table 要一起改的事見 docs/RD5軟體_HT9050_1203原點極性與回HOME_20261002_163000.md
+     MotorGolden g;  if (!be.GoldenMotor(mi, g)) { g_teachHomeUnknown = alias + "：沒有 golden 馬達物件（讀不到 SensorType）"; return -1; }
+-    if (g_W906OrgActiveLow && g_W906OrgActiveLow()) { const bool orgHigh = (io & 0x00000010ul) != 0; return (g.sensorType ? !orgHigh : orgHigh) ? 1 : 0; }   //AI(W906-HT9050-ORG-ST) 20261002
++    if (g_W906OrgActiveLow && g_W906OrgActiveLow()) { const bool orgHigh = (io & 0x00000010ul) != 0; const bool home = g.sensorType ? !orgHigh : orgHigh; return (home != g_W906OrgInvert) ? 1 : 0; }   //AI(W906-HT9050-ORG-ST) 20261002; AI(W906-ORG-INV) 20261002: != g_W906OrgInvert
+     // AX_MOTION_IO_ORG（golden myEthercatmotor.cpp:860 ScanMotorStatus `(Status>>4)&0x1`）；極性見 kPci1203CardOrgLogic（W5B-R2）
+     const int led = MotorAccessOrgHomeLed((io & 0x00000010ul) != 0, g.sensorType, kPci1203CardOrgLogic);
+     if (led < 0)
+diff --git a/WebMotorAccess.h b/WebMotorAccess.h
+index fbee9d7..628ffa3 100644
+--- a/WebMotorAccess.h
++++ b/WebMotorAccess.h
+@@ -563,6 +563,10 @@ extern const int kPci1203CardOrgLogic;
+ //  1203 軸「在原點」照該軸 SensorType（1＝ORG 位元 0／low、0＝ORG 位元 1／high，AI(W906-HT9050-ORG-ST) 20261002），不看 kPci1203CardOrgLogic。null／false＝原本的規則。
+ //  同一條規則也在 JsonBridge/ChanMotorPoints.cpp 的 led.home（Motor Test／Teach 頁的 HOME 燈）。
+ extern bool (*g_W906OrgActiveLow)();
++//AI(W906-ORG-INV) 20261002: EastSun「分支1203時 teach 和 mottest 頁面home燈號都反向」-- true = the HT9050 branch above answers the
++//  opposite (Teach HOME lamp, Teach Z-at-home interlock, engine home ORG check). Set at boot by WebMotorAccessLive.cpp when
++//  MachineType.h defines W906_HT9050_ORG_INVERT; the Motor Test lamp (ChanMotorPoints.cpp led.home) reads the same macro.
++extern bool g_W906OrgInvert;
+ // 純函式（測試直接驗）：orgBit＝motionIO bit 4；sensorType＝Motor->bSensorType；cardOrgLogic＝卡片的 CFG_AxOrgLogic（不是 0／1 ⇒ -1 不明）
+ int  MotorAccessOrgHomeLed(bool orgBit, bool sensorType, int cardOrgLogic);
+ int  MotorAccessTeachHomeLed(IMotorAccessBackend& be, int motIndex);
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index ee5f8d3..81b3203 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -1403,6 +1403,9 @@ void W906_MotorAccessEngineHooks()
+     W906_BrakeServoOnHook  = &W906_HookBrakeServoOn;                            //AI(W906-MT-FIX1) 20260926
+     W906_Ht9050OrgHomeHook = &W906_HookHt9050OrgHome;                           //AI(W906-HT9050-ORG-ENG) 20261001: 引擎的「在原點」（Motor/mymotor.h）
+     ht9045::g_W906OrgActiveLow = &ht9045::OrgActiveLowHT9050;                   //AI(W906-HT9050-ORG) 20261001: Teach 的也在開機就裝（不等第一個 teach 命令）
++#ifdef W906_HT9050_ORG_INVERT
++    ht9045::g_W906OrgInvert = true;                                             //AI(W906-ORG-INV) 20261002: MachineType.h -- the HT9050 branch answers the opposite
++#endif
+     s_done = true;  { extern void W906_MotorAccessPageEdges(); W906_MotorAccessPageEdges(); }   //AI(W906-WSLINK-B) 20260929: page-table close edges of fMotorTest / fTeach (EOF)
+     std::printf("motor.access: engine hooks registered (Motor Test / Teach fShow, 1203 motion, HOME, AllBtnUp, Stop1203All)\n");
+ }
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index 683b79b..0ecec18 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -3117,6 +3117,17 @@ int main(int argc, char** argv)
+         CHECK(MotorAccessTeachHomeLed(be, mZA) == 0, "HT9050-ORG-ST: SensorType=0, ORG bit low -> NOT at home");
+         be.motionIO[1] = 0x10;
+         CHECK(MotorAccessTeachHomeLed(be, mZA) == 1, "HT9050-ORG-ST: SensorType=0, ORG bit high -> at home");
++        //AI(W906-ORG-INV) 20261002: EastSun「分支1203時 teach 和 mottest 頁面home燈號都反向」-- g_W906OrgInvert flips the HT9050 answer
++        g_W906OrgInvert = true;
++        CHECK(MotorAccessTeachHomeLed(be, mZA) == 0, "ORG-INV: SensorType=0, ORG bit high -> NOT at home when inverted");
++        be.motionIO[1] = 0x00;
++        CHECK(MotorAccessTeachHomeLed(be, mZA) == 1, "ORG-INV: SensorType=0, ORG bit low -> at home when inverted");
++        be.golden[mZA].sensorType = true;
++        CHECK(MotorAccessTeachHomeLed(be, mZA) == 0, "ORG-INV: SensorType=1, ORG bit low -> NOT at home when inverted");
++        be.golden[mZA].sensorType = false;
++        be.motionIO[1] = 0x10;
++        g_W906OrgInvert = false;
++        CHECK(MotorAccessTeachHomeLed(be, mZA) == 1, "ORG-INV: back to not inverted -> SensorType=0, ORG bit high -> at home");
+         {   // no golden motor object -> SensorType unknown -> -1 (fail-closed), reason names SensorType
+             const MotorGolden gSaved = be.golden[mZA];
+             be.golden.erase(mZA);
+-- 
+2.55.0.windows.5
+

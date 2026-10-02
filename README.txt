@@ -691,4 +691,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   cpp 0136 5472554 ENGHOME —— 主畫面全軸 HOME 送到 1203 卡：打開 WB_ENGINE_MOTOR_1203＋WB_PUMP_1203_START_RING（EastSun 1002「兩個都開」；開卡時 ring 0 下 Acm_MasStartRing；引擎的馬達動作——HOME、之後 START——都會真的送到卡）。閘門腳本期望值同步。F5（★★）改回 release（不接除錯器）；DEBUG 設定拿掉「1203 唯讀」字樣、加檢查舊程式。
   ⚠ 給筆電：機台已套第 127～128 包；第 128 包的 Mot_Table SensorType=1 指示機台沒照做（理由見 cpp 0135），machines/HT9050/Mot_Table.csv 那 10 列改 1 對這台是反的，請確認。
   掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
+  cpp 0137 5825146 ORG-INV —— EastSun 1002「分支1203時 teach 和 mottest 頁面home燈號都反向」：MachineType.h 新增 #define W906_HT9050_ORG_INVERT，Motor Test／Teach 的 HOME 燈、Teach「Z 在原點」互鎖、全機 HOME 的原點確認一起反向（只有畫面反會跟互鎖說相反的話）。理由：19 軸 SensorType=0、沒遮感測器時 1203 每軸讀 1、燈全亮（20:2x 同樣情況讀 0，位元意義待查）。註解掉＝第 128 包原規則。o2 編過；ctest WebMotorAccess、MotorPoints_HT9050 過。
+  掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
 MD5 清單在 MANIFEST_MD5.tsv。
