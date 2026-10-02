@@ -1,4 +1,4 @@
-# St02 現況板（更新：2026-10-02 09:0x）
+# St02 現況板（更新：2026-10-02 14:5x，換帳號前收尾）
 
 > 新 session 先讀這份。我是 **St02-E**；派工的協調者是 **St02-M**（session 名稱會變，目前 **github-62**，uds `\\.\pipe\LOCAL\cc-msg-2e6f870585ba6e0d521e943f8e46a02b`（14:00 重啟後 St02-M＝github-62，我＝github-de），以最新訊息的 `from=` 為準）；St01 的協調者是 **ST01-M**，St01 的工程是 **ST01-E**。
 > 規則：每個 commit 兩組態編譯、不執行；St01 跑 ctest（§2 那一列要寫測試名＋「請 St01 代跑」，ST01-M 1002 起只代跑這種列）。每次 push 後都更新這份。⚠ 1002 07:4x Steven 對 St02-M 說「你如果能跑得起來的話, 可以做測試」——St02-E 這邊還沒生效（只是轉述，St02-E 的排程指令仍寫「編譯只編不跑」），已在 St02-E 的 session 直接問 Steven，等他回。
@@ -23,6 +23,24 @@
 - ELA：`1042d4cc` W15、`2ceca61c` W18、`82196ca3` W19、`22e97891` 文件；ship 0 errors，sim 重編中；cObserver 的 diff 等回報。
 - Q41：還沒 commit（A 段 TesterIF，4 檔），sim 0 errors。
 - 16:40：gpib-widget 推到 `bf2690aa`（文件）；本機 `00772497` 已 merge main 00f9a882（有程式）→ 兩組態編譯中，過了再推。st02-on-cbridge 下次推之前要 merge St01 head（現在 5b7fe37c）。
+
+### 10-02 14:5x 狀態（換帳號前收尾；新 session 從這裡接；St02-E 寫）
+- **St02-E Session ID：`c8311755-ee3b-4c2b-9f5f-bc5682ac9613`**（session 名 github-de；St02-M＝github-62，uds `\\.\pipe\LOCAL\cc-msg-2e6f870585ba6e0d521e943f8e46a02b`；ST01-M 現在是 github-da）。Steven 14:4x：帳號週用量 90%，要換帳號。沒有 helper 在跑；所有 worktree 都乾淨（都 commit 了）；沒有推半成品。
+- main `8f3cdc53`（批 43：!101 C8、!104 C11 已合；套件 125 機台整合 283f8382 已在 main）。
+- ⚠ 測試仍然只編譯不跑：Steven 對 St02-M 說過「你如果能跑得起來的話, 可以做測試」，但 St02-E 自己的排程指令還寫「編譯只編不跑」，已在 St02-E 的 session 直接問 Steven、還沒回 ⇒ 照舊 compile＋node --check，§2 寫「請 St01 代跑」＋測試名。
+- **已推、等人：**
+  - MR !114 ADAM6024（Steven 直接指示）：`v906/st02-adam6024` `0469e8ae`（wt `D:\AI_TempFile\st02-s18`）；EP 寫出開關 `W906_ADAM_EP_LIVE` 預設關；St02-M 14:24 寄信請 Jimmy 審核；St01 14:28 同意 MainClose.cpp :118／:789-793／:1068；筆電的行等 Jimmy；St01 約 16:0x 代跑 4 個 ADAM ctest＋TesterComm_Handler＋St02_Timer3＋MainClose。認領清單 docs/handoff/ST02_ADAM6024_CLAIMS_20261002.md（本機 `D:\AI_TempFile\st02-claims\ADAM_CLAIM_SHEET_vs_main_d14fa206.txt`）。
+  - MR !108 0128 補測試：`v906/st02-0128-test` `f176c6db`（wt st02-s17）；§2 請 gate＋St01 代跑 St02_Timer3。
+  - MR !105 ADAM skill（.claude/skills/ht9045-adam6024）：`64b62161`；只有 skill，可直接合。
+- **本機、還沒推（從這裡接）：**
+  1. **LI-9 F1**：`v906/st02-li9-f1-r` `05cf7c6e`（wt `D:\AI_TempFile\st02-s14`，從 main 8f3cdc53）＝`8f94db63`＋`f9eeb124`＋`05cf7c6e`（六條認領全部同意＋WebCmdGuard kExemptNames act.lotInfoFtp.state；St01 條件都照做：#1 #2 同一個 commit、#4 在 FormLock 下、:52「後 22 列」→ 20）。⚠ **sim 建置連結失敗**：St01 新的 test_e021_observer（tests/CMakeLists.txt:6644，f3e2574b）編 ChanAction.cpp 但沒有 JsonBridge/actions/LotInfoFtp.cpp ⇒ W906_LotInfoFtpAct undefined；test_mv_trays（:3566）、test_main_record_clear（:3570，St02 2e58459b2）同樣只列 MainRecordClear.cpp。**接續**：三行都在同一行後面加 ` ../JsonBridge/actions/LotInfoFtp.cpp`（:6644 是 St01 的行＝認領），兩組態重編（log `s09close\li9r_*`），merge-tree 一行再推 MR。
+  2. **OB-7（SG_JamCount）→ C6（OB-5）**：E-021 已在 main ⇒ 解鎖；計畫稿 docs/C7_FTPSAVE_SGJAM_PLAN_20261002.md；先對 8f3cdc53 重新推導 Data.Observer.html:234 的認領（批 43 a7e1633f 動過 Observer 頁）。
+  3. **C9 Teach（G2＋G1）**：`v906/st02-c9-r` `01c0dc1d`＋`v906/st02-c9-g1` `114f8192`（wt st02-s15），基準是套件 125 之前的 58cb0888。**接續**：rebase 到 main；**拿掉 G3**（機台已接吸嘴 IO 60cc29f6、伺服鈕 71132e21、TTL 反灰 00906385）；保留 G2（36 顆旋轉鈕、Sht Go Latch、Set All Z Move）＋G1（Pitch，#46 A）；全部認領行重新推導（WebMotorAccess.cpp kActions／檔尾、test 釘子、motor-access.json＋shim、HW.teach.html:81、sync_web.py :275），舊的 ST02_C9_CLAIMS_20261002.md 要換掉。
+  4. **C10 HANA RMS**：`v906/st02-c10-hana` `83fd05e7`（wt st02-s16，基準 2a2c62c0；`3b34408a`＝筆電 3 行認領，本機）。**接續**：rebase 到 main、對 ST02_C10_CLAIMS_20261002.md 重查行號、等筆電同意後推。
+  5. **C12 按鈕普查**（只量測分類、不改程式，在 main 上）：還沒開始；golden 對照 helper 12:5x 被用量上限中斷（scratchpad\c12 有半成品腳本）；需要 headless 瀏覽器實跑，等 Steven 在 St02-E 確認或請 St01 代跑。
+  6. **C13**（fLotInfo.Timer1 每 100 ms，呼叫 St01 的 `W906_TfLotInfo_Timer1Timer()`，LotInfo_E020.h:29）：等 E-020（St01 q59 b2047c1c）進 main 才編得過。
+  7. **C14 Bin Display（新卡，Steven 14:4x）**：① skill ② C++ 照 golden BinDisplay\MyBinDisp ③ fShowBinSelect tsUnloadMap「Bin Display Status」的網頁。**還沒開始、還沒通知 Jimmy**；換帳號後等 Steven 說開始再做。
+- **今天學到的（都寫進記憶或 SKILL §5）**：golden 看不到的按鈕先查；頁面讀設定檔原值之前看 golden 是不是 edit list 固定值／另有預設；同一行加呼叫要放在既有 `//` 前；區塊範圍的函式宣告在匿名 namespace 的函式裡會變成匿名 namespace 的函式（MainClose.cpp:118 的教訓）；靜態初始化的表單建構子工作可能沒跑（0128，記憶 static-init-facade-constructor）；測試函式別叫 Mark／None／Odd／Even／Space。
 
 ### 10-02 09:0x 狀態（新 session 從這裡接；St02-E 寫）
 - main `8c1afb11`（批 38 之後：!97 C-2 CommView、!98 O19 合進來；!99 C7 計畫稿也在）。**批 39**（筆電 TO_STEVEN §1 08:4x 登記，約一小時）幾乎蓋到 C9 G2 的每一條認領：WebMotorAccess.cpp :95／:955／:957／:4243／:4322／:4325／檔尾／TickGoldenHome、WebMotorAccess.h :202／:415、WebMotorAccessLive.cpp :47／:732、test_web_motor_access.cpp :393＋三個數量行＋新的最後一段、motor-access.json btnAlarmReset 後 5 列、HW.teach.html :191／:379／:506／:611／:715 ⇒ **C9 等批 39 進 main 再 rebase、重新推導每一條 OLD／NEW**（St02 的檔尾區塊接在它們後面）。

@@ -19,7 +19,9 @@ description: >
   W906_A01AutoLogoutTick, W906_WebLoginForceOperator, D-015, palSetup, palConfig, Tools 選單, Config 選單,
   act.main.menuVisible, W906_A01MenuVisibleOp, W906_ModalWaitTick, W906_A01CONFIGINI_PATH, D-015 A01b、
   告警框密碼（D-026）：dialog.auth、TfNote::DoPassword、DoUnlockPassword、GetJamLevel、bNeedPassWord、bAlarmUnlockPassWord、
-  asUnlockPassword、AlarmUnlock.ini、W906_ALARMUNLOCK_PATH、W906_NoteAuthVerify、W906_NoteAuthAnswerGate、auth-required、verifyAuth。
+  asUnlockPassword、AlarmUnlock.ini、W906_ALARMUNLOCK_PATH、W906_NoteAuthVerify、W906_NoteAuthAnswerGate、auth-required、verifyAuth、
+  另外兩個密碼框（D-034）：SpecialPanel、PanSpecialNoteClick、bErrPan_err、SpecialErrNote.ini、special-note、W906_SpecialPanelLocked、
+  MyMessageBox::DoPassword_MBox、mbox-password、W906_DoPasswordMBox、W906_ReauthConfigI37、[I37_1] FIFO、i37_1、reauthAll、W906_ReauthHasAnswerFor。
   golden 8 條路徑與移植樹對照全文 → references/password-paths.md；login.dat 位元組格式與 PW_Editor → references/login-dat-format.md
 ---
 
@@ -146,5 +148,36 @@ Steven01 這台 `D:\HT9045\system\Gerneral.ini` 的 `CUSTOMER_CODE=791` ⇒ 走 
   - 頁面：`D:\HT9045\web\page\ht9045_dialog_host.js:283-352` `HTDialogHost.verifyAuth`（dialog-bridge.js 不改）；登入框按取消＝補送 `{"cancelled":true}`（Q45-4＝A：空白帳密＝錯，有密碼本時變 Operator）。
 - **密碼**：只走本機 WS（127.0.0.1），比對只在 C++；回應、printf、log 都不含密碼（OPLOG 看到 `passw` 也不記內容）；打的字用完清成 0；頁面送出後把物件裡的密碼清空。
 - **[W906]**：（1）golden 同一次按鍵裡問完就關框，網頁拆成 dialog.auth＋回答兩個指令，中間靠一次性通行；（2）解除密碼＋登入兩個框同一次按鍵（CC_ASE_M）拆成兩次 dialog.auth（回 `stage:"login"`）；（3）WAR1677 不發（golden 本來就不顯示）；（4）AlarmUnlock.ini 不在 ⇒ 什麼都比不中；（5）面板鍵不能代替畫面輸入（被擋的面板鍵不動畫面那張通行，免得頁面接著送的回答被拒、而 dialog-bridge.js 已經不再開登入框）。
-- **沒做**：HandlerResultServer 面板鎖（`bNeedTCPAlarm` 的關框限制，解鎖指令沒翻）、SpecialPanel 密碼、`MyMessageBox::DoPassword_MBox`、SECS 工號檢查、Greatek FTP 密碼本。
+- **沒做**：HandlerResultServer 面板鎖（`bNeedTCPAlarm` 的關框限制，解鎖指令沒翻）、SECS 工號檢查（St02，照 S25 結案）、Greatek FTP 密碼本。SpecialPanel 密碼與 `MyMessageBox::DoPassword_MBox` 在 20261002 D-034 做了，見 §10。
 - ctest：`D026_NoteAuth`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tests\test_note_auth.cpp`，假密碼本／假 JAM0000.dat／假 AlarmUnlock.ini 都在 build 目錄的 `note_auth_scratch`；對照組 `W906_D026_SRC_ROOT`）、`D026_NoteAuthPage`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\webprobe\d026_note_auth_selftest.cjs`；對照組 `W906_DIALOG_HOST_JS`）。
+
+## 10. 另外兩個密碼框：SpecialPanel 與 MyMessageBox::DoPassword_MBox（todo D-034，20261002，AI(W906-D034)）
+
+同 D-026／B5 的設計（Q45「甲」）：網頁只收集打的字，**比對只在 C++**；回應、printf、log 都不含密碼（RULINGS_20261001 #40）。St02 那一半（SECS 工號檢查 `CheckEmployeeID`）照 S25 結案，計畫書 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\D034_PLAN_20261002.md`（St02 MR !88）。
+
+### 10.1 SpecialPanel（契約 kind `special-note`）
+
+- **golden**（V912 `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\note.cpp`）：
+  - 開框 `TfNote::FormShow` `:1574-1616`：`IniConfig.bIndexDropNeedPwdByIni`（[I] Index 掉料 JAM0303～0306／0314／0315）或 `IniConfig.bTesterTimeUpErrorNeedPassword`（WAR07352）⇒ `bShowSpecialPan`；是 ⇒ `bErrPan_err=true`。`D:\HT9045\system\SpecialErrNote.ini`（`asErrNotePath`）`[SUCK] TestSuck==1` ⇒ 讀 `[MESSAGE] En／Ch`（`lblSpecialNoteEn／Ch`）與 `[PASSWORD] Pwd`；否則 `Pwd=""`、`bErrPan_err=false`。
+  - 鎖：`bErrPan_err==true && Pwd!=""` 時每一個按鍵都直接 return —— `BtnSkipClick` `:2867`（八個選鍵）、`ScanKey` `:2908-2913`（面板鍵，Alarm Reset 除外）、`BtnStartClick` `:3858`（出貨組態）、`BtnPauseClick` `:3870`、`BtnResetClick` `:5261`（在 `fMain->BtnResetClick` 之後）。
+  - 解：`PanSpecialNoteClick` `:5489-5507`：點紅色面板 → 小鍵盤 → 打的字＝`Pwd` ⇒ `bErrPan_err=false`（CC_LINGSEN＋Tester Time Up ⇒ `iTestTimeUpErrContinueR=2`）。沒有登入、沒有等級。
+  - `bErrPan_err`／`Pwd` 是 note.cpp **檔案層級全域**（`:91`／`:119`），不是每一則各一份：下一則 FormShow 不會清 `bErrPan_err`（只會重讀 `Pwd`），沒解鎖就關掉的框會讓下一則也鎖著（golden 怪處，照翻）。
+- **移植樹**：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\WebLogin.cpp` D-026 那一段裡（`FormShowSpecialPanelBlock`、`PanSpecialNoteClick`、全域 `bErrPan_err`／`Pwd` 在 `noteauth` 命名空間）：
+  - 信箱 `auth`：鎖著 ⇒ `kind:"special-note"`、`special:true`、每一個提供的鍵都在 `actions`、`prompt` 帶 SpecialErrNote.ini 的 En／Ch；dialog-bridge.js／login-page.js 不用改（`userIdRequired` 只在後面還要登入、又有密碼本時才是 true）。
+  - `dialog.auth`：鎖著時先比特殊密碼（不跑 DoPassword）：錯 ⇒ `stage:"special"`；對了而這一鍵還要 DoUnlockPassword／DoPassword ⇒ `accepted:false`、`stage:"unlock"／"login"`（同 D-026 的兩段式）；都不用 ⇒ `accepted:true`。
+  - 三個閘（`W906_NoteAuthAnswerGate`／`W906_NoteAuthIoGate`／`W906_NoteAuthNoticeGate`）鎖著一律拒；通知只在「是 PAUSE 那一按」時鎖（同 D-026 的 pause 2）。
+  - 面板鍵選鍵：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\wb_serve.cpp:7324`／`:7326`（筆電檔，FROM_STEVEN §1 認領 C1／C2）`W906_SpecialPanelLocked()` ⇒ `blocked`（golden ScanKey 直接 return，連選鍵、關蜂鳴器都不做）。
+  - 測試縫：沒有 getenv；測試直接把全域 `asErrNotePath` 指到 scratch 資料夾（`D026_NoteAuth` 8b）。
+- **沒做**：Alert.Note 頁面上紅色 `PanSpecialNote` 的顯示（`dialog-page.js`，在 `tsRedAlarm` 隱藏分頁裡；現在靠登入框 Label5 的 prompt 顯示 En／Ch）；`TfNote::Timer1Timer` `:3307`／`:3315` 的 Out Arm 掉料開第 6 門那一段（`bOpenSixDoor` 沒移植，那裡的 `Pwd` 是固定的鎖標記）；`forms/fNote_ShowError.cpp` 的 GATE B1 仍是 `#if 0`（通知那一條改由 NoticeGate 擋，註解過時，筆電的檔）。
+
+### 10.2 MyMessageBox::DoPassword_MBox（契約 kind `mbox-password`）
+
+- **golden** `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\mymessbox.cpp:1228-1286`：權限表**第 35 項**；`fInput->fShow==false`（伺服器沒有小鍵盤表單 ⇒ 一律走）；CC_PTI 另一條（出貨組態是廠商密碼 Gerneral.ini `[VENDER] HONPREC`，模擬組態 `#else #endif` 什麼都不做＝直接過）；其他：有密碼本 ⇒ `cbUserSelectChange(NULL)`、沒有 ⇒ `stOperatorClick`；`AccessLevel<iLevel && iLevel>0` ⇒ false（**第 35 項＝0 照樣跳登入框，打什麼都過**；沒有 REAL_TIME_CCD 條件）；有密碼本時問完**一律登出成 Operator**（`:1275-1282`）。
+- golden 呼叫點與移植樹：
+  - `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cConfiguration.cpp:7353-7369` `CheckConfigurationBeforeSave`：`cbI37_1`（FIFO）由關改開 ⇒ 問；錯 ⇒ `cbI37_1->Checked=false`、其他照存。**接上**：editlist.save 的 `reauth` point `"i37_1"` → `W906_ReauthConfigI37` → `W906_DoPasswordMBox`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\WebLogin.cpp` 檔尾 D-034 段；宣告 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\WebReauth.h`）；產生檔 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\IniConfig.gen.inc` 的 `IC_DoPasswordMBox`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\editlist\IniConfig.py` 的 replace＋member，`python tools/gen_editlist.py --only IniConfig` 重產，產生器輸出 LF、要轉回 CRLF）；沒帶答案照舊 `filerw::ELPasswordRefused`。CC_PTI 出貨組態照 Q45 #1～#3＝C：網頁版不提供（golden 的「錯」，不讀也不寫 Gerneral.ini）。
+  - 同一次存檔 M01 也改了 ⇒ golden 問兩次 ⇒ `reauth` 可以是陣列 `[{point:"m01",…},{point:"i37_1",…}]`（重複的點整次拒），回應多一個 `reauthAll`；單一物件跟以前位元組相同。`IC_PasswordGuard` 改看 `W906_ReauthHasAnswerFor("IniConfig","m01")`。
+  - extra.auth 的 `points[i37_1]`：`kind:"mbox-password"`、`armed`、`turnOnOnly`、`levelItem:35`、`level`、`logoutAfter`（有密碼本）；CC_PTI 出貨組態 `kind:"vendor"`、`armed:false`。
+  - 頁面 `D:\HT9045\web\page\ht9045_iniconfig_auth_c.js`：FIFO 由關改開 ⇒ 登入小鍵盤（先 M01、再 FIFO）；取消＝`{cancelled:true}`。
+  - `mymessbox.cpp:457-470` `pnlPauseClick` 的 `bMBoxNeedPassword`：**到不了** —— 只有 `ShowMyMessagePWD`（`:1164-1226`）會設它，而它沒移植（呼叫端是筆電的閘：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\WebStart.cpp` W906-ST-W7-C-DLG、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\PowerSavingMode.cpp` GATE (3)）。`W906_DoPasswordMBox` 的 `mboxArm`＝golden `main.cpp:13285`（stOperatorClick 的 Supervisor／Engineer 那一臂）已經備好給那一天用。
+  - `pnlPauseClick` 的 SECS 分支（`:467-523`）與 `TSecsAlarmForm::btnOKClick`（`:1455-1490`）：只有 KYEC_LEE／JSCC_OS／SCC（`CosFunction.bUseN07_5`），RULINGS #25 客戶專屬先跳過；`fSecsAlarm` 在移植樹是 NULL。
+- ctest：`WebLogin_Reauth` 6b（C++）、`D034_IniConfigFifoPage`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\webprobe\d034_iniconfig_fifo_selftest.cjs`，node 離線；對照組 `W906_INICONFIG_AUTH_JS`）、`D026_NoteAuth` 8b（SpecialPanel）。

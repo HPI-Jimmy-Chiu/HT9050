@@ -660,7 +660,7 @@ golden #4 是「點下去當下」問、每點一格問一次；建議做法是�
 ### 11.5 沒做（交給別人或以後）
 
 - HandlerResultServer 面板鎖（golden `BtnStartClick` `:3848`／`BtnPauseClick` `:3868` 的 `bNeedTCPAlarm` 直接不給關，要 IT 下指令解鎖）：解鎖指令沒翻，照做會讓框永遠關不掉；等級計算有照做。
-- SpecialPanel 密碼（`bErrPan_err`／`Pwd`）、`MyMessageBox::DoPassword_MBox`、SECS 工號檢查（契約 `dialogAuth.kinds` 的另外三種）、Greatek FTP 密碼本（N15）。
+- （20261002 更正：SpecialPanel 與 DoPassword_MBox 已在 D-034 做了，見 §12；SECS 工號檢查 St02 照 S25 結案）SpecialPanel 密碼（`bErrPan_err`／`Pwd`）、`MyMessageBox::DoPassword_MBox`、SECS 工號檢查（契約 `dialogAuth.kinds` 的另外三種）、Greatek FTP 密碼本（N15）。
 - 開框當下畫面上的 PanSpecialNote、BtnHome 字樣等純顯示的 FormShow 行。
 - 筆電的檔：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\forms\fNote.h` 的 GATE (N-14) 仍是「成員函式不定義」的連結互鎖（本次是自由函式翻譯，沒動它）；`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\forms\fNote_ShowError.cpp` 的 GATE(W906-J5-ACK) B3 註解說 dialog.auth 沒接——現在接了，由 wb_serve 的通知閘擋，註解要筆電改。
 
@@ -669,3 +669,10 @@ golden #4 是「點下去當下」問、每點一格問一次；建議做法是�
 - `D026_NoteAuth`（C++）：開框旗標、密碼本（過／錯／不夠／取消／CC_PTI／登出）、下拉選單（fNote 那一臂）、F15／VTEST／SCC／KYEC_LEE／WAR04217／O16／統計／SECS 等待、解除密碼（錯／對／兩步／檔案不在）、通知、面板鍵、信箱 JSON、wb_serve 等三個檔的呼叫點；所有輸出與這段時間寫的 log 裡假密碼 0 次；六個真檔沒變。對照組 `W906_D026_SRC_ROOT` 指到改之前的三個檔 ⇒ 紅。
 - `D026_NoteAuthPage`（node，離線）：`verifyAuth` 的送出形狀、密碼清空、回應對應、錯誤不帶密碼、不同步 throw、取消補送（沒有密碼欄）。對照組 `W906_DIALOG_HOST_JS` 指到改之前的檔 ⇒ 紅。
 - 沒有上機、沒有跑 wb_serve、沒有跑探針。上機請 Steven 在一個權限表設了等級的代碼上試：按 Start 跳登入框 → 錯的不關 → 對的關、主畫面變 Operator（有密碼本時）。
+
+## 12. 另外兩個密碼框（20261002，todo D-034，St01 那一半）
+
+- **SpecialPanel**（golden V912 `note.cpp` FormShow `:1574-1616`、PanSpecialNoteClick `:5489-5507`）：比對目標＝`D:\HT9045\system\SpecialErrNote.ini` `[PASSWORD]`（明文檔，golden 設計）。網頁走 D-026 同一條 `dialog.auth`（信箱 `auth.kind:"special-note"`），鎖著時先比特殊密碼、不跑 DoPassword；對了而這一鍵還要登入 ⇒ `stage:"login"` 兩段式。不綁連線／權杖／登入的人（同 Q64 (3)）。
+- **DoPassword_MBox**（`mymessbox.cpp:1228-1286`）：本設計「甲」的第 8 個點 —— Configuration `[I37_1]` FIFO 由關改開（`cConfiguration.cpp:7353-7369`），editlist.save 的 `reauth` point `"i37_1"`，`levelItem` 35、**沒有** REAL_TIME_CCD 條件、第 35 項＝0 照樣問（打什麼都過）、有密碼本一律登出成 Operator。同一次存檔 M01 也改 ⇒ `reauth` 送陣列 `[m01, i37_1]`（golden 問兩次），回應 `reauthAll`；單一物件位元組不變。CC_PTI 出貨組態是廠商密碼 ⇒ 照 #1～#3＝C 不提供。
+- 檔案：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\WebLogin.cpp`（B5 段的陣列／點、D-026 段的 SpecialPanel、檔尾 D-034 段）、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\WebReauth.h`、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\WebNoteAuth.h`、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\editlist\IniConfig.py`＋`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\IniConfig.gen.inc`、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\IniConfig.cpp`（IC_PasswordGuard 看 m01 那一筆）、`D:\HT9045\web\page\ht9045_iniconfig_auth_c.js`、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\wb_serve.cpp:7324`／`:7326`／`:4897`（認領）。
+- ctest：`WebLogin_Reauth` 6b、`D026_NoteAuth` 8b、`D034_IniConfigFifoPage`。

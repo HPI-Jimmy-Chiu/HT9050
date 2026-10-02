@@ -1,6 +1,6 @@
 ---
 name: ht9045-alarm-dismissal
-description: HT9045 告警「解除」機制知識庫 —— 四種組合（stop / nonstop × note / message）各自用什麼鍵解除、實體 IO 面板鍵與畫面按鈕的分工、解除前的權限閘（DoUnlockPassword / DoPassword / DoPassword_MBox）。當使用者詢問 alarm 怎麼解除、怎麼關掉、Note 關不掉、MessageBox 關不掉、按了 Retry 沒反應、Alarm Reset 為什麼不關窗、K_Pause、K_Retry、ScanKey、ScanPannelKey、SnFKStart、SnFKPause、UpdateButtonStatus、KeyComp、ReturnCode、解除密碼、bAlarmUnlockPassWord、GetJemUnlockPassWord、NonStop 告警怎麼關 等問題時，應先載入此技能。關鍵字：alarm 解除, 解除告警, 關閉 alarm, Note 關不掉, dismiss, ScanKey, ScanPannelKey, SnFKPause, SnFKStart, SnFKRetry, K_PAUSE, KeyComp, ReturnCode, UpdateButtonStatus, DoPassword, DoUnlockPassword, DoPassword_MBox, bAlarmUnlockPassWord, GetJemUnlockPassWord, bDisableKeypad, AlarmReset, NonStop, Alert.Note, MyMessageBox。另涵蓋告警「位置」的顯示：ShowErrorUnit, FlushPanel, iPosition, palSys, arguments.position, display.flushPanel, dbFlush, palInArm, palSafeDoor9, Panel5, tsHandler, 紅框閃爍, 告警位置指錯, Motion View 內嵌, ErrShowToForm, reDescription, reBigDescription, AlarmDescription, Error 資料夾 dat, Alarm-description.json, AlarmCodeList, 單元編號, Edit3, codeUnits, 交叉驗證, Alert.MotionView, Alert.MotionView9050, almDoors, createTrayStatusUnit, sim_alarm, HTDialogBridge.build。
+description: HT9045 告警「解除」機制知識庫 —— 四種組合（stop / nonstop × note / message）各自用什麼鍵解除、實體 IO 面板鍵與畫面按鈕的分工、解除前的權限閘（DoUnlockPassword / DoPassword / DoPassword_MBox）。當使用者詢問 alarm 怎麼解除、怎麼關掉、Note 關不掉、MessageBox 關不掉、按了 Retry 沒反應、Alarm Reset 為什麼不關窗、K_Pause、K_Retry、ScanKey、ScanPannelKey、SnFKStart、SnFKPause、UpdateButtonStatus、KeyComp、ReturnCode、解除密碼、bAlarmUnlockPassWord、GetJemUnlockPassWord、NonStop 告警怎麼關 等問題時，應先載入此技能。關鍵字：alarm 解除, 解除告警, 關閉 alarm, Note 關不掉, dismiss, ScanKey, ScanPannelKey, SnFKPause, SnFKStart, SnFKRetry, K_PAUSE, KeyComp, ReturnCode, UpdateButtonStatus, DoPassword, DoUnlockPassword, DoPassword_MBox, SpecialPanel, PanSpecialNoteClick, bErrPan_err, SpecialErrNote.ini, special-note, mbox-password, W906_DoPasswordMBox, W906_SpecialPanelLocked, [I37_1] FIFO（D-034）, bAlarmUnlockPassWord, GetJemUnlockPassWord, bDisableKeypad, AlarmReset, NonStop, Alert.Note, MyMessageBox。另涵蓋告警「位置」的顯示：ShowErrorUnit, FlushPanel, iPosition, palSys, arguments.position, display.flushPanel, dbFlush, palInArm, palSafeDoor9, Panel5, tsHandler, 紅框閃爍, 告警位置指錯, Motion View 內嵌, ErrShowToForm, reDescription, reBigDescription, AlarmDescription, Error 資料夾 dat, Alarm-description.json, AlarmCodeList, 單元編號, Edit3, codeUnits, 交叉驗證, Alert.MotionView, Alert.MotionView9050, almDoors, createTrayStatusUnit, sim_alarm, HTDialogBridge.build。
 ---
 
 # HT9045 告警解除機制
@@ -289,6 +289,21 @@ if(CosFunction.bUseAlarmUnlockPassWord==true)
 
 **這是 golden 的既有行為，不是 bug —— 翻譯時要照抄，不要自作主張補上密碼檢查。**
 note 那邊沒有這個洞（實體鍵走 `Start()`/`BtnPauseClick()`，與滑鼠同一個函式）。
+
+### V906 現況（20261002，todo D-034，`AI(W906-D034)`；細節見 `ht9045-login` §10）
+
+- `DoPassword_MBox()`（V912 `mymessbox.cpp:1228-1286`；權限表第 35 項，＝0 也照樣跳登入框）的四個 golden 呼叫點：
+  - Configuration `[I37_1]` FIFO 由關改開（`cConfiguration.cpp:7353-7369`）：**接上**，editlist.save 的 `reauth` point `i37_1`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\WebLogin.cpp` 檔尾 `W906_DoPasswordMBox`）。
+  - `pnlPauseClick` 的 `bMBoxNeedPassword`：**到不了** —— 只有 `ShowMyMessagePWD` 會設它，而它沒移植（筆電的閘 WebStart.cpp W906-ST-W7-C-DLG、PowerSavingMode.cpp GATE (3)）。
+  - `pnlPauseClick` SECS 分支、`TSecsAlarmForm::btnOKClick`：KYEC_LEE／JSCC_OS／SCC 專屬（RULINGS #25），沒做。
+- 上面「實體鍵繞過密碼」那條 message 非對稱照舊（移植樹 `W906MbIoDismiss` 也不問密碼）。
+
+### 第三層：SpecialPanel 密碼（`PanSpecialNoteClick`，只有 note）
+
+- 開框 `TfNote::FormShow` V912 `note.cpp:1574-1616`：[I] Index 掉料（JAM0303～0306／0314／0315）或 Tester Time Up（WAR07352）＋ `D:\HT9045\system\SpecialErrNote.ini` `[SUCK] TestSuck==1` ⇒ `bErrPan_err=true`、`Pwd` 讀 `[PASSWORD]`。
+- 鎖著時**每一個按鍵都直接 return**：選鍵 `BtnSkipClick` `:2867`、面板 `ScanKey` `:2908-2913`（**Alarm Reset 例外**）、`BtnStartClick` `:3858`、`BtnPauseClick` `:3870`、`BtnResetClick` `:5261`。要先點紅色面板 `PanSpecialNote`、打對 `Pwd`（`:5489-5507`）才解；跟登入等級無關。
+- 全域、不是每一則各一份：沒解鎖就被關掉的框，下一則（只要 TestSuck 還是 1）照樣鎖著。
+- V906：信箱 `auth.kind:"special-note"`、`dialog.auth` 先比特殊密碼、三個閘先擋（`WebLogin.cpp` D-026 段）；面板鍵 `tools/wb_serve.cpp:7324`／`:7326` `W906_SpecialPanelLocked()`。頁面的紅色面板還沒畫（prompt 帶 En／Ch）。
 
 ---
 

@@ -236,6 +236,36 @@ RunInfo.LotNo = edtSysLotID->Text;  // 在 SetLotID 中設定
 
 ---
 
+## 9b. V906 移植樹：RTC 換檔、Change File、palSecsGem 暗門（20261002，St01，todo E-020 LI-6／LI-11／LI-13）
+
+golden＝V912 `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\uLotInfo.cpp`（Big5，用 cp950 讀）。移植樹＝`D:\HT9045\HT9011UC_Cpp_V3.33.906.0`。
+
+| 項目 | golden | 移植樹 |
+|------|--------|--------|
+| RTC 換檔狀態機 | `Timer1Timer` :5366-5453、`RTCChangeFile(bool bNeedDelete=true)` :5455-5475、`enum eWaitRtcDeleteTask` :5357-5363、`TQPF_Timer WaitRtcDeleteDelay` :5364；Timer1 dfm :14621-14626（Enabled=False、Interval=100） | `LotInfo_E020.cpp`（ht9045_sm）；宣告在 `forms/fLotInfo.h:2333`（同一行） |
+| Change File | `btChangeFileClick` :10394-10418（dfm :4641-4648；可見度 FormShow :572） | `W906_E020_btChangeFileClick`（`LotInfo_E020.cpp`）；網頁 `act.lotInfo.changeFile` |
+| palSecsGem 6 下暗門 | `palSecsGemMouseDown` :10532-10606（dfm palSecsGem :314-323） | 本體＝jimmychiu 的 `forms/fLotInfo.cpp:4794`（照 golden）；網頁 `act.lotInfo.palSecsGemMouseDown` |
+
+- **RTC 換檔的呼叫者**（V912）：`cSetUp.cpp:2846`／`:2854`（讀配方；移植樹 `cSetUp.cpp:1084`／`:1094`，20261002 解閘）、`uhome.cpp:1946`（歸零；移植樹 `uhome.cpp:1554`，解閘，等待點 `:1956` 讀 `bRTCChangeFileFinish`）、`main.cpp:11017`（開機，移植樹沒有那段 FormShow）、`cContact.cpp:14673`（ROI 學習，fContact 沒移植）。
+- 呼叫條件都是 `REAL_TIME_CCD && !COM2->bCCDDummyRum`；模擬組態 `bCCDDummyRum` 永遠 true（`cSetUp.cpp:1055-1056`），所以只有出貨組態＋Gerneral.ini `REAL_TIME_CCD=1`＋配方開 CCD buffer 才會進來。
+- **COM2 的 RTC 視覺那一半沒有移植**（`atester_shims.h:373-462` 的 `TCOM2Shim` 只有扭力那半）：Timer1Timer 裡每一個送給視覺的敘述（@FILE、@SITE、DELETE、MODEL、InspEnd）都閘住（`GATE (W906-E020-LI6-1)`～`-6`），每一筆印一行 `[E020-LI6] GATE ... skipped` 並記在 `W906_E020_RtcSkips()`（最後 200 筆）；狀態機與旗標照 golden 跑。
+  結果＝golden 在 RTC 斷線時的行為：DELETE 的回覆永遠等不到，`wrdWaitReply` 靠 golden 自己的 10 秒逾時（:5434）結束，最後 `bSendRealCCDSendStart=true`、`bRTCChangeFileFinish=true`、Timer1 關掉。
+- **Timer1 還沒有人敲**（todo X-1／E-025，Jimmy 的 timer 表）：`W906_TfLotInfo_Timer1Timer()` 是給將來 timer 卡用的 OnTimer（每 100 ms 呼叫；照 VCL，只有 `Timer1->Enabled` 時才跑）。接上之前，`RTCChangeFile` 只把 Timer1 打開，歸零在 `uhome.cpp:1956` 照舊等（每 10 秒「RTC Change File TimeOut」）——跟解閘前一樣。
+  ⚠ 接上 timer 卡之後：RTC 機台歸零會完成，但視覺端沒收到 @FILE／@SITE／MODEL（human-review A，要上機看）。
+- **Change File（BarCode 分頁）**：分支照 golden 選；三個分支都還沒移植，C++ 回 `guard:"gated"`＋`whyNot:"GATE (W906-E020-LI11-n): ..."`，什麼都不做：
+  - `-1` `BAR_CODE_INSTALL==ebctInShtIntel`：golden 按 fBarCode 的 change-file 斷線／連線鈕（V912 `BarCode/BarCode.cpp:6141-6160`，ClientSocket_BarcodeChangeFile）——移植樹 fBarCode 沒有這兩顆鈕。
+  - `-2` `ebctEtherNetCCD`、`-3` `ebctUseCCDMode`＋`CosFunction.b2DUseSubJobFunction`＋`TestIF_File.b2DUseSubJob`：golden `bBarcodeConnect=true`＋`InitialBarcodeScanChangeFile()`＋`TimerBarcodeChangeFile` → `DoBarcodeChangeFile`（`BarCode.cpp:6217-~6700`）——整條換檔鏈沒移植（`cStateRecord.cpp:1938` GATE、`WebRecipeChange.cpp:537` 缺口同一件事）；**不單獨設 `bBarcodeConnect`**。
+  - golden 不走任何分支（`bEnableBarCode` 關、或沒有對應的 BAR_CODE_INSTALL）＝ executed、什麼都不做（照 golden）。
+  - 按鈕看不看得到：C++ 先照 FormShow :571-572 重算（`tab-hidden`／`button-hidden`）；頁面另外照 tag `lot.barcode.changeFile.visible` 顯示。
+  - BarCode 的筆記放這裡：`ht9045-barcode-flow`／`ht9045-clearcount-flow` 兩支是 RogerYang 的、已在 main 撤掉（RULINGS_20261002 第 13 條），不要重建。
+- **palSecsGem 暗門**：左左右右左左（golden `static int iStep`）；運轉中、等級低於 HonPrec、`CC_KYEC_LEE` 時 golden 直接 return。第 6 下：Lot ID 空的 ⇒ `SetLotID("0123456789")`（寫 `AuthPath config.ini [Lot Info]` 的 Lot ID、LotStartTime、Customer Lot ID，改 `RunInfo.LotNo`），Operator ID 空的 ⇒ "12345"。golden 沒有任何提示。
+  網頁每一下都送（排隊、不丟、不套冷卻），帶 `seq`（第幾下），不然伺服器 WebCmdGuard（同指令＋同 value 400 ms 內 ⇒ busy:）會把「左、左」併成一下；按在面板裡的按鈕上不算；面板右鍵不跳瀏覽器選單。C++ 先查 `tsLotID` 分頁與 `palSecsGem` 看不看得到（`tab-hidden`／`panel-hidden`）。
+  主畫面的 Lot Start 框（筆電的 `ht9045_lotstart.js`）不會預填這兩個值（交給筆電）。
+- 網頁路由：`JsonBridge/ChanAction.cpp:348`（同一行）→ `ht9045::sjson::W906_LotInfoE020Act`；act.* 照例要操作權杖、過 WebCmdGuard、不持 FormLock（E-021 先例）。頁面 `D:\HT9045\web\page\ht9045_lotinfo_e020.js`（`Data.LotInfo.html` :496 載入、:302 拿掉 disabled、:92 加 `data-e020`）。
+- ctest：`E020_LotInfoRTC`、`E020_LotInfoActs`（`tests/test_e020_lotinfo_e020.cpp`；測試一定要 `W906_AUTH_PATH` 指到沙盒，否則 exit 2）、`E020_LotInfoPage`（node）。對照組：`W906_E020_SRC_ROOT`／`W906_E020_PAGE_DIR` 指到改之前的檔要變紅。
+
+---
+
 ## 10. 已知問題 / 注意事項
 
 | 問題 | 說明 |
