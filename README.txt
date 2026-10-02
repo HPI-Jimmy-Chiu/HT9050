@@ -640,4 +640,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      網頁斷線、Teach 等頁被擋。修法只動 cObserver.cpp（第一次用到時照原版補建曲線與下拉選項、ItemIndex-1 超出範圍就不畫）與 forms/fObserver.h（SeriesCount()），
      不移動行號。也請一起收 web 0082（TAGS-RECONNECT：background.html 的 tag 連線斷了每 2 秒重連）。cpp 0127（F5-EXTCON）只改 .vscode/launch.json，main 不用收。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  web 0083 34fcbbd HSYS-ENTRY —— 機況監視列的「⚙ Handler System」入口重新看得到（0930 LAYOUT110 把每頁底部的程式對應說明列一律藏起來，入口剛好放在那一列裡，被一起藏掉）；搬到 OCR 那一行的右邊，點了一樣問密碼再開 Handler System。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
