@@ -1,0 +1,982 @@
+From 7508a5a2e4889dc395384989bc0794189c85112b Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 2 Oct 2026 20:56:31 +0800
+Subject: [PATCH] PKG-128: GitHub main 5c3a4a8 (GitLab main 116a0809) on the
+ machine -- NB2 !119 HT9050-ORG-ST (the 1203 HOME lamp / Teach Z-at-home /
+ engine home ORG check follow each axis's Mot_Table SensorType: 1 = ORG low is
+ home, 0 = high), Ifor !109 SetTempSave as golden, St02 !108 test
+
+EastSun 1002 chose package 128's rule after measuring "no home sensor covered -> 1203 reads 0" (the
+20261001 HT9050-ORG rule "0 = home" lit every HOME lamp). The package asks to set SensorType=1 on the
+machine's Mot_Table first; NOT done: that keeps "0 = home", the direction EastSun just measured wrong.
+The 16 enabled 1203 rows with SensorType=0 stay 0 (high = home, matches the measurement); MInArmX /
+MInArmY / MInArmZA (SensorType=1) to be checked by covering the sensor. Mot_Table untouched.
+
+check_and_copy: NEW 2 / OLD 11 / LOCAL 5; the LOCAL files (WebMotorAccess.cpp/.h, WebMotorAccessLive.cpp,
+tests/CMakeLists.txt, tools/wb_serve.cpp) merged three-way against the package's base_025fdabe
+(= package 127): 0 conflicts; the extra CMake LINK_GROUP line is test_settemp_save's own block.
+Package files LF -> CRLF.
+
+o2: wb_serve + test_pci1203_motor_route / test_web_motor_access / test_settemp_save / test_st02_timer3
+build; ctest Pci1203MotorRoute, WebMotorAccess, EcatMotorRoute, SetTempSave, St02_Timer3, NoticeAck,
+ThermoComm 8/8; pe_truncation_check 95/95 (built together with the ENGHOME MachineType.h change).
+---
+ JsonBridge/ChanMotorPoints.cpp                |   4 +-
+ Motor/mymotor.h                               |   2 +-
+ WebMotorAccess.cpp                            |   8 +-
+ WebMotorAccess.h                              |   2 +-
+ WebMotorAccessLive.cpp                        |   2 +-
+ docs/HAL_MOTTABLE_CLASSIFICATION.md           |   2 +-
+ docs/MACHINE_PATCHES_20261002.md              |   5 +
+ docs/NIGHT_REPORT.md                          |   7 +-
+ ...10\207\345\233\236HOME_20261002_163000.md" | 106 +++++++++
+ docs/RULINGS_20261002.md                      |   7 +
+ forms/fMain.h                                 |   2 +-
+ forms/fMain_Heater.cpp                        |  30 +--
+ tests/CMakeLists.txt                          |  14 ++
+ tests/test_settemp_save.cpp                   | 224 ++++++++++++++++++
+ tests/test_st02_timer3.cpp                    |  43 ++++
+ tests/test_web_motor_access.cpp               |  23 +-
+ tools/wb_serve.cpp                            |   2 +-
+ uTemp_Set.cpp                                 | 129 ++++++++--
+ 18 files changed, 560 insertions(+), 52 deletions(-)
+ create mode 100644 "docs/RD5\350\273\237\351\253\224_HT9050_1203\345\216\237\351\273\236\346\245\265\346\200\247\350\210\207\345\233\236HOME_20261002_163000.md"
+ create mode 100644 tests/test_settemp_save.cpp
+
+diff --git a/JsonBridge/ChanMotorPoints.cpp b/JsonBridge/ChanMotorPoints.cpp
+index ebb27b1..0ac67ea 100644
+--- a/JsonBridge/ChanMotorPoints.cpp
++++ b/JsonBridge/ChanMotorPoints.cpp
+@@ -318,8 +318,8 @@ std::string MotorRuntimeJson()
+             w.BeginObject();
+             w.Key("cw").Bool((io & 0x00000008ul) != 0);
+             //AI(W906-HT9050-ORG) 20261001: HT9050（9050GPIB）＋1203 分支 —— EastSun「home 是 high 時 代表沒偵測到 是 low 時 代表有偵測到」：
+-            //  HOME 燈＝在原點＝ORG 位元 0（low）。同 WebMotorAccess.cpp MotorAccessTeachHomeLed 的規則（Teach 的「Z 在原點」判斷）。
+-            w.Key("home").Bool((W906_GpibModel == "9050GPIB") ? (io & 0x00000010ul) == 0 : (io & 0x00000010ul) != 0);
++            //  HOME 燈＝在原點。同 WebMotorAccess.cpp MotorAccessTeachHomeLed 的規則。//AI(W906-HT9050-ORG-ST) 20261002 (NB2): 逐軸照 Mot_Table SensorType（1＝ORG 0／low 在原點，0＝ORG 1／high 在原點；沒有馬達物件時照舊 low）
++            w.Key("home").Bool((W906_GpibModel == "9050GPIB") ? (((motObj && !MOT[mi].Motor->bSensorType) ? (io & 0x00000010ul) != 0 : (io & 0x00000010ul) == 0)) : (io & 0x00000010ul) != 0);
+             w.Key("ccw").Bool((io & 0x00000004ul) != 0);
+             w.Key("emg").Bool((io & 0x00000040ul) != 0);
+             w.Key("alarm").Bool((io & 0x00000002ul) != 0 || (ov.state & 0xFFu) == 3u);
+diff --git a/Motor/mymotor.h b/Motor/mymotor.h
+index f4735e0..939db9f 100644
+--- a/Motor/mymotor.h
++++ b/Motor/mymotor.h
+@@ -87,7 +87,7 @@ class TTrayMotor;
+ 
+ // ---------------------------------------------------------------------------
+ //AI(W906-HT9050-ORG-ENG) 20261001: HT9050＋1203 分支，引擎這一半。EastSun 20261001「所有動作如果有馬達判定home的 都要用9050 1203來判定」
+-//  （規則：1203 回來的原點訊號 low＝在原點、high＝沒偵測到；Teach 那一半在 WebMotorAccess.cpp MotorAccessTeachHomeLed）。
++//  （規則：1203 回來的原點訊號照該軸 Mot_Table SensorType——1＝low 在原點、0＝high 在原點，AI(W906-HT9050-ORG-ST) 20261002；Teach 那一半在 WebMotorAccess.cpp MotorAccessTeachHomeLed）。
+ //  掛勾由 wb_serve 開機裝（WebMotorAccessLive.cpp W906_MotorAccessEngineHooks）：回 -2＝不歸這條管（不是 HT9050，或不是 PCI1203 軸）→ golden 原樣；
+ //  -1＝讀不到 1203 的原點訊號 → 當成不在原點（fail-closed）；0＝不在原點；1＝在原點。沒裝（ctest、其他機種）＝-2。
+ //  用在：TMyMotor::ScanMotorStatus 的最後（全引擎讀 MOT[i].Led[iHomeLed] 的地方都先經過它），以及兩個直接問 Motor->HomeFlag() 的回原點流程
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index fc68901..37fd426 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -3903,11 +3903,11 @@ int MotorAccessTeachHomeLed(IMotorAccessBackend& be, int mi)
+     if (!be.Pci1203MotionIO(a.axis, io)) { g_teachHomeUnknown = alias + "：監看器沒有這一軸的樣本"; return -1; }
+     if (SampleStale(be, a.axis)) { g_teachHomeUnknown = alias + "：命令之後監看器還沒有新樣本"; return -1; }   // 命令之後還沒新樣本
+     //AI(W906-HT9050-ORG) 20261001: HT9050＋1203 分支 —— EastSun「偵測全部都要改用1203回來的home訊號 不是用IO了，home 是 high 時 代表沒偵測到、
+-    //  是 low 時 代表有偵測到」。卡片 ORG 位元（motionIO bit 4）＝0（low）＝在原點；不再看 SensorType／kPci1203CardOrgLogic（不明＝不在原點那條）。
++    //  是 low 時 代表有偵測到」。卡片 ORG 位元（motionIO bit 4）當成 /Home 原始準位；不看 kPci1203CardOrgLogic（不明＝不在原點那條）。
+     //  沒樣本／命令後沒新樣本照上面兩行仍是 -1（fail-closed）。掛勾由 WebMotorAccessLive.cpp 依 W906_GpibModel=="9050GPIB" 裝上。
+-    if (g_W906OrgActiveLow && g_W906OrgActiveLow()) return ((io & 0x00000010ul) != 0) ? 0 : 1;
+-    MotorGolden g;
+-    if (!be.GoldenMotor(mi, g)) { g_teachHomeUnknown = alias + "：沒有 golden 馬達物件（讀不到 SensorType）"; return -1; }
++    //AI(W906-HT9050-ORG-ST) 20261002 (NB2, 使用者 1002 16:1x「照該軸 SensorType 決定」): 逐軸＝golden InitMotor :492 `uOrgLogic=bSensorType?0:1`——SensorType=1 ⇒ ORG 0（low）＝在原點，0 ⇒ ORG 1（high）＝在原點；前提與 Mot_Table 要一起改的事見 docs/RD5軟體_HT9050_1203原點極性與回HOME_20261002_163000.md
++    MotorGolden g;  if (!be.GoldenMotor(mi, g)) { g_teachHomeUnknown = alias + "：沒有 golden 馬達物件（讀不到 SensorType）"; return -1; }
++    if (g_W906OrgActiveLow && g_W906OrgActiveLow()) { const bool orgHigh = (io & 0x00000010ul) != 0; return (g.sensorType ? !orgHigh : orgHigh) ? 1 : 0; }   //AI(W906-HT9050-ORG-ST) 20261002
+     // AX_MOTION_IO_ORG（golden myEthercatmotor.cpp:860 ScanMotorStatus `(Status>>4)&0x1`）；極性見 kPci1203CardOrgLogic（W5B-R2）
+     const int led = MotorAccessOrgHomeLed((io & 0x00000010ul) != 0, g.sensorType, kPci1203CardOrgLogic);
+     if (led < 0)
+diff --git a/WebMotorAccess.h b/WebMotorAccess.h
+index a1bc830..fbee9d7 100644
+--- a/WebMotorAccess.h
++++ b/WebMotorAccess.h
+@@ -560,7 +560,7 @@ bool MotorAccessStartBlocked(std::string& why);
+ extern const int kPci1203CardOrgLogic;
+ //AI(W906-HT9050-ORG) 20261001: HT9050＋1203 分支（EastSun 20261001「我需要你分支 使用9050 並且使用1203 偵測全部都要改用1203回來的home訊號
+ //  不是用IO了 並且home 是hight時 代表沒偵測到 是low時 代表有偵測到」）。掛勾回 true（WebMotorAccessLive.cpp 裝的：W906_GpibModel=="9050GPIB"）時，
+-//  1203 軸「在原點」＝卡片 ORG 位元 0（low），不看 SensorType 與 kPci1203CardOrgLogic。null／false＝原本的規則。
++//  1203 軸「在原點」照該軸 SensorType（1＝ORG 位元 0／low、0＝ORG 位元 1／high，AI(W906-HT9050-ORG-ST) 20261002），不看 kPci1203CardOrgLogic。null／false＝原本的規則。
+ //  同一條規則也在 JsonBridge/ChanMotorPoints.cpp 的 led.home（Motor Test／Teach 頁的 HOME 燈）。
+ extern bool (*g_W906OrgActiveLow)();
+ // 純函式（測試直接驗）：orgBit＝motionIO bit 4；sensorType＝Motor->bSensorType；cardOrgLogic＝卡片的 CFG_AxOrgLogic（不是 0／1 ⇒ -1 不明）
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index a809dec..ee5f8d3 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -1333,7 +1333,7 @@ static bool W906_HookFShow(const char* goldenForm)                             /
+ }
+ static int  W906_HookMoving(int motIndex) { return ht9045::MotorAccessMovingOf(ht9045::MotorAccessLiveBackend(), motIndex); }
+ static bool W906_HookHoming() { return ht9045::MotorAccessHomingActive(); }
+-//AI(W906-HT9050-ORG-ENG) 20261001: 引擎的「馬達在原點」（Motor/mymotor.h W906_Ht9050OrgHomeHook）。HT9050＋1203 軸＝1203 監看器的原點訊號 low，
++//AI(W906-HT9050-ORG-ENG) 20261001: 引擎的「馬達在原點」（Motor/mymotor.h W906_Ht9050OrgHomeHook）。HT9050＋1203 軸＝1203 監看器的原點訊號照該軸 SensorType（1＝low、0＝high，AI(W906-HT9050-ORG-ST) 20261002），
+ //  跟 Teach 同一支 MotorAccessTeachHomeLed（-2 不是 1203 軸、-1 讀不到／命令後沒新樣本、Mot_Table Enable=0＝1 照 golden、0／1）。不是 HT9050＝-2（golden 原樣）。
+ static int W906_HookHt9050OrgHome(int mi)
+ {
+diff --git a/docs/HAL_MOTTABLE_CLASSIFICATION.md b/docs/HAL_MOTTABLE_CLASSIFICATION.md
+index 246595d..3225905 100644
+--- a/docs/HAL_MOTTABLE_CLASSIFICATION.md
++++ b/docs/HAL_MOTTABLE_CLASSIFICATION.md
+@@ -84,7 +84,7 @@ HT9050 要讓「mot_table.csv 決定分類」成立，**前提是 IO_CARD_TYPE 
+ | EncodeType | 24 | `iEncodeType` | **無消費者**（見 §9 absence #1） | （名義上）編碼器型式 | 兩樹皆 parsed-but-unread |
+ | PickLimit | 25 | `iPickLimit` | :3992-3993（僅 MTestZ1/Z2 → `MOT[i].IndexPickLimit`） | 下壓吸取極限（Z 保護） | database 端也只在 Alias∈{MTestZ1,MTestZ2} 才讀（port 註 database.cpp:2443-2444） |
+ | LimitLogic | 26 | `iLimitLogic` | :3971 → `bLimitLogic` | 極限開關邏輯極性 | MC88X1 強制 0（database.cpp:2608-2614） |
+-| In1Logic | 27 | `iIn1Logic` | :3972 → `bIn1Logic` | IN1（近原點/抵達）輸入極性 | 1203 卡側有 CFG_AxIN1Stop* 硬體互鎖族（RECON_PCIE1203_CommonMotion.md §3） |
++| In1Logic | 27 | `iIn1Logic` | :3972 → `bIn1Logic` | ~~IN1（近原點/抵達）輸入極性~~ **EtherCAT／PCIE-1203 軸（TMyEtherCatMotor）＝伺服警報（ALM）訊號的極性**：`Motor/myEthercatmotor.cpp:2016`／`:2069` `uAlmLogic=bIn1Logic? 0:1`（`CFG_AxAlmLogic`）（AI(W906-HT9050-ORG-ST) 20261002：NB2 R154 更正） | 1203 卡側有 CFG_AxIN1Stop* 硬體互鎖族（RECON_PCIE1203_CommonMotion.md §3） |
+ 
+ （fallback 序照 TMOTNO ctor database.cpp:2152-2184；上表個別欄我把 ctor 值照抄，
+ 與現役 CSV 物理序不同處正是 §3.1 的重點，勿拿 fallback 序去讀檔。）
+diff --git a/docs/MACHINE_PATCHES_20261002.md b/docs/MACHINE_PATCHES_20261002.md
+index a2b5c62..a80f7af 100644
+--- a/docs/MACHINE_PATCHES_20261002.md
++++ b/docs/MACHINE_PATCHES_20261002.md
+@@ -75,3 +75,8 @@ b42p 兩組態全新 11:37～12:15（HEAD e7fef6ac）：出貨 332 支 4 項、
+ | tools 0145 HTDESIGNER-157a（13:43）＋請筆電收 tools 0136／0143／0145 | 設計外掛：0.140 的版面開 C++ 檔會關掉設計頁，之後「跳到程式碼」讀到已關的頁面而中斷（Webview is disposed），已修；第 4 層時限 180→600 秒 | 照 RULINGS_20261002 第 14 條轉 ES02（TO_ES02 §4 13:5x，main `862c2ed1`）；第 126 包的機台通知重申「外掛改動走 ES02」 |
+ 
+ 下一次從 **cpp 0130／web 0085／tools 0146** 開始；C++ 鏈尾 `a64c46ff`、web 鏈尾 `78ee7510`。
++
++## 8. 增補（1002 16:4x）：HT9050-ORG 被 ORG-ST 取代
++
++- 機台的 **HT9050-ORG（cpp 0050）**（1203 軸「ORG low＝在原點」）上表列為「照機台」。1002 16:1x 使用者直接交辦 NB2 改成**逐軸照 Mot_Table SensorType**（MR !119，`5390cf1b`；GitLab main 本批＝GitHub 第 128 包），同一段 `WebMotorAccess.cpp:3903-3913`、`JsonBridge/ChanMotorPoints.cpp:322` ⇒ **以 ORG-ST 為準**；機台之後再送這段的 patch 要先講。
++- 機台套第 128 包前要把自己的 `system\Mot_Table.csv` 裡 `CardModel=PCI1203`、`Enable=1` 的列 SensorType 改成 1（repo 的 `machines/HT9050/Mot_Table.csv` 已改 10 列），沒改原點判斷會反過來。
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index f9b3793..b515e6e 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -10,6 +10,7 @@
+ 
+ | 項目 | 在哪 | 狀態／下一步 |
+ |---|---|---|
++| ✅ **ORG-ST：NB2 MR !119**（你 1002 16:1x 交辦 NB2、16:3x「編譯沒問題就立即 push」） | GitLab main 本批＝GitHub 第 128 包 | HT9050 的 1203 軸「在原點」（Teach／Arm Cell 的 Z 在原點檢查、引擎原點旗標、HOME 燈）**逐軸照 Mot_Table 的 SensorType**：1＝ORG low 在原點、0＝high 在原點（＝golden InitMotor）；`machines/HT9050/Mot_Table.csv` 10 列 SensorType 0→1 ⇒ HT9050 行為跟以前一樣。⚠ **機台自己的 `system\Mot_Table.csv` 也要改這 10 列**，沒改就套新 wb_serve，原點判斷會反過來（Z 不在原點也被當成在原點）——第 128 包的機台通知寫在最前面。另更正 `docs/HAL_MOTTABLE_CLASSIFICATION.md:87`（In1Logic 在 1203 軸是伺服警報極性，NB2 R154）。驗證：出貨＋模擬兩組態全新建置 0 錯誤（出貨截斷檢查 309 個 exe/dll 完整）；SensorType 相關 12 支 ctest 兩組態都過（WebMotorAccess、MotorPoints／MachineMotors_HT9050、MT_E3b_Engine、MtSaveMotTable、GaliRoute 三支、Pci1203／Ecat 路由、TeachButtonsGen、Stream2E_MvMotor；模擬的 WebMotorAccess 在負載下逾時，單獨重跑 1.8 秒過）。⚠ **Steven 16:57～16:59 已在 GitLab 網頁先合了 !119 和另外 4 張（`2dd90ef3`：Ifor !109 SetTempSave、St02 !108 測試、!117／!118 skill）**，都沒經過筆電 gate ⇒ 筆電把合併後的 main 再編兩組態、補跑 !109／!108 的測試：增量建置兩組態 0 錯誤；14 支（12 支 SensorType 相關＋SetTempSave＋St02_Timer3）兩組態都過（模擬組態 4 支在超載下逾時，一支一支單獨重跑都過）；第 128 包就從這個 main 切 |
+ | ✅ **第四十四批：第四十一批＋St02 !105＋Ifor !106＋機台 web 0083／0084** | GitLab main 本批＝GitHub 第 127 包 | ①第四十一批（你 1002 09:1x 第 37 項 A）：通知框的確認鈕照 golden 會暫停機台；阻塞型警報按 PAUSE 照 golden 送 DoPause 與 ESD 停止（INBOX 122／123）；②Ifor !106：溫控序列埠照 golden（I-03 第一階段）、ThermoComm 改成讓出 CPU；③St02 !105：ADAM-6024 skill；④機台 13:38 web 0083（底部狀態列的 Handler System 入口）、14:05 web 0084（Motor Database／IO Table 表格的小鍵盤照 golden；機台 M37 的 GearRatio 被打成 0.0.071425 就是這個）。gate：出貨 335 支 4 敗＝基準；模擬 335 支 22 敗＝19 基準＋3 支負載逾時（St02_Timer3／St02_TimerESD／TesterComm_HomeJson：同時段 Arm Cell 子代理在跑建置與測試，單獨重跑 3/3 過、各約 4 秒）；模擬的截斷檢查被防毒卡 20 分鐘、停掉後補跑 309 個 exe/dll 完整；sysguard 0 |
+ | ✅ **第四十三批：同事的 MR**（你 1002 12:2x「接下來是同事推gitlab部分要MR」） | GitLab main 本批＝GitHub 第 126 包 | St01 q59 到 `7898802a`（E-021 Observer 保養紀錄分頁、D-044 客戶名 906 對照表；12:10 的 `b2047c1c` 等 St01 自己 gate）、St02 !101（C8）／!104（C11）、Ifor !102（R126 M2／M3）／!100（文件）、Steven !103（skill）、ES02 HTDESIGNER 0.161。**Time Data 分頁機台跟 St01 做重了，照機台為準**（`a7e1633f`）；合併時吃掉一行 `endif()`，b43a configure 失敗，已補（`630134fb`）。gate：b43b 兩組態全新 12:37～13:55（HEAD 630134fb）：出貨 334 支 4 項＝基準；模擬 334 支 20 項＝基準 19 項＋WB_WsLink（負載下逾時，單獨重跑通過 17.8 秒）；執行期資料夾前後 0／0／0；模擬組態的截斷檢查被防毒拖住、砍掉後補跑（INBOX 149） |
+ | ✅ **機台端 patch 第三輪**（你 1002 09:5x「機台端一旦有更新，必須立即性」） | GitLab main 本批＝GitHub 第 125 包（以第 123 包為底，第 124 包作廢） | 機台 1001～1002 推的 121 顆：收 96 顆（含 0128「wb_serve 開機 10～20 秒自己結束」的修正、web 0082 斷線重連）；PKG／MERGE 21 顆與 0127 不收；LOGIN-HONPREC、TEACH-KB 保留（§0 第 50、51 項）。逐顆紀錄與衝突 `docs/MACHINE_PATCHES_20261002.md`；gate：b42p 兩組態全新 11:37～12:15（HEAD e7fef6ac）：出貨 332 支 4 項、模擬 332 支 19 項，失敗集合逐名＝基準；執行期資料夾前後 0／0／0；absence 3 個已知名稱；numcmp PASS A=2 B=11 B′=3 C=30、未覆核 0。機台在筆電的兩組態才看得到的 4 支紅燈（UAC 擋名字含 setup 的測試執行檔、模擬組態的鍵鎖期待值、Teach 輪詢測試的假 DOM、一處直接讀 bShow）已修（`907b7759`、`e7fef6ac`） |
+@@ -430,7 +431,11 @@
+ | `862c2ed1` | —（只動文件） | 機台 13:43 請筆電收的外掛 tools 0136／0143／0145 轉 ES02（第 14 條） |
+ | `8549dc78` 等 4 顆（Steven） | —（只動文件） | Steven 1002 14:54～14:55 在 GitLab 網頁直接合：!103 到 `8b411762`（St01 E-027 溫度條 skill）、!105（ADAM-6024 skill）、!110（Ifor 在 CLAUDE.md 加一節，§0 第 57 項）、!113（NB2 文件，含 V912 code review 退件對照） |
+ | `60c70965` | —（只動文件） | 回 St02 MR !114 七題（開關預設關、Q2 RunTestProgram 筆電第四十六批開閘、Q7 B2／M1 標籤對調）、St01 E-027 background.html 認領 OK、St02 C14 Bin 顯示器現況、Jerry !107、Ifor !110；§0 第 56／57 項；W-08／W-09 結案、W-14 問機台 |
+-| 本批（第四十四批，含本份報告） | 127（hash 見下一批） | 第四十一批＋St02 !105＋Ifor !106＋機台 web 0083／0084；gate：出貨 335 支 4 敗＝基準；模擬 335 支 22 敗＝19 基準＋3 支負載逾時（St02_Timer3／St02_TimerESD／TesterComm_HomeJson：同時段 Arm Cell 子代理在跑建置與測試，單獨重跑 3/3 過、各約 4 秒）；模擬的截斷檢查被防毒卡 20 分鐘、停掉後補跑 309 個 exe/dll 完整；sysguard 0 |
++| `025fdabe` | 127 `bce78fd` | 第四十一批＋St02 !105＋Ifor !106＋機台 web 0083／0084；gate：出貨 335 支 4 敗＝基準；模擬 335 支 22 敗＝19 基準＋3 支負載逾時（St02_Timer3／St02_TimerESD／TesterComm_HomeJson：同時段 Arm Cell 子代理在跑建置與測試，單獨重跑 3/3 過、各約 4 秒）；模擬的截斷檢查被防毒卡 20 分鐘、停掉後補跑 309 個 exe/dll 完整；sysguard 0 |
++| `3942682e` | —（只動文件） | RULINGS_20261002 第 19 條（Jerry 測過的項目＝筆電確認邏輯＋兩組態編譯成功就收；例 Timetick）、TO_JERRY 請他推 Timetick 修改、W-15 |
++| `9da8b949` | —（只動文件） | St02-M 14:24 信（請審 !114）已讀；回 3c348627 審查原文在哪 |
++| `13aa49dd` | —（只動文件） | W-13 第 1 次追問（Arm Cell 機台資料，真實軟極限最要緊）；轉 NB2 R155（St01 E-021 兩個中度：寫檔失敗被吞掉）給 St01 |
++| 本批（ORG-ST，含本份報告） | 128（hash 見下一批） | NB2 !119 HT9050-ORG-ST；出貨＋模擬兩組態全新建置 0 錯誤（出貨截斷檢查 309 個 exe/dll 完整）；SensorType 相關 12 支 ctest 兩組態都過（WebMotorAccess、MotorPoints／MachineMotors_HT9050、MT_E3b_Engine、MtSaveMotTable、GaliRoute 三支、Pci1203／Ecat 路由、TeachButtonsGen、Stream2E_MvMotor；模擬的 WebMotorAccess 在負載下逾時，單獨重跑 1.8 秒過）；含 Steven 網頁合的 `2dd90ef3`（!119／!109／!108／!117／!118） |
+ | — | — | **夜間迴圈（新帳號）**：cron `f34a7ab2`（`7,27,47 * * * *`＝每 20 分鐘，session 閒置才觸發、7 天自動到期），0930 21:0x 掛上。⚠ session-scoped：視窗關掉或筆電被強制關機就沒了 |
+ 
+ ## §6 我自己犯的錯與更正
+diff --git "a/docs/RD5\350\273\237\351\253\224_HT9050_1203\345\216\237\351\273\236\346\245\265\346\200\247\350\210\207\345\233\236HOME_20261002_163000.md" "b/docs/RD5\350\273\237\351\253\224_HT9050_1203\345\216\237\351\273\236\346\245\265\346\200\247\350\210\207\345\233\236HOME_20261002_163000.md"
+new file mode 100644
+index 0000000..fa46244
+--- /dev/null
++++ "b/docs/RD5\350\273\237\351\253\224_HT9050_1203\345\216\237\351\273\236\346\245\265\346\200\247\350\210\207\345\233\236HOME_20261002_163000.md"
+@@ -0,0 +1,106 @@
++# HT9050 PCI1203 軸：原點極性與回 HOME（NB2 整理，20261002）
++
++> 給所有人查閱。依據 main 的程式碼、安裝在 NB2 的 Advantech Common Motion SDK 範例，以及機台端的實測紀錄（`docs/WORKLOG_MACHINE.md`）。行號以本檔加入時的 main 為準。
++
++## 1. 這次改了什麼（`AI(W906-HT9050-ORG-ST)` 20261002）
++
++**使用者 1002 16:1x 指示**：HT9050（GPIB `general.ini` 的 `Model=9050GPIB`）的 1203 軸，原點判斷「照該軸 Mot_Table `SensorType` 決定」，像 SMC 一樣改表就能換邊。
++
++| | 改之前（`AI(W906-HT9050-ORG)` 20261001） | 改之後 |
++|---|---|---|
++| 規則 | 所有 1203 軸一律「ORG 位元 0（low）＝在原點」，不看 SensorType | **逐軸**：`SensorType=1` ⇒ low＝在原點；`SensorType=0` ⇒ high＝在原點（跟 golden `InitMotor` `uOrgLogic = bSensorType ? ORG_ACT_LOW : ORG_ACT_HIGH` 同一個意思） |
++| 判斷（Teach 的「Z 在原點」檢查、引擎 `Led[iHomeLed]`、回原點 case 20、`uhome.cpp` InArmX 檢查） | `WebMotorAccess.cpp` `MotorAccessTeachHomeLed` | 同一支，改成逐軸 |
++| 顯示（Motor Test／Motor View 的 HOME 燈） | `JsonBridge/ChanMotorPoints.cpp` `led.home` | 同一條規則（純顯示） |
++| `machines/HT9050/Mot_Table.csv` | 啟用中的 1203 軸 SensorType 有 0 有 1 | 啟用中的 1203 軸**全部 1**（M01 MInArmY、M03 MInArmZA、M11 MInShutte1、M14 MTestZ1、M20 MOutArmY、M22 MOutArmZA、M30 MTrayX、M41 MInRotate、M42 MOutRotate、M108 MCCDY 由 0 改 1）＝**行為跟改之前完全一樣** |
++
++### ⚠ 套用時一定要做
++
++1. **機台自己的 `system\Mot_Table.csv` 也要把上面這 10 列的 SensorType 改成 1**（先備份）。repo 裡的 `machines/HT9050/` 只是存檔，不會自動複製到機台。沒改的話，SensorType＝0 的軸會被判成「high＝在原點」，跟現在相反：Teach 的 Z 檢查會擋錯，回原點會等不到「到原點」。
++2. **之後要哪一軸反過來，就只改那一軸的 SensorType**（0↔1），重開 wb_serve 生效。
++
++### ⚠ 一個還沒量過的前提
++
++- SensorType 也會在開機時寫進卡片的 `CFG_AxOrgLogic`（`Motor/myEthercatmotor.cpp:492`）。
++- 本規則假設卡片**不會**再依 OrgLogic 把 motionIO bit 4 反相，也就是 bit 4 是 /Home 的原始準位。
++- 支持這個假設的證據：EastSun 1001 看到每一軸都是「low＝偵測到」，而當時 MInArmX 是 SensorType=1，Y／ZA 是 0。如果卡片會反相，兩邊應該相反。
++- **上機確認法**：套用後，看一軸 SensorType 從 0 改成 1 的軸（例 MInArmY）。遮住 sensor，HOME 燈要亮；放開，燈要滅。結果相反就代表卡片會反相，請先改回並回報（量法也在 `docs/W5_PROGRESS.md` Q2）。
++
++## 2. Mot_Table 的三個極性欄位（1203）
++
++| 欄位 | 管什麼 | 程式 |
++|---|---|---|
++| `SensorType` | 原點（ORG）極性：1＝low 有效、0＝high 有效 | 卡片 `CFG_AxOrgLogic`（`myEthercatmotor.cpp:492`）；HT9050 分支的原點判斷（本次） |
++| `LimitLogic` | 極限開關極性（其他卡用） | **1203 這條路不讀它**（`Motor/myEthercatmotor.cpp` 沒有用到 `bLimitLogic`）；1203 的極限極性由 **`D:\HT9045\config\Pci1203Axis.ini`**（路徑寫死在 `EtherCAT/Pci1203Control.cpp:109`）的 `pelLogic`／`melLogic` 設，以 `[station<站號>.axis<子軸>]` 分區；1203 監看頁設定時寫回（`:142`），開機後逐項套用到卡片（`Pci1203AxisIniTick`）。`machines/HT9050/Pci1203Axis.ini` 只是 repo 裡的存檔，程式不讀 |
++| `In1Logic` | **伺服警報（ALM）極性**，不是原點 | `CFG_AxAlmLogic = bIn1Logic ? 0 : 1`（`myEthercatmotor.cpp:2016`）。⚠ `docs/HAL_MOTTABLE_CLASSIFICATION.md:87` 寫成「IN1 近原點」是錯的 |
++
++Advantech 定義：`ORG_ACT_LOW=0`、`ORG_ACT_HIGH=1`（`EtherCAT/vendor/AdvMotDrv.h:729-730`）。
++
++## 3. 原點訊號怎麼讀、怎麼看
++
++```
++驅動器（安川 Σ-X）的 /Home 輸入 → 60FDh bit 2（套過驅動器 Pn511 的極性）
++  → 1203 卡 Acm_AxGetMotionIO 的 AX_MOTION_IO_ORG（bit 4，0x10）
++  → 監看器 EtherCAT/Pci1203Monitor.cpp:2330-2366（每輪每軸讀 state／motionIO／位置／速度，五個都成功才算數）
++  → tag pci1203.ax<N>.motionIO 與 pci1203.ax<N>.org（WebBridgeTags.cpp:1713、:1955-1993）
++  → 1203 監看頁 web/pci1203.html（ORG 燈、motionIO 十六進位）
++  → 判斷：WebMotorAccess.cpp MotorAccessTeachHomeLed；顯示：ChanMotorPoints.cpp led.home
++```
++
++**在機台上看**：1203 監看頁找到該軸，遮住／放開 sensor 各看一次 ORG 燈（bit 4）。
++- 會變：照該軸 SensorType 對一下是不是想要的極性。
++- 完全不變：可能 sensor 接在 IO 模組而不是驅動器的原點輸入；或 ring 的循環通訊停了（同頁極限、DI 燈也全不動）。0911 的「整條 ring 凍住」原因是讀 ESC 暫存器，已預設關掉（`Pci1203Monitor.cpp:1270-1300`）。
++
++## 4. 回 HOME 流程（依 SDK 與本樹程式）
++
++### 4.1 SDK 有兩種歸零
++
++| | 卡片做（Advantech「典型」16 種） | 驅動器做（CiA402 / DS402） |
++|---|---|---|
++| 呼叫 | `Acm_AxMoveHome(MODE1..16, dir)` | `Acm_AxHome(101..137, dir)`＝CiA402 方法 1～37＋100（`docs/RECON_PCIE1203_CommonMotion.md` §3） |
++| 誰產生運動 | 卡片 | 驅動器 |
++| 參數 | 卡片的 `PAR_AxHomeVel*`／`Acc`／`Dec`、`CFG_AxOrgLogic` | 驅動器物件 `6098h`（方法）、`6099h:1`／`:2`（找開關／找零點速度）、`609Ah`（加速）、`607Ch`（原點偏移） |
++| 原廠範例 | `Examples_EtherCAT\Windows\C#\Home\Form1.cs`（ORG Low／High 選鈕 `:409-427`） | 同一支 `SetHomeParams` 用 `mAcm_DevWriteSDOData` 寫 `6098h`／`6099h`／`609Ah`（`:1090-1150`） |
++| HT9050 | **不能用**：這台的軸回 `0x8000510F` | **用這個**：方法 24／28（`WebMotorAccess.cpp:1239-1240`、`:1363`） |
++
++### 4.2 本樹按下 HOME 之後（`WebMotorAccess.cpp` `StartHome1203` `:1300-1375`）
++
++1. `HomeFlag=0`（golden 一按就清）。
++2. 安全門開著 ⇒ 拒絕（golden `TMyMotor::Home` 的 `CheckIsSafeDoorOpen`）。
++3. 監看器樣本太舊 ⇒ 拒絕。
++4. 判斷驅動器類型：DS402 ⇒ 下面這條；不是 DS402 ⇒ 走 golden 的卡片式 MODE12（`StartHomeCardSide`）；判斷不出 ⇒ 拒絕（不猜）。
++5. `Home High Speed` 是 0 ⇒ 拒絕。
++6. 寫卡片歸零速度（照原廠範例與 golden `SetHomeSpeed`），再把**卡片的 PTP 速度設成歸零速度**。原因：實測 `Acm_AxHome` 在呼叫當下，拿卡片 PTP 的 VelHigh／VelLow／Acc 去填驅動器 `6099h:1`／`:2`／`609Ah`（`EtherCAT/Pci1203Gear.h:470-510`，0917 量到），不讀卡片的歸零速度。
++7. `Acm_AxHome(HomeDirectior ? 124 : 128, HomeDirectior ? +1 : -1)`。
++8. 驅動器做完後，Z 軸照 golden case 500 移到 `ZSafePos` 才算 `HomeFlag=1`。
++
++### 4.3 哪些可以用軟體設定
++
++| 項目 | 現在由誰決定 | 能不能用軟體設 |
++|---|---|---|
++| 歸零方法 | 程式固定 24／28 | 換方向：可以（下一列）；換成別的方法：要改程式 |
++| 起跑方向 | Mot_Table `HomeDirectior`（1⇒124／+1，0⇒128／−1） | **可以** |
++| 找開關／找零點速度 | Mot_Table `HomeHighSpeed`／`HomeLowSpeed` ⇒ 經 PTP 速度填進 `6099h:1`／`:2` | **可以** |
++| 加減速 | Mot_Table `Acc`／`Dec` ⇒ `609Ah` | **可以** |
++| 原點偏移 `607Ch` | 驅動器（卡片不寫它） | **可以**：1203 監看頁的驅動器歸零參數（找開關速度／找零點速度／歸原點加速度／原點偏移量，`web/js/pci1203/view.js:3235-3241`，命令 `pci1203.ax.setDriveHome`）。`607Ch` 寫了會留著；另外三個下次歸零會被 PTP 速度蓋掉（上面第 6 步） |
++| **原點開關極性（a／b 接點）** | **驅動器 `Pn511`**（XS：4／5／6＝CN1-10／11／12 ON 有效，D／E／F＝OFF 有效；`60FDh bit 2`＝/Home 狀態；`docs/WORKLOG_MACHINE.md:62`） | **目前軟體不寫**。用 SigmaWin+ 設；要程式寫，得 EastSun 把物件加進 SDO 寫入白名單，而且可能要重新上電 |
++| 歸零後 Z 的位置 | `Gerneral.ini` `ZSafePos` | 可以 |
++
++### 4.4 ⚠ 原點極性有兩層，要一起決定
++
++- **驅動器 `Pn511`** 決定驅動器歸零時把哪個準位當成「在開關上」，也就是歸零動作本身。
++- **軟體的 SensorType 規則**（第 1 節）決定程式和畫面怎麼解讀 bit 4。
++- 如果把某軸的 `Pn511` 改成 OFF 有效，`60FDh bit 2`（bit 4）會變成「1＝在原點」。這時那一軸的 SensorType 也要改成 0，否則判斷會反過來。
++
++## 5. 1203 可以參考的程式與文件
++
++- **SDK**（NB2 有裝）：`C:\Program Files (x86)\Advantech\Common Motion\`，含 `PCI_PCIE-1203`、`Examples_EtherCAT`（C#／VC／BCB／Winform）、`Public` 標頭、`Utility`。沒找到 PDF 手冊。
++- **repo 內 SDK 標頭**：`EtherCAT/vendor/AdvMotApi.h`、`AdvMotDrv.h`、`AdvMotPropID.h`、`AdvMotErr.h`。
++- **程式**：
++  - `EtherCAT/Pci1203Monitor.cpp/.h`：讀取。
++  - `EtherCAT/Pci1203Control.cpp/.h`：命令、白名單、InitCfg 表、`Pci1203Axis.ini`。
++  - `EtherCAT/Pci1203Gear.h`：驅動器歸零參數的實測。
++  - `EtherCAT/Pci1203MotorRoute.cpp`：引擎 InitMotor／歸零。
++  - `WebMotorAccess.cpp`：Motor Test／Teach 歸零、原點判斷。
++  - `Motor/myEthercatmotor.cpp`：golden `TMyEtherCatMotor`。
++- **文件**：`docs/RECON_PCIE1203_CommonMotion.md`、`ENGINE_1203_MOTOR_ROUTE_DESIGN.md`、`HT9050_1203_BRINGUP_PARAMETERS.md`、`HT9050_PCI1203_DIRECTION.md`、`W5_PROGRESS.md`、`WORKLOG_MACHINE.md`。
++- **同事成果備份**：`D:\HT9045\backup\HT9050_PCI1203_20260916`。安川 Σ-X 說明書在機台的 `D:\HT9045\_vendor_manuals\Yaskawa_SigmaX\`。
+diff --git a/docs/RULINGS_20261002.md b/docs/RULINGS_20261002.md
+index e689b13..726fc87 100644
+--- a/docs/RULINGS_20261002.md
++++ b/docs/RULINGS_20261002.md
+@@ -63,3 +63,10 @@
+ - **D1**「實際上只有ZA，其他先不顯示」：一支手臂只有一支 Enable 的 Z 時照硬體當**單吸嘴**算（不加多吸嘴 X/Y 偏移，Shuttle 用 `GetShtRowColPos`），不管 ini 的 `USE_PICKER_COUNT`；ack 附一句說明。**D2**「照建議」：Shuttle 區只有 shuttle 軸 READY、而且停在手臂側教導點 gap 內才准降 Z。**D3**「照建議」：操作權換人或斷線 ⇒ 取消 job，並對自己的軸送 Stop1203。BinBox、Magazine、有 pitch 軸的機型「9050沒有，先忽略」⇒ 第一版只做 9050 有的區（In：Loader／HP2／InShuttle1／CleanKit；Out：OutShuttle1／Auto1-3／Fix1-3），其他列出來灰掉寫原因。
+ - **執行**：排在機台端 patch 第三輪（GitHub 第 125 包）與同事 MR 那一批之後。規格寫的「第三十九批之後」已不成立：第三十九批撤回了，Z 全部上升改用機台的 TEACH-ZALLUP（機台 cpp 0093／web 0064），catalog 計數照現況重算。
+   上機：🔴 會動機構，ES02 或 EastSun 要在機台旁；先不勾 zDown 走 Loader (1,1)／(3,8) 看 XY。
++
++## 19. Jerry 測過的項目：**筆電確認修改邏輯＋兩組態編譯成功就整合**（使用者 1002 15:4x）
++
++- 原話：「Jerry那邊有測試過的項目，可以直接整合，例如他剛剛有提到Timetick數值太大導致程式執行效率差，他實驗沒問題，你只要確認修改邏輯和編譯成功就可以整合」。
++- 做法：Jerry 推 `v906/jerry-*` 分支＋MR，說明改了什麼、怎麼測的；筆電讀 diff 確認邏輯（對照 golden／對照他的量測），出貨＋模擬兩組態建置 0 錯誤就合進 main、照常出 GitHub 機台更新包。不必等完整 ctest gate；ctest 照樣跑，紅了的另外回報、不擋這一類的合併。
++- 例：**Timetick**（J-15：`kServeTickMs = 500`，`tools/wb_serve.cpp:2931`；Jerry 量到 501 個狀態停留 100% 落在 500 ms 格子、79% 的轉換是空等 1～2 拍）。它原本是 RULINGS_20260917 B13 的裁決、`wb_serve.cpp:4509` 標了 ⚠⚠「不可以讓它變快」——Jerry 測過的改法推上來，就照這一條收；B13 的「要先量 golden 真實週期」不再擋。
++- 1002 15:4x 量到：Jerry 在 GitLab 上**還沒有**改節拍的程式（`v906/jerry-handoff` 只有 J-15 的數據，而且寫「我們不動 `kServeTickMs`」）⇒ TO_JERRY §4 請他推（W-15）。
+diff --git a/forms/fMain.h b/forms/fMain.h
+index eb52e09..00d48b2 100644
+--- a/forms/fMain.h
++++ b/forms/fMain.h
+@@ -591,7 +591,7 @@ public:
+                                     //   bodies: forms/fMain_Heater.cpp (ht9045_sm), golden main.cpp:23890-23981 (SetTemp) /
+                                     //   :18613-20265 (Index16Heater) / :20266-20742 (IndexHeatMode) / :20743-20847 (HotplateHeatMode) / :21528-21643 (Timer2Timer's heater segment, port-only wrapper W906_Timer2HeaterSegment; ht9045::W906_Timer2HeaterTick runs it from PumpTick, WebBridgeTags.cpp:601, phase 2).
+                                     //   SetTemp stays a virtual stub here (forms/fMain.cpp:511): W906_SetTempHook, once installed by
+-                                    //   wb_serve's boot (W906_InstallSetTemp -- not yet, FROM_IFOR §3 S1/S2), runs W906_SetTempBody; no hook (every ctest) = old stub.
++                                    //   wb_serve's boot (W906_InstallSetTemp, tools/wb_serve.cpp:4065 -- AI(W906-I01C) 20261002), runs W906_SetTempBody; no hook (every ctest) = old stub.
+     int  W906_SetTemp_Sim;                        // [PORT-ONLY SEAM] != 0 = test override (returned without running the body); 0 = the hook's golden body if installed, else 0
+     virtual void ChangePassword(); // [METHOD] golden main.h:1417 (body main.cpp:31772, SECS/GEM password-file
+                                     //   loader -- untranslated) -- offline: no-op call-count seam
+diff --git a/forms/fMain_Heater.cpp b/forms/fMain_Heater.cpp
+index 28bb9db..4512192 100644
+--- a/forms/fMain_Heater.cpp
++++ b/forms/fMain_Heater.cpp
+@@ -31,17 +31,17 @@
+ //  IO this reaches on a real machine (all live bodies in the port): the segment's
+ //  IndexHeatMode switches SW[SwHeaterFanSpeed], OpenDUTHeat and
+ //  EPSwitchOnOff(eEPSwBoth) exactly as golden does every second while idle.
+-//  SetTemp is NOT live yet. Its callers (AutoRetest.cpp:1959 / :1986,
+-//  SECSGEM/uHGemHT9045.cpp:3682, ProductionInfo/uPAT_Function.cpp:1852) still reach
+-//  the virtual stub at forms/fMain.cpp:511, which runs W906_SetTempBody only through
+-//  W906_SetTempHook -- and no phase so far installs that hook (wb_serve never calls
+-//  W906_InstallSetTemp).
+-//  Reason: the body persists the new set point through fTemp_Set->spbSaveClick, whose
+-//  write tail (uTemp_Set.cpp SAFETY GATE (S2)) and SaveSetupFile (S1) are still gated.
+-//  Live today, the golden body would reset fHeaterOK / iThermoTask / the hot buffers
+-//  and return 0, but the second ReadTempFile would read the OLD set point back -- a
+-//  silent half-success. The hook goes in once S1 / S2 are decided (FROM_IFOR §3
+-//  20261001); the Timer2 / boot hook points above do not depend on it.
++//  SetTemp is LIVE (AI(W906-I01C) 20261002, I-01 phase 2 (2); W-05 = (a)): wb_serve installs W906_SetTempHook at boot
++//  (tools/wb_serve.cpp:4065, W906_InstallSetTemp), so its callers (AutoRetest.cpp:1959 / :1986,
++//  SECSGEM/uHGemHT9045.cpp:3682, ProductionInfo/uPAT_Function.cpp:1852) run the golden body below. Its save,
++//  fTemp_Set->spbSaveClick, writes again: uTemp_Set.cpp SAFETY GATE (S1) / (S2) and GATE(dep-FormHS) are open
++//  (RULINGS_20261001 #0). Written as golden: the recipe Temperature.Data, IniData\DefineTemp\Temperature*.Data,
++//  config\ATC.ini, config.ini, LastSet.ini, *.MD5 (BackupSetupFile). Port-only addition after the second
++//  ReadTempFile: W906_EditPageWindowClosed("fTemp_Set") -- the web page must reopen to show the new set point.
++//  History: phases 1 and 2 (1) left the hook out on purpose -- with S1 / S2 still gated the golden body
++//  would reset fHeaterOK / iThermoTask / the hot buffers and return 0 while the second ReadTempFile read
++//  the OLD set point back (a silent half-success; FROM_IFOR §3 20261001 15:5x, NB2 R125). The Timer2 / boot
++//  hook points above never depended on it.
+ //
+ //  Text: golden VERBATIM, statement by statement, same order, original author
+ //  comments carried over (cp950-decoded to UTF-8, zero U+FFFD). The golden lines were
+@@ -2437,7 +2437,7 @@ int TfMain::W906_SetTempBody(bool bAsk, double fWorkTemp, double fSoakTime)
+         fTemp_Set->edWorkTemp->Text=fWorkTemp;
+     fTemp_Set->edSoakTime->Text=fSoakTime;
+     fTemp_Set->spbSaveClick(NULL);  //AI(W906-I01) 20261001: golden 傳 this（VCL 的 TfMain*->TObject*）；移植樹 TfMain 沒有 TObject 基底，spbSaveClick 不看 Sender（同 Command.cpp:8658 的既有寫法）
+-    fTemp_Set->ReadTempFile(true);
++    fTemp_Set->ReadTempFile(true);  { extern void (*W906_SetTempPageClosedHook)(const char*); if (W906_SetTempPageClosedHook) W906_SetTempPageClosedHook("fTemp_Set"); }   //AI(W906-I01C) 20261002 (Ifor01): port-only, web cooperation (TO_IFOR §4 1002 08:5x ①): golden reloads the open form here; the web temperature page holds its own copy, so the C route treats it as closed (wb_serve points the hook at FileRW/_EditPage.cpp W906_EditPageWindowClosed; FileRW is wb_serve-only, so 0 in a ctest) -- its next save answers 409 "reopen the page" instead of writing the old set point back
+     if(LastSet.iTemperature==Tempture_Ambient && Temperature.bATCActiveCooling)                                         //wei 20151013  by Setup File ATC Ambient Temp set
+         edATCAmbientTemper->Text=fWorkTemp;
+     else
+@@ -2589,13 +2589,13 @@ void TfMain::W906_Timer2HeaterSegment()
+ // ---------------------------------------------------------------------------
+ // PORT-ONLY: the SetTemp hook. The virtual TfMain::SetTemp stays a stub in
+ // forms/fMain.cpp:511 (ht9045_forms, whose vtable must not reach ht9045_sm);
+-// W906_InstallSetTemp() installs it -- NOT called by wb_serve yet (I-01 phase 1: only tests/test_heater_chain.cpp:96; AI(W906-B21-I01NOTE) 20261001) (same pattern as
++// W906_InstallSetTemp() installs it -- wb_serve's boot calls it since I-01 phase 2 (2) (tools/wb_serve.cpp:4065; AI(W906-I01C) 20261002); tests/test_heater_chain.cpp:96 and tests/test_settemp_save.cpp too (same pattern as
+ // W906_InstallUpdateMainOperateMode, forms/fMain_OperateMode.cpp). Not installed
+-// (wb_serve today, every other ctest) = the old stub: SetTemp returns W906_SetTemp_Sim.
++// (every other ctest) = the old stub: SetTemp returns W906_SetTemp_Sim.
+ // ---------------------------------------------------------------------------
+ extern int (*W906_SetTempHook)(TfMain*, bool, double, double);   // forms/fMain.cpp:511
+ static int W906_SetTempThunk(TfMain* m, bool bAsk, double fWorkTemp, double fSoakTime) { return m != 0 ? m->W906_SetTempBody(bAsk, fWorkTemp, fSoakTime) : 1; }
+-void W906_InstallSetTemp() { W906_SetTempHook = &W906_SetTempThunk; }
++void W906_InstallSetTemp() { W906_SetTempHook = &W906_SetTempThunk; }   void (*W906_SetTempPageClosedHook)(const char* goldenForm) = 0;   // AI(W906-I01C) 20261002: the web page "closed" call after SetTemp's save (W906_SetTempBody); wb_serve sets it (tools/wb_serve.cpp:4065)
+ 
+ // ---------------------------------------------------------------------------
+ // PORT-ONLY: the Timer2 heater tick (I-01 phase 2; TO_IFOR.md §4 12:0x ②).
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 022e391..4377b60 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -6706,3 +6706,17 @@ endif()
+ add_test(NAME ThermoComm COMMAND test_thermo_comm "${CMAKE_SOURCE_DIR}")
+ set_tests_properties(ThermoComm PROPERTIES TIMEOUT 120 ENVIRONMENT
+     "W906_E84DATA_ROOT=${_ht9045_log_scratch}/E84DataTxt;W906_PRODLOG_ROOT=${_ht9045_log_scratch}/Production_Log;W906_CLEANPADLOG_ROOT=${_ht9045_log_scratch}/CleanPad_Log;W906_TCPDATA_ROOT=${_ht9045_log_scratch}/TCP_Data;W906_SUMMARYLOT_ROOT=${_ht9045_log_scratch}/Summary_Lot;W906_EVENTLOG_ROOT=${_ht9045_log_scratch}/EventLogTxt;W906_INIDATA_ROOT=${_ht9045_log_scratch}/IniData;W906_UNLOADERINFO_ROOT=${_ht9045_log_scratch}/UnloaderInfo;W906_AUTH_PATH=${_ht9045_config_scratch}/;W906_MACHINERECORD_DIR=${_ht9045_log_scratch}/machinerecord")
++
++# --- test_settemp_save: AI(W906-I01C) 20261002 (Ifor01) -- I-01 phase 2 (2): golden TfMain::SetTemp saves through
++#   fTemp_Set->spbSaveClick -> SaveSetupFile with uTemp_Set.cpp SAFETY GATE (S1) / (S2) / GATE(dep-FormHS) open (W-05 = (a)).
++#   %TEMP% sandbox recipe: [Mode] Temperature / [Time] Soak written and read back, fHeaterOK / iThermoTask reset, the web page
++#   hook called; SystemStart writes nothing; the machine's own files untouched. Red with the gates put back. Containment: ENV-ALL.
++add_executable(test_settemp_save test_settemp_save.cpp)
++target_link_libraries(test_settemp_save PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_settemp_save PRIVATE ws2_32)
++endif()
++add_test(NAME SetTempSave COMMAND test_settemp_save)
++set_tests_properties(SetTempSave PROPERTIES TIMEOUT 120)
+diff --git a/tests/test_settemp_save.cpp b/tests/test_settemp_save.cpp
+new file mode 100644
+index 0000000..b8f6c4e
+--- /dev/null
++++ b/tests/test_settemp_save.cpp
+@@ -0,0 +1,224 @@
++// =============================================================================
++//  test_settemp_save.cpp  --  AI(W906-I01C) 20261002 (Ifor01)
++//
++//  I-01 phase 2 (2) (docs/handoff/TO_IFOR.md §4 1002 08:5x ①, W-05 = (a)): golden TfMain::SetTemp (main.cpp:23890-23981,
++//  forms/fMain_Heater.cpp) saves the new set point through fTemp_Set->spbSaveClick -> SaveSetupFile (uTemp_Set.cpp), whose
++//  SAFETY GATE (S1) / (S2) and GATE(dep-FormHS) are open now. The test FAILS with those gates put back: the file keeps the
++//  old set point and ReadTempFile reads it back (the "silent half-success" that kept the hook out in phases 1 / 2 (1)).
++//
++//    [1] before: ReadTempFile(true) reads the sandbox recipe (Temperature 50.0, Soak 10.0)
++//    [2] SetTemp(false, 85.0, 30.0) through the hook (W906_InstallSetTemp) returns 0; the sandbox recipe's Temperature.Data now
++//        has [Mode] Temperature=85.0 and [Time] Soak=30.0 (golden SaveSetupFile, "0.0" format); Temperature.fWorkTemperBase /
++//        fSoakTime read back 85 / 30 (golden :23960 ReadTempFile(true)); fHeaterOK=false, iThermoTask=1 (golden :23966-23972);
++//        the C route's page hook got "fTemp_Set" once (port-only: the web temperature page must reopen)
++//    [3] SystemStart -> returns 1 and writes nothing (golden :23896-23897)
++//    [4] the machine's own files are untouched: D:\HT9045\SetUp.inf's recipe Temperature.Data, config\ATC.ini, config\config.ini,
++//        system\Gerneral.ini, IniData\DefineTemp\Temperature.Data (size + write time)
++//
++//  Sandbox: %TEMP%\ht9045_settemp_<tick>\ (DataPath / DefaultPath / OffsetPath / LastDataPath are pointed there before any call;
++//  AuthPath and asGeneralPath follow ctest's W906_AUTH_PATH / W906_GENERAL_INI_PATH). Refuses to run (exit 2, nothing called)
++//  outside ctest's redirect roots (st02_test_containment.h). The sandbox is removed on a green run.
++// =============================================================================
++#include "forms/fTemp_Set.h"
++#include "forms/fMain.h"
++#include "common.h"
++#include "cmydef.h"
++#include "cprod.h"
++#include "Config.h"
++#include "CosFunction.h"
++#include "LastSet.h"
++#include "MachineType.h"
++#include "bthermo.h"          // iThermoTask
++#include "st02_test_containment.h"
++#include <windows.h>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <string>
++
++extern int (*W906_SetTempHook)(TfMain*, bool, double, double);   // forms/fMain.cpp:511
++void W906_InstallSetTemp();                                       // forms/fMain_Heater.cpp
++extern void (*W906_SetTempPageClosedHook)(const char*);           // forms/fMain_Heater.cpp
++
++static int g_pass=0, g_fail=0;
++#define CHECK(c, msg) do { if(c){ g_pass++; } else { g_fail++; std::printf("  FAIL [test_settemp_save.cpp:%d] %s\n", __LINE__, msg); } } while(0)
++
++static std::string g_root;
++static int g_pageClosed=0;
++static std::string g_pageForm;
++static void FakePageClosed(const char* form) { g_pageClosed++; g_pageForm=form ? form : ""; }
++
++static std::string Slurp(const std::string& p)
++{
++    FILE* f=std::fopen(p.c_str(), "rb");
++    if(!f) return std::string("<missing>");
++    std::string s; char buf[4096]; size_t n;
++    while((n=std::fread(buf, 1, sizeof(buf), f))>0) s.append(buf, n);
++    std::fclose(f);
++    return s;
++}
++static void Spit(const std::string& p, const std::string& s)
++{
++    FILE* f=std::fopen(p.c_str(), "wb");
++    if(f) { std::fwrite(s.data(), 1, s.size(), f); std::fclose(f); }
++}
++static bool UnderMachineTree(const std::string& p)
++{
++    std::string l=W906TestSafeLower(p.c_str());
++    return l.find("d:\\ht9045\\")==0 || l.find("d:/ht9045/")==0;
++}
++// [section] key=value, case-insensitive on section / key; "" when missing
++static std::string IniValue(const std::string& text, const char* section, const char* key)
++{
++    std::string sec;
++    size_t pos=0;
++    while(pos<text.size())
++    {
++        size_t e=text.find('\n', pos);
++        if(e==std::string::npos) e=text.size();
++        std::string line=text.substr(pos, e-pos);
++        pos=e+1;
++        while(!line.empty() && (line[line.size()-1]=='\r' || line[line.size()-1]==' ')) line.erase(line.size()-1);
++        if(line.size()>=2 && line[0]=='[' && line[line.size()-1]==']') { sec=W906TestSafeLower(line.substr(1, line.size()-2).c_str()); continue; }
++        const size_t eq=line.find('=');
++        if(eq==std::string::npos || sec!=W906TestSafeLower(section)) continue;
++        std::string k=line.substr(0, eq);
++        while(!k.empty() && k[k.size()-1]==' ') k.erase(k.size()-1);
++        if(W906TestSafeLower(k.c_str())==W906TestSafeLower(key)) return line.substr(eq+1);
++    }
++    return std::string();
++}
++struct Stamp { bool there; DWORD size; FILETIME t; };
++static Stamp StampOf(const std::string& p)
++{
++    Stamp s; std::memset(&s, 0, sizeof(s));
++    WIN32_FILE_ATTRIBUTE_DATA a;
++    if(::GetFileAttributesExA(p.c_str(), GetFileExInfoStandard, &a)) { s.there=true; s.size=a.nFileSizeLow; s.t=a.ftLastWriteTime; }
++    return s;
++}
++static bool SameStamp(const Stamp& a, const Stamp& b)
++{
++    return a.there==b.there && a.size==b.size && a.t.dwLowDateTime==b.t.dwLowDateTime && a.t.dwHighDateTime==b.t.dwHighDateTime;
++}
++static std::string MachineRecipeTemperature()
++{
++    std::string inf=Slurp("D:\\HT9045\\SetUp.inf");
++    while(!inf.empty() && (inf[inf.size()-1]=='\r' || inf[inf.size()-1]=='\n' || inf[inf.size()-1]==' ')) inf.erase(inf.size()-1);
++    if(inf.empty() || inf=="<missing>") return std::string();
++    return "D:\\HT9045\\IniData\\Data\\"+inf+"\\Temperature.Data";
++}
++
++int main()
++{
++    std::setvbuf(stdout, NULL, _IONBF, 0);
++    std::printf("SetTempSave\n");
++    if(!W906TestInsideCtestRoots("SetTempSave"))
++        return 2;
++
++    char tmp[MAX_PATH];
++    ::GetTempPathA(sizeof(tmp), tmp);
++    char stamp[32];
++    std::snprintf(stamp, sizeof(stamp), "%lu", (unsigned long)::GetTickCount());
++    g_root=std::string(tmp)+"ht9045_settemp_"+stamp;
++    ::CreateDirectoryA(g_root.c_str(), 0);
++    ::CreateDirectoryA((g_root+"\\Data").c_str(), 0);
++    ::CreateDirectoryA((g_root+"\\Data\\STR").c_str(), 0);
++    ::CreateDirectoryA((g_root+"\\DefineTemp").c_str(), 0);
++    ::CreateDirectoryA((g_root+"\\Offset").c_str(), 0);
++    Spit(g_root+"\\SetUp.inf", "STR\r\n");
++    const std::string recipe=g_root+"\\Data\\STR\\Temperature.Data";
++    Spit(recipe, "[Mode]\r\nMode=0\r\nTemperature=50.0\r\n[Time]\r\nSoak=10.0\r\n");
++
++    DataPath    =AnsiString((g_root+"\\Data\\").c_str());
++    DefaultPath =AnsiString((g_root+"\\").c_str());
++    OffsetPath  =AnsiString((g_root+"\\Offset\\").c_str());
++    LastDataPath=AnsiString((g_root+"\\SetUp.inf").c_str());
++    // DataPath / DefaultPath / LastDataPath: the %TEMP% sandbox, never under D:\HT9045. AuthPath / asGeneralPath: ctest's own scratch
++    // (W906_AUTH_PATH / W906_GENERAL_INI_PATH, already checked by W906TestInsideCtestRoots) -- which itself lives under the build tree,
++    // possibly D:\HT9045\...\Obj, so for those two the test is "is it a scratch dir", not "is it outside D:\HT9045".
++    const bool authScratch=W906TestSafeLower(AuthPath.c_str()).find("scratch")!=std::string::npos;
++    const bool genScratch=W906TestSafeLower(asGeneralPath.c_str()).find("scratch")!=std::string::npos;
++    if(UnderMachineTree(DataPath.c_str()) || UnderMachineTree(DefaultPath.c_str()) || UnderMachineTree(LastDataPath.c_str()) ||
++       !authScratch || !genScratch)
++    {
++        std::printf("  ABORT: a path is not in the sandbox (Data %s, Default %s, LastData %s, Auth %s, General %s) -- nothing was called\n",
++                    DataPath.c_str(), DefaultPath.c_str(), LastDataPath.c_str(), AuthPath.c_str(), asGeneralPath.c_str());
++        return 2;
++    }
++
++    const char* const kMachine[]={ "D:\\HT9045\\config\\ATC.ini", "D:\\HT9045\\config\\config.ini", "D:\\HT9045\\system\\Gerneral.ini",
++                                   "D:\\HT9045\\IniData\\DefineTemp\\Temperature.Data" };
++    const int kN=(int)(sizeof(kMachine)/sizeof(kMachine[0]));
++    Stamp before[kN+1];
++    for(int i=0; i<kN; i++) before[i]=StampOf(kMachine[i]);
++    const std::string machineRecipe=MachineRecipeTemperature();
++    before[kN]=machineRecipe.empty() ? Stamp() : StampOf(machineRecipe);
++
++    OpenGeneralIniFile();   // wb_serve opens INIFileGeneral in LoadMachineConfig (database.cpp:3142) and keeps it open until exit; SaveLastSetIni
++                            // (spbSaveClick) writes through it (WriteIniDataGeneral, common.cpp, no NULL check -- golden). Here on ctest's sandbox path.
++    CHECK(fMain!=0, "fMain exists (the facade's global)");
++    if(fMain==0) { std::printf("FAIL: no fMain\n"); return 1; }
++    TfTemp_Set* const oldTempSet=fTemp_Set;
++    fTemp_Set=new TfTemp_Set();
++    fTemp_Set->Init();                                              // the wb_serve boot does the same (tools/wb_serve.cpp:3112 / :3121)
++    SystemStart=false;
++    IniConfig.bEnable_SECS_GEM=false;
++    IniConfig.bA02DisableSaveParsWhenSwitchToOp=false;
++    CosFunction.bSaveTemperatureByMachine=false;
++    CosFunction.bNotClearAllHotBuffer=false;
++
++    std::printf("[1] before: ReadTempFile(true) reads the sandbox recipe\n");
++    fTemp_Set->ReadTempFile(true);
++    CHECK(Temperature.fWorkTemperBase==50.0, "Temperature.fWorkTemperBase == 50.0 from the sandbox recipe");
++    CHECK(Temperature.fSoakTime==10.0, "Temperature.fSoakTime == 10.0 from the sandbox recipe");
++    CHECK(LastSet.iTemperature==Tempture_Hot, "[Mode] Mode=0 -> Tempture_Hot");
++
++    std::printf("[2] SetTemp(false, 85.0, 30.0) through the hook\n");
++    W906_InstallSetTemp();
++    W906_SetTempPageClosedHook=&FakePageClosed;
++    fMain->W906_SetTemp_Sim=0;
++    fHeaterOK=true;
++    iThermoTask=42;
++    const int r=fMain->SetTemp(false, 85.0, 30.0);
++    CHECK(r==0, "SetTemp returns 0 (golden :23979)");
++    const std::string after=Slurp(recipe);
++    CHECK(IniValue(after, "Mode", "Temperature")=="85.0", "recipe [Mode] Temperature == 85.0 (golden SaveSetupFile, uTemp_Set.cpp S1)");
++    CHECK(IniValue(after, "Time", "Soak")=="30.0", "recipe [Time] Soak == 30.0");
++    CHECK(Temperature.fWorkTemperBase==85.0, "Temperature.fWorkTemperBase == 85.0 read back (golden :23960 ReadTempFile(true))");
++    CHECK(Temperature.fSoakTime==30.0, "Temperature.fSoakTime == 30.0 read back");
++    CHECK(fHeaterOK==false, "fHeaterOK reset (golden :23966)");
++    CHECK(iThermoTask==1, "iThermoTask = 1 (golden :23972)");
++    CHECK(g_pageClosed==1 && g_pageForm=="fTemp_Set", "the web temperature page hook got \"fTemp_Set\" once (port-only)");
++    if(IniValue(after, "Mode", "Temperature")!="85.0")
++        std::printf("     recipe now:\n%s\n", after.c_str());
++
++    std::printf("[3] SystemStart: returns 1, writes nothing (golden :23896-23897)\n");
++    {
++        const std::string snap=Slurp(recipe);
++        SystemStart=true;
++        CHECK(fMain->SetTemp(false, 95.0, 5.0)==1, "SystemStart -> 1");
++        SystemStart=false;
++        CHECK(Slurp(recipe)==snap, "the recipe is unchanged");
++        CHECK(g_pageClosed==1, "the page hook is not called again");
++    }
++    W906_SetTempHook=0;
++    W906_SetTempPageClosedHook=0;
++    fTemp_Set=oldTempSet;                                           // the instance is left alive (VCL stand-in teardown not exercised here)
++
++    CloseGeneralIniFile();
++    std::printf("[4] the machine's own files are untouched\n");
++    for(int i=0; i<kN; i++)
++        CHECK(SameStamp(before[i], StampOf(kMachine[i])), kMachine[i]);
++    if(!machineRecipe.empty())
++        CHECK(SameStamp(before[kN], StampOf(machineRecipe)), machineRecipe.c_str());
++
++    if(g_fail==0)
++    {
++        std::string cmd="rmdir /s /q \""+g_root+"\" >nul 2>&1";
++        std::system(cmd.c_str());
++    }
++    else
++        std::printf("  sandbox kept for inspection: %s\n", g_root.c_str());
++    std::printf("%s: %d/%d checks passed\n", g_fail ? "FAIL" : "PASS", g_pass, g_pass+g_fail);
++    return g_fail ? 1 : 0;
++}
+diff --git a/tests/test_st02_timer3.cpp b/tests/test_st02_timer3.cpp
+index ee73919..ec034c2 100644
+--- a/tests/test_st02_timer3.cpp
++++ b/tests/test_st02_timer3.cpp
+@@ -35,6 +35,8 @@
+ //   14. G4 RecordTemp (golden main.cpp:2658-2689; AI(W906-R126) 20261002, NB2 R126 M5): on a SystemSec that is a multiple of
+ //       the [L10] interval, every installed channel's fObserver->dTempHistroy row shifts left and UN150Read lands in [59];
+ //       other seconds, the same second again and channels not installed leave it alone.  Memory only.
++//   15. (AI(W906-ST02-0128) 20261002) the same with the Observer page shown: RecordTemp -> UpdateTempChart on the
++//       static-init chart must not throw and must have its series (machine patch 0128 OBS-TEMPSERIES f09c5208).
+ // =============================================================================
+ #include "MachineType.h"
+ #include "cmydef.h"
+@@ -678,6 +680,47 @@ int main(int argc, char** argv)
+         SystemSec = secSaved;
+     }
+ 
++    // AI(W906-ST02-0128) 20261002 (St02-E): the test MR !90 should have had.  fObserver is a STATIC facade (cObserver.cpp)
++    //   built before the ini layer, so its constructor skips golden's TempChart AddSeries loop (906_0625_Steven
++    //   cObserver.cpp:339-344, the port's INIFileGeneral guard); RecordTemp -> UpdateTempChart with the Observer page shown
++    //   then hit Series[0] on an empty chart -> std::out_of_range -> wb_serve died 10-20 s after start (machine patch 0128
++    //   OBS-TEMPSERIES, package 125, f09c5208: the series are now created on first use).  This drives that exact path.
++    std::printf(" 15. G4 RecordTemp with the Observer page shown: UpdateTempChart on the static-init chart (0128)\n");
++    {
++        CHECK(fObserver != 0 && fObserver->TempChart != 0 && fObserver->cbbTempChart != 0);
++        const bool showSaved = fObserver->bShow;
++        const bool inst0 = bUT150Install[0];
++        const double read0 = UN150Read[0];
++        const int ivSaved15 = IniConfig.iL10TempRecordInterval;
++        const Word secSaved15 = SystemSec;
++        double h0[60];
++        for (int j = 0; j < 60; ++j) h0[j] = fObserver->dTempHistroy[0][j];
++        fObserver->bShow = true;                          // golden fObserver->bShow (W906_FormShowing: member || page table)
++        bUT150Install[0] = true;
++        IniConfig.iL10TempRecordInterval = 1;             // every 15 s
++        UN150Read[0] = 55.0;
++        SystemSec = 45;                                   // a multiple of 15, not the second section 14 recorded last
++        bool threw = false;
++        try { T3(); } catch (...) { threw = true; }
++        CHECK(!threw);                                    // before 0128: std::out_of_range from Series[0] (terminate in wb_serve)
++        CHECK(fObserver->TempChart->SeriesCount() >= tcTotalCount);   // the series exist after the first use (0128)
++        CHECK(fObserver->dTempHistroy[0][59] == 55.0);  // RecordTemp still recorded the reading
++        fObserver->cbbTempChart->ItemIndex = 0;           // "All": golden UpdateTempChart's all-series arm
++        UN150Read[0] = 66.0;
++        SystemSec = 60;
++        threw = false;
++        try { T3(); } catch (...) { threw = true; }
++        CHECK(!threw);
++        CHECK(fObserver->TempChart->SeriesCount() >= tcTotalCount &&
++              fObserver->TempChart->Series[0]->Points.size() == 60);   // channel 0 installed: its 60 samples are drawn
++        fObserver->bShow = showSaved;
++        for (int j = 0; j < 60; ++j) fObserver->dTempHistroy[0][j] = h0[j];
++        bUT150Install[0] = inst0;
++        UN150Read[0] = read0;
++        IniConfig.iL10TempRecordInterval = ivSaved15;
++        SystemSec = secSaved15;
++    }
++
+     W906_ShowErrorMessage_Hook = 0;
+     ht9045::W906_Timer3SetRecordLoaderDate(0);
+     ht9045::W906_Timer3SetStatusBarTime(0);
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index 3737f73..683b79b 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -3106,12 +3106,28 @@ int main(int argc, char** argv)
+               "W5B-R2: card logic == golden (SensorType ? 0 : 1) -> bit as-is; different -> inverted; unknown -> -1");
+         //AI(W906-HT9050-ORG) 20261001: HT9050＋1203 分支 —— EastSun「home 是 high 時 代表沒偵測到 是 low 時 代表有偵測到」
+         g_W906OrgActiveLow = []() { return true; };
++        //AI(W906-HT9050-ORG-ST) 20261002 (NB2): per axis by Mot_Table SensorType (golden InitMotor :492 uOrgLogic = bSensorType ? ORG_ACT_LOW : ORG_ACT_HIGH)
++        const bool zaSensorSaved = be.golden[mZA].sensorType;
++        be.golden[mZA].sensorType = true;                                       // SensorType=1: ORG low = at home (EastSun 1001, the HT9050 table after this change)
+         be.motionIO[1] = 0x10;
+-        CHECK(MotorAccessTeachHomeLed(be, mZA) == 0, "HT9050-ORG: ORG bit high -> NOT at home (no SensorType / card-logic guess)");
++        CHECK(MotorAccessTeachHomeLed(be, mZA) == 0, "HT9050-ORG-ST: SensorType=1, ORG bit high -> NOT at home");
+         be.motionIO[1] = 0x00;
+-        CHECK(MotorAccessTeachHomeLed(be, mZA) == 1, "HT9050-ORG: ORG bit low -> at home");
++        CHECK(MotorAccessTeachHomeLed(be, mZA) == 1, "HT9050-ORG-ST: SensorType=1, ORG bit low -> at home");
++        be.golden[mZA].sensorType = false;                                      // SensorType=0: ORG high = at home (as SMC's ORG_Positive)
++        CHECK(MotorAccessTeachHomeLed(be, mZA) == 0, "HT9050-ORG-ST: SensorType=0, ORG bit low -> NOT at home");
++        be.motionIO[1] = 0x10;
++        CHECK(MotorAccessTeachHomeLed(be, mZA) == 1, "HT9050-ORG-ST: SensorType=0, ORG bit high -> at home");
++        {   // no golden motor object -> SensorType unknown -> -1 (fail-closed), reason names SensorType
++            const MotorGolden gSaved = be.golden[mZA];
++            be.golden.erase(mZA);
++            CHECK(MotorAccessTeachHomeLed(be, mZA) == -1 && Has(MotorAccessTeachHomeUnknownWhy(), "SensorType"),
++                  "HT9050-ORG-ST: no golden motor object -> -1 (SensorType unknown, NOT 'at home')");
++            be.golden[mZA] = gSaved;
++        }
++        be.golden[mZA].sensorType = true;
+         be.motionIO.erase(1);
+         CHECK(MotorAccessTeachHomeLed(be, mZA) == -1, "HT9050-ORG: no monitor sample -> still -1 (fail-closed)");
++        be.golden[mZA].sensorType = zaSensorSaved;
+         g_W906OrgActiveLow = 0;
+         be.motionIO[1] = 0x10;                                                  // 回到上面 W5B-R2 那一段的狀態
+         be.freezePolls = true;
+@@ -3141,6 +3157,8 @@ int main(int argc, char** argv)
+             CHECK(MotorAccessTeachInterlockHome(be, mSh2) == -2, "TEACH-ZDISABLED: an enabled MN200 row -> -2 as before");
+             // (c) 1203 軸：跟 MotorAccessTeachHomeLed 一模一樣（HT9050 ORG 規則、Enable=0＝1 不是 -3、沒樣本＝-1 fail-closed）
+             g_W906OrgActiveLow = []() { return true; };
++            const bool zaSensorSaved2 = be.golden[mZA].sensorType;
++            be.golden[mZA].sensorType = true;                                   //AI(W906-HT9050-ORG-ST) 20261002: SensorType=1 = low at home (the HT9050 table)
+             be.motionIO[1] = 0x10;
+             CHECK(MotorAccessTeachInterlockHome(be, mZA) == 0 && MotorAccessTeachHomeLed(be, mZA) == 0, "TEACH-ZDISABLED (c): 1203 ORG bit high -> 0 (unchanged)");
+             be.motionIO[1] = 0x00;
+@@ -3150,6 +3168,7 @@ int main(int argc, char** argv)
+             be.table["MInArmZA"].tableEnable = false;
+             CHECK(MotorAccessTeachInterlockHome(be, mZA) == 1, "TEACH-ZDISABLED (c): 1203 Enable=0 -> 1 as before (not -3)");
+             be.table["MInArmZA"].tableEnable = true;
++            be.golden[mZA].sensorType = zaSensorSaved2;
+             g_W906OrgActiveLow = 0;
+             be.motionIO[1] = 0x10;                                              // 回到上面那一段的狀態
+         }
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 65fcb6b..b9e6ac7 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -4062,7 +4062,7 @@ int main(int argc, char** argv)
+     { extern void FileRW_HSys_Boot(); FileRW_HSys_Boot(); }  { extern void FileRW_ContactForce_Boot(); FileRW_ContactForce_Boot(); }  { extern void FileRW_ACTForm_Boot(); FileRW_ACTForm_Boot(); }  /* AI(W906-FRW-S108) 20260926 (Steven 團隊)：golden CreateForm(TACTForm) HT9045.cpp:221（TfContactForce :220 之後）→ 建構子 AutoTemperature.cpp:289；golden :297 LoadACTData 在 :398 設 FilePath 之前 ⇒ 讀空檔名、ACTData＝預設值，不讀不寫任何檔。要在 LoadMachineConfig 之後（iSocketBaseTempCount）。本體 FileRW/ACTForm.cpp，冪等 */  /* AI(W906-FRW-S57) 20260926 (Steven 團隊)：golden CreateForm(TfContactForce) HT9045.cpp:220（THandlerSystem :210 之後）；只建替身（DFM 設計期狀態＋存檔讀的替身＋容器父子），不讀不寫檔 —— golden 建構子本體延到第一次 editlist.get ContactForce；開機讀檔仍是下面的 LoadContactForceTables()（已補 dIndexZOffset，P4）。冪等 */  /* AI(W906-FRW-S162) 20260927 [W906]：更正前一段 S57 註解 —— R15＝B（Steven，RULINGS_20260926 S162）起 FileRW_ContactForce_Boot() 開機就跑 golden 建構子本體（V912 ContactForce.cpp:421-653，照 CreateForm HT9045.cpp:220 時序；呼叫位置不變）：bUseDynamicKitDiameter 時依 [SLK Type] 在 D:\HT9045\system\ContactInfo.ini 補缺鍵（Ind 段 Diameter_<d>mm_<n>）、沒檔時 WriteFile 建檔；下面的 LoadContactForceTables() 讀的就是補過／建好的檔。細節見 FileRW/ContactForce.cpp FileRW_ContactForce_Boot */   //Steven 20260925 (S12-C HSys)：golden CreateForm(THandlerSystem) HT9045.cpp:210（TfConfiguration 之後）
+     { extern void FileRW_BinSelect_Boot(); FileRW_BinSelect_Boot(); }   //Steven 20260925 (S12-C BinSelect)：golden TfBinSel 替身＋收養 fBinSel 真元件；要在下面 fBinSel->ReadFile 之前   //Steven 20260925 (S12-C)：golden TfTrayAssignment 替身（HT9045.cpp:188；建構子讀 bUseAuto2Empty／CosFunction，要在 LoadMachineConfig 之後）；開機讀檔仍是 W906_BootReadTrayAssignment   //Steven 20260925 (S12-C)：golden TfYieldMonitoring 替身（HT9045.cpp:215 CreateForm，在 TfConfiguration 之後；讀檔仍是 fYieldMonitoring->ReadFile）   //Steven 20260924 (S12-C ArmSpeed_File)：golden TfSpeed 的替身（DFM 狀態＋建構子）；讀檔仍是 fSpeed->ReadFile   //Steven 20260924 (S12-C)：golden main.cpp:1532-1543 new 各 HTEditList ＋ TfConfiguration 建構子的註冊（InitConfigEdtList），要在 InitialHandler（golden FormShow）之前；見 FileRW/IniConfig.cpp
+     { extern void FileRW_BarCode_Boot(); FileRW_BarCode_Boot(); }  { extern void FileRW_Monitor_Boot(); FileRW_Monitor_Boot(); }  /* AI(W906-FRW-S110) 20260926 (Steven 團隊)：golden CreateForm(TfMonitor) HT9045.cpp:247（TfBarCode :243 之後）→ 建構子 MonitorInterface.cpp:32 LoadTCPIPParament()：只讀 D:\HT9045\system\MVData.ini（檔不在＝預設值，不建檔）；MVCtrl（TCP）不做。本體 FileRW/Monitor.cpp，冪等 */  { extern void FileRW_GroundMan_Boot(); FileRW_GroundMan_Boot(); }  { extern void FileRW_Rotate_Boot(); FileRW_Rotate_Boot(); }  { extern void W906_TrayMapping_BootFlags(); W906_TrayMapping_BootFlags(); }  { extern void FileRW_AutoAlignment_Boot(); FileRW_AutoAlignment_Boot(); }  { extern void FileRW_Winway_Boot(); FileRW_Winway_Boot(); }  /* AI(W906-FRW-S109) 20260926 (Steven 團隊)：golden CreateForm(TfWinway) HT9045.cpp:272（TfAutoAlignment :270 之後）→ 建構子 WinWaySetting.cpp:12：4 站 LoadCommData＋SaveCommData ⇒ 每次開機讀、並原樣寫回 D:\HT9045\config\ATCWinWay.ini（golden 同，不看 ATC_SYSTEM；檔不在會照預設值建）；不開 COM、不送 Modbus。本體 FileRW/Winway.cpp，冪等 */  { extern void FileRW_CounterSel_Boot(); FileRW_CounterSel_Boot(); }  { extern void FileRW_AutoCalSuckZ_Boot(); FileRW_AutoCalSuckZ_Boot(); }  /* AI(W906-FRW-S70) 20260926 (Steven 團隊)：golden CreateForm(TfProductionInfo) HT9045.cpp:257 → 建構子 ProductionInfo.cpp:52 的 AutoCalSuckZ 段（高度差陣列清零、Enable=false、elData 22 筆具名註冊、SearchStartZ=0）；不讀檔、不寫檔；要在 W906_DoReadLastData 之前，冪等 */  /* AI(W906-CRT-CounterSel) 20260926（Steven 團隊，S56）：golden CreateForm(TfCounterSel) HT9045.cpp:203 → 建構子 cCounterSel.cpp:23（NeedRef=false）；只建替身、不讀檔（[Visible] 由 ReadLastSetIni 讀），冪等 */   /* AI(W906-FRW-NoPage) 20260926 (Steven 團隊)：golden CreateForm(TFrmRotate) HT9045.cpp:227 → 建構子 fRotate.cpp:42（bShowRotateBySite 等；不讀檔）；CreateForm(TfTrayMapping) :252 → 建構子 cTrayMapping.cpp:92-104 的 bUseTrayMap 等五旗標（移植樹原本在靜態初始化算，看不到 Gerneral.ini）；CreateForm(TfAutoAlignment) :270 → 建構子 AutoAlignment.cpp:47（Gerneral.ini [Auto_Alignment] CCD 位址／埠，缺鍵照 golden 補寫）。三者與 BarCode／GroundMan 沒有共用狀態、也沒有 HTEditList，順序不影響；都要在 LoadMachineConfig 之後、W906_DoReadLastData 之前 */  { extern void FileRW_AGV_Boot(); FileRW_AGV_Boot(); }  /* AI(W906-B8-AG1) 20260930 [W906] St01：golden CreateForm(TfAGV) HT9045.cpp:278（TfVacuumUnit :275、TfWinway :272 之後）→ 只建替身（DFM 狀態＋存檔讀的替身＋父子）、裝開窗閘的 spbAGV 看得見判斷；不讀 AGV.ini、不寫檔（讀檔在 golden FormShow／spbSaveClick＝網頁開頁／存檔，與 DoReadLastData main.cpp:9378）。本體 FileRW/TestIF_File_AGV.cpp，冪等；接在同一行、行尾 // 之前，不移動行號 */   //Steven 團隊 20260925 (S12-C TestIF_File_BarCode)：golden CreateForm(TfBarCode) HT9045.cpp:243（TfQAMode :228 之後）；只建替身（DFM 狀態＋建構子），不讀檔（讀檔在 W906_DoReadLastData golden :9361）   //AI(W906-CRT-GroundMan) 20260926 (Steven 團隊)：golden CreateForm(TfGroundMan) HT9045.cpp:262（TfBarCode :243 之後）→ 建構子 GroundMan.cpp:24 → :136 ReadGroundOffset()：讀 D:\HT9045\system\GroundMan.ini（CheckAndReadIniData 缺鍵照 golden 補寫，路徑是 golden 寫死的字面值）；要在 LoadMachineConfig 之後（HSys.iGroundManScanPoint、CUSTOMER_CODE）
+-    {   { extern void W906_InstallUpdateMainOperateMode(); W906_InstallUpdateMainOperateMode(); std::printf("UpdateMainOperateMode body installed = yes\n"); }  { extern void W906_BootInitialATC(); W906_BootInitialATC(); }  /* AI(W906-ATC1) 20260926: golden FormShow main.cpp:9357-9361 InitialATC＋ATCIniPath，在 InitialHandler（:9559）之前 —— 沒有它 USE_ATC_MODE=4 的機台 ChangeATCSiteUse 會對空的 ATC_SYS_PAL 取 [0]（NB2 R72 ATC-1，forms/fMain_ATCSiteUse.cpp 檔尾） */   // AI(W906-OPMODE) 20260926: 在 InitialHandler 之前裝 —— 它的 LoadMachineRecord（cinitial.cpp:10231）→ SetMainRunStartMode → UpdateMainOperateMode 在 golden 開機就會跑（切加熱器繼電器、送 ATC 命令、寫 lastdata），0922 裁決「都要，全部動作都要執行」；fTemp_Set 在 :3111 已建［⚠ 20260926 NB2 R72 OPM-4 更正：:3111 在 W906_DoReadLastData 裡，比 InitialHandler 晚 —— InitialHandler 裡那一次呼叫時 fTemp_Set 還沒讀檔］
++    {   { extern void W906_InstallUpdateMainOperateMode(); W906_InstallUpdateMainOperateMode(); std::printf("UpdateMainOperateMode body installed = yes\n"); }  { extern void W906_InstallSetTemp(); W906_InstallSetTemp(); extern void (*W906_SetTempPageClosedHook)(const char*); extern void W906_EditPageWindowClosed(const char* goldenForm); W906_SetTempPageClosedHook = &W906_EditPageWindowClosed; }  /* AI(W906-I01C) 20261002 (Ifor01): golden TfMain::SetTemp (main.cpp:23890-23981) live -- its save path (uTemp_Set.cpp S1/S2) is open since I-01 phase 2 (2); same forms->sm split as the line before (forms/fMain_Heater.cpp EOF); the page hook = FileRW's W906_EditPageWindowClosed (SetTemp saved -> the web temperature page must reopen, TO_IFOR §4 1002 08:5x ①) */  { extern void W906_BootInitialATC(); W906_BootInitialATC(); }  /* AI(W906-ATC1) 20260926: golden FormShow main.cpp:9357-9361 InitialATC＋ATCIniPath，在 InitialHandler（:9559）之前 —— 沒有它 USE_ATC_MODE=4 的機台 ChangeATCSiteUse 會對空的 ATC_SYS_PAL 取 [0]（NB2 R72 ATC-1，forms/fMain_ATCSiteUse.cpp 檔尾） */   // AI(W906-OPMODE) 20260926: 在 InitialHandler 之前裝 —— 它的 LoadMachineRecord（cinitial.cpp:10231）→ SetMainRunStartMode → UpdateMainOperateMode 在 golden 開機就會跑（切加熱器繼電器、送 ATC 命令、寫 lastdata），0922 裁決「都要，全部動作都要執行」；fTemp_Set 在 :3111 已建［⚠ 20260926 NB2 R72 OPM-4 更正：:3111 在 W906_DoReadLastData 裡，比 InitialHandler 晚 —— InitialHandler 裡那一次呼叫時 fTemp_Set 還沒讀檔］
+         { extern void GetTimeInfo(); GetTimeInfo(); }   /* AI(W906-CLOCK) 20260924: golden TfMain ctor main.cpp:1683 在 InitialHandler（:9559）之前先更新一次掛鐘。沒有這一次，網頁命令在第一個 500 ms 拍子之前就被排空（每 50 ms 一圈）時會讀到哨兵 9999 —— 非模擬探針實測 lot.start 寫出 LotStartTime=9999-9999-00 9999:9999:9999 */  { extern void W906_TfMain_FormShow_TempFuseLimit(); W906_TfMain_FormShow_TempFuseLimit(); }  /* AI(W906-FUSELIMIT) 20261001: golden TfMain::FormShow main.cpp:9535-9551 TempFuseLimitType (250/200/170 by customer, machine and iTempLimitation; was never assigned = 0.0), right before :9553 bHasTrayCSV and :9559 InitialHandler as in golden; body MainFormShow_TempFuse.cpp */  { extern void W906_CfgTrayPlate_MainFormShowFlags(); W906_CfgTrayPlate_MainFormShowFlags(); }  /* AI(W906-FRW-S98) 20260926 (Steven 團隊)：golden TfMain::FormShow main.cpp:9987-9988 bHasTrayCSV=FileExists(TrayTablePath); bHasPlateCSV=FileExists(PlateTablePath);（golden 緊接著 :9992 InitialHandler）。本體 FileRW/CfgTrayPlate.cpp，只查檔在不在。插在同一行，不移動行號 */  InitialHandler(); const bool okWP = true;  { extern void W906_BootSummary(bool); extern bool W906_WbServeHas1203(); W906_BootSummary(W906_WbServeHas1203()); }   /* AI(W906-BOOTSUM) 20260925: 開機摘要（BootSummary.cpp），純觀測 */   // AI(W906-A4-2) 20260924: golden main.cpp:9559 —— 完整 bring-up（InitialClass、InitHontechHardware〔InitSucker／InitialSwitch／InitialSensor／OpenPCI132Card／InitialMotorParameter／InitCylinder〕、LoadMachineRecord、ReadPassword、SetWorkParameter、SetMotorSpeed）取代這裡原本只叫 SetWorkParameter 的整合接縫；位置在 golden ctor 那段（吸嘴格數、ARM_OFFSET，上面）之後，順序與 golden 相同。U23／U24（A9）由此照 golden 順序接上
+         std::printf("InitialHandler (golden main.cpp:9559) done -> %s   (Tech.iInArmPlate1Y=%d iInArmPlate2Y=%d)\n",
+                     okWP ? "true" : "false",
+diff --git a/uTemp_Set.cpp b/uTemp_Set.cpp
+index eff636f..0757b76 100644
+--- a/uTemp_Set.cpp
++++ b/uTemp_Set.cpp
+@@ -211,12 +211,12 @@ using vclcompat::clRed;
+ // Forward-declared here so this TU can reference the same global.
+ extern TfDynamicTemp *fDynamicTemp;
+ 
+-// FTestIF -- GATE(G-FTestIF), see facade header. Golden `TFTestIF` (cTesterIF.h)
+-// has no facade anywhere in this port; only its ONE call shape
+-// (`FTestIF->ReadTestIFFile();`) is ever reached here, and both call sites are
+-// `#if 0`-gated (matching Automation/SCK_ART_Remainder.h gate #2 / Command.cpp
+-// gates #11-12), so `FTestIF` itself is never dereferenced by compiled code --
+-// no forward declaration needed.
++// FTestIF -- GATE(G-FTestIF): golden TFTestIF (cTesterIF.h) has no facade in this port. DoIniDataToForm's call (:3365) stays gated; SaveSetupFile's (:5384) re-reads only
++// the [InitialMode] block -- the one this form writes -- through UTS_ReadTestIFFile_InitialMode (end of file; same subset as FileRW/Temperature.gen.inc TS_ReadTestIFFile_InitialMode). AI(W906-I01C) 20261002.
++#include "forms/fHS.h"   // AI(W906-I01C) 20261002 (Ifor01): TFormHS::CheckTempOffset (forms/fHS.cpp:804, golden HS_Function.cpp:3958) for spbSaveClick's WAR15194 check
++static TFormHS* UTS_FormHS() { static TFormHS* p = new TFormHS(); return p; }   // AI(W906-I01C): golden FormHS -- the global name is a stub's (Automation/SCK_ART_Remainder.h:629); same private instance as FileRW/Temperature.gen.inc:68 (CheckTempOffset keeps its state in function statics)
++static void UTS_ReadTestIFFile_InitialMode();   // AI(W906-I01C): end of file (golden cTesterIF.cpp:563-570 + :713-779)
++//
+ 
+ //------------------------------------------------------------------------------
+ // golden :47 -- global, ZERO-initialized (NOT `= new TfTemp_Set()`), per this
+@@ -3046,7 +3046,7 @@ void TfTemp_Set::ReadTempFile(bool bUpdateAll)
+     Temperature.Arm2NoFullsiteOffset_4  =CheckAndReadIniData(szDir, "Index", "Arm2 No Fullsite Offset4", 0.0);          //wei 20160107 No FullSite Add Offset
+     Temperature.Arm2NoFullsiteOffset_5  =CheckAndReadIniData(szDir, "Index", "Arm2 No Fullsite Offset5", 0.0);          //wei 20160107 No FullSite Add Offset
+ 
+-    ATCInterfaceForm->iCheckSameTempTime=CheckAndReadIniData("D:\\HT9045\\Config\\ATC.ini", "Setup", "iCheckSameTempTime", 300);                                //Ifor 20160308 Add 開啟ATC功能時讀取ATC設定檔
++    ATCInterfaceForm->iCheckSameTempTime=CheckAndReadIniData(AuthPath+"ATC.ini", "Setup", "iCheckSameTempTime", 300);                                //Ifor 20160308 Add 開啟ATC功能時讀取ATC設定檔   //AI(W906-I01C) 20261002 (Ifor01): golden literal "D:\\HT9045\\Config\\ATC.ini" == AuthPath+"ATC.ini" in production (common.cpp:31; Windows paths ignore case) -- the AuthPath seam (W906_AUTH_PATH) keeps a ctest off the real config\ATC.ini
+ 
+     Temperature.dSocketAirCoolingOnTimer=CheckAndReadIniData(szDir, "Index", "dSocketAirCoolingOnTimer", 5.0);          //jou 2016-04-28 Socket Air Cooling contact count trun on
+     Temperature.dSocketAirCoolingOffTimer=CheckAndReadIniData(szDir, "Index", "dSocketAirCoolingOffTimer", 5.0);        //jou 2016-04-28 Socket Air Cooling contact count trun on
+@@ -4560,24 +4560,24 @@ void TfTemp_Set::spbSaveClick(TObject *Sender)
+         // anywhere in this port tree (grepped, 0 hits outside this file and
+         // golden). Whole validation block gated; `bHasErrorSet` keeps its
+         // `=false` default while gated (cannot validate what cannot be read).
+-#if 0 // GATE(dep-FormHS)
++//AI(W906-I01C) 20261002 (Ifor01): GATE(dep-FormHS) OPENED -- TFormHS::CheckTempOffset has a body (forms/fHS.cpp:804); FormHS -> UTS_FormHS() (top of file)
+         for(int i=0; i<tcTotalCount; i++)
+         {
+             if(bUT150Install[i]==true)
+             {
+-                if(FormHS->CheckTempOffset(i, atof(myTempPal[i]->edLowbase->Text.c_str())+atof(myTempPal[i]->edOffset->Text.c_str())+dbSetTemp))
++                if(UTS_FormHS()->CheckTempOffset(i, atof(myTempPal[i]->edLowbase->Text.c_str())+atof(myTempPal[i]->edOffset->Text.c_str())+dbSetTemp))
+                 {
+                     bHasErrorSet=true;
+                 }
+-                else if(FormHS->CheckTempOffset(i, atof(myTempPal[i]->edBase->Text.c_str())+atof(myTempPal[i]->edOffset->Text.c_str())+dbSetTemp))
++                else if(UTS_FormHS()->CheckTempOffset(i, atof(myTempPal[i]->edBase->Text.c_str())+atof(myTempPal[i]->edOffset->Text.c_str())+dbSetTemp))
+                 {
+                     bHasErrorSet=true;
+                 }
+-                else if(FormHS->CheckTempOffset(i, atof(myTempPal[i]->edHighBase->Text.c_str())+atof(myTempPal[i]->edOffset->Text.c_str())+dbSetTemp))
++                else if(UTS_FormHS()->CheckTempOffset(i, atof(myTempPal[i]->edHighBase->Text.c_str())+atof(myTempPal[i]->edOffset->Text.c_str())+dbSetTemp))
+                 {
+                     bHasErrorSet=true;
+                 }
+-                else if(FormHS->CheckTempOffset(i, atof(myTempPal[i]->edSHighBase->Text.c_str())+atof(myTempPal[i]->edOffset->Text.c_str())+dbSetTemp))         //Ztex 2024.07.27 Add 6 Point Temperature Offset
++                else if(UTS_FormHS()->CheckTempOffset(i, atof(myTempPal[i]->edSHighBase->Text.c_str())+atof(myTempPal[i]->edOffset->Text.c_str())+dbSetTemp))         //Ztex 2024.07.27 Add 6 Point Temperature Offset
+                 {
+                     bHasErrorSet=true;
+                 }
+@@ -4586,10 +4586,10 @@ void TfTemp_Set::spbSaveClick(TObject *Sender)
+ 
+         if(bHasErrorSet==true)
+         {
+-            FormHS->CheckTempOffset(0, 0, true);
++            UTS_FormHS()->CheckTempOffset(0, 0, true);
+             return;
+         }
+-#endif // GATE(dep-FormHS)
++//AI(W906-I01C) 20261002: (the old #endif of GATE(dep-FormHS))
+     }
+     //<==
+     //Ifor 20180809 (Steven) : add Check the temperature Offset limit Hisi_V02.20
+@@ -4650,7 +4650,7 @@ void TfTemp_Set::spbSaveClick(TObject *Sender)
+     // this point is the real "commit to disk" tail (SaveSetupFile + the
+     // DefineTemp path CopyFile/WriteIniData + SaveLastSetIni +
+     // fMain->BackupSetupFile). Gated whole-block per the task brief.
+-#if 0 // SAFETY GATE (S2)
++//AI(W906-I01C) 20261002 (Ifor01): SAFETY GATE (S2) OPENED (RULINGS_20261001 #0; TO_IFOR §4 1002 08:5x ①, W-05 = (a)) -- the commit-to-disk tail runs as golden
+     SaveSetupFile(szDir, S);                                                    //kevin 20150105
+     #ifdef ASE_KaohSiung
+         fBuilder->bSaveAsJobFile(S,"JOBFILE");
+@@ -4823,11 +4823,11 @@ void TfTemp_Set::spbSaveClick(TObject *Sender)
+     {
+         if(LastSet.iTemperature==Tempture_Ambient)
+         {
+-            SetTempShiftOffsetPeriod(25,fMain->cbSetupFileName->Text);
++            ;   // GATE(W906-I01C) missing-dependency: golden SetTempShiftOffsetPeriod(25,fMain->cbSetupFileName->Text); -- no body in the port (golden cOffSet.cpp:3621; CC_ASE_CL only; the C route gates it too, FileRW/Temperature.gen.inc ELTodo)
+         }
+         else
+         {
+-            SetTempShiftOffsetPeriod(Temperature.fWorkTemperBase, fMain->cbSetupFileName->Text);
++            ;   // GATE(W906-I01C) missing-dependency: golden SetTempShiftOffsetPeriod(Temperature.fWorkTemperBase, fMain->cbSetupFileName->Text); -- same as above
+         }
+     }
+     fMain->BackupSetupFile();                                                   //Ifor 20170620 (wei) add Auto BackUp Setup File & Last Data
+@@ -4838,7 +4838,7 @@ void TfTemp_Set::spbSaveClick(TObject *Sender)
+     spbSave->Down=false;
+     ReadTempFile(true);
+     DoIniDataToForm(true);
+-#endif // SAFETY GATE (S2)
++//AI(W906-I01C) 20261002: (the old #endif of SAFETY GATE (S2))
+     (void)iSum; (void)szDir2;   // write-only once SAFETY GATE (S2) is inert
+ }
+ //------------------------------------------------------------
+@@ -4850,7 +4850,7 @@ void TfTemp_Set::spbSaveClick(TObject *Sender)
+ //---------------------------------------------------------------------------
+ void TfTemp_Set::SaveSetupFile(AnsiString szDir, AnsiString S)
+ {
+-#if 0 // SAFETY GATE (S1)
++//AI(W906-I01C) 20261002 (Ifor01): SAFETY GATE (S1) OPENED (same ruling) -- SaveSetupFile writes the recipe Temperature.Data as golden
+     int iSum=0;
+     int data=0;
+     int i=0, j=0;
+@@ -5277,7 +5277,7 @@ void TfTemp_Set::SaveSetupFile(AnsiString szDir, AnsiString S)
+         edTempAlwaysSameAlarm->Text = "20";
+     }
+ 
+-    WriteIniData("D:\\HT9045\\Config\\ATC.ini", "Setup", "iCheckSameTempTime", edTempAlwaysSameAlarm->Text);
++    WriteIniData(AuthPath+"ATC.ini", "Setup", "iCheckSameTempTime", edTempAlwaysSameAlarm->Text);   //AI(W906-I01C) 20261002 (Ifor01): golden literal "D:\\HT9045\\Config\\ATC.ini" == AuthPath+"ATC.ini" in production (common.cpp:31; Windows paths ignore case) -- the AuthPath seam (W906_AUTH_PATH) keeps a ctest off the real config\ATC.ini
+ 
+     WriteIniData(szDir, "Index", "dSocketAirCoolingOnTimer", edSocketAirCoolingOn->Text);                               //jou 2016-04-28 Socket Air Cooling contact count trun on
+     WriteIniData(szDir, "Index", "dSocketAirCoolingOffTimer", edSocketAirCoolingOff->Text);                             //jou 2016-04-28 Socket Air Cooling contact count trun on
+@@ -5381,7 +5381,7 @@ void TfTemp_Set::SaveSetupFile(AnsiString szDir, AnsiString S)
+     WriteIniData(szDir, "LB Temp Function", "LB_Temp_Low_Setting",       atof(edLBTempLowSettingValue->Text.c_str()));
+     WriteIniData(szDir, "LB Temp Function", "bLBTempHighAlarm_Enable",   cbLBTempHighAlarmEnable->Checked);
+     WriteIniData(szDir, "LB Temp Function", "bLBTempLowAlarm_Enable",    cbLBTempLowAlarmEnable->Checked);
+-    FTestIF->ReadTestIFFile();
++    UTS_ReadTestIFFile_InitialMode();                                            //AI(W906-I01C) 20261002: golden FTestIF->ReadTestIFFile(); -- only its [InitialMode] block (GATE G-FTestIF, top of file)
+     //<==
+     //Steven 20180815 : Initial Temp Offset-------------------------------------
+ 
+@@ -5392,7 +5392,7 @@ void TfTemp_Set::SaveSetupFile(AnsiString szDir, AnsiString S)
+         WriteIniData(szDir, "TriTempSet",   "UseHeaterBase",                    chkTriTempEnableBase->Checked);
+         WriteIniData(szDir, "TriTempSet",   "UseHeaterDoor",                    chk_IndexHeaterDoor->Checked);          //Ztex 2023.10.23 Add Index Door Heater
+     }                                                                           //Heater開關設定
+-#endif // SAFETY GATE (S1)
++//AI(W906-I01C) 20261002: (the old #endif of SAFETY GATE (S1))
+     (void)szDir; (void)S;   // write-only once SAFETY GATE (S1) is inert
+ }
+ //---------------------------------------------------------------------------
+@@ -7426,3 +7426,88 @@ void TfTemp_Set::cbATCReferTempSensorClick(TObject *Sender)
+ // body here, matching golden's own "declared but never defined, never
+ // called" state (see facade header OMITTED note).
+ 
++//------------------------------------------------------------------------------
++// AI(W906-I01C) 20261002 (Ifor01): golden TFTestIF::ReadTestIFFile (906 cTesterIF.cpp:562) -- only the path (:565-569)
++//   and the [InitialMode] block (:689-758) that SaveSetupFile writes (GATE G-FTestIF, top of file: TFTestIF has no
++//   facade; the rest of that reader is other pages' data). Copied from the cp950-decoded golden by line number (generator,
++//   not retyped). Same subset as the C route's TS_ReadTestIFFile_InitialMode (FileRW/Temperature.gen.inc, translated
++//   from V912 cTesterIF.cpp:713-779 -- the same text). Called from SaveSetupFile where golden calls FTestIF->ReadTestIFFile().
++//------------------------------------------------------------------------------
++static void UTS_ReadTestIFFile_InitialMode()
++{
++    AnsiString S="";   // golden cTesterIF.cpp:565
++    S=GetLastOpenFN();   // golden cTesterIF.cpp:566
++    AnsiString szDir="";//, szDir2;   // golden cTesterIF.cpp:567
++    szDir=DataPath+S;   // golden cTesterIF.cpp:568
++    szDir+="\\Tester.Data";   // golden cTesterIF.cpp:569
++    //ChungHung 20140425 add for TSMC Device   // golden cTesterIF.cpp:689
++    TestIF_File.bEveryFirstDeviceUseInitialDelay            =ReadIniData(szDir, "InitialMode",       "bEveryFirstDeviceUseInitialDelay",          false);   // golden cTesterIF.cpp:690
++
++    if(CosFunction.bAfterInitialDelayUseOtherArm)                               //Jerryyang 20180607 (wei) : Initail delay後不直接測試,換用另外一支arm下去測,用意是避免device溫度被socket帶走後直接測試容易fail   // golden cTesterIF.cpp:692
++        TestIF_File.bUseOtherArmToTestAfterInitialDelay     =ReadIniData(szDir, "InitialMode",       "bUseOtherArmToTestAfterInitialDelay",       false);   // golden cTesterIF.cpp:693
++    else   // golden cTesterIF.cpp:694
++        TestIF_File.bUseOtherArmToTestAfterInitialDelay     =false;   // golden cTesterIF.cpp:695
++
++    TestIF_File.bAfterShowAlarmMessageUseInitialDelay       =ReadIniData(szDir, "InitialMode",       "bAfterShowAlarmMessageUseInitialDelay",     false);   // golden cTesterIF.cpp:697
++    TestIF_File.bWhenHappenTestedTimeBelowUseInitialDelay   =ReadIniData(szDir, "InitialMode",       "bWhenHappenTestedTimeBelowUseInitialDelay", false);   // golden cTesterIF.cpp:698
++    TestIF_File.iEveryFirstDeviceUseInitialDelay            =ReadIniData(szDir, "InitialMode",       "iEveryFirstDeviceUseInitialDelay",          1.00);   // golden cTesterIF.cpp:699
++
++    #ifdef SOFT_SIMULTE                                                         //Steven 20241108 : 軟體模擬有做五秒就好   // golden cTesterIF.cpp:701
++    TestIF_File.iInitialDelay                               =5;   // golden cTesterIF.cpp:702
++    TestIF_File.iInitialDelay_2                             =5;   // golden cTesterIF.cpp:703
++    TestIF_File.iInitialDelay_3                             =5;   // golden cTesterIF.cpp:704
++    TestIF_File.iInitialDelay_4                             =5;   // golden cTesterIF.cpp:705
++    TestIF_File.iInitialDelay_5                             =5;   // golden cTesterIF.cpp:706
++    TestIF_File.iInitialDelay_6                             =5;   // golden cTesterIF.cpp:707
++    TestIF_File.iInitialDelay_7                             =5;   // golden cTesterIF.cpp:708
++    TestIF_File.iInitialDelay_8                             =5;   // golden cTesterIF.cpp:709
++    TestIF_File.iInitialDelay_9                             =5;   // golden cTesterIF.cpp:710
++    TestIF_File.dInitialDelay_10                            =5;   // golden cTesterIF.cpp:711
++    #else   // golden cTesterIF.cpp:712
++    TestIF_File.iInitialDelay                               =ReadIniData(szDir, "InitialMode",       "iInitialDelay",            1.00);     //ChungHung 20141210 add for SCK want to every event have delay   // golden cTesterIF.cpp:713
++    TestIF_File.iInitialDelay_2                             =ReadIniData(szDir, "InitialMode",       "iInitialDelay_2",          1.00);     //ChungHung 20141210 add for SCK want to every event have delay   // golden cTesterIF.cpp:714
++    TestIF_File.iInitialDelay_3                             =ReadIniData(szDir, "InitialMode",       "iInitialDelay_3",          1.00);     //ChungHung 20141210 add for SCK want to every event have delay   // golden cTesterIF.cpp:715
++    TestIF_File.iInitialDelay_4                             =ReadIniData(szDir, "InitialMode",       "iInitialDelay_4",          1.00);     //ChungHung 20141210 add for SCK want to every event have delay   // golden cTesterIF.cpp:716
++    TestIF_File.iInitialDelay_5                             =ReadIniData(szDir, "InitialMode",       "iInitialDelay_5",          1.00);     //ChungHung 20141210 add for SCK want to every event have delay   // golden cTesterIF.cpp:717
++    TestIF_File.iInitialDelay_6                             =ReadIniData(szDir, "InitialMode",       "iInitialDelay_6",          1.00);     //ChungHung 20150526 add for ATK want to even stop over will use initial delay   // golden cTesterIF.cpp:718
++    TestIF_File.iInitialDelay_7                             =ReadIniData(szDir, "InitialMode",       "iInitialDelay_7",          1.00);     //wei 20151228 No FullSite delay   // golden cTesterIF.cpp:719
++    TestIF_File.iInitialDelay_8                             =ReadIniData(szDir, "InitialMode",       "iInitialDelay_8",          1.00);     //kevin 20160310 測試完成到下一次完成超過所設時間須啟動   // golden cTesterIF.cpp:720
++    TestIF_File.iInitialDelay_9                             =ReadIniData(szDir, "InitialMode",       "iInitialDelay_9",          1.00);     //Steven 20160818 : OTD打開Delay   // golden cTesterIF.cpp:721
++    TestIF_File.dInitialDelay_10                            =ReadIniData(szDir, "InitialMode",       "dInitialDelay_10",         0.0);      //kevin 20181031 (Steven) : add SOT start SRQ41 send next SRQ 41 wait time   // golden cTesterIF.cpp:722
++    #endif   // golden cTesterIF.cpp:723
++
++    if(CosFunction.bHiSiliconFunction && CUSTOMER_CODE==CC_ASE_KaohSiung)       //kevin 20191227 add  Initial Start Delay Time 需卡下限, 最小30秒.   // golden cTesterIF.cpp:725
++    {   // golden cTesterIF.cpp:726
++        if(TestIF_File.dInitStartDelayTime<30)                                  //kevin 20200110   // golden cTesterIF.cpp:727
++        {   // golden cTesterIF.cpp:728
++            TestIF_File.dInitStartDelayTime=30;   // golden cTesterIF.cpp:729
++            TestIF_File.iInitialDelay=30;   // golden cTesterIF.cpp:730
++        }   // golden cTesterIF.cpp:731
++    }   // golden cTesterIF.cpp:732
++
++    TestIF_File.bOTDUnlockDelay                             =ReadIniData(szDir, "InitialMode",       "bOTDUnlockDelay",                             false);     //Steven 20160818 : OTD打開Delay   // golden cTesterIF.cpp:734
++    TestIF_File.bWhenPressStopOverUseInitialDelay           =ReadIniData(szDir, "InitialMode",       "bWhenPressStopOverUseInitialDelay",           false);     //ChungHung 20150526 add for ATK want to even stop over will use initial delay   // golden cTesterIF.cpp:735
++    TestIF_File.iWhenPressStopOver                          =ReadIniData(szDir, "InitialMode",       "iWhenPressStopOver",                          1.00);      //ChungHung 20150526 add for ATK want to even stop over will use initial delay   // golden cTesterIF.cpp:736
++    TestIF_File.bWhenNoFullSiteUseInitialDelay              =ReadIniData(szDir, "InitialMode",       "bWhenNoFullSiteUseInitialDelay",              false);     //wei 20151228 No FullSite delay   // golden cTesterIF.cpp:737
++    TestIF_File.bAfterAutoCleanFunctionUseInitialDelay      =ReadIniData(szDir, "InitialMode",       "bAfterAutoCleanFunctionUseInitialDelay",      false);   // golden cTesterIF.cpp:738
++    TestIF_File.bTestFinishToNextTestOver                   =ReadIniData(szDir, "InitialMode",       "bTestFinishToNextTestOver",                   false);     //kevin 20160310 測試完成到下一次完成超過所設時間須啟動   // golden cTesterIF.cpp:739
++    TestIF_File.iTestFinishToNextTestOver                   =ReadIniData(szDir, "InitialMode",       "iTestFinishToNextTestOver",                   1.00);      //kevin 20160310 測試完成到下一次完成超過所設時間須啟動   // golden cTesterIF.cpp:740
++    TestIF_File.bAfterOpenHeatDoorUseInitialDelay           =ReadIniData(szDir, "InitialMode",       "bAfterOpenHeatDoorUseInitialDelay",           false);     //ChungHung 20141210 add for SCK want to after Open HeatDoor have delay time   // golden cTesterIF.cpp:741
++    TestIF_File.bTestStartToNextTestStart                   =ReadIniData(szDir, "InitialMode",       "bTestStartToNextTestStart",                   false);     //kevin 20181031 (Steven) : add SOT start SRQ41 send next SRQ 41   // golden cTesterIF.cpp:742
++    TestIF_File.dTeststartToNextTestStart                   =ReadIniData(szDir, "InitialMode",       "dTeststartToNextTestStart",                   1.00);      //kevin 20181031 (Steven) : add SOT start SRQ41 send next SRQ 41  over time   // golden cTesterIF.cpp:743
++
++    //Steven 20190313 : Initial Start Delay use different setting in FT and RT   // golden cTesterIF.cpp:745
++    //==>   // golden cTesterIF.cpp:746
++    TestIF_File.dInitialDelay_1_RT                          =ReadIniData(szDir, "InitialMode",       "dInitialDelay_1_RT",              0.0);   // golden cTesterIF.cpp:747
++    TestIF_File.dInitialDelay_2_RT                          =ReadIniData(szDir, "InitialMode",       "dInitialDelay_2_RT",              0.0);   // golden cTesterIF.cpp:748
++    TestIF_File.dInitialDelay_3_RT                          =ReadIniData(szDir, "InitialMode",       "dInitialDelay_3_RT",              0.0);   // golden cTesterIF.cpp:749
++    TestIF_File.dInitialDelay_4_RT                          =ReadIniData(szDir, "InitialMode",       "dInitialDelay_4_RT",              0.0);   // golden cTesterIF.cpp:750
++    TestIF_File.dInitialDelay_5_RT                          =ReadIniData(szDir, "InitialMode",       "dInitialDelay_5_RT",              0.0);   // golden cTesterIF.cpp:751
++    TestIF_File.dInitialDelay_6_RT                          =ReadIniData(szDir, "InitialMode",       "dInitialDelay_6_RT",              0.0);   // golden cTesterIF.cpp:752
++    TestIF_File.dInitialDelay_7_RT                          =ReadIniData(szDir, "InitialMode",       "dInitialDelay_7_RT",              0.0);   // golden cTesterIF.cpp:753
++    TestIF_File.dInitialDelay_8_RT                          =ReadIniData(szDir, "InitialMode",       "dInitialDelay_8_RT",              0.0);   // golden cTesterIF.cpp:754
++    TestIF_File.dInitialDelay_9_RT                          =ReadIniData(szDir, "InitialMode",       "dInitialDelay_9_RT",              0.0);   // golden cTesterIF.cpp:755
++    TestIF_File.dInitialDelay_10_RT                         =ReadIniData(szDir, "InitialMode",       "dInitialDelay_10_RT",             0.0);   // golden cTesterIF.cpp:756
++    //<==   // golden cTesterIF.cpp:757
++    //Steven 20190313 : Initial Start Delay use different setting in FT and RT   // golden cTesterIF.cpp:758
++}
+-- 
+2.55.0.windows.5
+

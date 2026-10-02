@@ -684,4 +684,11 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
   cpp 0134 0a7f2de WORKLOG —— 工作紀錄第 80 項（第 127 包、machine_params／workorder 快照、推送規矩改成「編譯過就推、附參數與工單」）。
   掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
+  cpp 0135 7508a5a PKG-128 —— 機台整合筆電第 128 包（GitHub main 5c3a4a8、GitLab 116a0809）：NB2 !119 HT9050-ORG-ST（1203 HOME 燈、Teach「Z 在原點」、全機 HOME 原點確認改成逐軸照 Mot_Table SensorType：1＝ORG low 在原點、0＝high）、Ifor !109 SetTempSave、St02 !108 測試。
+                    EastSun 1002 實測「沒遮到 home sensor 時 1203 讀 0」（10-01 的「0＝在原點」讓每顆 HOME 燈都亮），選第 128 包的規則。
+                    ⚠ 包裡要求先把機台 Mot_Table 改成 SensorType=1——**沒做**：那等於維持「0＝在原點」＝剛量到的錯誤方向。16 列 SensorType=0 維持（high＝在原點，符合實測）；MInArmX／Y／ZA（SensorType=1）待遮 sensor 確認。Mot_Table 沒動。
+                    五個機台改過的檔用包內 base_025fdabe 三方合併 0 衝突。o2 編過；ctest 8/8；PE 95/95。
+  cpp 0136 5472554 ENGHOME —— 主畫面全軸 HOME 送到 1203 卡：打開 WB_ENGINE_MOTOR_1203＋WB_PUMP_1203_START_RING（EastSun 1002「兩個都開」；開卡時 ring 0 下 Acm_MasStartRing；引擎的馬達動作——HOME、之後 START——都會真的送到卡）。閘門腳本期望值同步。F5（★★）改回 release（不接除錯器）；DEBUG 設定拿掉「1203 唯讀」字樣、加檢查舊程式。
+  ⚠ 給筆電：機台已套第 127～128 包；第 128 包的 Mot_Table SensorType=1 指示機台沒照做（理由見 cpp 0135），machines/HT9050/Mot_Table.csv 那 10 列改 1 對這台是反的，請確認。
+  掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
 MD5 清單在 MANIFEST_MD5.tsv。
