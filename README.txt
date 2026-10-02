@@ -669,4 +669,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   tools 0146 HTDESIGNER-161（0.161.0）—— 筆電包 126 的外掛部分合進機台：ES02 的 0.158–0.161（圖片元件可以換 Picture、方案總管外框到底、「群組到…」可選 Panel／GroupBox、選取時四邊都標邊距）。三方合併（基準＝包 125）：9 個只有 ES02 改、4 個兩邊都改都沒有衝突；機台的 tools 0136／0143／0145 補丁都保留。C++ 部分＝整合工作階段的 cpp 0130。機台測試：程式庫 179/179、探針 7/7＋分頁樹 7/7、假 VS Code 221/221、面板全過；真的 VS Code 156/159（已知 3 項「頁面」清單檢查過期）；e2e_build.ps1 沒跑。包 127 沒有外掛。
   ⚠ 給筆電：機台的 tools 0136、0143、0145 外掛補丁還沒進 GitLab，請收。機台現在外掛 0.161.0。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0132 8a5f75b BOOT-INITMOTOR —— 開機開卡、馬達送電 1 秒後，照 golden 對 M35 MLoaderZ 跑一次 InitMotor（清錯、設定表含 SensorType→ORG 極性與 In1Logic→ALM 極性、最大速度、Servo ON、座標歸零），結果寫在 oplog。EastSun 1002 要求，先只做 MLoaderZ。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。

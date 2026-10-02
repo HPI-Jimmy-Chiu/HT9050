@@ -1,0 +1,140 @@
+From 8a5f75b44134a8ba0625b5e7b6d082a4f980905f Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 2 Oct 2026 18:35:26 +0800
+Subject: [PATCH] BOOT-INITMOTOR: golden InitMotor on M35 MLoaderZ once per
+ run, after the 1203 card is open and the motor power is on
+
+EastSun 20261002: right after start, open the card, power the motors, then InitMotor -- MLoaderZ first.  Until now golden InitMotor
+(ResetError, the CFG table incl. CFG_AxOrgLogic from SensorType / CFG_AxAlmLogic from In1Logic, CFG_AxMax*, SvOn,
+SetCommand/SetPosition 0) ran only from Motor Test's Test Range / Test Rate, so SensorType / In1Logic never reached the card.
+
+* WebMotorAccess.cpp EOF: MotorAccessBootInitMotor = the existing InitMotor1203 for one alias, steps as one report line.
+* WebMotorAccessLive.cpp EOF: W906_BootInitMotorTick, from W906_BrakeAxisTick (after every monitor Poll): control ready, axis claimed,
+  fresh sample, relay ON (OutValue or card read-back) + SnMotorPower on + no EMG for 1 s -> once per run; the report goes to the op log.
+  kBootInitAxes = { MLoaderZ }.  Lines above both EOFs unchanged.
+
+Verified (o2): wb_serve 0 errors; ctest WebMotorAccess, Pci1203MotorRoute, Pci1203Pure 3/3; pci1203_readonly_gate PASS.  Needs F5 on the machine.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebMotorAccess.cpp     | 28 +++++++++++++++++++++++++
+ WebMotorAccess.h       |  3 +++
+ WebMotorAccessLive.cpp | 46 +++++++++++++++++++++++++++++++++++++++++-
+ 3 files changed, 76 insertions(+), 1 deletion(-)
+
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index c0640b0..fc68901 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -5387,3 +5387,31 @@ MotorAccessOutcome DoTeachIndexServo(const MotorAccessReq& r, long long wireId,
+ 
+ }  // namespace
+ }  // namespace ht9045
++
++//AI(W906-BOOT-INITMOTOR) 20261002: EastSun 1002「一開始執行的時候開卡完就要進行馬達送電後就要開始進行InitMotor ... 請先以 M35 MLoaderZ」.
++//  golden TMyEtherCatMotor::InitMotor (myEthercatmotor.cpp:172-394) on the monitor's handles, the same body Test Range / Test Rate
++//  run (InitMotor1203 above, EastSun R4): ResetError until READY (bounded), the closed CFG table (CFG_AxOrgLogic from SensorType,
++//  CFG_AxAlmLogic from In1Logic, ...), CFG_AxMaxVel/Acc/Dec, ResetError, SvOn 1, SetCommand(0)/SetPosition(0). Called once per
++//  wb_serve run per axis by the live tick (WebMotorAccessLive.cpp EOF, W906_BootInitMotorTick) after the card is open and the
++//  motor power is on. report = one line per step for the op log.
++namespace ht9045 {
++bool MotorAccessBootInitMotor(IMotorAccessBackend& be, const std::string& alias, std::string& report)
++{
++    MotionCtx m;
++    if (!be.Resolve(alias, m.a)) { report = alias + ": not in Mot_Table"; return false; }
++    if (!m.a.Is1203()) { report = alias + ": not a PCI1203 row (" + m.a.cardModel + ")"; return false; }
++    if (m.a.motIndex < 0 || !be.GoldenMotor(m.a.motIndex, m.g)) { report = alias + ": no golden motor object (MOT[].Motor NULL)"; return false; }
++    std::vector<InitStep> steps;
++    std::string stopWhy;
++    const bool ran = InitMotor1203(be, 0, m, steps, stopWhy);
++    int fails = 0;
++    report = alias + " InitMotor (boot): ";
++    for (std::size_t i = 0; i < steps.size(); ++i) {
++        if (!steps[i].ok) ++fails;
++        report += (i ? " | " : "") + steps[i].name + (steps[i].ok ? " ok" : " FAIL") + (steps[i].note.empty() ? std::string() : " (" + steps[i].note + ")");
++    }
++    if (!ran) report += (steps.empty() ? "" : " | ") + std::string("STOPPED: ") + stopWhy;
++    else report += " -- done, " + std::to_string(fails) + " step(s) failed";
++    return ran && fails == 0;
++}
++}  // namespace ht9045
+\ No newline at end of file
+diff --git a/WebMotorAccess.h b/WebMotorAccess.h
+index d30cd45..a1bc830 100644
+--- a/WebMotorAccess.h
++++ b/WebMotorAccess.h
+@@ -671,6 +671,9 @@ MotTableSaveResult MotTableSaveRow(const std::string& path, const std::string& s
+ //    mis = MOT[] indexes; false + why = cannot say (unknown which, grid larger than the golden [2][8] tables).
+ //    The live body is W906_TeachFixedMotorsLive (WebMotorAccessLive.cpp EOF).
+ 
++//AI(W906-BOOT-INITMOTOR) 20261002: golden InitMotor for one 1203 axis at boot (WebMotorAccess.cpp EOF). true = every step ok.
++bool MotorAccessBootInitMotor(IMotorAccessBackend& be, const std::string& alias, std::string& report);
++
+ }  // namespace ht9045
+ 
+ #endif  // HT9045_WEBMOTORACCESS_H
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index b0aee90..a809dec 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -1445,7 +1445,7 @@ void W906_MotorAccessTick(bool operatorConnected)
+ //  wait for the 500 ms beat). The beat (W906_MotorAccessTick) is unchanged.
+ //AI(W906-BRAKE-AXIS) 20260929: wb_serve's modal wait loop polls the monitor too (a box is up while a drive alarms and drops SVON):
+ //  the brake half runs there as well (tools/wb_serve.cpp W906_ModalWaitTick, right after its Poll).
+-void W906_BrakeAxisTick() { W906_MotorAccessEngineHooks(); ht9045::BrakeAxisTick(); }
++void W906_BootInitMotorTick(); void W906_BrakeAxisTick() { W906_MotorAccessEngineHooks(); ht9045::BrakeAxisTick(); W906_BootInitMotorTick(); }   //AI(W906-BOOT-INITMOTOR) 20261002: + boot InitMotor (EOF)
+ 
+ void W906_MotorAccessPollTick(bool operatorConnected)                           //AI(W906-MT-FIX1) 20260926: live ControlOwner()!=0 from wb_serve
+ {
+@@ -1518,3 +1518,47 @@ bool W906_TeachFixedMotorsLive(const std::string& which, std::vector<int>& mis,
+     why = "不認得的 golden 固定馬達組 '" + which + "'";
+     return false;
+ }
++
++//AI(W906-BOOT-INITMOTOR) 20261002: EastSun 1002「一開始執行的時候開卡完就要進行馬達送電後就要開始進行InitMotor ... 請先以 M35 MLoaderZ
++//  進行」. Once per wb_serve run, per axis in kBootInitAxes: when the 1203 card is open (control ready, the axis claimed, a fresh
++//  sample), the motor power is on (relay ON -- OutValue or the card's read-back -- SnMotorPower on, no EMG) and has stayed on for
++//  1 s, run golden InitMotor on it (ht9045::MotorAccessBootInitMotor, WebMotorAccess.cpp EOF) and write the step list to the op
++//  log (BRAKE line channel). Called from W906_BrakeAxisTick (after every monitor Poll). Only MLoaderZ for now; add aliases here.
++void W906_BootInitMotorTick()
++{
++    static const char* const kBootInitAxes[] = { "MLoaderZ" };
++    const std::size_t n = sizeof(kBootInitAxes) / sizeof(kBootInitAxes[0]);
++    static bool done[sizeof(kBootInitAxes) / sizeof(kBootInitAxes[0])] = {};
++    static DWORD powerSince = 0;
++    static bool powerSeen = false;
++    if (ht9045::Pci1203Monitor() == 0) return;
++    bool pending = false;
++    for (std::size_t i = 0; i < n; ++i) if (!done[i]) pending = true;
++    if (!pending) return;
++    ht9045::IMotorAccessBackend& be = ht9045::MotorAccessLiveBackend();
++    std::string why;
++    if (!be.Pci1203Ready(why)) return;
++    const ht9045::MotorPowerState ps = be.GoldenMotorPower(false);
++    const bool powerOn = (ps.relayOn || (ps.cardKnown && ps.card)) && !GEM_EMGPressed && !Sen[SnMotorPower].IsOff();
++    const DWORD now = ::GetTickCount();
++    if (!powerOn) { powerSeen = false; return; }
++    if (!powerSeen) { powerSeen = true; powerSince = now; return; }
++    if (now - powerSince < 1000) return;
++    for (std::size_t i = 0; i < n; ++i) {
++        if (done[i]) continue;
++        const std::string alias = kBootInitAxes[i];
++        ht9045::MotorAccessAxis a;
++        if (!be.Resolve(alias, a) || !a.Is1203() || a.axis < 0 || !a.tableEnable) {
++            done[i] = true;
++            ht9045::BrakeLog(alias + " InitMotor (boot): skipped -- " + (a.why.empty() ? std::string("not an enabled PCI1203 axis the monitor opened") : a.why));
++            continue;
++        }
++        bool known = false;
++        (void)be.Pci1203ServoOn(a.axis, known);
++        if (!known) continue;                                                   // no fresh sample yet: next Poll
++        done[i] = true;
++        std::string report;
++        const bool ok = ht9045::MotorAccessBootInitMotor(be, alias, report);
++        ht9045::BrakeLog(report + (ok ? "" : "  [NOT all ok]"));
++    }
++}
+\ No newline at end of file
+-- 
+2.55.0.windows.5
+
