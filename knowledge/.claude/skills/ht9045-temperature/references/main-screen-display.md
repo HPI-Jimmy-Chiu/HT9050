@@ -56,6 +56,7 @@
   - TC401：一台 4 通道，第（序號÷4）＋1 台、通道＝序號%4（`cpublic.cpp:422-461`）。
   - **Index 區（Aa1～Bh2）例外**：`USE_16_HEATER`＝2／3 走 EJ1N（自己的 COM 埠、台號＝SW1）、＝5／6 走 DTME08（Ethernet、站＝內部站號），不走溫控 COM 埠（`bthermo.cpp:1331-1367`）；＝1／4 才照序號＋1 走溫控 COM 埠。
   - DTME08 的「站」是內部站號：0＝DTME08 主機，1～3＝DTMN08 的旋鈕（`controllers\delta-dtm.md` §1.3）；CH＝手冊的 CH1～CH8。
+  - ⛔ 20261002（E-029，移植樹，golden 沒有）：任何通道都可以是 5 Omron EJ1N／6 Delta DTM（`[TempCtrl] HeaterInsOpt_<通道>`）。「各溫控器不同」存 `HeaterInsAddr_<通道>`（EJ1N＝台號、DTM＝內部站號）＋`HeaterInsCh_<通道>`（CH）；Index 區不填＝上表 EJ1N／DTME08 兩欄（golden `iTempCode` 接線），Index 區以外 golden 沒有對照、一定要填。規則：`D:\HT9045\.claude\skills\ht9045-heater-control\SKILL.md` §9。
 
 | # | 通道（eTempControll） | 畫面名稱 | 面板（golden dfm） | KT4H／E5DC／DTK4848 站號 | TC401 第幾台／通道 | Index 走 EJ1N（2／3）台／CH | Index 走 DTME08（5／6）站／CH |
 |---:|---|---|---|---:|---|---|---|
@@ -180,6 +181,7 @@
 - **H 的程式怎麼開 DTM**：`DoThermo` → `DoSetSVOfDTME08()`（H `bthermo.cpp:4714-4792`），對 `i<INDEX_HEAT_COUNT` 用 `Addr=iTempCode[i]`，也就是 **HT9045 Index 的順序**（Aa1、Ba1、Ab1…）；
   16 組時 `Addr>=tcAe1` 跳過（`:4782`）〔V〕。⇒ 照 H 的程式，站 1 CH1 拿到的是 tcAa1 的設定值而不是 HotPlate1；16 組時站 3 不會被讀寫；HotPlate／Shuttle／DUT／Chamber／HeatGun 仍走溫控 COM 埠〔推，程式已讀、沒上機〕。
   HT9050 的通道表要另外做，不能照抄 `iTempCode`。逐通道廠牌的選項也沒有「Delta DTM」（G `MachineType.h:656`、`MachineTypeUtility.cpp:19-24`）。
+  ⛔ 20261002 更正（E-029，St01；Steven 1002「溫控器少了 DTM」「這邊選不到DTM」「還有EJ1N也選不到」）：移植樹的 HW.HandlerSys「Heater」現在有「Omron EJ1N」（代碼 5）與「Delta DTM」（6）——「各溫控器不同」每個通道 7 個廠牌都能選（HT9050 的 Hotplate／Shuttle／DUT 可以設成 DTM＋站＋CH），「全機相同」時只在 Index 下拉。golden V912 仍沒有；底層（bthermo 等）還不讀 5／6。見 `D:\HT9045\.claude\skills\ht9045-heater-control\SKILL.md` §9。
 - **網頁**：`Main.MotionView9050.html`、`Alert.MotionView9050.html`、`IDE.MotionView9050-*.html` 都沒有顯示溫度、也不讀溫度 tag；HotPlate 只是版面上的一塊（`MotionView9050-layout.json:26`）〔V〕。
 
 ## 7. V906 網頁現況（移植樹 HEAD 20261002）
@@ -195,9 +197,14 @@
   golden 的 A1 C1 E1 G1 是 **Aa1、Ab1、Ac1、Ad1**（§3 表）；Ac1＝E1、Ae1＝I1、Ag1＝M1，而且 Ae1／Ag1 是 32 組第 2 列（gbArm1_2）的通道。Arm2 同樣錯。改的時候照 §3 表。
 - 移植樹 `cTemperFrom.cpp`（1433 行）：建構子、`ShowThermo`（`:234-1156`）、`ShowHotName`（`:1332-1381`）有翻但**沒有正式呼叫端**（只有 `tests/test_temperfrom_core.cpp`）；WAR15 告警那段 `#if 0`（GATE T1，`:977-1006`）；
   `FormShow`、`ChangeFormSize`、`SetIndex16HeaterPos`、`Timer1Timer` 沒翻（`forms\fTemperFrom.h:72-91`）〔V〕。
-- 20261001 起 `forms\fMain_Heater.cpp` 翻了 `Index16Heater`／`IndexHeatMode`／`HotplateHeatMode`，`W906_Timer2HeaterTick` 從 `WebBridgeTags.cpp:601` 跑 ⇒ `bUT150Install[]` 可能已經有值，但 `temp.zone.*.inst` 仍發 null〔推〕。
-  `StageThermo.cpp:50-65` 說「bUT150Install 的寫入點只在 main.cpp、沒移植」已經過時。
-- 量測值（`UN150Read[]`）唯一的寫入路徑是加熱執行緒 → `DoThermo`，而執行緒從不啟動（本 skill SKILL.md §2）⇒ 現在不管哪個頁面都拿不到 PV。
+- **`bUT150Install[]` 已經有真值**（I-01，Ifor）：`forms\fMain_Heater.cpp` 翻了 `Index16Heater`／`IndexHeatMode`／`HotplateHeatMode`（寫 `bUT150Install[]`），開機 `tools\wb_serve.cpp:4233` 跑一次 `IndexHeatMode`（golden `TfMain::FormShow`），之後每秒 `WebBridgeTags.cpp:601` 的 `W906_Timer2HeaterTick`（golden `Timer2Timer` 加熱段）〔V，review6 `067d4c7a`；Ifor 1002 確認〕。但 `temp.zone.*.inst` 仍發 null（`kThermoFields` 的 live＝false）。
+  ⚠ `StageThermo.cpp:50-65` 的 inst 註解（「寫入點只在 main.cpp、沒移植」）已經過時；檔案是筆電的，註解由筆電／Ifor 改（Ifor 接 pv 時同一個 commit 改）。
+  inst 要不要先單獨上線：Ifor 建議等 pv 一起，Steven 決定（Ifor 1002 提問）。
+- 量測值（`UN150Read[]`）與通訊異常（`UN150CommError[]`）唯一的寫入路徑是加熱執行緒 → `DoThermo`，而執行緒從不啟動（本 skill SKILL.md §2）⇒ 現在不管哪個頁面都拿不到 PV。
+  兩種組態都一樣：模擬版 `HeaterSimTick.cpp` 刻意不跑 `DoThermo`（`:18`、`:49`），出貨版那支是空函式（`:26`）〔V〕。
+  Ifor 的計畫：出貨版 `DoThermo` 跑起來後（等筆電的共用快鐘，RULINGS_20261002 第 7 條），同一個 commit 在 `PublishThermoTags` 加 pv／comm／inst 讀值並把 live 改 true；`StageThermo.cpp` 是筆電的檔，先逐行認領。
+- 新溫度條（E-027，§9.1）只在 review6（`8f6613f8` 起）；main 的 `Status.TemperFrom.html` 還是舊版，要等 review6 進 main（Q70，等 Steven）。
+- **HT9050 的格子要等 I-03b**（DTM 站號／CH → `eTempControll` 對照表）：golden DTM 讀值寫到 `UN150Read[iTempCode[i]]`，`iTempCode` 是 HT9045 Index 的順序（Aa1、Ba1…，§6），溫度條的 HT9050 版讀 `tcHotPlate1`／`tcShuttle1`／`tcDUT1`／`tcChamber`／`tcHeatGun1`，對不上 ⇒ 底層接值之後 HT9050 也要 I-03b 做完才有數字；I-03 第二段（MR !115）因此還不啟動 DTME08 輪詢（Ifor 1002）。
 
 ## 8. 意外發現（golden 原樣，只記不改）
 
@@ -245,6 +252,7 @@ Steven 1002：「那個配置挺不錯的, 協助整合進去畫面中吧, 要�
 - 後續（20261002）：
   - **已合進 review6**：ST01-E 合成 `5a7c1bba`，含 `339ac421` 與 `dc3a0b64`。SIM／SHIP 下讀頁面的 27 個 ctest 都過。
   - **位址寫法**：照 Steven「第x台 CHx → CHx-x」改。EJ1N 寫 `EJ1N CH6-1`（台-CH）；DTM 寫 `DTM CH0-2`（內部站號-CH）；TC401 寫 `TC401 CH1-0`（台-通道）；HT9050 寫 `CH1-1`（站-CH）；KT4H、E5DC、DTK 寫 `KT4H #12`。
+  - ⛔ 20261002（E-029，St01）：**逐通道代碼 5／6**——Index 區以外的通道 `HeaterInsOpt_`＝5 寫 `EJ1N CH台-CH`、＝6 寫 `DTM CH站-CH`（站＝內部站號，0＝DTME08 主機），台／站與 CH 來自「各溫控器不同」（`HeaterInsMode=1`）存的 `HeaterInsAddr_<通道>`／`HeaterInsCh_<通道>`；沒存（或「全機相同」）就寫 `EJ1N 站號未設定`／`DTM 站號未設定`（詞條 `Temp: Station not set`，不猜）。Index 區：USE_16_HEATER 是 EJ1N／DTME08 時照上面的 golden 公式，「不同」模式存了台／站＋CH 就用存的；COM 埠廠牌在「不同」模式存了站號也用存的（`KT4H #50`、`TC401 CH3-1`）。ctest `E029_HeaterPages`（node）[D] 驗這些字。
   - **多語系**：`588412a1`，Steven「你有做多國語言支援嗎?」。
     - 介面字經 `web\page\i18n.js` 的 `HTI18N.t` 翻譯，支援 en、zh、ja、ko，跟著 `HT_LANG` 換語言。
     - 新增的 35 個詞條放在 `terms`，key 一律是 `'Temp: '`＋英文原文（`2615ce75`；`terms` 是全站共用字典，「OK→正常」不能漏到別頁的 OK 鈕），字典編輯器重新產生檔案時會保留。

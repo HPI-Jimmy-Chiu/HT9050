@@ -17,7 +17,7 @@ description: >
 # St02 作業流程與現況（V906 移植）
 
 > 所有路徑都是絕對路徑。V906 樹＝`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\`；網頁＝`D:\HT9045\web\`；
-> golden 906（St02 用）＝`D:\HT9045\HT9011UC_Code_V3.33.906.0_20260625_Steven\`；golden 912＝`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\`。
+> golden 906（St02 用）＝`D:\HT9045\HT9011UC_Code_V3.33.906.0_20260625_Steven\`；912（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\`）**不是翻譯來源**，只能拿來看 906 有沒有漏（RULINGS_20261002 第 20 條，見 §4）。
 
 ## 0. 先看這些
 
@@ -56,6 +56,7 @@ description: >
   - ship：`$env:V906_BUILD_DIR="build_ship"; $env:V906_CMAKE_ARGS="-DW906_NO_SOFT_SIMULTE=ON"` 再跑 build.bat。預設 -O，**不要 Release**。
   - 背景跑：`run_in_background`，log 寫到 scratchpad；看 `Build OK` 與 `error:` 數；確認改過的 TU 真的有編（grep `<檔名>.obj`）。
   - 獨立 worktree 用自己的 obj 根：`$env:V906_OBJ_ROOT="D:\AI_TempFile\<worktree>-obj"`。
+  - 第二條建置線（20261002）：`C:\Users\steven\AppData\Local\Temp\claude\d---github\c8311755-ee3b-4c2b-9f5f-bc5682ac9613\scratchpad\s09close\build_lane.ps1 -Src D:\AI_TempFile\<worktree> -ObjRoot D:\AI_TempFile\<worktree>-obj -Cfg sim|ship -Tag X`（用那棵樹自己的 build.bat；log 在同一個 s09close）。st02-speed 那條（build_speed.ps1）切 commit 會造成大量重編，分支多的時候另開一條線比排隊快。
   - Git Bash 的 `cmd //c build.bat` 不行（not recognized）。
   - 被中斷的 build（session 結束）log 會停在某個 %，沒有 error：重跑即可。TaskStop 後確認沒有殘留 ninja／cc1plus。
 - `nm`（只讀檔）可以用，例如 R0 的「TNMFTP 只在一個 archive 定義」驗收。
@@ -100,7 +101,7 @@ description: >
   原型的 SimNet glue 只有 wb_serve 會編，而把它加進 wb_serve 的正是 CMakeLists.txt 的認領行 ⇒ 從來沒編過；一套上就 `'byte' does not name a type`（techniques §5）。
   測試分支叫 `v906/st02-<批名>-claimtest`，commit 標「CLAIM LINES ... NEVER PUSH」；認領行用腳本套（先逐字核對 OLD），認領稿的 OLD／NEW 也從同一支腳本產生。
 - **解「缺 include」的閘一定要兩組態完整建置**（`build.bat quick`，會連所有測試執行檔）。`-fsyntax-only` 看不到連結方向（techniques §8）。
-- **golden 引用一律寫樹名**：`golden 906_0625_Steven main.cpp:30140`；912 寫 `912 <file>:<line>`；NB2 給的 0618 號碼照原樣標「NB2」。0625 在 main.cpp :28427 之前起比 0618 多 78 行。版本基準：906 為底＋912 補的（0926 14:3x 裁決）。
+- **golden 引用一律寫樹名**：`golden 906_0625_Steven main.cpp:30140`；912 寫 `912 <file>:<line>`；NB2 給的 0618 號碼照原樣標「NB2」。0625 在 main.cpp :28427 之前起比 0618 多 78 行。版本基準：**只用 906**（RULINGS_20261002 第 20 條，Steven 1002 18:0x「我還有看到912版，這是錯的，現在分工處理只能做906 C++專案，能理解?」）：912 只能拿來看 906 有沒有漏，912 才有的內容一律不翻；**沒有例外**——卡片或指示寫了 912 的路徑，也照 906 的對應程式翻（ADAM／HANA／C14 的 912 例外全作廢）。舊的「906 為底＋912 補的」（0926 14:3x）作廢。推之前問自己：有沒有哪一行是照 912 翻、而 912 跟 906 不一樣？
 - **ctest 不可寫真檔**：沙盒放 `%TEMP%\ht9045_<名>_<tick>`；測試自己把路徑指過去，指到 `D:\HT9045` 底下就在呼叫任何東西之前中止；綠燈才刪沙盒。既有的轉向變數：W906_INIDATA_ROOT、W906_HT9045LOG_ROOT、W906_SAVEEVENTLOG_ROOT、W906_AUTH_PATH、W906_SETUPINF_PATH（不在 blanket）等；新接縫照 D5 做法（getenv、沒設＝golden 字面、tests/CMakeLists.txt 的 `_ht9045_env_extra` APPEND）。
 - 新 ctest 放在 St02 的區段（tests/CMakeLists.txt 自己那幾塊的後面），名稱照 `TesterComm_*`、`ELA_*`、`AOI_*`、`MyDB_*`。
 
@@ -134,6 +135,9 @@ description: >
 13. **頁面小鍵盤的範圍要對 golden 的一般分支**（20261002 TesterIF 稽核、全頁稽核 MR !92／!95）：產生的 `ht9045_wire_*.js` 的 kb 取的是 golden 處理器的**第一個** ShowQwertyKey，常常是客戶分支。改頁面或接新欄位時看 golden 處理器的全部分支：客戶碼取 else（S25），IniConfig／機構選項（VTEST、bC03UseCatchTray…）要在開鍵盤時才決定（MR !94 的做法：C++ 在 editlist.get 的 extra 送旗標、頁面 capture 階段的 mousedown 選範圍）。重跑：`tools/webprobe/qwerty_first_branch_audit.py`。
 14. **測試裡的 `_putenv`**（20261002）：MinGW.org 嚴格模式不宣告，用 `tests/test_agv_e84.cpp:158-163` 的 `HT9045_TEST_PUTENV` 守衛；一定要是 CRT 呼叫（被測程式用 getenv），字串放 static。`__fastcall` 函式掃 exe 要用沒解碼的名字（`nm -C` 解不開）。
 15. **解閘前要確認那個表單的建構子工作在移植樹真的有跑**（20261002 套件 125 的 0128：St02 MR !90 害 wb_serve 開機 10-20 秒就死）：R126 打開 RecordTemp → `fObserver->UpdateTempChart()`，它對每個加熱器用 `TempChart->Series[j]`；golden 的建構子會建這些曲線（906_0625_Steven cObserver.cpp:339-344），但移植樹的 fObserver 是**靜態物件**（cObserver.cpp:3289），開機時 ini 還沒開，建曲線那段被 `if (INIFileGeneral != 0)` 跳過（:655-660）⇒ Observer 頁開著時 `Series[0]` 丟 std::out_of_range。做法：解閘呼叫表單方法（Update*／Show*／圖表、表格填值）之前，讀那個方法的前提**和**移植樹那個表單的建構子（找 INIFileGeneral／靜態初始化守衛、延後建立的成員、空的容器），並寫一個用移植樹方式建物件、再走解閘路徑的 ctest（test_st02_timer3 第 15 段）。記憶 static-init-facade-constructor。
+16. **git 標「衝突」不等於同一行衝突**（20261002 17:2x，!114 merge main 2dd90ef3）：wb_serve.cpp :4065（只有 main 改，Ifor I-01C）和 :4066（只有我們改，ADAM C-11）相鄰，git 就把兩個 hunk 合成一個衝突；St02-M 掃描以為 C-11 要重新請筆電同意。判斷之前用三個 index 版本逐行比：`git show :1:<path>`（共同祖先）／`:2:`（我們）／`:3:`（main），列出兩邊各自改了哪幾行；沒有一行兩邊都改＝各取各的（腳本 `C:\Users\steven\AppData\Local\Temp\claude\d---github\c8311755-ee3b-4c2b-9f5f-bc5682ac9613\scratchpad\adam\resolve_wbs_adjacent.py`），認領行的舊行一字不差＝擁有者的同意仍有效。檔尾區塊衝突用同一資料夾的 `merge_keep_main_first.py`（main 的區塊在前）。
+17. **回報裡的 ctest 名稱一律從 tests/CMakeLists.txt grep**（20261002：憑記憶寫了「Adam6024_Comm／Adam6024_Integrate／MainClose」，實際是 `ADAM6024_Comm`、`Adam6024_Flow`、`MainCloseStop`，連發兩次更正）：`grep -o "add_test(NAME [A-Za-z0-9_]*" tests/CMakeLists.txt | grep -i <關鍵字>`；node 測試（`*Page`）也要列。
+18. **審 helper 的交件：每一個新的區塊範圍 `extern` 都要查它在不在匿名 namespace 裡**（20261002 C14：helper 把三個 BinDisplay 宣告放在 MainClose.cpp:957＝ShutdownSequence，在 `namespace {` :174-1148 裡，跟 ADAM 0469e8ae 同一個坑；helper 只跑 `-fsyntax-only`，抓不到連結錯）：`grep -n "namespace" <檔>` 找範圍；在裡面就改到全域的空行宣告（techniques.md §「匿名 namespace」:77-88）。最後一定要完整建置（會連所有測試執行檔）。
 
 **每做完一件（推送或 helper 交件）也要**（使用者 20260927 19:2x）：
 - 更新對應的 skill／reference 與現況板 `D:\HT9045\.claude\skills\ht9045-st02-workflow\references\current-state.md`；

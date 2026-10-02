@@ -9,6 +9,10 @@ description: >
   不走溫控 COM 埠；V906 移植樹現況（頁面照 912、底層只看 TC401HeaterControl、wb_serve 沒有跑溫控迴圈）與 Steven 的裁決
   （RULINGS_20260926 第 26 條、S136＝Q14 B、S137＝Q15、S154／S166＝Q34 方案 D：St01 的讀寫檔＋頁面＋ctest 已做，
   新鍵 HeaterInsMode／HeaterInsIndexOpt／HeaterInsOtherOpt／HeaterInsAddr_、開頁不寫檔、缺鍵＝3，底層歸 Jimmy）。
+  20261002 E-029／Q71～Q76（St01）：廠牌 7 個（＋5 Omron EJ1N、6 Delta DTM，同一個 HeaterInsOpt_ 鍵；BCB V912 認不得＝Steven 接受的風險）、
+  71 個通道全列可選、Index 區 EJ1N／DTM 與 [System] USE_16_HEATER 雙向連動（一次存檔兩個鍵都寫）、全機相同時 EJ1N／DTM 只在 Index 下拉
+  （其他位置 golden 5 個）、Head1～4⇄Ax／Bx（看 rgHeater）與 Socket⇄DUT1～4（看 rgUse4DUT）互斥即時顯示、EJ1N 台號＋CH／DTM 站＋CH
+  （新鍵 HeaterInsCh_）、D-8a 分三條匯流排、HEATER_CTRL_TYPE 永遠不寫 5／6 → §9。
   Use when：Heater 分頁、HandlerSys 溫控器廠牌、逐通道廠牌、混廠牌、Index 溫控器、站號、溫度顯示 999、溫控不動作、
   溫控迴圈卡住、Gerneral.ini [TempCtrl] 被寫 -9999、HeaterInsOpt 缺鍵、Q34、Q15、Q14、方案 D、要改 bthermo 的廠牌判斷。
   關鍵字：heater, 溫控, 溫控器, 廠牌, HEATER_CTRL_TYPE, TC401HeaterControl, HeaterInsOpt, HeaterInsOpt_Read,
@@ -18,7 +22,9 @@ description: >
   UN150Read, g_iHeaterTypeIdx_SendCmd, Comm2ReceiveData, UT100WordWriteNoSucm, TMC401WriteTemp, E5DCWriteTemp,
   DTK4848WordWriteNoSucm, g_pDTKComm, COM_PORT, COM_PORT_OMRON, HeaterThread, StageThermo, HSys_Heater.h,
   ht9045_hsys_heater_c.js, grpHeater, HeaterInsMode, HeaterInsAddr, Q34_HEATER_MIX_PLAN, HeaterInsIndexOpt, HeaterInsOtherOpt,
-  W906_HeaterStationIdx, W906_HeaterMixReadFile, W906_HeaterMixSave, HSys_HeaterMix, test_hsys_heater_mix, D-8, 站號重複。
+  W906_HeaterStationIdx, W906_HeaterMixReadFile, W906_HeaterMixSave, HSys_HeaterMix, test_hsys_heater_mix, D-8, 站號重複,
+  E-029, E029, Q71, Q72, Q73, Q74, Q75, Q76, EJ1N=5, DTM=6, Delta DTM, Omron EJ1N, HeaterInsCh_, W906_HeaterInsUnitCh, W906_HeaterInsBus,
+  W906_HeaterInsU16For, W906_HeaterInsU16Area, HmLinkIndex, HmActive, rgUse4DUT, SocketBasedAdd4Temp, 互斥, 兩個變數, E029_HeaterPages, 台號, 內部站號。
   71 通道全表、通訊框格式、讀存檔逐行 → references/golden-v912-channels.md；移植樹逐檔現況、底層待改清單、
   方案 D 與 St02 平行方案對照、方案 D 實作（§5）→ references/port-status-and-plans.md；
   溫度總入口（V906 溫度現況一張表、溫度迴圈內部、Temp_Set、溫度檔案）→ D:\HT9045\.claude\skills\ht9045-temperature\SKILL.md；
@@ -40,6 +46,8 @@ description: >
 | `[System] USE_16_HEATER` | 同上 | HandlerSys「Index Heater Counts」單選 `rgHeater`（golden `HandlerSys.dfm:3049-3055`） | Index 區幾組、用什麼控制器：0 eht4Heater、1 eht16Heater（KT4H 16 組）、2 eht16HeaterEJ1N、3 eht32HeaterEJ1N、4 eht32HeaterKT4H、5 eht16HeaterDTME08、6 eht32HeaterDTME08（golden `MachineType.h:717-723`） | 溫控迴圈決定 Index 區走不走溫控 COM 埠（見 §3.4） |
 
 廠牌值（golden `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cmydef.cpp:222-227`、顯示字 `MachineTypeUtility.cpp:19-25`）：0 TC401、1 Panasonic KT4H、2 Omron E5DC、3 No Heater、4 DTK4848。`-9999`＝`INVALID_INT_VAL_NEG`（golden `cmydef.h:169`）。
+
+⛔ 20261002（E-029，Q71）：移植樹的 `HeaterInsOpt_<通道>` 多兩個代碼 **5＝Omron EJ1N、6＝Delta DTM**（同一個鍵；golden 只有 0～4，`eHeaterInsOpt_Count 5`，`MachineType.h:660`）。`HEATER_CTRL_TYPE` 仍只有 0～4（永遠不寫 5／6）。細節 §9。
 
 ## 2. golden V912 的逐通道廠牌（事實）
 
@@ -114,6 +122,18 @@ description: >
 | ctest | `tests\test_hsys_heater_mix.cpp`（`HSys_HeaterMix`） | 105 項過（SIM，20260927） |
 細節、St01 的解讀（待 Steven 確認）、Steven01 實檔的逐鍵結果：references/port-status-and-plans.md §5。
 
+⛔ 20261002 更正（E-029／Q71～Q76，St01）：上表「逐通道表＝23 個＋走溫控 COM 埠的 Index 區」「EJ1N／DTME08 時 Index 下拉停用、跟著其他位置」已過期——
+| 項目 | 現在 |
+|---|---|
+| 廠牌 | 7 個：golden 5 個＋5 Omron EJ1N、6 Delta DTM（`g_W906HeaterInsOptStr`，移植樹 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\HSys.cpp` 第 (4) 段；golden `g_HeaterInsOptStr`／`eHeaterInsOpt_Count` 不動） |
+| 下拉 | 全機相同：Index 位置 7 個、**其他位置 golden 5 個**；各溫控器不同：每個通道 7 個（Q73） |
+| 列 | 71 個通道全列（替身 71 組：`cbHeaterInsOpt_`、`edHeaterInsAddr_`、新的 `edHeaterInsCh_`）；Head1～4⇄Ax／Bx、Socket⇄DUT1～4 兩組互斥照 rgHeater／rgUse4DUT 即時顯示（Q74～Q76）；其他通道 golden 可見條件只標「這台沒裝」 |
+| Index ⇄ USE_16_HEATER | 雙向自動連動，一次存檔兩個鍵都寫（Q72）；`W906_HeaterInsIndexLocked` 拿掉 |
+| 站號 | EJ1N＝台號＋CH、DTM＝內部站號＋CH（新鍵 `HeaterInsCh_<通道>`）；D-8a 分三條匯流排 |
+| 給底層 | `W906_HeaterInsBus`、`W906_HeaterInsUnitCh`（新）；`W906_HeaterStationIdx` 只給 COM 埠廠牌 |
+| ctest | `HSys_HeaterMix`（C++）398 項、`E029_HeaterPages`（node）20 項 |
+全文 §9。
+
 ⛔ 20261001 更正（HEAD `c13d34b4`）：上表「溫控迴圈有沒有在跑」仍是沒有（沒有人建 HeaterThread、DoThermo 從不執行），但 20260929 起**模擬版**的 `W906_HeaterSimTick`（移植樹 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\HeaterSimTick.cpp:42`，`WebBridgeTags.cpp:632` 每個 PumpTick 呼叫）會跑 `CheckHeater`／`DoHeaterOn`（不跑 DoThermo）；**出貨版**那個函式是空的，`fHeaterOK` 沒有任何地方會設。DTME08：移植樹現在有 `forms\fDTME08.cpp`（外殼）與 `EJ1N\uDTME08Control`（沒人建立）。溫度的 V906 現況總表、bthermo 狀態表與 `#if 0` 清單、uHeaterThread 的告警與 `CheckHeaterOK`：`D:\HT9045\.claude\skills\ht9045-temperature\SKILL.md` §2 與 references/port-thermo-loop.md。
 
 ## 5. Steven 的裁決
@@ -124,6 +144,9 @@ description: >
 | Q14（S136） | B（偏離 golden） | 按 Heater Type 不立刻寫檔，等整頁存檔（已做 `3ee547e5`） |
 | Q15（S137 定案，0927 11:xx） | 「預設選 3 No Heater，然後 B 開頁不寫檔」＋「要跟 Q34 一起做」 | 71 鍵缺鍵預設改 3、開頁不寫檔；**併入 Q34，不單獨先改**（程式還沒動，今天仍是缺鍵補 -9999）。⛔ 20260927 更正：已隨 Q34 做（`bc970c38`）——缺鍵＝3 只用在「不同」模式（舊檔推斷成「相同」不受影響），開頁不寫檔 |
 | Q34（S154，0927） | 新設計＝方案 D | 「先選相同或不同；相同＝選 Index 的溫控器與其他位置的溫控器；不同＝每個溫控器單獨設定，並且可以指定站號」。D-1～D-9 細節**待 Steven 確認，程式沒動**。⛔ 20260927 更正：見下一列 S166 |
+| Q71（1002 16:3x，Steven 直接回 ST01-E） | 「同一個鍵加新代碼」 | EJ1N＝5、DTM＝6 存同一個 `[TempCtrl] HeaterInsOpt_<通道>`；接受風險：BCB V912 認不得 5／6、golden 廠牌分派沒有 else |
+| Q72（1002 16:3x；16:5x「使用 EJ1N 或是 DTM 應該是要設定兩個變數」） | 「自動連動」 | Index 區 EJ1N／DTM ⇄ `[System] USE_16_HEATER` 雙向，16／32 組數不變，一次存檔兩個鍵都寫（§9.2） |
+| Q73～Q76（1002 17:1x，在 ST01-E2 的對話，每題選建議） | 見 §9.3 | 全機相同：EJ1N／DTM 只在 Index 下拉；不同：每通道 7 個；Head1～4⇄Ax／Bx 照 rgHeater、Socket⇄DUT1～4 照 rgUse4DUT，即時（Q74 跟 golden 相反） |
 | Q34（S166，0927 18:1x） | 「開工，其他照建議」 | D-1b、D-2＝A（RULINGS_20260927 第 7 條第 35 題：Index 位置＝Head1～4＋Index 32 區，36 個）、D-3a～D-9a；⑥ 第 4 點（No Heater 通道跳過）**不做**（第 7 條第 34 題）。St01 讀寫檔＋頁面＋ctest 已做（`bc970c38`）；底層 ⑥ 1～3、5～8 歸 Jimmy |
 
 裁決原文：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20260926.md`（第 26 條 `:140-149`、S136 `:365`、S137 `:366`／`:419`、S154 `:388`）；RULINGS_20260927 第 1 條（V912 不改，只通報）在 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20260927.md:5`。
@@ -152,6 +175,60 @@ description: >
 - bthermo／cpublic／rs232／cConfiguration／MachineType.h 是 Jimmy 的檔；St01 只動頁面與讀寫檔（`FileRW\HSys*`、`tools\editlist\HSys.py`、`web\page\ht9045_hsys_heater_c.js`）。
 - 判斷「某通道現在用什麼廠牌」要分清：檔案值（可能 -9999）、golden 記憶體值（-9999 已換成 `HEATER_CTRL_TYPE`，存檔後例外）、移植樹溫控實際用的值（永遠是 `TC401HeaterControl`）。
 - 引用 golden 一律寫 V912 全路徑；同名檔（`bthermo.cpp`、`cpublic.cpp`、`rs232.cpp`、`database.cpp`）移植樹也有，行號完全不同。
+- （E-029）`HEATER_CTRL_TYPE` 永遠只寫 0～4；有 EJ1N／DTM 時也不寫 3（golden `main.cpp:10939-10961` EJ1N／DTME08 要 `HEATER_CTRL_TYPE≠NoHeater` 才啟動）。
+- （E-029）改 Index Heater Counts 一律「真的點」原本的 `#rgHeater`；頁面腳本不碰 `data-hst-src`（表格版面 `ht9045_hsys_table_c.js` 的替身，ST01-E2 的檔）。
+- （E-029）`DTME08_Control.ini` 本頁只讀不寫（golden 讀 exe 資料夾、移植樹讀 `system\`，兩棵樹路徑不同，todo D-035；要加寫檔先問 ST01-E）。
+
+## 9. E-029：EJ1N／DTM、71 個通道、Index ⇄ USE_16_HEATER（20261002，St01）
+
+Steven 1002 原話：16:4x「溫控器少了 DTM」「這邊選不到DTM」「還有EJ1N也選不到」；指著 golden V912 `MachineType.h:638-655`（＝906 `MachineType.h:632` enum eTempControll，71 個名字相同，Jimmy RULINGS_20261002 #20）「這些全部都要可以選,所以數量也是少了」；16:5x「使用 EJ1N 或是 DTM 應該是要設定兩個變數」；17:1x「我的認知是: 當選擇全機相同, 那就是 index 跟其他部位的分成兩種溫控器進行選擇 EJ1N 跟 DTM 在index站都是可以選的」「當選擇全機不同單獨設定, 那就是每個位置要可以單獨設定, 包含使用 EJ1N跟DTM」「index區裡面, Head 1234 跟 Ax Bx這32組屬於互斥的, 也就是同時間只會顯示其中的一種」「socket跟 Dut 1~4也是互斥的」。裁決登記：`D:\HT9045\.claude\skills\ht9050-construction\references\decisions-decided.md`「### Q71.」～「### Q76.」。
+
+程式（移植樹 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\`）：`FileRW\HSys.cpp` 第 (4) 段（`HmLinkIndex`、`HmActive`、`HmFromProxies`、`HmDuplicates`、`HmCtrlTypeFor`、`HmReadFile`）、`FileRW\HSys_Heater.h` 檔尾 E029（規則全文）；頁面 `D:\HT9045\web\page\ht9045_hsys_heater_c.js`（規則是純函式 `window.HT9045HSysHeater.rules`，跟 C++ 同一套）；溫度條 `D:\HT9045\web\page\ht9045_temperfrom_strip.js`。
+
+> **golden 對照（Jimmy RULINGS_20261002 #20，1002 18:0x：golden＝906 `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260625_Steven`，V912 只拿來查 906 漏了什麼）**：
+> 逐通道廠牌（`HeaterInsOpt_`、`g_tHeaterInsInfo`、`GetCtrlItemVisProp`、`g_HeaterInsOptStr`、`EN_HEATER_SHEET`、`eHeaterInsOpt_Count`）是 **V912 才有的功能**（906_0625 沒有 `MachineTypeUtility.cpp`、沒有 `EN_HEATER_SHEET`）；照 Steven Q34／Q71～Q76 當 St01 的設計留在 review6、等 Jimmy 定（NIGHT_REPORT s0 #63），底層不動。本節引 V912 的這幾處照留。
+> 其他引用 906 與 V912 相同（20261002 對過）：eTempControll 906 `MachineType.h:632`（V912 :638）、eSocketTempControll 906 :616-618（V912 :742-744）、eHeaterType 906 :651-657（V912 :717-723）；rgHeater／rgUse4DUT 的 DFM 選項 906 `HandlerSys.dfm:3029`／`:2387`；讀寫 906 `HandlerSys.cpp:162`／`:651`（USE_16_HEATER）、`:339`／`:819`（SocketBasedAdd4Temp）；Index 區跳過溫控 COM 埠 906 `bthermo.cpp:1155-1190`（V912 :1331-1367）；EJ1N／DTME08 啟動 906 `main.cpp:10503-10526`（V912 :10939-10961）；COM_PORT_OMRON 906 `database.cpp:521`；iTempCode 906 `cmydef.cpp:111-117`；DTME08_Control.ini 讀 exe 資料夾 906 `EJ1N\uDTME08Control.h:54`。沒有找到不同的地方。
+
+### 9.1 廠牌與檔案
+- `[TempCtrl] HeaterInsOpt_<通道>`：0～4 照 golden，**5＝Omron EJ1N、6＝Delta DTM**（Q71）。
+  ⚠ **已接受的風險（Steven 1002）**：同一台之後若跑 BCB V912，5／6 golden 認不得——廠牌分派沒有 else（§3.1），裝了的通道溫控迴圈會停在那一通道。USE_16_HEATER＝EJ1N／DTME08 時 Index 區 golden 先跳過（§3.4），不受影響。
+- `HeaterInsOtherOpt` 只寫 0～4（全機相同的「其他位置」只有 golden 5 個；舊檔讀到 5／6 當 KT4H）；`HeaterInsIndexOpt` 0～6。
+- 新鍵 `HeaterInsCh_<通道>`：EJ1N／DTM 的 CH（1 起算）。`HeaterInsAddr_<通道>` 在 EJ1N＝台號（SW1 1～15）、DTM＝內部站號（0～3，0＝DTME08 主機）；其他廠牌照舊。`g_iHeaterInsAddr`／新的 `g_iHeaterInsCh` 的「沒有鍵」改成 -9999（DTM 站 0 合法）。
+- 預設（空白）：Index 區照 golden 接線 `iTempCode`（golden `cmydef.cpp:111-117`）第 p 個＝EJ1N 第 p/4+1 台 CH p%4+1、DTM 站 p/8 CH p%8+1；Index 區以外 golden 沒有對照 ⇒「各溫控器不同」裝了的通道一定要填（不然整頁擋下）。
+- `HEATER_CTRL_TYPE`（D-6a）：只數 0、1、2、4；沒有 COM 埠廠牌但有 EJ1N／DTM → 沿用檔案值（不是 0～2、4 → KT4H）；全部 No Heater 才寫 3。
+
+### 9.2 Index 區 ⇄ USE_16_HEATER（Q72，兩個變數一起存）
+- Index 區＝Aa1～Bd2（序號 11～26），32 組再加 Ae1～Bh2（33～48）；4 Heaters 時算 Aa1～Bd2（選 EJ1N／DTM 會打開的那 16 組）。
+- Heater 分頁改了（全機相同的 Index 下拉；或各溫控器不同的 Index 區任一通道）→ USE_16_HEATER：EJ1N 16→2、32→3；DTM 16→5、32→6；4 Heaters→16；改回 COM 埠廠牌 2／5→1、3／6→4。任一通道選 EJ1N／DTM＝整個 Index 區；改回 COM 埠廠牌＝整區一起改回。
+- Index Heater Counts 改了 → Heater 分頁：EJ1N／DTME08 → Index 區＝5／6；改回 1／4（或 0）→ 原本的 EJ1N／DTM 改 KT4H（golden eht16Heater／eht32HeaterKT4H＝KT4H 版）。
+- 頁面即時連動（改 USE_16_HEATER＝真的點 `#rgHeater`）；伺服器存檔前再對一次（`HmLinkIndex`，開頁時的 USE_16_HEATER 記在 `W906_HeaterMixLoaderSystemSet`）：誰改了跟誰；**兩邊都改又對不上 → 整頁不存**；Index 區同時有 EJ1N 與 DTM → 擋。`W906_HeaterMixSave` 最後再寫一次 `[System] USE_16_HEATER`（＝golden `SaveSystemSet :777` 剛寫的值）。
+- 讀檔以 USE_16_HEATER 為準（golden 真正看的是它）：EJ1N／DTME08 → Index＝5／6；COM 埠版本讀到 5／6 → KT4H。
+- 按 Heater Type（golden `rgHeaterTypeClick`）：其他位置＝點的廠牌；USE_16_HEATER 是 EJ1N／DTME08 時 Index 區照舊（golden 按 Heater Type 不動 USE_16_HEATER）。
+- 全機相同、Index＝EJ1N／DTM 時，Head1～4 的檔案值＝其他位置的廠牌（照 golden 留在溫控 COM 埠；16／32 組時畫面不顯示 Head1～4，見 9.3）。
+
+### 9.3 下拉與互斥（Q73～Q76，1002 17:1x）
+- 全機相同：EJ1N／DTM 只在「Index 位置溫控器」（7 個），「其他位置溫控器」golden 5 個（替身也只有 5 項）。各溫控器不同：每個通道 7 個。`W906_HeaterInsIndexLocked` 拿掉。
+- Head1～4⇄Ax／Bx 照 Index Heater Counts：4 Heaters＝Head1～4、16 組＝Aa1～Bd2、32 組＝Aa1～Bh2。⚠ **跟 golden 相反**：golden V912 `MachineTypeUtility.cpp:241-293` `GetCtrlItemVisProp`（:256-266）在 16／32 組才顯示 Head1～4；Steven 知道仍這樣選（待人審 B）。
+- Socket⇄DUT1～4 照 Dut Heater Count（`rgUse4DUT`＝`[System] SocketBasedAdd4Temp`，golden enum 0 1 EA、1 4 EA、2 2 EA，畫面順序 1 EA／4 EA／2 EA）：1 EA＝Socket、2 EA＝DUT1～2、4 EA＝DUT1～4（Socket 那條＝golden `:268` 註解掉的條件打開）。
+- golden 只在開機算一次；這兩組跟著頁面上的 rgHeater／rgUse4DUT 即時變（新行為，待人審 B）。伺服器存檔時照替身的值判斷「這台有裝」（`HmActive`）；替身全部 Visible（頁面只是隱藏列），所以頁面切回來改的值不會被丟掉。
+- 其他通道：71 個全列；有下拉的 golden 可見條件、Index 區以外沒下拉的 16 個（OutSht、Base、HotPlate3／4、Shuttle3／4、Door、LBUp／Down）只標「這台沒裝」，照樣可選；指定了站號就算在用（D-8a 會檢查）。
+
+### 9.4 D-8a 分匯流排
+- 溫控 COM 埠（TC401／KT4H／E5DC／DTK4848）：D-8a 同廠牌同站號＋R113 不同廠牌同站號，照舊。
+- EJ1N（`[TempCtrl] COM_PORT_OMRON`）：同台同 CH 擋。DTM（Ethernet，一條連線）：同站同 CH 擋。不同匯流排之間不比。
+- 範圍＝這台有裝（9.3）＋「各溫控器不同」指定了站號的通道。
+
+### 9.5 連線設定（唯讀顯示）
+Heater 區塊顯示 `[TempCtrl] COM_PORT`、`[TempCtrl] COM_PORT_OMRON`（兩個都在「Com Port」分頁可改，`cbComTemp`／`cbComTempOmron`）與 DTM 的 `DTME08_Control.ini [SocketSetting] asAddress／asPort`（移植樹讀 `D:\HT9045\system\DTME08_Control.ini`，Steven01 不存在 → 顯示程式預設 127.0.0.1:59999；golden 讀 exe 資料夾 `D:\HT9045\EXE\DTME08_Control.ini`；本頁**不寫**，D-035）。測試縫 `W906_DTME08INI_PATH`（只讀）。
+
+### 9.6 給 Jimmy（底層）
+- bthermo／rs232／OmronEJ1N／fDTME08 要逐通道讀 5／6：`W906_HeaterInsBus(Addr)`（1 COM、2 EJ1N、3 DTM）、`W906_HeaterInsUnitCh(Addr,&台/站,&CH)`；COM 埠廠牌照舊 `IsValEqual_HeaterInsOpt`＋`W906_HeaterStationIdx`。在那之前移植樹溫控仍只看 `HEATER_CTRL_TYPE`（頁面 D-9a 提示寫明逐通道 EJ1N／DTM 也一樣要等底層）。
+- golden 的 EJ1N 站號送 `%02X`、收 `atoi`，10 以上會不一致（`controllers\omron-ej1n.md` §4）；頁面允許 1～15（SW1），底層要決定編碼。
+- golden 的 DTM 只掃內部站號 0～3、Index 32 區（`iTempCode`）；Index 區以外的 DTM 通道（HT9050 的 Hotplate／Shuttle／DUT）要新的通道表（`D:\HT9045\.claude\skills\ht9050-hw\references\temp-dtm-map.md`）。
+- BCB 相容風險（9.1）：跑 BCB V912 的同一台，5／6 的通道會讓溫控迴圈停住。
+
+### 9.7 驗證
+ctest `HSys_HeaterMix`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tests\test_hsys_heater_mix.cpp`，E029 情境 (1)～(11)：兩個方向的連動、兩個鍵同一次存檔、兩邊都改擋下、5／6 來回位元組不變、三條匯流排、範圍、HEATER_CTRL_TYPE、互斥兩個方向、下拉 5／7 個）；`E029_HeaterPages`（node，`tools\webprobe\e029_heater_selftest.cjs`：規則、假 DOM 裡真的點 `#rgHeater`、不碰 `data-hst-src`、溫度條 5／6 位址；內建壞副本對照）。
 
 ## 相關 skill
 

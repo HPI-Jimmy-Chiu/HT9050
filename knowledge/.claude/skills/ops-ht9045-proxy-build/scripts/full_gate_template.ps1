@@ -12,12 +12,13 @@ W "=== HEAD $(git -C $WT rev-parse --short HEAD)"
 $env:PATH='C:\MinGW\bin;C:\CMake\bin;C:\Program Files\Git\cmd;C:\Program Files\nodejs;C:\Windows\System32;C:\Windows'   # nodejs: the node-based ctests (WB_WsLink, WB_F5Contract, D015_A01MenuPage ...) are only registered when CMake finds node (20260930: missing before, those tests silently did not run)
 Set-Location "$WT\HT9011UC_Cpp_V3.33.906.0"
 # Real-file check lists D:\HT9045\system and D:\HT9045\IniData too (20260930: cBinSel writes Bin Func keys, WebLogin_Reauth stamps login.dat / levelset.dat)
+# 20261002: also D:\PrecautionRecord and D:\MajorMaintenanceRecord, folders included (TfObserver FormShow / LoadPrecautionMenu mkdirs a real D:\PrecautionRecord\system in ctests that open the Observer; E-021 writes maintenance records there)
 $HF = @('D:\HT9045\config\config.ini','D:\HT9045\system\Gerneral.ini','D:\HT9045\system\ContactInfo.ini','D:\HT9045\system\levelset.dat','D:\HT9045\system\lastdata.dat','D:\HT9045\Error\English\JAM0000.dat')
-function HS { ($HF | ForEach-Object { if (Test-Path $_) { "$_|$((Get-FileHash $_ -Algorithm SHA256).Hash)|$((Get-Item $_).LastWriteTimeUtc.Ticks)" } else { "$_|missing" } }) + (Get-ChildItem 'D:\HT9045_Log' -Recurse -File | ForEach-Object { "$($_.FullName)|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)" }) + (Get-ChildItem 'D:\HT9045\system' -Recurse -File | ForEach-Object { "$($_.FullName)|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)" }) + (Get-ChildItem 'D:\HT9045\IniData' -Recurse -File | ForEach-Object { "$($_.FullName)|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)" }) }
+function HS { ($HF | ForEach-Object { if (Test-Path $_) { "$_|$((Get-FileHash $_ -Algorithm SHA256).Hash)|$((Get-Item $_).LastWriteTimeUtc.Ticks)" } else { "$_|missing" } }) + (Get-ChildItem 'D:\HT9045_Log' -Recurse -File | ForEach-Object { "$($_.FullName)|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)" }) + (Get-ChildItem 'D:\HT9045\system' -Recurse -File | ForEach-Object { "$($_.FullName)|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)" }) + (Get-ChildItem 'D:\HT9045\IniData' -Recurse -File | ForEach-Object { "$($_.FullName)|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)" }) + (@('D:\PrecautionRecord','D:\MajorMaintenanceRecord') | ForEach-Object { if (Test-Path $_) { "$_|dir"; Get-ChildItem $_ -Recurse -Force | ForEach-Object { "$($_.FullName)|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)" } } else { "$_|missing" } }) }
 function RealCheck($tag, $before) {
   $after = HS
   $hd = Compare-Object $before $after
-  W "=== real-file check after $tag (config.ini / Gerneral.ini / ContactInfo.ini / levelset.dat / lastdata.dat / JAM0000.dat SHA256 + HT9045_Log + system + IniData listing) diff: $(@($hd).Count)"
+  W "=== real-file check after $tag (config.ini / Gerneral.ini / ContactInfo.ini / levelset.dat / lastdata.dat / JAM0000.dat SHA256 + HT9045_Log + system + IniData + PrecautionRecord + MajorMaintenanceRecord listing) diff: $(@($hd).Count)"
   $hd | ForEach-Object { W "$($_.SideIndicator) $($_.InputObject)" }
   return @($hd).Count
 }

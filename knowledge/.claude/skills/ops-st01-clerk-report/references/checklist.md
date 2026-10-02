@@ -83,14 +83,25 @@
 | 43 | 筆電那邊的「使用者」照抄成「使用者」 | §11.70 的 rulings-index R930 列寫「使用者當面裁決」：筆電的 RULINGS 檔裡「使用者」是 Jimmy，St01 的讀者看不出是誰 | ST01-E 23:3x 收件 | 別的 session 檔案裡的「使用者」「你」「我們」一律換成人名（對照 TO_STEVEN 同一條的寫法）；查不到是誰就寫「（原文：使用者）」 |
 | 44 | gate 報「某支測試過了」，其實那支根本沒登記 | 20260930 ST01-M 的 gate 範本 PATH 沒有 nodejs ⇒ `W906_NODE_EXECUTABLE` 快取成 NOTFOUND，5 支 node 測試（WB_F5Contract／WB_TokenIdle／WB_WsLink／D015_A01MenuPage／Stream2E_PagePolls）一整天都沒登記（267 支、應為 271）；§11.70 照抄「`ca661a18` gate 裡 Stream2E_PagePolls 過了」 | 記錄員 §11.71 交件建議 | 寫「gate 裡某支過了」之前，對 gate log 的測試總數跟本機同一顆 commit 的 ctest 總數；少了就查那支測試當時有沒有登記（node／Python 路徑、`if(...)` 條件），沒登記寫「沒跑」 |
 | 45 | 「已轉達、還沒 commit」幾分鐘後就落地，下一輪又當新的記一次 | 20261001 §11.72g：ST01-E 審 St02 MR !15 的 FormLock 回覆，本輪終點 `633222d5`（01:22）時還沒 commit，兩分鐘後落地成 handoff `ae2eb939`（01:24） | 記錄員 §11.72 交件建議 | 簡報寫「轉達中／還沒 commit」的事，交件前查 `git log origin/v906/steven-handoff` 終點之後幾分鐘有沒有對應的 commit；有就兩個事實都寫（當時還沒、實際 hash／時間），下一輪不要重記 |
+| 46 | 簡報把不同時間的 commit 歸在同一個「X 之後」底下 | 20261001 §11.73 簡報把 `f5e4bc4f`（01:52）與 `568848d1`（02:53）都寫成「`8caaf1e4` 之後」，其實前者在 `8caaf1e4` 之前 | 記錄員 §11.73 交件建議 | 歸屬一律照 `git log --first-parent` 逐顆重排，不照簡報的分組；分開寫在各自的時間點 |
+| 47 | 本機測試結果找不到 log 就寫「未找到」 | §11.73 的 SIM 16／16、SHIP 3／3 其實在 ST01-E 的建置目錄（`st01e-q44-build\m7_ctest.log`／`m8_ctest.log`／`m8_node.log`、`st01e-n34-build-ship\m7s_ctest.log`／`m8s_ctest.log`） | ST01-E 03:1x 收件 | ST01-E 自己的本機結果先找 `D:\AI_TempFile\st01e-q44-build\` 與 `st01e-n34-build-ship\` 下同時間的 `*ctest*.log`；還找不到才照 C-38 註明 |
+| 48 | 長期「仍未見回覆」的項目：重查來源，但要分清楚「原本的指示」跟「後來的追問」 | 20261001 §11.74 把 Jimmy 09-30 20:54 的原指示（A01 掛 `:7627`）當成已回答 St01 22:2x 的追問（改掛 `:7621` 可不可以）——時間順序反了，追問其實還沒回 | ST01-E 10:3x 收件 | 每輪重查一次來源；比對時間：答覆要晚於問題；commit 歸屬照 `git log -S` 查（那個掛點在 `ea17dd3a`，不是 `0812b7da`） |
+| 49 | 狀態表（例 EVENT_PORT_BATCH_20260928.md）沒人動就默默過期 | B1～B6 0928 就落地，表格到 1001 才補（41 格） | 記錄員 §11.74 交件建議 | 每輪看本輪 commit 有沒有對到某張狀態表的列（用列代號 grep commit 訊息）；有就在那一列尾端加「⛔ 更新（日期、commit）」，不改原文 |
+| 50 | 用 Python 手刻 `\uXXXX` 轉義寫中文：打錯一個十六進位數字會變成另一個合法的中文字 | §11.75 記錄員把「綁」（`\u7d81`）打成 `\u7db1`（綱），UTF-8／控制字元／行尾檢查全部通過 | 記錄員 §11.75 交件建議 | 能直接寫中文就不要手刻轉義；一定要轉義時，寫完用 Read 工具讀渲染後的文字逐字看，或 grep 正確的字確認命中數 |
+| 51 | 「用量上限」要照通知原文分清楚是哪一種：子代理的 session 上限（幾點重置）／帳號週用量 | §11.75 把 B8 工程師 11:48 的 session 上限（13:40 重置）寫成「帳號週用量上限」；同一輪又把 08:4x 那次（只打到一個子代理，10:1x 已更正帳號沒事）一起改錯 | ST01-E 14:2x 收件 | 抄通知裡的原句與重置時間；改舊句之前先看那一句講的是哪一次事件、那一次後來有沒有更正 |
+| 52 | GitLab 網頁合併產生的 merge commit 時間是 UTC（比台灣晚 8 小時），main 與入口網站 repo 都一樣 | §11.76：Steven 的 15 個網頁合併 `78be5aff`～`caae69bb` 在 git 顯示 08:05～08:13，實際是 16:05～16:13 | 記錄員 §11.76 交件建議 | 用 merge commit 時間前先換算成台灣時間，再跟交接訊息（台灣時間）對一次；不要把 UTC 直接寫成本地時間 |
+| 53 | 轉交的項目要寫原始來源，不要寫成轉交的人說的 | §11.76 把 ST01-M 19:1x 回報、經 ST01-E 轉交的項目寫成「ST01-E 口述」（5 處），還把有 log 的 22／22 寫成「尚無 log 路徑」 | ST01-E 19:3x 收件 | 派工訊息裡寫明「以下是 X 的回報」就照寫「X 回報（Y 轉交）」；寫「沒有 log」之前先問 ST01-E 要路徑 |
+| 54 | 派工訊息裡寫「在跑」「排隊」的 gate／順序，交件時可能已經變了 | §11.77：派工說 review6 `6dd4a772` 的 SHIP 還在跑，log 其實 21:24 已結束；之後又有 `f17fbacd`／`b22a90a4` 兩顆 handoff 改了佇列 | 記錄員 §11.77 交件建議 | 寫 §12.2 前：每個「在跑」項目讀 log 最後的 `=== ... done` 標記；再跑 `git log origin/v906/steven-handoff --since=<派工時間>` 看有沒有新的交接改了順序 |
+| 55 | 記錄員工作期間 repo 還在動（登記 commit、筆電合併） | §11.78：交件期間 ST01-M 多推了 `c489ad5d`／`1f0262a8`，筆電也在 23:08 把 d026 合進 main（`352e861c`），派工時都還不知道 | 記錄員 §11.78 交件建議 | 收集完事實、最後寫檔前各 `git fetch` 一次，範圍終點用最新那一顆；派工裡說「等審」的分支頭都跑一次 `git merge-base --is-ancestor <頭> origin/main`；decisions-pending 在最後終點重讀一次 |
+| 56 | 派工說「待回覆／在跑」的項目，最後寫檔前要再讀一次來源；檔案可能只在 q59 或 main | 10-02 §11.79：第一次讀（01:27）到交件之間 main 多了 batch 29 與 NIGHT_REPORT #43；`LotInfo_SECSLotStart.cpp` 等只在 q59 worktree／main，用 D:\HT9045 查會顯示 MISSING | 記錄員 10-02 §11.79 交件建議 | 最後寫檔前重讀 gate log 與 main 的 docs/handoff/TO_STEVEN.md；路徑檢查 MISSING 時先查 q59 worktree（D:\AI_TempFile\st01e-q59）與 `git show origin/main:<path>`，文中寫明哪一棵樹，不要當成路徑寫錯（C-33 的變體）。另：§11.NN 跨檔連號（standing-rules），新的一天不從 §11.1 重來，派工說錯也照規則 |
 
 ## D. 指令
 
-**D-1　decisions-pending 的題數與清單**
+**D-1　decisions-pending 的題數與清單**（⛔ 20261002 ST01-E 更正：題目標題可能是 `###` 或 `####`（Q70 用 `####`），舊的 `"^### [QRW][0-9]"` 會數到 0 被誤當「沒有待決題」；改用 `"^####* [QRW][0-9]"`，數完開檔看一眼）
 
 ```
-grep -c "^### [QRW][0-9]" /d/HT9045/.claude/skills/ht9050-construction/references/decisions-pending.md
-grep "^### [QRW][0-9]" /d/HT9045/.claude/skills/ht9050-construction/references/decisions-pending.md | cut -d. -f1
+grep -c "^####* [QRW][0-9]" /d/HT9045/.claude/skills/ht9050-construction/references/decisions-pending.md
+grep "^####* [QRW][0-9]" /d/HT9045/.claude/skills/ht9050-construction/references/decisions-pending.md | cut -d. -f1
 grep -n "⚠ 還要 Steven 回" /d/HT9045/.claude/skills/ht9050-construction/references/decisions-decided.md
 ```
 

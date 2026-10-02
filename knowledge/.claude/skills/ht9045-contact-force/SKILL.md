@@ -25,6 +25,26 @@ description: HT9045 IC Test Handler 接觸力（Contact Force）計算與 GPIB �
 > - [ht9045-recipe → Contact.Data.md](../ht9045-recipe/references/Contact.Data.md)：`Contact.Data` 各 INI Key 定義。
 > - [ht9045-atc](../ht9045-atc/SKILL.md)：ATC 溫控；[ht9045-atk-amr-flow](../ht9045-atk-amr-flow/SKILL.md)：LOT_END / AMR 自動化（**與接觸力無關**）。
 
+> **//Steven 團隊 20261001（St01，B8 CT-3a）** — `Setup.Contact.html` 的切模式（11 顆模式單選）、T.Start／T.Step、One Cycle 已接 C 路 form.event（golden V912 `cContact.cpp:15555-15564`／`:2280-2283`／`:2285-2288`／`:17152-17156`；只設旗標，START 之後流程才照著做）：
+> - 旗標寫**流程讀的那一份**：`bSetupStart`／`bSetupStep` → `fContact`（`TfContactShim`，`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\atester_shims.h:251`），`ckernel.cpp:324`／`:255` 的 `WaitManualStartKey`／`WaitManualStepKey` 讀它；移植樹的 `TfContact` 表單物件叫 `fContactForm`（沒人讀它的這兩個成員）。`bContinueContact`（One Cycle）今天沒有讀者——golden 的 Contact 狀態機在移植樹都閘著。
+> - 每次開 Contact 頁＝golden FormShow ⇒ 回 Normal、清 T.Start／T.Step（照 golden）；存檔後引擎的重讀不算開頁（模式照留）；關窗＝golden FormClose ⇒ Normal。
+> - 運轉中：T.Start／T.Step／One Cycle 照 golden 收（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_FormEvent.cpp` 檔尾 runexc 第 15～17 列）；模式單選照舊拒收（比 golden 嚴）。
+> - 選 Normal 以外的模式再按 START：移植樹的 Contact 狀態機（`DoTestContactFunction` 等）還沒翻（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\csystem.cpp:31305` GATE），MainProc 走 Contact 分支但不動軸。細節：skill `ht9045-html-json` 的 `references/route-c-golden-bridge.md`（CT-3a 那一則）、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\B8_RISK_20260930.md`「CT-3」第 9 點；ctest `B8_Ct3a_ContactFlags`。
+
+> **//Steven 團隊 20261001（St01，B8 CT-3b'）** — `Setup.Contact.html` 的 START／PAUSE 已接 C 路 form.event（golden V912 `cContact.cpp:14072-14077`／`:14079-14082`）。
+> - START 照 golden 叫的是主畫面 START 鈕的 OnClick `TfMain::BtnStartClick`（`main.cpp:6529-6593`），**不是**面板鍵：只有 `CosFunction.bEnableSoftWareControlButton`（TSMC 台南／SIGURD 北興／UTAC TW）或 SOFT_SIMULTE 建置才真的起動；**出貨建置其他客戶按 Contact 的 START 只會把主畫面兩格扭力框 `edTorue0`／`edTorue1` 設成 "10"**（golden 就是這樣）。
+> - PAUSE＝`TfMain::BtnPauseClick` → `Pause("BtnPauseClick")` → `TfMainWeb::PauseFromWeb`（停機鏈同主畫面 PAUSE）。
+> - 兩支都在 form.event 回覆之後跑（after-ack；START 有確認框、PAUSE 的 SetRunStartMode 也可能跳框），運轉中照 golden 收（runexc 第 18～19 列）；[D16] 才看得到（SOFT_SIMULTE 一律看得到）。
+> - 本體 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\DeviceForm_File.cpp` 檔尾（主控台 `[B8-CT3B] …`）；細節：skill `ht9045-html-json` 的 `references/route-c-golden-bridge.md` §3.0g、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\B8_RISK_20260930.md`「CT-3」第 9 點。
+
+> **//Steven 團隊 20261001（St01，B8 CT-3d）** — `Setup.Contact.html` 的 OTD 兩顆面板（"OTD Under 240KG"／"OTD Over 360KG"）與 OTD 燈已接 C 路 form.event（golden V912 `cContact.cpp:15395-15418`／`:15420-15443`／`:15445-15507`）。
+> - 點面板＝golden 直接動四顆 Dock 氣缸（`Cylinder[C_DockYAxisOn／Off、C_DockXAxisOn／Off]`），沒有任何檢查；兩支各有自己的 static bDown（照抄 golden：240、360、240 的第三下走「回 Off 組」）。
+> - OTDTimer（golden 100 ms）依四顆氣缸的 Status 與 On 感測器點 OTD 燈（紅＝沒插好／錯誤、綠＝鎖好、滅＝全開）、開關兩個輸出點 `SwUnDock`／`SwDockError`；移植樹在開頁與每個 form.event 之後補一拍（定時拍子 B8 P-1 還沒接 ⇒ 輸出只在頁面有動作時更新）。
+> - 只有 `USE_OTD==1`（`D:\HT9045\system\Gerneral.ini` [System]）看得到；Steven01 開發機 `USE_OTD=2` 看不到。運轉中照 golden 收（**Steven Q65＝B，1002 08:0x**：runexc 第 20～21 列，頁面表要說 Contact 開著；運轉中按 OTD 會照 golden 動 Dock 氣缸，上機由 EastSun 看）。
+> - 本體 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\DeviceForm_File.cpp` 檔尾（主控台 `[B8-CT3D] …`）；ctest `B8_Ct3d_OtdDock`、`B8_Ct3d_ContactPage`。
+> - CT-3c（Index Z1／Z2 Jog 下壓微調）沒做：jog 的閘 `iIndexStatus` 只在 golden Contact 狀態機（`Do_Z1_AutoGetHeight`／`Do_Z2_AutoGetHeight`／`Do_ContactTest_32Site`）case 3010 設，移植樹那幾支沒翻；另要 `WB_ENGINE_INDEXZ_1203` 打開。細節 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\B8_RISK_20260930.md`「CT-3」第 9 點。
+
+
 ## 專案資訊
 
 - **專案**：HT9045 IC Test Handler

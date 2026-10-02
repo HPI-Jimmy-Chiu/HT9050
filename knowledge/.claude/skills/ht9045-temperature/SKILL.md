@@ -13,7 +13,7 @@ description: >
   ShowThermo, EJ1N, OmronEJ1N, DTME08, uDTME08Control, fDTME08, uTemp_Set, Temp_Set, uLotInfo, LotInfo, NetATCTimeTimer,
   SetATCOffset, ReadTempFile, SaveSetupFile, Temperature.Data, DefineTemp, SingleTempLimit, ATC.ini, iCheckSameTempTime,
   iATC_MODE_TYPE, AutoTempOfsByFTP, SetTempOfs, GetFactSetTemp, ConvertTempOffset, CheckHeater, CheckHeaterOK, fHeaterOK, fHeaterStableOK, iThermoTask,
-  HeaterSimTick, W906_HeaterSimTick, UN150Read, bUT150Install, WAR15, MES2130, MES2131, temp.sv, temp.pv, StageThermo,
+  HeaterSimTick, W906_HeaterSimTick, UN150Read, bUT150Install, WAR15, MES2130, MES2131, temp.sv, temp.pv, StageThermo, E-029, EJ1N=5, DTM=6,
   Status.TemperFrom.html, Setup.Temp_Set.html, Tj Avg Times。
   移植樹溫度程式逐檔 → references/port-thermo-loop.md；golden Temp_Set／LotInfo 溫度項目 → references/temp-set-and-lotinfo.md；
   散在其他 skill 的溫度事實索引＋兩個 ATC skill 的重疊 → references/temperature-facts-index.md；
@@ -59,8 +59,10 @@ description: >
 | 出貨版的加熱判斷 | `W906_HeaterSimTick` 是空函式 ⇒ **`fHeaterOK` 沒有任何地方會設**；`CheckHeaterOK`（`uHeaterThread.cpp:478`）在非常溫 recipe 一直回 false（InArm／OutArm 會看它） | 已登記 D-029（§6 第 1 條） |
 | 溫度顯示 `cTemperFrom` | 只翻一部分（建構子、`ShowThermo`、Yield 顯示）；`Timer1Timer`（100 ms，驅動 SwCCDCooling 與 RecordTemp）、`FormShow` 沒翻；沒有 `fTemperFrom` 實例，`ShowThermo` 沒有正式呼叫端；GATE T1（`:977-1006`）擋掉 WAR15<Addr>（太冷）／WAR15<Addr+100>（太熱） | `cTemperFrom.cpp`、`forms\fTemperFrom.h:72-91`、`:375` |
 | EJ1N／DTME08 | `OmronEJ1N.cpp`、`OmronThermo.cpp` 沒移植；`uDTME08Control` 有翻但沒有人建立；`forms\fDTME08.cpp` 只是外殼 | `EJ1N\` |
+| 逐通道廠牌 EJ1N／DTM（20261002，E-029，St01） | HW.HandlerSys「Heater」可以把任何通道設成 **5 Omron EJ1N／6 Delta DTM**（同一個 `HeaterInsOpt_<通道>` 鍵；全機相同時只在 Index 下拉）；Index 區的 EJ1N／DTM 跟 `[System] USE_16_HEATER` 雙向連動、一次存檔兩個鍵都寫；EJ1N 台號＋CH、DTM 內部站號＋CH（新鍵 `HeaterInsCh_<通道>`）。**底層（bthermo 等）還不讀 5／6**，溫控仍只看 `HEATER_CTRL_TYPE`。⚠ 同一台若跑 BCB V912，5／6 golden 認不得（Steven 接受的風險）。溫度條 `D:\HT9045\web\page\ht9045_temperfrom_strip.js` 位址：`EJ1N CH台-CH`、`DTM CH站-CH`（references/main-screen-display.md §9.1） | `FileRW\HSys.cpp` 第 (4) 段；規則 `D:\HT9045\.claude\skills\ht9045-heater-control\SKILL.md` §9 |
 | 溫度 tag | `temp.sv`、`temp.soak`、`temp.mode` 是活的（`WebBridgeTags.cpp:1010-1012`）；`temp.pv` 與 `zone.*` 一律 null（`kUnloadedTags`，`:221-231`）；`JsonBridge\StageThermo.cpp:171` 產生 213 個 `temp.zone.<ch>.*`，`tools\wb_serve.cpp:2888` 每拍會發（⛔ 20261002 更正：原寫「只有測試呼叫」），但欄位 live＝false、一律 null，沒有頁面讀 | |
 | 溫度頁面 | `Status.TemperFrom.html` 11 格都是「---」（只有 OCR 是活的）；`Main.HeaterView.html` 是靜態；`HW.OmronEJ1N.html` 0 個鍵接線；frmDTME08 沒有頁面 | `D:\HT9045\web\page\` |
+| 隱藏入口（Handler System） | 20261002 todo E-023 TP-2（St01，AI(W906-E023-TP2)）：golden `TfTemperFrom::Panel73／72／71MouseDown`（V912 `cTemperFrom.cpp:1702-1779`；palLed 三顆燈 dfm :29／:45／:61）照翻在 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\cTemperFrom_E023.cpp`（ht9045_sm；`bGreen`／`bYellow` golden :36 的家），網頁 `ht9045_temperfrom_ev.js` 送 `act.temperFrom.mouseDown`；順序（左黃→左綠→非左紅）、HonPrec、運轉中、YES／NO、**密碼在 C++ 比**（RULINGS_20261001 #40 測試值；不在網頁、不印；模擬組態／CC_HONPREC_QC golden 不問）；Panel73 的 `fAutoTeach->DoAutoTeachProcess()` 仍在 SAFETY-GATE（TfAutoTeach 沒移植，同 `csystem.cpp:30722`）。⚠ HW.HandlerSys.html 的開頁閘（`FileRW\_EditPage.cpp:899` GHandlerSys）只查等級＋運轉中，沒有綁這個手勢 | `cTemperFrom_E023.cpp`、`D:\HT9045\web\page\ht9045_temperfrom_ev.js` |
 | Temp_Set 頁 | C 路已接（`FileRW\Temperature.cpp`＋`Temperature.gen.inc`、`Setup.Temp_Set.html`、`ht9045_temp_set_c.js`；json-bridge write-inventory ✅ `bc935659`）；`SendATCSelfTest`、`sbtExitClick` 的 ATC 部分、Defrost 仍擋；R130：Arm offset 不存 | `uTemp_Set.cpp`、`FileRW\Temperature.cpp` |
 | LotInfo 的溫度 | 只有顯示（`W906_ShowATCThermoDisplay`，`forms\fLotInfo.cpp:6282`）；`NetATCTimeTimer`、`SetATCOffset`、ATC 上線切換、Chamber Boost、`AutoTempOfsByFTP` 都沒移植（`forms\fLotInfo.h:1091-1128` 列為會動機台） | `forms\fLotInfo.cpp` |
 
@@ -77,8 +79,8 @@ description: >
 | `D:\HT9045\config\config.ini [SingleTempLimit] CH%02d` | 0～10 | `cprod.cpp:2669-2685`；`SaveLastSetIni`（`uTemp_Set.cpp:4547-4552`） |
 | `D:\HT9045\system\ATC.ini` | ATC 介面設定：`[System] iATC_MODE_TYPE`（`ATC\ATC_Handler_Side.cpp:2454`）、通道位址／埠／offset | `main.cpp:9792-9798` 把 `ATCIniPath` 指到這裡；`ATC\ATCInterface.cpp:44` 的 `"Config\\ATC.ini"` 只是建構時的預設，開機就被蓋掉 |
 | `D:\HT9045\Config\ATC.ini` | **只有** `[Setup] iCheckSameTempTime`（最小 20） | `uTemp_Set.cpp` 讀 `:2875`、寫 `:5053` |
-| golden：exe 資料夾的 `DTME08_Control.ini [SocketSetting]`（Steven01 是 `D:\HT9045\EXE\DTME08_Control.ini`） | DTME08 Modbus/TCP 的 `asAddress`／`asPort` | golden `EJ1N\uDTME08Control.h:54-56`（`ExtractFilePath(Application->ExeName)`）。⛔ 20261001 更正：本列原寫 `system\`，那是移植樹 GATE (1) 的路徑（`EJ1N\uDTME08Control.h:135-141`），而 `D:\HT9045\system\DTME08_Control.ini` 不存在 ⇒ 移植樹會用預設 `127.0.0.1:59999`；已登記 D-035（§6 第 6 條） |
-| `D:\HT9045\system\Gerneral.ini [TempCtrl]`／`[System]` | `HEATER_CTRL_TYPE`、71 個 `HeaterInsOpt_`、`COM_PORT`、`COM_PORT_OMRON`；`USE_16_HEATER` | `ht9045-heater-control` §1 |
+| golden：exe 資料夾的 `DTME08_Control.ini [SocketSetting]`（Steven01 是 `D:\HT9045\EXE\DTME08_Control.ini`） | DTME08 Modbus/TCP 的 `asAddress`／`asPort`（⛔ 20261002：HW.HandlerSys 的 Heater 區塊唯讀顯示移植樹讀的那一份，不寫檔，E-029） | golden `EJ1N\uDTME08Control.h:54-56`（`ExtractFilePath(Application->ExeName)`）。⛔ 20261001 更正：本列原寫 `system\`，那是移植樹 GATE (1) 的路徑（`EJ1N\uDTME08Control.h:135-141`），而 `D:\HT9045\system\DTME08_Control.ini` 不存在 ⇒ 移植樹會用預設 `127.0.0.1:59999`；已登記 D-035（§6 第 6 條） |
+| `D:\HT9045\system\Gerneral.ini [TempCtrl]`／`[System]` | `HEATER_CTRL_TYPE`、71 個 `HeaterInsOpt_`、`COM_PORT`、`COM_PORT_OMRON`；`USE_16_HEATER`。⛔ 20261002（E-029，移植樹）：`HeaterInsOpt_` 多 5 EJ1N／6 DTM；方案 D 鍵 `HeaterInsMode`、`HeaterInsIndexOpt`（0～6）、`HeaterInsOtherOpt`（0～4）、`HeaterInsAddr_<通道>`（EJ1N＝台號、DTM＝內部站號）、新的 `HeaterInsCh_<通道>`（EJ1N／DTM 的 CH）；`HEATER_CTRL_TYPE` 永遠 0～4 | `ht9045-heater-control` §1、§9 |
 
 > ⛔ 20261001：`ht9045-atc` 說 `iATC_MODE_TYPE` 存在 `Config\ATC.ini`——不對，是 `D:\HT9045\system\ATC.ini`（上表）。該 skill 已加更正註記。
 
@@ -97,7 +99,7 @@ description: >
 - 6 點補償（`iTempMode==16`，CASE-GIGAS-20260901-001）：移植樹 bthermo 只有 5／3／2 點（`iTempMode` 8／4／2）。
 - `ATC_TYPE_36`、`IS_ATC33()`（golden `uHeaterThread.cpp:326`、`:1507`）。
 - `bATC32UseTJMode`（golden `cTemperFrom.cpp:1275-1288`）。
-- 逐通道廠牌 `HeaterInsOpt_`：V908（`HT9011UC_Code_V3.33.908.0_20260702`）、V910 的 HT9050 樹（`HT9011UC_Code_V3.33.910.0_20260820_HT9050`）、V912 都有；一般 V910（`_20260716`）與 V899 沒有。移植樹的頁面照 912（`ht9045-heater-control` §4）。
+- 逐通道廠牌 `HeaterInsOpt_`：V908（`HT9011UC_Code_V3.33.908.0_20260702`）、V910 的 HT9050 樹（`HT9011UC_Code_V3.33.910.0_20260820_HT9050`）、V912 都有；一般 V910（`_20260716`）與 V899 沒有。移植樹的頁面照 912（`ht9045-heater-control` §4）。⛔ 20261002：移植樹另加 5 EJ1N／6 DTM、71 個通道全列（E-029，`ht9045-heater-control` §9；golden 沒有）。
 
 ## 6. 程式項目（ST01-M 已登記；這份 skill 不改程式）
 

@@ -1,0 +1,44 @@
+# 產生檔 -- tools/gen_editlist.py。C 形狀（HTEditList／具名替身）的原始檔（相對於 HT9011UC_Cpp_V3.33.906.0），
+# CMakeLists.txt 的 wb_serve include 它。新增結構：在 STRUCTS 加一筆、寫 FileRW/<struct>.cpp、重跑本產生器。
+set(W906_EDITLIST_SRC
+    FileRW/_EditList.cpp
+    FileRW/_EditPage.cpp
+    FileRW/_KitSuck.cpp
+    FileRW/IniConfig.cpp
+    FileRW/Ld_UldDelayTime.cpp
+    FileRW/UserDefForm_File.cpp
+    FileRW/ArmSpeed_File.cpp
+    FileRW/ACTForm.cpp
+    FileRW/AOAOffset.cpp
+    FileRW/AOISetup.cpp
+    FileRW/AutoCalSuckZ.cpp
+    FileRW/BinSelect.cpp
+    FileRW/ContactForce.cpp
+    FileRW/DeviceForm_File.cpp
+    FileRW/GroundMan.cpp
+    FileRW/HSys.cpp
+    FileRW/IniConfig_CounterSel.cpp
+    FileRW/IniConfig_OCR.cpp
+    FileRW/Monitor.cpp
+    FileRW/Offset_File.cpp
+    FileRW/Rotate.cpp
+    FileRW/ShuttleMove.cpp
+    FileRW/StartCondition.cpp
+    FileRW/TTLCfg.cpp
+    FileRW/Temperature.cpp
+    FileRW/TestIF_File_AGV.cpp
+    FileRW/TestIF_File_AutoAlignment.cpp
+    FileRW/TestIF_File_BarCode.cpp
+    FileRW/TestIF_File_Cleaning.cpp
+    FileRW/TestIF_File_FixAICCD.cpp
+    FileRW/TestIF_File_Magazine.cpp
+    FileRW/TestIF_File_QAMode.cpp
+    FileRW/TestIF_File_SetUp.cpp
+    FileRW/TestIF_File_TesterIF.cpp
+    FileRW/TestIF_File_VacuumUnit.cpp
+    FileRW/TestIF_File_YieldMonitoring.cpp
+    FileRW/TrayForm.cpp
+    FileRW/Winway.cpp
+    FileRW/Teach.cpp
+    FileRW/Main_A01AutoLogout.cpp
+)

@@ -1,4 +1,4 @@
-# St02 現況板（更新：2026-10-02 14:5x，換帳號前收尾）
+# St02 現況板（更新：2026-10-02 18:4x，第 20 條只做 906）
 
 > 新 session 先讀這份。我是 **St02-E**；派工的協調者是 **St02-M**（session 名稱會變，目前 **github-62**，uds `\\.\pipe\LOCAL\cc-msg-2e6f870585ba6e0d521e943f8e46a02b`（14:00 重啟後 St02-M＝github-62，我＝github-de），以最新訊息的 `from=` 為準）；St01 的協調者是 **ST01-M**，St01 的工程是 **ST01-E**。
 > 規則：每個 commit 兩組態編譯、不執行；St01 跑 ctest（§2 那一列要寫測試名＋「請 St01 代跑」，ST01-M 1002 起只代跑這種列）。每次 push 後都更新這份。⚠ 1002 07:4x Steven 對 St02-M 說「你如果能跑得起來的話, 可以做測試」——St02-E 這邊還沒生效（只是轉述，St02-E 的排程指令仍寫「編譯只編不跑」），已在 St02-E 的 session 直接問 Steven，等他回。
@@ -23,6 +23,31 @@
 - ELA：`1042d4cc` W15、`2ceca61c` W18、`82196ca3` W19、`22e97891` 文件；ship 0 errors，sim 重編中；cObserver 的 diff 等回報。
 - Q41：還沒 commit（A 段 TesterIF，4 檔），sim 0 errors。
 - 16:40：gpib-widget 推到 `bf2690aa`（文件）；本機 `00772497` 已 merge main 00f9a882（有程式）→ 兩組態編譯中，過了再推。st02-on-cbridge 下次推之前要 merge St01 head（現在 5b7fe37c）。
+
+### 10-02 18:4x 狀態（⛔ RULINGS_20261002 第 20 條：只做 906；新 session 從這裡接；St02-E 寫）
+- **Steven 1002 18:0x「我還有看到912版，這是錯的，現在分工處理只能做906 C++專案，能理解?」**（main 8430458c）：翻譯來源只有 906（本機用 906_0625_Steven），912 只能看 906 有沒有漏；**沒有例外**（ADAM／HANA／C14 的 912 例外全作廢）。記憶 golden-906-only-no-912。
+- 18:30 帳號用量上限把 4 個 helper 都中斷了（C10 交件完才斷；C9、OB-7、C14 頁面做到一半、沒 commit）。18:3x 起：
+  1. **!114 ADAM 照 906 重翻**：helper 在 `D:\AI_TempFile\st02-s18`（`v906/st02-adam6024`，在 d0d8b87d 上加一個 commit）；新認領清單 `D:\AI_TempFile\st02-claims\ADAM_CLAIM_SHEET_vs_main_<hash>_906.txt`。審完兩組態完整建置才推。
+  2. **稽核**：唯讀 helper，輸出 `D:\AI_TempFile\st02-claims\AUDIT_912_ST02_20261002.md`（St02 在 main 上的 commit＋所有分支；a＝912≠906 重做、b＝只改引用、c＝只看過）。交 St02-M。
+  3. **C14 回到 906**：`D:\AI_TempFile\st02-s13` `v906/st02-c14` 重設到 `8db5c2c9` 再 merge main 8430458c ⇒ `c950e6ce`（merge-tree 一行）；912 版留在 `v906/st02-c14-912void-local`（不要推）。sim 建置中（第二條線 `D:\AI_TempFile\st02-s13-obj`，log c14b906）。認領清單要重產（舊的 112 行作廢）。C14 頁面 helper（st02-s19，基於 912 版）等 C14 906 好了再接，要改成基於 c950e6ce。
+  4. **!116 LI-9**：本機 `57d2f083`（da36b214 merge＋看板＋skill 文件），sim 0 錯誤、ship 建置中（st02-speed，log li9m_ship）；**稽核確認來源是 906 才推**。
+  5. **C10 HANA 停**（不推）；H-013 全停。
+  6. skill：ht9045-adam6024、ht9045-bin-display（都在 main，寫「基準 912」）稽核後改 906，小的文件 MR；workflow skill §4 已在本機改成只用 906（跟下一次推送一起推）。
+- C9（st02-s15）、OB-7（st02-s20）的 helper 等稽核說來源是 906 再接（它們留著沒 commit 的改動，不要清）。
+
+### 10-02 17:2x 狀態（新 session 從這裡接；St02-E 寫）
+- Session 沒變：St02-E＝`c8311755-ee3b-4c2b-9f5f-bc5682ac9613`（github-de）；St02-M＝github-62。main＝`2dd90ef3`（!108、!118 已合）。⚠ main 今天前進很快：**每次推之前 fetch、merge-tree 對當下的 main 只印一行**。
+- 建置只有一棵樹（`D:\AI_TempFile\st02-speed` 切到要建的 commit，`scratchpad\s09close\build_speed.ps1 -Cfg sim|ship -Tag X`），一次只能跑一個 ⇒ 排隊：**① !114 `d0d8b87d` sim（adam6，跑中）→ 推「SHIP 待建」② !116 `da36b214` sim → 推 ③ !114 ship ④ !116 ship ⑤ C14 兩組態**。
+- **已推、等人**：!114 ADAM 推到的是 `0469e8ae`（之後本機 `3c2c5941` 3h 測試修正、`849d2109`／`d0d8b87d` 兩次 merge main，還沒推）；!116 LI-9 推到的是 `e839f529`（本機 `da36b214` merge main 2dd90ef3，還沒推）。St01 的 Adam6024_Pressure 重跑會在推送後觸發。
+- C-11（wb_serve.cpp:4066）在 2dd90ef3 上是**相鄰行**衝突、不是同一行：舊行一字不差 ⇒ 筆電的同意仍有效（St02-M 已在 CHAT 更正，handoff 292723a0）。
+- **C14**（wt `D:\AI_TempFile\st02-s13` `v906/st02-c14`）：`8b499b21` bring-up＋`8db5c2c9` 認領＋`d0db79e8` 912 差異（含審查修正：MainClose 三個宣告從 :957〔匿名 namespace〕移到全域 :125）。**還沒完整建置**（排第 ⑤）。St02-M 裁決：912 非 BinDisplay 的 cShowBinSelect 差異**不移植**（MR 要寫「912 non-BinDisplay hunks intentionally not ported」）；整個 DoCycleTFT 搬進 St02 檔＝問筆電中（不同意的話筆電自己收那 64 行）。推之前把 35 行認領全文交 St02-M。
+- **4 個 helper 在跑**（Steven 對 St02-M：「加派人手吧~」；各自一棵 worktree、只做 -fsyntax-only、只在本機 commit，St02-E 審＋完整建置才推）：
+  1. C14 頁面＋js：`D:\AI_TempFile\st02-s19` `v906/st02-c14-pane`（從 d0db79e8）——St01 的 Status.ShowBinSelect.html :106-113 那塊＋一個 include（St01 事先同意），新的 St02 js。
+  2. OB-7→C6：`D:\AI_TempFile\st02-s20` `v906/st02-ob7`（從 main 2dd90ef3）——先重新推導 Data.Observer.html:234。
+  3. C9 rebase：`D:\AI_TempFile\st02-s15` 新分支 `v906/st02-c9-r2`（舊分支不動）——拿掉 G3、留 G2＋G1、新認領清單 `D:\AI_TempFile\st02-claims\C9_CLAIM_SHEET_vs_main_<hash>.txt`。
+  4. C10 rebase：`D:\AI_TempFile\st02-s16` 新分支 `v906/st02-c10-r2`——新認領清單標出舊行變了的（要筆電重新同意）。
+- 還沒動：C12（要 headless 實跑）、C13（等 E-020 進 main）、ADAM-F1／F2（!114 合了之後）、Adam6024Integrate_St02.cpp:9-20 註解的 B2／M1 標籤對調（下次動那個檔時改）。
+- ChangeLog 寫到第 46 列、§43（`D:\docs\ChangeLog\CHANGES_20261002_Steven02.md`）。
 
 ### 10-02 14:5x 狀態（換帳號前收尾；新 session 從這裡接；St02-E 寫）
 - **St02-E Session ID：`c8311755-ee3b-4c2b-9f5f-bc5682ac9613`**（session 名 github-de；St02-M＝github-62，uds `\\.\pipe\LOCAL\cc-msg-2e6f870585ba6e0d521e943f8e46a02b`；ST01-M 現在是 github-da）。Steven 14:4x：帳號週用量 90%，要換帳號。沒有 helper 在跑；所有 worktree 都乾淨（都 commit 了）；沒有推半成品。

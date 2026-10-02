@@ -24,6 +24,10 @@
 
 ## HandlerSys 範例
 
+> 本節與下一節是 A 路（`settings-bind.js`／JSON 匯出）時代的 `handler-*-table.js`，原檔只留在唯讀的
+> `D:\HT9045\page_Old\`。現行 C 路頁面的同一版面見文末「HandlerSys C 路版（2026-10-02）」；版面規則照舊，
+> 資料與回寫規則以文末那節為準。
+
 `HW.HandlerSys.html` 的 Loader / Unloader TabSheet2 以 `handler-track-table.js` 實作：
 
 | Proxy 畫面 | DFM authority | 回寫規則 | JSON 行為 |
@@ -97,3 +101,70 @@ In / Out Arm Other Settings 與 Temperature Settings 才保留排序選單。
 6. 使用 Playwright 在 1920×1080 驗證 Grid 尺寸、scroll 範圍與無元素重疊；並執行
    `node --check` 驗證新增的 JavaScript。
 7. 對 In / Out Arm 四欄矩陣，確認六列皆有一個 Title 與三個 Option 儲存格，所有列出的 Proxy 均回寫原始 DFM control，且未重複出現在 Other In / Out Arm Settings。
+
+## HandlerSys C 路版（2026-10-02）
+
+Steven 1002「我比較喜歡 `D:\HT9045\page_Old\HW.HandlerSys.html` 這個版面」→ 把上面的表格版面搬到 C 路頁面
+`D:\HT9045\web\page\HW.HandlerSys.html`（St01 ST01-E2，`AI(W906-HSYS-TABLE)`）。`page_Old` 唯讀，只拿來比對。
+
+| 檔案（`D:\HT9045\web\page\`） | 內容 |
+|---|---|
+| `ht9045_hsys_table.css` | page_Old 內嵌樣式（`HW.HandlerSys.html:53-151`）；固定色改成 `--hst-*` token，四種佈景主題都有 |
+| `ht9045_hsys_table_c.js` | page_Old 三支 `handler-settings-table.js`／`handler-track-table.js`／`handler-comport-table.js`＋頁籤順序腳本合成一支；必須在 `ht9045_hsys_heater_c.js`、`ht9045_hsys_events_c.js` 之後載入 |
+
+**資料規則（跟 A 路不同的地方）**
+
+- 引擎（`ht9045_wire_engine.js`）只讀寫原始 DFM 元件；表格是替身，沒有自己的存檔資料，也沒有 JSON extension。
+- 表格 → 原始元件一律走真的事件：radio `click()`、checkbox `click()`、select 設 `selectedIndex` 後發 `change`、
+  Edit 設 `value` 後發 `input`＋`change`。只改 `.checked` 不發事件，golden 處理器（`rgTTLCardClick`、
+  `rgRotateKit_TypeClick`、`rgHeaterTypeClick`…）就不會跑。
+- 原始元件 → 表格：每 500 ms 一次，加上表格外任何 input／change／click 之後馬上一次。同步值、select 選項
+  （引擎會補 `cpp-text`／`cpp-item` 選項）、停用（`:disabled`／`aria-disabled`）、唯讀、golden Visible
+  （`style.visibility='hidden'` 或 DFM 的 `display:none`）。整列的替身都不可見時整列收起來。
+- 原始元件用 class `ht-src-hidden` 藏，不用 inline `display:none`：Search Function（golden `edtSearchFunctionChange`）
+  把 GroupBox 搬進 `scrlbxSearchFunc` 時要看得到，搬回原位時 `cssText` 被還原也不會失效。
+- Edit 替身是唯讀；按下去把 mousedown 轉給原始 Edit，開的是同一個 golden 小鍵盤（旗標、上下限都一樣）。
+  表格自己的搜尋框用通用 QWERTY。
+- Machine Track 只管列的顯示；page_Old 每 500 ms 會自己取消 Empty／Color、重設 Unloader Cover Tray ID 與
+  Can Go Rear，golden 沒有 `MachineTrackClick`，C 路版拿掉。
+- golden 沒有的設定（Fix 1/2/4/5/6 install、Auto 4-6 Y Motor、Auto 4-6 cylinder／magazine）顯示 N/A；
+  Fix 3「full tray」是 Configuration 頁的 `[E55] cbE55`，選項灰掉。
+- 每軌 Auto ART（`rgAuto1ART`～`rgAuto6ART`）照上面「已移除的每軌 Auto ART」規則：不投影，也不進 Other Settings；
+  golden `SaveSystemSet`（V912 `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\HandlerSys.cpp:665-679`；906 `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260625_Steven\HandlerSys.cpp:543-559`）照樣存它讀進來的值。
+- Com Port 的 `Set Default` 按 golden `btnSetATCCom`（`ht9045_hsys_events_c.js`），不再自己帶一份預設表。
+- page_Old 漏掉的 `cbSocketSenAmpCnt2nd`／`cbSocketSenAmpCnt3rd`（Socket／Rotate／Color Sensor 表）與
+  `rgAutoFormSize`（Temperature Settings）補回；Index Items 三張表高改 13:6:7，CanBus 六列不再被裁掉。
+- 某一頁籤建表失敗時，該頁籤退回原始 DFM 版面，其他頁籤照常（console 有 `[HSys table]` 訊息）。
+- Customer Code、Search Function 兩個頁籤不動。Heater 頁籤的內容搬進 Temperature 頁（下面 E-029）。
+
+**E-029：Heater 搬進 Temperature 頁（Steven 1002 16:4x）**
+
+Steven：「heater type 看起來已經整合到 Heater頁面」「Index Heater Count也是整合到 Heater頁面」「把整個Heater頁面搬到 Temperature Setting 與 Tri Temperature的中間」。
+
+- 版面（`ht9045_hsys_table_c.js` 的 `renderHeaterSection`，St01 ST01-E2）：Temperature 頁的表建好之後，把 `grpHeater` 搬進
+  `#htTemperatureTables`，放在 Temperature Settings 與 Tri Temperature 中間（`#htHeaterSection`）。三張表疊起來、各自全高，
+  整個頁籤一條捲軸。`grpHeater`、它的 `.cli` 與 `ht9045_hsys_heater_c.js` 在 `.cli` 裡建的東西用 CSS 改成照內容高度排。
+- Heater Type（`rgHeaterType`）與 Index Heater Counts（`rgHeater`）從 Temperature Settings 拿掉（pane 5 的 `excludeSourceIds`），
+  改成 Heater 區最上面的兩列替身。回寫照樣是真的事件，所以 heater_c 掛在 `#rgHeaterType` 的 `rgHeaterTypeClick` 連動照樣會跑。
+- Heater 頁籤（`data-t="10"`，`tsHeater`）不刪，用 class `ht-tab-moved` 藏：引擎仍會把 C++ 的 TabVisible 套到它的
+  `style.display`（`FileRW/_EditList.cpp:105`），Heater 區跟著它（還有 `grpHeater` 的 golden Visible）顯示／收起。
+  只用 inline `display:none` 藏頁籤會被引擎讀檔時改回來。
+- 分工（ST01-E 1002 定案）：`ht9045_hsys_heater_c.js`（ST01-E 的工程師，Q71／Q72 廠牌與通道）照樣建在 `grpHeater .cli`，
+  只讀寫原始元件（`rgHeaterType`、`rgHeater`、`cbHeaterInsOpt_*`、`edHeaterInsAddr_*`），不碰帶 `data-hst-src` 的替身；
+  它用真的 click 改原始 `rgHeater`（Q72 連動）時，替身由 500 ms 同步跟上。
+- 建 Heater 區失敗時退回原本的 Heater 頁籤（`heaterSectionBack`）。
+
+**驗證（離線，不連 wb_serve）**
+
+ctest `HSys_TablePage`（`HT9011UC_Cpp_V3.33.906.0/tools/webprobe/hsys_table_selftest.cjs`）自動跑下面 1～4a 項，外加一份 `pick()` 只設 `.checked`、不發事件的壞複本當對照（必須變紅）；沒有 Edge 時回 77＝SKIP。改 `ht9045_hsys_table_c.js` 的回寫方式時，對照那一段要跟著改。
+
+1. 用 scratchpad 的 harness（頁面複本加 `<base href>` 指回 worktree 的 `web\page\`）以 headless Edge 跑：
+   原始元件被藏起來卻沒有替身的清單，只能剩 golden 自己藏的 `GroupBox1`／`GroupBox2`（SafeDoor／HeaterDoor）與每軌 ART。
+2. 表格改值 → 原始元件與 golden 處理器結果：TTL Card＝3 時 Address 變 Yes 且停用；Rotate Kit 非 Cylinder 時 In／Out 停用；
+   ATC3.3+6.0＝`rgATC` 6＋`rgATCMixMode` 1；Fix 3 Use Cylinder＝`rgInstallFix3` 1＋`rgFix3FullPlace` 2；`rgHeaterType` 收到 change。
+3. 原始元件改值（不發事件）、設 `visibility:hidden`、設 `disabled` → 500 ms 內表格跟上。
+4. `Set Default` 後 `cbComIndex`＝COM11；Search Function 輸入關鍵字，被藏的 GroupBox 出現在搜尋框，清掉後回原位且仍藏著。
+4a. E-029：`grpHeater` 在 Temperature Settings 與 Tri Temperature 中間；Heater Type／Index Heater Counts 的替身在 Heater 區、
+    不在 Temperature Settings；Heater 頁籤藏著、pane 10 是空的；把 Heater 頁籤 `style.display` 設成 `none`（引擎套 TabVisible=false）
+    Heater 區收起，設回 `''` 又出現。
+5. 四種佈景主題各頁籤截圖（1272×972）。

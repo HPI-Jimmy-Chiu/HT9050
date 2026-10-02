@@ -91,6 +91,11 @@
 
 ## 5. 方案 D 的實作（St01，20260927，commit `bc970c38`）
 
+> ⛔ 20261002 更正（E-029／Q71～Q76，St01）：下面幾條已被取代——5.2 的「0～4」（現在 `HeaterInsOpt_`、`HeaterInsIndexOpt` 是 0～6，`HeaterInsOtherOpt` 仍 0～4，新鍵 `HeaterInsCh_<通道>`）、
+> 5.2／5.4 的「只寫列出的通道（D-3a）」（現在＝這台有裝＋指定了站號的通道）、5.3 最後一條與 5.5 的「EJ1N／DTME08 時 Index 跟著其他位置、下拉停用」與 5.6 第 1、5 點
+> （現在 Index 下拉自己選 EJ1N／DTM，跟 USE_16_HEATER 雙向連動；USE_16_HEATER 與 rgUse4DUT 用頁面上的值）、5.5 的「逐通道表＝D-3a 列出的通道」（現在 71 個全列，
+> 兩組互斥即時顯示）、5.7 的 `W906_HeaterInsIndexLocked`（拿掉）。現況與規則：`D:\HT9045\.claude\skills\ht9045-heater-control\SKILL.md` §9。
+
 - 裁決：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20260926.md` S166（Steven 20260927「開工，其他照建議」）＝D-1b、D-2a（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20260927.md` 第 7 條第 35 題：Index 位置＝Head1～4＋Index 32 區，Socket、DUT1～4、IndexESD、Door1～2 算其他）、D-3a、D-4a、D-5a、D-6a、D-7a、D-8a、D-9a；⑥ 第 4 點不做（第 7 條第 34 題）。Q15＝S137、Q14＝S136。全文 `D:\HT9045\.claude\skills\ht9050-construction\references\decisions-decided.md`「### Q34.」。
 - 範圍：只有 St01 的讀寫檔、頁面、ctest。底層（Q34 ⑥ 1～3、5～8：bthermo／cpublic／rs232／cConfiguration／OmronEJ1N）一行沒動，**移植樹機台溫控仍只看 `HEATER_CTRL_TYPE`**，頁面照 D-9a 提示。
 - 行號是 20260927 工作樹 `v906/steven-cbridge-review6`（commit 前）的。
@@ -164,3 +169,16 @@
 - 測試跑前跑後 `D:\HT9045\system\Gerneral.ini` SHA256 `8ECFA892…94AA`、`D:\HT9045\config\config.ini` SHA256 `7E4BD43B…82A6` 都沒變（測試程式自己也比對）。
 - Steven01 這台的實檔（`test_hsys_heater_mix --example D:\HT9045\system\Gerneral.ini 2`：複製到暫存跑，原檔只讀）：開頁檔案不變；什麼都不改直接存檔 → 第 353～423 行 71 個 `HeaterInsOpt_…=-9999` 改成 `=2`，第 424～426 行多 `HeaterInsMode=0`、`HeaterInsIndexOpt=2`、`HeaterInsOtherOpt=2`，第 311 行 `HEATER_CTRL_TYPE=2` 不變，其他行一個位元組都沒動。跟 decisions-decided Q34 的例子一樣。
 - 頁面：`node --check` 過；用假 DOM 跑建畫面／切模式／點 Heater Type／EJ1N 鎖定共 21 項過。**沒有在瀏覽器實測**（不跑 wb_serve）。
+
+## 6. E-029 的實作（St01，20261002）
+
+全文在 `D:\HT9045\.claude\skills\ht9045-heater-control\SKILL.md` §9（Steven 原話、規則、給 Jimmy、驗證）。這裡只記改了哪些檔：
+
+| 檔 | 內容 |
+|---|---|
+| 移植樹 `FileRW\HSys_Heater.h` | 檔尾 E029：規則全文、`W906_HEATER_INS_EJ1N`／`W906_HEATER_INS_DTM`／`W906_HEATER_INS_OPT_COUNT`、站號範圍、`g_iHeaterInsCh[]`、匯流排常數、`W906_HeaterInsBus*`／`W906_HeaterInsUnitCh`／`W906_HeaterInsU16Area`／`W906_HeaterInsU16For`；`W906_HeaterInsIndexLocked` 拿掉 |
+| 移植樹 `FileRW\HSys.cpp` | 第 (4) 段重寫：`g_W906HeaterInsOptStr`（7 個）、`HmActive`（兩組互斥）、`HmLinkIndex`（Index ⇄ USE_16_HEATER）、`HmFromProxies`（台號／站＋CH、Other 只收 0～4）、`HmDuplicates`（三條匯流排）、`HmCtrlTypeFor`（不寫 5／6）、`HmReadFile(u)`、ExtraJson（71 列、`pair`、`active`、`otherOptions`、`conn`）、`W906_HeaterMixSave` 多寫 `HeaterInsCh_` 與 `[System] USE_16_HEATER`；第 (3) 段 golden 23 個下拉改 7 項；ExtraJson 頂層 `options` 改 7 個（`goldenOptions` 留 5 個） |
+| 移植樹 `tests	est_hsys_heater_mix.cpp` | 舊情境照新規則改期望值（V899／V912 檔在 USE_16_HEATER=2 時 Index 區＝5、Head1～4 不算有裝）；新增 `CaseE029`（11 段） |
+| 移植樹 `tools\webprobe\e029_heater_selftest.cjs`＋`tests\CMakeLists.txt` | 新 ctest `E029_HeaterPages`（node） |
+| `D:\HT9045\web\page\ht9045_hsys_heater_c.js` | 重寫：規則純函式（`window.HT9045HSysHeater.rules`）、71 列、Other 5 個、真的點 `#rgHeater`、跟著 `#rgHeater`／`#rgUse4DUT` 即時顯示、連線設定唯讀 |
+| `D:\HT9045\web\page\ht9045_temperfrom_strip.js`＋`i18n.js` | 5／6 的位址（`EJ1N CHx-x`、`DTM CHx-x`）、「不同」模式的站號鍵、新詞條 `Temp: Station not set` |

@@ -388,6 +388,7 @@ op1 1 1234
 
 **目前狀態**：**已裁決（RULINGS_20260926 S166）：方案 D 開工**——Steven 20260927 18:1x（對話中直接回覆 ST01-E）：「開工，其他照建議」；D-2＝A（RULINGS_20260927 第 7 條第 35 題，Steven 0927 17:1x「依據建議」）：Index 位置＝36 個通道（Head1～4＋Index 32 區，golden V912 MachineType.h:638-645），Socket、DUT1～4、IndexESD、Door1～2 算其他位置；D-1＝b、D-3＝a、D-4＝a、D-5＝a、D-6＝a、D-7＝a、D-8＝a、D-9＝a 照建議；⑥ 第 4 點（No Heater 通道讓迴圈跳過）**不做**（RULINGS_20260927 第 7 條第 34 題：照 golden 不加 else）。Q15（S137）併入一起做。St01 做讀寫檔＋頁面＋ctest；底層 ⑥ 1～3、5～8 歸 Jimmy（溫控迴圈那一波）。（先前紀錄：**Steven 20260927 選新設計（D）**（RULINGS_20260926 S154；ST01-E 20260927 轉述 Steven「要使用新的方案, 把方案列出來成為選項D」），**等 Steven 確認 D-1～D-9 的細節才開工**；Q15（S137「預設選 3 No Heater，然後 B 開頁不寫檔」）併入 D 一起做，不單獨先改。程式沒動（移植樹目前的行為仍是 A，還沒加提示）。　**Jimmy 回覆（TO_STEVEN 20260927 16:2x 第 169 列）**：新鍵名 OK；D-2（Index 位置包含哪些通道）要機構確認（他們的第 35 題）；No Heater 通道跳過是偏離 golden，他們建議選 B＝跳過（第 34 題）；底層 ⑥ 1～8 跟溫控迴圈那一波一起做。）　**St01 部分已做 `bc970c38`**（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\HSys.cpp` 第 (4) 段、`tools\editlist\HSys.py`、`D:\HT9045\web\page\ht9045_hsys_heater_c.js`、ctest HSys_HeaterMix 105/105）；衍生 R111～R114；底層 ⑥ 1～3、5～8 歸 Jimmy。
 （行號是 20260927 移植樹工作樹 `v906/steven-cbridge-review6` 當下的；`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\HSys*` 別的工程師也在改，行號可能位移。）
+⛔ 20261002 更正（E-029，St01 實作；裁決 Q71～Q76，本檔「### Q71.」～「### Q76.」）：方案 D 的這幾點已被取代——廠牌多 5 Omron EJ1N、6 Delta DTM（同一個 `HeaterInsOpt_` 鍵）；「全機相同」時 EJ1N／DTM 只在 Index 下拉、其他位置仍 golden 5 個；「各溫控器不同」每個通道 7 個；St01 的解讀「EJ1N／DTME08 時 Index 下拉停用、跟著其他位置」（`W906_HeaterInsIndexLocked`）拿掉，Index 區 EJ1N／DTM 改成跟 `[System] USE_16_HEATER` 雙向連動、一次存檔兩個鍵都寫（Steven「使用 EJ1N 或是 DTM 應該是要設定兩個變數」）；D-3a「列出的通道」改成 71 個全列、Head1～4⇄Ax／Bx 與 Socket⇄DUT1～4 兩組互斥照 rgHeater／rgUse4DUT 即時顯示；D-7a 多 EJ1N 台號＋CH、DTM 內部站號＋CH（新鍵 `HeaterInsCh_<通道>`）；D-8a 分溫控 COM 埠／EJ1N／DTM 三條匯流排。現況：`D:\HT9045\.claude\skills\ht9045-heater-control\SKILL.md` §9。
 
 ### Q35. 按主畫面 Exit 後要不要讓 wb_serve 自己結束（S95 關站那一半／todo D-007）
 **背景**：Exit 現在照 golden 先存生產資料（BinCount、lastdata、DailyJamRate、Arm*.dat），但 wb_serve 除了 `--seconds` 到期之外沒有正常結束的入口，所以存完頁面會說「程式不會自己結束，請在主控台 Ctrl-C」。golden FormClose 其餘的關站動作（SaveMachineRecord、停馬達、加熱器與風扇 Off、ATC OffLine…）大多是 Jimmy 的範圍。
@@ -1872,6 +1873,64 @@ ST01-E 再用選項題問 Steven（09:0x），三題都選建議：① 兩個命
 **為什麼要問**：這是安全層（運轉中擋按鈕）的改動，照 Q59 屬於例外，要 Steven 先看；綠了也不合，等 Steven 回。
 **Steven 的裁決**（20260930 17:1x，在 ST01-M 對話裡）：原話「golden應該是有卡權限吧? 依照golden」⇒ **照 golden，包含 golden 的權限檢查**。這 14 顆鈕跟它們所在的 Offset／AGV 視窗，在 golden 裡要什麼權限等級才能開、才能按，網頁版都要一模一樣，而且要在伺服器端（form.event）擋，不能只在頁面上藏起來。ST01-E 先查 golden 的權限出處（開窗、ChangeLevelAttr／LevelSet 的 Enabled、處理器內的檢查），補齊後做成單獨一個 commit，並加低權限、允許權限兩種 ctest。**權限補好、而且兩組態 gate 綠了，才在 §2 請 Jimmy 合 `46425cbc`＋權限修正。**注意：移植版的 ChangeLevelAttr 目前是空函式（M-11 查到的）。
 
+### 20261001 09:4x Steven 裁決：Q62、Q63（從 decisions-pending.md 搬來）
+
+### Q62. Setup.Contact 存檔的兩個 bug 修好了（todo D-021 Head Device Mode 捲軸、D-023 Kit Diameter），要不要先上機看過再合進 main
+> 一題兩件：都是 Setup.Contact 在網頁上存檔會存錯／存不進去，修好後存檔的內容會變（接觸氣壓相關），所以一起問。回一個答案就兩件都照辦；要分開回也可以（例：「D-021 A、D-023 B」）。
+
+**（一）D-021 Head Device Mode 捲軸**
+**建議：B，先上機看一次再合**（會改接觸氣壓；修好前的壞法是「改了不生效」，是比較安全的那一邊）。
+**操作員會看到什麼**：今天在網頁 Setup.Contact 拉 Head Device Mode 捲軸、按存檔，**不會生效**：存下去的還是舊值，重開頁面捲軸也不會顯示機台上的值（bug，ST01-E 20261001 找到）。修好後，存檔會真的改 Head Device Mode，並照 golden 重算接觸氣壓（dPress）和扭力（Torque）存進配方；生產時 dPress 就是 EP 氣壓（golden `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\atester.cpp`:9662 ADAM_WriteVoltage），所以**存檔後下一次壓測就用新的壓力**。
+**為什麼（golden）**：golden 捲軸的 OnChange＝scrbSLKChange（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cContact.cpp`:1185-1186；cContact.dfm:16134），會重算顆數、每顆力、氣壓。
+**移植樹現在**：C++ 存檔前的推導早就寫好（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\DeviceForm_File.cpp`:141 `DF_scrbSLKChange`），但網頁從來沒把捲軸位置送上去——`D:\HT9045\web\page\ht9045_contact_slk.js` 自己記位置，沒同步到引擎存檔時讀的欄位（`D:\HT9045\web\page\ht9045_wire_engine.js`:1250），所以這段 C++ 從來沒在網頁上跑過。
+**改法**（ST01-E，review6 `8d04f578`，只改 `D:\HT9045\web\page\ht9045_contact_slk.js` §19）：捲軸位置跟引擎的欄位雙向同步——存檔讀到現在的位置、開頁顯示 C++ 的位置。沒改引擎、C++、串流。ctest D021_ContactScrollSync 32／32（修之前的版本 24 項失敗）。按下去馬上送 EP 電壓那一段移植版本來就沒做（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\DeviceForm_File.cpp`:319-320），壓力只在存檔後改。
+**選項**：
+- A：兩組態 gate 綠了就合（照 golden）。例：Jimmy 合進 main 之後，操作員改 Head Device Mode、存檔，機台下一次壓測就用新算的氣壓。
+- B（建議）：先在機台上改一次、存檔，比對配方裡的 dPress／Torque（和 EP 輸出）跟 golden 同一份配方算的一樣，再合。例：Steven 或 Jimmy 在機台上換一個 Head Device Mode、存檔，同一份配方在 golden 上做同樣的操作，兩邊數字一樣才合；在那之前 main 維持「改了不生效」。
+- C：先不合、也不上機，等 CT-3（Contact 頁的機台操作：啟動、One Cycle、Auto Z Teach）一起做。
+**為什麼要問**：會改接觸氣壓（IO 輸出），照 Q59 屬於例外，要 Steven 先看。
+**（二）D-023 Kit Diameter 選項**（review6 `8caaf1e4`，只改 `D:\HT9045\web\page\ht9045_contact_slk.js`）
+**操作員會看到什麼**：今天網頁 Setup.Contact 的 Kit Diameter 選項會把**隱藏的尺寸也列出來**。這台 `D:\HT9045\system\ContactInfo.ini` [SLK Type] Visible=1,1,1,0,1（第 4 個 56 那一格是隱藏的），所以網頁列 5 格、C++ 只有 4 格；用 80mm 的配方時網頁選第 5 格（索引 4），C++ 對不上 ⇒ **網頁存檔會被拒，或（程式上可能的路）SaveSetupFile 把 Kit Diameter 寫成 0.0**（bug，ST01-E 20261001 找到）。修好後照 golden 只列看得到的尺寸，選哪一格跟 C++ 一致，存檔會寫對 Kit Diameter，最小力量／EP 相關數字也跟著照 golden 算。
+**為什麼（golden）**：golden FormShow 只把 bShow 的尺寸加進選項（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cContact.cpp`:1109-1145），DoIniDataToForm 再照檔案設索引（:851-919；對不到時設 0，:915-917）。
+**選項**：跟（一）一樣 A／B／C。**建議 B**：在機台上用 80mm 的配方按一次存檔，確認配方 [Mode] Kit Diameter 還是 8.0000、KitDiameterMode 還是 3，再合。
+**另外（不用 Steven 決定）**：同一個 commit 裡的 D-022（Setup.Contact 視窗關著時開機不再向 C++ 讀資料，照 golden 只在打開時 FormShow，cContact.cpp:1094）只影響讀取時機，但因為跟 D-023 在同一個 commit，會跟著這題一起合。
+
+**gate**：`8caaf1e4`（含 D-021、D-022、D-023 和兩次 merge main）排在 St02 MR !14／!15 之後跑；FROM_STEVEN §2 的 `7cbb478d` 那列只寫到 `f2df9e4f`，`8d04f578` 以後等 Steven 回了再另外寫一列。待人審 A16～A18／B21～B23。
+**Steven 的裁決**（20261001 09:4x，在 ST01-M 對話裡）：原話「通知jimmy讓eastsun上機驗證」⇒ **B**：先上機驗證再合。由 Jimmy 安排 EastSun 在機台上驗（D-021：換一個 Head Device Mode 存檔，dPress／Torque 跟 golden 同一份配方一樣；D-023：80mm 配方存檔後 Kit Diameter＝8.0000、KitDiameterMode＝3）；驗過才在 §2 請 Jimmy 合。
+
+### Q63. 主畫面 Config ▾ 按下去時照 golden 重設工作參數、更新操作模式（todo D-025），要不要先上機看過再合進 main
+**建議：B，先上機按一次再合**（會動 IO 輸出和加熱繼電器）。
+**操作員會看到什麼**：今天網頁主畫面按 **Config ▾**，只在瀏覽器裡打開選單，C++ 什麼都不做，運轉中也打得開。照 golden 接上之後，每按一次 Config ▾，C++ 會先做 golden 那兩件事、再打開選單：
+- **SetWorkParameter**（重設工作參數）：寫 IO 輸出——吸嘴模式 Z1／Z2、Sw10Bit／Sw10Bit2（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cinitial.cpp`:19039-19057、:8766-8772），並重寫 `D:\HT9045\system\teach.ini`；
+- **UpdateMainOperateMode**（更新操作模式）：切換加熱繼電器 SW[SwHeaterRelay]，可能送 ATC 7.0 溫度設定（ATC_SET_TEMP／ATC_RUN），並寫 `D:\HT9045\system\lastdata.dat`。
+另外：運轉中按 Config ▾／Tools ▾ 會被拒（golden 一樣）；再按一次不會把選單關掉（golden 沒有「再按關閉」）；權限不夠時不跳 WAR1676 框（golden bAlarm=false）；SoftStart 中允許（golden 一樣）。**Tools ▾ 只多送一個 SECS 事件（EnterTool），不動 IO**；移植版的 SECS 事件目前只是計數，不會真的送到主機。
+**為什麼（golden）**：golden sbConfigClick／sbSettingClick（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\main.cpp`:29009-29049）按下去就跑這些（:29027／:29048 送 EnterConfig／EnterTool）。
+**改法**（ST01-E，review6 `fc1e4d3a`）：St01 的 `D:\HT9045\web\page\ht9045_main_st01_ev.js` 攔下兩顆鈕，送 act.main.menuOpen；C++ 新檔 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\Main_D025MenuOpen.cpp` 照 golden 查閘、跑那兩件事，回「可以開／不行」，可以才打開選單。main.html 沒改。呼叫的都是已經移植好的函式，照原樣呼叫，沒有拿掉任何閘。ctest D025_MenuOpen（C++）＋D025_MenuOpenPage（node，23 項）；修之前的版本會失敗；D015_A01MenuPage 照舊通過。
+**選項**：
+- A：兩組態 gate 綠了就合（照 golden）。例：Jimmy 合進 main 後，操作員每按一次 Config ▾，吸嘴模式 IO、加熱繼電器就照 golden 重設一次。
+- B（建議）：先在機台上按一次 Config ▾，確認 IO（吸嘴模式、Sw10Bit）、加熱繼電器、ATC 溫度沒有異常，teach.ini 改寫的內容跟 golden 一樣，再合。例：Steven 或 Jimmy 在機台上停機時按 Config ▾，看 IO 監看頁和溫控器；在那之前 main 維持「按了什麼都不做」。
+- C：只接 Tools ▾（只送 SECS 事件）和運轉中拒開，Config ▾ 的 SetWorkParameter／UpdateMainOperateMode 先不接。例：運轉中打不開選單，但停機時按 Config ▾ 還是不會重設 IO。
+**為什麼要問**：會動 IO 輸出和加熱繼電器、可能送溫度設定，照 Q59 屬於例外，要 Steven 先看。
+**同一串還有**：TA-5（review6 `d6f75103`，Setup.TrayAssignment 圖形模式的兩個捲軸，golden cTrayAssignment.cpp:1639／:1674）——圖形模式（bTrayAssignUseGraphic）下存檔會照 golden 依捲軸位置寫 Tray.Data 的 RGAuto1-3／RGLoader；不碰加熱器／馬達／IO，照 Q59 不用問，列在待人審 B24。但它跟 Q62、Q63 疊在同一條分支上，要等 Q62、Q63 回了才能一起合。
+**Steven 的裁決**（20261001 09:4x，在 ST01-M 對話裡）：原話「同Q62」⇒ **B**：同 Q62，由 Jimmy 安排 EastSun 上機驗證（停機時按一次 Config ▾：吸嘴模式／Sw10Bit IO、加熱繼電器、ATC 溫度沒有異常，teach.ini 改寫的內容跟 golden 一樣），驗過才合。
+
+### 20261001 09:4x Steven 裁決：Q64（從 decisions-pending.md 搬來）
+
+### Q64. 警報框要輸入密碼才能清的，網頁照 golden 接上（todo D-026），有三點要你點頭
+**建議：B，照 golden 做，Jimmy 審過程式、EastSun 上機試一次再合**（安全層，而且動到 Jimmy 的警報框核心）。
+**操作員會看到什麼**：golden 有些警報要輸入等級密碼或解鎖密碼才能按 Start／Pause 清掉（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\note.cpp`:5277 DoPassword、:5431 DoUnlockPassword）。今天網頁遇到這種警報**清不掉**：伺服器回「dialog auth not wired」。接上之後，網頁警報框會跳密碼輸入，驗證過才能清，跟 golden 一樣。
+**做法**（ST01-E，側分支 `v906/st01-d026`，還在寫）：重用 B5 的重新登入（W906_Reauth），照 Q45「網頁不送明碼」的設計；輸出裡不會有密碼。要動 Jimmy 警報框核心的 7 處（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\wb_serve.cpp`、`wb_dialog_mailbox.h`、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\WebBridge\WebBridgeServer.cpp`，都在同一行改、行數不變），已在 FROM_STEVEN §1 認領、§3 請 Jimmy 審。
+**要你點頭的三點**：
+- **（一）動 Jimmy 的警報框核心**：規則上沒人認領的行可以直接改，但警報流程是 Jimmy 設計的，所以合之前要 Jimmy 看過程式（或 Jimmy 說伺服器那一半他自己做）。
+- **（二）安全政策**：「輸入警報密碼」這個指令**不用操作員權杖**就能送（`WebBridgeServer.cpp`:1448），跟今天「回答警報框」（dialog.response）一樣。理由：golden 是站在機台前的人都能回答警報，真正的檢查是密碼本身。風險：任何打得開網頁的人都能試密碼。**背景（St02 1001 07:17 提醒）**：這份免權杖清單是照你 20260927 的 **S124＝B「唯讀指令免權杖」**做的（St02 維護）；不是唯讀的例外目前只有 modal.answer、dialog.response（讓機台前的人都能回警報框），dialog.auth 會是第三個同類例外。St02 不反對，以你的答案為準。
+- **（三）機台面板上看得到的改變**：要密碼的警報開著時，**面板的 START／PAUSE 鈕會被拒**，要先在網頁輸入密碼（golden Start()／BtnPauseClick 就是這樣）；拒絕時不動任何軸。
+**選項**：
+- A：三點都照 golden，gate 綠＋Jimmy 審過就合。例：Jimmy 合進 main 後，要密碼的警報在網頁上輸入密碼就能清。
+- B（建議）：同 A，另外先由 **EastSun 上機**試一次（照你 1001 09:4x「需要上機驗證的, 都是請Eastsun處理」，經 Jimmy 安排；開一個要密碼的警報：密碼錯拒絕、密碼對可清；面板 START／PAUSE 在輸入前被拒）再合。
+- C：（二）不放行——輸入警報密碼也要操作員權杖（比 golden 嚴），其他照 B。例：沒登入網頁的人看得到警報，但不能在網頁上輸密碼清。
+**為什麼要問**：密碼／解鎖是安全層（同 Q61），又動到權杖政策，照 Q59 屬於例外。
+**Steven 的裁決**（20261001 09:4x，在 ST01-M 對話裡）：原話「（一）動 Jimmy 的警報框核心 : 通知jimmy後, 可以開工」「（二）安全政策 : 按照golden沒問題」「（三）機台面板上看得到的改變 :  這個密碼暫時不用太嚴謹沒關係, 任何知道密碼的人就是可以操作並排除密碼的人」⇒ **（一）**已在 FROM_STEVEN §3（1001 07:0x）通知 Jimmy，St01 可以開工（合併前仍請 Jimmy 看 diff）；**（二）**dialog.auth 照 golden 免操作員權杖（S124＝B 的第三個例外）；**（三）**照 golden：知道密碼的人就能操作、排除，面板 START／PAUSE 在輸入密碼前拒照 golden；**不另外加嚴**（不綁登入身分、不鎖次數、不加冷卻）。上機由 EastSun 試（Q62 規則）。
+
 ## St02（Steven02，測試通訊）
 
 ### Steven 已裁決的項目（W 系列）
@@ -2885,6 +2944,28 @@ ST01-E 再用選項題問 Steven（09:0x），三題都選建議：① 兩個命
 **目前狀態**：等 Steven 回。回法：「W62 照建議」或「W62-題一＝B」。
 **Steven 的裁決**：原話「W62 題一：按「下載工作檔」時機台主迴圈會停幾秒，可以嗎？ 可以」「題二：上機驗證下載時，工作檔資料夾要不要導到沙盒？ 不需要, 當作在客戶端使用的方式即可」（Steven 20260929 07:5x，在 ST01-M 對話裡）。⇒ 題一＝A：照 golden 在主迴圈同步下載（只准閒置、機台內沒 IC）；題二＝不導沙盒：上機驗證就照客戶端的用法，用真的工作檔資料夾。
 
+### 20261001 08:0x Steven 對 St02-E 的三句裁決（St02-E session 當面；St02-M 1001 08:15 請 ST01-M 代登記）
+- **TTL**：原話「TTL 介面是跟RS232整合再一起的」⇒ TTL 屬於 RS232 引擎（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\TesterComm\Rs232`），log 在 `D:\RS232Log\BinLog_TTL`；不另開 TTL 模組。
+- **ISA 卡**：原話「ISA卡片版本先不移植」⇒ ISA／舊卡的程式維持關閉（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\TesterComm\Gpib\GpibCore.cpp`:1431／:1452、PCI_L112C／L122C／CMnet DLL 那幾段；golden 905 也在 `/* */` 裡）。
+- **pull**：原話「必要的時候要pull」⇒ 工作分支落後 origin/main 時，必要就同步（快轉或合 main）；St02-E 已把 St02 那台的 `D:\HT9045` 工作分支快轉到 origin/main（純快轉、沒有覆蓋）。St01 這邊照同一原則：review6／`v906/st01-q59` 由 ST01-E 在送合併前合 main（共用目錄有別人沒 commit 的檔，不手動 pull）。
+
+### 20261001 13:4x Steven 裁決：W63（從 decisions-pending.md 搬來）
+
+### W63. 模擬組態遮網路選項（W58 第一階段）：SECS GEM 那兩個鍵要不要也遮？你跟 Jimmy 的裁決不一樣（St02）
+（St02-M 在 FROM_STEVEN §4 20261001 09:18 請 ST01-M 轉；**有預設**）
+**背景**：W58＝模擬組態（SIM）開機時，把會連到外面的網路選項先當成沒勾，免得測試機去連真的主機／網路磁碟。你 20260929 08:1x 裁 W58 時，「確定的網路連線」表裡**有 [N07-1] Enable SECS GEM**（`D:\HT9045\.claude\skills\ht9050-construction\references\decisions-decided.md`:2779-2812）；Jimmy 20261001 08:4x 裁**保留 [N07-1] Enable SECS GEM 與 [N07-2] 主機啟動不遮、其他照遮**（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20261001.md` 第 3 條），理由是筆電要在模擬組態測 SECS／主機啟動。**出貨組態兩種都不變。**
+**選項**：
+- **A（預設，照 Jimmy）**：模擬版一開，SECS GEM 照 config.ini 原值（勾著就連主機），FTP／網路磁碟等其他 58 個照遮。
+- B（照你 0929 原裁決）：SECS GEM 也先當沒勾，要手動勾＋存才連。回法：「SECS 也遮」。
+**目前狀態**：St02 本機先照 A 改好、等你回再推；你沒意見就照 A。
+**Steven 的裁決**（20261001 13:4x，在 ST01-M 對話裡）：原話「W63. 模擬組態遮網路選項  A」⇒ **A，照 Jimmy**：模擬組態保留 [N07-1] Enable SECS GEM 與 [N07-2] 主機啟動不遮，其他 58 個照遮；出貨組態不變。St02 照 A 推。
+
+### 20261001 13:0x～13:4x Steven 對 St02 testercomm 頁的裁決（St02-M session；St02-M 12:54／13:06／13:08 請 ST01-M 代登記）
+- 原話「我以為site01~32的面板是共用的!」「然後通訊Log的memo也是共用的」「請協助調整畫面」。
+- 原話（13:3x，附 32 格 Site 面板截圖）「截圖的元件只有一份, 在首頁」「然後主要通訊log也是只有一份, 在首頁」「其他的設定值可以根據不同的測試模式進行分頁」。
+- 原話（13:4x）「C++端在 32site 與 通訊log部分, 也是整合一個JSON進行發送」。
+- ⇒ `D:\HT9045\web\page\testercomm.html` 第一個分頁「首頁」放唯一一份 Site01～32 元件＋唯一一份主要通訊 Log（跟著目前的測試介面）；其他分頁依測試模式（GPIB／RS232·TTL／TCP/IP）放各自的設定值；C++ 端把 32 site 與主要通訊 Log 合成一個 JSON 送出。St02-E 做（St02 的檔），推 `v906/st02-tc-shared-panel`＋MR。
+
 ## 已裁決、不再問（早期整理；依據）
 
 
@@ -2920,3 +3001,141 @@ ST01-E 再用選項題問 Steven（09:0x），三題都選建議：① 兩個命
 * S107-3（按鈕防連點整件由 St01 做，不等 Jimmy）——已裁決並落地（`WebCmdGuard`＋前端），
   剩下交 Jimmy 的只有引擎頁面 busy 顯示與 `motor.access` 細分白名單，那些是「交給 Jimmy」
   清單裡的項目，不是待 Steven 決定。
+
+### 20261002 07:4x Steven 對 St02-M 的裁決：St02 這台可以跑測試（St02-M 1002 07:43 請 ST01-M 代登記）
+- **原話**：「你如果能跑得起來的話, 可以做測試」
+- **取代**：20260927 的規則「St02 這台只編譯、執行驗證一律請 St01 代跑」（也取代 St02-M 1002 06:29 那則「Steven 說可以之前照舊請 St01 代跑」）。
+- **St02 的做法**（St02-M 07:43）：①node 類 ctest（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\webprobe\*.cjs`）推之前在 St02 本機真跑（含對照組），§2 寫通過數；②新編出來的 exe（C++ ctest）可以試，被 F-Secure 擋或隔離就停、**不碰防毒設定**，那幾個照舊請 St01 代跑，§2 寫明哪些在 St02 跑過、哪些要 St01 跑；③推之前兩組態建置照舊。
+- **St01 這邊的影響**：St02 的 MR 只有 §2 寫明「要 St01 跑」的才排進 St01 代跑佇列；筆電收進批次的照舊不跑。
+
+### 20261002 08:0x Steven 裁決：Q65／Q66／Q67／W64／W65（從 decisions-pending.md 搬來）
+
+### Q65. 機台運轉中，要不要讓操作員在 Contact 頁按 OTD 面板動對接氣缸？（B8 CT-3d，St01）
+（ST01-E 1001 23:4x 提出；ST01-M 登記）
+**機台上會發生什麼**：有 OTD 對接機構的機台（USE_OTD==1），Contact 頁有兩個 OTD 面板（240KG、360KG），按一下會讓 4 支對接氣缸伸出或縮回（測試頭跟機台對接／分開）。golden 不管機台有沒有在跑都照做——處理器裡沒有任何檢查，而且 Contact 視窗是非模態的，運轉中也開得著（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cContact.cpp`:15395-15443 palOTD_4Click／palOTD_6Click）。移植樹今天（review6 `d6cda69d`）運轉中按這兩個面板會被拒（網頁 form.event 的運轉中規則）。開發機與 HT9050 是否有 OTD 硬體還不確定（USE_OTD=2 看不到這兩個面板）。
+**為什麼要問**：Steven Q61 說運轉中例外「依照golden」，照那條應該放行；但這是**運轉中動氣缸**，屬於 Q59 說的「IO 安全要 Steven 先看」，所以 ST01-M 不自己套 Q61。
+**選項**：
+- **A（ST01-M 建議）**：維持拒絕（比 golden 嚴）。例：機台在跑時操作員按 240KG 面板，畫面回「運轉中不能操作」，氣缸不動；要對接／分開先停機。之後 EastSun 在有 OTD 的機台上看過、確定運轉中真的需要，再改 B。
+- B：照 golden 放行，運轉中例外清單（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_FormEvent.cpp`）加 palOTD_4、palOTD_6 兩列（規則例外，human-review C 區）。例：機台在跑時操作員按 240KG 面板，對接氣缸立刻動作，跟 BCB6 一樣。
+**在哪看**：review6 `d6cda69d` commit 本文；`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\DeviceForm_File.cpp`:872-988；待人審 B42。
+**目前狀態**：等 Steven 回。回法：「Q65 A」或「Q65 B」。沒回之前照 A（今天的程式就是 A，不用改）。
+**Steven 的裁決**：原話「B」（Steven 1002 08:0x）⇒ Contact 頁 OTD 面板運轉中照 golden 放行；運轉中例外清單加 palOTD_4／palOTD_6 兩列（規則例外 C），拿掉移植樹的拒絕；EastSun 在 USE_OTD==1 機台驗。ST01-E 在 review6 跟進。
+
+### Q66. 保養紀錄的檔名要不要過濾操作員打的字？（E-021，St01）
+（ST01-E 1002 04:0x 提出；ST01-M 登記）
+**畫面上會發生什麼**：Data.Observer 的 Precautions Record 分頁（[B01] 開著的機台）與 Handler Major Maintenance 分頁（[B02]），按存檔時 golden 用**操作員自己打的文字**組檔名：`D:\PrecautionRecord\<機台 ID>_<時間>_<注意事項內容>.txt`、`D:\MajorMaintenanceRecord\<機台 ID>_<時間>_<備註第一行>.txt`，客戶設定的分享路徑（asB01／asB02）也照同一個名字再存一份。golden 沒有過濾（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cObserver.cpp`:4309-4383 SavePrecautionMemoInformation、:4542-4620 SaveMajorMaintenanceInformation）——注意事項如果打成 `..\..\HT9045\system\X`，就會在 `D:\HT9045\system\` 底下建立或**蓋掉**任何這個程式寫得到的 .txt（存檔會先清空舊檔）。BCB6 本來就有這個洞；移植版的文字是從瀏覽器送進來的（只聽 127.0.0.1、要有操作權杖）。
+**選項**：
+- A：照 golden，文字組出什麼路徑就寫什麼路徑。例：注意事項打「..\..\HT9045\system\X」，存檔後 `D:\HT9045\system\` 底下多一個（或被蓋掉）`X.txt`。
+- **B（St01 建議）**：移植版自己加一道：文字裡有 `\ / : * ? " < > |` 或 `..` 時拒絕存檔並提示，一般註記（中文、英文、數字、空白、- _ 等）完全不受影響。例：打「換吸嘴 -- 0.5mm」照常存；打「..\x」畫面回「檔名不能含路徑字元」，不存。
+**在哪看**：E-021（ST01-E 在 `v906/st01-q59` 做，commit 本文會附出處）；待人審 C12。
+**目前狀態**：等 Steven 回。回法：「Q66 A」或「Q66 B」。沒回之前照 B（一行開關，選 A 就切回 golden）。
+**Steven 的裁決**：原話「B」（Steven 1002 08:0x）⇒ 保養紀錄檔名有 `\ / : * ? " < > |` 或 `..` 就拒絕存檔，一般註記不受影響；E-021 的暫行做法即定案，註解改寫。
+
+### Q67. 機台運轉中，要不要讓操作員在 Status.ShowBinSelect 的 Index 分頁按 Auto Clean？（E-023 SB-1，St01）
+（ST01-E 1002 06:0x 提出；ST01-M 登記）
+**機台上會發生什麼**：Status.ShowBinSelect 視窗是非模態的，運轉中也開得著；golden 允許運轉中按 Index 分頁的 Auto Clean（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\main.cpp`:9190-9195）。按下去會看當時狀態走兩條路之一：
+- 機台裡有料：預約一次 Auto Clean／One Cycle——只設旗標，不直接動馬達；但 golden 的 InitOneCycle（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\csystem.cpp`:391）會**在運轉中把 iOneCycle／iCleanOut／iHome／iReset／iTrayFeed 這些流程進度歸零**。
+- 機台空的：golden 會先檢查四件事（要先 Home、Tray 手臂不在安全位置、Index Z 不在安全位置、Index 不在待命位置，`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cShowBinSelect.cpp`:2275／:2281／:2287／:2295／:2303），不符合就跳拒絕框；golden 的拒絕框一跳出來就會 **SystemStart＝false、SoftStart＝false、StopAllMotor**（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\mymessbox.cpp`:303-308）——運轉中 Tray 手臂正在動時就可能碰到，等於**按一下就停掉所有馬達**。
+移植樹（E-023，ST01-E 在 review6 做）目前運轉中按這顆會被拒（SystemStart 或 SoftStart 時），停機時按照 golden。
+**為什麼要問**：照 Q61「依照golden」應該放行；但運轉中會直接停所有馬達、也會把流程進度歸零，屬於 Q59 說的「馬達／IO 安全要 Steven 先看」，跟 Q65（運轉中動 OTD 氣缸）同一類，所以 ST01-M 不自己套 Q61。
+**選項**：
+- **A（St01 建議）**：維持拒絕（比 golden 嚴）。例：機台在跑時按 Index 分頁 Auto Clean，畫面回「運轉中不能操作」，什麼都不會發生；要清料先停機再按。
+- B：照 golden 放行。例：機台在跑時按下去，有料就預約 Auto Clean 並把其他流程進度歸零；空機而手臂不在安全位置就跳框並停掉所有馬達——跟 BCB6 一樣。
+**在哪看**：E-023 commit 本文（推上 review6 後）；待人審會列 A＋B。另外同頁的 Copy Recipe 照 golden 運轉中也能按（golden 沒有閘，只列 B 告知，不問）。
+**目前狀態**：等 Steven 回。回法：「Q67 A」或「Q67 B」。沒回之前照 A。
+**Steven 的裁決**：原話「可以按, 按了之後機台會執行one cycle, 然後才是auto clean」（Steven 1002 08:0x）⇒ B：Status.ShowBinSelect Index 分頁的 Auto Clean 運轉中照 golden 放行，預期行為＝先跑 One Cycle 再 Auto Clean；golden 空機時的拒絕框（含 StopAllMotor）照 golden 保留。ST01-E 在 review6 跟進，EastSun 驗。
+
+### W64. HANA RMS（客戶 HANA Micron 的配方伺服器連線）還要照 912 補進移植樹嗎？（H-013 第 3 項，St02）
+（St02-M 在 FROM_STEVEN §4 20261001 19:56 請 ST01-M 轉）
+**背景**：0926 你裁 11＝B「測試通訊這邊一起補」：照 912 補 S10F3 警報視窗、安全 PLC、HANA RMS。今天 14:2x Jimmy 的 RULINGS_20261001 第 26 條說「912是9046量產機版本，和我們進行的HT9050沒有關係，9050目前是用906 C++版本」。前兩項（7 行、值不變）St02 已照做、Jimmy 20:0x 同意；**第 3 項 HANA RMS 要不要補**變成問題。
+**份量與影響**：912 `Automation/automation.cpp`:2514-3158 約 650 行翻成 St02 新檔＋筆電 3 行，拿掉 St02 HandlerBridgeCtl.cpp 的 G9；只有 `CUSTOMER_CODE==CC_HANA_MICRON` 且 A77 打勾的機台會不一樣；912.0 這版本身有現場缺陷（開機只連一次、伺服器 30 秒閒置就斷）。要補的話還會多一題新設計（HANA RMS 設定／紀錄的網頁畫面，網頁上沒有可以掛的頁）。
+**選項**：
+- A：照 912 補（650 行＋之後問網頁畫面）。例：HANA Micron 機台勾 A77 後，開批會跟 HANA 的 RMS 伺服器比對配方。
+- **B（ST01-M 建議）**：照第 26 條，9050 用 906 golden——G9 改回 906 的文字（906 沒有 HANA 區塊），912 的 HANA RMS 留給之後真的要給 HANA 機台時再做。例：移植樹不連 HANA RMS，跟今天一樣。
+**在哪看**：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20261001.md`:161-166、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\TESTERCOMM_PORT_LEDGER.md`:182／:194-195、交接分支 `docs/handoff/ST02_H013_PLAN_20261001.md` §5。
+**目前狀態**：等 Steven 回。回法：「W64 A」或「W64 B」。
+**Steven 的裁決**：原話「A 912版本是比較新的, 另外Hana目前由RogerYang維護, 以RogerYang的註解為準」（Steven 1002 08:0x）⇒ 照 912 補 HANA RMS（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\Automation\automation.cpp`:2514-3158 → St02 自己的檔＋筆電 3 行，拿掉 St02 的 G9）；912 程式裡有 RogerYang 註解的地方以註解為準。是 RULINGS_20261001 第 26 條「912 跟 HT9050 無關」對 HANA 這一塊的例外（已告訴筆電）。St02 做（H-013 第二顆）。
+
+### W65. TesterIF 的 RS232 多出來的選項（Bit Length 5／6、Stop Bit 1.5、Parity Mark／Space）要正式保留嗎？（TesterIF 5B，St02）
+（St02-M 在 FROM_STEVEN §4 20261002 02:21 請 ST01-M 轉）
+**畫面上會發生什麼**：Setup 的 TesterIF 頁，RS232 設定裡的 Bit Length、Stop Bit、Parity 三組選項，現在比 BCB6 多幾個：Bit Length 多 5 Bits、6 Bits；Stop Bit 多 1.5 Bits；Parity 多 Mark、Space。多出來的都接在 golden 原本選項的後面，所以配方裡存的索引（0、1、2…）原本代表什麼還是一樣。這是 0926 Tester 通訊計畫裁決 5＝B 加的，但程式註記還寫「暫照建議，待使用者確認 decision #5」。
+**選項**：
+- **A（St02 建議）**：確認保留（就是現狀）。例：客戶的測試機要 7E1.5 或 Mark 同位，操作員可以直接選；舊配方打開，選項不變。RS232Standard 那邊的對應已做好。
+- B：照 golden 拿掉這幾個多出來的選項。例：選項跟 BCB6 一模一樣，只有 golden 原本的那幾個。
+**在哪看**（main `19e8826c`）：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\TestIF_File_TesterIF.cpp`:258-265（附加選項）、`D:\HT9045\web\page\Setup.TesterIF.html`:56（rgBitLength／rgStopBit／rgParity）、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\TesterComm\Rs232SetupCodes.h`（Setup.ini 對應）；盤點 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\TESTERIF_FIELD_AUDIT_20261002.md` §6 P7（St02 MR !92，合進 main 前在 `v906/st02-tif-audit`）。
+**目前狀態**：等 Steven 回。回法：「W65 A」或「W65 B」。沒回之前照 A（現狀）。
+**Steven 的裁決**：原話「A」（Steven 1002 08:0x）⇒ TesterIF 多出來的 RS232 選項（Bit Length 5／6、Stop Bit 1.5、Parity Mark／Space，接在 golden 選項後面）正式保留；程式裡「待使用者確認 decision #5」的註記改寫（St01 檔由 ST01-E、St02 檔由 St02）。
+
+### 20261002 12:2x Steven 裁決：W66（從 decisions-pending.md 搬來）
+
+### W66. HANA RMS 的設定與連線紀錄要不要做網頁畫面？（C10，St02）
+（St02-M 在 CHAT_ST02 20261002 10:30 請 ST01-M 轉；W64＝A 之後的新設計題）
+**畫面上會發生什麼**：golden 912 在 Configuration 頁 A77 旁邊有一顆鈕，打開 HANA RMS 分頁（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\Automation\automation.dfm`:468-723 tsHANARMSInterlock：IP、Port、HDNAME、連線紀錄）；移植樹的 `D:\HT9045\web\page\Config.Configuration.html`:70 有 cbA77 勾選框、沒有那顆鈕。
+**選項**：
+- A：照 912 版面做新頁面。例：操作員在網頁上改 HANA 的 IP 就生效、看得到連線紀錄。
+- **B（St02 建議）**：先不做——只有 HANA Micron 且勾 A77 的機台會用到；設定直接改 `HANARMS.ini`、紀錄看 `D:\HT9045_Log\HANARMS\`，等真的有 HANA 機台要上線再做。
+**目前狀態**：等 Steven 回。回法：「W66 A」或「W66 B」。沒回之前照 B。
+**Steven 的裁決**：原話「W66. HANA RMS 的設定與連線紀錄要不要做網頁畫面？ B（St02 建議）：先不做」（1002 12:2x）⇒ HANA RMS 不做網頁設定／紀錄頁；設定改 `HANARMS.ini`、紀錄看 `D:\HT9045_Log\HANARMS\`，等真的有 HANA 機台要上線再做。St02 的 C10（照 912 補 HANA RMS 本體）照常進行。
+
+### 20261002 12:2x Steven 裁決：Q68／Q69（從 decisions-pending.md 搬來）
+
+### Q68. HW.HandlerSys 頁的開頁閘要不要綁 golden 的隱藏手勢＋密碼？（E-023 TP-2，St01）
+（ST01-E 1002 07:5x 提出；ST01-M 登記）
+**畫面上會發生什麼**：golden 只能經由 Status.TemperFrom 頁的隱藏手勢進 Handler System：連點三顆溫度燈號（Panel71～73MouseDown，`D:\HT9045\HT9011UC_Code_V3.33.906.0_20260625_Steven\cTemperFrom.cpp`:1692-1769）→ 輸入密碼 → 才開 TfHandlerSystem。E-023（review6 `f8da6505`）已照 golden 做好這個手勢＋密碼（密碼只在 C++ 比對，網頁、回覆、log、測試輸出都看不到）。但網頁版的 HW.HandlerSys 頁另外有自己的開頁閘（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_EditPage.cpp`:899 GHandlerSys），**只查等級＋運轉中**，沒有綁這個手勢＋密碼——從別的地方開這頁（例如 background.html 裡 debugOnly 的 handlersys 視窗）就繞過了手勢與密碼。
+**選項**：
+- A：維持現狀（等級閘）。例：等級夠的人從選單直接開 HW.HandlerSys，不用手勢也不用密碼。
+- B：要先用 TP-2 手勢＋密碼拿到一次性的解鎖權杖，HW.HandlerSys 才開得了（照 golden 唯一入口）。例：沒做手勢就開這頁，畫面回「請先從 TemperFrom 解鎖」。會動到 HSys 相關測試（如 OpenEnterLog）與筆電的 `D:\HT9045\web\page\background.html`。
+**在哪看**：review6 `f8da6505` commit 本文；待人審 C15。
+**目前狀態**：等 Steven 回。回法：「Q68 A」或「Q68 B」。沒回之前照 A（現狀）。
+**Steven 的裁決**：原話「Q68. HW.HandlerSys 頁的開頁閘要不要綁 golden 的隱藏手勢＋密碼？ 先按照現況, 以後再說」⇒ A：HW.HandlerSys 維持等級閘，不綁 TP-2 手勢＋密碼；以後再議。
+
+### Q69. HT9050 的主畫面溫度要不要另外設計？（ST01-E2 溫度對照，St01）
+（ST01-E2 1002 09:4x 依 Steven「溫度怎麼顯示在主頁上」整理時發現；ST01-M 登記）
+**畫面上會發生什麼**：golden 的溫度畫面（Status.TemperFrom＋主畫面溫度格）是照 HT9045 系列排的：Index 4／16／32、DUT 2／4、TriTemp、ATC 各有版面，**沒有 HT9050 自己的版面**；HT9050 的 DTM 溫控走 HT9045 的 Index 順序（iTempCode），跟 HT9050 三站的實際配線對不上——照 golden 移植，HT9050 上看到的溫度格會跟實際站位不對應。對照表在 `D:\HT9045\.claude\skills\ht9045-temperature\references\main-screen-display.md`（MR !103，合進 main 前在 `v906/steven-st01e2-temp-display`），71 個通道各對到哪台溫控器的哪個 CH。
+**選項**：
+- A：維持照 golden（HT9045 的版面與順序），等之後真的要給 HT9050 客戶再設計。例：HT9050 開機看到 HT9045 的溫度格，站位對應要對照表才看得懂。
+- B：現在就設計 HT9050 的溫度版面（三站、照實際配線排），屬新設計，要定版面再做。例：HT9050 的畫面直接顯示站 1／2／3 的實際溫度。
+**目前狀態**：等 Steven 回。回法：「Q69 A」或「Q69 B」。沒回之前照 A。
+**Steven 的裁決**：原話「HT9045跟HT9050都要新的設計, 你先給我個提案吧, 可以用你能顯示的方式顯示給我看」⇒ 不是 A 也不是單純 B：**HT9045 與 HT9050 的主畫面溫度都要新設計**；ST01-M 先出提案（畫面示意），Steven 看過再定。登記為 todo E-027。
+
+### 20261002 16:3x Steven 裁決：Q71／Q72（Steven 直接回 ST01-E 的提問，沒有經過 decisions-pending.md）
+
+### Q71. Heater 分頁要加 EJ1N、DTM 兩種溫控器，代碼存在哪？（E-029，St01）
+（ST01-E 1002 16:3x 用 AskUserQuestion 問；ST01-M 登記）
+**畫面上會發生什麼**：HW.HandlerSys 的 Heater 分頁每個通道選一種溫控器廠牌，存進 `D:\HT9045\system\Gerneral.ini` [TempCtrl] HeaterInsOpt_<通道>；golden 只有 5 種廠牌，EJ1N、DTM 選不到。
+**Steven 的裁決**：「同一個鍵加新代碼」⇒ **EJ1N＝5、DTM＝6，存同一個 [TempCtrl] HeaterInsOpt_<通道> 鍵**。Steven 接受風險：BCB V912 不認得 5／6，golden 的廠牌分派也沒有 else（舊程式讀到會落空）。
+
+### Q72. Index 區選 EJ1N／DTM 時，要不要自動改 [System] USE_16_HEATER？（E-029，St01）
+（ST01-E 1002 16:3x 用 AskUserQuestion 問；ST01-M 登記）
+**畫面上會發生什麼**：Steven「使用 EJ1N 或是 DTM 應該是要設定兩個變數」——Index 區的溫控器廠牌與 `D:\HT9045\system\Gerneral.ini` [System] USE_16_HEATER（Index 加熱數與型式）是兩個鍵。
+**Steven 的裁決**：「自動連動」⇒ **Index 區 EJ1N／DTM ↔ [System] USE_16_HEATER 雙向自動連動**（ST01-E 轉述：USE_16_HEATER 的值 2／3、5／6，保留 16／32 的數量；對應細節見 E-029 的 commit），一次存檔寫兩個變數。
+
+### 20261002 17:1x Steven 裁決：Q73～Q76（Steven 在 ST01-E2 的對話裡回，每題都選建議；ST01-E2 轉 ST01-M 登記）
+
+### Q73. Heater 分頁「全機相同」與「各溫控器不同」時，EJ1N／DTM 出現在哪？（E-029，St01）
+**Steven 原話**：「當選擇全機相同, 那就是 index 跟其他部位的分成兩種溫控器進行選擇 EJ1N 跟 DTM 在index站都是可以選的」「當選擇全機不同單獨設定, 那就是每個位置要可以單獨設定, 包含使用 EJ1N跟DTM」「index區裡面, Head 1234 跟 Ax Bx這32組屬於互斥的, 也就是同時間只會顯示其中的一種」「socket跟 Dut 1~4也是互斥的」
+**Steven 的裁決**：**全機相同**＝Index 與其他部位分兩個下拉：EJ1N／DTM 只出現在 Index 的下拉，其他部位維持 golden 5 種廠牌；**各溫控器不同**＝每個通道都可選 7 種廠牌（含 EJ1N、DTM）。取代 Q34 的 Index 鎖（W906_HeaterInsIndexLocked）。跟 golden 不同（golden 沒有 EJ1N／DTM）→ 待人審 B。
+
+### Q74. Index 區的 Head1～4 與 Ax／Bx 32 組怎麼互斥？（E-029，St01）
+**Steven 的裁決**：照 rgHeater（Index Heater Counts）：4 個 → Head1～4；16 個 → Aa1～Bd2；32 個 → Aa1～Bh2；同時只顯示一種。**刻意偏離 golden**：golden V912 `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\MachineTypeUtility.cpp`:241-293 在 16／32 時仍顯示 Head1～4 → 待人審 B。
+
+### Q75. Socket 與 DUT1～4 怎麼互斥？（E-029，St01）
+**Steven 的裁決**：照 rgUse4DUT（Dut Heater Count）：1 EA → Socket；2 EA → DUT1～2；4 EA → DUT1～4；同時只顯示一種。等於打開 golden `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\MachineTypeUtility.cpp`:268 被註解掉的 Socket 那行。
+
+### Q76. 頁面上改 rgHeater／rgUse4DUT 時，顯示的通道要不要即時跟著變？（E-029，St01）
+**Steven 的裁決**：要，即時變。golden 只在開機時算一次，這是新行為 → 待人審 B。
+
+### 20261002 20:4x Steven 裁決：Q70（從 decisions-pending.md 搬來）
+
+### Q70. EastSun 的機台建不出 review6，「EastSun 驗過才進 main」做不到——review6 要不要先進 main，讓 EastSun 在下一個安裝包上驗？（ST01-M 1002 13:1x 登記）
+
+- **現在的作法**：Steven 1001 09:4x 規定上機驗證一律請 EastSun。St01 把要上機看的一般修改放在 review6 分支（`v906/steven-cbridge-review6`），EastSun 驗過才合進 main。Steven 要先看的加熱／馬達／IO 安全項目另放側分支（例如 `v906/st01-d026`），不在 review6。
+- **卡在哪**：已交 EastSun 六批（be065d1e、05e3f181、6dd4a772、91e136d4、d6cda69d、39293c0f），第七批 8d8b1345 正在跑兩組態測試，**結果都還沒回**。筆電 1002 12:2x 回報（main 分支 `docs/handoff/TO_STEVEN.md` 第 455 列）：EastSun 那台機台**沒有 GitLab 權限，只收從 main 做的 GitHub 安裝包**，所以拿不到 review6。照現在的規則，這七批永遠驗不了。
+- **EastSun 要驗的清單**：`D:\HT9045\.claude\skills\ht9050-construction\references\human-review.md` A 區（A35～A48），例如 A46「運轉中按 Contact 頁 OTD 面板，對接氣缸照 golden 動作」（Steven Q65＝B）、A47「運轉中按 Auto Clean，先 One Cycle 再 Auto Clean」（Steven Q67＝B）。
+- **A（筆電提議，ST01-M 建議）**：review6 先進 main。St01 在 §2 寫可以合到第七批 8d8b1345（兩組態測試綠了才寫），筆電照常兩組態測試後合進 main；機台下一個安裝包就有，EastSun 在那上面照 A 區清單驗，有問題 St01 直接在 main 上修。例：EastSun 拿到第 126 包，逐項試 A35～A48，A46 氣缸動作跟 BCB6 不同 → 回報 → St01 修 → 下一包。代價：還沒上機驗過的修改先進 main。這些都是一般項目，Steven 先看的安全項目在側分支、不受影響。
+- **B**：review6 不進 main，請 Jimmy 另外從 review6 打一個安裝包給 EastSun。例：Jimmy 打一包「review6-8d8b1345」，EastSun 驗完再合 main。代價：Jimmy 那邊要多一條打包流程，而且 review6 會一直跟 main 分開，越拖衝突越多（今天第三輪機台整合已造成 5 支檔衝突，ST01-E 正在解）。
+- **C**：維持現狀，等 EastSun 自己有辦法拿 review6。例：七批繼續放著。代價：驗不了，review6 離 main 越來越遠。
+- **登記時的狀態**：等 Steven 選。筆電說 Steven／St01 同意之前，review6 不進 main。
+
+**Steven 的裁決**：原話「Q70：review6 要不要先進 main。def051af 的測試已經跑完，跟基準一樣。  做完就可以push」⇒ **A：review6 進 main**（ST01-M 這樣理解，Steven 可以更正）。
+**接下來**：ST01-E 的一次合併（E-029＋ST01-E2 版面 `f533d227`＋溫度 skill `caecc89f`＋main `48f97f51`，本機 `fb31e431`）兩組態測試綠了就推 review6；ST01-M 的排隊 gate `D:\AI_TempFile\st01-chain-115-review6.ps1`（q59 `4410648f` → MR !115 協助合併 `cd013917` → review6 新頭）跑完全量兩組態 gate，綠了在 FROM_STEVEN §2 寫「review6 可以合進 main 到 <hash>（Steven Q70＝A）」；EastSun 在 main 做的下一個安裝包上照 `D:\HT9045\.claude\skills\ht9050-construction\references\human-review.md` A 區驗，有問題 St01 在 main 上修。

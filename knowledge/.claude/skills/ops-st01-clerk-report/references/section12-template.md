@@ -72,7 +72,7 @@
 沒列到的一律以 decisions-pending.md 為準；本節和 decisions-pending.md 對不起來時，下一輪記錄員核實再回報。
 ```
 
-條目數核對：`grep -c "^### [QRW][0-9]" D:\HT9045\.claude\skills\ht9050-construction\references\decisions-pending.md` 的數字＝本節逐題（或併條裡逐題點名）的題數。
+條目數核對：`grep -c "^####* [QRW][0-9]" D:\HT9045\.claude\skills\ht9050-construction\references\decisions-pending.md` 的數字＝本節逐題（或併條裡逐題點名）的題數。
 
 ## 12.5 交給 Jimmy／其他 Steven session
 
