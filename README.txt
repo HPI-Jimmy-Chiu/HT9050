@@ -625,4 +625,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   web 0081 ac1225f PKG-120-123 —— 同上（19 支接線檔範圍、qwerty 小數、Teach 頁、CommView、ht9045_kb_generic.js）。
   cpp 0125 b651217 WORKLOG —— 工作紀錄第 75～76 項、§3 一列。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0126 0192f29 F5-PROGRESS 復原 —— F5 的三個編譯工作改回直接呼叫 cmake（09:33 F5 編譯沒有啟動；tasks.json 回到早上之前的內容）。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
