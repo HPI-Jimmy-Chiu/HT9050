@@ -1,0 +1,90 @@
+From fa2181490c72bbba8c1685160b0a3f5d38cff632 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 2 Oct 2026 08:31:16 +0800
+Subject: [PATCH] F5-PROGRESS / HMI-SECOND: F5 never looks dead -- the wait
+ page shows the build's progress, and an HMI window left open goes to the wait
+ page
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 20261002: 「又出現 我按F5 編譯沒反應 我把UI 關掉 才編譯的情況」.  Measured (hmi_shell.log, the build dir, oplog): F5 at 08:16:56 opened
+the wait page and started the build in the same second; the build ran 6 minutes (390 objects -- cmydef.h had changed with laptop
+packages 112-113) while the page said only 「還沒回應」, covering VS Code, so it looked dead and the window was closed at 08:17:40.
+
+* tools/build_with_status.ps1 (new): the same cmake --build (every line passed through for the terminal and the problem matcher,
+  cmake's exit code returned), writing web/JSON/runtime/boot_build.js every 0.5 s (percent, objects built, current file, errors).
+* .vscode/tasks.json: the three IOWEB builds (ship, -O2, DEBUG) run through it; same build dir, target and -j 6.
+* web boot_wait.html (separate commit): reloads that file every second -- 「編譯 NN%（已編 N 個檔）／目前：<file>」, 「編譯完成，程式啟動中」,
+  and on a failed build 「編譯失敗」 + the first error line; a status older than the page is ignored; a long build no longer
+  triggers the 3-minute warning.
+* tools/hmi_shell/hmi_shell.cpp: a second start hands its URL to the running window (WM_COPYDATA) instead of only bringing it to
+  the front, so an HMI window left on the old page goes to the wait page F5 asked for.
+
+Verified: the wrapper on build_integ_ship_x86_o2 (up to date, rc 0, state done) and on a missing target (rc 2, state failed);
+headless Edge on a copy of boot_wait.html: building / done / failed / stale each shown as above; tasks.json parses (19 tasks);
+build_hmi_shell.bat rc 0.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ boot_wait.html | 37 ++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 36 insertions(+), 1 deletion(-)
+
+diff --git a/boot_wait.html b/boot_wait.html
+index a02649f..76a9529 100644
+--- a/boot_wait.html
++++ b/boot_wait.html
+@@ -117,7 +117,8 @@
+     var s = secs();
+     tm.textContent = s.toFixed(1) + ' s';
+     setPct(95 * (1 - Math.exp(-s / (EXPECT / 2))));                 // 前面走得快、越接近越慢，不會到 100
+-    if (s >= 180 && !warn.classList.contains('show')) {
++    if (B && B.state === 'building') { setPct(Math.max(95 * (1 - Math.exp(-s / (EXPECT / 2))), B.pct * 0.6)); }   // AI(W906-F5-PROGRESS) 20261002: the build is the first part
++    if (s >= 180 && !(B && B.state === 'building') && !warn.classList.contains('show')) {   // AI(W906-F5-PROGRESS): a long build is not "stuck"
+       warn.textContent = '已經超過 3 分鐘還沒起來：請看 VS Code 有沒有跳出「preLaunchTask 錯誤」，或下方「偵錯主控台」的最後幾行。';
+       warn.classList.add('show');
+     }
+@@ -150,6 +151,40 @@
+     img.onload = once;
+     img.src = base + 'img/homemode/MODE2_Lmt.png?bootwait=' + Date.now();
+   }
++  // ---- AI(W906-F5-PROGRESS) 20261002: EastSun「我按F5 編譯沒反應 我把UI 關掉 才編譯」-- the F5 build (tools/build_with_status.ps1)
++  //   writes JSON/runtime/boot_build.js every 0.5 s; this page reloads it as a <script> (file:// cannot fetch) and shows it.
++  //   Only a status written after this page opened (minus 15 s) counts -- an old file from a previous build is ignored.
++  var B = null, opened = Date.now();
++  function showBuild() {
++    if (done || !B) return;
++    if (B.state === 'building') {
++      loading.textContent = '編譯中，完成後自動啟動 / Building ' + B.pct + '%';
++      cnt.textContent = '編譯 ' + B.pct + '%（已編 ' + B.n + ' 個檔，' + B.elapsed + ' 秒）';
++      file.textContent = B.file ? ('目前：' + B.file) : '準備中…';
++    } else if (B.state === 'done') {
++      loading.textContent = '編譯完成，程式啟動中 / Starting';
++      cnt.textContent = '編譯完成（' + B.n + ' 個檔，' + B.elapsed + ' 秒），等待伺服器回應';
++      file.textContent = base + ' 還沒回應（讀設定 → 建立畫面 → 開 1203 卡）';
++    } else if (B.state === 'failed') {
++      done = true;
++      loading.textContent = '編譯失敗 / Build failed';
++      cnt.textContent = '錯誤 ' + B.errors + ' 個';
++      file.textContent = B.lastError || '';
++      warn.textContent = '編譯失敗，程式不會啟動：請看 VS Code 下方「終端機」的紅字（第一個 error 那一行），修好再按 F5。';
++      warn.classList.add('show'); root.style.cursor = 'default';
++    }
++  }
++  function pollBuild() {
++    if (done) return;
++    var old = document.getElementById('htBuildStatus'); if (old) old.parentNode.removeChild(old);
++    var sc = document.createElement('script'); sc.id = 'htBuildStatus';
++    sc.src = 'JSON/runtime/boot_build.js?t=' + Date.now();
++    sc.onload = function () { var b = window.__HT_BUILD; if (b && b.t >= opened - 15000) { B = b; showBuild(); } };
++    sc.onerror = function () {};
++    document.head.appendChild(sc);
++  }
++  pollBuild();
++  setInterval(pollBuild, 1000);
+   setInterval(tick, 200);
+   tick();
+   probe();
+-- 
+2.55.0.windows.5
+

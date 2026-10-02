@@ -613,4 +613,9 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     ②IO 視窗打開時 C++ 照原版抱住 Index 煞車（SwFMotorBreaker／SwBMotorBreaker Off）並記錄 Index 四軸位置，運轉中不做。ctest IoFormShow。
   cpp 0120 befb016 WORKLOG —— 工作紀錄第 72～73 項；§4 記 EastSun「剩下照 BCB」。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0121 a87f2a5 F5-PROGRESS／HMI-SECOND —— F5 的等待畫面顯示編譯進度（tools/build_with_status.ps1 寫進度、tasks.json 三個編譯改走它）；
+                    HMI 視窗程式第二次啟動時把網址交給已開的視窗（舊視窗直接換到等待畫面）。
+  web 0079 fa21814 F5-PROGRESS —— boot_wait.html 每秒讀進度：編譯 NN%／目前檔案／完成／失敗＋第一個錯誤。
+  cpp 0122 0b4c97d WORKLOG —— 工作紀錄第 74 項。
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
 MD5 清單在 MANIFEST_MD5.tsv。
