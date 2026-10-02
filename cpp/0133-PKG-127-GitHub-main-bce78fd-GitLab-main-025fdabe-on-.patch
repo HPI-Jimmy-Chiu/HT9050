@@ -1,0 +1,1505 @@
+From bf0b457963a51a43c1f08a0bda0da20ee55b38b8 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 2 Oct 2026 19:22:05 +0800
+Subject: [PATCH] PKG-127: GitHub main bce78fd (GitLab main 025fdabe) on the
+ machine -- laptop batch 41 (a notice's confirm pauses as golden, a blocking
+ alarm's PAUSE sends DoPause + ESD stop), Ifor !106 (I-03
+ temperature-controller serial line, ThermoComm yields); the machine's web
+ 0083/0084 already identical
+
+check_and_copy: SAME 2 (web) / NEW 1 / OLD 9 / LOCAL 2. The two LOCAL files (tests/CMakeLists.txt,
+tools/wb_serve.cpp) were merged three-way against the package's own base_8f3cdc53 (= package 126,
+which the machine had integrated): 0 conflicts (the machine-history base the script picked gave
+2 / 6 false conflicts). tests/CMakeLists.txt gains the test_thermo_comm block; the one extra
+LINK_GROUP line is that block's own, not a duplicate. Package files were LF, put back to CRLF.
+Package 128 (bce78fd..5c3a4a8, HT9050-ORG-ST + SensorType=1 on Mot_Table) not applied: EastSun 1002.
+
+o2 (build_integ_ship_x86_o2): wb_serve + test_thermo_comm + test_notice_ack build;
+ctest ThermoComm / NoticeAck 2/2; pe_truncation_check 94/94.
+---
+ atester_shims.h                  |   8 +-
+ bthermo.cpp                      | 114 ++++++------
+ cpublic.cpp                      |  90 +++++-----
+ docs/INBOX_QUEUE.md              |   6 +-
+ docs/MACHINE_PATCHES_20261002.md |  10 ++
+ docs/NIGHT_REPORT.md             |  11 +-
+ forms/fNote_ShowError.cpp        | 110 ++++++++++--
+ rs232.cpp                        | 221 +++++++++++++++++++++++-
+ tests/CMakeLists.txt             |  16 +-
+ tests/test_notice_ack.cpp        |  52 ++++--
+ tests/test_thermo_comm.cpp       | 287 +++++++++++++++++++++++++++++++
+ tools/wb_serve.cpp               |   4 +-
+ 12 files changed, 781 insertions(+), 148 deletions(-)
+ create mode 100644 tests/test_thermo_comm.cpp
+
+diff --git a/atester_shims.h b/atester_shims.h
+index b2f3f49..5528472 100644
+--- a/atester_shims.h
++++ b/atester_shims.h
+@@ -422,7 +422,7 @@ public:
+     //  ⚠ 沒有搬的：HP 通訊卡（TorqueUseHPComCard）那一半 —— 見 rs232.cpp 檔頭「HP 通訊卡為什麼閘著」。
+     //    RTC 視覺（bRealTimeCom_ReceiveOK／SendCommToVision…）、溫控 Comm2、ATC、PadComm 都不是這條路，沒動。
+     // -----------------------------------------------------------------------
+-    TComm *Comm1;                                                    // golden rs232.h:15 (rs232.dfm:39 object Comm1: TComm)
++    TComm *Comm1;  TComm *Comm2;                                     // golden rs232.h:15 (rs232.dfm:39 object Comm1: TComm); Comm2 = golden rs232.h:14 (rs232.dfm:8, the temperature-controller port) -- AI(W906-I03) 20261002 (Ifor01), same line
+     void RS232Init();                                                // golden rs232.h:70  (body rs232.cpp:149-688)
+     void TorqueSend(unsigned char *str, int len);                    // golden rs232.h:71  (rs232.cpp:765)
+     void ReadTorque();                                               // golden rs232.h:74  (rs232.cpp:809)
+@@ -450,12 +450,12 @@ public:
+     int  rwCommandDelay;                                             // golden rs232.h:173
+     TQPF_Timer iWriteAndCheckMotorTorqueDelay;                       // golden rs232.h:174（WebStart.cpp 照 golden main.cpp:5528 呼叫 .On()）
+     bool fPanasonicParameterRW;                                      // golden rs232.h:179
+-    void Comm1ReceiveData(void *Sender, void *Buffer, unsigned short BufferLength);   // golden rs232.h:28 (rs232.cpp:1750)
++    void Comm1ReceiveData(void *Sender, void *Buffer, unsigned short BufferLength);   void Comm2ReceiveData(void *Sender, void *Buffer, unsigned short BufferLength);   // golden rs232.h:28 (rs232.cpp:1750); Comm2ReceiveData = golden rs232.h:26 (rs232.cpp:721-757) -- AI(W906-I03) 20261002, same line
+     // 不是 golden 的成員：golden 的 SPComm 在主執行緒、以 ReadIntervalTimeout=100 ms 切好一包才呼叫 Comm1ReceiveData；
+     //   vclcompat 的 TComm 在讀取執行緒上逐塊呼叫。這兩支把那個語意補回來 —— 讀取執行緒只排隊，
+     //   MainProc 的節拍（ReadTorque／ReadWriterParameter 開頭）才交付。理由與細節見 rs232.cpp 檔頭。
+-    void W906_Comm1QueueRx(void *Buffer, unsigned short BufferLength);
+-    void W906_PumpComm1();
++    void W906_Comm1QueueRx(void *Buffer, unsigned short BufferLength);  void W906_Comm2QueueRx(void *Buffer, unsigned short BufferLength);   // AI(W906-I03) 20261002: Comm2 the same way (rs232.cpp EOF), same line
++    void W906_PumpComm1();  void W906_PumpComm2();  void W906_Comm2DfmBoot();   // AI(W906-I03) 20261002: W906_PumpComm2 = bthermo.cpp DoThermo's first line; W906_Comm2DfmBoot = rs232.dfm:8-38 design-time values (ctor), same line
+     void W906_CreateFormBoot();                                      // golden TCOM2 建構子（rs232.cpp:95-125）裡讀 Gerneral.ini 的那一段；
+                                                                      //   在 golden CreateForm(TCOM2) 的位置（HT9045.cpp:174）由 wb_serve 呼叫
+ private:
+diff --git a/bthermo.cpp b/bthermo.cpp
+index 3b99eb4..5db65e5 100644
+--- a/bthermo.cpp
++++ b/bthermo.cpp
+@@ -1271,16 +1271,16 @@ void DoThermo()
+ //  PageControl1, no ecp1TabSheet9.  Cannot compile.
+ //  ACTIVE DEFAULT: the early-return is dropped.  Offline the Config form is never shown, so the
+ //  guard could never fire -- no observable delta.
+-#if 0 // TODO(W7-UI G14a): golden :1004-1005
+-    if(fConfiguration->fShow==true && fConfiguration->PageControl1->ActivePageIndex==fConfiguration->ecp1TabSheet9)
+-        return;
+-#endif // TODO(W7-UI G14a)
++//AI(W906-I03) 20261002 (Ifor01): GATE W7-UI G14a OPENED (the 20260807 note above is history) -- H1-08's substitution (csystem.cpp:24854): fShow -> page table, ActivePageIndex -> FileRW_ProxyPageIndex, ecp1TabSheet9 = 1 (golden cConfiguration.h:2370 = tsTempComm); -1 in programs without FileRW
++    { extern int FileRW_ProxyPageIndex(const char* form, const char* name); if(W906_FormShowing("fConfiguration", false)==true && FileRW_ProxyPageIndex("TfConfiguration", "PageControl1")==1)   // golden :1004 fConfiguration->fShow==true && fConfiguration->PageControl1->ActivePageIndex==fConfiguration->ecp1TabSheet9
++        return; }                                                               // golden :1005
++//AI(W906-I03) 20261002: (the old #endif of G14a)
+ 
+     static bool bMultiple=false;
+     if(bMultiple==true)
+         return;
+ 
+-    bMultiple=true;
++    bMultiple=true;  { extern void W906_PumpTempComm2(); W906_PumpTempComm2(); }   //AI(W906-I03) 20261002: Comm2 的收件交付（rs232.cpp：讀取執行緒排隊、這裡安靜滿 100 ms 才交給 golden Comm2ReceiveData），在 DoThermoReal 讀 Com2ReceiveOK 之前
+     DoThermoReal();
+ 
+     if(ATC_SYSTEM==eWinWay && Temperature.bATCActiveCooling==true)              //Jimmychiu 20210906
+@@ -1706,7 +1706,7 @@ void DoThermoReal()
+ //AI(W906-GA-BTHERMO) 20260807: GATE W7-UI G14b -- golden :1408 fConfiguration->fShow (same unported form).
+ //  Macro default false selects golden's own else branch (Temp=0), which is exactly
+ //  what an unshown Config form produces.
+-                    if(BTHERMO_G14_FCONFIGURATION_FSHOW)
++                    if(W906_FormShowing("fConfiguration", false))          //AI(W906-I03) 20261002: GATE W7-UI G14b OPENED -- golden :1408 fConfiguration->fShow (page table, as G14a)
+                         Temp=OldTemp[Addr];
+                     else
+                         Temp=0;
+@@ -2648,9 +2648,9 @@ void DoThermoReal()
+ //  defined, so calling it is an undefined reference.  Verified by walking
+ //  cpublic.cpp's #if/#else/#endif nesting, not by eye.
+ //  ACTIVE DEFAULT: the SV change is not journalled; OldTemp[Addr]=Temp on the next line still runs.
+-#if 0 // TODO(W7 G20): golden :2334
++//AI(W906-I03) 20261002 (Ifor01): GATE W7 G20 OPENED (golden :2334; the 20260807 note above is history): HeaterSVLog is defined now (cpublic.cpp, through W906_HeaterLogHook)
+                 HeaterSVLog(Addr, Temp);
+-#endif // TODO(W7 G20)
++//AI(W906-I03) 20261002: (the old #endif of G20)
+                 OldTemp[Addr]=Temp;                                             // write setup temperature
+                 WriteCommand=0x0001;
+                 if(ATC_SYSTEM==eATCSiliconType && Temperature.bATCActiveCooling==true &&
+@@ -2667,9 +2667,9 @@ void DoThermoReal()
+ //  cpublic.cpp:582 sits inside that file's `#if 0` block (blocked there on the
+ //  unported EJ1N/TextProcess module and on COM2->Comm2).  Undefined reference.
+ //  ACTIVE DEFAULT: no SV is pushed to a TC401 controller (there is none offline).
+-#if 0 // TODO(W5 G21a): golden :2346
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G21a OPENED (golden :2346; the 20260807 note above is history): the cpublic.cpp bodies are live now (TextProcess ported, Comm2 through g_pCOM2Comm2)
+                     TMC401WriteTemp(Addr/4, Addr%4, Temp*10);                   //送溫度到溫控器
+-#endif // TODO(W5 G21a)
++//AI(W906-I03) 20261002: (the old #endif of G21a)
+                 }
+                 else if(TC401HeaterControl==KT4H)
+                 {
+@@ -2678,9 +2678,9 @@ void DoThermoReal()
+ //  cpublic.cpp:326 sits inside that file's `#if 0` block (blocked there on the
+ //  unported EJ1N/TextProcess module and on COM2->Comm2).  Undefined reference.
+ //  ACTIVE DEFAULT: the KT4H SV push is skipped; all surrounding SM bookkeeping stays ACTIVE.
+-#if 0 // TODO(W5 G22): golden :2350
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G22 OPENED (golden :2350; the 20260807 note above is history): the cpublic.cpp bodies are live now (TextProcess ported, Comm2 through g_pCOM2Comm2)
+                     UT100WordWriteNoSucm(Addr, WriteCommand, Temp*10);          //送溫度到溫控器
+-#endif // TODO(W5 G22)
++//AI(W906-I03) 20261002: (the old #endif of G22)
+                 }
+                 else if(TC401HeaterControl==E5DC)                               //Steven 20141030 : 新增OMRON E5DC溫控器
+                 {
+@@ -2689,9 +2689,9 @@ void DoThermoReal()
+ //  cpublic.cpp:640 sits inside that file's `#if 0` block (blocked there on the
+ //  unported EJ1N/TextProcess module and on COM2->Comm2).  Undefined reference.
+ //  ACTIVE DEFAULT: no SV is pushed to an E5DC controller.
+-#if 0 // TODO(W5 G23a): golden :2354
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G23a OPENED (golden :2354; the 20260807 note above is history): the cpublic.cpp bodies are live now (TextProcess ported, Comm2 through g_pCOM2Comm2)
+                     E5DCWriteTemp(Addr, Temp*10);                                //Frank20141030
+-#endif // TODO(W5 G23a)
++//AI(W906-I03) 20261002: (the old #endif of G23a)
+                 }
+                 else if(TC401HeaterControl==DTK4848)                            //KaiHuang 20190821 : 新增台達 DTK4848溫控器
+                 {
+@@ -2729,9 +2729,9 @@ void DoThermoReal()
+ //  cpublic.cpp:603 sits inside that file's `#if 0` block (blocked there on the
+ //  unported EJ1N/TextProcess module and on COM2->Comm2).  Undefined reference.
+ //  ACTIVE DEFAULT: no PV read is issued; case 200 then times out through Com2Delay exactly as golden.
+-#if 0 // TODO(W5 G21b): golden :2380
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G21b OPENED (golden :2380; the 20260807 note above is history): the cpublic.cpp bodies are live now (TextProcess ported, Comm2 through g_pCOM2Comm2)
+                     TMC401ReadTemp(Addr/4, Addr%4);
+-#endif // TODO(W5 G21b)
++//AI(W906-I03) 20261002: (the old #endif of G21b)
+                 }
+                 else if(TC401HeaterControl==KT4H)
+                 {
+@@ -2740,9 +2740,9 @@ void DoThermoReal()
+ //  cpublic.cpp:339 sits inside that file's `#if 0` block (blocked there on the
+ //  unported EJ1N/TextProcess module and on COM2->Comm2).  Undefined reference.
+ //  ACTIVE DEFAULT: the KT4H PV read is skipped; all surrounding SM bookkeeping stays ACTIVE.
+-#if 0 // TODO(W5 G22): golden :2384
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G22 OPENED (golden :2384; the 20260807 note above is history): the cpublic.cpp bodies are live now (TextProcess ported, Comm2 through g_pCOM2Comm2)
+                     UT100WordReadNoSucm(Addr, ReadCommand);
+-#endif // TODO(W5 G22)
++//AI(W906-I03) 20261002: (the old #endif of G22)
+                 }
+                 else if(TC401HeaterControl==E5DC)                               //Steven 20141030 : 新增OMRON E5DC溫控器
+                 {
+@@ -2751,9 +2751,9 @@ void DoThermoReal()
+ //  cpublic.cpp:623 sits inside that file's `#if 0` block (blocked there on the
+ //  unported EJ1N/TextProcess module and on COM2->Comm2).  Undefined reference.
+ //  ACTIVE DEFAULT: no PV read is issued; case 255 then times out through Com2Delay exactly as golden.
+-#if 0 // TODO(W5 G23b): golden :2388
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G23b OPENED (golden :2388; the 20260807 note above is history): the cpublic.cpp bodies are live now (TextProcess ported, Comm2 through g_pCOM2Comm2)
+                     E5DCReadTemp(Addr);
+-#endif // TODO(W5 G23b)
++//AI(W906-I03) 20261002: (the old #endif of G23b)
+                 }
+                 else if(TC401HeaterControl==DTK4848)                            //KaiHuang 20190821 : 新增台達 DTK4848溫控器
+                 {
+@@ -2818,9 +2818,9 @@ void DoThermoReal()
+ //  ACTIVE DEFAULT: the COM-port reset is skipped; every other statement of the retry/error
+ //  bookkeeping around it (Com2Delay / CommunCTErr / UN150CommError / Task=230)
+ //  stays ACTIVE.
+-#if 0 // TODO(W5 G17): golden :2446
+-                        COM2->Comm2->StopComm();
+-#endif // TODO(W5 G17)
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G17 OPENED (golden :2446; the 20260807 note above is history): TCOM2Shim::Comm2 exists now (rs232.cpp)
++                        { extern Spcomm::TComm* g_pCOM2Comm2; if (g_pCOM2Comm2) g_pCOM2Comm2->StopComm(); }   //AI(W906-I03) 20261002: golden COM2->Comm2->StopComm(); -- the seam is COM2->Comm2 (rs232.cpp W906_Comm2DfmBoot)
++//AI(W906-I03) 20261002: (the old #endif of G17)
+                         Com2Delay.SetSecAndOn(0.5);
+                         CommunCTErr[Addr]++;                                    //JerryYang 20170929 (wei) CommunCTErr改成陣列
+                         if(CommunCTErr[Addr]>5)
+@@ -2867,9 +2867,9 @@ void DoThermoReal()
+ //  ACTIVE DEFAULT: the COM-port reset is skipped; every other statement of the retry/error
+ //  bookkeeping around it (Com2Delay / CommunCTErr / UN150CommError / Task=230)
+ //  stays ACTIVE.
+-#if 0 // TODO(W5 G17): golden :2486
+-                    COM2->Comm2->StopComm();
+-#endif // TODO(W5 G17)
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G17 OPENED (golden :2486; the 20260807 note above is history): TCOM2Shim::Comm2 exists now (rs232.cpp)
++                    { extern Spcomm::TComm* g_pCOM2Comm2; if (g_pCOM2Comm2) g_pCOM2Comm2->StopComm(); }   //AI(W906-I03) 20261002: golden COM2->Comm2->StopComm(); -- the seam is COM2->Comm2 (rs232.cpp W906_Comm2DfmBoot)
++//AI(W906-I03) 20261002: (the old #endif of G17)
+                     Com2Delay.SetSecAndOn(0.5);
+                     CommunCTErr[Addr]++;                                        //JerryYang 20170929 (wei) CommunCTErr改成陣列
+                     if(CommunCTErr[Addr]>5)
+@@ -2892,9 +2892,9 @@ void DoThermoReal()
+ //  shim exposes bCCDDummyRum / DoReleaseAndInspEnd / ATCAlarmSenCheck only --
+ //  no Comm2 member, so COM2->Comm2->StartComm() cannot compile.
+ //  ACTIVE DEFAULT: the COM-port restart is skipped; Task still advances to 300.
+-#if 0 // TODO(W5 G17): golden :2504
+-                COM2->Comm2->StartComm();
+-#endif // TODO(W5 G17)
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G17 OPENED (golden :2504; the 20260807 note above is history): TCOM2Shim::Comm2 exists now (rs232.cpp)
++                { extern Spcomm::TComm* g_pCOM2Comm2; if (g_pCOM2Comm2) g_pCOM2Comm2->StartComm(); }   //AI(W906-I03) 20261002: golden COM2->Comm2->StartComm(); -- the seam is COM2->Comm2 (rs232.cpp W906_Comm2DfmBoot)
++//AI(W906-I03) 20261002: (the old #endif of G17)
+                 #endif
+                 Task=300;
+             }
+@@ -2931,9 +2931,9 @@ void DoThermoReal()
+ //  ACTIVE DEFAULT: the COM-port reset is skipped; every other statement of the retry/error
+ //  bookkeeping around it (Com2Delay / CommunCTErr / UN150CommError / Task=230)
+ //  stays ACTIVE.
+-#if 0 // TODO(W5 G17): golden :2530
+-                        COM2->Comm2->StopComm();                                //JerryYang 20170925 (wei) COM port Reset
+-#endif // TODO(W5 G17)
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G17 OPENED (golden :2530; the 20260807 note above is history): TCOM2Shim::Comm2 exists now (rs232.cpp)
++                        { extern Spcomm::TComm* g_pCOM2Comm2; if (g_pCOM2Comm2) g_pCOM2Comm2->StopComm(); }   //JerryYang 20170925 (wei) COM port Reset   //AI(W906-I03) 20261002: golden COM2->Comm2->StopComm(); -- the seam is COM2->Comm2 (rs232.cpp W906_Comm2DfmBoot)
++//AI(W906-I03) 20261002: (the old #endif of G17)
+                         Com2Delay.SetSecAndOn(0.5);
+                         CommunCTErr[Addr]++;
+                         if(CommunCTErr[Addr]>5)
+@@ -3022,9 +3022,9 @@ void DoThermoReal()
+ //  ACTIVE DEFAULT: the COM-port reset is skipped; every other statement of the retry/error
+ //  bookkeeping around it (Com2Delay / CommunCTErr / UN150CommError / Task=230)
+ //  stays ACTIVE.
+-#if 0 // TODO(W5 G17): golden :2612
+-                    COM2->Comm2->StopComm();                                    //JerryYang 20170925 (wei) COM port Reset
+-#endif // TODO(W5 G17)
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G17 OPENED (golden :2612; the 20260807 note above is history): TCOM2Shim::Comm2 exists now (rs232.cpp)
++                    { extern Spcomm::TComm* g_pCOM2Comm2; if (g_pCOM2Comm2) g_pCOM2Comm2->StopComm(); }   //JerryYang 20170925 (wei) COM port Reset   //AI(W906-I03) 20261002: golden COM2->Comm2->StopComm(); -- the seam is COM2->Comm2 (rs232.cpp W906_Comm2DfmBoot)
++//AI(W906-I03) 20261002: (the old #endif of G17)
+                     Com2Delay.SetSecAndOn(0.5);
+                     CommunCTErr[Addr]++;
+                     if(CommunCTErr[Addr]>5)
+@@ -3081,9 +3081,9 @@ void DoThermoReal()
+ //  ACTIVE DEFAULT: the COM-port reset is skipped; every other statement of the retry/error
+ //  bookkeeping around it (Com2Delay / CommunCTErr / UN150CommError / Task=230)
+ //  stays ACTIVE.
+-#if 0 // TODO(W5 G17): golden :2658
+-                        COM2->Comm2->StopComm();                                //JerryYang 20190627 Omron溫度讀取error也要重新開COM
+-#endif // TODO(W5 G17)
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G17 OPENED (golden :2658; the 20260807 note above is history): TCOM2Shim::Comm2 exists now (rs232.cpp)
++                        { extern Spcomm::TComm* g_pCOM2Comm2; if (g_pCOM2Comm2) g_pCOM2Comm2->StopComm(); }   //JerryYang 20190627 Omron溫度讀取error也要重新開COM   //AI(W906-I03) 20261002: golden COM2->Comm2->StopComm(); -- the seam is COM2->Comm2 (rs232.cpp W906_Comm2DfmBoot)
++//AI(W906-I03) 20261002: (the old #endif of G17)
+                         Com2Delay.SetSecAndOn(0.5);
+                         CommunCTErr[Addr]++;
+                         if(CommunCTErr[Addr]>5)
+@@ -3214,9 +3214,9 @@ void DoThermoReal()
+ //  ACTIVE DEFAULT: the COM-port reset is skipped; every other statement of the retry/error
+ //  bookkeeping around it (Com2Delay / CommunCTErr / UN150CommError / Task=230)
+ //  stays ACTIVE.
+-#if 0 // TODO(W5 G17): golden :2782
+-                    COM2->Comm2->StopComm();                                    //JerryYang 20190627 Omron溫度讀取error也要重新開COM
+-#endif // TODO(W5 G17)
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G17 OPENED (golden :2782; the 20260807 note above is history): TCOM2Shim::Comm2 exists now (rs232.cpp)
++                    { extern Spcomm::TComm* g_pCOM2Comm2; if (g_pCOM2Comm2) g_pCOM2Comm2->StopComm(); }   //JerryYang 20190627 Omron溫度讀取error也要重新開COM   //AI(W906-I03) 20261002: golden COM2->Comm2->StopComm(); -- the seam is COM2->Comm2 (rs232.cpp W906_Comm2DfmBoot)
++//AI(W906-I03) 20261002: (the old #endif of G17)
+                     Com2Delay.SetSecAndOn(0.5);
+                     CommunCTErr[Addr]++;                                        //JerryYang 20190627 Omron溫度讀取error也要重新開COM
+                     if(CommunCTErr[Addr]>5)
+@@ -3263,9 +3263,9 @@ void DoThermoReal()
+ //  ACTIVE DEFAULT: the COM-port reset is skipped; every other statement of the retry/error
+ //  bookkeeping around it (Com2Delay / CommunCTErr / UN150CommError / Task=230)
+ //  stays ACTIVE.
+-#if 0 // TODO(W5 G17): golden :2822
+-                        COM2->Comm2->StopComm();                                //JerryYang 20170925 (wei) COM port Reset
+-#endif // TODO(W5 G17)
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G17 OPENED (golden :2822; the 20260807 note above is history): TCOM2Shim::Comm2 exists now (rs232.cpp)
++                        { extern Spcomm::TComm* g_pCOM2Comm2; if (g_pCOM2Comm2) g_pCOM2Comm2->StopComm(); }   //JerryYang 20170925 (wei) COM port Reset   //AI(W906-I03) 20261002: golden COM2->Comm2->StopComm(); -- the seam is COM2->Comm2 (rs232.cpp W906_Comm2DfmBoot)
++//AI(W906-I03) 20261002: (the old #endif of G17)
+                         Com2Delay.SetSecAndOn(0.5);
+                         CommunCTErr[Addr]++;
+                         if(CommunCTErr[Addr]>5)
+@@ -3351,9 +3351,9 @@ void DoThermoReal()
+ //  ACTIVE DEFAULT: the COM-port reset is skipped; every other statement of the retry/error
+ //  bookkeeping around it (Com2Delay / CommunCTErr / UN150CommError / Task=230)
+ //  stays ACTIVE.
+-#if 0 // TODO(W5 G17): golden :2901
+-                    COM2->Comm2->StopComm();                                    //JerryYang 20170925 (wei) COM port Reset
+-#endif // TODO(W5 G17)
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G17 OPENED (golden :2901; the 20260807 note above is history): TCOM2Shim::Comm2 exists now (rs232.cpp)
++                    { extern Spcomm::TComm* g_pCOM2Comm2; if (g_pCOM2Comm2) g_pCOM2Comm2->StopComm(); }   //JerryYang 20170925 (wei) COM port Reset   //AI(W906-I03) 20261002: golden COM2->Comm2->StopComm(); -- the seam is COM2->Comm2 (rs232.cpp W906_Comm2DfmBoot)
++//AI(W906-I03) 20261002: (the old #endif of G17)
+                     Com2Delay.SetSecAndOn(0.5);
+                     CommunCTErr[Addr]++;                                        //JerryYang 20170929 (wei) CommunCTErr改成陣列
+                     if(CommunCTErr[Addr]>5)
+@@ -3516,9 +3516,9 @@ void DoThermoReal()
+ //  cpublic.cpp:326 sits inside that file's `#if 0` block (blocked there on the
+ //  unported EJ1N/TextProcess module and on COM2->Comm2).  Undefined reference.
+ //  ACTIVE DEFAULT: the KT4H Alarm-1 value 0 is skipped; all surrounding SM bookkeeping stays ACTIVE.
+-#if 0 // TODO(W5 G22): golden :3052
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G22 OPENED (golden :3052; the 20260807 note above is history): the cpublic.cpp bodies are live now (TextProcess ported, Comm2 through g_pCOM2Comm2)
+                 UT100WordWriteNoSucm(Addr, WriteCommand, 0);
+-#endif // TODO(W5 G22)
++//AI(W906-I03) 20261002: (the old #endif of G22)
+             }
+ 
+             if(OldTemp[Addr]<120.0 && OldTemp[Addr]>0)                          //小於120的一律設定為140度
+@@ -3528,9 +3528,9 @@ void DoThermoReal()
+ //  cpublic.cpp:326 sits inside that file's `#if 0` block (blocked there on the
+ //  unported EJ1N/TextProcess module and on COM2->Comm2).  Undefined reference.
+ //  ACTIVE DEFAULT: the KT4H Alarm-1 value 140.0 is skipped; all surrounding SM bookkeeping stays ACTIVE.
+-#if 0 // TODO(W5 G22): golden :3057
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G22 OPENED (golden :3057; the 20260807 note above is history): the cpublic.cpp bodies are live now (TextProcess ported, Comm2 through g_pCOM2Comm2)
+                 UT100WordWriteNoSucm(Addr, WriteCommand, 140*10);
+-#endif // TODO(W5 G22)
++//AI(W906-I03) 20261002: (the old #endif of G22)
+             }
+             else if(OldTemp[Addr]>=120.0)                                       //大於120的一律比設定多10度
+             {
+@@ -3539,9 +3539,9 @@ void DoThermoReal()
+ //  cpublic.cpp:326 sits inside that file's `#if 0` block (blocked there on the
+ //  unported EJ1N/TextProcess module and on COM2->Comm2).  Undefined reference.
+ //  ACTIVE DEFAULT: the KT4H Alarm-1 value OldTemp+10 is skipped; all surrounding SM bookkeeping stays ACTIVE.
+-#if 0 // TODO(W5 G22): golden :3061
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G22 OPENED (golden :3061; the 20260807 note above is history): the cpublic.cpp bodies are live now (TextProcess ported, Comm2 through g_pCOM2Comm2)
+                 UT100WordWriteNoSucm(Addr, WriteCommand, (OldTemp[Addr]+10)*10);
+-#endif // TODO(W5 G22)
++//AI(W906-I03) 20261002: (the old #endif of G22)
+             }
+             Com2Delay.Set0_1SecAndOn(6);
+             Task=510;
+@@ -3610,9 +3610,9 @@ void DoThermoReal()
+ //  cpublic.cpp:326 sits inside that file's `#if 0` block (blocked there on the
+ //  unported EJ1N/TextProcess module and on COM2->Comm2).  Undefined reference.
+ //  ACTIVE DEFAULT: the KT4H Alarm-1 type 0 (no alarm) is skipped; all surrounding SM bookkeeping stays ACTIVE.
+-#if 0 // TODO(W5 G22): golden :3121
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G22 OPENED (golden :3121; the 20260807 note above is history): the cpublic.cpp bodies are live now (TextProcess ported, Comm2 through g_pCOM2Comm2)
+                 UT100WordWriteNoSucm(Addr, WriteCommand, 0);                    //0000H = No Alarm
+-#endif // TODO(W5 G22)
++//AI(W906-I03) 20261002: (the old #endif of G22)
+             }
+             else
+             {
+@@ -3621,9 +3621,9 @@ void DoThermoReal()
+ //  cpublic.cpp:326 sits inside that file's `#if 0` block (blocked there on the
+ //  unported EJ1N/TextProcess module and on COM2->Comm2).  Undefined reference.
+ //  ACTIVE DEFAULT: the KT4H Alarm-1 type 1 (high limit) is skipped; all surrounding SM bookkeeping stays ACTIVE.
+-#if 0 // TODO(W5 G22): golden :3125
++//AI(W906-I03) 20261002 (Ifor01): GATE W5 G22 OPENED (golden :3125; the 20260807 note above is history): the cpublic.cpp bodies are live now (TextProcess ported, Comm2 through g_pCOM2Comm2)
+                 UT100WordWriteNoSucm(Addr, WriteCommand, 1);                    //0001H = High Limit Alarm
+-#endif // TODO(W5 G22)
++//AI(W906-I03) 20261002: (the old #endif of G22)
+             }
+             Com2Delay.Set0_1SecAndOn(6);
+             Task=530;
+diff --git a/cpublic.cpp b/cpublic.cpp
+index adb2aad..2ba13ff 100644
+--- a/cpublic.cpp
++++ b/cpublic.cpp
+@@ -278,27 +278,27 @@ AnsiString DTK4848_LRC(AnsiString str)
+     str=str.SubString(str.Length()-1, 2) ;
+     return str;
+ }
+-// AI(GA1-B3) 20260804: re-surveyed -- still blocked, tightened citation.
+-// T_ASXII2HEX[23]/T_HEX2ASCII_Mac/A_Create_LCR are golden EJ1N/TextProcess.h
+-// declarations (definitions in EJ1N/TextProcess.cpp:325+) for the Panasonic
+-// KT4H comm module; EJ1N/ has NO port anywhere in this tree (no EJ1N/
+-// directory at all -- confirmed by a whole-tree find). CCLink/MyCCLink.cpp
+-// re-declares the SAME 4 externs (golden's own "avoid #include cpublic.h"
+-// banner) but has zero definitions either (see that file's own
+-// AI(W5-CCLink-Translate) note) -- not a substitute home. UT100WordWriteNoSucm/
+-// ReadNoSucm additionally need COM2->Comm2: golden rs232.h's real TCOM2 is
+-// unported; the only offline stand-in, atester_shims.h::TCOM2Shim, has no
+-// Comm2 member.
+-#if 0 // TODO(GA1-B3): blocked by EJ1N/TextProcess.{h,cpp} (whole module unported) + COM2->Comm2 (real TCOM2 unported)
++// AI(W906-I03) 20261002 (Ifor01): GATE (GA1-B3) OPENED -- I-03 phase 1 (TO_IFOR.md I-03; FROM_IFOR §1 1002 09:0x).
++// Both blockers the 20260804 note named are gone: EJ1N/TextProcess.{h,cpp} is ported (ht9045_globals, the same
++// library as this file; T_ASXII2HEX / T_HEX2ASCII_Mac / A_Create_LCR / SetBCC are live), and golden's COM2->Comm2
++// (rs232.dfm:8 object Comm2: TComm -- the temperature-controller port RS232Init opens at golden rs232.cpp:264-281)
++// now exists on the port's only COM2 object (atester_shims.h TCOM2Shim::Comm2, bodies in rs232.cpp). This file is in
++// ht9045_globals, below COM2's library, so the writes go through the seam g_pCOM2Comm2 below -- the same way
++// DTK4848Word*NoSucm already go through g_pDTKComm; rs232.cpp W906_RS232InitTemp points both at COM2->Comm2.
++// Null (a ctest that does not set it, HEATER_CTRL_TYPE=NoHeater) = nothing is written. Compile-only changes, each
++// marked on its line: (char*) casts on SENDBUFF / READBUFF (unsigned char[1024] here, char in golden's sprintf use),
++// .c_str() for the AnsiString passed to %4s, and the TMC401 frame cast for CRC_Check(unsigned char*).
++#include "EJ1N/TextProcess.h"   // golden cpublic.cpp:11 / :24 #include "TextProcess.h" (T_ASXII2HEX, T_HEX2ASCII_Mac, A_Create_LCR, SetBCC)
++Spcomm::TComm* g_pCOM2Comm2 = nullptr;   // AI(W906-I03) 20261002: golden COM2->Comm2 seam (set by rs232.cpp W906_RS232InitTemp; 0 = not opened)
+ //------------------------------------------------------------------------------
+ void GetEveryCode(AnsiString AnsiData)                                          //Steven 20111028 : 改成AnsiString
+ {
+-    sprintf(Temp_Control.cHeader   , "%s", AnsiData.SubString(1, 1));
+-    sprintf(Temp_Control.cAddress  , "%s", AnsiData.SubString(2, 2));
+-    sprintf(Temp_Control.cFuncCode , "%s", AnsiData.SubString(4, 2));
+-    sprintf(Temp_Control.cResponse , "%s", AnsiData.SubString(6, 2));
+-    sprintf(Temp_Control.cData     , "%s", AnsiData.SubString(8, 4));
+-    sprintf(Temp_Control.cErrCheck , "%s", AnsiData.SubString(12, 2));
++    sprintf(Temp_Control.cHeader   , "%s", AnsiData.SubString(1, 1).c_str());   //AI(W906-I03) 20261002: .c_str() -- compile only (BCB6 passed the AnsiString through ...)
++    sprintf(Temp_Control.cAddress  , "%s", AnsiData.SubString(2, 2).c_str());   //AI(W906-I03) 20261002: .c_str() -- compile only (BCB6 passed the AnsiString through ...)
++    sprintf(Temp_Control.cFuncCode , "%s", AnsiData.SubString(4, 2).c_str());   //AI(W906-I03) 20261002: .c_str() -- compile only (BCB6 passed the AnsiString through ...)
++    sprintf(Temp_Control.cResponse , "%s", AnsiData.SubString(6, 2).c_str());   //AI(W906-I03) 20261002: .c_str() -- compile only (BCB6 passed the AnsiString through ...)
++    sprintf(Temp_Control.cData     , "%s", AnsiData.SubString(8, 4).c_str());   //AI(W906-I03) 20261002: .c_str() -- compile only (BCB6 passed the AnsiString through ...)
++    sprintf(Temp_Control.cErrCheck , "%s", AnsiData.SubString(12, 2).c_str());   //AI(W906-I03) 20261002: .c_str() -- compile only (BCB6 passed the AnsiString through ...)
+ }
+ //------------------------------------------------------------------------------
+ int Change_Tempture_Value()
+@@ -329,24 +329,24 @@ void UT100WordWriteNoSucm(int Addr, int Command, int Value)
+     int iFunctionCode=6;
+     AnsiString tmp1;
+     tmp1=IntToHex(Value, 4);
+-    ::sprintf(SENDBUFF, ":%02X%02X%04X%4s00%c%c", Addr+1, iFunctionCode, Command, tmp1, CRRS232, LFRS232);
++    ::sprintf((char*)SENDBUFF, ":%02X%02X%04X%4s00%c%c", Addr+1, iFunctionCode, Command, tmp1.c_str(), CRRS232, LFRS232);   //AI(W906-I03) 20261002: (char*) + .c_str() -- compile only
+     Btmp1=A_Create_LCR(&SENDBUFF[1], 12);
+     SENDBUFF[13]=T_HEX2ASCII_Mac(Btmp1>>4);
+     SENDBUFF[14]=T_HEX2ASCII_Mac(Btmp1);
+-    COM2->Comm2->WriteCommData(SENDBUFF, ::strlen(SENDBUFF));
++    if (g_pCOM2Comm2) g_pCOM2Comm2->WriteCommData((char*)SENDBUFF, ::strlen((char*)SENDBUFF));   //AI(W906-I03) 20261002: golden COM2->Comm2->WriteCommData(SENDBUFF, ::strlen(SENDBUFF)) through the seam
+ }
+ //------------------------------------------------------------------------------
+ void UT100WordReadNoSucm(int Addr, int Command)
+ {
+     int iFunctionCode=3;
+     unsigned char Btmp1;
+-    ::sprintf(READBUFF, ":%02X%02X%04X000100%c%c", Addr+1, iFunctionCode, Command, CRRS232, LFRS232);
++    ::sprintf((char*)READBUFF, ":%02X%02X%04X000100%c%c", Addr+1, iFunctionCode, Command, CRRS232, LFRS232);   //AI(W906-I03) 20261002: (char*) -- compile only
+     Btmp1=A_Create_LCR(&READBUFF[1], 12);
+     READBUFF[13]=T_HEX2ASCII_Mac(Btmp1>>4);                                     //Set return number by byte
+     READBUFF[14]=T_HEX2ASCII_Mac(Btmp1);
+-    COM2->Comm2->WriteCommData(READBUFF, ::strlen(READBUFF));
++    if (g_pCOM2Comm2) g_pCOM2Comm2->WriteCommData((char*)READBUFF, ::strlen((char*)READBUFF));   //AI(W906-I03) 20261002: golden COM2->Comm2->WriteCommData(READBUFF, ::strlen(READBUFF)) through the seam
+ }
+-#endif // TODO(W5)
++//AI(W906-I03) 20261002: (the old #endif of GATE (GA1-B3))
+ //AI(ht9045-v899) 20260626: ungated DTK4848WordWriteNoSucm -- COM2->Comm2 rerouted to g_pDTKComm seam
+ //------------------------------------------------------------------------------
+ //KaiHuang 20190821 : 新增台達 DTK4848溫控器
+@@ -572,17 +572,17 @@ unsigned int CRC_Check(unsigned char *ary, unsigned int len)
+     return (crc);
+ }
+ //------------------------------------------------------------------------------
+-// AI(GA1-B3) 20260804: re-surveyed -- still blocked. golden rs232.h's real
+-// TCOM2 (member `TComm *Comm2`) is unported; the only offline stand-in,
+-// atester_shims.h::TCOM2Shim, deliberately carries just bCCDDummyRum/
+-// DoReleaseAndInspEnd()/ATCAlarmSenCheck() (the tester-engine's 3 needs) and
+-// has no Comm2 member -- pulling it in would not satisfy this call shape
+-// anyway (it is also the tester engine's shim, not cpublic.cpp's layer).
+-#if 0 // TODO(GA1-B3): blocked by COM2->Comm2 (golden rs232.h TCOM2 unported; TCOM2Shim has no Comm2 member)
++// AI(W906-I03) 20261002 (Ifor01): GATE (GA1-B3) OPENED -- the one blocker named in 20260804 (no COM2->Comm2) is gone:
++// TCOM2Shim::Comm2 exists (rs232.cpp, I-03 phase 1). Same seam as the KT4H block above (g_pCOM2Comm2, this file is
++// in ht9045_globals, below COM2's library). TMC401 = Modbus RTU (CRC_Check, 8 bytes); E5DC = OMRON CompoWay/F (STX ..
++// ETX + BCC + CR LF). Compile-only changes, marked on each line: (unsigned char*) for CRC_Check's signature
++// (cpublic.h:334), .c_str() for the AnsiString passed to %s, (char*) for WriteCommData(char*, Word).
++//AI(W906-I03) 20261002: (was `#if 0 // TODO(GA1-B3): blocked by COM2->Comm2`, next line)
++//------------------------------------------------------------------------------
+ void TMC401WriteTemp(int Addr, int CH, int Temp)
+ {
+     unsigned char CRCL,CRCH;
+-    DWord Tempdata,data;
++    DWORD Tempdata,data;                     //AI(W906-I03) 20261002: golden BCB6 DWord = Win32 DWORD -- compile only
+     char str[128]={'\0'};
+     Tempdata=Temp;
+ 
+@@ -592,18 +592,18 @@ void TMC401WriteTemp(int Addr, int CH, int Temp)
+     str[3]=0xC8+CH;
+     str[4]=(Tempdata & 0xff00)>>8;
+     str[5]=Tempdata & 0xff;
+-    data=CRC_Check(&str[0], 6);
++    data=CRC_Check((unsigned char*)&str[0], 6);                                 //AI(W906-I03) 20261002: (unsigned char*) -- compile only
+     CRCL=data&0xff;
+     CRCH=data>>8;
+     str[6]=CRCL;
+     str[7]=CRCH;
+-    COM2->Comm2->WriteCommData(str, 8);
++    if (g_pCOM2Comm2) g_pCOM2Comm2->WriteCommData(str, 8);                      //AI(W906-I03) 20261002: golden COM2->Comm2->WriteCommData(str, 8) through the seam
+ }
+ //------------------------------------------------------------------------------
+ void TMC401ReadTemp(int Addr, int CH)
+ {
+     unsigned char CRCL,CRCH;
+-    DWord data;
++    DWORD data;                     //AI(W906-I03) 20261002: golden BCB6 DWord = Win32 DWORD -- compile only
+     char str[128]={'\0'};
+ 
+     str[0]=Addr+1;
+@@ -612,12 +612,12 @@ void TMC401ReadTemp(int Addr, int CH)
+     str[3]=CH;
+     str[4]=0x00;
+     str[5]=0x01;
+-    data=CRC_Check(&str[0], 6);
++    data=CRC_Check((unsigned char*)&str[0], 6);                                 //AI(W906-I03) 20261002: (unsigned char*) -- compile only
+     CRCL=data&0xff;
+     CRCH=data>>8;
+     str[6]=CRCL;
+     str[7]=CRCH;
+-    COM2->Comm2->WriteCommData(str, 8);
++    if (g_pCOM2Comm2) g_pCOM2Comm2->WriteCommData(str, 8);                      //AI(W906-I03) 20261002: golden COM2->Comm2->WriteCommData(str, 8) through the seam
+ }
+ //------------------------------------------------------------------------------
+ void E5DCReadTemp(int Addr)
+@@ -633,8 +633,8 @@ void E5DCReadTemp(int Addr)
+                   // 0002    : 元素數量, 2個
+ 
+     BCC=SetBCC(Command);
+-    Str.sprintf("%c%s%c%c\r\n", STX, Command, ETX, BCC);
+-    COM2->Comm2->WriteCommData(Str.c_str(), Str.Length());
++    Str.sprintf("%c%s%c%c\r\n", STX, Command.c_str(), ETX, BCC);                 //AI(W906-I03) 20261002: .c_str() -- compile only
++    if (g_pCOM2Comm2) g_pCOM2Comm2->WriteCommData((char*)Str.c_str(), Str.Length());   //AI(W906-I03) 20261002: golden COM2->Comm2->WriteCommData(Str.c_str(), Str.Length()) through the seam
+ }
+ //------------------------------------------------------------------------------
+ void E5DCWriteTemp(int Addr, int Temp)
+@@ -643,10 +643,10 @@ void E5DCWriteTemp(int Addr, int Temp)
+     AnsiString Command, Str;
+     Command.sprintf("%02d0000102C100030000010000%04X", Addr+1, Temp);
+     BCC=SetBCC(Command);
+-    Str.sprintf("%c%s%c%c\r\n", STX, Command, ETX, BCC);
+-    COM2->Comm2->WriteCommData(Str.c_str(), Str.Length());
++    Str.sprintf("%c%s%c%c\r\n", STX, Command.c_str(), ETX, BCC);                 //AI(W906-I03) 20261002: .c_str() -- compile only
++    if (g_pCOM2Comm2) g_pCOM2Comm2->WriteCommData((char*)Str.c_str(), Str.Length());   //AI(W906-I03) 20261002: golden COM2->Comm2->WriteCommData(Str.c_str(), Str.Length()) through the seam
+ }
+-#endif // TODO(W5)
++//AI(W906-I03) 20261002: (the old #endif of GATE (GA1-B3))
+ // AI(GA1-B3) 20260804: re-surveyed all 7 -- TestIF (cprod.h:2576) and SW[]
+ // (myswitch.h:43) are now BOTH real, so this block's own original citation is
+ // stale, but each function still has its own real blocker (per-function,
+@@ -706,15 +706,15 @@ void HeaterLog(AnsiString Message, bool bOnOff)
+ //AI(W906-LOGOBJ-W7) 20260927 (St02-E): (the old #endif of GATE (PT-W5c))
+     }
+ }
+-#if 0 // ...resume the GA1-B3 gate  (AI(W906-MEMO) 20260927: OutShuttleLog below = reference copy; live one in acarry_shims.cpp)
++//AI(W906-I03) 20261002 (Ifor01): HeaterSVLog is live (bthermo.cpp G20, I-03); the GA1-B3 gate now resumes below it, before OutShuttleLog
+ //------------------------------------------------------------------------------
+ void HeaterSVLog(int Addr, double dTemp)                                        //Steven 20200121 : Log for Heater SV
+ {
+     AnsiString NewMess;
+-    NewMess.sprintf("Set Heater %s SV to %f", asTempCtrl[Addr], dTemp);
+-    fMain->slHeaterLog->AddTextWithDateTime(NewMess);
++    NewMess.sprintf("Set Heater %s SV to %f", asTempCtrl[Addr].c_str(), dTemp);   //AI(W906-I03) 20261002: .c_str() -- compile only
++    { extern void (*W906_HeaterLogHook)(AnsiString); if (W906_HeaterLogHook) W906_HeaterLogHook(NewMess); }   //AI(W906-I03) 20261002: golden fMain->slHeaterLog->AddTextWithDateTime(NewMess); -- the same hook HeaterLog uses above (LogObjects.cpp: fMain->slHeaterLog; 0 in every ctest)
+ }
+-//------------------------------------------------------------------------------
++#if 0 // ...resume the GA1-B3 gate  (AI(W906-MEMO) 20260927: OutShuttleLog below = reference copy; live one in acarry_shims.cpp)
+ void OutShuttleLog(bool bFlag)                                                  //Steven 20110531
+ {
+     AnsiString sFileName;
+diff --git a/docs/INBOX_QUEUE.md b/docs/INBOX_QUEUE.md
+index b0d6667..2754d6c 100644
+--- a/docs/INBOX_QUEUE.md
++++ b/docs/INBOX_QUEUE.md
+@@ -154,8 +154,8 @@
+ | 119 | 🔴 **kCode==0 的通知型告警框關不掉，而馬達已經停了**（Jerry J-5，`FROM_JERRY.md` 在 `v906/jerry-handoff`，main `3a93a28f` 實測）：`tools/wb_serve.cpp` ForwardShowErrorMessage 的 kcode==0 分支先照 golden 停機（`W906_AlarmStopLikeGolden`），寫信箱 `state:"pending"`（`closePolicy:"acknowledge-only"`、`buttons:[]`），但**從來沒有人呼叫 `DialogMailboxRetire()`**，而 `web/page/ht9045_dialog_host.js:177` 在沒有 pending query 時一律拒絕 ⇒ 框關不掉、重新整理會再彈、只能重開 wb_serve。修法三塊（Jerry 的建議）：① C++（筆電）新 WS 指令 `dialog.notifyAck`（tag＝requestId；只在信箱是這個 id 的 kcode==0 通知時 `DialogMailboxRetire()`，不進等待迴圈、不碰 `g_modalServer`；對不上回 ok:false＋原因）＋ctest；② web（`ht9045_dialog_host.js` 是 St01 的檔）：通知型送 `dialog.notifyAck` 並 resolve；③ 畫面：通知型只給一顆「確認」。**INBOX 118 讓馬達撞到的警報照 golden 顯示之後，每次撞機都會碰到這一條** ⇒ 緊接在 118 後面做 | Jerry 0929 18:24（筆電 0930 10:3x 才讀到） | ✅ 20260930 筆電 l2k（`AI(W906-J5-ACK)`）C++ 半：新 WS 指令 `dialog.notifyAck`（tag＝通知的 requestId）只在信箱放的是**這個 id 的 kCode==0 通知**時退役（`DialogMailboxRetire()`），不進等待迴圈、不 PostQuery；對不上回 ok:false `no-pending-notice`（已關，網頁當成關好了）／`request-mismatch:current=<id>`／`not-a-notice:current=<id>`（阻塞告警，照舊用 dialog.response 答）／`golden-refused:<原因>`／`retire-failed:current=<id>`。退役後照 golden 關框一次：BtnPauseClick 的 KeyCode==0 那一臂（SoftStop／SoftStart、EventReport(DoPause)、ESD_SYSTEM_STOP；馬達通知張貼時已套過 SoftStop 就不再套）＋FormClose（Jam 計數、PassTime／Recovery、MyDBUEventRecover、關框旗標、Alarm->Clear…）；通知之後機台已重新啟動就只套記錄、不暫停。權杖／防連點／關站白名單都豁免。ctest `NoticeAck`。⏳ web 兩塊（`ht9045_dialog_host.js` 對 `arguments.kCode===0` 送 `dialog.notifyAck`、只給一顆「確認」）請 St01（TO_STEVEN §4）；待裁決：馬達通知的 EventLogTxt 列 StopedTime 仍寫 0、golden 的 START 出口（TfNote::Start KeyCode==0 :3683-3803）沒接 |
+ | 120 | 🟡 **Jerry 的其他三項**：① J-1 `web/background.html` 生產輪詢加 in-flight 閘門（`v906/jerry-webpoll` `0ef1d36d`，已開 MR；筆電看過同意，建議再加「超過 10 秒沒回就放掉旗標」的保險）——跟下一批一起 gate 後合進 main；② J-2 `web/page/ht9045_recipe_client.js` `cmd0()` 的逾時沒包住 `connect()`（WebSocket 卡在 CONNECTING 時畫面永遠「送出中」、Console 沒字）——筆電修，逾時從 `cmd0()` 一進來就算；③ J-4 golden 路徑寫死：dfm2rc 早就認 `HT9045_GOLDEN_ROOT`（`tools/dfm2rc/dfm_parse.py:687` 起），只有 `tools/gen_teach_editlist.py:31` 寫死 ⇒ 改成先看同一個變數，產生檔註解裡的 golden 路徑固定印預設值（`--check` 才不會因路徑不同而紅）。（J-3 `FTPClient_Transfer` 在筆電這台會過 ⇒ Jerry 那台的環境，不動） | Jerry 0929 18:24 | ✅ 0930 12:3x 上 main（`0b8480c5`）：J-1 `0ef1d36d` 合進來、J-2 `connect()` 逾時、J-4 `HT9045_GOLDEN_ROOT`；兩組態 gate＝基準 |
+ | 121 | 🔴 **常溫模擬跑兩分鐘就停：每個供上來的入料盤都是「有盤、0 顆」**（amb0930a 模擬；根因報告 `docs/AMBIENT_STALL_HTRAY_20260930.md`，兩輪反駁沒推翻）：golden `TTrayMotor::SetHTrayPanel`（`Motor/mymotor.cpp:1500-1504`）是 `fHTary=true; pHTray=ptr;`，golden 開機時 `SetSimuScreenPara` 在 `if(flag)` 裡無條件綁 50 顆盤馬達（`cinitial.cpp:6430-6489`，沒有 SOFT_SIMULTE 閘）；`SetTray` 只有 `if(fHTary)` 才填 IC 格（golden :1506-1514）。移植樹的 `SetHTrayPanel` 是空的、50 個呼叫全在 `#if 0 // GATE n5-G3`，閘門理由寫「不改任何機台狀態」—— 錯。結果 `DoSupplyNewICTray` case 1300 `MOT[MMTrayY].SetTray(HAS_IC)` 之後 Loader 盤 `fHasTray=true`＋整盤 NULL_IC：入料手臂 case 10↔15 永遠等，CatchTray case 100 把每盤當 tray end 收去 buffer（只剩 MTrayX 在動）。**真機組態同樣中**（不是模擬專屬） | 筆電 0930 amb0930a | ✅ 0930 16:06 上 main（`e43ea2e7`，第四批；GitHub 第 87 包）；重跑模擬後入料臂會取料，下一個停點 ⇒ INBOX 128 |
+-| 122 | 🟡 **golden 按 START 也會關掉通知框**（INBOX 119 agent 0930 發現）：golden `TfNote::Start` 的 KeyCode==0 那一段（`note.cpp:3683-3803`，面板 START 鍵）也會關 note 並跑 FormClose；移植樹按 START 時通知框留著，之後的 `dialog.notifyAck` 只補紀錄。照 golden 翻：START（`start.run`／面板 START）在有 kcode==0 通知時也退掉信箱＋跑同一段關框 | 筆電 0930（119 回報第 1 點） | 🔜 |
+-| 123 | 🟡 **阻塞型警報按 PAUSE 少兩件事**：`W906-DLG-PAUSE` 那條回答路徑沒有送 `EventReport(DoPause)` 和 `SendCommand_ESD(ESD_SYSTEM_STOP)`（golden `note.cpp:4149-4151`），而 119 的通知確認有送 ⇒ 兩條路要一致，照 golden 補 | 筆電 0930（119 回報第 4 點） | 🔜 |
++| 122 | 🟡 **golden 按 START 也會關掉通知框**（INBOX 119 agent 0930 發現）：golden `TfNote::Start` 的 KeyCode==0 那一段（`note.cpp:3683-3803`，面板 START 鍵）也會關 note 並跑 FormClose；移植樹按 START 時通知框留著，之後的 `dialog.notifyAck` 只補紀錄。照 golden 翻：START（`start.run`／面板 START）在有 kcode==0 通知時也退掉信箱＋跑同一段關框 | 筆電 0930（119 回報第 1 點） | 🔜；✅ 1002 第四十四批（筆電第四十一批 `867124ac`）：橫幅註解照 golden 更正（KeyCode==0 的通知框沒有 START 出口） |
++| 123 | 🟡 **阻塞型警報按 PAUSE 少兩件事**：`W906-DLG-PAUSE` 那條回答路徑沒有送 `EventReport(DoPause)` 和 `SendCommand_ESD(ESD_SYSTEM_STOP)`（golden `note.cpp:4149-4151`），而 119 的通知確認有送 ⇒ 兩條路要一致，照 golden 補 | 筆電 0930（119 回報第 4 點） | 🔜；✅ 1002 第四十四批（筆電第四十一批 `867124ac`）：`W906_NoteBlockingPauseLikeGolden` 照 golden 送 DoPause＋ESD 停止、模擬組態逐鍵紀錄；ctest NoticeAck [N] |
+ | 124 | 🟡 **面板實體 PAUSE 鍵關通知框**：golden `ScanKey`→`BtnPauseClick` 讓面板 PAUSE 鍵也能關 note；移植樹沒接到通知 ⇒ 照 golden 接（跟 122 一起看） | 筆電 0930（119 回報第 5 點） | 🔜 |
+ | 125 | 🟡 **`auto9045.cpp:207-216` `CheckCanChangeRealDummy` 是恆回 true 的替身**，真本體在 `cMainStatus.cpp:323`（St01 0930 13:40 B8 M-11 找到）——照 golden 改接真本體（FT／RT 切換、Real／Dummy 切換前的檢查） | St01 0930 13:40 | ✅ 0930 晚第六批上 main（`origin/v906/jimmy-i125` `5b0bab58`，`AI(W906-I125)`）：auto9045 的 11 個 `W5FA_TfMainExt` 替身退 7 個改接真的 TfMain（主機下的換溫度模式／切 tester 連線／查主畫面狀態／查目前工單照 golden 執行；換溫度模式會動到加熱），Command.cpp (S4)／(S10) 改回 golden 的 `CheckCanChangeRealDummy`；換工單本身仍空（`W906_RC_ChangeSetUpFile` 另接）。新 ctest `I125_RealDummy` |
+ | 126 | 🟢 **ctest `TesterComm_TcpCmdServer` 第 10 段（HTSET,322／323）寫檔太多，負載一高就逾時**：0930 第三批 gate 出貨組態逾時（201 s）、單獨重跑也逾時（180 s），放寬逾時單獨跑 116.5 s 全過——第 1～9 段 8.4 s，第 10 段 107 s（`HTSET,322,5` 一個指令 58.8 s，INI 逐次寫檔）。安靜時整支約 20 s。處置：調高它的 TIMEOUT 或減少那段的寫檔次數（不改被測程式） | 筆電 0930 14:1x | ✅ 1002 00:2x St02 MR !86（`33b545ac`）在 main（第二十八批）：照 NB2 R123 §3 只改測試（第 10 段兩個 Bin、段尾還原、補存檔內容檢查）；gate b28a 兩組態全新：出貨 316／4、模擬 316／19，失敗集合逐名＝基準（b20h）；sysguard 0／0／0 |
+@@ -180,7 +180,7 @@
+ | 146 | 🔴 **Teach 頁新分頁 Arm Cell**（RULINGS_20261002 第 18 條；NB2 R146／URGENT U6：使用者 11:1x「OK，照這版做」） | 使用者 1002 11:1x（經 NB2） | 🔜 機台整合（第 125 包）＋同事 MR 那一批之後開工；規格在 `origin/v906/nb2-assist` 的 `docs/nb2_assist/RD5軟體_NB2規格_Teach頁ArmCell分頁_20261002_101914.md`；機台資料 W-13 |
+ | 147 | 🟡 **第三十九批撤回後的補做：Teach 的 Out Z All Down、Set All In／Out Arm Z 照機台的 TEACH-ZALLUP 結構重做**（機台只做了 In／Out Z All Up＋Index 四顆 Servo）；NB2 R144 對第三十九批的 8 條差異（1 中 7 低）重做時一併看 | 筆電 1002 10:2x | 🔜 Arm Cell 之後或同一批 |
+ | 148 | 🟡 **第四十批（Teach 選項分頁 TabVisible）、第四十一批（通知框確認照 golden 暫停、INBOX 123）跟機台重疊，待比對**：機台 TEACH-FORMSHOW／TEACH-TABS（C++ 算 golden FormShow 的 TabVisible）、NOTE-KEYGATE／NOTE-SCREENSTART 已在 main；兩批還在 `v906/jimmy-b40`（`c4c1da5f`）／`v906/jimmy-b41`（b18，未 commit）| 筆電 1002 10:2x | ✅ **1002 12:5x 比完**：①**第四十批撤掉**——機台的 `FileRW/TeachFormShow_File.cpp` 從 C++ 照 golden FormShow 算 TabVisible，第四十批處理的 8 個頁籤（tsAOI／tsRotate／tsShuttleSensor／tsMR／tsMagazine／tsOutSort／tsYPitch15／tsYPitch60）全都涵蓋，而且開窗時會蓋過 View-rules，再做一份只會互相打架；分支 `v906/jimmy-b40` 留著當史料。②**第四十一批照做**——跟機台的 NOTE-KEYGATE（SKIP 那一組鍵的鎖）、NOTE-SCREENSTART（畫面 START）不重疊（它管的是 PAUSE），在整合後的樹上 `git apply -3 --check` 乾淨；排在第四十三批之後當下一批 |
+-| 149 | 🟡 **`build.bat` 的截斷檢查被砍掉／當掉時不會判失敗**（1002 13:4x 量到）：gate b43b 模擬組態的 `tools/pe_truncation_check.ps1` 被防毒拖到 30 分鐘（每開一支新 exe 都被掃；308 支），筆電 `Stop-Process -Force` 它之後，`build.bat:209-213` 的 `if errorlevel 1` 沒有觸發（被砍的程序回傳 -1，`errorlevel 1` 只抓 ≥1），照樣印「Build OK」進 ctest。這次建置本身完整（1731/1731 連結完成），截斷檢查事後單獨補跑 | 筆電 1002 13:4x | 🔜 `build.bat` 沒人在跑的時候改成 `if not "%ERRORLEVEL%"=="0"`（純 CRLF、無 BOM，改前先確認沒有 cmd 在跑它），並在 gate_wt.sh 對「沒有『通過：N 個 exe/dll』那一行」判紅 |
++| 149 | 🟡 **`build.bat` 的截斷檢查被砍掉／當掉時不會判失敗**（1002 13:4x 量到）：gate b43b 模擬組態的 `tools/pe_truncation_check.ps1` 被防毒拖到 30 分鐘（每開一支新 exe 都被掃；308 支），筆電 `Stop-Process -Force` 它之後，`build.bat:209-213` 的 `if errorlevel 1` 沒有觸發（被砍的程序回傳 -1，`errorlevel 1` 只抓 ≥1），照樣印「Build OK」進 ctest。這次建置本身完整（1731/1731 連結完成），截斷檢查事後單獨補跑 | 筆電 1002 13:4x | 🔜 `build.bat` 沒人在跑的時候改成 `if not "%ERRORLEVEL%"=="0"`（純 CRLF、無 BOM，改前先確認沒有 cmd 在跑它），並在 gate_wt.sh 對「沒有『通過：N 個 exe/dll』那一行」判紅；1002 13:5x 單獨補跑 build_sim 的截斷檢查：通過，308 個 exe/dll 結構完整（防毒掃過一輪後幾秒就跑完） |
+ 
+ ---
+ 
+diff --git a/docs/MACHINE_PATCHES_20261002.md b/docs/MACHINE_PATCHES_20261002.md
+index fced26a..a2b5c62 100644
+--- a/docs/MACHINE_PATCHES_20261002.md
++++ b/docs/MACHINE_PATCHES_20261002.md
+@@ -65,3 +65,13 @@ b42p 兩組態全新 11:37～12:15（HEAD e7fef6ac）：出貨 332 支 4 項、
+ 
+ - 從 **cpp 0130／web 0083** 開始；C++ 鏈尾 `a64c46ff`、web 鏈尾 `fe231709`（tools 另計：0136／0137 轉 ES02）。
+ - GitHub 第 125 包以第 123 包（`8c1afb11`）為底：第 124 包作廢（機台沒套過）。
++
++## 7. 增補（1002 下午，機台推了新的）
++
++| 機台 patch | 內容 | 怎麼收 |
++|---|---|---|
++| web 0083 HSYS-ENTRY（13:38） | 底部機況列的「⚙ Handler System」入口重新看得到（0930 LAYOUT110 把每頁底部的程式對應說明列藏起來，入口剛好在那一列），搬到 OCR 那一行右邊 | web 鏈尾 `fe231709` → `4c34e9f4`；cherry-pick 進第四十四批 |
++| web 0084 GRIDKB（14:05） | Motor Database 與 IO Table 表格的小鍵盤照 golden：名稱欄只能英數字、GearRatio／Acc／Dec 小數、其他整數（以前每一格都開完整英文鍵盤，機台 M37 MColorZ 的 GearRatio 被打成 `0.0.071425`，程式讀成 0） | web 鏈尾 → `78ee7510`；第四十四批的 gate 才跑 9 分鐘，停掉、併進來重跑（b44b） |
++| tools 0145 HTDESIGNER-157a（13:43）＋請筆電收 tools 0136／0143／0145 | 設計外掛：0.140 的版面開 C++ 檔會關掉設計頁，之後「跳到程式碼」讀到已關的頁面而中斷（Webview is disposed），已修；第 4 層時限 180→600 秒 | 照 RULINGS_20261002 第 14 條轉 ES02（TO_ES02 §4 13:5x，main `862c2ed1`）；第 126 包的機台通知重申「外掛改動走 ES02」 |
++
++下一次從 **cpp 0130／web 0085／tools 0146** 開始；C++ 鏈尾 `a64c46ff`、web 鏈尾 `78ee7510`。
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index 0e9c53f..f9b3793 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -10,6 +10,7 @@
+ 
+ | 項目 | 在哪 | 狀態／下一步 |
+ |---|---|---|
++| ✅ **第四十四批：第四十一批＋St02 !105＋Ifor !106＋機台 web 0083／0084** | GitLab main 本批＝GitHub 第 127 包 | ①第四十一批（你 1002 09:1x 第 37 項 A）：通知框的確認鈕照 golden 會暫停機台；阻塞型警報按 PAUSE 照 golden 送 DoPause 與 ESD 停止（INBOX 122／123）；②Ifor !106：溫控序列埠照 golden（I-03 第一階段）、ThermoComm 改成讓出 CPU；③St02 !105：ADAM-6024 skill；④機台 13:38 web 0083（底部狀態列的 Handler System 入口）、14:05 web 0084（Motor Database／IO Table 表格的小鍵盤照 golden；機台 M37 的 GearRatio 被打成 0.0.071425 就是這個）。gate：出貨 335 支 4 敗＝基準；模擬 335 支 22 敗＝19 基準＋3 支負載逾時（St02_Timer3／St02_TimerESD／TesterComm_HomeJson：同時段 Arm Cell 子代理在跑建置與測試，單獨重跑 3/3 過、各約 4 秒）；模擬的截斷檢查被防毒卡 20 分鐘、停掉後補跑 309 個 exe/dll 完整；sysguard 0 |
+ | ✅ **第四十三批：同事的 MR**（你 1002 12:2x「接下來是同事推gitlab部分要MR」） | GitLab main 本批＝GitHub 第 126 包 | St01 q59 到 `7898802a`（E-021 Observer 保養紀錄分頁、D-044 客戶名 906 對照表；12:10 的 `b2047c1c` 等 St01 自己 gate）、St02 !101（C8）／!104（C11）、Ifor !102（R126 M2／M3）／!100（文件）、Steven !103（skill）、ES02 HTDESIGNER 0.161。**Time Data 分頁機台跟 St01 做重了，照機台為準**（`a7e1633f`）；合併時吃掉一行 `endif()`，b43a configure 失敗，已補（`630134fb`）。gate：b43b 兩組態全新 12:37～13:55（HEAD 630134fb）：出貨 334 支 4 項＝基準；模擬 334 支 20 項＝基準 19 項＋WB_WsLink（負載下逾時，單獨重跑通過 17.8 秒）；執行期資料夾前後 0／0／0；模擬組態的截斷檢查被防毒拖住、砍掉後補跑（INBOX 149） |
+ | ✅ **機台端 patch 第三輪**（你 1002 09:5x「機台端一旦有更新，必須立即性」） | GitLab main 本批＝GitHub 第 125 包（以第 123 包為底，第 124 包作廢） | 機台 1001～1002 推的 121 顆：收 96 顆（含 0128「wb_serve 開機 10～20 秒自己結束」的修正、web 0082 斷線重連）；PKG／MERGE 21 顆與 0127 不收；LOGIN-HONPREC、TEACH-KB 保留（§0 第 50、51 項）。逐顆紀錄與衝突 `docs/MACHINE_PATCHES_20261002.md`；gate：b42p 兩組態全新 11:37～12:15（HEAD e7fef6ac）：出貨 332 支 4 項、模擬 332 支 19 項，失敗集合逐名＝基準；執行期資料夾前後 0／0／0；absence 3 個已知名稱；numcmp PASS A=2 B=11 B′=3 C=30、未覆核 0。機台在筆電的兩組態才看得到的 4 支紅燈（UAC 擋名字含 setup 的測試執行檔、模擬組態的鍵鎖期待值、Teach 輪詢測試的假 DOM、一處直接讀 bShow）已修（`907b7759`、`e7fef6ac`） |
+ | ✅ **第六批：機台端 patch 全部收進 main** | GitLab main `1742fc1e`＝GitHub 第 89 包 `472b8e1` | cpp 0022～0044、web 0012～0033 全收（RULINGS_20260930 第 11 條）＋INBOX 125。做法、4 處衝突怎麼解、全面核對、筆電編譯器才報的 `_stricmp`、IO 表測試常數 134→136：`docs/MACHINE_PATCHES_20260930.md` §0。gate：模擬 267 支＝19 項基準；出貨在最終 commit 上全新重跑（§3）；執行期資料夾 0／0／0。**下一次機台 patch 從 cpp 0045／web 0034 開始** |
+@@ -130,7 +131,9 @@
+ | ~~52~~ | ~~**寄給軟體群（RD5_SW）的機台整合通知信**~~ | ✅ **你 1002 13:4x「寄出」⇒ 13:42:51 寄出**（收件人「研五軟體」RD5_SW@honprec.com，寄件備份確認；主旨「[HT9045 V906] HT9050 機台端 10/01～10/02 的修改已收進 GitLab main（GitHub 第 125 包）…」） | — | — |
+ | 53 | **「看得到按鈕但沒功能」要不要委派（你 11:0x 問）** | 我建議 A：先量再分工——St02 已派卡 **ST02-C12**（全站按鈕普查，只量只分類，第 125 包進 main 之後做），量完我按原因分給 St02／St01／Kevin，會讓機台動的列給你；機台端正在做的 Teach／IO／Vacuum／Motor 頁留給機台。B：全交給機台端；C：筆電自己量自己修（容易跟機台撞，像今天第 39 批）。 | 照 A 進行中 | TO_STEVEN §3 ST02-C12、§4 11:2x |
+ | 54 | **W-07（HT9050 有沒有接地監測板／OTD）追了兩次 8 小時沒回** | ES02 一直沒回這題；GM-2（接地監測）要多急取決於它。11:1x 也請機台端代答（它能唯讀 Gerneral.ini，寫在第 125 包的機台通知）。要不要打電話問 EastSun？ | 等機台端回 | `docs/handoff/WAITING_REPLIES.md` W-07 |
+-| 55 | **St01 給 EastSun 上機的六批（review6 `be065d1e`～`39293c0f`）要不要先合進 main** | 白話：St01（Steven）的規則是「EastSun 上機說 OK 之前不進 main」，但機台連不到公司 GitLab，只能從 GitHub 更新包拿東西，而更新包是從 main 做的 ⇒ **照現在的規則這六批永遠上不了機台**。例：第四批 Contact 頁、第五批 OTD 對接氣缸，EastSun 想測也拿不到。**A（建議）**：筆電照常 gate 後合進 main，出一包給機台，EastSun 在機台上測，有問題再修；**B**：維持 St01 的規則（那就只能在 ES02 筆電模擬看畫面）。已在 TO_STEVEN §4 問 St01／Steven | 照 B（不合），等 St01／Steven 或你回 | TO_STEVEN §4 1002 12:2x |
++| 55 | **St01 給 EastSun 上機的六批（review6 `be065d1e`～`39293c0f`）要不要先合進 main** | 白話：St01（Steven）的規則是「EastSun 上機說 OK 之前不進 main」，但機台連不到公司 GitLab，只能從 GitHub 更新包拿東西，而更新包是從 main 做的 ⇒ **照現在的規則這六批永遠上不了機台**。例：第四批 Contact 頁、第五批 OTD 對接氣缸，EastSun 想測也拿不到。**A（建議）**：筆電照常 gate 後合進 main，出一包給機台，EastSun 在機台上測，有問題再修；**B**：維持 St01 的規則（那就只能在 ES02 筆電模擬看畫面）。已在 TO_STEVEN §4 問 St01／Steven | 照 B（不合），等 St01／Steven 或你回（**1002 13:43 St01 已把它登記成 Steven 的 Q70，St01 的 ST01-M 與 ST01-E 都建議 A**） | TO_STEVEN §4 1002 12:2x；FROM_STEVEN §3 1002 13:43 |
++| 56 | **St02 的 ADAM-6024（EP 增壓）移植：總開關要不要打開** | 白話：St02 把 golden 的 ADAM-6024 程式整支翻好了（MR !114，26 個檔、+7,436 行；筆電排第四十六批 gate），另外加了一個總開關 `W906_ADAM_EP_LIVE`，**預設關**——關著時機台跟現在一模一樣（不送 EP 壓力設定值、不連 172.16.8.110、不載 ADAMTCP.dll）。打開＝golden 的 EP 動作全部一起上：開機連線、每秒寫生產設定值、AutoClean 後還原、離開時歸零、HOME 時檢查連線。例：打開之後，如果機台**沒有** ADAM 模組或 wb_serve 找不到 ADAMTCP.dll，真機模式按 HOME 會跳「Adam Connect Error and Stop Home」、不准歸零（golden 就是這樣）。**A（建議）**：先關著合進 main；第 127 包請機台端唯讀回報三件事（ADAMTCP.dll 在哪、`Gerneral.ini` 的 `EP_Install`／`INSTALL_DOUBLE_EP`、172.16.8.110 有沒有回應；W-14），都 OK 再出一包把開關打開，讓 EastSun 上機測；**B**：現在就打開（有模組的話馬上能測，沒有的話 HOME 會被擋）；**C**：先一直關著 | 照 A：關著合，先問機台 | TO_STEVEN §4 1002 15:0x；`docs/handoff/ST02_ADAM6024_CLAIMS_20261002.md`（steven-handoff 分支） |
++| 57 | **Ifor01 在 CLAUDE.md 加的一整節「HT9050 開發知識與極限規則」（MR !110，+36 行）：Steven 1002 14:55 已在 GitLab 網頁合進 main（`d732d0c7`），要不要改放法** | 白話：CLAUDE.md 是每個 session 一開始整份讀進來的檔，加越多每次越慢、越貴，而且它已經很長；內容本身（HT9050＝9046_LS＋PCIE-1203、溫控全台達 DTM、Index Z 扭力走 1203……）是有出處的事實，沒有錯。**A（建議）**：內容搬到 skill 的參考檔（例：`.claude/skills/ht9050-construction/references/` 底下一份），CLAUDE.md 只留一行指標；**B**：照現在這樣留在 CLAUDE.md | 照 B（保持現狀），等你回 | MR !110；TO_IFOR §4 1002 15:0x |
+ 
+ ### §0b INBOX 129 普查 (a)(b) 待決定清單（1001 01:2x；每項都附 golden 位置，細節在 census129_ab.md §4）
+ 
+@@ -423,7 +426,11 @@
+ | `73dbc251`、`fc7230ce` | —（只動文件） | 給 St02 的 HW.teach.html 提醒、ES02 W-03 結案（機台 tools 0136 早就做了）、上機卡 E-06 作廢、Frank W-11 第 1 次追問；St02 派工順序＋新卡 ST02-C12 |
+ | `283f8382` | 125 `d70ae64` | 機台 96 顆＋撤第 39 批＋筆電建置才看得到的 4 支修正＋night-loop 技能 §1.0「機台優先」；gate：b42p 兩組態全新 11:37～12:15（HEAD e7fef6ac）：出貨 332 支 4 項、模擬 332 支 19 項，失敗集合逐名＝基準；執行期資料夾前後 0／0／0；absence 3 個已知名稱；numcmp PASS A=2 B=11 B′=3 C=30、未覆核 0 |
+ | `d14fa206` 等 4 顆 | —（只動文件） | St02 GO、St01 D-034 認領 OK、q59 與 Time Data 說明；LI-9 F1 認領 OK；St02 派工順序＋卡 C12 |
+-| 本批（第四十三批，含本份報告） | 126（hash 見下一批） | 同事 MR 七件＋Time Data 讓位＋補 endif；gate：b43b 兩組態全新 12:37～13:55（HEAD 630134fb）：出貨 334 支 4 項＝基準；模擬 334 支 20 項＝基準 19 項＋WB_WsLink（負載下逾時，單獨重跑通過 17.8 秒）；執行期資料夾前後 0／0／0；模擬組態的截斷檢查被防毒拖住、砍掉後補跑（INBOX 149） |
++| `8f3cdc53` | 126 `2efc840` | 同事 MR 七件＋Time Data 讓位＋補 endif；gate：b43b 兩組態全新 12:37～13:55（HEAD 630134fb）：出貨 334 支 4 項＝基準；模擬 334 支 20 項＝基準 19 項＋WB_WsLink（負載下逾時，單獨重跑通過 17.8 秒）；執行期資料夾前後 0／0／0；模擬組態的截斷檢查被防毒拖住、砍掉後補跑（INBOX 149） |
++| `862c2ed1` | —（只動文件） | 機台 13:43 請筆電收的外掛 tools 0136／0143／0145 轉 ES02（第 14 條） |
++| `8549dc78` 等 4 顆（Steven） | —（只動文件） | Steven 1002 14:54～14:55 在 GitLab 網頁直接合：!103 到 `8b411762`（St01 E-027 溫度條 skill）、!105（ADAM-6024 skill）、!110（Ifor 在 CLAUDE.md 加一節，§0 第 57 項）、!113（NB2 文件，含 V912 code review 退件對照） |
++| `60c70965` | —（只動文件） | 回 St02 MR !114 七題（開關預設關、Q2 RunTestProgram 筆電第四十六批開閘、Q7 B2／M1 標籤對調）、St01 E-027 background.html 認領 OK、St02 C14 Bin 顯示器現況、Jerry !107、Ifor !110；§0 第 56／57 項；W-08／W-09 結案、W-14 問機台 |
++| 本批（第四十四批，含本份報告） | 127（hash 見下一批） | 第四十一批＋St02 !105＋Ifor !106＋機台 web 0083／0084；gate：出貨 335 支 4 敗＝基準；模擬 335 支 22 敗＝19 基準＋3 支負載逾時（St02_Timer3／St02_TimerESD／TesterComm_HomeJson：同時段 Arm Cell 子代理在跑建置與測試，單獨重跑 3/3 過、各約 4 秒）；模擬的截斷檢查被防毒卡 20 分鐘、停掉後補跑 309 個 exe/dll 完整；sysguard 0 |
+ | — | — | **夜間迴圈（新帳號）**：cron `f34a7ab2`（`7,27,47 * * * *`＝每 20 分鐘，session 閒置才觸發、7 天自動到期），0930 21:0x 掛上。⚠ session-scoped：視窗關掉或筆電被強制關機就沒了 |
+ 
+ ## §6 我自己犯的錯與更正
+diff --git a/forms/fNote_ShowError.cpp b/forms/fNote_ShowError.cpp
+index 9842385..e6b739e 100644
+--- a/forms/fNote_ShowError.cpp
++++ b/forms/fNote_ShowError.cpp
+@@ -577,14 +577,14 @@ void TfNote::W906_FormShowServoOff()
+ //    branch: dialog mailbox + alarm ring raise/clear, return at once).  golden :1110 sets KeyCode=0 ("PAUSE only"), and
+ //    the port's kcode==0 notes do not wait (user ruling 20260923, AI(W906-Q30-KZERO)): the tick thread never waits on
+ //    the browser here.
+-//    [W906] DEVIATION, stated: golden's ShowModal returns only through the note's one button, PAUSE (TfNote::BtnPauseClick,   [AI(W906-J5-ACK) 20260930: golden has a second exit, TfNote::Start's KeyCode==0 arm :3683-3803 (panel START); the PAUSE exit is now wired at the notice ack -- EOF banner]
++//    [W906] DEVIATION, stated: golden's ShowModal returns only through the note's one button, PAUSE (TfNote::BtnPauseClick,   [AI(W906-J5-ACK) 20260930: [AI(W906-I37A) 20261002: INBOX 122 / NB2 R122 correction -- TfNote::Start's KeyCode==0 arm :3683-3803 is NOT a second exit: FormShow hides BtnStart :1542-1545 and the panel START key returns while it is hidden :3024-3029]; the PAUSE exit is now wired at the notice ack -- EOF banner]
+ //    KeyCode==0 arm, golden note.cpp:4044-4153: SoftStop=true; ReturnCode=0; SoftStart=false; ...).  The port's note does
+ //    not wait, so that answer's state is applied right after the hook -- the rule of AI(W906-ALARMSTOP) 20260924 (user
+ //    ruling 1: a notice stops the machine and the operator presses START again, "golden's result, without the key press").
+ //    Without it SystemStart stays true (golden :1052-1169 never clears it -- it relies on the note), MainProc's
+ //    fAllMotorHome==false arm (csystem.cpp:31185) sets iHome=1 and its iHome==1 arm (:31556) runs DoHomeProcess -- the
+ //    machine re-homes by itself on the next tick, before anybody has seen the alarm.
+-//    Not applied with the answer (same as the W906-DLG-PAUSE Pause answer in wb_serve): golden :4149-4151
++//    Not applied with the answer (the blocking W906-DLG-PAUSE answer sends them since AI(W906-I37A) 20261002, INBOX 123): golden :4149-4151
+ //    EventReport(DoPause) and SendCommand_ESD(ESD_SYSTEM_STOP), and :4052 DoPassword.
+ //    Recovery / PassTime (golden :1140-1141 / :1150-1151) are golden FormClose's (not ported): "" and 0.   [AI(W906-J5-ACK) 20260930: FormClose now runs at the notice ack (EOF), after this row was written -- StopedTime stays 0 here (known gap, EOF banner)]
+ //  GATES (each a missing dependency; the measurement is on the #if line):
+@@ -792,16 +792,16 @@ void ShowMotorErrorMessage(AnsiString Code, int MotorAlarmNo, AnsiString errPart
+ // =============================================================================
+ //  AI(W906-J5-ACK) 20260930: the operator's answer to a KeyCode==0 note -- INBOX 119 (Jerry J-5, FROM_JERRY 0929 18:24).
+ //  Golden (906 note.cpp): a KeyCode==0 note waits in ShowModal (ShowErrorMessage :991, ShowMotorErrorMessage :1133)
+-//  until the operator closes it, and it has TWO exits (the INBOX 118 banner above says one; golden has both):
++//  until the operator closes it, and it has ONE exit, PAUSE (AI(W906-I37A) 20261002: INBOX 122 / NB2 R122 -- not two, see START):
+ //    PAUSE  TfNote::BtnPauseClick (:3826), its KeyCode==0 arm (:4044-4153): SoftStop=true, ReturnCode=0, SoftStart=false,
+ //           EventReport(DoPause), SendCommand_ESD(ESD_SYSTEM_STOP), Close()
+-//    START  TfNote::Start (:3527), its KeyCode==0 arm (:3683-3803): fMain->Start("fNote::Start 2"),
+-//           SendCommand_ESD(ESD_SYSTEM_START), Close() -- the panel START key (ScanKey), or BtnStart on CC_SIGURD_PeiXing
+-//  and both end in TfNote::FormClose (:2503-2762).  The port's notice does not wait (user ruling 20260923,
++//    START  TfNote::Start (:3527), its KeyCode==0 arm (:3683-3803) is unreachable: FormShow hides BtnStart (:1542-1545),
++//           the panel START key returns while it is hidden (:3024-3029); the port matches (dialog-page.js, wb_serve :7369)
++//  and PAUSE ends in TfNote::FormClose (:2503-2762).  The port's notice does not wait (user ruling 20260923,
+ //  AI(W906-Q30-KZERO)).  This is the PAUSE exit, reached from the page's single 確認 button through WS dialog.notifyAck
+-//  (tools/wb_serve.cpp W906_NoticeAckCommand -> w906dlg::NotifyAckHandle, tools/wb_dialog_mailbox.h).  The START exit is
+-//  not wired: START while a notice is up restarts the machine (start.run / panel START) and leaves the box up; an ack
+-//  after that is only a close (pause 2 below).  Nothing here starts motion.
++//  (tools/wb_serve.cpp W906_NoticeAckCommand -> w906dlg::NotifyAckHandle, tools/wb_dialog_mailbox.h).  A web / remote
++//  START (start.run, SECS RCMD) can restart the machine while the box is up; the ack then pauses it as golden does
++//  (RULINGS_20261002 #5 = NIGHT_REPORT s0 #37 A; it used to be "pause 2", records only).  Nothing here starts motion.
+ //
+ //  W906_NoteNoticeCapture -- when a notice is posted (wb_serve ForwardShowErrorMessage, its kcode==0 branch): keeps what
+ //    FormClose reads from fNote.  Golden reads it at close, and nothing can change it while the note is modal (a new
+@@ -813,11 +813,11 @@ void ShowMotorErrorMessage(AnsiString Code, int MotorAlarmNo, AnsiString errPart
+ //  WHAT RUNS (the pause code goes back in the ack, w906dlg::NotifyAckOkJson):
+ //    3 no-golden-note  the record half did not run (InitialOK false :538-542 / an alarm while fNote is up :814-818):
+ //                      golden shows no note at all, so nothing closes -- only the mailbox is retired.
+-//    2 skipped-machine-running  SystemStart or SoftStart is true: restarted since the notice.  In golden that restart
+-//                      IS the START exit and the note closed with it; a PAUSE now would pause a running machine (golden
+-//                      never does that from a note) and Alarm->Clear() would drop alarms raised while it runs.  Only the
+-//                      records: the jam count (:2528-2529), PassTime / Recovery (:2545 / :2548-2549), MyDBUEventRecover
+-//                      (:2557).
++//    2 skipped-machine-running  RETIRED by AI(W906-I37A) 20261002 (RULINGS_20261002 #5 = A).  It was: SystemStart or SoftStart
++//                      true (restarted since the notice) -> records only, no PAUSE.  golden's KeyCode==0 arm has no such
++//                      condition (:4146-4152): the machine is paused now and Alarm->Clear() drops what it raised meanwhile, as
++//                      golden.  bPress below is always true; the code value 2 stays reserved in w906dlg::NotifyAckOkJson.
++//
+ //    1 already-applied the motor note: ShowMotorErrorMessage's body applied :4146 / :4148 right after posting (this file,
+ //                      the AI(W906-ALARMSTOP) rule), so SoftStop / SoftStart are not set a second time; the rest as 0.
+ //    0 applied         the machine is still in the stop the notice put it in: everything below.
+@@ -883,7 +883,7 @@ const char* W906_NoteNoticeAckRefusal(const char* requestId)
+ {
+     if (!W906_Notice.valid || W906_Notice.requestId != AnsiString(requestId ? requestId : "")) return 0;   // [W906] not this notice: nothing to refuse (the close below does nothing either)
+     if (!W906_Notice.goldenNote) return 0;                                      // [W906] pause 3: golden has no note, no BtnPauseClick
+-    if (SystemStart==true || SoftStart==true) return 0;                         // [W906] pause 2: not a PAUSE press any more (banner)
++    if (false) return 0;                                                        // [W906] was pause 2 (SystemStart||SoftStart -> no refusal checks); AI(W906-I37A) 20261002: A -- golden refuses whatever the machine state
+ #if 0 // GATE(W906-J5-ACK) B1: golden :3828-3831 -- fNote->bNeedTCPAlarm (TfNote has none; Command.cpp's readers are comments / #if 0) and bErrPan_err / Pwd (0 definitions in this tree, git grep 20260930): the HandlerResultServer panel lock and the SpecialPanel password are not ported, so neither refuses here
+     if(CosFunction.bEnableHandlerResultServer && bNeedTCPAlarm)                 //Sam 20230620 : 面板已經鎖定需要 IT 下命令解鎖
+         return;
+@@ -907,7 +907,7 @@ bool W906_NoteNoticeAckLikeGolden(const char* requestId, int* pauseOut, bool* ja
+     if (mine && W906_Notice.goldenNote)
+     {
+     W906_Notice.valid=false;                                                    // [W906] exactly once
+-    const bool bPress = (SystemStart==false && SoftStart==false);               // [W906] banner: 0 / 1 when true, 2 when false
++    const bool bPress = true;                                                   // [W906] banner: 0 / 1; AI(W906-I37A) 20261002: A -- was (SystemStart==false && SoftStart==false), "pause 2" when false
+     pause = !bPress ? 2 : (W906_Notice.answerApplied ? 1 : 0);
+     const int KeyCode=0;                                                        // [W906] this note's fNote->KeyCode (golden :901 KCode / :1110); the member may already hold a later note's
+     const int ReturnCode=0;                                                     // [W906] golden :4147 ReturnCode=0 (TfNote has no ReturnCode; the caller got 0 when the notice was posted)
+@@ -1342,3 +1342,81 @@ bool W906_NoteNoticeAckLikeGolden(const char* requestId, int* pauseOut, bool* ja
+     if (passTimeOut)   *passTimeOut=passSec;
+     return mine;
+ }
++
++//------------------------------------------------------------------------------
++//  AI(W906-I37A) 20261002: INBOX 123 (NB2 R122 s2; RULINGS_20261002 #5, Q-C = with the SOFT_SIMULTE key records) -- a BLOCKING alarm
++//  answered with PAUSE.  golden TfNote::BtnPauseClick (906 note.cpp:3826; V912 :3866), its Select[] arm for the selected key:
++//    :3840  bStartMoveSpeed=false;                (the panel path, wb_serve.cpp:7380, already did it; the web path had not)
++//    :3980-3982  ReturnCode=KeyComp[i]; SoftStop=true; SoftStart=false;   -- the callers (wb_serve.cpp :622-624 / :691) do these
++//    :3983-4034  #ifdef SOFT_SIMULTE: the per-key EventLog row + EventReport(DoSkip / DoRetry / ...)
++//    :4036-4038  EventReport(SECS_EVENT.DoPause) (SECS on) and SendCommand_ESD(ESD_SYSTEM_STOP)   (906 :4036-4038 / V912 :4076-4078)
++//    then Close() -> FormClose: the callers' W906_NoteJamCountOnClose / W906_NoteFormCloseAlarmClear, after this call (golden order).
++//  k = the answered key (K_SKIP ...), mapped back to golden's i through the same KeyComp table (:3836).  The two callers are the
++//  only blocking PAUSE exits in the tree (the web answer and the panel IO key).  The notice (KeyCode==0) PAUSE is
++//  W906_NoteNoticeAckLikeGolden above.  Nothing here moves anything (the machine stopped when the alarm was posted).
++//------------------------------------------------------------------------------
++void W906_NoteBlockingPauseLikeGolden(int k)
++{
++    void NewRecordProcess(AnsiString AlarmCode, AnsiString S, AnsiString Debug);   // cMyDB.h:129 (golden cMyDB.h:62); all three given here
++    bStartMoveSpeed=false;                                                      //Steven 20231018 : Fixed for G14   [golden :3840]
++#ifdef SOFT_SIMULTE
++    {
++    const int KeyComp[]={K_SKIP, K_RETRY, K_TRAY_FEED, K_TRAY_END, K_CLEAN_OUT, K_RESET, K_HOME, K_TRAIN,K_ONECYCLE};   // golden :3836
++    int i=-1;
++    for (int j=0; j<(int)(sizeof(KeyComp)/sizeof(KeyComp[0])); j++) if (KeyComp[j]==k) { i=j; break; }   // [W906] golden's loop index
++                if(     i==0)
++                {
++                    NewRecordProcess("MES2120", "SKIP pressed", "Note_BtnPauseClick");
++                    if(IniConfig.bEnable_SECS_GEM==true)                        //Steven 20140528 : Secs Gem
++                        EventReport(SECS_EVENT.DoSkip);                         //29     按下 Skip
++                }
++                else if(i==1)
++                {
++                    NewRecordProcess("MES2121", "RETRY pressed", "Note_BtnPauseClick");
++                    if(IniConfig.bEnable_SECS_GEM==true)                        //Steven 20140528 : Secs Gem
++                        EventReport(SECS_EVENT.DoRetry);                        //28     按下 Retry
++                }
++                else if(i==2)
++                {
++                    NewRecordProcess("MES2118", "TRAY FEED pressed", "Note_BtnPauseClick");
++                    if(IniConfig.bEnable_SECS_GEM==true)                        //Steven 20140528 : Secs Gem
++                        EventReport(SECS_EVENT.DoTrayFeed);                     //32     按下 Tray Feed
++                }
++                else if(i==3)
++                {
++                    NewRecordProcess("MES2119", "TRAY END pressed", "Note_BtnPauseClick");
++                    if(IniConfig.bEnable_SECS_GEM==true)                        //Steven 20140528 : Secs Gem
++                        EventReport(SECS_EVENT.DoTrayEnd);                      //31     按下 Tray End
++                }
++                else if(i==4)
++                {
++                    NewRecordProcess("MES2114", "CLEAN OUT pressed", "Note_BtnPauseClick");
++                    if(IniConfig.bEnable_SECS_GEM==true)                        //Steven 20140528 : Secs Gem
++                        EventReport(SECS_EVENT.DoCleanOut);                     // 4     按下 Clean Out
++                }
++                else if(i==5)
++                {
++                    NewRecordProcess("MES2113", "RESET pressed", "Note_BtnPauseClick");
++                    if(IniConfig.bEnable_SECS_GEM==true)                        //Steven 20140528 : Secs Gem
++                        EventReport(SECS_EVENT.DoReset);                        //33     按下 Reset
++                }
++                else if(i==6)
++                {
++                    NewRecordProcess("MES2122", "HOME & Retry pressed", "Note_BtnPauseClick");                          //ChungHung HT9045 2011/12/13
++                    if(IniConfig.bEnable_SECS_GEM==true)                        //Steven 20140528 : Secs Gem
++                        EventReport(SECS_EVENT.DoHome);                         //25     按下 Home
++                }
++                else if(i==7)
++                {
++                    NewRecordProcess("MES2123", "Auto Training", "Note_BtnPauseClick");
++                }
++                else if(i==8)
++                {
++                    NewRecordProcess("MES2124", "Fix pressed", "Note_BtnPauseClick");
++                }
++    }
++#endif
++            if(IniConfig.bEnable_SECS_GEM==true)                                //Steven 20140528 : Secs Gem
++                EventReport(SECS_EVENT.DoPause);                                // 2     按下 Pause
++            SendCommand_ESD(ESD_SYSTEM_STOP);                                   //Steven 20140722
++}
+diff --git a/rs232.cpp b/rs232.cpp
+index a72c259..8a64c70 100644
+--- a/rs232.cpp
++++ b/rs232.cpp
+@@ -160,7 +160,7 @@ const size_t W906_COMM1_MAX_PENDING = 2048;   // 不是 golden 的值：只為
+ //---------------------------------------------------------------------------
+ TCOM2Shim::TCOM2Shim()
+     : bCCDDummyRum(true),                                                       // offline: dummy-run true so RTC/CCD branches short-circuit（原本的值，不變）
+-      Comm1(new TComm(0)),                                                      // golden rs232.dfm:39 object Comm1: TComm
++      Comm1(new TComm(0)), Comm2(new TComm(0)),                                // golden rs232.dfm:39 object Comm1: TComm; Comm2 = rs232.dfm:8 object Comm2: TComm (AI(W906-I03) 20261002, same line)
+       rwCommandDelay(0),                                                        // golden VCL 物件零初始化；W906_CreateFormBoot 設 5（rs232.cpp:119）
+       fPanasonicParameterRW(false),
+       autoTask(0)                                                               // golden VCL 物件零初始化；InitReadTorueTask 在 Panasonic 時設 1
+@@ -175,7 +175,7 @@ TCOM2Shim::TCOM2Shim()
+     Comm1->StopBits=_1;                                                         // rs232.dfm:57
+     // rs232.dfm:61 ReadIntervalTimeout = 100 —— 刻意不設，見檔頭 (2)
+     Comm1->OnReceiveData=[this](vclcompat::TObject * /*Sender*/, void *Buffer, Spcomm::Word BufferLength)
+-                         { W906_Comm1QueueRx(Buffer, BufferLength); };          // rs232.dfm:66 OnReceiveData = Comm1ReceiveData（經 (1) 的佇列）
++                         { W906_Comm1QueueRx(Buffer, BufferLength); };  W906_Comm2DfmBoot();   // rs232.dfm:66 OnReceiveData = Comm1ReceiveData（經 (1) 的佇列）；AI(W906-I03) 20261002: W906_Comm2DfmBoot = Comm2 的 rs232.dfm:8-38 設計期值＋OnReceiveData＋兩個縫（檔尾），同一行
+ }
+ //---------------------------------------------------------------------------
+ void TCOM2Shim::W906_Comm1QueueRx(void *Buffer, unsigned short BufferLength)   // 讀取執行緒
+@@ -241,17 +241,17 @@ void W906_COM2_CreateFormBoot()
+ }
+ //---------------------------------------------------------------------------
+ //  golden TCOM2::RS232Init（rs232.cpp:149-688）。
+-//  活的只有扭力通道（:155-161 檢查 HSys.sTorqueComPort、:236-262 開 Comm1）。
++//  活的：扭力通道（:155-161 檢查 HSys.sTorqueComPort、:236-262 開 Comm1）；AI(W906-I03) 20261002 起還有溫控 Comm2（:163-182、:264-281、:684-685，檔尾）。
+ //  閘著的（都不是這條路；它們的 TComm 成員與接收函式 Comm2ReceiveData／Comm4ReceiveData／TempComm6ReceiveData／
+ //  cmATC*ReceiveData／PadCommReceiveData／cmVisionLightReceiveData 在 TCOM2Shim 上都不存在 —— 只探測或打開一個
+ //  沒有消費者的埠，只會在開機時多跳警告、或把那個埠佔住）：
+-//    :163-182  溫控 KT4H（HSys.sTempComPort）／EJ1N（HSys.sTempOmronComPort）的埠檢查
++//    （:163-182 溫控 KT4H／EJ1N 的埠檢查 —— AI(W906-I03) 20261002 已接上，本體檔尾 W906_RS232InitTempCheck）
+ //    :184-189  Real Time CCD（HSys.sRTCComPort）       :191-196  溫度 IC（HSys.sTempDynamicComPort）
+ //    :198-219  ATC 1-4（SOFT_SIMULTE 臂本來就全 false）   :221-234  Tray 步進馬達／控制面板（HSys.TrayStepMotor_ComPort）
+-//    :264-281  Comm2 開埠                                   :283-560  Comm4（RTC）開埠＋RTC 指令字串表
++//    （:264-281 Comm2 開埠：已接上，W906_RS232InitTempOpen）      :283-560  Comm4（RTC）開埠＋RTC 指令字串表
+ //    :562-574  TempComm6（溫度 IC）開埠                     :576-646  ATC 1-4 開埠
+ //    :648-682  Vision light（cmVisionLight）
+-//    :684-685  Rs232Comm2Busy／InitQue(&RxQue)（Comm2 的收件佇列）
++//    （:684-685 Rs232Comm2Busy／InitQue(&RxQue)：已接上，同上）
+ //    :686-687  TimerHPCard->Enabled=true —— HP 通訊卡（檔頭 (3)）
+ //---------------------------------------------------------------------------
+ void TCOM2Shim::RS232Init()
+@@ -268,7 +268,7 @@ void TCOM2Shim::RS232Init()
+         ShowMyMessage("Index Torque : "+HSys.sTorqueComPort+" port error , "+GetErrorMessage(iErr), "");
+     }
+ 
+-    // golden :163-234 其餘通道的埠檢查 —— 閘著，理由見函式上方
++    { extern void W906_RS232InitTempCheck(bool *flag); W906_RS232InitTempCheck(flag); }   // AI(W906-I03) 20261002: golden :163-182 溫控埠檢查（檔尾）；:184-234 其餘通道的埠檢查仍閘著，理由見函式上方
+ 
+     if(flag[0])
+     {
+@@ -298,7 +298,7 @@ void TCOM2Shim::RS232Init()
+         }
+     }
+ 
+-    // golden :264-687 其餘通道開埠、Rs232Comm2Busy／RxQue、TimerHPCard —— 閘著，理由見函式上方
++    { extern void W906_RS232InitTempOpen(const bool *flag); W906_RS232InitTempOpen(flag); }   // AI(W906-I03) 20261002: golden :264-281 開溫控埠＋:684-685（檔尾）；:283-682 其餘通道開埠、:686-687 TimerHPCard 仍閘著，理由見函式上方
+ }
+ //----------------------------------------------------------------------------
+ #define MOTOR_MIN_WAIT  10                                                      //2008/07/15 lee   // golden :761
+@@ -2289,3 +2289,208 @@ int W906_Ht9050TorqueLimit(int MotorIndex, int Torque)
+     }
+     return 0;
+ }
++//==============================================================================
++//  AI(W906-I03) 20261002 (Ifor01): golden TCOM2 的溫控器那一半（Comm2）—— I-03 第一階段
++//  （docs/handoff/TO_IFOR.md I-03；FROM_IFOR §1 1002 09:0x）。golden（906，cp950 → UTF-8）：
++//    rs232.dfm:8-38 object Comm2: TComm ......... W906_Comm2DfmBoot（建構子呼叫）
++//    rs232.cpp:131 / :133-147 Rs232Comm2Busy／Que／RxQue／InitQue
++//    rs232.cpp:163-182 RS232Init 的溫控埠檢查 ...... W906_RS232InitTempCheck
++//    rs232.cpp:264-281 開 Comm2、:684-685 ........... W906_RS232InitTempOpen
++//    rs232.cpp:721-757 Comm2ReceiveData
++//  沒搬：golden :127-130 的 RS232zipShowFlag／Comm2ReceiveFlag／BIBTestOkFlag／Comm2BusyFlag —— 整棵 golden 除了定義沒有任何人讀寫。
++//
++//  與 golden 的語意差，跟扭力 Comm1 同一件事（檔頭 (1)(2)）：golden 的 SPComm 在主執行緒、以 ReadIntervalTimeout=100
++//  （rs232.dfm:30）切好一包才呼叫 Comm2ReceiveData，而 Comm2ReceiveData 靠「一包一次到齊」：BufferLength<7 直接丟掉、TC401／TMC401
++//  讀 data[0..7]、KT4H／E5DC／DTK4848 把整包 sprintf("%s") 進 Com2Buffer。vclcompat 的 TComm 在讀取執行緒上有幾個位元組就交幾個
++//  ⇒ 讀取執行緒只排隊（W906_Comm2QueueRx），golden 的消費端 DoThermo 每拍開頭（bthermo.cpp）呼叫 W906_PumpComm2：
++//  安靜滿 100 ms（dfm 那個值）才把整包交給 Comm2ReceiveData。ReadIntervalTimeout 同樣**不**設到 vclcompat 的 Comm2 上（檔頭 (2)）。
++//
++//  g_pCOM2Comm2／g_pDTKComm（cpublic.cpp：ht9045_globals 的縫，cpublic.cpp 在 COM2 的 library 底下，不能直接寫 COM2->Comm2）
++//  在建構子就指到 Comm2 ＝ golden「COM2->Comm2 一直在」。埠沒開時 WriteCommData 回 false、什麼都不寫（vclcompat/Comm.cpp:396，同 SPComm）。
++//
++//  開機不會因為溫控埠打不開而卡住：RS232Init 在 InitialHandler 裡（wb_serve.cpp:4066），在 PumpInit 設 InitialOK=true（:4212）
++//  之前，而 ShowMyMessage 在 InitialOK==false 時只記一筆 Exception、不顯示（golden mymessbox.cpp:765-769 Ifor 20151230；
++//  wb_serve W906MbShowMyMessage 照翻）；模擬組態另外照 golden :771 直接略過含 " port error" 的訊息。
++//------------------------------------------------------------------------------
++extern Spcomm::TComm* g_pCOM2Comm2;   // cpublic.cpp（golden COM2->Comm2 的縫）
++extern Spcomm::TComm* g_pDTKComm;     // cpublic.cpp / cpublic.h:394（DTK4848，golden 也是 COM2->Comm2）
++
++namespace {
++struct W906_Comm2RxQueue {
++    CRITICAL_SECTION cs;
++    std::vector<unsigned char> pending;
++    DWORD lastTick;
++    W906_Comm2RxQueue() : lastTick(0) { ::InitializeCriticalSection(&cs); }   // 只碰自己的成員（同 g_comm1Rx）
++};
++W906_Comm2RxQueue g_comm2Rx;
++const DWORD  W906_COMM2_INTERVAL_MS = 100;    // rs232.dfm:30 Comm2 ReadIntervalTimeout = 100
++const size_t W906_COMM2_MAX_PENDING = 2048;   // 不是 golden 的值：同 Comm1，只為了不讓一條一直在講話的線把佇列無限撐大
++
++const int QUE_LEN_W906 = 4096;                // golden :133 #define QUE_LEN 4096（不用巨集：本樹別處可能也有同名巨集）
++typedef struct tagQue                         // golden :134-139
++{
++    int Read;
++    int Write;
++    unsigned char ptr[QUE_LEN_W906];          // golden Byte ptr[QUE_LEN]
++}Que;
++Que RxQue;                                    // golden :140 static Que RxQue;
++BOOL InitQue(Que *que)                        // golden :142-147
++{
++    que->Read=0;
++    que->Write=0;
++    return TRUE;
++}
++bool Rs232Comm2Busy;                          // golden :131（golden 只在 :684 寫、沒有人讀）
++}
++
++//------------------------------------------------------------------------------
++//  golden rs232.dfm:8-38（object Comm2: TComm）的設計期值。建構子最後呼叫（Comm1 的設定之後）。
++//------------------------------------------------------------------------------
++void TCOM2Shim::W906_Comm2DfmBoot()
++{
++    Comm2->CommName="COM2";                                                     // rs232.dfm:9
++    Comm2->BaudRate=9600;                                                       // rs232.dfm:10
++    Comm2->ParityCheck=false;                                                   // rs232.dfm:11
++    Comm2->Outx_XonXoffFlow=false;                                              // rs232.dfm:17
++    Comm2->Inx_XonXoffFlow=false;                                               // rs232.dfm:18
++    Comm2->ByteSize=_8;                                                         // rs232.dfm:24
++    Comm2->Parity=None;                                                         // rs232.dfm:25
++    Comm2->StopBits=_1;                                                         // rs232.dfm:26
++    // rs232.dfm:30 ReadIntervalTimeout = 100 —— 刻意不設，理由同 Comm1（檔頭 (2)）
++    Comm2->OnReceiveData=[this](vclcompat::TObject * /*Sender*/, void *Buffer, Spcomm::Word BufferLength)
++                         { W906_Comm2QueueRx(Buffer, BufferLength); };          // rs232.dfm:35 OnReceiveData = Comm2ReceiveData（經佇列）
++    g_pCOM2Comm2=Comm2;                                                         // golden 的 COM2->Comm2（cpublic.cpp 的 KT4H／TMC401／E5DC 寫入）
++    g_pDTKComm=Comm2;                                                           // golden DTK4848Word*NoSucm 也寫 COM2->Comm2（cpublic.cpp 原本就走這個縫）
++}
++//------------------------------------------------------------------------------
++void TCOM2Shim::W906_Comm2QueueRx(void *Buffer, unsigned short BufferLength)   // 讀取執行緒
++{
++    const unsigned char *p=(const unsigned char*)Buffer;
++    ::EnterCriticalSection(&g_comm2Rx.cs);
++    g_comm2Rx.pending.insert(g_comm2Rx.pending.end(), p, p+BufferLength);
++    g_comm2Rx.lastTick=::GetTickCount();
++    ::LeaveCriticalSection(&g_comm2Rx.cs);
++}
++//------------------------------------------------------------------------------
++void TCOM2Shim::W906_PumpComm2()                                                // DoThermo 的節拍（bthermo.cpp）
++{
++    std::vector<unsigned char> frame;
++    ::EnterCriticalSection(&g_comm2Rx.cs);
++    if(g_comm2Rx.pending.empty()==false &&
++       ((DWORD)(::GetTickCount()-g_comm2Rx.lastTick)>=W906_COMM2_INTERVAL_MS ||
++        g_comm2Rx.pending.size()>=W906_COMM2_MAX_PENDING))
++    {
++        frame.swap(g_comm2Rx.pending);
++    }
++    ::LeaveCriticalSection(&g_comm2Rx.cs);
++
++    if(frame.empty())
++        return;
++
++    const unsigned short n=(unsigned short)frame.size();
++    frame.push_back(0);                                                         // golden 把整包當 C 字串 sprintf("%s") 進 Com2Buffer；SPComm 的緩衝區比一包大，這裡補一格 NUL
++    Comm2ReceiveData(Comm2, &frame[0], n);
++}
++//------------------------------------------------------------------------------
++//  golden TCOM2::Comm2ReceiveData（rs232.cpp:721-757），逐句照翻。
++//------------------------------------------------------------------------------
++void TCOM2Shim::Comm2ReceiveData(void * /*Sender*/, void *Buffer, unsigned short BufferLength)
++{
++    if(InitialOK==false)                                                        //Steven 20120202 : 加入Thread保護
++        return;
++
++    if(BufferLength<7)
++        return;
++
++    unsigned char *data;                                                        // golden byte *data;
++    data=(unsigned char *)Buffer;
++
++    if(BufferLength>250)
++       BufferLength=250;
++
++    if(TC401HeaterControl==TC401)                                               //Steven 20141030 : 新增OMRON E5DC溫控器
++    {
++        for(int i=0; i<8; i++)
++            READBUFF[i]=data[i];
++    }
++    else if(TC401HeaterControl==E5DC)                                           //Steven 20141030 : 新增OMRON E5DC溫控器
++    {
++        Com2Buffer.sprintf("%s", (char*)Buffer);                                //Steven 20111028 : 改成AnsiString
++    }
++    else
++    {
++        if(data[0]!=':')
++        {
++            return;
++        }
++        else
++        {
++            Com2Buffer.sprintf("%s", (char*)Buffer);                            //Steven 20111028 : 改成AnsiString
++        }
++    }
++    Com2ReceiveOK=true;
++}
++//------------------------------------------------------------------------------
++//  golden TCOM2::RS232Init 的溫控埠檢查（rs232.cpp:163-182），逐句照翻。RS232Init :271 同一行呼叫。
++//------------------------------------------------------------------------------
++void W906_RS232InitTempCheck(bool *flag)
++{
++    if(TC401HeaterControl==NoHeater)                                            //Steven 20171227 (Wei) : Add for HT-9045L
++    {
++        flag[1]=false;
++        flag[2]=false;
++    }
++    else
++    {
++        flag[1]=GetCOMPortStatus(HSys.sTempComPort);
++        if(flag[1]==false)
++            ShowMyMessage("Temperature KT4H : "+HSys.sTempComPort+" port error", "");
++
++        if(USE_16_HEATER==eht16HeaterEJ1N ||
++           USE_16_HEATER==eht32HeaterEJ1N ||
++           USE_16_HEATER==eht32HeaterDTME08)                                    //Steven 20140923 : Index使用EJ1N版32組加熱器
++        {
++            flag[2]=GetCOMPortStatus(HSys.sTempOmronComPort);
++            if(flag[2]==false)
++                ShowMyMessage("Temperature EJ1N :"+HSys.sTempOmronComPort+" port error", "");
++        }
++    }
++}
++//------------------------------------------------------------------------------
++//  golden TCOM2::RS232Init 的開溫控埠（rs232.cpp:264-281）與 :684-685，逐句照翻。RS232Init :301 同一行呼叫。
++//  golden 的 SPComm StartComm 開不了埠會丟例外 → 下面的 catch；vclcompat 的 StartComm 開不了會安靜地轉成模擬
++//  （vclcompat/Comm.cpp:340-343），所以多看一次 IsSimMode()，讓「開不了」照樣走 golden catch 那兩行（記錄＋訊息）。
++//------------------------------------------------------------------------------
++void W906_RS232InitTempOpen(const bool *flag)
++{
++    if(flag[1] && USE_NEW_TEMPCTRL_FUNCTION==false)
++    {
++        COM2->Comm2->CommName="\\\\.\\"+HSys.sTempComPort;
++        COM2->Comm2->Parity=None;
++        COM2->Comm2->BaudRate=9600;
++        COM2->Comm2->ByteSize=_8;
++        COM2->Comm2->ParityCheck=false;
++        COM2->Comm2->StopBits=_1;
++        try
++        {
++            COM2->Comm2->StartComm();                                           //僅能啟動一次
++            if(COM2->Comm2->IsSimMode())                                        // AI(W906-I03): SPComm 會在這裡丟例外（見上）
++                throw 0;
++        }
++        catch(...)
++        {
++            MyDBIProcess("Exception", "TCOM2::RS232Init");
++            ShowMyMessage("Temperature KT4H : "+HSys.sTempComPort+" port error", "");
++        }
++    }
++
++    Rs232Comm2Busy=false;                                                       // golden :684
++    InitQue(&RxQue);                                                            // golden :685
++}
++//------------------------------------------------------------------------------
++//  bthermo.cpp DoThermo（ht9045_sm；不 include atester_shims.h）每拍開頭用 block-scope extern 呼叫這一支。
++//------------------------------------------------------------------------------
++void W906_PumpTempComm2()
++{
++    COM2->W906_PumpComm2();
++}
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index de75399..022e391 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -3645,7 +3645,7 @@ add_executable(test_ga1_cprod
+     #   would ever fire.
+     ${CMAKE_CURRENT_SOURCE_DIR}/../CosFunction.cpp
+     ${CMAKE_CURRENT_SOURCE_DIR}/../cmydef.cpp
+-    ${CMAKE_CURRENT_SOURCE_DIR}/../cpublic.cpp
++    ${CMAKE_CURRENT_SOURCE_DIR}/../cpublic.cpp  ${CMAKE_CURRENT_SOURCE_DIR}/../EJ1N/TextProcess.cpp  # AI(W906-I03) 20261002 (Ifor01): cpublic.cpp's KT4H / E5DC bodies are ungated (I-03) and call T_ASXII2HEX / A_Create_LCR / T_HEX2ASCII_Mac / SetBCC (ht9045_globals has them; this target compiles its sources directly), same line
+     ${CMAKE_CURRENT_SOURCE_DIR}/../myTimer.cpp
+     ${CMAKE_CURRENT_SOURCE_DIR}/../common.cpp
+     ${CMAKE_CURRENT_SOURCE_DIR}/../LastSet.cpp
+@@ -6692,3 +6692,17 @@ if(W906_NODE_EXECUTABLE)
+         "${CMAKE_SOURCE_DIR}/tools/webprobe/e021_observer_selftest.cjs" "${CMAKE_SOURCE_DIR}/../web/page")
+     set_tests_properties(E021_ObserverPage PROPERTIES TIMEOUT 60)
+ endif()
++# --- test_thermo_comm: AI(W906-I03) 20261002 (Ifor01) -- I-03 phase 1: golden TCOM2 Comm2 (the temperature-controller serial port,
++#   rs232.cpp EOF) + cpublic.cpp KT4H / TMC401 / E5DC frames + bthermo.cpp DoThermoReal over it. Comm2 forced to SIM (no COM port);
++#   no RS232Init / W906_CreateFormBoot (they probe real ports / touch Gerneral.ini). Frames byte for byte against independent encoders,
++#   the 100 ms delivery, DoThermo end to end with a fake KT4H (UN150ReadReal 100.0) and without one (999, longest call). ~10 s.
++add_executable(test_thermo_comm test_thermo_comm.cpp)
++target_link_libraries(test_thermo_comm PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_thermo_comm PRIVATE ws2_32)
++endif()
++add_test(NAME ThermoComm COMMAND test_thermo_comm "${CMAKE_SOURCE_DIR}")
++set_tests_properties(ThermoComm PROPERTIES TIMEOUT 120 ENVIRONMENT
++    "W906_E84DATA_ROOT=${_ht9045_log_scratch}/E84DataTxt;W906_PRODLOG_ROOT=${_ht9045_log_scratch}/Production_Log;W906_CLEANPADLOG_ROOT=${_ht9045_log_scratch}/CleanPad_Log;W906_TCPDATA_ROOT=${_ht9045_log_scratch}/TCP_Data;W906_SUMMARYLOT_ROOT=${_ht9045_log_scratch}/Summary_Lot;W906_EVENTLOG_ROOT=${_ht9045_log_scratch}/EventLogTxt;W906_INIDATA_ROOT=${_ht9045_log_scratch}/IniData;W906_UNLOADERINFO_ROOT=${_ht9045_log_scratch}/UnloaderInfo;W906_AUTH_PATH=${_ht9045_config_scratch}/;W906_MACHINERECORD_DIR=${_ht9045_log_scratch}/machinerecord")
+diff --git a/tests/test_notice_ack.cpp b/tests/test_notice_ack.cpp
+index f515355..8904f9c 100644
+--- a/tests/test_notice_ack.cpp
++++ b/tests/test_notice_ack.cpp
+@@ -20,14 +20,14 @@
+ //        the jam count, PassTime, Recovery, the FormClose flags
+ //    [E] a second ack of the same id -> "no-pending-notice"; the jam count does not move again
+ //    [F] a blocking alarm (K_RETRY) pending -> "not-a-notice:current=<id>"; nothing retired, slot kBlocking
+-//    [G] restarted since the notice (SystemStart) -> retired, pause "skipped-machine-running": no PAUSE, the records only
++//    [G] restarted since the notice (SystemStart) -> retired and PAUSED as golden: pause "applied" (AI(W906-I37A) 20261002, RULINGS_20261002 #5 = A; it was "skipped-machine-running": no PAUSE, the records only)
+ //    [H] the motor note (its body applied the answer at post) -> pause "already-applied": SoftStop / SoftStart untouched
+ //    [I] golden BtnPauseClick's refusal (CC_ASE_SG + bTesterSendPause, note.cpp:3833-3834) -> "golden-refused:..."; still
+ //        pending; accepted once the refusal is gone
+ //    [J] no golden note (the record half did not run, note.cpp:541 / :817) -> retired, pause "no-golden-note", no effect
+ //    [K] a failed retire -> "retire-failed:current=<id>"; the slot stays kNotice and nothing is applied (a retry works)
+ //    [L] the handler never blocks: every call returns within AtomicWrite's own retry bound (2 s; measured 47-312 ms)
+-//    [M] source pins: the wb_serve.cpp dispatch, handler, blocking-wait answer and capture; the token exemption
++//    [M] source pins: the wb_serve.cpp dispatch, handler, blocking-wait answer and capture; the token exemption   [N] AI(W906-I37A) 20261002: INBOX 123 W906_NoteBlockingPauseLikeGolden (behaviour + the two wb_serve.cpp callers)
+ //  Writes only its own mailbox folder under the redirected as9045LogPath (the guard refuses to run anywhere else);
+ //  MyDBUEventRecover is the CSV-only no-op, EventReport is the Sim recorder, Alarm is NULL in ctest.
+ // ===========================================================================
+@@ -52,7 +52,7 @@
+ 
+ void        W906_NoteNoticeCapture(const char* requestId, bool motorNote);    // forms/fNote_ShowError.cpp EOF
+ const char* W906_NoteNoticeAckRefusal(const char* requestId);
+-bool        W906_NoteNoticeAckLikeGolden(const char* requestId, int* pause, bool* jamCounted, unsigned long* passTimeSec);
++bool        W906_NoteNoticeAckLikeGolden(const char* requestId, int* pause, bool* jamCounted, unsigned long* passTimeSec);  void W906_NoteBlockingPauseLikeGolden(int k);   // AI(W906-I37A) 20261002
+ extern int        iDuplicateError;                                            // forms/fNote_ShowError.cpp (golden note.cpp:84)
+ extern int        iEventID;                                                   // (golden note.cpp:82)
+ extern bool       W906_ShowErrorMessage_Recorded;
+@@ -393,7 +393,7 @@ int main()
+     }
+ 
+     // ---- [G] ------------------------------------------------------------------------------------------------
+-    std::printf("[G] restarted since the notice: retired, no PAUSE, the records only\n");
++    std::printf("[G] restarted since the notice: retired, and PAUSED as golden (RULINGS_20261002 #5 = A; was pause 2)\n");
+     {
+         RecordLike("JAM0508", 1, true);
+         StoppedLikeNotice();
+@@ -404,13 +404,13 @@ int main()
+         const int jam0 = JamCount();
+         std::string ack;
+         CHECK(Ack("19", &ack, g_dir) == true);
+-        CHECK(ack.find("\"pause\":\"skipped-machine-running\"") != std::string::npos);
+-        CHECK(SoftStop == false && SoftStart == false && SystemStart == true);  // the running machine is not paused
+-        CHECK(g_SimEventReportCount == 0);                                    // no DoPause report
+-        CHECK(bOpenAllDoor == false && bInArmNeedToSafePos == true);          // FormClose's flags left alone
+-        CHECK(JamCount() == jam0 + 1);                                        // the record still counts (golden's START exit closes too)
++        CHECK(ack.find("\"pause\":\"applied\"") != std::string::npos);   // AI(W906-I37A) 20261002: was "skipped-machine-running"
++        CHECK(SoftStop == true && SoftStart == false && SystemStart == true);    // golden :4146-4148: SoftStop -- MainProc pauses the running machine
++        CHECK(g_SimLastEventReportCeid == (unsigned)SECS_EVENT.DoPause);      // golden :4149-4150
++        CHECK(bOpenAllDoor == true && bInArmNeedToSafePos == false);          // FormClose runs (golden :2503-2762), as for any PAUSE
++        CHECK(JamCount() == jam0 + 1);                                        // :2528-2529
+         CHECK(g_slot.kind == w906dlg::AlarmSlot::kIdle && w906dlg::TextSaysIdle(Slurp(aJson)));
+-        SystemStart = false;
++        SystemStart = false; SoftStop = false;
+     }
+ 
+     // ---- [H] ------------------------------------------------------------------------------------------------
+@@ -568,6 +568,38 @@ int main()
+         CHECK(w.find("cmdName != \"dialog.response\" && cmdName != \"dialog.notifyAck\"") != std::string::npos);   // token-exempt
+     }
+ 
++    // ---- [N] AI(W906-I37A) 20261002 -----------------------------------------------------------------------------------
++    std::printf("[N] INBOX 123: a blocking alarm answered PAUSE -- golden BtnPauseClick's Select[] arm (906 note.cpp:3840, :3983-4038)\n");
++    {
++        IniConfig.bEnable_SECS_GEM = true;
++        bStartMoveSpeed = true;
++        ResetSimEventReport();
++        W906_NoteBlockingPauseLikeGolden(K_SKIP);
++        CHECK(bStartMoveSpeed == false);                                       // :3840
++#ifdef SOFT_SIMULTE
++        CHECK(g_SimEventReportCount == 2);                                     // :3983-3989 DoSkip (SOFT_SIMULTE only), then :4036-4037 DoPause
++#else
++        CHECK(g_SimEventReportCount == 1);                                     // :4036-4037 DoPause (the key records are SOFT_SIMULTE only)
++#endif
++        CHECK(g_SimLastEventReportCeid == (unsigned)SECS_EVENT.DoPause);
++        ResetSimEventReport();
++        W906_NoteBlockingPauseLikeGolden(K_TRAIN);                             // i==7: a record, no event (golden :4023-4026)
++        CHECK(g_SimEventReportCount == 1 && g_SimLastEventReportCeid == (unsigned)SECS_EVENT.DoPause);
++        IniConfig.bEnable_SECS_GEM = false;
++        ResetSimEventReport();
++        W906_NoteBlockingPauseLikeGolden(K_RETRY);
++        CHECK(g_SimEventReportCount == 0);                                     // every EventReport sits behind bEnable_SECS_GEM
++        IniConfig.bEnable_SECS_GEM = true;
++        const std::string s = ReadSource("tools/wb_serve.cpp");
++        const size_t p1 = s.find("if (pressed == \"BtnPause\") {");
++        const size_t p2 = s.find("if (ioPressed == \"BtnPause\") {");
++        CHECK(p1 != std::string::npos && s.find("W906_NoteBlockingPauseLikeGolden(k);", p1) < s.find("W906_NoteJamCountOnClose(k);", p1));
++        CHECK(p2 != std::string::npos && s.find("W906_NoteBlockingPauseLikeGolden(kio);", p2) < s.find("W906_NoteJamCountOnClose(kio);", p2));
++        const std::string f = ReadSource("forms/fNote_ShowError.cpp");
++        const size_t b = f.find("void W906_NoteBlockingPauseLikeGolden(int k)");
++        CHECK(b != std::string::npos && f.find("EventReport(SECS_EVENT.DoPause);", b) < f.find("SendCommand_ESD(ESD_SYSTEM_STOP);", b));
++    }
++
+     CUSTOMER_CODE = saveCust; LastSet.iRealDummy = saveReal; IniConfig.bEnable_SECS_GEM = saveSecs;
+     CosFunction.bIncludeMTBA = saveMtba; bTesterSendPause = saveTsp;
+     if (g_fail == 0) RemoveMailbox(g_dir);                                    // kept on a failure, for the diagnosis
+diff --git a/tests/test_thermo_comm.cpp b/tests/test_thermo_comm.cpp
+new file mode 100644
+index 0000000..c430f3d
+--- /dev/null
++++ b/tests/test_thermo_comm.cpp
+@@ -0,0 +1,287 @@
++// =============================================================================
++//  test_thermo_comm.cpp  --  AI(W906-I03) 20261002 (Ifor01)
++//
++//  I-03 第一階段（docs/handoff/TO_IFOR.md I-03）：golden TCOM2 的溫控器序列埠 Comm2（rs232.cpp 檔尾）＋cpublic.cpp 的
++//  KT4H／TMC401／E5DC 封包＋bthermo.cpp DoThermoReal 走這條線。Comm2 強制 SIM 模式（vclcompat/Comm.h SetSimMode），
++//  不開任何 COM 埠；不呼叫 RS232Init／W906_CreateFormBoot（會探測真的 COM 埠、讀寫 Gerneral.ini）。
++//
++//    [1] 封包逐位元組比對（另寫一份編碼器，不呼叫被測的 helper）：KT4H 讀／寫（Modbus ASCII＋LRC，golden cpublic.cpp:177-200）、
++//        TMC401 讀／寫（Modbus RTU＋CRC16，:423-460）、E5DC 讀／寫（CompoWay/F：STX＋命令＋ETX＋BCC＋CRLF，:462-487）、
++//        DTK4848 讀（g_pDTKComm 從建構子起就是 COM2->Comm2，:217-228）
++//    [2] 收件：位元組分兩次、間隔 20 ms 到達 ⇒ 安靜不滿 100 ms（rs232.dfm:30）不交付；滿了才整包交給 Comm2ReceiveData
++//        （golden rs232.cpp:721-757）：KT4H ':' 開頭 → Com2Buffer＋Com2ReceiveOK；少於 7 個位元組丟掉；不是 ':' 開頭丟掉；
++//        InitialOK=false 丟掉；TC401 → READBUFF[0..7]
++//    [3] DoThermo 全程（KT4H、只裝 tcHotPlate1）：假溫控器回話（寫入 06 原樣回、讀取 03 回 100.0 度）⇒ UN150ReadReal==100.0、
++//        UN150CommError==false
++//    [4] 同一個通道、溫控器不回：每一次 DoThermo 的最長耗時（I-03 卡要的「一拍最多卡多久」）、多久變 999／UN150CommError
++//    [5] 讀原始碼：DoThermo 在 DoThermoReal 之前交付 Comm2；RS232Init 呼叫兩支溫控 helper；三個檔的閘都拿掉了（argv[1]＝原始碼根目錄）
++//    [6] 只動記憶體：D:\HT9045\system\Gerneral.ini 與 D:\HT9045\config\config.ini 前後逐位元組相同
++// =============================================================================
++#include "atester_shims.h"
++#include "cmydef.h"
++#include "cpublic.h"
++#include "bthermo.h"
++#include "MachineType.h"
++#include "LastSet.h"
++#include "Config.h"
++#include "cprod.h"
++#include <windows.h>
++#include <cstdio>
++#include <cstring>
++#include <string>
++#include <vector>
++
++extern Spcomm::TComm* g_pCOM2Comm2;                 // cpublic.cpp（golden COM2->Comm2 的縫）
++void W906_PumpTempComm2();                          // rs232.cpp 檔尾
++
++static int g_pass=0, g_fail=0;
++#define CHECK(c, msg) do { if(c){ g_pass++; } else { g_fail++; std::printf("  FAIL [test_thermo_comm.cpp:%d] %s\n", __LINE__, msg); } } while(0)
++
++static std::string Slurp(const std::string& p)
++{
++    FILE* f=std::fopen(p.c_str(), "rb");
++    if(!f) return std::string("<missing>");
++    std::string s; char buf[4096]; size_t n;
++    while((n=std::fread(buf, 1, sizeof(buf), f))>0) s.append(buf, n);
++    std::fclose(f);
++    return s;
++}
++
++static std::string TakeTx()
++{
++    const std::vector<char>& v=COM2->Comm2->SimTxBuffer();
++    std::string out(v.begin(), v.end());
++    COM2->Comm2->SimClearTx();
++    return out;
++}
++
++static void Inject(const std::string& s) { COM2->Comm2->SimInjectReceive(s.data(), (Spcomm::Word)s.size()); }
++
++// ---- independent encoders (the protocols, not the code under test) ----
++static int HexVal(char c) { return (c>='0' && c<='9') ? c-'0' : (c>='A' && c<='F') ? c-'A'+10 : (c>='a' && c<='f') ? c-'a'+10 : 0; }
++static std::string Hex2(unsigned v) { char b[8]; std::snprintf(b, sizeof(b), "%02X", v&0xFF); return b; }
++static std::string Hex4(unsigned v) { char b[8]; std::snprintf(b, sizeof(b), "%04X", v&0xFFFF); return b; }
++static std::string Lrc(const std::string& hexBody)              // Modbus ASCII: two's complement of the byte sum
++{
++    unsigned char sum=0;
++    for(size_t i=0; i+1<hexBody.size(); i+=2) sum=(unsigned char)(sum+HexVal(hexBody[i])*16+HexVal(hexBody[i+1]));
++    return Hex2((unsigned char)(0x100-sum));
++}
++static std::string AsciiFrame(const std::string& hexBody) { return ":"+hexBody+Lrc(hexBody)+"\r\n"; }
++static unsigned Crc16(const std::string& b)                     // Modbus RTU CRC-16 (0xA001, init 0xFFFF)
++{
++    unsigned crc=0xFFFF;
++    for(unsigned char c : b) { crc^=c; for(int k=0; k<8; k++) crc=(crc&1) ? (crc>>1)^0xA001 : crc>>1; }
++    return crc;
++}
++static std::string RtuFrame(std::initializer_list<unsigned char> l)
++{
++    std::string b(l.begin(), l.end());
++    const unsigned c=Crc16(b);
++    b.push_back((char)(c&0xFF)); b.push_back((char)(c>>8));
++    return b;
++}
++static std::string CompoWay(const std::string& cmd)             // STX cmd ETX BCC CR LF; BCC = XOR(cmd) ^ ETX
++{
++    unsigned char bcc=0;
++    for(unsigned char c : cmd) bcc^=c;
++    bcc^=0x03;
++    return std::string(1, '\x02')+cmd+std::string(1, '\x03')+std::string(1, (char)bcc)+"\r\n";
++}
++
++// ---- a fake KT4H on the line: write (06) -> echo, read (03) -> one word ----
++struct FakeKT4H {
++    std::string acc;
++    double pv;
++    int writes, reads;
++    FakeKT4H() : pv(100.0), writes(0), reads(0) {}
++    void Serve()
++    {
++        acc+=TakeTx();
++        for(;;)
++        {
++            const size_t a=acc.find(':');
++            if(a==std::string::npos) { acc.clear(); return; }
++            const size_t e=acc.find("\r\n", a);
++            if(e==std::string::npos) { acc.erase(0, a); return; }
++            const std::string f=acc.substr(a, e+2-a);
++            acc.erase(0, e+2);
++            if(f.size()<17) continue;
++            const std::string addr=f.substr(1, 2), func=f.substr(3, 2);
++            if(func=="06") { writes++; Inject(f); }
++            else if(func=="03") { reads++; Inject(AsciiFrame(addr+"0302"+Hex4((unsigned)(pv*10.0+0.5)))); }
++        }
++    }
++};
++
++static double MaxCallMs(double cur, LARGE_INTEGER t0, LARGE_INTEGER t1, LARGE_INTEGER fq)
++{
++    const double ms=(double)(t1.QuadPart-t0.QuadPart)*1000.0/(double)fq.QuadPart;
++    return ms>cur ? ms : cur;
++}
++
++int main(int argc, char** argv)
++{
++    static const char* const kReal[2]={ "D:\\HT9045\\system\\Gerneral.ini", "D:\\HT9045\\config\\config.ini" };
++    std::string before[2];
++    for(int i=0; i<2; i++) before[i]=Slurp(kReal[i]);
++
++    COM2->Comm2->SetSimMode(true);
++    COM2->Comm2->StartComm();
++
++    std::printf("[1] frames on Comm2 (independent encoders)\n");
++    CHECK(g_pCOM2Comm2==COM2->Comm2, "g_pCOM2Comm2 == COM2->Comm2 from the constructor (golden COM2->Comm2)");
++    CHECK(g_pDTKComm==COM2->Comm2, "g_pDTKComm == COM2->Comm2 from the constructor (golden DTK4848 writes COM2->Comm2)");
++    TakeTx();
++    UT100WordReadNoSucm(0, 0x0080);
++    CHECK(TakeTx()==AsciiFrame("010300800001"), "KT4H read: ':' 01 03 0080 0001 LRC CR LF");
++    UT100WordWriteNoSucm(4, 0x0001, 1250);
++    CHECK(TakeTx()==AsciiFrame("05060001"+Hex4(1250)), "KT4H write: ':' 05 06 0001 04E2 LRC CR LF");
++    TMC401ReadTemp(1, 2);
++    CHECK(TakeTx()==RtuFrame({0x02, 0x03, 0x00, 0x02, 0x00, 0x01}), "TMC401 read: 02 03 0002 0001 CRC16");
++    TMC401WriteTemp(0, 1, 1234);
++    CHECK(TakeTx()==RtuFrame({0x01, 0x06, 0x00, 0xC9, 0x04, 0xD2}), "TMC401 write: 01 06 00C9 04D2 CRC16");
++    E5DCReadTemp(0);
++    CHECK(TakeTx()==CompoWay("010000101C00000000002"), "E5DC read: STX 01 000 0101 C0 0000 00 0002 ETX BCC CR LF");
++    E5DCWriteTemp(2, 0x1F4);
++    CHECK(TakeTx()==CompoWay("030000102C100030000010000"+Hex4(0x1F4)), "E5DC write: STX 03 000 0102 C1 0003 00 0001 0000 01F4 ETX BCC CR LF");
++    {
++        DTK4848WordReadNoSucm(0);
++        const std::string t=TakeTx();
++        CHECK(t.size()>2 && t[0]==':' && t.compare(t.size()-3, 3, std::string("\r\n\0", 3))==0, "DTK4848 read goes out on Comm2 (golden strlen+1: the NUL too)");
++    }
++
++    std::printf("[2] receive: 100 ms quiet, then golden Comm2ReceiveData\n");
++    const bool savedInit=InitialOK;
++    const int savedCtl=TC401HeaterControl;
++    InitialOK=true;
++    TC401HeaterControl=KT4H;
++    {
++        const std::string r=AsciiFrame("01030203E8");
++        Com2ReceiveOK=false; Com2Buffer="";
++        Inject(r.substr(0, 6));
++        ::Sleep(20);
++        Inject(r.substr(6));
++        W906_PumpTempComm2();
++        CHECK(Com2ReceiveOK==false, "two pieces 20 ms apart: not delivered before 100 ms of quiet (rs232.dfm:30)");
++        ::Sleep(130);
++        W906_PumpTempComm2();
++        CHECK(Com2ReceiveOK==true, "after 100 ms of quiet: one frame delivered");
++        CHECK(std::string(Com2Buffer.c_str())==r, "Com2Buffer == the whole frame (golden sprintf(\"%s\") of the packet)");
++
++        Com2ReceiveOK=false;
++        Inject(":0103");  ::Sleep(130);  W906_PumpTempComm2();
++        CHECK(Com2ReceiveOK==false, "fewer than 7 bytes: dropped (golden :727-728)");
++        Inject("X0103020064AB\r\n");  ::Sleep(130);  W906_PumpTempComm2();
++        CHECK(Com2ReceiveOK==false, "KT4H frame not starting with ':': dropped (golden :747-750)");
++        InitialOK=false;
++        Inject(r);  ::Sleep(130);  W906_PumpTempComm2();
++        CHECK(Com2ReceiveOK==false, "InitialOK==false: dropped (golden :724-725)");
++        InitialOK=true;
++
++        TC401HeaterControl=TC401;
++        const std::string rtu=RtuFrame({0x01, 0x03, 0x02, 0x03, 0xE8});
++        Inject(rtu);  ::Sleep(130);  W906_PumpTempComm2();
++        CHECK(Com2ReceiveOK==true && READBUFF[1]==0x03 && READBUFF[3]==0x03 && READBUFF[4]==0xE8, "TC401: READBUFF[0..7] = the RTU reply (golden :736-740)");
++        TC401HeaterControl=KT4H;
++    }
++
++    std::printf("[3] DoThermo end to end: KT4H, tcHotPlate1, a fake controller answering\n");
++    const int savedTemp=LastSet.iTemperature;
++    const bool savedAl1=IniConfig.bEnableKT4HAlarm1;
++    const int savedAtc=ATC_SYSTEM, savedTri=Tri_Temp_Machine;
++    LastSet.iTemperature=Tempture_Ambient;
++    IniConfig.bEnableKT4HAlarm1=false;
++    ATC_SYSTEM=0;
++    Tri_Temp_Machine=0;
++    for(int i=0; i<tcTotalCount; i++) { bUT150Install[i]=false; UN150CommError[i]=false; UN150Read[i]=0; UN150ReadReal[i]=0; }
++    bUT150Install[tcHotPlate1]=true;
++    iThermoTask=1;
++    Com2ReceiveOK=false;
++    TakeTx();
++    {
++        FakeKT4H dev;
++        const DWORD t0=::GetTickCount();
++        while(::GetTickCount()-t0<15000 && UN150ReadReal[tcHotPlate1]==0)
++        {
++            DoThermo();
++            dev.Serve();
++            ::Sleep(0);                                                 // yield only: golden's timers are wall-clock (Com2Delay 0.5 s), and the state machine visits ~75 channels per round -- a 2 ms sleep is ~14 ms on Windows and stretches a round past 2 s
++        }
++        std::printf("     writes answered %d, reads answered %d, %lu ms\n", dev.writes, dev.reads, (unsigned long)(::GetTickCount()-t0));
++        CHECK(dev.writes>=1, "the SV write (function 06) went out first (OldTemp starts at -1, golden case 1)");
++        CHECK(dev.reads>=1, "a PV read (function 03, register 0080) went out");
++        CHECK(UN150ReadReal[tcHotPlate1]==100.0, "UN150ReadReal[tcHotPlate1] == 100.0 (golden case 250: A_Get_MEM_Word()/10.0)");
++        CHECK(UN150CommError[tcHotPlate1]==false, "UN150CommError[tcHotPlate1] == false");
++    }
++
++    std::printf("[4] the same channel, no controller: longest DoThermo call, time to 999\n");
++    {
++        // continue from [3]: every channel's SV is already written (OldTemp == Temp), so only tcHotPlate1's PV read goes out.
++        // Restarting at case 1 would write SV again to every channel (golden case 100 :1489-1491 sends 0 to the uninstalled
++        // ones) and each unanswered write waits 0.5 s -- a ~35 s round with no controller on the line, golden's own pace.
++        UN150Read[tcHotPlate1]=0;
++        LARGE_INTEGER fq, a, b;
++        ::QueryPerformanceFrequency(&fq);
++        double maxMs=0.0;
++        long calls=0;
++        const DWORD t0=::GetTickCount();
++        while(::GetTickCount()-t0<30000 && !(UN150Read[tcHotPlate1]==999 && UN150CommError[tcHotPlate1]))
++        {
++            ::QueryPerformanceCounter(&a);
++            DoThermo();
++            ::QueryPerformanceCounter(&b);
++            maxMs=MaxCallMs(maxMs, a, b, fq);
++            calls++;
++            TakeTx();
++            ::Sleep(0);                                                 // yield only: golden's timers are wall-clock (Com2Delay 0.5 s), and the state machine visits ~75 channels per round -- a 2 ms sleep is ~14 ms on Windows and stretches a round past 2 s
++        }
++        const DWORD took=::GetTickCount()-t0;
++        std::printf("     %ld DoThermo calls, longest %.3f ms; UN150Read=999 after %lu ms\n", calls, maxMs, (unsigned long)took);
++        CHECK(UN150Read[tcHotPlate1]==999 && UN150CommError[tcHotPlate1], "no reply: UN150Read = 999 and UN150CommError (golden: 2 retries, then CommunCTErr > 5)");
++        CHECK(maxMs<50.0, "no DoThermo call blocks (waiting is Com2Delay 0.5 s polled per call, writes go to the writer thread)");
++        CHECK(took>=6000 && took<=20000, "time to 999 is the golden timer sum (8 x 0.5 s reads + 6 x 0.5 s case 230 ~ 7 s)");
++    }
++    LastSet.iTemperature=savedTemp;
++    IniConfig.bEnableKT4HAlarm1=savedAl1;
++    ATC_SYSTEM=savedAtc;
++    Tri_Temp_Machine=savedTri;
++    TC401HeaterControl=savedCtl;
++    InitialOK=savedInit;
++
++    std::printf("[5] source\n");
++    if(argc>1)
++    {
++        const std::string root(argv[1]);
++        const std::string bt=Slurp(root+"/bthermo.cpp");
++        const size_t dt=bt.find("\nvoid DoThermo()");
++        const size_t pump=bt.find("W906_PumpTempComm2();", dt==std::string::npos ? 0 : dt);
++        const size_t real=bt.find("DoThermoReal();", dt==std::string::npos ? 0 : dt);
++        CHECK(dt!=std::string::npos && pump!=std::string::npos && real!=std::string::npos && pump<real, "DoThermo pumps Comm2 before DoThermoReal");
++        CHECK(bt.find("#if 0 // TODO(W5 G17)")==std::string::npos && bt.find("#if 0 // TODO(W5 G21")==std::string::npos &&
++              bt.find("#if 0 // TODO(W5 G22)")==std::string::npos && bt.find("#if 0 // TODO(W5 G23")==std::string::npos &&
++              bt.find("#if 0 // TODO(W7 G20)")==std::string::npos && bt.find("#if 0 // TODO(W7-UI G14a)")==std::string::npos,
++              "bthermo.cpp: G14a / G17 / G20 / G21-G23 are open");
++        const std::string rs=Slurp(root+"/rs232.cpp");
++        const size_t ri=rs.find("void TCOM2Shim::RS232Init()");
++        const size_t ck=rs.find("W906_RS232InitTempCheck(flag);", ri==std::string::npos ? 0 : ri);
++        const size_t op=rs.find("W906_RS232InitTempOpen(flag);", ri==std::string::npos ? 0 : ri);
++        CHECK(ri!=std::string::npos && ck!=std::string::npos && op!=std::string::npos && ck<op, "RS232Init calls the temperature check, then the open (golden :163-182, :264-281)");
++        const std::string cp=Slurp(root+"/cpublic.cpp");
++        CHECK(cp.find("\n    COM2->Comm2->WriteCommData(")==std::string::npos, "cpublic.cpp: no direct COM2->Comm2 write left (all through g_pCOM2Comm2)");
++    }
++    else
++        CHECK(false, "argv[1] = source root (tests/CMakeLists.txt passes it)");
++
++    COM2->Comm2->StopComm();
++
++    std::printf("[6] memory only: real files unchanged\n");
++    for(int i=0; i<2; i++)
++    {
++        const std::string after=Slurp(kReal[i]);
++        CHECK(after==before[i], kReal[i]);
++    }
++
++    std::printf("%s: %d/%d checks passed\n", g_fail ? "FAIL" : "PASS", g_pass, g_pass+g_fail);
++    return g_fail ? 1 : 0;
++}
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 418d27f..65fcb6b 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -622,7 +622,7 @@ static int ForwardShowErrorMessage(const char* code, int kcode, int pos)
+                     if (pressed == "BtnPause") {
+                         SoftStop  = true;                                       // golden note.cpp:3981
+                         SoftStart = false;                                      // golden note.cpp:3982
+-                        std::printf("query qid=%s: pressed=BtnPause -> SoftStop=1 SoftStart=0 (golden BtnPauseClick)\n", qidStr);
++                        std::printf("query qid=%s: pressed=BtnPause -> SoftStop=1 SoftStart=0 (golden BtnPauseClick)\n", qidStr);  { extern void W906_NoteBlockingPauseLikeGolden(int); W906_NoteBlockingPauseLikeGolden(k); }   //AI(W906-I37A) 20261002: INBOX 123 -- golden BtnPauseClick :3840 + SIM key records :3983-4034 + DoPause / ESD STOP :4036-4038 (forms/fNote_ShowError.cpp EOF)
+                     }
+                     if (i + 1 < local.size()) { g_carry.insert(g_carry.begin(), local.begin() + (i + 1), local.end()); g_carryRunnable = true; }  { extern void W906_NoteJamCountOnClose(int); W906_NoteJamCountOnClose(k); }  /* AI(W906-J2) 20260926: golden FormClose :2528 Jam 計數，在重走 START 之前（forms/fNote_JamCount.cpp） */  if (pressed.empty() || pressed == "BtnStart") { extern bool W906_AlarmAnswerStartLikeGolden(const char*); W906_AlarmAnswerStartLikeGolden(qidStr); }  { extern void W906_NoteFormCloseAlarmClear(); W906_NoteFormCloseAlarmClear(); }  return k;  // AI(W906-HALARM-CLOSE) 20260926: golden TfNote::FormClose note.cpp:2531 Alarm->Clear()（HAlarm.cpp 檔尾）  // AI(W906-ALARMSTOP) 20260924: 按 START（或沒帶按鍵）照 golden TfNote::Start（note.cpp:3665-3678）重走啟動檢查 —— 本體在檔尾  //AI(W906-MERGE-56bbf785) 20260926: the commands drained together with the answer (local[i+1..]) were dropped here -- never run, never acked (the browser saw an ack timeout). They go back to the FRONT of g_carry (machine IOWEB-P25 carry; the main loop wakes on !g_carry.empty() and drains it first), in arrival order. Put back BEFORE the START side effect: StartFromWeb can raise another alarm, and that wait must see these older commands before anything newer. Same line, so no line below moves
+                 }
+@@ -688,7 +688,7 @@ static int ForwardShowErrorMessage(const char* code, int kcode, int pos)
+                 ht9045::sjson::ClearAlarm(qidStr, ioAns, ioPressed, kio);
+                 std::printf("query qid=%s answered %s (K=%d) via panel IO %s pressed=%s\n",
+                             qidStr, ioAns.c_str(), kio, ioInput.c_str(), ioPressed.c_str());
+-                if (ioPressed == "BtnPause") { SoftStop = true; SoftStart = false; }        // golden note.cpp:3981-3982（同上面網頁那條）
++                if (ioPressed == "BtnPause") { SoftStop = true; SoftStart = false;  extern void W906_NoteBlockingPauseLikeGolden(int); W906_NoteBlockingPauseLikeGolden(kio); }        // golden note.cpp:3981-3982（同上面網頁那條）；AI(W906-I37A) 20261002：INBOX 123 同上
+                 { extern void W906_NoteJamCountOnClose(int); W906_NoteJamCountOnClose(kio); }  /* AI(W906-J2) 20260926: 同上面網頁那個出口 */  if (ioPressed == "BtnStart") { extern bool W906_AlarmAnswerStartLikeGolden(const char*); W906_AlarmAnswerStartLikeGolden(qidStr); }
+                 { extern void W906_NoteFormCloseAlarmClear(); W906_NoteFormCloseAlarmClear(); }  return kio;   // AI(W906-HALARM-CLOSE) 20260926: 面板鍵回答也是關框，同上（golden note.cpp:2531）
+             }
+-- 
+2.55.0.windows.5
+

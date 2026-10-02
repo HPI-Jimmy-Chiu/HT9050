@@ -671,4 +671,15 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   cpp 0132 8a5f75b BOOT-INITMOTOR —— 開機開卡、馬達送電 1 秒後，照 golden 對 M35 MLoaderZ 跑一次 InitMotor（清錯、設定表含 SensorType→ORG 極性與 In1Logic→ALM 極性、最大速度、Servo ON、座標歸零），結果寫在 oplog。EastSun 1002 要求，先只做 MLoaderZ。
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
+  cpp 0133 bf0b457 PKG-127 —— 機台整合筆電第 127 包（GitHub main bce78fd、GitLab 025fdabe）：批次 41（提示框按確認照原版暫停、會擋的警報按 PAUSE 送 DoPause＋ESD 停止）、Ifor !106（I-03 溫控器序列埠）。web 兩檔與機台的 0083／0084 相同，沒有 web patch。
+                    兩個機台本地改過的檔（tests/CMakeLists.txt、tools/wb_serve.cpp）用包內的 base_8f3cdc53（第 126 包）三方合併，0 衝突。o2 編過；ctest ThermoComm／NoticeAck 2/2；PE 94/94。
+                    第 128 包（HT9050-ORG-ST，要先把 Mot_Table 16 列改 SensorType=1）這次沒套：EastSun 1002 決定先不套。
+  ★ 新增：machine_params\ 與 workorder\（EastSun 1002：給同仁測試、確認用）。
+     machine_params\ = 機台參數快照：D_HT9045_system（D:\HT9045\system）、D_HT9045_config（D:\HT9045\config）、runcfg（SetUp.inf、teach.ini、config\；不含 logs）。
+     workorder\ = 目前工單：SetUp.inf 指定的配方資料夾（現在是 IOWEB_TEST_R003）＋ LastSet.ini。
+     之後機台每次推送都會重拍（鏡像），git 歷史就是設定的歷史；說明在各資料夾的 README_PARAMS.txt／README_WORKORDER.txt。
+     ⚠ 照原樣放、沒有遮任何值（含密碼檔），EastSun 裁決。是 HT9050 這台的設定，別台不要整包覆蓋。
+     推送工具也放進來了：_tools\push_stage.ps1。
+  ⚠ 給筆電：第 128 包機台還沒套（EastSun 先不套）；機台現在 = GitHub main bce78fd（第 127 包）＋機台修改。
+  掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
 MD5 清單在 MANIFEST_MD5.tsv。
