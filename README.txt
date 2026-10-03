@@ -776,4 +776,7 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   cpp 0146 9868761 VACDIAG —— EastSun 1003「圖片上幫我檢查一下 我G的數值 都不會變動 其他是會的 檢查一下軟體讀取位置有沒有錯誤」「不然幫我可讀取的位置數值 都列出來顯示在上面」。查程式：InArm A／C／E／G＝VC0～3，壓力讀這個 ECAT-VC4（ring 1 站 160）輸入資料的位元組 0/1、2/3、4/5、6/7（MyLaneIo.cpp:808-818），G 的 6/7 在 VC4 有效範圍內、算法與其他三格相同，IO_Table 四格設定一致——位址沒有錯。G 畫面是 OK（不是錯誤卡住），所以比較可能是模組 VC3 的壓力不在 6/7 或那一路硬體。vacuum.get 每個站多回：原始位元組 0～15、每兩個位元組換算的 kPa（VC n）、OK 位元 64～71／128～135。o2 編過；ctest I115B_Vacuum、VacuumVc8 過。
   web 0091 bd4cb03 VACDIAG (web) —— Vacuum Unit 頁上方的診斷列（點一下收起），標出每個 VC 對應哪一格。
   掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
+  cpp 0147 ec0e5f7 WORKLOG —— ★ 機台設定檔：D:\HT9045\system\IO_Table.csv 的 OutArm（站 161）吸嘴 Bit 改成跟 VC4 Port 一致（EastSun 1003「為什麼inarm 和outarm 吸嘴位置不一樣」→「照建議改」）。Bit＝原版 VaccumCopyFormSuck 當 VC 編號用的欄位；10-01 改 VC4 Port 時 OutArm 的 Bit 沒跟著改（仍是 VC8 反排 A=7…H=0），所以啟用的 A/C/E/G 顯示 Error5、停用的 B/D/F/H 反而顯示別格的壓力。改成 A/C/E/G＝3/2/1/0、B/D/F/H＝7/6/5/4，每格感測／吸／破三列共 24 列，其他欄不動；備份 D:\HT9045\_BACKUP_20261003_iotable_outarm_bit。新表在 machine_params\D_HT9045_system\IO_Table.csv。
+  ⚠ 給筆電：machines/HT9050/IO_Table.csv 的 OutArm Bit 也要照這個改（MachineSuckers_HT9050 測試的期望值會跟著變）。
+  掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
 MD5 清單在 MANIFEST_MD5.tsv。
