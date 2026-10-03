@@ -724,4 +724,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   （推送掃描命中 10 處，逐一看過都是註解／鍵盤 PASSWORD 旗標／測試假值 pw-test-1 的誤報。另外 cTemperFrom_E023.cpp 的 E023T_PasswordRefused 含原版寫死的 Handler System 密碼——掃描沒抓到；它早已在 main 的 HSys.cpp／cObserver.cpp／fLotInfo.cpp／Config.json 等公開，這次沒有多公開。）
   web 0088 8ea4d5b WIREBAR-CORNER —— EastSun 1003「你這視窗都擋到我看的位子了 你可以把這視窗移到不會擋到的地方嗎」：開頁的「✓ 讀取完成（C 路…）」狀態條（#ht9045WireBar，44 頁共用）從上方整條改成右下角小框（theme.css，!important 蓋過引擎與 7 支補件的 inline 樣式；避開 Teach 右下小標籤），乾淨讀取 6 秒自動收（❌／⚠／存檔結果照舊留到按 ×）。
   掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
+  web 0089 289fc48 VACBTN-TOGGLE —— EastSun 1003「往上的箭頭觸發是真空ON 關掉是OFF，往下箭頭觸發是破真空ON 沒觸發是OFF」＋選「按一下 ON、再按一下 OFF」，通道確認正確（往上＝吸）。oplog：每次按下 0.44～0.53 秒後又來一次點擊（連點／觸控觸發兩次），把輸出馬上切回 OFF；程式本身每次點擊只送一次、本來就是切換。改：同一顆箭頭 0.7 秒內的第二次點擊不算（連點的第二下也不算）；ON 時按鈕畫成凹下去（原本只變淺藍，看起來像沒反應）。只改網頁，C++ 不動。
+  掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
 MD5 清單在 MANIFEST_MD5.tsv。
