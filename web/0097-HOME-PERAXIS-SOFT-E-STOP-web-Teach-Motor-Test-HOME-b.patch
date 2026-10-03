@@ -1,0 +1,140 @@
+From 2196ffcfd2cf72614a0e4c350921267facdcf85e Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 16:12:12 +0800
+Subject: [PATCH] HOME-PERAXIS + SOFT E-STOP (web): Teach / Motor Test HOME
+ button follows the SELECTED axis's own homeJob (start/stop that axis only;
+ selecting another axis no longer releases the previous axis's home; token
+ held while any axis homes); main screen soft panel gets a red E-STOP (WS
+ panel.estop, no token step) -- EastSun 1003
+
+---
+ page/HW.MotorTest.html       | 10 ++++++++--
+ page/HW.teach.html           | 19 ++++++++++++++++---
+ page/ht9045_main_softkeys.js | 15 ++++++++++++++-
+ page/main.html               |  2 +-
+ 4 files changed, 39 insertions(+), 7 deletions(-)
+
+diff --git a/page/HW.MotorTest.html b/page/HW.MotorTest.html
+index bfd46a2..bb6bc15 100644
+--- a/page/HW.MotorTest.html
++++ b/page/HW.MotorTest.html
+@@ -389,6 +389,7 @@ document.querySelectorAll('.traypos').forEach(function(ph){
+     showTorque(mot.torque);                            // AI(W906-MT-E3) 20260925
+     var st=rm.state||{};
+     setLeds(st.led);                                   // AI(W906-MT-E1) 20260925
++    if(mot.homeJob===true){ var hbS=document.getElementById('btnHome'); if(hbS) hbS.classList.add('down'); }   // AI(W906-HOME-PERAXIS) 20261003: the selected axis is homing (e.g. selected again while it homes) -> show it
+     if(syncJobButton('btnHome', mot.homeJob)) onHomeEnded(rm);
+     syncJobButton('btnLoopMove', mot.loopJob);
+     if(mot.loopJob===true && mot.loopCount!=null){ var lc=document.getElementById('lblLoopCount'); if(lc) lc.textContent=String(mot.loopCount); }
+@@ -495,7 +496,10 @@ document.querySelectorAll('.traypos').forEach(function(ph){
+     var oldId=curMotorId(); if(!oldId) return;
+     var lp=document.getElementById('btnLoopMove'), hb=document.getElementById('btnHome');
+     if(lp && lp.classList.contains('down')) HTMotorAccess.sendLater('btnLoopMove',{start:false}, [oldId], 'relLoop');
+-    if(hb && hb.classList.contains('down')) HTMotorAccess.sendLater('btnHome',{start:false}, [oldId], 'relHome');
++    // AI(W906-HOME-PERAXIS) 20261003: EastSun「我按X回HOME 並且在回HOME過程中再去按Y X回HOME動作會停止 不是應該各歸各地嗎?」（裁決 20260929 各軸獨立）——
++    //   換軸不再替原本那一軸送 HOME 抬起（golden lM00Click :745 btnHome->Down=false 會停掉它）；那一軸繼續回原點，按鈕改顯示新選的軸。
++    //   (was: if(hb && hb.classList.contains('down')) HTMotorAccess.sendLater('btnHome',{start:false}, [oldId], 'relHome');)
++    void hb;
+     allBtnUp();
+   }
+   // AI(W906-MT-E2) 20260925：golden lM00Click／lpA00Click 第一件事（:740-743／:768-771，非 SOFT_SIMULTE）
+@@ -1751,7 +1755,9 @@ document.querySelectorAll('.traypos').forEach(function(ph){
+     on('btnGoSoftN','click',function(){ HTMotorAccess.send('btnGoSoftN',{targetPos:softOf('softLimitN','softN')}); });
+     on('btnHome','click',function(){   // AI(W906-W4D) 20260925：送「按下後 btnHome->Down 的值」（NB2 R23 W4C-5），狀態由 onAck 依伺服端回覆設
+       var hb=document.getElementById('btnHome');
+-      HTMotorAccess.send('btnHome',{start:!(hb&&hb.classList.contains('down'))});
++      var mh=((getRuntimeMap()[curMotorId()]||{}).motion)||{};   // AI(W906-HOME-PERAXIS) 20261003: start/stop THIS axis's home (runtime homeJob; the button only when unknown)
++      var homing=(mh.homeJob===true)||(mh.homeJob!==false && !!(hb&&hb.classList.contains('down')));
++      HTMotorAccess.send('btnHome',{start:!homing});
+     });
+     on('btnLoopMove','click',function(){
+       if(selectedIndex===-1) return;                 // AI(W906-MT-E3) 20260925：golden :1303-1307 ActiveIndex==-1 → Down=false; return（All 模式也一樣）
+diff --git a/page/HW.teach.html b/page/HW.teach.html
+index 49e2880..c1c32ce 100644
+--- a/page/HW.teach.html
++++ b/page/HW.teach.html
+@@ -491,10 +491,21 @@ function teachRuntimeById(id){
+ //   C++ 的 runtime 每軸有 motion.homeJob；HOME 那一軸連續兩次讀到 false 就彈起（同 HW.MotorTest.html syncJobButton，一次讀到可能是還沒排進去）。
+ //   沒有這一段的話：只補 holdToken 會讓 HOME 做完按鈕不彈起、hold 永遠成立、權杖永遠不還（NB2 R69 §4）。
+ var teachHomeMotor=null, teachHomeGone=0;
++// AI(W906-HOME-PERAXIS) 20261003: EastSun「我按X回HOME 並且在回HOME過程中再去按Y X回HOME動作會停止 不是應該各歸各地嗎?」——
++//   golden 只有一顆 btnHome、一次一軸；照 EastSun 20260929「各軸獨立」：按鈕顯示「目前選的那一軸」有沒有在回原點（C++ runtime 的
++//   motion.homeJob），按下時依那一軸決定 start（開始／停止這一軸），不再看共用按鈕的 down —— 原本切到 Y 再按會送 start:false，
++//   C++ 照 golden StopAllMotor 把 X 也停了（C++ 那一半也改成只停那一軸，WebMotorAccess.cpp TeachHomeRelease）。
++//   任何一軸還在回原點就不還權杖（還掉＝操作員連線消失，C++ 會取消歸零工作）。
++function teachAxisHoming(id){ var m=id?((teachRuntimeById(id).motion)||{}):{}; return m.homeJob===true; }
++function teachAnyHoming(){ var rt=teachMotorRuntime; if(!rt||!rt.motors) return false; for(var i=0;i<rt.motors.length;i++){ var m=rt.motors[i]; if(m&&m.motion&&m.motion.homeJob===true) return true; } return false; }
+ function teachSyncHome(){
+   var hb=document.getElementById('btnHome');
+-  if(!hb || !hb.classList.contains('down') || !teachHomeMotor){ teachHomeGone=0; return; }
+-  var mot=(teachRuntimeById(teachHomeMotor).motion)||{};
++  if(!window.__teachHomeHold && window.HT9045Recipe && HT9045Recipe.setTokenHold){ window.__teachHomeHold=true; HT9045Recipe.setTokenHold(teachAnyHoming); }
++  if(!hb || !teachActiveMotorId){ teachHomeGone=0; return; }
++  var mot=(teachRuntimeById(teachActiveMotorId).motion)||{};
++  if(mot.homeJob===true){ hb.classList.add('down'); teachHomeGone=0; return; }
++  if(!hb.classList.contains('down')){ teachHomeGone=0; return; }
++  if(teachHomeMotor!==teachActiveMotorId && mot.homeJob===false){ hb.classList.remove('down'); teachHomeGone=0; return; }   // 選到沒在回原點的軸
+   if(mot.homeJob!==false){ teachHomeGone=0; return; }
+   if(++teachHomeGone>=2){ hb.classList.remove('down'); teachHomeGone=0; }
+ }
+@@ -785,7 +796,9 @@ function teachBindMotionButtons(cat){
+   }, 60000); }
+   teachOn('btnHome','click',function(){  teachHomeMotor=teachActiveMotorId;   // AI(W906-W5-TEACH) 20260925：送「按下後 btnHome->Down 的值」，down 由 onAck 依 homeActive 設
+     var hb=document.getElementById('btnHome');
+-    HTMotorAccess.send('btnHome',{start:!(hb&&hb.classList.contains('down'))});
++    var mh=(teachRuntimeById(teachActiveMotorId).motion)||{};   // AI(W906-HOME-PERAXIS) 20261003: 依「這一軸」決定；runtime 讀不到才退回看按鈕
++    var homing=(mh.homeJob===true)||(mh.homeJob!==false && !!(hb&&hb.classList.contains('down')));
++    HTMotorAccess.send('btnHome',{start:!homing});
+   });
+   teachOn('btnStop','click',function(){ HTMotorAccess.send('btnStop'); });
+   //AI(W906-TEACH-SH2) 20260930: 按鈕稽核 —— SetComputeInSh2（Pickup Error Placement 頁「ComputeInSh2」）golden OnClick＝SetComputeInSh2Click
+diff --git a/page/ht9045_main_softkeys.js b/page/ht9045_main_softkeys.js
+index 057f511..e5d0095 100644
+--- a/page/ht9045_main_softkeys.js
++++ b/page/ht9045_main_softkeys.js
+@@ -51,9 +51,22 @@
+       });
+   }
+ 
++  // AI(W906-SOFTKEY) 20261003: EastSun「按鈕裡面我也需要緊急停止按紐」-- WS panel.estop: no token step, no 400 ms cool-down, no busy skip
++  //   (a second press just sends the stop again); C++ WebMainScanKey.cpp W906_SoftEmergencyStop (token-exempt, served inside dialogs too).
++  function estop() {
++    if (!R || !R.rawCmd) { msg('緊急停止：連線元件（HT9045Recipe）沒載入，沒有送出 —— 請用實體急停', 'err'); return; }
++    msg('緊急停止：送出中…', 'warn');
++    R.rawCmd('panel.estop').then(function (m) {
++      var d = (m && (m.detail || m.message)) || '';
++      msg(d || '緊急停止：已送出', 'warn');
++    }, function (e) { msg('緊急停止：沒有送出 —— ' + detailOf(e) + '（請用實體急停）', 'err'); });
++  }
++
+   function bind() {
+     var box = $('softKeys');
+     if (!box) return;
++    var es = $('softEStop');
++    if (es && !es.__softkey) { es.__softkey = true; es.setAttribute('data-st01ev', '1'); es.addEventListener('click', estop); }
+     var btns = box.querySelectorAll('[data-key]');
+     for (var i = 0; i < btns.length; i++) {
+       (function (b) {
+@@ -67,5 +80,5 @@
+   }
+   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind, { once: true });
+   else bind();
+-  window.HT9045MainSoftKeys = { press: press };
++  window.HT9045MainSoftKeys = { press: press, estop: estop };
+ })();
+diff --git a/page/main.html b/page/main.html
+index 8a2c7f5..a97089c 100644
+--- a/page/main.html
++++ b/page/main.html
+@@ -272,7 +272,7 @@
+     <div class="statList" id="palFunc" title="palFunc（golden main.cpp:1507-1529 的 23 個元件）：wb_serve 沒有發布 → 不可知">
+       <div class="fn" style="color:#777;font-weight:normal;" title="沒有來源：status.* 11 個 tag 恆為 null（WebBridgeTags.cpp:358-401），線上格式待 Steven 裁決">---</div>
+     </div>
+-    <div id="btnView" style="font-size:28px;margin-top:8px;color:#36c;cursor:pointer;" title="btnView（收合清單）">⬅️</div><!-- AI(W906-SOFTKEY) 20261003: EastSun「紅框內做出按鈕 因為我現在實體按鈕沒辦法通訊 需要在軟體上 按按鈕做動」-- 實體前面板按鍵的螢幕版（ht9045_main_softkeys.js；C++ WebMainScanKey.cpp W906_SoftPanelKeyPush） --><div id="softKeys" title="面板按鍵（軟體）：每一顆＝按一下實體前面板鍵，原版 ScanKey 照樣判斷要不要動作" style="margin-top:10px;width:232px;display:grid;grid-template-columns:1fr 1fr;gap:6px;"><div style="grid-column:1 / 3;font-size:13px;font-weight:bold;color:#334;">面板按鍵（軟體）</div><button type="button" class="btn3d" data-key="START" title="面板 START 鍵（軟體）：WS panel.key START＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;color:#0a7a0a;">START</button><button type="button" class="btn3d" data-key="PAUSE" title="面板 PAUSE 鍵（軟體）：WS panel.key PAUSE＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;color:#b00;">PAUSE</button><button type="button" class="btn3d" data-key="HOME" title="面板 HOME 鍵（軟體）：WS panel.key HOME＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;">HOME</button><button type="button" class="btn3d" data-key="RESET" title="面板 RESET 鍵（軟體）：WS panel.key RESET＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;">RESET</button><button type="button" class="btn3d" data-key="ONECYCLE" title="面板 ONE CYCLE 鍵（軟體）：WS panel.key ONECYCLE＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;">ONE CYCLE</button><button type="button" class="btn3d" data-key="CLEANOUT" title="面板 CLEAN OUT 鍵（軟體）：WS panel.key CLEANOUT＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;">CLEAN OUT</button><button type="button" class="btn3d" data-key="TRAYFEED" title="面板 TRAY FEED 鍵（軟體）：WS panel.key TRAYFEED＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;">TRAY FEED</button><button type="button" class="btn3d" data-key="ALARMRESET" title="面板 ALARM RESET 鍵（軟體）：WS panel.key ALARMRESET＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;">ALARM RESET</button><button type="button" class="btn3d" data-key="RETRY" title="面板 RETRY 鍵（軟體）：WS panel.key RETRY＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;">RETRY</button><button type="button" class="btn3d" data-key="SKIP" title="面板 SKIP 鍵（軟體）：WS panel.key SKIP＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;">SKIP</button><div id="softKeysMsg" style="grid-column:1 / 3;font-size:12px;min-height:16px;word-break:break-all;"></div></div>
++    <div id="btnView" style="font-size:28px;margin-top:8px;color:#36c;cursor:pointer;" title="btnView（收合清單）">⬅️</div><!-- AI(W906-SOFTKEY) 20261003: EastSun「紅框內做出按鈕 因為我現在實體按鈕沒辦法通訊 需要在軟體上 按按鈕做動」-- 實體前面板按鍵的螢幕版（ht9045_main_softkeys.js；C++ WebMainScanKey.cpp W906_SoftPanelKeyPush） --><div id="softKeys" title="面板按鍵（軟體）：每一顆＝按一下實體前面板鍵，原版 ScanKey 照樣判斷要不要動作" style="margin-top:10px;width:232px;display:grid;grid-template-columns:1fr 1fr;gap:6px;"><div style="grid-column:1 / 3;font-size:13px;font-weight:bold;color:#334;">面板按鍵（軟體）</div><button type="button" class="btn3d" id="softEStop" title="緊急停止（軟體）：WS panel.estop —— 所有馬達停止（含 1203 全軸）、運轉旗標清除、回原點中止；免權杖、對話框開著時也收。⚠ 這不是硬體急停迴路（AI(W906-SOFTKEY) 20261003）" style="grid-column:1 / 3;height:46px;font-size:16px;font-weight:bold;color:#fff;background:#c00;border-color:#900;">緊急停止 E-STOP</button><button type="button" class="btn3d" data-key="START" title="面板 START 鍵（軟體）：WS panel.key START＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;color:#0a7a0a;">START</button><button type="button" class="btn3d" data-key="PAUSE" title="面板 PAUSE 鍵（軟體）：WS panel.key PAUSE＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;color:#b00;">PAUSE</button><button type="button" class="btn3d" data-key="HOME" title="面板 HOME 鍵（軟體）：WS panel.key HOME＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;">HOME</button><button type="button" class="btn3d" data-key="RESET" title="面板 RESET 鍵（軟體）：WS panel.key RESET＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;">RESET</button><button type="button" class="btn3d" data-key="ONECYCLE" title="面板 ONE CYCLE 鍵（軟體）：WS panel.key ONECYCLE＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;">ONE CYCLE</button><button type="button" class="btn3d" data-key="CLEANOUT" title="面板 CLEAN OUT 鍵（軟體）：WS panel.key CLEANOUT＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;">CLEAN OUT</button><button type="button" class="btn3d" data-key="TRAYFEED" title="面板 TRAY FEED 鍵（軟體）：WS panel.key TRAYFEED＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;">TRAY FEED</button><button type="button" class="btn3d" data-key="ALARMRESET" title="面板 ALARM RESET 鍵（軟體）：WS panel.key ALARMRESET＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;">ALARM RESET</button><button type="button" class="btn3d" data-key="RETRY" title="面板 RETRY 鍵（軟體）：WS panel.key RETRY＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;">RETRY</button><button type="button" class="btn3d" data-key="SKIP" title="面板 SKIP 鍵（軟體）：WS panel.key SKIP＝按一下實體面板鍵（AI(W906-SOFTKEY) 20261003）" style="height:40px;font-size:13px;font-weight:bold;padding:0 4px;">SKIP</button><div id="softKeysMsg" style="grid-column:1 / 3;font-size:12px;min-height:16px;word-break:break-all;"></div></div>
+   </div>
+ </div>
+ 
+-- 
+2.55.0.windows.5
+

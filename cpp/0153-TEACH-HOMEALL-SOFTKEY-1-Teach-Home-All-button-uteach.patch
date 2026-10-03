@@ -1,0 +1,314 @@
+From a0808d0f68f13db1cff9f81ec43b285923d00705 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 15:59:10 +0800
+Subject: [PATCH] TEACH-HOMEALL + SOFTKEY: (1) Teach 'Home All' button (uteach
+ btnHomeAll -> motor.access teachHomeAll): runs the panel HOME key's arm
+ (golden TfMain::ScanKey main.cpp:2545-2563, WebMainScanKey.cpp
+ W906_PanelHomeKeyArm) through IMotorAccessBackend::GoldenHomeAll; refused
+ while a jog / single home runs or during manual teach / SystemStart; on
+ 'armed' the live backend closes the Teach page (golden MainProc returns while
+ fTeach is shown) so the golden home sequence (Z first, then XY) starts. (2)
+ Main-screen soft panel keys: WS panel.key
+ <START|PAUSE|HOME|RESET|ONECYCLE|CLEANOUT|TRAYFEED|TRAYEND|ALARMRESET|RETRY|SKIP>
+ queues one key id that ScanPannelKey returns (W906_VirtualPanelKeyHook, after
+ golden's SystemInitialOK / SafeLock / employee-ID refusals) to the first key
+ reader -- golden ScanKey, the Home PAUSE hook, the alarm/message waits --
+ i.e. one physical press; unread keys expire in 3 s. EastSun 1003 'physical
+ buttons cannot communicate, need software buttons'
+
+---
+ WebMainScanKey.cpp              | 84 +++++++++++++++++++++++++++++++++
+ WebMotorAccess.cpp              | 34 ++++++++++++-
+ WebMotorAccess.h                |  2 +-
+ WebMotorAccessLive.cpp          |  4 +-
+ ckernel.cpp                     |  4 +-
+ tests/test_web_motor_access.cpp | 26 ++++++++--
+ tools/wb_serve.cpp              |  2 +-
+ 7 files changed, 145 insertions(+), 11 deletions(-)
+
+diff --git a/WebMainScanKey.cpp b/WebMainScanKey.cpp
+index a4c0e4e..93f85ea 100644
+--- a/WebMainScanKey.cpp
++++ b/WebMainScanKey.cpp
+@@ -43,6 +43,7 @@
+ #include "W906FormShowing.h"        // W906_FormShowing
+ #include "JsonBridge/FormJson.h"    // ht9045::formjson::FormLock / FormUnlock
+ #include <cstdio>
++#include <string>
+ 
+ void NewRecordProcess(AnsiString AlarmCode, AnsiString S, AnsiString Debug);   // cMyDB.h:129 (not included: its defaults clash with canary_support.h's RecordProcess / MyDBIProcessNew)
+ int  ScanPannelKey();                                    // ckernel.h (local declaration, same convention as tools/wb_serve.cpp)
+@@ -370,6 +371,89 @@ void W906_MainScanKeyWith(int (*scan)(), bool noticeUp)
+     }
+ }
+ 
++// AI(W906-SOFTKEY) 20261003: EastSun 「你可以幫我圖片上 紅框內做出按鈕嗎 因為我現在實體按鈕沒辦法通訊 需要在軟體上 按按鈕做動」.
++// Screen panel keys: WS panel.key (tools/wb_serve.cpp) pushes one key id here; ScanPannelKey (ckernel.cpp, the W906_VirtualPanelKeyHook
++// line after golden's SystemInitialOK / SafeLock / employee-ID refusals) hands it to whichever key reader asks first -- TfMain::ScanKey
++// above, the Home hook (PAUSE aborts a home), the alarm / message waits (RETRY / SKIP / PAUSE / ALARM RESET) -- exactly like one
++// physical press.  [W906] A key nobody reads within kSoftKeyLifeMs is dropped (a guard such as an open dialog kept every reader from
++// scanning), so a press can never fire long after the operator made it; at most kSoftKeyMax are queued.  Front-pad ids (SnFK*).
++#include <deque>
++#include <windows.h>
++extern int (*W906_VirtualPanelKeyHook)();                // ckernel.cpp EOF
++namespace {
++const unsigned long kSoftKeyLifeMs = 3000;
++const std::size_t   kSoftKeyMax    = 4;
++struct MskSoftKey { int id; unsigned long t; std::string name; };
++std::deque<MskSoftKey> s_softKeys;
++int MskSoftKeyPop()
++{
++    const unsigned long now = ::GetTickCount();
++    while (!s_softKeys.empty()) {
++        const MskSoftKey k = s_softKeys.front();
++        s_softKeys.pop_front();
++        if ((unsigned long)(now - k.t) <= kSoftKeyLifeMs) {
++            std::printf("[SOFTKEY] %s read by the key scan\n", k.name.c_str());
++            return k.id;
++        }
++        std::printf("[SOFTKEY] %s dropped: not read within %lu ms (a dialog / guard kept the key scan away)\n", k.name.c_str(), kSoftKeyLifeMs);
++    }
++    return -1;
++}
++}  // namespace
++bool W906_SoftPanelKeyPush(const std::string& name, std::string& why)
++{
++    static const struct { const char* n; const int* id; } kKeys[] = {
++        { "START", &SnFKStart }, { "PAUSE", &SnFKPause }, { "HOME", &SnFKHome }, { "RESET", &SnFKReset },
++        { "ONECYCLE", &SnFKOneCycle }, { "CLEANOUT", &SnFKCleanOut }, { "TRAYFEED", &SnFKTrayFeed }, { "TRAYEND", &SnFKTrayEnd },
++        { "ALARMRESET", &SnFKAlarmReset }, { "RETRY", &SnFKRetry }, { "SKIP", &SnFKSkip } };
++    for (std::size_t i = 0; i < sizeof(kKeys) / sizeof(kKeys[0]); ++i) {
++        if (name != kKeys[i].n) continue;
++        if (s_softKeys.size() >= kSoftKeyMax) { why = "panel.key " + name + ": 前面還有 " + std::to_string(s_softKeys.size()) + " 個按鍵沒被讀走，這一下不收"; return false; }
++        W906_VirtualPanelKeyHook = &MskSoftKeyPop;
++        MskSoftKey k; k.id = *kKeys[i].id; k.t = ::GetTickCount(); k.name = name;
++        s_softKeys.push_back(k);
++        std::printf("[SOFTKEY] %s pushed (key id %d)\n", name.c_str(), k.id);
++        why = "panel.key " + name + "：已送出，等同按一下實體面板鍵（原版 TfMain::ScanKey 照樣判斷要不要動作）";
++        return true;
++    }
++    why = "panel.key: 不認得的按鍵 '" + name + "'（START／PAUSE／HOME／RESET／ONECYCLE／CLEANOUT／TRAYFEED／TRAYEND／ALARMRESET／RETRY／SKIP）";
++    return false;
++}
++
++// AI(W906-TEACH-HOMEALL) 20261003: EastSun 「請你先幫我在 teach 做一個全機回 home 的按鈕 我需要做測試 因為現在實體按鈕沒作用」.
++// The panel HOME key's arm above (golden main.cpp:2545-2563), for a screen button (WebMotorAccessLive.cpp GoldenHomeAll ->
++// motor.access uteach btnHomeAll / teachHomeAll). Same checks, same order, same TfMain::Home -- only the caller differs.
++// Returns 0 = BtnHome disabled (SystemStart), 1 / 2 = a bin check refused (its message is shown), 3 = TfMain::Home refused,
++// 4 = armed (SoftStart / iHome set; MainProc runs the home on the following beats).
++int W906_PanelHomeKeyArm(const char* who, std::string& why)
++{
++    if(!MskBtnHomeEnabled())
++    {
++        why = "SystemStart==true（運轉中）—— golden BtnHome->Enabled=false（ProcessKeyFlush main.cpp:4107-4111）";
++        return 0;
++    }
++    if(IniConfig.bG06HomeinitialCheckZ1 &&bHomeUnlock==false)                   //kevin 20131218
++        bHomeinitialCheckPushZ1=true;
++    if(MskCheckAutoOnlySetOneBin())
++    {
++        why = "golden CheckAutoOnlySetOneBin 擋下（訊息已顯示，main.cpp:32544）";
++        return 1;
++    }
++    if(IniConfig.bP28Auto1OnlyBin1==true && MskCheckAuto1OnlyBin1())
++    {
++        why = "golden CheckAuto1OnlyBin1 擋下（訊息已顯示，main.cpp:32511／:32516）";
++        return 2;
++    }
++    bHomeByStart=false;
++    if(!fMain->Home(who))
++    {
++        why = "golden TfMain::Home 回 false（SoftStart 已經設了，或它自己的檢查擋下：測試機未完成／OLP bin／Out Arm 破真空檢查）";
++        return 3;
++    }
++    why = "全機回原點已啟動（SoftStart／iHome 已設）";
++    return 4;
++}
++
+ // golden TfHome::Timer1Timer uhome.cpp:4885-4889 -> TfHome::ScanKey :4874-4883 (Timer1 Enabled = W906_HomeTimer1Enabled, uhome.cpp)
+ void W906_HomeScanKeyWith(int (*scan)())
+ {
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index 47fb913..599d150 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -92,7 +92,7 @@ const ActionRow kActions[] = {
+     { "setTeachFromCurrent", "ui",     "",     "uteach.cpp:2098 btnSetToClick（只做 EditPtr->Text=edtNowPosition->Text，頁面自己做）" },
+     { "setTeachFromOffset",  "ui",     "",     "uteach.cpp:2200 btnSetToOffsetClick（只做 EditPtr->Text=edtSetToOffset->Text，頁面自己做）" },
+     { "teachSet",            "live",   "",     "uteach.cpp:3360 SetButton140Click／:3517 SetButton020Click／:3650 SetButton064Click（手動教導：關伺服→對話框→讀編碼器→開伺服）" },  { "moveToTrayCell", "live", "", "（golden 沒有這顆鈕；HT160 Teach→Advanced→Sort Arm 點位測試的對等物）RULINGS_20261002 第 18 條：Z→ZSafePos、golden IsCanQuickJogMove、X／Y、可選 Z 下（AI(W906-ARMCELL) 20261002，本檔 EOF）" },
+-    { "teachGo",             "live",   "",     "uteach.cpp:3401 GoButton140Click／:3559 GoButton020Click" },  { "teachZAllUp", "live", "", "uteach.cpp:4466 btnInZAllUpClick／:4480 btnOutZAllUpClick（那一臂每一個 Z：bIn/OutArmZHome=false＋InitProcessSingleMotorTask；Timer1Timer :1374 DoZHome :4505 推進）AI(W906-TEACH-ZALLUP) 20261001" },  { "teachIndexServo", "live", "", "uteach.cpp:4253 btnZ1ServoClick／:4270 btnZ2ServoClick／:2919 btnArm1YServoClick（btnArm2YServo 同一個處理函式）：Gali_Command(\"MO?\"／\"SH?\") 函式內 static 輪流、fAllMotorHome=false AI(W906-TEACH-ZALLUP) 20261001" },  { "teachSt02", "live", "", "uteach.cpp:4605 SpeedButtonInRotatePos90Click／:4657 SpeedButtonInRotateNeg90Click／:4721 btnSht1GoLatchClick／:4737 btnSht2GoLatchClick／:5948 btnSetAllInArmZ_MoveClick／:5973 btnSetAllOutArmZ_MoveClick（AI(W906-ST02-C9-G2) 20261002 St02：本檔 EOF TeachSt02Dispatch）" },  { "teachSetAllArmZ", "live", "", "uteach.cpp:4300 btnSetAllInArmZClick／:4367 btnSetAllOutArmZClick（各吸嘴 Z 讀 ReadPos 再減基準吸嘴；只填畫面欄位，不動、不寫檔）AI(W906-TEACH-ZDOWN) 20261003（本檔 EOF）" },  { "teachOutZAllDown", "live", "", "uteach.cpp:4542 btnOutZAllDownClick（每一支 Out Z：SetSpeed(10)，再 MotorMove(SetEditPickOutSht＋OutZEditPtr[i][j])）AI(W906-TEACH-ZDOWN) 20261003（本檔 EOF）" },
++    { "teachGo",             "live",   "",     "uteach.cpp:3401 GoButton140Click／:3559 GoButton020Click" },  { "teachZAllUp", "live", "", "uteach.cpp:4466 btnInZAllUpClick／:4480 btnOutZAllUpClick（那一臂每一個 Z：bIn/OutArmZHome=false＋InitProcessSingleMotorTask；Timer1Timer :1374 DoZHome :4505 推進）AI(W906-TEACH-ZALLUP) 20261001" },  { "teachIndexServo", "live", "", "uteach.cpp:4253 btnZ1ServoClick／:4270 btnZ2ServoClick／:2919 btnArm1YServoClick（btnArm2YServo 同一個處理函式）：Gali_Command(\"MO?\"／\"SH?\") 函式內 static 輪流、fAllMotorHome=false AI(W906-TEACH-ZALLUP) 20261001" },  { "teachSt02", "live", "", "uteach.cpp:4605 SpeedButtonInRotatePos90Click／:4657 SpeedButtonInRotateNeg90Click／:4721 btnSht1GoLatchClick／:4737 btnSht2GoLatchClick／:5948 btnSetAllInArmZ_MoveClick／:5973 btnSetAllOutArmZ_MoveClick（AI(W906-ST02-C9-G2) 20261002 St02：本檔 EOF TeachSt02Dispatch）" },  { "teachSetAllArmZ", "live", "", "uteach.cpp:4300 btnSetAllInArmZClick／:4367 btnSetAllOutArmZClick（各吸嘴 Z 讀 ReadPos 再減基準吸嘴；只填畫面欄位，不動、不寫檔）AI(W906-TEACH-ZDOWN) 20261003（本檔 EOF）" },  { "teachOutZAllDown", "live", "", "uteach.cpp:4542 btnOutZAllDownClick（每一支 Out Z：SetSpeed(10)，再 MotorMove(SetEditPickOutSht＋OutZEditPtr[i][j])）AI(W906-TEACH-ZDOWN) 20261003（本檔 EOF）" },  { "teachHomeAll", "live", "", "golden TfMain::ScanKey main.cpp:2545-2563（面板 HOME 鍵：BtnHome 可按→CheckAutoOnlySetOneBin／P28→bHomeByStart=false→Home）；教導頁按鈕是 EastSun 20261003 要的測試鈕（實體鍵還讀不到），接受後關掉教導頁（golden 教導頁開著時 MainProc 暫停，csystem.cpp VerifyMotorAction 那一臂）AI(W906-TEACH-HOMEALL) 20261003（本檔 EOF）" },
+ };
+ const int kActionCount = (int)(sizeof(kActions) / sizeof(kActions[0]));
+ 
+@@ -4443,7 +4443,7 @@ MotorAccessOutcome MotorAccessDispatch(const MotorAccessReq& r, long long wireId
+         if (r.action == "home")                         return DoTeachHome(r, wireId, be);
+         if (r.action == "teachGo")                      return DoTeachButton(r, wireId, be);   // golden 按鈕的處理函式決定做什麼（W5B-2）
+         if (r.action == "teachSet")                     return DoTeachSet(r, wireId, be);  if (r.action == "teachZAllUp") return DoTeachZAllUp(r, wireId, be);  if (r.action == "teachIndexServo") return DoTeachIndexServo(r, wireId, be);   if (r.action == "moveToTrayCell") return DoArmCell(r, wireId, be);  if (r.action == "teachSt02") { MotorAccessOutcome TeachSt02Dispatch(const MotorAccessReq&, long long, IMotorAccessBackend&); return TeachSt02Dispatch(r, wireId, be); }  /*AI(W906-ARMCELL) 20261002: the Teach Arm Cell tab (EOF)*/  //AI(W906-TEACH-ZALLUP) 20261001: golden uteach btnIn/OutZAllUp, btnZ1/Z2/Arm1Y/Arm2YServo (EOF) ‖ AI(W906-ST02-C9-G2) 20261002 (St02-E helper): teachSt02 -- body at this file's EOF (WebTeachSt02.h); after the run / manual-teach gates above. Same line, no line moves
+-    }  if (r.action == "teachZAllUp" || r.action == "teachIndexServo") return Refuse("motor.access " + r.action + "（" + r.source + "）: 這是 golden uteach 教導頁的按鈕（" + row->golden + "），MotorTest 沒有");  if (r.action == "moveToTrayCell") return Refuse("motor.access moveToTrayCell（" + r.source + "）: 這是教導頁 Arm Cell 分頁的動作（RULINGS_20261002 第 18 條），MotorTest 沒有");  if (r.action == "gearCalMove" || r.action == "gearRatioPreview" || r.action == "gearRatioSave") return DoGear(r, wireId, be);  if (r.action == "teachSetAllArmZ" || r.action == "teachOutZAllDown") { MotorAccessOutcome TeachZDownDispatch(const MotorAccessReq&, long long, IMotorAccessBackend&); return TeachZDownDispatch(r, wireId, be); }   //AI(W906-TEACH-ZALLUP) 20261001  //AI(W906-GEARRATIO) 20261002: the Motor Test Gear Ratio tab (EOF; DoGear refuses any source but uMotorTest)  //AI(W906-TEACH-ZDOWN) 20261003: INBOX 147 golden uteach btnSetAllIn/OutArmZ, btnOutZAllDown (EOF; after the dispatcher's run / hand-teach / Arm Cell gates; a Motor Test source is refused there)
++    }  if (r.action == "teachZAllUp" || r.action == "teachIndexServo") return Refuse("motor.access " + r.action + "（" + r.source + "）: 這是 golden uteach 教導頁的按鈕（" + row->golden + "），MotorTest 沒有");  if (r.action == "moveToTrayCell") return Refuse("motor.access moveToTrayCell（" + r.source + "）: 這是教導頁 Arm Cell 分頁的動作（RULINGS_20261002 第 18 條），MotorTest 沒有");  if (r.action == "gearCalMove" || r.action == "gearRatioPreview" || r.action == "gearRatioSave") return DoGear(r, wireId, be);  if (r.action == "teachHomeAll") { MotorAccessOutcome TeachHomeAllDispatch(const MotorAccessReq&, long long, IMotorAccessBackend&); return TeachHomeAllDispatch(r, wireId, be); }   /*AI(W906-TEACH-HOMEALL) 20261003 (EOF)*/  if (r.action == "teachSetAllArmZ" || r.action == "teachOutZAllDown") { MotorAccessOutcome TeachZDownDispatch(const MotorAccessReq&, long long, IMotorAccessBackend&); return TeachZDownDispatch(r, wireId, be); }   //AI(W906-TEACH-ZALLUP) 20261001  //AI(W906-GEARRATIO) 20261002: the Motor Test Gear Ratio tab (EOF; DoGear refuses any source but uMotorTest)  //AI(W906-TEACH-ZDOWN) 20261003: INBOX 147 golden uteach btnSetAllIn/OutArmZ, btnOutZAllDown (EOF; after the dispatcher's run / hand-teach / Arm Cell gates; a Motor Test source is refused there)
+     if (r.action == "jogP" || r.action == "jogN") return DoJog(r, wireId, be);
+     if (r.action == "moveRelative")                 return DoMoveRelative(r, wireId, be);
+     if (r.action == "moveAbsolute")                 return DoMoveAbsolute(r, wireId, be);
+@@ -8326,3 +8326,33 @@ void MotorAccessOnMessageBox(IMotorAccessBackend& be, const std::string& kind, c
+         g_lastJobNote = why + ": jobs ended" + (stopsMotors ? ", 1203 stop sent to " + std::to_string(n) + " axis(es)" : std::string(", nothing stopped (NonStop box)"));
+ }
+ }  // namespace ht9045
++// =============================================================================
++//  AI(W906-TEACH-HOMEALL) 20261003: EastSun 「請你先幫我在 teach 做一個全機回 home 的按鈕 我需要做測試 因為現在實體按鈕沒作用」.
++//  uteach btnHomeAll -> teachHomeAll.  NOT a golden button: golden homes the machine from the panel HOME key (TfMain::ScanKey
++//  main.cpp:2545-2563; the main-screen HOME does nothing on a real machine, main.cpp:7127-7143).  This runs exactly that arm
++//  (IMotorAccessBackend::GoldenHomeAll -> WebMainScanKey.cpp W906_PanelHomeKeyArm), so the home sequence itself is golden's
++//  (Z first, then XY, then TrayX / CCDY -- forms/fHome.cpp THomeOrder).
++//  Guards before it, besides the dispatcher's (SystemStart, manual teach, Arm Cell): no Teach / Motor Test HOME job and no jog may
++//  still be running -- the full HOME would command the same axes.  On "armed" the live backend closes the Teach page: golden MainProc
++//  returns every beat while fTeach is shown (csystem.cpp, the VerifyMotorAction arm), so the home only starts once it is closed.
++//  No confirm dialog (EastSun: a button golden runs on press is sent on press).
++// =============================================================================
++namespace ht9045 {
++MotorAccessOutcome TeachHomeAllDispatch(const MotorAccessReq& r, long long wireId, IMotorAccessBackend& be)
++{
++    (void)wireId;
++    const std::string who = "全機回原點（Teach btnHomeAll = 面板 HOME 鍵 golden main.cpp:2545）";
++    if (r.source != "uteach" || r.button != "btnHomeAll")
++        return Refuse("teachHomeAll: 只收教導頁的 btnHomeAll（來源 " + r.source + "，按鈕 " + r.button + "）");
++    if (AnyJobActive() || !g_jogs.empty())
++        return Refuse(who + ": 還有單軸回原點／JOG／迴圈在跑 —— 先等它結束或按 STOP，全機回原點會動到同一批軸");
++    std::string why;
++    const int rc = be.GoldenHomeAll("Teach btnHomeAll", why);
++    if (rc != 4) return Refuse(who + ": " + why);
++    webbridge::JsonWriter w;
++    w.BeginObject();
++    AckHead(w, r, "homeArmed", "uteach", who + ": " + why + "；教導頁關閉後開始（Z 先回完再回 XY），進度看 Home Monitor");
++    w.Key("closeTeach").Bool(true);
++    MotorAccessOutcome o; o.ok = true; o.ackJson = Finish(w); return o;
++}
++}  // namespace ht9045
+diff --git a/WebMotorAccess.h b/WebMotorAccess.h
+index fc48692..953c55d 100644
+--- a/WebMotorAccess.h
++++ b/WebMotorAccess.h
+@@ -264,7 +264,7 @@ public:
+     virtual bool Pci1203CmdPos(int axis, double& card) = 0;       // 監看器的 cmdPos（卡片單位）；false = 讀不到
+     //AI(W906-JOG-MAXVEL) 20261003: the monitor sample's current value of one Pci1203SpeedParam (e.g. kSpeedMaxVel = CFG_AxMaxVel);
+     //  false = unknown (no sample / not read). Default false, so a backend that does not know it changes nothing.
+-    virtual bool Pci1203SpeedNow(int axis, int which, double& v) { (void)axis; (void)which; (void)v; return false; }
++    virtual bool Pci1203SpeedNow(int axis, int which, double& v) { (void)axis; (void)which; (void)v; return false; }   virtual int GoldenHomeAll(const std::string& who, std::string& why) { (void)who; why = "this backend has no full-machine HOME"; return -1; }   //AI(W906-TEACH-HOMEALL) 20261003: the panel HOME key arm (WebMainScanKey.cpp W906_PanelHomeKeyArm: 0 disabled / 1-2 bin check / 3 Home refused / 4 armed), Teach btnHomeAll. Same line
+     virtual bool Pci1203AxisReady(int axis) = 0;                  // STA_AX_READY（golden MotionDone 的等價）
+     virtual bool GoldenMotor(int motIndex, MotorGolden& g) = 0;   // false = MOT[i].Motor 為 NULL
+     virtual bool GoldenSafeDoorOpen(int motIndex) = 0;            // MOT[i].Motor->CheckIsSafeDoorOpen()（TMyMotor::JogP／MotorMove 第一行）
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index 35b8eaf..5b00841 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -19,7 +19,7 @@
+ #include <map>                         //AI(W906-MT-E2) 20260925: GoldenReloadMotorParams
+ #include <string>
+ #include <vector>
+-
++int W906_PanelHomeKeyArm(const char* who, std::string& why);   //AI(W906-TEACH-HOMEALL) 20261003: WebMainScanKey.cpp (global scope -- a block-scope declaration inside the anonymous namespace below would name a different function). On the old blank line
+ #include "vclcompat/vcl_compat.h"
+ #include "database.h"                  // HSys.MotTable / TMOTDATA
+ #include "common.h"                    //AI(W906-MT-E2) 20260925: MotTablePath (Reload Motor Data re-reads it)
+@@ -407,7 +407,7 @@ public:
+         if (!s.valid || !s.opened || !s.speedValid[which]) return false;
+         v = s.speed[which];
+         return true;
+-    }
++    }   int GoldenHomeAll(const std::string& who, std::string& why) override { const int rc = ::W906_PanelHomeKeyArm(who.c_str(), why); if (rc == 4 && W906_FormProgramShowHook) W906_FormProgramShowHook("fTeach", false, "WebMotorAccessLive.cpp GoldenHomeAll: Teach btnHomeAll armed the full HOME -- golden MainProc pauses while fTeach is shown (csystem.cpp VerifyMotorAction arm), so the Teach page closes"); return rc; }   //AI(W906-TEACH-HOMEALL) 20261003: the panel HOME key arm (WebMainScanKey.cpp, wb_serve only -- as this file). Same line, nothing below moves
+     bool Pci1203CmdPos(int axis, double& card) override
+     {
+         TPci1203Monitor* m = Pci1203Monitor();
+diff --git a/ckernel.cpp b/ckernel.cpp
+index 724e895..64ffbd6 100644
+--- a/ckernel.cpp
++++ b/ckernel.cpp
+@@ -3159,7 +3159,7 @@ int ScanPannelKey()
+ 
+     if(bEnableEmployeeIDCheck==true)                                            //Ifor 20180927 (Steven) : Add 工號查驗時按鍵不可操作
+         return -1;
+-
++    { extern int (*W906_VirtualPanelKeyHook)(); if (W906_VirtualPanelKeyHook) { const int vk = W906_VirtualPanelKeyHook(); if (vk >= 0) return vk; } }   //AI(W906-SOFTKEY) 20261003: EastSun「實體按鈕沒辦法通訊 需要在軟體上按按鈕做動」-- a screen panel key (WebMainScanKey.cpp W906_SoftPanelKeyPush, WS panel.key) is returned here, after golden's own refusals above (SystemInitialOK / SafeLock / employee ID), so every key reader -- TfMain::ScanKey, the Home hook, the alarm / message waits -- gets it exactly as a physical press (one id per press). Null hook = golden. On the old blank line
+     static bool bK[64];
+     static bool bFlag=true;                                                     //JerryYang 20160524
+     static bool bFlag2=true;                                                    //JerryYang 20160524
+@@ -4114,3 +4114,5 @@ AnsiString InitialTestDelayStatus()     //wei 20171020 (jou) 延遲狀態顯示
+     return str;
+ }
+ //------------------------------------------------------------------------------
++//AI(W906-SOFTKEY) 20261003: the screen panel key source read by ScanPannelKey (above); set by WebMainScanKey.cpp (wb_serve only). Null = golden (physical keys only).
++int (*W906_VirtualPanelKeyHook)() = 0;
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index 8575314..ac02ac0 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -276,7 +276,7 @@ public:
+     }
+     int  GoldenZSafePos() override { return zSafe; }
+     std::map<int, double> speedNow;   //AI(W906-JOG-MAXVEL) 20261003: the card's current speed params the monitor "read" (empty = unknown)
+-    bool Pci1203SpeedNow(int axis, int which, double& v) override { (void)axis; std::map<int, double>::iterator it = speedNow.find(which); if (it == speedNow.end()) return false; v = it->second; return true; }
++    int homeAllRc = -1; int homeAllCalls = 0; std::string homeAllWho; int GoldenHomeAll(const std::string& who, std::string& why) override { ++homeAllCalls; homeAllWho = who; why = (homeAllRc == 4) ? "armed (fake)" : "refused (fake)"; return homeAllRc; }   /*AI(W906-TEACH-HOMEALL) 20261003*/   bool Pci1203SpeedNow(int axis, int which, double& v) override { (void)axis; std::map<int, double>::iterator it = speedNow.find(which); if (it == speedNow.end()) return false; v = it->second; return true; }
+     bool GoldenSystemStart() override { return systemStart; }
+     void GoldenResetMNet() override { ++resetCount; }
+     void GoldenSetRangeRate(int mi, bool range, int v) override { RR x = { mi, range, v }; rangeRates.push_back(x); }
+@@ -961,8 +961,8 @@ int main(int argc, char** argv)
+         for (int k = 0; k < 6; ++k) { if (contract3[k].seen == 1) ++contractSeen; else printf("    contract button %s seen %d time(s)\n", contract3[k].button, contract3[k].seen); }
+         CHECK(contractSeen == 11 && contractBad == 0,
+               "AI(W906-MT-E2/E3c): the 5 + 6 contract commands are in the catalog exactly once, with the agreed action/params/kind, source uMotorTest");
+-        CHECK(n == 65, "65 catalog commands (AI(W906-TEACH-ZDOWN) 20261003: + uteach btnSetAllInArmZ / btnSetAllOutArmZ / btnOutZAllDown; AI(W906-GEARRATIO) 20261002: + uMotorTest mtGearMove / mtGearPreview / mtGearSave; AI(W906-ST02-C9-G2) 20261002: + uteach St02Teach*; 38 + 5 MT-E2 + 5 MT-E3c: FormShow/FormClose/BitBtn2/BitBtn3/btnSaveLogLightScaleData + AI(W906-MT-ALMRST) 20260929 btnAlarmReset + AI(W906-TEACH-ALMRST) 20260930 uteach btnAlarmReset + AI(W906-MT-SAVEMOT) 20260930 btnSaveMotTable + AI(W906-TEACH-ZALLUP) 20261001 uteach btnInZAllUp/btnOutZAllUp/btnZ1Servo/btnZ2Servo/btnArm1YServo/btnArm2YServo + AI(W906-ARMCELL) 20261002 uteach armCellGo)");
+-        CHECK(actions.size() == 48, "48 distinct actions (AI(W906-TEACH-ZDOWN) 20261003: + teachSetAllArmZ / teachOutZAllDown; AI(W906-GEARRATIO) 20261002: + gearCalMove / gearRatioPreview / gearRatioSave; AI(W906-ST02-C9-G2) 20261002: + teachSt02; 28 + 4 MT-E2 + formShow/formClose/lightScale/lightScaleSave/lightScaleDataSave + resetAlarm + AI(W906-MT-SAVEMOT) saveMotTable + AI(W906-TEACH-ZALLUP) teachZAllUp/teachIndexServo + AI(W906-ARMCELL) moveToTrayCell)");
++        CHECK(n == 66, "66 catalog commands (AI(W906-TEACH-HOMEALL) 20261003: + uteach btnHomeAll; AI(W906-TEACH-ZDOWN) 20261003: + uteach btnSetAllInArmZ / btnSetAllOutArmZ / btnOutZAllDown; AI(W906-GEARRATIO) 20261002: + uMotorTest mtGearMove / mtGearPreview / mtGearSave; AI(W906-ST02-C9-G2) 20261002: + uteach St02Teach*; 38 + 5 MT-E2 + 5 MT-E3c: FormShow/FormClose/BitBtn2/BitBtn3/btnSaveLogLightScaleData + AI(W906-MT-ALMRST) 20260929 btnAlarmReset + AI(W906-TEACH-ALMRST) 20260930 uteach btnAlarmReset + AI(W906-MT-SAVEMOT) 20260930 btnSaveMotTable + AI(W906-TEACH-ZALLUP) 20261001 uteach btnInZAllUp/btnOutZAllUp/btnZ1Servo/btnZ2Servo/btnArm1YServo/btnArm2YServo + AI(W906-ARMCELL) 20261002 uteach armCellGo)");
++        CHECK(actions.size() == 49, "49 distinct actions (AI(W906-TEACH-HOMEALL) 20261003: + teachHomeAll; AI(W906-TEACH-ZDOWN) 20261003: + teachSetAllArmZ / teachOutZAllDown; AI(W906-GEARRATIO) 20261002: + gearCalMove / gearRatioPreview / gearRatioSave; AI(W906-ST02-C9-G2) 20261002: + teachSt02; 28 + 4 MT-E2 + formShow/formClose/lightScale/lightScaleSave/lightScaleDataSave + resetAlarm + AI(W906-MT-SAVEMOT) saveMotTable + AI(W906-TEACH-ZALLUP) teachZAllUp/teachIndexServo + AI(W906-ARMCELL) moveToTrayCell)");
+         {   //AI(W906-TEACH-ZALLUP) 20261001: the six Teach rows -- source uteach; the two Z All Up are kind motion (the page locks while the C++ answer is pending), the four Servo control
+             const char* zb[6] = { "btnInZAllUp", "btnOutZAllUp", "btnZ1Servo", "btnZ2Servo", "btnArm1YServo", "btnArm2YServo" };
+             int zseen = 0;
+@@ -1042,7 +1042,7 @@ int main(int argc, char** argv)
+         CHECK(unknown == 0, "every catalog action has a status");
+         //AI(W906-MERGE-56bbf785) 20260926: machine live 30 (MT-E1..E3c) + laptop W5-b teachSet/teachGo = 32; ui = machine 3 + the laptop's
+         //  setTeachFromCurrent/Offset = 5; 32 + 5 = the 37 actions -- nothing queued or blocked any more.
+-        CHECK(live.size() == 43 && live.count("teachSetAllArmZ") && live.count("teachOutZAllDown") && live.count("gearCalMove") && live.count("gearRatioPreview") && live.count("gearRatioSave") && live.count("moveToTrayCell") && live.count("teachSt02") && live.count("teachZAllUp") && live.count("teachIndexServo") && live.count("saveMotTable") && live.count("resetAlarm") && live.count("reloadMotorData") && live.count("stop") && live.count("servoToggle") && live.count("jogP") &&   //AI(W906-MT-ALMRST) 20260929: + resetAlarm  //AI(W906-MT-SAVEMOT) 20260930: + saveMotTable (live 34)  //AI(W906-TEACH-ZALLUP) 20261001: + teachZAllUp / teachIndexServo (live 36)  //AI(W906-ARMCELL) 20261002: + moveToTrayCell (live 37)  //AI(W906-ST02-C9-G2) 20261002: + teachSt02 (live 41 with ARMCELL + GEARRATIO, laptop batch 49 merge)  //AI(W906-TEACH-ZDOWN) 20261003: + teachSetAllArmZ / teachOutZAllDown (live 43)
++        CHECK(live.size() == 44 && live.count("teachHomeAll") && live.count("teachSetAllArmZ") && live.count("teachOutZAllDown") && live.count("gearCalMove") && live.count("gearRatioPreview") && live.count("gearRatioSave") && live.count("moveToTrayCell") && live.count("teachSt02") && live.count("teachZAllUp") && live.count("teachIndexServo") && live.count("saveMotTable") && live.count("resetAlarm") && live.count("reloadMotorData") && live.count("stop") && live.count("servoToggle") && live.count("jogP") &&   //AI(W906-MT-ALMRST) 20260929: + resetAlarm  //AI(W906-MT-SAVEMOT) 20260930: + saveMotTable (live 34)  //AI(W906-TEACH-ZALLUP) 20261001: + teachZAllUp / teachIndexServo (live 36)  //AI(W906-ARMCELL) 20261002: + moveToTrayCell (live 37)  //AI(W906-ST02-C9-G2) 20261002: + teachSt02 (live 41 with ARMCELL + GEARRATIO, laptop batch 49 merge)  //AI(W906-TEACH-ZDOWN) 20261003: + teachSetAllArmZ / teachOutZAllDown (live 43)
+               live.count("moveRelative") && live.count("moveAbsolute") && live.count("moveSoftLimitN") &&
+               live.count("setJogHighSpeed") && live.count("setSoftLimitP") && live.count("home") &&
+               live.count("loopMove") && live.count("resetMNet") && live.count("setRangeAndInit") &&
+@@ -1344,6 +1344,24 @@ int main(int argc, char** argv)
+             MotorAccessReq rel3 = Req("uMotorTest", "stop", "MOutArmY"); rel3.button = "sbMotorTest_JogP";
+             (void)MotorAccessDispatch(rel3, 11, be);
+         }
++        {   //AI(W906-TEACH-HOMEALL) 20261003: Teach btnHomeAll -> teachHomeAll = the panel HOME key arm (GoldenHomeAll); refused while a jog runs,
++            //  from any source but uteach, and when the arm refuses (its reason); accepted -> homeArmed + closeTeach (the live backend closes the page).
++            MotorAccessReq ha = Req("uteach", "teachHomeAll", 0); ha.button = "btnHomeAll"; ha.kind = "motion";
++            be.homeAllRc = 4; const int c0 = be.homeAllCalls;
++            MotorAccessOutcome oh = MotorAccessDispatch(ha, 21, be);
++            CHECK(oh.ok && be.homeAllCalls == c0 + 1 && be.homeAllWho == "Teach btnHomeAll" && oh.ackJson.find("homeArmed") != std::string::npos &&
++                  oh.ackJson.find("closeTeach") != std::string::npos, "TEACH-HOMEALL: btnHomeAll -> GoldenHomeAll(\"Teach btnHomeAll\") once, ack homeArmed + closeTeach");
++            be.homeAllRc = 3; oh = MotorAccessDispatch(ha, 22, be);
++            CHECK(!oh.ok && be.homeAllCalls == c0 + 2 && oh.ackJson.find("refused (fake)") != std::string::npos, "TEACH-HOMEALL: the arm refuses -> refused with its reason");
++            MotorAccessReq hb = ha; hb.source = "uMotorTest"; be.homeAllRc = 4; oh = MotorAccessDispatch(hb, 23, be);
++            CHECK(!oh.ok && be.homeAllCalls == c0 + 2, "TEACH-HOMEALL: only the Teach page's btnHomeAll (uMotorTest refused before the arm)");
++            MotorAccessReq jg = Req("uMotorTest", "jogP", "MOutArmY"); jg.button = "sbMotorTest_JogP";
++            (void)MotorAccessDispatch(jg, 24, be);
++            oh = MotorAccessDispatch(ha, 25, be);
++            CHECK(!oh.ok && be.homeAllCalls == c0 + 2, "TEACH-HOMEALL: refused while a jog runs (the full HOME would command the same axes)");
++            MotorAccessReq js = Req("uMotorTest", "stop", "MOutArmY"); js.button = "sbMotorTest_JogP"; (void)MotorAccessDispatch(js, 26, be);
++            be.homeAllRc = -1;
++        }
+         {
+             MotorAccessReq rel = Req("uMotorTest", "stop", "MOutArmY"); rel.button = "sbMotorTest_JogN";
+             const std::size_t e0 = be.extDrive.size(), x0 = be.executed.size();
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index b39039c..719b1cd 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -5710,7 +5710,7 @@ int main(int argc, char** argv)
+             //    false（並順手把 SoftStop 清回 false），所以這支回來的當下
+             //    SystemStart 正常仍是 1。瀏覽器要看 machine.state tag，
+             //    跟 start.run 的處置一致。
+-            } else if (wc.cmd == "main.home") { extern void W906_MainHomeCommand(webbridge::WebBridgeServer&, const webbridge::WebCommand&); W906_MainHomeCommand(server, wc);   /* AI(W906-FLOW-1) 20260927: 主畫面 HOME 鈕＝golden BtnHomeClick main.cpp:7120-7144（本體檔尾）；同一行，不移動行號 */ } else if (wc.cmd == "pause.run") {
++            } else if (wc.cmd == "main.home") { extern void W906_MainHomeCommand(webbridge::WebBridgeServer&, const webbridge::WebCommand&); W906_MainHomeCommand(server, wc);   /* AI(W906-FLOW-1) 20260927: 主畫面 HOME 鈕＝golden BtnHomeClick main.cpp:7120-7144（本體檔尾）；同一行，不移動行號 */ } else if (wc.cmd == "panel.key") { extern bool W906_SoftPanelKeyPush(const std::string&, std::string&); std::string why; const std::string key = (wc.hasValue && wc.value.isString()) ? wc.value.asString() : std::string(); const bool ok = W906_SoftPanelKeyPush(key, why); std::printf("panel.key %s: %s\n", key.c_str(), why.c_str()); server.CompleteCommand((unsigned long long)wc.id, ok, why);   /* AI(W906-SOFTKEY) 20261003: EastSun 「實體按鈕沒辦法通訊 需要在軟體上按按鈕做動」-- the main screen's panel keys = one physical press each (WebMainScanKey.cpp W906_SoftPanelKeyPush -> ScanPannelKey); same line, no line moves */ } else if (wc.cmd == "pause.run") {
+                 if (!g_webMain) {
+                     server.CompleteCommand((unsigned long long)wc.id, false,
+                                            "fMain was not repointed to TfMainWeb -- pause is not armed in this binary");
+-- 
+2.55.0.windows.5
+

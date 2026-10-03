@@ -1,0 +1,240 @@
+From 69529254f21af5295167f6c963cc5d44edf0213e Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 16:12:10 +0800
+Subject: [PATCH] HOME-PERAXIS + SOFT E-STOP: (1) axes home independently
+ (EastSun ruling 20260929, asked again 1003 'X stops when I home Y'):
+ releasing HOME on a 1203 axis ends and stops only that axis (Teach
+ TeachHomeRelease: CancelJobsOnAxis + DecStop instead of golden StopAllMotor +
+ every-axis 1203 stop; Motor Test DoHome: no EndSingleHome that dropped every
+ axis's job untracked); STOP still stops everything; tests updated +
+ two-axes-homing case. (2) Screen EMERGENCY STOP: WS panel.estop
+ (token-exempt, also served inside blocking dialogs) = golden alarm stop
+ (StopAllMotor(true); SoftStop=SoftStart=SystemStart=false) + every 1203 axis
+ stopped / jobs ended (W906_MotorAccessOnAlarm) + a running full HOME aborted
+ like the panel PAUSE; queued soft keys dropped; MainScanKey [13] -- EastSun
+ 1003
+
+---
+ WebBridge/WebBridgeServer.cpp     |  2 +-
+ WebMainScanKey.cpp                | 25 +++++++++++++++++++++++++
+ WebMotorAccess.cpp                | 27 ++++++++++++++++++++++-----
+ tests/test_main_scankey.cpp       | 19 +++++++++++++++++++
+ tests/test_main_scankey_stubs.cpp |  5 +++++
+ tests/test_web_motor_access.cpp   | 22 +++++++++++++++++++---
+ tools/wb_serve.cpp                |  3 ++-
+ 7 files changed, 93 insertions(+), 10 deletions(-)
+
+diff --git a/WebBridge/WebBridgeServer.cpp b/WebBridge/WebBridgeServer.cpp
+index 1a9d0f9..a8df560 100644
+--- a/WebBridge/WebBridgeServer.cpp
++++ b/WebBridge/WebBridgeServer.cpp
+@@ -1446,7 +1446,7 @@ void WebBridgeServer::Impl::HandleTextMessage(Conn& c, const std::string& text)
+         && cmdName != "ui.windows.put"
+         && cmdName != "cfg.resync"
+         && cmdName != "log.event" && cmdName != "modal.answer" && cmdName != "dialog.response" && cmdName != "dialog.notifyAck" && cmdName != "dialog.auth" /*AI(W906-D026) 20261001 St01: the alarm note's password answer, exempt like dialog.response (an alarm must be answerable without the token; the wait loop only takes it for the current qid)*/ && cmdName != "motor.stop" && cmdName != "act.home.abort" && cmdName != "contactct.get" && cmdName != "counterclear.get" && cmdName != "observer.get"   //AI(W906-HOMEMON) 20261001: act.home.abort exempt with motor.stop -- the Home Monitor's Abort Home (golden sbAbortHomeClick, stop direction) must not be held by a token in another tab; wb_serve runs it only while the home sequence shows the form (JsonBridge/ChanHome.cpp)
+-        && cmdName != "vacuum.get" && cmdName != "vacuum.open" && cmdName != "vacuum.close") {   //AI(W906-VACUNIT-1203) 20260930: HW.VacuumUnit's live view (golden tmr1Timer, polled every 1 s) is a READ -- exempt like observer.get, so the poll never takes the operator token (Motor Test's jog/HOME watchdog follows the holder). vacuum.setSV / do / setAll / reset are presses and stay behind the token.  // AI(W906-ALARM-ANSWER-TOKEN) 20260924: 告警回答豁免權杖 —— 使用者 F5 實測：MES0920 框上按 PAUSE 回 not-operator。ht9045_recipe_client.js:532-537 的 modalAnswer 刻意不 acquire（「警報一定要答得掉」，權杖可能在別的分頁），這裡卻沒豁免 ⇒ 告警框 iframe 的連線永遠答不掉。安全性不靠權杖：wb_serve 等待迴圈只收當前 qid＋有提供的選項（tools/wb_serve.cpp 回答處理），沒有告警時回 no query pending。⚠ c3c459f 起回答 START 會重走 StartFromWeb ⇒ 任何連上的瀏覽器答 START 都能讓機台繼續（golden 也是誰在框前誰按）  AI(W906-W4-MOTOR) 20260925: `motor.stop` 同列豁免 —— 停機不能被「權杖在別的分頁」擋住（golden 任何畫面的 STOP 都停得了；EastSun 的停止也不看控制權）。安全性不靠權杖：wb_serve 的 W906_MotorAccessWire 把 motor.stop 鎖死在 action=="stop"，其他動作走 motor.access 照樣要權杖。  AI(W906-Q2-S124) 20260927 (St02): Steven S124 = B -- the three read-only queries by exact name, no prefix (the laptop 20260927 10:2x: a `*.get` prefix would also pass a future `xxx.get` that writes). contactct.get / counterclear.get read, write no file and move nothing; observer.get is exempt HERE by name, but its four Yield acts (yieldSite / yieldMax / yieldMin / yieldClear) change memory, so wb_serve checks the token for them per act (WebCmdGuard::Exempt, AI(W906-Q2-OBS) 20260927, St02-E) -- the earlier "only read" wording was wrong. editlist.get stays token-gated (it is not read-only). ctest: tests/test_wb_server.cpp section 7.   AI(W906-J5-ACK) 20260930: `dialog.notifyAck` (INBOX 119) exempt by exact name with the two alarm answers -- the operator acknowledges a kCode==0 notice from the alarm iframe, which never acquires the token (same reason as AI(W906-ALARM-ANSWER-TOKEN)); it only retires a notice whose requestId matches (tools/wb_dialog_mailbox.h NotifyAckHandle), never starts anything.  ctest: tests/test_wb_server.cpp section 7
++        && cmdName != "vacuum.get" && cmdName != "vacuum.open" && cmdName != "vacuum.close" && cmdName != "panel.estop" /*AI(W906-SOFTKEY) 20261003: the screen EMERGENCY STOP must never wait for the token*/) {   //AI(W906-VACUNIT-1203) 20260930: HW.VacuumUnit's live view (golden tmr1Timer, polled every 1 s) is a READ -- exempt like observer.get, so the poll never takes the operator token (Motor Test's jog/HOME watchdog follows the holder). vacuum.setSV / do / setAll / reset are presses and stay behind the token.  // AI(W906-ALARM-ANSWER-TOKEN) 20260924: 告警回答豁免權杖 —— 使用者 F5 實測：MES0920 框上按 PAUSE 回 not-operator。ht9045_recipe_client.js:532-537 的 modalAnswer 刻意不 acquire（「警報一定要答得掉」，權杖可能在別的分頁），這裡卻沒豁免 ⇒ 告警框 iframe 的連線永遠答不掉。安全性不靠權杖：wb_serve 等待迴圈只收當前 qid＋有提供的選項（tools/wb_serve.cpp 回答處理），沒有告警時回 no query pending。⚠ c3c459f 起回答 START 會重走 StartFromWeb ⇒ 任何連上的瀏覽器答 START 都能讓機台繼續（golden 也是誰在框前誰按）  AI(W906-W4-MOTOR) 20260925: `motor.stop` 同列豁免 —— 停機不能被「權杖在別的分頁」擋住（golden 任何畫面的 STOP 都停得了；EastSun 的停止也不看控制權）。安全性不靠權杖：wb_serve 的 W906_MotorAccessWire 把 motor.stop 鎖死在 action=="stop"，其他動作走 motor.access 照樣要權杖。  AI(W906-Q2-S124) 20260927 (St02): Steven S124 = B -- the three read-only queries by exact name, no prefix (the laptop 20260927 10:2x: a `*.get` prefix would also pass a future `xxx.get` that writes). contactct.get / counterclear.get read, write no file and move nothing; observer.get is exempt HERE by name, but its four Yield acts (yieldSite / yieldMax / yieldMin / yieldClear) change memory, so wb_serve checks the token for them per act (WebCmdGuard::Exempt, AI(W906-Q2-OBS) 20260927, St02-E) -- the earlier "only read" wording was wrong. editlist.get stays token-gated (it is not read-only). ctest: tests/test_wb_server.cpp section 7.   AI(W906-J5-ACK) 20260930: `dialog.notifyAck` (INBOX 119) exempt by exact name with the two alarm answers -- the operator acknowledges a kCode==0 notice from the alarm iframe, which never acquires the token (same reason as AI(W906-ALARM-ANSWER-TOKEN)); it only retires a notice whose requestId matches (tools/wb_dialog_mailbox.h NotifyAckHandle), never starts anything.  ctest: tests/test_wb_server.cpp section 7
+         if (ctrlOwner_.load() != c.id && cfg.enforceControlToken) reject = "not-operator";   //AI(W906-TOKEN-OFF) 20260928: EastSun「先不要在機台端卡控」-- not enforced: nobody is refused
+         else                           { ctrlOwner_.store(c.id); ctrlLastCmdMs_ = NowMs(); }   //AI(W906-TOKEN-OFF) 20260928: ...and the sender becomes the holder (a no-op when it already is), so the page that presses the buttons is the "operator connected" that Motor Test's jog/HOME watchdog follows (W906_MotorAccessPollTick)
+     }
+diff --git a/WebMainScanKey.cpp b/WebMainScanKey.cpp
+index 93f85ea..9320ea7 100644
+--- a/WebMainScanKey.cpp
++++ b/WebMainScanKey.cpp
+@@ -420,6 +420,31 @@ bool W906_SoftPanelKeyPush(const std::string& name, std::string& why)
+     return false;
+ }
+ 
++// AI(W906-SOFTKEY) 20261003: EastSun 「按鈕裡面我也需要緊急停止按紐」-- the screen EMERGENCY STOP (WS panel.estop, token-exempt, also
++// served inside the blocking-dialog wait).  NOT a golden key (the real E-stop is the hardware circuit); it does what golden does when an
++// alarm stops the machine (note.cpp:795-801 StopAllMotor(true); SoftStop=SoftStart=SystemStart=false -- tools/wb_serve.cpp
++// W906_AlarmStopLikeGolden) plus the 1203 half golden's StopAllMotor cannot reach (W906_MotorAccessOnAlarm: every opened 1203 axis gets
++// the stop, every Teach / Motor Test job ends), and a running full HOME is aborted the way the panel PAUSE does it (golden
++// TfHome::ScanKey uhome.cpp:4878-4882: sbAbortHomeClick + Close).  Queued soft keys are dropped (nothing may fire after a stop).
++void W906_SoftEmergencyStop(std::string& why)
++{
++    extern void StopAllMotor(bool bIndexCanStop);                               // Motor/myGALILmotor.cpp (golden :4712)
++    extern void W906_MotorAccessOnAlarm(const char* code);                      // WebMotorAccessLive.cpp (1203 axes + jobs)
++    s_softKeys.clear();
++    StopAllMotor(true);                                                         // golden note.cpp:796
++    W906_MotorAccessOnAlarm("SOFT-ESTOP");
++    SoftStop    = false;                                                        // golden note.cpp:799
++    SoftStart   = false;                                                        // golden note.cpp:800
++    SystemStart = false;                                                        // golden note.cpp:801
++    bool homeAborted = false;
++    if (fHome && fHome->fShow) { fHome->sbAbortHomeClick(fHome); fHome->Close(); homeAborted = true; }   // golden uhome.cpp:4880-4881
++    RecordProcess("W906 SOFTKEY: EMERGENCY STOP pressed on the screen", homeAborted ? "home aborted" : "");
++    std::printf("[SOFTKEY] EMERGENCY STOP: StopAllMotor(true) + every 1203 axis stopped; SoftStop=SoftStart=SystemStart=0%s\n",
++                homeAborted ? "; full HOME aborted" : "");
++    why = std::string("緊急停止：所有馬達已送停止（含 1203 全軸）、運轉旗標已清") + (homeAborted ? "、回原點已中止" : "") +
++          "。⚠ 這是軟體停止，不是硬體急停迴路";
++}
++
+ // AI(W906-TEACH-HOMEALL) 20261003: EastSun 「請你先幫我在 teach 做一個全機回 home 的按鈕 我需要做測試 因為現在實體按鈕沒作用」.
+ // The panel HOME key's arm above (golden main.cpp:2545-2563), for a screen button (WebMotorAccessLive.cpp GoldenHomeAll ->
+ // motor.access uteach btnHomeAll / teachHomeAll). Same checks, same order, same TfMain::Home -- only the caller differs.
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index 599d150..b2b8533 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -1425,10 +1425,13 @@ MotorAccessOutcome DoHome(const MotorAccessReq& r, long long wireId, IMotorAcces
+     if (!m.a.Is1203())
+         return DoHomeGolden(r, be, m, who, wantStart);   //AI(W906-MT-SMHOME) 20261001: RULINGS_20261001 #8「照golden接上」-- golden btnHomeClick's non-1203 branch (uMotorTest.cpp:1152-1158 / release :1168-1171), body at the end of this file. Was a refusal citing the return-true stub that AI(W906-SMHOME) 0927 retired (ProcessSingleMotorHome is translated at the end of uhome.cpp)
+     HomeJob* running = FindHome(m.a.axis);
+-    if (!wantStart) {                                                           // golden else 支（:1166）：bSingleHome=false; PCIL132_StopMotor();（無條件停）
++    if (!wantStart) { const bool wasLsHome = running && running->fromLS;   /*AI(W906-HOME-PERAXIS) 20261003*/   // golden else 支（:1166）：bSingleHome=false; PCIL132_StopMotor();（無條件停）
+         if (running) CancelHome(be, *running, true, "home released (golden: bSingleHome=false; PCIL132_StopMotor)");
+         else Stop1203(be, m.a.axis, wireId);                                   // AI(W906-MT-E1): golden PCIL132_StopMotor = DecStop
+-        EndSingleHome(be, "HOME released (golden btnHomeClick :1170 bSingleHome=false)");   //AI(W906-MT-E3c) 20260925: the shared flag -- also ends Light Scale's single home
++        //AI(W906-HOME-PERAXIS) 20261003: was EndSingleHome(...) -- golden's ONE bSingleHome flag, which here cancelled EVERY axis's home job
++        //  (without stopping those axes: they kept moving untracked, HomeFlag never 1). Axes are independent (EastSun ruling 20260929 / 1003):
++        //  only this axis's job ends above; Light Scale's single-home wait drops only when it was this axis's job.
++        if (wasLsHome && g_ls.homePending) { g_ls.homePending = false; g_ls.lastNote = "bSingleHome=false (HOME released on the Light Scale axis) -> Light Scale case 1 goes on"; }   //AI(W906-MT-E3c) 20260925: the shared flag -- also ends Light Scale's single home
+         webbridge::JsonWriter w;
+         w.BeginObject();
+         AckHead(w, r, "homeStopped", "pci1203", running ? "HOME 抬起：停止歸零（golden else 支）" : "HOME 抬起：沒有進行中的歸零，照 golden 送停止");
+@@ -3385,8 +3388,22 @@ MotorAccessOutcome TeachHomeRelease(const MotorAccessReq& r, long long wireId, I
+     bool ready = false;
+     std::string why1203, firstRefusal, msg;
+     int sent = 0, accepted = 0, refused = 0;
+-    CancelAllJobs(be, "HOME released (golden btnHomeClick else: btnHome up, motors stopped)");
+-    if (hasM && g.galilIndex) {                                                 // golden :2190-2192
++    //AI(W906-HOME-PERAXIS) 20261003: EastSun「我按X回HOME 並且在回HOME過程中再去按Y X回HOME動作會停止 不是應該各歸各地嗎?」(ruling 20260929:
++    //  axes independent). golden releases btnHome with StopAllMotor (:2194) -- one home at a time; a 1203 axis now stops ITS OWN home only
++    //  (CancelJobsOnAxis + DecStop), every other axis keeps homing. STOP (btnStop) still stops everything. Galil / non-1203: golden as before.
++    const bool perAxis = hasM && !g.galilIndex && a.Is1203();
++    if (!perAxis) CancelAllJobs(be, "HOME released (golden btnHomeClick else: btnHome up, motors stopped)");
++    if (perAxis) {
++        CancelJobsOnAxis(be, r.motors[0], a, "HOME released on this axis (AI(W906-HOME-PERAXIS): the other axes' homes go on)");
++        ready = be.Pci1203Ready(why1203);
++        if (ready && a.axis >= 0) {
++            const Pci1203CmdResult res = Stop1203(be, a.axis, wireId);
++            sent = 1;
++            if (CmdFailed(res)) { refused = 1; firstRefusal = CmdWhy(res); } else accepted = 1;
++        }
++        msg = ready ? std::string("HOME 抬起：只停 ") + r.motors[0] + "（各軸獨立，其他軸的回原點照常進行）" + (refused ? "；停止被拒：" + firstRefusal : std::string())
++                    : std::string("HOME 抬起：1203 control not ready（") + why1203 + "）";
++    } else if (hasM && g.galilIndex) {                                          // golden :2190-2192
+         be.GoldenStopMotor(a.motIndex);                                         // INDEX_MOTION_CARD==0 的 Index 軸 → Gali_Command("ST")
+         msg = "HOME 抬起：golden Galil 分支 MOT[" + std::to_string(a.motIndex) + "].Gali_Command(\"ST\")（:2191）";
+     } else {                                                                    // golden :2193-2194
+@@ -3407,7 +3424,7 @@ MotorAccessOutcome TeachHomeRelease(const MotorAccessReq& r, long long wireId, I
+             //AI(W906-W5-b) 20260925: W5B-12 —— 回傳碼照 R21 W4B-3 判（Send1203Speed 內用 CmdFailed）；失敗就誠實說（停止已送）
+             if (be.Pci1203Ready(w2) && a.axis >= 0 && a.tableEnable) {
+                 if (!Send1203Speed(be, wireId, m, 1, why, note))
+-                    return Refuse(r.action + "（uteach）" + r.motors[0] + ": HOME 抬起：停止已送（StopAllMotor＋1203 全軸停），但 golden MOT.SetSpeed(1) 失敗 —— " + why +
++                    return Refuse(r.action + "（uteach）" + r.motors[0] + ": HOME 抬起：停止已送（1203 軸：只停這一軸，AI(W906-HOME-PERAXIS)），但 golden MOT.SetSpeed(1) 失敗 —— " + why +
+                                   "（卡上還是原本的速度；下一次 jog／移動前請先確認速度）");
+             } else {
+                 g_goldenPct[a.motIndex] = 1;                                    // 卡不可用：記下 golden 的速度狀態（下一次教導頁的 jog／移動會送）
+diff --git a/tests/test_main_scankey.cpp b/tests/test_main_scankey.cpp
+index a1cbe04..41f7355 100644
+--- a/tests/test_main_scankey.cpp
++++ b/tests/test_main_scankey.cpp
+@@ -262,6 +262,25 @@ int main()
+     CHECK(g_scanCalls == 0);
+     fHome->fShow = false;
+ 
++    // ---- [13] AI(W906-SOFTKEY) 20261003: screen panel keys (panel.key) and the screen EMERGENCY STOP (panel.estop) -----
++    std::printf("[13] soft keys: unknown name refused, a pushed key is unread by FakeScan (ScanPannelKey reads it), E-STOP clears the run flags\n");
++    {
++        extern bool W906_SoftPanelKeyPush(const std::string&, std::string&);
++        extern void W906_SoftEmergencyStop(std::string&);
++        extern int (*W906_VirtualPanelKeyHook)();
++        extern int g_W906TestMotorAccessOnAlarmCalls;
++        std::string why;
++        CHECK(!W906_SoftPanelKeyPush("NOPE", why));
++        CHECK(W906_SoftPanelKeyPush("START", why) && W906_VirtualPanelKeyHook != 0);
++        Idle(); SystemStart = true; SoftStart = true;
++        const int al0 = g_W906TestMotorAccessOnAlarmCalls;
++        W906_SoftEmergencyStop(why);
++        CHECK(SystemStart == false && SoftStart == false && SoftStop == false);
++        CHECK(g_W906TestMotorAccessOnAlarmCalls == al0 + 1);
++        CHECK(W906_VirtualPanelKeyHook() == -1);              // the START queued before the stop was dropped
++        CHECK(W906_SoftPanelKeyPush("PAUSE", why) && W906_VirtualPanelKeyHook() == SnFKPause && W906_VirtualPanelKeyHook() == -1);   // one id per press
++    }
++
+     W906_RemoteRun.Start = 0;
+     W906_RemoteRun.Pause = 0;
+     std::printf("\n%d / %d checks passed\n", g_total - g_fail, g_total);
+diff --git a/tests/test_main_scankey_stubs.cpp b/tests/test_main_scankey_stubs.cpp
+index 893be4c..1eeac4a 100644
+--- a/tests/test_main_scankey_stubs.cpp
++++ b/tests/test_main_scankey_stubs.cpp
+@@ -23,3 +23,8 @@ void FormUnlock() { --g_W906TestFormLockDepth; }
+ }  // namespace ht9045
+ 
+ void W906_Contact_OneCycleProcess() { ++g_W906TestContactOneCycleCalls; }
++
++//AI(W906-SOFTKEY) 20261003: W906_SoftEmergencyStop (WebMainScanKey.cpp) calls the live backend's alarm sweep; this test does not link
++//  WebMotorAccessLive.cpp -- count the calls instead.
++int g_W906TestMotorAccessOnAlarmCalls = 0;
++void W906_MotorAccessOnAlarm(const char*) { ++g_W906TestMotorAccessOnAlarmCalls; }
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index ac02ac0..df4fb96 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -1362,6 +1362,22 @@ int main(int argc, char** argv)
+             MotorAccessReq js = Req("uMotorTest", "stop", "MOutArmY"); js.button = "sbMotorTest_JogP"; (void)MotorAccessDispatch(js, 26, be);
+             be.homeAllRc = -1;
+         }
++        {   //AI(W906-HOME-PERAXIS) 20261003: EastSun「我按X回HOME 並且在回HOME過程中再去按Y X回HOME動作會停止 不是應該各歸各地嗎?」--
++            //  two axes home at once; releasing one ends ONLY its job (was: EndSingleHome cancelled every axis's job).
++            MotorAccessResetJobs();
++            be.golden[20].homeHigh = 2000; be.golden[20].homeLow = 500; be.golden[0].homeHigh = 2000; be.golden[0].homeLow = 500;   // golden PHomeHighSpeed／PHomeLowSpeed (0 = refused, W4C-3)
++            MotorAccessReq h1 = Req("uMotorTest", "home", "MOutArmY"); h1.button = "btnHome"; h1.flag["start"] = true;
++            MotorAccessReq h2 = Req("uMotorTest", "home", "MInArmX");  h2.button = "btnHome"; h2.flag["start"] = true;
++            const MotorAccessOutcome o1 = MotorAccessDispatch(h1, 31, be);
++            const MotorAccessOutcome o2 = MotorAccessDispatch(h2, 32, be);
++            const int both = MotorAccessJobs().homesActive;
++            h1.flag["start"] = false;
++            const MotorAccessOutcome o3 = MotorAccessDispatch(h1, 33, be);
++            CHECK(o1.ok && o2.ok && both == 2 && o3.ok && MotorAccessJobs().homesActive == 1,
++                  "HOME-PERAXIS: MOutArmY + MInArmX homing; MOutArmY released -> only its job ends, MInArmX keeps homing (1 job left)");
++            if (!(o1.ok && o2.ok)) printf("    o1=%s\n    o2=%s\n", o1.ackJson.c_str(), o2.ackJson.c_str());
++            MotorAccessResetJobs();
++        }
+         {
+             MotorAccessReq rel = Req("uMotorTest", "stop", "MOutArmY"); rel.button = "sbMotorTest_JogN";
+             const std::size_t e0 = be.extDrive.size(), x0 = be.executed.size();
+@@ -3506,13 +3522,13 @@ int main(int argc, char** argv)
+         sa = be.stopAll.size();
+         n0 = (int)be.executed.size();
+         o = MotorAccessDispatch(hq, 1, be);
+-        CHECK(o.ok && be.stopAll.size() == sa + 1 && MotorAccessJobs().homesActive == 0 && CountKind(be, n0, kCmdAxSetSpeed) == 4 &&
++        CHECK(o.ok && be.stopAll.size() == sa && MotorAccessJobs().homesActive == 0 && CountKind(be, n0, kCmdAxSetSpeed) == 4 &&   /*AI(W906-HOME-PERAXIS) 20261003: was sa + 1 (StopAllMotor) -- now this axis only*/
+               be.executed.back().kind == kCmdAxSetSpeed && be.executed[be.executed.size() - 3].value == 100.0,
+-              "W5B-11: teach home release -> StopAllMotor + home cancelled + golden MOT.SetSpeed(1) on the 1203 axis (velHigh 100)");
++              "W5B-11 + HOME-PERAXIS: teach home release -> this axis's home cancelled + stopped, NO StopAllMotor (axes independent), golden MOT.SetSpeed(1) on the 1203 axis (velHigh 100)");
+         be.failSetSpeed = 1;
+         sa = be.stopAll.size();
+         o = MotorAccessDispatch(hq, 1, be);
+-        CHECK(!o.ok && Has(o.ackJson, "SetSpeed(1) 失敗") && Has(o.ackJson, "停止已送") && be.stopAll.size() == sa + 1,
++        CHECK(!o.ok && Has(o.ackJson, "SetSpeed(1) 失敗") && Has(o.ackJson, "停止已送") && be.stopAll.size() == sa,   /*AI(W906-HOME-PERAXIS) 20261003: was sa + 1*/
+               "W5B-12: SetSpeed(1) refused by the card -> honest refusal (the stop was sent)");
+         MotorAccessReq hn = Req("uteach", "home", "MInShuttle2"); hn.flag["start"] = false;
+         const std::size_t ss0 = be.setSpeeds.size();
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 719b1cd..b5c422b 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -845,6 +845,7 @@ static int ForwardShowMyMessageBoxYesNo(const char* s1, const char* s2, const ch
+                 g_modalServer->CompleteCommand((unsigned long long)wc.id, true,
+                                                ht9045::sjson::ConfigResyncJson(since));
+             } else if (wc.cmd == "ui.windows.put") { std::string whyW; const std::string frameW = (wc.hasValue && wc.value.isString()) ? wc.value.asString() : std::string(); if (!frameW.empty() && ht9045::WebWindowRegistryPut(wc.connId, frameW, whyW)) g_modalServer->CompleteCommand((unsigned long long)wc.id, true, "{\"accepted\":true,\"duringModal\":true}"); else g_modalServer->CompleteCommand((unsigned long long)wc.id, false, "ui.windows.put: " + (frameW.empty() ? std::string("value must be the frame JSON string") : whyW));   //AI(W906-MERGE-56bbf785) 20260926: machine MT-FIX1 accepts ui.windows.put during the ShowErrorMessage wait (a wait over 15 s lets the window registry go stale -> fMotorTest/fTeach read "open" -> MainProc stays paused after the answer); laptop's YES/NO wait says its exceptions are "理由同上面那支", so it takes the same one. Same body as that branch, on one line
++            } else if (wc.cmd == "panel.estop") { extern void W906_SoftEmergencyStop(std::string&); std::string why; W906_SoftEmergencyStop(why); g_modalServer->CompleteCommand((unsigned long long)wc.id, true, why);   /* AI(W906-SOFTKEY) 20261003: the screen EMERGENCY STOP is served inside a blocking dialog too (like motor.stop) */
+             } else if (wc.cmd == "motor.stop") {
+                 // 同 ForwardShowErrorMessage（AI(W906-W4D) 20260925）：STOP 永遠放行。
+                 extern bool W906_MotorAccessWire(const std::string&, long long, std::string&, bool);
+@@ -5710,7 +5711,7 @@ int main(int argc, char** argv)
+             //    false（並順手把 SoftStop 清回 false），所以這支回來的當下
+             //    SystemStart 正常仍是 1。瀏覽器要看 machine.state tag，
+             //    跟 start.run 的處置一致。
+-            } else if (wc.cmd == "main.home") { extern void W906_MainHomeCommand(webbridge::WebBridgeServer&, const webbridge::WebCommand&); W906_MainHomeCommand(server, wc);   /* AI(W906-FLOW-1) 20260927: 主畫面 HOME 鈕＝golden BtnHomeClick main.cpp:7120-7144（本體檔尾）；同一行，不移動行號 */ } else if (wc.cmd == "panel.key") { extern bool W906_SoftPanelKeyPush(const std::string&, std::string&); std::string why; const std::string key = (wc.hasValue && wc.value.isString()) ? wc.value.asString() : std::string(); const bool ok = W906_SoftPanelKeyPush(key, why); std::printf("panel.key %s: %s\n", key.c_str(), why.c_str()); server.CompleteCommand((unsigned long long)wc.id, ok, why);   /* AI(W906-SOFTKEY) 20261003: EastSun 「實體按鈕沒辦法通訊 需要在軟體上按按鈕做動」-- the main screen's panel keys = one physical press each (WebMainScanKey.cpp W906_SoftPanelKeyPush -> ScanPannelKey); same line, no line moves */ } else if (wc.cmd == "pause.run") {
++            } else if (wc.cmd == "main.home") { extern void W906_MainHomeCommand(webbridge::WebBridgeServer&, const webbridge::WebCommand&); W906_MainHomeCommand(server, wc);   /* AI(W906-FLOW-1) 20260927: 主畫面 HOME 鈕＝golden BtnHomeClick main.cpp:7120-7144（本體檔尾）；同一行，不移動行號 */ } else if (wc.cmd == "panel.estop") { extern void W906_SoftEmergencyStop(std::string&); std::string why; W906_SoftEmergencyStop(why); std::printf("panel.estop: %s\n", why.c_str()); server.CompleteCommand((unsigned long long)wc.id, true, why);   /* AI(W906-SOFTKEY) 20261003: EastSun 「按鈕裡面我也需要緊急停止按紐」(WebMainScanKey.cpp W906_SoftEmergencyStop); token-exempt (WebBridgeServer.cpp) */ } else if (wc.cmd == "panel.key") { extern bool W906_SoftPanelKeyPush(const std::string&, std::string&); std::string why; const std::string key = (wc.hasValue && wc.value.isString()) ? wc.value.asString() : std::string(); const bool ok = W906_SoftPanelKeyPush(key, why); std::printf("panel.key %s: %s\n", key.c_str(), why.c_str()); server.CompleteCommand((unsigned long long)wc.id, ok, why);   /* AI(W906-SOFTKEY) 20261003: EastSun 「實體按鈕沒辦法通訊 需要在軟體上按按鈕做動」-- the main screen's panel keys = one physical press each (WebMainScanKey.cpp W906_SoftPanelKeyPush -> ScanPannelKey); same line, no line moves */ } else if (wc.cmd == "pause.run") {
+                 if (!g_webMain) {
+                     server.CompleteCommand((unsigned long long)wc.id, false,
+                                            "fMain was not repointed to TfMainWeb -- pause is not armed in this binary");
+-- 
+2.55.0.windows.5
+

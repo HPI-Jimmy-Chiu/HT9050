@@ -1,0 +1,912 @@
+From d27162b70061e532aebb5bafba18161e0f112410 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 15:12:43 +0800
+Subject: [PATCH] SCANKEY: golden TfMain::ScanKey (physical front/rear panel
+ keys: START / PAUSE / HOME / RESET / CLEAN OUT / ONE CYCLE / TRAY FEED /
+ ALARM RESET / POWER / TRAY END, main.cpp:2379-2656) and its TimerScanKeyTimer
+ guards (:31994-32025) ported in WebMainScanKey.cpp, ticked every wb_serve
+ main-loop pass (and the drag keepalive); TfHome::ScanKey (panel PAUSE aborts
+ Home, uhome.cpp:4874-4889) with Timer1->Enabled un-gated in uhome.cpp;
+ W906_Contact_OneCycleProcess export for ONE CYCLE on the Contact page; START
+ census 36 34 2; ctest MainScanKey -- EastSun 1003 'physical buttons do
+ nothing'. Inert until the panel keys are readable: IO_Table SnFK*/SnRK* rows
+ are Enable=0, and HT9050's panel may be the ELC-001 RS232 pad on COM4
+ (ControlPanelMode=1, uPadInterface not ported) Also GATE-TICK2:
+ pci1203_control_gate expects 2 Pci1203AxisIniTick sites (main loop +
+ W906_NativeKeepaliveMain, since 5f3ff7b) -- it had been red since 0930
+
+---
+ CMakeLists.txt                    |   2 +-
+ FileRW/DeviceForm_File.cpp        |  11 +
+ WebMainScanKey.cpp                | 407 ++++++++++++++++++++++++++++++
+ tests/CMakeLists.txt              |  27 +-
+ tests/test_main_scankey.cpp       | 269 ++++++++++++++++++++
+ tests/test_main_scankey_stubs.cpp |  25 ++
+ tools/pci1203_control_gate.ps1    |   6 +-
+ tools/wb_serve.cpp                |   4 +-
+ uhome.cpp                         |  24 +-
+ 9 files changed, 756 insertions(+), 19 deletions(-)
+ create mode 100644 WebMainScanKey.cpp
+ create mode 100644 tests/test_main_scankey.cpp
+ create mode 100644 tests/test_main_scankey_stubs.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 725bb15..6c0b286 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -3344,7 +3344,7 @@ add_executable(wb_serve
+     #   AI(W906-Q34-ARM) 20260923: 同上 —— 有 SDK 的機器上本 target 自己就會帶旗標，
+     #   不再需要同事那邊另外開；那台機器上網頁一次點擊就會真的送到卡片。
+     EtherCAT/Pci1203Control.cpp EtherCAT/Pci1203IoRoute.cpp EtherCAT/Pci1203MotorRoute.cpp JsonBridge/IoBtnPanelClick.cpp JsonBridge/IoFormShow.cpp EtherCAT/Pci1203GaliRouteCore.cpp EtherCAT/Pci1203GaliRoute.cpp EtherCAT/Pci1203TorqueHook.cpp   #AI(W906-INDEXZ-1203) 20260930: + Pci1203TorqueHook.cpp = the D4 torque hook, moved out of Pci1203GaliRoute.cpp so tests/test_gali_route_live.cpp can link the route's binding without WebMotorAccessLive.cpp (no vendor call either, control gate 5d).   #AI(W906-INDEXZ) 20260930: + the Index Z1 Gali_* -> 1203 route (INBOX 113; MachineType.h EOF WB_ENGINE_INDEXZ_1203, OFF by default; no vendor call of its own, control gate 5d).   # AI(W906-IOWEB-P17) 20260925: A4-7 engine IO -> 1203 route (MachineType.h EOF WB_ENGINE_IO_1203) + HW.IoSetView's io.btnPanelClick (golden BtnPanelClick); no vendor call of their own -- Execute() above makes it. Same line, no line below moves   AI(W906-ECAT-ROUTE) 20260929: + EtherCAT/Pci1203MotorRoute.cpp = the engine motor -> 1203 route (Motor/EcatMotorRoute.h; MachineType.h EOF WB_ENGINE_MOTOR_1203, OFF by default); no vendor call of its own either (tools/pci1203_control_gate.ps1 check 5d)
+-    WebAuth.cpp  WebModalWake.cpp  WebMainCtlButtons.cpp   # AI(W906-FW-W2) 20260819: auth.login verification core.  AI(W906-MODAL-WAKE) 20260926: WebModalWake.cpp = RULINGS_20260926 #9 (blocking dialog with no web page -> open the browser)   AI(W906-FLOW-4) 20260930: WebMainCtlButtons.cpp = the tick consumer of the main-screen ctlButton events (golden BtnOneCycleClick / BtnTrayEndClick / BtnAlarmResetClick); wb_serve only because St01's queue (FileRW/MainClick.cpp) is wb_serve-only too; same line so nothing moves
++    WebAuth.cpp  WebModalWake.cpp  WebMainCtlButtons.cpp  WebMainScanKey.cpp   # AI(W906-SCANKEY) 20261003: WebMainScanKey.cpp = golden TfMain::ScanKey (physical panel keys) + TfHome::ScanKey, ticked from the main loop.  # AI(W906-FW-W2) 20260819: auth.login verification core.  AI(W906-MODAL-WAKE) 20260926: WebModalWake.cpp = RULINGS_20260926 #9 (blocking dialog with no web page -> open the browser)   AI(W906-FLOW-4) 20260930: WebMainCtlButtons.cpp = the tick consumer of the main-screen ctlButton events (golden BtnOneCycleClick / BtnTrayEndClick / BtnAlarmResetClick); wb_serve only because St01's queue (FileRW/MainClick.cpp) is wb_serve-only too; same line so nothing moves
+     WebLogin.cpp  # Steven 20260924: golden TfMain cbUserSelectChange / stOperatorClick / btLoginClick
+     WebSmartDiag.cpp  # Steven 20260925 (Data.SmartDiagnostic): WS smartdiag.op JSON wrapper
+     WebRecipeChange.cpp  WebReadChainCalls.cpp   # AI(W906-RCHG) 20260925: WS recipe.change (golden cbSetupFileNameChange/ChangeSetUpFile) + DoReadLastData call shims
+diff --git a/FileRW/DeviceForm_File.cpp b/FileRW/DeviceForm_File.cpp
+index b4a0e5a..8f10d80 100644
+--- a/FileRW/DeviceForm_File.cpp
++++ b/FileRW/DeviceForm_File.cpp
+@@ -995,3 +995,14 @@ void Ct3dRun(TControl* sender)
+     EvB3Merge(pre, e->control);
+ }
+ }  // namespace
++
++//AI(W906-SCANKEY) 20261003: golden TfMain::ScanKey main.cpp:2613 fContact->OneCycleProcess() -- the panel ONE CYCLE key with the
++//  Contact page up (WebMainScanKey.cpp). Same body spbOneCycle runs (DF_OneCycleProcess, golden cContact.cpp:11741-11746) on this
++//  TU's TfContact statics; no ledOneCycle write (golden ScanKey does not touch it). FormLock: form events change these under it.
++#include "JsonBridge/FormJson.h"
++void W906_Contact_OneCycleProcess()
++{
++    ht9045::formjson::FormLock();
++    DF_OneCycleProcess();
++    ht9045::formjson::FormUnlock();
++}
+diff --git a/WebMainScanKey.cpp b/WebMainScanKey.cpp
+new file mode 100644
+index 0000000..a4c0e4e
+--- /dev/null
++++ b/WebMainScanKey.cpp
+@@ -0,0 +1,407 @@
++// =============================================================================
++//  WebMainScanKey.cpp -- golden TfMain::ScanKey (the physical front / rear panel keys) with its timer, and TfHome::ScanKey.
++//
++//  AI(W906-SCANKEY) 20261003: EastSun (machine engineer) 「現在移植」 -- the panel keys (HOME / PAUSE / RESET / START /
++//  ONE CYCLE / RETRY ...) did nothing because nothing in this tree ever called the key scan outside the dialog waits.
++//  golden 906 = D:\HT9045\HT9011UC_Code_V3.33.906.0_20260618 (cp950, read-only):
++//    TfMain::ScanKey            main.cpp:2379-2656  (only caller TimerScanKeyTimer :31994-32025; main.dfm:17339-17345 Interval 30)
++//    TfHome::ScanKey            uhome.cpp:4874-4883 (Timer1Timer :4885-4889; uhome.dfm:357-362 Interval 10)
++//  wb_serve only (CMakeLists.txt add_executable(wb_serve)): it calls FileRW/DeviceForm_File.cpp (wb_serve only) and the
++//  form-bridge lock. Called once per pass of wb_serve's main loop (tools/wb_serve.cpp, after W906_MainCtlButtonTick, and
++//  the drag keepalive W906_NativeKeepaliveMain).
++//  Key source = ScanPannelKey (ckernel.cpp:3147): one id per press (press latch :3732-3757), so a held key fires once.
++//  ⚠ It reads Sen[SnFK*] / Sen[SnRK*]: a key row of IO_Table.csv with Enable=0 never reads ON (mysensor.cpp:127-131), so
++//    until those rows carry the panel's real 1203 address this file is inert (machine config, not code).
++//  Not run inside the blocking-dialog waits: golden returns at :2383-2386 while fNote / MyMessageBox is up, and those
++//  waits scan the keys themselves (tools/wb_serve.cpp W906MbIoDismiss / W906_AlarmIoAnswer / W906_ModalWaitTick).
++//  START goes through W906_RemoteRunStart (forms/fMain.h, tools/wb_serve.cpp -> TfMainWeb::StartFromWeb), never the base
++//  TfMain::Start (WebStart.h). START_SitesCensus: +1 live site (tests/CMakeLists.txt --check).
++//  No FormLock around START / PAUSE / HOME / RESET (they can wait for the browser, FileRW/DeviceForm_File.cpp:676-680);
++//  FormLock around CleanOut / OneCycle / TrayFeed, as WebMainCtlButtons.cpp.
++// =============================================================================
++#include "MachineType.h"            // first (tools/macro_order_gate.ps1)
++#include "forms/fMain.h"            // fMain, BtnPauseClick / Home / BtnResetClick / BtnCleanOutClick / BtnOneCycleClick / InitialTrayFeedTask, W906_RemoteRunStart
++#include "forms/fHome.h"            // fHome: fShow / Close / sbAbortHomeClick / GaliMotorServoOff
++#include "forms/fNote.h"            // fNote
++#include "forms/fSortCT.h"          // fSortCT->pnlLoad
++#include "atester_shims.h"          // fContact (TfContactShim::fShow), fiosetview
++#include "mymessbox_shim.h"         // MyMessageBox
++#include "aHotPlateSubstrate.h"     // InArmSuck / OutArmSuck / FTestSuck / BTestSuck / CatchTraySuck
++#include "cmydef.h"                 // Sn*/Sw* ids, flags, AccessLevel, iDefSupervisorLevel, OFFLINE_ALARM, OFF_LINE, MMTrayY, C_Empty_Fix/C_Color_Fix, K_RETRY, MMSystem/MMAutoClean
++#include "cprod.h"                  // TestIF_File, ArmSpeed_File, Prod
++#include "CosFunction.h"
++#include "Config.h"
++#include "LastSet.h"
++#include "csystem.h"                // InitTrayEndFunction, AutoTrayCylinderFree, IndexHasIC / ShuttleHasIC
++#include "Motor/mymotor.h"          // MOT[]
++#include "mycylin.h"                // Cylinder[]
++#include "myswitch.h"               // SW[]
++#include "canary_support.h"         // ShowErrorMessage, ShowMyMessage, __FUNC__
++#include "SECSGEM/SecsEventType.h"  // SECS_EVENT
++#include "SECSGEM/SecsEventReport.h"// EventReport
++#include "MainCalcCore.h"           // ComputeCheckAutoOnlySetOneBin / ComputeCheckAuto1OnlyBin1
++#include "W906FormShowing.h"        // W906_FormShowing
++#include "JsonBridge/FormJson.h"    // ht9045::formjson::FormLock / FormUnlock
++#include <cstdio>
++
++void NewRecordProcess(AnsiString AlarmCode, AnsiString S, AnsiString Debug);   // cMyDB.h:129 (not included: its defaults clash with canary_support.h's RecordProcess / MyDBIProcessNew)
++int  ScanPannelKey();                                    // ckernel.h (local declaration, same convention as tools/wb_serve.cpp)
++extern bool SECS_GEM_PPMUSIC_CONTROL_flag;               // ckernel.cpp
++extern bool SECS_GEM_PPSIGNALTOWER_CONTROL_flag;         // ckernel.cpp
++extern bool W906_HomeTimer1Enabled;                      // uhome.cpp (golden TfHome::Timer1->Enabled)
++void W906_Contact_OneCycleProcess();                     // FileRW/DeviceForm_File.cpp EOF (golden TfContact::OneCycleProcess cContact.cpp:11741-11746)
++
++namespace {
++struct MskFormLock { MskFormLock() { ht9045::formjson::FormLock(); } ~MskFormLock() { ht9045::formjson::FormUnlock(); } };
++
++bool s_bOneCycleFinish = false;   // golden TfContact::bOneCycleFinish (ctor false)
++
++// golden TfContact::FormShow cContact.cpp:1192-1206 sets bOneCycleFinish when the Contact form opens.
++// [W906] Evaluated on the page's closed->open edge (page table), at most one pass (<=50 ms) after golden's moment.
++void MskContactFormShowEdge()
++{
++    static bool wasOpen = false;
++    const bool open = fContact != 0 && W906_FormShowing("fContact", fContact->fShow);
++    if (open && !wasOpen)
++    {
++        if(IndexHasIC() || InArmSuck.HasIC() || OutArmSuck.HasIC() || ShuttleHasIC())   // golden :1192-1195
++            s_bOneCycleFinish=false;                                                     // golden :1198
++        else
++            s_bOneCycleFinish=true;                                                      // golden :1204
++    }
++    wasOpen = open;
++}
++
++// golden ProcessKeyFlush main.cpp:4107-4111 / :4150 (BtnHome) and :4109 / :4117-4119 / :4144 (BtnCleanOut).
++// Same rule as FileRW/MainClick.cpp CtlBtnEnabled (anonymous there). BtnOneCycle->Enabled has no writer in golden (dfm default True).
++bool MskBtnHomeEnabled()     { return SystemStart==false; }
++bool MskBtnCleanOutEnabled() { return SystemStart==false && fAllMotorHome==true && iOneCycle==0; }
++
++// golden TfMain::CheckAutoOnlySetOneBin main.cpp:32523-32553 (logic MainCalcCore; dialog golden :32544). Unconditional:
++// golden ScanKey calls it in ship builds (the copies in tools/wb_serve.cpp / FileRW/DeviceForm_File.cpp are SOFT_SIMULTE-only).
++bool MskCheckAutoOnlySetOneBin()
++{
++    AnsiString str1, str2;
++    if(ComputeCheckAutoOnlySetOneBin(CosFunction.bUsePassBinOnlyCanSetOneBin, Prod.iIsPassT6, Prod.iT6CatData, iTestBinCount, s6TrayName, str1, str2))
++    {
++        ShowMyMessage(str1, str2, "", false, false);
++        return true;
++    }
++    return false;
++}
++// golden TfMain::CheckAuto1OnlyBin1 main.cpp:32502-32521 (dialogs :32511 / :32516)
++bool MskCheckAuto1OnlyBin1()
++{
++    AnsiString msg;
++    if(ComputeCheckAuto1OnlyBin1(CUSTOMER_CODE, LastSet.iTester, Prod.iT6PosCate, iTestBinCount, msg))
++    {
++        ShowMyMessage(msg, "", "", false, false);
++        return true;
++    }
++    return false;
++}
++// golden fAutoTeach->IsKeyStartEnable() AutoTeach/AutoTeach.cpp:1541-1552: true unless IsRun() (:217-224, false whenever
++// !(bManualSteplAutoTeach && bA56EnableAutoTeachFunciton)) and in step Home / In/Out Shuttle Sensor / Index Arm.
++// No fAutoTeach in the port (WebStart.cpp): with auto-alignment switched on the step is unknown -> fail closed.
++bool MskAutoTeachKeyStartEnable()
++{
++    if(CosFunction.bManualSteplAutoTeach==false || IniConfig.bA56EnableAutoTeachFunciton==false)
++        return true;
++    std::printf("[SCANKEY] START refused: golden fAutoTeach->IsKeyStartEnable() (main.cpp:2504) -- auto alignment is on and TfAutoTeach is not ported\n");
++    return false;
++}
++}  // namespace
++
++// golden TfMain::ScanKey main.cpp:2379-2656. scan = ScanPannelKey in production (a ctest feeds keys);
++// noticeUp = a kcode==0 note is up (golden: fNote->fShow; the port's notice does not set it, tools/wb_serve.cpp).
++void W906_MainScanKeyWith(int (*scan)(), bool noticeUp)
++{
++    static int Key=0;                                                                       // :2381
++
++    if((fNote && W906_FormShowing("fNote", fNote->fShow)) || noticeUp ||
++       (fiosetview && W906_FormShowing("fiosetview", fiosetview->fShow)))                   // :2383
++        return;
++    if(MyMessageBox && W906_FormShowing("MyMessageBox", MyMessageBox->fShow))               // :2385
++        return;
++    if((Key=scan())==-1 && iPauseBackUp==-1)                                                // :2387
++        return;
++
++    if(Key==SnFKStart)                                                                      // :2390
++    {
++        if(fContact && W906_FormShowing("fContact", fContact->fShow) && s_bOneCycleFinish==false)   //jou 980615 one cycle finish after can auto high or contact test
++        {
++            ShowErrorMessage("MES1645", 0, MMSystem, false, "ScanKey");         //Must finish [One Cycle]
++            return;
++        }
++
++        //==> Eastsun 20260527 整合#028.AAL.P-rev16 ScanKey AAL flag setup :KYEC
++        if(CosFunction.bUseBarcodeAutoAdjustLight==true &&
++           TestIF_File.bUseBarcodeAutoAdjustLight==true &&
++           TestIF_File.bEnableBarCode==true             &&
++           fMain->cbRunStartMode->Text.Pos("Initial")!=0)                       //Ifor 20210408 add:Barcode 自動調整光源
++        {
++            bStartAutoAdjustLight=true;
++            for(int i=0; i<4; i++)
++                bBarcodeNeedAutoAdjust[i]=true;
++            if(InArmSuck.iShtRow==1)
++            {
++                bBarcodeNeedAutoAdjust[1]=false;
++                bBarcodeNeedAutoAdjust[2]=false;
++            }
++            if(TestIF_File.iShuttleMode==1)
++            {
++                if(TestIF_File.iShuttle_Sel==0)         //Front Arm Only
++                {
++                    bBarcodeNeedAutoAdjust[2]=false;
++                    bBarcodeNeedAutoAdjust[3]=false;
++                }
++                else if(TestIF_File.iShuttle_Sel==1)    //Rear Arm Only
++                {
++                    bBarcodeNeedAutoAdjust[0]=false;
++                    bBarcodeNeedAutoAdjust[1]=false;
++                }
++            }
++        }
++        //<== Eastsun 20260527 整合#028.AAL.P-rev16
++
++        if(IniConfig.bEnableAutoCleanFunction && TestIF_File.iAutoClean_Function)           // :2432
++        {
++            if(TestIF_File.iAutoClean_Tray==eCKPos_CleanKit)                    //jou 2012-07-31 Clean kit使用shuttle 1
++            {
++                if(TestIF_File.iShuttleMode==1 && TestIF_File.iShuttle_Sel==1 && TestIF_File.dSiteYPitch>6350 && IniConfig.bE43AutoCleanUseHotplate==false)
++                {
++                    if(bUse8Picker)                                             //Alick 20170223 (wei) add for 9046LS AutoClean use
++                    {
++                    }
++                    else
++                    {
++                        ShowErrorMessage("WAR16102", K_RETRY, MMAutoClean, false, "ScanKey");   //AutoClean Must Use ARM1
++                        return;
++                    }
++                }
++            }
++            else
++            {
++                if(TestIF_File.iShuttleMode==1 && TestIF_File.iShuttle_Sel==0)  //kevin 20120518使用AUTOCLEAN 但只使用arm1要發alarm警告
++                {
++                    if(IniConfig.bD58UseArm1PickPlaceArm2Test==true && TestIF_File.bArm1PickPlaceArm2Test==true)   //Ifor 20200811 Fix: Arm1 Pick Place Arm2Test 需卡兩個條件
++                        ShowErrorMessage("WAR16105", K_RETRY, MMAutoClean, false, "ScanKey");   //20150127 不能使用autoclean
++                    else
++                        ShowErrorMessage("WAR16103", K_RETRY, MMAutoClean, false, "ScanKey");   //AutoClean Must Use ARM2
++                    return;
++                }
++            }
++        }
++
++        if(OFFLINE_ALARM)                                                       //jou 2014-03-28 SPIL Handler  On-line & Offline Switch Flow
++        {
++            if((IniConfig.bSPILFunction==true) && LastSet.iTester==OFF_LINE)    //JerryYang 20170328 (Jou) 矽品客戶碼統一用SPILFunction
++            {
++                if(AccessLevel<iDefSupervisorLevel)                             //Operator mode 狀態 offline按start 不可running。
++                {
++                    ShowMyMessage("Off line Call H/W Check!","離線模式需請工程師確認!");
++                    return;
++                }
++                else if(SystemStart==false && LastSet.bNeedSetupTeach==false)   //offline 狀態按start ，需出現提醒視窗，並再次輸入 ID/Password (supervisor mode) 。
++                {
++#if 0 // GATE (W906-SCANKEY-RELOGIN): golden :2476-2484 makes the supervisor log in again (cbUserSelectChange -- not a TfMain member, atester.cpp:4199); a panel key cannot open the web login box
++                    fPassword->Label5->Visible=true;
++                    fPassword->Label6->Visible=true;
++                    btLogin->Caption="Logout";
++                    cbUserSelectChange(this);
++                    TemperatureEditDisable();
++                    fPassword->Label5->Visible=false;
++                    fPassword->Label6->Visible=false;
++                    if(AccessLevel<iDefSupervisorLevel)
++                    {
++                        return;
++                    }
++#endif
++                    // [W906] fail closed: golden's next step is the login box; without it, no START (same posture as FileRW/LotInfo_SECSLotStart.cpp GATE LI1-1)
++                    RecordProcess("W906 SCANKEY: panel START refused -- SPIL offline START needs the supervisor login (golden main.cpp:2474-2490), not available from a panel key; START from the screen");
++                    return;
++                }
++            }
++        }
++
++        if(MskCheckAutoOnlySetOneBin())                                                     // :2494
++            return;
++        if(IniConfig.bP28Auto1OnlyBin1==true && MskCheckAuto1OnlyBin1())                    // :2499 Ifor 20171017 P28 功能整理
++            return;
++        if(MskAutoTeachKeyStartEnable()==false)                                             // :2504 JimmyChiu 20211229
++            return;
++        //==> Eastsun 20260520 整合
++        if(IniConfig.bI52_bAQLSortMode==true)                                   //Ifor 20210322 add:New AQL
++        {
++#if 0 // GATE (W906-SCANKEY-AQL) golden main.cpp:2511 fLotInfo->SetAQLMode() -- forms/fLotInfo.h has no SetAQLMode (same gap as FileRW/DeviceForm_File.cpp, SECSGEM G39)
++            fLotInfo->SetAQLMode();
++#endif
++            std::printf("[SCANKEY] TODO golden main.cpp:2511 fLotInfo->SetAQLMode() not done ([I52] AQL sort mode)\n");
++        }
++        //<== Eastsun 20260520 整合
++        if(fHome && W906_FormShowing("fHome", fHome->fShow)==false)                         // :2514 Steven 20111222
++        {
++            W906_RemoteRunStart("ScanKey_2");                                               // :2516 golden Start("ScanKey_2") -> TfMainWeb::StartFromWeb (the start.run landing; manual teach refuses)
++        }
++    }
++    else if(Key==SnFKPause && IniConfig.bFinishSuckAfterPause==false)                       // :2519
++    {
++        NewRecordProcess("MES2111", "PAUSE pressed", "ScanKey_1");
++        fMain->BtnPauseClick(fMain);                                                        // -> Pause -> W906_RemoteRunPause -> PauseFromWeb
++        if(CosFunction.bOEEFunction)
++        {
++#if 0 // GATE (W906-SCANKEY-OEE) golden :2525 fProductionInfo->ClickPause() -- not in forms/fProductionInfo.h (same gap as forms/fMain.h)
++            fProductionInfo->ClickPause();
++#endif
++        }
++    }
++    else if((Key==SnFKPause || iPauseBackUp!=-1) &&
++            IniConfig.bFinishSuckAfterPause==true)                              //Hung 20110901 : finish suck and destroy 後才暫停
++    {
++        if(InArmSuck.IsPickSuckFinish()==true && InArmSuck.IsPickDestroyFinish()==true   &&
++           OutArmSuck.IsPickSuckFinish()==true && OutArmSuck.IsPickDestroyFinish()==true &&
++           FTestSuck.IsShtSuckFinish()==true && FTestSuck.IsShtDestroyFinish()==true   &&
++           BTestSuck.IsShtSuckFinish()==true && BTestSuck.IsShtDestroyFinish()==true   &&
++           CatchTraySuck.IsShtSuckFinish()==true && CatchTraySuck.IsShtDestroyFinish()==true)
++        {
++            NewRecordProcess("MES2111", "PAUSE pressed", "ScanKey_2");
++            fMain->BtnPauseClick(fMain);
++            iPauseBackUp=-1;
++        }
++        else
++        {
++            iPauseBackUp=Key;                                                   // GOLDEN QUIRK KEPT: a later pass with no key writes -1 here
++        }
++    }
++    else if(Key==SnFKHome && MskBtnHomeEnabled())                                          // :2545 BtnHome->Enabled
++    {
++        if(IniConfig.bG06HomeinitialCheckZ1 &&bHomeUnlock==false)               //kevin 20131218
++            bHomeinitialCheckPushZ1=true;
++        if(MskCheckAutoOnlySetOneBin())
++             return;
++        if(IniConfig.bP28Auto1OnlyBin1==true && MskCheckAuto1OnlyBin1())           //Ifor 20171017 P28 功能整理
++            return;
++        bHomeByStart=false;
++        fMain->Home("ScanKey");                                                             // forms/fMain.cpp TfMain::Home
++    }
++    else if(Key==SnFKReset)                                                                 // :2565
++    {
++        if(bRunAutoClean)
++            return;                                                             //Steven 20120208
++        if(SystemStart)
++            return;
++        if(IniConfig.bSPILFunction==true || IniConfig.bA17RESETButtonDisable)   //kevin 20180711
++            return;
++        NewRecordProcess("MES2113", "RESET pressed", "ScanKey");
++        fMain->BtnResetClick(fMain);                                                        // golden Reset main.cpp:7235 NOT wired: forms/fMain.cpp no-op (WebMainCtlButtons.cpp)
++        if(fAllMotorHome==false || iHome==1)
++        {
++            fHome->GaliMotorServoOff("Key==Reset");                             //Steven 20230712 : 修正SwServoOn.Off時, 要抓住Z煞車
++        }
++        Cylinder[C_Empty_Fix].Off();
++        Cylinder[C_Color_Fix].Off();
++        AutoTrayCylinderFree();                                                 //jou 2010-01-25 start : 釋放Auto Tray上的汽缸
++    }
++    else if(Key==SnFKCleanOut && MskBtnCleanOutEnabled())                                  // :2588 BtnCleanOut->Enabled
++    {
++        if(bRunAutoClean)   return;                                             //Steven 20120208
++        NewRecordProcess("MES2114", "CLEAN OUT pressed", "ScanKey");
++        if(IniConfig.bEnable_SECS_GEM==true)                                    //Steven 20140528 : Secs Gem
++            EventReport(SECS_EVENT.DoCleanOut);
++        MskFormLock lock;
++        fMain->BtnCleanOutClick(fMain);                                                     // cCleanOut.cpp
++    }
++    else if(Key==SnFKOneCycle)                                                              // :2598 (BtnOneCycle->Enabled: always true)
++    {
++        bCleanHotplate_ART=1;                                                   //kevin 20150722
++        if(!(fContact && W906_FormShowing("fContact", fContact->fShow)))                    // :2602 fContact->fShow==false
++        {
++            NewRecordProcess("MES2115", "ONE CYCLE pressed", "ScanKey");
++            bManualOneCycle=true;                                               //Sam 20230309
++            if(IniConfig.bEnable_SECS_GEM==true)                                //Steven 20140528 : Secs Gem
++                EventReport(SECS_EVENT.DoOneCycle);
++            MskFormLock lock;
++            fMain->BtnOneCycleClick(fMain);                                                 // cCleanOut.cpp
++        }
++        else
++        {
++            NewRecordProcess("MES2115", "ONE CYCLE pressed", "Contact Test");   //Steven 20211213
++            W906_Contact_OneCycleProcess();                                                 // golden fContact->OneCycleProcess() (takes FormLock itself)
++        }
++    }
++    else if(Key==SnFKTrayFeed)                                                              // :2616
++    {
++        if(bRunAutoClean)
++            return;                                                             //Steven 20120208
++        if(bUnloading)                                                          //JerryYang 20250418 tray feed到一半不能
++            return;
++        MskFormLock lock;
++        fMain->InitialTrayFeedTask("ScanKey");                                              // cCleanOut.cpp
++    }
++    else if(Key==SnFKAlarmReset && bAlarmBuzzer)                                            // :2626
++    {
++        NewRecordProcess("MES2116", "ALARM RESET pressed", "ScanKey");
++        bAlarmBuzzer=false;
++        bLampAlarmReset=false;
++        SECS_GEM_PPMUSIC_CONTROL_flag=false;
++        SECS_GEM_PPSIGNALTOWER_CONTROL_flag=false;
++        SW[SwFKAlarmReset].Off();
++        SW[SwRKAlarmReset].Off();
++        if(IniConfig.bEnable_SECS_GEM==true)                                    //Steven 20140528 : Secs Gem
++            EventReport(SECS_EVENT.DoAlarmReset);
++    }
++    else if(Key==SnFKPowerOff || Key==SnRKPowerOff)                             //Alick 20160912
++    {
++        NewRecordProcess("MES2117", "POWER OFF pressed", "ScanKey");
++    }
++    else if(Key==SnFKPowerOn || Key==SnRKPowerOn)                               //kevin 20190328 power ON
++    {
++        NewRecordProcess("MES2128", "POWER ON pressed", "ScanKey");
++    }
++    else if((Key==SnFKTrayEnd || Key==SnRKTrayEnd) &&
++            ArmSpeed_File[InArm].bAutoSKIP==1 && bASkStart==true)               //kevin 20170606 (wei) add autoskip tray end
++    {
++        MOT[MMTrayY].InitNewTray(NULL_IC, false, __FUNC__);
++        InitTrayEndFunction();
++        if(CosFunction.bShowHPICCount)                                          //Steven 20221228 : 計算加熱盤IC數量
++        {
++            fSortCT->pnlLoad->Caption=MOT[MMTrayY].Tray.HowManyIC();
++        }
++    }
++}
++
++// golden TfHome::Timer1Timer uhome.cpp:4885-4889 -> TfHome::ScanKey :4874-4883 (Timer1 Enabled = W906_HomeTimer1Enabled, uhome.cpp)
++void W906_HomeScanKeyWith(int (*scan)())
++{
++    if(W906_HomeTimer1Enabled==false || fHome==0) return;                                  // TTimer Enabled (golden FormClose :4871)
++    if(fHome->fShow==false) return;                                                         // :4887
++    int Key;                                                                                // :4876
++    Key=scan();                                                                             // :4877
++    if(Key==SnFKPause)                                                                      // :4878
++    {
++        fHome->sbAbortHomeClick(fHome);                                                     // :4880
++        fHome->Close();                                                                     // :4881
++    }
++}
++
++// golden TfMain::TimerScanKeyTimer main.cpp:31994-32025 (Steven 20151022)
++void W906_MainScanKeyTickWith(int (*scan)(), bool noticeUp)
++{
++    MskContactFormShowEdge();
++    W906_HomeScanKeyWith(scan);                                                             // the 10 ms timer: first, as it usually wins in golden
++    static bool bRunTimer1=false;                                                           // :31996
++    if(InitialOK==false) { bRunTimer1=false; return; }                                      // :31997-32001
++    if(bEnableEmployeeIDCheck==true) return;                                                // :32003-32004
++    if(bSECSGEMAlarm && bSECSGEM_NoteAlarm==false)                                          // :32006-32007
++    {
++        // fNote->labSecsGemLock->Visible=true;   // golden :32009 -- no widget in the port
++        bRunTimer1=false;
++        return;
++    }
++    // else fNote->labSecsGemLock->Visible=false;   // golden :32015
++    if(bRunTimer1==true) return;                                                            // :32018
++    bRunTimer1=true;
++    W906_MainScanKeyWith(scan, noticeUp);                                                   // :32023
++    bRunTimer1=false;
++}
++void W906_MainScanKeyTick(bool noticeUp) { W906_MainScanKeyTickWith(&ScanPannelKey, noticeUp); }
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index f223760..1c12fba 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -4731,7 +4731,7 @@ set_tests_properties(InitialMemory PROPERTIES TIMEOUT 120)
+ #   Static scan of the source tree, no build dir, seconds.
+ if(Python3_Interpreter_FOUND)
+     add_test(NAME START_SitesCensus
+-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/start_sites_census.py" --check 35 33 2)   # AI(W906-ST02-C912) 20261003 (St02-E helper): back to golden 906_0625 main.cpp:15847-15858 (RULINGS_20261002 #20 / #23-6): was 34 32 2 -- the golden 912 GPIB remote START site (TesterComm/Handler/HandlerGpibMsg.cpp, St02 MR !33, AI(W906-H012-CENSUS) 20261001) is removed   AI(W906-B50-CENSUS) 20261003 (laptop batch 50 merge): main had 36 34 2 after review6 wired CT-3b (FileRW/DeviceForm_File.cpp:703) and OS-1b (FileRW/Offset_File.cpp:846) in batch 47; minus this GPIB remote START site = 35 33 2
++        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/start_sites_census.py" --check 36 34 2)   # AI(W906-SCANKEY) 20261003: was 35 33 2 -- + WebMainScanKey.cpp W906_RemoteRunStart("ScanKey_2"), golden TfMain::ScanKey main.cpp:2516 (the panel START key)    # AI(W906-ST02-C912) 20261003 (St02-E helper): back to golden 906_0625 main.cpp:15847-15858 (RULINGS_20261002 #20 / #23-6): was 34 32 2 -- the golden 912 GPIB remote START site (TesterComm/Handler/HandlerGpibMsg.cpp, St02 MR !33, AI(W906-H012-CENSUS) 20261001) is removed   AI(W906-B50-CENSUS) 20261003 (laptop batch 50 merge): main had 36 34 2 after review6 wired CT-3b (FileRW/DeviceForm_File.cpp:703) and OS-1b (FileRW/Offset_File.cpp:846) in batch 47; minus this GPIB remote START site = 35 33 2
+     set_tests_properties(START_SitesCensus PROPERTIES ENVIRONMENT "PYTHONIOENCODING=utf-8:replace" TIMEOUT 120)
+ endif()
+ 
+@@ -5298,6 +5298,31 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+ endif()
+ add_test(NAME MainCtlButtons COMMAND test_main_ctlbuttons)
+ set_tests_properties(MainCtlButtons PROPERTIES TIMEOUT 120)
++# --- test_main_scankey: AI(W906-SCANKEY) 20261003 -- the physical panel keys (golden TfMain::ScanKey main.cpp:2379-2656, its timer
++#   TimerScanKeyTimer :31994-32025, TfHome::ScanKey uhome.cpp:4874-4889), ported in WebMainScanKey.cpp (wb_serve only), compiled in
++#   here exactly as wb_serve compiles it.  Keys are injected through the *With(scan) entry points (a queue instead of ScanPannelKey);
++#   START / PAUSE land in a recorder installed in the W906_RemoteRun seat (forms/fMain.h:1440-1447); fMain points at a FakeMain whose
++#   Home / BtnResetClick only record.  tests/test_main_scankey_stubs.cpp gives FormLock / FormUnlock (depth counter) and a counting
++#   W906_Contact_OneCycleProcess (wb_serve's is in FileRW/DeviceForm_File.cpp).  Log rows go to machine_log_scratch (ENV-ALL, the DEFER
++#   above, so no ENVIRONMENT here on purpose); the test refuses to run outside it.
++add_executable(test_main_scankey
++    test_main_scankey.cpp
++    test_main_scankey_stubs.cpp
++    ${CMAKE_SOURCE_DIR}/WebMainScanKey.cpp
++)
++target_include_directories(test_main_scankey PRIVATE ${CMAKE_SOURCE_DIR})
++target_link_libraries(test_main_scankey PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++    ht9045_webbridge
++)
++if(WIN32)
++    target_link_libraries(test_main_scankey PRIVATE ws2_32)
++endif()
++if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
++    set_source_files_properties(test_main_scankey.cpp test_main_scankey_stubs.cpp ${CMAKE_SOURCE_DIR}/WebMainScanKey.cpp PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
++endif()
++add_test(NAME MainScanKey COMMAND test_main_scankey)
++set_tests_properties(MainScanKey PROPERTIES TIMEOUT 120)
+ 
+ # --- GaliRouteCore / GaliRouteEngine: AI(W906-INDEXZ) 20260930 -- INBOX 113, HT9050 Index Z1 Gali_* -> 1203 route ---
+ #   (the redo of cc426093's two tests, reverted with it by 94cd23d7).
+diff --git a/tests/test_main_scankey.cpp b/tests/test_main_scankey.cpp
+new file mode 100644
+index 0000000..a1cbe04
+--- /dev/null
++++ b/tests/test_main_scankey.cpp
+@@ -0,0 +1,269 @@
++// ===========================================================================
++//  tests/test_main_scankey.cpp
++//
++//  //AI(W906-SCANKEY) 20261003: the physical panel keys (golden TfMain::ScanKey main.cpp:2379-2656, its timer
++//  TimerScanKeyTimer :31994-32025, and TfHome::ScanKey uhome.cpp:4874-4889), ported in WebMainScanKey.cpp
++//  (wb_serve only; compiled into this test exactly as wb_serve compiles it).  The key source is injected: a fake
++//  scan() pops a queue and counts its calls (production passes ScanPannelKey, ckernel.cpp:3147).
++//  START / PAUSE land in the W906_RemoteRun seat (forms/fMain.h:1440-1447, body forms/fMain.cpp:1374-1376); here the
++//  seat is a recorder (pattern: tests/test_pause_forward.cpp:27-30).  fMain points at a FakeMain whose Home /
++//  BtnResetClick (both virtual: forms/fMain.h:338 / :230) only record; BtnPauseClick is NOT overridden, so the real
++//  forms/fMain.cpp:497 body runs -> Pause (forms/fMain.h:167, virtual, not overridden) -> W906_RemoteRunPause.
++//
++//    [1] guards (W906_MainScanKeyWith): fNote->fShow / noticeUp / fiosetview->fShow / MyMessageBox->fShow
++//        -> scan() is not called (golden :2383-2386)
++//    [2] guards (W906_MainScanKeyTickWith): InitialOK=false / bEnableEmployeeIDCheck -> scan() not called
++//        (golden :31997-32004); positive control: all clear -> scan() called once
++//    [3] START default -> the START seat once with "ScanKey_2" (golden :2516), outside FormLock
++//    [4] START while fHome->fShow -> seat not called (golden :2514)
++//    [5] PAUSE (bFinishSuckAfterPause=false) -> real BtnPauseClick -> PAUSE seat once with "BtnPauseClick" (golden :2519-2522)
++//    [6] HOME: SystemStart=1 -> Home not called (BtnHome->Enabled, golden ProcessKeyFlush); SystemStart=0 ->
++//        Home("ScanKey") once and bHomeByStart==false (golden :2545-2562)
++//    [7] RESET with SystemStart -> BtnResetClick not called (golden :2569-2570)
++//    [8] CLEAN OUT, enabled (SystemStart=0, fAllMotorHome, iOneCycle=0) -> golden CleanOut -> iCleanOut==1, under FormLock
++//    [9] TRAY FEED with bUnloading -> nothing (golden :2621-2622)
++//   [10] ALARM RESET with bAlarmBuzzer -> bAlarmBuzzer / bLampAlarmReset false afterwards (golden :2626-2631)
++//   [11] ONE CYCLE with fContact->fShow -> W906_Contact_OneCycleProcess once (golden :2611-2612; stub counts)
++//   [12] the Home hook (W906_HomeScanKeyWith): Timer1 enabled + fHome->fShow + key PAUSE -> sbAbortHomeClick + Close:
++//        fHome->fAbort true, fShow false, W906_HomeTimer1Enabled false (uhome.cpp:661 = golden :4871); a second
++//        press finds the timer disabled -> scan() not called.  LAST on purpose: sbAbortHomeClick -> GaliMotorServoOff
++//        writes SystemStart=false / fAllMotorHome=false (uhome.cpp:4986 / :4995).
++//  Writes: NewRecordProcess / RecordProcess rows (cMyDB log roots) -> machine_log_scratch (ENV-ALL); the guard below
++//  refuses to run anywhere else.  No motor / IO command reaches hardware: the test process has no card (offline objects).
++// ===========================================================================
++#include <cstdio>
++#include <deque>
++#include <string>
++#include "forms/fMain.h"              // TfMain (virtual Home :338 / BtnResetClick :230), fMain :1305, W906_RemoteRun :1445
++#include "forms/fHome.h"              // fHome :278, fShow :165, fAbort :180
++#include "forms/fNote.h"              // fNote :443, fShow :341
++#include "atester_shims.h"            // fContact :251 (fShow :157), fiosetview :362 (fShow :359)
++#include "mymessbox_shim.h"           // MyMessageBox :28 (fShow :24)
++#include "cmydef.h"                   // SnFK* :672-683 (values cmydef.cpp:793-806), InitialOK :220, iCleanOut :255, iTrayFeed :257,
++                                      // iHome :260, bOneCycle_BackUp :273, bLampAlarmReset :2571, iTrayFeedTask :2586, bAlarmBuzzer :2589,
++                                      // iPauseBackUp :2590 (=-1 cmydef.cpp:2817), bHomeByStart :2738, bRunAutoClean :3199,
++                                      // bSECSGEMAlarm :3763, bUnloading :3889, bEnableEmployeeIDCheck :3894, bSECSGEM_NoteAlarm :4327,
++                                      // OFFLINE_ALARM :2850
++#include "cprod.h"                    // TestIF_File: iAutoClean_Function :1697, bUseBarcodeAutoAdjustLight :2025
++#include "Config.h"                   // IniConfig: bEnable_SECS_GEM :92, bEnableAutoCleanFunction :118, bSPILFunction :133,
++                                      // bFinishSuckAfterPause :136, bG06HomeinitialCheckZ1 :211, bA17RESETButtonDisable :298,
++                                      // bA56EnableAutoTeachFunciton :341, bE53LowYieldAutoClean :621, bI40_bStartProductOnLine :811,
++                                      // bI52_bAQLSortMode :850, bP28Auto1OnlyBin1 :1422
++#include "CosFunction.h"              // CosFunction: bUsePassBinOnlyCanSetOneBin :144, bOEEFunction :238, bManualSteplAutoTeach :330,
++                                      // bUseBarcodeAutoAdjustLight :427
++#include "common.h"                   // as9045LogPath / asSaveEventLogPath (as tests/test_main_ctlbuttons.cpp:34)
++#include "w906_ctest_guard.h"         // W906TestRequireCtestRedirects :69
++
++void W906_MainScanKeyWith(int (*scan)(), bool noticeUp);        // WebMainScanKey.cpp
++void W906_HomeScanKeyWith(int (*scan)());                       // WebMainScanKey.cpp
++void W906_MainScanKeyTickWith(int (*scan)(), bool noticeUp);    // WebMainScanKey.cpp
++extern bool W906_HomeTimer1Enabled;                             // uhome.cpp:649
++extern int  g_W906TestFormLockDepth;                            // tests/test_main_scankey_stubs.cpp
++extern int  g_W906TestContactOneCycleCalls;                     // tests/test_main_scankey_stubs.cpp
++
++static int g_fail = 0, g_total = 0;
++static void check(bool c, const char* e, int line) {
++    ++g_total;
++    if (!c) { ++g_fail; std::printf("FAIL [test_main_scankey.cpp:%d]  %s\n", line, e); }
++}
++#define CHECK(c) check((c), #c, __LINE__)
++
++// ---- the key source: a queue; -1 = no key (ScanPannelKey's "nothing pressed")
++static std::deque<int> g_keys;
++static int g_scanCalls = 0;
++static int FakeScan()
++{
++    ++g_scanCalls;
++    if (g_keys.empty()) return -1;
++    const int k = g_keys.front();
++    g_keys.pop_front();
++    return k;
++}
++static void Press(int key) { g_keys.clear(); g_keys.push_back(key); g_scanCalls = 0; }
++
++// ---- the START / PAUSE seat (forms/fMain.h:1440-1444), recorder (tests/test_pause_forward.cpp:27-30)
++static int g_startCalls = 0, g_pauseCalls = 0, g_startLock = -1;
++static std::string g_startFunc, g_pauseFunc;
++static bool StubStart(AnsiString f) { ++g_startCalls; g_startFunc = f.c_str(); g_startLock = g_W906TestFormLockDepth; return true; }
++static bool StubPause(AnsiString f) { ++g_pauseCalls; g_pauseFunc = f.c_str(); return true; }
++
++// ---- fMain stand-in: Home / BtnResetClick record only (both virtual in forms/fMain.h:338 / :230)
++struct FakeMain : public TfMain
++{
++    int homeCalls = 0, resetCalls = 0;
++    std::string homeFunc;
++    bool Home(AnsiString Func) override { ++homeCalls; homeFunc = Func.c_str(); return true; }
++    void BtnResetClick(void*) override { ++resetCalls; }
++};
++
++// a homed, idle machine with every optional golden branch of ScanKey switched off
++static void Idle()
++{
++    SystemStart = false;
++    SoftStart = false;
++    fAllMotorHome = true;
++    InitialOK = true;
++    bEnableEmployeeIDCheck = false;
++    bSECSGEMAlarm = false;
++    bSECSGEM_NoteAlarm = false;
++    iPauseBackUp = -1;
++    iOneCycle = 0;
++    iCleanOut = 0;
++    iTrayFeed = 0;
++    iTrayFeedTask = 0;
++    iHome = 0;
++    bOneCycle_BackUp = false;
++    bRunAutoClean = false;
++    bUnloading = false;
++    bAlarmBuzzer = false;
++    OFFLINE_ALARM = false;
++    fMain->BtnOneCycle->Down = false;
++    fNote->fShow = false;
++    fiosetview->fShow = false;
++    MyMessageBox->fShow = false;
++    fContact->fShow = false;
++    fHome->fShow = false;
++    IniConfig.bEnable_SECS_GEM = false;
++    IniConfig.bEnableAutoCleanFunction = false;
++    IniConfig.bSPILFunction = false;
++    IniConfig.bFinishSuckAfterPause = false;
++    IniConfig.bG06HomeinitialCheckZ1 = false;
++    IniConfig.bA17RESETButtonDisable = false;
++    IniConfig.bA56EnableAutoTeachFunciton = false;
++    IniConfig.bI52_bAQLSortMode = false;
++    IniConfig.bP28Auto1OnlyBin1 = false;
++    IniConfig.bI40_bStartProductOnLine = false;
++    IniConfig.bE53LowYieldAutoClean = false;
++    CosFunction.bUseBarcodeAutoAdjustLight = false;
++    CosFunction.bUsePassBinOnlyCanSetOneBin = false;   // ComputeCheckAutoOnlySetOneBin -> false (MainCalcCore.cpp:572)
++    CosFunction.bManualSteplAutoTeach = false;         // MskAutoTeachKeyStartEnable -> true
++    CosFunction.bOEEFunction = false;
++    TestIF_File.iAutoClean_Function = 0;
++    TestIF_File.bUseBarcodeAutoAdjustLight = false;
++    g_startCalls = g_pauseCalls = 0;
++    g_startLock = -1;
++    g_startFunc.clear();
++    g_pauseFunc.clear();
++}
++
++int main()
++{
++    const char* const rt[] = { "as9045LogPath", as9045LogPath.c_str(), "asSaveEventLogPath", asSaveEventLogPath.c_str(), 0 };
++    if (!W906TestRequireCtestRedirects("MainScanKey", rt))
++        return 2;
++    if (fMain == 0 || fHome == 0 || fNote == 0 || fiosetview == 0 || MyMessageBox == 0 || fContact == 0) {
++        std::printf("FAIL: a form global is null\n");
++        return 1;
++    }
++    FakeMain* fake = new FakeMain();     // never deleted: fMain points at it for the rest of the process
++    fMain = fake;
++    W906_RemoteRun.Start = &StubStart;
++    W906_RemoteRun.Pause = &StubPause;
++
++    // ---- [1] guards of the scan itself --------------------------------------------------------------------------
++    std::printf("[1] a dialog is up -> the keys are not scanned (golden :2383-2386)\n");
++    Idle(); fNote->fShow = true;        Press(SnFKStart); W906_MainScanKeyWith(&FakeScan, false); CHECK(g_scanCalls == 0);
++    Idle();                             Press(SnFKStart); W906_MainScanKeyWith(&FakeScan, true);  CHECK(g_scanCalls == 0);
++    Idle(); fiosetview->fShow = true;   Press(SnFKStart); W906_MainScanKeyWith(&FakeScan, false); CHECK(g_scanCalls == 0);
++    Idle(); MyMessageBox->fShow = true; Press(SnFKStart); W906_MainScanKeyWith(&FakeScan, false); CHECK(g_scanCalls == 0);
++    CHECK(g_startCalls == 0);
++
++    // ---- [2] guards of the timer --------------------------------------------------------------------------------
++    std::printf("[2] TimerScanKeyTimer guards (golden :31997-32004)\n");
++    Idle(); InitialOK = false;              Press(SnFKAlarmReset); W906_MainScanKeyTickWith(&FakeScan, false); CHECK(g_scanCalls == 0);
++    Idle(); bEnableEmployeeIDCheck = true;  Press(SnFKAlarmReset); W906_MainScanKeyTickWith(&FakeScan, false); CHECK(g_scanCalls == 0);
++    Idle(); bSECSGEMAlarm = true;           Press(SnFKAlarmReset); W906_MainScanKeyTickWith(&FakeScan, false); CHECK(g_scanCalls == 0);   // :32006-32012
++    Idle();                                 Press(SnFKAlarmReset); W906_MainScanKeyTickWith(&FakeScan, false); CHECK(g_scanCalls == 1);   // control (fHome->fShow false: the home hook does not scan)
++
++    // ---- [3] START ----------------------------------------------------------------------------------------------
++    std::printf("[3] START -> W906_RemoteRun.Start(\"ScanKey_2\") once, outside FormLock\n");
++    Idle(); Press(SnFKStart); W906_MainScanKeyWith(&FakeScan, false);
++    CHECK(g_scanCalls == 1);
++    CHECK(g_startCalls == 1 && g_startFunc == "ScanKey_2");
++    CHECK(g_startLock == 0);
++    CHECK(g_pauseCalls == 0);
++
++    // ---- [4] START while the Home dialog is up --------------------------------------------------------------------
++    std::printf("[4] START while fHome->fShow -> no START (golden :2514)\n");
++    Idle(); fHome->fShow = true; Press(SnFKStart); W906_MainScanKeyWith(&FakeScan, false);
++    CHECK(g_scanCalls == 1 && g_startCalls == 0);
++    fHome->fShow = false;
++
++    // ---- [5] PAUSE ----------------------------------------------------------------------------------------------
++    std::printf("[5] PAUSE -> TfMain::BtnPauseClick (forms/fMain.cpp:497) -> Pause -> PAUSE seat\n");
++    Idle();
++    const int bpc0 = fake->W906_BtnPauseClickCallCount;
++    Press(SnFKPause); W906_MainScanKeyWith(&FakeScan, false);
++    CHECK(fake->W906_BtnPauseClickCallCount == bpc0 + 1);
++    CHECK(g_pauseCalls == 1 && g_pauseFunc == "BtnPauseClick");
++    CHECK(g_startCalls == 0);
++    CHECK(iPauseBackUp == -1);
++
++    // ---- [6] HOME -----------------------------------------------------------------------------------------------
++    std::printf("[6] HOME: disabled while SystemStart; else Home(\"ScanKey\") with bHomeByStart=false\n");
++    Idle(); SystemStart = true; bHomeByStart = true;
++    Press(SnFKHome); W906_MainScanKeyWith(&FakeScan, false);
++    CHECK(fake->homeCalls == 0 && bHomeByStart == true);
++    Idle(); bHomeByStart = true;
++    Press(SnFKHome); W906_MainScanKeyWith(&FakeScan, false);
++    CHECK(fake->homeCalls == 1 && fake->homeFunc == "ScanKey");
++    CHECK(bHomeByStart == false);
++
++    // ---- [7] RESET while running --------------------------------------------------------------------------------
++    std::printf("[7] RESET while SystemStart -> nothing (golden :2569-2570)\n");
++    Idle(); SystemStart = true;
++    Press(SnFKReset); W906_MainScanKeyWith(&FakeScan, false);
++    CHECK(fake->resetCalls == 0);
++
++    // ---- [8] CLEAN OUT ------------------------------------------------------------------------------------------
++    std::printf("[8] CLEAN OUT enabled -> golden CleanOut (cCleanOut.cpp:69) -> iCleanOut==1\n");
++    Idle();
++    Press(SnFKCleanOut); W906_MainScanKeyWith(&FakeScan, false);
++    CHECK(iCleanOut == 1);                                  // InitCleanOutFunction (csystem.cpp) via cCleanOut.cpp:112-114
++    CHECK(g_W906TestFormLockDepth == 0);                    // MskFormLock released
++    Idle(); SystemStart = true;                             // BtnCleanOut->Enabled false (golden ProcessKeyFlush)
++    Press(SnFKCleanOut); W906_MainScanKeyWith(&FakeScan, false);
++    CHECK(iCleanOut == 0);
++
++    // ---- [9] TRAY FEED while unloading --------------------------------------------------------------------------
++    std::printf("[9] TRAY FEED while bUnloading -> nothing (golden :2621-2622)\n");
++    Idle(); bUnloading = true;
++    Press(SnFKTrayFeed); W906_MainScanKeyWith(&FakeScan, false);
++    CHECK(iTrayFeed == 0 && iTrayFeedTask == 0);
++
++    // ---- [10] ALARM RESET ---------------------------------------------------------------------------------------
++    std::printf("[10] ALARM RESET with the buzzer on -> buzzer flags cleared\n");
++    Idle(); bAlarmBuzzer = true; bLampAlarmReset = true;
++    Press(SnFKAlarmReset); W906_MainScanKeyWith(&FakeScan, false);
++    CHECK(bAlarmBuzzer == false);
++    CHECK(bLampAlarmReset == false);
++
++    // ---- [11] ONE CYCLE on the Contact page ---------------------------------------------------------------------
++    std::printf("[11] ONE CYCLE with fContact->fShow -> W906_Contact_OneCycleProcess once\n");
++    Idle(); fContact->fShow = true;
++    const int oc0 = g_W906TestContactOneCycleCalls;
++    Press(SnFKOneCycle); W906_MainScanKeyWith(&FakeScan, false);
++    CHECK(g_W906TestContactOneCycleCalls == oc0 + 1);
++    fContact->fShow = false;
++
++    // ---- [12] the Home dialog's own PAUSE key (LAST: GaliMotorServoOff clears SystemStart / fAllMotorHome) ------
++    std::printf("[12] Home hook: PAUSE -> sbAbortHomeClick + Close, Timer1 disabled after Close (golden uhome.cpp:4871 oddity)\n");
++    Idle();
++    W906_HomeTimer1Enabled = true;
++    fHome->fShow = true;
++    fHome->fAbort = false;
++    Press(SnFKPause); W906_HomeScanKeyWith(&FakeScan);
++    CHECK(g_scanCalls == 1);
++    CHECK(fHome->fAbort == true);                           // uhome.cpp:5013
++    CHECK(fHome->fShow == false);                           // uhome.cpp:652 (Close)
++    CHECK(W906_HomeTimer1Enabled == false);                 // uhome.cpp:661
++    fHome->fShow = true;                                    // a later Home dialog: golden never re-enables Timer1
++    Press(SnFKPause); W906_HomeScanKeyWith(&FakeScan);
++    CHECK(g_scanCalls == 0);
++    fHome->fShow = false;
++
++    W906_RemoteRun.Start = 0;
++    W906_RemoteRun.Pause = 0;
++    std::printf("\n%d / %d checks passed\n", g_total - g_fail, g_total);
++    return g_fail ? 1 : 0;
++}
+diff --git a/tests/test_main_scankey_stubs.cpp b/tests/test_main_scankey_stubs.cpp
+new file mode 100644
+index 0000000..893be4c
+--- /dev/null
++++ b/tests/test_main_scankey_stubs.cpp
+@@ -0,0 +1,25 @@
++// ===========================================================================
++//  tests/test_main_scankey_stubs.cpp
++//
++//  //AI(W906-SCANKEY) 20261003: link stand-ins for tests/test_main_scankey.cpp.  WebMainScanKey.cpp is wb_serve-only and
++//  names two things that live in wb_serve's own sources:
++//    * ht9045::formjson::FormLock / FormUnlock (JsonBridge/FormJson.cpp:39, a CRITICAL_SECTION in wb_serve) -- ON the
++//      tested path (MskFormLock around CleanOut / OneCycle / TrayFeed, WebMainScanKey.cpp:55).  Here they keep a depth
++//      counter so the test can assert START runs outside the lock and CleanOut releases it (same shape as
++//      tests/test_main_ctlbuttons_stubs.cpp:18-23, plus the counter).
++//    * W906_Contact_OneCycleProcess (to be defined at the end of FileRW/DeviceForm_File.cpp, wb_serve only; golden
++//      TfContact::OneCycleProcess cContact.cpp:11741-11746) -- ON the tested path (ONE CYCLE while fContact->fShow,
++//      WebMainScanKey.cpp:329).  Here it only counts.
++// ===========================================================================
++
++int g_W906TestFormLockDepth = 0;
++int g_W906TestContactOneCycleCalls = 0;
++
++namespace ht9045 {
++namespace formjson {
++void FormLock()   { ++g_W906TestFormLockDepth; }
++void FormUnlock() { --g_W906TestFormLockDepth; }
++}  // namespace formjson
++}  // namespace ht9045
++
++void W906_Contact_OneCycleProcess() { ++g_W906TestContactOneCycleCalls; }
+diff --git a/tools/pci1203_control_gate.ps1 b/tools/pci1203_control_gate.ps1
+index 6d343ee..a19a0af 100644
+--- a/tools/pci1203_control_gate.ps1
++++ b/tools/pci1203_control_gate.ps1
+@@ -532,14 +532,14 @@ if ($callers.Count -ne 1) {
+ #AI(W906-1203INI-1) 20260917: the start-up re-apply, same rule.
+ #AI(W906-Q34-5b) 20260923: message says tools/wb_serve.cpp -- A's one caller is
+ #  there (PKG's is tools/wb_publish.cpp, which A no longer has -- T4-RETIRE).
+-if ($tickers.Count -ne 1) {
+-    Write-Host ("FAIL: Pci1203AxisIniTick has {0} call site(s); exactly 1 is expected (tools/wb_serve.cpp)." -f $tickers.Count) -ForegroundColor Red
++if ($tickers.Count -ne 2 -or @($tickers | Where-Object { $_ -notmatch '^\s*tools[\\/]wb_serve\.cpp:\d+$' }).Count -ne 0) {   #AI(W906-GATE-TICK2) 20261003: 2 = main loop + W906_NativeKeepaliveMain (W906_NATIVE_FORMS drag keepalive: same thread, mirrors the main loop line by line, wb_serve.cpp header of that function; arrived with 5f3ff7b) -- the gate had been red since 0930
++    Write-Host ("FAIL: Pci1203AxisIniTick has {0} call site(s); exactly 2 are expected, both in tools/wb_serve.cpp (main loop + W906_NativeKeepaliveMain)." -f $tickers.Count) -ForegroundColor Red
+     $tickers | ForEach-Object { Write-Host $_ -ForegroundColor Red }
+     Write-Host "This one writes the card WITHOUT an operator action, so a second caller is a" -ForegroundColor Yellow
+     Write-Host "second unattended writer. Re-count rather than inheriting the claim." -ForegroundColor Yellow
+     $fail++
+ } else {
+-    Write-Host ("call sites: Pci1203AxisIniTick has exactly 1 --{0}" -f $tickers[0]) -ForegroundColor Green
++    Write-Host ("call sites: Pci1203AxisIniTick has exactly 2 (main loop + drag keepalive) --{0}" -f ($tickers -join ',')) -ForegroundColor Green
+ }; if ($routers.Count -ne 1) { Write-Host ("FAIL: W906_InstallPci1203IoRoute has {0} call site(s); exactly 1 is expected (tools/wb_serve.cpp). It arms the ENGINE's IO onto the card -- a second caller is a second unattended writer." -f $routers.Count) -ForegroundColor Red; $routers | ForEach-Object { Write-Host $_ -ForegroundColor Red }; $fail++ } else { Write-Host ("call sites: W906_InstallPci1203IoRoute has exactly 1 --{0}  (engine IO route, IOWEB-P17)" -f $routers[0]) -ForegroundColor Green }; if ($motorRouters.Count -ne 1) { Write-Host ("FAIL: W906_InstallPci1203MotorRoute has {0} call site(s); exactly 1 is expected (tools/wb_serve.cpp). It arms the ENGINE's motion onto the card -- a second caller is a second unattended motion source." -f $motorRouters.Count) -ForegroundColor Red; $motorRouters | ForEach-Object { Write-Host $_ -ForegroundColor Red }; $fail++ } else { Write-Host ("call sites: W906_InstallPci1203MotorRoute has exactly 1 --{0}  (engine motor route, ECAT-ROUTE)" -f $motorRouters[0]) -ForegroundColor Green }; if ($slotWriters.Count -ne 1 -or $slotWriters[0] -notmatch '^\s*EtherCAT[\\/]Pci1203MotorRoute\.cpp:\d+$') { Write-Host ("FAIL: the engine motor route SLOT has {0} writer(s) outside tests\ (SetEcatMotorRoute( / Pci1203MotorRouteTable( / W906_EcRouteSlot_( ); exactly 1 is expected, the installer's in EtherCAT\Pci1203MotorRoute.cpp. Any other path installs the route WITHOUT the installer's preconditions (SOFT_SIMULTE, WB_ENGINE_MOTOR_1203, START_RING, armed control) -- and Pci1203MotorRouteInstalled() would still say false." -f $slotWriters.Count) -ForegroundColor Red; $slotWriters | ForEach-Object { Write-Host $_ -ForegroundColor Red }; $fail++ } else { Write-Host ("call sites: the engine motor route slot has exactly 1 writer --{0}  (the installer; review build #1)" -f $slotWriters[0]) -ForegroundColor Green }; if ($galiRouters.Count -ne 1) { Write-Host ("FAIL: W906_InstallPci1203GaliRoute has {0} call site(s); exactly 1 is expected (tools/wb_serve.cpp). It arms HT9050's Index Z1 onto the card -- a second caller is a second unattended motion source." -f $galiRouters.Count) -ForegroundColor Red; $galiRouters | ForEach-Object { Write-Host $_ -ForegroundColor Red }; $fail++ } else { Write-Host ("call sites: W906_InstallPci1203GaliRoute has exactly 1 --{0}  (Index Z1 route, INBOX 113)" -f $galiRouters[0]) -ForegroundColor Green }; if ($galiRouters.Count -eq 1) { $wsLines = @(Get-Content -LiteralPath (Join-Path $repo 'tools\wb_serve.cpp') -Encoding UTF8); $enableAt = -1; for ($wi = 0; $wi -lt $wsLines.Count; $wi++) { if ((Strip $wsLines[$wi]) -match '\bPci1203MonitorEnable\s*\(') { $enableAt = $wi + 1; break } }; $gm = [regex]::Match($galiRouters[0], '^\s*tools[\\/]wb_serve\.cpp:(\d+)$'); if (-not $gm.Success -or $enableAt -lt 0 -or [int]$gm.Groups[1].Value -le $enableAt) { Write-Host ("FAIL: W906_InstallPci1203GaliRoute must be called in tools\wb_serve.cpp AFTER Pci1203MonitorEnable (:{0}); it is at{1}. Before that the monitor does not exist, the route's card-open check refuses and the route never installs (review round 2 C of INBOX 113)." -f $enableAt, $galiRouters[0]) -ForegroundColor Red; $fail++ } else { Write-Host ("boot order: W906_InstallPci1203GaliRoute (tools\wb_serve.cpp:{0}) runs after Pci1203MonitorEnable (:{1})  (review round 2 C; ctest GaliRouteLive part S pins it too)" -f $gm.Groups[1].Value, $enableAt) -ForegroundColor Green } }; if ($galiSlotWriters.Count -ne 1 -or $galiSlotWriters[0] -notmatch '^\s*EtherCAT[\\/]Pci1203GaliRoute\.cpp:\d+$') { Write-Host ("FAIL: the Index Z1 route slot has {0} writer(s) outside tests\ (W906_SetGaliRoute( ); exactly 1 is expected, the installer's in EtherCAT\Pci1203GaliRoute.cpp. Any other path installs the route WITHOUT the installer's preconditions (the gate, an armed control, an open card, the M14 row)." -f $galiSlotWriters.Count) -ForegroundColor Red; $galiSlotWriters | ForEach-Object { Write-Host $_ -ForegroundColor Red }; $fail++ } else { Write-Host ("call sites: the Index Z1 route slot has exactly 1 writer --{0}  (the installer)" -f $galiSlotWriters[0]) -ForegroundColor Green }; if ($vc8SlotWriters.Count -ne 1 -or $vc8SlotWriters[0] -notmatch '^\s*EtherCAT[\\/]Pci1203Vc8Route\.inc:\d+$') { Write-Host ("FAIL: the ECAT-VC8 route slot has {0} writer(s) outside tests\ (SetVc8Route( / W906_Vc8RouteSlot_( ); exactly 1 is expected, Vc8RouteInstall_ in EtherCAT\Pci1203Vc8Route.inc. Any other path would hand golden's vacuum-unit calls to a route nobody identity-checked." -f $vc8SlotWriters.Count) -ForegroundColor Red; $vc8SlotWriters | ForEach-Object { Write-Host $_ -ForegroundColor Red }; $fail++ } else { Write-Host ("call sites: the ECAT-VC8 route slot has exactly 1 writer --{0}  (Vc8RouteInstall_, VACUNIT-1203)" -f $vc8SlotWriters[0]) -ForegroundColor Green }; if ($vc8Installers.Count -ne 1 -or $vc8Installers[0] -notmatch '^\s*EtherCAT[\\/]Pci1203IoRoute\.cpp:\d+$') { Write-Host ("FAIL: Vc8RouteInstall_ has {0} call site(s); exactly 1 is expected, inside W906_InstallPci1203IoRoute (EtherCAT\Pci1203IoRoute.cpp) -- whose own single caller is tools\wb_serve.cpp." -f $vc8Installers.Count) -ForegroundColor Red; $vc8Installers | ForEach-Object { Write-Host $_ -ForegroundColor Red }; $fail++ } else { Write-Host ("call sites: Vc8RouteInstall_ has exactly 1 --{0}  (inside W906_InstallPci1203IoRoute)" -f $vc8Installers[0]) -ForegroundColor Green }   #AI(W906-VACUNIT-1203) 20260930   #AI(W906-INDEXZ) 20260930   # AI(W906-ECAT-ROUTE) 20260929   # AI(W906-ENG1203) 20260929: + the slot-writer count
+ 
+ # -----------------------------------------------------------------------------
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index a63134d..b39039c 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -4572,7 +4572,7 @@ int main(int argc, char** argv)
+                 cmdQueue.waitForPush(left);   // AI(W906-IOWEB-P25) 20260925: was Sleep(2) slices: without timeBeginPeriod a slice is up to ~15.6 ms (the click log's 13-35 ms 其他). The queue now signals an event on every accepted push, so a click wakes this thread at once
+             }
+         }
+-        { extern void W906_FastClockPassBegin(); W906_FastClockPassBegin(); }  /* AI(W906-FASTCLK) 20261003: RULINGS_20261002 #7 -- the shared fast clock, first thing after the sleep: begins the pass meter, then runs every due job on this thread (heater 20 ms, bin panel 30 ms, GM-2 30 ms; FastClockWbServe.cpp). Same line, no line moves */  { extern void W906_NativeFormsPump(int); W906_NativeFormsPump(0); }  /* AI(W906-NATIVE-PROTO) 20260928 [W906]: 每一圈（≤50 ms，上面截止時間迴圈的上限）泵原生視窗訊息、IO 每 200 ms／馬達每 500 ms 灌一次（只讀）；site 0＝拖曳視窗時保活跑一拍主迴圈（檔尾 W906_NativeKeepaliveMain）。OFF＝空函式 */  { extern void W906_ServiceOutputs(int); W906_ServiceOutputs(0); }  { extern void W906_TesterCommTick(); W906_TesterCommTick(); }  { extern void W906_StateRecordDrainLog(); W906_StateRecordDrainLog(); }  { extern void W906_Timer2TestSecondsTick(); W906_Timer2TestSecondsTick(); }  /* AI(W906-J12) 20260926: golden Timer2Timer :21157-21205 test seconds, right after ProcessHVisionConnect like golden (forms/fMain_TestSeconds.cpp) */  /* AI(W906-GB-P3) 20260926: H4 -- bridge packets + TCP pump; every 1000 ms golden Timer2 ProcessHVisionConnect */  { extern int W906_MainCtlButtonTick(); W906_MainCtlButtonTick(); }  /* AI(W906-FLOW-4) 20260930: main-screen ONE CYCLE / TRAY FEED / ALARM RESET clicks St01 queued (act.main.ctlButton, FileRW/MainClick.cpp) -> golden OnClick bodies, once per click, every pass so a click runs before the next MainProc (WebMainCtlButtons.cpp; RESET and the site cell deliberately not taken, see there) */   // AI(W906-IOWEB-P25) 20260925: outputs that arrived during the sleep go out BEFORE PumpTick / Poll. On the old blank line, so no line below moves
++        { extern void W906_FastClockPassBegin(); W906_FastClockPassBegin(); }  /* AI(W906-FASTCLK) 20261003: RULINGS_20261002 #7 -- the shared fast clock, first thing after the sleep: begins the pass meter, then runs every due job on this thread (heater 20 ms, bin panel 30 ms, GM-2 30 ms; FastClockWbServe.cpp). Same line, no line moves */  { extern void W906_NativeFormsPump(int); W906_NativeFormsPump(0); }  /* AI(W906-NATIVE-PROTO) 20260928 [W906]: 每一圈（≤50 ms，上面截止時間迴圈的上限）泵原生視窗訊息、IO 每 200 ms／馬達每 500 ms 灌一次（只讀）；site 0＝拖曳視窗時保活跑一拍主迴圈（檔尾 W906_NativeKeepaliveMain）。OFF＝空函式 */  { extern void W906_ServiceOutputs(int); W906_ServiceOutputs(0); }  { extern void W906_TesterCommTick(); W906_TesterCommTick(); }  { extern void W906_StateRecordDrainLog(); W906_StateRecordDrainLog(); }  { extern void W906_Timer2TestSecondsTick(); W906_Timer2TestSecondsTick(); }  /* AI(W906-J12) 20260926: golden Timer2Timer :21157-21205 test seconds, right after ProcessHVisionConnect like golden (forms/fMain_TestSeconds.cpp) */  /* AI(W906-GB-P3) 20260926: H4 -- bridge packets + TCP pump; every 1000 ms golden Timer2 ProcessHVisionConnect */  { extern int W906_MainCtlButtonTick(); W906_MainCtlButtonTick(); }  { extern void W906_MainScanKeyTick(bool); W906_MainScanKeyTick(g_alarmSlot.kind == w906dlg::AlarmSlot::kNotice); }  /* AI(W906-SCANKEY) 20261003: golden TfMain::TimerScanKeyTimer main.cpp:31994-32025 (Interval 30) -> TfMain::ScanKey :2379-2656, the physical panel keys; plus TfHome::Timer1Timer uhome.cpp:4885-4889 (panel PAUSE aborts Home). A notice counts as fNote up (golden :2383; notices do not set fNote->fShow). Every pass, after the ctlButton events, before PumpTick (WebMainScanKey.cpp). Same line, no line moves */  /* AI(W906-FLOW-4) 20260930: main-screen ONE CYCLE / TRAY FEED / ALARM RESET clicks St01 queued (act.main.ctlButton, FileRW/MainClick.cpp) -> golden OnClick bodies, once per click, every pass so a click runs before the next MainProc (WebMainCtlButtons.cpp; RESET and the site cell deliberately not taken, see there) */   // AI(W906-IOWEB-P25) 20260925: outputs that arrived during the sleep go out BEFORE PumpTick / Poll. On the old blank line, so no line below moves
+         //AI(W906-Q34-7) 20260923: (2) 只看截止時間。提早醒來的那一圈 pumpBeat 是 false。
+         const DWORD now = ::GetTickCount();
+         const bool pumpBeat = (long)(now - nextPump) >= 0;
+@@ -8059,7 +8059,7 @@ void W906_NativeFormsSetIoClock(DWORD* p) { g_nfIoClock = p; }
+ 
+ void W906_NativeKeepaliveMain()
+ {
+-    { extern void W906_ServiceOutputs(int); W906_ServiceOutputs(0); }  { extern void W906_TesterCommTick(); W906_TesterCommTick(); }  { extern void W906_StateRecordDrainLog(); W906_StateRecordDrainLog(); }  { extern void W906_Timer2TestSecondsTick(); W906_Timer2TestSecondsTick(); }  { extern int W906_MainCtlButtonTick(); W906_MainCtlButtonTick(); }  /* AI(W906-FLOW-4) 20260930: main-screen ONE CYCLE / TRAY FEED / ALARM RESET clicks St01 queued (act.main.ctlButton, FileRW/MainClick.cpp) -> golden OnClick bodies, once per click, same as the main loop line (:4575) (WebMainCtlButtons.cpp; RESET and the site cell deliberately not taken, see there) */   //AI(W906-MERGE-NATIVE) 20260929: the main loop line (:4575) gained St02's W906_StateRecordDrainLog (MR !3) after this copy was made -- same order here
++    { extern void W906_ServiceOutputs(int); W906_ServiceOutputs(0); }  { extern void W906_TesterCommTick(); W906_TesterCommTick(); }  { extern void W906_StateRecordDrainLog(); W906_StateRecordDrainLog(); }  { extern void W906_Timer2TestSecondsTick(); W906_Timer2TestSecondsTick(); }  { extern int W906_MainCtlButtonTick(); W906_MainCtlButtonTick(); }  { extern void W906_MainScanKeyTick(bool); W906_MainScanKeyTick(g_alarmSlot.kind == w906dlg::AlarmSlot::kNotice); }  /* AI(W906-SCANKEY) 20261003: golden TfMain::TimerScanKeyTimer main.cpp:31994-32025 (Interval 30) -> TfMain::ScanKey :2379-2656, the physical panel keys; plus TfHome::Timer1Timer uhome.cpp:4885-4889 (panel PAUSE aborts Home). A notice counts as fNote up (golden :2383; notices do not set fNote->fShow). Every pass, after the ctlButton events, before PumpTick (WebMainScanKey.cpp). Same line, no line moves */  /* AI(W906-FLOW-4) 20260930: main-screen ONE CYCLE / TRAY FEED / ALARM RESET clicks St01 queued (act.main.ctlButton, FileRW/MainClick.cpp) -> golden OnClick bodies, once per click, same as the main loop line (:4575) (WebMainCtlButtons.cpp; RESET and the site cell deliberately not taken, see there) */   //AI(W906-MERGE-NATIVE) 20260929: the main loop line (:4575) gained St02's W906_StateRecordDrainLog (MR !3) after this copy was made -- same order here
+     const DWORD now = ::GetTickCount();
+     bool pumpBeat = false;
+     if (g_nfPumpClock) {
+diff --git a/uhome.cpp b/uhome.cpp
+index c4adb0f..fac7488 100644
+--- a/uhome.cpp
++++ b/uhome.cpp
+@@ -646,20 +646,20 @@ void TfHome::Show()
+     fShow =true;  if (W906_FormProgramShowHook) W906_FormProgramShowHook("fHome", true, "uhome.cpp:646 TfHome::Show (golden uhome.cpp:4847)");  /*AI(W906-PAGETAB-Q51) 20260928 [W906] 程式開畫面 ⇒ 頁面表（每個 HMI 自動跳出 Home Monitor，Steven Q-P2=A）；hook 是 0（ctest）＝不做*/                                                                // golden :4847
+     fAbort=false;                                                               // golden :4848
+ }
+-
+-void TfHome::Close()                                                            // golden TForm::Close -> TfHome::FormClose (uhome.cpp:4868-4872)
++bool W906_HomeTimer1Enabled=true;   //AI(W906-SCANKEY) 20261003: golden TfHome::Timer1->Enabled (uhome.dfm:357-362, VCL default True); written only by Close() below (golden :4871); read by W906_HomeScanKeyWith (WebMainScanKey.cpp). On the old blank line, nothing below moves
++void TfHome::Close()                                                           // golden TForm::Close -> TfHome::FormClose (uhome.cpp:4868-4872)
+ {
+     fShow=false;  if (W906_FormProgramShowHook) W906_FormProgramShowHook("fHome", false, "uhome.cpp:652 TfHome::Close (golden uhome.cpp:4870)");  /*AI(W906-PAGETAB-Q51) 20260928 [W906] 程式關畫面 ⇒ 頁面表（每個 HMI 自動關掉 Home Monitor）*/                                                                // golden :4870
+-    //AI(W906-HOME-C2) 20260920: GATE (W906-HOME-C2-TIMER1)
+-    // 缺相依：`TfHome::Timer1`（golden uhome.h 的 .dfm TTimer，只驅動
+-    //   `TfHome::ScanKey()` —— 掃歸零畫面上的面板按鍵）。
+-    // 行為：本樹沒有面板按鍵掃描，所以沒有計時器可以關。
+-    //   ⚠ golden 關它是為了停掉 ScanKey；本樹**從頭到尾就沒有 ScanKey**，
+-    //   所以這一格不是「少做一件事」，是「那件事在本樹不存在」。
+-    // UN-GATE：等面板按鍵掃描接進來（那時 Timer1 與 ScanKey 要一起翻）。
+-#if 0 // GATE (W906-HOME-C2-TIMER1): 缺相依，見上面的就地註解
+-    Timer1->Enabled=false;                                                      // golden :4871
+-#endif // GATE (W906-HOME-C2-TIMER1)
++    //AI(W906-HOME-C2) 20260920: GATE (W906-HOME-C2-TIMER1) -- [AI(W906-SCANKEY) 20261003: UN-GATED, see below]
++    //AI(W906-SCANKEY) 20261003: golden uhome.dfm:357-362 Timer1 (Interval 10) drives only Timer1Timer -> TfHome::ScanKey
++    //   (uhome.cpp:4874-4889: panel PAUSE -> sbAbortHomeClick + Close).  Port tick: W906_HomeScanKeyWith (WebMainScanKey.cpp,
++    //   wb_serve main loop); Enabled = W906_HomeTimer1Enabled (:649).  GOLDEN ODDITY KEPT: this is golden's only Timer1 write
++    //   and nothing re-enables it, so this path aborts Home only until the first FormClose after boot; later homes are
++    //   aborted by TfMain::ScanKey -> BtnPauseClick -> Pause (SoftStop) -> MainProc's stop arm -> sbAbortHomeClick.
++    //   (golden FormShow :4844-4849 does not touch Timer1.)
++    //(the #if 0 of GATE (W906-HOME-C2-TIMER1) is removed; this line keeps the line count)
++    W906_HomeTimer1Enabled=false;                                               // golden :4871 Timer1->Enabled=false;
++    //(the #endif of GATE (W906-HOME-C2-TIMER1) is removed)
+ }
+ 
+ // ---------------------------------------------------------------------------
+-- 
+2.55.0.windows.5
+

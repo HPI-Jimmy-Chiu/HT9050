@@ -1,0 +1,127 @@
+From a4f4c05253113427c000d44cbae176db1abfe717 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 16:24:57 +0800
+Subject: [PATCH] EXIT-ORDER + GATE-DRIFT: (1) EastSun 1003 'Exit does not seem
+ to close everything': the HMI window now closes LAST (W906_HmiShellQuit moved
+ after server.Stop / TesterComm / log objects / Pci1203ControlDisable /
+ Pci1203MonitorDisable), a shutdown watchdog thread ends the process if the
+ shutdown is not done 15 s after the main loop breaks (golden FormClose:
+ taskkill after 10 s, main.cpp:11936-11950), and oplog EXIT lines record
+ 'shutdown begins' / 'shutdown complete' / 'watchdog fired'. (2)
+ macro_order_gate re-baselined: ainarm9045_2x8_32.cpp 4365/4393 -> 4335/4363
+ and auto9045.h 228 -> 209 (line drift since import 07f918a), TTLCfg.cpp:281
+ (MachineType.h via .gen.inc) and UiHome.cpp:74 (W906_NO_SOFT_SIMULTE; word in
+ a comment) recorded as false positives -- gate passes
+
+---
+ tools/macro_order_gate.ps1 | 17 +++++++++++------
+ tools/wb_serve.cpp         | 33 +++++++++++++++++++++++++++++----
+ 2 files changed, 40 insertions(+), 10 deletions(-)
+
+diff --git a/tools/macro_order_gate.ps1 b/tools/macro_order_gate.ps1
+index 6708ff0..8f2ed06 100644
+--- a/tools/macro_order_gate.ps1
++++ b/tools/macro_order_gate.ps1
+@@ -1,4 +1,4 @@
+-﻿# ---------------------------------------------------------------------------
++# ---------------------------------------------------------------------------
+ #  macro_order_gate.ps1 -- find files that test a MachineType.h macro WITHOUT
+ #  MachineType.h being reachable at that point.
+ #
+@@ -44,7 +44,7 @@
+ #
+ #  EXPECTED SET
+ #  ------------
+-#  The three known at-risk sites are listed below with why each is latent.  The gate
++#  The known at-risk sites are listed below with why each is latent.  The gate
+ #  fails on anything NOT in that list, so a new one cannot arrive unnoticed.  Adding a
+ #  row here without an object-diff to back it is how this turns into decoration.
+ #
+@@ -61,12 +61,17 @@ $Tree = Split-Path $PSScriptRoot -Parent
+ 
+ # file:line:macro -> why it is latent rather than a live defect.
+ $Expected = @{
+-  'ainarm9045_2x8_32.cpp:4365:SOFT_SIMULTE' =
+-    'whole file body is inside ONE #if 0 (:121 "dead variant", #endif :7834); DWARF shows 11 lines with code in a 7,834-line file and the .obj is 2,484 B. #ifdef inside a skipped group is never evaluated. WHEN THAT GATE OPENS the file must first reach MachineType.h -- it includes only ainarm9045_2x8_32.h (which has ZERO includes) and vclcompat/vcl_compat.h, so today the SIM arms would silently vanish.'
+-  'ainarm9045_2x8_32.cpp:4393:SOFT_SIMULTE' =
++  'ainarm9045_2x8_32.cpp:4335:SOFT_SIMULTE' =
++    'whole file body is inside ONE #if 0 (:91 "dead variant", #endif :7804); DWARF shows 11 lines with code in a 7,804-line file and the .obj is 2,484 B. #ifdef inside a skipped group is never evaluated. WHEN THAT GATE OPENS the file must first reach MachineType.h -- it includes only ainarm9045_2x8_32.h (which has ZERO includes) and vclcompat/vcl_compat.h, so today the SIM arms would silently vanish.'
++  'ainarm9045_2x8_32.cpp:4363:SOFT_SIMULTE' =
+     'second site in the same dead #if 0 region; same remedy.'
+-  'Automation/auto9045.h:228:DEBUG_DUTONOFF' =
++  'Automation/auto9045.h:209:DEBUG_DUTONOFF' =
+     'DEBUG_DUTONOFF is COMMENTED OUT at MachineType.h:20, so it is undefined everywhere and the absent DoHomeAndStart() declaration is correct today. Latent: auto9045.h reaches only vclcompat/vcl_compat.h (:27), so uncommenting the macro would NOT make this declaration appear. Its 4 includers (auto9045.cpp, automation.cpp, tests/test_auto9045.cpp, tests/test_automation.cpp) would each fail differently depending on their own include order -- the worst shape.'
++  #AI(W906-GATE-DRIFT) 20261003: the three rows above re-baselined (line drift -30 / -19 since import 07f918a); two false positives added:
++  'FileRW/TTLCfg.cpp:281:SOFT_SIMULTE' =
++    'FALSE POSITIVE: :46 includes FileRW/TTLCfg.gen.inc which includes MachineType.h at its :14 -- the BFS indexes only *.h so it cannot follow .inc. MachineType.h is reached before :281 in the only TU.'
++  'TesterComm/UiHome.cpp:74:SOFT_SIMULTE' =
++    'FALSE POSITIVE: the directive tests W906_NO_SOFT_SIMULTE, a CMake -D (CMakeLists.txt:58-62), not a MachineType.h macro; the hit is the word SOFT_SIMULTE in the trailing // comment.'
+ }
+ 
+ $mtPath = Join-Path $Tree "MachineType.h"
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index b5c422b..ba8238a 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -5954,7 +5954,7 @@ int main(int argc, char** argv)
+         }  if (pumpBeat) { extern void W906_MainRecordTimer1Tick(); W906_MainRecordTimer1Tick(); extern void W906_MainRunInfoTimer2Tick(); W906_MainRunInfoTimer2Tick(); }  { extern void W906_SortCTTimer1Tick(); W906_SortCTTimer1Tick(); }  if (pumpBeat) { extern void W906_TeachLeaveTick(bool*, bool); W906_TeachLeaveTick(&fAllMotorHome, SystemStart); }  /* AI(W906-FRW-S122) 20260927 [W906]（Steven 團隊）：關掉／打開 Teach／Motor Test ⇒ fAllMotorHome=false（停機中才清；運轉中不清、只印一行 [S122]）。照 golden V912 main.cpp:28846-28847（fTeach->ShowModal 回來就清）、uteach.cpp:2442-2443（fMotorTest->ShowModal 回來就清）、uteach.cpp:1610（TfTeach::FormShow 也清）；[W906] 不在 golden：用視窗總表 WebWindowRegistryFShowPolicy 的邊緣代替 ShowModal 回來（跟 MainProc 暫停同一個判斷；回報全部過期時沿用上一拍，不算邊緣）。RULINGS_20260927 第 2 條第 18 題＝B、decisions-pending R80～R83＝A；本體 WebTeachLeave.cpp；500 ms 拍子（pumpBeat）。接在同一行，不移動行號 */  /* AI(W906-PROD-S113) 20260926（Steven 團隊）：golden Timer1Timer main.cpp:3284 UpdateRecordScreen(false)（每拍累計 LastSet.SystemAccSecond）＋ Timer2Timer :21666 UpdateRunInfo()（本體每 5 分鐘推一次 RunInfo.iYieldChart／MTBA／MUBA）；本體 FileRW/MainRecord.cpp；500 ms 拍子（pumpBeat）。AI(W906-FRW-S97) 20260927：golden TfSortCT::Timer1Timer cSortCT.cpp:869-884（1000 ms，W906_SortCTTimer1Tick 自己節流；只有 CC_ASE_M 開頁後啟用，其他機台一進來就 return），本體 WebSortCT.cpp／cSortCT.cpp。20260927 從 :4598（Jimmy 的 STATEREC／MotorAccessTick 行）搬到這一行 St01 自己的行尾，避免合併撞到別人的行；接在同一行，不移動行號 */  if (pumpBeat) { extern void W906_PageTableTick(bool, bool, bool); extern bool (*W906_MotorHomingHook)(); W906_PageTableTick(SystemStart, fHome != 0 && fHome->iHomeStep != 1, W906_MotorHomingHook != 0 && W906_MotorHomingHook()); }  /* AI(W906-PAGETAB-Q51) 20260928 [W906] 頁面表每拍（500 ms）：網頁列的邊緣、操作員關掉 Home Monitor ⇒ golden fHome->Close()、瀏覽器全關滿 10 秒而且（SystemStart 或 HOME ALL 或網頁馬達工作）⇒ 正常 STOP（Steven Q-P1 20260928）；本體 WebPageTable.cpp PageTableTick。上面 S122 那一呼叫的取樣也改問頁面表（WebTeachLeave.cpp WindowEdgeSample）。接在同一行，不移動行號 */  if (pumpBeat) { extern void W906_A01AutoLogoutTick(); W906_A01AutoLogoutTick(); }  /* AI(W906-D015-A01) 20260930 [W906]（St01）：todo D-015 golden TfMain::Timer3Timer 的 [A01] 閒置自動切回 Operator＋A01 30 分鐘自動重開（V912 main.cpp:25957-26096；Timer3 1000 ms，main.dfm:17333）；本體 FileRW/Main_A01AutoLogout.cpp（自己限成每秒一次）；SIM 組態照 golden #ifdef SOFT_SIMULTE 不會登出。接在同一行，不移動行號 */  { extern bool W906_ServeQuitDue(); if (W906_ServeQuitDue()) break; }  { extern bool W906_ExternalQuitDue(); if (W906_ExternalQuitDue()) break; }  /*AI(W906-STOPBTN) 20260929: the VS Code stop button / "關閉程式" task (tools/stop_wb_serve.ps1) asks for the same normal close as the main Exit, through a named event (EOF)*/   // AI(W906-PROD-S121) 20260926（Steven 團隊）：主畫面 Exit 第二框確認後（FileRW/MainClose.cpp W906_Main_CloseProgramOp step 2 設 W906_ServeQuitRequested）晚一圈離開主迴圈（這一圈的 ack 先送出去），走下面的正常關站路；接在同一行，不移動行號  AI(W906-FRW-S167) 20260928 [W906] Q44（Steven 20260928「至少馬達跟溫度的要停下來」）：W906_ServeQuitDue 晚一圈之後先停兩個（golden StopAllMotor＋1203 軸、SW[SwHeaterRelay].Off()；SIM 接真卡時另經 1203 命令面寫 0）並讀回確認，確認了（或網頁強制關閉）才回 true；沒停就留在迴圈，網頁用 act.main.closeProgram {"op":"status"|"retry"|"force"}；本體 FileRW/MainClose.cpp 檔尾；--seconds 在上面先 break，不等它；只改這一行的註解
+     }
+ 
+-    // AI(W906-FW-W5a) 20260819: unhook before the server object dies.
++    { extern void W906_ExitWatchdogStart(); W906_ExitWatchdogStart(); }   //AI(W906-EXIT-ORDER) 20261003: shutdown watchdog (15 s -> ExitProcess) + oplog EXIT line (EOF)   // AI(W906-FW-W5a) 20260819: unhook before the server object dies.
+     W906_ShowMyMessage_Hook = 0;  { extern void W906_MsgBoxHostUninstall(); W906_MsgBoxHostUninstall(); }   // AI(W906-SMM) 20260925
+     W906_ShowErrorMessage_Hook = 0;   // AI(W906-FW-W5b) 20260819
+     W906_ShowMyMessageBoxYesNo_Hook = 0;   // AI(W906-YESNO) 20260925: 同一時間卸下（伺服器物件死掉之前）
+@@ -5963,7 +5963,7 @@ int main(int argc, char** argv)
+     //   也就是解閘前的行為 —— 這是刻意的，關站過程不該還在查總表。
+     W906_DiagnosticsWindowOpen_Hook = 0;
+     g_pumpQueue = 0;  { extern void W906_ProdCloseSave(); W906_ProdCloseSave(); }  { extern void W906_ProdCloseShutdown(); W906_ProdCloseShutdown(); }  /*AI(W906-PROD-S121) 20260926（Steven 團隊）：golden FormClose 存檔以外的關站段（main.cpp:11881-12474：StopAllMotor＋1203 軸、IndexMotorBreakerOFF、加熱器繼電器／風扇／蜂鳴器 Off…；本體 FileRW/MainClose.cpp，只呼叫已有真本體的，其餘標「未停」），在 Program Close=1 與 server.Stop() 之前（1203 命令面與監看器還活著）；插在同一行、本行 // 註解之前，不移動行號*/   // AI(W906-PROD-S95) 20260926（Steven 團隊）：golden FormClose 的生產資料段（:11861 WriteLastDataFile(true)、:11919 SaveJamRateByDay(false)、:12195 WriteCTInfo；本體 FileRW/MainClose.cpp），在下一行寫 Program Close=1（golden :12444）之前；只有正常關站（--seconds 到期）走得到，Ctrl-C 那條（W906_ConsoleCtrl，另一條執行緒）不做；接在同一行，不移動行號
+-    g_modalServer = 0;  WriteIniDataGeneral("Record", "Program Close", 1);  { extern void W906_HmiShellQuit(); W906_HmiShellQuit(); }  /*AI(W906-HMI-SHELL) 20260930: the HMI program window closes with the program (golden: the main window IS the program)*/  { extern void W906_SecurityJamShutdown(); W906_SecurityJamShutdown(); }  /*AI(W906-SEC-S54) 20260926：收掉背景 Jam 匯出執行緒*/  { extern void WriteBootLog(AnsiString); WriteBootLog("Application->Run returned (normal exit)"); }  /* AI(W906-BOOTLOG) 20260926: golden HT9045.cpp:287 */   // AI(W906-A4-4) 20260924: golden FormClose main.cpp:11927（正常關站：--seconds 到期）
++    g_modalServer = 0;  WriteIniDataGeneral("Record", "Program Close", 1);  /*AI(W906-EXIT-ORDER) 20261003: W906_HmiShellQuit moved to the very end (before "stopped") -- the window used to vanish while the server, TesterComm, log objects and the 1203 card were still being closed, so a hang there was invisible; AI(W906-HMI-SHELL) 20260930 the HMI program window closes with the program*/  { extern void W906_SecurityJamShutdown(); W906_SecurityJamShutdown(); }  /*AI(W906-SEC-S54) 20260926：收掉背景 Jam 匯出執行緒*/  { extern void WriteBootLog(AnsiString); WriteBootLog("Application->Run returned (normal exit)"); }  /* AI(W906-BOOTLOG) 20260926: golden HT9045.cpp:287 */   // AI(W906-A4-4) 20260924: golden FormClose main.cpp:11927（正常關站：--seconds 到期）
+ 
+     { extern void W906_NativeFormsStop(); W906_NativeFormsStop(); }  /* AI(W906-NATIVE-PROTO) 20260928 [W906]: 正常關閉時關原生視窗。OFF＝空函式 */  server.Stop();
+     { extern void W906_TesterCommShutdown(); W906_TesterCommShutdown(); }  { extern void W906_DestroyLogObjects(); W906_DestroyLogObjects(); }  /* AI(W906-CSVONLY-P1) 20260926: golden FormDestroy :12508-12550 log deletes */  { extern void (*W906_ElaPostHook)(int); W906_ElaPostHook = 0; extern void W906_ElaStop(); W906_ElaStop(); }  /* AI(W906-ELA-P3) 20260927: hook first, then join the worker */   //AI(W906-GB-P3) 20260926: H6 -- uninstall the fMain tester seat, stop the engine (golden FormClose of the bridge)
+@@ -6002,7 +6002,7 @@ int main(int argc, char** argv)
+         DataPath = savedDataPath;
+ #endif // AI(W906-NODRY) 20260924
+ 
+-    std::printf("stopped\n");
++    { extern void W906_HmiShellQuit(); W906_HmiShellQuit(); }  { extern void W906_ExitDoneLog(); W906_ExitDoneLog(); }  /*AI(W906-EXIT-ORDER) 20261003: the window closes only after everything (incl. the 1203 card) is closed*/  std::printf("stopped\n");
+     return 0;
+ }
+ 
+@@ -8832,4 +8832,29 @@ void W906_NoticePanelKeyTick()
+     if (ok) W906_DialogCloseRequest("show-error-message", id, reqSeq, "PAUSE", 0, "SnFKPause");
+     std::printf("notice %s: panel PAUSE -> %s %s\n", id.c_str(), ok ? "closed" : "refused", ack.c_str());
+     std::fflush(stdout);
+-}
+\ No newline at end of file
++}
++// =============================================================================
++//  AI(W906-EXIT-ORDER) 20261003: EastSun 「為啥我按exit 好像都沒有全部正常關完?」-- review: the HMI window closed before the shutdown
++//  finished, nothing ended a hung shutdown, and the oplog never said whether it completed.  golden FormClose ends with a 10 s taskkill
++//  batch (main.cpp:11936-11950); here a watchdog thread starts when the main loop breaks and ends the process if the shutdown is not done
++//  in 15 s (written to stdout + oplog first).  ExitProcess releases the card handle like any process end.
++// =============================================================================
++static DWORD WINAPI W906_ExitWatchdogThread(LPVOID)
++{
++    ::Sleep(15000);
++    std::printf("[EXIT] shutdown not finished within 15 s -> ExitProcess(3) (golden FormClose: taskkill after 10 s, main.cpp:11936-11950)\n");
++    std::fflush(stdout);
++    OpLine("EXIT", "關站 15 秒還沒結束 -> 強制結束程式（原版 10 秒後 taskkill） / shutdown watchdog fired -> ExitProcess(3)");
++    ::ExitProcess(3);
++    return 0;
++}
++void W906_ExitWatchdogStart()
++{
++    OpLine("EXIT", "主迴圈結束，開始關站（15 秒內沒收完會強制結束） / shutdown begins");
++    HANDLE h = ::CreateThread(0, 0, &W906_ExitWatchdogThread, 0, 0, 0);
++    if (h) ::CloseHandle(h);
++}
++void W906_ExitDoneLog()
++{
++    OpLine("EXIT", "關站完成：伺服器、TesterComm、1203 卡都已關閉，最後才關 HMI 視窗 / shutdown complete");
++}
+-- 
+2.55.0.windows.5
+

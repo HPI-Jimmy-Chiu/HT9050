@@ -1,0 +1,88 @@
+From 83f9d085e227d9b963dc6a1c37ca2e4ce42b9059 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 16:35:45 +0800
+Subject: [PATCH] SOFTKEY-DIAG: panel.key's ack (logged in the oplog OK line)
+ now lists every golden gate in front of the key readers (SystemInitialOK,
+ employee-ID check, InitialOK, SECSGEM lock, alarm / notice / message box up,
+ IO page up, SystemStart) and what happened to the previous soft key (read by
+ the key scan / dropped after 3 s) -- EastSun 1003 'still cannot press':
+ 16:30:02 PAUSE reached wb_serve and was queued, nothing showed whether a
+ reader took it
+
+---
+ WebMainScanKey.cpp | 28 +++++++++++++++++++++++++++-
+ 1 file changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/WebMainScanKey.cpp b/WebMainScanKey.cpp
+index 9320ea7..953ff88 100644
+--- a/WebMainScanKey.cpp
++++ b/WebMainScanKey.cpp
+@@ -385,6 +385,8 @@ const unsigned long kSoftKeyLifeMs = 3000;
+ const std::size_t   kSoftKeyMax    = 4;
+ struct MskSoftKey { int id; unsigned long t; std::string name; };
+ std::deque<MskSoftKey> s_softKeys;
++std::string s_softLast;            // AI(W906-SOFTKEY-DIAG) 20261003: what happened to the previous soft key (read / dropped), told in the next ack
++bool        s_lastNoticeUp = false; // the tick's noticeUp (a kcode==0 note is up), for the ack's guard report
+ int MskSoftKeyPop()
+ {
+     const unsigned long now = ::GetTickCount();
+@@ -393,9 +395,11 @@ int MskSoftKeyPop()
+         s_softKeys.pop_front();
+         if ((unsigned long)(now - k.t) <= kSoftKeyLifeMs) {
+             std::printf("[SOFTKEY] %s read by the key scan\n", k.name.c_str());
++            s_softLast = k.name + " 已被按鍵掃描讀走（" + std::to_string((unsigned long)(now - k.t)) + " ms）";
+             return k.id;
+         }
+         std::printf("[SOFTKEY] %s dropped: not read within %lu ms (a dialog / guard kept the key scan away)\n", k.name.c_str(), kSoftKeyLifeMs);
++        s_softLast = k.name + " 3 秒內沒被讀走、已丟掉";
+     }
+     return -1;
+ }
+@@ -406,6 +410,27 @@ bool W906_SoftPanelKeyPush(const std::string& name, std::string& why)
+         { "START", &SnFKStart }, { "PAUSE", &SnFKPause }, { "HOME", &SnFKHome }, { "RESET", &SnFKReset },
+         { "ONECYCLE", &SnFKOneCycle }, { "CLEANOUT", &SnFKCleanOut }, { "TRAYFEED", &SnFKTrayFeed }, { "TRAYEND", &SnFKTrayEnd },
+         { "ALARMRESET", &SnFKAlarmReset }, { "RETRY", &SnFKRetry }, { "SKIP", &SnFKSkip } };
++    // AI(W906-SOFTKEY-DIAG) 20261003: EastSun「一樣沒辦法按阿」-- 16:30:02 panel.key PAUSE reached wb_serve and was queued, but nothing
++    //   showed whether a key reader took it.  Expired keys are noted here too (when no reader ever runs, the pop never sees them), and the
++    //   ack carries every golden gate in front of the key readers, so the oplog line of the next press says which one held it.
++    {
++        const unsigned long now = ::GetTickCount();
++        while (!s_softKeys.empty() && (unsigned long)(now - s_softKeys.front().t) > kSoftKeyLifeMs) {
++            s_softLast = s_softKeys.front().name + " 3 秒內沒被讀走、已丟掉（按鍵掃描沒有在讀）";
++            s_softKeys.pop_front();
++        }
++    }
++    std::string gates;
++    if (SystemInitialOK == false)                                                      gates += " SystemInitialOK=0(ScanPannelKey 不讀)";
++    if (bEnableEmployeeIDCheck)                                                        gates += " 工號查驗中";
++    if (InitialOK == false)                                                            gates += " InitialOK=0(ScanKey 不跑)";
++    if (bSECSGEMAlarm && bSECSGEM_NoteAlarm == false)                                  gates += " SECSGEM 鎖";
++    if (fNote && W906_FormShowing("fNote", fNote->fShow))                              gates += " 告警框開著";
++    if (s_lastNoticeUp)                                                                gates += " 通知框開著";
++    if (fiosetview && W906_FormShowing("fiosetview", fiosetview->fShow))               gates += " IO 畫面開著";
++    if (MyMessageBox && W906_FormShowing("MyMessageBox", MyMessageBox->fShow))         gates += " 訊息框開著";
++    if (SystemStart)                                                                   gates += " 運轉中(HOME 不收)";
++    const std::string diag = std::string("｜擋關：") + (gates.empty() ? "無" : gates) + (s_softLast.empty() ? std::string() : "｜上一鍵：" + s_softLast);
+     for (std::size_t i = 0; i < sizeof(kKeys) / sizeof(kKeys[0]); ++i) {
+         if (name != kKeys[i].n) continue;
+         if (s_softKeys.size() >= kSoftKeyMax) { why = "panel.key " + name + ": 前面還有 " + std::to_string(s_softKeys.size()) + " 個按鍵沒被讀走，這一下不收"; return false; }
+@@ -413,7 +438,7 @@ bool W906_SoftPanelKeyPush(const std::string& name, std::string& why)
+         MskSoftKey k; k.id = *kKeys[i].id; k.t = ::GetTickCount(); k.name = name;
+         s_softKeys.push_back(k);
+         std::printf("[SOFTKEY] %s pushed (key id %d)\n", name.c_str(), k.id);
+-        why = "panel.key " + name + "：已送出，等同按一下實體面板鍵（原版 TfMain::ScanKey 照樣判斷要不要動作）";
++        why = "panel.key " + name + "：已送出，等同按一下實體面板鍵（原版 TfMain::ScanKey 照樣判斷要不要動作）" + diag;
+         return true;
+     }
+     why = "panel.key: 不認得的按鍵 '" + name + "'（START／PAUSE／HOME／RESET／ONECYCLE／CLEANOUT／TRAYFEED／TRAYEND／ALARMRESET／RETRY／SKIP）";
+@@ -496,6 +521,7 @@ void W906_HomeScanKeyWith(int (*scan)())
+ // golden TfMain::TimerScanKeyTimer main.cpp:31994-32025 (Steven 20151022)
+ void W906_MainScanKeyTickWith(int (*scan)(), bool noticeUp)
+ {
++    s_lastNoticeUp = noticeUp;                                                              // AI(W906-SOFTKEY-DIAG) 20261003: for panel.key's guard report
+     MskContactFormShowEdge();
+     W906_HomeScanKeyWith(scan);                                                             // the 10 ms timer: first, as it usually wins in golden
+     static bool bRunTimer1=false;                                                           // :31996
+-- 
+2.55.0.windows.5
+

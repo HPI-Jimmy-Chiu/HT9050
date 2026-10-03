@@ -1,0 +1,180 @@
+From 06690c6f352e8720d0185aa2baef5259d9a097bd Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 14:49:26 +0800
+Subject: [PATCH] JOG-VLTIME: stepper axes (Mot_Table 1P2P=0, HT9050 M35..M40)
+ get golden's CFG_AxJogVLTime = 0 with the jog family (golden
+ myEthercatmotor.cpp:724), so Acm_AxJog runs at JogVelHigh at once instead of
+ crawling at JogVelLow then jumping -- EastSun 1003 'M35 ... pressed for a
+ while then it suddenly moves fast'; servo axes unchanged ('do not touch the
+ other servo motors')
+
+---
+ EtherCAT/Pci1203Control.cpp     |  4 +++-
+ EtherCAT/Pci1203Control.h       |  1 +
+ WebMotorAccess.cpp              | 14 +++++++++++++-
+ WebMotorAccess.h                |  4 ++--
+ WebMotorAccessLive.cpp          |  2 +-
+ tests/test_pci1203_pure.cpp     | 11 +++++++----
+ tests/test_web_motor_access.cpp | 16 ++++++++++++++++
+ 7 files changed, 43 insertions(+), 9 deletions(-)
+
+diff --git a/EtherCAT/Pci1203Control.cpp b/EtherCAT/Pci1203Control.cpp
+index d9c8035..bf03fa1 100644
+--- a/EtherCAT/Pci1203Control.cpp
++++ b/EtherCAT/Pci1203Control.cpp
+@@ -3060,7 +3060,8 @@ const InitCfgRow kInitCfgRows[kInitCfgCount] = {
+     //  AB_4X = 2, I_CW_CCW = 3 (AdvMotDrv.h:489-490)
+     { kInitCfgPulseInMode,  "CFG_AxPulseInMode",  false, true,  2, { 2.0,  3.0,  0.0  } },
+     //  O_CW_CCW = 0x10, OUT_DIR_ALL_NEG = 0x08, OUT_DIR_DIR_NEG = 0x04 (AdvMotDrv.h:515-517)
+-    { kInitCfgPulseOutMode, "CFG_AxPulseOutMode", false, true,  3, { 16.0, 8.0,  4.0  } }
++    { kInitCfgPulseOutMode, "CFG_AxPulseOutMode", false, true,  3, { 16.0, 8.0,  4.0  } },
++    { kInitCfgJogVLTime,    "CFG_AxJogVLTime",    false, false, 1, { 0.0,  0.0,  0.0  } }   //AI(W906-JOG-VLTIME) 20261003: golden :724 (Result!=SUCCESS only -> not excused)
+ };
+ 
+ #if HAVE_PCI1203
+@@ -3098,6 +3099,7 @@ unsigned long InitCfgPropId(int which)
+         case kInitCfgErcLogic:     return CFG_AxErcLogic;
+         case kInitCfgPulseInMode:  return CFG_AxPulseInMode;
+         case kInitCfgPulseOutMode: return CFG_AxPulseOutMode;
++        case kInitCfgJogVLTime:    return CFG_AxJogVLTime;      //AI(W906-JOG-VLTIME) 20261003
+     }
+ #else
+     (void)which;
+diff --git a/EtherCAT/Pci1203Control.h b/EtherCAT/Pci1203Control.h
+index d873b02..321bf7b 100644
+--- a/EtherCAT/Pci1203Control.h
++++ b/EtherCAT/Pci1203Control.h
+@@ -966,6 +966,7 @@ enum Pci1203InitCfgParam {
+     kInitCfgErcLogic,      // CFG_AxErcLogic      U32  {1}
+     kInitCfgPulseInMode,   // CFG_AxPulseInMode   U32  {AB_4X, I_CW_CCW}
+     kInitCfgPulseOutMode,  // CFG_AxPulseOutMode  U32  {O_CW_CCW, OUT_DIR_ALL_NEG, OUT_DIR_DIR_NEG}
++    kInitCfgJogVLTime,     // CFG_AxJogVLTime     U32  {0}    //AI(W906-JOG-VLTIME) 20261003: golden SetSpeed jog arm myEthercatmotor.cpp:724 Acm_SetI32Property(..,CFG_AxJogVLTime,0) (0 is the same 32 bits through the U32 setter); NOT excused for Dsp_PropertyIDNotSupport (golden tests Result!=SUCCESS). Not in Pci1203GoldenInitCfgPlan -- sent with the jog family, stepper axes only (WebMotorAccess.cpp)
+     kInitCfgCount
+ };
+ /* The vendor's own property spelling, for the audit line. "?" when out of range. */
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index 6f987fc..47fb913 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -619,7 +619,8 @@ bool ParamNum(const MotorAccessReq& r, const char* k, double& v)
+ //   [AI(W906-MT-E2) 20260925: superseded -- the page now sends the scroll bar (setSpeed jog=true, DoSetSpeed), and a jog
+ //   re-sends only the jog family at that position (DoJog).]
+ //   ⓘ golden also writes CFG_AxJogVLTime = 0 (an I32 property); Pci1203Control has no I32 setter, so it is not
+-//   written (gap, noted in the ack).
++//   written (gap, noted in the ack). [AI(W906-JOG-VLTIME) 20261003: now written for STEPPER axes through kCmdAxSetInitCfg's U32
++//   setter (0 = same bits), see the end of Send1203SpeedValues; servo axes still not, EastSun 1003.]
+ //AI(W906-MT-E2) 20260925: `families` picks which half goes to the card -- kFamPtp = golden SetSpeed(x) (edtSpeedChange,
+ //   MoveP/MoveN, LoopMove start), kFamPtp|kFamJog = golden SetSpeed(x, true) (the speed scroll bar, :801), kFamJog alone =
+ //   the jog press re-sending the jog family of the last scroll position (user ruling 20260925 「Jog = golden」: golden
+@@ -660,6 +661,17 @@ bool Send1203SpeedValues(IMotorAccessBackend& be, long long wireId, const Motion
+         const Pci1203CmdResult res = be.Pci1203Execute(c);
+         if (CmdFailed(res)) { why = "1203 設定速度失敗 —— " + CmdWhy(res); return false; }
+     }
++    //AI(W906-JOG-VLTIME) 20261003: EastSun「M35 加減速已經設定成超大 一樣沒有動 反而是 我按了有一段時間 他會突然動很快」.
++    //  Acm_AxJog runs at CFG_AxJogVelLow for CFG_AxJogVLTime, then jumps to CFG_AxJogVelHigh; on a stepper velLow = InitSpeed *
++    //  percent (golden SetSpeed :915-921) is nearly standstill. golden writes CFG_AxJogVLTime = 0 with the jog family
++    //  (myEthercatmotor.cpp:724) so the jog is at JogVelHigh at once. Stepper axes only (Mot_Table 1P2P=0, M35..M40):
++    //  EastSun 1003「不要改到其他伺服馬達喔 因為其他是正常的」-- so the servo axes get exactly what they got before.
++    if ((families & kFamJog) && m.g.stepMotor) {
++        Pci1203Cmd c;
++        c.kind = kCmdAxSetInitCfg; c.wireId = wireId; c.axis = m.a.axis; c.initCfg = kInitCfgJogVLTime; c.value = 0.0;
++        const Pci1203CmdResult res = be.Pci1203Execute(c);
++        if (CmdFailed(res)) { why = "1203 設定 CFG_AxJogVLTime=0 失敗 —— " + CmdWhy(res); return false; }
++    }
+     //AI(W906-W5-b) 20260925: R-W5B-4（golden MOT.SetSpeed 之後 MOT 記住的速度）
+     //AI(W906-MERGE-56bbf785) 20260926: laptop recorded every Send1203Speed (then PTP only); the machine split the families -- a
+     //  golden SetSpeed(x[, true]) always writes the PTP family, a jog-family-only re-send is not a SetSpeed, so only kFamPtp records.
+diff --git a/WebMotorAccess.h b/WebMotorAccess.h
+index 45987e8..fc48692 100644
+--- a/WebMotorAccess.h
++++ b/WebMotorAccess.h
+@@ -123,7 +123,7 @@ struct MotorGolden {
+     int      lastHomePos;         // Motor->LastHomePos（golden Timer1Timer :965 edtHomeOffset）
+     //AI(W906-MT-E3c) 20260925: what golden TMyEtherCatMotor::SetRate / InitMotor read from the object (Test Range / Test Rate, R4).
+     unsigned iSpeed;              // Motor->ReadSpeed() = HTMotor::iSpeed (the last SetSpeed's s; golden SetRate :587/:591)
+-    int      motorClass;          // golden InitMotor's MotorType arm: 0 Servo_Motor, 1 Rotate_Motor, 2 otherwise (kInitCfgMotor*)
++    int      motorClass;   bool stepMotor;   // golden InitMotor's MotorType arm: 0 Servo_Motor, 1 Rotate_Motor, 2 otherwise (kInitCfgMotor*).   stepMotor: AI(W906-JOG-VLTIME) 20261003: Motor->MotorType==Step_Motor (Mot_Table 1P2P=0; HT9050 M35..M40) -- only these get CFG_AxJogVLTime=0 (EastSun 1003「不要改到其他伺服馬達」). Same line, nothing below moves
+     //AI(W906-MERGE-56bbf785) 20260926: both sides added this field (machine MT-E3c for InitMotor, laptop W5-b for the teach page's
+     //  ORG lamp) -- one field, same source. 覆核 W5B-R2 —— golden TMyEtherCatMotor::InitMotor（myEthercatmotor.cpp:252）開軸時
+     //  `CFG_AxOrgLogic = bSensorType ? 0 : 1`，ScanMotorStatus（:860／:868）的 Led[iHomeLed] 直接讀 ORG 位元，前提就是這個設定。
+@@ -145,7 +145,7 @@ struct MotorGolden {
+           softP(0), softN(0), initSpeed(0), jogHigh(0), jogLow(0), acc(0.0), dec(0.0),
+           homeFlag(0), zStack(false), indexMotor(false), galilIndex(false), armZ(false), scaleMotor(false),
+           selectable(true), inShuttle(0), homeHigh(0), homeLow(0), accDb(0.0), decDb(0.0),
+-          range(0), rate(0), readSpeed(0), lastHomePos(0), iSpeed(0), motorClass(0), sensorType(false), in1Logic(false),
++          range(0), rate(0), readSpeed(0), lastHomePos(0), iSpeed(0), motorClass(0), stepMotor(false), sensorType(false), in1Logic(false),
+           teachNoServoOff(false), indexZ(false), indexY(false), rotateKit(0), servoAlarmOn(false) {}
+ };
+ 
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index ab5380b..35b8eaf 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -482,7 +482,7 @@ public:
+         g.lastHomePos   = M->LastHomePos;                                       //   golden Timer1Timer :965 edtHomeOffset
+         //AI(W906-MT-E3c) 20260925: what golden SetRate / InitMotor read (Test Range / Rate, R4)
+         g.iSpeed        = M->ReadSpeed();                                       // HTMotor::iSpeed
+-        g.motorClass    = (M->MotorType == Servo_Motor) ? kInitCfgMotorServo : (M->MotorType == Rotate_Motor) ? kInitCfgMotorRotate : kInitCfgMotorOther;
++        g.motorClass    = (M->MotorType == Servo_Motor) ? kInitCfgMotorServo : (M->MotorType == Rotate_Motor) ? kInitCfgMotorRotate : kInitCfgMotorOther;   g.stepMotor = (M->MotorType == Step_Motor);   //AI(W906-JOG-VLTIME) 20261003: Mot_Table 1P2P=0 (HT9050 M35..M40); same line
+         g.sensorType    = M->bSensorType;                                       // (also W5-b W5B-R2: golden InitMotor :252 CFG_AxOrgLogic)
+         g.in1Logic      = M->bIn1Logic;
+         //AI(W906-MERGE-56bbf785) 20260926: machine MT-E2/E3c fields above + the laptop's W5-b fields below; sensorType set once.
+diff --git a/tests/test_pci1203_pure.cpp b/tests/test_pci1203_pure.cpp
+index e8ac167..10cdc30 100644
+--- a/tests/test_pci1203_pure.cpp
++++ b/tests/test_pci1203_pure.cpp
+@@ -290,17 +290,20 @@ int main()
+             "CFG_AxPPU", "CFG_AxElReact", "CFG_AxAlmEnable", "CFG_AxAlmReact",
+             "CFG_AxOrgLogic", "PAR_AxJerk", "CFG_AxInpEnable", "CFG_AxInpLogic",
+             "CFG_AxAlmLogic", "CFG_AxEzLogic", "CFG_AxErcLogic",
+-            "CFG_AxPulseInMode", "CFG_AxPulseOutMode"
++            "CFG_AxPulseInMode", "CFG_AxPulseOutMode",
++            "CFG_AxJogVLTime"                                   //AI(W906-JOG-VLTIME) 20261003
+         };
+         bool namesOk = true, typesOk = true;
+         for (int q = 0; q < kInitCfgCount; ++q) {
+             if (std::strcmp(Pci1203InitCfgName(q), kExpect[q]) != 0) namesOk = false;
+             if (Pci1203InitCfgIsF64(q) != (q == kInitCfgJerk)) typesOk = false;
+-            if (Pci1203InitCfgNotSupportedOk(q) != (q != kInitCfgJerk)) typesOk = false;
++            if (Pci1203InitCfgNotSupportedOk(q) != (q != kInitCfgJerk && q != kInitCfgJogVLTime)) typesOk = false;
+         }
+-        check(namesOk, "the 13 rows are in enum order with the vendor spellings");
++        check(namesOk, "the 14 rows are in enum order with the vendor spellings");
+         check(typesOk,
+-              "only PAR_AxJerk is F64, and only PAR_AxJerk is NOT excused for Dsp_PropertyIDNotSupport (golden :262)");
++              "only PAR_AxJerk is F64; PAR_AxJerk (golden :262) and CFG_AxJogVLTime (golden SetSpeed :724) are NOT excused for Dsp_PropertyIDNotSupport");
++        check(Pci1203InitCfgValueOk(kInitCfgJogVLTime, 0.0) && !Pci1203InitCfgValueOk(kInitCfgJogVLTime, 100.0),
++              "CFG_AxJogVLTime: golden writes 0 only (jog starts at JogVelHigh at once)");
+         check(std::strcmp(Pci1203InitCfgName(-1), "?") == 0 &&
+               std::strcmp(Pci1203InitCfgName(kInitCfgCount), "?") == 0 &&
+               !Pci1203InitCfgValueOk(kInitCfgCount, 0.0),
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index 17c1c55..8575314 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -1328,6 +1328,22 @@ int main(int argc, char** argv)
+             MotorAccessReq rel2 = Req("uMotorTest", "stop", "MOutArmY"); rel2.button = "sbMotorTest_JogP";
+             (void)MotorAccessDispatch(rel2, 11, be);
+         }
++        {   //AI(W906-JOG-VLTIME) 20261003: EastSun「按了有一段時間 他會突然動很快」-- a STEPPER axis gets golden's CFG_AxJogVLTime = 0
++            //  (myEthercatmotor.cpp:724) after the 4 jog values; the servo jogs above got nothing extra (「不要改到其他伺服馬達」).
++            be.golden[20].stepMotor = true;
++            const std::size_t n0 = be.executed.size();
++            r.action = "jogP"; r.button = "sbMotorTest_JogP";
++            o = MotorAccessDispatch(r, 11, be);
++            CHECK(o.ok && be.executed.size() == n0 + 6 &&
++                  be.executed[n0].speed == kSpeedJogInit && be.executed[n0 + 3].speed == kSpeedJogDec &&
++                  be.executed[n0 + 4].kind == kCmdAxSetInitCfg && be.executed[n0 + 4].initCfg == kInitCfgJogVLTime &&
++                  be.executed[n0 + 4].value == 0.0 && be.executed[n0 + 4].axis == 3 &&
++                  be.executed[n0 + 5].kind == kCmdAxJogStart,
++                  "JOG-VLTIME: stepper jog -> 4 jog values, CFG_AxJogVLTime = 0, then Acm_AxJog");
++            be.golden[20].stepMotor = false;
++            MotorAccessReq rel3 = Req("uMotorTest", "stop", "MOutArmY"); rel3.button = "sbMotorTest_JogP";
++            (void)MotorAccessDispatch(rel3, 11, be);
++        }
+         {
+             MotorAccessReq rel = Req("uMotorTest", "stop", "MOutArmY"); rel.button = "sbMotorTest_JogN";
+             const std::size_t e0 = be.extDrive.size(), x0 = be.executed.size();
+-- 
+2.55.0.windows.5
+
