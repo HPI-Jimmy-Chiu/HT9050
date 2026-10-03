@@ -12,7 +12,17 @@ if ($LASTEXITCODE) { 'pull --ff-only failed -- skipped'; exit 0 }
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'push_stage.ps1') -Commit
 $rc = $LASTEXITCODE
 if ($rc -ne 0) {
-  "push_stage exit $rc -- NOT pushed; the push folder is left as it is for a look"
+  # AI(W906-SNAPSHOT-PUSH) 20261003: exit 4 with an empty remote = GitHub not reachable (measured 12:49: "Failed to connect to
+  #   github.com:443"). Put the folder back as it was, so the next run (30 min later) retries instead of skipping on "not clean";
+  #   the snapshot is taken again then. Any other failure (scan hits = 3) is left for a look.
+  $remoteNow = (git -C $PUSHDIR ls-remote origin refs/heads/machine/integ-ioweb 2>$null)
+  if ($rc -eq 4 -and -not $remoteNow) {
+    git -C $PUSHDIR checkout -- README.txt MANIFEST_MD5.tsv machine_params workorder machine_log 2>$null
+    git -C $PUSHDIR clean -fdq -- machine_params workorder machine_log 2>$null
+    'GITHUB-UNREACHABLE: nothing pushed; push folder restored, the next run retries'
+  } else {
+    "push_stage exit $rc -- NOT pushed; the push folder is left as it is for a look"
+  }
 }
 # new laptop package on main?
 $FROM = 'D:\HT9045\_from_github'

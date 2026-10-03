@@ -1,0 +1,118 @@
+From 00eeacc101a5804214dbe1b7935e1958e4ba134a Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 13:27:23 +0800
+Subject: [PATCH] JOG-MAXVEL: before the jog family goes out, a CFG_AxMaxVel /
+ MaxAcc / MaxDec the monitor knows to be below what the jog needs is raised to
+ golden InitMotor's values (PJogHighSpeed / dAcc / dDec) -- EastSun 1003
+ 'M35~M40 stepper: the JOG speed I set never had any effect' (M35 13:15:
+ 0x80000087 on the re-apply, the ceiling was written only by InitMotor)
+
+---
+ WebMotorAccess.cpp              | 19 +++++++++++++++++++
+ WebMotorAccess.h                |  3 +++
+ WebMotorAccessLive.cpp          |  9 +++++++++
+ tests/test_web_motor_access.cpp | 17 +++++++++++++++++
+ 4 files changed, 48 insertions(+)
+
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index c633c52..295c4b0 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -630,6 +630,25 @@ bool Send1203SpeedValues(IMotorAccessBackend& be, long long wireId, const Motion
+                          std::string& why, std::string& note, int families)
+ {
+     if (sp.skip) { note = "golden SetSpeed 不設速度（index 軸，或 PJogHighSpeed==0）"; return true; }
++    //AI(W906-JOG-MAXVEL) 20261003: EastSun「M35~M40 … 我設定JOG 速度都沒有效過」. The card refuses / clamps a velocity above
++    //  CFG_AxMaxVel (Pci1203Monitor.h:856-871; measured 13:15 on M35: re-apply "card returned 0x80000087"), and that ceiling was
++    //  written ONLY by InitMotor (golden :363-382 CFG_AxMaxVel = PJogHighSpeed, MaxAcc = dAcc, MaxDec = dDec; InitMotor1203 below),
++    //  which on this machine runs at boot for MLoaderZ only -- so a JogHigh edited later never got a ceiling to match. Before the jog
++    //  family goes out, a ceiling the monitor KNOWS to be below what this jog needs is set again to golden InitMotor's own values
++    //  (never below this velHigh / acc / dec); unknown or already high enough = nothing sent (as before).
++    if (families & kFamJog) {
++        const struct { Pci1203SpeedParam which; double need; double v; } mx[3] = {
++            { kSpeedMaxVel, sp.velHigh, (double)m.g.jogHigh > sp.velHigh ? (double)m.g.jogHigh : sp.velHigh },
++            { kSpeedMaxAcc, sp.acc, m.g.acc > sp.acc ? m.g.acc : sp.acc }, { kSpeedMaxDec, sp.dec, m.g.dec > sp.dec ? m.g.dec : sp.dec } };
++        for (int i = 0; i < 3; ++i) {
++            double now = 0;
++            if (!(mx[i].v > 0) || !be.Pci1203SpeedNow(m.a.axis, (int)mx[i].which, now) || now >= mx[i].need) continue;
++            Pci1203Cmd c;
++            c.kind = kCmdAxSetSpeed; c.wireId = wireId; c.axis = m.a.axis; c.speed = mx[i].which; c.value = mx[i].v;
++            const Pci1203CmdResult res = be.Pci1203Execute(c);
++            if (CmdFailed(res)) { why = "1203 設定速度上限失敗（CFG_AxMax*）—— " + CmdWhy(res); return false; }
++        }
++    }
+     const struct { Pci1203SpeedParam which; double v; } seq[8] = {
+         { kSpeedInit, sp.velLow }, { kSpeedRun, sp.velHigh }, { kSpeedAcc, sp.acc }, { kSpeedDec, sp.dec },
+         { kSpeedJogInit, sp.velLow }, { kSpeedJogRun, sp.velHigh }, { kSpeedJogAcc, sp.acc }, { kSpeedJogDec, sp.dec } };
+diff --git a/WebMotorAccess.h b/WebMotorAccess.h
+index 778ceb5..c73f085 100644
+--- a/WebMotorAccess.h
++++ b/WebMotorAccess.h
+@@ -262,6 +262,9 @@ public:
+ 
+     // ---- W4-b：運動命令用 ----
+     virtual bool Pci1203CmdPos(int axis, double& card) = 0;       // 監看器的 cmdPos（卡片單位）；false = 讀不到
++    //AI(W906-JOG-MAXVEL) 20261003: the monitor sample's current value of one Pci1203SpeedParam (e.g. kSpeedMaxVel = CFG_AxMaxVel);
++    //  false = unknown (no sample / not read). Default false, so a backend that does not know it changes nothing.
++    virtual bool Pci1203SpeedNow(int axis, int which, double& v) { (void)axis; (void)which; (void)v; return false; }
+     virtual bool Pci1203AxisReady(int axis) = 0;                  // STA_AX_READY（golden MotionDone 的等價）
+     virtual bool GoldenMotor(int motIndex, MotorGolden& g) = 0;   // false = MOT[i].Motor 為 NULL
+     virtual bool GoldenSafeDoorOpen(int motIndex) = 0;            // MOT[i].Motor->CheckIsSafeDoorOpen()（TMyMotor::JogP／MotorMove 第一行）
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index c650d47..d556835 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -399,6 +399,15 @@ public:
+     }
+ 
+     // ---- W4-b ----
++    bool Pci1203SpeedNow(int axis, int which, double& v) override   //AI(W906-JOG-MAXVEL) 20261003: the monitor's speed[] sample
++    {
++        TPci1203Monitor* m = Pci1203Monitor();
++        if (!m || axis < 0 || axis >= m->axisCount() || which < 0 || which >= Pci1203AxisSample::kSpeedCount) return false;
++        const Pci1203AxisSample& s = m->axis(axis);
++        if (!s.valid || !s.opened || !s.speedValid[which]) return false;
++        v = s.speed[which];
++        return true;
++    }
+     bool Pci1203CmdPos(int axis, double& card) override
+     {
+         TPci1203Monitor* m = Pci1203Monitor();
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index 44b570e..0283a1e 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -275,6 +275,8 @@ public:
+         if (it != golden.end()) it->second.homeFlag = v;
+     }
+     int  GoldenZSafePos() override { return zSafe; }
++    std::map<int, double> speedNow;   //AI(W906-JOG-MAXVEL) 20261003: the card's current speed params the monitor "read" (empty = unknown)
++    bool Pci1203SpeedNow(int axis, int which, double& v) override { (void)axis; std::map<int, double>::iterator it = speedNow.find(which); if (it == speedNow.end()) return false; v = it->second; return true; }
+     bool GoldenSystemStart() override { return systemStart; }
+     void GoldenResetMNet() override { ++resetCount; }
+     void GoldenSetRangeRate(int mi, bool range, int v) override { RR x = { mi, range, v }; rangeRates.push_back(x); }
+@@ -1309,6 +1311,21 @@ int main(int argc, char** argv)
+         r.action = "jogN"; r.button = "sbMotorTest_JogN";
+         o = MotorAccessDispatch(r, 11, be);
+         CHECK(o.ok && be.executed.size() == 10 && be.executed[9].kind == kCmdAxJogStart && be.executed[9].dir == -1 && be.extDrive.size() == 2, "jogN -> ExtDrive(1) + Acm_AxJog -1");
++        {   //AI(W906-JOG-MAXVEL) 20261003: EastSun「M35~M40 … 我設定JOG 速度都沒有效過」-- a CFG_AxMaxVel the monitor knows to be below the
++            //  jog's velHigh (100 here) is raised to golden InitMotor's PJogHighSpeed (10000) before the jog family; MaxAcc / MaxDec
++            //  already high enough are left alone; unknown (the cases above) sends nothing extra.
++            be.speedNow[kSpeedMaxVel] = 50.0; be.speedNow[kSpeedMaxAcc] = 1.0e9; be.speedNow[kSpeedMaxDec] = 1.0e9;
++            const std::size_t n0 = be.executed.size();
++            r.action = "jogP"; r.button = "sbMotorTest_JogP";
++            o = MotorAccessDispatch(r, 11, be);
++            CHECK(o.ok && be.executed.size() == n0 + 6 &&
++                  be.executed[n0].kind == kCmdAxSetSpeed && be.executed[n0].speed == kSpeedMaxVel && be.executed[n0].value == 10000.0 &&
++                  be.executed[n0 + 1].speed == kSpeedJogInit && be.executed[n0 + 5].kind == kCmdAxJogStart,
++                  "JOG-MAXVEL: ceiling 50 < velHigh 100 -> CFG_AxMaxVel = PJogHighSpeed 10000 first, then the 4 jog values and Acm_AxJog");
++            be.speedNow.clear();
++            MotorAccessReq rel2 = Req("uMotorTest", "stop", "MOutArmY"); rel2.button = "sbMotorTest_JogP";
++            (void)MotorAccessDispatch(rel2, 11, be);
++        }
+         {
+             MotorAccessReq rel = Req("uMotorTest", "stop", "MOutArmY"); rel.button = "sbMotorTest_JogN";
+             const std::size_t e0 = be.extDrive.size(), x0 = be.executed.size();
+-- 
+2.55.0.windows.5
+
