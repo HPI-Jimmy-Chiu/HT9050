@@ -94,6 +94,13 @@
 | 54 | 派工訊息裡寫「在跑」「排隊」的 gate／順序，交件時可能已經變了 | §11.77：派工說 review6 `6dd4a772` 的 SHIP 還在跑，log 其實 21:24 已結束；之後又有 `f17fbacd`／`b22a90a4` 兩顆 handoff 改了佇列 | 記錄員 §11.77 交件建議 | 寫 §12.2 前：每個「在跑」項目讀 log 最後的 `=== ... done` 標記；再跑 `git log origin/v906/steven-handoff --since=<派工時間>` 看有沒有新的交接改了順序 |
 | 55 | 記錄員工作期間 repo 還在動（登記 commit、筆電合併） | §11.78：交件期間 ST01-M 多推了 `c489ad5d`／`1f0262a8`，筆電也在 23:08 把 d026 合進 main（`352e861c`），派工時都還不知道 | 記錄員 §11.78 交件建議 | 收集完事實、最後寫檔前各 `git fetch` 一次，範圍終點用最新那一顆；派工裡說「等審」的分支頭都跑一次 `git merge-base --is-ancestor <頭> origin/main`；decisions-pending 在最後終點重讀一次 |
 | 56 | 派工說「待回覆／在跑」的項目，最後寫檔前要再讀一次來源；檔案可能只在 q59 或 main | 10-02 §11.79：第一次讀（01:27）到交件之間 main 多了 batch 29 與 NIGHT_REPORT #43；`LotInfo_SECSLotStart.cpp` 等只在 q59 worktree／main，用 D:\HT9045 查會顯示 MISSING | 記錄員 10-02 §11.79 交件建議 | 最後寫檔前重讀 gate log 與 main 的 docs/handoff/TO_STEVEN.md；路徑檢查 MISSING 時先查 q59 worktree（D:\AI_TempFile\st01e-q59）與 `git show origin/main:<path>`，文中寫明哪一棵樹，不要當成路徑寫錯（C-33 的變體）。另：§11.NN 跨檔連號（standing-rules），新的一天不從 §11.1 重來，派工說錯也照規則 |
+| 57 | 長任務被用量上限打斷後接續，沿用中斷前的數字 | 10-02 §11.84：記錄員 21:1x 被 session 上限砍掉、23:5x 接續；中間 `HEAD..origin/main` 從 0 變 7、decisions-pending 從 4 題變 0 題 | 記錄員 §11.84／§11.85 交件建議 | 接續時重跑 `rev-list --left-right --count`、decisions-pending 的 grep、gate log，再寫 §12 |
+| 58 | ST01-M 原文寫的 `D:\HT9045\docs\handoff\...` 在 review6 工作樹不存在（檔案只在交接分支） | §11.85：`ST01_912_AUDIT_20261002.md` 只在 `v906/steven-handoff` | 記錄員 §11.85 交件建議 | 照第 30 條查是哪個分支；非原文處寫「分支＋相對路徑」，原文引用處加一行記錄員註 |
+| 59 | 用 bash heredoc 寫含 `\\` 的 Python，反斜線被砍成一半 | §11.84 記錄員的 `fix3.py` assert 失敗 | 記錄員 §11.84 交件建議 | 含反斜線的腳本用 Write 工具寫成檔，或直接用 Edit 工具改 |
+| 60 | Jimmy 先答了原本列給 Steven 的題（decisions-decided 寫「Steven 要改再說」），§12.4 就直接刪掉 | §11.85：Jimmy RULINGS_20261002 第 23 條答了 Q77／W67～W69 | 記錄員 §11.85 交件建議 | §12.4 改列「Jimmy 先答、Steven 可推翻」並白話寫一次；Steven 下一輪沒改才拿掉 |
+| 61 | 把題目「白話」時漏掉觸發條件，寫成「永遠」 | 10-03 §11.86 §12.4 的 Q78 寫「操作員按存檔…912 上這些頁的存檔鈕等於永遠不存」；實際只有 Config [A02] 打開＋OP 等級（`AccessLevel`＝0）才不存（ST01-E 01:5x 原地 ⛔ 更正；登記表 decisions-pending.md 同樣漏了，請 ST01-M 改） | ST01-E 10-03 01:5x 收件 | 白話之前先讀題目原文的 if 條件（工程師報告或 golden 行號）；條件寫進白話第一句；寫「永遠／一定／都不」之前再對一次原文 |
+| 62 | 簡報寫「在跑」的 St02 代跑，交件時其實已跑完 | §11.86：簡報 01:2x 寫 !128 在跑；`st01-st02-128-queued.log` 01:28:52 已結束，交接分支 `21f266fd`（01:31）已寫 10／10 | 記錄員 §11.86 交件建議 | 和第 54、55 條同型：交件前讀 log 末行，並看 `git log origin/v906/steven-handoff`；兩邊時間都寫 |
+| 63 | 開新一天的檔、舊檔 §12 只留一行指標時，搬不搬已結案的 §12.5 條目沒有規則 | §11.86：10-02 檔 §12 換成指標，已結案 7 條沒有搬到 10-03 檔 | 記錄員 §11.86 交件建議 | 已結案（⛔ 已完成／⛔ 已結案）的不搬，在新檔 §12.5 頂端寫一行「已結案條目見前一天檔 §11.NN～§11.MM」；未結案的全部搬 |
 
 ## D. 指令
 

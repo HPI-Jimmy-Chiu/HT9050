@@ -146,6 +146,17 @@ git for-each-ref --format='%(refname:short) %(committerdate:iso)' 'refs/remotes/
 python D:/HT9045/backup/night_tools_20260927/mr_scan.py
 ```
 
+```
+# 20261003 起（RULINGS_20261003 第 13～15 條）：讀 NB2-1 心跳、回認領、寫筆電心跳
+git fetch -q origin v906/nb2-heartbeat && git show origin/v906/nb2-heartbeat:HEARTBEAT.md | head -12   # last tick > ~2.5 h ＝ NB2-1 停了，收回來做
+git show origin/v906/nb2-assist:HT9011UC_Cpp_V3.33.906.0/docs/nb2_assist/NOW.md | head -30               # NB2 的認領：當輪在 CHAT_JIMMY 回「收／已在第 XX 批」
+python D:/HT9045/backup/night_tools_20260927/laptop_heartbeat.py --doing "<這一輪在做什麼>" --agents <N> --waiting-jimmy <N> --push   # 每輪最後一步
+```
+
+- **筆電的角色**（RULINGS_20261003 第 13 條）：新功能與分析寫成工作卡給接案的人，筆電只留回答 Jimmy、分派追蹤、合 MR＋gate、出機台包、寫裁決與報告；筆電的子代理同時最多 1～2 個，只做整合時非修不可的小修補。
+- **備援**（第 14 條）：筆電心跳超過 4 小時＋main 4 小時沒推 ⇒ St01 接手合 MR（`tools/laptop_ops/README.md`）；回來後先讀 FROM_STEVEN §2 有沒有 St01 接手的紀錄。
+- **同事 MR 的新測試要附反向驗證**（第 15 條）：沒附的，合之前在 TO_<對象>.md §4 請他補（不擋合併，但記進批次說明）。
+
 - 他 §1 認領的檔：**我們不碰**，要動先在 TO_STEVEN.md §4 問他。
 - 他 §3 的問題：能答的直接答在 TO_STEVEN.md §4（同一顆 commit 推 main）；是 Jimmy 的決策題 ⇒ 列進 NIGHT_REPORT §0。
 - 我們要開始改一批檔之前，先在 TO_STEVEN.md §1 登記（跟他的認領是同一個道理：先寫、先推、再開工）；推上 main 之後把那一列劃掉。

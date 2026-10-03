@@ -2,7 +2,8 @@
 
 「移植樹」＝repo `HT9011UC_Cpp_V3.33.906.0\`，行號量於 origin/main `60c70965`（St02-E 的 `D:\AI_TempFile\st02-s18` HEAD `0469e8ae` 含 `8f3cdc53`，Bin Display 相關路徑和 origin/main 逐位元組相同；`D:\AI_TempFile\st02-s17` 抽查同行號）。網頁在 repo 根目錄 `web\page\`。golden 記號同 `SKILL.md` §0。
 
-> ⛔ 這份是 **main 上的樣子**。St02 的 C14 bring-up（C++＋網頁）在進行中、**還沒合併**；合併後以合併後的碼為準，本表要跟著改。
+> ⛔ 這份是 **main 上的樣子**（20261003 在 origin/main `577c41c5` 重量，這些 C++ 檔跟 `60c70965` 完全相同）。St02 的 C14 已照 **golden 906** 做完、推成 MR !127（C++，tip `1616a034`）與 MR !131（網頁分頁，tip `9723b74e`），在筆電第 49／50 批、**還沒進 main**；MR 改了什麼（GATE 1、D1～D8、P1、P2、(i)／(q)／(r)、S25、網頁 tag）見 `SKILL.md` §4.1。合進 main 之後以合併後的碼為準，本表要跟著改。
+> ⛔ 基準改成 **906**（`HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20261002.md` 第 20 條）：下面 §6 (v)、§8 第 2 題的「以 912 為準」已作廢。
 
 ## 0. 對舊說法的更正（以本表為準）
 
@@ -169,7 +170,7 @@ St02-E 1002 盤點新增的：
 | (s) | `sprintf("%02X", char)` 對 >=0x80 的位元組做符號延伸（`:222`、`:231`、`:247`）——寫進 AnsiString 不會溢位，只是 hex 字串變成 `FFFFFF8x` | 怪癖，照抄 |
 | (t) | DoStartSetColor case 200 在 `:2493` 用 `iVersion[Addr]`、`:2500` 用 `iVersion[AddBinDisp[Addr]]`（906 同） | 照抄 |
 | (u) | `DataModuleDestroy` 只停 BinDisp | 照抄 |
-| (v) | 906：CommBin 沒初始化、FormClose 不關埠、TFT 輪播一輪就停 | 以 912 為準後消失 |
+| (v) | 906：CommBin 沒初始化、FormClose 不關埠、TFT 輪播一輪就停 | ~~以 912 為準後消失~~ 基準是 906（RULINGS_20261002 #20）⇒ 照 906 留著；CommBin 的 NULL 初值由移植樹 `ZeroInitVclFields`（`MyBinDisp.cpp:145-146`）補上 |
 | (w) | Magazine 的 error bin 999 在狀態頁顯示「999」 | 照抄 |
 | (x) | BinDispTester 已過時 | 不移植 |
 
@@ -182,16 +183,17 @@ St02-E 1002 盤點新增的：
 - **現成載體**：`W906_StageShowBinSelectTags`（`WebBridgeTags.cpp:3363-3412`，`:2707` 呼叫）已有 `bin.<slug>` 文字、`bin.visible`、`bin.color`、`binsel.cat.*`、`binsel.index.*`、`binsel.uph.*`；頁面 helper `tag()`／`on()`（`web\page\ht9045_showbinselect_wire.js:54-55`）；動作 `act.showBinSelect.clearCount`（`tools\wb_serve.cpp:4826` → `WebShowBinSelect.cpp`）；St01 的 E-023（review6，`cShowBinSelect_E023.cpp`）另加 state／autoClean／uphDblClick／copyRecipe，改的是 html `:103`／`:129`／`:131`／`:145`，不碰 bindisp 這格。
 - **建議的新 tag**（名字是提案）：`binsel.disp.tabVisible`、`binsel.disp.pnl`（36 個「顏色|字」，eBinDisp 順序）、`binsel.disp.lbl`＋`.lblColor`（33）、`binsel.disp.groups`、`binsel.disp.status`＋`.statusColor`、`binsel.disp.jump`，都在同一個 `W906_StageShowBinSelectTags` 送。
 - **待定**：golden 只在分頁開著時畫——C++ 要知道網頁目前在哪個分頁，或裁決「一律畫」；強制跳頁在網頁上怎麼做。
+- **20261003 MR !131 的做法**（還沒進 main）：tag 名最後是 15 個 `binsel.disp.*`（panelType、tabVisible、ctrl、caption、color、inst、err、colorNow、binNow、lbl、lblColor、groups、status、statusColor、jumpSeq），放在 St02 自己的 `WebBinDispStatus_St02.cpp`（不是 `W906_StageShowBinSelectTags`），只在 BinSelect 視窗開著時由 wb_serve PublishExtraTags 推；「只在分頁開著時畫」＝[W906] shown-scope（每秒那一次當作分頁開著，人工審核 C8）；強制跳頁＝C++ 數 golden `:272` 的跳頁（`jumpSeq`），網頁跟著切（人工審核 B31，照 906 每秒跳）。P1 在 MR !127 已合成一組（`UnLoadPanel[]` 指到 pnlAuto1..pnlMag14）。細節 `SKILL.md` §4.1。
 
-## 8. 開放問題（20261002）
+## 8. 開放問題（20261002；20261003 更新狀態）
 
 | # | 問題 | 狀態 |
 |---|---|---|
-| 1 | HT9050 的 Gerneral.ini：NUMBER_PANEL_TYPE、兩個 COM_PORT（PC 表是 COM1／COM2，模擬組是 COM14／COM4）、AUTO_EMPTY_COLOR、Scanner_AOI、MAGAZINE_BIN_DISP_TYPE；COM2「Multi Bin」是不是第二條顯示器匯流排 | 等第 127 包回覆（WAITING_REPLIES W-14） |
-| 2 | 以 906 還是 912 的行為為準 | **已定：912**（Steven 1002 14:4x 點名 912 BinDisplay 資料夾；`HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20261001.md` 第 26 條的例外，同 ADAM／HANA；St02-M 1002 轉述） |
-| 3 | 節拍：500 ms PumpTick 可不可以，或要 30 ms 快時鐘 | 筆電做共用快時鐘（RULINGS_20261002 第 7 條），等掛點通知 |
-| 4 | golden 缺陷要不要修 | **St02-M 已定原則**：照翻、只防 UB、標 [W906]、人工審核 C 類。照這原則屬 UB 的是 (i)、(m)、(q)、(r)（分類是本 skill 套原則的結果） |
-| 5 | TComm 擁有者（TDataModule3 shim）與收資料怎麼交到節拍執行緒 | 照 §4 的 rs232.cpp 模式（St02 bring-up 中） |
-| 6 | 網頁：分頁狀態語意、強制跳頁、tag 名 | 頁是 St01 的、cShowBinSelect.cpp（P1）是筆電的，要先問 |
+| 1 | HT9050 的 Gerneral.ini：NUMBER_PANEL_TYPE、兩個 COM_PORT（PC 表是 COM1／COM2，模擬組是 COM14／COM4）、AUTO_EMPTY_COLOR、Scanner_AOI、MAGAZINE_BIN_DISP_TYPE；COM2「Multi Bin」是不是第二條顯示器匯流排 | 等第 127 包回覆（WAITING_REPLIES W-14，1003 02:2x 第 2 次追問）。HT9050 工作檔（`machines\HT9050\snapshot\machine_params\D_HT9045_system\Gerneral.ini`）寫的是 type 3、COM14／COM4、AUTO_EMPTY_COLOR=0、MAGAZINE_BIN_DISP_TYPE=0（`SKILL.md` §1），面板有沒有接仍要機台回 |
+| 2 | 以 906 還是 912 的行為為準 | ~~已定：912~~ **改定：906**（`HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20261002.md` 第 20 條，使用者 1002 18:0x，點名 C14「改照 906」；第 20a 條「C14 Bin 顯示器照舊 906」）。Steven 1002 14:4x 的 912 例外作廢；C14 的 MR !127／!131 都照 906 |
+| 3 | 節拍：500 ms PumpTick 可不可以，或要 30 ms 快時鐘 | 筆電做共用快時鐘（RULINGS_20261002 第 7 條），等掛點通知；MR !127 的 Timer1 先掛在 St02 派送器（約 500 ms） |
+| 4 | golden 缺陷要不要修 | **St02-M 已定原則**：照翻、只防 UB、標 [W906]、人工審核 C 類。照這原則屬 UB 的是 (i)、(m)、(q)、(r)（分類是本 skill 套原則的結果）。MR !127 防了 (i)、(q)、(r)（人工審核 C7）；**(m) 沒有防**，照 golden 原文 |
+| 5 | TComm 擁有者（TDataModule3 shim）與收資料怎麼交到節拍執行緒 | MR !127 照 §4 的 rs232.cpp 模式做了（`BinDisplay\BinDispBringUp_St02.cpp`，[W906] (1)／(2)） |
+| 6 | 網頁：分頁狀態語意、強制跳頁、tag 名 | MR !131 做了（§7 最後一條）；St01 的頁、筆電的 wb_serve 行都走了認領 |
 | 7 | S25 在 TSMC 機台上：`bUseTrayUpDownSet` | 待裁決 |
-| 8 | 要不要現在修 P2（myMN200motor 的 NULL） | 照第 4 條原則屬 UB 防護；檔是筆電的，走 claim |
+| 8 | 要不要現在修 P2（myMN200motor 的 NULL） | MR !127 修了（`Motor\myMN200motor.cpp:1508-1509`、`:2435`，筆電的檔、認領） |

@@ -195,3 +195,7 @@ HGemPtr->SetECDataPointer(ECID, HType.FT_8_TYPE, "Name", "Celsius", &Temperature
 ## 前置條件
 - 所有 SV/EC 註冊受 `CosFunction.bEnable_SECS_GEM == true` 保護
 - EC 額外受 `CosFunction.bGPIBUseSECSGENData` 保護
+
+## N07 SECS/GEM 斷線警報（JSCC NetworkMonitor，Steven 20260603）
+
+- golden 說明：`references/colleague-N07-NetworkMonitor-Reference.md` §1～§9；**V906 C++ 移植現況**（St02 卡 ST02-C15，MR !137／!138，20261003 還沒進 main，而且**先不收**：golden 0618 沒有這個警報，NIGHT_REPORT §0 第 79 項等 Jimmy；移植樹還沒有真的 HSMS 連線，接上之前不要勾 `chkN07_3_2`）在同一檔 §10。

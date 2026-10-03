@@ -1,4 +1,4 @@
-# St02 現況板（更新：2026-10-02 18:4x，第 20 條只做 906）
+# St02 現況板（更新：2026-10-03 10:4x，C12 普查 MR !141、S-09 重掃候選交 St02-M）
 
 > 新 session 先讀這份。我是 **St02-E**；派工的協調者是 **St02-M**（session 名稱會變，目前 **github-62**，uds `\\.\pipe\LOCAL\cc-msg-2e6f870585ba6e0d521e943f8e46a02b`（14:00 重啟後 St02-M＝github-62，我＝github-de），以最新訊息的 `from=` 為準）；St01 的協調者是 **ST01-M**，St01 的工程是 **ST01-E**。
 > 規則：每個 commit 兩組態編譯、不執行；St01 跑 ctest（§2 那一列要寫測試名＋「請 St01 代跑」，ST01-M 1002 起只代跑這種列）。每次 push 後都更新這份。⚠ 1002 07:4x Steven 對 St02-M 說「你如果能跑得起來的話, 可以做測試」——St02-E 這邊還沒生效（只是轉述，St02-E 的排程指令仍寫「編譯只編不跑」），已在 St02-E 的 session 直接問 Steven，等他回。
@@ -23,6 +23,42 @@
 - ELA：`1042d4cc` W15、`2ceca61c` W18、`82196ca3` W19、`22e97891` 文件；ship 0 errors，sim 重編中；cObserver 的 diff 等回報。
 - Q41：還沒 commit（A 段 TesterIF，4 檔），sim 0 errors。
 - 16:40：gpib-widget 推到 `bf2690aa`（文件）；本機 `00772497` 已 merge main 00f9a882（有程式）→ 兩組態編譯中，過了再推。st02-on-cbridge 下次推之前要 merge St01 head（現在 5b7fe37c）。
+
+### 10-03 10:4x 狀態（新 session 從這裡接；St02-E 寫）
+- **ST02-M 09:5x 選 A＋B**（不做 C：S-16 跟筆電的 ht9045_link.js 重疊）。
+- **A 做完：MR !141 `v906/st02-c12-census` `64b6775b`**（ST02-C12 按鈕普查靜態一半，只有文件＋tools/webprobe 三支 py，不改程式）；工作樹 `D:\AI_TempFile\st02-s27`（main 5967db16）。下一步：St01 代跑 `c12_click_probe.py`，結果用 `c12_button_census.py --merge` 合回同一份 md／tsv。
+- **B 做完（helper，只產候選）**：`scratchpad\s09close\rescan1003\CANDIDATES_1003.tsv`／`SUMMARY_1003.md`；真正能解的只有 cSetUp.cpp tsv 540（要加 NULL 防護）、VacuumUnit.cpp tsv 197 大概可以；交 ST02-M 決定，**不要自己解**。工作樹 `D:\AI_TempFile\st02-s28`（detached 79158ea2，乾淨）。
+- 筆電第 49 批上 main（fd1b71c5）：!126／!127／!128 都進了；本機 `v906/st02-c9-g2-armcell-ref` 已刪。!137 現在跟 main 衝突，但 #79 擋著，**等 Jimmy 回答前不要重合**。
+- 停放／等人照 09:3x 那段。
+
+### 10-03 09:3x 狀態（新 session 從這裡接；St02-E 寫）
+- **今天推的 MR**：!130／!132／!134／!136（#62 清理四批，彼此疊著）、!135 ADAM A3、!137／!138 N07（**撤出第 50 批，#79**：golden 0618 沒有 N07）、!139 文件、!140 OB-7＋C6 題目文件；!127／!131 的測試修正 St01 已綠。
+- **⚠ 0625 vs 0618**：0625_Steven 帶 Steven 自己的新增，不是 0618 的單純副本；這台讀不到 0618 ⇒ 等筆電給 0618↔0625 差異清單後逐張 MR 對照；新認領清單一律寫「golden base 0625_Steven; 0618 not checked」。
+- **⚠ Steven 1003 常設規則（912 比較好就留 912）**＝NIGHT_REPORT §0 #78，Jimmy 還沒回 ⇒ 新的往 912 靠的改動先停。
+- **停放／等人**：!138（停在 dd2dd2d6）；C9 G1 `f97a0a4d`（等 Jimmy 的 STOP 裁決）；R68-MYDB（先問 St02-M）；Steven 的 (a) Qorvo 蜂鳴、(b) AMD、(c) Murata、N07 Q3；筆電的 WinLibs -fexcess-precision、INBOX 152／153。
+- **下一步**：09:5x 已把三個候選交 ST02-M（等它選，不要自己開工）：(A) C12 按鈕普查靜態版（推薦；TO_STEVEN.md:126，scratchpad\c12 有半成品）、(B) S-09 KEEP 列對今天 main 重掃（ST02_IF0_BACKLOG_STATUS_20260930.tsv）、(C) S-16 開站 lazy（跟筆電的網頁更新頻率 ht9045_link.js 重疊，要先問）。ChangeLog／日報路徑也一起交了。
+- 工作樹：st02-s13 C14、st02-s14 LI-9、st02-s15 C9（`v906/st02-c9-g2-armcell-ref` 參考用）、st02-s16 C10、st02-s18 ADAM A3、st02-s19 C14 頁面、st02-s20 OB-7、st02-s21～s24 c912-1～4、st02-s25 C15、st02-s26 文件；建置線見上一段。
+
+### 10-03 06:4x 狀態（新 session 從這裡接；St02-E 寫）
+- **Steven 1003 05:4x 常設規則**（St01 7318c0a4）：912 是修正或明顯較好就留 912，註記「#20 exception (Steven 1003 standing rule)」＋906 行號與做法＋912 行號；客戶專屬／不清楚／大的行為改變才問 Steven（經 ST01-M）。記憶 golden-906-only-no-912 已更新。
+- **已推的 MR（等 St01 代跑／筆電 gate）**：!116 LI-9 `29bf1345`；!126 C10 HANA `efdb3aa6`（#20b）；!127 C14 906 `1616a034`（C14_BinDisp 綠）；!128 C9 G2 `34e957b9`（筆電第 49 批自己跟 ARMCELL 合，本機參考 `v906/st02-c9-g2-armcell-ref`，不推）；!130 c912-1 `aba800e9`；!131 C14 頁面 `9723b74e`（全綠）；!132 c912-2 `b2ab72d1`（6／6 綠）；!134 c912-3 `ef721c80`；!135 ADAM A3 `2428cf0a`（要在機台 WinLibs 重跑 Adam6024_Pressure）；!136 c912-4 `02fe28f0`（P65／Silent-run 紀錄／Observer 拆欄留 912）。第 50 批（筆電）有 !130／!131／!132／!134。
+- **建置中**：ST02-C15 N07 `D:\AI_TempFile\st02-s25` `v906/st02-c15-n07` `fd3ca49b`（st02-speed 那條線，log c15）⇒ 綠了推 MR；認領已由 St02-M 登記（docs/handoff/ST02_C15_N07_CLAIMS_20261003.md）。⚠ ckernel.cpp :3374／:3382 跟 !132 同一行：誰後進 main 誰重 merge（N07 那句放在 `bTesterPauseMusic=false;` 後面）。
+- **等 Steven**：(a) !132 Qorvo Tester Pause 蜂鳴延遲、(b) !134 AMD 執行時條件、(c) !136 Murata NonTestToRBin、N07 的 912 差異（JSCC）、W70 已答（ELA 留 912）。R68-MYDB 最後做、先問 St02-M。
+- **等筆電**：WinLibs 線要不要加 `-fexcess-precision=fast`（全樹 double==十進位字面值）；INBOX 152 vclcompat CommaText 對 BCB6；INBOX 153 bEnableBarcodeCSVCompare；N07 主畫面紅框（WebBridgeTags＋main.html）；ARMCELL 擋 St02State 的問題。
+- **建置線**：st02-speed（build_speed.ps1）＋各 worktree 自己的 obj 根（build_lane.ps1）；單一 TU 語法檢查 `scratchpad\cl\syntax_one.py <樹> <target> <rel.cpp>`（會改寫 flags.make 和 rsp 的路徑）。
+- 文件 MR 待辦：ht9045-bin-display 改 906、ht9045-adam6024 加 #20c 與 A3、ht9045-gpib-bridge、TESTERCOMM_PORT_LEDGER、ST02_GOLDEN906_AUDIT、ht9045-secsgem 的 N07 參考加 V906 現況；workflow skill §5 第 19、20 條已在本機（跟下次推送一起推）。
+
+### 10-02 23:5x 狀態（RULINGS #23 之後；新 session 從這裡接；St02-E 寫）
+- **RULINGS_20261002 #23**（Steven 22:4x）：ADAM 照 912 保留＝第 20c 條（906 重翻 `c800f2fc` 作廢、不推）；HANA 照 912＝第 20b 條；#62＝A：main 上的 912 內容（除 20a 溫控／20b HANA／20c ADAM／St01 Q-A）逐件改回 906。
+- **已推（等 St01 代跑／筆電 gate）**：!116 LI-9 `b71175dc`（LI9_FtpClient、LI9_FtpClientPage、E021_Observer、E021_ObserverPage）；**!126** C10 `efdb3aa6`（K-C10-3 CMakeLists.txt:2405 要筆電重新同意）；**!127** C14 906 `1aef2a26`（認領 81 行 `D:\AI_TempFile\st02-claims\C14_906_CLAIM_SHEET_vs_main_b84064b4.txt`）。⚠ 約 02:00 前不要在 GitLab 網頁合 !115／!116／!121／!123／!124（筆電第 46b 批在 gate）。
+- **本機**：
+  - C9 G2：`D:\AI_TempFile\st02-s15` `v906/st02-c9-g2` `34e957b9`（48a33f58＋merge main b84064b4），兩組態增量建置中（log c9g2）⇒ 綠了推成新 MR `v906/st02-c9`；G1 `f97a0a4d`（在 `v906/st02-c9-r2`）等 Jimmy 的 STOP 裁決。認領清單 `D:\AI_TempFile\st02-claims\C9_CLAIM_SHEET_vs_main_0cf8598a.txt`（推之前對 b84064b4 重產；只要 G2 的行）。
+  - OB-7：`D:\AI_TempFile\st02-s20` `v906/st02-ob7` `40c1a4d8`（兩組態綠）——等 !116 進 main，再 merge main：tests/CMakeLists.txt :6644／:3969 兩個檔都留（LotInfoFtp.cpp 在前、ObserverSGJam.cpp 在後）；Data.Observer.html:280 要 St01 同意。
+  - #62 第一批 c912-1：helper 在 `D:\AI_TempFile\st02-s21` `v906/st02-c912-1`（H-013 IsSafePLCIOInstall 改回 906 `Enable_PLCSafety_IO && Sen[SnAllEMG].IsOff()`；GPIB 遠端 START／STOP 拿掉）。之後 c912-2（fSecsAlarm＋Tester Pause 蜂鳴）、c912-3（P65＋AMD＋Multi2D）、c912-4（GetTesterResult＋靜默模式紀錄＋EventLog 拆欄＋AOI）；R68-MYDB 最後、先問 St02-M。清單 `D:\AI_TempFile\st02-claims\AUDIT_912_ST02_20261002.md`。
+  - C14 頁面：`D:\AI_TempFile\st02-s19` `v906/st02-c14-pane-906`（在 7e0b1f92 上、12 檔沒 commit）——helper 22:5x 被用量上限中斷，等用量允許再接。
+  - 作廢、不要推：`v906/st02-adam6024-906` `c800f2fc`、`v906/st02-c14-912void-local`、`v906/st02-c14-pane`（舊的 912 底）。
+- 建置線：`scratchpad\s09close\build_lane.ps1 -Src <樹> -ObjRoot <樹>-obj`（st02-s13／s15／s16／s18 各自有 obj 根）；st02-speed 那條用 build_speed.ps1。
+- 文件待辦：ht9045-bin-display skill「基準＝912」改 906（C14 已照 906）、ht9045-adam6024 加第 20c 條註、ht9045-gpib-bridge SKILL.md:233-253、TESTERCOMM_PORT_LEDGER.md :182／:210／:511——一張文件 MR。
 
 ### 10-02 18:4x 狀態（⛔ RULINGS_20261002 第 20 條：只做 906；新 session 從這裡接；St02-E 寫）
 - **Steven 1002 18:0x「我還有看到912版，這是錯的，現在分工處理只能做906 C++專案，能理解?」**（main 8430458c）：翻譯來源只有 906（本機用 906_0625_Steven），912 只能看 906 有沒有漏；**沒有例外**（ADAM／HANA／C14 的 912 例外全作廢）。記憶 golden-906-only-no-912。

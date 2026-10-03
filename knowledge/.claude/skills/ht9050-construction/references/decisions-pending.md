@@ -18,15 +18,22 @@
 ### 要 Steven 決定或確認的 Q
 
 
-#### Q77. Auto Clean 鈕「One Cycle 跑的時候不准再觸發」的保護，912 才有，要留還是照 #20 拿掉？（ST01-M 1002 21:0x 登記；St01 912 稽核 Q-A）
+#### Q78. 19 個存檔鈕的「A02 開著、OP 等級時直接關頁、不存」保護，912 才有，要留還是照 #20 改回 906？（ST01-M 1003 01:1x 登記；ST01-E 的 E-030a 找到；同一題已在 FROM_STEVEN §3 問 Jimmy）
 
-- **畫面上會發生什麼**：主畫面 Auto Clean 鈕（golden `btnAutoCleanClick`）。912 在開頭多一行「One Cycle 在跑就直接返回」（912 main.cpp :2254-2255，RogerYang 20260810）；906 :2101-2166 沒有這行。照 906 做的話，One Cycle 跑的時候按 Auto Clean，會再呼叫一次 One Cycle。Steven Q67＝B 讓運轉中也按得到 Auto Clean，所以這個情況真的會發生。
-- **A（ST01-E 建議）**：留著 912 的保護，記成 #20 的例外。例：One Cycle 跑到一半按 Auto Clean → 沒反應，等 One Cycle 做完再按。
-- **B**：照 #20 拿掉，跟 906 一樣。例：One Cycle 跑到一半按 Auto Clean → One Cycle 又被叫一次。
-- 同一份稽核的 Q-B（START 鈕的 Teradyne-US 保護，912 才有、客戶專用）照 #20 拿掉，不另外問；Q-C（Contact 頁第 11 個模式 Visual Detection）已經在 main 上，併進 W68。稽核全文：handoff 分支 `docs/handoff/ST01_912_AUDIT_20261002.md`。
-- **目前狀態**：等 Steven 選；選之前 St01 不動。
+- **畫面上會發生什麼**：V912 在 19 個設定頁的存檔處理加了一段 A02 `Close(); return;`（RogerYang 的保護）：AOISetup、BinSelect、GroundMan、IniConfig_OCR、Ld_UldDelayTime、Rotate、StartCondition、Temperature、BarCode、Cleaning、QAMode、SetUp、TesterIF、VacuumUnit、YieldMonitoring、TrayForm、TTLCfg、UserDefForm_File、Contact（另有 TrayAssignment）。906 都沒有。**只有 Config [A02]（切到 OP 等級不准存參數）打開、而且目前是 OP 等級（AccessLevel＝0）時**，912 這 19 頁按存檔會直接關頁、不寫檔；906 在同樣情況會繼續存（一般對話框頁存操作員改的值；Contact 是非對話框，Close() 先跑 FormClose，改的值被丟掉、檔案用原值重寫）。**A02 沒開或工程師等級以上，兩版都照常存。**main／review6 自動產生的 .gen.inc 裡是 V912 的寫法。（⛔ ST01-M 1003 02:0x 更正：01:1x 的版本寫成「912 永遠不存」，漏了 A02＋OP 等級這個條件；ST01-E 指出。）
+- **A（ST01-E 建議）**：留著 912 的保護，記成第 20 條的例外（跟 Q77 Auto Clean 一樣是保護）。例：A02 開著、OP 等級在 Cleaning 頁改了值按存檔 → 頁面關掉、不寫檔；工程師等級照常存。
+- **B**：照 #20 改回 906。例：A02 開著、OP 等級在 TrayAssignment 改了值按存檔 → 寫進檔案；在 Contact 改了按存檔 → 改的值被丟掉、檔案用原值重寫。
+- **目前狀態**：Jimmy 或 Steven 回答之前，E-030a 19 個都不動。
 
-（Q53～Q61、Q65～Q70 已由 Steven 裁決；Q77 等 Steven，搬到 decisions-decided.md。）
+#### Q79. ⚠ 送給測試機的接觸力字串（GPIB）現在照 912 的算法，要留還是改回 906？（ST01-M 1003 02:0x 登記；E-030a 報告 §8 (b)；同一題已在 FROM_STEVEN §3 問 Jimmy）
+
+- **畫面上會發生什麼**：Contact 頁讀檔時算出每支手臂的接觸力字串 asArmForce1／2，這個字串會經 GPIB 送給測試機。V912 ReadFile :609-616 用 `CalcDeviceForce(...,true)`（RogerYang 20260624，註解「這裡決定送 Kgf 還是 N」）；906 :607-608 用 `iPinCT*ForcePerPinN/9.8`。畫面上的力量顯示（ShowArmAndDeviceForce）也一樣是 912 的算法。CalcDeviceForce 在 906 _0625 裡沒有。main／review6 現在送的是 912 算出來的值。
+- **A**：留著 912 的算法，記成第 20 條的例外（像 #20c ADAM 那樣，當成真的 bug 修正）。例：測試機收到的力量照 912 的 Kgf／N 換算。
+- **B**：改回 906 的算法。例：測試機收到 `腳數×每腳牛頓數÷9.8` 算出來的值，跟今天 906 量產機一樣。
+- ST01-E 沒有建議，請 Jimmy 判斷（跟安全有關：力量單位錯會讓測試機設定錯的壓力）。詳見 `D:\AI_TempFile\st01e-e030a-report-20261003.md` §8。
+- **目前狀態**：回答之前不動。
+
+（Q53～Q61、Q65～Q70 已由 Steven 裁決；Q77 由 Jimmy #23 回答；Q78、Q79 等 Jimmy／Steven，搬到 decisions-decided.md。）
 
 ### 要 Steven 決定的 R（BCB 沒有答案、真的要 Steven 選的）
 
@@ -39,26 +46,4 @@
 > W1～W62 已裁決或結案（在 D:\HT9045\.claude\skills\ht9050-construction\references\decisions-decided.md）；目前沒有還沒裁的 W 題（20260929 08:1x 整理後全部結案）。St02 的新題目加在下面。
 > 正本與背景細節見 St02 `D:\HT9045\.claude\skills\ht9050-construction\references\progress-st02.md`「待使用者裁決」節；這裡照抄內容，不改意思。選項代號沿用 St02 表原本的大小寫。
 
-#### W67. #20「沒有例外」有沒有蓋掉 Steven 之前逐項裁決過的 912 項目？（St02-M 1002 20:30 請 ST01-M 統整；ST01-M 21:0x 登記）
-
-- **哪三項**：0927 #35 P65 ARM-QA 重測回 iLotStatus=1（912）；W15＝B 事件記錄 CSV 拆欄（912）；R68-MYDB 警報代碼表（912，本來就在等 Jimmy）。
-- **A**：蓋掉，三項都照 906 重做。例：ARM-QA 重測照 906 的流程，事件記錄 CSV 回到 906 的欄位。
-- **B**：之前的逐項裁決照舊，算 #20 的例外。例：這三項維持 912 的做法，稽核表標「Steven 例外」。
-- 背景：handoff 分支 `docs/handoff/ST02_912_AUDIT_20261002.md`（St02-M 1002 20:30，`ac48ae83`）。
-- **目前狀態**：等 Steven 選；St02 回覆之前不動。
-
-#### W68. main 上已經有的 912 內容，什麼時候清、由誰清？（St02-M 1002 20:30；ST01-M 21:0x 登記，併入 St01 稽核的 main 層發現）
-
-- **有哪些**：St02 自查 main 上「912 才有、要照 906 重做」16 項，依影響排：!114 ADAM-6024（見 W69）、GPIB 遠端 START／STOP（含 H-012 !33）、H-013 IsSafePLCIOInstall（安全 PLC）、H-013 fSecsAlarm、Tester Pause 蜂鳴延遲、P65 ARM-QA、AMD 執行期分支……；St01 稽核另列 Contact 頁 Visual Detection 模式（rbVisualDetectionTest）、DF_SetContactMode 的 ASE-CL 灰掉、D-026 WAR04217 密碼規則、editlist 產生器讀 V912（.gen.inc 內容是 V912 的行）。筆電 NIGHT_REPORT #62＝A：動已經在 main 的東西要等 Steven。
-- **A（ST01-M 建議）**：各組清自己的，照影響順序一張一張 MR（安全相關的 GPIB 遠端 START／STOP、IsSafePLCIOInstall 先），每張照 906 重做、兩組態 gate。例：St02 先送「GPIB 遠端 START／STOP 照 906」一張 MR，筆電照常合。
-- **B**：全部交給筆電在 #62 一次清。例：筆電排一批「#20 清理」，St01／St02 只提供清單。
-- **C**：先不清，只是之後不再加 912 的東西。
-- **目前狀態**：等 Steven 選；St01、St02 回覆之前都不動 main 上的這些。
-
-#### W69. !114 ADAM-6024 已經在 main，要留著補一張 906 修正，還是 revert？（St02-M 1002 20:30；ST01-M 21:0x 登記）
-
-- **現況**：!114（`9e46491f`，26 支檔、+7442 行，912 adam6024.cpp 翻的）在 1002 18:51 用網頁合進 main，在 #20 說「抽出 batch 45」之後 41 分鐘。St02-E 已經照 906 重翻好（Steven02 本機 `c800f2fc`，還沒推）。同一時段網頁也合了 MR !120 `v912/nb2-app`（`fe17dfda`，18:51），跟 #20「912 不做」對不上，一併請 Steven 知道。
-- **A（ST01-M 建議）**：留著，St02 送一張「ADAM-6024 照 906」的修正 MR（`c800f2fc`）蓋過去。例：main 上的 ADAM 頁短暫是 912 版，修正 MR 合了就變 906 版；別人的分支不用跟著處理 revert。
-- **B**：先 revert !114，再合 906 版。例：main 先拿掉 26 支檔，之後再加回 906 版；revert 這麼大的 MR，其他開著的分支合 main 時會多一輪衝突。
-- **目前狀態**：等 Steven 選。
-
+（W67～W69 已由 Jimmy RULINGS_20261002 第 23 條回答，搬到 decisions-decided.md。）

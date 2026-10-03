@@ -1,0 +1,64 @@
+// =============================================================================
+//  BinDisplay/BinDispBringUp_St02.h -- ST02-C14 Bin Display, the C++ bring-up (906 base).
+//  AI(W906-ST02-C14) 20261002 (St02-E helper).  Body: BinDisplay/BinDispBringUp_St02.cpp (its banner has the full map).
+//
+//  Golden 906 = D:\HT9045\HT9011UC_Code_V3.33.906.0_20260625_Steven (cp950):
+//    TDataModule3                 BinDisplay\MyBinDisp.h:21-32, MyBinDisp.cpp:21 / :32-35 / :3070-3073, MyBinDisp.dfm:1-68
+//    TMyBinDispCtrl::Timer1Timer  BinDisplay\MyBinDisp.cpp:284-604 (the body lives in the .cpp of this pair)
+//    CreateForm(TDataModule3)     HT9045.cpp:212
+//    SystemModularInitial         database.cpp:1539-1546 (only its bin-display half, :1543-1545)
+//    InitialOK copies             main.cpp:10483-10485 (FormShow) / :11567-11569 (FormClose)
+//    TfBinSel::FormShow pause     cBinSel.cpp:1719-1721
+//  Nothing here is 912 (the 912 delta is a separate step).
+// =============================================================================
+#ifndef BinDispBringUp_St02H
+#define BinDispBringUp_St02H
+
+#include "vclcompat/vcl_compat.h"   // Spcomm::TComm, vclcompat::TComponent, TObject
+
+// ---------------------------------------------------------------------------
+//  golden MyBinDisp.h:21-32 -- the design-time data module that owns the two SPComm ports.
+//  [W906] TDataModule (VCL) -> vclcompat::TComponent (the base vclcompat TComm already uses); __published / __fastcall dropped.
+// ---------------------------------------------------------------------------
+class TDataModule3 : public vclcompat::TComponent
+{
+public:     // golden __published
+    Spcomm::TComm *BinDisp;                                                     // MyBinDisp.dfm:8-37
+    Spcomm::TComm *BinDisp2;                                                    // MyBinDisp.dfm:38-67
+    void DataModuleDestroy(TObject *Sender);                                    // MyBinDisp.dfm:3 OnDestroy
+public:
+    explicit TDataModule3(vclcompat::TComponent* AOwner);                       // golden MyBinDisp.cpp:32-35 + the .dfm stream
+    virtual ~TDataModule3();
+private:
+    TDataModule3(const TDataModule3&);
+    TDataModule3& operator=(const TDataModule3&);
+};
+extern TDataModule3 *DataModule3;                                               // golden MyBinDisp.cpp:21 (extern PACKAGE in MyBinDisp.h:34)
+
+// ---------------------------------------------------------------------------
+//  Boot / timer seats (called by tools/wb_serve.cpp and MainTimersSt02.cpp)
+// ---------------------------------------------------------------------------
+// The bin-display half of golden SystemModularInitial (database.cpp:1543-1545) + CreateForm(TDataModule3) (HT9045.cpp:212).
+// Types other than 3 / 4: does nothing at all (BinDisCtrl and DataModule3 stay NULL, as main does today).
+void W906_BinDispSystemModularBoot_St02();
+// golden FormShow main.cpp:10483-10485: HSys.BinDisCtrl->InitialOK=InitialOK, once, on the first pass that sees InitialOK.
+void W906_BinDispFormShowAt_St02();
+// golden FormClose main.cpp:11567-11569: the same copy (InitialOK is false by then), once.
+void W906_BinDispFormClose_St02();
+// golden TfBinSel::FormShow cBinSel.cpp:1719-1721: HSys.BinDisCtrl->ProcessStopStart(false) (types 3 / 4).  Returns what it did.
+const char* W906_BinDispBinSelFormShow_St02();
+// The vclcompat TComm reader thread only queues; this hands each quiet chunk to golden CommBinReceiveData(2) on the tick thread.
+void W906_BinDispRxPumpAt_St02(unsigned long now);
+// golden Timer1 (ht9045_bindisp::TTimer): its Interval when it should run (Enabled, Interval > 0, an instance), else 0.
+unsigned long W906_BinDispTimer1Interval_St02();
+// One golden Timer1 tick: Timer1->OnTimer -> TMyBinDispCtrl::Timer1Timer.
+void W906_BinDispTimer1Fire_St02();
+// true when this process runs under ctest's redirect environment (no COM port may ever be opened then).
+bool W906_BinDispUnderCtest_St02();
+
+// ---- ctest only -----------------------------------------------------------
+void W906_BinDispTestReset_St02();                                              // the once-latches, the receive queues, the counters
+void W906_BinDispSetRxClock_St02(unsigned long (*clock)());                     // NULL = GetTickCount (the clock the queue stamps with)
+unsigned long W906_BinDispRealPortProbes_St02();                                // real GetCOMPortStatus calls (must stay 0 under ctest)
+
+#endif

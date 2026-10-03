@@ -4,7 +4,7 @@
 
 ## 0. V906 上全部灰底「X」
 
-不是故障：main 上 `HSys.BinDisCtrl` 在 wb_serve 是 NULL、Timer1Timer 是空殼、ChangeBinDispStatus 被 GATE D1～D6 閘成一律灰「X」，網頁分頁是靜態「---」。見 `port-status.md` §1。St02 的 C14 bring-up 合併前都會是這樣。
+不是故障：main 上 `HSys.BinDisCtrl` 在 wb_serve 是 NULL、Timer1Timer 是空殼、ChangeBinDispStatus 被 GATE D1～D6 閘成一律灰「X」，網頁分頁是靜態「---」。見 `port-status.md` §1。St02 的 C14 bring-up 合併前都會是這樣（20261003：MR !127＋!131 已推、在筆電第 49／50 批，還沒進 main；合了以後只有 NUMBER_PANEL_TYPE 3／4 才建 BinDisCtrl、才畫這個分頁；其他型態 golden 906 FormShow `cShowBinSelect.cpp:758-764` 本來就把分頁藏起來）。
 
 ## 1. 顯示「X」
 
@@ -18,7 +18,7 @@
 ## 2. 顯示「0」或紅「0」
 
 - 紅「0」＝ `iColorNow=1`、`iBinNow=0`：COM 掉線重設後的初值（`MyBinDisp.cpp:464-468`、`:479-483`），之後要等顯示器 ack 才會換。
-- **906 的 TFT（type 4）永遠紅「0」**：906 的 TFT 路徑從不更新 `iColorNow`／`iBinNow`；912 的修正 E（`WriteTargetBin :651-655` 等）才會跟著變。以 912 為準就不會有。
+- **906 的 TFT（type 4）永遠紅「0」**：906 的 TFT 路徑從不更新 `iColorNow`／`iBinNow`；912 的修正 E（`WriteTargetBin :651-655` 等）才會跟著變。~~以 912 為準就不會有。~~ 基準是 906（RULINGS_20261002 第 20 條），E 不移植 ⇒ V906 的 type 4 狀態頁也會這樣，是 golden 906 的行為。
 - type 3 一直紅「0」⇒ 顏色／bin 的 ack 沒回來或比對不到（`DoStartSetColor :2493-2526`、`DoStartSetBin :2133-2220`）；開 C14 看 BinDisplayLog 的回覆。
 - 實體 TFT 顯示「000」：bin 0 是合法的 bin（`%03d`，`:941`）。
 

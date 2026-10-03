@@ -1,21 +1,23 @@
 ---
 name: ht9045-adam6024
-description: HT9045 / HT9050 的 ADAM-6024（研華 12 通道萬用 I/O 模組）與 EP 電氣比例閥（下壓力道 Contact Force／Die Force 的設定值與回授）知識庫：硬體規格與 Modbus 位址、ASCII／UDP 指令、EP_Install 各型態（3＝ADAM-6024 含回授、4＝PISO ET-7226、5＝Two EP…）、APAX 獨立／Multi EP、廠商 ADAMTCP.dll（匯出、回傳碼、逾時）、golden 912 adam6024.cpp 49 個函式地圖與呼叫者、公斤→TransformFuntion→輸出碼→ADAM_DirectWriteData／APAX_WriteData 的寫出流程、AI→ADAM_ReadPA→KpaTransferKG→警報的讀回流程、906 與 912 差異、V906 移植現況（20261002：St02 的 ADAM 碼還在本機、未合併，EP 寫出沒有上線）、連線／壓力排錯與警報意義、碰這塊的規則。Use when：問 ADAM-6024 或 EP 氣壓、EP 設定值寫不出去、EP 回授不準、WAR1605／WAR16322／WAR16323／WAR0329、Connect Fail! Please Check ADAM IP!、Adam Connect Error and Stop Home、ADAM 連線數滿 8 條、韌體 6.01 B21、要移植或審查 adam6024、ADAMTCP.dll 執行時載入、atester_shims 的 ADAM 替身、Timer2 的 EP 寫出、HT9050 的 172.16.8.110。關鍵字：ADAM-6024, ADAM6024, adam6024.cpp, ADAMTCP, ADAMTCP.dll, ADAMTCP_WriteReg, ADAMTCP_Read6KAI, ADAMTCP_SendReceive6KUDPCmd, ADAMTCP_Connect, EP, 電氣比例閥, 電子調壓閥, EP_Install, INSTALL_DOUBLE_EP, CHECK_EP_SETTING, EP_MAXKPA, EP_MINA_FeedBack, TransformFuntion, KpaTransferKG, MultiTransferKG, AdamOutputToPA, ADAM_ReadPA, ADAM_ReadVoltage, ADAM_WriteVoltage, ADAM_DirectWriteData, ADAM_WriteMaxData, ADAM_Alarm, ADAM_DualAlarm, ADAM_ReturnValueCheck, ADAM_ReadAIValue, Open_ADAM_6024, Close_ADAM_6024, fCheckConnectStatus_ADAM6024, ClearAllConnection, APAX, APAX_WriteData, APAX-5070, ADSMOD, ET-7226, PISO DA, EPSwitchOnOff, EpSwitch, SwEpArm1, SwMultiEp, SnEPDieForce, 露點計, DewPoint, 172.16.8.110, 172.16.8.111, 172.16.8.112, Modbus/TCP 502, iWritePA, iAdamOutValue, iReadAdamEP, ST02-ADAM, AdamTcpShim, Adam6024_St02.h, 75756cab, 3c348627, GATE FW3-WA, W906-HOME-C2-GPIBADAM。
+description: HT9045 / HT9050 的 ADAM-6024（研華 12 通道萬用 I/O 模組）與 EP 電氣比例閥（下壓力道 Contact Force／Die Force 的設定值與回授）知識庫：硬體規格與 Modbus 位址、ASCII／UDP 指令、EP_Install 各型態（3＝ADAM-6024 含回授、4＝PISO ET-7226、5＝Two EP…）、APAX 獨立／Multi EP、廠商 ADAMTCP.dll（匯出、回傳碼、逾時）、golden 912 adam6024.cpp 49 個函式地圖與呼叫者、公斤→TransformFuntion→輸出碼→ADAM_DirectWriteData／APAX_WriteData 的寫出流程、AI→ADAM_ReadPA→KpaTransferKG→警報的讀回流程、906 與 912 差異、V906 移植現況（20261003：St02 照 912 翻的 ADAM 碼已在 main（MR !114，`9e46491f`），RULINGS_20261002 第 20c 條保留 912；EP 寫出由 `W906_ADAM_EP_LIVE` 關著；機台 WinLibs g++ 16.2 字面值精度的 A3 修正是 MR !135 `2428cf0a`，還沒進 main）、連線／壓力排錯與警報意義、碰這塊的規則。Use when：問 ADAM-6024 或 EP 氣壓、EP 設定值寫不出去、EP 回授不準、WAR1605／WAR16322／WAR16323／WAR0329、Connect Fail! Please Check ADAM IP!、Adam Connect Error and Stop Home、ADAM 連線數滿 8 條、韌體 6.01 B21、要移植或審查 adam6024、ADAMTCP.dll 執行時載入、atester_shims 的 ADAM 替身、Timer2 的 EP 寫出、HT9050 的 172.16.8.110。關鍵字：ADAM-6024, ADAM6024, adam6024.cpp, ADAMTCP, ADAMTCP.dll, ADAMTCP_WriteReg, ADAMTCP_Read6KAI, ADAMTCP_SendReceive6KUDPCmd, ADAMTCP_Connect, EP, 電氣比例閥, 電子調壓閥, EP_Install, INSTALL_DOUBLE_EP, CHECK_EP_SETTING, EP_MAXKPA, EP_MINA_FeedBack, TransformFuntion, KpaTransferKG, MultiTransferKG, AdamOutputToPA, ADAM_ReadPA, ADAM_ReadVoltage, ADAM_WriteVoltage, ADAM_DirectWriteData, ADAM_WriteMaxData, ADAM_Alarm, ADAM_DualAlarm, ADAM_ReturnValueCheck, ADAM_ReadAIValue, Open_ADAM_6024, Close_ADAM_6024, fCheckConnectStatus_ADAM6024, ClearAllConnection, APAX, APAX_WriteData, APAX-5070, ADSMOD, ET-7226, PISO DA, EPSwitchOnOff, EpSwitch, SwEpArm1, SwMultiEp, SnEPDieForce, 露點計, DewPoint, 172.16.8.110, 172.16.8.111, 172.16.8.112, Modbus/TCP 502, iWritePA, iAdamOutValue, iReadAdamEP, ST02-ADAM, AdamTcpShim, Adam6024_St02.h, 75756cab, 3c348627, GATE FW3-WA, W906-HOME-C2-GPIBADAM, 第 20c 條, #20c, W906_ADAM_EP_LIVE, W906_AdamEpLive, MR !114, 9e46491f, WinLibs, g++ 16.2.0, excess precision, FLT_EVAL_METHOD, A3, P18, MR !135, 2428cf0a, Adam6024_Pressure, FP_ORACLE_FINDINGS。
 ---
 
 # HT9045 ADAM-6024／EP 知識庫
 
-> ⛔ **20261002 現況，先讀這段**
-> - St02 的 ADAM6024 移植（卡 **ST02-ADAM**，helper H1～H4）**還在 St02-E 本機**：worktree `D:\AI_TempFile\st02-s18`，branch `v906/st02-adam6024`（從 origin/main `36f09560` 開），**沒有建置、沒有合併進 main**。
-> - main 上 **EP 寫出沒有上線**：`ADAM_WriteVoltage`／`ADAM_DirectWriteData` 是空殼替身，V906 從不送 EP 設定值給 ADAM-6024，也不讀回授。不要把本 skill 讀成「已完成」。細節見 §5。
+> ⛔ **20261003 現況，先讀這段**
+> - **第 20c 條：ADAM-6024 照 912 保留**（`HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20261002.md` 第 23 條第 2 項＝C，使用者 1002 22:4x）。理由：912 的 `MultiTransferKG` 小數修正（Eastsun 20260710「修正沒有小數點」；906 的參數是 `int`，0.5 kPa 會被截成 0）是**真的 bug 修正**。所以這是第 20 條「只做 906」的例外，跟第 20a 條（溫控）、第 20b 條（HANA）同類；St02 **不用**照 906 重翻（第 20 條 1002 18:0x 那句「退回照 906 重翻」由這一項取代）。
+> - St02 的移植（卡 **ST02-ADAM**，helper H1～H4）**已在 main**：MR !114 `v906/st02-adam6024`，Steven 1002 18:51 合進 main（`9e46491f`），檔案見 §5.3。
+> - **EP 寫出仍然沒有上線**：總開關 `W906_ADAM_EP_LIVE` 在 `HT9011UC_Cpp_V3.33.906.0\MachineType.h:1809` 是註解掉的（預設關）；關著時不載 `ADAMTCP.dll`、寫出入口的回答跟舊替身一樣、Timer2／開機／關程式／HOME 的 EP 動作都直接返回（`Adam6024Integrate_St02.cpp:36-41`）。第 20c 條寫明「總開關仍關，要開時另外通知、EastSun 在旁」。不要把本 skill 讀成「EP 已上線」。
+> - **機台的編譯器跟 BCB6 判斷不同**：HT9050 機台用 WinLibs g++ 16.2.0 建置，`Adam6024_Pressure` 在機台紅（4q／5e／5f／9t）；St02 的修正是 **MR !135**（`2428cf0a`，還沒進 main），**合了以後要在機台的 WinLibs 線上重跑 Adam6024_Pressure**。細節 §5.4。
 
 ## 0. 路徑與記號
 
 | 記號 | 絕對路徑 | 說明 |
 |---|---|---|
-| golden 912（主來源） | `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\` | Big5，用 cp950 讀。`adam6024.cpp` 3104 行、`adam6024.h` 92 行、`ADAMTCP.h` 266 行 |
+| golden 912（主來源；RULINGS_20261002 第 20c 條的例外） | `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\` | Big5，用 cp950 讀。`adam6024.cpp` 3104 行、`adam6024.h` 92 行、`ADAMTCP.h` 266 行 |
 | golden 906 | `D:\HT9045\HT9011UC_Code_V3.33.906.0_20260625_Steven\` | 本機用 0625_Steven 樹；0618 樹的行號在 :28427 之前 +78 才對得上 |
-| V906 移植樹 | repo `HT9011UC_Cpp_V3.33.906.0\` | UTF-8。本 skill 的行號查於 origin/main `36f09560`（worktree `D:\AI_TempFile\st02-s18\HT9011UC_Cpp_V3.33.906.0\`）；main checkout `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\` 的行號之後可能移動 |
+| V906 移植樹 | repo `HT9011UC_Cpp_V3.33.906.0\` | UTF-8。本 skill 的行號查於 origin/main `36f09560`（worktree `D:\AI_TempFile\st02-s18\HT9011UC_Cpp_V3.33.906.0\`）；main checkout `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\` 的行號之後可能移動。20261003 加的段落（開頭的現況、§4 的 ⚠ 補註、§5.1 的補註、§5.3、§5.4）量於 origin/main `577c41c5`（含 MR !114）與 MR tip `2428cf0a` |
 | 手冊 | `E:\HT9045W_相關料件技術文件\ADAM\ADAM-6000_Series_Manual_Ed2.pdf` | `p.N` = PDF 第 N 頁（印刷頁碼 N-10） |
 | 廠商 DLL | `D:\HT9045\EXE\ADAMTCP.dll` | 只准 `objdump -p` 看，**永遠不載入** |
 
@@ -101,10 +103,13 @@ description: HT9045 / HT9050 的 ADAM-6024（研華 12 通道萬用 I/O 模組�
 | `APAX_WriteData` 刪掉兩段已註解的 `iIndEPCnt==8` 舊碼 | — | `adam6024.cpp:2481-2487`、`:2531-2537`（註解，行為相同） |
 
 ⚠ 移植樹的 `TransformFuntion`（筆電的 `HT9011UC_Cpp_V3.33.906.0\adam6024.cpp`）是 **906 本體**：上面的 F15／F4 防呆都沒有（8 通道迴圈 :446-468、:726-754，16 通道迴圈 :762-797）。HT9050 若 `INSTALL_DOUBLE_EP=1`，16 通道迴圈照樣會跑（:724-800 的區塊對所有非 3 的模式都執行）。要補走擁有者（筆電）的 claim，不能直接改。
+→ **20261002 MR !114 已補**（同一行、標 `[912]`，筆電的檔、走認領）：origin/main `577c41c5` 的 `adam6024.cpp:449`／`:464`／`:467`（F15，8 通道 DieForce）、`:725`／`:731`／`:753`（F4 筆數＋F15）、`:763`（F4，16 通道）。照第 20c 條保留。
 
-## 5. V906 移植現況（20261002）
+## 5. V906 移植現況（20261002；20261003 補 §5.3 的合併狀態與 §5.4）
 
 ### 5.1 main（origin/main `36f09560`）上有什麼
+
+> ⛔ 這張表是 **MR !114 合進 main 之前**（`36f09560`）的樣子。!114（`9e46491f`）之後：五個替身已退場（`atester_shims.h:265` 改 include `Adam6024_St02.h`、`:266-269` 與 `atester_shims.cpp:326-330` 是 RETIRED 註解），Timer2「set EP force」寫手、FormClose 歸零／斷線、HOME 重連互鎖、WriteHandlerTestArmEP、HOME 後回授檢查、G24 都接上了（`Adam6024Integrate_St02.cpp`；呼叫端 `tools\wb_serve.cpp:4598`、`FileRW\MainClose.cpp:789`／`:1068`、`uhome.cpp:1507-1510`、`Command.cpp:2941`、`csystem.cpp:6369`、`:21213`）——**但全部在 `W906_ADAM_EP_LIVE`（關）後面**，所以機台上的行為仍跟這張表一樣：EP 不寫、不讀回授、`WAR1605` 不跳。逐列以 `Adam6024Integrate_St02.cpp` 檔頭為準。
 
 | 項目 | 位置（repo `HT9011UC_Cpp_V3.33.906.0\`） | 狀態 |
 |---|---|---|
@@ -131,9 +136,9 @@ description: HT9045 / HT9050 的 ADAM-6024（研華 12 通道萬用 I/O 模組�
   重做方向（commit 訊息原文）：把 golden Timer2 段做成 1 秒 pump、加離開歸零、Close 加參考計數、把 `ADAM_ReturnValueCheck` 放進 pump。補丁留在筆電 scratchpad `impl/adam/`。
 - 裁決仍是 **RULINGS_20260929 第 5 節第 6 條＝A**（執行時 LoadLibrary）。
 
-### 5.3 St02 正在做的（**進行中，20261002，未建置、未合併**）
+### 5.3 St02 的移植（MR !114，**20261002 18:51 已合進 main `9e46491f`**；第 20c 條保留 912）
 
-卡 ST02-ADAM（Steven 1002 約 10:5x：「Adam6024的code還沒寫, 派人進行移植 並且通知Jimmy」）。來源＝golden 912，912 才有的行標 `[912]` 並附 906 行。各檔一個擁有者：
+卡 ST02-ADAM（Steven 1002 約 10:5x：「Adam6024的code還沒寫, 派人進行移植 並且通知Jimmy」）。來源＝golden 912，912 才有的行標 `[912]` 並附 906 行。1002 18:0x 第 20 條曾要求「退回照 906 重翻」，1002 22:4x 第 23 條第 2 項改成 **C：保留**（＝第 20c 條，理由見開頭的現況）。總開關 `W906_ADAM_EP_LIVE`（`MachineType.h:1809`，預設關）要打開時另外通知、EastSun 在旁。ctest：`ADAM6024_Comm`（H1）、`Adam6024_Pressure`（H2）、`Adam6024_Apax`（H3）、`Adam6024_Flow`（H4）（`tests\CMakeLists.txt:6952-6990`）。各檔一個擁有者：
 
 | helper | 檔案（repo `HT9011UC_Cpp_V3.33.906.0\`） | 內容 |
 |---|---|---|
@@ -143,11 +148,24 @@ description: HT9045 / HT9050 的 ADAM-6024（研華 12 通道萬用 I/O 模組�
 | H4 整合 | `Adam6024Integrate_St02.cpp`（需要時）、`tests\test_adam6024_flow.cpp`、claim 清單 | 退替身、接呼叫端的 claim 行 |
 | H5 | 本 skill | — |
 
-20261002 約 11:15 在 worktree 看到的未追蹤檔：`Adam6024_St02.h`、`Adam6024Apax_St02.cpp`、`Public\ApaxShim_St02.h`、`Public\ApaxShim_St02.cpp`；其餘還沒出現。內容以 St02-E 整合後的版本為準。`Adam6024_St02.h` 檔頭列了它和 `atester_shims.h:265-269` 替身的五個衝突（同一個 TU 不能同時 include 兩者，直到 H4 的 claim 落地）。
+20261002 約 11:15 在 worktree 看到的未追蹤檔：`Adam6024_St02.h`、`Adam6024Apax_St02.cpp`、`Public\ApaxShim_St02.h`、`Public\ApaxShim_St02.cpp`；其餘還沒出現。內容以 St02-E 整合後的版本為準。`Adam6024_St02.h` 檔頭列了它和 `atester_shims.h:265-269` 替身的五個衝突（同一個 TU 不能同時 include 兩者，直到 H4 的 claim 落地）。——H4 的 claim 已隨 !114 落地（§5.1 的補註）；上面這段是 1002 中午的過程紀錄。
+
+### 5.4 機台編譯器 WinLibs g++ 16.2.0 的字面值精度（A3，MR !135，**還沒進 main**）
+
+- **現象**：HT9050 機台 1003 回報 `Adam6024_Pressure` 紅（4q／5e／5f／9t；EP 開關關著、只有測試）。St02-M 1003 04:42 查到根因：機台預設用 **WinLibs g++ 16.2.0 i686** 建置，它把 `5.6`、`40.2` 這類小數字面值用 80 位元算（`FLT_EVAL_METHOD` 2，C++ 預設 `-fexcess-precision=standard`），所以 `double == 5.6`／`== 40.2` 在機台是 false，BCB6 與基準線 g++ 6.3.0 是 true；`5.2 > 5.2` 這種邊界在機台也會成立（`HT9011UC_Cpp_V3.33.906.0\docs\FP_ORACLE_FINDINGS.md` §1／§3）。不只是測試：鋼徑 5.6 時增壓換算會掉到「其他」那一列（St02 量到 76.85 變 78.36，NIGHT_REPORT §0 第 77 項）。
+- **改法**（MR !135 `v906/st02-adam-fp-a3`，tip `2428cf0a`＝`bf04c1d1` 兩組態完整建置 0 錯誤＋`2428cf0a` 一行註解；**只改 St02 自己的 `Adam6024Pressure_St02.cpp`**，6 行同一行改寫、整檔 906 行不變、測試不動）：
+  - `:282`、`:305`（`KpaTransferKG`）golden `else if(fDiameter==5.6)` → A3 容差 `fDiameter - 5.6 < 1e-6 && fDiameter - 5.6 > -1e-6`；
+  - `:535`（`MultiTransferKG`）golden `if(fDiameter==40.2)` → 同樣的 A3 容差；
+  - `:822`（`ADAM_ReturnValueCheck`）golden `if((dReadVoltage<0.8 || dReadVoltage>5.2)` → 字面值轉 `(double)`：這是嚴格範圍，轉型會丟掉多餘精度＝BCB6 的 double 比法（`2428cf0a` 的 [W906] 註解說明為什麼不用容差）；
+  - 檔頭 D2 說明 `:87-88` 更正（`6.0`／`4.0`／`0` 在二進位是精確值，照留 golden 的 `==`）。
+  - 依據：使用者的 P18（20260923）／A3（20260924）裁決（commit 與 MR 寫成「RULINGS P18／A3」），記在 `FP_ORACLE_FINDINGS.md` §7／§8，同一種改法。
+- **驗證**：g++ 6.3.0（筆電、St01 的建置）上行為不變，St01 代跑 `Adam6024_Pressure` 應該照舊綠；**真正的驗證要在機台的 WinLibs 線上重跑 `Adam6024_Pressure`**（St02 這台沒有 WinLibs）——筆電 1003 04:5x 說收進下一批後會在機台通知請 EastSun 重跑；人工審核 A31（`docs\handoff\ST02_HUMAN_REVIEW_20260930.md`，`v906/steven-handoff` 分支）。
+- **整棵樹的解法**（加 `-fexcess-precision=fast` 或 `-std=gnu++17`）是工具鏈決定，在 NIGHT_REPORT §0 第 77 項等 Jimmy（筆電建議 A＝加，動手前先用 objdump 證明 g++ 6.3.0 基準線的機器碼不變）；他回之前維持一處一處改。
 
 ## 6. 排錯速查（細節 `references/troubleshooting.md`）
 
-- **V906 上 EP 沒動** ⇒ 不是故障，是 §5 還沒上線。
+- **V906 上 EP 沒動** ⇒ 不是故障，是 §5 還沒上線（碼在 main，但 `W906_ADAM_EP_LIVE` 關著）。
+- **`Adam6024_Pressure` 只在機台紅** ⇒ 先看是不是 WinLibs g++ 16.2 的字面值精度（§5.4）；MR !135 合了以後在機台重跑。
 - **連不上**：IP（新模組出廠 `10.0.0.1`）、網段、線、電源；新韌體（`6.01 B21` 以上）多了名稱與連線數檢查——連線數 ≥ 8 ⇒ `Adam Clear Fail, Please Check Network Cable or IP address`（`adam6024.cpp:2985`），`ClearAllConnection` 其實不會清（`:2844-2863`），要等 Host Idle 逾時或重開模組；`Connect Fail! Please Check ADAM IP!` 要連續失敗超過內部計數 100 才跳（`:361-371`），之前照樣回 true。
 - **壓力不對**：先看主畫面 `"EP: 輸出 / 讀回"`（`HS_Function.cpp:133-156`）分清寫錯或讀錯；校正值 `EP_MAXA`／`EP_MINA_FeedBack` 有 0 或相等 ⇒ 讀回變成電壓整數（`adam6024.cpp:512-515`）；V906 的力量表沒載＝「silent-30.0」缺陷（`HT9011UC_Cpp_V3.33.906.0\ContactForce.h:320-324`）；缸徑不在表裡用第一筆；Dual Force 只有 `INSTALL_DOUBLE_EP` 1/3 才寫。
 - **警報**：`WAR1605` 讀回 kPa 超出容差（漏氣、入氣不足、校正）；`WAR16322`／`WAR16323` 回授電壓不在 0.8～5.2 V（AI 跳線、範圍）；`WAR0329` Die Force 感測關。
@@ -159,7 +177,7 @@ description: HT9045 / HT9050 的 ADAM-6024（研華 12 通道萬用 I/O 模組�
 2. **測試絕不碰真模組**：不載入 `ADAMTCP.dll`／`ADSMOD.dll`、不開往 `172.16.8.x` 的 socket；用假接縫（75756cab 的 `AdamTcp_InstallApiForTest`／`W906_ADAMTCP_DLL` 設成不存在的路徑是前例）；ctest 先過 `tests\st02_test_containment.h` 的圍堵檢查。
 3. **EP 寫出不准單獨上線**：替身退場的那一天，必須同時有 golden Timer2「set EP force」段（912 `main.cpp:21677-21803`）、FormClose 歸零（`main.cpp:11947-11952`）、`ADAMTCP_Close` 的 WSACleanup 對策、pump 裡的 `ADAM_ReturnValueCheck`——這就是 3c348627 撤回的理由，不要重犯。
 4. **exe 不准靜態匯入** `ADAMTCP.dll`／`ADSMOD.dll`：建置後 `objdump -p` 每個 exe，不能出現 `DLL Name: ADAMTCP.dll`／`ADSMOD.dll`。
-5. **照 golden**（RULINGS_20261001 #0）：每個函式標 golden 912 行、偏離標 `// [W906]`；golden 怪癖照抄（`Read6KAI` 的 6017、名稱 `"16024-D"`、`ClearAllConnection` 名不符實、斜率 `(int)` 截斷、1250～1252 改 1253、連線失敗計數 90/50/100、`ADAMErrorMessage[-iRet]`）；客戶分支（JCET、KYEC_LEE、ASE、GIGAS、SPIL…）照 S25 閘住走 else。
+5. **照 golden**（RULINGS_20261001 #0；ADAM-6024 的 golden 是 912＝RULINGS_20261002 第 20c 條，其他模組照第 20 條只做 906）：每個函式標 golden 912 行（附 906 行）、偏離標 `// [W906]`；小數字面值的 `==`／嚴格範圍要想到機台的 WinLibs 線（§5.4，A3 寫法）；golden 怪癖照抄（`Read6KAI` 的 6017、名稱 `"16024-D"`、`ClearAllConnection` 名不符實、斜率 `(int)` 截斷、1250～1252 改 1253、連線失敗計數 90/50/100、`ADAMErrorMessage[-iRet]`）；客戶分支（JCET、KYEC_LEE、ASE、GIGAS、SPIL…）照 S25 閘住走 else。
 6. **檔案擁有者**：`adam6024.cpp/.h`、`atester_shims.h/.cpp` 是**筆電（jimmychiu）的檔**；`WebStart.cpp`、`uhome.cpp`、`Command.cpp`、`AutoClean\AutoClean.cpp`、`asendic_Loader.cpp` 的提交也以筆電為主，但有其他人改過；`FileRW\MainClose.cpp`、`csystem.cpp` 多人改過（75756cab 說 MainClose 是 St01 的檔）——動手前用 git log 與 AI 標記確認，並查 `TO_STEVEN.md` §1 與 `TO_KEVIN.md` §1。改別人的檔一律寫 claim（file:line、擁有者、舊行、新行，盡量同一行、新碼放在 `//` 前面），St02 的新檔各有一個 helper 擁有者（§5.3）。
 7. **新的全域符號只放自己的檔**：先查和替身（`atester_shims.h:265-269`）撞不撞；golden 的檔案層全域名字很泛（`Address`、`fValue`、`wGain`…），`Adam6024_St02.h` 用 `ADAM6024_ST02_INTERNAL` 把它們藏起來。
 8. **不寫密碼**：模組的 Utility 密碼在手冊 p.80 與韌體 SOP，本 skill 不抄值。

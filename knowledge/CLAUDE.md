@@ -103,6 +103,7 @@
 - **工作語言**（使用者 20260927 17:4x，為了省算力）：內部作業、agent prompt 與 agent 回傳用英文；**問使用者、對使用者說明、給使用者看的文件一律繁體中文**。
 - **同事分支合進 main 走 MR**（使用者 20260927 18:0x 選 A，`RULINGS_20260927.md` 第 8 條）：同事沒開 MR 的，筆電合併時用 push option（`git push origin <合併結果>:refs/heads/v906/jimmy-merge-<主題> -o merge_request.create -o merge_request.target=main -o merge_request.title=…`）開一張；
   gate 綠了照舊推 main，GitLab 自動標成已合併（沒有 CI，網頁按 Merge 不會跑 gate）。筆電自己的小 commit 照舊直接推 main。
+- **筆電的角色**（使用者 20261003 11:3x，`RULINGS_20261003.md` 第 13 條：「你現在角色除了解惑我的疑問外，還有就是有效分配工作給其他人處理，其他人也可以協助思考問題」「因為你一旦停擺，所有人都會停下來無法運作」）：新功能與分析寫成工作卡交給接案的人（TO_STEVEN／TO_IFOR／TO_FRANK／TO_JERRY／TO_KEVIN／TO_ES02；NB2 走 CHAT_JIMMY），問題也可以請同事一起想；筆電只留回答 Jimmy、分派追蹤、合 MR＋gate、出 GitHub 機台包、寫裁決與報告；筆電自己的子代理只用在整合時非修不可的小修補，**同時最多 1～2 個**（下面那條 ≤5 是上限，不是目標）。
 - **Agent／workflow 扇出：同時在跑的 agent「總數」≤ 5**（所有 workflow 加起來，不是每個 workflow 各 5），ultracode 不解除。
   開新 workflow 前先數還在跑的；要多個問題就讓一個 workflow 內**依序**跑。
   20260925 違反過兩次（IO 調查 4＋R28 三件 3 同時跑到 8、P25 審查 3＋其他 3 到 6），當場停掉並改成依序。
