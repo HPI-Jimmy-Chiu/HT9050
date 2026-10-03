@@ -1232,4 +1232,9 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   ✅ 派工 6 (1)：照 golden（cpp 0187 BOOT-SERVOALL）——開機 InitMotor 改成所有 1203 軸（原本只有 MLoaderZ）；MTestZ1 照 golden 走 Galil 路徑。
   ❓ EMG 題（放開急停後馬達電源會不會自己回來）、派工 6 時間點（開機前幾秒或按 HOME 之後）、派工 1／6 的量測：還沒回，等 EastSun 在機台旁。
   另外今晚機台端 cpp 0180～0186：HOME-BRAKE（302 後放煞車組）、HOME-TIMEOUT 後撤回（EastSun 要求）、雙軸一次一軸關掉（EastSun 要試雙軸同時）、HOME-STEPLEAVE（SW3D 步進壓在原點上先往 HomeDirection 移 1000，最多 3 次，失敗報警，單軸與全機共用一支函式）、ALARM-WHY（錯誤框顯示原因）、HOME-MAXVEL-SINGLE（單軸回原點先拉高 CFG_AxMaxVel：M30 0x80000081）。
+=== tools 0159 (20261003, machine) -- HTML designer (tools/vscode-htdesigner), version stays 0.162.0 ===
+- F5's build in a window of its own, big (EastSun 1003): an 80px %, a thick bar, steps / total, the time;
+  done = green and it closes itself, not finished = red and it stays. The status bar build item is gone.
+- Tests: run_all 3/3 layers; real VS Code 156/159 (3 known stale checks).
+- ! For the laptop: still not taken -- machine patches tools 0136 / 0143 / 0145 / 0147 / 0149 - 0159.
 MD5 清單在 MANIFEST_MD5.tsv。
