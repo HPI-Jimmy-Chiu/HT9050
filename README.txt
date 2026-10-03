@@ -781,4 +781,10 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
   web 0092 e4261d4 VACDIAG-OFF —— EastSun 1003「檔到畫面了啦 快點改回來 嚴禁檔到畫面」：Vacuum Unit 頁上方的診斷列蓋住面板，改成頁面上不顯示（只有用 ?vudiag=1 另開分頁才顯示）。C++ 回傳的原始資料不變。
   掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
+  10-03 11:49 機台快照（EastSun 在機台上做的事，沒有程式修改）：
+     machine_log/oplog_20261003.txt：1 個檔變動
+     machine_params/README_PARAMS.txt：1 個檔變動
+     workorder/README_WORKORDER.txt：1 個檔變動
+     操作紀錄 oplog_20261003.txt：新增 6 行
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 MD5 清單在 MANIFEST_MD5.tsv。
