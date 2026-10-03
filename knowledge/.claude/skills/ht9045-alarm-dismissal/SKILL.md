@@ -1,6 +1,6 @@
 ---
 name: ht9045-alarm-dismissal
-description: HT9045 告警「解除」機制知識庫 —— 四種組合（stop / nonstop × note / message）各自用什麼鍵解除、實體 IO 面板鍵與畫面按鈕的分工、解除前的權限閘（DoUnlockPassword / DoPassword / DoPassword_MBox）。當使用者詢問 alarm 怎麼解除、怎麼關掉、Note 關不掉、MessageBox 關不掉、按了 Retry 沒反應、Alarm Reset 為什麼不關窗、K_Pause、K_Retry、ScanKey、ScanPannelKey、SnFKStart、SnFKPause、UpdateButtonStatus、KeyComp、ReturnCode、解除密碼、bAlarmUnlockPassWord、GetJemUnlockPassWord、NonStop 告警怎麼關 等問題時，應先載入此技能。關鍵字：alarm 解除, 解除告警, 關閉 alarm, Note 關不掉, dismiss, ScanKey, ScanPannelKey, SnFKPause, SnFKStart, SnFKRetry, K_PAUSE, KeyComp, ReturnCode, UpdateButtonStatus, DoPassword, DoUnlockPassword, DoPassword_MBox, SpecialPanel, PanSpecialNoteClick, bErrPan_err, SpecialErrNote.ini, special-note, mbox-password, W906_DoPasswordMBox, W906_SpecialPanelLocked, [I37_1] FIFO（D-034）, bAlarmUnlockPassWord, GetJemUnlockPassWord, bDisableKeypad, AlarmReset, NonStop, Alert.Note, MyMessageBox。另涵蓋告警「位置」的顯示：ShowErrorUnit, FlushPanel, iPosition, palSys, arguments.position, display.flushPanel, dbFlush, palInArm, palSafeDoor9, Panel5, tsHandler, 紅框閃爍, 告警位置指錯, Motion View 內嵌, ErrShowToForm, reDescription, reBigDescription, AlarmDescription, Error 資料夾 dat, Alarm-description.json, AlarmCodeList, 單元編號, Edit3, codeUnits, 交叉驗證, Alert.MotionView, Alert.MotionView9050, almDoors, createTrayStatusUnit, sim_alarm, HTDialogBridge.build。
+description: HT9045 告警「解除」機制知識庫 —— 四種組合（stop / nonstop × note / message）各自用什麼鍵解除、實體 IO 面板鍵與畫面按鈕的分工、解除前的權限閘（DoUnlockPassword / DoPassword / DoPassword_MBox）。當使用者詢問 alarm 怎麼解除、怎麼關掉、Note 關不掉、MessageBox 關不掉、按了 Retry 沒反應、Alarm Reset 為什麼不關窗、K_Pause、K_Retry、ScanKey、ScanPannelKey、SnFKStart、SnFKPause、UpdateButtonStatus、KeyComp、ReturnCode、解除密碼、bAlarmUnlockPassWord、GetJemUnlockPassWord、NonStop 告警怎麼關 等問題時，應先載入此技能。關鍵字：alarm 解除, 解除告警, 關閉 alarm, Note 關不掉, dismiss, ScanKey, ScanPannelKey, SnFKPause, SnFKStart, SnFKRetry, K_PAUSE, KeyComp, ReturnCode, UpdateButtonStatus, DoPassword, DoUnlockPassword, DoPassword_MBox, SpecialPanel, PanSpecialNoteClick, bErrPan_err, SpecialErrNote.ini, special-note, mbox-password, W906_DoPasswordMBox, W906_SpecialPanelLocked, [I37_1] FIFO（D-034）, bAlarmUnlockPassWord, GetJemUnlockPassWord, bDisableKeypad, AlarmReset, NonStop, Alert.Note, MyMessageBox。另涵蓋告警「位置」的顯示：ShowErrorUnit, FlushPanel, iPosition, palSys, arguments.position, display.flushPanel, dbFlush, palInArm, palSafeDoor9, Panel5, tsHandler, 紅框閃爍, 告警位置指錯, Motion View 內嵌, ErrShowToForm, reDescription, reBigDescription, AlarmDescription, Error 資料夾 dat, Alarm-description.json, AlarmCodeList, 單元編號, Edit3, codeUnits, 交叉驗證, Alert.MotionView, Alert.MotionView9050, almDoors, createTrayStatusUnit, sim_alarm, HTDialogBridge.build。另涵蓋 C++ 單槽、網頁排隊時「被丟下的框」怎麼關（S-17，§7.y）：WaitTagScope, WaitNotifyAckReply, WaitOtherReply, no query pending:superseded-by, no-pending-notice:superseded-by, Dialog-close-request recent, 契約 1.3.1, 框關不掉, 排在後面的框出不來。
 ---
 
 # HT9045 告警解除機制
@@ -402,6 +402,21 @@ if (!f || !active || active.displayKind !== kind) return;
 - 頁面分不出是不是通知（closePolicy／buttons 兩種都一樣），所以由 C++ 核對這個 id 是不是 kCode==0 的通知；不是就回 `not-a-notice`，什麼都不做。
 - 有 pendingQuery 的停機告警照舊走 `modal.answer`；訊息通道（show-my-message）照舊走 `dialog.response`。
 - 還沒做（筆電 INBOX 122）：golden 按面板 START 也會關通知框（`TfNote::Start` KeyCode==0 那一段）。
+
+### 7.y ⛔ 20261003：C++ 單槽、網頁排隊 —— 「被丟下的框」一律要能關（筆電卡 S-17＝INBOX 137；`AI(W906-S17)`，St01）
+
+- 病根：C++ 每個信箱只有**一格**（Alarm-／Message-dialog-request、Dialog-close-request），網頁 `dialog-bridge.js` 卻把每一則**排隊**（`queueStop` 永不丟）。C++ 已經丟下的那一則（被新的覆蓋、被取代的不停機訊息框、別處答掉、實體鍵關掉）還在網頁上；它的回答要是被「留框」，排在它後面、C++ 正在等的那一框就永遠出不來，等待迴圈永遠不結束。
+- 判準（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\wb_dialog_mailbox.h`）：**沒有任何等待迴圈握著的 tag ＝ 被丟下的**。三個等待迴圈（`tools\wb_serve.cpp` 的 ForwardShowErrorMessage、ForwardShowMyMessageBoxYesNo、MbWait）進迴圈時用 `w906dlg::WaitTagScope` 登記自己的 qid（巢狀等待各自登記，外層不會被當成過期）；目前開著的不停機訊息框由 `W906_MsgBoxModelessAnswer` 先收。
+- 各條路現在回什麼（都在等待迴圈裡）：
+  - **A** `modal.answer`／`dialog.response` 的 tag 沒人握著 → `no query pending:superseded-by=<自己的 qid>`（`WaitOtherReply`；以前是 `modal-pending`＝留框）。網頁兩個畫框器都已經把 `/no query pending/` 當已關（`ht9045_dialog_host.js` 訊息通道、`ht9045_modal.js`），所以 JS 不用改正則。主迴圈本來就回 `no query pending`。
+  - **E** 阻塞告警等待中收到 `dialog.notifyAck` → `WaitNotifyAckReply`：被覆蓋／較舊、沒人握著的通知 → `no-pending-notice:superseded-by=<qid>`（網頁關框）；自己那一則、空 tag、沒發過的 id → `not-a-notice`（留框，同以前）。以前一律 `not-a-notice` ⇒「通知 26 → 阻塞告警 27」卡死（J5-ACK-2 的 superseded 只在主迴圈有效）。YES/NO、MbWait 兩個等待迴圈同樣處理。
+  - **B** `NotifyAckDecide`：id 只會變大（`g_nextQid++`），比格子裡那一則**舊**、又沒人握著的 → superseded。J5-ACK-2 的清單只留 64 筆，無人值守的迴圈（ShowLoadingIC 4 秒 8 則）半分鐘就超過，最舊的又會回 `request-mismatch`。
+- 網頁那一半：
+  - **C**（`ht9045_dialog_host.js`）告警框用**它自己的 requestId** 回答（pendingQuery 過期／沒有／是別的告警時）；通知的「確認」只要 requestId 不是目前 pendingQuery 就走 `dialog.notifyAck`（以前會被當成別的告警的 `modal.answer`）；告警回答收到 `no query pending` ＝ C++ 已不在等 → 關框。
+  - **D**（`dialog-bridge.js`，契約 1.3.1，Steven 1003 同意改；`web\JSON\Dialog-bridge-contract.json` schemaVersion 1.3.1＋`dialogClose.recentRule`，js 墊片用 `_gen_json_shim.py` 同一種寫法重產）`Dialog-close-request` 多一個 `recent`（最近 8 則關閉，舊的在前、含最新）；`inspectClose` 跑過每一則 seq 比上次新的；目標還在**佇列裡**（還沒畫）的也直接移出，不會晚點畫出一個答不掉的框。C++ 端：`W906_DialogCloseRequest` 用 `w906dlg::CloseRequestWithRecent`／`CloseEntryJson`。
+- 沒做（同類，待決）：YES/NO、MbWait 等待中，若告警信箱裡還有一則**活的**通知（不是被覆蓋的），按它的確認仍是 `not-a-notice`（留框）——要在等待迴圈裡退役它得跑 golden 的關框（W906_NoticeAckCommand），交 ST01-M／Steven 決定。
+- 測試：`tests\test_notice_ack.cpp` [Q]（Q1 B、Q2 E 照阻塞告警等待迴圈的呼叫順序、Q3 A、Q4 D、Q5 三個等待迴圈與關閉寫入的原始碼釘）＋ node `S17_DialogHostPage`（`tools\webprobe\s17_dialog_host_selftest.cjs`）、`S17_DialogClosePage`（`s17_dialog_close_selftest.cjs`），兩支都有 CONTROL（指到改之前的 js 必須紅）。
+- 與 St02 的面板鍵關不停機框（ScanKey 合併 MR，R188 M2）：被面板鍵關掉的框 tag 也沒人握著 → 同樣回 `no query pending…`，網頁關框；本次沒有動 `MbCloseModeless`、`s_mbModeless.qid = qid;` 那一行。
 
 ## 7.5 ⛔ 一定要停機的四類 —— 公司鐵律
 

@@ -74,6 +74,14 @@ C++ 偵測並處理 IO 後寫入 `Dialog-close-request.json`：
 `closeRequestSeq` 為 `null`、`trigger.source=html-action`。target 不符或無畫面時不得關閉目前 modal，
 而是回 `state=error`、`error.code=CLOSE_REQUEST_REJECTED`。
 
+**契約 1.3.1（20261003 S-17，Steven 同意；`AI(W906-S17D)`）**：`Dialog-close-request.json` 是單槽檔，C++ 在網頁一次輪詢
+（100 ms）內連關兩個框時，舊版只看得到最後一個；而且只認目前顯示中的框，還在佇列裡的框被拒、之後照樣畫出來、C++ 早就不等了。
+現在 C++（`tools\wb_serve.cpp` `W906_DialogCloseRequest`，`w906dlg::CloseRequestWithRecent`）另寫 `recent[]`：最近 8 則關閉、
+舊到新、含最新（每則 `closeRequestId`／`seq`／`target`／`trigger`／`resolvedAction`／`closeReason`）；頂層欄位仍是最新那一則。
+`dialog-bridge.js` `inspectClose` 依 seq 跑過每一則比上次新的：先比 `activeNS`、再比 `active`，都不中就從 `queueStop`／`queueNS`
+把目標拿掉（永遠不畫，`dialogWasOpen=false`）。沒有 `recent` 的舊檔當成 `[request]`。關閉回報送出中又來的，排進
+`closeResponseBacklog`（上限 16）由輪詢補送。測試：ctest `S17_DialogClosePage`（`tools\webprobe\s17_dialog_close_selftest.cjs`）。
+
 ## Display Environment
 
 Dialog 僅支援固定機台 FullHD 1920×1080；不設計或驗證手機／平板版面。
