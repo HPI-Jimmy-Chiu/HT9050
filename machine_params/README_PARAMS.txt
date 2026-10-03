@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-03 21:08
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 198f89b HOME: the 90 s route timeout is withdrawn and the twin-axis wait is switched off -／web 4377508。
+HT9050 機台參數快照（machine_params\）—— 2026-10-03 21:15
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ f1924d8 HOME-STEPLEAVE-2 + ALARM-WHY: the stepper's 1000 follows Mot_Table HomeDirection, ／web 4377508。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
