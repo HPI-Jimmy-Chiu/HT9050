@@ -926,4 +926,15 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      workorder/README_WORKORDER.txt：1 個檔變動
      設定檔變動：machine_params/D_HT9045_system/Gerneral.ini、machine_params/D_HT9045_system/machinerecord.dat
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+=== tools 0149 (20261003, machine) -- HTML designer (tools/vscode-htdesigner), version stays 0.162.0 ===
+- One stop stops everything (EastSun 1003): the status bar's and the Solution Explorer toolbar's stop button
+  both cancel the designer's build, stop every debug session, and end this tree's wb_serve / wb_publish /
+  wb_gateway still running (other folders untouched). VS Code's own stop ending one of this tree's
+  sessions stops the tree's other sessions too (F5's wb_publish + wb_gateway pair).
+- Ctrl+F (EastSun 1003: VS Code's own find box made it look like the search ran there): Ctrl+F on the designer
+  page opens the designer's find box; opening it closes VS Code's leftover find widget.
+- Auto-wiring: form.event's own after-ack call (W906_FormEventRunAfterAck, new in wb_serve.cpp 1003) is not
+  copied into the htd.event branch; another unknown FormEvent call = refused, not guessed.
+- Tests: run_all 3/3 layers; real VS Code 156/159 (3 known stale checks).
+- ! For the laptop: still not taken -- machine patches tools 0136 / 0143 / 0145 / 0147 / 0149 (see their sections).
 MD5 清單在 MANIFEST_MD5.tsv。
