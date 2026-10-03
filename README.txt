@@ -742,4 +742,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      操作紀錄 oplog_20261003.txt：新增 1328 行
      設定檔變動：machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+  cpp 0144 4e1569e TEACH-ROTATE —— EastSun 1003「這個畫面幫我加入rotate 的馬達按鈕 讓我可以操控 你應該可以看到MOT_TABLE 哪顆是enable」：Teach 的 Axle Control 本來就有「Rotate」框（In X＝MotorInRotateKit＝M41 MInRotate、Out X＝MotorOutRotateKit＝M42 MOutRotate，網頁用編號對應），原版依 USE_ROTATE_KIT（這台 0）藏起來；HT9050（9050GPIB）改依 Mot_Table Enable 顯示，不改 USE_ROTATE_KIT（打開會讓生產流程啟用旋轉模組）。o2 編過；ctest TeachFormShowBridge／TeachButtonsGen 過。
+  掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
 MD5 清單在 MANIFEST_MD5.tsv。
