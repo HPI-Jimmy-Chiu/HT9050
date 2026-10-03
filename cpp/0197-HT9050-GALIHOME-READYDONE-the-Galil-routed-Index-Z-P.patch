@@ -1,0 +1,83 @@
+From 914ae4f89312df81a08756cb2eefc8cc1589e0a0 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 23:18:34 +0800
+Subject: [PATCH] =?UTF-8?q?HT9050-GALIHOME-READYDONE:=20the=20Galil-routed?=
+ =?UTF-8?q?=20(Index=20Z,=20PCI-1203)=20DS402=20home=20ends=20at=20the=20f?=
+ =?UTF-8?q?irst=20sample=20after=20the=20command=20that=20reads=20READY=20?=
+ =?UTF-8?q?--=20position=200=20=3D=20done,=20elsewhere=20=3D=20failed;=20n?=
+ =?UTF-8?q?o=20HOMING=20sample,=20no=20timing=20(same=20rule=20as=20Pci120?=
+ =?UTF-8?q?3MotorRoute=20RouteHomeDone)=20--=20EastSun=201003=20'=E9=80=99?=
+ =?UTF-8?q?=E6=98=AF=E6=80=8E=E5=9B=9E=E4=BA=8B=E4=B8=8D=E6=98=AF=E9=83=BD?=
+ =?UTF-8?q?=E5=AE=8C=E6=88=90=E4=BA=86=E5=97=8E=3F':=2023:07:48=20MTestZ1'?=
+ =?UTF-8?q?s=20second=20home=20(uhome=20step=201250)=20lasted=200.5=20s,?=
+ =?UTF-8?q?=20the=20tick=20never=20sampled=20HOMING,=20'READY=20for=205=20?=
+ =?UTF-8?q?s=20without=20HOMING'=20failed=20and=20poisoned=20the=20route,?=
+ =?UTF-8?q?=20TI=20reported=20the=20alarm=20and=20ckernel=20GetMotorAlarmC?=
+ =?UTF-8?q?ode=20raised=20WAR240141=20(Out=20Of=20Torque=20/=20Power=20Off?=
+ =?UTF-8?q?)=20on=20a=20READY,=20servo-on,=20alarm-free=20drive.=20Card-si?=
+ =?UTF-8?q?de=20MODE12=20unchanged.=20ctest=20GaliRouteCore=20/=20GaliRout?=
+ =?UTF-8?q?eEngine=20/=20GaliRouteLive=20pass=20(core=20section=20G=20pins?=
+ =?UTF-8?q?=20the=20new=20rule).?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ EtherCAT/Pci1203GaliRouteCore.cpp | 14 ++++++++++++++
+ tests/test_gali_route_core.cpp    | 13 +++++++++----
+ 2 files changed, 23 insertions(+), 4 deletions(-)
+
+diff --git a/EtherCAT/Pci1203GaliRouteCore.cpp b/EtherCAT/Pci1203GaliRouteCore.cpp
+index afb50b1..934b41a 100644
+--- a/EtherCAT/Pci1203GaliRouteCore.cpp
++++ b/EtherCAT/Pci1203GaliRouteCore.cpp
+@@ -984,6 +984,20 @@ int TGaliRouteCore::HomePoll()
+     if (st == kStaErrorStop) { HomeFail("ERROR_STOP during the home"); return kGaliHomeFailed; }
+     if (st == kStaHoming) { sawHoming_ = true; return kGaliHomeRunning; }
+     if (st != kStaReady) return kGaliHomeRunning;
++    //AI(W906-GALIHOME-READYDONE) 20261003: the same DS402 rule as Pci1203MotorRoute RouteHomeDone (AI(W906-HOME-READYDONE)) -- EastSun
++    //  「你只要下指令 該軸就是還沒有回原點狀態」. 23:07:48 MTestZ1's second home (uhome step 1250) lasted 0.5 s, the tick never sampled HOMING,
++    //  and "READY for 5 s without HOMING" failed it: the route was poisoned, TI reported the alarm and ckernel GetMotorAlarmCode raised
++    //  WAR240141 (Out Of Torque / Power Off) on a READY, servo-on, alarm-free drive. Now a sample after the command (pending rule above) that
++    //  reads READY ends a DS402 home: command position 0 = done, anywhere else = failed. No timing. Card-side MODE12 keeps the old rule.
++    if (!homeCardSide_) {
++        homeActive_ = false;
++        if (o.s.cmdPos > 1.0 || o.s.cmdPos < -1.0) {
++            HomeFail("READY after the home command but the command position is " + std::to_string(std::lround(o.s.cmdPos)) + ", not 0 -- the home was interrupted or did not complete");
++            return kGaliHomeFailed;
++        }
++        io_->Log(sawHoming_ ? "home done" : "home done (READY at position 0 after the home command; the home ended before a HOMING sample -- not needed)");
++        return kGaliHomeDone;
++    }
+     if (!sawHoming_) {
+         if (!readySeen_) { readySeen_ = true; readySinceMs_ = now; return kGaliHomeRunning; }
+         if (now - readySinceMs_ >= kHomeNoHomingMs) { HomeFail("READY for 5 s without ever entering HOMING"); return kGaliHomeFailed; }
+diff --git a/tests/test_gali_route_core.cpp b/tests/test_gali_route_core.cpp
+index dfa8b6b..d6cf0cf 100644
+--- a/tests/test_gali_route_core.cpp
++++ b/tests/test_gali_route_core.cpp
+@@ -517,12 +517,17 @@ int main()
+         // Home High Speed 0
+         FakeIo hz; TGaliRouteCore chz; chz.Bind(&hz);
+         CHECK(chz.HomeStart(true, 0, 300, 1.0, 1.0) != 0 && hz.cmds.empty());
+-        // READY 5 s without HOMING
++        // AI(W906-GALIHOME-READYDONE) 20261003: a DS402 home needs no HOMING sample -- the first sample after the command that reads
++        //  READY ends it: command position 0 = done (was: READY 5 s without HOMING = failed), anywhere else = failed
+         FakeIo nh; TGaliRouteCore cnh; cnh.Bind(&nh);
+         cnh.HomeStart(true, 6000, 300, 1.0, 1.0);
+-        nh.poll = 11; CHECK(cnh.HomePoll() == kGaliHomeRunning);
+-        nh.now += 4999; CHECK(cnh.HomePoll() == kGaliHomeRunning);
+-        nh.now += 1;    CHECK(cnh.HomePoll() == kGaliHomeFailed && cnh.Poisoned());
++        CHECK(cnh.HomePoll() == kGaliHomeRunning);              // no sample after the command yet
++        nh.poll = 11; nh.s.cmdPos = 0.0;
++        CHECK(cnh.HomePoll() == kGaliHomeDone && !cnh.Poisoned());
++        FakeIo np; TGaliRouteCore cnp; cnp.Bind(&np);
++        cnp.HomeStart(true, 6000, 300, 1.0, 1.0);
++        np.poll = 11; np.s.cmdPos = 5541.0;
++        CHECK(cnp.HomePoll() == kGaliHomeFailed && cnp.Poisoned());
+         // ERROR_STOP
+         FakeIo es; TGaliRouteCore ces; ces.Bind(&es);
+         ces.HomeStart(true, 6000, 300, 1.0, 1.0);
+-- 
+2.55.0.windows.5
+
