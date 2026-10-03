@@ -1,0 +1,118 @@
+From 1895ddd766530668cfde30e3de2ca7770a20c548 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 19:20:05 +0800
+Subject: [PATCH] =?UTF-8?q?HOME-POWERWAIT:=20the=20full=20HOME=20waits=20f?=
+ =?UTF-8?q?or=20the=20motor=20power=20before=20it=20checks=20Servo=20ON=20?=
+ =?UTF-8?q?and=20homes=20--=20EastSun=201003=20'=E4=BD=A0=E6=B2=92?=
+ =?UTF-8?q?=E6=9C=89=E7=AD=89servo=20on=20=E8=A8=8A=E8=99=9F=E5=9B=9E?=
+ =?UTF-8?q?=E4=BE=86=20=E5=B0=B1=E7=9B=B4=E6=8E=A5=E5=85=A8=E9=83=A8?=
+ =?UTF-8?q?=E6=AD=B8=E5=8E=9F=E9=BB=9E=3F':=2019:07:48.6=20the=20motor=20r?=
+ =?UTF-8?q?elay=20read=201->0=20and=20came=20back=20at=2019:07:52.6,=20yet?=
+ =?UTF-8?q?=20the=200.5=20s=20check=20let=20HOME=20go=20on=20(the=20drive?=
+ =?UTF-8?q?=20SVON=20bit=20is=20no=20proof=20the=20motor=20power=20is=20th?=
+ =?UTF-8?q?ere)=20and=20the=20homes=20timed=20out=20('Motor=20not=20home?=
+ =?UTF-8?q?=20yet'=2019:08:35).=20Now=20case=20302=20first=20needs=20SW[Sw?=
+ =?UTF-8?q?MotorRelay]=20+=20Sen[SnMotorPower]=20(when=20enabled)=20ON=20f?=
+ =?UTF-8?q?or=201=20s=20in=20a=20row;=20after=20an=20OFF=20it=20re-sends?=
+ =?UTF-8?q?=20Alarm=20Reset=20+=20Servo=20ON=20to=20every=20enabled=20moto?=
+ =?UTF-8?q?r=20and=20waits=201=20s,=20then=20the=20SVON=20/=20alarm=20chec?=
+ =?UTF-8?q?k=20(20=20x=201=20s=20retries)=20runs;=20power=20not=20back=20w?=
+ =?UTF-8?q?ithin=2020=20s=20=3D=20HOME=20stops=20('Motor=20power=20is=20no?=
+ =?UTF-8?q?t=20on!')=20with=20the=20reason=20in=20the=20op=20log=20(HOME?=
+ =?UTF-8?q?=20lines).=20ctest=20homeclass=20/=20HomeMonitor=20/=20HomeBloc?=
+ =?UTF-8?q?k=20/=20NoteMotorError=20pass?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ uhome.cpp | 59 ++++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 58 insertions(+), 1 deletion(-)
+
+diff --git a/uhome.cpp b/uhome.cpp
+index 2bd67c1..84f789f 100644
+--- a/uhome.cpp
++++ b/uhome.cpp
+@@ -708,7 +708,11 @@ static int        s_W906HomeAfterReset = 310;
+ void (*g_W906HomeNote)(const char*) = 0;      //AI(W906-HOME-ALMRESET-3) 20261003: the op log's HOME line (tools/wb_serve.cpp W906_OpLogInit registers it); 0 = console only
+ static void W906_HomeNote(const std::string& s) { std::printf("[HOME] %s\n", s.c_str()); if(g_W906HomeNote) g_W906HomeNote(s.c_str()); }
+ static int        s_W906HomeResetTries = 0;
+-static std::string s_W906HomeSent;            //AI(W906-HOME-ALMRESET-3) 20261003: the axes case 300 sent Alarm Reset + Servo ON to   //AI(W906-HOME-ALMRESET-2) 20261003: 1 s retries before an axis counts as abnormal (the motor power relay comes back ~4 s after HOME starts)
++static TQPF_Timer s_W906HomePowerStable;      //AI(W906-HOME-POWERWAIT) 20261003: motor power ON 1 s in a row before the SVON check
++static TQPF_Timer s_W906HomePowerTimeout;     //  20 s for the motor power to come back
++static bool       s_W906HomePowerOk = false;
++static int        s_W906HomePowerOffTicks = 0;
++static std::string s_W906HomeSent;           //AI(W906-HOME-ALMRESET-3) 20261003: the axes case 300 sent Alarm Reset + Servo ON to   //AI(W906-HOME-ALMRESET-2) 20261003: 1 s retries before an axis counts as abnormal (the motor power relay comes back ~4 s after HOME starts)
+ bool ProcessMotorHome(bool Flag2)
+ {
+ #ifndef SOFT_SIMULTE
+@@ -2277,6 +2281,9 @@ bool ProcessMotorHome(bool Flag2)
+             fHome->iHomeStep=302;
+             s_W906HomeResetWait.SetMSAndOn(500);                                //  0.5 s: the drives answer the reset / Servo ON (also the brakes' servo-ON 0.5 s rule)
+             s_W906HomeResetTries=0;
++            s_W906HomePowerOk=false;                                            //AI(W906-HOME-POWERWAIT) 20261003: the power must read ON 1 s in a row first
++            s_W906HomePowerOffTicks=0;
++            s_W906HomePowerStable.SetMSAndOn(1000);
+             W906_HomeNote("step 300: alarm reset + servo on sent to " + s_W906HomeSent);   //AI(W906-HOME-ALMRESET-3) 20261003
+             MotorTask=FIRST_HOME;                                               //第一階段回Home
+             for(int i=0; i<TOTAL_MOTOR; i++)
+@@ -2296,6 +2303,56 @@ bool ProcessMotorHome(bool Flag2)
+                 SoftStop=true;
+                 break;
+             }
++            //AI(W906-HOME-POWERWAIT) 20261003: EastSun「你沒有等servo on 訊號回來 就直接全部歸原點?」-- 19:07:48.6 the motor relay read 1->0
++            //  and came back 0->1 at 19:07:52.6, yet the 0.5 s check let HOME go on (the drive's SVON bit is no proof the motor power is there)
++            //  and the homes timed out ("Motor not home yet" 19:08:35). Now: the motor power (SW[SwMotorRelay] + Sen[SnMotorPower] when
++            //  enabled) must read ON for 1 s in a row; every OFF->ON re-sends Alarm Reset + Servo ON to every enabled motor, then the
++            //  SVON / alarm check below runs. Power not back within 20 s = HOME stops with the reason in the op log.
++            {
++                const bool pwr = SW[SwMotorRelay].Status() && (Sen[SnMotorPower].Enable==false || Sen[SnMotorPower].IsOn());
++                if(!pwr)
++                {
++                    if(s_W906HomePowerOk || s_W906HomePowerOffTicks==0)
++                        W906_HomeNote(std::string("waiting for the motor power: SwMotorRelay=") + (SW[SwMotorRelay].Status() ? "1" : "0") +
++                                      " SnMotorPower=" + (Sen[SnMotorPower].Enable ? (Sen[SnMotorPower].IsOn() ? "1" : "0") : "n/a"));
++                    s_W906HomePowerOk=false;
++                    s_W906HomePowerStable.SetMSAndOn(1000);
++                    if(++s_W906HomePowerOffTicks==1) s_W906HomePowerTimeout.SetSecAndOn(20);
++                    if(s_W906HomePowerTimeout.Off())
++                    {
++                        W906_HomeNote("STOP: the motor power did not come back within 20 s");
++                        fHome->ListBox1->Items->Insert(0, "Motor power is not on (SwMotorRelay / SnMotorPower)");
++                        StopAllMotor();
++                        SystemStart=false;
++                        ShowMyMessage("Motor power is not on!", "馬達電源沒有開!", "ProcessMotorHome");
++                        fHome->fAbort=false;
++                        fHome->iHomeStep=1;
++                        SoftStop=true;
++                        return true;
++                    }
++                    break;
++                }
++                if(!s_W906HomePowerOk)
++                {
++                    if(!s_W906HomePowerStable.Off())                            //  ON, but not yet 1 s in a row
++                        break;
++                    s_W906HomePowerOk=true;
++                    if(s_W906HomePowerOffTicks>0)                               //  it was OFF: the drives lost their Servo ON -- send it again
++                    {
++                        for(int i=0; i<TOTAL_MOTOR; i++)
++                        {
++                            if(fHome->HomeClass[i]->THomeFlag==0 || MOT[i].Motor==NULL || MOT[i].Motor->Enable==false)
++                                continue;
++                            MOT[i].Motor->ResetState();
++                            MOT[i].ServoOnOff(true);
++                        }
++                        W906_HomeNote("motor power back (on for 1 s): alarm reset + servo on sent again to " + s_W906HomeSent);
++                        s_W906HomeResetTries=0;
++                        s_W906HomeResetWait.SetMSAndOn(1000);
++                    }
++                    s_W906HomePowerOffTicks=0;
++                }
++            }
+             if(!s_W906HomeResetWait.Off())
+                 break;
+             {
+-- 
+2.55.0.windows.5
+
