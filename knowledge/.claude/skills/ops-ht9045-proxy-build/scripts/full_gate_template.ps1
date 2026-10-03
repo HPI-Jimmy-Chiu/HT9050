@@ -10,6 +10,7 @@ git -C $WT fetch -q origin 2>&1 | Out-File $LOG -Append -Encoding ascii
 git -C $WT checkout -f --detach $C 2>&1 | Out-File $LOG -Append -Encoding ascii
 W "=== HEAD $(git -C $WT rev-parse --short HEAD)"
 $env:PATH='C:\MinGW\bin;C:\CMake\bin;C:\Program Files\Git\cmd;C:\Program Files\nodejs;C:\Windows\System32;C:\Windows'   # nodejs: the node-based ctests (WB_WsLink, WB_F5Contract, D015_A01MenuPage ...) are only registered when CMake finds node (20260930: missing before, those tests silently did not run)
+$env:HT9045_GOLDEN_ROOT='D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260618'   # golden 0618 (RULINGS_20261003 #2), read by dfm2rc_fidelity / dfm2rc_idempotent / TeachButtonsGen (ST01-E E-032 20261003)
 Set-Location "$WT\HT9011UC_Cpp_V3.33.906.0"
 # Real-file check lists D:\HT9045\system and D:\HT9045\IniData too (20260930: cBinSel writes Bin Func keys, WebLogin_Reauth stamps login.dat / levelset.dat)
 # 20261002: also D:\PrecautionRecord and D:\MajorMaintenanceRecord, folders included (TfObserver FormShow / LoadPrecautionMenu mkdirs a real D:\PrecautionRecord\system in ctests that open the Observer; E-021 writes maintenance records there)

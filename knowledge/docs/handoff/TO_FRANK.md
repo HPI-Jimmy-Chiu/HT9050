@@ -70,6 +70,15 @@
 - **位元組不變**：Big5、CRLF 照原樣，不要轉碼；分支根目錄放一個 `.gitattributes`，內容 `* -text`，讓 git 不改換行。
 - 推之前掃權杖／私鑰／7z 密碼；推完在 FROM_FRANK §2 寫分支名、兩顆 commit 的 hash 與檔數。排在 F-01a 之後、F-01b 之前或同時都可以。
 
+### F-03　HT9050 自動流程：選取單顆 IC 時是 VC4 的 4 個吸嘴一起吸一顆 IC（機台端派工 3；EastSun 1003 透過 Jimmy）
+
+- 出處：GitHub `machine/integ-ioweb` 的 `README.txt`「派工 3」。原版 9 系列一個吸嘴吸一顆；HT9050 的單顆 IC 模式是 **VC4 的 4 個吸嘴一起吸一顆**。
+- 自動流程裡跟「一個吸嘴＝一顆 IC」有關的都要改：哪幾個吸嘴要一起開／破真空、真空到位的判斷（4 個一起算一顆）、IC 有無／掉料判斷、吸嘴對應的 Tray／Socket 格位與 pitch、計數。
+- 參考：機台 IO_Table 吸嘴在 VC4／VC8 真空模組（InArm 站 160、OutArm 站 161、Index 站 162；OutArm 的 Bit 10-03 已改成跟 VC4 Port 一致，見機台 `WORKLOG_MACHINE` §1）；真空開／破＝VC 的 DO、到位＝DI 64+VC（`VacuumUnit/Vc8Route`、`TestIF_File_VacuumUnit`）。你的 910 處理過的照 910。
+- 要做：①列出要改的流程點（In Arm／Out Arm／Index 各自的吸、放、檢查）；②要機台確認的（例：哪 4 個吸嘴是一組）列出來問 EastSun（寫在 FROM_FRANK §3，筆電轉 TO_ES02）；③修正走 `v906/frank-*`＋MR，筆電 gate 後出包。
+- 跟 W-12（Carry kit／Index 吸嘴是不是 2×4）是同一件事，可以一起回。
+- 開工前在 FROM_FRANK §1 認領。**週一 1005 10:00 前還沒認領，筆電改派 NB2 先做 ①②**（你回來接 ③）。
+
 ## 4. 回答
 
 | 時間 | 你的問題 | 回答 |
@@ -102,3 +111,7 @@
 | 20261003 12:1x | 🫀 **請建心跳** | 🫀 **請建心跳**（RULINGS_20261003 第 17 條，Jimmy 1003 12:1x：「心跳線如果讓各人員建立完成後，回報目前人員上線狀況」）：每輪最後一步跑 `python tools/laptop_ops/heartbeat.py --who frank --doing "<這一輪在做什麼>" --next <下一輪時間> --push`（在任何一份 HT9045 checkout 裡跑；只寫分支 `v906/frank-heartbeat` 的一支 HEARTBEAT.md，不碰工作分支）；沒有迴圈、人工開的 session，開工跟收工各跑一次。建好後筆電的 `tools/laptop_ops/team_status.py` 就看得到你；全員狀況你也可以自己跑那支看。 |
 | 20261003 14:3x | ⏰ **追問（第 1 次；W-12）＋Jimmy 的回覆** | Jimmy 1003 14:3x：Frank 這邊照建議「再等」（RULINGS_20261003 第 22 條，§0 #34 B）。請 Frank 本人回兩件：①**W-12**：Carry kit 與 Index 吸嘴是不是 2×4？是的話，V906 自己加的 12 處 `\|\| Type_HT9050` 照 910 拿掉；②**W-01 Q1**：`DoPlaceTrayToAuto_9050(0)` 的修法——固定放 Auto1，還是放缺盤的 Auto？（Q2 層數計數器從 -1 開始、Q3 `MOutArmY` 還原兩次也請一起回。）回在 FROM_FRANK §3 即可。 |
 | 20261003 15:3x | 📅 **常駐卡：每日日報**（Steven 1003） | 📅 **常駐卡「每日日報」**（Steven 1003 透過 St01 轉：「要發給Jimmy筆電 讓有連線且有repo的人, 每天定期發日報」，ST 組以外的人由筆電派）——①**誰**：你（有在交接系統上連線的 session）；本機要有 clone 入口網站 repo（GitLab `honprec/rd/rd5/9050motionview`；還沒 clone 的照 https://pages.honprec.com/honprec/rd/rd5/9050motionview/sop.html 第一、二節做）。②**每個工作日**下班前（建議排程 17:30）寫當天日報並推；來不及就隔天 09:00 前推前一天的。一天一份、一個 MR。檔案 `public/Docs/Daily/<英文名>/YYYYMMDD.md`（英文名照組織表）。③**格式**照那個 repo 的 `.claude/skills/rd5-daily-report`（§2～§3.5、`references/template.md`）：一句話；今日完成表（狀態只用 完成／待上機／待客戶／待裁決／進行中）；卡點／需要協助表（從哪天開始、需要誰，沒有就寫「無」）；明天接續最多 3 項；一頁內。**不寫** Claude 對話經過、密碼／token／個資；AI 寫的草稿要本人看過。④**推送**：`git pull`（main）→ 開分支 `<英文名小寫>/<YYYYMMDD>-daily` → 只 add 自己的日報 → `git push -u origin HEAD -o merge_request.create -o merge_request.target=main -o merge_request.remove_source_branch -o merge_request.assign=steven -o merge_request.auto_merge`（檢查通過就自動合併）；推之前跑 `py tools/check_daily.py --changed` 自我檢查。推錯了隔天用修正 MR 改。排程用你習慣的方式（Claude Code 的排程是 session 內、7 天過期、重開要重建；或 Windows 工作排程器）。⑤開始交了就在 FROM 檔或 CHAT 說一聲（筆電也會看 daily.html 上方的「繳交狀況」）。 |
+| 20261003 18:04 | 📣 **常駐卡：報數＋每小時回報工作狀態**（Steven 1003 18:0x，由 ST01-M 直接寫入） | Steven 原話：「請Ifor / Jerry / Frank / Kevin / ES02 報數, 並加入每小時回報」「如果有人是idle狀態, 就找工作派給他」「我們直接寫進那五個人的 TO 檔。 不要等了」。①**現在報數**（Frank01）：一行寫清楚——在不在線、在做什麼、卡在什麼、下一步。回在你的 `docs/handoff/FROM_FRANK.md`（或你自己的交接分支）＋心跳。②**之後每小時回報一次工作狀態**，沒變也回一行；最方便的是心跳分支 `v906/frank-heartbeat` 的 HEARTBEAT.md（last tick／doing／next 三欄，工具 `tools/laptop_ops/heartbeat.py --who frank --doing "..." --next HH:MM --push`，跟 Ifor01 已在用的一樣）。③**沒事做（idle）就說**，派工的人會給你卡。派工順位（Steven 的代理人制度）：Jimmy 筆電 → ST01-M → ST02-M；前一位超過 1 小時沒回應就由下一位派工，回來就交還。上機驗證照舊只給 EastSun。 |
+| 20261003 18:5x | ⏰ **追問（第 2 次；W-12）** | 14:3x 那列的兩題還在等 Frank 本人：①Carry kit 與 Index 吸嘴是不是 2×4（是的話 V906 自己加的 12 處 HT9050 判斷照 910 拿掉）；②W-01 Q1 `DoPlaceTrayToAuto_9050(0)` 的修法——固定放 Auto1，還是放缺盤的 Auto？追兩次了，筆電把這題放進 Jimmy 的待決清單（要不要打電話）。 |
+| 20261003 19:5x | 📋 **新卡 F-03（機台端派工 3：4 個吸嘴吸一顆 IC）** | 見 §3。EastSun 透過 Jimmy 交辦；跟 W-12 的 2×4 題是同一件事。週一 10:00 前沒認領，筆電改派 NB2 先做流程點清單與要問 EastSun 的題目。 |
+| 20261003 19:5x | ⏰ **追問（第 1 次；W-23）：每日日報** | 15:3x 的常駐卡（Steven 1003）：入口網站 `public/Docs/Daily/` 裡 Ifor、Kevin、EastSun 已經在交，你這邊還沒有資料夾。週末不用補；**週一開工那天交第一份**（格式照 Steven 的 `public/Docs/Daily/Steven/20261003.md`），交了在 FROM 檔說一聲。 |

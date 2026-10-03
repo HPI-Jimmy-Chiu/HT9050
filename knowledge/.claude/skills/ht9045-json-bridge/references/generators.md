@@ -26,7 +26,7 @@
 | 輸出 | `FileRW/<struct>.cpp`（一個結構一支）＋整合檔 `_registry.cpp`／`README.md`／`_formbridge_sources.cmake` | `FileRW/<struct>.gen.inc`（產生的 golden 方法本體）＋手寫的 `FileRW/<struct>.cpp`（開機與 `PageDesc`） |
 | 端點 | `GET /api/form/<Page>` ＋ `WS form.save` | `WS editlist.get`／`editlist.save`（`tag=<struct>`） |
 | 傳輸層 | `JsonBridge/FormBridge.h/.cpp`（`FormState`／`BridgeDesc`）、`JsonBridge/FormJson.cpp` | `FileRW/_EditPage.h`（`PageDesc`／`PageRegistrar`）、`FileRW/_EditList.h/.cpp`（`EL<T>` 具名替身） |
-| 目前結構 | 只剩 `HotPlateForm_File`（`FileRW/_registry.cpp` `kBridgeCount = 1`；`TFTestIF`／`TfSetup`／`TfYieldMonitoring` 於 `f89be4ce` 退役，其餘早先改走 C 形狀，見 `tools/formbridge/_retired/README.md`） | `_integrated.txt` 35 個（34 支 `gen_editlist.py`＋`Teach` 用 `gen_teach_editlist.py`；20260927 加 `ACTForm`／`Winway`／`Monitor`，見廿五）。**逐結構總表見 skill `ht9045-html-json` `route-c-golden-bridge.md` §6**；逐頁驗收見 `write-inventory.md` 〇 |
+| 目前結構 | 只剩 `HotPlateForm_File`（`FileRW/_registry.cpp` `kBridgeCount = 3`＝它＋手寫的 `TfTeach`／`Tfiosetview`，見 2.2 ⛔ E-031；`TFTestIF`／`TfSetup`／`TfYieldMonitoring` 於 `f89be4ce` 退役，其餘早先改走 C 形狀，見 `tools/formbridge/_retired/README.md`） | `_integrated.txt` 35 個（34 支 `gen_editlist.py`＋`Teach` 用 `gen_teach_editlist.py`；20260927 加 `ACTForm`／`Winway`／`Monitor`，見廿五）。**逐結構總表見 skill `ht9045-html-json` `route-c-golden-bridge.md` §6**；逐頁驗收見 `write-inventory.md` 〇 |
 
 兩者都是**直接讀 golden BCB 原檔**（cp950，`GOLDEN = D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy`）
 機械改寫，不是移植樹手寫、也不翻譯移植樹的表單本體——這是 20260924 下午的裁決（`decisions.md` 二之三），
@@ -72,6 +72,13 @@ python tools/gen_formbridge.py                  # 全部重產 ＋ FileRW/_regis
 內容可能落後於 `FileRW/` 目錄實際有的 `.cpp` 檔（工程師用 `--only` 產出的新檔還沒整合），**要看檔案是否
 存在，不要只看這兩份索引**。
 
+⛔ 20261003 補（AI(W906-E031)，E-031 第二階段，St01）：**手寫的 bridge 走 keep-list**。`TfTeach`／`Tfiosetview`（`FileRW/TeachFormShow_File.cpp`、
+`FileRW/IoSetViewFormShow_File.cpp`）不是產生的，20261002 是手改 `_registry.cpp`／`_formbridge_sources.cmake` 加的列，全量一跑就被刪（build 不會紅）。
+現在列在 `tools/formbridge/_hand_kept.py`（`HAND_KEPT`：class、cpp、三處行尾註解原文；`COUNT_NOTE`），全量重產照表接在產生的列後面、跟已 commit 的
+一字不差；新增手寫 bridge 只改這張表。`python tools/gen_formbridge.py --out <資料夾>` 把輸出寫到別處（可配 `--only`）。
+ctest `E031_FormBridgeFullRun`（`tools/formbridge_fullrun_check.py`）全量跑進 TEMP 跟已 commit 的兩檔比，內建反向檢查；細節見 skill
+`ht9045-html-json` `route-c-golden-bridge.md` 的 E-031 (g)。
+
 ### 2.3 建置：只收兩份產生的正面清單（不 GLOB）
 
 ⛔ 20260926 改寫（舊的 GLOB 敘述在 `archive/generators_superseded.md`；第八輪審查 M-2 就已改掉，見十）。
@@ -80,7 +87,7 @@ python tools/gen_formbridge.py                  # 全部重產 ＋ FileRW/_regis
 | 清單 | 誰寫 | 收什麼 |
 |---|---|---|
 | `FileRW/_editlist_sources.cmake` | `gen_editlist.py`（**不帶 `--only`** 的整合跑，`gen_editlist.py:535-549`） | 共用層 `_EditList.cpp`／`_EditPage.cpp`／`_KitSuck.cpp` ＋ `tools/editlist/_integrated.txt` 列到的結構入口 `FileRW/<struct>.cpp`；`_integrated.txt` 裡不在 `tools/editlist/` 的名字（`Teach`）只要 `FileRW/<名>.cpp` 存在也收 |
-| `FileRW/_formbridge_sources.cmake` | `gen_formbridge.py`（不帶 `--only`） | `_registry.cpp` ＋ 已整合的 A 形狀（現在只有 `HotPlateForm_File.cpp`） |
+| `FileRW/_formbridge_sources.cmake` | `gen_formbridge.py`（不帶 `--only`） | `_registry.cpp` ＋ 已整合的 A 形狀（現在只有 `HotPlateForm_File.cpp`）＋ `tools/formbridge/_hand_kept.py` 的手寫 bridge（`TeachFormShow_File.cpp`、`IoSetViewFormShow_File.cpp`；⛔ 20261003 E-031） |
 
 手寫、不在兩份清單裡的 `FileRW/Teach.cpp`、`MainBoot.cpp`、`MainClick.cpp`、`Zteach.cpp`、`MainBackup.cpp`、`MainClose.cpp`、
 `CfgTrayPlate.cpp`、`MainRecord.cpp` 直接寫在 `CMakeLists.txt:3404` 那一行（`add_executable(wb_serve …)`，20260927 HEAD 227b79db；

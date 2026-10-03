@@ -96,6 +96,47 @@
 - 會動機構的人要在機台旁：A35（Contact 頁 START／PAUSE＝第 130 包那張卡的同一件事）、A37／A46（OTD 對接氣缸，USE_OTD=1 的機台）、A47（運轉中按 Auto Clean：先 One Cycle 再 Auto Clean）。A53（ADAM-6024 下壓力）只在把 `W906_ADAM_EP_LIVE` 打開之後才測。
 - 結果照 E-01 第 4 點寫在 FROM_ES02 §2（每項 OK／NG、哪一包，註明 E-07＋A 編號），筆電轉給 St01／St02。
 
+### E-08　Gear Ratio「手推量測」第一次上機：先用 5 mm 以內的小推，確認按伺服 ON 時軸不會彈回（第 134 包起；St01 1003 18:30 審查 M2）
+
+- 背景：手推量測是 Jimmy 1003 要的（RULINGS_20261003 第 8 條）：Gear Ratio 分頁的開關切到「手推」→ 開始 → 伺服 OFF → 用手把軸推到尺上的刻度 → 伺服 ON → 輸入尺上量到的距離 → 預覽 → 存檔。整個過程不下任何移動指令；只給 PCI1203 的直線軸（Z 軸選不到）。
+- **風險（M2）**：golden 按伺服 ON 時會把卡上的命令位置對齊到編碼器；移植樹在 1203 上做不到。如果驅動器一上電就往舊的命令位置走，**按伺服 ON 的那一刻，軸會彈回推之前的位置（整段推的距離）**，手還在軸上就會被夾到。
+- **第一次請這樣做**：選一支直線軸 → 只推 **5 mm 以內** → **手離開軸、站開**，再按伺服 ON → 看軸有沒有動。
+- 回報（寫在 FROM_ES02 §2，註明 E-08）：①按伺服 ON 時軸有沒有彈回（有的話大概幾 mm）；②頁面上顯示的 E0／E1；③哪一包、哪一軸。**有彈回就不要再用手推模式**，筆電請 NB2 看能不能像 golden 那樣在伺服 ON 時對齊命令位置。
+- 量完（不論存檔或中止）：**先重開 wb_serve、再回原點（HOME）**，才動那一軸。
+- 這張卡在第 134 包推上 GitHub 之後才能做（第 134 包要等 NB2 修好 St01 審查的 M1：推過軸、沒存檔就結束時 HomeFlag 要設 0）。
+
+### E-09　機台螢幕上哪些視窗被遮住或被截斷：逐一列出並全部修正（機台端派工 2；EastSun 1003 透過 Jimmy）
+
+- 出處：GitHub `machine/integ-ioweb` 的 `README.txt`「派工 2」。環境：HMI 外殼（`build_hmi_shell\ht9045_hmi.exe`，WebView2）開 background.html，主畫面固定 925×720，畫面縮放約 110%（main.html 的 🔍）。
+- EastSun 的規則：**任何提示／浮動框都不能擋到畫面內容**。
+- 要做：每一個頁面／視窗都開一次，逐一列出：位置、大小、內容有沒有超出、有沒有被別的視窗或浮動提示蓋住；然後全部修正（走 `v906/es02-*` 分支＋MR，筆電 gate 後出包）。你們的 HTDESIGNER 有機台畫面框（0.155 起），可以直接用 925×720 看。
+- 機台端 10-03 已經修好的不用重做：Temp Set 頁（灰框蓋數值、欄位標題空白、狀態列蓋表格＝web 0098，已在第 134 包）；主畫面軟體面板鍵被公司 Logo 的透明框蓋住（web 0101，ScanKey 那一串，St02 整合中）。
+- 結果：清單寫在 FROM_ES02 §2（註明 E-09），修正開 MR。開工前在 FROM_ES02 §1 認領一句。
+
+### E-10　Index Z1 扭力的上機量測（機台端派工 1 的後續；NB2-1 R197）
+
+- 結論先講：**Index Auto Height 今天在 HT9050 上不會動 Z**——移植樹只有宣告、主流程呼叫在 `#if 0`，網頁選 Auto Height 按 Contact START 只會伺服 ON。所以現在是安全的，但功能不存在。
+- golden 讀扭力不是經 Galil，是 RS-232（COM2）直接跟 Index 驅動器講；HT9050 沒有開扭力 COM 埠，`edTorue0` 沒人寫。照 golden 翻過來會卡在 case 555（golden 沒有逾時）＝不會壓下去，但也不會有結果。
+- **真正危險的是把 1203 的 6077h（實際扭力）直接接進扭力欄**：6077h 是 0.1 % 單位（差 10 倍），正負號跟方向走；Mitsubishi 設定下 golden 不取絕對值 ⇒ 門檻可能永遠不觸發，Z 每步往下直到高度下限，力量只剩扭力上限在擋。
+- **要接之前，請在機台量這五項**（EastSun 在旁邊、**先不裝 socket**、Z 在高處、慢速）：
+  1. 用量錶確認 Index Z1（MTestZ1，1203 上的 M14）每 mm 幾個計數、哪個方向是往下（預期 100 counts／mm）。
+  2. 寫扭力上限 400（40 %），讀回 60E0h／60E1h；同時讀 6072h（最大扭力）、6076h（額定扭力）。量完把上限改回原值。
+  3. 靜止時、慢速空中往下時各讀 6077h：記下正負號與大小（預期幾 % 以內），並確認監看器標示「單位已確認」。
+  4. 下面放剛性塊或荷重元，上限 100（10 %），每次往下 0.1 mm：確認 |6077h| 停在上限附近；同時看 60F4h（位置追隨誤差）對 6065h（容許範圍），看驅動器會不會跳警報。
+  5. 用荷重元量 10／20／40 % 各是幾 kgf，跟 golden 的 kg 表比對（golden 註解寫「12% = 60kg」，只有註解）。
+- 結果寫 FROM_ES02 §2（註明 E-10）。要不要、怎麼解這個功能的閘是 Jimmy 的決定（NIGHT_REPORT §0 第 86 項）；量測結果是那個決定的依據。
+
+### E-11　開機時 8 支 Z 軸的煞車：先量四項，再請 EastSun 決定兩題（機台端派工 6 的答案；NB2-1 R200／U17）
+
+- **(B) 安全疑慮**：移植樹的逐軸放煞車（`BrakeAxisTick`，EastSun 0926／0929 的規則）看到 SVON 0.5 秒就放；開機時的 SVON 是上一輪留下的（1203 的 SVON 斷電不會掉），所以 8 支有煞車的 Z 軸（M14、M03、M22、M35、M36、M38～M40）會在馬達電源繼電器 ON 之前被放開，只剩 `SnMotorPower` 在擋；接著開機上電又鎖、4 秒後再放。golden 開機只放一次（上電＋延遲之後）。
+- **請量**（EastSun 在旁邊、**Z 軸下方先淨空**）：
+  1. 開機與關程式時，馬達電源繼電器的**實體**輸出有沒有掉（看燈或量線圈，不是 oplog 的軟體值）。
+  2. 手動切繼電器 OFF：`SnMotorPower` 有沒有跟著變 OFF、要多久。
+  3. 繼電器 OFF 時，各軸 svo 與驅動器 6041h（Statusword）的 Operation enabled／Voltage enabled 掉不掉。
+  4. 開機前幾秒看 8 支 Z 軸的煞車燈與高度記號：有沒有在繼電器 ON 之前放開、軸有沒有往下滑。
+- **請 EastSun 決定兩題**：①放煞車條件要不要加回 `bMotorPowerState && MotorPowerOnDelay<=0`（**NB2-1 建議要**：開機只剩 golden 那一次放開；運轉中逐軸放煞車照 0929 規則不變；0929 拿掉它的理由「G31a 要等約 100 次」在 0930 之後已經過期）；②開機要不要照 golden 對每支啟用的 1203 軸 Servo ON（現在只做 M35；沒回答前維持現狀）。
+- 結果寫 FROM_ES02 §2（註明 E-11）。機台端也在 GitHub README（`567fa51`）看得到同樣內容。
+
 ## 4. 回答
 
 | 時間 | 你的問題／回報 | 回答 |
@@ -167,3 +208,15 @@
 | 20261003 14:3x | 🔧 **E-08（不急，有空再做）：量 Teach 頁 Arm Cell 的到位誤差**（Jimmy 1003 14:3x 回 §0 #70 ①：先維持 ±0.1 mm／3 秒，等你們量了再調；RULINGS_20261003 第 22 條） | 人在機台旁、Teach 頁 Arm Cell 指定一顆吸嘴走到 Loader (1,1)、(1,N) 等幾格，記下走完後編碼器跟目標差多少（mm）、多久到位；有沒有超過 0.1 mm 或 3 秒才到的。結果寫在下一次推 GitHub 的 README 一句就好。 |
 | 20261003 15:2x | ⓘ **MC01 13:49 推的 cpp 0149／web 0093（MT-COPYALL）也收進第 51 批** | 照原樣 `git am`（b51 `6263f5e7`／`35ce403a`），第 133 包會帶著，套包時不用再重放。同一批另有：Arm Cell 正在走或手動教導中，**任何來源的 HOME 都會被拒絕**（之前只有網頁 HOME 會擋）；Arm Cell 按 GO 時舊的通知框還開著就拒絕。 |
 | 20261003 15:3x | 📅 **常駐卡：每日日報**（Steven 1003） | 📅 **常駐卡「每日日報」**（Steven 1003 透過 St01 轉：「要發給Jimmy筆電 讓有連線且有repo的人, 每天定期發日報」，ST 組以外的人由筆電派）——①**誰**：你（有在交接系統上連線的 session）；本機要有 clone 入口網站 repo（GitLab `honprec/rd/rd5/9050motionview`；還沒 clone 的照 https://pages.honprec.com/honprec/rd/rd5/9050motionview/sop.html 第一、二節做）。②**每個工作日**下班前（建議排程 17:30）寫當天日報並推；來不及就隔天 09:00 前推前一天的。一天一份、一個 MR。檔案 `public/Docs/Daily/<英文名>/YYYYMMDD.md`（英文名照組織表）。③**格式**照那個 repo 的 `.claude/skills/rd5-daily-report`（§2～§3.5、`references/template.md`）：一句話；今日完成表（狀態只用 完成／待上機／待客戶／待裁決／進行中）；卡點／需要協助表（從哪天開始、需要誰，沒有就寫「無」）；明天接續最多 3 項；一頁內。**不寫** Claude 對話經過、密碼／token／個資；AI 寫的草稿要本人看過。④**推送**：`git pull`（main）→ 開分支 `<英文名小寫>/<YYYYMMDD>-daily` → 只 add 自己的日報 → `git push -u origin HEAD -o merge_request.create -o merge_request.target=main -o merge_request.remove_source_branch -o merge_request.assign=steven -o merge_request.auto_merge`（檢查通過就自動合併）；推之前跑 `py tools/check_daily.py --changed` 自我檢查。推錯了隔天用修正 MR 改。排程用你習慣的方式（Claude Code 的排程是 session 內、7 天過期、重開要重建；或 Windows 工作排程器）。⑤開始交了就在 FROM 檔或 CHAT 說一聲（筆電也會看 daily.html 上方的「繳交狀況」）。 |
+| 20261003 17:2x | 🔴 **上機：GitHub 第 133 包——機台建置請改 -O0；Arm Cell 走或手動教導時任何 HOME 都會被擋；GO 時舊通知框開著會被拒絕** | 前提：第 132 包已套，照舊保留你們 MachineType.h 的 `W906_HT9050_ORG_INVERT`、`WB_ENGINE_MOTOR_1203`／`WB_PUMP_1203_START_RING`。①**建置改 -O0**（第 18 條；這包起整棵樹 `-fexcess-precision=fast`），改完重建，下次推 GitHub 寫一句「已改 -O0」，並重跑 `Adam6024_Pressure`。②Arm Cell 第一次讀到 Z 離開原點就停 X／Y；③**HOME 全來源被擋**（網頁、面板、SECS、自動流程）——Arm Cell 在走或手動教導中按 HOME 會被拒絕，這是預期的；④Arm Cell 按 GO 前先關掉舊的通知框；⑤逗號清單照 BCB6 切；⑥你們自己的 0144／0146～0149、0088／0089／0091～0093 都在包裡，不用再重放。**請回（W-14／W-19）**：`[FASTCLK]`、BinDisplayLog、`Adam6024_Pressure`、接地板／OTD、Ifor 的兩題。 |
+| 20261003 17:3x | ⓘ **給 EastSun／MC01：機台 11:0x～17:0x 推的修正，筆電怎麼收** | ①**收進第 52 批**（gate b52a 17:24 起跑，綠了就是第 134 包，套包時不用再重放）：cpp 0151 JOG-VLTIME、0159 WORKLOG，web 0095 IO-SMALLY、0098 TEMPSET-CLIP。②**先等**：SCANKEY 那一串（cpp 0152／0153／0154／0156／0157、web 0096／0097／0099～0101）——St02 手上的 S-20 也在移植同一個 golden 面板鍵功能，筆電先請 St02 對過兩份再一起收（機台照舊在本地保留）；cpp 0155 EXIT-ORDER 依賴那一串，一起等。③**請 MC01 把 MT-ACCLIVE 單獨推一支 patch**：它包在 0150（PKG-132 套包紀錄）裡，筆電拆不乾淨；單獨一支就照原樣收。④**cpp 0158 BYPASS-WAR1603（暫時跳過「氣壓不足」告警）只留在機台本地，不進共用的樹**——這是安全告警，氣源修好請拿掉，拿掉時在 README 說一聲。 |
+| 20261003 18:04 | 📣 **常駐卡：報數＋每小時回報工作狀態**（Steven 1003 18:0x，由 ST01-M 直接寫入） | Steven 原話：「請Ifor / Jerry / Frank / Kevin / ES02 報數, 並加入每小時回報」「如果有人是idle狀態, 就找工作派給他」「我們直接寫進那五個人的 TO 檔。 不要等了」。①**現在報數**（ES02（EastSun））：一行寫清楚——在不在線、在做什麼、卡在什麼、下一步。回在你的 `docs/handoff/FROM_ES02.md`（或你自己的交接分支）＋心跳。②**之後每小時回報一次工作狀態**，沒變也回一行；最方便的是心跳分支 `v906/es02-heartbeat` 的 HEARTBEAT.md（last tick／doing／next 三欄，工具 `tools/laptop_ops/heartbeat.py --who es02 --doing "..." --next HH:MM --push`，跟 Ifor01 已在用的一樣）。③**沒事做（idle）就說**，派工的人會給你卡。派工順位（Steven 的代理人制度）：Jimmy 筆電 → ST01-M → ST02-M；前一位超過 1 小時沒回應就由下一位派工，回來就交還。上機驗證照舊只給 EastSun。 |
+| 20261003 18:3x | ⏰ **追問（第 1 次；W-19）：Ifor 的兩題還沒回** | ①你們 `Gerneral.ini` 是 `USE_16_HEATER=0`，golden 只有它是 DTME08 機型（5／6）時開機才建 DTM 溫控——實機應該設多少？②DTM 的 IP 寫在 `config` 的 `TfDTME08.ini`（4 個 Unit 都是 192.168.1.5），程式讀的是 `DTME08_Control.ini`（`EXE` 目錄，快照裡沒有）——這台的 DTM 位址以哪一份為準？查到在 README.txt 寫一句就好（GitHub README 也同時放了這兩題）。 |
+| 20261003 18:5x | 🔧 **給 MC01：St02 比對完 ScanKey，決定以你們的 `WebMainScanKey.cpp`（cpp 0152）為底** | St02 會把他那份（S-20）比較好的幾點疊上去，做成一張 MR 給筆電 gate（START 改讀 `fHome->fShow`、非模態框也讀面板鍵、開機時已按住的鍵要擋、軟體 ALARM RESET 也要做 N07 靜音那些副作用）。**請 MC01 幫兩個忙**：①把 MT-ACCLIVE 單獨推一支 patch（17:3x 那列已提）；②套完第 133 包之後，把 ScanKey 那一串（0152～0157、web 0096／0097／0099～0101）**以第 133 包為底重新匯出**，這樣 0153 以後才套得進 GitLab main（現在卡在 MT-ACCLIVE 動過的 `WebMotorAccess.cpp`）。0158（跳過氣壓不足）照舊只留本地。 |
+| 20261003 19:3x | 📋 **St01 新增上機檢查 A57～A59（接 E-07 的清單）＋新卡 E-08（手推量測第一次上機要先小推）** | **A57**　Contact 頁送給測試機的下壓力字串（C25，Steven Q79＝照 912）：只有 bKoreaFunction／CC_TSMC_TAINAN／CC_ASE_KaohSiung／bSPILFunction 其中一個開著才會送；912 四捨五入到小數 4 位；配方沒有 G 時預設 G=30。測的時候要開其中一個。**A58**　Setup 頁 RTC 勾選（C26）：移植樹開頁時不讀 ReadLockByFile（GATE G-SU-LockByFile），畫面顯示的是上次讀到的 ⇒ 改了鎖定檔之後，要把 Setup 頁關掉再開才看得到。**A59**　Config 頁「SECS GEM Alarm」勾選（C28）：看得到也能勾，但 St02 的 N07（MR !137／!138）進 main 之前不會有任何作用——上機看到不要當 bug 記。A57～A59 的正式列在 St01 的 review6（`ac83b3cc`，human-review.md），下次 review6 合進 main 後 GitHub 知識鏡像也會有。結果照 E-01 第 4 點寫在 FROM_ES02 §2（註明 E-07＋A 編號）。**E-08** 見 §3：第 134 包（還沒推，等 NB2 修 St01 審查的 M1）裡的 Gear Ratio 手推量測，第一次上機請先用 5 mm 以內的小推，確認按伺服 ON 時軸不會彈回。 |
+| 20261003 19:5x | 📋 **新卡 E-09（機台端派工 2：畫面遮擋清單＋修正）；HTDESIGNER 0.163.0 收進第 134 包** | ①E-09 見 §3：EastSun 透過 Jimmy 交辦，機台螢幕（925×720、縮放約 110%）上被遮住或被截斷的視窗逐一列出並修正；你們有機台畫面框，最適合做。②你們 18:15 的 `v906/es02-htdesigner` `e94741cb`（0.163.0，收了機台的 tools 0136～0150）：只動 `tools/vscode-htdesigner`，跟 0.151～0.162 一樣**不用開 MR**，筆電直接併進第 52 批（第 134 包）。機台端 README 的「For the laptop: still not taken -- tools 0136 / 0143 / 0145 / 0147 / 0149 / 0150」因此結案；之後機台的設計外掛 patch 照舊由你們收。 |
+| 20261003 20:3x | 📋 **新卡 E-10：Index Z1 扭力的上機量測（機台派工 1 的答案）** | NB2-1 讀完程式（R197）：Index Auto Height 今天在 HT9050 上**不會動 Z**（還沒翻），照 golden 翻過來會卡住不會壓；危險的是把 6077h 直接接進扭力欄（單位差 10 倍、正負號可能讓門檻永遠不觸發）。要接之前請照 §3 E-10 量五項（不裝 socket、Z 在高處、慢速）。 |
+| 20261003 20:4x | ❓ **兩件**：①**派工 6（開機後馬達好像激磁又放開）要先確認一句**：EastSun 說的是「軟體一開起來的前幾秒」，還是「按 HOME 之後」？（機台端查到 HOME 後約 2.2 秒會照原版切馬達電源約 4 秒；開機時煞車會先放、再鎖、約 4 秒後再放——兩個時間點不一樣）。回在 FROM_ES02 §3 一句就好；NB2-1 在查（卡 (l)）。②機台的設計外掛 patch 在 0.163.0 之後又有 **tools 0151～0156**（找字 32 檔並讀、F5 進度條、跳轉位置標色、找字視窗篩選、編輯器工具列、HANDOVER／CHANGELOG 分頁），照舊請你們收進下一版。 |
+| 20261003 20:5x | ⚠⚠ **St01 審查機台的 HOME 修正（cpp 0160～0170）：3 個中度安全問題——請 EastSun 先看 M-a** | 全文在 GitHub README（`02a5409`）。**M-a**（0170）：HOME 途中馬達電源掉了又回來，會自動對所有軸 Alarm Reset＋Servo ON、HOME 繼續——急停、開門造成的斷電也一樣，沒人按就重新激磁；建議電源穩定過後再掉就停 HOME。**M-b**（0168）：真的警報的軸每秒重試 20 次。**M-c**（0165）：驅動器回原點只看到 READY 就當成功，沒看 homing attained 位元（原點可能錯）。**請 EastSun 回一題**：HT9050 放開急停之後，馬達電源會不會自己回來？修正照舊由機台端做、推 patch；筆電第 53 批先照機台現在的樣子收。 |
+| 20261003 21:2x | ⚠⚠ **新卡 E-11：派工 6 的答案——開機時 Z 軸煞車可能在上電前就放開** | NB2-1 查完（R200）：(A) HOME 後斷電約 4 秒、(C) HOME 失敗斷電都照 golden；(1) 開機沒送 Servo ON 是翻譯缺口（被裁決擋著）；**(B) 開機那幾秒 8 支 Z 軸的煞車在馬達電源 ON 之前就放開**。請照 §3 E-11 量四項（Z 軸下方先淨空），並請 EastSun 決定兩題。 |
+| 20261003 21:45 | 📘 **Index 自動測高（Auto Height）：請照驅動器手冊確認扭力讀值（Steven 1003 21:4x，由 ST01-M 直接寫入；接 E-10）** | Steven 原話：「你這題丟回去給eastsun 他有手冊，等他確認」（夜間報告 §0 #86）。Index Z＝M14 MTestZ1，驅動器安川 Σ-X **SGDXS-200AA0A0002**（EtherCAT，馬達 SGMXA-30AUA6CA2）。NB2-1 R197：移植版若把 1203 的扭力讀值（物件 **6077h** Torque actual value）直接接上 golden 的「壓到設定扭力就停」，單位（可能差 10 倍）或正負號不對時，判斷永遠不成立，Z 會一直往下到高度下限。請照手冊回答：①6077h 的單位（千分之一額定扭力？％？）②往下壓（Index Z 下降方向）時讀值是正還是負（跟 Pn000 旋轉方向設定有沒有關）③驅動器端有沒有扭力上限（例如 60E0h／60E1h 或 Pn 參數）可以當最後一道保護、目前設多少 ④golden 用的扭力門檻（％）在這台要怎麼換算。回在 FROM_ES02（或交接分支）就好；確認之前 Auto Height **維持關著**，不要解閘試。 |

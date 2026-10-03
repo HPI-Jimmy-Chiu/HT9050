@@ -108,6 +108,7 @@
 | 68 | gate 排隊鏈只照 ST01-M 的清單寫，漏了腳本裡真的有的段 | §11.88：清單沒提 !140，`st01-chain-0930.ps1` 裡有 | 記錄員 §11.88 交件建議 | 寫 §12.2 的 gate 鏈前讀 `.ps1` 腳本本身與它的 `.log`；和第 54、62、66 條同型 |
 | 69 | 上一輪寫「待確認」、這一輪被 ST01-M 確認，只改了 §12 沒回舊節 | §11.88：!134／!136 重疊在 §11.87 是待確認 | 記錄員 §11.88 交件建議 | 在舊節原處補「⛔ 更新（…核對）」，§12 照新的寫 |
 | 70 | Git Bash heredoc 裡的 Python 印中文，cp950 主控台報錯（檔案寫完才報，容易誤判成寫壞） | §11.88 | 記錄員 §11.88 交件建議 | 腳本用 Write 工具寫成檔，`sys.stdout.reconfigure(encoding='utf-8')` 或只印 ASCII；第 59 條的延伸 |
+| 71 | 舊題號（2026-09 的 Q／R／W／S）在 decisions-decided.md 找不到，就寫成「查無」 | 10-03 16:5x ST01-M 整理 ht9050-construction（`6bc74320`）：2026-09 的已決紀錄原文搬到 `D:\HT9045\.claude\skills\ht9050-construction\references\archive\decisions-decided-202609.md`（保留舊行號 13-1875），活檔只剩 10 月 | ST01-M 16:5x | 舊題號先查活檔，再查 archive；archive 凍結不改，舊題的 ⛔／⚠ 後續寫在活檔尾端並寫題號；「⚠ 還要 Steven 回」只掃活檔 |
 
 ## D. 指令
 

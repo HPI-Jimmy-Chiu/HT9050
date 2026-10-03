@@ -2,7 +2,8 @@
 
 > 快照日期：2026-09-26  
 > 本檔是施工索引，不是永久真相。每次接續工作前，必須重新查閱 `RULINGS_YYYYMMDD.md`、`FROM_STEVEN.md`、`INBOX_QUEUE.md`、`NIGHT_REPORT.md`、實際 code／設定與測試結果。
-> 分類工作明細以 [../todo.md](../todo.md) 與 [../done.md](../done.md) 為權威。
+> 分類工作明細以 [todo.md](todo.md) 與 [done.md](done.md) 為權威。
+> **20261003 查核（最後查核日；ST01-M 整理 skill 時）**：本檔各表**沒有逐列更新**，狀態停在 2026-09-26 快照，不要拿表內狀態當現況。已知過時：①「Git 分支工作上下文」表（HEAD、ahead 數早已前進；分支是動態資訊，開工前自己 fetch）；②「Tester 測試通訊」與「Tester／GPIB 完整生產循環」兩列寫「目標 HEAD 只有 GB P0、P1 不在目標 HEAD」——之後 P1、P2a、P2b、P2c、P4 已合入 main（見 [done.md](done.md) H 段 H-001、H-002、H-004、H-006、H-007）；③「Recipe／Struct bridge」列寫「St01 只做語法檢查、沒有 build」「見 todo ★ Q41」——Q43 已裁決 St01 可以在本機跑 build 驗證（RULINGS_20260926 S159，有條件），Q41 也已裁決（S158），兩題都在 [archive/decisions-decided-202609.md](archive/decisions-decided-202609.md)。**現況以 [todo.md](todo.md)、[done.md](done.md)、[human-review.md](human-review.md)、[decisions-pending.md](decisions-pending.md) 為準**；本檔仍有效的是框架：必完工矩陣的範圍與升級證據、每段共同完成條件、Tester 完成條件、選擇原則、狀態升級規則。
 
 ## Git 分支工作上下文
 

@@ -117,7 +117,7 @@
 ## 5. 注意事項
 
 1. **寫 SV 前要開 `CoSH`（通訊寫入許可）**。DTK 說明書只列了參數名稱沒寫預設；DTB 手冊寫明「通訊寫入預設禁止」（`DTB_Manual_Eng.pdf` PDF p.10，印 9，0810H），DTK 上機時一定要確認，否則 06H 寫不進去、溫度不會變。
-2. 共用溫控 COM 埠：KT4H／E5DC／DTK／TC401 混用時站號不能撞。Steven 20260928 裁決 R113「不同廠牌共用同一個站號要擋，目前有遇到 E5DC + KT4H + DTK4848 混用了，新的機台架構是改用全機 DTM」（移植樹 V906 `FileRW/HSys.cpp:632-633`；`D:\HT9045\.claude\skills\ht9050-construction\references\decisions-decided.md:1120` R113）。
+2. 共用溫控 COM 埠：KT4H／E5DC／DTK／TC401 混用時站號不能撞。Steven 20260928 裁決 R113「不同廠牌共用同一個站號要擋，目前有遇到 E5DC + KT4H + DTK4848 混用了，新的機台架構是改用全機 DTM」（移植樹 V906 `FileRW/HSys.cpp:632-633`；`D:\HT9045\.claude\skills\ht9050-construction\references\archive\decisions-decided-202609.md:1120` R113）。
 3. 新機台方向是 **DTM**（見 `delta-dtm.md`），DTK 主要是舊機維護。`E:\HT9045W_相關料件技術文件\溫控器\溫控器選用差異表20181025.pptx` 的比較結論是「DTK 升溫最快且不 overshoot，KT4H 可用 DTK 取代」、DTK4848 安裝機型 HT-3310K（同資料夾 `index.md` §2.3 的摘錄；本文件未另外核對）。
 4. 若要查 47xxH 這組相容位址的正式定義，需要另外下載 **DTK 完整使用手冊**（本資料夾只有單張說明書，說明書最後一行請上 `www.deltaww.com` 下載）。
 5. 溫度範圍（DTK 說明書 PDF p.1「溫度感測器種類及溫度範圍」）：Pt100 −200～850 °C、K −200～1,300 °C 等；取樣 0.1 秒。

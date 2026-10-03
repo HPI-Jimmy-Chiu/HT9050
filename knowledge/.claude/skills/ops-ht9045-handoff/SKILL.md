@@ -43,7 +43,7 @@ St02 只能透過 git 交接檔聯絡；St01 的工程線在同一台，用 Send
 
 唯讀快照：`D:\HT9045_handoff\`（`scripts/refresh_handoff.sh` 產生，含三方合併的 `CHAT_合併.md`）。
 
-## 3. 巡檢（每 20 分鐘，先 pull）
+## 3. 巡檢（每 20 分鐘，先 pull，最後心跳）
 
 0. **pull**（Steven 20261002 17:5x「使用20分鐘的, 然後要做pull」；ST01-M 的排程在每小時 :03／:23／:43）：
    - `D:\HT9045`：先 `git fetch origin`，再看 `git rev-list --left-right --count origin/v906/steven-cbridge-review6...HEAD`。左邊（遠端多的）不是 0、右邊是 0 才 `git pull --ff-only`；右邊不是 0＝ST01-E 有本機還沒推的 commit，不 pull、不 rebase，等它推（20261002 20:3x `fb31e431` 多 58 顆就是這樣）。
@@ -59,6 +59,13 @@ St02 只能透過 git 交接檔聯絡；St01 的工程線在同一台，用 Send
    - 同事的 MR 有衝突（20261002 MR !115，Ifor：測試清單檔尾＋`wb_serve.cpp` 三行開機長行，兩邊在同一行各加東西）：St01 在獨立 worktree 合 main、兩邊的插入都留，跑全量 gate，不先動對方分支。Steven 20:4x「我們直接整合好之後, 幫她合併就好」——gate 綠了才推到 MR 的來源分支、幫忙合併。
 6. Monitor 跑 `bash scripts/watch_skill.sh`（timeout 1800000，到期重開）；事件提醒使用者，自己改的忽略。
    - 5 小時檢查點（Steven 20260927：不寄信、每 5 小時一次）：SendMessage 叫 ST01-E「記錄員補到現在＋push/pull」並附 ST01-M 這段做的事；ChangeLog／日報／rulings-index.md 由 ST01-E 的記錄員寫（skill `ops-st01-clerk-report`），ST01-M 只給文字、不直接改這三份檔。例外：Steven 的入口網站日報 `D:\RD5-Portal\public\Docs\Daily\Steven\YYYYMMDD.md` 由 ST01-M 編、ST01-E3 晚上推（memory「做完就更新 skill」）。
+8. **心跳**（Jimmy RULINGS_20261003 第 17 條）：每輪最後一步在 `D:\HT9045` 跑 `python tools/laptop_ops/heartbeat.py --who st01 --doing "<在做什麼>" --next <下一輪 HH:MM> --push`（工具在 main；review6 還沒有就先 `git show origin/main:tools/laptop_ops/heartbeat.py` 存一份到 scratchpad 再跑）。只寫自己的分支 `v906/st01-heartbeat`，不碰工作樹。看全員：`python tools/laptop_ops/team_status.py`。
+9. **筆電停擺時 St01 是備援整合者**（同檔第 14 條）：`origin/v906/jimmy-heartbeat:HEARTBEAT.md` 的 last tick 超過 4 小時**而且** GitLab main 4 小時沒推 ⇒ St01 可以合 gate 綠的 MR、推 main（步驟 `tools/laptop_ops/README.md`），先在 FROM_STEVEN §2 寫一列；GitHub 機台包仍只由筆電推。
+   - St01 怎麼跑筆電的整合工具（S-19 演練 1003，MR !156 筆電合進 main `e6c981cc`）：看 `tools/laptop_ops/README.md`「在 St01 上跑（備援整合者）」——設 `GATE_WT_BASE`／`GATE_LOG_DIR`／`RERUN_DIR`／`DOCS_PUSH_REPO`／`PYTHON="py -3"`（St01 的 `python` 是 WindowsApps 空殼）；`mr_seen.json` 每台各一份，第一次跑先 `--ack 115,116,133,68`（已關的 MR）；接手前先確認 steven 帳號能推 main（受保護分支／Maintainer）；St01 一次只能跑一個 gate（建置目錄共用）。演練報告 `D:\AI_TempFile\st01e3-s19\S19_演練報告_20261003.md`。
+10. **每小時報數＋派工代理人**（Steven 20261003 17:3x～17:4x）：「通知全部人, 先報數」「然後每個小時要回答一下工作狀態」「如果有人是idle狀態, 就找工作派給他」「請Jimmy筆電, 跟ST01-M 要定時查看大家有沒有在工作」。
+   - St01 內部每個 session（ST01-E 與其工程師、ST01-E2、ST01-E3、臨時 helper session）每小時給 ST01-M 一行：在不在線／在做什麼／卡什麼／下一步。巡檢時核對，超過 1 小時沒報就催；idle 的從 `ht9050-construction/references/todo.md` 派卡（包含 ST01-E2——Steven 17:3x 的 idle 規則；Steven 直接交代的事仍優先）。
+   - 筆電派工的五人（Ifor／Jerry／Frank／Kevin／ES02）由筆電在各自 `TO_<NAME>.md` 點名＋每小時回報（FROM_STEVEN §3 `6d493252`／`c203575d`）；St01 平常不寫那些檔。
+   - **代理人順位**：筆電 → ST01-M → ST02-M → Ifor／Jerry／Frank／Kevin／ES02。前一位沒回應（St01 判定：超過 1 小時沒有報數、心跳沒更新）就由下一位接手派工，在 FROM_STEVEN 寫一列「接手派工」；前一位回來就寫「交還派工」並附接手期間派出的卡。接手者只派工、gate、合 gate 綠的 MR；GitHub 機台包與 RULINGS 正本仍只由筆電寫。
 7. 沒有新東西只回一行「無變化」。
    - skill 快查表：`python scripts/skill_index.py <輸出檔>` 產生全表，貼回 memory 的 skill-quick-index.md（AUTO TABLE 段）。
 
@@ -77,7 +84,7 @@ bash scripts/handoff_commit.sh <edit.py 絕對路徑> <commit 訊息檔>
 ## 5. 硬規則（細節見 references/protocol.md）
 
 - **派工都要提醒更新 skill＋日報**（Steven 20261002 08:1x：「記得通知大家要更新skill跟日報」「你每次安排工作的時候,都要做這個提醒, 記錄到 instruction裡面好了」）：ST01-M 每一則有新工作的訊息——給 ST01-E／ST01-E2／ST01-E3 的 SendMessage、CHAT_ST02 與 FROM_STEVEN §4 的 St02 工作卡、給子代理的 prompt——最後都加一行 `Reminder (Steven): when done, update the related skill and the daily (ChangeLog / repo daily / Steven's portal daily via ST01-M).`；給 ST01-E、St02-M 的派工另加「也轉告你的工程師／helper」。純轉告、回覆、FYI 不強制。
-- **只做 906（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20261002.md` 第 20 條，Steven 20261002 18:0x）**：原話「我還有看到912版，這是錯的，現在分工處理只能做906 C++專案，能理解?」。golden＝906 `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260625_Steven`，912 只拿來查 906 漏了什麼，沒有「Steven 點名」的例外；派工單要寫明。**例外 20a（Jimmy 19:0x 依 Steven）：溫控必須參考 V912**（溫控器、HandlerSys Heater 分頁 E-029、HT9050 通道表、bthermo；E-027／E-029 的 V912 引用保留）。St01 分支用到 912 的稽核在 FROM_STEVEN §3 `f1208ecf`（全文在 handoff 分支 `docs/handoff/ST01_912_AUDIT_20261002.md`；Q-A／Q-B／Q-C 等 Steven）。
+- **只做 906（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20261002.md` 第 20 條，Steven 20261002 18:0x）**：原話「我還有看到912版，這是錯的，現在分工處理只能做906 C++專案，能理解?」。golden＝906 **0618** `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260618`（Jimmy RULINGS_20261003 第 2 條；共用區 `U:\共用區\HT-9050\K01_golden0618_HT9050snapshot_20260930\` 已解開，NB2 指紋驗證過；0625 `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260625_Steven` 只做對照），912 只拿來查 906 漏了什麼，沒有「Steven 點名」的例外；派工單要寫明。**例外 20a（Jimmy 19:0x 依 Steven）：溫控必須參考 V912**（溫控器、HandlerSys Heater 分頁 E-029、HT9050 通道表、bthermo；E-027／E-029 的 V912 引用保留）。St01 分支用到 912 的稽核在 FROM_STEVEN §3 `f1208ecf`（全文在 handoff 分支 `docs/handoff/ST01_912_AUDIT_20261002.md`；Q-A／Q-B／Q-C 等 Steven）。
   - **912 比較好就照 912（Steven 20261003 05:3x～05:4x 常設規則）**：原話「以後我這邊遇到這個問題，如果是912比較好，就是註記906的行號跟做法　然後增加註記912已修正或更新的行號」「不需要一直糾結在這邊　Jimmy弄了天條擋住不是906 cpp版的項目　我們這邊就是讓他接受+繞過這一個限制」。906 與 912 不同、912 是修 bug 或明顯比較好 ⇒ 程式照 912，註解寫 906 的行號＋做法、912 修正／更新的行號、「#20 例外（Steven 1003 常設規則）」；不再寫進 decisions-pending 問 Steven，在 FROM_STEVEN §3 公開告訴 Jimmy、human-review C 區登一筆；判斷不出哪個好、或客戶專用／行為改變很大才問 Steven。第一批：Q78（A02 存檔保護）、Q79（GPIB 力量字串）、W70（ELA 拆欄）、Data.Observer 事件記錄檢視。**Jimmy 已接受**（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20261003.md` 第 1 條＝§0 #78 B：做的人自己判斷、不用等 Jimmy；保留 912 的地方兩邊行號都寫，帳本記一列理由——St01 記在 ht9050-construction registry）。**golden 基準是 906 的 0618**（同檔第 2 條：用共用區 7z 密碼解開，0625 只做對照；St01 的重核是 todo E-032）；產生器的 golden 來源由 St01 決定（第 4 條，todo E-031）。
 - **先聽著、不接單**：Jimmy 的派工卡 S-01～S-06 不認領，除非 Steven 說要接。
 - **看區段、不看檔名**：別人登記的檔，不同區段就直接做並在 FROM_STEVEN 寫明；同一段等對方回覆。`aHotPlateSubstrate.*` 要先問 Steven。

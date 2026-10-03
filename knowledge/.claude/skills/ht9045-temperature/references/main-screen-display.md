@@ -198,12 +198,13 @@
 - 移植樹 `cTemperFrom.cpp`（1433 行）：建構子、`ShowThermo`（`:234-1156`）、`ShowHotName`（`:1332-1381`）有翻但**沒有正式呼叫端**（只有 `tests/test_temperfrom_core.cpp`）；WAR15 告警那段 `#if 0`（GATE T1，`:977-1006`）；
   `FormShow`、`ChangeFormSize`、`SetIndex16HeaterPos`、`Timer1Timer` 沒翻（`forms\fTemperFrom.h:72-91`）〔V〕。
 - **`bUT150Install[]` 已經有真值**（I-01，Ifor）：`forms\fMain_Heater.cpp` 翻了 `Index16Heater`／`IndexHeatMode`／`HotplateHeatMode`（寫 `bUT150Install[]`），開機 `tools\wb_serve.cpp:4233` 跑一次 `IndexHeatMode`（golden `TfMain::FormShow`），之後每秒 `WebBridgeTags.cpp:601` 的 `W906_Timer2HeaterTick`（golden `Timer2Timer` 加熱段）〔V，review6 `067d4c7a`；Ifor 1002 確認〕。但 `temp.zone.*.inst` 仍發 null（`kThermoFields` 的 live＝false）。
-  ⚠ `StageThermo.cpp:50-65` 的 inst 註解（「寫入點只在 main.cpp、沒移植」）已經過時；檔案是筆電的，註解由筆電／Ifor 改（Ifor 接 pv 時同一個 commit 改）。
-  inst 要不要先單獨上線：Ifor 建議等 pv 一起，Steven 決定（Ifor 1002 提問）。
-- 量測值（`UN150Read[]`）與通訊異常（`UN150CommError[]`）唯一的寫入路徑是加熱執行緒 → `DoThermo`，而執行緒從不啟動（本 skill SKILL.md §2）⇒ 現在不管哪個頁面都拿不到 PV。
-  兩種組態都一樣：模擬版 `HeaterSimTick.cpp` 刻意不跑 `DoThermo`（`:18`、`:49`），出貨版那支是空函式（`:26`）〔V〕。
-  Ifor 的計畫：出貨版 `DoThermo` 跑起來後（等筆電的共用快鐘，RULINGS_20261002 第 7 條），同一個 commit 在 `PublishThermoTags` 加 pv／comm／inst 讀值並把 live 改 true；`StageThermo.cpp` 是筆電的檔，先逐行認領。
-- 新溫度條（E-027，§9.1）只在 review6（`8f6613f8` 起）；main 的 `Status.TemperFrom.html` 還是舊版，要等 review6 進 main（Q70，等 Steven）。
+  ⚠ `StageThermo.cpp:50-67`（`kThermoFields` 的 inst 列）的說明（「寫入點只在 main.cpp、沒移植」）已經過時；檔案是筆電的，由 Ifor 在接 inst 的同一個 commit 改。
+  **inst 先單獨上線**（Steven 1003 17:3x「可以先推了」；Ifor 1002 原本建議等 pv）：Ifor 在 `PublishThermoTags` 讀 `bUT150Install[]`，inst 列 live 改 true；pv／comm 維持 false。1003 17:34 已寄信通知 Ifor（副本 Steven）。
+  上線後：沒裝的通道顯示 ---、標「沒裝」；有裝的通道在 pv 接上前仍是 ---、標「沒有資料」（`web\page\ht9045_temperfrom_strip.js:147-149`）。
+- 量測值（`UN150Read[]`）與通訊異常（`UN150CommError[]`）唯一的寫入路徑是 `DoThermo`。加熱執行緒本身仍不啟動（本 skill SKILL.md §2），但 **1003 起出貨版由 serve loop 的快鐘每 20 ms 跑一次 `DoThermo`**（Jimmy `153f9a5e` FASTCLK step 3：`FastClockJobs.cpp:8`、`:22`；`MachineType.h:1852` `W906_FASTCLK_HEATER`）〔V，main `b111825c`〕。
+  模擬版照舊不跑：`HeaterSimTick.cpp` 刻意不跑 `DoThermo`（`:18`、`:49`）；它的出貨版分支仍是空函式（`:26`），出貨版改由 `FastClockJobs.cpp` 跑〔V〕。
+  pv／comm 仍發 null：Jimmy 在 `StageThermo.cpp:28` 註明要上機量過才改 live（`DoThermoReal` 讀哪些通道要看 `bUT150Install[]`）。Ifor 的計畫：上機確認後，同一個 commit 在 `PublishThermoTags` 加 pv／comm 讀值並把 live 改 true；`StageThermo.cpp` 是筆電的檔，先逐行認領。
+- 新溫度條（E-027，§9.1）**已經在 main**：Steven Q70＝A，review6 到 `81a106d2` 為止的內容 1003 合進 main（交付包 130）。
 - **HT9050 的格子要等 I-03b**（DTM 站號／CH → `eTempControll` 對照表）：golden DTM 讀值寫到 `UN150Read[iTempCode[i]]`，`iTempCode` 是 HT9045 Index 的順序（Aa1、Ba1…，§6），溫度條的 HT9050 版讀 `tcHotPlate1`／`tcShuttle1`／`tcDUT1`／`tcChamber`／`tcHeatGun1`，對不上 ⇒ 底層接值之後 HT9050 也要 I-03b 做完才有數字；I-03 第二段（MR !115）因此還不啟動 DTME08 輪詢（Ifor 1002）。
 
 ## 8. 意外發現（golden 原樣，只記不改）

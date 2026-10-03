@@ -43,7 +43,7 @@ DTB4824 **不是拿來控溫**，而是 Steven 20210510 加的「自動 K 溫」
 | 顯示 | `UpdateTemperatureData`（`:809-832`）：≥200 顯示 `ERROR` | |
 | 開頁 | `FormShow`（`:419-532`）：DTB4824 時把每點的 `cbChannel` 藏起來（`:495-499`） | |
 
-⚠ golden 時序怪點：建構子 `:297` 先 `LoadACTData`，`:398` 才設 `FilePath`，所以開機那次讀不到檔、`iThermoCtrlType` 一定是預設 1 → **建構子永遠建 DTB4824 的 33 點面板**；開頁 `:428` 才真正讀 ini（移植樹 V906 `FileRW/ACTForm.cpp:18-23` 已記錄，照 golden 保留；St01 意見見 `D:\HT9045\.claude\skills\ht9050-construction\references\decisions-decided.md:669`）。
+⚠ golden 時序怪點：建構子 `:297` 先 `LoadACTData`，`:398` 才設 `FilePath`，所以開機那次讀不到檔、`iThermoCtrlType` 一定是預設 1 → **建構子永遠建 DTB4824 的 33 點面板**；開頁 `:428` 才真正讀 ini（移植樹 V906 `FileRW/ACTForm.cpp:18-23` 已記錄，照 golden 保留；St01 意見見 `D:\HT9045\.claude\skills\ht9050-construction\references\archive\decisions-decided-202609.md:669`）。
 
 ### 1.5 移植樹 V906 現況
 

@@ -161,7 +161,7 @@ bool ReadData (char *cFName, char *ptr, int size)   // CreateFile(OPEN_EXISTING)
 ### C.2 `LAST_LEVEL_SET` ↔ `system\levelset.dat`（`cSecurity.cpp`）
 
 ```cpp
-typedef struct { int AccessLevel[256]; } LAST_LEVEL_SET;   // cprod.h:1149-1152，1 個成員
+typedef struct { int AccessLevel[256]; } LAST_LEVEL_SET;   // cprod.h:1150-1153（20261003 E-031：S69 4e8c93af 在 :141 多一行之後），1 個成員
 
 void TfSecurity::GetLevelSet()   // :1474
 {

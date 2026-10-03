@@ -1,6 +1,7 @@
 # ★ 待 Steven 決定（未決斷）
 
 > 從 `todo.md` 的 ★ 節拆出來（Steven 20260927：「把已決斷跟未決斷的分成兩個檔案，方便閱讀」）。已經決定的在 [decisions-decided.md](decisions-decided.md)。
+> 20261003 分檔：2026-09-30 以前裁決的題目（Q1～Q61、R1～R146、W1～W62）封存在 [archive/decisions-decided-202609.md](archive/decisions-decided-202609.md)；本檔下面提到「搬到 decisions-decided.md」的舊題，現在要到封存檔找。
 > **回法**：在題目的「目前狀態」後面直接寫答案（選 A／B／C，或直接打字），或在對話裡回；沒寫到的題目照建議做。Steven 回了之後，該題整段搬到 decisions-decided.md，並附 RULINGS 編號。
 > 題號沿用原本的：**Q**＝St01（Steven01，資料讀寫）要 Steven 決定；**R**＝St01 已照建議先做、Steven 可推翻；**W**＝St02（Steven02，測試通訊），照 St02 `progress-st02.md`「待使用者裁決」的順序，選項代號沿用 St02 原本的大小寫。
 > 維護：Q／R＝ST01-E（Steven01-Engineer，St01 工程線），W＝ST01-M（Steven01-Manager）代 St02 登記（Steven 20260927 定的角色名；session 名 github-xx 會變，不寫）。
@@ -22,6 +23,8 @@
 
 （目前沒有。Q80 已由 Jimmy RULINGS_20261003.md 第 2 條回答，搬到 decisions-decided.md。）
 
+（目前沒有。Q81 已由 Steven 20261003 14:3x 裁決，搬到 decisions-decided.md。）
+
 （Q53～Q61、Q65～Q70 已由 Steven 裁決；Q77 由 Jimmy #23 回答；Q78、Q79 由 Steven 1003 裁決（照 912＋906 行號），搬到 decisions-decided.md。）
 
 ### 要 Steven 決定的 R（BCB 沒有答案、真的要 Steven 選的）
@@ -41,14 +44,22 @@
 
 > 下面三題是 St02 照 Steven 1003 常設規則（912 比較好就照 912＋雙註記）挑出來的**客戶專屬**項目，規則說客戶專屬的要問 Steven（St02-M CHAT_ST02 1003 05:39／05:43；ST01-M 06:2x 登記）。St02 現在都先照 906，Steven 選 912 就補回。
 
-#### W72. AMD 的特殊流程：用編譯旗標（906），還是執行時看 2DID 格式（912）？
+（W72 已由 Steven 20261003 14:3x 裁決，搬到 decisions-decided.md。）
 
-- **畫面上會發生什麼**：906 main.cpp:18158-18168 的 AMD 版本包在沒有定義的 `AMD_Version` 編譯旗標裡（等於只跑 Delta Castle 那段）；912 main.cpp:18785／:18834／:19076 改成執行時看 `TestIF_File.i2DIDFormat==eAMD`（Ifor 20260717「不使用define方式處理」）。St02 MR !134 先改回 906。
-- **A**：照 912（2DID 格式選 AMD 就走 AMD 流程）。例：AMD 客戶的機台不用另外編版本。
-- **B**：維持 906（只有 Delta Castle；AMD 要另外編譯）。
+（W73 已由 Steven 20261003 14:3x 裁決，搬到 decisions-decided.md。）
 
-#### W73. Murata 機台 2DID 比對 NG 的料，要不要寫一筆 NonTestToRBin 紀錄（912）？
+> 下面兩題是筆電草稿 MR !70（計時器排程表，LI-6／INBOX 145 ②）`docs/TIMER_TABLE_PLAN.md` §8 原本等 Jimmy 的 Q1／Q2；Steven 1003 15:0x「如果有正在等待Jimmy判定的項目, 可以讓我 (Steven本人) 來協助裁決」⇒ ST01-M 1003 15:2x 在對話裡問 Steven、16:2x 登記於此。來源：MR !70 tip `6f94ba4a`（`refs/merge-requests/70/head`）。
 
-- **畫面上會發生什麼**：客戶碼 CC_Murata、2DID 比對 NG 的料照樣放到 iTestBinCount；912 atester.cpp:1048 另外寫一筆 PordRec「NonTestToRBin」，批次統計的 E1 數會把它算進去；906 atester.cpp:1038-1058 沒有這行。St02 MR !136 先照 906（不寫，human-review B35）。
-- **A**：照 912（寫這筆，E1 數包含這些料）。
-- **B**：維持 906（不寫）。
+（Q84 已由 Steven 20261003 16:3x 裁決，搬到 decisions-decided.md。）
+
+（Q85 已由 Steven 20261003 16:2x 裁決，搬到 decisions-decided.md。）
+
+> 下面這題是 github-80 的 V-2 覆核（1003 18:3x，唯讀）提出的：B70／B71 當時照 Jimmy RULINGS_20261002 #23-5／6 拿掉了 912 才有的客戶功能，但 Steven 後來的 Q81（1003 14:3x）把「912 才有的客戶功能預設留 912」定成預設。
+
+#### Q86. B70／B71 拿掉的兩個 912 客戶功能，要不要照 Q81 的預設改回留 912？
+
+- **B70 Teradyne-US 的 START 防呆**：912 在 Contact 存檔前，Teradyne-US 機型多一個 return（V912 DeviceForm `:6533-6534`）；現在照 906（0618 main.cpp:6261-6266，沒有這個檢查），移植樹 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\DeviceForm_File.cpp`:749-753。
+- **B71 ASE-CL 灰掉 edContactHeight1／2**（Chrischen 20260316 的客戶需求，V912 :1306-1307、:1021-1028、:1478-1485、:15577-15633）：現在 7 處都以 `#if 0` 關掉（`DeviceForm_File.gen.inc` :1089、:1277、:2375、:2465、:2486、:2502、:2523），0618 沒有。
+- **A（建議）**：照 Q81 的預設，兩項改回留 912，三段註解（0618 行號＋做法、912 行號、#20 exception (Steven Q81 default)）；HT9050 的客戶（台積電龍潭）用不到，所以機台行為不變。
+- **B**：維持現狀（照 906，Jimmy #23-5／6），Q81 只管 TrayForm 那 6 項與之後的批次。
+- **目前狀態**：等 Steven。

@@ -169,7 +169,7 @@ OM p.23（3-3）附注 2：Hx000 可讀寫 SV，Hx270 只讀；從 Hx268 一次�
 
 ## 5. 注意事項（含 HT9050）
 
-1. **HT9050 用 DTM 的方式比 HT9045 多**（`D:\HT9045\.claude\skills\ht9050-hw\references\temp-dtm-map.md`）：3 站 24 通道——站 1 DTME08（Hotplate1/2、In Shuttle1/2、DUT1～4，PT100，SSR）、站 2 DTMN08（Chamber PT100 SCR、Hot Air 1/2 **K-type** SCR）、站 3 DTME08（SLK-1～8，PT100）。HT9045 的 DTM 只管 Index 32 組（`iTempCode[]`），HP／Shuttle／DUT／Chamber 走序列埠；HT9050 要把它們也搬到 DTM。Steven 20260928（R113）：「新的機台架構是改用全機 DTM」（移植樹 V906 `FileRW/HSys.cpp:632-633`；`D:\HT9045\.claude\skills\ht9050-construction\references\decisions-decided.md:1120`）。
+1. **HT9050 用 DTM 的方式比 HT9045 多**（`D:\HT9045\.claude\skills\ht9050-hw\references\temp-dtm-map.md`）：3 站 24 通道——站 1 DTME08（Hotplate1/2、In Shuttle1/2、DUT1～4，PT100，SSR）、站 2 DTMN08（Chamber PT100 SCR、Hot Air 1/2 **K-type** SCR）、站 3 DTME08（SLK-1～8，PT100）。HT9045 的 DTM 只管 Index 32 組（`iTempCode[]`），HP／Shuttle／DUT／Chamber 走序列埠；HT9050 要把它們也搬到 DTM。Steven 20260928（R113）：「新的機台架構是改用全機 DTM」（移植樹 V906 `FileRW/HSys.cpp:632-633`；`D:\HT9045\.claude\skills\ht9050-construction\references\archive\decisions-decided-202609.md:1120`）。
 2. ⚠ **HT9050 表上「站 3＝DTME08」與手冊架構衝突**：一個群組只有一台主機（OM p.6（1-1）），主機內部站號固定 0（EN p.10（9）註 *3）。第二台 DTME08 是**另一個群組、另一個 IP**，目前 `uDTME08Control` 只有一條 socket、用 `x*0x1000` 分站，**定址不到它**。要嘛站 3 其實是 DTMN08（那它的旋鈕要設 2，站 2 的 DTMN08 旋鈕要設 1，才會對上 `iCh/8` 的算法），要嘛程式要多開一條連線。要問硬體確認。
 3. ⚠ HT9050 站 2 混用 PT100 與 K-type，但現有程式每站 8 通道只能設同一種感測器（§4 #9）；要逐通道寫 Hx028～02F。
 4. HT9050-TempMap.json 把 DTMN08 的介面寫成 Ethernet；實際上 DTMN08 沒有通訊埠，是透過 DTME08 主機（EN p.5（4））。

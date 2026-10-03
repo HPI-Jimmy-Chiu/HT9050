@@ -21,7 +21,7 @@ description: >
   machine.defines, cfg.resync, cfg.ver, 開機配置, SOFT_SIMULTE, MachineType.h,
   通訊縮減, 表⑧, FILEIO_BRIDGE_STATUS, DoIniDataToForm, /api/form, S12, 頁面改讀 C++,
   存檔後重讀, Chiller Temp, ATC.ini, iATC_MODE_TYPE, golden 表單橋, C 路, A 形狀, C 形狀,
-  gen_formbridge.py, gen_editlist.py, tools/formbridge, FileRW, --only, editlist.get,
+  gen_formbridge.py, gen_editlist.py, tools/formbridge, FileRW, --only, _hand_kept.py, E031_FormBridgeFullRun, editlist.get,
   editlist.save, PageDesc, PageRegistrar, _EditPage.h, EL<T>, 具名替身, Ld_UldDelayTime,
   W906_SecurityBoot, iMaxLevelItem, GATE (SEC1), iDecimalPoint, G1 驗收, s12c_page_probe.py,
   s12_form_probe.py, _integrated.txt, GOLDEN_BRIDGE, CRouteOwner, kOwned, W906_DoReadLastData,

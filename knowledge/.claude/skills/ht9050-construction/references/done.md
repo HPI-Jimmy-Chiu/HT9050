@@ -4,11 +4,7 @@
 
 ## 維護規則
 
-- 項目必須由 `todo.md` 搬入，不得在兩檔同時存在；保留原 ID 與主分類。
-- `IMPLEMENTED`＝程式／文件已在目標 HEAD，但尚未取得完整環境實測；`VERIFIED`＝指定環境與範圍的實測通過。
-- `VERIFIED` 必填日期、commit、環境／模式、測試輸出；歷史證據要明寫「歷史」，不得冒充目前 HEAD 的新回歸。
-- 旁支、其他 worktree、未合入 commit 與口頭宣告不能列入本檔。
-- 若後續回歸失敗或需求擴大，保留本列並以新 ID 在 `todo.md` 建立修正工作，互相引用。
+規則只留一份，在 [../SKILL.md](../SKILL.md)〈台帳規則〉：從 `todo.md` 整列搬入（保留原 ID，註明「原 todo X-0nn」；沒進過 todo 的用 x1xx 編號）、**只收已合入 main 的**、`IMPLEMENTED`／`VERIFIED` 的證據要求、回歸時另開新 todo ID（20261003 整理 skill 時把本節原有的條文併過去，免得兩份寫得不一樣）。
 
 ## A — 需求與產品
 
