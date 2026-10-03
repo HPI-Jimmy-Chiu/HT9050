@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-03 15:13
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ d27162b SCANKEY: golden TfMain::ScanKey (physical front/rear panel keys: START / PAUSE / H／web b5ff2f7。
+HT9050 機台參數快照（machine_params\）—— 2026-10-03 16:12
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 6952925 HOME-PERAXIS + SOFT E-STOP: (1) axes home independently (EastSun ruling 20260929, ／web 2196ffc。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
