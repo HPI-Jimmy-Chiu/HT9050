@@ -1275,4 +1275,11 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      操作紀錄 oplog_20261003.txt：新增 405 行
      設定檔變動：machine_params/D_GPIB9045_system/general.ini、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/lastdata_backup2.dat
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+=== tools 0160 (20261003, machine) -- HTML designer (tools/vscode-htdesigner), version stays 0.162.0 ===
+- Stop works during F5's build (ends that build's process tree, deletes half-written exes); the find window
+  closes when the focus leaves it (Ctrl+F brings it back with the last results); F5 / build+start first end the
+  same program still running (no need to press stop); save / save all on the toolbar; the extension starts with
+  VS Code. (EastSun 1003)
+- Tests: run_all 3/3 layers; real VS Code 156/159 (3 known stale checks).
+- ! For the laptop: still not taken -- machine patches tools 0136 / 0143 / 0145 / 0147 / 0149 - 0160.
 MD5 清單在 MANIFEST_MD5.tsv。
