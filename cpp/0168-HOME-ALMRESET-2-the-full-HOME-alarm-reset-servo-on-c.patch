@@ -1,0 +1,91 @@
+From 4a54de570e33d577717b3ea8032aa4c58413fce3 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 19:05:26 +0800
+Subject: [PATCH] =?UTF-8?q?HOME-ALMRESET-2:=20the=20full-HOME=20alarm-rese?=
+ =?UTF-8?q?t=20/=20servo-on=20check=20(case=20302)=20no=20longer=20stops?=
+ =?UTF-8?q?=20HOME=20falsely.=20EastSun=201003=20'=E4=BD=A0alarm=20?=
+ =?UTF-8?q?=E5=85=A8=E6=A9=9F=E6=AD=B8=E5=8E=9F=E9=BB=9E=E5=B0=B1=E8=A6=81?=
+ =?UTF-8?q?=E5=81=9C=E4=BA=86'=20/=20'M14=20=E6=B2=92=E6=9C=89=20ALARM=20?=
+ =?UTF-8?q?=E9=98=BF':=20(1)=20the=20Galil-routed=20Index=20Z=20(M14=20MTe?=
+ =?UTF-8?q?stZ1)=20never=20got=20Led[iServoOn]=20from=20ScanMotorStatus,?=
+ =?UTF-8?q?=20so=20it=20always=20read=20SERVO-OFF=20--=20now=20read=20with?=
+ =?UTF-8?q?=20golden's=20own=20Gali=5FScanMotStatusTIMO=20(MG=5FMOY)=20lik?=
+ =?UTF-8?q?e=20the=20Galil=20home=20case=208;=20(2)=20the=20motor=20power?=
+ =?UTF-8?q?=20relay=20comes=20back=20~4=20s=20after=20HOME=20starts=20(18:?=
+ =?UTF-8?q?36:53=201->0,=2018:36:57=200->1),=20so=20abnormal=20axes=20get?=
+ =?UTF-8?q?=20Alarm=20Reset=20+=20Servo=20ON=20again=20every=201=20s=20and?=
+ =?UTF-8?q?=20only=20count=20as=20abnormal=20after=2020=20retries=20(~20?=
+ =?UTF-8?q?=20s).=20ctest=20homeclass=20/=20HomeMonitor=20/=20HomeBlock=20?=
+ =?UTF-8?q?/=20NoteMotorError=20/=20Pci1203MotorRoute=20/=20EcatMotorRoute?=
+ =?UTF-8?q?=20/=20GaliRoute*=20pass?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ uhome.cpp | 28 +++++++++++++++++++++++++++-
+ 1 file changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/uhome.cpp b/uhome.cpp
+index 37d960e..9a654bc 100644
+--- a/uhome.cpp
++++ b/uhome.cpp
+@@ -705,6 +705,7 @@ void TfHome::InitGali_HomeTask()
+ //AI(W906-HOME-ALMRESET) 20261003: case 300 -> 302 (alarm reset + servo ON of every enabled motor, then the check); see case 302
+ static TQPF_Timer s_W906HomeResetWait;
+ static int        s_W906HomeAfterReset = 310;
++static int        s_W906HomeResetTries = 0;   //AI(W906-HOME-ALMRESET-2) 20261003: 1 s retries before an axis counts as abnormal (the motor power relay comes back ~4 s after HOME starts)
+ bool ProcessMotorHome(bool Flag2)
+ {
+ #ifndef SOFT_SIMULTE
+@@ -2270,6 +2271,7 @@ bool ProcessMotorHome(bool Flag2)
+             s_W906HomeAfterReset=fHome->iHomeStep;                              //AI(W906-HOME-ALMRESET) 20261003: golden's next step, taken after the check
+             fHome->iHomeStep=302;
+             s_W906HomeResetWait.SetMSAndOn(500);                                //  0.5 s: the drives answer the reset / Servo ON (also the brakes' servo-ON 0.5 s rule)
++            s_W906HomeResetTries=0;
+             MotorTask=FIRST_HOME;                                               //第一階段回Home
+             for(int i=0; i<TOTAL_MOTOR; i++)
+             {
+@@ -2298,6 +2300,7 @@ bool ProcessMotorHome(bool Flag2)
+                     if(fHome->HomeClass[i]->THomeFlag==0 || MOT[i].Motor==NULL || MOT[i].Motor->Enable==false)
+                         continue;
+                     MOT[i].ScanMotorStatus();
++                    { extern bool W906_GaliRouteOwns(int); if(W906_GaliRouteOwns(MOT[i].Mot_Name)) MOT[i].Gali_ScanMotStatusTIMO(); }   //AI(W906-HOME-ALMRESET-2) 20261003: EastSun「M14 沒有 ALARM 阿」-- the Galil-routed Index Z (M14 MTestZ1) never gets Led[iServoOn] from ScanMotorStatus (Gali_ScanMotStatus has no servo bit); golden's own Galil home reads it with Gali_ScanMotStatusTIMO (MG_MOY, myGALILmotor.cpp case 8), so this check does too
+                     const bool alm  = MOT[i].GetMotorAlarm();
+                     const bool svOn = MOT[i].Led[iServoOn];
+                     if(alm || !svOn)
+@@ -2311,7 +2314,30 @@ bool ProcessMotorHome(bool Flag2)
+                         sBad += one;
+                     }
+                 }
+-                if(iBad>=0)                                                     //  an axis still in alarm / not excited after the reset: HOME stops,
++                //AI(W906-HOME-ALMRESET-2) 20261003: EastSun「你alarm 全機歸原點就要停了」-- 18:36:53 HOME started, the motor power relay went
++                //  1->0 and came back 0->1 at 18:36:57 (DoMotorPowerOn, case 1), so a single check at 0.5 s saw every drive unexcited and
++                //  stopped HOME with "Motor not home yet". Now: re-send Alarm Reset + Servo ON to the abnormal axes every 1 s and only
++                //  after 20 retries (~20 s) count them abnormal.
++                if(iBad>=0 && s_W906HomeResetTries<20)
++                {
++                    ++s_W906HomeResetTries;
++                    for(int i=0; i<TOTAL_MOTOR; i++)
++                    {
++                        if(fHome->HomeClass[i]->THomeFlag==0 || MOT[i].Motor==NULL || MOT[i].Motor->Enable==false)
++                            continue;
++                        if(MOT[i].GetMotorAlarm() || !MOT[i].Led[iServoOn])
++                        {
++                            MOT[i].Motor->ResetState();
++                            MOT[i].ServoOnOff(true);
++                            fHome->ShowLed(i, 3);                               //  back to "in progress" while it is retried
++                        }
++                    }
++                    if(s_W906HomeResetTries==1 || s_W906HomeResetTries%5==0)
++                        fHome->ListBox1->Items->Insert(0, AnsiString(("Waiting for alarm reset / servo on: " + sBad).c_str()));
++                    s_W906HomeResetWait.SetMSAndOn(1000);
++                    break;
++                }
++                if(iBad>=0)                                                     //  an axis still in alarm / not excited after the retries: HOME stops,
+                 {                                                               //  the first one gets golden's motor jam popup, the list goes to the listbox
+                     std::printf("[HOME] after Alarm Reset + Servo ON, %d motor(s) abnormal: %s\n", nBad, sBad.c_str());
+                     fHome->ListBox1->Items->Insert(0, AnsiString(("Abnormal after alarm reset / servo on: " + sBad).c_str()));
+-- 
+2.55.0.windows.5
+
