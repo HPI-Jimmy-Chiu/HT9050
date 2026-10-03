@@ -463,7 +463,7 @@
 | 2019 | SV | Contact Air Force Feedback | FT_8 |  |  |  |  |  | ✓ | 🟡 程式獨有 |
 | 2020 | SV | Contact Set KG | FT_8 |  |  |  |  |  | ✓ | 🟡 程式獨有 |
 | 2021 | SV/EC | Die Force KG | FT_8 |  |  |  |  | Die Force KG | ✓ |  |
-| 2022 | SV | Use Die Force | BOOLEAN |  |  |  |  | Use Die Force | ✓ | ⚠️ EC名稱: Code=`The no of pins on die` / ⚠️ EC型別: Code=INT_4 |
+| 2022 | SV | Use Die Force | BOOLEAN |  |  |  |  | Use Die Force | ✓ | ✅ 20261003 ST02-C16（Steven Q83＝A，照 V912 uHGemHT9045_EC.cpp:158／:161）：程式改成 EC 2022＝Use Die Force（BOOLEAN）、EC 2025＝The no of pins on die（INT_4），SV 2022 拿掉（golden 906 0618 是 SV 2022＝Use Die Force、EC 2022＝pin 數，同一個號碼兩樣東西） |
 | 2023 | SV | Die Force Kit Diameter | INT_4 |  |  |  |  | Die Force Kit Diameter | ✓ |  |
 | 2024 | SV | Die Force Feedback | FT_8 |  |  |  |  |  | ✓ | 🟡 程式獨有 |
 | 2050 | SV/EC | Product Type | ASCII |  |  |  |  | Product Type |  | 🔴 文件獨有 |
