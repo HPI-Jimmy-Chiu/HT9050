@@ -1243,4 +1243,5 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      workorder/README_WORKORDER.txt：1 個檔變動
      設定檔變動：machine_params/runcfg/system/teach.ini、machine_params/runcfg/system/teach.ini.bak_20261003_homepos0
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+10-03 給筆電（Jimmy 想知道，EastSun 交辦）：驅動器讀回來的扭力值＝**馬達額定扭力的 %，解析度 0.1 %（小數一位）**。讀 6077h（雙軸 B 軸 6877h），INT16；% = raw × 2704h:1 ÷ 2704h:2，9/15 實測每軸 2704h＝1/10 → raw÷10；Motor Test 顯示小數一位剛好等於原始解析度。細節（含 file:line、N·m 換算、範圍、注意事項）與手冊（安川 SGDXW／SGDXS EtherCAT 手冊、SGDXW 系列、SW3D 步進 EVER DS402）在 dispatch\20261003_torque_units_manuals\。
 MD5 清單在 MANIFEST_MD5.tsv。
