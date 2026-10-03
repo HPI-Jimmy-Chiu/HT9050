@@ -773,4 +773,7 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      操作紀錄 oplog_20261003.txt：新增 831 行
      設定檔變動：machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+  cpp 0146 9868761 VACDIAG —— EastSun 1003「圖片上幫我檢查一下 我G的數值 都不會變動 其他是會的 檢查一下軟體讀取位置有沒有錯誤」「不然幫我可讀取的位置數值 都列出來顯示在上面」。查程式：InArm A／C／E／G＝VC0～3，壓力讀這個 ECAT-VC4（ring 1 站 160）輸入資料的位元組 0/1、2/3、4/5、6/7（MyLaneIo.cpp:808-818），G 的 6/7 在 VC4 有效範圍內、算法與其他三格相同，IO_Table 四格設定一致——位址沒有錯。G 畫面是 OK（不是錯誤卡住），所以比較可能是模組 VC3 的壓力不在 6/7 或那一路硬體。vacuum.get 每個站多回：原始位元組 0～15、每兩個位元組換算的 kPa（VC n）、OK 位元 64～71／128～135。o2 編過；ctest I115B_Vacuum、VacuumVc8 過。
+  web 0091 bd4cb03 VACDIAG (web) —— Vacuum Unit 頁上方的診斷列（點一下收起），標出每個 VC 對應哪一格。
+  掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
 MD5 清單在 MANIFEST_MD5.tsv。
