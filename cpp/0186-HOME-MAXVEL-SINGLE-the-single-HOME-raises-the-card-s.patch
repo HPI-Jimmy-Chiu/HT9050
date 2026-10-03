@@ -1,0 +1,93 @@
+From 31f00b4626629fd873bce0041bc4311fc9586532 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 21:28:48 +0800
+Subject: [PATCH] =?UTF-8?q?HOME-MAXVEL-SINGLE:=20the=20single=20HOME=20rai?=
+ =?UTF-8?q?ses=20the=20card's=20speed=20ceiling=20before=20its=20home=20sp?=
+ =?UTF-8?q?eeds,=20like=20the=20engine=20home=20--=20EastSun=201003=20'?=
+ =?UTF-8?q?=E6=9F=A5=E4=B8=80=E4=B8=8BM30=20=E7=82=BA=E4=BD=95=E6=AD=B8?=
+ =?UTF-8?q?=E5=8E=9F=E9=BB=9E=E5=A4=B1=E6=95=97'=20(screenshot:=20'1203=20?=
+ =?UTF-8?q?=E8=A8=AD=E5=AE=9A=E5=8D=A1=E7=89=87=E6=AD=B8=E9=9B=B6=E9=80=9F?=
+ =?UTF-8?q?=E5=BA=A6=E5=A4=B1=E6=95=97=20...=20card=20returned=200x8000008?=
+ =?UTF-8?q?1').=200x80000081=20=3D=20InvalidAxParHomeVelLow=20(Advantech?=
+ =?UTF-8?q?=20AdvMotErr.h:177):=20M30=20MTrayX's=20HomeLowSpeed=2020000=20?=
+ =?UTF-8?q?/=20HomeHighSpeed=2030000=20are=20above=20CFG=5FAxMaxVel=20=3D?=
+ =?UTF-8?q?=20PJogHighSpeed=2015000,=20which=20golden=20InitMotor=20writes?=
+ =?UTF-8?q?=20(it=20had=20run=20in=20the=20full=20HOME).=20The=20engine=20?=
+ =?UTF-8?q?home=20raises=20the=20ceiling=20first=20(Pci1203MotorRoute.cpp?=
+ =?UTF-8?q?=20HOME-MAXVEL);=20the=20Motor=20Test=20/=20Teach=20HOME=20did?=
+ =?UTF-8?q?=20not.=20New=20RaiseCeilingForHome=20(WebMotorAccess.cpp,=20th?=
+ =?UTF-8?q?e=20jog's=20JOG-MAXVEL=20rule:=20a=20CFG=5FAxMaxVel=20/=20MaxAc?=
+ =?UTF-8?q?c=20/=20MaxDec=20the=20monitor=20KNOWS=20to=20be=20below=20the?=
+ =?UTF-8?q?=20need=20is=20raised=20to=20it,=20never=20lowered,=20unknown?=
+ =?UTF-8?q?=20=3D=20nothing=20sent)=20before=20the=20home=20family=20in=20?=
+ =?UTF-8?q?StartHome1203=20(DS402)=20and=20StartHomeCardSide,=20and=20befo?=
+ =?UTF-8?q?re=20the=20stepper=20leave=20move=20(it=20runs=20at=20a=20home?=
+ =?UTF-8?q?=20speed).=20ctest=20WebMotorAccess=20/=20homeclass=20/=20HomeM?=
+ =?UTF-8?q?onitor=20/=20HomeBlock=20pass?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ WebMotorAccess.cpp | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index 72fa6d6..2995284 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -1299,6 +1299,26 @@ void PushHomeJob(const HomeJob& h)
+     for (std::size_t i = 0; i < g_homes.size(); ++i) if (!g_homes[i].active) { g_homes[i] = h; placed = true; break; }
+     if (!placed) g_homes.push_back(h);
+ }
++//AI(W906-HOME-MAXVEL-SINGLE) 20261003: EastSun 1003「查一下M30 為何歸原點失敗」-- Motor Test HOME on M30 MTrayX: "1203 設定卡片歸零速度
++//  失敗 ... card returned 0x80000081" = InvalidAxParHomeVelLow (AdvMotErr.h:177): HomeLowSpeed 20000 / HomeHighSpeed 30000 above the card's
++//  CFG_AxMaxVel = PJogHighSpeed 15000 that golden InitMotor writes (the full HOME's InitMotor had run). The engine home raises the
++//  ceiling first (Pci1203MotorRoute.cpp HOME-MAXVEL); the single HOME did not. Same rule as the jog's JOG-MAXVEL above: a CFG_AxMax*
++//  the monitor KNOWS to be below what this home needs is raised to it (never lowered; unknown = nothing sent).
++bool RaiseCeilingForHome(IMotorAccessBackend& be, long long wireId, const MotionCtx& m, double vel, double acc, double dec, std::string& why)
++{
++    const struct { Pci1203SpeedParam which; double need; } mx[3] = { { kSpeedMaxVel, vel }, { kSpeedMaxAcc, acc }, { kSpeedMaxDec, dec } };
++    for (int i = 0; i < 3; ++i) {
++        double now = 0;
++        if (!(mx[i].need > 0) || !be.Pci1203SpeedNow(m.a.axis, (int)mx[i].which, now) || now >= mx[i].need) continue;
++        Pci1203Cmd c;
++        c.kind = kCmdAxSetSpeed; c.wireId = wireId; c.axis = m.a.axis; c.speed = mx[i].which; c.value = mx[i].need;
++        const Pci1203CmdResult res = be.Pci1203Execute(c);
++        if (CmdFailed(res)) { why = "1203 回原點前拉高速度上限失敗（CFG_AxMax*）—— " + CmdWhy(res); return false; }
++    }
++    return true;
++}
++double HomeVelNeed(const MotorGolden& g) { return (double)(g.homeHigh > g.homeLow ? g.homeHigh : g.homeLow); }
++
+ std::string StartHomeCardSide(const std::string& motorId, long long wireId, IMotorAccessBackend& be,
+                               const MotionCtx& m, const std::string& who, bool fromLS, HomeStartInfo& info)
+ {
+@@ -1307,6 +1327,7 @@ std::string StartHomeCardSide(const std::string& motorId, long long wireId, IMot
+         return who + ": 軸還在動（golden EtherCatMotHome case 1：先 DecStop，停好後再按一次 HOME）";
+     }
+     Stop1203(be, m.a.axis, wireId);                                             // golden: DecStop() before SetHomeSpeed
++    { std::string cw; if (!RaiseCeilingForHome(be, wireId, m, HomeVelNeed(m.g), m.g.accDb, m.g.decDb, cw)) return who + ": " + cw; }   //AI(W906-HOME-MAXVEL-SINGLE) 20261003
+     const struct { int which; double v; } hs[4] = {
+         { kHomeVelLow, (double)m.g.homeLow }, { kHomeVelHigh, (double)m.g.homeHigh }, { kHomeAcc, m.g.accDb }, { kHomeDec, m.g.decDb } };
+     for (int i = 0; i < 4; ++i) {
+@@ -1376,6 +1397,7 @@ std::string StartHome1203(const std::string& motorId, long long wireId, IMotorAc
+         //  on the PTP seed below; now it writes them first, like the examples and golden. The PTP seed is KEPT: EastSun measured
+         //  20260917 that Acm_AxHome copies PAR_AxVelHigh/VelLow/Acc into 6099h:1/:2 / 609Ah (Pci1203Gear.h:476-507), so without it the
+         //  drive would home at whatever PTP speed the last jog left. The drive's 6099h/609Ah and gear are logged (op log MOT drvHome/gear).
++        { std::string cw; if (!RaiseCeilingForHome(be, wireId, m, HomeVelNeed(m.g), m.g.accDb, m.g.decDb, cw)) return who + ": " + cw; }   //AI(W906-HOME-MAXVEL-SINGLE) 20261003: M30 0x80000081
+         const struct { int which; double v; } hs[4] = {
+             { kHomeVelLow, (double)m.g.homeLow }, { kHomeVelHigh, (double)m.g.homeHigh }, { kHomeAcc, m.g.accDb }, { kHomeDec, m.g.decDb } };
+         for (int i = 0; i < 4; ++i) {
+@@ -4060,6 +4082,8 @@ int MotorAccessStepperLeaveOrigin(IMotorAccessBackend& be, const std::string& mo
+     const unsigned run = (g.homeHigh && g.homeLow) ? (g.homeHigh < g.homeLow ? g.homeHigh : g.homeLow) : (g.homeHigh ? g.homeHigh : g.homeLow);
+     if (run == 0) { g_stepLeave.erase(motorId); why = motorId + "：回原點速度是 0，不移動"; return -1; }
+     const double init = (g.initSpeed && g.initSpeed < run) ? (double)g.initSpeed : (double)run;
++    { MotionCtx mc; mc.a = a; mc.g = g; std::string cw;                       //AI(W906-HOME-MAXVEL-SINGLE) 20261003: the leave move runs at a home speed too (M30 0x80000081)
++      if (!RaiseCeilingForHome(be, -1, mc, (double)run, g.accDb, g.decDb, cw)) { g_stepLeave.erase(motorId); why = motorId + "：" + cw; return -1; } }
+     const struct { Pci1203SpeedParam which; double v; } sp[4] = { { kSpeedInit, init }, { kSpeedRun, (double)run }, { kSpeedAcc, g.accDb }, { kSpeedDec, g.decDb } };
+     for (int i = 0; i < 4; ++i) {
+         Pci1203Cmd c; c.kind = kCmdAxSetSpeed; c.axis = a.axis; c.speed = sp[i].which; c.value = sp[i].v;
+-- 
+2.55.0.windows.5
+
