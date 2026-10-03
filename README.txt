@@ -753,4 +753,8 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      操作紀錄 oplog_20261003.txt：新增 930 行
      設定檔變動：machine_params/D_GPIB9045_system/general.ini、machine_params/D_HT9045_system/Mot_Table.csv、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/lastdata_backup2.dat、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261003_095732
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+  cpp 0145 f64409b PKG-131 —— 機台整合筆電第 131 包（GitHub main 19b954b、GitLab fd1b71c5）：Motor Test Gear Ratio 分頁（存檔會改 Mot_Table GearRatio／teach.ini）、Arm Cell 補充、St02 C9 G2／C14／C10、前面板 PAUSE 關提示框；⚠ 開機 Bin 顯示器開 COM14（NUMBER_PANEL_TYPE=3），沒接面板每 60 秒跳提示——機台設定沒動，等 EastSun 決定要不要設 0。
+                    wb_serve.cpp 衝突（第 130 包合併時 JAM-STOP 說明位置不同）：機台與基準只差 3 行網頁權杖 → 用筆電版補回那 3 行。其餘 5 檔三方合併乾淨。o2 全編過；34 支 30 過，4 支 *_HT9050 改餵正本 3 過、MachineMotors 差 MTestZ1 速度（EastSun 10:36 從 Motor Test 回寫 Mot_Table）。
+  web 0090 f8d179c PKG-131 (web) —— 同一包的 7 個網頁檔。
+  掃描：見下方。
 MD5 清單在 MANIFEST_MD5.tsv。
