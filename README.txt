@@ -982,4 +982,16 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      參考：機台 IO_Table 吸嘴列在 VC4／VC8 真空模組（InArm 站 160、OutArm 站 161、Index 站 162；OutArm 的 Bit 已在 10-03 改成跟 VC4 Port 一致，
      見 WORKLOG_MACHINE §1），真空開／破＝VC 的 DO、到位＝DI 64+VC（VacuumUnit/Vc8Route、TestIF_File_VacuumUnit）。
      請列出要改的流程點（In Arm／Out Arm／Index 各自的吸、放、檢查），修正後出包；需要機台確認的地方（哪 4 個吸嘴是一組）請列出來問 EastSun。
+10-03 派工給筆電（EastSun 交辦給 Jimmy）——機台端改了多次沒修好，紀錄檔一起放在 dispatch\20261003_F5_close_rebuild\：
+  ⚠ 給筆電（派工 4）：F5 之後關掉 HMI 視窗，程式沒有跟著結束——「關掉視窗後它才又開始編譯／啟動」，之後視窗又自己跳出來。EastSun：「你已經修正多次沒有修好」。
+     現象（hmi_shell.log 最後幾行）：18:20:48 F5 開出等待畫面 boot_wait.html（此時還在編譯）；18:21:32 EastSun 按關閉 → 「close: page answered "none"」→ 只有視窗結束，
+     F5 的 preLaunchTask 編譯照跑、wb_serve 編完照樣啟動，wb_serve 的 keeper（W906_HmiKeeperTick）發現沒有頁面又把 HMI 視窗開回來。
+     關鍵：boot_wait.html 沒有定義 HT9045ShellCloseRequest；hmi_shell 收到 "none" 時只關自己，沒有通知 F5 的編譯／啟動停下，也沒有通知 wb_serve。
+     機台端已試過的修正（都沒解決這個情況）：EXIT-ORDER a4f4c05（關站順序＋15 秒強制結束＋oplog EXIT 紀錄，只管已經在跑的 wb_serve）、
+     F5WAIT 3eab632、F5-PROGRESS／HMI-SECOND a87f2a5、F5-EXTCON 8b266d6、HMI-SHELL 1954b25、CLOSE-BUSY 5b766a4 …（完整清單 fix_history_exit_hmi_f5.txt）。
+     機台端草擬過的修法（沒套）：boot_wait 定義 HT9045ShellCloseRequest 回 'boot'；hmi_shell 在 'boot'／沒有頁面時寫 operator_close 旗標檔並對 wb_serve 送
+     Local\HT9045_wb_serve_quit_<pid>；wb_serve 的 W906_ExternalQuitDue 認旗標檔走正常關站，keeper 看到旗標就不再開視窗；F5 開頭清旗標。
+     ⚠ 另外要決定：關視窗時 F5 的「編譯」要不要也一起取消（VS Code 的 preLaunchTask 不在 hmi_shell 管轄內）。
+     附檔：hmi_shell.log（HMI 視窗紀錄）、bootsample_20261003_*.txt（每次開機的取樣）、launch.json／tasks.json（機台 F5 設定）、fix_history_exit_hmi_f5.txt；
+     操作紀錄 machine_log\oplog_20261003.txt（每輪開機、EXIT、關站都有時間戳）。
 MD5 清單在 MANIFEST_MD5.tsv。
