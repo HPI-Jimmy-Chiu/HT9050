@@ -1,0 +1,114 @@
+From e9eb8d1fffa9c5b12fbefd5586f44bfcec831bcd Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 18:34:50 +0800
+Subject: [PATCH] HOME-ALMRESET: the full-machine HOME starts with an Alarm
+ Reset (TMyEtherCatMotor::ResetState = Acm_AxResetError via the route) and
+ Servo ON of every enabled motor (case 300), waits 0.5 s (also the brakes'
+ servo-ON rule) and checks every motor to home in the new case 302: an axis
+ still in alarm or not excited is lit red, all such axes are listed in the
+ Home Monitor listbox + stdout, the first gets golden's motor jam popup and
+ HOME stops; otherwise golden's next step (305 / 310). EastSun 1003 'add alarm
+ reset of every motor to the full HOME', 'and detect which motor is abnormal',
+ 'check that every motor is excited at the start'. Not golden (golden resets /
+ servos ON per axis inside each home). ctest homeclass / HomeMonitor /
+ HomeBlock / NoteMotorError pass
+
+---
+ uhome.cpp | 60 ++++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 59 insertions(+), 1 deletion(-)
+
+diff --git a/uhome.cpp b/uhome.cpp
+index cf023cd..37d960e 100644
+--- a/uhome.cpp
++++ b/uhome.cpp
+@@ -702,7 +702,9 @@ void TfHome::InitGali_HomeTask()
+     MOT[MTestZ1].GaliSofDelayCount=0;
+     MOT[MTestZ2].GaliSofDelayCount=0;
+ }
+-
++//AI(W906-HOME-ALMRESET) 20261003: case 300 -> 302 (alarm reset + servo ON of every enabled motor, then the check); see case 302
++static TQPF_Timer s_W906HomeResetWait;
++static int        s_W906HomeAfterReset = 310;
+ bool ProcessMotorHome(bool Flag2)
+ {
+ #ifndef SOFT_SIMULTE
+@@ -2208,6 +2210,11 @@ bool ProcessMotorHome(bool Flag2)
+                     MOT[i].HomeFlag=1;
+                     fHome->ShowLed(i, 1);
+                 }
++                else                                                            //AI(W906-HOME-ALMRESET) 20261003: EastSun「全機回home 流程加入把每顆馬達全部送 alarm reset」
++                {                                                               //  ＋「檢查最開始時有沒有把所有馬達都激磁」-- NOT golden (golden resets / servos ON
++                    MOT[i].Motor->ResetState();                                 //  per axis inside each home, InitMotor in EtherCatMotHome Task 1): every enabled
++                    MOT[i].ServoOnOff(true);                                    //  motor gets its Alarm Reset (Acm_AxResetError via the route) and Servo ON here;
++                }                                                               //  case 302 checks the result after 0.5 s
+             }
+             MOT[MTrayX].TrayArmInitial();
+ 
+@@ -2260,6 +2267,9 @@ bool ProcessMotorHome(bool Flag2)
+             {
+                 fHome->iHomeStep=310;
+             }
++            s_W906HomeAfterReset=fHome->iHomeStep;                              //AI(W906-HOME-ALMRESET) 20261003: golden's next step, taken after the check
++            fHome->iHomeStep=302;
++            s_W906HomeResetWait.SetMSAndOn(500);                                //  0.5 s: the drives answer the reset / Servo ON (also the brakes' servo-ON 0.5 s rule)
+             MotorTask=FIRST_HOME;                                               //第一階段回Home
+             for(int i=0; i<TOTAL_MOTOR; i++)
+             {
+@@ -2272,6 +2282,54 @@ bool ProcessMotorHome(bool Flag2)
+                 }
+             }
+             break;
++        case 302:                                                               //AI(W906-HOME-ALMRESET) 20261003: EastSun「並且偵測哪顆馬達有異常」
++            if(fHome->fShow==false)
++            {
++                SoftStop=true;
++                break;
++            }
++            if(!s_W906HomeResetWait.Off())
++                break;
++            {
++                int iBad=-1, nBad=0;
++                std::string sBad;
++                for(int i=0; i<TOTAL_MOTOR; i++)
++                {
++                    if(fHome->HomeClass[i]->THomeFlag==0 || MOT[i].Motor==NULL || MOT[i].Motor->Enable==false)
++                        continue;
++                    MOT[i].ScanMotorStatus();
++                    const bool alm  = MOT[i].GetMotorAlarm();
++                    const bool svOn = MOT[i].Led[iServoOn];
++                    if(alm || !svOn)
++                    {
++                        if(iBad<0) iBad=i;
++                        ++nBad;
++                        fHome->ShowLed(i, 2);
++                        char one[96];
++                        snprintf(one, sizeof(one), "M%02d %s%s%s", i, MOT[i].Alias.c_str(), alm ? " ALARM" : "", svOn ? "" : " SERVO-OFF");
++                        if(!sBad.empty()) sBad += ", ";
++                        sBad += one;
++                    }
++                }
++                if(iBad>=0)                                                     //  an axis still in alarm / not excited after the reset: HOME stops,
++                {                                                               //  the first one gets golden's motor jam popup, the list goes to the listbox
++                    std::printf("[HOME] after Alarm Reset + Servo ON, %d motor(s) abnormal: %s\n", nBad, sBad.c_str());
++                    fHome->ListBox1->Items->Insert(0, AnsiString(("Abnormal after alarm reset / servo on: " + sBad).c_str()));
++                    StopAllMotor();
++                    SystemStart=false;
++                    iRef=MOT[iBad].GetErrorIndex();
++                    if(iRef==9) iRef=6;
++                    JamCode=MotorIndexToJamCode(iBad);
++                    ShowMotorErrorMessage(JamCode, MOT[iBad].GetMotorAlarm() ? iRef+1 : 0);
++                    fHome->fAbort=false;
++                    fHome->iHomeStep=1;
++                    SoftStop=true;
++                    return true;
++                }
++                fHome->ListBox1->Items->Insert(0, "All motors: alarm reset + servo on OK");
++                fHome->iHomeStep=s_W906HomeAfterReset;                          //  golden's next step (305 / 310)
++            }
++            break;
+         case 305:                                                               //Jimmychiu 20240307 : Loader Tray改用步進馬達
+             if(DoTopBtmHome(false))
+             {
+-- 
+2.55.0.windows.5
+
