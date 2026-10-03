@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-03 03:09
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 3e51a46 WORKLOG: 10-02/03 items 86-87 -- Z home back-off removed; package 129 integrated (／web 80cccd7。
+HT9050 機台參數快照（machine_params\）—— 2026-10-03 09:26
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 741a0bd PKG-130: GitHub main 75c49fd (GitLab main 577c41c5) on the machine -- INDEXZ2 (WB_／web f4dae6e。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置

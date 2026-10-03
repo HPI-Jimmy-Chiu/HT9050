@@ -716,4 +716,10 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆；沒有機台設定檔。
   cpp 0142 3e51a46 WORKLOG —— 工作紀錄第 86～87 項（Z 軸往回 200 刪掉、第 129 包；設計外掛部分＝tools 0148，0.162.0）。
   掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
+  cpp 0143 741a0bd PKG-130 —— 機台整合筆電第 130 包（GitHub main 75c49fd、GitLab 577c41c5）：INDEXZ2（WB_ENGINE_INDEXZ_1203 打開：Index Z1 在 START／HOME 時經 1203 移動，第一次 EastSun 在旁）、St01 review6 E-021～E-029（Contact 頁／自動 Offset 的 START 照原版啟動機台）、Ifor TP-1b、筆電收了機台 cpp 0131～0140。
+                    筆電已經帶機台的修改，所以 8 個 LOCAL 檔先列「機台比筆電多的行」：WebMotorAccess 三檔＋閘門腳本沒有 → 用筆電版；CMakeLists／tests／wb_serve 有機台的 TeachKb 與權杖關閉 → 三方合併；MachineType.h＝筆電版＋機台的 W906_WEB_TOKEN_ENFORCE 0 段落。Mot_Table 沒動。o2 全編過；挑 51 支 47 過，4 支 *_HT9050 改餵機台正本全過。
+  web 0087 f4dae6e PKG-130 (web) —— 同一包的 23 個網頁檔。
+  ⚠ 給筆電：(1) 機台的 W906_WEB_TOKEN_ENFORCE 0（TOKEN-OFF，EastSun 0928）main 沒有，請收；(2) 機台 repo 的 machines/HT9050 不在包裡，*_HT9050 測試在機台仍讀 9/24 的表——要不要把 machines/HT9050 也放進包？
+  掃描：見下方結果。
+  （推送掃描命中 10 處，逐一看過都是註解／鍵盤 PASSWORD 旗標／測試假值 pw-test-1 的誤報。另外 cTemperFrom_E023.cpp 的 E023T_PasswordRefused 含原版寫死的 Handler System 密碼——掃描沒抓到；它早已在 main 的 HSys.cpp／cObserver.cpp／fLotInfo.cpp／Config.json 等公開，這次沒有多公開。）
 MD5 清單在 MANIFEST_MD5.tsv。
