@@ -817,4 +817,13 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
                     o2 全編過；30 支 29 過，GearTeachSave 讀筆電 repo 的 machines/HT9050/snapshot（這台沒有）。
   ⚠ 給筆電：GearTeachSave 與 4 支 *_HT9050 測試讀 machines/HT9050（含 snapshot\），這些不在包裡，機台跑不到——要不要把 machines/HT9050 也放進包？
   掃描：見下方。
+  10-03 15:13 機台快照（EastSun 在機台上做的事，沒有程式修改）：
+     machine_log/oplog_20261003.txt：1 個檔變動
+     machine_params/D_GPIB9045_system：1 個檔變動
+     machine_params/D_HT9045_system：8 個檔變動
+     machine_params/README_PARAMS.txt：1 個檔變動
+     workorder/README_WORKORDER.txt：1 個檔變動
+     操作紀錄 oplog_20261003.txt：新增 965 行
+     設定檔變動：machine_params/D_GPIB9045_system/general.ini、machine_params/D_HT9045_system/Gerneral.ini、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/lastdata_backup2.dat、machine_params/D_HT9045_system/machinerecord.dat、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261003_143853、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261003_143931、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261003_144027
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 MD5 清單在 MANIFEST_MD5.tsv。
