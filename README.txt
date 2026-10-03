@@ -779,4 +779,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   cpp 0147 ec0e5f7 WORKLOG —— ★ 機台設定檔：D:\HT9045\system\IO_Table.csv 的 OutArm（站 161）吸嘴 Bit 改成跟 VC4 Port 一致（EastSun 1003「為什麼inarm 和outarm 吸嘴位置不一樣」→「照建議改」）。Bit＝原版 VaccumCopyFormSuck 當 VC 編號用的欄位；10-01 改 VC4 Port 時 OutArm 的 Bit 沒跟著改（仍是 VC8 反排 A=7…H=0），所以啟用的 A/C/E/G 顯示 Error5、停用的 B/D/F/H 反而顯示別格的壓力。改成 A/C/E/G＝3/2/1/0、B/D/F/H＝7/6/5/4，每格感測／吸／破三列共 24 列，其他欄不動；備份 D:\HT9045\_BACKUP_20261003_iotable_outarm_bit。新表在 machine_params\D_HT9045_system\IO_Table.csv。
   ⚠ 給筆電：machines/HT9050/IO_Table.csv 的 OutArm Bit 也要照這個改（MachineSuckers_HT9050 測試的期望值會跟著變）。
   掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
+  web 0092 e4261d4 VACDIAG-OFF —— EastSun 1003「檔到畫面了啦 快點改回來 嚴禁檔到畫面」：Vacuum Unit 頁上方的診斷列蓋住面板，改成頁面上不顯示（只有用 ?vudiag=1 另開分頁才顯示）。C++ 回傳的原始資料不變。
+  掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
 MD5 清單在 MANIFEST_MD5.tsv。
