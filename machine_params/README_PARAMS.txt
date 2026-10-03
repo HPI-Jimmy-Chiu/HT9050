@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-03 23:18
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 914ae4f HT9050-GALIHOME-READYDONE: the Galil-routed (Index Z, PCI-1203) DS402 home ends at／web 4377508。
+HT9050 機台參數快照（machine_params\）—— 2026-10-03 23:23
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 1ca2340 HT9050-HOME-TWOZ-2: the full HOME's Index Z moves (W906_HomeTwoZ) use MTestZ1's Ga／web 4377508。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
