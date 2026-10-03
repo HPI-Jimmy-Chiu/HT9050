@@ -975,4 +975,11 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      machine_params/README_PARAMS.txt：1 個檔變動
      workorder/README_WORKORDER.txt：1 個檔變動
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+10-03 派工給筆電（EastSun 交辦給 Jimmy）——機台端沒有動程式，請筆電端修正後出包：
+  ⚠ 給筆電（派工 3）：HT9050 自動流程的吸嘴對 IC 方式要改。機台現在跑的是「單顆 IC」：HT9050 選取單顆 IC 動作時，是 VC4 的 4 個吸嘴一起吸一顆 IC；
+     舊版（原版 9 系列）都是一個吸嘴吸一顆。所以自動流程裡跟「一個吸嘴＝一顆 IC」有關的部分都要跟著改：哪幾個吸嘴要一起開／破真空、真空到位的判斷
+     （4 個一起算一顆）、IC 有無／掉料判斷、吸嘴對應的 Tray／Socket 格位與 pitch、計數。
+     參考：機台 IO_Table 吸嘴列在 VC4／VC8 真空模組（InArm 站 160、OutArm 站 161、Index 站 162；OutArm 的 Bit 已在 10-03 改成跟 VC4 Port 一致，
+     見 WORKLOG_MACHINE §1），真空開／破＝VC 的 DO、到位＝DI 64+VC（VacuumUnit/Vc8Route、TestIF_File_VacuumUnit）。
+     請列出要改的流程點（In Arm／Out Arm／Index 各自的吸、放、檢查），修正後出包；需要機台確認的地方（哪 4 個吸嘴是一組）請列出來問 EastSun。
 MD5 清單在 MANIFEST_MD5.tsv。
