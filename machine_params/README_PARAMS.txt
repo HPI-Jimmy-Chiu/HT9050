@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-03 20:40
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 6ec291d HOME-BRAKE: the full HOME releases the brake groups once every motor is confirmed ／web 4377508。
+HT9050 機台參數快照（machine_params\）—— 2026-10-03 20:54
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ f5afaea HOME-TIMEOUT: a 1203 home that does not end within 90 s of its command is a failed／web 4377508。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
