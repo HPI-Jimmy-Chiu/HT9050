@@ -799,4 +799,10 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   cpp 0148 00eeacc JOG-MAXVEL —— EastSun 1003「M35~M40 幫我檢查一下 這幾顆是步進馬達 跟其他不同 我設定JOG 速度都沒有效過」。卡片的 JOG 速度不能超過 CFG_AxMaxVel，而這個上限只有 InitMotor 會寫（原版 CFG_AxMaxVel＝PJogHighSpeed），這台開機只對 MLoaderZ 跑 InitMotor；之後改 JogHigh，上限還是舊的——13:15 M35 改速度卡片回 0x80000087。改：送 JOG 速度前，監看器讀到的上限比這次要的速度／加減速低，就先把上限設回原版 InitMotor 的值（不低於這次的值）；讀不到或夠高就不送（同以前）。程式對步進／伺服沒有分支，問題是上限沒更新。
                     另外：M35～M40 的 Acc／Dec 只有 40000，JOG 加速度不跟百分比縮放，要加到 40 萬要 10 秒，按幾秒看起來會像速度沒變——這是 Mot_Table 資料，沒改。o2 編過；ctest WebMotorAccess 過（含新檢查）。
   掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
+  10-03 13:28 機台快照（EastSun 在機台上做的事，沒有程式修改）：
+     machine_log/oplog_20261003.txt：1 個檔變動
+     machine_params/README_PARAMS.txt：1 個檔變動
+     workorder/README_WORKORDER.txt：1 個檔變動
+     操作紀錄 oplog_20261003.txt：新增 38 行
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 MD5 清單在 MANIFEST_MD5.tsv。

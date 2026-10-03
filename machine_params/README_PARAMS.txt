@@ -1,4 +1,4 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-03 13:27
+HT9050 機台參數快照（machine_params\）—— 2026-10-03 13:28
 來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 00eeacc JOG-MAXVEL: before the jog family goes out, a CFG_AxMaxVel / MaxAcc / MaxDec the m／web e4261d4。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
