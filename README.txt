@@ -1287,4 +1287,13 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      workorder/README_WORKORDER.txt：1 個檔變動
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 10-03 給筆電（EastSun 交辦給 Jimmy，請建成 SKILL）：dispatch\20261003_homing_1203_skill\HOMING_1203_FOR_SKILL.md（開頭已附建議的 SKILL frontmatter name: ht9050-1203-homing）。重點：以前 SMC 是卡片回原點；PCI-1203 EtherCAT 不是 1203 回原點，是我們下命令給 1203、1203 再下命令給驅動器，由驅動器回原點（DS402 method 24/28），所以不同驅動器回原點可能不一樣（HT9050 實測：Yaskawa 伺服壓在原點上會先退開，SW3D-680 步進會一直往前找）。內容含：卡片式 vs 驅動器式、樹怎麼選路、今天找到的驅動器差異與修法、golden 對不上的地方、新驅動器上線檢查清單、待決定與要在教導後移除的 HT9050 暫時分支。
+  10-03 22:58 機台快照（EastSun 在機台上做的事，沒有程式修改）：
+     machine_log/oplog_20261003.txt：1 個檔變動
+     machine_params/D_GPIB9045_system：1 個檔變動
+     machine_params/D_HT9045_system：3 個檔變動
+     machine_params/README_PARAMS.txt：1 個檔變動
+     workorder/README_WORKORDER.txt：1 個檔變動
+     操作紀錄 oplog_20261003.txt：新增 577 行
+     設定檔變動：machine_params/D_GPIB9045_system/general.ini、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/lastdata_backup2.dat
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 MD5 清單在 MANIFEST_MD5.tsv。
