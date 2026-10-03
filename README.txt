@@ -726,4 +726,20 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
   web 0089 289fc48 VACBTN-TOGGLE —— EastSun 1003「往上的箭頭觸發是真空ON 關掉是OFF，往下箭頭觸發是破真空ON 沒觸發是OFF」＋選「按一下 ON、再按一下 OFF」，通道確認正確（往上＝吸）。oplog：每次按下 0.44～0.53 秒後又來一次點擊（連點／觸控觸發兩次），把輸出馬上切回 OFF；程式本身每次點擊只送一次、本來就是切換。改：同一顆箭頭 0.7 秒內的第二次點擊不算（連點的第二下也不算）；ON 時按鈕畫成凹下去（原本只變淺藍，看起來像沒反應）。只改網頁，C++ 不動。
   掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
+  10-03 09:45 機台快照（EastSun 在機台上做的事，沒有程式修改）：
+     machine_log/oplog_20260929.txt：1 個檔變動
+     machine_log/oplog_20260930.txt：1 個檔變動
+     machine_log/oplog_20261001.txt：1 個檔變動
+     machine_log/oplog_20261002.txt：1 個檔變動
+     machine_log/oplog_20261003.txt：1 個檔變動
+     machine_params/D_HT9045_system：2 個檔變動
+     machine_params/README_PARAMS.txt：1 個檔變動
+     workorder/README_WORKORDER.txt：1 個檔變動
+     操作紀錄 oplog_20260929.txt：新增 9982 行
+     操作紀錄 oplog_20260930.txt：新增 4681 行
+     操作紀錄 oplog_20261001.txt：新增 7559 行
+     操作紀錄 oplog_20261002.txt：新增 9171 行
+     操作紀錄 oplog_20261003.txt：新增 1328 行
+     設定檔變動：machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 MD5 清單在 MANIFEST_MD5.tsv。

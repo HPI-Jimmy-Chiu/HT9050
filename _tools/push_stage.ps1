@@ -1,7 +1,11 @@
 ﻿param(
   [string[]]$Cpp = @(), [string[]]$Web = @(),
-  [Parameter(Mandatory = $true)][string]$ReadmeFile,   # UTF-8 text to insert before the last README line
-  [Parameter(Mandatory = $true)][string]$MsgFile,      # commit message (UTF-8)
+  [string]$ReadmeFile = 'AUTO',                        # UTF-8 text to insert before the last README line; AUTO = written from what the snapshot changed
+  [string]$MsgFile = 'AUTO',                           # commit message (UTF-8); AUTO = generated
+  #   AI(W906-SNAPSHOT-PUSH) 20261003: EastSun「我做了什麼事情 也幫我推上去 不是只有改軟體才要推 嚴格執行」-- with no -Cpp / -Web and AUTO,
+  #   this is a snapshot-only push of what EastSun did on the machine: settings (machine_params\), the work order (workorder\) and his
+  #   operation log (machine_log\ = runcfg\logs\oplog_*.txt: every button / command / motor move with a time stamp). Nothing changed ->
+  #   exit 0 without a commit. _tools\push_snapshot.ps1 runs this every 30 min.
   [switch]$NoParams,                                   # skip the machine_params / workorder snapshot (default: always take it)
   [switch]$Commit                                      # without it: make patches + snapshot + README + manifest + scan only
 )
@@ -57,6 +61,7 @@ if (-not $NoParams) {
   if (Test-Path $WO) { Get-ChildItem $WO -Directory | Where-Object { $_.Name -ne $recipe } | Remove-Item -Recurse -Force }   # only the active one
   Mirror $rsrc (Join-Path $WO $recipe)
   Copy-Item -LiteralPath (Join-Path $RUNCFG 'config\LastSet.ini') -Destination (Join-Path $WO 'LastSet.ini') -Force
+  Mirror (Join-Path $RUNCFG 'logs') (Join-Path $PUSHDIR 'machine_log') @() @('oplog_*.txt')   # AI(W906-SNAPSHOT-PUSH) 20261003: EastSun's operation log
   $ts = Get-Date -Format 'yyyy-MM-dd HH:mm'
   $cHead = (git -C $CT log -1 --format='%h %s').Substring(0, [Math]::Min(90, (git -C $CT log -1 --format='%h %s').Length))
   $wHead = (git -C $WT log -1 --format='%h')
@@ -71,6 +76,7 @@ HT9050 機台參數快照（machine_params\）—— $ts
   D_HT9045_config\  ($(& $cnt (Join-Path $MP 'D_HT9045_config')) 檔)  → D:\HT9045\config\
   runcfg\           ($(& $cnt (Join-Path $MP 'runcfg')) 檔)  → D:\HT9045\_integ_ioweb\runcfg\   SetUp.inf（目前工單）、system\teach.ini（教導值）、config\（config.ini、LastSet.ini、Pci1203*.ini …）；logs\ 沒放
   D_GPIB9045_system\ ($(& $cnt (Join-Path $MP 'D_GPIB9045_system')) 檔) → D:\GPIB9045\system\   只收 *.ini／*.dat；general.ini 的 [Version] Model＝機種（HT9050＝9050GPIB，程式靠它啟動 HT9050 分支）
+  ..\machine_log\   ($(& $cnt (Join-Path $PUSHDIR 'machine_log')) 檔)  ← D:\HT9045\_integ_ioweb\runcfg\logs\oplog_*.txt   操作紀錄（每個按鈕、命令、馬達動作、開機都有時間戳；只供查閱，不用放回）
 
 注意
   * 這是 HT9050 這一台的設定。別台機台不要整包覆蓋：IO 對照或馬達表錯了，程式會照錯的對照推線圈、動馬達。
@@ -87,6 +93,32 @@ HT9050 目前工單（workorder\）—— $ts
   [IO.File]::WriteAllText((Join-Path $WO 'README_WORKORDER.txt'), $wd.Replace("`r`n", "`n"), $u8)
   $paramNote = "machine_params／workorder 快照 $ts（工單 $recipe）"
   "snapshot: $paramNote"
+}
+
+# AI(W906-SNAPSHOT-PUSH) 20261003: AUTO README section / commit message from what the snapshot changed
+if ($ReadmeFile -eq 'AUTO' -or $MsgFile -eq 'AUTO') {
+  $chg = @(git -C $PUSHDIR -c core.quotepath=false status --porcelain -uall -- machine_params workorder machine_log)
+  if (-not $chg.Count -and -not $new.Count) { 'nothing changed since the last push (settings / work order / operation log) -- no commit'; exit 0 }
+  $ts2 = Get-Date -Format 'MM-dd HH:mm'
+  $lines = @("  $ts2 機台快照（EastSun 在機台上做的事，沒有程式修改）：")
+  $groups = $chg | ForEach-Object { $p = $_.Substring(3).Trim('"'); ($p -split '/')[0] + '/' + (($p -split '/') | Select-Object -Skip 1 -First 1) } | Group-Object | Sort-Object Name
+  foreach ($g in $groups) { $lines += "     $($g.Name)：$($g.Count) 個檔變動" }
+  $ops = @($chg | Where-Object { $_ -match 'machine_log/oplog_' })
+  foreach ($o in $ops) {
+    $p = $o.Substring(3).Trim('"')
+    $ns = git -C $PUSHDIR diff --numstat -- $p
+    $added = if ($ns) { ($ns -split "`t")[0] } else { (Get-Content (Join-Path $PUSHDIR $p)).Count }
+    $lines += "     操作紀錄 $(Split-Path $p -Leaf)：新增 $added 行"
+  }
+  $cfg = @($chg | Where-Object { $_ -match 'machine_params/' -and $_ -notmatch 'README_PARAMS' } | ForEach-Object { $_.Substring(3).Trim('"') })
+  if ($cfg.Count) { $lines += '     設定檔變動：' + (($cfg | Select-Object -First 12) -join '、') + $(if ($cfg.Count -gt 12) { " …共 $($cfg.Count) 個" } else { '' }) }
+  $lines += '  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。'
+  if ($ReadmeFile -eq 'AUTO') { $ReadmeFile = Join-Path $env:TEMP 'push_snapshot_readme.txt'; [IO.File]::WriteAllText($ReadmeFile, ($lines -join "`n") + "`n", $u8) }
+  if ($MsgFile -eq 'AUTO') {
+    $cHead2 = git -C $CT log -1 --format='%h'; $wHead2 = git -C $WT log -1 --format='%h'
+    $MsgFile = Join-Path $env:TEMP 'push_snapshot_msg.txt'
+    [IO.File]::WriteAllText($MsgFile, "machine/integ-ioweb: machine snapshot $ts2 -- what EastSun did on the machine (settings / work order / operation log; no code change) -- machine C++ $cHead2, web $wHead2`n", $u8)
+  }
 }
 
 # README: insert before the last line (UTF-8 no BOM, LF)
@@ -114,7 +146,7 @@ foreach ($f in @($new) + @($ReadmeFile)) {
 }
 if (-not $NoParams) {
   $l1 = [Text.Encoding]::GetEncoding(28591)
-  foreach ($f in Get-ChildItem (Join-Path $PUSHDIR 'machine_params'), (Join-Path $PUSHDIR 'workorder') -Recurse -File -Force) {
+  foreach ($f in Get-ChildItem (Join-Path $PUSHDIR 'machine_params'), (Join-Path $PUSHDIR 'workorder'), (Join-Path $PUSHDIR 'machine_log') -Recurse -File -Force) {
     if ($f.Length -gt 50MB) { $hits += "$($f.FullName): larger than 50 MB" ; continue }
     if ($l1.GetString([IO.File]::ReadAllBytes($f.FullName)) -match $rxKey) { $hits += "$($f.FullName): key / token pattern" }
   }
@@ -135,7 +167,7 @@ if (-not $Commit) { 'dry run done (not committed; the folder now has the changes
 $remote = (git -C $PUSHDIR ls-remote origin refs/heads/machine/integ-ioweb) -split "`t" | Select-Object -First 1
 $local = git -C $PUSHDIR rev-parse HEAD
 if ($remote -ne $local) { "remote $remote != local $local -- NOT COMMITTED"; exit 4 }
-git -C $PUSHDIR add -A -- cpp web tools _tools machine_params workorder README.txt MANIFEST_MD5.tsv
+git -C $PUSHDIR add -A -- cpp web tools _tools machine_params workorder machine_log README.txt MANIFEST_MD5.tsv
 git -C $PUSHDIR commit -q -F $MsgFile
 if ($LASTEXITCODE) { throw 'commit failed' }
 git -C $PUSHDIR push origin HEAD:machine/integ-ioweb
