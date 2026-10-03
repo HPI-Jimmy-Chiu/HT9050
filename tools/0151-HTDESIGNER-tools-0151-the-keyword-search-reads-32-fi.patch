@@ -1,0 +1,211 @@
+From 2cfa3da1e290039746be3e305a39bc7f6062af14 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 18:25:22 +0800
+Subject: [PATCH] HTDESIGNER (tools 0151): the keyword search reads 32 files at
+ once (about 3x faster)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EastSun 1003: "你搜尋關鍵字 是用並列運算 去搜檔案嗎 怎感覺很慢"
+- It was one file at a time: 4,364 files / 217 MB took 10-11 s here, nearly all
+  of it waiting for the reads (decoding + matching all of them: 0.3 s).
+- lib/projectsearch.js: pool(items, 32, fn, stop); search() reads 32 files at
+  once, each file's hits in its own slot, joined in file order at the end -- the
+  same list as before (checked on 4 searches against the old code: same hits,
+  same order); limit / cancel still stop it. listFiles() lists a folder level at
+  a time, its folders together. Now about 3 s.
+- No in-memory cache: this PC has 7.7 GB with 1.5 GB free; keeping 217 MB of
+  text resident is too much here.
+
+Tests: run_all 3/3 layers (lib 183 -- a new one: 120 files in nested folders,
+order / limit / cancel); real VS Code 156/159 (the 3 known stale checks).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/vscode-htdesigner/CHANGELOG.md         |  4 +
+ tools/vscode-htdesigner/HANDOVER.md          |  1 +
+ tools/vscode-htdesigner/lib/projectsearch.js | 92 +++++++++++++-------
+ tools/vscode-htdesigner/test/run_tests.js    | 22 +++++
+ 4 files changed, 89 insertions(+), 30 deletions(-)
+
+diff --git a/tools/vscode-htdesigner/CHANGELOG.md b/tools/vscode-htdesigner/CHANGELOG.md
+index 7ba5d1c..4f6ee18 100644
+--- a/tools/vscode-htdesigner/CHANGELOG.md
++++ b/tools/vscode-htdesigner/CHANGELOG.md
+@@ -3,6 +3,10 @@
+ 每一版多了什麼。怎麼操作看 [操作一覽](CHEATSHEET.md)，詳細說明看 README。
+ 
+ ## 0.162.0
++- 機台端補丁（tools 0151，版本號不變）：**搜尋變快約 3 倍**（EastSun 1003：「你搜尋關鍵字是用並列運算去搜檔案嗎，怎感覺很慢」）。
++  以前是一個檔讀完才讀下一個：4,364 個檔、217 MB 要 10～11 秒，幾乎都在等硬碟（解碼加比對全部才 0.3 秒）。
++  現在同時讀 32 個檔、列資料夾也一起列：約 3 秒，找到的結果、順序跟以前一模一樣。
++  沒有把檔案內容留在記憶體（這台 7.7 GB 只剩 1.5 GB 可用，217 MB 常駐太吃緊）。
+ - 機台端補丁（tools 0150，版本號不變）：**「尋找」變成自己的視窗，而且看得到之前搜尋過什麼**（EastSun 1003：「你搜尋關鍵字的視窗可以額外的視窗嗎，不要用內建的，並且我可以看到我之前搜尋了什麼」）。
+   Ctrl+F（或 Ctrl+Shift+F）開一個獨立的浮動視窗「尋找」（可以拖到別的螢幕）：上面是尋找目標、搜尋範圍、大小寫／全字／正規式；
+   左邊「之前搜尋的」列出搜尋紀錄（最新的在上面，寫範圍、幾筆、時間；按一下＝再找一次，× 刪一筆，「清除」全刪；關掉 VS Code 也留著）；
+diff --git a/tools/vscode-htdesigner/HANDOVER.md b/tools/vscode-htdesigner/HANDOVER.md
+index 5435091..f5d0a2b 100644
+--- a/tools/vscode-htdesigner/HANDOVER.md
++++ b/tools/vscode-htdesigner/HANDOVER.md
+@@ -134,6 +134,7 @@
+       - **Ctrl+F**（EastSun 1003：「我ctrl+F 還是會出現預設的視窗，讓我以為在他那邊搜尋」）：package.json 多一條 ctrl+f＝`ht9045Designer.find`，when＝設計畫面在前面（`activeCustomEditorId == 'ht9045Designer.editor'`、不在改字、焦點不在側欄／面板）；`cmdFind` 開框前先 `closeFindWidget`／`editor.action.webvieweditor.hideFind`。`vscode_it` 的 BtnPanelLane3／Alias 三項 1003 偶發失敗（同一版重跑會過），失敗時明細會寫 `active=… data=… rows=…`。
+       - ⚠ smoke 的執行列測試要先 `clearInterval(rb.procTimer)`：機台上真的有 wb_serve 在跑時，⏹ 會在「閒置」檢查裡亮起來（那是對的，測試要跟真實的行程清單隔開）。⚠ 筆電還沒收。
+     - 機台補丁 tools 0150（20261003，版本號不變）：**尋找視窗**（EastSun 1003：「你搜尋關鍵字的視窗可以額外的視窗嗎，不要用內建的，並且我可以看到我之前搜尋了什麼」）。`ProjectSearch.openWindow`：WebviewPanel `ht9045Designer.findWindow`（`media/findwin.js`／`findwin.css`），建好後 `workbench.action.moveEditorToNewWindow` 浮出（設定 `find.newWindow`）；`cmdFind` 先關 VS Code 的尋找框再開它（`find.window` 關掉＝舊的 QuickPick）。紀錄在 `globalState['htd.findHistory']`（最多 50、同字同範圍只留一筆）。結果按一下＝`open(h, fwCol)`，開在叫出視窗前的編輯群組（不是浮動視窗裡）。`run(q, scope, file, { quiet })`：從視窗找時不拉側欄、不跳訊息。範圍沒有「即時標示」（那是 VS Code 內建的框）。
++    - 機台補丁 tools 0151（20261003，版本號不變）：`lib/projectsearch.js` 並列讀檔（EastSun 1003「搜尋怎感覺很慢」）。`pool(items, 32, fn, stop)`：`search` 同時讀 32 個檔，每個檔的結果放自己的格子，最後照檔案順序接起來（跟一個一個讀的結果逐筆相同，量過 4 種搜尋）；`listFiles` 一層一層、同一層的資料夾一起列。量測（這台）：一個一個讀 10～11 秒 → 3 秒；解碼＋比對全部只要 0.3 秒，剩下的是讀檔（看起來是防毒每讀一個檔就掃一次）。**沒做記憶體快取**：這台 7.7 GB、只剩 1.5 GB，217 MB 常駐太吃緊；要再快就做「只留小檔、有上限」的快取。
+     - ⚠ **只有包裡改的檔、新檔要「原樣複製位元組」**（`[IO.File]::ReadAllBytes`／`WriteAllBytes`），不要讀成文字再寫：讀成文字會把 BOM 拿掉，而 `test\panels_render.ps1` 有中文，PowerShell 5.1 沒有 BOM 就讀錯。兩邊都改的才用 `git merge-file` 的結果（那幾個是 .md／.js）。
+     - 操作員在跑 `wb_serve` 的時候也可以跑外掛的測試：測試頁有 CSP 封網路（探針測試會驗證），只用隨機的 DevTools 埠。會連 `wb_serve` 的只有 `e2e_*`，不跑。
+   - **機台要新版的時候**：這台聯絡不到筆電端的工作階段（`ListAgents` 看不到），也讀不到 GitLab。
+diff --git a/tools/vscode-htdesigner/lib/projectsearch.js b/tools/vscode-htdesigner/lib/projectsearch.js
+index ebed568..48cf617 100644
+--- a/tools/vscode-htdesigner/lib/projectsearch.js
++++ b/tools/vscode-htdesigner/lib/projectsearch.js
+@@ -43,18 +43,33 @@ function makeRe(q, opts) {
+   try { return { re: new RegExp(src, o.caseSensitive ? 'g' : 'gi') }; } catch (e) { return { error: '正規式寫錯了：' + e.message }; }
+ }
+ 
++// AI(W906-HTDESIGNER) 20261003 (machine, EastSun: "你搜尋關鍵字 是用並列運算 去搜檔案嗎 怎感覺很慢"): it was one file at a
++// time -- 4,364 files / 217 MB took 12 s, nearly all of it waiting for the disk (decoding + matching them all: 0.3 s).
++// Now this many reads / directory listings are in flight at once (32 at once: 2.9 s here).
++const PARALLEL = 32;
++/** Run fn(item, i) over items, `n` at a time; stops taking new ones once stop() says so. */
++async function pool(items, n, fn, stop) {
++  let next = 0;
++  const worker = async () => { while (next < items.length && !(stop && stop())) { const i = next++; await fn(items[i], i); } };
++  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
++}
++
+ /** The files to search under one root (sorted, so a run is repeatable). */
+ async function listFiles(root) {
+   const out = [];
+-  const stack = [root];
+-  while (stack.length) {
+-    const d = stack.pop();
+-    let ents;
+-    try { ents = await fsp.readdir(d, { withFileTypes: true }); } catch (e) { continue; }
+-    for (const e of ents) {
+-      const p = path.join(d, e.name);
+-      if (e.isDirectory()) { if (!SKIP_DIR.test(e.name)) stack.push(p); } else if (e.isFile() && (EXT.has(path.extname(e.name).toLowerCase()) || NAMES.has(e.name))) out.push(p);
+-    }
++  let level = [root];
++  // (one directory level at a time, its directories listed together)
++  while (level.length) {
++    const nextLevel = [];
++    await pool(level, PARALLEL, async d => {
++      let ents;
++      try { ents = await fsp.readdir(d, { withFileTypes: true }); } catch (e) { return; }
++      for (const e of ents) {
++        const p = path.join(d, e.name);
++        if (e.isDirectory()) { if (!SKIP_DIR.test(e.name)) nextLevel.push(p); } else if (e.isFile() && (EXT.has(path.extname(e.name).toLowerCase()) || NAMES.has(e.name))) out.push(p);
++      }
++    });
++    level = nextLevel;
+   }
+   return out.sort((a, b) => a.localeCompare(b));
+ }
+@@ -90,31 +105,48 @@ async function search(roots, re, opts) {
+   // (a root with files: only those -- the "current file" scope)
+   for (const r of roots) if (r && r.root) lists.push({ r, files: Array.isArray(r.files) ? r.files.slice() : await listFiles(r.root) });
+   const total = lists.reduce((n, l) => n + l.files.length, 0);
++  // (read PARALLEL files at once; each file's hits kept in its own slot, put together in file order at the end, so the
++  //  list is the same as one-at-a-time -- the order of the roots, then of the files)
++  const jobs = [];
++  for (const { r, files } of lists) for (const f of files) jobs.push({ r, f });
++  const slots = new Array(jobs.length);
++  let scanned = 0, found = 0, cancelled = false;
++  // (each match is its own RegExp: lastIndex is per search)
++  const reOf = () => new RegExp(re.source, re.flags);
++  await pool(jobs, PARALLEL, async ({ r, f }, i) => {
++    if (o.cancelled && o.cancelled()) { cancelled = true; return; }
++    let buf;
++    try {
++      const st = await fsp.stat(f);
++      if (st.size > MAX_FILE) { scanned++; return; }
++      buf = await fsp.readFile(f);
++    } catch (e) { scanned++; return; }
++    scanned++;
++    if (o.progress && scanned % 200 === 0) o.progress(scanned, total);
++    if (buf.indexOf(0) >= 0 && buf.indexOf(0) < 4096) return;   // binary
++    const { text, enc } = decode(buf, r.kind);
++    const hs = hitsIn(text, reOf(), o.perFile);
++    if (!hs.length) return;
++    slots[i] = { r, f, enc, hs };
++    found += hs.length;
++  }, () => cancelled || found >= o.limit || !!(o.cancelled && o.cancelled() && (cancelled = true)));
+   const hits = [];
+-  let scanned = 0, withHits = 0, truncated = false;
+-  for (const { r, files } of lists) {
+-    for (const f of files) {
+-      if (o.cancelled && o.cancelled()) return { hits, files: withHits, scanned, truncated: true, cancelled: true, ms: Date.now() - t0 };
+-      scanned++;
+-      if (o.progress && scanned % 200 === 0) o.progress(scanned, total);
+-      let buf;
+-      try {
+-        const st = await fsp.stat(f);
+-        if (st.size > MAX_FILE) continue;
+-        buf = await fsp.readFile(f);
+-      } catch (e) { continue; }
+-      if (buf.indexOf(0) >= 0 && buf.indexOf(0) < 4096) continue;   // binary
+-      const { text, enc } = decode(buf, r.kind);
+-      const hs = hitsIn(text, re, Math.min(o.perFile, o.limit - hits.length));
+-      if (!hs.length) continue;
+-      withHits++;
+-      const rel = path.relative(r.root, f);
+-      for (const h of hs) hits.push(Object.assign({ area: r.area, file: f, rel, enc }, h));
++  let withHits = 0, truncated = cancelled;
++  for (const s of slots) {
++    if (!s) continue;
++    if (hits.length >= o.limit) { truncated = true; break; }
++    withHits++;
++    const rel = path.relative(s.r.root, s.f);
++    for (const h of s.hs) {
+       if (hits.length >= o.limit) { truncated = true; break; }
++      hits.push(Object.assign({ area: s.r.area, file: s.f, rel, enc: s.enc }, h));
+     }
+-    if (truncated) break;
+   }
+-  return { hits, files: withHits, scanned, total, truncated, ms: Date.now() - t0 };
++  // (the limit reached while files were still unread: more may be there)
++  if (found >= o.limit && scanned < jobs.length) truncated = true;
++  const res = { hits, files: withHits, scanned, total, truncated, ms: Date.now() - t0 };
++  if (cancelled) res.cancelled = true;
++  return res;
+ }
+ 
+ /** The results as plain text (one line per hit), for the clipboard / the output panel. */
+diff --git a/tools/vscode-htdesigner/test/run_tests.js b/tools/vscode-htdesigner/test/run_tests.js
+index 583335e..002e5ce 100644
+--- a/tools/vscode-htdesigner/test/run_tests.js
++++ b/tools/vscode-htdesigner/test/run_tests.js
+@@ -1122,6 +1122,28 @@ async function main() {
+       got.rx === '1/3,5/4,10/2' && got.badRx && got.long && (!got.real || (got.real.golden > 100 && got.real.goldenBig5)),
+       'projectsearch: golden decoded as Big5 (吸嘴 found there -- VS Code\'s Find in Files reads it as UTF-8 and never matches), UTF-8 elsewhere (a non-UTF-8 file falls back to Big5); case-insensitive by default, whole word, case, regex (a bad one said); line / column; a long line cut around the hit',
+       JSON.stringify(got));
++    // (1003 machine: files read 32 at a time -- the list is still in file order, roots in their order; the limit cuts
++    //  in that order; a cancel stops it) -- a throw-away tree of 120 files in nested folders
++    const pDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'htd_par_'));
++    const pA = path.join(pDir, 'a'), pB = path.join(pDir, 'b');
++    for (let i = 0; i < 120; i++) {
++      const d = path.join(i % 2 ? pB : pA, 'd' + (i % 5), 'e' + (i % 3));
++      fs.mkdirSync(d, { recursive: true });
++      // (bigger files first in name order: a slow read must not move its hits later)
++      fs.writeFileSync(path.join(d, 'f' + String(i).padStart(3, '0') + '.txt'), 'x'.repeat(i < 10 ? 200000 : 10) + '\nKEY ' + i + '\nKEY again\n');
++    }
++    const pR = [{ area: 'one', root: pA, kind: 'port' }, { area: 'two', root: pB, kind: 'port' }];
++    const pAll = await ps.search(pR, ps.makeRe('KEY').re, {});
++    const pWant = [].concat(...await Promise.all(pR.map(async x => (await ps.listFiles(x.root)).map(f => [x.area, f]))));
++    const pOrder = pAll.hits.filter((h, i) => i % 2 === 0).map(h => h.area + '|' + h.file).join('\n') === pWant.map(w => w.join('|')).join('\n');
++    const pLim = await ps.search(pR, ps.makeRe('KEY').re, { limit: 7 });
++    const pLimOk = pLim.hits.length === 7 && pLim.truncated && pLim.hits.map(h => h.file).join() === pAll.hits.slice(0, 7).map(h => h.file).join();
++    let pN = 0;
++    const pCx = await ps.search(pR, ps.makeRe('KEY').re, { cancelled: () => ++pN > 5 });
++    try { fs.rmSync(pDir, { recursive: true, force: true }); } catch (e) { /* temp */ }
++    ok(pAll.hits.length === 240 && pAll.files === 120 && pAll.scanned === 120 && pOrder && pLimOk && pCx.cancelled && pCx.truncated && pCx.scanned < 120,
++      'projectsearch reads 32 files at once: the hits in file order (roots in order, a big file first keeps its place), the limit cut in that order, a cancel stops it',
++      JSON.stringify({ n: pAll.hits.length, files: pAll.files, pOrder, lim: pLim.hits.length, limT: pLim.truncated, cx: { c: pCx.cancelled, s: pCx.scanned } }));
+   }
+ 
+   // --- cppsymbols (AI 20261001, 0.140): Visual Studio's navigation bar (類別 ▾ | 成員 ▾) for the breadcrumbs
+-- 
+2.55.0.windows.5
+

@@ -994,4 +994,10 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      ⚠ 另外要決定：關視窗時 F5 的「編譯」要不要也一起取消（VS Code 的 preLaunchTask 不在 hmi_shell 管轄內）。
      附檔：hmi_shell.log（HMI 視窗紀錄）、bootsample_20261003_*.txt（每次開機的取樣）、launch.json／tasks.json（機台 F5 設定）、fix_history_exit_hmi_f5.txt；
      操作紀錄 machine_log\oplog_20261003.txt（每輪開機、EXIT、關站都有時間戳）。
+=== tools 0151 (20261003, machine) -- HTML designer (tools/vscode-htdesigner), version stays 0.162.0 ===
+- The keyword search reads 32 files at once (EastSun 1003: "search feels slow"): 10-11 s -> about 3 s here
+  (4,364 files / 217 MB; the time was the reads, not the matching). Same hits, same order as before.
+  No in-memory cache (this PC: 7.7 GB, 1.5 GB free).
+- Tests: run_all 3/3 layers; real VS Code 156/159 (3 known stale checks).
+- ! For the laptop: still not taken -- machine patches tools 0136 / 0143 / 0145 / 0147 / 0149 / 0150 / 0151.
 MD5 清單在 MANIFEST_MD5.tsv。
