@@ -1,0 +1,257 @@
+From fc0d614053b8e36f7eea6403310940278020d9e8 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 18:19:39 +0800
+Subject: [PATCH] HOME-FAILVISIBLE: the full-machine HOME on the 1203 no longer
+ hangs silently (EastSun 1003 'fix the 1203 full HOME'; review of every step):
+ (1) a DS402 home the drive reported done counts in TMyMotor::MotorHome case
+ 20 -- method 24/28 ends just off the origin switch (8 servos in today's
+ oplog), so golden's origin-lamp check retried 3x then gave up; (2)
+ RouteHomeDone returns -1 when the home was never sent, on ERROR_STOP, or
+ after ~5 s READY without HOMING -> TMyEtherCatMotor home fault -> MotorHome
+ returns 2 (was 0 forever); (3) GOLDEN DEFECT in uhome.cpp (3 sites):
+ 'HomeFlag==0 && ret==2' never fired because MotorHome sets HomeFlag=2 before
+ returning 2 -> now 'HomeFlag!=1 && ret==2', so a failed / timed-out home
+ raises the motor jam alarm and stops HOME. ctest Pci1203MotorRoute (+section
+ N, ERROR_STOP / never-sent now -1), EcatMotorRoute, HomeMonitor, HomeBlock,
+ homeclass, motor_w4, sim_motor, NoteMotorError, WebMotorAccess pass; *_HT9050
+ data failures unchanged (repo machines/HT9050 is the 09-24 table); gates pass
+
+---
+ EtherCAT/Pci1203MotorRoute.cpp     | 31 +++++++++++++++++++++++++-----
+ Motor/EcatMotorRoute.h             |  2 +-
+ Motor/HTMotor.h                    |  2 +-
+ Motor/myEthercatmotor.cpp          |  5 +++--
+ Motor/mymotor.cpp                  | 16 +++++++++++++--
+ tests/test_pci1203_motor_route.cpp | 16 +++++++++++++--
+ uhome.cpp                          |  6 +++---
+ 7 files changed, 62 insertions(+), 16 deletions(-)
+
+diff --git a/EtherCAT/Pci1203MotorRoute.cpp b/EtherCAT/Pci1203MotorRoute.cpp
+index 3575d94..048e7f1 100644
+--- a/EtherCAT/Pci1203MotorRoute.cpp
++++ b/EtherCAT/Pci1203MotorRoute.cpp
+@@ -109,7 +109,7 @@ struct AxisRec {
+     bool          havePend; unsigned long pendPoll;      // ... at its last ACCEPTED state-changing command (4.2)
+     bool          stuck;                                 // Q11: refused / failed / DRY motion, until the next stop
+     bool          stopSkipped;                           // the StopDec of this DecStop was skipped (Q7) -> skip its ExtDrive(0)
+-    bool          homeActive, homeSent, homeSawHoming, homeCardSide, homeNoHomingNoted;
++    bool          homeActive, homeSent, homeSawHoming, homeCardSide, homeNoHomingNoted;   int homeReadyNoHoming;   //AI(W906-HOME-FAILVISIBLE) 20261003: RouteHomeDone calls that read READY with no HOMING seen
+     double        spd[kSpd];    // last SUCCESSFUL write per Pci1203SpeedParam (Q7)
+     bool          spdOk[kSpd];
+     unsigned long bindTries;
+@@ -117,7 +117,7 @@ struct AxisRec {
+     AxisRec()
+         : claimed(false), motorId(-1), haveCmd(false), lastCmdPoll(0), havePend(false), pendPoll(0)
+         , stuck(false), stopSkipped(false), homeActive(false), homeSent(false), homeSawHoming(false)
+-        , homeCardSide(false), homeNoHomingNoted(false), bindTries(0)
++        , homeCardSide(false), homeNoHomingNoted(false), homeReadyNoHoming(0), bindTries(0)
+     {
+         for (int q = 0; q < kSpd; ++q) { spd[q] = 0.0; spdOk[q] = false; }
+     }
+@@ -541,7 +541,7 @@ int RouteHomeStart(int board, int port, bool homeDir, double hi, double lo, doub
+     int slot = -1;
+     std::string why;
+     const unsigned long pre = Preflight(board, port, rec, slot, why);
+-    if (rec) { rec->homeActive = true; rec->homeSent = false; rec->homeSawHoming = false; rec->homeCardSide = false; rec->homeNoHomingNoted = false; }
++    if (rec) { rec->homeActive = true; rec->homeSent = false; rec->homeSawHoming = false; rec->homeCardSide = false; rec->homeNoHomingNoted = false; rec->homeReadyNoHoming = 0; }
+     if (pre != 0) {
+         if (rec) rec->stuck = true;
+         ++s_stats.refused;
+@@ -639,7 +639,18 @@ int RouteHomeDone(int board, int port)
+     NoteForeign();
+     Pci1203MotorRouteEnv& e = Env();
+     AxisRec* rec = Find(board, port);
+-    if (rec == 0 || !rec->homeActive || !rec->homeSent) return 0;
++    if (rec == 0 || !rec->homeActive) return 0;
++    //AI(W906-HOME-FAILVISIBLE) 20261003: EastSun 1003「把1203 的全機回home 修好」-- a home that cannot finish is reported (-1) instead of
++    //  0 forever: golden's full HOME waited silently at step 375 (MotorHome's 90 s ResetTime never alarms there, review 1003).
++    //  -1 = the home command was never sent (a RouteHomeStart refusal / failed write), ERROR_STOP while homing, or READY for
++    //  kHomeReadyNoHomingCalls calls (~5 s at the 500 ms engine beat) without one HOMING sample. TMyEtherCatMotor turns it into a
++    //  home fault -> TMyMotor::MotorHome returns 2 -> uhome's motor-alarm path (jam code popup, HOME stopped).
++    const int kHomeReadyNoHomingCalls = 10;
++    if (!rec->homeSent) {
++        rec->homeActive = false;
++        Say(board, port, "HomeDone", "FAILED", "the home command was never sent (see the HomeStart line) -> reported as a failed home");
++        return -1;
++    }
+     if (!e.CardUsable()) return 0;
+     int hits = 0;
+     const int slot = Pci1203MotorRouteFindSlot(e, board, port, &hits);
+@@ -648,11 +659,21 @@ int RouteHomeDone(int board, int port)
+     if (!a.valid || !a.opened) return 0;
+     if (Pending(*rec, e.PollCount())) return 0;
+     if (a.state == kEcStaHoming) { rec->homeSawHoming = true; return 0; }
++    if (a.state == kEcStaErrorStop) {                                  //AI(W906-HOME-FAILVISIBLE) 20261003
++        rec->homeActive = false;
++        Say(board, port, "HomeDone", "FAILED", "ERROR_STOP while homing -> reported as a failed home");
++        return -1;
++    }
+     if (a.state == kEcStaReady) {
+         if (!rec->homeSawHoming) {
+             if (!rec->homeNoHomingNoted) {
+                 rec->homeNoHomingNoted = true;
+-                Say(board, port, "HomeDone", "WAITING", "READY without a HOMING sample since the home command -- not reported done (golden's 90 s ResetTime decides)");
++                Say(board, port, "HomeDone", "WAITING", "READY without a HOMING sample since the home command -- not reported done yet");
++            }
++            if (++rec->homeReadyNoHoming >= kHomeReadyNoHomingCalls) {    //AI(W906-HOME-FAILVISIBLE) 20261003: was 0 forever
++                rec->homeActive = false;
++                Say(board, port, "HomeDone", "FAILED", "READY ~5 s without a HOMING sample -> reported as a failed home");
++                return -1;
+             }
+             return 0;
+         }
+diff --git a/Motor/EcatMotorRoute.h b/Motor/EcatMotorRoute.h
+index 32b5b09..dff7cc9 100644
+--- a/Motor/EcatMotorRoute.h
++++ b/Motor/EcatMotorRoute.h
+@@ -115,7 +115,7 @@ struct TEcatMotorRoute {
+     bool          (*initCfg)(int board, int port, int motorClass, bool sensorType, bool in1Logic,
+                              double maxVel, double maxAcc, double maxDec);     // InitMotor's ladder + table (design 1.2)
+     int           (*homeStart)(int board, int port, bool homeDir, double hi, double lo, double acc, double dec);   // 1 = issued
+-    int           (*homeDone)(int board, int port);                              // 1 done, 0 not yet
++    int           (*homeDone)(int board, int port);                              // 1 done, 0 not yet, -1 failed (AI(W906-HOME-FAILVISIBLE) 20261003)
+     bool          (*homeCardSide)(int board, int port);                          // last homeStart was card-side (zero after)
+ };
+ 
+diff --git a/Motor/HTMotor.h b/Motor/HTMotor.h
+index 68819c8..951a29e 100644
+--- a/Motor/HTMotor.h
++++ b/Motor/HTMotor.h
+@@ -115,7 +115,7 @@ public:
+     double          GearRatio;
+     int             PSoftLimitP;
+     int             PSoftLimitN;
+-    int             LastHomePos;
++    int             LastHomePos;   bool bW906HomeTrusted = false; bool bW906HomeFault = false;   //AI(W906-HOME-FAILVISIBLE) 20261003: set by TMyEtherCatMotor's routed 1203 home -- Trusted = a DS402 home the drive reported done (TMyMotor::MotorHome case 20 skips the origin-lamp check), Fault = the route reported the home failed (MotorHome returns 2). Same line
+     int             EncoderType;
+     int             iHomePitch;
+ 
+diff --git a/Motor/myEthercatmotor.cpp b/Motor/myEthercatmotor.cpp
+index 1d285d5..ac85971 100644
+--- a/Motor/myEthercatmotor.cpp
++++ b/Motor/myEthercatmotor.cpp
+@@ -1762,8 +1762,9 @@ bool TMyEtherCatMotor::EtherCatMotHome()
+     if(!EcatMotorRoute()) { Task=1; return false; }   //AI(W906-ECAT-ROUTE) 20260929: no route = the two statements this arm always had. With the route: golden's Task 1/10/20 (golden :1289-1378), homing the EastSun way (design 2.3)
+     switch(Task) { case 1: if(!MotionDone()) { DecStop(); break; } DecStop(); InitMotor(MotorID); OldSpeed=iSpeed; if(GearRatio==0) break;   // Q2: golden's full InitMotor (ResetError, table, Servo ON) minus Q1's zeroing
+         SetSoftLimit(999999,-999999); W906_EcHomeStart(iBoardID, iPortID, HomeDirection, PHomeHighSpeed, PHomeLowSpeed, dAcc, dDec); Task=10; break;   // result ignored like golden's MoveHome WAR16122: Task 10 regardless
+-      case 10: if(W906_EcHomeDone(iBoardID, iPortID)==1) { HomeDelay.SetSecAndOn(0.3); Task=20; } break;   // a HOMING sample, then a READY one, both after the command
+-      case 20: if(HomeDelay.Off()) { LastHomePos=-ReadPos(); if(W906_EcHomeCardSide(iBoardID, iPortID)) { SetCommand(0); MySleep(10); SetPosition(0); }   // DS402: no zeroing (EastSun)
++      case 10: { const int hd = W906_EcHomeDone(iBoardID, iPortID); if(hd==1) { HomeDelay.SetSecAndOn(0.3); Task=20; } else if(hd<0) { bW906HomeFault=true; SetSpeed(OldSpeed); SetSoftLimit(PSoftLimitP, PSoftLimitN); Task=1; } break; }   // a HOMING sample, then a READY one, both after the command; AI(W906-HOME-FAILVISIBLE) 20261003: -1 = the route says this home failed -> MotorHome returns 2 (was: waited forever)
++      case 20: if(HomeDelay.Off()) { LastHomePos=-ReadPos(); const bool cardSide=W906_EcHomeCardSide(iBoardID, iPortID); if(cardSide) { SetCommand(0); MySleep(10); SetPosition(0); }   // DS402: no zeroing (EastSun)
++            bW906HomeTrusted=!cardSide;   //AI(W906-HOME-FAILVISIBLE) 20261003: a DS402 home the drive reported done -- MotorHome case 20 must not demand the origin lamp (method 24/28 ends just off the switch: 8 servos 1003 oplog)
+             SetSpeed(OldSpeed); SetSoftLimit(PSoftLimitP, PSoftLimitN); Task=1; return true; } break;
+       default: Task=1; return false; }
+     return false;
+diff --git a/Motor/mymotor.cpp b/Motor/mymotor.cpp
+index d4c8407..b6380e7 100644
+--- a/Motor/mymotor.cpp
++++ b/Motor/mymotor.cpp
+@@ -1138,10 +1138,21 @@ int TMyMotor::MotorHome(bool Flag)
+             HomeReset();
+             Task = 10;
+             iHomeRetryCT = 3;
++            Motor->bW906HomeTrusted = false; Motor->bW906HomeFault = false;   //AI(W906-HOME-FAILVISIBLE) 20261003: a new home starts clean
+             break;
+ 
+         case 10:
+-            if (Home())
++            {
++                const bool hd = Home();
++                if (Motor->bW906HomeFault)                                      //AI(W906-HOME-FAILVISIBLE) 20261003: the routed 1203 home failed
++                {                                                               //  (never sent / ERROR_STOP / no HOMING) -- was a silent wait
++                    Motor->bW906HomeFault = false;
++                    Task = 1;
++                    HomeFlag = 2;
++                    return 2;                                                   // uhome's motor-alarm path (jam popup, HOME stopped)
++                }
++                if (!hd) break;
++            }
+             {
+                 Task = 20;
+                 htWaitHomeSensorOnDelay.SetMSAndOn(300);
+@@ -1155,8 +1166,9 @@ int TMyMotor::MotorHome(bool Flag)
+             break;
+ 
+         case 20:
+-            if (W906_Ht9050OrgHome(Mot_Name) != -2 ? W906_Ht9050OrgHome(Mot_Name) == 1 : Motor->HomeFlag())   //AI(W906-HT9050-ORG-ENG) 20261001: golden `Motor->HomeFlag()`；HT9050＋1203＝原點訊號 low（mymotor.h）
++            if (Motor->bW906HomeTrusted || (W906_Ht9050OrgHome(Mot_Name) != -2 ? W906_Ht9050OrgHome(Mot_Name) == 1 : Motor->HomeFlag()))   //AI(W906-HT9050-ORG-ENG) 20261001: golden `Motor->HomeFlag()`；HT9050＋1203＝原點訊號 low（mymotor.h）  AI(W906-HOME-FAILVISIBLE) 20261003: + a DS402 home the drive reported done counts (it ends off the switch; Motor Test never checks the lamp either)
+             {
++                Motor->bW906HomeTrusted = false;
+                 Task = 1;
+                 HomeFlag  = 1;
+                 fCanMove  = true;
+diff --git a/tests/test_pci1203_motor_route.cpp b/tests/test_pci1203_motor_route.cpp
+index c4741ae..a86389d 100644
+--- a/tests/test_pci1203_motor_route.cpp
++++ b/tests/test_pci1203_motor_route.cpp
+@@ -365,7 +365,7 @@ int main()
+         // R5 -- HOMING then ERROR_STOP is a homing FAULT, never "homed" (golden waits; MotorHome's alarm check takes over)
+         CHECK(R()->homeStart(10, 0, true, 20000.0, 2000.0, 500000.0, 400000.0) == 1);
+         e.axes[(std::size_t)k].state = 4; e.poll++; CHECK(R()->homeDone(10, 0) == 0);
+-        e.axes[(std::size_t)k].state = 3; e.poll++; CHECK(R()->homeDone(10, 0) == 0);
++        e.axes[(std::size_t)k].state = 3; e.poll++; CHECK(R()->homeDone(10, 0) == -1);   //AI(W906-HOME-FAILVISIBLE) 20261003: ERROR_STOP while homing = reported failed (was 0 forever: the full HOME waited silently)
+         e.poll++;                                   CHECK(R()->homeDone(10, 0) == 0);
+         Call(10, 0, kEcStopDec); e.axes[(std::size_t)k].state = 1; e.poll++;           // the engine's alarm stop
+         // R6 -- a HOMING sample from BEFORE the home command (a previous / cancelled job) does not count
+@@ -429,7 +429,7 @@ int main()
+         g.AddAxis(12, 0);
+         CHECK(R()->bind(12, 0, 120, false));
+         CHECK(R()->homeStart(12, 0, true, 20000.0, 2000.0, 1.0, 1.0) == 0 && g.sent.empty());
+-        CHECK(R()->homeDone(12, 0) == 0);
++        CHECK(R()->homeDone(12, 0) == -1);                                  //AI(W906-HOME-FAILVISIBLE) 20261003: never sent = reported failed once
+     }
+ 
+     // ---- I: InitMotor ----
+@@ -467,6 +467,18 @@ int main()
+         CHECK(!R()->initCfg(99, 0, kInitCfgMotorServo, true, true, 1.0, 2.0, 3.0) && e.sent.empty());
+     }
+ 
++    //AI(W906-HOME-FAILVISIBLE) 20261003: ---- N: READY ~5 s (10 engine calls) with no HOMING sample after the command -> -1, not 0 forever
++    {
++        FakeEnv e; Fresh(e);
++        const int k = e.AddAxis(15, 0); e.AddSlave(15, true);
++        CHECK(R()->bind(15, 0, 150, false));
++        CHECK(R()->homeStart(15, 0, true, 20000.0, 2000.0, 500000.0, 400000.0) == 1);
++        e.axes[(std::size_t)k].state = 1;
++        int got = 0, calls = 0;
++        for (; calls < 12 && got == 0; ++calls) { e.poll++; got = R()->homeDone(15, 0); }
++        CHECK(got == -1 && calls == 10);
++        CHECK(R()->homeDone(15, 0) == 0);                                    // reported once; the job is over
++    }
+     //AI(W906-HOME-MAXVEL) 20261003: ---- M: EastSun「全機回home 當掉了」-- the engine home's InitMotor sets CFG_AxMaxVel = PJogHighSpeed;
+     //  a HomeHighSpeed above it was refused by the card, so the home was never sent. Now the ceiling known to be lower is raised first.
+     {
+diff --git a/uhome.cpp b/uhome.cpp
+index fac7488..cf023cd 100644
+--- a/uhome.cpp
++++ b/uhome.cpp
+@@ -2562,7 +2562,7 @@ bool ProcessMotorHome(bool Flag2)
+                         }
+                     }
+ 
+-                    if(MOT[i].HomeFlag==0 && ret==2)
++                    if(MOT[i].HomeFlag!=1 && ret==2)   //AI(W906-HOME-FAILVISIBLE) 20261003: golden `HomeFlag==0 && ret==2` -- GOLDEN DEFECT: TMyMotor::MotorHome sets HomeFlag=2 BEFORE returning 2 (mymotor.cpp case 20 retries out / ResetTime), so this never fired and a failed / timed-out home waited forever (the 1003 step 375 hang); HomeFlag!=1 keeps golden's intent (not already homed). Same line
+                     {
+                         StopAllMotor();
+                         fHome->ShowLed(i, 2);
+@@ -2980,7 +2980,7 @@ bool ProcessMotorHome(bool Flag2)
+                         }
+                     }
+ 
+-                    if(MOT[i].HomeFlag==0 && ret==2)
++                    if(MOT[i].HomeFlag!=1 && ret==2)   //AI(W906-HOME-FAILVISIBLE) 20261003: golden `HomeFlag==0 && ret==2` -- GOLDEN DEFECT: TMyMotor::MotorHome sets HomeFlag=2 BEFORE returning 2 (mymotor.cpp case 20 retries out / ResetTime), so this never fired and a failed / timed-out home waited forever (the 1003 step 375 hang); HomeFlag!=1 keeps golden's intent (not already homed). Same line
+                     {
+                         StopAllMotor();
+                         fHome->ShowLed(i, 2);
+@@ -5061,7 +5061,7 @@ bool ProcessSingleMotorHome(int Index)
+             break;
+         case 300:
+             ret=MOT[Index].MotorHome(0);
+-            if(MOT[Index].HomeFlag==0 && ret==2)
++            if(MOT[Index].HomeFlag!=1 && ret==2)   //AI(W906-HOME-FAILVISIBLE) 20261003: golden `HomeFlag==0 && ret==2` -- GOLDEN DEFECT: TMyMotor::MotorHome sets HomeFlag=2 BEFORE returning 2 (mymotor.cpp case 20 retries out / ResetTime), so this never fired and a failed / timed-out home waited forever (the 1003 step 375 hang); HomeFlag!=1 keeps golden's intent (not already homed). Same line
+             {
+                 MOT[Index].PCIL132_StopMotor();
+                 iTask=1;
+-- 
+2.55.0.windows.5
+

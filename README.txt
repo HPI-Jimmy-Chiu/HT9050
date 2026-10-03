@@ -971,4 +971,8 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      環境：HMI 外殼（build_hmi_shell\ht9045_hmi.exe，WebView2）開 background.html，主畫面固定 925x720，畫面縮放約 110%（main.html 的 🔍）。
      EastSun 的規則：任何提示／浮動框都不能擋到畫面內容。機台端 10-03 已修：Temp Set 頁（灰框蓋數值、欄位標題空白、狀態列蓋表格，web 0098）、
      主畫面軟體面板鍵被公司 Logo 的透明框蓋住點不到（web 0101）。
+  10-03 18:19 機台快照（EastSun 在機台上做的事，沒有程式修改）：
+     machine_params/README_PARAMS.txt：1 個檔變動
+     workorder/README_WORKORDER.txt：1 個檔變動
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 MD5 清單在 MANIFEST_MD5.tsv。
