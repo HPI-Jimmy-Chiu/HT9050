@@ -1216,4 +1216,12 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      操作紀錄 oplog_20261003.txt：新增 848 行
      設定檔變動：machine_params/D_GPIB9045_system/general.ini、machine_params/D_HT9045_system/Gerneral.ini、machine_params/D_HT9045_system/Mot_Table.csv、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/lastdata_backup2.dat、machine_params/D_HT9045_system/machinerecord.dat、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261003_212310、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261003_212650
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+10-03 機台端回覆筆電（St01 審查 cpp 0160～0170、NB2-1 派工 6）——EastSun 裁決「照BCB裡面方法修改」：
+  ✅ M-a：照 golden 改（cpp 0187 HOME-POWERDROP）——回原點中電源穩定過之後才掉（急停／開門／安全迴路），停止回原點（StopAllMotor＋SystemStart=false＋訊息框），不再自動重新激磁；HOME 自己 case 2/3 的斷電再上電照舊。
+  ✅ M-b：照 golden 改（cpp 0187 HOME-1RETRY）——golden 只 reset 一次：302 檢查最多再清警報＋激磁 1 次，仍異常就停止回原點（原本 20 次）。
+  ⏸ M-c：還沒改。golden 回完要看原點燈，但 HT9050 的伺服用 DS402 方式 24／28 回原點會停在原點開關旁邊，照 golden 檢查 10-03 下午 8 支伺服全部被判失敗、全機回原點卡住。之後機台端已加：回完位置必須是 0（cpp 0176／0179），不是 0＝中斷＝失敗。要不要再加 statusword homing attained，等 EastSun。
+  ✅ 派工 6 (B)：照建議 A＝照 golden（cpp 0187 BRAKE-BOOT）——放煞車加回 bMotorPowerState && MotorPowerOnDelay==0（golden ckernel.cpp:2910／:2976）。
+  ✅ 派工 6 (1)：照 golden（cpp 0187 BOOT-SERVOALL）——開機 InitMotor 改成所有 1203 軸（原本只有 MLoaderZ）；MTestZ1 照 golden 走 Galil 路徑。
+  ❓ EMG 題（放開急停後馬達電源會不會自己回來）、派工 6 時間點（開機前幾秒或按 HOME 之後）、派工 1／6 的量測：還沒回，等 EastSun 在機台旁。
+  另外今晚機台端 cpp 0180～0186：HOME-BRAKE（302 後放煞車組）、HOME-TIMEOUT 後撤回（EastSun 要求）、雙軸一次一軸關掉（EastSun 要試雙軸同時）、HOME-STEPLEAVE（SW3D 步進壓在原點上先往 HomeDirection 移 1000，最多 3 次，失敗報警，單軸與全機共用一支函式）、ALARM-WHY（錯誤框顯示原因）、HOME-MAXVEL-SINGLE（單軸回原點先拉高 CFG_AxMaxVel：M30 0x80000081）。
 MD5 清單在 MANIFEST_MD5.tsv。
