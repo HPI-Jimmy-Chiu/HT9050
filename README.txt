@@ -1066,4 +1066,8 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      不確定的：繼電器 DO 開關卡時實體會不會掉（oplog 的 relay 是軟體值，不是卡片讀回）、svo 位元代表命令還是驅動器真的激磁。
      附檔 dispatch\20261003_servo_on_off_at_start\：findings_machine_side.txt（逐點 file:line）、oplog_20261003.txt（今天 29 次開機）、oplog_20261002.txt、
      三次 HOME 的 bootsample。另：機台端 cpp 0168-0171 是今天回原點的修正（激磁檢查等電源、未認領的 1203 軸補認領、HOME／JAM／ROUTE 紀錄）。
+  10-03 19:34 機台快照（EastSun 在機台上做的事，沒有程式修改）：
+     machine_params/README_PARAMS.txt：1 個檔變動
+     workorder/README_WORKORDER.txt：1 個檔變動
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 MD5 清單在 MANIFEST_MD5.tsv。

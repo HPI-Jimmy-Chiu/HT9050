@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-03 19:33
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 98acd56 ECAT-RECLAIM: an engine 1203 axis whose claim was refused at boot is claimed again／web 4377508。
+HT9050 機台參數快照（machine_params\）—— 2026-10-03 19:34
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 31c6af3 WORKLOG: items 106-111 (MODCHECK-2, 1203 full HOME fixes, HOME-ALMRESET 1-3 / POWE／web 4377508。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
