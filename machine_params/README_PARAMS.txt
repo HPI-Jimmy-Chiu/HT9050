@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-03 22:05
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ b071905 ﻿HT9050-TRAYSAFE: HT9050 only -- no 'TrayArm moves %d to the left error' box and n／web 4377508。
+HT9050 機台參數快照（machine_params\）—— 2026-10-03 22:14
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 9e1dc79 ﻿HT9050-HOMEPOS0: HT9050 only -- every position the full HOME moves an axis to aft／web 4377508。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
