@@ -805,4 +805,6 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      workorder/README_WORKORDER.txt：1 個檔變動
      操作紀錄 oplog_20261003.txt：新增 38 行
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+  cpp 0149 71a45c0／web 0093 d444bf0 MT-COPYALL —— EastSun 1003「我複製M35的參數但是為啥沒作用」：原版 Copy From（BitBtn1Click :1392）只接受 M00～M24 當來源，選 M35 網頁照原版不做、只在狀態列提示，命令沒送到 C++（13:25 之後 oplog 沒有 copyFrom）。HT9050 有 M35～M42，改成依完整編號（M35＝35），只要那顆馬達存在就照抄。複製的項目維持原版 6 項（JogHigh／JogLow／HomeHigh／HomeLow／SoftLimitP／SoftLimitN；InitialSpeed／Acc／Dec／Range 原版就不抄）。o2 編過；ctest WebMotorAccess 過。
+  掃描（patch 與 README）：權杖／私鑰／7z 密碼／部署金鑰 0 筆。
 MD5 清單在 MANIFEST_MD5.tsv。
