@@ -950,4 +950,12 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      machine_params/README_PARAMS.txt：1 個檔變動
      workorder/README_WORKORDER.txt：1 個檔變動
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+=== tools 0150 (20261003, machine) -- HTML designer (tools/vscode-htdesigner), version stays 0.162.0 ===
+- Find is its own window (EastSun 1003: not VS Code's built-in box, and the earlier searches visible):
+  Ctrl+F / Ctrl+Shift+F open a floating window "Find" (keyword, scope, Aa / whole word / regex), the searches
+  made before on the left (newest first; a click searches again, x deletes one, kept across restarts), the
+  results on the right (hit marked; a click opens the line in the editor group the user came from).
+  Settings: ht9045Designer.find.newWindow off = a tab beside; ht9045Designer.find.window off = the old box.
+- Tests: run_all 3/3 layers (the window also drawn in headless Edge); real VS Code 156/159 (3 known stale checks).
+- ! For the laptop: still not taken -- machine patches tools 0136 / 0143 / 0145 / 0147 / 0149 / 0150.
 MD5 清單在 MANIFEST_MD5.tsv。
