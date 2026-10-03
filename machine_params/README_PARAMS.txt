@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-03 16:25
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ a4f4c05 EXIT-ORDER + GATE-DRIFT: (1) EastSun 1003 'Exit does not seem to close everything'／web 45dd338。
+HT9050 機台參數快照（machine_params\）—— 2026-10-03 16:35
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 83f9d08 SOFTKEY-DIAG: panel.key's ack (logged in the oplog OK line) now lists every golden／web 45dd338。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
