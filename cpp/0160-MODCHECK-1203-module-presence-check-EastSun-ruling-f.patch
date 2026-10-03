@@ -1,0 +1,1281 @@
+From 2baf5657c14b422b533e09e48ac4a416525825d4 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 17:13:26 +0800
+Subject: [PATCH] MODCHECK: 1203 module presence check (EastSun ruling): first
+ connect records every IO + motor module (ring / position / station / name;
+ vacuum units and junctions excluded) into <dir of
+ asGeneralPath>\Pci1203Modules.ini -- created only when absent (.tmp +
+ no-replace rename, never overwritten; skipped when the scan is incomplete);
+ afterwards read only: on every connect (boot + each link restore) within 10 s
+ a listed module missing / not in OP / station changed, or an unlisted
+ IO/motor module, raises ONE WAR16154 (ShowErrorMessage, same shape as
+ WAR16152) per connect; silent while the link watch says lost.
+ EtherCAT/Pci1203ModuleCheck.h (pure) + wb_serve EOF tick on the link-watch
+ lines; ctest Pci1203ModuleCheck; no new vendor call (readonly gate passes)
+
+---
+ EtherCAT/Pci1203ModuleCheck.h      | 609 +++++++++++++++++++++++++++++
+ tests/CMakeLists.txt               |  16 +
+ tests/test_pci1203_modulecheck.cpp | 393 +++++++++++++++++++
+ tools/wb_serve.cpp                 | 170 +++++++-
+ 4 files changed, 1183 insertions(+), 5 deletions(-)
+ create mode 100644 EtherCAT/Pci1203ModuleCheck.h
+ create mode 100644 tests/test_pci1203_modulecheck.cpp
+
+diff --git a/EtherCAT/Pci1203ModuleCheck.h b/EtherCAT/Pci1203ModuleCheck.h
+new file mode 100644
+index 0000000..493ab8f
+--- /dev/null
++++ b/EtherCAT/Pci1203ModuleCheck.h
+@@ -0,0 +1,609 @@
++// =============================================================================
++//  EtherCAT/Pci1203ModuleCheck.h -- "1203 模組在位檢查": every IO / motor module
++//  recorded on the first connect must be there, in OP, at the same station, on
++//  every later connect.
++//
++//  //AI(W906-MODCHECK) 20261003: rules decided by the machine engineer (EastSun 1003):
++//    * FIRST CONNECT: record every IO module and every motor (drive) module --
++//      name, ring, position, station -- into D:\HT9045\system\Pci1203Modules.ini.
++//      Create it ONLY when it does not exist; never overwrite. Do not write when the
++//      scan is truncated, a station is unaddressable, or the scan found nothing.
++//    * AFTERWARDS ONLY READ IT. On every connect (the boot connect and every link
++//      restore), within 10 s:
++//        listed module not found                         -> missing
++//        found but not in OP within 10 s                  -> not OP
++//        same ring + position + name, different station   -> station changed
++//        an IO / motor module the ini does not list       -> extra
++//      ONE alarm per connect (the host raises golden-shaped WAR16154 with the text).
++//      Nothing while the link watch (EtherCAT/Pci1203LinkWatch.h) reports link lost.
++//    This header is the DECISION (pure, header-only, no vendor header, no
++//    <windows.h>, no clock, no file I/O). The host (tools/wb_serve.cpp EOF,
++//    W906_Pci1203ModuleCheckTick) feeds it one sample after every monitor Poll(),
++//    loads the ini when asked, writes the ini when asked, and raises the alarm.
++//
++//  ## CLASSIFICATION (Pci1203ModuleClassify -- takes name / profile / isVacuum so it stays pure)
++//    motor  = CiA profile 402, else the name contains "SERVOPACK"
++//             (the same rule as EtherCAT/Pci1203IoRoute.cpp StationIsDrive)
++//    excluded = the station passes Pci1203Vc8IdentityOk (EtherCAT/Pci1203Vc8.h, ECAT-VC8 / VC4
++//             vacuum units) -- the host computes isVacuum, this header never sees the table
++//    IO     = CiA profile 401, else the name contains "Dig. In" / "Dig. Out"
++//    anything else (ECAT-2515 junctions, unknown modules) is excluded: not recorded, not checked.
++//
++//  ## "STATION"
++//    = Pci1203SlaveSample::addr, the SlaveIP every address-keyed call uses (StationIsDrive, the
++//    VC8 route and the 1203 page's messages all call that "站"). Measured 20260910 it tracks the
++//    module's dial (alias), so turning a dial shows up here as "station changed".
++//    Unaddressable stations are left out of the sample (as the link watch does): their addr is
++//    their twin's. A recorded module that became unaddressable therefore reads as "missing".
++//
++//  ## CONNECT GENERATIONS
++//    A generation starts (a) the first time the card is open, not disabled, the scan found
++//    stations and the link is not lost, and (b) after every OnLinkRestored() (the host calls it
++//    when the link watch reports kRestored), at the first sample that satisfies the same test.
++//    At the start it asks the host to load the ini once (the Loader functor), then:
++//      no ini      -> as soon as the scan is writable: kWriteIni (the text to create); if it does
++//                     not become writable within 10 s: kWriteSkipped (the reason). No alarm.
++//      bad ini     -> kIniBad (the reason) once. No alarm (see the host: open question).
++//      ini read    -> every sample: early kPass when every listed module is found, at its
++//                     station, in OP, and nothing extra; early kAlarm when every listed module is
++//                     found in OP but a station changed / an extra module exists; otherwise at
++//                     kPci1203ModCheckMs: kPass if no problem, else kAlarm.
++//    A generation produces at most ONE terminal event (kWriteIni / kWriteSkipped / kIniBad /
++//    kPass / kAlarm / kAbandoned) and then latches until the next generation.
++//    The link lost while a generation runs -> kAbandoned (no alarm; the link watch owns that
++//    fault, WAR16152); the restore starts a new one.
++// =============================================================================
++#ifndef HT9045_ETHERCAT_PCI1203MODULECHECK_H
++#define HT9045_ETHERCAT_PCI1203MODULECHECK_H
++
++#include <cstdio>
++#include <cstdlib>
++#include <string>
++#include <vector>
++
++#include "EtherCAT/Pci1203LinkWatch.h"   // Pci1203LinkSafeText / Pci1203LinkElapsedMs / Pci1203LinkStateName (pure)
++
++namespace ht9045 {
++
++//  ★ THE ONE PLACE the 10 s lives (EastSun 1003「10 秒內」).
++enum { kPci1203ModCheckMs = 10000 };
++//  How many problems the alarm text names one by one; the rest are counted.
++enum { kPci1203ModCheckListMax = 4 };
++//  errPart of golden ShowErrorMessage (event log / HANDLER LOG csv): short, CSV / quote safe.
++enum { kPci1203ModCheckTextMax = 400 };
++//  A module name inside the alarm text is clipped to this many bytes.
++enum { kPci1203ModCheckNameMax = 28 };
++
++enum Pci1203ModuleKind { kPci1203ModNone = 0, kPci1203ModIo = 1, kPci1203ModMotor = 2 };
++
++inline const char* Pci1203ModuleKindName(int kind)
++{
++    return kind == kPci1203ModMotor ? "Motor" : kind == kPci1203ModIo ? "IO" : "None";
++}
++
++//  Case-insensitive substring (ASCII), as Pci1203IoRoute.cpp NameSaysServopack / Pci1203Vc8NameHas.
++inline bool Pci1203ModNameHas(const std::string& name, const char* has)
++{
++    if (!has || !*has) return false;
++    std::size_t m = 0;
++    while (has[m]) ++m;
++    for (std::size_t i = 0; i + m <= name.size(); ++i) {
++        std::size_t k = 0;
++        for (; k < m; ++k) {
++            char a = name[i + k], b = has[k];
++            if (a >= 'a' && a <= 'z') a = (char)(a - 'a' + 'A');
++            if (b >= 'a' && b <= 'z') b = (char)(b - 'a' + 'A');
++            if (a != b) break;
++        }
++        if (k == m) return true;
++    }
++    return false;
++}
++
++//  Trim spaces / tabs / CR / LF at both ends (the ini stores and compares the trimmed name).
++inline std::string Pci1203ModTrim(const std::string& s)
++{
++    std::size_t a = 0, b = s.size();
++    while (a < b && (s[a] == ' ' || s[a] == '\t' || s[a] == '\r' || s[a] == '\n')) ++a;
++    while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t' || s[b - 1] == '\r' || s[b - 1] == '\n')) --b;
++    return s.substr(a, b - a);
++}
++
++//  The engineer's rule, in its order: drive first (never argued with), vacuum excluded, then IO.
++inline int Pci1203ModuleClassify(const std::string& name, bool profileValid, unsigned short profile, bool isVacuum)
++{
++    if ((profileValid && profile == 402) || Pci1203ModNameHas(name, "SERVOPACK")) return kPci1203ModMotor;
++    if (isVacuum) return kPci1203ModNone;
++    if ((profileValid && profile == 401) || Pci1203ModNameHas(name, "Dig. In") || Pci1203ModNameHas(name, "Dig. Out"))
++        return kPci1203ModIo;
++    return kPci1203ModNone;
++}
++
++// One module as the ini records it.
++struct Pci1203ModuleEntry {
++    int           kind;        // kPci1203ModIo / kPci1203ModMotor
++    int           ring;
++    int           position;    // ADV_SLAVE_INFO.Position
++    int           station;     // Pci1203SlaveSample::addr
++    std::string   name;        // trimmed ADV_SLAVE_INFO.Name
++    unsigned long vendorId;    // informational (not compared)
++    unsigned long productId;   // informational (not compared)
++    Pci1203ModuleEntry() : kind(kPci1203ModNone), ring(-1), position(-1), station(-1), vendorId(0), productId(0) {}
++};
++
++// One scanned (present, addressable) station as this check sees it.
++struct Pci1203ModuleStation {
++    int            ring;
++    int            position;
++    int            station;
++    bool           infoValid;  // ADV_SLAVE_INFO came back (name / position / IDs are real)
++    std::string    name;       // trimmed
++    unsigned long  vendorId;
++    unsigned long  productId;
++    bool           readOk;     // this Poll's state read succeeded
++    unsigned short state;      // raw EC_SLAVE_STATE_*
++    int            kind;       // Pci1203ModuleClassify
++    Pci1203ModuleStation()
++        : ring(-1), position(-1), station(-1), infoValid(false), vendorId(0), productId(0)
++        , readOk(false), state(0), kind(kPci1203ModNone) {}
++};
++
++// One sample: what the monitor says right after a Poll(), plus the link watch's verdict.
++struct Pci1203ModuleInput {
++    bool        open;            // card().open
++    bool        disabled;        // Disabled()
++    int         slavesFound;     // card().slavesFound
++    bool        scanTruncated;   // card().scanTruncated
++    int         unaddressable;   // present stations no address reaches (left out of `stations`)
++    bool        linkLost;        // the link watch says lost right now (Pci1203LinkWatch::lost())
++    std::vector<Pci1203ModuleStation> stations;   // present + addressable, scan order
++    Pci1203ModuleInput() : open(false), disabled(false), slavesFound(0), scanTruncated(false), unaddressable(0), linkLost(false) {}
++};
++
++inline bool Pci1203ModStationOp(const Pci1203ModuleStation& s)
++{
++    return s.readOk && (s.state & 0x0Fu) == 0x08u;           // EC_SLAVE_STATE_OP, as Pci1203LinkStationUp
++}
++
++//  The monitor -> sample adapter. A template, as Pci1203LinkInputFromMonitor, so the test can hand
++//  it a fake with card() / Disabled() / slaveCount() / slave(i). `isVacuum(sample)` is the host's
++//  Pci1203Vc8IdentityOk wrapper. Reads only what Poll() / the scan already stored.
++template <class Mon, class IsVac>
++inline Pci1203ModuleInput Pci1203ModuleInputFromMonitor(const Mon& mon, IsVac isVacuum, bool linkLost)
++{
++    Pci1203ModuleInput in;
++    in.open          = mon.card().open;
++    in.disabled      = mon.Disabled();
++    in.slavesFound   = mon.card().slavesFound;
++    in.scanTruncated = mon.card().scanTruncated;
++    in.linkLost      = linkLost;
++    const int n = mon.slaveCount();
++    for (int i = 0; i < n; ++i) {
++        const auto& s = mon.slave(i);
++        if (!s.present) continue;
++        if (s.unaddressable) { ++in.unaddressable; continue; }
++        Pci1203ModuleStation st;
++        st.ring      = s.ring;
++        st.position  = s.position;
++        st.station   = s.addr;
++        st.infoValid = s.infoValid;
++        st.name      = Pci1203ModTrim(s.name);
++        st.vendorId  = s.vendorId;
++        st.productId = s.productId;
++        st.readOk    = s.stateValid;
++        st.state     = s.state;
++        st.kind      = Pci1203ModuleClassify(st.name, s.profileValid, s.profile, isVacuum(s));
++        in.stations.push_back(st);
++    }
++    return in;
++}
++
++// ---------------------------------------------------------------------------
++//  The ini (text). Plain golden-style sections, one per module; the host writes it once.
++// ---------------------------------------------------------------------------
++inline std::string Pci1203ModuleIniSerialize(const std::vector<Pci1203ModuleEntry>& e, const std::string& created)
++{
++    std::string t;
++    t += "; Pci1203Modules.ini -- PCI-1203 IO / motor modules recorded on the first connect.\r\n";
++    t += "; AI(W906-MODCHECK) 20261003: written once by wb_serve when this file did not exist; never overwritten.\r\n";
++    t += "; Every later connect compares the ring against this list (missing / not OP / station changed / extra -> WAR16154).\r\n";
++    t += "; To re-learn the machine after a deliberate hardware change: delete this file and reconnect.\r\n";
++    t += "[Pci1203Modules]\r\n";
++    t += "Version=1\r\n";
++    char b[96];
++    std::snprintf(b, sizeof(b), "Count=%d\r\n", (int)e.size());
++    t += b;
++    t += "Created=" + Pci1203ModTrim(created) + "\r\n";
++    for (std::size_t i = 0; i < e.size(); ++i) {
++        std::snprintf(b, sizeof(b), "[Module%d]\r\n", (int)(i + 1));                     t += b;
++        t += std::string("Kind=") + Pci1203ModuleKindName(e[i].kind) + "\r\n";
++        std::snprintf(b, sizeof(b), "Ring=%d\r\n", e[i].ring);                            t += b;
++        std::snprintf(b, sizeof(b), "Position=%d\r\n", e[i].position);                    t += b;
++        std::snprintf(b, sizeof(b), "Station=%d\r\n", e[i].station);                      t += b;
++        std::string nm = e[i].name;                                                       // one line, always
++        for (std::size_t k = 0; k < nm.size(); ++k) if (nm[k] == '\r' || nm[k] == '\n') nm[k] = ' ';
++        t += "Name=" + Pci1203ModTrim(nm) + "\r\n";
++        std::snprintf(b, sizeof(b), "VendorID=0x%08lX\r\n", e[i].vendorId);               t += b;
++        std::snprintf(b, sizeof(b), "ProductID=0x%08lX\r\n", e[i].productId);             t += b;
++    }
++    return t;
++}
++
++inline bool Pci1203ModParseInt(const std::string& v, int* out)
++{
++    const std::string s = Pci1203ModTrim(v);
++    if (s.empty()) return false;
++    char* end = 0;
++    const long x = std::strtol(s.c_str(), &end, 10);   // decimal only: a hand-edited "080" must not read as octal
++    if (!end || *end != '\0') return false;
++    *out = (int)x;
++    return true;
++}
++
++//  Text -> entries. False (with `why`) for anything the check could misread: no [Pci1203Modules],
++//  Count missing / not matching the module sections, a module without Ring / Position / Station /
++//  Name / a known Kind, or no module at all.
++inline bool Pci1203ModuleIniParse(const std::string& text, std::vector<Pci1203ModuleEntry>& out, std::string& why)
++{
++    out.clear();
++    why.clear();
++    bool head = false, inHead = false;
++    int count = -1;
++    struct Got { bool kind, ring, pos, st, name; Got() : kind(false), ring(false), pos(false), st(false), name(false) {} };
++    std::vector<Got> got;
++    std::size_t p = 0;
++    int line = 0;
++    std::size_t start = 0;
++    if (text.size() >= 3 && (unsigned char)text[0] == 0xEF && (unsigned char)text[1] == 0xBB && (unsigned char)text[2] == 0xBF) start = 3;
++    p = start;
++    while (p <= text.size()) {
++        std::size_t q = text.find('\n', p);
++        if (q == std::string::npos) q = text.size();
++        const std::string ln = Pci1203ModTrim(text.substr(p, q - p));
++        ++line;
++        p = q + 1;
++        if (ln.empty() || ln[0] == ';' || ln[0] == '#') { if (q == text.size()) break; continue; }
++        if (ln[0] == '[') {
++            const std::size_t e = ln.find(']');
++            const std::string sec = e == std::string::npos ? std::string() : ln.substr(1, e - 1);
++            inHead = false;
++            if (sec == "Pci1203Modules") { head = true; inHead = true; }
++            else if (sec.compare(0, 6, "Module") == 0) { out.push_back(Pci1203ModuleEntry()); got.push_back(Got()); }
++            else { char b[64]; std::snprintf(b, sizeof(b), "line %d: unknown section", line); why = b; out.clear(); return false; }
++            if (q == text.size()) break;
++            continue;
++        }
++        const std::size_t eq = ln.find('=');
++        if (eq == std::string::npos) { char b[64]; std::snprintf(b, sizeof(b), "line %d: no '='", line); why = b; out.clear(); return false; }
++        const std::string k = Pci1203ModTrim(ln.substr(0, eq));
++        const std::string v = Pci1203ModTrim(ln.substr(eq + 1));
++        bool ok = true;
++        if (inHead) {
++            if (k == "Count") ok = Pci1203ModParseInt(v, &count);
++        } else if (!out.empty()) {
++            Pci1203ModuleEntry& m = out.back();
++            Got& g = got.back();
++            if      (k == "Kind")      { m.kind = v == "Motor" ? kPci1203ModMotor : v == "IO" ? kPci1203ModIo : kPci1203ModNone; g.kind = m.kind != kPci1203ModNone; ok = g.kind; }
++            else if (k == "Ring")      { ok = Pci1203ModParseInt(v, &m.ring);     g.ring = ok; }
++            else if (k == "Position")  { ok = Pci1203ModParseInt(v, &m.position); g.pos  = ok; }
++            else if (k == "Station")   { ok = Pci1203ModParseInt(v, &m.station);  g.st   = ok; }
++            else if (k == "Name")      { m.name = v; g.name = !v.empty(); ok = g.name; }
++            else if (k == "VendorID")  { m.vendorId  = std::strtoul(v.c_str(), 0, 0); }   // informational: never fails the parse
++            else if (k == "ProductID") { m.productId = std::strtoul(v.c_str(), 0, 0); }
++        }
++        if (!ok) { char b[96]; std::snprintf(b, sizeof(b), "line %d: bad value for %s", line, k.c_str()); why = b; out.clear(); return false; }
++        if (q == text.size()) break;
++    }
++    if (!head)              { why = "no [Pci1203Modules] section"; out.clear(); return false; }
++    if (out.empty())        { why = "no module listed"; return false; }
++    if (count != (int)out.size()) {
++        char b[80]; std::snprintf(b, sizeof(b), "Count=%d but %d module sections", count, (int)out.size());
++        why = b; out.clear(); return false;
++    }
++    for (std::size_t i = 0; i < got.size(); ++i) {
++        if (!(got[i].kind && got[i].ring && got[i].pos && got[i].st && got[i].name)) {
++            char b[80]; std::snprintf(b, sizeof(b), "[Module%d] lacks Kind / Ring / Position / Station / Name", (int)(i + 1));
++            why = b; out.clear(); return false;
++        }
++    }
++    return true;
++}
++
++//  The entries the first connect records: every IO / motor station of the sample, scan order.
++inline std::vector<Pci1203ModuleEntry> Pci1203ModuleCollect(const Pci1203ModuleInput& in)
++{
++    std::vector<Pci1203ModuleEntry> v;
++    for (std::size_t i = 0; i < in.stations.size(); ++i) {
++        const Pci1203ModuleStation& s = in.stations[i];
++        if (s.kind == kPci1203ModNone) continue;
++        Pci1203ModuleEntry e;
++        e.kind = s.kind; e.ring = s.ring; e.position = s.position; e.station = s.station;
++        e.name = s.name; e.vendorId = s.vendorId; e.productId = s.productId;
++        v.push_back(e);
++    }
++    return v;
++}
++
++//  Why the first-connect write must NOT happen now ("" = writable).
++inline std::string Pci1203ModuleWriteBlock(const Pci1203ModuleInput& in)
++{
++    char b[96];
++    if (!in.open || in.disabled)  return "card not open / monitor disabled";
++    if (in.scanTruncated)         return "the scan was truncated (wall-clock budget)";
++    if (in.slavesFound <= 0 || in.stations.empty()) return "the scan found no station";
++    if (in.unaddressable > 0) { std::snprintf(b, sizeof(b), "%d station(s) unaddressable (SubDevice ID conflict)", in.unaddressable); return b; }
++    for (std::size_t i = 0; i < in.stations.size(); ++i) {
++        const Pci1203ModuleStation& s = in.stations[i];
++        if (!s.infoValid || s.position < 0) {
++            std::snprintf(b, sizeof(b), "ring %d station %d: identity (ADV_SLAVE_INFO) not read", s.ring, s.station);
++            return b;
++        }
++    }
++    if (Pci1203ModuleCollect(in).empty()) return "the scan found no IO / motor module";
++    return std::string();
++}
++
++struct Pci1203ModuleProblem {
++    enum Kind { kMissing = 0, kNotOp, kStationChanged, kExtra };
++    int                 kind;
++    Pci1203ModuleEntry  module;      // kExtra: what was found; others: the ini entry
++    int                 foundStation; // kStationChanged / kNotOp: the station found now
++    bool                readOk;      // kNotOp
++    unsigned short      state;       // kNotOp
++    Pci1203ModuleProblem() : kind(kMissing), foundStation(-1), readOk(false), state(0) {}
++};
++
++//  ini vs sample. `allFoundOp` = every listed module was found (ring + position + name) and is in OP.
++inline std::vector<Pci1203ModuleProblem> Pci1203ModuleDiff(const std::vector<Pci1203ModuleEntry>& ini,
++                                                           const Pci1203ModuleInput& in, bool* allFoundOp)
++{
++    std::vector<Pci1203ModuleProblem> out;
++    std::vector<bool> used(in.stations.size(), false);
++    bool all = true;
++    for (std::size_t i = 0; i < ini.size(); ++i) {
++        const Pci1203ModuleEntry& e = ini[i];
++        int hit = -1;
++        for (std::size_t k = 0; k < in.stations.size(); ++k) {
++            const Pci1203ModuleStation& s = in.stations[k];
++            if (used[k] || !s.infoValid) continue;
++            if (s.ring == e.ring && s.position == e.position && s.name == e.name) {
++                if (hit < 0 || s.station == e.station) hit = (int)k;      // prefer the exact station
++                if (s.station == e.station) break;
++            }
++        }
++        if (hit < 0) {
++            Pci1203ModuleProblem p; p.kind = Pci1203ModuleProblem::kMissing; p.module = e;
++            out.push_back(p); all = false; continue;
++        }
++        used[hit] = true;
++        const Pci1203ModuleStation& s = in.stations[hit];
++        if (s.station != e.station) {
++            Pci1203ModuleProblem p; p.kind = Pci1203ModuleProblem::kStationChanged; p.module = e; p.foundStation = s.station;
++            out.push_back(p);
++        }
++        if (!Pci1203ModStationOp(s)) {
++            Pci1203ModuleProblem p; p.kind = Pci1203ModuleProblem::kNotOp; p.module = e; p.foundStation = s.station;
++            p.readOk = s.readOk; p.state = s.state;
++            out.push_back(p); all = false;
++        }
++    }
++    for (std::size_t k = 0; k < in.stations.size(); ++k) {
++        const Pci1203ModuleStation& s = in.stations[k];
++        if (used[k] || s.kind == kPci1203ModNone) continue;
++        Pci1203ModuleProblem p; p.kind = Pci1203ModuleProblem::kExtra;
++        p.module.kind = s.kind; p.module.ring = s.ring; p.module.position = s.position; p.module.station = s.station;
++        p.module.name = s.name; p.module.vendorId = s.vendorId; p.module.productId = s.productId;
++        out.push_back(p);
++    }
++    if (allFoundOp) *allFoundOp = all;
++    return out;
++}
++
++inline std::string Pci1203ModuleProblemText(const Pci1203ModuleProblem& p)
++{
++    const std::string nm = Pci1203LinkSafeText(p.module.name, (std::size_t)kPci1203ModCheckNameMax);
++    char b[192];
++    switch (p.kind) {
++    case Pci1203ModuleProblem::kMissing:
++        std::snprintf(b, sizeof(b), "missing r%d pos %d st %d %s", p.module.ring, p.module.position, p.module.station, nm.c_str());
++        break;
++    case Pci1203ModuleProblem::kNotOp:
++        if (p.readOk)
++            std::snprintf(b, sizeof(b), "not OP r%d pos %d st %d %s state 0x%02X %s%s", p.module.ring, p.module.position,
++                          p.foundStation, nm.c_str(), (unsigned)p.state, Pci1203LinkStateName(p.state), (p.state & 0x10u) ? "+ERR" : "");
++        else
++            std::snprintf(b, sizeof(b), "not OP r%d pos %d st %d %s state read failed", p.module.ring, p.module.position,
++                          p.foundStation, nm.c_str());
++        break;
++    case Pci1203ModuleProblem::kStationChanged:
++        std::snprintf(b, sizeof(b), "station changed r%d pos %d %s st %d -> %d", p.module.ring, p.module.position, nm.c_str(),
++                      p.module.station, p.foundStation);
++        break;
++    default:
++        std::snprintf(b, sizeof(b), "extra %s r%d pos %d st %d %s", Pci1203ModuleKindName(p.module.kind), p.module.ring,
++                      p.module.position, p.module.station, nm.c_str());
++        break;
++    }
++    return b;
++}
++
++// What the host's Loader returns (it is asked once per generation).
++struct Pci1203ModuleIniLoad {
++    enum Status { kMissing = 0, kOk = 1, kBad = 2 };
++    int                             status;
++    std::vector<Pci1203ModuleEntry> entries;   // kOk
++    std::string                     why;       // kBad
++    Pci1203ModuleIniLoad() : status(kMissing) {}
++};
++
++class Pci1203ModuleCheck {
++public:
++    enum Event {
++        kNone = 0,
++        kWriteIni,      // first connect, scan writable: create the ini with `iniText` (CREATE_NEW; never overwrite)
++        kWriteSkipped,  // first connect, scan never writable within the window: `text` = why; nothing written
++        kIniBad,        // the ini exists but cannot be read safely: `text` = why
++        kPass,          // every listed module present, at its station, in OP; nothing extra
++        kAlarm,         // raise WAR16154 with `text` NOW (once per generation)
++        kAbandoned      // the link was lost while this generation ran: no verdict
++    };
++    struct Result {
++        Event         event;
++        unsigned long gen;          // the generation this result belongs to (0 = none yet)
++        std::string   startText;    // non-empty on the sample that started a generation (a log line)
++        std::string   text;         // the event's text (kAlarm: the alarm's errPart)
++        std::string   iniText;      // kWriteIni: the file's content
++        std::vector<Pci1203ModuleEntry>   entries;    // kWriteIni: what is recorded
++        std::vector<Pci1203ModuleProblem> problems;   // kAlarm
++        Result() : event(kNone), gen(0) {}
++    };
++
++    Pci1203ModuleCheck() : started_(false), running_(false), restorePending_(false), mode_(kModeCheck), gen_(0), since_(0), alarms_(0) {}
++
++    // The link watch says the link came back (its kRestored): the next good sample starts a generation.
++    void OnLinkRestored() { restorePending_ = true; }
++
++    //  One sample. `load()` -> Pci1203ModuleIniLoad, called once when a generation starts.
++    //  `clock` = the same instant as wall-clock text (the start time named in the alarm).
++    template <class Loader>
++    Result Step(const Pci1203ModuleInput& in, unsigned long nowMs, const std::string& clock, Loader load)
++    {
++        Result r;
++        r.gen = gen_;
++
++        // 1. The link watch owns a lost link: abandon a running generation, start none.
++        if (in.linkLost) {
++            if (running_) {
++                running_ = false;
++                r.event = kAbandoned;
++                r.text  = Pci1203LinkSafeText(GenHead_() + "1203 link lost while checking - no verdict; checked again when the link is restored",
++                                              kPci1203ModCheckTextMax);
++            }
++            return r;
++        }
++
++        // 2. Start a generation?
++        const bool cardOk = in.open && !in.disabled && in.slavesFound > 0;
++        if (!running_) {
++            const bool start = cardOk && (!started_ || restorePending_);
++            if (!start) return r;
++            const bool restore = started_;
++            started_ = true; restorePending_ = false; running_ = true;
++            ++gen_; r.gen = gen_;
++            since_ = nowMs; sinceClock_ = clock;
++            const Pci1203ModuleIniLoad L = load();
++            entries_.clear(); badWhy_.clear();
++            if (L.status == Pci1203ModuleIniLoad::kOk)       { mode_ = kModeCheck; entries_ = L.entries; }
++            else if (L.status == Pci1203ModuleIniLoad::kBad) { mode_ = kModeBad;   badWhy_ = L.why; }
++            else                                             { mode_ = kModeWrite; }
++            char b[160];
++            std::snprintf(b, sizeof(b), "1203 module check #%lu started (%s, %s) - %s", gen_, restore ? "link restored" : "first connect",
++                          clock.c_str(),
++                          mode_ == kModeCheck ? "comparing with the ini" : mode_ == kModeBad ? "ini unreadable" : "no ini yet: recording");
++            r.startText = Pci1203LinkSafeText(b, kPci1203ModCheckTextMax);
++            if (mode_ == kModeCheck) {
++                std::snprintf(b, sizeof(b), " (%d modules listed; alarm WAR16154 if a problem remains after %d s)",
++                              (int)entries_.size(), (int)(kPci1203ModCheckMs / 1000));
++                r.startText = Pci1203LinkSafeText(r.startText + b, kPci1203ModCheckTextMax);
++            }
++        }
++
++        // 3. Decide.
++        const unsigned long el = Pci1203LinkElapsedMs(nowMs, since_);
++        const bool timeUp = el >= (unsigned long)kPci1203ModCheckMs;
++        if (mode_ == kModeBad) {
++            running_ = false;
++            r.event = kIniBad;
++            r.text  = Pci1203LinkSafeText(GenHead_() + "Pci1203Modules.ini unreadable - " + badWhy_ + " - not checked (never rewritten)",
++                                          kPci1203ModCheckTextMax);
++            return r;
++        }
++        if (mode_ == kModeWrite) {
++            const std::string block = Pci1203ModuleWriteBlock(in);
++            if (block.empty()) {
++                running_ = false;
++                r.event   = kWriteIni;
++                r.entries = Pci1203ModuleCollect(in);
++                r.iniText = Pci1203ModuleIniSerialize(r.entries, sinceClock_);
++                int io = 0, mo = 0;
++                for (std::size_t i = 0; i < r.entries.size(); ++i) (r.entries[i].kind == kPci1203ModMotor ? mo : io)++;
++                char b[128];
++                std::snprintf(b, sizeof(b), "recording %d modules (%d IO, %d motor) into Pci1203Modules.ini", (int)r.entries.size(), io, mo);
++                r.text = Pci1203LinkSafeText(GenHead_() + b, kPci1203ModCheckTextMax);
++            } else if (timeUp) {
++                running_ = false;
++                r.event = kWriteSkipped;
++                r.text  = Pci1203LinkSafeText(GenHead_() + "Pci1203Modules.ini NOT written - " + block +
++                                              " (tried again on the next connect)", kPci1203ModCheckTextMax);
++            }
++            return r;
++        }
++
++        // mode_ == kModeCheck
++        bool allFoundOp = false;
++        std::vector<Pci1203ModuleProblem> pr = Pci1203ModuleDiff(entries_, in, &allFoundOp);
++        if (!allFoundOp && !timeUp) return r;      // something listed is missing / not OP: wait for the window
++        running_ = false;
++        if (pr.empty()) {
++            char b[160];
++            std::snprintf(b, sizeof(b), "all %d listed modules present, at their stations, in OP after %lu ms",
++                          (int)entries_.size(), el);
++            r.event = kPass;
++            r.text  = Pci1203LinkSafeText(GenHead_() + b, kPci1203ModCheckTextMax);
++            return r;
++        }
++        ++alarms_;
++        r.event    = kAlarm;
++        r.problems = pr;
++        r.text     = AlarmText_(pr, el);
++        return r;
++    }
++
++    bool          running() const { return running_; }
++    unsigned long gen()     const { return gen_; }
++    unsigned long alarms()  const { return alarms_; }   // alarms asked for since construction
++
++private:
++    enum Mode { kModeCheck = 0, kModeWrite, kModeBad };
++
++    std::string GenHead_() const
++    {
++        char b[48];
++        std::snprintf(b, sizeof(b), "1203 module check #%lu: ", gen_);
++        return b;
++    }
++
++    // "1203 modules: 3 problems 10.0 s after connect 08:01:02 - missing ... / not OP ... (+1 more)"
++    std::string AlarmText_(const std::vector<Pci1203ModuleProblem>& pr, unsigned long el) const
++    {
++        char head[128];
++        std::snprintf(head, sizeof(head), "1203 modules: %d problem%s %lu.%lu s after connect %s - ", (int)pr.size(),
++                      pr.size() == 1 ? "" : "s", el / 1000ul, (el % 1000ul) / 100ul, sinceClock_.c_str());
++        std::string list;
++        for (std::size_t i = 0; i < pr.size() && i < (std::size_t)kPci1203ModCheckListMax; ++i) {
++            if (!list.empty()) list += " / ";
++            list += Pci1203ModuleProblemText(pr[i]);
++        }
++        if (pr.size() > (std::size_t)kPci1203ModCheckListMax) {
++            char b[32];
++            std::snprintf(b, sizeof(b), " (+%d more)", (int)pr.size() - (int)kPci1203ModCheckListMax);
++            list += b;
++        }
++        return Pci1203LinkSafeText(head + list, kPci1203ModCheckTextMax);
++    }
++
++    bool          started_;          // a generation has started since boot
++    bool          running_;          // a generation is waiting for its verdict
++    bool          restorePending_;   // OnLinkRestored() since the last start
++    Mode          mode_;
++    unsigned long gen_;
++    unsigned long since_;
++    std::string   sinceClock_;
++    unsigned long alarms_;
++    std::vector<Pci1203ModuleEntry> entries_;   // this generation's ini (kModeCheck)
++    std::string   badWhy_;                      // kModeBad
++};
++
++}  // namespace ht9045
++
++#endif  // HT9045_ETHERCAT_PCI1203MODULECHECK_H
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 1c12fba..7bb5432 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -6601,6 +6601,22 @@ target_include_directories(test_pci1203_linkwatch PRIVATE ${CMAKE_CURRENT_SOURCE
+ target_link_libraries(test_pci1203_linkwatch PRIVATE vclcompat)
+ add_test(NAME Pci1203LinkWatch COMMAND test_pci1203_linkwatch)
+ set_tests_properties(Pci1203LinkWatch PROPERTIES TIMEOUT 60)
++# --- test_pci1203_modulecheck: AI(W906-MODCHECK) 20261003 -- EastSun 1003 (machine engineer's ruling), the 1203 module presence check:
++#   EtherCAT/Pci1203ModuleCheck.h (the decision behind tools/wb_serve.cpp EOF W906_Pci1203ModuleCheckTick -> WAR16154)
++#   against a fake monitor + fake clock + fake ini (a Loader lambda over a string): classification (402 / SERVOPACK motor,
++#   vacuum excluded with the REAL Pci1203Vc8IdentityOk, 401 / Dig. In / Dig. Out IO); ini round trip + refusals; no ini -> one
++#   write event, no alarm; truncated / unaddressable -> no write; all OP -> pass; missing / not OP at 9.9 s vs 10 s; station
++#   changed; extra; several faults -> exactly one alarm, latched until the next generation; link lost -> abandoned.  Built like
++#   test_pci1203_linkwatch (Pci1203Monitor.cpp / Pci1203Control.cpp without HAVE_PCI1203, for the real sample structs).
++#   Memory only, reads and writes no file; at the end, so it has its own TIMEOUT.
++add_executable(test_pci1203_modulecheck
++    test_pci1203_modulecheck.cpp
++    ../EtherCAT/Pci1203Monitor.cpp
++    ../EtherCAT/Pci1203Control.cpp)
++target_include_directories(test_pci1203_modulecheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
++target_link_libraries(test_pci1203_modulecheck PRIVATE vclcompat)
++add_test(NAME Pci1203ModuleCheck COMMAND test_pci1203_modulecheck)
++set_tests_properties(Pci1203ModuleCheck PROPERTIES TIMEOUT 60)
+ 
+ # --- test_home_monitor: AI(W906-HOMEMON) 20261001 -- the web Home Monitor's C++ half (JsonBridge/ChanHome.cpp).
+ #   A: home.rows (golden runtime THomeClass: Visible rows, vector order, labName Caption / Left / Top, edPos Text, ShowLed lamp)
+diff --git a/tests/test_pci1203_modulecheck.cpp b/tests/test_pci1203_modulecheck.cpp
+new file mode 100644
+index 0000000..40fe36e
+--- /dev/null
++++ b/tests/test_pci1203_modulecheck.cpp
+@@ -0,0 +1,393 @@
++// =============================================================================
++//  test_pci1203_modulecheck.cpp -- EtherCAT/Pci1203ModuleCheck.h, the 1203 module
++//  presence check behind WAR16154 (tools/wb_serve.cpp EOF W906_Pci1203ModuleCheckTick).
++//
++//  //AI(W906-MODCHECK) 20261003: EastSun 1003 (machine engineer's ruling).
++//  A FAKE MONITOR (card() / Disabled() / slaveCount() / slave(i), holding the real
++//  sample structs), a FAKE CLOCK and a FAKE INI (a Loader lambda over a string) --
++//  so every rule is walked without a card and without a file:
++//    [1] classification: 402 / SERVOPACK = motor, vacuum excluded (with the REAL
++//        Pci1203Vc8IdentityOk), 401 / "Dig. In" / "Dig. Out" = IO, junctions excluded;
++//    [2] the ini text round-trips; damaged inis are refused, decimal only;
++//    [3] no ini -> one write event, no alarm; truncated / unaddressable / identity
++//        missing -> no write, kWriteSkipped at 10 s (not 9.9); an empty scan starts nothing;
++//    [4] everything present + OP -> early pass;
++//    [5] missing -> nothing at 9.9 s, the alarm at 10 s;
++//    [6] not OP -> nothing at 9.9 s, the alarm at 10 s; reaching OP inside the window -> pass;
++//    [7] station changed / [8] extra -> the alarm at once (everything listed is in OP);
++//    [9] several faults -> exactly ONE alarm, latched until the next generation
++//        (OnLinkRestored); link lost -> silent / abandoned; the Loader runs once per generation;
++//    [10] the alarm text is CSV / quote safe and bounded.
++//  ⚠ WHAT IT DOES NOT PROVE: what the real scan reports for a module that is unplugged
++//  and replugged WITHOUT a Refresh (present / position / name are scan-time facts),
++//  and that W906_Pci1203ModuleIniCreate's no-replace rename behaves on this volume.
++//  Both are on-machine checks. Reads and writes no file.
++// =============================================================================
++#include "EtherCAT/Pci1203ModuleCheck.h"
++#include "EtherCAT/Pci1203Monitor.h"
++#include "EtherCAT/Pci1203Vc8.h"
++
++#include <cstdio>
++#include <cstring>
++#include <string>
++#include <vector>
++
++using namespace ht9045;
++
++static int g_total = 0;
++static int g_fail  = 0;
++
++static void check(bool ok, const char* what)
++{
++    ++g_total;
++    std::printf("%s: %s\n", ok ? "PASS" : "FAIL", what);
++    if (!ok) ++g_fail;
++}
++
++static bool has(const std::string& s, const char* part) { return s.find(part) != std::string::npos; }
++
++// ---------------------------------------------------------------------------
++//  The fake monitor.
++// ---------------------------------------------------------------------------
++struct FakeMon {
++    Pci1203CardSample               c;
++    bool                            dis;
++    std::vector<Pci1203SlaveSample> s;
++    FakeMon() : dis(false) { s.resize(10); }
++    const Pci1203CardSample&  card() const { return c; }
++    bool                      Disabled() const { return dis; }
++    int                       slaveCount() const { return (int)s.size(); }
++    const Pci1203SlaveSample& slave(int i) const { return s[i]; }
++
++    void Station(int i, int ring, int pos, int addr, const char* name, bool profileValid, unsigned short profile,
++                 unsigned short state = 0x08)
++    {
++        Pci1203SlaveSample& x = s[i];
++        x.present = true; x.ring = ring; x.position = pos; x.addr = addr; x.unaddressable = false;
++        x.infoValid = true; x.name = name; x.profileValid = profileValid; x.profile = profile;
++        x.stateValid = true; x.state = state; x.lastError = 0;
++        x.vendorId = 0x539; x.productId = 0x100;
++    }
++    void Gone(int i)                     { s[i] = Pci1203SlaveSample(); }
++    void State(int i, unsigned short st) { s[i].stateValid = true; s[i].state = st; }
++};
++
++//  The "machine": ring 0 two drives + a junction, ring 1 two DI modules + a VC4 vacuum unit, all in OP.
++static FakeMon Healthy()
++{
++    FakeMon m;
++    m.c.open = true;
++    m.Station(0, 0, 0, 0x00E, "SGDXS-2R8A30A0", true, 402);
++    m.Station(1, 0, 1, 0x000, "SGDXW-2R8AA0A1000 SERVOPACK", false, 0);
++    m.Station(2, 1, 0, 0x001, "ECAT-2515 junction", false, 0);
++    m.Station(3, 1, 8, 0x050, "ECx-P32-HON 32DI 32 Ch. Dig. In.", false, 0);
++    m.Station(4, 1, 9, 0x051, "ECx-P32-HON 32DO 32 Ch. Dig. Out", true, 401);
++    m.Station(5, 1, 10, 0x0A0, "ECAT-VC4-ODM1", true, 401);
++    m.s[5].vendorId = 0x00494350ul; m.s[5].productId = 0x00A20401ul;
++    m.c.slavesFound = 6;
++    return m;
++}
++
++static bool IsVac(const Pci1203SlaveSample& s) { std::string why; return Pci1203Vc8IdentityOk(s, why); }
++
++static Pci1203ModuleInput In(const FakeMon& m, bool linkLost = false)
++{
++    return Pci1203ModuleInputFromMonitor(m, IsVac, linkLost);
++}
++
++//  A fake ini file: `exists` + `text`, and how many times it was loaded.
++struct FakeIni {
++    bool        exists;
++    std::string text;
++    int         loads;
++    FakeIni() : exists(false), loads(0) {}
++    Pci1203ModuleIniLoad operator()()
++    {
++        ++loads;
++        Pci1203ModuleIniLoad L;
++        if (!exists) return L;
++        std::string why;
++        if (Pci1203ModuleIniParse(text, L.entries, why)) L.status = Pci1203ModuleIniLoad::kOk;
++        else { L.status = Pci1203ModuleIniLoad::kBad; L.why = why; }
++        return L;
++    }
++};
++
++struct Run {
++    int write, skip, bad, pass, alarm, abandon, start;
++    std::string lastAlarm, lastSkip, lastWrite;
++    std::vector<Pci1203ModuleProblem> problems;
++    unsigned long firstEventAt;
++    Run() : write(0), skip(0), bad(0), pass(0), alarm(0), abandon(0), start(0), firstEventAt(0) {}
++    int events() const { return write + skip + bad + pass + alarm + abandon; }
++};
++
++static void One(Pci1203ModuleCheck& c, const FakeMon& m, FakeIni& ini, unsigned long t, Run& run, bool linkLost = false)
++{
++    const Pci1203ModuleCheck::Result r = c.Step(In(m, linkLost), t, "2026-10-03 08:00:00", [&ini]() { return ini(); });
++    if (!r.startText.empty()) ++run.start;
++    if (r.event != Pci1203ModuleCheck::kNone && run.events() == 0) run.firstEventAt = t;
++    switch (r.event) {
++    case Pci1203ModuleCheck::kWriteIni:     ++run.write; run.lastWrite = r.iniText; break;
++    case Pci1203ModuleCheck::kWriteSkipped: ++run.skip;  run.lastSkip = r.text;     break;
++    case Pci1203ModuleCheck::kIniBad:       ++run.bad;                              break;
++    case Pci1203ModuleCheck::kPass:         ++run.pass;                             break;
++    case Pci1203ModuleCheck::kAlarm:        ++run.alarm; run.lastAlarm = r.text; run.problems = r.problems; break;
++    case Pci1203ModuleCheck::kAbandoned:    ++run.abandon;                          break;
++    default: break;
++    }
++}
++
++//  t0..t1 inclusive, one sample every stepMs.
++static void Feed(Pci1203ModuleCheck& c, const FakeMon& m, FakeIni& ini, unsigned long t0, unsigned long t1,
++                 unsigned long stepMs, Run& run, bool linkLost = false)
++{
++    for (unsigned long t = t0; t <= t1; t += stepMs) One(c, m, ini, t, run, linkLost);
++}
++
++//  The ini the healthy machine would record.
++static FakeIni HealthyIni()
++{
++    FakeIni ini;
++    ini.exists = true;
++    ini.text = Pci1203ModuleIniSerialize(Pci1203ModuleCollect(In(Healthy())), "2026-10-03 07:00:00");
++    return ini;
++}
++
++static int Count(const std::vector<Pci1203ModuleProblem>& v, int kind)
++{
++    int n = 0;
++    for (std::size_t i = 0; i < v.size(); ++i) if (v[i].kind == kind) ++n;
++    return n;
++}
++
++int main()
++{
++    std::printf("== test_pci1203_modulecheck (AI(W906-MODCHECK) 20261003) ==\n");
++    check(kPci1203ModCheckMs == 10000, "[0] the window is 10 s, in one place (kPci1203ModCheckMs)");
++
++    // -----------------------------------------------------------------------
++    //  [1] classification
++    // -----------------------------------------------------------------------
++    check(Pci1203ModuleClassify("SGDXS-2R8A30A0", true, 402, false) == kPci1203ModMotor, "[1a] CiA 402 -> motor");
++    check(Pci1203ModuleClassify("SGDXW servopack", false, 0, false) == kPci1203ModMotor, "[1b] name SERVOPACK (any case), no profile -> motor");
++    check(Pci1203ModuleClassify("odd drive", true, 402, true) == kPci1203ModMotor, "[1c] 402 wins over isVacuum (drive first)");
++    check(Pci1203ModuleClassify("ECAT-VC4-ODM1", true, 401, true) == kPci1203ModNone, "[1d] vacuum unit excluded even with profile 401");
++    check(Pci1203ModuleClassify("whatever", true, 401, false) == kPci1203ModIo, "[1e] CiA 401 -> IO");
++    check(Pci1203ModuleClassify("ECx-P32-HON 32DI 32 Ch. Dig. In.", false, 0, false) == kPci1203ModIo, "[1f] name Dig. In -> IO");
++    check(Pci1203ModuleClassify("ECx 32DO Dig. Out", false, 0, false) == kPci1203ModIo, "[1g] name Dig. Out -> IO");
++    check(Pci1203ModuleClassify("ECAT-2515 junction", false, 0, false) == kPci1203ModNone, "[1h] junction / unknown -> excluded");
++    {
++        const Pci1203ModuleInput in = In(Healthy());
++        int io = 0, mo = 0, none = 0;
++        for (std::size_t i = 0; i < in.stations.size(); ++i)
++            (in.stations[i].kind == kPci1203ModIo ? io : in.stations[i].kind == kPci1203ModMotor ? mo : none)++;
++        check(in.stations.size() == 6 && mo == 2 && io == 2 && none == 2,
++              "[1i] adapter over the fake monitor: 2 motor, 2 IO, junction + VC4 excluded (REAL Pci1203Vc8IdentityOk)");
++        check(Pci1203ModuleCollect(in).size() == 4, "[1j] Collect records the 4 IO / motor modules only");
++    }
++
++    // -----------------------------------------------------------------------
++    //  [2] ini text
++    // -----------------------------------------------------------------------
++    {
++        const std::vector<Pci1203ModuleEntry> a = Pci1203ModuleCollect(In(Healthy()));
++        const std::string t = Pci1203ModuleIniSerialize(a, "2026-10-03 07:00:00");
++        std::vector<Pci1203ModuleEntry> b; std::string why;
++        bool same = Pci1203ModuleIniParse(t, b, why) && b.size() == a.size();
++        for (std::size_t i = 0; same && i < a.size(); ++i)
++            same = a[i].kind == b[i].kind && a[i].ring == b[i].ring && a[i].position == b[i].position &&
++                   a[i].station == b[i].station && a[i].name == b[i].name &&
++                   a[i].vendorId == b[i].vendorId && a[i].productId == b[i].productId;
++        check(same, "[2a] serialize -> parse round-trips every field");
++        check(has(t, "Count=4") && has(t, "Station=80") && has(t, "Kind=Motor"), "[2b] decimal station, Count, Kind in the text");
++        check(Pci1203ModuleIniParse("\xEF\xBB\xBF" + t, b, why) && b.size() == 4, "[2c] a UTF-8 BOM (an editor's save) is accepted");
++
++        std::string bad1 = t; bad1.replace(bad1.find("Count=4"), 7, "Count=5");
++        check(!Pci1203ModuleIniParse(bad1, b, why) && has(why, "Count") && b.empty(), "[2d] Count not matching the sections -> refused");
++        std::string bad2 = t; { const std::size_t k = bad2.find("Name="); bad2.replace(k, bad2.find('\r', k) - k, "Name="); }
++        check(!Pci1203ModuleIniParse(bad2, b, why), "[2e] an empty Name -> refused");
++        check(!Pci1203ModuleIniParse("", b, why) && !Pci1203ModuleIniParse("[Pci1203Modules]\r\nCount=0\r\n", b, why),
++              "[2f] empty file / no module -> refused");
++        std::string oct = t; oct.replace(oct.find("Station=80"), 10, "Station=080");
++        check(Pci1203ModuleIniParse(oct, b, why) && b[2].station == 80, "[2g] a hand-edited 080 reads as decimal 80, not octal");
++        std::string bad3 = t; bad3.replace(bad3.find("Ring=0"), 6, "Ring=x");
++        check(!Pci1203ModuleIniParse(bad3, b, why), "[2h] a non-number Ring -> refused");
++    }
++
++    // -----------------------------------------------------------------------
++    //  [3] first connect: write / skip
++    // -----------------------------------------------------------------------
++    {
++        Pci1203ModuleCheck c; FakeIni ini; Run run;
++        FakeMon m = Healthy();
++        Feed(c, m, ini, 1000, 31000, 200, run);
++        check(run.write == 1 && run.alarm == 0 && run.events() == 1 && run.firstEventAt == 1000,
++              "[3a] no ini: ONE write event at the first sample, no alarm, nothing after");
++        check(has(run.lastWrite, "Count=4") && ini.loads == 1, "[3b] the write carries the 4 modules; the ini was loaded once");
++    }
++    {
++        Pci1203ModuleCheck c; FakeIni ini; Run run;
++        FakeMon m = Healthy(); m.c.scanTruncated = true;
++        Feed(c, m, ini, 1000, 10900, 100, run);                // 9.9 s after the start
++        check(run.events() == 0, "[3c] truncated scan: nothing written, nothing said at 9.9 s");
++        One(c, m, ini, 11000, run);
++        check(run.skip == 1 && run.write == 0 && run.alarm == 0 && has(run.lastSkip, "truncated"),
++              "[3d] truncated scan: kWriteSkipped at 10 s, with the reason, no alarm");
++        Feed(c, m, ini, 11200, 40000, 200, run);
++        check(run.events() == 1, "[3e] ... and latched (no retry until the next connect)");
++        c.OnLinkRestored(); m.c.scanTruncated = false;
++        One(c, m, ini, 41000, run);
++        check(run.write == 1, "[3f] the next connect with a complete scan writes");
++    }
++    {
++        Pci1203ModuleCheck c; FakeIni ini; Run run;
++        FakeMon m = Healthy(); m.s[6] = m.s[3]; m.s[6].unaddressable = true;
++        Feed(c, m, ini, 0, 12000, 200, run);
++        check(run.write == 0 && run.skip == 1 && has(run.lastSkip, "unaddressable"), "[3g] an unaddressable station -> not written");
++    }
++    {
++        Pci1203ModuleCheck c; FakeIni ini; Run run;
++        FakeMon m = Healthy(); m.s[3].infoValid = false;
++        Feed(c, m, ini, 0, 12000, 200, run);
++        check(run.write == 0 && run.skip == 1 && has(run.lastSkip, "identity"), "[3h] a station without its identity -> not written");
++    }
++    {
++        Pci1203ModuleCheck c; FakeIni ini; Run run;
++        FakeMon m; m.c.open = true; m.c.slavesFound = 0;
++        Feed(c, m, ini, 0, 30000, 200, run);
++        check(run.events() == 0 && run.start == 0 && ini.loads == 0 && c.gen() == 0,
++              "[3i] the scan found 0: no generation, no write, the ini not even read");
++        FakeMon dis = Healthy(); dis.dis = true;
++        Feed(c, dis, ini, 30200, 60000, 200, run);
++        check(run.events() == 0 && c.gen() == 0, "[3j] monitor disabled: no generation");
++    }
++
++    // -----------------------------------------------------------------------
++    //  [4] all present + OP -> early pass
++    // -----------------------------------------------------------------------
++    {
++        Pci1203ModuleCheck c; FakeIni ini = HealthyIni(); Run run;
++        Feed(c, Healthy(), ini, 5000, 65000, 200, run);
++        check(run.pass == 1 && run.alarm == 0 && run.events() == 1 && run.firstEventAt == 5000,
++              "[4a] everything present, at its station, in OP: pass at the first sample, then nothing");
++        check(ini.loads == 1 && c.gen() == 1, "[4b] one generation, the ini loaded once");
++    }
++
++    // -----------------------------------------------------------------------
++    //  [5] missing
++    // -----------------------------------------------------------------------
++    {
++        Pci1203ModuleCheck c; FakeIni ini = HealthyIni(); Run run;
++        FakeMon m = Healthy(); m.Gone(3); m.c.slavesFound = 5;
++        Feed(c, m, ini, 1000, 10900, 100, run);
++        check(run.events() == 0, "[5a] a listed module missing: nothing at 9.9 s");
++        One(c, m, ini, 11000, run);
++        check(run.alarm == 1 && Count(run.problems, Pci1203ModuleProblem::kMissing) == 1 && has(run.lastAlarm, "missing r1 pos 8 st 80"),
++              "[5b] ... the alarm at 10 s, naming ring / position / station");
++    }
++
++    // -----------------------------------------------------------------------
++    //  [6] not OP
++    // -----------------------------------------------------------------------
++    {
++        Pci1203ModuleCheck c; FakeIni ini = HealthyIni(); Run run;
++        FakeMon m = Healthy(); m.State(0, 0x14);              // SAFEOP + ERR
++        Feed(c, m, ini, 1000, 10900, 100, run);
++        check(run.events() == 0, "[6a] found but SAFEOP: nothing at 9.9 s");
++        One(c, m, ini, 11000, run);
++        check(run.alarm == 1 && Count(run.problems, Pci1203ModuleProblem::kNotOp) == 1 && has(run.lastAlarm, "SAFEOP+ERR"),
++              "[6b] ... the alarm at 10 s with the state");
++    }
++    {
++        Pci1203ModuleCheck c; FakeIni ini = HealthyIni(); Run run;
++        FakeMon m = Healthy(); m.State(4, 0x02);              // PREOP while the ring comes up
++        Feed(c, m, ini, 1000, 5000, 200, run);
++        m.State(4, 0x08);
++        Feed(c, m, ini, 5200, 30000, 200, run);
++        check(run.pass == 1 && run.alarm == 0 && run.firstEventAt == 5200, "[6c] reaching OP inside the window -> pass, no alarm");
++    }
++
++    // -----------------------------------------------------------------------
++    //  [7] station changed / [8] extra -> at once
++    // -----------------------------------------------------------------------
++    {
++        Pci1203ModuleCheck c; FakeIni ini = HealthyIni(); Run run;
++        FakeMon m = Healthy(); m.s[3].addr = 0x055;           // the dial turned
++        Feed(c, m, ini, 1000, 30000, 200, run);
++        check(run.alarm == 1 && run.firstEventAt == 1000 && Count(run.problems, Pci1203ModuleProblem::kStationChanged) == 1 &&
++              Count(run.problems, Pci1203ModuleProblem::kMissing) == 0 && has(run.lastAlarm, "st 80 -> 85"),
++              "[7] same ring + position + name, other station: station changed, alarm at once (not missing + extra)");
++    }
++    {
++        Pci1203ModuleCheck c; FakeIni ini = HealthyIni(); Run run;
++        FakeMon m = Healthy(); m.Station(6, 1, 11, 0x052, "ECx-P32-HON 32DI 32 Ch. Dig. In.", false, 0); m.c.slavesFound = 7;
++        m.Station(7, 1, 12, 0x0A1, "ECAT-VC4-ODM1", true, 401); m.s[7].vendorId = 0x00494350ul;   // a vacuum unit: never extra
++        Feed(c, m, ini, 1000, 30000, 200, run);
++        check(run.alarm == 1 && run.firstEventAt == 1000 && run.problems.size() == 1 &&
++              Count(run.problems, Pci1203ModuleProblem::kExtra) == 1 && has(run.lastAlarm, "extra IO r1 pos 11 st 82"),
++              "[8] an IO module not in the ini: extra, alarm at once; the added vacuum unit is not counted");
++    }
++
++    // -----------------------------------------------------------------------
++    //  [9] several faults -> one alarm; latch; generations; link lost
++    // -----------------------------------------------------------------------
++    {
++        Pci1203ModuleCheck c; FakeIni ini = HealthyIni(); Run run;
++        FakeMon m = Healthy();
++        m.Gone(0); m.State(1, 0x04); m.s[3].addr = 0x057; m.Station(6, 1, 11, 0x052, "x Dig. Out", false, 0);
++        Feed(c, m, ini, 1000, 61000, 200, run);
++        check(run.alarm == 1 && run.events() == 1 && run.problems.size() == 4,
++              "[9a] missing + not OP + station changed + extra: exactly ONE alarm in 60 s, carrying all four");
++        check(has(run.lastAlarm, "4 problems"), "[9b] the alarm text counts them");
++        c.OnLinkRestored();
++        Feed(c, m, ini, 61200, 80000, 200, run);
++        check(run.alarm == 2 && ini.loads == 2 && c.gen() == 2, "[9c] link restored -> a new generation -> the alarm once more");
++
++        c.OnLinkRestored();
++        FakeMon good = Healthy();
++        Feed(c, good, ini, 80200, 82000, 200, run, true);      // restore reported but the watch says lost again
++        check(run.start == 2 && c.gen() == 2, "[9d] link lost: no generation starts");
++        Feed(c, good, ini, 82200, 90000, 200, run);
++        check(run.pass == 1 && c.gen() == 3, "[9e] link back (not lost): the pending restore starts generation 3 -> pass");
++    }
++    {
++        Pci1203ModuleCheck c; FakeIni ini = HealthyIni(); Run run;
++        FakeMon m = Healthy(); m.Gone(4);
++        Feed(c, m, ini, 1000, 5000, 200, run);
++        Feed(c, m, ini, 5200, 30000, 200, run, true);           // lost in the middle of the window
++        check(run.abandon == 1 && run.alarm == 0, "[9f] the link lost while checking: abandoned, no alarm (the link watch owns it)");
++        Feed(c, m, ini, 30200, 60000, 200, run);
++        check(run.alarm == 0 && c.gen() == 1, "[9g] ... and nothing until the restore is reported");
++        c.OnLinkRestored();
++        Feed(c, m, ini, 60200, 75000, 200, run);
++        check(run.alarm == 1, "[9h] restore -> re-checked -> the missing module alarms");
++    }
++    {
++        Pci1203ModuleCheck c; FakeIni ini; ini.exists = true; ini.text = "garbage"; Run run;
++        Feed(c, Healthy(), ini, 0, 30000, 200, run);
++        check(run.bad == 1 && run.write == 0 && run.alarm == 0 && run.events() == 1, "[9i] an unreadable ini: kIniBad once, never rewritten, no alarm");
++    }
++
++    // -----------------------------------------------------------------------
++    //  [10] safe text
++    // -----------------------------------------------------------------------
++    {
++        Pci1203ModuleCheck c; FakeIni ini = HealthyIni(); Run run;
++        FakeMon m = Healthy();
++        for (int i = 0; i < 4; ++i) {
++            char nm[96]; std::snprintf(nm, sizeof(nm), "Weird, \"quoted\" 'name' %d Dig. In with a very long tail text", i);
++            m.Station(6 + i, 1, 20 + i, 0x060 + i, nm, false, 0);
++        }
++        m.Gone(0);
++        Feed(c, m, ini, 0, 12000, 200, run);
++        check(run.alarm == 1 && run.lastAlarm.find(',') == std::string::npos && run.lastAlarm.find('"') == std::string::npos &&
++              run.lastAlarm.find('\'') == std::string::npos && run.lastAlarm.size() <= (std::size_t)kPci1203ModCheckTextMax &&
++              has(run.lastAlarm, "(+1 more)"),
++              "[10] 5 problems: no comma / quote, <= 400 bytes, the first 4 named and the rest counted");
++    }
++
++    std::printf("== %d checks, %d failed ==\n", g_total, g_fail);
++    std::printf(g_fail == 0 ? "RESULT: ALL PASS\n" : "RESULT: FAIL\n");
++    return g_fail == 0 ? 0 : 1;
++}
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index ba8238a..455e54f 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -4654,7 +4654,7 @@ int main(int argc, char** argv)
+                 //   Poll 之後改回 "tick"，後面 drain／發布卡住時的報法與改動前相同。
+                 WdMark("1203 Poll");
+                 { extern void W906_IoTiming(int); W906_IoTiming(3); mon->Poll(); W906_IoTiming(4); }  { extern void W906_MotorAccessPollTick(bool); extern bool W906_OwnerHeldSince(unsigned long long, unsigned long long&); static unsigned long long s_w906OwnerPoll = 0; W906_MotorAccessPollTick(W906_OwnerHeldSince(server.ControlOwner(), s_w906OwnerPoll)); }   //AI(W906-MERGE-0929) 20260929: review TK-1: a takeover (owner X -> Y) counts as "operator gone" for X for one beat, see W906_OwnerHeldSince at EOF   // AI(W906-IOWEB-P21) 20260925: phase mark for the click-latency log  //AI(W906-MT-E2) 20260925: right after Poll -- a 1203 LoopMove sees its arrival on the fresh sample (golden leg times), the Motor Test copy is refreshed (WebMotorAccessLive.cpp). Same line, so no line below moves
+-                { extern void W906_Pci1203LinkWatchTick(); W906_Pci1203LinkWatchTick(); }  WdMark("tick");   //AI(W906-1203-LINKLOST) 20261001: EastSun 1001「1203 如果斷線10秒 要跳出異常」-- one link sample after every Poll; lost 10 s -> golden WAR16152 (EOF W906_Pci1203LinkWatchTick, EtherCAT/Pci1203LinkWatch.h). Same line, no line moves
++                { extern void W906_Pci1203LinkWatchTick(); W906_Pci1203LinkWatchTick(); }  { extern void W906_Pci1203ModuleCheckTick(); W906_Pci1203ModuleCheckTick(); }  /*AI(W906-MODCHECK) 20261003: then the module presence check (EOF; EtherCAT/Pci1203ModuleCheck.h)*/  WdMark("tick");   //AI(W906-1203-LINKLOST) 20261001: EastSun 1001「1203 如果斷線10秒 要跳出異常」-- one link sample after every Poll; lost 10 s -> golden WAR16152 (EOF W906_Pci1203LinkWatchTick, EtherCAT/Pci1203LinkWatch.h). Same line, no line moves
+                 ioPolled = wasOpen || mon->card().open;  g_apiCacheDirty = true;   // AI(W906-IOWEB-P6) 20260924: right after Poll(), same thread  // AI(W906-IOWEB-P25) 20260925: was rebuilt HERE, before the drain, so every click queued during the Poll also waited 20-160 ms for four JSON strings; now marked, rebuilt after the drain
+             }
+         }
+@@ -8091,7 +8091,7 @@ void W906_NativeKeepaliveMain()
+             if (ht9045::TPci1203Monitor* mon = ht9045::Pci1203Monitor()) {
+                 WdMark("1203 Poll");
+                 { extern void W906_IoTiming(int); W906_IoTiming(3); mon->Poll(); W906_IoTiming(4); }  { extern void W906_MotorAccessPollTick(bool); extern bool W906_OwnerHeldSince(unsigned long long, unsigned long long&); static unsigned long long s_keepOwnerPoll = 0; W906_MotorAccessPollTick(W906_OwnerHeldSince(g_modalServer ? g_modalServer->ControlOwner() : 0ull, s_keepOwnerPoll)); }   //AI(W906-MERGE-NATIVE) 20260929: TK-1, same as the main loop's Poll line
+-                { extern void W906_Pci1203LinkWatchTick(); W906_Pci1203LinkWatchTick(); }  WdMark("tick (native window drag keepalive)");   //AI(W906-1203-LINKLOST) 20261001: same as the main loop's Poll -- the drag keepalive Polls too, so it samples too (one watch, EOF). Same line
++                { extern void W906_Pci1203LinkWatchTick(); W906_Pci1203LinkWatchTick(); }  { extern void W906_Pci1203ModuleCheckTick(); W906_Pci1203ModuleCheckTick(); }  /*AI(W906-MODCHECK) 20261003: same as the main loop*/  WdMark("tick (native window drag keepalive)");   //AI(W906-1203-LINKLOST) 20261001: same as the main loop's Poll -- the drag keepalive Polls too, so it samples too (one watch, EOF). Same line
+                 g_apiCacheDirty = true;
+             }
+         }
+@@ -8752,7 +8752,7 @@ void W906_HmiShellQuit()
+ // =============================================================================
+ #ifdef INSTALL_1203_MONITOR
+ #include "EtherCAT/Pci1203LinkWatch.h"
+-void W906_Pci1203LinkWatchTick()
++bool g_w906Pci1203LinkLost = false; unsigned long g_w906Pci1203LinkRestoreGen = 0;   void W906_Pci1203LinkWatchTick()   //AI(W906-MODCHECK) 20261003: the link watch's verdict for W906_Pci1203ModuleCheckTick (EOF) -- lost now / how many restores so far. Same line
+ {
+     ht9045::TPci1203Monitor* mon = ht9045::Pci1203Monitor();
+     if (!mon) return;
+@@ -8762,7 +8762,7 @@ void W906_Pci1203LinkWatchTick()
+     char clock[16];
+     std::snprintf(clock, sizeof(clock), "%02d:%02d:%02d", st.wHour, st.wMinute, st.wSecond);
+     const ht9045::Pci1203LinkWatch::Result r =
+-        s_watch.Step(ht9045::Pci1203LinkInputFromMonitor(*mon), (unsigned long)::GetTickCount(), clock);
++        s_watch.Step(ht9045::Pci1203LinkInputFromMonitor(*mon), (unsigned long)::GetTickCount(), clock);  g_w906Pci1203LinkLost = r.lost;   //AI(W906-MODCHECK) 20261003: the module check stays silent while the link is lost. Same line
+     const std::string sec = std::to_string((int)(ht9045::kPci1203LinkLostAlarmMs / 1000));   // the header's one constant
+     switch (r.event) {
+     case ht9045::Pci1203LinkWatch::kArmed:
+@@ -8782,7 +8782,7 @@ void W906_Pci1203LinkWatchTick()
+         break;
+     case ht9045::Pci1203LinkWatch::kRestored:
+         std::printf("[1203-link] %s\n", r.text.c_str());
+-        OpLine("LINK", "1203 連線恢復 / " + r.text);
++        OpLine("LINK", "1203 連線恢復 / " + r.text);  ++g_w906Pci1203LinkRestoreGen;   //AI(W906-MODCHECK) 20261003: every restore = a new connect for the module check. Same line
+         break;
+     default:
+         break;
+@@ -8858,3 +8858,163 @@ void W906_ExitDoneLog()
+ {
+     OpLine("EXIT", "關站完成：伺服器、TesterComm、1203 卡都已關閉，最後才關 HMI 視窗 / shutdown complete");
+ }
++// =============================================================================
++//  AI(W906-MODCHECK) 20261003: EastSun 1003 (machine engineer's ruling) -- the 1203 module presence check, the host of
++//    EtherCAT/Pci1203ModuleCheck.h. The DECISION (classification, connect generations, the 10 s window, one alarm per
++//    connect, when the first-connect write is allowed) is in that header; this only feeds it and does what it asks.
++//
++//  WHERE: right after W906_Pci1203LinkWatchTick on the same two lines (main loop IO clock + drag keepalive), on the tick
++//    thread, so it reads this Poll's sample and the link watch's verdict for it (g_w906Pci1203LinkLost /
++//    g_w906Pci1203LinkRestoreGen, set in W906_Pci1203LinkWatchTick).
++//
++//  FILE: <directory of asGeneralPath> + "Pci1203Modules.ini" = D:\HT9045\system\Pci1203Modules.ini on this machine
++//    (asGeneralPath = common.cpp:155 / :393, W906_GENERAL_INI_PATH seam -- so a ctest redirect moves this file too).
++//    READ once per generation (the Loader). WRITTEN only on kWriteIni: the text goes to "<ini>.tmp" (CREATE_ALWAYS,
++//    flushed), then MoveFileExA(tmp, ini, MOVEFILE_WRITE_THROUGH) WITHOUT MOVEFILE_REPLACE_EXISTING -- the rename fails
++//    with ERROR_ALREADY_EXISTS if the ini appeared meanwhile, so an existing file is never overwritten, and a reader
++//    never sees a half-written ini. The .tmp is deleted on any failure.
++//
++//  RAISING: ShowErrorMessage("WAR16154", 0, MMSystem, false, AnsiString(text)) -- the same call shape as WAR16152 in
++//    W906_Pci1203LinkWatchTick (KCode 0 = a notice: W906_AlarmStopLikeGolden, the golden alarm record, the HMI popup).
++//    ⚠ WAR16154 is a NEW code: it is in no AlarmCodeList / alarm table on this machine yet (grep 20261003: 0 hits under
++//    D:\HT9045), so the popup's text is whatever the alarm lookup gives an unknown code + errPart. Add the row.
++//
++//  LOG: stdout "[1203-mod] ..." and an oplog LINK line on start / write / skip / bad ini / pass / alarm / abandon,
++//    Chinese + English. The alarm's errPart stays ASCII (it lands in the csv logs).
++// =============================================================================
++#ifdef INSTALL_1203_MONITOR
++#include "EtherCAT/Pci1203ModuleCheck.h"
++#include "EtherCAT/Pci1203Vc8.h"           // Pci1203Vc8IdentityOk: a vacuum unit is not an IO module
++extern bool          g_w906Pci1203LinkLost;          // W906_Pci1203LinkWatchTick (above)
++extern unsigned long g_w906Pci1203LinkRestoreGen;
++
++static std::string W906_Pci1203ModuleIniPath()
++{
++    const std::string g = asGeneralPath.c_str();
++    const std::size_t k = g.find_last_of("\\/");
++    return (k == std::string::npos ? std::string() : g.substr(0, k + 1)) + "Pci1203Modules.ini";
++}
++
++static ht9045::Pci1203ModuleIniLoad W906_Pci1203ModuleIniLoad(const std::string& path)
++{
++    ht9045::Pci1203ModuleIniLoad L;
++    HANDLE h = ::CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
++    if (h == INVALID_HANDLE_VALUE) {
++        const DWORD e = ::GetLastError();
++        if (e == ERROR_FILE_NOT_FOUND) { L.status = ht9045::Pci1203ModuleIniLoad::kMissing; return L; }
++        char b[64]; std::snprintf(b, sizeof(b), "open failed (err %lu)", (unsigned long)e);   // PATH_NOT_FOUND / ACCESS_DENIED / sharing:
++        L.status = ht9045::Pci1203ModuleIniLoad::kBad; L.why = b;                             //   NOT "missing" -- never record over it
++        return L;
++    }
++    std::string text;
++    char buf[4096];
++    DWORD got = 0;
++    bool ok = true;
++    for (;;) {
++        if (!::ReadFile(h, buf, sizeof(buf), &got, NULL)) { ok = false; break; }
++        if (got == 0) break;
++        text.append(buf, got);
++        if (text.size() > (1u << 20)) { ok = false; break; }   // 1 MB: not a module list
++    }
++    ::CloseHandle(h);
++    if (!ok) { L.status = ht9045::Pci1203ModuleIniLoad::kBad; L.why = "read failed / too large"; return L; }
++    std::string why;
++    if (ht9045::Pci1203ModuleIniParse(text, L.entries, why)) L.status = ht9045::Pci1203ModuleIniLoad::kOk;
++    else { L.status = ht9045::Pci1203ModuleIniLoad::kBad; L.why = why; }
++    return L;
++}
++
++// kWriteIni: "<ini>.tmp" then a no-replace rename. "" = written; else why not.
++static std::string W906_Pci1203ModuleIniCreate(const std::string& path, const std::string& text)
++{
++    const std::string tmp = path + ".tmp";
++    char b[96];
++    HANDLE h = ::CreateFileA(tmp.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
++    if (h == INVALID_HANDLE_VALUE) {
++        std::snprintf(b, sizeof(b), "create %s.tmp failed (err %lu)", "Pci1203Modules.ini", (unsigned long)::GetLastError());
++        return b;
++    }
++    DWORD put = 0;
++    const BOOL w = ::WriteFile(h, text.data(), (DWORD)text.size(), &put, NULL);
++    const BOOL f = w ? ::FlushFileBuffers(h) : FALSE;
++    const DWORD we = ::GetLastError();
++    ::CloseHandle(h);
++    if (!w || !f || put != (DWORD)text.size()) {
++        ::DeleteFileA(tmp.c_str());
++        std::snprintf(b, sizeof(b), "write .tmp failed (err %lu)", (unsigned long)we);
++        return b;
++    }
++    if (!::MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_WRITE_THROUGH)) {    // NO MOVEFILE_REPLACE_EXISTING: never overwrite
++        const DWORD me = ::GetLastError();
++        ::DeleteFileA(tmp.c_str());
++        if (me == ERROR_ALREADY_EXISTS || me == ERROR_FILE_EXISTS)
++            std::snprintf(b, sizeof(b), "the ini already exists (err %lu) - left as it is", (unsigned long)me);
++        else
++            std::snprintf(b, sizeof(b), "rename .tmp -> ini failed (err %lu)", (unsigned long)me);
++        return b;
++    }
++    return std::string();
++}
++
++void W906_Pci1203ModuleCheckTick()
++{
++    ht9045::TPci1203Monitor* mon = ht9045::Pci1203Monitor();
++    if (!mon) return;
++    static ht9045::Pci1203ModuleCheck s_check;
++    static unsigned long s_restoreSeen = 0;
++    if (s_restoreSeen != g_w906Pci1203LinkRestoreGen) { s_restoreSeen = g_w906Pci1203LinkRestoreGen; s_check.OnLinkRestored(); }
++    SYSTEMTIME st;
++    ::GetLocalTime(&st);
++    char clock[32];
++    std::snprintf(clock, sizeof(clock), "%04d-%02d-%02d %02d:%02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
++    const std::string path = W906_Pci1203ModuleIniPath();
++    const ht9045::Pci1203ModuleInput in = ht9045::Pci1203ModuleInputFromMonitor(*mon,
++        [](const ht9045::Pci1203SlaveSample& s) { std::string why; return ht9045::Pci1203Vc8IdentityOk(s, why); },
++        g_w906Pci1203LinkLost);
++    const ht9045::Pci1203ModuleCheck::Result r =
++        s_check.Step(in, (unsigned long)::GetTickCount(), clock, [&path]() { return W906_Pci1203ModuleIniLoad(path); });
++    const std::string sec = std::to_string((int)(ht9045::kPci1203ModCheckMs / 1000));   // the header's one constant
++    if (!r.startText.empty()) {
++        std::printf("[1203-mod] %s\n", r.startText.c_str());
++        OpLine("LINK", "1203 模組檢查開始（" + sec + " 秒內比對 " + path + "） / " + r.startText);
++    }
++    switch (r.event) {
++    case ht9045::Pci1203ModuleCheck::kWriteIni: {
++        const std::string err = W906_Pci1203ModuleIniCreate(path, r.iniText);
++        if (err.empty()) {
++            std::printf("[1203-mod] %s -> %s written\n", r.text.c_str(), path.c_str());
++            OpLine("LINK", "1203 第一次連線，模組清單已建立（之後只讀不寫） " + path + " / " + r.text);
++        } else {
++            std::printf("[1203-mod] %s -> NOT written: %s\n", r.text.c_str(), err.c_str());
++            OpLine("LINK", "1203 模組清單沒有寫入（" + err + "） / " + r.text);
++        }
++        break;
++    }
++    case ht9045::Pci1203ModuleCheck::kWriteSkipped:
++        std::printf("[1203-mod] %s\n", r.text.c_str());
++        OpLine("LINK", "1203 模組清單不寫（掃描不完整，下次連線再試） / " + r.text);
++        break;
++    case ht9045::Pci1203ModuleCheck::kIniBad:
++        std::printf("[1203-mod] %s\n", r.text.c_str());
++        OpLine("LINK", "1203 模組清單讀不懂，這次不檢查（不會覆寫它） / " + r.text);
++        break;
++    case ht9045::Pci1203ModuleCheck::kPass:
++        std::printf("[1203-mod] %s\n", r.text.c_str());
++        OpLine("LINK", "1203 模組檢查通過 / " + r.text);
++        break;
++    case ht9045::Pci1203ModuleCheck::kAlarm:
++        std::printf("[1203-mod] ALARM WAR16154: %s\n", r.text.c_str());
++        std::fflush(stdout);
++        OpLine("LINK", "1203 模組檢查不符（缺少／未進 OP／站號變更／多出）-> 跳 WAR16154 / " + r.text);
++        WdMark("1203 module check -> ShowErrorMessage(WAR16154)");
++        ShowErrorMessage("WAR16154", 0, MMSystem, false, AnsiString(r.text.c_str()));   // same shape as WAR16152 above
++        break;
++    case ht9045::Pci1203ModuleCheck::kAbandoned:
++        std::printf("[1203-mod] %s\n", r.text.c_str());
++        OpLine("LINK", "1203 檢查中斷線，這次不判（恢復後重查） / " + r.text);
++        break;
++    default:
++        break;
++    }
++}
++#endif
+-- 
+2.55.0.windows.5
+
