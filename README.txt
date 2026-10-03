@@ -1070,4 +1070,12 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      machine_params/README_PARAMS.txt：1 個檔變動
      workorder/README_WORKORDER.txt：1 個檔變動
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+=== tools 0153 (20261003, machine) -- HTML designer (tools/vscode-htdesigner), version stays 0.162.0 ===
+- A jump to code (from an event or elsewhere) marks where it went in its own background colour: the whole
+  function (header to closing brace) or else that line; a scroll bar mark too; the next jump moves it.
+  Colour: ht9045Designer.jumpTargetBackground (Settings > colours).
+- Back / forward to code places: two big status bar buttons with words ("back to previous place",
+  "next place") = Alt+Left / Alt+Right; arrows on the editor title bar when they can go. (EastSun 1003)
+- Tests: run_all 3/3 layers; real VS Code 156/159 (3 known stale checks).
+- ! For the laptop: still not taken -- machine patches tools 0136 / 0143 / 0145 / 0147 / 0149 - 0153.
 MD5 清單在 MANIFEST_MD5.tsv。
