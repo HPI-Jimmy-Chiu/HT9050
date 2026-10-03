@@ -1042,4 +1042,10 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      操作紀錄 oplog_20261003.txt：新增 137 行
      設定檔變動：machine_params/D_GPIB9045_system/general.ini、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/lastdata_backup2.dat
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+=== tools 0152 (20261003, machine) -- HTML designer (tools/vscode-htdesigner), version stays 0.162.0 ===
+- F5's build progress bar always shows (EastSun 1003): the extension now starts on F5 ("onDebug"; before it only
+  started with a designer page / view, so F5 right after opening VS Code had no bar). The status bar also shows
+  "build ######## 75% (30/40)". Not onStartupFinished (it slowed other parts in the real-VS-Code test).
+- Tests: run_all 3/3 layers; real VS Code 156/159 (3 known stale checks).
+- ! For the laptop: still not taken -- machine patches tools 0136 / 0143 / 0145 / 0147 / 0149 / 0150 / 0151 / 0152.
 MD5 清單在 MANIFEST_MD5.tsv。
