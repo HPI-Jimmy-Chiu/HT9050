@@ -1149,4 +1149,8 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      machine_params/README_PARAMS.txt：1 個檔變動
      workorder/README_WORKORDER.txt：1 個檔變動
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+=== tools 0156 (20261003, machine) -- HTML designer (tools/vscode-htdesigner): notes only ===
+- Tabs and buttons on two rows (EastSun 1003): this machine's VS Code user setting
+  "workbench.editor.editorActionsLocation": "titleBar" -- the editor buttons (the designer toolbar) move to the
+  window title bar. Not in the repo; set it on another PC for the same layout.
 MD5 清單在 MANIFEST_MD5.tsv。
