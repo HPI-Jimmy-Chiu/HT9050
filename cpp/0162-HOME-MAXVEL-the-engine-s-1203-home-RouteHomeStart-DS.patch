@@ -1,0 +1,105 @@
+From 4e917354f34a0afa0502d3260397e1f5ebb4efbd Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 17:42:01 +0800
+Subject: [PATCH] HOME-MAXVEL: the engine's 1203 home (RouteHomeStart, DS402
+ arm) raises a CFG_AxMaxVel / MaxAcc / MaxDec known to be below the home
+ speeds before writing them -- InitMotor had just set the ceiling to
+ PJogHighSpeed (golden :363-382) and HT9050's HomeHighSpeed exceeds
+ JogHighSpeed on almost every servo (MInArmZA / MOutArmZA 100000 > 80000), so
+ the card refused the speed and Acm_AxHome was never sent: the full-machine
+ HOME hung at step 375 (EastSun 1003 'full HOME froze'). Same rule as Motor
+ Test JOG-MAXVEL / MT-ACCLIVE (never lowered; unknown = nothing extra). ctest
+ Pci1203MotorRoute section M
+
+---
+ EtherCAT/Pci1203MotorRoute.cpp     | 30 ++++++++++++++++++++++++++++++
+ tests/test_pci1203_motor_route.cpp | 25 ++++++++++++++++++++++++-
+ 2 files changed, 54 insertions(+), 1 deletion(-)
+
+diff --git a/EtherCAT/Pci1203MotorRoute.cpp b/EtherCAT/Pci1203MotorRoute.cpp
+index 44aa0ec..3575d94 100644
+--- a/EtherCAT/Pci1203MotorRoute.cpp
++++ b/EtherCAT/Pci1203MotorRoute.cpp
+@@ -566,6 +566,36 @@ int RouteHomeStart(int board, int port, bool homeDir, double hi, double lo, doub
+             LatchFault(rec, false, kEcRcRefused, "HomeStart (PHomeHighSpeed 0)");   //AI(W906-ENG1203) 20260929
+             return 0;
+         }
++        //AI(W906-HOME-MAXVEL) 20261003: EastSun 1003「全機回home 當掉了」-- the engine home first runs InitMotor (RouteInitCfg above:
++        //  CFG_AxMaxVel = PJogHighSpeed, MaxAcc = dAcc, MaxDec = dDec, golden :363-382), then writes the home speeds as PTP speeds; on
++        //  HT9050 HomeHighSpeed > JogHighSpeed on almost every servo (MInArmZA / MOutArmZA 100000 > 80000), the card refuses a velocity
++        //  above its ceiling (0x80000087, measured on M35 13:15, WebMotorAccess.cpp JOG-MAXVEL), so the home was never sent and step 375
++        //  waited forever.  Same rule as Motor Test's JOG-MAXVEL / MT-ACCLIVE (EastSun 1003): a ceiling KNOWN to be below what this home
++        //  needs is raised to that value first (never lowered; unknown = nothing sent, as before).  Known = this route's last successful
++        //  write of it (InitMotor just now) or else the monitor's read-back.
++        {
++            const Pci1203AxisSample& smp = Env().Axis(slot);
++            const struct { int which; Pci1203SpeedParam sp; double need; const char* nm; } mx[3] = {
++                { kEcSpdMaxVel, kSpeedMaxVel, hi,  "CFG_AxMaxVel" }, { kEcSpdMaxAcc, kSpeedMaxAcc, acc, "CFG_AxMaxAcc" },
++                { kEcSpdMaxDec, kSpeedMaxDec, dec, "CFG_AxMaxDec" } };
++            for (int i = 0; i < 3; ++i) {
++                const int s = (int)mx[i].sp;
++                if (!(mx[i].need > 0) || s < 0 || s >= kSpd) continue;
++                double cur = -1.0;
++                if (rec->spdOk[s]) cur = rec->spd[s];
++                else if (smp.valid && smp.speedValid[s]) cur = smp.speed[s];
++                if (cur < 0 || cur >= mx[i].need) continue;
++                char note[160];
++                std::snprintf(note, sizeof(note), "%s %.0f < home needs %.0f -> raised first (AI(W906-HOME-MAXVEL))", mx[i].nm, cur, mx[i].need);
++                Say(board, port, "HomeStart", "CEILING", note);
++                const unsigned long mrc = SetSpeedParam(board, port, *rec, slot, mx[i].which, mx[i].need);
++                if (mrc != 0) {
++                    Say(board, port, "HomeStart", "STOPPED", "raising the speed ceiling failed -- Acm_AxHome not sent");
++                    LatchFault(rec, false, mrc, "HomeStart (speed ceiling)");
++                    return 0;
++                }
++            }
++        }
+         const struct { int which; double v; } seq[4] = { { kEcSpdInit, lo }, { kEcSpdRun, hi }, { kEcSpdAcc, acc }, { kEcSpdDec, dec } };
+         for (int i = 0; i < 4; ++i) {
+             const unsigned long src = SetSpeedParam(board, port, *rec, slot, seq[i].which, seq[i].v);
+diff --git a/tests/test_pci1203_motor_route.cpp b/tests/test_pci1203_motor_route.cpp
+index ff417c5..c4741ae 100644
+--- a/tests/test_pci1203_motor_route.cpp
++++ b/tests/test_pci1203_motor_route.cpp
+@@ -439,7 +439,7 @@ int main()
+         CHECK(R()->bind(13, 0, 130, false));
+         CHECK(R()->initCfg(13, 0, kInitCfgMotorServo, true, true, 100000.0, 500000.0, 400000.0));
+         Pci1203InitCfgStep plan[24];
+-        const int n = Pci1203GoldenInitCfgPlan(kInitCfgMotorServo, true, true, plan, 24);
++        const int n = Pci1203GoldenInitCfgPlan(kInitCfgMotorServo, true, true, plan, 24);      
+         CHECK(n > 0);
+         CHECK((int)e.sent.size() == 1 + n + 3 + 1);                          // ResetError (READY) + plan + Max* + ResetError
+         CHECK(e.sent[0].kind == kCmdAxResetError && e.sent[0].axis == k);
+@@ -467,6 +467,29 @@ int main()
+         CHECK(!R()->initCfg(99, 0, kInitCfgMotorServo, true, true, 1.0, 2.0, 3.0) && e.sent.empty());
+     }
+ 
++    //AI(W906-HOME-MAXVEL) 20261003: ---- M: EastSun「全機回home 當掉了」-- the engine home's InitMotor sets CFG_AxMaxVel = PJogHighSpeed;
++    //  a HomeHighSpeed above it was refused by the card, so the home was never sent. Now the ceiling known to be lower is raised first.
++    {
++        FakeEnv e; Fresh(e);
++        e.AddAxis(14, 0); e.AddSlave(14, true);                     // a DS402 drive (as section H)
++        CHECK(R()->bind(14, 0, 140, false));
++        CHECK(R()->initCfg(14, 0, kInitCfgMotorServo, true, true, 80000.0, 8000.0, 8000.0));   // HT9050 MInArmZA: JogHigh 80000, Acc / Dec 8000
++        e.sent.clear(); e.poll++;
++        CHECK(R()->homeStart(14, 0, true, 100000.0, 10000.0, 8000.0, 8000.0) == 1);            // HomeHigh 100000 > the 80000 ceiling
++        std::size_t iMax = 999, iRun = 999;
++        int nMaxAcc = 0, nMaxDec = 0;
++        for (std::size_t i = 0; i < e.sent.size(); ++i) {
++            if (e.sent[i].kind != kCmdAxSetSpeed) continue;
++            if (e.sent[i].speed == kSpeedMaxVel && e.sent[i].value == 100000.0 && iMax == 999) iMax = i;
++            if (e.sent[i].speed == kSpeedRun && iRun == 999) iRun = i;
++            if (e.sent[i].speed == kSpeedMaxAcc) ++nMaxAcc;
++            if (e.sent[i].speed == kSpeedMaxDec) ++nMaxDec;
++        }
++        CHECK(iMax < iRun && iRun < e.sent.size());                  // CFG_AxMaxVel = 100000 before the home VelHigh
++        CHECK(nMaxAcc == 0 && nMaxDec == 0);                         // acc / dec already within their ceilings: not rewritten
++        CHECK(!e.sent.empty() && e.sent.back().kind == kCmdAxHome);  // and the home is sent
++    }
++
+     //AI(W906-ENG1203) 20260929: ---- F: HIGH-1 stops that bypass the route ----
+     {
+         FakeEnv e; Fresh(e);
+-- 
+2.55.0.windows.5
+
