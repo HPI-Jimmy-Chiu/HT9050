@@ -1,0 +1,103 @@
+From 98acd564a9ec4a1bab0ab95ebf029ef2c88611a2 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 19:31:33 +0800
+Subject: [PATCH] ECAT-RECLAIM: an engine 1203 axis whose claim was refused at
+ boot is claimed again on its next read / Servo ON / alarm reset, and every
+ claim / refusal goes to the op log -- 19:22 full HOME (EastSun 1003
+ screenshot WAR240410 MInRotate): MInRotate, MOutRotate and MCCDY read
+ SERVO-OFF for 20 s (HOME lines) while the monitor showed svo=1 for all three;
+ TMyEtherCatMotor::ScanMotorStatus returns with the LEDs untouched when
+ W906_EcRead fails, and the route read fails for an unclaimed axis (Open_Axis
+ only binds in InitMotor). Now ScanMotorStatus / MotOutputOn / ResetState call
+ Open_Axis() first while bAxisOpen is false; Pci1203MotorRoute Say() forwards
+ CLAIMED / REFUSED / FAIL lines to g_W906RouteNote (wb_serve: ROUTE lines).
+ ctest Pci1203MotorRoute / EcatMotorRoute / homeclass / HomeMonitor /
+ HomeBlock / NoteMotorError pass
+
+---
+ EtherCAT/Pci1203MotorRoute.cpp | 7 +++++++
+ Motor/myEthercatmotor.cpp      | 6 +++---
+ tools/wb_serve.cpp             | 4 ++--
+ 3 files changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/EtherCAT/Pci1203MotorRoute.cpp b/EtherCAT/Pci1203MotorRoute.cpp
+index 048e7f1..0cb4267 100644
+--- a/EtherCAT/Pci1203MotorRoute.cpp
++++ b/EtherCAT/Pci1203MotorRoute.cpp
+@@ -43,6 +43,8 @@
+ static_assert(W906_ENG1203_GATE == 4, "ht9045_engine_route_armed_probe must compile the ARMED installer branch");
+ #endif
+ 
++void (*g_W906RouteNote)(const char*) = 0;     //AI(W906-ECAT-RECLAIM) 20261003: the op log's ROUTE line (tools/wb_serve.cpp W906_OpLogInit registers it); 0 = console only
++
+ namespace ht9045 {
+ 
+ namespace {
+@@ -213,6 +215,11 @@ void Say(int board, int port, const char* what, const char* verdict, const std::
+     const unsigned long n = ++s_sayPerAxis[Key(board, port)];
+     if (!force && !(n <= 30 || (n % 500) == 0)) { ++s_stats.linesDropped; return; }
+     ++s_stats.linesShown;
++    if (::g_W906RouteNote && (std::strcmp(verdict, "REFUSED") == 0 || std::strcmp(verdict, "CLAIMED") == 0 || std::strstr(verdict, "FAIL") != 0)) {   //AI(W906-ECAT-RECLAIM) 20261003: claims / refusals / failures in the op log (ROUTE lines) -- the 19:22 HOME stop had no trace of why 3 axes could not be read
++        char b[512];
++        std::snprintf(b, sizeof(b), "st %d ax %d %s -> %s%s%s", board, port, what, verdict, why.empty() ? "" : "  -- ", why.c_str());
++        ::g_W906RouteNote(b);
++    }
+     if (!s_verbose) return;
+     std::printf("engine motor -> 1203 #%lu: st %d ax %d %s -> %s%s%s   [skipped: stop %lu, extDrive %lu, speed %lu; Q1 refused %lu; stop FAILED %lu]\n",
+                 seq, board, port, what, verdict, why.empty() ? "" : "  -- ", why.c_str(),
+diff --git a/Motor/myEthercatmotor.cpp b/Motor/myEthercatmotor.cpp
+index ac85971..85e453b 100644
+--- a/Motor/myEthercatmotor.cpp
++++ b/Motor/myEthercatmotor.cpp
+@@ -1189,7 +1189,7 @@ void TMyEtherCatMotor::ScanMotorStatus( bool *Led )
+                 Led[iAlarmLed]=true;    //iServoOn 改 iAlarmLed
+         }
+ #else
+-        TEcatAxisRead s; if(EcatMotorRoute()) { if(!W906_EcRead(iBoardID, iPortID, s)) return; const unsigned long m=s.motionIO;   //AI(W906-ECAT-ROUTE) 20260929: golden :843-892 decoded from the monitor's sample (a failed read returns like golden's: Led and bAlarm untouched). No route = the 8 lines below, as before
++        TEcatAxisRead s; if(EcatMotorRoute()) { if(!bAxisOpen) Open_Axis(); /*AI(W906-ECAT-RECLAIM) 20261003: an axis whose boot InitMotor claim was refused (card not ready yet) is claimed again here -- 19:22 HOME: MInRotate / MOutRotate / MCCDY read SERVO-OFF 20 s although the monitor showed svo=1 (unclaimed = every read fails, Led untouched)*/ if(!W906_EcRead(iBoardID, iPortID, s)) return; const unsigned long m=s.motionIO;   //AI(W906-ECAT-ROUTE) 20260929: golden :843-892 decoded from the monitor's sample (a failed read returns like golden's: Led and bAlarm untouched). No route = the 8 lines below, as before
+             Led[iCcwLed]=((m>>2)&1)!=0; Led[iCwLed]=((m>>3)&1)!=0; Led[iHomeLed]=((m>>4)&1)!=0; Led[iSoftcwLed]=((m>>16)&1)!=0; Led[iSoftccwLed]=((m>>17)&1)!=0;
+             Led[iAlarmLed]=((m>>1)&1)!=0 || s.state==kEcStaErrorStop; Led[iServoOn]=((m>>14)&1)!=0; Led[iEmgLed]=((m>>6)&1)!=0; } else {
+         Led[iCcwLed]=false;
+@@ -1805,7 +1805,7 @@ void TMyEtherCatMotor::MotOutputOn(int iOutport)
+         ShowErrorMessage("WAR16122", 0, MMSystem, 0, strError);
+     }
+ #endif
+-    W906_EC_ONLY(if(EcatMotorRoute()) { if(bAlarm==true) { W906_EcCall(iBoardID, iPortID, kEcResetError, 0, 0); MySleep(100); } W906_EcCall(iBoardID, iPortID, kEcSvOn, 0, 1); }) }   //AI(W906-ECAT-ROUTE) 20260929: golden :1392-1412 through the route (the file-global bAlarm, golden quirk kept); no route = not even the MySleep
++    W906_EC_ONLY(if(EcatMotorRoute()) { if(!bAxisOpen) Open_Axis(); if(bAlarm==true) { W906_EcCall(iBoardID, iPortID, kEcResetError, 0, 0); MySleep(100); } W906_EcCall(iBoardID, iPortID, kEcSvOn, 0, 1); }) }   //AI(W906-ECAT-ROUTE) 20260929: golden :1392-1412 through the route (the file-global bAlarm, golden quirk kept); no route = not even the MySleep
+ //--------------------------------------------------------------------------
+ void TMyEtherCatMotor::MotOutputOff(int iOutport)
+ {
+@@ -2187,7 +2187,7 @@ void TMyEtherCatMotor::ResetState()
+ //        ShowErrorMessage("WAR16122", 0, MMSystem, 0,strError);
+     }
+ #endif
+-    W906_EC_ONLY(W906_EcCall(iBoardID, iPortID, kEcResetError, 0, 0);) }   //AI(W906-ECAT-ROUTE) 20260929: golden :1764-1773 Acm_AxResetError through the route (no engine caller)
++    W906_EC_ONLY(if(EcatMotorRoute() && !bAxisOpen) Open_Axis(); W906_EcCall(iBoardID, iPortID, kEcResetError, 0, 0);) }   //AI(W906-ECAT-RECLAIM) 20261003: claim first (see ScanMotorStatus)   //AI(W906-ECAT-ROUTE) 20260929: golden :1764-1773 Acm_AxResetError through the route (no engine caller)
+ //--------------------------------------------------------------------------
+ void TMyEtherCatMotor::ResetAxisOpen()
+ {
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 7a59b84..572170e 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -8299,7 +8299,7 @@ std::string OpAll(const OpFields& f)
+     return s;
+ }
+ 
+-void W906_OpSrNote(const char* s) { OpLine("SREC", s ? std::string(s) : std::string()); }  void W906_OpStreamNote(const char* s) { OpLine("STREAM", s ? std::string(s) : std::string()); }  void W906_OpBrakeNote(const char* s) { OpLine("BRAKE", s ? std::string(s) : std::string()); }  void W906_OpHomeNote(const char* s) { OpLine("HOME", s ? std::string(s) : std::string()); }  void W906_OpVacuumNote(const char* s) { OpLine("VAC", s ? std::string(s) : std::string()); }   //AI(W906-VACUNIT-1203) 20260930: + every ECAT-VC8 write (refused / dry / issued, EtherCAT/Pci1203Vc8Route.inc g_W906VacuumNote)   //AI(W906-SR-HANG) 20260929: State Record background worker steps (cStateRecord.cpp g_W906StateRecordNote); AI(W906-BRAKE-AXIS) 20260929: per-axis brake release / hold (WebMotorAccessLive.cpp g_W906BrakeNote) -- 2nd fix: it sat behind this comment ; //AI(W906-STREAM-S1) 20260930: STREAM = the 10 s [STREAM] line (WebStreamStats.h)
++void W906_OpSrNote(const char* s) { OpLine("SREC", s ? std::string(s) : std::string()); }  void W906_OpStreamNote(const char* s) { OpLine("STREAM", s ? std::string(s) : std::string()); }  void W906_OpBrakeNote(const char* s) { OpLine("BRAKE", s ? std::string(s) : std::string()); }  void W906_OpHomeNote(const char* s) { OpLine("HOME", s ? std::string(s) : std::string()); }  void W906_OpRouteNote(const char* s) { OpLine("ROUTE", s ? std::string(s) : std::string()); }  void W906_OpVacuumNote(const char* s) { OpLine("VAC", s ? std::string(s) : std::string()); }   //AI(W906-VACUNIT-1203) 20260930: + every ECAT-VC8 write (refused / dry / issued, EtherCAT/Pci1203Vc8Route.inc g_W906VacuumNote)   //AI(W906-SR-HANG) 20260929: State Record background worker steps (cStateRecord.cpp g_W906StateRecordNote); AI(W906-BRAKE-AXIS) 20260929: per-axis brake release / hold (WebMotorAccessLive.cpp g_W906BrakeNote) -- 2nd fix: it sat behind this comment ; //AI(W906-STREAM-S1) 20260930: STREAM = the 10 s [STREAM] line (WebStreamStats.h)
+ 
+ std::string OpDiff(const OpFields& was, const OpFields& now)
+ {
+@@ -8338,7 +8338,7 @@ void W906_OpLogInit(int port)
+                   (int)(W906_WEB_TOKEN_ENFORCE != 0));
+     OpLine("START", std::string(head) + built + "  " + exe);
+     webbridge::g_W906OpLogHook = &W906_OpHook;
+-    { extern void (*g_W906StateRecordNote)(const char*); g_W906StateRecordNote = &W906_OpSrNote; }  { extern void (*g_W906BrakeNote)(const char*); g_W906BrakeNote = &W906_OpBrakeNote; }  { extern void (*g_W906HomeNote)(const char*); g_W906HomeNote = &W906_OpHomeNote; }  ht9045::StreamSetSink(&W906_OpStreamNote);  { extern void (*g_W906VacuumNote)(const char*); g_W906VacuumNote = &W906_OpVacuumNote; }   //AI(W906-VACUNIT-1203) 20260930: + the ECAT-VC8 writes   //AI(W906-SR-HANG) 20260929; AI(W906-BRAKE-AXIS) 20260929 (2nd fix: the registration sat behind this comment) ; //AI(W906-STREAM-S1) 20260930
++    { extern void (*g_W906StateRecordNote)(const char*); g_W906StateRecordNote = &W906_OpSrNote; }  { extern void (*g_W906BrakeNote)(const char*); g_W906BrakeNote = &W906_OpBrakeNote; }  { extern void (*g_W906HomeNote)(const char*); g_W906HomeNote = &W906_OpHomeNote; }  { extern void (*g_W906RouteNote)(const char*); g_W906RouteNote = &W906_OpRouteNote; }  ht9045::StreamSetSink(&W906_OpStreamNote);  { extern void (*g_W906VacuumNote)(const char*); g_W906VacuumNote = &W906_OpVacuumNote; }   //AI(W906-VACUNIT-1203) 20260930: + the ECAT-VC8 writes   //AI(W906-SR-HANG) 20260929; AI(W906-BRAKE-AXIS) 20260929 (2nd fix: the registration sat behind this comment) ; //AI(W906-STREAM-S1) 20260930
+     std::printf("oplog: %s\\oplog_<yyyymmdd>.txt\n", g_opDir.c_str());
+ }
+ 
+-- 
+2.55.0.windows.5
+
