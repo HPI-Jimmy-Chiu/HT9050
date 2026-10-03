@@ -1022,4 +1022,15 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      操作紀錄 oplog_20261003.txt：新增 244 行
      設定檔變動：machine_params/D_GPIB9045_system/general.ini、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/lastdata_backup2.dat
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+10-03 派工給筆電（EastSun 交辦給 Jimmy）——機台端沒有改建置設定，請筆電端修正後出包：
+  ⚠ 給筆電（派工 5）：機台上編譯太慢，F5（-O0）跟 release（-O2）都慢，EastSun 要求加快。
+     機台端實測（檔案時間戳）：F5 只建 wb_serve，改一個 .cpp 要 ~61 秒，其中編譯只有 3 秒，其餘是重新打包 libht9045_sm.a（25 秒）、
+     重做 wb_serve 的 objects.a（22 秒）、連結（11 秒）；改到 MachineType.h／cmydef.h 要重編 400～600 個檔（-O0 245 秒、-O2 352 秒，
+     wb_serve 有 78% 的 obj 相依 MachineType.h）；連測試一起建（ALL，-O2）要 ~21 分鐘。
+     機台：i7-14700 28 執行緒、RAM 只有 7.7 GB（所以 F5 用 -j 6）、原始碼和所有 build 目錄都在 D:（5400 轉傳統硬碟），C: 是 NVMe。
+     機台端猜的加速方向（請筆電端評估、實作後出包）：build 目錄放 C:／防毒排除、改 Ninja 或不要每次重做 objects.a、ht9045_sm 改 OBJECT library 或 thin archive、
+     PCH／ccache、測試共用 test_bootstrap 並移出 ALL；拆 MachineType.h 開關要先問 EastSun（開關放 MachineType.h 是他的裁決）。
+     限制：oracle 線 g++ 6.3.0 不能換、build\ 的 CMAKE_BUILD_TYPE 不能動；請先在新的 build 目錄比時間。
+     附檔 dispatch\20261003_build_speed\：build_timing_20261003.txt（時間表＋機台規格）、o2_ALL_build_20261003_1858-1904.log（今天整包 -O2 編譯輸出）、
+     兩條線的 CMakeCache、ht9045_sm／wb_serve 的 link.txt、機台的 launch.json／tasks.json。
 MD5 清單在 MANIFEST_MD5.tsv。
