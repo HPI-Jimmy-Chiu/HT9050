@@ -1,4 +1,4 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-03 10:48
+HT9050 機台參數快照（machine_params\）—— 2026-10-03 11:18
 來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ f64409b PKG-131: GitHub main 19b954b (GitLab main fd1b71c5) on the machine -- Bin display ／web f8d179c。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
