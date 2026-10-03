@@ -17,15 +17,15 @@ description: >
 
 # HT9045 頁面表（取代 golden 的 fShow／bShow）
 
-> **樹**：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\` 開頭＝**移植樹**（C++，UTF-8）；`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\` 開頭＝**golden V912**（BCB6，Big5）；`D:\HT9045\web\` 開頭＝**網頁**。
+> **樹**：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\` 開頭＝**移植樹**（C++，UTF-8）；`D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260618\` 開頭＝**golden 906**（BCB6，cp950，不在 git；Jimmy RULINGS_20261002 第 20 條、RULINGS_20261003 第 2 條：golden＝906 0618；20261003 E-032 改）；`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\` 開頭＝**V912**（只拿來對照，行號寫在（）裡；溫控照第 20a 條以 V912 為準；20261003 E-030 改，AI(W906-E030-CITE)）；`D:\HT9045\web\` 開頭＝**網頁**。
 > **基準**：設計文件（20260928）裡的行號與列數多半已過期；本檔的行號、列數全部在 **20261002** 對 `D:\HT9045` 分支 `v906/steven-cbridge-review6` HEAD `deb5f18e` 重讀過（WebPageTable.cpp、test_pagetable.cpp、background.html、fshow_audit_baseline.json 這四支跟 `origin/main` `36f09560` 相同）。
 > **擁有者**：WebPageTable.*、test_pagetable.cpp、fshow_audit.* ＝ **St01**（Q51）；background.html ＝ **筆電（Jimmy）**；WebWindowRegistry.* ＝ Jimmy／EastSun（頁面表一行都不改它）。
 
 ## 1. 白話
 
-- **golden 的 fShow**：每張表單帶 `bool fShow;`（例 `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\uhome.h:70`），FormShow 設 true、FormClose 設 false（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\uhome.cpp:4997`、`:5020`）。別的程式直接讀它決定做不做事，例（golden V912）：
-  - `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\ckernel.cpp:411` `if(iHome==0 && fSetup->fShow==false)`
-  - `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\uhome.cpp:2516-2519` `if(fHome->fShow==false) { SoftStop=true; break; }`（Home Monitor 關掉＝回原點停）
+- **golden 的 fShow**：每張表單帶 `bool fShow;`（例 `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260618\uhome.h:70`，V912 同行），FormShow 設 true、FormClose 設 false（`D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260618\uhome.cpp:4847`、`:4870`；V912 `:4997`、`:5020`）。別的程式直接讀它決定做不做事，例（golden 906；V912 在（）裡）：
+  - `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260618\ckernel.cpp:411`（V912 同行）`if(iHome==0 && fSetup->fShow==false)`
+  - `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260618\uhome.cpp:2387-2390`（V912 `:2516-2519`）`if(fHome->fShow==false) { SoftStop=true; break; }`（Home Monitor 關掉＝回原點停）
 - **為什麼網頁版不能直接讀**：畫面在瀏覽器裡，C++ 表單 facade 沒有 FormShow／FormClose 事件，網頁視窗類表單的成員**從來沒人設成 true** ⇒ 直接讀＝永遠「沒開」（設計 §1.2、§2.2）。只有 C++ 自己開的對話框（fNote、MyMessageBox）和回原點程式開的 fHome，成員是對的。
 - **現在的做法**：一律問單一函式，成員照傳（同一行改、行數不變）：
   - golden：`if(iHome==0 && fSetup->fShow==false)`

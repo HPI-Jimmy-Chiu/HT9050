@@ -4,7 +4,7 @@
 - 上述分類無法覆蓋的報告需求
 - 代理人使用報告
 - SKILL 應用說明
-- 日報（個人/主管版）
+- 日報（個人/主管版）：**20261003 起不走本檔**，一律用 [ops-daily-worklog](../ops-daily-worklog/ops-daily-worklog.md) 的 RD5 統一格式，寫到 `<repo>\public\Docs\Daily\<EnglishName>\{YYYYMMDD}.md`
 - 代理商客戶服務出差報告
 
 ## 輸出路徑
@@ -21,9 +21,9 @@
 |---|---|
 | 代理人使用報告 | `{YYYYMMDD}_{人員}_RD5軟體_{代理名稱}代理使用報告.md` |
 | SKILL 應用說明 | `{YYYYMMDD}_{人員}_RD5軟體_{SKILL名稱}_SKILL應用說明.md` |
-| 個人日報 | `{YYYYMMDD}_{人員}_RD5_個人日報.md` |
-| 日報（精簡版） | `{YYYYMMDD}_{人員}_RD5_個人日報_精簡版.md` |
-| 日報（軟體格式） | `{YYYYMMDD}_{人員}_RD5軟體_daily_report.md` |
+| 個人日報（舊，20261003 起改用 ops-daily-worklog） | `{YYYYMMDD}_{人員}_RD5_個人日報.md` |
+| 日報（精簡版）（舊，20261003 起改用 ops-daily-worklog） | `{YYYYMMDD}_{人員}_RD5_個人日報_精簡版.md` |
+| 日報（軟體格式）（舊，20261003 起改用 ops-daily-worklog） | `{YYYYMMDD}_{人員}_RD5軟體_daily_report.md` |
 
 ## 通用 Markdown 骨架
 ```markdown

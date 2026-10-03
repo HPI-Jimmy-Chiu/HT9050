@@ -2000,6 +2000,8 @@ ST01-E 再用選項題問 Steven（09:0x），三題都選建議：① 兩個命
 ⇒ 意思：保留 912 的行為（commit `1bf262c5`），已經做的不用改回去。
 **現況**：改動範圍：D:\HT9045\HT9011UC_Cpp_V3.33.906.0\ckernel.cpp、D:\HT9045\HT9011UC_Cpp_V3.33.906.0\TesterComm\Handler\HandlerGpibMsg.cpp、D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\TESTERCOMM_PORT_LEDGER.md（commit `1bf262c5` 尚未編譯驗證）。
 
+**⛔ 20261003 ST01-M 補**：St02 MR !132（#62 第二批）照 Jimmy RULINGS_20261002 #23-6 把這段改回 906（馬上響）；St02 1003 05:39 又把同一題當客戶專屬題問 Steven（W71）。本裁決（A＝912）加上 Steven 1003 常設規則（912 比較好就照 912，註解寫 906 行號與做法＋912 修正行號）⇒ **W71 照本裁決定為 912**，St02 開修正 MR 改回 912＋雙註記（筆電：往 912 改的新變更先等 Jimmy 夜間報告 §0 第 78 項）。
+
 ### W9. 遠端下達的溫度偏移量（offset）指令能不能寫進配方檔（D-1；todo H-009／St02）
 **這是什麼功能**：測試機或上位系統可以透過 GPIB、SECS 或 FTP 指令，遠端下達一個溫度偏移量（temperature offset），微調機台的測溫。V906 裡 GPIB 的 `SETTJ` 這條指令目前是「活的」（有在運作），但少了新版（912）額外補上的那段處理（golden D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\uTemp_Set.cpp:6142-6163）。
 **當時的問題**：就算把 912 少的那段補上，要把這個偏移量寫進配方檔（D:\HT9045\IniData\Data\<配方>\Temperature.Data）這一步，目前被一個安全防護閘（S3）擋住（D:\HT9045\HT9011UC_Cpp_V3.33.906.0\uTemp_Set.cpp:6306-6308、:6345-6347），所以現在遠端下達的溫度偏移量**完全不會生效，畫面上也不會有任何提示**。要不要打開這個安全閘，讓它照 golden 的行為真的寫進配方？
@@ -3182,3 +3184,62 @@ Jimmy 原話：「#1A #2C #3A #4A #5照建議 #6照建議 #7B #8B #9A #10A #11C 
 - **登記時的狀態**：等 Steven 選。
 
 **裁決**（#23 第 2 項＝§0 56）：**C：保留 912 版，記成第 20 條的例外（第 20c 條）**。理由：912 的 `MultiTransferKG` 小數修正是真的 bug 修正（EastSun 0710：906 的 int 會把 0.5 kPa 截成 0）。St02-E 照 906 重翻的 `c800f2fc` 作廢；總開關 `W906_ADAM_EP_LIVE` 仍關，要開時另外通知、EastSun 在旁。同一條：**第 20b 條 HANA 照 912**（St02 的 C10 HANA RMS 可以推，MR !126）；**第 20a 條溫控照 V912 不變**（Ifor 21:1x 不同意見，Jimmy 選 Steven 的）。
+
+### 20261003 05:3x Steven 裁決：Q78、Q79（從 decisions-pending.md 搬來；兩題原本也在 FROM_STEVEN §3 問 Jimmy＝夜間報告 §0 第 74～76 項）
+
+Steven 原話：「Q78 Q79, 可以按照912，但是註解同時提供906的行號位置」。
+
+### Q78. 19 個存檔鈕的「A02 開著、OP 等級時直接關頁、不存」保護，912 才有，要留還是照 #20 改回 906？（ST01-M 1003 01:1x 登記；ST01-E 的 E-030a 找到；同一題已在 FROM_STEVEN §3 問 Jimmy）
+
+- **畫面上會發生什麼**：V912 在 19 個設定頁的存檔處理加了一段 A02 `Close(); return;`（RogerYang 的保護）：AOISetup、BinSelect、GroundMan、IniConfig_OCR、Ld_UldDelayTime、Rotate、StartCondition、Temperature、BarCode、Cleaning、QAMode、SetUp、TesterIF、VacuumUnit、YieldMonitoring、TrayForm、TTLCfg、UserDefForm_File、Contact（另有 TrayAssignment）。906 都沒有。**只有 Config [A02]（切到 OP 等級不准存參數）打開、而且目前是 OP 等級（AccessLevel＝0）時**，912 這 19 頁按存檔會直接關頁、不寫檔；906 在同樣情況會繼續存（一般對話框頁存操作員改的值；Contact 是非對話框，Close() 先跑 FormClose，改的值被丟掉、檔案用原值重寫）。**A02 沒開或工程師等級以上，兩版都照常存。**main／review6 自動產生的 .gen.inc 裡是 V912 的寫法。（⛔ ST01-M 1003 02:0x 更正：01:1x 的版本寫成「912 永遠不存」，漏了 A02＋OP 等級這個條件；ST01-E 指出。）
+- **A（ST01-E 建議）**：留著 912 的保護，記成第 20 條的例外（跟 Q77 Auto Clean 一樣是保護）。例：A02 開著、OP 等級在 Cleaning 頁改了值按存檔 → 頁面關掉、不寫檔；工程師等級照常存。
+- **B**：照 #20 改回 906。例：A02 開著、OP 等級在 TrayAssignment 改了值按存檔 → 寫進檔案；在 Contact 改了按存檔 → 改的值被丟掉、檔案用原值重寫。
+- **登記時的狀態**：等 Jimmy／Steven。
+
+**裁決**：**A：照 912**——19 個存檔處理的 A02 保護（Config [A02] 開著、OP 等級時直接關頁、不存）保留，記成第 20 條的例外；**程式註解同時寫 V912 與 906 的行號**（906 沒有這段的地方，寫明 906 對應的位置／「906 無」）。St01 照做：todo E-030 註記，human-review C24。
+
+### Q79. ⚠ 送給測試機的接觸力字串（GPIB）現在照 912 的算法，要留還是改回 906？（ST01-M 1003 02:0x 登記；E-030a 報告 §8 (b)；同一題已在 FROM_STEVEN §3 問 Jimmy）
+
+- **畫面上會發生什麼**：Contact 頁讀檔時算出每支手臂的接觸力字串 asArmForce1／2，這個字串會經 GPIB 送給測試機。V912 ReadFile :609-616 用 `CalcDeviceForce(...,true)`（RogerYang 20260624，註解「這裡決定送 Kgf 還是 N」）；906 :607-608 用 `iPinCT*ForcePerPinN/9.8`。畫面上的力量顯示（ShowArmAndDeviceForce）也一樣是 912 的算法。CalcDeviceForce 在 906 _0625 裡沒有。main／review6 現在送的是 912 算出來的值。
+- **A**：留著 912 的算法，記成第 20 條的例外（像 #20c ADAM 那樣，當成真的 bug 修正）。例：測試機收到的力量照 912 的 Kgf／N 換算。
+- **B**：改回 906 的算法。例：測試機收到 `腳數×每腳牛頓數÷9.8` 算出來的值，跟今天 906 量產機一樣。
+- ST01-E 沒有建議，請 Jimmy 判斷（跟安全有關：力量單位錯會讓測試機設定錯的壓力）。詳見 `D:\AI_TempFile\st01e-e030a-report-20261003.md` §8。
+- **登記時的狀態**：等 Jimmy／Steven。
+
+**裁決**：**A：照 912**——Contact 讀檔算 asArmForce1／2 用 V912 的 CalcDeviceForce（ShowArmAndDeviceForce 同），送給測試機的 GPIB 力量字串維持 912 算法，記成第 20 條的例外；**程式註解同時寫 V912 與 906 的行號**（906 ReadFile :607-608 的 `iPinCT*ForcePerPinN/9.8`、ShowArmAndDeviceForce :1911-1912）。St01 照做：todo E-030 註記，human-review C25。
+
+### 20261003 05:3x Steven 裁決：W70（從 decisions-pending.md 搬來）
+
+### W70. ELA 事件記錄分析器的欄位拆法要不要也改回 906？（St02-M 1003 04:55 請 ST01-M 轉 Steven；ST01-M 05:0x 登記）
+
+- **背景**：照 #62＝A，St02 已把 Data.Observer 的事件記錄檢視改回 906（golden cObserver.cpp GetEventLogText 用 CommaText）。但 ELA 分析器（`HT9011UC_Cpp_V3.33.906.0/EventLogAnalysis/ElaCore.cpp:672`、`ElaChipMos.cpp:654`）還是用 912 的拆欄（`EventLogCsv.h` 的 ela::SplitEventLogCsv）。ELA 不是 golden HT9045 程式裡的功能，Steven 之前 W15＝B 明確選了 912 的拆欄。
+- **A（St02 現在的做法）**：ELA 維持 912 拆欄，當成 W15＝B 的延續（ELA 本來就不在 golden 裡）。例：分析器的停機次數、時間照現在的算法。
+- **B**：ELA 也改回 906 的 CommaText。例：測試裡釘住的數字會變（ELA_Core 9a 停機 131 次／309 秒／MES 123 → 123／0／115；ELA_Core 10 6／105 秒 → 5／98；ELA_Reports 2 → 3），要實跑才量得到。
+- 另外 St02 發現：移植樹的 CommaText（vclcompat）只用逗號切，BCB6 還會在沒加引號的空白切，所以「改回 CommaText」對有空白的列其實等於 912 的拆欄；要不要把 vclcompat 改成 BCB6 的切法，是筆電的檔，已在 CHAT_ST02 問筆電。
+- **登記時的狀態**：等 Steven。
+
+**ST01-M 先對過兩版原始碼**（Steven 問「W70 在906跟912沒差異 對吧？」）：ELA 分析器本身 906、912 都沒有；但事件記錄的拆法兩版不同——906 cObserver.cpp :3848 等用 `tsRow->CommaText`（BCB6 的 CommaText 連沒加引號的空白也切），912 cObserver.cpp :4023 另寫 `ParseEventLogLine`（只在逗號切，:3977 註解寫明就是為了避開 CommaText 切空白）。例：`07 Tester I/F` 這種含空白的欄位，906 拆成 11 欄，912 拆成 9 欄。
+**裁決**：Steven 原話「看起來912的做法比較好啊」⇒ **A：ELA 維持 912 的拆法**，記成第 20 條的例外（跟 W15＝B 一致）；程式註解比照 Q78／Q79 同時寫 906 的行號。（Data.Observer 事件記錄檢視——St02 #62 第四批 c912-4 已改回 906 CommaText——要不要也照 912，ST01-M 05:31 另問 Steven；回答前請 St02 先不要推那一段。）
+
+### 20261003 10:2x 依 Steven 既有裁決結案：W71（從 decisions-pending.md 搬來）
+
+### W71. Qorvo 機台的 Tester Pause 蜂鳴：馬上響（906），還是等最長測試時間到才響（912）？
+
+- **畫面上會發生什麼**：測試機叫停（Tester Pause）時的蜂鳴。906 馬上響；912（main.cpp:16372-16381、ckernel.cpp:744-748／:2144-2148／:2158-2162，RogerYang 20260626）等 MaxTestTime 到了才響，按 Alarm Reset 後重新計時。St02 MR !132 先改回 906。
+- **A**：照 912（等最長測試時間才響）。例：Qorvo 機台測試機暫停 3 秒就恢復，蜂鳴不會響。
+- **B**：維持 906（馬上響）。例：測試機一暫停蜂鳴就響。
+
+**結論**：同一題 Steven 已在 0927 裁過 W8＝A（「已做，A」＝留 912）；加上 1003 常設規則 ⇒ **A：照 912**（等最長測試時間才響、Alarm Reset 後重新計時），註解寫 906 :行號與做法＋912 修正行號。St02 MR !132 改回 906 的那段要用修正 MR 改回 912（筆電：往 912 改的新變更先等 Jimmy §0 第 78 項）。Steven 若要改判再說。
+
+### 20261003 10:0x～10:1x Jimmy 裁決：Q80（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20261003.md` 第 1、2 條；從 decisions-pending.md 搬來）
+
+### Q80. 0618 拿到之前，St01／St02 還能用 906 的 0625 當翻譯基準嗎？（St02-M 1003 08:37 請 ST01-M 轉 Steven；St01 同樣情況；ST01-M 08:4x 登記）
+
+- **背景**：Jimmy RULINGS_20261002 #20 與筆電說 golden 一律是 906 的 **0618**，0625 只供對照。St01、St02 兩台都讀不到 0618（St02 只有加密 7z；St01 只有 `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260625_Steven`），照 Steven 0927 的裁決一直用 **0625**。N07 SECS/GEM 斷線警報（St02 MR !137／!138）就是 0625 才有、0618 沒有的例子，筆電因此先不收（夜間報告 §0 第 79 項）；St01、St02 已推的工作也可能有 0625 才有的行。
+- **A（ST01-M 建議）**：繼續用 0625，請筆電給 0618 對 0625 的差異清單（至少 St01／St02 碰過的檔），0625 才有的項目先標出來暫停、交 Jimmy 定。例：N07 先不收，其他照常。
+- **B**：0618 拿到之前停掉新的翻譯工作。例：St01／St02 只做 bug 修正與測試。
+- **另外**：Steven 若能讓兩台讀到 0618（解開的樹放共用區，或口頭告訴壓縮檔密碼——不寫進任何檔），之後直接照 0618，這題就不存在。
+- **St01 這邊拿到 0618 時要對的**（ST01-E 1003 08:50 列）：E-030 的 AMD 三個條件依賴 0625 cContact.cpp :1418／:1587／:1709——這是唯一要拿 0618 確認內容的；Q-A、Q78、Q79 註解寫的 906 行號、引用一次改（review6 `9c187d77`、q59 `c4b0937e`）的行號要對 0618 重核（只是註解）；Q-B、ASE-CL、D-026 WAR04217、條碼 CSV 比對是拿掉 912 才有的東西，0618 只有在「有」這些時才會不同（不太可能）。
+- **登記時的狀態**：等 Steven。
+
+**裁決**：Jimmy 第 2 條（§0 #80）＝**A：用統一的共用區 7z 密碼自己解開 golden 0618，之後一律照 0618，0625 只做對照**（密碼在 GitLab `docs/handoff/TO_STEVEN.md` §2 須知，不寫進任何檔）；已在 main 的程式用 NB2 R179 指紋工具（`v906/nb2-assist` `HT9011UC_Cpp_V3.33.906.0/docs/nb2_assist/w16/golden_fingerprint.py`）找出 0625 才有的行逐項查——是修正或比較好的照第 1 條保留並兩邊註明，其他改回 0618。第 1 條（§0 #78）＝**B：全面接受 Steven 1003 常設規則**（912 是修正或明顯比較好的就留 912，做的人自己判斷、不用等 Jimmy；兩邊行號都寫，帳本記一列理由）。St01 照做：todo E-032（St01 的工作對 0618 重核）。

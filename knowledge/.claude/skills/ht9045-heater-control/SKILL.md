@@ -185,8 +185,8 @@ Steven 1002 原話：16:4x「溫控器少了 DTM」「這邊選不到DTM」「�
 
 程式（移植樹 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\`）：`FileRW\HSys.cpp` 第 (4) 段（`HmLinkIndex`、`HmActive`、`HmFromProxies`、`HmDuplicates`、`HmCtrlTypeFor`、`HmReadFile`）、`FileRW\HSys_Heater.h` 檔尾 E029（規則全文）；頁面 `D:\HT9045\web\page\ht9045_hsys_heater_c.js`（規則是純函式 `window.HT9045HSysHeater.rules`，跟 C++ 同一套）；溫度條 `D:\HT9045\web\page\ht9045_temperfrom_strip.js`。
 
-> **golden 對照（Jimmy RULINGS_20261002 #20，1002 18:0x：golden＝906 `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260625_Steven`，V912 只拿來查 906 漏了什麼）**：
-> 逐通道廠牌（`HeaterInsOpt_`、`g_tHeaterInsInfo`、`GetCtrlItemVisProp`、`g_HeaterInsOptStr`、`EN_HEATER_SHEET`、`eHeaterInsOpt_Count`）是 **V912 才有的功能**（906_0625 沒有 `MachineTypeUtility.cpp`、沒有 `EN_HEATER_SHEET`）；照 Steven Q34／Q71～Q76 當 St01 的設計留在 review6、等 Jimmy 定（NIGHT_REPORT s0 #63），底層不動。本節引 V912 的這幾處照留。
+> **golden 對照（Jimmy RULINGS_20261002 #20，1002 18:0x；RULINGS_20261003 第 2 條（E-032）：golden＝906 0618 `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260618`，V912 只拿來查 906 漏了什麼）**：
+> 逐通道廠牌（`HeaterInsOpt_`、`g_tHeaterInsInfo`、`GetCtrlItemVisProp`、`g_HeaterInsOptStr`、`EN_HEATER_SHEET`、`eHeaterInsOpt_Count`）是 **V912 才有的功能**（906 0618／0625 都沒有 `MachineTypeUtility.cpp`、沒有 `EN_HEATER_SHEET`）；照 Steven Q34／Q71～Q76 當 St01 的設計留在 review6、等 Jimmy 定（NIGHT_REPORT s0 #63），底層不動。本節引 V912 的這幾處照留。
 > 其他引用 906 與 V912 相同（20261002 對過）：eTempControll 906 `MachineType.h:632`（V912 :638）、eSocketTempControll 906 :616-618（V912 :742-744）、eHeaterType 906 :651-657（V912 :717-723）；rgHeater／rgUse4DUT 的 DFM 選項 906 `HandlerSys.dfm:3029`／`:2387`；讀寫 906 `HandlerSys.cpp:162`／`:651`（USE_16_HEATER）、`:339`／`:819`（SocketBasedAdd4Temp）；Index 區跳過溫控 COM 埠 906 `bthermo.cpp:1155-1190`（V912 :1331-1367）；EJ1N／DTME08 啟動 906 `main.cpp:10503-10526`（V912 :10939-10961）；COM_PORT_OMRON 906 `database.cpp:521`；iTempCode 906 `cmydef.cpp:111-117`；DTME08_Control.ini 讀 exe 資料夾 906 `EJ1N\uDTME08Control.h:54`。沒有找到不同的地方。
 
 ### 9.1 廠牌與檔案

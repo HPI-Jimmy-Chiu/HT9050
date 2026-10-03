@@ -18,22 +18,11 @@
 ### 要 Steven 決定或確認的 Q
 
 
-#### Q78. 19 個存檔鈕的「A02 開著、OP 等級時直接關頁、不存」保護，912 才有，要留還是照 #20 改回 906？（ST01-M 1003 01:1x 登記；ST01-E 的 E-030a 找到；同一題已在 FROM_STEVEN §3 問 Jimmy）
+（目前沒有。Q78、Q79 已由 Steven 20261003 05:3x 裁決，搬到 decisions-decided.md。）
 
-- **畫面上會發生什麼**：V912 在 19 個設定頁的存檔處理加了一段 A02 `Close(); return;`（RogerYang 的保護）：AOISetup、BinSelect、GroundMan、IniConfig_OCR、Ld_UldDelayTime、Rotate、StartCondition、Temperature、BarCode、Cleaning、QAMode、SetUp、TesterIF、VacuumUnit、YieldMonitoring、TrayForm、TTLCfg、UserDefForm_File、Contact（另有 TrayAssignment）。906 都沒有。**只有 Config [A02]（切到 OP 等級不准存參數）打開、而且目前是 OP 等級（AccessLevel＝0）時**，912 這 19 頁按存檔會直接關頁、不寫檔；906 在同樣情況會繼續存（一般對話框頁存操作員改的值；Contact 是非對話框，Close() 先跑 FormClose，改的值被丟掉、檔案用原值重寫）。**A02 沒開或工程師等級以上，兩版都照常存。**main／review6 自動產生的 .gen.inc 裡是 V912 的寫法。（⛔ ST01-M 1003 02:0x 更正：01:1x 的版本寫成「912 永遠不存」，漏了 A02＋OP 等級這個條件；ST01-E 指出。）
-- **A（ST01-E 建議）**：留著 912 的保護，記成第 20 條的例外（跟 Q77 Auto Clean 一樣是保護）。例：A02 開著、OP 等級在 Cleaning 頁改了值按存檔 → 頁面關掉、不寫檔；工程師等級照常存。
-- **B**：照 #20 改回 906。例：A02 開著、OP 等級在 TrayAssignment 改了值按存檔 → 寫進檔案；在 Contact 改了按存檔 → 改的值被丟掉、檔案用原值重寫。
-- **目前狀態**：Jimmy 或 Steven 回答之前，E-030a 19 個都不動。
+（目前沒有。Q80 已由 Jimmy RULINGS_20261003.md 第 2 條回答，搬到 decisions-decided.md。）
 
-#### Q79. ⚠ 送給測試機的接觸力字串（GPIB）現在照 912 的算法，要留還是改回 906？（ST01-M 1003 02:0x 登記；E-030a 報告 §8 (b)；同一題已在 FROM_STEVEN §3 問 Jimmy）
-
-- **畫面上會發生什麼**：Contact 頁讀檔時算出每支手臂的接觸力字串 asArmForce1／2，這個字串會經 GPIB 送給測試機。V912 ReadFile :609-616 用 `CalcDeviceForce(...,true)`（RogerYang 20260624，註解「這裡決定送 Kgf 還是 N」）；906 :607-608 用 `iPinCT*ForcePerPinN/9.8`。畫面上的力量顯示（ShowArmAndDeviceForce）也一樣是 912 的算法。CalcDeviceForce 在 906 _0625 裡沒有。main／review6 現在送的是 912 算出來的值。
-- **A**：留著 912 的算法，記成第 20 條的例外（像 #20c ADAM 那樣，當成真的 bug 修正）。例：測試機收到的力量照 912 的 Kgf／N 換算。
-- **B**：改回 906 的算法。例：測試機收到 `腳數×每腳牛頓數÷9.8` 算出來的值，跟今天 906 量產機一樣。
-- ST01-E 沒有建議，請 Jimmy 判斷（跟安全有關：力量單位錯會讓測試機設定錯的壓力）。詳見 `D:\AI_TempFile\st01e-e030a-report-20261003.md` §8。
-- **目前狀態**：回答之前不動。
-
-（Q53～Q61、Q65～Q70 已由 Steven 裁決；Q77 由 Jimmy #23 回答；Q78、Q79 等 Jimmy／Steven，搬到 decisions-decided.md。）
+（Q53～Q61、Q65～Q70 已由 Steven 裁決；Q77 由 Jimmy #23 回答；Q78、Q79 由 Steven 1003 裁決（照 912＋906 行號），搬到 decisions-decided.md。）
 
 ### 要 Steven 決定的 R（BCB 沒有答案、真的要 Steven 選的）
 
@@ -47,3 +36,19 @@
 > 正本與背景細節見 St02 `D:\HT9045\.claude\skills\ht9050-construction\references\progress-st02.md`「待使用者裁決」節；這裡照抄內容，不改意思。選項代號沿用 St02 表原本的大小寫。
 
 （W67～W69 已由 Jimmy RULINGS_20261002 第 23 條回答，搬到 decisions-decided.md。）
+
+（W70 已由 Steven 20261003 05:3x 裁決，搬到 decisions-decided.md。）
+
+> 下面三題是 St02 照 Steven 1003 常設規則（912 比較好就照 912＋雙註記）挑出來的**客戶專屬**項目，規則說客戶專屬的要問 Steven（St02-M CHAT_ST02 1003 05:39／05:43；ST01-M 06:2x 登記）。St02 現在都先照 906，Steven 選 912 就補回。
+
+#### W72. AMD 的特殊流程：用編譯旗標（906），還是執行時看 2DID 格式（912）？
+
+- **畫面上會發生什麼**：906 main.cpp:18158-18168 的 AMD 版本包在沒有定義的 `AMD_Version` 編譯旗標裡（等於只跑 Delta Castle 那段）；912 main.cpp:18785／:18834／:19076 改成執行時看 `TestIF_File.i2DIDFormat==eAMD`（Ifor 20260717「不使用define方式處理」）。St02 MR !134 先改回 906。
+- **A**：照 912（2DID 格式選 AMD 就走 AMD 流程）。例：AMD 客戶的機台不用另外編版本。
+- **B**：維持 906（只有 Delta Castle；AMD 要另外編譯）。
+
+#### W73. Murata 機台 2DID 比對 NG 的料，要不要寫一筆 NonTestToRBin 紀錄（912）？
+
+- **畫面上會發生什麼**：客戶碼 CC_Murata、2DID 比對 NG 的料照樣放到 iTestBinCount；912 atester.cpp:1048 另外寫一筆 PordRec「NonTestToRBin」，批次統計的 E1 數會把它算進去；906 atester.cpp:1038-1058 沒有這行。St02 MR !136 先照 906（不寫，human-review B35）。
+- **A**：照 912（寫這筆，E1 數包含這些料）。
+- **B**：維持 906（不寫）。

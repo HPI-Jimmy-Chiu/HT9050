@@ -3,7 +3,7 @@ name: make-report-skill
 description: >
   統一的報告產生技能。涵蓋客戶提案表、Release Note、個人/部門週報、
   ops 工作紀錄、除錯報告、程式碼差異摘要、出差報告、change log 等報告類型。
-  適用關鍵字：週報、提案表、release note、除錯報告、使用報告、
+  適用關鍵字：日報（20261003 起 RD5 統一格式）、週報、提案表、release note、除錯報告、使用報告、
   上線前掃描、ops log、daily worklog、weekly review、code diff summary、travel report、
   change log、變更紀錄、變更日誌。
 applyTo: "**/*"
@@ -43,7 +43,7 @@ applyTo: "**/*"
 
 | 報告 | 以前 | 現在 |
 |---|---|---|
-| 日報 | `D:\docs\ops\daily\{YYYYMMDD}.md` | `<repo>\public\Docs\Daily\<EnglishName>\{YYYYMMDD}.md` |
+| 日報 | `D:\docs\ops\daily\{YYYYMMDD}.md` | `<repo>\public\Docs\Daily\<EnglishName>\{YYYYMMDD}.md`（**20261003 起用 RD5 統一格式**：一句話／今日完成／卡點／需要協助／明天接續四段、一頁內；見 [ops-daily-worklog.md](./references/ops-daily-worklog/ops-daily-worklog.md)） |
 | Change Log | `D:\docs\ChangeLog\CHANGES_{YYYYMMDD}_{作者}.md` | `<repo>\public\Docs\ChangeLog\<EnglishName>\CHANGES_{YYYYMMDD}_<EnglishName>.md` |
 | Release Note／提案／Bug 修正 | `D:\docs\customers\{代理商}\{客戶代碼}_{客戶名稱}\release-notes\|proposals\{YYYY}\` | `<repo>\public\Docs\customers\…`（底下結構不變） |
 | 個人週報 | `D:\docs\ops\weekly\{YYYY}\{MM}\{YYYYMMDD}\` | `<repo>\public\Docs\weekly\<EnglishName>\{YYYYMMDD}.md`（**小寫 `weekly`**；日期＝週報日（週三）；最省事：`py tools/weekly2md.py <個人週報.xlsx> --name <EnglishName> --zh <中文名>`，.xlsx／.msg 不進 git） |
@@ -65,12 +65,14 @@ applyTo: "**/*"
 
 1. （可選）`node tools/md2html.js` 產一份 HTML。
 2. `py tools/build_portal.py`，不能多出新的警告。
-3. 開分支 `<name>/<YYYYMMDD>-<topic>`，然後推送並開 MR：
+3. **日報**：commit 之後、推送之前，在入口網站 clone 跑 `py tools/check_daily.py --changed` 自我檢查（看這個分支相對 origin/main 改到、日期 ≥ 20261003 的日報；還沒 commit 就用 `py tools/check_daily.py <檔>`），列出的項目照 [ops-daily-worklog.md](./references/ops-daily-worklog/ops-daily-worklog.md) 改好再推。
+   這是自我檢查（Steven 20261003：「不用阻擋同事的報告」）：GitLab MR 的 check-portal 與 git pre-push 只列出不合格項目，MR 照常自動合併；Claude 在入口網站 repo 推送時會暫停一次，讓 Claude 照 rd5-daily-report 調整後再推（同一份內容再推一次就放行）。
+4. 開分支 `<name>/<YYYYMMDD>-<topic>`，然後推送並開 MR：
    `git push -u origin HEAD -o merge_request.create -o merge_request.target=main -o merge_request.remove_source_branch`
    由 Steven 審完合併。建議節奏：早上推前一天的，或下班前推當天的。不可以直接推 main。
-4. 可以照抄的「直接寫進 repo 的日報」流程：`D:\RD5-Portal\.claude\skills\rd5-daily-report\SKILL.md`（在 MR !1 的分支上）。
+5. 日報格式與流程的正本：`<repo>\.claude\skills\rd5-daily-report\SKILL.md`（§2 格式、§3 寫作規則、§3.5 推送前的格式檢查；Steven 的 clone 是 `D:\RD5-Portal`），範本 `<repo>\.claude\skills\rd5-daily-report\references\template.md` §統一格式。20261003 起全員用統一格式；本 skill 的 ops-daily-worklog 照抄正本，不一致時以正本為準。
 
-> **St01 的日報（Steven 的每日工作日誌）**：20260929 起由 ST01-M 編輯（Steven「日報一律通報 ST01-M做內容編輯」），寫在 `D:\RD5-Portal\public\Docs\Daily\Steven\YYYYMMDD.md`（Steven 20260929 15:2x：「今天的日報…要改寫到 D:\RD5-Portal\public\Docs\Daily\Steven 裡面」），一天一份；改好由 **ST01-E3** 推送、開 MR（Steven：「改好通知 st01-e3 push」「他負責 protal的管理」）。20260928 以前的舊日報與寄信存查仍在 `D:\docs\ops\daily\`。St01 記錄員（`D:\HT9045\.claude\skills\ops-st01-clerk-report\`）的 ChangeLog 仍寫 `D:\docs\ChangeLog\`、repo 日報仍寫 `docs\ops\daily\`，到 Steven 另外說為止。
+> **St01 的日報（Steven 的每日工作日誌）**：20260929 起由 ST01-M 編輯（Steven「日報一律通報 ST01-M做內容編輯」），寫在 `D:\RD5-Portal\public\Docs\Daily\Steven\YYYYMMDD.md`（Steven 20260929 15:2x：「今天的日報…要改寫到 D:\RD5-Portal\public\Docs\Daily\Steven 裡面」），一天一份，20261003 起同樣用統一格式；改好由 **ST01-E3** 推送、開 MR（Steven：「改好通知 st01-e3 push」「他負責 protal的管理」）。20260928 以前的舊日報與寄信存查仍在 `D:\docs\ops\daily\`。St01 記錄員（`D:\HT9045\.claude\skills\ops-st01-clerk-report\`）的 ChangeLog 仍寫 `D:\docs\ChangeLog\`、repo 日報仍寫 `docs\ops\daily\`，到 Steven 另外說為止。
 
 ## 報告類型路由表
 
@@ -88,7 +90,7 @@ applyTo: "**/*"
 | 部門週報 | — | [group-weekly-report.md](./references/group-weekly-report/group-weekly-report.md) | [group-weekly-report-template](./templates/group-weekly-report-template/) | HTML |
 | 除錯報告 / 使用報告 / 上線前掃描 | 預設 MD+HTML；若使用者指定「MD only」則僅輸出 MD | [debug-and-risk-report.md](./references/debug-and-risk-report/debug-and-risk-report.md) | [honprec-blue-template](./templates/honprec-blue-template/SKILL.md) | **MD 或 MD+HTML（可選）**|
 | 其他報告 | — | [other-report.md](./references/other-report/other-report.md) | 視情況 | MD / HTML |
-| ops daily worklog | — | [ops-daily-worklog.md](./references/ops-daily-worklog/ops-daily-worklog.md) | [ops-daily-worklog-template](./templates/ops-daily-worklog-template/template.md) | MD only |
+| ops daily worklog（日報）| **20261003 起 RD5 統一格式**（一句話／今日完成／卡點／需要協助／明天接續，一頁內）；輸出 `<repo>\public\Docs\Daily\<EnglishName>\{YYYYMMDD}.md`；推送前 `py tools/check_daily.py --changed` 自我檢查 | [ops-daily-worklog.md](./references/ops-daily-worklog/ops-daily-worklog.md) | [ops-daily-worklog-template](./templates/ops-daily-worklog-template/template.md) | MD only |
 | ops weekly review | — | [ops-weekly-review.md](./references/ops-weekly-review/ops-weekly-review.md) | [ops-weekly-review-template](./templates/ops-weekly-review-template/template.md) | MD only |
 | code-diff-summary | — | [code-diff-summary.md](./references/code-diff-summary/code-diff-summary.md) | [code-diff-summary-template](./templates/code-diff-summary-template/template.md) | MD only |
 | 合併報告（Merge Report）| 含 Section 1–9、功能來源追蹤（Section 8）、SVN Commit Message（Section 9）；合併流程、衝突解決、build 驗證 | [merge-report.md](./references/merge-report/merge-report.md) | — | MD only |

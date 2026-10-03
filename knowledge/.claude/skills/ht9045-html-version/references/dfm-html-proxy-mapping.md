@@ -130,7 +130,7 @@ Steven 1002「我比較喜歡 `D:\HT9045\page_Old\HW.HandlerSys.html` 這個版�
 - golden 沒有的設定（Fix 1/2/4/5/6 install、Auto 4-6 Y Motor、Auto 4-6 cylinder／magazine）顯示 N/A；
   Fix 3「full tray」是 Configuration 頁的 `[E55] cbE55`，選項灰掉。
 - 每軌 Auto ART（`rgAuto1ART`～`rgAuto6ART`）照上面「已移除的每軌 Auto ART」規則：不投影，也不進 Other Settings；
-  golden `SaveSystemSet`（V912 `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\HandlerSys.cpp:665-679`；906 `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260625_Steven\HandlerSys.cpp:543-559`）照樣存它讀進來的值。
+  golden `SaveSystemSet`（V912 `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\HandlerSys.cpp:665-679`；906 `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260618\HandlerSys.cpp:543-557`）照樣存它讀進來的值。
 - Com Port 的 `Set Default` 按 golden `btnSetATCCom`（`ht9045_hsys_events_c.js`），不再自己帶一份預設表。
 - page_Old 漏掉的 `cbSocketSenAmpCnt2nd`／`cbSocketSenAmpCnt3rd`（Socket／Rotate／Color Sensor 表）與
   `rgAutoFormSize`（Temperature Settings）補回；Index Items 三張表高改 13:6:7，CanBus 六列不再被裁掉。
