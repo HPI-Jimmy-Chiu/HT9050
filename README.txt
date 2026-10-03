@@ -1057,4 +1057,13 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      操作紀錄 oplog_20261003.txt：新增 208 行
      設定檔變動：machine_params/D_GPIB9045_system/general.ini、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/lastdata_backup2.dat
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+10-03 派工給筆電（EastSun 交辦給 Jimmy）——機台端只查證、沒有改這部分程式：
+  ⚠ 給筆電（派工 6）：EastSun：「為啥軟體開起來，好像先激磁又放激磁」。請查明並修正（要照原版的地方請標明）。
+     機台端查到的（今天 29 次開機逐次看 oplog）：開機時軟體沒有送 Servo ON 也沒有送 Servo OFF（1203 監看器 svo 一次 1->0 都沒有；開機看到的 svo=1 是上一輪留下的）；
+     原版開機 InitMotor 會對每一軸 Servo ON，移植樹這一步沒有碰到卡（路由還沒裝好）。
+     最可能被看成「激磁又放開」的是：(A) 按 HOME 後約 2.2 秒照原版切馬達電源繼電器約 4 秒再接回（uhome case 2/3，golden uhome.cpp:2207/:2330），
+     (B) 開機時煞車先放開、DoMotorPowerOn 又把 Index／Magazine／Cassette 煞車鎖住、約 4 秒後再放開（csystem.cpp:16140、:14415-14418）。
+     不確定的：繼電器 DO 開關卡時實體會不會掉（oplog 的 relay 是軟體值，不是卡片讀回）、svo 位元代表命令還是驅動器真的激磁。
+     附檔 dispatch\20261003_servo_on_off_at_start\：findings_machine_side.txt（逐點 file:line）、oplog_20261003.txt（今天 29 次開機）、oplog_20261002.txt、
+     三次 HOME 的 bootsample。另：機台端 cpp 0168-0171 是今天回原點的修正（激磁檢查等電源、未認領的 1203 軸補認領、HOME／JAM／ROUTE 紀錄）。
 MD5 清單在 MANIFEST_MD5.tsv。
