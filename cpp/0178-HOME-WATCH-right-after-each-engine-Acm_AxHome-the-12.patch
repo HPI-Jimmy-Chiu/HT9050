@@ -1,0 +1,101 @@
+From 47b64a04c0b93f8d824d4abaf2e53c5e77c53c2b Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 3 Oct 2026 20:23:34 +0800
+Subject: [PATCH] =?UTF-8?q?HOME-WATCH:=20right=20after=20each=20engine=20A?=
+ =?UTF-8?q?cm=5FAxHome=20the=201203=20monitor=20is=20polled=20briefly=20un?=
+ =?UTF-8?q?til=20the=20axis=20is=20sampled=20HOMING=20--=20EastSun=201003?=
+ =?UTF-8?q?=20'=E4=B8=80=E6=A8=A3=E5=A4=B1=E6=95=97'=20/=20'=E6=88=91?=
+ =?UTF-8?q?=E5=89=9B=E5=89=9B=E5=9B=9Einshuttle1=20=E6=98=AF=E6=AD=A3?=
+ =?UTF-8?q?=E5=B8=B8=E7=9A=84':=2020:18=20run=20(home=20family=20written,?=
+ =?UTF-8?q?=20dual-axis=20wait=20working):=20MInArmX=20/=20MInArmY=20/=20M?=
+ =?UTF-8?q?OutArmX=20/=20MOutArmY=20/=20MOutShuttle2=20/=20both=20rotates?=
+ =?UTF-8?q?=20homed;=20MInShuttle1=20failed=20'READY=20without=20HOMING'.?=
+ =?UTF-8?q?=20His=20single=20home=20of=20it=20at=2020:20:47=20lasted=200.6?=
+ =?UTF-8?q?=20s=20(the=20axis=20sits=20at=20its=20origin);=20in=20the=20fu?=
+ =?UTF-8?q?ll=20HOME=20the=20next=20monitor=20poll=20(HOME-POLL,=20before?=
+ =?UTF-8?q?=20the=20next=20axis's=20start)=20came=200.9=20s=20after=20its?=
+ =?UTF-8?q?=20Acm=5FAxHome=20--=20the=20home=20was=20over=20unseen.=20Now?=
+ =?UTF-8?q?=20RouteHomeStart,=20after=20an=20issued=20home,=20calls=20g=5F?=
+ =?UTF-8?q?W906MonitorPollAfterHome=20up=20to=2012=20times=20(wb=5Fserve?=
+ =?UTF-8?q?=20W906=5FMonitorPollAfterHomeFromEngine:=20Sleep=2040=20ms=20+?=
+ =?UTF-8?q?=20one=20mon->Poll(),=20not=20rate-limited)=20and=20stops=20as?=
+ =?UTF-8?q?=20soon=20as=20the=20axis's=20homingSeenPoll=20is=20after=20the?=
+ =?UTF-8?q?=20command=20--=20as=20the=20single-axis=20home=20sees=20it=20w?=
+ =?UTF-8?q?ith=20its=20fast=20tick;=20at=20most=20~0.5=20s=20per=20axis,?=
+ =?UTF-8?q?=20hook=20unset=20in=20tests.=20ctest=20Pci1203MotorRoute=20/?=
+ =?UTF-8?q?=20EcatMotorRoute=20/=20homeclass=20/=20HomeMonitor=20/=20HomeB?=
+ =?UTF-8?q?lock=20pass;=20tools/pci1203=5Freadonly=5Fgate.ps1=20PASS?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ EtherCAT/Pci1203MotorRoute.cpp | 16 ++++++++++++++--
+ tools/wb_serve.cpp             | 10 +++++++++-
+ 2 files changed, 23 insertions(+), 3 deletions(-)
+
+diff --git a/EtherCAT/Pci1203MotorRoute.cpp b/EtherCAT/Pci1203MotorRoute.cpp
+index d2c804a..f6d917a 100644
+--- a/EtherCAT/Pci1203MotorRoute.cpp
++++ b/EtherCAT/Pci1203MotorRoute.cpp
+@@ -43,7 +43,8 @@
+ static_assert(W906_ENG1203_GATE == 4, "ht9045_engine_route_armed_probe must compile the ARMED installer branch");
+ #endif
+ 
+-void (*g_W906MonitorPollNow)() = 0;           //AI(W906-HOME-POLL) 20261003: one 1203 monitor poll now, rate-limited by its owner (tools/wb_serve.cpp registers it); 0 = nothing (tests)
++void (*g_W906MonitorPollAfterHome)() = 0;     //AI(W906-HOME-WATCH) 20261003: ~40 ms pause + one 1203 monitor poll, not rate-limited (tools/wb_serve.cpp); 0 = nothing (tests)
++void (*g_W906MonitorPollNow)() = 0;          //AI(W906-HOME-POLL) 20261003: one 1203 monitor poll now, rate-limited by its owner (tools/wb_serve.cpp registers it); 0 = nothing (tests)
+ void (*g_W906RouteNote)(const char*) = 0;    //AI(W906-ECAT-RECLAIM) 20261003: the op log's ROUTE line (tools/wb_serve.cpp W906_OpLogInit registers it); 0 = console only
+ 
+ namespace ht9045 {
+@@ -663,7 +664,18 @@ int RouteHomeStart(int board, int port, bool homeDir, double hi, double lo, doub
+         Exec(board, port, *rec, c, "HomeStart card-side", true, true, &ok);
+     }
+     rec->homeSent = ok;
+-    rec->homeCmdPoll = Env().PollCount();                             //AI(W906-HOME-SEEN) 20261003: a HOMING sample from a poll that ENDS after this counts (RouteHomeDone)
++    rec->homeCmdPoll = Env().PollCount();
++    //AI(W906-HOME-WATCH) 20261003: EastSun「我剛剛回inshuttle1 是正常的」-- 20:20:47 his single home of MInShuttle1 (already at its origin)
++    //  lasted 0.6 s; in the 20:18 full HOME the next monitor poll came 0.9 s after its Acm_AxHome, so the home was over unseen again.
++    //  Right after an issued home: up to 12 short polls (~40 ms apart) until the monitor samples this axis HOMING (or it left READY),
++    //  as the single-axis home sees it with its fast tick. At most ~0.5 s per axis; nothing in tests (hook unset).
++    if (ok && ::g_W906MonitorPollAfterHome) {
++        for (int w = 0; w < 12; ++w) {
++            ::g_W906MonitorPollAfterHome();
++            const Pci1203AxisSample& a = Env().Axis(slot);
++            if (a.homingSeenPoll > rec->homeCmdPoll) break;
++        }
++    }                            //AI(W906-HOME-SEEN) 20261003: a HOMING sample from a poll that ENDS after this counts (RouteHomeDone)
+     if (ok) rec->stuck = false;      // Exec() re-marks it when the home command itself was not issued OK
+     return ok ? 1 : 0;
+ }
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 201626e..9c464b9 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -7630,6 +7630,14 @@ void W906_MonitorPollNowFromEngine()
+     if (ht9045::TPci1203Monitor* mon = ht9045::Pci1203Monitor()) { mon->SetYieldHook(0); mon->Poll(); mon->SetYieldHook(&W906_OutputYieldHook); { extern void W906_BrakeAxisTick(); W906_BrakeAxisTick(); } }
+ }
+ 
++//AI(W906-HOME-WATCH) 20261003: right after an engine Acm_AxHome (Pci1203MotorRoute.cpp RouteHomeStart): 40 ms, then one monitor poll,
++//  not rate-limited -- a home of an axis already at its origin lasts ~0.6 s (MInShuttle1 20:20:47) and must be sampled HOMING.
++void W906_MonitorPollAfterHomeFromEngine()
++{
++    ::Sleep(40);
++    if (ht9045::TPci1203Monitor* mon = ht9045::Pci1203Monitor()) { mon->SetYieldHook(0); mon->Poll(); mon->SetYieldHook(&W906_OutputYieldHook); }
++}
++
+ void W906_ModalWaitTick(int kind, int kcode)
+ {  { extern void W906_Q44ConsoleServiceTick(); W906_Q44ConsoleServiceTick(); }  { extern void W906_A01AutoLogoutTick(); W906_A01AutoLogoutTick(); }  { extern void W906_St02TimersTickFromModal(); W906_St02TimersTickFromModal(); }  /*AI(W906-D015-A01b) 20260930 [W906]（St01，Jimmy 20260930 答覆）: [A01] 閒置計數在阻塞框開著時照數、時間到照樣登出 —— golden VCL Timer3 在 ShowModal 的訊息迴圈裡照跑（V912 main.cpp:26022-26072）；本體 FileRW/Main_A01AutoLogout.cpp 自己限成每秒一次、有重入保險；同一行，不移動行號*/   //AI(W906-D012) 20260929 [W906] Q44 A3: a blocking box is open (the main loop cannot reach W906_ServeQuitDue) -- console Ctrl-C / X still gets the stop commands sent from here (tick thread); body FileRW/MainClose.cpp; AI(W906-S13) 20261001 (St02-E, claim): + St02 timers in modal waits (golden VCL timers keep firing during ShowModal), MainTimersSt02.cpp
+     { extern void W906_NativeFormsPump(int); W906_NativeFormsPump(1); }  /* AI(W906-NATIVE-PROTO) 20260928 [W906]: 告警／是否／ShowMyMessage 三個阻塞等待框期間主迴圈停住，這裡照樣泵原生視窗（否則 5 秒後 Windows 標「沒有回應」）；site 1＝拖曳時只保活 Index 煞車保護（檔尾 W906_NativeKeepaliveModal）。OFF＝空函式 */  {                                                                           // 1203 DI 樣本（見檔頭）
+@@ -8350,7 +8358,7 @@ void W906_OpLogInit(int port)
+                   (int)(W906_WEB_TOKEN_ENFORCE != 0));
+     OpLine("START", std::string(head) + built + "  " + exe);
+     webbridge::g_W906OpLogHook = &W906_OpHook;
+-    { extern void (*g_W906StateRecordNote)(const char*); g_W906StateRecordNote = &W906_OpSrNote; }  { extern void (*g_W906BrakeNote)(const char*); g_W906BrakeNote = &W906_OpBrakeNote; }  { extern void (*g_W906HomeNote)(const char*); g_W906HomeNote = &W906_OpHomeNote; }  { extern void (*g_W906RouteNote)(const char*); g_W906RouteNote = &W906_OpRouteNote; }  { extern void (*g_W906MotorHomeNote)(const char*); g_W906MotorHomeNote = &W906_OpHomeNote; }  { extern void (*g_W906MonitorPollNow)(); extern void W906_MonitorPollNowFromEngine(); g_W906MonitorPollNow = &W906_MonitorPollNowFromEngine; }  ht9045::StreamSetSink(&W906_OpStreamNote);  { extern void (*g_W906VacuumNote)(const char*); g_W906VacuumNote = &W906_OpVacuumNote; }   //AI(W906-VACUNIT-1203) 20260930: + the ECAT-VC8 writes   //AI(W906-SR-HANG) 20260929; AI(W906-BRAKE-AXIS) 20260929 (2nd fix: the registration sat behind this comment) ; //AI(W906-STREAM-S1) 20260930
++    { extern void (*g_W906StateRecordNote)(const char*); g_W906StateRecordNote = &W906_OpSrNote; }  { extern void (*g_W906BrakeNote)(const char*); g_W906BrakeNote = &W906_OpBrakeNote; }  { extern void (*g_W906HomeNote)(const char*); g_W906HomeNote = &W906_OpHomeNote; }  { extern void (*g_W906RouteNote)(const char*); g_W906RouteNote = &W906_OpRouteNote; }  { extern void (*g_W906MotorHomeNote)(const char*); g_W906MotorHomeNote = &W906_OpHomeNote; }  { extern void (*g_W906MonitorPollNow)(); extern void W906_MonitorPollNowFromEngine(); g_W906MonitorPollNow = &W906_MonitorPollNowFromEngine; }  { extern void (*g_W906MonitorPollAfterHome)(); extern void W906_MonitorPollAfterHomeFromEngine(); g_W906MonitorPollAfterHome = &W906_MonitorPollAfterHomeFromEngine; }  ht9045::StreamSetSink(&W906_OpStreamNote);  { extern void (*g_W906VacuumNote)(const char*); g_W906VacuumNote = &W906_OpVacuumNote; }   //AI(W906-VACUNIT-1203) 20260930: + the ECAT-VC8 writes   //AI(W906-SR-HANG) 20260929; AI(W906-BRAKE-AXIS) 20260929 (2nd fix: the registration sat behind this comment) ; //AI(W906-STREAM-S1) 20260930
+     std::printf("oplog: %s\\oplog_<yyyymmdd>.txt\n", g_opDir.c_str());
+ }
+ 
+-- 
+2.55.0.windows.5
+
