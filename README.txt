@@ -811,4 +811,10 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      machine_params/README_PARAMS.txt：1 個檔變動
      workorder/README_WORKORDER.txt：1 個檔變動
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+  cpp 0150 77bb222／web 0094 ba0b8e2 PKG-132＋MT-ACCLIVE —— 機台整合筆電第 132 包（GitHub main a071554、GitLab db9f0430）：加熱器監控每 20 ms（HEATER_CTRL_TYPE=4，加熱測試前要設 3——機台設定沒動）、Teach Out Z All Down 會動 Out Z、提示框會停 Motor Test HOME／Loop、Gear Ratio R171、St02 c912→906／Bin 狀態面板／ADAM A3、Bin 顯示 NUMBER_PANEL_TYPE=4＋COM14 檢查。
+                    10 個 LOCAL：9 個三方合併乾淨（機台的 JOG-MAXVEL／MT-COPYALL／TEACH-ROTATE／開關全保留），HW.teach.html 一處衝突＝筆電的 ZALLUP 行＋機台的 TEACH-KB 行。筆電刪的 SafePlcIOInstall.cpp／SecsAlarmForm.cpp/.h 已無引用，刪掉。test_gear_teach_save 補連 FileRW/TeachKb.cpp（機台 Teach.cpp 用到）。
+                    MT-ACCLIVE：EastSun 1003「我把加速度上調也沒用」——原版表格改 Acc／Dec 只改資料庫值，執行中的 dAcc 要到下次 SetADCRate(100)（HOME）才跟上；13:54 存了 400000，之後 JOG／設速度仍送 40000。改成表格改 Acc／Dec 立即 SetAcc／SetDec；速度上限（CFG_AxMax*）提高也擴到 PTP（Move＋／Move－／Go）。
+                    o2 全編過；30 支 29 過，GearTeachSave 讀筆電 repo 的 machines/HT9050/snapshot（這台沒有）。
+  ⚠ 給筆電：GearTeachSave 與 4 支 *_HT9050 測試讀 machines/HT9050（含 snapshot\），這些不在包裡，機台跑不到——要不要把 machines/HT9050 也放進包？
+  掃描：見下方。
 MD5 清單在 MANIFEST_MD5.tsv。
