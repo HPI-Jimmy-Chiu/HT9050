@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-03 18:24
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ fc0d614 HOME-FAILVISIBLE: the full-machine HOME on the 1203 no longer hangs silently (East／web 4377508。
+HT9050 機台參數快照（machine_params\）—— 2026-10-03 18:26
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 2a527a1 WORKLOG: §3 designer tools 0151 (keyword search reads 32 files at once, 10-11 s ->／web 4377508。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
