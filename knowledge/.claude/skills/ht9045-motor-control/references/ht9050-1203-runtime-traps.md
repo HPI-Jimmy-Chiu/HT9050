@@ -33,9 +33,21 @@
   改在 `InArmZSafe`／`OutArmZSafe` 一處；shuttle／Index 那一處是安全互鎖，留在呼叫點。
 
 ## 3. 警報與失敗
-- 自動運轉 `ScanAllMotorStatus`（`csystem.cpp`）**只重掃 MInArmX/Y、MOutArmX/Y、MTrayX**，而且要 `PServoAlarmOn==1` 才報 ⇒ 其他軸移動中驅動器警報＝
-  ERROR_STOP＋MotionDone 永遠 false＋**沒有 JAM**，站別永遠等。
-- HT9050 表上**伺服**列 M03、M22、M41、M42、M108 的 ServoAlarmOn＝0 ⇒ golden 的步進規則讓它們在 PAUSE／馬達 JAM 時繼續走完，警報、編碼器檢查、原點感測檢查全關。
+- 自動運轉 `ScanAllMotorStatus`（`csystem.cpp`）的 golden 寫法**只重掃 MInArmX/Y、MOutArmX/Y、MTrayX**，而且要 `PServoAlarmOn==1` 才報。
+  - 後果：其他軸移動中驅動器報警＝ERROR_STOP＋MotionDone 永遠 false＋**沒有 JAM**，站別永遠等（golden 的 1203 那一臂也一樣）。
+  - **E-045（S-26 R4＋Steven Q98，`v906/st01e2-e045`）的修法**（只改 HT9050）：
+    - 偵測：`EcatAlarmScan.cpp` 的 `W906_EcAlarmScanRow(i)`（`csystem.cpp`:16015 呼叫、:16017 的條件 OR 進去）讀已認領 1203 軸的非 pending 樣本，出現 ALM／ERROR_STOP 就走 golden 同一個升警報本體，不看 ServoAlarmOn。
+    - 一次清除：同一拍下一次 `ResetState()`（route 的 ResetError）。之後第一筆非 pending 樣本：清掉＝要重新 HOME（Q88）；清不掉＝鎖住，跳一次「整機斷電重開後再 HOME」，`csystem.cpp`:30460 的 SoftStart 閘門擋 START／HOME。不重試；斷電（EMG／SnMotorPower off）或出現沒警報的樣本才解除。
+    - HOME 中不下 reset，交給 InitMotor。停止永遠不擋。
+    - **警報事件開始時 fAllMotorHome 必須是 true，才做那一次 reset 和鎖住**。開機或馬達斷電後，到第一次完整 HOME 之前，只走 golden 的升警報。
+      - 原因：開機後 1203 軸可能停在 ERROR_STOP（`Pci1203Monitor.cpp`:2774 量過 13 軸），驅動器還在啟動時 reset 會失敗。
+      - 那時如果鎖住，會連 HOME（golden 的恢復路徑）都擋掉。
+    - 斷電判斷**只讀感測器**，不呼叫 `IsEMGPressed()`（它會鎖煞車、全軸 Servo Off）。
+    - 紀錄行是 `W906 ECALARM ...`。
+    - 手動移動的閘門留給 E-043 第 2 顆（`W906_EcAlarmMotionAllowed`）。
+  - E-044／E-043 第 2 顆的報警一律先看 `SystemStart==true && iHome!=1`，避免同一次停機跳兩個框。
+- HT9050 表上**伺服**列 M03、M22、M41、M42、M108 的 ServoAlarmOn＝0 ⇒ golden 的步進規則讓它們在 PAUSE／馬達 JAM 時繼續走完，編碼器檢查、原點感測檢查全關。
+  - 警報偵測在 E-045 之後不再靠 ServoAlarmOn；表要不要改，由 EastSun 決定（R6）。
 - golden 的 67 個 WAR16122 框都在 `#if HAVE_PCI1203` 裡（**沒編進來**）：被拒的移動 → route Q11 把軸標成「未完成」直到下一次停止（站別永遠等、沒框）；
   停止失敗只寫 op log；被拒的速度寫入不鎖存（照舊速度動）。⚠ 而 `AlarmCodeCatalog.cpp` 的 WAR16122／16123 已經是「Load tray need take out tray manually.」／
   三小時檢驗 ⇒ 不能直接拿 WAR16122 報卡片錯。

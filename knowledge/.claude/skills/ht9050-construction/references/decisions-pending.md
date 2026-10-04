@@ -64,7 +64,7 @@
 - **§0 #73**：Jerry 的 Timetick（`kServeTickMs` 500 ms 改小）修改一直沒推（W-15）。
 - **§0 #49**：Ifor 0922 修的 V912 RotateKit（取料失敗、重試後手臂卡住）是哪個客戶／哪台機台／週報哪一列（W-18，追第二次）。
 - **§0 #72**：機台端 ADAM-6024（ADAMTCP.dll 位置、EP_Install／INSTALL_DOUBLE_EP、172.16.8.110 ping）與接地監測板／OTD 有沒有裝（W-14）。
-- **本機**：3 個閒置的 VS Code 終端機（PID 55100／12732／29984）與另一個驗證用 session（現在當 St01 helper 在用）要不要關——自動模式不准 St01 關。
 
 （Q90～Q97 已由 Steven 20261004 07:2x 裁決，搬到 decisions-decided.md。）
 
+（Q98 已由 Steven 20261004 17:0x 裁決，搬到 decisions-decided.md。）

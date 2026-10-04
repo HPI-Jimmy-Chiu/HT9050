@@ -171,6 +171,7 @@ python D:/HT9045/backup/night_tools_20260927/laptop_heartbeat.py --doing "<這�
   `python D:/HT9045/backup/night_tools_20260927/followup_due.py`（只讀）：滿 4 小時沒回 ⇒ 同一個 `TO_<對象>.md` §4 寫「⏰ 追問（第 N 次；W-編號）」、
   改帳本那一列、推 main。追兩次（8 小時）還沒回 ⇒ 列進 NIGHT_REPORT §0 請 Jimmy 決定打電話或寄信（寄信只在他對那個人、那件事授權過才寄）。
   ⚠ git 只能留言：對方的 AI 沒在跑就看不到；`SendMessage` 只到得了本機的 session。
+  ⚠⚠ **20261004 22:1x 起：EastSun／機台端／ES02 的題目一律不等**（使用者：「等EastSun決定->這問題一律不要等他，沒有回答就立刻也一份給ST01處理，他也能回覆」）——問的同一顆 commit 就在 `TO_STEVEN.md` §4 給 St01 一份、請他直接回答能答的，WAITING_REPLIES 那一列註明「同時給 St01」；不要等 4 小時追問或追兩次才轉（RULINGS_20261004 第 4 條）。
 
 
 > ⚠ **1002 量到：這份技能與 `CLAUDE.md` 是從 session 啟動的那個 checkout 載入的**。主 checkout `D:\HT9045` 落後 main 998 顆時，夜間迴圈讀到的是 0930 版，少了 1001 的「照 golden 補齊不受安全禁令」常設授權（RULINGS_20261001 第 0 條），那晚因此把 INBOX 140 誤延到白天兩小時。開工前在當批 worktree 跑一次 `git diff <主 checkout 的 HEAD> origin/main -- .claude/skills/night-loop/SKILL.md CLAUDE.md`，有差就以 main 那份為準。
@@ -304,6 +305,7 @@ python D:/HT9045/backup/night_tools_20260927/laptop_heartbeat.py --doing "<這�
 > ```
 >
 > 今天的基準是 **64 dirs / 63 with Contact.Data**。
+> ⚠ **20261004 21:5x 更新：基準是 66 dirs / 65 with Contact.Data**。多的那一個是 `FT005054`（目錄 mtime 1001 06:32）：RULINGS_20260927 的 T1 流程對照把真機紀錄 `D:\HT9045\Staterecord\2025-12-11 17_47_57\HT9045\` 的 `IniData\Data\FT005054` 刻意放進真實 IniData（不是有人新建工單、不是回歸）；wb_serve 開機的 `SetMD5ByFolder` 會在作用中工單資料夾寫 `<md5>.MD5`，所以它的 mtime 會跟著動。下面 65／64、64／63 都是更早的基準。
 > ⚠ **20260926 更新：新筆電（JIMMYCHIU-NB，0922 佈署）的基準是 65 dirs / 64 with Contact.Data** —— 所有配方目錄的 mtime 都是 09-22 16:04～16:26，
 > 是佈署時整批複製進來的，不是有人新建工單；64／63 是舊電腦（NB2）0916 量的。帶文件的配方數變了 ⇒ pagewire 分類的分母（63）要照 64 重算（待辦）。
 > **20260927 03:1x 已量**（INBOX 第 82 列）：Contact.Data 64 份、72 個鍵，沒有任何鍵「只缺一份」⇒ Contact 頁的分類不因 63→64 改變；其他文件少數鍵只缺在特定舊工單，清單在 INBOX 82。**0926 16:4x 量過，不用重分類**：`tools/pagewire/wire/*.js` 的 `fields` 區只有 5 個檔有東西（tempset 49、testerif 25、contact 24、yieldmonitoring 20、qamode 1，共 119 筆三元組；只用到 contact／tester／temperature 三份文件，各 64 份配方帶著），逐筆對這台每一份「有那份文件」的配方（文件名＝配方目錄裡同名的 `.Data`，不分大小寫；`[區段]`＋`鍵=` 照 `probe_keys.py:load_docs` 的讀法）⇒ **119 筆全部 64/64 都在**，所以沒有哪一份配方會因為缺 `fields` 鍵而存不了檔；過期的只有註解裡的 `63/63` 分母（不影響行為，不改）。

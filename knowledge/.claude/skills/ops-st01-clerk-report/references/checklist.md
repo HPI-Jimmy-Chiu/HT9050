@@ -122,6 +122,9 @@
 | 82 | 只存在側分支的新檔，在 review6 工作樹做路徑存在檢查（D-4）報 MISSING | 10-04 §11.94：E-038 的 IndexZTorque* 等檔只在 `v906/st01e-e038` | 記錄員 §11.94 ⑤ | 寫成「分支 `<名>` 的相對路徑」，不加 `D:\`；D-4 對這類路徑改用 `git cat-file -e <分支>:<路徑>` 驗（C-30／C-56／C-67 同型） |
 | 83 | gate 還在跑，就從邊寫邊長的 ctest log 寫結論 | 10-04 §11.94：`11f99613` SHIP ctest 05:41 起跑，06:04 只到 234／393 | 記錄員 §11.94 ⑤ | 寫「在跑」時附讀 log 的時刻與進度（第幾／總數），不附結論、不推測；SIM／SHIP 各自寫 |
 | 84 | 簡報寫的推送時間和 reflog 不一致 | 10-04 §11.94：E-038 簡報寫「~06:0x 推」，`git reflog show origin/v906/st01e-e038` 是 05:56:07 | 記錄員 §11.94 ⑤ | 推送時間以 `git reflog show origin/<分支>` 為準，commit 時間以 `git log --format=%ad` 為準，兩者不同時兩個都寫；C-64／C-72 的延伸 |
+| 85 | todo 寫「已含 X」就照抄成已做 | 10-04 §11.95：todo E-036 寫「(a) e6da3de9＋3 處隱私註解」，`git show --name-only e6da3de9` 只有 4 個檔，3 處隱私註解還沒做 | 記錄員 §11.95 ⑤ | todo／簡報說某 commit 含什麼，用 `git show --name-only <hash>`（必要時 `git show <hash> -- <檔>`）對過再寫；對不上就照實寫並列 ④（C-28／C-64 延伸） |
+| 86 | 只讀派工簡報，漏了筆電在 main 上的新交接 | 10-04 §11.95：筆電 08:31 TO_STEVEN「約 09:10 前 St01 沒意見就把 review6 `9ebe4af3` 併進 batch 60」不在簡報裡；ST01-M 同時打算自己推 main（兩個整合者） | 記錄員 §11.95 ⑤ | 寫檔最後一步讀 `origin/main:docs/handoff/TO_STEVEN.md` 與 `origin/v906/steven-handoff` 本輪新 commit；有時限或兩邊會撞的，放 ④ 第 1 條並標「有時限」，ST01-E 立刻轉 ST01-M（C-55／C-56 延伸） |
+| 87 | gate log 只看 summary，不看 RERUN 段 | 10-04 §11.95：`11f99613` log 的 RERUN 段 PE_TruncationCheckTimeout 仍 Not Run，簡報說補 PATH 單獨跑通過，log 裡找不到那次 | 記錄員 §11.95 ⑤ | gate log 分 summary、RERUN、SIM／SHIP ctest 各段讀；簡報說的單獨重跑若在 log 找不到，寫「依 ST01-M 簡報」並列 ④（C-76／C-79 延伸） |
 
 ## D. 指令
 

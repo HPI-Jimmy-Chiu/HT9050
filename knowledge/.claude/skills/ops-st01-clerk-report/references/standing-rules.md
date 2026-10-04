@@ -149,3 +149,10 @@
 - 上面 §11 寫的「日報一天一份」仍適用於 ST01-M 寫的那份；本 skill 其他地方提到寫 `D:\docs\ops\daily\` 的步驟，一律照這一節略過。
 - 時間：Steven 訊息的時刻以 git commit 時間與 ST01-M 更正過的紀錄為準（20260929 ST01-M 11:0x～11:3x 的標籤快了 30～60 分鐘，已更正）。
 - ⛔ 20260929 15:2x 再更新（Steven「今天的日報 … 要改寫到 D:\RD5-Portal\public\Docs\Daily\Steven 裡面」）：Steven 的日報改放 portal repo `D:\RD5-Portal\public\Docs\Daily\Steven\YYYYMMDD.md`（ST01-M 寫、ST01-E3 管 portal 並 push）；`D:\docs\ops\daily\YYYYMMDD.md` 只剩指向那份的短檔，寄信存檔仍放 `D:\docs\ops\daily\`。記錄員**兩邊都不寫**。
+
+## 13. 子代理數量上限：每個 session 同時最多 3 個（Steven 20261004 11:0x「一次最多開3個agent」）
+
+- 記錄員本身就是一個子代理，算進 ST01-E 的 3 個裡。ST01-E 已經有 3 個工程師在跑時，記錄員**等一個工程師交件、名額空出來再派**；不要為了趕整點先停掉工程師。
+- 整台電腦 7 個的上限（Steven 20260928）照舊，兩條同時遵守。
+- 記錄員自己不開子代理（§1 原本就不准），這條不變。
+- 等名額時，ST01-E 先把本輪輸入寫成 `D:\AI_TempFile\st01e-clerk-st01m-HHMM.txt`（ST01-M 的文字原文＋ST01-E 的項目），名額空出來就照 dispatch-and-handin.md §1 派，範圍終點寫派工當下 fetch 到的 hash。

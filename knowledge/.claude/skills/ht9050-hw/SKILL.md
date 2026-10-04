@@ -50,7 +50,7 @@ applyTo: "**/IO_Table_9050.csv, **/Mot_Table*.csv, **/HP-9050*.xls, **/HP-9050*.
 執行期路徑：`D:\HT9045\system\IO_Table_9050.csv`、`D:\HT9045\system\Mot_Table_9050.csv`（與 `docs/` 下的副本目前**內容相同**；repo 的 `core.autocrlf=true`，
 clone 出來的 CSV 換行會變 CRLF，所以比對用內容不要用 hash）。
 
-## 六份 reference
+## 八份 reference
 
 | 主題 | 檔案 | 什麼時候看 |
 |------|------|-----------|
@@ -61,6 +61,7 @@ clone 出來的 CSV 換行會變 CRLF，所以比對用內容不要用 hash）�
 | **溫控器 DTM ↔ eTempControll 對照表** | [references/temp-dtm-map.md](references/temp-dtm-map.md) | 做溫控、看到 `iTempCode[]`、要加溫區 |
 | 三份工作簿的分頁盤點與差異 | [references/source-workbooks.md](references/source-workbooks.md) | 硬體送新版來、要比對改了什麼 |
 | **開發知識與極限規則**（Ifor01 1002：機型架構與通訊、溫控逾時／閾值／保護、開發與驗證規範；原本在 CLAUDE.md） | [references/dev-knowledge-and-limits.md](references/dev-knowledge-and-limits.md) | 做溫控、序列埠、1203、ctest 沙盒、寫測試之前 |
+| **HT9050 與 HT9045 的差異（活紀錄）**：身分／軸卡／Index／飛梭／軌道料盤／手臂氣缸／安全／溫控／IO／畫面，每條附出處與狀態 | [references/ht9050-vs-ht9045.md](references/ht9050-vs-ht9045.md) | 問「HT9050 跟 HT9045 哪裡不一樣」、要寫「只有 HT9050 才改」的程式、Steven 又說了一條新差異要記下來（照該檔 §0 加一列） |
 
 機器可讀的溫控對照表：[data/HT9050-TempMap.json](data/HT9050-TempMap.json)。
 

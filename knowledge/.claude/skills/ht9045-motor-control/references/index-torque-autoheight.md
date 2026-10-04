@@ -10,7 +10,7 @@
 |---|---|---|
 | 選哪一軸 | `:841-851` | `chkReadTorque1`＝Z1（位址 0）、`chkReadTorque2`＝Z2（位址 1） |
 | 交握 | `:899-985` | ENQ → 驅動器回 EOT → 送請求 → 驅動器回 ACK＋ENQ → 送 EOT → 收資料 → 回 ACK |
-| 請求封包 | `:833`、`:909-910` | `datatrq[4]={0x00, 位址, 0x52, 0xAE-位址}`：資料長度 0、軸位址、**命令 0x52（命令 5／模式 2，註解「要求讀取扭力值」）**、檢查碼 |
+| 請求封包 | `:833`、`:909-910` | `datatrq[4]={0x00, 位址, 0x52, 0xAE-位址}`：資料長度 0、軸位址、**命令 0x52（＝(模式<<4)|命令＝命令 2／模式 5「Read out of present torque output」，註解「要求讀取扭力值」；1004 更正：以前寫成命令 5／模式 2；單位＝額定扭力 2000，所以 k/20＝額定扭力 %（A5II p.427），詳見 skill ht9045-panasonic-rs232）**、檢查碼 |
 | 回覆解碼 | `:1799-1813` | `k = str[4]<<8 \| str[3]`（16 位元有號）；**`if(k<0) k=0;`**（負值丟掉）；**`Torque = k/20.0`**；`%5.2f` 寫進 `fMain->edTorue0`（`:975`）與 `fContact->PnlTorue0` |
 | 逾時／錯誤 | `:858-866`、`:887-895` | 收不到回覆 `Torque=-9999`、重開 COM；連續 10 次 → 「Rs232 Read Index Z1 Torque error!!」 |
 
@@ -124,3 +124,17 @@ MainProc → COM2->ReadTorque()（csystem.cpp:30399）
 - Q3 1203（Advantech DS402）有沒有在哪裡反轉命令極性——EastSun 上機。
 - Q4 HT9050 Z 的撐重扭力是否小於 kg（15 %）——EastSun 上機。
 - Q5 Phase B（翻 Auto Height 本體，約 8,200 行 golden）誰做——筆電 CT-3c 清單上，Steven 決定。
+
+## 7. 量產 Index 扭力等待逾時（E-044，Steven 1004 08:4x「加逾時：報警並停機」，not-golden）
+
+- 位置：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\atester.cpp` `DoTestHeadMotor` case 12110 第一行（:6908）與 14110（:7538，臂 2 雙胞胎）同一行插入；本體 `Ht9050TorqueWait.cpp`／`Ht9050TorqueWait.h`（St01）；ctest `E044TorqueWait`。側分支 `v906/st01e-e044`。
+- golden（0618 atester.cpp:6436-6468）在這裡等 edTorue0 有值；唯一的錯誤出口（:6456-6460）要 `GetReadTorueTask()==999`，只有讀成功才會設（golden rs232.cpp:991-995）。HT9050 沒有 RS-232 扭力（rs232.cpp:263-266 不開埠），B7（V910 DoTestHead）或 E-038 CONFIRMED=1 之前什麼都等不到 ⇒ 永遠壓著等（S-26 10-1）。
+- 只 HT9050：`MOT[MTestZ1].CardType=="PCI1203"`（同 rs232.cpp:950）是 atester 那行 && 的第一個運算元；其他機種停在 CardType，什麼都不跑＝照 golden 永遠等。SIM（SOFT_SIMULTE）不作用（12110 在 SIM 到不了）。
+- 5 秒沒有值 ⇒ 清 chkReadTorque1/2（RS-232 讀取器與 E-038 bridge 都停，不再跳「Read Index Z1 Torque error」）→ `ShowErrorMessage`（golden 停機：wb_serve 先 StopAllMotor(true)＋SoftStop/SoftStart/SystemStart=false，再記警報、再出框）→ golden 12110 自己的出口 `fAllMotorHome=false; Task=1;` ⇒ 下次 START 先回原點。
+- 只在自動運轉推著這段等待時才會報（ST01-M 1004 15:4x 變更，ST01-E2 R4 計畫 §3）：`SystemStart && !SoftStop && fAllMotorHome && iHome!=1`＝自動運轉梯子自己的守衛（csystem.cpp:1686／:1934）＋不在 HOME（iHome==1，csystem.cpp:31224；golden 的 HOME 路徑與停機分支在 [I01] 時也會呼叫 DoTestHeadMotor，:31220-31231、:32632-32648）。停機、HOME、驅動器警報後（fAllMotorHome=false）都不報，而且視窗歸零。
+- 計時：自己的視窗、`GetTickCount`（測試可換假時鐘）；**每次進入 12110／14110 都重新起算**：golden 的武裝條件（bFirstTime＋DoTestHeadMotorDelay 未到）、或跟上一拍之間隔了 2 個以上 MainProc 拍（`GetMainProcCallCount`，＝狀態機去過別處或停過機），都算新的一次進入；有值的一拍也歸零。停機後再按 START＝重新算 5 秒。不能用 atester 裡的 MyTickCount（:5861 被替身成常數 0）。
+- 5 秒（Steven 1004 14:1x 確認「照設計 5 秒」）＝E-038／E-042 P5 的 kTorqueWaitMs；比 E-038 的 10 秒「source not confirmed」早，操作員只看到一個有碼的警報。golden 的 ReadTorqueDelay 10 秒沒動。
+- 警報碼：暫用 WAR0361（臂 1）／WAR0362（臂 2）＝golden 既有「Index arm 1/2 contact torque monitor error.」；KCode 照 golden Index 慣例（bIndexAreaOnlyCanUseSkip ? K_SKIP : K_RETRY）。**TODO：Jimmy 選**（WAR0361/0362 或新 WAR0363/0364；K_SKIP 或 K_RETRY），只改 `Ht9050TorqueWait.cpp` 兩個字面值，不用再認領筆電檔。
+- ⚠ **R4（todo E-045：移動中驅動器警報要照 golden ShowMotorErrorMessage 報一次）應該比 E-044 早或一起上**；沒有它，Z1 下壓中驅動器警報不會報出來，等 5 秒後會被當成扭力逾時。E-045 誰做、何時做由 Steven 決定。R4 報了之後 E-044 不會再報第二個：ShowMotorErrorMessage 先把 fAllMotorHome 設 false（golden note.cpp:1059；移植樹 forms/fNote_ShowError.cpp:663），等待就不符合條件（ctest E044TorqueWait [T14]）。
+- 拿掉條件：B7 上線、HT9050 量產不再走 12110／14110 時，同一個 commit 刪兩行插入、翻 ctest E044TorqueWait 的 pin；E-042 不在 12110／14110 另加 P5（避免雙警報）。
+- 上機（EastSun，human-review A）：教導做完、無 IC，START → Z1 下到 12110 → 約 5 秒警報（碼＝暫用碼）、全軸停、之後不再跳 Read Torque 訊息、什麼都不動（這台 [I01]=1）→ START 先 HOME。
