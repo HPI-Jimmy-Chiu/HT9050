@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-04 20:56
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ fa29db7 WORKLOG 10-04: section 2 rows 120-123 (packages 134-140, Teach KB no range on HT90／web 1e95562。
+HT9050 機台參數快照（machine_params\）—— 2026-10-04 22:14
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ fef1f41 WORKLOG 10-04: section 2 rows 124-125 (packages 141-144 synced; read-only check of／web af09ed6。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置

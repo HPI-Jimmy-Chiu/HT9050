@@ -1374,4 +1374,17 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      操作紀錄 oplog_20261004.txt：新增 14854 行
      設定檔變動：machine_params/D_GPIB9045_system/general.ini、machine_params/D_HT9045_system/Gerneral.ini、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/lastdata_backup2.dat、machine_params/runcfg/system/teach.ini
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+  10-04 22:14 整合筆電第 141～144 包（main 到 369f553）＋機台快照：
+     程式：cpp 0208（33880da，141～144 包：Index Z 扭力讀 1203、開機表格稽核 T1～T12、St02 N07 警報橫幅、F5 關視窗停止啟動、Teach CHECK_RANGE 重讀修正等；
+           WebBridge/WebBridgeServer.cpp 沒套＝筆電把 act.observerSG.state 加進免權杖，等 EastSun 決定）、cpp 0209（WORKLOG）、web 0108（af09ed6，網頁那一半）。
+           o2 全建 exit 0、ctest 348/368（失敗清單見 WORKLOG §3 141～144 列）、production_audit 設定檔 0 變更。
+     掃描擋下 5 行（DoPassword／bNeedPassWord 的註解、網頁自測 'PASSWORD:' 說明文字），都來自筆電包、公開的 main 本來就有，照 1002「照原樣」裁決放行。
+     machine_log/oplog_20261004.txt：1 個檔變動
+     machine_params/D_HT9045_system：2 個檔變動
+     machine_params/README_PARAMS.txt：1 個檔變動
+     workorder/IOWEB_TEST_R003：3 個檔變動
+     workorder/README_WORKORDER.txt：1 個檔變動
+     操作紀錄 oplog_20261004.txt：新增 943 行
+     設定檔變動：machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 MD5 清單在 MANIFEST_MD5.tsv。
