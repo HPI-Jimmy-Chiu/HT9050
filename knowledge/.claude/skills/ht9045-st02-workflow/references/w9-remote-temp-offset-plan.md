@@ -3,7 +3,7 @@
 > Status 20260927: **GO**. The laptop verified every line on 5997abda (TO_STEVEN §4 12:3x):
 > uTemp_Set.cpp :6306-6308 / :6345-6347 (S3), :6394 / :6397; SECSGEM/uHGemHT9045.cpp :7096 / :7118 / :7128 / :7131;
 > forms/fTemp_Set.h :259-262 / :529-530. **Re-check the numbers after merging main.**
-> Decisions (github-46): 912 (a) the GPIB reload = YES; (b) iSiteToOfs = OUT (keep it in the ledger as pending, with the
+> Decisions (St02-M): 912 (a) the GPIB reload = YES; (b) iSiteToOfs = OUT (keep it in the ledger as pending, with the
 > reason: iSiteToOfs is zero until the first START); SECS G34 = OPEN; FTP = OUT (not translated).
 > Extra: change G34's :7106 comment ("夜間迴圈不會打開它") to past tense.
 > The ctest is drafted, untracked: `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tests\test_w9_remote_temp_offset.cpp` (cases a-f,

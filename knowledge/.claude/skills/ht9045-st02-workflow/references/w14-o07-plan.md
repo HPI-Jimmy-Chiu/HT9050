@@ -14,4 +14,4 @@
 2. Find the V906 site (atester.cpp / csystem.cpp; gate id) and what TestIF vs TestIF_File hold for those fields.
 3. Propose the in-memory approach: change only the in-use TestIF (and whatever the contact logic reads), never
    WriteIniData to Contact.Data; say what resets it (next recipe load?) and what the operator sees.
-4. Send the plan to github-46; no code until GO.
+4. Send the plan to St02-M; no code until GO.

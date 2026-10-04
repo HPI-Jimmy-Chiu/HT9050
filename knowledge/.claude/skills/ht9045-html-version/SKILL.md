@@ -622,9 +622,16 @@ GET  /api/text/<root>/<f>  整檔內容 {path, bytes, text}
 **機台上沒有實體鍵盤。**
 
 1. **HTML 畫面本身不可以使用實體鍵盤** —— 所有文字框設 `readonly`，單擊叫出小鍵盤（與 golden 的 `OnMouseDown` 一致）。
-2. **只有小鍵盤出現時**才可以用「對應到小鍵盤按鍵」的實體鍵：可見字元（大小寫容錯）、Backspace→`⌫`、Delete、Enter、Escape→`Abort`、Space。小鍵盤上沒有的鍵一律不接受；小鍵盤沒開時實體鍵完全無效。
+   golden 點了不會開小鍵盤的欄位（`.dfm` 沒有 `OnClick`／`OnMouseDown`、也不在 `HTEditList`；或 golden `ReadOnly`），接線檔 `kb` 那一列寫 `null`：
+   引擎不掛小鍵盤、欄位照樣 `readonly`、title 寫原因（20261004 KB-GOLDEN 2/2，`ht9045_wire_hwteach.js` 50 格）。沒有列＝照舊通用 QWERTY。
+2. **只有小鍵盤出現時**才可以用「對應到小鍵盤按鍵」的實體鍵：可見字元（大小寫容錯；數字鍵盤的 `-`、`%`、`.` 也是）、
+   Backspace→`⌫`／數字鍵盤 `BS`、Delete→`Delete`／`Del`、Enter→`Enter`／`OK`、Escape→`Abort`、Space→空白鍵（畫面上有才算）。
+   小鍵盤上沒有的鍵一律不接受——小鍵盤開著時直接吃掉，不給後面的畫面（golden `ShowModal`；只放 F1～F12、Ctrl／Alt／Meta 組合鍵、單獨修飾鍵）；
+   小鍵盤沒開時實體鍵完全無效。
 
-實作在 `web/page/ht9045_wire_engine.js` 的 `physicalKeys()`：偵測 `.qkOv` 覆蓋層存在時把 keydown 轉成對應按鈕的 `click()`，用**按鈕文字**比對，不依賴 `qwerty.js` 內部結構。
+實作在 `web/page/ht9045_wire_engine.js` 的 `physicalKeys()`（對照表 `PHYS_MAP`）：偵測 `.qkOv` 覆蓋層存在時把 keydown 轉成對應按鈕的 `click()`，用**按鈕文字**比對，不依賴 `qwerty.js` 內部結構。
+實體鍵＝按畫面上那顆鍵；畫面上的鍵 20261004 起照 golden `TfQwertyKey`（KB-GOLDEN 1/2）：開窗整段反白、第一個鍵取代舊值、`-` 切換正負、
+`%` 只輪換步進鍵刻度、`dp` 決定步進鍵的字、Abort＝放回原值再照範圍夾、沒有 ✕、點遮罩不關。細節見 `references/qwerty-keyboard.md`。
 
 ⚠ **沒有做在 `qwerty.js`**：那是網頁作者的檔案、存在鏡像來源，`sync_web.py --apply` 會整檔覆蓋。長久解法是網頁作者把它收進 `qwerty.js`。
 

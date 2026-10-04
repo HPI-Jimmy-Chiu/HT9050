@@ -2,22 +2,22 @@
 name: ht9045-st02-workflow
 description: >
   St02（Steven02，主機 STEVEN-NB3）在 V906 C++ 樹做移植工作的作業流程與現況板。涵蓋：角色（St02-E＝工程師／這個 session、St02-M＝協調者、St01-M＝St01 的協調者；session 名稱會變：
-  github-59 → github-46 → github-4f → github-62，重開後逐一問角色）、只編譯不執行的驗證規則（兩組態 sim／ship、build.bat 用 PowerShell 全路徑）、分支與獨立 worktree
-  （遠端只留 v906/steven-gpib-widget；本機工作樹 st02-speed、唯讀掃描樹 st02-mainscan）、加人手（helper agent 的交代法與審核）、每次 push 的回報格式（hash、merge-tree、
-  St01 的 ctest 清單與 done／todo 列、每小時信的 2～4 行）、行數不變的改法、golden 引用要寫樹名（906_0625_Steven）、
+  名稱只記在本機、不寫進共用檔，重開後逐一問角色）、只編譯不執行的驗證規則（兩組態 sim／ship、build.bat 用 PowerShell 全路徑）、分支與獨立 worktree
+  （遠端只留 v906/steven-gpib-widget；本機工作樹 1004 15:2x 起只留 st02-ela／st02-s36／st02-s39 與開著的 MR 樹）、加人手（helper agent 的交代法與審核）、每次 push 的回報格式（hash、merge-tree、
+  St01 的 ctest 清單與 done／todo 列、每小時信的 2～4 行）、行數不變的改法、golden 引用要寫樹名（1003 起 golden 0618，0625_Steven 只對照）、
   ctest 不可寫真檔的圍堵規則、RULINGS 第 4 條「上機要看」、編輯技巧與踩過的坑（heredoc 吃反斜線、sed 吃 CR、CRLF、
   控制字元、cp950 輸出）。references 放現況板與各項已調查好的計畫（P4 cMyDB＋W7、W9 遠端溫度 offset、W10 TCP 指令伺服器、
   Q9／Q24 login.dat、W14 O07）與 St02-M 的研究（WinINet ElaFtp、W10 R2 接命令、W14 Contact.Data、ELA W15／W18／W19）。
   Use when：St02 開工、壓縮後接續、要知道現在該做什麼、要推 gpib-widget／st02-on-cbridge、要回報給 St02-M、
   要做 P4／W9／W10／Q9／Q24／W14／Q41／ELA、要派 helper、要編譯驗證、要寫 CRLF 檔或跨檔替換。
-  關鍵字：St02, St02-E, St02-M, St01-M, Steven02, STEVEN-NB3, github-62, github-4f, github-46, github-59, S-09, near-miss, Q-INC, 翻開編譯, FShow_Audit, 完整建置, helper, 加人手, Q41, WinINet, gpib-widget, st02-on-cbridge, steven-p4-wip, 兩組態, build_ship,
-  merge-tree, 上機要看, 906_0625_Steven, P4, W7, W9, W10, Q9, Q24, W14, R0, ht9045_nmftp, 行數不變, line-neutral, CRLF。
+  關鍵字：St02, St02-E, St02-M, St01-M, Steven02, STEVEN-NB3, S-09, near-miss, Q-INC, 翻開編譯, FShow_Audit, 完整建置, helper, 加人手, Q41, WinINet, gpib-widget, st02-on-cbridge, steven-p4-wip, 兩組態, build_ship,
+  merge-tree, 上機要看, golden 0618, 906_0625_Steven, P4, W7, W9, W10, Q9, Q24, W14, R0, ht9045_nmftp, 行數不變, line-neutral, CRLF。
 ---
 
 # St02 作業流程與現況（V906 移植）
 
 > 所有路徑都是絕對路徑。V906 樹＝`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\`；網頁＝`D:\HT9045\web\`；
-> golden 906（St02 用）＝`D:\HT9045\HT9011UC_Code_V3.33.906.0_20260625_Steven\`；912（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\`）**不是翻譯來源**，只能拿來看 906 有沒有漏（RULINGS_20261002 第 20 條，見 §4）。
+> golden 906（St02 用）＝**0618**：`D:\HT9045\HT9011UC_Code_V3.33.906.0_20260618\`（RULINGS_20261003 第 2 條，1003 起；要從加密 7z 解開，密碼只在 GitLab main `docs/handoff/TO_STEVEN.md` §2，**永遠不抄進任何檔**）。1003 10:3x 在這台解 7z 被 Claude Code 權限檢查擋下（判定憑證外洩），**那條路不可重試或繞道**；10:5x 改成從共用區 `U:\共用區\HT-9050\K01_golden0618_HT9050snapshot_20260930\` **單純複製** St01 解好的 0618（886 檔；指紋跟 NB2 的 fp_0618.tsv 完全一樣），所以這台**有 0618 了**。`D:\HT9045\HT9011UC_Code_V3.33.906.0_20260625_Steven\` 只做對照（0927～1003 曾是基準）。912（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\`）：是修正或明顯比較好的就留 912 並兩邊註明（RULINGS_20261003 第 1 條），其他照 0618；20a 溫控／20b HANA／20c ADAM 照舊。
 
 ## 0. 先看這些
 
@@ -42,7 +42,7 @@ description: >
 ## 1. 角色
 
 - **St02-E（Steven02-Engineer）**＝這個工程 session（使用者 20260927 命名），在本機 Steven02（STEVEN-NB3）上；交接檔裡的「St02」標記指的就是它。**St01**＝另一台 Steven（跑 ctest／SIM、擁有 C 路產生器、Security／Login 頁等）。**筆電**＝Jimmy 那一側（擁有大部分 jimmychiu 的檔）。
-- **協調者**：**St02-M（Steven02-Manager）**（session 名稱會變：github-59 → github-46 → github-4f → github-62；名字會被別的 session 撿走，重開後逐一問角色）。它派工作給 St02-E；所有裁決、認領、回報都經過它。回訊息用它最新訊息的 `from=` uds 位址（重開就會換）。
+- **協調者**：**St02-M（Steven02-Manager）**（session 名稱會變，名字也會被別的 session 撿走——名稱只記在本機、不寫進共用檔，重開後逐一問角色）。它派工作給 St02-E；所有裁決、認領、回報都經過它。回訊息用它最新訊息的 `from=` uds 位址（重開就會換）。
 - **St01-M**＝St01 那邊的協調者。St01 的工程 session 跑 ctest／SIM。
 - **不直接寄信給 Jimmy**；每次 push 把 commit＋2～4 行重點交給協調者，它每小時合寄一封。
 - **要裁決的題目**：交給 St02-M，由它附絕對路徑與行號轉 ST01-M 彙整；不直接問 Steven、不寄信（Steven 20260927）。
@@ -67,10 +67,10 @@ description: >
 | 樹 | 分支 | 用途 |
 |---|---|---|
 | `D:\HT9045`（主 checkout） | `v906/steven-gpib-widget` | St02 主要工作分支；推之前先 merge origin/main |
-| `D:\AI_TempFile\st02-on-cbridge` | `v906/steven-st02-on-cbridge` | **已退役（20260927 20:3x）**：St01 合回最後一顆 94f16127（St01 ed365c68）。不要再推；遠端分支也不刪（對外動作）。以後改 St01 的檔也在 gpib-widget 上做，照樣走 §1 認領 |
-| `D:\AI_TempFile\st02-speed` | 目前是 `v906/st02-s09-rescan`（**只在本機**，`5d766431`＝S-09 重掃交筆電的 3 列，等筆電；18 列那版 `5e887d2d` 在 `v906/st02-s09-rescan-claims`，已被取代、不要推） | St02-E 做程式的主要工作樹：每件工作從 origin/main 開一條本機分支，驗過再併進 gw。obj 根 `D:\AI_TempFile\st02-speed-obj`（`build`＝模擬、`build_ship`＝出貨）。20260930 起放 near-miss 認領 `329b6f18`，等筆電回覆 |
-| `D:\AI_TempFile\st02-mainscan` | detached，指 origin/main | S-09 翻開編譯掃描用的唯讀樹（techniques §6）。要掃新的 main 時 `git -C D:/AI_TempFile/st02-mainscan checkout --detach origin/main` |
-| 其他 `D:\AI_TempFile\st02-*` | 各種本機分支 | 之前的 helper 或工作留下的，資料夾名稱跟現在的分支不一定對得上（例如 st02-p4 現在是 S-10 的分支）。用之前先 `git worktree list` 看清楚，不要當成 P4／W10／ELA |
+| `D:\AI_TempFile\st02-s36`、`st02-s39` | detached（建置線） | 增量建置線：原始碼樹＋`st02-s36-obj`／`st02-s39-obj`（第 32 條：要建哪個 commit 就在樹裡 `git checkout --detach <commit>`，再跑 `lane_cmake.sh`）。s39＝!180；s36＝!174 合 main 後的重建（!174 推完、進 main 後 s36 可刪） |
+| `D:\AI_TempFile\st02-ela` | `v906/steven-w42-encode`（只在本機，18 個 commit） | ★W42 報表編碼＋訊息英文化 1～3 步＋ELA messages，等 Steven（W42 Q1～Q6／W57）。不要刪 |
+| `D:\AI_TempFile\st02-s40`、`s42`～`s45` | 各 MR 分支 | s40＝S-24（本機，等 Q97）；s42＝!180、s43＝!179（已進 main）、s44＝!176（已進 main）、s45＝!174 |
+| 已刪（1004 15:2x，St02-M 清理） | — | st02-on-cbridge、st02-speed、st02-mainscan 與其他 40 多棵；唯讀掃描改用 `git grep … origin/main`（不用另開樹）。要另開工作樹先 `git worktree list`，用完就請 St02-M 收（VS Code 的 git 擴充會掃 D:\AI_TempFile 底下每一棵） |
 
 - **絕不推 main**。不 merge St01 的分支進 gpib-widget（反方向可以：St01 的分支 merge 進 st02-on-cbridge）。
 - **只留一條遠端工作分支＝`v906/steven-gpib-widget`**（RULINGS_20260927 §8，20260927 18:0x）。st02-on-cbridge 等 St01 合回 94f16127 就退役。之後改 St01 的檔也在 gpib-widget 上做（main 已含 St01 到 6bd0f5a4），照樣先經 §1 認領；需要 6bd0f5a4 之後的 St01 commit 時先問 St02-M。`*-wip` 分支只在本機。
@@ -101,7 +101,7 @@ description: >
   原型的 SimNet glue 只有 wb_serve 會編，而把它加進 wb_serve 的正是 CMakeLists.txt 的認領行 ⇒ 從來沒編過；一套上就 `'byte' does not name a type`（techniques §5）。
   測試分支叫 `v906/st02-<批名>-claimtest`，commit 標「CLAIM LINES ... NEVER PUSH」；認領行用腳本套（先逐字核對 OLD），認領稿的 OLD／NEW 也從同一支腳本產生。
 - **解「缺 include」的閘一定要兩組態完整建置**（`build.bat quick`，會連所有測試執行檔）。`-fsyntax-only` 看不到連結方向（techniques §8）。
-- **golden 引用一律寫樹名**：`golden 906_0625_Steven main.cpp:30140`；912 寫 `912 <file>:<line>`；NB2 給的 0618 號碼照原樣標「NB2」。0625 在 main.cpp :28427 之前起比 0618 多 78 行。版本基準：**只用 906**（RULINGS_20261002 第 20 條，Steven 1002 18:0x「我還有看到912版，這是錯的，現在分工處理只能做906 C++專案，能理解?」）：912 只能拿來看 906 有沒有漏，912 才有的內容一律不翻；**沒有例外**——卡片或指示寫了 912 的路徑，也照 906 的對應程式翻（ADAM／HANA／C14 的 912 例外全作廢）。舊的「906 為底＋912 補的」（0926 14:3x）作廢。推之前問自己：有沒有哪一行是照 912 翻、而 912 跟 906 不一樣？
+- **golden 引用一律寫樹名**：`golden 0618 main.cpp:N`（1003 起的基準）；對照寫 `0625_Steven main.cpp:M`；912 寫 `V912 <file>:<line>`。0625 在 main.cpp :28427 之前起比 0618 多 78 行，ckernel ShowRunLed／ScanPannelKey、main Timer2Timer 也不同（W-17，`docs/handoff/W17/diff_0618_0625.tsv`）——**不能機械平移**，有 0618 原文才算數。版本基準：**0618 為主**（RULINGS_20261003 第 2 條），912 只在「是修正或明顯比較好」時保留（第 1 條：兩邊行號都註明＋`docs/ST02_GOLDEN906_AUDIT.md` 一列，自己判斷、不用等點頭），912 才有的客戶專屬功能或只是寫法不同 ⇒ 照 0618；20a／20b／20c 照舊。舊的「只用 906、沒有例外」（RULINGS_20261002 第 20 條）與「906 為底＋912 補的」（0926 14:3x）都已被取代。推之前問自己：每個 golden 引用是不是 0618 的號碼？保留 912 的地方有沒有寫理由？
 - **ctest 不可寫真檔**：沙盒放 `%TEMP%\ht9045_<名>_<tick>`；測試自己把路徑指過去，指到 `D:\HT9045` 底下就在呼叫任何東西之前中止；綠燈才刪沙盒。既有的轉向變數：W906_INIDATA_ROOT、W906_HT9045LOG_ROOT、W906_SAVEEVENTLOG_ROOT、W906_AUTH_PATH、W906_SETUPINF_PATH（不在 blanket）等；新接縫照 D5 做法（getenv、沒設＝golden 字面、tests/CMakeLists.txt 的 `_ht9045_env_extra` APPEND）。
 - 新 ctest 放在 St02 的區段（tests/CMakeLists.txt 自己那幾塊的後面），名稱照 `TesterComm_*`、`ELA_*`、`AOI_*`、`MyDB_*`。
 
@@ -142,6 +142,25 @@ description: >
 20. **只 `node --check` 的 node 自測，審查時要逐行看「讀了什麼」**（20261003 !131 St01 代跑連錯兩次，都是 node --check 抓不到的執行期錯）：(a) 假 DOM／假物件：測試讀到的每一個屬性（`v.dom.head`…）都要在建構時設好——`dom.document.head` 有、`dom.head` 沒設 ⇒ TypeError；(b) 對頁面原文做的順序／存在檢查要找**完整的標籤**（`<script src="x.js"></script>`），不要找檔名——檔名也出現在註解裡，`indexOf` 會先找到註解；(c) 交 St01 代跑時一定附對照組（例：`W906_C14_PANE_JS` 指向空 .js 要變紅）。
 21. **改 skill／文件之前先看擁有者**（20261003 !139：.claude/skills/ht9045-secsgem/ 是筆電（jimmychiu）的，St02 只附加了一段，St02-M 只好把它列進 §2 請筆電同意）：`git log --format=%an --diff-filter=A -- <檔>` 看是誰建的；別人的 skill 只附加、不改原文，而且在回報裡寫成認領。加一個新的 ChanAction 分派也一樣要先查：`grep -n "JsonBridge/ChanAction.cpp" tests/CMakeLists.txt tests/*.cmake`，每一個編它的測試目標都要補上新動作的 .cpp（20261003 OB-7：St01 新的 E-020／E-022／E-023 測試連結失敗）。
 22. **靜態掃網頁按鈕（ST02-C12，20261003 MR !141）的五個坑**：①分頁內容 `div.pcPane` 預設 `display:none`，不能算「藏起來」（點頁籤就看得到）；②綁定不一定用 id 寫在頁面 script：Teach 的 Set／Go 在動態載入的 JSON shim（`web/JSON/js/teach-access.js`，由 motor-access.js 依網址載入）、Exit 用 class `exitbtn` 統一綁、Omron／CCLink 未移植頁由 `ht9045_unported_form_c.js` 變灰；③有頁寫死 `ws://127.0.0.1:9045/...`，任何會點按鈕的探針都要在頁面腳本跑之前把**所有** WebSocket／fetch 網址改到自己的假伺服器（Page.addScriptToEvaluateOnNewDocument），並附一個「一顆會送、一顆只改畫面、一顆沒反應」的對照頁，讀錯就停；④頁面 `<title>` 的 dfm 寫法不一（`（x.dfm）`、`（x.dfm / fX : TfX）`、`（x.cpp / fX）`），golden 表單名／類別從 dfm 第一個 object 讀；⑤命令多半是引擎依資料表組的，靜態只能說「有沒有 script 提到」，分類一律標 `s:`（暫定），送了什麼要點擊實測（`tools/webprobe/c12_click_probe.py`，這台不跑，請 St01 代跑）。
+23. **golden 讀 0618 的 ctest 環境（St01 E-032，20261003）**：dfm2rc_idempotent／TeachButtonsGen／dfm2rc_fidelity 讀 `HT9045_GOLDEN_ROOT`；St02 的 gate（或請 St01 代跑時）一律指到 `D:\HT9045\HT9011UC_Code_V3.33.906.0_20260618`，不再指 0625。引用的行號搬到 0618 時只改「St02 自己寫的行」；別人的檔裡別人寫的行不動（要動就先認領）。
+24. **開機／首次掃描類的守衛會改到既有測試的第一拍**（20261003 S-20 M3）：golden ScanPannelKey 的 bK[] 一開始是 false，開機時就按著的鍵會觸發一次；加「先看到一次 OFF 才算數」的守衛後，test_scankey 第 [1] 段第一拍就是「開機後第一次掃描」，START 會被擋、`g_starts == 1` 會紅。加這種守衛時：先找所有呼叫該函式的測試（`grep -ln "ScanKey()\|W906_TimerScanKeyTimer" tests/*.cpp`），在準備步驟加一拍「沒有按鍵」，再提供一個測試用的回到開機狀態的鉤子（`W906_ScanKeyFirstScanRearm_St02`）給新段落用。
+25. **NB2 的突變檢查工具 `tools/nb2_assist/mutation_check.py`（MR !145）每個突變都會建置＋跑 ctest**，STEVEN-NB3 不能跑；請 St01 代跑，交代 `--file`／`--lines`（函式範圍）／`--target`／`--ctest`，表格貼進 MR。這台能做的對照：用 Python 照測試的計數規則數一次，在新樹與「改之前的樹」（main）各跑一次，每個 CHECK 都要翻（例：St02_Keep912 用 `scratchpad\s20\keep912_precheck.py`）。
+26. **權限檢查擋下的修改不要繞**（20261003 S-20：helper 拿掉 IdleHomed 裡已經沒用的互鎖測試狀態，被判「Security Test Removal」）：留著、加註解、在回報裡寫清楚交給使用者決定；不換寫法、不叫別的 session 代做。
+27. **PowerShell 背景跑 build.bat，cmake 可能在「Generating done」之後卡住不結束**（20261003 15:2x／15:5x，st02-speed 兩次：21 分鐘只用 13 秒 CPU、沒有子程序、log 只有 START 一行）。同一個樹直接 `cmake -S . -B ... < /dev/null` 88 秒就正常結束。改用 `scratchpad\s09close\lane_bash.sh <src 工作樹> <obj 根> sim|ship <tag>`（bash 執行、stdin 接 /dev/null、輸出寫同一個 s09close\<tag>_<cfg>.log）。判斷卡住：log 幾分鐘都只有 START、cmake 的 CPU 秒數不動 ⇒ TaskStop 那個背景工作、確認沒有殘留的 cmake／cmd，再用 bash 版重跑。
+    另一個會卡的地方：build.bat 最後的 `tools/pe_truncation_check.ps1` 碰到防毒正在掃的新 exe 會一直等（W-29；log 停在「=== … N 個 exe/dll ===」、PowerShell CPU 不動）。編譯和連結其實已完成（看 [100%] 與錯誤數）。做法：停掉自己那支 pe_truncation_check 的 PowerShell，改用 NB2-1 !159 有逾時的版本（`git show origin/v906/jimmy-b53:HT9011UC_Cpp_V3.33.906.0/tools/pe_truncation_check.ps1`，`-OpenTimeoutMs 30000`，LOCKED 的跳過不算壞檔）；已設定過的 obj 直接用 `scratchpad\s09close\lane_cmake.sh`（cmake --build＋!159 PE 檢查）。build.bat 被中斷後 log 會印出說明文字（「undefined reference = …」），不是真的錯誤。MR 說明寫「PE check run with !159's timeout (AV lock, W-29)」。
+28. **新增或改了 ctest 的 MR，交給筆電之前一定要先請 St01 代跑那幾支（兩組態）**（20261003 !150 C14b：第 9～13 段從沒跑過就推，筆電 gate b52a ship 紅 4 項、被踢出第 52 批）。這台只能編譯，三種錯它都看不出來：①期待寫錯（golden ProcessStopStart(true) 會立刻吃掉 bFirstInit，`bFirstInit == true` 本來就不會成立）；②組態差異（ship 的 Timer1Timer case 1 會重開 COM，SIM 擷取緩衝被 StartComm 清掉，測試的讀取位置沒歸零就再也收不到）；③全檔搜尋的釘子撞到同名的別的東西（csystem.cpp 有兩個「GATE G09」）。做法：推之前在回報裡寫明「請 St01 代跑：<ctest 名稱>，兩組態，紅的話附完整輸出」；測試裡在可能不到位的地方先印狀態（幀數、緩衝大小、呼叫次數），代跑一次就看得到原因。釘子要對準位置（例：只看呼叫那一行上面幾行），不要全檔找一個字串。
+29. **測試執行檔的名稱不能有 setup／install／update／patch**（20261003 NB2-1 R199：!155 的 `test_st02_s09_setup_temperfrom.exe` 被 Windows 的安裝程式偵測要求提升權限，ctest 兩組態都「Not Run (permission denied)」；筆電在第 53 批用 `set_target_properties(<target> PROPERTIES OUTPUT_NAME test_st02_s09_su_temperfrom)` 修，ctest 名稱不變）。新增測試目標時先看名稱；非用不可就加 OUTPUT_NAME。推之前查：`git diff <base> HEAD -- HT9011UC_Cpp_V3.33.906.0/tests/CMakeLists.txt | grep "^+add_executable" | grep -iE "setup|install|update|patch"` 要沒有輸出。
+30. **移植一個符號之後，樹裡寫「沒有移植／no port」的舊註解就過期了**（20261004 S-25：St02 1002 移植 IsMultiEPPressureRouteActive、G24 也解了，但 forms/fHS.h 三段還寫「全樹沒有」，筆電的 absence 哨兵才抓到）。移植／解閘時：`git grep -n <符號>` 把寫「no port／NO PORT／missing symbol／不存在」的註解一併列出，自己的檔順手改，別人的檔列給 St02-M 轉筆電（同行替換、行數不變）。改閘的理由要寫真正擋住的原因（例：golden 906 根本沒人呼叫 ⇒「NO LIVE CALLER IN GOLDEN 906」），不要只把舊理由刪掉。
+31. **時間標籤一律先跑 `date '+%H:%M'` 再寫，不要用估的**（20261004 St02-M：ChangeLog 第 6～8 列、現況板標題、給 St02-M 的訊息都比實際快約一小時）。已推的工作用 commit 時間（`git log -1 --format=%ci`）當依據；ChangeLog 的「時間」欄寫實際區間。
+32. **D 槽只剩 55 GB 時，不要每張 MR 開新的 obj 目錄**（20261004 MR-A／S-09）：把一個已設定好的工作樹 `git checkout --detach <要驗的 commit>`，再用 `scratchpad\s09close\lane_cmake.sh <那個 obj>\build|build_ship` 增量建置；commit 與推送在分支所在的工作樹做（同一個 commit）。改到 forms/fMain.h 這類大家都 include 的檔，增量也幾乎全編（sim 約 30 分、ship 約 20 分）。
+33. **移植樹的表單建構子不會把成員歸零，golden VCL 會**（20261004 S-09：TfTemperFrom 的 strShowYield[].OnOff 建構子沒設；golden 的 TObject::InitInstance 整塊清零）。寫「拿掉補丁就變紅」的反向檢查時，不要只靠新物件的預設值；要再加一個不同值的情況（S-09 的 [5] OCR=0）把數值來源釘住，並在 commit 寫明。
+34. **測試裡的原始碼釘子不要釘「兩個檔相鄰」，修測試時保持行數不變**（20261004 !165 NB2-1 R209）：合 main 之後共用清單（CMakeLists 的同一行）中間常會多出別人的檔，「`A  B` 相鄰」就紅了；改釘「同一行、B 在 A 之後、在 `#` 之前」。反向清單引用測試行號時，修測試一律同一行附加（R209 的 YPitch 種在既有的那一行），不然整份清單的行號都要重算。另：測試環境沒讀 Tray.Data 等設定檔時，被測函式後面的 W906 後備訊息（例 W906-PITCH0）會蓋掉 ExString——種值要種在被測函式真正讀的源頭（[[seed-tests-at-the-real-source]]）。
+35. **推之前在本機跑原始碼稽核腳本**（20261004 !165 在第 59 批 gate 的 FShow_Audit 紅）：MR 只要讀了表單的 fShow／bShow／Visible，或動到 forms/*.h，就先跑 `python tools/fshow_audit.py`（只掃原始碼，本機可跑）；其他會掃原始碼的稽核（tools/st_gate_audit.py、tools/pci1203_split_check.py、tools/cite_check_notes.py）也一併看。刻意直接讀成員時：理由寫在那一行、同一個 commit 用 `--write-baseline --force` 調高基準，並確認基準檔只多了自己那幾筆。代跑清單也要列 FShow_Audit。
+36. **commit 前看 `git diff --cached --stat`，推之前看 `git diff --stat origin/main...HEAD`**（20261004 !179：在既有工作樹 `git checkout -b X origin/main` 之後，`git add 一個檔 && git commit` 卻把兩個交接文件的舊版也一起提交了——疑似切分支時索引沒更新乾淨（機器同時被 VS Code 的 git 掃描拖慢）。merge-tree 冒出 TO_STEVEN.md 衝突才發現）。檔案清單跟預期不符就先 `git checkout HEAD~1 -- <多出來的檔>` 再 amend（還沒推的才可以）；推過的分支用 `git diff --name-only origin/main...<分支> | grep docs/` 普查。
+37. **比對兩個建置的目的檔：先遮掉帶 `dir32 .rdata` 重定位的立即值再說「不同」**（20261004 ccache 實驗：fMain.cpp.obj 反組譯差 198 行，全是字串常數在 .rdata 的位移，遮掉後 0 差異、字串集合相同）。做法：`objcopy -g` 去除除錯資訊 → `objdump -dr` → 重定位行可能隔一行續行才出現，往下看兩行（scratchpad `ccx/rdata_mask.py`）。另：MinGW 6.3 的 PCH 在增量重建可能 `internal error ... MapViewOfFileEx`，不要把 PCH 當成穩定的加速手段。
+38. **別人要改共用元件時的「有沒有人依賴舊行為」普查，看三種地方**（20261004 KB-GOLDEN，筆電改 qwerty.js）：(1) 所有呼叫點（`git grep` 對 origin/main，不是自己的舊工作樹）；(2) 載入**真**元件的 node／headless 測試（假元件只記呼叫的不受影響）；(3) **包住**共用函式的頁面（例：Temp_Set 包 HTQwerty.show 串 onAbort），它們依賴的是元件內部的呼叫順序，要逐行寫出依賴的行號給改的人。別人的測試釘到要改的行為也一併指出（不只 St02 的）。普查期間不碰該元件，直到那批進 main。
+39. **main 每進一包，所有還開著的 St02 MR 都重跑一次 merge-tree（各自一條指令，只印一行才算過）**（20261004 !174：第 141 包帶進 !165 的 N07 那一行後，我只把 main 合進 !180，沒回頭查 !174，衝突放了 4 個多小時，到第 62 批進 main 才發現）。巡檢看到 main 前進就跑：`git merge-tree --write-tree origin/main origin/v906/<分支>`；多一行就把 main 合進該分支、兩邊的改動都留、兩組態完整建置、merge-tree 一行再推，並告訴 St02-M（MR tip 變了，代跑要跑新 tip）。
+40. **長時間的背景 PowerShell／bash 工作，先 `cd D:\HT9045`（中性目錄）再開**（20261004 15:31：刪 obj 目錄的背景 PowerShell 是在 session 目前資料夾＝st02-s36 裡開的，它的工作目錄就鎖住 st02-s36，St02-M `git worktree remove` 之後資料夾刪不掉、剩 1581 個檔，要等腳本跑完才放開）。工具會繼承 session 當下的資料夾；要被刪的工作樹或 obj 目錄裡，不要留任何程序的工作目錄。刪不掉的檔用程序路徑／命令列找不到時，多半是工作目錄、VS Code 檔案監看或防毒在掃。
 
 **每做完一件（推送或 helper 交件）也要**（使用者 20260927 19:2x）：
 - 更新對應的 skill／reference 與現況板 `D:\HT9045\.claude\skills\ht9045-st02-workflow\references\current-state.md`；

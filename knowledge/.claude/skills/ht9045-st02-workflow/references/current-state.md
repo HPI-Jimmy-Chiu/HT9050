@@ -1,6 +1,6 @@
-# St02 現況板（更新：2026-10-03 10:4x，C12 普查 MR !141、S-09 重掃候選交 St02-M）
+# St02 現況板（更新：2026-10-03 12:3x，S-20 主迴圈接手中、N07 已疊上、建置中）
 
-> 新 session 先讀這份。我是 **St02-E**；派工的協調者是 **St02-M**（session 名稱會變，目前 **github-62**，uds `\\.\pipe\LOCAL\cc-msg-2e6f870585ba6e0d521e943f8e46a02b`（14:00 重啟後 St02-M＝github-62，我＝github-de），以最新訊息的 `from=` 為準）；St01 的協調者是 **ST01-M**，St01 的工程是 **ST01-E**。
+> 新 session 先讀這份。我是 **St02-E**；派工的協調者是 **St02-M**（session 名稱會變，只記在本機；以最新訊息的 `from=` 為準）；St01 的協調者是 **ST01-M**，St01 的工程是 **ST01-E**。
 > 規則：每個 commit 兩組態編譯、不執行；St01 跑 ctest（§2 那一列要寫測試名＋「請 St01 代跑」，ST01-M 1002 起只代跑這種列）。每次 push 後都更新這份。⚠ 1002 07:4x Steven 對 St02-M 說「你如果能跑得起來的話, 可以做測試」——St02-E 這邊還沒生效（只是轉述，St02-E 的排程指令仍寫「編譯只編不跑」），已在 St02-E 的 session 直接問 Steven，等他回。
 > 裁決要問的：一律交給 St02-M，由它轉 ST01-M 彙整給 Steven；不直接問 Steven、不寄信。
 > 5 小時觸發：本 session 設了 cron `58 */5 * * *`（只在本 session 有效）。
@@ -23,6 +23,109 @@
 - ELA：`1042d4cc` W15、`2ceca61c` W18、`82196ca3` W19、`22e97891` 文件；ship 0 errors，sim 重編中；cObserver 的 diff 等回報。
 - Q41：還沒 commit（A 段 TesterIF，4 檔），sim 0 errors。
 - 16:40：gpib-widget 推到 `bf2690aa`（文件）；本機 `00772497` 已 merge main 00f9a882（有程式）→ 兩組態編譯中，過了再推。st02-on-cbridge 下次推之前要 merge St01 head（現在 5b7fe37c）。
+
+### 10-04 15:0x 狀態（St02-E 寫）
+- **工作樹清理（St02-M 執行 `git worktree remove`，不加 --force）**：St02-E 回覆只留 **st02-ela**（★W42，等 Steven）、**st02-s39**（!180／!174 建置線，st02-s39-obj）、**st02-s36**（!179 建置線，!179 進 main 後可刪）＋開著的 MR 樹 s40／s42～s45。st02-speed、st02-mainscan 會被刪 ⇒ SKILL 裡提到這兩棵的地方，刪完要改。刪完後殘留的 obj 目錄（s13／15／16／18／24／25／30／32／38、elasched、on-cbridge、w10 的 -obj）等 St02-M 點頭才刪。
+
+### 10-04 14:4x 狀態（St02-E 寫）
+- **KB-GOLDEN（筆電，第 63 批）**：筆電在改 `web/page/qwerty.js` 照 golden TfQwertyKey＋新 ctest QwertyGoldenKeypad。**第 63 批進 main 前不碰 qwerty.js／attachKeyboards／引擎的按鍵攔截。** St02 普查結果 none（ChangeLog 第 26 列）。
+- 其餘同 14:1x：!174／!180 等代跑、!179 第 62 批、S-24 等 Steven（Q97）。
+
+### 10-04 14:1x 狀態（St02-E 寫）
+- !179 代跑綠（St01 13:55），在第 62 批；!174（`v906/st02-mainloop-rest` `647f397d`）、!180（`v906/st02-timer-table-b2` `b4a8fc0b`）等代跑，St02-M 已請列第 63 批候選。
+- ccache 實驗完成並回報 St02-M（14:1x）：不建議照現況接上 W906_FastBuild.cmake（增量重建 PCH 內部錯誤、全新建置只快 1～10%、瓶頸是 240 次連結）。speedup-ideas 一列已給 St02-M，等它決定誰寫進 !173；`D:\AI_TempFile\st02-ccx`（約 30 GB）等同意後刪。
+- S-24 仍等 Steven（Q97），其餘同 13:0x。
+
+### 10-04 13:0x 狀態（St02-E 寫）
+- main `de5e0637`（第 141 包含 !165）。**已推等代跑／批次**：!174 `647f397d`、!176 `a9fbc88e`（代跑綠，第 62 批）、**!179** strShowYield `7d9aa105`、**!180** MR-B `b4a8fc0b`。若 !174 與 !180 先後合：MainTimersSt02.cpp St02PassAt 那行照 !174 拿掉 `|| g_modalDepth > 0`。
+- S-24 本機 `02aee28d`（st02-s40，含 T7、apply_hooks 已有 ③）：仍等 Steven（Q97）；套用前 rebase 到當時 main 並重跑 `--dry`（第 60／61 批改了 wb_serve 檔尾與行數，檔尾檢查 EOF_OK 要更新）。
+- 排程：10 分鐘巡檢 `ab569765`、五小時 `acdb59c5`。ccache 實驗低優先（D 段、objcompare、speedup-ideas 一列）。
+
+### 10-04 11:1x 交接（換帳號＋重開機後；新 session 先讀這段，再讀下面 09:5x）
+- **ccache 實驗已停**：ccx.sh 與殘留 cmake 已結束；st02-s41 的 MainTimersSt02.cpp 已還原（git status 乾淨，detached 在 main `fb608e5e`）。已量：A 不開模組 1393 s、B 開模組冷快取 1374 s（命中 27%）、C 熱快取 1249 s（命中 74%）；**D（改一個 .cpp 重建）沒量完**。續做：重跑 D（D:\AI_TempFile\st02-ccx\A、C 還在）＋A／B 的 objcompare＋cpp_build speedup-ideas 一列；做完刪 st02-ccx（約 30 GB）。
+- scratchpad 重開機後還在；St02-M 另備份到 D:\AI_TempFile\scratch-backup-20261004\St02-E_c8311755\。
+- **排程先不建**（Steven 10:5x：本週用量 95%，10/10 重置；要建先問頻率）。
+- **下一步順序**：① 第 60 批 gate 對 !165（`1c7c0273`）綠了 → 推 MR-B（st02-s42 `v906/st02-timer-table-b2` `e80d1eff`：fetch → merge-tree 單獨一行 → push 開 MR）；紅了在 st02-s39 修。② !174／!176 等代跑結果。③ S-24 等 Steven（共用檔掛點，Q97 三選一）＋St01（③）＋筆電（⑤）。④ ccache 實驗收尾。⑤ strShowYield 建構子歸零小 MR（!171 已進 main，可以做）。
+- ChangeLog D:\docs\ChangeLog\CHANGES_20261004_Steven02.md 到第 20 列（交接檔只抄到 18，St02-M 要補 19～20）；skill §5 到第 35 條。
+
+### 10-04 09:5x 狀態（換帳號前；新 session 從這裡接；St02-E 寫）
+- !171 已進 main（第 140 包 `26bf17d2`）。**已推、等代跑／gate**：!165 ScanKey（`v906/st02-scankey` tip `1c7c0273`，FShow_Audit 修正，在第 60 批 b60 約 10:00 gate）；!171 S-09 開機（`a6885f2e`）；!174 mainloop 剩餘（`v906/st02-mainloop-rest` `647f397d`，筆電的 FASTCLK-MODAL＋TIMERRES，WINMM 新匯入）；!176 OB-7 後續（`v906/st02-ob7-followup` `a9fbc88e`）。!168 已進 main（第 138 包）。
+- **MR-B**（st02-s42，本機分支 `v906/st02-timer-table-b2` tip `e80d1eff`，兩組態建過 0 錯）：**等第 60 批對 !165 綠了再推**（fetch → merge-tree 單獨一行 → push 開 MR）；MR 文字照 scratchpad\s20\MRB_COMMIT_MSG.txt＋D4 縮小（FYI）＋fMain_Timers.* 是 St02 的（Q84＝A）；代跑＝!168 的 11 支＋St02_N07Alarm＋C14BinDisp；反向 scratchpad\s20\REVERSE_MRB.md。若 !174 先進 main：MainTimersSt02.cpp 的 St02PassAt 那行照 FASTCLK-MODAL 拿掉 `|| g_modalDepth > 0`。
+- **S-24**（st02-s40，分支 `v906/st02-s24-staterecord`，4 個 St02 新檔已本機 commit `b29634bb`「WIP not for push」）：Q92 自動紀錄＋T6、S30 present 欄已做（St02 的檔，語法 0 錯）；6 個共用檔掛點 **第二次被權限檢查擋**（Steven 要擇一：允許規則／自己跑 apply_hooks.py／手動），③ 等 St01 確認、⑤ 等筆電；確切行 scratchpad\s24\CLAIMS_3_5.md；④ 待 NB2-1。套用前對當時的 main 重核（含 E-043 :2555 鄰行）。
+- **ccache／PCH 實驗**（St02-M 指派，結果要寫進 cpp_build 的 speedup-ideas）：腳本 scratchpad\ccx\ccx.sh 在背景跑，log scratchpad\ccx\ccx.log；原始碼 st02-s41 在 main `fb608e5e`（detached）；obj D:\AI_TempFile\st02-ccx\A／B／C（各約 10GB，量完可刪）。已量：A 不開模組完整建置 1393 s（1622 個 CXX）；B 設定 rc=0、PCH 套在 11 個目標。B／C／D 還在跑。之後還要 objcompare（A 與 B 幾個 .o：objcopy -g 後 objdump -d 比對）。D 段會在 MainTimersSt02.cpp 尾加一行註解再 git checkout 還原——若中斷要手動還原。
+- 之後：strShowYield 建構子歸零的小 MR（!171 進 main 後，筆電說「你決定」）。
+
+### 10-04 06:2x 狀態（新 session 從這裡接；St02-E 寫）
+- main 第 138 包（`caeda672`）已有 !157、!166、!168（MR-A）。已推待合：!171 S-09 開機補設（等代跑 St02_S09SetupTemperFrom／TemperFromCore／TemperFromTimer1）。
+- **!165 ScanKey**（st02-s39，本機分支 `v906/st02-scankey-combined` → 推到 `v906/st02-scankey`）：NB2-1 R209 兩支紅已修（`3adc6c8d`，同一行）；合 main 兩次（`8b9ae529` 帳本第 1 條表＋tests/CMakeLists 檔尾；`d905794b` 第 138 包的兩個檔尾），**合併樹兩組態建置中（log skm2_*）**；完成 ⇒ merge-tree 單獨一行 ⇒ 推 ⇒ 回報 St02-M，請代跑全部 8 支。
+- **!70 MR-B**（st02-s42，`v906/st02-timer-table-b2` `21018ddc` = !165 新 tip `d905794b` + 併入 commit）：本機，**不開 MR 直到 !165 代跑綠**；舊的 `v906/st02-timer-table-b`（`aa1a0945`，疊在 MR-A＋舊 !165）兩組態建過 0 錯，保留參考。obj 用 st02-s36-obj（`git checkout --detach` 到要驗的 commit）。設計：派發器的五支→排程表 OnTimer（W906_St02TimersBindTable），wb_serve:7621／WebBridgeTags:605 不動；反向 scratchpad\s20\REVERSE_MRB.md。
+- **OB-7 後續**（st02-s44 `v906/st02-ob7-followup`，`0a2c69d5` 本機）：(a)＋(c) 完成；(b) 等筆電同意 WebBridgeServer.cpp:1449，與 WebCmdGuard.cpp:90 一起加。
+- S-24 仍停（Steven Q97）；S30 待辦已記在 scratchpad\s24\HOOKS_TODO.md 檔尾。
+
+### 10-04 02:1x 狀態（新 session 從這裡接；St02-E 寫）
+- !160 已合（package 136）。!157 W-17 第二部分合 main 後 tip `35fb8ff1`。**!166 S-25**（st02-s41，`v906/st02-s25-fhs`，tip `9edd0048`）：forms/fHS.h 三段過期註解，只改註解、沒有測試，等筆電。S-25 (1) 答案已由 St02-M 上交接 ff5a7ed6（EP 紀錄兩支 golden 沒人呼叫不翻；CheckEPRange 不屬 ADAM，轉 TFormHS／KLT 負責人）。
+- **S-24** 仍停：4 個新檔在 st02-s40 未提交，6 個共用檔的掛點被權限檢查擋，等 Steven 回 A／B／C。!165／!161 等代跑，紅了就是下一件工作。
+
+### 10-04 01:5x 狀態（新 session 從這裡接；St02-E 寫）
+- 已合進 main：!149、!150、!155。已推待合：!157 W-17 第二部分、!160 C16、!161 S-22（疊在 !150，筆電已同意認領）、**!165 ScanKey 合併 MR**（st02-s39，tip `8f53ee73`，取代 S-20；等代跑 ScanKeyGolden／MainScanKey／START_SitesCensus／St02_N07Alarm／St02_N07BannerPage／HomeBlock／MainCtlButtons／St02_Keep912）。
+- **S-24** st02-s40 `v906/st02-s24-staterecord`：helper 做第一階段（StateRecordDiag.h／.cpp＋St02_StateRecordDiag，並套用筆電已同意的 ①cStateRecord:1387 ②wb_serve :5934／檔尾／:2503 掛載路由 ⑥Main.gbControlBtn.html:142-144 ⑦MainStateRecord.cpp:159-169 ⑧兩個 CMakeLists）；③ 三個阻塞迴圈與看門狗自動紀錄等 Jimmy（#89／#90，之後疊在 St01 !164 上）；④ uhome.cpp 只寫出唯讀 accessor 提案等 NB2-1；⑤ 剎車欄位等 NB2-1 (m) 進 main。分析：scratchpad\s24\S24_GAP_ANALYSIS.md。
+- 之後：mainloop 剩餘（FASTCLK-MODAL `0b5ff7b5`＋TIMERRES `5b09b320`，cherry-pick 保留筆電作者，等 St01 !164 合了再做）→ !70 MR-A（從 main 重做，參考 st02-s36 `bbed2725`）／MR-B → S-09 開機 yield 補丁 → !140 後續 → 改標註。
+- 建置：`scratchpad\s09close\lane_cmake.sh <obj dir> <tag> sim|ship`（已設定過的 obj 用 cmake --build＋!159 PE 檢查）；新 obj 根用 lane_bash.sh（但 PE 檢查會卡，卡了就停掉那支 PowerShell、改跑 pe_check_b53.ps1）。
+
+### 10-03 20:5x 狀態（新 session 從這裡接；St02-E 寫）
+- 已推：!149 912-keeps、!150 C14b（tip `47e0f8c2`，等代跑 `ctest -R ^C14_BinDisp$` 兩組態轉綠）、!155 S-09、!157 W-17 第二部分。
+- **ScanKey 合併 MR（取代 S-20）** st02-s39 `v906/st02-scankey-combined`：0152（MC01）＋第 2／3／4 步＋N07 !137／!138 已提交；第 5 步測試移植 helper 進行中（新 ctest ScanKeyGolden、REVERSE 在 scratchpad\skt\REVERSE_SKG.md）；之後兩組態建置 → 請 St01 代跑 → 推。軟體鍵 0153／0156／0157 等 MC01 在 package 133 上重新匯出；0154 要裁決；0158 永不合。HUMAN_REVIEW：面板鍵來源、RESET 尾段 IO、首掃守衛、沒有 HMI 時 START、PAUSE 關 Unloader 框、PAUSE 中止回原點。
+- S-20（st02-s33）只當零件來源，不再推。
+- **S-22** st02-s37 `888c53cc`（在 !150 的 `47e0f8c2` 上）：等 !150 綠了再推（代跑 C14_BinDisp／C14_BinDispPane／C14_BinDispPanePage）。
+- **C16** st02-s35 `2fec0088`（疊在 !149）：等 !149 合。**!70** MR-A 的 WIP 在 st02-s36 `bbed2725`（疊在 S-20，要改以 main 重做）。
+- 建置都用 `scratchpad\s09close\lane_bash.sh`（PowerShell 背景會卡 cmake）。
+
+### 10-03 17:3x 狀態（新 session 從這裡接；St02-E 寫）
+- 已推：**!149** 912-keeps（`39096461`）、**!150** C14b（`3091e93b`）——都在筆電第 52 批，筆電自己 gate。
+- **S-20** st02-s33 `4a7af892`（M1 的鎖搬到 MainScanKey；DeviceForm_File.cpp 回到筆電原文、St01 認領撤掉）：兩組態閘門過（speed 線）。推之前：筆電同意 wb_serve 檔尾／:6981／DUET3D、!149 合、批次 51 進 main 後 rebase＋「面板 HOME 被擋」釘子（!146）；推完請 St01 跑突變檢查。
+- **C16** st02-s35 `v906/st02-c16-local`：`6c54770b`＋`2fec0088`（疊在 !149）；增量建置在 st02-s30-obj（st02-s30 暫時 detached 在 2fec0088）。等筆電同意認領＋!149 合。
+- **!70 計時表** st02-s36 `v906/st02-timer-table-local`（從 S-20 4a7af892）：MR-A＝合 origin/v906/jimmy-timer-table（merge 不 squash；RULINGS／INBOX 取 main；CMake 兩邊都留；wb_serve 掛點放回今天的行）helper 進行中、obj st02-s36-obj、log tta_*；MR-B＝併入（設計 scratchpad\s20\TIMER_TABLE_FOLD_DESIGN.md，D1 不做、D2～D5 核准；舊測試的每個 CHECK 都要對到新的或寫明退休理由）。
+- 之後：S-22（規格 scratchpad\c14\S22_SPEC_753e259a.md）→ W-17／S-09（等筆電）→ !140 後續 → 改標註 MR。
+
+### 10-03 16:0x 狀態（新 session 從這裡接；St02-E 寫）
+- **MR !149 已推**（`v906/st02-keep912`，tip `39096461`：W71 `6831645f`、W72 `317dd587`、W73＋St02_Keep912 `39096461`）；工作樹 st02-s30（obj st02-s30-obj）。等筆電 gate／St01 代跑。
+- **C14b** st02-s32（`v906/st02-c14b-local`）：`5cb95621`／`2bdd049b`（樹＝helper 的 9c1a6bb8／26db2228，只改標題）＋`3091e93b` MainClose:962 字樣；增量建置中（log c14b3_*），過了 merge-tree 一行就推。
+- **S-20** st02-s33（`v906/st02-s20-mainloop`）：`b6c5c85e`（R188 後）→ `781685a9` 合 912-keeps → `3b6d5102` OEE 帳本；speed 線 st02-speed 已切到 3b6d5102，bash 建置中（log s20e_*）。推之前：筆電同意 wb_serve 檔尾／:6981／DUET3D 那行、!149 先合、批次 51 進 main 後 rebase 並補「面板 HOME 被擋」釘子（NB2 !146）、突變檢查請 St01 代跑。
+- **CommaText**（批次 51 改成 BCB6：沒加引號的空白也會切）：唯讀 helper 普查 St02 程式／測試中；有影響的在各閘門前修。
+- 之後：S-22（規格 nb2-assist 753e259a，存在 scratchpad\c14\S22_SPEC_753e259a.md）→ C16（認領行已交，St02-M 送筆電同意）→ W-17 註解 MR／S-09（等筆電）→ !140 後續 → 改標註 MR。
+- ⚠ speed 線用 PowerShell 背景跑 build.bat 時 cmake 會卡在 Generating 之後；改用 `scratchpad\s09close\lane_bash.sh <src> <obj> sim|ship <tag>`。
+
+### 10-03 14:0x 狀態（新 session 從這裡接；St02-E 寫）
+- **S-20**（`D:\AI_TempFile\st02-s33`，`v906/st02-s20-mainloop`）：`6f58061d` H1／M1、`d242c685` 合 main db9f0430、`662fc595` M2（RESET 後續行 GATE RESET-POST，等 Jimmy §0）＋M3（開機就 ON 的 HOME／START 要先看到一次 OFF；測試鉤子 W906_ScanKeyFirstScanRearm_St02）。St01 已同意 DeviceForm_File.cpp 檔尾；St02-M 同意 M2／M3。START 普查 36/34/2 過。
+- 還沒做：等測試 helper（a29b57a2）提交 test_scankey 修正（含第 [1] 段前的空拍）→ 跑 `scratchpad\s20\s20_test15.py` 加第 [15] 段 → 反向驗證行寫進 REVERSE_S20.md → W71 推了之後把 S-20 疊上去、重合 ckernel :3374／:3382 → 兩組態完整建置、nm、DLL、merge-tree 一行 → 推。
+- 背景 helper：C14b rebase＋閘門（a52bad09，st02-s32）、W71 rebase＋閘門（a465a235，st02-s30）。推送順序 W71 → C14b → S-20 → S-22；每個推完把 tip／MR 號／merge-tree／測試清單／HUMAN_REVIEW 給 St02-M。
+- HUMAN_REVIEW 要列：(a) 面板 RESET 後續動作閘住；(b) 開機卡住的 HOME／START 只記錄不動作；上機看正常按會動、卡住的只留 `[SCANKEY] ... ignored`。
+
+### 10-03 12:3x 狀態（新 session 從這裡接；St02-E 寫）
+- **S-20 是第一優先**（TO_STEVEN §3，RULINGS_20261003 第 13 條：筆電的 `v906/jimmy-mainloop` 交給 St02）：FASTCLK-MODAL `0b5ff7b5`、TIMERRES `5b09b320`、SCANKEY `07306ba2`（INBOX 86 面板實體鍵，沒建置沒測）＋疊 N07 !137／!138 ⇒ 一張 MR。
+- 工作樹 `D:\AI_TempFile\st02-s33`、分支 `v906/st02-s20-mainloop`：`2b877dbf` 合 !137（衝突都兩邊留：MainTimersSt02 kBD=5／kT2=6／kSlots=7；CMakeLists:2776 兩個檔；ckernel :3374／:3382＝906 那行＋N07 的一句）、`79a4def0` 合 !138（無衝突）。
+- 建置：speed 線 detached 在 `07306ba2`（基底），兩組態背景建置中（log s20a_*）；之後再建 `79a4def0`。審查 helper（唯讀）對 golden 0618 逐段看 MainScanKey，報告寫到 scratchpad\s20\REVIEW_S20.md。
+- 測試這台不跑：「修到綠」要請 St01 代跑卡上那串（FastClock|FastClk_.*|ScanKey|START_SitesCensus|St02_.*|NoticeAck|ModalWake|HeaterSimTick|PauseForward|MainCtlButtons|WB_.*）。
+- 新規則（RULINGS_20261003 #15）：每個新增／改過的 ctest 檢查，MR 說明都要附「改壞第 X 行 → CHECK Y 會紅」；C14b／S-09／W71 的 MR 說明也要補。
+
+### 10-03 11:5x 狀態（新 session 從這裡接；St02-E 寫）
+- **佇列（St02-M 11:2x）**：①S-09 MR（helper 在 st02-s29 建置中）②ST02-C14b ③W71（等第 50 批）④`47eeb5ef` 推送（等筆電同意認領）⑤!140 後續（等第 51 批）。
+- **ST02-C14b 本機做好**：`D:\AI_TempFile\st02-s32` `v906/st02-c14b-local` `9f234299`（在 !131 頂端）；H1／M1／M2＋低優先；ctest C14_BinDisp 第 9～12 段；兩組態 -fsyntax-only 0 錯。認領清單 `D:\AI_TempFile\st02-claims\C14B_CLAIM_SHEET_vs_c14pane_9723b74e.txt`（筆電 4 檔、St01 2 檔）。**等**：第 50 批進 main → rebase → 完整建置＋nm＋DLL＋merge-tree → 各擁有者同意 → 推。
+- 暫存的密碼相關腳本（pw_shape*、extract_0618.py）已照 St02-M 要求刪掉。
+
+### 10-03 12:0x 狀態（新 session 從這裡接；St02-E 寫）
+- **golden 0618 在這台了**：St02-M 10:5x 指的共用區 K01 快照（St01 解好的）**單純複製**到 `D:\HT9045\HT9011UC_Code_V3.33.906.0_20260618\`（886 檔，.gitignore:48 忽略；指紋跟 NB2 fp_0618.tsv 完全一樣）。解 7z 那條路照舊不碰。之後一律照 0618 翻、引用寫 `golden 0618 檔:行`。
+- **W-17 第二部分做完**：St02 的引用碰到 0625 才有的行，N07 之外只有 W10 Command.cpp:12626 與 C14 cShowBinSelect.cpp:272，都是 0618 把賦值打成比較的筆誤 ⇒ (a) 保留；沒有 (b)。文件更新版交 St02-M（scratchpad\w17\ST02_OVERLAP_20261003.md）。改註解＋帳本：`D:\AI_TempFile\st02-s31` `v906/st02-w17-part2` `47eeb5ef`（只動註解，等筆電同意認領再推；清單 st02-claims\W17P2_*）。
+- **W71**：`st02-s30` `99e63dfd`，0618 行號已讀過；等第 50 批進 main 再改到 main 上推（帳本段落要改成只加一列，避免跟 47eeb5ef 檔尾衝突）。
+- **S-09 helper** 還在 st02-s29／st02-speed 建置。
+
+### 10-03 11:3x 狀態（新 session 從這裡接；St02-E 寫）
+- **golden 基準改回 0618**（RULINGS_20261003 第 2 條，Steven 在筆電終端答 A）；912 是修正或明顯比較好的就留、兩邊註明（第 1 條＝B）。
+- **⛔ 這台解 0618 的 7z 在 10:3x 被 Claude Code 權限檢查擋下（憑證外洩）**：不可重試、不可換腳本／helper／請 St02-M 代做；等 Steven 自己解到 `D:\HT9045\HT9011UC_Code_V3.33.906.0_20260618\` 或開權限。要 0618 原文的工作等著（W-17 第二部分、W71 的 0618 行號）。
+- **W-17 第一部分做完**：handoff `795cc008` `docs/handoff/W17/ST02_OVERLAP_20261003.md`（St02 碰到的 21 組，判定都「待 0618」）；腳本在 scratchpad\w17\。
+- **W71（Qorvo 蜂鳴改回 912）本機準備好**：`D:\AI_TempFile\st02-s30` `v906/st02-w71-local` `b5061c51`（在 c912-4 上 revert 660b1d32＋兩邊註明＋帳本一列）；ckernel／fLotInfo 跟 !132 之前一字不差（!137 之後合得乾淨）；四檔兩組態 -fsyntax-only 0 錯。**不推**：等第 50 批進 main（再改到 main 上）＋0618 讀得到（行號是推算的）。
+- **S-09 解閘 MR（tsv 540＋197）**：helper 在 `D:\AI_TempFile\st02-s29` `v906/st02-s09-lift-1003` 做、在 st02-speed 建置；引用寫 `golden 0618 cSetUp.cpp:2825（0625_Steven same line）`（指紋推得）。
+- 之後：!140 後續（等 !140 進第 51 批）——(a) LogAppend 順序、(b) act.observerSG.state 免權杖（別人的檔，先認領）、(c) 引用改 0618。
 
 ### 10-03 10:4x 狀態（新 session 從這裡接；St02-E 寫）
 - **ST02-M 09:5x 選 A＋B**（不做 C：S-16 跟筆電的 ht9045_link.js 重疊）。
@@ -72,7 +175,7 @@
 - C9（st02-s15）、OB-7（st02-s20）的 helper 等稽核說來源是 906 再接（它們留著沒 commit 的改動，不要清）。
 
 ### 10-02 17:2x 狀態（新 session 從這裡接；St02-E 寫）
-- Session 沒變：St02-E＝`c8311755-ee3b-4c2b-9f5f-bc5682ac9613`（github-de）；St02-M＝github-62。main＝`2dd90ef3`（!108、!118 已合）。⚠ main 今天前進很快：**每次推之前 fetch、merge-tree 對當下的 main 只印一行**。
+- Session 沒變：St02-E、St02-M 都同一個 session。main＝`2dd90ef3`（!108、!118 已合）。⚠ main 今天前進很快：**每次推之前 fetch、merge-tree 對當下的 main 只印一行**。
 - 建置只有一棵樹（`D:\AI_TempFile\st02-speed` 切到要建的 commit，`scratchpad\s09close\build_speed.ps1 -Cfg sim|ship -Tag X`），一次只能跑一個 ⇒ 排隊：**① !114 `d0d8b87d` sim（adam6，跑中）→ 推「SHIP 待建」② !116 `da36b214` sim → 推 ③ !114 ship ④ !116 ship ⑤ C14 兩組態**。
 - **已推、等人**：!114 ADAM 推到的是 `0469e8ae`（之後本機 `3c2c5941` 3h 測試修正、`849d2109`／`d0d8b87d` 兩次 merge main，還沒推）；!116 LI-9 推到的是 `e839f529`（本機 `da36b214` merge main 2dd90ef3，還沒推）。St01 的 Adam6024_Pressure 重跑會在推送後觸發。
 - C-11（wb_serve.cpp:4066）在 2dd90ef3 上是**相鄰行**衝突、不是同一行：舊行一字不差 ⇒ 筆電的同意仍有效（St02-M 已在 CHAT 更正，handoff 292723a0）。
@@ -86,7 +189,7 @@
 - ChangeLog 寫到第 46 列、§43（`D:\docs\ChangeLog\CHANGES_20261002_Steven02.md`）。
 
 ### 10-02 14:5x 狀態（換帳號前收尾；新 session 從這裡接；St02-E 寫）
-- **St02-E Session ID：`c8311755-ee3b-4c2b-9f5f-bc5682ac9613`**（session 名 github-de；St02-M＝github-62，uds `\\.\pipe\LOCAL\cc-msg-2e6f870585ba6e0d521e943f8e46a02b`；ST01-M 現在是 github-da）。Steven 14:4x：帳號週用量 90%，要換帳號。沒有 helper 在跑；所有 worktree 都乾淨（都 commit 了）；沒有推半成品。
+- **St02-E、St02-M、ST01-M 的 session 名稱只記在本機。**Steven 14:4x：帳號週用量 90%，要換帳號。沒有 helper 在跑；所有 worktree 都乾淨（都 commit 了）；沒有推半成品。
 - main `8f3cdc53`（批 43：!101 C8、!104 C11 已合；套件 125 機台整合 283f8382 已在 main）。
 - ⚠ 測試仍然只編譯不跑：Steven 對 St02-M 說過「你如果能跑得起來的話, 可以做測試」，但 St02-E 自己的排程指令還寫「編譯只編不跑」，已在 St02-E 的 session 直接問 Steven、還沒回 ⇒ 照舊 compile＋node --check，§2 寫「請 St01 代跑」＋測試名。
 - **已推、等人：**
@@ -427,7 +530,7 @@
 - 待決：A8 之後超豐還是 0，因為 golden 分析器 ListProductionLog 用第 5 欄篩列（golden 也一樣）；要不要偏離 golden 讓它認超豐欄位，問 St02-M。U13 開機那一行等 Steven。
 
 ### 09-28 14:2x 狀態（新 session 從這裡接）
-- **14:00 重啟**：我＝St02-E（github-de），St02-M＝github-62。另一個也在當 St02-E 的 session（github-c3）已改名 **St02-E2**、停手（只做唯讀 W42 翻譯表，D:\AI_TempFile\st02-e2）；查過分支、reflog、編譯目錄都沒被動。重啟後 cron 要重建（`53 */5` 五小時＋`7-59/10` 巡檢）。
+- **14:00 重啟**：我＝St02-E。另一個也在當 St02-E 的 session 已改名 **St02-E2**、停手（只做唯讀 W42 翻譯表，D:\AI_TempFile\st02-e2）；查過分支、reflog、編譯目錄都沒被動。重啟後 cron 要重建（`53 */5` 五小時＋`7-59/10` 巡檢）。
 - gpib-widget 遠端 `0daefb95`（MR !3）：14:18 `b4c11660`＝merge main 1818cfa4（`982dba99`）＋`v906/steven-w48-rework`（★W48 三項裁決；wb_serve 每小時寫 TimeData＋HANDLER LOG＝golden 行為）；14:24 `ba46ad9f` ★W45 認領（WebSecurityJam.cpp 11 行、ht9045_wire_statussecurity.js :130／:216、Status.Security.html :56）＋`0daefb95` Speed 滑桿 form.event "change"＋position（St01 review6 7e1785dc X-2；29a13bdb 不再從 state 改有自己事件的元件）。
 - helper：W42（st02-ela `0495e6f5`，第 1～3 步做完，推之前要自己跑兩組態）、W36-1（st02-q41 WIP `1851e6f9`，不推）都在重啟時結束，不用重開。唯讀 helper 在查 St01 B3 頁面 JS（review6 6ba451d5／b08ae6ad：cleaning／contact／offset／barcode *_ev.js）和我們頁面 JS 的重複處理 → 清單先給 St02-M 再改。
 - ST01-M 13:4x／13:5x：B4 OK；START 前檢查順序＝St01 的「沒連 HMI 畫面就拒絕」先、再 golden 順序；CL-5／S-07 歸 St01；W44-1 editlist 那一半歸 St01，引擎四行仍是我們的認領（等筆電）；R120-F 與開機 `_NET` 快照改歸 St01（我們只留設計說明）；Temp_Set 共用佇列歸 St01（TS-1），之後 ts7 改用它；★W42 認領原則 OK，等 Steven（W57～W62）。
