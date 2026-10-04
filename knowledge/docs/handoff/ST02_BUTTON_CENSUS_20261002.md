@@ -362,7 +362,7 @@ python c12_button_census.py --merge c12_click.tsv --out-tsv <repo>/docs/handoff/
 
 - 探針只連自己的假伺服器：頁面腳本跑之前先把**所有** WebSocket 網址（有頁寫死 `ws://127.0.0.1:9045/...`）和 fetch／XHR 網址改到假伺服器的埠；假伺服器每個命令都回 ok:false、`/api/*` 回 404。碰不到 wb_serve、碰不到機台、不讀寫機台檔案。需要 Edge（不是 ctest）。
 - 每頁單獨開（不在外框裡）；有分頁的先點那一頁的頁籤；confirm／prompt 一律回「確定」，才看得到確認之後送的命令。
-- 已知限制：①C++ 資料到了才綁的鈕（例 Offset 部位鈕）在假伺服器下看起來沒反應，會落在 dead/；②FormShow bridge（Teach／IO）藏的元件在假伺服器下不會藏；③不在外框裡，`HT9045Link` 的 hub 路徑沒走到。這三種在 dead/ 裡要人看。
+- 已知限制：①C++ 資料到了才綁的鈕（例 Offset 部位鈕、Temp_Set 的 btClearAll——editlist.get 回來才掛）在假伺服器下看起來沒反應，會落在 dead/；②FormShow bridge（Teach／IO）藏的元件在假伺服器下不會藏；③不在外框裡，`HT9045Link` 的 hub 路徑沒走到；④只收使用者真的點擊（`e.isTrusted`）的處理器（例 ht9045_dio_delete.js 的 spbDelete）——探針 v1 用 `el.click()`（isTrusted＝false）會讀成 dead/；⑤只改輸入框值的處理器（不送命令、不改 DOM，例 btClearAll）——v1 只數 DOM 異動，讀成 dead/。④⑤ 由探針 v2 解決（AI(W906-ST02-C12T) 20261005：先捲到看得見、找沒被蓋住的點，用 DevTools 真的滑鼠點擊；另數 input／change 事件與值有變的控制項，輸出多 inp／val 兩欄；被蓋住的記 covered(probe)、不點）；①②③ 仍在。dead/ 在真的 wb_serve 上確認之前不是待辦清單。
 
 ## 9. INBOX 155 重跑與 D 類分派（St02-E 1004；產生器不寫這節，重跑 `--out-md` 會蓋掉）
 
@@ -388,3 +388,26 @@ python c12_button_census.py --merge c12_click.tsv --out-tsv <repo>/docs/handoff/
 - 靜態普查原本的 36 顆 D（St01 合併前的 `s:unbound/D`）就是上表的 HW.teach 32＋HW.MotorTest 4；點擊探針量的時候都在沒切到的分頁上，所以實測欄是「看不見」，不是「有反應」。
 - **跟小鍵盤有關的列**：第 63 批（KB-GOLDEN）改了 qwerty.js 與引擎的按鍵攔截，所有「按了會開小鍵盤」的列（多在 `OK-ui`）與 HW.teach 頁，第 63 批進 main 後要重量。
 
+## 10. 探針 v1 讀錯的列與 v2 重跑（St02-E 1005；產生器不寫這節，重跑 `--out-md` 會蓋掉）
+
+St02-M 派 C12 A 類兩顆（DIOInterFaceCFG spbDelete、Temp_Set btClearAll）去接，讀了才發現**兩顆早就接好了**（都是 St02 做的），dead/A 是探針讀錯：
+
+| 頁 | 鈕 | 已經接在 | 為什麼 v1 讀成 dead |
+|---|---|---|---|
+| Config.DIOInterFaceCFG | spbDelete | `web/page/ht9045_dio_delete.js`（AI(W906-DIO-DEL) 20261001；WS `ttlcfg.op` → FileRW/TTLCfg.cpp FileRW_TTLCfg_DeleteOp；golden 0618 DIOInterFaceCFG.cpp:248-256） | ④ `onDelete` 第一行 `if (ev && ev.isTrusted === false) return;` |
+| Setup.Temp_Set | btClearAll | `web/page/Setup.Temp_Set.html:385`（AI(W906-Q41) 20260927 TS-3 `btClearAllClick`，清 golden 0618 uTemp_Set.cpp:5126-5135 的 7 格） | ① 在 `editlistGet('Temperature')` 回來後才由 `q41Hook()` 掛上；⑤ 只改 `.value` |
+
+同樣原因、**已確認**的還有 Setup.AGV 的 btInitalLoad／btInitalUnLoad（`ht9045_agv_c.js` `onClick` 第一行就擋 isTrusted）。
+用「該頁載入的腳本裡有 isTrusted 檢查、又引用這顆 id」掃出來的**候選**（沒逐一確認擋的是不是這顆鈕的 click）：
+Setup.BarCode sbtExit；Setup.Cleaning btnStartAutoClean／sbTrayAssign／btnResetCleanCount；Setup.SetUp sbUpdate（dead/D）／sbtExit／btnLUpToRDownN／btnLUpToRDownZ／btnLDownToRUpZ／btnRUpToLDownZ／btnRDownToLUpZ／btnRUpToLDownN；
+Setup.Temp_Set sbtExit；Setup.AGV spbSave。另外 dead/A 74 顆裡 73 顆在 .tsv 的 refs 欄已經有網頁程式引用——**dead/ 的「網頁沒送」多半是探針環境（①～⑤）造成的**，St02-M 1004 20:0x 列的「27 個真的缺口」要等真的 wb_serve 確認。
+
+**v2 重跑（請 St01 代跑；這台只編譯、不執行）**——等第 65 批（含 !187 主畫面 Logo）進 main 之後在 main 上跑：
+
+```
+cd <repo>/HT9011UC_Cpp_V3.33.906.0/tools/webprobe
+python c12_click_probe.py --census <repo>/docs/handoff/ST02_BUTTON_CENSUS_20261002.tsv --out c12_click_v2.tsv [--dbg-port 9362]
+```
+
+- 先跑自我測試（6 顆：ws、dom、dead、trusted（要捲 2400 px、只收真的點擊）、value（只改值）、covered（被蓋住、不點））；任一顆讀錯就 exit 2、不量。
+- `c12_click_v2.tsv` 交回（放 handoff 或傳給 St02-M）；STEVEN-NB3 用 `python c12_button_census.py --merge c12_click_v2.tsv --out-tsv ... --out-md ...`（golden 0618）合併重分類，§9／§10 手寫節照舊補回。
