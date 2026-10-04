@@ -292,16 +292,16 @@ note 那邊沒有這個洞（實體鍵走 `Start()`/`BtnPauseClick()`，與滑�
 
 ### V906 現況（20261002，todo D-034，`AI(W906-D034)`；細節見 `ht9045-login` §10）
 
-- `DoPassword_MBox()`（V912 `mymessbox.cpp:1228-1286`；權限表第 35 項，＝0 也照樣跳登入框）的四個 golden 呼叫點：
-  - Configuration `[I37_1]` FIFO 由關改開（`cConfiguration.cpp:7353-7369`）：**接上**，editlist.save 的 `reauth` point `i37_1`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\WebLogin.cpp` 檔尾 `W906_DoPasswordMBox`）。
+- `DoPassword_MBox()`（906 `mymessbox.cpp:1208-1266`（V912 :1228-1286）；權限表第 35 項，＝0 也照樣跳登入框）的四個 golden 呼叫點：
+  - Configuration `[I37_1]` FIFO 由關改開（906 `cConfiguration.cpp:7237-7253`（V912 :7353-7369））：**接上**，editlist.save 的 `reauth` point `i37_1`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\WebLogin.cpp` 檔尾 `W906_DoPasswordMBox`）。
   - `pnlPauseClick` 的 `bMBoxNeedPassword`：**到不了** —— 只有 `ShowMyMessagePWD` 會設它，而它沒移植（筆電的閘 WebStart.cpp W906-ST-W7-C-DLG、PowerSavingMode.cpp GATE (3)）。
-  - `pnlPauseClick` SECS 分支、`TSecsAlarmForm::btnOKClick`：KYEC_LEE／JSCC_OS／SCC 專屬（RULINGS #25），沒做。
+  - `pnlPauseClick` SECS 分支、`TSecsAlarmForm::btnOKClick`（V912 才有，906 沒有這張表單）：KYEC_LEE／JSCC_OS／SCC 專屬（RULINGS #25），沒做。
 - 上面「實體鍵繞過密碼」那條 message 非對稱照舊（移植樹 `W906MbIoDismiss` 也不問密碼）。
 
 ### 第三層：SpecialPanel 密碼（`PanSpecialNoteClick`，只有 note）
 
-- 開框 `TfNote::FormShow` V912 `note.cpp:1574-1616`：[I] Index 掉料（JAM0303～0306／0314／0315）或 Tester Time Up（WAR07352）＋ `D:\HT9045\system\SpecialErrNote.ini` `[SUCK] TestSuck==1` ⇒ `bErrPan_err=true`、`Pwd` 讀 `[PASSWORD]`。
-- 鎖著時**每一個按鍵都直接 return**：選鍵 `BtnSkipClick` `:2867`、面板 `ScanKey` `:2908-2913`（**Alarm Reset 例外**）、`BtnStartClick` `:3858`、`BtnPauseClick` `:3870`、`BtnResetClick` `:5261`。要先點紅色面板 `PanSpecialNote`、打對 `Pwd`（`:5489-5507`）才解；跟登入等級無關。
+- 開框 `TfNote::FormShow` 906 `note.cpp:1564-1606`（V912 :1574-1616）：[I] Index 掉料（JAM0303～0306／0314／0315）或 Tester Time Up（WAR07352）＋ `D:\HT9045\system\SpecialErrNote.ini` `[SUCK] TestSuck==1` ⇒ `bErrPan_err=true`、`Pwd` 讀 `[PASSWORD]`。
+- 鎖著時**每一個按鍵都直接 return**：選鍵 `BtnSkipClick` `:2845`、面板 `ScanKey` `:2886-2891`（**Alarm Reset 例外**）、`BtnStartClick` `:3818`、`BtnPauseClick` `:3830`、`BtnResetClick` `:5221`（906 行號；V912 :2867／:2908-2913／:3858／:3870／:5261）。要先點紅色面板 `PanSpecialNote`、打對 `Pwd`（`:5489-5507`）才解；跟登入等級無關。
 - 全域、不是每一則各一份：沒解鎖就被關掉的框，下一則（只要 TestSuck 還是 1）照樣鎖著。
 - V906：信箱 `auth.kind:"special-note"`、`dialog.auth` 先比特殊密碼、三個閘先擋（`WebLogin.cpp` D-026 段）；面板鍵 `tools/wb_serve.cpp:7324`／`:7326` `W906_SpecialPanelLocked()`。頁面的紅色面板還沒畫（prompt 帶 En／Ch）。
 

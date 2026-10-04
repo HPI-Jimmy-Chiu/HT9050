@@ -15,6 +15,6 @@
 
 ## V906 移植樹：Observer 的 Clear Time Data（todo E-021 OB-9，St01 20261002）
 
-- golden（V912）：`cObserver.cpp:5624-5630` TfObserver::btnClearTimeClick＝`LastSet.iJamCount[0..2]=0` ＋ `fCounterClear->ClearCount(ctTimeData)`（`cCounterClear.cpp:246` 那一臂：`LastSet.SystemAccSecond[k][i]=0`，k<2——第三組不清——＋ `MyDBIProcess("Process","Time Data has been cleared!!")`）。沒有等級檢查、沒有確認框、運轉中也能按；不存檔（下一次 lastdata.dat 存檔才落地）。
+- golden（906 `cObserver.cpp:5393-5399`＝V912 `:5624-5630`，兩棵相同；20261003 E-030 補 906）：TfObserver::btnClearTimeClick＝`LastSet.iJamCount[0..2]=0` ＋ `fCounterClear->ClearCount(ctTimeData)`（`cCounterClear.cpp` 906 :245／V912 :246 那一臂，這一臂兩棵相同：`LastSet.SystemAccSecond[k][i]=0`，k<2——第三組不清——＋ `MyDBIProcess("Process","Time Data has been cleared!!")`）。沒有等級檢查、沒有確認框、運轉中也能按；不存檔（下一次 lastdata.dat 存檔才落地）。
 - 移植樹（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0`）：Data.Observer Counter 分頁的 Clear Time Data 鈕 → WS `act.observer.clearTime`（`JsonBridge\ChanAction.cpp:344` → `cObserver.cpp` 檔尾 `ht9045::sjson::W906_ObserverAct`）→ jimmychiu 翻好的 `TfObserver::btnClearTimeClick`（cObserver.cpp:7196，原樣呼叫）；頁面 `D:\HT9045\web\page\ht9045_observer_ev.js`，做完叫一次 observer.get timer 讓累計時間格子更新。
 - 測試：ctest `E021_Observer` 第 [9] 節（iJamCount 歸 0、SystemAccSecond[0..1] 歸 0、[2] 不動）。

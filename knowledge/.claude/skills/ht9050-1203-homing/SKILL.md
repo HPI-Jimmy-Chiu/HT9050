@@ -177,6 +177,14 @@ description: >-
 | HT9050 判斷 | `W906_IsHT9050()` = HT9050 原點掛勾對 MTrayX 有回答（GPIB Model 9050GPIB，`WebMotorAccessLive.cpp W906_HookHt9050OrgHome`） | — |
 | SW3D 的 home 速度／6098h=19 | 樹沒驗證 Acm_AxHome 是否也蓋 SW3D 的 6099h | `Pci1203Gear.h:547-550` |
 
+### 6a. S-26 的 St01 判讀（20261004，項目 4／9／10；全文 `D:\AI_TempFile\st01-s26\FINDINGS-S26-items-4-9-10.md`）
+- **TRAYSAFE 範圍太寬（9-1，High）**：它把 golden 的 Tray Arm 錯邊檢查對**所有**呼叫者關掉，自動運轉也一樣。golden 本來就有開關：`TrayArmMotorMove(p, bCheckPos)`（golden 0618 `Motor\mymotor.cpp:5662-5745`，golden 自己在 :4869 OCR 移動傳 `false`）。HT9050 應該只在 HOME 呼叫點傳 `bCheckPos=false`，不要整段跳過。
+- **HOMEPOS0 只管 HOME（9-2，High）**：START 仍然走「teach 0＋配方偏移（例 6800）＋golden 差值」，位置沒人驗過——教導完成前不要 START。
+- **golden 的安全位判斷永遠不成立（9-3）**：golden `uhome.cpp:3980-3986` 的 `(x-100>=e)&&(e>=x+100)` 不可能為真，實際只看 `Led[iHomeLed]`（golden 缺陷；本意應是 `e<x-100 || e>x+100`）。HOMEPOS0-2 跟 HOMEPOS0 一起拿掉。
+- **四個暫時分支只在機台上（9-5）**：GitLab main `e310ee27` 沒有 `W906_HomePos`／TRAYSAFE／HOMEPOS0；建議收成一個開關（例 `W906_HT9050_TEACH_PENDING`，限 `W906_IsHT9050()`）＋開機一行 op-log＋一支 ctest 釘四處，移除條件＝EastSun 驗完教導。
+- **加速度上限（4-2／4-3）**：`CFG_AxMaxAcc/MaxDec` 取最後一次引擎 HOME 時「已縮放」的 dAcc/dDec；慢速跑完再 HOME 會把上限壓低，下次 START 的加速度被拒，而且拒絕不報（卡片保留舊值，HOME 剛完是 home seed）。建議 RouteInitCfg 用 Mot_Table 的 AccDataBase/DecDataBase 只升不降，並把被拒的速度／加速度寫入跟動作一樣 latch。
+- **Index Z 扭力（10-1／10-2）**：HT9050 第一次 START 會停在 DoTestHeadMotor 12110 一直等（12110 自己的錯誤要 `GetReadTorueTask()==999` 才會到，只有讀成功才會是 999，所以不會逾時、也不清 `fAllMotorHome`；R210 1-16 說會報錯是錯的）；不要照 R210 1-16 對 6077h 取 abs()（Steven Q87：正負號要比較）。E-038 的做法（分支 `v906/st01e-e038`）見 `D:\HT9045\.claude\skills\ht9045-motor-control\references\index-torque-autoheight.md` §6。
+
 ## 7. 改這塊時的規矩
 - 機台端不自己動馬達（HOME／JOG／清錯都要 EastSun 同意）；只做唯讀量測與 ctest。
 - 相關 ctest：`Pci1203MotorRoute`、`EcatMotorRoute`、`homeclass`、`HomeMonitor`、`HomeBlock`、`WebMotorAccess`、`GaliRoute*`、`NoteMotorError`；

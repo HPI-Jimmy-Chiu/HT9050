@@ -593,6 +593,7 @@ var=value;  //Steven YYYYMMDD : Fix == to = (was comparison, not assignment)
 
 > ⚠️ #1 `csystem.cpp` WAR0955 與 r906 已修的「OCR LotID 3 處」**不同分支，當時被遺漏**。
 > 全部 17 處於 906 以 Python binary 模式修正（Big5 安全），**禁止用 `replace_string_in_file` 寫入中文**。
+> ⛔ 20261003 V906 C++ 移植樹（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\`）的對應狀態（AI(W906-E034) 20261003，todo E-034＝筆電卡 S-21，St01；Steven 1003 14:5x「Q82. A」＝#20 例外，Steven 1003 常設規則）：上表是 0625 修的那一批；移植樹抄的是 0618，所以這些 `==` 原本都還在。E-034 在筆電的移植檔改成 `=`（同一行改、行數不變）：#1 `csystem.cpp:32417`（在 `#if 0` OCRSTART 閘裡，閘打開前沒有執行期差異）、#5–7 `uYieldMonitoring.cpp:2242`／`:2286`／`:2287`、#8–10 `acatchtray.cpp:8568`／`:8609`／`:8677`、#12 `forms\fTrayAssignment.cpp:235`、#13 `OCRInsp.cpp:819`、#14 `cTemperFrom.cpp:1302`、#15 `cObserver.cpp:2540`；#17 `cShowBinSelect.cpp:2315` 是 St02 C14 已改（`8db5c2c9`）；#16 cSetUp 在 St01 的 `FileRW\TestIF_File_SetUp.gen.inc`（E-032 保留 `=`）；#2 Command.cpp 是 St02 W10；#3–4 cAutoAlignment DoUIToData、#11 HS_Function TimerAutoBackupTimer 沒移植。測試 ctest `E034_NoopEq`、`YieldMonCore`、`ObserverCore`、`TemperFromCore`。
 
 ---
 

@@ -68,6 +68,7 @@ description: >
 
 > 「機台上溫度為什麼不動」：上表第 2～5 列一起看——迴圈沒跑、通訊擋住、出貨版連「加熱完成」都沒人判斷。
 > 底層（bthermo、cpublic、rs232、uHeaterThread）歸 Jimmy（`ht9045-heater-control` §8）。
+> ⛔ 20261003 補（AI(W906-E034) 20261003，todo E-034＝筆電卡 S-21，St01；Steven 1003 14:5x「Q82. A」＝#20 例外，Steven 1003 常設規則）：`cTemperFrom.cpp` `ShowOffYieldFun` 的功能關閉面板——golden 0618 `:1600` `strShowYield[i].bFlag==true;` 沒作用（不閃爍設定時面板一直是 clBtnFace）；0625 `:1600`、V912 `:1610` 是 `=true`（第 20a 條溫控本來就引 V912）。移植樹 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\cTemperFrom.cpp:1302` 已改 `=true`、檔尾註解 `:1411-1432` 一起改；功能關閉＋不閃爍時面板改成恆亮紅色。測試 ctest `TemperFromCore` `Test_ShowOffYieldFun_NoBlinkTurnsRed`。今天沒有 `fTemperFrom` 正式實例（上表第 6 列），所以畫面上還看不到。
 
 ## 3. 溫度檔案與鍵
 

@@ -35,7 +35,7 @@
 | Track Matrix 的 Z/Y Motor、Cassette checkbox | `chkAuto*`、`chkLoader*`、`cb*Cassette` | Proxy checkbox 同步原始 checkbox | 維持 `uiMap` / INI 匯出 |
 | Track Matrix 的 Cover Tray ID 選項 | `rgCoverTrayID`、`rgEmptyKeyence` | Loader／Empty 列分別在 `ART / Track Function` 欄顯示帶標籤的 Cover／Unloader ComboBox；各自回寫原始 radio | 維持 `uiMap` / INI 匯出 |
 | Track Function Multi-select ComboBox | `Auto2SelectCy`、`rgAuto3Magazine`、`rgAutoTrackCanGoRear` | 每列以單一可展開 ComboBox 勾選 Rear、Separated Empty cylinder、Magazine；各項分別寫回來源 radio，Rear 變更後同步所有 Auto 列 | `trackFunction` 延伸欄位 |
-| 已移除的每軌 Auto ART | `rgAuto1ART`~`rgAuto6ART` | 原始 DFM 控制項保持隱藏，以維持既有 `uiMap` / INI binding；不得投影至 Matrix 或 Other Settings | 不匯出 `art` 欄位 |
+| 已移除的每軌 Auto ART | `rgAuto1ART`~`rgAuto6ART` | 原始 DFM 控制項保持隱藏，以維持既有 `uiMap` / INI binding；不得投影至 Matrix 或 Other Settings（這是 page_Old／A 路；C 路版 1003 起照 Steven B69 加回，見文末「HandlerSys C 路版」） | 不匯出 `art` 欄位 |
 | Auto4-6 Y Motor / Function | 無對應 DFM/INI Key | 儲存在 Proxy `dataset` | `handlerTrackMatrix`，`runtimeSupported:false` |
 | Com Port 可搜尋／排序表格 | 原始 Com Port ComboBox、`chkUseHPComCard`、`cbESDUse4COM` | COM Port Proxy 依列回寫來源 `selectedIndex`；Index Torque 列的 Setting 欄整合 HonPrec COM board checkbox，EM Aware Port 1 列整合 3M EM Aware 4-COM checkbox；可依 Device 名稱搜尋，並切換依 Device name 或 COM Port 的升冪／降冪排序 | 維持 `uiMap` / INI 匯出 |
 | Com Port `Set Default` 命令 | `btnSetATCComClick` 的 BCB6 預設表 | 一次回寫 `cbComIndex`、溫控、ATC 1-4、OCR、Air Conditioner、TTL1/2 共 15 個來源 ComboBox，並同步 Proxy；完整表格置於 ScrollBox，工具列固定可見 | 維持 `uiMap` / INI 匯出 |
@@ -49,7 +49,7 @@
 
 `rgInstallAutoRestest` 與 `rgAutoTrackCanGoRear` 是共用設定。不可把 Rear 當成每條
 Auto 軌道各自的 BCB6 欄位；Matrix 雖在每列提供單一 Multi-select ComboBox，Rear 仍必須依共用來源
-同步。`rgAuto1ART`~`rgAuto6ART` 已不再是 HTML Proxy 顯示或 JSON extension 的一部分。
+同步。`rgAuto1ART`~`rgAuto6ART` 已不再是 HTML Proxy 顯示或 JSON extension 的一部分（page_Old；C 路版 1003 起照 Steven B69 加回顯示，見文末；仍不是 JSON extension）。
 
 ## HandlerSys Setting Table 最終配置（2026-09-03）
 
@@ -129,8 +129,13 @@ Steven 1002「我比較喜歡 `D:\HT9045\page_Old\HW.HandlerSys.html` 這個版�
   Can Go Rear，golden 沒有 `MachineTrackClick`，C 路版拿掉。
 - golden 沒有的設定（Fix 1/2/4/5/6 install、Auto 4-6 Y Motor、Auto 4-6 cylinder／magazine）顯示 N/A；
   Fix 3「full tray」是 Configuration 頁的 `[E55] cbE55`，選項灰掉。
-- 每軌 Auto ART（`rgAuto1ART`～`rgAuto6ART`）照上面「已移除的每軌 Auto ART」規則：不投影，也不進 Other Settings；
-  golden `SaveSystemSet`（V912 `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\HandlerSys.cpp:665-679`；906 `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260618\HandlerSys.cpp:543-557`）照樣存它讀進來的值。
+- 每軌 Auto ART（`rgAuto1ART`～`rgAuto6ART`，每個 Auto 出料盤可不可以放要重測的 IC）：**1003 Steven B69「Go」加回**（跟 page_Old 不同）——
+  每個 Auto 列 Track Function 下拉清單的第一項「ART」勾選，勾選用真的 click 寫回原始 radio；有替身就不再進 Other Settings。
+  golden 一直顯示、不變灰：讀檔 906 `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260618\HandlerSys.cpp:134-139`；存檔 `:543-559`，其中 `:544`
+  `if(USE_AUTO_RETEST)` 成立（ART Function `rgInstallAutoRestest`＝Install）才把六格存進去（V912 `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\HandlerSys.cpp:665-679` 同）
+  ⇒ ART Function＝Un Install 時改勾選不會存，照 golden。執行時讀這六格的地方（906）：分 bin 選盤 `cBinSel.cpp:2709`／`:2915`／`:4095`、
+  放料到 Auto 盤 `asendic.cpp:133`／`:142`、`asendic_Auto.cpp:952`／`:1038`、`csystem.cpp:6978`（V912：`cBinSel.cpp:2748`／`:2954`／`:4143`、
+  `asendic_Auto.cpp:1020`／`:1106`，asendic 同行號）。ctest `HSys_TablePage` 的 [C] B69 那一項釘住。
 - Com Port 的 `Set Default` 按 golden `btnSetATCCom`（`ht9045_hsys_events_c.js`），不再自己帶一份預設表。
 - page_Old 漏掉的 `cbSocketSenAmpCnt2nd`／`cbSocketSenAmpCnt3rd`（Socket／Rotate／Color Sensor 表）與
   `rgAutoFormSize`（Temperature Settings）補回；Index Items 三張表高改 13:6:7，CanBus 六列不再被裁掉。
@@ -159,7 +164,7 @@ Steven：「heater type 看起來已經整合到 Heater頁面」「Index Heater 
 ctest `HSys_TablePage`（`HT9011UC_Cpp_V3.33.906.0/tools/webprobe/hsys_table_selftest.cjs`）自動跑下面 1～4a 項，外加一份 `pick()` 只設 `.checked`、不發事件的壞複本當對照（必須變紅）；沒有 Edge 時回 77＝SKIP。改 `ht9045_hsys_table_c.js` 的回寫方式時，對照那一段要跟著改。
 
 1. 用 scratchpad 的 harness（頁面複本加 `<base href>` 指回 worktree 的 `web\page\`）以 headless Edge 跑：
-   原始元件被藏起來卻沒有替身的清單，只能剩 golden 自己藏的 `GroupBox1`／`GroupBox2`（SafeDoor／HeaterDoor）與每軌 ART。
+   原始元件被藏起來卻沒有替身的清單，只能剩 golden 自己藏的 `GroupBox1`／`GroupBox2`（SafeDoor／HeaterDoor）（每軌 ART 1003 B69 起有替身，不在這張清單）。
 2. 表格改值 → 原始元件與 golden 處理器結果：TTL Card＝3 時 Address 變 Yes 且停用；Rotate Kit 非 Cylinder 時 In／Out 停用；
    ATC3.3+6.0＝`rgATC` 6＋`rgATCMixMode` 1；Fix 3 Use Cylinder＝`rgInstallFix3` 1＋`rgFix3FullPlace` 2；`rgHeaterType` 收到 change。
 3. 原始元件改值（不發事件）、設 `visibility:hidden`、設 `disabled` → 500 ms 內表格跟上。

@@ -109,6 +109,19 @@
 | 69 | 上一輪寫「待確認」、這一輪被 ST01-M 確認，只改了 §12 沒回舊節 | §11.88：!134／!136 重疊在 §11.87 是待確認 | 記錄員 §11.88 交件建議 | 在舊節原處補「⛔ 更新（…核對）」，§12 照新的寫 |
 | 70 | Git Bash heredoc 裡的 Python 印中文，cp950 主控台報錯（檔案寫完才報，容易誤判成寫壞） | §11.88 | 記錄員 §11.88 交件建議 | 腳本用 Write 工具寫成檔，`sys.stdout.reconfigure(encoding='utf-8')` 或只印 ASCII；第 59 條的延伸 |
 | 71 | 舊題號（2026-09 的 Q／R／W／S）在 decisions-decided.md 找不到，就寫成「查無」 | 10-03 16:5x ST01-M 整理 ht9050-construction（`6bc74320`）：2026-09 的已決紀錄原文搬到 `D:\HT9045\.claude\skills\ht9050-construction\references\archive\decisions-decided-202609.md`（保留舊行號 13-1875），活檔只剩 10 月 | ST01-M 16:5x | 舊題號先查活檔，再查 archive；archive 凍結不改，舊題的 ⛔／⚠ 後續寫在活檔尾端並寫題號；「⚠ 還要 Steven 回」只掃活檔 |
+| 72 | 派工訊息寫的時間（例「22:3x」「23:2x」）和 git log 對不上 | 10-03 §11.91：ST01-E 寫 `90e5b112`「22:3x」，commit 是 22:23:20；「23:2x ST01-M 說做 Phase A」沒有對應 commit（認領 `8ad56c34` 是 23:12:38） | 記錄員 §11.91 ⑤ | 有 hash 的項目一律用 `git log --format=%ad` 的時間；找不到 commit 的項目照派工訊息寫並在記錄員註說明，不要自己補時間。ST01-E 寫派工訊息前先跑 `date` 或查 commit 時間 |
+| 73 | §12.2「在跑」的 gate 只看 log 末行就寫進度 | 10-03 §11.91：q59 SIM 紅 18 支只對了數量，沒有逐名對基準 | 記錄員 §11.91 ⑤ | 在跑或剛跑完的 gate，除了讀末行，也讀 SIM／SHIP 的失敗清單逐名對基準（SIM 18／SHIP 3 的名單在 `D:\HT9045\.claude\skills\ops-ht9045-proxy-build\SKILL.md` 第 6 步）；沒逐名對就寫「數量同基準、名單未核」 |
+| 74 | 篩選錨點字串憑記憶打，比對失敗或比到別列 | 10-03 §11.91：§11 摘要表第 90 列結尾是「R1003 列）」，記錄員先用了「R1003 列本輪更新）」 | 記錄員 §11.91 ⑤ | 錨點一律從檔案逐字複製（用 Python 讀出那一行再切），全形字不要手打；比對前 `assert count == 1` |
+| 75 | worktree 資料夾還在，就當成 worktree 還在 | 10-03 §11.91：`D:\AI_TempFile\wt-st01e2-e027` 資料夾還在，但已不是 worktree；`wt-st01e2-hsys` 已不存在 | 記錄員 §11.91 ⑤ | 寫 worktree 狀態前先跑 `git -C /d/HT9045 worktree list`，以它為準；資料夾在但不在清單裡，寫「資料夾殘留、已不是 worktree」 |
+| 76 | gate 排隊腳本 log 的「returned exit 0」當成全綠 | 10-04 §11.92：q59 `0430ede6` SHIP 有 4 支紅（基準 3＋SetTempSave），排隊腳本仍回 0 | 記錄員 §11.92 ⑤ | gate 結果一律讀 log 末尾的失敗清單，逐名對基準（SIM 18／SHIP 3，名單在 `D:\HT9045\.claude\skills\ops-ht9045-proxy-build\SKILL.md` 第 6 步）；exit 0 只代表腳本跑完 |
+| 77 | 隱私修正之後，後來的登記 commit 又把 session 名寫回去 | 10-04 §11.92：`68ee5e7d` 改掉 decisions-pending 的 session 名，`ff125f99`（Q93）又寫回 | 記錄員 §11.92 ⑤ | 每輪對本輪範圍內所有改到 decisions-pending／todo 的 commit 重掃 `github-`；命中就不抄、在 ④ 請 ST01-E 轉 ST01-M 改 |
+| 78 | 在 Git Bash 用 printf／echo 追加含反斜線的路徑，`\2026` 被當成八進位 | 10-04 §11.92：記錄員在 `2026-10-03.md` 檔尾追加一行，產生一個壞位元組（已用 Python 改回） | 記錄員 §11.92 ⑤ | 含路徑（反斜線）的追加一律用 Write 工具寫的 Python 腳本或 Edit 工具；追加後用 Python 解碼 UTF-8 並數控制字元（D-7） |
+| 79 | 簡報的 gate 結論（「green」）照字面寫，`Not Run` 當成通過或當成紅 | 10-04 §11.93：合併 proxy `4a3715cb` SIM 被說成 green，實際是基準 18 支紅＋#389 `St02_S09SetupTemperFrom` `Not Run`（exe 不見） | 記錄員 §11.93 ⑤ | gate 結論一律照 log 末段失敗清單逐名對基準；`Not Run` 另列並寫原因（exe 缺／被跳過），不算進紅也不算通過 |
+| 80 | 記錄員的 Python 腳本用一般字串寫 Windows 路徑，`\H`、`\c` 出 SyntaxWarning | 10-04 §11.93：結果仍是字面反斜線，但下一個 `\n`／`\t`／`\2` 就會壞 | 記錄員 §11.93 ⑤ | 含反斜線的字串一律用 raw 字串（`r"D:\HT9045\..."`），或把文字先用 Write 工具寫成檔再讀（C-59／C-78 同一類） |
+| 81 | review6 一次推上整串 scratch 合併鏈，顆數照 `rev-list --count` 算 | 10-04 §11.94：`9f6cc2f5` 把 E-031 批 1／E-035／B69／S-16／main／q59 的合併鏈一起推上；first-parent 14 顆有 12 顆早於本輪時段，`--left-right --count` 右邊 65 也不是本輪顆數 | 記錄員 §11.94 ⑤ | 範圍用 `git log --first-parent <上一輪終點>..<本輪終點>` 描述，來源行拆「合併鏈 N 顆＋ST01-M M 顆」；被合進來的 commit 不算本輪顆數 |
+| 82 | 只存在側分支的新檔，在 review6 工作樹做路徑存在檢查（D-4）報 MISSING | 10-04 §11.94：E-038 的 IndexZTorque* 等檔只在 `v906/st01e-e038` | 記錄員 §11.94 ⑤ | 寫成「分支 `<名>` 的相對路徑」，不加 `D:\`；D-4 對這類路徑改用 `git cat-file -e <分支>:<路徑>` 驗（C-30／C-56／C-67 同型） |
+| 83 | gate 還在跑，就從邊寫邊長的 ctest log 寫結論 | 10-04 §11.94：`11f99613` SHIP ctest 05:41 起跑，06:04 只到 234／393 | 記錄員 §11.94 ⑤ | 寫「在跑」時附讀 log 的時刻與進度（第幾／總數），不附結論、不推測；SIM／SHIP 各自寫 |
+| 84 | 簡報寫的推送時間和 reflog 不一致 | 10-04 §11.94：E-038 簡報寫「~06:0x 推」，`git reflog show origin/v906/st01e-e038` 是 05:56:07 | 記錄員 §11.94 ⑤ | 推送時間以 `git reflog show origin/<分支>` 為準，commit 時間以 `git log --format=%ad` 為準，兩者不同時兩個都寫；C-64／C-72 的延伸 |
 
 ## D. 指令
 

@@ -75,6 +75,7 @@
 ### 3.1 網頁端
 
 - 開站就載入：`D:\HT9045\web\background.html:906-907` 非 lazy 視窗的 iframe 直接給 `src`；只有 `lazy:true` 的三個視窗是空殼（`D:\HT9045\web\background.html:753-759` 開窗時才載入、`D:\HT9045\web\background.html:785-791` 關窗時卸載）。24 個 C 路頁全都**不是** lazy（對照表 3.3）。
+  ⇒ **2026-10-03 起（S-16，AI(W906-S16)）**：hidden 視窗改成第一次開才載入（`iframe data-defer-src`，`D:\HT9045\web\background.html` 建 iframe 那一行與 `openWin`），所以 C 路頁的「接上就讀資料」（`load()`）現在發生在第一次開窗，不是開站；開過之後再開仍不重讀（關閉只藏起來）。開站看得到的 9 個視窗照舊開站就載。
 - 引擎接上就要資料：`D:\HT9045\web\page\ht9045_wire_engine.js:2046` 接上函式 attach，最後一行 `D:\HT9045\web\page\ht9045_wire_engine.js:2108` `load();`；C 路頁的 `load()` 就是 C 路讀取（`D:\HT9045\web\page\ht9045_wire_engine.js:1298-1299` → `D:\HT9045\web\page\ht9045_wire_engine.js:1188`）。
 - 引擎**沒有**聽外框的「視窗開了」訊息（在 `D:\HT9045\web\page\ht9045_wire_engine.js` 找 `HT_WIN`：0 筆）；會聽的頁只有 `D:\HT9045\web\page\HW.MotorTest.html`（`D:\HT9045\web\page\HW.MotorTest.html:995-1019`：視窗開著才輪詢、打開時補跑開頁）與 `D:\HT9045\web\page\ht9045_cleaning_c.js:197-205`（Exit 解鎖）。
 - 開窗不要資料：`D:\HT9045\web\background.html:746-771` 只做「設定檔判定」「開窗政策」「lazy 載入」「顯示」「設狀態 open」「全螢幕／聚焦」。

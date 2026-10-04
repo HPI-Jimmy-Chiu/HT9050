@@ -10,6 +10,7 @@
 1. **`TMyBinDispHT9046` 已經翻了**（e157d7fe，20260824），只是停放。移植樹 `HT9011UC_Cpp_V3.33.906.0\docs\RECON_BinDisCtrl.md`（0820，當時確實沒翻）與 repo 根目錄 `docs\handoff\TO_STEVEN.md:461`（筆電 1002 15:0x：「the hardware subclass TMyBinDispHT9046 is NOT translated」）都是舊資訊。
 2. **`TDataModule3` 不是只給測試台**：RECON §1 與移植樹 `MyBinDisp.h:43-54` NOTE B 說量產不碰它——錯。golden `HT9045.cpp:213` 建它，`Timer1Timer` case 1 綁 `CommBin=DataModule3->BinDisp`（`MyBinDisp.cpp:340`／`:344`）。量產的序列埠設定就是 `MyBinDisp.dfm:8-67`。
 3. **跳頁是真的**：移植樹 `cShowBinSelect.cpp:2315` 的 `(void)(PageControl1->ActivePageIndex==3)` 來自 906_0618／905.8；906_0625 `:272` 與 912 `:295` 是 `=3`。
+   ⛔ 20261003 補（AI(W906-E034)，St01）：main 上這一行已經是 `PageControl1->ActivePageIndex=3;`（St02 C14 `8db5c2c9`，1002，註解引 0625 `:272`；V912 `:295`）。E-034（Steven Q82＝A）沒有再改它，只加 ctest `E034_NoopEq` [B4] 釘這一行；行為測試是 St02 的 `C14_BinDispPane`（`tests\test_c14_bindisp_pane.cpp:195`）。
 4. **普查 E-T3-003（「沒有呼叫者」）過時**：`MainTimer3.cpp:353-357`（S-14，00c4a036，在 main）每秒呼叫 DoShowBinDigital 與 ChangeBinDispStatus。E-SMC-004（SystemModularInitial 沒人呼叫）與 E-RT-001（Timer1 空殼）仍然成立。
 5. 筆電 15:0x 那列給的 `cShowBinSelect.cpp:2242-2330`、`database.cpp:203-232` 行號和 main `60c70965` 不合；以 §1 為準（ChangeBinDispStatus `:2253-2402`、InstallColorBinDisplay `:223-268`）。
 

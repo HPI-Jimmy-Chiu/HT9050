@@ -144,6 +144,7 @@ DoCatchTray()                               [acatchtray.cpp]
 ### 4.3 DoLoadCarRotArmReadRFID
 - Task: `iCoverTrayIDTask[iKeyenceCoverTrayID_LoaderCar]`
 - Cases: `1, 2, 3, 100, 500, 1000, 2000, 2500, 3000, 3100, 4000, 4100, 5000, 6000`
+- ⛔ 20261003 V906 移植樹補（AI(W906-E034) 20261003，todo E-034＝筆電卡 S-21，St01；Steven 1003 14:5x「Q82. A」＝#20 例外，Steven 1003 常設規則）：golden 0618 `acatchtray.cpp:8403`／`:8444`／`:8512` 三處 `asTrayIDDataCorverLoader=="NOREAD";` 沒作用（讀不到／按 Skip 時 ID 停在 case 3 清的 `""`）；0625 同行號、V912 改寫過的函式 `:9088`／`:9166`／`:9245` 是 `="NOREAD"`。移植樹 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\acatchtray.cpp:8568`／`:8609`／`:8677` 已改 `=`；下游 `asendic_Loader.cpp:1836-1838` 會把 "NOREAD" 當讀取失敗處理。移植樹目前**沒有呼叫者**（golden 呼叫端 `cTrayMapping.cpp:5828` 沒移植），所以今天沒有執行期差異。測試：ctest `E034_NoopEq` [A]（離線：`MOT[MLdCarRotArm].Motor=NULL`、氣缸 Enable=false、Sen 強制、`W906_ShowErrorMessage_SimReturn`）。
 
 ---
 

@@ -4,7 +4,7 @@ function W($m) { $m | Out-File $LOG -Append -Encoding ascii }
 git -C $WT fetch -q origin 2>&1 | Out-File $LOG -Append -Encoding ascii
 git -C $WT checkout -f --detach __COMMIT__ 2>&1 | Out-File $LOG -Append -Encoding ascii
 W "=== HEAD $(git -C $WT rev-parse --short HEAD)"
-$env:PATH='C:\MinGW\bin;C:\CMake\bin;C:\Program Files\Git\cmd;C:\Windows\System32;C:\Windows'
+$env:PATH='C:\MinGW\bin;C:\CMake\bin;C:\Program Files\Git\cmd;C:\Program Files\nodejs;C:\Windows\System32;C:\Windows;C:\Windows\System32\WindowsPowerShell\v1.0'   # nodejs + WindowsPowerShell as in full_gate_template.ps1 (node / powershell based ctests are skipped or Not Run without them)
 Set-Location "$WT\HT9011UC_Cpp_V3.33.906.0"
 $T = @('wb_serve','test_testercomm_gpib','test_testercomm_handler','test_testercomm_ipc','test_p6_gpib_aux','test_testercomm_rs232','test_set_test_timeout_timer')
 W "=== SIM configure $(Get-Date -Format 'HH:mm:ss')"

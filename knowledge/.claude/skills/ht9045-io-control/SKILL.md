@@ -140,6 +140,8 @@ if(Sen[SnAllSafeDoor].Enable==false && Sen[SnAllEMG].Enable==false)
 4. grep 該 Sensor 名稱，確認無「檢查 Enable 就擋機」的防呆函式
 5. 保留列本身即是文件——同時在機台設定文件註明停用原因與日後啟用條件
 
+> **V906 移植樹實際怎麼讀表**：哪一列決定 `Cylinder[].Enable`、缺列時物件長什麼樣、空欄位會讓整列強制停用、非數字會安靜變 0、`AUTO_EMPTY_COLOR` 會蓋掉 Empty／Color 氣缸、Mot_Table GearRatio 壞值變 0 → [references/table-loading-port.md](references/table-loading-port.md)（S-23 A1，2026-10-04）
+
 ## MotionNet 架構說明
 
 HT9045 支援兩種 MotionNet 供應商的 Master 卡：
@@ -515,6 +517,7 @@ if(sMsg==sLastMsg) { iSameCount++; if(iSameCount==3 || (iSameCount%1000)==0) Rec
 - [ethercat-pci1203-api.md](references/ethercat-pci1203-api.md) - EtherCAT PCI-1203 API 參考
 - [io-alias-map-doc.md](references/io-alias-map-doc.md) - IO 畫面 Alias 對照文件生成（iosetview.dfm → 標註 HTML；含四層座標校正機制 PAGE_ADJ / PAGE_NO_ADJ / COMP_ADJ 與微調工作流程）
 - [exit-shutdown.md](references/exit-shutdown.md) - V906 移植樹按 Exit 時的停機（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\MainClose.cpp`）：現在的三步流程、SIM 建置接真卡為什麼關不掉 1203 頁打開的 DO、出貨建置漏的 54 個輸出、固定「未停」的項目、1203 命令面清零的做法與陷阱（先過 `Pci1203RouteCanWriteBit`、ring 0／驅動器站、只能 tick 執行緒）、S121／S163／R38～R41／Q39 與待 Steven 選的 Q44。⚠ 上面「IO 基底類型」表的 `ePLCbase`／`ePCI1203` 值寫反了，正確值見該檔檔頭
+- [cylinder-sensor-layer.md](references/cylinder-sensor-layer.md) - 缺列／Enable 0 時呼叫端拿到什麼：Push／Pop 不看 Enable、感測器 IsOn 與 IsOff 都回 false、golden 開機強制開啟安全門與蓋掉表的氣缸、C3／C4 規則建議（S-23，20261004）
 
 ## 工具腳本
 

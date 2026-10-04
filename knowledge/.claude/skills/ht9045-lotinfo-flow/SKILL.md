@@ -238,7 +238,7 @@ RunInfo.LotNo = edtSysLotID->Text;  // 在 SetLotID 中設定
 
 ## 9b. V906 移植樹：RTC 換檔、Change File、palSecsGem 暗門（20261002，St01，todo E-020 LI-6／LI-11／LI-13）
 
-golden＝V912 `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\uLotInfo.cpp`（Big5，用 cp950 讀）。移植樹＝`D:\HT9045\HT9011UC_Cpp_V3.33.906.0`。
+golden＝906 `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260618\uLotInfo.cpp`（cp950，不在 git；Jimmy RULINGS_20261002 第 20 條）。移植樹＝`D:\HT9045\HT9011UC_Cpp_V3.33.906.0`。下表與下面的行號是 V912 `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\uLotInfo.cpp`（只拿來對照）；906 對照（20261003 E-030，AI(W906-E030-CITE)，兩棵內容相同）：Timer1Timer :5255-5342、RTCChangeFile :5344-5364、enum :5246-5252、WaitRtcDeleteDelay :5253、10 秒逾時 :5323、Timer1 dfm :14496-14501；btChangeFileClick :10213-10237（dfm :4517-4524；FormShow :545-546）；palSecsGemMouseDown :10351-10425（dfm :314-323 同號）；呼叫者 cSetUp.cpp :2824／:2832、uhome.cpp :1823、main.cpp :10576、cContact.cpp :14565；BarCode.cpp :6119-6138／:6195-6211。
 
 | 項目 | golden | 移植樹 |
 |------|--------|--------|

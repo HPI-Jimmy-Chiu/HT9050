@@ -93,3 +93,9 @@ CalculateSiteYield
 3. 再補 `DoLowYieldAlarm()` 的動作策略（OneCycle、Retry、Smart Auto Clean）。
 4. 若涉及「為何突然不報警或延後報警」，務必檢查 `ClearYieldCount()` 與 Host/SECSGEM 清計數路徑。
 5. 若涉及現場權限或處置規範，補充 `cSecurity.cpp` 的 Jam Level 分類影響。
+
+## V906 移植樹：RT 自動關 site 已照 0625／V912 生效（AI(W906-E034) 20261003，todo E-034＝筆電卡 S-21，St01；Steven 1003 14:5x「Q82. A」＝#20 例外，Steven 1003 常設規則）
+
+- `DoRTAutoSocketOff()`（切到 RT 時依良率關 socket）：golden 0618 `uYieldMonitoring.cpp:5249`（Auto Head）與 `:5287-5288`（Auto Socket）寫成 `bLowYieldCloseSite[..]==true;`，比較完丟掉，低良率 site **從來不會被標記**，RT 自動關 site 只會關到別處早就標好的。0625 同行號、V912 `:5326`／`:5364-5365` 改成 `=true`。
+- 移植樹 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\uYieldMonitoring.cpp:2242`／`:2286`／`:2287` 已改 `=true`（同一行改、行數不變）；之後 `DoAutoCloseSite(2)` 會真的關掉 `bUseTestSocket`、記 `LastSet.iCloseSiteByLowYield=1`。
+- 測試：ctest `YieldMonCore` 的 `Test_DoRTAutoSocketOff_MarksLowYield`（以前叫 `..._FaithfulDeadSweep`，釘的是 0618 沒作用的版本）。人工審核：行為改變（RT 切換時真的會關低良率 socket；條件 `CosFunction.bAutoCloseSiteWhenRT`＋`TestIF_File.iAutoCloseSiteWhenRT`，SCKART 四條件時不做）。

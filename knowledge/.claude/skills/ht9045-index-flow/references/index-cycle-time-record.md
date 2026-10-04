@@ -156,6 +156,7 @@ EOT → SOT 之間全部計入：
 - `bIndexTimeSet` 為真時顯示**假值**（`0.9 + random(25)/100`，kevin 20130321/20130812，K15 假 index time）— 客戶抱怨數字不合理時先確認這個旗標。
 - SPIL 特例：`iBodySP>=100 && INDEX_PRESS_TYPE==e85KG && bSPILFunction` 時，`400 < IndexTime < 500` 一律壓成 400ms（jou 2010-11-15，SPIL 要求 index time 必須在 0.4 sec 內）。
 - `ShowIndexTime()` 內順帶呼叫 OEE `CalculateOEEPlanOut()`（`bN14_1_EnableOEEFunction`）。
+- ⛔ 20261003 V906 移植樹補（AI(W906-E034) 20261003，todo E-034＝筆電卡 S-21，St01；Steven 1003 14:5x「Q82. A」＝#20 例外，Steven 1003 常設規則）：`TfObserver::RecordIndexTime` 的 OEE 分支（`CosFunction.bOEEFunction`、Index Z 筆數 < 11）golden 0618 `cObserver.cpp:2897` 是沒作用的 `sTestIndexZTime=="";`（舊的 Index-Z 時間字串留著）；0625 `:2897`、V912 `:3057` 是 `=""`。移植樹 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\cObserver.cpp:2540` 已改 `= ""`。測試 ctest `ObserverCore` `Test_RecordIndexTime_OEEResetsIndexZTime`。
 - 是否顯示由 `IniConfig.bShowIndexTime` 控制（`fCounterSel` 的 `cbIndexTime`）。
 
 ---

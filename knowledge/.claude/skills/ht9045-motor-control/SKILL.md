@@ -314,3 +314,5 @@ class TTrayMotor : public TMyMotor {
 - [ethercat-api.md](references/ethercat-api.md) - Advantech EtherCAT 馬達 API
 - [hontech-m4-api.md](references/hontech-m4-api.md) - 泓格 MotionNet M2X4 C API
 - [tray-step-motor-api.md](references/tray-step-motor-api.md) - Tray 軌道步進馬達（RS-232）API
+- [index-torque-autoheight.md](references/index-torque-autoheight.md) - Index Z 扭力讀值：golden 國際牌 RS-232（rs232.cpp 0x52、k/20、負值歸 0）↔ 安川 Σ-X 6077h（0.1 %、2704h）、正負號比較規則（Steven Q87）、自動測高流程與 port 防護（20261003）
+- [ht9050-1203-runtime-traps.md](references/ht9050-1203-runtime-traps.md) - HT9050（PCI-1203＋DS402）上 golden 流程的執行期陷阱：MOTION_CARD_TYPE=0 讓伺服 ON 寫 0、route 拒絕 DS402 座標寫入但 Reload／InitMotor1203 直接寫、iInposLed 永遠 false（料盤手臂防撞失效）、原點燈當 Z 安全、移動中驅動器警報不報、WAR16122 沒編又撞碼、W906_IsHT9050 只在機台樹（S-26，20261004）

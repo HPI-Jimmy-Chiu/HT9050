@@ -621,7 +621,7 @@ golden #4 是「點下去當下」問、每點一格問一次；建議做法是�
 ### 11.1 golden 做什麼（白話）
 
 - 告警框跳出來的時候（golden `TfNote::FormShow`，`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\note.cpp:1496-1502`、`:1818-1941`）就決定「這一則要不要密碼」：
-  - **要登入、等級要夠**：權限表 `D:\HT9045\Error\English\JAM0000.dat` 裡這個代碼設的等級不是 0（`fSecurity->GetJamLevel`；大部分客戶碼還把 JAM0301／JAM0302／JAM0508／WAR0310…這一串固定拉到權限表第 35 項）；或 SCC 那幾個代碼、同一個 JAM 連續 N 次（O16）、單位時間內 N 次（O17）、KYEC 工號檢查、條碼 WAR04217。
+  - **要登入、等級要夠**：權限表 `D:\HT9045\Error\English\JAM0000.dat` 裡這個代碼設的等級不是 0（`fSecurity->GetJamLevel`；大部分客戶碼還把 JAM0301／JAM0302／JAM0508／WAR0310…這一串固定拉到權限表第 35 項）；或 SCC 那幾個代碼、同一個 JAM 連續 N 次（O16）、單位時間內 N 次（O17）、KYEC 工號檢查。（V912 另有「條碼 WAR04217 一律要密碼」，906 沒有；20261003 E-030 照 906 拿掉，見 `ht9045-login` §9。）
   - **要輸入 Alarm 解除密碼**：只有 CC_ASE_M（`CosFunction.bUseAlarmUnlockPassWord`），而且這個代碼在權限表勾了「UnlockPassWord」。密碼是 `C:\Windows\AlarmUnlock.ini` 第一行（golden 開機讀，`main.cpp:11381-11403`）。
 - 操作員選好 RETRY／SKIP…按 Start 或 Pause（`note.cpp:3599`／`:3604`、`:3921`／`:3926`；只有「確認」的通知框 `:3724`／`:4092`）：先問解除密碼（`DoUnlockPassword` `:5431`），再跳登入框（`DoPassword` `:5277`）——**已經登入的人也照樣問**。
   - 對了而且等級夠 ⇒ 記一筆「==Login for unlock alarm.==」、關框。**有密碼本的機台問完一律登出成 Operator**（力成 CC_PTI 例外）。
@@ -666,13 +666,13 @@ golden #4 是「點下去當下」問、每點一格問一次；建議做法是�
 
 ### 11.6 測試
 
-- `D026_NoteAuth`（C++）：開框旗標、密碼本（過／錯／不夠／取消／CC_PTI／登出）、下拉選單（fNote 那一臂）、F15／VTEST／SCC／KYEC_LEE／WAR04217／O16／統計／SECS 等待、解除密碼（錯／對／兩步／檔案不在）、通知、面板鍵、信箱 JSON、wb_serve 等三個檔的呼叫點；所有輸出與這段時間寫的 log 裡假密碼 0 次；六個真檔沒變。對照組 `W906_D026_SRC_ROOT` 指到改之前的三個檔 ⇒ 紅。
+- `D026_NoteAuth`（C++）：開框旗標、密碼本（過／錯／不夠／取消／CC_PTI／登出）、下拉選單（fNote 那一臂）、F15／VTEST／SCC／KYEC_LEE／WAR04217（20261003 E-030 起照 906：只看 JAM 等級表）／O16／統計／SECS 等待、解除密碼（錯／對／兩步／檔案不在）、通知、面板鍵、信箱 JSON、wb_serve 等三個檔的呼叫點；所有輸出與這段時間寫的 log 裡假密碼 0 次；六個真檔沒變。對照組 `W906_D026_SRC_ROOT` 指到改之前的三個檔 ⇒ 紅。
 - `D026_NoteAuthPage`（node，離線）：`verifyAuth` 的送出形狀、密碼清空、回應對應、錯誤不帶密碼、不同步 throw、取消補送（沒有密碼欄）。對照組 `W906_DIALOG_HOST_JS` 指到改之前的檔 ⇒ 紅。
 - 沒有上機、沒有跑 wb_serve、沒有跑探針。上機請 Steven 在一個權限表設了等級的代碼上試：按 Start 跳登入框 → 錯的不關 → 對的關、主畫面變 Operator（有密碼本時）。
 
 ## 12. 另外兩個密碼框（20261002，todo D-034，St01 那一半）
 
-- **SpecialPanel**（golden V912 `note.cpp` FormShow `:1574-1616`、PanSpecialNoteClick `:5489-5507`）：比對目標＝`D:\HT9045\system\SpecialErrNote.ini` `[PASSWORD]`（明文檔，golden 設計）。網頁走 D-026 同一條 `dialog.auth`（信箱 `auth.kind:"special-note"`），鎖著時先比特殊密碼、不跑 DoPassword；對了而這一鍵還要登入 ⇒ `stage:"login"` 兩段式。不綁連線／權杖／登入的人（同 Q64 (3)）。
+- **SpecialPanel**（golden 906 `note.cpp` FormShow `:1564-1606`、PanSpecialNoteClick `:5442-5460`；V912 :1574-1616／:5489-5507）：比對目標＝`D:\HT9045\system\SpecialErrNote.ini` `[PASSWORD]`（明文檔，golden 設計）。網頁走 D-026 同一條 `dialog.auth`（信箱 `auth.kind:"special-note"`），鎖著時先比特殊密碼、不跑 DoPassword；對了而這一鍵還要登入 ⇒ `stage:"login"` 兩段式。不綁連線／權杖／登入的人（同 Q64 (3)）。
 - **DoPassword_MBox**（`mymessbox.cpp:1228-1286`）：本設計「甲」的第 8 個點 —— Configuration `[I37_1]` FIFO 由關改開（`cConfiguration.cpp:7353-7369`），editlist.save 的 `reauth` point `"i37_1"`，`levelItem` 35、**沒有** REAL_TIME_CCD 條件、第 35 項＝0 照樣問（打什麼都過）、有密碼本一律登出成 Operator。同一次存檔 M01 也改 ⇒ `reauth` 送陣列 `[m01, i37_1]`（golden 問兩次），回應 `reauthAll`；單一物件位元組不變。CC_PTI 出貨組態是廠商密碼 ⇒ 照 #1～#3＝C 不提供。
 - 檔案：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\WebLogin.cpp`（B5 段的陣列／點、D-026 段的 SpecialPanel、檔尾 D-034 段）、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\WebReauth.h`、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\WebNoteAuth.h`、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\editlist\IniConfig.py`＋`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\IniConfig.gen.inc`、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\IniConfig.cpp`（IC_PasswordGuard 看 m01 那一筆）、`D:\HT9045\web\page\ht9045_iniconfig_auth_c.js`、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\wb_serve.cpp:7324`／`:7326`／`:4897`（認領）。
 - ctest：`WebLogin_Reauth` 6b、`D026_NoteAuth` 8b、`D034_IniConfigFifoPage`。

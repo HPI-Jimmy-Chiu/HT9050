@@ -423,3 +423,58 @@ Steven 原話：「Q78 Q79, 可以按照912，但是註解同時提供906的行�
 - **登記時的狀態**：等 Steven；!70 仍是草稿、筆電還沒排。
 
 **Steven 的裁決**：原話「Q84  A」（16:2x 先問「這是做什麼用的? 簡單說明它的用途」，ST01-M 白話說明後回） ⇒ **A：併進排程表**——St02 MR !48 的 Timer8／TemperatureStorageMinute 本體（`MainTimer8.cpp`）改由排程表當 OnTimer 呼叫，St02 的小派發器（`MainTimersSt02.cpp`）與 `WebBridgeTags.cpp:605` 那一行退場；機台行為不變（一樣每 1000 ms）。做的人：!70 的排程表由筆電做（LI-6／INBOX 145 ②），接上時先在交接檔跟 St02 講好退場的行（St02 的檔）。S-13／S-14 改寫進排程表的空殼。照「Steven認可的就是直接放行」通知 Jimmy 與 St02。!70 的 §8 兩題（Q84＝Q1、Q85＝Q2）至此都已裁決。
+
+### 20261003 21:2x Steven 裁決：B69（分軌 Auto ART 加回 HandlerSys → Loader／Unloader → Track Matrix）
+
+- 來源：ST01-E2 問 Steven（說明這個設定在 HandlerSys → Loader／Unloader → Track Matrix 畫面，建議加回）；Steven 21:2x 跑完 /usage 回「Go」，ST01-E2 依前後文當成同意 B69。
+- **裁決**：加回分軌 Auto ART（rgAuto1-6ART），ST01-E2 做（側分支 off review6 `9db913c7`），同時更新 skill dfm-html-proxy-mapping.md 原本禁止投影 rgAuto1-6ART 的規則；照「Steven認可的就是直接放行」。
+
+### 20261003 21:3x Steven 裁決：Q86（從 decisions-pending.md 搬來）
+
+### Q86. B70／B71 拿掉的兩個 912 客戶功能，要不要照 Q81 的預設改回留 912？
+
+- **B70 Teradyne-US 的 START 防呆**：912 在 Contact 存檔前，Teradyne-US 機型多一個 return（V912 DeviceForm `:6533-6534`）；現在照 906（0618 main.cpp:6261-6266，沒有這個檢查），移植樹 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\DeviceForm_File.cpp`:749-753。
+- **B71 ASE-CL 灰掉 edContactHeight1／2**（Chrischen 20260316 的客戶需求，V912 :1306-1307、:1021-1028、:1478-1485、:15577-15633）：現在 7 處都以 `#if 0` 關掉（`DeviceForm_File.gen.inc` :1089、:1277、:2375、:2465、:2486、:2502、:2523），0618 沒有。
+- **A（建議）**：照 Q81 的預設，兩項改回留 912，三段註解（0618 行號＋做法、912 行號、#20 exception (Steven Q81 default)）；HT9050 的客戶（台積電龍潭）用不到，所以機台行為不變。
+- **B**：維持現狀（照 906，Jimmy #23-5／6），Q81 只管 TrayForm 那 6 項與之後的批次。
+- **登記時的狀態**：等 Steven。
+
+**Steven 的裁決**：原話「Q86 目前不急，慢慢做就好了，答案A」 ⇒ **A：B70（Teradyne-US START 防呆）、B71（ASE-CL 灰掉 edContactHeight1／2）都改回保留 912**，三段註解（0618 行號＋做法、912 行號、#20 exception (Steven Q81 default; Q86)）；**不急**——todo E-037 低優先，排在 E-031 第 1 批、E-036 之後。HT9050（台積電龍潭）機台行為不變。照「Steven認可的就是直接放行」通知 Jimmy。
+
+### 20261003 22:1x Steven 裁決：Q87（筆電 NIGHT_REPORT §0 #86：HT9050 Index 自動測高 Auto Height）
+
+- **題目**：解閘前要不要加 golden 沒有的防護（NB2-1 R197：port 只有宣告、呼叫在 #if 0，今天不會動 Z；照 golden 翻會卡在 case 555 等扭力；把 1203 的 6077h 直接接進 edTorue0 會因單位差 10 倍／正負號讓門檻永不觸發）。選項 A 照翻＋三道防護、B（建議）先關著等 EastSun 量、C 照翻不加防護。
+- **過程**：Steven 21:4x「Q87, 你沒有馬達驅動器的手冊嗎？」「你這題丟回去給eastsun 他有手冊，等他確認」（St01 寫 TO_ES02 main `3b63f43c`）；「能同時間，到網路上爬文嗎？」（St01 查到安川 SIEP C710812 02H：6077h＝扭力命令、預設 0.1 %、正負跟參考座標，貼 TO_ES02 main `e3403015`）。
+- **Steven 的裁決**：原話「所以我們可以開工Q87嗎？ 把安川讀回來的值，轉換成跟原本國際牌馬達一樣的比例」「正負號是要比較的」 ⇒ **A：開工**——把安川 6077h 讀值換算成 golden 國際牌（Panasonic）驅動器的同一比例（依 2704h 分子／分母，預設 0.1 % → %），**保留正負號比較**（只在往下壓的方向達到門檻才停，方向由設定／量測決定，不取絕對值），加 port 專用防護（扭力來源未確認前拒絕、case 555 逾時→ST＋警報），程式先寫好測過，**機台上等 EastSun 照手冊／上機確認 M14 的 2704h 與下壓正負號後才解開**。St01 做（todo E-038），照「Steven認可的就是直接放行」通知 Jimmy。
+
+### 20261003 22:4x Steven 裁決：S-17 可以改 dialog-bridge.js（Steven 的對話框合約 v1.3.0）
+
+- 來源：St01 接筆電卡 S-17（對話框「C++ 單槽、網頁排隊」全面檢查，github-80 第 1 步唯讀報告）；D 項（排隊中的框收到關閉要求被拒、同一個 100 ms 輪詢兩個關閉要求掉一個）要改 `web/page/dialog-bridge.js` :344-371／:712-740，那是 Steven 定的合約，先問 Steven。
+- **Steven 的裁決**：原話「Steven 同意改 dialog-bridge.js 嗎？ 改」⇒ 可以改；合約版本升 v1.3.1 並在檔頭註明；github-80 跟 A／B／C 一起做在 `v906/st01-s17`。
+
+### 20261003 22:5x Steven 裁決：Q88（筆電 NIGHT_REPORT §0 #87：機台自己寫的 HOME 修正 cpp 0160～0179，St01 V-6 的 3 個中度安全問題）
+
+- 題目：A 照機台現況收進第 53 批、修正等 EastSun；B 先改 M-a 再收；C 先不收。St01 V-6：M-a 斷電又回來自動重置＋激磁＋繼續 HOME；M-b 真警報每秒重試 20 次；M-c 驅動器回原點只看 READY。
+- **Steven 的裁決（機台端歸零規則，跟 golden 分開）**：原話「斷電後就必須歸零」「Alarm如果可以clear, 基本上也是需要歸零」「Alarm如果不能clear,就必須斷電重啟後歸零」「機台只要不斷電，基本上不需要歸零」「這個動作跟golden是分開的無誤」「一直沒斷電：已經歸零過的軸不用再歸零。但是要把encoder pulse回寫給command pulse」「比照golden的 servo on功能」。
+  ⇒ M-a：HOME 途中斷電（含急停／開門）＝停止 HOME、全部軸要重新歸零，電回來不可自動繼續；M-b：警報清得掉就清（一次）、清掉的軸要重新歸零；清不掉就停、提示斷電重開再歸零；沒斷電、已歸零的軸不用重歸零，但伺服 ON 時要比照 golden ServoOnOff 把 encoder 回寫成 command（也解 NB2 !151 M2）。M-c 建議加原點到位旗標。St01 直接寫 TO_ES02（main `e2931f5a`／`10ab026f`）；收進 main 的時機照筆電（A＝照機台現況收、修正跟上）。
+
+### 20261003 22:5x Steven 裁決：Q89（筆電 NIGHT_REPORT §0 #88：開機時 8 支 Z 軸煞車可能在馬達電源上來前就放開，NB2-1 R200）
+
+- **Steven 的裁決**：原話「Q89 應該要先servo on後才能放煞車」⇒ **A 的方向**：放煞車條件＝馬達電源已上＋本輪伺服 ON 完成（＋延遲數完），開機不可因上一輪留下的 SVON 就放煞車。St01 寫進 TO_ES02（main `10ab026f`）；改的人照筆電安排（NB2-1 或機台端）。
+
+### 20261004 07:2x Steven 裁決：Q90～Q97（1003 22:5x 留到上午的 8 題，一次回）
+
+- 方式：St01（ST01-M）在對話裡用選擇題問，Steven 每題選一個；題目原文在 decisions-pending.md 20261004 07:2x 以前的版本（review6 `eea47df0`）。
+- **Q90（E-038 要不要扣撐住自重的扭力基準）＝A 不扣，照 golden**：golden 國際牌路徑沒扣（golden 0618 rs232.cpp :1809-1812，k/20、負值歸 0）；ini 選項 HT9050_INDEXZ_TORQUE_BASELINE 預設關，等 EastSun 量完自重再看要不要開。E-038 Phase A（`v906/st01e-e038` `e6cec741`）本來就照 A。
+- **Q91（E-038 Phase B：golden 自動測高本體約 8,200 行誰做）＝A St01 接**：St01 在筆電 CT-3c 卡上認領（Do_Z1／Z2_AutoGetHeight、DoTestContactFunction、Do_LoadCellAutoHigh、GetAutoHeightMaxKGTorque）；解開 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\csystem.cpp`:31320-31322 的 #if 0 仍要等 EastSun 的 E-10 量測。
+- **Q92（主迴圈卡死 ≥60 秒自動錄 State Record）＝A 自動錄**：照 golden hang-up 自動錄的先例（golden 0618 aTester_Front.cpp:7384、csystem.cpp:9685）；每次停擺只錄一次、只寫 `W906_*` 檔。St02 S-24 做。
+- **Q93（對話框開著時 State Record 鈕還能錄）＝A 放行**：移植專用例外（同 motor.stop／act.home.abort 寫法），唯讀、不動機台。St02 S-24 做；`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\wb_serve.cpp` :671／:856／:6801 這三行 St01 S-17 也改過，St02 動之前先跟 St01 對行。
+- **Q94（🔴 §0 #92：HT9050 Index 下壓回「完成」但 Z1 沒動）＝A(a)**：**先擋**——HT9050 呼叫成對下壓時報警、不回完成（NB2-1 MR !170 已做，選 A 才合）；**正式版移植 V910 DoTestHead**（Frank 的 910 版本＝HT9050 真正的 Index 流程；移植樹 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\csystem.cpp`:657 現在沒有），不走「馬達層成對指令→只動 Z1」。
+- **Q95（§0 #93：開機照 Mot_Table 決定 Index 四軸存不存在）＝A**：只 HT9050 走，其他機種照 golden；改掉 Jimmy 0930 的 D1＝A。NB2-1 做。
+- **Q96（§0 #91：開機驗表 St01 S-23 C5）＝B 做，而且 ERROR 擋 START**：12 條規則寫 op log＋開機摘要「驗表：ERROR n／WARN n」；**ERROR 級（例：HT9050 上 IO_CARD_TYPE 不是 4、1203 軸號重複）擋 START**，WARN 只記錄。golden 沒有＝新功能（not-golden）。設計在 `docs/handoff/S23_FINDINGS_A1A2C5_20261004.md` §5、§7；St01（ST01-E2 的設計）做。齒輪比讀成 0 不另外當 1（沿用建議）。
+- **Q97（St02 S-24 改共用檔被 STEVEN-NB3 的權限檢查擋下）＝A**：Steven 本人到 STEVEN-NB3 的 St02-E session 允許這次修改；St02-E 先跑 `apply_hooks.py --dry` 再正式跑、兩組態建置、代跑後推。St01 不代改。
+- 照「Steven 認可的直接放行」：St01 寫 FROM_STEVEN §3 通知筆電／Jimmy、CHAT_ST02 通知 St02，不等 Jimmy 點頭。
+- **Q96 補充（Steven 1004 07:4x，ST01-E2 問 ERROR 要不要也擋 HOME）**：原話「一開始就開不了，怎麼會還可以home?」⇒ 開機驗到 ERROR＝這台機器不能運轉：**HOME 和 START 都擋**（不是只擋 START）；開機畫面照樣顯示驗表結果讓人知道要改哪一列。手動動馬達（Motor Test／JOG／Teach）要不要也擋，由 E-043 的設計列出入口後再定。
+- **Q96 再補充（Steven 1004 07:4x）**：原話「明天有個任務是機台要可以動起來，先以安全能動為主，可以先不考慮擋」「但是明天18:00後要按照標準流程走」⇒ **20261005 18:00 以前**：驗表只寫紀錄＋開機摘要，不擋 HOME／START（先讓機台安全地動起來）；**20261005 18:00 以後**照標準流程：ERROR 擋 HOME 和 START。做法：E-043 分兩顆——第 1 顆只記錄（先合、先上機），第 2 顆加擋，18:00 以後才合／才打開；不用日期寫在程式裡判斷。
+- **Q96 原則（Steven 1004 07:4x）**：原話「也就是：io 馬達的裝置有異常error的時候，機台就不可以動」⇒ 標準流程（20261005 18:00 以後）：IO／馬達裝置有 ERROR，**機台任何動作都不行**——HOME、START，以及手動動馬達（Motor Test／JOG／Teach）都擋。同一原則也適用執行中的裝置異常（例：S-26 R4 驅動器跑到一半報警卻沒有升成警報，要修成會停）。
+- **Q94 補充（Steven 1004 07:5x）**：原話「Q94可以先不實作 測試流程，明天下午18：00後再做就好了」⇒ 正式版（移植 V910 DoTestHead 測試流程）**20261005 18:00 以後**才做；「先擋」（NB2-1 MR !170：HT9050 成對下壓報警、不回完成）照 A(a) 不變。
