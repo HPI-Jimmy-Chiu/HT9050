@@ -66,3 +66,42 @@
 2. 數字欄有沒有打錯字（不然會安靜地變 0）？GearRatio 不能是 0。
 3. 氣缸：輸出列與 `_On`／`_Off` 列的 Enable 是不是你要的組合？Empty／Color 那 8 顆會被 `AUTO_EMPTY_COLOR` 蓋掉。
 4. PCI1203 軸的 (BoardID, Port) 有沒有重複？在不在環上（op log 的 `ROUTE st X ax Y claim`）？
+
+## 開機驗表 TableAudit（E-043，2026-10-04）
+
+> Steven 1004 07:2x Q96＝B，07:4x 定案規則表與原則：「**IO／馬達的裝置有異常 ERROR 的時候，機台就不可以動**」「一開始就開不了，怎麼會還可以 home?」。
+> golden 沒有這個功能（新功能）。程式：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\TableAudit.h`（規則表在檔頭）／`TableAudit.cpp`（純函式）／`TableAuditLive.cpp`（讀檔與全域變數）；
+> ctest `TableAudit`（`tests\test_tableaudit.cpp`，每條規則各一個壞表樣本）。
+
+- **什麼時候跑**：`tools\wb_serve.cpp:4066`，在 `InitialHandler` 與 `W906_BootSummary` 之後（表已經讀完、也綁定完）。
+  - 會重新讀 IO_Table／Mot_Table 的**原始文字**，因為載入程式已經把打錯的字轉成 0，綁定後的表看不出來。
+  - 主控台印 `[BOOT] 驗表：ERROR n／WARN n（INFO n）`，每一項再印一行 `TABLEAUDIT <等級> <規則> <哪一列>`。
+  - op log 開在 `:4305`，所以這些行先存起來，由 `:8340` 的 `W906_TableAuditSetNote` 補寫成 `AUDIT` 行。
+- **規則**（ERROR＝這台一定出事；WARN＝很可能錯，只記錄；INFO＝只記數量）：
+  - **ERROR**：
+    - T1：HT9050 的 `IO_CARD_TYPE` 不是 4，或表讀不進來。
+    - T2a：Enable 1 的列有非數字的值，或 GearRatio ≤ 0。
+    - T4：兩個 Enable 1 的 PCI1203 軸 (BoardID, Port) 相同。
+    - T5a：兩個 Enable 1 的輸出（Cylinder／Switch／Sucker_On／Sucker_Off）位址相同。
+    - T9：HT9050 上 Enable 1 的軸 CardModel 不是 PCI1203。
+  - **WARN**：
+    - T2b：Enable 0 的列有壞值，或時間欄是非數字。
+    - T3：表上 Enable 1，但有空欄位，被強制成 0。
+    - T5b：輸入點重複。
+    - T6：氣缸輸出列和 `_On`／`_Off` 列的 Enable 不一致。
+    - T7：`AUTO_EMPTY_COLOR` 蓋掉表格。
+    - T8：名稱重複或空白、列太短、格子裡有空白。
+    - T11：Pci1203Axis.ini 對不到軸，或 pel／mel 缺一個。
+    - T12：IO 的 1203 站號不在 Pci1203Modules.ini 裡。
+  - **INFO**：T10，程式有用到、表上沒有的名稱。
+- **擋不擋**：
+  - **第一筆（10/05 機台用）只記錄、不擋任何動作**。Steven 07:4x：「明天機台要可以動起來，先以安全能動為主」。
+  - **第二筆（10/05 18:00 以後）**：有 ERROR 就擋所有會動的入口。
+    - HOME 和 START：`WebStart.cpp:1148`（StartFromWeb）、`csystem.cpp:30460`（面板／SECS／TCP，SoftStart 和 iHome）、`tools\wb_serve.cpp:5713`（網頁全機 HOME）。
+    - 手動移動：`WebMotorAccess.cpp:4369` `MotorAccessDispatch` 的 motion 類，包括 Motor Test、JOG、教導、單軸 HOME。
+    - 氣缸和開關輸出：`tools\wb_serve.cpp:6215` 的 IO 點擊。
+    - **停止／中止（motor.stop、act.home.abort）永遠不擋**。拒絕時的紀錄文字是 `W906 TABLEAUDIT: <動作> refused -- table ERROR <規則> <列>`。
+- **2026-10-03 機台現用表的結果**：ERROR 0、WARN 44、INFO 1。
+  - WARN 是 T6 23 個、T5b 14 個、T7 2 個、T8 3 個、T2b 1 個（M37）、T11 1 個（station0）。INFO 是 T12，因為沒有附 Pci1203Modules.ini。
+  - 所以第二筆上線後，照現在的表不會擋住機台。
+- **改表或改規則之前先查**：ERROR 的規則要保守。每多一條 ERROR，就是多一個「機台完全不能動」的理由；新規則先當 WARN，跑一陣子沒有誤報再升級（Steven 決定）。
