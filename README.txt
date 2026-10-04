@@ -1350,4 +1350,28 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      machine_params/README_PARAMS.txt：1 個檔變動
      workorder/README_WORKORDER.txt：1 個檔變動
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+  10-04 20:56 機台端今天的修改（程式＋快照）：
+     cpp 0202＝13eca55  PKG-134：筆電第 134 包（Gear Ratio 手推量測、Tester Pause 延遲響鈴 912 等）
+     cpp 0203＝ecfa1a4  PKG-135..140：筆電第 135～140 包（BRAKE-SERVOFIRST、Servo ON 寫回命令位置、Index 成對指令在 HT9050 報警、TRAYSAFE-3 等）；o2 全建＋ctest 343/361，18 個失敗都是環境／表格內容／既有
+     cpp 0204＝0540c57  WORKLOG：135～140 包 ctest 失敗清單
+     cpp 0205＝e820eea  HT9050-TEACH-KB-LOADERY：Teach 的 Loader Y 小鍵盤在 HT9050 不夾上下限
+     cpp 0206＝3800d02  HT9050-TEACH-KB-ALL：Teach 全部欄位小鍵盤在 HT9050 不夾上下限（開關 W906_HT9050_TEACH_KB_CHECK，預設 0）
+     cpp 0207＝fa29db7  WORKLOG 10-04：§2 第 120～123 項、§4 空跑前必處理清單、HT9050 Out Shuttle 規則（EastSun 第 7～10 點）、Frank 待回
+     web 0103＝94b238e  PKG-134（web）
+     web 0104＝f6f923a  PKG-135..140（web）
+     web 0105＝9a0cc07  HT9050-TEACH-KB-ALL（web 半邊）
+     web 0106＝1554472  TEACH-1PICKZ：Teach 的 In/Out Arm Pick Up／Place Z 點在單吸嘴機台重新顯示（原版 ZE→ZA 換算套到「沒這軸就藏」）
+     web 0107＝1e95562  TEACH-1PICKZ-2：同上，在 HMI 外框裡也顯示（等整頁載完再判斷吸嘴數）
+     掃描：18 筆「password = 值」都在 0202／0203／0104 的程式碼裡（原版變數名與 golden 寫死的 FTP 密碼），同一個 repo 的 main 早已公開；照 EastSun 1002「照原樣、不遮」裁決推送，沒有權杖／私鑰
+     machine_log/oplog_20261003.txt：1 個檔變動
+     machine_log/oplog_20261004.txt：1 個檔變動
+     machine_params/D_GPIB9045_system：1 個檔變動
+     machine_params/D_HT9045_system：4 個檔變動
+     machine_params/README_PARAMS.txt：1 個檔變動
+     machine_params/runcfg：1 個檔變動
+     workorder/README_WORKORDER.txt：1 個檔變動
+     操作紀錄 oplog_20261003.txt：新增 417 行
+     操作紀錄 oplog_20261004.txt：新增 14854 行
+     設定檔變動：machine_params/D_GPIB9045_system/general.ini、machine_params/D_HT9045_system/Gerneral.ini、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/lastdata_backup2.dat、machine_params/runcfg/system/teach.ini
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 MD5 清單在 MANIFEST_MD5.tsv。
