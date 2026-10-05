@@ -35,7 +35,7 @@ LOTEND:COMP, CLEAROK, ID?, MAP?, CT?, TEMPSET?, SOAK?
 
 | 檔案 | 說明 |
 |------|------|
-| `d:\GPIB9045\.github\skills\gpib-hana\Auto_retest_Scenario_HANDLERMAKER_Released_eng_20241218.pdf` | **主要規格書**：Hana Micron ART Handler 通訊規格（2024/12/18 Release） |
+| `d:\GPIB9045\.github\skills\gpib-hana\Auto_retest_Scenario_HANDLERMAKER_Released_eng_20241218.pdf`（二進位規格，不在 git：`D:\GPIB9045` 不是 git repo，只在 GPIB9045 工作區） | **主要規格書**：Hana Micron ART Handler 通訊規格（2024/12/18 Release） |
 | `d:\HT9045\HT9011UC_Code_V3.33.900.0_20260331_bk_SW20260331\Automation\HANA_ART.h` | Handler 端 ART 類別定義（uHANA_ART, SRQCode enum, TimeData struct） |
 | `d:\HT9045\HT9011UC_Code_V3.33.900.0_20260331_bk_SW20260331\Automation\HANA_ART.cpp` | Handler 端完整指令處理邏輯（DoCmdWhenHDStart, DEVON 驗證, FT/RT 切換） |
 | `d:\GPIB9045\GPIB_Code_32Site_V12.13.900.0_20260331\Main.h` | GPIB 端 HANA_ART_SMILL struct、SRQCode enum 定義 |

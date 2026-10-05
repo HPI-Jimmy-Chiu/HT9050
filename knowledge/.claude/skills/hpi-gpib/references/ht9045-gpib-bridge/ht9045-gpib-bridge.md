@@ -151,7 +151,7 @@ DOOSAN TESNA（`DUTCHK?`）、Ampere（`GetFFC?`）、Novatek（多筆查詢指�
 > 全文：`references/gpib-v906-integration-plan.md`（與 V906 樹 `docs/GPIB_20260926_INTEGRATION_PROPOSAL.md` 同步）。
 > 使用者 20260926 裁決：**GPIB 必須是 wb_serve 行程內的獨立執行緒**、四種 Tester 介面一併整合、設定統一在 cTesterIF。狀態：P0～P7 都已落地（20260926 晚，見 **§8.7**），P6 為暫定子集＋Q2 (a)，只剩 P8 機邊 bring-up —— **以 §8.6／§8.7 為準**，§8.1～8.3 是當初的計畫文字。
 > 另兩個子專案的 agent／skill 是本計畫的參考來源：`D:\GPIB9045\.github\agents\GPIB9045.agent.md`（含 `gpib-rs232-merge` 先行設計、`gpib-command-list`、`gpib-93k-art`、`gpib-hana`、`gpib-qrovo`）、
-> `D:\RS232Standard\.github\agents\RS232Standard.agent.md`（含 `rs232-standard-interface`、`rs232-ttl-communication`）、`D:\.github\skills\gpib-ht9045-sync`（三邊定義同步）。
+> `D:\RS232Standard\.github\agents\RS232Standard.agent.md`（含 `rs232-standard-interface`、`rs232-ttl-communication`）、`.claude/skills/hpi-gpib/references/gpib-ht9045-sync/`（三邊定義同步）。
 
 ### 8.1 一句話
 

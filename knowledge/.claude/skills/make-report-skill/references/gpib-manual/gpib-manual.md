@@ -53,9 +53,9 @@
 
 ### HTML 轉換指令
 ```powershell
-python "d:\.github\skills\make-report-skill\scripts\md_to_html.py" `
+python "D:\HT9045\.claude\skills\make-report-skill\scripts\md_to_html.py" `
     "<repo>\public\Docs\manual\GPIB_Manual\{YYYYMMDD}_GPIB_Command_Manual_EN_{Edition}_V{版本號}.md" --template blue
-python "d:\.github\skills\make-report-skill\scripts\md_to_html.py" `
+python "D:\HT9045\.claude\skills\make-report-skill\scripts\md_to_html.py" `
     "<repo>\public\Docs\manual\GPIB_Manual\{YYYYMMDD}_GPIB_Command_Manual_ZH_{Edition}_V{版本號}.md" --template blue
 ```
 

@@ -28,11 +28,11 @@ Empty Socket Check, Pick & Place, IEEE488.2, SPE-001712, Qorvo Protocol
 
 | 檔案 | 說明 |
 |------|------|
-| `d:\GPIB9045\.github\skills\gpib-qrovo\SPE-001712 Rev(A)_Gpib command.docx` | **主要規格書**：Qorvo Pick & Place Handler GPIB Command 規格 Rev A（2018/09/20，James Migliaccio） |
-| `d:\GPIB9045\.github\skills\gpib-qrovo\GPIB Custormize for Qorvo.pdf` | Qorvo GPIB 客製化規格（HonTech 內部文件） |
-| `d:\GPIB9045\.github\skills\gpib-qrovo\SES20-086 Improvement of additional GPIB command for QORVO.pdf` | SES20-086：Qorvo 附加 GPIB 指令改良說明 |
-| `d:\GPIB9045\.github\skills\gpib-qrovo\message_2020_07_30_10.TXT` | 2020/07/30 實際通訊記錄（含 QRC?/BINON/ESC 流程） |
-| `d:\GPIB9045\.github\skills\gpib-qrovo\簡報1.pptx` | Qorvo GPIB 功能說明簡報 |
+| `d:\GPIB9045\.github\skills\gpib-qrovo\SPE-001712 Rev(A)_Gpib command.docx`（二進位規格，不在 git：`D:\GPIB9045` 不是 git repo，只在 GPIB9045 工作區） | **主要規格書**：Qorvo Pick & Place Handler GPIB Command 規格 Rev A（2018/09/20，James Migliaccio） |
+| `d:\GPIB9045\.github\skills\gpib-qrovo\GPIB Custormize for Qorvo.pdf`（二進位規格，不在 git：`D:\GPIB9045` 不是 git repo，只在 GPIB9045 工作區） | Qorvo GPIB 客製化規格（HonTech 內部文件） |
+| `d:\GPIB9045\.github\skills\gpib-qrovo\SES20-086 Improvement of additional GPIB command for QORVO.pdf`（二進位規格，不在 git：`D:\GPIB9045` 不是 git repo，只在 GPIB9045 工作區） | SES20-086：Qorvo 附加 GPIB 指令改良說明 |
+| `.claude/skills/hpi-gpib/references/gpib-qrovo/message_2020_07_30_10.TXT` | 2020/07/30 實際通訊記錄（含 QRC?/BINON/ESC 流程） |
+| `d:\GPIB9045\.github\skills\gpib-qrovo\簡報1.pptx`（二進位規格，不在 git：`D:\GPIB9045` 不是 git repo，只在 GPIB9045 工作區） | Qorvo GPIB 功能說明簡報 |
 
 ---
 

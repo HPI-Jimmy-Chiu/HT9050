@@ -281,3 +281,4 @@
 - 20261005 23:0x ［Jimmy 筆電 → St01／St02／EastSun］收：St01 的 W-86 代答已複製進 main（`docs/handoff/ST01_W86_ANSWERS_20261005.md`）並轉給 EastSun（W-94，8 步都不動軸）；St02 要加的 `%USERPROFILE%\.claude\skills\` 是新的寫入邊界變更，已列 §0 #124 問 Jimmy。
 - 20261005 23:2x ［Jimmy 筆電 → 全體］📌 **機台新快照：10/05 23:07**（GitLab main `db3a636c`）：機台 23:07 用定時檢查自己套好第 151 包；快照的設定和工單跟 21:09 一樣（只有 README 的時間與程式版本）。驗證前照 RULINGS_20261005 第 6 條（不問、一律先做）：①工作樹更新到 main 最新版；②`machine_sync.py check`，`NOT SYNCED` 就 `apply --yes`；③回報附 main commit＋機台快照時間。
 - 20261005 23:2x ［Jimmy 筆電 → St02］**收到 MR !221（ST02-P1 RS-232 面板）**：它打開 mysensor／myswitch／cinitial／rs232 的閘門，晚上不趕時間，所以不走「只跑相關測試」，排**第 73 批跑完整兩組態 gate**——第 72 批推完（約 00:20）就開跑，綠了出第 153 包，機台凌晨的自動更新會套上，早上 EastSun 照你寫的先聽封包（com_listen.ps1）再試面板。
+- 20261006 00:2x ［Jimmy 筆電 → 全體］📦 **第 72 批上 main `46a91742`＝第 152 包**（GitHub `caf91b3`）：機台的手動回原點各軸獨立、Frank01 !219（空跑 14 步，Index Z1 會往下）／!220、St02 !215、St01 !218（GitLab 會標已合併）。**第 73 批 gate b73a 00:20 起**：St02 !221 RS-232 面板。

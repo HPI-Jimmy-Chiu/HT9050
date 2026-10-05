@@ -23,7 +23,7 @@ GPIB interface, SRQ flow, test handler GPIB program
 
 ## 原始文件
 
-- **路徑**：`d:\GPIB9045\.github\skills\gpib-program-manual\references\GPIB_Program Manual_V12.04.doc`
+- **路徑**：`d:\GPIB9045\.github\skills\gpib-program-manual\references\GPIB_Program Manual_V12.04.doc`（二進位規格，不在 git：`D:\GPIB9045` 不是 git repo，只在 GPIB9045 工作區）
 - **版本**：V12.04
 - **格式**：Microsoft Word 97-2003 (.doc)
 - **說明**：GPIB 程式設計手冊，描述 H9046_32GPIB.exe 軟體架構與 GPIB/RS232 通訊介面
@@ -39,14 +39,14 @@ GPIB interface, SRQ flow, test handler GPIB program
 ## 完整參考文件
 
 > **MD 版本（已轉換 + 程式碼補充）**：
-> `d:\GPIB9045\.github\skills\gpib-program-manual\references\GPIB_Program_Manual_V12.04.md`
+> `.claude/skills/hpi-gpib/references/gpib-program-manual/references/GPIB_Program_Manual_V12.04.md`
 >
 > 原始 Word 文件：
-> `d:\GPIB9045\.github\skills\gpib-program-manual\references\GPIB_Program Manual_V12.04.doc`
+> `d:\GPIB9045\.github\skills\gpib-program-manual\references\GPIB_Program Manual_V12.04.doc`（二進位規格，不在 git：`D:\GPIB9045` 不是 git repo，只在 GPIB9045 工作區）
 
 ## 主要主題索引
 
-> 詳細規格請參閱：`d:\GPIB9045\.github\skills\gpib-program-manual\references\GPIB_Program_Manual_V12.04.md`
+> 詳細規格請參閱：`.claude/skills/hpi-gpib/references/gpib-program-manual/references/GPIB_Program_Manual_V12.04.md`
 
 ### 資料結構
 

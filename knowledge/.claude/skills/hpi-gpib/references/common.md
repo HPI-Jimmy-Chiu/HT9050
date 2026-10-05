@@ -62,7 +62,7 @@
 - Bin 字元表：Advan Type 1（0～15，每 channel 1 byte、每 8 byte 一個逗號）、16 BIN（0～16，16＝G）、32 BIN（16～32＝G～W）、254 BIN（每 channel 3 byte、每 24 byte 一個逗號，255＝Error Bin）、GS16（每 channel 各自逗號，Reject＝A）、GS32（1～2 byte）、Advan T6577（V3.28.588 之後，Reject＝A）。配方 `[GP-IB] Type`：0 ADVAN_Type1、1 256Bin、2 16Bin、3 32Bin、4 SPEA、5 16BinGS、6 32BinGS、7 15BinT6577、8 15BinQorvo、9 Delta_Castle（8、9 此處依客戶分流，見 [customers.md](customers.md)）。〔STD §4.3、P8 §2.4〕
 - golden 坑：GPIB 16BinGS 的 BINON 永遠不過、256 bin 只看第一位數；上機不要先用 16BinGS／32BinGS／256 bin。〔BR §8.6、P8 §8〕
 - 2DID：`BARCODE?` **倒序**（最右＝Site 1，關閉 Site＝`0`）；`GET2DID?` 正序；`QRC?` 正序，無 IC `@`、未讀到 `$`、讀取失敗 `#`；`GETBARCODENUMBER` 回 `<3 位數長度><Site1_2D,…><checksum>`（無資料＝`NA`）。〔STD、CL〕
-- 各章指令（Handler Information、Recipe、Site Map、Bin Map／Yield、Temperature & Soak、Index Arm、Remote Control：`PAUSE`／`SETHANDLERDOPAUSE`／`PAUSE_01`／`STOP_01`／`ONECYCLE`／`AUTO_CLEAN`／`OVERDRIVE`／`RECONTACT`、Device Map：`PICKLOAD`／`PLACETOLOAD`／`TRAYFEED`、ART、ATC Control、ATC 6.0、ASIF、Data Collection、Tester Control `SVID`／`ECID`／`RCMD`；`CEID` 與 S5F1 尚未支援）見 CL；原始規格 `HT9xxx GPIB_Command_FullVersion_V12.13.884.docx` 沒進版控，在 `d:\GPIB9045\.github\skills\gpib-command-list\references\`。〔CL〕
+- 各章指令（Handler Information、Recipe、Site Map、Bin Map／Yield、Temperature & Soak、Index Arm、Remote Control：`PAUSE`／`SETHANDLERDOPAUSE`／`PAUSE_01`／`STOP_01`／`ONECYCLE`／`AUTO_CLEAN`／`OVERDRIVE`／`RECONTACT`、Device Map：`PICKLOAD`／`PLACETOLOAD`／`TRAYFEED`、ART、ATC Control、ATC 6.0、ASIF、Data Collection、Tester Control `SVID`／`ECID`／`RCMD`；`CEID` 與 S5F1 尚未支援）見 CL；原始規格 `HT9xxx GPIB_Command_FullVersion_V12.13.884.docx` 沒進版控，在 `d:\GPIB9045\.github\skills\gpib-command-list\references\`（二進位規格，不在 git：`D:\GPIB9045` 不是 git repo，只在 GPIB9045 工作區）。〔CL〕
 
 ## 5. 溫度指令與 `SETTEMP?` 回覆格式
 

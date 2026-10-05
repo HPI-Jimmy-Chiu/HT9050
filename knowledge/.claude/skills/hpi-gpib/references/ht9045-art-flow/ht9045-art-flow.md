@@ -30,7 +30,7 @@ description: >
 HT9045 / HT9046LS / HT9011UC **Handler 端** ART（Auto Retest，自動重測）完整流程知識庫。
 本 SKILL 聚焦 **Handler（HandlerSys / H9045.exe）側**的 ART 狀態機與旗標邏輯；
 **GPIB 端（H9046_32GPIB.exe）**的 93K 指令解析與 SRQKIND 回應請參照
-`gpib-93k-art` SKILL（`d:\GPIB9045\.github\skills\gpib-93k-art\SKILL.md`）。
+`gpib-93k-art` SKILL（`.claude/skills/hpi-gpib/references/gpib-93k-art/gpib-93k-art.md`）。
 
 當使用者詢問下列問題時應載入此 SKILL：
 
@@ -283,7 +283,7 @@ Handler 端 `HHandler2Gpib.bSimulate` 在 `RunDummy` 訊息內的取值（`main.
 > [references/handler-art-flow.md](references/handler-art-flow.md)
 
 > **93K GPIB 端指令 / SRQKIND 回應 / iLotStatus 處理**（GPIB 程式側）：
-> 參照 `gpib-93k-art` SKILL（`d:\GPIB9045\.github\skills\gpib-93k-art\`）
+> 參照 `gpib-93k-art` SKILL（`.claude/skills/hpi-gpib/references/gpib-93k-art/`）
 
 ---
 

@@ -140,9 +140,90 @@ if RS232_DIR:
 
 ---
 
-## Step 2：MSG_CMD 同步（MessageDef.h + .cpp）
+## Step 2：MSG_CMD 同步（MessageDef.h X-Macro 單一來源）
 
-### 比對邏輯
+> **架構變更（REV908, 2026-07-02）**：MSG_CMD 已從「散落 extern / const + 平行 slCmdList」
+> 改為 `MessageDef.h` 內的 **inline X-Macro 單一來源表**。三專案（HT9045 / GPIB9045 /
+> RS232Standard）各自持有一份**內容相同**的表，`.cpp/.h` 的 extern、const、`MSG_CMD_NAMES[]`
+> 與 `MSG_CMD_COUNT` 全部由該表展開；`slCmdList` 由迴圈 `MSG_CMD_NAMES[]` 自動產生
+> （GPIB `Main.cpp`、RS232 `MainForm.cpp`），**不再手動維護 slCmdList**。
+
+### 表結構（每列一筆指令）
+
+```c
+// MessageDef.h — 4 欄 X-Macro：index, cmd, short description, note
+#define MSG_CMD_LIST_A(X) \
+  X(  0, MSG_CMD_NONE      , "NONE"      , "") \
+  X(  8, MSG_CMD_NoFull... , "NoFull..." , "Steven 20141016 : ...") \
+  ...（每個 chunk 最後一列「不得」有續行反斜線 `\`）
+#define MSG_CMD_LIST_B(X) ...
+#define MSG_CMD_LIST_C(X) ...
+#define MSG_CMD_LIST(X) MSG_CMD_LIST_A(X) MSG_CMD_LIST_B(X) MSG_CMD_LIST_C(X)
+
+// 展開（.h：extern；.cpp：const 定義 + NAMES[] 陣列 + COUNT）
+#define X(idx,name,str,note) extern const unsigned int name;
+MSG_CMD_LIST(X)
+#undef X
+extern const char * const MSG_CMD_NAMES[];
+extern const int          MSG_CMD_COUNT;
+```
+
+| 欄位 | 意義 | 範例 |
+|------|------|------|
+| `index` | 指令碼數值（0..N，不可跳號、不可重排既有值） | `117` |
+| `cmd` | `MSG_CMD_xxx` 常數名 | `MSG_CMD_SetNONDOUBLEBIN` |
+| `short description` | slCmdList / log 顯示字串（wire/顯示用） | `"Non-DoubleBin"` |
+| `note` | 註解（原 `/* */` 內容）；無註解填 `""` | `"Sam 20210329 : Add GPIB NONDOUBLEBIN_"` |
+
+### 同步規則
+
+- **新增指令**：在三專案 `MessageDef.h` 的 `MSG_CMD_LIST_C(X)` 末尾各加入**同一列** `X(index, cmd, "desc", "note")`，index 接續現有最大值。務必讓新的最後一列**沒有**續行反斜線、原本的舊末列**補上**反斜線。
+- **修改指令**：三份表同步修改該列的 `desc` / `note`（index 與 cmd 不動）。
+- **數值基準**：以 HT9045 `MessageDef.h` 表為唯一基準；GPIB / RS232 直接複製整列，不得自行分配 index。
+- **不需**再手動改 `.cpp`（extern/const/NAMES）或任何 `slCmdList->Add()`——皆為自動展開。
+- **chunk 平衡**：A/B/C 各約 68 列，避免超過 BCB6 前置處理器巨集展開長度上限；列數過多時把最舊的一列往前一個 chunk 移。
+
+### 編碼安全（Big5）
+
+- `note` 內含 Big5 中文，屬字串字面值。**禁止** note 內出現位元組 `0x5C`（`\`）或 `0x22`（`"`）——會破壞字串字面值。目前 204 列皆已驗證無此二位元組。
+- 讀寫一律 `open(path,'rb')` 後以 `latin-1` 逐位元組處理（byte-exact），或 `cp950`；禁止 UTF-8。
+
+### 比對 / 複製程式碼
+
+```python
+import re
+# 解析一個 MessageDef.h 的 X-Macro 表 -> {index: (cmd, desc, note)}
+ROW = re.compile(rb'^\s*X\(\s*(\d+)\s*,\s*(\w+)\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\)')
+def parse_table(path):
+    tbl = {}
+    for ln in open(path, 'rb').read().split(b'\n'):
+        m = ROW.match(ln)
+        if m:
+            idx = int(m.group(1))
+            tbl[idx] = (m.group(2), m.group(3), m.group(4))  # bytes, byte-exact
+    return tbl
+
+ht = parse_table(HT_MDEF_H)          # 基準
+for tgt in [GPIB_MDEF_H, RS232_MDEF_H]:
+    if not tgt:
+        continue
+    cur = parse_table(tgt)
+    missing = sorted(set(ht) - set(cur))          # 缺少的 index
+    diff    = [i for i in set(ht) & set(cur) if ht[i] != cur[i]]  # 內容不一致
+    # missing -> 追加到目標 MSG_CMD_LIST_C 末尾（整列 byte 複製，維護反斜線）
+    # diff    -> 逐列覆寫（以 HT 為準）
+```
+
+> 舊版（extern / const 兩處分開維護）已淘汰；若遇到尚未遷移的舊版資料夾，先執行
+> `D:\AI_TempFile\reformat_4param.py` 型式的遷移再同步。
+
+### 舊版資料夾（REV908 以前：extern / const 分開維護）
+
+> 20261005 St01 從移植前的 HT9045 版本保留：REV908 以前的樹（例如 V899、906 golden 0618）
+> 的 `MessageDef.h` 仍是 `extern` 宣告、`MessageDef.cpp` 是 `const` 定義，沒有 X-Macro 表。
+> 兩邊都是舊版時才用這段；只要有一邊已是 X-Macro 表，就先遷移再用上面的新流程。
+
+#### 比對邏輯
 
 ```python
 def get_msg_extern(path):
@@ -170,13 +251,13 @@ missing_rs232_h   = ht_h_cmds - rs232_h_cmds   if RS232_DIR else set()
 missing_rs232_cpp = set(ht_cpp_cmds) - set(rs232_cpp_cmds) if RS232_DIR else set()
 ```
 
-### 插入規則
+#### 插入規則
 
 - **`.h`**：從 HT9045 `MessageDef.h` 取出缺少 extern 行（原始 bytes，保留中文註解），插入在目標最後一個 `extern const unsigned int MSG_CMD_` 行之後（整批插入，保留 HT 側順序）
 - **`.cpp`**：從 HT9045 `MessageDef.cpp` 取出缺少 const 行（原始 bytes），插入在目標最後一個 `const unsigned int MSG_CMD_` 行之後（整批插入，保留 HT 側順序）
 - 數值以 HT9045 `MessageDef.cpp` 為唯一基準，不得自行分配
 
-### 插入程式碼
+#### 插入程式碼
 
 ```python
 def insert_msg_to_target(target_h, target_cpp, missing_h, missing_cpp,
@@ -260,7 +341,7 @@ value_diff_rs232_modes = {k: (ht_modes[k], rs232_modes[k]) for k in ht_modes
 
 - 若有 **新增成員** 或 **值偏移**：直接覆寫目標 `MessageDef.h` 中的 enum eTestMode 區塊，將其替換為從 HT9045 `MachineType.h` 取出的完整 enum 區塊
 - **同時對 GPIB9045 與 RS232Standard 兩個目標執行相同覆寫**
-- GPIB9045 修改後同步更新 `d:\GPIB9045\.github\skills\gpib-program-manual\references\GPIB_Program_Manual_V12.04.md` 的 eTestMode 章節
+- GPIB9045 修改後同步更新 `.claude/skills/hpi-gpib/references/gpib-program-manual/references/GPIB_Program_Manual_V12.04.md` 的 eTestMode 章節
 
 ---
 

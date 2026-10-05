@@ -23,8 +23,13 @@ HT9045 與以下兩個子專案之間有三組定義必須保持一致，否則�
 | 同步項目 | HT9045 基準檔 | 同步目標（GPIB9045 / RS232Standard） | 影響 |
 |---------|--------------|--------------------------------------|------|
 | Customer Code（`CC_xxx`） | `MachineType.h` | `cmydef.h` | 程式誤判機台客戶類型 |
-| MSG_CMD 指令碼 | `MessageDef.h/.cpp` | `MessageDef.h/.cpp` | IPC 通訊指令不認識，Handler 無回應 |
+| MSG_CMD 指令碼（**X-Macro 單一來源表**） | `MessageDef.h` | `MessageDef.h`（同一列複製） | IPC 通訊指令不認識，Handler 無回應 |
 | `enum eTestMode` | `MachineType.h` | `MessageDef.h`（standalone enum） | 誤判 Site 測試模式，BIN 分類錯誤 |
+
+> **REV908 起**：MSG_CMD 改為 `MessageDef.h` 內 4 欄 inline X-Macro 表
+> `X(index, cmd, "short description", "note")`；`.cpp/.h` 的 extern / const /
+> `MSG_CMD_NAMES[]` / `MSG_CMD_COUNT` 與 `slCmdList`（GPIB `Main.cpp`、RS232
+> `MainForm.cpp` 迴圈）**全部自動展開**，同步時只需複製表格列。
 
 ---
 
@@ -86,11 +91,11 @@ Steps 1–3 依寫入檔案分為兩組，可**同時**（平行）啟動兩個 
 
 ---
 
-### Agent B — Step 2：MSG_CMD 指令碼（MessageDef.h + .cpp）
+### Agent B — Step 2：MSG_CMD 指令碼（MessageDef.h X-Macro 表）
 
-比對 HT9045 `MessageDef.h`（extern 宣告）與 `MessageDef.cpp`（const 定義），將缺少的 MSG_CMD_ 整批插入目標側對應檔案末尾。數值以 HT9045 為唯一基準，不得自行分配。
+MSG_CMD 為 `MessageDef.h` 內的 4 欄 inline X-Macro 單一來源表 `X(index, cmd, "desc", "note")`。比對 HT9045 表與目標表，將缺少的整列複製到目標 `MSG_CMD_LIST_C(X)` 末尾（維護 chunk 尾列反斜線），內容不一致者以 HT9045 為準覆寫。`.cpp`（extern/const/NAMES/COUNT）與 `slCmdList` 皆自動展開，**不需**手動編輯。數值 index 以 HT9045 為唯一基準，不得自行分配。
 
-→ 詳細比對腳本與插入程式：[sync-procedures.md § Step 2] (references/sync-procedures.md#step-2msg_cmd-同步messagedefh--cpp)
+→ 詳細結構、規則與比對腳本：[sync-procedures.md § Step 2] (references/sync-procedures.md#step-2msg_cmd-同步messagedefh-x-macro-單一來源)
 
 ### Agent B — Step 3：enum eTestMode（緊接 Step 2 後執行）
 

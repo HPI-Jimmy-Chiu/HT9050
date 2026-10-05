@@ -33,7 +33,7 @@ bEndLotAutoRetestGPIB, bWaitStartLotAutoRetestGPIB
 
 | 檔案 | 說明 |
 |------|------|
-| `d:\GPIB9045\.github\skills\gpib-93k-art\ART on HT-9xxx - With GPIB log.pptx` | **主要規格書**：ART 通訊流程圖與 GPIB Log（2017.01.26，Rework 2022.09.06）|
+| `d:\GPIB9045\.github\skills\gpib-93k-art\ART on HT-9xxx - With GPIB log.pptx`（二進位規格，不在 git：`D:\GPIB9045` 不是 git repo，只在 GPIB9045 工作區）；repo 有同名的 `.claude/skills/hpi-gpib/references/ht9045-art-flow/references/ART on HT-9xxx - With GPIB log.pptx`（大小差 5 bytes，不保證同版） | **主要規格書**：ART 通訊流程圖與 GPIB Log（2017.01.26，Rework 2022.09.06）|
 | `d:\HT9045\HT9011UC_Code_V3.33.900.0_20260331_bk_SW20260331\Automation\SCK_ART.h` | Handler 端 ART 模組定義（TfSCKART, iCurrent93KARTStep, LED 狀態追蹤）|
 | `d:\HT9045\HT9011UC_Code_V3.33.900.0_20260331_bk_SW20260331\Automation\SCK_ART.cpp` | Handler 端 ART 完整邏輯（DoARTLotStart, CheckNeedRT, iFTRTCount 計算）|
 | `d:\GPIB9045\GPIB_Code_32Site_V12.13.900.0_20260331\Main.cpp` | GPIB 端 93K 指令解析（FR?, LOTCLEAR?, INPUTQTY, SRQKIND?, LORORDER, SRQMASK）|

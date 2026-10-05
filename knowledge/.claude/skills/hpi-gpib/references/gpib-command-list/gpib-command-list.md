@@ -33,7 +33,7 @@ Advan T6577, Qorvo Protocol, SIGURD Protocol, 32-site, HT9045, HT9046
 
 ## 原始文件
 
-- **路徑**：`d:\GPIB9045\.github\skills\gpib-command-list\references\HT9xxx GPIB_Command_FullVersion_V12.13.884.docx`
+- **路徑**：`d:\GPIB9045\.github\skills\gpib-command-list\references\HT9xxx GPIB_Command_FullVersion_V12.13.884.docx`（二進位規格，不在 git：`D:\GPIB9045` 不是 git repo，只在 GPIB9045 工作區）
 - **版本**：V12.13.884（最後更新：2026/01/14，RogerYang）
 - **適用機台**：HT-9xxx 系列（HT9045, HT9046）
 
@@ -41,11 +41,11 @@ Advan T6577, Qorvo Protocol, SIGURD Protocol, 32-site, HT9045, HT9046
 
 ### Standard GPIB Command
 
-> 詳細規格請參閱：`d:\GPIB9045\.github\skills\gpib-command-list\references\standard-gpib-command.md`
+> 詳細規格請參閱：`.claude/skills/hpi-gpib/references/gpib-command-list/references/standard-gpib-command.md`
 
 ### GPIB Command with 2DID
 
-> 詳細規格請參閱：`d:\GPIB9045\.github\skills\gpib-command-list\references\standard-gpib-command.md`（章節：GPIB Command with 2DID）
+> 詳細規格請參閱：`.claude/skills/hpi-gpib/references/gpib-command-list/references/standard-gpib-command.md`（章節：GPIB Command with 2DID）
 
 | 指令 | 排列順序 | 說明 |
 |------|---------|------|
@@ -207,7 +207,7 @@ Advan T6577, Qorvo Protocol, SIGURD Protocol, 32-site, HT9045, HT9046
 
 ### Qorvo GPIB Protocol
 
-> 完整 Qorvo 指令規格請參閱：`d:\GPIB9045\.github\skills\gpib-qrovo\SKILL.md`
+> 完整 Qorvo 指令規格請參閱：`.claude/skills/hpi-gpib/references/gpib-qrovo/gpib-qrovo.md`
 > 原始規格文件：`SPE-001712 Rev(A)_Gpib command.docx`（Qorvo GTS，Rev A，2018/09/20）
 
 | 指令 | 說明 |
