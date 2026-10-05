@@ -1461,4 +1461,12 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      操作紀錄 oplog_20261005.txt：新增 2273 行
      設定檔變動：machine_params/D_HT9045_system/Mot_Table.csv、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261005_143408、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261005_143627、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261005_144039、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261005_144057、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261005_144109
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+  10-05 17:06 機台快照（EastSun 在機台上做的事，沒有程式修改）：
+     machine_log/oplog_20261005.txt：1 個檔變動
+     machine_params/D_HT9045_system：16 個檔變動
+     machine_params/README_PARAMS.txt：1 個檔變動
+     workorder/README_WORKORDER.txt：1 個檔變動
+     操作紀錄 oplog_20261005.txt：新增 8223 行
+     設定檔變動：machine_params/D_HT9045_system/Mot_Table.csv、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261005_145128、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261005_145337、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261005_153846、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261005_153959、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261005_154020、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261005_154041、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261005_154630、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261005_154710、machine_params/D_HT9045_system/Mot_Table.csv.bak_20261005_155252 …共 16 個
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 MD5 清單在 MANIFEST_MD5.tsv。
