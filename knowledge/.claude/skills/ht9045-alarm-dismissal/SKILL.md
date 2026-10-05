@@ -11,7 +11,7 @@ description: HT9045 告警「解除」機制知識庫 —— 四種組合（stop
 > 兩支 `*.NonStop.html`）必須忠實複製這套解除規則，
 > 而這套規則的**非對稱之處全部違反直覺**，靠記憶一定會翻錯。
 >
-> 當日完整變更紀錄：`D:\docs\ChangeLog\CHANGES_20260922_Steven.md`
+> 當日完整變更紀錄：`<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260922_Steven.md`
 > 相關技能：`ht9045-html-version`（web 端翻譯規矩）、`ht9045-io-control`（Sen/SW）
 
 ## References

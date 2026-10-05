@@ -9,7 +9,7 @@
 > **//Steven 20260921** — 這條計算鏈**已有 web 端實作**：
 > `D:\HT9045\client\ht9045_contact_slk.js`（部署到 `web\page\`），
 > 給 `Setup.Contact.html` 用。逐函式忠實翻譯，四處刻意的界線見本檔末節。
-> 當日完整變更紀錄：`D:\docs\ChangeLog\CHANGES_20260921_Steven.md` §8 / §9
+> 當日完整變更紀錄：`<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260921_Steven.md` §8 / §9
 
 > **//Steven 團隊 20260926** — 移植樹（V906 C++）現況，給要改這條計算鏈的人：
 > - 上面那支 web 端檔案現在的位置是 `D:\HT9045\web\page\ht9045_contact_slk.js`（`D:\HT9045\client\` 已不存在，

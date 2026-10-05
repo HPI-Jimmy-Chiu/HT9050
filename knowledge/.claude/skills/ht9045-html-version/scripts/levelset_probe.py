@@ -2,7 +2,7 @@
 # Steven 20260916
 # ----------------------------------------------------------------------
 # 驗收 /api/system/levelset 與 system.levels.put 的讀寫語意。
-# 當日完整變更紀錄：D:\docs\ChangeLog\CHANGES_20260916_Steven.md
+# 當日完整變更紀錄：<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260916_Steven.md
 # ----------------------------------------------------------------------
 
 """levelset_probe.py -- 二進位投影通路的驗收探針。

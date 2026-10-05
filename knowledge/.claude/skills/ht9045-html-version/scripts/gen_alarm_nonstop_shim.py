@@ -2,7 +2,7 @@
 """gen_alarm_nonstop_shim.py -- 從 AlarmNonStop.json 產生 file: 協定用的墊片
 
 Steven 20260922
-當日完整變更紀錄：D:\\docs\\ChangeLog\\CHANGES_20260922_Steven.md
+當日完整變更紀錄：<入口網站 repo>\\public\\Docs\\ChangeLog\\Steven\\CHANGES_20260922_Steven.md
 
 為什麼需要這個檔
 ----------------

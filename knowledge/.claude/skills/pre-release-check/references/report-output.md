@@ -11,7 +11,7 @@
 | 報告類型 | 上線前掃描（除錯報告） |
 | Template | 不套用（純 Markdown） |
 | 格式 | **MD 僅** |
-| 輸出路徑 | `D:\docs\PreReleaseCheck\{YYYY}\` |
+| 輸出路徑 | `<入口網站 repo>\public\Docs\PreReleaseCheck\{YYYY}\` |
 | 命名 | `{YYYYMMDD}_{HHmm}_{作者}_PreReleaseRiskCheck_{專案}_{基線}_{主題}[_r{nn}]_draft.md` |
 
 ### 草稿區段（Build 驗證結果欄位留空）
@@ -43,7 +43,7 @@
 {YYYYMMDD}_{HHmm}_{作者}_PreReleaseRiskCheck_{專案}_{基線}_{主題}[_r{nn}].md
 
 【輸出路徑】
-D:\docs\PreReleaseCheck\{YYYY}\
+<入口網站 repo>\public\Docs\PreReleaseCheck\{YYYY}\
 ```
 
 > ⚠️ **草稿完成後，等待使用者確認內容無誤**，再進行階段二。
@@ -57,7 +57,7 @@ D:\docs\PreReleaseCheck\{YYYY}\
 | 報告類型 | 上線前掃描（除錯報告） |
 | Template | `honprec-blue-template` |
 | 格式 | **MD + HTML** |
-| 輸出路徑 | `D:\docs\PreReleaseCheck\{YYYY}\` |
+| 輸出路徑 | `<入口網站 repo>\public\Docs\PreReleaseCheck\{YYYY}\` |
 | 命名 | `{YYYYMMDD}_{HHmm}_{作者}_PreReleaseRiskCheck_{專案}_{基線}_{主題}[_r{nn}][_v{n}].md/html` |
 
 ### 操作

@@ -2,7 +2,7 @@
 # Steven 20260916
 # ----------------------------------------------------------------------
 # 新檔。驗證審查 R2：apply 階段有 notFound 時，ack 必須 ok:false、changed=0，且檔案不動。
-# 當日完整變更紀錄：D:\docs\ChangeLog\CHANGES_20260916_Steven.md
+# 當日完整變更紀錄：<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260916_Steven.md
 # ----------------------------------------------------------------------
 
 """r2_refuse_probe.py -- 「一好一壞」混合送 apply，證明 all-or-nothing 且 ack 不假裝成功。

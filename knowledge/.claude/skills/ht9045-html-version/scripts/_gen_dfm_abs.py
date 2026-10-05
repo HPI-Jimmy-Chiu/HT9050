@@ -15,7 +15,7 @@ OUT  = r'D:\HT9045\page'
 # 1. 新增 JOB_BASE：單一 job 可指定別棵 golden 樹。
 # 2. 新增 3 個 job：Setup.ContactForce / HW.VacuumUnit / Setup.AGV。
 # 3. OUT 可用環境變數 HT9045_DFM_OUT 覆寫（只想取幾頁時用，不必動整棵 page\）。
-# 當日完整變更紀錄：D:\docs\ChangeLog\CHANGES_20260919_Steven.md
+# 當日完整變更紀錄：<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260919_Steven.md
 # ----------------------------------------------------------------------
 OUT = os.environ.get('HT9045_DFM_OUT') or OUT
 

@@ -2,7 +2,7 @@
 # Steven 20260916
 # ----------------------------------------------------------------------
 # 新檔。跑 web/tests/levels_wire_probe.html，驗證 sysLevels 的瀏覽器端寫入接合。
-# 當日完整變更紀錄：D:\docs\ChangeLog\CHANGES_20260916_Steven.md
+# 當日完整變更紀錄：<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260916_Steven.md
 # ----------------------------------------------------------------------
 
 """levels_wire_smoke.py -- 把探針頁跑一次，把 <pre id="out"> 的內容印出來。

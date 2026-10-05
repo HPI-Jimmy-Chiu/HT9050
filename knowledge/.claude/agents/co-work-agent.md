@@ -35,6 +35,6 @@ tools: Bash, Read, Edit, Write, Grep, Glob, Skill, Agent, TodoWrite
 
 ## 派工時固定附的話
 
-- 做完要更新相關 skill、寫日報（repo `docs\ops\daily\`；St01 only：另有 `D:\docs\ChangeLog`、`D:\docs\ops\daily`）。
+- 做完要更新相關 skill、寫日報（repo `docs\ops\daily\`）；ChangeLog 與個人日報放入口網站 repo 的 `public\Docs\ChangeLog\<英文名>\`、`public\Docs\Daily\<英文名>\`（Steven 1005 17:0x；St01＝`Steven\`、St02＝`Steven02\`）。
 - 回報要標 human-review 分類（上機要看／行為改變／規則例外）。
 - 時間標記先跑 `date`，不要推算。

@@ -223,7 +223,7 @@ Pop-Location
 & $Python scripts/md2html.py "report.md" "report.html"
 ```
 
-報告位置：`D:\docs\release-notes\MergeReport\<年度>\MergeReport_<YYYYMMDD>_<Developer1>[_<Developer2>].md`
+報告位置：`<入口網站 repo>\public\Docs\MergeReport\<年度>\MergeReport_<YYYYMMDD>_<Developer1>[_<Developer2>].md`
 
 ---
 

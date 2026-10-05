@@ -9,9 +9,9 @@
 
 | 版本層級 | 輸出路徑 | Template |
 |---------|---------|---------|
-| 廠內版（含 Pre-Release Scan 細節）| `D:\docs\release-notes\{YYYY}\` | honprec-red |
-| 代理商版 | `D:\docs\customers\{代理商}\0000_{代理商}\release-notes\{YYYY}\` | honprec-red |
-| 客戶版 | `D:\docs\customers\{代理商}\{客戶代碼}\release-notes\{YYYY}\` | honprec-red |
+| 廠內版（含 Pre-Release Scan 細節）| `<入口網站 repo>\public\Docs\customers\{代理商}\{客戶代碼}\release-notes\{YYYY}\` | honprec-red |
+| 代理商版 | `<入口網站 repo>\public\Docs\customers\{代理商}\0000_{代理商}\release-notes\{YYYY}\` | honprec-red |
+| 客戶版 | `<入口網站 repo>\public\Docs\customers\{代理商}\{客戶代碼}\release-notes\{YYYY}\` | honprec-red |
 
 ---
 

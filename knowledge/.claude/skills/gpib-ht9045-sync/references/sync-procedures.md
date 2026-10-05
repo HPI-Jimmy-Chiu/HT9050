@@ -342,7 +342,7 @@ if RS232_DIR:
 
 | 專案 | 路徑格式 |
 |------|---------|
-| HT9045 / GPIB9045 | `D:\docs\ops\daily\YYYYMMDD.md` |
+| HT9045 / GPIB9045 | `<入口網站 repo>\public\Docs\Daily\<EnglishName>\YYYYMMDD.md` |
 
 追加至檔案末尾（換行後插入）：
 

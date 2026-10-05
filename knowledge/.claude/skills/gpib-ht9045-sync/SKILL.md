@@ -110,7 +110,7 @@ Steps 1–3 依寫入檔案分為兩組，可**同時**（平行）啟動兩個 
 
 ### Step 5：記錄同步歷史
 
-更新 `GPIB9045.agent.md`、`RS232Standard.agent.md`、`HT9045.agent.md` 中的同步歷史表格，並追加 `D:\docs\ops\daily\YYYYMMDD.md` daily log（若檔案存在且有實際變更）。
+更新 `GPIB9045.agent.md`、`RS232Standard.agent.md`、`HT9045.agent.md` 中的同步歷史表格，並追加 `<入口網站 repo>\public\Docs\Daily\<EnglishName>\YYYYMMDD.md` daily log（若檔案存在且有實際變更）。
 
 → 記錄格式與規則：[sync-procedures.md § Step 5] (references/sync-procedures.md#step-5記錄同步歷史)
 

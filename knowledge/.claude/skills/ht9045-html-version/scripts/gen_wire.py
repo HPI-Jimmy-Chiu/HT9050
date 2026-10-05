@@ -2,7 +2,7 @@
 # Steven 20260916
 # ----------------------------------------------------------------------
 # HW.teach / HW.HandlerSys 改接機台設定檔；新增 sysEnums（radio/checkbox/combo）。
-# 當日完整變更紀錄：D:\docs\ChangeLog\CHANGES_20260916_Steven.md
+# 當日完整變更紀錄：<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260916_Steven.md
 # ----------------------------------------------------------------------
 
 """gen_wire.py -- 從 extract_page_v2.py 的輸出產生每頁的接線資料檔。

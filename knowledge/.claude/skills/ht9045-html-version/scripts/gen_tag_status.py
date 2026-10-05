@@ -3,7 +3,7 @@
 # ----------------------------------------------------------------------
 # 新檔。盤點 wb_serve 送出的每一個執行期 tag 現在有沒有接到畫面上，
 # 寫入 screenshot_meta.js 的 TAG_WIRE_STATUS。
-# 當日完整變更紀錄：D:\docs\ChangeLog\CHANGES_20260916_Steven.md
+# 當日完整變更紀錄：<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260916_Steven.md
 # ----------------------------------------------------------------------
 
 """gen_tag_status.py -- 產生 TAG_WIRE_STATUS 並寫進 screenshot_meta.js。

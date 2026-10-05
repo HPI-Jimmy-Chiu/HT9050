@@ -2,7 +2,7 @@
 r"""gen_setup_siteimgs.py -- Set Up 畫面 Site Mode 示意圖 bmp -> png
 
 //Steven 20260921
-當日完整變更紀錄：D:\docs\ChangeLog\CHANGES_20260921_Steven.md
+當日完整變更紀錄：<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260921_Steven.md
 
 golden cSetUp.cpp 的 Image1 是**執行期**換圖的：
     Image1->Picture->LoadFromFile(BmpPath + TestSiteFileName[1][iCheckPos]);

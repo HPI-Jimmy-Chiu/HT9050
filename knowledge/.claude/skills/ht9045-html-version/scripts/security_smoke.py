@@ -3,7 +3,7 @@
 # ----------------------------------------------------------------------
 # 新檔。用 Edge 無頭模式真的載入 Status.Security.html，驗證 179 組權限 radio
 # 有沒有依照 levelset.dat 的值被選起來、以及索引有沒有對位。
-# 當日完整變更紀錄：D:\docs\ChangeLog\CHANGES_20260916_Steven.md
+# 當日完整變更紀錄：<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260916_Steven.md
 # ----------------------------------------------------------------------
 
 """security_smoke.py -- Status.Security 的 DOM 驗收（不是看原始碼，是量跑過 JS 的 DOM）。

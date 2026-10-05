@@ -197,7 +197,7 @@ File | Line | Pattern | Severity | Suggested Fix
 | 項目 | 值 |
 |------|----|
 | 格式 | MD only，不輸出 HTML，無 Logo |
-| 輸出路徑 | `D:\docs\release-notes\MergeReport\<年度>\MergeReport_<yyyyMMdd>_<Developer1>[_<Developer2>].md` |
+| 輸出路徑 | `<入口網站 repo>\public\Docs\MergeReport\<年度>\MergeReport_<yyyyMMdd>_<Developer1>[_<Developer2>].md` |
 | 必填 Section | Section 8 功能來源追蹤、Section 9 SVN Commit Message |
 | SVN Commit | 報告與程式碼同一筆 commit，不可分開 |
 

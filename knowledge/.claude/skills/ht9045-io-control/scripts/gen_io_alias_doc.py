@@ -6,11 +6,21 @@ components, and overlays annotation boxes on the 1:1 screenshots in D:\HT9045\IM
 """
 import re, os, base64, json, sys, shutil
 
+def _portal_docs(sub, old):
+    """St02 20261005 (Steven: documents go to the RD5 portal): <portal repo>\\public\\Docs\\<sub>.
+    Portal repo = env RD5_PORTAL_REPO, else D:\\RD5-Portal (St01 / St02), else D:\\HT9045-Index (laptop);
+    none of them there -> the old D:\\docs location, with a warning."""
+    for root in (os.environ.get("RD5_PORTAL_REPO"), r"D:\RD5-Portal", r"D:\HT9045-Index"):
+        if root and os.path.isdir(os.path.join(root, "public", "Docs")):
+            return os.path.join(root, "public", "Docs", sub)
+    print("WARNING: RD5 portal repo not found (set RD5_PORTAL_REPO) -> old location " + old, file=sys.stderr)
+    return old
+
 DFM   = r"D:\HT9045\HT9011UC_Code_V3.33.908.0_20260702\iosetview.dfm"
 IMGDIR= r"D:\HT9045\IMG\IO"
-OUT   = r"D:\docs\manual\HT9011UC_IOSetView_Alias_Map.html"
+OUT   = _portal_docs(r"manual\HT9011UC_IOSetView_Alias_Map.html", r"D:\docs\manual\HT9011UC_IOSetView_Alias_Map.html")
 CSV_SRC = r"D:\HT9045\system\IO_Table.csv"        # machine master copy
-CSV_DST = r"D:\docs\manual\IO_Table.csv"          # copied next to HTML (if absent)
+CSV_DST = os.path.join(os.path.dirname(OUT), "IO_Table.csv")          # copied next to HTML (if absent)
 
 TARGET_TYPES = ("TMyLedLane", "TBtnPanelLane")
 # TTL page uses plain TMyLed / TBtnPanel (with Alias) - collected only under tsTTL

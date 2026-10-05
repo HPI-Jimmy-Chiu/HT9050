@@ -2,7 +2,7 @@
 name: ht9045-st02-workflow
 description: >
   St02（Steven02，主機 STEVEN-NB3）在 V906 C++ 樹做移植工作的作業流程與現況板。涵蓋：角色（St02-E＝工程師／這個 session、St02-M＝協調者、St01-M＝St01 的協調者；session 名稱會變：
-  名稱只記在本機、不寫進共用檔，重開後逐一問角色）、只編譯不執行的驗證規則（兩組態 sim／ship、build.bat 用 PowerShell 全路徑）、分支與獨立 worktree
+  github-59 → github-46 → github-4f → github-62，重開後逐一問角色）、只編譯不執行的驗證規則（兩組態 sim／ship、build.bat 用 PowerShell 全路徑）、分支與獨立 worktree
   （遠端只留 v906/steven-gpib-widget；本機工作樹 1004 15:2x 起只留 st02-ela／st02-s36／st02-s39 與開著的 MR 樹）、加人手（helper agent 的交代法與審核）、每次 push 的回報格式（hash、merge-tree、
   St01 的 ctest 清單與 done／todo 列、每小時信的 2～4 行）、行數不變的改法、golden 引用要寫樹名（1003 起 golden 0618，0625_Steven 只對照）、
   ctest 不可寫真檔的圍堵規則、RULINGS 第 4 條「上機要看」、編輯技巧與踩過的坑（heredoc 吃反斜線、sed 吃 CR、CRLF、
@@ -10,7 +10,7 @@ description: >
   Q9／Q24 login.dat、W14 O07）與 St02-M 的研究（WinINet ElaFtp、W10 R2 接命令、W14 Contact.Data、ELA W15／W18／W19）。
   Use when：St02 開工、壓縮後接續、要知道現在該做什麼、要推 gpib-widget／st02-on-cbridge、要回報給 St02-M、
   要做 P4／W9／W10／Q9／Q24／W14／Q41／ELA、要派 helper、要編譯驗證、要寫 CRLF 檔或跨檔替換。
-  關鍵字：St02, St02-E, St02-M, St01-M, Steven02, STEVEN-NB3, S-09, near-miss, Q-INC, 翻開編譯, FShow_Audit, 完整建置, helper, 加人手, Q41, WinINet, gpib-widget, st02-on-cbridge, steven-p4-wip, 兩組態, build_ship,
+  關鍵字：St02, St02-E, St02-M, St01-M, Steven02, STEVEN-NB3, github-62, github-4f, github-46, github-59, S-09, near-miss, Q-INC, 翻開編譯, FShow_Audit, 完整建置, helper, 加人手, Q41, WinINet, gpib-widget, st02-on-cbridge, steven-p4-wip, 兩組態, build_ship,
   merge-tree, 上機要看, golden 0618, 906_0625_Steven, P4, W7, W9, W10, Q9, Q24, W14, R0, ht9045_nmftp, 行數不變, line-neutral, CRLF。
 ---
 
@@ -42,15 +42,18 @@ description: >
 ## 1. 角色
 
 - **St02-E（Steven02-Engineer）**＝這個工程 session（使用者 20260927 命名），在本機 Steven02（STEVEN-NB3）上；交接檔裡的「St02」標記指的就是它。**St01**＝另一台 Steven（跑 ctest／SIM、擁有 C 路產生器、Security／Login 頁等）。**筆電**＝Jimmy 那一側（擁有大部分 jimmychiu 的檔）。
-- **協調者**：**St02-M（Steven02-Manager）**（session 名稱會變，名字也會被別的 session 撿走——名稱只記在本機、不寫進共用檔，重開後逐一問角色）。它派工作給 St02-E；所有裁決、認領、回報都經過它。回訊息用它最新訊息的 `from=` uds 位址（重開就會換）。
+- **協調者**：**St02-M（Steven02-Manager）**（session 名稱會變：github-59 → github-46 → github-4f → github-62；名字會被別的 session 撿走，重開後逐一問角色）。它派工作給 St02-E；所有裁決、認領、回報都經過它。回訊息用它最新訊息的 `from=` uds 位址（重開就會換）。
 - **St01-M**＝St01 那邊的協調者。St01 的工程 session 跑 ctest／SIM。
 - **不直接寄信給 Jimmy**；每次 push 把 commit＋2～4 行重點交給協調者，它每小時合寄一封。
 - **要裁決的題目**：交給 St02-M，由它附絕對路徑與行號轉 ST01-M 彙整；不直接問 Steven、不寄信（Steven 20260927）。
 - 交接檔：FROM_STEVEN／TO_STEVEN（`D:\HT9045\docs\handoff\`；FROM_STEVEN 只在 `v906/steven-handoff`）。**不寫 todo.md**。
 
-## 2. 驗證規則（本機只編譯，不執行）
+## 2. 驗證規則（編譯＋本機跑 ctest）
 
-- F-Secure 會擋新 exe：**不跑 ctest、不跑任何 exe**，也不動防毒。執行驗證一律給 St01。
+- **Steven 1005 13:2x 在 St02-E 的 session 直接說「你可以在這台電腦上跑測試」**（取代舊的「本機只編譯、執行驗證一律給 St01」；St01 也已不再代跑）。
+  ctest 在自己的 obj 目錄跑：`ctest --test-dir <obj>\build -R "^(名1|名2)$" --output-on-failure < /dev/null`（bash，先 `cd /d/HT9045`）；SIM 跑完再跑 SHIP，**不要兩組態同時跑**（固定暫存名的舊測試會互撞，§5 第 49 條）。
+  F-Secure 沒擋 ctest 的測試執行檔（1005 13:27 實測）；不動防毒。ctest 照舊不可寫真檔（§4）。測試以外的 exe（wb_serve 等）沒有被授權，照舊不跑。
+  ⚠ 這台沒有 HAVE_PCI1203（CMakeCache 0 筆），不會碰到 1203 卡。
 - 每次 push 前**兩組態都編譯**，回報寫「0 errors both configs」：
   - sim：`& "D:\HT9045\HT9011UC_Cpp_V3.33.906.0\build.bat"`（PowerShell，全路徑；PATH 前面加 `C:\CMake\bin`）。
   - ship：`$env:V906_BUILD_DIR="build_ship"; $env:V906_CMAKE_ARGS="-DW906_NO_SOFT_SIMULTE=ON"` 再跑 build.bat。預設 -O，**不要 Release**。
@@ -160,11 +163,25 @@ description: >
 37. **比對兩個建置的目的檔：先遮掉帶 `dir32 .rdata` 重定位的立即值再說「不同」**（20261004 ccache 實驗：fMain.cpp.obj 反組譯差 198 行，全是字串常數在 .rdata 的位移，遮掉後 0 差異、字串集合相同）。做法：`objcopy -g` 去除除錯資訊 → `objdump -dr` → 重定位行可能隔一行續行才出現，往下看兩行（scratchpad `ccx/rdata_mask.py`）。另：MinGW 6.3 的 PCH 在增量重建可能 `internal error ... MapViewOfFileEx`，不要把 PCH 當成穩定的加速手段。
 38. **別人要改共用元件時的「有沒有人依賴舊行為」普查，看三種地方**（20261004 KB-GOLDEN，筆電改 qwerty.js）：(1) 所有呼叫點（`git grep` 對 origin/main，不是自己的舊工作樹）；(2) 載入**真**元件的 node／headless 測試（假元件只記呼叫的不受影響）；(3) **包住**共用函式的頁面（例：Temp_Set 包 HTQwerty.show 串 onAbort），它們依賴的是元件內部的呼叫順序，要逐行寫出依賴的行號給改的人。別人的測試釘到要改的行為也一併指出（不只 St02 的）。普查期間不碰該元件，直到那批進 main。
 39. **main 每進一包，所有還開著的 St02 MR 都重跑一次 merge-tree（各自一條指令，只印一行才算過）**（20261004 !174：第 141 包帶進 !165 的 N07 那一行後，我只把 main 合進 !180，沒回頭查 !174，衝突放了 4 個多小時，到第 62 批進 main 才發現）。巡檢看到 main 前進就跑：`git merge-tree --write-tree origin/main origin/v906/<分支>`；多一行就把 main 合進該分支、兩邊的改動都留、兩組態完整建置、merge-tree 一行再推，並告訴 St02-M（MR tip 變了，代跑要跑新 tip）。
-40. **長時間的背景 PowerShell／bash 工作，先 `cd D:\HT9045`（中性目錄）再開**（20261004 15:31：刪 obj 目錄的背景 PowerShell 是在 session 目前資料夾＝st02-s36 裡開的，它的工作目錄就鎖住 st02-s36，St02-M `git worktree remove` 之後資料夾刪不掉、剩 1581 個檔，要等腳本跑完才放開）。工具會繼承 session 當下的資料夾；要被刪的工作樹或 obj 目錄裡，不要留任何程序的工作目錄。刪不掉的檔用程序路徑／命令列找不到時，多半是工作目錄、VS Code 檔案監看或防毒在掃。
+40. **長時間的背景 PowerShell／bash 工作，先在 bash 跑 `cd /d/HT9045`（中性目錄）再開**——session 的目前資料夾跟著 bash 的 cd 走，PowerShell 工具就從那裡啟動；**PowerShell 裡的 `Set-Location` 只改 PS 的位置，不改程序真正的工作目錄**，擋不住鎖資料夾（20261004 15:31：刪 obj 目錄的背景 PowerShell 是在 session 目前資料夾＝st02-s36 裡開的，它的工作目錄就鎖住 st02-s36，St02-M `git worktree remove` 之後資料夾刪不掉、剩 1581 個檔，要等腳本跑完才放開）。工具會繼承 session 當下的資料夾；要被刪的工作樹或 obj 目錄裡，不要留任何程序的工作目錄。刪不掉的檔用程序路徑／命令列找不到時，多半是工作目錄、VS Code 檔案監看或防毒在掃。
+41. **代跑清單的測試名稱照 `add_test(NAME …)` 原樣複製，不要憑記憶寫**（20261004 !180：清單寫「C14BinDisp」，實際是 **C14_BinDisp**，St01 的正規式比不到就靜靜漏掉，靠人工補跑才發現）。送清單前對 MR tip 的 tests/CMakeLists.txt 逐一核對：`git show <tip>:HT9011UC_Cpp_V3.33.906.0/tests/CMakeLists.txt` 存成檔，每個名字 `grep -c -E "add_test\(NAME <名>( |\))"` 都要是 1（scratchpad `cm174.txt` 做法）。
+42. **接 golden TfMain 計時器的一段時，同時決定「阻塞框開著時要不要跑」**（20261004 S-27／!183）：golden 告警框與訊息框自己的 Timer1（10 ms）每拍呼叫 fMain->Timer1Timer 和 Timer7Timer（note.cpp:3355-3356、mymessbox.cpp:542-543），所以 golden Timer1 的每一段在框開著時都照跑。移植樹的 Timer1 片段分散在 PumpTick（WebBridgeTags.cpp:598）、wb_serve 主迴圈、W906_ModalWaitTick（wb_serve.cpp:7620）三處，只接 PumpTick 的那段框一開就停（例：安全門鎖、時鐘）。新接一段就問：golden 框開著時它跑不跑？跑就也接到 ModalWaitTick（或 S-27 的 W906_ModalTimer1Segments），並查它會不會自己開框（會的話要防重入）。大範圍逐段對照可以交給唯讀 helper（給它 golden 讀檔腳本 scratchpad `gshow.py`、要它列 file:line），回來後自己核對關鍵幾點再動手。
+43. **別台代跑合併回來的普查／報表，先看 golden 欄位有沒有空掉**（20261004 INBOX 155：St01 合併 C12 點擊實測時那台讀不到 golden 樹，tsv 的 golden_dfm 從 1603 變 0、分類全成 dead/?，表面上卻「完成」）。檢查法：比對合併前後 golden 欄位的填寫數（scratchpad `c12r/tsv_stats.py`）。修法：在有 golden 0618 的這台重跑靜態步驟；別台量的點擊結果不用重量——從合併版 tsv 的 sent_probe 欄反推回 c12_click_probe.py 的輸出格式（`c12r/rebuild_probe.py`，是 merge_probe 的反函數，列數要跟對方回報的一樣）再 `--merge`。golden 以 0618 為準，0625_Steven 另跑一次只當對照（`c12r/cmp_golden.py`）。
+44. **靜態量版面時，可捲動的祖先（overflow auto／scroll）裡的元件不算被裁；說「要修」之前先對 golden 的容器型別**（20261004 E-09：HW.OmronEJ1N 32 個元件「超出表單底部」，其實在 ScrollBox1 `overflow:auto` 裡，golden 也是 TScrollBox——我先報成「真的溢出、先修」，再撤回）。真正被裁＝祖先是 overflow hidden／clip 而且捲不到；只靠靜態推算的結果標「待實測」，等執行時量測（e09_layout_probe.py）確認再排修。
+45. **問 EastSun／機台端的題目不等：同一次推送也給 St01 一份**（RULINGS_20261004 第 4 條，Jimmy 1004 22:2x「等EastSun決定->這問題一律不要等他，沒有回答就立刻也一份給ST01處理」）。St02 的題目交 St02-M：它在 FROM_STEVEN §3 問、同一次推送在 FROM_STEVEN §4 給 St01 一份；TO_STEVEN／WAITING_REPLIES 是筆電的檔，St02 不改。工作照常往下做，不要被機台題卡住（例：E-09 解析度未知就兩種解析度都量）。
+46. **判讀網頁「被蓋住／被裁掉」要照 VCL 的畫法比 golden**（20261004 E-09）：VCL 的視窗元件（Edit、ComboBox、Memo、Button、CheckBox、RadioButton、Panel、GroupBox、ScrollBox、PageControl）**一定畫在圖形元件（Label、Image、Shape、Bevel、SpeedButton、PaintBox）上面**，跟順序無關；同類的照 dfm 建立順序（後建立的在上）；子元件被父容器的工作區裁掉。網頁只照 DOM 順序疊，所以「輸入框被標籤／圖片蓋住」是網頁的錯（例：主畫面 Logo 蓋住運轉模式選單），「標籤被輸入框蓋住」跟 golden 一樣。golden 型別從頁面的 title="id : TType" 查，順序與父容器大小從 golden 0618 dfm 查（scratchpad `e09/triage.py`、`order_vs_golden.py`、`clip_vs_golden.py`）。量測環境（假伺服器）造成的另外標出來重量。
+47. **量版面的「被裁／被蓋」要先看可捲動容器**（20261004 E-09 v1 誤判：Teach 頁控制項在 overflow:auto 的 scrlbxInArmXY 裡，捲到看不到的被算成被外層裁掉、畫面外的點也去測遮蓋）。規則：往上找祖先時遇到 overflow auto／scroll 就改測那個容器本身；「被裁」＝在碰到任何可捲動容器之前就超出 overflow hidden／clip 的祖先；「被蓋」只測目前在畫面上看得到的控制項。腳本的自我測試要包含這種情況（e09_layout_probe.py v2）。結論要上機改之前，先找一個例子對 golden dfm 的容器型別確認。
+48. **「控制項被裁」先分「只有方框」還是「文字被切」**（20261005 E-09：Setup.SetUp 的 TCheckBox 方框寬 275，比字長很多，方框超出群組框幾 px 不代表看得到的字被切）。量法：Range 選控制項內容，用 getClientRects() 的每個行框跟裁切祖先的矩形比（e09_layout_probe.py v3 標 [box only]／[TEXT CUT]）。只有文字真的被切才排修。另：v1→v2→v3 每改一次量測規則，都在自我測試頁加一個對應情況，否則量測工具本身的錯不會被抓到。
+49. **測試在 %TEMP% 寫暫存檔一律用每個行程不同的名字**（20261005 ST02-C17／St01 E-039：28 支測試用固定檔名，SIM／SHIP 或別人的 gate 同時跑就互相蓋掉、偶發紅）。新測試用 `tests/w906_test_tmpname.h`：`W906_TestTmpName("x.ini")`→`x_<pid>.ini`、資料夾用完 `W906_TestTmpRemoveTree(dir)`。這個標頭只用 C 執行階段（不 include windows.h——有些測試 #undef DeleteFile 給 vclcompat 用）。普查要逐處看（同一檔可能有一處用 GetTickCount 計時、另一處用固定名），改名前查有沒有別的測試／CMake ENVIRONMENT 用同一個固定名稱（跨行程的不能只改一邊）。第二批（!191／!192）補充：同一個暫存根掛很多葉名的（SCK_ART 的 ScratchDir）改成每個行程一個子資料夾、結束整個刪，不要逐個葉名改；測試用 _putenv 把暫存根當 log 根的，只要是本行程讀就照改，但另開一張 MR 方便單獨退；CMake 的 ENVIRONMENT 已對全部測試設了根目錄的（例如 W906_UNLOADERINFO_ROOT），測試裡的固定後備只在手動跑時才用到，不用改。原本留著暫存的測試改名後一定要補清理，不然每跑一次多一份。**!191 教訓（1005 St01 紅）：改了暫存名，也要 grep 斷言／預期文字裡的舊名字**（ELA_Oee 把沙盒路徑寫進發布的 JSON，預期字串還是舊名，每跑必紅）——預期字串用同一個 W906_TestTmpName 組，不要放寬成只比對尾巴。
+50. **接卡片、寫 OLD/NEW 之前先查「是不是已經做了」**（20261005：S-28 早在 10-02 由 NB2 的 I124 做完；C12 派的兩顆 A 類都是 St02 自己 9/27、10/01 接好的）。先 `git log origin/main -S<golden 函式名或 INBOX 編號>`、grep `AI(W906-I<編號>)`，再讀 golden。**按鈕普查的「dead」不等於沒接**：點擊探針用假伺服器，①資料到了才綁、④只收 isTrusted 的處理器、⑤只改輸入框值的處理器都會讀成 dead；探針 v2（!193）用 DevTools 真的點、另數 inp／val，但①②③仍在——dead/ 要在真的 wb_serve 上確認才是待辦。
+51. **兩個 TMyKitSuck：要用完整版才有的成員（例 CheckDestoryFinish、Suck[][].iNozzleEvent）時，另開一個只 include mykitsuck.h 的小檔**（20261005 ESC：HandlerEscSuck.cpp；ctest 也拆兩個 TU）。aHotPlateSubstrate.h 是精簡鏡像，跟 mykitsuck.h 不能出現在同一個 TU。golden 的 && 條件拆出去時順序和短路要照抄（CheckDestoryFinish 有副作用）。機台端（ht9045_sm）要叫 TesterComm/Handler 的東西，照 S-13 的做法：機台端定義函式指標、TesterCommWiring.cpp 安裝，不要直接連 handler 函式庫、也不必動 forms/fMain.h。本機分支在等筆電時 main 會動：推之前一定重跑 merge-tree，撞了就 rebase 再兩組態重編。
+52. **「某個機型／旗標切換會改變什麼」的審查做法**（20261005 ST02-C19）：先算出會翻的條件種類（例：LS＝300、9050＝800，main 沒有大小比較 ⇒ 只有 ==／!=／switch 會變），用 `git grep -w` 抽出全部、分「活的／註解／#if 0」，活的分給 helper（BRIEF 寫清楚欄位與讀碼指令、cp950 用 cp950cat.py），自己抽查最重的幾列。跨樹比對（main vs 機台 vs 910）不可只比單一行——`if(MachineTypeChoice==Type_HT9050)` 到處都有；要連後兩行一起比。最重要的常是「另一棵樹根本沒有這段程式」（C19：機台 0210 沒有 F9050-BD，147 會讓它第一次上機）——先數關鍵函式在兩棵樹的出現次數。
+53. **現場機台打包（例 HT9045_Package_*.zip）只讀、只引用鍵值**（20261005 C19／C21）：內含密碼檔——不複製任何機台檔進 git／handoff／MR／訊息，PASSWORD 資料夾完全不碰，報告寫「Gerneral.ini KEY=值」。先用 SHA-256（CRLF 正規化後）比對打包的 C++ 與手上的程式來源 commit，相同才把它當「機台現在的程式」；機台實際的 ini／Mot_Table／IO_Table／teach.ini／oplog 用來把「假設」改成「確定」——C19 就因此更正了一列（Y 閂鎖不變）。helper 跑到一半才拿到新資料時，用 SendMessage 轉告來源＋規則。
+54. **診斷用的「掃全部 IO 點」不能直接呼叫 IsOn()／Status()／GetOnBit()**（20261005 S2）：MyLaneIO 的 IOInputBit／IOOutBitStatus／IOBitOn 在位址範圍錯時（SHIP）會 ShowMyMessage 跳框、讀失敗會寫 MNetLog、1203 吸嘴點還會經 VC8 閘門印字——流程只讀它用到的點，掃描會把每個「啟用但位址錯」的點每 100 ms 跳一次框。做法：先 `MyLaneIO.CheckPortRangeErr` 不為 0 就不讀、VC8 閘門自己判（不印字）、非模擬組態 1203 輸入直接呼叫 `Pci1203IoRoute()->readByte`（一個 byte 一次、拿到回傳碼）；傳 AnsiString 參數用一個空的全域常數（複製空字串不配置）。SW 的 Status() 會改寫 OutValue，命令值直接讀欄位。共用檔掛點被派回自己套時：先合 main、逐行重新定位、把 NEW 套在 scratchpad 副本上試編兩組態，再交認領；不用套用腳本改共用檔。
 
 **每做完一件（推送或 helper 交件）也要**（使用者 20260927 19:2x）：
 - 更新對應的 skill／reference 與現況板 `D:\HT9045\.claude\skills\ht9045-st02-workflow\references\current-state.md`；
-- ChangeLog：**St02-E 自己維護** `D:\docs\ChangeLog\CHANGES_<YYYYMMDD>_Steven02.md`（摘要表一列＋一節＋待 Steven 表＋§12 目前狀態；繁體中文、絕對路徑、UTF-8 無 BOM、CRLF，用 Write 工具寫），每次推送後更新；St02-M 原樣抄進交接分支 `docs/handoff/ST02_CHANGELOG_<日期>.md` 給 ST01-M（使用者 20260927「Change log也推過去」；St01 那台讀不到我們的 D:）。
+- ChangeLog：**St02-E 自己維護** `D:\RD5-portal\public\Docs\ChangeLog\Steven02\CHANGES_<YYYYMMDD>_Steven02.md`（Steven 20261005 17:0x：ChangeLog 改放入口網站；`D:\docs\ChangeLog\` 不再寫新檔，舊檔留著；入口網站的 commit／MR 與 .html 由 St02-M 做；規則見 make-report-skill references/change-log/change-log.md §輸出路徑與命名）（摘要表一列＋一節＋待 Steven 表＋§12 目前狀態；繁體中文、絕對路徑、UTF-8 無 BOM、CRLF，用 Write 工具寫），每次推送後更新；St02-M 原樣抄進交接分支 `docs/handoff/ST02_CHANGELOG_<日期>.md` 給 ST01-M（使用者 20260927「Change log也推過去」；St01 那台讀不到我們的 D:）。
 - 日報：每次回報附一段繁體中文日報給 St02-M，它加進 `docs/handoff/ST02_DAILY_<日期>.md`；ST01-E 寫進 repo 的 `docs/ops/daily/<yyyy-mm-dd>.md`（使用者 20260927「日報可以推給st01-m幫你寫」）。不再寫 `D:\docs\ops\daily\`。
 
 ## 6. 回報與文件的語言

@@ -336,4 +336,4 @@ switch(iErr) {
 
 ## 工具腳本
 
-- [gen_io_alias_doc.py](scripts/gen_io_alias_doc.py) - 解析 iosetview.dfm，在 `D:\HT9045\IMG\IO\` 截圖上標註全部 TMyLedLane/TBtnPanelLane 的 Alias，輸出自含式 HTML 至 `D:\docs\manual\`。執行：`py gen_io_alias_doc.py`。腳本內建各頁人工校正值（2026-07-03 已全頁校正），修改校正值時須與現值累加。
+- [gen_io_alias_doc.py](scripts/gen_io_alias_doc.py) - 解析 iosetview.dfm，在 `D:\HT9045\IMG\IO\` 截圖上標註全部 TMyLedLane/TBtnPanelLane 的 Alias，輸出自含式 HTML 至 `<入口網站 repo>\public\Docs\manual\`。執行：`py gen_io_alias_doc.py`。腳本內建各頁人工校正值（2026-07-03 已全頁校正），修改校正值時須與現值累加。

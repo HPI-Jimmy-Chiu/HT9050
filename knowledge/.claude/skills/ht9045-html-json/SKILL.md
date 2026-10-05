@@ -42,7 +42,7 @@ applyTo: "**/*"
 > §3 改寫成 JSON→HTML（`editlist.get`）／HTML→JSON（`editlist.save`）兩段並附程式行號，§6 改成
 > **全部 32 個 C 路結構的總表**（單一出處）；A 形狀 `TFTestIF` 退役（`f89be4ce`）、`D:\HT9045_ref`
 > 退場（`3e0ebb92`，golden 改指主 repo V912）。被取代的舊句在 `references/archive/`。
-> 當日完整變更紀錄：`D:\docs\ChangeLog\CHANGES_20260926_Steven.md`
+> 當日完整變更紀錄：`<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260926_Steven.md`
 
 > **//Steven 20260921** — 接線分級之外多了一層：**行為翻譯層**（golden 的 VCL
 > handler 搬到瀏覽器）。它不改變本檔的 `data`/`kb`/`tag`/`none` 分級 ——
@@ -50,11 +50,11 @@ applyTo: "**/*"
 > 行為層問的是「動這個元件之後畫面該怎麼變」，兩件事。
 > 20260921 落地兩支：`ht9045_setup_sitemap.js`、`ht9045_contact_slk.js`。
 > 規格與三個坑寫在 skill `ht9045-html-version` 的「第三種形狀：行為翻譯層」。
-> 當日完整變更紀錄：`D:\docs\ChangeLog\CHANGES_20260921_Steven.md`
+> 當日完整變更紀錄：`<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260921_Steven.md`
 
 > **//Steven 20260916** — 實測重查並修正：四大類表的 ✅ 只屬於已廢棄的靜態 JSON 那條路；
 > 新增 wb_serve 對照表、執行期 tag 實況與 `/api/system/levelset`；重寫「待辦」。
-> 當日完整變更紀錄：`D:\docs\ChangeLog\CHANGES_20260916_Steven.md`
+> 當日完整變更紀錄：`<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260916_Steven.md`
 
 > **//Steven 20260915** — 本檔於 2026-09-15 更新。
 > 當日完整變更紀錄：`D:\HT9045\CHANGES_20260915_Steven.md`

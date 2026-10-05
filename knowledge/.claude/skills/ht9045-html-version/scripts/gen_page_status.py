@@ -2,7 +2,7 @@
 # Steven 20260916
 # ----------------------------------------------------------------------
 # 量出每頁接線程度，寫入 screenshot_meta.js 的 PAGE_WIRE_STATUS（本次補算 sysEnums）。
-# 當日完整變更紀錄：D:\docs\ChangeLog\CHANGES_20260916_Steven.md
+# 當日完整變更紀錄：<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260916_Steven.md
 # ----------------------------------------------------------------------
 
 """產生 PAGE_WIRE_STATUS 並寫進 screenshot_meta.js。

@@ -350,7 +350,7 @@ A 形狀 bridge，處置是暫不註冊，不算「已上線的風險」：
 | M-6 | C 形狀探針沒有驗證「第一次存檔新增的鍵有沒有超出 golden 鍵集」 | ✅ 探針補上：鍵集從 `.gen.inc` 的 `->Add` 與 `WriteIniData` 抽出，新增鍵集檢查、重複鍵檢查、`--allow` 已知差異白名單 |
 | L-1 | golden `FormShow` 裡的 `Todo` 開頁看不到 | ✅ 開頁回應加回 `session` |
 
-完整內容見 ChangeLog `D:\docs\ChangeLog\CHANGES_20260924_Steven.md` §60。
+完整內容見 ChangeLog `<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260924_Steven.md` §60。
 
 ---
 
@@ -395,7 +395,7 @@ A 形狀版本一併刪除）。
 配套：`tools/editlist/_integrated.txt`（見三之 1）、`gen_editlist.py` 檔名不符在 `--only` 時
 跳過而不中止（審查第 9 輪 M-4）、探針補上 golden 鍵集裡含 `printf` 格式（`%02d` 之類）的鍵名。
 
-完整內容見 ChangeLog `D:\docs\ChangeLog\CHANGES_20260925_Steven.md` §2。
+完整內容見 ChangeLog `<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260925_Steven.md` §2。
 
 ---
 
@@ -529,8 +529,8 @@ golden 主軸是 `ReadFile`、`spbSaveClick`、`DoIniDataToForm(int iNowOffsetSe
 * **Jimmy／JerryYang 待決定**：`SYSTEM_TEST_IF` 要不要補 golden 912 的
   `bDualSiteUseOneSuck`、`bPreventDropfunction`、`iYieldAlarmCheckIntervalByCount`。
 
-完整內容見 ChangeLog `D:\docs\ChangeLog\CHANGES_20260924_Steven.md` §68 與
-`D:\docs\ChangeLog\CHANGES_20260925_Steven.md` §2、§6、§7。
+完整內容見 ChangeLog `<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260924_Steven.md` §68 與
+`<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260925_Steven.md` §2、§6、§7。
 
 ---
 

@@ -9,7 +9,7 @@
 | 項目 | 路徑 |
 |------|------|
 | 生成腳本 | `scripts/gen_io_alias_doc.py`（本 skill 內） |
-| 輸出文件 | `D:\docs\manual\HT9011UC_IOSetView_Alias_Map.html` |
+| 輸出文件 | `<入口網站 repo>\public\Docs\manual\HT9011UC_IOSetView_Alias_Map.html` |
 | 截圖來源 | `D:\HT9045\IMG\IO\<tabsheet名稱>.png`（938x938、1:1 未縮放） |
 | DFM 來源 | `D:\HT9045\HT9011UC_Code_V3.33.908.0_20260702\iosetview.dfm` |
 
@@ -101,7 +101,7 @@ HTML 內建 CSV 檢視引擎，將 IO 點位資訊顯示於三處：
 - 預設使用**生成時內嵌**的 `D:\HT9045\system\IO_Table.csv`（cp950 讀取）
 - 使用者可按「載入 IO_Table.csv」或**拖放 CSV** 到頁面 → 存入 localStorage，重新整理仍沿用
 - 「還原內建資料」清除外部載入
-- 腳本會複製 CSV 到 `D:\docs\manual\IO_Table.csv`（僅在不存在時，不覆蓋使用者編輯）
+- 腳本會複製 CSV 到 `<入口網站 repo>\public\Docs\manual\IO_Table.csv`（僅在不存在時，不覆蓋使用者編輯）
 - 重複 Alias 全部列出；Enable=0 顯示刪除線；Lane/IP 空白顯示「未配置」；查無 Alias 顯示「無資料」
 - 時序欄（警報 On/Off ｜ 延遲 On/Off）僅 Output 類型顯示
 

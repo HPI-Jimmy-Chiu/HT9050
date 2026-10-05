@@ -133,7 +133,7 @@ All X file(s) scanned — no risk patterns detected. ✔
 
 | 腳本 | 用途 |
 |------|------|
-| `scripts/scan_and_report_pre_release.py` | 自動掃描 **P1/P2/P4/P5/P6/P7/P9/P11/P12/P13 + DFM(Form)** 並生成報告。**吃命令列參數**：`python scan_and_report_pre_release.py <版本資料夾> [--report-dir ...] [--developer ...]`，版本標籤由資料夾名稱自動抽出。預設輸出至 `D:\docs\customers\HPI-TW\0000_HonPrec`。**報告產製 follow `make-report-skill`**：MD 不放 Logo，HTML 一律由 `md_to_html.py --template blue`（honprec-blue-template）轉出，不在腳本內嵌 base64。P11 內建 4 道 FP 過濾與嚴重度啟發式；DFM 只看 Form 物件本身。 |
+| `scripts/scan_and_report_pre_release.py` | 自動掃描 **P1/P2/P4/P5/P6/P7/P9/P11/P12/P13 + DFM(Form)** 並生成報告。**吃命令列參數**：`python scan_and_report_pre_release.py <版本資料夾> [--report-dir ...] [--developer ...]`，版本標籤由資料夾名稱自動抽出。預設輸出至 `<入口網站 repo>\public\Docs\customers\HPI-TW\0000_HonPrec`。**報告產製 follow `make-report-skill`**：MD 不放 Logo，HTML 一律由 `md_to_html.py --template blue`（honprec-blue-template）轉出，不在腳本內嵌 base64。P11 內建 4 道 FP 過濾與嚴重度啟發式；DFM 只看 Form 物件本身。 |
 | `scripts/run_build_verify_20260323.ps1` | BCB6 全重建腳本（建議改用 [compile-verification.md](references/compile-verification.md) 的 `cmd /c` 版本以避免 MAKE0000.@@@ 問題） |
 | `scripts/parse_build_log_20260323.py` | 解析 build log 輸出 Error/Warning 統計 |
 

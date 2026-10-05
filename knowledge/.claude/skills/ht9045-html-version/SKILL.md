@@ -13,24 +13,24 @@ description: >
 > 現成的權威表，任何新盤點都要先對它；`tag` 級對顯示頁是**完成態**不是缺口。
 > 另記 dfm 事件盤點工具 `audit_dfm_events.py`（九桶、兩句必講的話、五個會讓數字錯一倍的陷阱）、
 > 不停機告警 NonStop（定義＝C++ 不呼叫 `StopAllMotor()`）、以及 AccessLevel 的缺口。
-> 當日完整變更紀錄：`D:\docs\ChangeLog\CHANGES_20260922_Steven.md`
+> 當日完整變更紀錄：`<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260922_Steven.md`
 
 > **//Steven 20260921** — 新增**第三種形狀：行為翻譯層**（golden 的 VCL handler 搬到瀏覽器）。
 > 兩支落地：`ht9045_setup_sitemap.js`（Setup.SetUp 的 Site Mode）與
 > `ht9045_contact_slk.js`（Setup.Contact 的 SLK 捲軸與 Contact Force）。
 > 一併記下 dfm `TScrollBar` 產生成空 `<div>`、VCL `OnChange` 在 web 沒有對應、
 > 以及存檔擴充點 `HT9045Contact.addCollector()` 三件事，見「行為翻譯層」一節。
-> 當日完整變更紀錄：`D:\docs\ChangeLog\CHANGES_20260921_Steven.md`
+> 當日完整變更紀錄：`<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260921_Steven.md`
 
 > **//Steven 20260919** — 新增三個 dfm 轉換頁（`Setup.ContactForce` / `HW.VacuumUnit` / `Setup.AGV`）、
 > 產生器三個新機制（`JOB_BASE` 指定別棵 golden 樹、`HT9045_DFM_OUT` 輸出目錄覆寫、
 > 宣告式 `widget_host()` ＋新檔 `page-widgets.js`），以及兩個元件模板
 > （`makeVacuumPanel` 新增、`makeContactForceGroup` 依 dfm 原型重寫）。
-> 當日完整變更紀錄：`D:\docs\ChangeLog\CHANGES_20260919_Steven.md`
+> 當日完整變更紀錄：`<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260919_Steven.md`
 
 > **//Steven 20260916** — 更新接線分級（16/14/37 → 21/1/9/36）、補上執行期 tag 訂閱層，
 > 並訂正 `Status.Security` 的後端檔（`levelset.dat`，不是 `Security_new.def`）。
-> 當日完整變更紀錄：`D:\docs\ChangeLog\CHANGES_20260916_Steven.md`
+> 當日完整變更紀錄：`<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260916_Steven.md`
 
 > **//Steven 20260915** — 本檔於 2026-09-15 更新。
 > 當日完整變更紀錄：`D:\HT9045\CHANGES_20260915_Steven.md`
@@ -62,7 +62,7 @@ theme.css, 佈景主題, SHOT_MAP, 截圖頁, 版面拖曳模式, layoutEdit,
 ## 產出位置
 
 ```
-D:\HT9045\                    ← 2026-09-02 由 D:\docs\manual\HT9xxx_Manual\ 搬移至此
+D:\HT9045\                    ← 2026-09-02 由 <入口網站 repo>\public\Docs\manual\HT9xxx_Manual\ 搬移至此
 ├── background.html          ← 視窗管理器桌面＋開站品牌 loader；WINDOWS 陣列定義各視窗，?mode= 往下傳；?machine= 決定機種 profile
 ├── release.html / debug.html / debug9050.html ← 入口（debug9050 帶 machine=HT9050）
 ├── HT9045_Release.cmd    ← **Edge --kiosk 全螢幕**啟動器（release：無瀏覽器 UI；頁內封鎖右鍵/快速鍵）

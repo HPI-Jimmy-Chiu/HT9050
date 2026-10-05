@@ -198,8 +198,8 @@ IMG_MAP 命中 → BMP 轉 `img/dfm_<檔名>.png`（空格轉底線）。
 
 | 用途 | 位置 |
 |---|---|
-| IO 畫面元件相對位置（座標標框） | D:\docs\manual\HT9011UC_IOSetView_Alias_Map.html |
-| 其餘畫面截圖對照 | D:\docs\manual\SECS_Manual\HT9045_SECS_ScreenMap_ZH.html、HT9045_Config_ScreenMap_ZH.html |
+| IO 畫面元件相對位置（座標標框） | <入口網站 repo>\public\Docs\manual\HT9011UC_IOSetView_Alias_Map.html |
+| 其餘畫面截圖對照 | <入口網站 repo>\public\Docs\manual\SECS_Manual\HT9045_SECS_ScreenMap_ZH.html、HT9045_Config_ScreenMap_ZH.html |
 | 底圖 | D:\HT9045\IMG\BMP、D:\HT9045\IMG\Graphic |
 
 ## VCL→HTML 定位法則（2026-08 以 cSpeed 驗證）

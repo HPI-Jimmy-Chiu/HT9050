@@ -4,7 +4,7 @@
 # 新檔。盤點 HT9045.cpp 的 Application->CreateForm 清單裡，哪些表單建立後
 # 從未被 Show() / ShowModal() 顯示過，寫入 screenshot_meta.js 的
 # FORM_SHOW_STATUS。
-# 當日完整變更紀錄：D:\docs\ChangeLog\CHANGES_20260919_Steven.md
+# 當日完整變更紀錄：<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260919_Steven.md
 # ----------------------------------------------------------------------
 
 """gen_form_show_status.py -- 產生 FORM_SHOW_STATUS 並寫進 screenshot_meta.js。

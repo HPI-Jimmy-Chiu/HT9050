@@ -2,7 +2,7 @@
 # Steven 20260916
 # ----------------------------------------------------------------------
 # 新檔。用 Edge 無頭模式把表格頁真的載入一次，檢查 sysGrid 有沒有畫出來。
-# 當日完整變更紀錄：D:\docs\ChangeLog\CHANGES_20260916_Steven.md
+# 當日完整變更紀錄：<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260916_Steven.md
 # ----------------------------------------------------------------------
 
 """grid_smoke.py -- 沒有 Playwright，就用 msedge --headless --dump-dom。

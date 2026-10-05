@@ -2,7 +2,7 @@
 r"""gen_setup_cosflags.py -- 從 golden CosFunction.cpp 抽出 Set Up 畫面要用的客戶旗標
 
 //Steven 20260921
-當日完整變更紀錄：D:\docs\ChangeLog\CHANGES_20260921_Steven.md
+當日完整變更紀錄：<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260921_Steven.md
 
 為什麼需要這支
 --------------

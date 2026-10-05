@@ -42,7 +42,7 @@
 > （措辭改寫、指向不存在的 `FlowChart\` 死指標、或只是「五個 vs 六個陷阱」的舊數字）。
 >
 > ⇒ **Skills 現在只有 `.claude/skills/` 一處權威，不需要再同步任何鏡像。**
-> 完整稽核：`D:\docs\ops\weekly\2026\09\20260918\20260918_Steven_skills_duplication_audit.md`
+> 完整稽核：`D:\docs\ops\weekly\2026\09\20260918\20260918_Steven_skills_duplication_audit.md`（20261005 18:1x 註：這份稽核只在 Steven 那台的 `D:/docs`，沒有搬進入口網站；Steven 1005 17:0x 起 ChangeLog／日報／週報改放入口網站 repo 的 `public/Docs/…`（MR !211），那天的 ChangeLog 在 `public/Docs/ChangeLog/Steven/CHANGES_20260918_Steven.md`）
 
 ### 可用子代理（Task 工具呼叫）
 - `ht9045-v912` — **目前的量產維護目標**（20260909 起），鎖定 `HT9011UC_Code_V3.33.912.0_20260908_Jimmy`（公司 20260908 出貨版）。新客戶案件預設走這支。

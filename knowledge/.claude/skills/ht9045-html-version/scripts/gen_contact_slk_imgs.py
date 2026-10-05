@@ -2,7 +2,7 @@
 """gen_contact_slk_imgs.py -- Setup.Contact.html 的 imgSLK 換圖素材
 
 Steven 20260921
-當日完整變更紀錄：D:\\docs\\ChangeLog\\CHANGES_20260921_Steven.md
+當日完整變更紀錄：<入口網站 repo>\\public\\Docs\\ChangeLog\\Steven\\CHANGES_20260921_Steven.md
 
 golden cContact.cpp:2080 DutCount()：
     asStr.sprintf("%sContact%d.bmp", BmpPath, scrbSLK->Position);

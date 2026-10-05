@@ -22,7 +22,17 @@ from datetime import datetime
 #   - HTML 一律透過 make-report-skill 的 md_to_html.py 產生（不在本腳本內嵌 base64）。
 # ---------------------------------------------------------------------------
 
-DEFAULT_REPORT_DIR = r"D:\docs\customers\HPI-TW\0000_HonPrec"
+def _portal_docs(sub, old):
+    """St02 20261005 (Steven: documents go to the RD5 portal): <portal repo>\\public\\Docs\\<sub>.
+    Portal repo = env RD5_PORTAL_REPO, else D:\\RD5-Portal (St01 / St02), else D:\\HT9045-Index (laptop);
+    none of them there -> the old D:\\docs location, with a warning."""
+    for root in (os.environ.get("RD5_PORTAL_REPO"), r"D:\RD5-Portal", r"D:\HT9045-Index"):
+        if root and os.path.isdir(os.path.join(root, "public", "Docs")):
+            return os.path.join(root, "public", "Docs", sub)
+    print("WARNING: RD5 portal repo not found (set RD5_PORTAL_REPO) -> old location " + old, file=sys.stderr)
+    return old
+
+DEFAULT_REPORT_DIR = _portal_docs(r"customers\HPI-TW\0000_HonPrec", r"D:\docs\customers\HPI-TW\0000_HonPrec")
 DEFAULT_DEVELOPER = "Steven"
 
 # make-report-skill 的 MD→HTML 轉換器（除錯/風險報告用 blue 模板）

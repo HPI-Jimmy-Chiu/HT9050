@@ -32,7 +32,7 @@ applyTo: "**/*"
 | 原始碼編碼 | **Big5 (CP950)** — 所有 .cpp/.h/.dfm/.rc |
 | SVN 儲存庫 | `file:///U:/SourceCode/SVN/HT9011UC_Code_V3.20` |
 | EXE 路徑 | `D:\HT9045\EXE\HT9045.exe` |
-| 合併報告路徑 | `D:\docs\release-notes\MergeReport\<年度>\` |
+| 合併報告路徑 | `<入口網站 repo>\public\Docs\MergeReport\<年度>\` |
 | SVN Base 路徑 | `D:\HT9045\HT9045_SVN_TempFile\` |
 | Python | `C:\Users\steven\AppData\Local\Programs\Python\Python314\python.exe` |
 
@@ -230,7 +230,7 @@ fc.exe /N "<主幹路徑>\<檔案.cpp>" "<Merge路徑>\<檔案.cpp>" > "d:\HT904
 > 詳見編譯驗證流程，含 cmydef.h/cpp 補充、連結錯誤處理、Build Log 確認，以及 Kevin/Jimmy 功能確認。
 > [references/merge-build-verify.md](references/merge-build-verify.md)
 
-> **Step 6 報告格式**：遵循 `d:\.github\skills\make-report-skill\SKILL.md` 的「合併報告（Merge Report）」類型規範，含輸出路徑（`D:\docs\release-notes\MergeReport\<年度>\`）、MD-only 格式，以及 Logo 使用規則（MD 報告不放 Logo）。
+> **Step 6 報告格式**：遵循 `d:\.github\skills\make-report-skill\SKILL.md` 的「合併報告（Merge Report）」類型規範，含輸出路徑（`<入口網站 repo>\public\Docs\MergeReport\<年度>\`）、MD-only 格式，以及 Logo 使用規則（MD 報告不放 Logo）。
 
 ### Step 4.5：Layer 1 靜態驗證（編譯前必做）
 

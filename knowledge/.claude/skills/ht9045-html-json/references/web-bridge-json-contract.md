@@ -1,7 +1,7 @@
 # HT9045 Web Bridge — HTML 端的 JSON 契約
 
 > **//Steven 20260916** — 新檔。
-> 當日完整變更紀錄：`D:\docs\ChangeLog\CHANGES_20260916_Steven.md`
+> 當日完整變更紀錄：`<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260916_Steven.md`
 > 最後更新：20260927（Steven 團隊）—— §1.3 防連點補註對過 HEAD `99ec7b7b` 的 `WebCmdGuard.cpp`／`.h` 更正（`motor.access` 改 action 級、IO 鈕 `W906IoClickGuardScope`、行號），全文以 `wbserve-conventions.md` §4 為準。
 
 ## 這份文件是什麼

@@ -1,6 +1,6 @@
 # St02 現況板（更新：2026-10-03 12:3x，S-20 主迴圈接手中、N07 已疊上、建置中）
 
-> 新 session 先讀這份。我是 **St02-E**；派工的協調者是 **St02-M**（session 名稱會變，只記在本機；以最新訊息的 `from=` 為準）；St01 的協調者是 **ST01-M**，St01 的工程是 **ST01-E**。
+> 新 session 先讀這份。我是 **St02-E**；派工的協調者是 **St02-M**（session 名稱會變，目前 **github-62**，uds `\\.\pipe\LOCAL\cc-msg-2e6f870585ba6e0d521e943f8e46a02b`（14:00 重啟後 St02-M＝github-62，我＝github-de），以最新訊息的 `from=` 為準）；St01 的協調者是 **ST01-M**，St01 的工程是 **ST01-E**。
 > 規則：每個 commit 兩組態編譯、不執行；St01 跑 ctest（§2 那一列要寫測試名＋「請 St01 代跑」，ST01-M 1002 起只代跑這種列）。每次 push 後都更新這份。⚠ 1002 07:4x Steven 對 St02-M 說「你如果能跑得起來的話, 可以做測試」——St02-E 這邊還沒生效（只是轉述，St02-E 的排程指令仍寫「編譯只編不跑」），已在 St02-E 的 session 直接問 Steven，等他回。
 > 裁決要問的：一律交給 St02-M，由它轉 ST01-M 彙整給 Steven；不直接問 Steven、不寄信。
 > 5 小時觸發：本 session 設了 cron `58 */5 * * *`（只在本 session 有效）。
@@ -24,6 +24,136 @@
 - Q41：還沒 commit（A 段 TesterIF，4 檔），sim 0 errors。
 - 16:40：gpib-widget 推到 `bf2690aa`（文件）；本機 `00772497` 已 merge main 00f9a882（有程式）→ 兩組態編譯中，過了再推。st02-on-cbridge 下次推之前要 merge St01 head（現在 5b7fe37c）。
 
+### 10-05 16:4x 狀態（St02-E 寫，session ht9045-46；St02-M＝ht9045-32；新 session 從這段接）
+- **S-24＋S2 已推＝MR !209** `bf8984cb`（從 b857685a 快轉；合過 main 8d2bb8c1＝第 68b 批）。兩組態 0 錯＋PE、nm 四個符號全域 T；25 支目標 ctest SIM／SHIP 都 25／25；完整 ctest（ab51e36e）SIM 406／428、SHIP 420／428，紅的全是這台環境、nm 確認沒有連進 S-24。log 在 `C:\AI_TempFile\st02e-scratch\`（s24m_*、s24n_*）。等筆電 gate。
+- **這台第一次跑完整 ctest 的「環境紅燈」名單**（不是回歸，之後比對用）：SIM＝config_db、ini_helpers、config_loaders、GA1_ReadGeneralIni、dfm2rc_rc_compiles／_fidelity／_idempotent（沒裝 rc.exe）、SimIO、W6_Canary、W6_4_TesterAnchor、HanaART、BarCodeHelpers、BarCode8CCDGlue、AGV_E84、Automation、W7_L1_Auto2／_Color／_Loader／_AutoRT、GA2_C1_cinitial、WB_SimPump、mainproc_guard（讀這台 `D:\HT9045\system` 的機台設定）；SHIP＝前 7 支＋WebMotorAccess 偶發逾時（-j6 下 121 秒，單獨 2 秒過）。
+- **C21 補審 0218 已寫好**：`C:\AI_TempFile\st02e-scratch\ST02_MACH0218_HOME_REVIEW_20261005.md`（交 St02-M 發布）。結論：0218 正確（HOME 中途停下不再算完成，START 從第 1 步重 HOME）；HOMEPOS0（H-1／H-2）仍成立；小問題 Q-0218-1（暫停超過 180 秒再 START 會立刻停）。
+- **寫入邊界改到 .claude**：Steven 刪了 `D:\HT9045\.github`（「以後只有 .claude」）⇒ 政策在 `D:\HT9045\.claude\ops\write-boundary-policy.json`（本機未追蹤；Steven 自己改了 settings.json 第 9 行；`scripts/ops/check-write-boundary.ps1:358` 預設也改）。external 多了 `D:\RD5-portal\`、`C:\AI_TempFile\`、`%USERPROFILE%\.claude\skills\`。⚠ 工作副本的 116 個 .github 刪除、settings.json、check-write-boundary.ps1、.claude/ops **都不提交**；St01 MR !208 會把政策正式搬上 main，到時把那三行重新加回。`D:\AI_TempFile\` 寫檔會被 hook 詢問。
+- **ChangeLog 改放入口網站**（Steven 17:0x）：`D:\RD5-portal\public\Docs\ChangeLog\Steven02\CHANGES_<日期>_Steven02.md`；0927～1005 的 9 份已複製過去（`D:\docs\ChangeLog\` 原檔留著、不再寫）。入口網站 commit／MR 由 St02-M 做。make-report-skill（SKILL.md 第 75～80 行、references/change-log/change-log.md）已改；St01 記錄員 skill（ops-st01-clerk-report）請 ST01-M 改。17:0x 兩個 repo 都已快轉：`D:\HT9045`＝`2c08c1c0`、`D:\RD5-portal`＝`d22de56`。
+- **暫存一律放 `C:\AI_TempFile\`**（Steven 14:2x 定案）：新的腳本與 log 在 `C:\AI_TempFile\st02e-scratch\`；新工作樹也開在 `C:\AI_TempFile\`。
+- 下一步：工作樹搬到 `C:\AI_TempFile`（st02-s39／s40／s45／esc／ela＋st02-claims；robocopy 不含 obj → `git worktree repair` → 舊的 .git 改名 .git.moved，D 槽一律不刪；obj 在 C 槽重新設定）→ C18（`650cb578`，!174 已進 main，合 main 時 tests/CMakeLists 檔尾衝突，main 在前；FastClk_Jobs 對照 c309e159）→ C22（`hpi-` 前綴）。
+
+### 10-05 13:3x 狀態（St02-E 寫，session ht9045-46；St02-M＝ht9045-32；新 session 從這段接）
+- **Steven 1005 13:2x 在 St02-E 的 session 直接說：「你可以在這台電腦上跑測試」**＋「你能決定的就自動決定／不要一直問我／大部分項目可以從 skill 裡面找答案」⇒ ctest 現在在這台本機跑（SKILL §2 已改）；St01 不再代跑。
+- **S-24＋S2**（`v906/st02-s24-staterecord`，工作樹 st02-s40）：`825faecc` FShow_Audit（StateRecordDiag.cpp 4 處直接讀照 !165 前例寫理由、基準 54→58）→ `e482919d` T7 測試修正（第一次本機跑 151 過／4 紅，都是測試的 CodePart 與 FindLine 錯，掛點本身照認領）→ `ab51e36e` 合 main 5f1fd774（tests/CMakeLists 檔尾 main 在前；8a 因 main 在 :2422 加 Ht9050DryRun.cpp 移到 :2557、內容不變）。merge-tree 一行。**還沒推**：建置線 s39 切 ab51e36e 兩組態重建 → 本機跑受影響的 ctest 兩組態 → 推＋開 MR。
+- **C22（St02-M 14:0x 撤回 13:3x 的更正；St01 13:2x 更正列 handoff d58509a0）**：照 Steven 11:5x——前綴 **`hpi-`**（hpi-gpib／hpi-secs／hpi-rs232）；**S-24 推完就開工**（Steven「這個應該可以先開工了」），照 C22 卡的結構、不等 S2 範本，St01 的 S1 規範不同再調；舊名 stub SKILL.md 指向新名、一週後刪。放行範圍只有 §1 agents＋C22，其他重組等 Steven／Jimmy。
+- **RULINGS_20261005 #6（Jimmy 13:4x）**：驗證前①工作樹更新到 main 最新；②`python tools/machine_sync/machine_sync.py check`（工具在 repo 根目錄 tools/，不在 V906 樹裡），NOT SYNCED 就 apply（先備份、做完 restore）；③回報附 main commit＋機台快照時間。1005 14:0x 這台 check＝NOT SYNCED（32／32 關鍵檔不同；這台 9045GPIB_12Site、機台 9050GPIB；快照 13:35，GitHub ff1b55f3）。**ctest 閘門跑在沙盒、不讀機台設定 ⇒ S-24 不 apply**，回報寫明；要在這台驗證機台行為時才 apply＋restore。
+- 順序：S-24 → C22 → C18（等 !174 進 main）。
+
+### 10-05 12:4x 狀態＝交接（St02-E 寫；新 session 從這段接；下面 10-05 各段的「接下來」都已被這段取代）
+**正在做：S-24＋S2 開一張 MR（batch 68b）。** 分支 `v906/st02-s24-staterecord`，工作樹 `D:\AI_TempFile\st02-s40`，本機 tip **`8500ea58`（未推；遠端還是 b857685a）**：
+`b857685a` S-24 4 個新檔 → `efa34cb7` S2（W906_IO.csv／W906_Recent.csv，只動自己 4 檔）→ `ac49fc5b` 合 main 9403048b → `8500ea58` 六個共用檔的 13 項掛點。
+- **掛點**：認領 St02-M 已貼 §1（handoff `ce3c82e5`，全文 `docs/handoff/ST02_S24_HOOKS_20261005.md`）；13 項用 Edit 各套一次，**權限沒擋**；`s2h\verify_applied.py` 逐字比對 13 處全 OK，git diff 只有預期的行（wb_serve +124／改 7、MainStateRecord 7/7、其餘各 1、tests/CMakeLists +30）。④ uhome、⑤ WebMotorAccessLive 沒做（等 NB2-1）。
+- **建置（進行中）**：建置線 s39＝原始碼 `D:\AI_TempFile\st02-s39` 已 `checkout --detach 8500ea58`、兩個 obj 都重跑過 cmake；背景 `lane_cmake.sh` 先 SIM 後 SHIP，紀錄 `C:\Users\steven\AppData\Local\Temp\claude\d---github\c8311755-ee3b-4c2b-9f5f-bc5682ac9613\scratchpad\s09close\s24h_sim.log`／`s24h_ship.log`（12:47 SIM 81%、0 錯）。⚠ 之後做 C18 要把 s39 切回 C18 的 commit 並重跑兩個 cmake。
+- **接下來照順序**：(1) 兩個 log 用嚴格條件數錯誤＝0（`: error:|fatal error:|FAILED:|undefined reference|multiple definition`），有錯先修、修完重建；(2) nm 兩組態 wb_serve.exe 要有 `W906_SrDiagWbServeTick`／`W906_StateRecordDuringDialog`／`W906_StateRecordHangRequest`，`test_st02_staterecord_diag.exe` 有建出來；(3) `git fetch`，`git merge-tree --write-tree HEAD origin/main` **單獨跑、只印一行**才推；(4) 推同一分支（從 b857685a 快轉）＋push option 開 MR：`-o merge_request.create -o merge_request.target=main -o merge_request.title=... -o merge_request.description=...`，描述寫 S-24＋S2、§1 認領 ce3c82e5、不含 ④⑤、兩組態 0 錯、ctest `St02_StateRecordDiag`「St02-E 本機跑（待 Steven 在 St02-E 確認）」、人工審核三點（⑥ 網頁 15 秒後改走卡死路徑、⑦ 模擬組態回覆 recorded:true、阻塞框內可按 State Record）；(5) MR 號＋tip 回報 St02-M，附日報段＋ChangeLog 第 24 列（第 23 列已寫到「認領已交」）。
+- **工具**（都在 `C:\Users\steven\AppData\Local\Temp\claude\d---github\c8311755-ee3b-4c2b-9f5f-bc5682ac9613\scratchpad\s2h\`）：`anchor_check.py`（OLD 在哪一行）、`gen_claim.py <base>`（產認領檔＋old_/new_*.txt）、`dry_copy.py`＋`dry_compile.sh`（NEW 套在副本上試編）、`verify_applied.py`（套完逐字比對）。St02-M 規定：不准用腳本改共用檔，只能 Edit；權限擋就停、回報 St02-M 原文。
+- **測試誰跑**：St02-M 轉述 Steven 11:5x「St02-E 自己在這台跑」、「St01 之後沒空代跑」——**Steven 還沒在本 session 直接說**，所以照舊只編譯不跑；St01 不再代跑。
+- **新規則**：RULINGS_20261005 #4——說「機台設定／工單問題」前先跑 `python tools/machine_sync/machine_sync.py check`（NOT SYNCED→apply --yes→再看→restore；SYNCED 引兩行 snapshot）。
+- **排隊中**：C18 `650cb578`（v906/st02-esc，工作樹 st02-esc）等 !174 進 main（batch 68b）→ merge-tree 對新 main 一行才推，代跑清單 St02_ProcessForESC（＋W906_ESC_CONTROL=1 要 exit 1）、St02_Timer1、St02_TimerESD、St02_ModalTimer1、St02_MainTimers、TesterComm_Handler、FastClk_Jobs。**C22**（通訊 15 支 skill → hpi-gpib／hpi-secs／hpi-rs232，分支 `v906/st02-skills-comm`＋MR，helper 最多 3，驗證自己做：0 斷鏈、舊觸發詞都在、檔數／位元組前後一致）在這張 MR 之後；卡片與提案存 `C:\Users\steven\AppData\Local\Temp\claude\d---github\c8311755-ee3b-4c2b-9f5f-bc5682ac9613\scratchpad\c22\`（card_1114.md、proposal.md §2.1 #16-18），盤點 `c22\inventory_before.txt`（15 支、182 檔）；前綴 hpi-（Steven）vs ht-（#5）與「第三批、等 St01 S1 規範」St02-M 已請 ST01-M 協調，先用 hpi-。**14:0x 定案：`hpi-`、S-24 推完就開工（見 13:3x 段）。**C20 取消（ES02 已做）。
+
+### 10-05 12:1x 狀態（St02-E 寫；新 session 從這段接）
+- **S-24 分支** `v906/st02-s24-staterecord`（工作樹 st02-s40）本機 `ac49fc5b` = b857685a S-24 ＋ `efa34cb7` S2 ＋ 合 main 9403048b；**未推**。
+- **掛點認領**交 St02-M（`scratchpad/s2h/ST02_S24_HOOKS_20261005.md`，13 項，不含 ④⑤）；貼 §1 後：用 Edit 逐項套（只試一次，權限擋就停、告訴 St02-M，不用腳本、不繞道），再兩組態完整建置＋nm、merge-tree、推、開一張 MR（S-24＋S2，batch 68b）。驗證工具：`s2h/anchor_check.py`（OLD 位置）、`s2h/dry_copy.py`＋`dry_compile.sh`（副本試編）。
+- 測試誰跑：St02-M 轉述 Steven 11:5x「St02-E 自己在這台跑」——**還沒在本 session 直接確認**，照舊只編譯；§2 寫「St02-E 本機跑（待 Steven 在 St02-E 確認）」。St01 不再代跑。
+- 之後：C22（hpi-gpib／hpi-secs／hpi-rs232 skill 重組，分支 `v906/st02-skills-comm`，helper 最多 3）。C18 `650cb578` 等 !174（batch 68b）。C20 取消。
+
+### 10-05 11:3x 狀態（St02-E 寫；新 session 從這段接）
+- **S-24 已推** `b857685a`（工作樹 st02-s40）；筆電套 6 個共用檔掛點（ST02_S24_HOOKS／CLAIMS_3_5）後開 MR。
+- **S2**（W906_IO.csv＋W906_Recent.csv）認領內容已交、等 St02-M 核准；核准後在同一分支加一個 commit，只動同樣 4 個檔（StateRecordDiag.cpp 直接 include mykitsuck.h／mycylin.h，g++ -H 確認沒有 aHotPlateSubstrate.h）。
+- 等：!174 `581b0dcb`（St01 代跑）→ C18 `650cb578`；C20 等 0162 上 GitLab。
+
+### 10-05 11:0x 狀態（St02-E 寫；新 session 從這段接）
+- **C21（W-67）交出**：scratchpad `w67/ST02_MACH0210_SAFETY_20261005.md`（St02-M 發布到 docs/handoff）。C19 補充 §7 在 `c19/C19_ADDENDUM_SITE_INI.md`。
+- **!174 已推** `581b0dcb`（等 St01 代跑 FastClk_Jobs，貼第 7 節 [timing]／[info]）；TIMERRES 選擇不被忽略＝筆電的決定。
+- 現場機台打包在 `D:\AI_TempFile\ht9050_site_20261005_0752\`（只讀、只引用鍵值、不碰 PASSWORD）。
+- 之後：C18（`650cb578`，等 !174 上 main）→ C20（等筆電把 0162 放上 GitLab）。s39 建置線停在 581b0dcb。
+- 11:1x（St02-M）：C21 已逐位元組發布（handoff ce4377ed）；!174 代跑請求已貼。C19 補充 §7（`c19/C19_ADDENDUM_SITE_INI.md`）已確認 10:3x 接上（handoff 7895774a），沒有待辦。Steven 的日報／RD5 portal／08:0x 行程檢查改由 St02-M 做，不是 St02-E 的工作。
+
+### 10-05 10:0x 狀態（St02-E 寫；新 session 從這段接）
+- **C19 交出**（報告在 scratchpad `c19/ST02_C19_TYPE9050_SWITCH_20261005.md`，St02-M 放 steven-handoff）。
+- **!174 第 7 節修正** `581b0dcb`（工作樹 st02-s45，分支 v906/st02-mainloop-rest）兩組態編譯中 → 0 錯＋merge-tree 一行就推、交 hash（St02-M 09:5x 已核准）。TIMERRES 的 Windows 11「選擇不被忽略」只是提案，筆電決定。
+- 之後：C18（等 !174 上 main）→ C20（HTDESIGNER tools 0162，等筆電放上 GitLab）。s39 建置線停在 581b0dcb。
+
+### 10-05 07:3x 狀態（St02-E 寫；新 session 從這段接）
+- **第 66 批已上 main**（bfb30b76：!190／!191（筆電自修 ELA_Oee）／!192／!193 在 1bd7e1b7）。C17 結案，三個工作樹刪了（本機分支 -b2 因追蹤上游 -d 不刪，留著）。
+- **MR !194**（普查 v2，只有文件，工作樹 st02-c12t 分支 `v906/st02-c12v2-census` `815fa178`）等合併。
+- **C18** 本機 `650cb578`（工作樹 st02-esc），兩組態 0 錯；merge-tree 對 main／!174 都一行；**等 !174 上 main 才推**。s39 建置線停在 650cb578。
+- 換建置線基底時：先對兩個 obj 目錄各跑一次 `cmake <obj dir>` 再編（SHIP 不會自己重新設定）。
+- 07:5x：**!194 已合進 main（c0cbcd33）**；C18 對 c0cbcd33 merge-tree 仍一行，繼續等 !174。st02-c12t 工作樹可刪（內容都在 main）。
+- 08:1x（St02-M）：**筆電沒算力暫停，St01 當備援整合**（自己 gate／合併、不做 GitHub 包、機台安全的等 Jimmy／筆電）。第 67 批空的。!174 St01 代跑 07:58 開始；**!174 上 main → C18 對新 main 跑 merge-tree → 推 → 交 St02-M hash＋代跑清單**（St02_ProcessForESC＋對照 W906_ESC_CONTROL=1 要 exit 1、St02_Timer1、St02_TimerESD、St02_ModalTimer1、St02_MainTimers、TesterComm_Handler、FastClk_Jobs）。
+
+### 10-05 06:5x 狀態（St02-E 寫；新 session 從這段接）
+- **ST02-C18（ESC）本機完成、已認領、等 !174 上 main 才推**：工作樹 `D:\AI_TempFile\st02-esc`、分支 `v906/st02-esc` `650cb578`（rebase 到 a9256df7 之後，merge-tree 一行），s39 建置線停在這個 commit。!174 合併後 → 再跑一次 merge-tree（main 與 !174 現在都一行）→ 推 MR，代跑清單 St02_ProcessForESC（＋對照 W906_ESC_CONTROL=1 要紅）、St02_Timer1、St02_TimerESD、St02_ModalTimer1、TesterComm_Handler、FastClk_Jobs。
+- 第 65 批已上 main（a9256df7：!183 S-27、!187）。!190／!191／!192／!193 進第 66 批（跟 F9050-BD；St01 不用再代跑 !191／!192）；C12 v2 的點擊量測仍請 St01；!174 等 NB2-1。工作樹 st02-e09b1／st02-s27 已移除。
+- **06:5x 起**：!191 紅燈修正已推（`25a68e6c`，St01 只重跑 ELA_Oee）；C12 v2 普查已推到 !193（`4797062e`，dead/A 74→63）。下一件：C18 等 !174；C18 本機 `650cb578`（含第 9 節測試，還要增量編一次：建置線現在停在 !191 的 25a68e6c）。
+- 07:0x：普查 §11 btnRUpToLDownN 備註在 st02-c12t 本機 `6c31e891`（沒推，跟下次動普查一起推）。
+
+### 10-05 04:4x 狀態（St02-E 寫；新 session 從這段接）
+- ESC 唯讀計畫交 St02-M（scratchpad `esc/ESC_PLAN.md`），等筆電把它變成卡片；**沒有認領、沒有改檔**。手上沒有別的工作。
+- 等：!190／!191／!192（St01 代跑 C17）、!193（St01 第 65 批後重跑 C12 v2，結果放 docs/handoff/c12_raw_v2/ 或 St01 說路徑 → 這台合併）、!174（NB2-1）、!183／!187（第 65 批）。
+
+### 10-05 04:3x 狀態（St02-E 寫；新 session 從這段接）
+- St02-M 04:2x 派三件：①S-28＝已由 NB2 I124 做完（結案）；②C12 A 類兩顆＝早就接好、探針誤判 → 改做 **MR !193**（探針 v2＋census ④⑤，工作樹 st02-c12t `1bd7e1b7`），等 St01 在第 65 批進 main 後重跑（指令在 census md §10）；③Qorvo ProcessForESC 唯讀計畫——**下一件**，筆記在 scratchpad `esc/ESC_NOTES.md`（golden 0618 main.cpp:7603-7706、Timer1 :2858、5 個觸發點；移植樹 bTriggerESC 在 THandlerTesterSide，fMain 沒有 ProcessForESC）。
+- 開著的 MR：!174、!183、!187、!190、!191、!192、!193。
+
+### 10-05 04:1x 狀態（St02-E 寫；新 session 從這段接）
+- **ST02-C17 三張 MR 都推了，等 St01 代跑**：!190（第一批 4 支，`12132473`）、!191（B1 21 支，`edbe01de`，工作樹 st02-c17b）、!192（B2 AGV_E84／ELA_Hub，`89423ecb`，工作樹 st02-c17b2）；B1、B2 都疊在 !190 上（!190 合併前 diff 會帶到它的 commit）。W7_L1_Auto 不改（理由見 ChangeLog 1005 第 6 列）。代跑方式：SIM／SHIP 同時跑兩次，跑完 TEMP 裡沒有 *_<pid> 殘留。s39 建置線停在 `89423ecb`。
+- E-09 只剩 Security 重量。開著的 MR：!174、!183、!187、!190、!191、!192。
+
+### 10-05 03:5x 狀態（St02-E 寫；新 session 從這段接）
+- **ST02-C17**（St01 E-039，St02-M 911ff6e0 認領 28 支＋tests/w906_test_tmpname.h）：第一批 **MR !190** `12132473`（工作樹 st02-c17）等 St01 代跑（BinSelCore、IniFiles、common、HSys_HeaterMix＋SIM／SHIP 同跑兩次）。**第二批**＝其餘 24 支（清單在 scratchpad `c17/scan2.tsv`），從 main 開新分支 v906/st02-c17-tmpnames-b；跨行程靠固定名稱的先停下回報。s39 建置線停在 12132473。
+- E-09 只剩 Security 重量（筆電 gate 機或 Steven）。開著的 MR：!174、!183、!187、!190。
+
+### 10-05 02:1x 狀態（St02-E 寫；新 session 從這段接）
+- **E-09**：v2 結果（docs/handoff/e09_raw_v2/）→ 清單重產 **MR !189** `a41823af`（工作樹 st02-e09，分支 v906/st02-e09-layout）。只剩主畫面 Logo 是網頁的錯（**!187** `4c8c6f25` 已修，代跑綠，等 gate）。**1005 02:3x 定案**：v3（e09_raw_v3/）Setup 20 個全是 [box only]、0 個 TEXT CUT ⇒ 不修。**E-09 只剩 Security 要真 wb_serve 重量**（St01 不開 wb_serve；交筆電 gate 機或 Steven 08:00 決定）。!189 tip `27077e6c`。Teach 不用改。分類腳本在 scratchpad `e09\`（v2_*.tsv、build_report_v2.py）。
+- 開著的 MR：!174 `5828ef91`（等 NB2-1 重跑）、!183 `568a2a02`（綠，第 65 批）、!187 `4c8c6f25`（綠，等 gate）。**!189 已由 St01 合進 main 67aa2356（1005 02:46）**；st02-e09、st02-c12 工作樹已移除（分支都已合併）。ChangeLog 1005 起寫 CHANGES_20261005_Steven02.md。
+
+### 10-04 23:4x 狀態（St02-E 寫；新 session 從這段接）
+- **E-09 第 1 批已推 MR !187** `4c8c6f25`（main.html:45＋E09_MainLogo），等代跑；工作樹 st02-e09b1。**E-09 下一步**：等 St01 的 v2 重量（docs/handoff/e09_raw_v2/），再在量測腳本加「文字寬度」檢查判 Setup，Teach／Omron 依 v2 決定（Teach 改的話保留 KB-GOLDEN 掛勾、代跑 teach_kb_golden_selftest.cjs／qwerty_golden_selftest.cjs）。
+- 開著的 MR：!174 `5828ef91`（等 NB2-1 重跑）、!183 `568a2a02`（綠，第 65 批）、**!187 `4c8c6f25`（1005 01:58 St01 代跑綠、對照組照預期紅；St01 同意 main.html:45；上機實點看 B43）**。S-28 唯讀；S-24 等 Q97。E-09 v2 重量 St01 01:55 開跑。1005 起 ChangeLog 寫 `D:\RD5-Portal\public\Docs\ChangeLog\Steven02\CHANGES_20261005_Steven02.md`。
+- **E-09 額外檢查（St01 W-54 回答 docs/handoff/ST01_W_ANSWERS_20261004.md:76-84，St02-M 23:5x）**：HT9050 有兩個螢幕（ht9050-hw hardware-overview.md 第 14 列），HMI 在哪一個、解析度／縮放／工作列問 EastSun；保守預設＝**對話框、提示、浮動框都要落在主畫面 925×720 框內（×1.1≈1018×792）**。v2 結果回來決定修正時，把開在這個框外的浮動提示／對話框列為候選（大表單如 io 1732 寬塞不下，靠 CLIPFIX＋捲動，不算）。
+
+### 10-04 23:1x 狀態（St02-E 寫；新 session 從這段接）
+- !186（E-09 清單）已進 main f2189135。**E-09 第 1 批**：工作樹 `D:\AI_TempFile\st02-e09b1`、分支 `v906/st02-e09-b1-logo`（本機、未提交）：tools/webprobe/e09_main_logo_selftest.cjs＋tests/CMakeLists.txt 檔尾 E09_MainLogo；main.html:45 修改用 scratchpad `e09\apply_logo.py`（先比對原文）。**main.html 是 St01 的檔：等 St01 回覆或約 23:4x 才執行**，之後提交、merge-tree、推 MR、回報 St02-M（代跑 E09_MainLogo＋反向）。
+- E-09 其餘：Teach／Omron 等 St01 用 v2（adfe1e8b）重量（結果在 docs/handoff/e09_raw_v2/）；Offset 撤回；Setup 待量測腳本加文字寬度檢查。
+- **W-54 已答（Steven 1004 23:1x，St01 轉）**：「應該是full hd. 但是現場可能設定不一樣，這題留給eastsun」⇒ E-09 先以 1920x1080（工作列後約 1032 高）為準修，現場設定由 EastSun 確認；1280 的結果只當參考。
+
+### 10-04 22:5x 狀態（St02-E 寫；新 session 從這段接，hash 見下面 21:2x）
+- !184 已進 main（ea726422，第 64b 批）。**E-09 清單 MR !186** `c058635c`：docs/handoff/ST02_E09_LAYOUT_20261004.md／.tsv＋e09_raw＋兩支 webprobe 工具。分類腳本在 scratchpad `e09\`（triage.py、order_vs_golden.py、clip_vs_golden.py、build_report.py）。
+- **E-09 修正（下一步）**：第 1 批 Main.html imgLogo、HW.teach.html 疊放順序與窗格寬；第 2 批 Setup.SetUp grpIndexOption、Setup.OffSet Image1、HW.OmronEJ1N 加熱器面板。等 St02-M 告訴我各頁的擁有者，先唯讀查第 1 批；改前給 OLD／NEW。Security 要在真 wb_serve 重量。
+
+### 10-04 21:2x 狀態（St02-E 寫；新 session 從這段接）
+- **hash**：!174 `5828ef91`（v906/st02-mainloop-rest，st02-s45）｜!183 `568a2a02`（v906/st02-s27-modal-timer1，st02-s27；綠，第 65 批）｜!184 `011b88ee`（v906/st02-c12-census-0618，st02-c12）｜E-09 `ce1610c4`（v906/st02-e09-layout，st02-e09，量測腳本 b13e14eb 起沒變）｜W42 本機 `34ddd9d7`（st02-ela，不推）｜S-24 本機 `02aee28d`（st02-s40，不推，等 Q97）。s39 建置線停在 568a2a02。各工作樹都乾淨；只有 D:\HT9045 的 SKILL.md／current-state.md 是本機未提交（跟下一張 skills MR 送，第 40 條修正＋第 41～44 條）。
+- **在等誰**：St01＝E-09 量測腳本兩次（1920x1032、1280x976）＋第 63 批後重跑 C12 點擊探針；NB2-1＝!174 在 5828ef91 重跑 11 支；EastSun（經筆電）＝HT9050 螢幕解析度與工作列——**22:2x 起照 RULINGS_20261004 第 4 條不等 EastSun，同時給 St01 一份回答**（筆電已在 f2cf5eee 轉成 W-54 給 EastSun、同時列給 St01 回答 W-57；E-09 本來就兩種解析度都量，不被它卡住）；筆電＝S-27b（Timer7／ProcessStatrDigital／Omron）、ProcessICHotTime、ProcessForESC 的派卡。
+- **E-09 計畫**：St01 結果回來 → 合成 docs/handoff/ST02_E09_LAYOUT_20261004.md＋.tsv（加靜態結果）開 MR → 分批修、每批一張 MR。靜態目前只剩 1920x1080／110% 下 11 個太高的視窗（CLIPFIX 應該處理，待實測）；Omron 已更正為不是溢出。這台不跑 Edge／node／exe。
+- **S-28 停著**（唯讀，等 St01 回覆 ScanKey／面板鍵路徑；若碰 uhome.cpp 要列確切行號給筆電，避開 F9050-BD 的 HOME flag19）。
+
+### 10-04 21:1x 狀態（St02-E 寫）
+- 已推：!174 `5828ef91`（等 NB2-1 重跑 11 支）、!183 `568a2a02`（綠，第 65 批）、!184 `011b88ee`（普查，等合併）。s39 建置線停在 568a2a02。
+- **E-09（最優先）**：工作樹 `D:\AI_TempFile\st02-e09`、分支 `v906/st02-e09-layout` `b13e14eb`（e09_layout_probe.py＋e09_static_layout.py）；等 St01 跑兩種螢幕大小，結果回來後合成 docs/handoff/ST02_E09_LAYOUT_20261004.md＋.tsv 開 MR，再分批修（OmronEJ1N 先）。background.html 避開 St01 S-16 的 :433-440、:792-798、:955-960、:983-986、:1056-1061（改前給 St02-M 行號）。**這台不跑 Edge／node／任何 exe**（Steven 的巡檢指令；St02-M 已請 ST01-M 問 Steven 要不要放寬）。
+- S-28 仍唯讀等 St01；S-27b 未開工。
+
+### 10-04 20:2x 狀態（St02-E 寫）
+- 第 63 批（第 144 包）進 main（!180、!161 已合）：**!174 衝突已在本機解 `5828ef91`**（MainTimersSt02.cpp 取 !174 的 Timer1BinTick 寫法），s39 建置中，建完先推；**!183 衝突已在本機解 `568a2a02`**（tests/CMakeLists.txt 檔尾兩塊都留），!174 建完再建、推。St01 在 1ee1d76e 的 !183 代跑仍有效（S-27 的檔在兩個 tip 間沒變）。
+- KB-GOLDEN 已解凍。**筆電新認領 F9050-BD（合併前不碰）**：acatchtray.cpp、asendic_Loader.cpp、csystem.cpp（DoReceiveAllToBottom_9050 與 DoCatchTray／DoInspectTrayColorOnLoader／DoLoad／InitAllProcessTask／DoTrayFeed 的 Type_HT9050 分支）、uhome.cpp HOME flag19、cprod.h、cmydef.cpp／.h、cinitial.cpp、mycylin.h、MachineType.h、TrayXMoveCheckEnc、MES0924、forms/fContact.h、tests/CMakeLists.txt 檔尾。S-28 若走到 uhome.cpp（TfHome::ScanKey）要在 OLD／NEW 列出確切行號。
+
+### 10-04 19:5x 狀態（St02-E 寫）
+- **INBOX 155 已推 MR !184** `011b88ee`（工作樹 `D:\AI_TempFile\st02-c12`，!184 合了再刪）：普查 md／tsv 重跑（golden 0618）＋St01 點擊結果併回＋md §9 D 類分派建議。反推點擊結果的腳本在 scratchpad `c12r\rebuild_probe.py`（以後 St01 再合併時若又缺 golden，可照做）。
+- 等：!174（NB2-1 重跑）、!183（代跑 15 支＋2 反向）、!184（合併）；S-28 唯讀等 St01。
+
+### 10-04 19:1x 狀態（St02-E 寫）
+- **S-27 已推 MR !183** `1ee1d76e`（工作樹 `D:\AI_TempFile\st02-s27`，分支 `v906/st02-s27-modal-timer1`，基於 !180 b4a8fc0b＋main）：等代跑 15 支＋2 個反向（scratchpad `s27/REVERSE_S27.md`）；上機要看：門鎖。**s39 建置線目前停在 1ee1d76e**（!174 要修就切 a6b76a6c、!180 切 b4a8fc0b）。
+- !174 `a6b76a6c` 等 NB2-1 重跑 11 支；S-28 唯讀等 St01；S-27b（Timer7／ProcessStatrDigital／Omron）未開工；ProcessICHotTime、ProcessForESC 等卡。
+
+### 10-04 18:1x 狀態（St02-E 寫）
+- **!174** `a6b76a6c`（FastClk_Jobs 第 6 節上限改用實際框時間；兩組態 0 錯）：等 NB2-1 重跑 11 支（含 St02_N07Alarm、C14_BinDisp）；s39 建置線目前停在 a6b76a6c（!180 要重建就切回 b4a8fc0b）。!180、!161、!173、!181 在第 63 批（!173／!181 已由 St01 合進 main `2a8bbb24`）。
+- **S-27（INBOX 93，告警框開著時照跑 fMain Timer1）開工**：插入點 `tools/wb_serve.cpp:7630`（W906_ModalWaitTick 內 FlushFlag＋MainRecord 那一行，同一行、插在註解前；main 與 !180 行號相同）。golden 兩個框的 Timer1 每 10 ms 呼叫 fMain->Timer1Timer（note.cpp:3355、mymessbox.cpp:542）。已在框內跑的：FlushFlag、UpdateRecordScreen、St02 分派器；**缺的主要是 PumpTick 才跑的段，例如安全門鎖 W906_SafeDoorLockTick（golden :3051-3076）**。helper 在盤點 golden Timer1 :2696-3838 全段；動手前把 OLD／NEW 行給 St02-M。tests/CMakeLists.txt 檔尾會跟 St01 E-045 衝突，兩邊都留。golden 框還呼叫 Timer7Timer／ProcessStatrDigital（是否併入 S-27 等 St02-M）。
+- **S-28（INBOX 124，面板實體 PAUSE 鍵關通知框）**：唯讀，等 St01 回覆 ScanKey（E-034 的行不動）。
+
+### 10-04 17:1x 狀態（St02-E 寫）
+- **★W42 恢復時**：工作樹 `D:\AI_TempFile\st02-ela`（`v906/steven-w42-encode`，18 個本機 commit）還在；**st02-ela-obj 已刪**（Steven 1004 17:1x 清理），要另建 obj 目錄、兩組態約 45 分鐘。第 4 步翻譯表與草稿原本在 `D:\AI_TempFile\st02-e2`（已刪），**已提交在 st02-ela 本機分支 `34ddd9d7` 的 `_local_w42_w46_archive\`（不推；W42 推之前 `git rm -r` 掉）**，scratchpad `wt_archive\st02-e2\` 另有一份（含 io／native／trays 等）（W42_MSG_TABLE_20260928.csv、draft\W42_MSG_TABLE_20260928_v2.csv、README_W42_MSG_TABLE.md、draft\W42_STEP4_PREP_20260928.md、draft\gen_log_english.py、in_ST02_W42_DESIGN.md）；★W46 研究也在那裡。
+- 建置目錄只剩 `st02-s39-obj`（!174／!180 建置線）＋ `D:\HT9045\Obj\V906\build`／`build_ship`。開著的 MR：!174（等 NB2-1 代跑＋C14_BinDisp）、!180（代跑綠）、!181（skills，第 63 批）；S-24 等 Steven（Q97）。
+
 ### 10-04 15:0x 狀態（St02-E 寫）
 - **工作樹清理（St02-M 執行 `git worktree remove`，不加 --force）**：St02-E 回覆只留 **st02-ela**（★W42，等 Steven）、**st02-s39**（!180／!174 建置線，st02-s39-obj）、**st02-s36**（!179 建置線，!179 進 main 後可刪）＋開著的 MR 樹 s40／s42～s45。st02-speed、st02-mainscan 會被刪 ⇒ SKILL 裡提到這兩棵的地方，刪完要改。刪完後殘留的 obj 目錄（s13／15／16／18／24／25／30／32／38、elasched、on-cbridge、w10 的 -obj）等 St02-M 點頭才刪。
 
@@ -46,7 +176,7 @@
 - scratchpad 重開機後還在；St02-M 另備份到 D:\AI_TempFile\scratch-backup-20261004\St02-E_c8311755\。
 - **排程先不建**（Steven 10:5x：本週用量 95%，10/10 重置；要建先問頻率）。
 - **下一步順序**：① 第 60 批 gate 對 !165（`1c7c0273`）綠了 → 推 MR-B（st02-s42 `v906/st02-timer-table-b2` `e80d1eff`：fetch → merge-tree 單獨一行 → push 開 MR）；紅了在 st02-s39 修。② !174／!176 等代跑結果。③ S-24 等 Steven（共用檔掛點，Q97 三選一）＋St01（③）＋筆電（⑤）。④ ccache 實驗收尾。⑤ strShowYield 建構子歸零小 MR（!171 已進 main，可以做）。
-- ChangeLog D:\docs\ChangeLog\CHANGES_20261004_Steven02.md 到第 20 列（交接檔只抄到 18，St02-M 要補 19～20）；skill §5 到第 35 條。
+- ChangeLog D:\RD5-Portal\public\Docs\ChangeLog\Steven02\CHANGES_20261004_Steven02.md 到第 20 列（交接檔只抄到 18，St02-M 要補 19～20）；skill §5 到第 35 條。
 
 ### 10-04 09:5x 狀態（換帳號前；新 session 從這裡接；St02-E 寫）
 - !171 已進 main（第 140 包 `26bf17d2`）。**已推、等代跑／gate**：!165 ScanKey（`v906/st02-scankey` tip `1c7c0273`，FShow_Audit 修正，在第 60 批 b60 約 10:00 gate）；!171 S-09 開機（`a6885f2e`）；!174 mainloop 剩餘（`v906/st02-mainloop-rest` `647f397d`，筆電的 FASTCLK-MODAL＋TIMERRES，WINMM 新匯入）；!176 OB-7 後續（`v906/st02-ob7-followup` `a9fbc88e`）。!168 已進 main（第 138 包）。
@@ -175,7 +305,7 @@
 - C9（st02-s15）、OB-7（st02-s20）的 helper 等稽核說來源是 906 再接（它們留著沒 commit 的改動，不要清）。
 
 ### 10-02 17:2x 狀態（新 session 從這裡接；St02-E 寫）
-- Session 沒變：St02-E、St02-M 都同一個 session。main＝`2dd90ef3`（!108、!118 已合）。⚠ main 今天前進很快：**每次推之前 fetch、merge-tree 對當下的 main 只印一行**。
+- Session 沒變：St02-E＝`c8311755-ee3b-4c2b-9f5f-bc5682ac9613`（github-de）；St02-M＝github-62。main＝`2dd90ef3`（!108、!118 已合）。⚠ main 今天前進很快：**每次推之前 fetch、merge-tree 對當下的 main 只印一行**。
 - 建置只有一棵樹（`D:\AI_TempFile\st02-speed` 切到要建的 commit，`scratchpad\s09close\build_speed.ps1 -Cfg sim|ship -Tag X`），一次只能跑一個 ⇒ 排隊：**① !114 `d0d8b87d` sim（adam6，跑中）→ 推「SHIP 待建」② !116 `da36b214` sim → 推 ③ !114 ship ④ !116 ship ⑤ C14 兩組態**。
 - **已推、等人**：!114 ADAM 推到的是 `0469e8ae`（之後本機 `3c2c5941` 3h 測試修正、`849d2109`／`d0d8b87d` 兩次 merge main，還沒推）；!116 LI-9 推到的是 `e839f529`（本機 `da36b214` merge main 2dd90ef3，還沒推）。St01 的 Adam6024_Pressure 重跑會在推送後觸發。
 - C-11（wb_serve.cpp:4066）在 2dd90ef3 上是**相鄰行**衝突、不是同一行：舊行一字不差 ⇒ 筆電的同意仍有效（St02-M 已在 CHAT 更正，handoff 292723a0）。
@@ -186,10 +316,10 @@
   3. C9 rebase：`D:\AI_TempFile\st02-s15` 新分支 `v906/st02-c9-r2`（舊分支不動）——拿掉 G3、留 G2＋G1、新認領清單 `D:\AI_TempFile\st02-claims\C9_CLAIM_SHEET_vs_main_<hash>.txt`。
   4. C10 rebase：`D:\AI_TempFile\st02-s16` 新分支 `v906/st02-c10-r2`——新認領清單標出舊行變了的（要筆電重新同意）。
 - 還沒動：C12（要 headless 實跑）、C13（等 E-020 進 main）、ADAM-F1／F2（!114 合了之後）、Adam6024Integrate_St02.cpp:9-20 註解的 B2／M1 標籤對調（下次動那個檔時改）。
-- ChangeLog 寫到第 46 列、§43（`D:\docs\ChangeLog\CHANGES_20261002_Steven02.md`）。
+- ChangeLog 寫到第 46 列、§43（`D:\RD5-Portal\public\Docs\ChangeLog\Steven02\CHANGES_20261002_Steven02.md`）。
 
 ### 10-02 14:5x 狀態（換帳號前收尾；新 session 從這裡接；St02-E 寫）
-- **St02-E、St02-M、ST01-M 的 session 名稱只記在本機。**Steven 14:4x：帳號週用量 90%，要換帳號。沒有 helper 在跑；所有 worktree 都乾淨（都 commit 了）；沒有推半成品。
+- **St02-E Session ID：`c8311755-ee3b-4c2b-9f5f-bc5682ac9613`**（session 名 github-de；St02-M＝github-62，uds `\\.\pipe\LOCAL\cc-msg-2e6f870585ba6e0d521e943f8e46a02b`；ST01-M 現在是 github-da）。Steven 14:4x：帳號週用量 90%，要換帳號。沒有 helper 在跑；所有 worktree 都乾淨（都 commit 了）；沒有推半成品。
 - main `8f3cdc53`（批 43：!101 C8、!104 C11 已合；套件 125 機台整合 283f8382 已在 main）。
 - ⚠ 測試仍然只編譯不跑：Steven 對 St02-M 說過「你如果能跑得起來的話, 可以做測試」，但 St02-E 自己的排程指令還寫「編譯只編不跑」，已在 St02-E 的 session 直接問 Steven、還沒回 ⇒ 照舊 compile＋node --check，§2 寫「請 St01 代跑」＋測試名。
 - **已推、等人：**
@@ -428,7 +558,7 @@
   - Q3（fConfiguration A／B／C）；
   - St01 review6 `7e60e445`（等 Steven 回 Q59）。
 - 日報：St02-M 06:2x 寫進交接檔（handoff `c088e065`）。
-- ChangeLog：`D:\docs\ChangeLog\CHANGES_20260930_Steven02.md`，寫到第 11 列＋§10 目前狀態，St02-M 會再抄一次。
+- ChangeLog：`D:\RD5-Portal\public\Docs\ChangeLog\Steven02\CHANGES_20260930_Steven02.md`，寫到第 11 列＋§10 目前狀態，St02-M 會再抄一次。
 - 踩到的坑：uHGem 引用 fSpeed 會把 cSpeed.cpp.obj 拉進 12 支測試，連結失敗。語法檢查看不到，要做完整建置（techniques §8）。
 
 ### 09-29 20:3x 狀態（St02-E 寫）
@@ -530,7 +660,7 @@
 - 待決：A8 之後超豐還是 0，因為 golden 分析器 ListProductionLog 用第 5 欄篩列（golden 也一樣）；要不要偏離 golden 讓它認超豐欄位，問 St02-M。U13 開機那一行等 Steven。
 
 ### 09-28 14:2x 狀態（新 session 從這裡接）
-- **14:00 重啟**：我＝St02-E。另一個也在當 St02-E 的 session 已改名 **St02-E2**、停手（只做唯讀 W42 翻譯表，D:\AI_TempFile\st02-e2）；查過分支、reflog、編譯目錄都沒被動。重啟後 cron 要重建（`53 */5` 五小時＋`7-59/10` 巡檢）。
+- **14:00 重啟**：我＝St02-E（github-de），St02-M＝github-62。另一個也在當 St02-E 的 session（github-c3）已改名 **St02-E2**、停手（只做唯讀 W42 翻譯表，D:\AI_TempFile\st02-e2）；查過分支、reflog、編譯目錄都沒被動。重啟後 cron 要重建（`53 */5` 五小時＋`7-59/10` 巡檢）。
 - gpib-widget 遠端 `0daefb95`（MR !3）：14:18 `b4c11660`＝merge main 1818cfa4（`982dba99`）＋`v906/steven-w48-rework`（★W48 三項裁決；wb_serve 每小時寫 TimeData＋HANDLER LOG＝golden 行為）；14:24 `ba46ad9f` ★W45 認領（WebSecurityJam.cpp 11 行、ht9045_wire_statussecurity.js :130／:216、Status.Security.html :56）＋`0daefb95` Speed 滑桿 form.event "change"＋position（St01 review6 7e1785dc X-2；29a13bdb 不再從 state 改有自己事件的元件）。
 - helper：W42（st02-ela `0495e6f5`，第 1～3 步做完，推之前要自己跑兩組態）、W36-1（st02-q41 WIP `1851e6f9`，不推）都在重啟時結束，不用重開。唯讀 helper 在查 St01 B3 頁面 JS（review6 6ba451d5／b08ae6ad：cleaning／contact／offset／barcode *_ev.js）和我們頁面 JS 的重複處理 → 清單先給 St02-M 再改。
 - ST01-M 13:4x／13:5x：B4 OK；START 前檢查順序＝St01 的「沒連 HMI 畫面就拒絕」先、再 golden 順序；CL-5／S-07 歸 St01；W44-1 editlist 那一半歸 St01，引擎四行仍是我們的認領（等筆電）；R120-F 與開機 `_NET` 快照改歸 St01（我們只留設計說明）；Temp_Set 共用佇列歸 St01（TS-1），之後 ts7 改用它；★W42 認領原則 OK，等 Steven（W57～W62）。
@@ -593,7 +723,7 @@
 
 ### 09-28 00:3x 狀態（新 session 從這裡接）
 - gpib-widget 遠端 `e439fe46`（MR !3）：ELA R1～R6、★W45 第一步、S118 托盤資料（目前沒有呼叫端）都已推。
-- ChangeLog 換日：`D:\docs\ChangeLog\CHANGES_20260928_Steven02.md`。
+- ChangeLog 換日：`D:\RD5-Portal\public\Docs\ChangeLog\Steven02\CHANGES_20260928_Steven02.md`。
 - 進行中：D4（Q41 helper，st02-q41）。fMain.cpp 兩處要等筆電認領同意才推。
 - 等認領：S118 的 wb_serve.cpp 第 439／2894 行、Main.MotionView.html 第 2970 行（當時記成筆電的頁；20260929 起是 St02 的頁，見上一條）。
 - helper A（st02-ela）、C（st02-elasched）閒著；可接的工作要等裁決或協定。
@@ -629,7 +759,7 @@
   - ELA B（R4 WinINet ElaFtp）：`D:\AI_TempFile\st02-elaftp`，分支 v906/steven-elaftp-wip，obj 根 st02-elaftp-obj。
   - ELA C（R5 ElaSchedule）：D:/AI_TempFile/st02-elasched，分支 v906/steven-elasched-wip，obj 根 st02-elasched-obj；用工作表呼叫各工作（R2／R4 合併時再填），不改 ElaService.cpp，合併時由 St02-E 在 W906_ElaStart 接一行。CMake 新檔加在 ElaTables.cpp 那行後面。
   - 兩個都改 ht9045_ela 的 CMake：A 的新檔加在 ElaCore.cpp 那行後面，B 的新檔加在清單最後＋把 :1372 的連結改成 wininet；FTP_Log 由 B 負責。
-- **ChangeLog** `D:\docs\ChangeLog\CHANGES_20260927_Steven02.md` 由我維護（每次推送後更新，St02-M 抄進交接檔）；日報區塊隨回報交給 St02-M。
+- **ChangeLog** `D:\RD5-Portal\public\Docs\ChangeLog\Steven02\CHANGES_20260927_Steven02.md` 由我維護（每次推送後更新，St02-M 抄進交接檔）；日報區塊隨回報交給 St02-M。
 - 接下來：R3 → R5 → R6，然後 W20 Jam Code 編輯器合一；低優先 S118 Tray producer、D4 WebLogin.cpp SPIL API。
 
 ### 19:1x 狀態（新 session 從這裡接）

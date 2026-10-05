@@ -39,6 +39,8 @@ applyTo: "**/*"
 | `<repo>` | 自己本機 RD5 入口網站 repo 的 clone 位置（GitLab `honprec/rd/rd5/9050motionview`） | `D:\RD5-Portal`（SOP 給同事的例子是 `D:\HT9045-Index`） |
 | `<EnglishName>` | 組織表上的英文名 | `Steven` |
 
+> **其他 skill 寫的 `<入口網站 repo>` 就是上表的 `<repo>`**（St02 20261005，Steven「其他文件也要跟著換路徑」）：St01／St02＝`D:\RD5-Portal`、筆電＝`D:\HT9045-Index`。共用 skill 不寫死某一台的路徑；會自己寫檔的腳本（pre-release-check `scan_and_report_pre_release.py`、ht9045-io-control `gen_io_alias_doc.py`）依序找環境變數 `RD5_PORTAL_REPO`（與 `generate_code_diff_summary.py` 同一個）→ `D:\RD5-Portal` → `D:\HT9045-Index`，都沒有才退回舊的 `D:\docs\…` 並印警告。
+
 **寫到哪裡**（Steven 20260929 11:15：「未來報告跟手冊的寫入路徑都要放入 D:\RD5-Portal\public\Docs\ 裡面」——所有報告與手冊都寫進 `<repo>\public\Docs\`）
 
 | 報告 | 以前 | 現在 |
@@ -72,7 +74,12 @@ applyTo: "**/*"
    由 Steven 審完合併。建議節奏：早上推前一天的，或下班前推當天的。不可以直接推 main。
 5. 日報格式與流程的正本：`<repo>\.claude\skills\rd5-daily-report\SKILL.md`（§2 格式、§3 寫作規則、§3.5 推送前的格式檢查；Steven 的 clone 是 `D:\RD5-Portal`），範本 `<repo>\.claude\skills\rd5-daily-report\references\template.md` §統一格式。20261003 起全員用統一格式；本 skill 的 ops-daily-worklog 照抄正本，不一致時以正本為準。
 
-> **St01 的日報（Steven 的每日工作日誌）**：20260929 起由 ST01-M 編輯（Steven「日報一律通報 ST01-M做內容編輯」），寫在 `D:\RD5-Portal\public\Docs\Daily\Steven\YYYYMMDD.md`（Steven 20260929 15:2x：「今天的日報…要改寫到 D:\RD5-Portal\public\Docs\Daily\Steven 裡面」），一天一份，20261003 起同樣用統一格式；改好由 **ST01-E3** 推送、開 MR（Steven：「改好通知 st01-e3 push」「他負責 protal的管理」）。20260928 以前的舊日報與寄信存查仍在 `D:\docs\ops\daily\`。St01 記錄員（`D:\HT9045\.claude\skills\ops-st01-clerk-report\`）的 ChangeLog 仍寫 `D:\docs\ChangeLog\`、repo 日報仍寫 `docs\ops\daily\`，到 Steven 另外說為止。
+> **St01 的日報（Steven 的每日工作日誌）**：20260929 起由 ST01-M 編輯（Steven「日報一律通報 ST01-M做內容編輯」），寫在 `D:\RD5-Portal\public\Docs\Daily\Steven\YYYYMMDD.md`（Steven 20260929 15:2x：「今天的日報…要改寫到 D:\RD5-Portal\public\Docs\Daily\Steven 裡面」），一天一份，20261003 起同樣用統一格式；改好由 **ST01-E3** 推送、開 MR（Steven：「改好通知 st01-e3 push」「他負責 protal的管理」）。20260928 以前的舊日報與寄信存查仍在 `D:\docs\ops\daily\`。~~St01 記錄員（`D:\HT9045\.claude\skills\ops-st01-clerk-report\`）的 ChangeLog 仍寫 `D:\docs\ChangeLog\`、repo 日報仍寫 `docs\ops\daily\`，到 Steven 另外說為止。~~
+> **Steven 20261005 17:0x 另外說了**：「D:\docs\ChangeLog\ 不是應該改存放到 D:\RD5-portal\public\Docs\ChangeLog 嗎?」⇒ **ChangeLog 一律寫入口網站**，`D:\docs\ChangeLog\` 不再寫新檔（舊檔留著當史料，不搬也不刪）：
+> - St01（記錄員）：`D:\RD5-Portal\public\Docs\ChangeLog\Steven\CHANGES_{YYYYMMDD}_Steven.md`（記錄員 skill 的路徑由 ST01-M 改）。
+> - St02（STEVEN-NB3 的 St02-E）：`D:\RD5-portal\public\Docs\ChangeLog\Steven02\CHANGES_{YYYYMMDD}_Steven02.md`。**另開 `Steven02\` 資料夾**：入口網站 `tools/build_portal.py` 以「資料夾名＋日期」當一筆，放進 `Steven\` 會跟 St01 同一天的 ChangeLog 互相蓋掉；`Steven02` 對不到組織表，建置時印一行警告、照樣列出。0927～1005 的 9 份已從 `D:\docs\ChangeLog\` 複製過去（原檔留著）。
+> - 入口網站歸 ST02-M：commit／MR（含 md2html 轉出的 .html）由 ST02-M 做，寫檔的人只寫 .md。
+> - repo 日報（`docs\ops\daily\`）這次沒有改，照舊。
 
 ## 報告類型路由表
 

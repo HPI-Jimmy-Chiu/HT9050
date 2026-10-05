@@ -14,6 +14,8 @@
 
 > 所有專案共用同一目錄，不依專案分子目錄（同 ops-daily-worklog 慣例）。
 > `{作者}` 用使用者本人英文名（例：Steven），不用專案名。
+> **同一個人有兩台機器各自寫 ChangeLog 時**（Steven 20261005 17:0x）：第二台用 `<EnglishName>02` 當資料夾與檔名後綴，例 St02＝`<repo>\public\Docs\ChangeLog\Steven02\CHANGES_{YYYYMMDD}_Steven02.md`。入口網站 `tools/build_portal.py` 以「資料夾名＋日期」當一筆，同一資料夾同一天兩份會互相蓋掉。
+> `D:\docs\ChangeLog\` 是 20260929 之前（St02 到 20261005）的舊位置，**不再寫新檔**；舊檔留著當史料。
 
 ## 輸出格式
 純 **Markdown**，**不放 Logo**，不輸出 HTML（除非使用者另外要求）。
@@ -90,7 +92,7 @@
 
 ## 範例
 
-完整範例見 [d:\docs\ChangeLog\CHANGES_20260915_Steven.md](d:\docs\ChangeLog\CHANGES_20260915_Steven.md)
+完整範例見 [<repo>\public\Docs\ChangeLog\Steven\CHANGES_20260915_Steven.md](<repo>\public\Docs\ChangeLog\Steven\CHANGES_20260915_Steven.md)（舊位置 `d:\docs\ChangeLog\` 也有同一份）
 （HT9045 專案，2026-09-15，含 C++ 後端 API 新增、前端接線引擎、孤兒頁清理、
 已知落差與備份位置等完整章節，可作為格式基準）。
 

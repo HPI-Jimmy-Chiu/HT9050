@@ -3,7 +3,7 @@
 > 功能實作日期：2026-07-28（Steven）
 > 基準版本：`HT9011UC_Code_V3.33.910.0_20260716`（試驗 build V3.33.910.1）
 > 客戶來源：947_SCK（TeraTech）UPH 改善需求
-> 詳細發版說明：`D:\docs\customers\TeraTech\947_SCK\release-notes\2026\20260728_HT-9xxx_Software_Release_Note_V3.33.910.1_廠內版.md`
+> 詳細發版說明：`<入口網站 repo>\public\Docs\customers\TeraTech\947_SCK\release-notes\2026\20260728_HT-9xxx_Software_Release_Note_V3.33.910.1_廠內版.md`
 
 ---
 

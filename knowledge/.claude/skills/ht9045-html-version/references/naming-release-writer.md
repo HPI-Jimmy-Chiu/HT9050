@@ -27,7 +27,7 @@
 | 無前綴 | Main.×11、main、ScreenShots |
 
 > **//Steven 20260919** — Setup. 加 `ContactForce`、`AGV`（19→**21**）；HW. 加 `VacuumUnit`（7→**8**）。
-> Data.（9）／Status.（8）／IDE.（4）未變。當日完整變更紀錄：`D:\docs\ChangeLog\CHANGES_20260919_Steven.md`
+> Data.（9）／Status.（8）／IDE.（4）未變。當日完整變更紀錄：`<入口網站 repo>\public\Docs\ChangeLog\Steven\CHANGES_20260919_Steven.md`
 >
 > ⚠ **這張表是「分類規則的登錄表」，不等於 `page\` 目錄的檔案數**，對不起來是正常的，原因有三：
 > ① `Setup.Configuration` / `Setup.DIOInterFaceCFG` 已於 20260915 改名進 `Config.*`（本表仍列在 Setup. 列），
@@ -42,7 +42,7 @@
 ### 重新命名工具 `D:\AI_TempFile\_rename_pages.py`（可重跑）
 - 以**基底名**（先去 `Setup./Data./Status./HW./IDE.` 再去 dfm 前綴字母）查 `SETUP / DATA / STATUS / HW / IDE / KEEP` 集合 → 決定新名；改分類只需改集合再跑一次。
 - dry-run 列出 map 與引用數，`--apply` 才改檔名並替換引用。
-- 引用替換範圍：`D:\HT9045\*.html`、`page\*.html|*.js`、`page\shot\*.html`、`D:\AI_TempFile\_gen_*|_scan_*.py`、skill SKILL.md／references／scripts、`docs\ops\daily`、`D:\docs\ops\daily\20260902.md`。
+- 引用替換範圍：`D:\HT9045\*.html`、`page\*.html|*.js`、`page\shot\*.html`、`D:\AI_TempFile\_gen_*|_scan_*.py`、skill SKILL.md／references／scripts、`docs\ops\daily`、`<入口網站 repo>\public\Docs\Daily\Steven\20260902.md`。
 - 以一次性 regex alternation（長鍵優先，`(?<![\w.])` 前綴保護）避免鏈式替換（例：`cSetUp`→`Setup.SetUp` 不會再被吃）。
 - **產生器 `JOBS` / `NO_OVERWRITE` / `PAGE_EXTRA` / `SUBTREE_JOBS` 的輸出檔名同時被替換**，重跑 `_gen_dfm_abs.py` 即輸出新檔名；ComponentMap 章節 anchor 不變。
 - background `WINDOWS[].id` 不變（`binsel`、`motortest`…），只有 `src` 改名 → Main.html `DFM_MAP`／`View-rules.json` 不受影響。
