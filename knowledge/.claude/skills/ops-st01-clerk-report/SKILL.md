@@ -3,10 +3,10 @@ name: ops-st01-clerk-report
 description: >
   St01（Steven01）工程線的「記錄員整點回報」：ST01-E（Steven01-Engineer）每小時或每段落派一位記錄員子代理，把 D:\HT9045
   分支 v906/steven-cbridge-review6 的新 commit、工程師交件、Steven 的裁決、ST01-M 給的交接項目，累加寫進三份檔——
-  ChangeLog D:\docs\ChangeLog\CHANGES_20260926_Steven.md（§11 摘要表加一列＋§11.NN 新節、§12 目前狀態整段覆蓋）、
-  日報 D:\docs\ops\daily\20260926.md（檔尾「09-27 HH:MM 更新」段）、裁決進度表
+  ChangeLog D:\RD5-Portal\public\Docs\ChangeLog\Steven\CHANGES_YYYYMMDD_Steven.md（20261005 17:0x 起；§11 摘要表加一列＋§11.NN 新節、§12 目前狀態整段覆蓋）、
+  repo 日報 D:\HT9045\docs\ops\daily\YYYY-MM-DD.md（檔尾「MM-DD HH:MM 更新」段；Steven 個人日報不歸記錄員）、裁決進度表
   D:\HT9045\.claude\skills\ht9050-construction\references\rulings-index.md（最後更新、主表狀態、狀態計數、最近變動 20 行）。
-  記錄員不做 git 寫入、不 build；ST01-E 核對後把 §12 四塊轉給 Steven、只 commit rulings-index.md；ST01-M 只給文字、
+  記錄員不做 git 寫入、不 build；ST01-E 核對後把 §12 四塊轉給 Steven、在 HT9045 commit rulings-index.md＋repo 日報、ChangeLog 每天推一次入口網站 MR；ST01-M 只給文字、
   不直接寫這三份檔，並用 5 小時檢查點提醒 ST01-E。含範圍指令、⛔ 更正寫法、§12 範本、派工與交件範本、常見錯誤
   （Q34 誤寫成 levelset.dat、已裁決寫成待決、Q4 重選沒跟上、§12.4 漏列 R 題、R 題寫成「定案」、機台資料夾誤接到移植樹底下）
   與核對清單（顆數、題號、條目數、路徑存在、狀態計數、diff 只刪在允許的地方）。
@@ -28,7 +28,7 @@ description: >
 
 | 用途 | 絕對路徑 | 誰改 |
 |---|---|---|
-| ChangeLog（讀者 Jimmy 與研五軟體組；不在 git） | `D:\docs\ChangeLog\CHANGES_20260926_Steven.md` | 記錄員 |
+| ChangeLog（讀者 Jimmy 與研五軟體組；20261005 17:0x 起在入口網站 repo，見 references/standing-rules.md §14） | `D:\RD5-Portal\public\Docs\ChangeLog\Steven\CHANGES_YYYYMMDD_Steven.md`（之前的 `D:\docs\ChangeLog\` 舊檔保留、不再寫） | 記錄員 |
 | 日報（不在 git） | `D:\docs\ops\daily\20260926.md` | 記錄員 |
 | 裁決進度表（在 git，三方都看得到） | `D:\HT9045\.claude\skills\ht9050-construction\references\rulings-index.md` | 記錄員寫、ST01-E commit；ST01-M 不改內容 |
 | 舊裁決進度表（20260927 13:0x 凍結） | `D:\docs\ops\registers\HT9045_裁決進度表.md` | 不再改 |
@@ -57,7 +57,7 @@ description: >
 
 ## 3. 一輪的步驟（記錄員）
 
-> 20260928 起 ChangeLog 與日報**一天一份**（`D:\docs\ChangeLog\CHANGES_YYYYMMDD_Steven.md`、`D:\docs\ops\daily\YYYYMMDD.md`），§12 只放最新一天，規則見 references/standing-rules.md §11。上面說明裡寫死的 0926 檔名，照當天日期換。
+> 20260928 起 ChangeLog 與日報**一天一份**（`D:\RD5-Portal\public\Docs\ChangeLog\Steven\CHANGES_YYYYMMDD_Steven.md`〔20261005 17:0x 起，之前在 `D:\docs\ChangeLog\`〕、`D:\docs\ops\daily\YYYYMMDD.md`），§12 只放最新一天，規則見 references/standing-rules.md §11。上面說明裡寫死的 0926 檔名，照當天日期換。
 > ⛔ 20260929 11:1x 起 **Steven 日報 `D:\docs\ops\daily\YYYYMMDD.md` 由 ST01-M 編輯，記錄員不寫**（Steven「日報一律通報 ST01-M做內容編輯」）；記錄員只寫 ChangeLog、repo 日報 `D:\HT9045\docs\ops\daily\YYYY-MM-DD.md`、rulings-index。見 references/standing-rules.md §12。（20260929 15:2x 起 Steven 日報在 `D:\RD5-Portal\public\Docs\Daily\Steven\YYYYMMDD.md`，也不是記錄員寫。）
 
 > 20260927 19:3x 起：每一輪也要併 St02 的 `docs/handoff/ST02_DAILY_<YYYYMMDD>.md`／`ST02_CHANGELOG_<YYYYMMDD>.md`（交接分支），規則見 references/standing-rules.md §10。
@@ -87,7 +87,7 @@ description: >
 2. 核對：references/checklist.md B 段（顆數、題號對題目、§12.4 條目數＝decisions-pending 標題數、工程師名單、路徑存在、狀態計數、diff 只刪在允許的地方）。
 3. 錯的地方：自己在原處加「⛔ 更正（ST01-E hh:mx 核對）：」改掉，或退回記錄員重寫；錯誤型態是新的，補進 references/checklist.md C 段。
 4. 轉 Steven：§12.1～12.4 原文；12.4 附 `D:\HT9045\.claude\skills\ht9050-construction\references\decisions-pending.md`。
-5. commit（只有 rulings-index.md 在 git 裡，`D:\docs` 不是 repo）：
+5. commit（HT9045 repo：rulings-index.md＋repo 日報；ChangeLog 在入口網站 repo，ST01-E 每天推一次 MR，見 references/standing-rules.md §14）：
    `git -C /d/HT9045 commit -m "rulings-index: clerk round <上一輪終點>..<本輪終點>" -- .claude/skills/ht9050-construction/references/rulings-index.md`（訊息結尾照 session 規定加 Co-Authored-By），再 push。例：`23efc733`（20260927 14:25，範圍 `46e2d7f9..9f6c178c` 含 ST01-E 更正）。只 commit 這一個檔；ST01-M 要在 `D:\HT9045` commit 前會先問 ST01-E（`D:\HT9045\.claude\skills\ops-ht9045-handoff\references\protocol.md`「共用工作樹」）。
 
 ## 6. 交件格式（記錄員 → ST01-E）

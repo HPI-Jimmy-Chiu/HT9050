@@ -125,6 +125,13 @@
 | 85 | todo 寫「已含 X」就照抄成已做 | 10-04 §11.95：todo E-036 寫「(a) e6da3de9＋3 處隱私註解」，`git show --name-only e6da3de9` 只有 4 個檔，3 處隱私註解還沒做 | 記錄員 §11.95 ⑤ | todo／簡報說某 commit 含什麼，用 `git show --name-only <hash>`（必要時 `git show <hash> -- <檔>`）對過再寫；對不上就照實寫並列 ④（C-28／C-64 延伸） |
 | 86 | 只讀派工簡報，漏了筆電在 main 上的新交接 | 10-04 §11.95：筆電 08:31 TO_STEVEN「約 09:10 前 St01 沒意見就把 review6 `9ebe4af3` 併進 batch 60」不在簡報裡；ST01-M 同時打算自己推 main（兩個整合者） | 記錄員 §11.95 ⑤ | 寫檔最後一步讀 `origin/main:docs/handoff/TO_STEVEN.md` 與 `origin/v906/steven-handoff` 本輪新 commit；有時限或兩邊會撞的，放 ④ 第 1 條並標「有時限」，ST01-E 立刻轉 ST01-M（C-55／C-56 延伸） |
 | 87 | gate log 只看 summary，不看 RERUN 段 | 10-04 §11.95：`11f99613` log 的 RERUN 段 PE_TruncationCheckTimeout 仍 Not Run，簡報說補 PATH 單獨跑通過，log 裡找不到那次 | 記錄員 §11.95 ⑤ | gate log 分 summary、RERUN、SIM／SHIP ctest 各段讀；簡報說的單獨重跑若在 log 找不到，寫「依 ST01-M 簡報」並列 ④（C-76／C-79 延伸） |
+| 88 | 暫存資料夾的同名舊備份拿來 diff | 10-04 §11.99：記錄員暫存資料夾裡的 `cl_before.md` 是 10-03 舊 session 留下的，差點拿來比本輪 | 記錄員 §11.99 ⑤ | 備份檔一律加輪次前綴（例 `r99_CHANGES.before.md`），比之前先看檔案時間；ST01-E 派工前的複本放 `scratchpad\cNN\`（NN＝本輪節號） |
+| 89 | `git show --name-only A B C` 一次看多顆，把檔案歸錯 commit | 10-04 §11.99：差點把 E-045 的 skill 檔歸到 E-037 | 記錄員 §11.99 ⑤ | 一顆一顆看（`for h in ...; do git show --stat $h; done`）；合併 commit 用 `git diff --name-only <合併>^1 <合併>` |
+| 90 | 多行替換照「由上往下」套用，前面插入一行後，後面的行號全部錯一行 | 10-05 §11.104：「458 改寫」排在「452 改寫（+1 行）」之後，覆蓋到空白行，用備份還原重跑 | 記錄員 §11.104 ⑤ | 依原行號**由下往上**套用，或改用文字錨點找行；腳本先寫斷言（舊行內容）再改 |
+| 91 | 讀還在跑的 ctest log，只比紅燈「數量」不逐名比基準 | 10-05 §11.105：SIM 19 紅對基準 18，多出來的 `WB_State` 只有逐名比才看得出來 | 記錄員 §11.105 ⑤ | 紅燈一律逐名對 `ops-ht9045-proxy-build` SKILL.md 第 6 步的基準名單；多出來的寫名字＋「待核／單獨重跑」，不寫結論（C-83 的延伸） |
+| 92 | 範圍取代（replace_range）右界忘了 +1，把下一節標題重複寫一次 | 10-05 §11.105：第一版腳本執行前抓到 | 記錄員 §11.105 ⑤ | 範圍用「含頭不含尾」並在腳本裡斷言取代後的標題行只出現一次；同一行的就地修改先做、插入後做 |
+| 93 | 寫 worktree 狀態時用的是派工時的清單，寫的當下已經變了 | 10-05 §11.104：`D:\AI_TempFile\st01e-e042-b5` 在記錄員寫檔途中從 `git worktree list` 消失 | 記錄員 §11.104 ⑤ | 寫任何 worktree／資料夾狀態前，最後一步再跑一次 `git -C D:/HT9045 worktree list` 與 `ls` |
+| 94 | §12 照上一輪抄「等筆電合」，那個 MR 其實已經進 main | 10-05 §11.106：MR !205（`34826407`）15:57 已合進 main `0d4e733a`，§11.105／§12 還寫「等筆電合」，簡報也沒提 | 記錄員 §11.106 ⑤ | 寫 §12 前，每一個「等合」的分支頭都跑 `git -C /d/HT9045 merge-base --is-ancestor <hash> origin/main`（真＝已合），結果寫進 §12.1／§12.5，已合的原處補 ⛔ |
 
 ## D. 指令
 
@@ -175,7 +182,7 @@ print('checked', len(seen))
 **D-5　被折行拆開的路徑**（行尾是反斜線）
 
 ```
-grep -n '[\]$' /d/docs/ChangeLog/CHANGES_20260926_Steven.md /d/docs/ops/daily/20260926.md
+grep -n '[\]$' /d/RD5-Portal/public/Docs/ChangeLog/Steven/CHANGES_YYYYMMDD_Steven.md /d/HT9045/docs/ops/daily/YYYY-MM-DD.md
 ```
 
 **D-6　代名詞與 session 名**（對本輪新段；「」裡的原話命中可以保留）
@@ -191,8 +198,8 @@ grep -nE 'github-[0-9]+' <新段檔>
 **D-7　行尾、BOM、控制字元**
 
 ```
-file /d/docs/ChangeLog/CHANGES_20260926_Steven.md /d/docs/ops/daily/20260926.md /d/HT9045/.claude/skills/ht9050-construction/references/rulings-index.md
-LC_ALL=C grep -nP '[\x00-\x08\x0b\x0c\x0e-\x1f]' /d/docs/ChangeLog/CHANGES_20260926_Steven.md /d/docs/ops/daily/20260926.md /d/HT9045/.claude/skills/ht9050-construction/references/rulings-index.md
+file /d/RD5-Portal/public/Docs/ChangeLog/Steven/CHANGES_YYYYMMDD_Steven.md /d/HT9045/docs/ops/daily/YYYY-MM-DD.md /d/HT9045/.claude/skills/ht9050-construction/references/rulings-index.md
+LC_ALL=C grep -nP '[\x00-\x08\x0b\x0c\x0e-\x1f]' /d/RD5-Portal/public/Docs/ChangeLog/Steven/CHANGES_YYYYMMDD_Steven.md /d/HT9045/docs/ops/daily/YYYY-MM-DD.md /d/HT9045/.claude/skills/ht9050-construction/references/rulings-index.md
 ```
 
 預期：ChangeLog、日報是「UTF-8 text」（LF，無 BOM），rulings-index 是「UTF-8 text, with CRLF line terminators」；控制字元指令沒有輸出（ChangeLog §10.2 有一個歷史上的 Tab，不在檢查範圍內）。
@@ -200,8 +207,8 @@ LC_ALL=C grep -nP '[\x00-\x08\x0b\x0c\x0e-\x1f]' /d/docs/ChangeLog/CHANGES_20260
 **D-8　跟派工前的複本比（ST01-E）**
 
 ```
-diff <暫存資料夾>/CHANGES_20260926_Steven.before.md /d/docs/ChangeLog/CHANGES_20260926_Steven.md | grep '^<'
-diff <暫存資料夾>/20260926.before.md /d/docs/ops/daily/20260926.md | grep '^<'
+diff <暫存資料夾>/CHANGES_20260926_Steven.before.md /d/RD5-Portal/public/Docs/ChangeLog/Steven/CHANGES_YYYYMMDD_Steven.md | grep '^<'
+diff <暫存資料夾>/rNN_daily.before.md /d/HT9045/docs/ops/daily/YYYY-MM-DD.md | grep '^<'
 diff <暫存資料夾>/rulings-index.before.md /d/HT9045/.claude/skills/ht9050-construction/references/rulings-index.md | grep '^<'
 ```
 

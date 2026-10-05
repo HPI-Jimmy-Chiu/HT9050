@@ -272,3 +272,5 @@ if(PA > iAdamOutValue + iADAMRange ||
 
 - [references/contact-force-calc-flow-and-web.md](references/contact-force-calc-flow-and-web.md)：**計算流程、SLK 缸徑 Min/Max 表、D28、Index Press Type 上限、EP 差異警報（WAR1605/16322/16323）、web 端實作與 V906 移植現況**（同事版，原 repo SKILL.md）
 - [references/v906-boot-contactinfo.md](references/v906-boot-contactinfo.md)：repo 既有參考檔（同事整理）
+- [ht9045-index-flow → autoheight-contact-test-ht9045.md](../ht9045-index-flow/references/autoheight-contact-test-ht9045.md)：**自動測高／Contact Test 的動作流程**（EP 充飽／洩氣 `ADAM_WriteMaxData`／`ADAM_WriteVoltage`、EP 漏氣檢查 `ADAM_Alarm`／WAR1605、扭力上限與讀值、存檔；golden 906 0618＋V912 差異，20261005）
+- [ht9045-index-flow → autoheight-contact-test-ht9050-current.md](../ht9045-index-flow/references/autoheight-contact-test-ht9050-current.md)：**HT9050 自動測高卡點**（含 EP 硬體問題：硬體表 ITV2050-IL2L＋DXMR90 vs 設定 `EP_Install=3` ADAM-6024，20261005）

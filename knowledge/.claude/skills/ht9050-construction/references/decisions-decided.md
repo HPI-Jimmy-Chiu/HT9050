@@ -497,3 +497,22 @@ Steven 原話：「Q78 Q79, 可以按照912，但是註解同時提供906的行�
 - 題目：ST01-E2 的唯讀計畫（`D:\AI_TempFile\st01e2-r4-plan-20261004.md`）提的副作用：HOME 後還停在 ERROR_STOP 的軸，會讓每次 START 前都要先 HOME。
 - **Steven 的回答**：原話「Error stop的軸要嘗試 clear alarm, 如果不能clear, 就只能全機斷電重置」⇒ 修法加一條：ERROR_STOP 的軸先嘗試清警報（一次）；清得掉＝照 Q88 規則那一軸要重新歸零；清不掉＝報警、提示「全機斷電重置」（不自動重試、不繼續動）。跟 Q88（1003 22:5x）的歸零規則一致。
 - 誰做／何時：Steven 沒有另選，照建議＝**ST01-E2 做**，跟 E-044 一起或更早進批次；進機台包前仍要 EastSun 回 Q1～Q4（TO_ES02 main `220edfa7`）。ST01-M 的理解，Steven 可推翻。
+
+### 20261004 22:2x Steven 裁決：Q99（安川 A.A10／A.EA2）、Q100（A.9xx 警告）
+
+- **Q99**：原話「可以reset就reset，不能reset的就斷電」⇒ 看實際結果：送一次 Reset 後驅動器真的回到沒警報＝算清掉（那一軸重新歸零）；清不掉＝提示全機斷電再 HOME。＝E-045（MR !185）現在的做法，不必改；不另外把 A.A10／A.EA2 固定歸到「一定斷電」。
+- **Q100**：原話「電池低還是可以運作，所以不算」⇒ 安川 A.9xx 警告（例 A.930 電池低、A.910 過載預警）不算「裝置有 ERROR」，不擋動作；只記錄、提示（電池低要提醒換電池）。
+
+### 20261004 23:1x Steven 回答機台題（1005 更正：原寫 23:3x，登記 commit f4baf1d2 是 23:15）（Jimmy RULINGS_20261004 #4：等 EastSun 的題目 St01 可答）
+
+- **W-54（E-09 機台螢幕）**：原話「應該是full hd. 但是現場可能設定不一樣，這題留給eastsun」⇒ St02 先照 1920×1080（工作列露出時可用約 1032 高）修；EastSun 確認實際設定。
+- **W-44（HT9050 Index 只有 Z1）**：原話「9050的飛梭分成 入料跟出料兩個。當兩個都在home位置的時候，index z1可以下壓到socket」⇒ Index Z1 下壓前的互鎖＝入料飛梭與出料飛梭都在 home 位置。
+- **W-56（Out Arm 防掉氣缸 C_OutPnPDrop1-4、C_OutArmSmallY）**：原話「吸嘴會記錄有無ic的狀態，當執行suck的時候要由開到關。執行destory的時候要由關到開。有ic狀態下要夾起來（關, push） 無ic狀態下要開(pop)」⇒ 防掉氣缸跟著吸嘴的有無 IC 狀態：suck（吸料）時由開→關、destroy（放料）時由關→開；有 IC＝夾住（關、push），沒 IC＝打開（pop）。
+- **W-45／W-46（急停輸入、SnServo、SnSystemPower、安全門）**：原話「不確定，請 EastSun 看」⇒ 維持現狀、繼續問 EastSun。
+
+### 20261005 09:2x Steven 裁決：Q101（HT9050 自動測高把 IC 放回入料飛梭前，飛梭要不要移回右邊）
+
+- **背景**：HT9050 的 Index 只有 Z1、沒有 Y 軸；W-44 要求測高（下壓 socket）前入料飛梭退到左邊（golden Do_Z1_AutoGetHeight case 150／151 的那段，E-042 B3b）；但 golden 把 IC 放回飛梭（TfContact::DoZPlaceToShuttle、DoArm1／2PlaceToShuttle）時從不移動飛梭（HT9045 靠 Index Y 移到 socket，飛梭一直在 Index 下方），所以 HT9050 照 golden 走會把 IC 放到沒有飛梭的位置（ST01-E 1005 08:2x 流程文件修訂時發現）。
+- **Steven 1005 09:2x 選：加一步——放回前入料飛梭移回右邊**（AskUserQuestion，選項 1，St01 建議）。
+- **做法（E-042 B4，not golden、只限 HT9050）**：最後一次測高之後、DoZPlaceToShuttle 之前：前提 Z1 在安全高度、出料飛梭 X 在 OutSHT[0].iRight ±100（不在交接點），讀不到或不符就報警＋ST、照 golden 出口、絕不移動；符合才把入料飛梭移到 InSHT[0].iRight 並確認到位（±100），再放 IC，然後照 Steven 7 步流程第 7 步退回 iLeft。跟 Steven 08:1x 的 HT9045 七步流程（第 6 步放回飛梭、第 7 步飛梭退回左側）一致。
+- **上機**：human-review A66——EastSun 第一次用 1% 速度看這段移動。

@@ -7,10 +7,11 @@
 
 ## 1. 權限與範圍
 
-**規則**：記錄員只改三份檔——`D:\docs\ChangeLog\CHANGES_20260926_Steven.md`、`D:\docs\ops\daily\20260926.md`、
+**規則**：記錄員只改三份檔——`D:\RD5-Portal\public\Docs\ChangeLog\Steven\CHANGES_YYYYMMDD_Steven.md`（20261005 17:0x 起；之前 `D:\docs\ChangeLog\CHANGES_20260926_Steven.md`）、`D:\docs\ops\daily\20260926.md`、
 `D:\HT9045\.claude\skills\ht9050-construction\references\rulings-index.md`。
 
 - git 只用只讀指令：`log`、`show`、`diff`、`rev-list`、`status`、`ls-files`。**不** add／commit／push／fetch／pull／checkout／stash／merge／reset（fetch 由 ST01-E 在派工前做）。
+  ⛔ 20261004 22:5x 澄清（記錄員 §11.99 ④-9）：記錄員**不 fetch**——遠端 ref 用 ST01-E 派工前 fetch 的那一份（派工訊息寫 fetch 時刻）；checklist C-55／C-64／C-86 說的「最後一步讀 `origin/main`／`origin/v906/steven-handoff`」＝讀本機已有的 `origin/*` ref，不是自己 fetch。要更新的遠端狀態寫進 ④ 請 ST01-E 核，不要自己動 ref（別的 session 同時 fetch 時也會讓 ref 變動，C-81 寫範圍一律用派工訊息寫死的終點 hash）。
 - 不 build、不跑 ctest、不跑 wb_serve（會改機台真檔）、不開子代理、不寄信。
 - 不改 decisions-pending.md／decisions-decided.md／todo.md／done.md／RULINGS_*.md／FROM_STEVEN.md／任何 skill（包括本 skill）；發現那些檔有錯，寫進交件第 ④ 項給 ST01-E。
 - `D:\docs\ops\registers\HT9045_裁決進度表.md` 20260927 13:0x 起凍結（ST01-M `eada7571` 搬進 skill），不再改。
@@ -134,7 +135,7 @@
 
 ## 11. ChangeLog 與日報一天一份（Steven 20260928：選「開 0928 新檔」＋「每天一份呀！」）
 
-- ChangeLog：`D:\docs\ChangeLog\CHANGES_YYYYMMDD_Steven.md`；日報：`D:\docs\ops\daily\YYYYMMDD.md`。**每天開一份新檔**，當天的 §11 小節、§11 摘要表的列、日報「HH:MM 更新」段都寫在當天那份。
+- ChangeLog：`D:\RD5-Portal\public\Docs\ChangeLog\Steven\CHANGES_YYYYMMDD_Steven.md`（20261005 17:0x 起，§14；之前 `D:\docs\ChangeLog\CHANGES_YYYYMMDD_Steven.md`）；日報：`D:\docs\ops\daily\YYYYMMDD.md`。**每天開一份新檔**，當天的 §11 小節、§11 摘要表的列、日報「HH:MM 更新」段都寫在當天那份。
 - §12「目前狀態」只放在最新一天的檔；前一天的檔在 §12 的位置留一行「目前狀態見 <下一天的檔> §12」。
 - 小節編號（§11.NN）跨檔連號、不重來，舊的引用才對得到。
 - 跨午夜的輪次看範圍的**結束時間**歸哪一天。
@@ -144,7 +145,7 @@
 ## 12. Steven 的日報 `D:\docs\ops\daily\YYYYMMDD.md` 改由 ST01-M 編輯（Steven 20260929 11:1x，經 ST01-E2：「日報一律通報 ST01-M做內容編輯」）
 
 - 20260929 起，**記錄員不再寫 `D:\docs\ops\daily\YYYYMMDD.md`**（不新增「HH:MM 更新」段、不改舊段）。ST01-M 是唯一編輯者，每 2 小時（在 :17）依各方回報寫一次、一天一份，當天結束經 ST01-E2 同步到 portal。
-- 記錄員照舊寫：ChangeLog `D:\docs\ChangeLog\CHANGES_YYYYMMDD_Steven.md`（§11 小節、摘要表、§12）、repo 日報 `D:\HT9045\docs\ops\daily\YYYY-MM-DD.md`、`D:\HT9045\.claude\skills\ht9050-construction\references\rulings-index.md`。
+- 記錄員照舊寫：ChangeLog `D:\RD5-Portal\public\Docs\ChangeLog\Steven\CHANGES_YYYYMMDD_Steven.md`（20261005 17:0x 起，§14；§11 小節、摘要表、§12）、repo 日報 `D:\HT9045\docs\ops\daily\YYYY-MM-DD.md`、`D:\HT9045\.claude\skills\ht9050-construction\references\rulings-index.md`。
 - 記錄員交件後，ST01-E 把摘要轉給 ST01-M（ST01-M 拿去寫 Steven 日報）；Steven 20260929「記得通知每個小弟要寫日報回饋給你」。
 - 上面 §11 寫的「日報一天一份」仍適用於 ST01-M 寫的那份；本 skill 其他地方提到寫 `D:\docs\ops\daily\` 的步驟，一律照這一節略過。
 - 時間：Steven 訊息的時刻以 git commit 時間與 ST01-M 更正過的紀錄為準（20260929 ST01-M 11:0x～11:3x 的標籤快了 30～60 分鐘，已更正）。
@@ -156,3 +157,15 @@
 - 整台電腦 7 個的上限（Steven 20260928）照舊，兩條同時遵守。
 - 記錄員自己不開子代理（§1 原本就不准），這條不變。
 - 等名額時，ST01-E 先把本輪輸入寫成 `D:\AI_TempFile\st01e-clerk-st01m-HHMM.txt`（ST01-M 的文字原文＋ST01-E 的項目），名額空出來就照 dispatch-and-handin.md §1 派，範圍終點寫派工當下 fetch 到的 hash。
+
+## 14. ChangeLog 改放入口網站 repo（Steven 20261005 17:0x，在 St02-E 那邊裁決，St02-M 經 CHAT_ST02 `d68810ad1` 轉、ST01-M 17:5x 轉 ST01-E）
+
+**規則**：
+- ChangeLog 不再寫 `D:\docs\ChangeLog\`，改寫入口網站 repo：St01＝`D:\RD5-Portal\public\Docs\ChangeLog\Steven\CHANGES_YYYYMMDD_Steven.md`；St02 用 `Steven02\`（`build_portal.py` 以資料夾＋日期當鍵，兩邊不能同名）。
+- 格式、§11／§12 規則都不變；舊檔 `D:\docs\ChangeLog\CHANGES_*_Steven.md` 保留不刪、不再改。
+- 記錄員照樣只改檔、不做 git；**ST01-E 每天推一次入口網站 MR**（一天一個分支，例 `st01/changelog-YYYYMMDD`）：`node tools/md2html.js <md>` 產生同名 html → `py tools/build_portal.py --ci` 通過 → commit md＋html → push 開 MR（不加 auto-merge；ST01-M 經 Steven 同意後用 GitLab API 合）。推之前掃一次密碼／權杖／金鑰（`public/` 合進 main 後全公司看得到）。
+- 入口網站 MR 還沒合、`D:\RD5-Portal` 還沒有當天的檔時：記錄員先寫 `D:\docs\ChangeLog\` 那份，ST01-E 推 MR 時一起搬過去。
+- 第一批：0929～1005 搬上去是入口網站 MR !181（`st01/changelog-20261005` `8506650`，0926～0928 早就在 main 而且內容相同）。
+- 不在這條範圍：repo 日報 `D:\HT9045\docs\ops\daily\YYYY-MM-DD.md` 與 rulings-index 照舊（Steven 的裁決只講 ChangeLog）。
+
+**為什麼**：讀者（Jimmy、研五軟體組）都看入口網站；St02 的 ChangeLog 已經放在那裡（入口網站 MR !179）。

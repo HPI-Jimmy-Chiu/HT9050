@@ -6,7 +6,7 @@
 
 ```
 記錄員這一輪的工作：照 D:\HT9045\.claude\skills\ops-st01-clerk-report\SKILL.md 與它的 references\ 五份檔，更新三份紀錄：
-D:\docs\ChangeLog\CHANGES_20260926_Steven.md、D:\docs\ops\daily\20260926.md、
+D:\RD5-Portal\public\Docs\ChangeLog\Steven\CHANGES_YYYYMMDD_Steven.md、D:\HT9045\docs\ops\daily\YYYY-MM-DD.md（repo 日報）、
 D:\HT9045\.claude\skills\ht9050-construction\references\rulings-index.md。只改這三份，不做 git 寫入、不 build、不開子代理。
 
 1. 範圍：<上一輪終點>..<本輪終點>（<N> 顆，<hh:mm>～<hh:mm>）。本輪終點固定是 <本輪終點>；寫的時候 HEAD 往前了也不要自己延伸。
@@ -47,7 +47,7 @@ D:\HT9045\.claude\skills\ht9050-construction\references\rulings-index.md。只�
 記錄員交件：<上一輪終點>..<本輪終點>（<N> 顆，09-27 <hh:mm>～<hh:mm>），新節 §11.<NN>
 
 ① 改了哪些檔
-- D:\docs\ChangeLog\CHANGES_20260926_Steven.md：§11 摘要表第 <NN> 列；新增 §11.<NN>（a～<x>）；§12.1～§12.4 整段重寫；§12.5 新增 <k> 條（開頭字：…）、改標 ⛔ <j> 條（開頭字：…）；⛔ 更正 <i> 處（§… 第 … 行附近）
+- D:\RD5-Portal\public\Docs\ChangeLog\Steven\CHANGES_YYYYMMDD_Steven.md：§11 摘要表第 <NN> 列；新增 §11.<NN>（a～<x>）；§12.1～§12.4 整段重寫；§12.5 新增 <k> 條（開頭字：…）、改標 ⛔ <j> 條（開頭字：…）；⛔ 更正 <i> 處（§… 第 … 行附近）
 - D:\docs\ops\daily\20260926.md：檔尾新增「09-27 <HH:MM> 更新」一段；⛔ 更正 <…>
 - D:\HT9045\.claude\skills\ht9050-construction\references\rulings-index.md：最後更新；主表改 <列號…>、新增 <列號…>；最近變動加 1 行、刪掉最舊的「<那行開頭的時間>」那行，現在 20 行
 ② 狀態計數：✅<a>／⏳<b>／📝<c>／❓<d>／➡<e>／—<f>（合計 <T>；上一輪 ✅…；差異：<哪一列從什麼改成什麼>）

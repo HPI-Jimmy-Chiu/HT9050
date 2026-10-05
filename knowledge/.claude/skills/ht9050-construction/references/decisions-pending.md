@@ -18,6 +18,14 @@
 
 ### 要 Steven 決定或確認的 Q
 
+#### Q102. 自動測高 E-042 要用到的兩個條碼函式，能不能補進 TfBarCode（在 `aHotPlateSubstrate.h`，照規定要先問 Steven）——不急，HT9050 用不到
+
+- **是什麼**：golden 0618 的接觸測試流程（TfContact::DoTestContactFunction 一帶）在有條碼的機台會呼叫 `fBarCode->DoBarcodeCCDAutoTeach()` 與 `fBarCode->CleanBarcodeError()`；移植樹的 TfBarCode 還沒有這兩個函式。E-042 B3／B4 先用相依閘擋住（有條碼才需要，沒有就跳過），所以現在不會出錯。
+- **為什麼要問**：TfBarCode 宣告在 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\aHotPlateSubstrate.h`，St01 的常設規則是 `aHotPlateSubstrate.*` 要先問 Steven 才能動。
+- **影響範圍**：HT9050 機台 `BAR_CODE_INSTALL=0`，golden 本來就跳過，**HT9050 不受影響**；只有有裝條碼的 HT9045 機台在 E-042 解開（B6）後跑接觸測試時才需要。
+- **St01 建議**：A——准 St01 照 golden 0618 原樣把這兩個函式補進 TfBarCode（只加函式，不改既有成員），排在 E-042 B6 之前；B——先不補，B6 時有條碼的機台接觸測試直接拒絕並提示。沒回就照 **B**（不動 aHotPlateSubstrate.h）。
+- **目前狀態**：待 Steven（登記 ST01-M 1005 10:03，review6 `6461ed47`；來源 ST01-E 記錄員 ④）。⛔ 更正：原寫 10:2x，commit 時間是 10:03（ST01-E 記錄員 1005 14:1x 指出）。
+
 
 （目前沒有。Q78、Q79 已由 Steven 20261003 05:3x 裁決，搬到 decisions-decided.md。）
 
@@ -68,3 +76,5 @@
 （Q90～Q97 已由 Steven 20261004 07:2x 裁決，搬到 decisions-decided.md。）
 
 （Q98 已由 Steven 20261004 17:0x 裁決，搬到 decisions-decided.md。）
+
+（Q99、Q100 已由 Steven 20261004 22:2x 裁決，搬到 decisions-decided.md。）
