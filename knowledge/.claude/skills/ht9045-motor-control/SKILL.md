@@ -1,6 +1,6 @@
 ---
 name: ht9045-motor-control
-description: HT9045 Handler 馬達控制層模式。適用於馬達移動、回原點、JOG 點動、伺服控制或底層馬達卡操作。涵蓋 HTMotor、TMyMotor、TTrayMotor、TMySYNTEKMotor、TMyMN200Motor、TMyEtherCatMotor、TMyGALILMotor、TMySMCMotor、Hontech_M4 及 Galil DMC 整合。用於馬達修改、馬達問題除錯、新增馬達定義或理解馬達控制流程。觸發關鍵字：motor, 馬達, Galil, MN200, SYNTEK, PCI-L132, 回原點, home, JOG, servo, PISO-MN200, MotionNet, 泓格, ICP-DAS, mn_fix_move, mn_velocity_move, mn_home_start, EtherCAT, PCI1203, Advantech, SMC, CONTEC, Hontech, M2X4, SortArm
+description: HT9045 Handler 馬達控制層模式。適用於馬達移動、回原點、JOG 點動、伺服控制或底層馬達卡操作。涵蓋 HTMotor、TMyMotor、TTrayMotor、TMySYNTEKMotor、TMyMN200Motor、TMyEtherCatMotor、TMyGALILMotor、TMySMCMotor、Hontech_M4 及 Galil DMC 整合。用於馬達修改、馬達問題除錯、新增馬達定義或理解馬達控制流程。觸發關鍵字：motor, 馬達, Galil, MN200, SYNTEK, PCI-L132, 回原點, home, JOG, servo, PISO-MN200, MotionNet, 泓格, ICP-DAS, mn_fix_move, mn_velocity_move, mn_home_start, EtherCAT, PCI1203, Advantech, SMC, CONTEC, Hontech, M2X4, SortArm；馬達驅動器手冊參照：Panasonic MINAS A4／A5 RS232（rs232.cpp，Index Z 扭力）、Panasonic MINAS A6BN EtherCAT、安川 Σ-X EtherCAT（HT9050，6077h／警報與重置）
 ---
 
 <!-- AI(W906-BA-SKILL) 20260915：這支 skill 來自網頁同事 20260915 交付的
@@ -316,3 +316,8 @@ class TTrayMotor : public TMyMotor {
 - [tray-step-motor-api.md](references/tray-step-motor-api.md) - Tray 軌道步進馬達（RS-232）API
 - [index-torque-autoheight.md](references/index-torque-autoheight.md) - Index Z 扭力讀值：golden 國際牌 RS-232（rs232.cpp 0x52、k/20、負值歸 0）↔ 安川 Σ-X 6077h（0.1 %、2704h）、正負號比較規則（Steven Q87）、自動測高流程與 port 防護（20261003）
 - [ht9050-1203-runtime-traps.md](references/ht9050-1203-runtime-traps.md) - HT9050（PCI-1203＋DS402）上 golden 流程的執行期陷阱：MOTION_CARD_TYPE=0 讓伺服 ON 寫 0、route 拒絕 DS402 座標寫入但 Reload／InitMotor1203 直接寫、iInposLed 永遠 false（料盤手臂防撞失效）、原點燈當 Z 安全、移動中驅動器警報不報、WAR16122 沒編又撞碼、W906_IsHT9050 只在機台樹（S-26，20261004）
+
+**馬達驅動器手冊參照**（原三支獨立 skill，Steven 20261005 08:0x 併入）：
+- [panasonic-rs232/overview.md](references/panasonic-rs232/overview.md) - Panasonic MINAS A4／A5 RS232：協定、指令表、golden `rs232.cpp` 實作（Index Z 扭力 0x52、k/20）
+- [panasonic-ethercat-a6bn/overview.md](references/panasonic-ethercat-a6bn/overview.md) - Panasonic MINAS A6BN EtherCAT：通訊、CiA402 與模式、物件字典、錯誤與重置（目前沒有機台在用）
+- [yaskawa-ethercat/overview.md](references/yaskawa-ethercat/overview.md) - 安川 Σ-X（SGDXS／SGDXW）EtherCAT：CiA402、物件字典（6077h、2704h）、警報與重置、參數、硬體（HT9050 在用）

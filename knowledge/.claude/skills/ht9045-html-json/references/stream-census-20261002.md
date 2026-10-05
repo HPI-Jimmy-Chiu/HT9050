@@ -38,7 +38,52 @@ JSON 做一次 `cJSON_Parse`**，逐顆馬達取 20 幾個欄位、與上一次�
 `g_opOn` 只由環境變數 `W906_OPLOG_DIR` 打開（`W906_OpLogInit`，`:8316`）。
 
 ⇒ **要量 apiCache 的真實成本，必須先把 `W906_OPLOG_DIR` 清掉。**
-20261002 第一次量到的「apiCache 每拍約 69 ms」**是在 op log 開著的狀態下量的，尚未扣除這一項**。
+
+**20261002 實測這個汙染有多大**（同一台、同一支 exe、同樣 7–8 個 10 秒窗）：
+
+| | op log 開 | **op log 關** | 差 |
+|---|---:|---:|---:|
+| apiCache 每次 | 18.99–27.41 ms | **7.70 ms** | **−67%** |
+| apiCache 每拍（500 ms） | ~69 ms | **23.2 ms** | **−46 ms** |
+| publish 每次 | 7.60–11.04 ms | **7.30 ms** | −10% |
+| 兩者每拍合計 | ~92 ms | **38.5 ms** | **−54 ms** |
+
+⇒ **開著 op log 去量節拍，會把一半以上的時間算到別人頭上。**
+
+### 0.2b ⛔⛔ `W906_OPLOG_DIR` 是「每個啟動設定各自決定」的，不是全域開關
+
+清掉使用者環境變數**不一定有用** —— `HT9011UC_Cpp_V3.33.906.0/.vscode/launch.json` 裡
+**有些設定自己寫死了它**：
+
+| 啟動設定 | 有沒有寫死 `W906_OPLOG_DIR` |
+|---|---|
+| F5 預設（`Obj/V906/build_dbg/wb_serve.exe`） | ❌ 沒有 ⇒ 清使用者變數有效 |
+| `IOWEB(這台): wb_serve 出貨組態（1203 唯讀）`（`:121`） | ✅ **寫死** `${workspaceFolder}\..\runcfg\logs` |
+| `IOWEB(這台): wb_serve 出貨組態（不接除錯器，較快）`（`:166`） | ✅ **寫死**（同上） |
+
+⇒ 用後兩個設定時，**不管使用者變數怎麼清，op log 照開、apiCache 照樣被汙染**，
+而且 log 會跑到 `D:\HT9045\runcfg\logs\` 而不是 `D:\HT9045_Log\oplog\`。
+**量之前先確認你按的是哪一個 F5。**
+
+### 0.2c 拿不到 `[STREAM]` 的時候怎麼辦（20261002 實際遇到）
+
+`[STREAM]` 只 `printf` 到 stdout（`wb_serve.cpp:5949` 發、`WebStreamStats.cpp:210` 印），
+**沒有 HTTP 端點、也不存在任何變數裡**。而這台的 cppdbg＋MinGW gdb **沒有把 debuggee 的
+stdout 接到偵錯主控台**，所以 F5 跑的時候看不到它。
+
+不改程式的取法（20261002 用這個拿到乾淨數字）：
+
+1. 使用者停掉 F5（確認 `wb_serve` 沒了、8045 沒在 listen）
+2. 從終端機跑**同一支 exe**，stdout 轉向：
+   ```
+   D:\HT9045\Obj\V906\build_dbg\wb_serve.exe > stream_clean.log 2>&1
+   ```
+   cwd 設成樹根（＝F5 的 `"cwd": "${workspaceFolder}"`）、不帶參數。跑 95 秒拿 8 個窗。
+3. 確認 log 裡有 `oplog: off (W906_OPLOG_DIR not set)`，**丟掉第一個窗**（計數器在那時才設基準）
+
+> 建議（屬第 12 條的筆電地盤，這裡只記）：給 `[STREAM]` 一個**輕量**的獨立檔案 sink，
+> 只寫那一行、不連帶啟動 `W906_OpLogMotorRuntime`。現在「要看統計就得開整包 op log」
+> 這個綁定，本身就是量不準的根因。
 
 ### 0.2a 量測前的「無磁碟」檢查單（20261002 Jerry 實測）
 
@@ -232,6 +277,27 @@ tower.amber           7 次
 | **B** | 把開頁閘從 3 個家族推廣到單頁專屬家族 | 待定（§4：靜態分析給不出定數） | 低，機制與 ctest（`test_streamgate.cpp`）都現成 |
 
 **A 單獨做就把每拍要整理的量砍掉六成。** 而且 A 不需要寫閘，只需要決定還要不要發。
+
+### 5.1 ⚠ 但要先搞清楚 A／B 省的是**CPU**，不是頻寬
+
+20261002 20:3x 的乾淨 `[STREAM]`（同一次量測的 `http` 欄）：
+
+| 通道 | 流量 | 誰在拉 |
+|---|---:|---|
+| **HTTP `/api/struct/io/runtime`** | **512 KB/s**（5 次／秒 × 約 102 KB） | `HW.IoSetView.html`，每 200 ms |
+| HTTP dialog mailbox | 16 KB/s（**30 次／秒**） | `dialog-bridge.js`，每 100 ms |
+| HTTP motor runtime | 0 | Motor Test／Motion View 沒開 |
+| **WS tag 串流（patch）** | **0.3 KB/s** | 全部頁面共用一條 |
+
+**HTTP 的 io runtime 輪詢是 WS tag 串流的 1,700 倍。**
+
+⇒ 本檔前面講的 1089 個沒人讀的 tag，省的是 **publish 每拍 15.4 ms 的 CPU**，
+**不是網路量**。真正的資料量在 `/api/struct/*` 的 HTTP 輪詢上，那是另一條線。
+**兩件事不要混在同一張工作卡裡。**
+
+⛔ 同時否決一個看起來很划算的想法：**「apiCache 重建 6 次/秒 → 1–2 次/秒」不可行。**
+那 6 次/秒正是為了餵 5 次/秒的 HTTP 輪詢；只降重建、不降輪詢，網頁會拿到過期資料。
+要省必須兩邊一起降 —— 而輪詢側是第 12 條的筆電地盤。
 
 ---
 

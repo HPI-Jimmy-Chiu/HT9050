@@ -107,6 +107,23 @@ HT9045/
 > 規則、安裝與更新步驟見 `machines/README.md` 與各機台資料夾的 `README.md`。
 > 從 `machines/` 複製到 `system/` 屬於改動執行期設定，要先得到使用者同意並先備份。
 
+## ★ 懷疑是「HT9050 機台設定或工單」的問題：先比對機台快照，再下結論（Jimmy 20261005，所有人、所有 AI）
+
+> AI(W906-MACHSYNC) 20261005，`HT9011UC_Cpp_V3.33.906.0/docs/RULINGS_20261005.md` 第 4 條。起因：同事的 AI 回報「機台參數設定有問題」，
+> 實際確認是**它電腦上的機台參數跟機台端不一樣**。Jimmy 原話：「如果發現是機台設定或工單問題，優先上github確認工單和機台設定是否同步，
+> 沒有同步就先同步再檢查，如果已經同步，那就是真問題的機率高，可提出討論」。
+
+1. **先比對**：`python tools/machine_sync/machine_sync.py check`
+   （先比 GitHub `HT9050` 分支 `machine/integ-ioweb`——機台約每 30 分鐘把 `machine_params/`＋`workorder/` 推上去；
+   連不到 GitHub 自動改比 GitLab main 的 `machines/HT9050/snapshot/`，並印出那份是機台幾點拍的）。
+2. **`NOT SYNCED`（exit 1）⇒ 先同步再看**：`machine_sync.py apply --yes`（自動先備份、複製、逐檔比 MD5）。
+   同步前量到的現象**不能**當成機台問題回報。這條規則就是 Jimmy 對「開發機／模擬機同步 HT9050 工作檔」的同意（上面「先得到使用者同意」那句在這個情況已經給了）；**別台真機台一律不裝**。
+3. **`SYNCED`（exit 0）⇒ 真問題的機率高，提出討論**：回報時附上工具印的 `machine snapshot` 兩行（來源、機台拍照時間）。
+4. 做完驗證要還原：`machine_sync.py restore <apply 印的備份資料夾>`（還原、比 MD5、刪備份）。
+
+細節：`tools/machine_sync/README.md`；放回位置與機種身分（`D:\GPIB9045\system\general.ini` 的 `[Version] Model`）：`machines/HT9050/snapshot/SNAPSHOT_SOURCE.md`。
+GitLab 那份照 RULINGS_20261002 第 21 條是**單向**的（機台 → GitHub → 筆電鏡像 → GitLab）：要改機台設定，請 EastSun 在機台上改、推上來，不要改 GitLab 那份。
+
 ## 機台 Layout
 
 機台物理配置示意圖請參考：`IMG/BMP/InOutArmOffset_6.bmp`

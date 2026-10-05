@@ -28,6 +28,7 @@
 - 模擬與真機只由建置期的 `SOFT_SIMULTE` 決定（出貨組態 `-DW906_NO_SOFT_SIMULTE=ON`）；`--dry` 已經完全拿掉，請不要再加。
 - 筆電 gate 的基準：出貨組態 4 項（`config_db`、`ini_helpers`、`config_loaders`、`GA1_ReadGeneralIni`），模擬組態 19 項（清單在 `D:\HT9045\backup\night_tools_20260928\sim_base_9050.txt`）。你那台 23／8 的差別見 §4 J-3、J-4。
 - **除錯提示（Jerry 1001 21:04，J-11）**：在中斷點停超過 10 秒再繼續，wb_serve 會照 `kPageNoScreenGraceMs`（10 秒沒有畫面就停機，`WebPageTable.cpp:468-500`）停機並跳 MES16441，瀏覽器的 WebSocket 也已經斷了、不會自己接回（J-11）⇒ **繼續之前先在瀏覽器按 Ctrl+Shift+R**，省得去查 MES16441／按 RETRY、PAUSE 沒反應。
+- **20261005 11:5x 新規則（Jimmy；RULINGS_20261005 第 4 條，全文 `AGENTS.md`「懷疑是 HT9050 機台設定或工單的問題」一節）：懷疑是機台設定或工單問題，先比對機台快照再下結論。** 起因：有同事的 AI 回報機台參數有問題，最後查到是它電腦上的參數跟機台不一樣。做法：`python tools/machine_sync/machine_sync.py check` —— `NOT SYNCED` 就 `apply --yes`（自動備份→複製→逐檔比 MD5）後重看，同步前量到的不算機台問題；`SYNCED` 才是真問題的機率高，附上工具印的 `machine snapshot` 兩行提出討論；做完 `restore <備份資料夾>`。工具先比 GitHub（機台約每 30 分鐘推一次）；讀不到 GitHub 自動改比 GitLab `machines/HT9050/snapshot/`（筆電 1005 已補到機台最新的快照，之後夜間迴圈每輪跟上）。只裝在開發機／模擬，別台真機台不裝。
 
 ## 3. 工作卡
 
@@ -73,3 +74,5 @@
 | 20261003 18:04 | 📣 **常駐卡：報數＋每小時回報工作狀態**（Steven 1003 18:0x，由 ST01-M 直接寫入） | Steven 原話：「請Ifor / Jerry / Frank / Kevin / ES02 報數, 並加入每小時回報」「如果有人是idle狀態, 就找工作派給他」「我們直接寫進那五個人的 TO 檔。 不要等了」。①**現在報數**（Jerry）：一行寫清楚——在不在線、在做什麼、卡在什麼、下一步。回在你的 `docs/handoff/FROM_JERRY.md`（或你自己的交接分支）＋心跳。②**之後每小時回報一次工作狀態**，沒變也回一行；最方便的是心跳分支 `v906/jerry-heartbeat` 的 HEARTBEAT.md（last tick／doing／next 三欄，工具 `tools/laptop_ops/heartbeat.py --who jerry --doing "..." --next HH:MM --push`，跟 Ifor01 已在用的一樣）。③**沒事做（idle）就說**，派工的人會給你卡。派工順位（Steven 的代理人制度）：Jimmy 筆電 → ST01-M → ST02-M；前一位超過 1 小時沒回應就由下一位派工，回來就交還。上機驗證照舊只給 EastSun。 |
 | 20261003 19:5x | ⏰ **追問（第 1 次；W-23）：每日日報** | 15:3x 的常駐卡（Steven 1003）：入口網站 `public/Docs/Daily/` 裡 Ifor、Kevin、EastSun 已經在交，你這邊還沒有資料夾。週末不用補；**週一開工那天交第一份**（格式照 Steven 的 `public/Docs/Daily/Steven/20261003.md`），交了在 FROM 檔說一聲。 |
 | 20261003 23:24 | 📌 **St01 代筆電追問（W-15；Jimmy 1003 23:1x「其他沒回的可以轉給ST01詢問」）** | 你實驗過的主迴圈一拍（`kServeTickMs`，現在 500 ms）改小：請推一條分支＋開 MR（寫明改成多少、怎麼測的），Jimmy 1002 說測過就收（RULINGS_20261002 第 19 條）。推了在 FROM_JERRY 或交接分支留一行。 |
+| 20261005 09:0x | ✅ **MR !196 合進 main 了（`aced2723`，只有文件）——謝謝；W-15 的程式那半還在等** | §3.5 節拍表的更正收到：apiCache＋publish 是網頁輪詢帶動的固定成本（76.9 ms/s），只有 PumpTick 跟著節拍變；建議 100 ms；低於 50 ms 要一起改 `tools/wb_serve.cpp` 迴圈的 50 ms 等待上限；機台上的 1203 Poll 要在機台上量。**W-15 還沒結**：請把 `kServeTickMs` 的修改（建議值 100 ms，或你量過認為對的值）推成 `v906/jerry-*` 分支＋MR，附「改成多少、怎麼測、前後對照」——筆電 gate 綠就合（RULINGS_20261002 第 19 條）。 |
+| 20261005 11:4x | ✅ **W-15 收到：MR !202（`kServeTickMs` 500→100 ms）＋MR !200（J-11 A2）排進第 68b 批** | 謝謝 Jerry。第 67 批（機台 0210～0217）gate 中、推完出第 147 包後，第 68b 批就 gate 這兩張；機台的值（!202 註明「機台值待上機量測」）照你的建議由 EastSun 在機台上量過再定。 |

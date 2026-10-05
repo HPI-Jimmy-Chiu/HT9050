@@ -86,6 +86,25 @@ git ls-tree --name-only origin/machine/integ-ioweb cpp/ web/ | tail   # 最大�
 2. 在專用 worktree（從 origin/main 開）逐顆 cherry-pick 機台自己的 commit（`PKG-*`／`MERGE-*` 是機台合筆電的包，**不 cherry-pick**；`WORKLOG` 照收），衝突照 RULINGS_20260930 第 11 條**以機台為準**；機台端的暫時設定（TOKEN-OFF、TEMP-DOORS）照舊不收。
 3. 兩組態 gate 綠 → 推 GitLab main → 推 GitHub 機台更新包（第 22 條 B）→ 寫 `docs/MACHINE_PATCHES_<日期>.md`（收到哪一顆、兩條鏈的新鏈尾、衝突怎麼合）。
 4. 筆電自己還沒推的批次跟機台重疊時：**先停**，等機台的收進來再比，機台已經做的不要再做一份。
+5. 同一個分支的 `dispatch/<yyyyMMdd>_staterecord_<HHmmss>/` 是機台推上來的 State Record（RULINGS_20261004 第 1 條、RULINGS_20261005 第 2 條）：分析由 NB2-1 接（`tools/staterecord/fetch_staterecord.py`）；NB2-1 兩輪都沒認領的，筆電自己接。
+6. **機台快照鏡像（每一輪都跑，很便宜；RULINGS_20261005 第 4 條）**：`python tools/laptop_ops/snap_push.py --latest`。
+   GitHub 的 `machine_params/`＋`workorder/` 跟 GitLab main `machines/HT9050/snapshot/` 一樣就印 `up to date`；不一樣就鏡像並推 GitLab main
+   （只動 snapshot/，不另出 GitHub 機台包）。⚠ 1003 13:46 到 1005 之間沒人跑，GitLab 那份落後機台兩天、差 34 個檔——讀不到 GitHub 的 St01／St02
+   拿舊設定在驗證。有推的那一輪，在 NIGHT_REPORT §1 記一行（機台拍照時間＋commit）。
+
+### 0a. ★ 主 checkout 快轉到正本（V2；使用者 20261005「S1、S2、V1、V2 都照建議 A 做」，RULINGS_20261005 第 2 條）
+
+`D:\HT9045` 這個資料夾沒有人會替它換新——整合都在 worktree 裡做、直接推 GitLab。1005 量到它停在 10/02 09:27、落後 origin/main 1,225 顆，
+在它裡面開的 session 讀到的是舊的 CLAUDE.md、技能與交接檔（同日因此給錯一次建議：另開分支，而 1004 早已裁決推 `dispatch/`）。每一輪：
+
+```
+python D:/HT9045/scripts/ops/ff_main_checkout.py      # 0＝已是最新或已快轉；1＝這輪不安全而略過（原因會印）；2＝錯誤
+```
+
+- 不安全就略過：不在 main、本機有沒推的 commit、有 cmd／ctest／cmake／ninja／g++／wb_serve 從這個資料夾在跑（`.claude\worktrees` 底下的不算）、git 拒絕覆寫沒 commit 的檔。
+- 它不 stash、不 reset、不動任何沒 commit 的檔；沒存的改動只要不在這次要更新的檔上就照樣保留（1005 用拋棄式 repo 量過六種情境）。
+- 連續三輪回 1 寫進 NIGHT_REPORT §3（附它印的原因）；回 2 當紅燈。
+- 搭配 V1：每個 session 開場的 SessionStart 檢查（`scripts/ops/check_stale_checkout.py`，掛在 `.claude/settings.json`）落後就提醒，不自動改。
 
 ```
 date +%H:%M                                   # 1. 先決定模式

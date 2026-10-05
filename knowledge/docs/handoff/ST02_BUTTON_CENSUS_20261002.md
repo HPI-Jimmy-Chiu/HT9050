@@ -1,14 +1,14 @@
 # ST02-C12 按鈕普查：「看得到、按了沒反應」（靜態＋點擊實測）
 
 > **golden 基準：`D:/HT9045/HT9011UC_Code_V3.33.906.0_20260618`**（RULINGS_20261003 第 2 條：0618 為準，906_0625_Steven 只對照；對照結果見文末）。
-> 量測樹：靜態在 main `e0e6b70d`（St02-E 1004 在 STEVEN-NB3 重跑，golden 0618）；點擊實測是 St01 1004 19:3x 在 main `7238673d` 量的（兩者程式相同，`e0e6b70d` 只多了本文件），從 St01 合併版 tsv 的 sent_probe 欄還原後重新合併。只量、只分類，**沒有改任何程式**（TO_STEVEN.md §3 ST02-C12）。
+> 量測樹：main `c0224dfb 2026-10-05 06:26:47 +0800`（＝ main `bb065426` ＋ !193 `1bd7e1b7`，舊分支 `v906/st02-c12-trusted` 上的合併，跟 St01 點擊實測用的 `66c9f29c` 程式相同；第 66 批 `bfb30b76` 已含這兩個）。只量、只分類，**沒有改任何程式**（TO_STEVEN.md §3 ST02-C12）。
 > 產生：`HT9011UC_Cpp_V3.33.906.0/tools/webprobe/c12_button_census.py`（靜態）＋ `c12_click_probe.py`（無頭 Edge＋假伺服器，**已合併實測結果**）。每顆的完整欄位在同名 `.tsv`。
 
 ## 0. 白話摘要
 
 - 範圍：外框 `web/background.html` WINDOWS 表開得到的頁＋Alert 覆蓋頁，共 64 頁、1859 顆按鈕（golden 的 TButton／TBitBtn／TSpeedButton，加上網頁自己的 `<button>`）。
 - 看得到又沒有變灰的：**430 顆**（其餘：靜態藏起來 1312、變灰 105、開發用頁 12）。
-- 實測按了**什麼都沒發生**（沒送 WS、沒有 POST、沒有視窗動作、畫面沒變）：**110 顆**，依 golden／移植樹分成 A～E（§1）。
+- 實測按了**什麼都沒發生**（沒送 WS、沒有 POST、沒有視窗動作、畫面沒變）：**99 顆**，依 golden／移植樹分成 A～E（§1）。
 
 ## 1. 分類與建議誰做
 
@@ -16,13 +16,13 @@
 |---|---|---:|---|
 | `dead/D` | 實測沒反應，golden 處理器本體會動馬達／寫輸出 | 5 | 列給 Jimmy：處理器本體會動馬達／寫輸出／啟動，不派 |
 | `dead/B` | 實測沒反應，C++ 沒有處理器 | 11 | C++ 沒翻（照 golden 補；筆電或 St02 先在 §1 認領） |
-| `dead/A` | 實測沒反應，C++ 有處理器（form.event 表列或同名函式） | 74 | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
+| `dead/A` | 實測沒反應，C++ 有處理器（form.event 表列或同名函式） | 63 | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | `dead/A+E?` | 實測沒反應，C++ 有處理器（form.event 表列或同名函式）；WORKLOG_MACHINE §4 有提到（id 或頁） | 1 | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送；機台端正在做（WORKLOG_MACHINE §4 提到）——先問機台，避免重工 |
 | `dead/C0` | 實測沒反應，golden 沒有 OnClick 或處理器是空的 | 14 | 不用做：golden 這顆本來就沒有 OnClick／處理器是空的 |
 | `dead/?` | 實測沒反應，不是 golden 元件、也沒有處理器線索 | 5 |  |
-| `OK-cmd` | 實測送了 C++ 認得的命令 | 67 |  |
+| `OK-cmd` | 實測送了 C++ 認得的命令 | 65 |  |
 | `OK-http` | 實測送了 POST／PUT | 2 |  |
-| `OK-ui` | 實測只有畫面／視窗動作（沒送 C++） | 43 |  |
+| `OK-ui` | 實測只有畫面／視窗動作（沒送 C++；探針 v2 起也算只改輸入框值的） | 56 |  |
 | `s:unbound/?` | 靜態：沒有 script 提到這顆 id，不是 golden 元件、也沒有處理器線索 | 186 |  |
 | `s:unbound/?+E?` | 靜態：沒有 script 提到這顆 id，不是 golden 元件、也沒有處理器線索；WORKLOG_MACHINE §4 有提到（id 或頁） | 22 | 機台端正在做（WORKLOG_MACHINE §4 提到）——先問機台，避免重工 |
 | `greyed(static)` | 網頁 disabled | 1 |  |
@@ -46,13 +46,13 @@
 | Status.ShowMessage.html | uShowMessage.dfm | 1 | 1 | 0 | 0 |  |
 | Status.ShowBinSelect.html | cShowBinSelect.dfm | 4 | 3 | 0 | 1 | dead/A 1 |
 | Setup.OffSet.html | cOffSet.dfm | 89 | 73 | 0 | 16 | dead/C0 12, dead/A 2, OK-ui 1, dead/D 1 |
-| Setup.Speed.html | cSpeed.dfm | 6 | 0 | 0 | 6 | dead/A 6 |
+| Setup.Speed.html | cSpeed.dfm | 6 | 0 | 0 | 6 | OK-ui 4, dead/A 2 |
 | HW.IoSetView.html | iosetview.dfm | 17 | 17 | 0 | 0 |  |
 | Config.Configuration.html | cConfiguration.dfm | 49 | 48 | 0 | 1 | dead/B 1 |
 | Status.CounterSel.html | cCounterSel.dfm | 1 | 0 | 0 | 1 | dead/A 1 |
 | Data.CounterClear.html | cCounterClear.dfm | 2 | 0 | 0 | 2 | dead/A 1, OK-cmd 1 |
 | Data.Builder.html | cBuilder.dfm | 5 | 0 | 4 | 1 | OK-cmd 1 |
-| Config.DIOInterFaceCFG.html | DIOInterFaceCFG.dfm | 4 | 0 | 1 | 3 | dead/A 3 |
+| Config.DIOInterFaceCFG.html | DIOInterFaceCFG.dfm | 4 | 0 | 1 | 3 | dead/A 2, OK-cmd 1 |
 | Status.LtcSensor.html | LtcSensor.dfm | 16 | 1 | 14 | 1 | OK-ui 1 |
 | Status.TowerLight.html | cTowerLight.dfm | 1 | 0 | 0 | 1 | dead/A 1 |
 | HW.OmronEJ1N.html | EJ1N/OmronEJ1N.dfm | 15 | 11 | 4 | 0 |  |
@@ -63,19 +63,19 @@
 | Setup.Contact.html | cContact.dfm | 20 | 15 | 2 | 3 | dead/A 2, dead/D 1 |
 | Setup.TesterIF.html | cTesterIF.dfm | 3 | 1 | 0 | 2 | dead/A 2 |
 | Status.GroundMan.html | GroundMan/GroundMan.dfm | 5 | 0 | 3 | 2 | dead/A 2 |
-| Setup.Ld_ULd.html | cLd_ULd.dfm | 3 | 0 | 0 | 3 | dead/A 3 |
+| Setup.Ld_ULd.html | cLd_ULd.dfm | 3 | 0 | 0 | 3 | dead/A 2, OK-ui 1 |
 | Status.Security.html | cSecurity.dfm | 187 | 6 | 0 | 181 | s:unbound/? 180, OK-cmd 1 |
 | Setup.TrayForm.html | cTrayForm.dfm | 4 | 1 | 0 | 3 | dead/A 2, dead/B 1 |
 | Setup.SCK_ART.html | Automation/SCK_ART.dfm | 8 | 2 | 0 | 6 | dead/B 4, dead/A 2 |
 | Setup.YieldMonitoring.html | uYieldMonitoring.dfm | 3 | 1 | 0 | 2 | dead/A 2 |
 | Setup.HotPlate.html | cHotPlate.dfm | 2 | 0 | 0 | 2 | OK-cmd 1, dead/A 1 |
-| Setup.SetUp.html | cSetUp.dfm | 9 | 0 | 0 | 9 | dead/A 7, dead/B 1, dead/D 1 |
+| Setup.SetUp.html | cSetUp.dfm | 9 | 0 | 0 | 9 | OK-ui 5, dead/A 2, dead/B 1, dead/D 1 |
 | Data.SmartDiagnostic.html | SmartDiagnostic.dfm | 6 | 1 | 2 | 3 | OK-ui 2, dead/C0 1 |
 | Data.StartCondition.html | cStartCondition.dfm | 88 | 84 | 0 | 4 | dead/A 4 |
 | Setup.Temp_Set.html | uTemp_Set.dfm | 10 | 7 | 0 | 3 | dead/A 3 |
 | Setup.BinSel.html | cBinSel.dfm | 8 | 0 | 0 | 8 | dead/A 6, dead/? 2 |
-| HW.teach.html | uteach.dfm | 865 | 782 | 23 | 60 | OK-cmd 32, OK-ui 28 |
-| HW.MotorTest.html | uMotorTest.dfm | 52 | 24 | 1 | 27 | OK-cmd 18, OK-ui 9 |
+| HW.teach.html | uteach.dfm | 865 | 782 | 23 | 60 | OK-cmd 31, OK-ui 29 |
+| HW.MotorTest.html | uMotorTest.dfm | 52 | 24 | 1 | 27 | OK-cmd 16, OK-ui 11 |
 | HW.home.html | uhome.dfm | 2 | 1 | 0 | 1 | OK-cmd 1 |
 | HW.ShuttleMove.html | ShuttleMove.dfm | 26 | 7 | 17 | 2 | dead/A 2 |
 | Setup.TrayAssignment.html | cTrayAssignment.dfm | 2 | 0 | 0 | 2 | dead/A 2 |
@@ -131,7 +131,6 @@
 | Setup.TrayForm.html | spbCopy | Copy From | `dead/B` | clicked | — | spbCopyClick cTrayForm.cpp:692-713 (17 句) |  | C++ 沒翻（照 golden 補；筆電或 St02 先在 §1 認領） |
 | Alert.Password.html | btnOK | OK | `dead/A` | clicked | forms/fPassword.cpp forms/fPassword.h | btnOKClick Password.cpp:385-388 (1 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Alert.Password.html | spbCancel | Cancel | `dead/A` | clicked | forms/fPassword.cpp forms/fPassword.h | spbCancelClick Password.cpp:123-128 (3 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
-| Config.DIOInterFaceCFG.html | spbDelete | Delete | `dead/A` | clicked | FileRW/TTLCfg.cpp FileRW/TTLCfg.gen.inc | spbDeleteClick DIOInterFaceCFG.cpp:248-256 (4 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Config.DIOInterFaceCFG.html | spbExit | Exit | `dead/A` | clicked | FileRW/StartCondition.cpp FileRW/StartCondition.gen.inc | spbExitClick DIOInterFaceCFG.cpp:258-261 (1 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Config.DIOInterFaceCFG.html | spbSave | Save | `dead/A` | clicked ; dom:1 | Automation/auto9045.cpp Command.cpp | spbSaveClick DIOInterFaceCFG.cpp:191-235 (28 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Data.CounterClear.html | spbExit | Exit | `dead/A` | clicked | FileRW/StartCondition.cpp FileRW/StartCondition.gen.inc | spbExitClick cCounterClear.cpp:452-456 (2 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
@@ -146,8 +145,8 @@
 | HW.VacuumUnit.html | sbtExit | Exit | `dead/A` | clicked | FileRW/Temperature.gen.inc FileRW/TestIF_File_BarCode.gen.in | sbtExitClick VacuumUnit/VacuumUnit.cpp:402-406 (2 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | HW.VacuumUnit.html | spbSave | Save | `dead/A` | clicked ; dom:1 | Automation/auto9045.cpp Command.cpp | spbSaveClick VacuumUnit/VacuumUnit.cpp:378-400 (12 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Main.AOAInfo.html | OffsetSave | Save | `dead/A+E?` | clicked ; dom:1 | FileRW/AOAOffset.cpp FileRW/AOAOffset.gen.inc | OffsetSaveClick main.cpp:33822-33915 (78 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送；機台端正在做（WORKLOG_MACHINE §4 提到）——先問機台，避免重工 |
-| Setup.AGV.html | btInitalLoad | Inital Load | `dead/A` | clicked | form.event=yes | btInitalLoadClick Automation/AGV.cpp:1055-1059 (2 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
-| Setup.AGV.html | btInitalUnLoad | Inital Unload | `dead/A` | clicked | form.event=yes | btInitalUnLoadClick Automation/AGV.cpp:1061-1065 (2 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
+| Setup.AGV.html | btInitalLoad | Inital Load | `dead/A` | clicked ; dom:1 | form.event=yes | btInitalLoadClick Automation/AGV.cpp:1055-1059 (2 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
+| Setup.AGV.html | btInitalUnLoad | Inital Unload | `dead/A` | clicked ; dom:1 | form.event=yes | btInitalUnLoadClick Automation/AGV.cpp:1061-1065 (2 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Setup.AGV.html | sbtExit | Exit | `dead/A` | clicked | FileRW/Temperature.gen.inc FileRW/TestIF_File_BarCode.gen.in | sbtExitClick Automation/AGV.cpp:1036-1041 (3 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Setup.AGV.html | spbSave | Save | `dead/A` | clicked ; dom:1 | Automation/auto9045.cpp Command.cpp | spbSaveClick Automation/AGV.cpp:928-969 (30 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Setup.BarCode.html | sbtExit | Exit | `dead/A` | clicked | form.event 表列 | sbtExitClick BarCode/BarCode.cpp:2392-2401 (7 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
@@ -166,7 +165,6 @@
 | Setup.Contact.html | btnTempSet | Temperature Setting | `dead/A` | clicked | forms/fContact.h | btnTempSetClick cContact.cpp:17184-17187 (1 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Setup.Contact.html | sbtExit | Exit | `dead/A` | clicked | FileRW/Temperature.gen.inc FileRW/TestIF_File_BarCode.gen.in | sbtExitClick cContact.cpp:14478-14487 (5 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Setup.HotPlate.html | sbtExit | Exit | `dead/A` | clicked | FileRW/Temperature.gen.inc FileRW/TestIF_File_BarCode.gen.in | sbtExitClick cHotPlate.cpp:627-631 (2 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
-| Setup.Ld_ULd.html | btnDefaultValue | Default Value | `dead/A` | clicked | forms/fLd_ULd.cpp forms/fLd_ULd.h | btnDefaultValueClick cLd_ULd.cpp:224-237 (8 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Setup.Ld_ULd.html | sbtExit | Exit | `dead/A` | clicked | FileRW/Temperature.gen.inc FileRW/TestIF_File_BarCode.gen.in | sbtExitClick cLd_ULd.cpp:218-222 (2 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Setup.Ld_ULd.html | spbSave | Save | `dead/A` | clicked ; dom:1 | Automation/auto9045.cpp Command.cpp | spbSaveClick cLd_ULd.cpp:179-202 (12 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Setup.OffSet.html | btnOffsetList | To Offset List | `dead/A` | clicked ; dom:2 | forms/fOffSet.h | btnOffsetListClick cOffSet.cpp:3369-3374 (3 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
@@ -175,19 +173,10 @@
 | Setup.QAMode.html | btnOk | Exit | `dead/A` | clicked | forms/fQAMode.cpp forms/fQAMode.h | btnOkClick QAMode.cpp:27-30 (1 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Setup.SCK_ART.html | btnExit | Exit | `dead/A` | clicked | ATC/ATCInterface.cpp ATC/ATCInterface.h | btnExitClick Automation/SCK_ART.cpp:808-820 (7 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Setup.SCK_ART.html | btnExit1 | Exit | `dead/A` | clicked | ATC/ATCInterface.cpp ATC/ATCInterface.h | btnExitClick Automation/SCK_ART.cpp:808-820 (7 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
-| Setup.SetUp.html | btnLDownToRUpZ |  | `dead/A` | clicked | FileRW/TestIF_File_SetUp.cpp FileRW/TestIF_File_SetUp.gen.in | btnLUpToRDownNClick cSetUp.cpp:4167-4290 (64 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
-| Setup.SetUp.html | btnLUpToRDownN |  | `dead/A` | clicked | FileRW/TestIF_File_SetUp.cpp FileRW/TestIF_File_SetUp.gen.in | btnLUpToRDownNClick cSetUp.cpp:4167-4290 (64 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
-| Setup.SetUp.html | btnLUpToRDownZ |  | `dead/A` | clicked | FileRW/TestIF_File_SetUp.cpp FileRW/TestIF_File_SetUp.gen.in | btnLUpToRDownNClick cSetUp.cpp:4167-4290 (64 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
-| Setup.SetUp.html | btnRDownToLUpZ |  | `dead/A` | clicked | FileRW/TestIF_File_SetUp.cpp FileRW/TestIF_File_SetUp.gen.in | btnLUpToRDownNClick cSetUp.cpp:4167-4290 (64 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Setup.SetUp.html | btnRUpToLDownN |  | `dead/A` | clicked | FileRW/TestIF_File_SetUp.cpp FileRW/TestIF_File_SetUp.gen.in | btnLUpToRDownNClick cSetUp.cpp:4167-4290 (64 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
-| Setup.SetUp.html | btnRUpToLDownZ |  | `dead/A` | clicked | FileRW/TestIF_File_SetUp.cpp FileRW/TestIF_File_SetUp.gen.in | btnLUpToRDownNClick cSetUp.cpp:4167-4290 (64 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Setup.SetUp.html | sbtExit | Exit | `dead/A` | clicked | form.event 表列 | sbtExitClick cSetUp.cpp:3452-3466 (8 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Setup.Speed.html | sbtExit | Exit | `dead/A` | clicked | FileRW/Temperature.gen.inc FileRW/TestIF_File_BarCode.gen.in | sbtExitClick cSpeed.cpp:1788-1793 (3 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Setup.Speed.html | spbSave | Save | `dead/A` | clicked ; dom:1 | Automation/auto9045.cpp Command.cpp | spbSaveClick cSpeed.cpp:1433-1786 (200 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
-| Setup.Speed.html | spbSelectAll | Select All | `dead/A` | clicked ; dom:1 | form.event 表列 | spbSelectAllClick cSpeed.cpp:1795-1810 (13 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
-| Setup.Speed.html | spbSetToDef | Set to define | `dead/A` | clicked | form.event 表列 | spbSetToDefClick cSpeed.cpp:1812-1933 (63 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
-| Setup.Speed.html | spbSpeedAdd | Speed + | `dead/A` | clicked | form.event 表列 | spbSpeedAddClick cSpeed.cpp:1414-1419 (3 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
-| Setup.Speed.html | spbSpeedDec | Speed - | `dead/A` | clicked | form.event 表列 | spbSpeedDecClick cSpeed.cpp:1421-1424 (1 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Setup.Temp_Set.html | btClearAll | Clear All | `dead/A` | clicked | forms/fTemp_Set.h uTemp_Set.cpp | btClearAllClick uTemp_Set.cpp:5126-5135 (7 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Setup.Temp_Set.html | sbtExit | Exit | `dead/A` | clicked | form.event 表列 | sbtExitClick uTemp_Set.cpp:5101-5124 (15 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
 | Setup.Temp_Set.html | spbSave | Save | `dead/A` | clicked ; dom:1 | Automation/auto9045.cpp Command.cpp | spbSaveClick uTemp_Set.cpp:4201-4528 (167 句) |  | 網頁那一側（Steven 這邊，St01／St02 認領）：C++ 已有處理器，網頁沒送 |
@@ -223,65 +212,63 @@
 | Setup.BinSel.html | btnAutoHide | 自動隱藏停用列 | `dead/?` | clicked ; dom:1 | — | — |  |  |
 | Setup.BinSel.html | spbAOIBin | AOI Bin | `dead/?` | clicked ; dom:1 | — | 沒有 OnClick |  |  |
 | Status.TemperFrom.html | tzExpand | Expand all ▸ | `dead/?` | clicked ; dom:2 | — | — |  |  |
+| Config.DIOInterFaceCFG.html | spbDelete | Delete | `OK-cmd` | clicked ; control.acquire ; ttlcfg.op ; dom:1 | FileRW/TTLCfg.cpp FileRW/TTLCfg.gen.inc | spbDeleteClick DIOInterFaceCFG.cpp:248-256 (4 句) |  |  |
 | Data.Builder.html | spbExit | Exit | `OK-cmd` | clicked ; control.acquire ; builder.op | FileRW/StartCondition.cpp FileRW/StartCondition.gen.inc | spbExitClick cBuilder.cpp:484-487 (1 句) |  |  |
 | Data.ContactCT.html | btClearCount | Count Clear | `OK-cmd` | clicked ; control.acquire ; act.contactCT.clearCount ; contactct.get ; dom:8 | JsonBridge/actions/MainClarnData.cpp cContactCT.cpp | btClearCountClick cContactCT.cpp:944-1069 (76 句) |  |  |
 | Data.ContactCT.html | btYieldChart | Yield Chart | `OK-cmd` | clicked ; control.acquire ; act.contactCT.yieldChart ; contactct.get ; dom:8 | cContactCT.cpp forms/fContactCT.h | btYieldChartClick cContactCT.cpp:1071-1075 (2 句) |  |  |
 | Data.CounterClear.html | spbExe | Execute | `OK-cmd` | clicked ; counterclear.exe ; dom:6 | counterclear.get=yes counterclear.click=yes | spbExeClick cCounterClear.cpp:394-450 (28 句) |  |  |
-| Data.Observer.html | btExit | Exit | `OK-cmd` | clicked ; control.acquire ; act.observer.exit ; observer.get ; dom:7 | cObserver.cpp forms/fObserver.h | BtnExitClick cObserver.cpp:697-706 (4 句) |  |  |
+| Data.Observer.html | btExit | Exit | `OK-cmd` | clicked ; observer.get ; control.acquire ; act.observer.exit ; dom:7 | cObserver.cpp forms/fObserver.h | BtnExitClick cObserver.cpp:697-706 (4 句) |  |  |
 | Data.Observer.html | btnClearTime | Clear Time Data | `OK-cmd` | clicked ; control.acquire ; act.observer.clearTime ; observer.get ; dom:7 | cObserver.cpp forms/fObserver.h | btnClearTimeClick cObserver.cpp:5393-5399 (4 句) |  |  |
 | Data.SortCT.html | btnClearCount | 🗒 Clear Count | `OK-cmd` | clicked ; control.acquire ; act.sortCT.clearCount ; dom:3 | act.trayEdit=yes | btnClearCountClick cSortCT.cpp:577-669 (40 句) |  |  |
 | HW.HandlerSys.html | LoadBtn | Load | `OK-cmd` | clicked ; control.acquire ; dom:4 | — | LoadBtnClick HandlerSys.cpp:985-988 (1 句) |  |  |
 | HW.MotorTest.html | btResetMNet | Reset MNet | `OK-cmd` | clicked ; control.takeover ; motor.access ; http:GET ../JSON/offline/Motor-runtime.offline | forms/fMotorTest.h | btResetMNetClick uMotorTest.cpp:1718-1725 (3 句) |  |  |
-| HW.MotorTest.html | btnGo | Go | `OK-cmd` | clicked ; control.takeover ; motor.access ; dom:932 | forms/fMotorTest.h | btnGoClick uMotorTest.cpp:1605-1619 (6 句) | MOT[].MotorMove |  |
+| HW.MotorTest.html | btnGo | Go | `OK-cmd` | clicked ; control.takeover ; motor.access ; http:GET ../JSON/offline/Motor-runtime.offline | forms/fMotorTest.h | btnGoClick uMotorTest.cpp:1605-1619 (6 句) | MOT[].MotorMove |  |
 | HW.MotorTest.html | btnGoSoftN | Go Soft N Pos | `OK-cmd` | clicked ; control.takeover ; motor.access ; dom:968 | forms/fMotorTest.h | btnGoSoftNClick uMotorTest.cpp:1105-1111 (2 句) | MOT[].MotorMove |  |
-| HW.MotorTest.html | btnGoSoftP | Go Soft P Pos | `OK-cmd` | clicked ; control.takeover ; motor.access ; http:GET ../JSON/offline/Motor-runtime.offline | forms/fMotorTest.h | btnGoSoftPClick uMotorTest.cpp:1097-1103 (2 句) | MOT[].MotorMove |  |
-| HW.MotorTest.html | btnHighSpeed | Jog High | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:114 | forms/fMotorTest.h | btnHighSpeedClick uMotorTest.cpp:1403-1409 (3 句) |  |  |
+| HW.MotorTest.html | btnGoSoftP | Go Soft P Pos | `OK-cmd` | clicked ; control.takeover ; motor.access ; dom:968 | forms/fMotorTest.h | btnGoSoftPClick uMotorTest.cpp:1097-1103 (2 句) | MOT[].MotorMove |  |
 | HW.MotorTest.html | btnHome | Home Reset | `OK-cmd` | clicked ; control.takeover ; motor.access ; http:GET ../JSON/offline/Motor-runtime.offline | forms/fMotorTest.h | btnHomeClick uMotorTest.cpp:1113-1174 (37 句) | MOT[].PCIL132_StopMotor |  |
-| HW.MotorTest.html | btnHomeLow | Home Low | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:112 | forms/fMotorTest.h | btnHomeLowClick uMotorTest.cpp:1427-1433 (3 句) |  |  |
+| HW.MotorTest.html | btnHomeLow | Home Low | `OK-cmd` | clicked ; control.acquire ; motor.access ; http:GET ../JSON/offline/Motor-runtime.offline. | forms/fMotorTest.h | btnHomeLowClick uMotorTest.cpp:1427-1433 (3 句) |  |  |
 | HW.MotorTest.html | btnMotorPower | Motor Power | `OK-cmd` | clicked ; control.takeover ; motor.access ; dom:160 | forms/fMotorTest.h | btnMotorPowerClick uMotorTest.cpp:1621-1645 (14 句) | SW[].On |  |
-| HW.MotorTest.html | btnReloadMotorData | Reload Motor Data | `OK-cmd` | clicked ; control.takeover ; motor.access ; http:GET /api/struct/motor/config ; http:GET / | forms/fMotorTest.h | btnReloadMotorDataClick uMotorTest.cpp:1695-1711 (8 句) |  |  |
+| HW.MotorTest.html | btnReloadMotorData | Reload Motor Data | `OK-cmd` | clicked ; control.takeover ; motor.access ; control.acquire ; motor.access ; http:GET /api | forms/fMotorTest.h | btnReloadMotorDataClick uMotorTest.cpp:1695-1711 (8 句) |  |  |
 | HW.MotorTest.html | btnServoOff | Servo Off | `OK-cmd` | clicked ; control.takeover ; motor.access ; dom:158 | forms/fMotorTest.h | btnServoOffClick uMotorTest.cpp:1661-1671 (6 句) | MOT[].ServoOnOff |  |
-| HW.MotorTest.html | btnSetPosN | Set Position 2 | `OK-cmd` | clicked ; control.acquire ; motor.access ; http:GET ../JSON/offline/Motor-runtime.offline. | forms/fMotorTest.cpp forms/fMotorTest.h | btnSetPosNClick uMotorTest.cpp:1088-1095 (2 句) |  |  |
-| HW.MotorTest.html | btnSetRange | Test Range | `OK-cmd` | clicked ; control.acquire ; motor.access ; http:GET ../JSON/offline/Motor-runtime.offline. | forms/fMotorTest.h | btnSetRangeClick uMotorTest.cpp:1374-1382 (5 句) |  |  |
-| HW.MotorTest.html | btnStop | Stop | `OK-cmd` | clicked ; motor.stop ; dom:114 | forms/fMotorTest.h | btnStopClick uMotorTest.cpp:1647-1659 (6 句) | MOT[].PCIL132_StopMotor StopAllMotor |  |
+| HW.MotorTest.html | btnSetPosP | Set Position 1 | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:111 | forms/fMotorTest.cpp forms/fMotorTest.h | btnSetPosPClick uMotorTest.cpp:1079-1086 (2 句) |  |  |
+| HW.MotorTest.html | btnStop | Stop | `OK-cmd` | clicked ; motor.stop ; control.acquire ; motor.access ; http:GET ../JSON/offline/Motor-run | forms/fMotorTest.h | btnStopClick uMotorTest.cpp:1647-1659 (6 句) | MOT[].PCIL132_StopMotor StopAllMotor |  |
 | HW.MotorTest.html | palExit | Exit | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:112 | forms/fMotorTest.cpp forms/fMotorTest.h | palExitClick uMotorTest.cpp:1727-1730 (1 句) |  |  |
 | HW.MotorTest.html | sbMotorTest_JogN | - | `OK-cmd` | clicked ; control.takeover ; motor.access ; motor.stop ; dom:963 | — | 沒有 OnClick |  |  |
-| HW.MotorTest.html | sbMotorTest_JogP | + | `OK-cmd` | clicked ; control.takeover ; motor.access ; motor.stop ; dom:965 | — | 沒有 OnClick |  |  |
+| HW.MotorTest.html | sbMotorTest_JogP | + | `OK-cmd` | clicked ; control.takeover ; motor.access ; motor.stop ; http:GET ../JSON/offline/Motor-ru | — | 沒有 OnClick |  |  |
 | HW.MotorTest.html | sbMotorTest_MoveN | - | `OK-cmd` | clicked ; control.takeover ; motor.access ; dom:968 | forms/fMotorTest.h | sbMotorTest_MoveNClick uMotorTest.cpp:1224-1250 (13 句) | MOT[].Gali_MotMove MOT[].MotorMove |  |
 | HW.MotorTest.html | sbMotorTest_MoveP | + | `OK-cmd` | clicked ; control.takeover ; motor.access ; dom:968 | forms/fMotorTest.h | sbMotorTest_MovePClick uMotorTest.cpp:1252-1278 (13 句) | MOT[].Gali_MotMove MOT[].MotorMove |  |
 | HW.home.html | sbAbortHome | Abort Home | `OK-cmd` | clicked ; act.home.abort ; dom:6 | act.home.abort=yes | sbAbortHomeClick uhome.cpp:4980-4986 (4 句) |  |  |
-| HW.teach.html | MotorInArmPitchX | X Pitch | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:47 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorInArmX | X | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:68 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorInArmZA | ZA | `OK-cmd` | clicked ; control.acquire ; motor.access(MInArmZA) ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorInArmZAe | Z Ae | `OK-cmd` | clicked ; control.acquire ; motor.access(MInArmZAe) ; dom:29 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorAuto1YCW | Auto 1 CW | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorAuto2YCW | Auto 2 CW | `OK-cmd` | clicked ; control.acquire ; motor.access(MAuto2Y) ; dom:49 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorInArmPitchX4 | X Pitch 4 | `OK-cmd` | clicked ; control.acquire ; motor.access(MInArmPitchX4) ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorInArmX | X | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:47 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorInArmY | Y | `OK-cmd` | clicked ; control.acquire ; motor.access(MInArmY) ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
 | HW.teach.html | MotorInArmZAh | Z Ah | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
 | HW.teach.html | MotorInArmZB | ZB | `OK-cmd` | clicked ; control.acquire ; motor.access(MInArmZB) ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorInArmZD | ZD | `OK-cmd` | clicked ; control.acquire ; motor.access(MInArmZD) ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorInArmZF | ZF | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorInArmZG | ZG | `OK-cmd` | clicked ; control.acquire ; motor.access ; control.acquire ; motor.access(MInArmZG) ; dom: | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorInSh2 | X | `OK-cmd` | clicked ; control.acquire ; motor.access ; control.acquire ; motor.access(MInShuttle2) ; d | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorIndexArm1Y | Y | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:68 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorIndexArm1Z | Z | `OK-cmd` | clicked ; control.acquire ; motor.access(MTestZ1) ; dom:47 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorOutArmX | X | `OK-cmd` | clicked ; control.acquire ; motor.access(MOutArmX) ; dom:26 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorOutArmY | Y | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:68 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorOutArmZB | ZB | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorOutArmZH | ZH | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorInArmZC | ZC | `OK-cmd` | clicked ; control.acquire ; motor.access(MInArmZA) ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorInArmZD | ZD | `OK-cmd` | clicked ; control.acquire ; motor.access ; control.acquire ; motor.access(MInArmZD) ; dom: | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorInArmZE | ZE | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorInArmZH | ZH | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:69 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorIndexArm1Y | Y | `OK-cmd` | clicked ; control.acquire ; motor.access(MTestY1) ; dom:26 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorIndexArm2Z | Z | `OK-cmd` | clicked ; control.acquire ; motor.access(MTestY2) ; dom:26 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorOutArmPitchX2 | X Pitch 2 | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:69 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorOutArmY | Y | `OK-cmd` | clicked ; control.acquire ; motor.access(MOutArmY) ; dom:26 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorOutArmZD | ZD | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorOutArmZE | ZE | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorOutSh2 | X | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:69 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorTrayX | X | `OK-cmd` | clicked ; control.acquire ; motor.access(MTrayX) ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
 | HW.teach.html | btnAlarmReset | Alarm Reset | `OK-cmd` | clicked ; control.takeover ; motor.access(MInArmX) ; dom:48 | — | — |  |  |
-| HW.teach.html | btnHome | HOME | `OK-cmd` | clicked ; control.takeover ; motor.access(MInArmX) ; control.acquire ; motor.access ; dom: | forms/fMotorTest.h | btnHomeClick uteach.cpp:2133-2198 (37 句) | MOT[].ServoOnOff StopAllMotor |  |
-| HW.teach.html | btnInZAllUp | In Z All Up | `OK-cmd` | clicked ; control.takeover ; motor.access(MInArmZH) ; dom:5890 | — | btnInZAllUpClick uteach.cpp:4466-4478 (8 句) |  |  |
-| HW.teach.html | btnJogN | JOG N | `OK-cmd` | clicked ; control.acquire ; motor.access(MInArmX) ; control.takeover ; motor.access(MInArm | — | 沒有 OnClick |  |  |
-| HW.teach.html | btnJogP | JOG P | `OK-cmd` | clicked ; control.takeover ; motor.access(MInArmX) ; motor.stop(MInArmX) ; dom:5885 | — | 沒有 OnClick |  |  |
-| HW.teach.html | btnLoaderY | Loader Y | `OK-cmd` | clicked ; control.acquire ; motor.access(MLoaderY) ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | btnMotorTest | Motor Tools | `OK-cmd` | clicked ; control.acquire ; motor.access(MInArmX) ; dom:21 | — | btnMotorTestClick uteach.cpp:2436-2440 (2 句) |  |  |
-| HW.teach.html | btnMoveN | Move - | `OK-cmd` | clicked ; control.takeover ; motor.access(MInArmX) ; dom:5888 | — | btnMoveNClick uteach.cpp:2205-2232 (15 句) | MOT[].Gali_MovePR MOT[].MotorMove |  |
-| HW.teach.html | btnMoveP | Move + | `OK-cmd` | clicked ; control.takeover ; motor.access(MInArmX) ; control.acquire ; motor.access(MInArm | — | btnMovePClick uteach.cpp:2104-2131 (15 句) | MOT[].Gali_MovePR MOT[].MotorMove |  |
-| HW.teach.html | btnMoveTo | Move | `OK-cmd` | clicked ; control.takeover ; motor.access(MInArmX) ; dom:5865 | — | btnMoveToClick uteach.cpp:2391-2407 (8 句) | MOT[].Gali_MotMove MOT[].MotorMove |  |
-| HW.teach.html | btnOutZAllUp | Out Z All Up | `OK-cmd` | clicked ; control.takeover ; motor.access(MOutArmPitchX4) ; dom:5867 | — | btnOutZAllUpClick uteach.cpp:4480-4492 (8 句) |  |  |
-| HW.teach.html | btnSave | SAVE | `OK-cmd` | clicked ; control.acquire ; motor.access(MInArmX) ; dom:44 | FileRW/Teach.cpp Interface/TesterTCP.cpp | btnSaveClick uteach.cpp:2261-2389 (67 句) |  |  |
-| HW.teach.html | btnServo | Servo | `OK-cmd` | clicked ; control.acquire ; motor.access ; control.takeover ; motor.access(MInArmX) ; dom: | — | btnServoClick uteach.cpp:4287-4293 (3 句) | MOT[].ServoOnOff |  |
-| HW.teach.html | btnSetTo | SET TO | `OK-cmd` | clicked ; control.acquire ; motor.access(MInArmX) ; dom:24 | forms/fTeach.cpp forms/fTeach.h | btnSetToClick uteach.cpp:2098-2102 (2 句) |  |  |
-| HW.teach.html | btnStop | STOP | `OK-cmd` | clicked ; motor.stop(MInArmX) ; dom:29 | forms/fMotorTest.h | btnStopClick uteach.cpp:2948-2954 (4 句) | StopAllMotor |  |
-| HW.teach.html | pnlExit | EXIT | `OK-cmd` | clicked ; control.acquire ; motor.access ; dom:42 | — | pnlExitClick uteach.cpp:5026-5032 (3 句) |  |  |
+| HW.teach.html | btnHome | HOME | `OK-cmd` | clicked ; control.takeover ; motor.access(MInArmX) ; control.acquire ; motor.access(MInArm | forms/fMotorTest.h | btnHomeClick uteach.cpp:2133-2198 (37 句) | MOT[].ServoOnOff StopAllMotor |  |
+| HW.teach.html | btnInZAllUp | In Z All Up | `OK-cmd` | clicked ; control.takeover ; motor.access(MInArmZH) ; dom:5868 | — | btnInZAllUpClick uteach.cpp:4466-4478 (8 句) |  |  |
+| HW.teach.html | btnJogN | JOG N | `OK-cmd` | clicked ; control.takeover ; motor.access(MInArmX) ; motor.stop(MInArmX) ; dom:5864 | — | 沒有 OnClick |  |  |
+| HW.teach.html | btnJogP | JOG P | `OK-cmd` | clicked ; control.acquire ; motor.access(MInArmX) ; control.acquire ; motor.access ; contr | — | 沒有 OnClick |  |  |
+| HW.teach.html | btnMoveN | Move - | `OK-cmd` | clicked ; control.takeover ; motor.access(MInArmX) ; control.acquire ; motor.access ; dom: | — | btnMoveNClick uteach.cpp:2205-2232 (15 句) | MOT[].Gali_MovePR MOT[].MotorMove |  |
+| HW.teach.html | btnMoveP | Move + | `OK-cmd` | clicked ; control.takeover ; motor.access(MInArmX) ; dom:5886 | — | btnMovePClick uteach.cpp:2104-2131 (15 句) | MOT[].Gali_MovePR MOT[].MotorMove |  |
+| HW.teach.html | btnMoveTo | Move | `OK-cmd` | clicked ; control.takeover ; motor.access(MInArmX) ; dom:5886 | — | btnMoveToClick uteach.cpp:2391-2407 (8 句) | MOT[].Gali_MotMove MOT[].MotorMove |  |
+| HW.teach.html | btnOutZAllUp | Out Z All Up | `OK-cmd` | clicked ; control.takeover ; motor.access(MOutArmPitchX4) ; dom:5888 | — | btnOutZAllUpClick uteach.cpp:4480-4492 (8 句) |  |  |
+| HW.teach.html | btnSave | SAVE | `OK-cmd` | clicked ; control.acquire ; motor.access ; control.acquire ; motor.access(MInArmX) ; dom:4 | FileRW/Teach.cpp Interface/TesterTCP.cpp | btnSaveClick uteach.cpp:2261-2389 (67 句) |  |  |
+| HW.teach.html | btnServo | Servo | `OK-cmd` | clicked ; control.takeover ; motor.access(MInArmX) ; control.acquire ; motor.access(MInArm | — | btnServoClick uteach.cpp:4287-4293 (3 句) | MOT[].ServoOnOff |  |
+| HW.teach.html | btnStop | STOP | `OK-cmd` | clicked ; motor.stop(MInArmX) ; dom:27 | forms/fMotorTest.h | btnStopClick uteach.cpp:2948-2954 (4 句) | StopAllMotor |  |
 | Main.CommView.html | btnReadZ1 | Read Z1 | `OK-cmd` | clicked ; control.acquire ; act.main.indexTorque ; dom:4 | — | btnReadZ1Click main.cpp:21945-21948 (1 句) |  |  |
 | Main.CommView.html | btnReadZ2 | Read Z2 | `OK-cmd` | clicked ; control.acquire ; act.main.indexTorque ; dom:1 | — | btnReadZ2Click main.cpp:21950-21953 (1 句) |  |  |
 | Main.CommView.html | btnSetZ1 | Set Z1 | `OK-cmd` | clicked ; control.acquire ; act.main.indexTorque ; dom:1 | — | btnSetZ1Click main.cpp:21927-21934 (3 句) |  |  |
@@ -294,46 +281,59 @@
 | eventlog.html | saveSum | Save Summary | `OK-http` | clicked ; http:POST /api/ela/summary ; http:GET /api/ela ; dom:4 | — | — |  |  |
 | Data.SmartDiagnostic.html | sb_SmartDiagnostic_Setup | Setup | `OK-ui` | clicked ; dom:5 | — | 沒有 OnClick |  |  |
 | Data.SmartDiagnostic.html | sb_SmartDiagnostic_Summary | Summary | `OK-ui` | clicked ; dom:5 | — | 沒有 OnClick |  |  |
-| HW.MotorTest.html | BitBtn1 | Copy From | `OK-ui` | clicked ; http:GET ../JSON/offline/Motor-runtime.offline.json ; http:GET ../JSON/offline/M | ATC/ATCInterface.cpp ATC/ATCInterface.h | BitBtn1Click uMotorTest.cpp:1384-1401 (14 句) |  |  |
+| HW.MotorTest.html | BitBtn1 | Copy From | `OK-ui` | clicked ; dom:111 | ATC/ATCInterface.cpp ATC/ATCInterface.h | BitBtn1Click uMotorTest.cpp:1384-1401 (14 句) |  |  |
 | HW.MotorTest.html | btnAlarmReset | Alarm Reset | `OK-ui` | clicked ; dom:114 | — | — |  |  |
+| HW.MotorTest.html | btnHighSpeed | Jog High | `OK-ui` | clicked ; dom:114 | forms/fMotorTest.h | btnHighSpeedClick uMotorTest.cpp:1403-1409 (3 句) |  |  |
 | HW.MotorTest.html | btnHomeHigh | Home High | `OK-ui` | clicked ; http:GET ../JSON/offline/Motor-runtime.offline.json ; http:GET ../JSON/offline/M | forms/fMotorTest.h | btnHomeHighClick uMotorTest.cpp:1419-1425 (3 句) |  |  |
-| HW.MotorTest.html | btnLoopMove | Loop Move | `OK-ui` | clicked ; dom:111 | forms/fMotorTest.h | btnLoopMoveClick uMotorTest.cpp:1300-1345 (26 句) | MOT[].PCIL132_StopMotor |  |
+| HW.MotorTest.html | btnLoopMove | Loop Move | `OK-ui` | clicked ; http:GET ../JSON/offline/Motor-runtime.offline.json ; http:GET ../JSON/offline/M | forms/fMotorTest.h | btnLoopMoveClick uMotorTest.cpp:1300-1345 (26 句) | MOT[].PCIL132_StopMotor |  |
 | HW.MotorTest.html | btnLowSpeed | Jog Low | `OK-ui` | clicked ; dom:112 | forms/fMotorTest.h | btnLowSpeedClick uMotorTest.cpp:1411-1417 (3 句) |  |  |
-| HW.MotorTest.html | btnRange | Range | `OK-ui` | clicked ; http:GET ../JSON/offline/Motor-runtime.offline.json ; http:GET ../JSON/offline/M | forms/fMotorTest.cpp forms/fMotorTest.h | btnRangeClick uMotorTest.cpp:1451-1456 (2 句) |  |  |
-| HW.MotorTest.html | btnSetPosP | Set Position 1 | `OK-ui` | clicked ; http:GET ../JSON/offline/Motor-runtime.offline.json ; http:GET ../JSON/offline/M | forms/fMotorTest.cpp forms/fMotorTest.h | btnSetPosPClick uMotorTest.cpp:1079-1086 (2 句) |  |  |
+| HW.MotorTest.html | btnRange | Range | `OK-ui` | clicked ; dom:75 | forms/fMotorTest.cpp forms/fMotorTest.h | btnRangeClick uMotorTest.cpp:1451-1456 (2 句) |  |  |
+| HW.MotorTest.html | btnSetPosN | Set Position 2 | `OK-ui` | clicked ; dom:111 | forms/fMotorTest.cpp forms/fMotorTest.h | btnSetPosNClick uMotorTest.cpp:1088-1095 (2 句) |  |  |
+| HW.MotorTest.html | btnSetRange | Test Range | `OK-ui` | clicked ; dom:112 | forms/fMotorTest.h | btnSetRangeClick uMotorTest.cpp:1374-1382 (5 句) |  |  |
 | HW.MotorTest.html | btnSoftNPos | Soft Neg | `OK-ui` | clicked ; http:GET ../JSON/offline/Motor-runtime.offline.json ; http:GET ../JSON/offline/M | forms/fMotorTest.h | btnSoftNPosClick uMotorTest.cpp:1443-1449 (3 句) |  |  |
 | HW.MotorTest.html | btnSoftPPos | Soft Pos | `OK-ui` | clicked ; http:GET ../JSON/offline/Motor-runtime.offline.json ; http:GET ../JSON/offline/M | forms/fMotorTest.h | btnSoftPPosClick uMotorTest.cpp:1435-1441 (3 句) |  |  |
-| HW.teach.html | MotorAuto1YCW | Auto 1 CW | `OK-ui` | clicked ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorAuto2YCW | Auto 2 CW | `OK-ui` | clicked ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorInArmPitchX2 | X Pitch 2 | `OK-ui` | clicked ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorInArmPitchX | X Pitch | `OK-ui` | clicked ; dom:47 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorInArmPitchX2 | X Pitch 2 | `OK-ui` | clicked ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
 | HW.teach.html | MotorInArmPitchX3 | X Pitch 3 | `OK-ui` | clicked ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorInArmPitchX4 | X Pitch 4 | `OK-ui` | clicked ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorInArmY | Y | `OK-ui` | clicked ; dom:26 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorInArmZAf | Z Af | `OK-ui` | clicked ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorInArmZA | ZA | `OK-ui` | clicked ; dom:26 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorInArmZAe | Z Ae | `OK-ui` | clicked ; dom:50 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorInArmZAf | Z Af | `OK-ui` | clicked ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
 | HW.teach.html | MotorInArmZAg | Z Ag | `OK-ui` | clicked ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorInArmZC | ZC | `OK-ui` | clicked ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorInArmZE | ZE | `OK-ui` | clicked ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorInArmZH | ZH | `OK-ui` | clicked ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorInSh1 | X | `OK-ui` | clicked ; dom:47 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorIndexArm2Y | Y | `OK-ui` | clicked ; dom:26 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorIndexArm2Z | Z | `OK-ui` | clicked ; dom:26 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorInArmZF | ZF | `OK-ui` | clicked ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorInArmZG | ZG | `OK-ui` | clicked ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorInSh1 | X | `OK-ui` | clicked ; dom:26 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorInSh2 | X | `OK-ui` | clicked ; dom:47 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorIndexArm1Z | Z | `OK-ui` | clicked ; dom:26 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorIndexArm2Y | Y | `OK-ui` | clicked ; dom:47 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
 | HW.teach.html | MotorOutArmPitchX | X Pitch | `OK-ui` | clicked ; dom:47 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorOutArmPitchX2 | X Pitch 2 | `OK-ui` | clicked ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
 | HW.teach.html | MotorOutArmPitchX3 | X Pitch 3 | `OK-ui` | clicked ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
 | HW.teach.html | MotorOutArmPitchX4 | X Pitch 4 | `OK-ui` | clicked ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorOutArmX | X | `OK-ui` | clicked ; dom:47 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
 | HW.teach.html | MotorOutArmZA | ZA | `OK-ui` | clicked ; dom:26 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorOutArmZC | ZC | `OK-ui` | clicked ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorOutArmZD | ZD | `OK-ui` | clicked ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorOutArmZE | ZE | `OK-ui` | clicked ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorOutArmZB | ZB | `OK-ui` | clicked ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorOutArmZC | ZC | `OK-ui` | clicked ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
 | HW.teach.html | MotorOutArmZF | ZF | `OK-ui` | clicked ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
 | HW.teach.html | MotorOutArmZG | ZG | `OK-ui` | clicked ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorOutSh1 | X | `OK-ui` | clicked ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorOutSh2 | X | `OK-ui` | clicked ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | MotorTrayX | X | `OK-ui` | clicked ; dom:26 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
-| HW.teach.html | btnSetToOffset | SET TO | `OK-ui` | clicked ; dom:22 | forms/fTeach.cpp forms/fTeach.h | btnSetToOffsetClick uteach.cpp:2200-2203 (1 句) |  |  |
+| HW.teach.html | MotorOutArmZH | ZH | `OK-ui` | clicked ; dom:27 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | MotorOutSh1 | X | `OK-ui` | clicked ; dom:48 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | btnLoaderY | Loader Y | `OK-ui` | clicked ; dom:47 | — | MotorTrayXClick uteach.cpp:3630-3648 (10 句) |  |  |
+| HW.teach.html | btnMotorTest | Motor Tools | `OK-ui` | clicked ; dom:21 | — | btnMotorTestClick uteach.cpp:2436-2440 (2 句) |  |  |
+| HW.teach.html | btnSetTo | SET TO | `OK-ui` | clicked ; dom:22 | forms/fTeach.cpp forms/fTeach.h | btnSetToClick uteach.cpp:2098-2102 (2 句) |  |  |
+| HW.teach.html | btnSetToOffset | SET TO | `OK-ui` | clicked ; dom:43 | forms/fTeach.cpp forms/fTeach.h | btnSetToOffsetClick uteach.cpp:2200-2203 (1 句) |  |  |
+| HW.teach.html | pnlExit | EXIT | `OK-ui` | clicked ; dom:42 | — | pnlExitClick uteach.cpp:5026-5032 (3 句) |  |  |
 | Main.MotionView.html | axisToggle | 顯示未啟用軸 | `OK-ui` | clicked ; dom:7 | — | — |  |  |
+| Setup.Ld_ULd.html | btnDefaultValue | Default Value | `OK-ui` | clicked ; inp:16 ; val:8 | forms/fLd_ULd.cpp forms/fLd_ULd.h | btnDefaultValueClick cLd_ULd.cpp:224-237 (8 句) |  |  |
 | Setup.OffSet.html | btnToIndexOffset | Go To Index & Tray Arm O | `OK-ui` | clicked ; dom:10 | forms/fOffSet.cpp forms/fOffSet.h | btnToIndexOffsetClick cOffSet.cpp:3376-3380 (2 句) |  |  |
-| Status.LtcSensor.html | btnClose | Exit | `OK-ui` | clicked ; dom:63 | forms/fIoSetView.h | btnCloseClick LtcSensor.cpp:678-681 (1 句) |  |  |
+| Setup.SetUp.html | btnLDownToRUpZ |  | `OK-ui` | clicked ; val:4 | FileRW/TestIF_File_SetUp.cpp FileRW/TestIF_File_SetUp.gen.in | btnLUpToRDownNClick cSetUp.cpp:4167-4290 (64 句) |  |  |
+| Setup.SetUp.html | btnLUpToRDownN |  | `OK-ui` | clicked ; val:32 | FileRW/TestIF_File_SetUp.cpp FileRW/TestIF_File_SetUp.gen.in | btnLUpToRDownNClick cSetUp.cpp:4167-4290 (64 句) |  |  |
+| Setup.SetUp.html | btnLUpToRDownZ |  | `OK-ui` | clicked ; val:4 | FileRW/TestIF_File_SetUp.cpp FileRW/TestIF_File_SetUp.gen.in | btnLUpToRDownNClick cSetUp.cpp:4167-4290 (64 句) |  |  |
+| Setup.SetUp.html | btnRDownToLUpZ |  | `OK-ui` | clicked ; val:4 | FileRW/TestIF_File_SetUp.cpp FileRW/TestIF_File_SetUp.gen.in | btnLUpToRDownNClick cSetUp.cpp:4167-4290 (64 句) |  |  |
+| Setup.SetUp.html | btnRUpToLDownZ |  | `OK-ui` | clicked ; val:4 | FileRW/TestIF_File_SetUp.cpp FileRW/TestIF_File_SetUp.gen.in | btnLUpToRDownNClick cSetUp.cpp:4167-4290 (64 句) |  |  |
+| Setup.Speed.html | spbSelectAll | Select All | `OK-ui` | clicked ; dom:1 ; inp:9 ; val:9 | form.event 表列 | spbSelectAllClick cSpeed.cpp:1795-1810 (13 句) |  |  |
+| Setup.Speed.html | spbSetToDef | Set to define | `OK-ui` | clicked ; inp:165 ; val:61 | form.event 表列 | spbSetToDefClick cSpeed.cpp:1812-1933 (63 句) |  |  |
+| Setup.Speed.html | spbSpeedAdd | Speed + | `OK-ui` | clicked ; inp:9 ; val:2 | form.event 表列 | spbSpeedAddClick cSpeed.cpp:1414-1419 (3 句) |  |  |
+| Setup.Speed.html | spbSpeedDec | Speed - | `OK-ui` | clicked ; inp:3 ; val:2 | form.event 表列 | spbSpeedDecClick cSpeed.cpp:1421-1424 (1 句) |  |  |
+| Status.LtcSensor.html | btnClose | Exit | `OK-ui` | clicked ; dom:72 | forms/fIoSetView.h | btnCloseClick LtcSensor.cpp:678-681 (1 句) |  |  |
 | eventlog.html | jamSetting | Jam Code Setting | `OK-ui` | clicked ; http:GET /api/ela ; frame:open Status.Security.html ; dom:4 | — | — |  |  |
 
 ## 4. 抽 10 顆給筆電複驗
@@ -411,3 +411,20 @@ python c12_click_probe.py --census <repo>/docs/handoff/ST02_BUTTON_CENSUS_202610
 
 - 先跑自我測試（6 顆：ws、dom、dead、trusted（要捲 2400 px、只收真的點擊）、value（只改值）、covered（被蓋住、不點））；任一顆讀錯就 exit 2、不量。
 - `c12_click_v2.tsv` 交回（放 handoff 或傳給 St02-M）；STEVEN-NB3 用 `python c12_button_census.py --merge c12_click_v2.tsv --out-tsv ... --out-md ...`（golden 0618）合併重分類，§9／§10 手寫節照舊補回。
+
+## 11. 探針 v2 實測結果（St01 1005 06:0x～06:13 代跑，St02-E 合併；產生器不寫這節，重跑 `--out-md` 會蓋掉）
+
+- 樹：St01 本機合併 `66c9f29c` ＝ main `bb065426`（第 65 批，含 !187）＋ !193 `1bd7e1b7`；指令同 §10；**自我測試 6 項全過**（ws／dom／dead／trusted／value／covered）；1384 列，0 列「被蓋住」。原始輸出在 `docs/handoff/c12_raw_v2/`（`c12_click_v2.tsv`、`console_notes.txt`）。上面 §0～§8 已是 v2 的數字（golden 0618）。
+- 看得到又沒變灰的 430 顆裡，「按了沒反應」**110 → 99 顆**；**dead/A 74 → 63**。
+- 從 dead/A 變活的 11 顆（都是 v1 探針讀錯，網頁早就接好）：
+
+| 頁 | 鈕 | v2 量到 | 原因 |
+|---|---|---|---|
+| Config.DIOInterFaceCFG | spbDelete | `OK-cmd`：`ttlcfg.op` | ④ 只收真的點擊 |
+| Setup.Speed | spbSpeedAdd／spbSpeedDec／spbSelectAll／spbSetToDef | `OK-ui`：inp／val | ⑤ 只改輸入框值 |
+| Setup.SetUp | btnLUpToRDownN／btnLUpToRDownZ／btnLDownToRUpZ／btnRUpToLDownZ／btnRDownToLUpZ | `OK-ui`：val | ⑤（§10 的候選，確認） |
+| Setup.Ld_ULd | btnDefaultValue | `OK-ui`：inp 16／val 8 | ⑤ |
+
+- §10 列過、v2 仍是 dead 的：Temp_Set **btClearAll**（① 要等 `editlistGet('Temperature')` 回資料才掛，假伺服器不回——已知接好）；AGV btInitalLoad／btInitalUnLoad／spbSave（只量到 dom:1，處理器要的資料沒到）；Cleaning btnStartAutoClean／sbTrayAssign／btnResetCleanCount；BarCode／SetUp／Temp_Set 的 sbtExit；SetUp sbUpdate（dead/D）；SetUp **btnRUpToLDownN**——**有接上、不是缺口**（St02-E 1005 07:0x 唯讀查過、St02-M 同意）：六顆排序鈕在 `web/page/ht9045_setup_sitemap.js:1398-1402` 用同一個迴圈綁同一支 `sortSiteMap`（golden cSetUp.cpp:4176-4299 btnLUpToRDownNClick，方向取 dfm Tag，它是 Tag 5）；探針在同一次開頁裡連點六顆、它排第六，它的方向在假伺服器的格子配置下排出的號碼跟前一顆 btnRDownToLUpZ 留下的一樣（golden 原樣的怪處：Visible 看目標格、Enabled 看 [i][j]），所以 val:0。
+- **31 顆在 OK-cmd／OK-ui 之間互換**（v1→v2 17 顆、反向 14 顆）：全是 HW.teach／HW.MotorTest 的馬達鈕，差別只在 `control.acquire ; motor.access` 有沒有剛好落在 0.7 秒觀察窗——那是頁面定時續約馬達存取權，不是這顆鈕送的。兩次都算「有反應」，誰該做什麼不受影響。
+- **結論**：探針能分辨的 ④⑤ 已排除；剩下的 dead/ 99 顆（dead/A 63）主要是 ①（等 C++ 資料才綁）、②、③——**要在真的 wb_serve 上確認才算缺口**，在那之前這不是待辦清單。

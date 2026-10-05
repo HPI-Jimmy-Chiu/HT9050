@@ -16,6 +16,10 @@ applyTo: "**/IO_Table_9050.csv, **/Mot_Table*.csv, **/HP-9050*.xls, **/HP-9050*.
 
 # HT9050（HP-9050）硬體規格表
 
+> ★ **機台現況（實際在跑的 IO_Table／Mot_Table／Gerneral.ini／teach.ini／config.ini／工單）不在這裡**：
+> 在 GitHub `machine/integ-ioweb` 的機台快照（GitLab 鏡像 `machines/HT9050/snapshot/`）。懷疑是機台設定或工單問題時，
+> 先跑 `python tools/machine_sync/machine_sync.py check`，沒同步就先同步再看（RULINGS_20261005 第 4 條；`AGENTS.md` 同名一節）。
+>
 > ⚠ **本 skill 是「硬體給的資料」的權威索引，不是機台現況**。
 > 三份來源工作簿由硬體／電控填寫，程式端尚未全部接上。
 > 每一節都分「**表上寫什麼**」與「**程式端目前是什麼**」兩欄，

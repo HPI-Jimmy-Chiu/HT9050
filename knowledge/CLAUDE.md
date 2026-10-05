@@ -110,6 +110,11 @@
   20260925 違反過兩次（IO 調查 4＋R28 三件 3 同時跑到 8、P25 審查 3＋其他 3 到 6），當場停掉並改成依序。
 - 工具層也不可以跳詢問：寫入邊界 hook 對 Claude 的 scratchpad 與記憶目錄放行（`externalAllowedRoots`），
   並把 `.claude/worktrees/<名稱>/` 當成一棵完整的樹來判斷（見下方 hook 那一段）。
+- **開工前先對正本**（使用者 20261005「S1、S2、V1、V2 都照建議 A 做」，RULINGS_20261005 第 2 條）：`D:\HT9045` 主資料夾**沒有人會自動換新**
+  （整合在 worktree 做、直接推 GitLab；1005 量到它停在 10/02、落後 origin/main 1,225 顆，在裡面開的 session 讀到舊規則而給錯建議）。
+  V1：每個 session 開場的 SessionStart 檢查（`scripts/ops/check_stale_checkout.py`，`.claude/settings.json`）落後就提醒（main 落後就提醒，其他分支落後 100 顆以上才提醒），不自動改；
+  V2：夜間迴圈每一輪跑 `scripts/ops/ff_main_checkout.py` 安全快轉（不在 main／有本機 commit／有建置或 wb_serve 從這裡在跑／git 拒絕覆寫時就略過，不 stash、不 reset）。
+  看到提醒時：讀規則、技能、交接檔之前先更新，或用 `git show origin/main:<路徑>` 讀正本。
 
 ---
 

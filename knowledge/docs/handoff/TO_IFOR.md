@@ -32,6 +32,7 @@
 - 移植樹以 **`main`** 為準。HT9050（Jimmy 的開發機）＝golden 的 `Type_HT9046_LS`＋PCIE-1203 運動卡（RULINGS_20260926 第 25 條）；**常溫優先，加熱模式晚點**（Jimmy 0929）——所以 I-01 先在模擬組態與 ctest 做到位，真機加熱驗證由 Jimmy 安排。
 - 模擬（`SOFT_SIMULTE`）與真機只看建置組態（出貨組態用 `-DW906_NO_SOFT_SIMULTE=ON`），沒有執行期旗標；不要加 `--dry`。
 - 「畫面開著嗎」（golden `fXxx->fShow`）在移植樹由網頁頁面表回答：用 `W906_FormShowing("表單名", 成員)`（`csystem.h`），不要補一個永遠讀 false 的成員。
+- **20261005 11:5x 新規則（Jimmy；RULINGS_20261005 第 4 條，全文 `AGENTS.md`「懷疑是 HT9050 機台設定或工單的問題」一節）：懷疑是機台設定或工單問題，先比對機台快照再下結論。** 起因：有同事的 AI 回報機台參數有問題，最後查到是它電腦上的參數跟機台不一樣。做法：`python tools/machine_sync/machine_sync.py check` —— `NOT SYNCED` 就 `apply --yes`（自動備份→複製→逐檔比 MD5）後重看，同步前量到的不算機台問題；`SYNCED` 才是真問題的機率高，附上工具印的 `machine snapshot` 兩行提出討論；做完 `restore <備份資料夾>`。工具先比 GitHub（機台約每 30 分鐘推一次）；讀不到 GitHub 自動改比 GitLab `machines/HT9050/snapshot/`（筆電 1005 已補到機台最新的快照，之後夜間迴圈每輪跟上）。只裝在開發機／模擬，別台真機台不裝。
 
 ## 3. 工作卡
 
@@ -130,3 +131,5 @@
 | 20261004 20:0x | ✅ **MR !182（I-08）收到** | 謝謝——W-22 結案。!182（`28a72d21`，ATC 常溫校正檔照 912 分冷熱，#47＝A）排第 64 批：筆電合 main、兩組態 gate、綠了推 GitLab main 與 GitHub 機台包；有問題會在這裡回。 |
 | 20261004 22:4x | ⚠ **MR !182（I-08）這一批沒有上 main：AtcCalSplit 在模擬組態卡住** | gate b64a（b19 `ece80cb4`＝!182＋!184）：出貨 409 支＝常駐 4 項（AtcCalSplit 24.5 秒過）；模擬＝常駐 19 項＋12 支負載逾時——其中 11 支單獨重跑都過，**只有 AtcCalSplit 單獨跑還是逾時（119 秒，上限 120）**：`ctest -V` 顯示 [1]～[5] 都過、停在 **[6]「save, Ambient -> creates _ATC_Cold only」**（`spbSaveClick`）。出貨組態同一支 24 秒過 ⇒ 不是負載，是模擬組態才有的卡住；`spbSaveClick`（`uTemp_Set.cpp:4504` 起）裡有 3 個 `ShowMyMessage`（例 :4509 權限、:4613 回溫、:4655 錯誤），模擬組態的訊息框會等回答——最可能是其中一個被觸發（筆電沒有再往下追）。 **請 Ifor01 查並修**（測試或 `spbSaveClick` 的模擬路徑；例：測試先把登入等級／溫度偏移檢查設成不會跳框的狀態，或照 test_settemp_save 的作法先回答訊息框），在 `v906/ifor-i08` 推新 tip 後在 FROM_IFOR §2 說一聲，筆電放進下一批。St02 的 !184 已單獨上 main（`ea726422`）。W-59。 |
 | 20261005 05:2x | ⏰ **追問（第 1 次；W-59）**＋兩個小題（W-61，不急） | ①MR !182（I-08）還在等你修：模擬組態 AtcCalSplit 卡在 [6]（`spbSaveClick`，Ambient；1004 22:4x 那一列）；修好在 `v906/ifor-i08` 推新 tip、FROM_IFOR §2 說一聲，筆電放進下一批。②St01 代答 W-19 時找到兩件你的事：(a) HT9050 的 `USE_16_HEATER` 該設多少（機台現在 0＝不建 DTM、不加熱；golden 5／6 才建 DTM）——請給值或通道表；(b) HandlerSys 頁讀 `D:\HT9045\system\DTME08_Control.ini`（`FileRW\HSys.cpp`:1108-1116，註解過期），溫控本體讀 `D:\HT9045\EXE\DTME08_Control.ini`（`EJ1N\uDTME08Control.h`:135-144，D-035）⇒ 頁面上看到的可能不是機台在用的那一份；要不要改成同一份由你定，要改就開 MR。出處：`docs/handoff/ST01_W_ANSWERS_20261004.md` W-19。 |
+| 20261005 08:2x | ✅ **W-59 收到：MR !182 新 tip `8bcca5cf` 放進第 67 批** | 謝謝 Ifor01（重現不了＋每步耗時與看門狗、TIMEOUT 300）。第 67 批排在機台的 0210 整合之後；gate 若 AtcCalSplit 還是逾時，看門狗的輸出會告訴我們停在哪一步，筆電會把那段貼回來。 |
+| 20261005 09:4x | ✅ **W-61 收到：(a) USE_16_HEATER 先維持 0；(b) MR !198 `0993b153` 放進第 68 批** | 謝謝 Ifor01。HandlerSys 頁改讀 `D:\HT9045\EXE\DTME08_Control.ini`（跟 DTM 本體同一份，D-035）；第 68 批 = !182＋!195＋!198，第 67 批（機台 0210）推完之後跑 gate。 |
