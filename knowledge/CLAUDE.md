@@ -368,3 +368,29 @@ CASE-ID 要放在**冒號後面**（`make_release_note.py` 的正則會吞掉日
 ## HT9050 開發知識與極限規則（Ifor01 20261002）
 
 > 已搬到 `.claude/skills/ht9050-hw/references/dev-knowledge-and-limits.md`（Jimmy 1002 22:4x §0 第 57 項＝A：CLAUDE.md 每個 session 都整份讀，越長越慢；內容照原文搬，`RULINGS_20261002.md` 第 23 條）。做 HT9050 的溫控／序列埠／1203／ctest 沙盒之前先讀那一份。
+
+---
+
+## Agent 分流
+
+> Steven 20261005 11:5x 放行、12:0x 核准（ST01-E session「要，照 ST01-M 說的做」）；Jimmy RULINGS_20261005 第 5 條同意（主路由寫在本檔、不另建主路由 agent 檔；三支區域 agent 照提案 §1）。依據 `docs/handoff/ST01_AGENT_SKILL_REORG_PROPOSAL_20261005.md`（v906/steven-handoff 分支）§1 與 §4（FROM_STEVEN §3 1005 13:2x 更正列）。
+> Steven 定的新前綴是 `hpi-`（不是 `ht-`）；放行範圍只有 §1 agent 架構與通訊類 skill（ST02-C22）。主題 skill 重構、客戶橫切層、封存等 Steven／Jimmy 討論後再做——在那之前 skill 一律用目前的名字。
+
+先判斷問題屬於哪一區，再交給對的 agent：
+
+| 問題 | 交給 | agent 檔 |
+|---|---|---|
+| HT9045 程式（V899／V906／V912）、流程、馬達、IO、通訊、網頁 HMI、溫控、告警、建置出貨、客訴、週報 | **ht9045-agent**，再依版本派 ht9045-v899／ht9045-v906／ht9045-v912／case-coordinator／weekly-report | `D:\HT9045\.claude\agents\ht9045-agent.md` |
+| HT9050 機台事實：硬體、馬達參數、IO 表、1203 回原點、MotionView 9050、自動測高、乾跑、跟 9045 的差異 | **ht9050-agent** | `D:\HT9045\.claude\agents\ht9050-agent.md` |
+| 跨 session／跨機台：交接檔、巡檢、代跑 build、todo／done 登記、記錄員、日報、派工 | **co-work-agent** | `D:\HT9045\.claude\agents\co-work-agent.md` |
+| RD5 入口網站（repo 9050motionview）：頁面、索引產生器、日報發布、部署 | **rd5-portal-agent**（入口網站歸 ST02-M，走 MR） | 入口網站 repo 的 `.claude\agents\rd5-portal-agent.md`（St01／St02：`D:\RD5-Portal`；筆電：`D:\HT9045-Index`） |
+
+**跨區工作的先後**
+- HT9050 機台問題要改程式：先 **ht9050-agent** 查事實（附函式＋Task、出處），再由 **ht9045-v906** 改 C++。不要讓改程式的 agent 自己猜機台事實。
+- 改完要登記、通知或交接：最後交 **co-work-agent**（FROM_STEVEN、todo／done、日報）。
+- 要放上入口網站的文件：內容在 HT9045 做完，發布交 **rd5-portal-agent**。
+- 一個問題跨兩區時，先做「事實／規格」那一區，再做「改動」那一區；不要兩區同時改同一件事。
+
+**每支 agent 開頭第一張表就是 skill 清單**：「開工必讀」那一欄開工就用 **Skill 工具**載入，「依情境再讀」看主題再載。St02 正在整理的 hpi-gpib／hpi-secs／hpi-rs232 還沒進樹前，標「(整理中，舊名照用)」，照用 gpib-*／ht9045-secsgem／ht9045-secs-sem／rs232-* 舊名。
+
+既有 5 支 agent（ht9045-v899、ht9045-v906、ht9045-v912、case-coordinator、weekly-report）保留不改，掛在 ht9045-agent 底下。
