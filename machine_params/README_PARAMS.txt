@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-05 19:19
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 8ae622d WORKLOG 10-05: item 127 -- priority dispatch to Jimmy: port the golden RS-232 oper／web abe25b4。
+HT9050 機台參數快照（machine_params\）—— 2026-10-05 21:09
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 9314e5a ﻿IOTHREAD: the PCI-1203 IO scan runs on its own thread, which owns the card (desig／web abe25b4。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
