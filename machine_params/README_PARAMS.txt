@@ -1,9 +1,9 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-05 13:03
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 664d186 HOME-AUDIT1005: full-machine HOME bug check (EastSun 1005 '你檢查一下全機回HOME 還有沒有BUG'; ／web 8bd78b0。
+HT9050 機台參數快照（machine_params\）—— 2026-10-05 13:35
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 7d58cf2 JOG-VLTIME-2: every 1203 axis gets golden's CFG_AxJogVLTime = 0 with the jog famil／web 8bd78b0。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
-  D_HT9045_system\  (593 檔)  → D:\HT9045\system\      機台正本：Gerneral.ini、IO_Table.csv、Mot_Table.csv（wb_serve 直接讀這三個）
+  D_HT9045_system\  (594 檔)  → D:\HT9045\system\      機台正本：Gerneral.ini、IO_Table.csv、Mot_Table.csv（wb_serve 直接讀這三個）
   D_HT9045_config\  (53 檔)  → D:\HT9045\config\
   runcfg\           (57 檔)  → D:\HT9045\_integ_ioweb\runcfg\   SetUp.inf（目前工單）、system\teach.ini（教導值）、config\（config.ini、LastSet.ini、Pci1203*.ini …）；logs\ 沒放
   D_GPIB9045_system\ (5 檔) → D:\GPIB9045\system\   只收 *.ini／*.dat；general.ini 的 [Version] Model＝機種（HT9050＝9050GPIB，程式靠它啟動 HT9050 分支）
