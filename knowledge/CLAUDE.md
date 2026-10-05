@@ -14,7 +14,7 @@
 | Agents（子代理） | `.claude/agents/<name>.md` | `.github/agents/<name>.agent.md` |
 | Commands（斜線指令） | `.claude/commands/<name>.md` | `.github/prompts/<name>.prompt.md` |
 | Hooks（寫入邊界） | `.claude/settings.json` → `scripts/ops/check-write-boundary.ps1` | `.github/hooks/pretool-write-boundary.json` |
-| 寫入邊界政策 | `.github/ops/write-boundary-policy.json`（兩邊共用同一份） | 同左 |
+| 寫入邊界政策 | `.claude/ops/write-boundary-policy.json`（兩邊共用同一份；1005 從 `.github/ops` 搬過來，MR !208、RULINGS_20261005 第 20 條） | `.github/hooks/pretool-write-boundary.json` 的 `OPS_WRITE_POLICY` 指同一份 |
 
 > 維護提醒：修改任一 Skill / Agent / Command 後，若仍同時使用 Copilot，請同步更新對應的鏡像檔。
 
@@ -174,7 +174,7 @@ Claude Code 無原生路徑範圍指令機制，故將原 `.github/instructions/
 > 只從 `readonlyRoots` 拿掉不夠也不對稱 —— `confirmOutsideAllowed:false`
 > 會讓「兩份清單都沒列到」變成靜默放行，不是詢問也不是阻擋。
 >
-> **權威的寫入邊界在 `.github/ops/write-boundary-policy.json`，不在本文。**
+> **權威的寫入邊界在 `.claude/ops/write-boundary-policy.json`，不在本文。**（1005 從 `.github/ops` 搬過來，MR !208；`.github/ops` 只剩一行說明。1005 之前開的 session 的 hook 指令還帶舊路徑，守門腳本會自動改讀新位置，`AI(W906-WBPOLICY-MOVE)`）
 > Claude Code 端由 `.claude/settings.json` 的 PreToolUse hook 強制
 > （20260909 接上；在那之前腳本第 73 行有語法錯誤，從未執行過）。
 >

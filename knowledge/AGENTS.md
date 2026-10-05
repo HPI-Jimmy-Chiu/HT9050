@@ -73,7 +73,7 @@ HT9045/
   （`confirmOutsideAllowed:false` 會讓「兩份都沒列到」變成靜默放行）。
 - 除上述兩棵之外，其他版本原始碼目錄（`HT9011UC_Code_*`、`HT9046LS_Code_*`、
   `HT9011UC_Cpp_*_noBuild`、`HT9011UC_CSharp_*`）一律唯讀，除非使用者明確指定切換目標版本。
-  權威清單在 `.github/ops/write-boundary-policy.json`，不在本文。
+  權威清單在 `.claude/ops/write-boundary-policy.json`，不在本文（1005 從 `.github/ops` 搬過來）。
 
 ## 建置方式
 
@@ -112,6 +112,8 @@ HT9045/
 > AI(W906-MACHSYNC) 20261005，`HT9011UC_Cpp_V3.33.906.0/docs/RULINGS_20261005.md` 第 4 條。起因：同事的 AI 回報「機台參數設定有問題」，
 > 實際確認是**它電腦上的機台參數跟機台端不一樣**。Jimmy 原話：「如果發現是機台設定或工單問題，優先上github確認工單和機台設定是否同步，
 > 沒有同步就先同步再檢查，如果已經同步，那就是真問題的機率高，可提出討論」。
+>
+> ⚠ **每一次測試前都先做，不用問**（Jimmy 1005 19:2x，在 NB2 對話裡：「一定要更新」「未來其他同事要測試，也不要問，必須更新才能接著測試」；RULINGS_20261005 第 6 條）：工作樹先更新到 GitLab main 最新版，再跑下面第 1～2 步；沒做就不准接著測。
 
 1. **先比對**：`python tools/machine_sync/machine_sync.py check`
    （先比 GitHub `HT9050` 分支 `machine/integ-ioweb`——機台約每 30 分鐘把 `machine_params/`＋`workorder/` 推上去；

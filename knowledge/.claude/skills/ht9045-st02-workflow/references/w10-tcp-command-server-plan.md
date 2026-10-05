@@ -2,7 +2,7 @@
 
 > **Status 20260927 late (St02-E): DONE on `v906/steven-w10-wip` (D:\AI_TempFile\st02-w10), compiled both configs, NOT run
 > (St01 runs the ctest); not merged.**  What was built and every deviation / 上機要看: `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\
-> TESTERCOMM_PORT_LEDGER.md` "W10＝B"; the protocol + V906 shape: `D:\HT9045\.claude\skills\ht9045-gpib-bridge\references\tcp-command-server-7016.md`.
+> TESTERCOMM_PORT_LEDGER.md` "W10＝B"; the protocol + V906 shape: `D:\HT9045\.claude\skills\hpi-gpib\references\ht9045-gpib-bridge\references\tcp-command-server-7016.md`.
 > Differences from the plan below: item 4 (">99 -> drop") is REPLACED by R2 (St02-M 20260927: the RS232-style framer,
 > TesterComm/Tcp/TcpCmdFramer.*, 2048-byte cap, no NG; 322 / 323 guard only the write, golden reply);
 > item 2's ctor creation is one call on fMain.cpp:235; item 3 also rewrote the stale B7 banner; S-a opened 16 of the 18 S2

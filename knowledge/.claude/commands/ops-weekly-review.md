@@ -17,7 +17,7 @@ description: "Use when: 執行每週治理盤點、維護 Harness、檢查邊界
 1. 依週檢模板建立或更新本週審查檔。
 2. 檢查 Agent、Skill、Instruction、Command/Prompt、Hook、Script、日誌是否有過時或漂移。
 3. 檢查是否發生以下情況：
-   - 寫入邊界被放寬（檢查 .github/ops/write-boundary-policy.json）
+   - 寫入邊界被放寬（檢查 .claude/ops/write-boundary-policy.json）
    - 備份規則被跳過（system/、config/、CFG/ 的 .ini/.csv/.dat）
    - description 失效導致 Skill 不易觸發
    - Command/Prompt 與實際工作流脫節

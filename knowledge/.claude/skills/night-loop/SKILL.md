@@ -172,6 +172,8 @@ python D:/HT9045/backup/night_tools_20260927/mr_scan.py
 # 20261003 起（RULINGS_20261003 第 13～15 條）：讀 NB2-1 心跳、回認領、寫筆電心跳
 git fetch -q origin v906/nb2-heartbeat && git show origin/v906/nb2-heartbeat:HEARTBEAT.md | head -12   # last tick > ~2.5 h ＝ NB2-1 停了，收回來做
 git show origin/v906/nb2-assist:HT9011UC_Cpp_V3.33.906.0/docs/nb2_assist/NOW.md | head -30               # NB2 的認領：當輪在 CHAT_JIMMY 回「收／已在第 XX 批」
+python D:/HT9045/backup/night_tools_20260927/nb2_urgent.py      # NB2 URGENT.md「未讀」裡 NIGHT_REPORT 還沒點名的 U<n>：exit 1 ⇒ 當輪轉出去，並在 NIGHT_REPORT 寫「已讀 U<n>」（1005 22:2x：U26～U30 漏讀 1～5 小時，因為只讀了心跳和 NOW.md）
+python D:/HT9045/backup/night_tools_20260927/daily_health.py --out <worktree>/HT9011UC_Cpp_V3.33.906.0/docs/health/HEALTH_<前一天>.md   # 每天 01:00 那一輪跑一次（RULINGS_20261005 第 21 條：只量不改；紅燈才進 NIGHT_REPORT §0；每週給 Jimmy 彙總、他決定改哪個流程）
 python D:/HT9045/backup/night_tools_20260927/laptop_heartbeat.py --doing "<這一輪在做什麼>" --agents <N> --waiting-jimmy <N> --push   # 每輪最後一步
 ```
 

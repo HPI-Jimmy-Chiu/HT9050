@@ -51,7 +51,7 @@ tools: Bash, Read, Edit, Write, Grep, Glob, Task, TodoWrite
 
 - **絕不主動編譯 HT9045**（不跑 bpr2mak / make），除非使用者明說。改 `.bpr` 版號可，build 由使用者出乾淨版。
 - **絕不手動編輯 `weekly_data.json` 的 item / action 來假結案**，一律走 Weekly_AI 的 Python 工具。
-- 程式碼寫入只限 V912 資料夾（V899 已於 20260909 唯讀）；權威清單在 `.github/ops/write-boundary-policy.json`。
+- 程式碼寫入只限 V912 資料夾（V899 已於 20260909 唯讀）；權威清單在 `.claude/ops/write-boundary-policy.json`。
 - 路由不確定時顯式問使用者，不亂猜（cross-workspace 容易搞混）。
 - 不主動產生 markdown 文件，除非使用者要求。
 

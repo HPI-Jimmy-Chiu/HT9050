@@ -174,7 +174,7 @@ STX = 0x02, SOH = 0x01, ETX = 0x03
 
 ## 待確認事項（高優先）
 
-1. `HTSET, 333` Auto Start 目前 **No Action**，需開通（V906 註記，AI(W906-W10) 20260927 (St02-E)：Handler 7016 的 `HTSET,333`／`334` 在 V906 已接通——golden Command.cpp 的條件照舊（CC_TERAPOWER 或 `CosFunction.bRemoteLotStart`、HALT、未啟動），經 `W906_RemoteRun` 到 `TfMainWeb::StartFromWeb`／`PauseFromWeb`，不碰基底 `TfMain::Start`；沒安裝或手動教導中回 NG。見 `D:\HT9045\.claude\skills\ht9045-gpib-bridge\references\tcp-command-server-7016.md`）
+1. `HTSET, 333` Auto Start 目前 **No Action**，需開通（V906 註記，AI(W906-W10) 20260927 (St02-E)：Handler 7016 的 `HTSET,333`／`334` 在 V906 已接通——golden Command.cpp 的條件照舊（CC_TERAPOWER 或 `CosFunction.bRemoteLotStart`、HALT、未啟動），經 `W906_RemoteRun` 到 `TfMainWeb::StartFromWeb`／`PauseFromWeb`，不碰基底 `TfMain::Start`；沒安裝或手動教導中回 NG。見 `D:\HT9045\.claude\skills\hpi-gpib\references\ht9045-gpib-bridge\references\tcp-command-server-7016.md`）
 2. Safety Interlock 指令需**新增實作**
 3. One Cycle 模式 TCP 指令定義（待供應商提供）
 
