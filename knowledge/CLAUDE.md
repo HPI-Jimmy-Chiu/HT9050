@@ -74,7 +74,7 @@
   `HT9011UC_Cpp_V3.33.906.0/docs/NIGHT_REPORT.md` 後靜默**，早上只讀那一份。
   政策見 `night-loop` skill。⚠ session-scoped —— 視窗關掉或機器重開就沒了）
 - 治理：`/ops-daily-worklog`、`/ops-weekly-review`、`/ops-skill-maintenance`、`/ops-new-project-bootstrap`
-- 週報/案件（Hub，操作 Weekly_AI）：`/update-weekly`、`/weekly-status`、`/weekly-case-intake`、`/weekly-case-integrity`、`/weekly-next-week`、`/weekly-help`、`/weekly-upload`（關鍵字「**上傳週報**」）
+- 週報/案件（Hub，操作 Weekly_AI）：`/update-weekly`、`/weekly-status`、`/weekly-case-intake`、`/weekly-case-integrity`、`/weekly-next-week`、`/weekly-help`、`/weekly-upload`（關鍵字「**上傳週報**」）、`/daily-upload`（關鍵字「**上傳日報**」）
 
 > Weekly_AI 工作區為 Hub 模式接入：agent/指令在 HT9045，實際 Python 工具與 `weekly_data.json`、`Customer/` 資料留在 Weekly_AI。修改 weekly-report agent 或指令時，Weekly_AI 的 `.github/` 原始定義為鏡像，視需要同步。
 
@@ -141,6 +141,7 @@
 |---|---|
 | **夜間迴圈** | `/loop 20m /night-loop`。晨間報告在 `HT9011UC_Cpp_V3.33.906.0/docs/NIGHT_REPORT.md` |
 | **上傳週報** | `/weekly-upload`（使用者 20260930：「當我說關鍵字[上傳週報]，就自動幫我執行」，直接跑、不先問）：本週週報 md 貼上 RD5 入口網站（內容檢查乾淨才推，有命中才停下來問）＋照上一封週報信做好本週的信（預設存草稿開視窗，使用者說「寄出」才寄）。工具在 Weekly_AI `tools/weekly_upload.py` |
+| **上傳日報** | `/daily-upload`（使用者 20261005：結案補一列＋關鍵字）：說了就開始做、不先問要不要做。**兩段式**——當天的日報（12:00 前＝前一個工作天）照入口網站統一格式寫好、`check_daily.py`＋內容檢查都過，**先把全文貼給使用者看，使用者回「推」才推**上 daily.html（入口網站規定 AI 代寫的要本人看過）。結案時 `close_case.py` 會自動在當天草稿補一列（不推）。工具在 Weekly_AI `tools/daily_upload.py`。起因：20261005 量到網站上 JimmyChiu 日報 0 篇——之前只有週報與 Release Note 有發佈工具 |
 | **接線 / wire** | 網頁欄位 ↔ 配方文件的對照（`tools/pagewire/`）。三元組是 `[文件, 區段, 鍵]` |
 | **golden** | `HT9011UC_Code_V3.33.906.0_20260618`（BCB6、Big5、唯讀）。翻譯的對照原文 |
 | **移植樹 / A 樹** | `HT9011UC_Cpp_V3.33.906.0`。唯一的 C++ 開發目標 |

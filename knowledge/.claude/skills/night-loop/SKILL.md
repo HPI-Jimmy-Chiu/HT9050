@@ -91,6 +91,8 @@ git ls-tree --name-only origin/machine/integ-ioweb cpp/ web/ | tail   # 最大�
    GitHub 的 `machine_params/`＋`workorder/` 跟 GitLab main `machines/HT9050/snapshot/` 一樣就印 `up to date`；不一樣就鏡像並推 GitLab main
    （只動 snapshot/，不另出 GitHub 機台包）。⚠ 1003 13:46 到 1005 之間沒人跑，GitLab 那份落後機台兩天、差 34 個檔——讀不到 GitHub 的 St01／St02
    拿舊設定在驗證。有推的那一輪，在 NIGHT_REPORT §1 記一行（機台拍照時間＋commit）。
+   **有推的那一輪，同一輪要在 `CHAT_JIMMY.md` 叮嚀全體**（使用者 1005 13:4x「處理快照部分，必須叮嚀囑咐，要用Main最新版本，用機台端的工單和機台參數，才能開始驗證問題」，RULINGS_20261005 第 6 條）：寫出新快照的機台拍照時間＋main commit，並重述兩步——工作樹先更新到 main 最新版；`python tools/machine_sync/machine_sync.py check`，`NOT SYNCED` 就 `apply --yes` 同步後才開始驗證；回報附 main commit＋機台快照時間。
+7. **機台有沒有套筆電的包（每一輪都跑，只讀）**：`python D:/HT9045/backup/night_tools_20260927/pkg_uptake.py`。機台端 Claude 的規矩（EastSun 1001）是每次推完就查 GitHub main、有新包就整合、編好請 EastSun 按 F5——**但只有它在跑、沒被叫暫停時才會查，筆電沒有管道叫醒它**（使用者 1005 15:1x 問「機台端會自己知道嗎」）。印 `REMIND`（最舊一個沒套的包推出超過 3 小時）⇒ 當輪回覆與 NIGHT_REPORT 告訴 Jimmy「第 N 包推出 X 小時機台還沒套」，由他或 EastSun 跟機台說；不要自己推第二份。
 
 ### 0a. ★ 主 checkout 快轉到正本（V2；使用者 20261005「S1、S2、V1、V2 都照建議 A 做」，RULINGS_20261005 第 2 條）
 
@@ -175,6 +177,8 @@ python D:/HT9045/backup/night_tools_20260927/laptop_heartbeat.py --doing "<這�
 - **筆電的角色**（RULINGS_20261003 第 13 條）：新功能與分析寫成工作卡給接案的人，筆電只留回答 Jimmy、分派追蹤、合 MR＋gate、出機台包、寫裁決與報告；筆電的子代理同時最多 1～2 個，只做整合時非修不可的小修補。
 - **備援**（第 14 條）：筆電心跳超過 4 小時＋main 4 小時沒推 ⇒ St01 接手合 MR（`tools/laptop_ops/README.md`）；回來後先讀 FROM_STEVEN §2 有沒有 St01 接手的紀錄。
 - **同事 MR 的新測試要附反向驗證**（第 15 條）：沒附的，合之前在 TO_<對象>.md §4 請他補（不擋合併，但記進批次說明）。
+- **確定做完的 MR 直接關，不用問**（使用者 1005 14:4x，RULINGS_20261005 第 7 條：「如果已經確定做完就直接關，不用詢問…有沒有做過只有你清楚」）：開著但內容已在 main 的 MR，用 `python D:/HT9045/backup/night_tools_20260927/mr_verify_close.py <編號> "<留言：在 main 哪一顆、誰確認>"` 先試跑，每一行新增都在 main（或不在的行逐行看懂、寫進留言再加 `--allow-missing N`）才加 `--close`；量不出來就不關、照舊問。NIGHT_REPORT §1 記一行。
+- **急件通道**（使用者 1005 15:0x，RULINGS_20261005 第 9 條）：MR 標「急件」（擋住機台測試的小修正）不等整批——在現有建置資料夾增量建出貨＋模擬兩組態的 wb_serve＋MR 寫的相關測試，失敗集合沒多出來就推 main、出包（README 標「急件：只跑相關測試」），下一批的全量 gate 補驗。機台端的暫時繞過（第 10 條，`AI(W906-TEMP-*)`）照舊不收進 main。
 
 - 他 §1 認領的檔：**我們不碰**，要動先在 TO_STEVEN.md §4 問他。
 - 他 §3 的問題：能答的直接答在 TO_STEVEN.md §4（同一顆 commit 推 main）；是 Jimmy 的決策題 ⇒ 列進 NIGHT_REPORT §0。

@@ -135,6 +135,11 @@ cd /d/Work-jimmychiu/document/WeeklyReport/Weekly_AI && python tools/sync.py pus
 重產本週 Excel → 週報 md 貼上 RD5 入口網站（內容檢查乾淨才推）→ 照上一封週報信做好本週的信（存草稿開視窗）。
 例外照指令檔：內容檢查有命中要停下來問；信要等使用者說「寄出」才跑 `--send-draft <EntryID>`。
 
+### F. 「上傳日報」（20261005 起）
+使用者說「上傳日報」→ 照 `.claude/commands/daily-upload.md` 跑 `tools/daily_upload.py`，**兩段式**：
+collect → 照入口網站統一格式寫草稿（結案列＋週報 action＋裁決＋HT9045 commit 歸納）→ check → **全文貼給使用者看** → 使用者回「推」才 push
+（入口網站規定 AI 代寫的日報要本人看過）。內容檢查有命中要停下來問。結案時 `close_case.py` 會自動在當天草稿補一列（不推），所以結案不用另外記日報。
+
 ## 結案 / Release Note 歸屬
 週報、case、release note、鴻勁紅(`*_customer_*`/`*_distributor_*`)、鴻勁藍(`*_internal_*`)產物一律本代理負責，放 `Customer/<客戶>/<CASE>/04_release/`。接收 ht9045-v899 的修正 handoff 後更新 `issue.md`、`weekly_data.json`、產出紅/藍，回報實體路徑。結案沒版號要主動索取。
 
@@ -143,6 +148,7 @@ cd /d/Work-jimmychiu/document/WeeklyReport/Weekly_AI && python tools/sync.py pus
 （20260930 實例：912.6 的藍版漏列上一版以來同樹另外兩顆 commit，是結案後稽核才抓到）。所以結案一律照下面順序做完：
 
 1. **結案**：`python tools/sync.py pull` → 備份 `issue.md` → `close_case.py --search "<標題片段>" --version V… …`（**永不用 `--row`**；中文參數用 Python 子程序傳，不經 Bash argv）。
+   複查 PASS 後它會自動在今天的日報草稿 `daily/<YYYYMMDD>.rows.json` 補一列「CASE-xxx 結案」（20261005；不推，「上傳日報」時一起推）。
 2. **藍版檢查**：實讀 `*_internal_zh-TW.md`——本次 commit 動到的檔都在、沒有別案的 `//AI`、「所在函式」沒被掃描器誤標；
    並列出「同版另含」：`git diff --stat <上一版出貨 commit> <本版 commit> -- <樹>` 裡**不屬於本案**的 commit 也要寫（對所有客戶有差異的要寫進紅版）。
    修好後用 `make_release_note.md_to_html(md, …, accent='blue')`（紅版 `accent='red'`）重產 html，再跑 `python tools/verify_close.py --case <CASE-ID>` 要 PASS。

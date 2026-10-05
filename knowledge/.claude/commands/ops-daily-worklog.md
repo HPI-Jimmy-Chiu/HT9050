@@ -6,6 +6,9 @@ description: "Use when: 記錄每日工作日誌、工作交接、Session 收尾
 
 請在 HT9045 專案中新增或更新當日工作日誌。
 
+> **20261005**：**Jimmy 的日報改用 `/daily-upload`（關鍵字「上傳日報」）**——它蒐集當天證據（結案列、週報 action、commit、裁決）、
+> 照下面的統一格式寫好、`check_daily.py`＋內容檢查都過才推。本指令留給其他人與 St01 記錄員用。
+
 ## 目標路徑
 
 - 日誌：`<repo>/public/Docs/Daily/<EnglishName>/YYYYMMDD.md`（檔名一定是 YYYYMMDD.md；`<repo>`＝自己本機 RD5 入口網站 repo 的位置、`<EnglishName>`＝組織表上的英文名，見 `.claude/skills/make-report-skill/SKILL.md`「輸出位置設定」；寫完照那一節開分支＋MR。St01 記錄員暫時照舊寫 `docs/ops/daily/YYYY-MM-DD.md`，Steven 20260928「先不改，明天再說」）
@@ -27,10 +30,10 @@ description: "Use when: 記錄每日工作日誌、工作交接、Session 收尾
 
 ## HT9045 專案脈絡
 
-- 目前版本：V3.33.899.0_20260323_Jimmy_20260422
-- 版本目錄：HT9011UC_Code_V3.33.899.0_20260323_Jimmy_20260422/
+- 量產維護版：V3.33.912.0（`HT9011UC_Code_V3.33.912.0_20260908_Jimmy/`）；V899 自 20260909 起唯讀（20261005 更正：原本寫 V899）
+- C++ 移植樹：`HT9011UC_Cpp_V3.33.906.0/`
 - 共用設定：system/、config/、CFG/、IniData/
-- Skill 位於 .claude/skills/（Copilot 鏡像在 .agents/skills/）；斜線指令位於 .claude/commands/
+- Skill 位於 .claude/skills/（`.agents/skills/` 已於 20260918 退場）；斜線指令位於 .claude/commands/
 
 ## 輸出要求
 
