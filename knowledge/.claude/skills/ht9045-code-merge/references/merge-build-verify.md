@@ -190,7 +190,7 @@ File | Line | Pattern | Severity | Suggested Fix
 ## Step 6：報告產生
 
 > 報告格式、Section 1–9 結構、命名規則詳見：
-> **[make-report-skill → 合併報告（Merge Report）](d:\.github\skills\make-report-skill\references\merge-report\merge-report.md)**
+> **[make-report-skill → 合併報告（Merge Report）](D:\HT9045\.claude\skills\make-report-skill\references\merge-report\merge-report.md)**
 
 ### 快速摘要
 

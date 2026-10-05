@@ -73,7 +73,7 @@ Release Note 客戶版(多語)：20260327_HT-9xxx_Software_Release_Note_V3.33.89
 1. 先判斷報告 audience：廠內版 / 代理商版 / 客戶版 → 決定檔名尾碼 `{版本別}`。
 2. 判斷報告類型（Release Note / 提案報告 / 手冊）→ 決定檔名格式與輸出路徑。
 3. 判斷目錄變數：`{代理商}`、`{客戶代碼}_{客戶名稱}`。
-   - 客戶代碼 / 客戶名稱 / 代理商，優先參考 `d:\.github\instructions\customer-code-table.instructions.md`，正式來源為 `d:\.github\skills\make-report-skill\customer-code\customer-code-manager\SKILL.md`。
+   - 客戶代碼 / 客戶名稱 / 代理商，優先參考 `D:\HT9045\.claude\skills\make-report-skill\references\customer-code-table\customer-code-table.instructions.md`，正式來源為 `D:\HT9045\.claude\skills\make-report-skill\customer-code\customer-code-manager\SKILL.md`。
    - `Distributor` 未明示但 `Region` 可判定時，依「地區 → 代理商」映射推定。
 4. 組合：`{路徑}\{YYYYMMDD}_..._{版本別}.{ext}`。
 

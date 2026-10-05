@@ -138,7 +138,7 @@ HT9045 端新增了客戶代碼後，在本工作區執行：
 
 ### customer-code-table.instructions.md（唯一來源）
 
-**檔案**：`.github/instructions/customer-code-table.instructions.md`
+**檔案**：`D:\HT9045\.claude\skills\make-report-skill\references\customer-code-table\customer-code-table.instructions.md`
 
 **修改區域**：「客戶縮寫表」
 
@@ -296,7 +296,7 @@ customer-code-table.instructions.md 已更新
 
 | 名稱 | 位置 | 說明 |
 |------|------|------|
-| **customer-code-table.instructions.md** | `.github/instructions/customer-code-table.instructions.md` | 客戶縮寫/代理商/語言唯一來源 |
+| **customer-code-table.instructions.md** | `D:\HT9045\.claude\skills\make-report-skill\references\customer-code-table\customer-code-table.instructions.md` | 客戶縮寫/代理商/語言唯一來源 |
 | **customer-code-manager SKILL** | `.github/skills/make-report-skill/customer-code/customer-code-manager/SKILL.md` | 本技能詳細文檔 |
 | **ht9045-customer-code-manager SKILL** | `d:\HT9045\.github\skills\ht9045-customer-code-manager\SKILL.md` | HT9045 程式碼端雙向同步技能 |
 | **CustomerReq Agent** | `.github/agents/CustomerReq.agent.md` | 代理商路由定義 |

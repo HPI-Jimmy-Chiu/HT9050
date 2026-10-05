@@ -36,7 +36,7 @@ DEFAULT_REPORT_DIR = _portal_docs(r"customers\HPI-TW\0000_HonPrec", r"D:\docs\cu
 DEFAULT_DEVELOPER = "Steven"
 
 # make-report-skill 的 MD→HTML 轉換器（除錯/風險報告用 blue 模板）
-MD_TO_HTML = r"D:\.github\skills\make-report-skill\scripts\md_to_html.py"
+MD_TO_HTML = r"D:\HT9045\.claude\skills\make-report-skill\scripts\md_to_html.py"
 REPORT_TEMPLATE = "blue"
 
 SRC_EXT = {".cpp", ".h", ".c"}
@@ -117,6 +117,16 @@ def strip_inline_comment(line):
     if p >= 0:
         return line[:p]
     return line
+
+
+# P6 FP fix: '/' inside a string literal (e.g. human-readable message
+# "Arm 1/Arm 2 Tester Time Up error place to R Bin : ") is not a division
+# operator. Strip string literal contents before scanning for '/'.
+STRING_LIT_PAT = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def strip_string_literals(line):
+    return STRING_LIT_PAT.sub('""', line)
 
 
 def find_p1(lines, file_rel):
@@ -239,6 +249,7 @@ def find_p6(lines, file_rel):
 
     for i, raw in enumerate(lines, 1):
         line = strip_inline_comment(raw)
+        line = strip_string_literals(line)  # FP fix: ignore '/' inside "..." messages
         if not line or "/" not in line:
             continue
         if "//" in raw and raw.strip().startswith("//"):

@@ -230,7 +230,7 @@ fc.exe /N "<主幹路徑>\<檔案.cpp>" "<Merge路徑>\<檔案.cpp>" > "d:\HT904
 > 詳見編譯驗證流程，含 cmydef.h/cpp 補充、連結錯誤處理、Build Log 確認，以及 Kevin/Jimmy 功能確認。
 > [references/merge-build-verify.md](references/merge-build-verify.md)
 
-> **Step 6 報告格式**：遵循 `d:\.github\skills\make-report-skill\SKILL.md` 的「合併報告（Merge Report）」類型規範，含輸出路徑（`<入口網站 repo>\public\Docs\MergeReport\<年度>\`）、MD-only 格式，以及 Logo 使用規則（MD 報告不放 Logo）。
+> **Step 6 報告格式**：遵循 `D:\HT9045\.claude\skills\make-report-skill\SKILL.md` 的「合併報告（Merge Report）」類型規範，含輸出路徑（`<入口網站 repo>\public\Docs\MergeReport\<年度>\`）、MD-only 格式，以及 Logo 使用規則（MD 報告不放 Logo）。
 
 ### Step 4.5：Layer 1 靜態驗證（編譯前必做）
 
@@ -314,4 +314,4 @@ Merge 分支:
 | [merge-workflow.md](references/merge-workflow.md) | 合併完整工作流程（含 Phase 0a 詳細指令）|
 | [scripts-reference.md](references/scripts-reference.md) | 全部腳本 CLI 用法與觸發時機說明 |
 | [ht9046au-merge-case.md](references/ht9046au-merge-case.md) | HT-9046AU 合併案例：build/linker 錯誤處理 |
-| `d:\.github\skills\make-report-skill\SKILL.md` | Step 6 合併報告格式規範（輸出路徑、Logo 規則、報告類型路由）|
+| `D:\HT9045\.claude\skills\make-report-skill\SKILL.md` | Step 6 合併報告格式規範（輸出路徑、Logo 規則、報告類型路由）|

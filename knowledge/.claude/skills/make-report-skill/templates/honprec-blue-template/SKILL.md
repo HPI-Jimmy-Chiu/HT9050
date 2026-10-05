@@ -23,7 +23,7 @@ applyTo: "**/*"
 > 正確流程：AI 先將報告存為 `.md`，再執行腳本轉換（腳本自動讀 PNG，無需 AI 讀 Base64）：
 >
 > ```
-> python "d:\.github\skills\make-report-skill\scripts\md_to_html.py" <output.md> --template blue
+> python "D:\HT9045\.claude\skills\make-report-skill\scripts\md_to_html.py" <output.md> --template blue
 > ```
 
 ## 色彩方案

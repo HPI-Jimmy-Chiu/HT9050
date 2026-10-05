@@ -29,7 +29,7 @@ applyTo: "**/*"
 | 技能 | 工作區 | 負責範圍 |
 |------|--------|---------|
 | **ht9045-customer-code-manager**（程式碼端） | `d:\HT9045\.github\skills\ht9045-customer-code-manager\SKILL.md` | `#define CC_xxx`（MachineType.h）、`FUNC_CC_xxx` + `case`（CosFunction.cpp）、`rgCustomerList`（HandlerSys.dfm） |
-| **customer-code-manager**（本技能，報告/索引端） | `d:\.github\skills\make-report-skill\customer-code\customer-code-manager` | 客戶縮寫表（`customer-code-table.instructions.md`，唯一來源）、地區→代理商→語言映射、Release Note 客戶路由 |
+| **customer-code-manager**（本技能，報告/索引端） | `D:\HT9045\.claude\skills\make-report-skill\customer-code\customer-code-manager` | 客戶縮寫表（`customer-code-table.instructions.md`，唯一來源）、地區→代理商→語言映射、Release Note 客戶路由 |
 
 > **同步規則**：
 > - **程式碼端為代碼數值與英文符號的來源**（Code Number / `CC_` Symbol）。
@@ -57,7 +57,7 @@ applyTo: "**/*"
 ## 問題編號客戶縮寫表（Issue Number CUSTOMER 欄位）
 
 > 縮寫對照表已移至 **instructions**，讓 AI 在所有場合自動套用，不需手動觸發技能：
-> → [`instructions/customer-code-table.instructions.md`](d:\.github\instructions\customer-code-table.instructions.md)
+> → [`references/customer-code-table/customer-code-table.instructions.md`](D:\HT9045\.claude\skills\make-report-skill\references\customer-code-table\customer-code-table.instructions.md)
 
 新客戶加入時，請在上面的 instructions 檔的「客戶縮寫表」中插入一行，再依下方步驟更新其他檔案。
 
@@ -71,7 +71,7 @@ applyTo: "**/*"
 
 | 檔案 | 位置 | 修改內容 | 說明 |
 |------|------|---------|------|
-| **customer-code-table.instructions.md** | `.github/instructions/customer-code-table.instructions.md` | 客戶縮寫表 | 新增縮寫 + 代理商對應（**唯一來源**） |
+| **customer-code-table.instructions.md** | `D:\HT9045\.claude\skills\make-report-skill\references\customer-code-table\customer-code-table.instructions.md` | 客戶縮寫表 | 新增縮寫 + 代理商對應（**唯一來源**） |
 | **CustomerReq.agent.md** | `.github/agents/CustomerReq.agent.md` | 更新郵件路由規則 | 若為新代理商則添加 |
 
 ---
@@ -107,7 +107,7 @@ applyTo: "**/*"
 
 ### 步驟 3：更新客戶縮寫表（唯一來源）
 
-**檔案**：`.github/instructions/customer-code-table.instructions.md`
+**檔案**：`D:\HT9045\.claude\skills\make-report-skill\references\customer-code-table\customer-code-table.instructions.md`
 
 **查找錨點**：「客戶縮寫表」表格
 
@@ -262,7 +262,7 @@ applyTo: "**/*"
 | 技能/資源 | 位置 | 用途 |
 |----------|------|------|
 | **ht9045-customer-code-manager** | `d:\HT9045\.github\skills\ht9045-customer-code-manager\SKILL.md` | 程式碼端雙向同步對應技能（`CC_` 定義、FUNC、UI） |
-| **customer-code-table.instructions.md** | `.github\instructions\customer-code-table.instructions.md` | 客戶縮寫/代理商/語言唯一來源 |
+| **customer-code-table.instructions.md** | `D:\HT9045\.claude\skills\make-report-skill\references\customer-code-table\customer-code-table.instructions.md` | 客戶縮寫/代理商/語言唯一來源 |
 | **CustomerReq Agent** | `.github\agents\CustomerReq.agent.md` | 路由規則與提案表流程 |
 
 ---
@@ -295,7 +295,7 @@ applyTo: "**/*"
 
 | 檔案 | 路徑 | 說明 |
 |------|------|------|
-| 客戶縮寫表（唯一來源） | `.github/instructions/customer-code-table.instructions.md` | 客戶縮寫/代理商/語言索引 |
+| 客戶縮寫表（唯一來源） | `D:\HT9045\.claude\skills\make-report-skill\references\customer-code-table\customer-code-table.instructions.md` | 客戶縮寫/代理商/語言索引 |
 | CustomerReq Agent | `.github/agents/CustomerReq.agent.md` | 代理商路由規則 |
 | 客戶代碼來源 | `d:\HT9045\.github\skills\ht9045-customer-code-manager\SKILL.md` | HT9045 程式碼端雙向同步技能 |
 

@@ -89,7 +89,7 @@
 
 - `HH:MM` 用本輪最後一顆 commit 的時間（或 `hh:mx`）。
 - 狀態計數從 rulings-index.md 表頭**重新抄**，不要沿用上一段的數字（13:58 那段寫「狀態計數詳見該檔」也可以，但寫數字時一定要重算過）。
-- 檔頭「一句話」「今天真正重要的 4 件事」「待辦」等前段不動；那是日報開檔時寫的（格式權威 `D:\.github\prompts\ops-daily-worklog.prompt.md`；那份寫的範本 `D:\docs\ops\templates\daily-worklog.tmpl.md` 20260927 查的時候不存在，開新日報時照 `D:\docs\ops\daily\20260926.md` 的前段排）。
+- 檔頭「一句話」「今天真正重要的 4 件事」「待辦」等前段不動；那是日報開檔時寫的（格式權威 `D:\HT9045\.claude\commands\ops-daily-worklog.md`＋`D:\HT9045\.claude\skills\make-report-skill\references\ops-daily-worklog\ops-daily-worklog.md`（20261005 起；原本指的 `D:\.github` prompt 已退場，repo 這份較新）；那份寫的範本 `D:\docs\ops\templates\daily-worklog.tmpl.md` 20260927 查的時候不存在，開新日報時照 `D:\docs\ops\daily\20260926.md` 的前段排）。
 
 例（13:58 那段開頭，縮短）：
 

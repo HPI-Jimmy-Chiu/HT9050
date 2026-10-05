@@ -243,7 +243,7 @@ def main():
         print(f"  [{lang}] wrote {out_path}  ({os.path.getsize(out_path):,} bytes)")
 
     print("\nNext: convert to HTML with 鴻勁紅 template:")
-    print('  python d:\\.github\\skills\\make-report-skill\\scripts\\md_to_html.py "<md_path>" --template red')
+    print('  python D:\\HT9045\\.claude\\skills\\make-report-skill\\scripts\\md_to_html.py "<md_path>" --template red')
 
 
 if __name__ == '__main__':

@@ -46,14 +46,14 @@
 
 ## set_nsi_flags.py 使用方式
 
-路徑：`d:\.github\skills\make-ht9045-installer\scripts\set_nsi_flags.py`
+路徑：`D:\HT9045\.claude\skills\make-ht9045-installer\scripts\set_nsi_flags.py`
 
 ```powershell
 # 切換為 AMD 客製 + Beta
-python "d:\.github\skills\make-ht9045-installer\scripts\set_nsi_flags.py" "TF-AMD_" "_BETA"
+python "D:\HT9045\.claude\skills\make-ht9045-installer\scripts\set_nsi_flags.py" "TF-AMD_" "_BETA"
 
 # 還原為標準版
-python "d:\.github\skills\make-ht9045-installer\scripts\set_nsi_flags.py" "" ""
+python "D:\HT9045\.claude\skills\make-ht9045-installer\scripts\set_nsi_flags.py" "" ""
 ```
 
 **自動補全規則**：

@@ -2,7 +2,7 @@
 
 > 本文件由原 `ht9045-lastset-array-audit/SKILL.md` 內容降為 reference（2026-06-16）。
 > **完整超集版本**（含結構定義位置、Load/Save 函數、高風險存取位置、版本異動、語意保持原則）
-> 見全域 skill：`d:\.github\skills\pre-release-check\references\lastset-array-audit.md`（P7）。
+> 見 skill：`D:\HT9045\.claude\skills\pre-release-check\references\lastset-array-audit.md`（P7）。
 > HT9045 工作區源碼對照另見同目錄 [source-map.md](source-map.md)。
 
 ## 目的

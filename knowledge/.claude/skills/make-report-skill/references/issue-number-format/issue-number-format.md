@@ -42,7 +42,7 @@
 ## 客戶代碼（CUSTOMER）
 
 > 客戶代碼縮寫的**完整定義與維護**統一由以下 Instructions 負責，本文件不重複維護：
-> → [`instructions/customer-code-table.instructions.md`](d:\.github\instructions\customer-code-table.instructions.md)
+> → [`references/customer-code-table/customer-code-table.instructions.md`](D:\HT9045\.claude\skills\make-report-skill\references\customer-code-table\customer-code-table.instructions.md)
 
 新客戶加入時，請至 `customer-code-table.instructions.md` 登記縮寫，並依 [customer-code-manager SKILL](../../customer-code/customer-code-manager/SKILL.md) 步驟執行。
 

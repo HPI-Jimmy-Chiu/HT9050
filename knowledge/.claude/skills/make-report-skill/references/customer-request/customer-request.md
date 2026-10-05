@@ -77,7 +77,7 @@
 - 完整輸出路徑與命名規則統一參考 [../report-version-naming/report-version-naming.md](../report-version-naming/report-version-naming.md)。
 
 ## 完整規格
-詳見：`../../customer-code/customer-code-manager/SKILL.md`（客戶縮寫/代理商唯一來源：`d:\.github\instructions\customer-code-table.instructions.md`）
+詳見：`../../customer-code/customer-code-manager/SKILL.md`（客戶縮寫/代理商唯一來源：`D:\HT9045\.claude\skills\make-report-skill\references\customer-code-table\customer-code-table.instructions.md`）
 HTML 樣式詳見：`../../templates/honprec-red-template/SKILL.md`
 
 ## 相關參考

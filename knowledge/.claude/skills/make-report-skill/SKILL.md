@@ -11,19 +11,14 @@ applyTo: "**/*"
 
 # make-report-skill — 統一報告產生技能
 
-> ## ⚠ 這個 skill 有兩份，正本在 `D:\.github`
+> ## 正本（20261005 起）
 >
-> | 位置 | 角色 | 版控 |
-> |---|---|---|
-> | `D:\.github\skills\make-report-skill\` | **正本**，所有修改都改這裡 | ❌ 無（`D:\.github\.git` 已損壞） |
-> | `D:\HT9045\.claude\skills\make-report-skill\` | 鏡像，給 Jimmy 經 git 取得 | ✅ `ht9045.git` / `feat/v912-port` |
+> 這個 skill 的正本是 `D:\HT9045\.claude\skills\make-report-skill\`（`ht9045.git` 版控），所有修改都改這裡。
+> 舊的 `D:\.github\skills\make-report-skill\` 已退場（Steven 1005），不再同步、不要改。
 >
-> **兩份必須逐位元組相同。** 改完正本要重新複製一次，不要只改其中一邊
-> —— `D:\HT9045` 底下 `.agents` / `.claude` / `.github` 三個 skills 目錄已經有
-> **24 個 skill 內容漂移**（2026-09-18 實測），這個 skill 不要變成第 25 個。
->
-> ⚠ 檔內 `d:\.github\skills\make-report-skill\scripts\...` 這類腳本路徑**刻意指向正本**，
-> 不隨鏡像改寫。Jimmy 那台若沒有 `D:\.github`，報告產生腳本不可用（但 reference 文件照樣可讀）。
+> 檔內腳本路徑一律寫 `D:\HT9045\.claude\skills\make-report-skill\scripts\...`；
+> clone 不在 `D:\HT9045` 的機器（例如 Jimmy 的筆電）把前段換成自己 clone 的位置即可。
+> 客戶縮寫表搬到 `references\customer-code-table\customer-code-table.instructions.md`。
 
 
 ## ⚙ 輸出位置設定（20260929 起：所有報告與手冊都直接寫進 RD5 入口網站 repo 的 `public\Docs\`）
@@ -120,7 +115,7 @@ applyTo: "**/*"
 ```text
 1. AI 產出 MD 報告（含 YAML frontmatter），儲存至目標路徑
 2. 執行腳本轉換 HTML：
-   python "d:\.github\skills\make-report-skill\scripts\md_to_html.py" <output.md> [--template red|blue]
+   python "D:\HT9045\.claude\skills\make-report-skill\scripts\md_to_html.py" <output.md> [--template red|blue]
 ```
 
 | 報告格式 | Logo 處理 |
@@ -147,7 +142,7 @@ applyTo: "**/*"
 
 客戶代碼定義與分發規則詳見：
 - [customer-code-manager/SKILL.md](./customer-code/customer-code-manager/SKILL.md)（報告/索引端；與 HT9045 端 `ht9045-customer-code-manager` 雙向同步）
-- 客戶縮寫/代理商/語言唯一來源：[customer-code-table.instructions.md](../../instructions/customer-code-table.instructions.md)
+- 客戶縮寫/代理商/語言唯一來源：[customer-code-table.instructions.md](references/customer-code-table/customer-code-table.instructions.md)
 
 ---
 

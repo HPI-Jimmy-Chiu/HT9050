@@ -56,8 +56,10 @@ rem 用瀏覽器打開 → 按「📂 載入機台檔案」或直接把資料夾
 
 ```bat
 node assets\smoke-test.js "<你的 html>"
-python d:\.github\skills\Make-Report-Skill\scripts\verify_animation_html.py "<你的 html>"
+python D:\HT9045\.claude\skills\make-report-skill\scripts\verify_animation_html.py "<你的 html>"
 ```
+
+> 20261005 St01 查：`verify_animation_html.py` 在 `D:\HT9045\.claude\skills\make-report-skill\scripts\`、舊的 skill 位置都**不存在**，這一行目前跑不起來；先只跑 `smoke-test.js`。
 
 輸出路徑依 `Make-Report-Skill` 的動畫類路由：
 `D:\00_ReleaseNote\{代理商或廠內}\{客戶}\{proposals|bug-reports}\{YYYY}\{YYYYMMDD}_{作者}_{機型}_{主題}_{受眾}.html`

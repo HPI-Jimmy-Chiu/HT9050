@@ -76,7 +76,7 @@
 | P7 | 每一拍第一句先查 M14 驅動器：ALM、ERROR_STOP、伺服 OFF、樣本連 3 次無效、輪詢凍結 2 秒、路由失敗 → 同一拍 `ST` | Steven 1004 07:5x |
 | P8 | 只准模式 1、3；只准單 shuttle（`iShuttleMode=1, iShuttle_Sel=0`）、只准 Arm1。拒絕：模式 2（手動）、模式 8（Load Cell）、32-site、Calibrate Above 等 | Steven 1004 08:4x |
 | P9 | 下一步的**命令位置**到 `fIndexDownPos` 以下 → `ST`（golden 只看 encoder） | — |
-| W-44 | 下壓 socket 的那幾個 Task：In Shuttle1（M11）、Out Shuttle1（M17）要在「home」±100 counts 內，否則 `ST`＋出口。取料、放料不檢查 | Steven W-44；ST01-M 1005 03:4x |
+| W-44 | 下壓 socket 的那幾個 Task：In Shuttle1（M11）、Out Shuttle1（M17）要在「home」±100 counts 內，否則 `ST`＋出口。取料、放料不檢查。⛔ **20261005 23:1x 定義改了（Q114）**：Steven「Out shuttle 可能在執行5s的動作，所以應該是有個安全的x座標，在安全位置之外,index就可以下壓到socket」＋「5s是 ccd的五面檢查」——改成「飛梭 X 在 Index 安全區之外才准下壓」，判斷由 Frank 寫（ST01-C 呼叫 `W906_Ht9050ShuttlesClearOfIndex`）；本列的「home ±100」是 E-042 現在的寫法，E-042 B6 之前要改呼叫 Frank 的判斷，見 `ht9050-index-fp-flow.md` | Steven W-44；ST01-M 1005 03:4x；Q114 |
 
 ## 3. 先知道的 HT9050 差異
 

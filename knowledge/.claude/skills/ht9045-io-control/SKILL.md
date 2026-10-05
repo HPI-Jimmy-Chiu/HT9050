@@ -23,6 +23,8 @@ description: HT9045 Handler IO 控制層模式。適用於氣缸、感測器、�
 
 ## 快速參考
 
+> **IO 卡（MotionNet 先達／MN200、PCIE-1203、安全 PLC、ISA／1735U）的開卡流程與錯誤確認**，跟馬達卡放在同一份對照 → [card-init-and-health.md](../ht9045-motor-control/references/card-init-and-health.md)（24V／ring／EtherCAT 斷線檢查、ResetMNet 恢復；Steven 1005 23:2x）。
+
 | 模組 | 類別 | 陣列 | 最大數量 | 標頭檔 |
 |------|------|------|----------|--------|
 | 氣缸 | `TMyCylinder` | `Cylinder[]` | `MaxCylinderItem` | `mycylin.h` |
@@ -226,6 +228,16 @@ Acm_DevClose(&DevHandle);
 | `IOBitOff()` | `Acm_DaqDoSetBit()` |
 | `IOInputBit()` | `Acm_DaqDiGetBit()` |
 | `IOOutBitStatus()` | `Acm_DaqDoGetBit()` |
+
+### HT9050：1203 的 IO 點、急停、安全門（20261005，ST01-E）
+
+- **1203 的 IO 點＝（Lane, IP, Port）**：Lane＝Ring、IP＝站號、Port＝通道（位元組 Port/8、位元 Port%8）；IO 表的 **Bit 欄不參與定址**（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\EtherCAT\Pci1203IoRoute.cpp` 的 `RouteWriteBit`／`RouteReadBit` 都是 `(void)Bit`）。DI、DO 是分開的影像。⇒ 同一個 Lane／IP 上兩個名字填同一個 Port＝同一個點（W-56：`C_OutArmSmallY_Off／_On` 與 `C_InPnPDrop1_Off／_On`，E-043b 的 T5 鍵改成 Lane／IP／Port）。
+- **HT9050 的 IO 表**（`D:\HT9045\machines\HT9050\IO_Table.csv`，跟機台快照的列一樣）：急停四顆 `SnFrontLeftEMG`／`SnRearLeftEMG`／`SnFrontRightEMG`／`SnRearRightEMG`（:461-464）、`SnServo`（:732）、`SnSystemPower`（:741）、`SnRKCoverOpen`（:730）都是 **Enable 0**；Enable 0 的感測器 `TMySensor::IsOff()` 回 false（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\mysensor.cpp` `IsOff` 開頭的 `if(Enable == false)`）⇒ `IsEMGPressed`、`IsMotorCanRun`、E-045 的 EMG 條件在 HT9050 上永遠不成立，DoSystem 的系統電源分支進不去。
+  - **軟體看得到的急停只有 `SnMotorPower` 掉電**（:3，Lane 1、IP 2、Port 30、Enable 1；安全迴路切掉驅動器電源，W-45）。任何馬達電源中斷都當急停（含 Motor Test 的 Motor Power OFF 鈕、繼電器故障）＝安全的方向；可靠度看 SnMotorPower 的接線（W-45 要 EastSun 逐顆急停驗）。
+  - **讀得到的門只有 `SnSafeDoor1`**（＝`SnSafeDoorIndex`，兩個名字同一點 IP 2、Port 25，:449-450）。golden `InitialSafeDoor`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\cinitial.cpp`:3034 起）不管表格，把 1、2、3、6～9（＋10）號門強制 Enable 1（W-46），2～10 號在 HT9050 是讀不到的 MotionNet 列 ⇒ main 建置上讀成「開著」；機台用 TEMP-DOORS 暫時繞道（連真的 SnSafeDoor1 一起關）；St01 W-86 #94 的規則 A（HT9050 只開表裡 Enable 1 的門）還不在 main ⇒ decisions-pending Q126（E-043 Q-R4，EastSun）。
+- **E-043 第 2 顆（2a）之後，IO 頁輸出與 1203 頁的 DO 照樣不擋**（Steven 1005 22:1x「不擋 IO 頁和電源」，decisions-decided Q104）：EastSun 0929 IO-NOGUARD（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\JsonBridge\IoBtnPanelClick.cpp`:229）照舊，Servo ON／Motor Power ON 也不擋；擋的是 HOME、START、手動移動、1203 頁的移動／JOG／回原點。⚠ E-043 計畫 §8 舊建議「commit 2 之後 IO 頁和 1203 頁在 ERROR 時拒絕」作廢。真空頁的寫入在 2b 會被擋、IO 頁還能手動輸出＝畫面一致性的落差，不是互鎖（human-review C）。
+- E-043 的「1203 主卡／環斷線＝整機不能動」（Q108）原本用「表格需要 1203」當開關，已被 Steven 1005 23:2x（Q119：看馬達類別狀態、不糾結 1203）取代，改法在 E-043 計畫第 2 版。
+- W-44（Index Z1 下壓前的飛梭互鎖）看的是飛梭的馬達位置、不是 IO：Steven 1005 23:1x 改成「安全 X 座標」（Q114，飛梭在 Index 安全區外就能下壓），保護歸 Frank01；E-042 B3／B4 的原點版要在 B6 前改呼叫 Frank 的判斷。見 `D:\HT9045\.claude\skills\ht9045-index-flow\references\ht9050-index-fp-flow.md` §5。
 
 ## 核心使用模式
 

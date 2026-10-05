@@ -303,8 +303,8 @@ scripts/
 4. 若該欄位開放給客戶（audience.customer: true）：
    - 補上對應截圖至 screenshots/<group>/<section>-overview.png（英文 UI）
    - 執行 python scripts/gen_customer_manual.py 產出 7 國語言 md
-   - 各語系執行 `python d:\.github\skills\make-report-skill\scripts\md_to_html.py "<md>" --template red` 轉鴻勁紅 HTML
-    - 若後續要再包裝成廠內版 / 代理商版 / 客戶版報告檔名，需遵循 `d:\.github\skills\make-report-skill\references\report-version-naming\report-version-naming.md` 的 audience → 檔名尾碼轉換規則
+   - 各語系執行 `python D:\HT9045\.claude\skills\make-report-skill\scripts\md_to_html.py "<md>" --template red` 轉鴻勁紅 HTML
+    - 若後續要再包裝成廠內版 / 代理商版 / 客戶版報告檔名，需遵循 `D:\HT9045\.claude\skills\make-report-skill\references\report-version-naming\report-version-naming.md` 的 audience → 檔名尾碼轉換規則
 
 ### 12.3 Audience 過濾規則
 
@@ -314,7 +314,7 @@ scripts/
 | operator: true | 出現在操作員手冊（待實作 gen_operator_*）|
 | customer: true | 出現在 output/customer/<lang>/HT9045_Config_Manual.md（隱藏內部變數，附截圖與翻譯） |
 
-> `customer: true` 代表內容受眾，不代表輸出檔名尾碼必須直接寫 `客戶版`；若要對外再產生正式報告或交付檔名，需依 `d:\.github\skills\make-report-skill\references\report-version-naming\report-version-naming.md` 轉成 `{客戶名稱}`。
+> `customer: true` 代表內容受眾，不代表輸出檔名尾碼必須直接寫 `客戶版`；若要對外再產生正式報告或交付檔名，需依 `D:\HT9045\.claude\skills\make-report-skill\references\report-version-naming\report-version-naming.md` 轉成 `{客戶名稱}`。
 
 ### 12.4 支援語系
 

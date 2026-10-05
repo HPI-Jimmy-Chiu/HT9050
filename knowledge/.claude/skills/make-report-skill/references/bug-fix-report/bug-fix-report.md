@@ -110,7 +110,7 @@
 
 HTML 轉換指令：
 ```
-python "d:\.github\skills\make-report-skill\scripts\md_to_html.py" <output.md> --template red
+python "D:\HT9045\.claude\skills\make-report-skill\scripts\md_to_html.py" <output.md> --template red
 ```
 
 ## 相關參考

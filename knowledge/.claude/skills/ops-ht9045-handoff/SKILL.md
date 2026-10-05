@@ -46,6 +46,7 @@ St02 只能透過 git 交接檔聯絡；St01 的工程線在同一台，用 Send
 ## 3. 巡檢（每 20 分鐘，先 pull，最後心跳）
 
 0. **pull**（Steven 20261002 17:5x「使用20分鐘的, 然後要做pull」；ST01-M 的排程在每小時 :03／:23／:43）：
+   - ⛔ **1006 04:3x 起改成跟著 main 走**（Steven 1005 22:4x「同意，我們跟著main走。不是main跟著我們」）：`D:\HT9045` 已切到 **main**（`8d774474`，ST01-E 切換；review6 經 MR !222 收進 main 後退場）。第 0 步改成 `git -C D:/HT9045 fetch origin` → `git rev-list --left-right --count origin/main...HEAD`：左邊＞0、右邊＝0 就 `pull --ff-only`；**每輪都回報落後 main 幾顆**，不能只看「pull 有沒有新東西」（1005 review6 默默落後 469 顆的教訓）。登記／skill 的 commit 不再直接推共用樹：放短分支（例 `v906/st01-skills-1005`）走 MR。下面講 review6 的句子是歷史。
    - `D:\HT9045`：先 `git fetch origin`，再看 `git rev-list --left-right --count origin/v906/steven-cbridge-review6...HEAD`。左邊（遠端多的）不是 0、右邊是 0 才 `git pull --ff-only`；右邊不是 0＝ST01-E 有本機還沒推的 commit，不 pull、不 rebase，等它推（20261002 20:3x `fb31e431` 多 58 顆就是這樣）。
    - `D:\RD5-Portal`：`git pull --ff-only`。ST01-M 在那裡只改檔、不 commit，由 ST01-E3 推；ST01-E3 的功能分支合進 main 後遠端分支會刪掉，pull 會說「no such ref was fetched」，那是正常的，換分支交給 ST01-E3，未提交的日報／組織圖改動會跟著走。
 1. `sh scripts/refresh_handoff.sh`（fetch＋更新快照）。
@@ -89,13 +90,13 @@ bash scripts/handoff_commit.sh <edit.py 絕對路徑> <commit 訊息檔>
   - **912 比較好就照 912（Steven 20261003 05:3x～05:4x 常設規則）**：原話「以後我這邊遇到這個問題，如果是912比較好，就是註記906的行號跟做法　然後增加註記912已修正或更新的行號」「不需要一直糾結在這邊　Jimmy弄了天條擋住不是906 cpp版的項目　我們這邊就是讓他接受+繞過這一個限制」。906 與 912 不同、912 是修 bug 或明顯比較好 ⇒ 程式照 912，註解寫 906 的行號＋做法、912 修正／更新的行號、「#20 例外（Steven 1003 常設規則）」；不再寫進 decisions-pending 問 Steven，在 FROM_STEVEN §3 公開告訴 Jimmy、human-review C 區登一筆；判斷不出哪個好、或客戶專用／行為改變很大才問 Steven。第一批：Q78（A02 存檔保護）、Q79（GPIB 力量字串）、W70（ELA 拆欄）、Data.Observer 事件記錄檢視。**Jimmy 已接受**（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20261003.md` 第 1 條＝§0 #78 B：做的人自己判斷、不用等 Jimmy；保留 912 的地方兩邊行號都寫，帳本記一列理由——St01 記在 ht9050-construction registry）。**golden 基準是 906 的 0618**（同檔第 2 條：用共用區 7z 密碼解開，0625 只做對照；St01 的重核是 todo E-032）；產生器的 golden 來源由 St01 決定（第 4 條，todo E-031）。
 - **先聽著、不接單**：Jimmy 的派工卡 S-01～S-06 不認領，除非 Steven 說要接。
 - **看區段、不看檔名**：別人登記的檔，不同區段就直接做並在 FROM_STEVEN 寫明；同一段等對方回覆。`aHotPlateSubstrate.*` 要先問 Steven。
-- **共用工作樹**：ST01-E 也用 `D:\HT9045`。commit 登記前先 fetch、確認 `origin/v906/steven-cbridge-review6..HEAD` 為空、先 SendMessage 問它，只 commit 自己的檔。
+- **共用工作樹**（⛔ 1006 04:3x 起 `D:\HT9045` 在 main；下文的 review6 改讀成「main」，commit 走短分支＋MR）：ST01-E 也用 `D:\HT9045`。commit 登記前先 fetch、確認 `origin/v906/steven-cbridge-review6..HEAD` 為空、先 SendMessage 問它，只 commit 自己的檔。
 - **給 Steven 看的文件寫絕對路徑**（`D:\HT9045\...`，標明哪棵樹）；commit hash 後面附主要檔案全路徑。
 - Steven 的答案要**照原話**轉，不改意思；理解不確定就標出來再問。
 - **語言**（RULINGS_20260927 第 8 條＋Steven 18:1x）：內部作業與 SendMessage 用英文；FROM_STEVEN、CHAT_ST01、給 Jimmy 的列可以寫英文；skill（含 ht9050-construction 的 todo／done／decisions）與 ChangeLog／日報維持繁體中文（UTF-8）；回 Steven 本人一律繁體中文。
 - **St01 分支合 main**：由 Steven 決定；用 ops-ht9045-proxy-build 的全量 gate 當證據，在 FROM_STEVEN §2 寫「到哪一顆可以合」給筆電（例 20260927 17:40 到 `6bd0f5a4`）；同事分支合 main 一律要有 MR（RULINGS_20260927 第 8 條）。**每一批都要對得上 Steven 的一個裁決**：Q56（20260929）只涵蓋 `10cac033` 那一輪，加上當晚在 §2 講好的 `b5710386`／`1e5316eb` 修正版；新功能的批次要看 Q59（「全套 gate 綠了就直接請 Jimmy 合」，20260930 登記，等 Steven 回）。還沒有裁決時，gate 綠了只在 §3 貼證據，並寫「合併列等 Steven」。筆電催的時候也一樣。**§2 寫過「合最新版也可以」之後，分支又進了沒 gate 的 commit，要馬上改那一列**（20260930 01:3x 的例子：`699dc06d` 進來後改成「最多到 `4d4495f3`」）。
 - **20261001 起的合併規則（取代上一條「等 Q59」那段）**：Q59（20260930「ok」）＝兩組態 gate 綠了 ST01-M 直接寫 §2；**上機才驗得出來的（加熱器／馬達／IO、改接觸氣壓這類）先由 EastSun 上機驗證再寫 §2**（Steven 1001 09:4x「需要上機驗證的, 都是請Eastsun處理」，Q62／Q63／Q64 都是 B）。照 golden 補齊、接上的功能不用再問 Steven（Jimmy RULINGS_20261001 第 0 條，跟 Steven 的方向一致）；只有**新設計／跟 golden 不同**或**動別人認領的檔**才問。「只是改了存檔內容」不算例外（20261001 04:4x ST01-M 更正）。
-- **St01 兩條分支**：`v906/st01-q59`＝不用上機、gate 綠就寫 §2 cap 的工作；`v906/steven-cbridge-review6`＝要 EastSun 上機驗的（D-021～D-025 等），驗過才寫 §2。新的大件（例 D-026）先開側分支，完成後再合進對應那條。共用目錄 `D:\HT9045` 只在 review6 上，其他分支用各自的 worktree（`D:\AI_TempFile\st01e-q59` 等）。§3 告訴筆電「review6 過了某顆不要合」時，要寫清楚停在哪顆。
+- **St01 兩條分支**（⛔ 歷史：1006 04:3x 起 review6 退場，新工作一律從 main 開分支走 MR）：`v906/st01-q59`＝不用上機、gate 綠就寫 §2 cap 的工作；`v906/steven-cbridge-review6`＝要 EastSun 上機驗的（D-021～D-025 等），驗過才寫 §2。新的大件（例 D-026）先開側分支，完成後再合進對應那條。共用目錄 `D:\HT9045` 只在 review6 上，其他分支用各自的 worktree（`D:\AI_TempFile\st01e-q59` 等）。§3 告訴筆電「review6 過了某顆不要合」時，要寫清楚停在哪顆。
 - **上機驗證清單**：`ht9050-construction/references/human-review.md` 的 A 區＝EastSun 的清單；新增 A 項同一輪在 §3 請 Jimmy 轉 EastSun，附分支／commit 和每一項要看什麼（先 gate 再給）。
 - **代跑 St02 的 MR 之前先看 main**：筆電已經合進 main（它自己跑過兩組態 gate）的 MR，St01 的代跑改成可省；正在跑的確認性 gate 可以只留 SIM＋真實檔檢查就停，讓位給還沒合的工作（20261001 MR !20、!21 的例子）。
 - **時間標記一律先跑 `date`**：20261001 ST01-M 兩次寫早（「05:15」實際 04:57、「09:5x」實際 09:46），ST01-E 也寫早 30 分鐘；標錯當輪就改。

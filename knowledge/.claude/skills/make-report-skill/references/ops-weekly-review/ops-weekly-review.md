@@ -47,7 +47,7 @@
 
 ## AI 自動補充規則
 1. 讀取當週 ops daily 日誌作為本週摘要素材
-2. 掃描 `d:\.github\skills\` 最後修改時間，標記異動的 Skill
+2. 掃描 `D:\HT9045\.claude\skills\` 最後修改時間，標記異動的 Skill
 3. 若有 ADR 相關決策，連結至對應 ADR 文件
 
 ## 模板

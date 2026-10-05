@@ -28,7 +28,7 @@
 ### 腳本指令（重新產生）
 
 ```powershell
-python "d:\.github\skills\make-report-skill\scripts\generate_code_diff_summary.py" `
+python "D:\HT9045\.claude\skills\make-report-skill\scripts\generate_code_diff_summary.py" `
   --project {HT9045|GPIB9045} `
   --range {daily|weekly} `
   --date {YYYY-MM-DD}

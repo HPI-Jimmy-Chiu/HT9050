@@ -22,6 +22,8 @@ Handler 機台馬達控制模式，涵蓋步進/伺服馬達驅動、多種運�
 
 ## 快速參考
 
+> **各種軸卡／IO 卡的開卡流程與錯誤確認對照**（Steven 1005 23:2x「馬達跟Io 的問題，應該要優先考慮使用的是哪一種技術」）→ [references/card-init-and-health.md](references/card-init-and-health.md)：先從 Gerneral.ini 卡別鍵／Mot_Table CardModel／IO_Table ISABase 判斷技術，再看開卡入口、開機順序、失敗告警碼（WAR1694／1696／16150／16152／16154）、執行期健康檢查（CheckPCI_L112State／CheckPCI_MN200State／CheckPCI_EtherCatState、ResetMNet）、恢復方式、golden 與移植樹差異。
+
 | 類別 | 說明 | 標頭檔 |
 |------|------|--------|
 | `HTMotor` | 馬達基底類別（抽象介面） | `HTMotor.h` |
@@ -262,6 +264,14 @@ MOT[idx].Motor->PSoftLimitN = -999999;  // 負向軟體極限
 int iEncoderTorence = 500;   // 編碼器到位容許範圍
 int iCheckZ = 4000;          // 輕壓速度的放寬範圍
 ```
+
+### 常設規則：閘與防護看「馬達類別的狀態」，不看機型、軸卡或「表格要不要 1203」（Steven 1005 23:2x）
+
+> 原話：「我們的馬達是class概念，可以使用多種不同的軸卡或是ethercat通訊或是motionnet。你應該看看motor相關的skill才來問這個問題。不應該糾結在1203」（decisions-decided Q119＝E-043 Q-R5）
+
+- 新寫的閘（允許／拒絕動作、停工作）用 `TMyMotor`／`HTMotor` 子類別給的狀態判斷（警報、伺服、到位、讀值能不能用……），同一份規則就適用 MotionNet、各家軸卡與 EtherCAT（上面〈類別繼承架構〉）。
+- 不要用 `W906_GpibModel`、`MachineTypeChoice==Type_HT9050`、`CardType=="PCI1203"` 或「表格需要 1203」當閘的開關。E-043 Revision 1 R2 的 `needs1203`、E-045／E-048 用 HT9050 判斷當開關的寫法都算被取代，改法照 E-043 計畫第 2 版（ST01-E 1005 23:2x 在寫）。
+- 選資料路徑（例：E-038 扭力從 1203 6077h 讀還是 RS-232 讀）是類別／裝置的分派，不是閘，不在這條範圍。
 
 ---
 

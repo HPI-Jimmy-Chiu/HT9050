@@ -225,6 +225,18 @@ For batch scanning and automated replacement, see
 [division-safety.md](division-safety.md) which provides a complete 4-stage
 PowerShell workflow: Search → Filter → Replace → Verify.
 
+### 已知誤報（FP）排除規則
+
+- **字串常量中的 `/`**：`/` 出現在 `"..."` 字串字面值內（例如人類可讀訊息
+  `"Arm 1/Arm 2 Tester Time Up error place to R Bin : "`），**不是除法運算子**，
+  必須在掃描前先移除字串常量內容再套用 P6 regex。
+  案例：`atester_32Site.cpp:2850`
+  `MyDBIProcess("Message", "Arm 1/Arm 2 Tester Time Up error place to R Bin : "+AnsiString(...)+" pcs" );`
+  → `/` 在 `"Arm 1/Arm 2..."` 字串內，右側緊接的 `Arm` 被誤判為除數變數。
+  轻量版 `scan_and_report_pre_release.py` 的 `find_p6()` 已加入
+  `strip_string_literals()` 前處理修正此類 FP（見 references/division-safety.md
+  §已內建過濾 表格，字串常量移除為既有規則，此處為輕量掃描腳本補齊同等過濾）。
+
 ---
 
 ## P6b — Type Mismatch After ChangeToFloatNonPcnt (UB)

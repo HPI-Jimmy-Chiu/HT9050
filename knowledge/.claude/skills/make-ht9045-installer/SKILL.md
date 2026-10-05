@@ -40,7 +40,7 @@ description: >-
 
 ```powershell
 # 範例：切換為 AMD 客製 Beta；還原用 "" ""
-python "d:\.github\skills\make-ht9045-installer\scripts\set_nsi_flags.py" "TF-AMD_" "_BETA"
+python "D:\HT9045\.claude\skills\make-ht9045-installer\scripts\set_nsi_flags.py" "TF-AMD_" "_BETA"
 ```
 
 ---

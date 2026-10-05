@@ -67,7 +67,7 @@
 3. 轉換 HTML：
 
 ```powershell
-python "d:\.github\skills\make-report-skill\scripts\md_to_html.py" <output.md> --template blue
+python "D:\HT9045\.claude\skills\make-report-skill\scripts\md_to_html.py" <output.md> --template blue
 ```
 
 ---

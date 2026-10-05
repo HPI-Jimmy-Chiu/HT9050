@@ -82,7 +82,7 @@
 - `13:0x` 表示 13:00～13:09；`13:xx` 表示那個小時內、分鐘不確定。
 - Steven 下指示的時間找不到直接對應的 commit：寫「約 HH:MM 前」並註明依據哪兩顆 commit 推估。例：`12:0x（⛔更正：無直接 commit 可查，依前後 commit 0b1f4204 12:13／c913d5e5 12:26 推估約 12:1x 前）`。
 - 跨日：20260926 21:35 起 commit 已經是 20260927，ChangeLog 與日報**檔名維持 20260926**，內文時間一律標「09-27 hh:mm」避免跟 26 日混淆；範圍指令跨日時改用 `--date=format:"%m-%d %H:%M"`。
-- 什麼時候開新一天的檔（新的 `CHANGES_YYYYMMDD_Steven.md`、新的日報）：由 ST01-E 在派工訊息裡說；沒說就繼續寫同一份（新檔的檔頭格式照 `D:\.github\skills\make-report-skill\references\change-log\change-log.md` 與 `D:\.github\prompts\ops-daily-worklog.prompt.md`）。
+- 什麼時候開新一天的檔（新的 `CHANGES_YYYYMMDD_Steven.md`、新的日報）：由 ST01-E 在派工訊息裡說；沒說就繼續寫同一份（新檔的檔頭格式照 `D:\HT9045\.claude\skills\make-report-skill\references\change-log\change-log.md` 與 `D:\HT9045\.claude\commands\ops-daily-worklog.md`）。
 
 ## 6. 題目與裁決
 

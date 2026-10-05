@@ -1,6 +1,6 @@
 import os, re, sys
 
-ROOTS = [("HT9045", "D:/HT9045/.claude/skills"), ("user", "D:/.github/skills")]
+ROOTS = [("HT9045", "D:/HT9045/.claude/skills")]  # 20261005: D:/.github retired
 OUT = sys.argv[1]
 
 
@@ -64,7 +64,7 @@ for tag, root in ROOTS:
 
 with open(OUT, "w", encoding="utf-8") as f:
     f.write("<!-- AUTO TABLE START -->\n")
-    for tag in ("HT9045", "user"):
+    for tag in ("HT9045",):
         sub = [r for r in rows if r[0] == tag]
         f.write(f"\n### {tag}（{len(sub)}）\n\n| skill | 行 | 做什麼 | 關鍵字 | references |\n|---|--:|---|---|---|\n")
         for _, name, n, summ, kw, rs in sub:

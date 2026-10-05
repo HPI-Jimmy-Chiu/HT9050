@@ -16,8 +16,10 @@
 
 ```bat
 node assets\smoke-test.js "<你的 html>"
-python d:\.github\skills\Make-Report-Skill\scripts\verify_animation_html.py "<你的 html>"
+python D:\HT9045\.claude\skills\make-report-skill\scripts\verify_animation_html.py "<你的 html>"
 ```
+
+> 20261005 St01 查：`verify_animation_html.py` 在 `D:\HT9045\.claude\skills\make-report-skill\scripts\`、舊的 skill 位置都**不存在**，這一行目前跑不起來；先只跑 `smoke-test.js`。
 
 `smoke-test.js` 用 DOM stub 在 node 裡把整條時間軸跑完（不需要瀏覽器）：
 它會把每個機型組合（Y 變距 有/無 × Pitch Open-Close/Fixed）各跑 3000 格 `render()`，
@@ -234,7 +236,7 @@ BIFF2 記錄實測 100% 是 `LABEL(0x0004)`，連負數馬達位置也是字串�
 
 ## 4. 結構檢查
 
-`Make-Report-Skill\scripts\verify_animation_html.py` 會檢查：
+`make-report-skill\scripts\verify_animation_html.py` 會檢查：
 
 UTF-8 無 BOM、DOCTYPE/charset/lang/title、標籤配對、
 所有 `getElementById()` 目標存在、所有 `var(--x)` 都在 `:root` 有定義、

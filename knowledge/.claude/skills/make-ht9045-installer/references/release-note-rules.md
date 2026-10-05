@@ -1,6 +1,6 @@
 # Release Note 製作規則（Track B）
 
-> 依據 `D:\.github\skills\make-report-skill\SKILL.md` 的 release-note 規範執行。
+> 依據 `D:\HT9045\.claude\skills\make-report-skill\SKILL.md` 的 release-note 規範執行。
 > Track A Step 4 進行中即可同步填入草稿；Track A Step 5 完成後補填 installer 資訊。
 
 ---
@@ -95,7 +95,7 @@ HT-9xxx_Software_Release_Note_V{VERSION}_{YYYYMMDD}_{客戶縮寫}.html
 ## MD → HTML 轉換
 
 ```powershell
-python "d:\.github\skills\make-report-skill\scripts\md_to_html.py" "<output.md>" --template red
+python "D:\HT9045\.claude\skills\make-report-skill\scripts\md_to_html.py" "<output.md>" --template red
 ```
 
 在 Track A 與 Track B 均完成後執行。

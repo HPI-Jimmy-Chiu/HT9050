@@ -22,7 +22,7 @@ description: >
 | 技能 | 工作區 | 負責範圍 |
 |------|--------|---------|
 | **ht9045-customer-code-manager**（本技能） | `d:\HT9045\.github` | **程式碼端**：`#define CC_xxx`（MachineType.h）、`FUNC_CC_xxx` + `case`（CosFunction.cpp）、`rgCustomerList`（HandlerSys.dfm） |
-| **customer-code-manager**（報告端） | `d:\.github\skills\make-report-skill\customer-code\customer-code-manager\SKILL.md` | **報告/索引端**：客戶縮寫表（`customer-code-table.instructions.md`，唯一來源）、地區→代理商→語言映射、Release Note 客戶路由 |
+| **customer-code-manager**（報告端） | `D:\HT9045\.claude\skills\make-report-skill\customer-code\customer-code-manager\SKILL.md` | **報告/索引端**：客戶縮寫表（`customer-code-table.instructions.md`，唯一來源）、地區→代理商→語言映射、Release Note 客戶路由 |
 
 > **同步規則**：
 > - **本技能（程式碼端）為代碼數值與英文符號的來源**（Code Number / `CC_` Symbol）。新增 `CC_` 後，**必須**通知報告端在 `customer-code-table.instructions.md` 補上對應縮寫/代理商/語言。
@@ -96,8 +96,8 @@ description: >
 
 | 資源 | 位置 | 用途 |
 |------|------|------|
-| customer-code-manager（報告端） | `d:\.github\skills\make-report-skill\customer-code\customer-code-manager\SKILL.md` | 報告/索引端雙向同步對應技能（代理商、語言、客戶路由） |
-| 客戶縮寫表（唯一來源） | `d:\.github\instructions\customer-code-table.instructions.md` | 客戶縮寫 + 代理商 + 語言對照表 |
+| customer-code-manager（報告端） | `D:\HT9045\.claude\skills\make-report-skill\customer-code\customer-code-manager\SKILL.md` | 報告/索引端雙向同步對應技能（代理商、語言、客戶路由） |
+| 客戶縮寫表（唯一來源） | `D:\HT9045\.claude\skills\make-report-skill\references\customer-code-table\customer-code-table.instructions.md` | 客戶縮寫 + 代理商 + 語言對照表 |
 | Big5 Encoding | `.copilot\instructions\big5-files.instructions.md` | 確保編碼一致性 |
 | source-map | [references/source-map.md](references/source-map.md) | 檔案位置對照 |
 

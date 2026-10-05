@@ -55,7 +55,7 @@ RD5_個人週報_{人員}_{YYYY}_{MM}_{DD}.html
 - 在生成週報前，**自動執行個人出差報告腳本**，取得本週 CRM 出差/客戶服務回覆紀錄
 - 執行方式：
   ```powershell
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "d:\.github\skills\make-report-skill\scripts\generate_personal_travel_report.ps1" -StartDate "{YYYYMMDD（週開始日）}"
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\HT9045\.claude\skills\make-report-skill\scripts\generate_personal_travel_report.ps1" -StartDate "{YYYYMMDD（週開始日）}"
   ```
 - 將 CRM 查詢結果中每一筆「客戶服務明細檔」或出差記錄，整合進週報表中：
   - `客戶` 欄：填入 CRM 回傳的客戶/案件名稱（若無則填 `-`）
@@ -114,7 +114,7 @@ Get-ChildItem $histRoot -Recurse -Filter "entries.json" | ForEach-Object {
 ## HTML 生成指令
 
 ```bash
-python "d:\.github\skills\make-report-skill\scripts\md_to_html.py" <input.md> --template weekly
+python "D:\HT9045\.claude\skills\make-report-skill\scripts\md_to_html.py" <input.md> --template weekly
 ```
 
 > ⚠️ 週報格式，必須使用 `--template weekly`。
