@@ -1400,4 +1400,9 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      操作紀錄 oplog_20261005.txt：新增 6599 行
      設定檔變動：machine_params/D_GPIB9045_system/general.ini、machine_params/D_HT9045_system/Gerneral.ini、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/lastdata_backup2.dat、machine_params/D_HT9045_system/machinerecord.dat、machine_params/runcfg/system/teach.ini
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+=== tools 0162 (20261005, machine) -- HTML designer (tools/vscode-htdesigner), version stays 0.162.0 ===
+- F5 starts at once when the program is already built and no source is newer (the wait page still opens);
+  otherwise it builds as before. Solution Explorer's start button spins orange during F5's build again. (EastSun 1005)
+- Tests: run_all 3/3 layers; real VS Code 156/159 (3 known stale checks).
+- ! For the laptop: still not taken -- machine patches tools 0136 / 0143 / 0145 / 0147 / 0149 - 0162.
 MD5 清單在 MANIFEST_MD5.tsv。
