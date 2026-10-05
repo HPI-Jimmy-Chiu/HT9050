@@ -1,0 +1,345 @@
+From bce3d7cd4ee4d7a268b6f20a11065a8809d78f7c Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Mon, 5 Oct 2026 18:29:12 +0800
+Subject: [PATCH] PKG-148 (web): GitHub main f38cae6 -- ht9045_link.js web
+ reconnect (commands fail at once while disconnected, never replayed); line
+ endings kept CRLF
+
+---
+ page/ht9045_link.js | 202 ++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 193 insertions(+), 9 deletions(-)
+
+diff --git a/page/ht9045_link.js b/page/ht9045_link.js
+index 174d8a7..86727c7 100644
+--- a/page/ht9045_link.js
++++ b/page/ht9045_link.js
+@@ -22,6 +22,9 @@
+ //   iframe -> hub   {ht9045link:'hello', v:1, url, name}  (window.postMessage, transfers port2)
+ //                   {k:'send', data}   {k:'bye'}   {k:'pong'}
+ //   hub -> iframe   {k:'welcome'}  {k:'open'}  {k:'msg', data}  {k:'close', code, reason}  {k:'ping'}
++//                   {k:'suspend'}  {k:'resume'}   AI(W906-J11-RECONNECT-A) 20261005: the transport dropped /
++//                   came back. NOT a close: the page keeps its VSock (readyState stays OPEN) and its
++//                   half-typed input; it sees 'reconnecting' / 'reconnected' and then a fresh snapshot.
+ //
+ // HUB RULES
+ //   * every command is forwarded EXACTLY ONCE, never retried here (WebCmdGuardGlobal would call a retry
+@@ -83,6 +86,20 @@
+                                                         //   takeover elsewhere is noticed within this -- review R1: a stale screen that still believes it holds
+                                                         //   the token would take it back on a reconnect). A held acquire is not op-logged (wb_serve OpQuiet).
+   var SCREEN_REGAIN_MS = CFG.screenRegainMs || 60000;   // AI(W906-SCREEN-TOKEN) 20261001: while NOT held, try to regain this often (a refusal is op-logged)
++  //AI(W906-J11-RECONNECT) 20261002: 斷線自動重連（Jimmy 1002 09:1x 裁決＝A）
++  var RECONNECT_MIN_MS  = CFG.reconnectMinMs  || 1000;  //   第一次等 1 s，之後加倍
++  var RECONNECT_MAX_MS  = CFG.reconnectMaxMs  || 30000; //   上限 30 s（除錯時停很久也不會把伺服器敲爛）
++  var RX_IDLE_MS        = CFG.rxIdleMs        || 20000; //   超過這麼久沒收到任何 server frame ⇒ 視同死線
++                                                        //   ⚠ 要大於 wb_serve 最慢的推送間隔。節拍 500 ms、
++                                                        //     api 快取與 publish 都掛在同一圈，正常每秒都有東西；
++                                                        //     20 s 留給「停一下中斷點看個變數」不誤殺。
++  var RX_IDLE_CHECK_MS  = CFG.rxIdleCheckMs   || 5000;  //   多久檢查一次
++  //AI(W906-J11-RECONNECT-A) 20261005: Jimmy 1002 22:5x 特別交代的「連線逾時」。
++  //  wb_serve 停在中斷點時，OS 會把 TCP 三次握手做完（listen backlog 還在），但應用層
++  //  不會回 WebSocket 升級 ⇒ 瀏覽器的 socket 卡在 CONNECTING，onopen／onclose **都不會來**。
++  //  hub 的 state 就永遠停在 'connecting'，_reSchedule 的 `state !== 'idle'` 讓它不再排重連，
++  //  整條重連鏈就死在這裡。所以要自己計時收掉。
++  var CONNECT_TIMEOUT_MS = CFG.connectTimeoutMs || 10000;
+   var CONNECTING = 0, OPEN = 1, CLOSING = 2, CLOSED = 3;
+ 
+   function now() { return Date.now(); }
+@@ -96,10 +113,11 @@
+     this.readyState = CONNECTING;
+     this.protocol = '';
+     this.onopen = this.onmessage = this.onclose = this.onerror = null;
+-    this._ls = { open: [], message: [], close: [], error: [] };
++    this._ls = { open: [], message: [], close: [], error: [], reconnecting: [], reconnected: [] };   // AI(W906-J11-RECONNECT-A) 20261005
+     this._up = null;        // function(text): hand a frame to the transport
+     this._down = null;      // function(code, reason): tell the transport we close
+     this.via = 'pending';   // 'hub' | 'relay' | 'direct'
++    this.linkState = 'live';   // AI(W906-J11-RECONNECT-A) 20261005: 'live' | 'reconnecting' —— readyState 之外的真實連線狀況，見 _suspend
+   }
+   VSock.CONNECTING = CONNECTING; VSock.OPEN = OPEN; VSock.CLOSING = CLOSING; VSock.CLOSED = CLOSED;
+   VSock.prototype.addEventListener = function (t, f) { (this._ls[t] || (this._ls[t] = [])).push(f); };
+@@ -129,8 +147,34 @@
+   VSock.prototype._opened = function () {
+     if (this.readyState !== CONNECTING) return;
+     this.readyState = OPEN;
++    this.linkState = 'live';
+     this._emit('open');
+   };
++  // ===========================================================================
++  //  AI(W906-J11-RECONNECT-A) 20261005 —— 「重連中」狀態（Jimmy 1002 22:5x，RULINGS_20261002 第 23 條＝A）
++  //
++  //  階段一（654bf62f）讓 hub 的 socket 會自己接回來，但畫面還是死的：_allClosed 把
++  //  this.clients 清空、每個 iframe 的 VSock 走 _closed() 進入終局 CLOSED，沒有任何
++  //  路徑回到 OPEN ⇒ 只有整頁重新載入才會活。Jimmy 的裁決是「讓畫面活過重連」。
++  //
++  //  ⚠ 為什麼 readyState 在重連期間**維持 OPEN**，而不是退回 CONNECTING：
++  //    頁面端大量程式碼是 `if (sock.readyState === OPEN) sock.send(...)`，而 VSock.send
++  //    在非 OPEN 時會 **throw**。退回 CONNECTING 會讓按鈕的 click handler 直接丟例外，
++  //    等於把「暫時沒網路」升級成「頁面壞掉」—— 那正是這張卡要消滅的症狀。
++  //    所以對頁面維持 WebSocket 的契約（OPEN），另外用 `linkState` 表達真實狀況，
++  //    並發 'reconnecting' / 'reconnected' 自訂事件給想顯示指示燈的頁面。
++  //    斷線期間真的送出去的指令不會被吞掉，hub 會當場回 ok:false（見 Hub.fromClient）。
++  // ===========================================================================
++  VSock.prototype._suspend = function () {
++    if (this.readyState !== OPEN || this.linkState === 'reconnecting') return;
++    this.linkState = 'reconnecting';
++    this._emit('reconnecting');
++  };
++  VSock.prototype._resume = function () {
++    if (this.linkState !== 'reconnecting') return;
++    this.linkState = 'live';
++    this._emit('reconnected');
++  };
+   VSock.prototype._message = function (data) {
+     if (this.readyState === OPEN) this._emit('message', { data: data });
+   };
+@@ -174,8 +218,14 @@
+     this.keepTimer = null;          // AI(W906-SCREEN-TOKEN) 20261001: screen keep-alive (SCREEN_KEEP_MS)
+     this.takeNext = true;           // AI(W906-SCREEN-TOKEN) 20261001: review R1 / R3 -- the next socket open sends takeover (else acquire); see _screenStart
+     this.lastHeldOkAt = 0;          //   time of the last ok answer that proved this screen holds the token (screen / keep / page acquire or takeover)
++    this.reTimer = null;            // AI(W906-J11-RECONNECT) 20261002: backoff reconnect timer
++    this.reDelay = 0;               //   current backoff, ms (0 = not backing off); reset to 0 only by a socket that really OPENED
++    this.lastRxAt = 0;              //   time of the last frame FROM wb_serve (idle watchdog; 0 = nothing yet)
++    this.wdTimer = null;            //   idle watchdog timer
+     this.stats = { realOpens: 0, up: 0, down: 0, fanout: 0, localAcks: 0, releasesSent: 0, tagSkipped: 0, tagResync: 0,   // AI(W906-STREAM-F) 20260930: tagSkipped / tagResync
+-                   screenTakes: 0, screenRejoins: 0, screenTakeRefused: 0, screenKeeps: 0, screenLost: 0, screenRegained: 0 };   // AI(W906-SCREEN-TOKEN) 20261001
++                   screenTakes: 0, screenRejoins: 0, screenTakeRefused: 0, screenKeeps: 0, screenLost: 0, screenRegained: 0,   // AI(W906-SCREEN-TOKEN) 20261001
++                   reconnects: 0, reconnectGaveUp: 0, wdFires: 0,   // AI(W906-J11-RECONNECT) 20261002
++                   upDropped: 0, connectTimeouts: 0 };   // AI(W906-J11-RECONNECT-A) 20261005
+   }
+ 
+   Hub.prototype.connect = function () {
+@@ -185,15 +235,33 @@
+     try { ws = new this.WS(this.url); } catch (e) { this.state = 'idle'; this._allClosed(1006, 'cannot open ' + this.url); return; }
+     this.sock = ws;
+     this.stats.realOpens++;
++    //AI(W906-J11-RECONNECT-A) 20261005: 見 CONNECT_TIMEOUT_MS —— 卡在 CONNECTING 的那一路
++    var cto = setTimeout(function () {
++      cto = null;
++      if (self.sock !== ws || self.state !== 'connecting') return;
++      self.stats.connectTimeouts++;
++      try { ws.close(4002, 'connect timeout'); } catch (e) {}
++      //  有些瀏覽器對還沒開起來的 socket 呼叫 close() 不會觸發 onclose ⇒ 自己收尾，
++      //  並把 sock 設成 null，之後那條 socket 若遲到才開，上面每個 handler 的
++      //  `self.sock !== ws` 都會把它擋掉。
++      if (self.sock === ws) { self.sock = null; self.state = 'idle'; self._allClosed(4002, 'connect timeout'); }
++    }, CONNECT_TIMEOUT_MS);
+     ws.onopen = function () {
+       if (self.sock !== ws) return;
++      if (cto) { clearTimeout(cto); cto = null; }
+       self.state = 'open'; opened = true;
++      //AI(W906-J11-RECONNECT) 20261002: 退避**只有在真的開起來**才歸零。connect() 連不上那一路
++      //  （下面 catch）自己會呼叫 _allClosed，若在那裡歸零就變成固定間隔狂敲伺服器。
++      self.reDelay = 0;
++      self.lastRxAt = now();        //   看門狗從這一刻開始算（還沒收到任何 frame 不代表死掉）
++      self._wdSchedule();
+       self._screenStart();          // AI(W906-SCREEN-TOKEN) 20261001: FIRST on the socket, so every page command after it finds this connection the owner
+       Object.keys(self.clients).forEach(function (cid) { self._clientOpen(self.clients[cid]); });
+     };
+     ws.onmessage = function (ev) { if (self.sock === ws) self._fromServer(String(ev.data)); };
+     ws.onclose = function (ev) {
+       if (self.sock !== ws) return;
++      if (cto) { clearTimeout(cto); cto = null; }   // AI(W906-J11-RECONNECT-A) 20261005
+       self.sock = null; self.state = 'idle';
+       // AI(W906-SCREEN-TOKEN) 20261001: review R1 / R3 (read before _allClosed resets the token): an OPENED socket that drops while
+       //   this screen holds the token -- proven by an answer within 1.5 keep periods (a throttled hidden tab's belief is older) --
+@@ -211,12 +279,85 @@
+     this.token = { held: false, holders: {}, pend: {} };
+   };
+ 
++  //AI(W906-J11-RECONNECT-A) 20261005: 傳輸層掉線**不再**是每個 client 的終局。
++  //  以前這裡 `this.clients = {}` ＋ 逐一 `closed()`，等於告訴每個 iframe「你死了」；
++  //  VSock._closed 的 CLOSED 是終局（:145 `if (this.readyState === CLOSED) return;`），
++  //  所以即使 socket 之後重連成功也沒有對象可以通知，只有整頁重新載入才會活。
++  //  現在：**保留註冊表**，把每個 client 標成未開啟並通知「重連中」；
++  //  重連成功後 connect() 的 ws.onopen 既有的那一行
++  //  （`Object.keys(self.clients).forEach(... _clientOpen ...)`）就會把它們一一喚醒，
++  //  並補一份合成快照。真正的終局（bye／port 關閉／ping 掉光）仍然走 remove()＋closed()。
+   Hub.prototype._allClosed = function (code, reason) {
+-    var self = this, cs = this.clients;
+-    this.clients = {};
++    var self = this;
+     this._resetSession();
+-    Object.keys(cs).forEach(function (cid) { cs[cid].closed(code || 1006, reason || ''); });
++    Object.keys(this.clients).forEach(function (cid) {
++      var c = self.clients[cid];
++      c.isOpen = false;                                   // 讓重連後的 _clientOpen 會再跑一次
++      c.held = null;                                      // 伺服器那邊已經沒有這條連線了，持有的 jog 不再屬於我們
++      if (c.suspended) { try { c.suspended(code || 1006, reason || ''); } catch (e) {} }
++    });
+     this._pingSchedule();
++    this._wdStop();                 // AI(W906-J11-RECONNECT) 20261002
++    this._reSchedule(this.clients); // AI(W906-J11-RECONNECT) 20261002: 見下方（A 之後註冊表還在，直接傳它）
++  };
++
++  // ===========================================================================
++  //  AI(W906-J11-RECONNECT) 20261002 —— 斷線自動重連（Jimmy 1002 09:1x 裁決＝A，FROM_JERRY J-11）
++  //
++  //  以前：ws.onclose -> _allClosed 只做清理，state 留在 'idle' 就停住，**沒有人再連**。
++  //  唯一會重連的路徑是 Hub.add()（`else this.connect()`）—— 所以操作員 Ctrl+Shift+R
++  //  產生新 client 才會好。這就是 1002 實測的那條鏈：停在中斷點 → socket 掉 →
++  //  10 秒後 page-table 判定「沒有 HMI 畫面」正常 STOP ＋ MES16441 → 之後告警框按了沒反應
++  //  （modal.answer 走 WebSocket）→ 只能重新整理。
++  //
++  //  權杖不在這裡處理：ws.onclose 已經在 _allClosed 清 token **之前**決定好 takeNext
++  //  （AI(W906-SCREEN-TOKEN) 20261001，:201 "read before _allClosed resets the token"），
++  //  重連成功後 _screenStart 會照那個決定送 takeover 或 acquire ——
++  //  正是 Jimmy 裁決的「重連的畫面就是最新的畫面 → 照 RULINGS_20261001 第 31 條 takeover」。
++  //  C++ 不用改：停機對話框伺服器對每條新連線本來就補送（NB2 R124 實測）。
++  // ===========================================================================
++  Hub.prototype._reSchedule = function (hadClients) {
++    var self = this;
++    if (this.reTimer) return;                                   // 已經排了
++    //  沒有任何 iframe 在等資料就不要重連：這與 remove() 的 IDLE_CLOSE_MS（沒有 client 就
++    //  關 socket）是同一個語意，不然兩邊會互相打架。下一個 Hub.add() 會自己 connect()。
++    if (!hadClients || !Object.keys(hadClients).length) { this.stats.reconnectGaveUp++; return; }
++    this.reDelay = this.reDelay ? Math.min(this.reDelay * 2, RECONNECT_MAX_MS) : RECONNECT_MIN_MS;
++    var wait = this.reDelay;
++    this.reTimer = setTimeout(function () {
++      self.reTimer = null;
++      if (self.state !== 'idle') return;                        // 期間已經有人連上了（例如 Hub.add）
++      //AI(W906-J11-RECONNECT-A) 20261005: A 之後註冊表活著，但斷線這段期間 iframe 仍可能
++      //  全部關掉（bye／ping 掉光 → remove()）。那時 this.sock 已經是 null，remove() 的
++      //  IDLE_CLOSE_MS 分支（`&& this.sock`）不會排 —— 若還是重連就留下一條沒人用的連線。
++      if (!Object.keys(self.clients).length) { self.stats.reconnectGaveUp++; return; }
++      //  ⚠ 階段一（654bf62f）時這裡**不可以**看 self.clients —— 當時 _allClosed 會先把它
++      //    清成 {}（第一版就是這樣寫的，結果每次都走 reconnectGaveUp、一次都沒重連，
++      //    Jerry 實測「中斷 30 秒後繼續，畫面還是死的」），所以證據只能是傳進來的 hadClients。
++      //    AI(W906-J11-RECONNECT-A) 20261005：A 之後 _allClosed **不再清空**註冊表，
++      //    hadClients 就是 this.clients 本身；改成在上面多一道「現在還有沒有 client」的檢查。
++      self.stats.reconnects++;
++      self.connect();                                           // 失敗會再走 _allClosed，退避繼續加倍
++    }, wait);
++  };
++
++  //  閒置看門狗：wb_serve 停在中斷點時是「活著但不回應」—— TCP 沒有關，onclose 不會觸發，
++  //  瀏覽器端的 socket 可能一直是 OPEN。所以光靠 onclose 救不了 1002 實測的那個情境。
++  //  ⚠ 這條是 hub ↔ wb_serve；既有的 PING_MS(5000) 是 hub ↔ iframe，兩者不同。
++  Hub.prototype._wdSchedule = function () {
++    var self = this;
++    this._wdStop();
++    this.wdTimer = setTimeout(function () {
++      self.wdTimer = null;
++      if (self.state !== 'open' || !self.sock) return;
++      if (now() - self.lastRxAt < RX_IDLE_MS) { self._wdSchedule(); return; }   // 還有在收，繼續看
++      self.stats.wdFires++;
++      try { self.sock.close(4001, 'rx idle'); } catch (e) {}                    // 走正常的 onclose -> _allClosed -> 重連
++    }, RX_IDLE_CHECK_MS);
++  };
++
++  Hub.prototype._wdStop = function () {
++    if (this.wdTimer) { clearTimeout(this.wdTimer); this.wdTimer = null; }
+   };
+ 
+   // client = {id, name, deliver(text), opened(), closed(code, reason), port?: bool, win?, missed, held:{button: {source, motors}}, source}
+@@ -234,7 +375,11 @@
+   Hub.prototype._clientOpen = function (c) {
+     if (c.isOpen) return;
+     c.isOpen = true;
+-    c.opened();
++    //AI(W906-J11-RECONNECT-A) 20261005: 第一次開 = opened()（頁面收到 WebSocket 的 'open'）；
++    //  斷線後再回來 = resumed()，頁面**不會**再收到第二次 'open'（它從來沒收過 'close'），
++    //  只會收到 'reconnected' 與下面那份新的合成快照。
++    if (c.wasOpen && c.resumed) { try { c.resumed(); } catch (e) {} }
++    else { c.opened(); c.wasOpen = true; }
+     if (this.snapMeta) {
+       var snap = {};
+       Object.keys(this.snapMeta).forEach(function (k) { snap[k] = this.snapMeta[k]; }, this);
+@@ -328,9 +473,23 @@
+     }
+   };
+ 
++  //AI(W906-J11-RECONNECT-A2) 20261005: 「這條線現在真的能送嗎」的單一判準。
++  //  ⚠ 只看 this.state 不夠 —— Jerry 1005 用 F6（暫停 wb_serve，不是停止）實測抓到：
++  //    伺服器凍住時 TCP 不會斷，所以 hub.state 一直是 'open'、this.sock 也非 null；
++  //    閒置看門狗在 20 s 時呼叫 sock.close(4001)，socket 進入 CLOSING，但 onclose 要等
++  //    對方回關閉握手 —— 對方凍住，所以那個空窗期很長。期間 send() 會丟
++  //    「WebSocket is already in CLOSING or CLOSED state」。所以必須看 socket 自己的 readyState。
++  Hub.prototype._linkUp = function () {
++    return this.state === 'open' && !!this.sock && this.sock.readyState === OPEN;
++  };
++
+   Hub.prototype._up = function (text) {
++    //AI(W906-J11-RECONNECT-A) 20261005: 斷線期間 this.sock 是 null。A 之前不會走到這裡
++    //  （client 都死了），A 之後要自己擋，否則是 TypeError: sock is null。
++    if (!this._linkUp()) { this.stats.upDropped++; return false; }
+     this.stats.up++;
+-    this.sock.send(text);
++    try { this.sock.send(text); } catch (e) { this.stats.upDropped++; return false; }   // AI(W906-J11-RECONNECT-A2) 20261005: readyState 與 send 之間仍有競態
++    return true;
+   };
+ 
+   Hub.prototype._localAck = function (c, lid, ok, error, extra) {
+@@ -414,7 +573,17 @@
+   // a frame from one client
+   Hub.prototype.fromClient = function (cid, text) {
+     var c = this.clients[cid];
+-    if (!c || this.state !== 'open') return;
++    if (!c) return;
++    //AI(W906-J11-RECONNECT-A) 20261005: A 之後 client 活過斷線 ⇒ 斷線期間**真的會**有指令送進來
++    //  （以前 client 當場死掉，所以沒人會送，這裡只是 `return` 靜默丟掉）。
++    //  現在當場回 ok:false，讓頁面知道失敗、操作員自己重按。
++    //  ⛔ 絕不排隊重送：把幾秒前的 STOP／JOG 補送到會動的機台上，比誠實失敗危險得多。
++    if (!this._linkUp()) {
++      var mq = parse(text);
++      if (mq && typeof mq === 'object' && typeof mq.id === 'number')
++        this._localAck(c, mq.id, false, 'link.reconnecting');
++      return;
++    }
+     var m = parse(text);
+     if (!m || typeof m !== 'object' || typeof m.id !== 'number') { this._up(text); return; }
+     var lid = m.id, name = m.type === 'cmd' ? String(m.cmd || '') : '';
+@@ -482,7 +651,15 @@
+     var gid = this.nextGid++;
+     this.inflight[gid] = { cid: +cid, lid: lid, kind: 'cmd' };
+     m.id = gid;
+-    this._up(JSON.stringify(m));   // exactly once; no retry here
++    //AI(W906-J11-RECONNECT-A2) 20261005: 送不出去就**當場回覆並撤掉 inflight**。
++    //  以前（A 的第一版）只是讓 _up 回 false，那筆 inflight 變成孤兒，頁面要空等到自己的
++    //  15 秒逾時 —— Jerry 1005 的 F6 實測 log 裡的 `vacuum.get: no ack within 15000ms`
++    //  與 `ui.windows.put: no ack within 15000ms` 就是這個。
++    if (!this._up(JSON.stringify(m))) {   // exactly once; no retry here
++      delete this.inflight[gid];
++      var c = this.clients[cid];
++      if (c && lid) this._localAck(c, lid, false, 'link.reconnecting');
++    }
+   };
+ 
+   Hub.prototype._dupExtra = function (hr) {
+@@ -519,6 +696,7 @@
+ 
+   Hub.prototype._fromServer = function (text) {
+     this.stats.down++;
++    this.lastRxAt = now();          // AI(W906-J11-RECONNECT) 20261002: 任何一個 server frame 都算「還活著」（看門狗看這個）
+     var m = parse(text), self = this;
+     if (m && m.type === 'ack' && typeof m.id === 'number') {
+       var r = this.inflight[m.id];
+@@ -605,6 +783,8 @@
+       deliver: function (t) { later(function () { vs._message(t); }); },
+       opened: function () { later(function () { vs._opened(); }); },
+       closed: function (code, reason) { later(function () { vs._closed(code, reason, false); }); },
++      suspended: function () { later(function () { vs._suspend(); }); },   // AI(W906-J11-RECONNECT-A) 20261005
++      resumed: function () { later(function () { vs._resume(); }); },      // AI(W906-J11-RECONNECT-A) 20261005
+     };
+     var cid = hub.add(c);
+     vs.via = 'hub';
+@@ -626,6 +806,8 @@
+       deliver: function (t) { port.postMessage({ k: 'msg', data: t }); },
+       opened: function () { port.postMessage({ k: 'open' }); },
+       closed: function (code, reason) { try { port.postMessage({ k: 'close', code: code, reason: reason }); } catch (e) {} },
++      suspended: function () { try { port.postMessage({ k: 'suspend' }); } catch (e) {} },   // AI(W906-J11-RECONNECT-A) 20261005
++      resumed: function () { try { port.postMessage({ k: 'resume' }); } catch (e) {} },      // AI(W906-J11-RECONNECT-A) 20261005
+       ping: function () { port.postMessage({ k: 'ping' }); },
+     };
+     // welcome FIRST: hub.add() may answer 'open' at once (already connected), and the iframe must have
+@@ -711,6 +893,8 @@
+       }
+       if (port !== bound) return;                     // traffic for a channel that did not bind
+       if (x.k === 'open') vs._opened();
++      else if (x.k === 'suspend') vs._suspend();   // AI(W906-J11-RECONNECT-A) 20261005
++      else if (x.k === 'resume') vs._resume();     // AI(W906-J11-RECONNECT-A) 20261005
+       else if (x.k === 'msg') vs._message(x.data);
+       else if (x.k === 'ping') port.postMessage({ k: 'pong' });
+       else if (x.k === 'close') { forget(vs); try { port.close(); } catch (e5) {} closeTries(); vs._closed(x.code, x.reason, false); }
+-- 
+2.55.0.windows.5
+
