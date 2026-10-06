@@ -1,0 +1,241 @@
+From 9eec18d7a277d21d8f5e5fecc179fdd43f94cbfe Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 6 Oct 2026 17:16:47 +0800
+Subject: [PATCH] =?UTF-8?q?PLCMODEL:=20safety-PLC=20model=20branch=20--=20?=
+ =?UTF-8?q?SafePlcModel=3D1=20reads=20the=20Reer=20MOSAIC=20M1S=20COM=20Sy?=
+ =?UTF-8?q?stem=20I/O=20block=20per=20the=20vendor=20manual;=200=20=3D=20g?=
+ =?UTF-8?q?olden=20--=20EastSun=201006=20'agent=20=E5=88=86=E6=9E=90=20?=
+ =?UTF-8?q?=E5=AE=89=E5=85=A8PLC.pdf=20=E7=9C=8B=E7=9C=8B=E8=B7=9F?=
+ =?UTF-8?q?=E8=BB=9F=E9=AB=94=E6=98=AF=E5=90=A6=E4=B8=8D=E4=B8=80=E6=A8=A3?=
+ =?UTF-8?q?'=20->=20'=E8=A8=98=E5=BE=97PLC=20=E8=A6=81=E7=94=A8=E5=9E=8B?=
+ =?UTF-8?q?=E8=99=9F=E5=88=86=E6=94=AF=E5=87=BA=E5=8E=BB=E5=96=94'.=20Back?=
+ =?UTF-8?q?up=20branch=20backup/pre-plcmodel-20261006.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Manual (D:\HT9045\_vendor_manuals\安全PLC.pdf = Reer 'Process data mapping for M1S COM Master module V2.0' 8547780 Rev.4, p.28): Modbus FC3/FC4 System I/O at registers 0x400-0x410 (17 registers, low byte = even-numbered byte): 0x400 lo System status, 0x401-0x408 Input status bytes 0-15, 0x409-0x40A Restart, 0x40B-0x40C Fieldbus feedback, 0x40D-0x40E Probe, 0x40F-0x410 OSSD; 0x000-0x001 is the host's WRITE area. Golden reads FC4 0x0000 x11 -> the write area plus undefined registers. Measured read-only on this machine: 0x0000 x11 = 22 zero bytes, unchanged for 20 min; 0x400 x17 = System status 0x01, Input bytes 0x55 0x15 0x10 0x05, Restart byte 0 = 0x04, OSSD 0; control 0x620 (project CRC 0x4D29, date 2026-09-13) non-zero; 0x500 error codes 0.
+
+Code (all same-line edits except the new function at the end of MyPLC_IO_Modbus.cpp): Gerneral.ini [System] SafePlcModel -> iSafePlcModel (cmydef.cpp/.h, read in database.cpp next to SafePlcIO). PLCIOTaskCycle: model 1 requests FC4 0x400 x17; the reply goes through W906_PlcM1SFill, which lays it into golden's InPortData_Byte ([0] System status, [1+n] Input status byte n, [20..21] OSSD bytes 0..1) so golden's bit split, MyLaneIo IOInputBit (Port 0x300+n -> Input byte n via the +1 index) and TMyPLC_IO_Modbus::IsOn stay unchanged. Model 0 = golden, byte for byte. tests/test_myplc_modbus.cpp [4]: the 34 bytes measured on the machine as the reply -> parse and Port 0x300..0x303 mapping (7 checks pass; the request address itself is confirmed by reading the code -- the SIM socket's tx is not reachable from the test).
+
+Machine data (pushed by push_stage's machine_params snapshot): Gerneral.ini + SafePlcModel=1 under SafePlcIO=0 (backup Gerneral.ini.bak_plcmodel_20261006_171604); SafePlcIO stays 0 until the E-STOP / door bits are mapped (the 0x400 watch saw Input byte 4 bit 0 and byte 1 bits 0/2 change 17:03-17:11; EastSun to say what was operated; golden MyLaneIo only maps Port 0x300-0x303 = Input bytes 0-3).
+
+o2 full build 0 errors; ctest 384/402, failures = the known list; production_audit passes; Debug and release wb_serve rebuilt. WORKLOG item 135.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ MyPLC/MyPLC_IO_Modbus.cpp   | 46 +++++++++++++++++++++++++----
+ cmydef.cpp                  |  2 +-
+ cmydef.h                    |  2 +-
+ database.cpp                |  2 +-
+ docs/WORKLOG_MACHINE.md     |  1 +
+ tests/test_myplc_modbus.cpp | 58 +++++++++++++++++++++++++++++++++++++
+ 6 files changed, 103 insertions(+), 8 deletions(-)
+
+diff --git a/MyPLC/MyPLC_IO_Modbus.cpp b/MyPLC/MyPLC_IO_Modbus.cpp
+index 3ef2a2f..ca119d9 100644
+--- a/MyPLC/MyPLC_IO_Modbus.cpp
++++ b/MyPLC/MyPLC_IO_Modbus.cpp
+@@ -79,7 +79,7 @@ std::vector<TMyPLC_IO_Modbus*> TMyPLC_IO_Modbus::PLC_IO_Members;
+ 
+ int iTransactionID=0;
+ int iPLCIOTask=-1;
+-int iPLCStatusTask=-1;                                                          //ben 20230913 add
++int iPLCStatusTask=-1;  static void W906_PlcM1SFill(int slave, const VTBYTEDATA& data);   //ben 20230913 add   //AI(W906-PLCMODEL) 20261006: model 1 parser, end of this file; same line
+ 
+ bool bOSSDData[INPUT_MAX_Slave][2][8];
+ bool bScanSlave[INPUT_MAX_Slave];
+@@ -236,11 +236,11 @@ void PLCIOTaskCycle()
+ 
+             if(bScanSlave[iSlave])
+             {
+-                data.push_back(HIBYTE((INPUT_MAX_REGISTER+1)/2));               //一個Register為1個Byte 但一個位址包含兩個Register (one register is one byte, but one address spans two registers)
+-                data.push_back(LOBYTE((INPUT_MAX_REGISTER+1)/2));
++                data.push_back(HIBYTE(iSafePlcModel==1 ? 17 : (INPUT_MAX_REGISTER+1)/2));   //一個Register為1個Byte 但一個位址包含兩個Register (one register is one byte, but one address spans two registers)   //AI(W906-PLCMODEL) 20261006: model 1 (Reer M1S COM) = 17 registers 0x400-0x410 (manual 8547780 p.28)
++                data.push_back(LOBYTE(iSafePlcModel==1 ? 17 : (INPUT_MAX_REGISTER+1)/2));   //AI(W906-PLCMODEL) 20261006: same
+                 //PLC Reg 30001 == 0x00 回應的資料為2Byte資料 30002 30001 但30001為系統狀態 輸入暫存器從30002開始 (the reply for PLC Reg 30001==0x00 is 2 bytes: 30002,30001 -- but 30001 is system status, the input registers actually start at 30002)
+                 //PLC Reg 30003 == 0x01 回應的資料為2Byte資料 30004 30003 (the reply for PLC Reg 30003==0x01 is 2 bytes: 30004,30003)
+-                PlcComm.SendData(iTransactionID, iSlave, 4, 0x00, data);
++                PlcComm.SendData(iTransactionID, iSlave, 4, iSafePlcModel==1 ? 0x400 : 0x00, data);   //AI(W906-PLCMODEL) 20261006: model 1 reads from 0x400 (System I/O; 0x000-0x001 there are the host's WRITE area -- why model 0's address read all zero on this machine)
+                 hCheckTime.SetSecAndOn(1);
+                 Task=100;
+             }
+@@ -251,7 +251,7 @@ void PLCIOTaskCycle()
+             break;
+         case 100:
+             if(PlcComm.GetRecevie(iTransactionID,data))                         //讀取成功 (read succeeded)
+-            {                                                                   //寫入Byte陣列 (write into the byte array)
++            {   if(iSafePlcModel==1) W906_PlcM1SFill(iSlave, data); else        //寫入Byte陣列 (write into the byte array)   //AI(W906-PLCMODEL) 20261006: model 1 lays the M1S System I/O block into the same byte array (end of file), then golden's bit split below runs unchanged; model 0 = golden's byte loop on the next line. Same line
+                 for(int i=0; i<(int)data.size(); i++)
+                 {
+                     if(i<INPUT_MAX_REGISTER)
+@@ -387,3 +387,39 @@ void bPLCStatusCheck()
+     PlcComm.Cycle();
+ }
+ //------------------------------------------------------------------------------
++//AI(W906-PLCMODEL) 20261006: EastSun 1006「PLC 要用型號分支出去」-- Gerneral.ini [System] SafePlcModel=1 = Reer MOSAIC M1S COM
++//  (Modbus TCP), vendor manual "Process data mapping for M1S COM Master module V2.0" 8547780 Rev.4 (D:\HT9045\_vendor_manuals\
++//  安全PLC.pdf) p.28: FC3/FC4 System I/O at registers 0x400-0x410 (17 registers); each register carries two bytes, the LOW byte
++//  being the even-numbered one:
++//      0x400       lo = System status, hi = reserved
++//      0x401-0x408 Input status bytes 0-15        0x409-0x40A Restart input bytes 0-3
++//      0x40B-0x40C Fieldbus feedback bytes 0-3    0x40D-0x40E Probe status bytes 0-3
++//      0x40F-0x410 OSSD status bytes 0-3 (the manual's table draws these two high byte first; read here like the others --
++//                  golden forces bIOPowered=true right after, so nothing reads them yet)
++//  Golden's request (model 0: FC4 from 0x0000, 11 registers) lands on 0x000-0x001 = the host's WRITE area (FC6/FC16 "Fieldbus
++//  inputs") and 0x002-0x00A, which the manual does not define -- measured on this machine 20261006: 22 zero bytes for 20 min,
++//  while 0x400 x17 returned System status 0x01 and Input bytes 0x55 0x15 0x10 0x05 (control: CRC/date at 0x620 non-zero).
++//  This lays the block into golden's byte array so EVERYTHING downstream is golden's, unchanged:
++//      InPortData_Byte[slave][0]      = System status
++//      InPortData_Byte[slave][1+n]    = Input status byte n (n = 0..15)  -> golden's "+1" index (MyLaneIo.cpp IOInputBit,
++//                                       TMyPLC_IO_Modbus::IsOn, iPLCSafetyVer != 202204) maps IO_Table Port 0x300+n to Input byte n
++//      InPortData_Byte[slave][17..19] = 0
++//      InPortData_Byte[slave][20..21] = OSSD status bytes 0..1 -> golden's j>=20 branch fills bOSSDData[slave][0..1]
++//  golden's bit split (the loop after this call in PLCIOTaskCycle case 100) then fills bPLCInData / bOSSDData as before.
++//  ModbusTCPClient::GetRecevie hands the register bytes as sent on the wire (high byte first per register).
++static void W906_PlcM1SFill(int slave, const VTBYTEDATA& data)
++{
++    if(slave<0 || slave>=INPUT_MAX_Slave)
++        return;
++    unsigned char m[34]={0};
++    for(int i=0; i<(int)data.size() && i<34; i++)
++        m[(i/2)*2 + ((i%2)==0 ? 1 : 0)]=data[i];                              // wire hi,lo -> manual byte order lo,hi
++    for(int j=0; j<INPUT_MAX_REGISTER; j++)
++        InPortData_Byte[slave][j]=0;
++    InPortData_Byte[slave][0]=m[0];                                             // System status
++    for(int n=0; n<16 && 1+n<20; n++)
++        InPortData_Byte[slave][1+n]=m[2+n];                                     // Input status byte n
++    InPortData_Byte[slave][20]=m[30];                                           // OSSD status byte 0
++    InPortData_Byte[slave][21]=m[31];                                           // OSSD status byte 1
++}
++//------------------------------------------------------------------------------
+diff --git a/cmydef.cpp b/cmydef.cpp
+index 5dca541..b6b04b4 100644
+--- a/cmydef.cpp
++++ b/cmydef.cpp
+@@ -5901,7 +5901,7 @@ bool bCheckOpenDoor=true;
+ //Kevin 20231209 : for ASE KH
+ 
+ bool Enable_PLCSafety_IO=false;                                                 //Austin 20190531.01 增加PLC_IO模組及安全相關IO.
+-int iPLCSafetyVer=0;                                                            //joe 20220406.01 debug safe plc
++int iPLCSafetyVer=0;  int iSafePlcModel=0;                                      //joe 20220406.01 debug safe plc   //AI(W906-PLCMODEL) 20261006: + iSafePlcModel = Gerneral.ini [System] SafePlcModel -- 0 = golden's register map, 1 = Reer MOSAIC M1S COM (MyPLC_IO_Modbus.cpp); same line
+ int iWhichShtPickFor=0;
+ int iPickFromPlateMode=0;
+ int iEnabledSiteCount=0;                                                        //Steven 20231220 : 牛信保說要開site數量SVID 1250
+diff --git a/cmydef.h b/cmydef.h
+index 218bdbe..4f11a66 100644
+--- a/cmydef.h
++++ b/cmydef.h
+@@ -5611,7 +5611,7 @@ extern AnsiString asProductionByFileNamePath;
+ extern int iDynamicThresholdNum;                                                //JimmyChiu 20240411 : Dynamic multiplier for Continual Pass Bin( Socket )
+ 
+ extern bool Enable_PLCSafety_IO;                                                //Austin 20190531.01 增加PLC_IO模組及安全相關IO.
+-extern int iPLCSafetyVer;                                                       //joe 20220406.01 debug safe plc
++extern int iPLCSafetyVer;  extern int iSafePlcModel;                            //joe 20220406.01 debug safe plc   //AI(W906-PLCMODEL) 20261006: + iSafePlcModel (cmydef.cpp); same line
+ extern int iWhichShtPickFor;                                                    //Steven 20231208 : 判斷多吸嘴模式的Shuttle
+ //Kevin 20231209 : for ASE KH
+ //===>
+diff --git a/database.cpp b/database.cpp
+index 7eb1bfa..07ca93c 100644
+--- a/database.cpp
++++ b/database.cpp
+@@ -1667,7 +1667,7 @@ void SYSTEM_MODULAR::ReadGeneralIni()
+     INDEXDOORHEATER             =CheckAndReadIniDataGeneral("System", "IndexDoorHeater",                0);
+     //Ztex 2023.04.19 Add HT-1032 TriTemp Function <==
+     iAutoFormSize               =CheckAndReadIniDataGeneral("System", "iAutoFormSize",      0);                         //Jimmychiu 20231130: switch to allow Auto form size
+-    Enable_PLCSafety_IO         =CheckAndReadIniDataGeneral("System",  "SafePlcIO",         0);                         //Jason 20230619 add PLC_IO module + safety-related IO
++    Enable_PLCSafety_IO         =CheckAndReadIniDataGeneral("System",  "SafePlcIO",         0);  iSafePlcModel=CheckAndReadIniDataGeneral("System", "SafePlcModel", 0);   //Jason 20230619 add PLC_IO module + safety-related IO   //AI(W906-PLCMODEL) 20261006: EastSun 1006「PLC 要用型號分支出去」-- 0 = golden's map, 1 = Reer MOSAIC M1S COM (vendor manual 8547780 Rev.4 p.28); same line
+     DOUBLE_BELT_MODE            =CheckAndReadIniDataGeneral("System",  "DOUBLE_BELT_MODE",  0);                         //Ztex 2023.12.13 Add Double Belt Mode
+     USE_COVER_TRAYID            =CheckAndReadIniDataGeneral("System",  "USE_COVER_TRAYID",  tCIDNotUse);
+     USE_LD_Rot_Arm              =CheckAndReadIniDataGeneral("System", "USE_LD_Rot_Arm",     0);                         //RogerYang 20250828: add for Loader Rotate Arm
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 9ca1dd9..7dc515b 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -213,6 +213,7 @@
+ | 132 | **主迴圈每圈分段計時＋COM2 重置不再卡主迴圈（W906-PASSPROF／W906-COMM-STOPFAST）**（EastSun 1006「請最佳化下去」）：備份分支 backup/pre-passprof-20261006。①**PASSPROF**（tools/wb_serve.cpp）：在既有 WdMark 點用 QPC 分段計時（64 格＋「(more phases)」），一圈 ≥ W906_SLOWPASS_MS（預設 100、最小 5）就在 op log 寫一行 SLOW：牆鐘 ms、主執行緒 CPU ms、前 10 段；子段標記走 ht9045::g_W906PhaseMark（FastClockJobs.cpp 定義；ctest 為 0）：熱控拍、DoThermo、DoThermoReal case 100 各步、每個 COM2 StopComm／StartComm（bthermo.cpp）、MotorAccessTick 各段（WebMotorAccessLive.cpp）；全部放在既有行上（只有 wb_serve.cpp 檔尾加行）。②**量到的原因**（release、IO 執行緒 30 ms、閒置不開 HMI 不按）：主執行緒在 DoThermoReal 裡**等**（CPU 很低）——(a) COM2 StopComm 每次 11～16 ms、90 秒約 10～14 次：DTK4848 某些位址沒回應、重試用完 golden 就重置埠；探針：等寫入執行緒 0.1～2 ms、等讀取執行緒最多一個 Sleep(1)＝15.6 ms、CloseHandle(COM2) 11～12.7 ms（驅動）；(b) 開機後約 40 秒內每通道第一次 HeaterSVLog：slHeaterLog 是 3 參數 TMyStringList（MaxLineCount=1）⇒ 每兩行同步開檔寫 D:\HT9045_Log（golden 相同），**不改**（只在開機／SV 變更）。③**COMM-STOPFAST**（vclcompat/Comm.cpp，除檔尾外不移行）：讀取執行緒閒置改等手動重置的停止事件（同一個計時刻度，StopComm 一設就醒 ⇒ 0.05～0.13 ms）；StopComm 把埠 handle 交給短命關檔執行緒，StartComm（獨佔重開前）、下一次 StopComm、~Impl 都先等它（上限 5 s）；golden 重置順序（StopComm→0.5 s→StartComm）不變。④另：W906-TEMPLOG-DIR（csystem.cpp TemperatureStorageLog 的 MyForceDirectories 依路徑快取、最多 60 s 重查）；Pci1203ModuleCheck idle() ⇒ 沒事時 W906_Pci1203ModuleCheckTick 立刻返回。**實測**：SLOW 行裡不再有 COM2 StopComm；開機窗之後熱控 20 ms 漏拍每 10 s 0～1 次、主迴圈每圈平均約 2.6 ms、ping p50 1.8 ms。o2 全建 0 錯誤；ctest 381/399（失敗＝已知清單；中途 ThermoComm／ScanKeyGolden 兩支原始碼釘選被我的同行標記弄壞，已把標記挪開後通過）；production_audit：變動檔全是 13:24:34 wb_serve 量測關閉時寫的，13:25 後 0 檔被動 ⇒ ctest 0 寫入，已重拍基準；Debug 13:38、release 13:38 建好。COM2 一直重置 ＝ 有 DTK4848 位址不回（量到 Addr 1／2／4／5／8）——**EastSun 1006「還沒接atc」⇒ 正常，不用查接線**（ATC 接上後這些重置應消失，若沒消失再查） | cpp（見 commit） | 見 commit |
+ | 133 | **1203 參數重試：一直重試、每 1 分鐘、每次 Poll 一軸（W906-CFGRETRY）**（EastSun 1006「找一下還有那邊可優化速度」→「馬達不用每個參數都讀 讀有使用的」「參數重試一定要一直重試 只是秒數可以拉長」→「1 分鐘」；站台狀態「維持每次全讀」；共用位址的 3 站「是和分流器衝突而已 功能是正常的」）：計畫 D:\HT9045\_iothread_1006\PLAN_CFGRETRY.md；備份分支 backup/pre-cfgretry-20261006。**量到**（release、IO 執行緒 30 ms、閒置）：IO 執行緒吃一顆 CPU 的 74%；一次 Poll 85 ms＝站台狀態 84 ms（線上 40 站：ring 0 13 站、ring 1 27 站，每站 Acm_DevGetSlaveStates 2.1 ms）＋DI 0.3＋軸 0.75＋DO 0.15 ⇒ DI 一秒約 11 次；每 30 s 一次 1.26 s 的 Poll＝ax14～18（站 35／36／38／39／40，非 Yaskawa）kCfgGear＋kCfgDrive 每次都讀失敗（每軸 29 次 SDO、約 252 ms，5 軸擠同一次）；開機第一次 Poll 19 軸×61 次約 6.5 s（不改）。**改**（EtherCAT/Pci1203Monitor.cpp，6 行、同行、不移行號）：失敗組拿掉「最多 3 次」，每 60 s 開一輪、每次 Poll 只重試一軸；純重試（不是開機／重掃／寫入後的讀取）時齒輪比組第一個失敗就停、驅動器組 Pn21D 失敗就跳過剩下的；603Fh 警報碼重試、扭力退避（30 s 窗）、站台狀態不動。**實測**：Poll 最長 1350 ms → 約 110 ms（85＋一軸重試約 24 ms），150 s 內再也沒有秒級的 Poll。o2 全建 0 錯誤；ctest 382/400（失敗＝已知清單）；production_audit：變動全是 14:27:16 量測 wb_serve 關閉前寫的，之後 0 檔 ⇒ ctest 0 寫入，已重拍基準；Debug 14:34、release 14:34 建好 | cpp（見 commit） | 見 commit |
+ | 134 | **RS-232 實體面板打開、WAR16154 訊息、安全 PLC 輪詢補上（W906-SAFEPLC）**（EastSun 1006「實體按鈕code有轉完了嗎」→「面板走 RS-232」→ 截圖 COM4／115200「實體按鈕已接上」；「好像沒有把訊息寫到視窗」；「裡面之前有沒有 安全PLC 連線模式」→「都幫我補上」）。①**面板**：程式早就轉好（包 153 PadInterface_St02），只差設定；COM4 送 golden 的版本詢問 t051120 → 面板回 t05122065、按鍵 t051400000000。**機台設定**（D:\HT9045\system\Gerneral.ini，備份 Gerneral.ini.bak_panel_20261006_152525）：第 128 行 ControlPanelMode 0→1、第 588 行 [TrayY] COM PORT COM18→COM4（這台只有 COM1～6）、第 597 行 [NUMBER_PANEL2] COM_PORT COM4→COM14（分類顯示板會無條件搶開這個埠）；IO 表面板鍵列照 golden 維持停用（面板模式由面板供鍵值）。閒置開機實測：pad 1 ms 工作已註冊、無 port error、F5 佔住 COM4。**待查：面板燈不亮**（程式路徑 DoPanelLamp→SW.OnOff→SendSwitchStatus→ProcessSendDataNew 全照 golden，要看實際收送）。②**WAR16154 視窗無文字**：D:\HT9045\Error\AlarmCodeList.txt 缺這個代碼（WAR16152 有）⇒ 在 WAR16153 後補一行（備份 AlarmCodeList.txt.bak_war16154_20261006_153942），重開程式生效。③**安全 PLC**（SafePlcIO，golden Jason 20230619，Modbus TCP 172.16.8.120:502）：之前 TPLCIOThread::Resume 是空的、PlcComm 是模擬 socket ⇒ 新檔 MyPLC/SafePlcClock_St02.cpp：SafePlcIO=1 時註冊 FastClock「safeplc」1 ms 工作（PlcComm.W906_Poll() 處理 socket 事件＋golden PLCIOProcess），PlcComm 改 POLLED-Real（MyPLC/ModbusTCPClient W906_UsePolledRealSocket／W906_Poll），連線變化印 [SAFEPLC]；FastClockWbServe.cpp 同行註冊、CMakeLists 同行加檔、cinitial GATE 註記同行補。**SafePlcIO 仍是 0**：PLC 在線（ping 通、502 可連）但唯讀 FC4 讀到的 22 bytes 全 0，20 分鐘監看（D:\HT9045\_plc_1006\plc_watch.ps1）無任何位元變化；IO 表沒有 SnAllEMG／SnAllSafeDoor（ISABase=4）兩列 ⇒ 對到點位前不開（開了會一直 WAR16140 停機）。o2 全建 0 錯誤；ctest 380/400（HSys_HeaterMix／SetTempSave 平行時偶發，單跑都過；其餘＝已知清單）；production_audit 這次與 EastSun 的 F5（15:32 開機）重疊，變動屬程式本身；Debug 15:42、release 15:21 建好 | cpp（見 commit） | 見 commit |
++| 135 | **安全 PLC 型號分支（W906-PLCMODEL）**（EastSun 1006「你開一個agent 分析 安全PLC.pdf 看看跟軟體是否不一樣」→「記得PLC 要用型號分支出去喔」）：備份分支 backup/pre-plcmodel-20261006。**手冊**（D:\HT9045\_vendor_manuals\安全PLC.pdf＝Reer「Process data mapping for M1S COM Master module V2.0」8547780 Rev.4，p.28）：Modbus FC3/FC4 System I/O 在 0x400～0x410（17 個暫存器，每個暫存器低位元組是偶數號 byte）：0x400 lo＝System status、0x401～0x408＝Input status byte 0～15、0x409～0x40A Restart、0x40B～0x40C Fieldbus feedback、0x40D～0x40E Probe、0x40F～0x410 OSSD；0x000～0x001 是主機的**寫入**區。golden 讀 FC4 0x0000×11 ⇒ 讀到寫入區＋未定義區。**實測**（唯讀）：0x0000×11＝22 bytes 全 0、20 分鐘不變；0x400×17＝System status 0x01、Input 0x55 0x15 0x10 0x05、Restart byte0 0x04、OSSD 0；對照 0x620（CRC 0x4D29、日期 2026-09-13）非 0；0x500 錯誤碼 0。**改**：Gerneral.ini [System] SafePlcModel（cmydef iSafePlcModel、database.cpp 讀，同行）：0＝golden（預設，不變）、1＝M1S：PLCIOTaskCycle 請求 0x400×17（同行），回覆經新函式 W906_PlcM1SFill（MyPLC_IO_Modbus.cpp 檔尾）排進 golden 的 InPortData_Byte（[0]＝System status、[1+n]＝Input byte n、[20..21]＝OSSD byte 0..1），之後 golden 的位元拆解、MyLaneIO（Port 0x300+n ⇒ Input byte n，+1 索引）、IsOn 全部照舊。tests/test_myplc_modbus.cpp 新增 [4]：用機台實測的 34 bytes 當回覆，驗證解析與 Port 0x300～0x303 對應（7 項過；送出的位址因模擬 socket 不可讀，以程式碼確認）。**機台設定**：Gerneral.ini 在 SafePlcIO=0 下一行加 SafePlcModel=1（備份 Gerneral.ini.bak_plcmodel_20261006_171604），**SafePlcIO 仍 0**。0x400 監看（D:\HT9045\_plc_1006\plc_watch400.ps1，16:46～17:16）記到 Input byte 4 bit0 在 17:03～17:10 開關數次、byte 1 bit0 17:10:59 變 0、byte 1 bit2 17:11 0→1→…；**待 EastSun 說明當時操作才能對 SnAllEMG／SnAllSafeDoor**（⚠ golden MyLaneIO 只認 Port 0x300～0x303＝Input byte 0～3，若急停／門在 byte 4 以後要另外處理）。o2 全建 0 錯誤；ctest 384/402（失敗＝已知清單）；production_audit 通過；Debug 17:12、release 17:15 | cpp（見 commit） | 見 commit |
+ | — | **還沒完成**：①**實體面板鍵還是讀不到**：COM1／3／6／7 聽 15 分鐘沒資料；COM2／4／5 被 wb_serve 佔著；EastSun 說面板「跟一般 9 系列一樣」、而且「不是用 1203」→ 待確認接法。②**1203 模組 ini（WAR16154）**：程式草稿已寫好，待整合。③**關 HMI 視窗時程式還沒開好**的情況（之後會自己再開視窗）：修法已規劃 | — | 見 §4 |
+ | 41 | **VC4 閥值自己測**（EastSun「VC4 你自己測試 寫進去哪個位置 數值讀回來 會改變 自己推出來 用VC8」）：等 EastSun F5 後，用 Vacuum Unit 同一條命令對一格寫 -30 kPa、讀回、再寫回原值 | （測試中） | — |
+ | — | 關掉軟體後 VS Code 上方的除錯工具列還在：wb_serve／gdb 都已經結束、8055 沒人佔，是 VS Code 沒發現結束；按紅色方塊即可（只會跑關站腳本，沒有東西可關） | — | — |
+diff --git a/tests/test_myplc_modbus.cpp b/tests/test_myplc_modbus.cpp
+index a6db95b..0d25f0a 100644
+--- a/tests/test_myplc_modbus.cpp
++++ b/tests/test_myplc_modbus.cpp
+@@ -326,6 +326,63 @@ static void test_myplc_io_modbus()
+           "TMyPLC_IO_Modbus ctor self-registers into the static PLC_IO_Members list");
+ }
+ 
++// ===========================================================================
++//  [4] AI(W906-PLCMODEL) 20261006: SafePlcModel=1 (Reer MOSAIC M1S COM, vendor manual 8547780 Rev.4 p.28)
++//      The reply is the 34 data bytes MEASURED on the machine 20261006 (FC4 0x400 x17, read-only): System status 0x01,
++//      Input status bytes 0x55 0x15 0x10 0x05, Restart byte 0 = 0x04, OSSD 0.  Bytes on the wire = high byte first per register.
++// ===========================================================================
++extern int iSafePlcModel;   // cmydef.cpp
++extern bool bOSSDData[INPUT_MAX_Slave][2][8];   // MyPLC_IO_Modbus.cpp (not in the header)
++static void test_m1s_model()
++{
++    printf("\n[4] SafePlcModel=1 (Reer M1S COM): FC4 0x400 x17 -> golden's byte array -> IO_Table Port 0x300..0x303\n");
++
++    iSafePlcModel = 1;
++    PlcComm.SocketConnect(0, 0);
++    bScanSlave[0] = true;
++    iPLCIOTask = 1;
++    iTransactionID = 0x0100;
++    PLCIOTaskCycle();
++    CHECK(iPLCIOTask == 100, "model 1: the request went out (task 1 -> 100)");
++
++    const unsigned char wire[34] = {
++        0x00, 0x01,  0x15, 0x55,  0x05, 0x10,  0x00, 0x00,  0x00, 0x00,  0x00, 0x00,  0x00, 0x00,  0x00, 0x00,  0x00, 0x00,
++        0x00, 0x04,  0x00, 0x00,  0x00, 0x00,  0x00, 0x00,  0x00, 0x00,  0x00, 0x00,  0x00, 0x00,  0x00, 0x00 };
++    char frame[9 + 34];
++    frame[0] = 0x01; frame[1] = 0x00;                  // transaction id 0x0100
++    frame[2] = 0x00; frame[3] = 0x00;                  // protocol
++    frame[4] = 0x00; frame[5] = (char)(3 + 34);        // length = unit + fc + byte count + data
++    frame[6] = 0x00; frame[7] = 0x04;                  // unit 0, FC4
++    frame[8] = (char)34;                               // byte count
++    for (int i = 0; i < 34; ++i) frame[9 + i] = (char)wire[i];
++    TCustomWinSocket rx;
++    rx.SimPushReceive(frame, (int)sizeof(frame));
++    PlcComm.SocketRead(0, &rx);
++    PLCIOTaskCycle();
++    CHECK(iPLCIOTask == 1 && bPLCIOEffect, "model 1: the reply was taken (task 100 -> 1, bPLCIOEffect)");
++
++    CHECK(bPLCInData[0][0][0] == true, "System status 0x01 -> bPLCInData[0][0] bit 0");
++    bool b0 = true;  for (int k = 0; k < 8; ++k) if (bPLCInData[0][1][k] != (((0x55 >> k) & 1) != 0)) b0 = false;
++    bool b1 = true;  for (int k = 0; k < 8; ++k) if (bPLCInData[0][2][k] != (((0x15 >> k) & 1) != 0)) b1 = false;
++    bool b2 = true;  for (int k = 0; k < 8; ++k) if (bPLCInData[0][3][k] != (((0x10 >> k) & 1) != 0)) b2 = false;
++    bool b3 = true;  for (int k = 0; k < 8; ++k) if (bPLCInData[0][4][k] != (((0x05 >> k) & 1) != 0)) b3 = false;
++    CHECK(b0 && b1 && b2 && b3, "Input status bytes 0..3 (0x55 0x15 0x10 0x05) land at bPLCInData[0][1..4] (manual low byte first)");
++    bool ossd = true;  for (int k = 0; k < 8; ++k) if (bOSSDData[0][0][k] || bOSSDData[0][1][k]) ossd = false;
++    CHECK(ossd, "OSSD status bytes 0..1 = 0 -> bOSSDData all false");
++
++    TMyPLC_IO_Modbus p300b0, p300b1, p301b0, p302b4, p303b1;
++    p300b0.SetPortInformation(0, 0x300, 0);  p300b1.SetPortInformation(0, 0x300, 1);
++    p301b0.SetPortInformation(0, 0x301, 0);  p302b4.SetPortInformation(0, 0x302, 4);  p303b1.SetPortInformation(0, 0x303, 1);
++    CHECK(p300b0.IsOn() && !p300b1.IsOn() && p301b0.IsOn() && p302b4.IsOn() && !p303b1.IsOn(),
++          "IO_Table Port 0x300+n / Bit reads Input status byte n through golden's +1 index (iPLCSafetyVer 0)");
++
++    // model 0 keeps golden's request: back to task 1, the next send uses golden's address/count (only the cursor is visible)
++    iSafePlcModel = 0;
++    iPLCIOTask = 1;
++    PLCIOTaskCycle();
++    CHECK(iPLCIOTask == 100, "model 0 (golden) still sends");
++}
++
+ // ===========================================================================
+ int main()
+ {
+@@ -336,6 +393,7 @@ int main()
+     test_clientsocket_sim();
+     test_modbustcpclient();
+     test_myplc_io_modbus();
++    test_m1s_model();   // AI(W906-PLCMODEL) 20261006
+ 
+     printf("\n-------------------------------------------------------------\n");
+     printf(" RESULT: %d passed, %d failed\n", g_pass, g_fail);
+-- 
+2.55.0.windows.5
+
