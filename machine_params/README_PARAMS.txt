@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-06 08:43
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 78c074b IOTUNE: the 1203 IO thread's cost measured and cut -- EastSun 1006 '你先自己啟動分析'. Pla／web 8d860a9。
+HT9050 機台參數快照（machine_params\）—— 2026-10-06 09:00
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 762401b PKG-153-157: laptop packages 153-157 (GitHub main 39f843f / 8536685 / 4f8a155 / f4／web c19e27e。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
