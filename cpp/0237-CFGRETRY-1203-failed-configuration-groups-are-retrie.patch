@@ -1,0 +1,104 @@
+From dc7f7027a2b0a675f336623f692761eb2657d67e Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 6 Oct 2026 14:35:09 +0800
+Subject: [PATCH] =?UTF-8?q?CFGRETRY:=201203=20failed=20configuration=20gro?=
+ =?UTF-8?q?ups=20are=20retried=20forever,=20every=2060=20s,=20one=20axis?=
+ =?UTF-8?q?=20per=20Poll=20--=20EastSun=201006=20'=E5=8F=83=E6=95=B8?=
+ =?UTF-8?q?=E9=87=8D=E8=A9=A6=E4=B8=80=E5=AE=9A=E8=A6=81=E4=B8=80=E7=9B=B4?=
+ =?UTF-8?q?=E9=87=8D=E8=A9=A6=20=E5=8F=AA=E6=98=AF=E7=A7=92=E6=95=B8?=
+ =?UTF-8?q?=E5=8F=AF=E4=BB=A5=E6=8B=89=E9=95=B7'=20->=20'1=20=E5=88=86?=
+ =?UTF-8?q?=E9=90=98'=20(and=20'=E9=A6=AC=E9=81=94=E4=B8=8D=E7=94=A8?=
+ =?UTF-8?q?=E6=AF=8F=E5=80=8B=E5=8F=83=E6=95=B8=E9=83=BD=E8=AE=80=20?=
+ =?UTF-8?q?=E8=AE=80=E6=9C=89=E4=BD=BF=E7=94=A8=E7=9A=84';=20station=20sta?=
+ =?UTF-8?q?tes:=20'=E7=B6=AD=E6=8C=81=E6=AF=8F=E6=AC=A1=E5=85=A8=E8=AE=80'?=
+ =?UTF-8?q?).=20Plan=20D:\HT9045\=5Fiothread=5F1006\PLAN=5FCFGRETRY.md;=20?=
+ =?UTF-8?q?backup=20branch=20backup/pre-cfgretry-20261006.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Measured (release, IO thread 30 ms, idle): the IO thread uses 74% of a core; one Poll = 85 ms = station states 84 ms (40 stations on the wire, ring 0 13 / ring 1 27, Acm_DevGetSlaveStates 2.1 ms each) + DI 0.3 + axes 0.75 + DO 0.15. Every 30 s one Poll took 1.26 s: ax14-18 (stations 35/36/38/39/40, not Yaskawa) kCfgGear + kCfgDrive fail every time, 29 SDO reads / ~252 ms per axis, all five on the same Poll -- no DI read meanwhile.
+
+EtherCAT/Pci1203Monitor.cpp (6 lines, all same-line, no line moves): no try limit (was cfgTries < 3 on the 30 s window, every failed axis at once); a retry round opens every 60 s and retries ONE axis per Poll (Impl cfgRetryAxis / cfgRoundOn / cfgRoundNext / cfgRoundTick); on a pure retry (the group is not due for open / rescan / write, cfgDueNow) the gear group stops at its first failure and the drive group skips the rest after Pn21D fails. 603Fh retries, torque backoff (30 s window) and the station-state loop are unchanged.
+
+Measured after: worst Poll 1350 ms -> ~110 ms (85 + one axis retry ~24 ms), no second-long Poll in 150 s. o2 full build 0 errors; ctest 382/400, failures = the known list; production_audit: every change was written before the measurement wb_serve closed at 14:27:16, 0 files after (ctest wrote nothing), baseline re-snapshotted; Debug then release wb_serve rebuilt. WORKLOG item 133.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203Monitor.cpp | 12 ++++++------
+ docs/WORKLOG_MACHINE.md     |  1 +
+ 2 files changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/EtherCAT/Pci1203Monitor.cpp b/EtherCAT/Pci1203Monitor.cpp
+index 7ac8ff5..f1676fa 100644
+--- a/EtherCAT/Pci1203Monitor.cpp
++++ b/EtherCAT/Pci1203Monitor.cpp
+@@ -120,7 +120,7 @@ struct TPci1203Monitor::Impl {
+     //  window. Cleared by the poll that honours it.
+     bool        gearReadDue;
+     bool        gearReadForce;  std::vector<unsigned> cfgDue; std::vector<unsigned> cfgFailed; std::vector<int> cfgTries; std::vector<Pci1203CfgExpect> cfgExpect; std::vector<unsigned> cfgWritten; bool inPoll; bool cfgRetryDue; bool retryArmed; unsigned long retryTick; void (*yieldHook)(); bool inYield; unsigned long yieldMs;   //AI(W906-IOWEB-P25) 20260925: per-axis configuration groups still to read (cfgDue, armed by OpenAxes_ = open / rescan / re-attach, and by a write), groups whose last read failed (cfgFailed, retried on the 30 s window at most 3 times), written values awaiting agreement (cfgExpect), and the output-first yield hook. Same line, no line below moves
+-    unsigned    maxAxes;  struct Pci1203IoSnap* ioPub = 0; struct Pci1203IoSnap* ioStaged = 0;   // maxAxes: remembered so a re-attach can redo them   //AI(W906-IOTHREAD) 20261005: the published copy the main thread reads (ioPub) and the one the IO thread fills at the end of every poll (ioStaged); 0 until the IO thread's first poll. Same line, no line below moves
++    unsigned    maxAxes;  struct Pci1203IoSnap* ioPub = 0; struct Pci1203IoSnap* ioStaged = 0;  int cfgRetryAxis = -1; bool cfgRoundOn = false; std::size_t cfgRoundNext = 0; unsigned long cfgRoundTick = 0;   //AI(W906-CFGRETRY) 20261006: the failed-group retry round (EastSun 1006 「參數重試一定要一直重試 只是秒數可以拉長」→ 1 分鐘): which axis retries THIS Poll (-1 none), whether a round is open, the next axis to look at, when the last round opened; same line   // maxAxes: remembered so a re-attach can redo them   //AI(W906-IOTHREAD) 20261005: the published copy the main thread reads (ioPub) and the one the IO thread fills at the end of every poll (ioStaged); 0 until the IO thread's first poll. Same line, no line below moves
+     unsigned    diPorts;
+     unsigned    doPorts;              //AI(W906-1203MON-18) 20260910
+     //AI(W906-1203COLD-2) 20260924: when the last ring sweep ran, so a zero scan
+@@ -2228,7 +2228,7 @@ bool TPci1203Monitor::Poll()
+         // Nothing was ever discovered: the ring state is unknown, not good.
+         impl_->cardS.slaveValid = false;
+     }  const double segStationsMs_ = segClock_.Lap();   //AI(W906-LAT-1) 20260925: end of the station-state segment, start of the axis segment
+-    { const unsigned long nr = (unsigned long)::GetTickCount(); const bool due = !impl_->retryArmed || (nr - impl_->retryTick) >= 30000ul; if (due) { impl_->retryArmed = true; impl_->retryTick = nr; } impl_->alarmRetryDue = due; impl_->cfgRetryDue = due; }   //AI(W906-IOWEB-P25) 20260925: the 30 s retry window (failed 603Fh reads, failed configuration reads) is decided ONCE HERE, before the axis loop. It used to be decided inside the loop at axis index 0, so an unopened axis 0 skipped the decision; and `(long)(now - 0) >= 0` is false for an uptime of 24.8-49.7 days. Unsigned subtraction from an armed tick is wrap-correct. On the old blank line, so no line below moves
++    { const unsigned long nr = (unsigned long)::GetTickCount(); const bool due = !impl_->retryArmed || (nr - impl_->retryTick) >= 30000ul; if (due) { impl_->retryArmed = true; impl_->retryTick = nr; } impl_->alarmRetryDue = due; impl_->cfgRetryDue = due; }  { const unsigned long nr = (unsigned long)::GetTickCount(); impl_->cfgRetryAxis = -1; if (impl_->cfgRoundTick == 0) impl_->cfgRoundTick = nr | 1ul; else if (!impl_->cfgRoundOn && (nr - impl_->cfgRoundTick) >= 60000ul) { impl_->cfgRoundOn = true; impl_->cfgRoundNext = 0; impl_->cfgRoundTick = nr | 1ul; } if (impl_->cfgRoundOn) { std::size_t k = impl_->cfgRoundNext; while (k < impl_->cfgFailed.size() && impl_->cfgFailed[k] == 0u) ++k; if (k < impl_->cfgFailed.size()) { impl_->cfgRetryAxis = (int)k; impl_->cfgRoundNext = k + 1; } else impl_->cfgRoundOn = false; } }   //AI(W906-CFGRETRY) 20261006: failed configuration groups are retried WITHOUT a try limit, one axis per Poll, in a round that opens every 60 s (was: every failed axis on the one 30 s Poll, at most 3 times -- measured 1.26 s per 30 s on ax14-18 / stations 35-40, DI not read meanwhile). The 30 s window above still drives the 603Fh and torque retries. Same line   //AI(W906-IOWEB-P25) 20260925: the 30 s retry window (failed 603Fh reads, failed configuration reads) is decided ONCE HERE, before the axis loop. It used to be decided inside the loop at axis index 0, so an unopened axis 0 skipped the decision; and `(long)(now - 0) >= 0` is false for an uptime of 24.8-49.7 days. Unsigned subtraction from an armed tick is wrap-correct. On the old blank line, so no line below moves
+     // --- axes --------------------------------------------------------------
+     for (std::size_t i = 0; i < impl_->axHandles.size(); ++i) {
+         Pci1203AxisSample& s = impl_->axes[i];
+@@ -2442,7 +2442,7 @@ bool TPci1203Monitor::Poll()
+         //  re-attach (OpenAxes_ arms cfgDue), after a write (ExpectCfg_ / MarkCfgDue_), and a FAILED group on
+         //  the 30 s window at most 3 times. This overrides CTL-47 / GEAR-1 and 20260923 ruling #2's "as shipped".
+         unsigned cfgWant = (i < impl_->cfgDue.size()) ? impl_->cfgDue[i] : 0u;
+-        if (impl_->cfgRetryDue && i < impl_->cfgFailed.size()) { for (unsigned g = 0; g < 5u; ++g) if ((impl_->cfgFailed[i] & (1u << g)) != 0u && impl_->cfgTries[i * 5u + g] < 3) cfgWant |= (1u << g); }   //AI(W906-IOWEB-P25b) 20260925: retry budget PER GROUP (was per axis: one group that always fails used up every group's retries)
++        const unsigned cfgDueNow = cfgWant;  if ((int)i == impl_->cfgRetryAxis && i < impl_->cfgFailed.size()) { for (unsigned g = 0; g < 5u; ++g) if ((impl_->cfgFailed[i] & (1u << g)) != 0u) cfgWant |= (1u << g); }   //AI(W906-IOWEB-P25b) 20260925: retry budget PER GROUP (was per axis: one group that always fails used up every group's retries)   //AI(W906-CFGRETRY) 20261006: no try limit any more (was `&& cfgTries < 3`, on cfgRetryDue for every axis); only the round's axis (cfgRetryAxis); cfgDueNow = the groups due for a real reason (open / rescan / write), which are read in full
+         if (s.station < 0) cfgWant &= (unsigned)(kCfgSpeed | kCfgLimit | kCfgHome);   // the drive groups are station-keyed SDO reads
+         unsigned cfgBad = 0u;                                                        // groups with a failed read this pass
+         const bool doSpeedRead = (cfgWant & (unsigned)(kCfgSpeed | kCfgLimit | kCfgHome)) != 0;
+@@ -2579,7 +2579,7 @@ bool TPci1203Monitor::Poll()
+                                                       Pci1203GearSub(q),
+                                                       6 /*ECAT_TYPE_U32*/, 4, &v);
+                     if (rr == SUCCESS) s.gearVal[q] = (unsigned long)v;
+-                    s.gearValid[q] = (rr == SUCCESS);  if (rr != SUCCESS) cfgBad |= kCfgGear;  Yield_();
++                    s.gearValid[q] = (rr == SUCCESS);  if (rr != SUCCESS) cfgBad |= kCfgGear;  Yield_();  if (rr != SUCCESS && (cfgDueNow & (unsigned)kCfgGear) == 0u) break;   //AI(W906-CFGRETRY) 20261006: a pure retry stops at the group's first failure (the group stays failed; the next round asks again)
+                 }
+                 if (cfgWant & kCfgGear) calls += Pci1203AxisSample::kGearReadCount;
+ 
+@@ -2596,7 +2596,7 @@ bool TPci1203Monitor::Poll()
+                                                 (U16)(0x221D + base), 0,
+                                                 4 /*ECAT_TYPE_U16*/, 2, &v16);
+                     s.encValid[0] = (rr == SUCCESS);  if (rr != SUCCESS) cfgBad |= kCfgDrive;
+-                    if (rr == SUCCESS) s.encVal[0] = (unsigned long)v16;  Yield_();
++                    if (rr == SUCCESS) s.encVal[0] = (unsigned long)v16;  Yield_();  if (rr != SUCCESS && (cfgDueNow & (unsigned)kCfgDrive) == 0u) goto W906_cfgDriveSkip_;   //AI(W906-CFGRETRY) 20261006: a pure retry whose first drive-group read (Pn21D) fails skips the rest of the group (~25 mailbox reads, ~8.7 ms each when they fail)
+ 
+                     v16 = 0;
+                     rr = Acm_DevReadSDOData(impl_->dev, 0, st,
+@@ -2708,7 +2708,7 @@ bool TPci1203Monitor::Poll()
+                         if (mr == SUCCESS) s.driveHomeMethod = (long)method;
+                         ++calls;  Yield_();
+                     }
+-                }
++                }  W906_cfgDriveSkip_: ;   //AI(W906-CFGRETRY) 20261006: the pure-retry skip lands here (same line)
+             }
+         }
+ 
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 40ba106..cec11bb 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -211,6 +211,7 @@
+ | 130 | **HT9050 Index Z1 改走 1203 類別（W906-IDX1203）**（EastSun 1006：Q130 圈「請 EastSun 把 HT9050 的 INDEX_MOTION_CARD 改成非 0（用 MyMotor）」、「gali 是不是有單獨class ? 可以用1203 class 分支?」、「你可以統一 index 寫成一個移動函式 裡面再分支呼叫?」；推翻 0929 D1）：計畫 D:\HT9045\_idxmove_1006\PLAN_IDX1203_CLASS.md；備份分支 backup/pre-idx1203-20261006。INDEX_MOTION_CARD≠0 時 golden 照馬達表建 Index 軸（M14→TMyEtherCatMotor、M13/M15/M16 停用）、Galil 轉送不裝；**約 20 個被用到的 TMyMotor::Gali_* 函式開頭依類別分流**（涵蓋約 1,100 處呼叫，呼叫端一處不改）：Index 軸是 1203 → **統一的 W906_IndexMove**（Index 互鎖 IndexZCanMove／CheckTestZ1／ScanIndexMotorCanMove 照原版、速度直接設到 1203 類別、MotorMove、到位後原版編碼器範圍檢查→JAM）；Gali_Command 字串→1203 動作（ST／AB／VS0;SP0 停、SH／MO 伺服、DP＝命令＝編碼器、TP／TD／MG_BG／TI 回答；原始 Galil 移動字串不執行）；ScanMotStatus／TIMO／AlarmStatus→1203 燈號＋原版警報鎖存；SingalHome→原版步驟編號內用 MotorInitial＋MotorHome；FindZPhase 拒絕；Y1/Z2/Y2「不存在＝立即完成」。1203 類別本身 4 處 Index 名稱特例補分支（SetSpeed、GetMotorAlarm、PCIL132_StopMotor、停止後 fCMD 重設）。Galil 轉送拒裝時改由安裝程式另裝扭力／健康掛鉤＋IndexZCanMove={1,1}。開關 MachineType.h `W906_IDX1203_GALI_BRANCH`；**INDEX_MOTION_CARD=0＝完全不成立＝原本行為**（ctest GaliRouteEngine／GaliRouteCore 照過）。新 ctest Idx1203GaliBranch 61 項過。o2 全建 0 錯誤、ctest 380/399（失敗＝已知清單＋EcatMotorRoute 是防毒擋原路徑的 exe「operation not permitted」，複製到別處執行 143/143 過）、production_audit 0；Debug 11:27、release 11:34 建好。**之後**：EastSun 1006 同意改 Gerneral.ini INDEX_MOTION_CARD=1（見 §1），第一次 F5 要人在機台旁（回原點、空跑、Motor Test） | cpp（見 commit） | 見 commit |
+ | 131 | **IO 執行緒審查修正（W906-IOFIX）**（筆電 IOTHREAD_REVIEW_20261006 Part 1 #1～#6＋低風險；Jimmy 1006 #128＝A「先關、修好再開」→ EastSun 1006「我現在修 #1～#6，修好繼續開」）：計畫 D:\HT9045\_iothread_1006\PLAN_IOFIX.md；備份分支 backup/pre-iofix-20261006。①**重掃失敗**：Poll() 的「卡沒開／停用」提前 return 在 IO 執行緒也發布、Rescan() 結尾立刻發布 ⇒ 主執行緒看到 open=false，WAR16152 照常跳；⑤重掃成功後 Pci1203Control::Execute 立刻 Adopt ⇒ DO 用新對照表；②**代理等待**：500 ms 分段＋心跳，佇列中且心跳凍結 5 秒 ⇒ 撤回、命令失敗（printf），已被接手 ⇒ 繼續等、每 5 秒一行；CreateEvent 失敗直接拒絕；③**資料新舊**：發布帶時間，主執行緒 Adopt 時超過 3 秒沒新發布 ⇒ 已發布那份標 card().open=false＋lastErrorText（→ WAR16152），恢復即覆蓋；新 API Pci1203IoThreadPublishAgeMs；④**關機逾時**：IO 執行緒結束前自己清 PubReady／running／tid（不再無限遞迴），Stop 逾時 ⇒ 棄置（代理拒絕）、Pci1203MonitorDisable／ControlDisable 在執行緒活著時不 Close／delete；新 API Pci1203IoThreadAlive；⑥IndexZTorqueCore armPoll ← Pci1203IoFreshMark；低：Q44 pollsSinceIssue、GaliRouteCore 外來停止視窗、RouteSiblingHoming 不再繞回。**節拍維持 100**（Jimmy #127＝B 要 500；EastSun 1006 維持 100，數據回報：dispatch/20261006_iothread_tick）。o2 全建 0 錯誤、ctest 381/399（失敗＝已知清單；EcatMotorRoute 這次過）、production_audit 0；Debug 11:49、release 11:50 建好。**IO 執行緒故障路徑無卡 ctest 起不來，要上機驗**：1203 頁拔一顆驅動器電源後按 Refresh 看 WAR16152、正常 Refresh 後按 DO、EXIT | cpp（見 commit） | 見 commit |
+ | 132 | **主迴圈每圈分段計時＋COM2 重置不再卡主迴圈（W906-PASSPROF／W906-COMM-STOPFAST）**（EastSun 1006「請最佳化下去」）：備份分支 backup/pre-passprof-20261006。①**PASSPROF**（tools/wb_serve.cpp）：在既有 WdMark 點用 QPC 分段計時（64 格＋「(more phases)」），一圈 ≥ W906_SLOWPASS_MS（預設 100、最小 5）就在 op log 寫一行 SLOW：牆鐘 ms、主執行緒 CPU ms、前 10 段；子段標記走 ht9045::g_W906PhaseMark（FastClockJobs.cpp 定義；ctest 為 0）：熱控拍、DoThermo、DoThermoReal case 100 各步、每個 COM2 StopComm／StartComm（bthermo.cpp）、MotorAccessTick 各段（WebMotorAccessLive.cpp）；全部放在既有行上（只有 wb_serve.cpp 檔尾加行）。②**量到的原因**（release、IO 執行緒 30 ms、閒置不開 HMI 不按）：主執行緒在 DoThermoReal 裡**等**（CPU 很低）——(a) COM2 StopComm 每次 11～16 ms、90 秒約 10～14 次：DTK4848 某些位址沒回應、重試用完 golden 就重置埠；探針：等寫入執行緒 0.1～2 ms、等讀取執行緒最多一個 Sleep(1)＝15.6 ms、CloseHandle(COM2) 11～12.7 ms（驅動）；(b) 開機後約 40 秒內每通道第一次 HeaterSVLog：slHeaterLog 是 3 參數 TMyStringList（MaxLineCount=1）⇒ 每兩行同步開檔寫 D:\HT9045_Log（golden 相同），**不改**（只在開機／SV 變更）。③**COMM-STOPFAST**（vclcompat/Comm.cpp，除檔尾外不移行）：讀取執行緒閒置改等手動重置的停止事件（同一個計時刻度，StopComm 一設就醒 ⇒ 0.05～0.13 ms）；StopComm 把埠 handle 交給短命關檔執行緒，StartComm（獨佔重開前）、下一次 StopComm、~Impl 都先等它（上限 5 s）；golden 重置順序（StopComm→0.5 s→StartComm）不變。④另：W906-TEMPLOG-DIR（csystem.cpp TemperatureStorageLog 的 MyForceDirectories 依路徑快取、最多 60 s 重查）；Pci1203ModuleCheck idle() ⇒ 沒事時 W906_Pci1203ModuleCheckTick 立刻返回。**實測**：SLOW 行裡不再有 COM2 StopComm；開機窗之後熱控 20 ms 漏拍每 10 s 0～1 次、主迴圈每圈平均約 2.6 ms、ping p50 1.8 ms。o2 全建 0 錯誤；ctest 381/399（失敗＝已知清單；中途 ThermoComm／ScanKeyGolden 兩支原始碼釘選被我的同行標記弄壞，已把標記挪開後通過）；production_audit：變動檔全是 13:24:34 wb_serve 量測關閉時寫的，13:25 後 0 檔被動 ⇒ ctest 0 寫入，已重拍基準；Debug 13:38、release 13:38 建好。COM2 一直重置 ＝ 有 DTK4848 位址不回（量到 Addr 1／2／4／5／8）——**EastSun 1006「還沒接atc」⇒ 正常，不用查接線**（ATC 接上後這些重置應消失，若沒消失再查） | cpp（見 commit） | 見 commit |
++| 133 | **1203 參數重試：一直重試、每 1 分鐘、每次 Poll 一軸（W906-CFGRETRY）**（EastSun 1006「找一下還有那邊可優化速度」→「馬達不用每個參數都讀 讀有使用的」「參數重試一定要一直重試 只是秒數可以拉長」→「1 分鐘」；站台狀態「維持每次全讀」；共用位址的 3 站「是和分流器衝突而已 功能是正常的」）：計畫 D:\HT9045\_iothread_1006\PLAN_CFGRETRY.md；備份分支 backup/pre-cfgretry-20261006。**量到**（release、IO 執行緒 30 ms、閒置）：IO 執行緒吃一顆 CPU 的 74%；一次 Poll 85 ms＝站台狀態 84 ms（線上 40 站：ring 0 13 站、ring 1 27 站，每站 Acm_DevGetSlaveStates 2.1 ms）＋DI 0.3＋軸 0.75＋DO 0.15 ⇒ DI 一秒約 11 次；每 30 s 一次 1.26 s 的 Poll＝ax14～18（站 35／36／38／39／40，非 Yaskawa）kCfgGear＋kCfgDrive 每次都讀失敗（每軸 29 次 SDO、約 252 ms，5 軸擠同一次）；開機第一次 Poll 19 軸×61 次約 6.5 s（不改）。**改**（EtherCAT/Pci1203Monitor.cpp，6 行、同行、不移行號）：失敗組拿掉「最多 3 次」，每 60 s 開一輪、每次 Poll 只重試一軸；純重試（不是開機／重掃／寫入後的讀取）時齒輪比組第一個失敗就停、驅動器組 Pn21D 失敗就跳過剩下的；603Fh 警報碼重試、扭力退避（30 s 窗）、站台狀態不動。**實測**：Poll 最長 1350 ms → 約 110 ms（85＋一軸重試約 24 ms），150 s 內再也沒有秒級的 Poll。o2 全建 0 錯誤；ctest 382/400（失敗＝已知清單）；production_audit：變動全是 14:27:16 量測 wb_serve 關閉前寫的，之後 0 檔 ⇒ ctest 0 寫入，已重拍基準；Debug 14:34、release 14:34 建好 | cpp（見 commit） | 見 commit |
+ | — | **還沒完成**：①**實體面板鍵還是讀不到**：COM1／3／6／7 聽 15 分鐘沒資料；COM2／4／5 被 wb_serve 佔著；EastSun 說面板「跟一般 9 系列一樣」、而且「不是用 1203」→ 待確認接法。②**1203 模組 ini（WAR16154）**：程式草稿已寫好，待整合。③**關 HMI 視窗時程式還沒開好**的情況（之後會自己再開視窗）：修法已規劃 | — | 見 §4 |
+ | 41 | **VC4 閥值自己測**（EastSun「VC4 你自己測試 寫進去哪個位置 數值讀回來 會改變 自己推出來 用VC8」）：等 EastSun F5 後，用 Vacuum Unit 同一條命令對一格寫 -30 kPa、讀回、再寫回原值 | （測試中） | — |
+ | — | 關掉軟體後 VS Code 上方的除錯工具列還在：wb_serve／gdb 都已經結束、8055 沒人佔，是 VS Code 沒發現結束；按紅色方塊即可（只會跑關站腳本，沒有東西可關） | — | — |
+-- 
+2.55.0.windows.5
+
