@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-06 11:51
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ bb489f5 IOFIX: the 1203 IO thread's review findings #1-#6 fixed (IOTHREAD_REVIEW_20261006 ／web c19e27e。
+HT9050 機台參數快照（machine_params\）—— 2026-10-06 13:40
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ a00930a PASSPROF + COMM-STOPFAST: per-pass phase profiler in the serve loop; COM2 port res／web c19e27e。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
