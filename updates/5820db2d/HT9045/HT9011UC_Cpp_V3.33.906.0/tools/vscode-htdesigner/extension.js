@@ -1,0 +1,8922 @@
+'use strict';
+// AI(W906-HTDESIGNER) 20260929: HTML 視覺設計工具 (first built for HT9045; for every BCB6 -> web HMI + C++ software) -- VS Code extension entry.
+//
+// A WPF-designer-like view of the web HMI pages (web\page\*.html):
+//   * the page is rendered in a webview behind a no-network CSP (lib/pagehtml.js);
+//   * clicking a component selects it (the page's own handlers do not run);
+//   * the 元件 tree and the 屬性與事件 panel show the DFM control, its properties
+//     (tools\dfm2rc\ir_out) and its events;
+//   * double-clicking an event opens its code: the web JS listener that really
+//     runs in the browser, the C++ port (TfXxx::Handler), or the BCB6 original
+//     (Big5, opened read-only through a virtual document so it can never be
+//     re-saved as UTF-8).
+// Nothing here writes to any file, and nothing here can reach the machine.
+
+const vscode = require('vscode');
+const fs = require('fs');
+const claudeactivity = require('./lib/claudeactivity');
+const path = require('path');
+const crypto = require('crypto');
+const roots = require('./lib/roots');
+const pageinfo = require('./lib/pageinfo');
+const { SourceTree, decodeBig5, SKIP_DIR } = require('./lib/cppindex');
+const web = require('./lib/websearch');
+const fmt = require('./lib/format');
+const { buildPageHtml, hasIframe } = require('./lib/pagehtml');
+const { ReverseIndex, enclosingMethod } = require('./lib/reverse');
+const { WebCmdIndex } = require('./lib/webcmds');
+const overview = require('./lib/overview');
+const dfmdiff = require('./lib/dfmdiff');
+const taborder = require('./lib/taborder');
+const mixed = require('./lib/mixed');
+const pagelist = require('./lib/pagelist');
+const htmlblock = require('./lib/htmlblock');
+const toolbox = require('./lib/toolbox');
+const pagesearch = require('./lib/pagesearch');
+const pagelint = require('./lib/pagelint');
+const update = require('./lib/update');
+const liveconfig = require('./lib/liveconfig');
+const csvtable = require('./lib/csvtable');
+const vclevents = require('./lib/vclevents');
+const cppstub = require('./lib/cppstub');
+const cpptypes = require('./lib/cpptypes');
+const projectsearch = require('./lib/projectsearch');
+const solutiontree = require('./lib/solutiontree');
+const pagecontrol = require('./lib/pagecontrol');
+const snapshot = require('./lib/snapshot');
+const pagecompare = require('./lib/pagecompare');
+// 1006 the format painter: the look a "複製格式" carries (font, colors, alignment -- never a size, place or text)
+const FORMAT_PROPS = ['fontName', 'fontSize', 'bold', 'italic', 'underline', 'strikeout', 'color', 'background', 'alignment'];
+const icons = require('./lib/icons');
+const listitems = require('./lib/items');
+const cppsymbols = require('./lib/cppsymbols');
+const jsevents = require('./lib/jsevents');
+const aliasedit = require('./lib/aliasedit');
+const cppbridge = require('./lib/cppbridge');
+const CSV_VIEW = 'ht9045Designer.csv';
+const LINT_SOURCE = 'HTML 頁面檢查';
+const htmledit = require('./lib/htmledit');
+const buildwatch = require('./lib/buildwatch');
+const filelog = require('./lib/filelog');
+const uptodate = require('./lib/uptodate');
+const lex = require('./lib/cpplex');
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+const attrsOf = t => htmledit.attrsOf(t);
+/** Attributes the grid may change: text-like ones. Never the id (the page's JS finds it by it) or on* handlers. */
+const ATTR_EDIT = /^(title|class|placeholder|tabindex|alt|data-[\w-]+|aria-[\w-]+)$/;
+/** A CSS property name / value the grid writes into a style="…" (no way out of the declaration;
+    a quote is fine: htmledit.setStyle turns it into the other kind). */
+const CSS_NAME = /^(--)?[a-z][a-z0-9-]*$/;
+const CSS_BAD = /[;{}<>\\]/;
+
+const VIEW_TYPE = 'ht9045Designer.editor';
+const GOLDEN_SCHEME = 'ht9045-golden';
+const CONTAINER = 'workbench.view.extension.ht9045-designer';
+
+const KIND = {
+  web: { icon: '$(globe)', label: '網頁 JS' },
+  port: { icon: '$(symbol-class)', label: 'C++ 移植樹' },
+  golden: { icon: '$(history)', label: 'BCB6 原始碼（唯讀）' },
+  dfm: { icon: '$(symbol-structure)', label: 'BCB6 表單 .dfm（唯讀）' },
+  html: { icon: '$(code)', label: 'HTML 原始碼' },
+};
+
+let hub = null;
+
+function activate(context) {
+  hub = new Hub(context);
+  // exposed for test\integration (vscode.extensions.getExtension(...).exports)
+  return { hub };
+}
+
+function deactivate() {
+  hub = null;
+}
+
+// ---------------------------------------------------------------------------
+class Hub {
+  constructor(ctx) {
+    this.ctx = ctx;
+    this.out = vscode.window.createOutputChannel('HTML 視覺設計');
+    // (1003, EastSun: "你要寫LOG紀錄 才能查異常" + "並且定時清理LOG": what goes to the output panel also goes to a file per day,
+    //  errors with their stack; files older than log.keepDays (14) or over log.maxMB (50) removed at start and every 6 h)
+    {
+      const lc = vscode.workspace.getConfiguration('ht9045Designer');
+      const base = ctx.globalStorageUri && ctx.globalStorageUri.fsPath ? ctx.globalStorageUri.fsPath : path.join(require('os').tmpdir(), 'ht9045-html-designer');
+      this.flog = filelog.create(path.join(base, 'logs'), { keepDays: lc.get('log.keepDays') || 14, maxMB: lc.get('log.maxMB') || 50 });
+      const clean = () => { const r = this.flog.cleanup(); if (r.removed.length) this.flog.write('INFO', '清理舊 LOG：' + r.removed.join('、')); };
+      clean();
+      const lt = setInterval(clean, 6 * 3600 * 1000);
+      if (lt.unref) lt.unref();
+      ctx.subscriptions.push({ dispose: () => clearInterval(lt) });
+      this.flog.write('INFO', '外掛啟動 v' + ((ctx.extension && ctx.extension.packageJSON && ctx.extension.packageJSON.version) || '?') + '（' + (ctx.extension && ctx.extension.extensionPath || __dirname) + '）');
+    }
+    this.designers = new Set();
+    this.active = null;
+    this.irStores = new Map();
+    this.trees = new Map();
+    this.watchers = new Map();
+    this.selSeq = 0;
+    this.propsDesigner = null;
+    this.warnedOperate = false;
+    // AI(W906-HTDESIGNER) 20261001: the designer's own build files (HtdEvents.gen.cpp, the server's htd.event branch,
+    // the CMake entry) go to disk at once, through here -- never left unsaved for a build to trip on (EastSun 1001:
+    // "你這邊建置時 可能有問題"). The tests put an in-memory one in its place.
+    this.disk = {
+      read: f => { try { return fs.readFileSync(f); } catch (e) { return null; } },
+      write: (f, buf) => {
+        fs.mkdirSync(path.dirname(f), { recursive: true });
+        const tmp = f + '.htd-' + process.pid + '.tmp';
+        fs.writeFileSync(tmp, buf);
+        fs.renameSync(tmp, f);
+      },
+    };
+    this.tree = new ComponentTree(this);
+    // WPF document outline: drag a component onto a container to move it in there
+    this.treeDnd = new ComponentDnd(this);
+    this.treeView = vscode.window.createTreeView('ht9045Designer.components', {
+      treeDataProvider: this.tree, showCollapseAll: true, canSelectMany: true, dragAndDropController: this.treeDnd,
+    });
+    // WPF document outline: Ctrl/Shift+click in the tree = multi-select on the page
+    // (a single click is the item's command; the tree's own reveal is ignored here)
+    this.treeView.onDidChangeSelection(e => {
+      if (this.tree.revealing || !this.active) return;
+      const sel = (e.selection || []).filter(n => n && n.key);
+      if (sel.length < 2) return;
+      const ids = sel.map(n => (n.isForm ? '@form' : n.id)).filter(Boolean);
+      const focus = this.tree.lastClicked && sel.find(n => n.key === this.tree.lastClicked);
+      if (focus) ids.unshift(ids.splice(ids.indexOf(focus.isForm ? '@form' : focus.id), 1)[0]);
+      this.active.post({ type: 'selectIds', ids, origin: 'tree' });
+    });
+    // 頁面: all pages of the web folder, a click switches the designer to one
+    this.pages = new PageTree(this);
+    this.pageView = vscode.window.createTreeView('ht9045Designer.pages', { treeDataProvider: this.pages, showCollapseAll: true });
+    if (this.pageView.onDidChangeVisibility) this.pageView.onDidChangeVisibility(e => { if (e.visible) this.pages.revealActive(); });
+    // the version this window runs, in sight: after installing a new one, a window not reloaded still runs the old
+    this.version = (ctx.extension && ctx.extension.packageJSON && ctx.extension.packageJSON.version) || '';
+    if (this.version) this.pageView.description = 'v' + this.version;
+    // 工具箱: new components (the generator's markup)
+    this.toolboxView = vscode.window.createTreeView('ht9045Designer.toolbox', { treeDataProvider: this.toolboxTree = new ToolboxTree(this) });
+    // 專案搜尋 (0.137): one keyword over the port / web / golden trees, every hit listed
+    this.projSearch = new ProjectSearch(this);
+    this.projSearchView = vscode.window.createTreeView('ht9045Designer.projectSearch', { treeDataProvider: this.projSearch, showCollapseAll: true });
+    this.projSearch.view = this.projSearchView;
+    // 方案總管 (0.138): Visual Studio's Solution Explorer over the same three trees
+    this.solution = new SolutionTree(this);
+    // (0.148: drawn by the extension -- the search box right under the title, the tree under it, one view)
+    this.solPanel = new SolutionPanel(this);
+    this.solutionView = this.solPanel.adapter;
+    this.applyTabScrollbar();
+    this.applySectionFrames();
+    this.applyLayout();
+    this.solution.view = this.solutionView;
+    if (this.version) { this.solution.versionText = 'v' + this.version; this.solution.setDescription(); }
+    this.props = new PropsView(this);
+    // 搜尋頁面: the search box above the 頁面 list
+    this.pageSearch = new PageSearchView(this);
+    this.status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 40);
+    this.status.command = 'ht9045Designer.toggleMode';
+    // the page switcher, always in sight (the 頁面 list can be collapsed or hidden in the side bar)
+    this.pageStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 41);
+    this.pageStatus.command = 'ht9045Designer.openPage';
+    this.pageStatus.text = '$(file-code) 選擇頁面';
+    this.pageStatus.tooltip = '選一個 HTML 頁面，用設計檢視開啟';
+    this.pageStatus.show();
+    // 有新版: a newer install runs only after the window is reloaded -- found by itself, one button to take it
+    // (EastSun: "你不能加個按鈕讓我 reload 嗎 ... 就算我接受別人也沒辦法接受")
+    this.updateItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 42);
+    this.updateItem.command = 'ht9045Designer.reloadWindow';
+    this.newerVersion = null;
+    const updTimer = setInterval(() => this.checkUpdate(), 60000);
+    if (updTimer && updTimer.unref) updTimer.unref();
+    ctx.subscriptions.push({ dispose: () => clearInterval(updTimer) });
+    if (vscode.window.onDidChangeWindowState) ctx.subscriptions.push(vscode.window.onDidChangeWindowState(e => { if (e.focused) this.checkUpdate(); }));
+    const updFirst = setTimeout(() => this.checkUpdate(), 3000);
+    if (updFirst && updFirst.unref) updFirst.unref();
+    // AI(W906-HTDESIGNER) 20261002 (machine; EastSun「編譯進度可以有個進度條嗎?」): F5's build writes its progress to
+    // <web>\JSON\runtime\boot_build.js (tools\build_with_status.ps1) -- a progress bar here from it, read only
+    this.buildBar = null;
+    // (and, the F5 path being VS Code's own task calling cmake directly, CMake's progress in the build folder while a
+    //  build task runs: the task's start and end only, nothing about it is changed)
+    this.bwTask = null;
+    // (1003, EastSun: "檔案和按鈕請分成兩行" + "如果是claude 的視窗 請分成第三行": the buttons on the title bar
+    //  (workbench.editor.editorActionsLocation = titleBar), and Claude's tabs on a row of their own -- VS Code's
+    //  "pinned tabs on a separate row": a Claude tab is pinned when it opens; ht9045Designer.pinClaudeTabs turns it off)
+    // (1003, EastSun: "你搜尋關鍵字視窗模組 請你開軟體就自動啟用好 並且我沒按ctrl+F 請先隱藏": the extension starts with VS Code
+    //  (package.json onStartupFinished) so Ctrl+F does not wait for it to load; a 尋找 / 建置 window VS Code brings back from
+    //  the last session is closed at once -- they show only when asked for (Ctrl+F, a build))
+    if (vscode.debug && vscode.debug.registerDebugConfigurationProvider) {
+      ctx.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('cppdbg', {
+        // (before its preLaunchTask builds: the same program still running is ended -- RunBar.freeProgram)
+        resolveDebugConfigurationWithSubstitutedVariables: async (folder, cfg) => {
+          if (cfg && this.runBar && vscode.workspace.getConfiguration('ht9045Designer').get('run.freeBeforeBuild') !== false) {
+            try { await this.runBar.freeProgram(cfg.program); } catch (e) { /* the build says */ }
+          }
+          if (cfg && this.runBar) { try { this.skipBuildIfUpToDate(folder, cfg); } catch (e) { this.logErr('F5 是否要建置', e); } }
+          // (1006: gdb that cannot start a program on this PC -> LLDB (lldb-dap, the ht9045-lldb debugger); neither -> asked: without a debugger, or not)
+          if (cfg && this.runBar && !cfg.noDebug) {
+            let v = null;
+            try { v = await this.runBar.debugVia(cfg); } catch (e) { this.logErr('F5 偵錯器檢查', e); }
+            if (v && v.via === 'lldb' && v.cfg) { this.runBar.saidLldb(v.why); return v.cfg; }
+            if (v && !v.cfg) {
+              this.logEv('F5 Debug 不能用：' + v.why);
+              const pick = await vscode.window.showWarningMessage('Debug 啟動不了：這台電腦的偵錯器（gdb）沒辦法啟動程式（' + v.why + '）。要不接除錯器啟動嗎？', '不接除錯器啟動', '取消');
+              if (pick !== '不接除錯器啟動') return undefined;
+              return Object.assign({}, cfg, { noDebug: true });
+            }
+          }
+          return cfg;
+        },
+      }));
+    }
+    // (1006: the "ht9045-lldb" debugger -- what a gdb launch becomes on a PC where gdb cannot start a program: LLDB's own
+    //  debug adapter lldb-dap, the one the launch names, else the one found for the program's bitness)
+    if (vscode.debug && vscode.debug.registerDebugAdapterDescriptorFactory && vscode.DebugAdapterExecutable) {
+      ctx.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('ht9045-lldb', {
+        createDebugAdapterDescriptor: s => {
+          const c = (s && s.configuration) || {};
+          const dap = c.lldbDap && fs.existsSync(c.lldbDap) ? c.lldbDap : this.runBar ? this.runBar.findLldbDap(this.runBar.exeBits(c.program)) : null;
+          if (!dap) { vscode.window.showErrorMessage('找不到 lldb-dap.exe（設定 ht9045Designer.debug.lldbDapPath）。'); return undefined; }
+          return new vscode.DebugAdapterExecutable(dap, []);
+        },
+      }));
+    }
+    if (vscode.window.registerWebviewPanelSerializer) {
+      for (const vt of ['ht9045Designer.findWindow', 'ht9045Designer.buildWindow']) {
+        ctx.subscriptions.push(vscode.window.registerWebviewPanelSerializer(vt, { deserializeWebviewPanel: async p => { try { p.dispose(); } catch (e) { /* gone */ } } }));
+      }
+    }
+    if (vscode.window.tabGroups && vscode.window.tabGroups.onDidChangeTabs) {
+      ctx.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(e => this.pinClaudeTabs(e)));
+      // (Claude tabs already open when this starts: the one in front of each group)
+      try { this.pinClaudeTabs({ opened: vscode.window.tabGroups.all.map(g => g.activeTab).filter(Boolean) }); } catch (e) { /* no tabs */ }
+    }
+    // (1003: back / forward to the code places are on the editor's title bar -- package.json editor/title; the status bar
+    //  shows information only: EastSun "按鈕可以不要加圖片位置? 加在上方可以嗎?")
+    const isBuildTask = t => /build|建置|cmake|編譯/i.test((t && (t.name || '')) + ' ' + JSON.stringify((t && t.definition) || {}));
+    if (vscode.tasks && vscode.tasks.onDidStartTaskProcess) ctx.subscriptions.push(vscode.tasks.onDidStartTaskProcess(e => {
+      const t = e && e.execution && e.execution.task;
+      if (isBuildTask(t) && !(t.definition && t.definition.type === 'ht9045Designer')) { this.bwTask = { name: t.name, t: Date.now(), ended: false, code: null, dir: null, pid: e.processId || null }; if (this.runBar) this.runBar.update(); }
+    }));
+    if (vscode.tasks && vscode.tasks.onDidEndTaskProcess) ctx.subscriptions.push(vscode.tasks.onDidEndTaskProcess(e => {
+      const t = e && e.execution && e.execution.task;
+      if (this.bwTask && t && t.name === this.bwTask.name) { this.bwTask.ended = true; this.bwTask.code = e.exitCode; if (this.runBar) this.runBar.update(); }
+    }));
+    // (1003: F5 started this extension -- package.json "onDebug"; its build task may already be running then: taken up,
+    //  its CMake progress looked for over the last 10 minutes)
+    try {
+      const running = ((vscode.tasks && vscode.tasks.taskExecutions) || []).map(x => x && x.task).find(t => isBuildTask(t) && !(t.definition && t.definition.type === 'ht9045Designer'));
+      if (running && !this.bwTask) this.bwTask = { name: running.name, t: Date.now() - 600000, ended: false, code: null, dir: null, late: true };
+    } catch (e) { /* no task API */ }
+    const bwTimer = setInterval(() => this.buildWatchTick(), 1000);
+    if (bwTimer && bwTimer.unref) bwTimer.unref();
+    ctx.subscriptions.push({ dispose: () => { clearInterval(bwTimer); if (this.buildBar) this.buildBar.end(); } });
+    // CSV 表格: a .csv open as text -- a tab from before the update comes back as text (VS Code keeps the kind
+    // of editor a tab had): the table one click away, and asked once per file
+    // (EastSun 20260930: "依照圖片 表格沒有出現阿 我已經有更新過")
+    // (1006: the Claude tabs that are working -- a spinner on the status bar, every 2 s)
+    this.claudeItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 44);
+    this.claudeItem.command = 'ht9045Designer.claudeBusyPick';
+    const clTimer = setInterval(() => { try { this.claudeTick(); } catch (e) { /* next time */ } }, 2000);
+    if (clTimer && clTimer.unref) clTimer.unref();
+    ctx.subscriptions.push({ dispose: () => clearInterval(clTimer) }, this.claudeItem);
+    this.csvItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 43);
+    this.csvItem.command = 'ht9045Designer.openCsvTable';
+    this.csvItem.text = '$(table) 用表格開啟';
+    this.csvAsked = new Set();
+    if (vscode.window.onDidChangeActiveTextEditor) ctx.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(ed => this.csvTextEditor(ed)));
+    const csvFirst = setTimeout(() => this.csvTextEditor(vscode.window.activeTextEditor), 1500);
+    if (csvFirst && csvFirst.unref) csvFirst.unref();
+    // 執行列 (0.142, EastSun: "我需要在固定的地方 可以讓我啟動 暫停 停止 該軟體"): Visual Studio's ▶ ▾ ⏸ ⏹ ↻ step buttons, always
+    // at the left of the status bar (VS Code's own debug toolbar shows only while debugging)
+    this.runBar = new RunBar(ctx, this);
+    // the zoomWheel / snapSpacing setting changed: every open designer takes it at once (no reopening)
+    if (vscode.workspace.onDidChangeConfiguration) ctx.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration('ht9045Designer.zoomWheel')) {
+        const how = this.wheelZoom();
+        for (const d of this.designers) d.post({ type: 'wheelZoom', how });
+        this.updateStatus();
+      }
+      if (e.affectsConfiguration('ht9045Designer.snapSpacing')) {
+        const px = this.snapSpacing();
+        for (const d of this.designers) d.post({ type: 'snapSpacing', px });
+      }
+      // (0.155: the machine's screen frame, changed in Settings)
+      if (e.affectsConfiguration('ht9045Designer.screenSize')) { const sc = this.screenSize(); for (const d of this.designers) d.post({ type: 'setScreen', screen: sc }); }
+    }));
+    // (a command that fails: its error and stack in the log file -- then it fails as before)
+    const reg = (id, fn) => vscode.commands.registerCommand(id, (...a) => {
+      try {
+        const r = fn(...a);
+        return r && typeof r.then === 'function' ? r.then(x => x, e => { this.logErr(id, e); throw e; }) : r;
+      } catch (e) { this.logErr(id, e); throw e; }
+    });
+    ctx.subscriptions.push(
+      this.out, this.treeView, this.pageView, this.toolboxView, this.status, this.pageStatus, this.updateItem, this.csvItem,
+      reg('ht9045Designer.reloadWindow', () => this.cmdReloadWindow()),
+      // C++ navigation (0.140): the breadcrumbs' classes / members, the 專案 / 類別 / 成員 pickers
+      ...(vscode.languages.registerDocumentSymbolProvider ? [vscode.languages.registerDocumentSymbolProvider([{ language: 'cpp' }, { language: 'c' }], this.cppNav = new CppNav(this), { label: 'HTML 設計工具：C++ 導覽' })] : []),
+      reg('ht9045Designer.navProject', () => (this.cppNav || (this.cppNav = new CppNav(this))).cmdNav('project')),
+      reg('ht9045Designer.navClass', () => (this.cppNav || (this.cppNav = new CppNav(this))).cmdNav('class')),
+      reg('ht9045Designer.navMember', () => (this.cppNav || (this.cppNav = new CppNav(this))).cmdNav('member')),
+      // 分頁 (0.141, EastSun: "可以調整左右的 可以看其他方案 並且有選項可以關閉其他方案"): the list of the open ones (Visual
+      // Studio's ▾ at the end of the tab row), close the others -- VS Code's own commands. 0.142 (EastSun: "左右可以滾輪 不是選擇
+      // 檔案"): the 0.141 ◀ ▶ switched the file; no API scrolls the tab row, so the row gets the large scrollbar instead
+      // (the wheel over the row scrolls it too) -- tabScrollbar toggles it
+      reg('ht9045Designer.tabScrollbar', () => this.cmdTabScrollbar()),
+      reg('ht9045Designer.screenSize', a => this.cmdScreenSize(typeof a === 'string' ? a : undefined)),
+      reg('ht9045Designer.sectionFrames', () => this.cmdSectionFrames()),
+      // 尋找 (0.144): Visual Studio's Find in Files -- the keyword, the scope, the options in one box (Ctrl+Shift+F)
+      reg('ht9045Designer.find', a => this.projSearch.cmdFind(a)),
+      // (1003, EastSun: "可以轉跳我上次程式碼位置的按鈕 做大一點讓我方便點 也加個轉跳到上個程式碼後 可以轉跳到下個程式碼的按鈕":
+      //  VS Code's own place history -- Alt+Left / Alt+Right: a jump from an event, a search result, Ctrl+click alike)
+      // (1003, EastSun: "我上方按鈕也需要檔案儲存按鈕": save / save all on the same toolbar)
+      reg('ht9045Designer.openLogFolder', () => vscode.env.openExternal(vscode.Uri.file(this.flog.dir)).then(() => this.flog.dir)),
+      reg('ht9045Designer.saveFile', () => vscode.commands.executeCommand('workbench.action.files.save')),
+      reg('ht9045Designer.saveAllFiles', () => vscode.commands.executeCommand('workbench.action.files.saveAll')),
+      reg('ht9045Designer.navBack', () => vscode.commands.executeCommand('workbench.action.navigateBack')),
+      reg('ht9045Designer.navForward', () => vscode.commands.executeCommand('workbench.action.navigateForward')),
+      reg('ht9045Designer.tabList', () => vscode.commands.executeCommand('workbench.action.showAllEditorsByMostRecentlyUsed')),
+      reg('ht9045Designer.tabCloseOthers', () => vscode.commands.executeCommand('workbench.action.closeOtherEditors')),
+      // 上下版面 (0.140): a C++ file opened closes the page
+      ...(vscode.window.onDidChangeActiveTextEditor ? [vscode.window.onDidChangeActiveTextEditor(ed => this.onActiveEditor(ed))] : []),
+      // 方案總管 (0.138)
+      // (0.148: one webview view -- the box and the tree; right-click items get { htdId } -> solPanel.nodeOf)
+      vscode.window.registerWebviewViewProvider('ht9045Designer.solution', this.solPanel, { webviewOptions: { retainContextWhenHidden: true } }),
+      reg('ht9045Designer.solutionFilter', q => this.solution.cmdFilter(typeof q === 'string' ? q : undefined)),
+      reg('ht9045Designer.solutionClearFilter', () => this.solution.setFilter('')),
+      reg('ht9045Designer.solutionRefresh', () => { this.solution.cache.clear(); return this.solution.q ? this.solution.setFilter(this.solution.q) : this.solution.refresh(); }),
+      reg('ht9045Designer.solutionCollapseAll', () => this.solPanel.collapseAll()),
+      reg('ht9045Designer.solutionOpen', n => this.solution.open(this.solPanel.nodeOf(n))),
+      reg('ht9045Designer.solutionReveal', f => this.solution.cmdReveal(typeof f === 'string' ? f : undefined)),
+      reg('ht9045Designer.solutionSearchIn', a => { const n = this.solPanel.nodeOf(a); return n && n.path ? this.projSearch.cmdSearchHere({ q: n.q, fromTree: true, scope: n.type === 'file' ? 'file' : n.type === 'dir' ? 'folder' : 'project', file: n.path }) : null; }),
+      reg('ht9045Designer.solutionCopyPath', a => { const n = this.solPanel.nodeOf(a); return n && n.path ? Promise.resolve(vscode.env.clipboard.writeText(n.path)).then(() => n.path) : null; }),
+      reg('ht9045Designer.solutionRevealInOS', a => { const n = this.solPanel.nodeOf(a); return n && n.path ? vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(n.path)) : null; }),
+      // 專案搜尋 (0.137)
+      this.projSearchView,
+      reg('ht9045Designer.projectSearchRun', q => this.projSearch.cmdSearch(typeof q === 'string' ? q : undefined)),
+      reg('ht9045Designer.projectSearchOpen', h => this.projSearch.open(h)),
+      reg('ht9045Designer.projectSearchHere', a => this.projSearch.cmdSearchHere(a && typeof a === 'object' && !a.scheme ? a : undefined)),
+      reg('ht9045Designer.projectSearchCopy', () => this.projSearch.cmdCopy()),
+      reg('ht9045Designer.projectSearchClear', () => this.projSearch.cmdClear()),
+      reg('ht9045Designer.projectSearchCase', () => this.projSearch.toggle('caseSensitive')),
+      reg('ht9045Designer.projectSearchCaseOn', () => this.projSearch.toggle('caseSensitive')),
+      reg('ht9045Designer.projectSearchWord', () => this.projSearch.toggle('wholeWord')),
+      reg('ht9045Designer.projectSearchWordOn', () => this.projSearch.toggle('wholeWord')),
+      reg('ht9045Designer.projectSearchRegex', () => this.projSearch.toggle('regex')),
+      reg('ht9045Designer.projectSearchRegexOn', () => this.projSearch.toggle('regex')),
+      vscode.window.registerWebviewViewProvider('ht9045Designer.pageSearch', this.pageSearch),
+      // CSV 表格: a .csv as a table, edited like Excel (only the changed cells' text is replaced)
+      vscode.window.registerCustomEditorProvider(CSV_VIEW, this.csv = new CsvTableEditor(this), { webviewOptions: { retainContextWhenHidden: true } }),
+      reg('ht9045Designer.openCsvTable', uri => this.cmdOpenCsvTable(uri)),
+      // 搜尋頁面: filter the 頁面 list (the box, or a command with the words); '' = every page again
+      // (1006 audit: from the palette -- no argument -- it asks; it used to clear the filter)
+      reg('ht9045Designer.filterPages', async q => {
+        if (typeof q !== 'string') { q = await vscode.window.showInputBox({ prompt: '搜尋頁面（名稱、標題、元件）', value: (this.pages && this.pages.query) || '' }); if (q == null) return null; }
+        return this.filterPages(q);
+      }),
+      reg('ht9045Designer.clearPageFilter', () => this.filterPages('')),
+      // (0.139: 搜尋頁面 is 方案總管's search now -- Ctrl+; there)
+      reg('ht9045Designer.focusPageSearch', () => this.solution.cmdFilter()),
+      reg('ht9045Designer.openPageAt', (file, id) => (typeof file === 'string' && file ? this.openPageAt(file, id) : null)),
+      // 機種: which machine the pages are shown for (machine-only tabs / components)
+      reg('ht9045Designer.pickMachine', arg => this.cmdPickMachine(arg)),
+      vscode.window.registerWebviewViewProvider('ht9045Designer.properties', this.props, {
+        webviewOptions: { retainContextWhenHidden: true },
+      }),
+      vscode.window.registerCustomEditorProvider(VIEW_TYPE, {
+        resolveCustomTextEditor: (doc, panel) => this.createDesigner(doc, panel),
+      }, { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: false }),
+      // golden (Big5) through a READ-ONLY file system: the editor cannot change it at
+      // all, so it can never be saved back as UTF-8 (a content provider still lets
+      // the API edit the buffer, and "Save As" could then land on the original path)
+      vscode.workspace.registerFileSystemProvider(GOLDEN_SCHEME, new GoldenFs(), {
+        isReadonly: true, isCaseSensitive: false,
+      }),
+      reg('ht9045Designer.open', uri => this.cmdOpen(uri)),
+      reg('ht9045Designer.openPage', () => this.cmdOpenPage()),
+      reg('ht9045Designer.showPages', () => this.cmdShowPages()),
+      // the 頁面 list: open a page in the designer / as HTML text; read the folder again
+      reg('ht9045Designer.openPageFile', file => {
+        file = this.pageFileOf(file);
+        if (typeof file === 'string' && file) return vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(file), VIEW_TYPE);
+      }),
+      reg('ht9045Designer.openPageText', n => {
+        const f = this.pageFileOf(n) || (this.active ? this.active.file : null);
+        if (f) return vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(f), 'default', vscode.ViewColumn.Beside);
+      }),
+      reg('ht9045Designer.refreshPages', () => this.pages.refresh()),
+      reg('ht9045Designer.searchPages', q => this.cmdSearchPages(typeof q === 'string' ? q : undefined)),
+      // hidden in the designer only (the eye in the component tree / the design surface's menu)
+      reg('ht9045Designer.designHide', n => this.designHide(n, true)),
+      reg('ht9045Designer.designUnhide', n => this.designHide(n, false)),
+      reg('ht9045Designer.designToggle', n => this.designHide(n)),
+      reg('ht9045Designer.designUnhideAll', () => { if (this.active) this.applyDesignHidden(this.active, []); }),
+      // locked in the designer only (the lock in the component tree / the design surface's menu)
+      reg('ht9045Designer.designLock', n => this.designLock(n, true)),
+      reg('ht9045Designer.designUnlock', n => this.designLock(n, false)),
+      reg('ht9045Designer.designLockToggle', n => this.designLock(n)),
+      reg('ht9045Designer.designUnlockAll', () => { if (this.active) this.applyDesignLocked(this.active, []); }),
+      reg('ht9045Designer.designLockAll', () => this.designLockAll()),
+      // WPF Document Outline: Ctrl+H hide, Shift+Ctrl+H show, Ctrl+L lock, Shift+Ctrl+L unlock -- the selection
+      // (from the component tree: its selected rows)
+      reg('ht9045Designer.designKey', a => this.cmdDesignKey(a && a.cmd, !!(a && a.from === 'tree'))),
+      // WPF: F2 on the design surface = edit the control's text right there (renaming: the Name box, F2 in the tree)
+      reg('ht9045Designer.editText', () => {
+        const d = this.active;
+        if (!d) return null;
+        if (!(d.sel && d.sel.info && d.sel.info.id)) { vscode.window.setStatusBarMessage('$(info) 先選一個元件，再按 F2 改它的文字', 4000); return null; }
+        d.post({ type: 'editText' });
+        return { asked: d.sel.info.id };
+      }),
+      // Ctrl+Z / Ctrl+Y while that text box is open: its typing, never the page's undo
+      reg('ht9045Designer.textUndo', a => { const d = this.active; if (d && d.textEditing) d.post({ type: 'textUndo', redo: !!(a && a.redo) }); return !!(d && d.textEditing); }),
+      // AI(W906-HTDESIGNER) 20261001: the CSV table's own Excel keys -- the table handles them; VS Code's binding of the
+      // same key must not run too (Ctrl+R = Open Recent, Ctrl+- / Ctrl+Shift+= = zoom, Ctrl+Z while a cell is edited
+      // = undo of the FILE). package.json binds them to this in the table only.
+      reg('ht9045Designer.csvKey', () => true),
+      // WPF: Alt+arrow = duplicate the selection (the copy moved 1 px that way; Shift = 10 px) -- the Ctrl+drag copy
+      reg('ht9045Designer.duplicate', async a => {
+        // (1006 audit: from a tree row it used to be 0, 0 = nothing at all, silently -- 10 px down and right, as Ctrl+D)
+        if (this.treeNode(a)) { await this.onNode(a); a = { dx: 10, dy: 10 }; }
+        const d = this.active;
+        if (!d) return null;
+        return this.cmdCopyDrop(d, { ids: this.selIds(d), dx: Math.round(+(a && a.dx) || 0), dy: Math.round(+(a && a.dy) || 0) });
+      }),
+      // WPF Delete / Cut / Copy / Paste of whole components (the page is drawn again from the source)
+      // (from the Document Outline's right-click menu the row comes along: that component is selected first -- onNode)
+      reg('ht9045Designer.deleteComponent', async arg => { await this.onNode(arg); return this.cmdDelete(arg && typeof arg === 'object' && 'confirmed' in arg ? arg : null); }),
+      reg('ht9045Designer.cutComponent', async arg => { await this.onNode(arg); return this.cmdCut(arg && typeof arg === 'object' && 'confirmed' in arg ? arg : null); }),
+      reg('ht9045Designer.copyComponent', async n => { await this.onNode(n); return this.cmdCopy(); }),
+      // the Document Outline's own keys (WPF: the outline does what the design surface does): F2, Ctrl+C / X / V, Delete on
+      // the tree's selected row -- the arrow keys move the tree's selection without the page knowing, so it is selected
+      // first (several rows: the page already has them all)
+      reg('ht9045Designer.outlineKey', async a => {
+        const sel = this.treeView && this.treeView.selection ? this.treeView.selection.filter(n => n && n.key != null) : [];
+        if (sel.length === 1) await this.onNode(sel[0]);
+        const run = { rename: () => this.cmdRename(), copy: () => this.cmdCopy(), cut: () => this.cmdCut(null), paste: () => this.cmdPaste(), delete: () => this.cmdDelete(null) }[a && a.cmd];
+        return run ? run() : null;
+      }),
+      reg('ht9045Designer.pasteComponent', async n => { await this.onNode(n); return this.cmdPaste(); }),
+      // WPF Order
+      ...['front', 'forward', 'backward', 'back'].map(how => reg('ht9045Designer.order.' + how, async n => { await this.onNode(n); return this.cmdOrder(how); })),
+      // 工具箱 (WPF Toolbox): a click on an item adds one
+      reg('ht9045Designer.toolboxAdd', cls => this.cmdAdd(typeof cls === 'string' ? cls : cls && cls.cls)),
+      reg('ht9045Designer.toolboxArm', cls => this.toolboxArm(typeof cls === 'string' ? cls : cls && cls.cls)),
+      reg('ht9045Designer.claudeBusyPick', () => this.claudeBusyPick()),
+      reg('ht9045Designer.designNote', async n => { if (n && typeof n === 'object') await this.onNode(n); return this.cmdNote(typeof n === 'string' ? n : undefined); }),
+      reg('ht9045Designer.pinContainer', async n => { if (n && typeof n === 'object') await this.onNode(n); return this.cmdPinContainer(); }),
+      reg('ht9045Designer.comparePages', o => this.cmdComparePages(typeof o === 'string' ? o : undefined)),
+      reg('ht9045Designer.replaceCaptions', o => this.cmdReplaceCaptions(o)),
+      reg('ht9045Designer.exportPng', o => this.cmdExportPng(o && typeof o === 'object' && (o.out || o.run) ? o : undefined)),
+      reg('ht9045Designer.tabAdd', (a, o) => this.cmdTabAdd(a, o)),
+      reg('ht9045Designer.tabDelete', (a, o) => this.cmdTabDelete(a, o)),
+      reg('ht9045Designer.tabCaption', (a, o) => this.cmdTabCaption(a, o)),
+      reg('ht9045Designer.tabMoveLeft', (a, o) => this.cmdTabArrange(a, -1, o)),
+      reg('ht9045Designer.tabMoveRight', (a, o) => this.cmdTabArrange(a, 1, o)),
+      reg('ht9045Designer.tabSetActive', (a, o) => this.cmdTabArrange(a, 'active', o)),
+      reg('ht9045Designer.formatCopy', async n => { if (n && typeof n === 'object') await this.onNode(n); return this.cmdFormatCopy(); }),
+      reg('ht9045Designer.formatPaste', async n => { if (n && typeof n === 'object') await this.onNode(n); return this.cmdFormatPaste(); }),
+      reg('ht9045Designer.pasteRing', async a => { await this.onNode(a); return this.cmdPasteRing(typeof a === 'number' ? a : undefined); }),
+      reg('ht9045Designer.undoHistory', a => this.cmdUndoHistory(typeof a === 'number' ? a : undefined)),
+      reg('ht9045Designer.templateSave', async a => { if (a && typeof a === 'object') await this.onNode(a); return this.cmdTemplateSave(typeof a === 'string' ? a : undefined); }),
+      reg('ht9045Designer.templateInsert', a => this.cmdTemplateInsert(typeof a === 'string' ? a : a && a.template ? a.template.name : null)),
+      reg('ht9045Designer.templateDelete', a => this.cmdTemplateDelete(a)),
+      reg('ht9045Designer.toolboxArmSticky', cls => this.toolboxArmSticky(typeof cls === 'string' ? cls : cls && cls.cls)),
+      // WPF: "select an element in the Toolbox and press Enter" = added (like a double-click)
+      // (the arrow keys move the tree's focus, Enter selects: VS Code selects the focused item first -- its own Enter --
+      // and that item's click command, pick-up, is skipped for the moment)
+      reg('ht9045Designer.toolboxAddSelected', async () => {
+        this.toolboxEnter = Date.now();
+        try { await vscode.commands.executeCommand('list.select'); } catch (e) { /* the selection as it is */ }
+        await new Promise(r => setTimeout(r, 80));
+        const it = this.toolboxView && this.toolboxView.selection && this.toolboxView.selection[0];
+        if (!it || it.group) return null;   // (a category: nothing to add)
+        if (it.cls === POINTER.cls) return this.toolboxPointer();
+        this.lastArm = null;
+        this.toolboxBackToPointer();
+        if (this.active) { this.active.armed = null; this.active.post({ type: 'placeArm', cls: null }); }
+        return this.cmdAdd(it.cls);
+      }),
+      reg('ht9045Designer.rename', async (name, confirmed) => { await this.onNode(name); return this.cmdRename(typeof name === 'string' ? name : undefined, confirmed === true); }),
+      reg('ht9045Designer.addComponent', async n => { await this.onNode(n); return this.cmdAddPick(); }),
+      // Blend Group Into (a new panel) / Ungroup
+      reg('ht9045Designer.groupIntoPanel', async n => { await this.onNode(n); return this.cmdGroup(); }),
+      // 0.160 (the WPF gap list G14: Group Into > Grid / Canvas / Border ...): which container -- Panel or GroupBox
+      reg('ht9045Designer.groupInto', async a => { if (a && typeof a === 'object' && !a.kind) await this.onNode(a); return this.cmdGroupInto(a && a.kind); }),
+      reg('ht9045Designer.ungroup', async n => { await this.onNode(n); return this.cmdUngroup(); }),
+      // WPF "snap to gridlines"
+      reg('ht9045Designer.toggleGrid', on => this.cmdToggleGrid(typeof on === 'boolean' ? on : undefined)),
+      reg('ht9045Designer.toggleMode', () => this.cmdToggleMode()),
+      reg('ht9045Designer.reload', () => { if (this.active) this.active.render(); }),
+      reg('ht9045Designer.showSource', () => this.cmdShowSource()),
+      reg('ht9045Designer.revealSource', node => this.cmdRevealSource(node)),
+      reg('ht9045Designer.selectKey', key => {
+        this.tree.lastClicked = key;
+        if (this.active) this.active.post({ type: 'selectKey', key, origin: 'tree' });
+      }),
+      reg('ht9045Designer.showInfo', () => this.cmdShowInfo()),
+      reg('ht9045Designer.revealDfm', node => this.cmdRevealDfm(node)),
+      reg('ht9045Designer.findComponent', () => this.cmdFindComponent()),
+      reg('ht9045Designer.showInDesigner', entries => this.cmdShowInDesigner(entries)),
+      reg('ht9045Designer.showCodeInDesigner', () => this.cmdShowCodeInDesigner()),
+      reg('ht9045Designer.viewDesigner', () => this.cmdViewDesigner()),
+      reg('ht9045Designer.gotoEventHandler', () => this.cmdGotoEventHandler()),
+      reg('ht9045Designer.openWebSenders', (cmd, hits) => this.cmdOpenWebSenders(cmd, hits)),
+      reg('ht9045Designer.pageOverview', () => this.cmdPageOverview()),
+      reg('ht9045Designer.toggleWireMarks', on => this.cmdWireMarks(typeof on === 'boolean' ? on : undefined)),
+      reg('ht9045Designer.toggleDfmGhosts', on => this.cmdDfmGhosts(typeof on === 'boolean' ? on : undefined)),
+      reg('ht9045Designer.resetToDfm', async n => { await this.onNode(n); return this.cmdResetToDfm(); }),
+      // WPF Layout > Reset <property> / Reset All: only the position, only the size, the whole layout
+      ...['pos', 'size', 'layout'].map(only => reg('ht9045Designer.resetLayout.' + only, async n => { await this.onNode(n); return this.cmdResetToDfm(null, only); })),
+      reg('ht9045Designer.toggleTabOrder', on => this.cmdTabOrder(typeof on === 'boolean' ? on : undefined)),
+      reg('ht9045Designer.tabOrderSet', a => this.cmdTabOrderSet(a)),
+      // every component's name on the design surface (on / off per designer)
+      reg('ht9045Designer.toggleNames', on => {
+        const d = this.active;
+        if (!d) return null;
+        d.showNames = typeof on === 'boolean' ? on : !d.showNames;
+        d.post({ type: 'showNames', on: d.showNames });
+        this.updateStatus();
+        return { on: d.showNames };
+      }),
+      reg('ht9045Designer.dfmDiff', () => this.cmdDfmDiff()),
+      reg('ht9045Designer.resetZoom', () => { if (this.active) this.active.post({ type: 'setZoom', zoom: 1 }); }),
+      reg('ht9045Designer.zoomFit', () => { if (this.active) this.active.post({ type: 'zoomFit' }); }),
+      reg('ht9045Designer.zoomSelection', async n => { await this.onNode(n); if (this.active) this.active.post({ type: 'zoomSel' }); }),
+      // Blend: Ctrl+= / Ctrl+- zoom in / out one step (the artboard toolbar's + / -)
+      reg('ht9045Designer.zoomIn', () => { if (this.active) this.active.post({ type: 'zoomStep', dir: 1 }); return !!this.active; }),
+      reg('ht9045Designer.zoomOut', () => { if (this.active) this.active.post({ type: 'zoomStep', dir: -1 }); return !!this.active; }),
+      reg('ht9045Designer.help', () => vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.joinPath(ctx.extensionUri, 'README.md'))),
+      reg('ht9045Designer.cheatsheet', () => vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.joinPath(ctx.extensionUri, 'CHEATSHEET.md'))),
+      // the design surface's right-click menu (webview/context)
+      // (F7 / View Code only opens code -- WPF's View Code opens the code-behind; a double-click creates the default event)
+      reg('ht9045Designer.viewCode', async n => { await this.onNode(n); if (this.active) return this.onDesignerDblClick(this.active, true); }),
+      reg('ht9045Designer.selectParent', async n => { await this.onNode(n); if (this.active) this.active.post({ type: 'selectParent' }); }),
+      reg('ht9045Designer.selectHere', () => this.cmdSelectHere()),
+      reg('ht9045Designer.selectAll', async n => { await this.onNode(n); if (this.active) this.active.post({ type: 'selectAll' }); }),
+      reg('ht9045Designer.selectSameType', async n => { await this.onNode(n); if (this.active) this.active.post({ type: 'selectSameType', scope: 'page' }); }),
+      reg('ht9045Designer.selectSameTypeHere', async n => { await this.onNode(n); if (this.active) this.active.post({ type: 'selectSameType', scope: 'container' }); }),
+      // undo / redo from the designer's title bar (the page source's own undo stack)
+      reg('ht9045Designer.undo', () => { if (this.active) { this.active.panel.reveal(this.active.panel.viewColumn, false); return vscode.commands.executeCommand('undo'); } }),
+      reg('ht9045Designer.redo', () => { if (this.active) { this.active.panel.reveal(this.active.panel.viewColumn, false); return vscode.commands.executeCommand('redo'); } }),
+      // (AI 20261001: + WinForms' / BCB6's Format menu -- Align to Grid, Size to Grid, Horizontal / Vertical Spacing
+      //  Increase / Decrease / Remove)
+      ...['left', 'right', 'top', 'bottom', 'hcenter', 'vcenter', 'width', 'height', 'size', 'hspace', 'vspace', 'hcenterIn', 'vcenterIn',
+        'gridPos', 'gridSize', 'hspaceInc', 'hspaceDec', 'hspaceRemove', 'vspaceInc', 'vspaceDec', 'vspaceRemove'].map(how =>
+        reg('ht9045Designer.align.' + how, async n => { await this.onNode(n); if (this.active) this.active.post({ type: 'align', how }); })),
+      // (1006, C++Builder Edit > Size / Edit > Scale)
+      reg('ht9045Designer.align.sizeDialog', async a => { if (this.treeNode(a)) { await this.onNode(a); a = undefined; } return this.cmdSizeDialog(a); }),
+      // (1006, Blend's Auto Size width / height: as big as the content)
+      reg('ht9045Designer.align.fitContent', async n => { await this.onNode(n); if (this.active && this.selIds(this.active).length) { this.active.post({ type: 'align', how: 'sizeOp', w: 'fit', h: 'fit' }); return true; } return null; }),
+      reg('ht9045Designer.align.scaleDialog', async a => { if (this.treeNode(a)) { await this.onNode(a); a = undefined; } return this.cmdScaleDialog(a); }),
+      vscode.languages.registerCodeLensProvider([{ language: 'cpp' }, { language: 'c' }], this.lens = new HandlerLens(this)),
+      // 頁面檢查: the Problems panel + the quick fix of a cut attribute; a checked page is checked again as it changes
+      this.lintDiag = vscode.languages.createDiagnosticCollection('ht9045Designer'),
+      vscode.languages.registerCodeActionsProvider([{ language: 'html' }, { scheme: 'file', pattern: '**/*.html' }], new LintFixes(this),
+        { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }),
+      vscode.workspace.onDidChangeTextDocument(e => {
+        if (!this.lintDiag || !this.lintDiag.has(e.document.uri)) return;
+        clearTimeout(this._lintT);
+        this._lintT = setTimeout(() => this.lintFile(e.document.uri.fsPath), 700);
+      }),
+      reg('ht9045Designer.lintPage', () => this.cmdLint('page')),
+      reg('ht9045Designer.lintAll', () => this.cmdLint('all')),
+      // from the 頁面 list: one page, without opening it
+      reg('ht9045Designer.lintPageFile', n => {
+        const pf = this.pageFileOf(n);
+        if (!pf) return null;
+        n = { file: pf };
+        const issues = this.lintFile(n.file);
+        if (issues.length) vscode.commands.executeCommand('workbench.actions.view.problems').then(() => {}, () => {});
+        vscode.window.setStatusBarMessage('$(checklist) ' + path.basename(n.file) + '：' + (issues.length ? issues.length + ' 個問題（看「問題」面板）' : '沒有問題'), 6000);
+        return issues.length;
+      }),
+      reg('ht9045Designer.lintFixAll', uri => this.cmdLintFixAll(uri)),
+      reg('ht9045Designer.lintFixDfmGaps', uri => this.cmdLintFixDfmGaps(uri)),
+      reg('ht9045Designer.netCheck', () => {
+        const d = this.active;
+        if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return; }
+        d.netcheckNotify = true;
+        d.post({ type: 'netcheck' });
+      }),
+      vscode.window.onDidChangeTextEditorSelection(e => this.onEditorSelection(e)),
+    );
+  }
+
+  /**
+   * F5 (EastSun 1005: "如果已經編譯過了 請按下F5的時候 就直接啟動軟體"): the program already built and no source newer than it
+   * (lib/uptodate.js; a build folder whose CMake files changed builds) -> its preLaunchTask without the build: of a
+   * compound task (dependsOn) the last part that is not a build (the wait page -- the old program was already ended by
+   * freeProgram); a plain build task -> none. Anything unclear: the build stays. -> { skipped, why, task }
+   */
+  skipBuildIfUpToDate(folder, cfg) {
+    if (!cfg || !cfg.preLaunchTask || !cfg.program || vscode.workspace.getConfiguration('ht9045Designer').get('run.skipBuildWhenUpToDate') === false) return { skipped: false };
+    const tree = this.runBar.plan().tree;
+    const prog = path.resolve(String(cfg.program));
+    if (!tree || !prog.toLowerCase().startsWith(path.resolve(tree).toLowerCase() + path.sep)) return { skipped: false, why: '不是這棵樹的程式' };
+    const r = uptodate.check(prog, tree);
+    if (!r.upToDate) { this.logEv('F5：要建置（' + r.why + '）'); return { skipped: false, why: r.why }; }
+    // the preLaunchTask's parts, from the tasks.json of the folder
+    const fdir = folder && folder.uri ? folder.uri.fsPath : tree;
+    let tasks = [];
+    try { tasks = (JSON.parse(liveconfig.stripJsonc(fs.readFileSync(path.join(fdir, '.vscode', 'tasks.json'), 'utf8'))) || {}).tasks || []; } catch (e) { return { skipped: false, why: '讀不到 tasks.json' }; }
+    const byLabel = l => tasks.find(x => x && x.label === l);
+    const isBuild = l => { const x = byLabel(l); return /build|建置|編譯/i.test(String(l)) || !!(x && /cmake|make|build/i.test(String(x.command || '') + ' ' + JSON.stringify(x.args || []))); };
+    const top = byLabel(cfg.preLaunchTask);
+    let keep;
+    if (top && Array.isArray(top.dependsOn)) { const rest = top.dependsOn.filter(l => !isBuild(l)); keep = rest.length ? rest[rest.length - 1] : undefined; }
+    else if (isBuild(cfg.preLaunchTask)) keep = undefined;
+    else return { skipped: false, why: '建置工作的樣子認不得' };
+    const was = cfg.preLaunchTask;
+    if (keep) cfg.preLaunchTask = keep; else delete cfg.preLaunchTask;
+    vscode.window.setStatusBarMessage('$(rocket) 已經是最新的建置，直接啟動（' + r.why + '）', 8000);
+    this.logEv('F5：跳過建置，直接啟動 ' + prog + '（' + r.why + '；最新的原始碼 ' + (r.newest && r.newest.file) + '）；建置工作「' + was + '」→「' + (keep || '無') + '」');
+    return { skipped: true, why: r.why, task: keep || null };
+  }
+  /** A failure: the output panel and the log file, with the stack. */
+  logErr(where, e) {
+    const msg = (e && e.message) || String(e);
+    try { this.out.appendLine('[錯誤] ' + where + '：' + msg); } catch (x) { /* closed */ }
+    if (this.flog) this.flog.write('ERROR', where + '：' + msg + (e && e.stack ? '\n' + e.stack : ''));
+  }
+  /** A line for the log file only (the event trail: builds, stops, replaces ...). */
+  logEv(s) { if (this.flog) this.flog.write('EVENT', s); }
+  log(s) {
+    if (this.flog) this.flog.write('INFO', s);
+    const t = new Date();
+    const hh = String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0') + ':' + String(t.getSeconds()).padStart(2, '0');
+    this.out.appendLine('[' + hh + '] ' + s);
+    this.logLines = this.logLines || [];
+    this.logLines.push('[' + hh + '] ' + s);
+    if (this.logLines.length > 300) this.logLines.shift();
+  }
+
+  cfg() { return vscode.workspace.getConfiguration('ht9045Designer'); }
+  // 0.142 the tab row's scrollbar: 'large' once when the user has never set it (an explicit value -- even 'default' -- stays)
+  applyTabScrollbar() {
+    const c = vscode.workspace.getConfiguration('workbench.editor');
+    if (!c.inspect || !c.update) return false;
+    const i = c.inspect('titleScrollbarSizing');
+    if (!i || i.globalValue !== undefined || i.workspaceValue !== undefined) return false;
+    c.update('titleScrollbarSizing', 'large', vscode.ConfigurationTarget.Global);
+    return true;
+  }
+  // 0.147 (EastSun: "每個項目 你可以像 visual studio 外框有個跟底部一樣顏色的外框 這樣比較好辨識嗎?"): no API draws a frame around
+  // a side bar section, so its title bar gets Visual Studio's tool-window band (a solid background + a border line) --
+  // workbench.colorCustomizations, only for the theme in use, only keys the user has not set, once (then the toggle)
+  // 0.149 (EastSun: "相近顏色的外框你也還沒做 例如圖片上不是讓人很明確分離嗎?" -- Visual Studio's blue tool windows): a band and
+  // a border line that stand out (0.147's grey was too close to the side bar); the frame of the views the extension draws
+  // (方案總管, 屬性與事件) uses the same border colour (their CSS: --vscode-sideBarSectionHeader-border)
+  sectionFrameColors() {
+    const kind = vscode.window.activeColorTheme ? vscode.window.activeColorTheme.kind : 2;
+    return kind === 1 || kind === 4
+      ? { 'sideBarSectionHeader.background': '#c9d3e6', 'sideBarSectionHeader.border': '#8a9cc4', 'sideBarSectionHeader.foreground': '#1e1e1e' }
+      : { 'sideBarSectionHeader.background': '#2d2d30', 'sideBarSectionHeader.border': '#3f3f46', 'sideBarSectionHeader.foreground': '#f1f1f1' };   // (0.151: blackish, Visual Studio's dark tool window -- EastSun: "顏色是偏黑色的就好")
+  }
+  // (every value this extension ever wrote, per key -- 0.147's and 0.149's, dark and light)
+  sectionFrameOld() {
+    return {
+      'sideBarSectionHeader.background': ['#2f3d58', '#c9d3e6', '#2d2d30', '#dcdce4'],
+      'sideBarSectionHeader.border': ['#4f6fa8', '#8a9cc4', '#4b4b55', '#b4b4c0', '#3f3f46'],
+      'sideBarSectionHeader.foreground': ['#ffffff', '#1e1e1e', '#f1f1f1'],
+    };
+  }
+  /** Is the theme's band ours (its background one we wrote)? Only then a border / text colour equal to ours is ours too. */
+  sectionFramesOurs(mine) {
+    const bg = mine && mine['sideBarSectionHeader.background'];
+    return typeof bg === 'string' && this.sectionFrameOld()['sideBarSectionHeader.background'].includes(bg.toLowerCase());
+  }
+  async setSectionFrames(on) {
+    const wb = vscode.workspace.getConfiguration('workbench');
+    if (!wb.update) return false;
+    const theme = '[' + (wb.get('colorTheme') || 'Default Dark Modern') + ']';
+    const cc = Object.assign({}, (wb.inspect && (wb.inspect('colorCustomizations') || {}).globalValue) || {});
+    const mine = Object.assign({}, cc[theme] || {});
+    const want = this.sectionFrameColors(), old = this.sectionFrameOld();
+    // (#1e1e1e / #ffffff are common colours of a user's own: a key counts as ours only when the band is ours)
+    const bandOurs = this.sectionFramesOurs(mine);
+    const ours = (k, v) => bandOurs && typeof v === 'string' && old[k].includes(v.toLowerCase());
+    let changed = false;
+    for (const k of Object.keys(want)) {
+      if (on && (mine[k] === undefined || (ours(k, mine[k]) && mine[k] !== want[k]))) { mine[k] = want[k]; changed = true; }
+      if (!on && ours(k, mine[k])) { delete mine[k]; changed = true; }
+    }
+    if (!changed) return false;
+    if (Object.keys(mine).length) cc[theme] = mine; else delete cc[theme];
+    await wb.update('colorCustomizations', cc, vscode.ConfigurationTarget.Global);
+    return true;
+  }
+  /**
+   * The layout EastSun set on the machine (1003/1005: "claude 在上 C++ 檔案顯示在下 你有全部加進外掛工具嗎? 怎別台電腦沒有"):
+   * VS Code settings, not code -- so the extension sets them on any PC, once, at the user level, each only when the user
+   * has not set it there himself: the editor's buttons on the title bar (tabs on their own row), pinned tabs (Claude's,
+   * pinned by pinClaudeTabs) on a row of their own above the files, VS Code's floating debug toolbar off (the same
+   * buttons are on the title bar). Changed back by hand = left alone (a flag in globalState). ht9045Designer.layout.apply
+   * = false: never. -> the keys set
+   */
+  applyLayout() {
+    const gs = this.ctx && this.ctx.globalState;
+    if (!gs || gs.get('htd.layout1')) return [];
+    if (vscode.workspace.getConfiguration('ht9045Designer').get('layout.apply') === false) return [];
+    gs.update('htd.layout1', 1);
+    const want = [['workbench.editor', 'editorActionsLocation', 'titleBar'], ['workbench.editor', 'pinnedTabsOnSeparateRow', true], ['debug', 'toolBarLocation', 'hidden']];
+    const set = [];
+    for (const [sec, key, val] of want) {
+      const c = vscode.workspace.getConfiguration(sec);
+      const i = c.inspect ? c.inspect(key) : null;
+      if (i && i.globalValue !== undefined) continue;   // (his own choice stays)
+      if (c.update) { Promise.resolve(c.update(key, val, (vscode.ConfigurationTarget || {}).Global)).catch(() => { /* an old VS Code without it */ }); set.push(sec + '.' + key); }
+    }
+    if (set.length) { this.logEv('版面設定（只設沒設過的）：' + set.join('、')); vscode.window.setStatusBarMessage('$(layout) 版面：按鈕在標題列、Claude 分頁自己一行、浮動偵錯列關掉（設定 ht9045Designer.layout.apply）', 8000); }
+    return set;
+  }
+  applySectionFrames() {
+    const gs = this.ctx && this.ctx.globalState;
+    if (!gs || gs.get('htd.sectionFrames3')) return false;   // (0.149: 2, 0.151: 3 = the new colours, applied once more over the older)
+    gs.update('htd.sectionFrames3', 1);
+    // (set once before and gone now = the user turned them off: stays off)
+    if (gs.get('htd.sectionFrames') || gs.get('htd.sectionFrames2')) {
+      const wb = vscode.workspace.getConfiguration('workbench');
+      const theme = '[' + (wb.get('colorTheme') || 'Default Dark Modern') + ']';
+      const cc = (wb.inspect && (wb.inspect('colorCustomizations') || {}).globalValue) || {};
+      if (!this.sectionFramesOurs(cc[theme])) return false;
+    }
+    this.setSectionFrames(true);
+    return true;
+  }
+  async cmdSectionFrames() {
+    const wb = vscode.workspace.getConfiguration('workbench');
+    const theme = '[' + (wb.get('colorTheme') || 'Default Dark Modern') + ']';
+    const cc = (wb.inspect && (wb.inspect('colorCustomizations') || {}).globalValue) || {};
+    const on = !this.sectionFramesOurs(cc[theme]);
+    await this.setSectionFrames(on);
+    vscode.window.setStatusBarMessage(on ? '側欄分區外框：開（標題列有底色和框線）' : '側欄分區外框：關', 4000);
+    return on;
+  }
+  async cmdTabScrollbar() {
+    const c = vscode.workspace.getConfiguration('workbench.editor');
+    if (!c.update) return;
+    const big = c.get('titleScrollbarSizing') === 'large';
+    await c.update('titleScrollbarSizing', big ? 'default' : 'large', vscode.ConfigurationTarget.Global);
+    vscode.window.setStatusBarMessage(big ? '分頁列捲軸：恢復細的' : '分頁列捲軸：加粗（滑鼠在分頁列上滾輪也能左右捲）', 4000);
+  }
+  over() {
+    const c = this.cfg();
+    return { webRoot: c.get('webRoot') || '', portRoot: c.get('portRoot') || '', goldenRoot: c.get('goldenRoot') || '' };
+  }
+  wsFolders() { return (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath); }
+  rootsFor(file) { return roots.resolveRoots(file, this.wsFolders(), this.over()); }
+
+  irStore(root) {
+    if (!this.irStores.has(root)) this.irStores.set(root, new pageinfo.IrStore(root));
+    return this.irStores.get(root);
+  }
+
+  /** Shared index of a source tree; built once in the background. */
+  sourceTree(root, kind) {
+    if (!root) return null;
+    const key = kind + '|' + root.toLowerCase();
+    let t = this.trees.get(key);
+    if (!t) {
+      t = new SourceTree(root, kind);
+      this.trees.set(key, t);
+      this.log('建立索引：' + (kind === 'port' ? 'C++ 移植樹 ' : 'BCB6 原始碼 ') + root);
+      t.ensure().then(() => {
+        this.log('索引完成：' + root + '（' + t.files.length + ' 檔，' + t.qual.size + ' 個 Class::名稱，' + t.buildMs + ' ms）');
+      }, e => this.log('索引失敗：' + root + ' ' + (e && e.stack || e)));
+      if (kind === 'port') {
+        this.watch(root, '**/*.{cpp,h,hpp,c,cc,cxx,inc,inl}', uri => {
+          const rel = path.relative(root, uri.fsPath);
+          if (rel.split(path.sep).slice(0, -1).some(seg => SKIP_DIR.test(seg))) return;
+          t.rescan(uri.fsPath).catch(() => {});
+        });
+      }
+    }
+    return t;
+  }
+
+  watch(root, glob, fn) {
+    const key = root.toLowerCase() + '|' + glob;
+    if (this.watchers.has(key)) return;
+    try {
+      const w = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(root), glob));
+      w.onDidChange(fn); w.onDidCreate(fn); w.onDidDelete(fn);
+      this.ctx.subscriptions.push(w);
+      this.watchers.set(key, w);
+    } catch (e) {
+      this.log('無法監看 ' + root + '：' + e);
+    }
+  }
+
+  // --- designers -----------------------------------------------------------
+  createDesigner(doc, panel) {
+    const d = new Designer(this, doc, panel);
+    this.designers.add(d);
+    this.sourceTree(d.r.portRoot, 'port');
+    this.sourceTree(d.r.goldenRoot, 'golden');
+    if (d.r.webRoot) {
+      this.watch(d.r.webRoot, '**/*.{js,css}', uri => this.onWebAssetChanged(uri));
+    }
+    this.log('開啟 ' + d.file + '\n    web=' + d.r.webRoot + '\n    port=' + d.r.portRoot + '\n    ir=' + d.r.irRoot + '\n    golden=' + d.r.goldenRoot);
+    this.setActive(d);
+    if (!this.treeView.visible) {
+      vscode.commands.executeCommand(CONTAINER).then(() => panel.reveal(panel.viewColumn, false), () => {});
+    }
+  }
+
+  onWebAssetChanged(uri) {
+    const f = uri.fsPath;
+    clearTimeout(this._assetTimer);
+    this._assetTimer = setTimeout(() => {
+      for (const d of this.designers) {
+        d.info.then(pi => {
+          const hit = pi.scripts.some(s => web.samePath(s, f)) ||
+            (/\.css$/i.test(f) && web.samePath(path.dirname(f), d.pageDir));
+          if (hit) { this.log('重新載入（' + path.basename(f) + ' 改了）：' + path.basename(d.file)); d.render(); }
+        }, () => {});
+      }
+    }, 600);
+  }
+
+  removeDesigner(d) {
+    this.designers.delete(d);
+    this.pages.mark();
+    if (this.active === d) {
+      const next = Array.from(this.designers).find(x => x.panel.visible) || null;
+      this.setActive(next);
+    }
+  }
+
+  setActive(d) {
+    if (this.active === d) return;
+    this.active = d;
+    this.tree.set(d);
+    vscode.commands.executeCommand('setContext', 'ht9045Designer.anyDesignHidden', !!(d && d.designHidden && d.designHidden.size));
+    vscode.commands.executeCommand('setContext', 'ht9045Designer.anyDesignLocked', !!(d && d.designLocked && d.designLocked.size));
+    vscode.commands.executeCommand('setContext', 'ht9045Designer.gridOn', this.gridState().on);
+    // (1006 audit: F2's text box is the designer's own -- another one made active must not inherit its "typing" state)
+    vscode.commands.executeCommand('setContext', 'ht9045Designer.textEditing', !!(d && d.textEditing));
+    this.pages.mark();
+    this.pages.revealActive();
+    vscode.commands.executeCommand('setContext', 'ht9045Designer.active', !!d);
+    this.updateStatus();
+    if (d && d.pendingSel) {             // it changed selection while in the background
+      const p = d.pendingSel;
+      d.pendingSel = null;
+      this.onSelect(d, p.info, p.origin);
+      return;
+    }
+    this.showProps(d, d && d.sel ? d.sel.data : null);
+  }
+
+  // --- hidden in the designer only (the eye; the workspace state, never the source) ---
+  loadDesignHidden(file) { return this.loadDesignSet('htd.designHidden', file); }
+
+  /** A per-page list of names kept in the workspace state (hidden / locked in the designer). */
+  loadDesignSet(key, file) {
+    const all = this.ctx.workspaceState ? this.ctx.workspaceState.get(key, {}) : {};
+    const v = all && all[String(file).toLowerCase()];
+    return Array.isArray(v) ? v.filter(x => typeof x === 'string' && x) : [];
+  }
+
+  /** 1006 design notes of a page: { id: text } (workspace state 'htd.designNotes', per page). */
+  loadNotes(file) {
+    const all = this.ctx.workspaceState ? this.ctx.workspaceState.get('htd.designNotes', {}) : {};
+    const v = all && all[String(file).toLowerCase()];
+    return v && typeof v === 'object' ? Object.assign({}, v) : {};
+  }
+  saveNotes(file, notes) {
+    if (!this.ctx.workspaceState) return;
+    const all = Object.assign({}, this.ctx.workspaceState.get('htd.designNotes', {}));
+    if (Object.keys(notes).length) all[String(file).toLowerCase()] = notes; else delete all[String(file).toLowerCase()];
+    this.ctx.workspaceState.update('htd.designNotes', all);
+  }
+  /**
+   * 1006 (Blend: Add annotation, Ctrl+Shift+T): a note on the selected component (or the form) -- for the one reviewing
+   * ("這顆還沒接 IO"); kept in the workspace, not the page; empty = taken off. text (tests) = without asking.
+   */
+  async cmdNote(text) {
+    const d = this.active;
+    if (!d) return null;
+    const info = d.sel && d.sel.info;
+    const id = info && info.id ? info.id : '@form';
+    const cur = d.designNotes[id] || '';
+    let v = typeof text === 'string' ? text : await vscode.window.showInputBox({ prompt: (id === '@form' ? '表單' : id) + ' 的設計備註（只存在這個工作區，不會寫進網頁；空白＝拿掉）', value: cur });
+    if (v == null) return null;
+    v = v.trim();
+    if (v) d.designNotes[id] = v; else delete d.designNotes[id];
+    this.saveNotes(d.file, d.designNotes);
+    d.post({ type: 'designNotes', notes: d.designNotes });
+    if (this.tree && this.tree.refresh) this.tree.refresh();
+    vscode.window.setStatusBarMessage('$(note) ' + (id === '@form' ? '表單' : id) + (v ? ' 的備註：' + v : ' 的備註拿掉了'), 5000);
+    return { id, note: v || null };
+  }
+
+  /**
+   * 1006 (Office's Format Painter / Blend's Copy-Paste Style): the selected one's look -- font, size, bold, italic,
+   * underline, strikeout, color, background, alignment -- kept; pasted onto the selection as ONE edit (one Ctrl+Z).
+   * Only what differs is written; a transparent background is not copied (it would write nothing useful).
+   */
+  async cmdFormatCopy() {
+    const d = this.active;
+    if (!d) return null;
+    const id = this.selIds(d)[0];
+    if (!id) { vscode.window.setStatusBarMessage('$(info) 先選一個元件，再複製它的格式', 5000); return null; }
+    const rep = await d.request({ type: 'lookAll', ids: [id] }, 3000);
+    const it = rep && Array.isArray(rep.items) ? rep.items.find(x => x.id === id) : null;
+    if (!it || !it.look) { vscode.window.setStatusBarMessage('$(warning) 讀不到「' + id + '」的外觀', 5000); return null; }
+    const got = {};
+    for (const k of FORMAT_PROPS) {
+      const v = it.look[k];
+      if (v === null || v === undefined || v === '') continue;
+      got[k] = v;
+    }
+    this.fmtClip = { from: id, fmt: got };
+    vscode.window.setStatusBarMessage('$(paintcan) 已複製「' + id + '」的格式（' + Object.keys(got).length + ' 項），選別的元件按 Ctrl+Alt+V 貼上', 6000);
+    return this.fmtClip;
+  }
+  async cmdFormatPaste() {
+    const d = this.active;
+    if (!d) return null;
+    if (!this.fmtClip) { vscode.window.setStatusBarMessage('$(info) 先選一個元件按「複製格式」（Ctrl+Shift+C）', 5000); return null; }
+    const ids = this.selIds(d);
+    if (!ids.length) { vscode.window.setStatusBarMessage('$(info) 先選要套用格式的元件', 5000); return null; }
+    const rep = await d.request({ type: 'lookAll', ids }, 3000);
+    const looks = new Map((rep && Array.isArray(rep.items) ? rep.items : []).map(x => [x.id, x.look || {}]));
+    const items = [];
+    for (const id of ids) {
+      const cur = looks.get(id) || {};
+      for (const k of FORMAT_PROPS) {
+        if (!(k in this.fmtClip.fmt)) continue;
+        if (k === 'alignment' && (cur.alignment === null || cur.alignment === undefined)) continue;   // (not a label / panel)
+        if (cur[k] === this.fmtClip.fmt[k]) continue;
+        items.push({ id, type: 'setLook', prop: k, value: this.fmtClip.fmt[k] });
+      }
+    }
+    if (!items.length) { vscode.window.setStatusBarMessage('$(check) 格式已經一樣了，沒有要改的', 5000); return { items: 0 }; }
+    d.post({ type: 'editMany', items });
+    vscode.window.setStatusBarMessage('$(paintcan) 「' + this.fmtClip.from + '」的格式套到 ' + ids.length + ' 個元件（Ctrl+Z 一次復原）', 6000);
+    return { items: items.length, ids };
+  }
+
+  saveDesignSet(key, file, list) {
+    if (!this.ctx.workspaceState) return;
+    const all = Object.assign({}, this.ctx.workspaceState.get(key, {}));
+    if (list.length) all[String(file).toLowerCase()] = list; else delete all[String(file).toLowerCase()];
+    this.ctx.workspaceState.update(key, all);
+  }
+
+  /** Locked in the designer (the lock): it or a component around it. The locked name, or ''. */
+  lockedName(d, id) {
+    if (!d || !d.designLocked || !d.designLocked.size || !id) return '';
+    if (d.designLocked.has(id)) return id;
+    let row = d.treeData.find(r => r[2] === id);
+    const seen = new Set();
+    while (row && !seen.has(row[0])) {
+      seen.add(row[0]);
+      const name = row[7] ? '@form' : row[2];
+      if (d.designLocked.has(name)) return name;
+      row = row[1] ? d.treeData.find(r => r[0] === row[1]) : null;
+    }
+    return '';
+  }
+
+  applyDesignLocked(d, ids) {
+    if (!d) return;
+    d.designLocked = new Set(ids.filter(x => typeof x === 'string' && x && x !== '@form'));
+    const list = Array.from(d.designLocked);
+    this.saveDesignSet('htd.designLocked', d.file, list);
+    d.post({ type: 'designLocked', ids: list });
+    if (this.active === d) {
+      this.tree.refresh();
+      vscode.commands.executeCommand('setContext', 'ht9045Designer.anyDesignLocked', list.length > 0);
+      // the properties panel: its position / size fields follow the lock
+      if (d.sel && d.sel.info) this.onSelect(d, d.sel.info, 'lock');
+    }
+  }
+
+  /**
+   * 全部鎖定 (WinForms / BCB6 Format > Lock Controls -- "locks the form's size as well"; the pair of 全部解除鎖定):
+   * every component right under the form, so all that is inside them too (the form itself is never locked here).
+   */
+  designLockAll() {
+    const d = this.active;
+    if (!d || !d.treeData) return null;
+    const form = d.treeData.find(r => r[7]);
+    const top = form ? d.treeData.filter(r => r[1] === form[0] && r[2] && !r[7]).map(r => r[2]) : [];
+    if (!top.length) { vscode.window.setStatusBarMessage('$(info) 表單上沒有元件可以鎖定', 4000); return null; }
+    this.applyDesignLocked(d, Array.from(new Set([...(d.designLocked || []), ...top])));
+    vscode.window.setStatusBarMessage('$(lock) 全部鎖定：表單上的 ' + top.length + ' 個元件（和它們裡面的）在設計畫面不能移動、改大小、刪除；「全部解除鎖定」解開（原始碼沒改）', 6000);
+    return { locked: top };
+  }
+
+  designLock(n, lock) {
+    const d = this.active;
+    if (!d) return;
+    const id = n && typeof n.id === 'string' ? (n.isForm ? '' : n.id) : (d.sel && d.sel.info ? d.sel.info.id : '');
+    if (!id || id === '@form') { vscode.window.setStatusBarMessage('$(info) 表單本身不能鎖定', 4000); return; }
+    const ids = new Set(d.designLocked);
+    if (lock === undefined) lock = !ids.has(id);
+    if (lock) ids.add(id); else ids.delete(id);
+    this.applyDesignLocked(d, Array.from(ids));
+    vscode.window.setStatusBarMessage('$(' + (lock ? 'lock' : 'unlock') + ') ' + id + (lock ? ' 鎖定了：在設計畫面不能移動、改大小、刪除（裡面的元件也一樣；原始碼沒改）' : ' 解除鎖定'), 5000);
+  }
+
+  /**
+   * WPF Document Outline keys: hide / show / lock / unlock every selected component (the design
+   * surface's selection, or the tree's selected rows); the form itself is left out.
+   */
+  cmdDesignKey(cmd, fromTree) {
+    const d = this.active;
+    if (!d || !/^(hide|show|lock|unlock)$/.test(cmd || '')) return null;
+    const ids = (fromTree
+      ? (this.treeView && this.treeView.selection || []).filter(n => n && typeof n.id === 'string' && !n.isForm).map(n => n.id)
+      : this.selIds(d)).filter(x => x && x !== '@form');
+    const hide = cmd === 'hide' || cmd === 'show';
+    if (!ids.length) { vscode.window.setStatusBarMessage('$(info) 先選元件（表單本身不能' + (hide ? '隱藏' : '鎖定') + '）', 4000); return null; }
+    const on = cmd === 'hide' || cmd === 'lock';
+    const set = new Set(hide ? d.designHidden : d.designLocked);
+    for (const id of ids) { if (on) set.add(id); else set.delete(id); }
+    if (hide) this.applyDesignHidden(d, Array.from(set)); else this.applyDesignLocked(d, Array.from(set));
+    const what = { hide: '在設計檢視隱藏了（只影響畫面，原始碼沒改；Shift+Ctrl+H 顯示）', show: '顯示回來了',
+      lock: '鎖定了（在設計畫面不能移動、改大小、刪除；Shift+Ctrl+L 解鎖）', unlock: '解除鎖定' }[cmd];
+    vscode.window.setStatusBarMessage('$(' + { hide: 'eye-closed', show: 'eye', lock: 'lock', unlock: 'unlock' }[cmd] + ') ' + ids.join('、') + ' ' + what, 5000);
+    return { cmd, ids };
+  }
+
+  /** Refused when one of the names is locked: true (and the status says so). */
+  refuseLocked(d, ids, verb) {
+    for (const id of ids) {
+      const lk = this.lockedName(d, id);
+      if (lk) { this.refuseEdit(d, '「' + lk + '」鎖定了（元件樹上的鎖頭），不能' + verb + (lk !== id ? '（' + id + ' 在它裡面）' : '') + '。'); return true; }
+    }
+    return false;
+  }
+
+  /** ids = the names to hide (a toggle adds / removes one; [] shows everything again). */
+  applyDesignHidden(d, ids) {
+    if (!d) return;
+    d.designHidden = new Set(ids.filter(x => typeof x === 'string' && x && x !== '@form'));
+    const list = Array.from(d.designHidden);
+    if (this.ctx.workspaceState) {
+      const all = Object.assign({}, this.ctx.workspaceState.get('htd.designHidden', {}));
+      if (list.length) all[d.file.toLowerCase()] = list; else delete all[d.file.toLowerCase()];
+      this.ctx.workspaceState.update('htd.designHidden', all);
+    }
+    d.post({ type: 'designHidden', ids: list });
+    if (this.active === d) {
+      this.tree.refresh();
+      vscode.commands.executeCommand('setContext', 'ht9045Designer.anyDesignHidden', list.length > 0);
+    }
+  }
+
+  designHide(n, hide) {
+    const d = this.active;
+    if (!d) return;
+    // from the tree: its node; from the design surface's menu: the selection
+    const id = n && typeof n.id === 'string' ? (n.isForm ? '' : n.id) : (d.sel && d.sel.info ? d.sel.info.id : '');
+    if (!id || id === '@form') { vscode.window.setStatusBarMessage('$(info) 表單本身不能隱藏', 4000); return; }
+    const ids = new Set(d.designHidden);
+    if (hide === undefined) hide = !ids.has(id);
+    if (hide) ids.add(id); else ids.delete(id);
+    this.applyDesignHidden(d, Array.from(ids));
+    vscode.window.setStatusBarMessage('$(eye' + (hide ? '-closed' : '') + ') ' + id + (hide ? ' 在設計檢視隱藏了（只影響畫面，原始碼沒改）' : ' 顯示回來了'), 5000);
+  }
+
+  /** WPF "snap to gridlines": on / off for every page (the workspace state); the size is a setting. */
+  gridState() {
+    const on = !!(this.ctx.workspaceState && this.ctx.workspaceState.get('htd.gridOn', false));
+    // WPF: "Show/hide snap grid" and "snapping to gridlines" are two buttons -- shown (never set: as the snapping)
+    const sv = this.ctx.workspaceState ? this.ctx.workspaceState.get('htd.gridShow', undefined) : undefined;
+    const show = typeof sv === 'boolean' ? sv : on;
+    const size = Math.max(2, Math.min(64, Math.round(+vscode.workspace.getConfiguration('ht9045Designer').get('gridSize') || 8)));
+    return { on, show, size };
+  }
+
+  /** WPF's "Zoom by using" (Options > XAML Designer): which wheel zooms the design surface -- 'ctrl' (Ctrl+wheel, the
+   *  default), 'wheel' (the wheel alone), 'alt' (Alt+wheel). */
+  wheelZoom() {
+    const v = String(vscode.workspace.getConfiguration('ht9045Designer').get('zoomWheel') || 'ctrl');
+    return v === 'wheel' || v === 'alt' ? v : 'ctrl';
+  }
+
+  /** WPF's "Default zoom setting": a page opens at the zoom it had last time ('last', WPF's Last Used -- the default),
+   *  fitting the view ('fit', Fit All), or at 100% ('100'). */
+  defaultZoom() {
+    const v = String(vscode.workspace.getConfiguration('ht9045Designer').get('defaultZoom') || 'last');
+    return v === 'fit' || v === '100' ? v : 'last';
+  }
+  /** The spacing snaplines' distance (WPF's snapping spacing / margin; BCB6's grid step 8 by default; 0 = none). */
+  snapSpacing() {
+    const v = vscode.workspace.getConfiguration('ht9045Designer').get('snapSpacing');
+    const n = Math.round(+(v == null ? 8 : v));
+    return isFinite(n) ? Math.max(0, Math.min(64, n)) : 8;
+  }
+  /** WPF's "Default document view": a page opens as the design surface alone ('design', the default) or with its
+   *  HTML beside it ('split', WPF's Split view). */
+  defaultView() {
+    // (0.140: 'wpf' = the design above, the page's source below, closed when a C++ file is opened -- EastSun's default)
+    const v = String(vscode.workspace.getConfiguration('ht9045Designer').get('defaultView') || 'wpf');
+    return v === 'split' || v === 'design' ? v : 'wpf';
+  }
+
+  /**
+   * AI(W906-HTDESIGNER) 20261001 (0.140, EastSun: "如果點擊頁面 跟 WPF 一樣 上面是畫面 下面是對應原始碼；我切到 C++ 時要自動關閉
+   * 該頁面"; "編輯區希望只出現 C++ 原始碼"): the editor area in two rows -- the design surface above, the page's HTML
+   * below (WPF's designer over its XAML). The page before it (if any) is closed first: one page at a time.
+   */
+  async openWpf(d) {
+    const prev = this.wpfSession;
+    if (prev && !web.samePath(prev.file, d.file)) await this.closePageSession('another page');
+    this.wpfSession = { file: d.file, d, at: Date.now() };
+    try {
+      await vscode.commands.executeCommand('vscode.setEditorLayout', { orientation: 1, groups: [{ size: 0.62 }, { size: 0.38 }] });
+      if (d.panel.viewColumn && d.panel.viewColumn !== vscode.ViewColumn.One && d.panel.reveal) d.panel.reveal(vscode.ViewColumn.One, false);
+      if (!vscode.window.visibleTextEditors.some(e => e.document === d.doc)) {
+        await vscode.window.showTextDocument(d.doc, { viewColumn: vscode.ViewColumn.Two, preview: false, preserveFocus: true });
+      }
+    } catch (e) { this.log('上下版面：' + (e && e.message || e)); }
+  }
+
+  /**
+   * A C++ file became the active editor: the pages close, the area back to one (EastSun 1001: the HTML tabs left over
+   * should close by themselves too -- 0.141: every .html tab, the designer's and the text ones, not only the last page;
+   * a tab with unsaved changes stays). Only in the 'wpf' view.
+   */
+  async onActiveEditor(ed) {
+    if (!ed || !ed.document || !ed.document.uri) return;
+    const f = ed.document.uri.fsPath || '';
+    if (!/\.(cpp|cc|cxx|c|h|hpp|hxx|inc|inl)$/i.test(f)) return;
+    if (this.defaultView() !== 'wpf') return;
+    const s = this.wpfSession;
+    if (s && Date.now() - s.at < 800) return;   // (the page's own opening moments)
+    await this.closePageSession('C++', { allHtml: true });
+  }
+
+  /** Close the page of the session: its design surface and its HTML tab (not when it has unsaved changes), then one group. */
+  /**
+   * Close the page of the session -- or, opts.allHtml, every .html tab (designer or text) -- not one with unsaved
+   * changes; then the area back to one group. -> { closed, kept: [names left open] }
+   */
+  async closePageSession(why, opts) {
+    const s = this.wpfSession;
+    this.wpfSession = null;
+    const all = !!(opts && opts.allHtml);
+    if (!s && !all) return { closed: 0, kept: [] };
+    let closed = 0;
+    const kept = [];
+    const tg = vscode.window.tabGroups;
+    if (tg && tg.all) {
+      const tabs = [];
+      for (const g of tg.all) for (const t of g.tabs) {
+        const u = t.input && t.input.uri;
+        if (!u || !u.fsPath) continue;
+        if (all ? !/\.html?$/i.test(u.fsPath) : !(s && web.samePath(u.fsPath, s.file))) continue;
+        if (t.isDirty) { if (!kept.includes(path.basename(u.fsPath))) kept.push(path.basename(u.fsPath)); continue; }
+        tabs.push(t);
+      }
+      if (tabs.length) { try { await tg.close(tabs, true); closed = tabs.length; } catch (e) { this.log('關頁面：' + (e && e.message || e)); } }
+    } else {
+      // (no tab API: the designers this extension holds)
+      const ds = all ? Array.from(this.designers || []) : (s && s.d ? [s.d] : []);
+      for (const d of ds) {
+        if (!d || !d.panel || !d.panel.dispose) continue;
+        if (d.doc && d.doc.isDirty) { kept.push(path.basename(d.file)); continue; }
+        d.panel.dispose();
+        closed++;
+      }
+    }
+    // (one editor area again -- an unsaved page that stayed just moves into it)
+    if (closed) { try { await vscode.commands.executeCommand('workbench.action.joinAllGroups'); } catch (e) { /* one group already */ } }
+    if (kept.length) vscode.window.setStatusBarMessage('$(info) 沒有關（還沒存檔）：' + kept.join('、'), 8000);
+    this.log('上下版面：關了 ' + closed + ' 個頁面分頁（' + why + '）' + (kept.length ? '；還沒存檔沒關：' + kept.join('、') : ''));
+    return { closed, kept };
+  }
+  /** The zoom a page had last (kept per page in the workspace state; 1 = none kept). */
+  loadZoom(file) {
+    const all = this.ctx.workspaceState ? this.ctx.workspaceState.get('htd.zoom', {}) : {};
+    const z = all && +all[String(file).toLowerCase()];
+    return z >= 0.125 && z <= 8 ? z : 1;
+  }
+  saveZoom(file, z) {
+    if (!this.ctx.workspaceState) return;
+    const all = Object.assign({}, this.ctx.workspaceState.get('htd.zoom', {}) || {});
+    const k = String(file).toLowerCase();
+    if (z === 1) delete all[k]; else all[k] = z;
+    this.ctx.workspaceState.update('htd.zoom', all);
+  }
+
+  /**
+   * 0.155 (the WPF gap list G8: d:DesignWidth / DesignHeight): the machine's screen size drawn on every designer
+   * (setting ht9045Designer.screenSize "1920x1080"; '' = not drawn). -> { w, h } or null
+   */
+  screenSize() { return parseScreen(vscode.workspace.getConfiguration('ht9045Designer').get('screenSize')); }
+  async cmdScreenSize(arg) {
+    const cur = this.screenSize();
+    let v = typeof arg === 'string' ? arg : null;
+    if (v == null) {
+      const sizes = ['1920x1080', '1280x1024', '1366x768', '1280x800', '1024x768', '800x600'];
+      const items = [{ label: '$(close) 不畫', v: '' }].concat(sizes.map(x => ({ label: (cur && cur.w + 'x' + cur.h === x ? '$(check) ' : '') + x.replace('x', ' × '), v: x })), [{ label: '$(edit) 自訂…', v: null }]);
+      const pick = await vscode.window.showQuickPick(items, { placeHolder: '機台螢幕的大小（設計畫面上畫一個框：框外的元件在機台上看不到）' + (cur ? '　現在：' + cur.w + ' × ' + cur.h : '') });
+      if (!pick) return null;
+      v = pick.v;
+      if (v == null) {
+        v = await vscode.window.showInputBox({ prompt: '寬 x 高（例如 1920x1080）', value: cur ? cur.w + 'x' + cur.h : '', validateInput: t => parseScreen(t) ? null : '格式：寬x高，例如 1920x1080' });
+        if (v == null) return null;
+        const ps = parseScreen(v);
+        v = ps ? ps.w + 'x' + ps.h : '';
+      }
+    }
+    const c = vscode.workspace.getConfiguration('ht9045Designer');
+    if (c.update) await c.update('screenSize', v, vscode.ConfigurationTarget.Global);
+    const s2 = parseScreen(v);
+    for (const d of this.designers) d.post({ type: 'setScreen', screen: s2 });
+    vscode.window.setStatusBarMessage(s2 ? '$(screen-full) 機台螢幕框線：' + s2.w + ' × ' + s2.h : '機台螢幕框線：不畫', 4000);
+    return s2;
+  }
+
+  /** The artboard toolbar's two grid buttons (WPF): part 'show' = the grid drawn, 'snap' = snapping to it. */
+  async cmdGridPart(part, on) {
+    const g = this.gridState();
+    const snap = part === 'snap';
+    const nu = typeof on === 'boolean' ? on : !(snap ? g.on : g.show);
+    if (this.ctx.workspaceState) await this.ctx.workspaceState.update(snap ? 'htd.gridOn' : 'htd.gridShow', nu);
+    const g2 = this.gridState();
+    for (const d of this.designers) d.post({ type: 'setGrid', on: g2.on, show: g2.show, size: g2.size });
+    vscode.commands.executeCommand('setContext', 'ht9045Designer.gridOn', g2.on);
+    this.updateStatus();
+    vscode.window.setStatusBarMessage('$(symbol-numeric) ' + (snap ? '對齊格線 ' + (nu ? '開（' + g2.size + 'px；按住 Alt 暫時不吸）' : '關') : '顯示格線 ' + (nu ? '開' : '關')), 4000);
+    return g2;
+  }
+
+  /** WPF "Toggle artboard background": dark around the form, or the page's own (every page; the workspace state). */
+  artboardDark() { return !!(this.ctx.workspaceState && this.ctx.workspaceState.get('htd.artboardDark', false)); }
+
+  /** 1005 (Visual Studio / Blend show element bounds): every component outlined on every page (the workspace state). */
+  showBounds() { return !!(this.ctx.workspaceState && this.ctx.workspaceState.get('htd.showBounds', false)); }
+  /** 1006 (Blend / Photoshop): the rulers on the design surface -- every page (workspace state). */
+  rulers() { return !!(this.ctx.workspaceState && this.ctx.workspaceState.get('htd.rulers', false)); }
+  setRulers(on, from) {
+    if (this.ctx.workspaceState) this.ctx.workspaceState.update('htd.rulers', !!on);
+    for (const d of this.designers) if (d !== from) d.post({ type: 'setRulers', on: !!on });
+    vscode.window.setStatusBarMessage('$(symbol-ruler) 尺規：' + (on ? '開（從上面、左邊拖出參考線；拖回尺規上＝刪掉）' : '關') + '（只影響設計畫面）', 4000);
+    return { on: !!on };
+  }
+  /** 1006 a page's guides: { x: [page px], y: [page px] } (workspace state 'htd.guides', per page). */
+  loadGuides(file) {
+    const all = this.ctx.workspaceState ? this.ctx.workspaceState.get('htd.guides', {}) : {};
+    const g = all && all[String(file).toLowerCase()];
+    const ok = a => (Array.isArray(a) ? a : []).map(v => Math.round(+v)).filter(v => isFinite(v)).slice(0, 100);
+    return { x: ok(g && g.x), y: ok(g && g.y) };
+  }
+  saveGuides(file, g) {
+    if (!this.ctx.workspaceState) return null;
+    const ok = a => (Array.isArray(a) ? a : []).map(v => Math.round(+v)).filter(v => isFinite(v)).slice(0, 100);
+    const v = { x: ok(g && g.x), y: ok(g && g.y) };
+    const all = Object.assign({}, this.ctx.workspaceState.get('htd.guides', {}));
+    if (v.x.length || v.y.length) all[String(file).toLowerCase()] = v; else delete all[String(file).toLowerCase()];
+    this.ctx.workspaceState.update('htd.guides', all);
+    // the same page open twice (a second designer): it shows them too
+    for (const d of this.designers) if (d.file && String(d.file).toLowerCase() === String(file).toLowerCase()) d.post({ type: 'setGuides', guides: v });
+    return v;
+  }
+  setShowBounds(on, from) {
+    if (this.ctx.workspaceState) this.ctx.workspaceState.update('htd.showBounds', !!on);
+    for (const d of this.designers) if (d !== from) d.post({ type: 'setBounds', on: !!on });
+    vscode.window.setStatusBarMessage('$(symbol-namespace) 顯示所有邊界：' + (on ? '開（每個元件一圈虛線；原始碼沒改）' : '關'), 3000);
+  }
+
+  setArtboard(dark, from) {
+    if (this.ctx.workspaceState) this.ctx.workspaceState.update('htd.artboardDark', !!dark);
+    for (const d of this.designers) if (d !== from) d.post({ type: 'setArtboard', dark: !!dark });
+    vscode.window.setStatusBarMessage('$(color-mode) 畫面背景：' + (dark ? '暗色' : '頁面自己的') + '（只影響設計畫面）', 3000);
+    return { dark: !!dark };
+  }
+
+  async cmdToggleGrid(on) {
+    const g = this.gridState();
+    const nu = typeof on === 'boolean' ? on : !g.on;
+    // (the one command / menu item: the grid shown and snapped to together)
+    if (this.ctx.workspaceState) { await this.ctx.workspaceState.update('htd.gridOn', nu); await this.ctx.workspaceState.update('htd.gridShow', nu); }
+    for (const d of this.designers) d.post({ type: 'setGrid', on: nu, show: nu, size: g.size });
+    vscode.commands.executeCommand('setContext', 'ht9045Designer.gridOn', nu);
+    this.updateStatus();
+    vscode.window.setStatusBarMessage('$(symbol-numeric) 對齊格線 ' + (nu ? '開（' + g.size + 'px；按住 Alt 暫時不吸）' : '關'), 4000);
+    return { on: nu, size: g.size };
+  }
+
+  updateStatus() {
+    const d = this.active;
+    if (this.pageStatus) {
+      this.pageStatus.text = '$(file-code) ' + (d ? path.basename(d.file) : '選擇頁面') + ' $(chevron-down)';
+      this.pageStatus.tooltip = (d ? '目前：' + d.file + '\n' : '') + '按這裡：換一頁（選一個 HTML 頁面，用設計檢視開啟）' +
+        (this.version ? '\nHTML 視覺設計工具 v' + this.version : '');
+    }
+    if (!d) { this.status.hide(); return; }
+    const g = this.gridState();
+    this.status.text = (d.mode === 'design' ? '$(pencil) 設計模式' : '$(play) 操作模式') +
+      (d.zoom && d.zoom !== 1 ? '　' + Math.round(d.zoom * 100) + '%' : '') + (g.on ? '　格線 ' + g.size + 'px' : '') + (d.wireMarks ? '　接線標示' : '') + (d.dfmGhosts ? '　DFM 位置' : '') + (d.tabOrder ? '　Tab 順序' : '') + (d.showNames ? '　名稱' : '') +
+      (d.live && d.live.machine ? '　' + d.live.machine : '');
+    this.status.tooltip = (d.mode === 'design'
+      ? '點＝選元件，雙擊＝跳到事件程式碼。按這裡切到操作模式。'
+      : '點擊交給頁面自己的程式（網路仍全部封鎖）。按這裡切回設計模式。') +
+      '\n' + ({ wheel: '滾輪', alt: 'Alt＋滾輪' }[this.wheelZoom()] || 'Ctrl＋滾輪') + '縮放（設定 ht9045Designer.zoomWheel）；「HTML設計: 設計檢視縮放回 100%」還原。' +
+      (d.live ? '\n機種：' + (d.live.machine || '不指定') + (d.live.docs && Object.keys(d.live.docs).length ? '（機台設定檔唯讀：' + Object.keys(d.live.docs).join('、') + '）' : '') +
+        '　右鍵「顯示」→「設計檢視的機種」可以改' : '');
+    this.status.show();
+  }
+
+  /**
+   * A newer version of this extension installed (in the extensions folder this copy came from, or `extDir`)?
+   * Then: the status bar says so with a button, the 頁面 title too, and once a message with「現在更新」.
+   * Returns the newer version or null. A copy run from the source tree (no extensions folder) finds nothing.
+   */
+  /**
+   * One look at F5's build status file (lib/buildwatch.js): a running build = a progress bar (VS Code's notification,
+   * like the green ▶'s), its % from make; done / failed = the bar closes and the status bar says so. Read only: the
+   * bar has no Cancel -- F5's build is VS Code's task (stop it there). The designer's own ▶ build has its own bar.
+   * `file` / `now`: for the tests.
+   */
+  buildWatchTick(file, now, portRoot) {
+    if (this.runBar && this.runBar.building) return null;   // (the designer's own ▶ build shows its own bar)
+    const tNow = now || Date.now();
+    let f = file, port = portRoot;
+    if (!f || !port) {
+      let r = this.active && this.active.r;
+      if (!r || !r.webRoot || !r.portRoot) { try { r = roots.resolveRoots(null, this.wsFolders(), this.over()); } catch (e) { r = {}; } }
+      if (!f) f = buildwatch.statusFile(r.webRoot);
+      if (!port) port = r.portRoot;
+    }
+    let st = buildwatch.read(f);
+    // no fresh status file (F5 calls cmake directly): CMake's progress while a build task runs
+    if (!(st && typeof st.t === 'number' && tNow - st.t < 15000) && this.bwTask) {
+      const bt = this.bwTask;
+      const run = port ? buildwatch.runningCMake(port, bt.t - 5000) : [];
+      const pr = (bt.dir && run.find(x => x.dir === bt.dir)) || (!bt.dir && run[0]) || null;
+      if (pr) bt.dir = pr.dir;
+      // (taken up late: the time counts from when CMake's progress started, not from the 10-minute look-back)
+      if (pr && bt.late) { bt.t = pr.since; bt.late = false; }
+      const el = Math.round((tNow - bt.t) / 1000);
+      const base = { target: bt.name, dir: bt.dir ? path.basename(bt.dir) : '', file: '', errors: 0, lastError: '', elapsed: el, t: tNow, stopped: !!bt.cancelled };
+      if (pr && !bt.ended) st = Object.assign(base, { state: 'building', pct: pr.pct, n: pr.steps, total: pr.total });
+      else if (bt.dir && (!pr || bt.ended)) {
+        // the folder gone = the build ended; still there when the task ended = it failed (or was stopped)
+        st = Object.assign(base, { state: !pr || bt.code === 0 ? 'done' : 'failed', pct: 100, n: pr ? pr.steps : 0, errors: 0 });
+        if (bt.ended || !pr) this.bwTask = null;
+      } else if (bt.ended) { this.bwTask = null; st = null; }   // (nothing to build: up to date)
+      else st = null;
+    }
+    const what = buildwatch.decide(st, !!this.buildBar, tNow);
+    // (EastSun 1003: "請你用個獨立建置框 並且要放大 讓我看清楚" -- the build in a window of its own, big: the %, a thick bar,
+    //  steps / total, the time; done = green and it closes by itself; not finished = red and it stays. Setting
+    //  ht9045Designer.build.window = false: VS Code's notification as before)
+    const useWin = vscode.window.createWebviewPanel && vscode.workspace.getConfiguration('ht9045Designer').get('build.window') !== false;
+    if (what === 'open') {
+      const bar = { pct: 0, report: null, end: null, win: null };
+      bar.done = new Promise(res => { bar.end = res; });
+      this.buildBar = bar;
+      bar.pct = st.pct | 0;
+      this.logEv('F5 建置開始：' + (st.target || '') + '（' + (st.dir || '') + '）');
+      if (useWin) this.openBuildWin(bar, st);
+      else vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '建置 ' + (st.target || 'wb_serve') + '（' + (st.dir || 'F5') + '）', cancellable: false },
+        prog => { bar.report = prog; prog.report({ increment: st.pct | 0, message: buildwatch.message(st) }); bar.pct = st.pct | 0; return bar.done; });
+    } else if (what === 'update') {
+      const bar = this.buildBar, p = st.pct | 0;
+      if (bar.win) this.postBuildWin(bar, st, 'building');
+      if (bar.report) bar.report.report(p > bar.pct ? { increment: p - bar.pct, message: buildwatch.message(st) } : { message: buildwatch.message(st) });
+      if (p > bar.pct) bar.pct = p;
+      // (1003: F5's % on 方案總管's toolbar too -- it said 建置中 0% all the way)
+      if (this.solPanel && this.runBar) this.solPanel.postRun(this.runBar.snapshot());
+    } else if (/^close/.test(what)) {
+      const bar = this.buildBar;
+      this.logEv('F5 建置' + (what === 'close-done' ? '完成' : what === 'close-failed' ? (st && st.stopped ? '被停止' : '沒有完成' + (st && st.errors ? '（錯誤 ' + st.errors + ' 個' + (st.lastError ? '，第一個：' + st.lastError : '') + '）' : '')) : '狀態檔沒再更新（中斷或 VS Code 關了）') + '：' + ((st && st.dir) || '') + ' ' + ((st && buildwatch.message(st)) || ''));
+      bar.end();
+      this.buildBar = null;
+      if (bar.win) {
+        if (what === 'close-done') { this.postBuildWin(bar, Object.assign({}, st, { pct: 100 }), 'done'); const w = bar.win; setTimeout(() => { try { w.dispose(); } catch (e) { /* closed */ } }, this.buildWinCloseMs === undefined ? 4000 : this.buildWinCloseMs); }
+        else if (what === 'close-failed' && st.stopped) { this.postBuildWin(bar, st, 'stopped'); const w = bar.win; setTimeout(() => { try { w.dispose(); } catch (e) { /* closed */ } }, this.buildWinCloseMs === undefined ? 4000 : this.buildWinCloseMs); }
+        else if (what === 'close-failed') this.postBuildWin(bar, st, 'failed');
+        else { try { bar.win.dispose(); } catch (e) { /* closed */ } }
+      }
+      if (what === 'close-done') vscode.window.setStatusBarMessage('$(check) 建置完成：' + (st.dir || '') + '（' + buildwatch.message(st).replace(/^\d+%　/, '') + '）', 8000);
+      else if (what === 'close-failed' && st.stopped) vscode.window.setStatusBarMessage('$(debug-stop) 建置已停止（' + (st.dir || '') + '）', 8000);
+      else if (what === 'close-failed' && !bar.win) vscode.window.showErrorMessage('建置沒有完成（' + (st.dir || '') + '）' + (st.errors ? '：錯誤 ' + st.errors + ' 個' : '') + (st.lastError ? '，第一個：' + st.lastError : '') + '。原因在終端機和「問題」。');
+    }    return what;
+  }
+
+  /** The build window (media/buildwin.*): floated into its own window (ht9045Designer.build.newWindow, default on). */
+  openBuildWin(bar, st) {
+    const media = vscode.Uri.joinPath(this.ctx.extensionUri, 'media');
+    const p = vscode.window.createWebviewPanel('ht9045Designer.buildWindow', '建置', { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
+      { enableScripts: true, enableCommandUris: false, localResourceRoots: [media] });
+    bar.win = p;
+    const w = p.webview;
+    const nonce = crypto.randomBytes(16).toString('base64');
+    w.html = '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">' +
+      '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src ' + w.cspSource + '; script-src \'nonce-' + nonce + '\';">' +
+      '<link rel="stylesheet" href="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'buildwin.css')) + '"></head><body>' +
+      '<script nonce="' + nonce + '" src="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'buildwin.js')) + '"></script></body></html>';
+    bar.winLast = null;
+    w.onDidReceiveMessage(m => { if (m && m.type === 'ready' && bar.winLast) w.postMessage(bar.winLast); });
+    p.onDidDispose(() => { if (bar.win === p) bar.win = null; });
+    this.postBuildWin(bar, st, 'building');
+    if (vscode.workspace.getConfiguration('ht9045Designer').get('build.newWindow') !== false) {
+      Promise.resolve(vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow')).catch(() => { /* stays a tab */ });
+    }
+    return p;
+  }
+  postBuildWin(bar, st, state) {
+    if (!bar.win) return;
+    const el = Math.max(0, st.elapsed | 0);
+    const m = { type: 'build', state, title: '建置 ' + (st.target || 'wb_serve') + '（' + (st.dir || 'F5') + '）', pct: Math.max(0, Math.min(100, st.pct | 0)),
+      steps: st.n | 0, total: st.total | 0, time: (Math.floor(el / 60) ? Math.floor(el / 60) + ' 分 ' + String(el % 60).padStart(2, '0') + ' 秒' : el + ' 秒'),
+      file: st.file || '', errors: st.errors | 0, lastError: st.lastError || '' };
+    bar.winLast = m;
+    try { bar.win.webview.postMessage(m); } catch (e) { /* closed */ }
+  }
+  checkUpdate(extDir) {
+    const ext = this.ctx.extension;
+    const dir = extDir || (ext && ext.extensionPath ? path.dirname(ext.extensionPath) : null);
+    const inst = this.version && dir && ext && ext.id ? update.installedVersion(dir, ext.id) : null;
+    const newer = inst && update.cmpVer(inst, this.version) > 0 ? inst : null;
+    if (newer === this.newerVersion) return newer;
+    this.newerVersion = newer;
+    vscode.commands.executeCommand('setContext', 'ht9045Designer.updateReady', !!newer);
+    if (this.version) this.pageView.description = 'v' + this.version + (newer ? '（新版 v' + newer + ' 已裝好）' : '');
+    // (0.139: the 頁面 list is in 方案總管 now -- the version shows there)
+    if (this.version && this.solution) { this.solution.versionText = 'v' + this.version + (newer ? '（新版 v' + newer + ' 已裝好）' : ''); this.solution.setDescription(); }
+    if (!newer) { this.updateItem.hide(); return null; }
+    this.updateItem.text = '$(debug-restart) 設計工具新版 v' + newer + '：按這裡更新';
+    this.updateItem.tooltip = 'HTML 視覺設計工具 v' + newer + ' 已經裝好了，這個視窗還在跑 v' + this.version + '。\n' +
+      '按一下＝重新載入視窗，換成新版（開著的頁面、還沒存的檔案都會留著）。';
+    this.updateItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+    this.updateItem.show();
+    this.log('有新版 v' + newer + ' 已裝好（這個視窗跑 v' + this.version + '）');
+    vscode.window.showInformationMessage('HTML 視覺設計工具的新版 v' + newer + ' 已經裝好了（這個視窗還在跑 v' + this.version +
+      '）。按「現在更新」換成新版，開著的頁面會自己再打開。', '現在更新')
+      .then(c => { if (c === '現在更新') this.cmdReloadWindow(); }, () => {});
+    return newer;
+  }
+
+  /**
+   * CSV 表格 for `uri` (default: the active text editor's): the table opens, and the text tab of the same
+   * file closes (it is the same document: nothing unsaved is lost, the table shows it).
+   */
+  async cmdOpenCsvTable(uri) {
+    const u = uri instanceof vscode.Uri ? uri : (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document.uri);
+    if (!u) return false;
+    await vscode.commands.executeCommand('vscode.openWith', u, CSV_VIEW);
+    try {
+      const tg = vscode.window.tabGroups;
+      if (tg && vscode.TabInputText) {
+        const texts = tg.all.reduce((a, g) => a.concat(g.tabs), []).filter(t => t.input instanceof vscode.TabInputText && web.samePath(t.input.uri.fsPath, u.fsPath));
+        if (texts.length) await tg.close(texts, true);
+      }
+    } catch (e) { /* the text tab stays: harmless */ }
+    if (this.csvItem) this.csvItem.hide();
+    this.csvShown = false;
+    return true;
+  }
+
+  /** The active editor is a .csv shown as text: the status bar offers the table; asked once per file. */
+  csvTextEditor(ed) {
+    const doc = ed && ed.document;
+    const isCsv = !!(doc && doc.uri && doc.uri.scheme === 'file' && /\.csv$/i.test(doc.uri.fsPath || ''));
+    this.csvShown = isCsv;
+    if (!isCsv) { this.csvItem.hide(); return false; }
+    const name = path.basename(doc.uri.fsPath);
+    this.csvItem.tooltip = name + ' 現在是文字畫面。按這裡用「CSV 表格」開（像 Excel 一樣編輯，只改你改的格子）';
+    this.csvItem.show();
+    const k = doc.uri.fsPath.toLowerCase();
+    if (!this.csvAsked.has(k)) {
+      this.csvAsked.add(k);
+      // a text tab of it (one from before the update comes back as text, and a click in the explorer only brings
+      // that tab forward -- EastSun 20260930: "我圖片上開CSV 怎還是一樣的畫面?"): switched to the table by itself.
+      // Not a diff view, not one opened as text from the table on purpose (csvAsked), not with the setting off.
+      let plainTab = true;
+      try {
+        const at = vscode.window.tabGroups && vscode.window.tabGroups.activeTabGroup.activeTab;
+        plainTab = !at || !vscode.TabInputText || at.input instanceof vscode.TabInputText;
+      } catch (e) { plainTab = true; }
+      if (plainTab && this.cfg().get('csvAutoTable') !== false) {
+        this.cmdOpenCsvTable(doc.uri).then(() => {
+          vscode.window.setStatusBarMessage('$(table) ' + name + ' 改用表格開了（要看文字：表格右上「以文字開啟」；不要自動改：設定 ht9045Designer.csvAutoTable）', 8000);
+        }, () => {});
+        return true;
+      }
+      vscode.window.showInformationMessage(name + ' 現在是用文字開的。要用表格看嗎？', '用表格開', '不用')
+        .then(c => { if (c === '用表格開') this.cmdOpenCsvTable(doc.uri); }, () => {});
+    }
+    return true;
+  }
+
+  /** 搜尋頁面 from a command: filter the 頁面 list by `q` ('' = every page) and put the words in the box. */
+  filterPages(q) {
+    const s = this.pages.setFilter(q);
+    this.pageSearch.set(this.pages.query, s);
+    // (0.139: 方案總管 shows the same search -- its files too; the pages part is already done)
+    if (this.solution && String(q || '').trim() !== this.solution.q) this.solution.setFilter(q, { pagesDone: true });
+    return s;
+  }
+
+  /**
+   * 機種與機台設定 for pages of roots `r`: the machine (chosen, else the one F5 opens the HMI for in
+   * launch.json), and READ-ONLY copies of the settings F5 gives wb_serve (Gerneral.ini, config.ini) in
+   * wb_serve's /api/system shape. Choice (workspace): '' = like F5, '-' = none (the "no server" face), else an id.
+   */
+  machineState(r) {
+    const pick = (this.ctx.workspaceState && this.ctx.workspaceState.get('htd.machine', '')) || '';
+    const dirs = [];
+    for (const x of [r && r.portRoot, r && r.webRoot && path.dirname(r.webRoot)].concat(this.wsFolders())) {
+      if (x && !dirs.some(y => web.samePath(y, x))) dirs.push(x);
+    }
+    const hints = liveconfig.launchHints(dirs);
+    const cfg = vscode.workspace.getConfiguration('ht9045Designer');
+    const off = pick === '-';
+    const machine = off ? null : pick || hints.machine || null;
+    const iniOf = (key, auto) => (cfg.get(key) || auto || null);
+    const generalIni = off ? null : iniOf('generalIni', hints.generalIni);
+    const configIni = off ? null : iniOf('configIni', hints.configIni);
+    const docs = {};
+    this._iniCache = this._iniCache || new Map();
+    for (const [name, f] of [['gerneral', generalIni], ['config', configIni]]) {
+      if (!f) continue;
+      let st = null;
+      try { st = fs.statSync(f); } catch (e) { continue; }
+      const k = f.toLowerCase();
+      const c = this._iniCache.get(k);
+      if (c && c.mtime === st.mtimeMs && c.size === st.size) { docs[name] = c.doc; continue; }
+      const doc = liveconfig.iniToDoc(f);
+      this._iniCache.set(k, { mtime: st.mtimeMs, size: st.size, doc });
+      docs[name] = doc;
+    }
+    return { pick, machine, auto: !pick && !!hints.machine, hints, generalIni, configIni, docs: Object.keys(docs).length ? docs : null };
+  }
+
+  /** What a designer's page gets (lib/pagehtml.js `live`), null = nothing. */
+  liveFor(d) {
+    const s = this.machineState(d && d.r);
+    return s.machine || s.docs ? { machine: s.machine, docs: s.docs || {} } : null;
+  }
+
+  /** 機種: which machine the pages are shown for; every designer draws its page again. */
+  async cmdPickMachine(arg) {
+    const d = this.active;
+    const r = d ? d.r : roots.resolveRoots(null, this.wsFolders(), this.over());
+    const s = this.machineState(r);
+    let pick = arg;
+    if (typeof pick !== 'string') {
+      const prof = liveconfig.machineProfiles(r.webRoot);
+      const ids = prof.ids.slice();
+      if (s.hints.machine && !ids.includes(s.hints.machine)) ids.unshift(s.hints.machine);
+      const items = [{ label: '$(debug-start) 跟 F5 一樣' + (s.hints.machine ? '（' + s.hints.machine + '）' : '（launch.json 沒有指定機種）'), pick: '',
+        description: s.pick === '' ? '● 目前' : '', detail: 'F5 開機台畫面用的機種（launch.json 的 W906_HMI_URL machine=），設定檔也用 F5 給 wb_serve 的那幾個（唯讀）' }]
+        .concat(ids.map(id => ({ label: '$(server-environment) ' + id, pick: id, description: (s.pick === id ? '● 目前　' : '') + (prof.label[id] || ''),
+          detail: '頁面照 ' + id + ' 顯示（機台設定檔唯讀）' })))
+        .concat([{ label: '$(circle-slash) 不指定', pick: '-', description: s.pick === '-' ? '● 目前' : '',
+          detail: '跟沒有伺服器時一樣：機種專用的東西不顯示，設定檔也不讀' }]);
+      const it = await vscode.window.showQuickPick(items, { placeHolder: '設計檢視的機種（機種專用的頁籤、元件照它顯示）' });
+      if (!it) return null;
+      pick = it.pick;
+    }
+    if (this.ctx.workspaceState) await this.ctx.workspaceState.update('htd.machine', pick === '' ? undefined : pick);
+    const now = this.machineState(r);
+    this.log('設計檢視的機種：' + (now.machine || '不指定') + (now.auto ? '（跟 F5）' : '') +
+      (now.docs ? '；設定檔（唯讀）' + [now.generalIni, now.configIni].filter(Boolean).join('、') : ''));
+    for (const x of this.designers) x.render();
+    this.updateStatus();
+    return { machine: now.machine, auto: now.auto, docs: now.docs ? Object.keys(now.docs) : [] };
+  }
+
+  /** Reload the window (the only way a window takes a newly installed version). Unsaved files: VS Code keeps
+      them over a reload (hot exit) -- unless files.hotExit is off; then ask to save first. */
+  async cmdReloadWindow() {
+    const dirty = vscode.workspace.textDocuments.filter(t => t.isDirty);
+    const hot = vscode.workspace.getConfiguration('files').get('hotExit');
+    if (dirty.length && hot === 'off') {
+      const c = await vscode.window.showWarningMessage('有 ' + dirty.length + ' 個檔案還沒存（例如 ' + path.basename(dirty[0].fileName) +
+        '）。重新載入前要先存檔嗎？', { modal: true }, '全部存檔後重新載入', '不存，直接重新載入');
+      if (!c) return false;
+      if (c === '全部存檔後重新載入' && !(await vscode.workspace.saveAll(false))) return false;
+    }
+    await vscode.commands.executeCommand('workbench.action.reloadWindow');
+    return true;
+  }
+
+  showProps(d, data) {
+    this.propsDesigner = d;
+    this.props.show(data || null);
+  }
+
+  /** Page-level facts: which DFM, which form class, which scripts. */
+  async analyzePage(d) {
+    const html = d.doc.getText();
+    const r = d.r;
+    const title = pageinfo.parseTitle(html);
+    const store = r.irRoot ? this.irStore(r.irRoot) : null;
+    let ir = null, dfm = null;
+    if (store && title && title.dfm) {
+      const f = store.find(title.dfm, title.cls);
+      if (f) { ir = store.load(f); dfm = { how: 'title' }; }
+    }
+    if (store && !ir) {
+      await new Promise(res => setImmediate(res));
+      const g = store.guess(pageinfo.collectIds(html));
+      if (g) { ir = store.load(g.file); dfm = { how: 'guess', hits: g.hits, score: g.score }; }
+    }
+    const classes = [];
+    if (ir && ir.formClass) classes.push(ir.formClass);
+    if (title && title.cls && !classes.includes(title.cls)) classes.push(title.cls);
+    d.formLabel = ir ? (ir.formName || '表單') + ' : ' + (ir.formClass || '') : '表單（.form）';
+    d.ir = ir;
+    if (this.active === d) this.tree.refresh();
+    return { title, ir, dfm, classes, scripts: pageinfo.listScripts(html, d.pageDir), iframe: hasIframe(html) };
+  }
+
+  // --- selection -----------------------------------------------------------
+  onSelect(d, info, origin) {
+    if (this.active !== d) {
+      // a page in the background (it reloaded and restored its selection) must not
+      // take the tree and the panel away from the page the user is looking at
+      if (!d.panel.active) { d.pendingSel = { info, origin }; return; }
+      this.setActive(d);
+    }
+    d.pendingSel = null;
+    const seq = ++this.selSeq;
+    if (!info) { d.sel = null; this.showProps(d, null); return; }
+    if (origin !== 'tree') this.tree.reveal(info.key);
+    if (origin === 'click' || origin === 'tree' || origin === 'find' || origin === 'key' || origin === 'edit') this.syncSource(d, info.id);
+    const sel = { info, data: null, promise: null };
+    d.sel = sel;
+    sel.promise = this.resolve(d, info, partial => {
+      if (seq === this.selSeq) { sel.data = partial; this.showProps(d, partial); }
+    }).then(async data => {
+      // several selected: which fields differ among them (WPF shows those empty)
+      if (data && data.edit && Array.isArray(info.multi) && info.multi.length && seq === this.selSeq) {
+        const rep = await d.request({ type: 'lookAll', ids: [info.id].concat(info.multi) }, 3000);
+        if (rep) data.edit.mixed = mixed.mixedFields(rep.items);
+      }
+      if (seq === this.selSeq) { sel.data = data; this.showProps(d, data); }
+      return data;
+    }, e => {
+      this.log('解析元件失敗：' + (e && e.stack || e));
+      return null;
+    });
+  }
+
+  async onDesignerDblClick(d, viewOnly) {
+    const sel = d.sel;
+    if (!sel) return;
+    const data = await sel.promise;
+    if (!data) return;
+    // WPF / BCB6: its default event -- the code when set, a new handler (wired to the page) when empty
+    const g = data.eventGrid;
+    const def = g && g.rows && g.rows.length ? vclevents.defaultEventOf(g.vcl, g.isForm, g.rows.map(r => r.name)) : null;
+    const defRow = def ? g.rows.find(r => r.name === def) : null;
+    if (defRow && (defRow.handler || !viewOnly)) return this.onEventGrid(data, def, d);
+    if (viewOnly && g && g.formCls) {
+      // View Code with no default event: the form class's code (WPF: the code-behind)
+      const pf = await this.portClassFiles(d, g.formCls);
+      if (pf) return this.openTarget({ kind: 'port', file: pf.cppFile, line: 1, col: 1 }, d);
+    }
+    const i = fmt.defaultEvent(data.events, data.comp.isForm);
+    if (i >= 0) return this.openEvent(data, i, d);
+    return this.revealSource(d, data.comp.htmlId, true, data.comp.html != null ? data.targets[data.comp.html] : null);
+  }
+
+  webSources(d, pi) {
+    const list = [new web.Source(d.file, d.doc.getText(), true)];
+    for (const s of pi.scripts) {
+      const t = web.readText(s);
+      if (t != null) list.push(new web.Source(s, t, false));
+    }
+    return list;
+  }
+
+  /** The BCB6 .dfm a page's IR came from (golden tree), or null. */
+  dfmFileOf(d, ir) {
+    if (!ir || !ir.sourceDfm || !d.r.goldenRoot) return null;
+    const f = path.join(d.r.goldenRoot, ir.sourceDfm.replace(/[\\/]/g, path.sep));
+    return fs.existsSync(f) ? f : null;
+  }
+
+  /** A golden (Big5) file as lines, cached by mtime. */
+  goldenLines(file) {
+    let st;
+    try { st = fs.statSync(file); } catch (e) { return null; }
+    this._goldenLines = this._goldenLines || new Map();
+    const hit = this._goldenLines.get(file);
+    if (hit && hit.mtime === st.mtimeMs) return hit.lines;
+    let lines;
+    try { lines = decodeBig5(fs.readFileSync(file)).split('\n').map(l => l.replace(/\r$/, '')); } catch (e) { return null; }
+    this._goldenLines.set(file, { mtime: st.mtimeMs, lines });
+    if (this._goldenLines.size > 20) this._goldenLines.delete(this._goldenLines.keys().next().value);
+    return lines;
+  }
+
+  lineSnippet(file, line) {
+    const t = web.readText(file);
+    if (t == null) return '';
+    const lines = t.split('\n');
+    const s = (lines[line - 1] || '').replace(/\r$/, '').trim();
+    return s.length > 170 ? s.slice(0, 170) + '…' : s;
+  }
+
+  cppTarget(kind, h, forCmd) {
+    let note;
+    if (forCmd) note = h.dispatch ? '命令分派' : h.comment ? '註解提到' : '出現此字串';
+    else if (kind === 'golden') note = h.def ? '定義（BCB6 原版）' : h.comment ? '註解提到' : '引用';
+    else note = h.def ? (h.dead ? '定義，但在 #if 0 裡（不會編譯）' : '定義') : h.comment ? '註解提到（實作可能搬到這裡）' : '引用';
+    if (h.test) note += '（測試）';
+    return {
+      kind, file: h.file, line: h.line, col: h.col, snippet: h.snippet, note,
+      warn: !!h.dead, weak: forCmd ? !h.dispatch : !(h.def && !h.dead),
+    };
+  }
+
+  /**
+   * Everything the 屬性與事件 panel shows for one component. Calls onPartial first
+   * with the web/DFM part (instant), then resolves with the C++ part added.
+   */
+  async resolve(d, info, onPartial) {
+    const pi = await d.info;
+    const targets = [];
+    const T = t => { targets.push(t); return targets.length - 1; };
+    const isForm = info.id === '@form';
+    const ir = pi.ir;
+    const node = ir ? (isForm ? ir.root : (info.id ? ir.byName.get(info.id) : null)) : null;
+    const html = d.doc.getText();
+    const v = fmt.parseVclTitle(info.title || web.titleOf(html, info.id));
+
+    const comp = {
+      key: info.key, htmlId: info.id || '', isForm,
+      name: isForm ? ((ir && ir.formName) || '表單') : (info.id || '<' + info.tag + '>'),
+      cls: node ? node.class : (v ? v.cls : ''),
+      note: v && v.note ? v.note : '',
+      tag: info.tag, path: node ? node.path : '', chain: info.chain || [], cssPath: info.cssPath || '',
+      inIr: !!node, html: null,
+    };
+    if (info.id) {
+      const at = web.findIdAttr(html, info.id);
+      if (at) {
+        const p = d.doc.positionAt(at.start);
+        comp.html = T({ kind: 'html', file: d.file, line: p.line + 1, col: p.character + 1, snippet: '', note: 'HTML 原始碼', range: [at.start, at.end] });
+      }
+    }
+    // the control's own lines in the BCB6 .dfm (Big5): the IR knows "object Name: TClass"
+    const dfmFile = this.dfmFileOf(d, ir);
+    const dfmLines = dfmFile ? this.goldenLines(dfmFile) : null;
+    comp.dfm = null;
+    if (node && node.line && dfmLines) {
+      comp.dfm = T({ kind: 'dfm', file: dfmFile, line: node.line, col: 1, snippet: (dfmLines[node.line - 1] || '').trim(), note: 'DFM 定義' });
+    }
+    const propLines = node && node.line && dfmLines ? pageinfo.dfmPropLines(dfmLines, node.line) : {};
+
+    // web: listeners recorded at runtime, then where their code is
+    const sources = this.webSources(d, pi);
+    const idRe = info.id && !isForm ? web.idMentionRe(info.id) : null;
+    const mentions = idRe ? web.findAll(sources, idRe, 12) : [];
+    const mentionLines = mentions.map(m => ({ file: m.file, line: m.line }));
+    // the generated pages' layout classes say nothing about which handler is meant
+    const LAYOUT_CLS = /^(form|pnl|pnlCap|gbx|cli|lb|ed|ckb|rgi|btn3d|lled|lledCap|tab|act|dim|sgd|imgph|trk|elab|down)$/;
+    const classes = String(info.cls || '').split(/\s+/).filter(c => c.length >= 3 && !LAYOUT_CLS.test(c));
+    const listeners = [];
+    const near = loc => loc && mentionLines.some(m => web.samePath(m.file, loc.file) && loc.line >= m.line - 3 && loc.line <= m.line + 25);
+    const addL = (l, on, onLabel) => {
+      const f0 = l.frames && l.frames[0];
+      const bindFile = f0 ? web.mapFrameUrl(f0.url) : null;
+      let bind = null, bindT = null;
+      if (bindFile && fs.existsSync(bindFile)) {
+        bind = { kind: 'web', file: bindFile, line: f0.line, col: f0.col, snippet: this.lineSnippet(bindFile, f0.line), note: '綁定位置' };
+        if (!sources.some(s => web.samePath(s.file, bindFile))) {
+          const tx = web.readText(bindFile);
+          if (tx != null) sources.push(new web.Source(bindFile, tx, /\.html?$/i.test(bindFile)));
+        }
+      }
+      const h = web.locateFn(sources, l.fnText, bindFile);
+      const handler = h ? Object.assign({ kind: 'web', note: h.approx ? '處理函式（依第一行比對）' : '處理函式' }, h) : null;
+      const text = l.fnText || '';
+      const relevant = on === 'self' ||
+        (info.id && !isForm && text.includes(info.id)) ||
+        classes.some(c => web.mentionsClass(text, c)) ||
+        near(bind) || near(handler);
+      if (bind) bindT = T(bind);
+      const hT = handler ? T(handler) : null;
+      // follow the handler into what it calls, to the command it finally sends
+      const traced = relevant ? web.traceCmds(sources, text, 3, handler ? handler.file : bindFile) : [];
+      listeners.push({
+        type: l.type, on, onLabel: onLabel || '', via: l.via, cap: !!l.cap, fnName: l.fnName || '',
+        handler: hT, bind: bindT, cmds: traced.map(t => t.cmd), traced, relevant: !!relevant,
+      });
+    };
+    (info.listeners || []).forEach(l => addL(l, 'self'));
+    (info.inherited || []).forEach(a => a.list.forEach(l => addL(l, 'up', a.label)));
+    (info.inline || []).forEach(pair => {
+      const traced = web.traceCmds(sources, pair[1], 3, d.file);
+      listeners.push({
+        type: String(pair[0]).replace(/^on/i, ''), on: 'attr', onLabel: '', via: 'attr', cap: false, fnName: '',
+        handler: comp.html, bind: null, code: pair[1], cmds: traced.map(t => t.cmd), traced, relevant: true,
+      });
+    });
+    const mentionT = mentions.map(m => T(Object.assign({ kind: 'web', note: '提到此 id' }, m)));
+
+    // DFM events -> web targets now, C++ targets below
+    const events = [];
+    const evs = node && node.events ? Object.entries(node.events) : [];
+    for (const [name, handlerName] of evs) {
+      const types = fmt.domTypesOf(name);
+      const tl = [];
+      const push = x => { if (x != null && !tl.includes(x)) tl.push(x); };
+      for (const l of listeners) if (l.on === 'self' && types.includes(l.type)) push(l.handler != null ? l.handler : l.bind);
+      for (const l of listeners) if (l.on !== 'self' && l.relevant && types.includes(l.type)) push(l.handler != null ? l.handler : l.bind);
+      if (!tl.length) {
+        web.findAll(sources, web.identRe(handlerName), 3).forEach(h => push(T(Object.assign({ kind: 'web', note: '同名函式' }, h))));
+      }
+      events.push({ name, handler: handlerName, targets: tl, cppPending: true });
+    }
+
+    // commands the relevant handlers send (traced through their calls), and via what
+    const cmdVia = new Map();
+    for (const l of listeners) {
+      if (!l.relevant) continue;
+      for (const t of l.traced) {
+        if (!cmdVia.has(t.cmd)) cmdVia.set(t.cmd, [l.type + ' 處理函式'].concat(t.via.map(n => n + '()')));
+      }
+    }
+    for (const m of mentions) {
+      for (const c of web.extractCmds(m.snippet)) if (!cmdVia.has(c)) cmdVia.set(c, ['提到此 id 的那一行']);
+    }
+
+    // WPF-style editing: what can be changed, and whether it can be written back
+    const edTag = info.id ? htmledit.startTagOf(html, info.id) : null;
+    const edWrap = edTag && info.layout && info.layout.target === 'parent' ? htmledit.wrapperTagOf(html, edTag.start) : null;
+    // locked in the designer (the lock): position / size cannot be changed, text and look can
+    const locked = this.lockedName(d, isForm ? '@form' : info.id) || null;
+    // 1006 (the enumeration of every property row, in a real VS Code: HotPlateName showed ReadOnly ✓ -- the page's own JS
+    // makes it read only while it runs -- and unticking it changed nothing, the source has no readonly): what the grid
+    // shows for the attribute-made values is what the SOURCE says (WPF's grid shows the design-time value, not the
+    // running one); the probe's live reading stays for everything the source does not say
+    const look = info.look ? Object.assign({}, info.look) : null;
+    if (look && edTag) {
+      const attrMap = tg => { const o = {}; for (const [k, v] of htmledit.attrsOf(tg.text) || []) o[String(k).toLowerCase()] = v; return o; };
+      const at = attrMap(edTag);
+      const has = n => Object.prototype.hasOwnProperty.call(at, n);
+      if (look.readOnly != null) look.readOnly = has('readonly');
+      if (look.enabled != null) look.enabled = !has('disabled');
+      if (look.maxLength != null) look.maxLength = has('maxlength') ? (parseInt(at.maxlength, 10) || 0) : 0;
+      if (look.tabOrder !== undefined) look.tabOrder = has('tabindex') && /^-?\d+$/.test(String(at.tabindex).trim()) ? parseInt(at.tabindex, 10) : null;
+      if (look.checked != null) {
+        const inner = /^input$/i.test(edTag.name || '') ? edTag : htmledit.innerInputTag(html, edTag);
+        if (inner) look.checked = Object.prototype.hasOwnProperty.call(attrMap(inner), 'checked');
+      }
+      if (look.visible != null && !(info.layout && info.layout.target === 'parent')) {
+        const st = htmledit.styleOf(edTag.text);
+        const dd = st && st.decls ? st.decls.filter(x => String(x.name).toLowerCase() === 'display').pop() : null;
+        look.visible = !(dd && /^none\b/i.test(String(dd.value).trim()));
+      }
+    }
+    const edit = {
+      layout: info.layout || null, caption: info.caption || null, look,
+      inSource: !!edTag,
+      locked,
+      layoutInSource: !locked && !!(edTag && info.layout && (info.layout.target === 'self' || edWrap)),
+      dirty: !!d.doc.isDirty,
+      multi: Array.isArray(info.multi) && info.multi.length ? info.multi : null,
+      // (the form's DFM Width/Height are the whole window incl. caption and borders,
+      // not the page's client area: nothing comparable, so no DFM values for it)
+      dfm: node && !isForm ? fmt.dfmEditValues(node) : null,
+    };
+    // Name / Alias (the IO it stands for, kept in the title) and the page's own JS handlers (網頁事件): editable
+    const titleNow = edTag ? ((attrsOf(edTag.text).find(a => a[0] === 'title') || [])[1] || '') : '';
+    edit.aliasOn = !isForm && !!edTag && /Alias=/.test(html);
+    // (from the page as it is now -- the probe changed the title before it asked again -- not from the source text,
+    // which the edit may not have reached yet: the field showed the old Alias and it took a second Enter)
+    edit.alias = aliasedit.aliasOf(info.title ? info.title : titleNow);
+    edit.ioAliases = edit.aliasOn ? this.ioAliasList(d) : null;
+    edit.jsEvents = !isForm && edTag ? { types: jsevents.TYPES, handlers: jsevents.handlersOf(html, info.id) } : null;
+    // 0.157 (the WPF gap list G5: the Items collection editor): a select's / radio group's items, a memo's lines
+    edit.items = !isForm && edTag ? listitems.itemsOf(html, info.id) : null;
+
+    const data = {
+      comp, events, listeners, mentions: mentionT, cmds: [], uses: null, fields: null, tags: null, edit,
+      props: node ? fmt.formatProps(node.properties).map(p => p.concat([propLines[p[0]] || 0])) : [],
+      dfmFile: dfmFile || null,
+      html: {
+        geom: info.geom || null, dfmGeom: node ? node.geometry : null, attrs: info.attrs || [],
+        style: info.style || [], computed: info.computed || [], text: info.text || '', visible: info.visible !== false,
+        // what the SOURCE's start tag says (the grid edits these, like WPF edits the XAML):
+        // the declarations as written, not the browser's longhands; the attributes as written
+        srcStyle: edTag ? htmledit.styleOf(edTag.text).decls.map(x => [x.name, x.value]) : null,
+        srcAttrs: edTag ? attrsOf(edTag.text).filter(a => a[0] !== 'style').map(a => a.concat([ATTR_EDIT.test(a[0]) ? 1 : 0])) : null,
+      },
+      page: this.pageSummary(d, pi),
+      targets, cppPending: true,
+    };
+    onPartial(data);
+
+    const port = this.sourceTree(d.r.portRoot, 'port');
+    const gold = this.sourceTree(d.r.goldenRoot, 'golden');
+
+    // web command -> C++: the dispatch branch in the server, and the function it calls
+    const cmdRes = new Map();
+    for (const [c, via] of Array.from(cmdVia).slice(0, 8)) {
+      const send = web.findCmdSend(sources, c).map(h => T(Object.assign({ kind: 'web', note: '送出命令' }, h)));
+      const r = { cmd: c, via: via.join(' → '), send, dispatch: [], handlers: [], handlerNames: [], handlerAt: {}, other: [] };
+      if (port) {
+        const hits = (await port.findString(c)).filter(h => !h.test);
+        const disp = hits.filter(h => h.dispatch && !h.comment && !h.dead).slice(0, 3);
+        const called = [];
+        for (const h of disp) called.push(await port.calledFuncsAt(h.file, h.off));
+        r.dispatch = disp.map((h, k) => {
+          const t = this.cppTarget('port', h, true);
+          if (!called[k].length && /\{\s*$/.test(h.snippet)) t.note = '命令分派（處理程式就寫在這個區塊裡）';
+          return T(t);
+        });
+        const seenFn = new Set();
+        for (let k = 0; k < Math.min(2, disp.length); k++) {
+          for (const fnName of called[k]) {
+            if (seenFn.has(fnName)) continue;
+            seenFn.add(fnName);
+            for (const dd of (await port.findFuncDefs(fnName)).slice(0, 2)) {
+              const t = this.cppTarget('port', dd);
+              t.note = '處理函式 ' + fnName + (dd.dead ? '（在 #if 0 裡，不會編譯）' : '');
+              const ti = T(t);
+              r.handlers.push(ti);
+              if (!r.handlerNames.includes(fnName)) r.handlerNames.push(fnName);
+              if (r.handlerAt[fnName] == null && !dd.dead) r.handlerAt[fnName] = ti;
+            }
+          }
+        }
+        r.other = hits.filter(h => !disp.includes(h)).slice(0, 3).map(h => T(this.cppTarget('port', h, true)));
+      }
+      cmdRes.set(c, r);
+      data.cmds.push(r);
+    }
+
+    for (const ev of events) {
+      // what really runs when the web page's button is used: its command's C++ path
+      // (per command: its C++ handler functions, else its dispatch line; at most 4 in all,
+      // shallowest command first -- the full list is in the 送到 C++ 的命令 section)
+      const types = fmt.domTypesOf(ev.name);
+      let extra = 0;
+      for (const l of listeners) {
+        if (!(l.on === 'self' || l.relevant) || !types.includes(l.type)) continue;
+        for (const c of l.cmds) {
+          const r = cmdRes.get(c);
+          if (!r) continue;
+          const pick = r.handlers.length ? r.handlers.slice(0, 2) : r.dispatch.slice(0, 1);
+          for (const i of pick) {
+            if (extra >= 4 || ev.targets.includes(i)) continue;
+            data.targets[i] = Object.assign({}, data.targets[i], { note: '網頁命令 ' + c + ' → ' + data.targets[i].note });
+            ev.targets.push(i);
+            extra++;
+          }
+        }
+      }
+      if (port && pi.classes.length) {
+        const hits = await port.lookup(pi.classes, ev.handler);
+        const defs = hits.filter(h => h.def && !h.test).slice(0, 6);
+        const ments = hits.filter(h => h.comment && !h.test).slice(0, 5);
+        const other = hits.filter(h => !h.def && !h.comment && !h.test).slice(0, 2);
+        const pick = defs.concat(ments, other);
+        (pick.length ? pick : hits.slice(0, 3)).forEach(h => ev.targets.push(T(this.cppTarget('port', h))));
+      }
+      if (gold && pi.classes.length) {
+        const hits = await gold.lookup(pi.classes, ev.handler);
+        const defs = hits.filter(h => h.def).slice(0, 3);
+        (defs.length ? defs : hits.slice(0, 1)).forEach(h => ev.targets.push(T(this.cppTarget('golden', h))));
+      }
+      ev.cppPending = false;
+    }
+
+    // 事件表 (the Events tab of BCB6's Object Inspector / WPF's Properties window): every event of the class,
+    // the handler of the ones that are set, and where each is wired -- the page sends it (its *_ev.js CTLS
+    // list), the server has it (the generated form.event table), the C++ port has the function, BCB6 has it
+    {
+      const vcl = isForm ? 'TForm' : comp.cls || '';
+      const formCls = pi.classes && pi.classes.length ? pi.classes[0] : '';
+      const name = isForm ? '' : info.id || '';
+      const dfmEv = node && node.events ? node.events : {};
+      const table = port && d.r.portRoot ? this.serverEvents(d.r.portRoot) : [];
+      // the C++ events the designer wired on this page (htdCpp lines), the server's htd.event branch, the generated table
+      const pageText = d.doc.getText();
+      const htdLines = name ? jsevents.cppLines(pageText).filter(x => x.id === name) : [];
+      let htdDisp = null, htdRows = [];
+      if (htdLines.length && port) {
+        const hh = (await port.findString(cppbridge.CMD)).filter(h => h.dispatch && !h.dead && !h.test && !h.comment);
+        if (hh.length) htdDisp = T(Object.assign(this.cppTarget('port', hh[0], true), { note: '伺服器分派 ' + cppbridge.CMD + '（設計工具的事件）' }));
+        // (written a moment ago: the file on disk has it before the source index does)
+        if (!htdDisp) {
+          const sv = await this.htdServer(port);
+          const at = sv ? /\.cmd\s*==\s*"htd\.event"/.exec(sv.text) : null;
+          if (at) htdDisp = T({ kind: 'port', file: sv.file, line: sv.text.slice(0, at.index).split('\n').length, col: 1, snippet: cppbridge.CMD + ' → ' + (cppbridge.serverHook(sv.text, '').fn || ''),
+            note: '伺服器分派 ' + cppbridge.CMD + '（設計工具的事件）', weak: false });
+        }
+        const gd = d.r.portRoot ? this.htdGen(d.r.portRoot) : { text: null };
+        htdRows = gd.text ? cppbridge.rowsOf(gd.text) : [];
+      }
+      const rows = [];
+      for (const evName of vclevents.eventsOf(vcl, Object.keys(dfmEv))) {
+        const dfmH = dfmEv[evName] || '';
+        const conv = vclevents.handlerName(name, evName, isForm);
+        const fe = vclevents.formEventOf(evName);
+        const row = { name: evName, handler: dfmH, dfm: !!dfmH, idx: dfmH ? events.findIndex(e => e.name === evName) : -1, fe, conv,
+          port: null, server: null, web: null };
+        const srv = fe && name ? table.find(r => pi.classes.includes(r.cls) && r.ctl === name && r.ev === fe) : null;
+        if (srv) {
+          row.server = T({ kind: 'port', file: srv.file, line: srv.line, col: 1, snippet: srv.snippet, note: '伺服器的 form.event 事件表：' + srv.golden, weak: false });
+          if (!row.handler) row.handler = srv.meth;
+        }
+        if (port && pi.classes.length) {
+          const st = await port.defState(pi.classes, dfmH || conv);
+          if (st.state === 'live' || st.state === 'dead') {
+            row.port = T(this.cppTarget('port', st.hit));
+            row.portState = st.state;
+            if (!row.handler) row.handler = dfmH || conv;
+          }
+        }
+        if (fe && name) {
+          const re = new RegExp('\\[\\s*[\'"]' + name.replace(/[^\w]/g, '\\$&') + '[\'"]\\s*,\\s*[\'"]' + fe + '[\'"]\\s*\\]', 'g');
+          const h = web.findAll(sources, re, 1)[0];
+          if (h) row.web = T(Object.assign({ kind: 'web', note: '網頁會送 form.event（這一頁的事件清單）' }, h));
+        }
+        // wired through the page's JS: its listener of this DOM event sends a WS command the server dispatches to
+        // C++ (EastSun 20260930 on BtnPanelLane3: "應該有click吧? 他是連到C++的" -- io.btnPanelClick ->
+        // W906_DispatchIoClick); a component the .dfm does not have (added for the 9050) is wired this way too
+        // (a .dfm one keeps its handler name -- sbCloseProgram.OnClick = sbCloseProgramClick -- and gets the marks and
+        // the port's function, W906_Main_CloseProgramOp through act.main.closeProgram)
+        // a C++ event the designer wired (its htdCpp line): THAT handler -- not the htd.event entry point the page's
+        // listener sends to
+        const dl = htdLines.find(x => x.event === evName);
+        if (dl) {
+          row.cmd = cppbridge.CMD;
+          row.via = 'htd';
+          if (!row.handler) row.handler = dl.handler;
+          row.web = T({ kind: 'web', file: d.file, line: pageText.slice(0, dl.s).split('\n').length, col: 1, snippet: pageText.slice(dl.s, dl.e).trim(),
+            note: '這一頁送出（設計工具的 htdCpp）', weak: false });
+          row.server = htdDisp && htdRows.some(r => r.form === formCls && r.handler === dl.handler) ? htdDisp : null;
+          if (port && pi.classes.length) {
+            const st = dl.handler === (dfmH || conv) && row.portState ? { state: row.portState, hit: null } : await port.defState(pi.classes, dl.handler);
+            if (st.state === 'live') {
+              if (st.hit) row.port = T(this.cppTarget('port', st.hit));
+              row.portState = 'live';
+              row.main = row.port;
+              row.mainName = dl.handler;
+            } else {
+              // added and not saved yet: its body in the open .cpp
+              const od = this.dirtyHit(d.r.portRoot, new RegExp('\\b' + formCls + '\\s*::\\s*' + dl.handler + '\\s*\\('), /\.cpp$/i);
+              if (od) {
+                row.port = T({ kind: 'port', file: od.file, line: od.line, col: 1, snippet: od.snippet, note: '定義（還沒存檔）', weak: false });
+                row.portState = 'new';
+                row.main = row.port;
+                row.mainName = dl.handler;
+              }
+            }
+          }
+        }
+        if (!isForm && !dl) {
+          const types = fmt.domTypesOf(evName);
+          let via = null;
+          // (the operator-token handshake the sender does first -- control.takeover / control.release -- is not it;
+          // nor htd.event, the designer's own entry point: its handler is the row's htdCpp line)
+          for (const pass of [0, 1]) {
+            for (const l of listeners) {
+              if (via || !(l.on === 'self' || l.relevant) || !types.includes(l.type)) continue;
+              for (const c of l.cmds) {
+                if (c === cppbridge.CMD) continue;
+                if (pass === 0 && /^control\./.test(c)) continue;
+                const r = cmdRes.get(c);
+                if (r && (r.dispatch.length || r.handlers.length)) { via = { l, r }; break; }
+              }
+            }
+          }
+          if (via) {
+            row.cmd = via.r.cmd;
+            // THE function that runs (EastSun 20260930: "我需要你只對應到W906_Main_CloseProgramOp，其他的事件也都是一樣"):
+            // the handler the dispatch calls, not a guard / helper around it (W906_DispatchIoClick over
+            // W906_IoPageNoGuards; W906_Main_CloseProgramOp)
+            const hn = via.r.handlerNames.filter(n => via.r.handlerAt[n] != null);
+            const helper = n => /Guard|Lock|Log|Json|Printf|Ack/i.test(n);
+            const best = hn.find(n => /(Op|Click|Change|Dispatch\w*|Event|Handle\w*|Run\w*)$/.test(n) && !helper(n)) || hn.find(n => !helper(n)) || hn[0];
+            if (best) { row.main = via.r.handlerAt[best]; row.mainName = best; }
+            else if (via.r.dispatch.length) { row.main = via.r.dispatch[0]; row.mainName = via.r.cmd + '（wb_serve 的分派區塊）'; }
+            if (!row.handler) row.handler = best || via.r.cmd;
+            if (row.web == null) row.web = via.l.handler != null ? via.l.handler : via.l.bind;
+            if (row.server == null && via.r.dispatch.length) row.server = via.r.dispatch[0];
+            if (row.port == null && row.main != null) row.port = row.main;
+            row.via = 'cmd';
+          }
+        }
+        // no command to follow: the function the server's form.event table runs (B_cbSelectHPFromDBChange, the golden
+        // handler's translation), else the port's own definition of it (live), else that table row
+        if (row.main == null && srv && srv.fnLine) {
+          row.main = T({ kind: 'port', file: srv.file, line: srv.fnLine, col: 1, snippet: srv.fnSnippet, note: '伺服器的 form.event 跑的函式（' + srv.golden + ' 的翻譯）', weak: false });
+          row.mainName = srv.fn;
+        }
+        if (row.main == null && row.port != null && row.portState === 'live') { row.main = row.port; row.mainName = dfmH || conv; }
+        if (row.main == null && row.server != null) { row.main = row.server; row.mainName = (srv ? srv.meth : '') + '（form.event 事件表）'; }
+        rows.push(row);
+      }
+      // the value box's list (Windows Forms: "all methods that have a compatible method signature"): the form class's
+      // public methods whose parameter types are the event's, with a body that is compiled (a GATE's has none)
+      if (port && formCls && !isForm && name) {
+        const pf = await this.portClassFiles(d, formCls);
+        let hT = '';
+        try { hT = pf ? fs.readFileSync(pf.hFile, 'utf8') : ''; } catch (e) { hT = ''; }
+        const ms = hT ? cppbridge.methodsOf(hT, formCls).filter(m => m.access === 'public') : [];
+        const live = new Map();
+        for (const rw of rows) {
+          const key = cppbridge.typesKey(vclevents.signatureOf(rw.name));
+          rw.pick = [];
+          for (const m of ms) {
+            if (cppbridge.typesKey(m.params) !== key) continue;
+            if (!live.has(m.name)) live.set(m.name, (await port.defState(pi.classes, m.name)).state === 'live');
+            if (live.get(m.name) && !rw.pick.includes(m.name)) rw.pick.push(m.name);
+          }
+        }
+      }
+      // AI(W906-HTDESIGNER) 20261001: several selected (BCB6's Object Inspector, Windows Forms' Events tab): only the
+      // events they ALL have; one whose handlers differ shows empty; a name typed there = that handler for all of them
+      const others = !isForm && Array.isArray(info.multi) ? info.multi.filter(x => x && x !== '@form' && x !== name) : [];
+      let multi = null;
+      if (others.length) {
+        const lines = jsevents.cppLines(pageText);
+        const os = others.map(id => {
+          const n = ir ? ir.byName.get(id) : null;
+          const vv = n ? null : fmt.parseVclTitle(web.titleOf(pageText, id));
+          return { id, vcl: n ? n.class : (vv ? vv.cls : ''), dfm: n && n.events ? n.events : {} };
+        });
+        const common = [];
+        for (const rw of rows) {
+          if (!os.every(o => vclevents.eventsOf(o.vcl, Object.keys(o.dfm)).includes(rw.name))) continue;
+          const hs = [rw.handler || ''];
+          let ro = !!rw.dfm || !!(rw.cmd && rw.via !== 'htd');
+          const fe = rw.fe;
+          for (const o of os) {
+            const dh = o.dfm[rw.name] || '';
+            if (dh) ro = true;
+            const li = lines.find(x => x.id === o.id && x.event === rw.name);
+            let h = dh || (li ? li.handler : '');
+            if (!h && fe) { const sr = table.find(r => pi.classes.includes(r.cls) && r.ctl === o.id && r.ev === fe); if (sr) h = sr.meth; }
+            if (!h && port && pi.classes.length) {
+              const cv = vclevents.handlerName(o.id, rw.name, false);
+              const st = await port.defState(pi.classes, cv);
+              if (st.state === 'live' || st.state === 'dead') h = cv;
+            }
+            hs.push(h);
+          }
+          rw.mixed = hs.some(h => h !== hs[0]);
+          rw.multiRo = ro;
+          common.push(rw);
+        }
+        rows.splice(0, rows.length, ...common);
+        multi = others;
+      }
+      data.eventGrid = { vcl, formCls, name, isForm, rows, multi };
+    }
+
+    // the setting/recipe field this control edits (wire field map XST1: ['Hotplate Form',
+    // 'X Start']) and the C++ / BCB6 lines that read or write it
+    data.fields = [];
+    const widx = info.id && !isForm && d.r.webRoot ? this.webCmdIndex(d.r.webRoot) : null;
+    if (widx) {
+      const rwNote = (h, withSec) => (/\b\w*(Write|Save|Put|Set)\w*\s*\(/.test(h.snippet) ? '寫入' : /\b\w*(Read|Load|Get)\w*\s*\(/.test(h.snippet) ? '讀取' : '出現') +
+        (withSec ? '' : '（只比對到 key，section 可能是變數）') + (h.dead ? '（在 #if 0 裡）' : '');
+      const cppFor = async (tree, kind, r) => {
+        if (!tree) return [];
+        const hits = (await tree.findString(r.key)).filter(h => !h.test && !h.comment);
+        const both = hits.filter(h => h.snippet.includes('"' + r.section + '"'));
+        return (both.length ? both : hits).slice(0, 5).map(h => T(Object.assign(this.cppTarget(kind, h, true), {
+          note: rwNote(h, both.includes(h)), weak: !both.includes(h),
+        })));
+      };
+      // the same field is often mapped twice (hand-written wire + generated wire): one entry
+      const groups = new Map();
+      for (const r of widx.fieldsOf(d.file, info.id)) {
+        const k = r.section + '\u0000' + r.key;
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(r);
+      }
+      for (const rows of Array.from(groups.values()).slice(0, 4)) {
+        const r = rows[0];
+        data.fields.push({
+          section: r.section, key: r.key,
+          note: rows.map(x => x.note).filter(Boolean).join('；') || (rows.find(x => x.doc) || {}).doc || '',
+          web: rows.map(x => T({ kind: 'web', file: x.file, line: x.line, col: x.col, snippet: x.snippet, note: '欄位對照' + (x.doc ? '（文件 ' + x.doc + '）' : '') })),
+          port: await cppFor(port, 'port', r),
+          golden: await cppFor(gold, 'golden', r),
+        });
+      }
+    }
+
+    // live data the control shows: wire tag map 'machine.state': ['palMainStatus', 'text'],
+    // and the C++ lines that publish (or use) that tag
+    data.tags = [];
+    if (widx) {
+      const score = h => (/WebBridge|wb_serve|JsonBridge/i.test(h.file) ? 0 : 2) +
+        (/\b\w*(Set|Publish|Put|Emit|Update|Tag|tag)\w*\s*\(/.test(h.snippet) ? 0 : 1);
+      for (const r of widx.tagsOf(d.file, info.id).slice(0, 6)) {
+        const hits = port ? (await port.findString(r.tag)).filter(h => !h.test && !h.comment) : [];
+        hits.sort((a, b) => score(a) - score(b) || a.file.localeCompare(b.file) || a.line - b.line);
+        data.tags.push({
+          tag: r.tag, prop: r.prop,
+          web: T({ kind: 'web', file: r.file, line: r.line, col: r.col, snippet: r.snippet, note: '標籤對照（顯示為 ' + r.prop + '）' }),
+          port: hits.slice(0, 5).map(h => T(Object.assign(this.cppTarget('port', h, true), {
+            note: (h.dead ? '在 #if 0 裡' : '發布／使用這個標籤'), weak: !!h.dead,
+          }))),
+        });
+      }
+    }
+
+    // where the form's code touches this control (spbSave->Enabled = …, the declaration)
+    if (info.id && !isForm && pi.classes.length) {
+      const uses = { port: [], portMore: 0, golden: [], goldenMore: 0 };
+      const useNote = h => (h.decl ? '宣告' : h.comment ? '註解' : '使用') + (h.dead ? '（在 #if 0 裡）' : '') + (h.test ? '（測試）' : '');
+      if (port) {
+        const u = await port.findMemberUses(pi.classes, info.id, 80);
+        uses.port = u.slice(0, 15).map(h => T(Object.assign(this.cppTarget('port', h), { note: useNote(h), weak: h.comment || h.dead })));
+        uses.portMore = Math.max(0, u.length - 15);
+      }
+      if (gold) {
+        const u = await gold.findMemberUses(pi.classes, info.id, 80);
+        uses.golden = u.slice(0, 15).map(h => T(Object.assign(this.cppTarget('golden', h), { note: useNote(h), weak: h.comment })));
+        uses.goldenMore = Math.max(0, u.length - 15);
+      }
+      data.uses = uses;
+    }
+    data.cppPending = false;
+    data.page = this.pageSummary(d, pi);
+    return data;
+  }
+
+  pageSummary(d, pi) {
+    const notes = [];
+    if (pi.ir) {
+      const how = pi.dfm && pi.dfm.how === 'guess'
+        ? '（依元件名稱推測：吻合 ' + pi.dfm.hits + ' 個，' + Math.round(pi.dfm.score * 100) + '%）'
+        : '（依頁面標題）';
+      notes.push('DFM：' + (pi.ir.sourceDfm || path.basename(pi.ir.file)) + how + '，表單類別 ' + (pi.ir.formClass || '?'));
+    } else {
+      notes.push('找不到對應的 DFM：這頁只能顯示 HTML 屬性和網頁 JS。');
+    }
+    if (pi.iframe) notes.push('這頁有內嵌 iframe，設計檢視不載入它們（避免繞過網路封鎖）。');
+    if (d.blocked.length) {
+      notes.push('已擋下頁面的連線 ' + d.blocked.length + ' 種：' + d.blocked.slice(0, 3).map(b => b.uri || b.dir).join('、') + '（設計檢視不連機台）');
+    }
+    if (d.errors.length) notes.push('頁面 JS 錯誤 ' + d.errors.length + ' 筆，第一筆：' + d.errors[0].msg);
+    if (!d.r.portRoot) notes.push('找不到 C++ 移植樹，可在設定 ht9045Designer.portRoot 指定。');
+    if (!d.r.goldenRoot) notes.push('找不到 BCB6 原始碼資料夾，可在設定 ht9045Designer.goldenRoot 指定。');
+    return { file: d.file, name: path.basename(d.file), mode: d.mode, notes };
+  }
+
+  // --- opening code --------------------------------------------------------
+  /** The designer's column -- null once its panel is gone. AI(W906-HTDESIGNER) 20261002 (machine): since 0.140 a page
+      closes itself when a C++ file opens, and a panel that is gone THROWS on .viewColumn ("Webview is disposed",
+      the real-VS-Code test): a jump to code from the Properties panel of a page just closed did nothing at all. */
+  panelColumn(d) {
+    try { return d && d.panel ? d.panel.viewColumn : null; } catch (e) { return null; }
+  }
+
+  codeColumn(d) {
+    const dcol = this.panelColumn(d);
+    const eds = vscode.window.visibleTextEditors.filter(e => e.viewColumn && e.viewColumn !== dcol);
+    const other = eds.find(e => !d || e.document !== d.doc);
+    if (other) return other.viewColumn;
+    const same = eds.find(e => d && e.document === d.doc);
+    if (same) return Math.min(9, Math.max(same.viewColumn, dcol || 1) + 1);
+    return dcol ? Math.min(9, dcol + 1) : vscode.ViewColumn.Beside;
+  }
+
+  sourceColumn(d) {
+    const ex = vscode.window.visibleTextEditors.find(e => e.document === d.doc && e.viewColumn);
+    if (ex) return ex.viewColumn;
+    const dcol = this.panelColumn(d);
+    return dcol ? Math.min(9, dcol + 1) : vscode.ViewColumn.Beside;
+  }
+
+  async openTarget(t, d, intoBody) {
+    if (!t) return;
+    if (t.kind === 'html') { if (d) await this.revealSource(d, null, true, t); return; }
+    try {
+      const big5 = t.kind === 'golden' || t.kind === 'dfm';
+      const uri = big5 ? vscode.Uri.file(t.file).with({ scheme: GOLDEN_SCHEME }) : vscode.Uri.file(t.file);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      let pos = new vscode.Position(Math.max(0, (t.line || 1) - 1), Math.max(0, (t.col || 1) - 1));
+      // WPF: "navigates to the existing handler" -- the caret inside its body, ready to type (not on its name)
+      if (intoBody && !big5) pos = bodyPos(doc, pos.line) || pos;
+      const ed = await vscode.window.showTextDocument(doc, {
+        viewColumn: this.codeColumn(d), preview: true, selection: new vscode.Range(pos, pos),
+      });
+      ed.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+      this.markJump(doc, Math.max(0, (t.line || 1) - 1), t.kind === 'dfm');
+    } catch (e) {
+      vscode.window.showErrorMessage('開不了 ' + t.file + '：' + (e && e.message || e));
+    }
+  }
+
+  /**
+   * 1006 (EastSun: "我圖片上視窗 想要偵測claude 是否再作動 再作動的話 希望有轉圈圈動畫"): which of the Claude tabs is working --
+   * a spinning item on the status bar naming them (VS Code lets no extension draw on another one's tab, so the tab
+   * itself cannot spin); a click = pick one and go to its tab; one that finishes is said for a moment.
+   * Read from the transcripts (lib/claudeactivity.js). -> { busy: [titles], done: [titles] }
+   */
+  claudeTick() {
+    const item = this.claudeItem;
+    if (!item) return null;
+    if (vscode.workspace.getConfiguration('ht9045Designer').get('claudeActivity') === false) { item.hide(); return null; }
+    const tabs = vscode.window.tabGroups ? vscode.window.tabGroups.all.flatMap(g => g.tabs.map(t => ({ t, g }))).filter(x => this.isClaudeTab(x.t)) : [];
+    const labels = new Set(tabs.map(x => String(x.t.label || '').trim()));
+    const dir = this.claudeDir || path.join(require('os').homedir(), '.claude', 'projects');
+    let rows = [];
+    try { rows = claudeactivity.scan(dir); } catch (e) { rows = []; }
+    const busy = [...new Set(rows.filter(r => r.busy && r.title && labels.has(r.title.trim())).map(r => r.title.trim()))];
+    const before = this.claudeBusy || [];
+    const done = before.filter(t => !busy.includes(t) && labels.has(t));
+    this.claudeBusy = busy;
+    if (done.length) vscode.window.setStatusBarMessage('$(check) Claude 完成：' + done.join('、'), 10000);
+    if (busy.length) {
+      item.text = '$(loading~spin) Claude 作動中：' + busy.join('、');
+      item.tooltip = 'Claude 正在作動的分頁：\n' + busy.map(t => '・' + t).join('\n') + '\n\n點一下＝跳到那個分頁（設定 ht9045Designer.claudeActivity 可關掉）';
+      item.show();
+    } else item.hide();
+    return { busy, done };
+  }
+  /** The status bar item's click: a working Claude tab picked (one = at once) and brought to the front. */
+  async claudeBusyPick() {
+    const busy = this.claudeBusy || [];
+    if (!busy.length) return null;
+    const pick = busy.length === 1 ? busy[0] : await vscode.window.showQuickPick(busy, { placeHolder: '跳到哪一個正在作動的 Claude 分頁？' });
+    if (!pick) return null;
+    for (const g of vscode.window.tabGroups.all) {
+      const i = g.tabs.findIndex(t => this.isClaudeTab(t) && String(t.label || '').trim() === pick);
+      if (i < 0) continue;
+      const focus = ['workbench.action.focusFirstEditorGroup', 'workbench.action.focusSecondEditorGroup', 'workbench.action.focusThirdEditorGroup'][(g.viewColumn || 1) - 1];
+      try { if (focus) await vscode.commands.executeCommand(focus); await vscode.commands.executeCommand('workbench.action.openEditorAtIndex', i); } catch (e) { /* closed meanwhile */ }
+      return pick;
+    }
+    return null;
+  }
+  /** A tab of Claude Code (its webview panel). */
+  isClaudeTab(t) {
+    const i = t && t.input;
+    return !!(i && typeof i.viewType === 'string' && /claudeVSCodePanel/i.test(i.viewType));
+  }
+  /**
+   * A Claude tab that opened (or was moved) unpinned and is the active one: pinned (workbench.action.pinEditor acts on the
+   * active editor -- a tab that is not in front is left alone, nothing is switched to). -> how many were pinned.
+   */
+  pinClaudeTabs(e) {
+    if (vscode.workspace.getConfiguration('ht9045Designer').get('pinClaudeTabs') === false) return 0;
+    let n = 0;
+    for (const t of [].concat((e && e.opened) || [], (e && e.changed) || [])) {
+      if (!this.isClaudeTab(t) || t.isPinned || !t.isActive || !(t.group && t.group.isActive)) continue;
+      n++;
+      try { Promise.resolve(vscode.commands.executeCommand('workbench.action.pinEditor')).catch(() => { /* gone */ }); } catch (err) { /* gone */ }
+    }
+    return n;
+  }
+
+  /**
+   * AI(W906-HTDESIGNER) 20261003 (machine, EastSun: "你用事件轉跳到程式碼時 我希望你用不同底色 標出轉跳到的程式碼"): the code a
+   * jump went to, in its own background colour (ht9045Designer.jumpTargetBackground, a theme colour -- 設定 > 色彩可改)
+   * and a mark on the scroll bar: the whole function when the line starts one (header to closing brace, C++ / JS),
+   * else that line. One at a time: the next jump moves it; it stays when the tab is switched away and back.
+   * `lineOnly`: a .dfm line (an `object` block is not braces). -> { start, end } (0-based lines) or null.
+   */
+  markJump(doc, line0, lineOnly) {
+    if (!doc || !vscode.window.createTextEditorDecorationType) return null;
+    if (!this.jumpDeco) {
+      this.jumpDeco = vscode.window.createTextEditorDecorationType({
+        backgroundColor: new vscode.ThemeColor('ht9045Designer.jumpTargetBackground'), isWholeLine: true,
+        overviewRulerColor: new vscode.ThemeColor('ht9045Designer.jumpTargetBackground'), overviewRulerLane: vscode.OverviewRulerLane && vscode.OverviewRulerLane.Full,
+      });
+      this.ctx.subscriptions.push(this.jumpDeco);
+      // (decorations belong to an editor: a tab shown again gets it back)
+      if (vscode.window.onDidChangeVisibleTextEditors) this.ctx.subscriptions.push(vscode.window.onDidChangeVisibleTextEditors(() => this.applyJump()));
+    }
+    let r = null;
+    try { r = lineOnly ? null : cppstub.funcRange(doc.getText(), line0); } catch (e) { r = null; }
+    if (!r || r.end - r.start > 3000) r = { start: line0, end: line0 };
+    this.jumpMark = { uri: doc.uri.toString(), start: r.start, end: r.end };
+    this.applyJump();
+    return r;
+  }
+  applyJump() {
+    if (!this.jumpDeco) return;
+    const m = this.jumpMark;
+    for (const ed of vscode.window.visibleTextEditors || []) {
+      const mine = m && ed.document && ed.document.uri.toString() === m.uri;
+      const last = mine ? Math.min(m.end, ed.document.lineCount - 1) : 0;
+      ed.setDecorations(this.jumpDeco, mine ? [new vscode.Range(m.start, 0, last, 0)] : []);
+    }
+  }
+
+  /**
+   * The server's WS form.event tables (generated: FileRW/*.gen.inc, FileRW/*_File.cpp, JsonBridge -- rows
+   * {"control", "click"|"change", "<golden cpp>:<line> TfXxx::Method", &handler}). Read again after 20 s.
+   */
+  serverEvents(portRoot) {
+    const c = this._srvEv;
+    if (c && c.root === portRoot && Date.now() - c.at < 20000) return c.rows;
+    const rows = [];
+    // (the handler pointer after it -- &B_cbSelectHPFromDBChange -- is the function the server really runs)
+    const re = /\{\s*"(\w+)"\s*,\s*"(click|change)"\s*,\s*"([^"]*?(T\w+)::(\w+))"(?:\s*,\s*&\s*([A-Za-z_][\w:]*))?/g;
+    for (const sub of ['FileRW', 'JsonBridge']) {
+      let names = [];
+      try { names = fs.readdirSync(path.join(portRoot, sub)); } catch (e) { continue; }
+      for (const n of names) {
+        if (!/\.(cpp|inc|h)$/i.test(n)) continue;
+        const f = path.join(portRoot, sub, n);
+        let t;
+        try { t = fs.readFileSync(f, 'utf8'); } catch (e) { continue; }
+        if (t.indexOf('"click"') < 0 && t.indexOf('"change"') < 0) continue;
+        re.lastIndex = 0;
+        let m;
+        while ((m = re.exec(t))) {
+          let line = 1;
+          for (let i = 0; i < m.index; i++) if (t.charCodeAt(i) === 10) line++;
+          const row = { ctl: m[1], ev: m[2], golden: m[3], cls: m[4], meth: m[5], file: f, line, snippet: m[0].trim() };
+          if (m[6]) {
+            const fn = m[6].replace(/^.*::/, '');
+            const dm = new RegExp('(^|\\n)([^\\n;{}]*\\b' + fn + '\\s*\\([^;{)]*\\)\\s*)\\{').exec(t);
+            if (dm) {
+              const at = dm.index + dm[1].length;
+              row.fn = fn;
+              row.fnLine = t.slice(0, at).split('\n').length;
+              row.fnSnippet = dm[2].trim();
+            }
+          }
+          rows.push(row);
+        }
+      }
+    }
+    this._srvEv = { root: portRoot, at: Date.now(), rows };
+    return rows;
+  }
+
+  /** A double-click in the 事件表: a set event -> its code; an empty one -> a new handler (like BCB6). */
+  async onEventGrid(data, evName, d) {
+    const g = data && data.eventGrid;
+    const row = g && g.rows.find(r => r.name === evName);
+    if (!row) return null;
+    // several selected and not one handler of them all: a double-click makes one for all (Windows Forms / BCB6)
+    if (g.multi && g.multi.length && (!row.handler || row.mixed)) return this.cmdEventMany(d, data, row, row.conv);
+    // the one C++ function that runs, straight away (no list to pick from)
+    if (row.main != null && data.targets[row.main]) return this.openTarget(data.targets[row.main], d, true);
+    if (row.idx >= 0) return this.openEvent(data, row.idx, d);
+    const t = [row.port, row.server, row.web].filter(x => x != null)[0];
+    if (t != null) return this.openTarget(data.targets[t], d);
+    return this.cmdCreateEvent(d, data, row);
+  }
+
+  /**
+   * 新增事件處理函式 (EastSun 20260930: in the C++ port tree): the declaration in the form's class (.h), an empty
+   * body at the end of its .cpp -- one edit of the documents, nothing saved -- then the .cpp opens there.
+   * What the page and the server still need (the page's *_ev.js CTLS list, the generated form.event table)
+   * is said, not written: those belong to the event-porting pipeline (tools/editlist/*.py, gen_editlist.py).
+   */
+  /** The IO table's aliases (READ only; launch.json's W906_IOTABLE_PATH, else IO_Table.csv beside Gerneral.ini), cached by mtime. */
+  ioAliasList(d) {
+    const s = this.machineState(d && d.r);
+    const f = s.hints.ioTable || (s.generalIni ? path.join(path.dirname(s.generalIni), 'IO_Table.csv') : null);
+    if (!f) return null;
+    let st;
+    try { st = fs.statSync(f); } catch (e) { return null; }
+    const c = this._ioAl;
+    if (c && c.file === f && c.mtime === st.mtimeMs) return c.list;
+    const list = aliasedit.ioAliases(f);
+    this._ioAl = { file: f, mtime: st.mtimeMs, list: { file: f, names: list } };
+    return this._ioAl.list;
+  }
+
+  /** Alias (EastSun: "名稱都要讓我改 alias"): the Alias part of the component's title, which the page's JS reads. */
+  cmdSetAlias(d, data, value) {
+    const id = data.comp.htmlId;
+    const tag = id ? htmledit.startTagOf(d.doc.getText(), id) : null;
+    if (!tag) { this.refuseEdit(d, '原始碼裡找不到「' + id + '」，Alias 沒有改。'); return null; }
+    const title = (attrsOf(tag.text).find(a => a[0] === 'title') || [])[1] || '';
+    const r = aliasedit.withAlias(title, value);
+    if (r.error) { this.refuseEdit(d, r.error + '，沒有改。'); return null; }
+    if (r.title === title) return null;
+    const v = String(value || '').trim();
+    const io = data.edit && data.edit.ioAliases;
+    if (v && io && io.names.length && !io.names.includes(v)) {
+      vscode.window.showWarningMessage('Alias「' + v + '」不在 IO 表（' + path.basename(io.file) + '）裡——這個元件會對不到任何 IO。還是照改了，Ctrl+Z 可以復原。');
+    }
+    d.post({ type: 'setAttrRaw', key: data.comp.key, name: 'title', value: r.title });
+    vscode.window.setStatusBarMessage('$(edit) ' + id + ' 的 Alias：' + (aliasedit.aliasOf(title) || '（沒有）') + ' → ' + (v || '（拿掉）') + '（Ctrl+Z 復原）', 6000);
+    return { from: aliasedit.aliasOf(title), to: v, title: r.title };
+  }
+
+  /**
+   * A handler name typed into the 事件表: an empty event -> a new C++ handler of that name; one the designer (or
+   * the port) has that the .dfm does not name -> renamed in the class (.h) and every TfXxx::name of its .cpp.
+   * The .dfm's are BCB6's (golden, read only): not renamed.
+   */
+  async onEventName(data, evName, value, d) {
+    const g = data && data.eventGrid;
+    const row = g && g.rows.find(r => r.name === evName);
+    if (!row) return null;
+    const nu = String(value || '').trim();
+    if (g.multi && g.multi.length) return this.cmdEventMany(d, data, row, nu);
+    if (row.dfm) { this.refuseEdit(d, evName + ' 的 ' + row.handler + ' 是 BCB6 .dfm 指定的（golden，唯讀），名稱不在這裡改。'); return null; }
+    // cleared (WPF: the name deleted = the event not attached any more; the code stays)
+    if (!nu) return row.handler ? this.onEventReset(data, evName, d) : null;
+    if (!/^[A-Za-z_]\w*$/.test(nu)) { this.refuseEdit(d, '「' + nu + '」不能當 C++ 函式名稱（英文字母、數字、_，不能用數字開頭），沒有改。'); return null; }
+    if (!row.handler) return this.cmdCreateEvent(d, data, row, nu);
+    if (row.handler === nu) return null;
+    // a method the class already has (picked from the list): the event is attached to it instead (Windows Forms'
+    // selection box); a new name: the handler is renamed
+    const cls = data.eventGrid.formCls;
+    const pf = await this.portClassFiles(d, cls);
+    if (pf) {
+      const hd = await vscode.workspace.openTextDocument(vscode.Uri.file(pf.hFile));
+      if (cppstub.declares(hd.getText(), cls, nu)) return this.cmdUseHandler(d, data, row, cls, nu, hd);
+    }
+    return this.renameCppHandler(d, data, row, nu);
+  }
+
+  /**
+   * 事件 with several selected (BCB6's Object Inspector, Windows Forms' Events tab): the name typed = THAT function for
+   * every one of them -- made once (or the class's own one used), then each control's wiring (its page line, its row of
+   * the generated table); '' = each one's designer wiring taken off. Nothing is renamed (a name typed with several
+   * selected attaches, it does not rename). BCB6's .dfm ones (golden) and another page script's are not changed.
+   */
+  async cmdEventMany(d, data, row, nu) {
+    const g = data.eventGrid;
+    const n = g.multi.length + 1;
+    if (row.multiRo) {
+      this.refuseEdit(d, row.name + '：選取的元件裡有 BCB6 .dfm 指定的（golden，唯讀）或網頁 JS 自己送的處理函式，' + n + ' 個不能一起改——一個一個選來改。');
+      return null;
+    }
+    if (!nu) return this.resetMany(d, data, row, [g.name].concat(g.multi));
+    if (!/^[A-Za-z_]\w*$/.test(nu)) { this.refuseEdit(d, '「' + nu + '」不能當 C++ 函式名稱（英文字母、數字、_，不能用數字開頭），沒有改。'); return null; }
+    const cls = g.formCls;
+    const pf = await this.portClassFiles(d, cls);
+    if (!pf) { vscode.window.showInformationMessage('移植樹裡找不到 ' + cls + ' 的 .h／.cpp，事件沒有接。'); return null; }
+    const hDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(pf.hFile));
+    // the primary one: the one-selected path (made, or the class's own used) -- unless it is that one already
+    let first = { name: nu, wired: true, skipped: true };
+    if (!(row.handler === nu && row.via === 'htd')) {
+      first = cppstub.declares(hDoc.getText(), cls, nu) ? await this.cmdUseHandler(d, data, row, cls, nu, hDoc) : await this.cmdCreateEvent(d, data, row, nu);
+      // (not added -- e.g. a parameter type the port lacks: the others are not wired to a handler that is not there)
+      if (!first || first.refused) return first || null;
+    }
+    const dc = cppbridge.declOf(hDoc.getText(), cls, nu);
+    if (!dc) { vscode.window.showInformationMessage(cls + ' 沒有宣告 ' + nu + '，其他 ' + g.multi.length + ' 個沒有接。'); return first; }
+    // the others: wiring only, each in turn (each one's page line and table row from the text as it is by then)
+    const done = [], notes = [];
+    for (const id of g.multi) {
+      const w = await this.wirePlan(d, { name: id, isForm: false }, { name: row.name }, cls, nu, dc.params, dc.access, this.stamp());
+      this.htdWriteWire(w);
+      if (!w.wired) { notes.push(id + '：' + w.notes.join('；')); continue; }
+      const we = new vscode.WorkspaceEdit();
+      for (const op of w.ops) we.replace(op.doc.uri, new vscode.Range(op.doc.positionAt(op.s), op.doc.positionAt(op.e)), op.text);
+      if (!(await vscode.workspace.applyEdit(we))) { notes.push(id + '：沒有寫進去'); continue; }
+      done.push(id);
+    }
+    if (!notes.length) row.mixed = false;
+    if (this.props && this.props.data === data) this.props.show(data);
+    this.log('事件 ' + row.name + '（多選 ' + n + ' 個）＝' + cls + '::' + nu + '：' + (first.skipped ? g.name + ' 本來就是' : g.name) + (done.length ? '、' + done.join('、') : '') +
+      '（網頁未存檔）' + (notes.length ? '；沒有接：' + notes.join('；') : ''));
+    vscode.window.showInformationMessage(row.name + ' 接到 ' + cls + '::' + nu + '：' + [g.name].concat(done).join('、') + '（' + (done.length + 1) + ' / ' + n + ' 個，網頁還沒存檔）。' +
+      (notes.length ? '沒有接上：' + notes.join('；') + '。' : ''));
+    return { name: nu, first, done, notes };
+  }
+
+  /** 重設 with several selected: each one's designer wiring of the event taken off (the C++ function stays). */
+  async resetMany(d, data, row, ids) {
+    const cls = data.eventGrid.formCls, ev = row.name;
+    const rng = (doc, x) => new vscode.Range(doc.positionAt(x.s), doc.positionAt(x.e));
+    // the generated table first, straight to disk (the build's file, never left unsaved)
+    const gen = d.r.portRoot ? this.htdGen(d.r.portRoot) : { text: null };
+    const rows0 = gen.text ? cppbridge.rowsOf(gen.text) : [];
+    const hit = r => r.form === cls && r.event === ev && ids.includes(r.control);
+    const saved = [];
+    let genWhy = '';
+    if (rows0.some(hit)) {
+      if (gen.busy) genWhy = path.basename(gen.file) + ' 在編輯器裡有沒存的分頁，它的列沒有拿掉（關掉那個分頁、不存，再重設一次）';
+      else {
+        const genText = await this.htdRegen(d, rows0.filter(r => !hit(r)));
+        const wr = genText != null ? this.htdWriteDisk(genText) : null;   // (1006: genText = the files -- htdGenDisk)
+        if (wr && wr.error) genWhy = wr.error;
+        else if (wr) saved.push(path.basename(cppbridge.GEN_REL) + ' ' + rows0.filter(hit).length + ' 列');
+      }
+    }
+    const done = [];
+    for (const id of ids) {
+      const pt = d.doc.getText();
+      const line = jsevents.cppLines(pt).find(x => x.id === id && x.event === ev);
+      if (!line) continue;
+      const we = new vscode.WorkspaceEdit();
+      for (const x of jsevents.setCpp(pt, id, line.type, line.form, '', ev).edits) we.replace(d.doc.uri, rng(d.doc, x), x.text);
+      if (await vscode.workspace.applyEdit(we)) done.push(id);
+    }
+    if (!done.length && !saved.length) {
+      vscode.window.showInformationMessage(ev + '：選取的 ' + ids.length + ' 個都沒有設計工具接的連線可以拿掉。' + (genWhy ? genWhy + '。' : ''));
+      return null;
+    }
+    const old = row.handler;
+    if (done.includes(data.eventGrid.name)) Object.assign(row, { handler: '', main: null, mainName: null, cmd: null, via: null, web: null, server: null, port: null, portState: null });
+    if (done.length === ids.length) row.mixed = false;
+    if (this.props && this.props.data === data) this.props.show(data);
+    this.log('重設事件 ' + ev + '（多選 ' + ids.length + ' 個）：' + done.join('、') + '（網頁未存檔）' + (saved.length ? '；' + saved.join('、') + ' 直接存檔' : '') + '；C++ 函式沒有刪' + (genWhy ? '；' + genWhy : ''));
+    vscode.window.showInformationMessage('已重設 ' + ev + '：' + (done.length ? done.join('、') + ' 的網頁連線（還沒存檔）' : '') + (saved.length ? (done.length ? '、' : '') + saved.join('、') + '（已經直接存檔）' : '') +
+      '。C++ 函式' + (old ? ' ' + old : '') + '沒有刪。' + (genWhy ? genWhy + '。' : ''));
+    return { reset: ev, ids: done, saved };
+  }
+
+  /**
+   * The .cpp a form class's handlers go into: the one named like its .h; else the one with the most REAL definitions of
+   * the class (comments / strings masked), one that #includes the class's .h first. 1006 (the enumeration -- every page's
+   * events, built): TfTemperFrom's handler went into forms\fLotInfo.cpp, which only names TfTemperFrom:: in a comment
+   * and does not include its header ("'TfTemperFrom' has not been declared") -- it had been picked as the file with the
+   * most functions of any kind; the right one is cTemperFrom.cpp (9 definitions).
+   */
+  pickClassCpp(files, cls, hBase) {
+    const same = files.find(f => /\.cpp$/i.test(f) && path.basename(f).replace(/\.cpp$/i, '').toLowerCase() === String(hBase).toLowerCase());
+    if (same) return same;
+    const esc = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const defRe = new RegExp('\\b' + esc(cls) + '\\s*::\\s*~?\\w+\\s*\\(', 'g');
+    const incRe = new RegExp('#\\s*include\\s*["<][^">]*\\b' + esc(hBase) + '\\.h(pp)?[">]', 'i');
+    const scored = [];
+    for (const f of files.filter(x => /\.cpp$/i.test(x))) {
+      let t = null;
+      try { t = fs.readFileSync(f, 'utf8'); } catch (e) { continue; }
+      const n = (cppstub.mask(t).match(defRe) || []).length;
+      if (n > 0) scored.push({ f, n, inc: incRe.test(t) ? 1 : 0 });
+    }
+    scored.sort((a, b) => (b.inc - a.inc) || (b.n - a.n));
+    return scored.length ? scored[0].f : undefined;
+  }
+
+  /** The class's .h and .cpp in the port tree (null when not found). */
+  async portClassFiles(d, cls) {
+    const port = d && d.r.portRoot ? this.sourceTree(d.r.portRoot, 'port') : null;
+    if (!port || !cls) return null;
+    await port.ensure();
+    const files = Array.from(port.clsFiles.get(cls) || []).filter(f => !/[\\/]tests?[\\/]/i.test(f));
+    const read = f => { try { return fs.readFileSync(f, 'utf8'); } catch (e) { return null; } };
+    const hFile = files.filter(f => /\.h(pp)?$/i.test(f)).find(f => { const t = read(f); return t && cppstub.classBody(t, cls); });
+    if (!hFile) return null;
+    const base = path.basename(hFile).replace(/\.h(pp)?$/i, '');
+    const cppFile = this.pickClassCpp(files, cls, base);
+    return cppFile ? { port, hFile, cppFile } : null;
+  }
+
+  async renameCppHandler(d, data, row, nu) {
+    const cls = data.eventGrid.formCls;
+    const pf = await this.portClassFiles(d, cls);
+    if (!pf) { vscode.window.showInformationMessage('移植樹裡找不到 ' + cls + ' 的 .h／.cpp，名稱沒有改。'); return null; }
+    const hDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(pf.hFile));
+    const cDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(pf.cppFile));
+    if (cppstub.declares(hDoc.getText(), cls, nu)) { this.refuseEdit(d, cls + ' 已經有「' + nu + '」了，沒有改。'); return null; }
+    const r = cppstub.renameEdits(hDoc.getText(), cDoc.getText(), cls, row.handler, nu);
+    if (!r.h.length && !r.cpp.length) { this.refuseEdit(d, '在 ' + path.basename(pf.hFile) + '／' + path.basename(pf.cppFile) + ' 找不到 ' + row.handler + '，沒有改。'); return null; }
+    const we = new vscode.WorkspaceEdit();
+    const rng = (doc, x) => new vscode.Range(doc.positionAt(x.s), doc.positionAt(x.e));
+    for (const x of r.h) we.replace(hDoc.uri, rng(hDoc, x), x.text);
+    for (const x of r.cpp) we.replace(cDoc.uri, rng(cDoc, x), x.text);
+    // its wiring follows: the page's htdCpp line(s), the generated table's row
+    const pageR = jsevents.renameCppEdits(d.doc.getText(), cls, row.handler, nu);
+    for (const x of pageR) we.replace(d.doc.uri, rng(d.doc, x), x.text);
+    let genN = 0, genText = null, genWhy = '';
+    const gen = d.r.portRoot ? this.htdGen(d.r.portRoot) : { text: null };
+    const genRows = gen.text ? cppbridge.rowsOf(gen.text) : [];
+    if (genRows.some(x => x.form === cls && x.handler === row.handler)) {
+      const port = this.sourceTree(d.r.portRoot, 'port');
+      const sv = await this.htdServer(port);
+      const sh = sv ? cppbridge.serverHook(sv.text, this.stamp()) : { error: 'no server' };
+      const ctx = sh.fn ? await this.htdCtx(port, sh.fn) : null;
+      const full = [];
+      let eol = '\n';
+      for (const x of genRows) {
+        const renamed = x.form === cls && x.handler === row.handler;
+        const dc = renamed ? cppbridge.declOf(hDoc.getText(), cls, row.handler) : null;
+        const c = await this.htdRowCode(d, renamed ? Object.assign({}, x, { handler: nu }) : x, dc ? dc.params : undefined);
+        if (c.error) continue;
+        eol = c.eol;
+        full.push(Object.assign({}, x, renamed ? { handler: nu } : {}, c));
+        if (renamed) genN++;
+      }
+      if (gen.busy) { genN = 0; genWhy = path.basename(gen.file) + ' 在編輯器裡有沒存的分頁，它那一列沒有跟著改（關掉那個分頁、不存，再改一次名稱）'; }
+      else if (ctx && ctx.cjson) genText = this.htdGenDisk(d.r.portRoot, full, ctx, eol);   // (1006: the files, see htdGenDisk)
+      else genN = 0;
+    }
+    // (the generated table goes to disk first: its row calls the new name only once the class has it -- until the
+    //  .h / .cpp are saved it still compiles, see lib/cppbridge.js)
+    if (genText != null) {
+      const wr = this.htdWriteDisk(genText);
+      if (wr.error) { genN = 0; genWhy = wr.error; }
+    }
+    if (!(await vscode.workspace.applyEdit(we))) { vscode.window.showWarningMessage('改名沒有寫進去（檔案可能是唯讀的）。'); return null; }
+    // other files that name it (saved ones: the source index) -- said, not changed
+    const others = (await pf.port.lookup([cls], row.handler)).filter(h => !web.samePath(h.file, pf.hFile) && !web.samePath(h.file, pf.cppFile));
+    const old = row.handler;
+    row.handler = nu;
+    if (this.props && this.props.data === data) this.props.show(data);
+    this.log('事件處理函式改名 ' + cls + '::' + old + ' → ' + nu + '：' + path.basename(pf.hFile) + ' ' + r.h.length + ' 處、' + path.basename(pf.cppFile) + ' ' + r.cpp.length + ' 處（未存檔）' +
+      (genN ? '；' + cppbridge.GEN_REL + ' 已直接寫好' : '') + (genWhy ? '；' + genWhy : ''));
+    const wired = pageR.length ? '、網頁 ' + pageR.length + ' 處' : '';
+    vscode.window.showInformationMessage(cls + '::' + old + ' 改名為 ' + nu + '（' + path.basename(pf.hFile) + ' ' + r.h.length + ' 處、' + path.basename(pf.cppFile) + ' ' + r.cpp.length + ' 處' + wired + '；還沒存檔，Ctrl+Z 可以復原）。' +
+      (genN ? path.basename(cppbridge.GEN_REL) + ' 那一列已經直接改好存檔（建置不會因為還沒存檔而壞）。' : '') + (genWhy ? genWhy + '。' : '') +
+      (others.length ? '另外 ' + others.length + ' 個地方也寫到 ' + old + '（例如 ' + path.basename(others[0].file) + ':' + others[0].line + '），那些沒有改。' : ''));
+    return { from: old, to: nu, h: r.h.length, cpp: r.cpp.length, page: pageR.length, gen: genN, others: others.length };
+  }
+
+  /**
+   * 網頁事件 (EastSun: "網路js監聽器也要讓我填function"): the page's own JS handler of a DOM event, kept in the page's
+   * <script id="htdEvents"> block (lib/jsevents.js) -- a name adds the function and its binding, a new one renames
+   * it, '' takes the binding out. One edit of the page (nothing saved); the new function then opens.
+   */
+  async cmdJsEvent(d, data, ev, fn) {
+    const id = data.comp.htmlId;
+    if (!id || data.comp.isForm) { this.refuseEdit(d, '網頁事件要選一個有 id 的元件。'); return null; }
+    const text = d.doc.getText();
+    const r = jsevents.setBinding(text, id, String(ev || ''), fn);
+    if (r.error) { this.refuseEdit(d, r.error + '，沒有改。'); return null; }
+    if (!r.edits.length) return null;
+    const we = new vscode.WorkspaceEdit();
+    for (const x of r.edits) we.replace(d.doc.uri, new vscode.Range(d.doc.positionAt(x.s), d.doc.positionAt(x.e)), x.text);
+    if (!(await vscode.workspace.applyEdit(we))) { vscode.window.showWarningMessage('網頁事件沒有寫進去。'); return null; }
+    const now = jsevents.handlersOf(d.doc.getText(), id);
+    if (data.edit && data.edit.jsEvents) { data.edit.jsEvents.handlers = now; if (this.props && this.props.data === data) this.props.show(data); }
+    this.log('網頁事件 ' + id + '.' + ev + '：' + (String(fn || '').trim() || '（拿掉）') + (r.renamed ? '（' + r.renamed + ' 改名）' : '') + '（' + path.basename(d.file) + '，未存檔）');
+    if (r.fnAdded || r.renamed) await this.openJsEvent(d, id, ev);
+    else vscode.window.setStatusBarMessage('$(edit) ' + id + ' 的 ' + ev + '：' + (String(fn || '').trim() || '拿掉了') + '（Ctrl+Z 復原）', 6000);
+    return { id, ev, fn: String(fn || '').trim(), added: r.fnAdded || null, renamed: r.renamed || null, edits: r.edits.length };
+  }
+
+  /** The function of a web event in the page's HTML, beside the designer. */
+  async openJsEvent(d, id, ev) {
+    const h = jsevents.handlersOf(d.doc.getText(), id)[ev];
+    if (!h) return null;
+    return this.revealSource(d, id, true, { range: [h.at, h.at] });
+  }
+
+  async cmdCreateEvent(d, data, row, nameOverride) {
+    const g = data.eventGrid;
+    const cls = g.formCls;
+    const port = d && d.r.portRoot ? this.sourceTree(d.r.portRoot, 'port') : null;
+    if (!port || !cls) { vscode.window.showInformationMessage('找不到這一頁的 C++ 表單類別（移植樹），不能新增事件處理函式。'); return null; }
+    await port.ensure();
+    const files = Array.from(port.clsFiles.get(cls) || []).filter(f => !/[\\/]tests?[\\/]/i.test(f));
+    const read = f => { try { return fs.readFileSync(f, 'utf8'); } catch (e) { return null; } };
+    const hFile = files.filter(f => /\.h(pp)?$/i.test(f)).find(f => { const t = read(f); return t && cppstub.classBody(t, cls); });
+    if (!hFile) { vscode.window.showInformationMessage('移植樹裡找不到 class ' + cls + ' 的宣告（.h），不能新增事件處理函式。'); return null; }
+    const base = path.basename(hFile).replace(/\.h(pp)?$/i, '');
+    const cppFile = this.pickClassCpp(files, cls, base);
+    if (!cppFile) { vscode.window.showInformationMessage('移植樹裡找不到 ' + cls + ' 的 .cpp，不能新增事件處理函式。'); return null; }
+    const hDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(hFile));
+    const cDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(cppFile));
+    const name = nameOverride || row.conv;
+    // the class has it already: the event uses it (Windows Forms' selection box: an existing handler)
+    if (cppstub.declares(hDoc.getText(), cls, name)) return this.cmdUseHandler(d, data, row, cls, name, hDoc);
+    const params = vclevents.signatureOf(row.name);
+    // AI(W906-HTDESIGNER) 20261001: the build first -- a parameter type the form's header cannot see (TPoint, TRect,
+    // TDragObject ... are not in the port's vclcompat) would make the whole 9050 build fail at F5: not added, said why
+    const miss = cpptypes.missingTypes(params, cpptypes.includeClosure(hFile, d.r.portRoot));
+    if (miss.length) {
+      const why = row.name + ' 的參數用到 ' + miss.join('、') + '，移植樹裡 ' + path.basename(hFile) + ' 看不到它們的宣告（vclcompat 沒有）——新增的話 9050 會編不過，所以沒有新增。' +
+        '要用這個事件，先在移植樹（vclcompat）補上這些型別，再新增一次。';
+      this.log('沒有新增 ' + cls + '::' + name + '（' + row.name + '）：' + why);
+      vscode.window.showInformationMessage(why);
+      return { name: null, refused: true, missingTypes: miss, notes: [why] };
+    }
+    const stamp = this.stamp();
+    const note = '//AI(W906-HTDESIGNER) ' + stamp + ': 設計檢視新增的事件處理函式（' + (g.name || '表單') + '.' + row.name + '）';
+    const de = cppstub.declEdit(hDoc.getText(), cls, name, params, note);
+    const fe = cppstub.defEdit(cDoc.getText(), cls, name, params, note);
+    if (!de) { vscode.window.showInformationMessage('在 ' + path.basename(hFile) + ' 找不到 class ' + cls + ' 的本體。'); return null; }
+    // 自動接線 (EastSun 20260930: "如果我有需要新增事件 其他連結 理應外掛程式自動幫我新增"): the page's sender in the
+    // same edit as the handler; the build's part (the generated C++ table, the CMake entry, the server's htd.event
+    // branch) straight to disk first (AI 20261001: an unsaved one of them broke the build)
+    const hb = cppstub.classBody(hDoc.getText(), cls);
+    const access = hb ? cppbridge.accessAt(cppstub.mask(hDoc.getText()), hb, de.at) : 'public';
+    const wire = await this.wirePlan(d, g, row, cls, name, params, access, stamp);
+    this.htdWriteWire(wire);
+    const we = new vscode.WorkspaceEdit();
+    const at = (doc, off) => new vscode.Range(doc.positionAt(off), doc.positionAt(off));
+    we.replace(hDoc.uri, at(hDoc, de.at), de.text);
+    we.replace(cDoc.uri, at(cDoc, fe.at), fe.text);
+    for (const op of wire.ops) we.replace(op.doc.uri, new vscode.Range(op.doc.positionAt(op.s), op.doc.positionAt(op.e)), op.text);
+    if (!(await vscode.workspace.applyEdit(we))) { vscode.window.showWarningMessage('新增 ' + name + ' 沒有寫進去（檔案可能是唯讀的）。'); return null; }
+    this.log('新增事件處理函式 ' + cls + '::' + name + '（' + row.name + '）：' + path.basename(hFile) + ' 宣告、' + path.basename(cppFile) + ' 本體（未存檔）' +
+      (wire.done.length ? '；自動接線 ' + wire.done.join('、') + '（未存檔）' : '') + (wire.saved.length ? '；直接存檔 ' + wire.saved.join('、') : '') +
+      (wire.notes.length ? '；沒有接：' + wire.notes.join('；') : ''));
+    const pos = new vscode.Position(fe.bodyLine, 4);
+    await vscode.window.showTextDocument(cDoc, { preview: false, selection: new vscode.Range(pos, new vscode.Position(fe.bodyLine, 11)) });
+    // the 事件表 shows it at once (the source index sees it when the files are saved)
+    data.targets.push({ kind: 'port', file: cppFile, line: fe.bodyLine - 2, col: 1, snippet: 'void ' + cls + '::' + name + '(' + params + ')',
+      note: '定義（剛新增，還沒存檔）', weak: false });
+    row.port = data.targets.length - 1;
+    row.main = row.port;
+    row.mainName = name;
+    row.portState = 'new';
+    row.handler = name;
+    if (wire.wired) {
+      row.cmd = cppbridge.CMD;
+      row.via = 'htd';
+      data.targets.push({ kind: 'web', file: d.file, line: wire.webLine, col: 1, snippet: wire.webSnippet, note: '這一頁送出（設計工具的 htdCpp，剛新增）', weak: false });
+      row.web = data.targets.length - 1;
+      data.targets.push({ kind: 'port', file: wire.serverFile, line: wire.serverLine, col: 1, snippet: cppbridge.CMD + ' → ' + wire.fn, note: '伺服器分派 ' + cppbridge.CMD + '（剛新增）', weak: false });
+      row.server = data.targets.length - 1;
+    }
+    if (this.props && this.props.data === data) this.props.show(data);
+    const left = wire.wired ? [] : wire.notes;
+    vscode.window.showInformationMessage('已新增 ' + cls + '::' + name + '（' + path.basename(hFile) + ' 宣告、' + path.basename(cppFile) + ' 空的本體）。' +
+      (wire.wired ? '網頁也接好了：' + wire.done.join('、') + '——網頁 → WS ' + cppbridge.CMD + ' → 伺服器 → 這個函式。' : '') +
+      '表單的 .h／.cpp' + (wire.wired ? '和網頁' : '') + '還沒存檔（不要就不存，或 Ctrl+Z）。' +
+      (wire.saved.length ? '建置要用的 ' + wire.saved.join('、') + ' 已經直接存檔——不會讓建置壞掉（表單還沒存檔時，網頁按下去會回「函式還不在」）。' : '') +
+      (wire.wired ? '存檔後重建、重開 ' + path.basename(wire.serverFile).replace(/\.\w+$/, '') + '，網頁按下去才會跑到它。' : '') +
+      (left.length ? '網頁沒有接上：' + left.join('；') + '。' : ''));
+    return { h: hFile, cpp: cppFile, name, left, wired: wire.wired, done: wire.done, saved: wire.saved, notes: wire.notes };
+  }
+
+  /**
+   * An existing method of the class for the event (Windows Forms: "Use the selection box to choose an existing
+   * handler"): only the wiring is added (page line, generated row; the server branch / CMake entry once) -- no code
+   * written. A method declared without a compiled body (a GATE) is refused.
+   */
+  async cmdUseHandler(d, data, row, cls, name, hDoc) {
+    const g = data.eventGrid;
+    const hText = hDoc.getText();
+    const dc = cppbridge.declOf(hText, cls, name);
+    const port = this.sourceTree(d.r.portRoot, 'port');
+    const st = port ? await port.defState([cls], name) : { state: 'none' };
+    const od = st.state === 'live' ? null : this.dirtyHit(d.r.portRoot, new RegExp('\\b' + cls + '\\s*::\\s*' + name + '\\s*\\('), /\.cpp$/i);
+    if (!dc || (st.state !== 'live' && !od)) {
+      vscode.window.showInformationMessage(cls + '::' + name + ' 宣告了，但沒有會編譯的本體（可能是刻意沒有本體的 GATE），不能接到事件。');
+      await vscode.window.showTextDocument(hDoc, { preview: false });
+      return null;
+    }
+    const wire = await this.wirePlan(d, g, row, cls, name, dc.params, dc.access, this.stamp());
+    this.htdWriteWire(wire);
+    if (!wire.wired) { vscode.window.showInformationMessage(g.name + '.' + row.name + ' 沒有接到 ' + cls + '::' + name + '：' + wire.notes.join('；') + '。'); return { name, used: true, wired: false, notes: wire.notes }; }
+    const we = new vscode.WorkspaceEdit();
+    for (const op of wire.ops) we.replace(op.doc.uri, new vscode.Range(op.doc.positionAt(op.s), op.doc.positionAt(op.e)), op.text);
+    if (!(await vscode.workspace.applyEdit(we))) { vscode.window.showWarningMessage('事件的連線沒有寫進去（檔案可能是唯讀的）。'); return null; }
+    const def = st.state === 'live' && st.hit ? this.cppTarget('port', st.hit) : { kind: 'port', file: od.file, line: od.line, col: 1, snippet: od.snippet, note: '定義（還沒存檔）', weak: false };
+    data.targets.push(def);
+    row.port = data.targets.length - 1;
+    row.main = row.port;
+    row.mainName = name;
+    row.portState = st.state === 'live' ? 'live' : 'new';
+    row.handler = name;
+    row.cmd = cppbridge.CMD;
+    row.via = 'htd';
+    data.targets.push({ kind: 'web', file: d.file, line: wire.webLine, col: 1, snippet: wire.webSnippet, note: '這一頁送出（設計工具的 htdCpp，剛新增）', weak: false });
+    row.web = data.targets.length - 1;
+    data.targets.push({ kind: 'port', file: wire.serverFile, line: wire.serverLine, col: 1, snippet: cppbridge.CMD + ' → ' + wire.fn, note: '伺服器分派 ' + cppbridge.CMD, weak: false });
+    row.server = data.targets.length - 1;
+    if (this.props && this.props.data === data) this.props.show(data);
+    this.log('事件 ' + g.name + '.' + row.name + ' 用已經有的 ' + cls + '::' + name + '：' + wire.done.join('、') + '（未存檔）' + (wire.saved.length ? '；直接存檔 ' + wire.saved.join('、') : ''));
+    await this.openTarget(def, d);
+    vscode.window.showInformationMessage(g.name + '.' + row.name + ' 接到已經有的 ' + cls + '::' + name + '（沒有新增程式碼）：' + wire.done.join('、') +
+      '（還沒存檔）。' + (wire.saved.length ? '建置要用的 ' + wire.saved.join('、') + ' 已經直接存檔。' : '') +
+      '網頁存檔後重建、重開 ' + path.basename(wire.serverFile).replace(/\.\w+$/, '') + '，網頁按下去才會跑到它。');
+    return { name, used: true, wired: true, done: wire.done, saved: wire.saved };
+  }
+
+  /** The form class's .h (the one with its class body) and .cpp in the port tree, or { error }. */
+  async formFilesOf(d, cls) {
+    const port = d && d.r.portRoot ? this.sourceTree(d.r.portRoot, 'port') : null;
+    if (!port || !cls) return { error: '找不到這一頁的 C++ 表單類別（移植樹）' };
+    await port.ensure();
+    const files = Array.from(port.clsFiles.get(cls) || []).filter(x => !/[\\/]tests?[\\/]/i.test(x));
+    const read = x => { try { return fs.readFileSync(x, 'utf8'); } catch (e) { return null; } };
+    const hFile = files.filter(x => /\.h(pp)?$/i.test(x)).find(x => { const t = read(x); return t && cppstub.classBody(t, cls); });
+    if (!hFile) return { error: '移植樹裡找不到 class ' + cls + ' 的宣告（.h）' };
+    const base = path.basename(hFile).replace(/\.h(pp)?$/i, '');
+    const cppFile = this.pickClassCpp(files, cls, base);   // (1006: the same choice as a new handler's -- see pickClassCpp)
+    if (!cppFile) return { error: '移植樹裡找不到 ' + cls + ' 的 .cpp' };
+    return { hFile, cppFile };
+  }
+
+  /**
+   * 刪除事件 (Windows Forms: right-click the event -> Reset; WPF: the name deleted). 0.162 (EastSun: "刪除事件時 需要連動刪除
+   * 要可以編譯成功 然後刪除事件時 要跳出提醒視窗"): a warning first that lists what goes, then the page's htdCpp line, the
+   * generated row AND the C++ function (its declaration in the .h, its body in the .cpp) -- the function only when that still
+   * builds and loses no one's code: nothing else names it, no other event uses it, the generated row could be taken off, and
+   * it is the designer's (its note) or still the empty stub. Otherwise it stays, and the warning says why.
+   * BCB6's .dfm ones and another page script's are not the designer's to take off.
+   * opt.answer (tests / scripts): 'delete' = with the function (when it may), 'keep' = the wiring only; none = ask.
+   */
+  async onEventReset(data, evName, d, opt) {
+    const g = data && data.eventGrid;
+    const row = g && g.rows.find(r => r.name === evName);
+    if (row && g.multi && g.multi.length) return this.cmdEventMany(d, data, row, '');
+    if (!row || !row.handler) return null;
+    if (row.dfm) { this.refuseEdit(d, evName + ' 的 ' + row.handler + ' 是 BCB6 .dfm 指定的（golden，唯讀），不能刪除。'); return null; }
+    if (row.cmd && row.via !== 'htd') { this.refuseEdit(d, evName + ' 是這一頁的 JS 自己送 WS 命令 ' + row.cmd + '（不是設計工具接的）；要拿掉請改網頁的 JS。'); return null; }
+    const cls = g.formCls, id = g.name, fn = row.handler;
+    const pt = d.doc.getText();
+    const line = jsevents.cppLines(pt).find(x => x.id === id && x.event === evName);
+    const gen = d.r.portRoot ? this.htdGen(d.r.portRoot) : { text: null };
+    const rows0 = gen.text ? cppbridge.rowsOf(gen.text) : [];
+    const mineRow = r => r.form === cls && r.control === id && r.event === evName;
+    // another page of the same form wiring the same control.event shares the row (and the function): both stay
+    const elsewhere = this.otherPagesCpp(d, cls);
+    const sharedRow = elsewhere.filter(o => o.x.id === id && o.x.event === evName);
+    const hasRow = rows0.some(mineRow) && !sharedRow.length;
+    const pageWhy = sharedRow.length ? '另一頁（' + [...new Set(sharedRow.map(o => path.basename(o.file)))].join('、') + '）也是 ' + cls + '，它的 ' + id + '.' + evName + ' 還接著同一列' : '';
+    // the C++ function: may it go too?
+    const ff = await this.formFilesOf(d, cls);
+    let rm = null, hDoc = null, cDoc = null, keepWhy = '';
+    if (ff.error) keepWhy = ff.error;
+    else {
+      hDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(ff.hFile));
+      cDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(ff.cppFile));
+      rm = cppstub.removeEdits(hDoc.getText(), cDoc.getText(), cls, fn);
+      const others = rows0.filter(r => !mineRow(r) && r.form === cls && r.handler === fn);
+      const otherLines = jsevents.cppLines(pt).filter(x => x.handler === fn && !(x.id === id && x.event === evName))
+        .concat(elsewhere.filter(o => o.x.handler === fn && !(o.x.id === id && o.x.event === evName)).map(o => Object.assign({}, o.x, { id: path.basename(o.file) + ' ' + o.x.id })));
+      if (pageWhy) keepWhy = pageWhy;
+      else if (!rm.h || !rm.cpp) keepWhy = '在 ' + path.basename(ff.hFile) + '／' + path.basename(ff.cppFile) + ' 找不到 ' + cls + '::' + fn + ' 完整的宣告和本體';
+      else if (others.length || otherLines.length) keepWhy = '還有別的事件用 ' + fn + '（' + others.map(r => r.control + '.' + r.event).concat(otherLines.map(x => x.id + '.' + x.event)).join('、') + '）';
+      else if (rm.usedElsewhere.length) keepWhy = fn + ' 在 ' + rm.usedElsewhere.map(x => (x === '.h' ? path.basename(ff.hFile) : path.basename(ff.cppFile))).join('、') + ' 還有別的地方用到——刪掉會編不過';
+      else if (hasRow && gen.busy) keepWhy = path.basename(gen.file) + ' 在編輯器裡有沒存的分頁，產生的那一列拿不掉——刪掉函式會編不過';
+      else if (!rm.ours && !rm.empty) keepWhy = fn + ' 不是設計工具新增的、裡面也有程式碼（可能是從 BCB6 翻譯來的）——不自動刪';
+    }
+    const canDel = !keepWhy;
+    const bodyLines = rm && rm.body ? rm.body.split('\n').filter(x => x.trim() && !/^\s*(\(void\)\s*Sender\s*;|\/\/\s*TODO)/.test(x)).length : 0;
+    let answer = opt && opt.answer;
+    if (!answer) {
+      const parts = [line ? '・' + path.basename(d.file) + ' 裡的 htdCpp(...) 那一行' : null, hasRow ? '・產生的分派表（' + path.basename(cppbridge.GEN_REL) + '）那一列' : null,
+        canDel ? '・C++ 的 ' + cls + '::' + fn + '（' + path.basename(ff.hFile) + ' 的宣告、' + path.basename(ff.cppFile) + ' 的整個函式' + (bodyLines ? '——裡面有 ' + bodyLines + ' 行程式碼，會一起刪掉' : '，裡面是空的') + '）' : null].filter(Boolean);
+      const msg = '刪除事件 ' + id + '.' + evName + '（' + fn + '）？\n\n會刪掉：\n' + parts.join('\n') +
+        (canDel ? '' : '\n\nC++ 的 ' + fn + ' 會保留：' + keepWhy + '。') + '\n\n刪完 9050 照樣編得過；表單的 .h／.cpp 和網頁還沒存檔，不要就 Ctrl+Z。';
+      const btns = canDel ? ['刪除事件和函式', '只拿掉連線，保留函式'] : ['刪除事件（保留函式）'];
+      const pick = await vscode.window.showWarningMessage(msg, { modal: true }, ...btns);
+      if (!pick) return null;
+      answer = pick === '刪除事件和函式' ? 'delete' : 'keep';
+    }
+    const withFn = answer === 'delete' && canDel;
+    const we = new vscode.WorkspaceEdit();
+    const rng = (doc, x) => new vscode.Range(doc.positionAt(x.s), doc.positionAt(x.e));
+    const done = [];
+    if (line) {
+      for (const x of jsevents.setCpp(pt, id, line.type, line.form, '', evName).edits) we.replace(d.doc.uri, rng(d.doc, x), x.text);
+      done.push(path.basename(d.file) + ' 那一行');
+    }
+    // the generated table's row: straight to disk (the build's file, never left unsaved) -- before the function goes
+    let genText = null, genWhy = '';
+    if (hasRow) {
+      if (gen.busy) genWhy = path.basename(gen.file) + ' 在編輯器裡有沒存的分頁，它那一列沒有拿掉（關掉那個分頁、不存，再刪一次）';
+      else genText = await this.htdRegen(d, rows0.filter(r => !mineRow(r)));
+    }
+    if (withFn && hasRow && genText == null) return this.onEventReset(data, evName, d, { answer: 'keep' });
+    if (withFn) {
+      we.replace(hDoc.uri, rng(hDoc, rm.h), '');
+      we.replace(cDoc.uri, rng(cDoc, rm.cpp), '');
+      done.push(path.basename(ff.hFile) + ' 的宣告', path.basename(ff.cppFile) + ' 的 ' + fn);
+    }
+    if (!done.length && genText == null) {
+      vscode.window.showInformationMessage(id + '.' + evName + ' 沒有設計工具接的網頁連線可以拿掉；C++ 的 ' + cls + '::' + fn + ' 還在（要刪請直接改程式碼）。' + (genWhy ? genWhy + '。' : ''));
+      return null;
+    }
+    const saved = [];
+    if (genText != null) {
+      const wr = this.htdWriteDisk(genText);
+      if (wr.error) genWhy = wr.error; else saved.push(path.basename(cppbridge.GEN_REL) + ' 那一列');
+    }
+    if (done.length && !(await vscode.workspace.applyEdit(we))) { vscode.window.showWarningMessage('刪除沒有寫進去。'); return null; }
+    Object.assign(row, { handler: '', main: null, mainName: null, cmd: null, via: null, web: null, server: null, port: null, portState: null });
+    if (this.props && this.props.data === data) this.props.show(data);
+    const kept = withFn ? '' : 'C++ 的 ' + cls + '::' + fn + ' 保留' + (answer === 'delete' && keepWhy ? '（' + keepWhy + '）' : '');
+    this.log('刪除事件 ' + id + '.' + evName + '（' + cls + '::' + fn + '）：' + done.concat(saved).join('、') + (kept ? '；' + kept : '') + (genWhy ? '；' + genWhy : ''));
+    vscode.window.showInformationMessage('已刪除 ' + id + '.' + evName + '：' + done.concat(saved).join('、') + (kept ? '。' + kept : '') + '。' +
+      (done.length ? '表單的檔案和網頁還沒存檔（不要就 Ctrl+Z）。' : '') + (genWhy ? genWhy + '。' : ''));
+    return { reset: evName, handler: fn, done, saved, removedFn: withFn, keepWhy: keepWhy || null };
+  }
+
+  /**
+   * The OTHER pages' htdCpp lines on form `cls` (1006: two pages can be the same BCB6 form -- TfConfiguration's -- and
+   * then the generated row form.control.event and the C++ function are shared; deleting the event on one page took them
+   * from under the other). An open editor's text wins over the disk (its unsaved deletion counts). -> [{ file, x }]
+   */
+  otherPagesCpp(d, cls) {
+    const out = [];
+    if (!d.r || !d.r.webRoot) return out;
+    const seen = new Set();
+    for (const dir of [path.join(d.r.webRoot, 'page'), d.r.webRoot]) {
+      let names = [];
+      try { names = (this.disk.list ? this.disk.list(dir) : fs.readdirSync(dir)).filter(n => /\.html?$/i.test(n)); } catch (e) { names = []; }
+      for (const n of names) {
+        const f = path.join(dir, n);
+        if (web.samePath(f, d.file) || seen.has(f.toLowerCase())) continue;
+        seen.add(f.toLowerCase());
+        const open = vscode.workspace.textDocuments.find(x => x.uri && x.uri.scheme === 'file' && web.samePath(x.uri.fsPath, f));
+        let t = open ? open.getText() : null;
+        if (t == null) { const b = this.disk.read(f); t = b ? b.toString('utf8') : ''; }
+        if (!t.includes('htdCpp')) continue;
+        for (const x of jsevents.cppLines(t)) if (x.form === cls) out.push({ file: f, x });
+      }
+    }
+    return out;
+  }
+
+  /** The generated file's text for `rows` (each one's call made from the port again). null: no form.event to take the rules from. */
+  async htdRegen(d, rows) {
+    const port = this.sourceTree(d.r.portRoot, 'port');
+    const sv = await this.htdServer(port);
+    const sh = sv ? cppbridge.serverHook(sv.text, this.stamp()) : null;
+    if (!sh || !sh.fn) return null;
+    const ctx = await this.htdCtx(port, sh.fn);
+    if (!ctx.cjson) return null;
+    const full = [];
+    let eol = '\r\n';
+    for (const r of rows) {
+      const c = await this.htdRowCode(d, r);
+      if (c.error) continue;
+      eol = c.eol;
+      full.push(Object.assign({}, r, c));
+    }
+    // (1006: the files to write -- the table, its header, one per form header, the stale parts removed)
+    return this.htdGenDisk(d.r.portRoot, full, ctx, eol);
+  }
+
+  /** 所有找到的程式碼 (right-click): every place found for the event, to pick one. */
+  async onEventAll(data, evName, d) {
+    const g = data && data.eventGrid;
+    const row = g && g.rows.find(r => r.name === evName);
+    if (!row) return null;
+    const ks = [];
+    const add = k => { if (k != null && data.targets[k] && !ks.includes(k)) ks.push(k); };
+    add(row.main);
+    if (row.idx >= 0 && data.events[row.idx]) data.events[row.idx].targets.forEach(add);
+    [row.web, row.server, row.port].forEach(add);
+    if (!ks.length) { vscode.window.showInformationMessage(evName + '：沒有找到程式碼。'); return null; }
+    const items = ks.map(k => { const t = data.targets[k]; return { label: KIND[t.kind].icon + ' ' + KIND[t.kind].label + (t.note ? '　' + t.note : ''), description: this.relName(t.file, d) + ':' + t.line, detail: t.snippet || '', t }; });
+    const pick = await vscode.window.showQuickPick(items, { placeHolder: evName + '：要跳到哪一份程式碼？', matchOnDescription: true, matchOnDetail: true });
+    if (pick) await this.openTarget(pick.t, d);
+    return pick ? pick.t : null;
+  }
+
+  stamp() {
+    const day = new Date();
+    return day.getFullYear() + String(day.getMonth() + 1).padStart(2, '0') + String(day.getDate()).padStart(2, '0');
+  }
+
+  /**
+   * The designer's generated C++ event table, ON DISK (AI 20261001: it used to be an untitled document until saved,
+   * while CMakeLists.txt already named it -- the build failed). -> { file, text (null: not there yet), exists, busy }
+   * busy: an editor holds unsaved text of it (or an old untitled tab that a save would write there).
+   */
+  htdGen(portRoot) {
+    const f = path.join(portRoot, ...cppbridge.GEN_REL.split('/'));
+    const b = this.disk.read(f);
+    return { file: f, text: b ? b.toString('utf8') : null, exists: !!b, busy: this.unsavedDoc(f) };
+  }
+
+  /** An editor holds unsaved text of the file (a changed document, or an untitled one with that path). */
+  unsavedDoc(f) {
+    return vscode.workspace.textDocuments.some(x => x.uri && (x.isDirty || x.uri.scheme === 'untitled') && web.samePath(x.uri.fsPath, f));
+  }
+
+  /** The server's file (the one with form.event's dispatch), its bytes and its text read as latin1 (offsets = bytes). */
+  async htdServer(port) {
+    const disp = port ? (await port.findString('form.event')).filter(h => h.dispatch && !h.dead && !h.test && !h.comment) : [];
+    if (!disp.length) return null;
+    const f = disp[0].file, b = this.disk.read(f);
+    return b ? { file: f, buf: b, text: b.toString('latin1'), busy: this.unsavedDoc(f) } : null;
+  }
+
+  /**
+   * 1006: the generated event code as files (cppbridge.genParts -- the table, the shared header, one file per form header),
+   * the parts no row needs any more removed: [{ file, buf, what } | { file, remove: true, what }], the table first.
+   */
+  htdGenDisk(portRoot, rows, ctx, eol) {
+    const list = cppbridge.genParts(rows, ctx, eol).map(p => ({ file: path.join(portRoot, ...p.rel.split('/')), buf: Buffer.from(p.text, 'utf8'), what: p.rel }));
+    const keep = new Set(list.map(x => path.resolve(x.file).toLowerCase()));
+    const dir = path.join(portRoot, ...cppbridge.PART_DIR.split('/'));
+    let ents = [];
+    try { ents = fs.readdirSync(dir); } catch (e) { ents = []; }
+    for (const f of ents) {
+      const full = path.join(dir, f);
+      if (/\.gen\.cpp$/i.test(f) && !keep.has(path.resolve(full).toLowerCase())) list.push({ file: full, remove: true, what: cppbridge.PART_DIR + '/' + f + '（不再需要，刪掉）' });
+    }
+    // a CMakeLists.txt that lists the table but not yet the parts (a tree from before 0.177): the glob put in now -- a
+    // rename / reset writing parts the build does not compile would leave the table's calls unresolved (a link error)
+    const cm = path.join(portRoot, 'CMakeLists.txt');
+    const cmB = this.disk.read(cm);
+    if (cmB) {
+      const t = cmB.toString('latin1');
+      if (t.includes(cppbridge.GEN_REL) && !/\bHTD_GEN_PARTS\b/.test(t)) {
+        const ch = cppbridge.cmakeHook(t, cppbridge.GEN_REL, cppbridge.GEN_REL);
+        const nb = ch.edit ? cppbridge.spliceBytes(cmB, ch.edit) : null;
+        if (nb) list.push({ file: cm, buf: nb, what: 'CMakeLists.txt（產生檔的 ' + cppbridge.PART_DIR + ' 資料夾）', cmake: true });
+      }
+    }
+    return list;
+  }
+
+  /** Files to disk in this order (each one whole, through a temporary; remove: deleted): -> { written: [file], error? } */
+  htdWriteDisk(list) {
+    const written = [];
+    for (const w of list) {
+      if (w.remove) { try { if (fs.existsSync(w.file)) fs.unlinkSync(w.file); written.push(w.file); } catch (e) { return { written, error: path.basename(w.file) + ' 刪不掉（' + (e && e.message || e) + '）' }; } continue; }
+      try { this.disk.write(w.file, w.buf); written.push(w.file); } catch (e) {
+        return { written, error: path.basename(w.file) + ' 寫不進去（' + (e && e.message || e) + '）' + (written.length ? '；已寫好的：' + written.map(f => path.basename(f)).join('、') : '') };
+      }
+    }
+    return { written };
+  }
+
+  /**
+   * The build's part of a wire plan to disk -- the generated table first, then the CMake entry, then the server's
+   * branch: stopped anywhere, the tree still builds (the table alone is not compiled; with its CMake entry it only adds
+   * an unused function; the server calls it last). A failure = not wired, said. Sets wire.saved.
+   */
+  htdWriteWire(wire) {
+    wire.saved = [];
+    if (!wire.wired || !wire.disk || !wire.disk.length) return wire;
+    const wr = this.htdWriteDisk(wire.disk);
+    wire.saved = wire.disk.filter(w => wr.written.includes(w.file)).map(w => w.what);
+    if (wr.error) { wire.wired = false; wire.ops = []; wire.notes.push(wr.error); }
+    return wire;
+  }
+
+  /** What the generated file takes from the form.event implementation: its JSON header, form lock, running flags. */
+  async htdCtx(port, fn) {
+    const root = port.root;
+    const rel = f => path.relative(root, f).split(path.sep).join('/');
+    const read = f => { try { return fs.readFileSync(f, 'utf8'); } catch (e) { return ''; } };
+    const ctx = { fn, running: [] };
+    const impl = (await port.findFuncDefs(fn.replace(/HtdEvent$/, 'FormEvent'))).find(x => !x.dead && !x.test);
+    const it = impl ? read(impl.file) : '';
+    const incs = [];
+    const ire = /^[ \t]*#[ \t]*include[ \t]+"([^"]+)"/gm;
+    let m;
+    while ((m = ire.exec(it))) incs.push(m[1]);
+    const cj = incs.find(i => /(^|\/)cJSON\.h$/i.test(i)) || (() => { const f = port.files.find(x => /[\\/]cJSON\.h$/i.test(x)); return f ? rel(f) : null; })();
+    ctx.cjson = cj;
+    const lk = /([\w:]*FormLock)\s*\(\s*\)\s*;/.exec(it), ul = /([\w:]*FormUnlock)\s*\(\s*\)\s*;/.exec(it);
+    const lh = incs.find(i => /\bFormLock\s*\(/.test(read(path.join(root, i))));
+    if (lk && ul && lh) { ctx.lockHeader = lh; ctx.lock = lk[1]; ctx.unlock = ul[1]; }
+    const rre = /^[ \t]*extern[ \t]+bool[ \t]+(\w+)[ \t]*;/gm;
+    while ((m = rre.exec(it))) ctx.running.push(m[1]);
+    const sh = Array.from(port.clsFiles.get('TShiftState') || []).find(f => /\.h(pp)?$/i.test(f));
+    ctx.shiftHeader = sh ? rel(sh) : null;
+    return ctx;
+  }
+
+  /** One row of the generated table, made from the port: its form's header and the call. -> { header, call } | { error } */
+  async htdRowCode(d, r, params) {
+    const pf = await this.portClassFiles(d, r.form);
+    if (!pf) return { error: '移植樹裡找不到 ' + r.form + ' 的 .h／.cpp' };
+    const hText = (await vscode.workspace.openTextDocument(vscode.Uri.file(pf.hFile))).getText();
+    const cText = (await vscode.workspace.openTextDocument(vscode.Uri.file(pf.cppFile))).getText();
+    const obj = cppbridge.globalOf(hText, cText, r.form);
+    if (!obj) return { error: r.form + ' 沒有全域物件（像 extern ' + r.form + ' *fXxx;），網頁叫不到它的函式' };
+    let ps = params;
+    if (ps == null) {
+      const dc = cppbridge.declOf(hText, r.form, r.handler);
+      if (!dc) return { error: r.form + '::' + r.handler + ' 沒有宣告在 ' + path.basename(pf.hFile) };
+      if (dc.access !== 'public') return { error: r.form + '::' + r.handler + ' 宣告在 ' + dc.access + ' 裡，伺服器叫不到' };
+      ps = dc.params;
+    }
+    const sender = cppbridge.hasMember(hText, r.form, r.control) ? 'HtdSender(' + obj + '->' + r.control + ')' : 'nullptr';
+    const call = cppbridge.callOf(ps, obj, r.handler, sender);
+    if (call.error) return { error: r.form + '::' + r.handler + '：' + call.error };
+    return { header: path.relative(d.r.portRoot, pf.hFile).split(path.sep).join('/'), obj, call, eol: /\r\n/.test(hText) ? '\r\n' : '\n' };
+  }
+
+  /** The page's script that sends WS commands (a .js with rawCmd), loaded or to be loaded. -> { src } (to add) | null (loaded) | { error } */
+  htdClient(d) {
+    const t = d.doc.getText();
+    const dir = path.dirname(d.file);
+    const has = f => { try { return /\brawCmd\s*[:=]/.test(fs.readFileSync(f, 'utf8')); } catch (e) { return false; } };
+    const re = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi;
+    let m;
+    while ((m = re.exec(t))) { if (!/^[a-z]+:/i.test(m[1]) && has(path.resolve(dir, m[1].split(/[?#]/)[0]))) return null; }
+    const cands = [];
+    for (const base of [dir, d.r.webRoot, d.r.webRoot && path.join(d.r.webRoot, 'js')]) {
+      if (!base) continue;
+      try { for (const n of fs.readdirSync(base).sort()) if (/\.js$/i.test(n)) cands.push(path.join(base, n)); } catch (e) { /* none */ }
+    }
+    const hit = cands.find(has);
+    if (!hit) return { error: '找不到送命令的程式（有 rawCmd 的 .js）' };
+    return { src: path.relative(dir, hit).split(path.sep).join('/') };
+  }
+
+  /**
+   * 自動接線: the edits that make the page's control reach the new handler (lib/cppbridge.js explains the chain).
+   * Everything is checked first; anything missing -> nothing wired and the reason said (the handler is still added).
+   * -> { ops: [{ doc, s, e, text }], done, notes, wired, ... }
+   */
+  async wirePlan(d, g, row, cls, handler, params, access, stamp) {
+    const out = { ops: [], disk: [], saved: [], done: [], notes: [], wired: false };
+    const DOM = ['click', 'dblclick', 'mousedown', 'mouseup', 'mousemove', 'mouseenter', 'mouseleave', 'keydown', 'keyup', 'keypress', 'change', 'focus', 'blur', 'contextmenu'];
+    const type = fmt.domTypesOf(row.name).find(x => DOM.includes(x));
+    if (g.isForm || !g.name) { out.notes.push('表單本身的事件網頁不會送'); return out; }
+    if (!type) { out.notes.push(row.name + ' 在網頁上沒有對應的事件'); return out; }
+    if (access !== 'public') { out.notes.push(cls + '::' + handler + ' 會宣告在 ' + access + ' 裡，伺服器叫不到'); return out; }
+    const port = this.sourceTree(d.r.portRoot, 'port');
+    const code = await this.htdRowCode(d, { form: cls, handler, control: g.name, event: row.name }, params);
+    if (code.error) { out.notes.push(code.error); return out; }
+    const client = this.htdClient(d);
+    if (client && client.error) { out.notes.push(client.error); return out; }
+    const pt = d.doc.getText();
+    const pe = jsevents.setCpp(pt, g.name, type, cls, handler, row.name);
+    if (pe.error) { out.notes.push(pe.error); return out; }
+    // the build's part -- the server's branch, the CMake entry, the generated table -- is read and written ON DISK, byte
+    // for byte (the server's file is not all valid UTF-8: through an editor's UTF-8 save its other bytes would change)
+    const sv = await this.htdServer(port);
+    if (!sv) { out.notes.push('伺服器程式裡找不到 form.event 的分派'); return out; }
+    const sh = cppbridge.serverHook(sv.text, stamp);
+    if (sh.error) { out.notes.push(sh.error); return out; }
+    const ctx = await this.htdCtx(port, sh.fn);
+    if (!ctx.cjson) { out.notes.push('移植樹裡找不到 cJSON.h（伺服器要用它讀網頁送來的值）'); return out; }
+    const cm = path.join(d.r.portRoot, 'CMakeLists.txt');
+    const cmB = this.disk.read(cm);
+    const relS = path.relative(d.r.portRoot, sv.file).split(path.sep).join('/');
+    const ch = cmB ? cppbridge.cmakeHook(cmB.toString('latin1'), relS, cppbridge.GEN_REL) : { error: '找不到 CMakeLists.txt' };
+    if (ch.error) { out.notes.push(ch.error); return out; }
+    const gen = this.htdGen(d.r.portRoot);
+    // the designer writes them now: an editor with unsaved text of one would later overwrite it (or be overwritten)
+    const busy = [gen.busy && gen.file, sh.edit && sv.busy && sv.file, ch.edit && this.unsavedDoc(cm) && cm].filter(Boolean);
+    if (busy.length) {
+      out.notes.push(busy.map(f => path.basename(f)).join('、') + ' 在編輯器裡有還沒存的修改（或沒存的分頁）——設計工具要直接寫它：先存檔，或關掉那個分頁（不存），再新增一次');
+      return out;
+    }
+    const srvB = sh.edit ? cppbridge.spliceBytes(sv.buf, sh.edit) : null;
+    const cmB2 = ch.edit ? cppbridge.spliceBytes(cmB, ch.edit) : null;
+    if ((sh.edit && !srvB) || (ch.edit && !cmB2)) { out.notes.push('伺服器分派或 CMake 那一行有不能逐位元組寫入的字'); return out; }
+    // (one row per control + event; the same handler may serve several events)
+    const keep = cppbridge.rowsOf(gen.text || '').filter(r => !(r.form === cls && r.control === g.name && r.event === row.name));
+    const rows = [];
+    for (const r of keep) {
+      const c = await this.htdRowCode(d, r);
+      if (c.error) out.notes.push('（' + c.error + '：產生檔裡這一列拿掉）'); else rows.push(Object.assign({}, r, c));
+    }
+    rows.push({ form: cls, handler, control: g.name, event: row.name, header: code.header, call: code.call });
+    // the page: the htdCpp line (and the helper, and the client script when the page does not load it)
+    const block = jsevents.findBlock(pt);
+    const tag = client ? '<script src="' + client.src + '"></script>' + (/\r\n/.test(pt) ? '\r\n' : '\n') : '';
+    for (const x of pe.edits) out.ops.push({ doc: d.doc, s: x.s, e: x.e, text: (!block && tag ? tag : '') + x.text });
+    if (block && tag) out.ops.push({ doc: d.doc, s: block.start, e: block.start, text: tag });
+    out.done.push(path.basename(d.file) + '（htdCpp' + (client ? '＋載入 ' + path.basename(client.src) : '') + '）');
+    // to disk, in this order (htdWriteWire): the table, the CMake entry, the server's branch
+    // (1006: the table, its header and one file per form header -- the stale parts removed; the table first)
+    out.disk = this.htdGenDisk(d.r.portRoot, rows, ctx, code.eol).map((x, i) => i === 0 ? Object.assign(x, { what: cppbridge.GEN_REL + (gen.exists ? '' : '（新檔）') }) : x)
+      .filter(x => !(x.cmake && cmB2));   // (the CMake entry below already has the glob)
+    if (cmB2) out.disk.push({ file: cm, buf: cmB2, what: 'CMakeLists.txt（' + path.basename(sv.file).replace(/\.\w+$/, '') + ' 的來源清單）' });
+    if (srvB) out.disk.push({ file: sv.file, buf: srvB, what: path.basename(sv.file) + ' 的 ' + cppbridge.CMD + ' 分支' });
+    // where the page line / the server branch will be (for the 事件表)
+    const after = this.applyOps(pt, out.ops.filter(o => o.doc === d.doc));
+    const li = jsevents.cppLines(after).find(x => x.id === g.name && x.event === row.name);
+    out.webLine = li ? after.slice(0, li.s).split('\n').length : 1;
+    out.webSnippet = li ? after.slice(li.s, li.e).trim() : '';
+    const hookAt = sh.edit ? sh.edit.s : (/\.cmd\s*==\s*"htd\.event"/.exec(sv.text) || { index: 0 }).index;
+    out.serverFile = sv.file;
+    out.serverLine = sv.text.slice(0, hookAt).split('\n').length;
+    out.fn = sh.fn;
+    out.wired = true;
+    return out;
+  }
+
+  /** The first match of `re` in an open, not-saved document under `root` (a change the source index cannot see yet). */
+  dirtyHit(root, re, fileRe) {
+    if (!root) return null;
+    for (const doc of vscode.workspace.textDocuments) {
+      if (!doc.isDirty || !doc.uri || (fileRe && !fileRe.test(doc.uri.fsPath))) continue;
+      const rel = path.relative(root, doc.uri.fsPath);
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
+      const t = doc.getText();
+      const m = re.exec(t);
+      if (!m) continue;
+      const ls = t.lastIndexOf('\n', m.index) + 1, le = t.indexOf('\n', m.index);
+      return { file: doc.uri.fsPath, line: t.slice(0, m.index).split('\n').length, snippet: t.slice(ls, le < 0 ? t.length : le).trim().slice(0, 200) };
+    }
+    return null;
+  }
+
+  /** The text after non-overlapping edits { s, e, text } (for positions after an edit). */
+  applyOps(text, ops) {
+    let t = String(text || '');
+    for (const o of ops.slice().sort((a, b) => b.s - a.s)) t = t.slice(0, o.s) + o.text + t.slice(o.e);
+    return t;
+  }
+
+  async openEvent(data, i, d) {
+    let ev = data.events[i];
+    if (!ev) return;
+    if (data.cppPending && d && d.sel && d.sel.promise) {
+      const full = await d.sel.promise;
+      if (full && full.events[i] && full.events[i].name === ev.name) { data = full; ev = full.events[i]; }
+    }
+    const seen = new Set();
+    const ts = [];
+    for (const k of ev.targets) {
+      const t = data.targets[k];
+      if (!t) continue;
+      const key = t.kind + '|' + t.file.toLowerCase() + '|' + t.line;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ts.push(t);
+    }
+    if (!ts.length) {
+      vscode.window.showInformationMessage(ev.name + ' → ' + ev.handler + '：網頁 JS、C++ 移植樹、BCB6 原始碼都找不到這個事件的程式碼。');
+      return;
+    }
+    if (ts.length === 1) return this.openTarget(ts[0], d);
+    const pref = this.cfg().get('eventJump') || 'ask';
+    if (pref !== 'ask') {
+      const kind = pref === 'cpp' ? 'port' : pref;
+      const t = ts.find(x => x.kind === kind && !x.weak) || ts.find(x => x.kind === kind);
+      if (t) return this.openTarget(t, d);
+    }
+    const items = ts.map(t => ({
+      label: KIND[t.kind].icon + ' ' + KIND[t.kind].label + (t.note ? '　' + t.note : ''),
+      description: this.relName(t.file, d) + ':' + t.line,
+      detail: t.snippet || '',
+      t,
+    }));
+    const pick = await vscode.window.showQuickPick(items, {
+      placeHolder: ev.name + ' → ' + ev.handler + '：要跳到哪一份程式碼？',
+      matchOnDescription: true, matchOnDetail: true,
+    });
+    if (pick) return this.openTarget(pick.t, d);
+  }
+
+  relName(file, d) {
+    const bases = d ? [d.r.webRoot, d.r.portRoot, d.r.goldenRoot].filter(Boolean) : [];
+    for (const b of bases) {
+      const r = path.relative(b, file);
+      if (!r.startsWith('..') && !path.isAbsolute(r)) return r;
+    }
+    return file;
+  }
+
+  async revealSource(d, id, focus, t) {
+    if (!d) return;
+    let range = t && t.range ? t.range : null;
+    if (!range) {
+      const at = web.findIdAttr(d.doc.getText(), id);
+      if (!at) {
+        vscode.window.showInformationMessage('HTML 原始碼裡找不到 id="' + id + '"（可能是頁面 JS 動態產生的元件）。');
+        return;
+      }
+      range = [at.start, at.end];
+    }
+    const r = new vscode.Range(d.doc.positionAt(range[0]), d.doc.positionAt(range[1]));
+    const ed = await vscode.window.showTextDocument(d.doc, {
+      viewColumn: this.sourceColumn(d), preview: false, preserveFocus: !focus, selection: r,
+    });
+    ed.revealRange(r, vscode.TextEditorRevealType.InCenter);
+  }
+
+  /** Designer -> source: move an already visible HTML editor, never open or focus one. */
+  syncSource(d, id) {
+    if (!id || !this.cfg().get('syncSource')) return;
+    const ed = vscode.window.visibleTextEditors.find(e => e.document === d.doc);
+    if (!ed) return;
+    const at = web.findIdAttr(d.doc.getText(), id);
+    if (!at) return;
+    const r = new vscode.Range(d.doc.positionAt(at.start), d.doc.positionAt(at.end));
+    ed.selection = new vscode.Selection(r.start, r.end);
+    ed.revealRange(r, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+  }
+
+  /** Source -> designer: the cursor sits in a start tag with an id. */
+  onEditorSelection(e) {
+    const K = vscode.TextEditorSelectionChangeKind;
+    if (e.kind !== K.Mouse && e.kind !== K.Keyboard) return;
+    const d = Array.from(this.designers).find(x => x.doc === e.textEditor.document);
+    if (!d) return;
+    clearTimeout(this._edTimer);
+    this._edTimer = setTimeout(() => {
+      const off = d.doc.offsetAt(e.selections[0].active);
+      // WPF's split view: the cursor anywhere in an element's markup (its tag, its text, a child without an id)
+      const id = this.idAtOffset(d.doc.getText(), off);
+      if (id && id !== d.lastSelId) d.post({ type: 'selectId', id, origin: 'editor' });
+    }, 200);
+  }
+
+  onPropsMessage(m) {
+    const d = this.propsDesigner;
+    const data = this.props.data;
+    // (1006 audit: an edit the panel sent for the component it WAS showing -- a number run written 400 ms later, a menu
+    //  left open, the Font dialog -- is not put on another one selected meanwhile)
+    if (m && m.forKey != null && data && data.comp && m.forKey !== data.comp.key &&
+      /^(setLayout|setCaption|setLook|setFontAll|setItems|setAlias|setStyleProp|setAttrProp|resetProp|resetToDfm|align|rename|eventName|eventReset|eventAll|jsEvent|pickImage)$/.test(m.type)) {
+      vscode.window.setStatusBarMessage('$(warning) 選取剛換了：這個修改是給上一個元件的，沒有套用到現在選的元件', 6000);
+      return null;
+    }
+    switch (m && m.type) {
+      case 'undo':
+      case 'redo':
+        // 1006 (the user: Ctrl+Z for the components): Ctrl+Z / Ctrl+Y in the panel outside a text box = the page's
+        return vscode.commands.executeCommand(m.type === 'undo' ? 'ht9045Designer.undo' : 'ht9045Designer.redo');
+      case 'ready': {
+        // (0.149: the example of a button again -- one posted before the page listened may be lost)
+        const smp = this.props.sample ? this.props.sample() : null;
+        if (smp && this.props.view) this.props.view.webview.postMessage({ type: 'sample', data: smp });
+        this.props.show(this.props.data);
+        break;
+      }
+      case 'revealProp':
+        // a double-click on a property's name: where it is written in the HTML, the value selected (else the element)
+        if (d && data && data.comp && typeof m.prop === 'string') {
+          const pid = data.comp.isForm ? '@form' : data.comp.htmlId;
+          const pr = pid ? htmledit.propRange(d.doc.getText(), pid, m.prop) : null;
+          this.revealSource(d, pid, true, pr ? { range: pr } : (data.comp.html != null ? data.targets[data.comp.html] : null));
+          return { prop: m.prop, range: pr };
+        }
+        break;
+      case 'open': if (data) this.openTarget(data.targets[m.i], d); break;
+      case 'openEvent': if (data) this.openEvent(data, m.i, d); break;
+      case 'eventGrid': if (data) this.onEventGrid(data, m.name, d); break;
+      case 'openDfmLine':
+        if (data && data.dfmFile && m.line > 0) this.openTarget({ kind: 'dfm', file: data.dfmFile, line: m.line, col: 1 }, d);
+        break;
+      case 'revealSource':
+        if (d && data) this.revealSource(d, data.comp.htmlId, true, data.comp.html != null ? data.targets[data.comp.html] : null);
+        break;
+      case 'copy':
+        vscode.env.clipboard.writeText(String(m.text || ''));
+        vscode.window.setStatusBarMessage('已複製：' + m.text, 2000);
+        break;
+      case 'setLayout':
+      case 'setCaption':
+      case 'setLook':
+      case 'align':
+        // several selected: WPF's grid sets the value on every one of them
+        if (d && data && data.comp) this.forwardEdit(d, data.comp.key, m, !!(data.edit && data.edit.multi && data.edit.multi.length), data.comp.htmlId);
+        break;
+      case 'setFontAll': {
+        // 1006 the Font "…" dialog: the changed ones on every selected component, ONE batch edit (one undo step)
+        if (!d || !data || !data.comp || !m.values || typeof m.values !== 'object') break;
+        const ids = this.selIds(d).length ? this.selIds(d) : [data.comp.htmlId].filter(Boolean);
+        const ok = ['fontName', 'fontSize', 'bold', 'italic', 'underline', 'strikeout'];
+        const items = [];
+        for (const id of ids) for (const k of ok) if (m.values[k] !== undefined) items.push({ id, type: 'setLook', prop: k, value: m.values[k] });
+        if (items.length) d.post({ type: 'editMany', items });
+        return { items: items.length };
+      }
+      case 'resetToDfm':
+        // the panel's 全部改回 DFM: the selection (all of it) back to the .dfm, one undo step
+        if (d) return this.cmdResetToDfm(d);
+        break;
+      case 'resetProp':
+        // AI(W906-HTDESIGNER) 20261001: one property's Reset with several selected = EACH back to its OWN .dfm value
+        // (WPF / the Object Inspector); it used to write the primary one's value into all of them
+        if (d && typeof m.prop === 'string') return this.cmdResetToDfm(d, null, m.prop);
+        break;
+      case 'rename':
+        // the pencil by the name at the top of the panel, or the Name field (WPF's) with the new name
+        if (d && this.active === d) return this.cmdRename(typeof m.name === 'string' ? m.name : undefined);
+        break;
+      case 'setAlias':
+        if (d && data && data.comp) return this.cmdSetAlias(d, data, m.value);
+        break;
+      case 'pickImage':
+        if (d && data && data.comp) return this.cmdPickImage(d, data.comp.key);
+        break;
+      case 'setItems':
+        if (d && data && data.comp && data.comp.htmlId) return this.cmdSetItems(d, data.comp.htmlId, m.items);
+        break;
+      case 'eventName':
+        if (d && data) return this.onEventName(data, m.event, m.value, d);
+        break;
+      case 'eventReset':
+        if (d && data) return this.onEventReset(data, m.name, d);
+        break;
+      case 'selectId':
+        // the tag navigator: a parent picked in the panel's path
+        if (d && typeof m.id === 'string' && m.id) { d.lastSelId = m.id; d.post({ type: 'selectId', id: m.id, origin: 'editor' }); }
+        break;
+      case 'eventAll':
+        if (d && data) return this.onEventAll(data, m.name, d);
+        break;
+      case 'jsEvent':
+        if (d && data && data.comp) return this.cmdJsEvent(d, data, m.ev, m.fn);
+        break;
+      case 'openJsEvent':
+        if (d && data && data.comp) return this.openJsEvent(d, data.comp.htmlId, m.ev);
+        break;
+      case 'setStyleProp': {
+        // one style declaration of the source's start tag, as written (value null / '' = remove it)
+        if (!d || !data || !data.comp) break;
+        const name = String(m.name || '').trim().toLowerCase();
+        const value = m.value == null || String(m.value).trim() === '' ? null : String(m.value).trim();
+        if (!CSS_NAME.test(name) || (value !== null && CSS_BAD.test(value))) {
+          this.refuseEdit(d, '樣式「' + name + (value ? ': ' + value : '') + '」不能寫（名稱只能是英文小寫與 -，值不能有 ; { } < > \\）。');
+          break;
+        }
+        if (/^(left|top|right|bottom|width|height|position|inset)$/.test(name) && this.refuseLocked(d, [data.comp.htmlId], '改位置')) break;
+        d.post({ type: 'setStyleRaw', key: data.comp.key, name, value });
+        break;
+      }
+      case 'setAttrProp': {
+        if (!d || !data || !data.comp) break;
+        const name = String(m.name || '').trim().toLowerCase();
+        if (!ATTR_EDIT.test(name)) { this.refuseEdit(d, '屬性「' + name + '」不在這裡改（id 是網頁程式找元件用的；on… 是事件）。'); break; }
+        d.post({ type: 'setAttrRaw', key: data.comp.key, name, value: m.value == null ? null : String(m.value) });
+        break;
+      }
+      default: break;
+    }
+  }
+
+  // --- commands ------------------------------------------------------------
+  async cmdOpen(uri) {
+    if (!(uri instanceof vscode.Uri)) {
+      const ed = vscode.window.activeTextEditor;
+      if (ed && /\.html?$/i.test(ed.document.fileName)) uri = ed.document.uri;
+    }
+    if (!uri) return this.cmdOpenPage();
+    const ed = vscode.window.activeTextEditor;
+    const fromEditor = ed && ed.document.uri.toString() === uri.toString();
+    await vscode.commands.executeCommand('vscode.openWith', uri, VIEW_TYPE, fromEditor ? vscode.ViewColumn.Beside : undefined);
+  }
+
+  async cmdOpenPage() {
+    const r = roots.resolveRoots(null, this.wsFolders(), this.over());
+    let webRoot = r.webRoot;
+    if (!webRoot) {
+      const pick = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, openLabel: '這是 web 資料夾' });
+      if (!pick || !pick.length) return;
+      webRoot = pick[0].fsPath;
+    }
+    // first: the side bar's 頁面 list (it may be hidden); the current page marked
+    const cur = this.active ? this.active.file.toLowerCase() : '';
+    const items = [{ label: '$(list-tree) 在方案總管顯示頁面清單', description: '（網頁 → 頁面；被收起或隱藏時叫回來）', showList: true }];
+    for (const dir of [path.join(webRoot, 'page'), webRoot]) {
+      let names = [];
+      try { names = fs.readdirSync(dir).filter(n => /\.html?$/i.test(n)).sort(); } catch (e) { names = []; }
+      for (const n of names) {
+        const f = path.join(dir, n);
+        let head = '';
+        try {
+          const fd = fs.openSync(f, 'r');
+          const buf = Buffer.alloc(4096);
+          const len = fs.readSync(fd, buf, 0, 4096, 0);
+          fs.closeSync(fd);
+          head = buf.subarray(0, len).toString('utf8');
+        } catch (e) { head = ''; }
+        const t = pageinfo.parseTitle(head);
+        const isCur = f.toLowerCase() === cur;
+        items.push({ label: (isCur ? '$(eye) ' : '') + n, description: (isCur ? '● 目前　' : '') + (t ? t.title : ''), detail: path.relative(webRoot, f), file: f });
+      }
+    }
+    const pick = await vscode.window.showQuickPick(items, { placeHolder: '選一個頁面，用設計檢視開啟（打字可以篩選；' + webRoot + '）', matchOnDescription: true });
+    if (pick && pick.showList) return this.cmdShowPages();
+    if (pick) await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(pick.file), VIEW_TYPE);
+  }
+
+  /** The side bar's 頁面 list shown (VS Code's view focus command also brings back a hidden view). */
+  async cmdShowPages() {
+    // (0.139: the pages are in 方案總管, under 網頁 -> 頁面)
+    try { await vscode.commands.executeCommand('ht9045Designer.solution.focus'); } catch (e) { /* ignore */ }
+    if (this.solution) await this.solution.revealPages();
+    return !!(this.solutionView && this.solutionView.visible);
+  }
+
+  cmdToggleMode() {
+    const d = this.active;
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return; }
+    d.mode = d.mode === 'design' ? 'operate' : 'design';
+    d.post({ type: 'setMode', mode: d.mode });
+    this.updateStatus();
+    if (d.mode === 'operate' && !this.warnedOperate) {
+      this.warnedOperate = true;
+      vscode.window.showInformationMessage('操作模式：點擊會交給頁面自己的程式處理（例如切分頁、展開選單）。網路仍然全部封鎖，不會送任何命令到機台。');
+    }
+  }
+
+  async cmdShowSource() {
+    const d = this.active;
+    if (!d) return;
+    await vscode.window.showTextDocument(d.doc, { viewColumn: this.sourceColumn(d), preview: false, preserveFocus: true });
+  }
+
+  cmdRevealSource(node) {
+    const d = this.active;
+    if (!d) return;
+    if (node && node.key) {
+      if (node.isForm) return this.revealSource(d, '@form', true);
+      return this.revealSource(d, node.id, true);
+    }
+    if (d.sel && d.sel.info) return this.revealSource(d, d.sel.info.id, true);
+  }
+
+  /** Open the BCB6 .dfm at "object Name: TClass" (tree node, or the current selection). */
+  async cmdRevealDfm(node) {
+    const d = this.active;
+    if (!d) return;
+    const pi = await d.info;
+    const id = node && node.key ? (node.isForm ? '@form' : node.id) : (d.sel && d.sel.info ? d.sel.info.id : null);
+    if (!id) { vscode.window.showInformationMessage('先選一個元件。'); return; }
+    const n = pi.ir ? (id === '@form' ? pi.ir.root : pi.ir.byName.get(id)) : null;
+    const f = this.dfmFileOf(d, pi.ir);
+    if (!n || !n.line || !f) {
+      vscode.window.showInformationMessage(!pi.ir ? '這一頁沒有對應的 DFM。' : !f ? '找不到 BCB6 的 .dfm 檔（' + (pi.ir.sourceDfm || '?') + '）。' : 'DFM 裡沒有「' + id + '」（可能是網頁自己加的元件）。');
+      return;
+    }
+    return this.openTarget({ kind: 'dfm', file: f, line: n.line, col: 1 }, d);
+  }
+
+  // --- WPF-style editing: the probe changed the DOM, now write it into the source ---
+  refuseEdit(d, why) {
+    vscode.window.setStatusBarMessage('$(warning) ' + why, 6000);
+    this.log('[' + path.basename(d.file) + '] 沒有寫回：' + why);
+  }
+
+  /**
+   * m = { what:'style'|'attr'|'caption', id, target:'self'|'parent', style:{…}, attr:{…},
+   *       capKind, value }. One WorkspaceEdit = one undo step; nothing is saved to disk.
+   */
+  /** The characters one edit changes in `text`: { range:[s,e], repl } or { error }. */
+  editRange(text, m) {
+    const tag = m.id ? htmledit.startTagOf(text, m.id) : null;
+    if (!tag) return { error: '原始碼裡找不到 id="' + (m.id || '') + '"（可能是頁面 JS 產生的元件），只改到畫面、沒有寫回。' };
+    if (m.what === 'style' || m.what === 'attr') {
+      // (1006 audit, defence in depth: what reaches the source is checked here too -- a style value with ";" / "{" would
+      //  add declarations of its own; an attribute name that is not one, or an on… handler, is not written)
+      if (m.what === 'style') {
+        const bad = Object.entries(m.style || {}).find(([k, v]) => !/^(--)?[a-z][a-z0-9-]*$/i.test(k) || (v != null && /[;{}<>\\]/.test(String(v))));
+        if (bad) return { error: '樣式「' + bad[0] + '」的值不能寫進原始碼（不能有 ; { } < > \\），沒有寫回。' };
+      } else {
+        const bad = Object.keys(m.attr || {}).find(k => !/^[a-z][a-z0-9_:-]*$/i.test(k) || /^on/i.test(k));
+        if (bad) return { error: '屬性「' + bad + '」不能從這裡寫進原始碼，沒有寫回。' };
+      }
+      // 'pnlCap' / 'legend': the child that carries a TPanel's / TGroupBox's caption font
+      const target = m.target === 'parent' ? htmledit.wrapperTagOf(text, tag.start)
+        : m.target === 'pnlCap' || m.target === 'legend' ? htmledit.captionHostTag(text, tag, m.target)
+        : m.target === 'input' ? htmledit.innerInputTag(text, tag) : tag;   // (0.152: a check box's Checked, on the <input> in its <label>)
+      if (!target && (m.target === 'pnlCap' || m.target === 'legend')) {
+        return { error: '找不到「' + m.id + '」的標題元素（' + (m.target === 'legend' ? '<legend>' : '.pnlCap') + '）在原始碼的位置，沒有寫回。' };
+      }
+      if (!target) return { error: '「' + m.id + '」的位置由外層元素決定，但原始碼裡找不到緊鄰的外層標籤，沒有寫回。' };
+      // (fn: the same change applied to a tag's text -- a batch may change one tag twice)
+      const fn = t0 => {
+        let t = t0;
+        if (m.what === 'style') t = htmledit.setStyle(t, m.style || {});
+        else for (const [k, v] of Object.entries(m.attr || {})) t = htmledit.setAttr(t, k, v);
+        return t;
+      };
+      return { range: [target.start, target.end], repl: fn(target.text), fn };
+    }
+    if (m.what === 'class') {
+      // (an IO lamp / panel button's LEDStyle / Value / Blink / Down / Style: its classes, changed in place)
+      const fnc = t0 => htmledit.setClass(t0, m.add || [], m.remove || []);
+      return { range: [tag.start, tag.end], repl: fnc(tag.text), fn: fnc };
+    }
+    if (m.what === 'caption') {
+      if (m.capKind === 'value') {
+        const fnv = t0 => htmledit.setAttr(t0, 'value', String(m.value));
+        return { range: [tag.start, tag.end], repl: fnv(tag.text), fn: fnv };
+      }
+      // 1006 a labeled LED's caption (.lledCap beside the LED) / a TLabeledEdit's EditLabel (.elab beside its input):
+      // that sibling's text, in the element around them
+      if (m.capKind === 'lledCap' || m.capKind === 'elab') {
+        const par = htmlblock.parentOf(text, tag.start);
+        const cre = new RegExp('\\bclass\\s*=\\s*["\'][^"\']*\\b' + m.capKind + '\\b');
+        const sib = par ? htmlblock.childrenOf(text, par).find(c => cre.test(c.text)) : null;
+        if (!sib) return { error: '找不到「' + m.id + '」的' + (m.capKind === 'elab' ? '標籤（EditLabel）' : '燈號文字') + '在原始碼的位置，沒有寫回。' };
+        return { range: [sib.start + sib.text.length, text.lastIndexOf('</', sib.end - 1)], repl: htmledit.escText(m.value) };
+      }
+      const r = htmledit.captionRange(text, tag, m.capKind);
+      if (!r) return { error: '找不到「' + m.id + '」的文字在原始碼的位置，沒有寫回。' };
+      // (1006 audit: the same text = the source as it is -- &nbsp; / &quot; used to be re-encoded by a no-op edit)
+      if (htmledit.decodeEnt(text.slice(r[0], r[1])) === String(m.value)) return { range: r, repl: text.slice(r[0], r[1]) };
+      return { range: r, repl: htmledit.escText(m.value) };
+    }
+    return { error: '不認得的修改：' + m.what };
+  }
+
+  /** One edit, or a batch (group drag, align) as ONE WorkspaceEdit = one undo step. */
+  async applySourceEdit(d, m) {
+    const text = d.doc.getText();
+    const list = m.what === 'batch' ? (m.edits || []) : [m];
+    const all = [];
+    for (const one of list) {
+      const r = this.editRange(text, one);
+      if (r.error) { this.refuseEdit(d, r.error); d.render(); return false; }
+      // two changes of the same tag (改回 DFM: Left and Font.Bold of one button) = one edit of it
+      const same = r.fn ? all.find(p => p.fn && p.range[0] === r.range[0] && p.range[1] === r.range[1]) : null;
+      if (same) { same.repl = r.fn(same.repl); continue; }
+      all.push(r);
+    }
+    const parts = all.filter(r => text.slice(r.range[0], r.range[1]) !== r.repl);
+    if (!parts.length) return true;
+    parts.sort((a, b) => a.range[0] - b.range[0]);
+    for (let i = 1; i < parts.length; i++) {
+      if (parts[i].range[0] < parts[i - 1].range[1]) { this.refuseEdit(d, '同一段原始碼被改了兩次（重疊），沒有寫回。'); d.render(); return false; }
+    }
+    const we = new vscode.WorkspaceEdit();
+    for (const p of parts) we.replace(d.doc.uri, new vscode.Range(d.doc.positionAt(p.range[0]), d.doc.positionAt(p.range[1])), p.repl);
+    d.selfEdits++;
+    const ok = await vscode.workspace.applyEdit(we);
+    if (!ok) { d.selfEdits--; this.refuseEdit(d, '寫回原始碼失敗。'); d.render(); return false; }
+    this.noteFirstEdit(d);
+    return true;
+  }
+
+  /** The first change of the session: say where it went, how to undo / save, and sync_web.py. */
+  noteFirstEdit(d) {
+    if (this.warnedEdit) return;
+    this.warnedEdit = true;
+    const auto = vscode.workspace.getConfiguration('files', d.doc.uri).get('autoSave');
+    const autoNote = auto && auto !== 'off' ? '⚠ 你開了自動存檔（files.autoSave = ' + auto + '），改動會自動寫到磁碟。' : '還沒存檔；Ctrl+Z 復原、Ctrl+S 存檔。';
+    vscode.window.showInformationMessage(
+      '已改到 ' + path.basename(d.file) + ' 的 HTML 原始碼。' + autoNote +
+      '這一頁由 sync_web.py 從網頁作者那邊同步，--apply 會整份覆蓋：存檔前請確認，並告訴網頁作者。');
+  }
+
+  // --- WPF Delete / Copy / Cut / Paste: whole elements; the page is drawn again from the source ---
+  /**
+   * The VCL class of a name: the DFM's, else the component tree's, else the source's
+   * generated title="name : TClass" (a component added in this session is in neither yet).
+   */
+  classOf(d, pi, id, text) {
+    if (id === '@form') return 'form';
+    const n = pi && pi.ir ? pi.ir.byName.get(id) : null;
+    if (n && n.class) return n.class;
+    const row = d.treeData.find(r => r[2] === id);
+    if (row && row[4]) return row[4];
+    const tag = htmledit.startTagOf(text || d.doc.getText(), id);
+    const t = tag ? /\stitle\s*=\s*["']\s*[\w@]+\s*:\s*(T\w+)/.exec(tag.text) : null;
+    return t ? t[1] : '';
+  }
+
+  /** The names a structural command works on: the selection (+ the multi-selection), never the form. */
+  selIds(d) {
+    const info = d && d.sel && d.sel.info;
+    if (!info) return [];
+    return [info.id].concat(Array.isArray(info.multi) ? info.multi : []).filter(id => id && id !== '@form');
+  }
+
+  /** The unit of one name: the element, or the <span style="position:absolute"> around it (an input). */
+  unitFor(text, id) {
+    const tag = htmledit.startTagOf(text, id);
+    if (!tag) return null;
+    const w = htmledit.wrapperTagOf(text, tag.start);
+    const wrap = !!(w && !/\sid\s*=/.test(w.text) && /position\s*:\s*absolute/i.test(w.text));
+    const u = htmlblock.unitOf(text, id, wrap ? 'parent' : 'self');
+    if (u) u.id = id;
+    return u;
+  }
+
+  /** Units of these names; one inside another counts once. { units } or { error }. */
+  unitsFor(text, ids) {
+    const units = [];
+    for (const id of ids) {
+      const u = this.unitFor(text, id);
+      if (!u) return { error: '原始碼裡找不到「' + id + '」（可能是頁面 JS 產生的元件，或標籤沒有正常結束），沒有動。' };
+      units.push(u);
+    }
+    const outer = units.filter(u => !units.some(o => o !== u && o.start <= u.start && u.end <= o.end));
+    outer.sort((a, b) => a.start - b.start);
+    return { units: outer };
+  }
+
+  /** A structural change as ONE WorkspaceEdit (one undo step); the designer re-draws from it. */
+  async applyStructural(d, parts) {
+    parts.sort((a, b) => a.range[0] - b.range[0]);
+    for (let i = 1; i < parts.length; i++) {
+      if (parts[i].range[0] < parts[i - 1].range[1]) { this.refuseEdit(d, '同一段原始碼被改了兩次（重疊），沒有改。'); return false; }
+    }
+    const we = new vscode.WorkspaceEdit();
+    for (const p of parts) we.replace(d.doc.uri, new vscode.Range(d.doc.positionAt(p.range[0]), d.doc.positionAt(p.range[1])), p.repl);
+    // until the page is drawn again, a late 'select' from the old page must not change what
+    // the new one selects (d.lastSelId, set by the caller: the new / renamed component)
+    d.structuralPending = true;
+    const ok = await vscode.workspace.applyEdit(we);
+    if (!ok) { d.structuralPending = false; this.refuseEdit(d, '改原始碼失敗。'); return false; }
+    this.noteFirstEdit(d);
+    return true;
+  }
+
+  /**
+   * 0.154 (the WPF gap list G4: renaming x:Name renames its uses): EVERY place the page's JS names `id` (getElementById('x'),
+   * '#x', [id=x]) -- the page's own inline scripts and the scripts it loads -- with how many pages load that script
+   * (a shared one: another page may mean its own element of that name). [{ file, isPage, k, start, end, line, snip, pages }]
+   */
+  async renameRefs(d, pi, id) {
+    // (a script open in VS Code with changes not saved: its open text, not the file -- the edit goes to that text)
+    const open = new Map((vscode.workspace.textDocuments || []).filter(x => x && x.uri && x.uri.scheme === 'file').map(x => [path.resolve(x.uri.fsPath).toLowerCase(), x]));
+    const sources = this.webSources(d, pi).map(s => {
+      const od = !web.samePath(s.file, d.file) && open.get(path.resolve(s.file).toLowerCase());
+      return od ? new web.Source(s.file, od.getText(), false) : s;
+    });
+    const pageDir = path.dirname(d.file);
+    let htmls = [];
+    try { htmls = fs.readdirSync(pageDir).filter(f => /\.html?$/i.test(f)).map(f => path.join(pageDir, f)); } catch (e) { htmls = []; }
+    const loads = new Map();
+    const pagesLoading = file => {
+      if (loads.has(file)) return loads.get(file);
+      const base = path.basename(file);
+      const re = new RegExp('<script[^>]+src\\s*=\\s*["\']?[^"\'>]*' + base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '["\'\\s>]', 'i');
+      let n = 0;
+      for (const h of htmls) { try { if (re.test(fs.readFileSync(h, 'utf8'))) n++; } catch (e) { /* skip */ } }
+      loads.set(file, n);
+      return n;
+    };
+    const out = [];
+    for (const s of sources) {
+      const re = web.idMentionRe(id);
+      let m, k = 0;
+      while ((m = re.exec(s.text))) {
+        if (s.inScope(m.index)) {
+          const h = s.hitAt(m.index);
+          const isPage = web.samePath(s.file, d.file);
+          out.push({ file: s.file, isPage, k, start: m.index, end: m.index + m[0].length, text: m[0], line: h.line, snip: String(h.snippet || '').slice(0, 120), pages: isPage ? 1 : pagesLoading(s.file) });
+        }
+        k++;
+        if (m[0].length === 0) re.lastIndex++;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 0.157 (the WPF gap list G5: the Items collection editor / the String Collection Editor): a select's options, a
+   * radio group's items, a memo's lines -- one per line in the properties panel, written as the generator writes them
+   * (lib/items.js), one edit (Ctrl+Z). The one selected now stays selected when its text is still there.
+   */
+  /**
+   * 1006 (WinForms' smart tag -- the ▸ at a selected control's top right, "Designer Actions"): the common tasks of the
+   * component, by what it is: its default event, rename, the items of a list / radio group / memo, the picture of an
+   * image, the IO Alias of an IO component, group into a Panel, the properties. m.pick (tests) = the task's key.
+   */
+  async cmdSmartTag(d, m) {
+    if (!d || !m) return null;
+    if (this.active !== d) this.setActive(d);
+    const id = String(m.id || '');
+    const text = d.doc.getText();
+    const its = id ? listitems.itemsOf(text, id) : null;
+    const isImg = id ? /^<img\b/i.test((htmledit.startTagOf(text, id) || {}).text || '') : false;
+    const props = this.props && this.props.data && this.props.data.comp && this.props.data.comp.htmlId === id ? this.props.data : null;
+    const aliasOn = !!(props && props.edit && props.edit.aliasOn);
+    const tasks = [{ k: 'event', label: '$(symbol-event) 預設事件', description: '開啟／新增 C++ 處理函式（＝雙擊元件）' }];
+    if (its) tasks.push({ k: 'items', label: '$(list-unordered) 編輯' + (its.kind === 'memo' ? '內容（每一行）' : '項目（Items）') + '…', description: its.items.length + (its.kind === 'memo' ? ' 行' : ' 項') });
+    if (isImg) tasks.push({ k: 'image', label: '$(file-media) 選圖片…', description: 'Picture／Source' });
+    if (aliasOn) tasks.push({ k: 'alias', label: '$(plug) IO Alias…', description: props.edit.alias || '（沒有）' });
+    tasks.push({ k: 'rename', label: '$(edit) 改名稱…', description: id }, { k: 'group', label: '$(group-by-ref-type) 放進新的 Panel／GroupBox…' },
+      { k: 'props', label: '$(symbol-property) 屬性與事件', description: '開屬性面板' });
+    let k = m.pick;
+    if (!k) {
+      const p = await vscode.window.showQuickPick(tasks, { placeHolder: (id || '元件') + (m.cls ? ' : ' + m.cls : '') + ' 的常用工作' });
+      if (!p) return null;
+      k = p.k;
+    }
+    if (k === 'event') { await this.onDesignerDblClick(d, false); return { task: k }; }
+    if (k === 'rename') return { task: k, r: await this.cmdRename(typeof m.value === 'string' ? m.value : undefined) };
+    if (k === 'group') return { task: k, r: await this.cmdGroupInto(m.value) };
+    if (k === 'image') return { task: k, r: await this.cmdPickImage(d, m.key) };
+    if (k === 'props') { try { await vscode.commands.executeCommand('ht9045Designer.properties.focus'); } catch (e) { /* not there */ } return { task: k }; }
+    if (k === 'alias' && props) {
+      const v = typeof m.value === 'string' ? m.value : await vscode.window.showInputBox({ prompt: id + ' 的 IO Alias（空白＝拿掉）', value: props.edit.alias || '' });
+      if (v == null) return null;
+      return { task: k, r: await this.cmdSetAlias(d, props, v) };
+    }
+    if (k === 'items' && its) {
+      if (Array.isArray(m.value)) return { task: k, r: await this.cmdSetItems(d, id, m.value) };
+      // (1006: WinForms' String Collection Editor -- the properties panel's Items box, one item a line, with up / down /
+      //  sort; a one-line box with a separator was hard to read and could not hold a "｜")
+      try { await vscode.commands.executeCommand('ht9045Designer.properties.focus'); } catch (e) { /* not there */ }
+      // (1006 audit: PropsView has no post() -- the message never went out; its webview is the way)
+      const ff = { type: 'focusField', field: 'items' };
+      setTimeout(() => { const v = this.props && this.props.view; if (v && v.webview) v.webview.postMessage(ff); }, 150);
+      return { task: k, focused: true, sent: ff };
+    }
+    return null;
+  }
+
+  async cmdSetItems(d, id, items) {
+    if (!d || !id) return null;
+    if (this.refuseLocked && this.refuseLocked(d, [id], '改項目')) return null;
+    const e = listitems.itemsEdit(d.doc.getText(), id, items);
+    if (e.error) { this.refuseEdit(d, e.error + '。'); return null; }
+    d.lastSelId = id;
+    const ok = await this.applyStructural(d, [{ range: e.range, repl: e.repl }]);
+    if (ok) vscode.window.setStatusBarMessage('$(list-unordered) 「' + id + '」' + (e.kind === 'memo' ? '的內容' : '的項目') + '：' + (Array.isArray(items) ? items.length : 0) + (e.kind === 'memo' ? ' 行' : ' 項') + '（Ctrl+Z 復原）', 5000);
+    return ok ? { id, kind: e.kind, n: Array.isArray(items) ? items.length : 0, selected: e.selected } : null;
+  }
+
+  /**
+   * 0.158 (the WPF gap list G9: Image.Source's picker): pick an image file for the selected <img>. One outside the
+   * page's folder is copied into its img\ first (the page refers to it relatively, as the generator's img/... do);
+   * then written as its src (the probe applies it, the edit writes it back -- Ctrl+Z).
+   */
+  async cmdPickImage(d, key) {
+    if (!d || key == null) return null;
+    const pageDir = path.dirname(d.file);
+    const imgDir = path.join(pageDir, 'img');
+    const pick = await vscode.window.showOpenDialog({
+      canSelectMany: false, openLabel: '用這張圖', title: '圖片（Picture／Source）',
+      defaultUri: vscode.Uri.file(fs.existsSync(imgDir) ? imgDir : pageDir),
+      filters: { '圖片': ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'svg', 'ico', 'webp'] },
+    });
+    if (!pick || !pick.length) return null;
+    let file = pick[0].fsPath;
+    const inside = path.resolve(file).toLowerCase().startsWith(path.resolve(pageDir).toLowerCase() + path.sep);
+    if (!inside) {
+      try {
+        fs.mkdirSync(imgDir, { recursive: true });
+        let dest = path.join(imgDir, path.basename(file));
+        for (let k = 2; fs.existsSync(dest) && !sameFile(dest, file); k++) dest = path.join(imgDir, path.basename(file, path.extname(file)) + '_' + k + path.extname(file));
+        if (!fs.existsSync(dest)) fs.copyFileSync(file, dest);
+        file = dest;
+        vscode.window.setStatusBarMessage('$(file-media) 圖片複製到 ' + path.relative(pageDir, dest), 6000);
+      } catch (e) { this.refuseEdit(d, '圖片複製不到網頁的 img 資料夾：' + (e && e.message || e)); return null; }
+    }
+    const rel = path.relative(pageDir, file).split(path.sep).join('/');
+    d.post({ type: 'setLook', key, prop: 'src', value: rel });
+    return { src: rel, copied: !inside };
+  }
+
+  /** The page's JS that uses these names (getElementById('x'), '#x' ...): [{ id, hits }]. */
+  async webUsesOf(d, names) {
+    const pi = await d.info;
+    const sources = this.webSources(d, pi);
+    const out = [];
+    for (const id of names) {
+      const hits = web.findAll(sources, web.idMentionRe(id), 5);
+      if (hits.length) out.push({ id, hits });
+    }
+    return out;
+  }
+
+  /** Del / Cut: remove the selected elements from the source (asks first when the page's JS uses them). */
+  async cmdDelete(arg, verb) {
+    const d = this.active;
+    verb = verb || '刪除';
+    if (!d) return null;
+    const ids = this.selIds(d);
+    if (!ids.length) { vscode.window.setStatusBarMessage('$(info) 先選一個元件（表單本身不能' + verb + '）', 5000); return null; }
+    if (this.refuseLocked(d, ids, verb)) return null;
+    const text = d.doc.getText();
+    const us = this.unitsFor(text, ids);
+    if (us.error) { this.refuseEdit(d, us.error); return null; }
+    const names = [].concat(...us.units.map(u => htmlblock.idsIn(u.html)));
+    const uses = await this.webUsesOf(d, names);
+    if (uses.length && !(arg && arg.confirmed)) {
+      const list = uses.slice(0, 6).map(u => u.id + '（' + u.hits.map(h => path.basename(h.file) + ':' + h.line).join('、') + '）').join('\n');
+      const pick = await vscode.window.showWarningMessage(
+        '網頁程式有用到要' + verb + '的元件，' + verb + '之後那些程式會找不到它：\n' + list + (uses.length > 6 ? '\n…共 ' + uses.length + ' 個' : '') +
+        '\n\n確定要' + verb + '嗎？（Ctrl+Z 可以復原）', { modal: true }, verb);
+      if (pick !== verb) return null;
+    }
+    // afterwards the parent is selected (WPF)
+    const row = d.treeData.find(r => r[2] === ids[0]);
+    const prow = row ? d.treeData.find(r => r[0] === row[1]) : null;
+    d.lastSelId = prow ? prow[2] : null;
+    const parts = us.units.map(u => { const r = htmlblock.removeRange(text, u.start, u.end); return { range: r.range, repl: '' }; });
+    const ok = await this.applyStructural(d, parts);
+    if (ok) vscode.window.setStatusBarMessage('$(trash) 已' + verb + ' ' + us.units.map(u => u.id).join('、') + '（Ctrl+Z 復原）', 6000);
+    return ok ? { removed: us.units.map(u => u.id), uses: uses.map(u => u.id) } : null;
+  }
+
+  /**
+   * WPF Order: Bring to Front / Bring Forward / Send Backward / Send to Back = the
+   * element's place among its siblings in the source (later = drawn on top); the
+   * page is drawn again and the component tree follows. how: front|forward|backward|back
+   */
+  async cmdOrder(how) {
+    const d = this.active;
+    if (!d) return null;
+    const ids = this.selIds(d);
+    if (!ids.length) { vscode.window.setStatusBarMessage('$(info) 先選一個元件（表單本身沒有前後順序）', 5000); return null; }
+    if (ids.length > 1) return this.cmdOrderMany(d, ids, how);
+    if (this.refuseLocked(d, [ids[0]], '調整順序')) return null;
+    const text = d.doc.getText();
+    const u = this.unitFor(text, ids[0]);
+    if (!u) { this.refuseEdit(d, '原始碼裡找不到「' + ids[0] + '」（可能是頁面 JS 產生的元件），沒有動。'); return null; }
+    const r = htmlblock.reorder(text, u, how);
+    const WORD = { front: '最上層', forward: '上一層', backward: '下一層', back: '最下層' };
+    if (r.error) { this.refuseEdit(d, '「' + ids[0] + '」不能調整順序：' + r.error); return null; }
+    if (r.same) { vscode.window.setStatusBarMessage('$(info) ' + ids[0] + ' 已經在' + (how === 'front' || how === 'forward' ? '最上層' : '最下層'), 4000); return { same: true }; }
+    d.lastSelId = ids[0];
+    const ok = await this.applyStructural(d, r.parts);
+    if (ok) {
+      vscode.window.setStatusBarMessage('$(layers) ' + ids[0] + ' 移到' + WORD[how] + '（同一層第 ' + (r.to + 1) + ' / ' + r.of + ' 個；Ctrl+Z 復原）' +
+        (ids.length > 1 ? '　多選時只移動主要選取' : '') + this.tabOrderNote(text, d.doc.getText()), 8000);
+    }
+    return ok ? { id: ids[0], from: r.from, to: r.to, of: r.of, tabNote: !!this.tabOrderNote(text, d.doc.getText()) } : null;
+  }
+
+  /**
+   * 1005 (WPF audit: "調前後順序會不會靜悄悄改到 Tab 順序"): it does -- no page has a tabindex (81 pages, 9,828 controls,
+   * 20261005), so Tab goes in source order, and Order moves the source. WPF / WinForms keep the two apart; here the drawing
+   * order IS the source order (as the .dfm's), so the move stays and the change is said instead of happening silently.
+   * -> '' or the note for the status line: the order of the input / button / select / textarea tags before and after.
+   */
+  tabOrderNote(before, after) {
+    const seq = t => (String(t).match(/<(?:input|button|select|textarea)\b[^>]*>/gi) || []).filter(x => !/type\s*=\s*["']?hidden/i.test(x));
+    const a = seq(before), b = seq(after);
+    if (a.length !== b.length || a.every((x, i) => x === b[i])) return '';
+    return '　⚠ Tab 順序也跟著變了（網頁沒有設 tabindex 時，Tab＝原始碼順序）';
+  }
+
+  /**
+   * AI(W906-HTDESIGNER) 20261001: Order with several selected (WPF / Blend "Bring the selected object to the front" --
+   * the selection, not only its primary one, as it used to be): each among its own siblings, their order among
+   * themselves kept (front / backward: the earliest first; back / forward: the latest first), ONE edit.
+   */
+  async cmdOrderMany(d, ids, how) {
+    if (this.refuseLocked(d, ids, '調整順序')) return null;
+    const orig = d.doc.getText();
+    let text = orig;
+    const startOf = id => { const u = this.unitFor(text, id); return u ? u.start : -1; };
+    const missing = ids.filter(id => startOf(id) < 0);
+    const asc = ids.filter(id => startOf(id) >= 0).sort((a, b) => startOf(a) - startOf(b));
+    const seq = how === 'front' || how === 'backward' ? asc : asc.slice().reverse();
+    const moved = [], skipped = [], blocked = new Set();
+    const idOfKid = k => (/\bid\s*=\s*["']([^"']+)["']/.exec(k.text.slice(0, k.text.indexOf('>') + 1)) || [])[1] || '';
+    for (const id of seq) {
+      const u = this.unitFor(text, id);
+      let r = u ? htmlblock.reorder(text, u, how) : { error: '找不到' };
+      // one step (forward / backward) never jumps over another selected one that could not move: the order kept
+      if (!r.error && !r.same && (how === 'forward' || how === 'backward')) {
+        const kids = htmlblock.childrenOf(text, htmlblock.parentOf(text, u.start));
+        if (kids[r.to] && blocked.has(idOfKid(kids[r.to]))) r = { same: true };
+      }
+      if (r.error || r.same) { blocked.add(id); skipped.push(id + (r.error ? '（' + r.error + '）' : '')); continue; }
+      for (const p of r.parts.slice().sort((a, b) => b.range[0] - a.range[0])) text = text.slice(0, p.range[0]) + p.repl + text.slice(p.range[1]);
+      moved.push(id);
+    }
+    const WORD = { front: '最上層', forward: '上一層', backward: '下一層', back: '最下層' };
+    if (text === orig) {
+      vscode.window.setStatusBarMessage('$(info) 選取的 ' + ids.length + ' 個都已經在' + (how === 'front' || how === 'forward' ? '最上層' : '最下層') + (missing.length ? '（原始碼裡找不到：' + missing.join('、') + '）' : ''), 5000);
+      return { same: true, moved: [], skipped, missing };
+    }
+    // ONE replacement: the part of the source that changed (one Ctrl+Z)
+    let a = 0;
+    while (a < orig.length && a < text.length && orig[a] === text[a]) a++;
+    let b = 0;
+    while (b < orig.length - a && b < text.length - a && orig[orig.length - 1 - b] === text[text.length - 1 - b]) b++;
+    d.lastSelId = ids[0];
+    const ok = await this.applyStructural(d, [{ range: [a, orig.length - b], repl: text.slice(a, text.length - b) }]);
+    if (ok) vscode.window.setStatusBarMessage('$(layers) 選取的 ' + moved.length + ' 個移到' + WORD[how] + '（各自在自己的那一層，彼此的前後不變；Ctrl+Z 復原）' +
+      (skipped.length ? '　已經在那裡／不能移：' + skipped.join('、') : '') + this.tabOrderNote(orig, text), 8000);
+    return ok ? { moved, skipped, missing, tabNote: !!this.tabOrderNote(orig, text) } : null;
+  }
+
+  /**
+   * 選取這裡的元件… (Blend "Set Current Selection": "displays all objects in the hierarchy, starting with the object
+   * that was right-clicked"; Blend 2012: "a list of all objects, in Z order ... under the location that you clicked"):
+   * the components under the last right-click, the top one first, the form last -- one picked = selected.
+   */
+  async cmdSelectHere() {
+    const d = this.active;
+    if (!d) return null;
+    const rep = await d.request({ type: 'stackAt' }, 3000);
+    const items = rep && Array.isArray(rep.items) ? rep.items : [];
+    if (!items.length) { vscode.window.setStatusBarMessage('$(info) 先在設計畫面上按右鍵（那一點底下的元件會列出來）', 5000); return null; }
+    const pick = await vscode.window.showQuickPick(items.map((x, i) => ({
+      label: (i ? '' : '$(arrow-right) ') + (x.id === '@form' ? '表單' : x.id), description: x.cls || x.tag || '', detail: x.sel ? '（目前選取的）' : undefined, x,
+    })), { placeHolder: '選取這裡的元件（最上面的在前面）' });
+    if (!pick) return null;
+    d.post({ type: 'selectId', id: pick.x.id, origin: 'editor' });
+    return { id: pick.x.id, of: items.map(x => x.id) };
+  }
+
+  /**
+   * WPF document outline drag and drop: `ids` onto `target` (a component tree node;
+   * null = the empty area = the form). Onto a container (TPanel / TGroupBox /
+   * TTabSheet / the form) they move into it -- at its end, so on top; onto any other
+   * component they move next to it, into its parent. Their left/top numbers stay
+   * (they now count from the new container). One WorkspaceEdit, the page re-drawn.
+   */
+  async cmdReparent(ids, target, pos) {
+    const d = this.active;
+    if (!d) return null;
+    ids = ids.filter(id => id && id !== '@form');
+    if (!ids.length) return null;
+    const tId = !target ? '@form' : target.isForm ? '@form' : target.id;
+    if (!tId) return null;
+    if (this.refuseLocked(d, ids, '移動')) return null;
+    // never into itself or into something inside it
+    const rowOf = id => d.treeData.find(r => (id === '@form' ? r[7] : r[2] === id));
+    for (let row = rowOf(tId); row; row = row[1] ? d.treeData.find(r => r[0] === row[1]) : null) {
+      if (!row[7] && ids.includes(row[2])) { this.refuseEdit(d, '不能把「' + row[2] + '」放進它自己裡面。'); return null; }
+    }
+    const pi = await d.info;
+    const container = tId === '@form' || toolbox.CONTAINERS.test(this.classOf(d, pi, tId));
+    const text = d.doc.getText();
+    const us = this.unitsFor(text, ids);
+    if (us.error) { this.refuseEdit(d, us.error); return null; }
+    let at, lineOf;
+    if (container) {
+      // (AI 20261001, 0.136: into a tab sheet by its .dfm name -- WPF / Blend reparent into a TabItem; the body of a page
+      // without a form root)
+      const tag = htmledit.containerTagOf(text, tId);
+      at = tag ? htmlblock.insideEnd(text, tag) : -1;
+      lineOf = at;
+    } else {
+      const tu = this.unitFor(text, tId);
+      at = tu ? tu.end : -1;
+      lineOf = tu ? tu.start : -1;
+    }
+    if (at < 0) { this.refuseEdit(d, '找不到「' + tId + '」在原始碼的位置（或沒有正常結束），沒有移動。'); return null; }
+    if (us.units.some(u => u.start < at && at < u.end)) { this.refuseEdit(d, '不能把元件放進它自己裡面。'); return null; }
+    const parts = us.units.map(u => ({ range: htmlblock.removeRange(text, u.start, u.end).range, repl: '' }));
+    // pos (a drop on the design surface): where each one goes in the new container, { id: { left, top } }
+    const htmlOf = u => {
+      const p = pos && pos[u.id], at0 = p ? htmlblock.firstPx(u.html) : null;
+      return p && at0 && typeof at0.left === 'number' && typeof at0.top === 'number'
+        ? htmlblock.offsetBlock(u.html, Math.round(p.left) - at0.left, Math.round(p.top) - at0.top) : u.html;
+    };
+    const ls = text.lastIndexOf('\n', at - 1) + 1;
+    let repl;
+    if (container && !text.slice(ls, at).trim()) {
+      const ind = htmlblock.indentAt(text, at) + '  ';
+      repl = us.units.map(u => ind + htmlOf(u) + '\n').join('');
+      at = ls;
+    } else {
+      const ind = htmlblock.indentAt(text, lineOf) + (container ? '  ' : '');
+      repl = us.units.map(u => '\n' + ind + htmlOf(u)).join('');
+    }
+    // the insertion must not fall inside what is taken out
+    if (parts.some(p => p.range[0] < at && at < p.range[1])) { this.refuseEdit(d, '放的位置在要移走的那一段裡面，沒有移動。'); return null; }
+    parts.push({ range: [at, at], repl });
+    d.lastSelId = ids[0];
+    const ok = await this.applyStructural(d, parts);
+    if (ok) {
+      vscode.window.setStatusBarMessage('$(move) ' + us.units.map(u => u.id).join('、') + (container ? ' 移進 ' + (tId === '@form' ? '表單' : tId) : ' 移到 ' + tId + ' 旁邊') +
+        (pos ? '（放在放開的地方；Ctrl+Z 復原）' : '（left/top 數值沒變，現在從新的上層算起；Ctrl+Z 復原）'), 7000);
+    }
+    return ok ? { moved: us.units.map(u => u.id), into: container ? tId : null, after: container ? null : tId } : null;
+  }
+
+  /**
+   * Blend: "Reparent an object: drag the object over a layout panel and press Alt" -- the design surface let the
+   * selection go with Alt held: targets = the id'd elements under the pointer (innermost first, the form last, each
+   * with the pointer in its own child coordinates), offs = where each one's top-left is from the pointer. The first
+   * container takes them, at the place they were let go; the container they are already in = just that move.
+   */
+  async cmdReparentDrop(d, m) {
+    if (this.active !== d) this.setActive(d);
+    const offs = Array.isArray(m && m.offs) ? m.offs.filter(o => o && typeof o.id === 'string' && o.id && o.id !== '@form') : [];
+    const ids = offs.map(o => o.id);
+    if (!ids.length || !Array.isArray(m.targets)) return null;
+    const pi = await d.info;
+    const text = d.doc.getText();
+    const t = m.targets.find(g => g && !(typeof g.id === 'string' && ids.includes(g.id)) &&
+      (g.pane || g.id === '@form' || (typeof g.id === 'string' && toolbox.CONTAINERS.test(this.classOf(d, pi, g.id, text))))) || null;
+    if (!t) { this.refuseEdit(d, '放開的地方沒有可以放進去的容器（Panel、GroupBox 或表單），沒有換。'); return null; }
+    // (0.136: a sheet the page names (its .dfm name) takes them like a Panel; only an unnamed one is refused)
+    if (t.pane && !t.id) { this.refuseEdit(d, '分頁（TabSheet）在 HTML 裡沒有名稱，不能用拖的換進去：在元件樹把它拖到那個分頁裡的元件上。'); return null; }
+    const pos = {};
+    for (const o of offs) pos[o.id] = { left: Math.round((+t.x || 0) + (+o.dx || 0)), top: Math.round((+t.y || 0) + (+o.dy || 0)) };
+    const parentOf = id => {
+      const row = d.treeData.find(r => r[2] === id);
+      const pr = row && row[1] != null ? d.treeData.find(r => r[0] === row[1]) : null;
+      return pr ? (pr[7] ? '@form' : pr[2]) : null;
+    };
+    if (ids.every(id => parentOf(id) === t.id)) {
+      // already in it: only the move (ONE batch edit, from the source's positions)
+      d.post({ type: 'editMany', items: ids.map(id => ({ id, type: 'setLayout', left: pos[id].left, top: pos[id].top, force: true })) });
+      return { same: true, into: t.id, pos };
+    }
+    const r = await this.cmdReparent(ids, t.id === '@form' ? null : { id: t.id }, pos);
+    return r ? Object.assign({ pos }, r) : null;
+  }
+
+  /**
+   * WPF / Blend "Group Into": the selected components (all in one parent) get a new
+   * TPanel around them -- no border, no background, exactly their bounding box -- and
+   * count from it: on the screen nothing moves. One WorkspaceEdit, the panel selected.
+   */
+  /** 0.160 WPF's Group Into: pick the container (Panel / GroupBox), then group. kind: 'TPanel' | 'TGroupBox' (tests). */
+  async cmdGroupInto(kind) {
+    let k = kind;
+    if (!k) {
+      const pick = await vscode.window.showQuickPick([
+        { label: '$(layout-panel) Panel', description: '面板（沒有標題框）', kind: 'TPanel' },
+        { label: '$(group-by-ref-type) GroupBox', description: '群組框（有標題的框）', kind: 'TGroupBox' },
+      ], { placeHolder: '把選取的元件放進哪一種新容器？（WPF 的 Group Into）' });
+      if (!pick) return null;
+      k = pick.kind;
+    }
+    return this.cmdGroup(k === 'TGroupBox' ? 'TGroupBox' : 'TPanel');
+  }
+
+  async cmdGroup(kind) {
+    const d = this.active;
+    if (!d) return null;
+    const isGb = kind === 'TGroupBox';
+    const word = isGb ? 'GroupBox' : 'Panel';
+    const ids = this.selIds(d);
+    if (!ids.length) { vscode.window.setStatusBarMessage('$(info) 先選要放進新 ' + word + ' 的元件（可以多選）', 5000); return null; }
+    if (this.refuseLocked(d, ids, '放進新 ' + word)) return null;
+    const text = d.doc.getText();
+    const us = this.unitsFor(text, ids);
+    if (us.error) { this.refuseEdit(d, us.error); return null; }
+    const parents = us.units.map(u => htmlblock.parentOf(text, u.start));
+    if (!parents.every(p => p && parents[0] && p.tag.start === parents[0].tag.start)) {
+      this.refuseEdit(d, '要放進同一個新 Panel 的元件必須在同一層（同一個上層容器裡）。'); return null;
+    }
+    // drawn sizes (a label without a width is as wide as its text): the probe measures
+    const reply = await d.request({ type: 'lookAll', ids: us.units.map(u => u.id) }, 5000);
+    const lay = new Map(((reply && reply.items) || []).map(it => [it.id, it.lay]));
+    let minL = Infinity, minT = Infinity, maxR = -Infinity, maxB = -Infinity;
+    for (const u of us.units) {
+      const p = htmlblock.firstPx(u.html);
+      const l = lay.get(u.id);
+      const w = p && p.width !== null ? p.width : l && typeof l.width === 'number' ? l.width : null;
+      const h = p && p.height !== null ? p.height : l && typeof l.height === 'number' ? l.height : null;
+      if (!p || p.left === null || p.top === null || w === null || h === null) {
+        this.refuseEdit(d, '「' + u.id + '」的位置不是寫在自己 style 裡的 px 數值（或量不到大小），不能放進新 Panel。'); return null;
+      }
+      minL = Math.min(minL, p.left); minT = Math.min(minT, p.top);
+      maxR = Math.max(maxR, p.left + w); maxB = Math.max(maxB, p.top + h);
+    }
+    const used = new Set(pageinfo.collectIds(text).concat(d.treeData.map(r => r[2]).filter(Boolean)));
+    const pid = toolbox.newName(word, used);
+    let html, box;
+    if (isGb) {
+      // a GroupBox (the generator's fieldset.gbx: its 2px border, the caption above): 8px round them, 16px above for the
+      // caption; the children in its <div class="cli"> -- their place on the screen kept (the border counted, as Ungroup does)
+      const B = 2, gl = Math.max(0, minL - 8 - B), gt = Math.max(0, minT - 16 - B);
+      const gw = Math.round(maxR - gl + 8 + B), gh = Math.round(maxB - gt + 8 + B);
+      const inner = us.units.map(u => htmlblock.offsetBlock(u.html, -(gl + B), -(gt + B))).join('');
+      html = '<fieldset class="gbx" id="' + pid + '" style="position:absolute;left:' + gl + 'px;top:' + gt + 'px;width:' + gw + 'px;height:' + gh + 'px;--gbi:2px 3px 3px 2px;" title="' + pid + ' : TGroupBox">' +
+        '<legend style="background:var(--panel,#ece9d8);">' + pid + '</legend><div class="cli" style="position:absolute;inset:0;overflow:hidden;">' + inner + '</div></fieldset>';
+      box = { left: gl, top: gt, width: gw, height: gh };
+    } else {
+      const inner = us.units.map(u => htmlblock.offsetBlock(u.html, -minL, -minT)).join('');
+      html = '<div class="pnl" id="' + pid + '" style="position:absolute;left:' + minL + 'px;top:' + minT + 'px;width:' + Math.round(maxR - minL) + 'px;height:' +
+        Math.round(maxB - minT) + 'px;" title="' + pid + ' : TPanel"><span class="pnlCap" style="font-size:11px;"></span>' + inner + '</div>';
+      box = { left: minL, top: minT, width: Math.round(maxR - minL), height: Math.round(maxB - minT) };
+    }
+    // the panel takes the first one's place in the source; the others go
+    const first = us.units[0];
+    const parts = [{ range: [first.start, first.end], repl: html }].concat(
+      us.units.slice(1).map(u => ({ range: htmlblock.removeRange(text, u.start, u.end).range, repl: '' })));
+    d.lastSelId = pid;
+    const ok = await this.applyStructural(d, parts);
+    if (ok) vscode.window.setStatusBarMessage('$(group-by-ref-type) ' + us.units.map(u => u.id).join('、') + ' 放進新的 ' + pid + '（畫面上沒動；Ctrl+Z 復原）', 6000);
+    return ok ? { panel: pid, kind: isGb ? 'TGroupBox' : 'TPanel', moved: us.units.map(u => u.id), box } : null;
+  }
+
+  /**
+   * Blend "Ungroup": the selected TPanel / TGroupBox's children move out into its
+   * parent (their left/top plus the container's place and border: on the screen
+   * nothing moves) and the container goes. One WorkspaceEdit.
+   */
+  async cmdUngroup() {
+    const d = this.active;
+    if (!d) return null;
+    const id = this.selIds(d)[0];
+    const pi = await d.info;
+    const cls = id ? this.classOf(d, pi, id) : '';
+    if (!id || !/^(TPanel|TGroupBox)$/.test(cls)) { vscode.window.setStatusBarMessage('$(info) 先選一個 Panel 或 GroupBox（它裡面的元件會移到外面）', 5000); return null; }
+    if (this.refuseLocked(d, [id], '解除群組')) return null;
+    const text = d.doc.getText();
+    const u = this.unitFor(text, id);
+    const tag = htmledit.startTagOf(text, id);
+    if (!u || !tag) { this.refuseEdit(d, '原始碼裡找不到「' + id + '」，沒有動。'); return null; }
+    // the children live in it, or in its <div class="cli">
+    let holder = { tag, range: [u.start, u.end] };
+    const cliAt = htmlblock.insideEnd(text, tag);
+    const cli = htmlblock.parentOf(text, cliAt);
+    if (cli && cli.tag.start !== tag.start && cli.tag.start > tag.start && /\bclass\s*=\s*["'][^"']*\bcli\b/.test(cli.tag.text)) holder = cli;
+    const kids = htmlblock.childrenOf(text, holder).filter(k => k.name !== 'legend' && !/\bclass\s*=\s*["'][^"']*\bpnlCap\b/.test(k.text) &&
+      !/\bclass\s*=\s*["'][^"']*\bcli\b/.test(k.text));
+    if (!kids.length) { vscode.window.setStatusBarMessage('$(info) ' + id + ' 裡面沒有元件', 5000); return null; }
+    const own = htmlblock.firstPx(u.html);
+    if (!own || own.left === null || own.top === null) { this.refuseEdit(d, '「' + id + '」的位置不是 px 數值，不能解除群組。'); return null; }
+    const reply = await d.request({ type: 'lookAll', ids: [id] }, 5000);
+    const l = reply && reply.items && reply.items[0] ? reply.items[0].lay : null;
+    const cl = l && typeof l.cl === 'number' ? l.cl : 0, ct = l && typeof l.ct === 'number' ? l.ct : 0;
+    const blocks = kids.map(k => text.slice(k.start, k.end));
+    const bad = blocks.find(b => { const p = htmlblock.firstPx(b); return !p || p.left === null || p.top === null; });
+    if (bad) { this.refuseEdit(d, '裡面有元件的位置不是 px 數值，不能解除群組。'); return null; }
+    const out = blocks.map(b => htmlblock.offsetBlock(b, own.left + cl, own.top + ct));
+    const ind = htmlblock.indentAt(text, u.start);
+    const repl = out.join('\n' + ind);
+    const firstIds = htmlblock.idsIn(blocks[0]);
+    d.lastSelId = firstIds[0] || null;
+    const ok = await this.applyStructural(d, [{ range: [u.start, u.end], repl }]);
+    if (ok) vscode.window.setStatusBarMessage('$(ungroup-by-ref-type) ' + id + ' 解除群組：' + blocks.length + ' 個元件移到外面（畫面上沒動；Ctrl+Z 復原）', 6000);
+    return ok ? { removed: id, out: [].concat(...blocks.map(b => htmlblock.idsIn(b).slice(0, 1))), shift: { x: own.left + cl, y: own.top + ct } } : null;
+  }
+
+  /**
+   * 工具箱 (WPF Toolbox): a new component of class `cls` (the generator's markup, a
+   * BCB6-style name Label1 ...): into the selected container (TPanel / TGroupBox /
+   * TTabSheet / the form) at 8,8 -- moved on while that place is taken --, else just
+   * below the selected component, next to it in the source (same tab sheet / group).
+   */
+  async cmdAdd(cls, place) {
+    const d = this.active;
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
+    const item = toolbox.itemOf(cls);
+    if (!item) return null;
+    const text = d.doc.getText();
+    const pi = await d.info;
+    const info = d.sel && d.sel.info;
+    // (place: from the design surface -- { into, x, y, w, h }, the container and the point it was put at)
+    // (1006: a pinned container -- Blend's Pin active container -- is where a new one goes, whatever is selected)
+    const pin = !place ? this.pinnedOf(d, text) : null;
+    const selId = place ? place.into : pin || (info && info.id ? info.id : '@form');
+    const container = !!place || selId === '@form' || toolbox.CONTAINERS.test(this.classOf(d, pi, selId, text));
+    const used = new Set(pageinfo.collectIds(text).concat(d.treeData.map(r => r[2]).filter(Boolean)));
+    const id = toolbox.newName(item.base, used);
+    let at, x = 8, y = 8, lineOf, into = null, atEnd = false;
+    if (container) {
+      // (AI 20261001, 0.135: a tab sheet by its .dfm name, and '@form' on a page without a form root = its body)
+      const tag = htmledit.containerTagOf(text, selId);
+      at = tag ? htmlblock.insideEnd(text, tag) : -1;
+      lineOf = at;
+      into = selId;
+      if (place) { x = Math.max(0, Math.round(place.x)); y = Math.max(0, Math.round(place.y)); }
+      // 8,8 unless a child already stands there: then 16 px further down-right
+      const inner = tag && at > 0 ? text.slice(tag.end, at) : '';
+      for (let k = 0; !place && k < 20 && new RegExp('left:' + x + 'px;top:' + y + 'px').test(inner); k++) { x += 16; y += 16; }
+    } else {
+      const u = this.unitFor(text, selId);
+      // WPF: "the element is automatically placed in front of other elements in the active container element" -- the
+      // end of the selected one's container (AI 20261001: it went right after the selected one, under its later siblings);
+      // where: under the selected one, as before
+      const par = u ? htmlblock.parentOf(text, u.start) : null;
+      const pEnd = par && par.tag ? htmlblock.insideEnd(text, par.tag) : -1;
+      atEnd = !!(u && pEnd > u.end);
+      at = atEnd ? pEnd : (u ? u.end : -1);
+      lineOf = u ? u.start : -1;
+      const lay = info && info.layout;
+      if (lay && typeof lay.left === 'number' && typeof lay.top === 'number') { x = Math.round(lay.left); y = Math.round(lay.top + (lay.height || 0) + 8); }
+    }
+    if (at < 0) { this.refuseEdit(d, '找不到要放到哪裡（「' + selId + '」在原始碼裡找不到或沒有正常結束），沒有新增。'); return null; }
+    const w = place && place.w >= 4 ? Math.round(place.w) : 0, h = place && place.h >= 4 ? Math.round(place.h) : 0;
+    const html = item.html(id, x, y, w, h);
+    let repl;
+    const ls = text.lastIndexOf('\n', at - 1) + 1;
+    if ((container || atEnd) && !text.slice(ls, at).trim()) {
+      // (on its own line before the container's end tag: indented as the selected one, a sibling)
+      repl = (container ? htmlblock.indentAt(text, at) + '  ' : htmlblock.indentAt(text, lineOf)) + html + '\n';
+      at = ls;
+    } else {
+      repl = '\n' + htmlblock.indentAt(text, lineOf) + (container ? '  ' : '') + html;
+    }
+    d.lastSelId = id;
+    const ok = await this.applyStructural(d, [{ range: [at, at], repl }]);
+    if (ok) vscode.window.setStatusBarMessage('$(add) 新增了 ' + id + ' : ' + item.cls + (into ? '（在 ' + into + ' 裡）' : '（在 ' + selId + ' 下面）') + '（Ctrl+Z 復原）', 6000);
+    return ok ? { id, cls: item.cls, into, after: into ? null : selId, x, y, w, h } : null;
+  }
+
+  /**
+   * 改名稱 (WPF's Name field, F2): the selected component's id on the page -- its start tag,
+   * the generated title, <label for> -- and, like BCB6, its caption when that still is the
+   * old name. A name the .dfm has, or one the page's JS uses, is asked about first: those
+   * links are not renamed (the DFM, the C++ handlers, the web code stay as they are).
+   *   arg: the new name (tests / other code; else an input box), confirmed: skip the question
+   */
+  async cmdRename(arg, confirmed) {
+    const d = this.active;
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
+    const info = d.sel && d.sel.info;
+    const id = info && info.id;
+    if (!id || id === '@form') { vscode.window.setStatusBarMessage('$(info) 先選一個元件（表單本身的名稱不在這裡改）', 5000); return null; }
+    const text = d.doc.getText();
+    const used = new Set(pageinfo.collectIds(text).concat(d.treeData.map(r => r[2]).filter(Boolean)));
+    const bad = v => {
+      const s = String(v || '').trim();
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(s)) return '名稱只能用英文字母、數字和 _，而且不能用數字開頭（BCB6 的規則）';
+      if (s !== id && used.has(s)) return '這一頁已經有「' + s + '」了';
+      return null;
+    };
+    let nu = typeof arg === 'string' ? arg.trim() : await vscode.window.showInputBox({
+      prompt: '「' + id + '」的新名稱（id）', value: id, validateInput: v => bad(v),
+    });
+    if (nu == null) return null;
+    nu = String(nu).trim();
+    if (nu === id) return null;
+    const why = bad(nu);
+    if (why) { this.refuseEdit(d, why + '，沒有改。'); return null; }
+    const pi = await d.info;
+    const inDfm = !!(pi.ir && pi.ir.byName.has(id));
+    const refs0 = await this.renameRefs(d, pi, id);
+    const nUse = refs0.length;
+    if (inDfm && confirmed !== true) {
+      const msg = '把「' + id + '」改成「' + nu + '」？\n\n' +
+        '・BCB6 的 .dfm 裡有「' + id + '」：改名後這個元件就對不到 DFM（與 DFM 的差異、事件、C++ 程式都對不起來）。\n' +
+        '\nCtrl+Z 可以復原。';
+      const pick = await vscode.window.showWarningMessage(msg, { modal: true }, '改名稱');
+      if (pick !== '改名稱') return null;
+    }
+    const edits = htmlblock.renameEdits(text, id, nu, { caption: true });
+    if (!edits) { this.refuseEdit(d, '原始碼裡找不到「' + id + '」（可能是頁面 JS 產生的元件），沒有改。'); return null; }
+    // the page's designer-kept event block (網頁事件): its getElementById('old') follow
+    for (const x of jsevents.renameIdEdits(text, id, nu)) edits.push({ range: [x.s, x.e], repl: x.text });
+    // 0.154 (WPF: renaming x:Name renames its uses): the page's JS that names it -- picked from a list; a script other
+    // pages load too is not ticked (another page may mean its own element of that name). Esc = no rename at all.
+    const overlaps = r => edits.some(e => r.start < e.range[1] && r.end > e.range[0]);
+    const refs = refs0.filter(r => !(r.isPage && overlaps(r)));
+    let chosen = [];
+    if (refs.length) {
+      if (confirmed === true) chosen = refs.filter(r => r.pages <= 1);
+      else {
+        const items = refs.slice().sort((a, b) => (a.pages > 1) - (b.pages > 1)).map(r => ({
+          label: (r.pages > 1 ? '$(warning) ' : '$(file-code) ') + path.basename(r.file) + ':' + r.line,
+          description: r.snip,
+          detail: r.isPage ? '這一頁自己的程式' : r.pages > 1 ? '共用：' + r.pages + ' 頁都載入這支程式，別頁可能也有叫「' + id + '」的元件——確定再勾' : '只有這一頁載入這支程式',
+          picked: r.pages <= 1, ref: r,
+        }));
+        const sel = await vscode.window.showQuickPick(items, {
+          canPickMany: true, title: '改名稱「' + id + '」→「' + nu + '」：網頁程式裡用到它的地方',
+          placeHolder: '勾的會一起改（共用的程式預設不勾）；Enter＝改名，Esc＝都不改',
+        });
+        if (sel == null) return null;
+        chosen = (Array.isArray(sel) ? sel : [sel]).map(i => i.ref).filter(Boolean);
+      }
+    }
+    const swap = r => r.text.replace(id, nu);
+    for (const r of chosen.filter(x => x.isPage)) edits.push({ range: [r.start, r.end], repl: swap(r) });
+    d.lastSelId = nu;
+    const ok = await this.applyStructural(d, edits.map(e => ({ range: e.range, repl: e.repl })));
+    // the other scripts: one more edit (VS Code keeps an undo per file), matched again on the open document's own text
+    let webEdited = chosen.filter(x => x.isPage).length;
+    const ext = chosen.filter(x => !x.isPage);
+    if (ok && ext.length) {
+      const we = new vscode.WorkspaceEdit();
+      const byFile = new Map();
+      for (const r of ext) { if (!byFile.has(r.file)) byFile.set(r.file, []); byFile.get(r.file).push(r); }
+      for (const [file, rs] of byFile) {
+        try {
+          const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+          const t = doc.getText(), re = web.idMentionRe(id), ks = new Set(rs.map(r => r.k));
+          let m, k = 0;
+          while ((m = re.exec(t))) {
+            if (ks.has(k)) { we.replace(doc.uri, new vscode.Range(doc.positionAt(m.index), doc.positionAt(m.index + m[0].length)), m[0].replace(id, nu)); webEdited++; }
+            k++;
+            if (m[0].length === 0) re.lastIndex++;
+          }
+        } catch (e) { this.log('改名：' + file + ' 沒有改到（' + (e && e.message || e) + '）'); }
+      }
+      if (!(await vscode.workspace.applyEdit(we))) vscode.window.showWarningMessage('網頁程式裡的「' + id + '」沒有改成（HTML 已經改了）：' + Array.from(byFile.keys()).map(f => path.basename(f)).join('、'));
+    }
+    if (ok) {
+      // the designer's own marks (the eye, the lock) follow the name
+      if (d.designHidden && d.designHidden.has(id)) this.applyDesignHidden(d, Array.from(d.designHidden).map(x => (x === id ? nu : x)));
+      if (d.designLocked && d.designLocked.has(id)) this.applyDesignLocked(d, Array.from(d.designLocked).map(x => (x === id ? nu : x)));
+      vscode.window.setStatusBarMessage('$(edit) 「' + id + '」改名為「' + nu + '」（Ctrl+Z 復原）', 6000);
+    }
+    return ok ? { from: id, to: nu, edits: edits.length, inDfm, webUses: nUse, webEdited, chosen: chosen.map(r => path.basename(r.file) + ":" + r.line), shared: refs.filter(r => r.pages > 1).length } : null;
+  }
+
+  /**
+   * WinForms / WPF: a click on a toolbox item picks the tool (the design surface then shows a
+   * crosshair: a click puts it there, a drag also gives its size, Esc gives up); a second
+   * click on the same item within a moment ("double-click") adds it at once, as before.
+   */
+  /**
+   * 1006 (C++Builder Edit > Size): the width and the height of every selected one -- No change / Shrink to smallest /
+   * Grow to largest / a number (page px) -- ONE edit. a (tests): { w, h } as the probe takes them ('shrink' | 'grow' | n).
+   */
+  async cmdSizeDialog(a) {
+    const d = this.active;
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
+    if (!this.selIds(d).length) { vscode.window.setStatusBarMessage('$(info) 先選要改大小的元件（可以多選）', 5000); return null; }
+    let w, h;
+    // (1006 audit: the design surface's menu passes its context object -- only { w, h } (tests) skips the questions)
+    if (a && typeof a === 'object' && !a.kind && ('w' in a || 'h' in a)) { w = a.w; h = a.h; }
+    else {
+      const ask = async which => {
+        const p = await vscode.window.showQuickPick([
+          { label: '不變', v: undefined }, { label: '縮成最小的', description: '選取裡最' + (which === 'w' ? '窄' : '矮') + '的那個', v: 'shrink' },
+          { label: '放到最大的', description: '選取裡最' + (which === 'w' ? '寬' : '高') + '的那個', v: 'grow' },
+          { label: '合乎內容', description: '剛好放得下它的文字（Blend 的 Auto Size）', v: 'fit' }, { label: '指定數值…', v: 'num' },
+        ], { placeHolder: '大小（C++Builder Edit > Size）：' + (which === 'w' ? '寬度' : '高度') });
+        if (!p) return null;
+        if (p.v !== 'num') return { v: p.v };
+        const t = await vscode.window.showInputBox({ prompt: (which === 'w' ? '寬度' : '高度') + '（px）', validateInput: x => (/^\s*\d{1,4}\s*$/.test(x) && +x >= 2 ? null : '打 2 以上的整數') });
+        return t == null ? null : { v: +t };
+      };
+      const aw = await ask('w');
+      if (!aw) return null;
+      const ah = await ask('h');
+      if (!ah) return null;
+      w = aw.v; h = ah.v;
+    }
+    if (w === undefined && h === undefined) return null;
+    d.post({ type: 'align', how: 'sizeOp', w, h });
+    return { w, h };
+  }
+
+  /** 1006 (C++Builder Edit > Scale): the selection's left, top, width and height times a percentage (25-400), ONE edit. */
+  async cmdScaleDialog(a) {
+    const d = this.active;
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
+    if (!this.selIds(d).length) { vscode.window.setStatusBarMessage('$(info) 先選要縮放的元件（可以多選；Ctrl+A＝全部）', 5000); return null; }
+    let pct = typeof a === 'number' ? a : null;
+    if (pct == null) {
+      const t = await vscode.window.showInputBox({ prompt: '比例縮放（C++Builder Edit > Scale）：位置和大小乘上這個百分比（從容器左上角算）', value: '100',
+        validateInput: x => (/^\s*\d{2,3}\s*$/.test(x) && +x >= 25 && +x <= 400 ? null : '打 25～400') });
+      if (t == null) return null;
+      pct = +t;
+    }
+    if (!(pct >= 25 && pct <= 400) || pct === 100) return null;
+    d.post({ type: 'align', how: 'sizeOp', pct });
+    return { pct };
+  }
+
+  /** 1006 (C++Builder: Shift + a tool): the tool stays in the hand -- every click on the surface puts one; Esc, a right
+   *  click or the Pointer puts it back. (A tree item cannot tell Shift: this is the tool's right-click menu.) */
+  toolboxArmSticky(cls) {
+    const item = toolbox.itemOf(cls);
+    const d = this.active;
+    if (!item || cls === POINTER.cls) return null;
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
+    this.lastArm = null;
+    d.armed = cls;
+    d.post({ type: 'placeArm', cls, label: item.label, sticky: true });
+    d.panel.reveal(d.panel.viewColumn, false);
+    vscode.window.setStatusBarMessage('$(add) 連續放置 ' + item.cls + '：每點一下（或拖一個框）放一個；Esc／右鍵／工具箱的「指標」＝放下', 10000);
+    return { armed: cls, sticky: true };
+  }
+
+  toolboxArm(cls) {
+    // (Enter in the toolbox adds it -- the select that Enter makes is not a pick-up)
+    if (this.toolboxEnter && Date.now() - this.toolboxEnter < 500) return null;
+    if (cls === POINTER.cls) return this.toolboxPointer();
+    const item = toolbox.itemOf(cls);
+    const d = this.active;
+    if (!item) return null;
+    const now = Date.now();
+    const dbl = this.lastArm && this.lastArm.cls === cls && now - this.lastArm.t < 450;
+    this.lastArm = dbl ? null : { cls, t: now };
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
+    if (dbl) { d.post({ type: 'placeArm', cls: null }); this.toolboxBackToPointer(); return this.cmdAdd(cls); }
+    d.armed = cls;
+    d.post({ type: 'placeArm', cls, label: item.label });
+    d.panel.reveal(d.panel.viewColumn, false);
+    vscode.window.setStatusBarMessage('$(add) 放置 ' + item.cls + '：在設計畫面上點一下放在那裡（拖一個框＝連大小），Esc 取消；連點兩下工具箱＝直接加', 8000);
+    return { armed: cls };
+  }
+
+  /** WPF Toolbox "Pointer": the picked-up tool is put back; the surface selects again. */
+  toolboxPointer() {
+    this.lastArm = null;
+    const d = this.active;
+    const had = !!(d && d.armed);
+    if (d) { d.armed = null; d.post({ type: 'placeArm', cls: null }); }
+    vscode.window.setStatusBarMessage('$(inspect) 指標：' + (had ? '放下拿起的工具，' : '') + '設計畫面回到選取', 5000);
+    return { pointer: true, had };
+  }
+
+  /**
+   * WPF: once a tool is put down (or given up), the Toolbox's selection is Pointer again. Only when
+   * the toolbox is showing (a reveal would open it) -- its selection is not a click, nothing runs.
+   */
+  toolboxBackToPointer() {
+    const tv = this.toolboxView;
+    if (!tv || !tv.visible) return;
+    try { Promise.resolve(tv.reveal(POINTER, { select: true, focus: false })).catch(() => {}); } catch (e) { /* not showing */ }
+  }
+
+  /**
+   * The design surface put the armed tool down: targets = the id'd elements under the point,
+   * innermost first, each with the point in its own child coordinates ('@form' last). The
+   * first container (Panel / GroupBox / tab sheet ... or the form) takes it.
+   */
+  async cmdPlace(d, m) {
+    const item = toolbox.itemOf(m && m.cls);
+    // (1006: placed with Shift, or armed to stay -- the tool is still in the hand: the toolbox stays on it)
+    if (!(m && m.keep)) { d.armed = null; this.toolboxBackToPointer(); }
+    // cmdAdd works on the active designer: the one it was put down on
+    if (this.active !== d) this.setActive(d);
+    if (!item || !Array.isArray(m.targets) || !m.targets.length) return null;
+    const pi = await d.info;
+    const text = d.doc.getText();
+    // (1006: put down inside the pinned container = into it, not into a container nested in it)
+    const pinT = this.pinnedOf(d, text) ? m.targets.find(g => g && g.id === d.pinned) : null;
+    const t = pinT || m.targets.find(g => g && (g.pane || g.id === '@form' || (typeof g.id === 'string' && toolbox.CONTAINERS.test(this.classOf(d, pi, g.id, text))))) || null;
+    if (!t) { this.refuseEdit(d, '這裡沒有可以放元件的容器（Panel、GroupBox 或表單），沒有新增。'); return null; }
+    // a generated tab sheet has no id: by its .dfm name (0.135; WPF puts a control dropped on a TabItem into it);
+    // a sheet the page does not name (no TTabSheet title) still cannot be told apart
+    if (t.pane && !t.id) { this.refuseEdit(d, '分頁（TabSheet）裡不能用點的放：先選那個分頁上的一個元件，再連點兩下工具箱（新的會放在它下面、同一個分頁裡）。'); return null; }
+    return this.cmdAdd(item.cls, { into: t.id, x: +t.x || 0, y: +t.y || 0, w: +m.w || 0, h: +m.h || 0 });
+  }
+
+  /** The toolbox as a quick pick (the command palette / the design surface's menu). */
+  async cmdAddPick() {
+    const pick = await vscode.window.showQuickPick(toolbox.ITEMS.map(i => ({ label: i.label, description: i.cls + '　' + i.note, cls: i.cls })),
+      { placeHolder: '新增哪一種元件？（放進選取的容器，或放在選取元件的下面）' });
+    return pick ? this.cmdAdd(pick.cls) : null;
+  }
+
+  /** Ctrl+C: the selected elements' HTML, for Paste (also on the system clipboard as text). */
+  async cmdCopy() {
+    const d = this.active;
+    if (!d) return null;
+    const ids = this.selIds(d);
+    if (!ids.length) { vscode.window.setStatusBarMessage('$(info) 先選一個元件（表單本身不能複製）', 5000); return null; }
+    const us = this.unitsFor(d.doc.getText(), ids);
+    if (us.error) { this.refuseEdit(d, us.error); return null; }
+    this.clip = { blocks: us.units.map(u => u.html), ids: us.units.map(u => u.id), file: d.file };
+    // (1006, VS's Clipboard Ring: the last 10 copies kept -- Ctrl+Shift+V picks one; the same set again = moved to the top)
+    this.clipRing = (this.clipRing || []).filter(c => c.blocks.join('\n') !== this.clip.blocks.join('\n'));
+    this.clipRing.unshift(Object.assign({ at: Date.now() }, this.clip));
+    if (this.clipRing.length > 10) this.clipRing.length = 10;
+    try { await vscode.env.clipboard.writeText(this.clip.blocks.join('\n')); } catch (e) { /* the internal copy is enough */ }
+    vscode.window.setStatusBarMessage('$(copy) 已複製 ' + this.clip.ids.join('、') + '，Ctrl+V 貼上', 5000);
+    return this.clip;
+  }
+
+  /**
+   * 1006 (VS's ▾ beside Undo): the page's last changes, newest first; one picked = the page back to how it was before it
+   * (and before everything after it), as ONE edit -- Ctrl+Z takes that back. idx (tests): which, 0 = the newest.
+   * The page's HTML only (a C++ function an event added stays: its own file's Ctrl+Z).
+   */
+  async cmdUndoHistory(idx) {
+    const d = this.active;
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
+    const h = d.history || [];
+    if (!h.length) { vscode.window.setStatusBarMessage('$(info) 這一頁還沒有改過（開啟之後）', 5000); return null; }
+    const ago = t => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? s + ' 秒前' : Math.round(s / 60) + ' 分鐘前'; };
+    let k = typeof idx === 'number' ? idx : -1;
+    if (k < 0) {
+      const items = h.slice().reverse().map((x, i) => ({ label: (i === 0 ? '$(history) ' : '') + x.label, description: ago(x.at), detail: i ? '回到這一步之前（之後的 ' + (i + 1) + ' 步一起復原）' : '回到這一步之前', i }));
+      const p = await vscode.window.showQuickPick(items, { placeHolder: '復原到哪一步之前？（' + path.basename(d.file) + '；之後 Ctrl+Z 可以再拿回來）' });
+      if (!p) return null;
+      k = p.i;
+    }
+    const step = h[h.length - 1 - k];
+    if (!step) return null;
+    const doc = d.doc;
+    const we = new vscode.WorkspaceEdit();
+    we.replace(doc.uri, new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)), step.before);
+    d.histLabel = '回到「' + step.label + '」之前';
+    const ok = await vscode.workspace.applyEdit(we);
+    if (!ok) { d.histLabel = null; vscode.window.showWarningMessage('沒有復原成（檔案可能是唯讀的）。'); return null; }
+    vscode.window.setStatusBarMessage('$(history) 已回到「' + step.label + '」之前（' + (k + 1) + ' 步；Ctrl+Z 拿回來）', 6000);
+    return { steps: k + 1, label: step.label };
+  }
+
+  /**
+   * 1006 (Blend: Pin active container, Ctrl+Shift+D): the selected container (a Panel, a GroupBox, a tab sheet, the form)
+   * pinned -- every new component (toolbox, paste, template, clipboard ring) goes into it, whatever is selected; the same
+   * again (or nothing / not a container selected) = unpinned. A green dashed outline shows it.
+   */
+  async cmdPinContainer() {
+    const d = this.active;
+    if (!d) return null;
+    const text = d.doc.getText();
+    const pi = await d.info;
+    const info = d.sel && d.sel.info;
+    const id = info && info.id ? info.id : '@form';
+    const isCont = id === '@form' || toolbox.CONTAINERS.test(this.classOf(d, pi, id, text));
+    if (d.pinned && (d.pinned === id || !isCont)) {
+      const was = d.pinned;
+      d.pinned = null; d.post({ type: 'pinned', id: '' });
+      vscode.window.setStatusBarMessage('$(pinned) 取消釘選容器 ' + was, 4000);
+      return { pinned: null };
+    }
+    if (!isCont) { vscode.window.setStatusBarMessage('$(info) 先選一個容器（Panel、GroupBox、分頁或表單）再釘選', 5000); return null; }
+    d.pinned = id; d.post({ type: 'pinned', id });
+    vscode.window.setStatusBarMessage('$(pinned) 新元件都放進 ' + (id === '@form' ? '表單' : id) + '（Ctrl+Shift+D 取消）', 6000);
+    return { pinned: id };
+  }
+  /** The pinned container, if it is still on the page (gone = unpinned). */
+  pinnedOf(d, text) {
+    if (!d || !d.pinned) return null;
+    if (d.pinned === '@form' || htmledit.containerTagOf(text, d.pinned)) return d.pinned;
+    d.pinned = null; d.post({ type: 'pinned', id: '' });
+    return null;
+  }
+
+  /** 1006 (C++Builder Component Templates): the saved ones, [{ name, blocks, ids, from, at }] (globalState: every workspace). */
+  templates() {
+    const gs = this.ctx && this.ctx.globalState;
+    const t = gs ? gs.get('htd.templates') : null;
+    return Array.isArray(t) ? t.filter(x => x && typeof x.name === 'string' && Array.isArray(x.blocks) && x.blocks.length) : [];
+  }
+  async saveTemplates(list) {
+    const gs = this.ctx && this.ctx.globalState;
+    if (gs) await gs.update('htd.templates', list);
+    if (this.toolboxTree) this.toolboxTree.refresh();
+  }
+  /** Right-click 存成工具箱範本…: the selected components' HTML kept as a toolbox item (a name asked; the same name = replaced). */
+  async cmdTemplateSave(name) {
+    const d = this.active;
+    if (!d) return null;
+    const ids = this.selIds(d);
+    if (!ids.length) { vscode.window.setStatusBarMessage('$(info) 先選要存成範本的元件（可以多選；表單本身不行）', 5000); return null; }
+    const us = this.unitsFor(d.doc.getText(), ids);
+    if (us.error) { this.refuseEdit(d, us.error); return null; }
+    let nm = typeof name === 'string' ? name.trim() : '';
+    if (!nm) {
+      const t = await vscode.window.showInputBox({ prompt: '範本名稱（工具箱「我的範本」裡顯示的名字）', value: us.units.map(u => u.id).join('+').slice(0, 40),
+        validateInput: x => (x.trim() ? null : '打一個名稱') });
+      if (t == null) return null;
+      nm = t.trim();
+    }
+    const list = this.templates().filter(x => x.name !== nm);
+    const tpl = { name: nm, blocks: us.units.map(u => u.html), ids: us.units.map(u => u.id), from: path.basename(d.file), at: Date.now() };
+    list.push(tpl);
+    await this.saveTemplates(list);
+    vscode.window.setStatusBarMessage('$(symbol-snippet) 已存成範本「' + nm + '」（工具箱 → 我的範本）', 6000);
+    return tpl;
+  }
+  /** A template from the toolbox: put in like Ctrl+V (into the selected container, else after the selected one; new names). */
+  async cmdTemplateInsert(name) {
+    const t = this.templates().find(x => x.name === name);
+    if (!t) return null;
+    if (!this.active) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
+    const keep = this.clip;
+    this.clip = { blocks: t.blocks.slice(), ids: t.ids.slice(), file: '' };
+    try { return await this.cmdPaste(); } finally { this.clip = keep; this.toolboxBackToPointer(); }
+  }
+  async cmdTemplateDelete(a) {
+    const name = typeof a === 'string' ? a : a && a.template ? a.template.name : null;
+    if (!name) return null;
+    const list = this.templates();
+    if (!list.some(x => x.name === name)) return null;
+    await this.saveTemplates(list.filter(x => x.name !== name));
+    vscode.window.setStatusBarMessage('$(trash) 已刪除範本「' + name + '」', 5000);
+    return { deleted: name };
+  }
+
+  /**
+   * 1006 (VS's Clipboard Ring, Ctrl+Shift+V): one of the last 10 copied / cut sets of components picked and pasted like
+   * Ctrl+V (new names, into the selected container); it becomes the current copy too. idx (tests): which, 0 = newest.
+   */
+  async cmdPasteRing(idx) {
+    const ring = this.clipRing || [];
+    if (!this.active) return null;
+    if (!ring.length) { vscode.window.setStatusBarMessage('$(info) 還沒有複製過元件（Ctrl+C／Ctrl+X 之後才有）', 5000); return null; }
+    let k = typeof idx === 'number' ? idx : -1;
+    if (k < 0) {
+      const ago = t => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? s + ' 秒前' : Math.round(s / 60) + ' 分鐘前'; };
+      const p = await vscode.window.showQuickPick(ring.map((c, i) => ({ label: c.ids.join('、'), description: path.basename(c.file || '') + '　' + ago(c.at), i })),
+        { placeHolder: '貼上哪一組？（最近複製／剪下的 ' + ring.length + ' 組；新的在上）' });
+      if (!p) return null;
+      k = p.i;
+    }
+    const c = ring[k];
+    if (!c) return null;
+    this.clip = { blocks: c.blocks.slice(), ids: c.ids.slice(), file: c.file };
+    return this.cmdPaste();
+  }
+
+  /** Ctrl+X: copy, then delete (asks like Delete when the page's JS uses them). */
+  async cmdCut(arg) {
+    if (this.active && this.refuseLocked(this.active, this.selIds(this.active), '剪下')) return null;
+    const c = await this.cmdCopy();
+    if (!c) return null;
+    return this.cmdDelete(arg, '剪下');
+  }
+
+  /**
+   * Ctrl+V: the copied elements as new ones -- every id made new (spbSave -> spbSave_2),
+   * into the selected container (TPanel / TGroupBox / TTabSheet / the form), else next
+   * to the selected element; 8 px down-right when pasted on the page they came from.
+   */
+  async cmdPaste() {
+    const d = this.active;
+    if (!d) return null;
+    if (!this.clip || !this.clip.blocks.length) { vscode.window.setStatusBarMessage('$(info) 還沒有複製元件（先在設計檢視選元件按 Ctrl+C）', 5000); return null; }
+    const text = d.doc.getText();
+    const pi = await d.info;
+    const info = d.sel && d.sel.info;
+    const pin = this.pinnedOf(d, text);
+    const selId = pin || (info && info.id ? info.id : '@form');
+    const container = !!pin || selId === '@form' || toolbox.CONTAINERS.test(this.classOf(d, pi, selId, text));
+    let at;
+    let lineOf;
+    if (container) {
+      // (AI 20261001, 0.135: a tab sheet by its .dfm name, and '@form' on a page without a form root = its body)
+      const tag = htmledit.containerTagOf(text, selId);
+      at = tag ? htmlblock.insideEnd(text, tag) : -1;
+      lineOf = at;
+    } else {
+      const u = this.unitFor(text, selId);
+      at = u ? u.end : -1;
+      lineOf = u ? u.start : -1;
+    }
+    if (at < 0) { this.refuseEdit(d, '找不到要貼到哪裡（「' + selId + '」在原始碼裡找不到或沒有正常結束），沒有貼上。'); return null; }
+    const used = new Set(pageinfo.collectIds(text).concat(d.treeData.map(r => r[2]).filter(Boolean)));
+    const same = web.samePath(this.clip.file, d.file);
+    const made = [];
+    const blocks = this.clip.blocks.map(b => {
+      const r = htmlblock.renameIds(b, used);
+      made.push(...r.map.values());
+      return same ? htmlblock.offsetBlock(r.html, 8, 8) : r.html;
+    });
+    let repl;
+    const ls = text.lastIndexOf('\n', at - 1) + 1;
+    if (container && !text.slice(ls, at).trim()) {
+      // the container's end tag starts its line: whole lines, just before it
+      const ind = htmlblock.indentAt(text, at) + '  ';
+      repl = blocks.map(b => ind + b + '\n').join('');
+      at = ls;
+    } else {
+      // "\n" + indent + block: Delete takes the same break away again (htmlblock.removeRange)
+      const ind = htmlblock.indentAt(text, lineOf) + (container ? '  ' : '');
+      repl = blocks.map(b => '\n' + ind + b).join('');
+    }
+    // afterwards the first new element is selected
+    d.lastSelId = made[0] || d.lastSelId;
+    const ok = await this.applyStructural(d, [{ range: [at, at], repl }]);
+    if (ok) vscode.window.setStatusBarMessage('$(clippy) 已貼上 ' + made.join('、') + (container ? '（在 ' + selId + ' 裡）' : '') + '（Ctrl+Z 復原）', 6000);
+    return ok ? { made, into: container ? selId : null, after: container ? null : selId } : null;
+  }
+
+  /**
+   * WinForms / WPF: Ctrl+drag on the design surface = the selection copied, the copies where it was let
+   * go (dx / dy px from the originals, which stay); each copy right after its original -- the same
+   * container, drawn over it -- with new names (spbSave -> spbSave_2); the first copy selected; ONE undo.
+   */
+  async cmdCopyDrop(d, m) {
+    if (this.active !== d) this.setActive(d);
+    const ids = Array.isArray(m && m.ids) ? m.ids.filter(x => typeof x === 'string' && x && x !== '@form') : [];
+    const dx = Math.round(+(m && m.dx) || 0), dy = Math.round(+(m && m.dy) || 0);
+    if (!ids.length) { this.refuseEdit(d, '沒有可以複製的元件（先選元件；表單本身、沒有名稱（id）的不能複製）。'); return null; }
+    if (!dx && !dy) return null;
+    const text = d.doc.getText();
+    const us = this.unitsFor(text, ids);
+    if (us.error) { this.refuseEdit(d, us.error); return null; }
+    const used = new Set(pageinfo.collectIds(text).concat(d.treeData.map(r => r[2]).filter(Boolean)));
+    const made = [];
+    const parts = us.units.map(u => {
+      const r = htmlblock.renameIds(u.html, used);
+      made.push(...r.map.values());
+      // "\n" + indent + block, like Paste next to an element (Delete takes the same break away again)
+      return { range: [u.end, u.end], repl: '\n' + htmlblock.indentAt(text, u.start) + htmlblock.offsetBlock(r.html, dx, dy) };
+    });
+    d.lastSelId = made[0] || d.lastSelId;
+    const ok = await this.applyStructural(d, parts);
+    if (ok) vscode.window.setStatusBarMessage('$(copy) 複製了 ' + made.join('、') + '（位移 ' + dx + ', ' + dy + '；Ctrl+Z 復原）', 6000);
+    return ok ? { made, dx, dy } : null;
+  }
+
+  /** From the properties panel: ask the probe to apply (it then reports an 'edit').
+   *  all: the panel shows a multi-selection -- the probe sets it on every selected one. */
+  forwardEdit(d, key, m, all, cid) {
+    if (!d || key == null) return;
+    all = all === true;
+    // (1006 audit: cid = the component's id too -- after the page is drawn again its key may name another element)
+    cid = typeof cid === 'string' && cid ? cid : undefined;
+    if (m.type === 'setLayout') d.post({ type: 'setLayout', key, cid, left: m.left, top: m.top, width: m.width, height: m.height, all });
+    else if (m.type === 'setCaption') d.post({ type: 'setCaption', key, cid, value: m.value, all });
+    else if (m.type === 'setLook') {
+      const size = m.size && typeof m.size.width === 'number' && typeof m.size.height === 'number' ? { width: m.size.width, height: m.size.height } : undefined;
+      d.post({ type: 'setLook', key, cid, prop: m.prop, value: m.value, all, size });
+    }
+    else if (m.type === 'align') d.post({ type: 'align', how: m.how });
+  }
+
+  // --- code -> designer ------------------------------------------------------
+  /** Roots when no page is involved (a C++ file): settings, else the workspace. */
+  globalRoots() {
+    return roots.resolveRoots(null, this.wsFolders(), this.over());
+  }
+
+  /** The code -> page index for the current roots (built lazily, once). */
+  reverseIndex() {
+    const r = this.globalRoots();
+    if (!r.irRoot || !r.webRoot) return null;
+    const key = (r.irRoot + '|' + r.webRoot).toLowerCase();
+    if (!this._rev || this._rev.key !== key) {
+      this._rev = { key, idx: new ReverseIndex(this.irStore(r.irRoot), [path.join(r.webRoot, 'page'), r.webRoot]) };
+    }
+    return this._rev.idx;
+  }
+
+  /** C++ -> web for commands: which web script sends "x.y" (built lazily, once). */
+  webCmdIndex(webRoot) {
+    const root = webRoot || this.globalRoots().webRoot;
+    if (!root) return null;
+    this._wcis = this._wcis || new Map();
+    const key = root.toLowerCase();
+    let e = this._wcis.get(key);
+    if (!e) {
+      e = { idx: new WebCmdIndex(root), timer: null };
+      this._wcis.set(key, e);
+      // JSON\ holds data the running system may rewrite often: not code, ignore it
+      this.watch(root, '**/*.{js,html}', uri => {
+        if (/[\\/]JSON[\\/]/i.test(uri.fsPath)) return;
+        clearTimeout(e.timer);
+        e.timer = setTimeout(() => { e.idx = new WebCmdIndex(root); this.lens._em.fire(); }, 1500);
+      });
+    }
+    return e.idx;
+  }
+
+  async cmdOpenWebSenders(cmd, hits) {
+    const list = Array.isArray(hits) ? hits : [];
+    if (!list.length) return;
+    let pick = list[0];
+    if (list.length > 1) {
+      const it = await vscode.window.showQuickPick(list.map(h => ({
+        label: '$(globe) ' + path.basename(h.file) + ':' + h.line,
+        description: h.pages && h.pages.length ? h.pages.map(p => path.basename(p)).slice(0, 3).join('、') + (h.pages.length > 3 ? '…' : '') : '',
+        detail: h.snippet, h,
+      })), { placeHolder: '網頁在這些地方送出「' + cmd + '」', matchOnDescription: true, matchOnDetail: true });
+      if (!it) return;
+      pick = it.h;
+    }
+    return this.openTarget({ kind: 'web', file: pick.file, line: pick.line, col: pick.col }, null);
+  }
+
+  /** Open a page in the designer (or bring it forward) and select a control. */
+  async openInDesigner(e) {
+    let d = Array.from(this.designers).find(x => web.samePath(x.file, e.page));
+    if (d) {
+      d.panel.reveal(d.panel.viewColumn, false);
+    } else {
+      await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(e.page), VIEW_TYPE, vscode.ViewColumn.Beside);
+      for (let i = 0; i < 100 && !d; i++) {
+        d = Array.from(this.designers).find(x => web.samePath(x.file, e.page));
+        if (!d) await sleep(100);
+      }
+    }
+    if (!d) return null;
+    await Promise.race([d.readyP, sleep(15000)]);
+    d.post({ type: 'selectId', id: e.node, origin: 'code' });
+    return d;
+  }
+
+  async cmdShowInDesigner(entries) {
+    const list = Array.isArray(entries) ? entries : entries ? [entries] : [];
+    if (!list.length) return;
+    if (list.length === 1) return this.openInDesigner(list[0]);
+    const pick = await vscode.window.showQuickPick(list.map(e => ({
+      label: (e.node === '@form' ? '表單' : e.node) + (e.event ? '.' + e.event : ''),
+      description: path.basename(e.page) + (e.nodeClass ? '　' + e.nodeClass : ''),
+      detail: e.path || undefined,
+      e,
+    })), { placeHolder: '這段程式對應好幾個元件，要看哪一個？', matchOnDescription: true });
+    if (pick) return this.openInDesigner(pick.e);
+  }
+
+  /** Editor context menu: the handler the cursor is in, or the control name under it. */
+  async cmdShowCodeInDesigner() {
+    const ed = vscode.window.activeTextEditor;
+    const idx = this.reverseIndex();
+    if (!ed || !idx) { vscode.window.showInformationMessage('找不到 web 或 ir_out 資料夾（看「HTML設計: 顯示偵測到的資料夾」）。'); return; }
+    const doc = ed.document;
+    const text = doc.getText();
+    const off = doc.offsetAt(ed.selection.active);
+    const wr = doc.getWordRangeAtPosition(ed.selection.active, /[A-Za-z_]\w*/);
+    const word = wr ? doc.getText(wr) : '';
+    let entries = [];
+    // TfHotPlate::spbSaveClick written at the cursor, or the definition it sits in
+    const q = wr ? /\b(T[A-Za-z_]\w*)\s*::\s*$/.exec(text.slice(Math.max(0, doc.offsetAt(wr.start) - 80), doc.offsetAt(wr.start))) : null;
+    if (q) entries = idx.handler(q[1], word);
+    if (!entries.length && word && /^T/.test(word)) {
+      const after = /^\s*::\s*([A-Za-z_]\w*)/.exec(text.slice(doc.offsetAt(wr.end), doc.offsetAt(wr.end) + 80));
+      if (after) entries = idx.handler(word, after[1]);
+    }
+    const encl = enclosingMethod(text, off, lex.isDefinitionAt);
+    // a control name (spbSave->Enabled) of the form this code belongs to
+    if (!entries.length && word) {
+      const cls = encl ? [encl.cls] : this.formClassesOf(text, idx);
+      for (const c of cls) entries = entries.concat(idx.control(c, word));
+    }
+    if (!entries.length && encl) entries = idx.handler(encl.cls, encl.method);
+    if (!entries.length) {
+      vscode.window.showInformationMessage(
+        (encl ? encl.cls + '::' + encl.method : word || '這裡') + '：找不到對應的網頁元件（只認得有網頁、而且網頁標題寫了 .dfm 的表單）。');
+      return;
+    }
+    return this.cmdShowInDesigner(entries);
+  }
+
+  /** Form classes a C++ text belongs to (the most used TClass:: prefixes that have a page). */
+  formClassesOf(text, idx) {
+    const count = new Map();
+    const re = /\b(T[A-Za-z_]\w*)\s*::/g;
+    let m;
+    while ((m = re.exec(text))) if (idx.hasClass(m[1])) count.set(m[1], (count.get(m[1]) || 0) + 1);
+    return Array.from(count.entries()).sort((a, b) => b[1] - a[1]).slice(0, 2).map(x => x[0]);
+  }
+
+  /** 接線總覽: every DFM event of the page -- wired on the web? implemented in C++? */
+  async cmdPageOverview() {
+    const d = this.active;
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return; }
+    const pi = await d.info;
+    if (!pi.ir) { vscode.window.showInformationMessage('這一頁沒有對應的 DFM，沒有事件可以總覽。'); return; }
+    return vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '整理接線總覽：' + path.basename(d.file) + '…' }, async () => {
+      const ov = await this.computeOverview(d, pi);
+      OverviewPanel.show(this, d, ov);
+      return ov;
+    });
+  }
+
+  /**
+   * 頁面檢查 (WPF: the Error List): problems in the page sources, into VS Code's Problems
+   * panel -- a click there opens the line; a cut attribute has a quick fix (the bulb).
+   * scope: 'page' (the active page) | 'all' (every page of the web folder).
+   */
+  async cmdLint(scope) {
+    let files = [];
+    if (scope === 'all') {
+      const webRoot = (this.active && this.active.r.webRoot) || roots.resolveRoots(null, this.wsFolders(), this.over()).webRoot;
+      if (!webRoot) { vscode.window.showInformationMessage('找不到 web 資料夾（設定 ht9045Designer.webRoot）。'); return null; }
+      files = [].concat(...pagelist.listPages(webRoot).map(g => g.pages.map(p => p.file)));
+    } else {
+      const f = this.active ? this.active.file : (vscode.window.activeTextEditor && /\.html?$/i.test(vscode.window.activeTextEditor.document.fileName) ? vscode.window.activeTextEditor.document.fileName : null);
+      if (!f) { vscode.window.showInformationMessage('先開一頁（設計檢視或 HTML），或用「檢查所有頁面」。'); return null; }
+      files = [f];
+    }
+    const sum = { pages: files.length, withIssues: 0, error: 0, warn: 0, info: 0, byKind: {} };
+    for (const f of files) {
+      const n = this.lintFile(f);
+      if (n.some(i => i.level !== 'info')) sum.withIssues++;
+      for (const i of n) { sum[i.level === 'error' ? 'error' : i.level === 'info' ? 'info' : 'warn']++; sum.byKind[i.kind] = (sum.byKind[i.kind] || 0) + 1; }
+    }
+    this.log('頁面檢查（' + (scope === 'all' ? '所有頁面' : path.basename(files[0])) + '）：' + sum.pages + ' 頁，' + sum.withIssues + ' 頁有問題；錯誤 ' + sum.error + '、警告 ' + sum.warn +
+      '、跟 DFM 不同（資訊）' + sum.info + ' ' + JSON.stringify(sum.byKind));
+    if (sum.error + sum.warn + sum.info) vscode.commands.executeCommand('workbench.actions.view.problems').then(() => {}, () => {});
+    vscode.window.setStatusBarMessage('$(checklist) 頁面檢查：' + (sum.error + sum.warn ? '錯誤 ' + sum.error + '、警告 ' + sum.warn : '沒有錯誤') +
+      (sum.info ? '；跟 BCB6 .dfm 不同 ' + sum.info + ' 個（資訊）' : '') + (sum.error + sum.warn + sum.info ? '（看「問題」面板）' : ''), 8000);
+    return sum;
+  }
+
+  /** The .dfm form a page's title names (IR), or null -- for the checks, only a named one (no guessing). */
+  irForFile(file, text) {
+    try {
+      const r = this.rootsFor(file);
+      const store = r && r.irRoot ? this.irStore(r.irRoot) : null;
+      const title = pageinfo.parseTitle(text);
+      if (!store || !title || !title.dfm) return null;
+      const f = store.find(title.dfm, title.cls);
+      return f ? store.load(f) : null;
+    } catch (e) { return null; }
+  }
+
+  /** One page into the Problems panel (the open document's text when it is open). [issues] */
+  lintFile(file) {
+    const uri = vscode.Uri.file(file);
+    const open = vscode.workspace.textDocuments.find(td => td.uri.scheme === 'file' && web.samePath(td.uri.fsPath, file));
+    let text = '';
+    try { text = open ? open.getText() : fs.readFileSync(file, 'utf8'); } catch (e) { return []; }
+    const issues = pagelint.lintPage(text, { dir: path.dirname(file) });
+    // what the generator left out of the form (AutoSize / Alignment against the page's .dfm): information
+    if (this.cfg().get('lintDfmGaps') !== false) {
+      const ir = this.irForFile(file, text);
+      if (ir) { issues.push(...pagelint.dfmGaps(text, ir)); issues.sort((a, b) => a.at - b.at); }
+    }
+    const starts = [0];
+    for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) starts.push(i + 1);
+    const pos = off => {
+      let lo = 0, hi = starts.length - 1;
+      while (lo < hi) { const m = (lo + hi + 1) >> 1; if (starts[m] <= off) lo = m; else hi = m - 1; }
+      return new vscode.Position(lo, off - starts[lo]);
+    };
+    const diags = issues.map(i => {
+      const dg = new vscode.Diagnostic(new vscode.Range(pos(i.at), pos(i.at + i.len)), i.msg,
+        i.level === 'error' ? vscode.DiagnosticSeverity.Error : i.level === 'info' ? vscode.DiagnosticSeverity.Information : vscode.DiagnosticSeverity.Warning);
+      dg.source = LINT_SOURCE;
+      dg.code = i.kind;
+      return dg;
+    });
+    if (diags.length) this.lintDiag.set(uri, diags); else this.lintDiag.delete(uri);
+    // the 頁面 list shows each page's count ("⚠ 93"): once after a burst of checks
+    clearTimeout(this._pmT);
+    this._pmT = setTimeout(() => { if (this.pages) this.pages.mark(); }, 200);
+    return issues;
+  }
+
+  /** Every cut attribute of a page fixed at once (one WorkspaceEdit). */
+  async cmdLintFixAll(uri0) {
+    const file = uri0 instanceof vscode.Uri ? uri0.fsPath : this.active ? this.active.file : vscode.window.activeTextEditor ? vscode.window.activeTextEditor.document.fileName : null;
+    if (!file) return null;
+    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+    const issues = pagelint.lintPage(doc.getText(), { dir: path.dirname(file) }).filter(i => i.fix && i.kind === 'quote-cut');
+    if (!issues.length) { vscode.window.setStatusBarMessage('$(check) ' + path.basename(file) + ' 沒有被切斷的屬性', 4000); return 0; }
+    const we = new vscode.WorkspaceEdit();
+    for (const i of issues) we.replace(doc.uri, new vscode.Range(doc.positionAt(i.fix.at), doc.positionAt(i.fix.at + i.fix.len)), i.fix.repl);
+    const ok = await vscode.workspace.applyEdit(we);
+    if (ok) {
+      if (this.active && web.samePath(this.active.file, file)) this.noteFirstEdit(this.active);
+      vscode.window.setStatusBarMessage('$(wrench) ' + path.basename(file) + '：修正了 ' + issues.length + ' 個被切斷的屬性（還沒存檔；Ctrl+Z 復原）', 7000);
+      this.lintFile(file);
+    }
+    return ok ? issues.length : null;
+  }
+
+  /**
+   * Every "differs from the .dfm" note of a page fixed at once (one WorkspaceEdit): the labels'
+   * AutoSize=False size and alignment, the panel captions' alignment -- the .dfm's values.
+   */
+  async cmdLintFixDfmGaps(uri0) {
+    const file = uri0 instanceof vscode.Uri ? uri0.fsPath : this.active ? this.active.file : vscode.window.activeTextEditor ? vscode.window.activeTextEditor.document.fileName : null;
+    if (!file) return null;
+    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+    const text = doc.getText();
+    const ir = this.irForFile(file, text);
+    const gaps = ir ? pagelint.dfmGaps(text, ir) : [];
+    if (!gaps.length) { vscode.window.setStatusBarMessage('$(check) ' + path.basename(file) + (ir ? ' 的 Label／Panel 跟 DFM 一樣' : ' 的標題沒有寫是哪個 .dfm'), 4000); return 0; }
+    const we = new vscode.WorkspaceEdit();
+    for (const g of gaps) we.replace(doc.uri, new vscode.Range(doc.positionAt(g.fix.at), doc.positionAt(g.fix.at + g.fix.len)), g.fix.repl);
+    const ok = await vscode.workspace.applyEdit(we);
+    if (ok) {
+      if (this.active && web.samePath(this.active.file, file)) this.noteFirstEdit(this.active);
+      vscode.window.setStatusBarMessage('$(wrench) ' + path.basename(file) + '：' + gaps.length + ' 個 Label／Panel 改成 BCB6 .dfm 的大小與對齊（還沒存檔；Ctrl+Z 復原）', 7000);
+      this.lintFile(file);
+    }
+    return ok ? gaps.length : null;
+  }
+
+  /** Every DFM event of the page: wired on the web? implemented in C++? (the overview's data) */
+  async computeOverview(d, pi) {
+    const t0 = Date.now();
+    const reply = await d.request({ type: 'listenersAll' }, 5000);
+    const sources = this.webSources(d, pi);
+    const widx = d.r.webRoot ? this.webCmdIndex(d.r.webRoot) : null;
+    const fieldIds = new Set();
+    const tagIds = new Set();
+    if (widx) {
+      widx.build();
+      for (const id of widx.fieldsById.keys()) if (widx.fieldsOf(d.file, id).length) fieldIds.add(id);
+      for (const id of widx.tagsById.keys()) if (widx.tagsOf(d.file, id).length) tagIds.add(id);
+    }
+    const ov = await overview.buildOverview({
+      ir: pi.ir,
+      pageIds: new Set(pageinfo.collectIds(d.doc.getText()).concat(d.treeData.map(r => r[2]))),
+      listeners: reply ? reply.map : {},
+      fieldIds, tagIds,
+      quoted: overview.quotedNames(sources),
+      classes: pi.classes,
+      port: this.sourceTree(d.r.portRoot, 'port'),
+      gold: this.sourceTree(d.r.goldenRoot, 'golden'),
+    });
+    ov.page = path.basename(d.file);
+    ov.dfm = pi.ir.sourceDfm || path.basename(pi.ir.file);
+    ov.formClass = pi.ir.formClass || '';
+    ov.listenersOk = !!reply;
+    this.log('接線總覽 ' + ov.page + '：' + ov.summary.events + ' 個事件（' + (Date.now() - t0) + ' ms）' + (reply ? '' : '，⚠ 探針沒回應，網頁監聽器一欄不準'));
+    return ov;
+  }
+
+  /**
+   * 在畫面上標出接線狀態: every component with DFM events gets a coloured frame on the
+   * design surface -- green: the web handles all of them (a listener or the wire engine's
+   * field map), orange: some / only mentioned (delegated), red: none. On / off per designer.
+   */
+  async cmdWireMarks(on) {
+    const d = this.active;
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
+    const nu = typeof on === 'boolean' ? on : !d.wireMarks;
+    if (!nu) {
+      d.wireMarks = null;
+      d.post({ type: 'wireMarks', marks: null });
+      this.updateStatus();
+      return { on: false };
+    }
+    const pi = await d.info;
+    if (!pi.ir) { vscode.window.showInformationMessage('這一頁沒有對應的 DFM，沒有事件可以標示。'); return null; }
+    const ov = await this.computeOverview(d, pi);
+    const marks = {};
+    const count = { ok: 0, mid: 0, bad: 0 };
+    for (const row of ov.rows) {
+      if (!row.present || row.id === '@form' || !row.events.length) continue;
+      const good = row.events.filter(e => e.web === 'yes' || e.web === 'field').length;
+      const none = row.events.filter(e => e.web === 'no').length;
+      const st = good === row.events.length ? 'ok' : none === row.events.length ? 'bad' : 'mid';
+      marks[row.id] = st;
+      count[st]++;
+    }
+    d.wireMarks = marks;
+    d.post({ type: 'wireMarks', marks });
+    this.updateStatus();
+    vscode.window.setStatusBarMessage('$(plug) 接線標示：綠 ' + count.ok + '（網頁有接）、橘 ' + count.mid + '（部分／只有提到）、紅 ' + count.bad + '（網頁沒接）', 8000);
+    return { on: true, marks, count, listenersOk: ov.listenersOk };
+  }
+
+  /**
+   * DFM 位置: a purple dashed frame on the design surface where the BCB6 .dfm puts each
+   * control whose position / size differs from it. The frame stays at the DFM place while
+   * the control is dragged, and a drag near it snaps onto it. On / off per designer; while
+   * on, it follows every edit (compared again shortly after).
+   */
+  async cmdDfmGhosts(on, d0, quiet) {
+    const d = d0 instanceof Designer ? d0 : this.active;
+    if (!d) { if (!quiet) vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
+    // (a click while the first "on" still waits for the page counts as on already: the second turns it off)
+    const nu = typeof on === 'boolean' ? on : !(d.dfmGhosts || d.ghostsComing);
+    if (!nu) {
+      d.dfmGhosts = null;
+      d.ghostsComing = false;
+      d.ghostGen = (d.ghostGen || 0) + 1;   // a comparison already on its way must not turn them back on
+      clearTimeout(d.ghostTimer);
+      d.post({ type: 'dfmGhosts', items: null });
+      this.updateStatus();
+      return { on: false };
+    }
+    const gen = d.ghostGen || 0;
+    if (!d.dfmGhosts) d.ghostsComing = true;
+    const pi = await d.info;
+    if (!pi.ir) { d.ghostsComing = false; if (!quiet) vscode.window.showInformationMessage('這一頁沒有對應的 DFM，沒有位置可以畫。'); return null; }
+    const reply = await d.request({ type: 'lookAll', ids: Array.from(pi.ir.byName.keys()) }, 8000);
+    if ((d.ghostGen || 0) !== gen) return { on: false };   // turned off while it compared
+    d.ghostsComing = false;
+    if (!reply) { if (!quiet) vscode.window.showWarningMessage('設計檢視沒有回應（頁面還在載入？），請稍後再試。'); return null; }
+    const items = dfmdiff.ghostsOf(dfmdiff.diffPage(reply.items || [], pi.ir).rows);
+    d.dfmGhosts = items;
+    d.post({ type: 'dfmGhosts', items });
+    this.updateStatus();
+    if (!quiet) vscode.window.setStatusBarMessage('$(target) DFM 位置：' + (items.length ? items.length + ' 個元件的位置／大小跟 BCB6 .dfm 不同（紫色虛線框＝DFM 的位置）' : '所有元件的位置／大小都跟 DFM 一樣'), 8000);
+    return { on: true, items };
+  }
+
+  /**
+   * 改回 DFM: the selected component(s) back to what the .dfm says -- position / size,
+   * caption and look, every difference the DFM list would show for them -- in ONE edit
+   * (one undo step). A locked one keeps its place (and it is said); a control the page's JS
+   * builds is not in the source, so it is left alone.
+   */
+  async cmdResetToDfm(d0, only, prop) {
+    const d = d0 instanceof Designer ? d0 : this.active;
+    // WPF Layout > Reset Width / Height / ... / Reset All: only = 'pos' (Left, Top), 'size' (Width, Height),
+    // 'layout' (the four); none = everything that differs (the text and the look too)
+    const ONLY = { pos: /^(Left|Top)$/, size: /^(Width|Height)$/, layout: /^(Left|Top|Width|Height)$/ };
+    const onlyRe = only && ONLY[only] ? ONLY[only] : null;
+    const what = { pos: '位置', size: '大小', layout: '版面' }[only] || (prop ? prop + ' ' : '');
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
+    const ids = this.selIds(d);
+    if (!ids.length) { vscode.window.setStatusBarMessage('$(info) 先選取元件（表單本身沒有可以改回的）', 5000); return null; }
+    const pi = await d.info;
+    if (!pi.ir) { vscode.window.showInformationMessage('這一頁沒有對應的 DFM，沒有東西可以改回。'); return null; }
+    const known = ids.filter(id => pi.ir.byName.has(id));
+    if (!known.length) { vscode.window.setStatusBarMessage('$(info) DFM 裡沒有「' + ids[0] + '」，沒有東西可以改回', 5000); return null; }
+    const reply = await d.request({ type: 'lookAll', ids: known }, 8000);
+    if (!reply) { vscode.window.showWarningMessage('設計檢視沒有回應（頁面還在載入？），請稍後再試。'); return null; }
+    const srcText = d.doc.getText();
+    const inSource = new Set(pageinfo.collectIds(srcText));
+    // position / size: what the SOURCE says now (a move just made, the page not drawn again yet, still counts)
+    for (const it of reply.items || []) {
+      const lay = it && it.lay;
+      if (!lay || lay.root || lay.target !== 'self') continue;
+      const tg = htmledit.startTagOf(srcText, it.id);
+      if (!tg) continue;
+      for (const dc of htmledit.styleOf(tg.text).decls) {
+        const k = String(dc.name || '').trim().toLowerCase();
+        const px = /^(-?\d+(?:\.\d+)?)px$/.exec(String(dc.value || '').trim());
+        if (!px || !/^(left|top|width|height)$/.test(k)) continue;
+        lay[k] = Math.round(+px[1]);
+        if (lay.raw) lay.raw[k] = px[0];
+      }
+    }
+    // (1006 audit: the rows 0.152 made editable -- the DFM difference list has none for them, so with several selected
+    //  their 重設 said "跟 DFM 一樣" while the grid showed them different: each one's own .dfm value, ONE edit)
+    const EXTRA = { 'Font.Underline': 'underline', 'Font.StrikeOut': 'strikeout', WordWrap: 'wordWrap', ReadOnly: 'readOnly', Checked: 'checked', MaxLength: 'maxLength', TabOrder: 'tabOrder' };
+    if (prop && EXTRA[prop]) {
+      const k = EXTRA[prop], xi = [];
+      for (const it of reply.items || []) {
+        if (!it || !inSource.has(it.id) || !it.look) continue;
+        const dv = fmt.dfmEditValues(pi.ir.byName.get(it.id)) || {};
+        if (dv[k] == null || it.look[k] == null || it.look[k] === dv[k]) continue;
+        xi.push({ id: it.id, type: 'setLook', prop: k, value: dv[k] });
+      }
+      if (!xi.length) { vscode.window.setStatusBarMessage('$(check) ' + (known.length > 1 ? '這 ' + known.length + ' 個' : '「' + known[0] + '」') + '的 ' + prop + ' 跟 DFM 一樣，沒有要改回的', 5000); return { count: 0, items: xi, only: null }; }
+      d.post({ type: 'editMany', items: xi });
+      vscode.window.setStatusBarMessage('$(discard) ' + prop + ' 改回 DFM：' + xi.length + ' 個元件（一個 Ctrl+Z 可以全部復原）', 8000);
+      return { count: xi.length, items: xi, only: null };
+    }
+    const rows = dfmdiff.diffPage(reply.items || [], pi.ir).rows.filter(r => inSource.has(r.id) && (!onlyRe || (r.group === 'layout' && onlyRe.test(r.prop))) && (!prop || r.prop === prop));
+    const items = dfmdiff.resetItemsOf(rows);
+    if (!items.length) {
+      vscode.window.setStatusBarMessage('$(check) ' + (known.length > 1 ? '這 ' + known.length + ' 個' : '「' + known[0] + '」') + '的' + (what || '') + '跟 DFM 一樣，沒有要改回的', 5000);
+      return { count: 0, items, only: only || null };
+    }
+    d.post({ type: 'editMany', items });
+    const ctl = new Set(rows.map(r => r.id)).size;
+    vscode.window.setStatusBarMessage('$(discard) ' + (what ? what + '改回 DFM：' : '改回 DFM：') + ctl + ' 個元件、' + rows.length + ' 項（一個 Ctrl+Z 可以全部復原）', 8000);
+    return { count: rows.length, controls: ctl, items, only: only || null };
+  }
+
+  /**
+   * Tab 順序 (BCB6's Edit > Tab Order): a badge on every place the page's Tab key stops,
+   * numbered, compared with the order the .dfm gives the Tab key (TabOrder in each
+   * container, depth first -- lib/taborder.js). Red = not where the .dfm has it. On / off
+   * per designer; the ones out of order go to the output panel.
+   */
+  async cmdTabOrder(on, d0) {
+    const d = d0 instanceof Designer ? d0 : this.active;
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
+    const nu = typeof on === 'boolean' ? on : !d.tabOrder;
+    if (!nu) {
+      d.tabOrder = null;
+      d.post({ type: 'tabOrder', dfm: null });
+      this.updateStatus();
+      return { on: false };
+    }
+    const pi = await d.info;
+    const dfm = pi.ir ? taborder.dfmTabOrder(pi.ir) : [];
+    d.tabOrder = dfm;
+    const rep = await d.request({ type: 'tabOrder', dfm }, 5000);
+    this.updateStatus();
+    if (!rep) { vscode.window.showWarningMessage('設計檢視沒有回應（頁面還在載入？），請稍後再試。'); return { on: true, dfm }; }
+    const bad = Array.isArray(rep.bad) ? rep.bad : [];
+    vscode.window.setStatusBarMessage('$(list-ordered) Tab 順序：網頁 ' + rep.stops + ' 個 Tab 停點；跟 DFM 比 ' + rep.common + ' 個' +
+      (pi.ir ? (bad.length ? '，' + bad.length + ' 個順序不同（紅色）' : '，順序都一樣') : '（這一頁沒有 DFM）'), 10000);
+    if (bad.length) this.log('Tab 順序 ' + path.basename(d.file) + '：跟 DFM 不同的 ' + bad.length + ' 個 —— ' + bad.slice(0, 40).join('、') + (bad.length > 40 ? ' …' : ''));
+    return { on: true, dfm, stops: rep.stops, common: rep.common, bad };
+  }
+
+  /**
+   * 0.156 (the WPF gap list G7; WinForms View > Tab Order): set the Tab order by clicks -- the badges shown, then each
+   * click on the design surface numbers the component under it (tabindex 1, 2, 3 ...; each one an edit, Ctrl+Z undoes
+   * it); Esc / right-click = done. arg: { start } (default 1), or false = stop.
+   */
+  async cmdTabOrderSet(arg) {
+    const d = this.active;
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
+    if (arg === false) { d.post({ type: 'tabOrderSet', on: false }); return { on: false }; }
+    const start = arg && typeof arg === 'object' && +arg.start >= 0 ? Math.round(+arg.start) : 1;
+    if (!d.tabOrder) await this.cmdTabOrder(true, d);
+    d.post({ type: 'tabOrderSet', on: true, start });
+    d.panel.reveal(d.panel.viewColumn, false);
+    vscode.window.setStatusBarMessage('$(list-ordered) 設定 Tab 順序：在設計畫面上依序點元件（從 ' + start + ' 開始），Esc／右鍵＝完成', 10000);
+    return { on: true, start };
+  }
+
+  /** DFM 位置 is on: compare again a moment after an edit / a re-draw (one at a time). */
+  scheduleGhosts(d) {
+    if (!d || !d.dfmGhosts) return;
+    clearTimeout(d.ghostTimer);
+    d.ghostTimer = setTimeout(() => { if (d.dfmGhosts) this.cmdDfmGhosts(true, d, true).catch(() => null); }, 700);
+  }
+
+  /** 與 DFM 的差異: every control of the page against the .dfm (position, text, look). */
+  async cmdDfmDiff(d0, quiet) {
+    // (from a menu VS Code passes a Uri / the webview context as the first argument)
+    const d = d0 instanceof Designer ? d0 : this.active;
+    quiet = d0 instanceof Designer && quiet === true;
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return; }
+    const pi = await d.info;
+    if (!pi.ir) { if (!quiet) vscode.window.showInformationMessage('這一頁沒有對應的 DFM，沒有東西可以比對。'); return; }
+    const t0 = Date.now();
+    const ids = Array.from(pi.ir.byName.keys());
+    const reply = await d.request({ type: 'lookAll', ids }, 8000);
+    if (!reply) { if (!quiet) vscode.window.showWarningMessage('設計檢視沒有回應（頁面還在載入？），請稍後再試。'); return; }
+    const res = dfmdiff.diffPage(reply.items || [], pi.ir);
+    res.page = path.basename(d.file);
+    res.dfm = pi.ir.sourceDfm || path.basename(pi.ir.file);
+    res.formClass = pi.ir.formClass || '';
+    // a control the page's JS builds is not in the HTML source: nothing to write back into
+    const inSource = new Set(pageinfo.collectIds(d.doc.getText()));
+    for (const r of res.rows) r.inSource = inSource.has(r.id);
+    res.dirty = !!d.doc.isDirty;
+    // DFM 位置 on: the frames follow this comparison (no second look at the page)
+    if (d.dfmGhosts) { clearTimeout(d.ghostTimer); d.dfmGhosts = dfmdiff.ghostsOf(res.rows); d.post({ type: 'dfmGhosts', items: d.dfmGhosts }); }
+    res.ghostsOn = !!d.dfmGhosts;
+    this.log('與 DFM 的差異 ' + res.page + '：' + res.controls + ' 個元件、比了 ' + res.compared + ' 項、不同 ' + res.rows.length +
+      ' 項（位置／大小 ' + res.byGroup.layout + '、文字 ' + res.byGroup.text + '、外觀 ' + res.byGroup.look + '；' + (Date.now() - t0) + ' ms）');
+    DfmDiffPanel.show(this, d, res, quiet);
+    return res;
+  }
+
+  /**
+   * 在所有頁面搜尋: a component by its name, its class or the text it shows, over every
+   * page of the web folder; the pick opens that page and selects it there. With a
+   * string argument (tests, other code) the hits are returned without asking.
+   */
+  async cmdSearchPages(query) {
+    const webRoot = (this.active && this.active.r.webRoot) || roots.resolveRoots(null, this.wsFolders(), this.over()).webRoot;
+    if (!webRoot) { vscode.window.showInformationMessage('找不到 web 資料夾（設定 ht9045Designer.webRoot）。'); return null; }
+    const direct = typeof query === 'string';
+    const q = direct ? query : await vscode.window.showInputBox({
+      prompt: '在所有頁面找元件：名稱、型別或畫面上的文字（空白隔開＝每個字都要有）',
+      placeHolder: '例如 spbSave、Save、TGroupBox、存檔', value: this.lastPageQuery || '',
+    });
+    if (!q || !q.trim()) return null;
+    this.lastPageQuery = q;
+    const t0 = Date.now();
+    const hits = pagesearch.searchPages(webRoot, q, 500);
+    this.log('在所有頁面搜尋「' + q + '」：' + hits.length + ' 個（' + (Date.now() - t0) + ' ms）');
+    if (direct) return hits;
+    if (!hits.length) { vscode.window.showInformationMessage('所有頁面都沒有找到「' + q + '」。'); return hits; }
+    const HOW = { id: '名稱', text: '文字', class: '型別' };
+    const pick = await vscode.window.showQuickPick(hits.map(h => ({
+      label: h.id,
+      description: (h.cls ? h.cls + '　' : '') + (h.caption ? '「' + h.caption.slice(0, 40) + (h.caption.length > 40 ? '…' : '') + '」' : ''),
+      detail: h.page + ':' + h.line + '　（找到：' + HOW[h.how] + '）',
+      hit: h,
+    })), { placeHolder: '找到 ' + hits.length + (hits.length >= 500 ? '+' : '') + ' 個「' + q + '」— 選一個就開那一頁並選取它', matchOnDescription: true, matchOnDetail: true });
+    if (pick) await this.openPageAt(pick.hit.file, pick.hit.id);
+    return hits;
+  }
+
+  /** Open `file` in the designer and select `id` once its page is drawn (a hidden tab opens). */
+  /**
+   * WPF: "Right-click the element in the Document Outline window or the artboard" -- the same commands. A command run
+   * from the component tree's menu gets that row: the component is selected first (unless it already is, alone).
+   * Anything else as the argument (nothing, a name, { confirmed }) is left alone.
+   */
+  /**
+   * 1006 (EastSun: 多分頁的元件，右鍵新增分頁): what a 分頁 command is about -- { id, sheet }: from the design surface's
+   * menu the PageControl / the sheet under the click (the probe's context), from the tree its row (a PageControl or a
+   * TTabSheet), else the selection.
+   */
+  tabTarget(a) {
+    const d = this.active;
+    if (!d) return null;
+    if (a && typeof a === 'object' && (a.htdWrap || a.htdSheet)) return { id: a.htdSheet || a.htdWrap, sheet: a.htdSheet || '' };
+    const n = this.treeNode(a);
+    if (n) return { id: n.id, sheet: n.cls === 'TTabSheet' ? n.id : '' };
+    const id = d.sel && d.sel.info ? d.sel.info.id : '';
+    return id ? { id, sheet: '' } : null;
+  }
+  /** the sheet a 刪除 / 標題 is for: the one named, the one the component is on, else asked (name: tests) */
+  async tabSheetOf(d, t, name, what) {
+    const text = d.doc.getText();
+    if (t.sheet) return t.sheet;
+    const f = pagecontrol.sheetFor(text, t.id);
+    if (!f) return null;
+    if (f.sheet) return f.sheet.name;
+    if (name) return name;
+    const p = await vscode.window.showQuickPick(f.sheets.list.map(x => ({ label: x.caption || x.name, description: x.name + (x.act ? '（開啟時顯示的）' : ''), name: x.name })),
+      { placeHolder: what + '哪一個分頁？（' + f.sheets.id + '）' });
+    return p ? p.name : null;
+  }
+  /** 新增分頁: a sheet at the end of the PageControl (its tab + an empty pane), then shown and selected; ONE undo. */
+  async cmdTabAdd(a, opts) {
+    const d = this.active;
+    const t = this.tabTarget(a);
+    if (!d || !t) { vscode.window.setStatusBarMessage('$(info) 先選一個多分頁元件（TPageControl）或它的分頁', 5000); return null; }
+    const r = pagecontrol.addSheet(d.doc.getText(), t.id, opts);
+    if (r.error) { this.refuseEdit(d, r.error); return null; }
+    d.lastSelId = r.name;
+    if (!(await this.applyStructural(d, r.parts))) return null;
+    vscode.window.setStatusBarMessage('$(add) 「' + r.wrapId + '」新增分頁 ' + r.name + '（標題「' + r.caption + '」；右鍵「分頁標題…」改；Ctrl+Z 復原）', 6000);
+    return r;
+  }
+  /** 刪除這個分頁: its tab and its pane with what is on it (asked first when something is); ONE undo. */
+  async cmdTabDelete(a, opts) {
+    const d = this.active;
+    const t = this.tabTarget(a);
+    if (!d || !t) return null;
+    const name = await this.tabSheetOf(d, t, opts && opts.name, '刪除');
+    if (!name) return null;
+    const r = pagecontrol.removeSheet(d.doc.getText(), name);
+    if (r.error) { this.refuseEdit(d, r.error); return null; }
+    if (r.ids.length && !(opts && opts.confirmed)) {
+      const yes = await vscode.window.showWarningMessage('分頁「' + name + '」上有 ' + r.ids.length + ' 個元件（' + r.ids.slice(0, 6).join('、') + (r.ids.length > 6 ? '…' : '') +
+        '），會跟著分頁一起刪掉。', { modal: true, detail: 'Ctrl+Z 可以復原。C++ 裡它們的事件函式不會動。' }, '刪除');
+      if (yes !== '刪除') return null;
+    }
+    d.lastSelId = r.wrapId;
+    if (!(await this.applyStructural(d, r.parts))) return null;
+    vscode.window.setStatusBarMessage('$(trash) 刪除了分頁 ' + name + (r.ids.length ? '（和上面的 ' + r.ids.length + ' 個元件）' : '') + '，剩 ' + r.left + ' 個（Ctrl+Z 復原）', 6000);
+    return Object.assign({ name }, r);
+  }
+  /** 分頁標題…: the tab's caption (BCB6 TTabSheet.Caption); ONE undo. */
+  async cmdTabCaption(a, opts) {
+    const d = this.active;
+    const t = this.tabTarget(a);
+    if (!d || !t) return null;
+    const name = await this.tabSheetOf(d, t, opts && opts.name, '改標題：');
+    if (!name) return null;
+    const f = pagecontrol.sheetFor(d.doc.getText(), name);
+    const cur = f && f.sheet ? f.sheet.caption : '';
+    const v = opts && typeof opts.caption === 'string' ? opts.caption : await vscode.window.showInputBox({ prompt: '分頁「' + name + '」的標題（頁籤上的字，BCB6 的 Caption）', value: cur });
+    if (v == null || v === cur) return null;
+    const r = pagecontrol.setCaption(d.doc.getText(), name, v);
+    if (r.error) { this.refuseEdit(d, r.error); return null; }
+    d.lastSelId = name;
+    if (!(await this.applyStructural(d, r.parts))) return null;
+    vscode.window.setStatusBarMessage('$(edit) 分頁 ' + name + ' 的標題：「' + v + '」（Ctrl+Z 復原）', 5000);
+    return { name, caption: v };
+  }
+
+  /** 1006 分頁左移／右移 (dir -1 / +1) and 開啟時顯示這一頁 (how 'active'): the sheet asked for when it is not clear; ONE undo. */
+  async cmdTabArrange(a, how, opts) {
+    const d = this.active;
+    const t = this.tabTarget(a);
+    if (!d || !t) return null;
+    const name = await this.tabSheetOf(d, t, opts && opts.name, how === 'active' ? '開啟時顯示' : '移動');
+    if (!name) return null;
+    const r = how === 'active' ? pagecontrol.setActiveSheet(d.doc.getText(), name) : pagecontrol.moveSheet(d.doc.getText(), name, how);
+    if (r.error) { this.refuseEdit(d, r.error); return null; }
+    if (!r.parts.length) { vscode.window.setStatusBarMessage('$(check) 分頁 ' + name + ' 本來就是開啟時顯示的那一頁', 4000); return { name, same: true }; }
+    d.lastSelId = name;
+    if (!(await this.applyStructural(d, r.parts))) return null;
+    vscode.window.setStatusBarMessage('$(arrow-swap) 分頁 ' + name + (how === 'active' ? '：頁面開啟時顯示這一頁' : how < 0 ? '往左移' : '往右移') + '（Ctrl+Z 復原）', 5000);
+    return { name };
+  }
+
+  /**
+   * 1006 (EastSun: 設計畫面匯出成圖片): the page as a PNG, as the machine shows it (its own visibility), from the text in
+   * the editor (unsaved changes too) -- Edge headless draws a copy in %TEMP% (no network: the gateway is never opened).
+   * opts (tests): { out, run(exe, args) -> Promise } -- run defaults to child_process.execFile.
+   */
+  async cmdExportPng(opts) {
+    opts = opts || {};
+    const d = this.active;
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return null; }
+    const exe = opts.edge || snapshot.edgePath();
+    if (!exe) { vscode.window.showWarningMessage('找不到 Microsoft Edge（msedge.exe），沒辦法畫成圖片。'); return null; }
+    let out = opts.out;
+    if (!out) {
+      const desk = path.join(require('os').homedir(), 'Desktop');
+      const uri = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(path.join(fs.existsSync(desk) ? desk : require('os').homedir(), snapshot.defaultName(d.file))),
+        filters: { 'PNG 圖片': ['png'] }, saveLabel: '存成圖片', title: '設計畫面匯出成圖片（' + path.basename(d.file) + '）' });
+      if (!uri) return null;
+      out = uri.fsPath;
+    }
+    const text = d.doc.getText();
+    let size = snapshot.formSize(text);
+    const tmp = path.join(require('os').tmpdir(), 'htd_snapshot');
+    fs.mkdirSync(tmp, { recursive: true });
+    const file = path.join(tmp, 'page_' + process.pid + '.html');
+    const profile = path.join(tmp, 'edge-profile');
+    try { fs.unlinkSync(out); } catch (e) { /* not there */ }
+    const run = opts.run || ((x, a) => new Promise(res => require('child_process').execFile(x, a, { windowsHide: true, timeout: 45000 }, e => res(e))));
+    // (a page with no generated .form -- main.html, the MotionView pages: measured by a first pass, then drawn at that size)
+    const runOut = opts.runOut || ((x, a) => new Promise(res => require('child_process').execFile(x, a, { windowsHide: true, timeout: 45000, maxBuffer: 64 * 1024 * 1024 }, (e, so) => res(String(so || '')))));
+    const err = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '畫成圖片：' + path.basename(d.file) + '…' }, async () => {
+      if (!size.fromForm) {
+        fs.writeFileSync(file, snapshot.snapshotHtml(text, path.dirname(d.file), { measure: true }), 'utf8');
+        const ms = snapshot.parseSize(await runOut(exe, snapshot.measureArgs({ file, profile })));
+        if (ms) size = Object.assign({ measured: true }, ms);
+      }
+      fs.writeFileSync(file, snapshot.snapshotHtml(text, path.dirname(d.file)), 'utf8');
+      return run(exe, snapshot.edgeArgs({ file, out, w: size.w, h: size.h, profile }));
+    });
+    try { fs.unlinkSync(file); } catch (e) { /* left in %TEMP% */ }
+    let ok = false;
+    try { ok = fs.statSync(out).size > 0; } catch (e) { ok = false; }
+    if (!ok) { vscode.window.showWarningMessage('圖片沒有產生' + (err ? '：' + (err.message || err) : '') + '。'); this.log('匯出圖片失敗：' + (err && (err.message || err))); return null; }
+    this.log('匯出圖片：' + out + '（' + size.w + '×' + size.h + '）');
+    if (!opts.out) {
+      vscode.window.showInformationMessage('已存成圖片：' + path.basename(out) + '（' + size.w + '×' + size.h + '）', '開啟', '在檔案總管中顯示', '複製路徑').then(b => {
+        if (b === '開啟') vscode.commands.executeCommand('vscode.open', vscode.Uri.file(out));
+        else if (b === '在檔案總管中顯示') vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(out));
+        else if (b === '複製路徑') vscode.env.clipboard.writeText(out);
+      });
+    }
+    return { out, w: size.w, h: size.h };
+  }
+
+  /** 1006 audit: a page's file from a 頁面 row -- the path itself, a page node ({ file }), or a Solution Explorer row ({ htdId }) */
+  pageFileOf(n) {
+    if (typeof n === 'string') return n || null;
+    if (!n || typeof n !== 'object') return null;
+    if (n.file) return n.file;
+    const x = n.htdId && this.solPanel ? this.solPanel.nodeOf(n) : null;
+    return x ? (x.file || (x.inner && x.inner.file) || null) : null;
+  }
+
+  /** the pages of the active designer's folder: [{ file, name, text }] -- the text an editor has open (unsaved too), else the file */
+  pagesOfFolder(d) {
+    const dir = path.dirname(d.file);
+    const open = new Map((vscode.workspace.textDocuments || []).filter(x => x && x.uri && x.uri.scheme === 'file').map(x => [path.resolve(x.uri.fsPath).toLowerCase(), x]));
+    let names = [];
+    try { names = fs.readdirSync(dir).filter(f => /\.html?$/i.test(f)); } catch (e) { names = []; }
+    return names.sort((a, b) => a.localeCompare(b)).map(n => {
+      const file = path.join(dir, n), od = open.get(path.resolve(file).toLowerCase());
+      let text = null;
+      try { text = od ? od.getText() : fs.readFileSync(file, 'utf8'); } catch (e) { text = null; }
+      return { file, name: n, text };
+    }).filter(p => p.text != null);
+  }
+  /**
+   * 1006 (EastSun 「繼續」: 兩個頁面比較): this page and another one compared component by component (by id): only here,
+   * only there, and on both but different -- class, caption, place, size, shown -- as a Markdown preview. other (tests).
+   */
+  async cmdComparePages(other) {
+    const d = this.active;
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視（要比較的第一頁）。'); return null; }
+    const pages = this.pagesOfFolder(d).filter(p => path.resolve(p.file).toLowerCase() !== path.resolve(d.file).toLowerCase());
+    let b = typeof other === 'string' ? pages.find(p => p.name.toLowerCase() === other.toLowerCase() || path.resolve(p.file).toLowerCase() === path.resolve(other).toLowerCase()) : null;
+    if (!b) {
+      if (typeof other === 'string') { vscode.window.showWarningMessage('找不到頁面「' + other + '」'); return null; }
+      // (a page with a similar name first: HT9045 vs HT9050 versions of one screen)
+      const stem = path.basename(d.file).replace(/\.html?$/i, '').replace(/\d+$/, '').toLowerCase();
+      const items = pages.map(p => ({ label: p.name, description: p.name.toLowerCase().startsWith(stem) ? '名稱相近' : '', p }))
+        .sort((x, y) => (y.description ? 1 : 0) - (x.description ? 1 : 0));
+      const pick = await vscode.window.showQuickPick(items, { placeHolder: '「' + path.basename(d.file) + '」要跟哪一頁比較？', matchOnDescription: true });
+      if (!pick) return null;
+      b = pick.p;
+    }
+    const r = pagecompare.compare(d.doc.getText(), b.text);
+    const md = pagecompare.compareMarkdown(path.basename(d.file), b.name, r);
+    try {
+      const doc = await vscode.workspace.openTextDocument({ language: 'markdown', content: md });
+      await vscode.commands.executeCommand('markdown.showPreview', doc.uri);
+    } catch (e) { this.log('頁面比較：開不了預覽（' + (e && e.message || e) + '）'); }
+    vscode.window.setStatusBarMessage('$(diff) ' + path.basename(d.file) + ' ↔ ' + b.name + '：不一樣 ' + r.diff.length + '、只有這頁 ' + r.onlyA.length + '、只有那頁 ' + r.onlyB.length, 8000);
+    return Object.assign({ other: b.name, md }, r);
+  }
+  /**
+   * 1006 (EastSun 「繼續」: 跨頁面批次改文字): a caption text replaced on every page of the folder -- the components whose
+   * caption has it (or is it) listed, all ticked, to untick; ONE edit across the pages (one Ctrl+Z); only captions (never a
+   * script, a style, an id). Not saved (全部儲存). o (tests): { find, repl, whole, all: true = no list }.
+   */
+  async cmdReplaceCaptions(o) {
+    o = o && typeof o === 'object' && typeof o.find === 'string' ? o : null;
+    const d = this.active;
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視（在那個頁面的資料夾裡找）。'); return null; }
+    let find = o ? o.find : null, repl = o ? o.repl : null, whole = o ? !!o.whole : false;
+    if (!o) {
+      const sel = d.sel && d.sel.info && d.sel.info.caption ? String(d.sel.info.caption.value || '') : '';
+      find = await vscode.window.showInputBox({ prompt: '跨頁面取代文字：要找的文字（元件上的字，例如按鈕、標籤、標題）', value: sel });
+      if (!find) return null;
+      repl = await vscode.window.showInputBox({ prompt: '把「' + find + '」改成', value: find });
+      if (repl == null || repl === find) return null;
+      const how = await vscode.window.showQuickPick([{ label: '整個文字一樣的才改', w: true }, { label: '文字裡有這段的都改', w: false }], { placeHolder: '怎麼比對？' });
+      if (!how) return null;
+      whole = how.w;
+    }
+    const pages = this.pagesOfFolder(d);
+    let hits = pagecompare.captionHits(pages, find, String(repl == null ? '' : repl), whole);
+    if (!hits.length) { vscode.window.setStatusBarMessage('$(info) 沒有元件的文字' + (whole ? '是' : '有') + '「' + find + '」', 6000); return { done: 0, hits: 0 }; }
+    if (!(o && o.all)) {
+      const items = hits.map(h => ({ label: path.basename(h.file) + '  ·  ' + h.id, description: (h.cls || '') + '　「' + h.old + '」→「' + h.now + '」', picked: true, h }));
+      const picked = await vscode.window.showQuickPick(items, { canPickMany: true, placeHolder: hits.length + ' 個元件會改（' + new Set(hits.map(h => h.file)).size + ' 頁）；取消勾選不要改的，按 Enter' });
+      if (!picked || !picked.length) return null;
+      hits = picked.map(p => p.h);
+    }
+    const we = new vscode.WorkspaceEdit();
+    const byFile = new Map();
+    for (const h of hits) { if (!byFile.has(h.file)) byFile.set(h.file, []); byFile.get(h.file).push(h); }
+    for (const [file, hs] of byFile) {
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+      const t = doc.getText();
+      for (const h of hs) {
+        // (the text must still be what was found there -- a page changed meanwhile is left alone)
+        if (htmledit.decodeEnt(t.slice(h.at[0], h.at[1])) !== h.old) continue;
+        const isValue = /^value$/i.test(t.slice(Math.max(0, h.at[0] - 7), h.at[0] - 2).trim());
+        we.replace(doc.uri, new vscode.Range(doc.positionAt(h.at[0]), doc.positionAt(h.at[1])), isValue ? htmledit.escAttr(h.now) : htmledit.escText(h.now));
+      }
+    }
+    const ok = await vscode.workspace.applyEdit(we);
+    if (!ok) { vscode.window.showWarningMessage('跨頁面取代：沒有寫進去。'); return null; }
+    this.log('跨頁面取代「' + find + '」→「' + repl + '」：' + hits.length + ' 個元件／' + byFile.size + ' 頁');
+    vscode.window.showInformationMessage('改了 ' + hits.length + ' 個元件的文字（' + byFile.size + ' 頁，還沒存檔：全部儲存 Ctrl+K S；Ctrl+Z 一次復原）');
+    return { done: hits.length, pages: byFile.size };
+  }
+
+  /** a row of the component tree (a menu's argument), or null */
+  treeNode(n) { return n && typeof n === 'object' && n.key != null && typeof n.id !== 'undefined' && !('confirmed' in n) ? n : null; }
+
+  async onNode(n) {
+    const d = this.active;
+    if (!d || !n || typeof n !== 'object' || n.key == null || 'confirmed' in n || typeof n.id === 'undefined') return;
+    const cur = d.sel && d.sel.info;
+    if (cur && cur.key === n.key && !(cur.multi || []).length) return;
+    // (1006: right-click on a row of a multi-selection = the menu is for all of them -- VS / Explorer keep it)
+    if (cur && (cur.multi || []).length && (cur.key === n.key || (n.id && cur.multi.indexOf(n.id) >= 0))) return;
+    this.tree.lastClicked = n.key;
+    d.post({ type: 'selectKey', key: n.key, origin: 'tree' });
+    for (let i = 0; i < 30; i++) {
+      if (d.sel && d.sel.info && d.sel.info.key === n.key) return;
+      await sleep(100);
+    }
+  }
+
+  /**
+   * Shift+F7 from code (WPF: View Designer, "Shift+F7 toggles to the designer"): a page's HTML -> its designer with the
+   * element at the cursor selected; a C++ file -> the component its code at the cursor is for (showCodeInDesigner).
+   * (In the designer, Shift+F7 goes the other way: the selected component's HTML -- revealSource.)
+   */
+  async cmdViewDesigner() {
+    const ed = vscode.window.activeTextEditor;
+    if (!ed) return null;
+    const doc = ed.document;
+    if (/\.(cpp|cc|cxx|h|hpp|c)$/i.test(doc.fileName)) return this.cmdShowCodeInDesigner();
+    if (!/\.html?$/i.test(doc.fileName)) return null;
+    const id = this.idAtOffset(doc.getText(), doc.offsetAt(ed.selection.active));
+    if (!id) { await this.cmdOpen(doc.uri); return { file: doc.fileName, id: null }; }
+    const d = await this.openPageAt(doc.fileName, id);
+    return d ? { file: doc.fileName, id } : null;
+  }
+
+  /**
+   * 移到事件處理函式 from the page's HTML (WPF, XAML view: right-click the event -> "Navigate to Event Handler"):
+   * on a designer event's htdCpp(...) line -> that C++ function; anywhere in an element -> its default event's code
+   * (as F7 does -- nothing is added).
+   */
+  async cmdGotoEventHandler() {
+    const ed = vscode.window.activeTextEditor;
+    if (!ed || !/\.html?$/i.test(ed.document.fileName)) return null;
+    const doc = ed.document;
+    const text = doc.getText();
+    const off = doc.offsetAt(ed.selection.active);
+    const line = jsevents.cppLines(text).find(x => off >= x.s && off <= x.e);
+    if (line) {
+      const r = this.rootsFor(doc.fileName);
+      const port = r.portRoot ? this.sourceTree(r.portRoot, 'port') : null;
+      const st = port ? await port.defState([line.form], line.handler) : { state: 'none' };
+      if (st.state === 'live' && st.hit) { await this.openTarget(this.cppTarget('port', st.hit), null); return { form: line.form, handler: line.handler }; }
+      const od = r.portRoot ? this.dirtyHit(r.portRoot, new RegExp('\\b' + line.form + '\\s*::\\s*' + line.handler + '\\s*\\('), /\.cpp$/i) : null;
+      if (od) { await this.openTarget({ kind: 'port', file: od.file, line: od.line, col: 1 }, null); return { form: line.form, handler: line.handler, unsaved: true }; }
+      vscode.window.showInformationMessage('移植樹裡找不到 ' + line.form + '::' + line.handler + ' 的本體。');
+      return null;
+    }
+    const id = this.idAtOffset(text, off);
+    if (!id) { vscode.window.setStatusBarMessage('$(info) 游標不在任何元件裡', 4000); return null; }
+    const d = await this.openPageAt(doc.fileName, id);
+    if (!d) return null;
+    for (let i = 0; i < 100 && !(d.sel && d.sel.info && d.sel.info.id === id); i++) await sleep(100);
+    if (!(d.sel && d.sel.info && d.sel.info.id === id)) return null;
+    await this.onDesignerDblClick(d, true);
+    return { id };
+  }
+
+  /**
+   * The id of the element whose start tag -- or body -- holds `off` (the innermost one with an id; the generated
+   * <div class="form"> = '@form'), or null (the head, a script, outside the form).
+   */
+  idAtOffset(text, off) {
+    const idOf = tag => {
+      const m = /\sid\s*=\s*["']([^"']+)["']/.exec(tag);
+      if (m) return m[1];
+      return /^<div\b[^>]*\bclass\s*=\s*["']form["']/.test(tag) ? '@form' : null;
+    };
+    let at = off;
+    // the start tag the cursor is in
+    const lt = text.lastIndexOf('<', at);
+    const gt = lt >= 0 ? text.indexOf('>', lt) : -1;
+    if (lt >= 0 && gt >= off && text[lt + 1] !== '/' && text[lt + 1] !== '!') {
+      const own = idOf(text.slice(lt, gt + 1));
+      if (own) return own;
+      at = lt;
+    }
+    // the elements open there, innermost first (one pass over the page)
+    const stack = htmlblock.openStackAt(text, at) || [];
+    for (let i = stack.length - 1; i >= 0; i--) {
+      const got = idOf(stack[i].text);
+      if (got) return got;
+    }
+    return null;
+  }
+
+  async openPageAt(file, id) {
+    await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(file), VIEW_TYPE);
+    let d = null;
+    for (let i = 0; i < 200 && !d; i++) {
+      d = Array.from(this.designers).find(x => web.samePath(x.file, file) && x.treeData.length) || null;
+      if (!d) await sleep(100);
+    }
+    if (!d) return null;
+    d.lastSelId = id;
+    d.post({ type: 'selectId', id, origin: 'search' });
+    return d;
+  }
+
+  /** Quick pick over every component of the page (big pages have thousands). */
+  async cmdFindComponent() {
+    const d = this.active;
+    if (!d) { vscode.window.showInformationMessage('先開啟一個設計檢視。'); return; }
+    const pi = await d.info;
+    const items = d.treeData.map(r => {
+      const key = r[0], id = r[2], tag = r[3], cls = r[4], cap = r[5], hidden = r[6], isForm = r[7];
+      const node = pi.ir && !isForm ? pi.ir.byName.get(id) : null;
+      return {
+        label: isForm ? d.formLabel : id,
+        description: (cls || (node && node.class) || '<' + tag + '>') + (cap ? '　「' + cap + '」' : '') + (hidden ? '　（隱藏）' : ''),
+        detail: node && node.path ? node.path : undefined,
+        key,
+      };
+    });
+    const pick = await vscode.window.showQuickPick(items, {
+      placeHolder: '輸入元件名稱、型別或畫面上的文字（這頁共 ' + items.length + ' 個）',
+      matchOnDescription: true, matchOnDetail: true,
+    });
+    if (pick) d.post({ type: 'selectKey', key: pick.key, origin: 'find' });
+  }
+
+  cmdShowInfo() {
+    const r = this.active ? this.active.r : roots.resolveRoots(null, this.wsFolders(), this.over());
+    this.out.appendLine('');
+    this.out.appendLine('=== HTML 視覺設計：偵測結果 ===' + (this.version ? '（這個視窗跑的是 v' + this.version + '）' : ''));
+    this.out.appendLine('web     ' + r.webRoot);
+    this.out.appendLine('port    ' + r.portRoot);
+    this.out.appendLine('ir      ' + r.irRoot);
+    this.out.appendLine('golden  ' + r.goldenRoot);
+    for (const [k, t] of this.trees) {
+      this.out.appendLine('index   ' + k + '  ' + (t.buildMs ? t.files.length + ' 檔，' + t.qual.size + ' 名稱，' + t.buildMs + ' ms' : '建立中…'));
+    }
+    for (const d of this.designers) {
+      this.out.appendLine('page    ' + d.file + '  mode=' + d.mode + '  blocked=' + d.blocked.length + '  errors=' + d.errors.length);
+    }
+    this.out.show(true);
+  }
+}
+
+// ---------------------------------------------------------------------------
+class Designer {
+  constructor(hub, doc, panel) {
+    this.hub = hub;
+    this.doc = doc;
+    this.panel = panel;
+    this.id = ++Designer.seq;
+    this.mode = 'design';
+    this.treeData = [];
+    this.lastSelId = null;
+    this.scroll = null;
+    this.sel = null;
+    this.blocked = [];
+    this.errors = [];
+    // hidden in the designer only (WPF: the eye in the document outline); kept per
+    // page in the workspace state, never in the source
+    this.designHidden = new Set(hub.loadDesignHidden(doc.uri.fsPath));
+    this.designLocked = new Set(hub.loadDesignSet('htd.designLocked', doc.uri.fsPath));
+    // 1006 (Blend's annotations): notes on components, { id: text } -- workspace state only, never the page
+    this.designNotes = hub.loadNotes(doc.uri.fsPath);
+    this.formLabel = '表單';
+    this.disposed = false;
+    this.renderN = 0;
+    this.readyP = new Promise(res => { this._ready = res; });   // first component tree arrived
+    this.selfEdits = 0;   // our own source edits: the DOM already shows them, no reload
+    this.file = doc.uri.fsPath;
+    // 1006 (VS: the ▾ beside Undo = the list of the last actions, back to any of them): the page before each change
+    this.history = [];
+    this.histPrev = doc.getText();
+    // WPF's "Default zoom setting": the zoom it had last time (Last Used) / fitting the view once drawn (Fit All) / 100%
+    const dz = hub.defaultZoom();
+    this.zoom = dz === 'last' ? hub.loadZoom(this.file) : 1;
+    this.fitOnOpen = dz === 'fit';
+    this.pageDir = path.dirname(this.file);
+    this.r = hub.rootsFor(this.file);
+    const res = [vscode.Uri.file(this.pageDir), vscode.Uri.joinPath(hub.ctx.extensionUri, 'media')];
+    if (this.r.webRoot) res.push(vscode.Uri.file(this.r.webRoot));
+    panel.webview.options = { enableScripts: true, enableCommandUris: false, localResourceRoots: res };
+    this.subs = [
+      panel.webview.onDidReceiveMessage(m => this.onMessage(m)),
+      panel.onDidChangeViewState(() => { if (panel.active) hub.setActive(this); }),
+      panel.onDidDispose(() => this.dispose()),
+      vscode.workspace.onDidChangeTextDocument(e => {
+        if (e.document !== doc || !e.contentChanges.length) return;
+        this.noteHistory(e);
+        if (this.selfEdits > 0) { this.selfEdits--; return; }   // a designer edit: the page already shows it
+        this.scheduleRender();                                   // typing in the HTML, undo/redo, reload
+      }),
+    ];
+    this.render();
+    // 0.140 'wpf' (the default): the design above, the page's HTML below; closed when a C++ file is opened
+    if (hub.defaultView() === 'wpf') Promise.resolve().then(() => hub.openWpf(this)).catch(e => hub.log('上下版面：' + (e && e.message || e)));
+    // WPF's "Default document view: Split": the HTML opens beside the design surface (the focus stays on the design)
+    else if (hub.defaultView() === 'split' && !vscode.window.visibleTextEditors.some(e => e.document === doc)) {
+      Promise.resolve().then(() => vscode.window.showTextDocument(doc, { viewColumn: hub.sourceColumn(this), preview: false, preserveFocus: true }))
+        .catch(e => hub.log('分割檢視：開不了 HTML（' + (e && e.message || e) + '）'));
+    }
+  }
+
+  /**
+   * 1006: one change of the page's source -> a step of the undo history: { at, label, before } (the page as it was before
+   * it; the latest 100). Undo / Redo themselves are not steps (VS lists what was done, not the undoing). The label = the
+   * component the change is in (the nearest start tag with an id before it) and its line.
+   */
+  noteHistory(e) {
+    const before = this.histPrev;
+    this.histPrev = this.doc.getText();
+    const R = vscode.TextDocumentChangeReason || {};
+    const undoing = e.reason != null && (e.reason === R.Undo || e.reason === R.Redo);
+    if (undoing || before == null || before === this.histPrev) return;
+    const c0 = e.contentChanges[0];
+    const off = typeof c0.rangeOffset === 'number' ? c0.rangeOffset : 0;
+    let id = '', i = off;
+    for (let k = 0; k < 400 && i > 0; k++) {
+      const s = before.lastIndexOf('<', i - 1);
+      if (s < 0) break;
+      const m = /^<[A-Za-z][\w:-]*\b[^>]*?\bid\s*=\s*"([^"]+)"/.exec(before.slice(s, s + 600));
+      if (m) { id = m[1]; break; }
+      i = s;
+    }
+    const line = before.slice(0, off).split('\n').length;
+    const added = e.contentChanges.reduce((a, c) => a + c.text.length - c.rangeLength, 0);
+    const what = e.contentChanges.length > 1 ? e.contentChanges.length + ' 處' : added > 40 ? '加入' : added < -40 ? '刪除' : '修改';
+    const label = this.histLabel || what + (id ? ' ' + id : '') + '（第 ' + line + ' 行）';
+    this.histLabel = null;
+    this.history.push({ at: Date.now(), label, before });
+    if (this.history.length > 100) this.history.shift();   // (1006 the user: 100 steps remembered; was 30)
+  }
+
+  render() {
+    this.info = this.hub.analyzePage(this);
+    this.info.catch(e => this.hub.log('分析頁面失敗：' + (e && e.stack || e)));
+    this.blocked = [];
+    this.errors = [];
+    const w = this.panel.webview;
+    const base = w.asWebviewUri(vscode.Uri.file(this.pageDir)).toString().replace(/\/?$/, '/');
+    const probe = w.asWebviewUri(vscode.Uri.joinPath(this.hub.ctx.extensionUri, 'media', 'probe.js')).toString();
+    this.renderN++;
+    // a forwarding page would navigate the designer away from itself: say so instead
+    const target = pageinfo.redirectTarget(this.doc.getText());
+    this.redirect = target;
+    if (target) {
+      const nonce = crypto.randomBytes(16).toString('base64');
+      const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+      w.html = '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">' +
+        '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'nonce-' + nonce + '\';">' +
+        '<style>body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);padding:24px;line-height:1.7}' +
+        'button{font:inherit;color:var(--vscode-button-foreground);background:var(--vscode-button-background);border:none;padding:4px 14px;cursor:pointer}' +
+        'code{font-family:var(--vscode-editor-font-family)}</style></head><body>' +
+        '<p><code>' + esc(path.basename(this.file)) + '</code> 只是一個轉址頁：一打開就會轉到 <code>' + esc(target) + '</code>，本身沒有畫面。</p>' +
+        '<p><button id="go">用設計檢視開啟 ' + esc(target) + '</button></p>' +
+        '<script nonce="' + nonce + '">(function(){var api=acquireVsCodeApi();' +
+        'document.getElementById("go").addEventListener("click",function(){api.postMessage({__htd:1,type:"openRedirect"});});' +
+        'api.postMessage({__htd:1,type:"ready",redirect:true});})();</script></body></html><!-- htd-render ' + this.renderN + ' -->';
+      return;
+    }
+    // 機種與機台設定: the page decides what to show like on the machine (read-only copies); and a page that
+    // picks its JSON folder by its address gets the web root's (the designer's address has no /page/)
+    this.live = this.hub.liveFor(this);
+    const jsonHere = path.join(this.pageDir, 'JSON'), jsonRoot = this.r.webRoot ? path.join(this.r.webRoot, 'JSON') : '';
+    if (jsonRoot && !web.samePath(this.pageDir, this.r.webRoot) && !fs.existsSync(jsonHere) && fs.existsSync(jsonRoot)) {
+      const u = p => w.asWebviewUri(vscode.Uri.file(p)).toString().replace(/\/?$/, '/');
+      this.live = Object.assign({ machine: null, docs: {} }, this.live, { pathFix: { from: u(jsonHere), to: u(jsonRoot) } });
+    }
+    w.html = buildPageHtml(this.doc.getText(), {
+      cspSource: w.cspSource, baseHref: base, probeSrc: probe, mode: this.mode, live: this.live,
+    }) + '\n<!-- htd-render ' + this.renderN + ' -->';
+  }
+
+  scheduleRender() {
+    clearTimeout(this.renderTimer);
+    this.renderTimer = setTimeout(() => { if (!this.disposed) this.render(); }, 500);
+  }
+
+  post(m) {
+    if (this.disposed) return;
+    this.panel.webview.postMessage(Object.assign({ __htd: 1 }, m));
+  }
+
+  /** Ask the probe something and wait for the reply of the same type (null on timeout). */
+  request(m, ms) {
+    this._reqSeq = (this._reqSeq || 0) + 1;
+    const seq = this._reqSeq;
+    this._pending = this._pending || new Map();
+    return new Promise(res => {
+      const timer = setTimeout(() => { this._pending.delete(seq); res(null); }, ms || 5000);
+      this._pending.set(seq, v => { clearTimeout(timer); res(v); });
+      this.post(Object.assign({}, m, { seq }));
+    });
+  }
+
+  onMessage(m) {
+    if (!m || m.__htd !== 1) return;
+    const name = path.basename(this.file);
+    this.msgCount = (this.msgCount || 0) + 1;
+    this.lastMsg = m.type;
+    if (m.type === 'ready') { this.readyCount = (this.readyCount || 0) + 1; this.structuralPending = false; }
+    if (m.seq && this._pending && this._pending.has(m.seq)) {
+      const done = this._pending.get(m.seq);
+      this._pending.delete(m.seq);
+      done(m);
+      return;
+    }
+    switch (m.type) {
+      case 'openRedirect':
+        if (this.redirect) {
+          const f = path.resolve(this.pageDir, this.redirect);
+          vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(f), VIEW_TYPE);
+        }
+        break;
+      case 'ready': {
+        if (m.redirect) { if (this._ready) { this._ready(); this._ready = null; } break; }
+        // page scripts may strip the generated title="name : TClass" attributes at
+        // runtime, so the probe gets the VCL class of every name from the IR
+        const send = pi => {
+          const classes = {};
+          const events = {};
+          if (pi && pi.ir) {
+            for (const [n, node] of pi.ir.byName) {
+              classes[n] = node.class;
+              const ev = Object.keys(node.events || {});
+              if (ev.length && node !== pi.ir.root) events[n] = ev;
+            }
+            if (pi.ir.formClass) classes['@form'] = pi.ir.formClass;
+            if (pi.ir.root && pi.ir.root.events) events['@form'] = Object.keys(pi.ir.root.events);
+          }
+          this.post({ type: 'init', mode: this.mode, selectId: this.lastSelId, scroll: this.scroll, classes, events, zoom: this.zoom || 1,
+            designHidden: Array.from(this.designHidden), designLocked: Array.from(this.designLocked), designNotes: this.designNotes, grid: this.hub.gridState(),
+            wireMarks: this.wireMarks || null, showNames: !!this.showNames, dfmGhosts: this.dfmGhosts || null, tabOrder: this.tabOrder || null,
+            screen: this.hub.screenSize(),
+            snapLines: this.snapLines !== false, artboardDark: this.hub.artboardDark(), showBounds: this.hub.showBounds(), rulers: this.hub.rulers(), guides: this.hub.loadGuides(this.file), wheelZoom: this.hub.wheelZoom(), snapSpacing: this.hub.snapSpacing(),
+            fitOnOpen: !!this.fitOnOpen });
+          this.fitOnOpen = false;   // (once: a redraw keeps the zoom it has)
+        };
+        this.info.then(send, () => send(null));
+        clearTimeout(this.diagTimer);
+        this.diagTimer = setTimeout(() => this.post({ type: 'diag' }), 1500);
+        break;
+      }
+      case 'netcheck': {
+        const v = Array.isArray(m.violations) ? m.violations : [];
+        const need = ['ws://127.0.0.1:9', 'http://127.0.0.1:9'];
+        const allBlocked = need.every(u => v.some(x => x.indexOf(u) >= 0)) && m.fetch !== 'RESOLVED' && m.xhr !== 'LOADED';
+        this.netcheck = { ok: allBlocked, violations: v, ws: m.ws, fetch: m.fetch, xhr: m.xhr };
+        this.hub.log('[' + name + '] 網路封鎖檢查：' + (allBlocked ? '通過' : '⚠ 沒有全部擋下') +
+          '（WebSocket/HTTP/XHR 試連 127.0.0.1:9；被擋 ' + v.length + ' 次：' + v.join('、') + '）');
+        if (this.netcheckNotify) {
+          this.netcheckNotify = false;
+          if (allBlocked) vscode.window.showInformationMessage('網路封鎖檢查通過：預覽裡的 WebSocket、HTTP、XHR 全部被擋下（試連的是 127.0.0.1:9 這個關閉的埠）。');
+          else vscode.window.showWarningMessage('網路封鎖檢查沒有通過，請看輸出面板「HTML 視覺設計」。');
+        }
+        break;
+      }
+      case 'diag':
+        this.diag = m;
+        this.hub.log('[' + name + '] 載入狀況：圖片 ' + m.imagesLoaded + '/' + m.images + '（壞 ' + m.imagesBroken + '）、樣式表 ' +
+          m.sheets + '、script ' + m.scripts + '、背景 ' + m.bodyBg + (m.vscodeDefaultsLeft ? '、⚠ VS Code 預設樣式沒移除' : ''));
+        break;
+      case 'tree':
+        this.treeData = Array.isArray(m.nodes) ? m.nodes : [];
+        if (this.hub.active === this) this.hub.tree.set(this);
+        // the page was (re)drawn -- e.g. after an undo: the difference list compares again
+        if (this.dfmDiff && !this.dfmDiff.disposed) this.dfmDiff.scheduleRefresh();
+        this.hub.scheduleGhosts(this);
+        if (this._ready) { this._ready(); this._ready = null; }
+        break;
+      case 'select':
+        // (a late answer of the page before a structural edit: the redrawn page decides)
+        // ('initRoot': the page showed the form because the one asked for is not there yet -- keep asking for it)
+        if (m.origin !== 'initRoot' && (!this.structuralPending || m.origin === 'init')) this.lastSelId = m.info ? m.info.id : null;
+        this.hub.onSelect(this, m.info, m.origin);
+        break;
+      case 'guides':
+        // 1006 the page's guides (dragged out of the rulers): kept in the workspace, never the page
+        this.hub.saveGuides(this.file, { x: m.x, y: m.y });
+        break;
+      case 'toolbar':
+        // the artboard toolbar (WPF): the grid is the hub's setting (every designer); snaplines this designer's
+        if (m.cmd === 'toggleGrid') this.hub.cmdToggleGrid();
+        else if (m.cmd === 'gridShow' || m.cmd === 'gridSnap') this.hub.cmdGridPart(m.cmd === 'gridSnap' ? 'snap' : 'show');
+        else if (m.cmd === 'snap') { this.snapLines = m.on !== false; vscode.window.setStatusBarMessage('$(symbol-ruler) 對齊線：' + (this.snapLines ? '開' : '關'), 3000); }
+        else if (m.cmd === 'artboard') this.hub.setArtboard(!!m.dark, this);
+        else if (m.cmd === 'bounds') this.hub.setShowBounds(!!m.on, this);
+        else if (m.cmd === 'rulers') this.hub.setRulers(!!m.on, this);
+        else if (m.cmd === 'screen') this.hub.cmdScreenSize();
+        break;
+      case 'tabOrderSetEnd': {
+        // (0.156 the Tab order set by clicks: said, and the comparison with the DFM again)
+        const n = Array.isArray(m.done) ? m.done.length : 0;
+        vscode.window.setStatusBarMessage('$(list-ordered) Tab 順序設定完成：' + n + ' 個' + (n ? '（' + m.done.slice(0, 8).join('、') + (n > 8 ? '…' : '') + '）' : ''), 8000);
+        if (this.tabOrder) this.hub.cmdTabOrder(true, this).catch(() => null);
+        break;
+      }
+      case 'dblclick':
+        this.hub.onDesignerDblClick(this, !!m.viewOnly);
+        break;
+      case 'smartTag':
+        // 1006 the ▸ at the selected component: its common tasks (WinForms' smart tag)
+        this.hub.cmdSmartTag(this, m).catch(e => this.hub.log('常用工作：' + (e && e.stack || e)));
+        break;
+      case 'edit':
+        // one at a time: each edit is computed on the text the previous one left
+        this.editChain = (this.editChain || Promise.resolve())
+          .then(() => this.hub.applySourceEdit(this, m))
+          .catch(e => this.hub.log('寫回失敗：' + (e && e.stack || e)))
+          .then(() => { if (this.dfmDiff && !this.dfmDiff.disposed) this.dfmDiff.scheduleRefresh(); this.hub.scheduleGhosts(this); });
+        break;
+      case 'editRefused':
+        this.hub.refuseEdit(this, String(m.why || '不能改'));
+        break;
+      case 'place':
+        // the armed toolbox tool was put down on the surface
+        this.hub.cmdPlace(this, m).catch(e => this.hub.log('放置失敗：' + (e && e.stack || e)));
+        break;
+      case 'placeCancel':
+        this.armed = null;
+        this.hub.toolboxBackToPointer();
+        break;
+      case 'textEdit':
+        // F2's text box on the surface opened / closed: the designer's keys stay out while it is open
+        this.textEditing = !!m.open;
+        vscode.commands.executeCommand('setContext', 'ht9045Designer.textEditing', this.textEditing && this.hub.active === this);
+        break;
+      case 'reparentDrop':
+        // Alt held when a drag was let go (Blend): into the container under the pointer
+        this.hub.cmdReparentDrop(this, m).catch(e => this.hub.log('換容器失敗：' + (e && e.stack || e)));
+        break;
+      case 'copyDrop':
+        // Ctrl+drag on the surface: copies of the selection where it was let go
+        this.hub.cmdCopyDrop(this, m).catch(e => this.hub.log('複製失敗：' + (e && e.stack || e)));
+        break;
+      case 'note':
+        // a plain status line from the design surface (e.g. "選取了 12 個 TLabel")
+        this.lastNote = String(m.text || '').slice(0, 200);
+        vscode.window.setStatusBarMessage('$(info) ' + this.lastNote, 6000);
+        break;
+      case 'cmd': {
+        // Del / Ctrl+C / Ctrl+X / Ctrl+V on the design surface (this designer has the focus)
+        if (this.hub.active !== this) this.hub.setActive(this);
+        const run = { delete: () => this.hub.cmdDelete(null), copy: () => this.hub.cmdCopy(), cut: () => this.hub.cmdCut(null), paste: () => this.hub.cmdPaste() }[m.cmd];
+        if (run) Promise.resolve(run()).catch(e => this.hub.log('指令失敗（' + m.cmd + '）：' + (e && e.stack || e)));
+        break;
+      }
+      case 'zoom':
+        this.zoom = typeof m.zoom === 'number' ? m.zoom : 1;
+        this.hub.saveZoom(this.file, this.zoom);   // (for Last Used: the next time this page opens)
+        if (this.hub.active === this) this.hub.updateStatus();
+        break;
+      case 'scroll':
+        this.scroll = { x: m.x || 0, y: m.y || 0 };
+        break;
+      case 'blocked':
+        this.blocked.push({ dir: String(m.dir || ''), uri: String(m.uri || '') });
+        this.hub.log('[' + name + '] 已擋下連線：' + m.dir + ' ' + m.uri);
+        break;
+      case 'pageError':
+        this.errors.push({ msg: String(m.msg || ''), src: String(m.src || ''), line: m.line || 0 });
+        this.hub.log('[' + name + '] 頁面 JS 錯誤：' + m.msg + '（' + m.src + ':' + m.line + '）');
+        break;
+      case 'showErrors':
+        // the information bar's 看全部: every JS error of this page, in the output panel
+        this.hub.log('[' + name + '] 這一頁的 JS 錯誤（' + this.errors.length + ' 個）：');
+        this.errors.forEach((x, i) => this.hub.log('  ' + (i + 1) + '. ' + x.msg + '（' + path.basename(x.src || '') + ':' + x.line + '）'));
+        this.hub.out.show(true);
+        break;
+      default:
+        break;
+    }
+  }
+
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    clearTimeout(this.renderTimer);
+    clearTimeout(this.diagTimer);
+    clearTimeout(this.ghostTimer);
+    this.dfmGhosts = null;
+    for (const s of this.subs) { try { s.dispose(); } catch (e) { /* ignore */ } }
+    // its side tabs only make sense with it
+    for (const p of [this.overview, this.dfmDiff]) { if (p && !p.disposed) { try { p.panel.dispose(); } catch (e) { /* ignore */ } } }
+    this.hub.removeDesigner(this);
+  }
+}
+Designer.seq = 0;
+
+// ---------------------------------------------------------------------------
+/**
+ * ht9045-golden:/d:/HT9045/HT9011UC_Code_V…/x.cpp -> that file, decoded from Big5 and
+ * handed to VS Code as UTF-8 with a BOM (the BOM wins over any files.encoding the user
+ * has set). Registered with isReadonly, and every write path refuses.
+ */
+class GoldenFs {
+  constructor() {
+    this._em = new vscode.EventEmitter();
+    this.onDidChangeFile = this._em.event;
+  }
+  real(uri) { return uri.with({ scheme: 'file' }).fsPath; }
+  watch() { return new vscode.Disposable(() => {}); }
+  stat(uri) {
+    let st;
+    try { st = fs.statSync(this.real(uri)); } catch (e) { throw vscode.FileSystemError.FileNotFound(uri); }
+    return {
+      type: st.isDirectory() ? vscode.FileType.Directory : vscode.FileType.File,
+      ctime: st.ctimeMs, mtime: st.mtimeMs, size: st.size,
+      permissions: vscode.FilePermission ? vscode.FilePermission.Readonly : undefined,
+    };
+  }
+  readFile(uri) {
+    let buf;
+    try { buf = fs.readFileSync(this.real(uri)); } catch (e) { throw vscode.FileSystemError.FileNotFound(uri); }
+    return Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(decodeBig5(buf), 'utf8')]);
+  }
+  readDirectory() { return []; }
+  createDirectory(uri) { throw vscode.FileSystemError.NoPermissions(uri); }
+  writeFile(uri) { throw vscode.FileSystemError.NoPermissions(uri); }
+  delete(uri) { throw vscode.FileSystemError.NoPermissions(uri); }
+  rename(uri) { throw vscode.FileSystemError.NoPermissions(uri); }
+}
+
+// ---------------------------------------------------------------------------
+/**
+ * Above every C++ / BCB6 event handler that a web page's control uses:
+ *   $(preview) 設計檢視：Setup.HotPlate.html › spbSave.OnClick
+ * The index is built in the background on first use; the lenses appear when it is.
+ */
+class HandlerLens {
+  constructor(hub) {
+    this.hub = hub;
+    this._em = new vscode.EventEmitter();
+    this.onDidChangeCodeLenses = this._em.event;
+    this.building = false;
+  }
+
+  provideCodeLenses(doc) {
+    if (this.hub.cfg().get('codeLens') === false) return [];
+    const idx = this.hub.reverseIndex();
+    const widx = this.hub.webCmdIndex();
+    if (!idx && !widx) return [];
+    if ((idx && !idx.built) || (widx && !widx.built)) {
+      if (!this.building) {
+        this.building = true;
+        setTimeout(() => {
+          try {
+            if (idx) { idx.build(); this.hub.log('反查索引完成：' + idx.pages.length + ' 頁，' + idx.handlers.size + ' 個事件函式（' + idx.buildMs + ' ms）'); }
+            if (widx) { widx.build(); this.hub.log('網頁命令索引完成：' + widx.files + ' 個檔，' + widx.sends.size + ' 種命令（' + widx.buildMs + ' ms）'); }
+          } catch (e) { this.hub.log('索引失敗：' + e); }
+          this.building = false;
+          this._em.fire();
+        }, 50);
+      }
+      return [];
+    }
+    const text = doc.getText();
+    const out = [];
+    if (widx) this.commandLenses(doc, text, widx, out);
+    if (widx) this.fieldLenses(doc, text, widx, out);
+    if (widx) this.tagLenses(doc, text, widx, out);
+    if (!idx) return out;
+    const re = /\b(T[A-Za-z_]\w*)\s*::\s*([A-Za-z_]\w*)\s*\(/g;
+    let m;
+    while ((m = re.exec(text)) && out.length < 400) {
+      if (!idx.hasClass(m[1])) continue;
+      const entries = idx.handler(m[1], m[2]);
+      if (!entries.length) continue;
+      const lineStart = text.lastIndexOf('\n', m.index) + 1;
+      if (text.slice(lineStart, m.index).includes('//')) continue;
+      if (!lex.isDefinitionAt(text, m.index + m[0].length - 1)) continue;
+      const pos = doc.positionAt(m.index);
+      const range = new vscode.Range(pos.line, 0, pos.line, 0);
+      const pages = Array.from(new Set(entries.map(e => path.basename(e.page))));
+      const first = entries[0];
+      let title = '$(preview) 設計檢視：' + pages[0] + ' › ' + (first.node === '@form' ? '表單' : first.node) + '.' + first.event;
+      if (entries.length > 1) title += ' 等 ' + entries.length + ' 個元件' + (pages.length > 1 ? '（' + pages.length + ' 頁）' : '');
+      out.push(new vscode.CodeLens(range, { title, command: 'ht9045Designer.showInDesigner', arguments: [entries], tooltip: '打開網頁的設計檢視並選取用這個函式的元件' }));
+    }
+    return out;
+  }
+
+  /** Above a line that publishes "machine.state": the web control that shows it. */
+  tagLenses(doc, text, widx, out) {
+    const re = /"([a-z][\w]*\.[\w.]+)"/g;
+    const seen = new Set();
+    let m;
+    while ((m = re.exec(text)) && out.length < 900) {
+      if (!widx.tags.has(m[1])) continue;
+      const lineStart = text.lastIndexOf('\n', m.index) + 1;
+      const before = text.slice(lineStart, m.index);
+      if (before.includes('//') || /(==|!=)\s*$/.test(before)) continue;   // comments; command compares
+      const rows = widx.tagControls(m[1]).filter(r => r.pages.length);
+      if (!rows.length) continue;
+      const pos = doc.positionAt(m.index);
+      const key = pos.line + '|' + m[1];
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const entries = [];
+      const had = new Set();
+      for (const r of rows) {
+        for (const p of r.pages) {
+          const k = p.toLowerCase() + '|' + r.id;
+          if (had.has(k)) continue;
+          had.add(k);
+          entries.push({ page: p, node: r.id, path: 'tag ' + r.tag + '（顯示為 ' + r.prop + '）' });
+        }
+      }
+      let title = '$(eye) 網頁顯示 ' + m[1] + '：' + path.basename(entries[0].page) + ' › ' + entries[0].node;
+      if (entries.length > 1) title += ' 等 ' + entries.length + ' 處';
+      out.push(new vscode.CodeLens(new vscode.Range(pos.line, 0, pos.line, 0), {
+        title, command: 'ht9045Designer.showInDesigner', arguments: [entries], tooltip: '打開網頁的設計檢視並選取顯示這個標籤的元件',
+      }));
+    }
+  }
+
+  /** Above ReadIniData(…, "Hotplate Form", "X Start", …): the web control that edits it. */
+  fieldLenses(doc, text, widx, out) {
+    const re = /"([^"\\\n]{1,80})"\s*,\s*"([^"\\\n]{1,80})"/g;
+    const seen = new Set();
+    let m;
+    while ((m = re.exec(text)) && out.length < 800) {
+      re.lastIndex = m.index + 1 + m[1].length;     // pairs can chain: "a", "b", "c"
+      const rows = widx.fieldControls(m[1], m[2]).filter(r => r.pages.length);
+      if (!rows.length) continue;
+      const lineStart = text.lastIndexOf('\n', m.index) + 1;
+      if (text.slice(lineStart, m.index).includes('//')) continue;
+      const pos = doc.positionAt(m.index);
+      const key = pos.line + '|' + m[1] + '|' + m[2];
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const entries = [];
+      const had = new Set();
+      for (const r of rows) {
+        for (const p of r.pages) {
+          const k = p.toLowerCase() + '|' + r.id;          // hand-written + generated wire map the same control
+          if (had.has(k)) continue;
+          had.add(k);
+          entries.push({ page: p, node: r.id, path: '[' + r.section + '] ' + r.key + (r.note ? '　' + r.note : '') });
+        }
+      }
+      const pages = Array.from(new Set(entries.map(e => path.basename(e.page))));
+      let title = '$(symbol-field) 網頁欄位 [' + m[1] + '] ' + m[2] + '：' + pages[0] + ' › ' + entries[0].node;
+      if (entries.length > 1) title += ' 等 ' + entries.length + ' 處';
+      out.push(new vscode.CodeLens(new vscode.Range(pos.line, 0, pos.line, 0), {
+        title, command: 'ht9045Designer.showInDesigner', arguments: [entries], tooltip: '打開網頁的設計檢視並選取編輯這個欄位的元件',
+      }));
+    }
+  }
+
+  /** Above a server dispatch (== "io.btnPanelClick"): where the web sends that command. */
+  commandLenses(doc, text, widx, out) {
+    const re = /(==|\bcase)\s*"([a-z][\w]*\.[\w.:-]+)"/g;
+    const seen = new Set();
+    let m;
+    while ((m = re.exec(text)) && out.length < 600) {
+      const cmd = m[2];
+      const lineStart = text.lastIndexOf('\n', m.index) + 1;
+      if (text.slice(lineStart, m.index).includes('//')) continue;
+      const pos = doc.positionAt(m.index);
+      const key = pos.line + '|' + cmd;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const hits = widx.senders(cmd);
+      if (!hits.length) continue;
+      const pages = Array.from(new Set([].concat(...hits.map(h => h.pages)).map(p => path.basename(p))));
+      let title = '$(globe) 網頁送出 ' + cmd + '：' + path.basename(hits[0].file) + ':' + hits[0].line;
+      if (hits.length > 1) title += ' 等 ' + hits.length + ' 處';
+      if (pages.length) title += '（' + pages.slice(0, 2).join('、') + (pages.length > 2 ? ' 等 ' + pages.length + ' 頁' : '') + '）';
+      out.push(new vscode.CodeLens(new vscode.Range(pos.line, 0, pos.line, 0), {
+        title, command: 'ht9045Designer.openWebSenders', arguments: [cmd, hits], tooltip: '跳到網頁送出這個命令的地方',
+      }));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+function iconFor(n) {
+  if (n.isForm) return 'window';
+  const c = (n.cls || '').toLowerCase();
+  const t = n.tag;
+  if (/speedbutton|bitbtn|button|btnpanel/.test(c) || t === 'button') return 'symbol-event';
+  if (/edit|memo|maskedit/.test(c) || t === 'input' || t === 'textarea') return 'symbol-string';
+  if (/checkbox/.test(c)) return 'check';
+  if (/radio/.test(c)) return 'circle-large-outline';
+  if (/combobox|listbox/.test(c) || t === 'select') return 'list-selection';
+  if (/groupbox/.test(c) || t === 'fieldset') return 'group-by-ref-type';
+  if (/pagecontrol/.test(c)) return 'files';
+  if (/tabsheet/.test(c)) return 'file';
+  if (/image/.test(c) || t === 'img') return 'file-media';
+  if (/grid/.test(c) || t === 'table') return 'table';
+  if (/led|lamp/.test(c)) return 'lightbulb';
+  if (/label|statictext/.test(c)) return 'symbol-text';
+  if (/panel|scrollbox|bevel|shape/.test(c)) return 'symbol-namespace';
+  return 'symbol-field';
+}
+
+class ComponentTree {
+  constructor(hub) {
+    this.hub = hub;
+    this._em = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this._em.event;
+    this.d = null;
+    this.roots = [];
+    this.byKey = new Map();
+  }
+
+  set(d) {
+    this.d = d;
+    this.roots = [];
+    this.byKey = new Map();
+    const rows = d ? d.treeData : [];
+    for (const r of rows) {
+      const n = {
+        key: r[0], pk: r[1], id: r[2], tag: r[3], cls: r[4], cap: r[5], hidden: !!r[6], isForm: !!r[7], runHidden: !!r[8],
+        children: [], parent: null, depth: 0, tid: '',
+      };
+      this.byKey.set(n.key, n);
+    }
+    const seen = new Map();
+    for (const n of this.byKey.values()) {
+      const p = n.pk ? this.byKey.get(n.pk) : null;
+      if (p) { n.parent = p; p.children.push(n); } else this.roots.push(n);
+      const base = n.isForm ? '@form' : n.id;
+      const c = (seen.get(base) || 0) + 1;
+      seen.set(base, c);
+      n.tid = (d ? d.id : 0) + ':' + base + '#' + c;
+    }
+    const setDepth = (list, dep) => { for (const n of list) { n.depth = dep; setDepth(n.children, dep + 1); } };
+    setDepth(this.roots, 0);
+    this._em.fire();
+  }
+
+  refresh() { this._em.fire(); }
+
+  getChildren(n) { return n ? n.children : this.roots; }
+  getParent(n) { return n.parent || undefined; }
+
+  getTreeItem(n) {
+    const S = vscode.TreeItemCollapsibleState;
+    const label = n.isForm ? (this.d ? this.d.formLabel : '表單') : n.id;
+    const item = new vscode.TreeItem(label, n.children.length ? (n.depth < 2 ? S.Expanded : S.Collapsed) : S.None);
+    item.id = n.tid;
+    if (!n.cls && !n.isForm && this.d && this.d.ir) {
+      const node = this.d.ir.byName.get(n.id);
+      if (node) n.cls = node.class;
+    }
+    const dh = !n.isForm && !!(this.d && this.d.designHidden && this.d.designHidden.has(n.id));
+    const lk = !n.isForm && !!(this.d && this.d.designLocked && this.d.designLocked.has(n.id));
+    const note = this.d && this.d.designNotes ? this.d.designNotes[n.isForm ? '@form' : n.id] : null;
+    const desc = [];
+    if (note) desc.push('📝');
+    if (lk) desc.push('🔒');
+    if (!n.isForm) desc.push(n.cls || '<' + n.tag + '>');
+    if (n.cap) desc.push('「' + n.cap + '」');
+    if (dh) desc.push('（設計時隱藏）');
+    else if (n.runHidden) desc.push('（執行時隱藏）');
+    else if (n.hidden) desc.push('（隱藏）');
+    item.description = desc.join(' ');
+    item.tooltip = label + (n.cls ? ' : ' + n.cls : '') + '\n<' + n.tag + '>' + (n.cap ? '\n' + n.cap : '') +
+      (dh ? '\n在設計檢視暫時隱藏（按右邊的眼睛顯示回來；原始碼沒改）'
+        : n.runHidden ? '\n執行時隱藏（Visible=False，或頁面依機種／選配決定）；設計時照樣顯示，像 BCB6 的設計畫面'
+        : n.hidden ? '\n目前不可見（在未顯示的分頁裡，或被隱藏）' : '') +
+      (lk ? '\n鎖定：在設計畫面不能移動、改大小、刪除（裡面的元件也一樣）；按右邊的鎖頭解除' : '') +
+      (note ? '\n📝 設計備註：' + note : '');
+    item.iconPath = new vscode.ThemeIcon(dh ? 'eye-closed' : iconFor(n), dh || n.hidden ? new vscode.ThemeColor('disabledForeground') : undefined);
+    item.command = { command: 'ht9045Designer.selectKey', title: '選取', arguments: [n.key] };
+    // 'component' + '.hidden' / '.locked': the eye and the lock pick their icon from it; the form has neither
+    // (1006: '.pages' = a PageControl or one of its sheets -- 新增分頁 / 刪除這個分頁 / 分頁標題 on its menu)
+    item.contextValue = n.isForm ? 'componentForm' : 'component' + (dh ? '.hidden' : '') + (lk ? '.locked' : '') +
+      (n.cls === 'TPageControl' || n.cls === 'TTabSheet' ? '.pages' : '');
+    return item;
+  }
+
+  reveal(key) {
+    const n = this.byKey.get(key);
+    if (!n || !this.hub.treeView.visible) return;
+    // the page selected it: mirror that in the tree without the tree answering back
+    this.revealing = true;
+    const done = () => { setTimeout(() => { this.revealing = false; }, 50); };
+    this.hub.treeView.reveal(n, { select: true, focus: false }).then(done, done);
+  }
+}
+
+// ---------------------------------------------------------------------------
+/** 頁面: every page of the web folder by group -- a click opens it in the designer. */
+class PageTree {
+  constructor(hub) {
+    this.hub = hub;
+    this._em = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this._em.event;
+    this.groups = null;
+    this.byFile = new Map();
+    this.webRoot = null;
+    // 搜尋頁面 (the box above this list): only what has every word, and the components that have them
+    this.query = '';
+    this.found = null;
+    this.gen = 0;
+  }
+
+  /**
+   * Filter the list by `q` ('' = every page again): the pages whose name / title has every word, and
+   * under each the components that have them (name, class, text). keep: the same query again (a page
+   * changed), the groups stay as they were opened. Returns what was found, for the box.
+   */
+  setFilter(q, keep) {
+    const query = String(q || '').trim();
+    if (!keep) this.gen++;
+    this.query = query;
+    const t0 = Date.now();
+    const f = query ? pagesearch.filterPages(this.root(), query, 2000) : null;
+    this.found = null;
+    this.foundByFile = new Map();
+    if (f) {
+      const PER_PAGE = 100;
+      const open = f.hits <= 200;
+      const nodes = f.groups.map(g => {
+        const gn = { kind: 'group', name: g.name, children: [], parent: null, filtered: true };
+        gn.children = g.pages.map(p => {
+          const pn = Object.assign({}, p, { kind: 'page', parent: gn, filtered: true, open, children: [] });
+          pn.children = p.hits.slice(0, PER_PAGE).map(h => ({ kind: 'hit', parent: pn, hit: h }));
+          if (p.hits.length > PER_PAGE) pn.children.push({ kind: 'more', parent: pn, n: p.hits.length - PER_PAGE });
+          this.foundByFile.set(p.file.toLowerCase(), pn);
+          return pn;
+        });
+        return gn;
+      });
+      const best = f.groups.length ? (pagesearch.searchPages(this.root(), query, 1)[0] || null) : null;
+      let firstPage = null;
+      for (const g of nodes) { firstPage = firstPage || g.children.find(p => p.nameHit) || null; }
+      this.found = { query, words: f.words, nodes, pages: f.pages, hits: f.hits, capped: f.capped, best,
+        firstPage: firstPage || (nodes.length ? nodes[0].children[0] : null) };
+    }
+    const ms = Date.now() - t0;
+    const s = this.summary(ms);
+    if (this.hub.pageView) this.hub.pageView.message = s.text || undefined;
+    vscode.commands.executeCommand('setContext', 'ht9045Designer.pageFilterOn', !!query);
+    if (query && !keep) this.hub.log('搜尋頁面「' + query + '」：' + s.pages + ' 頁、' + s.hits + ' 個元件（' + ms + ' ms）');
+    this._em.fire();
+    return s;
+  }
+
+  /** What the filter found, in words (the list's message, the box's line under it). */
+  summary(ms) {
+    const f = this.found;
+    if (!this.query) return { query: '', pages: 0, hits: 0, text: '', none: false, ms: ms || 0 };
+    if (!f || !f.pages) return { query: this.query, pages: 0, hits: 0, text: '找不到「' + this.query + '」', none: true, ms: ms || 0 };
+    return { query: this.query, pages: f.pages, hits: f.hits, capped: f.capped, none: false, ms: ms || 0,
+      text: '「' + this.query + '」：' + f.pages + ' 頁' + (f.hits ? '、' + f.hits + (f.capped ? '+' : '') + ' 個元件' : '') };
+  }
+
+  /**
+   * Enter in the box: a component of exactly that name (its page opens, it is selected); else a page whose
+   * name / title has the words; else the best component found.
+   */
+  openFirst() {
+    const f = this.found;
+    if (!f) return null;
+    const openPage = p => vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(p.file), VIEW_TYPE);
+    if (f.best && f.best.exact) return this.hub.openPageAt(f.best.file, f.best.id);
+    if (f.firstPage && f.firstPage.nameHit) return openPage(f.firstPage);
+    if (f.best) return this.hub.openPageAt(f.best.file, f.best.id);
+    if (f.firstPage) return openPage(f.firstPage);
+    return null;
+  }
+
+  /** The web folder: the active designer's, else the one the settings / workspace name. */
+  root() {
+    if (this.hub.active && this.hub.active.r.webRoot) return this.hub.active.r.webRoot;
+    return roots.resolveRoots(null, this.hub.wsFolders(), this.hub.over()).webRoot || null;
+  }
+
+  build() {
+    const webRoot = this.root();
+    if (this.groups && webRoot === this.webRoot) return this.groups;
+    this.webRoot = webRoot;
+    this.byFile = new Map();
+    this.groups = pagelist.listPages(webRoot).map(g => {
+      const gn = { kind: 'group', name: g.name, children: [], parent: null };
+      gn.children = g.pages.map(p => {
+        const pn = Object.assign({ kind: 'page', parent: gn }, p);
+        this.byFile.set(p.file.toLowerCase(), pn);
+        return pn;
+      });
+      return gn;
+    });
+    if (webRoot) {
+      // a page added / removed / renamed: the list follows (debounced)
+      this.hub.watch(webRoot, '**/*.html', () => {
+        clearTimeout(this._t);
+        this._t = setTimeout(() => this.refresh(), 500);
+      });
+    }
+    return this.groups;
+  }
+
+  refresh() {
+    this.groups = null;
+    if (this.query) { const s = this.setFilter(this.query, true); this.hub.pageSearch.show(s); return; }
+    this._em.fire();
+  }
+  /** The open / active marks changed (no need to read the folder again). */
+  mark() { this._em.fire(); }
+  /** How many 頁面檢查 problems this page has in the Problems panel (0 = none or not checked). */
+  problemsOf(file) {
+    const c = this.hub.lintDiag;
+    if (!c) return 0;
+    const l = c.get(vscode.Uri.file(file));
+    // (errors and warnings; the "differs from the .dfm" notes are information, not problems)
+    return l ? l.filter(dg => dg.severity !== vscode.DiagnosticSeverity.Information).length : 0;
+  }
+
+  getChildren(n) {
+    if (n) return n.children || [];
+    if (this.found) return this.found.nodes;
+    // a query that found nothing: an empty list (the message above it says so)
+    return this.query ? [] : this.build();
+  }
+  getParent(n) { return n.parent || undefined; }
+
+  getTreeItem(n) {
+    const S = vscode.TreeItemCollapsibleState;
+    // filtered: the ids change with each query, so every group / page opens as the query wants
+    const q = n.filtered || n.kind === 'hit' || n.kind === 'more' ? 'q' + this.gen + ':' : '';
+    const words = this.found ? this.found.words : [];
+    if (n.kind === 'hit') {
+      const h = n.hit;
+      const item = new vscode.TreeItem({ label: h.id, highlights: pagesearch.highlightsOf(h.id, words) }, S.None);
+      item.id = q + 'hit:' + h.file.toLowerCase() + '#' + h.id + '@' + h.line;
+      item.description = (h.cls || '') + (h.caption ? (h.cls ? '　' : '') + '「' + h.caption.slice(0, 40) + (h.caption.length > 40 ? '…' : '') + '」' : '');
+      item.tooltip = h.page + ':' + h.line + '\n' + h.id + (h.cls ? ' : ' + h.cls : '') + (h.caption ? '\n「' + h.caption + '」' : '') +
+        '\n\n點一下：開這一頁並選取它';
+      item.iconPath = new vscode.ThemeIcon(h.how === 'class' ? 'symbol-class' : h.how === 'text' ? 'symbol-text' : 'symbol-field');
+      item.command = { command: 'ht9045Designer.openPageAt', title: '開啟並選取', arguments: [h.file, h.id] };
+      item.contextValue = 'pageHit';
+      return item;
+    }
+    if (n.kind === 'more') {
+      const item = new vscode.TreeItem('…還有 ' + n.n + ' 個（多打幾個字縮小範圍）', S.None);
+      item.id = q + 'more:' + n.parent.file.toLowerCase();
+      return item;
+    }
+    if (n.kind === 'group') {
+      const act = this.hub.active;
+      const has = act && n.children.some(p => web.samePath(p.file, act.file));
+      const item = new vscode.TreeItem(n.name, n.filtered || has ? S.Expanded : S.Collapsed);
+      item.id = q + 'grp:' + n.name;
+      const probs = n.children.reduce((s, p) => s + this.problemsOf(p.file), 0);
+      item.description = String(n.children.length) + (probs ? '　⚠ ' + probs : '');
+      item.iconPath = new vscode.ThemeIcon(n.name === pagelist.ROOT ? 'root-folder' : 'symbol-folder');   // (not 'folder': see SolutionTree's dir)
+      item.contextValue = 'pageGroup';
+      return item;
+    }
+    const act = this.hub.active;
+    const isActive = !!(act && web.samePath(act.file, n.file));
+    const isOpen = Array.from(this.hub.designers).some(d => web.samePath(d.file, n.file));
+    const nHits = n.filtered ? n.hits.length : 0;
+    const item = new vscode.TreeItem(n.filtered ? { label: n.label, highlights: pagesearch.highlightsOf(n.label, words) } : n.label,
+      nHits ? (n.open ? S.Expanded : S.Collapsed) : S.None);
+    item.id = q + 'page:' + n.file.toLowerCase();
+    const desc = [];
+    if (nHits) desc.push(nHits + ' 個元件');
+    else if (n.filtered && n.textHit) desc.push('頁面上的文字');
+    const probs = this.problemsOf(n.file);
+    if (probs) desc.push('⚠ ' + probs);
+    if (isActive) desc.push('● 目前');
+    else if (isOpen) desc.push('○ 已開啟');
+    if (n.redirect) desc.push('→ ' + n.redirect);
+    else if (n.title) desc.push(n.title);
+    item.description = desc.join('  ');
+    item.tooltip = n.rel + (n.title ? '\n' + n.title : '') + (n.redirect ? '\n轉址頁 → ' + n.redirect : '') +
+      (probs ? '\n頁面檢查：' + probs + ' 個問題（看「問題」面板）' : '') + '\n\n點一下：用設計檢視開啟';
+    item.iconPath = new vscode.ThemeIcon(isActive ? 'eye' : n.redirect ? 'arrow-right' : 'file-code',
+      isActive ? new vscode.ThemeColor('charts.orange') : undefined);
+    item.command = { command: 'ht9045Designer.openPageFile', title: '開啟', arguments: [n.file] };
+    item.contextValue = 'page';
+    return item;
+  }
+
+  /** Select the active page in the list (its group opens). */
+  revealActive() {
+    const act = this.hub.active;
+    const tv = this.hub.pageView;
+    if (!act || !tv || !tv.visible) return;
+    this.build();
+    // after the list has drawn what it was just told (a new filter, the first load): revealing an item it
+    // does not have yet is an error in VS Code's log ("No tree item with id ...")
+    clearTimeout(this._revealT);
+    this._revealT = setTimeout(() => {
+      const map = this.query ? this.foundByFile : this.byFile;
+      const n = map && act.file && map.get(act.file.toLowerCase());
+      if (n && tv.visible) tv.reveal(n, { select: true, focus: false, expand: true }).then(() => {}, () => {});
+    }, 250);
+  }
+}
+
+// ---------------------------------------------------------------------------
+/** The bulb on a cut attribute (頁面檢查): its inner quotes become the other kind; or the whole page at once. */
+class LintFixes {
+  constructor(hub) { this.hub = hub; }
+
+  provideCodeActions(document, range, context) {
+    const out = [];
+    // "differs from the .dfm": the .dfm's size / alignment for this one, or the whole page
+    const gapsHere = (context.diagnostics || []).filter(dg => dg.source === LINT_SOURCE && dg.code === 'dfm-gap');
+    if (gapsHere.length && this.hub) {
+      const text = document.getText();
+      const ir = this.hub.irForFile(document.uri.fsPath, text);
+      const gaps = ir ? pagelint.dfmGaps(text, ir) : [];
+      for (const dg of gapsHere) {
+        const g = gaps.find(x => x.at === document.offsetAt(dg.range.start));
+        if (!g) continue;
+        const a = new vscode.CodeAction('改成 BCB6 .dfm 的大小與對齊（' + g.id + '）', vscode.CodeActionKind.QuickFix);
+        a.edit = new vscode.WorkspaceEdit();
+        a.edit.replace(document.uri, new vscode.Range(document.positionAt(g.fix.at), document.positionAt(g.fix.at + g.fix.len)), g.fix.repl);
+        a.diagnostics = [dg];
+        a.isPreferred = true;
+        out.push(a);
+      }
+      const allG = new vscode.CodeAction('這一頁所有跟 DFM 不同的 Label／Panel 都改成 DFM 的', vscode.CodeActionKind.QuickFix);
+      allG.command = { command: 'ht9045Designer.lintFixDfmGaps', title: allG.title, arguments: [document.uri] };
+      out.push(allG);
+    }
+    const ours = (context.diagnostics || []).filter(dg => dg.source === LINT_SOURCE && dg.code === 'quote-cut');
+    for (const dg of ours) {
+      const value = document.getText(dg.range);
+      const start = document.offsetAt(dg.range.start);
+      const q = start > 0 ? document.getText().charAt(start - 1) : '"';
+      const other = q === '"' ? "'" : '"';
+      const a = new vscode.CodeAction('把裡面的 ' + q + ' 改成 ' + other + '（修正被切斷的屬性）', vscode.CodeActionKind.QuickFix);
+      a.edit = new vscode.WorkspaceEdit();
+      a.edit.replace(document.uri, dg.range, value.split(q).join(other));
+      a.diagnostics = [dg];
+      a.isPreferred = true;
+      out.push(a);
+    }
+    if (ours.length) {
+      const all = new vscode.CodeAction('修正這一頁所有被切斷的屬性', vscode.CodeActionKind.QuickFix);
+      all.command = { command: 'ht9045Designer.lintFixAll', title: '修正這一頁所有被切斷的屬性', arguments: [document.uri] };
+      out.push(all);
+    }
+    return out;
+  }
+}
+
+// ---------------------------------------------------------------------------
+/** Drag and drop in the component tree (WPF document outline): the names travel, the drop moves them. */
+const TREE_MIME = 'application/vnd.code.tree.ht9045designer.components';
+class ComponentDnd {
+  constructor(hub) {
+    this.hub = hub;
+    this.dragMimeTypes = [TREE_MIME];
+    this.dropMimeTypes = [TREE_MIME];
+  }
+  handleDrag(source, dataTransfer) {
+    const ids = (source || []).filter(n => n && !n.isForm && n.id).map(n => n.id);
+    if (ids.length) dataTransfer.set(TREE_MIME, new vscode.DataTransferItem(ids));
+  }
+  async handleDrop(target, dataTransfer) {
+    const item = dataTransfer.get(TREE_MIME);
+    if (!item) return null;
+    let ids = item.value;
+    if (typeof ids === 'string') { try { ids = JSON.parse(ids); } catch (e) { ids = []; } }
+    if (!Array.isArray(ids) || !ids.length || !ids.every(x => typeof x === 'string')) return null;
+    return this.hub.cmdReparent(ids, target || null);
+  }
+}
+
+// ---------------------------------------------------------------------------
+/**
+ * WPF / WinForms Toolbox: "Pointer" is the first item -- a click on it puts the picked-up tool
+ * back (the surface is for selecting again), and the toolbox goes back to it after a tool is put down.
+ */
+const POINTER = { cls: '@pointer', label: '指標', note: '回到選取（放下拿起的工具）', icon: 'inspect' };
+
+/** WPF: the caret inside a handler's body (the first statement, or just after an empty body's brace), or null. */
+function bodyPos(doc, line0) {
+  const b = cppstub.bodyStart(doc.getText(), line0);
+  return b ? new vscode.Position(b.line, b.col) : null;
+}
+
+/** 工具箱 (WPF Toolbox): the component classes a page can get; a click adds one. */
+const TPL_GROUP = '我的範本';
+class ToolboxTree {
+  // 0.153 (the WPF gap list G2): Pointer, then the categories (常用 / 容器 / IO 元件 / 其他), the components in them
+  // (1006, C++Builder Component > Create Component Template: + 我的範本, the user's own groups of components)
+  constructor(hub) {
+    this.hub = hub;
+    this.groups = new Map(toolbox.CATS.map(c => [c, { group: c }]));
+    this.tplGroup = { group: TPL_GROUP, tpl: true };
+    this._em = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this._em.event;
+  }
+  refresh() { this._em.fire(); }
+  templates() { return this.hub && this.hub.templates ? this.hub.templates() : []; }
+  getChildren(n) {
+    if (!n) return [POINTER, ...toolbox.CATS.filter(c => toolbox.ITEMS.some(i => toolbox.catOf(i) === c)).map(c => this.groups.get(c))].concat(this.templates().length ? [this.tplGroup] : []);
+    if (n.tpl) return this.templates().map(t => ({ template: t }));
+    if (n.group) return toolbox.ITEMS.filter(i => toolbox.catOf(i) === n.group);
+    return [];
+  }
+  // (reveal -- back to Pointer -- asks for the parent: Pointer and the categories are at the top)
+  getParent(it) { return !it || it === POINTER || it.group ? null : it.template ? this.tplGroup : this.groups.get(toolbox.catOf(it)) || null; }
+  getTreeItem(it) {
+    if (it && it.tpl) {
+      const g = new vscode.TreeItem(TPL_GROUP, vscode.TreeItemCollapsibleState.Expanded);
+      g.id = 'toolcat:@templates';
+      g.description = this.templates().length + ' 個';
+      g.tooltip = '你存的元件範本（C++Builder 的 Component Template）：選好一組元件 → 右鍵「存成工具箱範本…」。\n點一個範本＝放進選取的容器（或選取元件的下面），名稱自動改成新的。';
+      g.contextValue = 'toolCat';
+      return g;
+    }
+    if (it && it.template) {
+      const t = it.template;
+      const ti = new vscode.TreeItem(t.name, vscode.TreeItemCollapsibleState.None);
+      ti.id = 'tooltpl:' + t.name;
+      ti.description = t.ids.length + ' 個元件　' + t.ids.slice(0, 3).join('、') + (t.ids.length > 3 ? '…' : '');
+      ti.tooltip = '範本「' + t.name + '」：' + t.ids.join('、') + (t.from ? '\n（從 ' + t.from + ' 存的）' : '') + '\n\n點一下＝放進選取的容器（或選取元件的下面）；右鍵＝刪除這個範本';
+      ti.iconPath = new vscode.ThemeIcon('symbol-snippet');
+      ti.command = { command: 'ht9045Designer.templateInsert', title: '放置範本', arguments: [t.name] };
+      ti.contextValue = 'toolTemplate';
+      return ti;
+    }
+    if (it && it.group) {
+      const g = new vscode.TreeItem(it.group, vscode.TreeItemCollapsibleState.Expanded);
+      g.id = 'toolcat:' + it.group;
+      g.description = toolbox.ITEMS.filter(i => toolbox.catOf(i) === it.group).length + ' 個';
+      g.contextValue = 'toolCat';
+      return g;
+    }
+    if (it === POINTER) {
+      const p = new vscode.TreeItem(it.label, vscode.TreeItemCollapsibleState.None);
+      p.id = 'tool:@pointer';
+      p.description = it.note;
+      p.tooltip = '指標（WPF 工具箱的 Pointer）：放下拿起的工具，設計畫面回到選取（同 Esc）。\n放好一個元件後工具箱也會回到這一項。';
+      p.iconPath = new vscode.ThemeIcon(it.icon);
+      p.command = { command: 'ht9045Designer.toolboxArm', title: '指標', arguments: [it.cls] };
+      p.contextValue = 'toolPointer';
+      return p;
+    }
+    const item = new vscode.TreeItem(it.label, vscode.TreeItemCollapsibleState.None);
+    item.id = 'tool:' + it.cls;
+    item.description = it.note + '　' + it.cls;
+    item.tooltip = it.cls + '：' + it.note + '（名稱 ' + it.base + '1、' + it.base + '2…）\n\n' +
+      '點一下＝拿起這個工具：到設計畫面上點一下放在那裡，或拖一個框（連大小）；Esc 取消\n' +
+      '連點兩下＝直接新增：選了 Panel／GroupBox／分頁／表單 → 放進去（左上 8,8）；選了其他元件 → 放在它下面\n\n寫進 HTML 原始碼，Ctrl+Z 復原。';
+    item.iconPath = new vscode.ThemeIcon(it.icon);
+    item.command = { command: 'ht9045Designer.toolboxArm', title: '放置', arguments: [it.cls] };
+    item.contextValue = 'tool';
+    return item;
+  }
+}
+
+// ---------------------------------------------------------------------------
+/** 接線總覽 tab (one per designer; re-running the command refreshes it). */
+class OverviewPanel {
+  static show(hub, d, data) {
+    if (d.overview && !d.overview.disposed) { d.overview.set(data); d.overview.panel.reveal(undefined, true); return d.overview; }
+    d.overview = new OverviewPanel(hub, d, data);
+    return d.overview;
+  }
+
+  constructor(hub, d, data) {
+    this.hub = hub;
+    this.d = d;
+    this.data = data;
+    this.disposed = false;
+    const media = vscode.Uri.joinPath(hub.ctx.extensionUri, 'media');
+    this.panel = vscode.window.createWebviewPanel('ht9045Designer.overview', '接線總覽：' + path.basename(d.file),
+      { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+      { enableScripts: true, enableCommandUris: false, localResourceRoots: [media], retainContextWhenHidden: true });
+    const w = this.panel.webview;
+    const nonce = crypto.randomBytes(16).toString('base64');
+    w.html = '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">' +
+      '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src ' + w.cspSource + '; script-src \'nonce-' + nonce + '\';">' +
+      '<link rel="stylesheet" href="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'overview.css')) + '"></head><body><div id="root"></div>' +
+      '<script nonce="' + nonce + '" src="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'overview.js')) + '"></script></body></html>';
+    w.onDidReceiveMessage(m => this.onMessage(m));
+    this.panel.onDidDispose(() => { this.disposed = true; if (d.overview === this) d.overview = null; });
+  }
+
+  set(data) {
+    this.data = data;
+    this.panel.webview.postMessage({ type: 'data', data });
+  }
+
+  onMessage(m) {
+    switch (m && m.type) {
+      case 'ready': this.panel.webview.postMessage({ type: 'data', data: this.data }); break;
+      case 'select':
+        if (!this.d.disposed) {
+          this.d.panel.reveal(this.d.panel.viewColumn, true);
+          this.d.post({ type: 'selectId', id: String(m.id || ''), origin: 'overview' });
+        }
+        break;
+      case 'open':
+        this.hub.openTarget({ kind: m.kind === 'golden' ? 'golden' : m.kind === 'port' ? 'port' : 'web', file: String(m.file), line: m.line | 0, col: m.col | 0 }, this.d);
+        break;
+      default: break;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+/** 與 DFM 的差異 tab (one per designer; refreshed after every edit). */
+class DfmDiffPanel {
+  static show(hub, d, data, quiet) {
+    if (d.dfmDiff && !d.dfmDiff.disposed) {
+      d.dfmDiff.set(data);
+      if (!quiet) d.dfmDiff.panel.reveal(undefined, true);
+      return d.dfmDiff;
+    }
+    if (quiet) return null;
+    d.dfmDiff = new DfmDiffPanel(hub, d, data);
+    return d.dfmDiff;
+  }
+
+  constructor(hub, d, data) {
+    this.hub = hub;
+    this.d = d;
+    this.data = data;
+    this.disposed = false;
+    const media = vscode.Uri.joinPath(hub.ctx.extensionUri, 'media');
+    this.panel = vscode.window.createWebviewPanel('ht9045Designer.dfmDiff', '與 DFM 的差異：' + path.basename(d.file),
+      { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+      { enableScripts: true, enableCommandUris: false, localResourceRoots: [media], retainContextWhenHidden: true });
+    const w = this.panel.webview;
+    const nonce = crypto.randomBytes(16).toString('base64');
+    w.html = '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">' +
+      '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src ' + w.cspSource + '; script-src \'nonce-' + nonce + '\';">' +
+      '<link rel="stylesheet" href="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'overview.css')) + '"></head><body><div id="root"></div>' +
+      '<script nonce="' + nonce + '" src="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'dfmdiff.js')) + '"></script></body></html>';
+    w.onDidReceiveMessage(m => this.onMessage(m));
+    this.panel.onDidDispose(() => { this.disposed = true; clearTimeout(this.timer); if (d.dfmDiff === this) d.dfmDiff = null; });
+  }
+
+  set(data) {
+    this.data = data;
+    this.panel.webview.postMessage({ type: 'data', data });
+  }
+
+  scheduleRefresh() {
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => { if (!this.disposed && !this.d.disposed) this.hub.cmdDfmDiff(this.d, true); }, 400);
+  }
+
+  onMessage(m) {
+    if (this.d.disposed) return;
+    switch (m && m.type) {
+      case 'ready': this.panel.webview.postMessage({ type: 'data', data: this.data }); break;
+      case 'refresh': this.hub.cmdDfmDiff(this.d, true); break;
+      case 'ghosts':
+        // the design surface's DFM frames on / off; the button then says which
+        return this.hub.cmdDfmGhosts(undefined, this.d).then(r => this.hub.cmdDfmDiff(this.d, true).then(() => r));
+      case 'select':
+        this.d.panel.reveal(this.d.panel.viewColumn, true);
+        this.d.post({ type: 'selectId', id: String(m.id || ''), origin: 'dfmdiff' });
+        break;
+      case 'reset': {
+        // write one DFM value back: the probe changes the page and reports the edit
+        const r = m.reset || {};
+        const id = String(m.id || '');
+        if (!id || !/^(setLayout|setCaption|setLook)$/.test(r.type)) break;
+        const msg = { type: r.type, id };
+        for (const k of ['left', 'top', 'width', 'height']) if (typeof r[k] === 'number') msg[k] = r[k];
+        if (r.type === 'setCaption') msg.value = String(r.value == null ? '' : r.value);
+        if (r.type === 'setLook') { msg.prop = String(r.prop || ''); msg.value = r.value; }
+        // (AutoSize = False: the .dfm's own size comes along)
+        if (r.type === 'setLook' && r.size && typeof r.size.width === 'number' && typeof r.size.height === 'number') msg.size = { width: r.size.width, height: r.size.height };
+        this.d.panel.reveal(this.d.panel.viewColumn, true);
+        this.d.post(msg);
+        break;
+      }
+      case 'resetPattern': return this.resetPattern(String(m.key || ''), m.confirmed === true);
+      default: break;
+    }
+  }
+
+  /**
+   * "全部改回" on a pattern line: the same look / text difference on many controls -- every
+   * one written back to the DFM value in ONE edit (one Ctrl+Z), after a question.
+   * Position / size patterns are not offered: their DFM values differ control by control.
+   */
+  async resetPattern(key, confirmed) {
+    const data = this.data;
+    const pat = data && (data.patterns || []).find(p => p.key === key);
+    if (!pat) return null;
+    const rows = data.rows.filter(r => r.pattern === key && r.inSource && r.reset && /^(setLook|setCaption)$/.test(r.reset.type));
+    if (!rows.length) { vscode.window.setStatusBarMessage('$(info) 這一種差異沒有可以改回的元件（位置／大小請一個一個改）', 5000); return null; }
+    if (!confirmed) {
+      const pick = await vscode.window.showWarningMessage(
+        '把 ' + rows.length + ' 個 ' + pat.cls + ' 的 ' + pat.prop + ' 從「' + (pat.page || '（空）') + '」改回 DFM 的「' + (pat.dfm || '（空）') + '」？\n' +
+        '（寫進 HTML 原始碼，一個 Ctrl+Z 全部復原；要存檔才寫入）', { modal: true }, '改回');
+      if (pick !== '改回') return null;
+    }
+    // (AutoSize = False: each label's own .dfm size comes along -- lib/dfmdiff.resetItemsOf does the same)
+    const items = rows.map(r => Object.assign({ id: r.id, type: r.reset.type, prop: r.reset.prop, value: r.reset.value }, r.reset.size ? { size: r.reset.size } : {}));
+    this.d.panel.reveal(this.d.panel.viewColumn, true);
+    this.d.post({ type: 'editMany', items });
+    vscode.window.setStatusBarMessage('$(discard) ' + rows.length + ' 個 ' + pat.cls + ' 的 ' + pat.prop + ' 改回 DFM 的值（Ctrl+Z 復原）', 6000);
+    return { count: rows.length, items };
+  }
+}
+
+// ---------------------------------------------------------------------------
+class PropsView {
+  constructor(hub) {
+    this.hub = hub;
+    this.view = null;
+    this.data = null;
+  }
+
+  resolveWebviewView(view) {
+    this.view = view;
+    const media = vscode.Uri.joinPath(this.hub.ctx.extensionUri, 'media');
+    const w = view.webview;
+    w.options = { enableScripts: true, enableCommandUris: false, localResourceRoots: [media] };
+    const nonce = crypto.randomBytes(16).toString('base64');
+    const css = w.asWebviewUri(vscode.Uri.joinPath(media, 'props.css'));
+    const js = w.asWebviewUri(vscode.Uri.joinPath(media, 'props.js'));
+    w.html = '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">' +
+      '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src ' + w.cspSource +
+      '; script-src \'nonce-' + nonce + '\'; img-src ' + w.cspSource + ' data:;">' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+      '<link rel="stylesheet" href="' + css + '"></head><body><div id="root"></div>' +
+      '<script nonce="' + nonce + '" src="' + js + '"></script></body></html>';
+    w.onDidReceiveMessage(m => this.hub.onPropsMessage(m));
+    view.onDidDispose(() => { this.view = null; });
+    // 0.149: nothing selected = a button's properties / events, grey (EastSun: "還沒選到元件時 請用 button 參數 然後全部反灰")
+    const s = this.sample();
+    if (s) w.postMessage({ type: 'sample', data: s });
+  }
+
+  /** media/props_sample.json: the panel's data of a button (TSpeedButton), read once. */
+  sample() {
+    if (this._sample !== undefined) return this._sample;
+    try { this._sample = JSON.parse(fs.readFileSync(path.join(this.hub.ctx.extensionUri.fsPath, 'media', 'props_sample.json'), 'utf8')); } catch (e) { this._sample = null; }
+    return this._sample;
+  }
+
+  show(data) {
+    this.data = data;
+    // 1005 (WPF audit: the instance list on top of BCB6's Object Inspector / WPF's Properties window): every component
+    // of the page, in page order, indented by depth -- picked there = selected in the designer
+    if (data && data.comp) {
+      const d = this.hub.propsDesigner;
+      const rows = d && Array.isArray(d.treeData) ? d.treeData : [];
+      const byKey = new Map(rows.map(r => [r[0], r]));
+      const depth = r => { let n = 0, p = r; while (p && p[1] && byKey.has(p[1]) && n < 30) { p = byKey.get(p[1]); n++; } return n; };
+      data.comps = rows.filter(r => r[2] || r[7]).slice(0, 3000).map(r => ({ id: r[7] ? '@form' : r[2], name: r[7] ? '表單' : r[2], cls: r[4] || '', depth: depth(r), form: !!r[7] }));
+    }
+    if (this.view) this.view.webview.postMessage({ type: 'show', data });
+  }
+}
+
+// ---------------------------------------------------------------------------
+/** 搜尋頁面: the search box above the 頁面 list (media/search.js); what it types filters that list. */
+class PageSearchView {
+  constructor(hub) {
+    this.hub = hub;
+    this.view = null;
+  }
+
+  resolveWebviewView(view) {
+    this.view = view;
+    const media = vscode.Uri.joinPath(this.hub.ctx.extensionUri, 'media');
+    const w = view.webview;
+    w.options = { enableScripts: true, enableCommandUris: false, localResourceRoots: [media] };
+    const nonce = crypto.randomBytes(16).toString('base64');
+    w.html = '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">' +
+      '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src ' + w.cspSource + '; script-src \'nonce-' + nonce + '\';">' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+      '<link rel="stylesheet" href="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'search.css')) + '"></head><body><div id="root"' +
+      (this.attrs ? Object.keys(this.attrs).map(k => ' data-' + k + '="' + htmlesc(this.attrs[k]) + '"').join('') : '') + '></div>' +
+      '<script nonce="' + nonce + '" src="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'search.js')) + '"></script></body></html>';
+    w.onDidReceiveMessage(m => this.onMessage(m));
+    view.onDidDispose(() => { this.view = null; });
+  }
+
+  post(m) { if (this.view) this.view.webview.postMessage(m); }
+
+  onMessage(m) {
+    if (!m) return;
+    const pages = this.hub.pages;
+    if (m.type === 'ready') {
+      // the box was drawn again (moved, hidden and shown): it shows what the list is filtered by
+      if (pages.query) this.post({ type: 'set', q: pages.query, summary: pages.summary() });
+      else if (m.q) this.show(pages.setFilter(m.q));
+    } else if (m.type === 'query') {
+      this.show(pages.setFilter(m.q));
+    } else if (m.type === 'open') {
+      return pages.openFirst();
+    } else if (m.type === 'toList') {
+      return vscode.commands.executeCommand('ht9045Designer.pages.focus');
+    }
+  }
+
+  show(s) { this.post(Object.assign({ type: 'result' }, s)); }
+  /** Put `q` in the box (a command set the filter). */
+  set(q, s) { this.post({ type: 'set', q, summary: s }); }
+}
+// (two paths, the same file's bytes)
+function sameFile(a, b) { try { return fs.readFileSync(a).equals(fs.readFileSync(b)); } catch (e) { return false; } }
+// 0.155 "1920x1080" / "1920 × 1080" -> { w, h } (3 to 5 digits each), else null
+function parseScreen(v) {
+  const m = /^\s*(\d{3,5})\s*[x×*]\s*(\d{3,5})\s*$/i.exec(String(v == null ? '' : v));
+  return m ? { w: +m[1], h: +m[2] } : null;
+}
+// (an attribute value in the box's page)
+function htmlesc(t) { return String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+
+// ---------------------------------------------------------------------------
+/**
+ * AI(W906-HTDESIGNER) 20261001 (0.140, EastSun's screenshot of Visual Studio's navigation bar 專案 ▾ | 類別 ▾ | 成員 ▾):
+ * a C++ file's classes and members for VS Code's breadcrumbs (the bar above the editor: each part a drop-down) and
+ * the 類別 / 成員 pickers in the editor's title bar. lib/cppsymbols.js reads them (a light reading, not a compiler).
+ */
+// 執行列 (0.142): ▶ 啟動／繼續, ▾ the configuration, ⏸ 暫停, ⏹ 停止, ↻ 重新啟動, the steps -- VS Code's debug commands on
+// status bar items that stay; a button that cannot act now is grey and does nothing.
+// 0.149 (EastSun: "我需要有勾選開關 可以讓我開關 是否使用模擬模式 (SOFT_SIMULTE 有被定義的時候) 也要可以給我勾選是否是 debug
+// 模式 ... 綠色箭頭 啟動軟體並編譯的按鈕 ... 暫停的按鈕給我中斷"): ☑ 模擬 / ☑ Debug checkboxes, the green ▶ = build
+// wb_serve in the dir of that choice (media/htd_build.ps1) and start it (the tree's own launch entry, its program moved
+// to that dir; Debug off = no debugger); ⏸ breaks into it (Debug only); ⏹ also stops a build.
+const RUN_DIRS = { 'sim|dbg': 'build_dbg_nonoracle', 'sim|rel': 'build_nonoracle', 'ship|dbg': 'build_integ_dbg_x86', 'ship|rel': 'build_integ_ship_x86' };
+class RunBar {
+  constructor(ctx, hub) {
+    this.ctx = ctx;
+    this.hub = hub || null;
+    this.building = null;
+    const B = [
+      ['sim', ''], ['dbg', ''],
+      ['start', '$(debug-start)'], ['pick', '$(triangle-down)'], ['pause', '$(debug-pause)'], ['stop', '$(debug-stop)'],
+      ['restart', '$(debug-restart)'], ['over', '$(debug-step-over)'], ['into', '$(debug-step-into)'], ['out', '$(debug-step-out)'],
+    ];
+    this.items = {};
+    B.forEach(([k, t], i) => {
+      const it = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 1002 - i);
+      it.text = t;
+      this.items[k] = it;
+      ctx.subscriptions.push(it);
+    });
+    const d = vscode.debug || {};
+    for (const ev of ['onDidStartDebugSession', 'onDidTerminateDebugSession', 'onDidChangeActiveDebugSession', 'onDidChangeActiveStackItem'])
+      if (d[ev]) ctx.subscriptions.push(d[ev](() => this.update()));
+    // (VS Code's own ⏹ -- its floating debug bar, Shift+F5 -- ends only the session in focus: F5's pair wb_publish +
+    // wb_gateway kept the other one running. One of this tree's sessions ending = the rest of this tree's end too.)
+    this.sessions = new Set();
+    if (d.onDidStartDebugSession) ctx.subscriptions.push(d.onDidStartDebugSession(s => this.sessions.add(s)));
+    if (d.onDidTerminateDebugSession) ctx.subscriptions.push(d.onDidTerminateDebugSession(s => { this.followStop(s); setTimeout(() => this.update(), 300); }));
+    const rc = (id, fn) => { if (vscode.commands.registerCommand) ctx.subscriptions.push(vscode.commands.registerCommand(id, fn)); };
+    rc('ht9045Designer.run.toggleSim', () => this.toggle('run.simulation'));
+    rc('ht9045Designer.run.toggleDebug', () => this.toggle('run.debug'));
+    rc('ht9045Designer.run.buildAndStart', () => this.buildAndStart());
+    rc('ht9045Designer.run.cancelBuild', () => this.cancelBuild());
+    rc('ht9045Designer.run.stopAll', () => this.stopAll());
+    // (1003, EastSun: "按鈕可以不要加圖片位置? 加在上方可以嗎? ... 列一條工具列 把工具列都列上去 下面藍色顯示資訊就好": the buttons are on
+    //  the editor's title bar now (package.json editor/title, greyed by "enablement" on the context keys update() sets);
+    //  the status bar keeps only information)
+    for (const [id, cmd] of [['continue', 'continue'], ['pause', 'pause'], ['stepOver', 'stepOver'], ['stepInto', 'stepInto'], ['stepOut', 'stepOut']])
+      rc('ht9045Designer.run.' + id, () => vscode.commands.executeCommand('workbench.action.debug.' + cmd));
+    // (1005, EastSun: "圖片上按鈕我希望都有作用 現在好像有些是假的": VS Code's debug.restart only restarted the session -- the
+    //  exe was not rebuilt, so a change did not come in, and a wb_serve run outside a session left it grey. Visual
+    //  Studio's Restart = stop, build, start: that is what it does now)
+    rc('ht9045Designer.run.restart', () => this.restart());
+    for (const id of ['simOn', 'simOff']) rc('ht9045Designer.run.' + id, () => this.toggle('run.simulation'));
+    for (const id of ['dbgOn', 'dbgOff']) rc('ht9045Designer.run.' + id, () => this.toggle('run.debug'));
+    // (a wb_* exe running outside any session -- a terminal, a session that left it behind: ⏹ is not grey then)
+    this.procsAlive = false;
+    this.procTimer = setInterval(() => this.pollProcs(), 3000);
+    if (this.procTimer.unref) this.procTimer.unref();
+    ctx.subscriptions.push({ dispose: () => clearInterval(this.procTimer) });
+    if (vscode.workspace.onDidChangeConfiguration) ctx.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => { if (!e || !e.affectsConfiguration || e.affectsConfiguration('ht9045Designer.run')) this.update(); }));
+    this.update();
+  }
+  /** run.simulation / run.debug (both on when never set: simulation is the safe one, Debug is what can pause) */
+  opt(k) { const v = vscode.workspace.getConfiguration('ht9045Designer').get(k); return v === undefined || v === null ? true : !!v; }
+  async toggle(k) {
+    const c = vscode.workspace.getConfiguration('ht9045Designer');
+    const v = !this.opt(k);
+    // (written where it is set now -- a workspace value would hide a user-level one and the box would look dead)
+    const i = c.inspect ? c.inspect(k) : null;
+    const T = vscode.ConfigurationTarget || {};
+    const where = i && i.workspaceFolderValue !== undefined ? T.WorkspaceFolder : i && i.workspaceValue !== undefined ? T.Workspace : T.Global;
+    if (c.update) await c.update(k, v, where);
+    this.update();
+    vscode.window.setStatusBarMessage((k === 'run.simulation' ? '模擬模式（SOFT_SIMULTE）：' + (v ? '開' : '關') : (v ? 'Debug' : 'Release')) + '（下次按 ▶ 建置並啟動時用）', 4000);
+    return v;
+  }
+  /** What the next ▶ builds and starts: the C++ tree, the build dir of the two checkboxes. */
+  plan() {
+    const sim = this.opt('run.simulation'), dbg = this.opt('run.debug');
+    const port = this.hub && this.hub.projSearch ? this.hub.projSearch.areas().find(a => a.area === 'port') : null;
+    const dir = RUN_DIRS[(sim ? 'sim' : 'ship') + '|' + (dbg ? 'dbg' : 'rel')];
+    return { sim, dbg, dir, tree: port ? port.root : null, label: (sim ? '模擬' : '出貨組態') + '／' + (dbg ? 'Debug' : '不接除錯器') };
+  }
+  /**
+   * The tree's own launch entry for wb_serve -- read from <tree>\.vscode\launch.json itself (whatever folder is open):
+   * its W906_* environment points the settings / logs at ..\runcfg; without it wb_serve would write the machine's own
+   * files. None there = null (▶ refuses -- it does not start a bare one). ${workspaceFolder} = the tree.
+   */
+  launchFor(p) {
+    const folders = vscode.workspace.workspaceFolders || [];
+    const norm = f => path.resolve(f).toLowerCase();
+    const folder = folders.find(f => norm(f.uri.fsPath) === norm(p.tree)) || folders.find(f => norm(p.tree).startsWith(norm(f.uri.fsPath) + path.sep)) || folders[0];
+    const file = path.join(p.tree, '.vscode', 'launch.json');
+    let all = [];
+    try { all = (JSON.parse(liveconfig.stripJsonc(fs.readFileSync(file, 'utf8'))) || {}).configurations || []; } catch (e) { all = []; }
+    const wb = all.filter(c => c && c.type === 'cppdbg' && /wb_serve\.exe$/i.test(String(c.program || '')) && !/O2/.test(String(c.name || '')) && Array.isArray(c.environment) && c.environment.length);
+    const base = (p.dbg ? wb.find(c => !c.noDebug && /出貨組態/.test(c.name)) : wb.find(c => c.noDebug)) || wb.find(c => !c.noDebug) || null;
+    if (!base) return { folder, cfg: null, file };
+    const sub = v => typeof v === 'string' ? v.split('${workspaceFolder}').join(p.tree) : Array.isArray(v) ? v.map(sub) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, sub(x)])) : v;
+    const cfg = sub(JSON.parse(JSON.stringify(base)));
+    delete cfg.preLaunchTask;   // (built just now; the old-instance check is done before the build)
+    delete cfg.presentation;
+    cfg.name = 'HTML設計 ▶ wb_serve（' + p.label + '）';
+    cfg.program = path.join(p.tree, p.dir, 'wb_serve.exe');
+    cfg.noDebug = !p.dbg;
+    if (!p.dbg) cfg.ignoreRunWithoutDebuggingWarnings = true;
+    return { folder, cfg, file, from: base.name };
+  }
+  /** A wb_serve.exe already running (its exe could not be linked, port 8055 is taken). Tests replace it. */
+  async wbServeRunning() {
+    if (this.checkRunning) return this.checkRunning();
+    return new Promise(res => {
+      try {
+        require('child_process').execFile('tasklist', ['/FI', 'IMAGENAME eq wb_serve.exe', '/NH'], { windowsHide: true }, (e, out) => res(!e && /wb_serve\.exe/i.test(String(out || ''))));
+      } catch (e) { res(false); }
+    });
+  }
+  /** A build already going on (one of ours, or a VS Code task running cmake / make): two builds in one dir break it. */
+  otherBuild() {
+    const ex = (vscode.tasks && vscode.tasks.taskExecutions) || [];
+    return ex.find(e => {
+      const t = e && e.task;
+      if (!t) return false;
+      const x = t.execution || {};
+      const line = [t.name, x.process, x.commandLine].concat(x.args || []).map(v => (v && v.value) || v).join(' ');
+      return /cmake|mingw32-make|build_nonoracle|build_x64|htd_build/i.test(line);
+    }) || null;
+  }
+  /** ▶: build in the chosen dir (a task terminal: the output; 問題: the errors; a window with the bar and 取消), then start it. */
+  async buildAndStart() {
+    if (this.building) return null;
+    // (1006, EastSun: "方案總管那邊的 啟動按鈕 建置時 和我按F5 時好像不太一樣" + "我需要跟F5一樣": ▶ = F5 -- the
+    //  configuration picked in 執行與偵錯, its own preLaunchTask (the same build folder, wait page, old-program check),
+    //  and everything the extension does around F5 (freeProgram, skipping an up-to-date build, the build bar, the log).
+    //  Before, ▶ built the folder of the 模擬 / Debug boxes with its own script: 模擬 on = build_nonoracle, the
+    //  SIMULATION build, while F5 builds the shipping one. ht9045Designer.run.likeF5 = false: that old ▶.)
+    if (vscode.workspace.getConfiguration('ht9045Designer').get('run.likeF5') !== false) {
+      if (this.state() !== 'idle') await this.stopAll();
+      if (this.hub && this.hub.logEv) this.hub.logEv('▶ ＝ F5（執行與偵錯選的設定）');
+      await vscode.commands.executeCommand('workbench.action.debug.start');
+      return { likeF5: true };
+    }
+    const p = this.plan();
+    if (!p.tree) { vscode.window.showErrorMessage('找不到 C++ 移植樹（要建置的那棵）：開它的資料夾，或在設定 ht9045Designer.portRoot 指定。'); return null; }
+    // (1003, EastSun: "為啥我都已經關掉程式了 我還需要按按鈕停止 才可以編譯": what still runs is stopped here first -- not a
+    //  message asking for ⏹)
+    if (this.state() !== 'idle') await this.stopAll();
+    const ob = this.otherBuild();
+    if (ob) { vscode.window.showWarningMessage('另一個建置正在跑（' + ((ob.task && ob.task.name) || '工作') + '）：同一個資料夾同時建兩次會壞掉，等它跑完再按 ▶。'); return { plan: p, refused: 'build' }; }
+    const L = this.launchFor(p);
+    if (!L.cfg) {
+      vscode.window.showErrorMessage('不啟動：' + L.file + ' 裡沒有 wb_serve 的啟動設定（它的 W906_* 環境變數把設定檔、記錄導到 runcfg；沒有它，wb_serve 會直接寫機台的設定檔）。');
+      return { plan: p, refused: 'launch' };
+    }
+    // (1005, ES02: Debug's ▶ said "started" and nothing ran -- this PC's gdb dies on any program it starts (endpoint
+    //  security; even whoami.exe: exit 0xE0000027). Asked first, once a run: the user hears why and can start Release.)
+    // (1006: gdb that cannot run here -> LLDB (lldb-dap), breakpoints the same; neither -> asked)
+    if (p.dbg) {
+      const v = await this.debugVia(L.cfg);
+      if (!v.cfg) {
+        if (this.hub && this.hub.logEv) this.hub.logEv('▶ Debug 不能用：' + v.why);
+        const pick = await vscode.window.showWarningMessage('Debug 啟動不了：這台電腦的偵錯器（gdb）沒辦法啟動程式（' + v.why + '）。要改用 Release（不接除錯器）啟動嗎？', '改用 Release 啟動', '取消');
+        if (pick === '改用 Release 啟動') { await this.toggle('run.debug'); return this.buildAndStart(); }
+        return { plan: p, refused: 'gdb', why: v.why };
+      }
+      if (v.via === 'lldb') { L.cfg = v.cfg; this.saidLldb(v.why); }
+    }
+    if (await this.wbServeRunning()) await this.stopAll();
+    // (still one: another folder's -- not ours to end, and it holds the port)
+    if (await this.wbServeRunning()) { vscode.window.showWarningMessage('還有一支 wb_serve.exe 在跑（不是這棵樹的，沒有幫你關）：它佔著 exe 和連接埠，先把它關掉再按 ▶。'); return { plan: p, refused: 'running' }; }
+    const script = path.join(this.ctx.extensionPath || (this.ctx.extensionUri && this.ctx.extensionUri.fsPath) || __dirname, 'media', 'htd_build.ps1');
+    const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Tree', p.tree, '-Dir', p.dir, '-Sim', p.sim ? '1' : '0', '-Dbg', p.dbg ? '1' : '0'];
+    if (!vscode.tasks || !vscode.Task || !vscode.CustomExecution) return { plan: p, args, launch: L.cfg };
+    // The build runs here (child_process) and its output goes to a task terminal (a Pseudoterminal): the extension reads
+    // make's "[ 45%]" for the bar (EastSun: "我編譯視窗要有進度條"); 問題 still gets the errors ($gcc on that terminal).
+    const spawn = this.spawn || require('child_process').spawn;
+    const run = { child: null, pct: 0, cancelled: false, closed: false, code: null, onPct: null, endRes: null };
+    const ended = new Promise(r => { run.endRes = c => { if (run.closed) return; run.closed = true; run.code = c; r(c); }; });
+    const writeEm = new vscode.EventEmitter(), closeEm = new vscode.EventEmitter();
+    const pty = {
+      onDidWrite: writeEm.event, onDidClose: closeEm.event,
+      open: () => {
+        if (run.cancelled) { closeEm.fire(1); run.endRes(undefined); return; }
+        writeEm.fire('建置 wb_serve（' + p.label + '）→ ' + p.dir + '\r\n');
+        let child;
+        try { child = spawn('powershell.exe', args, { cwd: p.tree, windowsHide: true }); } catch (e) { writeEm.fire(String(e) + '\r\n'); closeEm.fire(1); run.endRes(1); return; }
+        run.child = child;
+        let carry = '';
+        const feed = t => {
+          t = String(t);
+          writeEm.fire(t.replace(/\r?\n/g, '\r\n'));
+          // (whole lines only: a "[ 45%]" split between two chunks is still read)
+          const lines = (carry + t).split('\n');
+          carry = lines.pop();
+          for (const ln of lines) {
+            const m = /^\s*\[\s*(\d{1,3})%\]/.exec(ln);
+            if (m) { const v = Math.min(100, +m[1]); if (v > run.pct) { const inc = v - run.pct; run.pct = v; if (run.onPct) run.onPct(v, inc); } }
+          }
+        };
+        // (utf8 decoded across chunks: g++ quotes Chinese source lines)
+        if (child.stdout) { if (child.stdout.setEncoding) child.stdout.setEncoding('utf8'); child.stdout.on('data', feed); }
+        if (child.stderr) { if (child.stderr.setEncoding) child.stderr.setEncoding('utf8'); child.stderr.on('data', feed); }
+        child.on('error', e => { writeEm.fire('\r\n' + String(e) + '\r\n'); closeEm.fire(1); run.endRes(1); });
+        child.on('close', c => { if (carry) feed('\n'); closeEm.fire(typeof c === 'number' ? c : 1); run.endRes(run.cancelled ? undefined : c); });
+      },
+      // (the terminal closed by hand: this run's build ends -- not whatever build is current then)
+      close: () => { if (this.building && this.building.run === run) this.cancelBuild(); },
+    };
+    const task = new vscode.Task({ type: 'ht9045Designer', kind: 'build' }, L.folder || vscode.TaskScope.Workspace, '建置 wb_serve（' + p.label + '）', 'HTML設計',
+      new vscode.CustomExecution(async () => pty), ['$gcc']);
+    task.presentationOptions = { reveal: vscode.TaskRevealKind.Always, panel: vscode.TaskPanelKind.Dedicated, clear: true };
+    this.building = { run, p };
+    this.update();
+    let code;
+    try {
+      await vscode.tasks.executeTask(task);
+      // (EastSun: "編譯的時候 需要有視窗顯示在編譯 然後可以有按鈕取消編譯" + "要有進度條": the window, its bar from make's %, 取消)
+      const t0 = Date.now();
+      code = vscode.window.withProgress ? await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification, title: '建置 wb_serve（' + p.label + '）', cancellable: true,
+      }, (prog, token) => {
+        if (token && token.onCancellationRequested) token.onCancellationRequested(() => this.cancelBuild());
+        const msg = () => run.pct + '%　' + p.dir + '　' + Math.round((Date.now() - t0) / 1000) + ' 秒（輸出在終端機）';
+        run.onPct = (v, inc) => { prog.report({ increment: inc, message: msg() }); if (this.hub && this.hub.solPanel) this.hub.solPanel.postRun(this.snapshot()); };
+        const tick = setInterval(() => prog.report({ message: msg() }), 1000);
+        // (what make already said before this window opened)
+        prog.report(run.pct ? { increment: run.pct, message: msg() } : { message: msg() });
+        return ended.then(c => { clearInterval(tick); return c; });
+      }) : await ended;
+    } catch (e) {
+      code = 1;
+      vscode.window.showErrorMessage('建置沒辦法開始：' + (e && e.message || e));
+    } finally {
+      this.building = null;
+      this.update();
+    }
+    if (code !== 0 && this.hub && this.hub.logEv) this.hub.logEv('▶ 建置' + (code === undefined ? '取消' : '失敗（exit ' + code + '）') + '：' + p.dir);
+    if (code !== 0) {
+      vscode.window.showErrorMessage(code === undefined ? '建置取消了（' + p.dir + '）。wb_serve.exe 已刪掉，下次 ▶ 會重新連結。⚠ 停在一半的 .obj 若讓下次連結失敗，先「建置」一次全部重編那幾個檔。' : '建置失敗（exit ' + code + '）：' + p.dir + '。錯誤在「問題」和終端機。');
+      return { plan: p, built: false, code };
+    }
+    // (a session started meanwhile -- F5 by hand: not a second wb_serve)
+    if (this.state() !== 'idle') { vscode.window.showWarningMessage('建置好了，但已經有程式在跑：沒有再啟動一個。'); return { plan: p, built: true, started: false }; }
+    // (a session that ends within seconds did not run the program -- said, not left as "started")
+    const t1 = Date.now(), dd = vscode.debug || {};
+    const early = dd.onDidTerminateDebugSession ? dd.onDidTerminateDebugSession(s => {
+      if (!s || s.name !== L.cfg.name) return;
+      early.dispose();
+      const sec = Math.round((Date.now() - t1) / 1000);
+      if (sec > 15) return;
+      if (this.hub && this.hub.logEv) this.hub.logEv('▶ ' + L.cfg.name + ' 啟動 ' + sec + ' 秒就結束了');
+      vscode.window.showErrorMessage('程式沒有跑起來：「' + L.cfg.name + '」啟動 ' + sec + ' 秒就結束了。原因在「偵錯主控台」' + (p.dbg ? '（Debug 時常見的是 gdb 被擋；可以按工具列的 Debug 改成 Release 再 ▶）' : '') + '。');
+    }) : null;
+    if (early) setTimeout(() => early.dispose(), 16000);
+    const ok = await vscode.debug.startDebugging(L.folder, L.cfg, { noDebug: !p.dbg });
+    if (this.hub && this.hub.logEv) this.hub.logEv('▶ 建置好、啟動 ' + L.cfg.program + '：' + (ok ? '成功' : '沒有啟動'));
+    return { plan: p, built: true, started: ok, from: L.from };
+  }
+  /**
+   * 取消建置: the whole tree of the build ends (cmake -> make -> g++ / ld: killing only powershell leaves them running),
+   * then wb_serve.exe of that dir is deleted -- a linker stopped half way leaves a cut exe that is NEWER than its
+   * objects, so the next build would call it up to date and run it (CLAUDE.md: 27 cut exes, exit 0, "ALL PASS").
+   * A build that already ended is not touched (its exe is the good one, about to start).
+   */
+  cancelBuild() {
+    const b = this.building;
+    // (1006 audit: the F5 / ▶ build -- run.likeF5, the default -- is a task, not this.building: it was left running)
+    if (!b && this.f5Build()) { return this.stopF5Build(this.f5Build()).then(() => true, () => false); }
+    if (!b || !b.run || b.run.cancelled || b.run.closed) return false;
+    b.run.cancelled = true;
+    const c = b.run.child;
+    if (!c) { b.run.endRes(undefined); return true; }   // (not started yet: it will not)
+    if (c.pid) {
+      try { (this.spawn || require('child_process').spawn)('taskkill', ['/PID', String(c.pid), '/T', '/F'], { windowsHide: true }); } catch (e) { try { c.kill(); } catch (x) { /* gone */ } }
+    }
+    const exe = path.join(b.p.tree, b.p.dir, 'wb_serve.exe');
+    setTimeout(() => {
+      if (b.run.code === 0) return;
+      try { if (fs.existsSync(exe)) fs.unlinkSync(exe); } catch (e) { /* still locked: the next build relinks anyway when it can */ }
+    }, 1500);
+    return true;
+  }
+  /**
+   * ⏹ (both red stops: the status bar's and 方案總管's toolbar; EastSun 1003: "按任何一個 都要完全停止"): everything
+   * this tree runs ends -- our build (cancelBuild), every debug session (a compound's other half too: VS Code's own
+   * stop ends only the one in focus), then any wb_serve / wb_publish / wb_gateway exe of this tree still alive
+   * (a no-debugger run, a terminal) is killed with its children. Exes of other folders are not touched.
+   */
+  /** F5's build task while it runs (the hub's build watch: its name, start, pid, build folder), or null. */
+  f5Build() { const bt = this.hub && this.hub.bwTask; return bt && !bt.ended ? bt : null; }
+  /** idle / running / paused, or building: the designer's own ▶ build or F5's build task. */
+  curState() { return this.building || this.f5Build() ? 'building' : this.state(); }
+  /**
+   * ⏹ during F5's build (EastSun 1003: "我要在編譯過程中可以按下圖片中停止 來停止編譯"): the task ended and its whole process tree
+   * (cmd -> cmake -> make -> g++ / ld) killed by ITS pid -- another session's build in the same tree is not touched; then
+   * the exes this build wrote in its folder are deleted: a linker stopped half way leaves a cut exe NEWER than its objects
+   * and the next build would call it up to date (CLAUDE.md: 27 cut exes, exit 0, "ALL PASS"). -> the deleted names.
+   */
+  async stopF5Build(bt) {
+    bt.cancelled = true;
+    for (const ex of (vscode.tasks && vscode.tasks.taskExecutions) || []) {
+      if (ex && ex.task && ex.task.name === bt.name) { try { ex.terminate(); } catch (e) { /* gone */ } }
+    }
+    if (bt.pid) { try { (this.spawn || require('child_process').spawn)('taskkill', ['/PID', String(bt.pid), '/T', '/F'], { windowsHide: true }); } catch (e) { /* gone */ } }
+    await new Promise(r => setTimeout(r, this.stopWaitMs === undefined ? 1500 : this.stopWaitMs));
+    let dir = bt.dir;
+    if (!dir) { const tree = this.plan().tree; const run = tree ? buildwatch.runningCMake(tree, bt.t - 5000) : []; dir = run[0] ? run[0].dir : null; }
+    const gone = [];
+    if (dir) {
+      for (const n of ['wb_serve.exe', 'wb_publish.exe', 'wb_gateway.exe']) {
+        const f = path.join(dir, n);
+        try { if (fs.existsSync(f) && fs.statSync(f).mtimeMs >= bt.t - 1000) { fs.unlinkSync(f); gone.push(n); } } catch (e) { /* locked: the next build relinks when it can */ }
+      }
+    }
+    if (this.hub && this.hub.logEv) this.hub.logEv('停止 F5 建置「' + bt.name + '」PID ' + (bt.pid || '?') + '（' + (dir || '資料夾不明') + '）' + (gone.length ? '，刪掉寫到一半的 ' + gone.join('、') : ''));
+    return gone;
+  }
+  /**
+   * F5 (EastSun 1003: "為啥我都已經關掉程式了 我還需要按按鈕停止 才可以編譯"): the HMI window closed, wb_serve still running in
+   * the background holds its exe -- the link fails until ⏹. Before F5's build (the cppdbg provider in the hub calls this),
+   * the program about to be rebuilt is stopped: its debug sessions, then its process (same exe path only -- another
+   * folder's, another exe of this tree are left), waited for until gone. -> the pids ended.
+   */
+  async freeProgram(prog) {
+    if (!prog || !/\.exe$/i.test(String(prog))) return [];
+    const want = path.resolve(String(prog)).toLowerCase();
+    const d = vscode.debug || {};
+    for (const s of Array.from(this.sessions || [])) {
+      const sp = s && s.configuration && s.configuration.program;
+      if (sp && path.resolve(String(sp)).toLowerCase() === want && d.stopDebugging) { try { await d.stopDebugging(s); } catch (e) { /* gone */ } }
+    }
+    const mine = () => Promise.resolve(this.listProcs()).then(ps => ps.filter(p => p.path && path.resolve(p.path).toLowerCase() === want), () => []);
+    const left = await mine();
+    for (const p of left) {
+      try { (this.spawn || require('child_process').spawn)('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true }); } catch (e) { /* gone */ }
+    }
+    for (let i = 0; left.length && i < 20; i++) {
+      if (!(await mine()).length) break;
+      await new Promise(r => setTimeout(r, this.stopWaitMs === undefined ? 250 : 0));
+    }
+    if (left.length && this.hub && this.hub.logEv) this.hub.logEv('F5 建置前先關掉還在跑的 ' + prog + '（PID ' + left.map(p => p.pid).join('、') + '）');
+    if (left.length) vscode.window.setStatusBarMessage('$(debug-stop) 先關掉還在跑的 ' + path.basename(String(prog)) + '（PID ' + left.map(p => p.pid).join('、') + '），再建置', 8000);
+    return left.map(p => p.pid);
+  }
+  /**
+   * Can this PC's gdb start a program at all? (ES02 1005: its endpoint security kills gdb on any program it starts --
+   * whoami.exe too, exit 0xE0000027, no word.) gdb starts whoami.exe stopped at its first instruction and kills it: exit 0
+   * = fine (remembered); anything else = { ok: false, why }. A check that cannot finish in time does not block. Tests
+   * replace gdbCheck.
+   */
+  async gdbWorks(dbgPath) {
+    if (this.gdbCheck) return this.gdbCheck(dbgPath);
+    const exe = String(dbgPath || '').replace(/\$\{env:([^}]+)\}/g, (m, k) => process.env[k] || '');
+    if (!exe || !fs.existsSync(exe)) return { ok: false, why: '找不到 gdb：' + (exe || dbgPath || '（launch.json 沒有 miDebuggerPath）') };
+    this.gdbOk = this.gdbOk || new Set();
+    if (this.gdbOk.has(exe.toLowerCase())) return { ok: true };
+    const sys = process.env.SystemRoot || 'C:\\Windows';
+    const probe = [path.join(sys, 'SysWOW64', 'whoami.exe'), path.join(sys, 'System32', 'whoami.exe')].find(f => fs.existsSync(f));
+    if (!probe) return { ok: true };
+    return new Promise(res => {
+      try {
+        require('child_process').execFile(exe, ['-nx', '--batch', '-ex', 'starti', '-ex', 'kill', '--args', probe], { windowsHide: true, timeout: 20000 }, (e, so, se) => {
+          if (e && e.killed) { res({ ok: true }); return; }   // (too slow to tell: not blocked on a guess)
+          const code = e ? (typeof e.code === 'number' ? e.code : 1) : 0;
+          if (code === 0) { this.gdbOk.add(exe.toLowerCase()); res({ ok: true }); return; }
+          res({ ok: false, why: 'gdb 啟動測試程式就結束，exit 0x' + (code >>> 0).toString(16).toUpperCase() + (String(se || '').trim() ? '：' + String(se).trim().split(/\r?\n/).pop().slice(0, 120) : '') });
+        });
+      } catch (e) { res({ ok: true }); }
+    });
+  }
+  /**
+   * 1006 (EastSun: "debug 就是可以攔中斷的模式喔" -- ES02: gdb is killed by the endpoint security the moment it writes a
+   * new thread's registers, lldb.exe is refused ("Access is denied"), lldb-mi under cpptools hangs (it keeps the \r of
+   * cpptools' CRLF commands: "-environment-cd <dir>\r" answers a broken line) -- LLDB's own debug adapter lldb-dap works:
+   * breakpoints stop, variables read, the program runs on): a cppdbg launch with gdb on a PC where gdb cannot start a
+   * program becomes an "ht9045-lldb" launch (this extension's debugger type, lldb-dap behind it) of the same program,
+   * arguments, folder, environment, preLaunchTask. -> { cfg, via: 'gdb' | 'lldb' | 'as-is', why } ; { cfg: null, why } =
+   * neither can debug here. ht9045Designer.debug.lldbFallback = false: never; ht9045Designer.debug.lldbDapPath: which.
+   */
+  async debugVia(cfg) {
+    // (no debugger asked, or not a gdb launch: left as it is)
+    if (!cfg || cfg.noDebug || cfg.type === 'ht9045-lldb' || (cfg.MIMode && cfg.MIMode !== 'gdb')) return { cfg, via: 'as-is' };
+    const conf = vscode.workspace.getConfiguration('ht9045Designer');
+    if (conf.get('debug.lldbFallback') === false) return { cfg, via: 'gdb' };
+    const g = await this.gdbWorks(cfg.miDebuggerPath);
+    if (g.ok) return { cfg, via: 'gdb' };
+    const bits = this.exeBits(cfg.program);
+    const dap = this.lldbFind ? this.lldbFind(bits) : this.findLldbDap(bits);
+    if (!dap) return { cfg: null, why: g.why + '；也沒有可以代替的 LLDB（' + (bits === 64 ? '64 位元的程式要 x86_64 的 lldb-dap' : 'i686 的 lldb-dap') + '，設定 ht9045Designer.debug.lldbDapPath）' };
+    return { cfg: this.lldbLaunch(cfg, dap), via: 'lldb', why: g.why };
+  }
+  /** The cppdbg launch as an ht9045-lldb one: the same program, arguments, folder, environment and tasks. */
+  lldbLaunch(cfg, dap) {
+    const env = {};
+    for (const e of Array.isArray(cfg.environment) ? cfg.environment : []) if (e && e.name) env[e.name] = e.value == null ? '' : String(e.value);
+    const out = { type: 'ht9045-lldb', request: 'launch', name: cfg.name || 'wb_serve', program: cfg.program, args: Array.isArray(cfg.args) ? cfg.args : [],
+      cwd: cfg.cwd || path.dirname(String(cfg.program || '')), env, stopOnEntry: !!cfg.stopAtEntry, lldbDap: dap };
+    for (const k of ['preLaunchTask', 'postDebugTask', 'serverReadyAction', 'presentation', 'internalConsoleOptions', '__configurationTarget']) if (cfg[k] !== undefined) out[k] = cfg[k];
+    return out;
+  }
+  /** Said once a window: this debug session goes through LLDB, and why. */
+  saidLldb(why) {
+    if (this.hub && this.hub.logEv) this.hub.logEv('Debug 改用 LLDB（lldb-dap）：' + why);
+    if (this.lldbSaid) return;
+    this.lldbSaid = true;
+    vscode.window.showInformationMessage('這台電腦的 gdb 不能啟動程式（' + why + '），這次 Debug 改用 LLDB——中斷點、逐步執行、看變數都一樣。');
+  }
+  /** 32 or 64: the PE header's machine of the program (not built yet: by its folder's name). */
+  exeBits(program) {
+    const f = String(program || '');
+    try {
+      const fd = fs.openSync(f, 'r');
+      try {
+        const b = Buffer.alloc(4096);
+        fs.readSync(fd, b, 0, 4096, 0);
+        const pe = b.readUInt32LE(0x3c);
+        if (pe + 6 <= b.length && b.readUInt32LE(pe) === 0x4550) return b.readUInt16LE(pe + 4) === 0x8664 ? 64 : 32;
+      } finally { fs.closeSync(fd); }
+    } catch (e) { /* not there yet */ }
+    return /x64|x86_64|amd64/i.test(f) ? 64 : 32;
+  }
+  /** The lldb-dap for `bits`: the setting, else the newest under %LOCALAPPDATA%\Programs\ht9045-lldb (i686 / x86_64). */
+  findLldbDap(bits) {
+    const set = String(vscode.workspace.getConfiguration('ht9045Designer').get('debug.lldbDapPath') || '').replace(/\$\{env:([^}]+)\}/g, (m, k) => process.env[k] || '');
+    if (set) return fs.existsSync(set) ? set : null;
+    const base = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'ht9045-lldb');
+    let dirs = [];
+    try { dirs = fs.readdirSync(base).filter(n => (bits === 64 ? /x86_64/i : /i686/i).test(n)).sort().reverse(); } catch (e) { dirs = []; }
+    for (const n of dirs) {
+      const f = path.join(base, n, 'bin', 'lldb-dap.exe');
+      if (fs.existsSync(f)) return f;
+    }
+    return null;
+  }
+  /** ↺ (Visual Studio's Restart): everything of this tree stopped, then ▶ -- built again (a change comes in) and started. */
+  async restart() {
+    if (this.building || this.f5Build()) return null;
+    if (this.curState() !== 'idle' || this.procsAlive) await this.stopAll();
+    return this.buildAndStart();
+  }
+  async stopAll() {
+    const did = [];
+    if (this.building && this.cancelBuild()) did.push('建置');
+    const f5 = this.f5Build();
+    if (f5) { const gone = await this.stopF5Build(f5); did.push('F5 建置' + (gone.length ? '（刪掉寫到一半的 ' + gone.join('、') + '，下次會重新連結）' : '')); }
+    const d = vscode.debug || {};
+    if (d.activeDebugSession && d.stopDebugging) {
+      try { await d.stopDebugging(); did.push('偵錯工作階段'); } catch (e) { /* already gone */ }
+    }
+    // (a session's exe needs a moment to end on its own -- killed only if it did not)
+    await new Promise(r => setTimeout(r, this.stopWaitMs === undefined ? 2000 : this.stopWaitMs));
+    const tree = this.plan().tree;
+    const left = tree ? (await this.listProcs()).filter(p => p.path && path.resolve(p.path).toLowerCase().startsWith(path.resolve(tree).toLowerCase() + path.sep)) : [];
+    for (const p of left) {
+      try { (this.spawn || require('child_process').spawn)('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true }); } catch (e) { /* gone */ }
+    }
+    if (left.length) did.push(left.map(p => path.basename(p.path)).join('、'));
+    this.procsAlive = false;
+    this.update();
+    vscode.window.setStatusBarMessage(did.length ? '$(debug-stop) 已全部停止：' + did.join('＋') : '$(debug-stop) 沒有在跑的東西', 5000);
+    if (this.hub && this.hub.logEv) this.hub.logEv('⏹ 全部停止：' + (did.join('＋') || '沒有在跑的') + (left.length ? '（結束 PID ' + left.map(p => p.pid + ' ' + p.path).join('、') + '）' : ''));
+    return { did, killed: left.map(p => p.pid) };
+  }
+  /** a session whose program is in this tree */
+  inTree(s) {
+    const tree = this.plan().tree;
+    const prog = s && s.configuration && s.configuration.program;
+    return !!(tree && prog && path.resolve(String(prog)).toLowerCase().startsWith(path.resolve(tree).toLowerCase() + path.sep));
+  }
+  /** one of this tree's sessions ended: the others of this tree are stopped too (returns how many) */
+  followStop(s) {
+    this.sessions.delete(s);
+    if (!this.inTree(s)) return 0;
+    const d = vscode.debug || {};
+    let n = 0;
+    for (const o of Array.from(this.sessions)) {
+      if (!this.inTree(o) || !d.stopDebugging) continue;
+      this.sessions.delete(o);
+      n++;
+      try { Promise.resolve(d.stopDebugging(o)).catch(() => { /* already gone */ }); } catch (e) { /* already gone */ }
+    }
+    return n;
+  }
+  /** wb_serve / wb_publish / wb_gateway running now: [{ pid, path }]. Tests replace it. */
+  listProcs() {
+    if (this.procLister) return this.procLister();
+    return new Promise(res => {
+      const ps = "Get-CimInstance Win32_Process -Filter \"Name='wb_serve.exe' OR Name='wb_publish.exe' OR Name='wb_gateway.exe'\" | ForEach-Object { '' + $_.ProcessId + '|' + $_.ExecutablePath }";
+      try {
+        require('child_process').execFile('powershell.exe', ['-NoProfile', '-Command', ps], { windowsHide: true }, (e, out) => {
+          res(String(out || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(l => { const i = l.indexOf('|'); return { pid: +l.slice(0, i), path: l.slice(i + 1) }; }).filter(p => p.pid > 0));
+        });
+      } catch (e) { res([]); }
+    });
+  }
+  /** This tree's wb_* exes among `procs` ([{ pid, path }]). */
+  treeProcs(procs) {
+    const tree = this.plan().tree;
+    return tree ? (procs || []).filter(p => p.path && path.resolve(p.path).toLowerCase().startsWith(path.resolve(tree).toLowerCase() + path.sep)) : [];
+  }
+  /**
+   * Every 3 s: (1003, EastSun: "我明明把程式關掉了 圖片上停止鈕 卻又還是可以點") only THIS tree's wb_* exes light ⏹ (tasklist
+   * first -- cheap; their paths asked only when one runs: another folder's wb_serve is not ours to stop); and the state
+   * is worked out again -- a session's end that came in out of order (or not at all) cannot leave ⏹ lit for more than 3 s.
+   */
+  pollProcs() {
+    const stNow = this.curState();
+    if (stNow !== this.lastSt) this.update();
+    if (this.procPolling) return;
+    this.procPolling = true;
+    const done = list => {
+      this.procPolling = false;
+      const alive = list.length > 0, names = list.map(p => path.basename(p.path)).join('、');
+      if (alive !== this.procsAlive || names !== this.procsNames) { if (this.hub && this.hub.logEv) this.hub.logEv(alive ? '這棵樹的程式在跑：' + names : '這棵樹的 wb_* 都結束了'); this.procsAlive = alive; this.procsNames = names; this.update(); }
+    };
+    const lister = this.procPoller || (cb => require('child_process').execFile('tasklist', ['/FI', 'IMAGENAME eq wb_*', '/NH'], { windowsHide: true }, (e, out) => cb(!e && /wb_(serve|publish|gateway)\.exe/i.test(String(out || '')))));
+    try {
+      lister(any => {
+        if (!any) { done([]); return; }
+        Promise.resolve(this.listProcs()).then(ps => done(this.treeProcs(ps)), () => done([]));
+      });
+    } catch (e) { done([]); }
+  }
+  /** Why ⏹ is lit now, in words (its tooltip): the build, the debug sessions by name, this tree's wb_* exes. */
+  stopWhy(st) {
+    const why = [];
+    if (st === 'building') why.push('建置中');
+    const names = Array.from(this.sessions || []).map(s => s && s.name).filter(Boolean);
+    const act = (vscode.debug || {}).activeDebugSession;
+    if (act && act.name && !names.includes(act.name)) names.push(act.name);
+    if (names.length) why.push('偵錯工作階段：' + names.join('、'));
+    if (this.procsAlive && this.procsNames) why.push('還在跑：' + this.procsNames);
+    return why.join('；');
+  }
+  // what the buttons can do now: nothing running / running / stopped at a breakpoint (a stack frame in focus)
+  state() {
+    const d = vscode.debug || {};
+    if (!d.activeDebugSession) return 'idle';
+    const s = d.activeStackItem;
+    return s && s.frameId !== undefined ? 'paused' : 'running';
+  }
+  update() {
+    const st0 = this.state(), st = this.curState();
+    this.lastSt = st;
+    const grey = vscode.ThemeColor ? new vscode.ThemeColor('disabledForeground') : undefined;
+    const green = vscode.ThemeColor ? new vscode.ThemeColor('testing.iconPassed') : undefined;
+    const set = (k, cmd, tip, color) => {
+      const it = this.items[k];
+      it.command = cmd || undefined;
+      it.color = cmd ? color : grey;
+      it.tooltip = tip + (cmd ? '' : '（現在不能用）');
+      // (1003: not in the status bar any more -- the title bar's buttons; the items still hold the state for 方案總管's toolbar)
+      it.hide();
+    };
+    const on = (want, cmd) => (want ? cmd : null);
+    const sim = this.opt('run.simulation'), dbg = this.opt('run.debug');
+    const ses = (vscode.debug || {}).activeDebugSession;
+    const noDbgRun = !!(ses && ses.configuration && ses.configuration.noDebug);
+    // the two checkboxes (what the next ▶ builds; a run going on keeps what it was built with)
+    this.items.sim.text = (sim ? '$(pass-filled)' : '$(circle-large-outline)') + ' 模擬';
+    // (⚠ not "no hardware": this tree's wb_serve links the 1203 card whenever ADVMOT.lib is there, SOFT_SIMULTE or not
+    // -- MachineType.h WB_PUMP_1203_CONTROL_LIVE, CMakeLists HAVE_PCI1203 -- so the card opens and pci1203.* are live)
+    set('sim', 'ht9045Designer.run.toggleSim', '模擬模式：' + (sim ? '開' : '關') + '（' + (sim ? 'SOFT_SIMULTE 有定義：引擎的 IO／感測器走模擬。⚠ 這棵樹的 1203 卡不受它管：有 ADVMOT.lib 時卡照樣會開、pci1203.* 命令照樣能動' : 'SOFT_SIMULTE 沒定義：出貨組態，跟機台上跑的一樣') + '）。按一下切換；下次 ▶ 建置並啟動時生效');
+    // (1005, EastSun: "Debug 按鈕請 按下後 變成release release 按下後 變成debug": Visual Studio's Debug / Release)
+    this.items.dbg.text = dbg ? '$(bug) Debug' : '$(rocket) Release';
+    set('dbg', 'ht9045Designer.run.toggleDebug', (dbg ? 'Debug（-g、接 gdb：可以下中斷點、⏸ 暫停）—— 按一下改成 Release' : 'Release（不接除錯器，較快；⏸ 不能用）—— 按一下改成 Debug') + '。下次 ▶ 時生效');
+    this.items.start.text = st === 'building' ? '$(sync~spin) 建置中' : '$(debug-start)';
+    const p = this.plan();
+    set('start', st === 'idle' ? 'ht9045Designer.run.buildAndStart' : on(st === 'paused', 'workbench.action.debug.continue'),
+      st === 'paused' ? '繼續 (F5)' : st === 'running' ? '執行中' : st === 'building' ? '建置中…（⏹ 取消）' :
+        (vscode.workspace.getConfiguration('ht9045Designer').get('run.likeF5') !== false ? '建置並啟動＝ F5（執行與偵錯選的設定，跟按 F5 一樣：同一個建置資料夾、等待畫面、已編過就跳過；「模擬」「Debug」勾選不影響它）' :
+        '建置並啟動 wb_serve（' + p.label + '）：' + p.dir + (p.sim ? '' : '　⚠ 出貨組態＝會接機台')), green);
+    set('pick', on(st === 'idle', 'workbench.action.debug.selectandstart'), '選擇「執行與偵錯」的設定，然後啟動（不建置）');
+    set('pause', on(st === 'running' && !noDbgRun, 'workbench.action.debug.pause'), st === 'running' && noDbgRun ? '暫停：這次沒接除錯器，不能中斷（勾 Debug 再 ▶）' : '暫停／中斷 (F6)');
+    // (one command for ⏹ whatever runs: a build, a session, a wb_* exe left running -- all of it stops)
+    set('stop', on(st !== 'idle' || this.procsAlive, 'ht9045Designer.run.stopAll'),
+      (st === 'building' ? '停止：取消建置' : '全部停止：偵錯工作階段（全部）＋這棵樹的 wb_serve／wb_publish／wb_gateway') +
+        (st !== 'idle' || this.procsAlive ? '\n現在亮著是因為：' + (this.stopWhy(st) || '偵錯工作階段') : ''));
+    set('restart', on(st === 'running' || st === 'paused' || (st === 'idle' && this.procsAlive), 'ht9045Designer.run.restart'), '重新啟動 (Ctrl+Shift+F5)：全部停止 → 重新建置 → 啟動（跟 Visual Studio 一樣，改過的程式會進去）');
+    set('over', on(st === 'paused', 'workbench.action.debug.stepOver'), '不進入函式 (F10)');
+    set('into', on(st === 'paused', 'workbench.action.debug.stepInto'), '逐步執行 (F11)');
+    set('out', on(st === 'paused', 'workbench.action.debug.stepOut'), '跳離函式 (Shift+F11)');
+    // (1003: what the title bar's buttons can do now -- package.json "enablement")
+    if (vscode.commands && vscode.commands.executeCommand) {
+      vscode.commands.executeCommand('setContext', 'ht9045Designer.runState', st);
+      vscode.commands.executeCommand('setContext', 'ht9045Designer.runNoDbg', noDbgRun);
+      vscode.commands.executeCommand('setContext', 'ht9045Designer.runCanStop', st !== 'idle' || !!this.procsAlive);
+      vscode.commands.executeCommand('setContext', 'ht9045Designer.runCanRestart', st === 'running' || st === 'paused' || (st === 'idle' && !!this.procsAlive));
+    }
+    // (0.151: the same buttons on the toolbar of 方案總管 -- the status bar's were not seen)
+    if (this.hub && this.hub.solPanel) this.hub.solPanel.postRun(this.snapshot(st));
+    return st;
+  }
+  /** The buttons' state for the 方案總管 toolbar: { st, sim, dbg, label, pct, b: { key: { cmd, tip } } }. */
+  snapshot(st) {
+    // (1003: the same state as update() -- F5's build is 'building' here too; 方案總管 showed 啟動, not 建置中, while F5 built)
+    const s = st || this.curState();
+    const b = {};
+    for (const k of ['start', 'pause', 'stop', 'restart', 'sim', 'dbg', 'over', 'into', 'out']) {
+      const it = this.items[k];
+      if (!it) continue;
+      const c = it.command;
+      b[k] = { cmd: c ? (typeof c === 'string' ? c : c.command) : null, tip: String(it.tooltip || '') };
+    }
+    const p = this.plan();
+    return { st: s, sim: p.sim, dbg: p.dbg, label: p.label, dir: p.dir, pct: this.building && this.building.run ? this.building.run.pct : (this.f5Build() && this.hub && this.hub.buildBar ? this.hub.buildBar.pct : null), b };
+  }
+}
+
+class CppNav {
+  constructor(hub) {
+    this.hub = hub;
+    this.cache = new Map();   // uri -> { version, syms }
+  }
+
+  symsOf(doc) {
+    const k = doc.uri.toString();
+    const c = this.cache.get(k);
+    if (c && c.version === doc.version) return c.syms;
+    const syms = cppsymbols.symbolsOf(doc.getText());
+    this.cache.set(k, { version: doc.version, syms });
+    if (this.cache.size > 50) this.cache.delete(this.cache.keys().next().value);
+    return syms;
+  }
+
+  kindOf(s) {
+    const K = vscode.SymbolKind;
+    return s.kind === 'struct' ? K.Struct : s.kind === 'class' ? K.Class : s.kind === 'method' ? (s.detail === '建構式' ? K.Constructor : K.Method) : s.kind === 'field' ? K.Field : K.Function;
+  }
+
+  /** VS Code's DocumentSymbolProvider: the breadcrumbs and the Outline. */
+  provideDocumentSymbols(doc) {
+    if (vscode.workspace.getConfiguration('ht9045Designer').get('cppNavigation') === false) return [];
+    const mk = s => {
+      const r = new vscode.Range(doc.positionAt(s.start), doc.positionAt(s.end));
+      const sel = new vscode.Range(doc.positionAt(s.selStart), doc.positionAt(Math.max(s.selStart, s.selEnd)));
+      const ds = new vscode.DocumentSymbol(s.name, (s.detail || '') + (s.sig ? ' ' + s.sig : ''), this.kindOf(s), r, r.contains(sel) ? sel : r);
+      ds.children = (s.children || []).map(mk);
+      return ds;
+    };
+    return this.symsOf(doc).map(mk);
+  }
+
+  /** 專案 ▾ / 類別 ▾ / 成員 ▾ (Visual Studio's navigation bar): which = 'project' | 'class' | 'member'. */
+  async cmdNav(which) {
+    const ed = vscode.window.activeTextEditor;
+    if (!ed) { vscode.window.showInformationMessage('先開一個 C++ 檔。'); return null; }
+    const doc = ed.document;
+    if (which === 'project') return this.hub.solution.cmdReveal(doc.uri.fsPath).then(n => { if (n) vscode.commands.executeCommand('ht9045Designer.solution.focus'); return n; });
+    const syms = this.symsOf(doc);
+    const off = doc.offsetAt(ed.selection.active);
+    const chain = cppsymbols.chainAt(syms, off);
+    const classes = syms.filter(s => s.kind === 'class' || s.kind === 'struct');
+    let items;
+    if (which === 'class') {
+      items = classes.map(s => ({ label: '$(symbol-class) ' + s.name, description: (s.defs ? '定義' : s.kind) + '　' + s.children.length + ' 個成員', s }))
+        .concat(syms.filter(s => s.kind === 'function').length ? [{ label: '$(symbol-function) （全域範圍）', description: syms.filter(s => s.kind === 'function').length + ' 個函式', global: true }] : []);
+    } else {
+      const cur = chain[0] && (chain[0].kind === 'class' || chain[0].kind === 'struct') ? chain[0] : null;
+      const sameName = cur ? syms.filter(s => (s.kind === 'class' || s.kind === 'struct') && s.name === cur.name) : [];
+      const list = cur ? [].concat(...sameName.map(s => s.children)) : syms.filter(s => s.kind === 'function').concat(...classes.map(c => c.children));
+      items = list.map(s => ({ label: (s.kind === 'field' ? '$(symbol-field) ' : '$(symbol-method) ') + s.name, description: (s.sig || '') + (s.detail ? '　' + s.detail : ''), s }));
+    }
+    if (!items.length) { vscode.window.showInformationMessage('這個檔沒有找到' + (which === 'class' ? '類別' : '成員') + '。'); return null; }
+    const here = which === 'class' ? chain[0] : chain[chain.length - 1];
+    const act = items.find(i => i.s === here);
+    const pick = await vscode.window.showQuickPick(items, { placeHolder: (which === 'class' ? '類別' : '成員') + '（' + path.basename(doc.uri.fsPath) + '）——選一個就跳過去', matchOnDescription: true, activeItems: act ? [act] : undefined });
+    if (!pick) return null;
+    if (pick.global) return this.cmdNavGlobal(ed, syms);
+    const pos = doc.positionAt(pick.s.selStart);
+    ed.selection = new vscode.Selection(pos, doc.positionAt(pick.s.selEnd));
+    ed.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+    return pick.s;
+  }
+
+  async cmdNavGlobal(ed, syms) {
+    const fs1 = syms.filter(s => s.kind === 'function');
+    const pick = await vscode.window.showQuickPick(fs1.map(s => ({ label: '$(symbol-function) ' + s.name, description: s.sig || '', s })), { placeHolder: '全域範圍的函式' });
+    if (!pick) return null;
+    const pos = ed.document.positionAt(pick.s.selStart);
+    ed.selection = new vscode.Selection(pos, ed.document.positionAt(pick.s.selEnd));
+    ed.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+    return pick.s;
+  }
+}
+
+// ---------------------------------------------------------------------------
+/**
+ * AI(W906-HTDESIGNER) 20261001 (0.138, EastSun's screenshot of Visual Studio's 方案總管): the project as a solution --
+ * 方案 -> projects (the C++ port tree, the web tree, the BCB6 golden tree: the 專案搜尋 roots) -> folders -> files, in
+ * Visual Studio's order (folders first, A->Z). A click opens a file (golden: read-only, decoded from Big5).
+ * 搜尋方案總管 (Ctrl+; as in Visual Studio): only the files whose name / path has every typed word, with their folders,
+ * all expanded. 與作用中文件同步: the open editor's file selected in the tree.
+ */
+class SolutionTree {
+  constructor(hub) {
+    this.hub = hub;
+    this._em = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this._em.event;
+    this.view = null;
+    this.q = '';
+    this.flt = null;        // { byRoot: Map(root -> filter result), count, truncated }
+    this.cache = new Map(); // root -> { at, files } (the file lists, for the filter)
+    this.nodes = new Map(); // id -> node (getParent / reveal)
+    this.versionText = '';
+    this.pageSummary = null;
+    // the 頁面 part follows the 頁面 list (a page added / removed, the open / active marks)
+    if (hub.pages && hub.pages.onDidChangeTreeData) hub.pages.onDidChangeTreeData(() => this._em.fire());
+  }
+
+  // 0.148 (EastSun: "BCB 原始碼就不用出現了 編譯用不到的東西"): only what the build uses -- the C++ port tree and the web;
+  // the BCB6 golden tree stays in 尋找 / 專案搜尋
+  projects() { return this.hub.projSearch.areas().filter(p => p.area !== 'golden'); }
+
+  node(n) { this.nodes.set(n.id, n); return n; }
+
+  async fileList(root) {
+    const c = this.cache.get(root);
+    if (c && Date.now() - c.at < 60000) return c.files;
+    const files = await solutiontree.allFiles(root);
+    this.cache.set(root, { at: Date.now(), files });
+    return files;
+  }
+
+  /**
+   * 搜尋方案總管: q = the words ('' = off) -- the files (name / path) AND, under 網頁 -> 頁面, the pages and their
+   * components (the old 搜尋頁面, 0.139). opts.pagesDone: the 頁面 part was just filtered. -> { count, truncated, pages }
+   */
+  async setFilter(q, opts) {
+    // 0.149: the words and their result change TOGETHER (a render between them drew the whole tree opened), and a
+    // search overtaken by a newer one is dropped (typing fast: an older walk finishing last won)
+    const nq = String(q || '').trim();
+    const seq = this.fseq = (this.fseq || 0) + 1;
+    let pre = null;
+    if (nq) {
+      const byRoot = new Map();
+      let count = 0, truncated = false;
+      for (const p of this.projects()) {
+        const r = solutiontree.filter(p.root, await this.fileList(p.root), nq, 2000 - count);
+        if (seq !== this.fseq) return this.lastResult || { count: 0 };
+        byRoot.set(p.root, r);
+        count += r.count;
+        truncated = truncated || r.truncated;
+      }
+      pre = { byRoot, count, truncated };
+    }
+    this.q = nq;
+    let ps = null;
+    if (!(opts && opts.pagesDone) && this.hub.pages && this.hub.pages.query !== this.q) {
+      ps = this.hub.pages.setFilter(this.q);
+      if (this.hub.pageSearch) this.hub.pageSearch.set(this.hub.pages.query, ps);
+    }
+    this.pageSummary = this.q && this.hub.pages ? this.hub.pages.summary() : null;
+    // (0.146: the box on top shows the words -- unless they came from it: it may hold more typing by now)
+    const done = r => {
+      this.lastResult = r;
+      if (!(opts && opts.fromBox) && this.hub.solPanel) this.hub.solPanel.set(this.q);
+      return r;
+    };
+    if (!this.q) { this.flt = null; this.refresh(); return done({ count: 0 }); }
+    const { count, truncated } = pre;
+    this.flt = pre;
+    this.refresh();
+    const pg = this.pageSummary || { pages: 0, hits: 0 };
+    return done({ count, truncated, pages: pg.pages, hits: pg.hits });
+  }
+
+  /** The title line: the version (the old 頁面 list showed it), and what the search found. */
+  setDescription() {
+    if (!this.view) return;
+    const pg = this.pageSummary;
+    const found = this.q ? '「' + this.q + '」' + (this.flt ? this.flt.count + (this.flt.truncated ? '+' : '') + ' 個檔' : '') +
+      (pg && pg.pages ? '、' + pg.pages + ' 頁' : '') : '';
+    this.view.description = [found, this.versionText || ''].filter(Boolean).join('　');
+    this.view.message = this.q && this.flt && !this.flt.count && !(pg && pg.pages) ? '沒有檔名、路徑、頁面或元件含「' + this.q + '」' : undefined;
+  }
+
+  refresh() {
+    this.nodes.clear();
+    this.setDescription();
+    vscode.commands.executeCommand('setContext', 'ht9045Designer.solutionFiltered', !!this.q);
+    this._em.fire();
+  }
+
+  /** The 頁面 node (網頁 -> 頁面) selected and opened, with the active page in it when one is open. */
+  async revealPages() {
+    const web = this.projects().find(p => p.area === 'web');
+    if (!web || !this.view || !this.view.reveal) return null;
+    const sln = this.node({ type: 'sln', id: 'sln' });
+    const proj = this.node({ type: 'proj', id: 'sln|web', p: web, path: web.root, parentId: sln.id });
+    const pg = this.node({ type: 'pgroot', id: 'sln|web|@pages', p: web, parentId: proj.id });
+    try { await this.view.reveal(pg, { select: true, focus: false, expand: true }); } catch (e) { /* not drawn yet */ }
+    return pg;
+  }
+
+  /** A node of the 頁面 list (PageTree) inside this tree. */
+  wrap(inner, parent) {
+    return this.node({ type: 'pg', inner, p: parent.p, parentId: parent.id, id: 'sln|pg|' + this.pageKey(inner) });
+  }
+
+  pageKey(n) {
+    if (n.kind === 'group') return 'grp:' + n.name + (n.filtered ? '?' : '');
+    if (n.kind === 'page') return 'page:' + String(n.file || '').toLowerCase() + (n.filtered ? '?' : '');
+    if (n.kind === 'hit') return 'hit:' + String(n.hit.file).toLowerCase() + '#' + n.hit.id + '@' + n.hit.line;
+    return 'more:' + (n.parent && n.parent.file ? String(n.parent.file).toLowerCase() : '');
+  }
+
+  async getChildren(n) {
+    if (!n) return [this.node({ type: 'sln', id: 'sln' })];
+    if (n.type === 'sln') {
+      // (searching: a project with a matching file -- or 網頁 with a matching page / component)
+      return this.projects().filter(p => !this.flt || (this.flt.byRoot.get(p.root) || { count: 0 }).count || (p.area === 'web' && this.pageSummary && this.pageSummary.pages))
+        .map(p => this.node({ type: 'proj', id: 'sln|' + p.area, p, path: p.root, parentId: 'sln' }));
+    }
+    // 網頁 -> 頁面 (0.139): the old 頁面 list, as it was (groups -> pages; filtered: -> components)
+    if (n.type === 'pgroot') return this.hub.pages ? this.hub.pages.getChildren().map(x => this.wrap(x, n)) : [];
+    // (1005, EastSun: "可以不要顯示元件了嗎? 因為下方就有元件 列表可以看了 方案總管就不用了": a page found by a component's
+    //  name is listed, its components are not -- the 元件 list under the designer shows them)
+    if (n.type === 'pg') return (this.hub.pages.getChildren(n.inner) || []).filter(x => x.kind !== 'hit' && x.kind !== 'more').map(x => this.wrap(x, n));
+    const p = n.p;
+    const f = this.flt ? this.flt.byRoot.get(p.root) : null;
+    const es = await solutiontree.entries(n.path);
+    const out = es.filter(e => !f || (e.dir ? f.dirs.has(path.resolve(e.path).toLowerCase()) : f.files.has(path.resolve(e.path).toLowerCase())))
+      .map(e => this.node({ type: e.dir ? 'dir' : 'file', id: 'sln|' + p.area + '|' + path.resolve(e.path).toLowerCase(), p, path: e.path, name: e.name, parentId: n.id }));
+    if (n.type === 'proj' && p.area === 'web' && this.hub.pages) {
+      const pgs = this.hub.pages.getChildren();
+      if (!this.q || pgs.length) out.unshift(this.node({ type: 'pgroot', id: 'sln|web|@pages', p, parentId: n.id }));
+    }
+    return out;
+  }
+
+  getParent(n) { return n && n.parentId ? this.nodes.get(n.parentId) : undefined; }
+
+  getTreeItem(n) {
+    const S = vscode.TreeItemCollapsibleState;
+    const open = this.q ? S.Expanded : S.Collapsed;
+    if (n.type === 'pgroot') {
+      const it = new vscode.TreeItem('頁面（依畫面）', this.q ? S.Expanded : S.Collapsed);
+      const pg = this.pageSummary;
+      it.description = this.q && pg ? pg.pages + ' 頁' : '點一下頁面＝設計檢視';
+      it.tooltip = 'web\\page 的每一頁，照畫面分類（以前的「頁面」清單）。點一下＝用設計檢視開；搜尋方案總管時也找頁面標題和元件。';
+      it.iconPath = new vscode.ThemeIcon('layout');
+      it.id = n.id + (this.q ? '?' : '');
+      return it;
+    }
+    if (n.type === 'pg') {
+      // (the 頁面 list's own item: label, highlights, the page's marks, its command -- its id made unique here)
+      const it = this.hub.pages.getTreeItem(n.inner);
+      it.id = n.id + (this.q ? '?' + this.hub.pages.gen : '');
+      // (1005: no components under a page here -- nothing to open, and no "N 個元件" in its line)
+      if (n.inner && n.inner.kind === 'page') {
+        it.collapsibleState = S.None;
+        if (typeof it.description === 'string') it.description = it.description.replace(/^\d+ 個元件\s*/, '');
+      }
+      return it;
+    }
+    if (n.type === 'sln') {
+      const ps = this.projects();
+      const it = new vscode.TreeItem('方案 \'' + this.solutionName() + '\'（' + ps.length + ' 個專案）', S.Expanded);
+      it.iconPath = new vscode.ThemeIcon('folder-library');
+      it.id = n.id;
+      it.tooltip = ps.map(p => p.label + '：' + p.root).join('\n');
+      return it;
+    }
+    if (n.type === 'proj') {
+      const it = new vscode.TreeItem(n.p.label, this.q ? S.Expanded : S.Collapsed);
+      it.description = path.basename(n.p.root);
+      it.tooltip = n.p.root;
+      it.iconPath = new vscode.ThemeIcon(n.p.area === 'golden' ? 'history' : n.p.area === 'web' ? 'globe' : 'project');
+      it.id = n.id;
+      return it;
+    }
+    if (n.type === 'dir') {
+      const it = new vscode.TreeItem(n.name, open);
+      it.resourceUri = vscode.Uri.file(n.path);
+      // 0.142 (EastSun: "資料夾也需要圖示"): ThemeIcon.Folder follows the file icon theme, and Seti draws no folder. 0.143: so does ANY
+      // ThemeIcon whose id is 'folder' (or 'file') -- VS Code checks the id, so 0.142's new ThemeIcon('folder') was still blank; symbol-folder always draws
+      it.iconPath = new vscode.ThemeIcon('symbol-folder', vscode.ThemeColor ? new vscode.ThemeColor('charts.yellow') : undefined);
+      it.id = n.id;
+      it.contextValue = 'htdSlnDir';
+      return it;
+    }
+    const it = new vscode.TreeItem(n.name, S.None);
+    it.resourceUri = vscode.Uri.file(n.path);
+    it.iconPath = vscode.ThemeIcon.File;
+    it.id = n.id;
+    it.tooltip = n.path + (n.p.area === 'golden' ? '\n（BCB6 原始碼：唯讀、照 Big5 開）' : '');
+    it.contextValue = 'htdSlnFile';
+    it.command = { command: 'ht9045Designer.solutionOpen', title: '開啟', arguments: [n] };
+    return it;
+  }
+
+  /** The solution's name: the folder that holds the projects (D:\HT9050\htd_work -> htd_work), else HT9045. */
+  solutionName() {
+    const ps = this.projects();
+    const dirs = Array.from(new Set(ps.map(p => path.dirname(path.resolve(p.root)).toLowerCase())));
+    return dirs.length === 1 ? path.basename(path.dirname(path.resolve(ps[0].root))) : 'HT9045';
+  }
+
+  async open(n) {
+    if (!n || !n.path) return null;
+    // a page: as text (the designer has its own open command); golden: read-only, Big5
+    const uri = n.p && n.p.area === 'golden' ? vscode.Uri.file(n.path).with({ scheme: GOLDEN_SCHEME }) : vscode.Uri.file(n.path);
+    try {
+      const doc = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(doc, { preview: true });
+      return uri;
+    } catch (e) {
+      // (not text: let VS Code open it its own way)
+      try { await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(n.path)); return vscode.Uri.file(n.path); } catch (x) { return null; }
+    }
+  }
+
+  async cmdFilter(arg) {
+    // 0.146: Ctrl+F / Ctrl+; / the title bar's filter = into the box of 方案總管 (an input box only if it cannot show);
+    // 0.148: the box is in 方案總管 itself
+    if (typeof arg !== 'string' && this.hub.solPanel) {
+      try {
+        await vscode.commands.executeCommand('ht9045Designer.solution.focus');
+        this.hub.solPanel.focusBox();
+        return { box: true };
+      } catch (e) { /* the box is not there: ask below */ }
+    }
+    const q = typeof arg === 'string' ? arg : await vscode.window.showInputBox({
+      prompt: '搜尋方案總管：檔名或路徑（空白隔開＝每個字都要有；含 / 的字比對路徑）', placeHolder: '例如 fHotPlate、forms .h、web/page main', value: this.q,
+    });
+    if (q == null) return null;
+    const r = await this.setFilter(q);
+    if (this.view && this.q) { try { await vscode.commands.executeCommand('ht9045Designer.solution.focus'); } catch (e) { /* not showing */ } }
+    return r;
+  }
+
+  /** 與作用中文件同步 (Visual Studio "Sync with Active Document"): the open file selected in the tree. */
+  async cmdReveal(fileArg) {
+    const ed = vscode.window.activeTextEditor;
+    // (1005, EastSun: "圖片上按鈕我希望都有作用": with the designer -- a custom editor -- in front there is no text editor, and
+    //  ◎ only said "沒有開著的檔案": the tab in front is asked then -- its page / CSV / any file)
+    const tab = vscode.window.tabGroups && vscode.window.tabGroups.activeTabGroup && vscode.window.tabGroups.activeTabGroup.activeTab;
+    const tabUri = tab && tab.input && (tab.input.uri || tab.input.modified);
+    const file = typeof fileArg === 'string' ? fileArg : ed && ed.document && ed.document.uri && ed.document.uri.scheme === 'file' ? ed.document.uri.fsPath
+      : tabUri && tabUri.scheme === 'file' ? tabUri.fsPath : this.hub && this.hub.active ? this.hub.active.file : null;
+    if (!file) { vscode.window.showInformationMessage('沒有開著的檔案。'); return null; }
+    const p = projectsearch.areaOf(this.projects(), file);
+    if (!p) { vscode.window.showInformationMessage(path.basename(file) + ' 不在這個方案的專案裡（' + this.projects().map(x => x.label).join('、') + '）。'); return null; }
+    // build the chain sln -> proj -> dirs -> file (the same ids getChildren gives)
+    const sln = this.node({ type: 'sln', id: 'sln' });
+    let parent = this.node({ type: 'proj', id: 'sln|' + p.area, p, path: p.root, parentId: sln.id });
+    const rel = path.relative(p.root, file).split(path.sep);
+    let cur = p.root, last = parent;
+    for (let i = 0; i < rel.length; i++) {
+      cur = path.join(cur, rel[i]);
+      last = this.node({ type: i === rel.length - 1 ? 'file' : 'dir', id: 'sln|' + p.area + '|' + path.resolve(cur).toLowerCase(), p, path: cur, name: rel[i], parentId: parent.id });
+      parent = last;
+    }
+    if (this.view && this.view.reveal) { try { await this.view.reveal(last, { select: true, focus: false, expand: false }); } catch (e) { /* hidden by the filter */ } }
+    return last;
+  }
+}
+
+// ---------------------------------------------------------------------------
+/**
+ * AI(W906-HTDESIGNER) 20261001 (0.148, EastSun: "方案總管整個重做成一格", with a picture: the search box right under
+ * 方案總管's title, the tree under it, what does not match hidden): 方案總管 drawn by the extension in one webview view.
+ * VS Code puts a title bar over every view and a tree view cannot hold an input, so the box and the tree are one page.
+ * The data stays SolutionTree's (getChildren / getTreeItem / setFilter / reveal -- the same nodes, ids, commands and
+ * marks); this class turns the open part of it into rows (media/solution.js draws them) with VS Code's own icons
+ * (lib/icons.js: the codicon font and the Seti file icons VS Code ships). SolutionTree.view is this.adapter.
+ */
+class SolutionPanel {
+  constructor(hub) {
+    this.hub = hub;
+    this.view = null;
+    this.open = new Map();   // node id -> open (the user's); not there = the item's own state
+    this.sel = null;
+    this.items = new Map();  // node id -> { n, it } of the rows drawn
+    this.rows = [];
+    this.description = '';
+    this.message = '';
+    this.timer = null;
+    this.lastQ = '';
+    const self = this;
+    this.adapter = {
+      get description() { return self.description; },
+      set description(v) { self.description = v || ''; if (self.view) self.view.description = self.description; },
+      get message() { return self.message; },
+      set message(v) { self.message = v || ''; self.schedule(); },
+      get visible() { return !!(self.view && self.view.visible); },
+      reveal: (n, o) => self.reveal(n, o),
+    };
+    hub.solution.onDidChangeTreeData(() => this.schedule());
+    // (the Seti colours are the theme's: light / dark again when the theme changes)
+    if (vscode.window.onDidChangeActiveColorTheme) hub.ctx.subscriptions.push(vscode.window.onDidChangeActiveColorTheme(() => this.schedule()));
+  }
+
+  appRoot() { return (vscode.env && vscode.env.appRoot) || ''; }
+
+  resolveWebviewView(view) {
+    this.view = view;
+    view.description = this.description;
+    const media = vscode.Uri.joinPath(this.hub.ctx.extensionUri, 'media');
+    const app = this.appRoot();
+    const cf = app ? icons.codiconFont(app) : null, se = app ? icons.seti(app) : null;
+    const w = view.webview;
+    const roots = [media];
+    if (cf) roots.push(vscode.Uri.file(path.dirname(cf)));
+    if (se) roots.push(vscode.Uri.file(se.dir));
+    w.options = { enableScripts: true, enableCommandUris: false, localResourceRoots: roots };
+    const nonce = crypto.randomBytes(16).toString('base64');
+    const cm = app ? icons.codicons(app) : icons.FALLBACK;
+    const ch = {};
+    for (const k of ['search', 'close', 'chevron-right', 'chevron-down', 'debug-start', 'debug-pause', 'debug-stop', 'debug-restart', 'debug-continue',
+      'pass-filled', 'circle-large-outline', 'target', 'refresh', 'collapse-all', 'sync', 'bug', 'rocket']) if (cm[k]) ch[k] = cm[k];
+    const font = (fam, f, fmt) => f ? '@font-face{font-family:\'' + fam + '\';src:url("' + w.asWebviewUri(vscode.Uri.file(f)) + '") format("' + fmt + '");}' : '';
+    w.html = '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">' +
+      '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; font-src ' + w.cspSource + '; style-src ' + w.cspSource + ' \'nonce-' + nonce + '\'; script-src \'nonce-' + nonce + '\';">' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+      '<link rel="stylesheet" href="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'solution.css')) + '">' +
+      '<style nonce="' + nonce + '">' + font('htd-codicon', cf, 'truetype') + font('htd-seti', se && se.font, 'woff') + '</style>' +
+      '</head><body><div id="root" data-ch="' + htmlesc(JSON.stringify(ch)) + '"></div>' +
+      '<script nonce="' + nonce + '" src="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'solution.js')) + '"></script></body></html>';
+    w.onDidReceiveMessage(m => this.onMessage(m));
+    if (view.onDidChangeVisibility) view.onDidChangeVisibility(() => { if (view.visible) this.schedule(); });
+    view.onDidDispose(() => { this.view = null; });
+  }
+
+  post(m) { if (this.view) this.view.webview.postMessage(m); }
+
+  schedule() {
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => { this.render().catch(e => this.hub.log('方案總管：' + (e && e.message || e))); }, 30);
+  }
+
+  /** The rows: the tree from the top, into what is open (the user's, or the item's own -- searching opens everything). */
+  async build(g) {
+    const sol = this.hub.solution;
+    if (sol.q !== this.lastQ) { this.open.clear(); this.lastQ = sol.q; }
+    const app = this.appRoot();
+    const cm = app ? icons.codicons(app) : icons.FALLBACK;
+    const se = app ? icons.seti(app) : null;
+    const light = vscode.window.activeColorTheme && (vscode.window.activeColorTheme.kind === 1 || vscode.window.activeColorTheme.kind === 4);
+    const rows = [], items = new Map(), MAX = 5000;
+    const walk = async (n, d) => {
+      if (rows.length >= MAX) return;
+      const it = sol.getTreeItem(n);
+      const coll = it.collapsibleState || 0;
+      const isOpen = coll ? (this.open.has(n.id) ? this.open.get(n.id) : coll === 2) : false;
+      items.set(n.id, { n, it });
+      rows.push(this.row(n, it, d, coll ? (isOpen ? 2 : 1) : 0, cm, se, light));
+      if (isOpen) for (const c of (await sol.getChildren(n)) || []) await walk(c, d + 1);
+    };
+    for (const r of (await sol.getChildren()) || []) { if (g !== undefined && g !== this.gen) return null; await walk(r, 0); }
+    return { rows, items };
+  }
+
+  row(n, it, d, tw, cm, se, light) {
+    const lab = typeof it.label === 'string' ? { label: it.label } : (it.label || { label: n.name || '' });
+    const tip = typeof it.tooltip === 'string' ? it.tooltip : it.tooltip && it.tooltip.value ? it.tooltip.value : '';
+    let ic = null;
+    const ip = it.iconPath;
+    const fileName = n.type === 'file' ? n.name : null;
+    if (fileName || (ip && ip.id === 'file')) {
+      const f = icons.fileIcon(se, fileName || (it.resourceUri ? path.basename(it.resourceUri.fsPath) : ''), light);
+      if (f) ic = { t: 's', ch: f.char, col: f.color };
+    } else if (ip && ip.id && cm[ip.id]) {
+      ic = { t: 'c', ch: cm[ip.id], col: ip.color && ip.color.id ? 'var(--vscode-' + ip.color.id.replace(/\./g, '-') + ')' : null };
+    }
+    // 0.149 (EastSun: "搜尋到的關鍵字 用顏色飆出來 例如 iosetview 搜尋到 io 就把 io 用不同顏色飆出來"): the words searched,
+    // marked in a file / folder name (every place, any case; a word with / marks its last part); a page's own marks stay
+    let hl = lab.highlights || null;
+    const q = this.hub.solution.q;
+    if (q && !hl && (n.type === 'file' || n.type === 'dir' || n.type === 'proj')) {
+      const t = String(lab.label || '').toLowerCase(), marks = [];
+      for (let w of q.toLowerCase().split(/\s+/).filter(Boolean)) {
+        if (w.includes('/') || w.includes('\\')) w = w.split(/[\\/]/).filter(Boolean).pop() || '';
+        if (!w) continue;
+        for (let i = t.indexOf(w); i >= 0; i = t.indexOf(w, i + w.length)) marks.push([i, i + w.length]);
+      }
+      marks.sort((a, b) => a[0] - b[0]);
+      const merged = [];
+      for (const m of marks) { const last = merged[merged.length - 1]; if (last && m[0] <= last[1]) last[1] = Math.max(last[1], m[1]); else merged.push(m.slice()); }
+      if (merged.length) hl = merged;
+    }
+    return {
+      id: n.id, d, l: lab.label, h: hl, ds: typeof it.description === 'string' ? it.description : '',
+      tip, ic, tw, ctx: it.contextValue || ('htdSln_' + n.type), cmd: !!it.command,
+    };
+  }
+
+  async render(reveal) {
+    if (!this.view) return null;
+    // (renders overlap -- the timer, a toggle, a reveal: only the newest one posts and keeps its rows)
+    const g = this.gen = (this.gen || 0) + 1;
+    const built = await this.build(g);
+    if (!built || g !== this.gen) return null;
+    const { rows, items } = built;
+    this.items = items;
+    this.rows = rows;
+    if (this.sel && !this.items.has(this.sel)) this.sel = null;
+    const more = rows.length >= 5000 ? '（只列前 5000 列：打長一點的字縮小範圍）' : '';
+    // (the selection goes with a reveal only: the page's own arrow keys may be ahead of these rows)
+    this.post({ type: 'rows', rows, sel: reveal ? this.sel : null, msg: [this.message, more].filter(Boolean).join(' '), reveal: reveal || null });
+    return rows;
+  }
+
+  async onMessage(m) {
+    if (!m) return null;
+    const sol = this.hub.solution;
+    if (m.type === 'ready') {
+      if (sol.q) this.post({ type: 'setq', q: sol.q });
+      else if (m.q) { await sol.setFilter(m.q, { fromBox: true }); }
+      if (this.hub.runBar) this.postRun(this.hub.runBar.snapshot());
+      return this.render();
+    }
+    if (m.type === 'query') return sol.setFilter(m.q, { fromBox: true });
+    if (m.type === 'select') { this.sel = m.id; return null; }
+    // 0.151 the toolbar (run bar + 方案總管's own buttons): only this extension's and VS Code's debug commands
+    if (m.type === 'cmd') {
+      const id = String(m.id || '');
+      if (!/^(ht9045Designer\.|workbench\.action\.debug\.)[\w.]+$/.test(id)) return null;
+      return vscode.commands.executeCommand(id);
+    }
+    const x = this.items.get(m.id);
+    if (!x) return null;
+    if (m.type === 'toggle') {
+      const cur = this.open.has(m.id) ? this.open.get(m.id) : x.it.collapsibleState === 2;
+      this.open.set(m.id, !cur);
+      this.sel = m.id;
+      return this.render();
+    }
+    if (m.type === 'activate') {
+      this.sel = m.id;
+      const c = x.it.command;
+      if (c) return vscode.commands.executeCommand(c.command, ...(c.arguments || []));
+    }
+    return null;
+  }
+
+  /** A command's argument from the webview's right-click menu ({ htdId }) -> the node; a node stays a node. */
+  nodeOf(a) {
+    if (a && a.htdId) { const x = this.items.get(a.htdId); return x ? x.n : null; }
+    return a;
+  }
+
+  /** Select a node: everything above it opened, scrolled to (Sync with Active Document, the 頁面 node). */
+  async reveal(n, o) {
+    if (!n) return null;
+    const sol = this.hub.solution;
+    for (let p = sol.getParent(n); p; p = sol.getParent(p)) this.open.set(p.id, true);
+    if (o && o.expand) this.open.set(n.id, true);
+    if (o && o.select !== false) this.sel = n.id;
+    if (o && o.focus) this.post({ type: 'focusList' });
+    return this.render(n.id);
+  }
+
+  collapseAll() {
+    for (const [id, x] of this.items) if (x.n.type !== 'sln' && (x.it.collapsibleState || 0)) this.open.set(id, false);
+    return this.render();
+  }
+
+  /** 0.151: the run bar's state for the toolbar on top of 方案總管 (EastSun: "我一直沒看到你的按鈕"). */
+  postRun(s) { if (s) this.post({ type: 'run', s }); }
+  /** The words into the box (a command set the filter). */
+  set(q) { this.post({ type: 'setq', q }); }
+  focusBox() { this.post({ type: 'focus' }); }
+}
+
+// ---------------------------------------------------------------------------
+/**
+ * AI(W906-HTDESIGNER) 20261001 (0.137, EastSun: "我沒辦法整個專案查詢關鍵字並列出來"): 專案搜尋 -- a keyword over the
+ * C++ port tree, the web tree and the BCB6 golden tree (Big5 read as Big5: VS Code's Find in Files garbles it), every
+ * hit in this tree: area -> file -> line (VS Code's Search view's layout). A click opens the line (golden: read-only,
+ * decoded from Big5, like every golden file the designer opens). Options = Find in Files' three: Aa, whole word, .*.
+ */
+class ProjectSearch {
+  constructor(hub) {
+    this.hub = hub;
+    this._em = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this._em.event;
+    this.q = '';
+    this.opts = { caseSensitive: false, wholeWord: false, regex: false };
+    // (1005, EastSun: "我搜尋視窗 搜尋時 搜尋範圍都會重製 你可以記憶住嗎? 我其他選項也要記憶住": 搜尋範圍, the options, the
+    //  filters and 取代為 kept in globalState -- the same after a search, a closed window, a restart)
+    const pf = this.prefs();
+    if (pf.opts) this.opts = pf.opts;
+    if (pf.scope) this.findLast = pf.scope;
+    this.fwRq = typeof pf.rq === 'string' ? pf.rq : '';
+    this.res = null;
+    this.roots = [];
+    this.view = null;
+    this.busy = false;
+    this.cancel = false;
+  }
+
+  /** The three trees, from the open designer or the workspace (the same roots the designer finds). */
+  areas() {
+    const d = this.hub.active;
+    const r = d && d.r ? d.r : roots.resolveRoots(null, this.hub.wsFolders(), this.hub.over());
+    return [
+      { area: 'port', label: 'C++ 移植樹', root: r.portRoot, kind: 'port' },
+      { area: 'web', label: '網頁', root: r.webRoot, kind: 'web' },
+      { area: 'golden', label: 'BCB6 原始碼（golden，Big5）', root: r.goldenRoot, kind: 'golden' },
+    ].filter(x => x.root && fs.existsSync(x.root));
+  }
+
+  optsText() {
+    return [this.opts.caseSensitive ? 'Aa' : '', this.opts.wholeWord ? '全字' : '', this.opts.regex ? '正規式' : ''].filter(Boolean).join('、');
+  }
+
+  setDescription() {
+    if (!this.view) return;
+    const o = this.optsText();
+    this.view.description = this.res ? '「' + this.q + '」' + this.res.hits.length + (this.res.truncated ? '+' : '') + ' 筆／' + this.res.files + ' 檔' +
+      (this.scopeLabel && this.scope !== 'solution' ? '　在 ' + this.scopeLabel : '') + (o ? '（' + o + '）' : '') : (o ? '選項：' + o : '');
+    vscode.commands.executeCommand('setContext', 'ht9045Designer.projSearch.case', this.opts.caseSensitive);
+    vscode.commands.executeCommand('setContext', 'ht9045Designer.projSearch.word', this.opts.wholeWord);
+    vscode.commands.executeCommand('setContext', 'ht9045Designer.projSearch.regex', this.opts.regex);
+  }
+
+  toggle(k) {
+    this.opts[k] = !this.opts[k];
+    this.setDescription();
+    // (the same keyword again with the new option, in the same scope, like Find in Files)
+    if (this.q && !this.busy) return this.run(this.q, this.scope, this.scopeFile);
+    return null;
+  }
+
+  /** Ask for the keyword (the selected text of the editor first), then search. arg: the keyword (tests / other code). */
+  async cmdSearch(arg) {
+    let q = typeof arg === 'string' ? arg : null;
+    if (q == null) {
+      const ed = vscode.window.activeTextEditor;
+      const sel = ed && !ed.selection.isEmpty ? ed.document.getText(ed.selection).split(/\r?\n/)[0].slice(0, 200) : '';
+      q = await vscode.window.showInputBox({
+        prompt: '在整個專案找（C++ 移植樹、網頁、BCB6 原始碼）' + (this.optsText() ? '　選項：' + this.optsText() : '　大小寫、全字、正規式在清單標題列切換'),
+        placeHolder: '例如 DoInArm、spbSave、吸嘴、Gerneral.ini', value: sel || this.q,
+      });
+    }
+    if (q == null || !String(q).trim()) return null;
+    return this.run(String(q));
+  }
+
+  /**
+   * From the code (Visual Studio: Find in Files with "Look in" = current document / current project / entire
+   * solution): the selection -- or the word at the cursor -- searched in the scope picked. arg: { q, scope } (tests).
+   */
+  async cmdSearchHere(arg) {
+    const ed = vscode.window.activeTextEditor;
+    // (1006 audit: from the Solution Explorer the row clicked -- the open editor's file used to win)
+    const file = arg && arg.fromTree && arg.file ? arg.file : ed && ed.document && ed.document.uri ? ed.document.uri.fsPath : (arg && arg.file) || null;
+    let q = arg && typeof arg.q === 'string' ? arg.q : '';
+    // (from the Solution Explorer's menu: ask -- the editor's word is not what was clicked)
+    if (!q && ed && !(arg && arg.fromTree)) {
+      const s = ed.selection;
+      if (s && !s.isEmpty) q = ed.document.getText(s).split(/\r?\n/)[0].slice(0, 200);
+      else if (ed.document.getWordRangeAtPosition) { const w = ed.document.getWordRangeAtPosition(s.active); if (w) q = ed.document.getText(w); }
+    }
+    if (!q) q = await vscode.window.showInputBox({ prompt: '要找的字', value: this.q }) || '';
+    if (!q.trim()) return null;
+    const areas = this.areas();
+    const here = file ? projectsearch.areaOf(areas, file) : null;
+    let scope = arg && arg.scope;
+    if (!scope) {
+      const items = [
+        file ? { label: '$(file) 目前檔案', description: path.basename(file), scope: 'file' } : null,
+        here ? { label: '$(folder) 目前專案', description: here.label, scope: 'project' } : null,
+        { label: '$(folder-library) 整個方案', description: areas.map(a => a.label).join('、'), scope: 'solution' },
+      ].filter(Boolean);
+      const pick = await vscode.window.showQuickPick(items, { placeHolder: '在哪裡找「' + q + '」？（Visual Studio 的「搜尋範圍」）' });
+      if (!pick) return null;
+      scope = pick.scope;
+    }
+    return this.run(q, scope, file);
+  }
+
+  /**
+   * 0.144 尋找 (EastSun: "我希望可以搜尋所有專案的關鍵字 可以選擇"; Visual Studio's Find in Files: 尋找目標 + 搜尋範圍 +
+   * options in one box): the keyword typed above, the scope picked below (目前檔案 / 目前專案 / 整個方案 / one project),
+   * Aa / 全字 / 正規式 as the box's buttons; Enter = search, the results in 專案搜尋. The last scope is picked again.
+   */
+  findScopes(file, inEditor) {
+    const areas = this.areas();
+    const here = file ? projectsearch.areaOf(areas, file) : null;
+    return [
+      // 0.145 (EastSun: "你不能直接取代ctrl+F 就好了嗎?"): Ctrl+F opens this box, so VS Code's own find in the file is its first scope
+      // -- every match marked as typed, F3 / Shift+F3 (Visual Studio's 快速尋找 "目前文件")
+      inEditor ? { label: '$(search) 這個檔案（即時標示，F3 下一個）', description: file ? path.basename(file) : '', scope: 'inline', file } : null,
+      file ? { label: '$(file) 目前檔案', description: path.basename(file), scope: 'file', file } : null,
+      here ? { label: '$(project) 目前專案', description: here.label, scope: 'project', file } : null,
+      { label: '$(folder-library) 整個方案', description: areas.map(a => a.label).join('、'), scope: 'solution', file: null },
+      ...areas.map(a => ({ label: '$(' + (a.area === 'golden' ? 'history' : a.area === 'web' ? 'globe' : 'symbol-class') + ') ' + a.label,
+        description: path.basename(a.root), scope: 'project', file: a.root, area: a.area })),
+    ].filter(Boolean);
+  }
+  findButtons() {
+    const o = this.opts, b = (k, icon, name) => ({ k, iconPath: new vscode.ThemeIcon(o[k] ? 'pass-filled' : icon), tooltip: name + '（目前：' + (o[k] ? '開' : '關') + '）' });
+    return [b('caseSensitive', 'case-sensitive', '大小寫要相同'), b('wholeWord', 'whole-word', '全字'), b('regex', 'regex', '正規式')];
+  }
+  async cmdFind(arg) {
+    const ed = vscode.window.activeTextEditor;
+    const file = ed && ed.document && ed.document.uri && ed.document.uri.scheme !== 'untitled' ? ed.document.uri.fsPath : null;
+    let q = '';
+    if (ed && ed.selection) {
+      const sl = ed.selection;
+      if (!sl.isEmpty) q = ed.document.getText(sl).split(/\r?\n/)[0].slice(0, 200);
+      else if (ed.document.getWordRangeAtPosition) { const w = ed.document.getWordRangeAtPosition(sl.active); if (w) q = ed.document.getText(w); }
+    }
+    const scopes = this.findScopes(file, !!ed);
+    const key = it => it.scope + '|' + (it.area || '');
+    const last = scopes.find(it => key(it) === this.findLast) || scopes.find(it => it.scope === 'inline') || scopes.find(it => it.scope === 'solution');
+    const go = (v, it) => {
+      this.findLast = key(it);
+      if (it.scope !== 'inline') return this.run(v, it.scope, it.file);
+      // (VS Code's find widget with the keyword and the box's options)
+      return Promise.resolve(vscode.commands.executeCommand('editor.actions.findWithArgs', {
+        searchString: v, isCaseSensitive: this.opts.caseSensitive, matchWholeWord: this.opts.wholeWord, isRegex: this.opts.regex,
+      })).then(() => ({ inline: true, q: v }));
+    };
+    // (tests / other code: { q, pick } = the keyword and the scope's key, no box)
+    if (arg && typeof arg.q === 'string') return go(arg.q, scopes.find(x => key(x) === arg.pick) || last);
+    // (EastSun 1003: "我ctrl+F 還是會出現預設的視窗 讓我以為在他那邊搜尋": VS Code's own find box left open from before
+    //  stays in the editor's corner while this box is up -- closed, so only one find box is on the screen)
+    for (const c of ['closeFindWidget', 'editor.action.webvieweditor.hideFind']) {
+      try { await vscode.commands.executeCommand(c); } catch (e) { /* not there now */ }
+    }
+    // (EastSun 1003: "你搜尋關鍵字的視窗 可以額外的視窗嗎 不要用內建的 並且我可以看到我之前搜尋了什麼": its own window, the
+    //  searches made before in it; ht9045Designer.find.window = false -> the box below)
+    if (vscode.window.createWebviewPanel && vscode.workspace.getConfiguration('ht9045Designer').get('find.window') !== false) return this.openWindow(q, file, ed);
+    if (!vscode.window.createQuickPick) return this.cmdSearchHere();
+    const qp = vscode.window.createQuickPick();
+    qp.title = '尋找　打字＝要找的字；↑↓ 選範圍（第一個＝這個檔案即時標示，其他＝列出每一筆）；Enter＝找';
+    qp.placeholder = '要找的字，例如 DoInArm、spbSave、吸嘴';
+    qp.value = q || this.q || '';
+    qp.items = scopes;
+    qp.activeItems = [last];
+    qp.matchOnDescription = false;
+    qp.buttons = this.findButtons();
+    // (typing must not filter the scope list away: every scope stays, the typed text is only the keyword)
+    const keep = () => { qp.items = scopes.map(it => Object.assign({}, it, { alwaysShow: true })); const a = qp.items.find(it => key(it) === key(last)); if (a) qp.activeItems = [a]; };
+    keep();
+    return new Promise(resolve => {
+      let done = false, accepted = false;
+      const fin = v => { if (!done) { done = true; resolve(v); } };
+      qp.onDidTriggerButton(b => { this.toggleOpt(b.k); qp.buttons = this.findButtons(); });
+      qp.onDidAccept(async () => {
+        const it = qp.activeItems[0] || last, v = qp.value;
+        if (!v.trim()) { qp.validationMessage = '先打要找的字'; return; }
+        accepted = true;
+        qp.hide();
+        fin(await go(v, it));
+      });
+      // (hide() above fires this too -- then the search's result is the answer, not null)
+      qp.onDidHide(() => { qp.dispose(); if (!accepted) fin(null); });
+      this.findBox = qp;
+      qp.show();
+    });
+  }
+  // (an option changed in the box: only remembered -- the box's Enter searches with it)
+  toggleOpt(k) { this.opts[k] = !this.opts[k]; this.setDescription(); }
+
+  /** The searches made before (newest first): [{ q, scope, scopeLabel, opts, n, when }], kept across sessions. */
+  history() { const gs = this.hub.ctx && this.hub.ctx.globalState; const h = gs ? gs.get('htd.findHistory') : null; return Array.isArray(h) ? h : []; }
+  setHistory(h) { const gs = this.hub.ctx && this.hub.ctx.globalState; if (gs && gs.update) gs.update('htd.findHistory', h.slice(0, 50)); }
+  /** 搜尋範圍 / options / filters / 取代為 as last set (globalState htd.findPrefs): { scope, opts, rq } */
+  prefs() { const gs = this.hub && this.hub.ctx && this.hub.ctx.globalState; const p = gs && gs.get ? gs.get('htd.findPrefs') : null; return p && typeof p === 'object' ? p : {}; }
+  savePrefs() { const gs = this.hub && this.hub.ctx && this.hub.ctx.globalState; if (gs && gs.update) gs.update('htd.findPrefs', { scope: this.findLast || '', opts: this.opts, rq: this.fwRq || '' }); }
+  static cleanOpts(o) { const k = (o && o.kinds) || {}; return { caseSensitive: !!(o && o.caseSensitive), wholeWord: !!(o && o.wholeWord), regex: !!(o && o.regex), kinds: { assign: !!k.assign, cond: !!k.cond, func: !!k.func } }; }
+  /**
+   * 尋找 as its own window (EastSun 1003, Visual Studio's Find in Files dialog + Find Results): the keyword, 搜尋範圍,
+   * the options, the searches made before (a click searches again), the results (a click opens the line in the main
+   * window). One window: Ctrl+F again brings it up with the word at the cursor. Opened as a floating window
+   * (ht9045Designer.find.newWindow, default on; an editor tab beside where VS Code cannot float it).
+   */
+  async openWindow(q, file, ed) {
+    // (where a hit opens: the editor group the user came from -- not the floating window's)
+    const col = ed && ed.viewColumn ? ed.viewColumn : (this.hub.active && this.hub.active.panel && this.hub.active.panel.viewColumn) || undefined;
+    if (col) this.fwCol = col;
+    this.fwFile = file || (this.hub.active && this.hub.active.file) || this.fwFile || null;
+    this.fwScopes = this.findScopes(this.fwFile, false);
+    const key = it => it.scope + '|' + (it.area || '');
+    const scopes = this.fwScopes.map(it => ({ key: key(it), label: it.label.replace(/^\$\([^)]*\) /, ''), description: it.description || '' }));
+    const scope = (scopes.find(s => s.key === this.findLast) || scopes.find(s => s.key.startsWith('file|')) || scopes[scopes.length - 1] || {}).key;
+    const s = { scopes, scope, opts: this.opts, history: this.history(), q: q || this.q || '', rq: this.fwRq || '' };
+    // (shown again after it hid itself: the last results come back with it)
+    if (this.fwLastRes && !this.fw) s.res = this.fwLastRes;
+    if (this.fw) {
+      try { this.fw.reveal(undefined, false); } catch (e) { /* closed meanwhile */ }
+      this.fw.webview.postMessage({ type: 'state', s, focus: true });
+      return { window: true, reused: true };
+    }
+    const media = vscode.Uri.joinPath(this.hub.ctx.extensionUri, 'media');
+    const p = vscode.window.createWebviewPanel('ht9045Designer.findWindow', '尋找', { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
+      { enableScripts: true, enableCommandUris: false, localResourceRoots: [media], retainContextWhenHidden: true });
+    this.fw = p;
+    const w = p.webview;
+    const nonce = crypto.randomBytes(16).toString('base64');
+    w.html = '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">' +
+      '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src ' + w.cspSource + '; script-src \'nonce-' + nonce + '\';">' +
+      '<link rel="stylesheet" href="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'findwin.css')) + '"></head><body>' +
+      '<script nonce="' + nonce + '" src="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'findwin.js')) + '"></script></body></html>';
+    this.fwPending = s;
+    w.onDidReceiveMessage(m => this.onWindowMessage(m));
+    p.onDidDispose(() => { if (this.fw === p) this.fw = null; });
+    // (1003, EastSun: "我需要的是隱藏 有需要搜尋在出現 focus到別的視窗 就隱藏 不要讓使用者看到 也點不出來": focus elsewhere = the
+    //  window closes -- an editor window VS Code floats cannot be hidden, only closed, and closed it is not on the task bar
+    //  either; Ctrl+F brings it back with the last results. A click on a result keeps the focus here (the line opens in the
+    //  main window), so results can be clicked one after another. The first moments are left out: floating it moves it.
+    //  ht9045Designer.find.hideOnBlur = false: it stays.)
+    this.fwOpenedAt = Date.now();
+    if (p.onDidChangeViewState) p.onDidChangeViewState(e => {
+      const wp = (e && e.webviewPanel) || p;
+      if (wp.active || Date.now() - this.fwOpenedAt < (this.fwSettleMs === undefined ? 1500 : this.fwSettleMs)) return;
+      if (vscode.workspace.getConfiguration('ht9045Designer').get('find.hideOnBlur') === false) return;
+      if (this.hub && this.hub.logEv) this.hub.logEv('尋找視窗：焦點離開，收起來');
+      try { p.dispose(); } catch (err) { /* gone */ }
+    });
+    // (its own window, floating -- VS Code 1.86+; older ones keep it as a tab beside)
+    if (vscode.workspace.getConfiguration('ht9045Designer').get('find.newWindow') !== false) {
+      try { await vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow'); } catch (e) { /* stays a tab */ }
+    }
+    return { window: true, reused: false };
+  }
+  async onWindowMessage(m) {
+    const p = this.fw;
+    if (!p || !m) return null;
+    const post = (s, focus) => p.webview.postMessage({ type: 'state', s, focus: !!focus });
+    if (m.type === 'ready') { post(this.fwPending || { history: this.history() }, true); return null; }
+    if (m.type === 'prefs') {
+      this.opts = this.constructor.cleanOpts(m.opts);
+      if (typeof m.scope === 'string' && m.scope) this.findLast = m.scope;
+      if (typeof m.rq === 'string') this.fwRq = m.rq;
+      this.savePrefs();
+      return null;
+    }
+    if (m.type === 'clearHistory') { this.setHistory([]); post({ history: [] }); return null; }
+    if (m.type === 'delHistory') { const h = this.history(); h.splice(m.i, 1); this.setHistory(h); post({ history: h }); return null; }
+    // (1006 audit: the window's own search -- the Solution Explorer's 在這裡搜尋 / the search tree run their own and used
+    //  to overwrite this.res / this.q: a click opened the other search's hit, 全部取代 rewrote ITS matches with this text)
+    const W = this.fwSearch || null;
+    if (m.type === 'open') { const h = W && W.res && W.res.hits[m.i]; return h ? this.open(h, this.fwCol, true) : null; }
+    if (m.type === 'replace') {
+      // (全部取代 = the results the window lists -- the first 2000, as its button says)
+      const hs = W && W.res ? (m.all ? W.res.hits.slice(0, 2000) : [W.res.hits[m.i]].filter(Boolean)) : [];
+      const r = await this.replaceHits(hs, String(m.text == null ? '' : m.text), W);
+      const wr = this.windowRes(W && W.res, W ? W.q : this.q);
+      this.fwLastRes = wr;
+      post({ replaced: r, res: wr });
+      return r;
+    }
+    if (m.type !== 'find' || !String(m.q || '').trim()) return null;
+    this.fwLastQuery = m;
+    const key = it => it.scope + '|' + (it.area || '');
+    const sc = (this.fwScopes || []).find(it => key(it) === m.scope) || (this.fwScopes || []).find(it => it.scope === 'solution') || { scope: 'solution', file: null, label: '整個方案' };
+    this.opts = this.constructor.cleanOpts(m.opts);
+    this.findLast = key(sc);
+    this.savePrefs();
+    post({ busy: true });
+    const res = await this.run(String(m.q), sc.scope, sc.file, { quiet: true, kinds: this.opts.kinds });
+    this.fwSearch = res ? { res, q: String(m.q), opts: Object.assign({}, this.opts) } : null;
+    const r = this.windowRes(res, String(m.q));
+    const scopeLabel = String(sc.label || '').replace(/^\$\([^)]*\) /, '');
+    const now = new Date(), two = n => (n < 10 ? '0' : '') + n;
+    const entry = { q: String(m.q), scope: key(sc), scopeLabel, opts: this.opts, n: res ? res.hits.length : null, when: two(now.getMonth() + 1) + '/' + two(now.getDate()) + ' ' + two(now.getHours()) + ':' + two(now.getMinutes()) };
+    const hist = [entry].concat(this.history().filter(x => !(x.q === entry.q && x.scope === entry.scope)));
+    this.setHistory(hist);
+    this.fwLastRes = r;
+    // (the scope searched goes back too: the box redrawn from the opts kept showing the scope it opened with)
+    post({ busy: false, res: r, history: hist.slice(0, 50), opts: this.opts, scope: this.findLast });
+    return r;
+  }
+
+  /**
+   * 取代 (EastSun 1003: "我搜尋視窗 要有可以替換關鍵字的功能"; Visual Studio's Replace in Files): the hits given get `text` in
+   * their place -- with 正規式 on, $1 / $2 ... are the groups of each match. One edit of the documents (WorkspaceEdit):
+   * nothing is saved (全部儲存 / Ctrl+S; Ctrl+Z takes it back). A hit is replaced only where the document still has that
+   * match at that place (a file changed since the search, a file read as Big5 -- its offsets are not the editor's --
+   * is skipped); the BCB6 golden tree (read only) never. -> { done, skipped, golden, files }
+   */
+  /** The results as the 尋找 window shows them (the first 2000; i = the index in this.res.hits). */
+  windowRes(res, q) {
+    if (!res) return null;
+    const labels = {};
+    for (const a of this.areas()) labels[a.area] = a.label;
+    const SHOW = 2000;
+    const files = new Set(res.hits.map(h => h.file)).size;
+    return { q, n: res.hits.length, truncated: res.truncated, files: res.files != null && !res.edited ? res.files : files, ms: res.ms, scopeLabel: this.scopeLabel, shown: Math.min(SHOW, res.hits.length),
+      hits: res.hits.slice(0, SHOW).map((h, i) => ({ i, area: h.area, areaLabel: labels[h.area] || '', rel: h.rel, file: h.file, line: h.line, col: h.col, len: h.len, text: h.text, kinds: h.kinds || null })) };
+  }
+  async replaceHits(hits, text, ctx) {
+    // (ctx = the search the hits came from -- the 尋找 window's own { res, q, opts }; else the last search)
+    const Q = ctx ? ctx.q : this.q, O = ctx ? ctx.opts : this.opts, RES = ctx ? ctx.res : this.res;
+    const out = { done: 0, skipped: 0, golden: 0, files: 0 };
+    const done = [];
+    const mk = projectsearch.makeRe(Q, O);
+    if (mk.error || !hits || !hits.length) return out;
+    const one = new RegExp(mk.re.source, mk.re.flags.replace('g', ''));
+    const by = new Map();
+    for (const h of hits) {
+      if (h.area === 'golden') { out.golden++; continue; }
+      if (h.enc && h.enc !== 'utf8') { out.skipped++; continue; }
+      if (!by.has(h.file)) by.set(h.file, []);
+      by.get(h.file).push(h);
+    }
+    const we = new vscode.WorkspaceEdit();
+    for (const [file, hs] of by) {
+      let doc;
+      try { doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file)); } catch (e) { out.skipped += hs.length; continue; }
+      const all = doc.getText();
+      let n = 0;
+      for (const h of hs) {
+        const got = typeof h.at === 'number' ? all.substr(h.at, h.len) : null;
+        const mm = got != null ? one.exec(got) : null;
+        if (!mm || mm.index !== 0 || mm[0].length !== got.length) { out.skipped++; continue; }
+        const rep = O.regex ? got.replace(one, text) : text;
+        we.replace(doc.uri, new vscode.Range(doc.positionAt(h.at), doc.positionAt(h.at + h.len)), rep);
+        done.push({ h, d: rep.length - h.len });
+        n++;
+      }
+      if (n) { out.done += n; out.files++; }
+    }
+    if (out.done) await vscode.workspace.applyEdit(we);
+    // (the list: the replaced ones out; the others after them in the same file moved by the length difference -- so a
+    //  next 取代 still finds its place)
+    // (every list holding these hits -- the window's and the tree's may share them -- moves along)
+    if (out.done) {
+      const gone = new Set(done.map(x => x.h));
+      for (const L of [RES, this.res, this.fwSearch && this.fwSearch.res].filter((x, i, a) => x && a.indexOf(x) === i)) {
+        for (const x of done) for (const o of L.hits) if (!gone.has(o) && o.file === x.h.file && o.at > x.h.at) o.at += x.d;
+        L.hits = L.hits.filter(o => !gone.has(o));
+        L.edited = true;
+      }
+    }
+    if (this.hub && this.hub.logEv) this.hub.logEv('取代「' + Q + '」→「' + text + '」：' + out.done + ' 處／' + out.files + ' 檔，略過 ' + out.skipped + '，golden ' + out.golden + '（' + Array.from(by.keys()).join('、') + '）');
+    vscode.window.setStatusBarMessage('$(replace-all) 取代了 ' + out.done + ' 處（' + out.files + ' 個檔，還沒存檔）' + (out.skipped ? '，略過 ' + out.skipped + ' 處（檔案已經改過）' : '') + (out.golden ? '，BCB6 原始碼 ' + out.golden + ' 處不改' : ''), 8000);
+    return out;
+  }
+
+  async run(q, scope, file, how) {
+    const quiet = !!(how && how.quiet);
+    const mk = projectsearch.makeRe(q, this.opts);
+    if (mk.error) { vscode.window.showWarningMessage(mk.error); return null; }
+    const all = this.areas();
+    if (!all.length) { vscode.window.showInformationMessage('找不到要搜尋的資料夾（C++ 移植樹、web、BCB6 原始碼）：開一個含它們的資料夾，或在設定 ht9045Designer.portRoot／webRoot／goldenRoot 指定。'); return null; }
+    const sc = projectsearch.scopeRoots(all, scope || 'solution', file);
+    if (sc.error) { vscode.window.showInformationMessage(sc.error + '。'); return null; }
+    const areas = sc.roots;
+    this.scope = scope || 'solution';
+    this.scopeLabel = sc.label;
+    this.scopeFile = file || null;
+    if (this.busy) { this.cancel = true; for (let i = 0; i < 100 && this.busy; i++) await new Promise(r => setTimeout(r, 20)); }
+    this.busy = true;
+    this.cancel = false;
+    this.q = q;
+    let res = null;
+    try {
+      res = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '專案搜尋「' + q + '」', cancellable: true }, async (prog, token) => {
+        return projectsearch.search(areas, mk.re, {
+          // (only the 尋找 window's filters: the other searches never filter)
+          kinds: (how && how.kinds) || null,
+          cancelled: () => this.cancel || !!(token && token.isCancellationRequested),
+          progress: (n, total) => prog.report({ message: n + '／' + total + ' 個檔' }),
+        });
+      });
+    } finally { this.busy = false; }
+    this.res = res;
+    this.roots = areas;
+    this.setDescription();
+    this._em.fire();
+    this.hub.log('專案搜尋「' + q + '」' + (this.optsText() ? '（' + this.optsText() + '）' : '') + '：' + res.hits.length + (res.truncated ? '+' : '') + ' 筆、' + res.files + ' 個檔（掃了 ' + res.scanned + ' 個，' + res.ms + ' ms）' + (res.cancelled ? '，中途取消' : ''));
+    // (from the 尋找 window: the results are in it -- the side bar not pulled up, no message box over it)
+    if (quiet) return res;
+    if (this.view) { try { await vscode.commands.executeCommand('ht9045Designer.projectSearch.focus'); } catch (e) { /* not showing */ } }
+    if (!res.hits.length) vscode.window.showInformationMessage('整個專案都沒有找到「' + q + '」（' + areas.map(a => a.label).join('、') + '，' + res.scanned + ' 個檔）。');
+    else if (res.truncated && !res.cancelled) vscode.window.showInformationMessage('「' + q + '」超過 ' + res.hits.length + ' 筆，只列前 ' + res.hits.length + ' 筆：打長一點、或開「全字」。');
+    return res;
+  }
+
+  /** The results as text to the clipboard (every hit: file:line:col  the line). */
+  async cmdCopy() {
+    if (!this.res || !this.res.hits.length) { vscode.window.showInformationMessage('還沒有搜尋結果。'); return null; }
+    const t = projectsearch.asText(this.q, this.res, this.roots);
+    await vscode.env.clipboard.writeText(t);
+    vscode.window.setStatusBarMessage('$(copy) 專案搜尋的 ' + this.res.hits.length + ' 筆結果複製到剪貼簿了', 5000);
+    return t;
+  }
+
+  cmdClear() {
+    this.res = null;
+    this.q = '';
+    this.setDescription();
+    this._em.fire();
+  }
+
+  /** Open a hit's line, the keyword selected (golden: read-only Big5). */
+  async open(h, col, keepFocus) {
+    if (!h) return null;
+    // (only the golden tree through the read-only Big5 view; a port / web file with a few stray bytes opens as it is)
+    const t = { kind: h.area === 'golden' ? 'golden' : 'port', file: h.file, line: h.line, col: h.col };
+    try {
+      const uri = t.kind === 'golden' ? vscode.Uri.file(h.file).with({ scheme: GOLDEN_SCHEME }) : vscode.Uri.file(h.file);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const ln = Math.max(0, h.line - 1);
+      // (the line shown may be the part around the hit of a long line: find the keyword in the real line)
+      const real = doc.lineAt ? doc.lineAt(Math.min(ln, doc.lineCount - 1)).text : '';
+      const mk = projectsearch.makeRe(this.q, this.opts);
+      let c = Math.max(0, h.col - 1), len = h.len;
+      if (mk.re && real) { mk.re.lastIndex = 0; const m = mk.re.exec(real); if (m) { c = m.index; len = m[0].length; } }
+      const sel = new vscode.Range(new vscode.Position(ln, c), new vscode.Position(ln, c + len));
+      const ed = await vscode.window.showTextDocument(doc, Object.assign({ preview: true, selection: sel }, col ? { viewColumn: col } : {}, keepFocus ? { preserveFocus: true } : {}));
+      if (ed && ed.revealRange) ed.revealRange(sel, vscode.TextEditorRevealType.InCenter);
+      return t;
+    } catch (e) {
+      vscode.window.showErrorMessage('開不了 ' + h.file + '：' + (e && e.message || e));
+      return null;
+    }
+  }
+
+  getChildren(n) {
+    const res = this.res;
+    if (!res) return [];
+    if (!n) {
+      return this.roots.map(r => ({ type: 'area', r, hits: res.hits.filter(h => h.area === r.area) })).filter(a => a.hits.length);
+    }
+    if (n.type === 'area') {
+      const by = new Map();
+      for (const h of n.hits) { if (!by.has(h.file)) by.set(h.file, []); by.get(h.file).push(h); }
+      return Array.from(by, ([file, hs]) => ({ type: 'file', file, rel: hs[0].rel, area: n.r.area, hits: hs }));
+    }
+    if (n.type === 'file') return n.hits.map(h => ({ type: 'hit', h }));
+    return [];
+  }
+
+  getTreeItem(n) {
+    const S = vscode.TreeItemCollapsibleState;
+    if (n.type === 'area') {
+      const it = new vscode.TreeItem(n.r.label, S.Expanded);
+      it.description = n.hits.length + ' 筆';
+      it.tooltip = n.r.root;
+      it.iconPath = new vscode.ThemeIcon(n.r.area === 'golden' ? 'history' : n.r.area === 'web' ? 'globe' : 'symbol-class');
+      it.id = 'ps:' + n.r.area;
+      return it;
+    }
+    if (n.type === 'file') {
+      const it = new vscode.TreeItem(path.basename(n.file), S.Collapsed);
+      const dir = path.dirname(n.rel);
+      it.description = (dir && dir !== '.' ? dir + '　' : '') + n.hits.length + ' 筆' + (n.hits[0].enc === 'big5' ? '　Big5' : '');
+      it.tooltip = n.file;
+      it.resourceUri = vscode.Uri.file(n.file);
+      it.id = 'ps:' + n.area + ':' + n.file;
+      return it;
+    }
+    const h = n.h;
+    const lead = h.text.length - h.text.replace(/^\s+/, '').length;
+    const shown = h.text.trim();
+    const label = h.line + ': ' + shown;
+    const at = String(h.line).length + 2 + Math.max(0, h.col - 1 - lead);
+    // (a TreeItemLabel: the keyword highlighted, as in VS Code's Search view)
+    const it = new vscode.TreeItem({ label, highlights: [[at, Math.min(label.length, at + h.len)]] }, S.None);
+    it.tooltip = h.rel + ':' + h.line + ':' + h.col + '\n' + shown;
+    it.command = { command: 'ht9045Designer.projectSearchOpen', title: '開啟', arguments: [h] };
+    it.id = 'ps:' + h.area + ':' + h.file + ':' + h.line + ':' + h.col;
+    return it;
+  }
+}
+
+// ---------------------------------------------------------------------------
+/**
+ * CSV 表格: a .csv as a table, edited like Excel (media/csv.js). Every change is a replacement of only
+ * the text of the cells it changes (lib/csvtable.js) in VS Code's document -- the machine's settings are
+ * CSV (Mot_Table.csv, IO_Table.csv), so nothing else of the file may move. Saving (Ctrl+S) and undo are
+ * VS Code's. A file VS Code could not read right (Big5 read as UTF-8) is shown, not edited.
+ */
+class CsvTableEditor {
+  constructor(hub) {
+    this.hub = hub;
+    this.open = new Set();
+  }
+
+  resolveCustomTextEditor(doc, panel) {
+    const media = vscode.Uri.joinPath(this.hub.ctx.extensionUri, 'media');
+    const w = panel.webview;
+    w.options = { enableScripts: true, enableCommandUris: false, localResourceRoots: [media] };
+    const nonce = crypto.randomBytes(16).toString('base64');
+    // style-src 'unsafe-inline': the table places every cell with style="left:…;top:…" (only the rows in sight
+    // are drawn); without it VS Code drops those and every cell lands in the corner (EastSun 20260930's screenshot)
+    w.html = '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">' +
+      '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src ' + w.cspSource + ' \'unsafe-inline\'; script-src \'nonce-' + nonce + '\';">' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+      '<link rel="stylesheet" href="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'csv.css')) + '"></head><body><div id="root"></div>' +
+      '<script nonce="' + nonce + '" src="' + w.asWebviewUri(vscode.Uri.joinPath(media, 'csv.js')) + '"></script></body></html>';
+    // (1006 audit: delim = decided once per open; queue = one write at a time; extVer = the last version changed by
+    //  something else than this table's own writes -- a write based on an older view is refused)
+    const t = { doc, panel, p: null, first: true, timer: null, safe: null, posted: 0, delim: null, queue: Promise.resolve(), applying: 0, extVer: 0 };
+    this.open.add(t);
+    const subs = [
+      w.onDidReceiveMessage(m => this.onMessage(t, m)),
+      vscode.workspace.onDidChangeTextDocument(e => {
+        if (e.document !== doc || !e.contentChanges.length) return;
+        if (!t.applying) t.extVer = doc.version;   // (another editor, Ctrl+Z / Ctrl+Y, a reload from disk)
+        clearTimeout(t.timer);
+        t.timer = setTimeout(() => this.send(t), 60);
+      }),
+    ];
+    panel.onDidDispose(() => { clearTimeout(t.timer); subs.forEach(s => s.dispose()); this.open.delete(t); if (t.editing) vscode.commands.executeCommand('setContext', 'ht9045Designer.csvEditing', false); });
+    // (another editor in front: no cell of this one is being edited for VS Code's keys)
+    subs.push(panel.onDidChangeViewState(e => { if (!e.webviewPanel.active && t.editing) { t.editing = false; vscode.commands.executeCommand('setContext', 'ht9045Designer.csvEditing', false); } }));
+  }
+
+  /** Whether the text can be written back: once per open (the bytes on disk vs what VS Code decoded). */
+  safety(t) {
+    if (t.safe) return t.safe;
+    let bytes = null;
+    try { if (t.doc.uri.scheme === 'file') bytes = fs.readFileSync(t.doc.uri.fsPath); } catch (e) { bytes = null; }
+    t.safe = csvtable.decodeSafe(bytes, t.doc.getText());
+    if (t.doc.uri.scheme !== 'file' && t.doc.uri.scheme !== 'untitled') t.safe = { ok: false, why: '這個檔案是唯讀的（' + t.doc.uri.scheme + '）。' };
+    return t.safe;
+  }
+
+  /** the text parsed with the separator decided when it was opened */
+  parse(t) {
+    const text = t.doc.getText();
+    if (!t.delim) t.delim = csvtable.detectDelim(text);
+    return csvtable.parseDoc(text, t.delim);
+  }
+
+  send(t) {
+    t.p = this.parse(t);
+    const s = this.safety(t);
+    t.posted++;
+    t.panel.webview.postMessage({
+      type: 'data', rows: t.p.rows.map(r => r.cells.map(c => c.v)), delim: t.p.delim, ver: t.doc.version,
+      readOnly: !s.ok, why: s.why || '', file: path.basename(t.doc.uri.fsPath || t.doc.fileName || ''), first: t.first,
+    });
+    t.first = false;
+  }
+
+  /** Replacements [{ s, e, text }] on the document as ONE edit (= one undo step). */
+  async apply(t, reps, what) {
+    if (!reps.length) return true;
+    const s = this.safety(t);
+    if (!s.ok) { vscode.window.showWarningMessage(s.why); this.send(t); return false; }
+    const we = new vscode.WorkspaceEdit();
+    for (const r of reps) we.replace(t.doc.uri, new vscode.Range(t.doc.positionAt(r.s), t.doc.positionAt(r.e)), r.text);
+    t.applying++;
+    let ok = false;
+    try { ok = await vscode.workspace.applyEdit(we); } finally { t.applying--; }
+    if (!ok) { vscode.window.showWarningMessage('CSV 表格：' + what + '沒有寫進去（檔案可能是唯讀的）。'); this.send(t); }
+    return ok;
+  }
+
+  onMessage(t, m) {
+    if (!m || typeof m.type !== 'string') return null;
+    // (1006 audit: writes one after another -- a second one used to be computed while the first was still being
+    //  applied, on the old text, and landed in the wrong bytes: Mot_Table's axis rows)
+    if (/^(edit|paste|insertRows|deleteRows|sortRows|insertCols|deleteCols)$/.test(m.type)) {
+      const run = t.queue.then(() => this.handle(t, m));
+      t.queue = run.catch(() => null);
+      return run;
+    }
+    return this.handle(t, m);
+  }
+
+  async handle(t, m) {
+    if (/^(edit|paste|insertRows|deleteRows|sortRows|insertCols|deleteCols)$/.test(m.type)) {
+      // a view older than a change made elsewhere: its rows / columns may not be these any more -- refused, shown again
+      if (Number.isInteger(m.ver) && m.ver < t.extVer) {
+        vscode.window.setStatusBarMessage('$(warning) CSV 表格：檔案剛在別處改過（或復原了），這次的修改沒有寫入——表格已更新，請再做一次', 8000);
+        this.send(t);
+        return false;
+      }
+      // the offsets of the text as it is NOW
+      t.p = this.parse(t);
+    }
+    // (1006 audit: a row / column number from the webview: an integer in range, else refused -- a missing one used to
+    //  become 0 and delete the title row)
+    const nr = t.p ? t.p.rows.length : 0, nc = t.p ? t.p.rows.reduce((mx, r) => Math.max(mx, r.cells.length), 0) : 0;
+    const idx = (x, max) => (Number.isInteger(x) && x >= 0 && x <= max ? x : null);
+    const cnt = (x, max) => (Number.isInteger(x) && x >= 1 ? Math.min(x, max) : null);
+    const bad = what => { vscode.window.setStatusBarMessage('$(warning) CSV 表格：' + what + '的位置不對，沒有改', 6000); return false; };
+    switch (m.type) {
+      case 'ready':
+        this.send(t);
+        return null;
+      case 'edit': {
+        const ch = (Array.isArray(m.changes) ? m.changes : []).filter(c => c && idx(c.r, nr + 1) !== null && idx(c.c, Math.max(nc, 1) + 256) !== null)
+          .map(c => ({ r: c.r, c: c.c, v: String(c.v == null ? '' : c.v) }));
+        return this.apply(t, csvtable.cellEdits(t.p, ch), '修改');
+      }
+      case 'paste': {
+        // Excel's clipboard (tab separated) from the top-left cell of the selection; a bigger selection the block fits
+        // a whole number of times is filled with it; a cut block moves (lib/csvtable.js pasteChanges) -- one edit
+        const grid = csvtable.fromTsv(m.text);
+        const int = (x, d) => (Number.isInteger(x) && x >= 0 ? x : d);
+        if (idx(m.r, nr + 1) === null || idx(m.c, nc + 256) === null) return bad('貼上');
+        const r0 = int(m.r, 0), c0 = int(m.c, 0);
+        const sel = { r0, c0, r1: Math.max(r0, int(m.r1, r0)), c1: Math.max(c0, int(m.c1, c0)) };
+        const cut = m.cut && Number.isInteger(m.cut.r0) ? { r0: int(m.cut.r0, 0), c0: int(m.cut.c0, 0), r1: int(m.cut.r1, 0), c1: int(m.cut.c1, 0) } : null;
+        const pc = csvtable.pasteChanges(t.p, grid, sel, cut);
+        const ok = await this.apply(t, csvtable.cellEdits(t.p, pc.changes), cut ? '搬移' : '貼上');
+        if (ok) t.panel.webview.postMessage({ type: 'select', r: pc.rect.r0, c: pc.rect.c0, r1: pc.rect.r1, c1: pc.rect.c1 });
+        return ok;
+      }
+      case 'editing':
+        // a cell is being edited: VS Code's Ctrl+Z (the FILE's undo) is held off -- the table takes back the typing
+        t.editing = !!m.on;
+        return vscode.commands.executeCommand('setContext', 'ht9045Designer.csvEditing', t.editing).then(() => true, () => false);
+      case 'copy':
+        return vscode.env.clipboard.writeText(csvtable.toTsv(Array.isArray(m.grid) ? m.grid : [])).then(() => true, () => false);
+      case 'readClip':
+        // the table's right-click 貼上: the clipboard back to it, pasted there like Ctrl+V (a webview cannot read it)
+        return vscode.env.clipboard.readText().then(tx => { t.panel.webview.postMessage({ type: 'clip', text: String(tx || '') }); return true; }, () => false);
+      case 'insertRows':
+        if (idx(m.r, nr) === null || cnt(m.count, 10000) === null) return bad('插入列');
+        return this.apply(t, csvtable.insertRows(t.p, m.r, cnt(m.count, 10000)), '插入列');
+      case 'deleteRows': {
+        // (1006: with a filter on, only the rows in sight go -- several runs, ONE edit, one Ctrl+Z)
+        const runs = Array.isArray(m.runs) && m.runs.length ? m.runs : [{ r: m.r, count: m.count }];
+        if (runs.some(x => !x || idx(x.r, nr - 1) === null || cnt(x.count, nr) === null)) return bad('刪除列');
+        const reps = [];
+        for (const x of runs) for (const r of csvtable.deleteRows(t.p, x.r, cnt(x.count, nr - x.r))) reps.push(r);   // (no spread: 150k runs overflowed)
+        return this.apply(t, reps, '刪除列');
+      }
+      case 'insertCols':
+        // 1006 (Excel's Insert sheet columns): empty fields in every row, ONE edit
+        if (idx(m.c, nc) === null || cnt(m.count, 1000) === null) return bad('插入欄');
+        return this.apply(t, csvtable.insertCols(t.p, m.c, cnt(m.count, 1000)), '插入欄');
+      case 'deleteCols':
+        if (idx(m.c0, nc - 1) === null || idx(m.c1, nc - 1) === null || m.c1 < m.c0) return bad('刪除欄');
+        return this.apply(t, csvtable.deleteCols(t.p, m.c0, m.c1), '刪除欄');
+      case 'sortRows': {
+        // 1006 (Excel's Sort): the rows' ORDER in the file changes -- asked first (a table's order can be its numbering:
+        // Mot_Table's rows are the axes); ONE edit, Ctrl+Z
+        if (idx(m.col, Math.max(nc - 1, 0)) === null || idx(m.from, nr) === null) return bad('排序');
+        const col = m.col, from = m.from;
+        const reps = csvtable.sortRows(t.p, t.doc.getText(), from, col, !!m.desc);
+        if (!reps.length) { vscode.window.setStatusBarMessage('$(info) 已經是這個順序了', 4000); return null; }
+        const name = String(m.colName || ('第 ' + (col + 1) + ' 欄'));
+        const pick = await vscode.window.showWarningMessage('依「' + name + '」' + (m.desc ? '由大到小' : '由小到大') + '排序 ' + (t.p.rows.length - from) + ' 列？\n\n這會改變檔案裡列的順序。有些表的順序就是編號（例如 Mot_Table.csv 的列順序＝軸的編號），排了機台會讀錯。不確定就先取消。\n\n排完可以 Ctrl+Z 復原（還沒存檔）。', { modal: true }, '排序');
+        if (pick !== '排序') return null;
+        // (1006 audit: computed again after the question -- the file may have changed while it was open)
+        t.p = this.parse(t);
+        return this.apply(t, csvtable.sortRows(t.p, t.doc.getText(), from, col, !!m.desc), '排序');
+      }
+      case 'openText':
+        // (asked for on purpose: no "use the table?" question for it)
+        if (this.hub.csvAsked) this.hub.csvAsked.add(t.doc.uri.fsPath.toLowerCase());
+        return vscode.commands.executeCommand('vscode.openWith', t.doc.uri, 'default');
+    }
+    return null;
+  }
+}
+
+module.exports = { activate, deactivate };

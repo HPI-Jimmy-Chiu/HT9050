@@ -1,24 +1,19 @@
 # HT9045 HTML Display Environment
 
+舊引用路徑保留；[讀取整理後文件](../../hpi-web-hmi/references/pages/references/html-display-environment.md)。
+
 ## Target Display
 
-- The HT9045 HTML version runs only on the machine's fixed FullHD display.
-- Required resolution: **1920 x 1080**.
-- The release runtime is Edge/Chromium kiosk/fullscreen on Windows.
-- Fixed VCL-style windows must fit within 1920 x 1080. Where the Windows taskbar is visible, usable height is approximately 1032 px.
+[讀取此節](../../hpi-web-hmi/references/pages/references/html-display-environment.md#target-display)
 
 ## Unsupported Layouts
 
-- Phone, tablet, portrait, and other mobile layouts are outside the product scope.
-- Responsive mobile breakpoints, mobile navigation, touch-first rearrangement, and phone/tablet screenshots must not be added unless the machine hardware specification changes.
-- Validation must not use phone/tablet viewport sizes such as 390 x 844 as an acceptance criterion.
+[讀取此節](../../hpi-web-hmi/references/pages/references/html-display-environment.md#unsupported-layouts)
 
 ## Required Validation
 
-- UI acceptance viewport: **1920 x 1080 only**.
-- Verify dialogs, fixed windows, text, buttons, and overlays stay inside the FullHD viewport without overlap or clipping.
-- Smaller VS Code embedded-browser dimensions may be used only as a tooling limitation check. They do not define product behavior and must not drive layout changes.
+[讀取此節](../../hpi-web-hmi/references/pages/references/html-display-environment.md#required-validation)
 
 ## Ownership
 
-This specification applies to `background.html`, `release.html`, `debug.html`, `page/*`, and all HTML dialog overlays. Machine resolution changes require an explicit update to this specification before responsive behavior is introduced.
+[讀取此節](../../hpi-web-hmi/references/pages/references/html-display-environment.md#ownership)

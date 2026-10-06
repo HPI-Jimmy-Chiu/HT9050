@@ -1,852 +1,167 @@
 # C 路（golden 表單橋）— 現行第三條資料路線
 
-**這是什麼**：C 路＝golden 表單橋（golden form bridge）。與 B 路共用 `wb_serve` 傳輸層
-（同一個 HTTP/WS 伺服器行程），但資料模型不同：B 路是「檔案鏡像」（讀寫 ini/csv 原始
-鍵值）；C 路是「畫面狀態」——HTML 拿到的是 golden 表單開頁後的狀態（值、`Visible`、
-`Enabled`、權限），存檔則觸發 golden 原本的存檔流程（檢查、鉗制、權限、Lock by File、
-寫完重讀），不是直接改檔。
-
-**命名**：Steven 20260924 核准「C 路」這個稱呼（「改吧」）。
-
-> **Steven 團隊 20260926 更新（HEAD 8fad1522 對程式核對）**：§2 端點列、§3 端點（改寫成
-> 「JSON→HTML／HTML→JSON」兩段，§3.1／§3.2 原編號保留）、§4 例子、§6 改成**全部結構的總表**。
-> 被取代的舊句移到 `archive/route-c-golden-bridge_superseded.md`（附日期與原因）。
-> **§6 的「C 路結構總表」是單一出處**——其他 skill（`ht9045-json-bridge` 的 `generators.md`、
-> `write-inventory.md`、`SKILL.md` §〇）引用這張，不各自再維護一份。
->
-> **Steven 團隊 20260927 更新（St01，HEAD 227b79db 對程式核對；派工時 HEAD 4f0586ee，之後又進 `61c96910` 等 3 顆，不影響本檔行號）**：
-> §6 總表補 #33～#35（`ACTForm`／`Winway`／`Monitor`，commit `217e7e5e`，三個都沒有頁面、沒有 `PageDesc`）；`kOwned` 多 5 個檔
-> （同 commit）；#3／#19／A 列開頁照 golden 讀 `System\TrayForm.csv`／`PlateForm.csv`（`217e7e5e`／`7d490f7c`）；§6 表註的手寫
-> FileRW 改寫成現況（多 `CfgTrayPlate`／`MainBackup`／`MainClose`／`MainRecord`，`MainBoot` 多五支）；§3.0 入口「無」的結構數 7→10；§3.0b 補伺服器防連點；§4 補兩句。
-> 這一輪 `tools/wb_serve.cpp` 的插入全部是「同一行接在行尾」（`git diff -U0 63bc008f..227b79db -- tools/wb_serve.cpp`：除了檔尾
-> `:7647` 起新增的 47 行，每個 hunk 都是一行換一行），所以本檔引用的 `wb_serve.cpp` 行號仍成立。被取代的舊句在
-> `archive/route-c-golden-bridge_superseded.md`。
->
-> **Steven 團隊 20260927 下午更新（St01 經驗整理，分支 `v906/steven-cbridge-review6` HEAD `89ccb4cc` 對程式核對）**：
-> 新增 §3.0d（`editlist.save` 運轉中拒絕，`f45b92f5`）、§3.0e（golden「按下即寫檔」的事件：BeforeApply 重播＋Q14＝B，`3ee547e5`）、
-> §3.0f（開頁不寫檔的讀法，Q15，計畫中）、§3.0g（`form.event`，Q40＝A，進行中）、§4.1（產生器改 golden 行為的標準流程：`_expect`／
-> REPLACE／GATE／冪等檢查，例 `725038a6`／`3ee547e5`）；§6 `CRouteOwner` 補 Q3 動態 DIO 檔名（`3ee547e5`）；§6 總表 #9、#30、#32 改成現況
-> （#32 ContactForce 建構子開機就跑，R15＝B，`725038a6`）；§3.3 第一型 `/api/form` 改成 Q4＝B 的現況。
-> ⛔ 行號更正（`3ee547e5` 在 `FileRW/IniConfig.cpp` 加了 P26 OCR Tray Lot 96 行、`725038a6` 動了 `FileRW/ContactForce.cpp`／`AOISetup.cpp`、
-> 防連點 `f45b92f5`／`b782b00b` 動了 `WebCmdGuard.cpp`，本檔原引用的行號已位移）：`IniConfig.cpp` `:68`／`:77`→`:109`／`:119`、`:226-257`→`:293-354`、
-> `:261-266`→`:356-363`、`:260-285`→`:356-381`；`WebCmdGuard.cpp:72`→`:89`；`AOISetup.cpp:81`→`:89`；`ContactForce.cpp:381-388`→`:387-394`；
-> `CMakeLists.txt:3404`→`:3419`；`kOwned` `:1289-1318`→`:1289-1319`（`};` 在 `:1319`）。舊句保留在原處、前面標「⛔ 20260927 更正」
-> （這一輪沒有寫 `archive/`）。
-> `tools/wb_serve.cpp` `227b79db..89ccb4cc`：`git diff -U0` 16 個 hunk 全是 `-N +N` 一行換一行，只有檔尾 `@@ -7693,0 +7694,131 @@`
-> （Q3 的 `CRouteOwnerDio` 與 main 合進來的 RSMODE）⇒ 本檔引用的 `wb_serve.cpp` 行號仍成立。
-> 在 `wb_serve.cpp` 動手的規矩（同一行插入、檔尾附加、函式指標安裝、防連點、測試縫、驗證）另寫在 [wbserve-conventions.md](wbserve-conventions.md)。
->
-> **Steven 團隊 20260927 晚間更新（St01，分支 `v906/steven-cbridge-review6` HEAD `db1b7638` 對程式核對；派工時 HEAD `6a06fe9e`，之後又進 `c9d3c932`、`9268162b`、`ed365c68` 等，已一起核對）**：
-> §3.0g `form.event` 改成現況（C++ 已做：`76058840` HotPlate／TrayForm／Cleaning、`4e74e8b4` TrayAssignment／Temp_Set；分頁值 `activePageIndex` `c9d3c932`），
-> 新增 §3.0h（開窗閘 `kOpenGates`，`cb306f89`）、§3.0i（關窗尾段兩批 `c8028b21`／`9268162b`＋`form.save` 運轉中拒絕 R87）、§3.0j（頁面補件與 golden 密碼點：
-> YM-1、`IC_PasswordGuard`、`SU_DoPassword`）；§3.0b、§3.0d、§3.0e、§3.3、§3.4、§4、§5、§6 表註、§8 補句。
-> `tools/wb_serve.cpp` `89ccb4cc..db1b7638`：`git diff -U0` 8 個 hunk 全是一行換一行（`:2666`、`:2669`、`:4111`、`:4826`、`:5207`、`:5261-5262`、`:5303`、`:5953`）⇒ 本檔引用的 `wb_serve.cpp` 行號仍成立。
-> ⛔ 行號更正（`FileRW/_EditPage.cpp` 多了 form.event 段、開窗閘段與分頁值段；`FileRW/_EditList.cpp` 多 5 行；`FileRW/IniConfig.cpp` 多 `IC_PasswordGuard` 107 行；
-> `CMakeLists.txt` 在 `1de5005b` 合 main 時位移）——`_EditPage.cpp`：`:50-74`→`:54-82`、`:54-55`→`:58-59`、`:66-69`→`:70-73`、`:76-201`→`:84-246`、`:78`→`:86`、
-> `:79-84`→`:87-92`、`:91-103`→`:99-111`、`:110-120`→`:151-161`、`:121-140`→`:162-181`、`:146-157`→`:187-201`、`:148`→`:190`、`:161-162`→`:206-207`、`:164`→`:209`、
-> `:165`→`:210`、`:178-199`→`:223-244`；`_EditList.cpp`：`:88-105`→`:93-110`、`:107-140`→`:112-145`、`:165-190`→`:170-195`；`IniConfig.cpp`：`:293-354`→`:400-461`、
-> `:356-363`→`:463-470`、`:356-381`→`:463-488`（`:109`／`:119` 不變）；`CMakeLists.txt:3419`→`:3431`；`JsonBridge/FormJson.cpp:166`（第一型時代的「第二型優先」）已不存在。
-> 舊句保留在原處，行尾加「⛔ 20260927 晚」標新行號（這一輪沒有寫 `archive/`）。
-
----
+舊引用路徑保留；[讀取整理後文件](../../hpi-web-hmi/references/json/references/route-c-golden-bridge.md)。
 
 ## 1. 定義
 
-C 路＝golden 表單橋。與 B 路共用 `wb_serve` 傳輸，但資料模型不同：
-- **B 路**：HTML 拿到的是**檔案內容**（ini/csv 原始鍵值），存檔＝直接改檔
-  （`RecipeDocApplyEdits`／`CsvApplyEdits`）。
-- **C 路**：HTML 拿到的是 **golden 開頁後的畫面狀態**（值、`Visible`、`Enabled`、權限），
-  存檔會跑 golden 原本的存檔流程（欄位檢查、鉗制、權限、Lock by File、寫完後重讀）。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/01.md#1-定義)
 
 ## 2. 與 A／B 的對照表
 
-| | A 路（已棄用） | B 路（檔案鏡像） | C 路（golden 表單橋） |
-|---|---|---|---|
-| 端點 | 靜態 JSON 檔（`JSON\*.json`） | `GET/WS /api/recipe`／`/api/system`／`/api/text` | C 形狀：`WS editlist.get`／`editlist.save`（`tag`＝結構名，§3）；A 形狀（只剩 HotPlate）：`GET /api/form/<Page>`＋`WS form.save`（§3.4）；診斷：`GET /api/editlist/<list>` |
-| HTML 拿到什麼 | PowerShell／`_gen_*.py` 產生的快照 | 檔案鍵值（`{value,type,raw}`／csv rows） | golden 開頁後的畫面狀態（值＋`Visible`／`Enabled`＋權限） |
-| 存檔怎麼寫 | 不寫回（唯讀快照） | 直接改檔（逐位元組保留＋備份＋原子置換） | 跑 golden 存檔流程（檢查／鉗制／權限／Lock by File／寫完重讀） |
-| C++ 程式從哪來 | `_gen_*.py` 一次性轉換 | `wb_serve.cpp` 手寫路由＋`RecipeDocApplyEdits`／`CsvApplyEdits` | 產生器直接轉 golden BCB 原檔：`gen_editlist.py`（C 形狀，34 支，20260927）、`gen_teach_editlist.py`（Teach）、`gen_formbridge.py`（A 形狀，只剩 HotPlate），輸出到 `FileRW/`（§4；三支都在 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\` 底下，結構設定在 `tools\editlist\`／`tools\formbridge\`） |
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/02.md#2-與-ab-的對照表)
 
 ## 3. 端點
 
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#3-端點)
+
 ### 3.0 三種入口（`tools/wb_serve.cpp`，HEAD 8fad1522 行號）
 
-| 入口 | 哪些結構 | 分派 |
-|---|---|---|
-| 通用層 `FileRW/_EditPage.cpp`（`PageDesc`＋`PageRegistrar` 靜態註冊，`FindPage(tag)`） | §6 總表「入口」欄標 **P** 的 | `editlist.get`：`:5204`／`:5211`；`editlist.save`：`:5300`／`:5324` |
-| 專用函式 | `IniConfig`（手寫 `FileRW/IniConfig.cpp`）、`Teach`（`FileRW/Teach.cpp`）、`BinSelect`（整包 value 含 bin 資料，`BinSelect.cpp:647-648` 刻意不註冊）、`Offset_File`（`widgets={offsets,common}`） | `:5211-5213`、`:5322-5326` |
-| A 形狀 `JsonBridge/FormJson.cpp` | 產生的只剩 `HotPlateForm_File`；另有手寫的 `TfTeach`／`Tfiosetview`（`tools/formbridge/_hand_kept.py`，`FileRW/_registry.cpp` `kBridgeCount = 3`；⛔ 20261003 E-031 (g)） | `GET /api/form` `:2683-2700`／`:2857-2859`；`WS form.save` `:5340` |
-
-`editlist.get`／`editlist.save` 的 tag 不是上面任何一種時回
-`editlist.get needs tag=IniConfig|Teach or a registered C-route struct (FileRW/_EditPage.h)`（`:5205-5206`）——
-§6 總表「入口」欄標「無」的 10 個結構（#24、#25、#27～#31、#33～#35；20260927）就是這樣（讀寫檔翻好了、沒有 `PageDesc`、沒有頁面）。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30-三種入口toolswb_servecpphead-8fad1522-行號)
 
 ### 3.0a JSON → HTML：`WS editlist.get`（＝golden 開頁 `FormShow`）
 
-- **必須跑在主迴圈**，所以是 WS 命令不是 HTTP：golden 開頁會重讀檔（例 `TfConfiguration::FormShow`
-  會 `ReadLastSetIni`→`ReadLastDataFile` 整塊覆蓋 `LastSet`），不能在 HTTP socket 執行緒跑。
-  對應地，`HTTP GET /api/editlist/IniConfig` **刻意回 405**（`FileRW/IniConfig.cpp:356-363`；⛔ 20260927 更正：原寫 `:261-266`，`3ee547e5` 之後位移；⛔ 20260927 晚：`db1b7638` 起 `:463-470`，`a8eca460` 位移）。
-  wb_serve 在 `FormLock()` 之下呼叫（`tools/wb_serve.cpp:5209-5217`）。
-- 通用層回應（`FileRW/_EditPage.cpp:50-74`；⛔ 20260927 晚：`:54-82`）：
-  `{struct, form, booted:true, lists:{<清單名>:{available, count, entries:[{id, form, group, key, content,
-  readFromFile, visible, enabled, transform?, min?, max?, 值}]}}, proxies:{<id>:{visible, enabled, editable,
-  tabVisible?, 值}}, session:{messages, asked, todo, trace}, mustSend:[…], extra?}`。⛔ 20260927 晚補：有事件表的頁另帶 `events`（§3.0g-3）；`TPageControl` 替身另帶 `activePageIndex`（§3.0g-6）。
-  清單筆來自 `EditListToJson`（`FileRW/_EditList.cpp:107-140`；⛔ 20260927 晚：`:112-145`），替身來自 `ProxyStateJson`（`:88-105`；⛔ 20260927 晚：`:93-110`）；
-  `editable` ＝ 元件自己＋每一層祖先的 `Enabled`／`Visible`／`TabVisible`、非 `ReadOnly`（`ELEditable`，
-  與存檔丟值同一套判斷，見 §3.1）；值欄位是 `text|checked|itemIndex|position|dateTime|cells|tag` 其一。
-  `mustSend` ＝ 產生器掃出的「golden 存檔流程會讀、但不在任何 HTEditList 裡」的替身（`kXX_SaveReads`
-  扣掉清單筆，`:66-69`；⛔ 20260927 晚：`:70-73`）。`extra` 只有設了 `PageDesc::extraJson` 的結構才有（例 `TfSetup` 的 Site 下拉、
-  `ContactForce` 的動態面板）。
-- 開頁會記下「開過、當時的 `AccessLevel`」（`:54-55`；⛔ 20260927 晚：`:58-59`），存檔時要對得上（§3.0b）。⛔ 20260927 晚補：`cb306f89` 起開頁跑 golden 之前先過開窗閘（§3.0h）。
-  `IniConfig` 手寫版同形狀（`FileRW/IniConfig.cpp:293-354`（⛔ 20260927 晚：`:400-461`） `IniConfigPageJson`，三份清單 `elConfig`／`cbLastSet`／`elConfig_byRecipe`；
-  20260927 起多一個 `extra.ocrTrayLot`＝P26 OCR Tray Lot 10 格的版面，Q19，`3ee547e5`；⛔ 20260927 更正：原寫 `:226-257`）。
-- **頁面端怎麼套**（`web/page/ht9045_wire_engine.js`）：`load()` 先看 `gbStruct()`（`:1074`，查 `GOLDEN_BRIDGE`
-  `:1038-1061`，24 頁）→ `gbLoad()`（`:1188-1223`）。`gbLoad` 先套 `lists.*.entries`，再套 `proxies`，
-  每一筆經 `gbApply()`（`:1131-1187`）：依值欄位決定 `GB_KIND[id]`（之後存檔就送這一種）、`visible:false`
-  → `visibility:hidden`、`tabVisible` → 找 `.tab[data-htitle^="<id> :"]`／`[title^=…]`；
-  `editable`（沒有時用 `enabled`）取 AND 記到 `GB_ENA`，**全部套完才先開後關**（§3.1）；
-  `itemIndex` 填不進畫面（選項數不夠）記進 `GB_UNFILL`，整頁拒寫（`:1157`，AI(W906-R33)）。
-  `mustSend` 裡頁面沒有 DOM 的會在狀態列列出、這一頁不能存（`:1211-1213`）。
-- **開頁送一次，不要輪詢**——每次都會把 `LastSet` 覆蓋回 `lastdata.dat` 的值（golden 開頁亦同，
-  不是 bridge 的副作用）；頁面客戶端 `HT9045Recipe.editlistGet`（`web/page/ht9045_recipe_client.js:412-416`）
-  先 `control.acquire` 再送。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30a-json--htmlws-editlistgetgolden-開頁-formshow)
 
 ### 3.0b HTML → JSON：`WS editlist.save`（＝golden 存檔鈕）
 
-- **頁面送什麼**（`gbSave()`，`ht9045_wire_engine.js:1249-1296`）：`GB_KIND` 裡**每一個**套過值的 id
-  都送目前 DOM 值（不是只送改過的），形狀 `{id:{text|checked|itemIndex(+text)|position|dateTime|cells|tag}}`；
-  送之前擋三件事：值讀不出來（例 日期格式錯）、`mustSend` 缺、`GB_UNFILL` 非空 → 整頁拒寫不送。
-  `window.confirm` 一次（網頁誤觸保護）；`GB_SAVE_Q`（`:1063-1068`，目前 `IniConfig`／`Teach`／`HSys`）
-  列了 golden 確認框英文原字串的結構，才把 `answers:{"<英文題目>":1}` 帶上；頁面有 `window.GB_EXTRA_SAVE`
-  （例 BinSel 的 bin 資料／actions）就併進 value（`:1272-1277`；`ht9045_recipe_client.js:420-428` 保證
-  `widgets`／`answers` 不被 extra 蓋掉）。value 是 **JSON 字串**：`{"widgets":{…},"answers":{…},…extra}`。
-- **伺服器檢查順序**（通用層 `FileRW/_EditPage.cpp:76-201`；⛔ 20260927 晚：`:84-246`，下面各步的新行號標在原行號旁；IniConfig 手寫版規則相同）：
-  0. （分派層，進通用層之前；20260927 起）tag 認得之後、解析 value 之前：`SystemStart || SoftStart` → 拒絕，一個鍵都不寫（§3.0d）。
-  0b. ⛔ 20260927 晚補（`cb306f89`）：接著 `filerw::OpenGateRefused(tag, true)` 重查 golden 開窗閘（`tools/wb_serve.cpp:5303` 同一行，§3.0h），拒絕一樣一個鍵都不寫；開頁 `editlist.get` 也在跑 golden 之前問一次（`:5207`）。
-  0c. 20260930 補（B5，Q45 甲，`699dc06d`）：value 解析完、存檔之前，`W906_ReauthTake`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\WebLogin.cpp` 檔尾，宣告 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\WebReauth.h`）把跟 `widgets` **並列**的 `reauth`
-      （`{point, userId?, password}` 或 `{point, cancelled:true}`）拿出來、JSON 裡的字清成 0、放進暫存；放進 widgets 裡、點不對、這一頁沒有重新登入點、型別錯 ⇒ 整次拒存（`tools\wb_serve.cpp:5308-5309`）。
-      只有兩頁收：`TestIF_File_SetUp`（rtcOff／ocrOff，golden `cSetUp.cpp:4325` DoPassword）、`IniConfig`（m01，golden `cConfiguration.cpp:6482`）。存檔成功時回應開頭多 `"reauth":{…}`（不含密碼，`:5333`），
-      這一臂結束時一律清掉暫存。開頁回應多 `extra.auth`（哪幾點要問、等級、模式）。細節 `D:\HT9045\.claude\skills\ht9050-st01-evaluations\references\q45-web-password.md` §10。
-  1. 結構沒開機建好 → 409（`:78`；⛔ 20260927 晚：`:86`）；**沒在同一個 `AccessLevel` 下 `editlist.get` 過** → 409
-     `reload page: …`（`:79-84`；⛔ 20260927 晚：`:87-92`）。
-  2. `widgets` 不是物件 → 400；`mustSend` 有缺 → 400 `refused: golden save reads these widgets …`（`:91-103`；⛔ 20260927 晚：`:99-111`），
-     一個鍵都不寫。
-  3. 有 `beforeApply` 的結構先重播 golden 的連動事件（例 TfSetup `ScrollBar1Change`、Cleaning 的按鈕、
-     HSys `rgHeaterTypeClick`），處理掉的 id 不再當一般值套（`:110-120`；⛔ 20260927 晚：`:151-161`）。golden 事件本身會寫檔的，重播時怎麼處理見 §3.0e
-     （HSys 的 `rgHeaterTypeClick` 20260927 起重播不寫檔，Q14＝B）。⛔ 20260927 晚補：`c9d3c932` 起在重播之前先套頁面送的分頁 `activePageIndex`（`:118-150`，§3.0g-6）。
-  4. 不可改的丟掉：自己或祖先停用／看不見、`ReadOnly`、清單筆 `bEnable=false` → 進 `ack.ignored`（`:121-140`；⛔ 20260927 晚：`:162-181`）。
-  5. 套值（`ELApplyProxies`）；套不進 → 400；存檔流程要讀、但值的種類套不進的 → reload＋400（`:146-157`；⛔ 20260927 晚：`:187-201`；400 時先還原分頁）。
-  6. 跑 golden 存檔流程 `saveFlow()`；`saved` ＝ trace 裡有 `savedMark`（`:161-162`；⛔ 20260927 晚：`:206-207`）。⛔ 20260927 晚補：幾頁的 `saveFlow` 另包了關窗尾段（§3.0i）。
-     **沒寫檔（A02 權限、答 NO、golden 提早 return）→ `d.reload()` 把替身還原成檔案值**（`:164`；⛔ 20260927 晚：`:209`）；
-     golden 呼叫了 `Close()` → 標記下次存檔前要重新開頁（`:165`；⛔ 20260927 晚：`:210`）。
-- **ack**（`:178-199`；⛔ 20260927 晚：`:223-244`）：`{struct, saved, applied:<數目>, ignored:[id…], kept:[id…], unknown:[id…], events?:[id…],
-  session:{messages:[{en,zh}], asked:[{en,zh,answer}], todo:[…], trace:[…]}}`。
-  `kept` ＝ 清單裡有、這次頁面沒送（沿用檔案／上次存檔的值）；`asked.answer` 1＝YES、2＝NO（沒答＝NO）；
-  `todo` ＝ golden 在伺服器端做不到的段落（`#if 0 // GATE (S12-C save)` 包起來的）；`trace` ＝ 經過的 golden 方法。
-  `session` 由 `SessionJson()`（`FileRW/_EditList.cpp:165-190`；⛔ 20260927 晚：`:170-195`）產生。錯誤時 ack `ok:false`＋錯誤字串
-  （`tools/wb_serve.cpp:5338`）。
-- **頁面收到 ack 之後**：列出 `messages`、`asked` 裡 `answer≠1` 的（「視為否」）、`ignored` 筆數、`todo`，
-  然後**一律重讀**（`gbLoad`，`ht9045_wire_engine.js:1279-1290`，規則 3：寫完一定重讀）。
-  錯誤訊息含 `reload page` 時提示先重讀（`:1293`）。
-- **防連點（20260926 起，S107-3；`2ae40ffe`）**：`editlist.save`／`form.save` 跟其他 WS 指令一樣，先過分派迴圈頭的
-  `W906CmdGuardScope`（`tools/wb_serve.cpp:4676`，本體 `WebCmdGuard.cpp`）：同一個 `cmd`＋`tag`＋`value` 在上一條**完成後**
-  400 ms 內又到（或還在排隊）→ 不執行，ack `ok:false`、錯誤字串以 `busy:` 開頭。`value` 算在判斷裡，所以改了值再存、
-  帶 `answers` 重送都不受影響；`editlist.get` 在名稱級白名單（`WebCmdGuard.cpp:89`；⛔ 20260927 更正：原寫 `:72`，`f45b92f5`／`b782b00b`
-  之後位移），開頁不受影響。頁面引擎
-  `ht9045_wire_engine.js`／`ht9045_recipe_client.js`（Jimmy 的檔）沒有特別處理 `busy:`（20260927 grep 0 筆），走引擎存檔的
-  C 路頁面會把它當一般錯誤顯示。規則全文、白名單、`W906_CMDGUARD_MS` 見 `web-bridge-json-contract.md` §1.3 補註；
-  ⚠ 那段寫在 `f45b92f5`（motor.access 改 action 級）、`b782b00b`（IO 鈕另有 `W906IoClickGuardScope`）之前，
-  20260927 HEAD `89ccb4cc` 的完整規則以 [wbserve-conventions.md](wbserve-conventions.md) §4 為準。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30b-html--jsonws-editlistsavegolden-存檔鈕)
 
 ### 3.0c 診斷：`GET /api/editlist/<elConfig|cbLastSet|elConfig_byRecipe|elUdUld>`
 
-只給 IniConfig 那幾張清單（`FileRW/IniConfig.cpp:356-381`（⛔ 20260927 晚：`:463-488`） `FileRW_IniConfig_Json`；⛔ 20260927 更正：原寫 `:260-285`；路由 `tools/wb_serve.cpp:2843-2853`）；
-回 `{list, struct, booted, data, formShown}`，**不含 `proxies`**（沒跑 FormShow，替身值不可信）。
-`id`＝`THTEdit::ControlName`（HTML 元件名稱）。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30c-診斷get-apieditlist)
 
 ### 3.0d 守衛：`editlist.save` 運轉中一律拒絕（RULINGS_20260927 #7，`f45b92f5`）
 
-**規則**：機台 `SystemStart`（運轉中）或 `SoftStart`（正要啟動／回原點）時，網頁送來的 `editlist.save` 不解析、不拿 `FormLock`、
-不跑 golden 存檔，直接回錯誤。理由是 golden 運轉中根本打不開設定畫面（golden V912
-`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\main.cpp:3970-3978` `DoMainPadProcess` 在 `SystemStart` 時把 `palSetup`／`palConfig` 藏起來），
-網頁卻隨時開得到。裁決：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20260927.md` §2 第 7 題「A：C++ 的 editlist.save 一律擋 `SystemStart||SoftStart`」。
-
-- 位置：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\wb_serve.cpp:5303`（`editlist.save` 分支，tag 檢查 `:5301-5302` 之後、`!wc.hasValue` 檢查之前，
-  接在同一行；`AI(W906-R0927-7)`）。錯誤字串兩句（中文），照 IO 頁的寫法（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\JsonBridge\IoBtnPanelClick.cpp:225-242`）：
-  `機台運轉中（SystemStart）不能從網頁存設定 —— golden 運轉中打不開設定畫面（…）`／`機台正要啟動或回原點（SoftStart）——這時不能從網頁存設定；…`；
-  另印一行 `editlist.save <tag> -> refused (SystemStart|SoftStart)`。
-- **範圍只有 `editlist.save`**：`form.save`（A 形狀 HotPlate）、`recipe.doc.put`、`system.file.put` 運轉中照舊放行——同一行的註解寫明「另列給 Steven 決定」。 ⛔ 20260927 晚更正：`form.save` 運轉中也擋了（R87，`c8028b21`，`JsonBridge\FormJson.cpp:119` 回 409 `running: …`，§3.0i）；`recipe.doc.put`、`system.file.put` 仍放行。
-  `editlist.get`（開頁）也不擋。⛔ 20260927 晚更正：`cb306f89` 起開頁也重查 golden 開窗閘，運轉中（`SystemStart`）工具／設定選單裡的頁回 `running:`（R89，§3.0h）。
-- 例：運轉中操作員在 `Setup.Speed.html` 按存檔 → ack `ok:false`＋上面第一句，`ArmCondition.Data` 不動；停機後再按同一顆鈕才照 golden 存。
-
-C 路其他守衛一覽（細節在各自的節）：同一個 `AccessLevel` 開過頁（§3.0b 1）、`mustSend` 全到（§3.0b 2）、不可改的丟掉（§3.0b 4）、golden 自己的權限
-（例 A02 `bA02DisableSaveParsWhenSwitchToOp`，§8）、檔案擁有者閘 `CRouteOwner`（擋 B 路直改 C 路的檔，§6）、防連點 `WebCmdGuard`（§3.0b 末段）。⛔ 20260927 晚補：再加開窗閘 `kOpenGates`（§3.0h）、`form.event` 的運轉中／開過頁／點得到／清單過期四道（§3.0g-2）、關窗尾段開頭的運轉中檢查（§3.0i）。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30d-守衛editlistsave-運轉中一律拒絕rulings_20260927-7f45b92f5)
 
 ### 3.0e golden「按下即寫檔」的事件：BeforeApply 重播＋Q14＝B（`3ee547e5`）
 
-**規則**：golden 有些元件「值一改就觸發事件」，事件會改別的元件、甚至直接寫檔。網頁只在按存檔時送最後狀態，所以 C 路在
-`PageDesc::beforeApply`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_EditPage.h:41-46`）裡**重播**那個 golden 事件：頁面送來的值與伺服器端
-不同＝使用者點過 → 先照 VCL 設值、再跑 golden 事件，處理掉的 id 列進 `handled`（`PageSave` 不再套它，`_EditPage.cpp:110-120`；⛔ 20260927 晚：`:151-161`）。
-事件裡若有「按下就寫檔」的敘述，預設照 golden 跑（會在 YES/NO 之前就寫）；Steven 裁決要延後的，用產生器 REPLACE 把那一行換成空敘述（§4.1）。
-用到 `beforeApply` 的結構（20260927）：`HSys`、`StartCondition`、`TestIF_File_BarCode`、`TestIF_File_Cleaning`、`TestIF_File_SetUp`、`TestIF_File_TesterIF`。⛔ 20260927 晚補（`4e74e8b4`）：再加 `TrayForm`（Tray Assignment：方向圖補點 R94、Fix 盤互鎖重查 R95）與 `Temperature`（只記套值前的 `rgIndexHeatMode`，給 R97 的拒存比較），§3.0g-5。
-
-**例（Q14＝B，Steven 20260927，`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20260926.md` S136）**：HandlerSys 的 Heater Type 單選
-`rgHeaterType`，golden OnClick＝`rgHeaterTypeClick`（golden V912 `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\HandlerSys.cpp:1519`），
-按下就把 71 個逐通道鍵（`:1536`）與 `HEATER_CTRL_TYPE`（`:1538`）寫進 `D:\HT9045\system\Gerneral.ini [TempCtrl]`。Q14＝B：**按了先不寫檔、整頁存檔才寫**。
-- 產生器：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\editlist\HSys.py:144-151` 兩條 REPLACE 把 golden `:1536`、`:1538` 換成 `;`（原文留在 `#if 0 // GATE`，
-  產生結果 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\HSys.gen.inc:4076-4084`）；重播仍照 golden `:1531-1535` 改記憶體（`m_iHeaterInsOpt`）與各通道 ComboBox。
-- 手寫入口：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\HSys.cpp:813` `BeforeApply`（註解 `:794-812` 逐項對照「存檔寫的鍵與值跟 golden 按下即寫的相同」）；
-  寫檔只由整頁存檔 `SaveSystemSet`（golden `HandlerSys.cpp:779-794`，答 YES＝`SaveSystemSet:write` 之後）做。
-- 跟 golden 不同的只有「沒存成」：答 NO、套值失敗（`_EditPage.cpp:148` reload；⛔ 20260927 晚：`:190`）時 golden 已經寫了，這裡不寫；記憶體由 reload
-  （＝FormShow → LoaderSystemSet → HeaterInsOpt_Read）還原成檔案值。
-- 頁面：`D:\HT9045\web\page\ht9045_hsys_heater_c.js` 只做「畫面那一半」（點廠牌 → 所有逐通道下拉設成同一個廠牌），title 提示「按下不寫檔」。
-- 溫控器廠牌的整體背景（71 通道、Q34 方案 D）見 skill `ht9045-heater-control`。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30e-golden按下即寫檔的事件beforeapply-重播q14b3ee547e5)
 
 ### 3.0f 開頁不寫檔的讀法（Q15，Steven 20260927 S137 定案；**計畫中，程式還沒動**）
 
-**規則**：golden `FormShow` 常用 `CheckAndReadIniData*`——鍵不在就先寫一筆預設值再讀，所以「開頁」本身會寫檔。C 路預設照 golden
-（開頁補寫缺鍵，§3.0a）。Steven 裁決「開頁不寫檔」的鍵，改用**不寫檔的讀法**：先 `CheckIniData`（只看鍵在不在，移植樹
-`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\common.cpp:634`），在就 `ReadIniData`（`common.cpp:851`），不在就只在記憶體放預設值；取代會補寫的
-`CheckAndReadIniDataGeneral`（`common.cpp:1643-1654`，`:1647` 是補寫那一行）。
-
-- 第一個要用的地方是 HandlerSys 的 71 個 `HeaterInsOpt_<通道>`：Q15（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20260926.md` S137 定案）
-  「預設選 3 No Heater，然後 B 開頁不寫檔」＋「Q15 要跟這個一起做」⇒ 併進 Q34 方案 D（S154），等 Steven 確認 D-1～D-9 才動
-  （`D:\HT9045\.claude\skills\ht9050-construction\references\decisions-pending.md` Q34 ④）。
-- 20260927 HEAD `89ccb4cc` 的程式仍是 golden 的讀法：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\HSys.cpp:96-106` `HeaterInsOpt_Read`
-  用 `CheckAndReadIniDataGeneral`，開頁缺鍵補寫 -9999。
-- 範圍只限裁決點名的鍵；同一頁其他讀檔呼叫照 golden（開頁仍補寫），這是 Steven 選 B 時已知的偏離範圍。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30f-開頁不寫檔的讀法q15steven-20260927-s137-定案計畫中程式還沒動)
 
 ### 3.0g `form.event`（Q40＝A，RULINGS_20260926 S157）——C++ 已做（`76058840`、`4e74e8b4`、`c9d3c932`），頁面送出點還沒有
 
-> ⛔ 20260929 補（D-013，commit `4b676a25`）：form.event 多兩個值鍵——`"barcode"`（字串或 null；golden 在處理器裡開刷條碼框〔TFormBarcodeReader::ShowModal〕時，C++ 用這段文字跑 golden 自己的框：FormShow → TimerKeyIn ×10 → btnEnterClick → FormClose，再回 golden Barcode_Reader；ack 多一個 `barcode` 陣列 `[{caption,inputType,scanned,accepted}]`，只有 golden 真的開了框才有）與 `"noPart":true`（Offset 微調沒選部位：iNowOffsetSel=-1，照 golden 跑存檔尾段）。`formevent::CurrentValueJson` 讓處理器拿到這一次事件帶的值。本體 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_FormEvent.cpp`、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_FormEventCtx.h`、`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\BarcodeReader.cpp:476-531`（W906_BarcodeBoxModal；只有 Cleaning 頁裝了開框掛勾，其他頁 ack 會帶 barcode 但頁面還沒顯示框）。Offset 的 R127：頁面在微調前依序點其他改過的組，讓 golden SpBotSelClick 先存上一組（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\Offset_File.cpp` OS_EvSelect）。
-
-⛔ 20260927 晚更正：本節標題原寫「——格式已定案、C++ 分派**進行中**」；C++ 分派已在同日 15:23 commit（`76058840`），現況見 3.0g-1 起。
-
-**用途**：golden 下拉「選一筆就自動填別的欄位」這類 `OnChange`／`OnClick` 事件，三頁共用一條 WS 指令：HotPlate `cbSelectHPFromDB`、
-TrayForm `cbTrayType`、Cleaning `cbbSelectTray`（§6 表註 S98 那一條）。⛔ 20260927 晚補：`4e74e8b4` 起多 Tray Assignment（32 列）與 Temp_Set（2 個），共五頁（3.0g-1）。
-
-- **格式**（定案；原文在唯讀快照 `D:\HT9045_handoff\FROM_STEVEN.md:242`，St01 20260927 10:15 給 Jimmy）：送 `cmd:"form.event"`、`tag:"<頁名>"`、
-  `value`＝JSON 字串 `{"form":"<golden 表單類別>","control":"<元件>","event":"change|click","itemIndex":…,"text":…,"checked":…,"state":{…選用}}`；
-  只有標了 `data-ht-event` 的控制項才送。ack 成功 `{"ok":true,"form","control","event","changed":{<元件>:{text,itemIndex,checked,items,enabled,visible}},
-  "messages":[…],"todo":[…]}`；失敗 `{"ok":false,"error":"<碼>: <說明>"}`，碼 `unknown-page`／`unknown-control`／`no-handler`／`bad-payload`／
-  `running`（`SystemStart||SoftStart`，同 §3.0d）／`busy:`（WebCmdGuard）／`handler-failed`。要權杖；防連點走 WebCmdGuard 一般規則。
-- **狀態**：頁面送出點由 Jimmy 在 `D:\HT9045\web\page\ht9045_wire_engine.js` 加；C++ 分派由另一位同事在寫，20260927 HEAD `89ccb4cc` 還沒有 commit。
-  實作細節等它進來再補，本節不寫。⛔ 20260927 晚更正：C++ 分派同日 15:23 已 commit（`76058840`，之後 `4e74e8b4`、`c9d3c932`），細節見下面 3.0g-1～3.0g-6；頁面送出點 HEAD `db1b7638` 仍沒有。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30g-formeventq40arulings_20260926-s157c-已做760588404e74e8b4c9d3c932頁面送出點還沒有)
 
 #### 3.0g-1 現況（20260927 晚，HEAD `db1b7638`）
 
-| 頁 | 路 | 事件（golden 處理器） | commit | R 題 |
-|---|---|---|---|---|
-| `Setup.HotPlate.html` | A 形狀（`FileRW/HotPlateForm_File.cpp:466` `kEvents`；設定 `tools/formbridge/TfHotPlate.py:33` `events`） | `cbSelectHPFromDB` change → `cbSelectHPFromDBChange`（golden V912 `cHotPlate.cpp:412-438`，填 7 欄） | `76058840` | R78、R79（每次事件先跑一次 golden `FormShow`） |
-| `Setup.TrayForm.html` | C（`UserDefForm_File`，`kTF_Events`） | `cbTrayType1`／`2`／`3` change → `cbTrayType1Change` → `ShowTypePage(Tag, ItemIndex)`（`cTrayForm.cpp:570-602`，DFM Tag 0／1／2） | `76058840` | R78 |
-| `Setup.Cleaning.html` | C（`TestIF_File_Cleaning`，`kCL_Events`） | `cbbSelectTray` change → `cbbSelectTrayChange`（`uCleaning.cpp:2322`）——golden DFM `Enabled = False`、整棵 V912 沒人打開 ⇒ 照 golden 回 `bad-payload` | `76058840` | R77 |
-| `Setup.TrayAssignment.html` | C（`TrayForm`，`kTA_Events` 32 列） | `imgLoaderClick`×13、`rgLoaderTypeClick`、`cbLoaderChange`、`RGLoaderClick`、`rgLoad_RTClick`、`rgFixTrayModeClick`、`cbEmptyChange`、`RGAuto2Click`（＋`BinTrayDetect`）；golden 怪處照留（`RGAuto5` 的 OnClick 是 `RGAuto2Click`、FT 群組看 `rgAuto2_RT`、改回第一個找到的） | `4e74e8b4` | R94～R96、R100 |
-| `Setup.Temp_Set.html` | C（`Temperature`，`kTS_Events`） | `rgIndexHeatModeClick`（V912 `uTemp_Set.cpp:4232`）、`chkTempCalByRecipeClick`（`:6333`） | `4e74e8b4` | R97～R99 |
-| `Config.Configuration.html`（⛔ 20260927 晚補，S158 Q41 CC-E2／CC-E7） | C（`IniConfig`；不是 PageDesc ⇒ 另登記 form.event 專用別名頁，**tag 送 `Config.Configuration`**，見 3.0g-7；`kIC_Events` 18 列，`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\IniConfig.gen.inc:9606`，設定 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\editlist\IniConfig.py` `events`） | `udD46` **`btNext`／`btPrev`**（不是 click）→ `udD46Click`（V912 `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cConfiguration.cpp:6094`）；`cbE30`／`cbE31`／`cbE31_1`／`cbE31_2`／`cbE32`／`cbE32_1`／`cbE32_2`／`cbE33` click → `cbE30Click`（`:6125`）；`cbE39` click → `cbE39Click`（`:6369`）；`cbD36`／`cbD37`／`cbD38`／`cbD36_1`／`cbD36_2` click → `cbD36Click`（`:6551`）；`cbD21`／`cbD47`／`cbF05` click → `Timer1Timer` 顯示段（`:6025`，golden 沒有 OnClick、靠 Timer1 每秒一拍） | 交件時未 commit | 見 3.0g-7 |
-
-- **入口**：`tools/wb_serve.cpp:4826`（St01 `act.main.*` 那一行，同一行接 `} else if (wc.cmd == "form.event") {`）→ `FileRW/_FormEvent.cpp` `W906_FormEvent`：
-  (1) tag → A 形狀 `formbridge::FindBridge`（`Setup.HotPlate`／`Setup.HotPlate.html`）優先，否則 C 路 `filerw::FindPageForEvent`（結構名或 `PageDesc::page`；同一頁兩個結構時挑有事件表的）；都沒有 ⇒ `unknown-page`；
-  (2) `SystemStart||SoftStart` ⇒ `running`（同 §3.0d）；(3) 解析 value，`form` 跟分派到的 golden 表單不同 ⇒ `bad-payload`；
-  (4) 持 `FormLock` 跑 A：`formbridge::RunEvent`（`JsonBridge/FormBridge.cpp`）／C：`filerw::RunPageEvent`（`FileRW/_EditPage.cpp:367-512`）。
-  ⛔ 20260930 補（AI(W906-FE-RUNEXC)，安全層、Steven 看過才合；D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\B8_RISK_20260930.md P-3）：(2) 多一張**運轉中例外表**——運轉中只有 (golden 表單類別, 元件, 事件) 在 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_FormEvent.cpp` 檔尾 `formevent::runexc` 表上、那一列允許目前的狀態（SystemStart／SoftStart 各一格，照 golden 處理器查不查、表單那時開不開得著）、而且頁面表說那個 golden 表單開著（`W906_FormShowing(物件名, false)`；沒有頁面表＝關）才往下走 (3)(4)；其他照舊 `running`、訊息同以前；表上有、條件不成立 ⇒ `running` 帶那一列的理由。第一批 14 列：Offset 的 12 顆 Setup Teach 排序鈕（golden V912 `cOffSet.cpp:3211-3221`）、AGV 的 Initial Load／Unload（golden V912 `Automation\AGV.cpp:1316-1330`），兩格都放行。⛔ 20261002：目前 21 列＝這 14 列＋TfContact 第 15～17 列（CT-3a）、18～19 列（CT-3b'）、20～21 列 `palOTD_4`／`palOTD_6`（CT-3d，Steven Q65＝B）。加列要附 golden 出處（非模態、處理器有沒有自己查運轉中）＋ctest（`B8_Os5_SortButtons` [7]、`B8_Ag1_Initial` [4] 各自核對自己表單的列數）；CT-3 的 Contact T.Start／T.Step 照同一個格式加。`editlist.save`（RULINGS_20260927 第 2 條第 7 題 A）、`form.save`（R87）不變。⛔ 20260930 Q61 補（AI(W906-Q61-LEVEL)；Steven「golden應該是有卡權限吧? 依照golden」）：**例外表不自己查等級**，等級照停機時同一套——開頁閘（`kOpenGates`，editlist.get 跑 golden FormShow 之前）＋RunPageEvent 第 1 步「在同一個等級開過頁」＋第 2 步 ELOperable（FormShow 依等級停用的容器）；golden 也是只在開窗時查。第一批：Offset 排序鈕 golden 沒有等級閘（`sbOffsetClick` main.cpp:28708-28722 不查；FormShow 的 `Insufficient(2)` 只停用 pnlPicker／btnOffsetList／pnlIndexOfs cOffSet.cpp:584-590）；AGV 兩顆只能經工具選單開（`sbSettingClick` main.cpp:29030-29047 `Insufficient(0)`＝`GAgv→GToolsMenu`）⇒ 等級不夠停機、運轉中都按不到。加列時每一列另寫「開窗閘是 kOpenGates 的哪一條、FormShow 有沒有依等級停用那顆鈕的容器」；golden 處理器自己查等級的照翻進處理器。ctest `B8_Os5_SortButtons` [10]、`B8_Ag1_Initial` [7]。已知沒照翻（不是等級）：`sbSetting->Enabled` 的 `authMainForm[0]`（ChangeLevelAttr main.cpp:12951，Security_new.def [Main] Tool）`GToolsMenu` 沒查（D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\B8_RISK_20260930.md P-3）。
-  ⛔ 20261001 補（AI(W906-B8-OS1B)，B8 OS-1b）：(5) **after-ack 動作**——golden 處理器最後叫 `fMain->Start` 這種會開 YES／NO 等待框的動作，不能在 (4) 持 `FormLock` 時做（socket 執行緒服務 `GET /api/editlist` 也拿這把鎖 ⇒ 等不到框的回答＝整台卡死）：處理器只 `formevent::afterack::Defer` 登記，`tools/wb_serve.cpp:4826` form.event 臂在 `CompleteCommand` 之後呼叫 `W906_FormEventRunAfterAck(feOk)`（鎖外、同一條主迴圈執行緒，同 start.run）；ack 多 `"afterAck":[說明…]`，事件開頭與處理器失敗時作廢（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_FormEvent.cpp` 檔尾；第一個使用者 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\Offset_File.cpp` 檔尾 `W906_Offset_B8AutoCheckStart` → `W906_RemoteRunStart`；ctest B8_Os1b_AutoCheckStart）。
-  ⛔ 20261001 補（AI(W906-B8-CL4)，B8 CL-4）：(5) 的判準反過來用——golden 處理器只設旗標、叫不等待的函式（沒有 YES／NO、沒有 `fMain->Start`）就**直接在處理器裡跑**，不登記 after-ack（例 Cleaning「Clean」鈕：golden `TfShowBinSelect::btnAutoCleanClick` 只登記 Auto Clean 任務＋`bRunAutoClean`，START 之後主流程才動；有料那一臂 `InitialAutoCleanAllTask` → `TfMain::BtnOneCycleClick` 也只有旗標＋紀錄）。golden 訊息 `ShowMyMessage` ⇒ `filerw::ELMessage`（ack.messages），不用移植樹的 `ShowMyMessage`（它的網頁 hook 會等 OK，持鎖等不到）。golden 處理器叫的是門面沒翻的別的表單成員（`forms/fShowBinSelect.h` SAFETY-QUEUED）⇒ 本體逐行照翻成自由函式放 St01 的檔尾（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\TestIF_File_Cleaning.cpp` `W906_ShowBinSelect_btnAutoCleanClick`），產生器 MANUAL 一條 replace 換過去、宣告放 DECLS。事件元件 golden 方法本體沒用到（產生器不建替身）⇒ 結構的 EvBoot 同一行補 `EL<TButton>(kForm, "...")`＋`kCL_EvParents` 補 DFM 父層（同 btnResetInterval），不然 RunPageEvent 回 "event proxy not created"。ctest B8_Cl4_StartAutoClean（C++）、B8_Cl4_CleaningPage（頁面，node 離線把整支 ev.js 放進 vm、假 DOM）。
-  ⛔ 20261001 補（AI(W906-B8-CT3A)，B8 CT-3a，St01）：運轉中例外表加第 15～17 列 TfContact `btnTStart`／`btnTStep`／`spbOneCycle`（golden 906 `cContact.cpp:2251-2254`／`:2256-2259`／`:16861-16865`（V912 :2280-2283／:2285-2288／:17152-17156），三支都不查 SystemStart／SoftStart；T.Start／T.Step 是流程運轉中在等的手動鍵 `ckernel.cpp:96-131`／`:54-94`（兩邊同行號）；`fContact` 非模態 906 `main.cpp:27324`（V912 :28314））⇒ 兩格都放行，頁面表要說 `fContact` 開著；同一頁的 11 顆模式單選**不在表上**（golden 一有料就停用 `rgHandlerMode`，`timerContact` 906 :21355-21365（V912 :21648-21658）沒移植 ⇒ 比 golden 嚴，human-review B）。另外三條通用規則：(a) **旗標寫流程讀的那一份**：golden 表單成員在移植樹有兩份時（C 路產生檔的 static 副本 vs 流程讀的物件），產生器 `members` 改成 `#define 成員 (物件->成員)`（Contact：`bSetupStart`／`bSetupStep` → `fContact`＝`TfContactShim`，`atester_shims.h:251`；移植樹的 `TfContact` 表單物件叫 `fContactForm`，`forms/fContact.cpp:701-711` 那兩支寫的是它、沒人讀）；測試用流程本身去讀（ctest 叫活的 `WaitManualStartKey`／`WaitManualStepKey`）。(b) **VCL TRadioButton.SetChecked(True)**（vclcompat 只是欄位）：值有變才 TurnSiblingsOff＋OnClick；「哪一顆勾著」由 C++ 自己記（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\DeviceForm_File.cpp` 檔尾 `FileRW_Contact_RbClickTrue`），不信頁面帶的 checked（editlist.save 的 widgets 會照網頁畫面套）；golden 程式碼的 `rb->Checked=true`（FormShow／FormClose）用產生器 replace 換成同一支。(c) **存檔後的重讀不是 golden FormShow**（`filerw::PageShownNow` 還是 true）：golden 存檔只 ReadFile＋DoIniDataToForm 的頁，FormShow 裡「重設執行期狀態」的行（Contact：906 :1162／:1341 回 Normal、:1164／:1171 清 T.Start／T.Step、:1218 清 One Cycle；V912 :1178／:1360、:1180／:1187、:1235）重讀時不做，同 `_FS_BACKUP`。直接寫機台旗標的事件（golden 點了就改、沒有存檔這一步）不走 CT-1 的 session 跳板 `EvB3Run`：`EvB3Table` 同一行分流到 `Ct3aRun`。TMyLed 燈號（替身是 TControl）值放 `Tag`（ProxyStateJson 一律帶 tag），頁面依 tag 點燈；DFM `Visible=False` 產生成 `display:none` 的鈕，引擎只改 visibility ⇒ 頁面 `D:\HT9045\web\page\ht9045_contact_ev.js` 的 `ct3aLoad` 照替身 visible 打開。ctest `B8_Ct3a_ContactFlags`。
-  ⛔ 20261003 補（AI(W906-E030-CITE)，todo E-030 第 4 部分，St01；Jimmy RULINGS_20261002 第 20 條、第 23 條第 6 項 (b)；Steven 1002 19:4x「你可以雙重註解, 就是把906跟912的行號都列進去」）：**怎麼引用 golden（906＋V912 雙列）**——golden＝906 `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260618`（cp950，不在 git），V912 `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy` 只拿來對照。(a) 註解寫 `golden 906 cContact.cpp:13965-13970（V912 :14072-14077）`；同一段一直引同一個檔時，段首寫一次「裸的 :N 是 906、（V912 :N）是 V912」，之後每行 `// :13967（V912 :14074）`；兩邊行號一樣的檔（例 cContactCT.cpp、ckernel.cpp :1-532、多數 .dfm）寫一次「兩邊同行號」就好。(b) 回覆／訊息字串（會進 JSON、主控台、測試的 `Has()`）用 ASCII：`"906 cContactCT.cpp:947 (V912 :947)"`、括號裡已有東西時 `(906 cShowBinSelect.cpp:2101, V912 :2248)`；測試照新字串釘（要釘就釘 906 那一半，例 `Has(r, "cShowBinSelect.cpp:2063 (V912 :2210)")`）。(c) **產生檔（`*.gen.inc`）的 golden 標籤、kXX_Events 的 golden 字串、產生器傳進來的行號（例 OS-1b 的 `goldenLine`）跟著產生器根目錄走（目前 V912，換根是 Jimmy 的決定），不手改**；測試比這些字串的照舊比 V912，訊息裡註明「V912, generated」。(d) V912 `main.cpp` 在 :26831 之後被 main `c2f6c75a`（10-02 17:16）加了 30 行：寫的時候用 c2f6c75a 之前的號碼，需要時註明「c2f6c75a 之前；今天的樹 +30」。(e) 對照工具：`diff --strip-trailing-cr` 兩棵同名檔建行號對照（V912 main.cpp／csystem.cpp 要拿 `git show c2f6c75a^:HT9011UC_Code_V3.33.912.0_20260908_Jimmy/main.cpp` 那一版比；做法同 handoff 分支 docs/handoff/ST01_912_AUDIT_20261002.md §8），落在 diff 塊裡的行＝內容不同，不是「只改引用」，要停下來另報。(f) 例外照舊：溫控（第 20a 條，E-027／E-029、bthermo、HSys heater、溫控 skill）引 V912；移植樹自己的檔（`csystem.cpp:13304`、`FileRW/...`、`tools/wb_serve.cpp:4826`、頁面 js 行號）不是 golden，不加 V912。
-  ⛔ 20261004 補（E-036c，St01）：**引用稽核工具只認有標「V912 檔名:N」的寫法**；改 c2f6c75a 之前的過期 V912 行號（main.cpp 約 :26831 以後一律 +30）時，同一段落裡沒標檔名的裸「:N」也要一起改，不然一段裡新舊編號混在一起——用 `git diff --no-index -U0` 對 c2f6c75a~1 與現在的 V912 main.cpp 求行號對照、每個數字開 golden 看過；**字串常數裡的行號不算註解**（會被測試釘住），留給程式卡（todo E-036d）。稽核表誤判率高：E-036a 127 列真的 5 列、E-036c 171 列真的 54 列。
-  ⛔ 20261003 補（AI(W906-E030A)，todo E-030 part A，St01；Jimmy RULINGS_20261002 第 20 條、第 23 條第 6 項）：**產生器根目錄還是 V912 時，「回 906」怎麼做**——不改 `GOLDEN`、不把 906 樹放進 git（Jimmy 決定），在 `tools\editlist\<結構>.py` 檔尾用 §4.1 的 REPLACE（`_expect` 釘住 V912 原文、換成 906 的寫法或 `;`），重產 `--only <結構>`、前後 SHA256 一樣＝冪等。第一個例子 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\editlist\DeviceForm_File.py` 檔尾：ASE 中壢 Contact 高度反灰（Chrischen 20260316）7 處換成 `;`（DoIniDataToForm V912 :1021-1028、FormShow :1306-1307／:1478-1485、SetContactMode :15577-15633 四段；906 都沒有）、FormShow 三處 `IniConfig.bAMDFunction` 換回 906 的 `CUSTOMER_CODE==CC_AMD_M`（V912 :1437／:1614／:1736 ＝ 906 :1418／:1587／:1709）。rbVisualDetectionTest（Q-C）不動。⚠ A02 的 `Close(); return;`（RogerYang 20260305）在 V912 的 19 支產生的存檔處理器都有、906 全沒有——**HOLD**（ST01-E 20261003：擋存檔的保護，同 Q-A 一類，問 Jimmy）；注意 golden 906 的語意分兩種：非模態表單（Contact，906 main.cpp:27324 Show()）的 `Close()` 當場跑 FormClose（ReadFile＋DoIniDataToForm 把頁面值丟掉、再存回檔案原值），模態表單（Tray Assignment，906 main.cpp:27443 ShowModal()）的 `Close()` 只設 ModalResult、存檔照存頁面值；產生器把 `Close()` 換成 `ELMark("closed")`、存完才補 FormClose 的寫法，只在 V912 立刻 return 時對兩種都成立——將來真的拿掉 return，非模態那一種要改成當場跑 FormClose。
-  ⛔ 20261003 補（AI(W906-E035)，todo E-035，St01 ST01-E2）：**REPLACE 的取代碼會原樣輸出**——`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\gen_editlist.py` 只把 golden 原文改寫成 `EL<>`，replace 第 5 欄的手寫碼不經過這一步，所以取代碼裡用到元件時，要直接寫成 `EL<TRadioButton>("TfContact", "rbVisualDetectionTest")->Visible=…` 這種形式。**AMD 旗標怎麼對到 906**：移植樹沒有地方寫 `IniConfig.bAMDFunction`（V912 Ifor 20260716 才加的旗標，只在 `FUNC_CC_AMD_SG`＝代碼 982 設 true，V912 `CosFunction.cpp:2991`），所以讀它的判斷永遠是 false。906 的等價條件是 `CUSTOMER_CODE==CC_AMD_M`（`D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260618\MachineType.h:354`）。**不要改用 `CosFunction.bAMDFunction`**：906 的 `SPILFunction` 也會設它（同一棵 `CosFunction.cpp:3082`；V912 已註解掉，`:3162`），用它的話 SPIL 機台也會中。例子：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\editlist\DeviceForm_File.py` 的 AI(W906-E035) 那一列，讓 Contact 頁第 11 個模式 Visual Detection Test 在 982 機台顯示（這是 V912 才有的功能，依 Q-C 先留、Q81 預設留 912；`242206be`）。測試是 ctest `B8_Ct3a_ContactFlags` 的 [3c]／[2]／[8]；把那一列拿掉重產，產生檔會和修改前一模一樣，這 3 項變紅。移植樹另外 12 處讀 `IniConfig.bAMDFunction` 的地方同樣永遠是 false，ST01-M 已在 E-035 那一列記成第 62 項的後續。
-  ⛔ 20261003 補（AI(W906-E030-Q78)／AI(W906-E030-Q79)，todo E-030，St01；Steven 1003 05:3x「Q78 Q79, 可以按照912，但是註解同時提供906的行號位置」＋05:4x 慣例「如果是912比較好，就是註記906的行號跟做法　然後增加註記912已修正或更新的行號」）：**Q78／Q79＝照 V912，記成第 20 條的例外**（`D:\HT9045\.claude\skills\ht9050-construction\references\decisions-decided.md` Q78／Q79；human-review C24／C25）——上一條 E030A 的 A02 HOLD 已決定，19 支產生的存檔處理器 Close() 後的 `return;` 留著。**「照 V912、只加 906 行號註解」的做法**：`tools\editlist\<結構>.py` 檔尾加一列 REPLACE，取代碼＝golden 原文（golden 方法名照產生器換成 `<P>_方法`，例 `DF_CalcDeviceForce`；原文進 `#if 0 // GATE`），產生的程式碼一字不變、只在那一行多一段註解；註解三段：(1) 906 檔:行＋906 在那裡做什麼（Q78 要寫表單怎麼開：ShowModal＝Close() 只設 ModalResult、改的值照存；Show＝Close() 當場跑 FormClose，FormClose 有 ReadFile／DoIniDataToForm 就把改的值丟掉——Rotate、BarCode、QAMode、VacuumUnit、Contact 是這種），(2) V912 修正／更新的檔:行，(3) `Kept: #20 exception (Steven 1003 Q78|Q79, keep V912)`；釘子同時釘 if／Close()／return 三行（`_expect` 或檔內的 `_e030q78_expect`）。驗收不 build：`gen_editlist.py --only <結構>` 跑兩次 SHA256 一樣（冪等）、新舊 .gen.inc 去掉註解與 `#if 0` 段後 token 一樣（只改註解）。Q79 三處都在 `DeviceForm_File.py` 檔尾：ReadFile V912 :615（906 :607-608）、ShowArmAndDeviceForce V912 :1940（906 :1911-1912，同一個算式、畫面值一樣）、CalcDeviceForce V912 :23057（V912 才有，906 0618 沒有）。⚠ 「G＝N×1000/9.8 時兩版 GPIB 值相同」核對兩棵樹：換算對（改 N 算 G、改 G 算 N 兩版一樣），但 N、G 各自四捨五入到 "0.0000" 存檔，**殘差乘上腳數看得出來**（skill ht9045-contact-force §2：4509 pin 906 106.8817、V912 106.8633，差約 0.018 Kgf；V912 的寫法就是該節的建議解法）；**預設只有 CC_JCET／CC_AMKOR_China 是 N×1000/9.8，其他客戶檔裡沒有 G 鍵時 G＝30.0、N＝0.0 ⇒ 兩版差更多**；字串格式另不同（V912 "0.0000"、906 AnsiString(double)）。IniConfig（cConfiguration.cpp 906 :5722-5728＝V912 :5828-5834）的 A02 是 if／else、兩版一樣，不是 Q78 的點。
-  ⛔ 20261003 補（AI(W906-E032)，todo E-032，St01；Jimmy `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20261003.md` 第 1、2 條）：**golden＝906 0618**（`D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260618`，cp950，不在 git；第 2 條）；0625 `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260625_Steven` 跟 V912 都只拿來對照。上面 E-030 那兩條寫的「906」原本是 0625，E-032 已改成 0618 的行號（review6 `v906/st01-e032-0618`、q59 本地）。(a) **0618 和 0625 行號不同的地方**（下面是 0625 行號；difflib 逐行對照，工具 `D:\AI_TempFile\st01e-e032\linemap_0618_0625.py map <檔> <0625行號>`）：`main.cpp` 0625 :20842 起（:20846-20859 WriteN07Log、:20936-20999 N07 區塊只有 0625；:21000 以後 0618＝0625−78）、`ckernel.cpp` :777 起（−5…−16）、`cConfiguration.cpp` :3227 起（−2；:3254 以後 −3）、`fAOI.cpp` :8166 起（−1）、`cmydef.cpp` :4481／`cmydef.h` :4326 起（−2）、`Config.h` :1005 起（−1）、`SECSGEM\uHGemHT9045_EC.cpp` :160 起（−2）、`SECSGEM\uHGemHT9045_SV.cpp` :386 起（+3）、`aoutarm9045_1x2_4.cpp` :529 起（−1），dfm：`cConfiguration.dfm`、`uhome.dfm`、`AutoTeach\InOutArmZteach.dfm`；其餘檔兩棵同行號（內容不同的 33 支函式見 `D:\AI_TempFile\st01e-e032\diff_0618_0625.tsv`）。(b) 引用寫 `golden 906 檔:N`＝0618 行號；**0625 或 V912 比較好而保留時**（第 1 條，Steven 1003 常設規則）註解三段：(1) 0618 檔:行＋0618 在那裡做什麼，(2) 保留的 0625／V912 檔:行，(3) `#20 exception (Steven 1003 standing rule, RULINGS_20261003 #1)`，另給 ST01-M 帳本一列（為什麼算修正）；產生檔照 Q78 的做法在 `tools\editlist\<結構>.py` 加「等價取代」REPLACE 列（E-032 例：TestIF_File_SetUp.py RTC 勾選、TrayForm.py Fix3、IniConfig.py [N07-3] 兩列）。(c) 第 20a 條溫控、Q-A／Q78／Q79（RULINGS_20261003 第 5、6 條）照舊留 V912，註解只換 0618 行號。(d) 產生器根目錄（`tools\gen_editlist.py` GOLDEN）還是 V912，換成 906 0618 是 E-031；在那之前 E-032 的 REPLACE 列釘的是 V912 原文。(e) E-030 那條 (a) 說 ckernel.cpp「兩邊同行號」：對 0618 只到 :532（V912 :533 起多了 ResetShakeShuttleTimeOut 等），已改寫成「ckernel.cpp :1-532」。
-  ⛔ 20261003 補（AI(W906-E031)，todo E-031 第一階段，St01；Jimmy RULINGS_20261003 第 4 條「golden_root 由 St01 負責、照 St01 的排程」、第 2 條、第 1 條）：**產生器讀哪一棵 golden，集中在 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\golden_root.py`**（review6 的側分支 `v906/st01-e031-phase2`：cc82d3b0 機制、31105da3 試行；TrayForm 試行 725cde57 只在舊側分支 `v906/st01-e031-goldenroot`、不進 review6——Steven Q81＝A 之後要重做，見 (e)）。上面 E-030 (c)、E-032 (d) 說的「產生器根目錄＝V912、換根是 Jimmy 的決定」由這一條取代：每個結構一棵，由設定檔自己選。(a) **兩棵樹**：`'906'`＝0618，位置照 `W906_GOLDEN_ROOT` → `HT9045_GOLDEN_ROOT`（tools/dfm2rc、TeachButtonsGen、gate 範本用的同一個）→ 預設 `D:\HT9045\backup\HT9011UC_Code_V3.33.906.0_20260618`；第一次用到時核對 `PINS`（9 支檔的 NB2 golden_fingerprint v1 text hash，值跟 NB2 公布的 fp_0618 一樣；拿 0625 樹來會有 8 支對不上、產生器中止）；產生檔印固定路徑、不印本機路徑，所以各台機器產出一樣。`'v912'`＝`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy`（`W906_V912_ROOT` 可改），不釘（Jimmy 會改，交給 git）。0618 不放進 git（它是加密 7z 發的，RULINGS_20261001 第 19 條；放進 git 等於繞過那層保護）。(b) **哪個結構讀哪一棵**：設定檔 `STRUCT['golden']`／`FORM['golden']`（`'906'`／`'v912'`）＞ `KEEP_V912`（Temperature、SYSTEM_TEMPERATURE、HSys、ACTForm、Winway＝第 20a 條溫控；這幾個寫 `'906'` 產生器中止）＞ `DEFAULT_TREE`（第一階段＝`'v912'`：沒寫的結構產出一字不變——三支產生器全跑，48 個輸出檔 SHA256 跟 HEAD 的產生器一樣、stdout 也一樣）。gen_sjson 用檔內 `TREE_ASK`（空＝預設）。(c) **單一方法換樹**：`'golden_methods': {方法: 'v912'}`＝整支照 V912（例 DeviceForm_File 的 `CalcDeviceForce`，V912 才有，Q79）；`KEEP_V912_METHODS`（HSys `rgHeaterTypeClick`）強制；改讀另一棵的方法標籤帶樹名（`// golden V912 cX.cpp:N`）、它的 replace／blocks 寫那一棵的行號、那一棵 header 才有的元件自動補進來。只差幾行的第 1 條保留**不要整支換樹**：用 replace 列（取代碼＝V912 寫法＋三段註解）；0618 沒有、V912 有的行（例 A02 `return;`）接在前一行那一列的取代碼後面——**同一個 golden 起行只能有一列 replace**（兩列同起行，第二列的取代碼會被包進第一列的 `#if 0`）。(d) **把一個結構換到 906**：`import golden_root as _GR`、`_TREE = _GR.tree_of('<結構>', '906')`、`_GR.lines(_TREE, '<檔>')` 取代自己 open V912，`STRUCT['golden'] = _TREE`；設定檔字串裡還有 V912 資料夾名 ⇒ 產生器中止（`check_config_source`；不然設定檔釘的是 V912 的行、產生器改的是 0618 的同號行，會靜默蓋錯地方）。數字列一律用 `python tools\golden_root.py map <檔> <V912 行>...` 換（difflib 相同段才給號碼；落在不同段回 DIFF＝要人看；`blocks <檔>` 列出所有不同段），**不要估**；換完 `gen_editlist.py --only <結構>` 跑兩次 SHA256 一樣、跟舊產生檔做程式差異（去掉註解與 `#if 0`），每一塊分 (a) 只有標籤／行號、(b) V912 修正＝第 1 條保留（三段註解＋帳本一列）、(c) V912 才有的客戶專屬功能＝**預設留 V912**（Steven Q81＝A 的先例，1003 14:3x，`D:\HT9045\.claude\skills\ht9050-construction\references\decisions-decided.md` Q81：每批交件列出、Steven 要改再說；Steven 認可的直接放行、只通知 Jimmy），用 `golden_methods`（整支方法 V912）或 REPLACE 列（取代碼＝V912 寫法）保留、三段註解的第 (3) 段寫 `#20 exception (Steven 1003 standing rule, Q81 = A)`；其他 V912 才有的功能照第 1 條判斷（修正或明顯比較好＝留 V912，否則照 906）、(d) 不確定＝列出來；再看 tests 有沒有釘產生檔的 golden 字串（例 kXX_Events）。(e) **試行**（全面切換的範本）：`TestIF_File_Magazine`（31105da3）＝只有標籤／行號、程式一樣；`TrayForm`（725cde57，舊側分支 `v906/st01-e031-goldenroot`，**不進 review6、要重做**）＝61 列裡 59 列機械換、2 列落在不同段人工處理；725cde57 把 V912 才有的 7 處照 906 拿掉（FixCanUse 9046LS 旋轉套件與 Top&Bottom AOI、ReadFile CYUEAN 停 Auto Tray Feed 與 KYEC AMR 分頁、FormShow CYUEAN 鎖勾選、存檔鈕 KYEC AMR 分頁、DFM GroupBox2_KYEC 隱藏），**Steven Q81＝A（1003 14:3x，decisions-decided 032c32e2）推翻這一點：6 項客戶功能（B1 HT9046_LS 轉盤 kit、B2 上下 AOI、B3／B4 CYUEAN、B5 KYEC AMR 分頁、B6 KYEC GroupBox2）留 V912**——重做時這 7 處用 `golden_methods` 或 REPLACE 列保留，每處三段註解：(1) 0618 檔:行＋0618 在那裡做什麼，(2) V912 檔:行，(3) `#20 exception (Steven 1003 standing rule, Q81 = A)`；重做進 review6 之前 TrayForm 照舊讀 V912；留 V912 三處（Fix3 `=false` 從等價取代變真的取代、CASE-20260611-001 下半盤同步插在 0618 :415 前面、A02 `return;` 接在 0618 :1260 Close() 那一列）；`tests\test_ta5_scrollbars.cpp` 釘的 kTA_Events 字串 :1639／:1674（V912）→ :1550／:1585（0618）。(f) **全面切換的順序**（E-031 報告，第二階段才做）：兩棵同檔或只有標籤 → 只差 A02 `return;`（Q78 插入）→ 只有 V912 修正 → 有客戶專屬功能（預設留 V912，Q81 先例；每批交件列出）→ Rotate／StartCondition／DeviceForm_File／IniConfig 最後；gen_sjson 最後；`KEEP_V912` 不動。⚠ HotPlateForm_File（gen_formbridge）的存檔鈕也有 A02 `return;`（V912 cHotPlate.cpp:447，0618 沒有）：Q78 原本的「19 支產生的存檔處理器」沒列到，ST01-M 7cfd6ff8 補登記成第 20 支，見 (g) ④。(g) **第二階段**（AI(W906-E031)，1003 下午，review6 的側分支 `v906/st01-e031-phase2`）：① **gen_formbridge 全量會刪手寫 bridge → keep-list**：TfTeach／Tfiosetview 的 bridge 是手寫 cpp（`FileRW\TeachFormShow_File.cpp`、`FileRW\IoSetViewFormShow_File.cpp`），20261002 直接手改進 `_registry.cpp`／`_formbridge_sources.cmake`，全量（不帶 `--only`）一跑兩列就被刪——build 不會紅（兩邊一起少），ctest `TeachFormShowBridge`／`IoSetViewFormShowBridge` 也照綠（直接編那支 cpp、自帶一筆 `kBridges[]`），wb_serve 靜默少兩個 bridge。改成 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\formbridge\_hand_kept.py`：`HAND_KEPT` 每列 class／cpp／三處行尾註解原文（decl／row／cmake）＋`COUNT_NOTE`，產生器照表接在產生的列後面、`kBridgeCount`＝產生的＋手寫的，全量產出跟已 commit 的一字不差；cpp 不在移植樹 FileRW\、沒定義 `kBridge_<class>`、跟產生的 `<struct>.cpp` 同名（會被蓋掉）、class 重複 ⇒ 中止、不寫任何檔。**新增手寫 bridge＝在這張表加一列再全量重產，不要手改那兩個產生檔。** 新選項 `gen_formbridge.py --out <資料夾>`（所有輸出寫到別處，可以配 `--only`）。② **ctest `E031_FormBridgeFullRun`**（`tools\formbridge_fullrun_check.py`；`tests\CMakeLists.txt` 緊接 TeachButtonsGen）：全量跑進 TEMP、跟已 commit 的兩檔比（換行不算），內建反向檢查（keep-list 清空的副本必須比對失敗、少的正是那幾列，否則 FAIL），前後雜湊 FileRW\ 確認沒寫進移植樹；秒級、不 build、不讀寫機台檔；SIM／SHIP 只 configure 的 build 資料夾都 Passed，keep-list 清空時經 ctest 紅（exit 8）。③ **過期產生檔**：第一階段量到 HEAD 有 9 支跟產生器不一致——`FileRW\AOAOffset.gen.inc`（Jimmy c2f6c75a 在 V912 main.cpp :26831 之後多 30 行 ⇒ OffsetSaveClick 的標籤全部 +30，77 行／153 個數字）、6 支 `JsonBridge\gen\sjson_*.gen.cpp`（S69 4e8c93af 在移植樹 cprod.h:141 多一行 ⇒ 表頭「來源：cprod.h:A-B」+1）、`_registry.cpp`／`_formbridge_sources.cmake`（就是 ①）。從 V912 重產、單獨一個 commit（實際變 7 支，兩支登錄檔由 keep-list 補成一樣），去掉註解與 `#if 0` 後程式全部 SAME，沒有測試釘這些標籤。**V912 或移植樹 cprod.h 的行數一動，產生檔的標籤就會落後**：要重產就三支產生器全跑、單獨 commit、訊息寫來源根目錄（`W906_V912_ROOT`）與逐檔變了什麼、確認「只有標籤」。手寫註解裡的舊 V912 行號（`FileRW\AOAOffset.cpp`、`FileRW\_EditPage.cpp`、`tools\editlist\AOAOffset.py`、`web\page\Main.AOAInfo.html`／`ht9045_aoaoffset_c.js` 的 main.cpp:34956…）沒動，跟 AOAOffset 換 0618 一起改。④ **HotPlateForm_File＝Q78 第 20 支**：A02 `return;`（V912 `cHotPlate.cpp:447`，0618 沒有）照 V912 保留（Jimmy RULINGS_20261003 第 6 條；ST01-M 7cfd6ff8 Q78／C24）。這一階段不改程式；三段註解（0618 行號＋0618 在那裡做什麼、V912 :447、`Kept: #20 exception (Steven 1003 Q78, keep V912)`）跟 TfHotPlate 全面切換一起補（`tools\formbridge\TfHotPlate.py` 的 overrides 列）。
-  ⛔ 20261003 補（AI(W906-E031)，todo E-031 全面切換第 1 批，St01；review6 的側分支 `v906/st01-e031-batch1`，從 cf95168c 起；ST01-E 合併後 build）：**已讀 906 0618 的結構 9 個**——TestIF_File_Magazine（31105da3 試行）、TrayForm（725cde57 的重做，見 (a)）、ShuttleMove、Monitor、IniConfig_CounterSel、TestIF_File_FixAICCD、TestIF_File_AutoAlignment、ArmSpeed_File、AOAOffset；`golden_root.py` 的 `DEFAULT_TREE` 還是 `'v912'`（各結構自己寫 `'golden': '906'`），其餘結構照舊 V912。每一個都證明：`gen_editlist.py --only` 跑兩次 SHA256 一樣、全量跑的產出跟 `--only` 一樣（47 個產生檔只有這幾支變）、去掉註解與 `#if 0` 後程式跟換樹前一樣（TrayForm 另有 44 個字串裡的 golden 行號標籤，逐一 `golden_root.py map` 核對）。前 7 個的 golden 檔兩棵逐位元組相同或只差轉的方法以外的幾行（cSpeed.dfm 只差換行字元），AOAOffset 的列全照內容找行。(a) **TrayForm 保留表**（Steven Q81＝A＋第 1 條；`python tools/golden_root.py blocks cTrayAssignment.cpp` 列出的不同段全部留 V912 ⇒ 產生的程式跟換樹前一樣）：B1 FixCanUse HT9046_LS 轉盤 kit V912 :115-122 → 插在 0618 :113 前；B2 FixCanUse Top&Bottom AOI :139-160 → 接在 0618 :126 後（`FileRW\TrayForm.cpp` 手寫的開機段 V912 main.cpp:1455-1462 跟著留）；B3 ReadFile CYUEAN 停 Auto Tray Feed :278-280 → 0618 :243（空白行）；B4 FormShow CYUEAN 鎖 chkAutoTrayFeed :860-865 → 0618 :783（空白行；元件照產生器規則改成替身）；B5 KYEC AMR 分頁 ReadFile :538-544 → 接在 0618 :469 後、存檔鈕 :1399-1402 → 插在 0618 :1315 前；B6 DFM GroupBox2_KYEC `Visible = False`（dfm:1310）→ `dfm_keep`；第 1 條 C27 Fix3 `=false`（取代 0618 :178 的 `==false`）、CASE-20260611-001 :453-481 → 插在 0618 :415 前；C24 Q78 A02 `return;` → 接在 0618 :1260 Close() 那一列。三段註解第 (3) 段：B 類寫 `#20 exception (Steven 1003 standing rule, Q81 = A)`，修正類寫 `RULINGS_20261003 #1`，Q78 寫 `RULINGS_20261003 #6`。**插入的寫法**：replace 列掛在 0618 的一行上（空白行最好），取代碼＝V912 原文（`_GR.lines('v912', …)` 讀、`_v912_only` 確認抄的每一行都是 V912 才有、`_v912_expect` 釘頭尾）＋那一行 0618 自己的原文（空白行就沒有）；產生器不改寫取代碼，所以碰到元件要自己寫成 `EL<型別>("表單", "名")`。(b) **新欄位 `dfm_keep`**（`tools\gen_editlist.py`，1057271d）：`[(元件, 屬性, 樹, 那一棵 .dfm 的行號, 原因)]`，只收 Enabled／Visible／ReadOnly；那一行必須在該元件那一層、結構那一棵已同值或沒產生任何一行都中止；產生的那一行帶 `// golden V912 x.dfm:N 取代：原因`；沒寫＝產出一字不變。(c) **HotPlateForm_File（Q78 第 20 支）**：三段註解用 `tools\formbridge\TfHotPlate.py` 的 `blocks` 列掛在 V912 :447（取代碼＝golden 原文 `return;`，程式不變，7c5e3dba）；這個結構還讀 V912，換 0618 時這一列會讓產生器停（0618 :447 是 `}`），改成接在 0618 :446 Close() 後面的插入。(d) **引用清理的坑**：設定檔／手寫檔寫的「V912 行號」不一定是現在的 V912——有 c2f6c75a（main.cpp :26831 後 +30）之前的號碼、DoReadLastData 一帶又少 2、也有本來就是 906 的號碼（例 uteach.cpp:4924＝0618 的 TfTeach::SaveFile，V912 是 :4939；cObserver.cpp:2109）。`golden_root.py map` 只對「現在的 V912 號碼」有效 ⇒ **每一條都照內容在兩棵各找一次**（grep 函式名／那一行原文），過時的在括號裡寫明；「移植樹 X:N」是移植樹的行號，不動。`FileRW\_EditPage.cpp` 的頁面閘表、`FileRW\MainClick.cpp` 的尾段 todo 字串還有不少過時的 V912 號碼（這一批只改了 AOAOffset 那三處）。(e) 下一批照上面 (f) 的順序：只差 A02 `return;` 的（Q78）→ 只有 V912 修正 → 有客戶專屬功能（預設留 V912，每批列出）→ Rotate／StartCondition／DeviceForm_File／IniConfig；gen_sjson 最後；`KEEP_V912` 不動。
-  ⛔ 20261004 補（AI(W906-E037)，todo E-037，St01；側分支 `v906/st01-e037` `67f73bce`）：把 E-030 換成 `;` 的 V912 段落改回 V912 時，不要只刪 REPLACE 列（那樣三段註解沒地方放）。做法：移到檔尾 `_E037_REPLACE`，寫成「等價取代」——取代碼＝V912 原文寫成 EL<> 替身，原文留在 `#if 0`，`_expect` 釘頭尾；說明欄三段＝906 0618 行號＋做法／保留的 V912 行號／`#20 exception (Steven 1003 standing rule; Q81 / Q86 = A)`。冪等驗證：`gen_editlist.py --only DeviceForm_File` 前後 SHA256 一樣；`B8_Ct3a` [3b]／[8] 釘住，改壞會紅。⚠ E-031 全面切換讀 0618 時，這 7 段在 0618 不存在，要改成像 TrayForm B1-B6 那樣的插入列。V912 行號一律寫現在這棵（c2f6c75a 之後）：E-030 (d)「寫 c2f6c75a 之前的號碼」從 review6 `5f6f6e05`（10-02 21:37）起作廢；程式字串裡的 golden 行號（例 `FileRW\Main_D025MenuOpen.cpp` 的回覆字串、`tests\test_d025_menuopen.cpp` 的釘子）改了＝改程式，要開程式卡（E-041、E-036d）。
-  ⛔ 20261001 補（AI(W906-B8-CT3B)，B8 CT-3b'，St01）：運轉中例外表加第 18～19 列 TfContact `btnStart`／`btnPause`（golden 906 `cContact.cpp:13965-13970`／`:13972-13975`（V912 :14072-14077／:14079-14082）；兩支都不查 SystemStart／SoftStart，主畫面 BtnStart 運轉中也不停用；`fContact` 非模態）⇒ 兩格都放行。兩支都走 (5) after-ack：START＝golden `TfMain::BtnStartClick`（906 `main.cpp:6261-6323`（V912 :6529-6593），翻在 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\DeviceForm_File.cpp` 檔尾 `Ct3bBtnStartClick`；只有 `CosFunction.bEnableSoftWareControlButton` 或 SOFT_SIMULTE 才真的 Start，出貨建置其他客戶＝只把 `edTorue0`／`edTorue1` 設 "10"；⛔ 20261003 E-030 照 906：V912 :6533-6534 才有的「Teradyne-US 等級低於 HonPrec 就 return」拿掉（RULINGS_20261002 第 23 條第 5 項 Q-B），原本的回傳碼 1 留空不重編）；PAUSE＝`fMain->BtnPauseClick`——**(5) 的判準要往下追**：`PauseFromWeb` 自己沒有框，但它叫的 `SetRunStartMode(rsmAutoSiteMap)` 在 SCK ART＋KYEC_LEE 會 `ShowMyMessage`（`RunStartMode.cpp:244`／`:526`）＝等瀏覽器 ⇒ 也要 after-ack（CL-4 的「直接在處理器裡跑」只適用於整條呼叫鏈都沒有框）。START 普查 36／34／2。ctest `B8_Ct3b_ContactStartPause`、`B8_Ct3b_ContactPage`。
-  ⛔ 20261001 補（AI(W906-B8-CT3D)，B8 CT-3d，St01）：Contact 的 OTD 兩顆面板 `palOTD_4`／`palOTD_6`（golden 906 `cContact.cpp:15170-15193`／`:15195-15218`（V912 :15395-15418／:15420-15443）：`Cylinder[C_DockYAxisOn／Off、C_DockXAxisOn／Off].On()／Off()`，沒有任何檢查）＋`OTDTimerTimer`（906 `:15220-15282`（V912 :15445-15507）：ledOTD＋`SW[SwUnDock]`／`SW[SwDockError]`）；只有 `USE_OTD==1` 看得到（FormShow 906 `:1310-1311`／`:1619`（V912 :1329-1330／:1646））。三條通用規則：(a) **頁面計時器拍子照 CT-L2**：golden TTimer 的 OnTimer 由 C++ 在「開頁（golden FormShow 之後）＋每個 form.event 之後」各補一拍、`Enabled` 才跑（`FileRW_Contact_OTDTimerTick`，同 `FileRW_Contact_TimerEPTick`）；同一頁的每一支跳板（EvB3Run／Ct3aRun／Ct3bRun／Ct3dRun）都要補。會寫輸出點的計時器在定時拍子（P-1，wb_serve 主迴圈那一行的主人接）上線前，輸出只在頁面有動作時更新——交件要寫明。(b) **TPanel 的 tag 只在非 0 時進替身快照**（`FileRW/_EditList.cpp` PutProxyValue；TControl 替身一律帶）：拿 Tag 存狀態要用不含 0 的值（BevelOuter 存 VCL TBevelCut：1 bvLowered／2 bvRaised；0＝沒點過＝DFM 預設），否則回到 0 時 `ack.changed` 收不到（EvDiff 只比 after 有的鍵）。TMyLed 的 Value＋TrueColor 合成一個 Tag（0 滅／1 綠／2 紅），頁面 `ct3dLook` 設 `--led-on`。(c) **運轉中例外不是「golden 沒查就加」**：golden 處理器不查、表單非模態，但流程不等這顆、按了會動氣缸 ⇒ 不自己加列，寫成 Steven 的決定（A 維持拒收／B 加 2 列）。⛔ 20261002 更正（AI(W906-B8-CT3D-Q65B)，St01）：**Steven Q65＝B（1002 08:0x）** ⇒ 運轉中例外表加第 20～21 列 TfContact `palOTD_4`／`palOTD_6`（click、`fContact`、SystemStart／SoftStart 兩格都放行；golden 出處 906 `cContact.cpp:15170-15218`、`main.cpp:27312-27327`（V912 :15395-15443、:28302-28317）），表共 21 列、TfContact 7 列；運轉中按 OTD 照 golden 動 Dock 氣缸（規則例外 human-review C，上機 EastSun）。ctest `B8_Ct3d_OtdDock` [7]／[9]、`B8_Ct3b_ContactStartPause` [7]（TfContact 7 列）、`B8_Ct3a_ContactFlags` [7]（只數 CT-3a 的 3 列）。IO 頁開著 `fiosetview->fShow` → `W906_FormShowing("fiosetview", fiosetview->fShow)`（同 `adam6024.cpp:941`）。測試記錄點：真的 `Cylinder[]`／`SW[]`、IO 基底全設 -1（On()／Off() 只設 Status／OutValue；On 感測器經同一個哨兵讀：TYPE_A＝false、TYPE_B＝true），`CosFunction.bCylinderOnOffTimeLog=false`（SmartDiagnostic 不寫檔）。CT-3c（Index Z Jog）沒做：閘 `iIndexStatus` 只在 golden Contact 狀態機 case 3010 設（906 `:7673`／`:10184`／`:11120`（V912 :7702／:10213／:11149）），移植樹沒翻。ctest `B8_Ct3d_OtdDock`、`B8_Ct3d_ContactPage`。
-  ⛔ 20261002 補（AI(W906-E022-CK1)，todo E-022 CK-1／CK-2／CK-3／SC-2，St01）：**不是每一頁都走 C 路**——Data.ContactCT 沒有 `tools/editlist/ContactCT*.py`，畫面是 WS `contactct.get`（wb_serve 自己的分支）。它的三個操作走既有的 act.* 總入口（`tools/wb_serve.cpp:4833` `IsActionCommand` → `JsonBridge/ChanAction.cpp` `HandleActionWithTag`，`:349` 同一行分派 `act.contactCT.*`）→ `cContactCT.cpp` 檔尾 `ht9045::sjson::W906_ContactCTAct`（golden 906 `cContactCT.cpp:944-1069` btClearCountClick、`:740-886` sgYieldDblClick、`:1071-1075` btYieldChartClick；V912 那一份逐位元組相同、行號一樣），wb_serve.cpp 一行都不用動。規則：(a) act.* 的成敗看 `"executed":true`，拒絕／問 YES／NO 都是 ok:false、JSON 在 ack.error；(b) golden 的 `Application->MessageBox(MB_YESNO)` 拆兩段：不帶 answer → `needConfirm`（golden 兩行字），網頁 `window.confirm` 後帶 `"yes"`／`"no"` 再送，C++ 守衛重跑；**取消＝NO 也要送**（golden Count Clear 按 NO 還會跑 `:1050-1068` 收尾）；(c) act.* 不持 FormLock（`ChanAction.cpp:454`），本體在 ht9045_sm 也拿不到（FormLock 在只編進 wb_serve 的 `JsonBridge/FormJson.cpp`，從 ht9045_sm 叫會讓每個連到它的測試連結失敗）；(d) 等級照 golden 在處理器裡查（107，預設 bAlarm=true ⇒ WAR1676），運轉中照 golden 查 SystemStart（act.* 沒有 runexc 表）；(e) 頁面補件 `D:\HT9045\web\page\ht9045_contactct_ev.js`（`Data.ContactCT.html:39` 同一行載入），Yield Chart＝localStorage `ht9045.observer.yieldChart`＋`postMessage({open:'observer'})`，Observer 頁（`ht9045_observer_wire.js`）重送 open、回應 activePage 4 就切 Yield 分頁（不送 act tab）；SC-2 StartCondition 的 Smart Diagnostic 鈕＝`postMessage({open:'smartdiag'})`（golden 906 `cStartCondition.cpp:1080-1084`（V912 :1254-1258））。測試 ctest `E022_ContactCT`、`E022_ContactCTPage`。
-  ⛔ 20261002 補（AI(W906-E023-SB1)，todo E-023 SB-1／SB-3／SB-4／TP-2，St01）：Status.ShowBinSelect／Status.TemperFrom 也不是 C 路頁。新動作 `act.showBinSelect.state／autoClean／uphDblClick／copyRecipe` 與 `act.temperFrom.mouseDown` 走同一個 act.* 總入口（`JsonBridge/ChanAction.cpp:346` 同一行；:344＝E-021（q59）、:349＝E-022，分開免得合併衝突）；`act.showBinSelect.clearCount` 照舊在 wb_serve 自己的臂（`tools/wb_serve.cpp:4826`）。本體放 **St01 的新檔**（`cShowBinSelect_E023.cpp`、`cTemperFrom_E023.cpp`，ht9045_sm，`CMakeLists.txt:2498` 同一行），不動 jimmychiu 的 cShowBinSelect.cpp／cTemperFrom.cpp。規則：(a) **本體只編進 wb_serve 的（FileRW/）要經安裝座**：ChanAction.cpp 也編進 ctest（SjsonChan、E022），ht9045_sm 的檔直接呼叫 FileRW 的符號會讓那些測試連不到 ⇒ `g_W906_E023_BtnAutoCleanSeat` 由 `FileRW_Cleaning_EvBoot` 同一行裝；(b) **act.* 不持 FormLock，要用 filerw session（ELMessage）就自己拿 FormLock**，放開後再用 golden `ShowMyMessage` 跳框（tick 執行緒等 MbWait，同 E-021）；(c) golden 的 `MB_OKCANCEL` 用 `"ok"／"cancel"`、`MB_YESNO` 用 `"yes"／"no"`；一個程序狀態的模態框（TP-2）用 C++ 的「框開著」旗標 `g_tp2Asked`，新的一下滑鼠就丟掉；(d) **密碼在 C++ 比、不回傳、不印，測試從移植檔讀出來用、不印**；(e) 寫機台檔的一律接縫（`W906_COPYRECIPE_ROOT`，沒設＝golden `D:\Run`），ctest 用 DEFER 的 ENVIRONMENT APPEND 給值，沒給就 exit 2；(f) 運轉中要不要收照 golden，但一條路上只要有「按下當場動馬達／IO／START／Pause／StopAllMotor」就先擋、問 Steven（ST01-M Q59 規則）。⛔ 20261002 更正（AI(W906-E023-Q67B)，St01）：SB-1 問了——**Steven Q67＝B（1002 08:0x）「可以按, 按了之後機台會執行one cycle, 然後才是auto clean」** ⇒ `act.showBinSelect.autoClean` 運轉中照 golden 收（act.* 沒有 runexc 表，處理器直接不查；golden 沒料那一臂的訊息框／StopAllMotor 照 golden 不動），回覆多帶 `running`（按下那一刻）；SB-4 的配方名稱拒收改稱 Steven Q66＝B。測試 ctest `E023_StatusEvents`、`E023_StatusPages`。
-- **權杖與防連點**：`form.event` 不在權杖豁免表 ⇒ 要權杖（同 `form.save`）；不在 WebCmdGuard 白名單 ⇒ 同 cmd＋tag＋value 400 ms 內擋（`_FormEvent.cpp:14-15`）。開窗閘（§3.0h）不另查——要求先在同一個 `AccessLevel` 下 `editlist.get` 過，開頁時已查。
-- **頁面送出點還沒有**：頁面端由 Jimmy 在 `D:\HT9045\web\page\ht9045_wire_engine.js` 加（只有標 `data-ht-event` 的控制項才送）。20260927 HEAD `db1b7638` 與 main `8b5a91b5` 在 `web\page\` grep `form.event`／`data-ht-event` 都是 0 筆 ⇒ 網頁還不會送；目前只有探針 `tools\webprobe\formevent_probe.py`、`formevent_ta_ts_probe.py` 會打（都還沒跑）。沒送事件就存檔的頁面，由 3.0g-5 的 BeforeApply 補。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30g-1-現況20260927-晚head-db1b7638)
 
 #### 3.0g-2 C 路 `RunPageEvent` 的檢查順序（`FileRW/_EditPage.cpp:367-512`）
 
-0. 結構沒開機建好 ⇒ `handler-failed`；事件表裡找 `control`＋`event` 相符的一列，沒有 ⇒ 元件存在回 `no-handler`（「has no translated golden handler … events: tools/editlist/<struct>.py」）、不存在回 `unknown-control`。
-1. **開過頁**：同 `editlist.save`，要在目前 `AccessLevel` 下 `editlist.get` 過（`:385`），否則 `bad-payload: reload page: …`——golden 的事件只發生在開著的表單上。
-2. **點得到嗎**：`ELOperable(form, control)`（`FileRW/_EditList.cpp:237`；自己＋每一層祖先的 `Enabled`／`Visible`／`TabVisible`，**不看 `ReadOnly`**——唯讀的下拉照樣點得到；`ELEditable` `:232` 改成呼叫它再加 ReadOnly，行為不變）。點不到 ⇒ `bad-payload … cannot be operated now … -- reload the page`（`:393`）。
-3. **控制項自己的值先驗**：`itemIndex` 超出 golden 清單 ⇒ `bad-payload`；**清單過期擋（R78）**：下拉有帶 `text`、而且跟伺服器清單第 `itemIndex` 項不同 ⇒ `bad-payload … the page's list is stale, reload the page`（`:412`）——golden 處理器拿 ItemIndex 當 CSV 列號（V912 `cHotPlate.cpp:422-436`、`cTrayForm.cpp:577`→`:589`），頁面開很久期間 `PlateForm.csv`／`TrayForm.csv` 被改過就會填錯列。沒帶 `text` 不檢查（跟 golden 一樣）。A 形狀同一條規則在 `JsonBridge/FormBridge.cpp`。
-4. **`state`**（選用，頁面其他控制項目前的值，格式同 `editlist.save` 的 `widgets`）：丟掉不可改的（同 §3.0b 的 4），其餘 `ELApplyProxies` 先全驗再一次套；分頁值不收的理由記進 todo（3.0g-6）。
-5. **套控制項自己的值**（VCL 語意：選清單第 n 項 ⇒ `ItemIndex=n`、`Text=Items[n]`；勾選框 ⇒ `Checked`），不觸發別的事件。
-6. **跑 golden**：快照 → 處理器（`Sender`＝這個元件的替身）→ 再快照（`:474`），`changed`＝前後有差的替身（`EvDiff` `:295`，`:489`）。處理器丟例外 ⇒ `handler-failed`，之前已改的替身**不還原**（同 golden：VCL 例外框之後表單停在那個狀態）。
-7. golden 訊息／待辦進 `messages`／`todo`；事件裡 golden 問 YES/NO（`ELAsk`）一律當 NO，todo 記 `golden asked "…" -- form.event has no answers, taken as NO (2)`；golden 呼叫 `Close()` ⇒ 下次要重新開頁。
-- A 形狀 `formbridge::RunEvent`：先跑一次 golden display（HotPlate＝`TfHotPlate::FormShow`，R79：會重讀 `<配方>\HotPlate.Data`、缺鍵補寫，副作用同 `GET /api/form` 開頁）→ 產生器從 golden DFM 抽的「控制項＋每一層容器」設計期 `Enabled`／`Visible` 鏈（`EventGuard`）判斷點不點得到 → 套 state 與控制項值 → 處理器 → 回處理器有賦值的屬性（`FormState` touched bits）。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30g-2-c-路-runpageevent-的檢查順序filerw_editpagecpp367-512)
 
 #### 3.0g-3 回覆格式（程式現況）
 
-- 成功：`{"ok":true,"form","control","event","golden":"<golden 處理器位置>","route":"A"|"C","changed":{<元件>:{…}},"messages":[{en,zh}],"todo":[…]}`
-  （`FileRW/_FormEvent.cpp:131-142`；`ok` 由 WebBridgeServer 的 AckJson 加）。⛔ 20260927 晚補：上面 10:15 的定案格式沒有 `golden`、`route` 兩個鍵，程式多送這兩個。
-- **`changed` 只列有變的元件、每個元件只列有變的鍵**（`text`／`itemIndex`／`checked`／`items`／`enabled`／`visible`／`editable`／`tabVisible`／`activePageIndex`…；鍵名同 `/api/form` 第二型 display），
-  **沒變的鍵不出現、不送 `null`**（`FileRW/_FormEvent.h:12-14`）；`TComboBox` 的 `text`／`itemIndex` 任一有變就兩個一起送（VCL 兩者連動）。頁面照 `changed` 局部套值，不必整頁重讀。
-- 失敗：`{"ok":false,"error":"<碼>: <說明>"}`，碼 `unknown-page`／`unknown-control`／`no-handler`／`bad-payload`／`running`／`handler-failed`；`busy:` 來自 WebCmdGuard。
-- `editlist.get` 對有事件表的頁多帶 `"events":{<元件>:{event, golden, operable, items?}}`（`FileRW/_EditPage.cpp:324` `EvPageJson`，接在 `PageJson` `:78`）：`operable=false` 的元件送了會被擋；`items` 是伺服器端的 golden 清單（頁面可拿來比對自己的下拉是不是舊的）。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30g-3-回覆格式程式現況)
 
 #### 3.0g-4 怎麼加一個事件（標準流程）
 
-**C 形狀**（HTEditList 那一類）：
-1. 冪等確認同 §4.1 步驟 1（`--only <結構>` 前後 `FileRW\<結構>.gen.inc` 的 SHA256 相同）。
-2. 在 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\editlist\<結構>.py` 加：
-   - `'events': [(控制項, 'change' 或 'click', golden 處理器), …]`（例 `tools\editlist\UserDefForm_File.py:22` `('cbTrayType1', 'change', 'cbTrayType1Change')`）；
-   - 處理器本身要列在 `'methods'`，參數只能是 `''`（拿掉 Sender）或 golden 原樣的 `TObject *Sender`（處理器讀 `Sender->Tag` 時用後者，例 `cbTrayType1Change`）；
-   - 處理器裡伺服器端做不到、或要等價改寫的行，照 §4.1 用 `'replace'`／`'blocks'`（例 Tray Assignment 的 `_EV_REPLACE` 把「改回原值」換成 `TA_RadioIndex`，3.0g-5）。
-   欄位說明全文：`tools\editlist\README.md:38` 的 `events` 那一列。
-3. 重產 `C:\Users\steven\AppData\Local\Programs\Python\Python314\python.exe D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\gen_editlist.py --only <結構>`：產生器在 `.gen.inc` 檔尾產生
-   `static const filerw::PageEvent k<P>_Events[]`（例 `FileRW\UserDefForm_File.gen.inc:891`），並把這些控制項的 DFM 設計期 `Tag` 帶進替身。
-4. 手寫入口 `FileRW\<結構>.cpp` 註冊（匿名 namespace 裡、`filerw::PageRegistrar g_reg` 之後）：
-   `filerw::PageEventsRegistrar g_evreg("<tag>", k<P>_Events, (int)(sizeof(k<P>_Events) / sizeof(k<P>_Events[0])));`
-   （例 `FileRW\UserDefForm_File.cpp:40`、`TestIF_File_Cleaning.cpp:245`、`Temperature.cpp:257`；Tray Assignment 另抄一份換跳板，`TrayForm.cpp:429`）。
-   事件表**另外註冊、不加進 `PageDesc`**（`FileRW\_EditPage.h:70-73`：`PageDesc` 是逐欄初始化的彙總型別，加欄位會讓每個結構多一個 `-Wmissing-field-initializers` 警告）。沒註冊 ⇒ 送來回 `no-handler`。
-5. golden DFM 停用、執行期也沒人打開的元件，`ELOperable` 會照 golden 擋（例 R77 Cleaning）；要放行必須是 Steven 的裁決（偏離 golden）。
-6. 語法檢查兩組態（[wbserve-conventions.md](wbserve-conventions.md) §6）、寫探針（例 `tools\webprobe\formevent_ta_ts_probe.py`）、把和 golden 不同的地方列成 R 題（例 R94～R100）。
-
-**A 形狀**（只剩 HotPlate）：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\formbridge\<表單>.py` 加 `'events'`（處理器要在 `methods`、除了 Sender 沒有別的參數；讀 Sender 的行用 `overrides` 改成讀那個控制項；
-`tools\formbridge\README.md:36`），重跑 `gen_formbridge.py --only <表單>`；產生器另從 golden DFM 抽 `EventGuard` 鏈，產生 `kEvents` 登錄在 `BridgeDesc.events`／`nEvents`。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30g-4-怎麼加一個事件標準流程)
 
 #### 3.0g-5 `4e74e8b4` 留下的三個寫法（Tray Assignment／Temp_Set，可當範本）
 
-- **`TA_RadioIndex`＝VCL `TCustomRadioGroup.SetItemIndex` 的模擬**（`FileRW\TrayForm.cpp:84`）：夾在 -1..Items.Count-1；值有變才設 `ItemIndex`，並照 golden DFM 跑那個群組的 `OnClick`
-  （檔內 `kOnClick` 表，例 `rgLoaderType`→`rgLoaderTypeClick`、`RGAuto5`→`RGAuto2Click`＝golden 怪處照留）。golden 處理器裡「把群組改回原值」那幾行在 VCL 會再觸發一次 OnClick，
-  所以這一波新轉的處理器用產生器 REPLACE 改成呼叫它（`tools\editlist\TrayForm.py` 的 `_EV_REPLACE`）；既有的 `TA_SetRadioIndex`（開頁用）不觸發——開頁設群組不跑 OnClick 是既有缺口（R100）。
-  同類寫法：`tools\editlist\TestIF_File_Cleaning.py` 的 `CL_RadioIndex`、`HSys.py:116`（`TrayForm.cpp:82` 註解）。
-- **`TA_EvOnTab` 分頁跳板**（`TrayForm.cpp:403`）：golden 使用者只點得到「目前分頁」上的元件，處理器又會看分頁（`RGLoaderClick` 的 FT 連動、`rgLoad_RTClick` 的 RT 連動、`ShowCompnet` 的 `edAutoNType`）。
-  事件表照抄產生的 `kTA_Events`，只把 `pgRunMode` 兩頁上的 14 個 RadioGroup 換成跳板：先把 `pgRunMode->ActivePageIndex` 設成那個元件所在的頁（`tsNormalTestGroup`＝0、`tsReTestGroup`＝1）、
-  跑處理器、再還原（存檔鈕的 FT→RT 複製看分頁，不能因為點過 FT 頁就改變存檔行為）。分頁外的 `cbLoader` 看的是「使用者當下在哪一頁」——伺服器不知道，照 DFM 的 1（交件記為機制缺口；`c9d3c932` 之後頁面可以用 `state` 送分頁，3.0g-6）。
-- **存檔時替沒送事件的頁面補**（`PageDesc::beforeApply`，`TrayForm.cpp:333` `BeforeApply`）——Jimmy 加送出點之前，頁面是「改完直接存」：
-  - R94（TA-1 方向圖）：替身 `Tag`＝目前圖號（照引擎 TImage 慣例「點一下 tag+1、存檔送 tag」，`ht9045_wire_engine.js:1166-1175`），golden 的 DFM Tag 索引改由 `TA_ImgIndex`（`:74`）查表；
-    存檔時頁面送的 tag 跟 `iTrayDirect[]` 不同，就照 golden `imgLoaderClick` 一下一下點到一致（最多 8 下）。
-  - R95（TA-3）：`rgFixTrayMode` 頁面值跟伺服器不同 ⇒ 照 VCL 點一下並跑 golden `rgFixTrayModeClick`（Fix 盤有 IC 會改回），被改回多一句訊息——機台 MOT 狀態的互鎖，不信任前端，存檔一定重查。
-  - R96：結果跟點的先後有關的群組（`rgLoaderType` 的 KYEC 條碼、`RGLoader`／`rgLoad_RT`／`RGAuto2`／`rgAuto2_RT` 的 bin 檢查）**不重播**（伺服器只看得到最後的值），等 Jimmy 標好事件再評估。
-  - R97（TS-1，Temp_Set）：換加熱模式／校正來源、沒送 `form.event` 就存 ⇒ **照舊拒存**（`FileRW\Temperature.cpp` `SaveFlow`）；`Temperature` 的 `BeforeApply`（`:163`）只記「套值前伺服器端的 `rgIndexHeatMode`」，
-    比較對象改成它與 `Temperature.bTempCalByRecipe`——存檔時分不出先換模式還是先改補償，沒辦法替頁面重播。R98（點擊時的讀檔照 golden 會補寫檔）、R99（一點就換掉機台記憶體的補償表）照 golden，待 Steven／Jimmy。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30g-5-4e74e8b4-留下的三個寫法tray-assignmenttemp_set可當範本)
 
 #### 3.0g-6 分頁值 `activePageIndex`（`c9d3c932`，C 路共用層；R102～R106）
 
-- **形狀**：`TPageControl` 替身在 `editlist.get` 的 `proxies` 多帶 `"activePageIndex":<整數>`；`editlist.save` 的 `widgets`、`form.event` 的 `state` 用同一個鍵送回（`{"<分頁控制>":{"activePageIndex":n}}`），
-  `form.event` 的 `changed` 也會帶（golden 處理器切了分頁；鍵名同 A 形狀 `JsonBridge/FormBridge.cpp:188`）。宣告與規則在 `FileRW/_EditList.h:131-133`、`:163`、ELApplyProxies 上方的註解。
-- **頁序**：golden DFM 頁序、0 起算、`TabVisible=false` 的頁也算一格＝VCL `PageIndex`＝頁面 `.tabs .tab` 的 `data-t`。
-- **範圍**：有 `ELSetPageOrder(form, pageControl, tabs, n)`（`FileRW/_EditList.cpp:221`）登記的用 0..n-1；沒登記的用 DFM 父子表（`ELSetParents`）裡以它為父的 `TTabSheet` 替身個數——那只是**下限**（產生器只收用到的替身＋祖先）。
-- **不合法**（不是數字、不是整數、超出範圍、`ELOperable` 點不到）⇒ **只丟那一筆**、其餘照套、理由進 `session.todo`（R102；跟其他種類「型別不對整批 400」不同，分頁是輔助值）；
-  **沒帶這個鍵＝舊行為**（有 `tag` 當 tag，否則 unknown）。停在 `TabVisible=false` 的頁照收（R103：golden 會用程式切到藏起來的分頁，V912 `cOffSet.cpp:192` 藏 `tsIndexOffset`、`:3383` 又切過去）。套值不觸發 `OnChange`。
-- **順序**：`PageSave` 在 `beforeApply` 之前先套分頁（`FileRW/_EditPage.cpp:118-150`；R104：Tray Assignment 的 `ShowCompnet` 看 `pgRunMode`，V912 `cTrayAssignment.cpp:1033-1034`；事件本身也切頁時以事件為準），
-  之後回 400 就還原成套值前的分頁（`restoreTabs`，`:189`／`:197`）；`SessionBegin` 之前收集的理由在它之後補記（`:205`）。`RunPageEvent` 同樣先記 `stateNotes`、跑處理器時補記。
-- **ctest**：`EditList_PageIndex`（`tests\test_editlist_pageindex.cpp`，`tests\CMakeLists.txt:4647`；只連 `ht9045_webbridge`＋vclcompat；`c9d3c932` 交件時還沒 build）。
-- **頁面端還沒接**：Jimmy 的引擎 C 路 `gbApply()`（`D:\HT9045\web\page\ht9045_wire_engine.js:1131`）不認這個鍵（開頁不切頁籤）、`gbSave()` 也不送；只有 A 形狀的 `formOverlay()`（`:1591-1594`）會照 `activePageIndex` 點頁籤。頁面不送＝跟以前一樣。
-- **已知缺口**（交件列出；R105、R106 待 Steven）：
-  1. 產生器沒產生 `ELSetPageOrder`（`_EditList.h` 註解「目前沒有呼叫端」；HEAD `db1b7638` 全樹 grep 只有 `_EditList.cpp` 自己與 ctest）⇒ HSys `pcSetting`、Temperature `pgcTempOffset`、TesterIF `pgcRS232`、GroundMan、AOAOffset
-     的最後一頁會被當成超出下限、記一筆假的 todo（R105＝A 就是替每個分頁控制補一行 `ELSetPageOrder`；產生器 `dfm_parents` 已照 DFM 順序走）。
-  2. golden 的 PageControl `OnChange` 處理器都沒翻：IniConfig `pcConfigChange`（V912 `cConfiguration.dfm:470`）、Temperature `pgcTempOffsetChange`（`uTemp_Set.dfm:4472`）、HSys `pcSettingChange`（`HandlerSys.dfm:52`）、
-     BarCode `pgc2DIDChange`（`BarCode\BarCode.dfm:54`／`:73`）、UserDefForm `PageControl1Change`（`cTrayForm.dfm:241`）——`tools\editlist\`、`FileRW\` grep 0 筆；頁面切頁籤＝只換分頁、沒跑 OnChange。
-  3. 伺服器開頁時的分頁 ≠ golden：產生器不收 DFM 的 `ActivePage`，也把程式裡的 `->ActivePage=tsX` 當純畫面敘述丟掉（`tools\gen_editlist.py:307`）⇒ 伺服器與網頁開頁都停在第 0 頁
-     （R106 例：ArmSpeed、YieldMonitoring、TesterIF、UserDefForm、ACTForm、BarCode；Tray Assignment 是手寫 `FileRW_TrayAssignment_Boot` 設成 DFM 的 `tsReTestGroup`＝第 1 頁）。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30g-6-分頁值-activepageindexc9d3c932c-路共用層r102r106)
 
 #### 3.0g-7 Configuration 頁（`IniConfig`，不是 PageDesc 的結構怎麼接 form.event；20260927 晚，S158 Q41 CC-E2／CC-E7）
 
-程式：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\IniConfig.cpp` 檔尾（`:498` 起的說明 (1)～(5)）＋ `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\IniConfig.gen.inc:9516-9626`；探針 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\webprobe\formevent_cc_probe.py`（寫好、沒跑）。
-
-- **別名頁**：`W906_FormEvent`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_FormEvent.cpp`）只認 `PageDesc`，IniConfig 的開頁／存檔卻是手寫入口（密碼守衛、P26 重播、關窗尾段）⇒ `IniConfig.cpp:558` 另登記
-  `kEvPage`（tag `Config.Configuration`、page `Config.Configuration.html`、form `TfConfiguration`）。**tag 不能是 `IniConfig`**：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\wb_serve.cpp:5204`／`:5300`
-  先找 PageDesc，會把 IniConfig 的 editlist.get／save 改走 `PageJson`／`PageSave`。別名頁沒有開窗閘 ⇒ 拿它送 editlist.get／save 一律 `no-gate`。
-  RunPageEvent 的「開過頁」紀錄只有 `PageJson` 會設 ⇒ IniConfig 開頁跑完 golden FormShow 後呼叫一次 `PageJson(kEvPage)`（formShow 空的、回應丟掉）；每個事件再查 IniConfig 自己的 `g_formShown`（存檔後沒重開頁 ⇒ `handler-failed … reload page`）。
-  `editlist.get IniConfig` 多帶 `"events"`（`udD46` 另帶 `"events":["btNext","btPrev"]`）與 `"eventTag":"Config.Configuration"`。
-- **TUpDown**：處理器拿不到頁面送的值（RunPageEvent 只替下拉／單選群組／勾選框／輸入框套值）⇒ `udD46` 拆成事件名 `btNext`／`btPrev`（golden `TUDBtnType`），伺服器照 VCL 先 `Position±Increment`（夾 5..15）再跑 `udD46Click`；送 `click` 回 `no-handler`。
-  **偏離**：`udD46Click` 改的記憶體 `IniConfig.iD46WaitIndexDestroyTime` 跑完放回（畫面照 golden 變、記憶體等存檔才改；Q14＝B 同方向，R 題待 Steven）。
-- **Timer1 一拍**：每個事件跑完 golden 處理器再跑 `Timer1Timer` 的顯示段（`UpdateUT150Comm` 與 IPSC 標籤用 replace 拿掉）；開頁也補第一拍（golden FormShow `:5312` 起動 Timer1）。
-- **存檔補重播**（R94／R95 同型）：`IC_EvBeforeApply`（`IniConfig.cpp:708`）在密碼守衛之後、套值之前：頁面值與伺服器不同、點得到的事件列照 VCL 點一次＋處理器＋一拍，再用重播後的可見／可改重算丟值、再查一次密碼守衛；之後的 400 先 `IC_EvRestore`（`:785`）。沒有要重播的＝行為不變。
-- **開頁值快照**：form.event 的 `state` 會把頁面值先套進替身 ⇒ 密碼守衛 `IC_OpenChecked`、P26 重播比的「開頁值」改看開頁時送出的 proxies（`IC_EvKeepShown`，`IniConfig.cpp:662`）。別的 C 路頁若也有「存檔時比開頁值」的邏輯，接 form.event 時要一起檢查。
-- edD46 雖然 DFM `Enabled = False`，golden 開頁 `InitialDataToEdit` 會設成清單筆的 `bEnable`（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\Public\HTEditList.cpp:1401`；移植樹 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\Public\HTEditList.cpp:1448`）⇒ 伺服器端可改、存檔不丟；頁面要照 `proxies.edD46.editable`，不是照 DFM。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30g-7-configuration-頁iniconfig不是-pagedesc-的結構怎麼接-formevent20260927-晚s158-q41-cc-e2cc-e7)
 
 #### 3.0g-8 Setup.Speed 滑桿／Setup.Temp_Set 基準點數（20260927 晚，S158 Q41 SP-1～SP-5、TS-7；commit 見 git log）
-- Speed 事件表 kSP_Events 13 列（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\ArmSpeed_File.gen.inc` 檔尾；設定 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\editlist\ArmSpeed_File.py` 'events'）：9 個軸勾選框 click → cbIndexArmClick（golden V912 `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cSpeed.cpp:1426`）、spbSelectAll（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cSpeed.cpp:1795`）、spbSetToDef（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cSpeed.cpp:1812`）、spbSpeedAdd（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cSpeed.cpp:1414`）、spbSpeedDec（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cSpeed.cpp:1421`）。`Position+=10` 類屬性複合指派用 replace 展開成「讀→算→寫回」（ELTrackBar::Pos 只有 =），`xxxClick(this)` 改成 SP_xxxClick()。
-- 滑桿不進事件表：formevent::Request 沒有 position（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_FormEvent.h`），RunPageEvent 第 4 步刪掉控制項自己的 state、第 5 步不套 TTrackBar／TPageControl ⇒ 處理器只看得到舊值。改由 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\ArmSpeed_File.cpp` 檔尾 BeforeApply 存檔前重播：先套 9 個勾選框（有變且可改 ⇒ Checked＋cbIndexArmClick），三條滑桿 position 與伺服器不同 ⇒ `Position=`（夾 Min..Max、觸發 tb*Change）⇒ 唯讀的 edAllSpeed／edAllAccSpeed／edEPControl（golden `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cSpeed.cpp:1453-1455` 存的就是它們）由 C++ 算；tbAllSpeed 被建構子停用（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cSpeed.cpp:35`）時，只要有一個打開它的元件點得到就先跑 cbIndexArmClick（ack.session.trace 記一筆）。各軸欄照舊「頁面最後狀態」；不可改的軸欄留下重播值＝golden。reload 改成 ReadFile＋DoIniDataToForm（golden FormClose `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cSpeed.cpp:1275-1276`）。
-- Temp_Set kTS_Events 加 rb1Point／rb2Point／rb3Point／rb5Point／rb6Point click → rb1PointClick（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\uTemp_Set.cpp:421`）、rgBasePoint click → rgBasePointClick（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\uTemp_Set.cpp:6384`）；兩支都只跑 UpDateEdit（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\uTemp_Set.cpp:3708-4138`，只設看得見／可改、只看最後狀態）。btnSortClick（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\uTemp_Set.cpp:5842`）不列：btnSort 只有換分頁的 pgcTempOffsetChange 會顯示，form.event 帶不了新分頁 ⇒ 伺服器端永遠點不到；排序由頁面做，伺服器 Tag 停 0、不藏通道（照收那些通道的值＝golden）。
-- VCL 隱含 OnClick：TRadioButton.SetChecked(true) 會 TurnSiblingsOff＋OnClick，vclcompat 沒有 ⇒ `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\editlist\Temperature.py` 用 replace 補在 DoIniDataToForm（golden `:3455-3459`，TS-1 事件讀到點數不同的補償檔時要重排欄位）、FormShow（golden `:679`）、rb1PointClick 開頭。**別的 C 路頁若 golden 靠「程式設單選鈕 Checked 觸發 OnClick」，同樣要補**（R100／R118 同一類：開頁設群組不觸發）。
-- 沒送事件就存檔：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\Temperature.cpp` 檔尾 BasePointReplay（BeforeApply 同一行呼叫）——重播、不拒存（與 TS-1／R97 不同：只改看得見、與先後無關）；「重播前可改、重播後不可改」的欄位先照頁面值收下，其餘交給 PageSave。只看得到開頁與最後兩組；要完全照 golden，頁面每點一次就送 form.event 並帶 state。
-- 探針 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\webprobe\q41_speed_ts7_probe.py`（寫好、沒跑）。
-- ⚠ 共用層缺口：form.event 沒有「滑桿位置」「新分頁」欄位；要補得改 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_FormEvent.cpp`／`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_EditPage.cpp`（連同 R105／R106 分頁評估一起看：`D:\HT9045\.claude\skills\ht9050-st01-evaluations\references\page-control-tabs.md`）。
+
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30g-8-setupspeed-滑桿setuptemp_set-基準點數20260927-晚s158-q41-sp-1sp-5ts-7commit-見-git-log)
 
 #### 3.0g-9 控制項自己的新值 `position`／`activePageIndex`（B1＝X-2，`7e1785dc`，20260928）
-- `form.event` value 頂層多兩個選用鍵（只給 C 路；`null`＝沒帶；沒帶＝舊行為）：`"position":<整數>`＝TTrackBar／TScrollBar／TUpDown 的 OnChange（C 路三種都是 `filerw::ELTrackBar` 替身），`event` 必須是 `"change"`；`"activePageIndex":<整數>`＝TPageControl 的 OnChange，頁序同 3.0g-6。例 `{"form":"TfSpeed","control":"tbAllSpeed","event":"change","position":80}`。
-- 程式：解析 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_FormEvent.cpp`（OptWhole）；`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_EditPage.cpp` RunPageEvent 第 3 步先驗、第 5 步先套（`SetPosition(v,false)`：夾 Min..Max、TUpDown 更新 Associate、不從替身 OnChange 再觸發），再跑表上的處理器一次（VCL：值先變才 OnChange）；分頁驗證共用 `ELPageIndexRefused`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_EditList.h`）。被夾過 ⇒ `changed` 帶實際 position、todo 記一筆。
-- 拒絕（bad-payload，什麼都不動）：position 帶在非 ELTrackBar 或事件不是 change（例 `udD46` 的 btNext／btPrev 照舊）；activePageIndex 帶在非 TPageControl、事件不是 change、或頁數不合法（**事件整個拒；存檔只丟那一筆**，R102）；A 形狀（HotPlate）帶了一律拒。
-- Setup.Speed 三條滑桿已進事件表（kSP_Events 16 列，仍經 R119 包裝）；BeforeApply 存檔重播保留給沒送事件的頁。TA-5（`sbNormalTest`）、CC-E8（`tbD25_*`／`tbD60_*`）只要補 `('<元件>','change','<處理器>')` 一列。今天沒有 C 路表有 TPageControl 的 change 列（Q51-5 切頁程式沒翻）⇒ 送了回 `no-handler`。
-- ctest `FormEvent_Position`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tests\test_formevent_position.cpp`）。
-- ⛔ 20261001 補（AI(W906-TA5)）：**TA-5 已做**——`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\editlist\TrayForm.py` 加 `('sbNormalTest','change','sbNormalTestChange')`／`('sbNormalTest_RT','change','sbNormalTest_RTChange')`（`--only TrayForm` 重產，kTA_Events 34 列）；`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\TrayForm.cpp` kTA_OnTab 把兩條捲軸放在第 2／3 頁跑（golden 處理器的 OnClick 連動看分頁：V912 cTrayAssignment.cpp:1235-1236、:1277-1278、:1687）；頁面 `D:\HT9045\web\page\ht9045_trayassign_ev.js` 把兩個靜態 div 換成可操作的捲軸，每一格送一次（`position`），`#sbNormalTest.value` 是 accessor（同 D-021 Contact 的做法）。ctest `TA5_ScrollBars`（C++，經真的 W906_FormEvent）、`TA5_ScrollPage`（node）。Tray00～15.bmp 換圖沒做（網頁沒有圖）。
+
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30g-9-控制項自己的新值-positionactivepageindexb1x-27e1785dc20260928)
 
 #### 3.0g-10 `state` 不能改「有自己事件列」的控制項（`29a13bdb`，B2 頁面工程師查到的缺口）
-- RunPageEvent 第 4 步：這一頁事件表上有自己一列的控制項，`state` 一律丟、伺服器保留原值（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_EditPage.cpp` EvValueBound／EvStateDiffers）；丟掉的值跟伺服器不同才記一筆 todo「state.<元件> ignored … send form.event for it first」。
-- 理由：golden 裡這些值只會經過自己的處理器改變；state 照套＝值變了、處理器沒跑 ⇒ 例 TrayForm `rgFixTrayMode` 跳過 Fix 盤有 IC 的互鎖（R95），存檔時 BeforeApply 看到頁面值＝伺服器值就不重查；Temp_Set `rgIndexHeatMode` 跳過 R97；TS-7 基準點跳過 BasePointReplay。
-- 例外：**TCustomEdit 只有 `"click"` 列（點一下開小鍵盤）照收**（可打字的輸入框打字不經 OnClick）⇒ Cleaning 的 77 個小鍵盤格靠頁面自己排除。
-- 選「丟」不選「拒」：state 是整頁其他控制項，拒絕會讓有兩個以上事件控制項的頁每一次事件都失敗。
-- **新規則**：有事件表的頁若要加 BeforeApply，「比伺服器替身目前值」只能用在事件列的控制項；別的要比開頁快照（同 IniConfig `IC_EvKeepShown`、Temperature `g_open`），否則又會被 state 繞過。
+
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30g-10-state-不能改有自己事件列的控制項29a13bdbb2-頁面工程師查到的缺口)
 
 #### 3.0g-11 頁面送出點的寫法（B2 `1b213d11`、B3 `6ba451d5`／`b08ae6ad`，20260928）
-- 每頁一支 St01 頁面檔，在頁面 html 的 St01 行尾同一行插一個 script tag（行數不變）：`D:\HT9045\web\page\ht9045_trayassign_ev.js`、`D:\HT9045\web\page\ht9045_trayform_ev.js`、`D:\HT9045\web\page\ht9045_hotplate_ev.js`、`D:\HT9045\web\page\ht9045_temp_set_ts1.js`、`D:\HT9045\web\page\ht9045_yield_ev.js`、`D:\HT9045\web\page\ht9045_cleaning_ev.js`、`D:\HT9045\web\page\ht9045_contact_ev.js`、`D:\HT9045\web\page\ht9045_barcode_ev.js`、`D:\HT9045\web\page\ht9045_offset_ev.js`。引擎 `D:\HT9045\web\page\ht9045_wire_engine.js` 不改；寫法照 St02 `ht9045_config_q41.js` :117-163。
-- tag 用頁名（Setup.TrayAssignment／Setup.TrayForm…；⚠ 結構名 TrayForm＝Tray Assignment 頁）；state＝引擎存檔那一包，但**事件表的控制項一律不放**；只收使用者真的操作（`isTrusted`）；一次一個、等 ack；同一控制項同一值未回覆＝連點丟掉；`busy:` 450 ms 重送最多 3 次；`not-operator` 續權杖重送一次；`reload page` → `HT9045Page.load()`；其他失敗把控制項改回點之前的值並說原因；套 `changed` 不補發 change；還有事件未回覆時存檔直接拒絕。
-- Temp_Set 事件後把面板值寫回 `LAST.proxies`（inline 存檔包裝只送跟 proxies 不同的欄）。Tray Assignment 開頁照伺服器分頁點頁籤、事件與存檔都帶 `pgRunMode`（R121）。
-- **html 同一行插入不要選「別的分支改過那一行的鄰行」**：git 合併時相鄰行也算衝突；先用 `git merge-file` 對 St02 分支試合。
-- B3 留下的寫法：小鍵盤格的即時事件先把替身還原成事件前的伺服器值、再照頁面值跑 golden 處理器，VCL 的 OnChange 才照「值變了才觸發」；事件之後只把處理器前後有變的＋送事件的那一格併進存檔重播基準；會改機台記憶體的選項事件（Contact）放在頁面 session、存檔才換上（R123）；todo 開頭的標記：`open:<視窗 id>`（頁面叫 background.html 開窗）、`main:<元件>`（主畫面那一半）。
-- **選取式編輯器（Offset）**：部位鈕本身也登記成 form.event（參數是 int，產生器 events 收不了 ⇒ 入口檔手寫表，同 IniConfig 的 IcEvRegistrar）；頁面每一次操作先送「目前部位鈕 click」再送真正的事件；處理器外包一層「最近一次選的部位＝目前部位」才跑，否則 `select-first`。不要讓伺服器猜頁面在看哪一組。
-- **開機補替身**：事件控制項若沒出現在任何 golden 方法本體（例：按鈕），產生器不建替身也不接父層 ⇒ 入口檔開機補建並 ELSetParents（`R119BootProxies`、`BC_EvBootProxies`、`TF_EvBootProxies`、`OS_EvBootProxies`、`FileRW_YieldMonitoring_EvBoot`），否則 `internal: event proxy not created` 或點不到。
-- ⚠ **不要從別的 Python 腳本 `import gen_editlist`**：它在模組層級就整批重產全部結構（會把 St02 的 `TestIF_File_TesterIF.gen.inc` 改成 LF）。要讀 DFM 自己寫讀取器。
-- ⚠ 無名 namespace 裡的函式不要用區塊範圍宣告去叫檔尾的函式：GCC 警告 used but never defined，語法檢查看不到；要在 namespace 範圍先宣告。
+
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30g-11-頁面送出點的寫法b2-1b213d11b3-6ba451d5b08ae6ad20260928)
 
 #### 3.0g-12 Configuration 頁 B4（`875d3499`，20260928）
-- kIC_Events 18 → 32 列（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\editlist\IniConfig.py` 'events'）：btD47 click → btD47Click（golden `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cConfiguration.cpp:6062`）、btnRecordJamRateByTimeClear click（:6691）、btResume click（:6257，只有 CC_MTI 看得到）、cbA09／chkA09_1／cbA14 click → cbA09Click（:6453；golden DFM 三格綁同一支）、8 條 EP 滑桿 change → tb*Change（:6271-:6684，帶 position，3.0g-9）。
-- 存檔補重播（IC_EvBeforeApply）表上有兩種 ELTrackBar：只有 udD46 一格一格按；滑桿走 IC_EvSlide（照 VCL 設 Position 再跑處理器；EP 保護把滑桿拉回時再拖一次，最多兩次）。**以後加 ELTrackBar 列都要先看這裡。**
-- A09 互鎖存檔時一定重查（IC_EvA09Recheck）：頁面值跟 IniConfig 記憶體值不同就照 VCL 點一次 cbA09、跑處理器；被改回 ⇒ 頁面值不收、ack.ignored 列 cbA09（比的是記憶體值，不是替身現值，照 3.0g-10 的規則）。
-- golden 讀 `InArmSuck.HasIC()` 的行用 replace 換成 `FileRW_ArmSuckHasIC(0)`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_KitSuck.cpp`）；要 `MOT[]` 時 Motor/mymotor.h 放 decls，前後用 `#pragma GCC diagnostic push／ignored "-Wunused-parameter"／pop` 包住，語法檢查基準才維持 5 筆。replace 的取代碼照原樣輸出：會進 DFM 父子表，但不算進檔頭「用到的替身」數目。
-- 頁面 `D:\HT9045\web\page\ht9045_config_st01_ev.js`（`D:\HT9045\web\page\Config.Configuration.html:126` 同一行載入）：tag 用 eventTag、不帶 state（整頁約 1400 個替身會逼近 64 KB 上限；這幾支處理器也不讀別的格子）。控制項歸屬：St02 的 `ht9045_config_q41.js` 管 udD46、E30 群組、E39、D36 群組、D21／D47／F05；St01 這支管 B4 的 14 個加 CC-L2（廠商密碼格當場改回，R135）。開頁時把 8 個 EP 標籤照 proxies.caption 補上（引擎 gbApply 不套 caption——所有頁都一樣，已報 Jimmy）。⛔ 20260930 更新（ST01-E，Jimmy INBOX 108，認領 handoff `41433415`）：引擎 `D:\HT9045\web\page\ht9045_wire_engine.js` gbApply 現在自己套 TLabel 的 caption（只套像標籤的元件：不是 INPUT／SELECT／TEXTAREA、沒有子元件；跟畫面現在的字一樣就不動；C++ 只對 TLabel 替身、而且 Caption 不是空的才送 caption，`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_EditList.cpp:58`），所以所有 C 路頁的標籤都跟著 golden 執行期設的 Caption；Configuration 這 8 個標籤的補丁已拿掉（`ht9045_config_st01_ev.js` applyOpenCaptions）。form.event 回應（ack.changed）的 caption 仍由各頁補件自己套（引擎不處理 ack.changed）。
-- W44-1：St02 的 replace 一筆（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\editlist\IniConfig.py:68`）把 dtpN10_3_1_SpecifiedTime 以 ECDouble 綁到 [FTPUpLoad] dN10_3_1_SpecifiedTime；頁面「只打時分」要等 St02 改引擎。
-- 補：TF-4 Bin Box Reset 與 TS-2 六個 ATC 勾選框的頁面送出點在 `D:\HT9045\web\page\ht9045_trayform_ev.js`、`D:\HT9045\web\page\ht9045_temp_set_ts1.js`（`fc7e7843`）。探針注意：腳本的 `button.click()`／合成 change 是 isTrusted=false，頁面刻意不送，要用真的輸入（CDP）。
+
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30g-12-configuration-頁-b4875d349920260928)
 
 ### 3.0h 守衛：開頁／存檔重查 golden 的開窗閘 `kOpenGates`（Q41 C-1／C-2，S158，`cb306f89`；R89～R93）
 
-**規則**：golden 開一個設定表單要先過選單鈕、再過頁面鈕（等級、運轉中、客戶）。網頁的開窗權限表（`D:\HT9045\.github\specs\page-access-policy.md`、`D:\HT9045\web\background.html` `MODAL_POLICY`）歸 Jimmy（Q42）；
-C++ 在 `editlist.get`／`editlist.save` 跑 golden 之前**再查一次**（不信任前端；做法同 `WebBuilder.cpp:255-267` RouteGuard 每次操作都重查）。拒絕時 golden 一行都不跑（同 golden 按鈕在 `ShowModal` 之前 return）。
-依據：Q41 盤點 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\Q41_INVENTORY_20260927.md` 第一節第 2 項、第二節 C-1／C-2。
-
-- **位置**：表與判斷在 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_EditPage.cpp` 檔尾（說明 `:518-558`、`kOpenGates` `:758-788` 共 25 列、`OpenGateRefused` `:791`；宣告 `_EditPage.h:98`）。
-  呼叫在 `tools\wb_serve.cpp:5207`（`editlist.get`，St01 `05f2695b` 那一行）與 `:5303`（`editlist.save`，接在 R0927-7 運轉中檢查之後），都是同一行插入。以 `editlist.*` 的 tag 查，含 `IniConfig`／`Teach`／`BinSelect`／`Offset_File`
-  四個不走 `PageDesc` 的入口；**A 形狀 HotPlate（`/api/form`、`form.save`）與 `form.event` 不經過這張表**。
-- **拒絕字串**：`<碼>: <說明>——<golden 出處>`，後綴「（開頁重查，Q41 C-1／C-2）」或「（存檔前重查，Q41 C-1／C-2）」；主控台印 `editlist.get <tag> -> refused (<碼>)`。
-
-| 碼 | 什麼時候 | 例 |
-|---|---|---|
-| `not-authorized` | `fSecurity->Insufficient(n, false)` 不夠：選單（工具 0、設定 1）、頁（Yield 39、BarCode 88、DIO 31、Start Mode 24、C.Select 25、Contact Force 152、Speed 3、Teach 87、Motion View 86）；Handler System 要 HonPrec | 「等級不足：工具選單需要等級 0（權限項目 [00] Main - Tools；levelset.dat 設定 … 以上，目前登入 …）——golden V912 main.cpp:29036 sbSettingClick fSecurity->Insufficient(0)」 |
-| `running` | `SystemStart`（**只看 SystemStart**；SoftStart 開頁不擋——golden 兩個選單鈕只看它） | 工具選單 `sbSettingClick`、設定選單 `sbConfigClick` 第一行 `if(SystemStart) return;`（V912 `main.cpp:29033-29034`、`:29012-29013`）；Speed 只在 `SystemStart && iHome`（`:28680-28681`） |
-| `disabled` | golden 那顆鈕在主畫面是灰的：`D:\HT9045\config\Security_new.def` [Main] 的開關是 0（`authMainForm[n]`；⛔ 20260930 補，AI(W906-AUTHMAINFORM)） | 工具選單 [0] `Tool`（V912 `ChangeLevelAttr` `main.cpp:12951`）、設定選單 [1] `Maintance`（`:12952`）、Teach [11] `Teaching`（`:13041-13043`，只在 `bAnyLevelCanGetStateRecode==false`）；順序 SystemStart → 開關 → 等級 |
-| `hidden` | golden 那顆鈕在這台機器看不見 | Contact Force（要 `WEIGHT_CALIBRATION`、`CC_HONPREC_QC` 或 `bUseDynamicKitDiameter`）；ASE 高雄的 Handler System |
-| `not-ready` | 機台狀態不允許 | Teach：`bResetMNet`（24V 還沒開好，`main.cpp:28835-28838`） |
-| `no-gate` | tag 沒登記在 `kOpenGates` | 一律拒絕（R93） |
-
-- **運轉中（R89）**：工具／設定選單裡的頁運轉中都開不了（連 `Setup.BinSel` 也是，照 golden）；經 C 路運轉中還開得到的只剩 `Setup.OffSet`（`sbOffsetClick` 不查）、`Main.AOAInfo`（AOA 頁籤不查）、
-  沒在回原點時的 `Setup.Speed`——存檔仍被 §3.0d 擋。這跟 Jimmy 的 `page-access-policy.md` §2「SystemStart 不會鎖住整個 HMI（例：Bin 設定）」不一致，已請 Jimmy 看；要改成 B（開頁放行、只擋存檔）只要改閘表一欄。
-- **偏離 golden**（寫在 `_EditPage.cpp` 本段檔頭）：等級不足**不跳 WAR1676**，理由回給頁面（R90；單獨開的網頁沒有對話框宿主時伺服器會停在警報等人回答）；一頁有兩條 golden 開法時任一條過就放行（R91，例 BarCode 也可從 Teach 頁
-  `sbBarCode` 開，V912 `uteach.cpp:4603-4607`，不查 88）；Handler System 在 C-3 密碼接好之前只靠 HonPrec 等級＋運轉中＋客戶（R92）。沒做：`sbAutoCleanClick` 的 `InitialOK`、`sbShuttleMaintainClick` 的「機台內還有料」、
-  `sbTeaching` 鈕本身的 Enabled、Handler System 的隱藏手勢＋確認框＋密碼（檔頭第 4 條）。⚠ 第 4 條（`_EditPage.cpp:554`）寫的「wb_serve 沒有把 InitialOK 設成 true」是 R74 更正前的舊前提（§3.0j），註解還沒改。
-- ⛔ 20260930 補（AI(W906-AUTHMAINFORM)，ST01-E 派工；B8 風險表 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\B8_RISK_20260930.md` P-3 的缺口）：**主畫面鈕的 Enabled 另要 `Security_new.def` [Main] 的開關**。
-- ⛔ 20260930 補（AI(W906-D016-SPEED)，ST01-E；todo D-016）：`GSpeed` 以前只在 `SystemStart && iHome` 時拒絕，比 golden 鬆——golden ChangeLevelAttr（V912 main.cpp:12937-12944，每一拍）運轉中整段把 sbSpeed 灰掉，`sbSpeedClick` 的 `SystemStart && iHome`（:28680-28681）只是第二道；現在 `SystemStart` 就回 `running`。原則：開頁閘照「主畫面那顆鈕在 golden 亮不亮」（ChangeLevelAttr），不只照 click 處理器裡的 return。
-  golden V912 `TfMain::ChangeLevelAttr`（`main.cpp:12926-13191`）由 `Timer2Timer` 每一拍呼叫（`:21675`，不在任何 if 裡）⇒ 它算的就是按鈕的穩態；開關是 0 ⇒ 鈕是灰的、`sbXxxClick` 不會跑。
-  開關：golden `cAuthority.cpp:19` `authMainForm[12]`、`:44-58` 鍵名、`:363-367` `GetMainAuth`（缺鍵預設 1）；移植樹 `cAuthority.cpp:457-461`，開機 `tools\wb_serve.cpp:4051` 呼叫（Steven01 的 [Main] 12 鍵都是 1 ⇒ 今天沒差）。
-  移植樹 `FileRW\_EditPage.cpp` 的 `GAuth`：`GToolsMenu` 查 [0] `Tool`、`GConfigMenu` 查 [1] `Maintance`、`GTeach` 查 [11] `Teaching`（`bAnyLevelCanGetStateRecode==true` 那一支 `:13045-13051` 只看 HonPrec、不看開關，**還沒做**）；
-  設定選單閘的另外三份 `WebBuilder.cpp`／`WebSmartDiag.cpp`／`WebTowerLight.cpp` 的 `RouteGuard` 同批補 [1]（放在 `Insufficient(1, alarm)` 之前：鈕灰的就不會跳 WAR1676）。
-  **不看開關的**：`sbSpeed`（`:12954` 停機時恆 true）、`sbOffset`（`ChangeLevelAttr` 不碰）、AOA 頁籤、Handler System；Speed／Offset 表單自己的 [3]／[2] 在 FormShow 停用分頁／容器（golden `cSpeed.cpp:182-188`、`cOffSet.cpp:584-590`），產生檔已照翻。
-  新增開窗閘時：golden 那顆鈕若在 `ChangeLevelAttr` 裡有 `&& authMainForm[n]`，判斷函式要加 `GAuth(n, "<[Main] 鍵名>", …)`（放在 `GNotRunning` 之後、`GLv` 之前）。ctest：`OpenEnterLog` [11]／[12]、`B8_Ag1_Initial` [7]、`B8_Ag1_AgvIni` [3]。
-  查到、沒改（交 ST01-E）：`sbSpeed` 運轉中是灰的（`:12944`，同一個 Timer2 每拍）但 `GSpeed` 只擋 `SystemStart && iHome`；IO 頁（`sbIO` `:12955` [4] `IO`）與 Message 頁（`sbMessage` `:13058` [5] `Message`）在 C++ 端沒有開窗閘（`JsonBridge\IoBtnPanelClick.cpp:84-92` 寫明不查等級），開關跟等級一起沒查。
-- **新增一個 C 路頁（或把沒有頁面的結構接上頁面）時，`kOpenGates` 要照 golden 那顆 `sbXxxClick` 補一列**（R93）——沒補 ⇒ 那一頁開不了、回 `no-gate:`。一列＝`{tag, "golden 從哪裡開（行號）", 主路判斷, 另一條路（沒有＝nullptr）, 另一條路名稱}`；
-  判斷函式用檔內的 `GToolsMenu`／`GConfigMenu`／`GMotionView` 加上 `GLv(item, …)`／`GNotRunning(…)` 組，golden 出處字串照現有列的寫法。
-- 探針：`tools\webprobe\q41_open_gate_probe.py`（含替 `W906_LEVELSET_PATH` 造 levelset 的小工具；還沒跑）。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30h-守衛開頁存檔重查-golden-的開窗閘-kopengatesq41-c-1c-2s158cb306f89r89r93)
 
 ### 3.0i 關窗尾段：存檔後補跑 golden 主畫面 `sbXxxClick` 的尾段（Q41 第 3 項，S107-1 延伸；`c8028b21`＋`9268162b`；R84～R87、R107）
 
-**規則**：golden 很多設定視窗是 `ShowModal`，主畫面 `TfMain::sbXxxClick` 在視窗關掉之後還有幾行（單位換算 `DoStructUnitConvert`、重載工作參數 `SetWorkParameter`、`LoadAutoCleanData`…），沒跑的話機台不一定馬上用新值。
-網頁沒有「關窗」事件，C 路照 RULINGS_20260926 S107-1（Steven 20260926 17:5x「存檔後就跑，不改成等 Exit」，`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20260926.md:284`）**存檔成功後就跑**（R85＝A）。
-方案：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\Q41_CLOSETAIL_PLAN_20260927.md`（§3 逐頁表、§4 掛法）。
-
-- **本體**：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\MainClick.cpp` 檔尾（跟 SetUp 頁的 `W906_Main_sbSetupClickTail` 同一處），宣告在新標頭 `FileRW\MainClickTail.h`——只放宣告、不 include 任何標頭
-  （呼叫端都在匿名 namespace 裡，區塊內前置宣告會變成另一支沒有本體的函式；gen.inc 又有一堆 `#define`）。回傳 `nullptr`＝跑了；非 nullptr＝沒跑的原因，呼叫端交給 `filerw::ELTodo`（A 形狀交給 `J.Todo`）進 ack 的 todo。
-- **每支開頭再查一次機台停著**（R86）：`CloseTailRunning(fn, golden, what)`（`MainClick.cpp:585`）——`SystemStart||SoftStart` ⇒ 不跑、trace 記 `<函式>:running`、主控台印 `close-tail <函式> -> not run: …`，
-  原因字串說「停機後這一頁再存一次（Contact 頁：再開一次）就會跑」；跑了印 `close-tail <函式> -> ran: …`。
-- **掛法（C 形狀）**：`PageDesc::saveFlow` 從 golden 存檔鈕改成檔尾的 `SaveFlow`（同一行改寫），`SaveFlow` 先跑 golden 存檔鈕再看 trace：`closed`（A02 權限不足，golden `Close()`）⇒ 先跑 golden `FormClose`、再跑尾段；
-  真的寫了檔（`savedMark`）⇒ 跑尾段；都不是（答 NO、golden 提早 return）⇒ 不跑（例 `FileRW\Ld_UldDelayTime.cpp:70-79`）。跟 golden 的差別：golden「開頁、沒存就關」也跑尾段，這裡不跑（值沒變）。描述檔不改、gen.inc 不重產。
-
-| 頁 | 函式（`FileRW\MainClick.cpp`） | golden V912 `main.cpp` | 呼叫端 | commit |
-|---|---|---|---|---|
-| Setup.Ld_ULd | `W906_Main_sbLdUldClickTail` `:612` | `:28454` | `FileRW\Ld_UldDelayTime.cpp` `SaveFlow` | `c8028b21` |
-| Setup.Speed | `W906_Main_sbSpeedClickTail` `:636` | `:28696-28699` | `FileRW\ArmSpeed_File.cpp` `SaveFlow` | `c8028b21` |
-| Setup.BinSel | `W906_Main_sbBinClickTail` `:663` | `:28325-28327` | `FileRW\BinSelect.cpp` `BinCloseTail`（`closed` 先跑 golden FormClose 的 bShow／ReadFile，再 `InitShowBinDigital`＋尾段） | `c8028b21` |
-| Setup.Contact | `W906_Main_sbContactClickOpen` `:693` | `:28315-28316`（`:28314` `fContact->Show()` 之後＝**開窗當下**） | `FileRW\DeviceForm_File.cpp:213`（開頁 `editlist.get`） | `c8028b21`（R84：golden 是非 modal `Show()`，Jimmychiu 20240731 從 ShowModal 改的，所以不是關窗尾段；網頁存完會重讀，存完也會再跑一次） |
-| Setup.TrayForm | `W906_Main_sbTrayFormClickTail` `:760` | `:28411-28412`（`:28413` `ShowTrayDeviceDir` 純畫面，沒翻） | `FileRW\UserDefForm_File.cpp` `SaveFlow` | `9268162b` |
-| Setup.HotPlate（A 形狀） | `W906_Main_sbPlateFormClickTail` `:787` | `:28422-28425` | 產生檔 `FileRW\HotPlateForm_File.cpp` 的 `SaveFlow`（設定 `tools\formbridge\TfHotPlate.py` 的 `saveFlowAfter`，見下） | `9268162b` |
-| Setup.TrayAssignment | `W906_Main_sbTrayAssignClickTail` `:815` | `:28434-28437` | `FileRW\TrayForm.cpp:495` `SaveFlow` | `9268162b` |
-| Setup.YieldMonitoring | `W906_Main_sbYieldClickTail` `:840` | `:28510-28512` | `FileRW\TestIF_File_YieldMonitoring.cpp` `SaveFlow` | `9268162b` |
-| Config.Configuration | `W906_Main_sbConfigurationClickHead`／`W906_Main_sbConfigurationClickTail` `:895` | `:28615-28622`（開窗前記 E43／A10／I37／A51／I21／A78 六個舊值）／`:28626-28657`（關窗後比對；`CC_AMKOR_Korea` `:28626-28632` 照 S25 包 GATE） | `FileRW\IniConfig.cpp:402`（`IC_FormShow` 之前）／`:351`（`IC_FormClose` 之後，**不看有沒有存成**——golden 每次關窗都跑） | `9268162b` |
-
-Temp_Set、SetUp 兩頁更早就照 S107-1 做了（`FileRW\Temperature.cpp` `SaveFlow`、`FileRW\TestIF_File_SetUp.cpp:191` 呼叫 `W906_Main_sbSetupClickTail`）。
-
-- **A 形狀的掛法 `saveFlowAfter`**（`9268162b`）：`tools\gen_formbridge.py:330` 新增可選鍵——C++ 敘述字串清單，每條一行、照原樣接在產生的 `SaveFlow(J)` 裡 `saveFlow(J);` 之後；沒給就輸出一字不變
-  （`tools\formbridge\README.md:37`；目前只有 `TfHotPlate` 用，`TfHotPlate.py:88`）。呼叫端在產生檔的 `namespace ht9045::formbridge` 裡，所以宣告一定從全域標頭 `FileRW/MainClickTail.h` 來（`TfHotPlate.py:28` 的 include 清單）、
-  呼叫寫 `::W906_Main_sbPlateFormClickTail()`，沒跑的原因交給 `J.Todo`（A 形狀的 `ack.todo`）。重產 `--only TfHotPlate` 冪等，diff＝1 個 include＋`SaveFlow` 兩行（`closed` 先跑 golden FormClose `cHotPlate.cpp:404` 的 `ReadFile`）。
-- **會多寫的檔**（已列給 Jimmy 的 sysguard，decisions R85）：配方 `HandlerCondition.Data` 的 `iIndexArmAutoCleanCnt`（`LoadAutoCleanData`）、`D:\HT9045\system\RunMode.txt`（`SetStartModeData`，記 MES2107 與 ChangeLog 事件）、
-  `D:\HT9045\system\lastdata.dat`（`UpdateMainOperateMode`；Configuration 每存一次都寫、答「否」也寫，golden 同）、配方 `Tester.Data` 缺鍵補寫；Contact 開頁與 BinSel 存檔的 `SetWorkParameter` 缺鍵時補寫
-  `D:\HT9045\system\Gerneral.ini` `[Shuttle]` `CHECK_RANGE`／`iInShtZRange`；Configuration／Yield 存檔也會照 golden 切一次加熱器繼電器、送 ATC7 指令。
-- **R87（`c8028b21`）**：A 形狀 `form.save`（HotPlate）運轉中也擋——`JsonBridge\FormJson.cpp:119` 呼叫 `FormSaveRunningRefused`（本體 `:231`），在空跑之前回 409、錯誤字串 `running: …（form.save，R87）`；`tools\wb_serve.cpp` 沒動。
-- ⛔ 20260929：下面這條已不成立——R107 在 `cd496b52`（B6）已做（見 §3.0l 的 R107 那一行）。- **已知缺口（R107）**：A 形狀沒有 C 路那種一次存檔的訊息收集（filerw session），所以 HotPlate 尾段裡 golden 跳的訊息（例 `LoadAutoCleanData` 的「The site Y-pitch can not use arm 2 for auto clean!!」，V912 `main.cpp:28424`）
-  **網頁上看不到**，設定本身照樣重讀。St01 建議 B（尾段自己開一次訊息收集、放進 HotPlate 存檔回覆，只改 `MainClick.cpp`），現況 A，待 Steven。
-- 探針：`tools\webprobe\q41_closetail_probe.py`（兩批都擴充了，還沒跑）。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30i-關窗尾段存檔後補跑-golden-主畫面-sbxxxclick-的尾段q41-第-3-項s107-1-延伸c8028b219268162br84r87r107)
 
 ### 3.0j 頁面補件與 golden 密碼點（Q41 S158：YM-1、CC-L2～L4、SU-L1 延伸；R73～R75）
 
-- **YM-1 Yield 頁存檔鈕（`a8eca460`）**：golden `TfYieldMonitoring::FormShow` `:2640` `ChangeData` 把全頁值元件接到 `edContactCountFTChange`（`:3243` `btnApply->Enabled=true`），`:2642` 再停用
-  ⇒「開頁先停用、改了任何一格才打開」。C 路把 `ChangeData` 閘掉（`FileRW\TestIF_File_YieldMonitoring.gen.inc:1283-1286`「頁面自己做」）卻照翻 `:1288` 的停用 ⇒ 引擎把按鈕 disabled、沒人再打開 ⇒ 網頁永遠存不了。
-  補件是 St01 手寫的頁面腳本 `D:\HT9045\web\page\ht9045_yieldmonitoring_c.js`（不是 `gen_wire.py` 產物，檔名刻意不叫 `ht9045_wire_<slug>.js` 免得被產生器覆蓋；載入在 `Setup.YieldMonitoring.html` 兩份接線檔之後）：
-  document 捕獲階段聽 `change`／`input`，來源是 golden `ChangeData` 會接的元件（看自己或最近祖先 `title`／`data-htitle` 的型別）就打開引擎照 C++ 停用的 `btnApply`（只開 `data-gb-dis="1"` 那一種；上層容器 C++ 說不可改就不開）；
-  引擎套值不發事件所以不會誤開；存完引擎重讀、golden `:2642` 又停用。**「改了才能存」這類畫面行為放頁面補件、不改 C++ 也不改 Jimmy 的引擎**，這支是範本。沒做：SIGURD 兩欄同步（客戶專屬，S25）、`MyYieldPanel` 格子（C 路沒移植）。
-  C++ 存檔本身不看 `btnApply` 的 Enabled。
-- **要密碼的勾選框一律拒存（fail-closed，R73，`a8eca460`）**：golden Configuration 點 `cbC12` 群組（`cConfiguration.cpp:6775`，含 C13／C14／C17／C24 的怪處）、`cbA27`（`:6824`）、`cbN07_EnableEmployeeCheak`（`:6860`）、
-  `cbM01`×16（`:6531`→`DoPassword` `:6482`，只在 `LevelSet.AccessLevel[92]!=0 && REAL_TIME_CCD`）時當場問密碼。網頁沒有「點下去當場問」的入口（C-3／Q45），所以 `FileRW\IniConfig.cpp:188` `IC_PasswordGuard`
-  在套值前比對：這些格子跟開頁值不同 ⇒ **整次存檔拒絕（400）並說明原因**，一個鍵都不寫；也不寫任何密碼。呼叫在 `:306-314`。CC-L5（A32_1，`:7274`）原本就 fail-closed。
-  ⛔ 20260930 更正（B5，Q45 甲，`699dc06d`）：`cbM01`×16 不再一律拒——這次存檔帶了 `reauth`（見 §3.0b 第 0c 步）就放行，套值之後、golden FormClose 之前照 golden DoPassword 問一次（`FileRW\IniConfig.cpp` 檔尾 `IC_ReauthM01`），
-  錯了把改過的 M01 格子改回開頁值，有密碼本時問完一律登出成 Operator；沒帶照舊整次拒存。C12 群組、A27、N07-5 仍拒存，說明改成「這一項要廠商密碼，網頁版不提供，請到 BCB 版機台改」。
-- **R74 不照翻 golden 的 `InitialOK` 守衛**：golden `:6777`／`:6827`／`:6863` 在 `InitialOK==false`（程式還沒開完）時不問密碼；移植樹一律檢查（比 golden 嚴一點），待 Steven。
-  ⛔ 20260927 更正（ST01-E 16:4x，decisions R74）：原本的理由「移植樹 wb_serve 從來沒把 InitialOK 設成 true」不對——wb_serve 開機 `PumpInit` 成功時會設 true（`WebBridgeTags.cpp:563`；`PumpInit` 本體 `:461`，
-  wb_serve 呼叫在 `tools\wb_serve.cpp:4212`）。A／B 只差在 PumpInit 失敗（例 SIM canary 拒絕）或開機完成前。⚠ 舊前提還留在三處註解（HEAD `db1b7638`）：`FileRW\IniConfig.cpp:158-159`（R74 已點名要更正）、
-  `FileRW\_EditPage.cpp:554`（開窗閘不做 `sbAutoCleanClick` InitialOK 的理由，§3.0h）、`WebBridgeTags.cpp:249`（「PumpInit() is called only from tools/wb_publish.cpp」）。
-- **R75 SetUp 頁關 OCR／RTC（`97c70d62`）**：golden `cSetUp.cpp:4325` `DoPassword` 在沒裝 `REAL_TIME_CCD`（執行期旗標，`Gerneral.ini [System]`，移植樹 `database.cpp:750`）時直接回 true。產生器原本把 `DoPassword()`
-  一律換成「密碼錯」⇒ 沒裝 RTC 的機台網頁也關不掉 OCR。改成描述檔 `tools\editlist\TestIF_File_SetUp.py` 的 `SU_DoPassword()`（`:74-77`、`:272-277`；golden 形狀 `bFlag=true; if(REAL_TIME_CCD) 拒絕`——有裝 RTC 時網頁仍沒有登入框，
-  視同密碼錯，C-3／Q45），重產 `--only TestIF_File_SetUp`（`FileRW\TestIF_File_SetUp.gen.inc:69` 成員、`:3038`／`:3065` 呼叫點；其他 34 支 gen.inc 位元組不變）。這是 §4.1 流程的第三個例子。
-  ⛔ 20260930 更正（B5，Q45 甲，`699dc06d`）：有裝 RTC 時不再一律視同密碼錯——`SU_DoPassword` 改呼叫 `W906_ReauthSetupDoPassword`（產生檔第 70 行）：這次存檔帶了 `reauth` 就照 golden
-  `TfSetup::DoPassword` 比對（第 37 項、不登出），沒帶才照舊 `ELPasswordRefused`。頁面 `D:\HT9045\web\page\ht9045_setup_c_wire.js` 第 (7) 段按 Save 時先跳登入小鍵盤。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30j-頁面補件與-golden-密碼點q41-s158ym-1cc-l2l4su-l1-延伸r73r75)
 
 ### 3.1 `proxies` 的 `editable` 欄位與「先開後關」規則（20260924 第六輪審查 H1）
 
-`editlist.get`／`editlist.save` 回應裡每一筆 `proxies` 除了值本身，還帶一個
-`editable` 欄位——與存檔路徑丟值用的是**同一套判斷**（`ELEditable`：元件自己＋
-每一層祖先的 `Enabled`／`Visible`、`TabVisible`，加上非 `ReadOnly`，見 §37 #1、
-§37 H-A）。頁面端（`ht9045_wire_engine.js` 的 `gbApply()`）把清單筆的 `enabled`
-與替身的 `editable` 取 **AND** 才記到 `GB_ENA`；`gbLoad()` 套完值之後**先開後關**——
-先把所有容器打開，最後才依 `GB_ENA` 逐一關閉，確保**停用的容器一定蓋過子元件**，
-不會出現內層容器重新 enable、卻沒考慮外層容器仍是停用狀態的舊 bug。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#31-proxies-的-editable-欄位與先開後關規則20260924-第六輪審查-h1)
 
 ### 3.2 `csDropDown` 清單外文字（20260924 第六輪審查 M2）
 
-VCL 的 `csDropDown` 型 combobox 允許目前的值不在清單裡（自由輸入文字）。頁面遇到
-這種情況會補一個 `<option data-src="cpp-text">` 放這個「清單外」的文字。**每次
-`gbLoad()` 重讀之前，要先刪掉上一次留下的那個 `<option>`**，否則會無限累加選項；
-`gbValue()` 選到這個選項時，回傳 `itemIndex -1` ＋ `text`（不是這個 option 在
-DOM 裡的實際 index），符合 VCL `csDropDown` 的語意——`itemIndex` 一律代表「在
-設計期清單裡的位置」，清單外文字沒有這個位置，只能是 `-1`。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#32-csdropdown-清單外文字20260924-第六輪審查-m2)
 
 ### 3.3 同一頁有兩型時誰先
 
-`ht9045_wire_engine.js`：`load()`／`save()` 都先看 `gbStruct()`（`:1299`／`:1776`）——在 `GOLDEN_BRIDGE`
-的頁面整頁走 C 形狀，B 路 `sysFields` 不讀也不寫；不在的才看 A 形狀（`FORM.kind==='golden-bridge' &&
-FORM.saveable` → `bridgeSave()`，`:1777`），再不是才走 B 路。`/api/form` 第一型（`DoIniDataToForm` 哨兵法，
-`tools/gen_formjson.py` 的 `FORMS`：HotPlate／Speed／TrayAssignment／DIOInterFaceCFG）目前**沒有頁面用得到**：
-後三頁在 `GOLDEN_BRIDGE`，HotPlate 被 A 形狀取代（`JsonBridge/FormJson.cpp:166` 第二型優先；⛔ 20260927 晚：第一型退役後這段程式已不存在，見本節末）。
-⛔ 20260927 更正（現況）：第一型（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\JsonBridge\FormJson.cpp`＋`JsonBridge\gen\form_*.gen.cpp`）要退役，
-Steven Q4 重選＝**B**（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20260926.md` S160，更正 S126 的 A）：先把 Setup.Speed／Setup.TrayAssignment／
-Config.DIOInterFaceCFG 三頁搬到第二型（A 形狀）再退役，`/api/form` 路由、第二型、`FormLock`／`FormUnlock` 保留。起因是 St02 20260927 09:24 盤點說這三頁的
-`formOverlay`（`D:\HT9045\web\page\ht9045_wire_engine.js:1554`）還靠第一型；但這三頁都在 `GOLDEN_BRIDGE`（`:1042`／`:1044`／`:1048`），`load()` 會先走
-`gbLoad()`（`:1299`）。
-⛔ 20260927 15:1x 查證結果（ST01-E 派工，全文 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\Q4_TYPE1_RETIRE_CHECK_20260927.md`）：三頁**從來沒有**靠第一型顯示值（開頁走 C 路 `editlist.get`；formOverlay 只在 B 路頁 `:1453` 與 `ht9045_contact_wire.js`／`ht9045_hotplate_wire.js` 呼叫）；逐欄比對 C 路涵蓋第一型全部欄位（Speed 116／116、TrayAssignment 50／50、DIO 11／11），另多送 49 欄與 BCB6 開畫面的強制值。第一型已由 St02 退役（`834fcc78`：刪 4 個 `form_*.gen.cpp` 與 `tools\gen_formjson.py`，`FormJson.cpp` 430→211 行），Jimmy 14:07 合進 main（`ed7df426`）；沒有 bridge 的頁 `/api/form` 回 404，引擎 `:1650` 靜默略過。是否還要照 S160 字面搬第二型，已寫成 Q4-2 請 Steven 確認（建議不搬）。
-⛔ 20260927 晚補（HEAD `db1b7638` 核對）：第一型在 main 退役的路線是 St02 `834fcc78` → Jimmy 合進 main `ed7df426`（`v906/jimmy-main0925`）；St01 分支在 `1de5005b` 合 main `56039beb` 時一起進來，
-所以 St01 分支也已退役——`JsonBridge\gen\` 沒有 `form_*.gen.cpp`、`tools\gen_formjson.py` 不在、`JsonBridge\FormJson.cpp` 240 行（`834fcc78` 的 211 行＋R87 運轉中拒絕，§3.0i），`:200-207` 沒有第二型 bridge 的頁一律 404。
-上面「`JsonBridge/FormJson.cpp:166` 第二型優先」那一句所說的程式已不存在。Q4-2（「三頁已改用 C 路顯示、第一型已退役——請確認不必再搬到第二型」，todo F-006）在
-`D:\HT9045\.claude\skills\ht9050-construction\references\decisions-pending.md` 仍待 Steven；全文查證 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\Q4_TYPE1_RETIRE_CHECK_20260927.md`。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#33-同一頁有兩型時誰先)
 
 ### 3.4 A 形狀：`GET /api/form/<Page>` ＋ `WS form.save`（只剩 `Setup.HotPlate.html`）
 
-本體在 `JsonBridge/FormJson.cpp`（`BridgePageJson` 負責 GET、`FormSave` 負責 WS `form.save`）與
-`JsonBridge/FormBridge.h`（`FormState`／`BridgeDesc`）。頁面 `bridgeSave()`（`ht9045_wire_engine.js:1740-1773`）
-只送「這次載入有可信來源」的 `saveReads` 欄位，伺服器先空跑 golden 存檔、真的讀到沒送的值就整筆拒寫；
-ack `{page, saved, closed, messages:[{en,zh}], todo:[…]}`。`sourceGap` 非空的頁面 `form.save` 回 409——
-唯一有 `sourceGap` 的 `TFTestIF` 已於 `f89be4ce` 退役（見 skill `ht9045-json-bridge` `generators.md` 二）。
-⛔ 20260927 晚補：`form.save` 運轉中回 409 `running:`（R87，`JsonBridge\FormJson.cpp:119`，§3.0i）；HotPlate 的控制項事件走 WS `form.event`（§3.0g，`kEvents`）；存檔成功後跑 golden `sbPlateFormClick` 的關窗尾段
-（產生器可選鍵 `saveFlowAfter`，§3.0i）；A 形狀不經過開窗閘 `kOpenGates`（§3.0h）。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#34-a-形狀get-apiform--ws-formsave只剩-setuphotplatehtml)
 
 ### 3.0m 程式設值也觸發 OnClick（`vcl_clicks`，B10b，commit `f14484e1`）
 
-- **VCL 行為**：程式設 `TRadioGroup::ItemIndex`（值變了而且 ≥0）、`TCheckBox::Checked`（值變了）、`TRadioButton::Checked`（false→true）會觸發它的 OnClick。BCB 開頁（DoIniDataToForm／FormShow）、讀檔、存檔時設值，就會順便跑點擊程式（例：Tray Assignment 一開頁 RGAuto3 就是灰的）。
-- **做法**：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_EditList.h`／`.cpp` 的 `filerw::ELSetOnClick`（登記替身的 golden OnClick）、`ELClickIndex`、`ELClickChecked`（照上面的 VCL 規則）；產生器 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\gen_editlist.py` 的結構鍵 **`'vcl_clicks': True`**（預設關）：把 golden 的 `->ItemIndex=`／`->Checked=` 改寫成 `filerw::ELClick*`，只改 DFM OnClick 有翻（在 `methods` 裡）的元件，並在 `<P>_DfmState` 登記。沒開這個鍵的結構產生結果一個位元組都不變。
-- **HTEditList**（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\Public\HTEditList.*`）：`HTEditList_SetClickHooks` 掛勾；Add／ReadEditTextFromFile／InitialDataToEdit 裡 8 處設值走它；沒掛（wb_serve 以外的所有程式）行為不變。Configuration 在 `FileRW_IniConfig_EvB10BBoot` 裝。
-- **已開**：TrayForm（16 個 RadioGroup＋cbEnableAMR_KYEC）、IniConfig（17 個勾選框）。**開之前要逐頁看**：BeforeApply 的事件重播、SaveFlow 會不會讓同一支點擊程式跑兩次。
-- **分頁**：`ELActivePage`／`ELTabIndexOf`／`ELPageIndexOf`（頁序表在各結構 .cpp 登記）；網頁點分頁送 form.event `{"control":"<pgc>","event":"change","activePageIndex":n,"state":{…}}`，`state` 帶其他欄位，切頁前改的值不會丟。
-- **R118 的發現**：BCB 開 Configuration 時 D36 → D33／D35 的連動也會被同一次讀檔蓋回（ReadEditTextFromFile 先設元件再抄回變數，InitialDataToEdit 再用變數設回），所以操作員看不到變化；網頁現在跑同一個順序，結果相同（ctest EvB10B_VclClicks [11]）。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/03.md#30m-程式設值也觸發-onclickvcl_clicksb10bcommit-f14484e1)
 
 ## 4. C++ 端怎麼來
 
-產生器**直接轉 golden BCB 原檔**，不是移植樹手寫：
-
-- **`tools/gen_formbridge.py`**：A 形狀（`SaveSetupFile` 那一類）。把 golden
-  `widget->Prop = v` 機械改寫成 `FormState`（`J.SetProp`／`J.GetProp`），控制流程與
-  右式原樣保留。
-- **`tools/gen_editlist.py`**：C 形狀（`HTEditList`）。golden header 宣告的元件
-  （例 `cbA01`）改寫成**具名替身** `EL<型別>("表單類別","名稱")`（`FileRW/_EditList.h`，
-  例 `EL<TCheckBox>("TfConfiguration","cbL43")`）；同時抽出 DFM 的 `Items.Strings`
-  設計期清單與父子樹（`object … end` 巢狀）；存檔流程「讀」的替身抽成必送清單
-  （`kIC_SaveReads`）；伺服器端接不上的 golden UI 段包進
-  `#if 0 // GATE (S12-C save)` ... `#endif // GATE (S12-C save)`。
-
-輸出都在 `HT9011UC_Cpp_V3.33.906.0/FileRW/`：
-- **C 形狀**：一個結構＝手寫入口 `FileRW/<結構>.cpp`（開機函式、`PageDesc`、`SaveFlow`／`Reload` 等）＋
-  產生的 `FileRW/<結構>.gen.inc`（golden 方法本體）；設定 `tools/editlist/<結構>.py`。只有
-  `tools/editlist/_integrated.txt` 列到的結構會進 `FileRW/_editlist_sources.cmake`（`gen_editlist.py:541-549`）。
-  沒有頁面的結構（#24、#25、#27～#31、#33～#35）的 `.cpp` 只有開機函式與 golden 入口函式（例 `FileRW_Winway_btnUpdateClick`），
-  沒有 `PageDesc`；golden 開機就會讀寫的照 `CreateForm` 順序在開機呼叫（例 #34 每次開機寫回 `ATCWinWay.ini`）。
-  ⛔ 20260927 晚補：有頁面的新結構（或把沒有頁面的結構接上頁面）要在 `FileRW/_EditPage.cpp` 的 `kOpenGates` 補一列，否則開頁回 `no-gate:`（§3.0h，R93）；golden 控制項事件照 §3.0g-4 接；
-  golden 主畫面在視窗關掉後還有尾段的，照 §3.0i 在 `SaveFlow` 補。
-- **Teach** 例外：`tools/gen_teach_editlist.py` 產 `FileRW/Teach.gen.inc`，讀的 golden 是 **V906 BCB 樹**
-  `D:\HT9045\HT9011UC_Code_V3.33.906.0_20260618`（`gen_teach_editlist.py:31`），不是 V912。
-- **A 形狀**：`FileRW/HotPlateForm_File.cpp` 一支（設定 `tools/formbridge/TfHotPlate.py`），
-  登錄表 `FileRW/_registry.cpp`、索引 `FileRW/README.md`（`gen_formbridge.py` 產生，只列 A 形狀）。
-  ⛔ 20260927：`tools/formbridge/TfHotPlate.py` 多 include `FileRW/CfgTrayPlate.h`，一條 `overrides` 在 golden `:49` 前宣告同名區域變數
-  `fConfiguration`（A 形狀產生器沒有檔案層原文插入點，`7d490f7c`；skill `ht9045-json-bridge` `generators.md` 廿六）。
-- 產生器操作細節（怎麼加一個新結構、陷阱）在 skill `ht9045-json-bridge` 的 `references/generators.md`。
-- A 形狀現況一句話：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\formbridge\` 只剩 `TfHotPlate.py`（其餘在 `_retired\`），`FileRW/_registry.cpp`
-  `kBridgeCount = 3`（⛔ 20261003 E-031：產生的 1 支＋`tools\formbridge\_hand_kept.py` 供列的手寫 `TfTeach`／`Tfiosetview`）；Q4＝B 之後 Speed／TrayAssignment／DIOInterFaceCFG 可能要搬進來（§3.3）。
-- ⛔ 20260927 晚補：`tools/gen_formbridge.py` 多兩個設定鍵——`events`（`76058840`，§3.0g-4）與可選的 `saveFlowAfter`（`9268162b`，`gen_formbridge.py:330`，§3.0i）；`TfHotPlate.py` 兩個都用。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/04.md#4-c-端怎麼來)
 
 ### 4.1 要改 golden 行為時：改產生器設定、不改產生檔（C 形狀的標準流程）
 
-**規則**：`FileRW/<結構>.gen.inc` 是產生檔（檔頭「不要手改：改產生器後重跑」），任何「照 golden 但這一行要換掉」的需求都寫在
-`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\editlist\<結構>.py`，再重跑產生器；手寫的只有入口 `FileRW/<結構>.cpp`（開機、`PageDesc`、`SaveFlow`、
-`Reload`、`BeforeApply`、`ExtraJson`）。產生器本身是 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\gen_editlist.py`（不在 `tools\editlist\` 裡）。
-
-步驟：
-1. **改前先確認冪等**：記下 `FileRW\<結構>.gen.inc` 的 SHA256 → 跑
-   `C:\Users\steven\AppData\Local\Programs\Python\Python314\python.exe D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\gen_editlist.py --only <結構>`
-   → SHA256 必須相同。不同＝別人改過設定沒重產、或手改過產生檔，先弄清楚再動（否則你的 diff 會混進別人的差異）。
-   `--only` 只重產這一個結構、不碰 `FileRW/_editlist_sources.cmake`（`gen_editlist.py:523-531`）；不帶 `--only` 會全部重產並改寫 cmake 清單，只在整合時用。
-2. 在 `<結構>.py` 描述改法，三種工具（格式見 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\editlist\README.md`「欄位」表）：
-   - **REPLACE**（`'replace'` 欄，tuple `(方法, golden 起行, 迄行, 原因, 取代碼)`）：等價或裁決過的取代。產生器輸出「取代碼＋`// golden <檔>:<起>-<迄> 取代：<原因>`」，
-     接著 `#if 0 // GATE (S12-C save) golden …` 包住 golden 原行、`#endif // GATE (S12-C save)`（`gen_editlist.py:264-275`、`:309-311`）。
-   - **BLOCKS**（`'blocks'` 欄，`(方法, 起行, 迄行, 原因)`）：伺服器端接不上的 golden 段。一樣包進 `#if 0 // GATE`；在 `save_methods` 裡的會變成
-     `filerw::ELTodo(…)`，進存檔 ack 的 `todo`。
-   - 產生器自動做的改寫（元件→`EL<型別>("表單類別","名稱")` 具名替身、`ShowMyMessage`→`ELMessage`、`ShowMyMessageBox_YES_NO`→`ELAsk`、`DoPassword_MBox`→拒絕、
-     純畫面敘述→`;`）不用寫設定。
-   - 行號**不要寫死數字**：用設定檔裡的輔助函式從 golden 原文找行（`L(方法, 文字, 第幾個)`），並用 `_expect(行號, golden 原文)` 釘住——golden 那一行
-     文字變了，產生器 `SystemExit` 停下來，不會蓋錯地方。golden 讀法一律 cp950（設定檔自己 `decode('cp950')`）。有這組輔助函式的設定：`AOISetup.py`、
-     `AutoCalSuckZ.py`、`Rotate.py` 有 `_expect`；19 支有 `L()`（例 `ContactForce.py`、`TestIF_File_SetUp.py`；20260927 grep `def L(`）。
-     產生器本身另外會擋「blocks／replace 的起行沒打中」（`gen_editlist.py:331-333`）；`gen_editlist.py` 檔頭說的「overrides 沒用到就中止」
-     程式裡沒有（`overrides` 只有 `gen_formbridge.py` 用），不要指望它。
-3. 重跑 `--only <結構>`，`git diff` 只該出現你要的那幾行（加上 golden 註解）；再跑一次，SHA256 不變（冪等）。
-4. 手寫入口與頁面要跟著改的一起改，註解寫偏離與裁決出處（格式見 [wbserve-conventions.md](wbserve-conventions.md) §7）；語法檢查兩組態（同 §6）。
-
-**例 1（`_expect` 釘住 golden 原文，Q31＝A'，`725038a6`）**：golden V912
-`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\fAOI.cpp:3300` 把 Top 的延遲寫進 Bottom 的鍵 `StartDelayTimeScanAOIView`、`:3301` 寫的鍵名
-`TimeOutTopScanAOIView` 跟讀檔 `:3495` 的 `TimeOutScanTopAOIView` 對不上。Steven Q31＝A'（RULINGS_20260926 S152：906 單邊修、V912 不改）。
-`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\editlist\AOISetup.py:97-100` 定義 `_expect`，`:123-125` 用它釘住 `_SV_TOPDLY`／`_SV_TOPTO` 兩行原文，
-REPLACE 兩條把「寫」的那一行改成讀檔用的鍵（讀檔 `fAOI_ReadFile` 不動）；產生結果 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\AOISetup.gen.inc:1195-1202`。
-哪天 Jimmy 在 V912 修了這兩行，`_expect` 對不上，產生器停下來，提醒這個偏離可以拿掉了。
-
-**例 2（REPLACE 成空敘述，Q14＝B，`3ee547e5`）**：`HSys.py:144-151` 把 golden `HandlerSys.cpp:1536`／`:1538` 的 `WriteIniDataGeneral` 換成 `;`（§3.0e）。
-commit 本文寫「regenerated --only HSys (idempotent before/after)」＝上面步驟 1、3 都做了。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/04.md#41-要改-golden-行為時改產生器設定不改產生檔c-形狀的標準流程)
 
 ## 5. 頁面端規則
 
-- **開頁送 `editlist.get` 一次，不要輪詢**——golden `FormShow` 每次都會把 `LastSet`
-  覆蓋回 `lastdata.dat` 的值（golden 本身開頁也是這樣，不是 bridge 的副作用）。
-- **存檔要送回 GET 給的所有值**（引擎實際送 `GB_KIND` 全部；伺服器只強制 `mustSend`／`kXX_SaveReads`
-  扣掉清單筆的那些，缺一整筆拒存；清單筆沒送的沿用舊值、列在 `ack.kept`）。
-- **存檔前必須在同一 `AccessLevel` 下 `get` 過**，否則 409。
-- **運轉中（`SystemStart||SoftStart`）存檔一律被拒**（§3.0d，20260927 起）；頁面把 ack 的錯誤字串照原樣顯示即可，不要自動重送。
-- **容器 `Enabled=false` 時，底下元件由頁面依 DOM 自行停用**；伺服器端也會忽略它們的值
-  （進 ack 的 `ignored`）。
-- **對話框題目用 `answers` 回答**，沒答＝NO（golden「Config data save to define?」那類
-  Yes/No 對話框即是一例）。
-- **網頁沒有「關頁」事件**：golden 靠 `ShowModal` 關窗才跑的尾段（例 TfTemp_Set 關窗後
-  `TfMain::sbTempOffsetClick` 的尾段），C 路要自己決定掛在哪個事件，做法與待決定事項見
-  `ht9045-json-bridge` 的 `generators.md` 十九。
-- **兩頁寫同一個鍵**（例 HSys 與 ContactForce 的 `Gerneral.ini` EP 四鍵）：C 路採「本頁沒改的欄位不把
-  舊值蓋回去」（S57／S90），見 `generators.md` 十八。
-- **golden 控制項事件走 `form.event`**（§3.0g）：只送標了 `data-ht-event` 的控制項；成功就照 ack 的 `changed` 局部套值（只有變的鍵、沒有 `null`），錯誤訊息含 `reload the page` 時提示重讀。20260927 晚頁面端還沒有送出點。
-- **運轉中（`SystemStart`）開工具／設定選單裡的 C 路頁，`editlist.get` 會回 `running:`**（開窗閘，§3.0h，R89）；等級不足回 `not-authorized:`；照原樣顯示即可，不要自動重送。
-- **畫面上「改了才能存」這類 golden 行為**（例 Yield 的 `ChangeData`）由頁面補件腳本做、不改引擎（§3.0j，`ht9045_yieldmonitoring_c.js`）。
-- **會一直更新的唯讀頁**（例 `Data.ContactCT`、`Data.Observer`）不是 C 路 `editlist.get`（它每次都會跑 golden `FormShow`、覆蓋 `LastSet`）；它們用免權杖的專用查詢每秒拍一次，寫法見 [wbserve-conventions.md](wbserve-conventions.md) §9。
-  ⛔ 20261002 補（AI(W906-E021-OB1)，todo E-021，St01）：**Data.Observer 的操作走 `act.observer.<op>`**（`JsonBridge/ChanAction.cpp:344` 同一行分派 → `cObserver.cpp` 檔尾 `ht9045::sjson::W906_ObserverAct`；不改 wb_serve.cpp）。Record 分頁（Precautions Record／Major Maintenance／Precaution Log，golden 906 `cObserver.cpp:4452-4753`＝V912 `:4683-4984`）、Exit（BtnExitClick 906／V912 :697-706）、Time Data（pgcMessageChange 906 :4766-4793／V912 :4997-5024、lstTimeDataClick 906 :4841-4844／V912 :5072-5075）、Backup Log（906 :5371-5391／V912 :5602-5622）、Clear Time Data（906 :5393-5399／V912 :5624-5630）。（20261003 E-030，`AI(W906-E030)`：golden 以 906 為準；逐函式比對 E-021 用到的每一段 906＝V912，V912 才有的 ARM yield layout／EventLog CSV 斷欄等都不在 E-021 裡，所以只補 906 行號、不改程式。）每一個 act 都帶整個 Record 分頁的輸入（value.widgets：操作員打的字在瀏覽器，C++ 先套上再跑 golden；panel 不是輸入、會被拒），回 dataRecord 整塊重畫；observer.get 的完整回應也帶 dataRecord（`cObserver.cpp:8288` 同一行）。act.* 不持 FormLock ⇒ golden 的 ShowMyMessage 照 golden 在 MbWait 等 OK。關窗：頁面表關窗邊緣第 20 列 `fObserver`（`FileRW/WindowEdgeTails.h`，skipWhileRunning=false）跑 golden FormClose → 存 `PrecautionParameter.ini`。jimmychiu 那份 Save*／Load*／pgcMessageChange／btnBackupLogYearClick 有 SAFETY 閘＋寫死 D:\ 路徑，St01 在檔尾重抄 golden（`W906_E021_*`）＋接縫 `W906_PRECAUTION_ROOT`／`W906_MAJORMAINT_ROOT`／`W906_BACKUPLOGBAT_PATH`（沒設＝golden 字面）；紀錄檔名的自由文字含 `\ / : * ? " < > |` 或 `..` 時移植版拒存（比 golden 嚴，ST01-E 暫定 B，待 Steven 決定）。頁面 `D:\HT9045\web\page\ht9045_observer_ev.js`；ctest `E021_Observer`、`E021_ObserverPage`。**編碼（AI(W906-E021-B5)，ST01-M 20261002 照 BCB 裁決）**：紀錄檔、鏡像與 PrecautionParameter.ini 是跟 BCB 版共用的機台資料，照 golden 用 Big5（cp950）讀寫（樹的 UTF-8 規則只管原始碼與新檔）；檔名從各段組成 UTF-16、走寬字元 API（CreateFileW／FindFirstFileW），NTFS 上的名字＝golden 的 Big5 ANSI 名字在 950 系統上變成的名字；整份內容先轉好才開檔；沒有 Big5 字形的字（簡體、emoji）在進來時就回 `not-big5`（移植版限定，human-review C），不寫成 `?`。
-  ⛔ 20261002 補（AI(W906-E020-LI11)，todo E-020 LI-11／LI-13，St01）：**Data.LotInfo 的 Change File 與 palSecsGem 滑鼠按下走 `act.lotInfo.<op>`**（`JsonBridge/ChanAction.cpp:348` 同一行分派 → `LotInfo_E020.cpp` 的 `ht9045::sjson::W906_LotInfoE020Act`；不改 wb_serve.cpp）：`act.lotInfo.changeFile`（value `{}`；golden 906 `uLotInfo.cpp:10213-10237`（V912 :10394-10418） btChangeFileClick，分支照 golden 選、三個分支都回 `guard:"gated"`＋`whyNot:"GATE (W906-E020-LI11-n)"`，golden 不走分支時 executed）、`act.lotInfo.palSecsGemMouseDown`（value `{"button":"left|right|middle","seq":n}`；golden 906 :10351-10425（V912 :10532-10606）的 6 下暗門，第 6 下寫 `AuthPath config.ini [Lot Info]`）。C++ 先照 golden 重算看不看得到（`tab-hidden`／`button-hidden`／`panel-hidden`），不持 FormLock。`seq` 讓連續兩下相同的按鍵不被 WebCmdGuard 併成一下（golden 每一下都算）。頁面 `D:\HT9045\web\page\ht9045_lotinfo_e020.js`；ctest `E020_LotInfoActs`、`E020_LotInfoPage`（RTC 換檔狀態機另見 ht9045-lotinfo-flow §9b，ctest `E020_LotInfoRTC`）。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/05.md#5-頁面端規則)
 
 ## 6. 與 B 路的分工 ＋ C 路結構總表（單一出處）
 
-C 路負責 **golden 有表單／存檔邏輯**的結構；B 路留給**沒有 golden 表單邏輯，或尚未轉到 C 路**的檔案。
-
-**檔案擁有者閘 `CRouteOwner`**（`tools/wb_serve.cpp:1284-1323`，`kOwned` 表 `:1289-1319`；⛔ 20260927 更正：原寫 `:1289-1318`）：列在表裡的檔，
-B 路兩個寫入口（`system.file.put` `:4929-4933`、`recipe.doc.put` `:5400`）一律回 **409** 並附對應 C 路命令，
-`dryRun` 照常放行；C 路自己的存檔不經過它。目前 `kOwned` 的檔名（小寫 basename 比對）：
-`config.ini`、`lastset.ini`、`configbyrecipe.ini`、`hotplate.data`、`uduld.data`、`armcondition.data`、
-`binasgn*.data`（7 支）、`tray.data`、`contact.data`、`temperature.data`、`position offset*.data`（3 支）、
-`gerneral.ini`、`autoclean.data`、`autocleancount.data`、`handlercondition.data`（6 頁共用）、`barcode.ini`、
-`groundman.ini`、`contactinfo.ini`、`socketcount.ini`、`teach.ini`、`jam0000.dat`（`WebSecurityJam.cpp`，
-不是 C 路結構）、`tester.data`（4 頁共用）。
-⛔ 20260927 補（`217e7e5e`，同一行 `:1314`）：`trayform.csv`、`plateform.csv`（`FileRW/CfgTrayPlate.cpp`）、`autotemperature.ini`（#33）、
-`atcwinway.ini`（#34）、`mvdata.ini`（#35）。這 5 個目前都沒有頁面；登記是防 B 路直改——B 路 `sysfile` 表有 `trayForm`／`plateForm`／
-`autoTemp`／`mvData` 四筆（`tools/wb_serve.cpp:1183`／`:1184`／`:1190`／`:1199`），`217e7e5e` 的註解寫「查過 web/page 沒有 B 路寫者」。
-⚠ **沒有登記的**：`AOI.Data`（AOISetup／IniConfig_OCR，S86 Q2 待 Steven）、`Rotate.Data`、`AutoCalSuckZ.Data`，
-以及 TTLCfg 寫的 `<cbDIOType>.ini`（檔名動態，basename 比對擋不到；B 路 `system.file.put tag=dio`
-仍可寫同一檔，`wb_serve.cpp:1178`）。
-⛔ 20260927 更正（Q3＝A，Steven S125，`3ee547e5`）：上一句「TTLCfg 的 `<cbDIOType>.ini` 沒有登記」已過期。`AOI.Data`、`Rotate.Data`、`AutoCalSuckZ.Data`
-仍沒有登記（20260927 HEAD `89ccb4cc` grep `wb_serve.cpp` 0 筆）。
-**動態檔名 `CRouteOwnerDio`**：`kOwned` 固定檔名都比不到時，`CRouteOwner` 最後一行改成 `return CRouteOwnerDio(fullPath);`
-（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\wb_serve.cpp:1322`，原本 `return nullptr;`；前置宣告佔用 `:1278` 原本的空行；本體在檔尾 `:7728`，
-重開同一個匿名 namespace）。認得三種，回擁有者 `FileRW/TTLCfg.cpp`（golden `TfDIOFrom::GetDIOFileName`，
-`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\DIOInterFaceCFG.cpp:47-70`：`config.ini [Tester] bI16TTLSaveInSetupFile ? <配方>\<DIO>.ini : DIOCFGPath\<DIO>.ini`）：
-(1) `DIOCFGPath`（`D:\HT9045\iniData\DioCfg\`）裡的任何 `*.ini`（母檔）；(2) 作用中配方資料夾裡、檔名去掉 `.ini` 後＝`DIOCFGPath` 某個 `*.ini` 的檔（配方副本）；
-(3) 目前 `ResolveDioPath()` 解析出來的 DIO 檔（保底）。比對不分大小寫、`/`＝`\`、連續 `\` 算一個；純讀（`FindFirstFile`＋讀 ini，不補鍵）。
-結果：B 路 `system.file.put tag=dio` 與 `recipe.doc.put`（配方裡的 DIO 副本）都回同一種 409 `owned by C route`，`dryRun` 照常放行。
-探針 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\webprobe\q3_dio_owner_probe.py` 已寫、**還沒跑**（要跑 wb_serve，見 [wbserve-conventions.md](wbserve-conventions.md) §6）。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/06.md#6-與-b-路的分工--c-路結構總表單一出處)
 
 ### C 路結構總表（20260926，HEAD 8fad1522 對程式核對）
 
-**怎麼量的**：結構＝`tools/editlist/_integrated.txt`（35 個名字，20260927 HEAD 227b79db；34 個有 `tools/editlist/<結構>.py`，
-`Teach` 用自己的產生器；#33～#35 是 20260927 補的列）；頁面＝`web/page/ht9045_wire_engine.js:1038-1061` `GOLDEN_BRIDGE`（24 頁）；
-入口＝`FileRW/*.cpp` 有沒有 `PageRegistrar`（§3.0）；開機與讀檔＝`tools/wb_serve.cpp` 行號
-（main() 的 CreateForm 段 `:4048-4064`，與開機／換配方共用的 `W906_DoReadLastData` `:3035-3600`）；
-擁有者＝`kOwned`。「port」＝移植樹既有的讀檔器（不在 FileRW）；「FileRW」＝本結構從 golden 轉出的函式。
-
-| # | 結構（tag） | golden 表單（V912 檔） | 頁面 | 入口 | 開機建替身 | 開機＋換配方讀檔 | `kOwned` | 加入 |
-|---|---|---|---|---|---|---|---|---|
-| 1 | `IniConfig` | `TfConfiguration`（`cConfiguration.cpp`） | `Config.Configuration.html` | 專用（手寫 `IniConfig.cpp`） | `:4052` `FileRW_IniConfig_Boot`（先 `W906_LdUldInitOnce`、尾端 `ReadLastSetIni`，`IniConfig.cpp:109`／`:119`；⛔ 20260927 更正：原寫 `:68`／`:77`） | `:3591` `ReadLastSetIni`（只開機） | config／lastset／configbyrecipe.ini | 0924 |
-| 2 | `Ld_UldDelayTime` | `TfLd_ULd`（`cLd_ULd.cpp`） | `Setup.Ld_ULd.html` | P | 經 #1 → `W906_LdUldInitOnce`（`cSpeed.cpp:1711`） | `:3299` port `fLd_ULd->ReadFile` | uduld.data | 0924 |
-| 3 | `UserDefForm_File` | `TfTrayForm`（`cTrayForm.cpp`） | `Setup.TrayForm.html` | P | `:3184` | `:3185` FileRW `FileRW_TrayForm_ReadFile` | tray.data | 0924 |
-| 4 | `ArmSpeed_File` | `TfSpeed`（`cSpeed.cpp`） | `Setup.Speed.html` | P | `:4054` | `:3299` port `fSpeed->ReadFile`、`:3464` DoIniDataToForm | armcondition.data | 0924 |
-| 5 | `TestIF_File_YieldMonitoring` | `TfYieldMonitoring`（`uYieldMonitoring.cpp`） | `Setup.YieldMonitoring.html` | P | `:4055` | `:3259` port `fYieldMonitoring->ReadFile` ⚠ | tester.data | `16f463b8` |
-| 6 | `TrayForm` | `TfTrayAssignment`（`cTrayAssignment.cpp`） | `Setup.TrayAssignment.html` | P | `:4048`／`:4049`（`Prod.iTrayType[]`、Tray 版面）、`:4056`、`:4057-4058`（讀檔 hook：全部 `ReadFile` 改走 FileRW 版） | `:3306`＋`:3465` DoIniDataToForm | tray.data | `16f463b8` |
-| 7 | `DeviceForm_File` | `TfContact`（`cContact.cpp`） | `Setup.Contact.html` | P | `:3232` `FileRW_Contact_Boot` | `:3230` port `fContactForm->ReadFile` | contact.data | `16f463b8` |
-| 8 | `TestIF_File_SetUp` | `TfSetup`（`cSetUp.cpp`） | `Setup.SetUp.html` | P | `:3199`（`fSetup->Init()` 之後） | `:3202`／`:3270` port `fSetup->ReadFile` | handlercondition.data | `16f463b8` |
-| 9 | `TTLCfg` | `TfDIOFrom`（`DIOInterFaceCFG.cpp`） | `Config.DIOInterFaceCFG.html` | P | `:4060` | `:3470` FileRW `DoReadLastDataLoad` | DIO 動態檔名（`CRouteOwnerDio`，Q3，`3ee547e5`；⛔ 20260927 更正：原寫「—（見上 ⚠）」） | `fe4f4d1d` |
-| 10 | `BinSelect` | `TfBinSel`（`cBinSel.cpp`） | `Setup.BinSel.html` | 專用 | `:4063` | `:3381` port `fBinSel->ReadParam`／`ReadFile` | binasgn*.data | `fe4f4d1d` |
-| 11 | `HSys` | `THandlerSystem`（`HandlerSys.cpp`） | `HW.HandlerSys.html` | P | `:4062` | 開機 `LoadMachineConfig`（`database.cpp` `ReadGeneralIni`）＋`:3864` `FileRW_HSys_ReadMainCtorKeys` | gerneral.ini | `322d68a3` |
-| 12 | `Offset_File` | `TfOffSet`（`cOffSet.cpp`） | `Setup.OffSet.html` | 專用 | `:3504`（`:3503` port `fOffSet->ReadFile` 之後） | `:3503` port | position offset*.data | `322d68a3` |
-| 13 | `Temperature` | `TfTemp_Set`（`uTemp_Set.cpp`） | `Setup.Temp_Set.html` | P | `:3113`、`:3121` Init、`:3122` 面板、`:3123` `W906_ReadATCIni`（後兩者只開機） | port `fTemp_Set->ReadTempFile`（`:3274` 等）、`:3463` DoIniDataToForm | temperature.data（＋tester.data） | `322d68a3` |
-| 14 | `Teach` | `TfTeach`（`uteach.cpp`，⚠ golden **V906**） | `HW.teach.html` | 專用 | `:4052` `FileRW_Teach_Boot` | `:3453` port `fTeach->ReadFile` | teach.ini | `ad7561d4` |
-| 15 | `StartCondition` | `TfStartCondition`（`cStartCondition.cpp`） | `Data.StartCondition.html` | P | `:3201` | `:3542` FileRW DoIniDataToForm | socketcount.ini（＋handlercondition） | `e7e8f5f0` |
-| 16 | `TestIF_File_QAMode` | `TfQAMode`（`QAMode.cpp`） | `Setup.QAMode.html` | P | `:4055` | `:3327` port `fQAMode->ReadFile`、`:3467` FileRW DoIniDataToForm | tester.data | `8af13c07` |
-| 17 | `TestIF_File_VacuumUnit` | `TfVacuumUnit`（`VacuumUnit/VacuumUnit.cpp`） | `HW.VacuumUnit.html` | P | `:4163` | 不讀（golden 開機／換配方都不呼叫 `ReadFile`，照做） | handlercondition.data | `8af13c07` |
-| 18 | `TestIF_File_TesterIF` | `TFTestIF`（`cTesterIF.cpp`） | `Setup.TesterIF.html` | P | `:4059` | `:3231` FileRW（開機 `BootReadTestIFFile`／換配方 `ReadTestIFFile`）、`:3460` DoIniDataToForm | tester.data | `8af13c07` |
-| 19 | `TestIF_File_Cleaning` | `TfCleaning`（`AutoClean/uCleaning.cpp`） | `Setup.Cleaning.html` | P | `:3200`（含 `LoadAutoCleanData`）、`:4269` `MainFormShow` | 同左 | autoclean／autocleancount.data（＋handlercondition） | `8af13c07` |
-| 20 | `TestIF_File_BarCode` | `TfBarCode`（`BarCode/BarCode.cpp`） | `Setup.BarCode.html` | P | `:4064` | `:3406` FileRW、`:3466` DoIniDataToForm | barcode.ini（＋handlercondition） | `0609a14f` |
-| 21 | `ShuttleMove` | `TfShuttleMove`（`ShuttleMove.cpp`） | `HW.ShuttleMove.html` | P | `:4061` | `:4232` `W906_ShuttleMoveReadData`（只 latch 機台、只開機） | handlercondition.data | `0609a14f` |
-| 22 | `GroundMan` | `TfGroundMan`（`GroundMan/GroundMan.cpp`） | `Status.GroundMan.html` | P | `:4064`（建構子即 `ReadGroundOffset`） | 系統檔，不隨配方 | groundman.ini | `7a84e018` |
-| 23 | `AOAOffset` | `TfMain`（`main.cpp` `OffsetSaveClick`） | `Main.AOAInfo.html` | P | `:4232` `FileRW_AOAOffset_Boot` | 值由 `database.cpp` `ReadGeneralIni` 讀 | （gerneral.ini 登記給 HSys） | `611edb7e` |
-| 24 | `Rotate` | `TFrmRotate`（`RotateKit/fRotate.cpp`） | 無 | 無 | `:4064` | `:3414` FileRW、`:3468` DoIniDataToForm | — | `c675594d` |
-| 25 | `TestIF_File_AutoAlignment` | `TfAutoAlignment`（`AutoAlignment/AutoAlignment.cpp`） | 無 | 無 | `:4064` | `:3534` port `fAutoAlignment->ReadFile`＋FileRW DoIniDataToForm | — | `c675594d` |
-| 26 | `IniConfig_CounterSel` | `TfCounterSel`（`cCounterSel.cpp`） | `Status.CounterSel.html` | P | `:4064` | `[Visible]` 由 #1 的 `ReadLastSetIni` 讀 | config.ini（與 #1 共用） | `0b1f4204` |
-| 27 | `TestIF_File_FixAICCD` | `TfFixAICCD`（`FixAICCD.cpp`） | 無 | 無 | 第一次呼叫時自建（`TestIF_File_FixAICCD.cpp:71`） | `:3446` port `fFixAICCD->ReadFile`、`:3468` FileRW DoIniDataToForm | — | `c79ee4e9` |
-| 28 | `TestIF_File_Magazine` | `TfMagazine`（`Magazine.cpp`） | 無 | 無 | 第一次呼叫時自建（`TestIF_File_Magazine.cpp:62`） | `:3376`／`:3391` port `fMagazine->ReadFile`；FileRW `DoIniDataToForm` 無呼叫者 | — | `c79ee4e9` |
-| 29 | `AutoCalSuckZ` | `TfProductionInfo`（`ProductionInfo/ProductionInfo.cpp`） | 無 | 無 | `:4064` | `:3515` FileRW DoIniDataToForm（golden 只 OEE 機台讀） | — | `58bd9425` |
-| 30 | `AOISetup` | `TFrmAOI`（`fAOI.cpp`） | 無 | 無 | 第一次呼叫時自建（`AOISetup.cpp:89`；⛔ 20260927 更正：原寫 `:81`，`725038a6` 之後位移） | `:3454` FileRW `ReadFile`（存檔 `FileRW_AOISetup_spbSaveClick` 仍無呼叫者；Q31＝A' 的寫檔修正在它接上時生效，§4.1 例 1） | —（AOI.Data 未登記） | `9ec84450`／`e6a8e0fc` |
-| 31 | `IniConfig_OCR` | `TfOCR`（`OCR.cpp`） | 無 | 無 | 第一次呼叫時自建（`IniConfig_OCR.cpp:72`） | `:3416` FileRW `ReadFile` | — | `973f2540` |
-| 32 | `ContactForce` | `TfContactForce`（`ContactForce.cpp`） | `Setup.ContactForce.html` 在，但**沒進 `GOLDEN_BRIDGE`**（純靜態頁） | P（`ContactForce.cpp:387-394`；⛔ 20260927 更正：原寫 `:381-388`） | `:4062` `FileRW_ContactForce_Boot`（`FileRW/ContactForce.cpp:419`）：建替身後**照 golden CreateForm 時序（`HT9045.cpp:220`）跑建構子本體**（V912 `ContactForce.cpp:421-653`，`EnsureCreated`，`:444`）——依 `[SLK Type]` 讀／補寫 `D:\HT9045\system\ContactInfo.ini`，檔不在就建檔（R15＝B，RULINGS_20260926 S162，`725038a6`；⛔ 20260927 更正：原寫「只建替身；golden 建構子延到第一次 `editlist.get`」，那是 S57 的舊做法）。`EnsureCreated` 留給開頁／存檔／iosetview 當保底 | 開機 `:4095` `LoadContactForceTables`（`ContactForceLoad.cpp`，含 `dIndexZOffset`） | contactinfo.ini | `21d37f2b` |
-| 33 | `ACTForm` | `TACTForm`（`AutoTemperature.cpp`） | 無（golden 主畫面 `sbAutoTempClick` `main.cpp:29883-29890`，`Insufficient(49)` → `ACTForm->Show()`） | 無 | `:4062` `FileRW_ACTForm_Boot`（接在 `FileRW_ContactForce_Boot` 同一行；golden `HT9045.cpp:221`） | 開機**不讀**：golden 建構子 `:297` `LoadACTData` 在 `:398` 設 `FilePath` 之前，讀的是空檔名 → `ACTData` 全是預設值（todo ★ R37）；開頁 `FormShow`（`:419`）才讀，`FileRW_ACTForm_FormShow` 無呼叫者；換配方不讀 | autotemperature.ini | `217e7e5e` |
-| 34 | `Winway` | `TfWinway`（`ATC/WinWaySetting.cpp`） | 無（golden `sbATCClick` `main.cpp:29598`，`ATC_SYSTEM==eWinWay` 才 `fWinway->ShowModal()`，`:29607-29609`） | 無 | `:4064` `FileRW_Winway_Boot`（`FileRW_AutoAlignment_Boot` 之後同一行；golden `HT9045.cpp:272`） | **每次開機讀並原樣寫回** `config\ATCWinWay.ini`（golden 建構子 `:12`，4 站 `LoadCommData`＋`SaveCommData`，不看 `ATC_SYSTEM`；不開 COM、不送 Modbus；todo ★ R36）；換配方不讀 | atcwinway.ini | `217e7e5e` |
-| 35 | `Monitor` | `TfMonitor`（`Monitor/MonitorInterface.cpp`） | 無（golden `sbMonitorViewClick` `main.cpp:33471`，`Insufficient(127)`；`IniConfig.bC11UseMonitorView` 才顯示鈕） | 無 | `:4064` `FileRW_Monitor_Boot`（`FileRW_BarCode_Boot` 之後同一行；golden `HT9045.cpp:247`） | 開機：建構子 `:32` `LoadTCPIPParament`（`:79`）只讀 `system\MVData.ini`（檔不在＝預設值，不建檔）；換配方不讀；存檔 `SaveTCPIPParament`（`:98`）無呼叫者 | mvdata.ini | `217e7e5e` |
-| A | `HotPlateForm_File`（A 形狀） | `TfHotPlate`（`cHotPlate.cpp`） | `Setup.HotPlate.html` | `/api/form`＋`form.save`（`kBridge_TfHotPlate`） | — | `:3299` port `fHotPlate->ReadFile`、`:3456` DoIniDataToForm | hotplate.data | 0924 |
-
-**表的註**：
-- 「加入」寫 0924 的，是 `_integrated.txt` 建立前就有的結構（設定拆檔 `201c55a0`，資料夾改名 `FileRW/` 時
-  `05f2695b`）；其餘是 `_integrated.txt` 第一次列到它的 commit（`git log -S<名字> -- tools/editlist/_integrated.txt`）。
-- 逐頁的讀／寫**驗收**狀態不在這張表，在 skill `ht9045-json-bridge` 的 `write-inventory.md` 〇；沒有頁面的
-  7 個結構（#24、#25、#27～#31）與 #32 的建頁備忘在同 skill 的 `pending-pages.md`。
-- ⚠ #5：golden V912 20260923 新加 `TfYieldMonitoring::SyncSiteYieldAlarmByArmMode()`（`uYieldMonitoring.cpp:904-922`，
-  `ReadFile` `:1077` 與 `TfMain::Start` `main.cpp:4796` 呼叫；只有 `CC_ChipMos_ZHUBEI` 生效）只翻進 C 路的
-  `FileRW/TestIF_File_YieldMonitoring.gen.inc`（`3e0ebb92`）——開機讀檔器是移植樹 `fYieldMonitoring->ReadFile`
-  （`forms/fYieldMonitoring.h:382`），全樹 grep 只有 FileRW 那一份，開機與 Start 目前不會跑它。客戶專屬（S25），記錄待 Jimmy。
-- ⛔ 20260927（S98）：#3 `UserDefForm_File`、#19 `TestIF_File_Cleaning` 開頁時照 golden `FormShow`（`cTrayForm.cpp:162-175`／
-  `uCleaning.cpp:1488-1499`）讀 `System\TrayForm.csv` 填「Select from Database」下拉（`217e7e5e` 解閘）；A 列 HotPlate 開頁照
-  `cHotPlate.cpp:47-58` 讀 `System\PlateForm.csv` 填 `cbSelectHPFromDB`（`7d490f7c`）。三頁共用同一份表 `FileRW/CfgTrayPlate.cpp`
-  （接法見 skill `ht9045-json-bridge` `generators.md` 廿六）；選一筆就自動填欄位（golden 下拉的 `OnChange`）三頁都還沒接
-  （skill `ht9050-construction` `references/todo.md` ★ Q40）。
-  ⛔ 20260927 晚更正：「選一筆就自動填欄位三頁都還沒接」已過期——C++ 端 `76058840`（WS `form.event`）已接好三頁的 golden `OnChange`（§3.0g）；還沒接的是頁面送出點（Jimmy）。
-- ⛔ 20260927：#33～#35 跟 #24、#25、#27～#31 一樣只有讀寫本體、沒有頁面；要不要現在建頁待 Steven（同 todo ★ Q41）。建頁備忘在
-  skill `ht9045-json-bridge` 的 `pending-pages.md` 十七～十九（十六是 Configuration 頁 Tray／HP 分頁，它不是 C 路結構）。
-- 不在 `_integrated.txt`、也不是 C 形狀的手寫讀寫檔（全部只編進 `wb_serve`，`CMakeLists.txt:3404` 那一行直接列；20260927 HEAD 227b79db；
-  ⛔ 20260927 更正：HEAD `89ccb4cc` 那一行在 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\CMakeLists.txt:3419`）：
-  ⛔ 20260927 晚更正：HEAD `db1b7638` 那一行在 `CMakeLists.txt:3431`（`1de5005b` 合 main 時 `ht9045_kyecftp`／`ht9045_nmftp` 那幾段位移；`76058840` 在同一行加 `FileRW/_FormEvent.cpp`）。
-  - `FileRW/MainBoot.cpp`（golden `TfMain::FormShow` 的開機小段）：`BinCount.txt` 讀回 `:3864`、`[Version] Ver` 戳記 `:3886`、
-    JamRawData `:4269`、`ShowLotInfoDownloadFlag` 寫 `lastdata.dat` `:4162`（`4dee7107`／`c317ca30`）；S91 `W906_FRWBoot_JamRateByDayRead`
-    （DailyJamRate，golden `main.cpp:9607`）在 `:3864`、`W906_FRWBoot_CriticalParaAuth`（`config\CriticalParaControl.ini`，`:9787`，缺鍵才補寫）
-    與 `W906_FRWBoot_LimitAuth`（`:9786`）在 `:3886`（`1d68d518`）；S94 `W906_FRWBoot_LotListsRead`（`LotData.txt`／`TrayIDByLot.txt` 讀回，
-    golden `:11344-11365`）在 `:4163`（`26d0b3f8`）；WC-1 `W906_FRWBoot_ResetLotInfo`（golden `:10991`，有 IC 且 `bShowLotInfo` 時讀回
-    `config.ini` 的 Product Name／Temp）在 `:4162`（`61c96910`，GATE WC-1 退役）。
-  - `FileRW/MainBackup.cpp`（S92，`4c5d7a26`）：golden `TfMain::BackupSetupFile`（`main.cpp:34053-34127`，配方夾 `*.MD5`＋自動備份），
-    每次 C 路存檔後都會跑；接法是函式指標安裝座（`forms/fMain.cpp:458`，skill `ht9045-json-bridge` `generators.md` 廿七；安裝座的規矩與全樹一覽見
-    [wbserve-conventions.md](wbserve-conventions.md) §3），開機 `:4111` 裝上。
-  - `FileRW/MainClose.cpp`（S95 `6905f8eb`、S121 `a684f171`、S95R `bd40ffcb`）：golden `FormClose` 的生產資料存檔與關站順序、Exit 鈕
-    `sbCloseProgramClick`（WS `act.main.closeProgram`，`:4826`）；主迴圈 `:5953`（結束旗標）、`:5964`（存檔＋停機）；
-    `SaveRunMode` 本體（`RunMode.txt`）走同一套安裝座，`:4111` 裝上。
-  - `FileRW/MainRecord.cpp`（S113，`0b38b6b5`）：golden `UpdateRecordScreen`／`UpdateRunInfo`（Observer 累計時間、Run Info），
-    每拍呼叫在主迴圈 `:5953`（`6db687d4` 從 Jimmy 的 `:4598` 搬來）、開機起點 `:3864`；只改記憶體，值由既有的 `WriteLastDataFile` 寫出。
-  - `FileRW/CfgTrayPlate.cpp`（S98，`217e7e5e`）：golden `TfConfiguration` Tray／Plate 表的四個處理器（`cConfiguration.cpp:7012`／`:7037`／
-    `:7148`／`:7194`），全樹一份（上面第一條的三個讀者共用）；開機 `:4052`（建表、兩顆 Load 鈕登記成 `"TfConfiguration"` 具名替身）、
-    `:4066`（golden `main.cpp:9987-9988` 設 `bHasTrayCSV`／`bHasPlateCSV`）。寫（兩顆 Update 鈕）目前沒有呼叫者。
-  - `FileRW/MainClick.cpp`：`W906_Main_PEModelOp`（WS `act.main.peModel` `:4826`，`a83d7f22`）；S100 `W906_Main_AutoSkipSwitchOp`／
-    `W906_Main_SetToDefineValueOp`（WS `act.main.autoSkip`／`act.main.setToDefineValue`，同一行 `:4826`，`d606b1d8`／`56c20f17`）、
-    `W906_Main_sbSetupClickTail`（由 `FileRW/TestIF_File_SetUp.cpp:191` 在存檔後呼叫）；`W906_Main_DutOnOff_SaveATC7Channels` 無呼叫者（`c913d5e5`）。
-    ⛔ 20260927 晚補：Q41 第 3 項「關窗尾段」兩批也在這支檔尾（`c8028b21`：Ld_ULd／Speed／BinSel／Contact 開頁；`9268162b`：TrayForm／HotPlate／TrayAssignment／Yield／Configuration），
-    宣告在 `FileRW/MainClickTail.h`，逐支見 §3.0i。
-  - `FileRW/Zteach.cpp`（`FileRW_Zteach_SaveFile` 無呼叫者；`58bd9425`）。
-  - 逐支的 golden 函式、會寫哪些真實檔、todo 題號：skill `ht9045-json-bridge` `write-inventory.md` 二「`TfMain` 開機／關程式／計時器的手寫 FileRW」。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/06.md#c-路結構總表20260926head-8fad1522-對程式核對)
 
 ## 7. 指標
 
-C 路完整設計細節、`cprod.h` 全域變數逐項盤點、對齊清單，見 skill `ht9045-json-bridge` 的
-`references/write-inventory.md`：
-- 「一之二、C 類 HTEditList 的寫檔設計」——具名替身、存檔流程、必送規則、拒寫規則。
-- 「§四、`cprod.h` 全域變數的讀寫盤點」。
-- 「§四之二」——對齊清單。
-產生器操作、加新結構的步驟與陷阱：同 skill `references/generators.md`。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/07.md#7-指標)
 
 ## 8. 驗證探針
 
-- `tools/webprobe/s12c_page_probe.py`：C 形狀**通用版**（`--page`／`--struct`），headless Edge ＋ DevTools，
-  R（讀）／W（`--write`，第一次允許 golden 正規化差異、第二次位元組不變）／L（重讀），判準見
-  `ht9045-json-bridge` `generators.md` 五。
-- `tools/webprobe/s12c_config_probe.py`：headless Edge ＋ DevTools 協定，走真瀏覽器打
-  `Config.Configuration.html`；R（讀）比對 `editlist.get` 與畫面 DOM，W（`--write`）跑
-  兩次存檔比對差異。另外驗 `editable=false` 的替身是否真的全部停用、`cpp-text` 選項重讀後
-  數量不變（見 §3.1、§3.2 的修法）。
-- `tools/webprobe/s12_form_probe.py`：**20260924 起需要 `--user`／`--password`**——`--write`
-  之前會先做 `ws_login`（從 `s12c_config_probe.py` 搬出來共用），沒帶帳密直接 FAIL。
-  這是因為 golden A02（`bA02DisableSaveParsWhenSwitchToOp`）在讀檔時序修好之後真的生效了
-  （因果鏈見 ChangeLog `CHANGES_20260924_Steven.md` §36）：Operator 權限（`AccessLevel==0`）
-  存檔會被 golden 存檔入口擋下，探針不能繞過這道閘，否則「探針沒登入卻能存檔」本身就是
-  一個沒發現的迴歸。
-- ⚠ 20260926 之後 `wb_serve` 開機約 1 秒會照 golden 自動啟動 GPIB／RS232Standard 引擎；不要它的 e2e
-  設 `HT9045_TESTERCOMM=0`（`generators.md` 廿三）。
-- `tools/webprobe/q3_dio_owner_probe.py`（`3ee547e5`）：Q3 動態 DIO 檔名的擁有者閘（§6）——`system.file.put tag=dio` 要回 409、`dryRun` 要放行、
-  非 C 路的 ini 不受影響、`recipe.doc.put` 配方裡的 DIO 副本要回 409。每個 put 都帶空 payload（閘不在也寫不到檔）；步驟 2-5 要 wb_serve 帶
-  `--allow-system-write`。20260927 還沒跑過。
-- 所有探針都要一個跑著的 `wb_serve`，會碰機台真檔；Steven01 這台跑之前要 Steven 同意、先備份再 SHA256 還原（[wbserve-conventions.md](wbserve-conventions.md) §6）。
-  400 ms 內重送同一指令的探針，啟動 wb_serve 前設 `W906_CMDGUARD_MS=0`。
-- 20260927 晚新增、**都還沒跑**（都要一個跑著的 wb_serve）：`tools/webprobe/formevent_probe.py`（`76058840`，HotPlate／TrayForm／Cleaning 的 `form.event`）、`formevent_ta_ts_probe.py`（`4e74e8b4`）、
-  `q41_open_gate_probe.py`（`cb306f89`，開窗閘；可用 `W906_LEVELSET_PATH` 造暫存權限表）、`q41_closetail_probe.py`（`c8028b21`／`9268162b`，關窗尾段）、`data_contactct_live_probe.py`（`c35f375e`）、
-  `data_observer_token_probe.py`（`742024b7`，唯讀 act 免權杖；St02 `94f16127` 之後項目 G 應該 PASS，`--expect-gate`）。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/08.md#8-驗證探針)
 
 ### 3.0k 開頁記 golden 的 "Enter ..."（R101＝RULINGS_20260926 S165，commit `342779cc`）
-- golden 每一顆開設定表單的鈕在 ShowModal／Show 之前記一筆 NewRecordProcess("MES21xx","Enter …")（GroundMan 是 RecordProcess("Enter Ground Man Form")，沒有代碼）。C 路在 editlist.get 跑 golden FormShow 之前呼叫 `filerw::OpenEnterRecord(tag, alreadyShown)`（移植樹 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_EditPage.h`）。
-- 表 `kOpenEnters` 在 `FileRW\_EditPage.cpp` 檔尾，與 kOpenGates 平行（不加 PageDesc 欄位）；代碼與字樣抄 golden V912 main.cpp 呼叫端的字面值（21 列）。golden 開窗鈕不記的頁不列：ContactForce、TestIF_File_VacuumUnit、AOAOffset、HSys。
-- 呼叫點：PageJson（SessionBegin 之後、formShow 之前，傳 ShownOf().shown；BinSelect 經 PageJson）；自己的入口 `FileRW\Teach.cpp:256`、`FileRW\Offset_File.cpp:353`、`FileRW\IniConfig.cpp:493`（傳各自的開頁旗標，都接在同一行）。
-- 不記：開窗閘拒絕、沒開機（409）、這一頁在伺服器端已經開著（存檔後引擎自動重讀、重讀鈕）。golden Close()（"closed"）之後再記；IniConfig 存檔＝golden FormClose，存後重讀會再記一筆（R110）。
-- 新增 C 路頁：kOpenGates 補一列時，照 golden sbXxxClick 決定 kOpenEnters 要不要補（golden 沒記就不列，寫進表下註解），並同步 `tests\test_openenter_log.cpp` 的 kWant／kNoRow（ctest OpenEnterLog）。
-- ⚠ 寫到哪：移植樹 NewRecordProcess 是空殼（`acatchtray_shims.cpp:152`）、RecordProcess 只印 stdout ⇒ 今天不寫檔，只有 wb_serve 主控台一行；cMyDB homecoming 之後自動進 golden 的 EventLogTxt／sqlite（R109）。
-- ⚠ editlist.get ≠ 操作員開窗：`D:\HT9045\web\background.html` 非 lazy 視窗開站就載入 iframe，第一次 editlist.get 發生在開站；操作員開窗只送 ui.windows.put（R108；同一個前提也影響 §3.0h 開窗閘）。
+
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/08.md#30k-開頁記-golden-的-enter-r101rulings_20260926-s165commit-342779cc)
 
 ### 3.0l 主畫面事件 act.main.*（批次 B6＋B9，`cd496b52`；RULINGS_20260926 S167／S169、Q47／Q48）
-- 入口：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\wb_serve.cpp:4826`（St01 那一行，同一行一個分支）→ `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\MainClick.cpp` 檔尾 W906_Main_EvB6Op；頁面 `D:\HT9045\web\page\ht9045_main_st01_ev.js`（main.html 與 Main.*.html 子頁各一行 script）。
-- 12 條：runMode／tempMode／light／fan／funcView／indexTorque／hp2View／checkEncoder／sg2DblClick／siteClick／ctlButton／cleanOut；value 都是 `{"op":…}`。golden 的 Enabled／Visible（authMainForm[6／8]、AccessLevel[105]、G23、ProcessKeyFlush）在 C++ 按下當下重算，不信任網頁。
-- S169「只做到事件觸發」：Site 格與 RESET／ONE CYCLE／TRAY FEED／ALARM RESET 只記「按了」（一下一筆，3 秒沒被取走就丟，R137），Jimmy 用 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\MainClickTail.h` 的 W906_Main_TakeCtlButtonEvent／W906_Main_TakeSiteClickEvent 取走後跑 golden 本體。已翻好的照接：HOME＝`main.home`（Jimmy，main 的 816ce9b2，review6 合 main 之前頁面顯示「伺服器不認得」）、CLEAN OUT＝`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\cCleanOut.cpp:64`。
-- 權杖照常要；main.html 上這一下拿的權杖做完就還（main.html 一直開著）。
-- R107：HotPlate 關窗尾段 golden 的 ShowMyMessage 經 W906_Main_Hp3TailTakeMessage 放進 form.save 回覆的 messages（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\formbridge\TfHotPlate.py` saveFlowAfter）。
-- 同一顆：`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\wb_serve.cpp:4269` 同一行接上 golden 開機的 FTP 下載資料快照（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\MainBoot.cpp` 檔尾 W906_FRWBoot_FTPDownloadDataSnapshot，a99d8e6c；R136）。
-- 例外：主畫面 Motion View 逐格托盤是 St02 的 ht9045_mv_trays.js；Save Log 鈕 golden 出貨版看不到（DEBUG_AUTO_CLEAN 關），不接。
+
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/08.md#30l-主畫面事件-actmain批次-b6b9cd496b52rulings_20260926-s167s169q47q48)
 
 ### 3.0n Configuration 頁 Tray／Hot Plate 分頁：WS `cfgtrayplate.op`（S98＋S169，todo E-003 ①，20261001）
 
-- **不是 C 路結構、也不走 form.event**：golden 兩張表（`strngrdTray`／`strngrdHP`，V912 `D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\cConfiguration.cpp:6945-7217`）
-  在移植樹 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\CfgTrayPlate.cpp`（類別 `TfConfigurationTrayPlate`，IniConfig 開頁、TrayForm／Cleaning／HotPlate 開頁都讀同一份）。
-  網頁用自己的 WS 指令 `cfgtrayplate.op`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\wb_serve.cpp:4826` form.event 那一行同行接上；本體同檔檔尾 `W906_CfgTrayPlateOp`，自己持 FormJson 鎖），
-  value＝`{"op":"get"|"select"|"modify"|"add"|"delete"|"reload"|"save","table":"tray"|"hp",…}`，每個回覆都帶兩張表的快照（cells、FixedRows／FixedCols、反白格 cursor、golden iSel、operable）。
-- 依據：RULINGS_20260926 S98＋S169（「如果已經有移植, 就接上, 如果沒有移植的, 我們直接實作」）蓋過 Q41 盤點「Configuration 的 Tray／HP 分頁：S98，屬 Q41 的『新頁面先不做』」（S158）。
-- golden **沒有確認框**（Save、Delete 按了就做）；Modify Data 的小鍵盤拆兩步：step 0 開鍵盤（回 keypad 規格）、step 1 OK（text）／Cancel，伺服器照 golden
-  `myQwertyKeyBoard.cpp:285-301` 尾段 atof→CheckRange→AnsiString 整理（Cancel 也整理），只收 golden 鍵盤打得出來的字（其餘 bad-value）。VCL 格子的副作用
-  （Add 之後選到新列、縮表時目前格被擠掉 ⇒ OnSelectCell、FixedRows／FixedCols 改變只搬反白）在同檔「VCL 格子」照 Delphi 6 Grids.pas 補。
-- 守衛（每一次重查，頁面只是第二道）：`running`（SystemStart||SoftStart）、`reload page`（Configuration 沒開或開頁後等級變了——看 form.event 別名頁
-  `Config.Configuration` 的開頁等級，新唯讀函式 `filerw::PageShownLevel`，`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\_EditPage.h` 檔尾）、`not-on-tab`（伺服器 PageControl1 不在這一頁）、
-  `not-operable`（按鈕看 `pnlTray`／`pnlHP`＝golden FormShow :5381-5382 權限＋切頁 :6113 鎖；點格／連點兩下看 `tsTrayData`／`tsHPData`——golden 權限不夠還是能連點兩下改格子、只是存不了，照翻）。
-- 頁面 `D:\HT9045\web\page\ht9045_config_trayplate.js`（`D:\HT9045\web\page\Config.Configuration.html:138` 同一行、在 ht9045_config_st01_ev.js 之後載入）：包 `HT9045Recipe.editlistGet`，
-  引擎開窗那一次 editlist.get IniConfig 回來才送 get（stage F：關著不送、最小化算開，同 D-022）；點 Tray／Hot Plate 頁籤 300 ms 後補一次 get。沒有新的串流／輪詢／publish。
-  開頁時照回應 `proxies.PageControl1.activePageIndex` 程式切頁（golden FormShow :4636-4646 `ActivePage=tsConfig`，ASE 高雄除外；引擎 C 路 gbApply 不切頁籤）——否則存檔重讀後畫面停在 Tray、
-  伺服器在 Config，本指令被 not-on-tab 擋、點同一頁籤又不會送 PageControl1 事件。isTrusted=false 的點擊，st01_ev 不送切頁事件。
-- 測試縫 `W906_TRAYFORMCSV_PATH`／`W906_PLATEFORMCSV_PATH`（沒設＝golden 全域 TrayTablePath／PlateTablePath；`tests\CMakeLists.txt` 的 `_ht9045_env_extra` 給每支 ctest 沙盒）。
-  ctest `S98_CfgTrayPlate`（C++，經 W906_CfgTrayPlateOp）、`S98_TrayPlatePage`（node，真的頁面檔）。
-- golden 怪處照留：R33（HP 存檔重讀 Tray 表）、R34（存一次再讀第 16 欄掉）、R35（空欄不加引號）、Load Data 讓 iSel 停在表外時 Delete 刪的是最後一列、只在網頁按鈕時才照 VCL 丟 EFOpenError／EFCreateError（開頁讀取照舊）。
-- ⛔ 20261001 補（AI(W906-D025)，todo D-025）：Tools ▾／Config ▾ 選單鈕＝WS `act.main.menuOpen` {"menu":"setup"|"config"}（`:4826` 同一行，act.main.menuVisible 分支後面）→ `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\FileRW\Main_D025MenuOpen.cpp` W906_Main_MenuOpenOp：閘＝`_EditPage.cpp` 檔尾 MenuClickRefused（開窗閘同一份 GToolsMenu／GConfigMenu：SystemStart、authMainForm[0|1]、Insufficient(0|1) 傳 bAlarm=false），尾段照 golden 906 main.cpp:28021-28025／:28045-28046（V912 :29023-29027／:29047-29048，c2f6c75a 之前）（Config：SetWorkParameter→UpdateMainOperateMode→EventReport(EnterConfig)；Tools：只有 EnterTool）；golden 沒有「再按收起」，頁面放行時選單已開就不叫 toggleMenu。⚠ SetWorkParameter 會寫 IO（SW[SwZ*SuckMode*]、SW[Sw10Bit*]）與 teach.ini，wb_serve 裡的 UpdateMainOperateMode 會切加熱器繼電器／送 ATC7／寫 lastdata.dat；EventReport 目前是模擬計數（SECSGEM/SecsEventReport.cpp，沒接 HSMS）。ctest `D025_MenuOpen`、`D025_MenuOpenPage`（node）。
+[讀取此節](../../hpi-web-hmi/references/json/references/route-c-golden-bridge/08.md#30n-configuration-頁-trayhot-plate-分頁ws-cfgtrayplateops98s169todo-e-003-①20261001)

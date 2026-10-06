@@ -1,37 +1,19 @@
 # XXX.MD5 — 工作檔完整性校驗
 
-**路徑：** `D:\HT9045\IniData\Data\[工作檔名]\[hash].MD5`
-**格式：** 純文字，單行 32 字元十六進位 MD5 Hash
-**用途：** 工作檔完整性驗證，防止檔案損毀或未授權修改
-
----
+舊引用路徑保留；[讀取整理後文件](../../hpi-lotinfo-recipe/references/recipe/references/MD5.md)。
 
 ## 格式
 
-```
-4ecd6a35a8959192af754eba9a74555c
-```
-
----
+[讀取此節](../../hpi-lotinfo-recipe/references/recipe/references/MD5.md#格式)
 
 ## 行為說明
 
-| 時機 | 行為 |
-|------|------|
-| 儲存工作檔 | 自動重新計算並更新 MD5 值 |
-| 載入工作檔 | 計算當前 .Data 檔的 MD5，與此檔比對 |
-| 比對不符 | 發出警告訊息（不一定阻止載入） |
-
----
+[讀取此節](../../hpi-lotinfo-recipe/references/recipe/references/MD5.md#行為說明)
 
 ## 注意事項
 
-- 通常同一目錄內有**兩個** MD5 檔（主 + 備份），以 MD5 Hash 值作為檔名
-- 手動修改任何 `.Data` 檔後，MD5 校驗會失效；需在程式中重新儲存工作檔使其更新
-- 勿手動修改此檔；應透過程式的 SaveFile 流程重新生成
-
----
+[讀取此節](../../hpi-lotinfo-recipe/references/recipe/references/MD5.md#注意事項)
 
 ## 關聯程式碼
 
-- MD5 計算：搜尋 `MD5` in [cprod.cpp](file:///d:\HT9045\HT9011UC_Code_V3.33.900.0_20260331\cprod.cpp)
+[讀取此節](../../hpi-lotinfo-recipe/references/recipe/references/MD5.md#關聯程式碼)

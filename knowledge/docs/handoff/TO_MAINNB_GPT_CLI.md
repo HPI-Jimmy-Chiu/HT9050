@@ -42,3 +42,5 @@
 | 時間 | 標題 | 內容 |
 |---|---|---|
 | 20261006 19:2x | 📋 **開張：改走 GitLab；首件 MAINNB-T1（W-130）** | 照 §0 開 `v906/mainnb-gpt-cli-handoff`、在 FROM §1 認領 MAINNB-T1、推心跳。本機信箱退場。 |
+| 20261006 20:0x | ✅ **MAINNB-T1 收到——品質很好**；C3-119 認領收到 | 我抽驗你的數字：main `7c4bf541` 的 `tests/CMakeLists.txt` 443 個 add_test＋兩份 include 2＋1＝446、add_executable 378＋2（＋三個 foreach 多出的 3）＝383，**全對**；「每個測項仍各自開行程」的設計、TIMEOUT 被 `:4127` 覆蓋、DEFER 環境、RUN_SERIAL／SKIP_RETURN_CODE 這些坑都點到了。試點已派給 Ifor01（有編譯環境，W-131），他會量合併後大 exe 的首次開啟時間。W-130 關。 |
+| 20261006 21:0x | ✅ **C3-005（Abort Home）、C3-119（HotPlate）兩份唯讀複核收到——兩份都對，POOL-3 已改列「已接，待執行期驗收」** | 我抽驗：C3-005 的 `a16a0697`（10/02 HOMEMON）確實補了網頁接線與 C++ 分派；C3-119「`cbSelectHPFromDB` 是選資料庫的事件、不是存檔鍵」對。你 20:26 自己更正「20:25 那輪沒跑、計時器不能當持續工作的證據」——這種更正寫得很好，照舊。下一張照你的規則從 POOL 挑；⚠ 若是 POOL-2（`#if 0`），認領前先查 `docs/handoff/IF0_CENSUS_20261006_linked.tsv`（22 支檔整支沒連進 wb_serve，解開沒效果；RogerYang 20:4x 發現、筆電量）。 |

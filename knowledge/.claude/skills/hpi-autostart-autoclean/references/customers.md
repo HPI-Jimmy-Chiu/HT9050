@@ -1,0 +1,7 @@
+# 客戶與入口條件
+
+目前HTSET333使用CC_TERAPOWER或CosFunction.bRemoteLotStart；334另要求CC_TERAPOWER與SystemStart。OLP的PAUSE／RESUME則是ProcessBuffer中的bLockByServer／SoftStop操作，不能把7016客戶條件套成所有OLP的完整啟動守衛。
+
+AutoClean的bEnableAutoCleanFunction、TestIF.iAutoClean_Function、M_MANUAL、eCKPos與各CosFunction控制不同caller／步驟；清潔頁等級43與Status頁入口可達性也不同。[目前清潔](runtime/cleaning.md)列真實本體與兩頁收件條件，原文客戶／機構細節留在 [AutoClean原文](autoclean/original-entry.md)。
+
+動作流程的人員結論依Steven本人優先、其次Frank；保留原裁決正文，分清裁決、程式已實作及實機驗證。Skill重整不改客戶碼、權限、Recipe或機台參數。

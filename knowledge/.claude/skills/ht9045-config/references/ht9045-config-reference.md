@@ -1,242 +1,75 @@
 # HT9045 配置區段索引
 
-快速參考 HT9045 機台配置的所有區段與代碼范圍。
+舊引用路徑保留；[讀取整理後文件](../../hpi-config/references/config/references/ht9045-config-reference.md)。
 
 ## 區段總覽
 
-| 代碼 | 區段名稱 | 功能範圍 | 典型項目數 | 最常更新度 |
-|------|---------|---------|-----------|----------|
-| **A** | Function | 機台主要功能設定 | ~40 | ★★★☆☆ |
-| **B** | Report | 報表生成與記錄 | ~15 | ★★☆☆☆ |
-| **C** | Hardware | 硬體選配與模組 | ~20 | ★☆☆☆☆ |
-| **D** | Index | 索引手臂控制 | ~80 | ★★☆☆☆ |
-| **E** | In/Out Arm | 進出手臂精細調整 | ~85 | ★★☆☆☆ |
-| **F** | Shuttle | 梭式機構交換 | ~35 | ★★☆☆☆ |
-| **G** | Visible | UI 與視覺化設定 | ~24 | ★★★☆☆ |
-| **I** | Tester | 測試機參數 | ~54 | ★★☆☆☆ |
-| **L** | Temperature | 溫度控制與補償 | ~50 | ★★★★☆ |
-| **N** | Network | 網路/遠端/上傳 | **~80 (最大)** | ★★★★★ |
-| **O** | Count | 計數/統計/記錄 | ~24 | ★★★☆☆ |
-| **P** | Tray | 盤子裝卸系統 | ~60 | ★★★☆☆ |
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#區段總覽)
 
 ## 區段詳細說明
 
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#區段詳細說明)
+
 ### A [ Function ] - 機台主要功能
 
-**概要**：HT9045 最核心的功能開關與模式設定
-
-**主要項目**：
-- A01: 自動切換 Operator 模式
-- A02: Normal/Prime bin 選擇
-- A07: 自動調速功能
-- A10: 自動重測（ART）
-- A14~A26: 條碼/ESD/接觸模式等設定
-- A60~A71: 進階功能（AMR、2D Sort、備份等）
-
-**特點**：新功能經常在 A60+ 區段加入
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#a--function----機台主要功能)
 
 ### B [ Report ] - 報表與記錄
 
-**概要**：生產數據、事件紀錄、PAT 接口
-
-**主要項目**：
-- B01~B05: 基本記錄設定
-- B11~B14: PAT（自動測試平台）整合
-
-**特點**：整合程度特定於客戶需求
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#b--report----報表與記錄)
 
 ### C [ Hardware ] - 硬體選配
 
-**概要**：可選硬體模組與功能卡
-
-**主要項目**：
-- C01~C06: 溫度/濕度/風扇
-- C17: Loader 顏色感測相關
-- C21: 其他硬體選配
-
-**特點**：多數為二進制開關，ECID 對應硬體編號
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#c--hardware----硬體選配)
 
 ### D [ Index ] - 索引手臂
 
-**概要**：多臂聯動、位置校準、誤檢測處理
-
-**主要項目**：
-- D01~D10: 基本旋轉與檢測
-- D41~D82: 精細控制與異常處理
-  - D68: Servo Off 控制
-  - D81: 真空檢查
-  - D82: 手臂上 IC 檢查
-
-**特點**：項目數多（80+），層級較深
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#d--index----索引手臂)
 
 ### E [ In/Out Arm ] - 進出手臂
 
-**概要**：進/出手臂的精細調整與尺度轉換
-
-**主要項目**：
-- E01~E30: 基本控制與位置調整
-- E30_1/E30_2: Hot/Cold 模式 In Arm 尺度
-- E31/E32: Out Arm、Shuttle 尺度
-- E35~E86: 高級異常處理與日誌
-  - E43: Auto Clean 計數
-  - E72: 等待 Shuttle
-  - E78: 逐顆吸取模式
-  - E85/E86: 填充與逐顆功能
-
-**特點**：Sub-Function 非常多，涉及溫度補償
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#e--inout-arm----進出手臂)
 
 ### F [ Shuttle ] - 梭式機構
 
-**概要**：梭式輸送轉向、感測、同步
-
-**主要項目**：
-- F01~F10: 基本控制
-- F30~F35: 2D 感測與 ID 對應
-  - F30: 浮動感測
-  - F33: 2DID 對應檢查
-  - F34: 感測參數設定
-  - F35: IC 掉落重置
-
-**特點**：近年新增了 2D 相關功能
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#f--shuttle----梭式機構)
 
 ### G [ Visible ] - UI 與視覺化
 
-**概要**：操作介面、警報提示、權限管理
-
-**主要項目**：
-- G01~G10: 基本顯示設定
-- G23~G24: 最新新增
-  - G23: 隱藏功能狀態顯示
-  - G24: 隱藏 SECS/GEM 狀態
-
-**特點**：使用者介面功能，常隨版本迭代
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#g--visible----ui-與視覺化)
 
 ### I [ Tester ] - 測試機參數
 
-**概要**：与外接??机的通信、?鄎蛂B失效?]理
-
-**主要項目**：
-- I01~I12: 基本通信與 Home 相關
-- I13~I40: 測試參數與格式
-- I49~I54: 進階功能
-  - I49: 錯誤 Bin 與接觸模式
-  - I51: 溫度異常處理
-  - I53: AQL 分類
-
-**特點**：與測試機型號相關性高
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#i--tester----測試機參數)
 
 ### L [ Temperature ] - 溫度控制
 
-**概要**：加熱/冷卻、補償、防結露
-
-**主要項目**：
-- L01~L12: 基礎溫度控制
-- L39~L45: 溫度穩定與補償
-  - L39: 進入溫度範圍等待
-  - L43: 功率追隨
-  - L44~L45: 冷氣切換與露點補償
-- L46~L50: 進階空氣流控制
-
-**特點**：更新最頻繁的區段之一，涉及複雜的熱學補償算法
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#l--temperature----溫度控制)
 
 ### N [ Network ] - 網路/遠端設定
 
-**概要**：FTP、SECS/GEM、數據上傳、遠程控制
-
-**特點**：**最大?段**（80+ 項），近年快速擴展
-
-**主要大類**：
-1. **N01~N06**: 基礎網路與 RMS/FTP 配置
-2. **N07~N08**: SECS/GEM 與自動化
-3. **N09~N12**: 批次計數、日誌上傳
-4. **N14**: Handler OEE 功能（最複雜，24 個子項）
-   - 包含 OEE 計算、數據上傳、MO 整合、Site Map 檢查
-5. **N20~N26**: 校驗碼、狀態上傳、ASE-CL、2DID 分選
-6. **N29~N35**: 參數檢查、溫度偏移、報表上傳
-
-**更新頻率**：最高（新客戶整合經常涉及網路功能定制）
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#n--network----網路遠端設定)
 
 ### O [ Count ] - 計數/統計
 
-**概要**：生產計數、Head 壽命、告警日誌
-
-**主要項目**：
-- O01: 清除與自檢
-- O03: Unloader 計數提醒
-- O06~O07: 生產記錄與 FT 失效計數
-- O11~O13: Head 壽命追蹤
-- O15~O24: 事件日誌與定時報表
-
-**特點**：輔助統計性功能，通常與記錄系統綁定
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#o--count----計數統計)
 
 ### P [ Tray ] - 盤子系統
 
-**概要**：盤子流向、Loader/Unloader、顏色分類
-
-**主要項目**：
-- P01~P15: 盤子進出與基本控制
-- P21~P32: 進階盤子邏輯與告警
-  - P21: Tray 進給方式
-  - P25~P27: 空/色盤邏輯
-- P43~P53: Unloader 與 Bin 管理
-  - P43: 卸料模式
-  - P48: 邊推與定位器迴圈
-- P57~P62: 最新功能
-  - P57: 依入料次數自動 Clean Out
-  - P62: 首個盤子檢查
-
-**特點**：複雜流程控制，常隨新卸料邏輯更新
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#p--tray----盤子系統)
 
 ## 快速查詢
 
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#快速查詢)
+
 ### 我想找... (查詢指南)
 
-| 如果想找 | 查詢位置 |
-|---------|---------|
-| 自動模式開關 | **A** (Function) |
-| 測試機相關 | **I** (Tester) |
-| 溫度相關 | **L** (Temperature) |
-| 網路/上傳相關 | **N** (Network) |
-| Arm 位置調整 | **E** (In/Out Arm) |
-| 盤子流向 | **P** (Tray) |
-| 硬體配置 | **C** (Hardware) |
-| 手臂旋轉 | **D** (Index) |
-| 梭式操作 | **F** (Shuttle) |
-| UI 控制 | **G** (Visible) |
-| 數據記錄 | **O** (Count) 或 **B** (Report) |
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#我想找-查詢指南)
 
 ### 常見工作清單
 
-**新客戶導入**：
-1. 檢查 **C** 硬體是否合符
-2. 設定 **L** 溫度范圍
-3. 配置 **N** FTP/SECS
-4. 調整 **D/E/F** 手臂與梭式參數
-5. 設定 **P** 盤子進給邏輯
-
-**版本更新**：
-1. 查看變動的區段（通常 **A/L/N/P**）
-2. 向 **G** Visible 檢查 UI 相關變動
-3. 確認 **O** Count 記錄方法有無變動
-4. 測試 **I** 測試機接口
-
-**故障排查**：
-1. **L** 溫度異常 → 檢查溫度設定
-2. **E** 手臂掉料 → 檢查尺度與真空
-3. **P** 盤子卡住 → 檢查進給邏輯
-4. **N** 無法上傳 → 檢查 FTP/網路設定
-5. **D** 索引位置不對 → 檢查旋轉校準
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#常見工作清單)
 
 ## 代碼格式速查
 
-| 代碼 | 含義 | 範例 |
-|------|------|------|
-| `[X##]` | 主功能 | `[A01]`, `[N20]` |
-| `[X##-#]` | 第一層子功能 | `[A01-1]`, `[N14-5]` |
-| `[X##-##]` | 第二層子功能 | `[N14-21]`, `[N10-3-1]` |
-| `[X##_#]` | 替代分隔符 | `[A10_6]`, `[E30_1]` |
-
----
-
-**更新時間**：2026-03-31  
-**版本**：基於 HT-9046 版本899-Configuration 全功能說明
+[讀取此節](../../hpi-config/references/config/references/ht9045-config-reference.md#代碼格式速查)

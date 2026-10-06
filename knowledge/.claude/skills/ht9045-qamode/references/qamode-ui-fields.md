@@ -1,61 +1,23 @@
 # QA Mode UI 與 Tester.Data 欄位詳細對照
 
-> 本文件為 `ht9045-qamode` SKILL 的補充參考，僅在需要查詢 UI 欄位細節時載入。
+舊引用路徑保留；[讀取整理後文件](../../hpi-lotinfo-recipe/references/qa/references/qamode-ui-fields.md)。
 
 ## UI 表單
 
-`TfQAMode`（QAMode.cpp / QAMode.dfm），主畫面亦有 `fLotInfo->edQAMode`。
-
-存檔路徑：`{DataPath}{LastOpenFN}\Tester.Data`，分兩個 INI section。
+[讀取此節](../../hpi-lotinfo-recipe/references/qa/references/qamode-ui-fields.md#ui-表單)
 
 ## [QA Mode]
 
-| Key | TestIF_File 變數 | 預設 | 範圍 | 說明 |
-|-----|------------------|------|------|------|
-| `Count` | `iQAModeCount` | 200 | 5~10000 | QA 抽測顆數 N |
-| `Tray Direct` | `iQATrayDirect` | TrayForm.Loader.Direction | 0~7 | Tray 方向圖示 |
-| `Run Type` | `iQAModeRunType` | 0 | 0~3 | 做完後動作（見 SKILL §4） |
-| `Untest Bin` | `iQAModeBin` | iTestBinCount-1（ATK=1） | 0~iTestBinCount-1 | QA 結束後剩餘 IC 的 Bin（0-based）|
-| `bQAModeAfterTrayEnd` | `bQAModeAfterTrayEnd` | false | bool | TrayEnd 後再重做一次 QA |
-| `bQAD22DoubleContact` | `bQAD22DoubleContact` | false | bool | 整合到 QA 的 D22 多重下壓 |
-| `iQAD22DoubleContactCount` | `iQAD22DoubleContactCount` | 1 | int | D22 下壓次數 |
-| `bQATrayEndCloseYield100Site` | `bQATrayEndCloseYield100Site` | false | bool | TrayEnd 把 Yield 100% 的 Site 關閉 |
+[讀取此節](../../hpi-lotinfo-recipe/references/qa/references/qamode-ui-fields.md#qa-mode)
 
 ## [QA Sampling]（僅 `CC_AMKOR_Korea && bSCKART_EnableART` 才顯示）
 
-| Key | TestIF_File 變數 | 預設 | 說明 |
-|-----|------------------|------|------|
-| `Enable` | `bEnableQASampling` | false | 啟用抽樣 |
-| `Bin` | `iQASamplingBin` | 1 | 抽樣放置 Bin |
-| `Tray Name` | `sQASamplingTray` | "Fix1" | 抽樣放置的 Auto Tray 名稱 |
-| `Count` | `iQASamplingCnt` | 100 | 抽樣顆數 |
+[讀取此節](../../hpi-lotinfo-recipe/references/qa/references/qamode-ui-fields.md#qa-sampling僅-cc_amkor_korea--bsckart_enableart-才顯示)
 
 ## 變數層級對應
 
-存檔 / 載入 / 執行三層變數命名一致，請勿混用：
-
-```
-UI (TEdit/TComboBox) ─DoFormToData→ TestIF_File.iQAModeCount        // 表單暫存
-                                       │
-                                  ReadFile()  WriteIniData()
-                                       │
-                              Tester.Data INI 檔
-                                       │
-                                  ReadIniData()
-                                       │
-                                  TestIF.iQAModeCount               // 執行緒讀檔暫存
-                                       │
-                              cinitial.cpp Initial Start
-                                       │
-                                  Prod.iQAModeCount                 // 量產執行用
-```
-
-**所有 QA 流程判斷一律使用 `Prod.iQAModeCount` / `Prod.iQAModeRunType` /
-`Prod.iQAModeBin` / `Prod.bQAModeAfterTrayEnd`**（cinitial.cpp:7074~ 賦值）。
+[讀取此節](../../hpi-lotinfo-recipe/references/qa/references/qamode-ui-fields.md#變數層級對應)
 
 ## 客戶鎖死規則
 
-- `CC_SCS` → `iQAModeRunType=1` 鎖死
-- `CC_SIGURD_PeiXing` → `iQAModeRunType=3` 鎖死、`edQAMode/rgQARunMode/cbQAModeBin/cbTrayEndDoQAModeAgain` Enabled=false
-- `CC_AnalogDevice_Phil` → `bQAModeAfterTrayEnd=false`、隱藏 `cbQAModeBin/cbTrayEndDoQAModeAgain`
-- `CosFunction.bQAModeUseUnloadCnt`（Maxim）→ `rgQARunMode` Enabled=false、隱藏 `cbQAModeBin/cbTrayEndDoQAModeAgain`
+[讀取此節](../../hpi-lotinfo-recipe/references/qa/references/qamode-ui-fields.md#客戶鎖死規則)

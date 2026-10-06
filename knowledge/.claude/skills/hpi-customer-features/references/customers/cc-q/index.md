@@ -1,0 +1,7 @@
+# cc-q 候選符號
+
+[回符號樹](../index.md)。各symbol保留獨立定義，別名／改名不自動合併。
+
+| 符號／運算元 | 候選列 |
+|---|---:|
+| [CC_QUALCOMM](cc_qualcomm/index.md) | 117 |

@@ -163,6 +163,11 @@ git for-each-ref --format='%(refname:short) %(committerdate:iso)' 'refs/remotes/
 git log -1 --format='%h %ci' origin/v906/iforgpt-handoff -- docs/handoff/FROM_IFORGPT.md 2>/dev/null
 git diff origin/main...origin/v906/iforgpt-handoff -- docs/handoff/FROM_IFORGPT.md 2>/dev/null | grep '^+' | tail -40
 git for-each-ref --format='%(refname:short) %(committerdate:iso)' 'refs/remotes/origin/v906/iforgpt-*'
+# 20261006 21:0x 起 RogerYang（BCB6 主程式維護者；人工 session、不是迴圈；golden 裡 `//RogerYang` 署名段落的原意可以直接問他）：FROM_ROGER.md 只在 v906/roger-handoff；
+#   派工與回答寫 main 的 docs/handoff/TO_ROGER.md；程式走 v906/roger-*＋MR（照一般同事的 MR 流程 gate）
+git log -1 --format='%h %ci' origin/v906/roger-handoff -- docs/handoff/FROM_ROGER.md 2>/dev/null
+git diff origin/main...origin/v906/roger-handoff -- docs/handoff/FROM_ROGER.md 2>/dev/null | grep '^+' | tail -40
+git for-each-ref --format='%(refname:short) %(committerdate:iso)' 'refs/remotes/origin/v906/roger-*'
 # 1006 起兩個 GPT 成員的交付另外看：NB2-GPT_CLI（NB2）寫 main 的 docs/handoff/NB2_GPT_CLI.md、程式／報告走 codex/* 分支＋MR；
 #   MainNB-GPT_CLI（這台筆電上的 Codex）：1006 19:1x 起能推 GitLab（Jimmy 轉達）——FROM_MAINNB_GPT_CLI.md 只在 v906/mainnb-gpt-cli-handoff；派工在 main 的 docs/handoff/TO_MAINNB_GPT_CLI.md；
 #   不碰編譯、不推 GitHub；心跳 v906/mainnbgpt-heartbeat。本機信箱 TO_／FROM_MAIN_CLAUDE_LOCAL.md 同時退場（1006 之前它推不上 git，驗過的發現由筆電轉成卡：Light／FAN → W-121）

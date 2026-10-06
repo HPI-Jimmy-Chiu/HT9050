@@ -1,0 +1,18 @@
+# CC_AMKOR_Korea：定位頁 2
+
+[回符號入口](index.md)。來源commit `341cea3d7c7136606223490c91de59019e6c0995`。
+
+function為候選；unresolved、lambda外層、停用提示與test／generated不能提升成實際生效結論。未列Task／case，需人工追完整條件與caller。
+
+| 版本／來源類別 | 檔名／function候選 | 類型／條件 | preprocessor候選 | 同版數值別名 | 次數 |
+|---|---|---|---|---|---:|
+| v906-cpp／source-candidate-build-membership-unchecked | [forms/fMain_Heater.cpp](https://gitlab.honprec.com/honprec/rd/rd5/ht9045/-/blob/341cea3d7c7136606223490c91de59019e6c0995/HT9011UC_Cpp_V3.33.906.0/forms/fMain_Heater.cpp) :: TfMain::IndexHeatMode | direct-comparison：CUSTOMER_CODE == CC_AMKOR_Korea | 無詞法條件標記；仍未核對build | — | 1 | <!-- scan-record:6031 -->
+| v906-cpp／source-candidate-build-membership-unchecked | [forms/fMain_OperateMode.cpp](https://gitlab.honprec.com/honprec/rd/rd5/ht9045/-/blob/341cea3d7c7136606223490c91de59019e6c0995/HT9011UC_Cpp_V3.33.906.0/forms/fMain_OperateMode.cpp) :: TfMain::W906_UpdateMainOperateModeBody | direct-comparison：CUSTOMER_CODE == CC_AMKOR_Korea | 無詞法條件標記；仍未核對build | — | 1 | <!-- scan-record:6044 -->
+| v906-cpp／source-candidate-build-membership-unchecked | [forms/fQAMode.cpp](https://gitlab.honprec.com/honprec/rd/rd5/ht9045/-/blob/341cea3d7c7136606223490c91de59019e6c0995/HT9011UC_Cpp_V3.33.906.0/forms/fQAMode.cpp) :: TfQAMode::FormShow | direct-comparison：CUSTOMER_CODE == CC_AMKOR_Korea | #if 0；字面停用候選 | — | 1 | <!-- scan-record:6085 -->
+| v906-cpp／source-candidate-build-membership-unchecked | [forms/fQAMode.cpp](https://gitlab.honprec.com/honprec/rd/rd5/ht9045/-/blob/341cea3d7c7136606223490c91de59019e6c0995/HT9011UC_Cpp_V3.33.906.0/forms/fQAMode.cpp) :: TfQAMode::ReadFile | direct-comparison：CUSTOMER_CODE == CC_AMKOR_Korea | 無詞法條件標記；仍未核對build | — | 1 | <!-- scan-record:6089 -->
+| v906-cpp／source-candidate-build-membership-unchecked | [forms/fTesterIF.cpp](https://gitlab.honprec.com/honprec/rd/rd5/ht9045/-/blob/341cea3d7c7136606223490c91de59019e6c0995/HT9011UC_Cpp_V3.33.906.0/forms/fTesterIF.cpp) :: TFTestIF::edInitialMaxTestClick | direct-comparison：CUSTOMER_CODE == CC_AMKOR_Korea | 無詞法條件標記；仍未核對build | — | 1 | <!-- scan-record:6111 -->
+| v906-cpp／test-or-harness-candidate | [tests/test_agv_portscan.cpp](https://gitlab.honprec.com/honprec/rd/rd5/ht9045/-/blob/341cea3d7c7136606223490c91de59019e6c0995/HT9011UC_Cpp_V3.33.906.0/tests/test_agv_portscan.cpp) :: main | symbol-reference | 無詞法條件標記；仍未核對build | — | 1 | <!-- scan-record:6152 -->
+| v906-cpp／test-or-harness-candidate | [tests/test_amr.cpp](https://gitlab.honprec.com/honprec/rd/rd5/ht9045/-/blob/341cea3d7c7136606223490c91de59019e6c0995/HT9011UC_Cpp_V3.33.906.0/tests/test_amr.cpp) :: main | symbol-reference | 無詞法條件標記；仍未核對build | — | 3 | <!-- scan-record:6160 -->
+| v906-cpp／test-or-harness-candidate | [tests/test_observer_core.cpp](https://gitlab.honprec.com/honprec/rd/rd5/ht9045/-/blob/341cea3d7c7136606223490c91de59019e6c0995/HT9011UC_Cpp_V3.33.906.0/tests/test_observer_core.cpp) :: Test_ProcessRunInfo_And_GetMachineData | symbol-reference | 無詞法條件標記；仍未核對build | — | 1 | <!-- scan-record:6250 -->
+| v906-cpp／test-or-harness-candidate | [tests/test_w6_canary.cpp](https://gitlab.honprec.com/honprec/rd/rd5/ht9045/-/blob/341cea3d7c7136606223490c91de59019e6c0995/HT9011UC_Cpp_V3.33.906.0/tests/test_w6_canary.cpp) :: test_fagv_satellite | symbol-reference | 無詞法條件標記；仍未核對build | — | 1 | <!-- scan-record:6291 -->
+| v906-cpp／test-or-harness-candidate | [tests/test_w7_l1_color.cpp](https://gitlab.honprec.com/honprec/rd/rd5/ht9045/-/blob/341cea3d7c7136606223490c91de59019e6c0995/HT9011UC_Cpp_V3.33.906.0/tests/test_w7_l1_color.cpp) :: enableAtkAmr | symbol-reference | 無詞法條件標記；仍未核對build | — | 1 | <!-- scan-record:6293 -->
