@@ -5,6 +5,7 @@
 
 ## ⚠⚠ 給機台端（20260929 18:1x 起，請先讀這一段）
 
+- **20261006 第 157 包（GitLab main `445275d1`）——只有測試檔；接在第 156 包後面**：①ctest `DtmChannelMap` 以前讀筆電才有的 `.claude/skills` JSON，**你們機台上一直紅（缺檔，不是表錯）**；現在測試自己帶硬體工作簿的 24 列，JSON 在才交叉比對、不在就印一行略過。**機台行為不變**，不用為了跑機台重建；下次建置時 `DtmChannelMap` 應該轉綠。②照舊：主控台不要選字；IOTHREAD 先只留你們機台；夜間自動更新照 23:0x 那一條。
 - **20261006 第 156 包（GitLab main `e405616d`）——急件，要重建 wb_serve；接在第 155 包後面**：①**HT9050 正式流程按 START 不再被教導值防呆擋下**（Jimmy 10/05 #121＝A）：golden `CompareTechData()` 有 3 道檢查假設「2 號點在 1 號點後面 10 mm 以上」（In Shuttle 1／2 的 Y、Out Shuttle 1／2 的 Y、Auto1／2 的 X），HT9050 的機構不是這樣——以前只有開空跑時跳過，現在 **HT9050 一律跳過這 3 道**，其他 4 道（加熱盤、Fix、Auto2／3）照舊；HT9045 完全不變。②**急件：只跑了相關測試**，下一批的全量 gate 會補驗。③照舊：主控台不要選字；IOTHREAD 先只留你們機台；夜間自動更新照 23:0x 那一條。
 - **20261006 第 155 包（GitLab main `230e0fe6`）——要重建 wb_serve；接在第 154 包後面**：①**St02 P2：你們 10/03 的「Teach 頁 Home All 鍵」＋「主畫面面板軟鍵」收進 main**（同一件事：cpp 0153／0156／0157、web 0096／0099～0101；改成照 golden 自己的軟體鍵旗標走，軟鍵的 ALARM RESET 也會做到實體鍵的副作用，例如 N07 靜音）。⚠ **Home All 與軟鍵的 START／HOME 會讓機台動，試的時候要有人在機台旁**。**不含軟體急停**（Jimmy 9/23：「已經有實體控制」）：`WebMainScanKey.cpp`、`main.html`、`ht9045_main_softkeys.js` 裡你們自己的軟體急停那幾行，合的時候**請保留你們的**（跟 IOTHREAD 一樣只留機台），其他照 main。②St01 ST01-C 第 1 片：Frank 910 的 HT9050 Index 下壓流程（`DoTestHeadMotorFP`＋`MoveIndexZ`）照行翻進來、保護都接好，**但目前沒有任何地方呼叫它——行為不變**（要等空跑關掉、Frank 的飛梭安全 X 保護接上，再由第 2 片接進流程）。③照舊：主控台不要選字；IOTHREAD 先只留你們機台；夜間自動更新照 23:0x 那一條。
 - **20261006 第 154 包（GitLab main `8ae0424c`）——要重建 wb_serve；接在第 153 包後面**：①**Teach 頁兩個新規則**（St02 ST02-C23，Steven 10/05 指定）：(a) 有範圍的參數欄（畫面上 134 個，例：入料手臂對位 Pitch X 0～4000）用小鍵盤輸入超出範圍時，按 OK 會自動夾到上下限（以前是存檔時被悄悄丟掉、重開又是舊值）；教導點位置欄照舊不夾。(b) **「Set To Offset」在那一支馬達還沒回原點（HOME 沒做完）時按不動**——狀態列會提示先 HOME（golden 不擋，這是 Steven 加的防呆）。②St01 的 review6 收回 main：對 HT9050 沒有行為改變（E-037 只影響 Teradyne US／ASE 客戶碼；E-036c、E-041 只改註解與引用文字）。③照舊：主控台不要選字；IOTHREAD 先只留你們機台；夜間自動更新照 23:0x 那一條。
@@ -279,6 +280,7 @@
 | 154 | `updates/8ae0424c/` | `8ae0424c` | `984ff908`（`updates/8ae0424c/_machine_ai/base_984ff908/`） | **要重建 wb_serve；接在 153 後面**：Teach 頁參數欄超出範圍自動夾、**沒回原點時 Set To Offset 按不動**；St01 review6 收回 main（HT9050 行為不變）（39 檔；gate b74a 兩組態綠：出貨 436＝基準 4；模擬＝基準 19＋WebMotorAccess 負載逾時（單獨重跑過）；真實檔不變；哨兵 3 綠） |
 | 155 | `updates/230e0fe6/` | `230e0fe6` | `8ae0424c`（`updates/230e0fe6/_machine_ai/base_8ae0424c/`） | **要重建 wb_serve；接在 154 後面**：St02 P2——Teach「Home All」＋主畫面面板軟鍵（**會讓機台動**；不含軟體急停，你們那幾行請保留）；St01 ST01-C 第 1 片（HT9050 Index 流程翻好、沒有呼叫點、行為不變）（24 檔；gate b75b 兩組態綠：出貨 438＝基準 4；模擬＝基準 19（多的單獨重跑過）；真實檔不變；哨兵 3 綠） |
 | 156 | `updates/e405616d/` | `e405616d` | `230e0fe6`（`updates/e405616d/_machine_ai/base_230e0fe6/`） | **急件，要重建 wb_serve；接在 155 後面**：HT9050 START 不再被 `CompareTechData` 那 3 道教導值檢查擋下（其他 4 道照舊、HT9045 不變）（5 檔；急件：只跑相關測試——兩組態增量建置綠；13 支相關測試兩組態都過（模擬第一次跑 3 支新連結執行檔啟動逾時，單獨重跑 2.8～5.2 秒過）；真實檔不變） |
+| 157 | `updates/445275d1/` | `445275d1` | `e405616d`（`updates/445275d1/_machine_ai/base_e405616d/`） | **只有測試檔；接在 156 後面**：`DtmChannelMap` 不再依賴筆電才有的 JSON（機台上那支紅燈會轉綠，行為不變）（3 檔；只有測試檔：兩組態增量建置綠、DtmChannelMap 兩組態都過、真實檔不變） |
 
 每一包各自有 `_machine_ai/README_MACHINE_AI.md`（內容與步驟）和自己的 `check_and_copy.ps1`。舊包不會被刪掉，`git pull` 不會讓正在套的那一包消失。
 
