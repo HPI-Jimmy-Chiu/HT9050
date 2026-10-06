@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-06 22:10
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 8c4de9e ERRPART: the alarm note's message line carries golden's " : "+errPart (e.g. which ／web 5fef154。
+HT9050 機台參數快照（machine_params\）—— 2026-10-06 22:27
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 50934ac PKG-163: laptop package 163 (GitHub main 4f9459c3, GitLab 5820db2d, base 58c8c8f8)／web 9385a55。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
