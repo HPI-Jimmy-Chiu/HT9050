@@ -1,0 +1,1169 @@
+From 2d57fa22210442a667c58b74d652f7b26adef621 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 6 Oct 2026 13:52:27 +0800
+Subject: [PATCH] =?UTF-8?q?PKG-159:=20laptop=20package=20159=20(GitHub=20m?=
+ =?UTF-8?q?ain=20d9993ce,=20GitLab=2022603f5f,=20base=20bc2891cc)=20--=20p?=
+ =?UTF-8?q?eriodic=20version=20check;=20EastSun=201006=20took=20both=20beh?=
+ =?UTF-8?q?aviour=20items=20(and=20then:=20'=E4=B9=8B=E5=BE=8C=E7=9A=84?=
+ =?UTF-8?q?=E6=9B=B4=E6=96=B0=E5=8C=85=E9=83=BD=E8=87=AA=E5=8B=95=E6=94=B6?=
+ =?UTF-8?q?').=20Plan=20D:\HT9045\=5Fpkg=5F159\PLAN=5F159.md;=20backup=20b?=
+ =?UTF-8?q?ranch=20backup/pre-pkg159-20261006=20+=20D:\HT9045\=5Fpkg=5F159?=
+ =?UTF-8?q?\backup=5Fmachine=5F134504.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Classified: OLD 10 (all scanned for machine-only AI(W906-*) tags / W906_ / Msk / s_ / k* identifiers missing from the laptop copy: 0), LOCAL 4 merged with 0 conflicts (merged-vs-machine adds/removes = laptop-vs-base, no machine line dropped; mymotor IDX1203 and bthermo PASSPROF marks kept), NEW 1; designer plugin folder (16 files) kept by rule. acarry.cpp / aoutarm9045_All_1Picker.cpp / docs/EVAL_THREADING_20261002.md / tests/test_flow9050_shuttle.cpp back to the machine's CRLF.
+
+A = Frank01 F9050-FIX2 (HT9050 only; motion order changes -- stand by the machine on the first run): Loader slot data MMTrayZ -> MMTrayY (csystem DoReceiveAllToBottom_9050); Index Z1 safe = TestZ1_Safe +-10 (Do_Auto_InSH / Do_Auto_OutSH); Out Shuttle Y (M18) pushed to Right after Out Shuttle 1 leaves Index with parts, Out Arm does not pick until Y is at Right (acarry + aoutarm9045_All_1Picker); empty Loader trays always to Empty (acatchtray DoPlaceToBuffer_9050); Tray arm waits while In / Out Arm ZA is below the up point (mymotor TrayArmMotorMove).
+B = Ifor01 IT-1 per golden: over-machine-limit set temperature -> WAR15194 + working temperature (G19a serial, G19b EJ1N, G19c DTME08, + the DTM map path); G25 ATC 6.0 block (only when ATC_SYSTEM says so; ATC not wired yet, EastSun 1006).
+
+Also: WORKLOG item 132 -- EastSun 1006 '還沒接atc': the COM2 resets (DTK4848 Addr 1/2/4/5/8 silent) are expected.
+
+o2 full build 0 errors; ctest 382/400 (new IT1_Bthermo passes; failures = the known list); production_audit 0 changes; Debug then release wb_serve rebuilt. WORKLOG section 3 row 159.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ Motor/mymotor.cpp                |  13 ++
+ acarry.cpp                       |  49 +++++-
+ acatchtray.cpp                   |   7 +-
+ aoutarm9045_All_1Picker.cpp      |   7 +
+ bthermo.cpp                      |  52 ++++--
+ csystem.cpp                      |   5 +-
+ docs/EVAL_THREADING_20261002.md  |  86 +++++++++-
+ docs/MACHINE_PATCHES_20261006.md |  25 +++
+ docs/NIGHT_REPORT.md             |  12 +-
+ docs/WORKLOG_MACHINE.md          |   3 +-
+ tests/CMakeLists.txt             |  16 ++
+ tests/test_dtm_channel_map.cpp   |   4 +
+ tests/test_flow9050_shuttle.cpp  |  69 +++++++-
+ tests/test_flow9050_tray.cpp     |  83 +++++++---
+ tests/test_it1_bthermo.cpp       | 263 +++++++++++++++++++++++++++++++
+ tools/measure_tick.ps1           |  56 +++++--
+ 16 files changed, 696 insertions(+), 54 deletions(-)
+ create mode 100644 tests/test_it1_bthermo.cpp
+
+diff --git a/Motor/mymotor.cpp b/Motor/mymotor.cpp
+index 0fc01a3..5e90cef 100644
+--- a/Motor/mymotor.cpp
++++ b/Motor/mymotor.cpp
+@@ -3663,6 +3663,19 @@ bool TrayArmMotorMove(int p, bool bCheckPos)
+     //<==
+     //Sam 20241206 : Tray Arm 新增 Teach 保護
+ 
++    //AI(W906-F9050-FIX2) 20261006: HT9050 新連鎖（golden／910 都沒有，作者裁決）—— Frank 本人 1006「Tray Arm在移動過程中 In/Out Arm ZA要在上位點」
++    //  （W-85 #105 ②；#109 ①「HT9050的Tray Arm是與In/Out Arm有Z相的干涉，在吸取/放置Unloader(Auto 1,2,3)的地方」）。「上位點」用 golden 自己的
++    //  判斷：InArmZSafe／OutArmZSafe(DETECT_POS_FLAG)＝每支吸嘴 Z 的 ReadPos()>=0（沒有低於原點）。不用原點燈：全機 HOME 完 Out Arm ZA 停在 0、燈是
++    //  滅的（Ht9050DryRun.cpp AI(W906-HT9050-DRYRUN-2)），而 HOME 第 1310 步會移 Tray 臂、不會先升 ZA，用燈的話 HOME 會卡在 1310。
++    //  不在上位 ⇒ Tray 臂停下來、回 false（呼叫端照常當「還沒到」重叫，ZA 上來後繼續）。只對 Type_HT9050；其他機種照舊。
++    if(MachineTypeChoice==Type_HT9050 &&
++       (InArmZSafe(DETECT_POS_FLAG)!=-1 || OutArmZSafe(DETECT_POS_FLAG)!=-1))
++    {
++        if(MOT[MTrayX].Motor!=NULL && MOT[MTrayX].Motor->Enable && MOT[MTrayX].Motor->MotionDone()==false)
++            MOT[MTrayX].PCIL132_StopMotor();
++        return false;
++    }
++
+     #ifdef SOFT_SIMULTE
+         bResult=MOT[MTrayX].MotorMove(p);
+     #else
+diff --git a/acarry.cpp b/acarry.cpp
+index 6b78412..aa0c7c2 100644
+--- a/acarry.cpp
++++ b/acarry.cpp
+@@ -3393,6 +3393,46 @@ bool W906_Ht9050OutSht1MoveBlocked(int target)
+     W906_ShtStopIfMoving(MOutShuttle1);
+     return true;
+ }
++//AI(W906-F9050-FIX2) 20261006: Frank 本人 1006 的兩題（FROM_FRANK §3 08bffcb3），HT9050 正式流程（Do_Auto_InSH／Do_Auto_OutSH 只給 Type_HT9050）：
++//  (1)「也是給他的Range可以，約略正負10」：飛梭 case 1 等 Index Z1 在安全高度，910 是 ReadPos()==Prod.TestZ1_Safe 精確相等（差 1 count 就一直等）。
++#ifndef W906_HT9050_Z1_SAFE_TOL
++#define W906_HT9050_Z1_SAFE_TOL 10
++#endif
++bool W906_Ht9050Z1AtSafe()
++{
++    const int d=MOT[MTestZ1].ReadPos()-Prod.TestZ1_Safe;
++    return d<=W906_HT9050_Z1_SAFE_TOL && -d<=W906_HT9050_Z1_SAFE_TOL;
++}
++//  (2)「Out Shuttle Y 要在右邊才能讓Out Arm取到料」「要的」（W-92 ①，NB2-1 設計 B1）：910 的 Do_Auto_OutSH 只動 MOutShuttle1；Out Shuttle 的
++//  Y 軸（MOutShuttle2，M18）要推到 Prod.OutSHT[1].iRight（Out Arm 取料位）。推之前 Out Shuttle 1 要在 Right（已退出 Index）、Out Arm ZA 在原點
++//  （同 W906_Ht9050OutSht2ToLeft 的規則）。推回 Left 不用另外寫：Out Shuttle 1 要再進 Index 前，W906_Ht9050OutSht1MoveBlocked 會先把它推回 Left。
++//  true = Y 已在 Right。HT9050 以外一律 true（呼叫端只有 Type_HT9050 的流程）。
++bool W906_Ht9050OutShtYToRight(std::string *why)
++{
++    if(MachineTypeChoice!=Type_HT9050) return true;
++    if(W906_ShtAt(MOutShuttle2, Prod.OutSHT[1].iRight)) return true;
++    if(!W906_ShtAt(MOutShuttle1, Prod.OutSHT[0].iRight))
++    {
++        W906_ShtStopIfMoving(MOutShuttle2);
++        if(why) *why="Out Shuttle 1 not at Right / Out Shuttle 1 不在右邊";
++        return false;
++    }
++    if(!W906_ShtOutArmZAHome())
++    {
++        W906_ShtStopIfMoving(MOutShuttle2);
++        if(why) *why="Out Arm ZA not at home / Out Arm ZA 不在原點";
++        return false;
++    }
++    MOT[MOutShuttle2].MotorMove(Prod.OutSHT[1].iRight);
++    if(why) *why="Out Shuttle Y moving to Right / Out Shuttle Y 移往 Right";
++    return false;
++}
++//  Out Arm 從 Out Shuttle 1 取料前（aoutarm9045_All_1Picker.cpp DoPickFromShuttle_9045_All_1Pick）：HT9050 時 Y 也要在 Right。其他機種一律 true。
++bool W906_Ht9050OutShtYReadyForPick()
++{
++    if(MachineTypeChoice!=Type_HT9050) return true;
++    return W906_ShtAt(MOutShuttle2, Prod.OutSHT[1].iRight);
++}
+ //------------------------------------------------------------------------------
+ bool InArmFullPickforTestMode()
+ {
+@@ -8776,7 +8816,7 @@ void Do_Auto_InSH()
+             {
+                 if(bContraPoisitionFlag==false)
+                 {
+-                    if(MOT[MTestZ1].ReadPos()==Prod.TestZ1_Safe)
++                    if(W906_Ht9050Z1AtSafe())                                   //AI(W906-F9050-FIX2) 20261006: ±10（Frank 1006）；910 原文 if(MOT[MTestZ1].ReadPos()==Prod.TestZ1_Safe)
+                     {
+                         Task=10;
+                     }
+@@ -8867,7 +8907,7 @@ void Do_Auto_OutSH()
+             {
+                 if(bContraPoisitionFlag==false)
+                 {
+-                    if(MOT[MTestZ1].ReadPos()==Prod.TestZ1_Safe)
++                    if(W906_Ht9050Z1AtSafe())                                   //AI(W906-F9050-FIX2) 20261006: ±10（Frank 1006）；910 原文 if(MOT[MTestZ1].ReadPos()==Prod.TestZ1_Safe)
+                         Task=10;
+                 }
+             }
+@@ -9027,6 +9067,11 @@ void Do_Auto_OutSH()
+ //                    }
+ //                    break;
+                 }
++                //AI(W906-F9050-FIX2) 20261006: 偏離 910（910 只動 MOutShuttle1；作者裁決 Frank 1006「Out Shuttle Y 要在右邊才能讓Out Arm取到料」「要的」，
++                //  W-92 ①，NB2-1 設計 B1）：Out Shuttle 1 已退出 Index、上面有料 ⇒ 把 Out Shuttle 的 Y 軸推到 Right（Out Arm 取料位）才交出去；
++                //  Out Arm 那邊在 DoPickFromShuttle_9045_All_1Pick 等 Y 到位。沒有料就不推（Y 留在 Left 待命）。
++                if(FRCarryKit.HasIC() && W906_Ht9050OutShtYToRight(NULL)==false)
++                    break;
+                 bCheckShuttleFlag=false;
+                 Task=1;
+             }
+diff --git a/acatchtray.cpp b/acatchtray.cpp
+index 1ac2197..60aa185 100644
+--- a/acatchtray.cpp
++++ b/acatchtray.cpp
+@@ -4369,7 +4369,10 @@ bool DoPlaceToBuffer_9050()
+             }
+             else
+             {
+-                pos=Prod.iXTrayAuto[0];                                         //kevin 20120726 移到auto 1
++                //AI(W906-F9050-FIX2) 20261006: 偏離 910（作者裁決）—— Frank 本人 1006「先改成Loader空盤只能到Empty Tray」（W-85 #105）：Item==3（工單選
++                //  [3]AUTO1，Tray.Data ToBuffer=2）也放 Empty。910 這裡走 case 200 的 DoPlaceTrayToAuto_9050(0)，那支函式從 1 起算、0 永遠做不完，
++                //  切成 Type_HT9050 後會停在 CatchTrayTask 2120 而且不報警。910 原文：pos=Prod.iXTrayAuto[0];   //kevin 20120726 移到auto 1
++                pos=Prod.iXTrayEmpty;
+             }
+             Task=10;
+             break;
+@@ -4387,7 +4390,7 @@ bool DoPlaceToBuffer_9050()
+                 }
+                 else
+                 {
+-                    Task = 200;
++                    Task = 100;                                                 //AI(W906-F9050-FIX2) 20261006: Frank 1006 Loader 空盤只到 Empty（見 case 1）；910 原文 Task = 200;
+                 }
+             }
+             break;
+diff --git a/aoutarm9045_All_1Picker.cpp b/aoutarm9045_All_1Picker.cpp
+index beb21e7..f7dffc9 100644
+--- a/aoutarm9045_All_1Picker.cpp
++++ b/aoutarm9045_All_1Picker.cpp
+@@ -482,6 +482,13 @@ bool DoPickFromShuttle_9045_All_1Pick(int iSht)
+         //MoveOutArmToAutoSafe();                                               //Steven 20150408 : Mark,避免吸嘴上上下下
+         return false;
+     }
++    //AI(W906-F9050-FIX2) 20261006: HT9050 —— Frank 1006「Out Shuttle Y 要在右邊才能讓Out Arm取到料」：Out Shuttle 1 的 Y 軸（MOutShuttle2）還沒在
++    //  Right 就先不去取料（Do_Auto_OutSH case 200 會把它推過去，acarry.cpp W906_Ht9050OutShtYToRight）。其他機種／Shuttle 2 一律放行。
++    {
++        extern bool W906_Ht9050OutShtYReadyForPick();
++        if(iSht==0 && W906_Ht9050OutShtYReadyForPick()==false)
++            return false;
++    }
+ 
+     switch(Task)
+     {
+diff --git a/bthermo.cpp b/bthermo.cpp
+index 3401d83..81e23f1 100644
+--- a/bthermo.cpp
++++ b/bthermo.cpp
+@@ -184,6 +184,9 @@
+                                //   EJ1N/TextProcess.cpp must be in the same link as this file.
+ // NOT included, and why:
+ //   rs232.h / OmronEJ1N.h / ATCInterface.h / ATC_Handler_Side.h / WinWaySetting.h /
++#include "forms/fHS.h"             //AI(W906-IT1) 20261006 (Ifor01): TFormHS::CheckTempOffset (forms/fHS.cpp:804, golden HS_Function.cpp:3958) -- gates G19a/b/c
++#define HT9045_ATCINTERFACE_TCOLOR_EXTRA   //AI(W906-IT1) 20261006 (Ifor01): skip ATCInterface.h:178-182's local clGray / clNavy -- EJ1N/MyOmronPanel.h (via forms/fDTME08.h below) defines clGray unguarded; ATCInterface.h uses neither after :182
++#include "ATC/ATCInterface.h"      //AI(W906-IT1) 20261006 (Ifor01): ATCInterfaceForm->ATC_60_SYS (ATC/ATCInterface.h:445, ATC/ATCSystem.cpp) -- gate G25
+ #include "EJ1N/DtmChannelMap.h"    //AI(W906-I03b) 20261005 (Ifor01): DtmMap_ChannelOf / DtmMap_ArmedCh / DtmMap_Active (HT9050 DTM channel map)
+ #include "forms/fDTME08.h"         //AI(W906-I03) 20261002 (Ifor01): G29 opened, frmDTME08 is ported (I-03 phase 2); the NOT-included list goes on: uTemp_Set.h / cConfiguration.h / HS_Function.h / ProductionInfo.h /
+ //   uLotInfo.h  -- unported; every symbol they supplied is gated (G02, G03, G14,
+@@ -1334,6 +1337,12 @@ void DoThermo()
+ //---------------------------------------------------------------------------
+ TQPF_Timer tThermoAlarmTimer;
+ //---------------------------------------------------------------------------
++//AI(W906-IT1) 20261006 (Ifor01): golden's FormHS (HS_Function.h:148 `extern PACKAGE TFormHS *FormHS;`).  The global name
++//  FormHS in this tree belongs to Automation/SCK_ART_Remainder.h's stub (UpDataToServerByFTP only), so this file reaches the
++//  translated TFormHS the way uTemp_Set.cpp:217 does.  CheckTempOffset keeps all its state in function statics, so this
++//  instance and uTemp_Set.cpp's share the same alarm bookkeeping, as golden's single FormHS did.
++static TFormHS* BT_FormHS() { static TFormHS* p = new TFormHS(); return p; }
++//---------------------------------------------------------------------------
+ //AI(W906-I03b) 20261005 (Ifor01): the DTM transport of a channel the DTM channel map serves (EJ1N/DtmChannelMap.h; NEW
+ //  DESIGN, docs/I03B_HT9050_DTM_CHANNEL_MAP.md option A, Ifor 1005 13:4x).  DoThermoReal case 100 has computed Temp exactly
+ //  as golden's serial path (staged Hotplate / Shuttle heating, DUT fixed temperature, heat modes, ...); only the serial
+@@ -1347,11 +1356,30 @@ TQPF_Timer tThermoAlarmTimer;
+ //    file's case 2500).  Not installed -> no read (golden's read branch goes to case 300).  The DTM not connected for more
+ //    than 5 visits -> 999 + UN150CommError, as case 2500's CommunCTErr>5.
+ //  The caller goes to case 300 (next channel): nothing waits for a serial reply.
+-static void W906_DtmMapExchange(int Addr, double Temp, double& dOldTemp, int& iCommErr)
++static void W906_DtmMapExchange(int Addr, double Temp, double& dOldTemp, int& iCommErr, bool& bHasErrorSet)
+ {
+     const int iCh=DtmMap_ChannelOf(Addr);
+     if(Temp!=dOldTemp)
+     {
++//AI(W906-IT1) 20261006 (Ifor01): DTM 表路徑比照 golden DTME08 路徑 -- with the map on, this exchange replaces golden's
++//  DTME08 path, and golden checks the over-machine-limit there (G19c in DoSetSVOfDTME08, golden :4750-4764; the same lines as
++//  G19a in the serial write branch below, golden :2318-2332).  Without it an HT9050 with the map would heat past the limit
++//  unchecked.  Same lines, DoThermoReal's bHasErrorSet and tThermoAlarmTimer (the path that calls it); laptop agreed TO_IFOR 1006 09:4x.
++        if(BT_FormHS()->CheckTempOffset(Addr, Temp))                            //設定溫度大於機台能力
++        {
++            if(bHasErrorSet==false)                                             //判斷有無Alarm過
++            {
++                BT_FormHS()->CheckTempOffset(0, 0, true);                       //Alarm 溫度設定錯誤
++                tThermoAlarmTimer.SetSecAndOn(20);
++                bHasErrorSet=true;                                              //設定Alarm旗標
++            }
++            else
++            {
++                if(tThermoAlarmTimer.Off())
++                    bHasErrorSet=false;                                         //取消Alarm旗標
++            }
++            Temp=Temperature.fWorkTemperBase;                                   //設定溫度超過機台極限改寫工作溫度給溫控器(不包含Offset)
++        }
+         HeaterSVLog(Addr, Temp);
+         dOldTemp=Temp;
+         ClearHotBuffer(Addr);
+@@ -2694,7 +2722,7 @@ void DoThermoReal()
+ //AI(W906-I03b) 20261005 (Ifor01): DTM channel map -- Temp is golden's; only the transport differs (W906_DtmMapExchange above).
+             if (ht9045::g_W906PhaseMark) ht9045::g_W906PhaseMark("T100 write branch");  if(DtmMap_ChannelOf(Addr)>=0)   //AI(W906-PASSPROF) 20261006: probe (same line)
+             {
+-                W906_DtmMapExchange(Addr, Temp, OldTemp[Addr], CommunCTErr[Addr]);
++                W906_DtmMapExchange(Addr, Temp, OldTemp[Addr], CommunCTErr[Addr], bHasErrorSet);
+                 Task=300;
+                 break;
+             }
+@@ -2709,12 +2737,12 @@ void DoThermoReal()
+ //  ACTIVE DEFAULT: the over-machine-limit clamp is skipped, i.e. golden's normal path: Temp keeps the
+ //  value GetFactSetTemp produced.  bHasErrorSet / tThermoAlarmTimer keep their
+ //  declarations so the gate can be retired by deleting the #if 0 alone.
+-#if 0 // TODO(W7 G19a): golden :2318-2332
+-                if(FormHS->CheckTempOffset(Addr, Temp))                         //設定溫度大於機台能力  //Ifor 20180809 (Steven) : add Check the temperature Offset limit Hisi_V02.20
++#if 1 // was: #if 0 // TODO(W7 G19a): golden :2318-2332 -- opened AI(W906-IT1) 20261006 (Ifor01): TFormHS::CheckTempOffset has a body now (forms/fHS.cpp:804); the note above is history
++                if(BT_FormHS()->CheckTempOffset(Addr, Temp))                    //設定溫度大於機台能力  //Ifor 20180809 (Steven) : add Check the temperature Offset limit Hisi_V02.20  //AI(W906-IT1) 20261006: FormHS -> BT_FormHS() (the global FormHS is SCK_ART_Remainder.h's stub; TFormHS::CheckTempOffset is forms/fHS.cpp:804)
+                 {
+                     if(bHasErrorSet==false)                                     //判斷有無Alarm過
+                     {
+-                        FormHS->CheckTempOffset(0, 0, true);                    //Alarm 溫度設定錯誤
++                        BT_FormHS()->CheckTempOffset(0, 0, true);               //Alarm 溫度設定錯誤  //AI(W906-IT1) 20261006: FormHS -> BT_FormHS() (the global FormHS is SCK_ART_Remainder.h's stub; TFormHS::CheckTempOffset is forms/fHS.cpp:804)
+                         tThermoAlarmTimer.SetSecAndOn(20);
+                         bHasErrorSet=true;                                      //設定Alarm旗標
+                     }
+@@ -3848,7 +3876,7 @@ void DoATC60Temperature()
+ //  zero hits.  Cannot compile.  The Temp[]/bHeater computation ABOVE stays ACTIVE.
+ //  ACTIVE DEFAULT: no ATC6.0/3.0 command is sequenced and UN150Read[] is left untouched (rather than
+ //  being overwritten with 999.0), so whatever the HAL last published survives.
+-#if 0 // TODO(W7-UI G25): golden :3243-3319
++#if 1 // was: #if 0 // TODO(W7-UI G25): golden :3243-3319 -- opened AI(W906-IT1) 20261006 (Ifor01): ATCInterfaceForm->ATC_60_SYS is ported (ATC/ATCInterface.h:445; ATC/ATCSystem.cpp SetTargetTemperature :1845 / SetTargetOffsetTemperature :1887 / SetATCRun :1920 / GetRealTemp :1815 / IsConnected :2027 / IsConnecting :2039, no gates; its socket comes from the ctor's NewSocket); the note above is history
+     static int count=0;
+     static int iTask=0;
+     count++;
+@@ -4022,12 +4050,12 @@ void DoSetSVOfOmronEJ1N()
+ //  entire surface is UpDataToServerByFTP (see its own gate #17 note) -- no
+ //  CheckTempOffset -- and HS_Function.{h,cpp} is unported.  Cannot compile.
+ //  ACTIVE DEFAULT: same as G19a, EJ1N SV path.
+-#if 0 // TODO(W7 G19b): golden :3387-3401
+-        if(FormHS->CheckTempOffset(Addr, Temp[Addr]))                           //設定溫度大於機台能力
++#if 1 // was: #if 0 // TODO(W7 G19b): golden :3387-3401 -- opened AI(W906-IT1) 20261006 (Ifor01): TFormHS::CheckTempOffset has a body now (forms/fHS.cpp:804); the note above is history
++        if(BT_FormHS()->CheckTempOffset(Addr, Temp[Addr]))                      //設定溫度大於機台能力  //AI(W906-IT1) 20261006: FormHS -> BT_FormHS() (the global FormHS is SCK_ART_Remainder.h's stub; TFormHS::CheckTempOffset is forms/fHS.cpp:804)
+         {
+             if(bHasErrorSet==false)                                             //判斷有無Alarm過
+             {
+-                FormHS->CheckTempOffset(0,0,true);                              //Alarm 溫度設定錯誤
++                BT_FormHS()->CheckTempOffset(0,0,true);                         //Alarm 溫度設定錯誤  //AI(W906-IT1) 20261006: FormHS -> BT_FormHS() (the global FormHS is SCK_ART_Remainder.h's stub; TFormHS::CheckTempOffset is forms/fHS.cpp:804)
+                 tEJ1NAlarmTimer.SetSecAndOn(20);
+                 bHasErrorSet=true;                                              //設定Alarm旗標
+             }
+@@ -5450,12 +5478,12 @@ void DoSetSVOfDTME08()
+ //  entire surface is UpDataToServerByFTP (see its own gate #17 note) -- no
+ //  CheckTempOffset -- and HS_Function.{h,cpp} is unported.  Cannot compile.
+ //  ACTIVE DEFAULT: same as G19a, DTME08 SV path.
+-#if 0 // TODO(W7 G19c): golden :4750-4764
+-        if(FormHS->CheckTempOffset(Addr, Temp[Addr]))                           //設定溫度大於機台能力
++#if 1 // was: #if 0 // TODO(W7 G19c): golden :4750-4764 -- opened AI(W906-IT1) 20261006 (Ifor01): TFormHS::CheckTempOffset has a body now (forms/fHS.cpp:804); the note above is history
++        if(BT_FormHS()->CheckTempOffset(Addr, Temp[Addr]))                      //設定溫度大於機台能力  //AI(W906-IT1) 20261006: FormHS -> BT_FormHS() (the global FormHS is SCK_ART_Remainder.h's stub; TFormHS::CheckTempOffset is forms/fHS.cpp:804)
+         {                                                                       //Ifor 20180809 (Steven) : add Check the temperature Offset limit Hisi_V02.20
+             if(bHasErrorSet==false)                                             //判斷有無Alarm過
+             {
+-                FormHS->CheckTempOffset(0, 0, true);                            //Alarm 溫度設定錯誤
++                BT_FormHS()->CheckTempOffset(0, 0, true);                       //Alarm 溫度設定錯誤  //AI(W906-IT1) 20261006: FormHS -> BT_FormHS() (the global FormHS is SCK_ART_Remainder.h's stub; TFormHS::CheckTempOffset is forms/fHS.cpp:804)
+                 tEJ1NAlarmTimer.SetSecAndOn(20);
+                 bHasErrorSet=true;                                              //設定Alarm旗標
+             }
+diff --git a/csystem.cpp b/csystem.cpp
+index eb325f9..cd4cffc 100644
+--- a/csystem.cpp
++++ b/csystem.cpp
+@@ -11921,7 +11921,10 @@ bool DoReceiveAllToBottom_9050()
+ 
+     //IO 陣列 (compile-time enum,可 static const)
+     static const int aMotZ[5]     = { MLoaderZ,               MEmptyZ,               MAuto1Z,               MAuto2Z,               MAuto3Z              };
+-    static const int aMMMot[5]    = { MMTrayZ,                MMEmpty,               MMAuto1,               MMAuto2,               MMAuto3              };
++    //AI(W906-F9050-FIX2) 20261006: Loader 格 MMTrayZ → MMTrayY（偏離 910 csystem.cpp:7648，作者裁決）—— Frank 本人 1005「在程式裡面資訊流判斷都是
++    //  以Y為主」、1006「改」：Loader 的料盤資料在 MMTrayY（DoLoadNewICTray_9050 case 300 記在這裡，DoCatchFromLoader_9050 case 40 也改清它，F9050-FIX1），
++    //  其他四格本來就是各站的料盤資料（MMEmpty／MMAuto1～3）。910 原文：{ MMTrayZ, MMEmpty, MMAuto1, MMAuto2, MMAuto3 }
++    static const int aMMMot[5]    = { MMTrayY,                MMEmpty,               MMAuto1,               MMAuto2,               MMAuto3              };
+     static const int aEdgeClip[5] = { C_LoaderEdgeClip,       C_EmptyEdgeClip,       C_Auto1EdgeClip,       C_Auto2EdgeClip,       C_Auto3EdgeClip      };
+     static const int aEdgePush[5] = { C_LoaderEdgePush,       C_EmptyEdgePush,       C_Auto1EdgePush,       C_Auto2EdgePush,       C_Auto3EdgePush      };
+     static const int aSel[5]      = { C_TrayZ_Selector,       C_EmptyLoaderZ_Select, C_Auto1LoaderZ_Select, C_Auto2LoaderZ_Select, C_Auto3LoaderZ_Select};
+diff --git a/docs/EVAL_THREADING_20261002.md b/docs/EVAL_THREADING_20261002.md
+index 7ad23a9..99c64ae 100644
+--- a/docs/EVAL_THREADING_20261002.md
++++ b/docs/EVAL_THREADING_20261002.md
+@@ -15,7 +15,8 @@
+ |---|---|
+ | 要不要改回多執行緒 | **擱置。** 維持單執行緒 —— 而且確認過現在的 main 與 golden 同形（§1）：golden 的 `MainProc` 包在 `Synchronize` 裡跑 UI 執行緒，8 條 `TThread` 有 7 條只是計時器；筆電的 `FastClock.cpp` 也沒建任何執行緒，三個 job 都在同一條 serve loop 上 |
+ | 筆電的節拍 | **500 → 100 ms**（`tools/wb_serve.cpp:2943`，commit `fbbaeb7b`，MR !202） |
+-| 機台的節拍 | **待定。** 要先量「有 1203 卡時 `Poll()` 吃掉多少」—— 筆電沒有卡量不到。唯讀腳本 `tools/measure_tick.ps1`（同 MR），看 `[FASTCLK]` 的 `busy max` / `>=100ms` |
++| 機台的節拍 | ✅ **1005 量完了：維持 500 ms，不動**（§3.6）。實測 Poll 每秒 5 次、每次約 120 ms ＝ 這條執行緒的 **60%**；`T_worst` 130 ms ⇒ 節拍 ≥ 390 ms。**100 ms 比單次 Poll 還短，設了每一拍都會遲到。** 而且 500 ms 下加熱 job 已經每 10 秒漏 275 拍 —— **機台的瓶頸是 Poll，不是節拍** |
++| 機台真正該做的 | **把阻塞式的 `Poll()` 移出主迴圈**（§5 的 C′）。§3.6 把 C′ 從「跟節拍無關的另一件事」升級成機台上該排的那一件 |
+ 
+ ⇒ 本文件的角色從「待決評估」變成「**取值依據**」。§5 的選項表仍然有效，但 A（調節拍）已經執行，
+ D 已被 §0.1 否決，B′／C′ 沒有排程。
+@@ -350,8 +351,87 @@ PumpTick   2 ms × (1000 / 節拍ms)      ← 只有這一項隨節拍變
+    ⇒ `kServeTickMs` 設成小於 50 的值**不會真的生效**，要一起改那個上限。
+ 
+ ⇒ **筆電上的安全區是 50～100 ms；建議取 100 ms**（5 倍，CPU 9.7%，不必動其他任何東西）。
+-⚠ **機台上另有 1203 `Poll()`（200 ms 一次、約 140 ms）** —— 那個數字我沒自己量過，
+-而且它會直接吃掉節拍。**機台上的值必須在機台上量過再定，不能照抄筆電的。**
++⚠ **機台上另有 1203 `Poll()`** —— ~~那個數字我沒自己量過~~ **20261005 量到了，見 §3.6。**
++
++---
++
++### 3.6 ✅✅✅ **機台實測（20261005 17:2x–17:3x，空跑中，有 1203 卡）—— 機台的值在這裡**
++
++Jerry 1005 到機台取 `D:\HT9045\_integ_ioweb_HDD_backup\runcfg\logs\oplog_20261005.txt`
++（機台的 F5 用「IOWEB(這台)」系列設定，`launch.json` 自己設了 `W906_OPLOG_DIR`，所以
++`[STREAM]`／`[FASTCLK]` 本來就在寫檔，不必另外跑工具、不必停機台）。
++狀態：**HT9050 空跑（dry run）進行中**（log 裡同時有 `HOME dryrun: step 70/80/90/100 (cycle 68)`
++與 `MOutShuttle2 st "READY"->"PTP_MOT"` 等真實運動）。
++
++連續 12 個 10 秒窗高度一致：
++
++```
++17:36:02  passes=219 (21.9/s) busy avg=27.693 max=130.607 ms  >=20ms=50 >=30ms=50 >=100ms=50
++17:36:12  passes=203 (20.1/s) busy avg=32.000 max=286.157 ms  >=20ms=63 >=30ms=54 >=100ms=51
++17:36:22  passes=224 (22.3/s) busy avg=26.923 max=129.356 ms  >=20ms=60 >=30ms=50 >=100ms=50
++17:36:42  passes=217 (21.7/s) busy avg=28.745 max=118.551 ms  >=20ms=64 >=30ms=56 >=100ms=50
++17:27:01  passes=232 (23.2/s) busy avg=25.954 max=117.858 ms  >=20ms=50 >=30ms=50 >=100ms=50
++```
++
++#### 筆電 vs 機台
++
++| | 筆電（無卡，§3.5） | **機台（有卡，空跑中）** |
++|---|---:|---:|
++| `passes/s` | 47.1 | **22** |
++| `busy avg` | 3.6 ms | **27 ms**（7.5 倍） |
++| `busy max` | 35 ms | **118–130 ms**（一次 286） |
++| **`>=100ms` / 10 s** | **0** | **50** |
++
++#### 🎯 `>=100ms = 50` 就是 Poll，而且對得分毫不差
++
++**50 次 ÷ 10 秒 ＝ 每秒 5 次**，而 `kIoTickMs = 200 ms` 正好就是每秒 5 次。
++
++```
++Poll  每秒 5 次 × 每次約 120 ms = 600 ms/s = 這條執行緒的 60%
++交叉驗算：busy avg 27 ms × 22 passes/s = 594 ms/s ≈ 59%   ✅ 對上
++```
++
++⇒ **`wb_serve.cpp:4537` 引用同事的「約 140 ms」是對的**（實測 118–130 ms）。
++這個數字在本文件前幾版一直標著「我沒自己量過」，**現在量到了**。
++
++#### ⛔ 結論：機台**不能**用 100 ms
++
++**Poll 單次 120 ms，比 100 ms 的一拍還長。** 設成 100 ms 等於要求每 100 ms 跑一次
++`PumpTick`，但每 200 ms 就有 120 ms 被 Poll 佔住 ⇒ **每一拍都遲到**。
++
++照 §3.5 的判準（節拍 ≥ 3 × 單趟最壞值）：`T_worst ≈ 130 ms` ⇒ **節拍 ≥ 390 ms**。
++⇒ **機台維持 500 ms，剛好在安全區。**
++
++#### ⚠ 而且機台在 500 ms 下**已經被餓到了**
++
++```
++heater   20 ms  missed=275/10s  maxLate=132 ms
++binpanel 30 ms  missed=159/10s  maxLate=123 ms
++groundman 30 ms missed=160/10s  maxLate=129 ms
++```
++
++週期 20 ms 的加熱 job **每 10 秒漏掉 275 拍、遲到 132 ms**。
++**這不是節拍造成的，是 Poll 把它們擠掉。**
++
++⇒ **機台真正的瓶頸是 1203 `Poll()`，不是 `kServeTickMs`。**
++在 Poll 沒處理之前，調節拍不會讓機台變快，只會讓遲到更嚴重。
++⇒ 這也讓 §5 的 **C′（真並行執行緒）** 從「跟節拍無關的另一件事」變成**機台上真正該排的那一件**
++（把阻塞式的 `Poll()` 移出主迴圈），而 D／B′ 只對筆電與網頁有意義。
++
++#### 兩個但書
++
++1. **op log 開著**（這份就是從 oplog 檔來的）⇒ `apiCache avg 19.8 ms` 有灌水（§0.2）。
++   **不影響本節結論**：Poll 是 120 ms 等級，差兩個數量級。
++2. `http io=50/7505.9KB` ＝ **每秒 750 KB**，比筆電的 512 KB/s 還高（§0.1）。
++
++### ⇒ 最終取值
++
++| | 值 | 依據 |
++|---|---|---|
++| **筆電模擬** | **100 ms** | 無 Poll，`busy max` 35 ms，CPU 9.7%（§3.5） |
++| **機台** | **維持 500 ms（不動）** | Poll 120 ms × 5/s = 60%，`T_worst` 130 ms（本節） |
++
++使用者 1005 的裁決「筆電先 100 ms，機台上機量測後再定」—— **量完的答案是：機台不動。**
+ 
+ ---
+ 
+diff --git a/docs/MACHINE_PATCHES_20261006.md b/docs/MACHINE_PATCHES_20261006.md
+index a9c4c5c..a4dac73 100644
+--- a/docs/MACHINE_PATCHES_20261006.md
++++ b/docs/MACHINE_PATCHES_20261006.md
+@@ -25,3 +25,28 @@
+ - **web 0119**＝第 153～157 包的 web 重做：收了 `HW.teach.html` 的 Set To Offset 防呆（ST02-C23 #103）、`ht9045_contact_slk.js`／`ht9045_showbinselect_ev.js`（St01 第 154 包）；`main.html`／軟鍵／Home All／`ht9045_wire_engine.js`／motor-access.js 留機台的——**ST02-C23 #100（Teach 136 欄照 golden 夾範圍，`HT9045PageKbRange`）沒收**，問 EastSun 是不是刻意的（W-98，同時給 St01）。
+ - **WORKLOG_MACHINE.md**：照鏈尾收進第 76 批（機台改寫了自己的第 129 列，加第 153～157 包那一列）。
+ - **鏈尾**：C++ `a36d04e8` → **`f306ea95`**（cpp 0232）。下一次從 **cpp 0233／web 0120／tools 0165** 開始。
++
++## 4. cpp 0232（IOTUNE-D）→ main `bc2891cc` → 第 158 包 GitHub `31e2b21`（11:1x）
++
++- 第 76 批：b19 `v906/jimmy-b76`（`1fe677ed` 作者照機台＋合 origin/main 文件／工具），gate `b76a` 兩組態綠（出貨 439＝基準 4；模擬＝基準 19＋3 個負載逾時單獨重跑過）。包裡另有 ES02 HTDESIGNER 0.176／0.177。
++- 機台這邊沒有新 patch：下一次從 **cpp 0233／web 0120／tools 0165** 開始；C++ 鏈尾 `f306ea95`。
++
++## 5. 11:07：tools 0165（HTDESIGNER：工具列的 ▶ 按鈕＝F5）（11:2x）
++
++- 機台自己的（EastSun 1006「我剛剛用方案總管那邊的 啟動按鈕 建置時 和我按F5 時好像不太一樣」「我需要跟F5一樣」）：`tools/vscode-htdesigner` 的 ▶ 原本自己建 `build_nonoracle`（模擬）；改成停掉正在跑的再執行 `workbench.action.debug.start`（＝F5，照「執行與偵錯」選的組態與它的 preLaunchTask），設定 `ht9045Designer.run.likeF5`（預設 true，false＝舊的 ▶）。只動 extension.js／package.json／CHANGELOG／HANDOVER／smoke 測試。
++- 照 tools 0164 的做法 **交 ES02 併進下一版 htdesigner**（ES02 是那條線的主人，main 上是 0.178；直接收機台這顆會跟 ES02 的版本岔開）。TO_ES02 §4 11:2x。
++- 下一次從 **cpp 0233／web 0120／tools 0166** 開始；C++ 鏈尾仍是 `f306ea95`（tools 不接鏈）。
++
++## 6. 11:37：cpp 0233（IDX1203：HT9050 的 Index Z1 改走 1203 類別）、web 0120（第 153～157 包 web 的同一顆）；快照 11:37 `fb0981f3`（11:5x）
++
++- **cpp 0233＝IDX1203**（機台自己的；EastSun 1006：Q130「INDEX_MOTION_CARD 改成非 0（用 MyMotor）」「gali 是不是有單獨class ? 可以用1203 class 分支?」「你可以統一 index 寫成一個移動函式 裡面再分支呼叫?」——推翻 0929 D1）：`INDEX_MOTION_CARD≠0` 時 golden 照馬達表建 Index 軸（M14 → `TMyEtherCatMotor`），Galil 轉送不安裝；約 20 個 `TMyMotor::Gali_*` 在開頭依類別分流——Index 軸是 1203 就走**唯一的 Index 移動 `W906_IndexMove`**（golden 的 Index 互鎖 `IndexZCanMove`／`CheckTestZ1`／`ScanIndexMotorCanMove`、速度直送 1203 類別、`MotorMove`、golden 的編碼器範圍檢查→JAM）；Galil 命令字串→`W906_Idx1203Command`（停止、伺服、DP／DE、查詢）；`ScanMotStatus`／`TIMO`／警報→類別的燈號＋golden 的警報鎖存；`SingalHome`→golden 的 task 編號＋`MotorInitial`＋`MotorHome`；`FindZPhase` 拒絕。開關：`MachineType.h` `#define W906_IDX1203_GALI_BRANCH`；**`INDEX_MOTION_CARD=0`（其他機台）＝golden 不變**。附 ctest `test_idx1203_gali_branch.cpp`。動到 `Motor/myGALILmotor.cpp`（+274）、`Motor/mymotor.cpp`、`Motor/EcatMotorRoute.cpp`、`Motor/GaliRoute.h`、`EtherCAT/Pci1203GaliRoute.cpp`、`MachineType.h`、tests。文件部分是第 158 包帶過去的 main 文件（＋機台 WORKLOG 兩列）＝機台套了第 158 包。
++- **收進 main**：第 78 批（跟 Ifor01 MR !238 一起；第 77 批 gate `b77a` 跑完就開，在 b18 準備）。⚠ **跟 St01 的 ST01-C 第 1／1b 片（Index 那一側、`Gali_*` 路由）重疊**——照「機台已經做的不要再做一份」，已請 St01 Index 側的程式先停、等 IDX1203 進 main 再接（TO_STEVEN §4 11:5x）。
++- **web 0120**：跟 web 0118／0119 同名（第 153～157 包 web 的 Set To Offset 防呆），包本身，不收。
++- **鏈尾**：C++ `f306ea95` → **`81b64a21`**（cpp 0233）。下一次從 **cpp 0234／web 0121／tools 0166** 開始。
++
++## 7. 11:51：cpp 0234（IOFIX：IO 執行緒審查 #1～#6 在機台修好）、web 0121（包本身）、`dispatch/20261006_iothread_tick/REPORT.md`（給 Jimmy 的節拍數據）（12:0x）
++
++- **cpp 0234＝IOFIX**（機台自己的；EastSun 1006 回 Jimmy #128＝A：「我現在修 #1～#6，修好繼續開」）：#1 重掃失敗／卡沒開也在 IO 執行緒發布 ⇒ WAR16152 照常；#2 代理等待 500 ms 分段＋心跳，5 秒沒進展就撤回並拒絕；#3 發布帶時間，3 秒沒新發布就標「卡沒開」；#4 IO 執行緒結束前自己清旗標、Stop 逾時就棄置（代理一律拒絕、不 Close／delete）；#5 重掃後主執行緒立刻採用新對照表；#6 `armPoll` 經 `Pci1203IoFreshMark`；低風險三處不再繞回。機台 o2 全建 0 錯、ctest 381／399（已知清單）。**程式只留機台**（依賴 IOTHREAD，#115＝C）；WORKLOG 第 131 列收進第 78 批。IO 執行緒路徑沒有卡的 ctest 起不來，上機驗由 EastSun（拔一顆驅動器電源後按 Refresh 看 WAR16152、Refresh 後按 DO、EXIT）。
++- **REPORT.md（給 Jimmy）**：EastSun 看了 #127＝B／#128＝A 之後——**IO 執行緒不關、改成當天修好**；**機台節拍維持 100**（「維持 100，把今天數據回報 Jimmy」）。待機實測（release、不開 HMI、45 秒）：現行（IO 執行緒 30 ms＋IOTUNE-D）每圈平均 2.6 ms、最慢 24.7 ms、溫控 20 ms 漏跑 7 次／10 秒、ping p90 9.8 ms、CPU 96%%；照專案規則（tick ≥ 3 × 最慢一圈）＝≥75 ms，100 成立；單執行緒最慢 125～141 ms 才需要 500。**負載下（HOME、空跑、Motor Test、頁面開著）還沒量**，機台端說之後補。⇒ NIGHT_REPORT §0 #131 給 Jimmy。
++- web 0121：跟 0118～0120 同一顆（包本身），不收。
++- **鏈尾**：C++ `81b64a21` → **`2559dc4a`**（cpp 0234）。下一次從 **cpp 0235／web 0122／tools 0166** 開始。
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index 31cb4f7..2379669 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -1,4 +1,4 @@
+-# 夜間報告 2026-10-02（五）晚 → 10-06（二）—— 進行中版本（最後更新 1006 11:0x）
++# 夜間報告 2026-10-02（五）晚 → 10-06（二）—— 進行中版本（最後更新 1006 12:4x）
+ 
+ > 這份從 1002 22:00 起算，整份重寫。0929 晚～1003 10:1x 的舊版（207 KB）在 git 歷史：`git show b6acab52:HT9011UC_Cpp_V3.33.906.0/docs/NIGHT_REPORT.md`。
+ > 讀法：§0 只放要你決定的；§1 做完的都附 commit 或數字；§2 還在做或刻意沒做的；§3 哨兵抓到的；§4 清理；§5 推送清單；§6 我自己的錯。
+@@ -49,6 +49,12 @@
+ | 第 155 包（✅ 1006 07:1x 已推） | `v906/jimmy-b75` → main `230e0fe6`、GitHub `4f8a155`（接第 154 包，24 檔）：**St02 P2**——機台自己做的 Teach 頁「Home All」鍵＋主畫面面板軟鍵收進 main（照 golden 自己的軟體鍵旗標走；**Home All 與軟鍵的 START／HOME 會讓機台動**；**不含軟體急停**，照你 9/23 的 P11-ESTOP 留在機台，README 請機台合的時候保留自己那幾行）；**St01 ST01-C 第 1 片**（HT9050 Index 流程翻好、沒有呼叫點、行為不變）。兩組態綠（出貨 438＝基準 4；模擬＝基準 19，多的單獨重跑過）；真實檔不變；哨兵 3 綠。 機台晚上會停，早上才會依序套 152→155 |
+ | 第 156 包（✅ 1006 07:5x 已推，急件） | `v906/jimmy-u230` → main `e405616d`、GitHub `f454084`（接第 155 包，5 檔）：**NB2-1 MR !230＝FR-NB2 ③**——HT9050 按 START 不再被 golden `CompareTechData` 那 3 道教導值檢查擋下（你 #121 的 A；其他 4 道照舊、HT9045 不變）。**急件通道**（第 9 條）：既有建置資料夾增量建兩組態＋相關測試——兩組態增量建置綠、13 支相關測試兩組態都過（模擬第一次跑有 3 支新連結執行檔啟動逾時，單獨重跑 2.8～5.2 秒過）、真實檔不變；下一批全量 gate 補驗。Frank01 照舊審（特別是 Auto2／Auto3 那一道） |
+ | 第 157 包（✅ 1006 08:1x 已推，只有測試檔） | `v906/jimmy-w81` → main `445275d1`、GitHub `291fced`（接第 156 包，3 檔）：**NB2-1 MR !231＝W-81**——ctest `DtmChannelMap` 不再依賴筆電才有的 `.claude/skills` JSON（以前在機台與 sparse worktree 上因為缺檔而紅），測試自己帶硬體工作簿的 24 列、JSON 在才交叉比對（NB2-1 附反向驗證）。兩組態增量建置綠、DtmChannelMap 兩組態都過、真實檔不變；機台行為不變 |
++| 第 158 包（✅ 1006 11:1x 已推） | 第 76 批 → main `bc2891cc`、GitHub `31e2b21`（接第 157 包，21 檔）：**機台自己的 IOTUNE-D**（io 網頁快取有人讀才重建，機台上已經有）收進 main＋ES02 HTDESIGNER 0.176／0.177（工具）。gate `b76a` 兩組態綠：出貨 439＝基準 4；模擬＝基準 19，多的 3 個逾時（WebMotorAccess、TcpCmdFieldsCensus、WebLogin_ForceOperator）單獨重跑都過；真實檔不變。README 給機台端那一條也帶了你 #128＝A（今天重編關 IO 執行緒＋tick 500）與 W-101（工單送料到沒教的 Auto2／3、Fix）。**第 77 批**（Ifor01 !235 IT-1 第一批＋Frank01 !237 F9050-FIX2）gate `b77a` 11:15 起 |
++| 其他（1006 11:2x） | 機台 11:07 推 tools 0165（htdesigner 的 ▶ 改成跟 F5 一樣，EastSun 要的）→ 照 0164 的做法交 ES02 併進下一版。ES02 HTDESIGNER 0.178（修「HTML 註解前面的元件一刪就卡死 100% CPU」）合進 main `c18c6255`，跟第 77 批一起進第 159 包。Ifor01 交 IT-1 第二批 MR !238（`MyTempPanel.cpp` 解 3、留 64）→ 第 78 批。機台還沒套第 158 包（推出 0.2 小時） |
++| 機台 IDX1203（1006 11:5x） | 機台 11:37 推 cpp 0233：照 EastSun 1006（Q130：Index 改用 MyMotor）把 HT9050 的 **Index Z1 改走 1203 類別**——所有 `Gali_*` 對 Index 軸分流到唯一的 `W906_IndexMove`，golden 的 Index 互鎖照留；`INDEX_MOTION_CARD=0` 的機台照 golden。排第 78 批收進 main（跟 Ifor01 !238 一起）；跟 St01 的 ST01-C Index 側重疊，已請 St01 先停、等它進 main 再接；快照 11:37 已鏡像 `fb0981f3` |
++| 機台 IOFIX＋節拍數據（1006 12:0x） | 機台 11:51 推 cpp 0234：IO 執行緒審查的 #1～#6 在機台修好了（程式照 #115＝C 只留機台）；同時附 `REPORT.md` 說節拍維持 100（§0 #131 給你）。NB2-2b 正在做的同一批修法（`v906/nb2-iothread-fix`）已請它停，改成審機台這份 |
++| 其他（1006 12:2x） | **St02 ST02-A1 報告**（`docs/handoff/ST02_A1_DEAD_CONTROLS_20261006.md`：HT9050 網頁 (a) 沒接線 38 個、(b) 到了 C++ 沒效果 8 個；C12 的 19 個「死鈕」有 15 個是誤判）——它問你的兩題都是「照 golden 補齊」，照 RULINGS_20261001 第 0 條我直接回了「照 golden 做」：①Contact 頁 11 個模式鈕＋START／Pause／TStart／TStep／OneCycle 的網頁反灰拿掉（C++ 已接；會讓機台動，第一次在 EastSun 旁邊跑）；②HT9050 的 5 個 EP 閘照 golden 解開（「ADAM 是空的」的理由已過時）。**已讀 UA3**（NB2：要不要把機台的 TRAYSAFE-3 收進 main，它已在 NB2 對話問你）。ES02 HTDESIGNER 0.179（收了機台 tools 0164／0165）合進 main `4e87bb8f`。Ifor01 交 IT-1 第三批 MR !240（`uTemp_Set.cpp` 解 1、留 41）→ 第 78 批；他 11:5x 自己從池子接了 POOL-1（`#if 0` 普查，17:00 交） |
++| 合併（1006 12:4x） | Jerry MR !241（EVAL §3.6 機台數據＋`measure_tick.ps1` 不再教主控台選字＝W-88 ②，W-88 結案）、Steven MR !242（`AGENTS.md` 加 Codex 入口，指向同一套 CLAUDE.md／agents／skills）、ES02 HTDESIGNER 0.180／0.181（`d22beb04`）。NB2-2 MR !239（模擬組態 HOME 停在 1530 的修正，只動模擬那條路）→ 第 78 批（W-79 的 flag19 沒包在裡面，另外處理）。NB2-1 從池子接了 POOL-4，但 NB2 記憶體不足被停下，等你說才重開 |
+ | 已讀 U31（1006 08:1x） | NB2-1 暫停接案：你 08:1x 在 NB2 對話說「做一段落後，先不要接案，我要手動測試」。它手上沒卡（!230、!231 都已在 main），你的測試環境 D:\HT9045＝main `445275d1`＋機台 10/05 23:07 快照 SYNCED。**筆電不再派工給 NB2-1**，等它在 U31 寫「已恢復」。另：St01 08:0x 以為「golden 在 backup/ 底下還寫得進去」——其實 04:4x 已補（`132c237b`）並實測擋下，已附證據請它重測 |
+ | 機台醒了（1006 08:4x） | 08:06～08:17 **套了第 152 包**（EastSun 1006：14 步空跑「收」、F9050-FIX1「收」；⚠ Out Sht Z 還是 0），接著 08:43 推了它自己的 **IOTUNE**（cpp 0230）——**W-89 的數字機台自己量好了**：單執行緒 ping p90 77 ms、最慢 1.2 秒；IO 執行緒（間隔 30 ms）p90 6.6 ms、最慢 22 ms，CPU 77%→110%。IOTUNE 照 #115＝C 留機台；WORKLOG 照收。快照 08:43 已鏡像（`9e812117`）並叮嚀全體。機台現在在第 152 包，第 153～157 包它的定時檢查會依序套 |
+ | Ifor 為什麼閒著（1006 09:0x） | **不是沒有工作，是筆電漏派**：他 10/05 15:13 的心跳寫「idle」，筆電只讀 NB2-1 的心跳；之後兩張卡在他離線時移走，他回來時筆電只回了謝謝。已派 **IT-1**（純翻譯：溫控三支檔的 `#if 0`，W-96）；`#if 0` 清單改成誰閒誰認領（RULINGS_20261006 第 4 條）；新工具 `idle_scan.py` 每輪讀所有人的心跳（第 5 條，技能 §5b 已改） |
+@@ -56,6 +62,7 @@
+ | IOTHREAD 審查寫好了（1006 09:1x） | 4 個審查＋14 個反證（推翻 3 條）：沒有死結、平常正常；三條出錯路徑會讓 IO 影像凍結卻當有效（§0 #128）。**main 也有的**：每一拍都重建網頁快取、發布 1,808 個 tag，`AI(W906-TICK-100)` 的理由跟程式不符——轉給 Jerry（W-88／W-90）。全文 `docs/handoff/IOTHREAD_REVIEW_20261006.md` |
+ | 機台套好第 153～157 包（1006 09:2x） | 機台 09:00 一次套完（cpp 0231）；保留它自己的軟體急停與 TOKEN-OFF。筆電逐檔對過：12 個不同的檔全是已知留在機台的，**沒有漏掉的筆電改動**。快照 09:00 已鏡像（`48503fdc`）並叮嚀全體。Steven 08:2x 回了 Q125～Q133、09:1x 寫了動作優先層級規格（MR !232 已合 `2faa557e`）⇒ §0 #129 |
+ | `#if 0` 還剩多少（1006 09:3x） | 你 09:3x 問的。粗量：**2,327 個／209 檔**（0929：2,479／193；一週解掉約 229、新檔多 77）；0929 清單的「處理狀態」欄 **0 筆**填過，所以哪些看過沒有紀錄。詳細調查做成公共卡 **POOL-1**（唯讀），放進新的 `docs/handoff/POOL.md`，誰先閒誰認領（CHAT_JIMMY 廣播；RULINGS_20261006 第 9 條） |
++| ✅ `#if 0` 普查結果（1006 12:4x） | 你 09:3x 問的，Ifor01 12:4x 交了（POOL-1，已複製進 main `docs/handoff/IF0_CENSUS_20261006.md`／`.tsv`）：**2,327 個裡，理由已過期 399、仍缺東西 1,590、不用解 328**；不含別人正在改的（HELD），**編得過、連結查過、沒有風險標記、可以直接照 golden 解開的 228 個／80 檔**（LOW 116、MEDIUM 110、HIGH 2）——放進公共池 POOL-2，大家逐檔認領 |
+ | 第 76 批：機台 IOTUNE-D（1006 09:3x） | 機台 09:14 推的 cpp 0232（io 網頁快取有人讀才重建，跟 IO 執行緒無關）收進 main：b19 `1fe677ed`，兩組態 gate `b76a` 09:31 起；綠了出第 158 包。web 0119：機台沒收 ST02-C23 #100（Teach 欄位夾範圍），問 EastSun 是否刻意（W-98） |
+ | 其他（1006 09:4x） | Ifor01 09:2x 接了 IT-1 第一批 `bthermo.cpp`（15 個裡解 4、留 11，MR 預計 14:00）；他提的兩項加熱相關筆電回了「同意」。ES02 的 HTDESIGNER 0.176.0 合進 main `e58cab94`（跟第 76 批一起進第 158 包）。St01 E-043 第二版：4 題轉 EastSun（W-99），1 題給你（§0 #130） |
+ | NB2-2 認領 A13（1006 09:4x） | 你手動測試時量到「HT9050 模擬組態 HOME 停在第 1530 步」（`W906_AxisOff` 讀 `Motor->Enable`，golden 在 SOFT_SIMULTE 把每一軸都清掉 ⇒ 1310 跳過 Tray 臂移動、MTrayX 停在 0）。NB2-2 自己修＋兩組態驗證＋開 MR；筆電不碰 `uhome.cpp`，MR 來了排下一批 |
+@@ -121,6 +128,9 @@
+ 
+ | # | 事項 | 白話＋例＋選項（建議） | 你回之前的預設 | 在哪 |
+ |---|---|---|---|---|
++| 133 | ⏳ **追兩次、超過 4 小時還沒回的（你 08:1x 的電話清單上都有）**：Jerry——W-73（JCH-2 接觸高度盤點＋JK-02 審 FinePitch）、W-88 ②（`measure_tick.ps1` 別再教在主控台選字；① 機台／SIM 分流已被你 #127＝B 取消）、W-90（IOTHREAD 審查；機台已自己修好 #1～#6）；EastSun——W-65（實際馬達參數）、W-75（E-10 自動測高要上機量的值） | **白話**：這幾題不是決策，是「人有沒有收到」。Jerry 今天有在線（11:3x 交了 J-16），EastSun 的機台也一直在推。**選項**：A＝你電話問到了就跟我說結果（我記帳本）；B＝我照規則再在 TO 檔追第三次。 | 照舊在帳本上等 | WAITING_REPLIES |
++| 132 | 🔴 **Jerry J-16：tick 100 ms 會讓主畫面的狀態字跟塔燈顏色停住不更新**（你回報的「機台在跑，主畫面卻顯示 alarm」就是這個）——三種修法選一個 | **白話**：畫面那行字（Running／Alarm…）跟塔燈上色，要等一個 300 ms 翻一次的旗標「換邊」才重畫；tick 100 ms 時取樣剛好每 600 ms 一次＝偶數倍，每次看到的旗標都一樣，所以不重畫，要等偶爾的抖動才突然跳對。**機台現在也是 100 ms（EastSun 維持 100，§0 #131），所以機台一樣中招**，不只筆電模擬。蜂鳴器、面板燈不受影響。**例**：WAR0123 09:52:43 跳、09:52:48 按 RETRY 清掉、對話框也關了，畫面字還停在 Alarm。**選項**：A＝照 golden，把那段顯示工作改到 10 ms 的快時鐘跑（golden 原本就是 10 ms，以後改 tick 不會再出事；但顯示工作變 10 倍頻率，要先量 CPU）（Jerry 建議）；B＝最小改法：補償邏輯改成不看 tick 長度（改 3 行、零風險，但重畫仍要約 1.2 秒）；C＝tick 改回 500（跟 #127＝B／#131 衝突）。**我的建議**：**先 B 走急件**（今天機台的狀態字跟塔燈就恢復），**A 等 Jerry 量完 CPU 再做**。 | Jerry 沒動程式，等你 | FROM_JERRY 1006 11:3x（J-16） |
++| 131 | 🔴 **EastSun 沒照你的 #127／#128 做：IO 執行緒沒關（當天修好審查的 6 項）、機台節拍維持 100——附了數據要給你看。接受嗎？** | **白話**：你 09:2x 定的是「機台先關 IO 執行緒、節拍改 500」。EastSun 改成：①把審查列的 #1～#6 當天修好（cpp 0234），IO 執行緒繼續開；②節拍維持 100，理由是今天的待機數據——現在每一圈最慢 24.7 ms，照專案規則（節拍 ≥ 3 倍最慢一圈）75 ms 以上就夠，100 成立；只有單執行緒（最慢 125～141 ms）才需要 500。**還沒量的**：HOME、空跑、Motor Test 這些「有負載」的情況。**例**：如果空跑時最慢一圈變成 50 ms，100 就不夠了（要 150 以上）。**選項**：A＝接受 EastSun 的（IO 執行緒開＋節拍 100），**條件**是負載量完補表、只要有一種情況最慢一圈超過 33 ms 就改回 500（**建議**：數據支持、審查的 6 項都修了；條件讓它可逆）；B＝照你原本的（先關 IO 執行緒、節拍 500），等負載數據再談。 | 機台照 EastSun 的跑（已經是這樣） | MACHINE_PATCHES_20261006 §7；GitHub `dispatch/20261006_iothread_tick/REPORT.md` |
+ | ~~130~~ | ✅ **1006 09:5x 你回：A**（RULINGS_20261006 第 10 條）——St01 在 EastSun 的 `Motor/myEthercatmotor.h:194`＋`.cpp` 檔尾加只讀的 `W906_BusState`；已告知 EastSun | — | — | TO_STEVEN／TO_ES02 §4 09:5x |
+ | ~~129~~ | ✅ **W-44 定案＝安全區**（RULINGS_20261006 第 11 條）：Steven 09:4x 親自裁定（「這題不要再投票了，以我的為準」），Frank 10:02 也是同一個答案（安全區不一定是 0）⇒ 多數決也是這個。預設安全區 In Shuttle 1 Left＋1000、Out Shuttle 1 Right−1000（約 1 cm）；FR-NB2 ② 開工 | — | — | FROM_STEVEN 09:5x；FROM_FRANK 10:02 |
+ | ~~128~~ | ✅ **1006 09:2x 你回：A**（RULINGS_20261006 第 8 條）——機台今天重編時同一次把 IO 執行緒關掉（`MachineType.h:1944`），等審查 #1～#3 修好再開；IOTUNE-D 照開、main 也收 | — | — | TO_ES02 §4 09:3x |
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 32f66ce..40ba106 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -210,7 +210,7 @@
+ | 129 | **IO 執行緒調校（W906-IOTUNE）**（EastSun 1006「你先自己啟動分析」）：計畫 D:\HT9045\_iothread_1006\PLAN_IOTUNE.md；備份分支 backup/pre-iotune-20261006。①**10-05 21:01 那一輪（Debug 版、IO 執行緒開）量到變差**：程式 CPU p50 34%→162%；IO 按鈕反應合計 p50 8.2→14.6 ms、p90 14.8→31.5 ms，多出來的是主迴圈重建畫面快取（每份新樣本都重建＋多發布一次）。②修：IO 執行緒的新樣本照樣立刻收（到位判斷用），但**畫面快取重建與多發布只在 IO 時鐘到期才做**＝以前的頻率（env W906_IOTHREAD_CACHE_EACH_POLL=1 回到每份都做）；間隔改可用 env **W906_PCI1203_IO_THREAD_GAP_MS**（=OFF 不啟動＝單執行緒），行號不動。③**我自己上機量（release、不開 HMI 網址、什麼都沒按，每組 45 s、sys.ping 60 次）**：單執行緒 CPU 77%、主執行緒 67.5%、ping p50 12／p90 77／最慢 1231 ms；間隔 10 ms CPU 126%（IO 執行緒 88.5%、主 26%）p50 2.0／p90 12.6／最慢 24；**30 ms 110%（IO 74%）p50 1.8／p90 6.6／最慢 22**；50 ms 100% p50 2.9／p90 10.1；100 ms 85% p90 19.3、最慢 374。→ 預設間隔 10→**30 ms**。主迴圈接手指令的最慢時間 1231 ms→約 22 ms。④發現：一次 Poll 本身約 80～90 ms 的**純 CPU**（不是等 IO），這才是樣本新鮮度的上限（30 ms 間隔 ≈ 每 115 ms 一份）——下一步要量 Poll 時間花在哪裡（DI／DO 快、從站／軸診斷慢 → 分快慢兩組）。每組都正常關站、8055 釋放。⑤**第二步 IOTUNE-D（畫面快取）**：oplog [FASTCLK]／[STREAM] 逐 10 秒統計顯示畫面快取每秒重建 10 次（kServeTickMs 100 的每一拍）、每次 18 ms＝主迴圈 18%，同時 `http io=0`（沒人讀 IO 快取）→ IO runtime 那份只在最近 3 秒有網頁讀過才重建（馬達那份照舊每拍，oplog MOT 行靠它；env W906_APICACHE_IO_ALWAYS=1 回到每拍）。30 ms 間隔下：主迴圈每圈平均 5.7→**2.6 ms**、最慢一圈約 35→**24.7 ms**、≥20 ms 的圈 100→**1**／10 s、**溫控 20 ms 漏跑約 53→7 次／10 s**、最晚 40→27.7 ms、快取 18.3→5.5 ms、程式 CPU 110→96%。對照今天單執行緒：溫控漏跑 272→7、主迴圈接手指令最慢 1.2 s→34 ms | cpp（見 commit） | 見 commit |
+ | 130 | **HT9050 Index Z1 改走 1203 類別（W906-IDX1203）**（EastSun 1006：Q130 圈「請 EastSun 把 HT9050 的 INDEX_MOTION_CARD 改成非 0（用 MyMotor）」、「gali 是不是有單獨class ? 可以用1203 class 分支?」、「你可以統一 index 寫成一個移動函式 裡面再分支呼叫?」；推翻 0929 D1）：計畫 D:\HT9045\_idxmove_1006\PLAN_IDX1203_CLASS.md；備份分支 backup/pre-idx1203-20261006。INDEX_MOTION_CARD≠0 時 golden 照馬達表建 Index 軸（M14→TMyEtherCatMotor、M13/M15/M16 停用）、Galil 轉送不裝；**約 20 個被用到的 TMyMotor::Gali_* 函式開頭依類別分流**（涵蓋約 1,100 處呼叫，呼叫端一處不改）：Index 軸是 1203 → **統一的 W906_IndexMove**（Index 互鎖 IndexZCanMove／CheckTestZ1／ScanIndexMotorCanMove 照原版、速度直接設到 1203 類別、MotorMove、到位後原版編碼器範圍檢查→JAM）；Gali_Command 字串→1203 動作（ST／AB／VS0;SP0 停、SH／MO 伺服、DP＝命令＝編碼器、TP／TD／MG_BG／TI 回答；原始 Galil 移動字串不執行）；ScanMotStatus／TIMO／AlarmStatus→1203 燈號＋原版警報鎖存；SingalHome→原版步驟編號內用 MotorInitial＋MotorHome；FindZPhase 拒絕；Y1/Z2/Y2「不存在＝立即完成」。1203 類別本身 4 處 Index 名稱特例補分支（SetSpeed、GetMotorAlarm、PCIL132_StopMotor、停止後 fCMD 重設）。Galil 轉送拒裝時改由安裝程式另裝扭力／健康掛鉤＋IndexZCanMove={1,1}。開關 MachineType.h `W906_IDX1203_GALI_BRANCH`；**INDEX_MOTION_CARD=0＝完全不成立＝原本行為**（ctest GaliRouteEngine／GaliRouteCore 照過）。新 ctest Idx1203GaliBranch 61 項過。o2 全建 0 錯誤、ctest 380/399（失敗＝已知清單＋EcatMotorRoute 是防毒擋原路徑的 exe「operation not permitted」，複製到別處執行 143/143 過）、production_audit 0；Debug 11:27、release 11:34 建好。**之後**：EastSun 1006 同意改 Gerneral.ini INDEX_MOTION_CARD=1（見 §1），第一次 F5 要人在機台旁（回原點、空跑、Motor Test） | cpp（見 commit） | 見 commit |
+ | 131 | **IO 執行緒審查修正（W906-IOFIX）**（筆電 IOTHREAD_REVIEW_20261006 Part 1 #1～#6＋低風險；Jimmy 1006 #128＝A「先關、修好再開」→ EastSun 1006「我現在修 #1～#6，修好繼續開」）：計畫 D:\HT9045\_iothread_1006\PLAN_IOFIX.md；備份分支 backup/pre-iofix-20261006。①**重掃失敗**：Poll() 的「卡沒開／停用」提前 return 在 IO 執行緒也發布、Rescan() 結尾立刻發布 ⇒ 主執行緒看到 open=false，WAR16152 照常跳；⑤重掃成功後 Pci1203Control::Execute 立刻 Adopt ⇒ DO 用新對照表；②**代理等待**：500 ms 分段＋心跳，佇列中且心跳凍結 5 秒 ⇒ 撤回、命令失敗（printf），已被接手 ⇒ 繼續等、每 5 秒一行；CreateEvent 失敗直接拒絕；③**資料新舊**：發布帶時間，主執行緒 Adopt 時超過 3 秒沒新發布 ⇒ 已發布那份標 card().open=false＋lastErrorText（→ WAR16152），恢復即覆蓋；新 API Pci1203IoThreadPublishAgeMs；④**關機逾時**：IO 執行緒結束前自己清 PubReady／running／tid（不再無限遞迴），Stop 逾時 ⇒ 棄置（代理拒絕）、Pci1203MonitorDisable／ControlDisable 在執行緒活著時不 Close／delete；新 API Pci1203IoThreadAlive；⑥IndexZTorqueCore armPoll ← Pci1203IoFreshMark；低：Q44 pollsSinceIssue、GaliRouteCore 外來停止視窗、RouteSiblingHoming 不再繞回。**節拍維持 100**（Jimmy #127＝B 要 500；EastSun 1006 維持 100，數據回報：dispatch/20261006_iothread_tick）。o2 全建 0 錯誤、ctest 381/399（失敗＝已知清單；EcatMotorRoute 這次過）、production_audit 0；Debug 11:49、release 11:50 建好。**IO 執行緒故障路徑無卡 ctest 起不來，要上機驗**：1203 頁拔一顆驅動器電源後按 Refresh 看 WAR16152、正常 Refresh 後按 DO、EXIT | cpp（見 commit） | 見 commit |
+-| 132 | **主迴圈每圈分段計時＋COM2 重置不再卡主迴圈（W906-PASSPROF／W906-COMM-STOPFAST）**（EastSun 1006「請最佳化下去」）：備份分支 backup/pre-passprof-20261006。①**PASSPROF**（tools/wb_serve.cpp）：在既有 WdMark 點用 QPC 分段計時（64 格＋「(more phases)」），一圈 ≥ W906_SLOWPASS_MS（預設 100、最小 5）就在 op log 寫一行 SLOW：牆鐘 ms、主執行緒 CPU ms、前 10 段；子段標記走 ht9045::g_W906PhaseMark（FastClockJobs.cpp 定義；ctest 為 0）：熱控拍、DoThermo、DoThermoReal case 100 各步、每個 COM2 StopComm／StartComm（bthermo.cpp）、MotorAccessTick 各段（WebMotorAccessLive.cpp）；全部放在既有行上（只有 wb_serve.cpp 檔尾加行）。②**量到的原因**（release、IO 執行緒 30 ms、閒置不開 HMI 不按）：主執行緒在 DoThermoReal 裡**等**（CPU 很低）——(a) COM2 StopComm 每次 11～16 ms、90 秒約 10～14 次：DTK4848 某些位址沒回應、重試用完 golden 就重置埠；探針：等寫入執行緒 0.1～2 ms、等讀取執行緒最多一個 Sleep(1)＝15.6 ms、CloseHandle(COM2) 11～12.7 ms（驅動）；(b) 開機後約 40 秒內每通道第一次 HeaterSVLog：slHeaterLog 是 3 參數 TMyStringList（MaxLineCount=1）⇒ 每兩行同步開檔寫 D:\HT9045_Log（golden 相同），**不改**（只在開機／SV 變更）。③**COMM-STOPFAST**（vclcompat/Comm.cpp，除檔尾外不移行）：讀取執行緒閒置改等手動重置的停止事件（同一個計時刻度，StopComm 一設就醒 ⇒ 0.05～0.13 ms）；StopComm 把埠 handle 交給短命關檔執行緒，StartComm（獨佔重開前）、下一次 StopComm、~Impl 都先等它（上限 5 s）；golden 重置順序（StopComm→0.5 s→StartComm）不變。④另：W906-TEMPLOG-DIR（csystem.cpp TemperatureStorageLog 的 MyForceDirectories 依路徑快取、最多 60 s 重查）；Pci1203ModuleCheck idle() ⇒ 沒事時 W906_Pci1203ModuleCheckTick 立刻返回。**實測**：SLOW 行裡不再有 COM2 StopComm；開機窗之後熱控 20 ms 漏拍每 10 s 0～1 次、主迴圈每圈平均約 2.6 ms、ping p50 1.8 ms。o2 全建 0 錯誤；ctest 381/399（失敗＝已知清單；中途 ThermoComm／ScanKeyGolden 兩支原始碼釘選被我的同行標記弄壞，已把標記挪開後通過）；production_audit：變動檔全是 13:24:34 wb_serve 量測關閉時寫的，13:25 後 0 檔被動 ⇒ ctest 0 寫入，已重拍基準；Debug 13:38、release 13:38 建好。**待上機確認**：COM2 一直重置 ＝ 有 DTK4848 位址不回（量到 Addr 1／2／4／5／8），是否本來就沒接 | cpp（見 commit） | 見 commit |
++| 132 | **主迴圈每圈分段計時＋COM2 重置不再卡主迴圈（W906-PASSPROF／W906-COMM-STOPFAST）**（EastSun 1006「請最佳化下去」）：備份分支 backup/pre-passprof-20261006。①**PASSPROF**（tools/wb_serve.cpp）：在既有 WdMark 點用 QPC 分段計時（64 格＋「(more phases)」），一圈 ≥ W906_SLOWPASS_MS（預設 100、最小 5）就在 op log 寫一行 SLOW：牆鐘 ms、主執行緒 CPU ms、前 10 段；子段標記走 ht9045::g_W906PhaseMark（FastClockJobs.cpp 定義；ctest 為 0）：熱控拍、DoThermo、DoThermoReal case 100 各步、每個 COM2 StopComm／StartComm（bthermo.cpp）、MotorAccessTick 各段（WebMotorAccessLive.cpp）；全部放在既有行上（只有 wb_serve.cpp 檔尾加行）。②**量到的原因**（release、IO 執行緒 30 ms、閒置不開 HMI 不按）：主執行緒在 DoThermoReal 裡**等**（CPU 很低）——(a) COM2 StopComm 每次 11～16 ms、90 秒約 10～14 次：DTK4848 某些位址沒回應、重試用完 golden 就重置埠；探針：等寫入執行緒 0.1～2 ms、等讀取執行緒最多一個 Sleep(1)＝15.6 ms、CloseHandle(COM2) 11～12.7 ms（驅動）；(b) 開機後約 40 秒內每通道第一次 HeaterSVLog：slHeaterLog 是 3 參數 TMyStringList（MaxLineCount=1）⇒ 每兩行同步開檔寫 D:\HT9045_Log（golden 相同），**不改**（只在開機／SV 變更）。③**COMM-STOPFAST**（vclcompat/Comm.cpp，除檔尾外不移行）：讀取執行緒閒置改等手動重置的停止事件（同一個計時刻度，StopComm 一設就醒 ⇒ 0.05～0.13 ms）；StopComm 把埠 handle 交給短命關檔執行緒，StartComm（獨佔重開前）、下一次 StopComm、~Impl 都先等它（上限 5 s）；golden 重置順序（StopComm→0.5 s→StartComm）不變。④另：W906-TEMPLOG-DIR（csystem.cpp TemperatureStorageLog 的 MyForceDirectories 依路徑快取、最多 60 s 重查）；Pci1203ModuleCheck idle() ⇒ 沒事時 W906_Pci1203ModuleCheckTick 立刻返回。**實測**：SLOW 行裡不再有 COM2 StopComm；開機窗之後熱控 20 ms 漏拍每 10 s 0～1 次、主迴圈每圈平均約 2.6 ms、ping p50 1.8 ms。o2 全建 0 錯誤；ctest 381/399（失敗＝已知清單；中途 ThermoComm／ScanKeyGolden 兩支原始碼釘選被我的同行標記弄壞，已把標記挪開後通過）；production_audit：變動檔全是 13:24:34 wb_serve 量測關閉時寫的，13:25 後 0 檔被動 ⇒ ctest 0 寫入，已重拍基準；Debug 13:38、release 13:38 建好。COM2 一直重置 ＝ 有 DTK4848 位址不回（量到 Addr 1／2／4／5／8）——**EastSun 1006「還沒接atc」⇒ 正常，不用查接線**（ATC 接上後這些重置應消失，若沒消失再查） | cpp（見 commit） | 見 commit |
+ | — | **還沒完成**：①**實體面板鍵還是讀不到**：COM1／3／6／7 聽 15 分鐘沒資料；COM2／4／5 被 wb_serve 佔著；EastSun 說面板「跟一般 9 系列一樣」、而且「不是用 1203」→ 待確認接法。②**1203 模組 ini（WAR16154）**：程式草稿已寫好，待整合。③**關 HMI 視窗時程式還沒開好**的情況（之後會自己再開視窗）：修法已規劃 | — | 見 §4 |
+ | 41 | **VC4 閥值自己測**（EastSun「VC4 你自己測試 寫進去哪個位置 數值讀回來 會改變 自己推出來 用VC8」）：等 EastSun F5 後，用 Vacuum Unit 同一條命令對一格寫 -30 kPa、讀回、再寫回原值 | （測試中） | — |
+ | — | 關掉軟體後 VS Code 上方的除錯工具列還在：wb_serve／gdb 都已經結束、8055 沒人佔，是 VS Code 沒發現結束；按紅色方塊即可（只會跑關站腳本，沒有東西可關） | — | — |
+@@ -260,6 +260,7 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-05 | 145 | 40d11de（GitLab a9256df7） | 37861d3（web 91697f8）：機台 cpp 0180-0201 收進 main、NOTICE-DEFER-2、HOME-1310FG、S-26 R3／R1（開關預設關）、E-044、E-045（EastSun 1005：保留，含空跑時擋 START／驅動器報警停機）、S-27、E-09、F-03（預設 0）。套前 blame：沒改到任何 10-04／10-05 機台寫的行、空跑檔沒碰。ctest 360/379（失敗清單同前＋TeachCheckRangeReload 要快照參數）；production_audit 0。**推 GitHub 被密碼掃描擋（`bTesterTimeUpErrorNeedPassword==true` 等原版變數名），EastSun 1005「一樣先推上去」** | 見推送紀錄 |
+ | 10-05 | 146 | ea7a631（GitLab bfb30b76） | bae54c6（web 8bd78b0），EastSun「你可以測試包了」。計畫 D:\HT9045\_pkg_146\PLAN_146.md：不改任何 10-04／10-05 的行、空跑進入點不變；C_OutArmSmallY 留機台 152（包的 303 定義／重複註冊註解掉）；HOME 1310 MLoaderZ→W906_HomePos(TrayZ_Home)（HT9050＝0）＋1310 補速度 100；MachineType.h／tests CMakeLists 兩邊都留；test_flow9050_tray 改成機台數字（260／+25 氣缸、Tech Empty／Color、真實工位順序，因 10-04 HT9050-TYPE 工位保護）。o2 全建，ctest 365/384（Flow9050_Tray 過、PE_TruncationCheckTimeout 過，失敗清單同前），production_audit 0；release wb_serve 10:42 建好。**⚠ 9050 新 Z 教導欄位（TrayZ_Down／TrayZ_Home／EmptyZ／Auto1～3Z）全樹沒設值＝0，關空跑生產前要先決定教點來源** | GitHub b9a4337 |
+ | 10-06 | 158 | 31e2b21（GitLab bc2891cc） | 本 commit（只有文件），EastSun「一樣最佳化執行緒 更新版本」。程式部分＝機台自己的 IOTUNE-D（cpp 0232）收進 main，wb_serve.cpp 合併結果＝機台檔（不寫，避免觸發重編）；設計外掛照規定跳過；收 docs 三份＋MACHINE_PATCHES_20261006.md。README／RULINGS_20261006 第 8 條：**Jimmy 1006 #128＝A（機台先關 IO 執行緒，等審查 #1～#3 修好再開）、#127＝B（機台節拍改 500）**——EastSun 1006 裁決：**IO 執行緒照開、機台端現在修審查 #1～#6**；**節拍維持 100**，把今天量測（IO 執行緒＋IOTUNE-D 後主迴圈最慢一圈約 25 ms，照 Jerry「tick ≥ 3×最壞單趟」100 就夠；單執行緒約 125～141 ms 才需要 500）回報 Jimmy | 見推送紀錄 |
++| 10-06 | 159 | d9993ce（GitLab 22603f5f） | 本 commit（只有機台 C++，沒有 web），定時版本檢查。計畫 D:\HT9045\_pkg_159\PLAN_159.md；備份分支 backup/pre-pkg159-20261006＋D:\HT9045\_pkg_159\backup_machine_134504。直接換 10（全掃機台獨有 AI(W906-*)／W906_／Msk／s_／k* ＝ 0 缺）、兩邊都改 4（0 衝突，合併後增刪＝筆電增刪，沒刪機台行；mymotor IDX1203、bthermo PASSPROF 標記保留）、新檔 1；設計外掛 16 檔照規定跳過；acarry／aoutarm9045_All_1Picker／EVAL_THREADING／test_flow9050_shuttle 行尾轉回機台 CRLF。EastSun 1006 兩題都收：**A＝Frank F9050-FIX2（HT9050 動作順序改變，第一次跑要站在機台旁）**：Loader 料盤資料 MMTrayZ→MMTrayY（csystem DoReceiveAllToBottom_9050）、Index Z1 安全高度 TestZ1_Safe ±10（Do_Auto_InSH／OutSH）、Out Shuttle 1 帶料離開 Index 後 Out Shuttle Y（M18）推到 Right、Y 不在 Right 時 Out Arm 不取料（acarry＋aoutarm9045_All_1Picker）、Loader 空盤一律放 Empty（acatchtray DoPlaceToBuffer_9050）、Tray 臂移動時 In/Out Arm ZA 要在上位點否則 Tray 臂停下等（mymotor TrayArmMotorMove）；**B＝Ifor IT-1（照 golden）**：設定溫度超過機台能力 ⇒ WAR15194＋改送工作溫度（G19a 串列／G19b EJ1N／G19c DTME08＋DTM 表路徑），G25 ATC 6.0 段（只有 ATC_SYSTEM 指定才跑；ATC 尚未接）。**EastSun 1006 之後：「之後的更新包都自動收」**。o2 全建 0 錯誤；ctest 382/400（新 IT1_Bthermo 過；失敗＝已知清單）；production_audit 0 變動；Debug 13:51、release 13:51 建好 | 見推送紀錄 |
+ | 10-06 | 153～157 | 39f843f／8536685／4f8a155／f454084／291fced（GitLab 984ff908→445275d1） | 本 commit（機台 C++＋web），EastSun「先更新 再跑最佳化執行緒」。計畫 D:\HT9045\_pkg_157\PLAN_157.md。疊成一份比對：直接換 46、新檔 11、一樣 1、兩邊都改 13。**「直接換」逐檔掃機台有、筆電版沒有的 AI 標記與識別字（46 檔全掃）**：WebMainScanKey.cpp（筆電版沒有機台軟體急停 W906_SoftEmergencyStop／MotorAccessOnAlarm、軟鍵佇列）與 WebBridgeServer.cpp（筆電版拿掉 TOKEN-OFF「先不要在機台端卡控」與 panel.estop 免權杖）**留機台版**；連帶留機台：test_scankey_golden.cpp、WebMotorAccess.h。EastSun 1006 裁決：①**154 Set To Offset 防呆「收」**（那一軸 HOME 沒做完或 Reset Offset 空的 → 不抄不送；Steven #103=B），只把那 7 行移植進機台 HW.teach.html；**HT9045PageKbRange／wire_engine 後備範圍不收**（會讓機台清單外的 Teach 欄位夾原版範圍，違反 1004「HT9050 不夾」）；②**156 CompareTechData 三組比對 HT9050 一律跳過「收」**（Jimmy s0 #121=A；原本只有空跑跳過）。不影響行為照收：153 RS-232 實體面板（機台 ControlPanelMode=0 → 開埠／埠檢查／1 ms 工作全跳過；要用改 ini ControlPanelMode=1＋[TrayY] COM PORT，現在 COM18 不存在）、154 E-036c 註解／E-037（Teradyne US／ASE 限定）／E-041、155 ST01-C slice 1（atester_FinePitch，沒有呼叫者）、157 DtmChannelMap 測試。155 ST02-P2（機台自己的 Teach Home All＋軟體面板鍵收進 main）兩邊都改的 WebMotorAccess.cpp（合併會在檔尾多生一份 TeachHomeAllDispatch）、WebMotorAccessLive、wb_serve、main.html、motor-access.js、softkeys／homeall js、test_web_motor_access **全部留機台版**。33 檔行尾改回 CRLF；重複登記掃描乾淨。備份 D:\HT9045\_pkg_157\backup_machine_085021。o2 全建 0 錯誤、ctest 380/398（失敗＝已知清單；**DtmChannelMap 過了**）、production_audit 0；release／Debug wb_serve 08:59 建好 | 見推送紀錄 |
+ | 10-06 | 152 | caf91b3（GitLab 46a91742） | 本 commit（只有機台 C++，web 沒變），定時版本檢查發現。計畫 D:\HT9045\_pkg_152\PLAN_152.md。37 檔：直接換 22、新檔 9、一樣 1、兩邊都改 5。EastSun 1006 裁決：①**FR-DR14 空跑改成 EastSun 的 14 步「收」**（Ht9050DryRun.cpp／.h：Index Z1 真的下去 In Sht Z 吸、Out Sht Z 放，Index 吸嘴真空、放料破真空 0.3 s、沒吸到不准上）——⚠ teach.ini [MTestZ1] setEditIndex1ToOutSht1Z 仍是 0（In Sht Z -4357 已教）；②**F9050-FIX1「收」**（偏離 910、Frank 1005）：DoCatchFromLoader_9050 盤資料改從 MMTrayY 交給 MTrayX；OutSHT1InRT／InLF（HT9050）±50 算到位。不影響行為照收：St02 ProcessForESC（只 Qorvo 15Bin＋bTriggerESC）、St01 E-042 B1～B4（沒有呼叫者）、docs、新測試。WebMotorAccess 合併＝機台檔；HW.teach.html 留機台版（筆電只差註解且少機台 homeall／kb 腳本）；tests/CMakeLists 衝突（筆電又要登記 HT9050_ShtSafe／DryRun）與 test_web_motor_access 衝突（機台 TEACH-HOMEALL）都取機台側；6 檔行尾改回 CRLF；重複登記掃描乾淨。備份 D:\HT9045\_pkg_152\backup_machine_080630。o2 全建 0 錯誤、ctest 374/394（失敗＝已知清單＋FastClk_Jobs 同時跑偶發，單跑連 5 次過）、production_audit 0；release／Debug wb_serve 08:16 建好 | 見推送紀錄 |
+ | 10-05 | 151 | f999257（GitLab 53a13cc9） | 本 commit（只有機台 C++，web 沒變），定時版本檢查發現。計畫 D:\HT9045\_pkg_151\PLAN_151.md。11 檔：直接收 5、新檔 1、兩邊都改 5。①Ht9050DryRun.cpp NB2-1 R233：`#ifdef W906_HT9050_DRYRUN` → `#if defined(W906_HT9050_DRYRUN) && !defined(SOFT_SIMULTE)`（只有模擬組態不跑空跑；機台沒開 SOFT_SIMULTE ⇒ **空跑行為不變**）；②新測試 tests/test_ht9050_prodflow.cpp（模擬組態正式流程）；③macro_order_gate.ps1、docs 三份。**tools/wb_serve.cpp 維持機台版**：唯一衝突是機台多的 IOTHREAD Pci1203IoThreadStop（留）；筆電檔尾補的 W906_ExitWatchdogThread／Start／ExitDoneLog 機台 10-03 EXIT-ORDER 早就有，照收會重複定義 → 不收。WebMotorAccess／WebMotorAccessLive 合併後與機台逐行相同。重複登記掃描乾淨。o2 全建 0 錯誤、ctest 373/392（失敗＝已知清單，E020 這次過）、production_audit 0；release／Debug wb_serve 23:05 建好 | 見推送紀錄 |
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 9cd02ba..69cd66d 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -8406,3 +8406,19 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+ endif()
+ add_test(NAME CompareTechHt9050 COMMAND test_comparetech_ht9050 "${CMAKE_SOURCE_DIR}")
+ set_tests_properties(CompareTechHt9050 PROPERTIES TIMEOUT 120)
++
++# --- test_it1_bthermo: AI(W906-IT1) 20261006 (Ifor01) -- IT-1 batch 1 (TO_IFOR s3 IT-1; FROM_IFOR s1 1006 09:2x): the four
++#   bthermo.cpp `#if 0` opened as golden 0618 -- G19a / G19b / G19c (TFormHS::CheckTempOffset, the over-machine-limit clamp +
++#   WAR15194) on the serial path (a fake KT4H on the SIM Comm2), the DTME08 path, the EJ1N path and the I-03b DTM-channel-map path,
++#   and G25 (ATC6.0 / 3.0 sequencer: SetTargetTemperature, 999 while the SIM socket is not connected).  CUSTOMER_CODE = CC_PTI
++#   (HT9050); source pins (argv[1] = the port root, read only); Gerneral.ini / config.ini compared before and after.  ~10-30 s.
++#   After the GLOBAL TEST TIMEOUT block => own TIMEOUT.
++add_executable(test_it1_bthermo test_it1_bthermo.cpp)
++target_link_libraries(test_it1_bthermo PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_it1_bthermo PRIVATE ws2_32)
++endif()
++add_test(NAME IT1_Bthermo COMMAND test_it1_bthermo "${CMAKE_SOURCE_DIR}")
++set_tests_properties(IT1_Bthermo PROPERTIES TIMEOUT 300)
+diff --git a/tests/test_dtm_channel_map.cpp b/tests/test_dtm_channel_map.cpp
+index c1e1fec..121d765 100644
+--- a/tests/test_dtm_channel_map.cpp
++++ b/tests/test_dtm_channel_map.cpp
+@@ -390,6 +390,10 @@ int main(int argc, char** argv)
+     Temperature.bUseIndividualTemp=false;
+     CosFunction.bUseIndividulTempSet=false;
+     Temperature.iIndexHeatMode=HeadChamberSocket;
++    CUSTOMER_CODE=CC_PTI;                                   // AI(W906-IT1) 20261006 (Ifor01): HT9050's customer (957). Since IT-1 opened the
++                                                            //   over-machine-limit check (bthermo G19a, also on this map path) the limit
++                                                            //   matters: CC_PTI = 175 (forms/fHS.cpp CheckTempOffset); unset, the test
++                                                            //   fell to TempFuseLimitType = 0.0 (cmydef.cpp:5715) and every SV was over it
+     IniConfig.bTemp25degControl=false;
+     IniConfig.bEnableKT4HAlarm1=false;
+     Tri_Temp_Machine=0;
+diff --git a/tests/test_flow9050_shuttle.cpp b/tests/test_flow9050_shuttle.cpp
+index fd51076..8847835 100644
+--- a/tests/test_flow9050_shuttle.cpp
++++ b/tests/test_flow9050_shuttle.cpp
+@@ -91,6 +91,10 @@ int  MoveInArmXYToWaitTrayArm(int iSht, int iKit, bool IncludeZ, bool bPlace);
+ extern int iMoveToShuttle;                                                  // ainarm9045.h:35
+ void EnsureArmOffsetObjects();                                              // cOffSet.cpp:166 (forms/fOffSet.h:450), golden main.cpp:2123-2139; as tests/test_AutoClean.cpp:70
+ void DoAllProcess();                                                        // csystem.cpp (only MainProc calls it; no header)
++bool W906_Ht9050Z1AtSafe();                                                 // acarry.cpp AI(W906-F9050-FIX2) 20261006
++bool W906_Ht9050OutShtYReadyForPick();                                      // acarry.cpp AI(W906-F9050-FIX2) 20261006
++bool DoPickFromShuttle_9045_All_1Pick(int iSht);                            // aoutarm9045_All_1Picker.cpp
++extern int iPickFromShuttle1Task;                                           // golden aoutarm.h
+ extern std::vector<int> g_csystemTrace;                                     // csystem.cpp tick-sequence oracle (CSYSTEM_TICK_ORACLE on ht9045_sm)
+ extern void csystemTraceClear();
+ enum { CT_SENSORSCAN = 1, CT_DOLOAD = 2, CT_DOINARM = 3, CT_SHT1 = 4, CT_SHT2 = 5,
+@@ -378,8 +382,12 @@ int main()
+     // =======================================================================
+     printf("[I] Do_Auto_InSH (910 acarry.cpp:8530-8624)\n");
+     ResetWorld();
++    //AI(W906-F9050-FIX2) 20261006: Frank 1006 Z1 safe within +-10 (910 :8559 exact ==; was "one count off -> stays 1"); edges in [F2]
++    SetMotPos(MTestZ1, Z1_SAFE + 11);  Do_Auto_InSH();
++    CHECK(AutoSHT1Task == 1, "I1a case 1: Z1 11 counts off safe -> stays 1 (+-10, Frank 1006)");
+     SetMotPos(MTestZ1, Z1_SAFE + 1);   Do_Auto_InSH();
+-    CHECK(AutoSHT1Task == 1, "I1a case 1: Z1 one count off safe -> stays 1 (exact ==, 910 :8559)");
++    CHECK(AutoSHT1Task == 10, "I1a2 case 1: Z1 one count off safe -> 10 (inside +-10; 910's exact == waited)");
++    AutoSHT1Task = 1;
+     SetMotPos(MTestZ1, Z1_SAFE);
+     bContraPoisitionFlag = true;       Do_Auto_InSH();
+     CHECK(AutoSHT1Task == 1, "I1b case 1: bContraPoisitionFlag -> stays 1 (910 :8557)");
+@@ -576,6 +584,65 @@ int main()
+         LastSet.iRealDummy = saveReal;
+     }
+ 
++    // =======================================================================
++    //  [F2] AI(W906-F9050-FIX2) 20261006: Frank 1006 -- (1) the shuttles wait for Index Z1 within +-10 of Prod.TestZ1_Safe (910: exact ==);
++    //       (2) Out Shuttle Y (MOutShuttle2) is pushed to Right after Out Shuttle 1 leaves the Index with an IC, and the Out Arm does not
++    //       start the Out Shuttle 1 pick before it is there (910 only moves MOutShuttle1)
++    // =======================================================================
++    printf("[F2] F9050-FIX2: Z1 safe +-10; Out Shuttle Y to Right for the Out Arm pick\n");
++    {
++        struct { int d; bool go; } zc[] = { { 0, true }, { 10, true }, { -10, true }, { 11, false }, { -11, false } };
++        for (auto &z : zc)
++        {
++            ResetWorld(); SetMotPos(MTestZ1, Z1_SAFE + z.d);
++            AutoSHT1Task = 1; Do_Auto_InSH();
++            AutoSHT2Task = 1; Do_Auto_OutSH();
++            char msg[200];
++            sprintf(msg, "F2-Z Z1 at TestZ1_Safe%+d: In / Out Shuttle case 1 -> %s", z.d, z.go ? "10 (go)" : "stays 1 (waits)");
++            CHECK(z.go ? (AutoSHT1Task == 10 && AutoSHT2Task == 10 && W906_Ht9050Z1AtSafe())
++                       : (AutoSHT1Task == 1 && AutoSHT2Task == 1 && !W906_Ht9050Z1AtSafe()), msg);
++        }
++
++        const int Y_L = 5000, Y_R = 45000;
++        const bool zaEn0 = MOT[MOutArmZA].Motor->Enable;
++        auto yWorld = [&](bool ic, bool zaHome) {
++            ResetWorld();
++            Prod.OutSHT[1].iLeft = Y_L; Prod.OutSHT[1].iRight = Y_R;
++            FreeMot(MOutShuttle2, true);
++            MOT[MOutShuttle2].Motor->Enable = true; MOT[MOutShuttle2].Motor->MotorIdleSafeDoorCheck = &DoorClosed;
++            SetMotPos(MOutShuttle2, Y_L);
++            MOT[MOutArmZA].Motor->Enable = !zaHome;   // Enable=0 counts as at home (W906_ShtOutArmZAHome); enabled: the sim HOME lamp is off
++            if (ic) FRCarryKit.Item[0][0] = HAS_IC;
++            SetMotPos(MOutShuttle1, OUT_R);
++            AutoSHT2Task = 200;
++        };
++        // (a) IC on the out pocket, Out Arm ZA at home: Y goes to Right, then case 200 finishes
++        yWorld(true, true);
++        int n = PumpUntil([] { Do_Auto_OutSH(); }, [] { return AutoSHT2Task == 1; }, 30);
++        CHECK(n <= 30 && MOT[MOutShuttle2].ReadPos() == Y_R, "F2-Ya IC on Out Shuttle 1 at Right: Out Shuttle Y pushed to Prod.OutSHT[1].iRight, then case 200 -> 1");
++        CHECK(W906_Ht9050OutShtYReadyForPick(), "F2-Yb Y at Right: the Out Arm may pick");
++        // (b) IC, Out Arm ZA not at home: Y stays at Left, case 200 waits
++        yWorld(true, false);
++        n = PumpUntil([] { Do_Auto_OutSH(); }, [] { return AutoSHT2Task == 1; }, 20);
++        CHECK(n == 21 && AutoSHT2Task == 200 && MOT[MOutShuttle2].ReadPos() == Y_L, "F2-Yc Out Arm ZA not at home: Y not pushed, case 200 waits");
++        CHECK(!W906_Ht9050OutShtYReadyForPick(), "F2-Yd Y at Left: the Out Arm may not pick yet");
++        // (c) the Out Arm side: DoPickFromShuttle_9045_All_1Pick(0) leaves its cursor alone while Y is not at Right
++        iPickFromShuttle1Task = 1;
++        bool anyTrue = false;
++        for (int i = 0; i < 5; ++i) if (DoPickFromShuttle_9045_All_1Pick(0)) anyTrue = true;
++        CHECK(!anyTrue && iPickFromShuttle1Task == 1, "F2-Ye DoPickFromShuttle_9045_All_1Pick(0) x5 with Y at Left: false, cursor stays 1");
++        // (d) no IC: Y not moved, case 200 finishes as in 910
++        yWorld(false, true);
++        n = PumpUntil([] { Do_Auto_OutSH(); }, [] { return AutoSHT2Task == 1; }, 30);
++        CHECK(n <= 30 && MOT[MOutShuttle2].ReadPos() == Y_L, "F2-Yf out pocket empty: Y stays at Left, case 200 -> 1 (910 as written)");
++        // (e) other machine types: the pick gate always lets through
++        MachineTypeChoice = Type_HT9046_LS;
++        CHECK(W906_Ht9050OutShtYReadyForPick(), "F2-Yg Type_HT9046_LS: no Out Shuttle Y condition");
++        MOT[MOutArmZA].Motor->Enable = zaEn0;
++        Prod.OutSHT[1].iLeft = 0; Prod.OutSHT[1].iRight = 0; SetMotPos(MOutShuttle2, 0);
++        ResetWorld();
++    }
++
+     // =======================================================================
+     //  [P] OutSHT1InLF / OutSHT1InRT (H089) and the Type_HT9046_LS answers
+     // =======================================================================
+diff --git a/tests/test_flow9050_tray.cpp b/tests/test_flow9050_tray.cpp
+index 10d0f94..5324344 100644
+--- a/tests/test_flow9050_tray.cpp
++++ b/tests/test_flow9050_tray.cpp
+@@ -507,9 +507,11 @@ int main()
+     // =======================================================================
+     //  [PB] DoPlaceToBuffer_9050 (910 :4245-4302)
+     // =======================================================================
+-    printf("[PB] DoPlaceToBuffer_9050: ToBuffer 0 / 1 -> Empty (1>10>100>1); 2 -> case 200 for ever\n");
++    //AI(W906-F9050-FIX2) 20261006: Frank 1006「先改成Loader空盤只能到Empty Tray」-- ToBuffer=2 (Item 3, [3]AUTO1) goes to Empty too; it used to stay
++    //  in case 200 for ever (DoPlaceTrayToAuto_9050(0), defect (b), 910 as written).
++    printf("[PB] DoPlaceToBuffer_9050: ToBuffer 0 / 1 / 2 -> Empty (1>10>100>1), case 200 never reached (Frank 1006)\n");
+     {
+-        for (int to = 0; to <= 1; ++to)
++        for (int to = 0; to <= 2; ++to)
+         {
+             char msg[200];
+             std::vector<int> seq;
+@@ -536,17 +538,44 @@ int main()
+             CHECK(firstNew == Prod.iXTrayEmpty && minX > 0, msg);
+             CHECK(iPlaceToEmpty9050Task == 1 && MOT[MTrayX].fHasTray == false, "inner DoPlaceTrayToEmpty_9050 finished (cursor 1, tray placed)");
+         }
+-        std::vector<int> seq;
+-        TrayForm.LoaderToEmptyColor[0] = 2; TrayForm.LoaderToEmptyColor[1] = 2;
+-        SetMotPos(MTrayX, Prod.iXTrayLoad);
+-        InitialPlaceToBuffer_9050();
+-        const int n = Pump(iPlaceToBuffer9050Task, [] { return DoPlaceToBuffer_9050(); }, 53, 1, seq);
+-        CHECK(n == 54 && CatchTraySuck.Item[0][0] == 3 && SeqIs(seq, { 1, 10, 200 }) && iPlaceToBuffer9050Task == 200,
+-              "ToBuffer=2 (Item 3): 1>10>200, then 50 more calls in 200, never true (DoPlaceTrayToAuto_9050(0), defect (b) kept)");
+-        CHECK(iPlaceToAuto9050Task == 1 && Pos(MTrayX) == Prod.iXTrayAuto[0], "inner cursor untouched; Tray X parked at iXTrayAuto[0]");
++        CHECK(iPlaceToAuto9050Task == 1, "ToBuffer 0..2: the Auto placer (DoPlaceTrayToAuto_9050) is never entered");
+         InitialPlaceToBuffer_9050();
+     }
+ 
++    // =======================================================================
++    //  [TZ] AI(W906-F9050-FIX2) 20261006: Frank 1006「Tray Arm在移動過程中 In/Out Arm ZA要在上位點」-- Motor/mymotor.cpp TrayArmMotorMove,
++    //       Type_HT9050 only; "up" = golden InArmZSafe / OutArmZSafe(DETECT_POS_FLAG) (ReadPos() >= 0, not the HOME lamp)
++    // =======================================================================
++    printf("[TZ] TrayArmMotorMove, Type_HT9050: the Tray Arm moves only with the In / Out Arm ZA at or above their origin\n");
++    {
++        const int inR = InArmSuck.iMotRow, inC = InArmSuck.iMotCol, inM = InArmSuck.Suck[0][0].iMotNo;
++        const int outR = OutArmSuck.iMotRow, outC = OutArmSuck.iMotCol, outM = OutArmSuck.Suck[0][0].iMotNo;
++        InArmSuck.iMotRow = 1;  InArmSuck.iMotCol = 1;  InArmSuck.Suck[0][0].iMotNo = MInArmZA;     // the single picker (USE_PICKER_COUNT=4)
++        OutArmSuck.iMotRow = 1; OutArmSuck.iMotCol = 1; OutArmSuck.Suck[0][0].iMotNo = MOutArmZA;
++        auto tryMove = [](int target, int calls) { bool ok = false; for (int i = 0; i < calls && !ok; ++i) ok = TrayArmMotorMove(target); return ok; };
++        MachineTypeChoice = Type_HT9050;
++        SetMotPos(MOutArmZA, 0); SetMotPos(MInArmZA, -100); SetMotPos(MTrayX, Prod.iXTrayLoad);
++        bool ok = tryMove(Prod.iXTrayEmpty, 20);
++        CHECK(!ok && Pos(MTrayX) == Prod.iXTrayLoad, "In Arm ZA at -100 (down): TrayArmMotorMove false 20 times, the Tray Arm stays at the Loader");
++        SetMotPos(MInArmZA, 0); SetMotPos(MOutArmZA, -1);
++        ok = tryMove(Prod.iXTrayEmpty, 20);
++        CHECK(!ok && Pos(MTrayX) == Prod.iXTrayLoad, "Out Arm ZA at -1 (one count below its origin): the Tray Arm stays");
++        SetMotPos(MOutArmZA, 0);
++        ok = tryMove(Prod.iXTrayEmpty, 200);
++        CHECK(ok && Pos(MTrayX) == Prod.iXTrayEmpty, "both ZA at 0 (where the full HOME leaves them, lamp or not): the Tray Arm moves and arrives");
++        SetMotPos(MInArmZA, 50); SetMotPos(MOutArmZA, 50); SetMotPos(MTrayX, Prod.iXTrayLoad);
++        ok = tryMove(Prod.iXTrayEmpty, 200);
++        CHECK(ok && Pos(MTrayX) == Prod.iXTrayEmpty, "both ZA up at their safe height (+50): moves");
++        MachineTypeChoice = Type_HT9046_LS;
++        SetMotPos(MInArmZA, -100); SetMotPos(MTrayX, Prod.iXTrayLoad);
++        ok = tryMove(Prod.iXTrayEmpty, 200);
++        CHECK(ok && Pos(MTrayX) == Prod.iXTrayEmpty, "Type_HT9046_LS: unchanged (no new interlock) -- moves with the In Arm ZA down");
++        MachineTypeChoice = Type_HT9050;
++        SetMotPos(MInArmZA, 0); SetMotPos(MOutArmZA, 0);
++        InArmSuck.iMotRow = inR;  InArmSuck.iMotCol = inC;  InArmSuck.Suck[0][0].iMotNo = inM;
++        OutArmSuck.iMotRow = outR; OutArmSuck.iMotCol = outC; OutArmSuck.Suck[0][0].iMotNo = outM;
++    }
++
+     // =======================================================================
+     //  [LN] DoLoadNewICTray_9050 (910 :2466-2553)
+     // =======================================================================
+@@ -679,7 +708,7 @@ int main()
+     printf("[RB] DoReceiveAllToBottom_9050: five areas to their Home; a tray is pressed into the stack first\n");
+     {
+         const int motZ[5] = { MLoaderZ, MEmptyZ, MAuto1Z, MAuto2Z, MAuto3Z };
+-        const int mm[5]   = { MMTrayZ, MMEmpty, MMAuto1, MMAuto2, MMAuto3 };
++        const int mm[5]   = { MMTrayY, MMEmpty, MMAuto1, MMAuto2, MMAuto3 };   //AI(W906-F9050-FIX2) 20261006: Loader area MMTrayY (Frank 1006「改」; 910 MMTrayZ)
+         const int home[5] = { Prod.TrayZ_Home, Prod.EmptyZ_Home, Prod.Auto1Z_Home, Prod.Auto2Z_Home, Prod.Auto3Z_Home };
+         for (int i = 0; i < 5; ++i) { MOT[mm[i]].fHasTray = false; SetMotPos(motZ[i], 7000 + 10 * i); }
+         int n = 0;
+@@ -690,7 +719,8 @@ int main()
+         CHECK(done && n == 3 && atHome, "all MM empty: 1 -> 90 -> 100 in every area, true on the 3rd call, five Z at their Home");
+ 
+         iLoaderLayerCount_9050 = 2;
+-        MOT[MMTrayZ].fHasTray = true;
++        MOT[MMTrayY].fHasTray = true;
++        MOT[MMTrayZ].fHasTray = true;                                           // the Z motor's object: must not be what Receive reads or clears
+         n = 0; done = false;
+         bool sawUp = false, sawDown = false;
+         while (!done && n < 20)
+@@ -700,15 +730,19 @@ int main()
+             if (Pos(MLoaderZ) == Prod.TrayZ_Down[3]) sawDown = true;
+         }
+         CHECK(done && sawUp && sawDown && Pos(MLoaderZ) == Prod.TrayZ_Home,
+-              "tray on MMTrayZ: MLoaderZ TrayZ_Up[2] (case 10) -> TrayZ_Down[3] (case 30) -> TrayZ_Home (case 90)");
+-        CHECK(iLoaderLayerCount_9050 == -1 && MOT[MMTrayZ].fHasTray == false,
+-              "layer 2 -> 3 (case 20) -> -1 (case 30, 910 as written); MMTrayZ emptied (case 20)");
++              "tray on MMTrayY: MLoaderZ TrayZ_Up[2] (case 10) -> TrayZ_Down[3] (case 30) -> TrayZ_Home (case 90)");
++        CHECK(iLoaderLayerCount_9050 == -1 && MOT[MMTrayY].fHasTray == false,
++              "layer 2 -> 3 (case 20) -> -1 (case 30, 910 as written); MMTrayY emptied (case 20, Frank 1006; 910 MMTrayZ)");
++        CHECK(MOT[MMTrayZ].fHasTray == true, "MMTrayZ (the Z motor's) untouched by Receive");
++        MOT[MMTrayZ].fHasTray = false;
+     }
+ 
+     // =======================================================================
+     //  [H2120] defect (b) through the dispatcher: ToBuffer=2 waits in CatchTrayTask 2120 for ever, no alarm
+     // =======================================================================
+-    printf("[H2120] DoCatchTray case 2120, Type_HT9050, ToBuffer=2: no progress, no alarm, survives InitAllProcessTask\n");
++    //AI(W906-F9050-FIX2) 20261006: was "[H2120] ... ToBuffer=2: no progress, no alarm" (defect (b) pinned as 910 wrote it); Frank 1006 routes the
++    //  Loader's empty tray to Empty only, so the dispatcher no longer reaches DoPlaceToBuffer_9050 case 200 (NIGHT_REPORT s0 #105, W-85).
++    printf("[H2120] DoCatchTray case 2120, Type_HT9050, ToBuffer=2: goes to Empty, never DoPlaceToBuffer_9050 case 200 (Frank 1006)\n");
+     {
+         MachineTypeChoice = Type_HT9050;
+         Globals();
+@@ -716,14 +750,19 @@ int main()
+         SetMotPos(MTrayX, Prod.iXTrayEmpty);
+         InitialPlaceToBuffer_9050();
+         CatchTrayTask = 2120;
+-        const int alarms0 = W906_ShowErrorMessage_Count;
+-        for (int i = 0; i < 60; ++i) DoCatchTray();
+-        CHECK(CatchTrayTask == 2120 && iPlaceToBuffer9050Task == 200 && iPlaceToAuto9050Task == 1 && W906_ShowErrorMessage_Count == alarms0,
+-              "60 DoCatchTray calls: CatchTrayTask 2120, DoPlaceToBuffer_9050 in case 200, no alarm (NIGHT_REPORT s0 #105)");
++        bool saw200 = false, saw100 = false;
++        for (int i = 0; i < 60; ++i)
++        {
++            DoCatchTray();
++            if (iPlaceToBuffer9050Task == 200) saw200 = true;
++            if (iPlaceToBuffer9050Task == 100) saw100 = true;
++        }
++        CHECK(!saw200 && iPlaceToAuto9050Task == 1, "60 DoCatchTray calls: DoPlaceToBuffer_9050 never in case 200, the Auto placer never entered");
++        CHECK(saw100 || CatchTrayTask != 2120, "ToBuffer=2 now goes the Empty way (case 100) instead of waiting in 2120 for ever");
+         InitAllProcessTask();
+-        CHECK(CatchTrayTask == 1 && iPlaceToBuffer9050Task == 200,
+-              "InitAllProcessTask resets CatchTrayTask but not the 9050 cursor (InitialPlaceToBuffer_9050 has no caller in 910)");
++        CHECK(CatchTrayTask == 1, "InitAllProcessTask resets CatchTrayTask");
+         InitialPlaceToBuffer_9050();
++        TrayForm.LoaderToEmptyColor[0] = 0; TrayForm.LoaderToEmptyColor[1] = 0;
+     }
+ 
+     // =======================================================================
+diff --git a/tests/test_it1_bthermo.cpp b/tests/test_it1_bthermo.cpp
+new file mode 100644
+index 0000000..40bc058
+--- /dev/null
++++ b/tests/test_it1_bthermo.cpp
+@@ -0,0 +1,263 @@
++// =============================================================================
++//  test_it1_bthermo.cpp  --  AI(W906-IT1) 20261006 (Ifor01)
++//
++//  IT-1 第一批（TO_IFOR §3 IT-1；FROM_IFOR §1 1006 09:2x）：bthermo.cpp 照 golden 0618 解開的 4 個 `#if 0`，在模擬組態真的有跑到。
++//  機台是 HT9050 的客戶碼（`CUSTOMER_CODE=CC_PTI` 957：`TFormHS::CheckTempOffset` 175 度以上算超過機台能力），工作溫度 170，
++//  另加起測補償讓「要送給溫控器的 SV」到 185（測試自己用 `GetFactSetTemp` 算，不猜補償的公式）：
++//
++//    [1] G19a 序列埠（`DoThermoReal`，假的 KT4H 只回寫入）：DUT 1 送出去的 SV＝工作溫度 170（不是 185），WAR15194 跳一次
++//    [2] I-03b 的 DTM 通道表路徑（`W906_DtmMapExchange`）套同一個檢查：開 HT9050 表，DUT 2 的 DTM 面板設定 SV＝170
++//    [3] G19c DTME08（`DoSetSVOfDTME08`，表沒開）：Index Aa1（DTM 通道 0）的面板設定 SV＝170，WAR15194 跳一次
++//    [4] G19b EJ1N（`DoSetSVOfOmronEJ1N`）：WAR15194 跳一次，20 秒內再呼叫不重跳（它自己的 bHasErrorSet＋tEJ1NAlarmTimer）
++//    [5] G25 ATC6.0（`DoATC60Temperature`）：兩拍後 `ATC_60_SYS.SetTemp`＝工作溫度；沒連線 ⇒ Index 32 組 UN150Read＝999
++//    [6] 讀原始碼：bthermo.cpp 剩 11 個 `#if 0`；四處都是 `#if 1 // was: #if 0`；沒有程式行還在用全域 `FormHS->CheckTempOffset`
++//    [7] 只動記憶體：D:\HT9045\system\Gerneral.ini、D:\HT9045\config\config.ini 前後逐位元組相同
++//  反向驗證（第 15 條）見 MR 說明：把任一處改回 `#if 0`（或拿掉 [2] 那段檢查）⇒ 對應那一節變紅。
++//  不開 COM 埠（Comm2 強制 SIM）、不連網路（ATC6.0 的 socket 是 SIM）。約 10～30 秒。
++// =============================================================================
++#include <winsock2.h>
++#include "atester_shims.h"                // COM2
++#include "MachineType.h"
++#include "cmydef.h"
++#include "cpublic.h"
++#include "cprod.h"                        // Temperature
++#include "forms/fTemp_Set.h"              // InitTempOffset (extern const int; bthermo.cpp reaches it the same way)
++#include "Config.h"                       // IniConfig
++#include "CosFunction.h"
++#include "LastSet.h"
++#include "bthermo.h"                      // DoThermo / DoSetSVOfDTME08 / DoSetSVOfOmronEJ1N / DoATC60Temperature / iThermoTask
++#include "acarry_shims.h"
++#include "mysensor.h"
++#include "myswitch.h"
++#include "canary_support.h"               // W906_ShowErrorMessage_LastCode / _Count
++#define HT9045_ATCINTERFACE_TCOLOR_EXTRA  // EJ1N/MyOmronPanel.h (via forms/fDTME08.h) defines clGray too -- same as bthermo.cpp
++#include "ATC/ATCInterface.h"             // ATCInterfaceForm->ATC_60_SYS
++#include "forms/fDTME08.h"
++#include "EJ1N/DtmChannelMap.h"
++#include "w906_ctest_guard.h"
++#include <windows.h>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <functional>
++#include <map>
++#include <string>
++#include <vector>
++
++void W906_DTME08_CreateFormBoot();
++double GetFactSetTemp(int Addr, double T);
++
++static int g_pass=0, g_fail=0;
++#define CHECK(c, msg) do { if(c){ g_pass++; } else { g_fail++; std::printf("  FAIL [test_it1_bthermo.cpp:%d] %s\n", __LINE__, msg); } } while(0)
++
++static std::string Slurp(const std::string& p)
++{
++    FILE* f=std::fopen(p.c_str(), "rb");
++    if(!f) return std::string("<missing>");
++    std::string s; char buf[4096]; size_t n;
++    while((n=std::fread(buf, 1, sizeof(buf), f))>0) s.append(buf, n);
++    std::fclose(f);
++    return s;
++}
++
++// The serial side: Comm2 in SIM.  A fake KT4H echoes every SV write (function 06) -- golden case 250 takes the echo as the
++// acknowledgement -- and remembers the last value written to register 0001 per station (":%02X" = Addr+1).
++struct FakeKT4H
++{
++    std::string acc;
++    std::map<int, int> sv;
++    void Serve()
++    {
++        const std::vector<char>& v=COM2->Comm2->SimTxBuffer();
++        acc.append(v.begin(), v.end());
++        COM2->Comm2->SimClearTx();
++        for(;;)
++        {
++            const size_t a=acc.find(':');
++            if(a==std::string::npos) { acc.clear(); return; }
++            const size_t e=acc.find("\r\n", a);
++            if(e==std::string::npos) { acc.erase(0, a); return; }
++            const std::string f=acc.substr(a, e+2-a);
++            acc.erase(0, e+2);
++            if(f.size()<17) continue;
++            if(f.substr(3, 2)=="06")
++            {
++                if(f.substr(5, 4)=="0001")
++                    sv[(int)std::strtol(f.substr(1, 2).c_str(), 0, 16)-1]=(int)std::strtol(f.substr(9, 4).c_str(), 0, 16);
++                COM2->Comm2->SimInjectReceive(f.data(), (Spcomm::Word)f.size());
++            }
++        }
++    }
++};
++
++static FakeKT4H g_kt;
++static bool Spin(DWORD ms, const std::function<bool()>& done)
++{
++    const DWORD t0=::GetTickCount();
++    while(::GetTickCount()-t0<ms)
++    {
++        for(int k=0; k<16; k++) { DoThermo(); g_kt.Serve(); }
++        if(done()) return true;
++        ::Sleep(1);
++    }
++    return done();
++}
++static int CountWar15194Since(int c0, const AnsiString& lastBefore)
++{
++    (void)lastBefore;
++    return (W906_ShowErrorMessage_LastCode==AnsiString("WAR15194")) ? (W906_ShowErrorMessage_Count-c0) : 0;
++}
++// raise Addr's start-up offset until GetFactSetTemp(Addr, base) >= target; returns the unclamped SV
++static double PushOver(int Addr, double base, double target)
++{
++    Temperature.fTempOffSet[InitTempOffset][Addr]=0.0;
++    const double c=GetFactSetTemp(Addr, base);
++    Temperature.fTempOffSet[InitTempOffset][Addr]=target-c;
++    return GetFactSetTemp(Addr, base);
++}
++
++int main(int argc, char** argv)
++{
++    if(!W906TestRequireCtestRedirects("IT1_Bthermo"))
++        return 2;
++    const std::string root=(argc>1)?argv[1]:".";
++    std::printf("test_it1_bthermo (IT-1 batch 1): bthermo.cpp gates G19a / G19b / G19c / G25 opened\n");
++    static const char* const kReal[2]={ "D:\\HT9045\\system\\Gerneral.ini", "D:\\HT9045\\config\\config.ini" };
++    std::string before[2];
++    for(int i=0; i<2; i++) before[i]=Slurp(kReal[i]);
++
++    WSADATA wsa;
++    ::WSAStartup(MAKEWORD(2, 2), &wsa);
++    COM2->Comm2->SetSimMode(true);
++    COM2->Comm2->StartComm();
++
++    const double kBase=170.0;
++    InitialOK=true;
++    bSystemClose=false;
++    PauseUT150Polling=false;
++    CUSTOMER_CODE=CC_PTI;                                   // HT9050 (957): over the limit from 175 (forms/fHS.cpp CheckTempOffset)
++    Tri_Temp_Machine=0;
++    ATC_SYSTEM=0;
++    ATC_InterfaceForm->iATC_MODE_TYPE=0;
++    Temperature.bATCActiveCooling=false;
++    LastSet.iTemperature=Tempture_Hot;
++    Temperature.fWorkTemperBase=kBase;
++    Temperature.bUseFixTemp=false;
++    Temperature.bUseIndividualTemp=false;
++    CosFunction.bUseIndividulTempSet=false;
++    Temperature.iIndexHeatMode=HeadChamberSocket;
++    IniConfig.bTemp25degControl=false;
++    IniConfig.bEnableKT4HAlarm1=false;
++    SHUTTLE_COOLING=0.0;
++    bUseInitTempOffset=true;                                // GetFactSetTemp adds fTempOffSet[InitTempOffset][Addr] while
++    iInitContactCount=0;                                    //   iInitContactCount < iCintactCntForTempOffsetAtInitial
++    Temperature.iCintactCntForTempOffsetAtInitial=1;
++    bTestOverTimeTempOffsetF=false;
++    Sen[SnHeaterDoor].Enable=false;                         // no I/O: a disabled sensor is never "off" -> the heater door reads closed
++    Sen[SnHeaterDoor2].Enable=false;
++    SW[SwHeaterRelay].Enable=true;                          // heater relay ON (no I/O card: an unrouted base -> Status() = OutValue)
++    SW[SwHeaterRelay].ISABase=-1;
++    SW[SwHeaterRelay].Type=1;
++    SW[SwHeaterRelay].OutValue=true;
++    for(int i=0; i<tcTotalCount; i++) { bUT150Install[i]=false; UN150CommError[i]=false; UN150Read[i]=0; UN150ReadReal[i]=0; }
++
++    // ---- [1] G19a: the serial write branch -------------------------------------------------------
++    std::printf("[1] G19a -- DoThermoReal, KT4H\n");
++    TC401HeaterControl=KT4H;
++    USE_16_HEATER=eht4Heater;
++    DtmMap_Select("");
++    const double over1=PushOver(tcDUT1, kBase, 185.0);
++    std::printf("    DUT 1: unclamped SV %.2f, work temperature %.2f\n", over1, kBase);
++    CHECK(over1>=175.0 && over1!=kBase, "[1] precondition: DUT 1's SV is over the PTI limit (>= 175) and differs from the work temperature");
++    bUT150Install[tcDUT1]=true;
++    iThermoTask=1;
++    Com2ReceiveOK=false;
++    COM2->Comm2->SimClearTx();
++    int c0=W906_ShowErrorMessage_Count;
++    const bool b1=Spin(30000, []{ return g_kt.sv.count(tcDUT1)!=0; });
++    CHECK(b1, "[1] the KT4H got an SV write for DUT 1");
++    std::printf("    KT4H register 0001 for DUT 1 = %d\n", b1 ? g_kt.sv[tcDUT1] : -1);
++    CHECK(b1 && g_kt.sv[tcDUT1]==(int)(kBase*10), "[1] DUT 1's SV = the work temperature x10 (1700), not the over-limit value -- G19a ran");
++    CHECK(CountWar15194Since(c0, "")>=1, "[1] WAR15194 (temperature setting over the machine's limit) raised");
++
++    // ---- [2] the DTM channel map path (I-03b) gets the same check ---------------------------------
++    std::printf("[2] DTM channel map path (W906_DtmMapExchange)\n");
++    USE_16_HEATER=eht32HeaterDTME08;
++    W906_DTME08_CreateFormBoot();                            // 32 panels; no socket needed: the exchange writes the panel
++    CHECK(frmDTME08->W906_Control()!=NULL && frmDTME08->GetChannelNumber()==32, "[2] DTM form built (32 channels)");
++    DtmMap_Select("HT9050");
++    const int ch2=DtmMap_ChannelOf(tcDUT2);
++    const double over2=PushOver(tcDUT2, kBase, 185.0);
++    CHECK(ch2==5 && over2>=175.0, "[2] precondition: DUT 2 = DTM channel 5, its SV over the limit");
++    for(int i=0; i<tcTotalCount; i++) bUT150Install[i]=false;
++    bUT150Install[tcDUT2]=true;
++    iThermoTask=1;
++    const bool b2=Spin(30000, [ch2]{ return frmDTME08->GetPalGroup(ch2)->GetSettingSV()!=0.0; });
++    std::printf("    DTM panel %d setting SV = %.2f\n", ch2, frmDTME08->GetPalGroup(ch2)->GetSettingSV());
++    CHECK(b2 && frmDTME08->GetPalGroup(ch2)->GetSettingSV()==kBase, "[2] mapped DUT 2's DTM setpoint = the work temperature (170), not the over-limit value");
++
++    // ---- [3] G19c: DoSetSVOfDTME08 (map off) --------------------------------------------------------
++    std::printf("[3] G19c -- DoSetSVOfDTME08\n");
++    DtmMap_Select("");
++    const double over3=PushOver(tcAa1, kBase, 185.0);
++    CHECK(iTempCode[0]==tcAa1 && over3>=175.0, "[3] precondition: DTM channel 0 = Index Aa1, its SV over the limit");
++    for(int i=0; i<tcTotalCount; i++) bUT150Install[i]=false;
++    bUT150Install[tcAa1]=true;
++    c0=W906_ShowErrorMessage_Count;
++    DoSetSVOfDTME08();
++    std::printf("    DTM panel 0 setting SV = %.2f\n", frmDTME08->GetPalGroup(0)->GetSettingSV());
++    CHECK(frmDTME08->GetPalGroup(0)->GetSettingSV()==kBase, "[3] Aa1's DTM setpoint = the work temperature (170) -- G19c ran");
++    CHECK(CountWar15194Since(c0, "")==1, "[3] WAR15194 raised once by DoSetSVOfDTME08 (its own bHasErrorSet)");
++
++    // ---- [4] G19b: DoSetSVOfOmronEJ1N --------------------------------------------------------------
++    std::printf("[4] G19b -- DoSetSVOfOmronEJ1N\n");
++    USE_16_HEATER=eht16HeaterEJ1N;
++    c0=W906_ShowErrorMessage_Count;
++    DoSetSVOfOmronEJ1N();
++    const int n4a=CountWar15194Since(c0, "");
++    DoSetSVOfOmronEJ1N();
++    CHECK(n4a==1, "[4] WAR15194 raised by the EJ1N path -- G19b ran");
++    CHECK(W906_ShowErrorMessage_Count-c0==1, "[4] ... once: the second call within 20 s does not raise it again (tEJ1NAlarmTimer)");
++
++    // ---- [5] G25: ATC6.0 / 3.0 ----------------------------------------------------------------------
++    std::printf("[5] G25 -- DoATC60Temperature\n");
++    ATC_SYSTEM=eATC60;
++    ATCInterfaceForm->ATC_60_SYS.SetTemp=0;
++    for(int a=tcAa1; a<=tcBd2; a++) UN150Read[a]=0.0;
++    for(int k=0; k<3; k++) DoATC60Temperature();
++    std::printf("    ATC_60_SYS.SetTemp = %.2f, UN150Read[tcAa1] = %.1f, [tcBd2] = %.1f\n", ATCInterfaceForm->ATC_60_SYS.SetTemp, UN150Read[tcAa1], UN150Read[tcBd2]);
++    CHECK(ATCInterfaceForm->ATC_60_SYS.SetTemp==kBase, "[5] the sequencer's first step sent the work temperature (SetTargetTemperature)");
++    CHECK(UN150Read[tcAa1]==999.0 && UN150Read[tcBd2]==999.0 && UN150Read[tcAd2]==999.0, "[5] ATC host not connected (SIM socket) -> Index UN150Read = 999 (golden :3304-3310)");
++    ATC_SYSTEM=0;
++
++    // ---- [6] source pins ----------------------------------------------------------------------------
++    std::printf("[6] source\n");
++    {
++        const std::string bt=Slurp(root+"/bthermo.cpp");
++        int nIf0=0;
++        size_t p=0;
++        while((p=bt.find("\n#if 0", p))!=std::string::npos) { nIf0++; p++; }
++        CHECK(nIf0==11, "[6] bthermo.cpp: 11 `#if 0` left (15 before IT-1; G01 x2, G02, G15, G16, G18, G26a, G26b, G28a, G28b, G28c stay)");
++        CHECK(bt.find("#if 1 // was: #if 0 // TODO(W7 G19a)")!=std::string::npos && bt.find("#if 1 // was: #if 0 // TODO(W7 G19b)")!=std::string::npos &&
++              bt.find("#if 1 // was: #if 0 // TODO(W7 G19c)")!=std::string::npos && bt.find("#if 1 // was: #if 0 // TODO(W7-UI G25)")!=std::string::npos,
++              "[6] G19a / G19b / G19c / G25 opened in place");
++        bool bGlobal=false;
++        size_t q=0;
++        while((q=bt.find("FormHS->CheckTempOffset", q))!=std::string::npos)
++        {
++            const size_t ls=bt.rfind('\n', q);
++            const std::string head=bt.substr(ls+1, q-ls-1);
++            if(head.find("//")==std::string::npos && (q<3 || bt.compare(q-3, 3, "BT_")!=0)) bGlobal=true;
++            q++;
++        }
++        CHECK(!bGlobal, "[6] no code line calls the global FormHS (SCK_ART_Remainder.h's stub) -- all go through BT_FormHS()");
++        CHECK(bt.find("W906_DtmMapExchange(Addr, Temp, OldTemp[Addr], CommunCTErr[Addr], bHasErrorSet);")!=std::string::npos, "[6] the map exchange gets DoThermoReal's bHasErrorSet");
++    }
++
++    // ---- [7] real files ---------------------------------------------------------------------------
++    for(int i=0; i<2; i++) CHECK(Slurp(kReal[i])==before[i], "[7] real machine file unchanged");
++
++    ::WSACleanup();
++    std::printf("test_it1_bthermo: %d passed, %d failed\n", g_pass, g_fail);
++    return g_fail==0 ? 0 : 1;
++}
+diff --git a/tools/measure_tick.ps1 b/tools/measure_tick.ps1
+index e5f2a34..d9f3a11 100644
+--- a/tools/measure_tick.ps1
++++ b/tools/measure_tick.ps1
+@@ -14,9 +14,17 @@
+   ★ 機台正在跑（START 中）時，根本不需要這支腳本：
+     HT9045_Web.cmd:80 用 `start` 開了一個標題「HT9045 wb_serve」的主控台視窗，而且沒有轉向，
+     所以 [STREAM] 與 [FASTCLK] **每 10 秒就印在那個視窗裡**，從開機印到現在。
+-    直接在那個視窗右鍵 -> 標記 -> 選 20~30 行 -> Enter 複製，就拿到一模一樣的數據。
+-    （若該視窗開頭的 'oplog:' 那一行有路徑，那些行也已經寫進該 txt，複製檔案更省事；
+-      但 op log 開著會讓 busy 多約 20 ms，回報時要講一聲。）
++    ⛔ 但**不要在那個視窗裡用「右鍵 -> 標記 -> 選取」把數字複製出來**。
++       Windows 主控台的快速編輯模式一進入選取就擋住寫入端，wb_serve 下一次 printf 整個卡住，
++       放開選取才會繼續。實測：筆電凍 50 秒（busy max=50321 ms）、機台 op log 記到 85,247 ms。
++       那不只是量測被污染 —— 是機台真的停在那裡不動。
++
++    ✅ 看那個視窗最開頭的 'oplog:' 那一行，照它決定怎麼取：
++       * oplog: <路徑>  -> [STREAM]／[FASTCLK] 也已經寫進那個 txt 了，**直接複製檔案**（零風險、最省事）。
++                           但 op log 開著會讓 busy 多約 20 ms，回報時要講一聲。
++       * oplog: off     -> 沒有檔可以複製，也**不要選字** —— 直接拍照／截圖那 20~30 行帶回來。
++                           （機台的 F5「IOWEB(這台)」系列在 launch.json 裡自己設了 W906_OPLOG_DIR，
++                             所以多半會是前者。）
+     ✅ 運轉中的數據比閒置的有價值 —— PumpTick 那時才真的在做事。兩種都抓最好。
+ 
+   用法（在機台的 PowerShell 裡）：
+@@ -37,14 +45,40 @@
+ param(
+   [int]    $Seconds = 180,
+   [string] $Tag     = "",
+-  [string] $Exe     = "D:\HT9045\server\wb_serve.exe",
++  [string] $Exe     = "",
+   [string] $OutDir  = "D:\HT9045_Log\tickmeasure"
+ )
+ 
+ $ErrorActionPreference = 'Stop'
+ 
+ # --- 0. 前置檢查 -----------------------------------------------------------
+-if (-not (Test-Path $Exe)) { throw "找不到 exe：$Exe   （機台的正式路徑；用別的請加 -Exe）" }
++# --- 0a. 找 exe（EastSun 1005 20:1x：預設那個在機台上不存在）---------------
++#  機台用 F5（「IOWEB(這台)」系列）⇒ exe 在 build_integ_ship_x86；
++#  HT9045_Web.cmd 用的是 D:\HT9045\server\wb_serve.exe；筆電 F5 是 Obj\V906\build_dbg。
++#  三個路徑都不一樣，所以不寫死預設值，改成**挑最新的那一個**並印出來讓人確認。
++if (-not $Exe) {
++  $cands = @(
++    "D:\HT9045\_integ_ioweb\HT9011UC_Cpp_V3.33.906.0\build_integ_ship_x86\wb_serve.exe",  # 機台（EastSun 1005 給的）
++    "D:\HT9045\HT9011UC_Cpp_V3.33.906.0\build_integ_ship_x86\wb_serve.exe",
++    "D:\HT9045\HT9011UC_Cpp_V3.33.906.0\build_integ_dbg_x86\wb_serve.exe",
++    "D:\HT9045\Obj\V906\build_dbg\wb_serve.exe",                                          # 筆電 F5
++    "D:\HT9045\Obj\V906\build\wb_serve.exe",
++    "D:\HT9045\server\wb_serve.exe"                                                       # HT9045_Web.cmd
++  ) | Where-Object { Test-Path $_ } | Get-Item | Sort-Object LastWriteTime -Descending
++  if (-not $cands) {
++    Write-Host "[X] 找不到任何 wb_serve.exe。請用 -Exe 指定。" -ForegroundColor Red
++    Write-Host "    機台的例子：-Exe D:\HT9045\_integ_ioweb\HT9011UC_Cpp_V3.33.906.0\build_integ_ship_x86\wb_serve.exe"
++    exit 1
++  }
++  $Exe = $cands[0].FullName
++  Write-Host "[i] 自動選用最新的 exe（要換請加 -Exe）：" -ForegroundColor Cyan
++  foreach ($c in $cands) {
++    $mark = if ($c.FullName -eq $Exe) { " <= 用這個" } else { "" }
++    Write-Host ("    {0}  {1}{2}" -f $c.LastWriteTime.ToString('MM-dd HH:mm'), $c.FullName, $mark)
++  }
++  Write-Host ""
++}
++if (-not (Test-Path $Exe)) { throw "找不到 exe：$Exe   （用 -Exe 指定）" }
+ 
+ $running = Get-Process wb_serve -ErrorAction SilentlyContinue
+ if ($running) {
+@@ -56,13 +90,17 @@ if ($running) {
+   Write-Host "   HT9045_Web.cmd:80 用 start 開了一個標題「HT9045 wb_serve」的主控台視窗，"
+   Write-Host "   沒有轉向 ⇒ [STREAM] 與 [FASTCLK] 每 10 秒就印在那個視窗裡。"
+   Write-Host ""
++  Write-Host "   ⛔ 不要在那個視窗裡右鍵 -> 標記 -> 選取。" -ForegroundColor Red
++  Write-Host "      快速編輯模式一進入選取就擋住寫入端，wb_serve 下一次 printf 就卡住不動，"
++  Write-Host "      放開才會繼續。實測筆電凍 50 秒、機台 op log 記到 busy max=85,247 ms。"
++  Write-Host "      機台在跑的時候這樣做 = 機台真的會停在那裡。"
++  Write-Host ""
+   Write-Host "   取法（零風險，什麼都不用關）：" -ForegroundColor Yellow
+   Write-Host "     1. 到那個視窗最開頭找 'oplog:' 那一行"
+-  Write-Host "        * oplog: <路徑>            -> 那些行也寫進該 txt 了，直接複製檔案，最省事"
++  Write-Host "        * oplog: <路徑>            -> 那些行也寫進該 txt 了，直接複製那個檔，最省事"
+   Write-Host "                                      （注意 busy 會被 op log 灌水約 20 ms，回報時講一聲）"
+-  Write-Host "        * oplog: off               -> 數字乾淨，用下面第 2 步"
+-  Write-Host "     2. 視窗內按右鍵 -> 標記 -> 選取 20~30 行 -> Enter 複製 -> 貼進記事本存檔"
+-  Write-Host "     3. ✅ 請在 START 跑著的狀態抓一份（PumpTick 真的在做事，比閒置有價值）；"
++  Write-Host "        * oplog: off               -> 數字乾淨，但沒有檔可複製 -> 拍照／截圖那 20~30 行"
++  Write-Host "     2. ✅ 請在 START 跑著的狀態抓一份（PumpTick 真的在做事，比閒置有價值）；"
+   Write-Host "        停機後再抓一段閒置的當對照。"
+   Write-Host ""
+   Write-Host "   本腳本只適用於「機台閒置、而且可以自由起停程式」的場合。" -ForegroundColor Yellow
+-- 
+2.55.0.windows.5
+
