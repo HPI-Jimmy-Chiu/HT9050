@@ -1,0 +1,73 @@
+From 2fe6e88739e630e5ae628baad64d86c34faf4ed6 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 6 Oct 2026 18:59:06 +0800
+Subject: [PATCH] =?UTF-8?q?IDX1203-LOG2:=20the=20Index=20stop=20line=20pri?=
+ =?UTF-8?q?nts=20at=20most=20once=20per=2030=20s=20regardless=20of=20motio?=
+ =?UTF-8?q?n=20--=20EastSun=201006=20screenshot=20'=E9=80=99=E5=80=8B?=
+ =?UTF-8?q?=E4=BD=A0=E9=96=8B=E5=B7=B2=E9=96=8Bagent=E4=BF=AE=E5=97=8E=20?=
+ =?UTF-8?q?=E4=BB=96=E4=B8=80=E7=9B=B4=E8=B7=B3=20=E5=89=9B=E5=89=9B?=
+ =?UTF-8?q?=E8=AC=9B=E4=BA=86=E5=BE=88=E5=A4=9A=E6=AC=A1=E4=B9=9F=E9=83=BD?=
+ =?UTF-8?q?=E6=B2=92=E4=BF=AE'.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+d0e060b gated the line on "axis moving", but MotionDone() stays false while the 1203 is not up (safety circuit off -> EtherCAT slaves offline), so every pass still printed. Now W906IdxStop counts stops and prints one line per 30 s with how many stops happened and how many had the axis not reporting done; the stop itself is still sent every time as golden does. The earlier "still not fixed" was the F5 started 18:33 running old code.
+
+Debug wb_serve 18:58 (new string present, old "was moving" gone), release 18:45. WORKLOG section 2 row 137 also records the safety PLC door bits mapped into D:\HT9045\system\IO_Table.csv (machine data, pushed in the machine_params snapshot; SafePlcIO stays 0).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ Motor/myGALILmotor.cpp  | 22 +++++++++++-----------
+ docs/WORKLOG_MACHINE.md |  1 +
+ 2 files changed, 12 insertions(+), 11 deletions(-)
+
+diff --git a/Motor/myGALILmotor.cpp b/Motor/myGALILmotor.cpp
+index 76e4816..3af78a9 100644
+--- a/Motor/myGALILmotor.cpp
++++ b/Motor/myGALILmotor.cpp
+@@ -6578,18 +6578,18 @@ void W906IdxStop(TMyMotor& z, const char* why)
+     //  (csystem.cpp, the G04 path) sends "ST" then "VS0;SP0,0,0,0;" to the Index EVERY pass (harmless on a Galil; the Galil route had a
+     //  cooldown, AI(W906-INDEXZ-1203) D4).  The stop itself still runs every time (golden); the stdout line now says so only when the axis
+     //  was moving, else one summary per 30 s with the count.
+-    static unsigned long s_idle = 0, s_lastTick = 0;
++    //  EastSun 1006 (2nd screenshot, '-- was moving' on every line): MotionDone() is false while the 1203 card / axis is not up
++    //  (the safety circuit was open), so "moving" cannot gate the line.  Now: at most ONE line per 30 s, with the counts.
++    static unsigned long s_stops = 0, s_moving = 0, s_lastTick = 0;
+     const unsigned long now = (unsigned long)::GetTickCount();
+-    if (moving) {
+-        std::printf("[IDX1203] %s stop (%s) -- was moving\n", z.Alias.c_str(), why ? why : "");
+-    } else {
+-        ++s_idle;
+-        if (s_lastTick == 0 || now - s_lastTick >= 30000ul) {
+-            std::printf("[IDX1203] %s stop (%s) on an idle axis -- %lu such stop(s) in the last %lu s (golden re-sends ST / VS0;SP0 every pass while the motor power is off)\n",
+-                        z.Alias.c_str(), why ? why : "", s_idle, s_lastTick == 0 ? 0ul : (now - s_lastTick) / 1000ul);
+-            s_idle = 0;
+-            s_lastTick = now;
+-        }
++    ++s_stops;
++    if (moving) ++s_moving;
++    if (s_lastTick == 0 || now - s_lastTick >= 30000ul) {
++        std::printf("[IDX1203] %s stop (%s) -- %lu stop(s) in the last %lu s, %lu with the axis not reporting done (golden re-sends ST / VS0;SP0 every pass while the motor power is off)\n",
++                    z.Alias.c_str(), why ? why : "", s_stops, s_lastTick == 0 ? 0ul : (now - s_lastTick) / 1000ul, s_moving);
++        s_stops = 0;
++        s_moving = 0;
++        s_lastTick = now;
+     }
+ }
+ 
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 8e7597e..e6c3599 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -215,6 +215,7 @@
+ | 134 | **RS-232 實體面板打開、WAR16154 訊息、安全 PLC 輪詢補上（W906-SAFEPLC）**（EastSun 1006「實體按鈕code有轉完了嗎」→「面板走 RS-232」→ 截圖 COM4／115200「實體按鈕已接上」；「好像沒有把訊息寫到視窗」；「裡面之前有沒有 安全PLC 連線模式」→「都幫我補上」）。①**面板**：程式早就轉好（包 153 PadInterface_St02），只差設定；COM4 送 golden 的版本詢問 t051120 → 面板回 t05122065、按鍵 t051400000000。**機台設定**（D:\HT9045\system\Gerneral.ini，備份 Gerneral.ini.bak_panel_20261006_152525）：第 128 行 ControlPanelMode 0→1、第 588 行 [TrayY] COM PORT COM18→COM4（這台只有 COM1～6）、第 597 行 [NUMBER_PANEL2] COM_PORT COM4→COM14（分類顯示板會無條件搶開這個埠）；IO 表面板鍵列照 golden 維持停用（面板模式由面板供鍵值）。閒置開機實測：pad 1 ms 工作已註冊、無 port error、F5 佔住 COM4。**待查：面板燈不亮**（程式路徑 DoPanelLamp→SW.OnOff→SendSwitchStatus→ProcessSendDataNew 全照 golden，要看實際收送）。②**WAR16154 視窗無文字**：D:\HT9045\Error\AlarmCodeList.txt 缺這個代碼（WAR16152 有）⇒ 在 WAR16153 後補一行（備份 AlarmCodeList.txt.bak_war16154_20261006_153942），重開程式生效。③**安全 PLC**（SafePlcIO，golden Jason 20230619，Modbus TCP 172.16.8.120:502）：之前 TPLCIOThread::Resume 是空的、PlcComm 是模擬 socket ⇒ 新檔 MyPLC/SafePlcClock_St02.cpp：SafePlcIO=1 時註冊 FastClock「safeplc」1 ms 工作（PlcComm.W906_Poll() 處理 socket 事件＋golden PLCIOProcess），PlcComm 改 POLLED-Real（MyPLC/ModbusTCPClient W906_UsePolledRealSocket／W906_Poll），連線變化印 [SAFEPLC]；FastClockWbServe.cpp 同行註冊、CMakeLists 同行加檔、cinitial GATE 註記同行補。**SafePlcIO 仍是 0**：PLC 在線（ping 通、502 可連）但唯讀 FC4 讀到的 22 bytes 全 0，20 分鐘監看（D:\HT9045\_plc_1006\plc_watch.ps1）無任何位元變化；IO 表沒有 SnAllEMG／SnAllSafeDoor（ISABase=4）兩列 ⇒ 對到點位前不開（開了會一直 WAR16140 停機）。o2 全建 0 錯誤；ctest 380/400（HSys_HeaterMix／SetTempSave 平行時偶發，單跑都過；其餘＝已知清單）；production_audit 這次與 EastSun 的 F5（15:32 開機）重疊，變動屬程式本身；Debug 15:42、release 15:21 建好 | cpp（見 commit） | 見 commit |
+ | 135 | **安全 PLC 型號分支（W906-PLCMODEL）**（EastSun 1006「你開一個agent 分析 安全PLC.pdf 看看跟軟體是否不一樣」→「記得PLC 要用型號分支出去喔」）：備份分支 backup/pre-plcmodel-20261006。**手冊**（D:\HT9045\_vendor_manuals\安全PLC.pdf＝Reer「Process data mapping for M1S COM Master module V2.0」8547780 Rev.4，p.28）：Modbus FC3/FC4 System I/O 在 0x400～0x410（17 個暫存器，每個暫存器低位元組是偶數號 byte）：0x400 lo＝System status、0x401～0x408＝Input status byte 0～15、0x409～0x40A Restart、0x40B～0x40C Fieldbus feedback、0x40D～0x40E Probe、0x40F～0x410 OSSD；0x000～0x001 是主機的**寫入**區。golden 讀 FC4 0x0000×11 ⇒ 讀到寫入區＋未定義區。**實測**（唯讀）：0x0000×11＝22 bytes 全 0、20 分鐘不變；0x400×17＝System status 0x01、Input 0x55 0x15 0x10 0x05、Restart byte0 0x04、OSSD 0；對照 0x620（CRC 0x4D29、日期 2026-09-13）非 0；0x500 錯誤碼 0。**改**：Gerneral.ini [System] SafePlcModel（cmydef iSafePlcModel、database.cpp 讀，同行）：0＝golden（預設，不變）、1＝M1S：PLCIOTaskCycle 請求 0x400×17（同行），回覆經新函式 W906_PlcM1SFill（MyPLC_IO_Modbus.cpp 檔尾）排進 golden 的 InPortData_Byte（[0]＝System status、[1+n]＝Input byte n、[20..21]＝OSSD byte 0..1），之後 golden 的位元拆解、MyLaneIO（Port 0x300+n ⇒ Input byte n，+1 索引）、IsOn 全部照舊。tests/test_myplc_modbus.cpp 新增 [4]：用機台實測的 34 bytes 當回覆，驗證解析與 Port 0x300～0x303 對應（7 項過；送出的位址因模擬 socket 不可讀，以程式碼確認）。**機台設定**：Gerneral.ini 在 SafePlcIO=0 下一行加 SafePlcModel=1（備份 Gerneral.ini.bak_plcmodel_20261006_171604），**SafePlcIO 仍 0**。0x400 監看（D:\HT9045\_plc_1006\plc_watch400.ps1，16:46～17:16）記到 Input byte 4 bit0 在 17:03～17:10 開關數次、byte 1 bit0 17:10:59 變 0、byte 1 bit2 17:11 0→1→…；**待 EastSun 說明當時操作才能對 SnAllEMG／SnAllSafeDoor**（⚠ golden MyLaneIO 只認 Port 0x300～0x303＝Input byte 0～3，若急停／門在 byte 4 以後要另外處理）。o2 全建 0 錯誤；ctest 384/402（失敗＝已知清單）；production_audit 通過；Debug 17:12、release 17:15 | cpp（見 commit） | 見 commit |
+ | 136 | **TFT（type 4）上線＋HT9050 TFT 對應（W906-TFT9050）；IDX1203 停止訊息不再洗版**（EastSun 1006「TFT 也接上去了 type4」「TFT沒有顯示」→「現在有顯示了」→「我需要TFT 更改9050 分支 第二個到第4個 TFT 是AUTO1~AUTO3 第五個是empty COLOR 先掠過」；「為什麼一直送圖片上的訊號?」）。①**機台設定**（Gerneral.ini，備份 .bak_tft_20261006_154508）：NUMBER_PANEL_TYPE 3→4、[NUMBER_PANEL] COM_PORT COM14→COM1、[NUMBER_PANEL2] COM_PORT→COM1（RULINGS_20261003 #19 的型號，COM 依 EastSun 1006「COM1」）。TFT 在 COM1／9600 回應站號 0x20～0x24（golden ReadVersion_TFT 探針；清背景回覆與 golden 比對字串逐 byte 相符）。「Bin display got error!!」＝Auto3／Fix1～6 沒回應被標成沒裝（golden cShowBinSelect.cpp:257-266 同），開機約 2～3 分鐘才出畫面（先掃不存在的 7 台）。②**TFT9050**（BinDisplay/BinDispBringUp_St02.cpp，同行呼叫＋同行前置宣告＋檔尾新函式 W906_BinDispTftAddrHt9050_St02）：Type_HT9050 且 type 4 時 iAddArrayTFT 改成 Loader 0x20、Auto1 0x21、Auto2 0x22、Auto3 0x23、Empty 0x24、Color 0x25（沒有裝置＝略過）；其他機型照 golden。實測（release 閒置 210 s）：inst＝1 1 0 1 1 1（Loader／Empty／Auto1～3 有、Color 無）。③**IDX1203-LOG**（cpp d0e060b）：馬達沒電時 golden LockIndexMotorAndDoHomeProcess 每圈送 ST＋VS0;SP0，W906IdxStop 原本每次印一行 ⇒ 只在軸在動時印、閒置每 30 s 彙總（停止照舊每次做）。o2 0 錯誤；顯示板相關 ctest 7／7、Index 相關 10／10；Debug 17:58、release 17:47 | cpp（見 commit） | 見 commit |
++| 137 | **IDX1203 停止訊息改成每 30 秒最多一行（第 136 條的修正）；安全 PLC 門位元逐扇對應進 IO 表**（EastSun 1006 截圖「這個你開已開agent修嗎 他一直跳 剛剛講了很多次也都沒修」；「我剛剛機台左側開關門 很多次 你都先記錄下來並且更改」→「所有們我已經開關完成 請你修改吧」）。①**Motor/myGALILmotor.cpp W906IdxStop**：第 136 條用「軸在動才印」擋，但 1203 沒上線時 MotionDone() 永遠是 false，所以照樣每次都印；改成不看動不動，30 秒內只印一行，附「這 30 秒停了幾次、幾次軸沒回報完成」（golden 馬達電源關著時每輪都會重送 ST／VS0;SP0，送是照送，只是不洗畫面）。EastSun 說「講了很多次也都沒修」的原因：18:33 開的 F5 還是舊碼，新碼要關掉程式重按 F5 才會編進去。Debug 18:58（exe 內含新字串、舊字串「was moving」已不在）、release 18:45。②**IO_Table.csv**（D:\HT9045\system，每次改前各備份 .bak_*_20261006_18xxxx）：唯讀 FC4 監看 0x400×17（D:\HT9045\_plc_1006\plc_watch400.ps1）配合 EastSun 逐扇開關：SnAllEMG 300/0、SnSafeDoor2 Loader 301/0、SnSafeDoor4 左側 301/2、SnSafeDoor5 InShuttle 301/4、SnSafeDoor6 Out Shuttle 左 302/0、SnSafeDoor7 Out Shuttle 右 302/2、SnSafeDoor8 右側 302/4、SnSafeDoor3 Unloader 302/6（全部 ISABase=4、InType 1、1＝關；Out Shuttle 右 18:57 EastSun 關上 → 0→1，證實「整天 0」＝門開著）。SnAllSafeDoor 那列刪掉（沒有合併位元；SafePlcIO=1 時 cinitial.cpp:2792-2797 不看 Enable 欄，只能刪列）。紀錄 D:\HT9045\_plc_1006\PLC_IO_MAP.md。SafePlcIO 仍為 0。 | 待確認：Index 門（PLC 302/0 還是 1203 實體 IO）、byte 3 bit 2/4/6 是什麼 | 本 commit |
+ | — | **還沒完成**（10-06 晚更新）：①**實體面板**：已知是 RS-232 面板接 COM4／115200（ControlPanelMode=1、[TrayY] COM PORT=COM4，第 134 條），15:24 有回應；之後線被拔掉，接回後還沒驗按鍵與燈（包 161 已收 St02 P1b 照 golden 分段讀）；面板回的是位址 1，若燈仍不亮要查前／後面板位址。②**1203 模組檢查（WAR16154）**：已整合，代碼表在第 134 條補上。③**關 HMI 視窗時程式還沒開好**的情況：修法已規劃。④**安全迴路**：16:12 起 OSSD 一直 0（M1S OSSD 紅燈）、Input byte1 bit0 自 17:10:59 為 0 ⇒ 1203 從站沒上線；要全部急停放開＋按 PLC 復歸（250 ms～5 s）。⑤**安全 PLC 點位**：SnAllEMG／SnAllSafeDoor 待 EastSun 說明監看時段的操作（D:\HT9045\_plc_1006\plc_watch400.log）；SafePlcIO 維持 0；若在 Input byte ≥4 要擴充 MyLaneIO（golden 只認 Port 0x300～0x303）。⑥**遠端復歸**：MOSAIC 的 Fieldbus Input 不是安全輸入，只能經 MSD 專案的 USER／MACRO RESTART，需整合商改專案＋風險評估。⑦**溫控 COM12**：開機「Temperature KT4H : COM12 port error」，[TempCtrl] COM_PORT=COM12 這台沒有（只有 COM1～6）。⑧**TFT**：「Bin display got error!!」來自 Fix1～6 沒裝；要不要 HT9050 不掃待裁決。⑨**早上未測**：INDEX_MOTION_CARD=1 首次 HOME／Z1、F9050-FIX2 首跑、IOFIX 故障路徑（都要等④） | — | 見 §4 |
+ | 41 | **VC4 閥值自己測**（EastSun「VC4 你自己測試 寫進去哪個位置 數值讀回來 會改變 自己推出來 用VC8」）：等 EastSun F5 後，用 Vacuum Unit 同一條命令對一格寫 -30 kPa、讀回、再寫回原值 | （測試中） | — |
+ | — | 關掉軟體後 VS Code 上方的除錯工具列還在：wb_serve／gdb 都已經結束、8055 沒人佔，是 VS Code 沒發現結束；按紅色方塊即可（只會跑關站腳本，沒有東西可關） | — | — |
+-- 
+2.55.0.windows.5
+
