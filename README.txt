@@ -1543,4 +1543,10 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      操作紀錄 oplog_20261006.txt：新增 734 行
      設定檔變動：machine_params/D_GPIB9045_system/general.ini、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/lastdata_backup2.dat
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+=== tools 0165 (20261006, machine) -- HTML designer (tools/vscode-htdesigner) 0.175.0 ===
+- The toolbar's start button = F5 (EastSun 1006): it starts the configuration picked in Run and Debug with its own
+  build task (before: the extension's own build of the folder of the simulation / Debug boxes -- the SIMULATION
+  build by default, while F5 builds the shipping one). Setting ht9045Designer.run.likeF5 = false: the old button.
+  ES02: please take it.
+- Tests: run_all 3/3 layers; real VS Code 153/159 (3 known stale + the BtnPanelLane3 selection set).
 MD5 清單在 MANIFEST_MD5.tsv。
