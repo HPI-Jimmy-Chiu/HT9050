@@ -1,0 +1,261 @@
+From 026dcd7f5af92c4d5845ead2487e0a6eb8c6d48e Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 07:17:11 +0800
+Subject: [PATCH] =?UTF-8?q?1203REOPEN=20stage=201:=20the=20re-open=20decis?=
+ =?UTF-8?q?ion=20(EtherCAT/Pci1203Reopen.h,=20pure)=20+=20tests/test=5Fpci?=
+ =?UTF-8?q?1203=5Freopen.cpp=20--=20EastSun=201007=20'=E5=8F=AA=E8=A6=81?=
+ =?UTF-8?q?=E9=96=8B=E5=8D=A1=E7=95=B0=E5=B8=B8=E6=88=96=E6=98=AF=20?=
+ =?UTF-8?q?=E6=9C=89=E6=B2=92=E6=9C=89=E5=81=B5=E6=B8=AC=E5=88=B0=E7=9A=84?=
+ =?UTF-8?q?=E6=A8=A1=E7=B5=84=20=E9=9C=80=E8=A6=81=E5=8A=A0=E5=80=8B=20?=
+ =?UTF-8?q?=E9=87=8D=E6=96=B0=E9=96=8B=E5=8D=A1=E6=B5=81=E7=A8=8B=20?=
+ =?UTF-8?q?=E5=8F=AF=E8=83=BD=E9=9C=80=E8=A6=81=E7=94=A8=E5=88=B0reset=20r?=
+ =?UTF-8?q?ing';=20rulings=20(AskUserQuestion=201007):=20automatic=20while?=
+ =?UTF-8?q?=20stopped=20+=20operator=20button,=20reset=20only=20the=20prob?=
+ =?UTF-8?q?lem=20ring,=20every=20module=20problem=20retries,=2010=20s=20ap?=
+ =?UTF-8?q?art=20/=203=20tries=20/=20the=20button=20gives=203=20more,=20WA?=
+ =?UTF-8?q?R16150=20open=20fail=20/=20WAR16157=20re-open=20failed,=20simul?=
+ =?UTF-8?q?ation=20first.=20Plan=20D:\HT9045\=5Freopen=5F1007\PLAN=5F1203?=
+ =?UTF-8?q?=5FREOPEN.md.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Not wired yet (stage 2 = Control kCmdRingReset via GetProcAddress Acm_MasResetRing with a whole-card fallback, stage 3 = wb_serve). Pci1203Reopen: 22/22.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203Reopen.h      | 106 ++++++++++++++++++++++++++++++++++
+ tests/CMakeLists.txt          |   8 +++
+ tests/test_pci1203_reopen.cpp |  91 +++++++++++++++++++++++++++++
+ 3 files changed, 205 insertions(+)
+ create mode 100644 EtherCAT/Pci1203Reopen.h
+ create mode 100644 tests/test_pci1203_reopen.cpp
+
+diff --git a/EtherCAT/Pci1203Reopen.h b/EtherCAT/Pci1203Reopen.h
+new file mode 100644
+index 0000000..561ecac
+--- /dev/null
++++ b/EtherCAT/Pci1203Reopen.h
+@@ -0,0 +1,106 @@
++// =============================================================================
++//  EtherCAT/Pci1203Reopen.h -- the 1203 "re-open card" DECISION (pure: no vendor header, no clock, no I/O).
++//
++//  AI(W906-1203REOPEN) 20261007: EastSun 1007「只要開卡異常或是 有沒有偵測到的模組 需要加個 重新開卡流程 可能需要用到reset ring」,
++//  rulings (AskUserQuestion 1007): automatic while the machine is stopped AND an operator button ("兩種都要"); reset only the
++//  ring that has the problem ("只重置出問題的那個環"); every module-check problem kind retries ("所有問題都重開"); 10 s between
++//  tries, 3 tries per fault, the operator button gives 3 more; alarms: open fail WAR16150, re-open failed WAR16157; simulation
++//  first. Plan D:\HT9045\_reopen_1007\PLAN_1203_REOPEN.md.
++//
++//  The host (tools/wb_serve.cpp EOF W906_Pci1203ReopenTick) reports faults and results and does what Step() asks:
++//    Fault(kRfOpenFail)            the card did not open (boot, or a re-open that failed)
++//    Fault(kRfModules, ringMask)   the module check (Pci1203ModuleCheck.h, WAR16154) found problems on these rings
++//                                  (bit 0 = ring 0 motor drives, bit 1 = ring 1 IO modules)
++//    Recovered()                   the card is open and the module check passed again
++//    AttemptDone()                 the action Step() asked for has finished (its outcome shows up as Recovered / Fault)
++//    OperatorRetry()               the 1203 page button: 3 more tries now (a manual re-open when there is no fault)
++//  Step(stopped, nowMs, &rings) returns at most one action per call:
++//    kRaResetRing (rings = the rings to reset), kRaReopenCard, kRaAlarm (once, after the 3rd failed try),
++//    kRaRecovered (once, after Recovered()), or kRaNone.
++//  Nothing is attempted while `stopped` is false (machine running / HOME / an axis moving -- the host decides) or while a
++//  previous attempt has not reported AttemptDone(). Tries are 10 s apart (signed millisecond difference: tick wrap safe).
++//  A fault that arrives again while one is pending MERGES its rings and keeps the try count (a re-check that still fails
++//  must not refill the budget); only Recovered() or OperatorRetry() refills it.
++// =============================================================================
++#ifndef HT9045_ETHERCAT_PCI1203REOPEN_H
++#define HT9045_ETHERCAT_PCI1203REOPEN_H
++
++namespace ht9045 {
++
++enum Pci1203ReopenFault { kRfNone = 0, kRfOpenFail = 1, kRfModules = 2, kRfManual = 3 };
++enum Pci1203ReopenAct   { kRaNone = 0, kRaResetRing = 1, kRaReopenCard = 2, kRaAlarm = 3, kRaRecovered = 4 };
++
++class Pci1203Reopen
++{
++public:
++    static const int           kTries = 3;
++    static const unsigned long kGapMs = 10000;
++
++    Pci1203Reopen() : fault_(kRfNone), rings_(0), tries_(0), waiting_(false), alarmed_(false), recovered_(false),
++                      haveNext_(false), nextAt_(0) {}
++
++    void Fault(int kind, unsigned ringMask = 0)
++    {
++        if (kind != kRfOpenFail && kind != kRfModules) return;
++        if (fault_ == kRfNone || fault_ == kRfManual) {                 // a new fault: fresh budget, try at once
++            fault_ = kind; rings_ = 0; tries_ = 0; alarmed_ = false; haveNext_ = false;
++        } else if (kind == kRfOpenFail) {
++            fault_ = kRfOpenFail;                                       // a card that does not open outranks a ring problem
++        }
++        if (kind == kRfModules) rings_ |= (ringMask & 3u);
++        recovered_ = false;
++    }
++    void Recovered()
++    {
++        if (fault_ == kRfNone) return;
++        fault_ = kRfNone; rings_ = 0; tries_ = 0; waiting_ = false; alarmed_ = false; haveNext_ = false;
++        recovered_ = true;
++    }
++    void AttemptDone(unsigned long nowMs)
++    {
++        if (!waiting_) return;
++        waiting_ = false; haveNext_ = true; nextAt_ = nowMs + kGapMs;
++    }
++    void OperatorRetry()
++    {
++        if (fault_ == kRfNone) { fault_ = kRfManual; rings_ = 0; }
++        tries_ = 0; alarmed_ = false; haveNext_ = false;               // 3 more, the first one now
++        recovered_ = false;
++    }
++
++    int Step(bool stopped, unsigned long nowMs, unsigned* ringsOut)
++    {
++        if (ringsOut) *ringsOut = 0;
++        if (recovered_) { recovered_ = false; return kRaRecovered; }
++        if (fault_ == kRfNone || waiting_) return kRaNone;
++        if (tries_ >= kTries) {
++            if (!alarmed_) { alarmed_ = true; return kRaAlarm; }
++            return kRaNone;
++        }
++        if (!stopped) return kRaNone;
++        if (haveNext_ && (long)(nowMs - nextAt_) < 0) return kRaNone;
++        ++tries_; waiting_ = true;
++        if (fault_ == kRfModules && rings_ != 0) {
++            if (ringsOut) *ringsOut = rings_;
++            return kRaResetRing;
++        }
++        return kRaReopenCard;                                           // open fail, manual, or a module fault with no ring
++    }
++
++    int      FaultKind() const { return fault_; }
++    unsigned Rings()     const { return rings_; }
++    int      Tries()     const { return tries_; }
++    bool     Waiting()   const { return waiting_; }
++    bool     Alarmed()   const { return alarmed_; }
++
++private:
++    int           fault_;
++    unsigned      rings_;
++    int           tries_;
++    bool          waiting_, alarmed_, recovered_, haveNext_;
++    unsigned long nextAt_;
++};
++
++}  // namespace ht9045
++
++#endif  // HT9045_ETHERCAT_PCI1203REOPEN_H
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 5ba5566..0de1932 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -8535,3 +8535,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+ endif()
+ add_test(NAME CcdCase75Gate COMMAND test_ccd_case75_gate "${CMAKE_SOURCE_DIR}")
+ set_tests_properties(CcdCase75Gate PROPERTIES TIMEOUT 120)
++# --- test_pci1203_reopen: AI(W906-1203REOPEN) 20261007 -- EastSun 1007「只要開卡異常或是 有沒有偵測到的模組 需要加個 重新開卡流程 可能需要用到reset ring」:
++#   EtherCAT/Pci1203Reopen.h (the decision behind tools/wb_serve.cpp W906_Pci1203ReopenTick): open fail -> re-open, module
++#   problems -> reset only those rings, 10 s apart, 3 tries, one alarm, operator button = 3 more, recovered once, running -> wait,
++#   tick wrap. Pure header, fake clock; memory only.
++add_executable(test_pci1203_reopen test_pci1203_reopen.cpp)
++target_include_directories(test_pci1203_reopen PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
++add_test(NAME Pci1203Reopen COMMAND test_pci1203_reopen)
++set_tests_properties(Pci1203Reopen PROPERTIES TIMEOUT 60)
+diff --git a/tests/test_pci1203_reopen.cpp b/tests/test_pci1203_reopen.cpp
+new file mode 100644
+index 0000000..79b8000
+--- /dev/null
++++ b/tests/test_pci1203_reopen.cpp
+@@ -0,0 +1,91 @@
++// =============================================================================
++//  tests/test_pci1203_reopen.cpp -- AI(W906-1203REOPEN) 20261007: EtherCAT/Pci1203Reopen.h, the 1203 re-open decision.
++//  EastSun 1007 rulings: automatic while stopped + operator button; reset only the ring with the problem; every module
++//  problem retries; 10 s apart, 3 tries per fault, the button gives 3 more; WAR16150 / WAR16157 (host). Pure: fake clock.
++// =============================================================================
++#include "EtherCAT/Pci1203Reopen.h"
++#include <cstdio>
++
++using namespace ht9045;
++
++static int g_total = 0, g_fail = 0;
++static void check(bool ok, const char* what)
++{
++    ++g_total;
++    if (!ok) ++g_fail;
++    std::printf("  %s: %s\n", ok ? "PASS" : "FAIL", what);
++}
++
++int main()
++{
++    std::printf("[1] no fault -> nothing\n");
++    {
++        Pci1203Reopen r; unsigned rings = 9;
++        check(r.Step(true, 0, &rings) == kRaNone && rings == 0, "idle: kRaNone, rings 0");
++    }
++
++    std::printf("[2] open fail while stopped: re-open now, then 10 s apart, 3 tries, ONE alarm\n");
++    {
++        Pci1203Reopen r; unsigned rings = 0; unsigned long t = 1000;
++        r.Fault(kRfOpenFail);
++        check(r.Step(true, t, &rings) == kRaReopenCard && r.Tries() == 1, "try 1 at once: re-open card");
++        check(r.Step(true, t + 50000, &rings) == kRaNone, "nothing while the attempt has not reported done");
++        r.AttemptDone(t + 200);  r.Fault(kRfOpenFail);                  // it failed again
++        check(r.Step(true, t + 200 + 9999, &rings) == kRaNone, "9.999 s after the attempt: wait");
++        check(r.Step(true, t + 200 + 10000, &rings) == kRaReopenCard && r.Tries() == 2, "10 s after: try 2 (the repeated fault kept the count)");
++        r.AttemptDone(t + 10300);  r.Fault(kRfOpenFail);
++        check(r.Step(true, t + 20300, &rings) == kRaReopenCard && r.Tries() == 3, "try 3");
++        r.AttemptDone(t + 20400);  r.Fault(kRfOpenFail);
++        check(r.Step(true, t + 30400, &rings) == kRaAlarm, "after the 3rd failure: ONE alarm (host: WAR16157)");
++        check(r.Step(true, t + 99999, &rings) == kRaNone && r.Alarmed(), "no second alarm, no 4th try");
++        r.Fault(kRfOpenFail);
++        check(r.Step(true, t + 199999, &rings) == kRaNone, "the same fault again does not refill the budget");
++        r.OperatorRetry();
++        check(r.Step(true, t + 200000, &rings) == kRaReopenCard && r.Tries() == 1, "operator button: 3 more, the first one now");
++    }
++
++    std::printf("[3] modules: reset only the problem rings; merge; recovered once\n");
++    {
++        Pci1203Reopen r; unsigned rings = 0; unsigned long t = 5000;
++        r.Fault(kRfModules, 2u);                                        // ring 1 (IO) missing
++        check(r.Step(true, t, &rings) == kRaResetRing && rings == 2u, "ring 1 problem -> reset ring 1 only");
++        r.AttemptDone(t + 100);
++        r.Fault(kRfModules, 1u);                                        // the re-check now also sees ring 0
++        check(r.Step(true, t + 10100, &rings) == kRaResetRing && rings == 3u && r.Tries() == 2, "merged: rings 0+1, try 2");
++        r.AttemptDone(t + 10200);
++        r.Recovered();
++        check(r.Step(true, t + 10201, &rings) == kRaRecovered, "check passed -> kRaRecovered once");
++        check(r.Step(true, t + 30000, &rings) == kRaNone && r.FaultKind() == kRfNone && r.Tries() == 0, "then idle, budget refilled");
++        r.Fault(kRfModules, 0u);
++        check(r.Step(true, t + 40000, &rings) == kRaReopenCard, "a module fault with no ring -> whole-card re-open");
++    }
++
++    std::printf("[4] not stopped -> nothing until stopped; open fail outranks rings\n");
++    {
++        Pci1203Reopen r; unsigned rings = 0;
++        r.Fault(kRfModules, 1u);
++        check(r.Step(false, 100, &rings) == kRaNone && r.Tries() == 0, "running: no attempt, no try counted");
++        r.Fault(kRfOpenFail);
++        check(r.Step(true, 200, &rings) == kRaReopenCard, "open fail on top of a ring fault -> whole-card re-open");
++    }
++
++    std::printf("[5] operator button with no fault = one manual re-open; tick wrap\n");
++    {
++        Pci1203Reopen r; unsigned rings = 0;
++        r.OperatorRetry();
++        check(r.FaultKind() == kRfManual && r.Step(true, 0, &rings) == kRaReopenCard, "manual: re-open card");
++        r.AttemptDone(1);  r.Recovered();
++        check(r.Step(true, 2, &rings) == kRaRecovered, "manual re-open succeeded -> recovered");
++        Pci1203Reopen w; unsigned long nearWrap = 0xFFFFFFFFul - 3000ul;
++        w.Fault(kRfOpenFail);
++        w.Step(true, nearWrap, &rings);  w.AttemptDone(nearWrap);  w.Fault(kRfOpenFail);
++        check(w.Step(true, nearWrap + 5000ul, &rings) == kRaNone, "across the tick wrap: 5 s -> still waiting");
++        check(w.Step(true, nearWrap + 10000ul, &rings) == kRaReopenCard, "across the tick wrap: 10 s -> try 2");
++        Pci1203Reopen x;
++        x.Fault(7);
++        check(x.FaultKind() == kRfNone && x.Step(true, 0, &rings) == kRaNone, "an unknown fault kind is ignored");
++    }
++
++    std::printf("==== Pci1203Reopen: %d checks, %d failed ====\n", g_total, g_fail);
++    return g_fail == 0 ? 0 : 1;
++}
+-- 
+2.55.0.windows.5
+
