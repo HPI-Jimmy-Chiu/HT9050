@@ -1,0 +1,184 @@
+From 73824bd6faf90c2a55edc6c186ccadb1d9a1de2a Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 6 Oct 2026 19:14:17 +0800
+Subject: [PATCH] =?UTF-8?q?PLCDOOR:=20safety=20PLC=20model=201=20makes=20g?=
+ =?UTF-8?q?olden's=20"all=20safety=20doors=20closed"=20input=20(IO=5FTable?=
+ =?UTF-8?q?=20Port=20310=20/=20Bit=200)=20from=20the=20PLC=20doors=20--=20?=
+ =?UTF-8?q?EastSun=201006=20'=E9=96=80=E8=AD=A6=E5=A0=B1=E4=B8=8D=E7=94=A8?=
+ =?UTF-8?q?=E7=9C=8B=E5=85=B6=E4=BB=96=E5=9C=B0=E6=96=B9=20=E7=9C=8BPLC?=
+ =?UTF-8?q?=E9=80=9A=E8=A8=8A=E5=B0=B1=E5=A5=BD=20=E8=AB=8B=E6=8A=8AIO=5FT?=
+ =?UTF-8?q?ABLE=20=E5=81=9A=E4=BF=AE=E6=AD=A3=20=E5=AF=AB=E5=87=BA?=
+ =?UTF-8?q?=E5=B0=8D=E6=87=89rear=20PLC=E7=9A=84=E8=A8=AD=E5=AE=9A=20?=
+ =?UTF-8?q?=E4=B8=A6=E4=B8=94=E5=8A=9F=E8=83=BD=E8=A6=81=E9=BD=8A=E5=85=A8?=
+ =?UTF-8?q?'.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Golden SafePlcIO=1 refuses to run unless SnAllSafeDoor and SnAllEMG are both enabled (bCheckPLCAllSafedoorAndEMGEnable, G14: SystemStart=false + StopAllMotor every pass) and raises WAR16125 from SnAllSafeDoor. This machine's MOSAIC project has one input per door and no combined bit, so W906_PlcM1SAllDoors (end of MyPLC/MyPLC_IO_Modbus.cpp) sets InPortData_Byte[17] bit 0 only when every door of golden's iSafeDoor[] list that the IO table puts on the PLC reads closed in the same frame; no PLC door -> 0, a door outside the 16 input bytes -> open. Per-door alarms stay golden's. Same-line call/declaration; only active with SafePlcModel=1.
+
+tests/test_myplc_modbus.cpp [5]: 64/64. Debug 19:12, release 19:13. Backup branch backup/pre-plcdoor-20261006. The IO_Table renumbering to the software door positions and SafePlcIO=1 are NOT in this commit (machine data, left for EastSun).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ MyPLC/MyPLC_IO_Modbus.cpp   | 32 ++++++++++++++++-
+ docs/WORKLOG_MACHINE.md     |  3 ++
+ tests/test_myplc_modbus.cpp | 69 ++++++++++++++++++++++++++++++++++++-
+ 3 files changed, 102 insertions(+), 2 deletions(-)
+
+diff --git a/MyPLC/MyPLC_IO_Modbus.cpp b/MyPLC/MyPLC_IO_Modbus.cpp
+index ca119d9..a7f0c43 100644
+--- a/MyPLC/MyPLC_IO_Modbus.cpp
++++ b/MyPLC/MyPLC_IO_Modbus.cpp
+@@ -79,7 +79,7 @@ std::vector<TMyPLC_IO_Modbus*> TMyPLC_IO_Modbus::PLC_IO_Members;
+ 
+ int iTransactionID=0;
+ int iPLCIOTask=-1;
+-int iPLCStatusTask=-1;  static void W906_PlcM1SFill(int slave, const VTBYTEDATA& data);   //ben 20230913 add   //AI(W906-PLCMODEL) 20261006: model 1 parser, end of this file; same line
++int iPLCStatusTask=-1;  static void W906_PlcM1SFill(int slave, const VTBYTEDATA& data);  void W906_PlcM1SAllDoors(int slave);   //ben 20230913 add   //AI(W906-PLCMODEL) 20261006: model 1 parser, end of this file; same line
+ 
+ bool bOSSDData[INPUT_MAX_Slave][2][8];
+ bool bScanSlave[INPUT_MAX_Slave];
+@@ -421,5 +421,35 @@ static void W906_PlcM1SFill(int slave, const VTBYTEDATA& data)
+         InPortData_Byte[slave][1+n]=m[2+n];                                     // Input status byte n
+     InPortData_Byte[slave][20]=m[30];                                           // OSSD status byte 0
+     InPortData_Byte[slave][21]=m[31];                                           // OSSD status byte 1
++    W906_PlcM1SAllDoors(slave);                                                 // AI(W906-PLCDOOR) 20261006: byte 17 bit 0 = all PLC safety doors closed (end of file)
+ }
+ //------------------------------------------------------------------------------
++//AI(W906-PLCDOOR) 20261006: EastSun 1006「門警報不用看其他地方 看PLC通訊就好 請把IO_TABLE 做修正 寫出對應rear PLC的設定 並且功能要齊全」.
++//  Golden's SafePlcIO=1 needs an "all safety doors closed" input from the PLC (Sen[SnAllSafeDoor]): bCheckPLCAllSafedoorAndEMGEnable
++//  (csystem.cpp) refuses to run -- SystemStart=false + StopAllMotor every pass -- unless SnAllSafeDoor and SnAllEMG are both enabled
++//  (or SnSafeMode is), and CheckSafeDoorIsClosed raises WAR16125 from it. This machine's MOSAIC project has one input per door and
++//  no combined door bit (every Input status bit mapped 20261006 by EastSun opening the doors one by one), so model 1 makes it here:
++//      InPortData_Byte[slave][17] bit 0 (IO_Table Port 310 / Bit 0, ISABase 4) = 1 only when EVERY door of golden's iSafeDoor[] list
++//      that the IO table puts on the PLC (ISABase 4, i.e. force-enabled by cinitial.cpp under SafePlcIO=1) reads 1 (closed) in this
++//      same frame. No PLC door configured -> 0 (fail safe: WAR16125, never a silent "closed").
++//  The per-door alarms (MES1611+N-1 at the door's position) are golden's, unchanged; this only feeds golden's generic check.
++#include "mysensor.h"
++void W906_PlcM1SAllDoors(int slave)
++{
++    if(slave<0 || slave>=INPUT_MAX_Slave)
++        return;
++    int doors=0, open=0;
++    for(int i=0; i<MAX_SAFE_DOOR_CNT; i++)
++    {
++        const int s=iSafeDoor[i];
++        if(s<0 || s>=MAX_SENSOR_ITEM || Sen[s].ISABase!=ePLCbase)
++            continue;
++        const int j=Sen[s].Port-PLCIO_INPUT_START_PORT_NUMBER+1;               // the same index golden's IOInputBit reads (iPLCSafetyVer != 202204)
++        if(j<1 || j>16 || Sen[s].Bit<0 || Sen[s].Bit>7)
++        {   ++open; continue; }                                                 // a door outside the 16 Input status bytes counts as open
++        ++doors;
++        if((InPortData_Byte[slave][j] & MyBitMask[Sen[s].Bit])==0)
++            ++open;
++    }
++    InPortData_Byte[slave][17]=(doors>0 && open==0) ? 0x01 : 0x00;
++}
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index e6c3599..62f9fd7 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -216,6 +216,7 @@
+ | 135 | **安全 PLC 型號分支（W906-PLCMODEL）**（EastSun 1006「你開一個agent 分析 安全PLC.pdf 看看跟軟體是否不一樣」→「記得PLC 要用型號分支出去喔」）：備份分支 backup/pre-plcmodel-20261006。**手冊**（D:\HT9045\_vendor_manuals\安全PLC.pdf＝Reer「Process data mapping for M1S COM Master module V2.0」8547780 Rev.4，p.28）：Modbus FC3/FC4 System I/O 在 0x400～0x410（17 個暫存器，每個暫存器低位元組是偶數號 byte）：0x400 lo＝System status、0x401～0x408＝Input status byte 0～15、0x409～0x40A Restart、0x40B～0x40C Fieldbus feedback、0x40D～0x40E Probe、0x40F～0x410 OSSD；0x000～0x001 是主機的**寫入**區。golden 讀 FC4 0x0000×11 ⇒ 讀到寫入區＋未定義區。**實測**（唯讀）：0x0000×11＝22 bytes 全 0、20 分鐘不變；0x400×17＝System status 0x01、Input 0x55 0x15 0x10 0x05、Restart byte0 0x04、OSSD 0；對照 0x620（CRC 0x4D29、日期 2026-09-13）非 0；0x500 錯誤碼 0。**改**：Gerneral.ini [System] SafePlcModel（cmydef iSafePlcModel、database.cpp 讀，同行）：0＝golden（預設，不變）、1＝M1S：PLCIOTaskCycle 請求 0x400×17（同行），回覆經新函式 W906_PlcM1SFill（MyPLC_IO_Modbus.cpp 檔尾）排進 golden 的 InPortData_Byte（[0]＝System status、[1+n]＝Input byte n、[20..21]＝OSSD byte 0..1），之後 golden 的位元拆解、MyLaneIO（Port 0x300+n ⇒ Input byte n，+1 索引）、IsOn 全部照舊。tests/test_myplc_modbus.cpp 新增 [4]：用機台實測的 34 bytes 當回覆，驗證解析與 Port 0x300～0x303 對應（7 項過；送出的位址因模擬 socket 不可讀，以程式碼確認）。**機台設定**：Gerneral.ini 在 SafePlcIO=0 下一行加 SafePlcModel=1（備份 Gerneral.ini.bak_plcmodel_20261006_171604），**SafePlcIO 仍 0**。0x400 監看（D:\HT9045\_plc_1006\plc_watch400.ps1，16:46～17:16）記到 Input byte 4 bit0 在 17:03～17:10 開關數次、byte 1 bit0 17:10:59 變 0、byte 1 bit2 17:11 0→1→…；**待 EastSun 說明當時操作才能對 SnAllEMG／SnAllSafeDoor**（⚠ golden MyLaneIO 只認 Port 0x300～0x303＝Input byte 0～3，若急停／門在 byte 4 以後要另外處理）。o2 全建 0 錯誤；ctest 384/402（失敗＝已知清單）；production_audit 通過；Debug 17:12、release 17:15 | cpp（見 commit） | 見 commit |
+ | 136 | **TFT（type 4）上線＋HT9050 TFT 對應（W906-TFT9050）；IDX1203 停止訊息不再洗版**（EastSun 1006「TFT 也接上去了 type4」「TFT沒有顯示」→「現在有顯示了」→「我需要TFT 更改9050 分支 第二個到第4個 TFT 是AUTO1~AUTO3 第五個是empty COLOR 先掠過」；「為什麼一直送圖片上的訊號?」）。①**機台設定**（Gerneral.ini，備份 .bak_tft_20261006_154508）：NUMBER_PANEL_TYPE 3→4、[NUMBER_PANEL] COM_PORT COM14→COM1、[NUMBER_PANEL2] COM_PORT→COM1（RULINGS_20261003 #19 的型號，COM 依 EastSun 1006「COM1」）。TFT 在 COM1／9600 回應站號 0x20～0x24（golden ReadVersion_TFT 探針；清背景回覆與 golden 比對字串逐 byte 相符）。「Bin display got error!!」＝Auto3／Fix1～6 沒回應被標成沒裝（golden cShowBinSelect.cpp:257-266 同），開機約 2～3 分鐘才出畫面（先掃不存在的 7 台）。②**TFT9050**（BinDisplay/BinDispBringUp_St02.cpp，同行呼叫＋同行前置宣告＋檔尾新函式 W906_BinDispTftAddrHt9050_St02）：Type_HT9050 且 type 4 時 iAddArrayTFT 改成 Loader 0x20、Auto1 0x21、Auto2 0x22、Auto3 0x23、Empty 0x24、Color 0x25（沒有裝置＝略過）；其他機型照 golden。實測（release 閒置 210 s）：inst＝1 1 0 1 1 1（Loader／Empty／Auto1～3 有、Color 無）。③**IDX1203-LOG**（cpp d0e060b）：馬達沒電時 golden LockIndexMotorAndDoHomeProcess 每圈送 ST＋VS0;SP0，W906IdxStop 原本每次印一行 ⇒ 只在軸在動時印、閒置每 30 s 彙總（停止照舊每次做）。o2 0 錯誤；顯示板相關 ctest 7／7、Index 相關 10／10；Debug 17:58、release 17:47 | cpp（見 commit） | 見 commit |
+ | 137 | **IDX1203 停止訊息改成每 30 秒最多一行（第 136 條的修正）；安全 PLC 門位元逐扇對應進 IO 表**（EastSun 1006 截圖「這個你開已開agent修嗎 他一直跳 剛剛講了很多次也都沒修」；「我剛剛機台左側開關門 很多次 你都先記錄下來並且更改」→「所有們我已經開關完成 請你修改吧」）。①**Motor/myGALILmotor.cpp W906IdxStop**：第 136 條用「軸在動才印」擋，但 1203 沒上線時 MotionDone() 永遠是 false，所以照樣每次都印；改成不看動不動，30 秒內只印一行，附「這 30 秒停了幾次、幾次軸沒回報完成」（golden 馬達電源關著時每輪都會重送 ST／VS0;SP0，送是照送，只是不洗畫面）。EastSun 說「講了很多次也都沒修」的原因：18:33 開的 F5 還是舊碼，新碼要關掉程式重按 F5 才會編進去。Debug 18:58（exe 內含新字串、舊字串「was moving」已不在）、release 18:45。②**IO_Table.csv**（D:\HT9045\system，每次改前各備份 .bak_*_20261006_18xxxx）：唯讀 FC4 監看 0x400×17（D:\HT9045\_plc_1006\plc_watch400.ps1）配合 EastSun 逐扇開關：SnAllEMG 300/0、SnSafeDoor2 Loader 301/0、SnSafeDoor4 左側 301/2、SnSafeDoor5 InShuttle 301/4、SnSafeDoor6 Out Shuttle 左 302/0、SnSafeDoor7 Out Shuttle 右 302/2、SnSafeDoor8 右側 302/4、SnSafeDoor3 Unloader 302/6（全部 ISABase=4、InType 1、1＝關；Out Shuttle 右 18:57 EastSun 關上 → 0→1，證實「整天 0」＝門開著）。SnAllSafeDoor 那列刪掉（沒有合併位元；SafePlcIO=1 時 cinitial.cpp:2792-2797 不看 Enable 欄，只能刪列）。紀錄 D:\HT9045\_plc_1006\PLC_IO_MAP.md。SafePlcIO 仍為 0。 | 待確認：Index 門（PLC 302/0 還是 1203 實體 IO）、byte 3 bit 2/4/6 是什麼 | 本 commit |
++| 138 | **安全 PLC 型號 1 補「全部安全門關好」輸入（W906-PLCDOOR）**（EastSun 1006「門警報不用看其他地方 看PLC通訊就好 請把IO_TABLE 做修正 寫出對應rear PLC的設定 並且功能要齊全」「你要看軟體裡面門的位置再去對應IO」）：備份分支 backup/pre-plcdoor-20261006＋D:\HT9045\_plc_1006\backup_plcdoor_20261006_191025＋IO_Table.csv／Gerneral.ini .bak_plcdoor_20261006_191025。**為什麼**：golden SafePlcIO=1 的 bCheckPLCAllSafedoorAndEMGEnable（csystem.cpp:30001）在 SnSafeMode 沒啟用時，SnAllSafeDoor 和 SnAllEMG 兩個都要啟用，不然每輪 SystemStart=false＋StopAllMotor（G14，csystem.cpp:16766）；CheckSafeDoorIsClosed 也用 SnAllSafeDoor 跳 WAR16125。這台 MOSAIC 專案一扇門一個位元，沒有合併位元。**做法**：MyPLC/MyPLC_IO_Modbus.cpp 檔尾 W906_PlcM1SAllDoors：型號 1 每收到一幀，把 golden iSafeDoor[] 裡 IO 表放在 PLC（ISABase 4）的門逐一讀同一幀的位元，全部是 1 才把 InPortData_Byte[17] bit 0（IO 表 Port 310／Bit 0）設 1；IO 表沒有任何 PLC 門 → 0（不會默默當成關）；門超出 16 個輸入位元組 → 當開。逐門警報（MES1611+N-1、門的位置）照 golden 不動。呼叫在 W906_PlcM1SFill 檔尾同一函式內、宣告在第 82 行同行。tests/test_myplc_modbus.cpp [5]：沒門→0、7 門全關→1（經 golden +1 索引讀 Port 310）、7 門各開一扇→0、逐門位元不變、界外門→當開；64／64。Debug 19:12、release 19:13。**IO 表（照軟體 HT9050 門位置 SD1 前左拉、SD2 前右拉、SD3 後左拉、SD4 後右拉、SD5 後右掀、SD6 左掀、SD7 右掀、SD8 Index 開檢；Alert.MotionView9050.html／ht9050-hw hardware-overview.md）改號＋加 SnAllSafeDoor 310/0、Gerneral.ini SafePlcIO=1 —— 被自動模式權限擋下，未改，等 EastSun 決定**。 | IO 表與 SafePlcIO 待 EastSun | 本 commit |
+ | — | **還沒完成**（10-06 晚更新）：①**實體面板**：已知是 RS-232 面板接 COM4／115200（ControlPanelMode=1、[TrayY] COM PORT=COM4，第 134 條），15:24 有回應；之後線被拔掉，接回後還沒驗按鍵與燈（包 161 已收 St02 P1b 照 golden 分段讀）；面板回的是位址 1，若燈仍不亮要查前／後面板位址。②**1203 模組檢查（WAR16154）**：已整合，代碼表在第 134 條補上。③**關 HMI 視窗時程式還沒開好**的情況：修法已規劃。④**安全迴路**：16:12 起 OSSD 一直 0（M1S OSSD 紅燈）、Input byte1 bit0 自 17:10:59 為 0 ⇒ 1203 從站沒上線；要全部急停放開＋按 PLC 復歸（250 ms～5 s）。⑤**安全 PLC 點位**：SnAllEMG／SnAllSafeDoor 待 EastSun 說明監看時段的操作（D:\HT9045\_plc_1006\plc_watch400.log）；SafePlcIO 維持 0；若在 Input byte ≥4 要擴充 MyLaneIO（golden 只認 Port 0x300～0x303）。⑥**遠端復歸**：MOSAIC 的 Fieldbus Input 不是安全輸入，只能經 MSD 專案的 USER／MACRO RESTART，需整合商改專案＋風險評估。⑦**溫控 COM12**：開機「Temperature KT4H : COM12 port error」，[TempCtrl] COM_PORT=COM12 這台沒有（只有 COM1～6）。⑧**TFT**：「Bin display got error!!」來自 Fix1～6 沒裝；要不要 HT9050 不掃待裁決。⑨**早上未測**：INDEX_MOTION_CARD=1 首次 HOME／Z1、F9050-FIX2 首跑、IOFIX 故障路徑（都要等④） | — | 見 §4 |
+ | 41 | **VC4 閥值自己測**（EastSun「VC4 你自己測試 寫進去哪個位置 數值讀回來 會改變 自己推出來 用VC8」）：等 EastSun F5 後，用 Vacuum Unit 同一條命令對一格寫 -30 kPa、讀回、再寫回原值 | （測試中） | — |
+ | — | 關掉軟體後 VS Code 上方的除錯工具列還在：wb_serve／gdb 都已經結束、8055 沒人佔，是 VS Code 沒發現結束；按紅色方塊即可（只會跑關站腳本，沒有東西可關） | — | — |
+@@ -266,6 +267,8 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-05 | 146 | ea7a631（GitLab bfb30b76） | bae54c6（web 8bd78b0），EastSun「你可以測試包了」。計畫 D:\HT9045\_pkg_146\PLAN_146.md：不改任何 10-04／10-05 的行、空跑進入點不變；C_OutArmSmallY 留機台 152（包的 303 定義／重複註冊註解掉）；HOME 1310 MLoaderZ→W906_HomePos(TrayZ_Home)（HT9050＝0）＋1310 補速度 100；MachineType.h／tests CMakeLists 兩邊都留；test_flow9050_tray 改成機台數字（260／+25 氣缸、Tech Empty／Color、真實工位順序，因 10-04 HT9050-TYPE 工位保護）。o2 全建，ctest 365/384（Flow9050_Tray 過、PE_TruncationCheckTimeout 過，失敗清單同前），production_audit 0；release wb_serve 10:42 建好。**⚠ 9050 新 Z 教導欄位（TrayZ_Down／TrayZ_Home／EmptyZ／Auto1～3Z）全樹沒設值＝0，關空跑生產前要先決定教點來源** | GitHub b9a4337 |
+ | 10-06 | 158 | 31e2b21（GitLab bc2891cc） | 本 commit（只有文件），EastSun「一樣最佳化執行緒 更新版本」。程式部分＝機台自己的 IOTUNE-D（cpp 0232）收進 main，wb_serve.cpp 合併結果＝機台檔（不寫，避免觸發重編）；設計外掛照規定跳過；收 docs 三份＋MACHINE_PATCHES_20261006.md。README／RULINGS_20261006 第 8 條：**Jimmy 1006 #128＝A（機台先關 IO 執行緒，等審查 #1～#3 修好再開）、#127＝B（機台節拍改 500）**——EastSun 1006 裁決：**IO 執行緒照開、機台端現在修審查 #1～#6**；**節拍維持 100**，把今天量測（IO 執行緒＋IOTUNE-D 後主迴圈最慢一圈約 25 ms，照 Jerry「tick ≥ 3×最壞單趟」100 就夠；單執行緒約 125～141 ms 才需要 500）回報 Jimmy | 見推送紀錄 |
+ | 10-06 | 161 | ec34e1eb（GitLab b8ea3a51） | 本 commit（只有機台 C++），定時版本檢查，依「之後的更新包都自動收」不另外發問。計畫 D:\HT9045\_pkg_161\PLAN_161.md；備份分支 backup/pre-pkg161-20261006＋D:\HT9045\_pkg_161\backup_machine_180234＋backup_conflict\。內容：機台自己的 PASSPROF／COMM-STOPFAST／CFGRETRY 收回 main＋W906_QTCT（MinGW.org 6.3 沒有 QueryThreadCycleTime 宣告 ⇒ 執行時從 kernel32 取）、Jerry J-17 A（不支援的 IO_CARD_TYPE 明確報錯，只診斷）、**St02 P1b（RS-232 面板照 golden 一段一段讀，PadInterface_St02.cpp）**、Ifor POOL-2（fLotInfo.cpp 照 golden 0618 開 3 個 #if 0）。直接換 9（全掃＝0 缺；NIGHT_REPORT 少一處 W906_HT9050_AS_LS 文字提及）、新檔 3、WebMotorAccessLive／csystem 合併後＝機台。**衝突 6 處**：wb_serve.cpp:239 與 PassProfEnd 收筆電（＝機台＋W906_QTCT，逐字比對過）；wb_serve.cpp:4687 IOTUNE、Pci1203Monitor.cpp:123 IO 執行緒欄位 **留機台**；筆電要加的 ExitWatchdog 函式機台已有（:8881）⇒ 不重複。3 檔行尾轉回 CRLF。o2 全建 0 錯誤；ctest 387/404（失敗＝已知清單）；production_audit 第一次與 EastSun 18:11 開的 F5 重疊（變動是程式開機會寫的檔）⇒ 程式關閉後重拍基準、重跑本包相關 27 支（25 過；IoPoints／MotorPoints_HT9050＝已知）⇒ audit 通過；Debug 18:11（EastSun 的 F5 編的，已含本包）、release 18:31 | 見推送紀錄 |
++| 10-06 | 設計外掛 tools 0169 | — | 設計外掛工作階段自己推（分支 6c14bb4，GitHub ef365856，接在 089f1a8a 之後）：方案總管工具列的 Debug／Release 按鈕改成醒目（EastSun 1006）；只動 tools/vscode-htdesigner | tools 0169 |
++| 10-06 | 設計外掛 tools 0168 | — | 設計外掛工作階段自己推（分支 ee40a88，GitHub 089f1a8a，接在 b76804d8 之後）：屬性面板分頁列尾端的 DFM／HTML／複製 三個按鈕拿掉（EastSun 1006「這邊不要有」）；跳轉仍可用雙擊、列選單、Shift+F7；只動 tools/vscode-htdesigner | tools 0168 |
+ | 10-06 | 設計外掛 tools 0167 | — | 設計外掛工作階段自己推（分支 b3f37d4，GitHub 591ec74d，接在 13df1af4 之後）：屬性面板「N 項和 DFM 不同／全部改回 DFM」那一條拿掉（EastSun 1006）；只動 tools/vscode-htdesigner | tools 0167 |
+ | 10-06 | 設計外掛 tools 0166 | — | 設計外掛工作階段自己推（分支 549a814，GitHub 13df1af4，接在 6eb93a91 之後，版本 0.197.0）：筆電包 158～161 的設計外掛部分已合進機台；以後套這幾包時 tools/vscode-htdesigner 一律跳過（套包規則本來就留機台版） | tools 0166 |
+ | 10-06 | 160 | 9f123fe（GitLab 2afc1946） | 本 commit（機台 C++＋web），定時版本檢查，依 EastSun 1006「之後的更新包都自動收」不另外發問。計畫 D:\HT9045\_pkg_160\PLAN_160.md；備份分支 backup/pre-pkg160-20261006（cpp、web）＋ D:\HT9045\_pkg_160\backup_machine_163045。直接換 11（含 web 3；全掃機台獨有標記／識別字＝0 缺）：Ifor IT-1 batches 2-3（MyTempPanel.cpp／.h、uTemp_Set.cpp，照 golden）、build_nonoracle.bat（Ninja；已有 CMakeCache 的目錄保留原產生器 ⇒ build_integ_dbg_x86 不變）、wave_wrapup_gate.ps1、docs ×3、web HMICLOSE（background.html／ht9045_main_close.js／ht9045_recipe_client.js）；新檔 3（兩支 IT-1 測試、tools/ninja_setup.ps1）；myGALILmotor.cpp／mymotor.cpp 合併後＝機台（筆電收的就是機台的 IDX1203）；tests/CMakeLists +2 支測試、無重複登記。**兩處衝突留機台**：MachineType.h（筆電沒有 `#define W906_PCI1203_IO_THREAD` 那段，照筆電會關掉 IO 執行緒 ⇒ 違反 EastSun 1006 #128）、uhome.cpp（TRAYSAFE-3 同一行程式碼、註解不同）；uhome 其餘 HOME1530-SIM 只在 SOFT_SIMULTE。8 檔行尾轉回機台 CRLF（cpp 5、web 3）。o2 全建 0 錯誤；ctest 383/402（Security_JamMerge 平行時偶發、單跑過；其餘＝已知清單）；production_audit 基準 16:32 重拍、ctest 16:43～16:45，變動全是 EastSun 16:45:32 開的 F5 寫的（BootLog 有 WinMain Enter），ctest 0 寫入；Debug 16:45（EastSun 的 F5 編的，已含本包）、release 16:51 | 見推送紀錄 |
+diff --git a/tests/test_myplc_modbus.cpp b/tests/test_myplc_modbus.cpp
+index 0d25f0a..1f81651 100644
+--- a/tests/test_myplc_modbus.cpp
++++ b/tests/test_myplc_modbus.cpp
+@@ -393,10 +393,77 @@ int main()
+     test_clientsocket_sim();
+     test_modbustcpclient();
+     test_myplc_io_modbus();
+-    test_m1s_model();   // AI(W906-PLCMODEL) 20261006
++    test_m1s_model();   void test_m1s_alldoors(); test_m1s_alldoors();   // AI(W906-PLCMODEL) 20261006   // AI(W906-PLCDOOR) 20261006: [5], end of file
+ 
+     printf("\n-------------------------------------------------------------\n");
+     printf(" RESULT: %d passed, %d failed\n", g_pass, g_fail);
+     printf("-------------------------------------------------------------\n");
+     return (g_fail == 0) ? 0 : 1;
+ }
++
++// ===========================================================================
++//  [5] AI(W906-PLCDOOR) 20261006: model 1 makes golden's "all safety doors closed" input (IO_Table Port 310 / Bit 0) from the doors
++//      the IO table puts on the PLC. Doors as mapped on the machine 20261006 (EastSun opening them one by one, software positions
++//      SD1..SD7 of the HT9050 door list): 301/0, 302/6, 301/4, 302/0, 302/2, 301/2, 302/4 -> all closed = byte 1 0x15, byte 2 0x55.
++// ===========================================================================
++#include "cmydef.h"
++#include "mysensor.h"
++static void m1s_feed(unsigned char in1, unsigned char in2)
++{
++    PlcComm.SocketConnect(0, 0);
++    bScanSlave[0] = true;
++    iPLCIOTask = 1;
++    static int s_id = 0x0200; iTransactionID = ++s_id;   // a fresh id per frame: the client keeps replies by id
++    PLCIOTaskCycle();
++    unsigned char wire[34] = {0};
++    wire[1] = 0x01;                 // System status
++    wire[2] = in1; wire[3] = 0x55;  // register 0x401: hi = Input byte 1, lo = Input byte 0
++    wire[4] = 0x55; wire[5] = in2;  // register 0x402: hi = Input byte 3, lo = Input byte 2
++    char frame[9 + 34];
++    frame[0] = (char)((iTransactionID >> 8) & 0xFF); frame[1] = (char)(iTransactionID & 0xFF); frame[2] = 0x00; frame[3] = 0x00; frame[4] = 0x00; frame[5] = (char)(3 + 34);
++    frame[6] = 0x00; frame[7] = 0x04; frame[8] = (char)34;
++    for (int i = 0; i < 34; ++i) frame[9 + i] = (char)wire[i];
++    TCustomWinSocket rx;
++    rx.SimPushReceive(frame, (int)sizeof(frame));
++    PlcComm.SocketRead(0, &rx);
++    PLCIOTaskCycle();
++}
++void test_m1s_alldoors()
++{
++    printf("\n[5] SafePlcModel=1: all-doors-closed input (Port 310 / Bit 0) made from the PLC doors of the IO table\n");
++    iSafePlcModel = 1;
++    for (int i = 0; i < MAX_SAFE_DOOR_CNT; ++i) Sen[iSafeDoor[i]].ISABase = 0;
++
++    m1s_feed(0x15, 0x55);
++    CHECK(iPLCIOTask == 1 && bPLCInData[0][17][0] == false, "no door on the PLC in the IO table -> 0 (fail safe, never a silent 'closed')");
++
++    const int sn[7]   = { SnSafeDoor1, SnSafeDoor2, SnSafeDoor3, SnSafeDoor4, SnSafeDoor5, SnSafeDoor6, SnSafeDoor7 };
++    const int port[7] = { 0x301, 0x302, 0x301, 0x302, 0x302, 0x301, 0x302 };
++    const int bit[7]  = { 0, 6, 4, 0, 2, 2, 4 };
++    for (int i = 0; i < 7; ++i) { Sen[sn[i]].ISABase = ePLCbase; Sen[sn[i]].Port = port[i]; Sen[sn[i]].Bit = bit[i]; }
++
++    m1s_feed(0x15, 0x55);
++    TMyPLC_IO_Modbus all; all.SetPortInformation(0, 0x310, 0);
++    CHECK(bPLCInData[0][17][0] == true && all.IsOn(), "every PLC door closed -> Port 310 / Bit 0 = 1 (read through golden's +1 index)");
++
++    int bad = 0;
++    for (int i = 0; i < 7; ++i)
++    {
++        unsigned char in1 = 0x15, in2 = 0x55;
++        if (port[i] == 0x301) in1 = (unsigned char)(in1 & ~(1 << bit[i])); else in2 = (unsigned char)(in2 & ~(1 << bit[i]));
++        m1s_feed(in1, in2);
++        if (bPLCInData[0][17][0] != false) ++bad;
++    }
++    CHECK(bad == 0, "any ONE PLC door open (each of the 7 tried) -> Port 310 / Bit 0 = 0");
++
++    m1s_feed(0x15, 0x45);           // Input byte 2 bit 4 open; bit 2/6 doors unchanged
++    CHECK(bPLCInData[0][17][0] == false && bPLCInData[0][3][4] == false && bPLCInData[0][3][6] == true,
++          "the per-door bits stay golden's (byte 2 bit 4 = 0, bit 6 = 1) next to the made bit");
++
++    Sen[SnSafeDoor8].ISABase = ePLCbase; Sen[SnSafeDoor8].Port = 0x320; Sen[SnSafeDoor8].Bit = 0;
++    m1s_feed(0x15, 0x55);
++    CHECK(bPLCInData[0][17][0] == false, "a PLC door outside the 16 Input status bytes counts as open");
++
++    for (int i = 0; i < MAX_SAFE_DOOR_CNT; ++i) Sen[iSafeDoor[i]].ISABase = 0;
++    iSafePlcModel = 0;
++}
+-- 
+2.55.0.windows.5
+
