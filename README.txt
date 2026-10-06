@@ -1637,4 +1637,8 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
   redraw after 40 ms anyway). ES02: please take it.
 - Not run on the machine: test/e2e_all.js, test/vscode_run_it.ps1 (they build / start the machine program).
 - Tests: run_all 3/3 layers; real VS Code 159/159 (all pass).
+=== tools 0167 (20261006, machine) -- HTML designer (tools/vscode-htdesigner) 0.197.0 ===
+- The "N items differ from the DFM / reset all to DFM" strip over the properties grid is gone (EastSun 1006: not
+  wanted). The per-row DFM values, the reset square and the menu item stay. ES02: please take it.
+- Tests: run_all 3/3 layers; real VS Code 159/159.
 MD5 清單在 MANIFEST_MD5.tsv。
