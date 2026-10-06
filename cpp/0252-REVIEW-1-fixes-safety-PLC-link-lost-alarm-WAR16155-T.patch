@@ -1,0 +1,266 @@
+From aff4167f24aa70ce2f36988490174cafd59e9931 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 03:02:04 +0800
+Subject: [PATCH] =?UTF-8?q?REVIEW-1=20fixes:=20safety-PLC=20link-lost=20al?=
+ =?UTF-8?q?arm=20WAR16155,=20Tray=20Z=20typed=20rows=20have=20no=20Set=20/?=
+ =?UTF-8?q?=20GO,=20a=20stuck=20IO=20thread=20no=20longer=20stalls=20the?=
+ =?UTF-8?q?=20tick=20loop=20--=20EastSun=201006=20'=E9=87=9D=E5=B0=8D?=
+ =?UTF-8?q?=E4=B9=8B=E5=89=8D=E6=94=B9=E7=9A=84code=20=E5=81=B5=E6=B8=AC?=
+ =?UTF-8?q?=E6=9C=89=E7=84=A1bug=20=E4=B8=80=E7=9B=B4=E6=8C=81=E7=BA=8C?=
+ =?UTF-8?q?=E4=B8=8B=E5=8E=BB'=20(three=20read-only=20review=20agents)=20a?=
+ =?UTF-8?q?nd=20'Plc=E6=96=B7=E7=B7=9A=E9=A1=8D=E5=A4=96=E5=AF=AB=E7=95=B0?=
+ =?UTF-8?q?=E5=B8=B8'.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+1. W906-PLCLOST: after a PLC link loss golden keeps the last frame (doors / EMG read "closed"; the clear block is commented out, Ken 20250428) and bCheckPLCConnet only notices once the socket is down. MyPLC_IO_Modbus.cpp EOF W906_SafePlcLinkLost = SafePlcIO=1 and (socket down or no reply frame for 2 s, counted from the first ask); W906_SafePlcFrameMark on every taken frame (same line). csystem.cpp DoSystem (inside SystemStart, after golden's G12, on the old blank line): lost -> ShowErrorMessage("WAR16155", K_RETRY, MMSystem), SystemStart=false, StopAllMotor. Door / EMG data untouched. The G23 comment claiming a silent PLC is still caught is marked wrong (same line). tests/test_myplc_modbus.cpp [7]: 74/74.
+2. W906-TRAYZ-PITCH-2: the 12 HT9050 Tray Z typed rows (pitch / lift / probe start / probe limit) are TECH_PARA rows, so a hand-made WS teachGo btn=btnGoTZ9050LoaderPitch drove MLoaderZ to the pitch value. MotorAccessResolveTeachButton refuses them (same line; EOF W906_TeachTypedOnly). test_web_motor_access: 1097/1097.
+3. W906-IOFIX-2: with the IO thread stuck, the Motor Test page's 100 ms SetTorqueFocusAxis went through RunSync whose freeze clock started at the request -> 5 s stall per beat. Pci1203Monitor.cpp: g_w906IoHeartAt (heartbeat tick), RunSync refuses at once when the heartbeat is already frozen >= 5 s (one line per 50), the wait's freeze clock starts at the last heartbeat, cleared when the thread starts. No test reaches it (needs the card); compiled.
+
+Debug + release (affected targets). Web part (WAR16155 text) in the web commit of the same name. WORKLOG section 2 row 142.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203Monitor.cpp     | 12 ++++++------
+ MyPLC/MyPLC_IO_Modbus.cpp       | 30 +++++++++++++++++++++++++++++-
+ WebMotorAccess.cpp              | 20 +++++++++++++++++++-
+ csystem.cpp                     |  4 ++--
+ docs/WORKLOG_MACHINE.md         |  1 +
+ tests/test_myplc_modbus.cpp     | 28 +++++++++++++++++++++++++++-
+ tests/test_web_motor_access.cpp |  2 +-
+ 7 files changed, 85 insertions(+), 12 deletions(-)
+
+diff --git a/EtherCAT/Pci1203Monitor.cpp b/EtherCAT/Pci1203Monitor.cpp
+index f1676fa..d9fe4b6 100644
+--- a/EtherCAT/Pci1203Monitor.cpp
++++ b/EtherCAT/Pci1203Monitor.cpp
+@@ -4404,7 +4404,7 @@ HANDLE           g_w906IoWake = 0;                // auto-reset: a request was q
+ HANDLE           g_w906IoThread = 0;
+ volatile long    g_w906IoStop = 0;
+ unsigned long    g_w906IoGapMs = 10;
+-volatile long    g_w906IoHeart = 0;
++volatile long    g_w906IoHeart = 0;  volatile DWORD g_w906IoHeartAt = 0;   //AI(W906-IOFIX-2) 20261007: + the tick of the last heartbeat (review 20261006 #1), same line
+ volatile long    g_w906IoServingMain = 0;         // a main-thread request is running (the main thread is blocked in RunSync)
+ Pci1203IoSnap*   g_w906IoStagedP = 0;             // registered by the first stage
+ Pci1203IoSnap*   g_w906IoPubP = 0;
+@@ -4425,14 +4425,14 @@ void W906IoCsInit_()
+ }
+ 
+ DWORD WINAPI W906IoThreadMain_(void*)
+-{
++{   g_w906IoHeartAt = 0;   //AI(W906-IOFIX-2) 20261007: a restarted thread starts with no heartbeat time (a previous run's must not refuse requests); same line
+     for (;;) {
+         W906IoServe_(true);
+         if (g_w906IoStop) break;
+         if (TPci1203Monitor* m = Pci1203Monitor()) {
+             try { m->Poll(); } catch (...) {}          // Poll never throws; a vendor surprise must not end the thread
+         }
+-        ::InterlockedIncrement(&g_w906IoHeart);
++        ::InterlockedIncrement(&g_w906IoHeart);  g_w906IoHeartAt = ::GetTickCount() | 1u;   //AI(W906-IOFIX-2) 20261007: heartbeat time, same line
+         W906IoServe_(true);
+         if (g_w906IoStop) break;
+         ::WaitForSingleObject(g_w906IoWake, (DWORD)g_w906IoGapMs);
+@@ -4508,7 +4508,7 @@ void Pci1203IoThreadRunSync(void (*fn)(void*), void* arg, bool boundaryOnly)
+         static unsigned long s_said = 0;
+         if (s_said++ == 0) std::printf("[IOTHREAD] card request refused: the IO thread did not stop in time and still owns the card\n");
+         return;
+-    }
++    }   { const DWORD hbA = g_w906IoHeartAt; if (hbA != 0 && (DWORD)(::GetTickCount() - hbA) >= kW906IoStallMs) { static unsigned long s_frozen = 0; if ((s_frozen++ % 50) == 0) { std::printf("[IOTHREAD] card request refused at once: no poll for %lu ms (heartbeat frozen; %lu refused so far)\n", (unsigned long)((DWORD)::GetTickCount() - hbA), s_frozen); std::fflush(stdout); } return; } }   //AI(W906-IOFIX-2) 20261007: review 20261006 #1 -- the thread is already stuck: refuse BEFORE queueing, so a caller that asks every 100 ms (Motor Test page W906_TorqueFocus -> SetTorqueFocusAxis) no longer freezes the tick loop 5 s per ask
+     W906IoReq r;
+     r.fn = fn;  r.arg = arg;  r.boundaryOnly = boundaryOnly;
+     r.done = ::CreateEventA(NULL, TRUE, FALSE, NULL);
+@@ -4526,7 +4526,7 @@ void Pci1203IoThreadRunSync(void (*fn)(void*), void* arg, bool boundaryOnly)
+     //  on this stack frame), so keep waiting -- and say so every 5 s.
+     const DWORD t0 = ::GetTickCount();
+     long hb0 = g_w906IoHeart;
+-    DWORD hbAt = t0, noteAt = t0;
++    DWORD hbAt = (g_w906IoHeartAt != 0) ? (DWORD)g_w906IoHeartAt : t0, noteAt = t0;   //AI(W906-IOFIX-2) 20261007: the freeze clock starts at the last heartbeat, not at this request (was hbAt = t0)
+     for (;;) {
+         HANDLE hs[2] = { r.done, g_w906IoThread };
+         const DWORD w = ::WaitForMultipleObjects(2, hs, FALSE, 500);
+@@ -4625,7 +4625,7 @@ bool Pci1203IoThreadStart(unsigned long gapMs, char* why, int whyLen)
+     if (g_w906IoWake == 0) { say("CreateEvent failed -- the IO stays on the main thread"); return false; }
+     ::InterlockedExchange(&Pci1203IoState().passMark, (long)m->card().pollCount);
+     DWORD tid = 0;
+-    g_w906IoThread = ::CreateThread(NULL, 0, &W906IoThreadMain_, NULL, CREATE_SUSPENDED, &tid);
++    g_w906IoHeartAt = 0;  g_w906IoThread = ::CreateThread(NULL, 0, &W906IoThreadMain_, NULL, CREATE_SUSPENDED, &tid);   //AI(W906-IOFIX-2) 20261007: clear the heartbeat time before the new thread exists; same line
+     if (g_w906IoThread == 0) { say("CreateThread failed -- the IO stays on the main thread"); return false; }
+     g_w906IoTid = tid;                                 // before it runs: its first Poll must know it is the IO thread
+     ::InterlockedExchange(&Pci1203IoState().running, 1);
+diff --git a/MyPLC/MyPLC_IO_Modbus.cpp b/MyPLC/MyPLC_IO_Modbus.cpp
+index a7f0c43..027dc9e 100644
+--- a/MyPLC/MyPLC_IO_Modbus.cpp
++++ b/MyPLC/MyPLC_IO_Modbus.cpp
+@@ -283,7 +283,7 @@ void PLCIOTaskCycle()
+                 //if(iPLCSafetyVer==202204)                                     //joe 20220406.01 debug safe plc
+                     bIOPowered=true;
+ 
+-                bPLCIOEffect=true;                                              //完成過一次 (completed at least once)
++                bPLCIOEffect=true;                                              //完成過一次 (completed at least once)   { void W906_SafePlcFrameMark(); W906_SafePlcFrameMark(); }   //AI(W906-PLCLOST) 20261007: frame time for the link-lost alarm (end of file)
+                 iSlave++;
+                 iTransactionID++;
+                 Task=1;
+@@ -453,3 +453,31 @@ void W906_PlcM1SAllDoors(int slave)
+     }
+     InPortData_Byte[slave][17]=(doors>0 && open==0) ? 0x01 : 0x00;
+ }
++//------------------------------------------------------------------------------
++//AI(W906-PLCLOST) 20261007: EastSun 1006 (asked whether a PLC link loss should clear the door data) 「Plc斷線額外寫異常」.
++//  Review 20261006: after a link loss golden keeps the last frame (its clear block in PLCStatusCheck is commented out, Ken 20250428),
++//  so doors / EMG keep reading "closed", and bCheckPLCConnet only notices once the socket itself is down -- a pulled cable can stay
++//  "connected" for tens of seconds. This is the separate alarm: the link is LOST when SafePlcIO=1 and either the socket is not
++//  connected or no reply frame has arrived for kW906PlcLostMs (from the first ask, so "never answered since boot" counts too).
++//  csystem.cpp DoSystem raises WAR16155 on it while running (same place as golden's G12 check). The door / EMG data are not touched.
++#include <chrono>
++static const long kW906PlcLostMs = 2000;
++static long long s_w906PlcFrameAt = 0, s_w906PlcSince = 0;
++static long long W906_PlcNowMs()
++{
++    return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
++}
++void W906_SafePlcFrameMark()
++{
++    s_w906PlcFrameAt = W906_PlcNowMs();
++}
++bool W906_SafePlcLinkLost()
++{
++    if(!Enable_PLCSafety_IO)
++        return false;
++    const long long now = W906_PlcNowMs();
++    if(s_w906PlcSince == 0)
++        s_w906PlcSince = now;
++    const long long ref = s_w906PlcFrameAt ? s_w906PlcFrameAt : s_w906PlcSince;
++    return !PlcComm.IsConnected() || (now - ref) > kW906PlcLostMs;
++}
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index 107511f..a36fd54 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -3944,7 +3944,7 @@ std::string MotorAccessResolveTeachButton(const TeachRegistry& reg, const std::s
+         if (reg.T[i].setBtn == btn || reg.T[i].goBtn == btn) {
+             own = &reg.T[i]; t.ownList = 'T'; t.ownIndex = (int)i;
+             if (reg.T[i].seq > lastSeq) { lastSeq = reg.T[i].seq; regVis = reg.T[i].vis; }
+-        }
++        }   { bool W906_TeachTypedOnly(const std::string&); if (own && W906_TeachTypedOnly(own->edit0)) return btn + ": " + own->edit0 + " 不是位置（pitch／抬升量／探測層數是手動輸入的數值），沒有 Set／GO"; }   //AI(W906-TRAYZ-PITCH-2) 20261007: review 20261006 -- these 12 HT9050 Tray Z rows' registry buttons were live server-side (EOF)
+     std::map<std::string, TeachBtnInfo>::const_iterator bi = reg.btns.find(btn);
+     const TeachBtnInfo* info = (bi != reg.btns.end()) ? &bi->second : 0;
+     if (info) {
+@@ -8976,3 +8976,21 @@ bool ServoOnEncSync(IMotorAccessBackend& be, long long wireId, const MotorAccess
+ }
+ }  // namespace
+ }  // namespace ht9045
++//AI(W906-TRAYZ-PITCH-2) 20261007: review 20261006 (Tray Z): the HT9050 Tray Z typed rows (pitch / hand-over lift / Loader probe start /
++//  probe limit; tools/gen_teach_registry.py EXT_ROWS) are TECH_PARA rows, so their registry Set / Go buttons resolved like any
++//  position: a hand-made WS teachGo btn=btnGoTZ9050LoaderPitch would drive MLoaderZ to the pitch value, a teachSet would write an
++//  encoder position into the probe limit. The page shows no such buttons; MotorAccessResolveTeachButton now refuses them here.
++namespace ht9045 {
++bool W906_TeachTypedOnly(const std::string& edit)
++{
++    if (edit.compare(0, 13, "setEditTZ9050") != 0)
++        return false;
++    static const char* const tails[] = { "Pitch", "Lift", "ProbeStart", "ProbeLimit" };
++    for (const char* t : tails) {
++        const std::string s(t);
++        if (edit.size() > s.size() && edit.compare(edit.size() - s.size(), s.size(), s) == 0)
++            return true;
++    }
++    return false;
++}
++}  // namespace ht9045
+\ No newline at end of file
+diff --git a/csystem.cpp b/csystem.cpp
+index fe8ad72..baf9add 100644
+--- a/csystem.cpp
++++ b/csystem.cpp
+@@ -16718,7 +16718,7 @@ void DoSystem()
+             bPLCDisconnet=true;
+         }
+ #endif // GATE G12
+-
++        { extern bool W906_SafePlcLinkLost(); if(W906_SafePlcLinkLost()) { ShowErrorMessage("WAR16155", K_RETRY, MMSystem); SystemStart=false; StopAllMotor(); } }   //AI(W906-PLCLOST) 20261007: EastSun「Plc斷線額外寫異常」-- safety PLC link lost (socket down or no frame for 2 s, MyPLC_IO_Modbus.cpp EOF) -> WAR16155 + stop, every pass while running; on the old blank line
+         if(CheckSafeDoorIsClosed()==false)                                      //jou 20171030 (Steven) : 修正安全門未關按Start時IndexArm會先動作
+         {
+             SystemStart=false;
+@@ -21305,7 +21305,7 @@ bool CheckSafeDoorIsClosed()
+     //  DELTA : UNAFFECTED: the WAR16125 alarm and `bReturnFlag=false` at golden
+     //  DELTA : :2672-2678 are driven by Sen[SnAllSafeDoor].IsOff(), which is ACTIVE, and
+     //  DELTA : still fire.  A PLC that has gone silent is therefore still caught (its
+-    //  DELTA : sensors read Off) -- only the operator hint that names the PLC is lost.
++    //  DELTA : sensors read Off) -- only the operator hint that names the PLC is lost.   [AI(W906-PLCDOOR-2) 20261006: the "still caught (its sensors read Off)" claim above is WRONG (review 20261006): after a link loss bPLCInData is NOT cleared (golden's clear block in MyPLC_IO_Modbus.cpp PLCStatusCheck is commented out, Ken 20250428), so door / EMG / all-doors bits keep the LAST frame (closed) -- same as golden. Only "the PLC never answered since boot" is caught (bPLCIOEffect==false). Whether to clear on disconnect is pending EastSun.]
+     #if 1 // GATE G23 -- golden csystem.cpp:2669-2670 (text below is golden VERBATIM)  // AI(W906-PLC-GATES) 20260926: OPENED (RULINGS_20260926 #20/#22; SafePlcIO=0 unchanged -- short-circuits on Enable_PLCSafety_IO)
+     if(Enable_PLCSafety_IO && bCheckPLCConnet()==false)                         //KenHsieh 20250313 : Fix PLC 判斷連線問題
+         bPLCConnet=false;
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 246c81a..b63842e 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -220,6 +220,7 @@
+ | 139 | **WAR16154 沒有文字 → 警報框接上 golden 的「 : errPart」；1203 頁馬達清單加 Mot_Table 名稱與站號；安全門 IO 照軟體門位置改號＋SafePlcIO=1（W906-ERRPART／W906-1203MOTNAME）**（EastSun 1006 截圖「沒有文字描述異常」；「圖片這邊我希望對應的IP有 MOT_TABLE 文字描述 和站號」；「你要看軟體裡面門的位置再去對應IO」→ AskUserQuestion「全部照改（含 SafePlcIO=1）」）。①tools/wb_serve.cpp：警報信箱的 message 原本只帶代碼、errPart 從沒送到網頁；EOF W906_AlarmMsgWithErrPart 在 canary_support 記錄的 LastCode＝本代碼時接 golden 的 " : "+errPart（forms/fNote_ShowError.cpp:400-408），第 377／380 行同行接上；警報相關 ctest 15／15。②web 5fef154：js/pci1203/view.js EOF 讀 /api/struct/motor/config，PCI1203 列 hw.boardId／port＝位址／軸 → 「狀態 · M14 MTestZ1 · 站 14 · axN」（無頭瀏覽器 19 軸全對上）；JSON AlarmCodeList-index／Alarm-description（＋shim）補 WAR16154 文字與中英說明。③D:\HT9045\system（備份 .bak_plcdoor_20261006_191025）：SnSafeDoor1 Loader 301/0、2 Unloader 302/6、3 InShuttle 301/4、4 OutShuttle 左 302/0、5 OutShuttle 右 302/2、6 左側 301/2、7 右側 302/4、8 Index 停用（原列）、新增 SnAllSafeDoor 310/0；Gerneral.ini SafePlcIO=1（第一次被自動模式擋下一半，EastSun 核准後完成；關程式後確認仍為 1）。Debug 22:08、release 21:49 | 待 EastSun 開機實測 SAFEPLC（[SAFEPLC] 連線、門／急停警報） | 本 commit |
+ | 140 | **HT9050 Tray Z 層位改成「基準層 − 層 × pitch」＋Teach 頁 9050 Tray Z（W906-TRAYZ-PITCH）**（EastSun 1006「Loader unloader 9050 流程有哪些點位 teach畫面無法設定？」→「第幾層不是用pitch來算嗎？」「每一層一定是有一個基準層 用pitch算上去」「基準層pitch要用減的」「交接位置不就是 上位嗎？」→ 我指出 Loader 取盤 case 10 上位[L]→++→case 30 上位[L+1]+抬升→case 50 下位[L+1]，若改本層會不動 →「對那額外抬升也要校正」「其他站額外抬升也要保留」「探測就是上位 加層數 然後要可以讓我設探測極限」「這個值要可以校正」「只編有改到的」）。計畫 D:\HT9045\_tray9050_1006\PLAN_TRAYZ_PITCH.md；備份分支 backup/pre-trayzpitch-20261006（cpp、web）＋ D:\HT9045\_tray9050_1006\backup_web_224055。**之前**：9050 流程（910 Eastsun 0819）讀每層一格的 Prod.TrayZ_Up/Down[MAX_TRACK=9]（層號 -1..19 越界）、EmptyZ_*／Auto1~3Z_*[20]、Home／抬升／探測起始層——沒有 ini 鍵、畫面或程式寫過（全 0）；HOME 的 W906_HomePos 在 HT9050 回 0。**現在**：LastSet.h TECH 最後一欄同行加 iTrayZ9050UpBase/DownBase/Pitch/Home/Lift[5]、ProbeStart、ProbeLimit；cinitial.cpp EOF W906_TrayZ9050(zone,up,layer)=base−layer×pitch、Home／Lift／ProbeStart／ProbeLimit（0＝20）直接讀 Tech（教導頁存檔後下一次移動就生效）；acatchtray.cpp（Loader 取盤、Empty 取／放盤、Auto1~3 放盤）、asendic_Loader.cpp（補盤、待命、Home、探測 1100/1110/1115/1120/1125、極限取代寫死的 MAX_LOADER_LAYER_9050）、csystem.cpp DoReceiveAllToBottom_9050、uhome.cpp HOME 的 Loader Z 全部同行改呼叫；流程步驟／++ 時機／每步 Up/Down/Home/Up+lift 照 910 不動；golden asendic.cpp 的 TrayZ_Up 與 cinitial 寫入不動。教導點：tools/gen_teach_registry.py EXT_ROWS +27（5 區 × 上位基準／下位基準／pitch／Home／抬升＋Loader 探測起始層／極限，鍵 setEditTZ9050*，段 [MLoaderZ]／[MEmptyZ]／[MAuto1Z..3Z]），fTeachRegistry.cpp 只換擴充區塊（+27 行），gen_teach_editlist.py 重生 Teach.gen.inc／WebTeachButtons.gen.inc，--check 通過。web：HW.teach.html Tray Arm 頁 gbW906TrayZ9050（上位／下位／Home 有 Set／GO），teach-access.json／js +15 techPoints，ht9045_teach_3axes_c.js 加 5 軸＋機型閘（parent.MACHINE.id＝HT9050）；無頭瀏覽器 HT9050 顯示且 Set 已綁、HT9045 隱藏。測試：Flow9050_Tray 104/104（Tech 設成與原 Prod 值逐層相同＋新 [TZ] 公式段：-1..19 層、pitch 減、Home／抬升、界外 zone＝0、探測極限預設 20／可設）、WebMotorAccess（EXT 7→34）、TeachButtonsGen、GA1_LastSet、TeachKb 等過；GearTeachSave＝已知（缺快照參數）。Debug 22:49、release 22:57（只編受影響目標） | 第一次開機 27 值＝0，要先教；EastSun 實機確認 | 本 commit |
+ | 141 | **安全 PLC 門其實沒在偵測——兩個缺陷修正（W906-PLCDOOR-2）**（EastSun 1006「請你檢查enable的io有哪些還沒有實際功能」→ IO 盤點代理；第 138／139 條我回報「功能已編入」是錯的）。①MyLaneIo.cpp:526 引擎讀 PLC 列的 IOInputBit 照 golden 只收 Port 0x300..0x303、其他回 true ⇒ SnAllSafeDoor 0x310（第 138 條的合成全門位元）永遠讀成「關」；tests [5] 走 TMyPLC_IO_Modbus::IsOn 另一條路所以綠。改：iSafePlcModel==1 時上限 0x310（同行），型號 0 照 golden。②InitialSafeDoor：JerryYang 20260926「安全門還沒好, 暫時MARK掉」（cinitial.cpp:3044-3050）與 SAFE_DOOR_AMOUNT=1（:3083-3084）在 PLC 強制啟用（:2792-2797）之後把門全關 ⇒ IsOff() 恆 false、MES1611～永不跳。改：InitialSafeDoor 結尾同行呼叫 cinitial.cpp EOF W906_SafeDoorPlcEnable——只在 SafePlcIO=1＋SafePlcModel=1、且 IO 表把該門放在 PLC（ISABase 4）時重新啟用（Type 1）；其他門與其他設定的暫時 MARK 照舊。tests/test_myplc_modbus.cpp [6]（走 MyLaneIO.IOInputBit 與 Sen.Enable）：69／69；Flow9050_Tray 104／104。Debug 23:1x、release 23:1x（只編受影響目標）。IO 盤點其餘結果（303 筆 Enable=1：有功能 92、沒功能 187、介於 24）見回覆，未改 | 開機後要確認 [SAFEPLC] 連線、門／急停警報；IO 盤點其餘項目待 EastSun 指示 | 本 commit |
++| 142 | **持續 bug 審查第一輪的修正：安全 PLC 斷線警報 WAR16155、Tray Z 非位置列的 Set／GO 封住、IO 執行緒卡住時不再拖住主迴圈（W906-PLCLOST／W906-TRAYZ-PITCH-2／W906-IOFIX-2）**（EastSun 1006「請持續偵測是否有版本需要更新 並且針對之前改的code 偵測有無bug 一直持續下去」→ 三個唯讀審查代理審今天機台自己的 commit；PLC 斷線 AskUserQuestion →「Plc斷線額外寫異常」）。①**W906-PLCLOST**：審查指出 PLC 拔線後 golden 不清 bPLCInData（清除區塊 Ken 20250428 註解掉），門／急停／全門位元停在最後一幀＝「關」，bCheckPLCConnet 要等 socket 真斷才知道。MyPLC_IO_Modbus.cpp EOF W906_SafePlcLinkLost：SafePlcIO=1 且（socket 未連線 或 2 s 沒有回應幀，從第一次詢問起算）；成功收幀處同行 W906_SafePlcFrameMark；csystem.cpp DoSystem（SystemStart 內、golden G12 之後的空行）同行：斷線 → ShowErrorMessage("WAR16155", K_RETRY, MMSystem)＋SystemStart=false＋StopAllMotor（斷線期間每次 START 都會再跳）；門／急停資料不動。D:\HT9045\Error\AlarmCodeList.txt 補 WAR16155（備份 .bak_war16155_20261007_025533）；web AlarmCodeList-index／Alarm-description（＋shim）補文字與中英說明。csystem.cpp G23 註解「silent PLC still caught (sensors read Off)」標註為錯誤（同行）。tests [7] 74／74。②**W906-TRAYZ-PITCH-2**：12 個非位置列（pitch／抬升／探測起始／極限）的登錄按鈕在伺服器端可被手工 WS 觸發（Go pitch 會把 Z 開到 pitch 值）；WebMotorAccess.cpp MotorAccessResolveTeachButton 迴圈後同行拒絕（EOF W906_TeachTypedOnly）；test_web_motor_access 同行加檢查，1097／1097。③**W906-IOFIX-2**：IO 執行緒卡住時，Motor Test 頁每 100 ms 的 SetTorqueFocusAxis 走 RunSync，凍結計時從請求起算 ⇒ 每拍卡 5 s。Pci1203Monitor.cpp：g_w906IoHeartAt（心跳時間，同行）、RunSync 排隊前心跳已凍結 ≥5 s 立刻拒絕（訊息每 50 次一行）、等待中的凍結計時改從最後心跳起算、執行緒啟動前後清 0；無測試涵蓋（需真卡），只驗編譯。審查其餘（PLC 逾時殘留回應、SocketError Sleep(1000)、IDX1203 互鎖初值在 gate 後、W906_IndexMove 沒呼叫 CheckYPosWhenZDown、探測參數範圍、Contact Z1 吋動、IO 頁重開首筆舊資料、84 ms 站狀態迴圈等）＝golden 同樣或低／待裁決，記在回覆。Debug 02:5x、release 03:0x（只編受影響目標） | 待 EastSun：審查列出的待裁決項 | 本 commit |
+ | — | **還沒完成**（10-06 晚更新）：①**實體面板**：已知是 RS-232 面板接 COM4／115200（ControlPanelMode=1、[TrayY] COM PORT=COM4，第 134 條），15:24 有回應；之後線被拔掉，接回後還沒驗按鍵與燈（包 161 已收 St02 P1b 照 golden 分段讀）；面板回的是位址 1，若燈仍不亮要查前／後面板位址。②**1203 模組檢查（WAR16154）**：已整合，代碼表在第 134 條補上。③**關 HMI 視窗時程式還沒開好**的情況：修法已規劃。④**安全迴路**：16:12 起 OSSD 一直 0（M1S OSSD 紅燈）、Input byte1 bit0 自 17:10:59 為 0 ⇒ 1203 從站沒上線；要全部急停放開＋按 PLC 復歸（250 ms～5 s）。⑤**安全 PLC 點位**：SnAllEMG／SnAllSafeDoor 待 EastSun 說明監看時段的操作（D:\HT9045\_plc_1006\plc_watch400.log）；SafePlcIO 維持 0；若在 Input byte ≥4 要擴充 MyLaneIO（golden 只認 Port 0x300～0x303）。⑥**遠端復歸**：MOSAIC 的 Fieldbus Input 不是安全輸入，只能經 MSD 專案的 USER／MACRO RESTART，需整合商改專案＋風險評估。⑦**溫控 COM12**：開機「Temperature KT4H : COM12 port error」，[TempCtrl] COM_PORT=COM12 這台沒有（只有 COM1～6）。⑧**TFT**：「Bin display got error!!」來自 Fix1～6 沒裝；要不要 HT9050 不掃待裁決。⑨**早上未測**：INDEX_MOTION_CARD=1 首次 HOME／Z1、F9050-FIX2 首跑、IOFIX 故障路徑（都要等④） | — | 見 §4 |
+ | 41 | **VC4 閥值自己測**（EastSun「VC4 你自己測試 寫進去哪個位置 數值讀回來 會改變 自己推出來 用VC8」）：等 EastSun F5 後，用 Vacuum Unit 同一條命令對一格寫 -30 kPa、讀回、再寫回原值 | （測試中） | — |
+ | — | 關掉軟體後 VS Code 上方的除錯工具列還在：wb_serve／gdb 都已經結束、8055 沒人佔，是 VS Code 沒發現結束；按紅色方塊即可（只會跑關站腳本，沒有東西可關） | — | — |
+diff --git a/tests/test_myplc_modbus.cpp b/tests/test_myplc_modbus.cpp
+index 4c8db37..2c080a3 100644
+--- a/tests/test_myplc_modbus.cpp
++++ b/tests/test_myplc_modbus.cpp
+@@ -393,7 +393,7 @@ int main()
+     test_clientsocket_sim();
+     test_modbustcpclient();
+     test_myplc_io_modbus();
+-    test_m1s_model();   void test_m1s_alldoors(); test_m1s_alldoors();   void test_m1s_engine_path(); test_m1s_engine_path();   /*AI(W906-PLCDOOR-2) 20261006: [6], end of file*/   // AI(W906-PLCMODEL) 20261006   // AI(W906-PLCDOOR) 20261006: [5], end of file
++    test_m1s_model();   void test_m1s_alldoors(); test_m1s_alldoors();   void test_m1s_engine_path(); test_m1s_engine_path();   /*AI(W906-PLCDOOR-2) 20261006: [6], end of file*/   void test_plc_link_lost(); test_plc_link_lost();   /*AI(W906-PLCLOST) 20261007: [7], end of file*/   // AI(W906-PLCMODEL) 20261006   // AI(W906-PLCDOOR) 20261006: [5], end of file
+ 
+     printf("\n-------------------------------------------------------------\n");
+     printf(" RESULT: %d passed, %d failed\n", g_pass, g_fail);
+@@ -509,4 +509,30 @@ void test_m1s_engine_path()
+     CHECK(Sen[SnSafeDoor1].Enable == false, "SafePlcIO=0: nothing re-enabled");
+     Sen[SnSafeDoor1].ISABase = 0;
+     Enable_PLCSafety_IO = savedPlc; iSafePlcModel = 0;
++}
++// ===========================================================================
++//  [7] AI(W906-PLCLOST) 20261007: EastSun「Plc斷線額外寫異常」-- W906_SafePlcLinkLost (MyPLC_IO_Modbus.cpp EOF) drives WAR16155 in
++//      csystem.cpp DoSystem: lost = SafePlcIO=1 and (socket not connected or no reply frame for 2 s).
++// ===========================================================================
++#include <thread>
++#include <chrono>
++bool W906_SafePlcLinkLost();
++void W906_SafePlcFrameMark();
++void test_plc_link_lost()
++{
++    printf("\n[7] safety PLC link lost (WAR16155): SafePlcIO off / socket down / fresh frame / 2 s without a frame\n");
++    const bool savedPlc = Enable_PLCSafety_IO;
++    Enable_PLCSafety_IO = false;
++    CHECK(W906_SafePlcLinkLost() == false, "SafePlcIO=0: never lost (golden machines untouched)");
++    Enable_PLCSafety_IO = true;
++    PlcComm.SocketDisConnect(0, 0);
++    CHECK(W906_SafePlcLinkLost() == true, "SafePlcIO=1, socket not connected: lost");
++    PlcComm.SocketConnect(0, 0);
++    W906_SafePlcFrameMark();
++    CHECK(W906_SafePlcLinkLost() == false, "connected and a frame just arrived: not lost");
++    std::this_thread::sleep_for(std::chrono::milliseconds(2200));
++    CHECK(W906_SafePlcLinkLost() == true, "connected but no frame for 2.2 s (pulled cable, socket still up): lost");
++    W906_SafePlcFrameMark();
++    CHECK(W906_SafePlcLinkLost() == false, "a new frame: recovered");
++    Enable_PLCSafety_IO = savedPlc;
+ }
+\ No newline at end of file
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index 1648609..c85e5d4 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -2961,7 +2961,7 @@ int main(int argc, char** argv)
+                       x.kind == (isSet ? kTkSet140 : kTkGo140) && x.handler == (isSet ? "SetButton140Click" : "GoButton140Click") &&
+                       x.ownList == 'P' && x.ownIndex == 212 + i && x.row.name0 == xm[i] && x.row.edit0 == xe[i];
+             }
+-            CHECK(okX, "W906 extension buttons resolve (PCI1203_IO): Set -> SetButton140Click / Go -> GoButton140Click on their own TECH_PARA row (Tag 212..218), not quirks");
++            CHECK(okX, "W906 extension buttons resolve (PCI1203_IO): Set -> SetButton140Click / Go -> GoButton140Click on their own TECH_PARA row (Tag 212..218), not quirks");   { TeachTarget tz; const bool upOk = MotorAccessResolveTeachButton(RX, "btnGoTZ9050LoaderUp", kTeachQuirkPolicy, tz).empty() && tz.row.name0 == "MLoaderZ" && tz.ownIndex == 219; TeachTarget tp, tl, ts; CHECK(upOk && Has(MotorAccessResolveTeachButton(RX, "btnGoTZ9050LoaderPitch", kTeachQuirkPolicy, tp), "不是位置") && Has(MotorAccessResolveTeachButton(RX, "btnSetTZ9050Auto3Lift", kTeachQuirkPolicy, tl), "不是位置") && Has(MotorAccessResolveTeachButton(RX, "btnSetTZ9050LoaderProbeLimit", kTeachQuirkPolicy, ts), "不是位置"), "AI(W906-TRAYZ-PITCH-2) 20261007: Tray Z position rows resolve (Go LoaderUp -> MLoaderZ row 219); typed rows (pitch / lift / probe) are refused, no Set / GO"); }
+             TeachTarget x0;
+             CHECK(Has(MotorAccessResolveTeachButton(R0, "btnGoCCDYSite1x1", kTeachQuirkPolicy, x0), "沒有這顆教導按鈕"),
+                   "W906 extension buttons on a non-PCI1203_IO machine: not registered, not in golden's dfm -> refused (unknown button)");
+-- 
+2.55.0.windows.5
+
