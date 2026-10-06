@@ -37,6 +37,37 @@
 
 （目前沒有。Q125～Q133 已由 Steven 20261006 08:2x 裁決（Q125／Q126 原本要問 EastSun、Q127～Q133 原本要問 Frank01，Steven 自己一次回），搬到 decisions-decided.md（moved to decided 20261006；題目原文也整段搬過去）。）
 
+### E-043 第 2 版的待答題（Q-R4'／Q-R6／Q-R7／Q-R8／Q-R10；1006 16:1x ST01-M 代 ST01-E 登記；程式已照預設出貨，答案不同再改）
+
+> 來源：`D:\AI_TempFile\st01e-e043c2-plan-20261005.md`「## Revision 2」；FROM_STEVEN §3 1006 09:1x（EastSun 四題經筆電 W-99）、Q-R11 已由 Jimmy 1006 09:5x 回 A（RULINGS_20261006 #10）。程式在 `v906/st01-e043c2`（WIP，St01 出差回來 gate＋MR）。
+
+#### Q-R7.（問 Steven）開機驗表新規則 T1'／T9' 一開始就當 ERROR，還是先 WARN
+
+- **機台上會怎樣**：T1'＝`IO_CARD_TYPE` 不是 2／3／4 ⇒ IO 表沒讀、門／急停／馬達電源都沒接上；T9'＝有啟用的軸、但這支程式沒有那種卡的驅動（離線樁），那根軸永遠不會動也不會報警。ERROR 會擋 START／HOME／Motor Test 移動（模擬不擋）。
+- **選項**：**A（預設，已出貨）**＝一開始就 ERROR。例：機台（IO_CARD_TYPE=4、Index 走 1203）不會觸發；Steven01 的電腦（IO_CARD_TYPE=1）開機就 ERROR，今天本來就是 ERROR，只是理由改成正確的。B＝照 skill 慣例新規則先 WARN、只記錄。
+- **目前狀態**：待 Steven；ST01-M 1006 09:2x 已問，未回。
+
+#### Q-R4'.（問 EastSun／Jimmy）Motor Test 硬停的「全部的門」（Q126）什麼時候可以真的靠它
+
+- **機台上會怎樣**：門項已出貨，但機台用 TEMP-DOORS 全關，所以不作用；main 建置上 HT9050 的 9 扇 MotionNet 幻影門讀成「開」。要靠它之前要：W-86 #94 的規則 A（HT9050 只開 IO 表 Enable 1 的門）進 main，且 SnSafeDoor1 確認關＝1（RULINGS_20261005 #22）。
+- **預設（已出貨）**：門項照 golden 門組出貨，TEMP-DOORS 下不作用。
+- **目前狀態**：待 EastSun（W-99）。
+
+#### Q-R6.（問 EastSun，要量）EtherCAT 站離開 OP（驅動器間拔線）時，軸的讀值會失敗還是維持舊值
+
+- **預設（已出貨）**：R2'（任何啟用軸的 class 回報斷線就全部拒絕＋硬停）＋10 秒 link watch WAR16152。若讀值一直成功，修法在 class 後面的 `RouteRead`（EastSun 的 `EtherCAT/Pci1203MotorRoute.cpp`）把「站不在 OP」當無效。
+- **目前狀態**：待 EastSun（W-99）。
+
+#### Q-R8.（問 EastSun）Refresh（卡重開）或環恢復後，DS402 驅動器還保有正確位置嗎（決定 E-048 (c) 要不要清 HomeFlag）
+
+- **預設（已出貨）**：不加，先記錄。
+- **目前狀態**：待 EastSun（W-99）。
+
+#### Q-R10.（問 EastSun）Q125 的「看看是不是可以解除 alarm」：引擎可不可以在 10 秒內自己下一次卡 Refresh
+
+- **預設（已出貨）**：不自動 Refresh；解除只做重認領＋一次 ResetError，卡重開留給操作員。
+- **目前狀態**：待 EastSun（W-99）。
+
 ## St02（Steven02，測試通訊）
 
 > **提醒（St02 在等 Steven）**：St02-E 要在 Steven02 這台跑完整 ctest，Steven 已經說可以，St02-E 在等 Steven **在 St02-E 自己的 session 裡**確認一次（St02 日報 09-29 11:5x）。

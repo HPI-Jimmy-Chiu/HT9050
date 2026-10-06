@@ -158,6 +158,17 @@ git for-each-ref --format='%(refname:short) %(committerdate:iso)' 'refs/remotes/
 git log -1 --format='%h %ci' origin/v906/frank-handoff -- docs/handoff/FROM_FRANK.md 2>/dev/null
 git diff origin/main...origin/v906/frank-handoff -- docs/handoff/FROM_FRANK.md docs/handoff/CHAT_FRANK.md 2>/dev/null | grep '^+' | tail -40
 git for-each-ref --format='%(refname:short) %(committerdate:iso)' 'refs/remotes/origin/v906/frank-*'
+# 20261006 17:5x 起 Ifor-GPT（GPT／Codex，Jimmy：「幫我加一個Ifor-GPT 我跑跑看差異」）：盲做 Ifor01 做過的兩張卡來比較；FROM_IFORGPT.md 只在 v906/iforgpt-handoff；派工在 main 的 docs/handoff/TO_IFORGPT.md；
+#   只推 v906/iforgpt-* 分支、不開 MR、不進 gate；兩張都交了就寫 docs/handoff/IFORGPT_VS_IFOR01_<日期>.md 給 Jimmy
+git log -1 --format='%h %ci' origin/v906/iforgpt-handoff -- docs/handoff/FROM_IFORGPT.md 2>/dev/null
+git diff origin/main...origin/v906/iforgpt-handoff -- docs/handoff/FROM_IFORGPT.md 2>/dev/null | grep '^+' | tail -40
+git for-each-ref --format='%(refname:short) %(committerdate:iso)' 'refs/remotes/origin/v906/iforgpt-*'
+# 1006 起兩個 GPT 成員的交付另外看：NB2-GPT_CLI（NB2）寫 main 的 docs/handoff/NB2_GPT_CLI.md、程式／報告走 codex/* 分支＋MR；
+#   MainNB-GPT_CLI（這台筆電上的 Codex）：1006 19:1x 起能推 GitLab（Jimmy 轉達）——FROM_MAINNB_GPT_CLI.md 只在 v906/mainnb-gpt-cli-handoff；派工在 main 的 docs/handoff/TO_MAINNB_GPT_CLI.md；
+#   不碰編譯、不推 GitHub；心跳 v906/mainnbgpt-heartbeat。本機信箱 TO_／FROM_MAIN_CLAUDE_LOCAL.md 同時退場（1006 之前它推不上 git，驗過的發現由筆電轉成卡：Light／FAN → W-121）
+git log -1 --format='%h %ci' origin/v906/mainnb-gpt-cli-handoff -- docs/handoff/FROM_MAINNB_GPT_CLI.md 2>/dev/null
+git diff origin/main...origin/v906/mainnb-gpt-cli-handoff -- docs/handoff/FROM_MAINNB_GPT_CLI.md 2>/dev/null | grep '^+' | tail -40
+git for-each-ref --format='%(refname:short) %(committerdate:iso)' 'refs/remotes/origin/v906/mainnb-gpt-*'
 # 20261001 13:5x 起 ES02（EastSun 的筆電）也加入（Jimmy：「Eastsun的筆電，簡稱ES02，也要加入協作，但是他的角色是在筆電測試有問題，修改後需要給我們整合，並推到gitlab和github」）：
 #   FROM_ES02.md／CHAT_ES02.md 只在 v906/es02-handoff（ES02 自己開）；派工在 main 的 docs/handoff/TO_ES02.md；修正走 v906/es02-*＋MR，筆電 gate、合 main、推 GitLab main 之後照常推 GitHub 機台更新包（ES02 不推 main／GitHub）。
 #   St01／St02 給 EastSun 的上機驗證項目（Steven 1001 09:4x「需要上機驗證的, 都是請Eastsun處理」）由筆電轉成 TO_ES02 §3 的卡；ES02 的上機結果回 TO_STEVEN §4
