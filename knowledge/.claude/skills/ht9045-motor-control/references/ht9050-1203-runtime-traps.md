@@ -27,6 +27,7 @@
   - 「`iInposLed==true` ⇒ 還沒穩」的檢查一律立刻過（跟 golden EtherCAT 版一樣）；
   - 拿它當「正在動」的檢查**永遠不成立**：`IsTrayArmMoveAvoidOutArmCrash`（`acatchtray.cpp`）⇒ 料盤手臂跨 Empty～Color 時 OutArm X/Y 不等、
     ONE CYCLE 結束檢查不等它（防撞互鎖等於沒有）。建議在 `ScanMotorStatus` 的 route 臂用樣本補 `Led[iInposLed] = pending || state!=READY`，所有讀它的地方要一起 ctest。
+  - ⛔ 更正（ST01-E 20261006 13:0x 核對 main `6b616f5e`）：上面的建議**已經做了**——S26-R3（`4d25e07d`，10-04 23:20，St01 K3）在 `HT9011UC_Cpp_V3.33.906.0/Motor/myEthercatmotor.cpp:1194` 的 route 臂寫 `Led[iInposLed]=s.pending || s.state!=kEcStaReady`。所以在 main 上 1203 的到位燈**是活的**：「還沒到位」在送出後、樣本回 READY 前為 true，`IsTrayArmMoveAvoidOutArmCrash` 這類「正在動」的檢查會成立。上面「永遠 false」只適用於 S26-R3 之前的樹與 golden。
 - **`Led[iHomeLed]`＝1203 ORG 位元**（SensorType＋`W906_HT9050_ORG_INVERT`）。DS402 的 home（24／28）停在開關**旁邊** ⇒ Z＝0 時原點燈可能不亮。
   `InArmZSafe`／`OutArmZSafe`（iFlag&1）拿它當「Z 安全」⇒ InArm／OutArm X/Y 永遠不動、50 次後重 HOME 三次再 WAR0157；33 個 shuttle move-safe 呼叫點、
   AutoClean 18 處、`acarry.cpp` `IsTestZ1NotSafeShuttle1CanNotMove` 都繼承。規則（R210 #2）：DS402 的 Z 在原點＝HomeFlag==1＋信任的 home＋cmd 在到位窗內（送出後的新樣本），

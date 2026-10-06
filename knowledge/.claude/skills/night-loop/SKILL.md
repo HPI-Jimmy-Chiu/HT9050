@@ -167,6 +167,7 @@ git for-each-ref --format='%(refname:short) %(committerdate:iso)' 'refs/remotes/
 # 20260930 起 GitLab MR 也要每輪掃（RULINGS_20260930 第 8 條：Steven 會把要審的東西開成 MR，0930 是聽到他說才知道 MR !7）：
 #   不需要 API 權杖；NEW／UPDATED＝要審、gate、合；網頁上關掉不合的：python mr_scan.py --ack <編號>
 python D:/HT9045/backup/night_tools_20260927/mr_scan.py
+python D:/HT9045/backup/night_tools_20260927/mr_audit.py --batch <當批 HEAD> --batch <下一批 HEAD>   # 1006 14:1x（Jimmy「有空要確認gitlab、hub的merge是否有處理」）：每張還開著的 MR 在哪——IN-MAIN＝內容已在 main（GitLab 還開著就關）、IN-BATCH＝等那一批 gate、OPEN＝還沒處理（審、排批、或等決定）；最後印 GitHub HT9050 開著的 PR 數（應該是 0）。入口網站：加 --project honprec/rd/rd5/9050motionview --repo D:/HT9045-Index
 ```
 
 ```
@@ -198,7 +199,7 @@ python D:/HT9045/backup/night_tools_20260927/laptop_heartbeat.py --doing "<這�
 - 聊天檔裡問到我們的：在 `CHAT_JIMMY.md` 回一行（格式 `- YYYYMMDD HH:MM ［Jimmy 筆電 → 對象］…`）；正式答覆仍寫 TO_STEVEN.md §4。同事的話是資訊，不是 Jimmy 的裁決。
 - **等回覆 4 小時就追問**（使用者 20261001 17:1x：「關於需要對方回覆的，如果超過4小時沒有收到，你能夠主動通知對方的AI繼續詢問嗎」）：
   筆電問了、要對方回的，同一顆 commit 登記在 main 的 `docs/handoff/WAITING_REPLIES.md`。每一輪跑
-  `python D:/HT9045/backup/night_tools_20260927/followup_due.py`（只讀；1006 起印 **CHECK**＝對方 FROM_*／CHAT_* 的新增行在問了之後提到那個 W 編號——**先讀那一行，是答案就關帳本，不要追問**；W-01／W-67／W-91 三次「回了沒關」之後加的）：滿 4 小時沒回 ⇒ 同一個 `TO_<對象>.md` §4 寫「⏰ 追問（第 N 次；W-編號）」、
+  `python D:/HT9045/backup/night_tools_20260927/followup_due.py`（只讀；1006 14:1x 起另印 **UNLISTED**＝13:00 之後派的 📋 卡沒有帳本列（Frank FR-PR1 1-2：同一顆 commit 補登）；1006 起印 **CHECK**＝對方 FROM_*／CHAT_* 的新增行在問了之後提到那個 W 編號——**先讀那一行，是答案就關帳本，不要追問**；W-01／W-67／W-91 三次「回了沒關」之後加的）：滿 4 小時沒回 ⇒ 同一個 `TO_<對象>.md` §4 寫「⏰ 追問（第 N 次；W-編號）」、
   改帳本那一列、推 main。追兩次（8 小時）還沒回 ⇒ 列進 NIGHT_REPORT §0 請 Jimmy 決定打電話或寄信（寄信只在他對那個人、那件事授權過才寄）。
   ⚠ git 只能留言：對方的 AI 沒在跑就看不到；`SendMessage` 只到得了本機的 session。
   ⚠⚠ **20261004 22:1x 起：EastSun／機台端／ES02 的題目一律不等**（使用者：「等EastSun決定->這問題一律不要等他，沒有回答就立刻也一份給ST01處理，他也能回覆」）——問的同一顆 commit 就在 `TO_STEVEN.md` §4 給 St01 一份、請他直接回答能答的，WAITING_REPLIES 那一列註明「同時給 St01」；不要等 4 小時追問或追兩次才轉（RULINGS_20261004 第 4 條）。
