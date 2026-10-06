@@ -44,7 +44,12 @@
 > ⇒ **Skills 現在只有 `.claude/skills/` 一處權威，不需要再同步任何鏡像。**
 > 完整稽核：`D:\docs\ops\weekly\2026\09\20260918\20260918_Steven_skills_duplication_audit.md`（20261005 18:1x 註：這份稽核只在 Steven 那台的 `D:/docs`，沒有搬進入口網站；Steven 1005 17:0x 起 ChangeLog／日報／週報改放入口網站 repo 的 `public/Docs/…`（MR !211），那天的 ChangeLog 在 `public/Docs/ChangeLog/Steven/CHANGES_20260918_Steven.md`）
 
-### 可用子代理（Task 工具呼叫）
+### 可用子代理（Agent／Task 工具呼叫）
+> 怎麼選哪一支：看本檔「## Agent 分流」。20261005 起多了下面 4 支區域 agent（Steven 1005 12:0x 核准、MR !205／入口網站 !172）；原本 5 支掛在 ht9045-agent 底下。
+- `ht9045-agent` — **HT9045 總管**：HT9045 程式問題的入口，判斷版本後往下派給 ht9045-v899／ht9045-v906／ht9045-v912／case-coordinator／weekly-report。
+- `ht9050-agent` — **HT9050 機台事實查證**：硬體、馬達與 IO 表、1203 回原點、MotionView 9050、自動測高、跟 HT9045 的差異。只查事實，改 C++ 交給 ht9045-v906。短期先讀對應主題的 HT9045 skill，HT9050 專屬內容等開始轉換再補（Steven 1006 10:1x）。
+- `co-work-agent` — **跨 session／跨機台協作**：交接檔、巡檢、代跑 build、todo／done 登記、記錄員、日報、派工；不寫機台程式。
+- `rd5-portal-agent` — **RD5 入口網站**（repo 9050motionview）：頁面、索引產生器、日報發布、部署。agent 檔在入口網站 repo（St01／St02：`D:\RD5-Portal\.claude\agents\rd5-portal-agent.md`），不在本 repo。
 - `ht9045-v912` — **目前的量產維護目標**（20260909 起），鎖定 `HT9011UC_Code_V3.33.912.0_20260908_Jimmy`（公司 20260908 出貨版）。新客戶案件預設走這支。
 - `ht9045-v899` — V3.33.899.0 版本**唯讀分析**（20260909 起樹已凍結）。用途只剩「客戶機台跑 899.x，要對照它實際在跑的碼」；修正一律做在 V912。
 - `ht9045-v906` — **HT9045 專屬 C++ 代理**（V906 移植樹，**實驗機**），鎖定 `HT9011UC_Cpp_V3.33.906.0`。所有 C++ 工作都歸它：翻譯波次、翻完後的新功能、CMake/ctest、MinGW+MSVC 雙 oracle、WebBridge 與瀏覽器 HMI。C++17 / UTF-8 / CMake，與 V899 的 BCB6 / Big5 / pre-C++11 規則完全相反。目標架構（20260812 定案）：**UI 用 web 開發、底層邏輯與控制是 C++**；MFC/Gate A 只是翻譯驗證 harness。
@@ -141,7 +146,7 @@
 |---|---|
 | **夜間迴圈** | `/loop 20m /night-loop`。晨間報告在 `HT9011UC_Cpp_V3.33.906.0/docs/NIGHT_REPORT.md` |
 | **上傳週報** | `/weekly-upload`（使用者 20260930：「當我說關鍵字[上傳週報]，就自動幫我執行」，直接跑、不先問）：本週週報 md 貼上 RD5 入口網站（內容檢查乾淨才推，有命中才停下來問）＋照上一封週報信做好本週的信（預設存草稿開視窗，使用者說「寄出」才寄）。工具在 Weekly_AI `tools/weekly_upload.py` |
-| **上傳日報** | `/daily-upload`（使用者 20261005：結案補一列＋關鍵字）：說了就開始做、不先問要不要做。**兩段式**——當天的日報（12:00 前＝前一個工作天）照入口網站統一格式寫好、`check_daily.py`＋內容檢查都過，**先把全文貼給使用者看，使用者回「推」才推**上 daily.html（入口網站規定 AI 代寫的要本人看過）。結案時 `close_case.py` 會自動在當天草稿補一列（不推）。工具在 Weekly_AI `tools/daily_upload.py`。起因：20261005 量到網站上 JimmyChiu 日報 0 篇——之前只有週報與 Release Note 有發佈工具 |
+| **上傳日報** | `/daily-upload`（使用者 20261005：結案補一列＋關鍵字）：說了就開始做、不先問要不要做。**直接推、不問**（使用者 20261006：「以後上傳日報能夠自動推嗎？不要詢問」，取代 20261005 的兩段式）——當天的日報（12:00 前＝前一個工作天）照入口網站統一格式寫好、`check_daily.py`＋內容檢查都過就推上 daily.html，推完把全文與頁面網址貼給使用者；只有內容檢查命中（不該給全公司看的字）才停下來問。入口網站 SOP 寫 AI 代寫的要本人看過——Jimmy 選擇推完再看。結案時 `close_case.py` 會自動在當天草稿補一列（不推）。工具在 Weekly_AI `tools/daily_upload.py`。起因：20261005 量到網站上 JimmyChiu 日報 0 篇——之前只有週報與 Release Note 有發佈工具 |
 | **接線 / wire** | 網頁欄位 ↔ 配方文件的對照（`tools/pagewire/`）。三元組是 `[文件, 區段, 鍵]` |
 | **golden** | `HT9011UC_Code_V3.33.906.0_20260618`（BCB6、Big5、唯讀）。翻譯的對照原文 |
 | **移植樹 / A 樹** | `HT9011UC_Cpp_V3.33.906.0`。唯一的 C++ 開發目標 |
@@ -205,155 +210,19 @@ Claude Code 無原生路徑範圍指令機制，故將原 `.github/instructions/
 > （27 個 `//AI(mg899to910)` 標記 + 655 個 `//AI(ht9045-v899)`）。
 > 史料：`docs/MG899TO910_CAMPAIGN_PLAN.md`、`docs/MG_PORT_LEDGER.md`。
 
+> 下面三節的內容已搬到各版本的 agent 檔（Steven 20261006 10:2x「應該放到對應的agent檔案裏面, 這邊放個連結就好, 減少md檔的篇幅」）；標題留著，別處的「見 CLAUDE.md 某節」照樣找得到。
+
 ### 編輯 V912 C/C++（`HT9011UC_Code_V3.33.912.0_20260908_Jimmy/**/*.{cpp,h,hpp}`）
 
-> 目前的量產維護目標。語言規則與 V899 那節**完全相同**（BCB6 / Big5 / pre-C++11），
-> 差別只在寫入邊界、AgentName、建置輸出。
-
-**寫入邊界**
-- 可寫：本目錄（以及 `HT9011UC_Cpp_V3.33.906.0/`，那是 V906 代理的地盤）。
-  **V899 已唯讀**，其他版本樹一律唯讀。
-- `system/`、`config/`、`CFG/`、`IniData/`、`setup.inf`、`CurrentSetupData.txt` 為共用參數，預設只讀。
-- 不得修改 `AGENTS.md` 禁改清單中的驅動與定義檔。
-
-**BCB6 / VCL / 編碼**：同 V899 那節（pre-C++11、`AnsiString`、Big5 最小差異、`.dfm` 不手動重排）。
-
-**AI 修改註解**：`//AI(ht9045-v912) YYYYMMDD: 描述`。
-CASE-ID 要放在**冒號後面**（`make_release_note.py` 的正則會吞掉日期後的括號）。
-若日後再跑一次 899→912 回搬戰役，campaign tag 用 `mg899to912`；
-**不要重用 `mg899to910`** —— V912 裡那 27 筆是前一次搬移的簽名。
-注意這棵樹的 AI tag 命名空間**與公司工程師共用**（例：`uTemp_Set.cpp:5676`
-的 `//AI(ht9045-atc) 20260904 (RogerYang)`），所以 harness 前綴要保持可辨識。
-
-**建置（第一次動手前必讀）**
-- 912 的 `HT9045.bpr` 把 `PROJECT` 指向 `D:\HT9045\EXE\HT9045.exe`、301 個 obj 與
-  PCH 指向 `D:\HT9045\Obj` —— **與 V899 出貨路徑相同**。
-- `build_bcb.bat` 自 20260909 起**預設**把 bpr2mak 產出的 .mak 導向
-  `<樹>\Obj912` / `<樹>\Out912`（`.claude/skills/bcb_build/scripts/redirect_mak.ps1`，含驗證 gate）。
-  忘記帶參數只會得到安全的私有建置。要寫共用目錄必須第 4 個參數明講 `shared`。
-- `MachineType.h:43` 的 `SOFT_SIMULTE` 在 vendor drop 裡是**開著的**
-  （連帶開 `DEBUG_ATC`、`DEBUG_HANGUP_NO_HOME`）。出貨前務必關掉。
-
-**已知的 V912 自身問題（不是我們搬壞的）**
-- `acatchtray.cpp:2449` JAM0610 防抖被換成 KYEC-only 閘門，而 `iTrayDetectCount`
-  全樹只有定義 `=0`、從未賦值 → 對所有客戶（含 KYEC）防抖等於失效。
-- 「Eastsun 20260521」ESD 讓位整合在 shuttle-2 側少了內層 `else`，
-  **21 支 `aoutarm*.cpp` 全中**；沒裝 ESD/BU5 的機台只要有 Auto 盤要換，
-  整個 case 2x00 變 no-op。
-- `cmydef.h` 有三個非 inline 的檔案範圍函式定義（`IsSafePLCIOType_Schneider` /
-  `IsSafePLCIOType_ReeR` / `IsSafePLCIOInstall`），被 239 支 .cpp include。
-  **20260909 實測：全量建置 290 個單元、294 個 .obj，ilink32 連結成功、0 個重複符號錯誤。**
-  也就是 BCB6 不拒絕這個寫法。寫法仍不合慣例，但**不要再當成建置風險重新爭論**。
+→ 規則在 [`.claude/agents/ht9045-v912.md`](.claude/agents/ht9045-v912.md)「編輯 V912 C/C++」一節（目前的量產維護目標；BCB6 / Big5 / pre-C++11）。主 session 直接改這棵樹的檔案之前，先讀那一節。
 
 ### 編輯 V899 C/C++（`HT9011UC_Code_V3.33.899.0_20260323_Jimmy_20260422/**/*.{cpp,h,hpp}`）
 
-> 前一個量產維護版，**20260909 起唯讀**。以下規則保留作為歷史與對照用；
-> 這棵樹現在只能讀，任何修正都做在 V912。
-
-**寫入邊界**
-- **本目錄已唯讀**（在 `readonlyRoots` 裡，hook 會 deny）。可寫的只有 V912 與 `HT9011UC_Cpp_V3.33.906.0`。
-- `system/`、`config/`、`CFG/`、`IniData/`、`setup.inf`、`CurrentSetupData.txt` 為共用參數，預設只讀，使用者明確要求才改。
-- 不得修改 `AGENTS.md` 禁改清單中的驅動與定義檔（如 `CSmc.h`、`sqlite3.h` 等）。
-
-**BCB6 / VCL / 編碼**
-- 以 pre-C++11 為準：不用 `auto`、`nullptr`、lambda、range-for；不引入新 STL/第三方依賴。
-- 字串優先用 VCL `AnsiString`，非必要不引入 `std::string`。
-- 原始碼為 Big5：最小化變更範圍，避免整檔重寫成 UTF-8，審查不得出現亂碼（U+FFFD）。
-- `.dfm` 為 Delphi 格式，不手動重排，除非使用者明確要求處理表單。
-
-**AI 修改註解**（格式：`//AI(AgentName) YYYYMMDD: 描述`）
-- 日期固定 `YYYYMMDD`；V899 新變更 AgentName 預設 `ht9045-v899`。
-- 描述寫「動作 + 原因」，不寫 fix/update 等空泛字樣。
-- 新增行：在前一行放獨立註解；修改單行：行尾加註解；多行區塊：只在區塊第一行前加一則。
-- 不重寫既有歷史 AI 註解格式。
-
-**完成後自我審查**
-- 確認落在 V899 目錄內、未碰禁改檔、最小差異、無編碼亂碼。
-- 回覆需說明：影響函式/狀態機、風險、驗證方式。
-- 修改共用標頭、核心狀態機、跨模組函式、全域變數時，優先對 V899 根目錄 `HT9045.bpr` 做 BCB6 build 檢查；環境不足無法編譯時要明說，不可假設成功。
+→ 規則在 [`.claude/agents/ht9045-v899.md`](.claude/agents/ht9045-v899.md)「編輯 V899 C/C++」一節（20260909 起唯讀，留作歷史與對照）。主 session 直接改這棵樹的檔案之前，先讀那一節。
 
 ### 編輯 V906 C++ 移植版（`HT9011UC_Cpp_V3.33.906.0/**/*.{cpp,h,hpp}`）
 
-> 本節規則**與上面 V899 那節相反**，不要混用。專屬代理：`ht9045-v906`。
-
-**寫入邊界**
-- 只允許修改 `HT9011UC_Cpp_V3.33.906.0/`。**BCB6 那邊要改請交回 `ht9045-v912`**
-  （V912 是量產維護目標；V899 自 20260909 起整棵唯讀，誰都不能改）。
-- `D:\HT9045\EXE\` 是 BCB6 量產建置的輸出目錄，V906 的 exe 永不複製或覆寫進去。
-- `D:\HT9045\EXE_V906\` 是 V906 自己的輸出目錄（`BA_MIGRATION_PLAN.md:800` 已決的分家）。
-- ⚠⚠ **20260918 裁決：`--dry` 與 `--allow-system-write` 不再是閘門。一律實際讀寫真實檔。**
-  使用者原話：「**不用擋，一律確實讀寫檔案**」「**沒有實際修改我都無法手動驗證**」。
-  這**推翻**了 20260917 之前「跑 `wb_serve` / `wb_publish` 啟動時一律加 `--dry`」那條。
-
-  **取代它的是「備份 → 驗證 → 刪備份」**（使用者 20260918 指定的做法）：
-  1. 動到真實檔之前，先備份會被碰到的那些（作用中工單、`system\*.ini`、`D:\HT9045_Log\`）
-  2. 跑驗證，**比對檔案內容**，不要只看 ack 回 `ok`
-  3. **驗證通過就把備份刪掉** —— 使用者明確要求不要累積備份垃圾
-  4. 驗證有問題就用備份還原，並回報
-
-  > 為什麼改：擋住寫入等於讓驗證跑在假路徑上，**等於沒驗到**。
-  > 真正要防的是「不可逆的損害」，而備份把它變成可逆的。
-
-  ⚠ 仍然要知道的事實（不是禁令，是風險來源）：
-  * `common.cpp:89` 的 `asGeneralPath` 指向量產機共用的 `system\Gerneral.ini`，
-    而 `LoadMachineConfig()` 會把缺的鍵**補寫回去**（實證：20260817 該檔被整檔重寫）。
-    ⇒ 那個檔是備份清單的第一項。
-  * web API 的讀寫**本來就**解析到真實檔（`RealRecipeDir()`，20260917 裁決 A1），
-    `--dry` 從來就沒擋過它。「帶了 `--dry` 就不會寫真檔」一直是錯的。
-
-- ⛔⛔ **20260923 裁決：`--dry` 已完全退場。行為由「建置期」的 `SOFT_SIMULTE` 決定，
-  不由任何執行期旗標決定。**（使用者原話：「`--dry` 不再使用」「比照 #8，行為由建置期的
-  `SOFT_SIMULTE` 決定，不由執行期旗標決定」）
-
-  上面 20260918 那條說的是「`--dry` 不再是**閘門**」；這一條更進一步：**它不再存在於任何啟動路徑**。
-
-  | | |
-  |---|---|
-  | 三個啟動器已移除 `--dry` | commit `a332397`（20260923）。`HT9045_Web.cmd:13-21` 原文：**`Do not re-add it.`** |
-  | exe 預設 | `f005a7c`（20260918 裁決 W906-ZEROARG）起 `dry=false`（`wb_serve.cpp:2534`） |
-  | ~~`wb_serve.cpp:2556` 還認得 `--dry`~~ | **20260924 起完全移除**（使用者：「全面用 `#define SOFT_SIMULTE` 來卡控模擬或實際機台」）：傳 `--dry` 會**被拒絕並 exit 2**；行程層級的 `dry` 旗標與兩段暫存導向已關掉（`AI(W906-NODRY)`），`tools/exe_startup_gate.ps1` 不再傳它，F5 契約探針改釘「必須拒絕」。⚠ 網頁 API 的 `dryRun`（寫入配方前先預覽、操作員確認後才寫）是另一件事：**使用者 20260924 確認「事實是有這樣的需求」—— 保留，不可跟著 `--dry` 一起拆**；它不是模擬／真機開關 |
-  | 模擬 vs 真機怎麼分 | **只看 `MachineType.h` 的 `#define SOFT_SIMULTE`**（V906 預設開；出貨組態用 CMake 的 `-DW906_NO_SOFT_SIMULTE=ON`）。使用者 20260918 原話：「軟體模擬僅有開啟 `SOFT_SIMULTE`，否則就是機台上能跑，**就這兩種**」 |
-
-  ⇒ **不要再建議、也不要再加 `--dry`。**要在「模擬」與「真機」之間切換，改建置組態，不是加參數。
-  ⚠ 理由不是潔癖：`--dry` 的失敗模式是**存檔 ack 回 ok、重讀「正常」、伺服器一停就整批蒸發**
-    （review A1，`wb_serve.cpp:996-1006`）—— 一個看起來成功的假成功，是最難查的那種。
-
-- ⚠⚠⚠ **20260918 裁決「甲」：這棵樹現在是實彈的。**
-  使用者原話：「**我會跑機台，而且必須**」「**現在要實彈開發**」。
-  `MachineType.h` 同時開了 `WB_PUMP_1203_CONTROL` 與 `WB_PUMP_1203_CONTROL_LIVE`。
-
-  **在有 `HAVE_PCI1203` 的建置上，網頁上一次點擊可以讓線圈通電、讓伺服轉動**，
-  沒有第二道 opt-in、沒有參數、沒有確認對話框。
-
-  這**推翻**了 1203 同事寫在 `tools/pci1203_control_gate.ps1` 裡的規則
-  （「不可留在 committed tree，要開就當場在 session 裡開」）。兩種安全模型都有道理，
-  但不能同時成立，使用者選了前者，理由是他的另一條常設規則：
-  **武裝狀態不可在機器之間分岔**，所以它必須在 git 裡。
-
-  | | |
-  |---|---|
-  | **沒裝 Advantech SDK 的機器**（例：這台筆電 JIMMYCHIU-NB） | `HAVE_PCI1203` 關 ⇒ `Pci1203ControlEnable()` 回 `not linked`，指令被誠實拒絕。⚠ 20260925 更正（RULINGS 第 34 條）：判準是「有沒有裝 SDK」不是「是不是筆電」—— 舊筆電 NB2 裝了 SDK、沒有卡，建出來的 wb_serve 是武裝的（wb_serve 找得到 SDK 就開 HAVE_PCI1203，0923 Q34 裁決） |
-  | 同事的機台端 | `HAVE_PCI1203=1` ⇒ **真的會動** |
-
-  ⇒ **在任何有卡的機器上碰這棵樹之前，先確認你知道機台周圍有沒有人。**
-  要反轉：`MachineType.h` 把 `WB_PUMP_1203_CONTROL_LIVE` 註解掉，**同時**把
-  `pci1203_control_gate.ps1` 的 `$expectActive` 改回 `$false`，兩邊要一起動。
-
-**語言 / 編碼 / 工具鏈**
-- **C++17**（`CMAKE_CXX_STANDARD 17`）；新寫的基礎建設開 `-Wall -Wextra`。
-- 原始碼 **UTF-8**。EOL 是**混合**的，逐檔保持原樣；`build.bat` 必須純 CRLF 無 BOM（cmd 掃 `goto` 承重）。
-- 主 oracle 是 **MinGW g++**（唯一重現 BCB6 x87 算術，不可替換）；MSVC 是次 oracle，且**只有 MSVC 能編 MFC UI**。
-- 建置一律走 `build.bat`（quick / gate / test / ui / run / msvc / clean / prune），不要自己另組 cmake 指令。
-- **建置輸出不在原始碼樹裡**（20260925 起，`AI(W906-OBJROOT)`）：相對的 build dir（`build`、`build_dbg`、`V906_BUILD_DIR=build_x`）一律落在 `<repo>\Obj\V906\`（主 checkout＝`D:\HT9045\Obj\V906`，worktree＝`<worktree>\Obj\V906`；可用 `V906_OBJ_ROOT` 覆寫）。F5 的 exe 在 `D:\HT9045\Obj\V906\build_dbg\wb_serve.exe`。`build_nonoracle.bat`／`build_x64.bat`（EastSun 的 1203 路線）沒改，仍在樹內。
-
-**AI 修改註解**：`//AI(W906-<工作代號>) YYYYMMDD: 描述`（例 `AI(W906-PT-W1)`、`AI(W906-GateA-0)`、`AI(W906-WebBridge-Tcp)`）。
-
-**完成後自我審查**
-- 翻譯以**忠實**優先於「寫得更好」；golden 不合理處照翻並在註解說明，改行為須使用者決定。
-- 驗收比對 **ctest 失敗清單**，不看數字或百分比。常駐失敗是**五個**（非回歸）：`config_db`、`IniFiles`、`ini_helpers`、`config_loaders`、`GA1_ReadGeneralIni`。
-  ⚠ 20260917 更正：`dfm2rc_idempotent` 已從清單拿掉 —— 20260916 夜間跑了四輪雙 gate，它**每一輪都通過**（Debug 153.79 s／Release 49.38 s）。把一個會過的測試留在「既有失敗」清單上，等於授權自己未來忽略它的真回歸。
-- 「build 綠」不等於「接上了」；交付數字只在全新 build dir 量，收工最後一個動作是 build 不是 commit。
-- 引用完成度百分比必附分母與單位。
+→ 規則在 [`.claude/agents/ht9045-v906.md`](.claude/agents/ht9045-v906.md)「編輯 V906 C++ 移植版」一節（C++17 / UTF-8 / CMake，規則跟 BCB6 那兩節相反）。主 session 直接改這棵樹的檔案之前，先讀那一節。
 
 ### 安全關鍵變更（運動控制 / IO / 互鎖 / 模式切換 / 警報 / 執行期設定）
 - 修改前先描述風險與影響範圍，修改後提供回歸與驗證建議。

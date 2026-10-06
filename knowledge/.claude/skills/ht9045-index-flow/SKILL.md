@@ -52,7 +52,7 @@ description: HT9045 IC Test Handler Index Arm（下壓模組）流程知識庫�
 - [case-crossarm-z-safe-interlock-deadlock.md](references/case-crossarm-z-safe-interlock-deadlock.md) — **「下壓後 hangup」跨臂 Z 安全位互鎖卡死案例**（`DoInterFaceErrorStep()` 用嚴格 `==` 比對對向臂是否精確在 `Prod.TestZ{1,2}_Safe`、不成立時只等待不主動補位；PAUSE 的 Galil `VS0` 急停會讓閒置臂留下無法自行消除的殘差；`RearTestSuckTestICTask`(iBTestSuckTestICTask)/`FrontTestSuckICTask` 卡 2500 + `TestTask` 卡 60；對應 `ht9045-staterecord-analysis` 的 Pattern #27）
 - [autoheight-contact-test-ht9045.md](references/autoheight-contact-test-ht9045.md) — **自動測高／Contact Test 動作流程（golden 906 0618，照 Steven 的 7 步：Arm 讓開 → In Shuttle 浮料檢查／2D／往右 → Index 吸料 → Index1、Index2 量高度 → 放回 → In Shuttle 回左；只用函式＋Task 參照、不寫行號）**：Contact 頁按鈕 → `DoTestContactFunction` 各 case、`DoZ1PickFromShuttle`、`Do_Z1/Z2_AutoGetHeight`（扭力上限、COM2 0x52 讀值 k/20＝%、停止條件 `TorqueData>=kg`／`fIndexDownPos`、case 555 沒有逾時）、`Do_LoadCellAutoHigh`、`DoZPlaceToShuttle`、存檔位置、V912 差異（20261005）
 - [autoheight-contact-test-ht9050-current.md](references/autoheight-contact-test-ht9050-current.md) — **HT9050 自動測高今天走到哪、卡在哪**：port main `MainProc` 呼叫 `DoTestContactFunction` 仍 `#if 0`、7 步對照（Index 只有 Z1、第 5 步不存在、放回前 In Shuttle 沒人移回右邊）、branch `v906/st01-e042` B1-B3（B3b 未 push）、P4/P5/P7/P8/P9/W-44、逐步狀態（等 E-10、EP 硬體、工單設定、Jimmy E-050/E-051）（20261005）
-- [ht9050-index-fp-flow.md](references/ht9050-index-fp-flow.md) — **HT9050 的 Index 流程＝910 `DoTestHeadMotorFP`**（只有 Z1、沒有 Index Y，飛梭開到 Index 下面讓 Z1 吸料／下壓／放料）：呼叫階層與 case、FinePitch 專用 vs 需要的拆分表、[F14] FP 與一般流程混用會卡住、F1（MTestZ1 只有 `Gali_*` 到得了 1203）、W-44 新定義（安全 X 座標，Steven 1005 23:1x）與 St01／Frank 分工、ST01-C 進度（20261005）
+- [ht9050-index-fp-flow.md](references/ht9050-index-fp-flow.md) — **HT9050 的 Index 流程＝910 `DoTestHeadMotorFP`**（只有 Z1、沒有 Index Y，飛梭開到 Index 下面讓 Z1 吸料／下壓／放料）：呼叫階層與 case、FinePitch 專用 vs 需要的拆分表、[F14] FP 與一般流程混用會卡住、F1（MTestZ1 只有 `Gali_*` 到得了 1203）、W-44 新定義（安全 X 座標，Steven 1005 23:1x）與 St01／Frank 分工、ST01-C 進度（20261005）；⛔ §9（20261006）：W-44 改成禁止飛梭進 socket 區、一切行為以 Index 需求為優先（Q133）、Index 軸卡別（Q130）、[I01] 定義（Q132）
 
 ## 關鍵原始檔
 
@@ -321,6 +321,8 @@ DoTestHeadMotor
 - 真空/壓力檢查分兩層：
   - 主流程中的 torque + socket sensor check（121xx / 141xx）。
   - 子流程中的 Front/Rear/TwoArm test-and-destroy state machines。
+- **[I01]（`bI01TesterFinishThenHome`，Enable tester finish then homing）作用在「測試中」**（Steven 1006 08:2x，`D:\HT9045\.claude\skills\ht9050-construction\references\decisions-decided.md` Q132）：原話「[I01]功能本來就是生產中作用的  這邊所謂的生產中 (正確說是 測試中), 就是 GPIB的 0x41命令 一直到收到 BINON與 ECHOOK, 且把BIN資料回寫到socket為止」⇒ 從 GPIB 的 0x41 命令開始，一直到收到 BINON 與 ECHOOK、而且把 BIN 資料回寫到 socket 為止；這段期間 HOME／停機要等測試做完才歸零（MainProc 的 [I01] 路徑會繼續呼叫 `DoTestHeadMotor()` 把測試推完）。HT9050 照 910／Jimmy #14 維持一般 `DoTestHeadMotor()`，見 [references/ht9050-index-fp-flow.md](references/ht9050-index-fp-flow.md) §9.3。
+- **HT9050 W-44（Steven 1006 Q133）**：禁止**飛梭**進 socket 區（入料飛梭右側、出料飛梭左側），不是禁止 Index；一切行為以 Index 的需求為優先——見 [references/ht9050-index-fp-flow.md](references/ht9050-index-fp-flow.md) §9.1。
 
 ---
 

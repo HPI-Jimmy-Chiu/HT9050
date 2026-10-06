@@ -273,6 +273,14 @@ int iCheckZ = 4000;          // 輕壓速度的放寬範圍
 - 不要用 `W906_GpibModel`、`MachineTypeChoice==Type_HT9050`、`CardType=="PCI1203"` 或「表格需要 1203」當閘的開關。E-043 Revision 1 R2 的 `needs1203`、E-045／E-048 用 HT9050 判斷當開關的寫法都算被取代，改法照 E-043 計畫第 2 版（ST01-E 1005 23:2x 在寫）。
 - 選資料路徑（例：E-038 扭力從 1203 6077h 讀還是 RS-232 讀）是類別／裝置的分派，不是閘，不在這條範圍。
 
+### 常設規則：Index 軸卡別（Steven 1006 Q130）
+
+> 原話：「3軸或4軸 index使用的是 Galil卡片, 1軸的index使用的是 MyMotor的 MotorMove. 跟是不是1203沒有關係!」「請記錄到skill裡面」（Steven 1006 08:2x，`D:\HT9045\.claude\skills\ht9050-construction\references\decisions-decided.md` Q130＝ST01-C F-4）
+
+- **Index 軸卡別（Steven 1006 Q130）：3 軸或 4 軸 Index 用 Galil 卡；1 軸 Index 用 MyMotor 的 MotorMove；跟是不是 1203 無關。**
+- 3 軸或 4 軸 Index（例：HT9045 的 Y1／Z1／Y2／Z2，上面〈Galil 軸名稱對應〉）＝`Gali_*` 那一套；1 軸 Index（HT9050 只有 MTestZ1）＝`TMyMotor::MotorMove`（910 `MoveIndexZ` 的寫法）。跟上一條一樣：看馬達類別，不看軸卡是不是 1203。
+- ⛔ 修正 Q113（1005 23:1x「Z1 在路由上就用 `Gali_MotMove`／`Gali_ReadPos`」）：HT9050 的 1 軸 Z1 不走路由的 `Gali_*`。今天 MTestZ1 建成 `TMyGALILMotor`、一般 `MotorMove` 到不了軸（ctest FP9050_Index [F4]，`D:\HT9045\.claude\skills\ht9045-motor-control\references\index-torque-autoheight.md` 20261005 補記的 F1），由 ST01-C slice 1b 修類別；流程見 `D:\HT9045\.claude\skills\ht9045-index-flow\references\ht9050-index-fp-flow.md` §9.2。
+
 ---
 
 ## 馬達移動回傳值

@@ -522,7 +522,7 @@ Steven 原話：「Q78 Q79, 可以按照912，但是註解同時提供906的行�
 - **題號對照**：ST01-C 計畫題 Q2＝Q103（計畫 `D:\AI_TempFile\st01e-c-fp-plan-20261005.md` §6；FROM_STEVEN §3 1005 18:0x 問；筆電 NIGHT_REPORT §0 #116）。
 - **題目**：910 在 Type_HT9050 只把 `DoAllProcess` 的 Index 那一格換成 `DoTestHeadMotorFP()`；MainProc 的 [I01] 兩處（等測試機做完、[I01] 鎖住全部馬達之後）與 `CheckNozzleEventFinish` 仍呼叫一般的 `DoTestHeadMotor()`（移植樹 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\csystem.cpp`:31360／:32777／:29100，main `feab2267` 行號）。A＝也改走 FP（跟 910 不同）；B＝照 910。
 - **Jimmy 的裁決**（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20261005.md` 第 14 條，TO_STEVEN 19:4x）：原話「#116 照 B」⇒ **B：三處照 910 維持一般 `DoTestHeadMotor()`**；ST01-C slice 2 只動 `DoAllProcess` 那一行（:1952）。Jimmy 另要 St01 寫測試重現「FP 與一般流程混用後步驟卡住」，重現得出來再提 A。
-- **後續（ST01-C 1005 22:5x 拆分分析 S4，測試 [F14]）**：**重現得出來**。FP 停在 `DoTestYFrontFP` 209／210 等測試時，[I01] 的一般 `DoTestHeadMotor()` 推的是一般 `DoTestY`，FP 那顆 IC 的測試永遠做不完，MainProc 一直停在等測試機、不會回原點；硬按 HOME 之後 FP 從舊的 210 接著走，跳過 130（飛梭閘）和 180（下壓），等一顆根本不在 socket 的 IC；一般 `DoTestYFront` 的 88 個 case 有 74 個在 FP 沒有，FP 碰到這種步驟什麼都不做、沒有訊息、沒有警報（SIM 與 SHIP 都一樣）。⇒ 提案 A（HOME 重設 FP 的所有游標、[I01] 三處在 HT9050 改呼叫 `DoTestHeadMotorFP()`、未知步驟回 case 1 並給訊息）寫在計畫 S4；改 A＝推翻 Jimmy 的第 14 條，照 RULINGS_20261005 第 18 條留給 Jimmy（流程面先問 Frank01＝decisions-pending Q132）。slice 1 照 B，只把現況釘在測試裡。
+- **後續（ST01-C 1005 22:5x 拆分分析 S4，測試 [F14]）**：**重現得出來**。FP 停在 `DoTestYFrontFP` 209／210 等測試時，[I01] 的一般 `DoTestHeadMotor()` 推的是一般 `DoTestY`，FP 那顆 IC 的測試永遠做不完，MainProc 一直停在等測試機、不會回原點；硬按 HOME 之後 FP 從舊的 210 接著走，跳過 130（飛梭閘）和 180（下壓），等一顆根本不在 socket 的 IC；一般 `DoTestYFront` 的 88 個 case 有 74 個在 FP 沒有，FP 碰到這種步驟什麼都不做、沒有訊息、沒有警報（SIM 與 SHIP 都一樣）。⇒ 提案 A（HOME 重設 FP 的所有游標、[I01] 三處在 HT9050 改呼叫 `DoTestHeadMotorFP()`、未知步驟回 case 1 並給訊息）寫在計畫 S4；改 A＝推翻 Jimmy 的第 14 條，照 RULINGS_20261005 第 18 條留給 Jimmy（流程面先問 Frank01＝decisions-pending Q132）。slice 1 照 B，只把現況釘在測試裡。（⛔ 20261006 Q132：Steven「照 Jimmy #14 維持 910」⇒ 提案 A 不做，見檔尾「20261006 08:2x Steven 裁決」）
 
 ### 20261005 22:1x Steven 裁決：Q104～Q109（E-043 計畫題 Q-1～Q-6：開機驗表第 2 顆要擋哪些入口；ST01-M 對話裡回）
 
@@ -531,8 +531,8 @@ Steven 原話：「Q78 Q79, 可以按照912，但是註解同時提供906的行�
 - **Q105（Q-2：模擬組態要不要一樣擋）**：原話「模擬狀態下，IO跟馬達都不會有error。所以基本上也不用擋」⇒ SIM 建置（`SOFT_SIMULTE`）不擋；驗表照樣跑、照樣記錄，開機印一行說明；測試用 `W906_TableAuditGateForceForTest(true)` 在 SIM 打開閘。
 - **Q106（Q-3：E-043c 的 GPIB Model 檢查 T13 要 ERROR 還是 WARN）**：原話「未來的9045也會使用1203，所以行為應該是要一樣的」⇒「表格全是 1203 就一定是 9050GPIB」這個前提不成立：**不做 T13 規則**（不 ERROR、不 WARN）；E-043c 縮成可選的一行 T13 INFO（Model、機型名、bHandlerModel、`D:\GPIB9045\system\general.ini` 最後寫入時間，寫進 op log）。
 - **Q107（Q-4：非動作的寫入要不要擋）**：原話「以單線程的程式來看，應該是其他的都動不了。但是通訊的項目（rs232,tcpip,gpib之類的通訊）但是就算通訊完成也不能繼續其他的流程。除非警報解除不應該擋」⇒ ST01-M 讀法：其他寫入也擋（照單執行緒的 golden）；通訊不擋，但警報清掉之前流程不能往下走。兩種讀法寫在計畫 R1.4；Steven 23:2x 回「兩種都對」（Q118）。非動作寫入另成 commit 2b。
-- **Q108（Q-5：1203 主卡故障或 EtherCAT 環斷線）**：原話「主卡故障或是斷線時，整機都不能動了。」⇒ 主卡故障／環斷＝ERROR，整機拒絕動作（新規則 R2）；訊息寫原因、不加「斷電重開」；連線回來就放行、不用重開軟體。⚠ R2 原本用「表格需要 1203」當開關，已被 Q119（看馬達類別狀態、不糾結 1203）取代，改法在 E-043 計畫第 2 版。
-- **Q109（Q-6：Motor Test 跑到一半別軸驅動器鎖住，要不要停）**：原話「Motor test畫面only, 可以不管其他軸的異常。但是主卡斷線,安全門,緊急停止是必須卡控的」⇒ 只限 Motor Test 頁：別軸鎖住不停正在跑的工作；主卡斷線、安全門、急停一定要停工作、拒絕新的移動（新規則 R4＋硬停 `MotorAccessHardStopTick`）。HT9050 上軟體看得到的急停只有 SnMotorPower 掉電、讀得到的門只有 SnSafeDoor1（`D:\HT9045\.claude\skills\ht9045-io-control\SKILL.md`〈HT9050：1203 的 IO 點、急停、安全門〉）。
+- **Q108（Q-5：1203 主卡故障或 EtherCAT 環斷線）**：原話「主卡故障或是斷線時，整機都不能動了。」⇒ 主卡故障／環斷＝ERROR，整機拒絕動作（新規則 R2）；訊息寫原因、不加「斷電重開」；連線回來就放行、不用重開軟體。⚠ R2 原本用「表格需要 1203」當開關，已被 Q119（看馬達類別狀態、不糾結 1203）取代，改法在 E-043 計畫第 2 版。（20261006 Q125：自動運轉中、不是移動中的軸＝先停運轉流程、試著解除警報，10 秒內解不了才警報，見檔尾「20261006 08:2x Steven 裁決」）
+- **Q109（Q-6：Motor Test 跑到一半別軸驅動器鎖住，要不要停）**：原話「Motor test畫面only, 可以不管其他軸的異常。但是主卡斷線,安全門,緊急停止是必須卡控的」⇒ 只限 Motor Test 頁：別軸鎖住不停正在跑的工作；主卡斷線、安全門、急停一定要停工作、拒絕新的移動（新規則 R4＋硬停 `MotorAccessHardStopTick`）。HT9050 上軟體看得到的急停只有 SnMotorPower 掉電、讀得到的門只有 SnSafeDoor1（`D:\HT9045\.claude\skills\ht9045-io-control\SKILL.md`〈HT9050：1203 的 IO 點、急停、安全門〉）。（20261006 Q126：Motor Test 硬停的安全門＝「全部的門」，見檔尾「20261006 08:2x Steven 裁決」）
 
 ### 20261005 22:2x Steven 裁決：Q110（ST01-C 計畫題 Q1：FinePitch 相關的部分要不要處理）
 
@@ -551,8 +551,8 @@ Steven 原話：「Q78 Q79, 可以按照912，但是註解同時提供906的行�
 
 - **題號對照**：計畫「Split after Steven 22:2x」S3 的選項 1（範圍）＝Q112、S6 的 Q3＝Q113、Q5＝Q114、Q6＝Q115、Q7＝Q116。
 - **Q112（範圍）**：原話「9050也有ccd,但是不是用來做校正的。後續再改ccd這一段，其餘的可以先移植」⇒ **選項 1**：910 `atester_FinePitch.cpp` 全部照搬（固定行號偏移）＋`MoveIndexZ`；**只有 CCD 那一段之後再改**——`DoTestZContactModeStart` case 1 的 `bEnableCalCCD` 分支在 HT9050 先改成最小的安全拒絕（訊息＋停機）＋TODO；其餘照移植。
-- **Q113（Q3：`MoveIndexZ` 怎麼動到 HT9050 的 Z1）**：Steven 選建議 ⇒ **B：走路由的 `Gali_*`**——Z1 在路由上時用 `MOT[MTestZ1].Gali_MotMove(iPos, GailSpeed)`＋`Gali_ReadPos()`（St01 自己的檔，跟 910 不同），不在路由上照 910 的 `MotorMove`。理由：HT9050 的 MTestZ1 是 `TMyGALILMotor`，只有 `TMyMotor::Gali_*` 會被送到 1203；一般的 `MotorMove` 碰不到 1203，還會回假的「到位」（ctest FP9050_Index [F4]）。Frank01 回 F-4（decisions-pending Q130）之後再看要不要改。
-- **Q114（Q5：W-44 的範圍）——W-44 的定義改了**：原話「Out shuttle 可能在執行5s的動作，所以應該是有個安全的x座標，在安全位置之外,index就可以下壓到socket」「5s是 ccd的五面檢查」⇒ **W-44 改成「安全 X 座標」規則**：飛梭的 X 在 Index 的安全區之外，Z1 就可以下壓到 socket；**不再要求兩支飛梭都在原點**（出料飛梭可能正在做 5S＝CCD 五面檢查）。在 HT9050 取代 RULINGS_20261005 第 19 條與 Steven 1004 23:16（本檔「20261004 23:1x Steven 回答機台題」W-44 那行）的「兩支都在原點」。
+- **Q113（Q3：`MoveIndexZ` 怎麼動到 HT9050 的 Z1）**：Steven 選建議 ⇒ **B：走路由的 `Gali_*`**——Z1 在路由上時用 `MOT[MTestZ1].Gali_MotMove(iPos, GailSpeed)`＋`Gali_ReadPos()`（St01 自己的檔，跟 910 不同），不在路由上照 910 的 `MotorMove`。理由：HT9050 的 MTestZ1 是 `TMyGALILMotor`，只有 `TMyMotor::Gali_*` 會被送到 1203；一般的 `MotorMove` 碰不到 1203，還會回假的「到位」（ctest FP9050_Index [F4]）。Frank01 回 F-4（decisions-pending Q130）之後再看要不要改。（⛔ 20261006 Q130 修正：1 軸 Index 用 MyMotor 的 `MotorMove`，HT9050 的 Z1 不走路由的 `Gali_*`，見檔尾「20261006 08:2x Steven 裁決」）
+- **Q114（Q5：W-44 的範圍）——W-44 的定義改了**：原話「Out shuttle 可能在執行5s的動作，所以應該是有個安全的x座標，在安全位置之外,index就可以下壓到socket」「5s是 ccd的五面檢查」⇒ **W-44 改成「安全 X 座標」規則**：飛梭的 X 在 Index 的安全區之外，Z1 就可以下壓到 socket；**不再要求兩支飛梭都在原點**（出料飛梭可能正在做 5S＝CCD 五面檢查）。在 HT9050 取代 RULINGS_20261005 第 19 條與 Steven 1004 23:16（本檔「20261004 23:1x Steven 回答機台題」W-44 那行）的「兩支都在原點」。（⛔ 20261006 Q133 再改：被禁止的是飛梭進 socket 區、不是 Index 的動作；安全 X 的概念保留，防護改作用在飛梭的移動上，見檔尾「20261006 08:2x Steven 裁決」）
   - **歸屬**：保護本身（安全區座標、移動層的判斷）歸 Frank01（卡 FR-NB2 ②，`Motor\myGALILmotor.cpp`／`acarry.cpp` 那一層）；ST01-C 的 FP 狀態機只呼叫 Frank 給的判斷 `W906_Ht9050ShuttlesClearOfIndex(AnsiString* why)`（名字是提案）。slice 1 用預設 null 的掛勾，**null＝不算安全**（Z1 不下壓），Frank 的判斷接上才會動。
   - **E-042**：B3／B4 的 W-44（`W906_IndexZShuttlesAtHome`／`W906_IndexZShuttlesHomeRefused`／`W906_IndexZShuttleHomeStop`，比對兩支飛梭在原點 ±100）**要在 E-042 B6 之前改成呼叫 Frank 的判斷**；MR !218 本身執行期零改變，不受影響。
   - 安全區的座標值、入料飛梭是不是同一規則由 Frank01 定（原話講的是出料飛梭；ST01-E 的讀法是兩支都看安全區，判斷函式名也是複數）。
@@ -561,7 +561,7 @@ Steven 原話：「Q78 Q79, 可以按照912，但是註解同時提供906的行�
 
 ### 20261005 23:2x Steven 裁決：Q117～Q119（E-043 Revision 1 的 Q-R1／Q-R2／Q-R5）、Q102、Q120～Q124（ST01-M 轉）
 
-- **題號對照**：E-043 Revision 1（R1.13）的 Q-R1＝Q117、Q-R2＝Q118、Q-R5＝Q119；Q-R3／Q-R4（問 EastSun）還沒回，在 decisions-pending Q125／Q126。Q102 原題號不變（從 decisions-pending 搬來，題目原文在本節最後）。
+- **題號對照**：E-043 Revision 1（R1.13）的 Q-R1＝Q117、Q-R2＝Q118、Q-R5＝Q119；Q-R3／Q-R4（問 EastSun）還沒回，在 decisions-pending Q125／Q126。（⛔ 20261006 08:2x Steven 已回，見檔尾「20261006 08:2x Steven 裁決」）Q102 原題號不變（從 decisions-pending 搬來，題目原文在本節最後）。
 - **Q117（Q-R1：別軸鎖住時，Motor Test 能不能對沒鎖的軸開始新的移動）**：⇒ **可以**，只限 Motor Test 頁、逐軸看（只拒絕被鎖住的那一軸）；Teach、1203 頁、START、HOME 只要有任何一軸鎖住就拒絕；主卡／通訊斷線、安全門、急停照 Q109 一律全停。
 - **Q118（Q-R2：「除非警報解除不應該擋」的讀法；AGV E84 Off；登入與選單）**：⇒ **兩種讀法都對**：通訊不擋、警報清掉之前流程等著；清警報的動作永遠不擋（Alarm Reset、驅動器 resetError、通知框「確認」、解鎖要的登入），登入／登出／選單、AGV E84 Off 也不擋；真空、CCD 燈、扭力設定、換配方這類寫入要擋＝commit 2b（其餘照計畫 R1.4 的表，運轉／溫度模式也在 2b）。2b 不用再等這題（E-043 第 2 版若有改以第 2 版為準）。
 - **Q119（Q-R5：E-045／E-048／E-043 用「HT9050」當開關，要不要改成「表格需要 1203」）**：原話「我們的馬達是class概念，可以使用多種不同的軸卡或是ethercat通訊或是motionnet。你應該看看motor相關的skill才來問這個問題。不應該糾結在1203」⇒ **常設規則**：閘與防護看**馬達類別（`TMyMotor`／`HTMotor` 子類別）給的狀態**（警報、伺服、讀值能不能用……），不看 Model、不看軸卡型別、也不看「表格需要 1203」。E-043 Revision 1 R2 的 `needs1203`、E-045／E-048 用 `W906_GpibModel=="9050GPIB" || MachineTypeChoice==Type_HT9050` 當開關的寫法都算被取代；怎麼改由 E-043 計畫第 2 版定（ST01-E 23:2x 在寫）。規則也寫進 `D:\HT9045\.claude\skills\ht9045-motor-control\SKILL.md`〈安全機制〉。
@@ -586,3 +586,89 @@ Steven 原話：「Q78 Q79, 可以按照912，但是註解同時提供906的行�
 ### 20261005 23:2x ⛔ 更正：W-44「兩支飛梭都在 home」在 HT9050 已被 Q114 取代
 
 - 本檔「### 20261004 23:1x Steven 回答機台題」的 W-44 那一行（原話「當兩個都在home位置的時候，index z1可以下壓到socket」）與 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\docs\RULINGS_20261005.md` 第 19 條「都在原點」的定義：HT9050 改照 Q114（Steven 1005 23:1x）的**安全 X 座標**規則——飛梭 X 在 Index 安全區之外就可以下壓；保護歸 Frank01，ST01-C 與 E-042 都呼叫 Frank 的判斷。那一行原文保留，只在行尾加了指向這裡的註記。
+- ⛔ **20261006 08:2x 再改（Q133）**：Steven「應該是禁止shuttle進入socket區域 (in shuttle的右側 跟out shuttle的左側), 而不是禁止index動作」——被禁止的是飛梭進 socket 區（入料飛梭的右側、出料飛梭的左側），不是 Index 的動作；一切行為以 Index 的需求為優先。Q114 的安全 X 概念保留，防護改作用在飛梭的移動上。見下一節。
+
+### 20261006 08:2x Steven 裁決：Q125～Q133（E-043 Q-R3／Q-R4、ST01-C 給 Frank01 的 F-1～F-7；從 decisions-pending.md 搬來；ST01-M 轉）
+
+- **題號對照**：E-043 Revision 1（`D:\AI_TempFile\st01e-e043c2-plan-20261005.md` R1.13）的 Q-R3＝Q125、Q-R4＝Q126；ST01-C 計畫（`D:\AI_TempFile\st01e-c-fp-plan-20261005.md`「Split after Steven 22:2x」S5）給 Frank01 的 F-1～F-7＝Q127～Q133。原本照 RULINGS_20261005 第 18 條要問 EastSun（Q125、Q126）與 Frank01（Q127～Q133），Steven 1006 08:2x 自己一次回了。原話照貼存檔：`D:\AI_TempFile\st01m-steven-answers-Q125-Q133-20261006.md`（ST01-M）。登記：ST01-E docs 工程師 1006 09:1x，分支 `v906/st01-decisions-1006`。題目原文在本節最後。
+- Steven 對 Q133、Q132、Q130 都說要記到 skill：W-44 新規則與 [I01] 定義在 `D:\HT9045\.claude\skills\ht9045-index-flow\references\ht9050-index-fp-flow.md` §9（另在 `D:\HT9045\.claude\skills\ht9045-index-flow\SKILL.md` §7、`D:\HT9045\.claude\skills\ht9045-index-flow\references\autoheight-contact-test-ht9050-current.md` W-44 那一列加指標）；Index 軸卡別在 `D:\HT9045\.claude\skills\ht9045-motor-control\SKILL.md`〈安全機制〉Q119 那條旁邊。
+- **Q125（E-043 Q-R3：自動運轉中 1203 主卡／環斷線，第一筆斷線就停，還是照 EastSun 1001 的 10 秒規則）**：原話「如果不是移動中的軸, 應該是停止運轉流程, 看看是不是可以解除alarm, 如果10秒內無法解除, 就要alarm」 ⇒ 不是移動中的軸：先**停止運轉流程**、試著**解除警報**，**10 秒內解除不了才跳警報**。**改變**：E-043 R2 的條款照這樣寫（取代 pending 的 A＝維持 10 秒／B＝第一筆就停二選一）。⚠ 原話只講「不是移動中的軸」；移動中的軸原話沒講，St01 讀法照 Q108（主卡故障／斷線＝整機拒絕新的移動）。
+- **Q126（E-043 Q-R4：Motor Test 硬停的「安全門」要看哪幾扇門）**：原話「全部的門」 ⇒ **全部的門**。**改變**：E-043 的 Motor Test 硬停（`MotorAccessHardStopTick`）看全部的門。⚠ HT9050 上 2～10 號門是讀不到的 MotionNet 列（main 會讀成「開著」）；「全部」是 golden 門組全部、還是機台上實際有的門（規則 A：IO 表 Enable 1），原話沒講，E-043 實作前要對（規則 A 還不在 main）。
+- **Q127（F-1：`DoTestHeadMotorFP` 是不是 HT9050 永久的 Index 流程）**：原話「沿用就好了, 沒問題」 ⇒ **是**。**改變**：沒有；ST01-C 照原計畫，HT9050 的 Index 流程就是 `DoTestHeadMotorFP`（slice 2 接 `DoAllProcess` 的 Index 那一格）。
+- **Q128（F-2：`DoTestZContactModeStart` case 1 的 `TestIF_File.bEnableCalCCD` 分支在 HT9050 拒絕可不可以）**：原話「拒絕＋TODO（Steven Q112）。」 ⇒ **可以**：拒絕（訊息＋停機）＋TODO。**改變**：沒有；照 slice 1 現在的寫法。（⚠ 這句跟 pending 的「預設」一字相同。）
+- **Q129（F-3：`MoveIndexZ` 的 CCD-Y 互鎖在 HT9050 要不要、條件是不是「HOME 後剛好 0」）**：原話「同Q133, index下壓前, 會確認shuttle是否離開socket區域, 抵達安全區 (不一定必須是0), 如果shuttle尚未離開, 就不能下去」 ⇒ **下壓前的檢查要**；條件不是「剛好 0」，是飛梭已**離開 socket 區、到了安全區**；還沒離開就不下壓。**改變**：跟 Q133 同一條（見下）。⚠ 原題問的是 M108 MCCDY（HT9050 的 Socket／Clamp 檢查 Y 軸），原話講的是飛梭——910 `MoveIndexZ` 那個「M108 剛好 0」的互鎖是改成「在安全區」、還是換成只看兩支飛梭，待 ST01-C／Frank01 對。
+- **Q130（F-4：HT9050 機台建置上，`MTestZ1` 的哪些呼叫會到 PCIE-1203）**：原話「3軸或4軸 index使用的是 Galil卡片, 1軸的index使用的是 MyMotor的 MotorMove. 跟是不是1203沒有關係!」「請記錄到skill裡面」 ⇒ **常設規則**：3 軸或 4 軸 Index 用 Galil 卡；1 軸 Index（HT9050 只有 Z1）用 MyMotor 的 `MotorMove`；跟軸卡是不是 1203 無關（同 Q119：看馬達類別，不糾結 1203）。**改變**：⛔ 修正 Q113（B：Z1 在路由上就走 `Gali_MotMove`／`Gali_ReadPos`）與 ST01-C F1——HT9050 的 1 軸 Z1 不走路由的 `Gali_*`，回到 910 `MoveIndexZ` 的 `MotorMove`；今天 MTestZ1 建成 `TMyGALILMotor`、一般 `MotorMove` 到不了軸（ctest FP9050_Index [F4]），接著由 ST01-C slice 1b 修類別。
+- **Q131（F-5：Index check（12101）、drop（40）、socket 檢查（122110）壓空 socket 時，910 靠什麼讓兩支飛梭不在 Index 下面）**：原話「同Q133, 兩個shuttle應該依照index的需求進行移動, 常態位置應該是 in shuttle在左側 跟out shuttle在右側 等待」 ⇒ 兩支飛梭**照 Index 的需求移動**；**常態等待位置＝入料飛梭在左側、出料飛梭在右側**（都在 socket 區外）。**改變**：這幾步下壓前一樣做 Q129 的檢查（飛梭已離開 socket 區才下壓）；飛梭平常就停在 socket 區外等。
+- **Q132（F-6：HT9050 生產中能不能走到 [I01]；機台用 [I01]=0，還是那三處改呼叫 `DoTestHeadMotorFP`）**：原話「照 Jimmy #14 維持 910」「[I01]功能本來就是生產中作用的  這邊所謂的生產中 (正確說是 測試中), 就是 GPIB的 0x41命令 一直到收到 BINON與 ECHOOK, 且把BIN資料回寫到socket為止」「請記錄到SKILL裡面」 ⇒ **照 Jimmy #14（Q103＝B）維持 910**：MainProc 的 [I01] 兩處與 `CheckNozzleEventFinish` 照舊呼叫一般 `DoTestHeadMotor()`、機台 [I01] 照舊開著（不改 0）、提案 A 不做；**[I01] 的定義**：[I01]（`bI01TesterFinishThenHome`）本來就是生產中作用，正確說是**測試中**＝從 GPIB 的 0x41 命令開始，一直到收到 BINON 與 ECHOOK、而且把 BIN 資料回寫到 socket 為止。**改變**：ST01-C slice 2 不動 [I01] 三處；定義寫進 skill。⚠ [F14]（FP 與一般流程混用會卡住）照舊存在、ctest 釘著，原話沒處理。
+- **Q133（F-7：Z1 已經壓在 socket 深度時飛梭進到 Index 安全區：Z1 要停（ST＋退出），還是只拒絕下一個指令）**：原話「應該是禁止shuttle進入socket區域 (in shuttle的右側 跟out shuttle的左側), 而不是禁止index動作」「一切行為以index的需求為優先, 請記錄到skill裡面」 ⇒ **兩個都不是——W-44 再改（HT9050 現行）**：被禁止的是**飛梭進 socket 區**（入料飛梭的右側、出料飛梭的左側），**不是 Index 的動作**；**一切行為以 Index 的需求為優先**。**改變**：⛔ 取代 Q114 之後 Z1 那一側「每次下壓都拒絕」的讀法（Frank 移動層在 `Gali_MotMove` 入口擋 Z1、ST01-C 下壓中飛梭進來就 `ST` Z1）——Q114 的安全 X 座標概念保留（安全區＝socket 區之外），但防護作用在**飛梭的移動**上（飛梭那一側是 Frank01 的檔，RULINGS_20261005 第 19 條）；Index 這一側只留 Q129 的下壓前檢查。E-042 B3／B4 的「兩支飛梭在原點 ±100」在 B6 之前改成同一個「已離開 socket 區、在安全區」判斷（不必是 0）。
+
+> 下面是 Q125～Q133 的題目原文（20261006 從 decisions-pending.md 整段搬來，一字不改；「目前狀態」是搬走當時的狀態，裁決在上面）。
+
+> 登記：ST01-E（docs 工程師，分支 `v906/st01-skills-1005`）。題號對照：E-043 Revision 1（`D:\AI_TempFile\st01e-e043c2-plan-20261005.md` R1.13）的 Q-R3＝Q125、Q-R4＝Q126；ST01-C 計畫（`D:\AI_TempFile\st01e-c-fp-plan-20261005.md`「Split after Steven 22:2x」S5）給 Frank01 的 F-1～F-7＝Q127～Q133。
+> 同一天已經回的（Steven：E-043 Q-1～Q-6、Q-R1／Q-R2／Q-R5，ST01-C 範圍與 Q1、Q3、Q5～Q7，Q102；Jimmy：ST01-C Q2）都在 decisions-decided.md 的 Q102～Q124。
+> 「910」＝Frank 的 HT9050 版：git ref `origin/ref/frank-910-9050` 的 `HT9011UC_Code_V3.33.910.0_20260820_beforeFinePitch\`（磁碟上沒有展開；`D:\HT9045\HT9011UC_Code_V3.33.910.0_20260820_HT9050\` 那一棵**沒有** `atester_FinePitch.cpp`）。流程說明見 `D:\HT9045\.claude\skills\ht9045-index-flow\references\ht9050-index-fp-flow.md`。
+
+#### Q125.（E-043 Q-R3，問 EastSun，Steven 知會）自動運轉中 1203 主卡／環斷線：第一筆斷線就停，還是照 EastSun 1001 的 10 秒規則
+
+- **機台上會怎樣**：Steven Q108 之後，斷線時**新的移動一律立刻拒絕**、Motor Test／Teach 的工作立刻停（Q109）；只差在**自動運轉中正在跑的流程**：照今天的規則要等 10 秒才跳 WAR16152 停機（EastSun 1001「1203 如果斷線10秒 要跳出異常」，`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\tools\wb_serve.cpp` `W906_Pci1203LinkWatchTick`）。
+- **選項**：A（預設）——自動運轉維持 10 秒；B——第一筆斷線就停。例：A＝接頭鬆了 3 秒又接回來，自動運轉不中斷；B＝一斷就停機、要重新 START。
+- **目前狀態**：待 EastSun（經筆電 TO_ES02）；沒回照 **A**。
+
+#### Q126.（E-043 Q-R4，問 EastSun／筆電；W-46、W-86 #94）Motor Test 硬停的「安全門」要看哪幾扇門
+
+- **機台上會怎樣**：硬停讀的是 golden 的門組。main 的 golden `InitialSafeDoor`（`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\cinitial.cpp`:3034-3100）不管 IO 表，把 1、2、3、6～10 號門強制 Enable 1；2～10 號在 HT9050 是讀不到的 MotionNet 列 ⇒ 在 main 建置上讀成「開著」，硬停會一開始就把每個工作取消、拒絕每個手動移動。機台用 TEMP-DOORS 暫時繞道，把所有門（**含真的 SnSafeDoor1**）都關掉。St01 W-86 #94 回答的規則 A（HT9050 只開 IO 表裡 Enable 1 的門＝只剩 SnSafeDoor1）還不在 main。
+- **St01 建議（預設）**：門的條件照 golden 的門組出貨；機台要靠它之前，規則 A（或同等的）要先進 main，並確認 SnSafeDoor1 的極性（關＝1）。在那之前，門只能靠 SnMotorPower（如果那扇門在安全迴路裡）。
+- **目前狀態**：待 EastSun／筆電。
+
+#### Q127.（ST01-C F-1，問 Frank01）`DoTestHeadMotorFP` 是不是 HT9050 永久的 Index 流程（「FinePitch」只是歷史名字）
+
+- **為什麼要問**：910 在 `DoAllProcess` 的 Index 那一格遇到 Type_HT9050 才呼叫它；ST01-C 照 Steven Q112 整份照搬。如果 Frank 打算寫另一套 HT9050 Index 流程，slice 2 接線前要知道。
+- **預設**：是（ST01-C 照這個做）。
+- **目前狀態**：待 Frank01（ST01-M 23:0x 貼在 FROM_STEVEN §3 請筆電轉 TO_FRANK；F-1～F-7 同一批）。
+
+#### Q128.（ST01-C F-2，問 Frank01）`DoTestZContactModeStart` case 1 的 `TestIF_File.bEnableCalCCD` 分支在 HT9050 拒絕可不可以
+
+- **為什麼要問**：910 沒有任何地方讀 `bEnableCalCCD`，只有網頁的 JSON 結構表能把它設起來；Steven Q112 已定「CCD 這一段之後再改」＝HT9050 先拒絕（訊息＋停機）＋TODO。要 Frank 確認 910 沒有別的路會用到它。
+- **預設**：拒絕＋TODO（Steven Q112）。
+- **目前狀態**：待 Frank01。
+
+#### Q129.（ST01-C F-3，問 Frank01；EastSun 量 M108）`MoveIndexZ` 的 CCD-Y 互鎖在 HT9050 要不要、條件是不是「HOME 後剛好 0」
+
+- **機台上會怎樣**：910 `MoveIndexZ` 在 Z1 要下到 `Prod.All_TestZ_Test_Safe` 以下時，M108 MCCDY（HT9050 的 Socket／Clamp 檢查 Y 軸，真的軸）不是剛好 0 或原點燈沒亮就**不送指令、也不報錯**——流程永遠等。
+- **預設**：照 910 保留互鎖；ST01-C slice 1 加一個「拒絕超過 5 秒就給訊息」（不動任何軸）；EastSun 上機確認 HOME 後 M108 讀 0 且原點燈亮（human-review A）。
+- **目前狀態**：待 Frank01。
+
+#### Q130.（ST01-C F-4，問 Frank01）HT9050 機台建置上，`MTestZ1` 的哪些呼叫會到 PCIE-1203
+
+- **為什麼要問**：ctest FP9050_Index [F4] 量到只有 `TMyMotor::Gali_*`（Galil 路由）會到 1203；一般 `MotorMove` 碰到沒有卡的 `TMyGALILMotor::MoveToPos`，什麼都沒送、卻回「到位」；一般 `ReadPos` 讀 0。若真是這樣，`Do_Auto_InSH`／`Do_Auto_OutSH` case 1 拿 `MOT[MTestZ1].ReadPos()`（＝0）比 `Prod.TestZ1_Safe` 是不是本意？（EastSun 1005 在 `D:\HT9045\HT9011UC_Cpp_V3.33.906.0\acarry.cpp` `W906_ShtIndexZ1Safe` 的註記「Index的部分是用一般馬達不是用Gali的模式，後續需要修正成1203的Motor Move」，那裡用一般的 `ReadEncoderPos` 讀 Z1——要跟 [F4] 的量測對一下。）
+- **預設**：只有 `Gali_*`；ST01-C 用路由的 `Gali_MotMove`／`Gali_ReadPos`（Steven Q113）；飛梭那邊的比對是 Frank 的檔，St01 不動。
+- **目前狀態**：待 Frank01。
+
+#### Q131.（ST01-C F-5，問 Frank01）Index check（12101）、drop（40）、socket 檢查（122110）壓空 socket 時，910 靠什麼讓兩支飛梭不在 Index 下面
+
+- **為什麼要問**：這幾步沒有檢查飛梭；`Do_Auto_InSH` 等的是 `MOT[MInShuttle1].fCanMoveM`，只有 `DoFrontTestSuckICFP`／`DoTestYFrontFP` 會設。
+- **預設**：照 Steven Q114 的新 W-44，ST01-C 在這幾步（W-44 檢查的步驟集）下壓前都呼叫 Frank 的「飛梭不在 Index 安全區」判斷；判斷還沒接上（null）＝不下壓。
+- **目前狀態**：待 Frank01。
+
+#### Q132.（ST01-C F-6，問 Frank01；改 A 要 Jimmy）HT9050 生產中能不能走到 [I01]——機台該用 [I01]=0，還是那三處改呼叫 `DoTestHeadMotorFP`
+
+- **機台上會怎樣**：Jimmy #14＝B（Q103）讓 [I01] 三處照 910 呼叫一般 `DoTestHeadMotor()`；機台 `bI01TesterFinishThenHome=1`；[F14] 重現：測到一半按 HOME／停機，FP 會卡在舊步驟、沒有訊息。
+- **預設**：照 Jimmy #14 維持 910；提案 A（計畫 S4）等 Frank 的看法，再由 Jimmy 決定（推翻 Jimmy 自己的裁決，照第 18 條留給 Jimmy）。
+- **目前狀態**：待 Frank01，之後 Jimmy。
+
+#### Q133.（ST01-C F-7，問 Frank01）Z1 已經壓在 socket 深度時（例：FP 12110 等扭力），飛梭進到 Index 安全區：Z1 要停（ST＋退出），還是只拒絕下一個指令
+
+- **為什麼要問**：Frank 的移動層保護（設計文件 s1「做法 A」第一層）回的是「還沒做完、等著」；ST01-C slice 1 是送 `ST`＋一個訊息＋照該狀態機的出口離開。用語照 Steven Q114 改成「進到安全區」（原題寫「離開 home」）。
+- **預設**：停（`ST`＋訊息＋退出）；抬起與 `ST` 永遠不擋。
+- **目前狀態**：待 Frank01。
+
+### 20261006 09:4x Steven 本人決斷：W-44 安全區（不投票，以 Steven 為準；ST01-M 轉）
+
+- **來由**：Jimmy 09:2x 定了 RULINGS_20261006 第 7 條（動作問題 Jimmy／Steven／Frank 三人多數決），W-44 因為 RULINGS_20261005 第 19 條（兩支飛梭都在原點）跟 Steven 的規格（安全區）不同，被列成第一題、等 Frank 投票（W-97，NIGHT_REPORT §0 #129）。ST01-M 09:3x 重新整理給 Steven 後，Steven 09:4x 本人決斷。
+- **原話**：「飛梭離開 socket 區、在安全區就可以，不一定是home」／「這條以我的為準確」／「安全區如果沒有預設值, 那就是先使用home周邊約1cm的位置」／「也就是 in shuttle 1的 left + 1000 跟 out shuttle 1的 right - 1000」／「原本卡home的方式, 會導致shuttle shake功能失效」／「這題不要再投票了, 以我的為準」／「可以在spec跟skill裡面註記是我下的決斷」
+- 飛梭離開 socket 區、在安全區，Index 就可以下壓，**不一定要在 home**。
+- 安全區沒有教點（預設值）時，先用 **home 周邊約 1 cm**：**In Shuttle 1 的 Left ＋ 1000**、**Out Shuttle 1 的 Right － 1000**。St01 讀法：In Shuttle 1 從 Left 往右不超過 1000、Out Shuttle 1 從 Right 往左不超過 1000＝安全區；再往 socket 那邊走就算進了 socket 區。HT9045 的 In／Out Shuttle 2 原話沒講，St01 先照同樣做法類推。
+- 理由（Steven）：原本卡 home 的方式會讓 **shuttle shake（飛梭抖動）功能失效**。
+- 這一條取代 RULINGS_20261005 第 19 條的「兩支飛梭都在原點，Z1 才准下壓」，**不適用** RULINGS_20261006 第 7 條的三人多數決（Steven：「這題不要再投票了, 以我的為準」）。
+- **連帶**：Q133（上面）的「下壓中 `ST` Z1」照 Q133 不再是 Index 的主要防護；飛梭那一側的擋（Frank01 FR-NB2 ②）上線前，Index 這一側先保留補救停（St01 建議）。
+- **寫進**：`D:\HT9045\docs\spec\modules\motion-priority-interlock.spec.md` §4.1／§9／§10；`D:\HT9045\.claude\skills\ht9045-index-flow\references\ht9050-index-fp-flow.md` §9.1 第 6 點。筆電：FROM_STEVEN §3 1006 09:4x。

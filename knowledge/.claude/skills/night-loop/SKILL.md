@@ -54,6 +54,7 @@ description: 夜間例行迴圈政策（HT9045）。下班後自動推進四條�
 - 不為了回報而停下或拆碎工作；能在一個 workflow 裡依序做完的就一次派完（agent 總數仍 ≤5）。
 - 決策題照「保持現行 → 可逆 → 樹編得起來」先選安全預設值做下去，寫進 `NIGHT_REPORT.md` §0，不等人。
 - **使用者不在時，決策題也要問人**（使用者 1005 20:2x 下班前：「動作流程優先問Frank、機台端問題問Eastsun、其他問ST02」，RULINGS_20261005 第 18 條）：動作流程（Index／Shuttle／Tray／HOME 流程）→ Frank01（TO_FRANK §4）；機台端（實機硬體、設定、量測、IO／安全門／警報碼）→ EastSun（TO_ES02 §4，同時給 St01）；其他 → St02（TO_STEVEN §4）。同一顆 commit 登記 WAITING_REPLIES。他們回的就照做並寫進 RULINGS（註明誰答）；沒回之前照預設值做、不等。動到 Jimmy 自己定的規則或推翻他裁決過的方向，仍留給 Jimmy。
+- **動作流程題三人多數決**（使用者 1006 09:2x：「動作問題也能問Frank，如果三人答案中，多數為依據」，RULINGS_20261006 第 7 條）：Index／Shuttle／Tray／Arm 的動作順序、互鎖、HOME 流程，Jimmy、Steven、Frank 三人的答案以多數為依據——兩人一致就照做；兩人不一致（例：W-44，Jimmy 第 19 條「都在原點」vs Steven 1006 規格「安全區、擋飛梭」）就問第三人，答了才動程式，在那之前照現行。不要把「同事的新答案跟 Jimmy 的裁決不同」直接當成要 Jimmy 改裁決的題目。
 
 每一次迭代**第一件事就是讀時鐘**（`date +%H:%M`），再決定模式。不要憑「上一輪是
 什麼模式」推論 —— 迭代之間可能隔了很久（額度中斷、機器忙）。
@@ -173,11 +174,14 @@ python D:/HT9045/backup/night_tools_20260927/mr_scan.py
 git fetch -q origin v906/nb2-heartbeat && git show origin/v906/nb2-heartbeat:HEARTBEAT.md | head -12   # last tick > ~2.5 h ＝ NB2-1 停了，收回來做
 git show origin/v906/nb2-assist:HT9011UC_Cpp_V3.33.906.0/docs/nb2_assist/NOW.md | head -30               # NB2 的認領：當輪在 CHAT_JIMMY 回「收／已在第 XX 批」
 python D:/HT9045/backup/night_tools_20260927/nb2_urgent.py      # NB2 URGENT.md「未讀」裡 NIGHT_REPORT 還沒點名的 U<n>：exit 1 ⇒ 當輪轉出去，並在 NIGHT_REPORT 寫「已讀 U<n>」（1005 22:2x：U26～U30 漏讀 1～5 小時，因為只讀了心跳和 NOW.md）
+python D:/HT9045/backup/night_tools_20260927/idle_scan.py       # 每個同事的心跳（origin/v906/*-heartbeat）＋TO_* 派卡列（📋）＋WAITING_REPLIES：DISPATCH＝心跳說 idle 之後沒派卡，或卡被移走（↪）之後沒給新卡、帳本也沒在等他 ⇒ 當輪派卡；CHECK＝只移走一部分，讀他的 FROM_* §1 再決定（1006 起，RULINGS_20261006 第 5 條）
+python D:/HT9045/backup/night_tools_20260927/drift_scan.py      # 每個人的工作樹跟 main 差幾包（最近推的程式分支的 main 基底＋心跳的 checkout 列）：STALE＝≥10 包 ⇒ 當輪在他的 TO_*.md §4 提醒「測試前先更新」（RULINGS_20261006 第 12 條）
 python D:/HT9045/backup/night_tools_20260927/daily_health.py --out <worktree>/HT9011UC_Cpp_V3.33.906.0/docs/health/HEALTH_<前一天>.md   # 每天 01:00 那一輪跑一次（RULINGS_20261005 第 21 條：只量不改；紅燈才進 NIGHT_REPORT §0；每週給 Jimmy 彙總、他決定改哪個流程）
 python D:/HT9045/backup/night_tools_20260927/laptop_heartbeat.py --doing "<這一輪在做什麼>" --agents <N> --waiting-jimmy <N> --push   # 每輪最後一步
 ```
 
 - **筆電的角色**（RULINGS_20261003 第 13 條）：新功能與分析寫成工作卡給接案的人，筆電只留回答 Jimmy、分派追蹤、合 MR＋gate、出機台包、寫裁決與報告；筆電的子代理同時最多 1～2 個，只做整合時非修不可的小修補。
+- **閒置偵測與交還**（RULINGS_20261006 第 4、5 條；使用者 1006 08:5x 問「沒有派工原因？是沒有工作嗎？」）：Ifor01 1005 15:13 心跳寫「idle for new cards」，迴圈只讀 NB2-1 的心跳，閒了一個工作天才被 Jimmy 發現。①每輪跑 `idle_scan.py`，DISPATCH 當輪派卡（派卡列標題帶 📋，工具靠它判斷）；②**卡從離線的人身上移走時，同一顆 commit 給他下一張**，讓他回來就有事做；③池子：**`docs/handoff/POOL.md`**（公共卡，筆電寫；POOL-1＝`#if 0` 調查，RULINGS_20261006 第 9 條）＋S-09 `#if 0` 清單（`docs/handoff/ST02_IF0_BACKLOG_20260929.*`，以檔為單位、誰閒誰認領）＋`docs/handoff/CENSUS129_20261001/`「還沒人接」；領域卡乾了（例：溫控卡在機台）就從池子派，不要等。
 - **備援**（第 14 條）：筆電心跳超過 4 小時＋main 4 小時沒推 ⇒ St01 接手合 MR（`tools/laptop_ops/README.md`）；回來後先讀 FROM_STEVEN §2 有沒有 St01 接手的紀錄。
 - **同事 MR 的新測試要附反向驗證**（第 15 條）：沒附的，合之前在 TO_<對象>.md §4 請他補（不擋合併，但記進批次說明）。
 - **確定做完的 MR 直接關，不用問**（使用者 1005 14:4x，RULINGS_20261005 第 7 條：「如果已經確定做完就直接關，不用詢問…有沒有做過只有你清楚」）：開著但內容已在 main 的 MR，用 `python D:/HT9045/backup/night_tools_20260927/mr_verify_close.py <編號> "<留言：在 main 哪一顆、誰確認>"` 先試跑，每一行新增都在 main（或不在的行逐行看懂、寫進留言再加 `--allow-missing N`）才加 `--close`；量不出來就不關、照舊問。NIGHT_REPORT §1 記一行。

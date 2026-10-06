@@ -136,9 +136,9 @@ cd /d/Work-jimmychiu/document/WeeklyReport/Weekly_AI && python tools/sync.py pus
 例外照指令檔：內容檢查有命中要停下來問；信要等使用者說「寄出」才跑 `--send-draft <EntryID>`。
 
 ### F. 「上傳日報」（20261005 起）
-使用者說「上傳日報」→ 照 `.claude/commands/daily-upload.md` 跑 `tools/daily_upload.py`，**兩段式**：
-collect → 照入口網站統一格式寫草稿（結案列＋週報 action＋裁決＋HT9045 commit 歸納）→ check → **全文貼給使用者看** → 使用者回「推」才 push
-（入口網站規定 AI 代寫的日報要本人看過）。內容檢查有命中要停下來問。結案時 `close_case.py` 會自動在當天草稿補一列（不推），所以結案不用另外記日報。
+使用者說「上傳日報」→ 照 `.claude/commands/daily-upload.md` 跑 `tools/daily_upload.py`，**直接推、不問**（使用者 20261006，取代兩段式）：
+collect → 照入口網站統一格式寫草稿（結案列＋週報 action＋裁決＋HT9045 commit 歸納）→ check → push → 推完把全文與頁面網址貼給使用者。
+只有內容檢查命中要停下來問。結案時 `close_case.py` 會自動在當天草稿補一列（不推），所以結案不用另外記日報。
 
 ## 結案 / Release Note 歸屬
 週報、case、release note、鴻勁紅(`*_customer_*`/`*_distributor_*`)、鴻勁藍(`*_internal_*`)產物一律本代理負責，放 `Customer/<客戶>/<CASE>/04_release/`。接收 ht9045-v899 的修正 handoff 後更新 `issue.md`、`weekly_data.json`、產出紅/藍，回報實體路徑。結案沒版號要主動索取。

@@ -1,5 +1,5 @@
 ---
-description: "上傳日報：把當天（12:00 前＝前一個工作天）的日報照入口網站統一格式寫好、貼給使用者看，使用者說「推」才推上 RD5 入口網站 daily.html。結案時已自動補的列會帶進來。關鍵字：上傳日報, 推日報, 寫日報, 補日報, 日報上網站"
+description: "上傳日報：把當天（12:00 前＝前一個工作天）的日報照入口網站統一格式寫好、檢查過就直接推上 RD5 入口網站 daily.html，不問（使用者 20261006）。結案時已自動補的列會帶進來。關鍵字：上傳日報, 推日報, 寫日報, 補日報, 日報上網站"
 ---
 
 # 上傳日報（使用者 20261005）
@@ -8,9 +8,10 @@ description: "上傳日報：把當天（12:00 前＝前一個工作天）的日
 起因：入口網站 daily.html 上 12 人 173 篇日報，JimmyChiu 0 篇——我們這邊只有週報與 Release Note 的發佈工具，日報從來沒有機制；
 網站日報頁上 Jimmy 那一列只看得到 Release Note，是因為 build_portal.py 把 release note 掛在每人的日報欄（`add_release_to_daily`）。
 
-**兩段式**：草稿寫好、檢查過，先**貼給使用者看**，使用者回「推」（或給修改）才推。
-理由：入口網站規定 AI 代寫的日報要本人看過才推（`sop.html`、rd5-daily-report skill §3.5「AI 代寫時…內容要本人看過」），
-而且推了之後再改要多開一個 MR（網站規定一天推一次）。使用者明講「直接推」時，那一次可以省掉確認。
+**直接推、不問**（使用者 20261006：「以後上傳日報能夠自動推嗎？不要詢問」，取代 20261005 的兩段式）：草稿寫好、`check` 過就 `push`，
+推完把**草稿全文與頁面網址**貼給使用者。唯一會停下來問的是**內容檢查命中**（§4 表格，不該給全公司看的字）。
+入口網站 SOP 寫 AI 代寫的日報要本人看過（`sop.html`、rd5-daily-report skill §3.5）——Jimmy 選擇推完再看。
+推了之後再改要多開一張 MR（網站規定一天推一次），所以第一次就照證據寫對，不要寫證據裡沒有的事。
 
 工具在 Weekly_AI：`tools/daily_upload.py`（借用 `publish_portal.py` 的分支／MR、`_publish_guard.py` 的內容檢查）。
 格式規則的權威是入口網站的 `.claude/skills/rd5-daily-report/SKILL.md` 與 `tools/check_daily.py`（工具直接載入 origin/main 那份來檢查）。
@@ -52,11 +53,11 @@ cd $W && PYTHONIOENCODING=utf-8 python -X utf8 tools/daily_upload.py <子指令>
 
 寫完跑 `daily_upload.py check`（不推）——格式沒過就照列出的項目改，不用問使用者。
 
-## 3. 給使用者看（第一段結束）
+## 3. 不用等使用者（20261006 起）
 
-`check` 過了之後，把**草稿全文**貼在回覆裡，最後一行問「要推嗎？（回『推』，或直接說要改哪裡）」。這是唯一需要使用者回的地方。
+`check` 過了就直接進第 4 步，**不要**貼草稿問「要推嗎」。使用者要改，看完網站上的再說，照改草稿再推一次。
 
-## 4. 推（push，使用者說「推」之後）
+## 4. 推（push）
 
 `daily_upload.py push`（Bash timeout 給 600000；大部分時間在等 MR 自動合併）：
 再檢查一次（「【待填】」、`check_daily.py`、內容檢查）→ `jimmychiu/<今天>-daily` 分支 → 本機 `build_portal.py --ci` →
@@ -64,8 +65,8 @@ cd $W && PYTHONIOENCODING=utf-8 python -X utf8 tools/daily_upload.py <子指令>
 
 | 輸出 | 怎麼處理 |
 |---|---|
-| `[網站] 已合併上線` | 回報頁面網址與 MR |
-| `日報格式沒過` | 照列出的項目改草稿，**改了內容就重貼給使用者看**再推 |
+| `[網站] 已合併上線` | 回報頁面網址與 MR，並貼上推上去的日報全文 |
+| `日報格式沒過` | 照列出的項目改草稿再推（不用問使用者） |
 | `內容檢查擋下 N 處` | **停下來問使用者**（回覆文字，不用彈窗）：列出命中的字與為什麼不該給全公司看，選項 **A 放行**（`push --guard-allow "<字>"`）／**B 改草稿**，附建議 |
 | `跟網站上的一樣，不用推` | 照實回報 |
 | `入口網站 repo 有未 commit 的修改` | 不要動那些修改；回報給使用者 |
@@ -74,7 +75,7 @@ cd $W && PYTHONIOENCODING=utf-8 python -X utf8 tools/daily_upload.py <子指令>
 ## 5. 補寫好幾天
 
 `daily_upload.py status [--since YYYYMMDD]` 列出還沒有日報的工作天（預設從日報功能上線的 20260928 起算，只算週一到週五）。
-每天各跑 `collect --date <d>` 寫好草稿 → 全部貼給使用者看 → `push --date d1,d2,…`：**一個 commit、一個 MR**。
+每天各跑 `collect --date <d>` 寫好草稿 → `check` → `push --date d1,d2,…`：**一個 commit、一個 MR**（不用先貼給使用者看；推完列出各篇的一句話與網址）。
 每篇的「一句話」都以「（補寫）」開頭。週末做的事（裁決、案件）併進下一個工作天，除非使用者要單獨一篇。
 
 ## 6. 其他子指令
@@ -87,4 +88,5 @@ cd $W && PYTHONIOENCODING=utf-8 python -X utf8 tools/daily_upload.py <子指令>
 - 一天推一次（Steven 20260929）。結案時 `close_case.py` 只補列、不推。
 - 不改 `weekly_data.json`。`daily/` 的草稿、證據、`rows.json` 是 Weekly_AI 的檔，`sync.py push` 會一起推進私人 GitHub `weeklyreport`；
   Weekly_AI「一次只在一台動」的規矩對它們一樣適用。
-- 結尾照慣例寫完成狀態（草稿待確認／已上線／被擋待決定）。
+- 結尾照慣例寫完成狀態（已上線／被擋待決定）。
+- 同一台有別的 session 正在推（入口網站 repo 有 `index.lock`、或有 `daily_upload.py push` 的程序在跑）就先等它結束，不要同時推（20261006 NB2 兩個 session 撞過一次）。

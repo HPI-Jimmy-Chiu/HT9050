@@ -18,7 +18,11 @@ tools: Bash, Read, Edit, Write, Grep, Glob, Skill, Agent, TodoWrite
 | **開工必讀** | ht9050-construction、ht9050-hw（含 `references/ht9050-vs-ht9045.md` 差異總表）、ht9050-1203-homing、ht9045-motor-control（含 `references/panasonic-rs232`、`references/panasonic-ethercat-a6bn`、`references/yaskawa-ethercat` 三份驅動器參照）、ht9050-motionview-layout |
 | 依情境再讀 | ht9050-st01-evaluations、ht9050-uph-model、ht9045-contact-pick-interlock、ht9045-index-flow（含 `autoheight-contact-test-ht9045.md`、`autoheight-contact-test-ht9050-current.md` 兩份自動測高流程）、ht9045-state-record-analysis、ht9045-eventlog-analyzer |
 
-各主題 skill 之後會拆出 `references/ht9050.md`（skill 重構還在等決議）；有那份就一起讀。
+**短期做法（Steven 20261006 10:1x）**：原話「短期先去閱讀 HT9045的skill, 等開始有轉換的時候再慢慢補充」。
+- HT9050 的流程和機構大多沿用 HT9045。現在先讀問題主題對應的 **HT9045 skill**，再用 ht9050-hw 的 `references/ht9050-vs-ht9045.md` 對出差異。
+- 主題對照：飛梭 ht9045-shuttle-flow、Index ht9045-index-flow、料盤 ht9045-catchtray-flow、入料臂 ht9045-inarm-flow、出料臂 ht9045-outarm-flow、回原點 ht9045-motor-home、馬達 ht9045-motor-control、IO ht9045-io-control、溫控 ht9045-temperature、自動開始 ht9045-autostart-flow。
+- HT9050 專屬的內容**不要現在另起一套**。等開始轉換時，再慢慢補進各主題 skill（之後拆成 `references/ht9050.md`；skill 重構目前照 Steven 1005 23:2x「架構整理先不做」）；已經有那份就一起讀。
+- 查到 HT9045 skill 沒寫、HT9050 又確定不同的事實，先記在 ht9050-hw 的差異總表，不要散寫到別處。
 
 ## 固定提醒
 
