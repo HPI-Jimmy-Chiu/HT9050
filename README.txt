@@ -1674,4 +1674,10 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
 - The Debug / Release button on the Solution Explorer toolbar stands out (EastSun 1006): a bigger icon, the icon
   and the word bright orange (Release) / red (Debug), the button tinted. ES02: please take it.
 - Tests: run_all 3/3 layers; real VS Code 159/159.
+  10-06 19:14 機台快照（EastSun 在機台上做的事，沒有程式修改）：
+     machine_params/D_HT9045_system：2 個檔變動
+     machine_params/README_PARAMS.txt：1 個檔變動
+     workorder/README_WORKORDER.txt：1 個檔變動
+     設定檔變動：machine_params/D_HT9045_system/Gerneral.ini.bak_plcdoor_20261006_191025、machine_params/D_HT9045_system/IO_Table.csv.bak_plcdoor_20261006_191025
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 MD5 清單在 MANIFEST_MD5.tsv。
