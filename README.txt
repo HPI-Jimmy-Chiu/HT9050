@@ -1631,4 +1631,10 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
      操作紀錄 oplog_20261006.txt：新增 749 行
      設定檔變動：machine_params/D_GPIB9045_system/general.ini、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/lastdata_backup2.dat
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+=== tools 0166 (20261006, machine) -- HTML designer (tools/vscode-htdesigner) 0.197.0 ===
+- Laptop packages 158-161 (ES02 0.177-0.197) merged; the designer is ES02's 0.197.0 plus the machine fix below.
+- Machine fix: CSV table frozen columns scrolled away when the next animation frame did not come (media/csv.js:
+  redraw after 40 ms anyway). ES02: please take it.
+- Not run on the machine: test/e2e_all.js, test/vscode_run_it.ps1 (they build / start the machine program).
+- Tests: run_all 3/3 layers; real VS Code 159/159 (all pass).
 MD5 清單在 MANIFEST_MD5.tsv。
