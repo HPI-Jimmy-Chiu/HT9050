@@ -1,0 +1,152 @@
+From 56a48263fdb7d27ce88c97205609ec558ee79ee8 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 6 Oct 2026 23:32:48 +0800
+Subject: [PATCH] =?UTF-8?q?PLCDOOR-2:=20the=20safety-PLC=20doors=20actuall?=
+ =?UTF-8?q?y=20alarm=20--=20two=20defects=20found=20by=20the=20IO=20audit?=
+ =?UTF-8?q?=20(EastSun=201006=20'=E8=AB=8B=E4=BD=A0=E6=AA=A2=E6=9F=A5enabl?=
+ =?UTF-8?q?e=E7=9A=84io=E6=9C=89=E5=93=AA=E4=BA=9B=E9=82=84=E6=B2=92?=
+ =?UTF-8?q?=E6=9C=89=E5=AF=A6=E9=9A=9B=E5=8A=9F=E8=83=BD').?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+1. MyLaneIo.cpp:526: the engine reads PLC rows through MyLaneIO.IOInputBit, whose golden cap 0x300..0x303 answered `true` for SnAllSafeDoor at 0x310 -- the all-doors bit made by 73824bd was never seen (always "closed"). Model 1 (SafePlcModel=1) now accepts 0x300..0x310 (same line); model 0 stays golden.
+2. InitialSafeDoor: JerryYang 20260926's temporary "safe doors not ready" MARK (cinitial.cpp:3044-3050) and SAFE_DOOR_AMOUNT=1 (:3083-3084) run after the PLC force-enable (:2792-2797), so every PLC door read IsOff()==false and MES1611+ never fired. New cinitial.cpp EOF W906_SafeDoorPlcEnable, called on the last line of InitialSafeDoor, re-enables (Type 1) only the iSafeDoor[] doors the IO table puts on the PLC (ISABase 4), only with SafePlcIO=1 and SafePlcModel=1; every other door / configuration keeps the MARK.
+
+tests/test_myplc_modbus.cpp [6] goes through the engine's path (MyLaneIO.IOInputBit, Sen.Enable): 69/69 (the [5] check used TMyPLC_IO_Modbus::IsOn, a different path, which is why it was green). Flow9050_Tray 104/104. Debug + release (affected targets). WORKLOG section 2 row 141.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ MyLaneIo.cpp                |  2 +-
+ cinitial.cpp                | 23 ++++++++++++++++++-
+ docs/WORKLOG_MACHINE.md     |  1 +
+ tests/test_myplc_modbus.cpp | 45 ++++++++++++++++++++++++++++++++++++-
+ 4 files changed, 68 insertions(+), 3 deletions(-)
+
+diff --git a/MyLaneIo.cpp b/MyLaneIo.cpp
+index 5892d1a..9855546 100644
+--- a/MyLaneIo.cpp
++++ b/MyLaneIo.cpp
+@@ -523,7 +523,7 @@ bool TLaneIO::IOInputBit(int Ring, int IP, int Port, int Bit, int iISABase, Ansi
+     // Translated faithfully; fires only when iISABase==ePLCbase.
+     if(bPLCIO[Port][Bit] && iISABase == ePLCbase)
+     {
+-        if(Port >= PLCIO_INPUT_START_PORT_NUMBER && Port <= 0x303)
++        if(Port >= PLCIO_INPUT_START_PORT_NUMBER && Port <= (iSafePlcModel == 1 ? 0x310 : 0x303))   //AI(W906-PLCDOOR-2) 20261006: model 1 (Reer M1S, MyPLC_IO_Modbus.cpp W906_PlcM1SFill) lays Input bytes 0..15 at Ports 0x300..0x30F and the made all-doors bit at 0x310 -- golden's 0x303 cap answered `true` (= closed) for SnAllSafeDoor 0x310 for ever (IO audit 20261006). Model 0 = golden's 0x303
+         {
+             if(iPLCSafetyVer == 202204)
+                 return bPLCInData[0][Port - PLCIO_INPUT_START_PORT_NUMBER + 2][Bit];  // joe 20220406.01
+diff --git a/cinitial.cpp b/cinitial.cpp
+index 554db67..60af724 100644
+--- a/cinitial.cpp
++++ b/cinitial.cpp
+@@ -3229,7 +3229,7 @@ void InitialSafeDoor()
+     {
+         IniConfig.bP35TrayArm=Sen[SnTrayArmSafePos].Enable;
+     }
+-//#endif
++    { void W906_SafeDoorPlcEnable(); W906_SafeDoorPlcEnable(); }   //#endif   //AI(W906-PLCDOOR-2) 20261006: re-enable the PLC-wired doors after the temporary MARK above (cinitial.cpp EOF); the //#endif comment kept on this line
+ }
+ //******************************************************************************
+ //
+@@ -19426,3 +19426,24 @@ int W906_TrayZ9050ProbeLimit()
+ {
+     return (Tech.iTrayZ9050ProbeLimit > 0) ? Tech.iTrayZ9050ProbeLimit : MAX_LOADER_LAYER_9050;
+ }
++//==============================================================================
++//AI(W906-PLCDOOR-2) 20261006: the safety-PLC doors actually alarm. IO audit 20261006 found that, with SafePlcIO=1 / SafePlcModel=1 and
++//  the IO table's doors on the PLC (ISABase 4), InitialSafeDoor still switched them off: JerryYang 20260926「安全門還沒好, 暫時MARK掉」
++//  (cinitial.cpp:3044-3050, SnSafeDoor1/2/3/6/7/8/9) and SAFE_DOOR_AMOUNT=1 (SnSafeDoor4/5) run AFTER the PLC force-enable at
++//  :2792-2797, so Sen[].IsOff() answered false and CheckSafeDoorIsClosed never raised MES1611+N-1. EastSun 1006「門警報不用看其他地方
++//  看PLC通訊就好 ... 功能要齊全」: called at the end of InitialSafeDoor, this re-enables (Type 1, as golden's PLC rule) every door of
++//  golden's iSafeDoor[] list that the IO table puts on the PLC -- only with SafePlcIO=1 and the Reer model (SafePlcModel=1). Doors not
++//  on the PLC, and every other configuration, keep the temporary MARK exactly as before.
++void W906_SafeDoorPlcEnable()
++{
++    if(!Enable_PLCSafety_IO || iSafePlcModel != 1)
++        return;
++    for(int i=0; i<MAX_SAFE_DOOR_CNT; i++)
++    {
++        const int s = iSafeDoor[i];
++        if(s < 0 || s >= MAX_SENSOR_ITEM || Sen[s].ISABase != ePLCbase)
++            continue;
++        Sen[s].Enable = true;
++        Sen[s].Type   = 1;
++    }
++}
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 64fd8bf..246c81a 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -219,6 +219,7 @@
+ | 138 | **安全 PLC 型號 1 補「全部安全門關好」輸入（W906-PLCDOOR）**（EastSun 1006「門警報不用看其他地方 看PLC通訊就好 請把IO_TABLE 做修正 寫出對應rear PLC的設定 並且功能要齊全」「你要看軟體裡面門的位置再去對應IO」）：備份分支 backup/pre-plcdoor-20261006＋D:\HT9045\_plc_1006\backup_plcdoor_20261006_191025＋IO_Table.csv／Gerneral.ini .bak_plcdoor_20261006_191025。**為什麼**：golden SafePlcIO=1 的 bCheckPLCAllSafedoorAndEMGEnable（csystem.cpp:30001）在 SnSafeMode 沒啟用時，SnAllSafeDoor 和 SnAllEMG 兩個都要啟用，不然每輪 SystemStart=false＋StopAllMotor（G14，csystem.cpp:16766）；CheckSafeDoorIsClosed 也用 SnAllSafeDoor 跳 WAR16125。這台 MOSAIC 專案一扇門一個位元，沒有合併位元。**做法**：MyPLC/MyPLC_IO_Modbus.cpp 檔尾 W906_PlcM1SAllDoors：型號 1 每收到一幀，把 golden iSafeDoor[] 裡 IO 表放在 PLC（ISABase 4）的門逐一讀同一幀的位元，全部是 1 才把 InPortData_Byte[17] bit 0（IO 表 Port 310／Bit 0）設 1；IO 表沒有任何 PLC 門 → 0（不會默默當成關）；門超出 16 個輸入位元組 → 當開。逐門警報（MES1611+N-1、門的位置）照 golden 不動。呼叫在 W906_PlcM1SFill 檔尾同一函式內、宣告在第 82 行同行。tests/test_myplc_modbus.cpp [5]：沒門→0、7 門全關→1（經 golden +1 索引讀 Port 310）、7 門各開一扇→0、逐門位元不變、界外門→當開；64／64。Debug 19:12、release 19:13。**IO 表（照軟體 HT9050 門位置 SD1 前左拉、SD2 前右拉、SD3 後左拉、SD4 後右拉、SD5 後右掀、SD6 左掀、SD7 右掀、SD8 Index 開檢；Alert.MotionView9050.html／ht9050-hw hardware-overview.md）改號＋加 SnAllSafeDoor 310/0、Gerneral.ini SafePlcIO=1 —— 被自動模式權限擋下，未改，等 EastSun 決定**。 | IO 表與 SafePlcIO 待 EastSun | 本 commit |
+ | 139 | **WAR16154 沒有文字 → 警報框接上 golden 的「 : errPart」；1203 頁馬達清單加 Mot_Table 名稱與站號；安全門 IO 照軟體門位置改號＋SafePlcIO=1（W906-ERRPART／W906-1203MOTNAME）**（EastSun 1006 截圖「沒有文字描述異常」；「圖片這邊我希望對應的IP有 MOT_TABLE 文字描述 和站號」；「你要看軟體裡面門的位置再去對應IO」→ AskUserQuestion「全部照改（含 SafePlcIO=1）」）。①tools/wb_serve.cpp：警報信箱的 message 原本只帶代碼、errPart 從沒送到網頁；EOF W906_AlarmMsgWithErrPart 在 canary_support 記錄的 LastCode＝本代碼時接 golden 的 " : "+errPart（forms/fNote_ShowError.cpp:400-408），第 377／380 行同行接上；警報相關 ctest 15／15。②web 5fef154：js/pci1203/view.js EOF 讀 /api/struct/motor/config，PCI1203 列 hw.boardId／port＝位址／軸 → 「狀態 · M14 MTestZ1 · 站 14 · axN」（無頭瀏覽器 19 軸全對上）；JSON AlarmCodeList-index／Alarm-description（＋shim）補 WAR16154 文字與中英說明。③D:\HT9045\system（備份 .bak_plcdoor_20261006_191025）：SnSafeDoor1 Loader 301/0、2 Unloader 302/6、3 InShuttle 301/4、4 OutShuttle 左 302/0、5 OutShuttle 右 302/2、6 左側 301/2、7 右側 302/4、8 Index 停用（原列）、新增 SnAllSafeDoor 310/0；Gerneral.ini SafePlcIO=1（第一次被自動模式擋下一半，EastSun 核准後完成；關程式後確認仍為 1）。Debug 22:08、release 21:49 | 待 EastSun 開機實測 SAFEPLC（[SAFEPLC] 連線、門／急停警報） | 本 commit |
+ | 140 | **HT9050 Tray Z 層位改成「基準層 − 層 × pitch」＋Teach 頁 9050 Tray Z（W906-TRAYZ-PITCH）**（EastSun 1006「Loader unloader 9050 流程有哪些點位 teach畫面無法設定？」→「第幾層不是用pitch來算嗎？」「每一層一定是有一個基準層 用pitch算上去」「基準層pitch要用減的」「交接位置不就是 上位嗎？」→ 我指出 Loader 取盤 case 10 上位[L]→++→case 30 上位[L+1]+抬升→case 50 下位[L+1]，若改本層會不動 →「對那額外抬升也要校正」「其他站額外抬升也要保留」「探測就是上位 加層數 然後要可以讓我設探測極限」「這個值要可以校正」「只編有改到的」）。計畫 D:\HT9045\_tray9050_1006\PLAN_TRAYZ_PITCH.md；備份分支 backup/pre-trayzpitch-20261006（cpp、web）＋ D:\HT9045\_tray9050_1006\backup_web_224055。**之前**：9050 流程（910 Eastsun 0819）讀每層一格的 Prod.TrayZ_Up/Down[MAX_TRACK=9]（層號 -1..19 越界）、EmptyZ_*／Auto1~3Z_*[20]、Home／抬升／探測起始層——沒有 ini 鍵、畫面或程式寫過（全 0）；HOME 的 W906_HomePos 在 HT9050 回 0。**現在**：LastSet.h TECH 最後一欄同行加 iTrayZ9050UpBase/DownBase/Pitch/Home/Lift[5]、ProbeStart、ProbeLimit；cinitial.cpp EOF W906_TrayZ9050(zone,up,layer)=base−layer×pitch、Home／Lift／ProbeStart／ProbeLimit（0＝20）直接讀 Tech（教導頁存檔後下一次移動就生效）；acatchtray.cpp（Loader 取盤、Empty 取／放盤、Auto1~3 放盤）、asendic_Loader.cpp（補盤、待命、Home、探測 1100/1110/1115/1120/1125、極限取代寫死的 MAX_LOADER_LAYER_9050）、csystem.cpp DoReceiveAllToBottom_9050、uhome.cpp HOME 的 Loader Z 全部同行改呼叫；流程步驟／++ 時機／每步 Up/Down/Home/Up+lift 照 910 不動；golden asendic.cpp 的 TrayZ_Up 與 cinitial 寫入不動。教導點：tools/gen_teach_registry.py EXT_ROWS +27（5 區 × 上位基準／下位基準／pitch／Home／抬升＋Loader 探測起始層／極限，鍵 setEditTZ9050*，段 [MLoaderZ]／[MEmptyZ]／[MAuto1Z..3Z]），fTeachRegistry.cpp 只換擴充區塊（+27 行），gen_teach_editlist.py 重生 Teach.gen.inc／WebTeachButtons.gen.inc，--check 通過。web：HW.teach.html Tray Arm 頁 gbW906TrayZ9050（上位／下位／Home 有 Set／GO），teach-access.json／js +15 techPoints，ht9045_teach_3axes_c.js 加 5 軸＋機型閘（parent.MACHINE.id＝HT9050）；無頭瀏覽器 HT9050 顯示且 Set 已綁、HT9045 隱藏。測試：Flow9050_Tray 104/104（Tech 設成與原 Prod 值逐層相同＋新 [TZ] 公式段：-1..19 層、pitch 減、Home／抬升、界外 zone＝0、探測極限預設 20／可設）、WebMotorAccess（EXT 7→34）、TeachButtonsGen、GA1_LastSet、TeachKb 等過；GearTeachSave＝已知（缺快照參數）。Debug 22:49、release 22:57（只編受影響目標） | 第一次開機 27 值＝0，要先教；EastSun 實機確認 | 本 commit |
++| 141 | **安全 PLC 門其實沒在偵測——兩個缺陷修正（W906-PLCDOOR-2）**（EastSun 1006「請你檢查enable的io有哪些還沒有實際功能」→ IO 盤點代理；第 138／139 條我回報「功能已編入」是錯的）。①MyLaneIo.cpp:526 引擎讀 PLC 列的 IOInputBit 照 golden 只收 Port 0x300..0x303、其他回 true ⇒ SnAllSafeDoor 0x310（第 138 條的合成全門位元）永遠讀成「關」；tests [5] 走 TMyPLC_IO_Modbus::IsOn 另一條路所以綠。改：iSafePlcModel==1 時上限 0x310（同行），型號 0 照 golden。②InitialSafeDoor：JerryYang 20260926「安全門還沒好, 暫時MARK掉」（cinitial.cpp:3044-3050）與 SAFE_DOOR_AMOUNT=1（:3083-3084）在 PLC 強制啟用（:2792-2797）之後把門全關 ⇒ IsOff() 恆 false、MES1611～永不跳。改：InitialSafeDoor 結尾同行呼叫 cinitial.cpp EOF W906_SafeDoorPlcEnable——只在 SafePlcIO=1＋SafePlcModel=1、且 IO 表把該門放在 PLC（ISABase 4）時重新啟用（Type 1）；其他門與其他設定的暫時 MARK 照舊。tests/test_myplc_modbus.cpp [6]（走 MyLaneIO.IOInputBit 與 Sen.Enable）：69／69；Flow9050_Tray 104／104。Debug 23:1x、release 23:1x（只編受影響目標）。IO 盤點其餘結果（303 筆 Enable=1：有功能 92、沒功能 187、介於 24）見回覆，未改 | 開機後要確認 [SAFEPLC] 連線、門／急停警報；IO 盤點其餘項目待 EastSun 指示 | 本 commit |
+ | — | **還沒完成**（10-06 晚更新）：①**實體面板**：已知是 RS-232 面板接 COM4／115200（ControlPanelMode=1、[TrayY] COM PORT=COM4，第 134 條），15:24 有回應；之後線被拔掉，接回後還沒驗按鍵與燈（包 161 已收 St02 P1b 照 golden 分段讀）；面板回的是位址 1，若燈仍不亮要查前／後面板位址。②**1203 模組檢查（WAR16154）**：已整合，代碼表在第 134 條補上。③**關 HMI 視窗時程式還沒開好**的情況：修法已規劃。④**安全迴路**：16:12 起 OSSD 一直 0（M1S OSSD 紅燈）、Input byte1 bit0 自 17:10:59 為 0 ⇒ 1203 從站沒上線；要全部急停放開＋按 PLC 復歸（250 ms～5 s）。⑤**安全 PLC 點位**：SnAllEMG／SnAllSafeDoor 待 EastSun 說明監看時段的操作（D:\HT9045\_plc_1006\plc_watch400.log）；SafePlcIO 維持 0；若在 Input byte ≥4 要擴充 MyLaneIO（golden 只認 Port 0x300～0x303）。⑥**遠端復歸**：MOSAIC 的 Fieldbus Input 不是安全輸入，只能經 MSD 專案的 USER／MACRO RESTART，需整合商改專案＋風險評估。⑦**溫控 COM12**：開機「Temperature KT4H : COM12 port error」，[TempCtrl] COM_PORT=COM12 這台沒有（只有 COM1～6）。⑧**TFT**：「Bin display got error!!」來自 Fix1～6 沒裝；要不要 HT9050 不掃待裁決。⑨**早上未測**：INDEX_MOTION_CARD=1 首次 HOME／Z1、F9050-FIX2 首跑、IOFIX 故障路徑（都要等④） | — | 見 §4 |
+ | 41 | **VC4 閥值自己測**（EastSun「VC4 你自己測試 寫進去哪個位置 數值讀回來 會改變 自己推出來 用VC8」）：等 EastSun F5 後，用 Vacuum Unit 同一條命令對一格寫 -30 kPa、讀回、再寫回原值 | （測試中） | — |
+ | — | 關掉軟體後 VS Code 上方的除錯工具列還在：wb_serve／gdb 都已經結束、8055 沒人佔，是 VS Code 沒發現結束；按紅色方塊即可（只會跑關站腳本，沒有東西可關） | — | — |
+diff --git a/tests/test_myplc_modbus.cpp b/tests/test_myplc_modbus.cpp
+index 1f81651..4c8db37 100644
+--- a/tests/test_myplc_modbus.cpp
++++ b/tests/test_myplc_modbus.cpp
+@@ -393,7 +393,7 @@ int main()
+     test_clientsocket_sim();
+     test_modbustcpclient();
+     test_myplc_io_modbus();
+-    test_m1s_model();   void test_m1s_alldoors(); test_m1s_alldoors();   // AI(W906-PLCMODEL) 20261006   // AI(W906-PLCDOOR) 20261006: [5], end of file
++    test_m1s_model();   void test_m1s_alldoors(); test_m1s_alldoors();   void test_m1s_engine_path(); test_m1s_engine_path();   /*AI(W906-PLCDOOR-2) 20261006: [6], end of file*/   // AI(W906-PLCMODEL) 20261006   // AI(W906-PLCDOOR) 20261006: [5], end of file
+ 
+     printf("\n-------------------------------------------------------------\n");
+     printf(" RESULT: %d passed, %d failed\n", g_pass, g_fail);
+@@ -467,3 +467,46 @@ void test_m1s_alldoors()
+     for (int i = 0; i < MAX_SAFE_DOOR_CNT; ++i) Sen[iSafeDoor[i]].ISABase = 0;
+     iSafePlcModel = 0;
+ }
++
++// ===========================================================================
++//  [6] AI(W906-PLCDOOR-2) 20261006: the ENGINE's path, not TMyPLC_IO_Modbus::IsOn. IO audit 20261006: Sen[] reads PLC rows through
++//      MyLaneIO.IOInputBit (MyLaneIo.cpp), whose golden 0x300..0x303 cap answered `true` for SnAllSafeDoor 0x310 -> the made bit was
++//      never seen; and InitialSafeDoor's temporary MARK switched the PLC doors off -> IsOff() always false. [5] passed through IsOn.
++// ===========================================================================
++#include "MyLaneIo.h"
++extern bool Enable_PLCSafety_IO;
++void W906_SafeDoorPlcEnable();
++void test_m1s_engine_path()
++{
++    printf("\n[6] SafePlcModel=1 through the engine's path: MyLaneIO.IOInputBit for Port 0x30F / 0x310, and the PLC doors re-enabled\n");
++    bPLCIO[0x310][0] = true;  bPLCIO[0x30F][7] = true;
++    iSafePlcModel = 1;
++    bPLCInData[0][17][0] = false;  bPLCInData[0][16][7] = true;
++    const bool off310 = MyLaneIO.IOInputBit(0, 0, 0x310, 0, ePLCbase, "SnAllSafeDoor");
++    const bool on30F  = MyLaneIO.IOInputBit(0, 0, 0x30F, 7, ePLCbase, "last input bit");
++    bPLCInData[0][17][0] = true;
++    const bool on310  = MyLaneIO.IOInputBit(0, 0, 0x310, 0, ePLCbase, "SnAllSafeDoor");
++    CHECK(off310 == false && on310 == true && on30F == true,
++          "model 1: Port 0x310 bit 0 reads the made all-doors bit (0 -> open, 1 -> closed); Port 0x30F reads Input byte 15");
++    iSafePlcModel = 0;
++    bPLCInData[0][17][0] = false;
++    CHECK(MyLaneIO.IOInputBit(0, 0, 0x310, 0, ePLCbase, "SnAllSafeDoor") == true,
++          "model 0 (golden): Port 0x310 is outside golden's 0x300..0x303 and answers true, unchanged");
++    bPLCIO[0x310][0] = false;  bPLCIO[0x30F][7] = false;
++
++    const bool savedPlc = Enable_PLCSafety_IO;
++    Sen[SnSafeDoor1].ISABase = ePLCbase; Sen[SnSafeDoor1].Enable = false; Sen[SnSafeDoor1].Type = 0;
++    Sen[SnSafeDoor9].ISABase = 0;        Sen[SnSafeDoor9].Enable = false;
++    Enable_PLCSafety_IO = true; iSafePlcModel = 0;
++    W906_SafeDoorPlcEnable();
++    CHECK(Sen[SnSafeDoor1].Enable == false, "model 0: the temporary door MARK is left alone");
++    iSafePlcModel = 1;
++    W906_SafeDoorPlcEnable();
++    CHECK(Sen[SnSafeDoor1].Enable == true && Sen[SnSafeDoor1].Type == 1 && Sen[SnSafeDoor9].Enable == false,
++          "SafePlcIO=1 + model 1: a PLC door (ISABase 4) is enabled again (Type 1); a door not on the PLC stays off");
++    Enable_PLCSafety_IO = false; Sen[SnSafeDoor1].Enable = false;
++    W906_SafeDoorPlcEnable();
++    CHECK(Sen[SnSafeDoor1].Enable == false, "SafePlcIO=0: nothing re-enabled");
++    Sen[SnSafeDoor1].ISABase = 0;
++    Enable_PLCSafety_IO = savedPlc; iSafePlcModel = 0;
++}
+\ No newline at end of file
+-- 
+2.55.0.windows.5
+
