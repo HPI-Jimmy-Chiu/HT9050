@@ -1,5 +1,40 @@
 # AGENTS.md — HT9045 自動化測試機台控制軟體
 
+## GPT / Codex 專案入口（20261006）
+
+本檔是 Codex 的專案入口。共用知識沿用本 repo 的 `CLAUDE.md`、`.claude/agents/` 與 `.claude/skills/`；不建立第二套技能鏡像，也不重建已退役的 `.agents/skills/`。
+
+### 開工與規則讀取
+
+- 先確認 repo、目前分支、`git status --short` 與 remote；fetch 後比較 `HEAD` 與 `origin/main`。有未提交改動時保留原狀，不自動 stash、reset 或換掉使用者分支；需要最新基準時用獨立工作樹，或用 `git show origin/main:<路徑>` 讀正本。
+- 讀最新 `CLAUDE.md` 的協作方式、Agent 分流與本次主題相關規則。其 `@AGENTS.md` 是 Claude 的 import 寫法；讀到時本檔已載入，不要循環重讀。
+- 修改前讀 `.claude/ops/write-boundary-policy.json` 並遵守唯讀與備份邊界。Claude 的 `.claude/settings.json` hooks 不代表已在 Codex 執行，不得宣稱有自動攔截保護。
+- 使用者當前指示優先於 repo 的歷史流程；遇到矛盾先確認版本、裁決日期與適用角色，勿把 Jimmy 筆電／ST01／ST02 的權責套給另一角色。
+- 對使用者的說明及文件用繁體中文；專案知識、裁決、驗證結果記在 repo 的既有文件位置，避免只存在個人記憶。
+
+### 按工作主題讀取
+
+下列 agent 檔在 Codex 中先作為工作規則與技能索引讀取；只有本次任務需要且已獲授權時才委派子代理，不把 Claude 的工具名稱當成 Codex 已安裝的工具。
+
+| 工作主題 | 規則入口（相對本 repo） |
+| --- | --- |
+| HT9045 程式與版本判斷 | `.claude/agents/ht9045-agent.md` |
+| V912 量產維護，Big5 / BCB6 / pre-C++11 | `.claude/agents/ht9045-v912.md` |
+| V899 客戶機台對照，唯讀 | `.claude/agents/ht9045-v899.md` |
+| V906 C++ 移植與 Web HMI，UTF-8 / C++17 / CMake | `.claude/agents/ht9045-v906.md` |
+| HT9050 硬體與機台事實，先查證再改程式 | `.claude/agents/ht9050-agent.md` |
+| 交接、代跑、todo / done、協作紀錄 | `.claude/agents/co-work-agent.md` |
+| 客訴與週報 | `.claude/agents/case-coordinator.md`、`.claude/agents/weekly-report.md` |
+| RD5 入口網站，repo `9050motionview` | 該 repo 的 `AGENTS.md`、`.claude/agents/rd5-portal-agent.md` |
+
+- 技能權威仍是 `.claude/skills/<name>/SKILL.md`。先讀所選 agent 的技能表，再讀適用技能及必要 references；清冊 `docs/ops/registers/skill-registry.md` 用來找入口，實際檔案與最新裁決才是依據。
+- 若 session 的技能清單沒有列出 repo 技能，直接讀上述 `SKILL.md` 並遵循適用流程；不要假設 `.claude/skills/` 自動被 Codex 註冊。Claude 的 `Skill`、`Task`、斜線指令與 `/loop` 不是可直接照抄的 Codex API；先讀對應檔案，再用本 session 可用工具執行已授權的工作。
+- 本文下方 BCB6 / Big5 規則適用 BCB6 樹；V906 移植樹依其 agent 規則使用 C++17 / UTF-8。V906 建置先讀 `cpp_build`，BCB6 建置先讀 `bcb_build`；文件入口修改只需檢查差異與引用，不啟動機台或執行期設定測試。
+- HT9050 執行期測試遵守下方機台快照同步、備份與還原流程。模擬／真機依建置期 `SOFT_SIMULTE`，不可重新加入已退場的 `--dry` 啟動參數；硬體操作須符合當次授權與機台現場條件。
+- 推送依使用者授權與對應 repo 流程，只提交本次檔案。跨同事整合走 MR；RD5 入口網站走分支與 MR 給 ST02-M。HT9045 main 的機台包交付規則仍依最新 `CLAUDE.md`，不可將私有 repo 歷史推到公開 GitHub。
+
+Codex 入口方式參考：[OpenAI 官方 AGENTS.md 說明](https://developers.openai.com/codex/guides/agents-md)。
+
 ## 專案概述
 
 HT9045 是一套用於半導體 / 電子元件自動化測試的 **Handler 控制軟體**，負責管理自動化取放臂、多站點測試、溫度控制、Shuttle 機構、Socket 測試及生產追蹤等功能。
@@ -234,4 +269,4 @@ GitLab 那份照 RULINGS_20261002 第 21 條是**單向**的（機台 → GitHub
 - 技能檔案位置：`.claude/skills/<name>/SKILL.md`
   （Steven 20260918：原本寫 `.agents/skills/`，該目錄已退場 —— 理由見 `CLAUDE.md` 的同日註）
 - 技能清冊與盤點：`docs/ops/registers/skill-registry.md`
-- 目前共 17 個 Skill，涵蓋 InArm / OutArm / Index / Shuttle / CatchTray / AutoClean / SECSGEM / AutoStart / LotInfo / ContactForce / V899 版本 / 編譯 / 資料分析等領域
+- 技能數量依目前版本的 `.claude/skills/*/SKILL.md` 實檔為準，不在入口維護固定數字；涵蓋機構流程、通訊、溫控、Web HMI、建置、協作與資料分析等領域。
