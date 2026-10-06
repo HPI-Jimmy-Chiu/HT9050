@@ -1,241 +1,99 @@
 # G30 — B12 · `HT-9045WH`
 
-> **群組**：B12 (HT-9045 12-site GPIB 變體 (9045GPIB_12Site))  
-> **HPP**：HPP=0 (窄 HP)  
-> **GearRatio**：GearY~0.350(SMC)  
-> **樣本數**：4 筆  
-> [← 返回索引](../teach-position-statistics.md)
+舊引用路徑保留；[讀取整理後文件](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md)。
 
 ## G30 · `HT-9045WH` · HPP=0 (窄 HP ~-46000) · GearY~0.350(SMC)
 
-- **機台群組**：B12 （HT-9045 12-site GPIB 變體 (9045GPIB_12Site)）
-- **SubModel 分布**：0×4
-- **Picker (USE_PICKER_COUNT) 分布**：1×4
-- **Y Pitch (USE_IN_OUT_ARM_Y_PITCH) 分布**：0×4
-- **GPIB Model 分布**：`9045GPIB_12Site`×4
-- **樣本數**：4 筆 state record
-- **獨立機台數**（依 Serial No 計）：4 台
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#g30--ht-9045wh--hpp0-窄-hp--46000--geary0350smc)
 
 ### 機台清單
 
-| Serial No | Factory | 樣本數 |
-|-----------|---------|--------|
-| `ELD105` | KYEC | 1 |
-| `ELD106` | KYEC | 1 |
-| `ELD799` | KYEC | 1 |
-| `ELD802` | KYEC | 1 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#機台清單)
 
 ### 來源 State Records（最多列 15 筆）
 
-- `JSCC\2024-11-02 20_13_02` &nbsp;*(S/N: ELD802)*
-- `JSCC\2024-11-05 13_04_42` &nbsp;*(S/N: ELD105)*
-- `JSCC\2024-12-01 17_42_31_854.4` &nbsp;*(S/N: ELD106)*
-- `JSCK\2025-08-05 10_06_00` &nbsp;*(S/N: ELD799)*
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#來源-state-records最多列-15-筆)
 
 ### Teach Position 統計
 
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#teach-position-統計)
+
 #### `[MInArmPitch]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditInXPitch120` | 4 | 24 | 36.5 | 76 | 4 | 34×1, 24×1, 39×1 |
-| `setEditInXPitch40` | 4 | -5302 | -5282 | -5272 | 3 | -5282×2, -5272×1, -5302×1 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#minarmpitch)
 
 #### `[MInArmX]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditAutoCleanX` | 4 | 11356 | 11532 | 15042 | 4 | 11677×1, 15042×1, 11356×1 |
-| `setEditHP1X` | 4 | 1476 | 1517 | 1581 | 4 | 1476×1, 1556×1, 1581×1 |
-| `setEditHP2X` | 4 | 1432 | 1522 | 1550 | 4 | 1497×1, 1547×1, 1550×1 |
-| `setEditInSht1X` | 4 | 31608 | 31981 | 32065 | 4 | 32015×1, 31608×1, 32065×1 |
-| `setEditInSht2X` | 4 | 31580 | 31957.5 | 32100 | 4 | 32038×1, 31580×1, 32100×1 |
-| `setEditLoaderX` | 4 | 20879 | 20948.5 | 20975 | 3 | 20975×2, 20922×1, 20879×1 |
-| `setInPickX` | 4 | 21369 | 21369 | 21369 | 1 | 21369×4 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#minarmx)
 
 #### `[MInArmY]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditAutoCleanY` | 4 | -85443 | -85277 | -33435 | 4 | -85134×1, -33435×1, -85443×1 |
-| `setEditHP1Y` | 4 | -50201 | -50137 | -50041 | 4 | -50041×1, -50176×1, -50201×1 |
-| `setEditHP2Y` | 4 | -6746 | -6670 | -6646 | 4 | -6677×1, -6646×1, -6663×1 |
-| `setEditInSht1Y` | 4 | -37800 | -37769 | -37732 | 4 | -37800×1, -37767×1, -37771×1 |
-| `setEditInSht2Y` | 4 | -5864 | -5813.5 | -5752 | 4 | -5856×1, -5752×1, -5771×1 |
-| `setEditLoaderY` | 4 | -56097 | -56032 | -55964 | 4 | -56011×1, -56097×1, -56053×1 |
-| `setInPickY` | 4 | -58054 | -58054 | -58054 | 1 | -58054×4 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#minarmy)
 
 #### `[MInArmZE]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `SetEditAutoClean` | 4 | -1430 | 0 | 0 | 2 | 0×3, -1430×1 |
-| `SetEditHP` | 4 | -1450 | -1430 | -1430 | 2 | -1430×3, -1450×1 |
-| `SetEditPickLoader` | 4 | -2280 | -2105 | -1860 | 4 | -2080×1, -2130×1, -2280×1 |
-| `SetEditPlaceInShuttle` | 4 | -1840 | -1740 | -1620 | 3 | -1740×2, -1840×1, -1620×1 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#minarmze)
 
 #### `[MInShutte1]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `edtEditInSht1OctSiteKit` | 4 | 9900 | 10765 | 11680 | 4 | 11680×1, 9900×1, 11000×1 |
-| `edtSetEditIS1BarCode` | 4 | 11630 | 11630 | 11630 | 1 | 11630×4 |
-| `edtSetEditOS1BarCode` | 4 | 20456 | 20456 | 20456 | 1 | 20456×4 |
-| `setEditInSht1Left` | 4 | -55 | -24 | 7 | 4 | 7×1, 0×1, -55×1 |
-| `setEditInSht1Right` | 4 | 38432 | 38473.5 | 38499 | 4 | 38499×1, 38481×1, 38466×1 |
-| `setEditOutSht1KitPos` | 4 | 20459 | 20518 | 20542 | 4 | 20516×1, 20459×1, 20520×1 |
-| `setEditOutSht1OneRowKit` | 4 | 20310 | 20420 | 20496 | 3 | 20420×2, 20496×1, 20310×1 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#minshutte1)
 
 #### `[MInShutte2]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `edtEditInSht2OctSiteKit` | 4 | 9900 | 10741.5 | 11680 | 4 | 11680×1, 9900×1, 11000×1 |
-| `edtSetEditIS2BarCode` | 4 | 10103 | 10103 | 10103 | 1 | 10103×4 |
-| `edtSetEditOS2BarCode` | 4 | 20405 | 20405 | 20405 | 1 | 20405×4 |
-| `setEditInSht2Left` | 4 | -53 | -39.5 | -17 | 4 | -53×1, -17×1, -34×1 |
-| `setEditInSht2Right` | 4 | 38430 | 38467.5 | 38487 | 4 | 38487×1, 38476×1, 38459×1 |
-| `setEditOutSht2KitPos` | 4 | 20440 | 20467 | 20563 | 4 | 20452×1, 20563×1, 20440×1 |
-| `setEditOutSht2OneRowKit` | 4 | 20366 | 20405 | 20429 | 4 | 20400×1, 20429×1, 20366×1 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#minshutte2)
 
 #### `[MOutArmPitch]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditOutXPitch120` | 4 | -44 | 60.5 | 94 | 4 | 32×1, -44×1, 94×1 |
-| `setEditOutXPitch40` | 4 | -5366 | -5261 | -5240 | 4 | -5277×1, -5366×1, -5245×1 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#moutarmpitch)
 
 #### `[MOutArmX]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditAuto1X` | 4 | -53695 | -53214 | -53176 | 4 | -53206×1, -53695×1, -53222×1 |
-| `setEditAuto2X` | 4 | -35182 | -34715 | -34674 | 4 | -34751×1, -35182×1, -34679×1 |
-| `setEditAuto3X` | 4 | -16658 | -16198.5 | -16148 | 4 | -16188×1, -16658×1, -16209×1 |
-| `setEditFix1X` | 4 | -35781 | -35333.5 | -35289 | 4 | -35367×1, -35781×1, -35300×1 |
-| `setEditFix2X` | 4 | -21477 | -21015 | -20985 | 4 | -21026×1, -21477×1, -20985×1 |
-| `setEditFix3X` | 4 | -7183 | -6732 | -6679 | 4 | -6755×1, -7183×1, -6679×1 |
-| `setEditOutSht1X` | 4 | -49044 | -48529.5 | -48494 | 4 | -48539×1, -49044×1, -48520×1 |
-| `setEditOutSht2X` | 4 | -48959 | -48507.5 | -48469 | 4 | -48530×1, -48959×1, -48485×1 |
-| `setOutPickX` | 4 | -53509 | -53509 | -53509 | 1 | -53509×4 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#moutarmx)
 
 #### `[MOutArmY]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditAuto1Y` | 4 | -55985 | -55876.5 | -55765 | 4 | -55896×1, -55985×1, -55765×1 |
-| `setEditAuto2Y` | 4 | -55945 | -55894 | -55764 | 4 | -55940×1, -55945×1, -55764×1 |
-| `setEditAuto3Y` | 4 | -55928 | -55848.5 | -55777 | 4 | -55928×1, -55882×1, -55777×1 |
-| `setEditFix1Y` | 4 | -10369 | -10349.5 | -10315 | 4 | -10315×1, -10369×1, -10352×1 |
-| `setEditFix2Y` | 4 | -10359 | -10344.5 | -10296 | 4 | -10296×1, -10359×1, -10352×1 |
-| `setEditFix3Y` | 4 | -10352 | -10343.5 | -10293 | 4 | -10293×1, -10350×1, -10352×1 |
-| `setEditOutSht1Y` | 4 | -37755 | -37728.5 | -37725 | 4 | -37729×1, -37755×1, -37725×1 |
-| `setEditOutSht2Y` | 4 | -5740 | -5728 | -5720 | 4 | -5727×1, -5729×1, -5720×1 |
-| `setOutPickY` | 4 | -57878 | -57878 | -57878 | 1 | -57878×4 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#moutarmy)
 
 #### `[MOutArmZE]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `SetEditPickOutSht` | 4 | -1830 | -1690 | -1590 | 3 | -1690×2, -1590×1, -1830×1 |
-| `SetEditPlaceAuto` | 4 | -2020 | -1850 | -1850 | 2 | -1850×3, -2020×1 |
-| `SetEditPlaceFix` | 4 | -1290 | -1140 | -1140 | 2 | -1140×3, -1290×1 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#moutarmze)
 
 #### `[MTestY1]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditIndex1ToSht1Y` | 4 | -364 | -303 | -237 | 4 | -334×1, -237×1, -364×1 |
-| `setEditIndex1ToSocketY` | 4 | 15607 | 15688.5 | 15763 | 4 | 15653×1, 15724×1, 15607×1 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#mtesty1)
 
 #### `[MTestY2]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditIndex2ToSht2Y` | 4 | 235 | 273.5 | 316 | 4 | 235×1, 316×1, 295×1 |
-| `setEditIndex2ToSocketY` | 4 | -15726 | -15697.5 | -15644 | 4 | -15726×1, -15644×1, -15710×1 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#mtesty2)
 
 #### `[MTestZ1]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditIndex1ToSht1Z` | 4 | -6357 | -4778.5 | -4357 | 3 | -4357×2, -5200×1, -6357×1 |
-| `setEditTestZSafePos` | 4 | 10 | 10 | 10 | 1 | 10×4 |
-| `setEditWaitTestZDown` | 4 | -500 | -500 | -500 | 1 | -500×4 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#mtestz1)
 
 #### `[MTestZ2]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditIndex2ToSht2Z` | 4 | -6306 | -4753 | -4306 | 3 | -4306×2, -5200×1, -6306×1 |
-| `setEditTestZSafePos` | 4 | 10 | 10 | 10 | 1 | 10×4 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#mtestz2)
 
 #### `[MTrayX]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditTrayAuto1X` | 4 | 79110 | 79257.5 | 79370 | 4 | 79110×1, 79370×1, 79290×1 |
-| `setEditTrayAuto2X` | 4 | 97540 | 97697.5 | 97820 | 4 | 97540×1, 97820×1, 97770×1 |
-| `setEditTrayAuto3X` | 4 | 115970 | 116127.5 | 116280 | 4 | 115970×1, 116280×1, 116205×1 |
-| `setEditTrayColorX` | 4 | 50110 | 50190 | 50300 | 4 | 50110×1, 50300×1, 50265×1 |
-| `setEditTrayEmptyX` | 4 | 28430 | 28552.5 | 28640 | 4 | 28430×1, 28640×1, 28610×1 |
-| `setEditTrayLoaderX` | 4 | -4045 | -3960 | -3880 | 4 | -4045×1, -3900×1, -3880×1 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#mtrayx)
 
 #### `[ArmAlignment]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `InArmAlignmentPitch_Y` | 2 | 0 | 750 | 1500 | 2 | 0×1, 1500×1 |
-| `InArmZAlignmentAa` | 1 | -500 | -500 | -500 | 1 | -500×1 |
-| `InArmZAlignmentAb` | 1 | -500 | -500 | -500 | 1 | -500×1 |
-| `InArmZAlignmentAc` | 1 | -500 | -500 | -500 | 1 | -500×1 |
-| `InArmZAlignmentAd` | 1 | -500 | -500 | -500 | 1 | -500×1 |
-| `InArmZAlignmentBa` | 1 | -500 | -500 | -500 | 1 | -500×1 |
-| `InArmZAlignmentBb` | 1 | -500 | -500 | -500 | 1 | -500×1 |
-| `InArmZAlignmentBc` | 1 | -500 | -500 | -500 | 1 | -500×1 |
-| `InArmZAlignmentBd` | 1 | -500 | -500 | -500 | 1 | -500×1 |
-| `OutArmAlignmentPitch_Y` | 2 | 0 | 750 | 1500 | 2 | 0×1, 1500×1 |
-| `OutArmZAlignmentAa` | 1 | -500 | -500 | -500 | 1 | -500×1 |
-| `OutArmZAlignmentAb` | 1 | -500 | -500 | -500 | 1 | -500×1 |
-| `OutArmZAlignmentAc` | 1 | -500 | -500 | -500 | 1 | -500×1 |
-| `OutArmZAlignmentAd` | 1 | -500 | -500 | -500 | 1 | -500×1 |
-| `OutArmZAlignmentBa` | 1 | -500 | -500 | -500 | 1 | -500×1 |
-| `OutArmZAlignmentBb` | 1 | -500 | -500 | -500 | 1 | -500×1 |
-| `OutArmZAlignmentBc` | 1 | -500 | -500 | -500 | 1 | -500×1 |
-| `OutArmZAlignmentBd` | 1 | -500 | -500 | -500 | 1 | -500×1 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#armalignment)
 
 #### `[InArm]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `AutoCleanPick` | 4 | -1450 | -1430 | -1430 | 2 | -1430×3, -1450×1 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#inarm)
 
 #### `[InArmZSub]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `Picker Aa` | 4 | -41 | 35 | 59 | 4 | -41×1, 20×1, 59×1 |
-| `Picker Ab` | 4 | -66 | 16.5 | 63 | 4 | -66×1, 10×1, 63×1 |
-| `Picker Ad` | 4 | -60 | -13.5 | 84 | 4 | -30×1, -60×1, 84×1 |
-| `Picker Ba` | 4 | 10 | 49 | 62 | 4 | 62×1, 10×1, 51×1 |
-| `Picker Bb` | 4 | 0 | 29 | 60 | 4 | 32×1, 0×1, 60×1 |
-| `Picker Bc` | 4 | -20 | 40.5 | 61 | 4 | 61×1, -20×1, 48×1 |
-| `Picker Bd` | 4 | -10 | 19 | 31 | 4 | 9×1, -10×1, 29×1 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#inarmzsub)
 
 #### `[OutArmZSub]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `Picker Aa` | 4 | -20 | 15 | 35 | 4 | 0×1, 30×1, 35×1 |
-| `Picker Ab` | 4 | -9 | 5 | 13 | 4 | 0×1, 10×1, 13×1 |
-| `Picker Ad` | 4 | -12 | 0 | 12 | 3 | 0×2, 12×1, -12×1 |
-| `Picker Ba` | 4 | -60 | -23 | 20 | 4 | -60×1, 20×1, -9×1 |
-| `Picker Bb` | 4 | -50 | -12.5 | 71 | 4 | -50×1, 10×1, 71×1 |
-| `Picker Bc` | 4 | -30 | -13 | 23 | 4 | -30×1, -20×1, 23×1 |
-| `Picker Bd` | 4 | -30 | -8 | 36 | 4 | -10×1, -30×1, 36×1 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#outarmzsub)
 
 #### `[Teach INI]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `Update2` | 4 | 1 | 1 | 1 | 1 | 1×4 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G30-B12-HT-9045WH-HPP0-SMC.md#teach-ini)

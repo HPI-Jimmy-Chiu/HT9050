@@ -50,7 +50,8 @@ description: >
 
 ## 2. 驗證規則（編譯＋本機跑 ctest）
 
-- **Steven 1005 13:2x 在 St02-E 的 session 直接說「你可以在這台電腦上跑測試」**（取代舊的「本機只編譯、執行驗證一律給 St01」；St01 也已不再代跑）。
+- **Steven 1005 13:2x 在 St02-E 的 session 直接說「你可以在這台電腦上跑測試」**（取代舊的「本機只編譯、執行驗證一律給 St01」；St01 也已不再代跑）。**不再派任何工作給 St01**（Steven 1005 11:5x，St02-M 1006 00:1x 轉述）：下面第 20／25／28 條等處寫「請 St01 代跑」的，一律改成本機跑；本機真的跑不了（例：要真機台）就在 MR 與 §2 寫「<測試>: laptop gate」。
+- **每次測試前**（RULINGS_20261005 第 6 條補充，不用問）：樹更新到 main 最新 → `python tools/machine_sync/machine_sync.py check`，未同步就 `apply --yes` → 測 → `restore <備份資料夾>`；回報寫 main commit＋機台快照時間。沒做的結果不算數。計數那一輪在機器空閒時依序跑（SIM 再 SHIP，-j3 左右），不要跟建置同時跑（1005 22:3x 實測：同時跑讓計時測試和 FShow_Audit 都逾時）。
   ctest 在自己的 obj 目錄跑：`ctest --test-dir <obj>\build -R "^(名1|名2)$" --output-on-failure < /dev/null`（bash，先 `cd /d/HT9045`）；SIM 跑完再跑 SHIP，**不要兩組態同時跑**（固定暫存名的舊測試會互撞，§5 第 49 條）。
   F-Secure 沒擋 ctest 的測試執行檔（1005 13:27 實測）；不動防毒。ctest 照舊不可寫真檔（§4）。測試以外的 exe（wb_serve 等）沒有被授權，照舊不跑。
   ⚠ 這台沒有 HAVE_PCI1203（CMakeCache 0 筆），不會碰到 1203 卡。
@@ -58,8 +59,9 @@ description: >
   - sim：`& "D:\HT9045\HT9011UC_Cpp_V3.33.906.0\build.bat"`（PowerShell，全路徑；PATH 前面加 `C:\CMake\bin`）。
   - ship：`$env:V906_BUILD_DIR="build_ship"; $env:V906_CMAKE_ARGS="-DW906_NO_SOFT_SIMULTE=ON"` 再跑 build.bat。預設 -O，**不要 Release**。
   - 背景跑：`run_in_background`，log 寫到 scratchpad；看 `Build OK` 與 `error:` 數；確認改過的 TU 真的有編（grep `<檔名>.obj`）。
-  - 獨立 worktree 用自己的 obj 根：`$env:V906_OBJ_ROOT="D:\AI_TempFile\<worktree>-obj"`。
-  - 第二條建置線（20261002）：`C:\Users\steven\AppData\Local\Temp\claude\d---github\c8311755-ee3b-4c2b-9f5f-bc5682ac9613\scratchpad\s09close\build_lane.ps1 -Src D:\AI_TempFile\<worktree> -ObjRoot D:\AI_TempFile\<worktree>-obj -Cfg sim|ship -Tag X`（用那棵樹自己的 build.bat；log 在同一個 s09close）。st02-speed 那條（build_speed.ps1）切 commit 會造成大量重編，分支多的時候另開一條線比排隊快。
+  - **暫存與工作樹一律在 `C:\AI_TempFile\`**（Steven 1005 14:2x 定案；1005 18:2x 起 St02 的工作樹都在這裡，D 槽留著的是 `.git.moved` 舊副本與舊 obj，不要再用）。新的腳本與 log 放 `C:\AI_TempFile\st02e-scratch\`。
+  - 獨立 worktree 用自己的 obj 根：`$env:V906_OBJ_ROOT="C:\AI_TempFile\<worktree>-obj"`。
+  - 第二條建置線（20261002）：`C:\Users\steven\AppData\Local\Temp\claude\d---github\c8311755-ee3b-4c2b-9f5f-bc5682ac9613\scratchpad\s09close\build_lane.ps1 -Src C:\AI_TempFile\<worktree> -ObjRoot C:\AI_TempFile\<worktree>-obj -Cfg sim|ship -Tag X`（用那棵樹自己的 build.bat；log 在同一個 s09close）。st02-speed 那條（build_speed.ps1）切 commit 會造成大量重編，分支多的時候另開一條線比排隊快。
   - Git Bash 的 `cmd //c build.bat` 不行（not recognized）。
   - 被中斷的 build（session 結束）log 會停在某個 %，沒有 error：重跑即可。TaskStop 後確認沒有殘留 ninja／cc1plus。
 - `nm`（只讀檔）可以用，例如 R0 的「TNMFTP 只在一個 archive 定義」驗收。
@@ -70,9 +72,12 @@ description: >
 | 樹 | 分支 | 用途 |
 |---|---|---|
 | `D:\HT9045`（主 checkout） | `v906/steven-gpib-widget` | St02 主要工作分支；推之前先 merge origin/main |
-| `D:\AI_TempFile\st02-s36`、`st02-s39` | detached（建置線） | 增量建置線：原始碼樹＋`st02-s36-obj`／`st02-s39-obj`（第 32 條：要建哪個 commit 就在樹裡 `git checkout --detach <commit>`，再跑 `lane_cmake.sh`）。s39＝!180；s36＝!174 合 main 後的重建（!174 推完、進 main 後 s36 可刪） |
-| `D:\AI_TempFile\st02-ela` | `v906/steven-w42-encode`（只在本機，18 個 commit） | ★W42 報表編碼＋訊息英文化 1～3 步＋ELA messages，等 Steven（W42 Q1～Q6／W57）。不要刪 |
-| `D:\AI_TempFile\st02-s40`、`s42`～`s45` | 各 MR 分支 | s40＝S-24（本機，等 Q97）；s42＝!180、s43＝!179（已進 main）、s44＝!176（已進 main）、s45＝!174 |
+| `C:\AI_TempFile\st02-s39` | detached（建置線） | 增量建置線：原始碼樹＋`C:\AI_TempFile\st02-s39-obj`（`build`／`build_ship`；1005 18:2x 在 C 槽重新設定，第一次是完整建置）。第 32 條：要建哪個 commit 就在樹裡 `git checkout --detach <commit>`，對兩個 obj 各跑一次 `cmake <obj>`，再跑 `lane_cmake.sh`。舊的 `D:\AI_TempFile\st02-s39-obj`、`st02-s36` 留給 Steven 處理 |
+| `C:\AI_TempFile\st02-ela` | `v906/steven-w42-encode`（只在本機，19 個 commit） | ★W42 報表編碼＋訊息英文化 1～3 步＋ELA messages，等 Steven（W42 Q1～Q6／W57）。不要刪、不要推 |
+| `C:\AI_TempFile\st02-s40` | `v906/st02-s24-staterecord` | S-24＝MR !209（凍結在 `bf8984cb`，筆電第 70 批）；本機 `b5dbf1e2` 只當對照，不推 |
+| `C:\AI_TempFile\st02-esc` | `v906/st02-esc` | C18（ESC），!174 已進 main，推之前才合 main |
+| `C:\AI_TempFile\st02-s45` | `v906/st02-mainloop-rest` | !174（已進 main），可收 |
+| `D:\AI_TempFile\st02-s42`～`s44`、`st02-c12t` | 已合併的 MR 分支 | 沒搬，等 Steven 決定刪不刪 |
 | 已刪（1004 15:2x，St02-M 清理） | — | st02-on-cbridge、st02-speed、st02-mainscan 與其他 40 多棵；唯讀掃描改用 `git grep … origin/main`（不用另開樹）。要另開工作樹先 `git worktree list`，用完就請 St02-M 收（VS Code 的 git 擴充會掃 D:\AI_TempFile 底下每一棵） |
 
 - **絕不推 main**。不 merge St01 的分支進 gpib-widget（反方向可以：St01 的分支 merge 進 st02-on-cbridge）。
@@ -198,7 +203,7 @@ description: >
 ## 7. 加人手：helper agent（Steven 20260927「加派人手」）
 
 - 一件工作一個 helper（Agent 工具，subagent_type `ht9045-v906`，背景跑），各自一個 worktree＋分支＋obj 根：
-  `git worktree add -b v906/steven-<名>-wip D:\AI_TempFile\st02-<名> v906/steven-gpib-widget`。
+  `git worktree add -b v906/steven-<名>-wip C:\AI_TempFile\st02-<名> v906/steven-gpib-widget`。
 - 交代的內容：計畫檔的絕對路徑（先讀完）、範圍（哪些不要做）、第 2 與第 4 節的硬規則全文（只編不跑、build.bat 的確切指令與自己的 obj 根、共用檔只改清單上的行且行數不變、Python＋CRLF 改檔、樹名、不寫真檔、不推、掃控制字元、commit 訊息格式），以及「必要時更新 skill／reference」（使用者 20260927）。
 - 共用檔還沒認領的：helper **不改**，只在回報裡給確切的 diff；St02-E 經 St02-M 認領後再套。
 - **「不執行」要寫全**（20260928，St02-M 04:4x 定的，等 Steven 另外說）：`node --check`（只檢查語法、什麼都不執行）可以，跟編譯一樣；**用 node 跑任何腳本或測試、用 Python 驅動建出來的程式、跑任何 exe 都不行**。只用 OS API 的工具腳本（改檔／交接用的 Python、用 ctypes 呼叫 kernel32，例如 WideCharToMultiByte）可以——不跑我們建出來的程式或測試（St02-M 05:0x）。每個 helper brief 都要寫這句。只寫「不跑 exe／ctest」時，Q52 helper 用 node 跑了頁面邏輯的小測試（沒碰機台檔，但還是在本機執行了；St02-M 已告訴 Steven）。還有：同一行加程式碼一定放在 `//` 前面（W10 的教訓，`references\techniques.md` §5）。

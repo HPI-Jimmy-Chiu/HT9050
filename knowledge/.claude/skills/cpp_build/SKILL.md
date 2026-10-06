@@ -97,10 +97,15 @@ winget install --id Ccache.Ccache --scope user
 
 每一項都要在**新的建置目錄**量前後對照（表格放 MR 說明），而且 gate 的結果不能變。
 
+### 4.4a St01 1006 實測與 Steven 的決定（1006 14:0x）
+
+- St01（NVMe、22 執行緒、Ninja、只建 wb_serve）：g++ 6.3 全新 469 s／改 1 個 .cpp 51 s／碰 `cprod.h` 407 s（429 檔）；WinLibs 16.2 全新 647 s／改 1 個 .cpp **21 s**／碰 `mymotor.h` 357 s（245 檔）。細節在 `references/speedup-ideas.md` 20261006 兩列。
+- **Steven 1006 決定**：①第一階段（Ninja、只建目標、建置目錄放 SSD、ccache）直接做——Jimmy 同日 !249 也把 Ninja 推給全員（`tools/ninja_setup.ps1`）；②**編譯器要換成 WinLibs 16.2**（機台已在用）——oracle 線的切換由筆電排 gate 對照後執行，4.5 第 2 點的「不換」自此作廢、改成「換之前要有兩組態 gate 與 ctest 失敗清單對照」；③標頭瘦身與 Motor／IO 隔離的評估在 `references/header-slimming-and-motor-io-isolation-20261006.md`（結論：先做 S0 註解規則與 cmydef.h 三拆，DLL 不做；B 部分結論要併進 hpi-motor-control／hpi-io-control 的通用節）。
+
 ### 4.5 不要做
 
 - **不要自己替防毒加排除**——公司資安軟體，IT 決定（gate 的偶發逾時也跟它的 CreateFile hook 有關）。
-- 不要在 oracle 線換掉 g++ 6.3.0。
+- ~~不要在 oracle 線換掉 g++ 6.3.0。~~ Steven 1006 14:0x 決定換 WinLibs 16.2（見 4.4a）；在筆電完成 gate 對照、切換之前，oracle 線照舊用 6.3。
 - 不要開 unity build（見 4.2）。
 
 ## 5. 踩過的坑

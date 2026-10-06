@@ -1,186 +1,47 @@
 # Pn 參數與功能（HT9045 軟體與現場工程師會碰到的部分）
 
-> 來源：SIEP C710812 02H（「p.」＝PDF 頁碼）第 5、6、12、17 章。只列 HT9050 用得到的；其他 Pn 不要動——
-> 手冊明說保留參數、手冊沒寫的參數、對所接馬達無效的參數都不要從預設值改（p.759）。
+舊引用路徑保留；[讀取整理後文件](../../../hpi-motor-control/references/control/references/yaskawa-ethercat/parameters-and-functions.md)。
 
 ## 0. 參數的共通規則
 
-| 規則 | 內容 | 頁 |
-|---|---|---|
-| Pn ↔ 物件 | Pn□□□＝物件 2□□□h（例 Pn100＝2100h），範圍 2000h～26FFh | p.651、p.177 |
-| 何時生效 | 「Immediately」立即；「After restart」＝斷電重開**或** software reset 後 | p.758 |
-| 不斷電套用 | Switch ON Disabled 時寫 2700h=1，「重啟生效」的參數與 2701h～2704h 立即套用 | p.651 |
-| 存檔 | 用 EtherCAT 寫的參數要寫 1010h:1="save" 才存進非揮發記憶體；只能在 Switch ON Disabled；存完要斷電重開才能 Operation Enabled | p.177、p.635 |
-| 禁止寫入 | Fn010 只擋數位操作器；SigmaWin+ 與 EtherCAT 仍可改 | p.177 |
-| 送修 | 送安川修理的驅動器回來會變出廠值，參數要自己留記錄 | p.699 |
-| 數位操作器 | 預設只顯示 setup 參數；Pn00B=n.□□□1 顯示全部 | p.174 |
-
-樹的做法（寫 → 2700h → 1010h 三步）見 `EtherCAT\Pci1203Gear.h` 檔頭註解。
+[讀取此節](../../../hpi-motor-control/references/control/references/yaskawa-ethercat/parameters-and-functions.md#0-參數的共通規則)
 
 ## 1. 轉向：Pn000（2000h）
 
-| 位數 | 值 | 意義 | 生效 | 頁 |
-|---|---|---|---|---|
-| n.□□□X | **0（預設）** | 從負載側看 **CCW 為正轉** | After restart | p.186、p.759 |
-| | 1 | CW 為正轉（Reverse Rotation Mode） | | |
-| n.X□□□ | 0／1 | 沒接編碼器時當旋轉型／線性型驅動器啟動 | After restart | p.759 |
-
-- 改的是馬達實際轉向，**不改速度／位置命令的極性**，編碼器分周輸出的極性也不變；P-OT 永遠對應「正轉命令」方向（p.186）。
-- 範圍 0000h～10B1h、預設 0000h（p.759）。n.□□X□、n.□X□□ 保留。
-- 馬達規格本身：正轉命令時從負載側看 CCW（KAEP03 p.57、p.77）。
+[讀取此節](../../../hpi-motor-control/references/control/references/yaskawa-ethercat/parameters-and-functions.md#1-轉向pn0002000h)
 
 ## 2. 電子齒輪與使用者單位
 
-- **EtherCAT 版用 2701h～2704h 設**；Pn20E／Pn210（預設 64／1，After restart）的說明直接寫「改用 2701h～2704h」（p.788）。
-- 編碼器解析度：SGMXJ／SGMXA／SGMXP／SGMXG 型號第 4 碼 U（26 位元絕對）或 W（26 位元無電池絕對）＝**67108864 inc/rev**（p.215、p.588）。
-- 計算：1 [Pos. unit]＝2701h:1／2701h:2 [inc]；比值 0.001～64000，超出 A.040（p.214、p.651）。
-  例（p.219）：螺桿導程 6 mm、1 μm 為單位、26 位元 ⇒ 2701h:1＝67108864、2701h:2＝6000（Pn21D=n.□□□0）。
-- 速度單位例：0.1 mm/s ⇒ 2702h:1＝67108864、:2＝60；加速度 0.1 mm/s² ⇒ 2703h:1＝67108864、:2＝600000（p.220）。
-- 2704h（扭力單位）見 [object-dictionary.md](object-dictionary.md) §4。
-- 若主站也設了電子齒輪，驅動器端要配合主站的規格設（p.214）。
-- Pn21D 編碼器解析度相容（p.216、p.230）：n.□□□X 0＝關（預設）、1＝開；n.□□X□ 4／6／8（預設）／A＝當 20／22／24／26 位元用；After restart。
-  不能用在全閉、所接編碼器位元數比設定少、線性馬達、解析度不是 2ⁿ 時（p.230）。樹有對應命令（`Pci1203Control.cpp` kCmdAxSetEncCompat）。
+[讀取此節](../../../hpi-motor-control/references/control/references/yaskawa-ethercat/parameters-and-functions.md#2-電子齒輪與使用者單位)
 
 ## 3. 煞車（Holding Brake）
 
-- 馬達內建煞車是**斷電作用型、只能保持**，不能拿來煞停；只用在已停止的馬達（p.205；KAEP03 p.59、p.81 同）。
-- /BK（Brake Output）：預設 CN1-1／CN1-2（/SO1）；ON（閉合）＝放開、OFF（開路）＝煞（p.158、p.206）。
-  分配：Pn50F=n.□X□□（預設 0100h ⇒ /BK 在 CN1-1／-2）（p.239、p.803）；Σ-LINK II 分配模式用 Pn5B6（p.240）。
-  （p.207 的註把這一位寫成「/WARN Signal Allocation」Pn50F=n.X□□□，與 p.239、p.803 不一致；以 p.239／p.803 的表為準。）
-- /BK 要自己一支腳，不要跟 /TGON 等共用（OR 輸出會讓垂直軸掉下時煞車不作用）（p.207）；把 /BK 改成正邏輯會讓斷線時煞車不作用（p.238）。
-- 24 V 煞車電源要跟 CN1 I/O 電源分開；突波吸收器裝在馬達煞車端子附近，裝了要重量煞車作用延遲（p.156）。
-- **超程時 /BK 保持 ON（不煞）**（p.206）。HWBB 時 /BK 變 OFF 且 Pn506 失效（p.577）。警報時馬達立刻斷電、不管 Pn506（p.207）。
-
-煞車延遲（24 VDC、DC 側切換時的例子，實機要自己量；p.206）：
-
-| 馬達 | 放開延遲 [ms] | 作用延遲 [ms] |
-|---|---|---|
-| SGMXJ-A5～-04 | 60 | 100 |
-| SGMXJ-06、-08 | 80 | 100 |
-| SGMXA-A5～-04 | 60 | 100 |
-| SGMXA-06～-10 | 80 | 100 |
-| SGMXA-15～-25 | 170 | 80 |
-| **SGMXA-30～-70** | **100** | **80** |
-| SGMXP-01 ／ SGMXP-02、-04 ／ SGMXP-08、-15 | 20 ／ 40 ／ 20 | 100 |
-| SGMXG-03～-20 ／ -30～-44 ／ -55～-1A ／ -1E | 100 ／ 170 ／ 170 ／ 250 | 80 ／ 100 ／ 80 ／ 80 |
-| SGM7M-A1～-A3 | 60 | 100 |
-
-- **送 Servo ON 後至少等 50 ms＋放開延遲，主站才下命令**（p.206 註 *2）。
-
-| 參數 | 名稱 | 範圍 | 單位 | 預設 | 生效 | 頁 |
-|---|---|---|---|---|---|---|
-| Pn506（2506h） | Brake Reference-Servo OFF Delay Time：停止中送 Servo OFF 後，延後多久切馬達電源（垂直軸用來先煞再斷電） | 0～50 | 10 ms | 0 | 立即 | p.207、p.800 |
-| Pn507（2507h） | Brake Reference Output Speed Level：運轉中斷電，速度低於此值就 /BK OFF | 0～10000 | min⁻¹ | 100 | 立即 | p.208、p.800 |
-| Pn508（2508h） | Servo OFF-Brake Command Waiting Time：運轉中斷電，經過此時間就 /BK OFF | 10～100 | 10 ms | 50 | 立即 | p.208、p.800 |
-
-- 停止中：收到 Servo OFF（Disable Operation）**立刻** /BK OFF，Pn506 決定馬達再撐多久才斷電（p.207）。
-- 運轉中：Pn507 或 Pn508 任一先成立就煞（p.208）；零速停止的警報在停下後才套用 Pn506（p.207）。
-- HT9050 的煞車軸與 IO（`Sw*Breaker`）見 [motors-9050.md](../../../ht9050-hw/references/motors-9050.md) §4；伺服 ON 先於放煞車是 Steven Q89（alarms 檔 §8）。
+[讀取此節](../../../hpi-motor-control/references/control/references/yaskawa-ethercat/parameters-and-functions.md#3-煞車holding-brake)
 
 ## 4. 伺服 OFF／警報／超程的停止方式
 
-| 參數 | 位數 | 值（預設粗體） | 生效 | 頁 |
-|---|---|---|---|---|
-| Pn001（2001h） | n.□□□X 伺服 OFF 與 Gr.1 警報 | **0 DB 停、停後 DB**；1 DB 停後放開 DB；2 不用 DB 自由滑行 | After restart | p.209、p.760 |
-| | n.□□X□ 超程停止 | **0 DB 或滑行**；1 用 Pn406 減速後**伺服鎖定（零位鎖定）**；2 Pn406 減速後滑行；3 用 Pn30A 減速後伺服鎖定；4 Pn30A 減速後滑行 | After restart | p.200、p.760 |
-| | n.□X□□ 主迴路 AC／DC 輸入 | **0 AC** | | p.760 |
-| Pn00A（200Ah） | n.□□□X Gr.2 停止（Pn00B=n.□□2□ 時才用） | 0 照 Pn001；**1 Pn406 減速**；2 Pn406 減速後滑行；3 Pn30A 減速；4 Pn30A 減速後滑行 | After restart | p.765 |
-| | n.□□X□ 強制停止（FSTP） | **0 照 Pn001**；1～4 同上 | After restart | p.288、p.765 |
-| Pn00B（200Bh） | n.□□X□ Gr.2 停止 | **0 零速停止**；1 照 Pn001；2 照 Pn00A | After restart | p.765 |
-| Pn406（2406h） | 緊急停止扭力 | 0～800 %（**800**），額定扭力百分比；實際上限是馬達瞬間最大扭力 | 立即 | p.201 |
-| Pn30A（230Ah） | 伺服 OFF 與強制停止減速時間 | 0～12000 ms（**0**＝零速停止）；指從最高轉速減到 0 的時間 | 立即 | p.201 |
-
-- **垂直軸：Pn001 設 n.□□1□（超程停後零位鎖定）**，否則超程時 /BK 不煞、負載可能掉，或停止後被外力慢慢推回（p.199）。
-- 扭力控制中不能減速停，一律照 Pn001=n.□□□X（p.200、p.288）。
-- DB 頻繁動作會劣化內部元件，啟停用命令不要用通斷電源或伺服（p.209）。低速或停止時 DB 可能沒煞力（p.210）。
+[讀取此節](../../../hpi-motor-control/references/control/references/yaskawa-ethercat/parameters-and-functions.md#4-伺服-off警報超程的停止方式)
 
 ## 5. 超程（P-OT／N-OT）
 
-- 預設：P-OT＝CN1-7、N-OT＝CN1-8（p.157、p.200）；ON＝允許該方向、OFF＝禁止（**常閉接法**）（p.200）。
-- **用常閉限位開關，不要改 P-OT／N-OT 的極性**；改了斷線時不會停（p.199、p.236）。
-- 分配（Σ-7S 相容模式，Pn50A=n.□□□1 預設）（p.236、p.801-802）：
-
-| 參數 | 預設 | 內容 |
-|---|---|---|
-| Pn50A（250Ah） | **1881h** | n.□□□X＝1 用 Pn50A～Pn516 分配；n.X□□□＝P-OT 腳位：1＝CN1-7 ON 時允許正轉（預設）；**8＝永遠允許（＝不用 P-OT）**；7＝永遠禁止 |
-| Pn50B（250Bh） | **8882h** | n.□□□X＝N-OT：2＝CN1-8（預設）、8＝永遠允許；n.□X□□＝/P-CL、n.X□□□＝/N-CL：8＝永遠無效（預設） |
-
-  兩者都 After restart（p.801-802）。樹有寫入命令（`Pci1203Control.cpp`，站號共用時拒絕寫）。
-- 超程中可以往反方向動（p.200）。停止方式見 §4。超程狀態：**6041h bit11＝1**、60FDh bit0（N-OT）／bit1（P-OT）（p.204）。
-- Pn00D（200Dh）n.X□□□（立即生效，p.201、p.766）：**0 不偵測（預設）**；1 偵測超程警告 A.9A0；2 偵測超程警報 A.d04。
-  - 只在伺服 ON 中、往命令方向的超程才偵測；命令為 0 時兩方向都偵測；伺服 ON 當下已在超程不偵測；軟體極限狀態中不偵測（p.202-203）。
-  - **設 2（超程警報）時不能用限位開關回原點**（p.201、p.677）。
-- Pn022（2022h）n.□□□X（After restart，p.203、p.768）：0＝P-OT／N-OT 輸入中才算超程（預設）；1＝輸入中且位置離開該開關側時也算——防止停止時衝過開關後又能往外走。
-- 各模式下的超程行為（p.204）：PP／IP／CSP 取消目前定位、只接受反方向目標；PV／CSV 只接受反方向速度；PT／CST 只出反方向扭力；Homing 見 ethercat-cia402 §7.5。
+[讀取此節](../../../hpi-motor-control/references/control/references/yaskawa-ethercat/parameters-and-functions.md#5-超程p-otn-ot)
 
 ## 6. 扭力限制
 
-四種方式，**最小的那個生效**（p.260、p.620）：
-
-| 方式 | 物件／參數 | 單位 | 預設 | 何時有效 | 頁 |
-|---|---|---|---|---|---|
-| 內部 | Pn402（2402h）正轉、Pn403（2403h）反轉 | 1 %（額定） | 800 | 永遠；立即生效 | p.260、p.791-792 |
-| 外部 | Pn404（2404h）、Pn405（2405h） | 1 % | 100 | /P-CL、/N-CL 輸入 ON 時（要先分配腳位，Pn50B） | p.261-263 |
-| Controlword | 同 Pn404／Pn405 | 1 % | 100 | **6040h bit11（正）／bit12（負）＝1** | p.665、p.260 |
-| 物件 | 6072h、60E0h、60E1h | Trq. unit | 6072h＝馬達最大；60E0h／60E1h＝8000 | 永遠 | p.688、p.620 |
-
-- 設超過馬達瞬間最大扭力時，以瞬間最大扭力為限（p.260）。設太低會加減速扭力不足（p.260、p.262）。
-- Pn002（2002h）n.□□□X：**1（預設）＝啟用來自 EtherCAT 的扭力限制命令**；0、2、3 保留（p.761）。
-- 限制中：6041h bit14＝1（p.668）；硬體輸出 /CLT 預設不輸出（Pn50F=n.□□□X＝0），Σ-LINK II 模式用 Pn5B4（p.264、p.803）。
-- 2704h 預設時 60E0h／60E1h 的 8000＝800 %，跟 Pn402／Pn403 預設一樣是「不限制」的意思；HT9050 馬達瞬間最大扭力約為額定的 3.5 倍（SGMXJ-04：4.46／1.27 N·m）、3 倍（SGMXA-30：29.4／9.80 N·m）（KAEP03 p.58、p.80；倍數是換算）。
-- Index Z1 的門檻寫法（門檻×10 寫 60E0h／60E1h）與 Q87 規則見 [index-torque-autoheight.md](../index-torque-autoheight.md) §2-§3。
+[讀取此節](../../../hpi-motor-control/references/control/references/yaskawa-ethercat/parameters-and-functions.md#6-扭力限制)
 
 ## 7. 軟體極限（607Dh）
 
-- 超出軟體極限時「跟超程一樣緊急停止」（p.259）。
-- 607Dh:1 Min／:2 Max（DINT、±1073741823、預設 0／0、存 EEPROM、不能 PDO）；**回原點完成後、或接絕對編碼器時才生效**；**Min ≥ Max＝關閉**（預設就是關）；值要含 607Ch 偏移（p.674）。
-- 軟體極限狀態中不偵測超程警報／警告（p.202-203）；6041h bit11 也會因軟體極限截斷目標而變 1（p.668）。
-- 樹那一側的 CFG_AxSwPel／卡片軟體極限是另一件事，見 [ht9050-1203-runtime-traps.md](../ht9050-1203-runtime-traps.md) §5。
+[讀取此節](../../../hpi-motor-control/references/control/references/yaskawa-ethercat/parameters-and-functions.md#7-軟體極限607dh)
 
 ## 8. 絕對編碼器
 
-- **Σ-X 驅動器只能接絕對編碼器**，但可以用 Pn002 當增量用（p.265）。
-- Pn002（2002h）n.□X□□（After restart，p.265、p.761；預設 0011h）：
-
-| 值 | 接多圈絕對編碼器（U）時 | 接無電池多圈（W）時 |
-|---|---|---|
-| **0（預設）** | 當多圈絕對用，**要電池** | 當多圈絕對用，不要電池 |
-| 1 | 當增量用，不要電池 | 當增量用 |
-| 2 | 當單圈絕對用，不要電池 | 當單圈絕對用 |
-
-- 電池裝在主站側**或**編碼器線（JUSP-BA01-E 電池盒）其中一處，**兩處都裝會形成迴路、可能起火**（p.266、p.148）。裝在主站側要加蕭特基二極體與 22 Ω 電阻（p.149）。
-- 電池約 2.7 V 以下 → A.830（預設）或 A.930（Pn008=n.□□□1）（p.699-700、p.764）；電池標準更換期：不通電 3 年（20°C）（p.699）。
-- **絕對編碼器重置**（多圈歸零）：A.810、A.820、第一次啟動、換馬達、想清多圈時做；**伺服 OFF**、參數不能禁止寫入；工具 Fn008／SigmaWin+／**2710h（request 1008h）**；完成後斷電重開；**多圈資料變成 −2～+2 圈，機械原點會變，主站要重新對位**（p.222-224、p.654）。
-  單圈絕對或 Pn002=n.□2□□ 時多圈恆 0，不需要也不會出 A.810／A.820（p.222）。
-- 多圈上限 Pn205（2205h）：0～65535 rev（預設 65535），After restart；改了會出 A.CC0，要做多圈上限設定（Fn013／2710h 1013h）（p.270-272、p.787）。
-- 原點偏移：607Ch＋27E4h（上電時套用），見 ethercat-cia402 §7.6（p.225、p.676）。
-- 編碼器電源電壓監看（Un17A）：一般規格 3.9 V 以上、Σ-7 相容規格 4.5～5.5 V（p.505）。
+[讀取此節](../../../hpi-motor-control/references/control/references/yaskawa-ethercat/parameters-and-functions.md#8-絕對編碼器)
 
 ## 9. HWBB（Hard Wire Base Block，第 12 章）
 
-- /HWBB1、/HWBB2 兩路硬體輸入（CN8），任一路 OFF → **4 ms 內切斷馬達電流**（p.573、p.576）。輸入要接成 sink；24 V 用 SELV（p.573）。
-- 進 HWBB：狀態機 Operation Enabled → Switch ON Disabled（p.600 *4）；/S-RDY OFF（p.577）；**/BK OFF 且 Pn506 失效**（p.577）；停法照 Pn001=n.□□□X（p.578）；**ALM 不輸出**（p.578）。
-- 恢復（p.574-576）：兩路都 ON → 6040h **Shutdown** → **Switch ON＋Enable operation**；條件：所有安全輸入 ON、還沒送 Servo ON、沒有在跑 Fn002／Fn003／Fn004／Fn00E／Fn080／Fn201／Fn206 這類會自己 servo ON 的工具功能。
-  若在送著 Enable Operation 時進 HWBB：先送 Shutdown，再送 Switch ON＋Enable Operation（p.575）。
-- 只有一路 OFF、另一路 10 秒內沒跟上 → **A.Eb1**（Reset＝No）；A.Eb1 不是安全元件（p.576、p.707）。OFF 脈寬 ≤ 0.5 ms 不認（p.576）。
-- 監看：60FDh bit24／25（HWBB1／2，0＝開路），6041h bit15 Safety active（p.692、p.668）。
-- 限制（風險評估要納入）：**垂直軸受重力仍會動，要另外的機械煞車**；功率模組故障時馬達最多可能轉 1/6 圈（旋轉型）；HWBB 不切驅動器電源、不是電氣隔離；DB 與煞車訊號都不是安全元件（p.572-574、p.577-578）。
-- EDM1 監看輸出：兩路都 OFF 時 4 ms 內 ON；不是安全輸出（p.579）。
-- 雙軸 SGDXW：HWBB 是硬體選項 1000（型號第 8～11 碼，KAEP03 p.45）；HT9050 的 SGDXW 型號都帶 1000（見 hardware 檔）。
+[讀取此節](../../../hpi-motor-control/references/control/references/yaskawa-ethercat/parameters-and-functions.md#9-hwbbhard-wire-base-block第-12-章)
 
 ## 10. 其他會碰到的
 
-| 項目 | 參數 | 重點 | 頁 |
-|---|---|---|---|
-| /Home、/Probe1、/Probe2 腳位 | Pn511（2511h），預設 **6543h**，After restart | /Probe1＝CN1-10、/Probe2＝CN1-11、**/Home＝CN1-12**，都是 ON（閉合）有效；D／E／F＝同腳位 OFF 有效；0～3、7～C＝永遠無效 | p.157、p.804 |
-| 強制停止 FSTP | Pn516（2516h），預設 **8888h**（永遠允許＝不用） | 要用就分配腳位、用常閉；不是安全功能；停法 Pn00A=n.□□X□；恢復見 alarms 檔 §5 | p.287-289、p.806 |
-| 瞬停保持 | Pn509（2509h）20～50000 ms，預設 **20**，立即 | 瞬停 ≤ 設定值維持伺服 ON；控制電源約撐 100 ms；主電源 OFF 偵測延遲約 16 ms；負載大出 A.410 時設定無效 | p.248、p.800 |
-| 位置偏差警報 | Pn520（2520h）預設 6116694、Pn526（2526h）預設 6116694，單位 reference unit，立即 | A.d00／A.d01 的門檻 | p.807、p.343 |
-| 到位範圍 | Pn522（2522h）預設 7 | /COIN | p.807 |
-| 過載警告時機 | Pn52B（252Bh）1～100 %，預設 20 | 過載警報時間的 20 % 先出 A.910 | p.212 |
-| 過載降額 | Pn52C（252Ch）10～100 %，預設 100，After restart | 散熱不足時提早出 A.720 | p.212 |
-| 通訊異常時的輸出 | Pn55C（255Ch）預設 1（啟用）、Pn55D（255Dh）預設 0000h | ESM 不在 OP 時 SO1～SO3 的狀態（預設全 OFF） | p.306 |
-| 最高轉速 | Pn385 | 大於馬達最高轉速出 A.550 | p.703 |
-| 旋轉偵測 | Pn502（2502h）預設 20 min⁻¹ | /TGON、PV 模式 6041h bit12 | p.242、p.669 |
-| 警告總開關 | Pn008 n.□X□□ | 見 alarms 檔 §7 | p.764 |
-| 輸入分配模式 | Pn50A n.□□□X：1＝Pn50A～Pn516（預設）、2＝Pn590～Pn5BC（Σ-LINK II） | 沒用 Σ-LINK II 時兩種只差參數號 | p.236 |
+[讀取此節](../../../hpi-motor-control/references/control/references/yaskawa-ethercat/parameters-and-functions.md#10-其他會碰到的)

@@ -368,3 +368,11 @@ After testing the skill, users may request improvements. Often this happens righ
 2. Notice struggles or inefficiencies
 3. Identify how SKILL.md or bundled resources should be updated
 4. Implement changes and test again
+
+
+## HT9045 / HT9050 repository topic skills
+
+When creating or reorganizing topic skills in this repository, read
+[references/hpi-topic-reorganization.md](references/hpi-topic-reorganization.md).
+Apply the agreed naming and common/machine/customer boundaries to the authorized
+topic; the wider proposal is not authorization to migrate other topics.

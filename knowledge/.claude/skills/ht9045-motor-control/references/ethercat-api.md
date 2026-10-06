@@ -1,91 +1,51 @@
 # Advantech EtherCAT 馬達 API 參考
 
-> 對應原始碼：`Motor/myEthercatmotor.cpp`、`Motor/myEthercatmotor.h`  
-> 硬體：Advantech PCI-1203 EtherCAT 主控卡  
-> API 標頭檔：`EtherCAT/AdvMotApi.h`、`EtherCAT/AdvMotDrv.h`
-
----
+舊引用路徑保留；[讀取整理後文件](../../hpi-motor-control/references/control/references/ethercat-api.md)。
 
 ## 概述
 
-`TMyEtherCatMotor` 繼承 `HTMotor`，使用 Advantech PCI-1203 EtherCAT 主控卡驅動馬達。透過 AdvMotDrv API 進行軸控制，支援 Latch 位置觸發鎖存、直線多軸同步移動及 EtherCAT 網路分佈式 IO。
-
----
+[讀取此節](../../hpi-motor-control/references/control/references/ethercat-api.md#概述)
 
 ## 類別資訊
 
-| 項目 | 說明 |
-|------|------|
-| 類別名稱 | `TMyEtherCatMotor` |
-| 繼承自 | `HTMotor` |
-| 標頭檔 | `Motor/myEthercatmotor.h` |
-| 實作檔 | `Motor/myEthercatmotor.cpp` |
-| 硬體 | Advantech PCI-1203 EtherCAT 控制卡 |
-| API | AdvMotDrv（AdvMotApi.h） |
-
----
+[讀取此節](../../hpi-motor-control/references/control/references/ethercat-api.md#類別資訊)
 
 ## 核心方法
 
+[讀取此節](../../hpi-motor-control/references/control/references/ethercat-api.md#核心方法)
+
 ### 初始化
 
-```cpp
-Motor->InitMotor(IoAddress);
-```
+[讀取此節](../../hpi-motor-control/references/control/references/ethercat-api.md#初始化)
 
 ### 位置移動
 
-```cpp
-Motor->MoveTo(targetPos);
-Motor->MoveToPos(targetPos);
-```
+[讀取此節](../../hpi-motor-control/references/control/references/ethercat-api.md#位置移動)
 
 ### 回原點
 
-```cpp
-Motor->HomeObject();
-Motor->HomeFlag();      // 回原點完成旗標
-```
+[讀取此節](../../hpi-motor-control/references/control/references/ethercat-api.md#回原點)
 
 ### JOG 點動
 
-```cpp
-Motor->JogP();
-Motor->JogN();
-```
+[讀取此節](../../hpi-motor-control/references/control/references/ethercat-api.md#jog-點動)
 
 ### 多軸路徑規劃
 
-```cpp
-Motor->AddAxis(axis);
-Motor->AddPath(axis);
-Motor->RunPath();
-```
+[讀取此節](../../hpi-motor-control/references/control/references/ethercat-api.md#多軸路徑規劃)
 
 ### 直線多軸同步移動
 
-```cpp
-Motor->LinearAxisMoveTo();
-```
+[讀取此節](../../hpi-motor-control/references/control/references/ethercat-api.md#直線多軸同步移動)
 
 ### Latch 機制（位置觸發鎖存）
 
-```cpp
-Motor->EnableTrigger();
-Motor->GetLatchBuffer();
-```
+[讀取此節](../../hpi-motor-control/references/control/references/ethercat-api.md#latch-機制位置觸發鎖存)
 
 ### EtherCAT 分佈式 IO 控制
 
-```cpp
-Motor->ethercat_set_output_bit(ring, ip, port, bitNo, data);
-Motor->ethercat_set_output_byte(ring, ip, port, data);
-```
-
----
+[讀取此節](../../hpi-motor-control/references/control/references/ethercat-api.md#ethercat-分佈式-io-控制)
 
 ## 特性
 
-- **Latch 位置觸發鎖存**：支援在特定位置自動鎖存編碼器數值
-- **直線多軸同步移動**：多軸協調直線插補運動
-- **EtherCAT 網路分佈式 IO**：透過 EtherCAT 網路直接控制遠端 DO 輸出
+[讀取此節](../../hpi-motor-control/references/control/references/ethercat-api.md#特性)

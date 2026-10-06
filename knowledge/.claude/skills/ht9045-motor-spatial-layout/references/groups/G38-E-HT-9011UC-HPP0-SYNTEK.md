@@ -1,282 +1,119 @@
 # G38 — E · `HT-9011UC`
 
-> **群組**：E (獨立機種)  
-> **HPP**：HPP=0 (窄 HP)  
-> **GearRatio**：GearY~0.194(SYNTEK)  
-> **樣本數**：3 筆  
-> [← 返回索引](../teach-position-statistics.md)
+舊引用路徑保留；[讀取整理後文件](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md)。
 
 ## G38 · `HT-9011UC` · HPP=0 (窄 HP ~-46000) · GearY~0.194(SYNTEK)
 
-- **機台群組**：E （獨立機種）
-- **SubModel 分布**：0×3
-- **Picker (USE_PICKER_COUNT) 分布**：1×3
-- **Y Pitch (USE_IN_OUT_ARM_Y_PITCH) 分布**：0×3
-- **GPIB Model 分布**：`9046_32GPIB`×3
-- **樣本數**：3 筆 state record
-- **獨立機台數**（依 Serial No 計）：1 台
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#g38--ht-9011uc--hpp0-窄-hp--46000--geary0194syntek)
 
 ### 機台清單
 
-| Serial No | Factory | 樣本數 |
-|-----------|---------|--------|
-| `PNFD822` |  | 3 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#機台清單)
 
 ### 來源 State Records（最多列 15 筆）
 
-- `VTest\2024-05-11 10_19_08` &nbsp;*(S/N: PNFD822)*
-- `VTest\2024-07-02 14_41_07` &nbsp;*(S/N: PNFD822)*
-- `VTest\2024-07-29 11_24_59` &nbsp;*(S/N: PNFD822)*
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#來源-state-records最多列-15-筆)
 
 ### Teach Position 統計
 
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#teach-position-統計)
+
 #### `[MInArmPitch]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditInXPitch120` | 2 | 50 | 50 | 50 | 1 | 50×2 |
-| `setEditInXPitch40` | 2 | -5332 | -5332 | -5332 | 1 | -5332×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#minarmpitch)
 
 #### `[MInArmPitchX2]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditInX2120` | 2 | 20 | 20 | 20 | 1 | 20×2 |
-| `setEditInX240` | 2 | -5290 | -5290 | -5290 | 1 | -5290×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#minarmpitchx2)
 
 #### `[MInArmPitchY]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditInY15` | 2 | -4797 | -4797 | -4797 | 1 | -4797×2 |
-| `setEditInY60` | 2 | -1371 | -1371 | -1371 | 1 | -1371×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#minarmpitchy)
 
 #### `[MInArmX]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `edtBt2DX` | 2 | 37310 | 37310 | 37310 | 1 | 37310×2 |
-| `setEditAutoCleanX` | 2 | 11422 | 11422 | 11422 | 1 | 11422×2 |
-| `setEditHP1X` | 2 | 1570 | 1570 | 1570 | 1 | 1570×2 |
-| `setEditHP2X` | 2 | 1542 | 1542 | 1542 | 1 | 1542×2 |
-| `setEditInSht1X` | 2 | 37136 | 37136 | 37136 | 1 | 37136×2 |
-| `setEditInSht2X` | 2 | 37207 | 37207 | 37207 | 1 | 37207×2 |
-| `setEditLoaderX` | 2 | 22897 | 22897 | 22897 | 1 | 22897×2 |
-| `setEditRotateX` | 2 | 33926 | 33926 | 33926 | 1 | 33926×2 |
-| `setInPickX` | 2 | 21386 | 21386 | 21386 | 1 | 21386×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#minarmx)
 
 #### `[MInArmY]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `edtBt2DY` | 2 | -26993 | -26993 | -26993 | 1 | -26993×2 |
-| `setEditAutoCleanY` | 2 | -77907 | -77907 | -77907 | 1 | -77907×2 |
-| `setEditHP1Y` | 2 | -51947 | -51947 | -51947 | 1 | -51947×2 |
-| `setEditHP2Y` | 2 | -8081 | -8081 | -8081 | 1 | -8081×2 |
-| `setEditInSht1Y` | 2 | -53797 | -53797 | -53797 | 1 | -53797×2 |
-| `setEditInSht2Y` | 2 | -7030 | -7030 | -7030 | 1 | -7030×2 |
-| `setEditLoaderY` | 2 | -72912 | -72912 | -72912 | 1 | -72912×2 |
-| `setEditRotateY` | 2 | -26968 | -26968 | -26968 | 1 | -26968×2 |
-| `setEdtINDecayY` | 2 | -35000 | -35000 | -35000 | 1 | -35000×2 |
-| `setInPickY` | 2 | -57890 | -57890 | -57890 | 1 | -57890×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#minarmy)
 
 #### `[MInArmZE]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `SetEditAutoClean` | 2 | -2200 | -2200 | -2200 | 1 | -2200×2 |
-| `SetEditHP` | 2 | -2200 | -2200 | -2200 | 1 | -2200×2 |
-| `SetEditPickInRotate` | 2 | -1000 | -1000 | -1000 | 1 | -1000×2 |
-| `SetEditPickLoader` | 2 | -1800 | -1800 | -1800 | 1 | -1800×2 |
-| `SetEditPlaceInRotate` | 2 | -800 | -800 | -800 | 1 | -800×2 |
-| `SetEditPlaceInShuttle` | 2 | -2000 | -2000 | -2000 | 1 | -2000×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#minarmze)
 
 #### `[MInRotate]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditRotateA` | 2 | 770 | 770 | 770 | 1 | 770×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#minrotate)
 
 #### `[MInShutte1]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `edtEditInSht1OctSiteKit` | 2 | 18138 | 18138 | 18138 | 1 | 18138×2 |
-| `edtSetEditIS1BarCode` | 2 | 19830 | 19830 | 19830 | 1 | 19830×2 |
-| `edtSetEditOS1BarCode` | 2 | 25500 | 25500 | 25500 | 1 | 25500×2 |
-| `setEditInSht1Left` | 2 | 644 | 644 | 644 | 1 | 644×2 |
-| `setEditInSht1Right` | 2 | 45698 | 45698 | 45698 | 1 | 45698×2 |
-| `setEditOutSht1KitPos` | 2 | 26785 | 26785 | 26785 | 1 | 26785×2 |
-| `setEditOutSht1OneRowKit` | 2 | 26767 | 26767 | 26767 | 1 | 26767×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#minshutte1)
 
 #### `[MInShutte2]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `edtEditInSht2OctSiteKit` | 2 | 18038 | 18038 | 18038 | 1 | 18038×2 |
-| `edtSetEditIS2BarCode` | 2 | 19785 | 19785 | 19785 | 1 | 19785×2 |
-| `edtSetEditOS2BarCode` | 2 | 25500 | 25500 | 25500 | 1 | 25500×2 |
-| `setEditInSht2Left` | 2 | 650 | 650 | 650 | 1 | 650×2 |
-| `setEditInSht2Right` | 2 | 45700 | 45700 | 45700 | 1 | 45700×2 |
-| `setEditOutSht2KitPos` | 2 | 26773 | 26773 | 26773 | 1 | 26773×2 |
-| `setEditOutSht2OneRowKit` | 2 | 26695 | 26695 | 26695 | 1 | 26695×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#minshutte2)
 
 #### `[MOutArmPitch]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditOutXPitch120` | 2 | 30 | 30 | 30 | 1 | 30×2 |
-| `setEditOutXPitch40` | 2 | -5295 | -5295 | -5295 | 1 | -5295×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#moutarmpitch)
 
 #### `[MOutArmPitchX2]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditOutX2120` | 2 | -30 | -30 | -30 | 1 | -30×2 |
-| `setEditOutX240` | 2 | -5350 | -5350 | -5350 | 1 | -5350×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#moutarmpitchx2)
 
 #### `[MOutArmPitchY]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditOutY15` | 2 | -4886 | -4886 | -4886 | 1 | -4886×2 |
-| `setEditOutY60` | 2 | -1483 | -1483 | -1483 | 1 | -1483×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#moutarmpitchy)
 
 #### `[MOutArmX]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditAuto1X` | 2 | -96602 | -96602 | -96602 | 1 | -96602×2 |
-| `setEditAuto2X` | 2 | -78153 | -78153 | -78153 | 1 | -78153×2 |
-| `setEditAuto3X` | 2 | -59695 | -59695 | -59695 | 1 | -59695×2 |
-| `setEditAuto4X` | 2 | -41194 | -41194 | -41194 | 1 | -41194×2 |
-| `setEditAuto5X` | 2 | -22745 | -22745 | -22745 | 1 | -22745×2 |
-| `setEditFix1X` | 2 | -87604 | -87604 | -87604 | 1 | -87604×2 |
-| `setEditFix2X` | 2 | -73474 | -73474 | -73474 | 1 | -73474×2 |
-| `setEditFix3X` | 2 | -59344 | -59344 | -59344 | 1 | -59344×2 |
-| `setEditFix4X` | 2 | -45136 | -45136 | -45136 | 1 | -45136×2 |
-| `setEditFix5X` | 2 | -31083 | -31083 | -31083 | 1 | -31083×2 |
-| `setEditFix6X` | 2 | -16949 | -16949 | -16949 | 1 | -16949×2 |
-| `setEditOutSht1X` | 2 | -92438 | -92438 | -92438 | 1 | -92438×2 |
-| `setEditOutSht2X` | 2 | -92393 | -92393 | -92393 | 1 | -92393×2 |
-| `setEditRotateOutX` | 2 | -44575 | -44575 | -44575 | 1 | -44575×2 |
-| `setOutPickX` | 2 | -53582 | -53582 | -53582 | 1 | -53582×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#moutarmx)
 
 #### `[MOutArmY]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditAuto1Y` | 2 | -72843 | -72843 | -72843 | 1 | -72843×2 |
-| `setEditAuto2Y` | 2 | -72756 | -72756 | -72756 | 1 | -72756×2 |
-| `setEditAuto3Y` | 2 | -72777 | -72777 | -72777 | 1 | -72777×2 |
-| `setEditAuto4Y` | 2 | -72723 | -72723 | -72723 | 1 | -72723×2 |
-| `setEditAuto5Y` | 2 | -72726 | -72726 | -72726 | 1 | -72726×2 |
-| `setEditFix1Y` | 2 | -18634 | -18634 | -18634 | 1 | -18634×2 |
-| `setEditFix2Y` | 2 | -18666 | -18666 | -18666 | 1 | -18666×2 |
-| `setEditFix3Y` | 2 | -18665 | -18665 | -18665 | 1 | -18665×2 |
-| `setEditFix4Y` | 2 | -18636 | -18636 | -18636 | 1 | -18636×2 |
-| `setEditFix5Y` | 2 | -18634 | -18634 | -18634 | 1 | -18634×2 |
-| `setEditFix6Y` | 2 | -18634 | -18634 | -18634 | 1 | -18634×2 |
-| `setEditOutSht1Y` | 2 | -53819 | -53819 | -53819 | 1 | -53819×2 |
-| `setEditOutSht2Y` | 2 | -7038 | -7038 | -7038 | 1 | -7038×2 |
-| `setEditRotateOutY` | 2 | -26913 | -26913 | -26913 | 1 | -26913×2 |
-| `setEdtOUTDecayY` | 2 | -70000 | -70000 | -70000 | 1 | -70000×2 |
-| `setOutPickY` | 2 | -57624 | -57624 | -57624 | 1 | -57624×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#moutarmy)
 
 #### `[MOutArmZE]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `SetEditPickOutRotate` | 2 | -1000 | -1000 | -1000 | 1 | -1000×2 |
-| `SetEditPickOutSht` | 2 | -2000 | -2000 | -2000 | 1 | -2000×2 |
-| `SetEditPlaceAuto` | 2 | -1800 | -1800 | -1800 | 1 | -1800×2 |
-| `SetEditPlaceFix` | 2 | -1700 | -1700 | -1700 | 1 | -1700×2 |
-| `SetEditPlaceFix2` | 2 | -1700 | -1700 | -1700 | 1 | -1700×2 |
-| `SetEditPlaceOutRotate` | 2 | -800 | -800 | -800 | 1 | -800×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#moutarmze)
 
 #### `[MOutRotate]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditRotateOutA` | 2 | 722 | 722 | 722 | 1 | 722×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#moutrotate)
 
 #### `[MTestY1]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditIndex1ToSht1Y` | 2 | -224 | -224 | -224 | 1 | -224×2 |
-| `setEditIndex1ToSocketY` | 2 | 23151 | 23151 | 23151 | 1 | 23151×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#mtesty1)
 
 #### `[MTestY2]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditIndex2ToSht2Y` | 2 | 261 | 261 | 261 | 1 | 261×2 |
-| `setEditIndex2ToSocketY` | 2 | -23122 | -23122 | -23122 | 1 | -23122×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#mtesty2)
 
 #### `[MTestZ1]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditIndex1ToSht1Z` | 2 | -4810 | -4810 | -4810 | 1 | -4810×2 |
-| `setEditTestZSafePos` | 2 | 10 | 10 | 10 | 1 | 10×2 |
-| `setEditWaitTestZDown` | 2 | -1000 | -1000 | -1000 | 1 | -1000×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#mtestz1)
 
 #### `[MTestZ2]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditIndex2ToSht2Z` | 2 | -4806 | -4806 | -4806 | 1 | -4806×2 |
-| `setEditTestZSafePos` | 2 | 10 | 10 | 10 | 1 | 10×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#mtestz2)
 
 #### `[MTrayX]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `setEditTrayAuto1X` | 2 | 95900 | 95900 | 95900 | 1 | 95900×2 |
-| `setEditTrayAuto2X` | 2 | 114330 | 114330 | 114330 | 1 | 114330×2 |
-| `setEditTrayAuto3X` | 2 | 132920 | 132920 | 132920 | 1 | 132920×2 |
-| `setEditTrayColorX` | 2 | 62200 | 62200 | 62200 | 1 | 62200×2 |
-| `setEditTrayEmptyX` | 2 | 30320 | 30320 | 30320 | 1 | 30320×2 |
-| `setEditTrayLoaderX` | 2 | -4850 | -4850 | -4850 | 1 | -4850×2 |
-| `setEdtAuto4` | 2 | 151600 | 151600 | 151600 | 1 | 151600×2 |
-| `setEdtAuto5` | 2 | 170210 | 170210 | 170210 | 1 | 170210×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#mtrayx)
 
 #### `[InArm]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `AutoCleanPick` | 3 | -2200 | -2200 | -2200 | 1 | -2200×3 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#inarm)
 
 #### `[InArmZSub]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `Picker Be` | 2 | 27 | 27 | 27 | 1 | 27×2 |
-| `Picker Bf` | 2 | -44 | -44 | -44 | 1 | -44×2 |
-| `Picker Bg` | 2 | -1 | -1 | -1 | 1 | -1×2 |
-| `Picker Bh` | 2 | 10 | 10 | 10 | 1 | 10×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#inarmzsub)
 
 #### `[OutArmZSub]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `Picker Aa` | 2 | 27 | 27 | 27 | 1 | 27×2 |
-| `Picker Ab` | 2 | -44 | -44 | -44 | 1 | -44×2 |
-| `Picker Ac` | 2 | -1 | -1 | -1 | 1 | -1×2 |
-| `Picker Ad` | 2 | 10 | 10 | 10 | 1 | 10×2 |
-| `Picker Ae` | 2 | 3 | 3 | 3 | 1 | 3×2 |
-| `Picker Ag` | 2 | 4 | 4 | 4 | 1 | 4×2 |
-| `Picker Ah` | 2 | -29 | -29 | -29 | 1 | -29×2 |
-| `Picker Ba` | 2 | 3 | 3 | 3 | 1 | 3×2 |
-| `Picker Bc` | 2 | 4 | 4 | 4 | 1 | 4×2 |
-| `Picker Bd` | 2 | -29 | -29 | -29 | 1 | -29×2 |
-| `Picker Bg` | 2 | -1700 | -1700 | -1700 | 1 | -1700×2 |
-| `Picker Bh` | 2 | -5332 | -5332 | -5332 | 1 | -5332×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#outarmzsub)
 
 #### `[Teach INI]`
 
-| Key | n | min | median | max | unique | 主流値 (top3) |
-|-----|---|-----|--------|-----|--------|----------------|
-| `Update` | 2 | 1 | 1 | 1 | 1 | 1×2 |
-| `Update2` | 2 | 1 | 1 | 1 | 1 | 1×2 |
+[讀取此節](../../../hpi-motor-control/references/layout/statistics/references/groups/G38-E-HT-9011UC-HPP0-SYNTEK.md#teach-ini)

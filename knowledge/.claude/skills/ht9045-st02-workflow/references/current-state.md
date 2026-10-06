@@ -24,7 +24,89 @@
 - Q41：還沒 commit（A 段 TesterIF，4 檔），sim 0 errors。
 - 16:40：gpib-widget 推到 `bf2690aa`（文件）；本機 `00772497` 已 merge main 00f9a882（有程式）→ 兩組態編譯中，過了再推。st02-on-cbridge 下次推之前要 merge St01 head（現在 5b7fe37c）。
 
-### 10-05 16:4x 狀態（St02-E 寫，session ht9045-46；St02-M＝ht9045-32；新 session 從這段接）
+### 10-06 14:1x 狀態（St02-E 寫；St02-M＝ht9045-32；新 session 從這段接）
+- **P1b 做完、推送中**：分支 `v906/st02-p1b-pad`（工作樹 `C:\AI_TempFile\st02-p1`），選 A＝回到 golden 逐 chunk（PadInterface_St02.cpp 佇列改成整塊、DrainRx 每拍全部取走、新接縫 `W906_PadRxQueuedBytesForTest`；測試 [8] 改 P1-8c～8g）。
+  建置線 s39 在 `0486b48f`（合 main 55b590bd）兩組態 0 錯；14:06 apply 機台 13:52 快照 → SIM St02_PadInterface 57／57、ScanKeyGolden 139／139；SHIP 56／56、139／139（差 1 是 P1-3a 既有的 SIM／SHIP 分支）→ 反向 R1（舊的跨 chunk 暫存）紅 P1-8c／8d／8e／8f／8g、R2（同 chunk 逐幀分 unit）紅 P1-8c → 14:13 已 restore（7 檔 MD5 相符、備份已刪）。
+  工具 `C:\AI_TempFile\st02e-scratch\p1b\`（reverse_p1b.py、mr_desc.md）。
+- **A1a／A1b 暫停**：A1a 改完 `ht9045_golden_kb_unwired.js:193-200` 後，下一個指令被 Claude Code 權限檢查判「Security Weaken」擋下（拿掉會讓機台啟動的按鈕的頁面封鎖）。照第 26 條不繞：已還原、`v906/st02-a1a-contact`（`C:\AI_TempFile\st02-c23`）乾淨未推；A1b（打開 EP 壓力輸出）同類，沒開始。**要 Steven 在這個 session 直接說要做**（或加權限規則）才繼續。已告訴 St02-M。
+- St01 今天 17:00 起離線（Steven 明天出國）：17:00 後不要排需要 St01 回覆／代跑／登記的事；問題給 St02-M。
+- 新的跨機聊天 repo：`https://gitlab.honprec.com/honprec/rd/rd5/ST-HandOver`（`chat/st02e.md`，只附加；短分支＋auto_merge）。跟 St02-M 照舊用 SendMessage。
+
+### 10-06 13:0x 狀態（St02-E 寫；St02-M＝ht9045-32）
+- **A1 已交**（唯讀盤點，報告 `C:\AI_TempFile\st02e-scratch\a1\ST02_A1_DEAD_CONTROLS_20261006.md`，St02-M 發布；工具 `a1\a1_field_probe.py`（`--clicks`／`--evals`）、`unwired_lists.py`、`gate_by_func.py`）。09:1x 第 3 輪 apply 機台 10-06 09:00 快照 → 已 restore。
+- 筆電 12:2x 回 A1 兩題「照 golden 都做」，St02-M 13:0x 派卡（handoff `0153df2d` §1 已認領）。**順序：P1b → A1a → A1b，各一張 MR**；先重量行號、把確切範圍給 St02-M 寫 §1。main＝`6b616f5e`，測試前照 #6。
+  - **P1b**（Ifor01 審 !221）：`PadInterface_St02.cpp` 收資料 `pending` 沒上限＋最後一段沒 CR 要等下一個 CR。golden 0618 uPadInterface.cpp:708-746 是每個 chunk 自己處理（do…while 至少一次、刪到第一個 \r、沒 CR 的尾巴處理一次就丟）。選項 A＝回到 golden 逐 chunk；B＝保留累積但上限約 4 KB＋一次 [Recv Error]＋尾巴照 golden 處理一次。對照機台 com_probe_pad 擷取（GitHub 機台分支 dispatch/20261005_rs232pad_priority/）。
+  - **A1a**：把 Contact 11 顆模式鈕＋btnStart／btnPause／btnTStart／btnTStep／spbOneCycle 從 `web/page/ht9045_golden_kb_unwired.js:190-217` 拿掉；機台會動 ⇒ MR 寫明、HUMAN_REVIEW 上機項、第一次上機 EastSun 在旁；node 測試＋反向。
+  - **A1b**：HT9050 的 5 個 EP 閘照 golden 打開（DeviceForm_File.gen.inc:2797／:2954／:4186、ContactForce.gen.inc:998／:1459）＋ContactForce 關窗尾；.gen.inc 若是 St01 產生器產物，先跟 St02-M 確認改產生器輸入還是同行替換；HUMAN_REVIEW 上機項；ctest＋反向。
+- 1006 09:2x pull 後兩支 skill 檔（SKILL.md、本檔）已核對：本機版是 main 的超集合（main 只多一行 10-05 16:4x 標題的舊字），**不用合**，跟下一次程式推送一起推。
+- ST-GPT（筆電上的 GPT／Codex）接手 skill 重整；要動本 skill 會在 FROM_STEVEN §4 問。
+
+### 10-06 A1 計數那一輪（08:11 apply 機台 10-05 23:07 快照 → 09:02 已 restore，447 檔 MD5 相符、備份已刪）
+另：wb_serve 開機時 golden BackupSetupFile 會把作用中配方的 `<hash>.MD5` 改名，realfile_guard 的 restore 不會改回——探針 `C:\AI_TempFile\st02e-scratch\a1\a1_field_probe.py` 會自動改回（內容相同才改）；手動跑 wb_serve 後要自己看 `D:\HT9045\IniData\Data\<配方>\*.MD5`。
+
+### 10-05 23:1x 狀態（St02-E 寫，session ht9045-46；St02-M＝ht9045-32；新 session 從這段接）
+- **P1＝急件 MR !221**（`v906/st02-p1-pad` tip `5fc10fb5`，已推，**分支凍結**——筆電要求才再動）。St02-M 已核對並貼出（handoff `a247f82c`）：FROM_STEVEN §2「急件 請 gate」、完整 MR 說明發布成 `docs/handoff/ST02_P1_MR221_DESC_20261005.md`（筆電貼進 !221）、§1 認領標已推、HUMAN_REVIEW A47／A48／B46／B47。等筆電急件 gate。
+- 可收的工作樹（請 St02-M 收）：`C:\AI_TempFile\st02-c22`（!216 已合）、`st02-docs`（!211 已合）、`st02-s45`；`st02-p1` 等 !221 進 main 後再收。`st02-s39`＋`st02-s39-obj` 留著當建置線。
+- **每次測試前的新規矩**（RULINGS_20261005 第 6 條補充，19:2x，不用問）：①樹更新到 main 最新 ②`python tools/machine_sync/machine_sync.py check`，未同步就 `apply --yes` ③回報寫 main commit＋機台快照時間 ④測完 `restore <備份資料夾>`。沒做①②的結果不算數。
+  23:09 apply（機台 23:07 快照）→ 測完 23:1x 已 restore、備份已刪（這台現在是原本的設定）。
+- 平行跑測試的教訓：SIM 測試跟 SHIP 連結同時跑會讓計時類測試與 FShow_Audit 逾時；計數那一輪要在機器空閒時依序跑（-j3）。
+- **C23＝MR !223**（`v906/st02-c23-teach` tip `917bf3de`，1006 01:2x 推；引擎 :2069 筆電點頭待補；完整說明 `C:\AI_TempFile\st02e-scratch\c23\mr_desc.md`）。134 個欄位夾範圍（136 列中 2 列在隱藏的 EdtTemp）。工作樹 `C:\AI_TempFile\st02-c23` 等 !223 進 main 再收。
+- **hpi-gpib 補課＝MR !224**（`v906/st02-hpigpib-catchup` tip `26936441`，只有 skill；工作樹 `C:\AI_TempFile\st02-c22b` 等進 main 再收；工具 `C:\AI_TempFile\st02e-scratch\c22b\`：remap.py／repoint.py／linkcheck_changed.py）。
+- **P2＝MR !226**（`v906/st02-p2-softkey` tip `c18501a7`，1006 04:5x 推；完整說明 `C:\AI_TempFile\st02e-scratch\p2\mr_desc.md`）。計數那一輪 SIM／SHIP 各 20／20、反向 R1～R6 紅。工作樹 `C:\AI_TempFile\st02-p2` 等 !226 進 main 再收。**手上沒有排隊的卡了**（P1／C23／hpi-gpib 已進 main，P2 等 gate）。
+- **bringup-paths＝MR !227**（`v906/st02-bringup-paths` tip `62c77584`，1006 04:5x，只有文件：ST02_BRINGUP_CHECKLIST.md 4 處舊 C22 路徑→hpi-gpib）。在 `C:\AI_TempFile\st02-c22b` 工作樹（!224 已合、拿來重用），等 !227 進 main 再收。
+- 給 Steven 刪的工作樹清單（St02-M 轉）：st02-p1、st02-c23、st02-c22／st02-docs／st02-s45；st02-c22b 等 !227、st02-p2 等 !226；st02-s39＋obj 留著當建置線。
+- （舊）**P2**（第 72 批已在 main；筆電對它的檔點頭還沒回——照 P1 的做法先寫碼、推之前再看點頭）。
+  **1006 03:2x 進度**：分支本機 tip `e0a00651`（兩顆 WIP，**不推**，等 HW.teach.html 做完一張 MR）。除了 HW.teach.html 都做好了：
+  C++ 8 檔（WebMainScanKey EOF：bAse* 軟體鍵＋3 秒過期＋一鍵一下＋最多 4＋DIAG＋W906_PanelHomeKeyArm，:438 同一行掛 tick；wb_serve :5738；WebBridgeServer :1449；WebMotorAccess .cpp／.h／Live；test_web_motor_access 67／50／45；ScanKeyGolden 新 [19]）；網頁 5 檔（main.html :275／:649、ht9045_main_softkeys.js、ht9045_teach_homeall_c.js、motor-access.json／.js）。web 0101 不用（main.html:45 已有 pointer-events:none）。
+  FShow_Audit 58＝基準、START 普查 36／34／2 通過。反向驗證腳本 `p2\reverse_p2.py`（R1～R6）。測試清單加 D015_A01MenuPage、D025_MenuOpenPage、St02_N07BannerPage、E09_MainLogo（讀 main.html）。
+  **剩下**：第 72→74 批進 main 後 merge → HW.teach.html :69（btnHomeAll 鈕）＋script include（重量行號）→ 計數那一輪 → 反向驗證 → 推 MR。St02-M 已在 §1 記下兩處改動（測試改放 [19]、不需要 0101），handoff eea6bee3。
+  （舊）1006 01:4x 停在這裡（用量上限）：工作樹 `C:\AI_TempFile\st02-p2`（分支 `v906/st02-p2-softkey`，從 main 1c7fef88，**還沒改任何檔**）。
+  已重量行號＝跟認領稿一樣（main 1c7fef88：WebMainScanKey EOF 456／:438；wb_serve :5738；WebBridgeServer :1449；WebMotorAccess :96／:4602／EOF 8949；.h :267；Live :22／:437；test_web_motor_access :279／:964／:965／:1045／rel3 :1346；HW.teach.html :69／:1254；main.html :275／:649）。
+  機台長行的原文：`C:\AI_TempFile\st02e-scratch\p2\wma_lines.txt`、各 commit diff 在 `p2\*.diff`、網頁 patch 在 `p2\web\`。
+  計畫照 `p2\P2_CLAIM_DRAFT.md`；一處調整：軟體鍵的測試放 ScanKeyGolden（它連真的 ScanPannelKey，能驗 soft ALARM RESET → N07 消音、RESET 停用設定照擋），test_main_scankey 可不動。
+- （舊）**C23（W-95，RULINGS_20261005 第 23 條）先做、P2 後做**：認領稿 `C:\AI_TempFile\st02e-scratch\c23\C23_CLAIM_DRAFT.md`（已交 St02-M）。#100＝引擎 `ht9045_wire_engine.js:2069` 同一行加頁面範圍掛點＋HW.teach.html 從 `HT9045Page.golden().page.lists.elTeach` 提供 136 個範圍（不改 C++）；#103＝Set To Offset 在選到的馬達 homeFlag≠1 或格子空時拒絕（Steven 指定、偏離 golden，列 HUMAN_REVIEW）。測試 TeachKbGolden（含 CONTROL）＋Teach／小鍵盤相關 node 測試＋e2e 探針 (f) 翻轉。**e2e 探針在這台跑（realfile_guard）；真的跑不了就在 MR 與 §2 寫「e2e probe: laptop gate」——不再交給 St01**（Steven 1005 11:5x「不再派工給 St01」，St02-M 1006 00:1x 轉述；skill 裡「請 St01 代跑」的舊規矩以此為準）。St02-M 已貼 C23 認領（§1 00:0x、`docs/handoff/ST02_C23_CLAIM_DRAFT_20261006.md`、§3 請筆電對引擎 :2069 點頭）；第 72 批進 main 時它會通知。ChangeLog 換到 `CHANGES_20261006_Steven02.md`。
+- 下一張：P2（TEACH-HOMEALL＋SOFTKEY，不含 SOFT E-STOP），等第 72 批（筆電 HOME-PERAXIS）進 main 再開。**認領稿已交 St02-M**：`C:\AI_TempFile\st02e-scratch\p2\P2_CLAIM_DRAFT.md`（12 項、行號對 main db3a636c 與第 72 批 ba8021dd；機台 diff 存在 `p2\*.diff`、網頁 patch 在 `p2\web\`，來源 GitLab `origin/v906/mc01-scankey-patches` 173cdb1a）。
+  St02-M 已預先認領（handoff `2fec1245`：FROM_STEVEN §1 暫定行號、稿發布成 `docs/handoff/ST02_P2_CLAIM_DRAFT_20261005.md`、§3 請筆電對它的檔點頭、panel.key 免權杖列 HUMAN_REVIEW C）。開工條件：第 72 批進 main **且**筆電點頭 → 重量行號 → 寄最終清單給 St02-M。MR 說明要寫 bAse* 的理由，並證明 V906 沒有別的地方會設 bAse*（ASE 沒移植；`git grep` 寫入點＝0）。
+  設計改動：軟體面板鍵改走 golden 的 `bAse*` 旗標（ASE 遠端那條路），ScanPannelKey 每顆鍵的副作用（N07 消音、音樂、RESET 停用設定）照跑 ⇒ 不動 ckernel.cpp、不要 W906_VirtualPanelKeyHook。
+
+### 10-05 22:2x 補記
+- **C22 MR !216 已進 main**（22:14，`e354b1c3`；St02-M 已在 §2 標記，handoff `f9d7364d`）。15 支舊名空殼 skill **約 10/12 刪**；刪的時候要改的 6 處名稱／路徑引用清單在 `CHAT_ST02` 19:4x（也在 MR !216 說明）。工作樹 `C:\AI_TempFile\st02-c22` 可收。
+- C18 !215 在第 72 批 gate b72a。P1：第 71 批已進 main（53a13cc9），P1 已合（`111c71fb`），兩組態增量重建＋急件測試清單跑中，過了就推急件 MR。
+
+### 10-05 21:3x 狀態（St02-E 寫，session ht9045-46；St02-M＝ht9045-32；新 session 從這段接）
+- **P1 可以推了，只等第 71 批進 main**：分支 tip `4ee5383c`（另有 `4279070f`＝FastClock 工作搬到 `PadInterfaceClock_St02.cpp`，修 14 支測試連結失敗）。兩組態建置 0 錯；本機 ctest 兩組態 St02_PadInterface 51／51、ScanKeyGolden 綠；全套 SIM 22 紅／SHIP 7 紅＝基準（失敗行逐字相同）；反向驗證 13／13（`p1\reverse_p1_result.md`）。筆電已同意共用行（TO_STEVEN 20:3x）。
+  第 71 批進 main 後：`git merge origin/main`（tests/CMakeLists 檔尾用 merge_keep_main_first.py）→ 有程式變動就在 s39 線增量重建＋跑 St02_PadInterface／ScanKeyGolden → `git merge-tree --write-tree --name-only origin/main HEAD` 一行 → 推：
+  `git push origin HEAD:refs/heads/v906/st02-p1-pad -o merge_request.create -o merge_request.target=main -o merge_request.title="急件 St02 P1：RS-232 操作面板 uPadInterface（golden 0618 TfPadInterface＋TPadRS232Thread）" -o merge_request.remove_source_branch`，MR 說明貼 `p1\mr_desc.md`（GitLab 網頁或 API）。
+  監看：背景 until 迴圈每 2 分鐘 fetch，main 有非 docs 的程式變動就通知（session 範圍）。
+
+### 10-05 20:1x 狀態（St02-E 寫，session ht9045-46；St02-M＝ht9045-32）
+- **ST02-P1（急件，W-80）RS-232 操作面板 uPadInterface**：卡在 `C:\AI_TempFile\st02e-scratch\p1\card_P1.md`，NB2 預勘 `p1\nb2_q2_survey.md`，golden UTF-8 副本 `p1\g\`。
+  分支 `v906/st02-p1-pad`（本機，工作樹 `C:\AI_TempFile\st02-p1`）：`5c9c166a`（P1 本體）＋`dd1b341e`（合 main a78c1e15，tests/CMakeLists 檔尾 main 在前）。對 main 11 檔 +1494／-23。
+  新檔 `PadInterface_St02.h`（inline 表＋閘門 4 方法）／`.cpp`（ht9045_sm：協定、序列埠、FastClock 1 ms 工作、測試接縫 `W906_PadPortForTest`／`W906_PadDroppedT07T08`／`W906_PadResetStateForTest`）；
+  共用檔同行替換：CMakeLists:2406、FastClockWbServe :75／:115、cinitial :17129-17131、mysensor 3 閘、myswitch 3 閘、rs232 :271。ctest：新 `St02_PadInterface`（P1-1a..P1-10e）＋`ScanKeyGolden` [18]。
+  建置線 `C:\AI_TempFile\st02-s39`（detached dd1b341e）＋`st02-s39-obj` 兩組態建置中（log：`…\s09close\p1_sim.log`／`p1_ship.log`）。
+  反向驗證腳本 `p1\reverse_p1.py`（R1..R13：改一行→只建測試目標→跑→預期的 CHECK 變紅→還原；結果寫 `p1\reverse_p1_result.md`）。
+  接下來：本機 ctest（St02_PadInterface、ScanKeyGolden、MainScanKey、FastClk_Jobs、FastClock、ModalWake、St02_ModalTimer1、FShow_Audit、START_SitesCensus 與 sensor／switch 相關）→ 反向驗證 → **第 71 批進 main 後再合 main** → merge-tree → 等筆電對共用行點頭 → 推急件 MR（標題寫「急件」）。P1 不碰 tools/wb_serve.cpp（第 71 批在改）。
+- **P2（下一張，P1 之後）**：機台 TEACH-HOMEALL＋SOFTKEY 一張 MR（機台 cpp 0153／0156／0157＋web 0096／0099-0101；稽核 `docs/handoff/MACHINE_VS_MAIN_AUDIT_20261005.md` §2 M2／M3）。**不含** SOFT E-STOP（RULINGS_20261005 #17）。要等第 71 批（M1 MT-ACCLIVE）進 main，且第 72 批（筆電做 HOME-PERAXIS：WebMotorAccess.cpp DoHome ~:1491／Teach btnHome ~:3477、test_web_motor_access.cpp、HW.MotorTest.html／HW.teach.html 的 HOME 鈕，RULINGS #16）也要避開或等它。開工時請 St02-M 在 FROM_STEVEN §1 認領。
+
+### 10-05 19:5x 狀態（St02-E 寫，session ht9045-46；St02-M＝ht9045-32）
+- **今天推出的 MR**：!209 S-24（筆電第 70 批）、!211 docs 路徑（已合）、!215 C18（gate 中）、**!216 C22**（`v906/st02-skills-comm` `bb41651f`，只有 skill；15 支通訊 skill → hpi-gpib／hpi-secs／hpi-rs232，舊名空殼一週後刪——刪的時候要改 6 處引用，清單在 MR 說明）。
+- C22 驗證工具（可重用）：`C:\AI_TempFile\st02e-scratch\c22_verify_all.py`（搬移前後檔數／內容、空殼、殘留 SKILL.md、控制字元）、`c22_linkdiff.py <基準>`（全 .claude 連結檢查，跟基準比「新增斷鏈」；搬移的檔換算回原路徑比對；`.claude` 底下只看磁碟，不退回 HEAD）。
+- 手上沒有排隊的卡，等 St02-M 派新的。工作樹：`C:\AI_TempFile\st02-c22`（C22，推完可收）、`st02-docs`（可收）、`st02-s45`（可收）。
+
+### 10-05 19:4x 狀態（St02-E 寫，session ht9045-46；St02-M＝ht9045-32）
+- **C18＝MR !215** `6b0b697d`（`v906/st02-esc`，**凍結**；只有筆電在第 70 批後要求才再合 main）：C 槽全新 obj `C:\AI_TempFile\st02-s39-obj` 兩組態完整建置 OK＋PE；本機 7 支 ctest 兩組態全綠；對照組 `W906_ESC_CONTROL=1` 兩組態都紅。St02-M 已貼 §2「請 gate」、HUMAN_REVIEW B45。
+- **工作樹全部在 `C:\AI_TempFile`**：st02-s39（建置線，detached `f1409428`）、s40（S-24，凍結）、s45、esc（C18，凍結）、ela（★W42 本機）、c22（C22）、docs（!211 已合，可收）＋st02-claims、st02e-scratch。
+- **C22 進行中**（`C:\AI_TempFile\st02-c22`，分支 `v906/st02-skills-comm`，基準 main a63a30cb，sparse 只 .claude）：hpi-rs232、hpi-secs 交件且驗證過；hpi-gpib helper 還在做。之後 St02-E 自己整合：修其他 skill 指向舊資料夾的連結（helper 已列 file:line）→ 全面斷鏈／關鍵字／檔案數與位元組對照 → 用明確路徑提交 → 推＋開 MR。注意：helper 回報 secs 的 `colleague-*` 與 secs-sem 有 42 份完全相同（照「只搬不刪」保留）、搬移後的兩份抽取文字檔本來就帶控制字元（夜間掃描會抓到，非新增）。
+- S-24 MR !209 在筆電第 70 批；docs MR !211 已合。
+
+### 10-05 18:1x 狀態（St02-E 寫，session ht9045-46；St02-M＝ht9045-32）
+- **MR !209（S-24）凍結**：筆電已把 `bf8984cb` 收進第 70 批（gate b70a 跑中，自己解了 tests/CMakeLists 檔尾）。**不要再推 v906/st02-s24-staterecord**。本機 `b5dbf1e2`（合 main d9fca156＝第 69 批）只當對照：兩組態 0 錯，25 支目標測試跑完若有紅告訴 St02-M 轉筆電。
+- **MR !211（docs 路徑換成入口網站）已進 main 62262fc0**：共用 skill 寫 `<入口網站 repo>\public\Docs\…`（定義在 make-report-skill：St01／St02 `D:\RD5-Portal`、筆電 `D:\HT9045-Index`）；兩支寫檔腳本用 `RD5_PORTAL_REPO`→`D:\RD5-Portal`→`D:\HT9045-Index`→舊 `D:\docs`（印警告）。St01 自己改了 co-work-agent.md（!212）和記錄員 skill。
+- **工作樹搬到 C:\AI_TempFile（進行中）**：已搬 st02-esc、st02-ela、st02-s45（robocopy 不含 Obj／build* → `git worktree repair` → D 槽舊副本的 `.git` 改名 `.git.moved`，D 槽不刪）＋`st02-claims` 資料夾。**還沒搬**：st02-s39（建置線）、st02-s40（S-24），等這輪測試跑完。新的建置 obj 在 `C:\AI_TempFile\st02-s39-obj`（第一次要完整建置）。docs 用的 sparse worktree `C:\AI_TempFile\st02-docs`（!211 已合，可收）。
+- 下一步：搬完 s39／s40 → C18（`C:\AI_TempFile\st02-esc`，推之前才合 main，檔尾會有第 70 批的區塊）→ C22（`hpi-`）。
+
+### 10-05 16:4x 狀態（St02-E 寫，session ht9045-46；St02-M＝ht9045-32）
 - **S-24＋S2 已推＝MR !209** `bf8984cb`（從 b857685a 快轉；合過 main 8d2bb8c1＝第 68b 批）。兩組態 0 錯＋PE、nm 四個符號全域 T；25 支目標 ctest SIM／SHIP 都 25／25；完整 ctest（ab51e36e）SIM 406／428、SHIP 420／428，紅的全是這台環境、nm 確認沒有連進 S-24。log 在 `C:\AI_TempFile\st02e-scratch\`（s24m_*、s24n_*）。等筆電 gate。
 - **這台第一次跑完整 ctest 的「環境紅燈」名單**（不是回歸，之後比對用）：SIM＝config_db、ini_helpers、config_loaders、GA1_ReadGeneralIni、dfm2rc_rc_compiles／_fidelity／_idempotent（沒裝 rc.exe）、SimIO、W6_Canary、W6_4_TesterAnchor、HanaART、BarCodeHelpers、BarCode8CCDGlue、AGV_E84、Automation、W7_L1_Auto2／_Color／_Loader／_AutoRT、GA2_C1_cinitial、WB_SimPump、mainproc_guard（讀這台 `D:\HT9045\system` 的機台設定）；SHIP＝前 7 支＋WebMotorAccess 偶發逾時（-j6 下 121 秒，單獨 2 秒過）。
 - **C21 補審 0218 已寫好**：`C:\AI_TempFile\st02e-scratch\ST02_MACH0218_HOME_REVIEW_20261005.md`（交 St02-M 發布）。結論：0218 正確（HOME 中途停下不再算完成，START 從第 1 步重 HOME）；HOMEPOS0（H-1／H-2）仍成立；小問題 Q-0218-1（暫停超過 180 秒再 START 會立刻停）。

@@ -53,8 +53,8 @@ description: 夜間例行迴圈政策（HT9045）。下班後自動推進四條�
 - **給使用者看的**維持繁體中文：`NIGHT_REPORT.md`、決策題、每一輪結尾那張「目前進度／還沒做完的」小表（終端回覆有 Stop hook 強制中文）。
 - 不為了回報而停下或拆碎工作；能在一個 workflow 裡依序做完的就一次派完（agent 總數仍 ≤5）。
 - 決策題照「保持現行 → 可逆 → 樹編得起來」先選安全預設值做下去，寫進 `NIGHT_REPORT.md` §0，不等人。
-- **使用者不在時，決策題也要問人**（使用者 1005 20:2x 下班前：「動作流程優先問Frank、機台端問題問Eastsun、其他問ST02」，RULINGS_20261005 第 18 條）：動作流程（Index／Shuttle／Tray／HOME 流程）→ Frank01（TO_FRANK §4）；機台端（實機硬體、設定、量測、IO／安全門／警報碼）→ EastSun（TO_ES02 §4，同時給 St01）；其他 → St02（TO_STEVEN §4）。同一顆 commit 登記 WAITING_REPLIES。他們回的就照做並寫進 RULINGS（註明誰答）；沒回之前照預設值做、不等。動到 Jimmy 自己定的規則或推翻他裁決過的方向，仍留給 Jimmy。
-- **動作流程題三人多數決**（使用者 1006 09:2x：「動作問題也能問Frank，如果三人答案中，多數為依據」，RULINGS_20261006 第 7 條）：Index／Shuttle／Tray／Arm 的動作順序、互鎖、HOME 流程，Jimmy、Steven、Frank 三人的答案以多數為依據——兩人一致就照做；兩人不一致（例：W-44，Jimmy 第 19 條「都在原點」vs Steven 1006 規格「安全區、擋飛梭」）就問第三人，答了才動程式，在那之前照現行。不要把「同事的新答案跟 Jimmy 的裁決不同」直接當成要 Jimmy 改裁決的題目。
+- **使用者不在時，決策題也要問人**（使用者 1005 20:2x 下班前：「動作流程優先問Frank、機台端問題問Eastsun、其他問ST02」，RULINGS_20261005 第 18 條）：動作流程（Index／Shuttle／Tray／HOME 流程）→ Frank01（TO_FRANK §4）；機台端（實機硬體、設定、量測、IO／安全門／警報碼）→ EastSun（TO_ES02 §4，同時給 St01）；其他 → St02（TO_STEVEN §4）。同一顆 commit 登記 WAITING_REPLIES。他們回的就照做並寫進 RULINGS（註明誰答）；沒回之前照預設值做、不等。（1006 16:3x 起，RULINGS_20261006 第 21 條）**他們本人確實回覆的就是定案**——跟 Jimmy 之前定的不同也照做，只在 NIGHT_REPORT §1 記一行，不再列 §0 等 Jimmy 確認；AI 自己推論的不算本人回覆。
+- **動作流程題：Steven 親自的回覆優先，其次是 Frank，不是投票**（使用者 1006 16:0x：「分工表ST01是親自回覆的話，優先，其次是Frank，我對於動作流程不熟，所以結論不是投票制」，RULINGS_20261006 第 20 條；取代同日 09:2x 第 7 條的三人多數決）：Index／Shuttle／Tray／Arm 的動作順序、互鎖、HOME 流程——St01／St02 引用 **Steven 原話**的答案最優先；沒有的話照 **Frank** 的答案（Frank01 轉）。St01 自己的工程判斷不算 Steven 的回覆。Jimmy 不是動作流程的裁判，這類題不要列給 Jimmy 投票；只有要推翻 Jimmy 自己定的產品／規則時才給 Jimmy。機台的機構事實照舊由 EastSun 上機確認。
 
 每一次迭代**第一件事就是讀時鐘**（`date +%H:%M`），再決定模式。不要憑「上一輪是
 什麼模式」推論 —— 迭代之間可能隔了很久（額度中斷、機器忙）。
@@ -93,7 +93,7 @@ git ls-tree --name-only origin/machine/integ-ioweb cpp/ web/ | tail   # 最大�
    GitHub 的 `machine_params/`＋`workorder/` 跟 GitLab main `machines/HT9050/snapshot/` 一樣就印 `up to date`；不一樣就鏡像並推 GitLab main
    （只動 snapshot/，不另出 GitHub 機台包）。⚠ 1003 13:46 到 1005 之間沒人跑，GitLab 那份落後機台兩天、差 34 個檔——讀不到 GitHub 的 St01／St02
    拿舊設定在驗證。有推的那一輪，在 NIGHT_REPORT §1 記一行（機台拍照時間＋commit）。
-   **有推的那一輪，同一輪要在 `CHAT_JIMMY.md` 叮嚀全體**（使用者 1005 13:4x「處理快照部分，必須叮嚀囑咐，要用Main最新版本，用機台端的工單和機台參數，才能開始驗證問題」，RULINGS_20261005 第 6 條）：寫出新快照的機台拍照時間＋main commit，並重述兩步——工作樹先更新到 main 最新版；`python tools/machine_sync/machine_sync.py check`，`NOT SYNCED` 就 `apply --yes` 同步後才開始驗證；回報附 main commit＋機台快照時間。
+   **有推、而且機台參數或工單真的變了的那一輪（1006 16:3x 起，Jimmy #135 ②＝A，RULINGS_20261006 第 21 條：只有 `.bak` 備份檔變的不算，看 `git show --stat <快照 commit>`），同一輪要在 `CHAT_JIMMY.md` 叮嚀全體**（使用者 1005 13:4x「處理快照部分，必須叮嚀囑咐，要用Main最新版本，用機台端的工單和機台參數，才能開始驗證問題」，RULINGS_20261005 第 6 條）：寫出新快照的機台拍照時間＋main commit，並重述兩步——工作樹先更新到 main 最新版；`python tools/machine_sync/machine_sync.py check`，`NOT SYNCED` 就 `apply --yes` 同步後才開始驗證；回報附 main commit＋機台快照時間。
 7. **機台有沒有套筆電的包（每一輪都跑，只讀）**：`python D:/HT9045/backup/night_tools_20260927/pkg_uptake.py`。機台端 Claude 的規矩（EastSun 1001）是每次推完就查 GitHub main、有新包就整合、編好請 EastSun 按 F5——**但只有它在跑、沒被叫暫停時才會查，筆電沒有管道叫醒它**（使用者 1005 15:1x 問「機台端會自己知道嗎」）。印 `REMIND`（最舊一個沒套的包推出超過 3 小時）⇒ 當輪回覆與 NIGHT_REPORT 告訴 Jimmy「第 N 包推出 X 小時機台還沒套」，由他或 EastSun 跟機台說；不要自己推第二份。
 
 ### 0a. ★ 主 checkout 快轉到正本（V2；使用者 20261005「S1、S2、V1、V2 都照建議 A 做」，RULINGS_20261005 第 2 條）

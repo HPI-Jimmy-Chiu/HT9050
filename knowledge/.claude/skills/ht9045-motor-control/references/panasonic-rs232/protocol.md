@@ -1,242 +1,95 @@
 # 國際牌 MINAS A4／A5 的 RS232／RS485 通訊協定
 
-> 只寫手冊有的；手冊沒寫的標「手冊未載明」。頁碼一律是 **PDF 頁碼**（不是印刷頁碼 7-xx）。
-> HT9045 程式怎麼用這些規則，見 `ht9045-implementation.md`；每個指令的資料內容見 `command-list.md`。
+舊引用路徑保留；[讀取整理後文件](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md)。
 
 ## 0. 手冊與頁碼對照
 
-| 簡稱 | 檔案 | 通訊章 | 備註 |
-|---|---|---|---|
-| A5II | `E:\HT9045W_相關料件技術文件\馬達手冊\minas-a5-2_manu_e.pdf`（512 頁，英文） | p.411–438（印刷 7-27～7-54）；指令表 p.423；指令細節 p.424–438；X2 接頭 p.101–102 | 最完整，本文主要依據 |
-| A5中 | `…\馬達手冊\A5中文操作手冊.pdf`（388 頁，2009 年 A5） | p.317–344（＝A5II 頁碼 −94，印刷頁碼相同）；X2 接頭 p.56–57 | 文字層字型偏移，只認得出英數字（見 §0.1） |
-| A4中 | `…\馬達手冊\Panasonic A4中文操作手冊.pdf`（365 頁） | p.278–304；指令表 p.290；細節 p.290–304；Pr0C p.110、Pr5E p.55／p.120 | 中文字無法解出，英數字可讀 |
-| MCB | `…\馬達手冊\MCB-RS232_485 MODULE.pdf`（3 頁，中文） | 全份 | 文字正常 |
-
-文字檔（已抽好、每頁一個 `=== PAGE n ===`）：`D:\AI_TempFile\panasonic-skill\a5_2_en.txt`、`a5_zh.txt`、`a4_zh.txt`、`mcb_rs232_485.txt`。
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#0-手冊與頁碼對照)
 
 ### 0.1 兩份中文手冊的文字層怎麼搜
 
-- **A5中**：英數字被平移了 −29（0x1D）。要找 `command` 就搜 `FRPPDQG`、`axis` 搜 `D[LV`、`checksum` 搜 `FKHFNVXP`、`ENQ` 搜 `(14`；數字變成控制字元。還原：每個字元 `chr(ord(c)+29)`。
-- **A4中**：英數字大多正常（`command`、`axis`、`ENQ`、hex 都能搜），但部分字串平移 +1（例：`ST343D`＝`RS232C`、`ST596`＝`RS485`、`FOR`＝`ENQ`、`Difdl!Tvn`＝`Check Sum`）。
-- 兩份的中文說明都**讀不出來**；需要中文措辭時看原 PDF。
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#01-兩份中文手冊的文字層怎麼搜)
 
 ## 1. 實體層
 
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#1-實體層)
+
 ### 1.1 A5：X2 接頭（A5II p.101；A5中 p.56）
 
-| 腳 | 訊號 | 說明 |
-|---|---|---|
-| 1 | GND | 控制電路地 |
-| 2 | NC | 不要接 |
-| 3 | TXD | RS232（驅動器送出） |
-| 4 | RXD | RS232（驅動器接收） |
-| 5／7 | 485− | RS485 |
-| 6／8 | 485+ | RS485 |
-| 外殼 | FG | 接驅動器保護地 |
-
-- 插頭：Tyco Electronics 2040008-1（選購）（A5II p.101）。腳位排列（從線端看）上排 8 6 4 2、下排 7 5 3 1（A5II p.101）。
-- 主機端介面例：RS232 用 SN751701 或同等品、RS485 用 ADM485 或同等品；主機 TXD 接驅動器 RXD（腳 4）、主機 RXD 接驅動器 TXD（腳 3）、GND 接腳 1；RS485 可接任一對端子；多台時各驅動器 GND 要共地（A5II p.414；A5中 p.320）。
-- 只有位置控制型（position control type）**沒有** X2（A5II p.411、p.101）。
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#11-a5x2-接頭a5ii-p101a5中-p56)
 
 ### 1.2 三種接法（A5II p.412–413、p.102；A5中 p.318–319）
 
-| 接法 | 怎麼接 | ID 設定 |
-|---|---|---|
-| 只用 RS232（一對一） | 主機 ↔ 一台驅動器的 X2 | 「可設 0–31 任意值；主機控制沒問題的話可以設成一樣」（A5II p.412） |
-| RS232＋RS485 | 主機用 RS232 接第一台，其餘用 RS485 串接；最多 32 台 | 接主機那台 Pr5.31＝0，其他 1–31（A5II p.412、p.102） |
-| 只用 RS485 | 主機直接 RS485 串所有台；最多 31 台 | 主機的模組 ID＝0，驅動器 Pr5.31＝1–31（A5II p.413） |
-
-- 多軸輪流抓資料時，切換軸之間要隔 **50 ms 以上**（A5II p.413、p.418）。
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#12-三種接法a5ii-p412413p102a5中-p318319)
 
 ### 1.3 A4：CN X3／X4（A4中 p.279–281）
 
-- A4 的通訊接頭是 CN X3 與 CN X4；接法圖與 A5 相同（RS232 一對一、RS232＋RS485、只用 RS485），模組 ID 由前面板旋轉開關 **RSW(ID)** 設（A4中 p.279、p.282）。
-- 腳位圖在 A4中 p.280（RS232）、p.281（RS485），圖上可讀到 RXD／TXD／G／FG／RS485±、介面 IC SN751701／ADM485、接頭 MD-S8000-10（JST），但「哪一腳是什麼」的文字對應從文字層**無法可靠還原**——接線前看原 PDF。
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#13-a4cn-x3x4a4中-p279281)
 
 ### 1.4 MCB-RS232_485 通訊板（MCB p.1–3）
 
-- 「僅適用於 Panasonic Minas A5 標準型伺服驅動器」；RS-232／485 組合或純 RS-485；每片 8 個埠（A～H，用 DV0PM20024 線 1 m 接驅動器 X2），最多 4 片＝32 軸（MCB p.1）。
-- 主機用 DV0P1960 接（RS-232／485 組合）；片與片之間 DV0P1970（MCB p.1–2）。
-- 純 RS-485 時自製接頭：Pin 7 RS485＋、Pin 8 RS485－、Pin 4 GND（MCB p.2）。
-- 設定：先設 Pr5.31（起始 ID 0 為第一站）、Pr5.29（RS232 速率）、Pr5.30（RS485 速率）；改了要存 EEPROM、控制電源重開才生效；指令表要看驅動器手冊（MCB p.2）。
-- MCB p.1 把通訊方式寫成「全雙工、同步／半雙工、同步」，A5II p.414 寫 asynchronous——以驅動器手冊為準（UART 本來就是非同步）。
-- **HT9045 程式未見使用 MCB**：golden 只有一個 `Comm1`＋繼電器 `SwReadTorue` 切兩台驅動器（見 `ht9045-implementation.md` §2）。
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#14-mcb-rs232_485-通訊板mcb-p13)
 
 ## 2. 通訊參數
 
-| 項目 | A5（A5II p.414、p.276–277；A5中 p.320–321） | A4（A4中 p.282、p.110） | HT9045 golden |
-|---|---|---|---|
-| 方式 | RS232 全雙工非同步；RS485 半雙工非同步 | 同左 | RS232 |
-| 鮑率 | 2400／4800／9600／19200／38400／57600／115200 | 2400～57600（**沒有 115200**） | 9600（rs232.cpp:250；HP 卡 115200 :248） |
-| 鮑率參數 | Pr5.29（RS232）、Pr5.30（RS485），0–6，預設 2＝9600；控制電源重開才生效 | Pr0C（RS232）、Pr0D（RS485），0–5，Pr0C 預設 2＝9600 | — |
-| 資料／同位／停止 | 8 bit／無／1 bit（start 1 bit） | 8 bit／無／1 bit | 8／無（三菱 Even）／1（rs232.cpp:242-253） |
-| 軸位址 | Pr5.31，0–127，預設 1；RS232／RS485 時最大有效值 31（A5II p.277） | RSW(ID) 旋轉開關；PrNo.00 範圍 0–15（A4中 p.282，中文說明無法解出，是否即軸位址：手冊文字未能確認） | 扭力讀：Z1 送 0、Z2 送 1；參數讀寫一律送 0 |
-| 速率誤差 | 2400–38400 ±0.5 %，57600–115200 ±2 %（A5II p.276） | 手冊未能解讀 | — |
-
-- 9600 bps 一個位元組 1.04 ms＝1000/9600×(1+8+1)；實際還要加驅動器處理與收發切換時間（A5II p.415；A5中 p.321；A4中 p.282）。
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#2-通訊參數)
 
 ## 3. 交握碼（A5II p.415；A5中 p.321；A4中 p.282）
 
-| 名稱 | 碼 | 作用 |
-|---|---|---|
-| ENQ | 05h | 有區塊要送時發出（傳送請求） |
-| EOT | 04h | 準備好收區塊時發出；送 ENQ 收到 EOT 後進入傳送模式 |
-| ACK | 06h | 收到的區塊判為正常 |
-| NAK | 15h | 收到的區塊判為異常（依檢查碼與逾時判斷） |
-
-- **RS485** 時 ENQ 與 EOT 前面多一個「模組辨識位元組」：`bit7=1`、低位＝模組 ID（Pr5.31）；主機模組 ID 為 0，所以驅動器 Pr5.31 要設 1–31（A5II p.415）。
-- RS232 沒有模組辨識位元組。
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#3-交握碼a5ii-p415a5中-p321a4中-p282)
 
 ## 4. 傳送順序
 
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#4-傳送順序)
+
 ### 4.1 RS232（A5II p.416；A5中 p.322；A4中 p.283）
 
-```
-主機                              驅動器
-1) ENQ (05h)          ───────▶
-                      ◀───────   2) EOT (04h)
-3) 指令區塊           ───────▶
-                      ◀───────   4) ACK (06h)（或 NAK 15h）
-                      ◀───────   5) ENQ (05h)        ← 驅動器有回覆要送
-6) EOT (04h)          ───────▶
-                      ◀───────   7) 回覆區塊
-8) ACK (06h)（或 NAK）───────▶
-```
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#41-rs232a5ii-p416a5中-p322a4中-p283)
 
 ### 4.2 RS485（A5II p.416；A4中 p.283）
 
-同上，但 ENQ／EOT 前加辨識位元組：主機送 `81h ENQ`、驅動器回 `81h EOT`（對 ID 1）；驅動器回傳時送 `80h ENQ`、主機回 `80h EOT`（主機 ID 0）。辨識位元組＝**對方**的 ID｜80h（A5II p.421）。
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#42-rs485a5ii-p416a4中-p283)
 
 ### 4.3 線路控制規則（A5II p.416）
 
-- 接收模式：收到 ENQ、回出 EOT 之後；傳送模式：送出 ENQ、收到 EOT 之後。
-- 搶線：送了 ENQ 在等 EOT 時又收到對方的 ENQ → 從端讓出、進入接收模式（主端的 ENQ 優先）。驅動器預設是從端（M/S＝0，§6）。
-- 傳送控制：進入傳送模式後連續送完整個區塊，等 ACK；收到 ACK 才算完成。T2 內沒收到 ACK、或收到 ACK／NAK 以外的碼 → **從 ENQ 重試**。命令位元組數送錯時驅動器可能不回 ACK。
-- 接收控制：從第一個位元組讀出命令位元組數 N，再連續收 N+3 個位元組；加總為 0 回 ACK；檢查碼錯或字元間逾時回 NAK。
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#43-線路控制規則a5ii-p416)
 
 ### 4.4 狀態轉移（A5II p.420–421；A4中 p.287–288）
 
-手冊有 RS232 與 RS485 兩張狀態圖（等 EOT、送區塊、等 ACK／NAK、等命令位元組數、收剩下的區塊…），每一格都標 T1／T2 的啟停與重試次數加一。要寫新的通訊層時照圖做；HT9045 golden 只實作了「主機送一次、收一次」的直線版本（見 `ht9045-implementation.md` §5、§7）。
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#44-狀態轉移a5ii-p420421a4中-p287288)
 
 ## 5. 區塊格式（A5II p.417；A5中 p.323；A4中 p.284）
 
-```
-┌────┬──────┬──────────────────────┬─────────────────┬──────────┐
-│ N  │ axis │ mode(高4位)│command(低4位) │ 參數（N 個位元組）│ checksum │
-└────┴──────┴──────────────────────┴─────────────────┴──────────┘
-  1      1              1                    N                1      ＝ 共 N+4 個位元組
-```
-
-| 欄 | 範圍 | 意義 |
-|---|---|---|
-| N | 0–240 | 命令位元組數＝後面參數的個數 |
-| axis | 0–127（A5；設成 Pr5.31 的值） | 軸號 |
-| command | 0–15 | 控制指令 |
-| mode | 0–15 | 指令執行模式，意義隨指令而變 |
-| checksum | 1 位元組 | 從區塊第一個位元組加到最後一個參數，總和的 2 補數 |
-
-**第 3 位元組的高低半位元**：手冊圖上只寫「command」「mode」兩格，沒有寫哪個在高位。p.419 的實例把它定死了——「取得執行權」（command 1／mode 7，A5II p.425）送的是 `71h`，「個別寫參數」（command 7／mode 1）送 `17h`，「寫 EEPROM」（command 7／mode 2）送 `27h`；p.418「讀絕對編碼器」（command 2／mode D）送 `D2h`。所以：
-
-> **位元組 ＝ (mode << 4) | command**。HT9045 的 `0x52` ＝ mode 5、command 2 ＝「Read out of present torque output」。
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#5-區塊格式a5ii-p417a5中-p323a4中-p284)
 
 ### 5.1 回覆區塊的錯誤碼
 
-幾乎每個回覆的最後一個參數是 **error code**（A5II p.424–438）：
-
-| 位元 | 意義 |
-|---|---|
-| bit7 | 0＝正常、1＝錯誤 |
-| bit6 | Data error（參數值超出範圍、寫 EEPROM 失敗等） |
-| bit5 | Command error（指令不存在或此模式不能用） |
-| bit4 | RS485 error |
-| bit3 | No. error（參數類別或編號超出範圍） |
-| bit0 | Control LV（寫 EEPROM 時控制電源欠壓）；取得執行權時是「in use」 |
-
-- 收到的資料個數不對時，不管哪個指令，都只回「錯誤碼一個位元組」（N＝1）（A5II p.423）。
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#51-回覆區塊的錯誤碼)
 
 ## 6. 協定參數（A5II p.417；A5中 p.323；A4中 p.284）
 
-| 名稱 | 意義 | RS232 初值 | RS485 初值 | 範圍 | 單位 |
-|---|---|---|---|---|---|
-| T1 | 字元間逾時（ENQ／EOT 與辨識位元組之間、區塊內相鄰字元之間）；超過就回 NAK | 5（0.5 s） | 1（0.1 s） | 1–255 | 0.1 s |
-| T2 | 協定逾時：送 ENQ 到收 EOT、送 EOT 到收第一個字元、送完檢查碼到收 ACK；超過就從 ENQ 重送或回 NAK | 5（0.5 s） | 1（0.1 s） | 1–255 | 表格寫「1 sec」 |
-| T6 | 驅動器回應時間：收 ENQ→送 EOT、收檢查碼→送 ACK、收 EOT→送第一個字元（A5 才有） | 0（0 ms） | 6（6 ms） | 0–255（RS485 2–255） | 1 ms |
-| RTY | 最大重試次數，超過就是傳送錯誤 | 1 | 1 | 1–8 | 次 |
-| M/S | 搶線時誰優先：0＝從端、1＝主端 | 0 | 0 | 0／1 | — |
-
-- ⚠ 手冊自相矛盾：T2 的初值寫「5（0.5 sec）」、單位欄寫「1 sec」（A5II p.417；A4中 p.284 同樣）；指令 1／8 的說明又寫「T1：0.1 s，T2：0.1 s，T6：1 ms」（A5II p.425）。照 0.1 s 解讀才跟「5＝0.5 s」一致，但手冊沒有明講哪個對。
-- 改協定參數：A5 用指令 1／8（RS232）、1／9（RS485），A4 用 1／1、1／2；新值從下一個指令起生效（A5II p.425；A4中 p.291–292）。A4 的協定參數表沒有 T6（A4中 p.284）。
-- HT9045 從來不改協定參數，也不實作 T1／T2；它自己的逾時是另一套（`ht9045-implementation.md` §5、§7）。
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#6-協定參數a5ii-p417a5中-p323a4中-p284)
 
 ## 7. 時序（A5II p.422；A4中 p.289）
 
-| 符號 | 意義 | 最小 | 最大 |
-|---|---|---|---|
-| T3 | 連續字元間隔 | 一個停止位元長 | T1 |
-| T4 | 驅動器回應時間 | 協定參數 T6 | T2 |
-| T5 | 主機回應時間 | 2 ms | T2 |
-
-- 時間從停止位元的上升緣算起（A5II p.422）。圖上每段之間標「0 to 2 ms」，配在「RS485 bus occupation」那一列（推定是 RS485 收發切換時間；手冊沒有文字說明）。標題寫「In case of RS485（RS232 to follow）」——RS232 也照這張。
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#7-時序a5ii-p422a4中-p289)
 
 ## 8. 檢查碼計算與範例
 
-規則：`checksum = (−(b0+b1+…+b(N+2))) & 0xFF`；收方驗證 `b0+…+b(N+3) ≡ 0 (mod 256)`（A5II p.417、p.416）。golden 的寫法是 `sum=~sum+1`（rs232.cpp:1384、:1400、:1436、:1453），讀扭力那一包直接寫成 `0xAE-Address`（:910），因為 `0x00+Address+0x52+(0xAE−Address)=0x100`。
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#8-檢查碼計算與範例)
 
 ### 8.1 手冊範例驗算（A5II p.418–419；A4中 p.285–286）
 
-| 範例 | 區塊 | 驗算 |
-|---|---|---|
-| 取得執行權（ID 1） | `01 01 71 01 8C` | 01+01+71+01＝74h → 2 補數 8Ch ✓ |
-| 驅動器回覆 | `01 01 71 00 8D` | 01+01+71+00＝73h → 8Dh ✓ |
-| A5 個別寫參數 Pr0.02＝0 | `06 01 17 00 02 00 00 00 00 E0` | 06+01+17+02＝20h → E0h ✓ |
-| A5 寫 EEPROM | `00 01 27 D8`，回 `01 01 27 00 D7` | ✓ |
-| A4 個別寫參數 No.0B＝0 | `03 01 18 0B 00 00 D9` | 03+01+18+0B＝27h → D9h ✓ |
-| A4 寫 EEPROM | `00 01 48 B7`，回 `01 01 48 00 B6` | ✓ |
-| 讀絕對編碼器（RS485 ID 1） | `00 01 D2 2D` | ✓ |
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#81-手冊範例驗算a5ii-p418419a4中-p285286)
 
 ### 8.2 HT9045 用到的封包（手算，跟 golden 組字一致）
 
-| 封包 | 位元組 |
-|---|---|
-| 讀扭力 Z1（axis 0） | `00 00 52 AE` |
-| 讀扭力 Z2（axis 1） | `00 01 52 AD` |
-| 扭力回覆：+300（＝15.00 %） | `03 00 52 2C 01 00 7E` |
-| 扭力回覆：−100（golden 會當 0） | `03 00 52 9C FF 00 10` |
-| A5 讀 Pr0.13 | `02 00 07 00 0D EA` |
-| A5 讀回 300 | `05 00 07 2C 01 00 00 00 C7` |
-| A5 寫 Pr0.13＝300／80／40／120 | `06 00 17 00 0D 2C 01 00 00 A9`／`…50 00 00 00 86`／`…28 00 00 00 AE`／`…78 00 00 00 5E` |
-| A5 寫入成功回覆 | `01 00 17 00 E8` |
-| A4 讀 Pr5E | `01 00 08 5E 99` |
-| A4 讀回 300 | `03 00 08 2C 01 00 C8` |
-| A4 寫 Pr5E＝300／80／40／120 | `03 00 18 5E 2C 01 5A`／`…50 00 37`／`…28 00 5F`／`…78 00 0F` |
-| A4 寫入成功回覆 | `01 00 18 00 E7` |
-
-（回覆的 axis 欄由驅動器填；上表假設 0。）
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#82-ht9045-用到的封包手算跟-golden-組字一致)
 
 ## 9. 正規的「改參數」流程（A5II p.419；A4中 p.286）
 
-1. 取得執行權（command 1／mode 7，資料 1）
-2. 個別寫參數（A5 7／1；A4 8／1）
-3. 需要保存時寫 EEPROM（A5 7／2；A4 8／4）
-4. 釋放執行權（1／7，資料 0）
-
-- 執行權是為了避免跟前面板操作衝突；「寫參數與寫 EEPROM 時要取得、做完要釋放」；取得中前面板除了監看模式都不能操作；取得失敗回「in use」錯誤（A5II p.425）。
-- 個別寫參數「只是暫時改」，要保存得再寫 EEPROM；寫 EEPROM 最長約 5 秒（全部參數都改過時）（A5II p.433）。
-- **HT9045 只做第 2 步**（不取執行權、不寫 EEPROM、不釋放）——寫完立刻讀回比對；手冊沒說不取執行權會被拒絕，實務上讀回比對通過（`ht9045-implementation.md` §13 陷阱）。
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#9-正規的改參數流程a5ii-p419a4中-p286)
 
 ## 10. A4 與 A5 差在哪
 
-| 項目 | A4 | A5／A5II | 出處 |
-|---|---|---|---|
-| 接頭 | CN X3／X4 | X2（8 腳） | A4中 p.279–281；A5II p.101 |
-| 模組 ID | 前面板 RSW(ID) | Pr5.31（0–127，通訊有效 0–31，預設 1） | A4中 p.279、p.282；A5II p.277 |
-| 最高鮑率 | 57600 | 115200 | A4中 p.282；A5II p.414 |
-| 鮑率參數 | Pr0C／Pr0D（0–5） | Pr5.29／Pr5.30（0–6） | A4中 p.110、p.282；A5II p.276 |
-| 協定參數 | T1、T2、RTY、M/S（無 T6）；指令 1／1、1／2 | T1、T2、T6、RTY、M/S；指令 1／8、1／9 | A4中 p.284、p.291–292；A5II p.417、p.425 |
-| 讀扭力 | 2／5，16 位元，額定＝2000 | 2／5，16 位元，額定＝2000 | A4中 p.294；A5II p.427 |
-| 參數讀寫 | command 8：讀 8／0（N＝1：編號）→ 回 16 位元值；寫 8／1（N＝3：編號＋16 位元）；EEPROM 8／4 | command 7：讀 7／0（N＝2：類別＋編號）→ 回 32 位元（符號延伸）；寫 7／1（N＝6：類別＋編號＋32 位元）；EEPROM 7／2 | A4中 p.300；A5II p.433 |
-| 參數編號 | 單一位元組 00h–7Fh（例 Pr5E） | 類別＋編號（例 Pr0.13＝00h、0Dh） | A4中 p.300；A5II p.433 |
-| 批次參數 | command B（0／1／2，以「頁」為單位） | 7／6、7／7、7／8（含 MIN／MAX／屬性，一次 8 個） | A4中 p.303–304；A5II p.434–436 |
-| 第 1 扭力限制 | Pr5E，0–500 %，預設 <500>*2 | Pr0.13，0–500 %，預設 500；多數組合實際 0–300、預設 300 | A4中 p.55、p.120；A5II p.234、p.134 |
-| 扭力限制相關參數 | Pr5E、Pr5F（同一註 *2，0–500 %） | Pr0.13（第 1）、Pr5.22（第 2）、Pr5.11、Pr5.25、Pr5.26 | A4中 p.55；A5II p.134 |
-| 回覆長度（HT9045 用到的） | 扭力 7、讀參數 7、寫參數 5 | 扭力 7、讀參數 9、寫參數 5 | 依 §5 規則算；golden 用 `BufferLength==7`（A5 再加 9）判斷（rs232.cpp:1801-1802） |
+[讀取此節](../../../hpi-motor-control/references/control/references/panasonic-rs232/protocol.md#10-a4-與-a5-差在哪)
