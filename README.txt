@@ -1670,4 +1670,8 @@ HT9050 機台端 → 筆電：機台自己的 commit（format-patch），分支 
 - The DFM / HTML / copy buttons at the end of the properties panel's tabs line are gone (EastSun 1006: not wanted);
   the jumps stay on a row's double-click / menu and Shift+F7. ES02: please take it.
 - Tests: run_all 3/3 layers; real VS Code 159/159.
+=== tools 0169 (20261006, machine) -- HTML designer (tools/vscode-htdesigner) 0.197.0 ===
+- The Debug / Release button on the Solution Explorer toolbar stands out (EastSun 1006): a bigger icon, the icon
+  and the word bright orange (Release) / red (Debug), the button tinted. ES02: please take it.
+- Tests: run_all 3/3 layers; real VS Code 159/159.
 MD5 清單在 MANIFEST_MD5.tsv。
