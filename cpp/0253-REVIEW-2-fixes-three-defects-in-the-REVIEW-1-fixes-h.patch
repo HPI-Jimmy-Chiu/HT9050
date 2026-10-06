@@ -1,0 +1,232 @@
+From b12ddefeb90c81d735a8a93b25999d78d8dceef2 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 03:22:14 +0800
+Subject: [PATCH] REVIEW-2 fixes: three defects in the REVIEW-1 fixes (hourly
+ review loop on aff4167 / fa06b9f).
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+1. (critical) MyPLC_IO_Modbus.cpp:286: the W906_SafePlcFrameMark call sat AFTER the line's existing `//完成過一次` comment, so it was never compiled -> the link-lost alarm fired 2 s after every START with a healthy PLC. Test [7] called the mark directly and stayed green. Now the call is before the comment, and "lost" = socket not connected or 2 requests in a row unanswered within hCheckTime (1 s) (W906_SafePlcFrameMiss on the timeout branch, same line; reset on a reply) -- a 2 s tick stall no longer blames the PLC. Test [7] now drives the real PLCIOTaskCycle (send, two 1.1 s timeouts, a reply): 75/75. All 11,128 lines added today scanned for code after a `//`: 0 (control: the bad line is caught).
+2. (high) Pci1203Monitor.cpp: heartbeat stamped GetTickCount()|1u could be 1 ms ahead of "now" -> the unsigned difference wrapped -> RunSync refused normal requests incl. STOPs at random; and the heartbeat-based freeze clock refused STOPs during a long but alive Poll. RunSync's immediate refusal and heartbeat-based clock are reverted (original behaviour); stamp is `t ? t : 1`; EOF W906_Pci1203IoHeartAgeMs (signed); only WebMotorAccessLive.cpp W906_TorqueFocus (the every-beat torque SDO focus) skips itself when the heartbeat is >= 5 s old.
+3. (medium) WAR16155 is RULINGS_20261005 #96's "1203 card command failed" -> the safety-PLC link-lost alarm is WAR16156 (csystem.cpp same line; AlarmCodeList.txt; web tables in the web commit).
+
+Debug + release (affected targets). WORKLOG section 2 row 143.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203Monitor.cpp | 17 ++++++++++++++---
+ MyPLC/MyPLC_IO_Modbus.cpp   | 34 +++++++++++++++++-----------------
+ WebMotorAccessLive.cpp      |  2 +-
+ csystem.cpp                 |  2 +-
+ docs/WORKLOG_MACHINE.md     |  1 +
+ tests/test_myplc_modbus.cpp | 33 +++++++++++++++++++++------------
+ 6 files changed, 55 insertions(+), 34 deletions(-)
+
+diff --git a/EtherCAT/Pci1203Monitor.cpp b/EtherCAT/Pci1203Monitor.cpp
+index d9fe4b6..dcf1ce2 100644
+--- a/EtherCAT/Pci1203Monitor.cpp
++++ b/EtherCAT/Pci1203Monitor.cpp
+@@ -4432,7 +4432,7 @@ DWORD WINAPI W906IoThreadMain_(void*)
+         if (TPci1203Monitor* m = Pci1203Monitor()) {
+             try { m->Poll(); } catch (...) {}          // Poll never throws; a vendor surprise must not end the thread
+         }
+-        ::InterlockedIncrement(&g_w906IoHeart);  g_w906IoHeartAt = ::GetTickCount() | 1u;   //AI(W906-IOFIX-2) 20261007: heartbeat time, same line
++        ::InterlockedIncrement(&g_w906IoHeart);  { const DWORD t = ::GetTickCount(); g_w906IoHeartAt = t ? t : 1u; }   //AI(W906-IOFIX-3) 20261007: heartbeat time; never later than "now" (IOFIX-2's |1u could be 1 ms ahead -> unsigned wrap), 0 stays "no heartbeat yet"
+         W906IoServe_(true);
+         if (g_w906IoStop) break;
+         ::WaitForSingleObject(g_w906IoWake, (DWORD)g_w906IoGapMs);
+@@ -4508,7 +4508,7 @@ void Pci1203IoThreadRunSync(void (*fn)(void*), void* arg, bool boundaryOnly)
+         static unsigned long s_said = 0;
+         if (s_said++ == 0) std::printf("[IOTHREAD] card request refused: the IO thread did not stop in time and still owns the card\n");
+         return;
+-    }   { const DWORD hbA = g_w906IoHeartAt; if (hbA != 0 && (DWORD)(::GetTickCount() - hbA) >= kW906IoStallMs) { static unsigned long s_frozen = 0; if ((s_frozen++ % 50) == 0) { std::printf("[IOTHREAD] card request refused at once: no poll for %lu ms (heartbeat frozen; %lu refused so far)\n", (unsigned long)((DWORD)::GetTickCount() - hbA), s_frozen); std::fflush(stdout); } return; } }   //AI(W906-IOFIX-2) 20261007: review 20261006 #1 -- the thread is already stuck: refuse BEFORE queueing, so a caller that asks every 100 ms (Motor Test page W906_TorqueFocus -> SetTorqueFocusAxis) no longer freezes the tick loop 5 s per ask
++    }   //AI(W906-IOFIX-3) 20261007: the IOFIX-2 "refuse at once when the heartbeat is frozen" that was here is REMOVED (review 20261007: with GetTickCount()|1 the unsigned difference wrapped and refused normal requests incl. STOPs at random; and a legitimately long Poll -- re-attach ScanSlaves_+OpenAxes_ up to ~8 s -- would refuse STOPs too). The Motor Test caller skips itself instead (WebMotorAccessLive.cpp W906_TorqueFocus).
+     W906IoReq r;
+     r.fn = fn;  r.arg = arg;  r.boundaryOnly = boundaryOnly;
+     r.done = ::CreateEventA(NULL, TRUE, FALSE, NULL);
+@@ -4526,7 +4526,7 @@ void Pci1203IoThreadRunSync(void (*fn)(void*), void* arg, bool boundaryOnly)
+     //  on this stack frame), so keep waiting -- and say so every 5 s.
+     const DWORD t0 = ::GetTickCount();
+     long hb0 = g_w906IoHeart;
+-    DWORD hbAt = (g_w906IoHeartAt != 0) ? (DWORD)g_w906IoHeartAt : t0, noteAt = t0;   //AI(W906-IOFIX-2) 20261007: the freeze clock starts at the last heartbeat, not at this request (was hbAt = t0)
++    DWORD hbAt = t0, noteAt = t0;   //AI(W906-IOFIX-3) 20261007: back to the request time (IOFIX-2 started it at the last heartbeat; review 20261007: a long but alive Poll then refused queued STOPs)
+     for (;;) {
+         HANDLE hs[2] = { r.done, g_w906IoThread };
+         const DWORD w = ::WaitForMultipleObjects(2, hs, FALSE, 500);
+@@ -4672,3 +4672,14 @@ void Pci1203IoThreadStop(unsigned long waitMs)
+     g_w906IoTid = 0;
+ }
+ }  // namespace ht9045
++//AI(W906-IOFIX-3) 20261007: how long since the IO thread's last heartbeat (end of a Poll), for callers that ask the card on every
++//  beat and must not queue behind a stuck thread (WebMotorAccessLive.cpp W906_TorqueFocus). 0 = thread not running or no heartbeat
++//  yet (nothing to judge). Signed difference: a heartbeat stamped in this same tick reads 0, never a wrapped 4294967295.
++unsigned long W906_Pci1203IoHeartAgeMs()
++{
++    if (!ht9045::Pci1203IoThreadRunning()) return 0;
++    const DWORD at = ht9045::g_w906IoHeartAt;
++    if (at == 0) return 0;
++    const long d = (long)(::GetTickCount() - at);
++    return d > 0 ? (unsigned long)d : 0ul;
++}
+diff --git a/MyPLC/MyPLC_IO_Modbus.cpp b/MyPLC/MyPLC_IO_Modbus.cpp
+index 027dc9e..321f925 100644
+--- a/MyPLC/MyPLC_IO_Modbus.cpp
++++ b/MyPLC/MyPLC_IO_Modbus.cpp
+@@ -283,7 +283,7 @@ void PLCIOTaskCycle()
+                 //if(iPLCSafetyVer==202204)                                     //joe 20220406.01 debug safe plc
+                     bIOPowered=true;
+ 
+-                bPLCIOEffect=true;                                              //完成過一次 (completed at least once)   { void W906_SafePlcFrameMark(); W906_SafePlcFrameMark(); }   //AI(W906-PLCLOST) 20261007: frame time for the link-lost alarm (end of file)
++                bPLCIOEffect=true;  { void W906_SafePlcFrameMark(); W906_SafePlcFrameMark(); }   //完成過一次 (completed at least once)   //AI(W906-PLCLOST-2) 20261007: a frame arrived -> the link-lost miss count is reset (end of file). The first version put this call AFTER the line's `//` comment, so it was never compiled (review 20261007)
+                 iSlave++;
+                 iTransactionID++;
+                 Task=1;
+@@ -292,7 +292,7 @@ void PLCIOTaskCycle()
+             {
+                 if(hCheckTime.Off())
+                 {
+-                    iSlave++;
++                    iSlave++;  { void W906_SafePlcFrameMiss(); W906_SafePlcFrameMiss(); }   //AI(W906-PLCLOST-2) 20261007: this request got no reply within hCheckTime (1 s) -> one miss (end of file)
+                     iTransactionID++;
+                     Task=1;
+                 }
+@@ -457,27 +457,27 @@ void W906_PlcM1SAllDoors(int slave)
+ //AI(W906-PLCLOST) 20261007: EastSun 1006 (asked whether a PLC link loss should clear the door data) 「Plc斷線額外寫異常」.
+ //  Review 20261006: after a link loss golden keeps the last frame (its clear block in PLCStatusCheck is commented out, Ken 20250428),
+ //  so doors / EMG keep reading "closed", and bCheckPLCConnet only notices once the socket itself is down -- a pulled cable can stay
+-//  "connected" for tens of seconds. This is the separate alarm: the link is LOST when SafePlcIO=1 and either the socket is not
+-//  connected or no reply frame has arrived for kW906PlcLostMs (from the first ask, so "never answered since boot" counts too).
+-//  csystem.cpp DoSystem raises WAR16155 on it while running (same place as golden's G12 check). The door / EMG data are not touched.
+-#include <chrono>
+-static const long kW906PlcLostMs = 2000;
+-static long long s_w906PlcFrameAt = 0, s_w906PlcSince = 0;
+-static long long W906_PlcNowMs()
++//  "connected" for tens of seconds. This is the separate alarm, WAR16156 (csystem.cpp DoSystem, while running, after golden's G12).
++//AI(W906-PLCLOST-2) 20261007: review 20261007 -- (a) the first version's frame mark was swallowed by a `//` comment, so the alarm fired
++//  2 s after every START with a healthy PLC; (b) it judged by wall-clock age (no frame for 2 s), so a tick-loop stall of 2 s blamed the
++//  PLC; (c) WAR16155 was already given to "1203 card command failed" (RULINGS_20261005 #96) -> now WAR16156. Judged by REQUESTS now:
++//      lost = SafePlcIO=1 and (socket not connected, or the last kW906PlcLostMisses requests each got no reply within hCheckTime=1 s)
++//  A reply resets the count (PLCIOTaskCycle case 100). A tick stall makes at most one request time out before the next one is
++//  answered, so it no longer trips; a pulled cable trips after 2 timeouts (~2 s of polling); "never answered since boot" trips too
++//  (the misses pile up) and so does "never connected" (socket down). The door / EMG data are not touched.
++static const int kW906PlcLostMisses = 2;
++static int s_w906PlcMisses = 0;
++void W906_SafePlcFrameMark()
+ {
+-    return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
++    s_w906PlcMisses = 0;
+ }
+-void W906_SafePlcFrameMark()
++void W906_SafePlcFrameMiss()
+ {
+-    s_w906PlcFrameAt = W906_PlcNowMs();
++    if(s_w906PlcMisses < 1000000) ++s_w906PlcMisses;
+ }
+ bool W906_SafePlcLinkLost()
+ {
+     if(!Enable_PLCSafety_IO)
+         return false;
+-    const long long now = W906_PlcNowMs();
+-    if(s_w906PlcSince == 0)
+-        s_w906PlcSince = now;
+-    const long long ref = s_w906PlcFrameAt ? s_w906PlcFrameAt : s_w906PlcSince;
+-    return !PlcComm.IsConnected() || (now - ref) > kW906PlcLostMs;
++    return !PlcComm.IsConnected() || s_w906PlcMisses >= kW906PlcLostMisses;
+ }
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index c1fa161..31c2dc5 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -1487,7 +1487,7 @@ void W906_MotorAccessEngineHooks()
+ static void W906_TorqueFocus(bool operatorConnected)
+ {
+     ht9045::TPci1203Monitor* m = ht9045::Pci1203Monitor();
+-    if (m == 0 || !operatorConnected) return;
++    if (m == 0 || !operatorConnected) return;   { extern unsigned long W906_Pci1203IoHeartAgeMs(); if (W906_Pci1203IoHeartAgeMs() >= 5000ul) return; }   //AI(W906-IOFIX-3) 20261007: review 20261006 #1 -- the IO thread made no poll for 5 s: do not queue this every-beat SDO focus behind it (each ask froze the tick loop 5 s); the 3 s focus simply lapses. STOP / DO callers are untouched
+     const ht9045::MotorAccessJobState js = ht9045::MotorAccessJobs();
+     if (!js.pageShown || js.selectedMotor.empty()) return;
+     ht9045::MotorAccessAxis a;
+diff --git a/csystem.cpp b/csystem.cpp
+index baf9add..4e2606c 100644
+--- a/csystem.cpp
++++ b/csystem.cpp
+@@ -16718,7 +16718,7 @@ void DoSystem()
+             bPLCDisconnet=true;
+         }
+ #endif // GATE G12
+-        { extern bool W906_SafePlcLinkLost(); if(W906_SafePlcLinkLost()) { ShowErrorMessage("WAR16155", K_RETRY, MMSystem); SystemStart=false; StopAllMotor(); } }   //AI(W906-PLCLOST) 20261007: EastSun「Plc斷線額外寫異常」-- safety PLC link lost (socket down or no frame for 2 s, MyPLC_IO_Modbus.cpp EOF) -> WAR16155 + stop, every pass while running; on the old blank line
++        { extern bool W906_SafePlcLinkLost(); if(W906_SafePlcLinkLost()) { ShowErrorMessage("WAR16156", K_RETRY, MMSystem); SystemStart=false; StopAllMotor(); } }   //AI(W906-PLCLOST) 20261007: EastSun「Plc斷線額外寫異常」-- safety PLC link lost (socket down or 2 requests in a row unanswered, MyPLC_IO_Modbus.cpp EOF) -> WAR16156 + stop, every pass while running; on the old blank line   //AI(W906-PLCLOST-2) 20261007: was WAR16155, which RULINGS_20261005 #96 gives to "1203 card command failed"
+         if(CheckSafeDoorIsClosed()==false)                                      //jou 20171030 (Steven) : 修正安全門未關按Start時IndexArm會先動作
+         {
+             SystemStart=false;
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index b63842e..d525059 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -221,6 +221,7 @@
+ | 140 | **HT9050 Tray Z 層位改成「基準層 − 層 × pitch」＋Teach 頁 9050 Tray Z（W906-TRAYZ-PITCH）**（EastSun 1006「Loader unloader 9050 流程有哪些點位 teach畫面無法設定？」→「第幾層不是用pitch來算嗎？」「每一層一定是有一個基準層 用pitch算上去」「基準層pitch要用減的」「交接位置不就是 上位嗎？」→ 我指出 Loader 取盤 case 10 上位[L]→++→case 30 上位[L+1]+抬升→case 50 下位[L+1]，若改本層會不動 →「對那額外抬升也要校正」「其他站額外抬升也要保留」「探測就是上位 加層數 然後要可以讓我設探測極限」「這個值要可以校正」「只編有改到的」）。計畫 D:\HT9045\_tray9050_1006\PLAN_TRAYZ_PITCH.md；備份分支 backup/pre-trayzpitch-20261006（cpp、web）＋ D:\HT9045\_tray9050_1006\backup_web_224055。**之前**：9050 流程（910 Eastsun 0819）讀每層一格的 Prod.TrayZ_Up/Down[MAX_TRACK=9]（層號 -1..19 越界）、EmptyZ_*／Auto1~3Z_*[20]、Home／抬升／探測起始層——沒有 ini 鍵、畫面或程式寫過（全 0）；HOME 的 W906_HomePos 在 HT9050 回 0。**現在**：LastSet.h TECH 最後一欄同行加 iTrayZ9050UpBase/DownBase/Pitch/Home/Lift[5]、ProbeStart、ProbeLimit；cinitial.cpp EOF W906_TrayZ9050(zone,up,layer)=base−layer×pitch、Home／Lift／ProbeStart／ProbeLimit（0＝20）直接讀 Tech（教導頁存檔後下一次移動就生效）；acatchtray.cpp（Loader 取盤、Empty 取／放盤、Auto1~3 放盤）、asendic_Loader.cpp（補盤、待命、Home、探測 1100/1110/1115/1120/1125、極限取代寫死的 MAX_LOADER_LAYER_9050）、csystem.cpp DoReceiveAllToBottom_9050、uhome.cpp HOME 的 Loader Z 全部同行改呼叫；流程步驟／++ 時機／每步 Up/Down/Home/Up+lift 照 910 不動；golden asendic.cpp 的 TrayZ_Up 與 cinitial 寫入不動。教導點：tools/gen_teach_registry.py EXT_ROWS +27（5 區 × 上位基準／下位基準／pitch／Home／抬升＋Loader 探測起始層／極限，鍵 setEditTZ9050*，段 [MLoaderZ]／[MEmptyZ]／[MAuto1Z..3Z]），fTeachRegistry.cpp 只換擴充區塊（+27 行），gen_teach_editlist.py 重生 Teach.gen.inc／WebTeachButtons.gen.inc，--check 通過。web：HW.teach.html Tray Arm 頁 gbW906TrayZ9050（上位／下位／Home 有 Set／GO），teach-access.json／js +15 techPoints，ht9045_teach_3axes_c.js 加 5 軸＋機型閘（parent.MACHINE.id＝HT9050）；無頭瀏覽器 HT9050 顯示且 Set 已綁、HT9045 隱藏。測試：Flow9050_Tray 104/104（Tech 設成與原 Prod 值逐層相同＋新 [TZ] 公式段：-1..19 層、pitch 減、Home／抬升、界外 zone＝0、探測極限預設 20／可設）、WebMotorAccess（EXT 7→34）、TeachButtonsGen、GA1_LastSet、TeachKb 等過；GearTeachSave＝已知（缺快照參數）。Debug 22:49、release 22:57（只編受影響目標） | 第一次開機 27 值＝0，要先教；EastSun 實機確認 | 本 commit |
+ | 141 | **安全 PLC 門其實沒在偵測——兩個缺陷修正（W906-PLCDOOR-2）**（EastSun 1006「請你檢查enable的io有哪些還沒有實際功能」→ IO 盤點代理；第 138／139 條我回報「功能已編入」是錯的）。①MyLaneIo.cpp:526 引擎讀 PLC 列的 IOInputBit 照 golden 只收 Port 0x300..0x303、其他回 true ⇒ SnAllSafeDoor 0x310（第 138 條的合成全門位元）永遠讀成「關」；tests [5] 走 TMyPLC_IO_Modbus::IsOn 另一條路所以綠。改：iSafePlcModel==1 時上限 0x310（同行），型號 0 照 golden。②InitialSafeDoor：JerryYang 20260926「安全門還沒好, 暫時MARK掉」（cinitial.cpp:3044-3050）與 SAFE_DOOR_AMOUNT=1（:3083-3084）在 PLC 強制啟用（:2792-2797）之後把門全關 ⇒ IsOff() 恆 false、MES1611～永不跳。改：InitialSafeDoor 結尾同行呼叫 cinitial.cpp EOF W906_SafeDoorPlcEnable——只在 SafePlcIO=1＋SafePlcModel=1、且 IO 表把該門放在 PLC（ISABase 4）時重新啟用（Type 1）；其他門與其他設定的暫時 MARK 照舊。tests/test_myplc_modbus.cpp [6]（走 MyLaneIO.IOInputBit 與 Sen.Enable）：69／69；Flow9050_Tray 104／104。Debug 23:1x、release 23:1x（只編受影響目標）。IO 盤點其餘結果（303 筆 Enable=1：有功能 92、沒功能 187、介於 24）見回覆，未改 | 開機後要確認 [SAFEPLC] 連線、門／急停警報；IO 盤點其餘項目待 EastSun 指示 | 本 commit |
+ | 142 | **持續 bug 審查第一輪的修正：安全 PLC 斷線警報 WAR16155、Tray Z 非位置列的 Set／GO 封住、IO 執行緒卡住時不再拖住主迴圈（W906-PLCLOST／W906-TRAYZ-PITCH-2／W906-IOFIX-2）**（EastSun 1006「請持續偵測是否有版本需要更新 並且針對之前改的code 偵測有無bug 一直持續下去」→ 三個唯讀審查代理審今天機台自己的 commit；PLC 斷線 AskUserQuestion →「Plc斷線額外寫異常」）。①**W906-PLCLOST**：審查指出 PLC 拔線後 golden 不清 bPLCInData（清除區塊 Ken 20250428 註解掉），門／急停／全門位元停在最後一幀＝「關」，bCheckPLCConnet 要等 socket 真斷才知道。MyPLC_IO_Modbus.cpp EOF W906_SafePlcLinkLost：SafePlcIO=1 且（socket 未連線 或 2 s 沒有回應幀，從第一次詢問起算）；成功收幀處同行 W906_SafePlcFrameMark；csystem.cpp DoSystem（SystemStart 內、golden G12 之後的空行）同行：斷線 → ShowErrorMessage("WAR16155", K_RETRY, MMSystem)＋SystemStart=false＋StopAllMotor（斷線期間每次 START 都會再跳）；門／急停資料不動。D:\HT9045\Error\AlarmCodeList.txt 補 WAR16155（備份 .bak_war16155_20261007_025533）；web AlarmCodeList-index／Alarm-description（＋shim）補文字與中英說明。csystem.cpp G23 註解「silent PLC still caught (sensors read Off)」標註為錯誤（同行）。tests [7] 74／74。②**W906-TRAYZ-PITCH-2**：12 個非位置列（pitch／抬升／探測起始／極限）的登錄按鈕在伺服器端可被手工 WS 觸發（Go pitch 會把 Z 開到 pitch 值）；WebMotorAccess.cpp MotorAccessResolveTeachButton 迴圈後同行拒絕（EOF W906_TeachTypedOnly）；test_web_motor_access 同行加檢查，1097／1097。③**W906-IOFIX-2**：IO 執行緒卡住時，Motor Test 頁每 100 ms 的 SetTorqueFocusAxis 走 RunSync，凍結計時從請求起算 ⇒ 每拍卡 5 s。Pci1203Monitor.cpp：g_w906IoHeartAt（心跳時間，同行）、RunSync 排隊前心跳已凍結 ≥5 s 立刻拒絕（訊息每 50 次一行）、等待中的凍結計時改從最後心跳起算、執行緒啟動前後清 0；無測試涵蓋（需真卡），只驗編譯。審查其餘（PLC 逾時殘留回應、SocketError Sleep(1000)、IDX1203 互鎖初值在 gate 後、W906_IndexMove 沒呼叫 CheckYPosWhenZDown、探測參數範圍、Contact Z1 吋動、IO 頁重開首筆舊資料、84 ms 站狀態迴圈等）＝golden 同樣或低／待裁決，記在回覆。Debug 02:5x、release 03:0x（只編受影響目標） | 待 EastSun：審查列出的待裁決項 | 本 commit |
++| 143 | **持續 bug 審查第二輪：第 142 條的修正自己有 3 個錯，已修（W906-PLCLOST-2／W906-IOFIX-3）**（每小時 :37 審查迴圈審 aff4167／fa06b9f）。①**嚴重**：MyPLC_IO_Modbus.cpp:286 的 W906_SafePlcFrameMark 呼叫同行接在既有的 `//完成過一次` 註解**後面**＝整段是註解、從沒編進程式 ⇒ PLC 正常也會在 START 後 2 s 跳警報停機；測試 [7] 直接呼叫 FrameMark 所以綠（測試沒走真路徑，同 [5] 的教訓）。改：呼叫移到註解前；斷線判斷改成「socket 未連線 或 連續 2 次請求在 hCheckTime=1 s 內沒有回應」（逾時分支同行 W906_SafePlcFrameMiss，回應時歸零）——也解掉審查 PLAUSIBLE A（主迴圈卡 2 s 會誤報）。tests [7] 改成經過真的 PLCIOTaskCycle（送出、等 1.1 s 逾時兩次、再收回應）：75／75。今天新增的 11,128 行全掃「程式碼在 `//` 之後」：0（對照組：原錯誤行會被抓到）。②**高**：Pci1203Monitor.cpp 心跳時間 `GetTickCount()|1u` 可能比 now 多 1 ms ⇒ 無號相減繞成 4294967295 ⇒ RunSync 隨機「立即拒絕」正常請求（含 STOP）；而且心跳起算的凍結計時會在合法的長 Poll（重連 ScanSlaves_+OpenAxes_）期間拒絕 STOP。改：RunSync 的立即拒絕與心跳起算全部撤回（恢復原行為，STOP／DO 不受影響）；心跳時間改 `t ? t : 1`；新增 EOF W906_Pci1203IoHeartAgeMs（有號差）；只在 WebMotorAccessLive.cpp W906_TorqueFocus（Motor Test 頁每拍的轉矩 SDO 焦點）心跳 ≥5 s 時略過。③**中**：WAR16155 已被 RULINGS_20261005 #96 指定給「1203 卡片命令失敗」⇒ 改 WAR16156（csystem.cpp 同行；AlarmCodeList.txt 備份 .bak_war16156_*；web 四檔）。Debug 03:2x、release 03:2x（只編受影響目標） | — | 本 commit |
+ | — | **還沒完成**（10-06 晚更新）：①**實體面板**：已知是 RS-232 面板接 COM4／115200（ControlPanelMode=1、[TrayY] COM PORT=COM4，第 134 條），15:24 有回應；之後線被拔掉，接回後還沒驗按鍵與燈（包 161 已收 St02 P1b 照 golden 分段讀）；面板回的是位址 1，若燈仍不亮要查前／後面板位址。②**1203 模組檢查（WAR16154）**：已整合，代碼表在第 134 條補上。③**關 HMI 視窗時程式還沒開好**的情況：修法已規劃。④**安全迴路**：16:12 起 OSSD 一直 0（M1S OSSD 紅燈）、Input byte1 bit0 自 17:10:59 為 0 ⇒ 1203 從站沒上線；要全部急停放開＋按 PLC 復歸（250 ms～5 s）。⑤**安全 PLC 點位**：SnAllEMG／SnAllSafeDoor 待 EastSun 說明監看時段的操作（D:\HT9045\_plc_1006\plc_watch400.log）；SafePlcIO 維持 0；若在 Input byte ≥4 要擴充 MyLaneIO（golden 只認 Port 0x300～0x303）。⑥**遠端復歸**：MOSAIC 的 Fieldbus Input 不是安全輸入，只能經 MSD 專案的 USER／MACRO RESTART，需整合商改專案＋風險評估。⑦**溫控 COM12**：開機「Temperature KT4H : COM12 port error」，[TempCtrl] COM_PORT=COM12 這台沒有（只有 COM1～6）。⑧**TFT**：「Bin display got error!!」來自 Fix1～6 沒裝；要不要 HT9050 不掃待裁決。⑨**早上未測**：INDEX_MOTION_CARD=1 首次 HOME／Z1、F9050-FIX2 首跑、IOFIX 故障路徑（都要等④） | — | 見 §4 |
+ | 41 | **VC4 閥值自己測**（EastSun「VC4 你自己測試 寫進去哪個位置 數值讀回來 會改變 自己推出來 用VC8」）：等 EastSun F5 後，用 Vacuum Unit 同一條命令對一格寫 -30 kPa、讀回、再寫回原值 | （測試中） | — |
+ | — | 關掉軟體後 VS Code 上方的除錯工具列還在：wb_serve／gdb 都已經結束、8055 沒人佔，是 VS Code 沒發現結束；按紅色方塊即可（只會跑關站腳本，沒有東西可關） | — | — |
+diff --git a/tests/test_myplc_modbus.cpp b/tests/test_myplc_modbus.cpp
+index 2c080a3..8d42adb 100644
+--- a/tests/test_myplc_modbus.cpp
++++ b/tests/test_myplc_modbus.cpp
+@@ -511,28 +511,37 @@ void test_m1s_engine_path()
+     Enable_PLCSafety_IO = savedPlc; iSafePlcModel = 0;
+ }
+ // ===========================================================================
+-//  [7] AI(W906-PLCLOST) 20261007: EastSun「Plc斷線額外寫異常」-- W906_SafePlcLinkLost (MyPLC_IO_Modbus.cpp EOF) drives WAR16155 in
+-//      csystem.cpp DoSystem: lost = SafePlcIO=1 and (socket not connected or no reply frame for 2 s).
++//  [7] AI(W906-PLCLOST-2) 20261007: EastSun「Plc斷線額外寫異常」-- W906_SafePlcLinkLost (MyPLC_IO_Modbus.cpp EOF) drives WAR16156 in
++//      csystem.cpp DoSystem: lost = SafePlcIO=1 and (socket not connected, or 2 requests in a row unanswered). Driven through the REAL
++//      PLCIOTaskCycle (the frame mark on the reply line, the miss on the 1 s timeout) -- the first version called the mark directly
++//      and stayed green while the production call was swallowed by a `//` comment (review 20261007).
+ // ===========================================================================
+ #include <thread>
+ #include <chrono>
+ bool W906_SafePlcLinkLost();
+-void W906_SafePlcFrameMark();
+ void test_plc_link_lost()
+ {
+-    printf("\n[7] safety PLC link lost (WAR16155): SafePlcIO off / socket down / fresh frame / 2 s without a frame\n");
++    printf("\n[7] safety PLC link lost (WAR16156) through PLCIOTaskCycle: SafePlcIO off / socket down / 2 timeouts / a reply\n");
+     const bool savedPlc = Enable_PLCSafety_IO;
+     Enable_PLCSafety_IO = false;
+     CHECK(W906_SafePlcLinkLost() == false, "SafePlcIO=0: never lost (golden machines untouched)");
+     Enable_PLCSafety_IO = true;
++    iSafePlcModel = 1;
+     PlcComm.SocketDisConnect(0, 0);
+     CHECK(W906_SafePlcLinkLost() == true, "SafePlcIO=1, socket not connected: lost");
+-    PlcComm.SocketConnect(0, 0);
+-    W906_SafePlcFrameMark();
+-    CHECK(W906_SafePlcLinkLost() == false, "connected and a frame just arrived: not lost");
+-    std::this_thread::sleep_for(std::chrono::milliseconds(2200));
+-    CHECK(W906_SafePlcLinkLost() == true, "connected but no frame for 2.2 s (pulled cable, socket still up): lost");
+-    W906_SafePlcFrameMark();
+-    CHECK(W906_SafePlcLinkLost() == false, "a new frame: recovered");
++    m1s_feed(0x15, 0x55);                                       // connect + one real request/reply through PLCIOTaskCycle
++    CHECK(iPLCIOTask == 1 && W906_SafePlcLinkLost() == false, "a reply taken by PLCIOTaskCycle: not lost (the production frame mark ran)");
++    int timeouts = 0;
++    for (int k = 0; k < 2; ++k) {                               // two requests, no reply, each timed out by hCheckTime (1 s)
++        iPLCIOTask = 1;  PLCIOTaskCycle();                      // send
++        std::this_thread::sleep_for(std::chrono::milliseconds(1100));
++        PLCIOTaskCycle();                                       // case 100: no reply, timer off -> miss
++        if (iPLCIOTask == 1) ++timeouts;
++        if (k == 0) CHECK(W906_SafePlcLinkLost() == false, "one unanswered request (e.g. after a tick stall): not lost yet");
++    }
++    CHECK(timeouts == 2 && W906_SafePlcLinkLost() == true, "two requests in a row unanswered (socket still up, cable pulled): lost");
++    m1s_feed(0x15, 0x55);
++    CHECK(W906_SafePlcLinkLost() == false, "the next reply: recovered");
++    iSafePlcModel = 0;
+     Enable_PLCSafety_IO = savedPlc;
+-}
+\ No newline at end of file
++}
+-- 
+2.55.0.windows.5
+

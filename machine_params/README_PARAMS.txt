@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-07 03:03
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ aff4167 REVIEW-1 fixes: safety-PLC link-lost alarm WAR16155, Tray Z typed rows have no Set／web fa06b9f。
+HT9050 機台參數快照（machine_params\）—— 2026-10-07 03:22
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ b12ddef REVIEW-2 fixes: three defects in the REVIEW-1 fixes (hourly review loop on aff4167／web 7618a5d。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
