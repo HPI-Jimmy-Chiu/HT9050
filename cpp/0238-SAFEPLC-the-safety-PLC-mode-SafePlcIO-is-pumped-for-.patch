@@ -1,0 +1,209 @@
+From 3b60f688f3236bab8a6615dd69371f452ada9191 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Tue, 6 Oct 2026 15:43:21 +0800
+Subject: [PATCH] =?UTF-8?q?SAFEPLC:=20the=20safety-PLC=20mode=20(SafePlcIO?=
+ =?UTF-8?q?)=20is=20pumped=20for=20real;=20RS-232=20operator=20panel=20swi?=
+ =?UTF-8?q?tched=20on=20(machine=20ini);=20WAR16154=20text=20--=20EastSun?=
+ =?UTF-8?q?=201006=20'=E5=AE=89=E5=85=A8PLC=20=E9=80=A3=E7=B7=9A=E6=A8=A1?=
+ =?UTF-8?q?=E5=BC=8F'=20->=20'=E9=83=BD=E5=B9=AB=E6=88=91=E8=A3=9C?=
+ =?UTF-8?q?=E4=B8=8A',=20'=E9=9D=A2=E6=9D=BF=E8=B5=B0=20RS-232'=20(COM4=20?=
+ =?UTF-8?q?/=20115200,=20'=E5=AF=A6=E9=AB=94=E6=8C=89=E9=88=95=E5=B7=B2?=
+ =?UTF-8?q?=E6=8E=A5=E4=B8=8A'),=20'=E5=A5=BD=E5=83=8F=E6=B2=92=E6=9C=89?=
+ =?UTF-8?q?=E6=8A=8A=E8=A8=8A=E6=81=AF=E5=AF=AB=E5=88=B0=E8=A6=96=E7=AA=97?=
+ =?UTF-8?q?'.=20Backup=20branch=20backup/pre-safeplc-20261006.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Safety PLC (golden Jason 20230619: Gerneral.ini [System] SafePlcIO, Modbus TCP 172.16.8.120:502, input registers 30001-30022): before this TPLCIOThread::Resume() was a no-op (nothing pumped PLCIOProcess) and PlcComm was a SIM socket. New MyPLC/SafePlcClock_St02.cpp: with SafePlcIO=1 a FastClock 'safeplc' 1 ms kDelay job (= golden Synchronize(PLCIOProcess) + MySleepEx(1)) runs PlcComm.W906_Poll() (the socket events on this thread, as golden's message loop) and then golden PLCIOProcess verbatim; PlcComm switched to vclcompat POLLED-Real (new ModbusTCPClient::W906_UsePolledRealSocket / W906_Poll), re-opened if InitPLCIO already opened it in SIM; one [SAFEPLC] stdout line per connection change / first data. FastClockWbServe.cpp registers it (same line as the pad job), CMakeLists adds the file (same line), cinitial GATE (W7a-I3) note updated (same line). SafePlcIO stays 0 on this machine: the PLC answers (ping, TCP 502, read-only FC4) but all 22 bytes read 0 and a 20-minute watch saw no bit change; IO_Table has no SnAllEMG / SnAllSafeDoor (ISABase 4) rows -- turning it on now would raise WAR16140 constantly.
+
+Machine data (not in this repo, pushed by push_stage's machine_params snapshot): Gerneral.ini ControlPanelMode 0->1, [TrayY] COM PORT COM18->COM4, [NUMBER_PANEL2] COM_PORT COM4->COM14 (backup Gerneral.ini.bak_panel_20261006_152525); Error\AlarmCodeList.txt + WAR16154 (backup .bak_war16154_20261006_153942).
+
+o2 full build 0 errors; ctest 380/400 (HSys_HeaterMix / SetTempSave failed under -j6, both pass alone; the rest = the known list); production_audit overlapped EastSun's F5 (booted 15:32), changes are the program's own; Debug and release wb_serve rebuilt. WORKLOG item 134.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ CMakeLists.txt              |  2 +-
+ FastClockWbServe.cpp        |  4 +--
+ MyPLC/ModbusTCPClient.cpp   | 16 +++++++++
+ MyPLC/ModbusTCPClient.h     |  2 +-
+ MyPLC/SafePlcClock_St02.cpp | 68 +++++++++++++++++++++++++++++++++++++
+ cinitial.cpp                |  2 +-
+ docs/WORKLOG_MACHINE.md     |  1 +
+ 7 files changed, 90 insertions(+), 5 deletions(-)
+ create mode 100644 MyPLC/SafePlcClock_St02.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 40fb2d6..53288d4 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -2403,7 +2403,7 @@ add_library(ht9045_sm STATIC
+     #     ProcessCount exports still out of this wave's scope [ProcessShowTestStatus/
+     #     ProcessCount/ProcessStartTestData/RecordHistroy/ProcessQASampling], stay
+     #     offline shims here).
+-    atester_shims.cpp  Adam6024Comm_St02.cpp  Adam6024Pressure_St02.cpp  Adam6024Apax_St02.cpp  Adam6024Integrate_St02.cpp  Automation/HanaRmsMembers_St02.cpp  Automation/HanaRms_St02.cpp  Automation/HanaRms_Prepare_St02.cpp  Automation/HanaRmsPump_St02.cpp  PadInterface_St02.cpp  PadInterfaceClock_St02.cpp   # AI(W906-ST02-P1) 20261005 (St02-E): PadInterface_St02.cpp = golden uPadInterface.cpp protocol + the pad half of TrayStepMotor.cpp, PadInterfaceClock_St02.cpp = its FastClock job (own TU: only FastClockWbServe.cpp's targets, which compile FastClock.cpp, pull it) (RS-232 operator pad; the gate half is the header PadInterface_St02.h, used by mysensor.cpp / myswitch.cpp in ht9045_io with no new link dependency)   # AI(W906-ST02-ADAM) 20261002 (St02-E): golden 912 adam6024.cpp (H1 comm / H2 pressure + alarms / H3 APAX) + the EP integration (H4: Timer2 pump, boot / exit / home, live switch).  Same archive as the stand-ins they retire (atester_shims.cpp:326-330) and as what they call (fContact / fiosetview / fContactForm / fProductionInfo / canary_support); not ht9045_core, whose -Wconversion / -Wpedantic would flood golden-verbatim code (ht9045_sm builds with -Wall -Wextra only, :3007-3008, so Adam6024Apax_St02.cpp needs no per-TU flags here)  # AI(W906-ST02-C10) 20261002 (St02-E, claim): golden 912 HANA RMS (Steven W64 = A) -- HanaRmsMembers_St02.cpp = the THanaRmsMembers ctor / dtor that atester_shims.cpp's `new TfAutomationShim()` needs (same archive, no socket code); the other three = golden 912 Automation/automation.cpp:2514-3158
++    atester_shims.cpp  Adam6024Comm_St02.cpp  Adam6024Pressure_St02.cpp  Adam6024Apax_St02.cpp  Adam6024Integrate_St02.cpp  Automation/HanaRmsMembers_St02.cpp  Automation/HanaRms_St02.cpp  Automation/HanaRms_Prepare_St02.cpp  Automation/HanaRmsPump_St02.cpp  PadInterface_St02.cpp  PadInterfaceClock_St02.cpp  MyPLC/SafePlcClock_St02.cpp   # AI(W906-SAFEPLC) 20261006: + MyPLC/SafePlcClock_St02.cpp = the safety PLC's FastClock job (own TU, same reason as PadInterfaceClock_St02.cpp); same line   # AI(W906-ST02-P1) 20261005 (St02-E): PadInterface_St02.cpp = golden uPadInterface.cpp protocol + the pad half of TrayStepMotor.cpp, PadInterfaceClock_St02.cpp = its FastClock job (own TU: only FastClockWbServe.cpp's targets, which compile FastClock.cpp, pull it) (RS-232 operator pad; the gate half is the header PadInterface_St02.h, used by mysensor.cpp / myswitch.cpp in ht9045_io with no new link dependency)   # AI(W906-ST02-ADAM) 20261002 (St02-E): golden 912 adam6024.cpp (H1 comm / H2 pressure + alarms / H3 APAX) + the EP integration (H4: Timer2 pump, boot / exit / home, live switch).  Same archive as the stand-ins they retire (atester_shims.cpp:326-330) and as what they call (fContact / fiosetview / fContactForm / fProductionInfo / canary_support); not ht9045_core, whose -Wconversion / -Wpedantic would flood golden-verbatim code (ht9045_sm builds with -Wall -Wextra only, :3007-3008, so Adam6024Apax_St02.cpp needs no per-TU flags here)  # AI(W906-ST02-C10) 20261002 (St02-E, claim): golden 912 HANA RMS (Steven W64 = A) -- HanaRmsMembers_St02.cpp = the THanaRmsMembers ctor / dtor that atester_shims.cpp's `new TfAutomationShim()` needs (same archive, no socket code); the other three = golden 912 Automation/automation.cpp:2514-3158
+     # AI(W906-R28TORQ) 20260925: golden TCOM2 的 Index Z 扭力那一半（rs232.cpp；使用者 20260925 裁決第 6 條）。
+     #   TCOM2Shim（COM2）的建構子與扭力成員都在這裡；放 ht9045_sm 是因為它要 fMain（ht9045_forms）、
+     #   fContactForm（forms/fContact.cpp，本 target）、SW[]（ht9045_io）、MOT[]（ht9045_motor）、HSys（ht9045_db），
+diff --git a/FastClockWbServe.cpp b/FastClockWbServe.cpp
+index 1b2249e..027ad74 100644
+--- a/FastClockWbServe.cpp
++++ b/FastClockWbServe.cpp
+@@ -72,7 +72,7 @@ void W906_FastClockSetOwnsBin(bool);       // FastClockJobs.cpp
+ void W906_St02Timer1BinFast();             // MainTimersSt02.cpp
+ }
+ unsigned long FileRW_ProxyTryBusyCount();  // FileRW/_ProxyTry.cpp
+-void W906_PadFastClockAdd(ht9045::fastclock::FastClock* clock, std::string& jobs);   // AI(W906-ST02-P1) 20261005 (St02-E): PadInterface_St02.cpp (golden TPadRS232Thread); global, outside the anonymous namespace. On the old blank line
++void W906_PadFastClockAdd(ht9045::fastclock::FastClock* clock, std::string& jobs);  void W906_SafePlcFastClockAdd(ht9045::fastclock::FastClock* clock, std::string& jobs);   //AI(W906-SAFEPLC) 20261006: MyPLC/SafePlcClock_St02.cpp (golden TPLCIOThread), same line   // AI(W906-ST02-P1) 20261005 (St02-E): PadInterface_St02.cpp (golden TPadRS232Thread); global, outside the anonymous namespace. On the old blank line
+ namespace {
+ 
+ using ht9045::fastclock::FastClock;
+@@ -112,7 +112,7 @@ void Start()
+     jobs += ", binpanel 30 ms (TfMain::Timer1 NUMBER_PANEL_TYPE==2)";
+     const unsigned gmMs = (fGroundMan != 0 && fGroundMan->Timer1->Interval > 0) ? (unsigned)fGroundMan->Timer1->Interval : 30u;
+     g_clock->Add("groundman", gmMs, ht9045::fastclock::kRate, &ht9045::W906_FastClockGroundManBeat);              // golden GroundMan.dfm:1877 / ctor :134
+-    jobs += ", groundman " + std::to_string(gmMs) + " ms (TfGroundMan::Timer1Timer; DoGroundMasterMonitor stays GATE GM-2)";  ::W906_PadFastClockAdd(g_clock, jobs);   // AI(W906-ST02-P1) 20261005 (St02-E): + "pad" 1 ms kDelay = golden TPadRS232Thread (Synchronize(Main232) + SleepEx(1)), only when ControlPanelMode==1 (golden main.cpp:22479 / :10142); also runs inside the boxes like golden mymessbox / note's Main232 pump
++    jobs += ", groundman " + std::to_string(gmMs) + " ms (TfGroundMan::Timer1Timer; DoGroundMasterMonitor stays GATE GM-2)";  ::W906_PadFastClockAdd(g_clock, jobs);  ::W906_SafePlcFastClockAdd(g_clock, jobs);   //AI(W906-SAFEPLC) 20261006: + "safeplc" 1 ms kDelay = golden TPLCIOThread (Synchronize(PLCIOProcess) + MySleepEx(1)), only when SafePlcIO=1; also runs inside the boxes (golden mymessbox / note bPLCStatusCheck)   // AI(W906-ST02-P1) 20261005 (St02-E): + "pad" 1 ms kDelay = golden TPadRS232Thread (Synchronize(Main232) + SleepEx(1)), only when ControlPanelMode==1 (golden main.cpp:22479 / :10142); also runs inside the boxes like golden mymessbox / note's Main232 pump
+     g_windowT0 = g_clock->NowUs();
+     g_busyT0   = FileRW_ProxyTryBusyCount();
+     ht9045::StreamEmit("[FASTCLK] serve-loop fast clock started: " + jobs);
+diff --git a/MyPLC/ModbusTCPClient.cpp b/MyPLC/ModbusTCPClient.cpp
+index 11610ef..f5d714d 100644
+--- a/MyPLC/ModbusTCPClient.cpp
++++ b/MyPLC/ModbusTCPClient.cpp
+@@ -261,3 +261,19 @@ void __fastcall ModbusTCPClient::SocketRead(TObject *Sender, TCustomWinSocket *S
+     delete []ByteData;
+ }
+ //------------------------------------------------------------------------------
++//AI(W906-SAFEPLC) 20261006: EastSun 1006「都幫我補上」(the safety-PLC mode, SafePlcIO). Port-only.
++//  Golden's TClientSocket is a real ctNonBlocking VCL socket whose OnConnect / OnRead / OnDisconnect / OnError arrive through
++//  the main thread's message loop. vclcompat's TClientSocket defaults to SIM (no OS socket); POLLED-Real (H-008, the same
++//  switch DTME08 / TesterTCP / HANA RMS use) gives the golden shape: Active=true starts a non-blocking connect and Poll()
++//  fires the four events on the thread that calls it. Called by MyPLC/SafePlcClock_St02.cpp only when SafePlcIO=1.
++//  SetSimMode(false) takes effect at the next Active=true, so a socket opened earlier in SIM is re-opened by the caller.
++void ModbusTCPClient::W906_UsePolledRealSocket()
++{
++    pClinetSocket->SetPolled(true);
++    pClinetSocket->SetSimMode(false);
++}
++int ModbusTCPClient::W906_Poll()
++{
++    return pClinetSocket->Poll();
++}
++//------------------------------------------------------------------------------
+diff --git a/MyPLC/ModbusTCPClient.h b/MyPLC/ModbusTCPClient.h
+index d2eb2fa..522614f 100644
+--- a/MyPLC/ModbusTCPClient.h
++++ b/MyPLC/ModbusTCPClient.h
+@@ -39,7 +39,7 @@ class ModbusTCPClient
+         ~ModbusTCPClient();
+         void SetScan(bool bSet);
+         void Cycle();
+-        void SetTCPInfo(AnsiString asIP, int Port);
++        void SetTCPInfo(AnsiString asIP, int Port);  void W906_UsePolledRealSocket(); int W906_Poll();   //AI(W906-SAFEPLC) 20261006: port-only -- a real WinSock connection whose events fire from W906_Poll() on the caller's thread (golden's VCL TClientSocket delivered them on the main thread); bodies at the end of ModbusTCPClient.cpp. Same line
+         bool Connect();
+         bool DisConnect();
+         bool IsConnected();
+diff --git a/MyPLC/SafePlcClock_St02.cpp b/MyPLC/SafePlcClock_St02.cpp
+new file mode 100644
+index 0000000..1cdae7f
+--- /dev/null
++++ b/MyPLC/SafePlcClock_St02.cpp
+@@ -0,0 +1,68 @@
++// =============================================================================
++//  MyPLC/SafePlcClock_St02.cpp  --  the safety PLC's serve-loop job (golden TPLCIOThread)
++//
++//  AI(W906-SAFEPLC) 20261006: EastSun 1006「都幫我補上」-- the safety-PLC connection mode (Gerneral.ini [System] SafePlcIO,
++//  Enable_PLCSafety_IO; golden Jason 20230619) end to end. Before this, SafePlcIO=1 was not golden end to end
++//  (cinitial.cpp GATE (W7a-I3) note): TPLCIOThread::Resume() is a no-op, so nothing pumped PLCIOProcess, and PlcComm
++//  stayed a SIM socket.
++//
++//  GOLDEN: InitPLCIO (MyPLC_IO_Modbus.cpp :100, called from cinitial.cpp when Enable_PLCSafety_IO, IP fixed 172.16.8.120:502)
++//  creates TPLCIOThread, whose Execute is `do { Synchronize(PLCIOProcess); MySleepEx(1,true); } while(!Terminated)` --
++//  PLCIOProcess = PLCIOTaskCycle (FC4 read of 30001-30022) + PLCStatusCheck (reconnect every 5 s when down, the
++//  bSafePLCThread heartbeat) + PlcComm.Cycle, all on the main thread; the socket's events arrive through the same
++//  message loop. golden mymessbox / note also run it while a box waits (bPLCStatusCheck, kevin 20250407).
++//
++//  HERE: one FastClock kDelay job, 1 ms, registered only when SafePlcIO=1 at start (as golden creates the thread only then):
++//    (1) PlcComm.W906_Poll() -- the socket events (connect / read / close / error) on this thread, as golden's message loop;
++//    (2) MyPLCIOThread->PLCIOProcess() -- the golden body, verbatim, once InitPLCIO has created the thread object.
++//  The FastClock also runs inside the blocking boxes (FastClockWbServe.cpp, E-FT1-001), which covers golden's box pump.
++//  PlcComm is switched to POLLED-Real here; if InitPLCIO already opened it (SIM), it is re-opened so the switch applies.
++//  Its own TU (like PadInterfaceClock_St02.cpp): only FastClockWbServe.cpp calls it, and every target that compiles that
++//  file also compiles FastClock.cpp.
++//  ⚠ golden ModbusTCPClient::SocketError sleeps 1000 ms (it runs on the main thread in golden too) -- with the PLC
++//  unreachable, each 5 s reconnect attempt costs a 1 s stall, as in golden. Kept.
++// =============================================================================
++#include "MyPLC_IO_Modbus.h"
++#include "cmydef.h"                 // Enable_PLCSafety_IO
++#include "FastClock.h"
++#include <string>
++#include <cstdio>
++
++namespace {
++void W906_SafePlcTick()
++{
++    if(!Enable_PLCSafety_IO)
++        return;
++    PlcComm.W906_Poll();                                                        // golden: the VCL message loop's socket events
++    if(MyPLCIOThread!=NULL)
++        MyPLCIOThread->PLCIOProcess();                                          // golden TPLCIOThread::Execute: Synchronize(PLCIOProcess)
++    static int s_conn=-1;  static bool s_effect=false;                          // port-only: one stdout line per connection change / first data
++    const int conn=PlcComm.IsConnected() ? 1 : 0;
++    if(conn!=s_conn)
++    {
++        std::printf("[SAFEPLC] %s 172.16.8.120:502\n", conn ? "connected" : "not connected");
++        std::fflush(stdout);
++        s_conn=conn;
++    }
++    if(bPLCIOEffect && !s_effect)
++    {
++        std::printf("[SAFEPLC] first input registers read (bPLCIOEffect)\n");
++        std::fflush(stdout);
++        s_effect=true;
++    }
++}
++}  // namespace
++
++void W906_SafePlcFastClockAdd(ht9045::fastclock::FastClock* clock, std::string& jobs)
++{
++    if(clock==0 || !Enable_PLCSafety_IO)                                        // golden: the thread exists only with SafePlcIO=1
++        return;
++    PlcComm.W906_UsePolledRealSocket();
++    if(MyPLCIOThread!=NULL)                                                     // InitPLCIO ran first and opened it in SIM: re-open, now Real
++    {
++        PlcComm.SetScan(false);
++        PlcComm.SetScan(true);
++    }
++    if(clock->Add("safeplc", 1, ht9045::fastclock::kDelay, &W906_SafePlcTick)>=0)   // golden MySleepEx(1,true)
++        jobs += ", safeplc 1 ms (golden TPLCIOThread::PLCIOProcess, SafePlcIO=1, Modbus TCP 172.16.8.120:502)";
++}
+diff --git a/cinitial.cpp b/cinitial.cpp
+index ed67588..9975477 100644
+--- a/cinitial.cpp
++++ b/cinitial.cpp
+@@ -11212,7 +11212,7 @@ void InitHontechHardware()
+     #ifndef SOFT_SIMULTE                                                        //Maxwu 20230727 mark test
+     if(Enable_PLCSafety_IO)                                                     //Austin 20190531.01 增加PLC_IO模組及安全相關IO. //Jason 20230619 增加安全PLC部分
+     {
+-#if 1   // GATE (W7a-I3) -- golden cinitial.cpp:5829-5830 (block :5826-5832; the old citation :5843-5847 was wrong), LINKAGE ONLY, golden text verbatim below.  // AI(W906-PLC-GATES) 20260926: OPENED (RULINGS_20260926 #20/#22) -- ht9045_comms is inside every executable's RESCAN group; SafePlcIO=0 unchanged (inside if(Enable_PLCSafety_IO)). ⚠ SafePlcIO=1 is still not golden end to end: nothing pumps PLCIOProcess (TPLCIOThread::Resume is a no-op) and PlcComm stays in Sim socket mode -- INBOX
++#if 1   // GATE (W7a-I3) -- golden cinitial.cpp:5829-5830 (block :5826-5832; the old citation :5843-5847 was wrong), LINKAGE ONLY, golden text verbatim below.  // AI(W906-PLC-GATES) 20260926: OPENED (RULINGS_20260926 #20/#22) -- ht9045_comms is inside every executable's RESCAN group; SafePlcIO=0 unchanged (inside if(Enable_PLCSafety_IO)). ⚠ SafePlcIO=1 is still not golden end to end: nothing pumps PLCIOProcess (TPLCIOThread::Resume is a no-op) and PlcComm stays in Sim socket mode -- INBOX   // AI(W906-SAFEPLC) 20261006: the two gaps above are closed -- MyPLC/SafePlcClock_St02.cpp pumps PLCIOProcess every 1 ms on the serve loop and switches PlcComm to POLLED-Real (registered only when SafePlcIO=1)
+ //AI(ht9045-v906) 20260810: PT-W7a integrate. Both symbols EXIST and are UN-GATED:
+ //   MyPLC/MyPLC_IO_Modbus.cpp:85  bool bScanSlave[INPUT_MAX_Slave];
+ //   MyPLC/MyPLC_IO_Modbus.cpp:100 void InitPLCIO(AnsiString asIP,int iPort)
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index cec11bb..fec2670 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -212,6 +212,7 @@
+ | 131 | **IO 執行緒審查修正（W906-IOFIX）**（筆電 IOTHREAD_REVIEW_20261006 Part 1 #1～#6＋低風險；Jimmy 1006 #128＝A「先關、修好再開」→ EastSun 1006「我現在修 #1～#6，修好繼續開」）：計畫 D:\HT9045\_iothread_1006\PLAN_IOFIX.md；備份分支 backup/pre-iofix-20261006。①**重掃失敗**：Poll() 的「卡沒開／停用」提前 return 在 IO 執行緒也發布、Rescan() 結尾立刻發布 ⇒ 主執行緒看到 open=false，WAR16152 照常跳；⑤重掃成功後 Pci1203Control::Execute 立刻 Adopt ⇒ DO 用新對照表；②**代理等待**：500 ms 分段＋心跳，佇列中且心跳凍結 5 秒 ⇒ 撤回、命令失敗（printf），已被接手 ⇒ 繼續等、每 5 秒一行；CreateEvent 失敗直接拒絕；③**資料新舊**：發布帶時間，主執行緒 Adopt 時超過 3 秒沒新發布 ⇒ 已發布那份標 card().open=false＋lastErrorText（→ WAR16152），恢復即覆蓋；新 API Pci1203IoThreadPublishAgeMs；④**關機逾時**：IO 執行緒結束前自己清 PubReady／running／tid（不再無限遞迴），Stop 逾時 ⇒ 棄置（代理拒絕）、Pci1203MonitorDisable／ControlDisable 在執行緒活著時不 Close／delete；新 API Pci1203IoThreadAlive；⑥IndexZTorqueCore armPoll ← Pci1203IoFreshMark；低：Q44 pollsSinceIssue、GaliRouteCore 外來停止視窗、RouteSiblingHoming 不再繞回。**節拍維持 100**（Jimmy #127＝B 要 500；EastSun 1006 維持 100，數據回報：dispatch/20261006_iothread_tick）。o2 全建 0 錯誤、ctest 381/399（失敗＝已知清單；EcatMotorRoute 這次過）、production_audit 0；Debug 11:49、release 11:50 建好。**IO 執行緒故障路徑無卡 ctest 起不來，要上機驗**：1203 頁拔一顆驅動器電源後按 Refresh 看 WAR16152、正常 Refresh 後按 DO、EXIT | cpp（見 commit） | 見 commit |
+ | 132 | **主迴圈每圈分段計時＋COM2 重置不再卡主迴圈（W906-PASSPROF／W906-COMM-STOPFAST）**（EastSun 1006「請最佳化下去」）：備份分支 backup/pre-passprof-20261006。①**PASSPROF**（tools/wb_serve.cpp）：在既有 WdMark 點用 QPC 分段計時（64 格＋「(more phases)」），一圈 ≥ W906_SLOWPASS_MS（預設 100、最小 5）就在 op log 寫一行 SLOW：牆鐘 ms、主執行緒 CPU ms、前 10 段；子段標記走 ht9045::g_W906PhaseMark（FastClockJobs.cpp 定義；ctest 為 0）：熱控拍、DoThermo、DoThermoReal case 100 各步、每個 COM2 StopComm／StartComm（bthermo.cpp）、MotorAccessTick 各段（WebMotorAccessLive.cpp）；全部放在既有行上（只有 wb_serve.cpp 檔尾加行）。②**量到的原因**（release、IO 執行緒 30 ms、閒置不開 HMI 不按）：主執行緒在 DoThermoReal 裡**等**（CPU 很低）——(a) COM2 StopComm 每次 11～16 ms、90 秒約 10～14 次：DTK4848 某些位址沒回應、重試用完 golden 就重置埠；探針：等寫入執行緒 0.1～2 ms、等讀取執行緒最多一個 Sleep(1)＝15.6 ms、CloseHandle(COM2) 11～12.7 ms（驅動）；(b) 開機後約 40 秒內每通道第一次 HeaterSVLog：slHeaterLog 是 3 參數 TMyStringList（MaxLineCount=1）⇒ 每兩行同步開檔寫 D:\HT9045_Log（golden 相同），**不改**（只在開機／SV 變更）。③**COMM-STOPFAST**（vclcompat/Comm.cpp，除檔尾外不移行）：讀取執行緒閒置改等手動重置的停止事件（同一個計時刻度，StopComm 一設就醒 ⇒ 0.05～0.13 ms）；StopComm 把埠 handle 交給短命關檔執行緒，StartComm（獨佔重開前）、下一次 StopComm、~Impl 都先等它（上限 5 s）；golden 重置順序（StopComm→0.5 s→StartComm）不變。④另：W906-TEMPLOG-DIR（csystem.cpp TemperatureStorageLog 的 MyForceDirectories 依路徑快取、最多 60 s 重查）；Pci1203ModuleCheck idle() ⇒ 沒事時 W906_Pci1203ModuleCheckTick 立刻返回。**實測**：SLOW 行裡不再有 COM2 StopComm；開機窗之後熱控 20 ms 漏拍每 10 s 0～1 次、主迴圈每圈平均約 2.6 ms、ping p50 1.8 ms。o2 全建 0 錯誤；ctest 381/399（失敗＝已知清單；中途 ThermoComm／ScanKeyGolden 兩支原始碼釘選被我的同行標記弄壞，已把標記挪開後通過）；production_audit：變動檔全是 13:24:34 wb_serve 量測關閉時寫的，13:25 後 0 檔被動 ⇒ ctest 0 寫入，已重拍基準；Debug 13:38、release 13:38 建好。COM2 一直重置 ＝ 有 DTK4848 位址不回（量到 Addr 1／2／4／5／8）——**EastSun 1006「還沒接atc」⇒ 正常，不用查接線**（ATC 接上後這些重置應消失，若沒消失再查） | cpp（見 commit） | 見 commit |
+ | 133 | **1203 參數重試：一直重試、每 1 分鐘、每次 Poll 一軸（W906-CFGRETRY）**（EastSun 1006「找一下還有那邊可優化速度」→「馬達不用每個參數都讀 讀有使用的」「參數重試一定要一直重試 只是秒數可以拉長」→「1 分鐘」；站台狀態「維持每次全讀」；共用位址的 3 站「是和分流器衝突而已 功能是正常的」）：計畫 D:\HT9045\_iothread_1006\PLAN_CFGRETRY.md；備份分支 backup/pre-cfgretry-20261006。**量到**（release、IO 執行緒 30 ms、閒置）：IO 執行緒吃一顆 CPU 的 74%；一次 Poll 85 ms＝站台狀態 84 ms（線上 40 站：ring 0 13 站、ring 1 27 站，每站 Acm_DevGetSlaveStates 2.1 ms）＋DI 0.3＋軸 0.75＋DO 0.15 ⇒ DI 一秒約 11 次；每 30 s 一次 1.26 s 的 Poll＝ax14～18（站 35／36／38／39／40，非 Yaskawa）kCfgGear＋kCfgDrive 每次都讀失敗（每軸 29 次 SDO、約 252 ms，5 軸擠同一次）；開機第一次 Poll 19 軸×61 次約 6.5 s（不改）。**改**（EtherCAT/Pci1203Monitor.cpp，6 行、同行、不移行號）：失敗組拿掉「最多 3 次」，每 60 s 開一輪、每次 Poll 只重試一軸；純重試（不是開機／重掃／寫入後的讀取）時齒輪比組第一個失敗就停、驅動器組 Pn21D 失敗就跳過剩下的；603Fh 警報碼重試、扭力退避（30 s 窗）、站台狀態不動。**實測**：Poll 最長 1350 ms → 約 110 ms（85＋一軸重試約 24 ms），150 s 內再也沒有秒級的 Poll。o2 全建 0 錯誤；ctest 382/400（失敗＝已知清單）；production_audit：變動全是 14:27:16 量測 wb_serve 關閉前寫的，之後 0 檔 ⇒ ctest 0 寫入，已重拍基準；Debug 14:34、release 14:34 建好 | cpp（見 commit） | 見 commit |
++| 134 | **RS-232 實體面板打開、WAR16154 訊息、安全 PLC 輪詢補上（W906-SAFEPLC）**（EastSun 1006「實體按鈕code有轉完了嗎」→「面板走 RS-232」→ 截圖 COM4／115200「實體按鈕已接上」；「好像沒有把訊息寫到視窗」；「裡面之前有沒有 安全PLC 連線模式」→「都幫我補上」）。①**面板**：程式早就轉好（包 153 PadInterface_St02），只差設定；COM4 送 golden 的版本詢問 t051120 → 面板回 t05122065、按鍵 t051400000000。**機台設定**（D:\HT9045\system\Gerneral.ini，備份 Gerneral.ini.bak_panel_20261006_152525）：第 128 行 ControlPanelMode 0→1、第 588 行 [TrayY] COM PORT COM18→COM4（這台只有 COM1～6）、第 597 行 [NUMBER_PANEL2] COM_PORT COM4→COM14（分類顯示板會無條件搶開這個埠）；IO 表面板鍵列照 golden 維持停用（面板模式由面板供鍵值）。閒置開機實測：pad 1 ms 工作已註冊、無 port error、F5 佔住 COM4。**待查：面板燈不亮**（程式路徑 DoPanelLamp→SW.OnOff→SendSwitchStatus→ProcessSendDataNew 全照 golden，要看實際收送）。②**WAR16154 視窗無文字**：D:\HT9045\Error\AlarmCodeList.txt 缺這個代碼（WAR16152 有）⇒ 在 WAR16153 後補一行（備份 AlarmCodeList.txt.bak_war16154_20261006_153942），重開程式生效。③**安全 PLC**（SafePlcIO，golden Jason 20230619，Modbus TCP 172.16.8.120:502）：之前 TPLCIOThread::Resume 是空的、PlcComm 是模擬 socket ⇒ 新檔 MyPLC/SafePlcClock_St02.cpp：SafePlcIO=1 時註冊 FastClock「safeplc」1 ms 工作（PlcComm.W906_Poll() 處理 socket 事件＋golden PLCIOProcess），PlcComm 改 POLLED-Real（MyPLC/ModbusTCPClient W906_UsePolledRealSocket／W906_Poll），連線變化印 [SAFEPLC]；FastClockWbServe.cpp 同行註冊、CMakeLists 同行加檔、cinitial GATE 註記同行補。**SafePlcIO 仍是 0**：PLC 在線（ping 通、502 可連）但唯讀 FC4 讀到的 22 bytes 全 0，20 分鐘監看（D:\HT9045\_plc_1006\plc_watch.ps1）無任何位元變化；IO 表沒有 SnAllEMG／SnAllSafeDoor（ISABase=4）兩列 ⇒ 對到點位前不開（開了會一直 WAR16140 停機）。o2 全建 0 錯誤；ctest 380/400（HSys_HeaterMix／SetTempSave 平行時偶發，單跑都過；其餘＝已知清單）；production_audit 這次與 EastSun 的 F5（15:32 開機）重疊，變動屬程式本身；Debug 15:42、release 15:21 建好 | cpp（見 commit） | 見 commit |
+ | — | **還沒完成**：①**實體面板鍵還是讀不到**：COM1／3／6／7 聽 15 分鐘沒資料；COM2／4／5 被 wb_serve 佔著；EastSun 說面板「跟一般 9 系列一樣」、而且「不是用 1203」→ 待確認接法。②**1203 模組 ini（WAR16154）**：程式草稿已寫好，待整合。③**關 HMI 視窗時程式還沒開好**的情況（之後會自己再開視窗）：修法已規劃 | — | 見 §4 |
+ | 41 | **VC4 閥值自己測**（EastSun「VC4 你自己測試 寫進去哪個位置 數值讀回來 會改變 自己推出來 用VC8」）：等 EastSun F5 後，用 Vacuum Unit 同一條命令對一格寫 -30 kPa、讀回、再寫回原值 | （測試中） | — |
+ | — | 關掉軟體後 VS Code 上方的除錯工具列還在：wb_serve／gdb 都已經結束、8055 沒人佔，是 VS Code 沒發現結束；按紅色方塊即可（只會跑關站腳本，沒有東西可關） | — | — |
+-- 
+2.55.0.windows.5
+
