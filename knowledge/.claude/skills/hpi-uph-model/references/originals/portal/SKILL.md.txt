@@ -1,0 +1,428 @@
+# HT9045 UPH Model
+
+HT9045 / HT9046 / HT9011UC 系列 IC Test Handler **離線 UPH 解析式計算** 與
+**馬達速度校正表（UPH_MotorProfiler）** 知識庫。
+
+當使用者詢問下列問題時，應載入此 Skill：
+
+- 「客戶要 QFP/QFN 在 Tray X×Y、Soak N 秒、Test M 秒、2D on/off 條件下的 UPH」
+- 「換成 Speed 80% 後 UPH 會差多少」
+- 「為什麼實機 UPH 低於規格」
+- 「HotPlate Soak 是否被吃掉」「TestTime 多長以上 Tray Arm 不影響 UPH」
+- 「如何用 Mot_Table 速度反推每段 cycle time」
+- 「UPH_MotorProfiler 工具怎麼用 / 記錄檔欄位定義」
+
+## 觸發關鍵字
+
+UPH, 產能, Throughput, Cycle Time, Soak Time, Test Time, Tray Form, Motor Speed,
+模擬 UPH, UPH 表格, UPH 估算, UPH 公式, MotorProfiler, Mot_Table, Speed 校正,
+HotPlate 平行, Index 平行, Tray Arm 攤提, ProcessMotorHome, Teach 座標, Auto Home,
+Index cycle time, Index time, 精簡模式, 完整模式, 動作表, Soak 補正, B_hp,
+site mode 比較, eTestMode, NN mode, 2x2NN, 2x4NN, 4x4NN, 4x8NN, 常溫, Ambient, Hot plate 直送,
+9050motionview, IDE.MotionView9045-UPH, IDE.MotionView9050-UPH
+
+## 適用版本
+
+HT9011UC V3.33.905.0 以後（含 Mot_Table 表格驅動馬達架構）。
+
+## 頁面（HTML Version，不載 JSON，雙擊可開）
+
+> **//Steven 20260922** — 這四頁已移到 GitLab repo `9050motionview`，本機工作區 `D:\HT9045\UPH\`
+> （舊路徑 `D:\HT9045\page\` 已改名 `page_Old\`，不要再改那份）。
+> 線上：<https://pages.honprec.com/honprec/rd/rd5/9050motionview/>
+
+| 頁面 | 用途 |
+|------|------|
+| `D:\HT9045\UPH\public\IDE.MotionView9045-UPH.html` | HT9045 UPH 計算器：**完整／精簡兩種動作表**（見 §8）、批次平行路徑模型（In Arm／Soak-HP／Socket／Index／Out Arm）、事件排程器（含 Shuttle iLeft/iRight 互鎖）、UPH 表／圖、穩態 Gantt、Hot／Ambient／兩者比較、Auto Y Pitch 選項（自動估 n_dip）、**多 site mode 比較總表＋多線圖** |
+| `D:\HT9045\UPH\public\IDE.MotionView9045-Concept.html` | 排程器驅動的立體概念動畫：8 軌時間線、steady／boot／tray 視窗、In／Out Arm 吸嘴頭 inset；秒數與盤形由 URL hash 參數覆寫（UPH 頁以 iframe hash 餵入，含 `temp=0/1`） |
+| `D:\HT9045\UPH\public\IDE.MotionView9050-UPH.html` | HT9050（HP-9050，單站）UPH 計算器：Hot／Ambient／比較、平行路徑（In P&P／測區鏈／Out P&P／Soak-HP／換盤） |
+| `D:\HT9045\UPH\public\IDE.MotionView9050-Concept.html` | HT9050 整機概念動畫，**Hot／Ambient 兩種動作模式**（控制列「溫度」下拉或 hash `temp=0/1`） |
+
+---
+
+## 1. 機台既有 UPH 計算（Per-Tray Real-Time）
+
+機台目前的 UPH 是 **後驗式每盤計算**：
+
+1. `asendic_Loader.cpp` — 新盤入 Loader 完成時 → `bRecordUPH = true`
+2. `ainarm9045.cpp` — 每次 Loader 吸取一排 → `iUPH_LoaderCount++`
+3. `ainarm9045.cpp` — InArm 到 Loader 吸**下一盤第一顆** (iCol≤0, iRow==0) → 觸發 `CalculateUPH(false)`
+4. 公式：$\text{UPH} = \frac{3600}{(\text{End} - \text{Start} - \text{Pause})_{\text{sec}}} \times \text{iUPH\_LoaderCount}$
+
+特徵：包含所有真實因素（JAM、retry、idle、Auto Clean），但**只有跑完一盤後才能得知**。
+
+詳細程式碼對照 → [`references/uph-existing-realtime-method.md`](references/uph-existing-realtime-method.md)。
+
+---
+
+## 2. 三大平行模型（解析式預測 — 核心觀念）
+
+UPH 不是各段時間相加，而是 **「最慢的那條平行路徑」決定** 一個 cycle 的長度。
+
+### 規則 1：HotPlate Soak 與 InArm 平行
+若 InArm 把 HotPlate 排滿並回到第一顆所花時間 ≥ Soak Time，Soak 完全被吸收：
+
+$$T_{IA\_eff} = \max(T_{IA},\ T_{HP}/N_{HP})$$
+
+### 規則 2：InArm vs Index+Test vs OutArm 三段平行（主瓶頸）
+
+$$T_{cycle} = \max(T_{IA\_eff},\ T_{IDX} + T_{SD} + T_{TT},\ T_{OA})$$
+
+當 $T_{TT}$ 很大時 Index 段主導，InArm/OutArm 完全藏起來。
+
+### 規則 3：Tray Arm 補退盤攤提
+$T_{LT}$（loader 補盤）、$T_{ULT}$（unloader 退盤）攤提到 Tray 內 IC 數 $N_{Tray}$：
+
+$$T_{cycle}' = \max(T_{cycle},\ T_{LT}/N_{Tray},\ T_{ULT}/N_{Tray})$$
+
+長測試秒數時三項都遠小於 $T_{cycle}$ → 完全隱藏，**不影響 UPH**。
+
+### 最終 UPH
+
+$$\text{UPH} = \frac{3600}{T_{cycle}'} \times N_{site} \times \frac{Y}{100}$$
+
+詳細推導與每段時間構成 → [`references/uph-parallel-model.md`](references/uph-parallel-model.md)。
+
+---
+
+## 3. 11 大時間項定義
+
+| 編號 | 名稱 | 包含動作 | 落在哪條平行路徑 |
+|------|------|----------|----------------|
+| 1 | InArm 吸放料 | Loader Suck + Vacuum + Place | InArm |
+| 2 | Tray Form 多次擺放 | 同顆 row 內 X/Y pitch 連續放料 | InArm |
+| 3 | HotPlate Soak | IC 入加熱盤後等待 | HotPlate（與 InArm 平行） |
+| 4 | Rotate / Bottom 2D | 旋轉、底部 2D 讀取 | InArm |
+| 5 | Shuttle 移動 + 2D | Shuttle 進/出 + 2DID scan | Shuttle（並入 InArm 或 Index 路徑取大者） |
+| 6 | Index 吸放 | Sht pick / release | Index |
+| 7 | Index Contact | Z 下壓、Drop Contact | Index |
+| 8 | Start Delay + Test Time | Initial Delay + Tester EOT | Index |
+| 9 | OutArm 吸放 + Rotate + 4S | OutArm cycle | OutArm |
+| 10 | Loader Tray 補入 | Tray Arm 取空 + 補新 tray | Tray Arm（攤提） |
+| 11 | Unloader Tray 退出 | Tray Arm 取滿 + 補空 tray | Tray Arm（攤提） |
+
+對應全域變數 / 函式來源 → [`references/uph-stage-breakdown.md`](references/uph-stage-breakdown.md)。
+
+---
+
+## 4. 馬達速度校正表（UPH_MotorProfiler — 三方混合架構）
+
+### 目的
+產出離線查表：給定（馬達、距離、Speed%、Acc%），輸出實測平均時間，讓 UPH 公式
+不需實機就能模擬任意客戶條件。
+
+### 架構：埋點 + uMotorTest 補位 + Excel 計算
+
+| 元件 | 角色 | 風險 |
+|------|------|------|
+| **Phase 1A 流程埋點** | 量產被動收集真實 cycle time（`IniConfig.bP11_1_RecordFlowProcessTime` 開關控制） | 極低（read-only） |
+| **Phase 1B uMotorTest UPH Tab** | 4 子分頁：Logger 開關 / Coverage Map 熱圖 / UPH 即時試算 / Smart 補位掃描 | 補位掃描沿用 ContinuousMove，撞機風險可控 |
+| **Phase 2 Excel UPH_Calculator** | 灌入 CSV 做擬合與全條件矩陣展開 | 零 |
+
+**三方共用同一份 CSV**：`D:\HT9045_Log\UPH_Profile\YYYY\MM\UPH_<Model>_<SN>_<YYYYMMDD>.csv`
+
+### 實作優先順序（建議）
+
+1. Phase 1A 流程埋點（~1~2 天） — 量產即收資料
+2. Phase 1B-1 Coverage Map（~1 天） — 看資料密度
+3. Phase 1B-3 UPH 即時試算（~1 天） — 客戶問即時答
+4. Phase 2 Excel 計算器（~0.5 天）
+5. Phase 1B-2 Smart 補位掃描（~2~3 天） — 跑 1~2 週後再評估必要性
+
+### 校正策略：Teach 座標 + 機台固定尺寸導出距離（適用 Phase 1B 補位）
+每顆馬達利用**實際 Teach 座標 + 機台固定尺寸**導出 1~4 段移動距離，
+量測結果直接對應真實生產行程（非固定 10mm/100mm/全行程）。
+
+關鍵設計：
+- **InArm** 使用 `InArmContinuousMove_9045()` 量測完整移動時間（Z-Safe→Pitch→XY同動→ZDown→Cylinder Delay），非個別 `MotorMove()`；含 Loader/HotPlate/Shuttle 多路徑段
+- **OutArm** 使用 `OutArmContinuousMove_9045()` 同上鏡像；含 Shuttle/AutoTray/FixTray/Magazine 多路徑段
+- **Index 8 步交替 cycle**（a~h）完整量測：a/c/e/g 分軸 Y+Z、b/f Shuttle、**d `Z1DownZ2Up` + h `Z1UpZ2Down` 雙軸聯動**（atester.cpp:11184/11233）；$T_{IDX}$ = 8 步加總
+- **Z 高度極限以 cContact `IndexContact[i]`/`IndexPlace[i]` 為準**，Y/Shuttle 移動前強制 Z-Safe 互鎖防撞機
+- **TrayArm X** 起終點自動加 6.5cm 補償偏移
+- 可解出 $T_{acc}$ 與 $v_{max}$，套 $T(d) = 2 T_{acc} + (d - d_{acc})/v$ 回推任意距離
+
+### Phase 1A 埋點位置（~15~25 個呼叫點）
+
+| 模組 | 呼叫點 | tag 前綴 |
+|------|--------|---------|
+| InArm | `ainarm9045.cpp` 所有 `InArmContinuousMove_9045()` | `IA_*` |
+| OutArm | `aoutarm9045.cpp` 所有 `OutArmContinuousMove_9045()` | `OA_*` |
+| Index | `atester.cpp:11184/11233/11381/11430` Z1DownZ2Up / Z1UpZ2Down | `IDX_*` |
+| Shuttle | `acarry.cpp` MOT[MInShuttle*].MotorMove | `SHT*` |
+| TrayArm | `acatchtray.cpp` MOT[MTrayX].MotorMove | `TRAY_X_*` |
+
+埋點包裝為 macro，IniConfig OFF 時編譯成 noop，零量產性能影響。
+
+### Speed + Acc 掃描（Phase 1B 補位用）
+- Speed 預設 5%~100%，步進 5%
+- Acc 預設 100%~100%（固定），改起始/步進即跑 Acc 維度，**不需改 code**
+- 每組重複 3 次取平均
+- Smart 模式：只跑 coverage < MinSamples 的格子（通常 30 分內完成）
+
+### 馬達清單（43 顆，依 Mot_Table.csv）
+
+| 群組 | 馬達 | 數量 | UPH 影響 |
+|------|------|------|---------|
+| InArm | M00~M10 (X/Y/Pitch/ZA~ZH)、M31 (PitchY)、M32 (PitchX2) | 13 | $T_{IA}$ |
+| Shuttle | M11/M12 (InShuttle1/2)、M17/M18 (OutShuttle1/2) | 4 | $T_{IDX}$ 內含 |
+| Index | M13/M14 (TestY1/Z1)、M15/M16 (TestZ2/Y2) | 4 | $T_{IDX}$ |
+| OutArm | M19~M29 (X/Y/Pitch/ZA~ZH)、M33 (PitchY)、M34 (PitchX2) | 13 | $T_{OA}$ |
+| Tray Arm | M30 (TrayX) | 1 | $T_{LT}/T_{ULT}$ |
+| Loader/Unloader Z | M35 (LoaderZ)、M36 (EmptyZ)、M37 (ColorZ)、M38~M40 (Auto1~3 Z) | 6 | $T_{LT}/T_{ULT}$ |
+| Rotate / AOI | M41 (InRotate)、M42 (OutRotate)、M43 (AOIKit) | 3 | InArm/OutArm 附加 |
+
+Asendic 系列（`asendic_Auto.cpp`、`asendic_Loader.cpp` 等）本身不持有獨立馬達，
+共用 M30 + M35~M40，所以列在 Tray Arm / Loader Z 群組內，毋須額外計時。
+
+詳細欄位、CSV 格式、埋點 API、UI 元件 → [`references/uph-motor-time-table.md`](references/uph-motor-time-table.md)。
+
+---
+
+## 5. 編譯開關與自動歸零
+
+### 不需要 `#define`
+
+UPH Motor Profiler 直接整合在 `uMotorTest` 的新 Tab `tsUPHProfiler`。
+`uMotorTest` 本身只在 Service mode 下開啟，天然隔離量產流程。
+
+### 自動歸零（Auto Home）
+
+啟動 Scan 時**自動呼叫 `ProcessMotorHome(0)` (uhome.cpp)**，不需手動先 Home。
+此函式內建 Z 軸優先、EMG 檢查、多馬達卡分流。
+
+### 安全門中斷 → 重新初始化
+
+安全門被開啟 → 立即停止馬達 + Flush CSV + `UPHSCAN_INTERRUPTED` 狀態。
+Resume 時**重新歸零** (`ProcessMotorHome(0)`) 再從中斷點接續。
+→ 技術人員可能已手動移動機構，必須 re-Home 確保 encoder 位置正確。
+
+---
+
+## 6. 使用流程（FAQ）
+
+### Q1：客戶要算 UPH，從哪裡開始？
+1. 收集條件：Package、Tray X×Y、Sites/Index、2D、Soak、TT、各馬達 Speed%、Yield
+2. 查 motor time table CSV 得到各段 $T_{IA}, T_{IDX}, T_{OA}, T_{LT}, T_{ULT}$
+3. 套規則 1→2→3 算 $T_{cycle}'$
+4. UPH = 3600 / $T_{cycle}'$ × $N_{site}$ × $Y$/100
+
+Worked example → [`references/uph-formula-worked-example.md`](references/uph-formula-worked-example.md)。
+
+### Q2：實機跑出來與公式差很多怎辦？
+先排除以下因素再質疑公式：
+- Vacuum delay、Destroy 吹氣
+- Site Off / Retest 比率
+- Auto Clean、Pick Error 重試
+- Tray 換盤等待（loader empty / unloader full）
+- ATC 升降溫等候
+
+驗證對照 → [`references/uph-validation-cases.md`](references/uph-validation-cases.md)。
+
+### Q3：MotorProfiler 怎麼啟用？
+1. 進入 Service mode → 開啟 Motor Test 畫面
+2. 切換到「UPH Profiler」Tab
+3. 勾選馬達 → 設定 Speed/Acc 範圍 → 按「Start Scan」
+4. 程式自動歸零 → 掃描 → 輸出 CSV 到 `D:\HT9045_Log\UPH_MotorTime\YYYY\MM\`
+
+---
+
+## 7. 安全注意事項
+
+- Profiler 只在 **Service Mode / 無 IC 狀態** 下執行，避免吸料/放料中段切入造成撞機
+- 每組移動前自動回 home → 移到起點 → 計時跑到終點 → 回 home，**單筆獨立**
+- 跑掃描期間禁止 Auto Start（程式內鎖 `bUPHProfilerRunning` 旗標）
+- CSV 寫入失敗 / 磁碟滿時，立即停止掃描並 Alarm
+
+---
+
+---
+
+## 8. 離線 UPH 頁的兩種動作表模式（完整／精簡）
+
+> **//Steven 20260922** 新增。以下規則只描述離線計算頁的模型，不是機台程式行為。
+
+### 8.1 完整模式（16 個動作）
+
+每批一個 cycle 的 16 個動作秒數，對應五條平行路徑（§2 的規則 1~3）。動作編號固定如下，
+精簡模式的兩個時間就是由這些編號的區段加總而來：
+
+| # | 動作 | 機構 | 屬於 |
+|---|------|------|------|
+| 1 | `IN_TP` | In Arm | Loader 下針（每批 × n_dip） |
+| 2 | `IN_EXT` | In Arm | Rotate／Bottom 2D／Precisor |
+| 3 | `IN_HPP` | In Arm | → Hot plate 放一組（**僅 Hot**） |
+| 4 | `IN_HPK` | In Arm | Hot plate 取已 soak 一組（**僅 Hot**） |
+| 5 | `IN_KIT` | In Arm | → Shuttle 站A 放 In-Kit |
+| 6 | `SHT` | Shuttle | iLeft ⇄ iRight 單程 |
+| 7 | `IDX_PICK` | Index | 站B 取 In-Kit |
+| 8 | `IDX_TOSOCK` | Index | Y → Socket |
+| 9 | `CONTACT` | Index/Socket | Z 下壓、Drop Contact |
+| 10 | `SD` | Tester | Start Delay |
+| 11 | `TEST` | Tester | SOT → EOT |
+| 12 | `IDX_BACK` | Index | Z 抬起 → Y 回 Shuttle |
+| 13 | `IDX_PLACE` | Index | 站B 放 Out-Kit |
+| 14 | `OUT_OP` | Out Arm | 站C 取 Out-Kit |
+| 15 | `OUT_EXT` | Out Arm | Rotate／4S／AOI |
+| 16 | `OUT_OPL` | Out Arm | Auto 盤放料（每批 × n_dipOut） |
+
+### 8.2 精簡模式（只有兩個時間）
+
+| 名稱 | 定義 | 備註 |
+|------|------|------|
+| **Index cycle time** | `max( Σ1~7 , Σ13~16 )` | 入料側鏈與出料側鏈**分別**加總後取大者；Hot 與 Ambient 各一個值（Ambient 的 Σ1~7 不含 3、4） |
+| **Index time** | `Σ8~12`（**含 TEST**） | 掃描測試時間時拆成「固定開銷 ＝ Index time − TEST 主值」＋ 該列 TEST |
+
+每批週期與 UPH：
+
+```
+兩支 Index：P = max( Index cycle , Index time )      兩臂交替共用同一個 Socket
+單支 Index：P = Index cycle + Index time             串行
+UPH = 3600 / P × N_pick × Yield
+```
+
+精簡模式**不另計** Loader 下針次數、換盤攤提、事件排程器互鎖（視為已含在使用者輸入的
+Index cycle time 內），但 **Soak 仍會被檢查**（見 8.3）。甘特動畫與整機動畫在精簡模式停用
+（沒有逐動作秒數可畫）。
+
+### 8.3 Soak 補正（Hot 模式必查）
+
+`B_hp ＝ Hot plate 可用格數 ÷ N_pick`（無條件捨去，至少 1）＝ 一片加熱盤裝得下幾批。
+
+> **跑完整片加熱盤的時間 ＝ Index cycle time × B_hp**。
+> 若這個值 **小於 Soak time**，代表 FIFO 最舊那顆還沒 soak 夠就被取走，
+> 週期必須被 soak 拉長 → **改以 `Index cycle time = Soak ÷ B_hp` 計算**。
+
+```
+if (hot && cycle × B_hp < soak)  cycle = soak / B_hp      // 自動補正，頁面會標出補正前後的值
+```
+
+這與完整模式的規則 1（§2）等價：完整模式是 `(Soak + T_in) / B_hp` 這條路徑參與取大，
+精簡模式因為沒有 T_in 細項，直接用 `Soak / B_hp` 當下限。
+
+### 8.4 Index cycle time 的基準顆數與縮放
+
+Index cycle time 是**以一組 8 顆（2x4 mode）估的**：
+
+| N_pick | 處理 |
+|--------|------|
+| > 8（例如 2x8＝16） | **× 2** |
+| ＝ 8（2x4） | × 1（基準） |
+| < 8（1x1／1x2／1x4／2x2…） | 理論上會縮短，但**沒有可靠公式，預設不縮**；請在多模式表的 `Index cycle` 欄**逐列手動輸入實機值** |
+
+多模式比較表在精簡模式下，每一列（site mode × 溫度）的 Index cycle 欄都是可編輯輸入框，
+改了就只影響那一列，另有「清除逐列覆寫」鈕。
+
+### 8.5 Site mode 清單（依 `MachineType.h · eTestMode`）
+
+可選（11 種）：`1x1` SingleSite、`1x2` DualSite、`2x1` DualSite2x1、`1x3` TriSite1X3、
+`1x4` QualSite1X4、`2x2` QualSite2X2、`2x3` _6Site2X3、`2x4` _8Site2X4、`2x5` _10Site2X5、
+`2x6` _12Site2X6、`2x8` _16Site2X8。常用預設＝`1x1／1x2／1x4／2x2／2x4／2x8`。
+
+**NN mode（`QualSite2X2N`／`_6Site2X3N`／`_8Site2X4N`／`_16Site4X4`／`_32Site4X8N`）目前隱藏不給選**：
+NN 的 socket 只用單排（`acarry.cpp` 裡 2X2N 與 1x2、2X4N 與 1x4 同一個 case），
+所以每批要多次下壓，而且 **index time 與一般模式不同，實機值未定**。
+補到實際 index time 後，把頁面 `SITE_MODES` 內的 `hidden:true` 拿掉即可。
+
+**已停用**：`_8Site1X4`（1x4_8，海思）、`_32Site4X8M`（4x8 單臂）—— 現場已不使用，頁面不列。
+
+⚠ `MachineType.h` 對 `_32Site4X8N` 的註解寫「雙Arm 32 Site」，但實際用法是 **NN mode**，
+註解與現況不符，查程式時別被誤導。
+
+### 8.6 溫度模式
+
+| 模式 | In 側路徑 | 說明 |
+|------|-----------|------|
+| Hot | 動作 1~7 全走 | 經 Hot plate soak，受 8.3 的 soak 補正約束 |
+| Ambient（常溫） | 跳過 3、4 | In Arm 從 Loader 吸完**直接放 Shuttle Kit**；無 soak、無 Hot plate 緩衝 |
+| 比較 | 兩者同時算 | **頁面預設**；同一張表／圖列出 Hot（藍實線）與 Ambient（橘虛線）與 ΔUPH |
+
+短測試時間時 In Arm 常是 Hot 的瓶頸，拿掉 Hot plate 兩步後常溫 UPH 明顯較高；
+測試時間拉長到 Socket 主導後兩者收斂 —— 這是預期行為，不是計算錯誤。
+
+實作對照：`IN_TP` 與 `OUT_OPL`、`IN_KIT` 與 `OUT_OP` 的預設秒數已**兩兩對齊**，
+使常溫的 In Arm 一趟 ≡ Out Arm 一趟（使用者 20260922 提供的實機認知）。
+
+---
+
+## 9. 推送後的通知信（UPH Simulator → GitLab → Maurice）
+
+> **//Steven 20260923** 新增。UPH 模擬頁改完、push 到 `9050motionview` 之後，**一定要寄一封通知信**。
+> 這是使用者 20260923 的指示，授權直接寄出，不必先開草稿等確認。
+
+### 9.1 收件人與主旨
+
+| | |
+|---|---|
+| 收件者 | `Maurice@honprec.com` |
+| 副本 | `steven@honprec.com`（寄件備份之一） |
+| 主旨 | `[HT9xxx UPH Simulator Gitlab Commit] <分支> -> <新 HEAD>：<三到五個重點>` |
+| 附件 | **不放**。頁面在 GitLab Pages，信裡給網址就好 |
+| 格式 | **純文字**（`BodyFormat = 1`） |
+
+主旨標籤沿用 [[mail-subject-convention]] 的規則（方括號標籤開頭），
+標籤字面即使用者指定的 `HT9xxx UPH Simulator Gitlab Commit`。
+
+### 9.2 內文順序（收件人先看到「我要做什麼」）
+
+1. **怎麼看**：GitLab Pages 網址（入口 ＋ 兩支 UPH 頁）、結尾斜線要保留、
+   `pages.honprec.com` 免登入而 `gitlab.honprec.com` 需登入、
+   `?lang=en` 可直接給外籍同事或客戶、clone 後雙擊 `public\index.html` 也能開。
+2. **這次推了什麼**：分支與 commit 範圍，每顆 commit 一行，再逐項說明功能與代表性數字。
+3. **已知待補**：把還沒確認的假設講清楚（例如 NN mode 的 index time、HT9050 的加熱盤位數與 soak），
+   並說明那些數字「先當趨勢看」。
+4. **備註**：預設秒數是示意值、實際產能以機台 Per-Tray UPH（`CalculateUPH`）為準。
+
+用字依 [[reports-use-names-not-pronouns]]：跨人信件寫名字（Steven / Maurice），不用你我他。
+
+### 9.3 寄法：Outlook COM（這台機器沒有 email 工具）
+
+```powershell
+$body = Get-Content -Raw -Encoding UTF8 '<信稿.txt>'      # 內文先寫成 UTF-8 檔再讀進來
+$ol   = [Runtime.InteropServices.Marshal]::GetActiveObject('Outlook.Application')
+$mail = $ol.CreateItem(0)
+$mail.To         = 'Maurice@honprec.com'
+$mail.CC         = 'steven@honprec.com'
+$mail.Subject    = '[HT9xxx UPH Simulator Gitlab Commit] main -> 72a80e1：...'
+$mail.BodyFormat = 1
+$mail.Body       = $body
+$mail.DeleteAfterSubmit = $false
+$mail.Send()
+```
+
+### 9.4 寄完一定要驗（三個數字）
+
+```powershell
+$ns = $ol.GetNamespace('MAPI')
+$ns.GetDefaultFolder(5).Items  | ? { $_.Subject -like '*UPH Simulator*' }        # 寄件備份匣：要找得到
+($ns.GetDefaultFolder(16).Items | ? { $_.Subject -like '*UPH Simulator*' }).Count # 草稿匣：要 0
+($ns.GetDefaultFolder(4).Items).Count                                            # 寄件匣 Outbox：要 0
+```
+
+`Send()` 沒報錯**不等於**信出去了 —— 卡在 Outbox 也是安靜的。三個數字都對才算寄出。
+完整做法與更多坑（信稿換行、附件政策）見 skill `ht9045-html-mirror-backup`。
+
+### 9.5 存查
+
+內文**從寄出的那封讀回來**再寫檔，確保與實際寄出的一字不差：
+`D:\docs\ops\daily\<YYYYMMDD>_mail_to_Maurice.txt`（UTF-8 無 BOM），
+檔頭補寄件者／收件者／副本／主旨／附件數。
+
+### 9.6 skill 隨頁面一起進 repo
+
+`9050motionview` repo 內有一份 `.claude/skills/ht9045-uph-model/`（本檔與 `references/` 的副本；2026-09-28 由 `skills/` 移入），
+讓沒有這套 AI 工作區的同事也能看到模型定義。
+**頁面改動涉及模型規則時，兩邊要一起更新**：來源是 `D:\HT9045\.github\skills\ht9045-uph-model\`，
+repo 內那份是副本，用 `copy` 覆蓋後一起 commit。
+
+---
+
+## References
+
+| 檔案 | 內容 |
+|------|------|
+| [`references/uph-existing-realtime-method.md`](references/uph-existing-realtime-method.md) | **機台既有 Per-Tray UPH 計算方式**：CalculateUPH 函式、bRecordUPH 觸發、CSV/SECS 記錄、UI 顯示 |
+| [`references/uph-parallel-model.md`](references/uph-parallel-model.md) | 三大平行模型完整推導、邊界條件、特殊場景 |
+| [`references/uph-stage-breakdown.md`](references/uph-stage-breakdown.md) | 11 大時間項對應的 cpp 函式、全域變數、Recipe 欄位 |
+| [`references/uph-motor-time-table.md`](references/uph-motor-time-table.md) | MotorProfiler CSV 欄位、檔名規則、存放路徑、Excel 樞紐建議 |
+| [`references/uph-formula-worked-example.md`](references/uph-formula-worked-example.md) | QFP 7×7、10×25 tray、2D off、TT=10s 完整算式 |
+| [`references/uph-validation-cases.md`](references/uph-validation-cases.md) | 對照 UPH 詳解.xlsx 既有實測值，誤差 <±3% 驗證 |

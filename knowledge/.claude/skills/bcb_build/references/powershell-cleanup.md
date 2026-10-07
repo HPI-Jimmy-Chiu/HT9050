@@ -1,45 +1,27 @@
 # PowerShell 視窗清理策略（bcb_build）
 
+舊引用路徑保留；[讀取整理後文件](../../hpi-build/references/bcb/references/powershell-cleanup.md)。
+
 ## 目的
 
-避免 build 期間產生的 PowerShell 視窗殘留，造成工作環境混亂或資源占用。
+[讀取此節](../../hpi-build/references/bcb/references/powershell-cleanup.md#目的)
 
 ## 模式 1：一般模式（建議預設）
 
-只清理有視窗的 PowerShell 程序，保留目前執行中的 shell。
-
-```powershell
-$selfPid = $PID
-Get-Process powershell -ErrorAction SilentlyContinue |
-  Where-Object { $_.Id -ne $selfPid -and $_.MainWindowHandle -ne 0 } |
-  Stop-Process -Force -ErrorAction SilentlyContinue
-```
+[讀取此節](../../hpi-build/references/bcb/references/powershell-cleanup.md#模式-1一般模式建議預設)
 
 ## 模式 2：強制模式（進階）
 
-清理所有非當前 PID 的 PowerShell 程序（包含背景程序）。
-
-```powershell
-$selfPid = $PID
-Get-Process powershell -ErrorAction SilentlyContinue |
-  Where-Object { $_.Id -ne $selfPid } |
-  Stop-Process -Force -ErrorAction SilentlyContinue
-```
+[讀取此節](../../hpi-build/references/bcb/references/powershell-cleanup.md#模式-2強制模式進階)
 
 ## 風險說明（強制模式）
 
-- 可能中斷其他自動化工作
-- 可能中斷背景監控或長時間任務
-- 建議先用一般模式，再視需要升級至強制模式
+[讀取此節](../../hpi-build/references/bcb/references/powershell-cleanup.md#風險說明強制模式)
 
 ## 建議順序
 
-1. 先執行一般模式
-2. 確認仍有殘留才執行強制模式
-3. build 腳本預設只用一般模式
+[讀取此節](../../hpi-build/references/bcb/references/powershell-cleanup.md#建議順序)
 
 ## 已整合腳本
 
-- `scripts/build_bcb_safe.ps1`
-
-此腳本已內建 `try/finally` 清理流程，build 成功或失敗都會執行視窗清理。
+[讀取此節](../../hpi-build/references/bcb/references/powershell-cleanup.md#已整合腳本)

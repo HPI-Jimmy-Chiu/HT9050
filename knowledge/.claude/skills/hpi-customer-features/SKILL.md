@@ -20,10 +20,10 @@ description: "Handler客戶功能跨主題索引；查CUSTOMER_CODE、CC_與FUNC
 | 問題 | Reference |
 |---|---|
 | 已寫入主題知識的客戶差異 | [跨主題路由](references/topics/index.md)，逐列讀原表的查證界線 |
-| ART條件／caller、客戶名稱已核對列 | [人工核對樹](references/reviewed/index.md)，局部靜態結論與候選分開 |
+| 客戶碼讀寫／功能入口、ART／名稱局部查證 | [人工核對樹](references/reviewed/index.md)，局部靜態結論與候選分開 |
 | 某個CC符號出現在哪些function | [客戶符號樹](references/customers/index.md)，候選與人工列分開 |
 | V912與V906數值／符號是否相同 | [分版本定義](references/versions/index.md)，不把改名或別名合成同一客戶 |
 | 重新產生候選或檢查未分類項 | [唯讀scanner](references/scanner.md)／[待補與孤兒](references/pending.md) |
 | 新增客戶、名稱／報告雙向同步 | [Config客戶流程](../hpi-config/references/customer/index.md)／[權威](references/authority.md) |
 
-推送前來源更新：[最新main核對](references/main-integration-20261006-2022.md)，歷史候選與本次掃描摘要分開。
+來源更新：[22時main核對](references/main-integration-20261006-222x.md)／[20時保存核對](references/main-integration-20261006-2022.md)，原候選、人工日期與新掃描摘要分開。

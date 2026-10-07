@@ -1,0 +1,11 @@
+# 建置來源／選項靜態核對
+
+基準main `2db43115d065beaa81ddbc69d0bd34df17a9959b`，來源blob見[source manifest](source-manifest.json)。只讀Git來源，未跑build／ctest、安裝、clean／prune／Stop-Process或機台程式，不宣稱本機編譯器／generator／快取已驗證。
+
+build.bat的MODE與:mingw／:testonly／:exenote分流：MODE=serve設TARGETARG=--target wb_serve後到mingw；V906_BUILD_DIR及V906_OBJ_ROOT建立輸出路由；GEN／V906_GENERATOR首次configure選generator，既有CMakeCache沿用。MINGW_BIN仍指C:/MinGW/bin，PATH選擇與本機toolchain版本要分開確認。
+
+CMakeLists.txt的HT9045_CXX_STANDARD cache預設17；WinLibs專線的build_nonoracle.bat使用HT9045_NONORACLE_BIN、HT9045_JOBS，14是專線設定而不是把V906全部改稱C++14。W906_NO_SOFT_SIMULTE定義sim／ship，W906_FAST_INCREMENTAL預設OFF；本基準沒有include W906_FastBuild.cmake。CMAKE_PROJECT_INCLUDE是另外可設定的路徑，僅憑預設來源不推論每個既有cache都未啟用。
+
+原cpp_build記1006 14:0x的工具鏈切換裁決與前置gate，原build註解／agent中的歷史不換說法不蓋過新裁決。此處只陳述來源釘住狀態，沒有自行切換oracle、改CMake或替其他人開gate。
+
+BCB三個工具的原byte、路徑與frontmatter保留；script的batch／PowerShell執行文字不是本次實際操作。相關清理範例留原文，現行入口依Steven不得啟停其他session的邊界處理。
