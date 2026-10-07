@@ -1,0 +1,370 @@
+From 4e3f1bf46ae10e608e330e5c1ab50eaac61e6fbd Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 10:40:41 +0800
+Subject: [PATCH] =?UTF-8?q?PARAMSYNC:=20the=20motor=20parameters=20reach?=
+ =?UTF-8?q?=20the=201203=20card=20at=20boot=20and=20when=20the=20Motor=20T?=
+ =?UTF-8?q?est=20/=20Teach=20page=20opens=20--=20EastSun=201007=20'?=
+ =?UTF-8?q?=E8=AB=8B=E4=BD=A0=E9=96=8B=E8=BB=9F=E9=AB=94=20=E6=88=96?=
+ =?UTF-8?q?=E6=98=AF=E9=96=8B=E5=95=9F=E9=A6=AC=E9=81=94=E7=9B=B8=E9=97=9C?=
+ =?UTF-8?q?=E7=95=AB=E9=9D=A2=E9=83=BD=E5=85=88=E5=AF=AB=E5=85=A5=20?=
+ =?UTF-8?q?=E5=9C=96=E7=89=87=E4=B8=8A=E5=B0=8D=E6=87=89=E9=A6=AC=E9=81=94?=
+ =?UTF-8?q?=E7=9A=84=E5=8F=83=E6=95=B8=20=E6=9C=89=E6=99=82=E5=80=99?=
+ =?UTF-8?q?=E6=A0=B9=E6=9C=AC=E9=82=84=E6=B2=92=E5=AF=AB=E9=80=B2=E5=8E=BB?=
+ =?UTF-8?q?'.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Rulings (AskUserQuestion 1007): InitSpeed > JogHighSpeed is flagged, EastSun fixes Mot_Table (no raise / clamp); live writes from the
+first run. Plan D:\HT9045\_paramsync_1007\PLAN_PARAMSYNC.md. Measured 1007: 128 "SetSpeed ... FAILED" route lines, four causes:
+ A golden's boot SetMotorSpeed runs before the 1203 route exists -> the PTP speeds never reached the card at boot;
+ B the boot InitMotor wrote CFG_AxMaxAcc/Dec from the runtime dAcc (MInArmX 1000 = 1 %), golden uses 100 % (cinitial.cpp:3616 -> :3643),
+   so every later PAR_AxAcc/Dec above it was refused (0x80000013/14);
+ C the route's SetSpeedParam had no ceiling step (HOME / Motor Test have one), failures only logged;
+ E W906_BootInitMotorTick was reachable only from the modal wait (W906_BrakeAxisTick) -> boot InitMotor ran at 09:01 / 09:36 only
+   (a box was up), not for the 09:48 / 10:xx runs;
+ D Mot_Table: MInArmY 50000 > 20000, MOutArmX 80000 > 15000, MOutShuttle1 40000 > 6000 (InitSpeed > JogHighSpeed) -> 0x80000011/12.
+
+- WebMotorAccess.cpp MotorAccessBootInitMotor (same line): CFG_AxMaxAcc/Dec = accDb/decDb (100 %) on the boot path only.
+- EtherCAT/Pci1203MotorRoute.cpp SetSpeedParam (same line): an Acc/Dec (PTP or jog) above a KNOWN acc/dec ceiling raises it first
+  (never lowered; unknown = written as before); velocity ceilings not raised (ruling). EOF: Pci1203MotorRouteSpeedVerify -- read-only
+  compare of every successful write with the monitor's fresh read-back (ok / mismatch / unverified).
+- WebMotorAccessLive.cpp: boot InitMotor + W906_ParamSyncTick on the main loop too (W906_MotorAccessPollTick, same line);
+  W906_ParamSyncTick (EOF) runs golden SetMotorSpeed() once after every boot InitMotor is done, and on the rising edge of the
+  fMotorTest / fTeach page (port-only, EastSun's request); waits while SystemStart / SoftStart / iHome / Home Monitor; PTP only
+  (SetSpeed bSetJog=false) so a Motor Test JOG keeps the page's speed; 1.5 s later logs PARAMSYNC: failed writes, read-back counts,
+  mismatches, and the Mot_Table rows with InitSpeed > JogHighSpeed.
+- Tests: test_pci1203_motor_route P (a fake card that refuses above its ceilings like the real one; MInArmX 1007 numbers: 0 failed,
+  ceiling raised first, never lowered, velocity not raised -> 0x80000012, unknown ceiling plain, verify ok / mismatch / unverified)
+  271/271; test_web_motor_access boot InitMotor MaxAcc/Dec = 100 % (1099/0). EcatMotorRoute, AtcBootInit, Pci1203Pure passed.
+Debug wb_serve linked (program not running). Scan 0.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203MotorRoute.cpp     | 47 ++++++++++++++++++
+ WebMotorAccess.cpp                 |  2 +-
+ WebMotorAccessLive.cpp             | 80 ++++++++++++++++++++++++++++--
+ tests/test_pci1203_motor_route.cpp | 72 +++++++++++++++++++++++++++
+ tests/test_web_motor_access.cpp    | 39 +++++++++++++++
+ 5 files changed, 236 insertions(+), 4 deletions(-)
+
+diff --git a/EtherCAT/Pci1203MotorRoute.cpp b/EtherCAT/Pci1203MotorRoute.cpp
+index 157d64e..8c5e2ab 100644
+--- a/EtherCAT/Pci1203MotorRoute.cpp
++++ b/EtherCAT/Pci1203MotorRoute.cpp
+@@ -337,6 +337,7 @@ unsigned long SetSpeedParam(int board, int port, AxisRec& rec, int slot, int whi
+         ++s_stats.skippedSpeed;
+         return 0;
+     }
++    { const int mw = (which == kEcSpdAcc || which == kEcSpdJogAcc) ? (int)kEcSpdMaxAcc : (which == kEcSpdDec || which == kEcSpdJogDec) ? (int)kEcSpdMaxDec : -1; const int ms = (mw == (int)kEcSpdMaxAcc) ? (int)kSpeedMaxAcc : (int)kSpeedMaxDec; if (mw >= 0 && v > 0 && ms < kSpd) { double cur = -1.0; if (rec.spdOk[ms]) cur = rec.spd[ms]; else if (a.valid && a.speedValid[ms]) cur = a.speed[ms]; if (cur >= 0 && cur < v) { char note[160]; std::snprintf(note, sizeof(note), "%s %.0f < %.0f -> raised first (AI(W906-PARAMSYNC))", mw == (int)kEcSpdMaxAcc ? "CFG_AxMaxAcc" : "CFG_AxMaxDec", cur, v); Say(board, port, "SetSpeed", "CEILING", note); const unsigned long mrc = SetSpeedParam(board, port, rec, slot, mw, v); if (mrc != 0) return mrc; } } }   //AI(W906-PARAMSYNC) 20261007: EastSun「有時候根本還沒寫進去」-- an Acc / Dec (PTP or jog) above the axis's KNOWN acc / dec ceiling is refused by the card (0x80000013/14); raise that ceiling to the value first, as HOME-MAXVEL does for the home (never lowered; unknown ceiling = written as before). Velocity ceilings are NOT raised here: InitSpeed > JogHighSpeed is a Mot_Table error EastSun fixes (ruling 1007), flagged by PARAMSYNC. Same line
+     bool ok = false;
+     char what[64];
+     std::snprintf(what, sizeof(what), "SetSpeed[%d]=%.3f", sp, v);
+@@ -965,3 +966,49 @@ void W906_InstallPci1203MotorRoute()
+ }
+ //AI(W906-BRAKE-SERVOFIRST) 20261004: NB2-1 task (m) -- see Pci1203MotorRoute.h (NULL unless wb_serve's WebMotorAccessLive installs it)
+ void (*W906_Pci1203CmdNote)(const ht9045::Pci1203Cmd& c, const ht9045::Pci1203CmdResult& r) = 0;
++//------------------------------------------------------------------------------
++//AI(W906-PARAMSYNC) 20261007: EastSun「請你開軟體 或是開啟馬達相關畫面都先寫入 圖片上對應馬達的參數 有時候根本還沒寫進去」-- the read-back
++//  half of the parameter sync (WebMotorAccessLive.cpp EOF, W906_ParamSyncTick). For every axis this route has claimed, each speed
++//  parameter whose last write SUCCEEDED (rec.spd / spdOk) is compared with the monitor's read-back (Pci1203AxisSample::speed, read
++//  after every write, Pci1203Monitor.cpp config poll) once a sample newer than the route's last command on the axis exists:
++//      ok   = card == written (|diff| <= 0.5 + 1e-6 * |value|)
++//      bad  = a fresh read-back that differs        -> one "st S ax A <param> want X card Y" item each
++//      unver= no fresh sample / no read-back for it   (reported as unverified, never as ok)
++//  Read only: nothing is written here.
++namespace ht9045 {
++std::string Pci1203MotorRouteSpeedVerify(int* okN, int* badN, int* unverN)
++{
++    static const char* const kNm[13] = { "VelLow", "VelHigh", "Acc", "Dec", "JogVelLow", "JogVelHigh", "JogAcc", "JogDec",
++                                         "Jerk", "JerkFactor", "CFG_AxMaxVel", "CFG_AxMaxAcc", "CFG_AxMaxDec" };
++    int ok = 0, bad = 0, unv = 0;
++    std::string items;
++    Pci1203MotorRouteEnv& e = Env();
++    const unsigned long pc = e.PollCount();
++    for (std::map<long, AxisRec>::const_iterator it = s_axes.begin(); it != s_axes.end(); ++it) {
++        const AxisRec& rec = it->second;
++        if (!rec.claimed) continue;
++        const int board = (int)(it->first / 1000L), port = (int)(it->first % 1000L);
++        int hits = 0, amb = 0;
++        const int slot = Pci1203MotorRouteFindSlot(e, board, port, &hits, &amb);
++        const bool fresh = slot >= 0 && (!rec.haveCmd || pc > rec.lastCmdPoll);
++        for (int q = 0; q < kSpd && q < 13; ++q) {
++            if (!rec.spdOk[q]) continue;
++            if (!fresh) { ++unv; continue; }
++            const Pci1203AxisSample& a = e.Axis(slot);
++            if (!a.valid || !a.speedValid[q]) { ++unv; continue; }
++            const double want = rec.spd[q], card = a.speed[q];
++            const double tol = 0.5 + 1e-6 * (want < 0 ? -want : want);
++            if ((card - want) > tol || (want - card) > tol) {
++                ++bad;
++                char b[160];
++                std::snprintf(b, sizeof(b), "%sst %d ax %d %s want %.0f card %.0f", items.empty() ? "" : "; ", board, port, kNm[q], want, card);
++                items += b;
++            } else ++ok;
++        }
++    }
++    if (okN) *okN = ok;
++    if (badN) *badN = bad;
++    if (unverN) *unverN = unv;
++    return items;
++}
++}  // namespace ht9045
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index a36fd54..1dc4544 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -6651,7 +6651,7 @@ bool MotorAccessBootInitMotor(IMotorAccessBackend& be, const std::string& alias,
+     if (m.a.motIndex < 0 || !be.GoldenMotor(m.a.motIndex, m.g)) { report = alias + ": no golden motor object (MOT[].Motor NULL)"; return false; }
+     std::vector<InitStep> steps;
+     std::string stopWhy;
+-    const bool ran = InitMotor1203(be, 0, m, steps, stopWhy);
++    m.g.acc = m.g.accDb;  m.g.dec = m.g.decDb;  const bool ran = InitMotor1203(be, 0, m, steps, stopWhy);   //AI(W906-PARAMSYNC) 20261007: EastSun「開軟體…都先寫入…參數 有時候根本還沒寫進去」-- golden boot runs SetMotorAccelSpeed(i,100) right before InitMotor (cinitial.cpp:3616 -> :3643), so CFG_AxMaxAcc/Dec = 100 % of Mot_Table Acc/Dec; this took the runtime dAcc (whatever % the speed table had left, e.g. MInArmX 1000 = 1 % of 100000), and every later PAR_AxAcc above it was refused (0x80000013/14, 1007: 128 FAILED lines). m is a local copy; same line
+     int fails = 0;
+     report = alias + " InitMotor (boot): ";
+     for (std::size_t i = 0; i < steps.size(); ++i) {
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index 31c2dc5..50449fc 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -1518,13 +1518,13 @@ namespace ht9045 { extern void (*g_W906PhaseMark)(const char*); }  void W906_Mot
+ //  wait for the 500 ms beat). The beat (W906_MotorAccessTick) is unchanged.
+ //AI(W906-BRAKE-AXIS) 20260929: wb_serve's modal wait loop polls the monitor too (a box is up while a drive alarms and drops SVON):
+ //  the brake half runs there as well (tools/wb_serve.cpp W906_ModalWaitTick, right after its Poll).
+-void W906_BootInitMotorTick(); void W906_BrakeAxisTick() { W906_MotorAccessEngineHooks(); ht9045::BrakeAxisTick(); W906_BootInitMotorTick(); }   //AI(W906-BOOT-INITMOTOR) 20261002: + boot InitMotor (EOF)
++void W906_BootInitMotorTick(); void W906_ParamSyncTick(); bool g_w906BootInitAllDone = false; void W906_BrakeAxisTick() { W906_MotorAccessEngineHooks(); ht9045::BrakeAxisTick(); W906_BootInitMotorTick(); W906_ParamSyncTick(); }   //AI(W906-PARAMSYNC) 20261007: + the parameter sync after the boot InitMotor (EOF) and its "boot done" flag.   //AI(W906-BOOT-INITMOTOR) 20261002: + boot InitMotor (EOF)
+ 
+ void W906_MotorAccessPollTick(bool operatorConnected)                           //AI(W906-MT-FIX1) 20260926: live ControlOwner()!=0 from wb_serve
+ {
+     W906_MotorAccessEngineHooks();                                              //AI(W906-MT-E3c) 20260925: idempotent
+     ht9045::MotorAccessPollTick(ht9045::MotorAccessLiveBackend(), operatorConnected);
+-    ht9045::BrakeAxisTick();                                                    //AI(W906-BRAKE-AXIS) 20260929: on the fresh sample (servo ON 0.5 s -> release; SVON gone -> hold)
++    ht9045::BrakeAxisTick();  W906_BootInitMotorTick();  W906_ParamSyncTick();   //AI(W906-PARAMSYNC) 20261007: + boot InitMotor and the parameter sync on the MAIN loop too -- W906_BootInitMotorTick was only reached from W906_BrakeAxisTick, which only wb_serve's modal wait calls (tools/wb_serve.cpp W906_ModalWaitTick): oplog 1007 shows the boot InitMotor at 09:01 / 09:36 only (a box was up), none for the 09:48 / 10:xx runs. Both are once-per-run / edge driven, so calling them from both loops is safe.  AI(W906-BRAKE-AXIS) 20260929: on the fresh sample (servo ON 0.5 s -> release; SVON gone -> hold)
+     OverlaySnapshot();
+     W906_MotorAccessHooks();
+     W906_TorqueFocus(operatorConnected);                                        //AI(W906-MT-E3c) 20260925: every Poll while the page shows the axis
+@@ -1621,7 +1621,7 @@ void W906_BootInitMotorTick()
+     if (ht9045::Pci1203Monitor() == 0) return;
+     bool pending = false;
+     for (std::size_t i = 0; i < n; ++i) if (!done[i]) pending = true;
+-    if (!pending) return;
++    if (!pending) { g_w906BootInitAllDone = true; return; }   //AI(W906-PARAMSYNC) 20261007: every boot axis has had its InitMotor (or was skipped) -> W906_ParamSyncTick (EOF) pushes the speeds once; same line
+     ht9045::IMotorAccessBackend& be = ht9045::MotorAccessLiveBackend();
+     std::string why;
+     if (!be.Pci1203Ready(why)) return;
+@@ -1674,3 +1674,77 @@ bool W906_MotorAccessHomeBlocked(const char* func, std::string& why)
+     }
+     return true;
+ }
++
++//------------------------------------------------------------------------------
++//AI(W906-PARAMSYNC) 20261007: EastSun 1007「請你開軟體 或是開啟馬達相關畫面都先寫入 圖片上對應馬達的參數 有時候根本還沒寫進去」.
++//  Plan D:\HT9045\_paramsync_1007\PLAN_PARAMSYNC.md; rulings (AskUserQuestion 1007): InitSpeed > JogHighSpeed is FLAGGED and EastSun fixes
++//  Mot_Table (nothing raised / clamped); live writes from the first run.
++//  Measured 1007: golden's boot SetMotorSpeed (cinitial.cpp InitialHandler) runs in wb_serve BEFORE the 1203 route is installed, so the
++//  PTP speeds never reached the card at boot; the boot InitMotor wrote only the ceilings (now at 100 %, WebMotorAccess.cpp
++//  MotorAccessBootInitMotor). This tick pushes golden's SetMotorSpeed() (every axis's PTP VelLow / VelHigh / Acc / Dec at the speed
++//  table's %, through the route -- whose SetSpeedParam now raises a known acc / dec ceiling first) when:
++//      (1) the boot InitMotor of every boot axis is done (g_w906BootInitAllDone, W906_BootInitMotorTick)   -- golden's own boot step
++//      (2) the Motor Test page opens  (W906_FormShowing("fMotorTest"), rising edge)                       -- port-only, EastSun's request
++//      (3) the Teach page opens       (W906_FormShowing("fTeach"), rising edge)                           -- port-only, EastSun's request
++//  Not while the machine runs / homes (SystemStart / SoftStart / iHome != 0 / the Home Monitor open): the request waits and runs as soon
++//  as it is stopped. SetMotorSpeed never touches the jog family (TMyEtherCatMotor::SetSpeed bSetJog defaults to false), so a JOG on the
++//  Motor Test page keeps the page's own speed (golden select / scroll bar).
++//  1.5 s later the result goes to the op log (BRAKE channel): the route writes that failed since the push, the read-back
++//  (Pci1203MotorRouteSpeedVerify: ok / mismatch / unverified) and every enabled PCI1203 row whose InitSpeed > JogHighSpeed (the card
++//  refuses VelLow / VelHigh above CFG_AxMaxVel = JogHighSpeed -- fix it in Mot_Table).
++#include "EtherCAT/Pci1203MotorRoute.h"         // Pci1203MotorRouteInstalled / Pci1203MotorRouteStatsNow
++void SetMotorSpeed();                                                           // cinitial.cpp (golden)
++namespace ht9045 { std::string Pci1203MotorRouteSpeedVerify(int* okN, int* badN, int* unverN); }   // EtherCAT/Pci1203MotorRoute.cpp EOF
++void W906_ParamSyncTick()
++{
++    static bool s_bootDone = false, s_mtPrev = false, s_tePrev = false, s_pending = false, s_waitSaid = false;
++    static int s_state = 0;
++    static DWORD s_at = 0;
++    static unsigned long s_failedBefore = 0;
++    static std::string s_reason;
++    if (ht9045::Pci1203Monitor() == 0 || !ht9045::Pci1203MotorRouteInstalled()) return;
++    if (!s_bootDone && g_w906BootInitAllDone) { s_bootDone = true; s_pending = true; s_reason = "開軟體（開機 InitMotor 都做完）"; }
++    const bool mt = W906_FormShowing("fMotorTest", false), te = W906_FormShowing("fTeach", false);
++    if (mt && !s_mtPrev) { s_pending = true; s_reason = "開 Motor Test 頁"; }
++    if (te && !s_tePrev) { s_pending = true; s_reason = "開 Teach 頁"; }
++    s_mtPrev = mt; s_tePrev = te;
++    const DWORD now = ::GetTickCount();
++    if (s_state == 0 && s_pending && s_bootDone) {
++        const bool busy = SystemStart || SoftStart || iHome != 0 || (fHome != 0 && fHome->fShow);
++        if (busy) {
++            if (!s_waitSaid) { ht9045::BrakeLog("PARAMSYNC " + s_reason + "：機台運轉／歸零中，先不寫，停下來再寫"); s_waitSaid = true; }
++            return;
++        }
++        s_pending = false; s_waitSaid = false;
++        s_failedBefore = ht9045::Pci1203MotorRouteStatsNow().failed;
++        SetMotorSpeed();
++        s_state = 1; s_at = now;
++        ht9045::BrakeLog("PARAMSYNC " + s_reason + "：SetMotorSpeed() 送出（每軸 PTP 初速／高速／加減速，照速度表 %），1.5 秒後讀回比對");
++        return;
++    }
++    if (s_state == 1 && now - s_at >= 1500) {
++        s_state = 0;
++        int ok = 0, bad = 0, unv = 0;
++        const std::string items = ht9045::Pci1203MotorRouteSpeedVerify(&ok, &bad, &unv);
++        const unsigned long failed = ht9045::Pci1203MotorRouteStatsNow().failed - s_failedBefore;
++        std::string flags;
++        ht9045::IMotorAccessBackend& be = ht9045::MotorAccessLiveBackend();
++        for (int i = 0; i < TOTAL_MOTOR && i < MAX_TRAY_MOTOR; ++i) {
++            if (MOT[i].Alias.Length() == 0) continue;
++            ht9045::MotorAccessAxis a;
++            ht9045::MotorGolden g;
++            if (!be.Resolve(MOT[i].Alias.c_str(), a) || !a.Is1203() || !a.tableEnable || !be.GoldenMotor(i, g)) continue;
++            if (g.initSpeed > g.jogHigh) {
++                char b[160];
++                std::snprintf(b, sizeof(b), "%s%s 初速 %u > JOG 高速 %u", flags.empty() ? "" : "；", MOT[i].Alias.c_str(), g.initSpeed, g.jogHigh);
++                flags += b;
++            }
++        }
++        char head[200];
++        std::snprintf(head, sizeof(head), "PARAMSYNC %s：寫入失敗 %lu 筆；讀回 一致 %d、不一致 %d、未確認 %d", s_reason.c_str(), failed, ok, bad, unv);
++        std::string line = head;
++        if (!items.empty()) line += "；不一致：" + items;
++        if (!flags.empty()) line += "；⚠ Mot_Table 要改（卡會拒收）：" + flags;
++        ht9045::BrakeLog(line);
++    }
++}
+diff --git a/tests/test_pci1203_motor_route.cpp b/tests/test_pci1203_motor_route.cpp
+index 6a87aad..4b0e06b 100644
+--- a/tests/test_pci1203_motor_route.cpp
++++ b/tests/test_pci1203_motor_route.cpp
+@@ -708,8 +708,80 @@ int main()
+         CHECK(!live.CardUsable() && !live.ControlArmed() && live.ExecCount() == 0ul && live.PollCount() == 0ul && live.AxisCount() == 0);
+     }
+ 
++    { void test_paramsync_ceiling(); test_paramsync_ceiling(); }   //AI(W906-PARAMSYNC) 20261007: ---- P, end of file ----
+     Pci1203MotorRouteSetEnvForTest(0);
+     Pci1203MotorRouteResetForTest();
+     std::printf("%s: %d/%d checks passed\n", g_fail ? "FAIL" : "PASS", g_total - g_fail, g_total);
+     return g_fail ? 1 : 0;
+ }
++
++// =============================================================================
++//  P  AI(W906-PARAMSYNC) 20261007: EastSun「有時候根本還沒寫進去」. A fake card that behaves like the real one on ceilings
++//     (measured 1007: PAR_AxAcc above CFG_AxMaxAcc -> 0x80000013, Dec -> 14, VelLow / VelHigh above CFG_AxMaxVel -> 11 / 12),
++//     driven through the REAL route (R()->call -> RouteCall -> SetSpeedParam). The plain FakeEnv above accepts everything, so no
++//     ceiling test could ever fail there. Numbers = MInArmX on 1007: boot left CFG_AxMaxAcc 1000 (1 %), HOME pushed Acc 91000.
++// =============================================================================
++namespace ht9045 { std::string Pci1203MotorRouteSpeedVerify(int* okN, int* badN, int* unverN); }
++class CeilingEnv : public FakeEnv {
++public:
++    Pci1203CmdResult Execute(const Pci1203Cmd& c) override
++    {
++        Pci1203CmdResult r = FakeEnv::Execute(c);
++        if (c.kind != kCmdAxSetSpeed || !r.issued || c.axis < 0 || c.axis >= (int)axes.size()) return r;
++        Pci1203AxisSample& a = axes[(std::size_t)c.axis];
++        const int s = (int)c.speed;
++        double cap = -1.0; unsigned long code = 0;   // a ceiling this fake was never given (speedValid false) = no limit
++        if ((s == (int)kSpeedAcc || s == (int)kSpeedJogAcc) && a.speedValid[kSpeedMaxAcc]) { cap = a.speed[kSpeedMaxAcc]; code = 0x80000013ul; }
++        if ((s == (int)kSpeedDec || s == (int)kSpeedJogDec) && a.speedValid[kSpeedMaxDec]) { cap = a.speed[kSpeedMaxDec]; code = 0x80000014ul; }
++        if (s == (int)kSpeedInit && a.speedValid[kSpeedMaxVel]) { cap = a.speed[kSpeedMaxVel]; code = 0x80000011ul; }
++        if (s == (int)kSpeedRun  && a.speedValid[kSpeedMaxVel]) { cap = a.speed[kSpeedMaxVel]; code = 0x80000012ul; }
++        if (cap >= 0 && c.value > cap) { r.ret = code; return r; }   // the card refuses, nothing changes on it
++        a.speed[s] = c.value; a.speedValid[s] = true;                 // accepted: the monitor reads it back
++        return r;
++    }
++};
++void test_paramsync_ceiling()
++{
++    CeilingEnv e; Fresh(e);
++    e.axes.reserve(4);                                                         // AddAxis below must not move the sample `a` refers to
++    const int k = e.AddAxis(5, 0); e.AddSlave(5, true);
++    CHECK(R()->bind(5, 0, 50, false));
++    Pci1203AxisSample& a = e.axes[(std::size_t)k];
++    a.speed[kSpeedMaxAcc] = 1000.0;  a.speedValid[kSpeedMaxAcc] = true;   // boot InitMotor at 1 %
++    a.speed[kSpeedMaxDec] = 1000.0;  a.speedValid[kSpeedMaxDec] = true;
++    a.speed[kSpeedMaxVel] = 10000.0; a.speedValid[kSpeedMaxVel] = true;   // JogHighSpeed
++    e.poll++;
++    const unsigned long failed0 = Pci1203MotorRouteStatsNow().failed;
++    std::size_t n0 = e.sent.size();
++    CHECK(Call(5, 0, kEcSetSpeed, kEcSpdAcc, 91000.0) == 0ul);                 // P1: raised first, then written
++    CHECK(e.sent.size() == n0 + 2 && e.sent[n0].speed == kSpeedMaxAcc && e.sent[n0].value == 91000.0 &&
++          e.sent[n0 + 1].speed == kSpeedAcc && e.sent[n0 + 1].value == 91000.0);
++    CHECK(Call(5, 0, kEcSetSpeed, kEcSpdDec, 91000.0) == 0ul);
++    CHECK(a.speed[kSpeedAcc] == 91000.0 && a.speed[kSpeedDec] == 91000.0 && a.speed[kSpeedMaxDec] == 91000.0);
++    CHECK(Pci1203MotorRouteStatsNow().failed == failed0);                      // P2: today's 0x80000013/14 lines -> none
++    n0 = e.sent.size();
++    CHECK(Call(5, 0, kEcSetSpeed, kEcSpdAcc, 500.0) == 0ul);                   // P3: below the ceiling: no raise, never lowered
++    CHECK(e.sent.size() == n0 + 1 && e.sent[n0].speed == kSpeedAcc && a.speed[kSpeedMaxAcc] == 91000.0);
++    n0 = e.sent.size();
++    CHECK(Call(5, 0, kEcSetSpeed, kEcSpdRun, 40000.0) == 0x80000012ul);        // P4: velocity ceiling NOT raised (ruling 1007:
++    CHECK(e.sent.size() == n0 + 1 && a.speed[kSpeedMaxVel] == 10000.0);        //     InitSpeed > JogHigh is fixed in Mot_Table)
++    CHECK(Pci1203MotorRouteStatsNow().failed == failed0 + 1);
++    // P5: unknown ceiling -> written as before (no raise invented)
++    const int k2 = e.AddAxis(6, 0); e.AddSlave(6, true);
++    CHECK(R()->bind(6, 0, 60, false));
++    n0 = e.sent.size();
++    Call(6, 0, kEcSetSpeed, kEcSpdAcc, 7000.0);
++    CHECK(e.sent.size() == n0 + 1 && e.sent[n0].speed == kSpeedAcc && e.axes[(std::size_t)k2].speed[kSpeedAcc] == 7000.0);
++    // P6: read-back verify -- a fresh sample after the writes
++    e.poll++;
++    int ok = 0, bad = 0, unv = 0;
++    std::string items = Pci1203MotorRouteSpeedVerify(&ok, &bad, &unv);
++    CHECK(bad == 0 && ok >= 5 && items.empty());
++    a.speed[kSpeedDec] = 1234.0;                                               // the card holds something else
++    items = Pci1203MotorRouteSpeedVerify(&ok, &bad, &unv);
++    CHECK(bad == 1 && items.find("st 5 ax 0 Dec want 91000 card 1234") != std::string::npos);
++    Call(5, 0, kEcSetSpeed, kEcSpdDec, 91000.0);                              // a write just now, no newer sample: unverified, not ok
++    items = Pci1203MotorRouteSpeedVerify(&ok, &bad, &unv);
++    CHECK(unv > 0 && bad == 0);
++    std::printf("P paramsync ceiling: done\n");
++}
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index c85e5d4..0a9517c 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -6890,6 +6890,45 @@ int main(int argc, char** argv)
+         (void)mX;
+     }
+ 
++    { void test_boot_initmotor_100pct(); test_boot_initmotor_100pct(); }   //AI(W906-PARAMSYNC) 20261007: end of file
+     printf("\n%d passed, %d failed\n", g_pass, g_fail);
+     return (g_fail == 0) ? 0 : 1;
+ }
++
++// =============================================================================
++//  AI(W906-PARAMSYNC) 20261007: EastSun「有時候根本還沒寫進去」-- the boot InitMotor (MotorAccessBootInitMotor, WebMotorAccess.cpp EOF)
++//  writes CFG_AxMaxAcc / MaxDec at 100 % of Mot_Table Acc / Dec, as golden's boot does (cinitial.cpp:3616 SetMotorAccelSpeed(i,100)
++//  -> :3643 InitMotor). It took the runtime dAcc before: MInArmX 1000 = 1 % on 1007, and every later PAR_AxAcc above it was refused.
++//  Test Range / Rate keep the runtime dAcc (golden: InitMotor at the % in force) -- pinned at [13] "MaxAcc = dAcc 1000".
++// =============================================================================
++namespace ht9045 { bool MotorAccessBootInitMotor(IMotorAccessBackend& be, const std::string& alias, std::string& report); }
++void test_boot_initmotor_100pct()
++{
++    printf("\n[PARAMSYNC] boot InitMotor: CFG_AxMaxAcc / MaxDec = Mot_Table Acc / Dec (100 %%), not the runtime %%\n");
++    MotorAccessResetJobs();
++    MotorGolden g;
++    g.valid = true; g.enable = true; g.gearRatio = 1.0; g.softP = 1000; g.softN = 0;
++    g.jogHigh = 10000; g.jogLow = 100; g.initSpeed = 500; g.acc = 1000; g.dec = 1000; g.homeFlag = 1;   // runtime dAcc / dDec at 1 %
++    g.homeHigh = 2000; g.homeLow = 500; g.accDb = 100000; g.decDb = 90000; g.range = 100; g.rate = 100;   // Mot_Table Acc / Dec
++    g.motorClass = 0; g.sensorType = true; g.in1Logic = false;
++    FakeBackend be;
++    be.table["MInArmX"] = Axis1203(0, 0, 0, 2);
++    be.aliasOf[0] = "MInArmX";
++    be.golden[0] = g;
++    be.opened.assign(5, true);
++    for (int ax = 0; ax < 5; ++ax) { be.cmdPos[ax] = 0.0; be.state[ax] = 1; }
++    be.executed.clear();
++    std::string report;
++    const bool ok = MotorAccessBootInitMotor(be, "MInArmX", report);
++    double maxVel = -1, maxAcc = -1, maxDec = -1;
++    for (std::size_t i = 0; i < be.executed.size(); ++i) {
++        const Pci1203Cmd& c = be.executed[i];
++        if (c.kind != kCmdAxSetSpeed) continue;
++        if (c.speed == kSpeedMaxVel) maxVel = c.value;
++        if (c.speed == kSpeedMaxAcc) maxAcc = c.value;
++        if (c.speed == kSpeedMaxDec) maxDec = c.value;
++    }
++    CHECK(ok && maxAcc == 100000.0 && maxDec == 90000.0,
++          "boot InitMotor: CFG_AxMaxAcc = 100000 / MaxDec = 90000 (Mot_Table, 100 %) -- not the runtime 1000 that made every later PAR_AxAcc fail on 1007");
++    CHECK(maxVel == 10000.0, "boot InitMotor: CFG_AxMaxVel = PJogHighSpeed 10000 (unchanged)");
++}
+-- 
+2.55.0.windows.5
+

@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-07 10:20
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ fc49bbe WORKLOG: §2 2026-10-07 rows 147-156 (1203 REOPEN-4, PAUSE/RESET deadlock + NOTICE-／web ae69cdd。
+HT9050 機台參數快照（machine_params\）—— 2026-10-07 10:40
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 4e3f1bf PARAMSYNC: the motor parameters reach the 1203 card at boot and when the Motor Tes／web ae69cdd。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
