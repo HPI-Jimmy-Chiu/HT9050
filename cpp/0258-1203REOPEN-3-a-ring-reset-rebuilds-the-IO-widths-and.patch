@@ -1,0 +1,117 @@
+From 1937c52dbf68a36666ce4c8e2ca2671b21106cb5 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 08:10:52 +0800
+Subject: [PATCH] =?UTF-8?q?1203REOPEN-3:=20a=20ring=20reset=20rebuilds=20t?=
+ =?UTF-8?q?he=20IO=20widths=20and=20the=20IO=20map=20too=20--=20EastSun=20?=
+ =?UTF-8?q?1007=20'2.=E8=AB=8B=E4=BD=A0=E6=83=B3=E8=BE=A6=E6=B3=95'=20(rev?=
+ =?UTF-8?q?iew=20P2:=20RescanRing=20left=20the=20DI/DO=20map=20as=20at=20t?=
+ =?UTF-8?q?he=20first=20open,=20so=20a=20module=20that=20came=20back=20was?=
+ =?UTF-8?q?=20not=20mapped,=20and=20an=20auto-disabled=20monitor=20never?=
+ =?UTF-8?q?=20came=20back).?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EtherCAT/Pci1203Monitor.cpp: Open() is split on its "reading the IO map" line (same line, no line moves): the second half -- DI/DO max channels, ring status, the DI/DO station maps and their attribution, DiBatchOpen_, opened=true / disabled=false -- is now the body of OpenIoLayout_, unchanged; it sits inside Open()'s #if HAVE_PCI1203, so RescanRing's call is #if-guarded too. RescanRing calls it after re-scanning the slaves and re-opening the axes. Impl gets diPortsReq / doPortsReq (the widths the FIRST Open() asked for, same line); Rescan() and RescanRing re-open with them -- they used the width clamped to what the card reported at the last open, so ports of a module missing then could never come back.
+
+readonly / control gates PASS; Pci1203 tests 6/6; code-after-comment scan 0; OpenIoLayout_ present in the Debug exe. No card in the tests: the IO-map rebuild is compiled, not run. Debug + release (affected targets). WORKLOG section 2 row 146.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203Monitor.cpp | 25 +++++++++++++++++--------
+ EtherCAT/Pci1203Monitor.h   |  2 +-
+ docs/WORKLOG_MACHINE.md     |  1 +
+ 3 files changed, 19 insertions(+), 9 deletions(-)
+
+diff --git a/EtherCAT/Pci1203Monitor.cpp b/EtherCAT/Pci1203Monitor.cpp
+index cc19845..0d3b249 100644
+--- a/EtherCAT/Pci1203Monitor.cpp
++++ b/EtherCAT/Pci1203Monitor.cpp
+@@ -121,8 +121,8 @@ struct TPci1203Monitor::Impl {
+     bool        gearReadDue;
+     bool        gearReadForce;  std::vector<unsigned> cfgDue; std::vector<unsigned> cfgFailed; std::vector<int> cfgTries; std::vector<Pci1203CfgExpect> cfgExpect; std::vector<unsigned> cfgWritten; bool inPoll; bool cfgRetryDue; bool retryArmed; unsigned long retryTick; void (*yieldHook)(); bool inYield; unsigned long yieldMs;   //AI(W906-IOWEB-P25) 20260925: per-axis configuration groups still to read (cfgDue, armed by OpenAxes_ = open / rescan / re-attach, and by a write), groups whose last read failed (cfgFailed, retried on the 30 s window at most 3 times), written values awaiting agreement (cfgExpect), and the output-first yield hook. Same line, no line below moves
+     unsigned    maxAxes;  struct Pci1203IoSnap* ioPub = 0; struct Pci1203IoSnap* ioStaged = 0;  int cfgRetryAxis = -1; bool cfgRoundOn = false; std::size_t cfgRoundNext = 0; unsigned long cfgRoundTick = 0;   //AI(W906-CFGRETRY) 20261006: the failed-group retry round (EastSun 1006 「參數重試一定要一直重試 只是秒數可以拉長」→ 1 分鐘): which axis retries THIS Poll (-1 none), whether a round is open, the next axis to look at, when the last round opened; same line   // maxAxes: remembered so a re-attach can redo them   //AI(W906-IOTHREAD) 20261005: the published copy the main thread reads (ioPub) and the one the IO thread fills at the end of every poll (ioStaged); 0 until the IO thread's first poll. Same line, no line below moves
+-    unsigned    diPorts;
+-    unsigned    doPorts;              //AI(W906-1203MON-18) 20260910
++    unsigned    diPorts;  unsigned diPortsReq = 0;   //AI(W906-1203REOPEN-3) 20261007: + the width Open() was ASKED for (diPorts is later clamped to what the card reported then); same line
++    unsigned    doPorts;  unsigned doPortsReq = 0;   //AI(W906-1203MON-18) 20260910   //AI(W906-1203REOPEN-3) 20261007: + the same for DO
+     //AI(W906-1203COLD-2) 20260924: when the last ring sweep ran, so a zero scan
+     //  can be retried on a LATER tick instead of on every tick. GetTickCount
+     //  wraps after 49 days; the comparison below is written as a subtraction of
+@@ -360,8 +360,8 @@ bool TPci1203Monitor::Open(unsigned maxAxes, unsigned diPorts, std::string& why,
+     if (diPorts > static_cast<unsigned>(kPci1203MaxDiPorts)) diPorts = kPci1203MaxDiPorts;
+     if (doPorts > static_cast<unsigned>(kPci1203MaxDoPorts)) doPorts = kPci1203MaxDoPorts;
+     impl_->maxAxes = maxAxes;
+-    impl_->diPorts = diPorts;
+-    impl_->doPorts = doPorts;
++    impl_->diPorts = diPorts;  if (impl_->diPortsReq == 0) impl_->diPortsReq = diPorts;   //AI(W906-1203REOPEN-3) 20261007: remember the FIRST request (a later Rescan re-opens with it, so the width can grow back when a module returns); same line
++    impl_->doPorts = doPorts;  if (impl_->doPortsReq == 0) impl_->doPortsReq = doPorts;
+ 
+     //AI(W906-1203MON-8) 20260907: ATTACHED vs OWNED. Read uiDevhand ONCE here
+     // and branch; Poll() re-reads it every time to catch production closing or
+@@ -623,7 +623,7 @@ bool TPci1203Monitor::Open(unsigned maxAxes, unsigned diPorts, std::string& why,
+     ScanSlaves_();
+     g_openPhase = "opening axis handles (up to 4 s)";
+     OpenAxes_();
+-    g_openPhase = "reading the IO map";
++    g_openPhase = "reading the IO map";  return OpenIoLayout_(diPorts, why, doPorts); }  bool TPci1203Monitor::OpenIoLayout_(unsigned diPorts, std::string& why, unsigned doPorts) {   //AI(W906-1203REOPEN-3) 20261007: EastSun「2.請你想辦法」(review P2: RescanRing did not rebuild the IO widths / IO map). Open() is SPLIT here, on this line: everything below -- DI/DO widths, ring status, DI/DO station maps + attribution, DiBatchOpen_, opened=true / disabled=false -- is the body of OpenIoLayout_, unchanged, so RescanRing (end of file) runs the very same code after a ring reset. No line below moves.
+ 
+     //AI(W906-1203MON-18) 20260910: ask the CARD how wide its IO image is, once,
+     //  here in Open() and never in a tick. Four properties, all verified to
+@@ -1857,8 +1857,8 @@ bool TPci1203Monitor::Rescan(std::string& why)
+     //  Remembered from the original Open(), so a rescan cannot quietly change
+     //  the shape of the published data underneath a page that is bound to it.
+     const unsigned ax = impl_->maxAxes;
+-    const unsigned di = impl_->diPorts;
+-    const unsigned dou = impl_->doPorts;
++    const unsigned di = impl_->diPortsReq ? impl_->diPortsReq : impl_->diPorts;   //AI(W906-1203REOPEN-3) 20261007: was impl_->diPorts -- the width CLAMPED at the last open, so a module missing then could never get its ports back by a rescan
++    const unsigned dou = impl_->doPortsReq ? impl_->doPortsReq : impl_->doPorts;
+ 
+     Close();
+     const bool ok = Open(ax, di, why, dou);
+@@ -4698,7 +4698,16 @@ bool TPci1203Monitor::RescanRing(std::string& why)
+     CloseAxes_();
+     ScanSlaves_();
+     OpenAxes_();
++    //AI(W906-1203REOPEN-3) 20261007: EastSun「2.請你想辦法」(review P2) -- then the SAME second half of Open(): DI/DO widths, ring
++    //  status, the DI/DO station maps and their ring / station / channel attribution, DiBatchOpen_, opened=true / disabled=false.
++    //  A module that came back after the reset is in the IO map again (was: DI/DO left mapped as at the first open), and a monitor
++    //  that had auto-disabled itself is enabled again. Same widths as the original Open() (impl_->diPorts / doPorts, like Rescan()).
++#if HAVE_PCI1203
++    const bool ok = OpenIoLayout_(impl_->diPortsReq ? impl_->diPortsReq : impl_->diPorts, why, impl_->doPortsReq ? impl_->doPortsReq : impl_->doPorts);
++#else
++    const bool ok = false;  why = "not linked: built without HAVE_PCI1203";
++#endif
+     if (Pci1203OnIoThread()) W906IoStage_(impl_->ioStaged, impl_->ioPub, impl_->cardS, impl_->axes, impl_->dis, impl_->dos, impl_->slaves, impl_->opened, impl_->disabled, impl_->disabledWhy);
+-    return true;
++    return ok;
+ }
+ }  // namespace ht9045
+diff --git a/EtherCAT/Pci1203Monitor.h b/EtherCAT/Pci1203Monitor.h
+index 5f18ab0..66437d2 100644
+--- a/EtherCAT/Pci1203Monitor.h
++++ b/EtherCAT/Pci1203Monitor.h
+@@ -1524,7 +1524,7 @@ private:
+     void OpenAxes_();
+     void CloseAxes_();
+     //AI(W906-1203MON-11) 20260907: bounded, time-budgeted, Open()-only.
+-    void ScanSlaves_();
++    void ScanSlaves_();  bool OpenIoLayout_(unsigned diPorts, std::string& why, unsigned doPorts);   //AI(W906-1203REOPEN-3) 20261007: the second half of Open() (IO widths, ring status, IO maps, DiBatchOpen_); also called by RescanRing; same line
+ 
+     struct Impl;
+     Impl* impl_;
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 922197b..fe8c7e8 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -224,6 +224,7 @@
+ | 143 | **持續 bug 審查第二輪：第 142 條的修正自己有 3 個錯，已修（W906-PLCLOST-2／W906-IOFIX-3）**（每小時 :37 審查迴圈審 aff4167／fa06b9f）。①**嚴重**：MyPLC_IO_Modbus.cpp:286 的 W906_SafePlcFrameMark 呼叫同行接在既有的 `//完成過一次` 註解**後面**＝整段是註解、從沒編進程式 ⇒ PLC 正常也會在 START 後 2 s 跳警報停機；測試 [7] 直接呼叫 FrameMark 所以綠（測試沒走真路徑，同 [5] 的教訓）。改：呼叫移到註解前；斷線判斷改成「socket 未連線 或 連續 2 次請求在 hCheckTime=1 s 內沒有回應」（逾時分支同行 W906_SafePlcFrameMiss，回應時歸零）——也解掉審查 PLAUSIBLE A（主迴圈卡 2 s 會誤報）。tests [7] 改成經過真的 PLCIOTaskCycle（送出、等 1.1 s 逾時兩次、再收回應）：75／75。今天新增的 11,128 行全掃「程式碼在 `//` 之後」：0（對照組：原錯誤行會被抓到）。②**高**：Pci1203Monitor.cpp 心跳時間 `GetTickCount()|1u` 可能比 now 多 1 ms ⇒ 無號相減繞成 4294967295 ⇒ RunSync 隨機「立即拒絕」正常請求（含 STOP）；而且心跳起算的凍結計時會在合法的長 Poll（重連 ScanSlaves_+OpenAxes_）期間拒絕 STOP。改：RunSync 的立即拒絕與心跳起算全部撤回（恢復原行為，STOP／DO 不受影響）；心跳時間改 `t ? t : 1`；新增 EOF W906_Pci1203IoHeartAgeMs（有號差）；只在 WebMotorAccessLive.cpp W906_TorqueFocus（Motor Test 頁每拍的轉矩 SDO 焦點）心跳 ≥5 s 時略過。③**中**：WAR16155 已被 RULINGS_20261005 #96 指定給「1203 卡片命令失敗」⇒ 改 WAR16156（csystem.cpp 同行；AlarmCodeList.txt 備份 .bak_war16156_*；web 四檔）。Debug 03:2x、release 03:2x（只編受影響目標） | — | 本 commit |
+ | 144 | **1203 重新開卡流程：開卡失敗／模組檢查不符 → 停機時自動重開（缺模組只 Reset 出問題的環）＋操作員按鈕（W906-1203REOPEN）**（EastSun 1007「幫我查一下 1203 reload 相關 Api」→「只要開卡異常或是 有沒有偵測到的模組 需要加個 重新開卡流程 可能需要用到reset ring」；AskUserQuestion：兩種都要／只重置出問題的那個環／先只做模擬；WAR16150＋WAR16157／所有問題都重開／間隔 10 秒、按鈕再給 3 次）。計畫 D:\HT9045\_reopen_1007\PLAN_1203_REOPEN.md。**查到的 API**：Acm_DevReOpen（golden 無上限 goto；量過會毒化 handle → 不用）、Acm_DevLoadConfig／Acm_LoadENI（沒用）、Acm_MasResetRing（ADVMOT.dll 有匯出、標頭沒有；用反射讀 C# 包裝 AdvMotAPI.dll 得到簽名 mAcm_MasResetRing(IntPtr, UInt16)；⚠ 這張卡 9/12 的 Mas* 都回 0x80000005，ResetRing 很可能無效 → 一律有整卡重開後備；下次 F5 stdout 的 `Acm_MasStartRing -> 0x...` 會說明）。**階段 1**（026dcd7）EtherCAT/Pci1203Reopen.h 純決策＋tests/test_pci1203_reopen.cpp 22／22。**階段 2**（c05c3bb）Pci1203Control kCmdRingReset（enum 尾端、allowlist、IO 執行緒兩次 Poll 之間、wire pci1203.ring.reset；GetProcAddress Acm_MasResetRing 每環，成功 → Monitor::RescanRing（不寫卡）；匯出不存在／失敗 → Rescan()）；Pci1203Pure 106／106；readonly／control gate PASS。**階段 3**（本 commit）tools/wb_serve.cpp EOF：開機開卡失敗 → 故障＋第一拍 WAR16150；模組檢查 kAlarm（WAR16154 之後）→ 問題的環遮罩；kPass → 恢復；主迴圈 W906_Pci1203ReopenTick（停機＝非 SystemStart、無 HOME、無網頁 HOME、無 1203 軸在動）→ 照決策做 kCmdRingReset／kCmdCardRescan（自動時 WB_1203_OPEN_WAIT_SEC 暫設 5 s，避免主迴圈卡 90 s）→ fAllMotorHome=false、卡開了但 IO 執行緒沒跑就啟動、++LinkRestoreGen 開新一代模組檢查；3 次失敗 → WAR16157；1203 頁 pci1203.card.reopen（運轉中拒絕）。AlarmCodeList.txt 補 WAR16157（備份 .bak_war16157_*），web 四檔補文字。**階段 4**（web）1203 頁「⟲ 重新開卡（再試 3 次）」按鈕（規定不加確認框）。Debug 04:xx、release 04:xx（只編受影響目標）。**只做了模擬**：決策與命令都有單元測試；主程式接線沒有實機驗證。⚠ 未做：ring 1 重置後 IO 輸出歸 0，要等流程下次寫入（樹裡沒有「全部重送輸出」）；恢復期間 LinkWatch 可能另跳 WAR16152（卡關閉 >10 s 時） | 待 EastSun：現場測試（例如拔一個 IO 模組的線再插回）；ring 1 輸出重送要不要做 | 本 commit |
+ | 145 | **1203 重新開卡流程審查後的 6 個修正（W906-1203REOPEN-2）**（每小時審查迴圈審 026dcd7／c05c3bb／012d4a9／web 6ae80ab）。C1【高】重試不等模組檢查的判定（判定本身要 10 s，每次重試都打斷前一次；第 3 次試完下一拍就 WAR16157）→ Pci1203Reopen.h 每次嘗試等判定：再報同一故障＝失敗、Recovered＝完成、30 s 沒判定＝失敗；失敗後 10 s 才下一次；第 3 次的判定出來才決定跳警報。C2【中高】只有 kPass 會 Recovered → kWriteIni／kWriteSkipped／kIniBad（沒有可比對的清單＝沒有不符）也算完成（wb_serve.cpp 三處同行），免得多做整卡重開與假 WAR16157。C3【中】pci1203.ring.reset 成了沒有停機檢查的網路命令 → 拿掉 wire 名稱，改 INTERNAL（審計名 "(internal)"），只有重開流程能發。C4 沒有 HAVE_PCI1203 的建置（筆電）開機必跳 WAR16150／16157 → "not linked" 不算開卡失敗。C5 命令沒送出也清 fAllMotorHome、多一代模組檢查 → 新 AttemptNotIssued：算一次失敗、不清 HOME、不開新一代。C6 按鈕可能給 4 次 → 手動重開中出現故障時保留次數。tests：Pci1203Reopen 33／33（等判定、第 3 次判定前不跳、30 s 逾時、手動保留次數、未送出）、Pci1203Pure 105／105；readonly／control gate PASS；註解掃描 0。審查 PLAUSIBLE（未改，回報 EastSun）：P1 ResetRing 後立刻掃描沒有等待；P2 RescanRing 不重建 IO 寬度／IO map（回來的模組 DI/DO 可能不在 map）；P3 IO 執行緒沒跑時整卡重開在主迴圈上（Acm_GetAvailableDevs 可能 15 s）；P4 開機安全迴路沒復歸時驅動器「缺少」會重置 ring 0 三次再 WAR16157。Debug 05:xx、release 05:xx | 待 EastSun：P1～P4 | 本 commit |
++| 146 | **只重置一個環後重建 IO 對應（W906-1203REOPEN-3）**（EastSun 1007「2.請你想辦法」＝第 145 條審查 P2：RescanRing 不重建 IO 寬度／IO map，回來的模組 DI/DO 可能不在 map；自動停用的 monitor 永遠回不來）。EtherCAT/Pci1203Monitor.cpp：Open() 在「reading the IO map」那一行同行切開，後半段（DI/DO 通道數、ring 狀態、DI/DO 站台 map 與歸屬、DiBatchOpen_、opened=true／disabled=false）原封不動成為 OpenIoLayout_（行號不動；在 #if HAVE_PCI1203 內，RescanRing 的呼叫也包 #if）；RescanRing 重掃站、重開軸之後呼叫它。另外 Impl 加 diPortsReq／doPortsReq（第一次 Open 要求的寬度，同行）；Rescan 與 RescanRing 都用它重開——原本用上次開卡時依卡片回報截短的寬度，開卡當時缺的模組回來也長不回來。readonly／control gate PASS；1203 測試 6／6；註解掃描 0；Debug exe 內有 OpenIoLayout_。測試環境沒有卡，IO map 重建只有編譯、沒有實跑。Debug 05:xx、release 05:xx | 待 EastSun 現場測試 | 本 commit |
+ | — | **還沒完成**（10-06 晚更新）：①**實體面板**：已知是 RS-232 面板接 COM4／115200（ControlPanelMode=1、[TrayY] COM PORT=COM4，第 134 條），15:24 有回應；之後線被拔掉，接回後還沒驗按鍵與燈（包 161 已收 St02 P1b 照 golden 分段讀）；面板回的是位址 1，若燈仍不亮要查前／後面板位址。②**1203 模組檢查（WAR16154）**：已整合，代碼表在第 134 條補上。③**關 HMI 視窗時程式還沒開好**的情況：修法已規劃。④**安全迴路**：16:12 起 OSSD 一直 0（M1S OSSD 紅燈）、Input byte1 bit0 自 17:10:59 為 0 ⇒ 1203 從站沒上線；要全部急停放開＋按 PLC 復歸（250 ms～5 s）。⑤**安全 PLC 點位**：SnAllEMG／SnAllSafeDoor 待 EastSun 說明監看時段的操作（D:\HT9045\_plc_1006\plc_watch400.log）；SafePlcIO 維持 0；若在 Input byte ≥4 要擴充 MyLaneIO（golden 只認 Port 0x300～0x303）。⑥**遠端復歸**：MOSAIC 的 Fieldbus Input 不是安全輸入，只能經 MSD 專案的 USER／MACRO RESTART，需整合商改專案＋風險評估。⑦**溫控 COM12**：開機「Temperature KT4H : COM12 port error」，[TempCtrl] COM_PORT=COM12 這台沒有（只有 COM1～6）。⑧**TFT**：「Bin display got error!!」來自 Fix1～6 沒裝；要不要 HT9050 不掃待裁決。⑨**早上未測**：INDEX_MOTION_CARD=1 首次 HOME／Z1、F9050-FIX2 首跑、IOFIX 故障路徑（都要等④） | — | 見 §4 |
+ | 41 | **VC4 閥值自己測**（EastSun「VC4 你自己測試 寫進去哪個位置 數值讀回來 會改變 自己推出來 用VC8」）：等 EastSun F5 後，用 Vacuum Unit 同一條命令對一格寫 -30 kPa、讀回、再寫回原值 | （測試中） | — |
+ | — | 關掉軟體後 VS Code 上方的除錯工具列還在：wb_serve／gdb 都已經結束、8055 沒人佔，是 VS Code 沒發現結束；按紅色方塊即可（只會跑關站腳本，沒有東西可關） | — | — |
+-- 
+2.55.0.windows.5
+
