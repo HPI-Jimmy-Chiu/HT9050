@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-08 00:14
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ c011ef9 TRAYNOPICKUP: HT9050 Tray Arm positions are the teach point + Offset (no 6800 pick／web e94a028。
+HT9050 機台參數快照（machine_params\）—— 2026-10-08 00:25
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 0d86694 FIXFULL9050: the Out Arm yield point (MoveOutArmXY_ToFix_Tray_Full) is the Auto3 X／web e94a028。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
