@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-07 13:19
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 4a4306c WORKLOG: ?3 row 166.／web 980e558。
+HT9050 機台參數快照（machine_params\）—— 2026-10-07 13:28
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ ddff58f TEACHGO-SPD: every Teach-page GO moves at the page's speed, and the speed bar is n／web 980e558。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置

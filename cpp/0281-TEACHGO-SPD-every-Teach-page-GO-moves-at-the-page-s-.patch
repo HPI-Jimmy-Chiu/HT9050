@@ -1,0 +1,140 @@
+From ddff58fd9ca9e921217c6e70b08fe218a363beeb Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 13:28:41 +0800
+Subject: [PATCH] =?UTF-8?q?TEACHGO-SPD:=20every=20Teach-page=20GO=20moves?=
+ =?UTF-8?q?=20at=20the=20page's=20speed,=20and=20the=20speed=20bar=20is=20?=
+ =?UTF-8?q?no=20longer=20pulled=20back=20--=20EastSun=201007=20'=E6=B2=92?=
+ =?UTF-8?q?=E9=98=BF=20=E6=88=91=E6=8C=89GO=20=E4=BB=96=E8=87=AA=E5=8B=95?=
+ =?UTF-8?q?=E6=A2=9D1%=E7=9A=84'=20/=20'=E5=85=B6=E4=BB=96=E7=9A=84?=
+ =?UTF-8?q?=E4=B9=9F=E8=A6=81=E4=BF=AE=20=E4=B8=8D=E6=98=AF=E5=8F=AA?=
+ =?UTF-8?q?=E6=9C=89=E9=80=99=E9=A0=81'.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Measured: 13:19:57 the Teach page sent teachGo btnGoOutSht2Right with params.speed 65 (speedEvent), the move ran at 1 %. Golden
+GoButton140Click (uteach.cpp:3429-3430) does SetSpeed(ScrollBar1) and then UpdateMotorTeachMonitor, which puts ScrollBar1 at 1 and
+SetSpeed(1), so the GO runs at 1 %; GoButton020Click forces 20 then UpdateMotorTeachTwoMonitor (bar to 1) and moves at 20 %. The port
+copied both. All Teach GO buttons go through these two handlers (DoTeachButton: kTkGo140 / kTkGo020).
+
+WebMotorAccess.cpp (same lines): TeachGoPct(r) = params.speed clamped 1..100 (as golden edtSpeedChange), else the last speed the page
+reported, else 1; TeachGo140 / TeachGo020 set the moving axis to it (TeachSpeedSet) and move at it; the TeachMonitor / TeachTwoMonitor
+resets and the forced 20 are gone. Motor Test's GO (DoMoveAbsolute) already used the page speed; Teach Move+/-/MoveTo use the page's
+last reported speed -- unchanged.
+tests/test_web_motor_access.cpp: + GoButton140 at the page's 65 % -> velHigh 6500; the GoButton020 checks now carry speed 35 and expect
+35 % (were golden's 20 %). WebMotorAccess 1104/0. wb_serve compiled; the link waits for EastSun's running program. Scan 0.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebMotorAccess.cpp              | 16 ++++++++--------
+ tests/test_web_motor_access.cpp | 20 +++++++++++++++-----
+ 2 files changed, 23 insertions(+), 13 deletions(-)
+
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index ec2f6c8..4f6a9f6 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -3196,7 +3196,7 @@ int TeachCurPct(int mi)
+ {
+     std::map<int, int>::const_iterator it = g_goldenPct.find(mi);
+     return it == g_goldenPct.end() ? 1 : it->second;
+-}
++}  int TeachGoPct(const MotorAccessReq& r) { double v = 0.0; if (ParamNum(r, "speed", v) && std::isfinite(v)) return v > 100.0 ? 100 : (v < 1.0 ? 1 : (int)v); return g_teachEdt > 0 ? g_teachEdt : 1; }   //AI(W906-TEACHGO-SPD) 20261007: the Teach GO speed = the page's speed (params.speed, clamped 1..100 like golden edtSpeedChange), else the last speed the page reported, else 1
+ 
+ // 教導頁共用前置：解析、golden 馬達、1203 層（MotionPrelude），再過 golden CheckCanMove＋IsCanQuickJogMove。
+ //   ⚠ 真機組態（或 SOFT_SIMULTE＋真的會動的 1203 軸，W5B-3）下 IsCanQuickJogMove → CheckShuttleCanMove 會
+@@ -3576,7 +3576,7 @@ MotorAccessOutcome TeachGo140(const MotorAccessReq& r, long long wireId, IMotorA
+     const std::string who = who0 + " " + m.a.cardModel + " MOT[" + std::to_string(mi) + "]";
+     if (m.g.homeFlag == 0) return RefuseT(who + ": motor need home 馬達需要歸零", ec);   // :3422（EditPtr 還沒設）
+     ec.e0 = t.row.edit0;                                                        // :3428 EditPtr=TechPara[Tag]->SetEdit
+-    TeachMonitor(be, mi, mi);                                                   // :3429-3430 SetSpeed(ScrollBar1)＋UpdateMotorTeachMonitor → 1%（R-W5B-4）
++    const int goPct = TeachGoPct(r);  TeachSpeedSet(be, mi, goPct);   //AI(W906-TEACHGO-SPD) 20261007: EastSun「我按GO 他自動條1%的」「其他的也要修 不是只有這頁」-- GO moves at the page's speed (params.speed); golden :3429-3430 SetSpeed(ScrollBar1) then UpdateMotorTeachMonitor reset the bar to 1 and moved at 1 % (was: TeachMonitor(be, mi, mi)).  // :3429-3430 SetSpeed(ScrollBar1)＋UpdateMotorTeachMonitor → 1%（R-W5B-4）
+     int target = 0;
+     std::string why;
+     if (!TeachFieldValue(r, ec.e0, target, why)) return RefuseT(who + ": " + why, ec);   // :3431 iNewPos=atoi(EditPtr->Text)
+@@ -3598,7 +3598,7 @@ MotorAccessOutcome TeachGo140(const MotorAccessReq& r, long long wireId, IMotorA
+     // golden：SetSpeed(ScrollBar1) 之後 InitMOTParameter(); SetSpeed(1); MotorMove(iNewPos) ⇒ 實際用 1% 走
+     std::string alias; be.AliasOfMotIndex(mi, alias);
+     MotorAccessReq r2 = r; r2.motors.assign(1, alias);
+-    MotorAccessOutcome o = m.a.Is1203() ? Move1203(r2, wireId, be, m, target, true, 1) : MoveGolden(r2, be, m, target, true, 1);
++    MotorAccessOutcome o = m.a.Is1203() ? Move1203(r2, wireId, be, m, target, true, goPct) : MoveGolden(r2, be, m, target, true, goPct);   //AI(W906-TEACHGO-SPD) 20261007: the page's speed, was 1 (golden); same line
+     if (!o.ok) return RefuseT(o.ackJson, ec);
+     o.ackJson = AddEcho(o.ackJson, ec, m.g.rotateKit ? &bl : 0);
+     return o;
+@@ -3637,17 +3637,17 @@ MotorAccessOutcome TeachGo020(const MotorAccessReq& r, long long wireId, IMotorA
+         const std::string who = who0 + " 第 " + std::to_string(i + 1) + " 軸";
+         ec.e0 = edits[i];                                                       // :3593 EditPtr=TechTwoPara[Tag]->SetEdit[i]
+         // :3594-3596 ScrollBar1->Position=20（→ ActiveMotorIndex 的 SetSpeed）、MOT[Two].SetSpeed(20)、UpdateMotorTeachTwoMonitor（→ 1%）（R-W5B-4）
+-        TeachEdtSpeed(be, ami, 20);
+-        TeachSpeedSet(be, mots[i], 20);
+-        TeachTwoMonitor(be, ami, mots[0], mots[i]);
++        const int goPct = TeachGoPct(r);  (void)ami;   //AI(W906-TEACHGO-SPD) 20261007: EastSun「其他的也要修」-- the two-axis GO also moves at the page's speed (golden: bar forced to 20, then UpdateMotorTeachTwoMonitor -> 1 %, the move at 20 %); the bar is no longer reset
++        TeachSpeedSet(be, mots[i], goPct);   //AI(W906-TEACHGO-SPD) 20261007: was TeachSpeedSet(be, mots[i], 20)
++        //AI(W906-TEACHGO-SPD) 20261007: was TeachTwoMonitor(be, ami, mots[0], mots[i]) (golden UpdateMotorTeachTwoMonitor: bar to 1)
+         const std::string moving = done.empty() ? std::string() : "（第 1 軸已經在走" + done + "）";
+         const int target = targets[i];
+         if (target > mm[i].g.softP) { std::snprintf(b, sizeof(b), ": Over max soft limit, abort process! 超過軟體正極限 (%d > %d)", target, mm[i].g.softP); return RefuseT(who + b + moving, ec); }
+         if (target < mm[i].g.softN) { std::snprintf(b, sizeof(b), ": Bellow min soft limit, abort process! 小於軟體負極限 (%d < %d)", target, mm[i].g.softN); return RefuseT(who + b + moving, ec); }
+         std::string alias; be.AliasOfMotIndex(mots[i], alias);
+         MotorAccessReq r2 = r; r2.motors.assign(1, alias);
+-        MotorAccessOutcome o = mm[i].a.Is1203() ? Move1203(r2, wireId, be, mm[i], target, true, 20)   // Steven 20210723 : Go按鈕速度提升到20%
+-                                                : MoveGolden(r2, be, mm[i], target, true, 20);
++        MotorAccessOutcome o = mm[i].a.Is1203() ? Move1203(r2, wireId, be, mm[i], target, true, goPct)   //AI(W906-TEACHGO-SPD) 20261007: the page's speed, was 20.  // Steven 20210723 : Go按鈕速度提升到20%
++                                                : MoveGolden(r2, be, mm[i], target, true, goPct);
+         if (!o.ok) return RefuseT(who + ": " + o.ackJson + moving, ec);
+         done += "; axis " + std::to_string(i + 1) + " -> " + std::to_string(target);
+     }
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index 2cd9c32..67ca455 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -3116,6 +3116,16 @@ int main(int argc, char** argv)
+               (int)be.executed.size() == n0 + 5 && be.executed[n0 + 1].value == 100.0 && !be.teachCanMoveCalls.empty() && be.teachCanMoveCalls.back() == 7 &&
+               Has(o.ackJson, "\"editPtr\":\"setEditInZSafeHeight\"") && Has(o.ackJson, "\"activeMotor\":\"MInArmZA\"") && AckShapeOk(o.ackJson, 7),
+               "GoButton140: CheckCanMove/IsCanQuickJogMove on MOT[7], speed 1% (velHigh 100), moveAbs 500 = the field value; ack carries editPtr");
++        {   // AI(W906-TEACHGO-SPD) 20261007: EastSun「我按GO 他自動條1%的」-- 13:19:57 the page sent speed 65 and the GO ran at 1 % (golden
++            //   UpdateMotorTeachMonitor). Now the GO runs at the page's speed: 65 % of JogHighSpeed 10000 = velHigh 6500.
++            q.num["speed"] = 65;
++            const int g0 = (int)be.executed.size();
++            o = MotorAccessDispatch(q, 1, be);
++            double vh = -1;
++            for (int i = g0; i < (int)be.executed.size(); ++i) if (be.executed[i].kind == kCmdAxSetSpeed && be.executed[i].speed == kSpeedRun) vh = be.executed[i].value;
++            CHECK(o.ok && be.executed.back().kind == kCmdAxMoveAbs && vh == 6500.0, "TEACHGO-SPD: GoButton140 with the page at 65% moves at 65% (velHigh 6500), not golden's 1%");
++            q.num.erase("speed");
++        }
+         be.golden[mZA].homeFlag = 0;
+         o = MotorAccessDispatch(q, 1, be);
+         CHECK(!o.ok && Has(o.ackJson, "need home") && !Has(o.ackJson, "editPtr") && Has(o.ackJson, "[active=MInArmZA]"),
+@@ -3164,11 +3174,11 @@ int main(int argc, char** argv)
+               "W5B-11: IndexArm_3_Axis: GoButton064 = (MTestY1, MTestY1), axis 2 skipped (golden :3578-3584), EditPtr stays SetEdit[0]");
+         be.reg = R0; be.indexArm3 = false;
+         MotorAccessReq q20 = TeachReq("teachGo", "GoButton020", false, false);
+-        q20.obj["fields"]["setEditLoaderX"] = 100; q20.obj["fields"]["setEditLoaderY"] = 200;
++        q20.obj["fields"]["setEditLoaderX"] = 100; q20.obj["fields"]["setEditLoaderY"] = 200;  q20.num["speed"] = 35;   // AI(W906-TEACHGO-SPD) 20261007: GO moves at the page speed (EastSun 1007), was golden 20 %
+         be.golden[mX].homeFlag = 0;                                             // golden GoButton020 不看 HomeFlag
+         n0 = (int)be.executed.size();
+         o = MotorAccessDispatch(q20, 1, be);
+-        CHECK(o.ok && CountKind(be, n0, kCmdAxMoveAbs) == 2 && be.executed[n0 + 1].value == 2000.0, "GoButton020: both axes at 20% (velHigh 2000), no HomeFlag check");
++        CHECK(o.ok && CountKind(be, n0, kCmdAxMoveAbs) == 2 && be.executed[n0 + 1].value == 3500.0, "GoButton020: both axes at the page speed 35% (velHigh 3500; golden 20%, EastSun 1007), no HomeFlag check");
+         be.golden[mX].homeFlag = 1;
+         q20.obj["fields"]["setEditLoaderY"] = 20000;
+         n0 = (int)be.executed.size();
+@@ -3606,12 +3616,12 @@ int main(int argc, char** argv)
+         be.golden[mX].jogHigh = 10000;
+         be.cmdPos[9] = 0.0;
+         MotorAccessReq q20c = TeachReq("teachGo", "GoButton020", false, false);
+-        q20c.obj["fields"]["setEditLoaderX"] = 100; q20c.obj["fields"]["setEditLoaderY"] = 200;
++        q20c.obj["fields"]["setEditLoaderX"] = 100; q20c.obj["fields"]["setEditLoaderY"] = 200;  q20c.num["speed"] = 35;   // AI(W906-TEACHGO-SPD) 20261007
+         o = MotorAccessDispatch(q20c, 1, be);
+-        CHECK(o.ok && MotorAccessGoldenSpeedPct(mX) == 20 && MotorAccessGoldenSpeedPct(mY) == 20, "R-W5B-4: GoButton020 leaves both axes at golden's 20%");
++        CHECK(o.ok && MotorAccessGoldenSpeedPct(mX) == 35 && MotorAccessGoldenSpeedPct(mY) == 35, "TEACHGO-SPD: GoButton020 leaves both axes at the page speed 35% (golden 20%)");
+         MotorAccessReq my = Req("uteach", "moveRelative", "MInArmY"); my.button = "btnMoveP"; my.num["interval"] = 10;
+         o = MotorAccessDispatch(my, 1, be);
+-        CHECK(o.ok && LastRunSpeed(be) == 2000.0, "R-W5B-4: MoveP right after GoButton020 on MInArmY runs at 20% (velHigh 2000), as golden");
++        CHECK(o.ok && LastRunSpeed(be) == 3500.0, "TEACHGO-SPD: MoveP right after GoButton020 on MInArmY runs at the GO's 35% (velHigh 3500)");
+         const std::size_t mvn = be.moves.size(), jgn = be.jogs.size();
+         MotorAccessReq ms = Req("uteach", "moveRelative", "MInShuttle2"); ms.button = "btnMoveP"; ms.num["interval"] = 10; ms.num["speed"] = 70;
+         be.readPos[mSh2] = 100;
+-- 
+2.55.0.windows.5
+
