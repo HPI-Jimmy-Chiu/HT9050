@@ -2079,4 +2079,12 @@ tools 0170 (20261007): HTML designer merged with laptop packages 162/163/167/168
      操作紀錄 oplog_20261007.txt：新增 541 行
      設定檔變動：machine_params/D_GPIB9045_system/general.ini、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/lastdata_backup2.dat
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+  10-07 21:49 機台快照（EastSun 在機台上做的事，沒有程式修改）：
+     machine_log/oplog_20261007.txt：1 個檔變動
+     machine_params/D_HT9045_system：2 個檔變動
+     machine_params/README_PARAMS.txt：1 個檔變動
+     workorder/README_WORKORDER.txt：1 個檔變動
+     操作紀錄 oplog_20261007.txt：新增 21 行
+     設定檔變動：machine_params/D_HT9045_system/Mot_Table.csv、machine_params/D_HT9045_system/Mot_Table.csv.bak_initspeed_20261007_214924
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 MD5 清單在 MANIFEST_MD5.tsv。
