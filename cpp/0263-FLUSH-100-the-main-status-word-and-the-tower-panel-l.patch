@@ -1,0 +1,100 @@
+From 8f1d0daf8f6849a4f5b1a0d6f3e3af767b25f33b Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 10:02:05 +0800
+Subject: [PATCH] =?UTF-8?q?FLUSH-100:=20the=20main=20status=20word=20and?=
+ =?UTF-8?q?=20the=20tower=20/=20panel=20lamps=20refresh=20again=20at=20the?=
+ =?UTF-8?q?=20100=20ms=20beat=20--=20EastSun=201007=20'=E5=9B=9E=E5=AE=8Ch?=
+ =?UTF-8?q?ome=20=E7=95=AB=E9=9D=A2=E6=80=8E=E9=82=84=E6=98=AF=E9=83=BD?=
+ =?UTF-8?q?=E4=B8=80=E6=A8=A3=3F'=20(main=20page=20kept=20"Homing"=20after?=
+ =?UTF-8?q?=20HOME=20ALL=20finished).?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Engine was fine (snapshot 09:54: fHome.fShow=0, fAllMotorHome=1, SystemStart=0). ShowRunLabel / ShowRunLed (golden edge check,
+ckernel.cpp:1949 / :1738) repaint only when FlushFlag changed since their previous call; DoSystemMessage calls them on 1 beat in 6.
+W906_FlushFlagTick flipped on wall clock (>= 250 ms) with a skip-1-in-6 compensation gated on a >= 250 ms beat. Since ced388a (10-05)
+the beat is 100 ms: a flip every 3rd beat = 2 flips per 6-beat window (even), compensation off -> every call saw the same value ->
+the status word ("Homing" painted by a slow HOME pass) and the 12 SW[] lamp / buzzer outputs ShowRunLed drives froze.
+
+WebBridgeTags.cpp (same lines): flip on a beat COUNT like golden's ct (main.cpp:3182) -- every 2nd beat: 3 flips per 6-beat window
+(odd) at any beat length, so every ShowRunLabel call sees an edge (100 ms beat: 200 ms flip vs golden 250). The skip compensation is
+disabled (it would make the window even again).
+
+tests/test_wb_simpump.cpp O9 (end of file): drives W906_FlushFlagTick once per beat as PumpTick does and samples every 6th beat like
+DoSystemMessage -- every window must show a change (20/20). O5 only checked that some word is published, which is why it stayed green.
+The old wall-clock code called back to back never flips -> 0/20. WB_SimPump 43/0, W7_L2_CKernel passed. Scan 0. wb_serve compiled;
+link waits for EastSun's running program.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebBridgeTags.cpp         |  8 ++++----
+ tests/test_wb_simpump.cpp | 31 +++++++++++++++++++++++++++++++
+ 2 files changed, 35 insertions(+), 4 deletions(-)
+
+diff --git a/WebBridgeTags.cpp b/WebBridgeTags.cpp
+index 9b05b5a..21c3fd2 100644
+--- a/WebBridgeTags.cpp
++++ b/WebBridgeTags.cpp
+@@ -2488,12 +2488,12 @@ void W906_FlushFlagTick()
+     //  代價：讀 FlushFlag 閃燈的 9 個 csystem 消費者（例 SW[SwManualZ1].OnOff(FlushFlag)）每 3 秒多停一拍。
+     //  快節拍（日後改回 golden 執行模型）時 slowTick 恆 false，本段不作用，回到純 250 ms 翻轉。
+     static std::chrono::steady_clock::time_point s_lastCall;
+-    static unsigned s_slowToggleCount = 0;
+-    const bool slowTick = (now - s_lastCall >= std::chrono::milliseconds(250));
++    static unsigned s_slowToggleCount = 0;  static unsigned s_w906FlushCalls = 0;   // AI(W906-FLUSH-100) 20261007: + the beat counter of the next lines
++    const bool slowTick = (now - s_lastCall >= std::chrono::milliseconds(250));  (void)slowTick;
+     s_lastCall = now;
+-    if (now - s_lastFlush >= std::chrono::milliseconds(250))                    // golden :3181-3183（ct 計 250 ms）
++    if ((++s_w906FlushCalls % 2u) == 0u)                                        // AI(W906-FLUSH-100) 20261007: EastSun「回完home 畫面怎還是都一樣?」-- was `now - s_lastFlush >= 250 ms` (wall clock). Since the beat went 500 -> 100 ms (ced388a, 10-05) that flipped every 3rd beat = 2 flips per 6-beat DoSystemMessage window (even), so ShowRunLabel / ShowRunLed (ckernel.cpp:1949 / :1738, golden edge check) never saw a change: machine.state stayed "Homing" after HOME, and the tower / panel lamps they drive froze too. Now golden's own model -- a beat COUNT like golden's ct (main.cpp:3182) -- flipping every 2nd beat: 3 flips per 6-beat window (odd) at any beat, so every ShowRunLabel call sees an edge (100 ms beat: 200 ms flip, golden 250)
+     {
+-        if (slowTick && (++s_slowToggleCount % 6u) == 0u)                       // 見上：6 = DoSystemMessage 的相數
++        if (false && slowTick && (++s_slowToggleCount % 6u) == 0u)              // AI(W906-FLUSH-100) 20261007: the 500 ms skip-1-in-6 compensation is off -- with the 2-beat count above every window already has an odd number of flips (a skip would make it even again).  見上：6 = DoSystemMessage 的相數
+         {
+             s_lastFlush = now;                                                  // 略過這一次，維持原值
+             return;
+diff --git a/tests/test_wb_simpump.cpp b/tests/test_wb_simpump.cpp
+index 9b9224b..a34fbc2 100644
+--- a/tests/test_wb_simpump.cpp
++++ b/tests/test_wb_simpump.cpp
+@@ -521,6 +521,37 @@ int main()
+         LastSet.iRealDummy = savedDummy;
+     }
+ 
++    { void W906_FlushEdgeEveryWindow(); W906_FlushEdgeEveryWindow(); }   // AI(W906-FLUSH-100) 20261007: O9, end of file
+     std::printf("\ntest_wb_simpump: %d checks, %d failure(s)\n", g_total, g_fail);
+     return g_fail == 0 ? 0 : 1;
+ }
++
++// =============================================================================
++//  O9 AI(W906-FLUSH-100) 20261007: EastSun「回完home 畫面怎還是都一樣?」-- after HOME the main page kept "Homing". ShowRunLabel /
++//  ShowRunLed (golden edge check, ckernel.cpp:1949 / :1738) repaint only when FlushFlag differs from their previous call, and
++//  DoSystemMessage calls them on 1 beat in 6. W906_FlushFlagTick ran on wall clock (>= 250 ms): at the 100 ms beat that is 2 flips per
++//  6 beats (even) -> the same value at every call -> frozen. O5 above only checks that SOME word is published, so it stayed green.
++//  This drives W906_FlushFlagTick exactly as PumpTick does (once per beat) and samples FlushFlag on every 6th beat like
++//  DoSystemMessage: every sample must differ from the one before (the old wall-clock code, called back to back, never flipped at all).
++// =============================================================================
++namespace ht9045 { void W906_FlushFlagTick(); }
++void W906_FlushEdgeEveryWindow()
++{
++    std::printf("\n-- O9 FlushFlag shows an edge to every 6-beat ShowRunLabel window (any beat length)\n");
++    extern bool bSECSGEMAlarm;
++    const bool savedAlarm = bSECSGEMAlarm;
++    bSECSGEMAlarm = false;
++    for (int k = 0; k < 6; ++k) ht9045::W906_FlushFlagTick();                  // settle into a window
++    bool prev = FlushFlag;
++    int edges = 0, windows = 20;
++    for (int w = 0; w < windows; ++w)
++    {
++        for (int k = 0; k < 6; ++k) ht9045::W906_FlushFlagTick();
++        if (FlushFlag != prev) ++edges;
++        prev = FlushFlag;
++    }
++    char buf[160];
++    std::snprintf(buf, sizeof(buf), "O9 FlushFlag changed in %d of %d six-beat windows (must be every one, or the status word / tower lamps freeze)", edges, windows);
++    check(edges == windows, buf);
++    bSECSGEMAlarm = savedAlarm;
++}
+-- 
+2.55.0.windows.5
+
