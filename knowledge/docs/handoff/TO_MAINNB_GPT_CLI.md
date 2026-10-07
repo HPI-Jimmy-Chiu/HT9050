@@ -37,6 +37,19 @@
 - **要回答的**：①盤點：每個 `add_test` → exe 目標、連結的程式庫（`LINK_GROUP` 那串）、參數、`TIMEOUT`；共有幾個不同的 exe。②**不能合**的：會寫真實檔的、靠 `abort`／當機／`exit` 判結果的、依賴靜態初始化順序或同名全域符號會撞的、需要獨立行程的（socket、子行程、執行緒）——每類舉 2～3 個實例（檔:行）。③**能合**的：連結同一組程式庫、可以放進同一個「分派器」exe（`main(argc, argv)` 依名稱呼叫各測試原本的 `main`）——提出分組、估計 exe 數會從多少降到多少。④依上面的量測估算省多少時間（新 exe 第一次開 45～79 秒、ctest `-j 5`）。⑤風險與驗證（合併前後失敗集合要一樣、反向驗證怎麼做）。
 - **產出**：推你的交接分支 `docs/handoff/MAINNB_T1_TEST_EXE_GROUPING_20261006.md`（繁體中文、檔:行），FROM §2 寫一列。讀完我決定派給誰實作。
 
+### MAINNB-B83　📋 第 83 批機台 patch 合併稽核（唯讀、不編譯；W-138）
+
+- **背景**：筆電 1007 08:3x～09:0x 把機台 cpp 0247～0258 收進 `v906/jimmy-b83`；IO 執行緒（IOTHREAD／IOTUNE）相關的改動依 §0 #115＝C 不進 main，衝突是手動解的（`HT9011UC_Cpp_V3.33.906.0/docs/MACHINE_PATCHES_20261007.md` §1）。
+- **範圍（只讀）**：比 `ce0edb9f`（機台 C++ 鏈尾＝機台現在的樹）與 `origin/v906/jimmy-b83`：`EtherCAT/Pci1203Monitor.cpp／.h`、`EtherCAT/Pci1203Control.cpp／.h`、`EtherCAT/Pci1203Reopen.h`、`tools/wb_serve.cpp`、`WebMotorAccess.cpp`、`WebMotorAccessLive.cpp`、`MyPLC/MyPLC_IO_Modbus.cpp`、`csystem.cpp`、`uhome.cpp`、`tests/test_myplc_modbus.cpp`。
+- **要回答的**：每一處差異歸類為 (a) IO 執行緒／IOTUNE（機台限定）、(b) main 早就有、機台還沒套的筆電改動、(c) 筆電 1007 為 oracle 加的兩處（`_putenv` 宣告、`::Sleep`）、(d) **其他**。只列 (d)（檔:行＋一句說明）；(d) 是 0 也回一行。
+- **產出**：FROM §2 一列（有 (d) 才另寫報告檔）。不改檔、不編譯。
+
+### MAINNB-B84　📋 第 84 批機台 patch 合併稽核（唯讀、不編譯；W-141）
+
+- **背景**：MAINNB-B83 的方法照用（你的 `tools/laptop_ops/mainnb_b83_reconstruct.py`）。第 84 批 `origin/v906/jimmy-b84`（`5d157b2b`）＝第 83 批頂端 `b43186db`＋Ifor01 !292＋St02 !295（＋它的測試沙盒修正 `2b663dbd`）＋機台 cpp 0259／0260／0262、web 0132（0261＝PKG-164 不收）＋`b55b7934`（3 處 `::Sleep`）。
+- **要回答的**：機台 cpp 0259～0262、web 0132 改到的檔（`EtherCAT/Pci1203Monitor.cpp`、`tools/wb_serve.cpp`、`MyPLC/MyPLC_IO_Modbus.cpp`、`tests/test_myplc_modbus.cpp`、`web/page/dialog-page.js`、`web/page/ht9045_alarm_motionview.js`），機台套完後的內容 vs 第 84 批，同樣只列 (d) 類；另外看 !295 的 `SECSGEM/uHGemHT9045.cpp` 三處解閘跟 golden 0618 `SECSGEM/uHGemHT9045.cpp:685-688`、`:1013-1021`、`:6210-6213` 是否逐行一致。
+- **產出**：FROM §2 一列（有 (d) 或不一致才另寫報告）。不改檔、不編譯。
+
 ## 4. 回答與通知（筆電寫）
 
 | 時間 | 標題 | 內容 |
@@ -44,3 +57,6 @@
 | 20261006 19:2x | 📋 **開張：改走 GitLab；首件 MAINNB-T1（W-130）** | 照 §0 開 `v906/mainnb-gpt-cli-handoff`、在 FROM §1 認領 MAINNB-T1、推心跳。本機信箱退場。 |
 | 20261006 20:0x | ✅ **MAINNB-T1 收到——品質很好**；C3-119 認領收到 | 我抽驗你的數字：main `7c4bf541` 的 `tests/CMakeLists.txt` 443 個 add_test＋兩份 include 2＋1＝446、add_executable 378＋2（＋三個 foreach 多出的 3）＝383，**全對**；「每個測項仍各自開行程」的設計、TIMEOUT 被 `:4127` 覆蓋、DEFER 環境、RUN_SERIAL／SKIP_RETURN_CODE 這些坑都點到了。試點已派給 Ifor01（有編譯環境，W-131），他會量合併後大 exe 的首次開啟時間。W-130 關。 |
 | 20261006 21:0x | ✅ **C3-005（Abort Home）、C3-119（HotPlate）兩份唯讀複核收到——兩份都對，POOL-3 已改列「已接，待執行期驗收」** | 我抽驗：C3-005 的 `a16a0697`（10/02 HOMEMON）確實補了網頁接線與 C++ 分派；C3-119「`cbSelectHPFromDB` 是選資料庫的事件、不是存檔鍵」對。你 20:26 自己更正「20:25 那輪沒跑、計時器不能當持續工作的證據」——這種更正寫得很好，照舊。下一張照你的規則從 POOL 挑；⚠ 若是 POOL-2（`#if 0`），認領前先查 `docs/handoff/IF0_CENSUS_20261006_linked.tsv`（22 支檔整支沒連進 wb_serve，解開沒效果；RogerYang 20:4x 發現、筆電量）。 |
+| 20261007 09:1x | 📋 **新卡 MAINNB-B83（W-138）** | 你 08:48 心跳寫沒有新卡——這張唯讀：比對機台鏈尾 `ce0edb9f` 與第 83 批，幫筆電確認 IO 執行緒那幾處沒有收錯或漏收（細節在 §3）。 |
+| 20261007 10:0x | ✅ **MAINNB-B83（W-138）收到——結論採用**：(d) 只有 D1（NB2-GPT 的模擬限定 FinePitch Index，已知）＋D2（!287 一行註解），IO 執行緒排除處沒有收錯或漏收。 | 報告 `69934aa7e`。 |
+| 20261007 10:0x | 📋 **新卡 MAINNB-B84（W-141）** | 你 09:57 心跳寫閒置——同樣方法稽核第 84 批（細節在 §3）。 |

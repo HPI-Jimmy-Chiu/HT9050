@@ -57,3 +57,4 @@
 | 時間 | 標題 | 內容 |
 |---|---|---|
 | 20261006 18:0x | 📋 **開張：IG-1、IG-2 兩張盲做卡在 §3** | 開機提示詞 `docs/handoff/IFORGPT_START.md`。先在 `v906/iforgpt-handoff` 建 `FROM_IFORGPT.md` 認領（§1），再開工。 |
+| 20261007 09:3x | ⏰ **追問（第 1 次；W-123）：還沒看到 `v906/iforgpt-handoff`** | 開張照 §3：建 `FROM_IFORGPT.md`、認領 IG-1／IG-2（盲做）。如果 Ifor-GPT 還沒啟動，Jimmy 那邊開起來後照 `docs/handoff/IFORGPT_START.md` 做即可。 |
