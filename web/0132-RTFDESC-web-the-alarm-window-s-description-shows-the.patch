@@ -1,0 +1,122 @@
+From ae69cdd383fcf6f0826bddc262e3a17cbb4a00e8 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 09:32:28 +0800
+Subject: [PATCH] =?UTF-8?q?RTFDESC=20(web):=20the=20alarm=20window's=20des?=
+ =?UTF-8?q?cription=20shows=20the=20text,=20not=20the=20RTF=20source=20--?=
+ =?UTF-8?q?=20EastSun=201007=20'=E8=A3=A1=E9=9D=A2=E8=B3=87=E8=A8=8A?=
+ =?UTF-8?q?=E5=AF=AB=E5=BE=97=E4=B8=8D=E6=B8=85=E6=A5=9A=20=E8=AB=8B?=
+ =?UTF-8?q?=E7=9C=8B=E4=B9=8B=E5=89=8DBCB=20=E5=8E=9F=E7=A2=BC=20=E6=98=AF?=
+ =?UTF-8?q?=E5=A6=82=E4=BD=95=E9=A1=AF=E7=A4=BA'.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Golden reDescription / reBigDescription are TRichEdit: Lines->LoadFromFile(Error\<Language>\<Code>.dat) parses an RTF
+file into formatted text. The page's <textarea> showed the raw source ({\rtf1\ansi\deff0{\fonttbl...). 390 entries of
+JSON/Alarm-description.json are RTF (8 with \'hh Big5 bytes in an fcharset136 font).
+
+page/dialog-page.js EOF: HT9045RtfText -- \par/\line newline, \tab, \'hh decoded by the current font's charset (136 Big5,
+134 GBK, 128 Shift-JIS, 129 EUC-KR, else cp1252), \uN, escaped \\ \{ \}; font/colour/style tables and \* destinations
+skipped; non-RTF strings returned unchanged (the Chinese .dat files are plain text). Used by dialog-page.js renderAlarm
+(same line) and ht9045_alarm_motionview.js fillDescription (same line). Data files untouched.
+
+Checked in headless Edge over all 390 RTF entries: 0 with RTF left over; MES1611 / JAM0560 (Big5 '。') render as golden.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ page/dialog-page.js             | 61 ++++++++++++++++++++++++++++++++-
+ page/ht9045_alarm_motionview.js |  2 +-
+ 2 files changed, 61 insertions(+), 2 deletions(-)
+
+diff --git a/page/dialog-page.js b/page/dialog-page.js
+index 4032c1d..8b6bc7b 100644
+--- a/page/dialog-page.js
++++ b/page/dialog-page.js
+@@ -61,7 +61,7 @@
+     setText($('Edit3'), code.substr(3, 2));            // Code.SubString(4,2)
+     setText($('edUnitName'), d.unitName || '');
+     setText($('ShowMessageEdit1'), msg);
+-    setText($('reDescription'), d.description || '');
++    setText($('reDescription'), global.HT9045RtfText ? global.HT9045RtfText(d.description || '') : (d.description || ''));   // AI(W906-RTFDESC) 20261007：TRichEdit 會解析 RTF（檔尾 HT9045RtfText）；同一行
+     setText($('BtnHome'), code === 'WAR07352' ? 'HOME' : 'HOME & RETRY');
+     selected = null;
+     ALARM_BTNS.forEach(function (b) {
+@@ -263,3 +263,62 @@
+   global.HTDialogPage = { kind: kind, current: function () { return current; }, render: kind === 'alarm' ? renderAlarm : renderMessage };
+   post({ type: 'HT_DIALOG_READY', kind: kind });
+ })(window);
++
++/* AI(W906-RTFDESC) 20261007：EastSun「裡面資訊寫得不清楚 請看之前BCB 原碼 是如何顯示」——
++ * golden 的 reDescription／reBigDescription 是 TRichEdit，Lines->LoadFromFile(Error\<Language>\<Code>.dat)（note.cpp ErrShowToForm）
++ * 遇到 RTF 檔會「解析」成格式文字；網頁是 <textarea>，原樣塞進去就變成 {\rtf1\ansi... 原始碼（Alarm-description.json 有 390 筆是 RTF，
++ * 其中 8 筆帶 \'hh 的 Big5 字（字型 fcharset136））。這裡把 RTF 轉成 TRichEdit 顯示的那份純文字：\par／\line 換行、\tab、
++ * \'hh 依當時字型的 charset 解碼（136 Big5、134 GBK、128 Shift-JIS、129 EUC-KR，其餘 cp1252）、\uN、跳脫的 \\ \{ \}；
++ * 字型表／色表／樣式表／\* 目的地整組略過。不是 RTF 的字串原樣回傳（中文 .dat 本來就是純文字）。資料檔不動。 */
++(function (global) {
++  'use strict';
++  var CS = { 136: 'big5', 134: 'gbk', 128: 'shift_jis', 129: 'euc-kr' };
++  var SKIPDEST = /^(fonttbl|colortbl|stylesheet|info|pict|header|footer|listtable|listoverridetable|rsidtbl|generator|themedata|latentstyles|datastore|xmlnstbl)$/;
++  function decode(bytes, charset) {
++    if (!bytes.length) return '';
++    var enc = CS[charset] || 'windows-1252';
++    try { return new TextDecoder(enc).decode(new Uint8Array(bytes)); }
++    catch (e) { return String.fromCharCode.apply(null, bytes); }
++  }
++  function rtfText(s) {
++    if (typeof s !== 'string' || !/^\s*\{\\rtf/.test(s)) return s;
++    var fonts = {};                                     // \fN -> \fcharsetM（字型表先掃一遍）
++    var ft = /\\f(\d+)[^;{}]*?\\fcharset(\d+)/g, m;
++    var tbl = /\{\\fonttbl([\s\S]*?)\}\s*\}/.exec(s);
++    if (tbl) while ((m = ft.exec(tbl[1]))) fonts[m[1]] = +m[2];
++    var out = '', bytes = [], i = 0, n = s.length;
++    var st = { skip: false, font: '0', uc: 1 }, stack = [], ucSkip = 0;
++    function flush() { if (bytes.length) { out += decode(bytes, fonts[st.font]); bytes = []; } }
++    function put(t) { if (st.skip) return; flush(); out += t; }
++    while (i < n) {
++      var c = s.charAt(i);
++      if (c === '{') { flush(); stack.push(st); st = { skip: st.skip, font: st.font, uc: st.uc }; i++; continue; }
++      if (c === '}') { flush(); st = stack.length ? stack.pop() : st; i++; continue; }
++      if (c === '\r' || c === '\n') { i++; continue; }
++      if (c !== '\\') { if (ucSkip > 0) ucSkip--; else put(c); i++; continue; }
++      var d = s.charAt(i + 1);
++      if (d === "'") {
++        var b = parseInt(s.substr(i + 2, 2), 16);
++        if (ucSkip > 0) ucSkip--; else if (!st.skip && !isNaN(b)) bytes.push(b);
++        i += 4; continue;
++      }
++      if (d === '\\' || d === '{' || d === '}') { put(d); i += 2; continue; }
++      if (d === '~') { put(' '); i += 2; continue; }
++      if (d === '*') { st.skip = true; i += 2; continue; }
++      if (d === '\r' || d === '\n') { put('\n'); i += 2; continue; }
++      var w = /^([a-zA-Z]+)(-?\d+)? ?/.exec(s.substr(i + 1, 40));
++      if (!w) { i += 2; continue; }
++      i += 1 + w[0].length;
++      var word = w[1], p = w[2];
++      if (SKIPDEST.test(word)) st.skip = true;
++      else if (word === 'par' || word === 'line') put('\n');
++      else if (word === 'tab') put('\t');
++      else if (word === 'f' && p != null) { flush(); st.font = p; }
++      else if (word === 'uc' && p != null) st.uc = +p;
++      else if (word === 'u' && p != null) { var u = +p; if (u < 0) u += 65536; put(String.fromCharCode(u)); ucSkip = st.uc; }
++    }
++    flush();
++    return out.replace(/\s+$/, '');
++  }
++  global.HT9045RtfText = rtfText;
++})(window);
+diff --git a/page/ht9045_alarm_motionview.js b/page/ht9045_alarm_motionview.js
+index 7b6f456..b63efa9 100644
+--- a/page/ht9045_alarm_motionview.js
++++ b/page/ht9045_alarm_motionview.js
+@@ -284,7 +284,7 @@
+     /* ⚠ reDescription 在 dfm 是 TRichEdit，產生器把它產成 <textarea>。
+      *   textContent 對 textarea 只改「預設值」，畫面上不會變 —— 要設 .value。
+      *   dialog-page.js:15 的 setText() 已經處理過這件事，這裡照抄它的判斷。 */
+-    setVal(re, body);
++    if (global.HT9045RtfText) body = global.HT9045RtfText(body);  setVal(re, body);   // AI(W906-RTFDESC) 20261007：EastSun「請看之前BCB 原碼 是如何顯示」—— golden TRichEdit 讀 .dat 會解析 RTF，這裡先轉成同樣的文字（dialog-page.js 檔尾）；同一行
+     if (big) setVal(big, body);           // golden 也載同一份（Ifor 20200331）
+     return true;
+   }
+-- 
+2.55.0.windows.5
+
