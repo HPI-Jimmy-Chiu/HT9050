@@ -1,0 +1,191 @@
+From 2275fce9d6c26967bfd2420a300e1d4bf6f747b1 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 12:08:53 +0800
+Subject: [PATCH] =?UTF-8?q?JOGDEC:=20a=20manual=20JOG=20decelerates=20and?=
+ =?UTF-8?q?=20stops=20at=20the=20Mot=5FTable=20Acc=20/=20Dec=20(100=20%)?=
+ =?UTF-8?q?=20--=20EastSun=201007=20'=E6=88=91=E6=9C=89=E7=9A=84=E6=99=82?=
+ =?UTF-8?q?=E5=80=99JOG=20=E6=94=BE=E9=96=8B=E5=BE=8C=20=E6=B2=92=E6=9C=89?=
+ =?UTF-8?q?=E9=A6=AC=E4=B8=8A=E5=81=9C=20=E4=B8=80=E7=9B=B4=E9=81=8E?=
+ =?UTF-8?q?=E5=8E=BB';=20ruling=20(AskUserQuestion=201007)=20'JOG=20?=
+ =?UTF-8?q?=E4=B8=80=E5=BE=8B=E7=94=A8=20Mot=5FTable=20=E5=8A=A0=E6=B8=9B?=
+ =?UTF-8?q?=E9=80=9F=20100%'.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Measured (oplog 11:41): MOutArmZA jogged at 33 % (velHigh 26400) with acc / dec 80 = 1 % of Mot_Table 8000 (the jog family took the
+runtime dAcc / dDec = the speed table's %, as golden SetSpeed does; the % reaches it since PARAMSYNC / golden Teach FormShow run
+SetMotorSpeed). The stop reached the card in 30 ms, but the axis was STOPPING for 2.6 s and slid ~7700 counts after the release.
+
+- WebMotorAccess.cpp Send1203SpeedValues (same lines): the JOG family's Acc / Dec = Mot_Table accDb / decDb (fallback: as before);
+  the acc / dec ceilings also cover them; the PTP family keeps golden's values (auto flow unchanged). The axis's Mot_Table Dec is kept
+  in g_jogStopDec; Stop1203 stops an axis this file jogged with that deceleration (kCmdAxStop value > 0), others as before.
+- EtherCAT/Pci1203Control.cpp kCmdAxStop (same lines): value > 0 -> Acm_AxStopDecEx(ax, value) (vendor AdvMotApi.h; exported by
+  ADVMOT.lib and the machine's SysWOW64\ADVMOT.dll, checked), value 0 -> Acm_AxStopDec as before (every engine / Galil / page stop
+  leaves value 0).
+- tests/test_web_motor_access.cpp test_jog_dec_100pct (end of file), 11:41 numbers through MotorAccessDispatch: jog Acc / Dec 8000
+  (was 80), the release -> kCmdAxStop value 8000, an axis never jogged -> value 0. WebMotorAccess 1102/0; Pci1203Pure,
+  Pci1203MotorRoute, EcatMotorRoute passed. Scan 0. wb_serve compiled; the link waits for EastSun's running program.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203Control.cpp     |  4 +--
+ WebMotorAccess.cpp              | 14 +++++-----
+ tests/test_web_motor_access.cpp | 49 ++++++++++++++++++++++++++++++++-
+ 3 files changed, 57 insertions(+), 10 deletions(-)
+
+diff --git a/EtherCAT/Pci1203Control.cpp b/EtherCAT/Pci1203Control.cpp
+index e83b7b9..7408b33 100644
+--- a/EtherCAT/Pci1203Control.cpp
++++ b/EtherCAT/Pci1203Control.cpp
+@@ -1400,7 +1400,7 @@ Pci1203CmdResult TPci1203Control::Run_(const Pci1203Cmd& c)
+ 
+         case kCmdAxStop:
+             if (!ValidateAxis(c.axis, r.why)) break;
+-            std::snprintf(call, sizeof(call), "Acm_AxStopDec(ax=%d)", c.axis);
++            if (c.value > 0) std::snprintf(call, sizeof(call), "Acm_AxStopDecEx(ax=%d, dec=%.1f)", c.axis, c.value); else std::snprintf(call, sizeof(call), "Acm_AxStopDec(ax=%d)", c.axis);   //AI(W906-JOGDEC) 20261007: value > 0 = stop with that deceleration (Acm_AxStopDecEx, vendor AdvMotApi.h); 0 = as before (every engine / Galil / page stop leaves value 0). Same line
+             r.accepted = true;
+             break;
+ 
+@@ -1728,7 +1728,7 @@ Pci1203CmdResult TPci1203Control::Run_(const Pci1203Cmd& c)
+             ret = Acm_AxJog(ax, (U16)WireDirToVendor(c.dir));
+             break;
+         case kCmdAxStop:
+-            ret = Acm_AxStopDec(ax);
++            ret = (c.value > 0) ? Acm_AxStopDecEx(ax, (F64)c.value) : Acm_AxStopDec(ax);   //AI(W906-JOGDEC) 20261007: see the validation above; same line
+             break;
+         case kCmdAxEmgStop:
+             ret = Acm_AxStopEmg(ax);
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index 3c2d407..f7727ea 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -228,7 +228,7 @@ int PtpPctOf(int mi)
+     std::map<int, int>::const_iterator it = g_ptpPct.find(mi);
+     return it == g_ptpPct.end() ? 1 : it->second;
+ }
+-bool g_mtShown = false;
++bool g_mtShown = false;  std::map<int, double> g_jogStopDec;   //AI(W906-JOGDEC) 20261007: card axis -> the deceleration its manual JOG stops with (Mot_Table Dec, 100 %), set whenever this file writes the jog family (Send1203SpeedValues); Stop1203 stops that axis with Acm_AxStopDecEx at it
+ 
+ // AI(W906-MT-E1) 20260925: golden TMyEtherCatMotor::DecStop (golden Motor/myEthercatmotor.cpp:415-437) for a 1203
+ //   axis -- Acm_AxStopDec, then Acm_AxSetExtDrive(ax, 0) (leave jog mode; golden then sets bFirstClickJog=true, so
+@@ -239,7 +239,7 @@ bool g_mtShown = false;
+ Pci1203CmdResult Stop1203(IMotorAccessBackend& be, int axis, long long wireId)
+ {
+     Pci1203Cmd c;
+-    c.kind = kCmdAxStop; c.wireId = wireId; c.axis = axis;
++    c.kind = kCmdAxStop; c.wireId = wireId; c.axis = axis;  { std::map<int, double>::const_iterator jd = g_jogStopDec.find(axis); if (jd != g_jogStopDec.end() && jd->second > 0) c.value = jd->second; }   //AI(W906-JOGDEC) 20261007: EastSun「JOG 放開後 沒有馬上停 一直過去」(ruling 1007: 「JOG 一律用 Mot_Table 加減速 100%」) -- an axis this page jogged stops at its Mot_Table Dec (Acm_AxStopDecEx), not at the speed table's % (11:41 MOutArmZA: dec 80 = 1 % of 8000, slid 2.6 s / ~7700 counts after release). Same line
+     const Pci1203CmdResult res = be.Pci1203Execute(c);
+     Pci1203Cmd x;
+     x.kind = kCmdAxSetExtDrive; x.wireId = wireId; x.axis = axis; x.value = 0.0;
+@@ -631,7 +631,7 @@ const int kFamPtp = 1, kFamJog = 2;
+ bool Send1203SpeedValues(IMotorAccessBackend& be, long long wireId, const MotionCtx& m, int pct, const Motor1203Speed& sp,
+                          std::string& why, std::string& note, int families)
+ {
+-    if (sp.skip) { note = "golden SetSpeed 不設速度（index 軸，或 PJogHighSpeed==0）"; return true; }
++    if (sp.skip) { note = "golden SetSpeed 不設速度（index 軸，或 PJogHighSpeed==0）"; return true; }  const double jAcc = m.g.accDb > 0 ? m.g.accDb : sp.acc, jDec = m.g.decDb > 0 ? m.g.decDb : sp.dec;   //AI(W906-JOGDEC) 20261007: EastSun ruling 1007「JOG 一律用 Mot_Table 加減速 100%」-- the JOG family's Acc / Dec = Mot_Table Acc / Dec (golden: dAcc / dDec at the speed table's %, which left MOutArmZA's jog at 80 = 1 %); the PTP family keeps golden's values
+     //AI(W906-JOG-MAXVEL) 20261003: EastSun「M35~M40 … 我設定JOG 速度都沒有效過」. The card refuses / clamps a velocity above
+     //  CFG_AxMaxVel (Pci1203Monitor.h:856-871; measured 13:15 on M35: re-apply "card returned 0x80000087"), and that ceiling was
+     //  written ONLY by InitMotor (golden :363-382 CFG_AxMaxVel = PJogHighSpeed, MaxAcc = dAcc, MaxDec = dDec; InitMotor1203 below),
+@@ -642,7 +642,7 @@ bool Send1203SpeedValues(IMotorAccessBackend& be, long long wireId, const Motion
+     if (families & (kFamJog | kFamPtp)) {
+         const struct { Pci1203SpeedParam which; double need; double v; } mx[3] = {
+             { kSpeedMaxVel, sp.velHigh, (double)m.g.jogHigh > sp.velHigh ? (double)m.g.jogHigh : sp.velHigh },
+-            { kSpeedMaxAcc, sp.acc, m.g.acc > sp.acc ? m.g.acc : sp.acc }, { kSpeedMaxDec, sp.dec, m.g.dec > sp.dec ? m.g.dec : sp.dec } };
++            { kSpeedMaxAcc, (families & kFamJog) && jAcc > sp.acc ? jAcc : sp.acc, std::max(m.g.acc, (families & kFamJog) && jAcc > sp.acc ? jAcc : sp.acc) }, { kSpeedMaxDec, (families & kFamJog) && jDec > sp.dec ? jDec : sp.dec, std::max(m.g.dec, (families & kFamJog) && jDec > sp.dec ? jDec : sp.dec) } };   //AI(W906-JOGDEC) 20261007: with the jog family the acc / dec ceilings must also cover its Mot_Table Acc / Dec (jAcc / jDec); same line
+         for (int i = 0; i < 3; ++i) {
+             double now = 0;
+             if (!(mx[i].v > 0) || !be.Pci1203SpeedNow(m.a.axis, (int)mx[i].which, now) || now >= mx[i].need) continue;
+@@ -654,14 +654,14 @@ bool Send1203SpeedValues(IMotorAccessBackend& be, long long wireId, const Motion
+     }
+     const struct { Pci1203SpeedParam which; double v; } seq[8] = {
+         { kSpeedInit, sp.velLow }, { kSpeedRun, sp.velHigh }, { kSpeedAcc, sp.acc }, { kSpeedDec, sp.dec },
+-        { kSpeedJogInit, sp.velLow }, { kSpeedJogRun, sp.velHigh }, { kSpeedJogAcc, sp.acc }, { kSpeedJogDec, sp.dec } };
++        { kSpeedJogInit, sp.velLow }, { kSpeedJogRun, sp.velHigh }, { kSpeedJogAcc, jAcc }, { kSpeedJogDec, jDec } };   //AI(W906-JOGDEC) 20261007: jog Acc / Dec = Mot_Table (was sp.acc / sp.dec = the speed table's %); same line
+     for (int i = 0; i < 8; ++i) {
+         if (!(families & (i < 4 ? kFamPtp : kFamJog))) continue;
+         Pci1203Cmd c;
+         c.kind = kCmdAxSetSpeed; c.wireId = wireId; c.axis = m.a.axis; c.speed = seq[i].which; c.value = seq[i].v;
+         const Pci1203CmdResult res = be.Pci1203Execute(c);
+         if (CmdFailed(res)) { why = "1203 設定速度失敗 —— " + CmdWhy(res); return false; }
+-    }
++    }  if (families & kFamJog) g_jogStopDec[m.a.axis] = jDec;   //AI(W906-JOGDEC) 20261007: Stop1203 stops this axis at its Mot_Table Dec from now on; same line
+     //AI(W906-JOG-VLTIME) 20261003: EastSun「M35 加減速已經設定成超大 一樣沒有動 反而是 我按了有一段時間 他會突然動很快」.
+     //  Acm_AxJog runs at CFG_AxJogVelLow for CFG_AxJogVLTime, then jumps to CFG_AxJogVelHigh; on a stepper velLow = InitSpeed *
+     //  percent (golden SetSpeed :915-921) is nearly standstill. golden writes CFG_AxJogVLTime = 0 with the jog family
+@@ -688,7 +688,7 @@ bool Send1203SpeedValues(IMotorAccessBackend& be, long long wireId, const Motion
+     std::snprintf(b, sizeof(b), "speed %d%% -> s=%u velLow=%.1f velHigh=%.1f acc=%.1f dec=%.1f (%s)",
+                   pct, sp.s, sp.velLow, sp.velHigh, sp.acc, sp.dec,
+                   families == (kFamPtp | kFamJog) ? "PTP + jog" : (families == kFamJog ? "jog family only" : "PTP"));
+-    note = std::string(b) + vlTimeWarn;
++    note = std::string(b) + vlTimeWarn;  if (families & kFamJog) { char jb[96]; std::snprintf(jb, sizeof(jb), "; jog acc=%.1f dec=%.1f (Mot_Table 100%%, AI(W906-JOGDEC))", jAcc, jDec); note += jb; }   //AI(W906-JOGDEC) 20261007: same line
+     return true;
+ }
+ bool Send1203Speed(IMotorAccessBackend& be, long long wireId, const MotionCtx& m, int pct,
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index 62bbc2e..8a6d77d 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -6890,7 +6890,7 @@ int main(int argc, char** argv)
+         (void)mX;
+     }
+ 
+-    { void test_boot_initmotor_100pct(); test_boot_initmotor_100pct(); }   //AI(W906-PARAMSYNC) 20261007: end of file
++    { void test_boot_initmotor_100pct(); test_boot_initmotor_100pct(); }   { void test_jog_dec_100pct(); test_jog_dec_100pct(); }   //AI(W906-JOGDEC) 20261007: + the jog decel test (end of file).  AI(W906-PARAMSYNC) 20261007: end of file
+     printf("\n%d passed, %d failed\n", g_pass, g_fail);
+     return (g_fail == 0) ? 0 : 1;
+ }
+@@ -7010,3 +7010,50 @@ bool W906Pool5CatalogEqualsTable(const std::set<std::string>& acts)
+     printf("    (%s: %u catalog actions, %u kActions rows)\n", path.c_str(), (unsigned)acts.size(), (unsigned)table.size());
+     return !table.empty() && onlyCat == 0 && onlyTable == 0;
+ }
++
++// =============================================================================
++//  AI(W906-JOGDEC) 20261007: EastSun「我有的時候JOG 放開後 沒有馬上停 一直過去」; ruling 1007「JOG 一律用 Mot_Table 加減速 100%」.
++//  11:41 MOutArmZA jogged at 33 % with acc / dec 80 (= 1 % of Mot_Table 8000, the speed table's %): the stop reached the card in
++//  30 ms but the axis slid 2.6 s / ~7700 counts. Now the jog family's Acc / Dec = Mot_Table Acc / Dec, and the release stops an
++//  axis this page jogged with Acm_AxStopDecEx at that Dec. Same numbers as 11:41; through MotorAccessDispatch (the page's path).
++// =============================================================================
++void test_jog_dec_100pct()
++{
++    printf("\n[JOGDEC] manual JOG: jog Acc / Dec = Mot_Table (100 %%), the release stops at Mot_Table Dec (Acm_AxStopDecEx)\n");
++    MotorAccessResetJobs();
++    MotorGolden g;
++    g.valid = true; g.enable = true; g.gearRatio = 1.0; g.softP = 1000000; g.softN = -1000000;
++    g.jogHigh = 80000; g.jogLow = 10000; g.initSpeed = 10000; g.acc = 80; g.dec = 80; g.homeFlag = 1;   // runtime dAcc / dDec at 1 %
++    g.homeHigh = 100000; g.homeLow = 10000; g.accDb = 8000; g.decDb = 8000; g.range = 100; g.rate = 100;  // Mot_Table Acc / Dec
++    g.motorClass = 0; g.sensorType = true; g.in1Logic = false;
++    FakeBackend be;
++    be.table["MOutArmZA"] = Axis1203(0, 0, 0, 6);
++    be.table["B"] = Axis1203(21, 21, 0, 7);                                    // axis 7: never jogged anywhere in this test binary (g_jogStopDec is per process)
++    be.aliasOf[0] = "MOutArmZA"; be.aliasOf[21] = "B";
++    be.golden[0] = g; be.golden[21] = g;
++    be.opened.assign(8, true);
++    for (int ax = 0; ax < 8; ++ax) { be.cmdPos[ax] = 0.0; be.state[ax] = 1; }
++    be.executed.clear();
++    MotorAccessReq r = Req("uMotorTest", "jogN", "MOutArmZA"); r.button = "sbMotorTest_JogN";
++    MotorAccessOutcome o = MotorAccessDispatch(r, 41, be);
++    double jAcc = -1, jDec = -1;
++    for (std::size_t i = 0; i < be.executed.size(); ++i) {
++        if (be.executed[i].kind != kCmdAxSetSpeed || be.executed[i].axis != 6) continue;
++        if (be.executed[i].speed == kSpeedJogAcc) jAcc = be.executed[i].value;
++        if (be.executed[i].speed == kSpeedJogDec) jDec = be.executed[i].value;
++    }
++    CHECK(o.ok && jAcc == 8000.0 && jDec == 8000.0,
++          "jog family Acc / Dec = Mot_Table 8000 (was 80 = the speed table's 1 % -> 11:41 slid 2.6 s after release)");
++    be.executed.clear();
++    MotorAccessReq rel = Req("uMotorTest", "stop", "MOutArmZA"); rel.button = "sbMotorTest_JogN";
++    o = MotorAccessDispatch(rel, 41, be);
++    double stopDec = -1;
++    for (std::size_t i = 0; i < be.executed.size(); ++i) if (be.executed[i].kind == kCmdAxStop && be.executed[i].axis == 6) stopDec = be.executed[i].value;
++    CHECK(o.ok && stopDec == 8000.0, "the jog release stops the axis with Acm_AxStopDecEx at Mot_Table Dec 8000 (kCmdAxStop value)");
++    be.executed.clear();
++    MotorAccessReq relB = Req("uMotorTest", "stop", "B"); relB.button = "sbMotorTest_JogN";
++    (void)MotorAccessDispatch(relB, 42, be);
++    double stopB = -1;
++    for (std::size_t i = 0; i < be.executed.size(); ++i) if (be.executed[i].kind == kCmdAxStop && be.executed[i].axis == 7) stopB = be.executed[i].value;
++    CHECK(stopB == 0.0, "an axis this page never jogged: plain Acm_AxStopDec (value 0), as before");
++}
+-- 
+2.55.0.windows.5
+
