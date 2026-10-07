@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-07 10:02
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 8f1d0da FLUSH-100: the main status word and the tower / panel lamps refresh again at the 1／web ae69cdd。
+HT9050 機台參數快照（machine_params\）—— 2026-10-07 10:11
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 7ad5cf5 DOCS: request to Jimmy -- every alarm must show its description (EastSun 1007 '請ji／web ae69cdd。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
