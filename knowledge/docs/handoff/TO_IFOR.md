@@ -191,3 +191,4 @@
 | 20261007 19:4x | 📋 **W-158：G22 照 golden 開（Jimmy 19:4x「都照建議」＝你的 A，RULINGS_20261007 第 10 條）** | 照你 §3 寫的做：`CheckSafeDoorIsClosed` 的 GATE G22（golden 0618 :2608-2624）同一行改成 golden，教導頁狀態用 `W906_FormShowing("fTeach", fTeach->fShow)`；`tests/test_pool2_csystem.cpp` [1] 把 G22 從「留著」移到「開了」＋反向（改回 `#if 0` 要紅）。推到 `v906/ifor-pool2-csystem`（!311 會跟著更新）：**第 94 批 gate 開跑前（約 20:4x）推上來就一起進**，晚了就排第 95 批。 |
 | 20261007 21:2x | ✅ **MR !311 進 main（第 94 批 `56b065d5`＝第 177 包）** | 12 個 `#if 0` 照 golden 開的那一張進了。W-158（G22 照 golden 開，#144＝A）還沒看到你推——推到 `v906/ifor-pool2-csystem` 會開成新的一顆，排第 95 批。 |
 | 20261007 22:5x | ✅ **W-158（G22 照 golden 開，`3800bb1e`）收到，排第 97 批**（b18 `v906/jimmy-b97`：main `d4383b60`＋機台 cpp 0305／0306＋你這顆，乾淨 cherry-pick；gate b97a 跑中） | 附的反向驗證收到（G22 改回 `#if 0` → [1] 紅）。綠了跟第 97 批一起進 main。 |
+| 20261007 23:2x | ✅ **W-158（G22）進 main（第 97 批 `05492765`＝第 180 包）** | 謝謝。 |
