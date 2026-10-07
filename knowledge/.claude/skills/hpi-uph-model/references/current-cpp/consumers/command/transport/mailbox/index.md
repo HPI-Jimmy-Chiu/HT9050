@@ -7,3 +7,5 @@ pin `37cef908a42adaaa8df8a0d3fc5959e52446e802`；[manifest](source-manifest.json
 - 固定source：[Hub](https://gitlab.honprec.com/honprec/rd/rd5/ht9045/-/blob/37cef908a42adaaa8df8a0d3fc5959e52446e802/HT9011UC_Cpp_V3.33.906.0/TesterComm/TesterCommHub.cpp)、[Hub宣告](https://gitlab.honprec.com/honprec/rd/rd5/ht9045/-/blob/37cef908a42adaaa8df8a0d3fc5959e52446e802/HT9011UC_Cpp_V3.33.906.0/TesterComm/TesterCommHub.h)、[Mailbox](https://gitlab.honprec.com/honprec/rd/rd5/ht9045/-/blob/37cef908a42adaaa8df8a0d3fc5959e52446e802/HT9011UC_Cpp_V3.33.906.0/TesterComm/SyncMailbox.cpp)、[Mailbox宣告](https://gitlab.honprec.com/honprec/rd/rd5/ht9045/-/blob/37cef908a42adaaa8df8a0d3fc5959e52446e802/HT9011UC_Cpp_V3.33.906.0/TesterComm/SyncMailbox.h)。
 
 活正文用function與欄位定位；原碼golden行號／當時的設計註解只作歷史，未重驗golden或真機。
+
+[Engine接收子樹](engine/index.md)續查Hub／thread、GPIB／RS232 payload與GPIB UPH寫入局部；本地結果與設備送達分開，完整生命週期仍待查。

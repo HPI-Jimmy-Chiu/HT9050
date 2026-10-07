@@ -38,3 +38,5 @@
 - [Binary 密碼本結構／slot／編輯與回讀還原（局部）](customer-book-storage/index.md)
 
 - [EncodeStr／文字密碼本編輯與存檔回傳（局部）](customer-book-text/index.md)
+
+[密碼簿算法說明的公開發布界線](publication/index.md)依 Jimmy 20261007 §11 固定排除；私有正文與原查證結果保持，筆電同步工具是否生效需另核對。

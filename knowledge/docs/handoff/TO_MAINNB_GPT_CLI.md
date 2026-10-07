@@ -56,6 +56,13 @@
 - **要做的**：對那 396 碼，在 golden 0618（`D:/HT9045/HT9011UC_Code_V3.33.906.0_20260618`，Big5，唯讀）找出每一碼在哪裡觸發（檔:行）、當時的 `ShowMyMessage`／訊息字串、附近的條件，各寫一句**草稿說明**（發生什麼、通常怎麼處理）；碼在 golden 找不到觸發處的另列。
 - **產出**：交接分支一份 CSV（碼、家族、golden 檔:行、訊息、草稿說明、把握度）＋一頁摘要；FROM §2 一列。不改檔、不編譯。
 
+### MAINNB-SOFTLIM　📋 用「軟體極限」當目標位置的地方（唯讀、不編譯；W-164；優先於 POOL-2）
+
+- **背景**：1008 00:19 機台 `WAR240198 MOutArmX Motor Alarm`——golden 的出料手臂讓位點 `MoveOutArmXY_ToFix_Tray_Full` 是 `MOutArmX` 的 `PSoftLimitN + iOutArmXBase*2000 + 100`，而 HT9050 的馬達表 SoftLimitN＝-999999，目標變成約 -999899，軸一路跑到警報。機台 cpp 0313 FIXFULL9050 只修了這一處（HT9050 改用 Auto3 X/Y；第 100 批）。RULINGS_20261007 第 13 條：EastSun 決定軟體極限先維持 ±999999（不限制位置）——**這台 48 軸有 45 軸是 ±999999**（`machines/HT9050/snapshot/machine_params/D_HT9045_system/Mot_Table.csv`），所以 golden 任何「拿軟體極限當目標／停靠點／讓位點」的地方，在 HT9050 都會把軸送到行程盡頭。
+- **要做的**：在移植樹（`HT9011UC_Cpp_V3.33.906.0`，讀 `origin/main`）找出每一處**用軟體極限算出移動目標或存成位置**的程式（`PSoftLimitN`／`PSoftLimitP`、Mot_Table 的 SoftLimitN／P 欄位、相關 getter）。純檢查（`if (pos < 極限)` 這類防呆）**另列一個數字就好**，不用逐一寫。每一處目標：檔:行、函式、golden 0618 對應行（Big5、唯讀）、哪一軸、HT9050 會不會走到（Type_HT9050／9050GPIB；那支手臂變體檔有沒有連進 wb_serve——查 `docs/handoff/IF0_CENSUS_20261006_linked.tsv`）、用上面那份馬達表算出來的目標值。cpp 0313 已修的那處標「已修」。
+- **排序**：HT9050 正常流程／HOME／教導頁會走到的排最前面；只有別的機型或沒連進去的放後面。
+- **產出**：交接分支 `docs/handoff/SOFTLIMIT_TARGET_CENSUS_20261008.md`＋`.tsv`；FROM §2 一列。不改程式、不編譯、不碰機台。筆電收到後轉給 EastSun／機台端（TO_ES02），要不要改、怎麼改由機台端與 Frank01 決定。
+
 ## 4. 回答與通知（筆電寫）
 
 | 時間 | 標題 | 內容 |
@@ -71,3 +78,4 @@
 | 20261007 11:3x | ✅ **防撞複核收到**（`d84336e6`）：轉成 Frank01 的卡 W-145（TO_FRANK §3 F-04，Index／飛梭流程的負責人）；(a)「退到 Left／Right」怎麼算問 Jimmy（NIGHT_REPORT §0 第 139 項）。W-144 認領收到。 | |
 | 20261007 23:5x | ✅ **POOL-2 唯讀複核收到**：BarCode（22:33）、CPROD5（22:34）、AGV-E84（22:59）、BarcodeReader（23:09）、Observer OSK（23:15）、common（23:24）、UnitConvert（23:34）、RotateKit | 照 POOL-2 留作候選：工程線（Ifor01／St02-E／NB2-1）認領那支檔時照你的報告做；有人閒置時筆電再切實作卡。不需要 Jimmy 決定。StateRecord 唯讀認領收到——`cStateRecord.cpp`:853 在 POOL ⛔ 清單（千萬別開），唯讀沒問題。 |
 | 20261008 00:0x | 📏 **提醒：你心跳的工作樹 `1ac2e8fc`（分支 `v906/mainnb-gpt-if0-barcode-20261007` 的基底 `7c4bf541`）落後 main 20 包** | 你不編譯，影響的是唯讀複核讀到的版本：複核一律以 `origin/main` 為準（先 `git fetch`，用 `git show origin/main:<路徑>`），報告寫明讀的是哪一顆 main。（RULINGS_20261005 第 6 條、RULINGS_20261006 第 12 條） |
+| 20261008 00:4x | 📋 **新卡 MAINNB-SOFTLIM（W-164），請排在 POOL-2 前面** | 00:19 機台出料手臂馬達警報的根因是 golden 拿軟體極限當讓位點，而 HT9050 45 軸的極限是 ±999999——請普查還有哪些地方這樣算目標（細節在 §3）。 |

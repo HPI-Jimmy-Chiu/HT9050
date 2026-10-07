@@ -27,3 +27,5 @@ description: "Handler客戶功能跨主題索引；查CUSTOMER_CODE、CC_與FUNC
 | 新增客戶、名稱／報告雙向同步 | [Config客戶流程](../hpi-config/references/customer/index.md)／[權威](references/authority.md) |
 
 來源更新：[最新main盤點](references/main-integration-20261007-114x.md)／[前次保存核對](references/main-integration-20261006-222x.md)，原候選、人工日期與新掃描摘要分開。
+
+密碼簿算法說明的[公開發布界線](references/reviewed/publication/index.md)：固定排除公開同步，原文仍保留在公司私有 repo。

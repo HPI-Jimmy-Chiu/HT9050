@@ -66,3 +66,5 @@ Loader記錄旗標的短入口／case 1300與版本差異另見 [Loader子樹](c
 [RULINGS_20261007 第8條](https://gitlab.honprec.com/honprec/rd/rd5/ht9045/-/blob/1147cefda898d438fe556bea43dbb9e1df292ca3/HT9011UC_Cpp_V3.33.906.0/docs/RULINGS_20261007.md) 保存 Jerry 本人選擇修 ACL、`wb_serve` 不升權，以及他台靜默寫入失敗的回報。這是保存成功查證的裁決來源；本單元未量本機權限或改 ACL。該文件第7條則分開主程式／F5與開發 gate 的建置路徑，本次只做文件驗證。
 
 [mailbox子樹](current-cpp/consumers/command/transport/mailbox/index.md)pin `37cef908a42adaaa8df8a0d3fc5959e52446e802`保存四source、七body及七宣告；本地返回／pump／timeout與實際送達分清，完整engine／thread／生命週期未驗。
+
+[Engine接收子樹](current-cpp/consumers/command/transport/mailbox/engine/index.md)保存三組獨立pin、七source／十完整body／一Running宣告及一GPIB dispatcher片段；本地結果不推送達，舊manifest／metadata／原文保留。

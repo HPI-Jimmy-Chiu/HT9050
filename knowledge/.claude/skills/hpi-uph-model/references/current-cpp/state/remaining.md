@@ -19,3 +19,9 @@ HT9050與其他Handler仍使用[同題機型樹](../../machines/index.md)，不�
 [Command轉送局部](../consumers/command/transport/index.md)補註冊／清除與兩版本地出口；producer／counter到grid及整個傳送成功仍未閉合。
 
 [mailbox局部](../consumers/command/transport/mailbox/index.md)分開kSent／callback result／排隊sent與外部送達；整個UPH producer／counter／consumer仍未閉合。
+
+[engine接收子樹](../consumers/command/transport/mailbox/engine/index.md)補本地啟停旗標／回呼、payload與GPIB返回層次；完整UPH計數／保存與所有機型路徑仍未閉合。
+
+## 本批交付與待續
+
+20261007：本批交付已查的 engine／payload／GPIB 局部 references。完整 UPH producer／counter／grid／保存、MV／driver／dispatcher／caller、每機型容量／site／校正與並行生命週期明標「待續」；現有候選／原文與相容入口保留。本批整合最新 main 後重驗所選來源，不將新納入的 PadInterface 或機台快照視為這些未決項已驗證。

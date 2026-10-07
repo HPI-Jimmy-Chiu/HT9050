@@ -36,3 +36,5 @@
 [Command轉送鏈局部](../../current-cpp/consumers/command/transport/index.md)保留共用包裝與V906／V912出口差異；沒有以callback存在當HT9050已傳送。
 
 [mailbox局部](../../current-cpp/consumers/command/transport/mailbox/index.md)只記V906本地同步傳送狀態；不據kSent判HT9050測試機已收。
+
+[Engine接收鏈局部](../../current-cpp/consumers/command/transport/mailbox/engine/index.md)補V906共用Hub／thread與介面差異，不據Running、0或MyGPIBWrite true判HT9050設備已收。

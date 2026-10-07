@@ -7,3 +7,5 @@
 待查：engine side handler／OnHandlerMessage、thread Loop／Running生命週期、所有SetHandler／Reset／Send caller、啟動／切換／shutdown與鎖契約、request例外及OS等待失敗、payload結構／編碼、接收端和傳送結果、UPH producer／counter／grid／DB／CSV／SECS保存、每機型容量／site／校正，以及S8。
 
 未執行C++／build、程式、指令、server／engine、API／LIVE、網頁、IO、Home、機台或runtime。回[本地流程](flow.md)、[上游界線](../limits.md)與[來源](../../../../../resources.md)。
+
+後續[engine／payload／GPIB子樹](engine/index.md)已讀七啟停body、兩payload body及一writer body／一dispatcher片段；上列完整生命週期、全caller／dispatcher與實際送達仍未閉合。
