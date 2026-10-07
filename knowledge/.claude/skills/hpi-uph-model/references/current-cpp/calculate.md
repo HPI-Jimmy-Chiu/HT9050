@@ -14,4 +14,6 @@ tTempTime<=start的另一分支只把iUPH設零、start改成tTempTime並清／�
 
 VTEST Elaps. Time來源是扣pause之前的tConsumeSecond，兩版body都如此；V906的相反註解不能代替實際順序。見 [計數／時間](count-time.md) 與 [輸出差異](outputs.md)。
 
+[後續狀態子樹](state/index.md) 另釘pin0c2eac30b的全域定義、MainProc累加及OneCycle／CleanOut指定清除區段；完整caller／pause writer仍未閉合。
+
 本層沒有確認整盤觸發、Lot重置、全部pause累計、日期運算平台等價、counter溢位、callback成功或實機throughput。

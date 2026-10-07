@@ -8,7 +8,7 @@
 
 增量前有提前return：兩版均有LoaderAutoCleanOutByInputCT／loading status與2DCheck路徑；V912的SCK輸入alarm還可返回，V906相應DoChkInputCntAlarm區塊在所選版本是#if 0。完整callee、SCK／2D／retry差異未閉合，只保留body條件位置，不驗證動作成功。
 
-MoveInArmXYToLoader_9045、其他配置InArm、asendic_Loader與pause／reset writer是後續路由，未宣稱全部呼叫鏈完成。
+[配置InArm caller子樹](callers/index.md) 已補七個AddLoadingCount call附近區段與V906 2x8_32短stub，完整caller仍未讀完；MoveInArmXYToLoader_9045與asendic_Loader仍待查；[pause／reset局部狀態](state/index.md) 已補24定義／extern與22指定區段，不宣稱全部呼叫鏈完成。
 
 ## RUN_INFO
 

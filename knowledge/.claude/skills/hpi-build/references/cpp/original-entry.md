@@ -1,5 +1,7 @@
 > 保存來源：`.claude/skills/cpp_build/SKILL.md`，main `2db43115d`。原文機型、版本與日期維持原標註；原程式碼行號僅為歷史定位，新查證依function／關鍵變數；目前共同項與差異先看 [共用對照](../common.md)。
 
+> **最新建置分流（Jimmy 20261007）**：F5、一般 build.bat 與 Ctrl+Shift+B 只建 wb_serve 及必要依賴，BUILD_TESTING=OFF，不跑測試／probe／PE 驗證工具。開發驗證仍保留：明確執行 build.bat gate/test，使用獨立 build_tests 或 build_tests_<工作代號> 目錄，BUILD_TESTING=ON；禁止使用應用程式／F5 目錄。W906_TEST_BUNDLES 只是打包方式，不能當成關閉測試。下文歷史「一般建置含 tests」描述依本裁決更新；完整規則見 [F5 與開發驗證共用規則](../../../../../docs/handoff/RD5軟體_F5與開發驗證建置規則_20261007_134727.md)。未執行測試或零測試不得回報 gate 通過。
+
 <!-- preserved-content:start -->
 
 # V906 C++ 建置（cpp_build）

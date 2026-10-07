@@ -35,8 +35,18 @@ fenced／inline code 與 wiki 字串完整保留。舊入口及 reference 路徑
 後續補 V906／V912 `CalculateUPH`／Profiler／customer callers、各機型容量／site、預設秒數的量測來源及其他 Handler 分派。
 
 portal 原稿的 Maurice 寄信／個人 Copilot 鏡像條款保留作 20260923 歷史，
-不自動擴大本對話通知授權或建立第二套 Skill；本次 Skill 批次仍依 Steven 最新指示合 main／pull 後通知 RD5_SW。
+不自動擴大本對話通知授權或建立第二套 Skill；本次Skill批次依進度中的最新integration_policy交Ready MR給Jimmy／筆電整合，main確認後pull自己的工作樹，再由ST02-M通知RD5_SW。
 
 ## 20261007 C++ 局部續查
 
 [目前 C++ 樹](current-cpp/index.md) 另釘住8f213da4f五個blob、六body／四RUN_INFO宣告；補兩版CalculateUPH／AddLoadingCount、V906日期helper、輸出差異與2473檔的六Profiler符號盤點。上述原稿／HTML pin未覆寫；所有caller、pause／counter、機型容量／site／校正與Profiler實作仍待查，不以零命中、呼叫或舊設計推定完整功能／磁碟／實機結果。
+
+[全域／暫停狀態子樹](current-cpp/state/index.md) 另釘pin0c2eac30b，六source／24定義與extern／22已讀局部區段；六個完整函式只保存hash、語意仍未讀完。1120cpp六詞盤點16候選只是後續線索。
+
+後續 [CSV writer 子樹](current-cpp/writers/index.md) 另保存 pin06fb64e54 八source／十一body／六宣告：V906 FOREHOPE空本體、V912日期六／七欄、兩版common overload的追加／換行／void失敗返回，以及V912 FileInfo指定方法。前一層manifest與歷史byte證據保留；保存成功、完整consumer／caller與作用中機型仍未驗證。
+
+[Kernel暫停開始與排程子樹](current-cpp/state/kernel/index.md) 另釘pin `938ebc37e95314ad496b03c7c257e1abc5fb9799`：四source／兩DoSystemMessage完整body與宣告／四ShowRunLabel局部區段／兩SystemStart接合，ShowRunLabel兩完整body僅保存hash。2298 cpp／h限定字面盤點、13原文命中檔／四函式形狀可重現；完整UI／所有caller、writer／thread、刷新tick與機型作用仍未驗，前層manifest與歷史內容完整保留。
+
+[配置InArm caller子樹](current-cpp/callers/index.md) 另釘pin `f2a1d78160e9f44f6bb351f0a3552ae36e87a031`：10source、七caller完整body保存hash／七指定call區段與一個已讀V906 2x8_32 return-false短stub，區分7call／3定義／3宣告、#if 0與Tray實參方向。全部caller／callee／機型分派、每顆口徑、consumer／容量仍未閉合；前層來源／歷史保存不變。
+
+Loader記錄旗標的短入口／case 1300與版本差異另見 [Loader子樹](current-cpp/state/loader/index.md)；完整函式僅保存hash，不稱全派工完成。
