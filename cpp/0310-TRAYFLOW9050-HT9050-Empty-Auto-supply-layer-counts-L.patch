@@ -1,0 +1,385 @@
+From f7515cf921cafdc51b6f984adc365f5e79eb3204 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 23:40:18 +0800
+Subject: [PATCH] =?UTF-8?q?TRAYFLOW9050:=20HT9050=20Empty=20->=20Auto=20su?=
+ =?UTF-8?q?pply,=20layer=20counts,=20Loader=20count=200,=20HOME=20reset=20?=
+ =?UTF-8?q?--=20EastSun=201007=20'Empty=20=E4=B8=8D=E6=9C=83=E5=B0=87?=
+ =?UTF-8?q?=E7=A9=BA=20Tray=20=E8=A3=9C=E5=88=B0=20Auto=201'=20->=20'?=
+ =?UTF-8?q?=E6=88=91=E7=8F=BE=E5=9C=A8=E4=BF=AE'.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+acatchtray.cpp
+- DoCatchTray cases 500 / 600: Type_HT9050 calls W906_CatchFromEmpty9050 (end of file) instead of golden CatchNewTrayFromBuffer:
+  W906_ProbeEmpty9050 counts the Empty stack when unknown (-1): MEmptyZ from the deepest layer not below Home upwards until
+  SenEmptySelectHasTray -> L+1 trays; a tray already at the deepest layer -> MES1022; none but SnEmptyDrawerHasTray on -> MES1024;
+  SIM = 5. Then DoCatchFromEmpty_9050 (no caller in 910). Count 0 -> answers 2 (DoCatchTray back to case 1), MES1021 every 100th
+  call, RETRY re-probes. Same 0/1/2 answers as CatchNewTrayFromBuffer.
+- DoCatchFromEmpty_9050 takes the TOP tray (Up[n-1]) and makes n-1 (910 never changed the count); the place into Empty waits for a
+  known count (:4398).
+- DoCatchTray 400 / 1000 / 2000 also re-init the 9050 sub-cursors (InitialCatchFromEmpty_9050 / InitialPlaceToAuto_9050 /
+  InitialPlaceToBuffer_9050).
+cmydef.cpp: iAuto1..3LayerCount_9050 start at 0 (= empty) instead of -1 (the first place went one pitch above the base).
+asendic_Loader.cpp DoLoadNewICTray_9050: Loader count 0 raises MES0920 (RETRY / CLEAN OUT) and sets -1 so DoLoad_9050 re-probes --
+  was a silent 1 -> 800 -> 900 -> 1 loop.
+csystem.cpp InitAllProcessTask (HOME / START): HT9050 also calls W906_InitTrayTasks9050 (Loader / Empty / Buffer / NewICTray cursors,
+  Empty re-probe).
+Not changed: DoPlaceTrayToAuto_9050's 'push the existing stack aside' branch (would add 2 layers per place; waits for EastSun).
+Other machines: golden. Same lines + end of file.
+tests: test_flow9050_tray.cpp -- the three 910 pins updated to the new behaviour, new [CW] block (5 checks); test_fp9050_index.cpp [F2]
+census also exempts iTestYFinePitchTask, read by csystem.cpp W906_FlowTraceTick (FLOWTRACE, op-log only).
+Flow9050_Tray 115/115, W6_3_CatchTray, Flow9050_Shuttle, W6_6_Hub, W6_6_CSystemCycle, FP9050_Pure, FP9050_Index, HT9050_ShtSafe,
+HT9050_DryRun, HT9050_ProdFlow, E044TorqueWait passed. Debug linked, release linked. Backups D:\HT9045\_review\*.bak_trayflow9050_20261007_233435.
+WORKLOG row 192.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ acatchtray.cpp               | 135 ++++++++++++++++++++++++++++++++---
+ asendic_Loader.cpp           |   2 +-
+ cmydef.cpp                   |   6 +-
+ csystem.cpp                  |   2 +-
+ docs/WORKLOG_MACHINE.md      |   1 +
+ tests/test_flow9050_tray.cpp |  33 +++++++--
+ tests/test_fp9050_index.cpp  |   2 +-
+ 7 files changed, 160 insertions(+), 21 deletions(-)
+
+diff --git a/acatchtray.cpp b/acatchtray.cpp
+index 0cd2ee2..a8f94b6 100644
+--- a/acatchtray.cpp
++++ b/acatchtray.cpp
+@@ -2623,7 +2623,7 @@ int DoCatchFromLoader_9050()
+ //AI(W906-F9050-BD) 20261004: 910 :2529-2531 verbatim.  iEmptyLayerCountDetect_9050 is never used (910 as written).
+ int iEmptyLayerCount_9050        = -1;
+ int iEmptyLayerCountDetect_9050  = 0;
+-int iCatchFromEmpty9050Task      = 1;
++int iCatchFromEmpty9050Task      = 1;  int W906_ProbeEmpty9050(); int W906_CatchFromEmpty9050(int iWhichAuto);   //AI(W906-TRAYFLOW9050) 20261007: both at acatchtray.cpp EOF
+ void InitialCatchFromEmpty_9050()
+ {
+     iCatchFromEmpty9050Task = 1;
+@@ -2651,7 +2651,7 @@ int DoCatchFromEmpty_9050()
+                Cylinder[C_EmptyEdgePush].Pop() &&
+                Cylinder[C_MobileTrayTableSelect].Push())
+             {
+-                if(MOT[MEmptyZ].MotorMove(W906_TrayZ9050(1, 1, iEmptyLayerCount_9050))==1)   //AI(W906-TRAYZ-PITCH) 20261006: was Prod.EmptyZ_Up[iEmptyLayerCount_9050]
++                if(MOT[MEmptyZ].MotorMove(W906_TrayZ9050(1, 1, iEmptyLayerCount_9050-1))==1)   //AI(W906-TRAYZ-PITCH) 20261006: was Prod.EmptyZ_Up[iEmptyLayerCount_9050]
+                     Task=20;
+             }
+             break;
+@@ -2661,7 +2661,7 @@ int DoCatchFromEmpty_9050()
+                Cylinder[C_EmptyLoaderZ_Select].Push() &&
+                Cylinder[C_MobileTrayTableSelect].Push())
+             {
+-                if(MOT[MEmptyZ].MotorMove(W906_TrayZ9050(1, 1, iEmptyLayerCount_9050) + W906_TrayZ9050Lift(1))==1)   //AI(W906-TRAYZ-PITCH) 20261006: was Prod.EmptyZ_Up[..] + Prod.iEmptyCatchExtraLift_9050
++                if(MOT[MEmptyZ].MotorMove(W906_TrayZ9050(1, 1, iEmptyLayerCount_9050-1) + W906_TrayZ9050Lift(1))==1)   //AI(W906-TRAYZ-PITCH) 20261006: was Prod.EmptyZ_Up[..] + Prod.iEmptyCatchExtraLift_9050
+                     Task=30;
+             }
+             break;
+@@ -2671,7 +2671,7 @@ int DoCatchFromEmpty_9050()
+             MOT[MTrayX].iIsCoverTray = MOT[MMEmpty].iIsCoverTray;
+             MOT[MTrayX].sTrayID      = MOT[MMEmpty].sTrayID;
+             MOT[MMEmpty].ClearTray(__FUNC__);
+-            Task=40;
++            iEmptyLayerCount_9050--; Task=40;   //AI(W906-TRAYFLOW9050) 20261007: the pick takes the TOP tray (Up[n-1], above) and the stack is n-1 -- the inverse of DoPlaceTrayToEmpty_9050 (Up[n], n+1); 910 never changed the count
+             break;
+         case 40:                                                                //Step 5: MZ 回下方待命
+             if(Cylinder[C_MobileTrayTableSelect].Pop())
+@@ -4395,7 +4395,7 @@ bool DoPlaceToBuffer_9050()
+             }
+             break;
+         case 100:                                                               //Step 2a: 放盤到 Empty
+-            if(DoPlaceTrayToEmpty_9050() == 1)
++            if(W906_ProbeEmpty9050() == 1 && DoPlaceTrayToEmpty_9050() == 1)   /* AI(W906-TRAYFLOW9050) 20261007: the Empty count is known (probed) before a place */
+             {
+                 Task = 1;
+                 return true;
+@@ -7516,7 +7516,7 @@ void DoCatchTray()
+                 }
+                 else
+                 {
+-                InitialCatchNewTrayFromBufferTask();
++                InitialCatchNewTrayFromBufferTask();  if(MachineTypeChoice==Type_HT9050) InitialCatchFromEmpty_9050();   //AI(W906-TRAYFLOW9050) 20261007: the 9050 Empty pick cursor, re-inited where golden re-inits its buffer pick
+                 if(TrayForm.LodareType!=0 &&                                    //Steven 20170628 (Wei) : 修正死雞死雞死雞~~
+                    (Target==2 || Target==3) &&
+                    TrayForm.AutoFromEmptyColor[iRunStartMode][Target-1])
+@@ -7654,7 +7654,7 @@ void DoCatchTray()
+             if(AUTO_EMPTY_COLOR!=0 ||                                                                                   //Steven 20251211
+                Sen[SnEmptyTrayIsLock1].IsOff()==false)
+             {
+-                ret=CatchNewTrayFromBuffer(Target);                                                                     //Sam 20230220 : 拿掉 bMustFromColorBuffer & bFailAlarm
++                ret=(MachineTypeChoice==Type_HT9050) ? W906_CatchFromEmpty9050(Target) : CatchNewTrayFromBuffer(Target);   /* AI(W906-TRAYFLOW9050) 20261007: HT9050 takes the new tray from the Empty stack (DoCatchFromEmpty_9050, no caller in 910); same 0 / 1 / 2 answers */                                                                     //Sam 20230220 : 拿掉 bMustFromColorBuffer & bFailAlarm
+                 if(ret==1)
+                 {
+                     Task=1000;
+@@ -7716,7 +7716,7 @@ void DoCatchTray()
+             }
+             break;
+         case 600:
+-            ret=CatchNewTrayFromBuffer(Target);                                 //Sam 20230220 : 拿掉 bMustFromColorBuffer & bFailAlarm
++            ret=(MachineTypeChoice==Type_HT9050) ? W906_CatchFromEmpty9050(Target) : CatchNewTrayFromBuffer(Target);   /* AI(W906-TRAYFLOW9050) 20261007: as case 500 */                                 //Sam 20230220 : 拿掉 bMustFromColorBuffer & bFailAlarm
+             if(ret==1)
+             {
+                 Task=1000;
+@@ -7781,7 +7781,7 @@ void DoCatchTray()
+ 
+             Task=1100;
+             iCatchTrayControlManual=0;
+-            InitialPlaceTrayToAutoTask();
++            InitialPlaceTrayToAutoTask();  if(MachineTypeChoice==Type_HT9050) InitialPlaceToAuto_9050();   //AI(W906-TRAYFLOW9050) 20261007
+ 
+             if(CosFunction.bUseEmptyColorTrayPreAlarm==true &&                  //Ifor 20170419 (wei) add Empty/Color Tray 補Tray至Auto需關閉 Pre Alaem
+                IniConfig.bP32EmptyColorTrayPreAlarm==true)
+@@ -7890,7 +7890,7 @@ void DoCatchTray()
+             }
+             break;
+         case 2000:
+-            InitialPlaceToBufferTask();
++            InitialPlaceToBufferTask();  if(MachineTypeChoice==Type_HT9050) InitialPlaceToBuffer_9050();   //AI(W906-TRAYFLOW9050) 20261007
+             if(TrayForm.LoaderToEmptyColor[iRunStartMode]!=2)                   //kevin 20120726
+                 iCatchTrayControlManual=0;
+             if(SUPPORT_2_EMPTY_EMPTY)
+@@ -9903,3 +9903,118 @@ bool DoCoverTray(int iAuto)
+ //------------------------------------------------------------------------------
+ 
+ //<== Eastsun 20260515 F011
++//==============================================================================
++//AI(W906-TRAYFLOW9050) 20261007: EastSun 1007 "Empty does not refill Auto 1" -> "fix it now". HT9050 Empty stack counted, probed, picked
++//  from (DoCatchTray 500/600) and reset on HOME/START. iEmptyLayerCount_9050 = trays in the Empty stack: 0 empty, -1 unknown -> probe
++//  before the next pick or place. DoPlaceTrayToEmpty_9050 hands in at Up[n]+lift and makes n+1; DoCatchFromEmpty_9050 takes the top
++//  tray at Up[n-1]+lift and makes n-1. Type_HT9050 paths only; golden untouched.
++//==============================================================================
++int W906_TrayZ9050Home(int zone);
++static int s_iEmptyProbeTask9050 = 1, s_iEmptyProbeLayer9050 = 0, s_iEmptyProbeFirst9050 = 0, s_iEmptyNoTray9050 = 0;
++void W906_InitProbeEmpty9050()
++{
++    s_iEmptyProbeTask9050 = 1;
++    s_iEmptyNoTray9050    = 0;
++}
++//  Probe (MEmptyZ): Home, then Up[L] from the deepest layer not below Home, one layer up per step, until SenEmptySelectHasTray => L+1 trays.
++int W906_ProbeEmpty9050()
++{
++    int &Task = s_iEmptyProbeTask9050, &L = s_iEmptyProbeLayer9050;
++    if(iEmptyLayerCount_9050 >= 0)
++    {
++        Task = 1;
++        return 1;
++    }
++    switch(Task)
++    {
++        case 1:
++            if(MOT[MEmptyZ].MotorMove(W906_TrayZ9050Home(1)) == 1)
++            {
++                #ifdef SOFT_SIMULTE
++                iEmptyLayerCount_9050 = 5;                                      // as DoLoad_9050 case 1000 (Loader 5)
++                return 1;
++                #else
++                L = MAX_LOADER_LAYER_9050 - 1;
++                while(L > 0 && W906_TrayZ9050(1, 1, L) < W906_TrayZ9050Home(1))  // never below Home
++                    L--;
++                s_iEmptyProbeFirst9050 = L;
++                Task = 100;
++                #endif
++            }
++            break;
++        case 100:
++            if(Cylinder[C_EmptyEdgeClip].Pop() &&
++               Cylinder[C_EmptyEdgePush].Pop() &&
++               Cylinder[C_EmptyLoaderZ_Select].Push())
++            {
++                if(MOT[MEmptyZ].MotorMove(W906_TrayZ9050(1, 1, L)) == 1)
++                {
++                    if(Sen[SenEmptySelectHasTray].IsOn())
++                    {
++                        if(L == s_iEmptyProbeFirst9050)                         // a tray even at the deepest layer
++                        {
++                            ShowErrorMessage("MES1022", K_RETRY, MMEmpty, false, "W906_ProbeEmpty9050");
++                            Task = 1;
++                            break;
++                        }
++                        iEmptyLayerCount_9050 = L + 1;
++                        Task = 1;
++                        return 1;
++                    }
++                    if(--L < 0)                                                 // no tray at any layer
++                    {
++                        if(Sen[SnEmptyDrawerHasTray].IsOn())                    // but the drawer sees one: the sensors disagree
++                        {
++                            ShowErrorMessage("MES1024", K_RETRY, MMEmpty, false, "W906_ProbeEmpty9050");
++                            Task = 1;
++                            break;
++                        }
++                        iEmptyLayerCount_9050 = 0;
++                        Task = 1;
++                        return 1;
++                    }
++                }
++            }
++            break;
++    }
++    return 0;
++}
++//  DoCatchTray 500/600 on Type_HT9050 (Empty is the only buffer, Frank 1006): 0 busy, 1 tray on Tray X, 2 no tray (-> case 1).
++int W906_CatchFromEmpty9050(int iWhichAuto)
++{
++    (void)iWhichAuto;
++    if(iCatchFromEmpty9050Task == 1)
++    {
++        if(W906_ProbeEmpty9050() != 1)
++            return 0;
++        if(iEmptyLayerCount_9050 <= 0)
++        {
++            if(++s_iEmptyNoTray9050 >= 100)                                     // golden CatchNewTrayFromBuffer's MES1021 cadence
++            {
++                s_iEmptyNoTray9050 = 0;
++                if(ShowErrorMessage("MES1021", K_RETRY, MMEmpty, false, "W906_CatchFromEmpty9050") == K_RETRY)
++                    iEmptyLayerCount_9050 = -1;                                 // refilled: probe again
++            }
++            return 2;
++        }
++        s_iEmptyNoTray9050 = 0;
++    }
++    const int ret = DoCatchFromEmpty_9050();
++    if(ret == 3)                                                                // Tray X may not move (stopped, cursor 1)
++    {
++        Cylinder[C_TrayX_UpDown].Pop();                                         // as CatchNewTrayFromBuffer case 2150
++        return 0;
++    }
++    return ret;
++}
++void InitLoadNewICTrayTask_9050();                                              // asendic_Loader.cpp
++//  InitAllProcessTask (HOME / START), Type_HT9050 only.
++void W906_InitTrayTasks9050()
++{
++    InitialCatchFromLoader_9050();
++    InitialCatchFromEmpty_9050();
++    InitialPlaceToBuffer_9050();                                                // + InitialPlaceToEmpty_9050 / InitialPlaceToAuto_9050
++    InitLoadNewICTrayTask_9050();
++    W906_InitProbeEmpty9050();
++    iEmptyLayerCount_9050 = -1;                                                 // the operator may have touched the Empty stack: re-probe
++}
+diff --git a/asendic_Loader.cpp b/asendic_Loader.cpp
+index 247dcf2..0e7bc56 100644
+--- a/asendic_Loader.cpp
++++ b/asendic_Loader.cpp
+@@ -2723,7 +2723,7 @@ int W906_TrayZ9050(int zone, int up, int layer); int W906_TrayZ9050Home(int zone
+         case 1:
+             if(iLoaderLayerCount_9050==0)
+             {
+-                //RecordProcess("iLoaderLayerCount_9050==0");
++                ret = ShowErrorMessage("MES0920", K_RETRY | K_CLEAN_OUT, MMTrayZ, false, "DoLoadNewICTray_9050_1"); if(ret == K_CLEAN_OUT) fMain->CleanOut("DoLoadNewICTray_9050_1"); iLoaderLayerCount_9050 = -1;   //RecordProcess("iLoaderLayerCount_9050==0");   //AI(W906-TRAYFLOW9050) 20261007: count 0 was a silent 1->800->900->1 loop; now MES0920 (no tray) and -1 -> DoLoad_9050 case 1000 re-probes
+                 return true;
+             }
+             Task = 100;
+diff --git a/cmydef.cpp b/cmydef.cpp
+index b6b04b4..54cfb66 100644
+--- a/cmydef.cpp
++++ b/cmydef.cpp
+@@ -6432,6 +6432,6 @@ bool bMaintanceMode=false;
+ //  DoReceiveAllToBottom_9050 increments, then resets to -1 (its cases 20 / 30), every area that holds a tray; the Loader count is set by DoLoad_9050 (case 1000: 5 in a SOFT_SIMULTE build, else its layer probe), decremented by DoLoadNewICTray_9050 and incremented by DoCatchFromLoader_9050.  A -1 or >=MAX index reads outside
+ //  Prod.TrayZ_Up/Down[MAX_TRACK] / *Z_Up/Down[MAX_LOADER_LAYER_9050] (910 defect (a); fields in 910's order, so the same neighbours as 910, cprod_9050.inc).  Translated as written.
+ int iLoaderLayerCount_9050=-1;                                                   //Eastsun 20260819 loader有幾盤
+-int iAuto1LayerCount_9050 = -1;                                                 //Eastsun 20260820 : Auto1 stack 層數
+-int iAuto2LayerCount_9050 = -1;                                                 //Eastsun 20260820 : Auto2 stack 層數
+-int iAuto3LayerCount_9050 = -1;                                                 //Eastsun 20260820 : Auto3 stack 層數
++int iAuto1LayerCount_9050 = 0;                                                  //Eastsun 20260820 : Auto1 stack 層數
++int iAuto2LayerCount_9050 = 0;                                                  //Eastsun 20260820 : Auto2 stack 層數
++int iAuto3LayerCount_9050 = 0;                                                  //Eastsun 20260820 : Auto3 stack 層數
+diff --git a/csystem.cpp b/csystem.cpp
+index d76eb22..c7ed485 100644
+--- a/csystem.cpp
++++ b/csystem.cpp
+@@ -286,7 +286,7 @@ void SetInitialICCheck()
+ void InitAllProcessTask()
+ {
+     if(MachineTypeChoice==Type_HT9050)                                         //AI(W906-F9050-BD) 20261004: H090, 910 csystem.cpp:5836-5839 verbatim; today 9050GPIB decodes as Type_HT9046_LS (database.cpp:517) => InitLoadTask() as before
+-        InitLoadTask_9050();
++        { InitLoadTask_9050(); void W906_InitTrayTasks9050(); W906_InitTrayTasks9050(); }   //AI(W906-TRAYFLOW9050) 20261007: HOME / START also reset the 9050 tray-arm cursors and re-probe the Empty stack (acatchtray.cpp EOF)
+     else
+         InitLoadTask();                                                        // shim (golden asendic_Loader.cpp)
+     InitInArmTask();                                                           // aHotPlateSubstrate.cpp
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index b4a004b..8afb2d0 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -84,6 +84,7 @@
+ | 169 | **Out Shuttle Z 位置還原**（EastSun「剛剛說的teach 沒有indexZ 高度可以設定 我說錯了 可以不用改 在其他頁面已經可以設定了」）：revert web 113a1ef，控制項回到套件 149 的原位置；給 Jimmy 的說明同步更正 | web 4e68790；cpp（本列） | — |
+ | 170 | **只查：實體 HOME 鍵沒反應**（EastSun「我實體按鈕案home都沒反應」）：PadCommLog 今天實體按鍵封包（t05x400…）只到 09:15:57，最後一筆 HOME＝t050400002020（HOME 0x20＋ALARM RESET 0x2000 卡住，golden ScanPannelKey ALARM RESET 最後判斷蓋掉 HOME）；之後只有程式送出的燈號回音（0006/0016＝PAUSE 燈閃，Teach 頁訊息框開著時）。EventLog 10 筆 MES2112 全是網頁軟鍵。程式這條路與 golden 相同，不改碼；請查面板 ALARM RESET 鈕／按鍵線。17:00 release 補建 | — | — |
+ | 171 | **ALARM RESET 卡住時其他實體鍵照常**（EastSun「就算reset卡住其他按鈕不是也要可以用?」→ 選「改」）：ckernel.cpp ScanPannelKey 前／後面板共 4 處 ALARM RESET 判斷，按著不放（已鎖存）時不再蓋掉同時按的其他鍵；剛按下那一下照 golden 優先。備份 D:\HT9045\_review\ckernel.cpp.bak_rstheld_20261007_172605 | cpp（本列） | ScanKeyGolden（新增 4 項）、MainScanKey、W7_L2_CKernel、SysinitBoot、St02_N07Alarm、St02_PadInterface 全過；Debug 17:30／release 17:31 |
++| 192 | **HT9050 Tray 流程：Empty 補 Auto、層數、Loader 0 層、HOME 重置**（EastSun「Empty 不會將空 Tray 補到 Auto 1」→「我現在修」；只讀代理列計畫）：①acatchtray.cpp DoCatchTray case 500／600：HT9050 改呼叫 W906_CatchFromEmpty9050（檔尾）＝先 W906_ProbeEmpty9050 探 Empty 層數（MEmptyZ 由最深層往上、SenEmptySelectHasTray 亮 ⇒ L+1；最深層就亮 MES1022；全沒亮但 SnEmptyDrawerHasTray 亮 MES1024；SIM＝5），再跑 DoCatchFromEmpty_9050（910 沒有呼叫者）；Empty 0 層回 2（回 case 1），每 100 次 MES1021、RETRY 重探；②DoCatchFromEmpty_9050 取最上層 Up[n-1]、取完 n-1（910 不改層數）；放 Empty 前先確定層數（:4398）；③cmydef.cpp Auto1～3 層數起始 -1→0（0＝空）；④asendic_Loader.cpp DoLoadNewICTray_9050 Loader 0 層：MES0920（RETRY／CLEAN OUT）＋ -1 重探，不再 1→800→900→1 無聲空轉；⑤csystem.cpp InitAllProcessTask（HOME／START）HT9050 加 W906_InitTrayTasks9050（重置 Loader／Empty／Buffer／NewICTray 游標＋Empty 重探），DoCatchTray 400／1000／2000 加對應 9050 Initial*。**未改**：DoPlaceTrayToAuto_9050 的「已有 stack 先撥開」（代理指出會讓每次 +2 層，待 EastSun 機台確認）。其他機種照 golden（AI(W906-TRAYFLOW9050)） | cpp（本列） | Flow9050_Tray 115/115（910 釘死的 3 項改成新行為＋新增 [CW] 5 項）、W6_3_CatchTray、Flow9050_Shuttle、W6_6_*、FP9050_Pure（census 放行 FLOW 只讀的 iTestYFinePitchTask）、FP9050_Index、HT9050_ShtSafe／DryRun／ProdFlow、E044TorqueWait 過；Debug 已連結（程式關著）、release 已建 |
+ | 191 | **Tray Arm 安全檢查改 HT9050 自己的判斷**（EastSun「Loader/Unloader 好像有問題，Loader 不會將 Tray 移動到吸取位置…Empty 不會將空 Tray 補到 Auto 1」→ 只讀查證：golden 安全線 (Empty+Color)/2+6500＝6866 是 9046 排列，HT9050 移到 Empty（7532）和 Loader（191213）每次都被擋（22:23:45「TrayArm moves 7532 to the left error」）→ AskUserQuestion「寫HT9050的自己判斷 Loader在最左邊，Empty在最右邊，Auto在中間」）：Motor/mymotor.cpp TrayArmMotorMove，HT9050（9050GPIB 或 Type_HT9050）：Loader 要在所有 Auto 的外側、Empty 在另一外側、Auto 在 Empty 與 Loader 之間、其他目標在 [Empty, Loader] 內；兩側由教導值決定不寫死；不符 ⇒ 訊息框＋拒絕；HOME 照舊 bCheckPos=false；其他機種照 golden（AI(W906-TRAYSAFE9050)，同一行） | cpp（本列） | Flow9050_Tray 110/110（測試教導點改 HT9050 順序＋新增 [TS] 5 項）、W6_3_CatchTray 過；release 已建；Debug 已編譯、等關程式 |
+ | 190 | **START 後主程式卡 103 秒＋EMG/Servo 誤報：console 輸出改非同步**（另一個工作階段，commit 0c8cd92 CONASYNC）：22:27:31 START 後一次主迴圈 102.9 s（CPU 57 ms），bootsample 顯示卡在 __mingw_printf → WriteFile：stdout 無緩衝、MinGW 逐字寫，F5 下 VS Code 終端停止讀取 ⇒ 每個印字的執行緒一起停；1203 link watch 判 IO 影像遺失（22:29:21 card not open）→ DoSystem IsIndexMotorOutOfPower →「EMG/Servo sensor error」（沒有按 EMG、馬達電源沒斷）。修：main 的 setvbuf 之後同行呼叫 W906_ConsoleAsyncInstall（檔尾）：fd1（console 時 fd2）改寫行程內 pipe，讀取執行緒立即收進記憶體、寫出執行緒照 console 速度送；超過 8 MB 丟最舊並留註記；W906_CONSOLE_ASYNC=0 回舊行為 | cpp 0c8cd92 | 探針 D:\HT9045\_probe_conasync：沒人讀的 pipe 舊碼 15 s 仍卡、新碼 1.9 s 印完；正常讀全部送達；Debug 已編譯、下次 F5 連結 |
+ | 189 | **資料流追蹤 FLOW（oplog）**（EastSun「程式模擬不是用Step By Step，是要由資料流來判斷是否能吸放料，在一次模擬正常的動作看看哪邊會卡住」→ AskUserQuestion「在實機上跑」）：csystem.cpp DoAllProcess 開頭呼叫 W906_FlowTraceTick（檔尾）：機台狀態（run／stop／homed）＋料在哪（Loader 盤 MMTrayY／InArmSuck／FLCarryKit＝In Shuttle1／FTestSuck＝Index／FRCarryKit＝Out Shuttle／OutArmSuck）＋各引擎游標（LoadTask_9050、iCatchFromLoader9050Task、iArmTask、iInArmPlaceToShuttleTask、AutoSHT1/2Task、iTestHeadMotorTask、iTestYFinePitchTask、iTestYFrontTask、iFrontTestSuckICTask、iFrontTestDestroyICTask、OutArmTask、iPickFromShuttle1Task），有變化才寫 oplog「FLOW …」；只讀（AI(W906-FLOWTRACE)） | cpp（本列） | W6_6_CSystemCycle、W6_6_Hub、Flow9050_Shuttle 過；release 已建；Debug 已編譯、等關程式 |
+diff --git a/tests/test_flow9050_tray.cpp b/tests/test_flow9050_tray.cpp
+index 86d1151..848edd9 100644
+--- a/tests/test_flow9050_tray.cpp
++++ b/tests/test_flow9050_tray.cpp
+@@ -290,9 +290,9 @@ int main(int argc, char** argv)
+           "C_MobileTrayTableSelect 295, C_LoaderEdgeClip 315, C_Auto1~3EdgeClip 316-318, C_EmptyEdgeClip 319, C_CasArm_Clip 320 < 321");
+     CHECK(SnMobileTrayHasTray == 802 && SnLoaderDrawerHasTray == 815 && SnCasArmHasTray == 876 && SnCasArmHasTray < MAX_SENSOR_ITEM,
+           "SnMobileTrayHasTray 802, SnLoaderDrawerHasTray 815, SnCasArmHasTray 876 < 900");
+-    CHECK(iLoaderLayerCount_9050 == -1 && iEmptyLayerCount_9050 == -1 && iAuto1LayerCount_9050 == -1 &&
+-          iAuto2LayerCount_9050 == -1 && iAuto3LayerCount_9050 == -1 && iEmptyLayerCountDetect_9050 == 0,
+-          "layer counters start at -1 (910 as written, W-01 Q2 pending); iEmptyLayerCountDetect_9050 0 (never used)");
++    CHECK(iLoaderLayerCount_9050 == -1 && iEmptyLayerCount_9050 == -1 && iAuto1LayerCount_9050 == 0 &&
++          iAuto2LayerCount_9050 == 0 && iAuto3LayerCount_9050 == 0 && iEmptyLayerCountDetect_9050 == 0,
++          "Loader / Empty start at -1 (= probe), Auto1~3 at 0 (= empty; AI(W906-TRAYFLOW9050) 20261007, was -1 in 910); iEmptyLayerCountDetect_9050 0 (never used)");
+     CHECK(iCatchFromLoader9050Task == 1 && iCatchFromEmpty9050Task == 1 && iPlaceToEmpty9050Task == 1 && iPlaceToAuto9050Task == 1 &&
+           iPlaceToBuffer9050Task == 1 && iLoadNewICTrayTask_9050 == 1 && LoadTask_9050 == 1,
+           "every 9050 cursor starts at 1");
+@@ -462,8 +462,8 @@ int main(int argc, char** argv)
+         InitialCatchFromEmpty_9050();
+         const int n = Pump(iCatchFromEmpty9050Task, [] { return DoCatchFromEmpty_9050(); }, 40, 1, seq);
+         CHECK(n <= 40 && SeqIs(seq, { 1, 10, 20, 30, 40, 70, 1 }), "case sequence 1>10>20>30>40>70>1, returns 1");
+-        CHECK(iEmptyLayerCount_9050 == 1, "iEmptyLayerCount_9050 unchanged by a pick (910 has no -- / ++ here; W-01 Q2 (c) pending)");
+-        CHECK(Pos(MEmptyZ) == W906_TrayZ9050(1, 0, 1) && Pos(MTrayX) == Prod.iXTrayEmpty, "MEmptyZ at EmptyZ_Down[1], MTrayX at iXTrayEmpty");
++        CHECK(iEmptyLayerCount_9050 == 0, "AI(W906-TRAYFLOW9050) 20261007: a pick takes the top tray, 1 -> 0 (910 left the count unchanged)");
++        CHECK(Pos(MEmptyZ) == W906_TrayZ9050(1, 0, 0) && Pos(MTrayX) == Prod.iXTrayEmpty, "MEmptyZ at EmptyZ_Down[1], MTrayX at iXTrayEmpty");
+         CHECK(MOT[MTrayX].fHasTray && MOT[MTrayX].iIsCoverTray == 5 && MOT[MTrayX].sTrayID == AnsiString("E1") && MOT[MMEmpty].fHasTray == false,
+               "tray ownership MMEmpty -> MTrayX (case 30)");
+     }
+@@ -600,6 +600,29 @@ int main(int argc, char** argv)
+     //  [TZ] AI(W906-F9050-FIX2) 20261006: Frank 1006「Tray Arm在移動過程中 In/Out Arm ZA要在上位點」-- Motor/mymotor.cpp TrayArmMotorMove,
+     //       Type_HT9050 only; "up" = golden InArmZSafe / OutArmZSafe(DETECT_POS_FLAG) (ReadPos() >= 0, not the HOME lamp)
+     // =======================================================================
++    printf("[CW] AI(W906-TRAYFLOW9050) 20261007: W906_CatchFromEmpty9050 (DoCatchTray 500/600 on HT9050) and the HOME / START reset\n");
++    {
++        extern int W906_CatchFromEmpty9050(int iWhichAuto); extern void W906_InitTrayTasks9050();
++        MachineTypeChoice = Type_HT9050;
++        SetMotPos(MInArmZA, 0); SetMotPos(MOutArmZA, 0);
++        W906_InitTrayTasks9050();
++        CHECK(iEmptyLayerCount_9050 == -1 && iCatchFromEmpty9050Task == 1, "HOME / START reset: Empty count -1 (re-probe), Empty pick cursor 1");
++        iEmptyLayerCount_9050 = 0;  SetMotPos(MEmptyZ, 4321);
++        int r = 0; for (int i = 0; i < 50; ++i) r = W906_CatchFromEmpty9050(1);
++        CHECK(r == 2 && Pos(MEmptyZ) == 4321 && iCatchFromEmpty9050Task == 1, "Empty count 0: answers 2 (no tray -> DoCatchTray case 1), nothing moves");
++        iEmptyLayerCount_9050 = 2;  SetMotPos(MEmptyZ, 0);  SetMotPos(MTrayX, Prod.iXTrayLoad);
++        MOT[MTrayX].ClearTray("Flow9050_Tray");
++        MOT[MMEmpty].fHasTray = true; MOT[MMEmpty].iIsCoverTray = 0; MOT[MMEmpty].sTrayID = "E2";
++        r = 0; for (int i = 0; i < 200 && r != 1; ++i) r = W906_CatchFromEmpty9050(1);
++        CHECK(r == 1 && iEmptyLayerCount_9050 == 1 && MOT[MTrayX].fHasTray && Pos(MEmptyZ) == W906_TrayZ9050(1, 0, 1),
++              "Empty count 2: one pick of the top tray -> answers 1, tray on Tray X, count 1, MEmptyZ at Down[1]");
++        MachineTypeChoice = Type_HT9046_LS;  iCatchFromEmpty9050Task = 77;
++        extern void InitAllProcessTask();  InitAllProcessTask();
++        CHECK(iCatchFromEmpty9050Task == 77, "Type_HT9046_LS: InitAllProcessTask leaves the 9050 cursors alone");
++        MachineTypeChoice = Type_HT9050;  InitAllProcessTask();
++        CHECK(iCatchFromEmpty9050Task == 1 && iEmptyLayerCount_9050 == -1, "Type_HT9050: InitAllProcessTask (HOME / START) resets them");
++        iEmptyLayerCount_9050 = -1;
++    }
+     printf("[TS] AI(W906-TRAYSAFE9050) 20261007: TrayArmMotorMove's HT9050 station order (Loader | Autos | Empty, sides from the teach values)\n");
+     {
+         MachineTypeChoice = Type_HT9050;
+diff --git a/tests/test_fp9050_index.cpp b/tests/test_fp9050_index.cpp
+index e741436..3596889 100644
+--- a/tests/test_fp9050_index.cpp
++++ b/tests/test_fp9050_index.cpp
+@@ -1227,7 +1227,7 @@ int main()
+                 if (c.empty()) continue;
+                 if (!own) {
+                     for (int k = 0; k < nn; ++k)
+-                        if (HasWord(c, names[k], false) && !(b == "cstaterecord.cpp" && k == 11) && !(b == "csystem.cpp" && (k == 0 || k == 2))) {   /* AI(W906-FP9050-MACHINE) 20261007: the DoAllProcess dispatch's DoTestHeadMotorFP / InitTestYFPTask lines are live in SHIP now (EastSun 1007); the old exact-text exemption never matched (those lines were #ifdef'd out of the SHIP scan) */ ++uses; if (where.size() < 300) where += " " + b + ":" + std::to_string(i + 1) + " " + names[k]; }
++                        if (HasWord(c, names[k], false) && !(b == "cstaterecord.cpp" && k == 11) && !(b == "csystem.cpp" && (k == 0 || k == 2 || k == 11))) {   /* AI(W906-FP9050-MACHINE) 20261007: the DoAllProcess dispatch's DoTestHeadMotorFP / InitTestYFPTask lines are live in SHIP now (EastSun 1007); the old exact-text exemption never matched (those lines were #ifdef'd out of the SHIP scan); k 11 = iTestYFinePitchTask READ by csystem.cpp W906_FlowTraceTick (AI(W906-FLOWTRACE), op-log only) */ ++uses; if (where.size() < 300) where += " " + b + ":" + std::to_string(i + 1) + " " + names[k]; }
+                     if (c.find("#") != std::string::npos && c.find("include") != std::string::npos) {
+                         std::string low = v[i]; for (std::size_t q = 0; q < low.size(); ++q) low[q] = (char)std::tolower((unsigned char)low[q]);
+                         if (low.find("atester_finepitch.h") != std::string::npos) { ++includers; where += " include:" + b; }
+-- 
+2.55.0.windows.5
+
