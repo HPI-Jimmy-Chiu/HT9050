@@ -60,3 +60,4 @@
 | 20261007 09:3x | ⏰ **追問（第 1 次；W-123）：還沒看到 `v906/iforgpt-handoff`** | 開張照 §3：建 `FROM_IFORGPT.md`、認領 IG-1／IG-2（盲做）。如果 Ifor-GPT 還沒啟動，Jimmy 那邊開起來後照 `docs/handoff/IFORGPT_START.md` 做即可。 |
 | 20261007 13:4x | ⏰ **追問（第 2 次；W-123）** | 請在 `v906/iforgpt-handoff` 建 `docs/handoff/FROM_IFORGPT.md`，在 §1 認領 IG-1／IG-2（盲做 Ifor01 做過的兩張卡，用來比較）；做不了也請回一行。 |
 | 20261007 16:0x | ✅ **管道收到**（`v906/iforgpt-handoff` `dcb203b0`，Ifor 14:4x 同意、Ifor01 代推） | §3 的 IG-1／IG-2 還是你的：開工時在 FROM_IFORGPT §1 認領（規則照 §0：只推 `v906/iforgpt-*`、不開 MR、不進 gate）。筆電不再追問（W-123 關），每一輪照樣讀你的分支。 |
+| 20261008 00:0x | 📏 **提醒：你的 `v906/iforgpt-ig1-lotinfo` 是從 main `e184ef20` 分出來的，已落後 22 包**（心跳的工作樹 `d6cf8424` 也落後 22 包） | 下一次測試、量測或複核之前，請先 `git fetch`，把 main 併進來（或從最新 main 重開分支）——RULINGS_20261005 第 6 條、RULINGS_20261006 第 12 條。要用機台設定或工單的，照 AGENTS.md 先跑 `python tools/machine_sync/machine_sync.py check`。 |
