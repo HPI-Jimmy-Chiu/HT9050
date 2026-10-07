@@ -1,0 +1,120 @@
+From f960a66dbe9dc9696130b4c8ffd77d959fa34735 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 10:56:19 +0800
+Subject: [PATCH] PKG-165 (web): package 165 web files -- background.html,
+ page/ht9045_main_close.js (Exit closes the disconnected operator window),
+ page/ht9045_mv9050_axes.js (MotionView 9050 axes status bar); OLD, CRLF kept
+ as the machine's; HW.teach.html merged = machine.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ background.html            | 10 ++++++++++
+ page/ht9045_main_close.js  | 12 ++++++++----
+ page/ht9045_mv9050_axes.js | 33 +++++++++++++++++++++++++++++++--
+ 3 files changed, 49 insertions(+), 6 deletions(-)
+
+diff --git a/background.html b/background.html
+index 721924b..3457ab6 100644
+--- a/background.html
++++ b/background.html
+@@ -1261,6 +1261,16 @@ function refreshGuardUi(){
+ //   按是就用 ExecuteScript 叫這裡：走主畫面 Exit 的同一條路（ht9045_main_close.js HT9045MainClose.close，答案預先填 YES，
+ //   EastSun「我只需要讓客戶確認是否真的要關閉軟體」—— 不會再問第二次）。守衛（運轉中、機台內有 IC）照樣由 C++ 擋並顯示原因；
+ //   通過後 wb_serve 關站，最後通知程式視窗自己關掉。回 'exit'＝已交給 Exit；'none'＝主畫面還沒載入（程式視窗就直接關）。
++// 僅明確斷線時允許關閉 HMI；native shell 在真正關閉前再次檢查。
++window.HT9045ShellIsOffline=function(){
++  try { var rs=window.HT9045Recipe && HT9045Recipe.status(); return !!rs && rs.live===false; }
++  catch(e) { return false; }
++};
++window.HT9045ShellCloseOffline=function(){
++  if(!window.HT9045ShellIsOffline()) return false;
++  window.close();
++  return true;
++};
+ window.HT9045ShellCloseRequest=function(){
+   try{
+     var conn=false; try{ var rs=window.HT9045Recipe && HT9045Recipe.status(); conn=!!(rs && (rs.live!==undefined ? rs.live : rs.connected)); }catch(e){}   // AI(W906-HMICLOSE) 20261006 (NB2-2, Jimmy 1006 10:5x「網頁如果已經發生斷線，應該要能夠關閉的」): live, not connected -- since RECONNECT-A (ht9045_link.js 20261005) connected stays true while the hub reconnects to a wb_serve that is gone, so this answered 'exit' and the HMI window waited for a quit message that never came
+diff --git a/page/ht9045_main_close.js b/page/ht9045_main_close.js
+index a799066..153ef48 100644
+--- a/page/ht9045_main_close.js
++++ b/page/ht9045_main_close.js
+@@ -345,15 +345,19 @@
+ 
+   // opts.answers：測試用，[true|false, true|false] 依序回答兩個確認框；沒給就用 window.confirm（golden 的兩行字）
+   function closeProgram(opts) {
++    // 斷線只關閉操作視窗，不向失聯的控制程式送出關站命令。
++    if (window.HT9045Recipe && typeof HT9045Recipe.status === 'function' && HT9045Recipe.status().live === false) {
++      var host = window.parent;
++      if (host && typeof host.HT9045ShellCloseOffline === 'function' && host.HT9045ShellCloseOffline()) {
++        return Promise.resolve({ executed: false, guard: 'offline-window-close' });
++      }
++      return Promise.resolve({ executed: false, guard: 'link-down' });
++    }
+     if (shutting) {                                                           // AI(W906-PROD-S121) 20260926: 關站中
+       if (ui && q44.hidden) q44Hide(false);                                   // AI(W906-FRW-S167) 20260928: 收起時再按 Exit ＝打開蓋層
+       return Promise.resolve({ executed: false, guard: 'closing-local' });
+     }
+     if (busy || Date.now() < coolUntil) return Promise.resolve({ executed: false, guard: 'busy-local' });
+-    if (window.HT9045Recipe && typeof HT9045Recipe.status === 'function' && HT9045Recipe.status().live === false) {   // AI(W906-HMICLOSE) 20261006 (NB2-2, Jimmy 1006 10:5x「網頁如果已經發生斷線，應該要能夠關閉的」): wb_serve is gone (or not answering) -- nothing to close on its side; the commands below would only come back "失敗" one after another. Say so and let the window be closed.
+-      if (!(opts && opts.answers)) alert('與 wb_serve 的連線已經中斷（程式已經結束或沒有回應），沒有東西需要關。\n直接關閉這個視窗即可；要再操作，請重新啟動 wb_serve。');
+-      return Promise.resolve({ executed: false, guard: 'link-down' });
+-    }
+     var b = $('sbCloseProgram');
+     var answers = (opts && opts.answers) ? opts.answers.slice() : null;
+     function ask(r, fallback) {
+diff --git a/page/ht9045_mv9050_axes.js b/page/ht9045_mv9050_axes.js
+index 83f9bdf..0249845 100644
+--- a/page/ht9045_mv9050_axes.js
++++ b/page/ht9045_mv9050_axes.js
+@@ -31,6 +31,34 @@
+     } catch (e) { /* not same-origin / no frame: as a top-level page */ }
+   })();
+ 
++  var liveBar, lastSeq = null, lastSeqAt = 0, lastPositions = null;
++  function status(text, ok) {
++    if (!liveBar) {
++      liveBar = document.createElement('div');
++      liveBar.setAttribute('role', 'status');
++      liveBar.style.cssText = 'position:sticky;top:0;z-index:50;padding:8px 12px;background:#fff;border-bottom:1px solid #b9c2c8;font:14px sans-serif;';
++      document.body.insertBefore(liveBar, document.body.firstChild);
++    }
++    liveBar.style.color = ok ? '#17683d' : '#a13c13';
++    liveBar.textContent = text;
++  }
++  function updateStatus(rt, pos) {
++    var r = rt && rt.runtime, now = Date.now(), moved = false;
++    if (!r || r.connected !== true || r.seq == null) {
++      status('尚未收到即時資料，請確認控制程式已啟動。', false); return;
++    }
++    if (r.seq !== lastSeq) { lastSeq = r.seq; lastSeqAt = now; }
++    Object.keys(pos).forEach(function (id) {
++      if (lastPositions && lastPositions[id] && lastPositions[id].v !== pos[id].v) moved = true;
++    });
++    lastPositions = pos;
++    if (now - lastSeqAt > 3000) {
++      status('資料已超過 3 秒未更新，請檢查程式連線。', false); return;
++    }
++    status('即時資料更新中｜' + (moved ? '馬達位置有變化' : '馬達位置未變（可能停止或等候）') +
++      '｜更新第 ' + r.seq + ' 次。請看下方軸讀數；示意圖尚未顯示即時動作。', true);
++  }
++
+   function gated() { return !!(document.body && document.body.classList.contains('gated')); }
+   function pollAllowed() { return !document.hidden && (!winHosted || winShown) && !gated(); }
+ 
+@@ -70,10 +98,11 @@
+       return r.json();
+     }).then(function (rt) {
+       busy = false; fails = 0;
+-      fill(positions(rt));
++      var pos = positions(rt);
++      fill(pos); updateStatus(rt, pos);
+     }).catch(function () {
+       busy = false;
+-      if (++fails === 3) fill({});   // server gone: show "—" instead of the last positions
++      if (++fails >= 3) { fill({}); status('無法取得即時資料，請確認控制程式與連線。', false); }   // server gone: show "—" instead of the last positions
+     });
+   }
+ 
+-- 
+2.55.0.windows.5
+
