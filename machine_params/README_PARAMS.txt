@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-07 16:50
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 5c36fef WORKLOG: ?2 row 168 (point data push + note to Jimmy).／web 113a1ef。
+HT9050 機台參數快照（machine_params\）—— 2026-10-07 16:58
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 99ab1c5 NOTE-JIMMY-TEACHDATA-2: Out Shuttle Z line corrected (EastSun 1007: the Index Z he／web 4e68790。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
