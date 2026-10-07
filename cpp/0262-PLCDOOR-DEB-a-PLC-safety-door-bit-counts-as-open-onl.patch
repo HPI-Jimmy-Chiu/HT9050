@@ -1,0 +1,161 @@
+From 4c92ace12b40f026be16cbecb1dfe89c8380dd8b Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 09:38:31 +0800
+Subject: [PATCH] =?UTF-8?q?PLCDOOR-DEB:=20a=20PLC=20safety-door=20bit=20co?=
+ =?UTF-8?q?unts=20as=20open=20only=20after=200.5=20s=20open=20in=20a=20row?=
+ =?UTF-8?q?=20--=20EastSun=201007=20'=E4=BD=A0=E9=96=8B=E5=AE=89=E5=85=A8?=
+ =?UTF-8?q?=E9=96=80=20=E6=9C=89=E5=81=B5=E6=B8=AC=E9=80=A3=E7=BA=8C?=
+ =?UTF-8?q?=E9=96=8B0.5=E7=A7=92=E6=89=8D=E7=95=B0=E5=B8=B8=E5=97=8E=3F=20?=
+ =?UTF-8?q?=E4=B8=8D=E7=84=B6=E8=A8=8A=E8=99=9F=E5=8F=AF=E8=83=BD=E6=9C=83?=
+ =?UTF-8?q?=E7=9E=AC=E9=96=93=E9=96=83=E7=88=8D'=20(after=20MES1613=20at?=
+ =?UTF-8?q?=2009:32:02=20while=20the=20PLC=20read=20door=203=20closed=20be?=
+ =?UTF-8?q?fore=20and=20after).?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+MyPLC/MyPLC_IO_Modbus.cpp: W906_PlcM1SDoorDebounce (end of file) runs on every model-1 frame inside W906_PlcM1SFill, before
+W906_PlcM1SAllDoors (same line). A door bit of golden's iSafeDoor[] list on the PLC (ISABase 4) that reads 0 is held at 1 until
+it has read 0 on every frame for g_w906PlcDoorOpenMs = 500 ms; 1 passes at once and clears the timer. Port 310 (all doors,
+WAR16125) is made from the held bits, so it gets the same 0.5 s. EMG (Port 300) and all other bits untouched.
+Done at the data layer, not in CheckSafeDoorIsClosed: that one is also called once by START / a manual move / the tray clamp,
+where a timer would let a really open door pass.
+
+tests/test_myplc_modbus.cpp: [5] (mapping, frame by frame) runs with 0 ms; new [8] through the real PLCIOTaskCycle path in real
+time: one-frame flicker held, 250 ms held, flicker clears the timer, 600 ms open -> 0 and Port 310 = 0, closing at once, EMG
+passed. 83 passed / 0 failed. Code-after-comment scan 0. wb_serve compiled; its link waits for EastSun's running program.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ MyPLC/MyPLC_IO_Modbus.cpp   | 38 +++++++++++++++++++++++++++++++-
+ tests/test_myplc_modbus.cpp | 43 ++++++++++++++++++++++++++++++++++---
+ 2 files changed, 77 insertions(+), 4 deletions(-)
+
+diff --git a/MyPLC/MyPLC_IO_Modbus.cpp b/MyPLC/MyPLC_IO_Modbus.cpp
+index 321f925..6204419 100644
+--- a/MyPLC/MyPLC_IO_Modbus.cpp
++++ b/MyPLC/MyPLC_IO_Modbus.cpp
+@@ -421,7 +421,7 @@ static void W906_PlcM1SFill(int slave, const VTBYTEDATA& data)
+         InPortData_Byte[slave][1+n]=m[2+n];                                     // Input status byte n
+     InPortData_Byte[slave][20]=m[30];                                           // OSSD status byte 0
+     InPortData_Byte[slave][21]=m[31];                                           // OSSD status byte 1
+-    W906_PlcM1SAllDoors(slave);                                                 // AI(W906-PLCDOOR) 20261006: byte 17 bit 0 = all PLC safety doors closed (end of file)
++    void W906_PlcM1SDoorDebounce(int); W906_PlcM1SDoorDebounce(slave);  W906_PlcM1SAllDoors(slave);   // AI(W906-PLCDOOR-DEB) 20261007: EastSun「有偵測連續開0.5秒才異常嗎? 不然訊號可能會瞬間閃爍」-- a PLC door bit counts as open only after 0.5 s open in a row (end of file), before the all-doors bit is made; same line.  AI(W906-PLCDOOR) 20261006: byte 17 bit 0 = all PLC safety doors closed (end of file)
+ }
+ //------------------------------------------------------------------------------
+ //AI(W906-PLCDOOR) 20261006: EastSun 1006「門警報不用看其他地方 看PLC通訊就好 請把IO_TABLE 做修正 寫出對應rear PLC的設定 並且功能要齊全」.
+@@ -481,3 +481,39 @@ bool W906_SafePlcLinkLost()
+         return false;
+     return !PlcComm.IsConnected() || s_w906PlcMisses >= kW906PlcLostMisses;
+ }
++//------------------------------------------------------------------------------
++//AI(W906-PLCDOOR-DEB) 20261007: EastSun 1007「你開安全門 有偵測連續開0.5秒才異常嗎? 不然訊號可能會瞬間閃爍」-- after MES1613 (door 3)
++//  came at 09:32:02 while the PLC read door 3 closed before and after. Runs on every model-1 frame (W906_PlcM1SFill), so the time is
++//  measured where the data arrives, not in CheckSafeDoorIsClosed (that one is also called ONCE by START / a manual move / the tray
++//  clamp -- a delay there would let a door that is really open pass such a one-shot check).
++//      door bit 1 (closed) -> passes at once, its open timer is cleared
++//      door bit 0 (open)   -> held at 1 until it has read 0 on every frame for g_w906PlcDoorOpenMs (500 ms), then passes as 0
++//  Only the door bits of golden's iSafeDoor[] list that the IO table puts on the PLC (ISABase 4) -- the same set W906_PlcM1SAllDoors
++//  uses, which runs right after on the held bits, so Port 310 (WAR16125) gets the same 0.5 s. EMG (Port 300) and every other bit are
++//  untouched (an E-stop is never delayed). The safety PLC's own door / OSSD reaction is hardware and not affected by this.
++int g_w906PlcDoorOpenMs = 500;
++void W906_PlcM1SDoorDebounce(int slave)
++{
++    static DWORD s_openSince[INPUT_MAX_Slave][17][8] = {};                     // 0 = not open; index j = 1..16 (Input byte j-1)
++    if(slave<0 || slave>=INPUT_MAX_Slave)
++        return;
++    DWORD now=::GetTickCount();  if(now==0) now=1;
++    for(int i=0; i<MAX_SAFE_DOOR_CNT; i++)
++    {
++        const int s=iSafeDoor[i];
++        if(s<0 || s>=MAX_SENSOR_ITEM || Sen[s].ISABase!=ePLCbase)
++            continue;
++        const int j=Sen[s].Port-PLCIO_INPUT_START_PORT_NUMBER+1, b=Sen[s].Bit;
++        if(j<1 || j>16 || b<0 || b>7)
++            continue;                                                           // W906_PlcM1SAllDoors counts it as open, unchanged
++        if(InPortData_Byte[slave][j] & MyBitMask[b])
++            s_openSince[slave][j][b]=0;
++        else
++        {
++            if(s_openSince[slave][j][b]==0)
++                s_openSince[slave][j][b]=now;
++            if((long)(now-s_openSince[slave][j][b]) < (long)g_w906PlcDoorOpenMs)
++                InPortData_Byte[slave][j]|=MyBitMask[b];                        // not open long enough yet: still "closed"
++        }
++    }
++}
+diff --git a/tests/test_myplc_modbus.cpp b/tests/test_myplc_modbus.cpp
+index 8d42adb..56f4daa 100644
+--- a/tests/test_myplc_modbus.cpp
++++ b/tests/test_myplc_modbus.cpp
+@@ -393,7 +393,7 @@ int main()
+     test_clientsocket_sim();
+     test_modbustcpclient();
+     test_myplc_io_modbus();
+-    test_m1s_model();   void test_m1s_alldoors(); test_m1s_alldoors();   void test_m1s_engine_path(); test_m1s_engine_path();   /*AI(W906-PLCDOOR-2) 20261006: [6], end of file*/   void test_plc_link_lost(); test_plc_link_lost();   /*AI(W906-PLCLOST) 20261007: [7], end of file*/   // AI(W906-PLCMODEL) 20261006   // AI(W906-PLCDOOR) 20261006: [5], end of file
++    test_m1s_model();   void test_m1s_alldoors(); test_m1s_alldoors();   void test_m1s_engine_path(); test_m1s_engine_path();   /*AI(W906-PLCDOOR-2) 20261006: [6], end of file*/   void test_plc_link_lost(); test_plc_link_lost();   /*AI(W906-PLCLOST) 20261007: [7], end of file*/   void test_plc_door_debounce(); test_plc_door_debounce();   /*AI(W906-PLCDOOR-DEB) 20261007: [8], end of file*/   // AI(W906-PLCMODEL) 20261006   // AI(W906-PLCDOOR) 20261006: [5], end of file
+ 
+     printf("\n-------------------------------------------------------------\n");
+     printf(" RESULT: %d passed, %d failed\n", g_pass, g_fail);
+@@ -431,7 +431,7 @@ static void m1s_feed(unsigned char in1, unsigned char in2)
+ void test_m1s_alldoors()
+ {
+     printf("\n[5] SafePlcModel=1: all-doors-closed input (Port 310 / Bit 0) made from the PLC doors of the IO table\n");
+-    iSafePlcModel = 1;
++    iSafePlcModel = 1;  extern int g_w906PlcDoorOpenMs; g_w906PlcDoorOpenMs = 0;   // AI(W906-PLCDOOR-DEB) 20261007: this block tests the MAPPING frame by frame -> no 0.5 s hold here ([8] tests the hold); same line
+     for (int i = 0; i < MAX_SAFE_DOOR_CNT; ++i) Sen[iSafeDoor[i]].ISABase = 0;
+ 
+     m1s_feed(0x15, 0x55);
+@@ -465,7 +465,7 @@ void test_m1s_alldoors()
+     CHECK(bPLCInData[0][17][0] == false, "a PLC door outside the 16 Input status bytes counts as open");
+ 
+     for (int i = 0; i < MAX_SAFE_DOOR_CNT; ++i) Sen[iSafeDoor[i]].ISABase = 0;
+-    iSafePlcModel = 0;
++    iSafePlcModel = 0;  g_w906PlcDoorOpenMs = 500;   // AI(W906-PLCDOOR-DEB) 20261007: back to the production value; same line
+ }
+ 
+ // ===========================================================================
+@@ -545,3 +545,40 @@ void test_plc_link_lost()
+     iSafePlcModel = 0;
+     Enable_PLCSafety_IO = savedPlc;
+ }
++// ===========================================================================
++//  [8] AI(W906-PLCDOOR-DEB) 20261007: EastSun「你開安全門 有偵測連續開0.5秒才異常嗎? 不然訊號可能會瞬間閃爍」-- a PLC door bit counts
++//      as open only after 0.5 s open on every frame (W906_PlcM1SDoorDebounce, MyPLC_IO_Modbus.cpp EOF). Driven through the REAL
++//      PLCIOTaskCycle -> W906_PlcM1SFill path (m1s_feed), real time. Door 3 = Port 301 / Bit 4 = Input byte 1 bit 4 = bPLCInData[0][2][4].
++// ===========================================================================
++void test_plc_door_debounce()
++{
++    printf("\n[8] PLC door open must last 0.5 s before it counts (flicker filter); closing counts at once; Port 310 follows\n");
++    extern int g_w906PlcDoorOpenMs;
++    iSafePlcModel = 1;  g_w906PlcDoorOpenMs = 500;
++    const int sn[7]   = { SnSafeDoor1, SnSafeDoor2, SnSafeDoor3, SnSafeDoor4, SnSafeDoor5, SnSafeDoor6, SnSafeDoor7 };
++    const int port[7] = { 0x301, 0x302, 0x301, 0x302, 0x302, 0x301, 0x302 };
++    const int bit[7]  = { 0, 6, 4, 0, 2, 2, 4 };
++    for (int i = 0; i < 7; ++i) { Sen[sn[i]].ISABase = ePLCbase; Sen[sn[i]].Port = port[i]; Sen[sn[i]].Bit = bit[i]; }
++    const unsigned char closed1 = 0x15, open3 = 0x05;      // Input byte 1 with door 3 (bit 4) closed / open
++    m1s_feed(closed1, 0x55);
++    CHECK(bPLCInData[0][2][4] == true && bPLCInData[0][17][0] == true, "all doors closed: door 3 = 1, Port 310 = 1");
++    m1s_feed(open3, 0x55);
++    CHECK(bPLCInData[0][2][4] == true && bPLCInData[0][17][0] == true, "door 3 reads open for one frame: still closed (held)");
++    std::this_thread::sleep_for(std::chrono::milliseconds(250));
++    m1s_feed(open3, 0x55);
++    CHECK(bPLCInData[0][2][4] == true, "open for ~250 ms: still held");
++    m1s_feed(closed1, 0x55);
++    CHECK(bPLCInData[0][2][4] == true, "back to closed (a flicker): closed, the open timer is cleared");
++    m1s_feed(open3, 0x55);
++    std::this_thread::sleep_for(std::chrono::milliseconds(300));
++    m1s_feed(open3, 0x55);
++    CHECK(bPLCInData[0][2][4] == true && bPLCInData[0][17][0] == true, "open again, 300 ms since the restart (550 ms since the first open): still held -- the timer restarted");
++    std::this_thread::sleep_for(std::chrono::milliseconds(300));
++    m1s_feed(open3, 0x55);
++    CHECK(bPLCInData[0][2][4] == false && bPLCInData[0][17][0] == false, "open on every frame for 600 ms: door 3 = 0 and Port 310 = 0 (MES1613 / WAR16125 can fire)");
++    m1s_feed(closed1, 0x55);
++    CHECK(bPLCInData[0][2][4] == true && bPLCInData[0][17][0] == true, "closed: counts at once (no delay on closing)");
++    CHECK(bPLCInData[0][1][0] == true, "EMG (Port 300 / Bit 0, not a door) is passed straight through");
++    for (int i = 0; i < MAX_SAFE_DOOR_CNT; ++i) Sen[iSafeDoor[i]].ISABase = 0;
++    iSafePlcModel = 0;
++}
+-- 
+2.55.0.windows.5
+
