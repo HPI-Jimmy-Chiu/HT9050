@@ -1,0 +1,1744 @@
+// =============================================================================
+//  WebMotorAccessLive.cpp  --  `motor.access` 的真實後端（只連進 wb_serve）
+//
+//  AI(W906-W4-MOTOR) 20260925.  介面與分層見 WebMotorAccess.h。
+//
+//  兩套編號怎麼對起來（都是量過的，不是猜的）：
+//    * MOT[] 下標 = Mot_Table 的 No "M%02d"（cinitial.cpp InitialMotorParameter 的對法；
+//      JsonBridge/ChanMotorPoints.cpp MotorIndexOf 同一條規則）。
+//    * 1203 軸槽 = 監看器樣本的 (station, stationAxis) == Mot_Table 的 (BoardID, Port)。
+//      production 以 Acm_AxOpenbyID(dev, BoardID, Port) 開軸（Motor/myEthercatmotor.cpp:384），
+//      EastSun 的監看器把每一軸以「擁有它的站＋站內軸號」唯一命名（EtherCAT/Pci1203Monitor.cpp:1440 起），
+//      machines/HT9050/Pci1203Axis.ini 的段名 [station<N>.axis<M>] 也是這個鍵。
+//      對不到就拒絕並說出站號／軸號 —— 不退回「用 BoardID 當軸槽下標」這種看起來會動的猜法。
+// =============================================================================
+#include "WebMotorAccess.h"
+
+#include <cstdio>
+#include <cstdlib>
+#include <map>                         //AI(W906-MT-E2) 20260925: GoldenReloadMotorParams
+#include <string>
+#include <vector>
+int W906_PanelHomeKeyArm(const char* who, std::string& why);   //AI(W906-TEACH-HOMEALL) 20261003 (machine cpp 0153; ST02-P2 port 20261006 St02-E): WebMainScanKey.cpp (global scope -- a block-scope declaration inside the anonymous namespace below would name a different function). On the old blank line
+#include "vclcompat/vcl_compat.h"
+#include "database.h"                  // HSys.MotTable / TMOTDATA
+#include "common.h"                    //AI(W906-MT-E2) 20260925: MotTablePath (Reload Motor Data re-reads it)
+#include "cmydef.h"                    // MTestY1
+#include "Motor/mymotor.h"             // MOT[MAX_TRAY_MOTOR]
+#include "Motor/HTMotor.h"             // iServoOn（Led 下標）
+#include "EtherCAT/Pci1203Monitor.h"   // Pci1203Monitor() / Pci1203AxisSample
+#include "forms/fMotorTest.h"          // fMotorTest->bSingleHome
+#include "forms/fTeach.h"              // W5-b：fTeach->CheckCanMove／IsCanQuickJogMove（uteach 的互鎖）
+#include "Motor/myEthercatmotor.h"     // TMyEtherCatMotor::W906_RuntimeAcc/Dec
+#include "mysensor.h"                  // Sen[]（IsMotorCanRun）
+#include "cprod.h"
+#include "csystem.h"                   // CheckSafeDoorIsClosed
+#include "canary_support.h"            // ShowMyMessage
+#include "mycylin.h"                   // Cylinder[]（飛梭閘門，NB2 R21 W4B-2）
+#include "MachineType.h"               // SOFT_SIMULTE
+#include "JsonBridge/ChanMotor.h"      // W4-c：MotorRuntimeOverlay
+#include "JsonBridge/ChanIo.h"         //AI(W906-MT-E3c) 20260925: IoByteSample / PickIoSample (the relay's DO read-back)
+#include "EtherCAT/Pci1203IoRoute.h"   //AI(W906-MT-E3c) 20260925: Pci1203RouteSetSource / Pci1203RouteLastWrite (Motor Power's SW[] writes)
+#include "WebWindowRegistry.h"         //AI(W906-MT-E3c) 20260925: WebWindowRegistryFShowPolicy (the engine's W906_FormFShowHook)
+#include "myswitch.h"                  //AI(W906-MT-E3c) 20260925: SW[] (SwMotorRelay / SwServerON)
+#include "forms/fHome.h"               //AI(W906-MT-E3c) 20260925: fHome->GaliMotorServoOff (MT-E3b)
+#include "LastSet.h"                   // AI(W906-W5-b) 20260925: Tech（WebTeachButtons.gen.inc 的 Parameter 指標，與 fTeach 登錄表核對）
+extern std::string g_W906MotorErrorReason;   //AI(W906-ALARM-WHY) 20261003: Motor/mymotor.cpp -- file scope (a block-scope extern inside namespace ht9045 would name ht9045::...)
+#include "cpublic.h"                  // AI(W906-W5-b) 20260925: 登錄條件用的組態旗標（與 forms/fTeachRegistry.cpp 同一組 include）
+//AI(W906-MERGE-56bbf785) 20260926: the include lists of both sides (machine MT-E3c + laptop W5-b), nothing dropped.
+#include "EtherCAT/Pci1203MotorRoute.h"   //AI(W906-ENG1203) 20260929: review HIGH-1 / MEDIUM-1 -- W906_EngineRouteForeignStop (EOF) and the route's per-axis fault latch (OverlaySnapshot). Was a blank line: no line below moves
+extern void StopAllMotor(bool bIndexCanStop);   // Motor/myGALILmotor.cpp（golden Motor/myGALILmotor.cpp:4712）
+void SetMotorAccelSpeed(int Index, int ADCSpeed);   //AI(W906-MT-E2) 20260925: cinitial.cpp:16730 (golden cinitial.h:51) -- Reload Motor Data
+#include "EtherCAT/Pci1203GaliRoute.h"   //AI(W906-INDEXZ) 20260930: INBOX 113 -- the Index Z1 route's foreign-stop entry (W906_EngineRouteForeignStop, EOF) and its fault text (OverlaySnapshot). Was a blank line: no line below moves
+void (*g_W906BrakeNote)(const char*) = 0;           //AI(W906-BRAKE-AXIS) 20260929: the op log's BRAKE line (tools/wb_serve.cpp W906_OpLogInit registers it)
+void InitProcessSingleMotorTask(int iMot);  bool ProcessSingleMotorHome(int iMot);  bool W906_TeachFixedMotorsLive(const std::string& which, std::vector<int>& mis, std::string& why);   //AI(W906-TEACH-ZALLUP) 20261001: + W906_TeachFixedMotorsLive (body at EOF)  //AI(W906-MT-SMHOME) 20261001: acatchtray_shims.h:423-424 (golden uhome.cpp:397 / :415; translated at the end of uhome.cpp, AI(W906-SMHOME))
+namespace ht9045 {
+
+namespace {
+
+const unsigned long kSvOnBit = 0x00004000ul;   // AX_MOTION_IO_SVON（WebBridgeTags.cpp 的 21 個 motionIO 位元表同值）
+
+int MotorIndexOf(const AnsiString& no)
+{
+    const std::string s(no.c_str());
+    if (s.size() < 2 || (s[0] != 'M' && s[0] != 'm')) return -1;
+    for (std::size_t i = 1; i < s.size(); ++i)
+        if (s[i] < '0' || s[i] > '9') return -1;
+    return std::atoi(s.c_str() + 1);
+}
+
+//AI(W906-MT-E3c) 20260925: the Mot_Table row behind MOT[mi] (first row whose No is "M%02d"(mi), cinitial.cpp's rule) and
+//  whether it is a PCI1203 row -- EastSun R2: such a row is a 1203 axis whatever INDEX_MOTION_CARD says (M14 MTestZ1).
+const TMOTDATA* RowOfIndex(int mi)
+{
+    for (std::size_t i = 0; i < HSys.MotTable.size(); ++i) {
+        const TMOTDATA* r = HSys.MotTable[i];
+        if (r && MotorIndexOf(r->No) == mi) return r;
+    }
+    return 0;
+}
+bool RowIs1203(int mi)
+{
+    const TMOTDATA* r = RowOfIndex(mi);
+    return r && std::string(r->CardModel.c_str()) == "PCI1203";
+}
+
+//AI(W906-MT-E3c) 20260925: the monitor's DO read-back of SW[sw]'s bit, the way the route addresses it
+//  (EtherCAT/Pci1203IoRoute.cpp RouteWriteBit/CheckWrite_: ring = Lane, station = IP, byte = Port/8, bit = Port%8;
+//  JsonBridge/ChanIo.h PickIoSample). false = no reading: the point is disabled, the engine's IO is not routed to the 1203,
+//  no open / polling monitor, the byte is not in the card map, or it did not read back.
+bool RelayCardBit(int sw, bool& bit)
+{
+    bit = false;
+    const TMySwitch& s = SW[sw];
+    if (!s.Enable || s.Port < 0 || !ht9045::Pci1203RouteInstalled()) return false;
+    ht9045::TPci1203Monitor* mon = ht9045::Pci1203Monitor();
+    if (mon == 0 || !mon->Open_() || mon->Disabled() || !mon->card().open) return false;
+    std::vector<ht9045::sjson::IoByteSample> v;
+    for (int i = 0; i < mon->doCount(); ++i) {
+        const ht9045::Pci1203DoSample& d = mon->do_(i);
+        ht9045::sjson::IoByteSample b;
+        b.valid = d.valid; b.ring = d.ring; b.station = d.station; b.stationChan = d.stationChan; b.byteData = d.byteData;
+        v.push_back(b);
+    }
+    const int k = ht9045::sjson::PickIoSample(v, s.Ring, s.IP, s.Port / 8, 0);
+    if (k < 0 || !v[k].valid) return false;
+    bit = ((v[k].byteData >> (s.Port % 8)) & 1) != 0;
+    return true;
+}
+
+//AI(W906-MERGE-56bbf785) 20260926: machine helpers above (MT-E3c) + the laptop's two teach-page thunks below (W5-b), both kept.
+//AI(W906-W5-b) 20260925: W5B-3 —— forms/fTeach.cpp IsCanQuickJogMove 本體的兩個掛鉤（GoldenTeachCanMove 呼叫本體之前裝上）：
+//  1203 軸的「Z 在原點」讀監看器 ORG、SOFT_SIMULTE 下被移動的是真的會動的 1203 軸就跑本體。邏輯在 WebMotorAccess.cpp（有單元測試）。
+bool TeachLive1203Thunk(int mi) { return MotorAccessTeachLive1203(MotorAccessLiveBackend(), mi); }
+int  TeachHomeLedThunk(int mi)  { return MotorAccessTeachInterlockHome(MotorAccessLiveBackend(), mi); }   //AI(W906-TEACH-ZDISABLED) 20261001: was MotorAccessTeachHomeLed; + Mot_Table Enable=0 的非 1203 軸＝-3 不檢查（EastSun 1001「如果 testz2 enable 是0 那就不要擋testz2」；引擎 W906_HookHt9050OrgHome 仍用 MotorAccessTeachHomeLed）
+bool OrgActiveLowHT9050()        { return W906_GpibModel == "9050GPIB"; }   //AI(W906-HT9050-ORG) 20261001: HT9050＋1203＝ORG low 才是在原點（WebMotorAccess.h）
+
+//AI(W906-BRAKE-AXIS) 20260929: EastSun 20260929「只要SERVO ON 就必須要先激磁 0.5秒後 觸發io的煞車」／「寫在激磁 只要有激磁做動 0.5秒
+//  就要觸發對應io煞車 如果有煞車io的話」. One brake output per axis (IO_Table.csv names; output ON = release, EastSun R1):
+//    SVON seen by the monitor       -> 0.5 s later that axis' output ON (release), once per SVON; motor power on and no EMG
+//                                      (IsIndexMotorOutOfPower, EastSun 20260926) -- otherwise it waits until they are.
+//    SVON gone (drive alarm, ...)   -> the output OFF (hold) at once. The Motor Test / teach servo OFF holds it BEFORE the off
+//                                      (BrakeHoldBeforeServoOff, then 100 ms, then Acm_AxSetSvOn 0).
+//  An axis "has" its brake when the output is Enable=1 in IO_Table and its Mot_Table row is an enabled PCI1203 axis that the
+//  monitor opened. The golden group releases (DoSystem G05 / CountMotorPowerDelay G16 / HOME start) keep their groups but now
+//  also need every axis of the group to be SVON for 0.5 s (W906_HookBrakeServoOn), and none of them right after a hold.
+//  ⚠ IO_Table also lists SwCassetteEmptyMotBreaker (MEmptyZ, st16 ch25) and SwCassetteAuto3MotBreaker (MAuto3Z, ch28), but this
+//    program has no SW[] for them (cmydef.cpp stops at SwCassetteAuto2MotBreaker = 366): they are NOT driven -- reported.
+//  AI(W906-BRAKE-EMPTY-AUTO3) 20260930: EastSun「目前M40不會觸發」-- the two SW[] now exist (cmydef.cpp 369 / 370, MAX_SWITCH_ITEM
+//    372) and are in golden's Cassette group (CassetteBreakerON/OFF) and in the table below, so the note above is history.
+struct BrakeAxisDef { const char* alias; const int* sw; };
+const BrakeAxisDef kBrakeAxes[] = {
+    { "MInArmZA",  &SwInArmZBreaker },              // st16 ch5
+    { "MOutArmZA", &SwOutArmZBreaker },             // st16 ch6
+    { "MTestZ1",   &SwFMotorBreaker },              // st16 ch4 (Index Z1)
+    { "MTestZ2",   &SwBMotorBreaker },              // Enable=0 in IO_Table / Mot_Table on HT9050
+    { "MLoaderZ",  &SwCassetteLDMotBreaker },       // st16 ch24
+    { "MEmptyZ",   &SwCassetteEmptyMotBreaker },    // st16 ch25   AI(W906-BRAKE-EMPTY-AUTO3) 20260930
+    { "MAuto1Z",   &SwCassetteAuto1MotBreaker },    // st16 ch26
+    { "MAuto2Z",   &SwCassetteAuto2MotBreaker },    // st16 ch27
+    { "MAuto3Z",   &SwCassetteAuto3MotBreaker },    // st16 ch28   AI(W906-BRAKE-EMPTY-AUTO3) 20260930
+};
+const DWORD kBrakeReleaseDelayMs = 500;             // EastSun: servo ON 0.5 s, then the brake
+const DWORD kBrakeHoldBlockMs    = 1000;            // after a hold: no release (a stale SVON sample must not undo it)
+struct BrakeAxisState {
+    bool  on;            // the last known monitor SVON
+    DWORD onSince;       // GetTickCount at the SVON edge
+    bool  released;      // this SVON already released the brake (or found it released)
+    bool  waitLogged;    // "waiting for motor power / EMG" said once
+    bool  blocked;       // a hold happened at blockSince: no release for kBrakeHoldBlockMs (2nd fix 20260929: a bare
+    ht9045::BrakeServoOnLedger ledger; int slot; DWORD blockSince;    //   "blockUntil=0" compared as (LONG)(now-0)<0 would block for ever once GetTickCount passes 2^31 ms)  AI(W906-BRAKE-SERVOFIRST) 20261004: + ledger (Servo ON from this run since power on) and the 1203 slot
+    BrakeAxisState() : on(false), onSince(0), released(false), waitLogged(false), blocked(false), slot(-1), blockSince(0) {}
+};
+std::map<std::string, BrakeAxisState> g_brakeAxis;  unsigned g_brakeSvOnSeq[256] = {};  unsigned BrakeSvOnSeq(int slot) { return (slot >= 0 && slot < 256) ? g_brakeSvOnSeq[slot] : 0u; }   //AI(W906-BRAKE-SERVOFIRST) 20261004: issued Servo ON count per 1203 slot (tick thread: every Execute runs there -- Pci1203GaliRoute.cpp's note)
+void BrakeLog(const std::string& s)                 // console + op log (BRAKE lines; wb_serve registers ::g_W906BrakeNote)
+{
+    std::printf("[brake] %s\n", s.c_str());
+    if (::g_W906BrakeNote) ::g_W906BrakeNote(s.c_str());
+}
+bool BrakeBlocked(const BrakeAxisState& st, DWORD now) { return st.blocked && (now - st.blockSince) < kBrakeHoldBlockMs; }
+// the brake output of this axis, -1 = none / Enable=0 in IO_Table
+int BrakeSwOf(const std::string& alias)
+{
+    for (std::size_t i = 0; i < sizeof(kBrakeAxes) / sizeof(kBrakeAxes[0]); ++i)
+        if (alias == kBrakeAxes[i].alias) {
+            const int sw = *kBrakeAxes[i].sw;
+            return (sw >= 0 && sw < MAX_SWITCH_ITEM && SW[sw].Enable) ? sw : -1;
+        }
+    return -1;
+}
+// SVON for at least 0.5 s by the tick's record and not just held -- the golden group releases ask this per axis
+bool BrakeAxisOnLongEnough(const std::string& alias)
+{
+    std::map<std::string, BrakeAxisState>::const_iterator it = g_brakeAxis.find(alias);
+    const DWORD now = ::GetTickCount();
+    return it != g_brakeAxis.end() && it->second.on && (now - it->second.onSince) >= kBrakeReleaseDelayMs && !BrakeBlocked(it->second, now);
+}  //AI(W906-HT9050-BRAKEPOWER) 20261005: EastSun 1005「我激磁後 你煞車怎沒自動放掉?」「我M3明明激磁了」-> 「看 SnMotorPower＋該軸 Servo ON 0.5 秒」.
+//  Measured 09:21 (/api/struct/io/runtime): SnMotorPower I2.30 = ON while SwMotorRelay O1.29 = OFF and M03 MInArmZA reported SVON -- on HT9050 the
+//  relay output does not cut the drives' power, so "relay off / bMotorPowerState false" held every brake although the motors had power. HT9050 only:
+//  "power up" = SnMotorPower ON and no EMG (the real power input; a real power cut still holds the brakes -- the 10-03 BRAKE-BOOT reason: a 1203 SVON
+//  survives a power cut). The per-axis rules stay: SVON 0.5 s and a Servo ON sent while the power was up. Other machines: unchanged.
+bool BrakeHt9050PowerUp() { return !GEM_EMGPressed && !Sen[SnMotorPower].IsOff(); }
+bool BrakePowerOnNow() { if (OrgActiveLowHT9050()) return BrakeHt9050PowerUp(); return ht9045::BrakePowerOn(SW[SwMotorRelay].Enable, SW[SwMotorRelay].OutValue != 0, GEM_EMGPressed, Sen[SnMotorPower].IsOff()); }  bool BrakeAxisServoFirst(const std::string& alias, std::string* why) { std::map<std::string, BrakeAxisState>::const_iterator it = g_brakeAxis.find(alias); if (OrgActiveLowHT9050() ? !BrakeHt9050PowerUp() : !ht9045::BrakePowerReady(BrakePowerOnNow(), bMotorPowerState, MotorPowerOnDelay, why)) { if (why && OrgActiveLowHT9050()) *why = "SnMotorPower OFF 或 EMG（HT9050 以馬達電源感測器判斷）"; return false; } if (it == g_brakeAxis.end() || !it->second.ledger.Issued(BrakeSvOnSeq(it->second.slot))) { if (why) *why = "這一輪上電之後還沒對它送過 Servo ON（RULINGS_20261003 第 24 條：先 Servo ON 才放煞車）"; return false; } return true; }  bool BrakeHeldForMotion(const Pci1203Cmd& c, std::string* why) { if (!ht9045::BrakeMotionKind(c.kind) || c.axis < 0) return false; for (std::size_t i = 0; i < sizeof(kBrakeAxes) / sizeof(kBrakeAxes[0]); ++i) { const std::string alias = kBrakeAxes[i].alias; std::map<std::string, BrakeAxisState>::const_iterator it = g_brakeAxis.find(alias); int slot = (it != g_brakeAxis.end()) ? it->second.slot : -1; if (slot < 0) { MotorAccessAxis a; if (MotorAccessLiveBackend().Resolve(alias, a) && a.Is1203()) slot = a.axis; } if (slot != c.axis) continue; const int sw = BrakeSwOf(alias); if (sw >= 0 && !SW[sw].OutValue) { if (why) *why = alias + "：煞車還鎖著（上電完成、這一輪 Servo ON 之後 0.5 秒才放，RULINGS_20261003 第 24 條）—— 移動沒有送出，稍候再按"; return true; } } return false; }   //AI(W906-BRAKE-SERVOFIRST) 20261004: (a) + (b) of WebMotorAccess.h for the golden group / G05 per-axis releases; + laptop 1004 01:1x: no motion is sent to an axis whose brake output is still held (web Motor Test / Teach / Arm Cell, LiveBackend::Pci1203Execute)
+//AI(W906-BRAKE-GROUP) 20260930: EastSun「我每次開軟體的時候 M35 我都需要先把激磁關掉再開起來，這樣機構才會動作」.
+//  Measured in runcfg\logs\oplog_20260930.txt (restart 08:48:36): 08:48:47.48 BrakeAxisTick released MLoaderZ / MAuto1Z (SVON
+//  carried over from the last run) -> 08:48:49.70 Motor Test FormShow "relay ON -> DoMotorPowerOn" -> golden CassetteBreakerOFF()
+//  held all three cassette brakes -> golden's own release (G05 idle pass / G16) asks W906_BrakeReleaseOK("Cassette"), which
+//  refused the WHOLE group because MAuto2Z is not servo-ON (every start today) -> the brakes stayed held, and BrakeAxisTick's
+//  `released` latch (one release per SVON) never looked again. 08:49:57 servo off: "it was already held". Servo off/on = a new
+//  SVON edge = BrakeAxisTick releases again -- that is why the toggle "fixed" it. Same shape for InOutArmZ (MInArmZA off at start
+//  holds MOutArmZA's brake).
+//  Fix: when golden asks to release a group (only then -- G05 / G16 / HOME start, each already exclusive with every golden hold:
+//  EMG / motor power off / MotorPowerOnDelay / bMotorPowerState), the members that ARE ready are released one by one; the rest
+//  stay held. EastSun 20260926 "對應軸 Servo On 才放" is per axis, and so is 20260929 "只要有激磁做動 0.5 秒就要觸發對應 io 煞車".
+//  Ready = the same test as BrakeAxisTick: SVON sample on for 0.5 s, not just held by a servo off, no EMG, SnMotorPower on.
+//  Returns true when it switched the output (logged once per switch -- G05 asks every idle pass).
+bool BrakeReleaseAxisIfReady(const std::string& alias, const char* group)
+{
+    const int sw = BrakeSwOf(alias);
+    if (sw < 0 || SW[sw].OutValue) return false;                                // no brake output here / already released
+    if (!BrakeAxisOnLongEnough(alias)) return false;
+    if (OrgActiveLowHT9050() ? !BrakeHt9050PowerUp() : (GEM_EMGPressed || Sen[SnMotorPower].IsOff())) return false;  if (!BrakeAxisServoFirst(alias, 0)) return false;   //AI(W906-HT9050-BRAKEPOWER) 20261005: HT9050 = SnMotorPower + no EMG   //AI(W906-BRAKE-BOOT) 20261003: + golden's motor power condition (see BrakeAxisTick)  AI(W906-BRAKE-SERVOFIRST) 20261004: + power state / delay / a Servo ON from this run  AI(W906-PKG140) 20261004: both kept (machine golden `MotorPowerOnDelay==0` is stricter than BrakePowerReady's `<= 0`)   //AI(W906-MACH0216) 20261005: laptop -- non-HT9050 arm kept as main (the machine's bMotorPowerState / MotorPowerOnDelay term is its PKG-140 BRAKE-BOOT union, not on main)
+    SW[sw].On();
+    g_brakeAxis[alias].released = true;
+    BrakeLog(alias + " SVON 0.5 s -> " + SW[sw].Name.c_str() + " ON (brake released per axis; golden group " + (group ? group : "?") +
+             " held because another axis of it is not servo-ON)");
+    return true;
+}
+// tick thread, after every monitor Poll (main loop and the modal wait loop)
+void BrakeAxisTick()
+{
+    if (Pci1203Monitor() == 0) return;
+    IMotorAccessBackend& be = MotorAccessLiveBackend();
+    const DWORD now = ::GetTickCount();
+    //AI(W906-BRAKE-AXIS) 20260929 2nd fix (EastSun「我激磁的時候一樣沒有觸發對應io」, 20:40:44): bMotorPowerState is NOT asked here.   [STALE 20261004, NB2-1 R206 / RULINGS_20261003 #24: W906-G31A-TIME (0930) made G31a ~1 s, so the reason below expired; bMotorPowerState, the power-on delay AND a Servo ON from this run are asked again -- powerOk / Issued below]
+    //  It turns true only when golden's automatic power-on has counted ~100 DoSystem passes (CheckMotorPowerShutDown G31a) --
+    //  the op log's PAGE "power" was still 0 at 20:41:09 although the relay was on and MInArmZA reported SVON, so the release
+    //  waited for nothing. The drive reporting SVON is the proof of power; what is left is EMG / SnMotorPower off (EastSun 20260926).
+    //  EMG is read from GEM_EMGPressed, the flag golden IsEMGPressed() leaves on every DoSystem pass (csystem.cpp): calling
+    //  IsEMGPressed() here would repeat its servo-off / brake sweep and consume its release edge.
+    const bool emg = GEM_EMGPressed, powerOff = Sen[SnMotorPower].IsOff();  const bool powerOn = ht9045::BrakePowerOn(SW[SwMotorRelay].Enable, SW[SwMotorRelay].OutValue != 0, emg, powerOff); std::string powerWhy;   //AI(W906-BRAKE-SERVOFIRST) 20261004
+    bool powerOk = ht9045::BrakePowerReady(powerOn, bMotorPowerState, MotorPowerOnDelay, &powerWhy);   //AI(W906-BRAKE-SERVOFIRST) 20261004: was `!emg && !powerOff` -- RULINGS_20261003 #24 (Jimmy A): + the relay, bMotorPowerState, the power-on delay   //AI(W906-MACH0216) 20261005: non-const for the HT9050 override below
+    const bool w906Ht9050 = OrgActiveLowHT9050();   //AI(W906-HT9050-BRAKEPOWER) 20261005: HT9050 -- "power up" = SnMotorPower ON and no EMG (see BrakeHt9050PowerUp)
+    const bool powerOnLedger = w906Ht9050 ? BrakeHt9050PowerUp() : powerOn;
+    if (w906Ht9050) { powerOk = powerOnLedger; powerWhy = powerOk ? std::string() : std::string("SnMotorPower OFF 或 EMG（HT9050 以馬達電源感測器判斷）"); }
+    for (std::size_t i = 0; i < sizeof(kBrakeAxes) / sizeof(kBrakeAxes[0]); ++i) {
+        const std::string alias = kBrakeAxes[i].alias;
+        MotorAccessAxis a;
+        if (!be.Resolve(alias, a) || !a.Is1203() || a.axis < 0 || !a.tableEnable) continue;
+        bool known = false;
+        const bool on = be.Pci1203ServoOn(a.axis, known);
+        if (!known) continue;                                                   // no fresh sample: decide nothing
+        BrakeAxisState& st = g_brakeAxis[alias];  st.slot = a.axis; const unsigned seq = BrakeSvOnSeq(a.axis); const bool freshSvOn = st.ledger.Step(seq, powerOnLedger);   //AI(W906-BRAKE-SERVOFIRST) 20261004  AI(W906-HT9050-BRAKEPOWER) 20261005: HT9050 ledger power = SnMotorPower
+        const int sw = BrakeSwOf(alias);
+        if (on) {
+            if (!st.on) { st.on = true; st.onSince = now; st.released = false; st.waitLogged = false; }  else if (freshSvOn) { st.onSince = now; st.released = false; st.waitLogged = false; }   //AI(W906-BRAKE-SERVOFIRST) 20261004: a Servo ON from this run restarts the 0.5 s even when the SVON bit never dropped (left over at boot, or through a relay cut)
+            if (sw < 0 || st.released || (now - st.onSince) < kBrakeReleaseDelayMs || BrakeBlocked(st, now)) continue;
+            if (!powerOk || !st.ledger.Issued(seq)) {   //AI(W906-BRAKE-SERVOFIRST) 20261004: Steven 22:57 「應該要先servo on後才能放煞車」 -- never from a leftover SVON
+                if (!st.waitLogged) { st.waitLogged = true; BrakeLog(alias + " SVON 0.5 s, " + SW[sw].Name.c_str() + " NOT released yet: " + (!powerOk ? powerWhy : std::string("no Servo ON from this run since the motor power came on (RULINGS_20261003 #24)")) + " -- released as soon as it clears"); }
+                continue;
+            }
+            st.released = true;
+            if (SW[sw].OutValue) continue;                                      // already released (a golden group release)
+            SW[sw].On();
+            BrakeLog(alias + " SVON 0.5 s -> " + SW[sw].Name.c_str() + " ON (brake released)");
+        } else if (st.on) {                                                     // SVON just went away
+            st.on = false; st.released = false; st.waitLogged = false;
+            if (sw < 0) continue;
+            if (SW[sw].OutValue) { SW[sw].Off(); BrakeLog(alias + " SVON off -> " + SW[sw].Name.c_str() + " OFF (brake held)"); }
+        }
+    }
+}
+
+class LiveBackend : public IMotorAccessBackend {
+public:
+    bool Resolve(const std::string& motorId, MotorAccessAxis& out) override
+    {
+        out = MotorAccessAxis();
+        const TMOTDATA* row = 0;
+        for (std::size_t i = 0; i < HSys.MotTable.size(); ++i) {
+            const TMOTDATA* r = HSys.MotTable[i];
+            if (r && motorId == r->Alias.c_str()) { row = r; break; }
+        }
+        if (!row) return false;
+        out.motIndex  = MotorIndexOf(row->No);
+        out.cardModel = row->CardModel.c_str();
+        out.boardId   = row->iBoardID;
+        out.port      = row->iPort;
+        out.motorLive = (out.motIndex >= 0 && out.motIndex < MAX_TRAY_MOTOR && MOT[out.motIndex].Motor != 0);
+        out.tableEnable = row->iEnable != 0;                                    // NB2 R22（見 WebMotorAccess.h MotorAccessAxis::tableEnable）
+        if (!out.Is1203()) return true;
+
+        TPci1203Monitor* m = Pci1203Monitor();
+        if (m == 0) { out.why = "1203 監看器沒有開（這個執行檔沒有 1203 SDK，或開卡失敗）"; return true; }
+        int hit = -1, hits = 0;
+        for (int ax = 0; ax < m->axisCount(); ++ax) {
+            const Pci1203AxisSample& s = m->axis(ax);
+            if (!s.opened) continue;
+            if (s.station == out.boardId && s.stationAxis == out.port) { if (hit < 0) hit = ax; ++hits; }
+        }
+        char b[200];
+        if (hits == 1) out.axis = hit;
+        else if (hits == 0) {
+            std::snprintf(b, sizeof(b), "1203 監看器找不到 站 %d 軸 %d（Mot_Table 的 BoardID／Port）的開成功軸",
+                          out.boardId, out.port);
+            out.why = b;
+        } else {
+            std::snprintf(b, sizeof(b), "站 %d 軸 %d 對到 %d 個軸槽 —— 不挑", out.boardId, out.port, hits);
+            out.why = b;
+        }
+        return true;
+    }
+
+    bool Pci1203Ready(std::string& why) override
+    {
+        if (Pci1203Control() == 0) {
+            why = "1203 control is not armed in this binary (built without HAVE_PCI1203, or Open() refused)";
+            return false;
+        }
+        return true;
+    }
+    int Pci1203AxisCount() override
+    {
+        TPci1203Monitor* m = Pci1203Monitor();
+        return m ? m->axisCount() : 0;
+    }
+    bool Pci1203AxisOpened(int axis) override
+    {
+        TPci1203Monitor* m = Pci1203Monitor();
+        return m && axis >= 0 && axis < m->axisCount() && m->axis(axis).opened;
+    }
+    bool Pci1203ServoOn(int axis, bool& known) override
+    {
+        known = false;
+        TPci1203Monitor* m = Pci1203Monitor();
+        if (!m || axis < 0 || axis >= m->axisCount()) return false;
+        const Pci1203AxisSample& s = m->axis(axis);
+        if (!s.valid || !s.opened) return false;
+        known = true;
+        return (s.motionIO & kSvOnBit) != 0;
+    }
+    // AI(W906-MT-E1) 20260925: see WebMotorAccess.h. Same identity rule as EtherCAT/Pci1203IoRoute.cpp
+    //   StationIsDrive (and web/js/pci1203/view.js stationIsDrive): a present slave at the axis's station on
+    //   ring 0 (drive SDO reads use ring 0) that says CiA 402 or SERVOPACK; the axis's own driveIsSigmaX too.
+    void GoldenMotorHomeAlarm(int motIndex, const std::string& why) override   //AI(W906-HOME-STEPLEAVE) 20261003: golden's motor jam note (the engine's HOME raises the same one through uhome)
+    {
+        std::printf("motor.access: home alarm M%02d: %s\n", motIndex, why.c_str());
+        //AI(W906-HOME-STEPLEAVE-3) 20261003 (review): a single HOME's failure must not stop every axis -- golden's motor jam note
+        //  (ShowMotorErrorMessage) runs StopAllMotor + fAllMotorHome=false, against EastSun 0929「每軸獨立，一軸警報不能鎖全頁」. A message box
+        //  with the reason instead (EastSun「你跳出錯誤需要出現為什麼錯誤」); the failed axis is already stopped and its HomeFlag is 2.
+        std::string alias; AliasOfMotIndex(motIndex, alias);
+        ShowMyMessage(AnsiString(("Motor home failed: " + alias + " -- " + why).c_str()), AnsiString(("馬達回原點失敗：" + alias + "，原因：" + why).c_str()), "MotorAccessHome");
+    }
+    bool Pci1203IsStepperDrive(int axis) override                               //AI(W906-HOME-STEPLEAVE) 20261003: the station's ring-0 slave is a SW3D drive (SW3D-680, HT9050 M35-M40)
+    {
+        TPci1203Monitor* m = Pci1203Monitor();
+        if (!m || axis < 0 || axis >= m->axisCount()) return false;
+        const Pci1203AxisSample& a = m->axis(axis);
+        if (!a.opened || a.station < 0) return false;
+        for (int i = 0; i < m->slaveCount(); ++i) {
+            const Pci1203SlaveSample& s = m->slave(i);
+            if (!s.present || s.addr != a.station) continue;
+            if (s.ring >= 0 && s.ring != 0) continue;
+            std::string u(s.name);
+            for (std::size_t k = 0; k < u.size(); ++k) if (u[k] >= 'a' && u[k] <= 'z') u[k] = (char)(u[k] - 'a' + 'A');
+            if (u.find("SW3D") != std::string::npos) return true;
+        }
+        return false;
+    }
+    int Pci1203DriveKind(int axis) override
+    {
+        TPci1203Monitor* m = Pci1203Monitor();
+        if (!m || axis < 0 || axis >= m->axisCount()) return -1;
+        const Pci1203AxisSample& a = m->axis(axis);
+        if (!a.opened || a.station < 0) return -1;
+        if (a.driveIsSigmaX) return 1;
+        bool otherProfile = false;
+        for (int i = 0; i < m->slaveCount(); ++i) {
+            const Pci1203SlaveSample& s = m->slave(i);
+            if (!s.present || s.addr != a.station) continue;
+            if (s.ring >= 0 && s.ring != 0) continue;
+            if (s.profileValid && s.profile == 402) return 1;
+            std::string u(s.name);
+            for (std::size_t k = 0; k < u.size(); ++k) if (u[k] >= 'a' && u[k] <= 'z') u[k] = (char)(u[k] - 'a' + 'A');
+            if (u.find("SERVOPACK") != std::string::npos) return 1;
+            if (s.profileValid) otherProfile = true;
+        }
+        return otherProfile ? 0 : -1;
+    }
+
+    void GoldenClearAllHomeFlags() override                                     // AI(W906-MT-E1) 20260925: golden InitialMotorParameter's HomeFlag=0 (cinitial.cpp:3615/:3773/:3989)
+    {
+        for (int i = 0; i < MAX_TRAY_MOTOR; ++i) MOT[i].HomeFlag = 0;
+        std::printf("motor.access: MOT[0..%d].HomeFlag = 0 (Reload Motor Data)\n", MAX_TRAY_MOTOR - 1);
+    }
+
+    Pci1203CmdResult Pci1203Execute(const Pci1203Cmd& c) override
+    {
+        { std::string bh; if (BrakeHeldForMotion(c, &bh)) { Pci1203CmdResult r; r.accepted = false; r.issued = false; r.ret = 0; r.why = bh; BrakeLog("motion refused (brake held): " + bh); return r; } }  TPci1203Control* ctl = Pci1203Control();   //AI(W906-BRAKE-SERVOFIRST) 20261004: laptop 1004 01:1x -- never drive against a held brake
+        if (ctl == 0) {
+            Pci1203CmdResult r;
+            r.accepted = false; r.issued = false; r.ret = 0;
+            r.why = "1203 control is not armed";
+            return r;
+        }
+        const Pci1203CmdResult r = ctl->Execute(c);  ::W906_EngineRouteForeignStop(c, r);   //AI(W906-ENG1203) 20260929: review HIGH-1 -- EVERY WebMotorAccess 1203 command (Stop1203 / Stop1203All: alarm, STOP, jog release, dead-man, cancels) passes here; a stop of an engine-claimed axis cancels its route home job, marks it pending and resets golden fCMD on its MOT rows. No engine route installed = nothing (WB_ENGINE_MOTOR_1203 is off)
+        std::printf("motor.access -> 1203 kind=%d axis=%d: accepted=%d issued=%d ret=0x%08lX %s%s%s\n",
+                    (int)c.kind, c.axis, (int)r.accepted, (int)r.issued, r.ret, r.wouldCall.c_str(),
+                    r.why.empty() ? "" : "  -- ", r.why.c_str());
+        return r;
+    }
+    void Pci1203NoteRefusal(long long wireId, const std::string& name, const std::string& why) override
+    {
+        TPci1203Control* ctl = Pci1203Control();
+        if (ctl) ctl->NoteRefusal(wireId, name, why);
+    }
+
+    void GoldenStopAll(const std::string& source) override
+    {
+        StopAllMotor(true);                                                     // golden uMotorTest.cpp:1650／uteach btnStopClick（StopAllMotor() 預設參數即 true）
+        if (source == "uMotorTest") {
+            if (fMotorTest != 0) fMotorTest->bSingleHome = false;               // golden uMotorTest.cpp:1651（wb_serve 目前不建立 fMotorTest ⇒ 守衛）
+        } else if (source == "uteach.home") {
+            // AI(W906-W5-b) 20260925: 覆核 R-W5B-6 —— golden uteach btnHomeClick 抬起（uteach.cpp:2193-2194）只有 StopAllMotor()，沒有 MTestY1 的 Galil "ST"
+        } else {
+            // golden uteach btnStopClick 的 `Tech_Part=0;` 不做：TfTeach facade 沒有這個成員（forms/fTeachPara.h:207 記著
+            //   「等消費者落地再帶進來」）—— 缺相依，不是選擇。
+            MOT[MTestY1].Gali_Command("ST", "TfTeach::btnStopClick");           // golden uteach btnStopClick（Steven 20230721）
+        }
+        std::printf("motor.access stop (%s): StopAllMotor(true) (golden btnStopClick)\n", source.c_str());
+    }
+    void GoldenStopMotor(int motIndex) override
+    {
+        if (motIndex < 0 || motIndex >= MAX_TRAY_MOTOR) return;
+        //AI(W906-MT-E3c) 20260925: EastSun R2 -- a PCI1203 row is never stopped through golden's Galil "ST" (its stop is the
+        //  1203 Stop1203 the dispatcher sends); the dispatcher does not call this for a 1203 row, this is the second lock.
+        if (RowIs1203(motIndex)) return;
+        if (INDEX_MOTION_CARD == 0 && (motIndex == MTestY1 || motIndex == MTestZ1 ||
+                                       motIndex == MTestZ2 || motIndex == MTestY2))   // golden uMotorTest.cpp:904-906／:1655-1656（Steven 20210623 : Index使用Galil）
+            MOT[motIndex].Gali_Command("ST", "motor.access stop");
+        else
+            MOT[motIndex].PCIL132_StopMotor();                                  // golden uMotorTest.cpp:908／:1658
+    }
+    bool GoldenServoOn(int motIndex, bool& known) override
+    {
+        known = false;
+        if (motIndex < 0 || motIndex >= MAX_TRAY_MOTOR || MOT[motIndex].Motor == 0) return false;
+        MOT[motIndex].ScanMotorStatus();                                        // golden uMotorTest.cpp:1665
+        known = true;
+        return MOT[motIndex].Led[iServoOn];
+    }
+    void GoldenServoOnOff(int motIndex, bool on) override
+    {
+        if (motIndex >= 0 && motIndex < MAX_TRAY_MOTOR) MOT[motIndex].ServoOnOff(on);
+    }
+
+    // ---- W4-b ----
+    bool Pci1203SpeedNow(int axis, int which, double& v) override   //AI(W906-JOG-MAXVEL) 20261003: the monitor's speed[] sample
+    {
+        TPci1203Monitor* m = Pci1203Monitor();
+        if (!m || axis < 0 || axis >= m->axisCount() || which < 0 || which >= Pci1203AxisSample::kSpeedCount) return false;
+        const Pci1203AxisSample& s = m->axis(axis);
+        if (!s.valid || !s.opened || !s.speedValid[which]) return false;
+        v = s.speed[which];
+        return true;
+    }   int GoldenHomeAll(const std::string& who, std::string& why) override { const int rc = ::W906_PanelHomeKeyArm(who.c_str(), why); if (rc == 4 && W906_FormProgramShowHook) W906_FormProgramShowHook("fTeach", false, "WebMotorAccessLive.cpp GoldenHomeAll: Teach btnHomeAll armed the full HOME -- golden MainProc pauses while fTeach is shown (csystem.cpp VerifyMotorAction arm), so the Teach page closes"); return rc; }   //AI(W906-TEACH-HOMEALL) 20261003 (machine cpp 0153; ST02-P2 port 20261006 St02-E): the panel HOME key arm (WebMainScanKey.cpp, wb_serve only -- as this file). Same line, nothing below moves
+    bool Pci1203CmdPos(int axis, double& card) override
+    {
+        TPci1203Monitor* m = Pci1203Monitor();
+        if (!m || axis < 0 || axis >= m->axisCount()) return false;
+        const Pci1203AxisSample& s = m->axis(axis);
+        if (!s.valid || !s.opened) return false;
+        card = s.cmdPos;
+        return true;
+    }
+    bool Pci1203AxisReady(int axis) override
+    {
+        TPci1203Monitor* m = Pci1203Monitor();
+        if (!m || axis < 0 || axis >= m->axisCount()) return false;
+        const Pci1203AxisSample& s = m->axis(axis);
+        return s.valid && s.opened && (s.state & 0xFFu) == 1u;                 // STA_AX_READY（EtherCAT/vendor/AdvMotDrv.h:793）
+    }
+    bool GoldenMotor(int mi, MotorGolden& g) override
+    {
+        g = MotorGolden();
+        if (mi < 0 || mi >= MAX_TRAY_MOTOR || MOT[mi].Motor == 0) return false;
+        HTMotor* M = MOT[mi].Motor;
+        g.valid         = true;
+        g.enable        = M->Enable;
+        g.gearRatio     = M->GearRatio;
+        g.direction     = M->Direction;
+        g.homeDirection = M->HomeDirection;
+        g.softP         = M->PSoftLimitP;
+        g.softN         = M->PSoftLimitN;
+        g.initSpeed     = M->InitSpeed;
+        g.jogHigh       = M->PJogHighSpeed;
+        g.jogLow        = M->PJogLowSpeed;
+        TMyEtherCatMotor* E = dynamic_cast<TMyEtherCatMotor*>(M);
+        if (E) { g.acc = E->W906_RuntimeAcc(); g.dec = E->W906_RuntimeDec(); }  // TMyEtherCatMotor::SetSpeed 寫進卡的那兩個
+        else   { g.acc = M->ReadAcc();         g.dec = M->ReadDec(); }          // 非 EtherCAT 軸不會走 1203 路徑，只是填值
+        g.homeFlag      = MOT[mi].HomeFlag;
+        const int n     = MOT[mi].Mot_Name;                                     // golden TMyMotor::SetSpeed 用 Mot_Name 判斷
+        g.zStack        = (n == MLoaderZ || n == MEmptyZ || n == MColorZ || n == MAuto1Z || n == MAuto2Z ||
+                           n == MAuto3Z  || n == MAuto4Z || n == MAuto5Z || n == MAuto6Z);
+        g.indexMotor    = (n == MTestY1 || n == MTestZ1 || n == MTestZ2 || n == MTestY2);
+        g.galilIndex    = g.indexMotor && INDEX_MOTION_CARD == 0;
+        //AI(W906-MT-E3c) 20260925: EASTSUN R2 -- a Mot_Table row whose CardModel is PCI1203 is a 1203 axis (M14 MTestZ1 on HT9050;
+        //  INDEX_MOTION_CARD stays 0, Gerneral.ini is not edited). So neither golden Index rule applies to it:
+        //    galilIndex=false -- golden's Galil branch (Gali_MotMove / "ST") is not its path;
+        //    indexMotor=false -- HT9050 DEVIATION: golden TMyMotor::SetSpeed is EMPTY for the Index four (Motor/mymotor.cpp
+        //      :485-487), which leaves a 1203 axis at whatever speed the card holds -- undefined for an axis golden never drove
+        //      through a card. It gets the same SetSpeed(pct) -> PTP/jog family as every other 1203 axis (from its Mot_Table
+        //      speeds: M14 JogHigh 900000 / Acc 9000000 -- check them before the first move).
+        if (RowIs1203(mi)) { g.indexMotor = false; g.galilIndex = false; }
+        g.armZ          = (n == MInArmZA  || n == MInArmZB  || n == MInArmZC  || n == MInArmZD  ||   // golden uhome.cpp ProcessSingleMotorHome
+                           n == MInArmZE  || n == MInArmZF  || n == MInArmZG  || n == MInArmZH  ||   //   case 300 的清單（逐字同序）
+                           n == MOutArmZA || n == MOutArmZB || n == MOutArmZC || n == MOutArmZD ||
+                           n == MOutArmZE || n == MOutArmZF || n == MOutArmZG || n == MOutArmZH ||
+                           n == MInArmZAe || n == MInArmZAf || n == MInArmZAg || n == MInArmZAh ||
+                           n == MInArmZBe || n == MInArmZBf || n == MInArmZBg || n == MInArmZBh ||
+                           n == MOutArmZAe || n == MOutArmZAf || n == MOutArmZAg || n == MOutArmZAh ||
+                           n == MOutArmZBe || n == MOutArmZBf || n == MOutArmZBg || n == MOutArmZBh ||
+                           n == MOutSortAa || n == MOutSortAb);
+        g.scaleMotor    = (n == MInArmXScale || n == MInArmYScale || n == MOutArmXScale || n == MOutArmYScale);   // golden :1122-1123
+#ifdef SOFT_SIMULTE
+        g.selectable    = true;                                                 // golden lM00Click 的 Enable 擋在 #ifndef SOFT_SIMULTE 裡
+#else
+        g.selectable    = M->Enable;                                            // golden uMotorTest.cpp:740-743
+#endif
+        g.inShuttle     = (n == MInShuttle1) ? 1 : (n == MInShuttle2) ? 2 : 0;
+        g.homeHigh      = M->PHomeHighSpeed;                                    // NB2 R23 W4C-3：golden SetHomeSpeed（myEthercatmotor.cpp:1703）
+        g.homeLow       = M->PHomeLowSpeed;
+        g.accDb         = M->GetAccDataBase();                                  // golden TMyMotor::Home SetADCRate(100) ⇒ dAcc = 資料庫值（mymotor.cpp:296-300）
+        g.decDb         = M->GetDecDataBase();
+        g.range         = M->ReadRange();                                       //AI(W906-MT-E2) 20260925: golden UpdateMotorParameter :668 / lM00Click :757-758
+        g.rate          = M->ReadRate();
+        g.readSpeed     = MOT[mi].GetSpeed();                                   //   golden Timer1Timer :982 lblRealSpeed (cached iSpeed / speed, no driver call)
+        g.lastHomePos   = M->LastHomePos;                                       //   golden Timer1Timer :965 edtHomeOffset
+        //AI(W906-MT-E3c) 20260925: what golden SetRate / InitMotor read (Test Range / Rate, R4)
+        g.iSpeed        = M->ReadSpeed();                                       // HTMotor::iSpeed
+        g.motorClass    = (M->MotorType == Servo_Motor) ? kInitCfgMotorServo : (M->MotorType == Rotate_Motor) ? kInitCfgMotorRotate : kInitCfgMotorOther;   g.stepMotor = (M->MotorType == Step_Motor);   //AI(W906-JOG-VLTIME) 20261003: Mot_Table 1P2P=0 (HT9050 M35..M40); same line
+        g.sensorType    = M->bSensorType;                                       // (also W5-b W5B-R2: golden InitMotor :252 CFG_AxOrgLogic)
+        g.in1Logic      = M->bIn1Logic;
+        //AI(W906-MERGE-56bbf785) 20260926: machine MT-E2/E3c fields above + the laptop's W5-b fields below; sensorType set once.
+        //  indexZ / indexY are golden's teach-page rules on the motor's identity (uteach ActiveMotorIndex==MTestZ1...), so they stay
+        //  set on a PCI1203 Index row too (unlike indexMotor / galilIndex above, which EastSun R2 clears for such a row).
+        g.teachNoServoOff = (n == MTrayBracketZ || n == MMagazine);              // W5-b：uteach.cpp:3393
+        g.indexZ        = (n == MTestZ1 || n == MTestZ2);                       // :3384
+        g.indexY        = (n == MTestY1 || n == MTestY2);                       // :3683
+        g.rotateKit     = (n == MInRotateKit) ? 1 : (n == MOutRotateKit) ? 2 : 0;   // :3455
+        g.servoAlarmOn  = M->PServoAlarmOn;                                     // AI(W906-W5-b) 20260925: W5B-6（golden mymotor.cpp:1931 ServoOnOff）
+        return true;
+    }
+    bool GoldenSafeDoorOpen(int mi) override
+    {
+        return mi >= 0 && mi < MAX_TRAY_MOTOR && MOT[mi].Motor != 0 && MOT[mi].Motor->CheckIsSafeDoorOpen();
+    }
+    bool GoldenSafeDoorClosed() override { return CheckSafeDoorIsClosed(); }   // csystem.h:228（golden 同名全域）
+    bool GoldenMotorCanRun() override
+    {
+        // golden TfMotorTest::IsMotorCanRun(true)（uMotorTest.cpp:1280-1298；移植 forms/fMotorTest.cpp:699 是成員，
+        //   而 wb_serve 不建立 fMotorTest）—— 同一段本體逐行抄過來。
+        bool flag = true;
+        if (Sen[SnFrontLeftEMG].IsOff())  flag = false;
+        if (Sen[SnFrontRightEMG].IsOff()) flag = false;
+        if (Sen[SnRearLeftEMG].IsOff())   flag = false;
+        if (Sen[SnRearRightEMG].IsOff())  flag = false;
+        if (Enable_PLCSafety_IO && Sen[SnAllEMG].IsOff()) flag = false;         // KenHsieh 20250212
+        if (Sen[SnServo].Enable && Sen[SnServo].IsOff()) flag = false;          // kevin 20140121
+        if (flag == false) ShowMyMessage("EMG Stop", "");
+        return flag;
+    }
+    bool GoldenMoveLocked(int mi) override
+    {
+        if (mi < 0 || mi >= MAX_TRAY_MOTOR) return true;
+        const TTrayMotor& M = MOT[mi];
+        return M.fCanMove == false || M.fCanMoveR == false || M.fCanMoveM == false || M.fCanMoveL == false ||
+               M.W906_HasMotorLocks();                                       // TMyMotor::MotorMove（Klutter 20210817／Steven 20210825）
+    }
+    int GoldenReadPos(int mi) override
+    {
+        return (mi >= 0 && mi < MAX_TRAY_MOTOR) ? MOT[mi].ReadPos() : 0;
+    }
+    void GoldenJog(int mi, bool positive, int pct) override
+    {
+        if (mi < 0 || mi >= MAX_TRAY_MOTOR) return;
+        //AI(W906-MT-E2) 20260925: pct = the last scroll-bar position (DoJog, user ruling 「Jog = golden」), so this re-applies
+        //  golden's SetSpeed(pos, true) (:801) -- was MOT.SetSpeed(edtSpeed) (the PTP family) as a stand-in. golden JogP/JogN
+        //  ignore their argument (Motor/mymotor.cpp:1322-1335).
+        //AI(W906-W5-b) 20260925: pct<0＝教導頁，不設速度（R-W5B-4）
+        //AI(W906-MERGE-56bbf785) 20260926: machine = SetSpeed(pct, true) (Motor Test), laptop = no SetSpeed when pct<0 (teach page):
+        //  both -- the laptop's `SetSpeed(pct)` arm is superseded by the machine's (pct, true) for every pct>=0 caller (only DoJog).
+        if (pct >= 0) MOT[mi].SetSpeed(pct, true);
+        if (positive) MOT[mi].JogP(pct < 0 ? 0 : pct); else MOT[mi].JogN(pct < 0 ? 0 : pct);   // golden :895／:845（TMyMotor::JogP 不用這個引數）
+    }
+    int GoldenMotorMove(int mi, int target, int pct, bool setSpeed) override
+    {
+        if (mi < 0 || mi >= MAX_TRAY_MOTOR) return -1;
+        if (setSpeed) { MOT[mi].SetSpeed(pct); MOT[mi].InitMOTParameter(); }   // golden MoveP/MoveN :1246-1247
+        return MOT[mi].MotorMove(target);
+    }
+    void GoldenSetParam(int mi, MotorParamWhich which, int value) override
+    {
+        if (mi < 0 || mi >= MAX_TRAY_MOTOR || MOT[mi].Motor == 0) return;
+        HTMotor* M = MOT[mi].Motor;
+        switch (which) {
+            case kParamJogHigh:  M->PJogHighSpeed  = (unsigned)value; break;    // golden :1407
+            case kParamJogLow:   M->PJogLowSpeed   = (unsigned)value; break;    // :1415
+            case kParamHomeHigh: M->PHomeHighSpeed = (unsigned)value; break;    // :1423
+            case kParamHomeLow:  M->PHomeLowSpeed  = (unsigned)value; break;    // :1431
+            case kParamSoftP:    M->PSoftLimitP    = value;           break;    // :1439
+            case kParamSoftN:    M->PSoftLimitN    = value;           break;    // :1447
+        }
+    }
+
+    // ---- NB2 R21 ----
+    unsigned long Pci1203PollCount() override
+    {
+        TPci1203Monitor* m = Pci1203Monitor();
+        return m ? m->card().pollCount : 0ul;
+    }
+    bool GoldenShuttleFloodgateReady(int which) override
+    {
+        if (SHUTTLE_FLOODGATE != 1) return true;                                // golden 只在 SHUTTLE_FLOODGATE==1 時檢查
+        if (which == 1) {                                                       // golden mymotor.cpp:659-661
+            Cylinder[C_Shuttle1Floodgate].Off();
+            Cylinder[C_OutShuttle1Floodgate].Off();
+            return Cylinder[C_Shuttle1Floodgate].OffSensor() && Cylinder[C_OutShuttle1Floodgate].OffSensor();
+        }
+        Cylinder[C_Shuttle2Floodgate].Off();                                    // golden mymotor.cpp:681-683
+        Cylinder[C_OutShuttle2Floodgate].Off();
+        return Cylinder[C_Shuttle2Floodgate].OffSensor() && Cylinder[C_OutShuttle2Floodgate].OffSensor();
+    }
+    unsigned GoldenReadSpeed(int mi) override
+    {
+        return (mi >= 0 && mi < MAX_TRAY_MOTOR && MOT[mi].Motor != 0) ? MOT[mi].Motor->ReadSpeed() : 0u;
+    }
+    // ---- NB2 R23 ----
+    bool GoldenSafeLockActive() override { return IsSafeLockCheck(); }         // csystem.cpp:478（golden 同名全域；會 On 安全鎖開關，golden Timer1Timer 每拍同樣呼叫）
+
+    // ---- W5-b（uteach）----
+    //AI(W906-W5-b) 20260925: W5B-2 —— 產生表（golden 建構子登錄表的每一列＋條件）在這台機台上求值，再與 fTeach 實際登錄的
+    //  TechPara／TechTwoPara 逐列核對（Parameter 指標、MotorSelect、Key）。對不上＝產生表過期或登錄表被改過 ⇒ 回 false（fail-closed）。
+    //  每次按鈕都重建（312 列，微秒級）：不快取，免得「開機後改了 Gerneral.ini」這種情況拿到舊表。
+    bool GoldenTeachRegistry(TeachRegistry& out, std::string& why) override
+    {
+        out = TeachRegistry();
+        if (!fTeach) { why = "教導頁的 facade（fTeach）沒建（wb_serve 開機會建）"; return false; }
+        struct Row { char owner; bool live; const int* p0; const int* p1; int m0; const char* n0; int m1; const char* n1;
+                     const char* k0; const char* k1; const char* e0; const char* e1; const char* sb; const char* sh; const char* gb; const char* gh; int vis; };
+        struct Ovr { const char* btn; const char* axleBtn; int m; const char* n; };
+        struct Btn { const char* btn; const char* handler; int tag; int dfmVis; const char* selfOther; const char* hiddenWhy; int lateReg; };   // AI(W906-W5-b) 20260925: R-W5B-2／3
+        // 非 static：條件式與 extern const int 的馬達下標每次在執行期取值（放檔案層會有跨檔靜態初始化順序問題）
+#define W5B_COND(e)  (e)
+#define W5B_PTR(x)   (&(x))
+#define W5B_NOPTR    (const int*)0
+#define W5B_MOT(x)   (int)(x), #x
+#define W5B_NOMOT    -1, ""
+#define W5B_ROW(o, live, atoms, p0, p1, m0, m1, k0, k1, e0, e1, sb, sh, gb, gh, vis) { o, live, p0, p1, m0, m1, k0, k1, e0, e1, sb, sh, gb, gh, vis },
+#define W5B_TAGOVR(b, a, m)
+#define W5B_BTN(b, h, tag, dv, so, hw, lr)
+        const Row rows[] = {
+#include "WebTeachButtons.gen.inc"
+        };
+#define W5B_COND(e)  false
+#define W5B_PTR(x)   0
+#define W5B_NOPTR    0
+#define W5B_MOT(x)   (int)(x), #x
+#define W5B_NOMOT    -1, ""
+#define W5B_ROW(o, live, atoms, p0, p1, m0, m1, k0, k1, e0, e1, sb, sh, gb, gh, vis)
+#define W5B_TAGOVR(b, a, m) { b, a, m },
+#define W5B_BTN(b, h, tag, dv, so, hw, lr)
+        const Ovr ovr[] = {
+#include "WebTeachButtons.gen.inc"
+            { 0, 0, -1, 0 }                                                     // 哨兵（表可能是空的）
+        };
+#define W5B_COND(e)  false
+#define W5B_PTR(x)   0
+#define W5B_NOPTR    0
+#define W5B_MOT(x)   (int)(x), #x
+#define W5B_NOMOT    -1, ""
+#define W5B_ROW(o, live, atoms, p0, p1, m0, m1, k0, k1, e0, e1, sb, sh, gb, gh, vis)
+#define W5B_TAGOVR(b, a, m)
+#define W5B_BTN(b, h, tag, dv, so, hw, lr) { b, h, tag, dv, so, hw, lr },
+        const Btn btns[] = {
+#include "WebTeachButtons.gen.inc"
+            { 0, 0, 0, 0, 0, 0, 0 }                                             // 哨兵
+        };
+        std::size_t ip = 0, it = 0;
+        char b[256];
+        for (std::size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
+            const Row& w = rows[i];
+            if (!w.live) continue;
+            TeachRegRow t;
+            t.owner = w.owner; t.mot0 = w.m0; t.mot1 = w.m1; t.name0 = w.n0; t.name1 = w.n1; t.key0 = w.k0; t.key1 = w.k1;
+            t.edit0 = w.e0; t.edit1 = w.e1; t.setBtn = w.sb; t.setHandler = w.sh; t.goBtn = w.gb; t.goHandler = w.gh;
+            t.seq = (int)i; t.vis = w.vis != 0;                                  // AI(W906-W5-b) 20260925: R-W5B-2（golden 建構子的執行順序與 Visible 引數）
+            if (w.owner == 'P') {
+                const TECH_PARA* q = ip < fTeach->TechPara.size() ? fTeach->TechPara[ip] : 0;
+                if (!q || q->Parameter != w.p0 || q->MotorSelect != w.m0 || std::string(q->Key.c_str()) != w.k0) {
+                    std::snprintf(b, sizeof(b), "TechPara[%u] 與產生表第 %u 列（%s／%s）對不上", (unsigned)ip, (unsigned)i + 1, w.k0, w.n0);
+                    why = b; return false;
+                }
+                out.P.push_back(t); ++ip;
+            } else {
+                const TECH_TWOPARA* q = it < fTeach->TechTwoPara.size() ? fTeach->TechTwoPara[it] : 0;
+                if (!q || q->Parameter[0] != w.p0 || q->Parameter[1] != w.p1 || q->MotorSelect[0] != w.m0 || q->MotorSelect[1] != w.m1 ||
+                    std::string(q->Key[0].c_str()) != w.k0 || std::string(q->Key[1].c_str()) != w.k1) {
+                    std::snprintf(b, sizeof(b), "TechTwoPara[%u] 與產生表第 %u 列（%s／%s）對不上", (unsigned)it, (unsigned)i + 1, w.k0, w.k1);
+                    why = b; return false;
+                }
+                out.T.push_back(t); ++it;
+            }
+        }
+        if (ip != fTeach->TechPara.size() || it != fTeach->TechTwoPara.size()) {
+            std::snprintf(b, sizeof(b), "實際登錄 TechPara %u／TechTwoPara %u 列，產生表在這台機台的條件下是 %u／%u 列",
+                          (unsigned)fTeach->TechPara.size(), (unsigned)fTeach->TechTwoPara.size(), (unsigned)ip, (unsigned)it);
+            why = b; return false;
+        }
+        for (std::size_t i = 0; ovr[i].btn; ++i) out.selectOnly[ovr[i].btn] = std::make_pair(ovr[i].m, std::string(ovr[i].n));
+        for (std::size_t i = 0; btns[i].btn; ++i) {                             // AI(W906-W5-b) 20260925: R-W5B-2／3
+            TeachBtnInfo b2;
+            b2.handler = btns[i].handler; b2.dfmTag = btns[i].tag; b2.dfmVisible = btns[i].dfmVis != 0;
+            b2.selfOther = btns[i].selfOther; b2.hiddenWhy = btns[i].hiddenWhy; b2.lateReg = btns[i].lateReg != 0;
+            out.btns[btns[i].btn] = b2;
+        }
+        return true;
+    }
+    bool GoldenTeachCanMove(int mi) override
+    {
+        if (!fTeach) return false;                                              // 教導頁的 facade 沒建（wb_serve 開機會建）
+        W906_TeachLive1203Hook = &TeachLive1203Thunk;                            // AI(W906-W5-b) 20260925: W5B-3（forms/fTeach.h 檔尾）
+        W906_TeachHomeLedHook  = &TeachHomeLedThunk;
+        g_W906OrgActiveLow     = &OrgActiveLowHT9050;                            //AI(W906-HT9050-ORG) 20261001
+        fTeach->ActiveMotorIndex = mi;                                         // golden：按運動鈕時的選取軸
+        return fTeach->CheckCanMove() && fTeach->IsCanQuickJogMove();          // forms/fTeach.cpp:330／:135
+    }
+    bool GoldenMotorPowerOff() override { return Sen[SnMotorPower].IsOff(); }  // uteach.cpp:2137
+    int  GoldenReadEncoderPos(int mi) override
+    {
+        return (mi >= 0 && mi < MAX_TRAY_MOTOR && MOT[mi].Motor != 0) ? MOT[mi].ReadEncoderPos() : 0;
+    }
+    bool GoldenTechPosUsesReadPos(int mi) override                              // AI(W906-W5-b) 20260925: W5B-14（uteach.cpp:3487-3490）
+    {
+        return MOTION_CARD_TYPE == MotionCard_Contec && mi >= 0 && mi < MAX_TRAY_MOTOR && MOT[mi].Motor != 0 && MOT[mi].Motor->MotorType == 0;
+    }
+    bool GoldenRotatorLastDirP(int mi) override                                 // AI(W906-W5-b) 20260925: W5B-9
+    {
+        return (mi >= 0 && mi < MAX_TRAY_MOTOR) ? MOT[mi].iLastRotatorDirP : true;
+    }
+    void GoldenSetRotatorLastDirP(int mi, bool p) override
+    {
+        if (mi >= 0 && mi < MAX_TRAY_MOTOR) MOT[mi].iLastRotatorDirP = p;
+    }
+    int  GoldenProdRotatorBacklash(bool inRot) override { return inRot ? Prod.iIn_iRotateA_Backlash : Prod.iOut_iRotateA_Backlash; }   // golden mymotor.cpp:2017／:2031
+    //AI(W906-MERGE-56bbf785) 20260926: the laptop's Pci1203MotionIO (W5B-3) and GoldenSetSpeed(mi, pct) (uteach btnHome 抬起 :2195)
+    //  were dropped here: the machine's MT-E2 block below has the identical Pci1203MotionIO, and GoldenSetSpeed(mi, pct, jog=false)
+    //  is golden SetSpeed(pct) (the teach page now calls that; see WebMotorAccess.h).
+    void GoldenClearAllMotorHome() override { fAllMotorHome = false; }         // AI(W906-W5-b) 20260925: W5B-R3（golden uteach.cpp:1606／:2439、main.cpp:27845）
+    bool GoldenIndexArm3Axis() override { return USE_INDEX_ARM_AXES == IndexArm_3_Axis; }  bool GoldenTeachFixedMotors(const std::string& which, std::vector<int>& mis, std::string& why) override { return ::W906_TeachFixedMotorsLive(which, mis, why); }   //AI(W906-TEACH-ZALLUP) 20261001: golden uteach's fixed motors (body at EOF)
+    int  GoldenTeachRemap(int mi) override
+    {
+        if (USE_PICKER_COUNT == ep1Picker && (mi == 7 || mi == 26)) return mi - 4;   // Ifor 20260109 fix 單一吸嘴模組顯示異常問題（uteach.cpp:3372／:3409）
+        return mi;
+    }
+    bool AliasOfMotIndex(int mi, std::string& alias) override
+    {
+        for (std::size_t i = 0; i < HSys.MotTable.size(); ++i) {
+            const TMOTDATA* r = HSys.MotTable[i];
+            if (r && MotorIndexOf(r->No) == mi) { alias = r->Alias.c_str(); return !alias.empty(); }
+        }
+        return false;
+    }
+    bool Pci1203ActPos(int axis, double& card) override
+    {
+        TPci1203Monitor* m = Pci1203Monitor();
+        if (!m || axis < 0 || axis >= m->axisCount()) return false;
+        const Pci1203AxisSample& s = m->axis(axis);
+        if (!s.valid || !s.opened) return false;
+        card = s.actPos;
+        return true;
+    }
+
+    // ---- W4-b2 ----
+    bool Pci1203AxisState(int axis, unsigned& state) override
+    {
+        TPci1203Monitor* m = Pci1203Monitor();
+        if (!m || axis < 0 || axis >= m->axisCount()) return false;
+        const Pci1203AxisSample& s = m->axis(axis);
+        if (!s.valid || !s.opened) return false;
+        state = s.state;
+        return true;
+    }
+    void GoldenSetHomeFlag(int mi, int v) override
+    {
+        if (mi >= 0 && mi < MAX_TRAY_MOTOR) MOT[mi].HomeFlag = v;
+        std::printf("motor.access: MOT[%d].HomeFlag = %d\n", mi, v);
+    }
+    int  GoldenZSafePos() override { return ZSafePos; }  bool GoldenSingleHomeBegin(int mi) override { if (mi < 0 || mi >= MAX_TRAY_MOTOR || MOT[mi].Motor == 0 || RowIs1203(mi)) return false; fHome->iHomeStep=1; InitProcessSingleMotorTask(mi); MOT[mi].HomeFlag=0; std::printf("motor.access home: golden InitProcessSingleMotorTask(%d) + HomeFlag=0 (btnHomeClick :1154-1158)\n", mi); return true; }  bool GoldenSingleHomeStep(int mi) override { if (mi < 0 || mi >= MAX_TRAY_MOTOR || RowIs1203(mi)) return false; return ProcessSingleMotorHome(mi) && MOT[mi].HomeFlag==1; }   //AI(W906-MT-SMHOME) 20261001: golden btnHomeClick :1154-1158 / MainProc csystem.cpp:16956-16957; a PCI1203 row never takes this path (second lock, as GoldenStopMotor)
+    bool GoldenSystemStart() override { return SystemStart; }  void GoldenArmCellZOrgAlarm(const std::string& zAlias, const std::string& what) override { std::printf("arm cell: %s left its origin while X / Y moved (%s) -> WAR16442 K_RETRY\n", zAlias.c_str(), what.c_str()); ShowErrorMessage("WAR16442", K_RETRY, MMSystem, false, AnsiString(zAlias.c_str())); }   /*AI(W906-ARMCELL-ZALARM) 20261003: NB2-1, RULINGS_20261003 #22 = s0 #70 (2) -- HT160 aSortArm.cpp:739-740 ShowSystemError(K_RETRY); golden ShowErrorMessage stops all motors itself (note.cpp:795) and waits like golden (W5-b ruling 1: the modal wait loop does not run the motor-access ticks, no re-entry); errPart = the Z*/  bool GoldenArmCellCatalog(ArmCellCatalog& out, std::string& why) override { return ArmCellLiveCatalog(out, why); }  bool GoldenArmCellPlan(const ArmCellRequest& q, ArmCellPlan& out, std::string& why) override { return ArmCellLivePlan(q, out, why); }  int GearArmOf(int mi) override { return GearLiveArmOf(mi); }  bool GearEmgStop(std::string& w) override { return GearLiveEmgStop(w); }  bool GearTeachWindowOpen(std::string& w) override { return GearLiveTeachWindowOpen(w); }  bool GearTeachRefs(std::vector<GearTeachRef>& o, std::string& w) override { return GearLiveTeachRefs(o, w); }  std::string GearTeachIniPath() override { return GearLiveTeachIniPath(); }  bool GearSetMotor(int mi, double r, int p, int n, std::string& w) override { return GearLiveSetMotor(mi, r, p, n, w); }  bool GearSetTeach(const std::vector<std::pair<const int*, int> >& v, std::string& w) override { return GearLiveSetTeach(v, w); }  bool GearTeachSaveReload(bool s, std::string& w, std::string& n) override { return GearLiveTeachSaveReload(s, w, n); }  std::string GearCalLogDir() override { return GearLiveCalLogDir(); }  std::string GearOperator() override { return GearLiveOperator(); }   //AI(W906-ARMCELL) 20261002: the Teach Arm Cell tab (ArmCellLive.cpp, tick thread)  //AI(W906-GEARRATIO) 20261002: + the Motor Test Gear Ratio tab (GearRatioLive.cpp, tick thread)
+    void GoldenResetMNet() override
+    {
+        ResetMNet(0, "MNet斷電", "Power Off", false);                            // golden uMotorTest.cpp:1723
+        std::printf("motor.access: ResetMNet(0) (golden btResetMNetClick)\n");
+    }
+    void GoldenSetRangeRate(int mi, bool range, int v) override
+    {
+        if (mi < 0 || mi >= MAX_TRAY_MOTOR || MOT[mi].Motor == 0) return;
+        if (range) MOT[mi].Motor->SetRange((unsigned)v);                        // golden :1378
+        else       MOT[mi].Motor->SetRate((unsigned)v);                         // golden :1368
+        MOT[mi].Motor->InitMotor(MOT[mi].Motor->Address);                       // golden :1379／:1369
+        MOT[mi].HomeFlag = 0;                                                   // golden :1380／:1370
+    }
+
+    // ---- AI(W906-MT-E2) 20260925 ----
+    void GoldenSetSpeed(int mi, int pct, bool jog) override
+    {
+        if (mi < 0 || mi >= MAX_TRAY_MOTOR || MOT[mi].Motor == 0) return;
+        MOT[mi].SetSpeed(pct, jog);                                             // TMyMotor::SetSpeed(double p, bool bSetJog) (Motor/mymotor.cpp:320)   //AI(W906-ENG1203) 20260929: ⚠ with the ENGINE MOTOR ROUTE installed (WB_ENGINE_MOTOR_1203, off by default) this also WRITES the card for a 1203 row (TMyEtherCatMotor::SetSpeed -> route kEcSetSpeed, the same values Motor Test sends -- Q7's dedup skips an equal write the card reads back); without the route it only sets iSpeed, as before
+    }
+    void GoldenSetCell(int mi, int row, double v) override
+    {
+        if (mi < 0 || mi >= MAX_TRAY_MOTOR || MOT[mi].Motor == 0) return;
+        HTMotor* M = MOT[mi].Motor;
+        // golden assigns `double ret` to the unsigned fields; BCB converts through a 64-bit integer (__ftol), so an
+        //   integral ret below 0 wraps modulo 2^32 -- (unsigned)(int) is that, without C++'s undefined double->unsigned.
+        //   The dispatcher already made ret golden's atoi value (integral, in int range) for every row but 8/9.
+        const int iv = (row == 8 || row == 9) ? 0 : (int)v;
+        switch (row) {
+            case 1:  M->SetInitSpeed((unsigned)iv);    break;                  // golden :1200 (TMyEtherCatMotor: InitSpeed=x)
+            case 2:  M->PJogHighSpeed  = (unsigned)iv; break;                  // :1202
+            case 3:  M->PJogLowSpeed   = (unsigned)iv; break;                  // :1204
+            case 4:  M->PHomeHighSpeed = (unsigned)iv; break;                  // :1206
+            case 5:  M->PHomeLowSpeed  = (unsigned)iv; break;                  // :1208
+            case 6:  M->PSoftLimitP    = iv;           break;                  // :1210
+            case 7:  M->PSoftLimitN    = iv;           break;                  // :1212
+            //AI(W906-MT-ACCLIVE) 20261003: EastSun「我把加速度上調也沒用」-- golden :1214/:1216 only set the DATABASE value; the
+            //  runtime dAcc / dDec (what SetSpeed sends to the card) follows it only at the next SetADCRate(100) (e.g. HOME,
+            //  mymotor.cpp TMyMotor::SetADCRate :291-305 = Motor->SetAcc(GetAccDataBase())). So an edited Acc did nothing until a
+            //  home (measured 13:54: saved 400000, every jog / speed after still sent acc=40000). Now the runtime value follows
+            //  the edit at once -- SetADCRate(100) for that one value.
+            case 8:  M->SetAccDataBase(v); M->SetAcc(v); break;                // :1214 (+ runtime)
+            case 9:  M->SetDecDataBase(v); M->SetDec(v); break;                // :1216 (+ runtime)
+            case 10: M->SetRange((unsigned)iv);        break;                  // :1218 (TMyEtherCatMotor: Range=min(a,1000))
+            default: return;
+        }
+        std::printf("motor.access: MOT[%d] strngrdMotor row %d = %g (golden SelectCell, memory only)\n", mi, row, v);
+    }
+    void GoldenSetLastHomePos(int mi, int v) override
+    {
+        if (mi < 0 || mi >= MAX_TRAY_MOTOR || MOT[mi].Motor == 0) return;
+        MOT[mi].Motor->LastHomePos = v;
+        std::printf("motor.access: MOT[%d].Motor->LastHomePos = %d\n", mi, v);
+    }
+    bool Pci1203MotionIO(int axis, unsigned long& io) override
+    {
+        TPci1203Monitor* m = Pci1203Monitor();
+        if (!m || axis < 0 || axis >= m->axisCount()) return false;
+        const Pci1203AxisSample& s = m->axis(axis);
+        if (!s.valid || !s.opened) return false;
+        io = s.motionIO;
+        return true;
+    }
+    bool GoldenAlarmLed(int mi, bool& known) override
+    {
+        known = false;
+        if (mi < 0 || mi >= MAX_TRAY_MOTOR || MOT[mi].Motor == 0) return false;
+        if (RowIs1203(mi)) return false;                                        //AI(W906-MT-E3c) 20260925: R2 -- a 1203 row's lamp is the monitor's (the dispatcher reads it there)
+        if (INDEX_MOTION_CARD == 0 && (mi == MTestY1 || mi == MTestZ1 || mi == MTestZ2 || mi == MTestY2))
+            MOT[mi].Gali_ScanMotStatus();                                       // golden UpdateMotorLed :636-638
+        else
+            MOT[mi].ScanMotorStatus();                                          // :640
+        known = true;
+        return MOT[mi].Led[iAlarmLed];
+    }
+    MotorReloadResult GoldenReloadMotorParams() override;                       // below the class
+    double MonotonicMs() override
+    {
+        LARGE_INTEGER f, c;                                                     // golden TQPF_Timer's clock (myTimer.cpp:128-134)
+        if (!::QueryPerformanceFrequency(&f) || f.QuadPart == 0 || !::QueryPerformanceCounter(&c)) return -1.0;
+        return (double)c.QuadPart * 1000.0 / (double)f.QuadPart;
+    }
+
+    // ---- AI(W906-MT-E3c) 20260925 ----
+    //  Motor Power: SW[] writes with the route source "web" (always executed and recorded, Pci1203IoRoute.h), restored to
+    //  "engine" right after -- the same bracket JsonBridge/IoBtnPanelClick.cpp puts around its IOBitOn.
+    MotorPowerState GoldenMotorPower(bool syncFromCard) override
+    {
+        MotorPowerState s;
+        bool card = false;
+        s.cardKnown = RelayCardBit(SwMotorRelay, card);
+        s.card = card;
+        if (syncFromCard && s.cardKnown && SW[SwMotorRelay].OutValue != card) {
+            SW[SwMotorRelay].OutValue = card;                                   // lead default: the card is the truth (IO-page clicks bypass OutValue)
+            s.synced = true;
+            std::printf("motor.access: SW[SwMotorRelay].OutValue := %d from the 1203 DO read-back\n", (int)card);
+        }
+        s.relayOn = SW[SwMotorRelay].OutValue;
+        s.motorPowerState = bMotorPowerState;
+        return s;
+    }
+    void GoldenMotorPowerOnBegin() override
+    {
+        Pci1203RouteSetSource("web");
+        W906_DoMotorPowerOnBegin();                                             // csystem.h (MT-E3b): golden DoMotorPowerOn, first pass
+        Pci1203RouteSetSource("engine");
+        std::printf("motor.access: DoMotorPowerOn begin (relay On + IndexMotorBreakerOFF/MagazineBreakerOFF/CassetteBreakerOFF)\n");
+    }
+    bool GoldenMotorPowerOnStep() override
+    {
+        Pci1203RouteSetSource("web");
+        const bool done = W906_DoMotorPowerOnStep();
+        Pci1203RouteSetSource("engine");
+        return done;
+    }
+    void GoldenServerOn() override
+    {
+        Pci1203RouteSetSource("web");
+        SW[SwServerON].On();                                                    // golden :1635 / :1042
+        Pci1203RouteSetSource("engine");
+        std::printf("motor.access: SW[SwServerON].On()\n");
+    }
+    void GoldenMotorServoOff(const std::string& sFunc) override
+    {
+        if (fHome == 0) { std::printf("motor.access: fHome is NULL -- GaliMotorServoOff(%s) not run\n", sFunc.c_str()); return; }
+        Pci1203RouteSetSource("web");
+        fHome->GaliMotorServoOff(AnsiString(sFunc.c_str()));                    // uhome.cpp (MT-E3b): golden uhome.cpp:4988-5016
+        Pci1203RouteSetSource("engine");
+        std::printf("motor.access: fHome->GaliMotorServoOff(\"%s\")\n", sFunc.c_str());
+    }
+    std::string GoldenRouteLastWrite() override
+    {
+        const Pci1203RouteWrite& w = Pci1203RouteLastWrite();
+        if (w.seq == 0) return "no write through the 1203 route yet";
+        char b[320];
+        std::snprintf(b, sizeof(b), "#%lu ring %d st %d %s %d = %d: %s%s%s", w.seq, w.ring, w.station, w.byte ? "byte" : "chan", w.port, w.value,
+                      !w.reached || !w.accepted ? "REFUSED" : w.issued ? (w.ret == 0 ? "ISSUED OK" : "ISSUED, VENDOR ERROR") : "DRY RUN",
+                      w.why.empty() ? "" : " -- ", w.why.c_str());
+        return b;
+    }
+    void GoldenSetRangeMemory(int mi, unsigned v) override
+    {
+        if (mi < 0 || mi >= MAX_TRAY_MOTOR || MOT[mi].Motor == 0) return;
+        MOT[mi].Motor->SetRange(v);                                             // TMyEtherCatMotor::SetRange: Range=min(a,1000), no card
+        std::printf("motor.access: MOT[%d].Motor->SetRange(%u) (memory)\n", mi, v);
+    }
+    void GoldenSetAccMemory(int mi, double a) override
+    {
+        if (mi < 0 || mi >= MAX_TRAY_MOTOR || MOT[mi].Motor == 0) return;
+        TMyEtherCatMotor* E = dynamic_cast<TMyEtherCatMotor*>(MOT[mi].Motor);
+        if (E) E->SetAcc(a);                                                    // `dAcc=a` (myEthercatmotor.cpp:1563) -- the member SetRate assigns
+        else   MOT[mi].Motor->HTMotor::SetAcc(a);                               // another object on a PCI1203 row (M14): the base member, no card
+        std::printf("motor.access: MOT[%d] dAcc = %.9g (golden SetRate, memory)\n", mi, a);
+    }
+    std::vector<InitCfg> GoldenInitCfgPlan(const MotorGolden& g) override
+    {
+        Pci1203InitCfgStep plan[16];
+        const int n = Pci1203GoldenInitCfgPlan(g.motorClass, g.sensorType, g.in1Logic, plan, 16);   // EastSun MT-E3a (golden order)
+        std::vector<InitCfg> v;
+        for (int i = 0; i < n && i < 16; ++i) { InitCfg c; c.which = plan[i].which; c.value = plan[i].value; c.name = Pci1203InitCfgName(plan[i].which); v.push_back(c); }
+        return v;
+    }
+    bool GoldenInitMotorEmgOff() override
+    {
+        return Sen[SnFrontLeftEMG].IsOff() || Sen[SnFrontRightEMG].IsOff() ||   // golden myEthercatmotor.cpp:180-181
+               Sen[SnRearLeftEMG].IsOff()  || Sen[SnRearRightEMG].IsOff();
+    }
+    void SleepMs(int ms) override { if (ms > 0) ::Sleep((DWORD)ms); }
+    //AI(W906-BRAKE-AXIS) 20260929: see BrakeAxisTick above -- the servo OFF holds the brake FIRST (true = it was released and is held now).
+    bool BrakeHoldBeforeServoOff(const std::string& alias, std::string& note) override
+    {
+        note.clear();
+        const int sw = BrakeSwOf(alias);
+        if (sw < 0) return false;
+        const bool was = SW[sw].OutValue;
+        SW[sw].Off();
+        BrakeAxisState& st = g_brakeAxis[alias];
+        st.released = false;
+        st.blocked = true; st.blockSince = ::GetTickCount();                   // the G05 group release / a stale SVON sample must not undo it
+        note = std::string("brake ") + SW[sw].Name.c_str() + " OFF (held) before servo off" + (was ? " + 100 ms" : " (it was already held)");
+        BrakeLog(alias + ": " + note);
+        return was;
+    }
+    void GoldenInitMOTParameterAll() override
+    {
+        for (int i = 0; i < TOTAL_MOTOR && i < MAX_TRAY_MOTOR; ++i) MOT[i].InitMOTParameter();   // golden uMotorTest.cpp:1314-1315
+    }
+    void GoldenFormClose() override { PauseUT150Polling = false; }              // golden uMotorTest.cpp:1361
+    std::string AliasOfMotor(int mi) override
+    {
+        const TMOTDATA* r = RowOfIndex(mi);
+        return r ? std::string(r->Alias.c_str()) : std::string();
+    }
+    int GoldenLightScaleEncoder(std::string& src, bool& fromMonitor) override
+    {
+        fromMonitor = false;
+        const TMOTDATA* row = RowOfIndex(MLightScale);
+        if (row && std::string(row->CardModel.c_str()) == "PCI1203") {        // a 1203 scale axis: its actual position (golden ReadEncoderPos)
+            MotorAccessAxis a;
+            TPci1203Monitor* m = Pci1203Monitor();
+            if (Resolve(row->Alias.c_str(), a) && a.axis >= 0 && m && a.axis < m->axisCount() && m->axis(a.axis).valid) {
+                const bool hasG = MOT[MLightScale].Motor != 0;
+                //AI(W906-MERGE-56bbf785) 20260926: `if (Direction) { "Direction=1 withheld (§0 #5)"; return 0; }` removed -- ruling 6B
+                //  (RULINGS_20260925 #13: a 1203 axis ignores Direction), as the laptop did for the runtime overlay below.
+                src = "pci1203";
+                fromMonitor = true;
+                return MotorCardToUser(m->axis(a.axis).actPos, hasG ? MOT[MLightScale].Motor->GearRatio : 1.0);
+            }
+            src = "pci1203: axis not readable (" + a.why + ") -> 0";
+            return 0;
+        }
+        if (MOT[MLightScale].Motor != 0) { src = row ? "MOT" : "MOT (no Mot_Table row)"; return MOT[MLightScale].ReadEncoderPos(); }   // golden, verbatim
+        src = "none";
+        return 0;
+    }
+    int GoldenLightScaleDataCount(int k) override
+    {
+        switch (k) {
+            case 1: return iLogLightScaleCount_InArmX1;   case 2: return iLogLightScaleCount_InArmX2;
+            case 3: return iLogLightScaleCount_InArmY1;   case 4: return iLogLightScaleCount_InArmY2;
+            case 5: return iLogLightScaleCount_OutArmX1;  case 6: return iLogLightScaleCount_OutArmX2;
+            case 7: return iLogLightScaleCount_OutArmY1;  case 8: return iLogLightScaleCount_OutArmY2;
+        }
+        return 0;
+    }
+    static TMemo* LsMemo(int k)
+    {
+        if (fMotorTest == 0) return 0;                                          // wb_serve does not build fMotorTest (forms/fMotorTest.cpp:99)
+        TMemo* const p[9] = { 0, fMotorTest->mmo1, fMotorTest->mmo2, fMotorTest->mmo3, fMotorTest->mmo4,
+                              fMotorTest->mmo5, fMotorTest->mmo6, fMotorTest->mmo7, fMotorTest->mmo8 };
+        return (k >= 1 && k <= 8) ? p[k] : 0;
+    }
+    std::vector<std::string> GoldenLightScaleData(int k) override
+    {
+        std::vector<std::string> v;
+        TMemo* m = LsMemo(k);
+        if (m && m->Lines) for (int i = 0; i < m->Lines->Count; ++i) v.push_back(m->Lines->Strings[i].c_str());
+        return v;
+    }
+    void GoldenLightScaleDataClear(int k) override { TMemo* m = LsMemo(k); if (m) m->Clear(); }
+    void GoldenLightScaleCountsReset() override
+    {
+        iLogLightScaleCount_InArmX1 = 0; iLogLightScaleCount_InArmX2 = 0; iLogLightScaleCount_InArmY1 = 0; iLogLightScaleCount_InArmY2 = 0;
+        iLogLightScaleCount_OutArmX1 = 0; iLogLightScaleCount_OutArmX2 = 0; iLogLightScaleCount_OutArmY1 = 0; iLogLightScaleCount_OutArmY2 = 0;
+    }
+    std::string LightScaleRoot() override { return "D:\\LightScale"; }          // golden uMotorTest.cpp:1752 / :2055
+    std::string LocalStampYmdhm() override
+    {
+        SYSTEMTIME t;
+        ::GetLocalTime(&t);                                                     // golden FormatDateTime("yyyymmddhhmm", Now())
+        char b[32];
+        std::snprintf(b, sizeof(b), "%04u%02u%02u%02u%02u", (unsigned)t.wYear, (unsigned)t.wMonth, (unsigned)t.wDay, (unsigned)t.wHour, (unsigned)t.wMinute);
+        return b;
+    }
+
+    //AI(W906-MT-SAVEMOT) 20260930: saveMotTable (Motor Test「回寫 Mot_Table」, WebMotorAccess.cpp EOF). The path is the one the boot
+    //  read (MotTablePath, database.cpp LoadMotData: W906_MOTTABLE_PATH or the golden literal); INDEX_MOTION_CARD decides TMOTDATA's
+    //  Index-row override. After a write the in-memory row of that Alias (the first one, Resolve's rule) is set the way TMOTDATA would
+    //  read the new cells -- only the ten Settings members and _CommaText; the row's identity (No/Alias/CardModel/...) is not touched.
+    std::string MotTableFilePath() override { return std::string(MotTablePath.c_str()); }
+    bool MotTableIndexForced() override { return INDEX_MOTION_CARD == 0; }
+    void MotTableRowSaved(const std::string& alias, const std::string& rowText,
+                          const std::vector<std::pair<std::string, std::string> >& cells) override
+    {
+        TMOTDATA* row = 0;
+        for (std::size_t i = 0; i < HSys.MotTable.size(); ++i) {
+            TMOTDATA* r = HSys.MotTable[i];
+            if (r && alias == r->Alias.c_str()) { row = r; break; }
+        }
+        if (!row) { std::printf("motor.access saveMotTable: HSys.MotTable has no row %s -- memory not updated\n", alias.c_str()); return; }
+        row->_CommaText = AnsiString(rowText.c_str());
+        for (std::size_t k = 0; k < cells.size(); ++k) {                        // TMOTDATA's own reads (database.cpp: atoi / atof)
+            const std::string& c = cells[k].first;
+            const char* t = cells[k].second.c_str();
+            if      (c == "InitSpeed")     row->iInitSpeed     = std::atoi(t);
+            else if (c == "JogHighSpeed")  row->iJogHighSpeed  = std::atoi(t);
+            else if (c == "JogLowSpeed")   row->iJogLowSpeed   = std::atoi(t);
+            else if (c == "HomeHighSpeed") row->iHomeHighSpeed = std::atoi(t);
+            else if (c == "HomeLowSpeed")  row->iHomeLowSpeed  = std::atoi(t);
+            else if (c == "SoftLimitP")    row->iSoftLimitP    = std::atoi(t);
+            else if (c == "SoftLimitN")    row->iSoftLimitN    = std::atoi(t);
+            else if (c == "Acc")           row->dAcc           = std::atof(t);
+            else if (c == "Dec")           row->dDec           = std::atof(t);
+            else if (c == "Range")         row->iRange         = std::atoi(t);  else if (c == "GearRatio") row->dGearRatio = std::atof(t);   //AI(W906-GEARRATIO) 20261002: gearRatioSave's cell (TMOTDATA dGearRatio = atof, database.cpp ~:2772; reload does not update it, the config API shows it -- NB2 spec §5.3 step 2). Same line
+        }
+        std::printf("motor.access saveMotTable: HSys.MotTable row %s updated (%d cell(s))\n", alias.c_str(), (int)cells.size());
+    }
+};
+
+//AI(W906-MT-E2) 20260925: golden btnReloadMotorDataClick's InitialMotorParameter() (golden cinitial.cpp:3392 on; port
+//  cinitial.cpp:3835-4107), WITHOUT the parts that would fight the 1203 monitor or re-shape the process:
+//    * the file is read the port's own way (TStringList + TMOTNO::SetMOTTableNo + the TMOTDATA row parser = the pieces of
+//      SYSTEM_MODULAR::LoadMotData, database.cpp:1774) into a PRIVATE list -- HSys.MotTable / mapMotTable (what Resolve,
+//      /api/struct/motor/config and the monitor's axis names are keyed on) are not replaced; HSys.MotNo is put back after.
+//      READ ONLY: Mot_Table.csv is never written.
+//    * a motor whose row identity changed (Motorname / Alias / CardModel / BoardID / Port / IP / Enable, or the row is new
+//      or gone) gets NOTHING -- its object was built for the old row; the ack says restart wb_serve.
+//    * for the others, exactly the table assignments of the bHasMotor branch (cinitial.cpp:4039-4094) onto the EXISTING
+//      MOT[i].Motor, then golden's SetMotorAccelSpeed(i, 100) (dAcc/dDec back to the database value -- memory only for the
+//      card types here, TMyEtherCatMotor::SetAcc is `dAcc=a`).
+//    * NOT re-run: InitialMotorName, `new`/`delete` of motor objects, Motor->Enable and MOT[i].CardType (identity),
+//      SetArmMaxSpeed (a SYNTEK card write), InitMotor(iAdder) (opens the axis -- the monitor owns every 1203 axis), and
+//      MC88X1's SetRate (no MC88X1 driver in this port, cinitial.cpp:3979).
+//  HomeFlag=0 for every motor is done by the caller first (GoldenClearAllHomeFlags), as golden's loop does for every i.
+//  (Still inside this file's anonymous namespace.)
+bool SameMotRowIdentity(const TMOTDATA& a, const TMOTDATA& b)
+{
+    return a.No == b.No && a.Alias == b.Alias && a.CardModel == b.CardModel && a.iBoardID == b.iBoardID &&
+           a.iPort == b.iPort && a.iIP == b.iIP && a.iEnable == b.iEnable;
+}
+void ReloadApplyRow(int i, const TMOTDATA& t)                                   // cinitial.cpp:4039-4094, line for line
+{
+    HTMotor* M = MOT[i].Motor;
+    const AnsiString sModel = t.CardModel;
+    M->GearRatio         = t.dGearRatio;
+    M->Direction         = (t.iDirection == 1) ? true : false;
+    M->HomeDirection     = (t.iHomeDirectior == 1) ? true : false;
+    double dAcc = t.dAcc;
+    double dDec = t.dDec;
+    if (sModel == "MN200") {                                                    // Steven 20230616 : MN200的加減速單位是秒
+        if (dAcc > 1) dAcc = t.dAcc / 100.0;
+        if (dDec > 1) dDec = t.dDec / 100.0;
+    } else if (sModel == "MC88X1") {                                            // golden also calls SetRate(iRate) -- not re-run (see above)
+        dAcc = t.iRate;
+        dDec = t.iRate;
+    }
+    M->SetAccDataBase(dAcc);
+    M->SetDecDataBase(dDec);
+    M->SetRange(t.iRange);
+    M->PHomeHighSpeed    = t.iHomeHighSpeed;
+    M->PHomeLowSpeed     = t.iHomeLowSpeed;
+    M->PJogHighSpeed     = t.iJogHighSpeed;
+    M->PJogLowSpeed      = t.iJogLowSpeed;
+    M->SetInitSpeed(t.iInitSpeed);
+    M->InitSpeed         = t.iInitSpeed;
+    M->PServoAlarmOn     = (t.iServoAlarmOn == 1) ? true : false;
+    M->MotorType         = t.i1P2P;
+    M->bSensorType       = t.iSensorType;
+    M->bLimitLogic       = (t.iLimitLogic == 1) ? true : false;
+    M->bIn1Logic         = (t.iIn1Logic == 1) ? true : false;
+    M->PSoftLimitN       = t.iSoftLimitN;
+    M->PSoftLimitP       = t.iSoftLimitP;
+    MOT[i].SimulateSpeed = t.iSimulateSpeed;
+    MOT[i].HomeFlag      = 0;                                                   // cinitial.cpp:4078
+    SetMotorAccelSpeed(i, 100);                                                 // :4079
+    if (MOT[i].Mot_Name == MInShuttle1) { iInitSpeedSh1 = M->InitSpeed; iPJogHighSpeedSh1 = M->PJogHighSpeed; }   // :4081-4085
+    if (MOT[i].Mot_Name == MInShuttle2) { iInitSpeedSh2 = M->InitSpeed; iPJogHighSpeedSh2 = M->PJogHighSpeed; }   // :4087-4091
+    if (i == MTestZ1 || i == MTestZ2) MOT[i].IndexPickLimit = t.iPickLimit;    // :4093-4094
+}
+
+MotorReloadResult LiveBackend::GoldenReloadMotorParams()
+{
+    MotorReloadResult R;
+    const AnsiString path = MotTablePath;                                       // what the boot LoadMotData read (database.cpp:1778)
+    if (!FileExists(path)) { R.why = std::string("file not found: ") + path.c_str(); return R; }
+    std::vector<TMOTDATA*> rows;
+    const TMOTNO bootCols = HSys.MotNo;
+    TStringList* SL = new TStringList();
+    try {
+        SL->LoadFromFile(path);
+        if (SL->Count <= 1)
+            R.why = std::string("no data rows in ") + path.c_str();
+        else if (HSys.MotNo.SetMOTTableNo(SL->Strings[0]) < HSys.MotNo.emotTotal - 1)   // LoadMotData's own gate (database.cpp:1799)
+            R.why = std::string("header not understood (LoadMotData gate) in ") + path.c_str();
+        else {
+            for (int k = 1; k < SL->Count; ++k) rows.push_back(new TMOTDATA(SL->Strings[k]));
+            R.read = true;
+        }
+    } catch (...) {
+        R.why = std::string("could not read (opened by other software?) ") + path.c_str();
+    }
+    HSys.MotNo = bootCols;                                                      // HSys.MotTable was parsed with this map
+    delete SL;
+    if (R.read) {
+        std::map<std::string, const TMOTDATA*> byNo;                            // LoadMotData's rule: the first row of a Motorname wins
+        for (std::size_t k = 0; k < rows.size(); ++k) {
+            const std::string no = rows[k]->No.c_str();
+            if (!no.empty() && byNo.find(no) == byNo.end()) byNo[no] = rows[k];
+        }
+        for (int i = 0; i < TOTAL_MOTOR && i < MAX_TRAY_MOTOR; ++i) {
+            AnsiString key;
+            key.sprintf("M%02d", i);
+            const TMOTDATA* o = 0;
+            std::map<AnsiString, AnsiString>::iterator it = HSys.mapMotTable.find(key);   // the boot row (cinitial.cpp:3880-3883)
+            if (it != HSys.mapMotTable.end()) {
+                const int k = std::atoi(it->second.c_str());
+                if (k >= 0 && k < (int)HSys.MotTable.size()) o = HSys.MotTable[k];
+            }
+            std::map<std::string, const TMOTDATA*>::const_iterator nt = byNo.find(key.c_str());
+            const TMOTDATA* n = (nt == byNo.end()) ? 0 : nt->second;
+            if (!o && !n) continue;
+            if (!o || !n || !SameMotRowIdentity(*o, *n)) {
+                ++R.identityChanged;
+                if (R.firstChanged.empty())
+                    R.firstChanged = std::string(key.c_str()) + (!o ? " (row added)" : !n ? " (row removed)" : " (No/Alias/CardModel/BoardID/Port/IP/Enable changed)");
+                continue;
+            }
+            if (MOT[i].Motor == 0) continue;
+            ReloadApplyRow(i, *n);
+            ++R.applied;
+        }
+    }
+    for (std::size_t k = 0; k < rows.size(); ++k) delete rows[k];
+    std::printf("motor.access reloadMotorData: %s: %s, applied %d, identity changed %d%s%s\n", path.c_str(),
+                R.read ? "re-read" : "NOT re-read", R.applied, R.identityChanged,
+                R.firstChanged.empty() ? "" : " first ", R.firstChanged.c_str());
+    if (!R.read) std::printf("  why: %s\n", R.why.c_str());
+    return R;
+}
+
+}  // namespace
+
+IMotorAccessBackend& MotorAccessLiveBackend()
+{
+    static LiveBackend s_backend;
+    return s_backend;
+}
+
+}  // namespace ht9045
+
+// wb_serve 的 `motor.access`／`motor.stop` 臂呼叫這一支（全域函式、區塊內 extern 宣告，同 W906_AlarmStopLikeGolden 的做法 ——
+//   wb_serve.cpp 不加 include 行，既有的行號引用不位移）。
+//   stopOnly = 命令是 `motor.stop`：WebBridgeServer 讓它**免操作權杖**（任何連上的頁面都要停得了機台，
+//   同告警回答的豁免），所以這裡必須把它鎖死在 action=="stop" —— 否則豁免就變成「不拿權杖也能動馬達」的洞。
+bool W906_MotorAccessWire(const std::string& valueJson, long long wireId, std::string& ackOut, bool stopOnly)
+{
+    ht9045::MotorAccessReq req;
+    std::string why;
+    if (!ht9045::MotorAccessParse(valueJson, req, why)) {
+        std::printf("motor.access REFUSED: %s\n", why.c_str());
+        ackOut = why;
+        return false;
+    }
+    if (stopOnly && req.action != "stop") {
+        ackOut = "motor.stop 只收 action=stop（它免操作權杖；其他動作請走 motor.access）";
+        std::printf("motor.stop REFUSED: action=%s\n", req.action.c_str());
+        return false;
+    }
+    const ht9045::MotorAccessOutcome o =
+        ht9045::MotorAccessDispatch(req, wireId, ht9045::MotorAccessLiveBackend());
+    std::printf("motor.access %s/%s %s: %s\n", req.source.c_str(), req.action.c_str(),
+                req.motors.empty() ? "-" : req.motors[0].c_str(),
+                o.ok ? "ok" : o.ackJson.c_str());
+    ackOut = o.ackJson;
+    return o.ok;
+}
+
+// NB2 R23 W4C-4：wb_serve 的 ShowErrorMessage 入口（W906_AlarmStopLikeGolden，golden note.cpp:795 StopAllMotor）同行呼叫。
+void W906_MotorAccessOnAlarm(const char* code)
+{
+    ht9045::MotorAccessOnAlarm(ht9045::MotorAccessLiveBackend(), code ? code : "");
+}
+
+// AI(W906-W5-b) 20260925: 覆核 W5B-R5 —— wb_serve 的 start.run 與告警框按 START（W906_AlarmAnswerStartLikeGolden）在呼叫 StartFromWeb 之前問：
+//   true＝手動教導中（伺服關、操作員可能正推著軸），不准啟動（why 是給畫面的理由）。
+bool W906_MotorAccessStartBlocked(std::string& why)
+{
+    return ht9045::MotorAccessStartBlocked(why);
+}
+
+// wb_serve 主迴圈每個 500 ms 拍子呼叫（tools/wb_serve.cpp:4048，同行附加在 W906_StateRecordTimer2Pump 之後）。
+//   用實際經過的毫秒數推進，拍子被拖慢（1203 Poll 約 140 ms）時等待時間不會被算短。
+#include <windows.h>
+#include <map>
+// W4-c：/api/struct/motor/runtime 的 1203 軸改讀監看器樣本（ChanMotor.h 檔尾的掛鉤）。
+// ⚠ NB2 R23 §2 更正：這個掛鉤在 **HTTP socket 執行緒**上被呼叫（wb_serve 的 /api/struct/* 路由），而 Pci1203Monitor 標明
+//   NOT THREAD-SAFE —— 主執行緒的 Poll 同時會改樣本（含 std::string driveErrText）。原本直接讀 m->axis() 是資料競爭（可能讀到半寫的字串）。
+//   ⇒ 主執行緒每個拍子（W906_MotorAccessTick）把需要的欄位抄一份，掛鉤只在鎖內讀這份抄本。
+//   Resolve（查監看器的軸槽）與 GoldenMotor（MOT[]）也都在主執行緒做完 —— socket 執行緒只在鎖內查這張以 Alias 為鍵的表。
+namespace {
+CRITICAL_SECTION                                            g_ovCs;
+bool                                                        g_ovInit = false;
+std::map<std::string, ht9045::sjson::MotorRuntimeOverlay>   g_ov;
+ht9045::sjson::MotorTestPageState                           g_page;   //AI(W906-MT-E2) 20260925: under g_ovCs too
+void OverlaySnapshot()                                                          // 主執行緒
+{
+    if (!g_ovInit) { ::InitializeCriticalSection(&g_ovCs); g_ovInit = true; }
+    std::map<std::string, ht9045::sjson::MotorRuntimeOverlay> v;
+    ht9045::TPci1203Monitor* m = ht9045::Pci1203Monitor();
+    ht9045::IMotorAccessBackend& be = ht9045::MotorAccessLiveBackend();
+    const ht9045::MotorAccessJobState js = ht9045::MotorAccessJobs();          // AI(W906-MT-E1) 20260925: btnHome / btnLoopMove state
+    for (std::size_t i = 0; m && i < HSys.MotTable.size(); ++i) {
+        const TMOTDATA* row = HSys.MotTable[i];
+        if (!row) continue;
+        ht9045::MotorAccessAxis a;
+        if (!be.Resolve(row->Alias.c_str(), a) || !a.Is1203() || a.axis < 0 || a.axis >= m->axisCount()) continue;
+        const ht9045::Pci1203AxisSample& s = m->axis(a.axis);
+        if (!s.valid || !s.opened) continue;
+        ht9045::sjson::MotorRuntimeOverlay out;
+        ht9045::MotorGolden g;
+        const bool hasG = be.GoldenMotor(a.motIndex, g);
+        if (false && hasG && g.direction) {   //AI(W906-DIR6B) 20260925: RULINGS_20260925 第 13 條（6B）「1203 軸不看 Direction，方向交給驅動器 Pn000」—— 不再以 Direction=1 拒絕；位置照卡片給（使用者單位＝卡片／GearRatio，不翻號）
+            out.posKnown = false;
+            out.why = "Direction=1：方向慣例待使用者決定（夜間報告 §0 第 5 件），位置先不給";
+        } else {
+            out.posKnown = true;
+            // AI(W906-W5-b) 20260925: W5B-6 —— 手動教導後以編碼器為基準的軸，「目前位置」給編碼器（golden ResetPos 之後 ReadPos＝編碼器；
+            //   教導頁 btnSetTo 就是把這個值寫進教導欄位）
+            out.cmdPos = ht9045::MotorCardToUser(ht9045::MotorAccessEncoderBase(a.axis) ? s.actPos : s.cmdPos, hasG ? g.gearRatio : 1.0);
+            out.encPos = ht9045::MotorCardToUser(s.actPos, hasG ? g.gearRatio : 1.0);
+        }
+        out.state   = s.state;
+        out.servoOn = (s.motionIO & 0x00004000ul) != 0;                         // AX_MOTION_IO_SVON
+        out.alarm   = (s.motionIO & 0x00000002ul) != 0 || (s.state & 0xFFu) == 3u;  // AX_MOTION_IO_ALM 或 ERROR_STOP
+        out.inPos   = (s.motionIO & 0x00002000ul) != 0;                         // AX_MOTION_IO_INP
+        out.busy    = (s.state & 0xFFu) != 1u;                                  // 不在 READY
+        out.driveErr = s.driveErrText;  { ht9045::Pci1203MotorRouteFault f; if (ht9045::Pci1203MotorRouteAxisFault(s.station, s.stationAxis, f)) out.why = ht9045::Pci1203MotorRouteFaultText(f); }  { std::string gz; if (ht9045::Pci1203GaliRouteFaultFor(s.station, s.stationAxis, gz)) out.why = out.why.empty() ? gz : out.why + "; " + gz; }   //AI(W906-ENG1203) 20260929: review MEDIUM-1 -- the engine route's latched failed stops / motions of this axis -> /api/struct/motor/... diag.why ("" when none, as before; the route never saw the axis = untouched)   //AI(W906-INDEXZ) 20260930: + the Index Z1 route's latched failed stops / motions (review #6), same diag.why
+        out.ioKnown  = true;                                                    // AI(W906-MT-E1) 20260925: Motor Test ALed1..10
+        out.motionIO = s.motionIO;
+        const std::string alias = row->Alias.c_str();
+        for (std::size_t k = 0; k < js.homeMotors.size(); ++k) if (js.homeMotors[k] == alias) { out.homeJob = true; break; }
+        out.loopJob   = js.loopActive && js.loopMotor == alias;
+        for (std::size_t k = 0; !out.loopJob && js.loopActive && k < js.loopMotors.size(); ++k) out.loopJob = (js.loopMotors[k] == alias);   //AI(W906-MT-E3c) 20260925: every motor of an All-mode loop
+        out.loopCount = out.loopJob ? js.loopCount : 0;
+        //AI(W906-MT-E3c) 20260925: actual torque (MT-E3a sample fields; valid for this poll only -- null when not)
+        out.torqueRawValid     = s.torqueValid;
+        out.torqueRaw          = s.torqueRaw;
+        out.torqueSrc          = s.torqueSrc;
+        out.torquePctValid     = s.torquePctValid;
+        out.torquePct          = s.torquePct;
+        out.torqueNmValid      = s.torqueNmValid;
+        out.torqueNm           = s.torqueNm;
+        out.torqueUnitVerified = s.torqueUnitVerified;
+        v[row->Alias.c_str()] = out;
+    }
+    //AI(W906-MT-E2) 20260925: the page-wide half (golden ActiveIndex, lblJogPTime / lblJogNTime / lblAvgTime), same copy rule.
+    ht9045::sjson::MotorTestPageState pg;
+    pg.selectedMotor = js.selectedMotor;
+    pg.hasJogPTime = js.hasJogPTime;  pg.jogPTime = js.jogPTime;
+    pg.hasJogNTime = js.hasJogNTime;  pg.jogNTime = js.jogNTime;
+    pg.hasAvgTime  = js.hasAvgTime;   pg.avgTime  = js.avgTime;
+    //AI(W906-MT-E3c) 20260925: motorPower / lock / lightScale (the contract's three top-level blocks), copied on this thread --
+    //  W906_GetMotorLockState() and SW[] may only be read here (csystem.h THREADING).
+    {
+        const ht9045::MotorPowerState ps = be.GoldenMotorPower(false);         // read only: no sync from the runtime producer
+        pg.hasPower = true;
+        pg.relayOn = ps.relayOn; pg.relayCardKnown = ps.cardKnown; pg.relayCard = ps.card;
+        pg.motorPowerState = ps.motorPowerState; pg.powerPending = js.powerPending;
+        const W906MotorLockState& lk = W906_GetMotorLockState();
+        pg.hasLock = true;
+        pg.locked = lk.locked; pg.labLockVisible = lk.labLockVisible; pg.lockText = lk.labLockCaption.c_str();
+        pg.unlockCount = lk.unlockCount; pg.lastUnlockWhy = lk.lastUnlockWhy.c_str();
+        //AI(W906-MT-AXISLOCK) 20260929: EastSun「只要某一軸alarm 就不讓我控制嗎？…每個軸都是獨立可控的」-- the per-axis lock the page uses
+        //  (WebMotorAccess.h MotorAccessAxisLock). A row that is not PCI1203 has no per-axis answer here: it follows golden's page lock.
+        for (std::size_t i = 0; i < HSys.MotTable.size(); ++i) {
+            const TMOTDATA* row = HSys.MotTable[i];
+            if (!row || row->iEnable != 1) continue;
+            ht9045::MotorAccessAxis a;
+            if (!be.Resolve(row->Alias.c_str(), a) || a.motIndex < 0) continue;
+            std::string why;
+            const int al = ht9045::MotorAccessAxisLock(be, a.motIndex, why);
+            if (al > 0 || (al < 0 && lk.locked)) { pg.lockedMotors.push_back(row->Alias.c_str()); pg.lockedWhy.push_back(al > 0 ? why : std::string("golden page lock (not a 1203 row)")); }
+        }
+        ht9045::MotorLightScaleState ls = ht9045::MotorAccessLightScale(500);  // contract: the last 500 lines of Memo1
+        pg.hasLightScale = true;
+        pg.lsActive = ls.active; pg.lsTask = ls.task; pg.lsEditsEnabled = ls.editsEnabled; pg.lsHomePending = ls.homePending;
+        pg.lsUseAxis = ls.useAxis; pg.lsAxisItem = ls.axisItem; pg.lsMoveType = ls.moveType; pg.lsNeedMovePos = ls.needMovePos;
+        pg.lsMemoCount = ls.memoCount; pg.lsMemoTail.swap(ls.memoTail);
+        for (int k = 0; k < 8; ++k) { pg.lsData[k] = be.GoldenLightScaleData(k + 1); pg.lsDataCounts[k] = be.GoldenLightScaleDataCount(k + 1); }
+        pg.lsLastSaved = ls.lastSaved; pg.lsLastNote = ls.lastNote; pg.lsEncoderSrc = ls.encoderSrc;
+        pg.loopMotors = js.loopMotors;
+        pg.pageShown = js.pageShown;  pg.armCellJson = ht9045::MotorAccessArmCellJson(be);  { std::vector<std::string> al; for (std::size_t gi = 0; gi < HSys.MotTable.size(); ++gi) if (HSys.MotTable[gi] && HSys.MotTable[gi]->iEnable == 1) al.push_back(HSys.MotTable[gi]->Alias.c_str()); pg.gearCalJson = ht9045::MotorAccessGearCalJson(be, al); }   //AI(W906-ARMCELL) 20261002: the armCell block of /api/struct/motor/runtime, built here on the tick thread (catalog + job)  //AI(W906-GEARRATIO) 20261002: + the Motor Test Gear Ratio block (session + per-axis eligibility; enabled Mot_Table rows)
+    }
+    ::EnterCriticalSection(&g_ovCs);
+    g_ov.swap(v);
+    g_page = pg;
+    ::LeaveCriticalSection(&g_ovCs);
+}
+}  // namespace
+static bool W906_MotorOverlay(const std::string& alias, ht9045::sjson::MotorRuntimeOverlay& out)   // socket 執行緒
+{
+    if (!g_ovInit) return false;                                                // 主執行緒還沒抄過（掛鉤在第一次抄完之後才註冊，這行只是保險）
+    ::EnterCriticalSection(&g_ovCs);
+    std::map<std::string, ht9045::sjson::MotorRuntimeOverlay>::const_iterator it = g_ov.find(alias);
+    const bool ok = it != g_ov.end();
+    if (ok) out = it->second;
+    ::LeaveCriticalSection(&g_ovCs);
+    return ok;
+}
+static bool W906_MotorTestPage(ht9045::sjson::MotorTestPageState& out)          //AI(W906-MT-E2) 20260925: any thread, same lock
+{
+    if (!g_ovInit) return false;
+    ::EnterCriticalSection(&g_ovCs);
+    out = g_page;
+    ::LeaveCriticalSection(&g_ovCs);
+    return true;
+}
+static void W906_MotorAccessHooks()                                            // after the first copy (both hooks read it)
+{
+    static bool s_hooks = false;
+    if (s_hooks) return;
+    ht9045::sjson::SetMotorRuntimeOverlay(&W906_MotorOverlay);
+    ht9045::sjson::SetMotorTestPageState(&W906_MotorTestPage);                  //AI(W906-MT-E2) 20260925
+    s_hooks = true;
+}
+
+//AI(W906-MT-E3c) 20260925: the engine's hooks (csystem.h, MT-E3b) -- EastSun R8: VerifyMotorAction completely golden and
+//  MainProc paused while Motor Test / Teach is open. Registered TOGETHER (MT-E3b api_for_next 2: the fShow hook alone would
+//  lock the page for ever, a TMyEtherCatMotor's MotionDone() is always false here). All run on the tick thread.
+static bool W906_HookFShow(const char* goldenForm)                             // golden fMotorTest / fTeach ->fShow
+{
+    { extern bool W906_PageFormAnswer(const char*); return W906_PageFormAnswer(goldenForm ? goldenForm : ""); }   //AI(W906-PAGETAB-Q51) 20260928 [W906] 改問頁面表（WebPageTable.cpp 規則 1～7；筆電 NIGHT_REPORT 第 36 題 A 案那一行）：瀏覽器全關 ⇒ 不再當成 Teach／Motor Test 開著，MainProc 不會無聲暫停（Steven Q-P1 20260928）；原本 ht9045::WebWindowRegistryFShowPolicy（過期＝開著）
+}
+static int  W906_HookMoving(int motIndex) { return ht9045::MotorAccessMovingOf(ht9045::MotorAccessLiveBackend(), motIndex); }
+static bool W906_HookHoming() { return ht9045::MotorAccessHomingActive(); }
+//AI(W906-HT9050-ORG-ENG) 20261001: 引擎的「馬達在原點」（Motor/mymotor.h W906_Ht9050OrgHomeHook）。HT9050＋1203 軸＝1203 監看器的原點訊號照該軸 SensorType（1＝low、0＝high，AI(W906-HT9050-ORG-ST) 20261002），
+//  跟 Teach 同一支 MotorAccessTeachHomeLed（-2 不是 1203 軸、-1 讀不到／命令後沒新樣本、Mot_Table Enable=0＝1 照 golden、0／1）。不是 HT9050＝-2（golden 原樣）。
+static int W906_HookHt9050OrgHome(int mi)
+{
+    if (W906_GpibModel != "9050GPIB") return -2;
+    ht9045::g_W906OrgActiveLow = &ht9045::OrgActiveLowHT9050;
+    return ht9045::MotorAccessTeachHomeLed(ht9045::MotorAccessLiveBackend(), mi);
+}
+//AI(W906-HOME-STEPLEAVE) 20261003: the engine's TMyMotor::MotorHome case 5 (Motor/mymotor.cpp g_W906PreHomeHook) -> the ONE shared
+//  MotorAccessStepperLeaveOrigin the single HOME uses too (EastSun「你可以統一寫個函式? 單軸和全軸歸原點共用?」). mi < 0 = reset motor -1-mi.
+static int W906_HookPreHome(int mi, char* why, int whyLen)
+{
+    ht9045::IMotorAccessBackend& be = ht9045::MotorAccessLiveBackend();
+    std::string alias;
+    if (mi < 0) { if (be.AliasOfMotIndex(-1 - mi, alias)) ht9045::MotorAccessStepperLeaveReset(alias); return 1; }
+    if (!be.AliasOfMotIndex(mi, alias)) return 1;
+    std::string w;
+    const int r = ht9045::MotorAccessStepperLeaveOrigin(be, alias, w);
+    if (why && whyLen > 0) std::snprintf(why, (std::size_t)whyLen, "%s", w.c_str());
+    return r;
+}
+static void W906_HookAllBtnUp(const char* why) { ht9045::MotorAccessAllBtnUp(ht9045::MotorAccessLiveBackend(), why ? why : ""); }
+static void W906_HookStop1203All(const char* why) { ht9045::MotorAccessStop1203All(ht9045::MotorAccessLiveBackend(), why ? why : ""); }
+//AI(W906-MT-FIX1) 20260926: EastSun ruling 20260926 on G16 -- "對應軸 Servo On 才放" (csystem.h W906_BrakeServoOnHook).
+//  Which axes each golden brake group holds on HT9050 (from the output names in IO_Table.csv and Mot_Table.csv; to be
+//  confirmed by EastSun on the machine):
+//    Index        SwFMotorBreaker / SwBMotorBreaker                 -> MTestZ1 (M14), MTestZ2 (not fitted)
+//    InOutArmZ    SwInArmZBreaker / SwOutArmZBreaker                -> MInArmZ*, MOutArmZ* (M03 MInArmZA, M22 MOutArmZA)
+//    Cassette     SwCassetteLD/Auto1/Auto2MotBreaker                -> MLoaderZ (M35), MAuto1Z (M38), MAuto2Z (M39)
+//                 + SwCassetteEmpty/Auto3MotBreaker (20260930)       -> MEmptyZ (M36), MAuto3Z (M40)
+//    Magazine     SwMagazineMotorBreaker (Enable=0 on HT9050)       -> no axis
+//    LDCarRotArmZ SwLoadCarRFIDZBreaker (not in IO_Table on HT9050) -> no axis
+//  Only enabled PCI1203 rows count; each must be opened by the monitor with a valid sample and its SVON bit on. A group with
+//  no such row answers true (nothing of this tree drives it; golden releases).
+static bool W906_BrakeGroupHasAlias(const char* group, const std::string& alias)
+{
+    const std::string g = group ? group : "";
+    if (g == "Index")     return alias == "MTestZ1" || alias == "MTestZ2";
+    if (g == "InOutArmZ") return alias.compare(0, 7, "MInArmZ") == 0 || alias.compare(0, 8, "MOutArmZ") == 0;
+    if (g == "Cassette")  return alias == "MLoaderZ" || alias == "MAuto1Z" || alias == "MAuto2Z" ||
+                                 alias == "MEmptyZ"  || alias == "MAuto3Z";   //AI(W906-BRAKE-EMPTY-AUTO3) 20260930: HT9050's two extra cassette brakes
+    return false;                                                               // Magazine / LDCarRotArmZ: no axis on HT9050
+}   static void W906_HookBrakeVerdictNote(const char* line) { if (::g_W906BrakeNote && line) ::g_W906BrakeNote(line); }  static void W906_HookPci1203CmdNote(const ht9045::Pci1203Cmd& c, const ht9045::Pci1203CmdResult& r) { if (c.kind == ht9045::kCmdAxSvOn && c.value != 0.0 && r.accepted && r.issued && r.ret == 0 && c.axis >= 0 && c.axis < 256 && (ht9045::OrgActiveLowHT9050() ? ht9045::BrakeHt9050PowerUp() : (!SW[SwMotorRelay].Enable || SW[SwMotorRelay].OutValue))) ++ht9045::g_brakeSvOnSeq[c.axis]; }   /*AI(W906-HT9050-BRAKEPOWER-2) 20261005: HT9050 counts a Servo ON when SnMotorPower is on (the relay output is off there -- 09:34 every Servo ON went uncounted, "no Servo ON from this run")*/  static bool W906_HookBrakeMotionReady(AnsiString* why) { std::string held; ht9045::IMotorAccessBackend& be = ht9045::MotorAccessLiveBackend(); for (std::size_t i = 0; i < sizeof(ht9045::kBrakeAxes) / sizeof(ht9045::kBrakeAxes[0]); ++i) { const std::string alias = ht9045::kBrakeAxes[i].alias; ht9045::MotorAccessAxis a; if (!be.Resolve(alias, a) || !a.Is1203() || a.axis < 0 || !a.tableEnable) continue; const int sw = ht9045::BrakeSwOf(alias); if (sw < 0 || SW[sw].OutValue) continue; held += (held.empty() ? "" : ", ") + alias; } if (held.empty()) return true; if (why) *why = AnsiString(held.c_str()); return false; }   //AI(W906-BRAKE-VERDICT) 20261003: csystem's W906_BrakeReleaseOK verdict -> the op log's BRAKE line only (csystem already printed it)
+static bool W906_HookBrakeServoOn(const char* group, AnsiString* why)
+{
+    ht9045::IMotorAccessBackend& be = ht9045::MotorAccessLiveBackend();
+    std::string off;  std::string sfWhy;   //AI(W906-BRAKE-SERVOFIRST) 20261004
+    std::vector<std::string> ready;                                            //AI(W906-BRAKE-GROUP) 20260930: members that could go alone
+    int n = 0;
+    for (std::size_t i = 0; i < HSys.MotTable.size(); ++i) {
+        const TMOTDATA* row = HSys.MotTable[i];
+        if (!row || row->iEnable != 1) continue;
+        const std::string alias = row->Alias.c_str();
+        if (!W906_BrakeGroupHasAlias(group, alias)) continue;
+        ht9045::MotorAccessAxis a;
+        if (!be.Resolve(alias, a) || !a.Is1203()) continue;                     // not a 1203 row: not this tree's to judge
+        ++n;
+        bool known = false;
+        const bool on = (a.axis >= 0) && be.Pci1203ServoOn(a.axis, known);
+        if (!known || !on) off += (off.empty() ? "" : ", ") + alias + (a.axis < 0 ? "（監看器沒開這一軸）" : (!known ? "（讀不到狀態）" : "（沒激磁）"));
+        else if (!ht9045::BrakeAxisOnLongEnough(alias)) off += (off.empty() ? "" : ", ") + alias + "（激磁未滿 0.5 秒，或剛鎖煞車）";  else if (!ht9045::BrakeAxisServoFirst(alias, &sfWhy)) off += (off.empty() ? "" : ", ") + alias + "（" + sfWhy + "）";   //AI(W906-BRAKE-AXIS) 20260929: EastSun: servo ON 0.5 s before any brake release  AI(W906-BRAKE-SERVOFIRST) 20261004: + power state / delay / a Servo ON from this run (RULINGS_20261003 #24)
+        else ready.push_back(alias);
+    }
+    if (off.empty()) return true;
+    for (std::size_t k = 0; k < ready.size(); ++k) ht9045::BrakeReleaseAxisIfReady(ready[k], group);   //AI(W906-BRAKE-GROUP) 20260930: see BrakeReleaseAxisIfReady
+    if (why) *why = AnsiString(("servo not ON: " + off + " -- 煞車維持鎖住，Servo On 之後下一拍才放（EastSun 裁決 20260926）").c_str());
+    (void)n;
+    return false;
+}
+// Called by wb_serve once before the pump loop (tools/wb_serve.cpp, the "spine pump: ARMED" line) and again from both
+//   ticks below (idempotent) -- so the hooks are in place before the first MainProc of the pump.
+void W906_MotorAccessEngineHooks()
+{
+    static bool s_done = false;
+    if (s_done) return;
+    W906_Stop1203AllHook   = &W906_HookStop1203All;
+    W906_MotorMovingHook   = &W906_HookMoving;
+    W906_FormFShowHook     = &W906_HookFShow;
+    W906_MotorHomingHook   = &W906_HookHoming;
+    W906_MotorAllBtnUpHook = &W906_HookAllBtnUp;
+    W906_BrakeServoOnHook  = &W906_HookBrakeServoOn;  W906_BrakeVerdictNote = &W906_HookBrakeVerdictNote;  ::W906_Pci1203CmdNote = &W906_HookPci1203CmdNote;  W906_BrakeMotionReadyHook = &W906_HookBrakeMotionReady;   //AI(W906-BRAKE-SERVOFIRST) 20261004: + the issued-Servo-ON count   //AI(W906-MT-FIX1) 20260926  AI(W906-BRAKE-VERDICT) 20261003: + the verdict note
+    { extern int (*g_W906PreHomeHook)(int, char*, int); g_W906PreHomeHook = &W906_HookPreHome; }   //AI(W906-HOME-STEPLEAVE) 20261003: the engine home's leave-the-origin step (Motor/mymotor.cpp case 5)
+    W906_Ht9050OrgHomeHook = &W906_HookHt9050OrgHome;                          //AI(W906-HT9050-ORG-ENG) 20261001: 引擎的「在原點」（Motor/mymotor.h）
+    ht9045::g_W906OrgActiveLow = &ht9045::OrgActiveLowHT9050;                   //AI(W906-HT9050-ORG) 20261001: Teach 的也在開機就裝（不等第一個 teach 命令）
+#ifdef W906_HT9050_ORG_INVERT
+    ht9045::g_W906OrgInvert = true;                                             //AI(W906-ORG-INV) 20261002: MachineType.h -- the HT9050 branch answers the opposite
+#endif
+    s_done = true;  { extern void W906_MotorAccessPageEdges(); W906_MotorAccessPageEdges(); }   //AI(W906-WSLINK-B) 20260929: page-table close edges of fMotorTest / fTeach (EOF)
+    std::printf("motor.access: engine hooks registered (Motor Test / Teach fShow, 1203 motion, HOME, AllBtnUp, Stop1203All)\n");
+}
+
+//AI(W906-MT-E3c) 20260925: the torque SDO focus (MT-E3a TPci1203Monitor::SetTorqueFocusAxis) for the Motor Test's selected
+//  axis -- EastSun R6 shows its torque next to Real Speed. Refreshed on every tick while the page is shown (C++'s record of
+//  golden fShow: formShow / selectMotor / formClose) and the operator is connected; it expires by itself 3 s after the last
+//  call (kPci1203TorqueFocusMs), so a closed page stops the mailbox traffic. Not a vendor call.
+static void W906_TorqueFocus(bool operatorConnected)
+{
+    ht9045::TPci1203Monitor* m = ht9045::Pci1203Monitor();
+    if (m == 0 || !operatorConnected) return;
+    const ht9045::MotorAccessJobState js = ht9045::MotorAccessJobs();
+    if (!js.pageShown || js.selectedMotor.empty()) return;
+    ht9045::MotorAccessAxis a;
+    if (!ht9045::MotorAccessLiveBackend().Resolve(js.selectedMotor, a) || !a.Is1203() || a.axis < 0) return;
+    m->SetTorqueFocusAxis(a.axis);
+}
+
+static bool g_opConnected = true;                                               // the last beat's WebBridgeServer::ControlOwner()!=0
+
+namespace ht9045 { extern void (*g_W906PhaseMark)(const char*); }  void W906_MotorAccessTick(bool operatorConnected)   //AI(W906-PASSPROF) 20261006: the serve loop's phase timer (FastClockJobs.cpp); same line
+{
+    W906_MotorAccessEngineHooks();                                              //AI(W906-MT-E3c) 20260925: idempotent (wb_serve registers them before the loop)
+    g_opConnected = operatorConnected;  if (ht9045::g_W906PhaseMark) ht9045::g_W906PhaseMark("MotorAccessTick: OverlaySnapshot");   //AI(W906-PASSPROF) 20261006: phase marks (same lines)
+    OverlaySnapshot();                                                          // NB2 R23 §2：先抄樣本，再（第一次）註冊掛鉤
+    if (ht9045::g_W906PhaseMark) ht9045::g_W906PhaseMark("MotorAccessTick: Hooks");  W906_MotorAccessHooks();   //AI(W906-MT-E2) 20260925: was the overlay hook alone, registered here
+    static DWORD s_last = 0;
+    const DWORD now = ::GetTickCount();
+    const int elapsed = (s_last == 0) ? 0 : (int)(now - s_last);
+    s_last = now;
+    if (ht9045::g_W906PhaseMark) ht9045::g_W906PhaseMark("MotorAccessTick: core");  if (elapsed > 0) ht9045::MotorAccessTick(ht9045::MotorAccessLiveBackend(), elapsed, operatorConnected);
+    if (ht9045::g_W906PhaseMark) ht9045::g_W906PhaseMark("MotorAccessTick: TorqueFocus");  W906_TorqueFocus(operatorConnected);   //AI(W906-MT-E3c) 20260925
+}
+
+//AI(W906-MT-E2) 20260925: wb_serve calls this right after every Pci1203Monitor()->Poll() (tools/wb_serve.cpp, the Poll line of
+//  the IO clock, same thread, about every 200 ms). Order: first the loop step on the fresh sample -- its arrival time is
+//  taken as close to the Poll as this thread gets (QueryPerformanceCounter, LiveBackend::MonotonicMs) -- then the copy for
+//  /api/struct/motor/runtime, so the copy already holds the new leg time / count and this Poll's motor IO lamps (they used to
+//  wait for the 500 ms beat). The beat (W906_MotorAccessTick) is unchanged.
+//AI(W906-BRAKE-AXIS) 20260929: wb_serve's modal wait loop polls the monitor too (a box is up while a drive alarms and drops SVON):
+//  the brake half runs there as well (tools/wb_serve.cpp W906_ModalWaitTick, right after its Poll).
+void W906_BootInitMotorTick(); void W906_ParamSyncTick(); bool g_w906BootInitAllDone = false; void W906_BrakeAxisTick() { W906_MotorAccessEngineHooks(); ht9045::BrakeAxisTick(); W906_BootInitMotorTick(); W906_ParamSyncTick(); }   //AI(W906-PARAMSYNC) 20261007: + the parameter sync after the boot InitMotor (EOF) and its "boot done" flag.   //AI(W906-BOOT-INITMOTOR) 20261002: + boot InitMotor (EOF)
+
+void W906_MotorAccessPollTick(bool operatorConnected)                           //AI(W906-MT-FIX1) 20260926: live ControlOwner()!=0 from wb_serve
+{
+    W906_MotorAccessEngineHooks();                                              //AI(W906-MT-E3c) 20260925: idempotent
+    ht9045::MotorAccessPollTick(ht9045::MotorAccessLiveBackend(), operatorConnected);
+    ht9045::BrakeAxisTick();  W906_BootInitMotorTick();  W906_ParamSyncTick();   //AI(W906-PARAMSYNC) 20261007: + boot InitMotor and the parameter sync on the MAIN loop too -- W906_BootInitMotorTick was only reached from W906_BrakeAxisTick, which only wb_serve's modal wait calls (tools/wb_serve.cpp W906_ModalWaitTick): oplog 1007 shows the boot InitMotor at 09:01 / 09:36 only (a box was up), none for the 09:48 / 10:xx runs. Both are once-per-run / edge driven, so calling them from both loops is safe.  AI(W906-BRAKE-AXIS) 20260929: on the fresh sample (servo ON 0.5 s -> release; SVON gone -> hold)
+    OverlaySnapshot();
+    W906_MotorAccessHooks();
+    W906_TorqueFocus(operatorConnected);                                        //AI(W906-MT-E3c) 20260925: every Poll while the page shows the axis
+}
+
+//AI(W906-WSLINK-B) 20260929: St01 13:32 safety point (b): the page-table close edge of fMotorTest / fTeach
+//  -> the C++ half of that window's golden FormClose (ht9045::MotorAccessPageClosed, rules in WebMotorAccess.cpp EOF; the two
+//  teach-pitch globals are cleared here). Registered once, from W906_MotorAccessEngineHooks (wb_serve
+//  calls it before the pump loop). skipWhileRunning=false: a close edge always stops (the safe direction). motor.access refuses
+//  new motion while SystemStart (WebMotorAccess.cpp dispatch gate, only STOP passes), so while running this can only end what
+//  was already going before START. onOpen is 0 (an opening page starts nothing).
+#include "WebTeachLeave.h"
+static void W906_MtPageClosed()    { ht9045::MotorAccessPageClosed(ht9045::MotorAccessLiveBackend(), "fMotorTest"); }
+static void W906_TeachPageClosed() { bInArmXPitch_40mm = false; bOutArmXPitch_40mm = false;   // golden uteach.cpp:2089-2090 (TfTeach::FormClose)
+                                     ht9045::MotorAccessPageClosed(ht9045::MotorAccessLiveBackend(), "fTeach"); }
+void W906_MotorAccessPageEdges()
+{
+    const bool mt = W906_WindowEdgeRegister("fMotorTest", 0, &W906_MtPageClosed, false);
+    const bool te = W906_WindowEdgeRegister("fTeach", 0, &W906_TeachPageClosed, false);
+    std::printf("motor.access: page-close edges registered (fMotorTest %s, fTeach %s) -- WSLINK-B dead-man\n",
+                mt ? "ok" : "REFUSED", te ? "ok" : "REFUSED");
+}
+
+//AI(W906-ENG1203) 20260929 / AI(W906-INDEXZ-1203) 20260930: the wb_serve glue W906_EngineRouteForeignStop (a stop that reached
+//  TPci1203Control::Execute WITHOUT the engine motor route or the Index Z1 Gali route) MOVED to EtherCAT/Pci1203GaliRoute.cpp EOF
+//  (review round 2 of INBOX 113, E(a): a ctest links that TU, not this one). Callers unchanged: LiveBackend::Pci1203Execute above
+//  and tools/wb_serve.cpp W906_Dispatch1203Ex; declaration EtherCAT/Pci1203MotorRoute.h.
+
+//AI(W906-TEACH-ZALLUP) 20261001: LiveBackend::GoldenTeachFixedMotors -- the MOT[] indexes golden uteach's fixed-motor buttons act on,
+//  computed the golden way at the moment of the press (contract: WebMotorAccess.h EOF; dispatch rules: WebMotorAccess.cpp EOF).
+//    "inZ"  golden btnInZAllUpClick  :4468-4475  for(i<InArmSuck.iMotRow) for(j<InArmSuck.iMotCol)  InArmZIndex[i][j]
+//    "outZ" golden btnOutZAllUpClick :4482-4489  for(i<OutArmSuck.iMotRow) for(j<OutArmSuck.iMotCol) OutArmZIndex[i][j]
+//    "z1" MTestZ1 (:4258), "z2" MTestZ2 (:4275), "arm1y" MTestY1 + MTestY2 when USE_INDEX_ARM_AXES==IndexArm_4_Axis (:2924-2926)
+//  InArmSuck / OutArmSuck through aHotPlateSubstrate.h -- the header forms/fTeach.cpp and WebStart.cpp read them through
+//  (the live definitions are mykitsuck.cpp's, AI(W906-A4-6)). InArmZIndex / OutArmZIndex are [2][8] (cmydef.cpp:3333 / :3335):
+//  a grid larger than that would make golden read past the table, so it is refused here instead of read.
+#include "aHotPlateSubstrate.h"
+bool W906_TeachFixedMotorsLive(const std::string& which, std::vector<int>& mis, std::string& why)
+{
+    mis.clear();
+    why.clear();
+    if (which == "inZ" || which == "outZ") {
+        const bool in = (which == "inZ");
+        const TMyKitSuck& k = in ? InArmSuck : OutArmSuck;
+        if (k.iMotRow < 0 || k.iMotRow > 2 || k.iMotCol < 0 || k.iMotCol > 8) {
+            char b[320];
+            std::snprintf(b, sizeof(b), "%s.iMotRow=%d／iMotCol=%d 超出 golden %s[2][8]（cmydef.cpp）—— 不讀表外的值",
+                          in ? "InArmSuck" : "OutArmSuck", k.iMotRow, k.iMotCol, in ? "InArmZIndex" : "OutArmZIndex");
+            why = b;
+            return false;
+        }
+        for (int i = 0; i < k.iMotRow; i++)
+            for (int j = 0; j < k.iMotCol; j++)
+                mis.push_back(in ? InArmZIndex[i][j] : OutArmZIndex[i][j]);
+        return true;
+    }
+    if (which == "z1") { mis.push_back(MTestZ1); return true; }
+    if (which == "z2") { mis.push_back(MTestZ2); return true; }
+    if (which == "arm1y") {
+        mis.push_back(MTestY1);
+        if (USE_INDEX_ARM_AXES == IndexArm_4_Axis) mis.push_back(MTestY2);    // JimmyChiu 20220708 : add Index Arm Axis (golden :2925 / :2933)
+        return true;
+    }
+    why = "不認得的 golden 固定馬達組 '" + which + "'";
+    return false;
+}
+
+//AI(W906-ARMCELL) 20261002: review m5 -- wb_serve's main.home (tools/wb_serve.cpp:7943) asks this after MotorAccessStartBlocked said
+//  "blocked": true = an Arm Cell job runs, why = "HOME 拒絕：教導頁 Arm Cell 進行中（…）" (was: the hand-teach text for both).
+bool W906_MotorAccessArmCellBlocked(const char* what, std::string& why)
+{
+    why = ht9045::MotorAccessArmCellBlockedWhy(what ? what : "");
+    return !why.empty();
+}
+
+//AI(W906-BOOT-INITMOTOR) 20261002: EastSun 1002「一開始執行的時候開卡完就要進行馬達送電後就要開始進行InitMotor ... 請先以 M35 MLoaderZ
+//  進行」. Once per wb_serve run, per axis in kBootInitAxes: when the 1203 card is open (control ready, the axis claimed, a fresh
+//  sample), the motor power is on (relay ON -- OutValue or the card's read-back -- SnMotorPower on, no EMG) and has stayed on for
+//  1 s, run golden InitMotor on it (ht9045::MotorAccessBootInitMotor, WebMotorAccess.cpp EOF) and write the step list to the op
+//  log (BRAKE line channel). Called from W906_BrakeAxisTick (after every monitor Poll). Only MLoaderZ for now; add aliases here.
+void W906_BootInitMotorTick()
+{
+    //AI(W906-BOOT-SERVOALL) 20261003: EastSun「照BCB裡面方法修改」(laptop NB2-1 R200 (1)): golden's boot InitMotor runs for EVERY EtherCAT axis
+    //  (SetServoOn(true) each) -- not only MLoaderZ. All HT9050 1203 rows of Mot_Table; a row that is not an enabled, opened PCI1203 axis is
+    //  skipped with the reason logged (unchanged). MTestZ1 stays out: Galil-routed Index Z, golden servos it ON through the Galil path
+    //  (uhome case 5 "SH"), not EtherCAT InitMotor.
+    static const char* const kBootInitAxes[] = { "MLoaderZ", "MInArmX", "MInArmY", "MInArmZA", "MInShuttle1", "MOutShuttle1", "MOutShuttle2",
+                                                 "MOutArmX", "MOutArmY", "MOutArmZA", "MTrayX", "MEmptyZ", "MAuto1Z", "MAuto2Z", "MAuto3Z",
+                                                 "MInRotate", "MOutRotate", "MCCDY" };
+    const std::size_t n = sizeof(kBootInitAxes) / sizeof(kBootInitAxes[0]);
+    static bool done[sizeof(kBootInitAxes) / sizeof(kBootInitAxes[0])] = {};
+    static DWORD powerSince = 0;
+    static bool powerSeen = false;
+    if (ht9045::Pci1203Monitor() == 0) return;
+    bool pending = false;
+    for (std::size_t i = 0; i < n; ++i) if (!done[i]) pending = true;
+    if (!pending) { g_w906BootInitAllDone = true; return; }   //AI(W906-PARAMSYNC) 20261007: every boot axis has had its InitMotor (or was skipped) -> W906_ParamSyncTick (EOF) pushes the speeds once; same line
+    ht9045::IMotorAccessBackend& be = ht9045::MotorAccessLiveBackend();
+    std::string why;
+    if (!be.Pci1203Ready(why)) return;
+    const ht9045::MotorPowerState ps = be.GoldenMotorPower(false);
+    const bool powerOn = (ps.relayOn || (ps.cardKnown && ps.card)) && !GEM_EMGPressed && !Sen[SnMotorPower].IsOff();
+    const DWORD now = ::GetTickCount();
+    if (!powerOn) { powerSeen = false; return; }
+    if (!powerSeen) { powerSeen = true; powerSince = now; return; }
+    if (now - powerSince < 1000) return;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (done[i]) continue;
+        const std::string alias = kBootInitAxes[i];
+        ht9045::MotorAccessAxis a;
+        if (!be.Resolve(alias, a) || !a.Is1203() || a.axis < 0 || !a.tableEnable) {
+            done[i] = true;
+            ht9045::BrakeLog(alias + " InitMotor (boot): skipped -- " + (a.why.empty() ? std::string("not an enabled PCI1203 axis the monitor opened") : a.why));
+            continue;
+        }
+        bool known = false;
+        (void)be.Pci1203ServoOn(a.axis, known);
+        if (!known) { if (now - powerSince < 20000) continue; done[i] = true; ht9045::BrakeLog(alias + " InitMotor (boot): skipped -- no servo sample from the card 20 s after motor power (slave offline / comm fault?)"); continue; }   //AI(W906-PARAMSYNC-2) 20261007: review of 4e3f1bf -- an axis that never reports state kept the boot "pending" for ever, so g_w906BootInitAllDone (and the boot PARAMSYNC) never came; give up on it after 20 s, logged. Same line.  // no fresh sample yet: next Poll
+        done[i] = true;
+        std::string report;
+        const bool ok = ht9045::MotorAccessBootInitMotor(be, alias, report);
+        ht9045::BrakeLog(report + (ok ? "" : "  [NOT all ok]"));  return;   //AI(W906-PARAMSYNC-2) 20261007: review of 4e3f1bf -- ONE axis per call: each InitMotor is ~0.9 s of IO-thread round trips, and since this tick also runs on the main loop (W906_MotorAccessPollTick) all 18 in one call froze the serve loop 16.5 s at 10:53 (RESET answered after 16063 ms, heater job starved). Same line
+    }
+}
+
+//AI(W906-MSGBOX-ABANDON) 20261003: INBOX 150 -- wb_serve's ShowMyMessage / ShowUnloaderTrayMessage hosts (tools/wb_serve.cpp
+//  W906MbShowMyMessage / W906MbShowUnloaderTray, same-line, right after the Arm Cell edge) call this the moment the box shows:
+//  golden uMotorTest Timer1Timer :921-926 (MyMessageBox->fShow -> HOME / LoopMove up) + the 1203 half of that box's StopAllMotor.
+//  Rules: WebMotorAccess.cpp EOF (MotorAccessOnMessageBox).
+void W906_MotorAccessOnMessageBox(const char* kind, const char* what, bool stopsMotors)
+{
+    ht9045::MotorAccessOnMessageBox(ht9045::MotorAccessLiveBackend(), kind ? kind : "", what ? what : "", stopsMotors);
+}
+
+//AI(W906-HOMEBLOCK) 20261003: NB2-1 (URGENT U14 item 3) -- forms/fMain.cpp W906_HomeBlockedHook (TfMain::Home's first statement);
+//  wb_serve installs it next to W906_ShowMyMessageBoxYesNo_Hook (tools/wb_serve.cpp). Rules: WebMotorAccess.cpp EOF (MotorAccessHomeBlocked).
+//  The refusal is logged (console + RecordProcess) once per (func, why), never a message box: the port's ShowMyMessage stops all
+//  motors and ends the Arm Cell job itself (W906MbShowMyMessage -> W906_MotorAccessArmCellOnPopup), and it waits for an answer.
+bool W906_MotorAccessHomeBlocked(const char* func, std::string& why)
+{
+    const std::string f = func ? func : "";
+    bool logOnce = false;
+    if (!ht9045::MotorAccessHomeBlocked(f, why, logOnce)) return false;
+    if (logOnce) {
+        std::printf("TfMain::Home(\"%s\") REFUSED: %s\n", f.c_str(), why.c_str());
+        RecordProcess(AnsiString(("W906 HOMEBLOCK: " + why).c_str()), AnsiString(f.c_str()));
+    }
+    return true;
+}
+
+//------------------------------------------------------------------------------
+//AI(W906-PARAMSYNC) 20261007: EastSun 1007「請你開軟體 或是開啟馬達相關畫面都先寫入 圖片上對應馬達的參數 有時候根本還沒寫進去」.
+//  Plan D:\HT9045\_paramsync_1007\PLAN_PARAMSYNC.md; rulings (AskUserQuestion 1007): InitSpeed > JogHighSpeed is FLAGGED and EastSun fixes
+//  Mot_Table (nothing raised / clamped); live writes from the first run.
+//  Measured 1007: golden's boot SetMotorSpeed (cinitial.cpp InitialHandler) runs in wb_serve BEFORE the 1203 route is installed, so the
+//  PTP speeds never reached the card at boot; the boot InitMotor wrote only the ceilings (now at 100 %, WebMotorAccess.cpp
+//  MotorAccessBootInitMotor). This tick pushes golden's SetMotorSpeed() (every axis's PTP VelLow / VelHigh / Acc / Dec at the speed
+//  table's %, through the route -- whose SetSpeedParam now raises a known acc / dec ceiling first) when:
+//      (1) the boot InitMotor of every boot axis is done (g_w906BootInitAllDone, W906_BootInitMotorTick)   -- golden's own boot step
+//      (2) the Motor Test page opens  (W906_FormShowing("fMotorTest"), rising edge)                       -- port-only, EastSun's request
+//      (3) the Teach page opens       (W906_FormShowing("fTeach"), rising edge)                           -- port-only, EastSun's request
+//  Not while the machine runs / homes (SystemStart / SoftStart / iHome != 0 / the Home Monitor open): the request waits and runs as soon
+//  as it is stopped. SetMotorSpeed never touches the jog family (TMyEtherCatMotor::SetSpeed bSetJog defaults to false), so a JOG on the
+//  Motor Test page keeps the page's own speed (golden select / scroll bar).
+//  1.5 s later the result goes to the op log (BRAKE channel): the route writes that failed since the push, the read-back
+//  (Pci1203MotorRouteSpeedVerify: ok / mismatch / unverified) and every enabled PCI1203 row whose InitSpeed > JogHighSpeed (the card
+//  refuses VelLow / VelHigh above CFG_AxMaxVel = JogHighSpeed -- fix it in Mot_Table).
+#include "EtherCAT/Pci1203MotorRoute.h"         // Pci1203MotorRouteInstalled / Pci1203MotorRouteStatsNow
+namespace ht9045 { bool MotorAccessPageJobActive(std::string& what); }   // WebMotorAccess.cpp EOF (AI(W906-PARAMSYNC-4))
+void SetMotorSpeed();                                                           // cinitial.cpp (golden)
+namespace ht9045 { std::string Pci1203MotorRouteSpeedVerify(int* okN, int* badN, int* unverN); }   // EtherCAT/Pci1203MotorRoute.cpp EOF
+void W906_ParamSyncTick()
+{
+    static bool s_bootDone = false, s_mtPrev = false, s_tePrev = false, s_pending = false, s_waitSaid = false;
+    static int s_state = 0;
+    static DWORD s_at = 0;
+    static unsigned long s_failedBefore = 0;
+    static std::string s_reason;
+    if (ht9045::Pci1203Monitor() == 0 || !ht9045::Pci1203MotorRouteInstalled()) return;
+    if (!s_bootDone && g_w906BootInitAllDone) { s_bootDone = true; s_pending = true; s_reason = "開軟體（開機 InitMotor 都做完）"; }
+    const bool mt = W906_FormShowing("fMotorTest", false), te = W906_FormShowing("fTeach", false);
+    if (mt && !s_mtPrev) { s_pending = true; s_reason = "開 Motor Test 頁"; }
+    if (te && !s_tePrev) { s_pending = true; s_reason = "開 Teach 頁"; }
+    s_mtPrev = mt; s_tePrev = te;
+    const DWORD now = ::GetTickCount();
+    if (s_state == 0 && s_pending && (s_bootDone || s_reason != "開軟體（開機 InitMotor 都做完）")) {   //AI(W906-PARAMSYNC-2) 20261007: review of 4e3f1bf -- a page-open request no longer waits for the boot InitMotor (motor power off at start, or a slave that never reports, swallowed every Motor Test / Teach sync); same line
+        std::string pageJob;  const bool busy = SystemStart || SoftStart || W906_FormShowing("fHome", fHome != 0 && fHome->fShow) || ht9045::MotorAccessPageJobActive(pageJob);   //AI(W906-PARAMSYNC-FSHOW) 20261007 laptop: the Home Monitor is a web page -- member || page table (FShow_Audit, gate b85a).  AI(W906-PARAMSYNC-4) 20261007: + a page job (JOG / single-axis home / loop / Arm Cell / hand teach, WebMotorAccess.cpp EOF) -- review P1.   //AI(W906-PARAMSYNC-3) 20261007: `iHome != 0` dropped -- iHome is 1 whenever the machine is NOT homed yet (csystem.cpp DoHomeProcess sets 0 only after CheckMotorHome), so an un-homed machine deferred every sync for ever (11:22:20 Teach request never ran; 12:10 snapshot: SystemStart 0, Home Monitor closed, fAllMotorHome 0). Homing in progress = the Home Monitor open (fHome->fShow), as ShowRunLabel's "Homing"; same line
+        if (busy) {
+            if (!s_waitSaid) { ht9045::BrakeLog("PARAMSYNC " + s_reason + "：" + (pageJob.empty() ? std::string("機台運轉／歸零中") : "頁面工作進行中（" + pageJob + "）") + "，先不寫，停下來再寫"); s_waitSaid = true; }
+            return;
+        }
+        s_pending = false; s_waitSaid = false;
+        s_failedBefore = ht9045::Pci1203MotorRouteStatsNow().failed;
+        SetMotorSpeed();
+        s_state = 1; s_at = now;
+        ht9045::BrakeLog("PARAMSYNC " + s_reason + "：SetMotorSpeed() 送出（每軸 PTP 初速／高速／加減速，照速度表 %），1.5 秒後讀回比對");
+        return;
+    }
+    if (s_state == 1 && now - s_at >= 1500) {
+        s_state = 0;
+        int ok = 0, bad = 0, unv = 0;
+        const std::string items = ht9045::Pci1203MotorRouteSpeedVerify(&ok, &bad, &unv);
+        const unsigned long failed = ht9045::Pci1203MotorRouteStatsNow().failed - s_failedBefore;
+        std::string flags;
+        ht9045::IMotorAccessBackend& be = ht9045::MotorAccessLiveBackend();
+        for (int i = 0; i < TOTAL_MOTOR && i < MAX_TRAY_MOTOR; ++i) {
+            if (MOT[i].Alias.Length() == 0) continue;
+            ht9045::MotorAccessAxis a;
+            ht9045::MotorGolden g;
+            if (!be.Resolve(MOT[i].Alias.c_str(), a) || !a.Is1203() || !a.tableEnable || !be.GoldenMotor(i, g)) continue;
+            if (g.initSpeed > g.jogHigh) {
+                char b[160];
+                std::snprintf(b, sizeof(b), "%s%s 初速 %u > JOG 高速 %u", flags.empty() ? "" : "；", MOT[i].Alias.c_str(), g.initSpeed, g.jogHigh);
+                flags += b;
+            }
+        }
+        char head[200];
+        std::snprintf(head, sizeof(head), "PARAMSYNC %s：寫入失敗 %lu 筆；讀回 一致 %d、不一致 %d、未確認 %d", s_reason.c_str(), failed, ok, bad, unv);
+        std::string line = head;
+        if (!items.empty()) line += "；不一致：" + items;
+        if (!flags.empty()) line += "；⚠ Mot_Table 要改（卡會拒收）：" + flags;
+        ht9045::BrakeLog(line);
+    }
+}
