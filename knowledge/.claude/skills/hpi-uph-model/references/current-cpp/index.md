@@ -17,3 +17,5 @@
 | WebBridge表格到UPH tag／sentinel | [consumer子樹](consumers/index.md) | 三body文字／兩常數／一caller區段；完整transport／producer仍待查 |
 
 沒有執行C++、Profiler、Home、檔案寫入、API、build、runtime或機台；實際UPH誤差仍待查。
+
+[封包宣告子樹](packets/index.md)補四份 MessageDef 的 VM／MV、MSG_CMD_UPH 與 V906／V912 版本對照；ABI、driver、機型／客戶部署仍待查。
