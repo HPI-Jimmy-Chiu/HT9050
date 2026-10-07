@@ -1,0 +1,404 @@
+From f4808ec06b930efe595acd197038a0c7aeb41654 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 08:03:40 +0800
+Subject: [PATCH] 1203REOPEN-2: six fixes from the review of the re-open flow
+ (hourly loop on 026dcd7 / c05c3bb / 012d4a9 / web 6ae80ab).
+
+C1 (high) retries did not wait for the module check's verdict (it needs up to 10 s itself), so every try interrupted the previous one and the 3rd try raised WAR16157 one tick after it was issued -> EtherCAT/Pci1203Reopen.h: each attempt waits for a verdict (the fault reported again = failed, Recovered = done, none within 30 s = failed); the next try 10 s after a failure; the alarm only after the 3rd attempt's verdict.
+C2 (mid-high) only kPass called Recovered -> kWriteIni / kWriteSkipped / kIniBad (no list to compare = no mismatch) also end a pending re-open (tools/wb_serve.cpp, three same-line hooks), avoiding extra whole-card re-opens and a false WAR16157.
+C3 (mid) pci1203.ring.reset was a wire command with no stopped check (any client could reset ring 0 while running) -> no wire name; INTERNAL, audit name "(internal)"; only the re-open flow issues it.
+C4 a build without HAVE_PCI1203 raised WAR16150 + WAR16157 at every boot -> "not linked" is not an open failure.
+C5 a try that never reached the card still cleared fAllMotorHome and started a module-check generation -> AttemptNotIssued: counts as a failed try, no HOME lost, no new generation.
+C6 the button could give 4 tries -> a fault during a manual re-open keeps the try count.
+
+Tests: Pci1203Reopen 33/33 (verdict wait, no alarm before the 3rd verdict, 30 s timeout, manual keeps the count, not issued), Pci1203Pure 105/105; readonly / control gates PASS; code-after-comment scan 0. Plausible items not changed (reported): no wait between the reset and the re-scan; RescanRing does not rebuild IO widths / IO map; a whole-card re-open on the tick thread when the IO thread is not running; drives "missing" at boot before the safety circuit is reset. Debug + release (affected targets). WORKLOG section 2 row 145.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203Control.cpp   |  4 +-
+ EtherCAT/Pci1203Control.h     |  2 +-
+ EtherCAT/Pci1203Reopen.h      | 58 ++++++++++++++-------
+ docs/WORKLOG_MACHINE.md       |  1 +
+ tests/test_pci1203_pure.cpp   |  2 +-
+ tests/test_pci1203_reopen.cpp | 97 +++++++++++++++++++++++------------
+ tools/wb_serve.cpp            | 15 ++++--
+ 7 files changed, 121 insertions(+), 58 deletions(-)
+
+diff --git a/EtherCAT/Pci1203Control.cpp b/EtherCAT/Pci1203Control.cpp
+index fa53840..e83b7b9 100644
+--- a/EtherCAT/Pci1203Control.cpp
++++ b/EtherCAT/Pci1203Control.cpp
+@@ -2173,7 +2173,7 @@ Pci1203CmdKind Pci1203CmdFromName(const std::string& n)
+     if (n == "pci1203.ax.svOn")       return kCmdAxSvOn;
+     if (n == "pci1203.ax.resetError") return kCmdAxResetError;
+     if (n == "pci1203.ax.absEncoderReset") return kCmdAxAbsEncoderReset;
+-    if (n == "pci1203.card.rescan")        return kCmdCardRescan;   if (n == "pci1203.ring.reset") return kCmdRingReset;   //AI(W906-1203REOPEN) 20261007: same line
++    if (n == "pci1203.card.rescan")        return kCmdCardRescan;   //AI(W906-1203REOPEN-2) 20261007: kCmdRingReset has NO wire name any more (review C3: any client could reset ring 0 while running) -- INTERNAL, issued only by wb_serve's re-open flow, which checks the machine is stopped
+     if (n == "pci1203.ax.jog")        return kCmdAxJogStart;
+     if (n == "pci1203.ax.stop")       return kCmdAxStop;
+     if (n == "pci1203.ax.emgStop")    return kCmdAxEmgStop;
+@@ -2222,7 +2222,7 @@ const char* Pci1203CmdName(Pci1203CmdKind k)
+         //  wire name is what appears in the audit log and in the page's 最後一筆
+         //  指令, and "absEnc" would not tell an operator what was just done.
+         case kCmdAxAbsEncoderReset: return "pci1203.ax.absEncoderReset";
+-        case kCmdCardRescan:        return "pci1203.card.rescan";   case kCmdRingReset: return "pci1203.ring.reset";   //AI(W906-1203REOPEN) 20261007: same line
++        case kCmdCardRescan:        return "pci1203.card.rescan";   case kCmdRingReset: return "pci1203.ring.reset (internal)";   //AI(W906-1203REOPEN) 20261007: same line   //AI(W906-1203REOPEN-2) 20261007: audit name says (internal) like the other wire-less kinds
+         case kCmdAxSetLimit:        return "pci1203.ax.setLimit";
+         case kCmdAxSetGear:         return "pci1203.ax.setGear";
+         case kCmdAxGearApply:       return "pci1203.ax.gearApply";
+diff --git a/EtherCAT/Pci1203Control.h b/EtherCAT/Pci1203Control.h
+index b0354c7..6f6ed50 100644
+--- a/EtherCAT/Pci1203Control.h
++++ b/EtherCAT/Pci1203Control.h
+@@ -420,7 +420,7 @@ enum Pci1203CmdKind {
+     //  607Ch is the exception: the card never writes it. The page must label
+     //  the difference, because a value about to be replaced and a value that
+     //  persists cannot be allowed to look the same.
+-    kCmdAxSetDriveHome, kCmdAxSetExtDrive, kCmdAxSetCmdPos, kCmdAxSetActPos, kCmdAxMoveHome, kCmdAxSetInitCfg, kCmdAxTorqueLimitSet, kCmdVc8DoSet, kCmdVc8SdoWriteI16, kCmdRingReset   /*AI(W906-1203REOPEN) 20261007: kCmdRingReset = value: ring mask 1 (ring 0) / 2 (ring 1) / 3; wire "pci1203.ring.reset"; Acm_MasResetRing per ring then a slave re-scan + axis re-open (TPci1203Monitor::RescanRing), falling back to the whole-card Rescan() when the export is missing or a reset fails. Appended LAST*/   //AI(W906-VACUNIT-1203) 20260930: + the ECAT-VC8 vacuum unit's two writes, INTERNAL (no wire name, audit name "(internal)"; only EtherCAT/Pci1203Vc8Route.inc issues them, for HW.VacuumUnit's golden buttons). kCmdVc8DoSet: port = the monitor DO slot, bit, value 0/1 -> Acm_DaqDoSetBitEx(dev, d.ring, d.station, d.stationChan*8+bit, v) -- refused unless the byte is ring-attributed and read back, the channel is 16..31 and the station passes the ECAT-VC8 identity check in OP (EtherCAT/Pci1203Vc8.h). kCmdVc8SdoWriteI16: vc8Slave = the monitor slave slot, vc8Vc 0..7, vc8Sub 02h (value exactly 1, threshold mode) or 13h (value 0..32767 = KpaToVC8), I16 DataSize 2 -> Acm_DevWriteSDOData(dev, v.ring, v.addr, 8000h+10h*vc, sub, ...) -- same station refusals. Not motion, not output-first. Appended LAST so no existing kind changes value.   //AI(W906-MT-FIX1) 20260926: kCmdAxTorqueLimitSet = INTERNAL (no wire name, audit name "(internal)"): axis = the 1203 monitor axis index, value = the torque limit in 0.1 % of rated (UINT16, whole number 0..65535). ONE Execute writes that value to 60E0h AND 60E1h (68E0h / 68E1h for a two-axis unit's B half), reads both back and compares; Pci1203CmdResult::ok / value / valueValid / failStep carry the verdict (see there). NO retry inside (the laptop's layer retries). Refused for no station / ambiguous station / unknown sub-axis / a station that is not CiA 402, like the monitor's 6077h read. Not motion, not output-first. Appended LAST so no existing kind changes value.   //AI(W906-MT-E3a) 20260925: kCmdAxSetInitCfg = INTERNAL (no wire name): axis + initCfg (Pci1203InitCfgParam) + value -> ONE entry of golden InitMotor's closed configuration table; not motion, not output-first; Dsp_PropertyIDNotSupport counts as SUCCESS like golden.   // kCmdAxSetDriveHome: axis, driveHome (which), value, value2 = confirm station.  //AI(W906-MT-E1) 20260925: INTERNAL (no wire name): axis+value 0/1 -> Acm_AxSetExtDrive; axis+value -> Acm_AxSetCmdPosition / Acm_AxSetActualPosition; axis+homeMode(0..15)+dir(+1/-1) -> Acm_AxMoveHome. Issued only by WebMotorAccess (golden Motor Test). See the allowlist entry.   //AI(W906-ENG1203) 20260929: stale since INBOX 112 -- the ENGINE MOTOR ROUTE (EtherCAT/Pci1203MotorRoute.cpp, wb_serve only, WB_ENGINE_MOTOR_1203 off by default) issues them too, where golden TMyEtherCatMotor does (see the allowlist entry's ECAT-ROUTE note); still internal, no wire name. The same stale sentence in EastSun's Pci1203Control.cpp (the case kCmdAxHome comment) is left untouched.
++    kCmdAxSetDriveHome, kCmdAxSetExtDrive, kCmdAxSetCmdPos, kCmdAxSetActPos, kCmdAxMoveHome, kCmdAxSetInitCfg, kCmdAxTorqueLimitSet, kCmdVc8DoSet, kCmdVc8SdoWriteI16, kCmdRingReset   /*AI(W906-1203REOPEN) 20261007: kCmdRingReset = value: ring mask 1 (ring 0) / 2 (ring 1) / 3; INTERNAL (no wire name since REOPEN-2, review C3; audit name "pci1203.ring.reset (internal)"; only wb_serve's re-open flow issues it, machine stopped); Acm_MasResetRing per ring then a slave re-scan + axis re-open (TPci1203Monitor::RescanRing), falling back to the whole-card Rescan() when the export is missing or a reset fails. Appended LAST*/   //AI(W906-VACUNIT-1203) 20260930: + the ECAT-VC8 vacuum unit's two writes, INTERNAL (no wire name, audit name "(internal)"; only EtherCAT/Pci1203Vc8Route.inc issues them, for HW.VacuumUnit's golden buttons). kCmdVc8DoSet: port = the monitor DO slot, bit, value 0/1 -> Acm_DaqDoSetBitEx(dev, d.ring, d.station, d.stationChan*8+bit, v) -- refused unless the byte is ring-attributed and read back, the channel is 16..31 and the station passes the ECAT-VC8 identity check in OP (EtherCAT/Pci1203Vc8.h). kCmdVc8SdoWriteI16: vc8Slave = the monitor slave slot, vc8Vc 0..7, vc8Sub 02h (value exactly 1, threshold mode) or 13h (value 0..32767 = KpaToVC8), I16 DataSize 2 -> Acm_DevWriteSDOData(dev, v.ring, v.addr, 8000h+10h*vc, sub, ...) -- same station refusals. Not motion, not output-first. Appended LAST so no existing kind changes value.   //AI(W906-MT-FIX1) 20260926: kCmdAxTorqueLimitSet = INTERNAL (no wire name, audit name "(internal)"): axis = the 1203 monitor axis index, value = the torque limit in 0.1 % of rated (UINT16, whole number 0..65535). ONE Execute writes that value to 60E0h AND 60E1h (68E0h / 68E1h for a two-axis unit's B half), reads both back and compares; Pci1203CmdResult::ok / value / valueValid / failStep carry the verdict (see there). NO retry inside (the laptop's layer retries). Refused for no station / ambiguous station / unknown sub-axis / a station that is not CiA 402, like the monitor's 6077h read. Not motion, not output-first. Appended LAST so no existing kind changes value.   //AI(W906-MT-E3a) 20260925: kCmdAxSetInitCfg = INTERNAL (no wire name): axis + initCfg (Pci1203InitCfgParam) + value -> ONE entry of golden InitMotor's closed configuration table; not motion, not output-first; Dsp_PropertyIDNotSupport counts as SUCCESS like golden.   // kCmdAxSetDriveHome: axis, driveHome (which), value, value2 = confirm station.  //AI(W906-MT-E1) 20260925: INTERNAL (no wire name): axis+value 0/1 -> Acm_AxSetExtDrive; axis+value -> Acm_AxSetCmdPosition / Acm_AxSetActualPosition; axis+homeMode(0..15)+dir(+1/-1) -> Acm_AxMoveHome. Issued only by WebMotorAccess (golden Motor Test). See the allowlist entry.   //AI(W906-ENG1203) 20260929: stale since INBOX 112 -- the ENGINE MOTOR ROUTE (EtherCAT/Pci1203MotorRoute.cpp, wb_serve only, WB_ENGINE_MOTOR_1203 off by default) issues them too, where golden TMyEtherCatMotor does (see the allowlist entry's ECAT-ROUTE note); still internal, no wire name. The same stale sentence in EastSun's Pci1203Control.cpp (the case kCmdAxHome comment) is left untouched.
+ };
+ 
+ // ---------------------------------------------------------------------------
+diff --git a/EtherCAT/Pci1203Reopen.h b/EtherCAT/Pci1203Reopen.h
+index 561ecac..bebf203 100644
+--- a/EtherCAT/Pci1203Reopen.h
++++ b/EtherCAT/Pci1203Reopen.h
+@@ -7,20 +7,26 @@
+ //  tries, 3 tries per fault, the operator button gives 3 more; alarms: open fail WAR16150, re-open failed WAR16157; simulation
+ //  first. Plan D:\HT9045\_reopen_1007\PLAN_1203_REOPEN.md.
+ //
++//  AI(W906-1203REOPEN-2) 20261007: review 20261007 -- the first version tried again every 10 s without waiting for the module
++//  check's VERDICT (which itself needs up to 10 s after the link is back, longer while a reset ring comes back up), so every
++//  try interrupted the previous one, and the 3rd try raised WAR16157 one tick after it was issued. Now every attempt waits for
++//  a verdict: a fault reported again (= still failing) or Recovered(); no verdict within kVerdictMs counts as a failure. The
++//  next try is kGapMs after that failure; the alarm comes only after the 3rd attempt's failure. Also: an operator re-open with
++//  no fault keeps its 3-try budget when a fault shows up during it (it gave 1 + 3 before).
++//
+ //  The host (tools/wb_serve.cpp EOF W906_Pci1203ReopenTick) reports faults and results and does what Step() asks:
+-//    Fault(kRfOpenFail)            the card did not open (boot, or a re-open that failed)
++//    Fault(kRfOpenFail)            the card did not open (boot, or a re-open that left it closed)
+ //    Fault(kRfModules, ringMask)   the module check (Pci1203ModuleCheck.h, WAR16154) found problems on these rings
+ //                                  (bit 0 = ring 0 motor drives, bit 1 = ring 1 IO modules)
+-//    Recovered()                   the card is open and the module check passed again
+-//    AttemptDone()                 the action Step() asked for has finished (its outcome shows up as Recovered / Fault)
++//    Recovered()                   the card is open and the module check has no mismatch to report
++//    AttemptDone(now)              the action Step() asked for has been carried out; its verdict follows
++//    AttemptNotIssued(now)         the action could not be carried out at all (no control / refused): an immediate failure
+ //    OperatorRetry()               the 1203 page button: 3 more tries now (a manual re-open when there is no fault)
+ //  Step(stopped, nowMs, &rings) returns at most one action per call:
+ //    kRaResetRing (rings = the rings to reset), kRaReopenCard, kRaAlarm (once, after the 3rd failed try),
+ //    kRaRecovered (once, after Recovered()), or kRaNone.
+-//  Nothing is attempted while `stopped` is false (machine running / HOME / an axis moving -- the host decides) or while a
+-//  previous attempt has not reported AttemptDone(). Tries are 10 s apart (signed millisecond difference: tick wrap safe).
+-//  A fault that arrives again while one is pending MERGES its rings and keeps the try count (a re-check that still fails
+-//  must not refill the budget); only Recovered() or OperatorRetry() refills it.
++//  Nothing is attempted while `stopped` is false (machine running / HOME / an axis moving -- the host decides).
++//  Signed millisecond differences: tick wrap safe. A fault reported again MERGES its rings and keeps the try count.
+ // =============================================================================
+ #ifndef HT9045_ETHERCAT_PCI1203REOPEN_H
+ #define HT9045_ETHERCAT_PCI1203REOPEN_H
+@@ -33,38 +39,46 @@ enum Pci1203ReopenAct   { kRaNone = 0, kRaResetRing = 1, kRaReopenCard = 2, kRaA
+ class Pci1203Reopen
+ {
+ public:
+-    static const int           kTries = 3;
+-    static const unsigned long kGapMs = 10000;
++    static const int           kTries    = 3;
++    static const unsigned long kGapMs    = 10000;   // after a failed try, before the next
++    static const unsigned long kVerdictMs = 30000;  // how long an attempt waits for the module check's verdict
+ 
+-    Pci1203Reopen() : fault_(kRfNone), rings_(0), tries_(0), waiting_(false), alarmed_(false), recovered_(false),
+-                      haveNext_(false), nextAt_(0) {}
++    Pci1203Reopen() : fault_(kRfNone), rings_(0), tries_(0), waiting_(false), awaiting_(false), failSeen_(false),
++                      alarmed_(false), recovered_(false), haveNext_(false), nextAt_(0), deadline_(0) {}
+ 
+     void Fault(int kind, unsigned ringMask = 0)
+     {
+         if (kind != kRfOpenFail && kind != kRfModules) return;
+-        if (fault_ == kRfNone || fault_ == kRfManual) {                 // a new fault: fresh budget, try at once
++        if (fault_ == kRfNone) {                                        // a new fault: fresh budget, try at once
+             fault_ = kind; rings_ = 0; tries_ = 0; alarmed_ = false; haveNext_ = false;
+-        } else if (kind == kRfOpenFail) {
+-            fault_ = kRfOpenFail;                                       // a card that does not open outranks a ring problem
++        } else if (fault_ == kRfManual || kind == kRfOpenFail) {
++            fault_ = kind;                                              // keep the budget; a closed card outranks a ring problem
+         }
+         if (kind == kRfModules) rings_ |= (ringMask & 3u);
++        if (awaiting_) failSeen_ = true;                                // the verdict of the pending attempt: still failing
+         recovered_ = false;
+     }
+     void Recovered()
+     {
+         if (fault_ == kRfNone) return;
+-        fault_ = kRfNone; rings_ = 0; tries_ = 0; waiting_ = false; alarmed_ = false; haveNext_ = false;
++        fault_ = kRfNone; rings_ = 0; tries_ = 0; waiting_ = false; awaiting_ = false; failSeen_ = false;
++        alarmed_ = false; haveNext_ = false;
+         recovered_ = true;
+     }
+     void AttemptDone(unsigned long nowMs)
+     {
+         if (!waiting_) return;
+-        waiting_ = false; haveNext_ = true; nextAt_ = nowMs + kGapMs;
++        waiting_ = false; awaiting_ = true; failSeen_ = false; deadline_ = nowMs + kVerdictMs;
++    }
++    void AttemptNotIssued(unsigned long nowMs)
++    {
++        if (!waiting_) return;
++        waiting_ = false; awaiting_ = false; failSeen_ = false; haveNext_ = true; nextAt_ = nowMs + kGapMs;
+     }
+     void OperatorRetry()
+     {
+         if (fault_ == kRfNone) { fault_ = kRfManual; rings_ = 0; }
+-        tries_ = 0; alarmed_ = false; haveNext_ = false;               // 3 more, the first one now
++        tries_ = 0; alarmed_ = false; haveNext_ = false; awaiting_ = false; failSeen_ = false;
+         recovered_ = false;
+     }
+ 
+@@ -73,6 +87,11 @@ public:
+         if (ringsOut) *ringsOut = 0;
+         if (recovered_) { recovered_ = false; return kRaRecovered; }
+         if (fault_ == kRfNone || waiting_) return kRaNone;
++        if (awaiting_) {
++            if (!failSeen_ && (long)(nowMs - deadline_) < 0) return kRaNone;   // still waiting for the verdict
++            awaiting_ = false; failSeen_ = false;                       // failed (reported again, or no verdict in time)
++            haveNext_ = true; nextAt_ = nowMs + kGapMs;
++        }
+         if (tries_ >= kTries) {
+             if (!alarmed_) { alarmed_ = true; return kRaAlarm; }
+             return kRaNone;
+@@ -91,14 +110,15 @@ public:
+     unsigned Rings()     const { return rings_; }
+     int      Tries()     const { return tries_; }
+     bool     Waiting()   const { return waiting_; }
++    bool     Awaiting()  const { return awaiting_; }
+     bool     Alarmed()   const { return alarmed_; }
+ 
+ private:
+     int           fault_;
+     unsigned      rings_;
+     int           tries_;
+-    bool          waiting_, alarmed_, recovered_, haveNext_;
+-    unsigned long nextAt_;
++    bool          waiting_, awaiting_, failSeen_, alarmed_, recovered_, haveNext_;
++    unsigned long nextAt_, deadline_;
+ };
+ 
+ }  // namespace ht9045
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 22402e6..922197b 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -223,6 +223,7 @@
+ | 142 | **持續 bug 審查第一輪的修正：安全 PLC 斷線警報 WAR16155、Tray Z 非位置列的 Set／GO 封住、IO 執行緒卡住時不再拖住主迴圈（W906-PLCLOST／W906-TRAYZ-PITCH-2／W906-IOFIX-2）**（EastSun 1006「請持續偵測是否有版本需要更新 並且針對之前改的code 偵測有無bug 一直持續下去」→ 三個唯讀審查代理審今天機台自己的 commit；PLC 斷線 AskUserQuestion →「Plc斷線額外寫異常」）。①**W906-PLCLOST**：審查指出 PLC 拔線後 golden 不清 bPLCInData（清除區塊 Ken 20250428 註解掉），門／急停／全門位元停在最後一幀＝「關」，bCheckPLCConnet 要等 socket 真斷才知道。MyPLC_IO_Modbus.cpp EOF W906_SafePlcLinkLost：SafePlcIO=1 且（socket 未連線 或 2 s 沒有回應幀，從第一次詢問起算）；成功收幀處同行 W906_SafePlcFrameMark；csystem.cpp DoSystem（SystemStart 內、golden G12 之後的空行）同行：斷線 → ShowErrorMessage("WAR16155", K_RETRY, MMSystem)＋SystemStart=false＋StopAllMotor（斷線期間每次 START 都會再跳）；門／急停資料不動。D:\HT9045\Error\AlarmCodeList.txt 補 WAR16155（備份 .bak_war16155_20261007_025533）；web AlarmCodeList-index／Alarm-description（＋shim）補文字與中英說明。csystem.cpp G23 註解「silent PLC still caught (sensors read Off)」標註為錯誤（同行）。tests [7] 74／74。②**W906-TRAYZ-PITCH-2**：12 個非位置列（pitch／抬升／探測起始／極限）的登錄按鈕在伺服器端可被手工 WS 觸發（Go pitch 會把 Z 開到 pitch 值）；WebMotorAccess.cpp MotorAccessResolveTeachButton 迴圈後同行拒絕（EOF W906_TeachTypedOnly）；test_web_motor_access 同行加檢查，1097／1097。③**W906-IOFIX-2**：IO 執行緒卡住時，Motor Test 頁每 100 ms 的 SetTorqueFocusAxis 走 RunSync，凍結計時從請求起算 ⇒ 每拍卡 5 s。Pci1203Monitor.cpp：g_w906IoHeartAt（心跳時間，同行）、RunSync 排隊前心跳已凍結 ≥5 s 立刻拒絕（訊息每 50 次一行）、等待中的凍結計時改從最後心跳起算、執行緒啟動前後清 0；無測試涵蓋（需真卡），只驗編譯。審查其餘（PLC 逾時殘留回應、SocketError Sleep(1000)、IDX1203 互鎖初值在 gate 後、W906_IndexMove 沒呼叫 CheckYPosWhenZDown、探測參數範圍、Contact Z1 吋動、IO 頁重開首筆舊資料、84 ms 站狀態迴圈等）＝golden 同樣或低／待裁決，記在回覆。Debug 02:5x、release 03:0x（只編受影響目標） | 待 EastSun：審查列出的待裁決項 | 本 commit |
+ | 143 | **持續 bug 審查第二輪：第 142 條的修正自己有 3 個錯，已修（W906-PLCLOST-2／W906-IOFIX-3）**（每小時 :37 審查迴圈審 aff4167／fa06b9f）。①**嚴重**：MyPLC_IO_Modbus.cpp:286 的 W906_SafePlcFrameMark 呼叫同行接在既有的 `//完成過一次` 註解**後面**＝整段是註解、從沒編進程式 ⇒ PLC 正常也會在 START 後 2 s 跳警報停機；測試 [7] 直接呼叫 FrameMark 所以綠（測試沒走真路徑，同 [5] 的教訓）。改：呼叫移到註解前；斷線判斷改成「socket 未連線 或 連續 2 次請求在 hCheckTime=1 s 內沒有回應」（逾時分支同行 W906_SafePlcFrameMiss，回應時歸零）——也解掉審查 PLAUSIBLE A（主迴圈卡 2 s 會誤報）。tests [7] 改成經過真的 PLCIOTaskCycle（送出、等 1.1 s 逾時兩次、再收回應）：75／75。今天新增的 11,128 行全掃「程式碼在 `//` 之後」：0（對照組：原錯誤行會被抓到）。②**高**：Pci1203Monitor.cpp 心跳時間 `GetTickCount()|1u` 可能比 now 多 1 ms ⇒ 無號相減繞成 4294967295 ⇒ RunSync 隨機「立即拒絕」正常請求（含 STOP）；而且心跳起算的凍結計時會在合法的長 Poll（重連 ScanSlaves_+OpenAxes_）期間拒絕 STOP。改：RunSync 的立即拒絕與心跳起算全部撤回（恢復原行為，STOP／DO 不受影響）；心跳時間改 `t ? t : 1`；新增 EOF W906_Pci1203IoHeartAgeMs（有號差）；只在 WebMotorAccessLive.cpp W906_TorqueFocus（Motor Test 頁每拍的轉矩 SDO 焦點）心跳 ≥5 s 時略過。③**中**：WAR16155 已被 RULINGS_20261005 #96 指定給「1203 卡片命令失敗」⇒ 改 WAR16156（csystem.cpp 同行；AlarmCodeList.txt 備份 .bak_war16156_*；web 四檔）。Debug 03:2x、release 03:2x（只編受影響目標） | — | 本 commit |
+ | 144 | **1203 重新開卡流程：開卡失敗／模組檢查不符 → 停機時自動重開（缺模組只 Reset 出問題的環）＋操作員按鈕（W906-1203REOPEN）**（EastSun 1007「幫我查一下 1203 reload 相關 Api」→「只要開卡異常或是 有沒有偵測到的模組 需要加個 重新開卡流程 可能需要用到reset ring」；AskUserQuestion：兩種都要／只重置出問題的那個環／先只做模擬；WAR16150＋WAR16157／所有問題都重開／間隔 10 秒、按鈕再給 3 次）。計畫 D:\HT9045\_reopen_1007\PLAN_1203_REOPEN.md。**查到的 API**：Acm_DevReOpen（golden 無上限 goto；量過會毒化 handle → 不用）、Acm_DevLoadConfig／Acm_LoadENI（沒用）、Acm_MasResetRing（ADVMOT.dll 有匯出、標頭沒有；用反射讀 C# 包裝 AdvMotAPI.dll 得到簽名 mAcm_MasResetRing(IntPtr, UInt16)；⚠ 這張卡 9/12 的 Mas* 都回 0x80000005，ResetRing 很可能無效 → 一律有整卡重開後備；下次 F5 stdout 的 `Acm_MasStartRing -> 0x...` 會說明）。**階段 1**（026dcd7）EtherCAT/Pci1203Reopen.h 純決策＋tests/test_pci1203_reopen.cpp 22／22。**階段 2**（c05c3bb）Pci1203Control kCmdRingReset（enum 尾端、allowlist、IO 執行緒兩次 Poll 之間、wire pci1203.ring.reset；GetProcAddress Acm_MasResetRing 每環，成功 → Monitor::RescanRing（不寫卡）；匯出不存在／失敗 → Rescan()）；Pci1203Pure 106／106；readonly／control gate PASS。**階段 3**（本 commit）tools/wb_serve.cpp EOF：開機開卡失敗 → 故障＋第一拍 WAR16150；模組檢查 kAlarm（WAR16154 之後）→ 問題的環遮罩；kPass → 恢復；主迴圈 W906_Pci1203ReopenTick（停機＝非 SystemStart、無 HOME、無網頁 HOME、無 1203 軸在動）→ 照決策做 kCmdRingReset／kCmdCardRescan（自動時 WB_1203_OPEN_WAIT_SEC 暫設 5 s，避免主迴圈卡 90 s）→ fAllMotorHome=false、卡開了但 IO 執行緒沒跑就啟動、++LinkRestoreGen 開新一代模組檢查；3 次失敗 → WAR16157；1203 頁 pci1203.card.reopen（運轉中拒絕）。AlarmCodeList.txt 補 WAR16157（備份 .bak_war16157_*），web 四檔補文字。**階段 4**（web）1203 頁「⟲ 重新開卡（再試 3 次）」按鈕（規定不加確認框）。Debug 04:xx、release 04:xx（只編受影響目標）。**只做了模擬**：決策與命令都有單元測試；主程式接線沒有實機驗證。⚠ 未做：ring 1 重置後 IO 輸出歸 0，要等流程下次寫入（樹裡沒有「全部重送輸出」）；恢復期間 LinkWatch 可能另跳 WAR16152（卡關閉 >10 s 時） | 待 EastSun：現場測試（例如拔一個 IO 模組的線再插回）；ring 1 輸出重送要不要做 | 本 commit |
++| 145 | **1203 重新開卡流程審查後的 6 個修正（W906-1203REOPEN-2）**（每小時審查迴圈審 026dcd7／c05c3bb／012d4a9／web 6ae80ab）。C1【高】重試不等模組檢查的判定（判定本身要 10 s，每次重試都打斷前一次；第 3 次試完下一拍就 WAR16157）→ Pci1203Reopen.h 每次嘗試等判定：再報同一故障＝失敗、Recovered＝完成、30 s 沒判定＝失敗；失敗後 10 s 才下一次；第 3 次的判定出來才決定跳警報。C2【中高】只有 kPass 會 Recovered → kWriteIni／kWriteSkipped／kIniBad（沒有可比對的清單＝沒有不符）也算完成（wb_serve.cpp 三處同行），免得多做整卡重開與假 WAR16157。C3【中】pci1203.ring.reset 成了沒有停機檢查的網路命令 → 拿掉 wire 名稱，改 INTERNAL（審計名 "(internal)"），只有重開流程能發。C4 沒有 HAVE_PCI1203 的建置（筆電）開機必跳 WAR16150／16157 → "not linked" 不算開卡失敗。C5 命令沒送出也清 fAllMotorHome、多一代模組檢查 → 新 AttemptNotIssued：算一次失敗、不清 HOME、不開新一代。C6 按鈕可能給 4 次 → 手動重開中出現故障時保留次數。tests：Pci1203Reopen 33／33（等判定、第 3 次判定前不跳、30 s 逾時、手動保留次數、未送出）、Pci1203Pure 105／105；readonly／control gate PASS；註解掃描 0。審查 PLAUSIBLE（未改，回報 EastSun）：P1 ResetRing 後立刻掃描沒有等待；P2 RescanRing 不重建 IO 寬度／IO map（回來的模組 DI/DO 可能不在 map）；P3 IO 執行緒沒跑時整卡重開在主迴圈上（Acm_GetAvailableDevs 可能 15 s）；P4 開機安全迴路沒復歸時驅動器「缺少」會重置 ring 0 三次再 WAR16157。Debug 05:xx、release 05:xx | 待 EastSun：P1～P4 | 本 commit |
+ | — | **還沒完成**（10-06 晚更新）：①**實體面板**：已知是 RS-232 面板接 COM4／115200（ControlPanelMode=1、[TrayY] COM PORT=COM4，第 134 條），15:24 有回應；之後線被拔掉，接回後還沒驗按鍵與燈（包 161 已收 St02 P1b 照 golden 分段讀）；面板回的是位址 1，若燈仍不亮要查前／後面板位址。②**1203 模組檢查（WAR16154）**：已整合，代碼表在第 134 條補上。③**關 HMI 視窗時程式還沒開好**的情況：修法已規劃。④**安全迴路**：16:12 起 OSSD 一直 0（M1S OSSD 紅燈）、Input byte1 bit0 自 17:10:59 為 0 ⇒ 1203 從站沒上線；要全部急停放開＋按 PLC 復歸（250 ms～5 s）。⑤**安全 PLC 點位**：SnAllEMG／SnAllSafeDoor 待 EastSun 說明監看時段的操作（D:\HT9045\_plc_1006\plc_watch400.log）；SafePlcIO 維持 0；若在 Input byte ≥4 要擴充 MyLaneIO（golden 只認 Port 0x300～0x303）。⑥**遠端復歸**：MOSAIC 的 Fieldbus Input 不是安全輸入，只能經 MSD 專案的 USER／MACRO RESTART，需整合商改專案＋風險評估。⑦**溫控 COM12**：開機「Temperature KT4H : COM12 port error」，[TempCtrl] COM_PORT=COM12 這台沒有（只有 COM1～6）。⑧**TFT**：「Bin display got error!!」來自 Fix1～6 沒裝；要不要 HT9050 不掃待裁決。⑨**早上未測**：INDEX_MOTION_CARD=1 首次 HOME／Z1、F9050-FIX2 首跑、IOFIX 故障路徑（都要等④） | — | 見 §4 |
+ | 41 | **VC4 閥值自己測**（EastSun「VC4 你自己測試 寫進去哪個位置 數值讀回來 會改變 自己推出來 用VC8」）：等 EastSun F5 後，用 Vacuum Unit 同一條命令對一格寫 -30 kPa、讀回、再寫回原值 | （測試中） | — |
+ | — | 關掉軟體後 VS Code 上方的除錯工具列還在：wb_serve／gdb 都已經結束、8055 沒人佔，是 VS Code 沒發現結束；按紅色方塊即可（只會跑關站腳本，沒有東西可關） | — | — |
+diff --git a/tests/test_pci1203_pure.cpp b/tests/test_pci1203_pure.cpp
+index cbf5337..92f454e 100644
+--- a/tests/test_pci1203_pure.cpp
++++ b/tests/test_pci1203_pure.cpp
+@@ -719,7 +719,7 @@ int main()
+         c.kind = kCmdAxTorqueLimitSet; c.axis = 0; c.value = 1000.0;
+         const Pci1203CmdResult r = ctl.Execute(c);
+         check(!r.accepted && !r.issued && !r.ok, "kCmdAxTorqueLimitSet on a closed control is refused, nothing issued, not ok");
+-    }   { check(Pci1203CmdFromName("pci1203.ring.reset") == kCmdRingReset && std::strcmp(Pci1203CmdName(kCmdRingReset), "pci1203.ring.reset") == 0, "AI(W906-1203REOPEN) 20261007: kCmdRingReset <-> \"pci1203.ring.reset\" both ways"); Pci1203WireCmd w; w.name = "pci1203.ring.reset"; w.hasNum = true; w.num = 2.0; Pci1203Cmd c; std::string why; const bool p = Pci1203ParseWire(w, c, why); check(p && c.kind == kCmdRingReset && c.value == 2.0, "wire pci1203.ring.reset num 2 -> kCmdRingReset, ring mask 2 (ring 1)"); Pci1203WireCmd w2; w2.name = "pci1203.ring.reset"; Pci1203Cmd c2; std::string why2; check(!Pci1203ParseWire(w2, c2, why2), "pci1203.ring.reset without a mask -> refused at parse"); TPci1203Control ctl; Pci1203Cmd k; k.kind = kCmdRingReset; k.value = 2.0; const Pci1203CmdResult r = ctl.Execute(k); check(!r.accepted && !r.issued, "kCmdRingReset on a closed control is refused, nothing issued"); }   //AI(W906-1203REOPEN) 20261007: same line
++    }   { check(Pci1203CmdFromName("pci1203.ring.reset") == kCmdNone && std::strstr(Pci1203CmdName(kCmdRingReset), "(internal)") != 0, "AI(W906-1203REOPEN-2) 20261007: kCmdRingReset is INTERNAL -- no wire name (review C3), audit name says (internal)"); Pci1203WireCmd w; w.name = "pci1203.ring.reset"; w.hasNum = true; w.num = 1.0; Pci1203Cmd c; std::string why; check(!Pci1203ParseWire(w, c, why), "a browser frame pci1203.ring.reset num 1 (reset ring 0) is refused at parse"); TPci1203Control ctl; Pci1203Cmd k; k.kind = kCmdRingReset; k.value = 2.0; const Pci1203CmdResult r = ctl.Execute(k); check(!r.accepted && !r.issued, "kCmdRingReset on a closed control is refused, nothing issued"); }   //AI(W906-1203REOPEN) 20261007: same line
+ 
+     std::printf("\ntest_pci1203_pure: %d checks, %d failure(s)\n", g_total, g_fail);
+     return g_fail == 0 ? 0 : 1;
+diff --git a/tests/test_pci1203_reopen.cpp b/tests/test_pci1203_reopen.cpp
+index 79b8000..943d46e 100644
+--- a/tests/test_pci1203_reopen.cpp
++++ b/tests/test_pci1203_reopen.cpp
+@@ -2,6 +2,9 @@
+ //  tests/test_pci1203_reopen.cpp -- AI(W906-1203REOPEN) 20261007: EtherCAT/Pci1203Reopen.h, the 1203 re-open decision.
+ //  EastSun 1007 rulings: automatic while stopped + operator button; reset only the ring with the problem; every module
+ //  problem retries; 10 s apart, 3 tries per fault, the button gives 3 more; WAR16150 / WAR16157 (host). Pure: fake clock.
++//  AI(W906-1203REOPEN-2) 20261007: review 20261007 -- every attempt now waits for the module check's verdict (a repeated
++//  fault = failed, Recovered = done, nothing for 30 s = failed); the alarm only after the 3rd attempt's failure; the operator
++//  button keeps 3 tries even when a fault appears during the manual re-open; an attempt that could not be issued fails at once.
+ // =============================================================================
+ #include "EtherCAT/Pci1203Reopen.h"
+ #include <cstdio>
+@@ -24,19 +27,25 @@ int main()
+         check(r.Step(true, 0, &rings) == kRaNone && rings == 0, "idle: kRaNone, rings 0");
+     }
+ 
+-    std::printf("[2] open fail while stopped: re-open now, then 10 s apart, 3 tries, ONE alarm\n");
++    std::printf("[2] open fail: each try waits for its verdict, 10 s gap after a failure, alarm only after the 3rd verdict\n");
+     {
+         Pci1203Reopen r; unsigned rings = 0; unsigned long t = 1000;
+         r.Fault(kRfOpenFail);
+         check(r.Step(true, t, &rings) == kRaReopenCard && r.Tries() == 1, "try 1 at once: re-open card");
+         check(r.Step(true, t + 50000, &rings) == kRaNone, "nothing while the attempt has not reported done");
+-        r.AttemptDone(t + 200);  r.Fault(kRfOpenFail);                  // it failed again
+-        check(r.Step(true, t + 200 + 9999, &rings) == kRaNone, "9.999 s after the attempt: wait");
+-        check(r.Step(true, t + 200 + 10000, &rings) == kRaReopenCard && r.Tries() == 2, "10 s after: try 2 (the repeated fault kept the count)");
+-        r.AttemptDone(t + 10300);  r.Fault(kRfOpenFail);
+-        check(r.Step(true, t + 20300, &rings) == kRaReopenCard && r.Tries() == 3, "try 3");
+-        r.AttemptDone(t + 20400);  r.Fault(kRfOpenFail);
+-        check(r.Step(true, t + 30400, &rings) == kRaAlarm, "after the 3rd failure: ONE alarm (host: WAR16157)");
++        r.AttemptDone(t + 200);
++        check(r.Step(true, t + 15000, &rings) == kRaNone && r.Awaiting(), "after the attempt: waiting for the verdict, no new try even 15 s later");
++        r.Fault(kRfOpenFail);                                           // verdict: still failing
++        check(r.Step(true, t + 15100, &rings) == kRaNone && !r.Awaiting(), "verdict 'failed' -> the 10 s gap starts now");
++        check(r.Step(true, t + 25099, &rings) == kRaNone, "9.999 s after the verdict: wait");
++        check(r.Step(true, t + 25100, &rings) == kRaReopenCard && r.Tries() == 2, "10 s after the verdict: try 2 (the repeated fault kept the count)");
++        r.AttemptDone(t + 25300);  r.Fault(kRfOpenFail);
++        r.Step(true, t + 25400, &rings);
++        check(r.Step(true, t + 35400, &rings) == kRaReopenCard && r.Tries() == 3, "try 3");
++        r.AttemptDone(t + 35500);
++        check(r.Step(true, t + 35600, &rings) == kRaNone && !r.Alarmed(), "right after try 3: NO alarm yet -- it waits for try 3's verdict (review C1)");
++        r.Fault(kRfOpenFail);
++        check(r.Step(true, t + 40000, &rings) == kRaAlarm, "try 3's verdict 'failed' -> ONE alarm (host: WAR16157)");
+         check(r.Step(true, t + 99999, &rings) == kRaNone && r.Alarmed(), "no second alarm, no 4th try");
+         r.Fault(kRfOpenFail);
+         check(r.Step(true, t + 199999, &rings) == kRaNone, "the same fault again does not refill the budget");
+@@ -44,43 +53,67 @@ int main()
+         check(r.Step(true, t + 200000, &rings) == kRaReopenCard && r.Tries() == 1, "operator button: 3 more, the first one now");
+     }
+ 
+-    std::printf("[3] modules: reset only the problem rings; merge; recovered once\n");
++    std::printf("[3] no verdict within 30 s counts as a failure; a recovery inside the window ends it\n");
+     {
+-        Pci1203Reopen r; unsigned rings = 0; unsigned long t = 5000;
+-        r.Fault(kRfModules, 2u);                                        // ring 1 (IO) missing
++        Pci1203Reopen r; unsigned rings = 0; unsigned long t = 0;
++        r.Fault(kRfModules, 2u);
+         check(r.Step(true, t, &rings) == kRaResetRing && rings == 2u, "ring 1 problem -> reset ring 1 only");
+         r.AttemptDone(t + 100);
+-        r.Fault(kRfModules, 1u);                                        // the re-check now also sees ring 0
+-        check(r.Step(true, t + 10100, &rings) == kRaResetRing && rings == 3u && r.Tries() == 2, "merged: rings 0+1, try 2");
+-        r.AttemptDone(t + 10200);
+-        r.Recovered();
+-        check(r.Step(true, t + 10201, &rings) == kRaRecovered, "check passed -> kRaRecovered once");
+-        check(r.Step(true, t + 30000, &rings) == kRaNone && r.FaultKind() == kRfNone && r.Tries() == 0, "then idle, budget refilled");
+-        r.Fault(kRfModules, 0u);
+-        check(r.Step(true, t + 40000, &rings) == kRaReopenCard, "a module fault with no ring -> whole-card re-open");
++        check(r.Step(true, t + 30099, &rings) == kRaNone && r.Awaiting(), "29.999 s without a verdict: still waiting");
++        check(r.Step(true, t + 30100, &rings) == kRaNone && !r.Awaiting(), "30 s without a verdict: failed, gap starts");
++        check(r.Step(true, t + 40100, &rings) == kRaResetRing && r.Tries() == 2, "10 s later: try 2");
++        r.AttemptDone(t + 40200);
++        r.Recovered();                                                  // the module check passed 12 s later
++        check(r.Step(true, t + 52200, &rings) == kRaRecovered, "check passed -> kRaRecovered once");
++        check(r.Step(true, t + 99999, &rings) == kRaNone && r.FaultKind() == kRfNone && r.Tries() == 0, "then idle, budget refilled");
+     }
+ 
+-    std::printf("[4] not stopped -> nothing until stopped; open fail outranks rings\n");
++    std::printf("[4] modules: rings merge; no ring -> whole card; running -> nothing; open fail outranks rings\n");
+     {
+         Pci1203Reopen r; unsigned rings = 0;
+-        r.Fault(kRfModules, 1u);
+-        check(r.Step(false, 100, &rings) == kRaNone && r.Tries() == 0, "running: no attempt, no try counted");
+-        r.Fault(kRfOpenFail);
+-        check(r.Step(true, 200, &rings) == kRaReopenCard, "open fail on top of a ring fault -> whole-card re-open");
++        r.Fault(kRfModules, 2u);
++        r.Step(true, 0, &rings);  r.AttemptDone(10);
++        r.Fault(kRfModules, 1u);                                        // the re-check also sees ring 0
++        r.Step(true, 20, &rings);
++        check(r.Step(true, 10020, &rings) == kRaResetRing && rings == 3u && r.Tries() == 2, "merged: rings 0+1, try 2");
++        Pci1203Reopen n; n.Fault(kRfModules, 0u);
++        check(n.Step(true, 0, &rings) == kRaReopenCard, "a module fault with no ring -> whole-card re-open");
++        Pci1203Reopen s; s.Fault(kRfModules, 1u);
++        check(s.Step(false, 100, &rings) == kRaNone && s.Tries() == 0, "running: no attempt, no try counted");
++        s.Fault(kRfOpenFail);
++        check(s.Step(true, 200, &rings) == kRaReopenCard, "open fail on top of a ring fault -> whole-card re-open");
+     }
+ 
+-    std::printf("[5] operator button with no fault = one manual re-open; tick wrap\n");
++    std::printf("[5] operator button with no fault: a manual re-open; a fault during it keeps the 3-try budget (review C6)\n");
+     {
+         Pci1203Reopen r; unsigned rings = 0;
+         r.OperatorRetry();
+-        check(r.FaultKind() == kRfManual && r.Step(true, 0, &rings) == kRaReopenCard, "manual: re-open card");
+-        r.AttemptDone(1);  r.Recovered();
+-        check(r.Step(true, 2, &rings) == kRaRecovered, "manual re-open succeeded -> recovered");
+-        Pci1203Reopen w; unsigned long nearWrap = 0xFFFFFFFFul - 3000ul;
++        check(r.FaultKind() == kRfManual && r.Step(true, 0, &rings) == kRaReopenCard && r.Tries() == 1, "manual: re-open card, try 1");
++        r.AttemptDone(10);  r.Fault(kRfOpenFail);                       // the manual re-open left the card closed
++        check(r.FaultKind() == kRfOpenFail && r.Tries() == 1, "the fault keeps the manual try count (was reset to 0 = 1 + 3 tries)");
++        r.Step(true, 20, &rings);
++        check(r.Step(true, 10020, &rings) == kRaReopenCard && r.Tries() == 2, "try 2");
++        Pci1203Reopen ok; ok.OperatorRetry(); ok.Step(true, 0, &rings); ok.AttemptDone(1); ok.Recovered();
++        check(ok.Step(true, 2, &rings) == kRaRecovered, "manual re-open with a clean verdict -> recovered");
++    }
++
++    std::printf("[6] an attempt that could not be issued fails at once (10 s gap, no 30 s verdict wait)\n");
++    {
++        Pci1203Reopen r; unsigned rings = 0;
++        r.Fault(kRfOpenFail);
++        r.Step(true, 0, &rings);  r.AttemptNotIssued(5);
++        check(!r.Awaiting() && r.Step(true, 9999, &rings) == kRaNone, "not issued: no verdict wait, gap running");
++        check(r.Step(true, 10005, &rings) == kRaReopenCard && r.Tries() == 2, "10 s later: try 2");
++    }
++
++    std::printf("[7] tick wrap; unknown fault kind\n");
++    {
++        Pci1203Reopen w; unsigned rings = 0; unsigned long nearWrap = 0xFFFFFFFFul - 3000ul;
+         w.Fault(kRfOpenFail);
+-        w.Step(true, nearWrap, &rings);  w.AttemptDone(nearWrap);  w.Fault(kRfOpenFail);
+-        check(w.Step(true, nearWrap + 5000ul, &rings) == kRaNone, "across the tick wrap: 5 s -> still waiting");
+-        check(w.Step(true, nearWrap + 10000ul, &rings) == kRaReopenCard, "across the tick wrap: 10 s -> try 2");
++        w.Step(true, nearWrap, &rings);  w.AttemptDone(nearWrap);
++        check(w.Step(true, nearWrap + 29000ul, &rings) == kRaNone && w.Awaiting(), "across the wrap: 29 s -> still waiting for the verdict");
++        check(w.Step(true, nearWrap + 30000ul, &rings) == kRaNone && !w.Awaiting(), "across the wrap: 30 s -> failed");
++        check(w.Step(true, nearWrap + 40000ul, &rings) == kRaReopenCard, "across the wrap: gap over -> try 2");
+         Pci1203Reopen x;
+         x.Fault(7);
+         check(x.FaultKind() == kRfNone && x.Step(true, 0, &rings) == kRaNone, "an unknown fault kind is ignored");
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 0044148..70e843c 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -9013,7 +9013,7 @@ void W906_Pci1203ModuleCheckTick()
+         const std::string err = W906_Pci1203ModuleIniCreate(path, r.iniText);
+         if (err.empty()) {
+             std::printf("[1203-mod] %s -> %s written\n", r.text.c_str(), path.c_str());
+-            OpLine("LINK", "1203 第一次連線，模組清單已建立（之後只讀不寫） " + path + " / " + r.text);
++            OpLine("LINK", "1203 第一次連線，模組清單已建立（之後只讀不寫） " + path + " / " + r.text);  { extern void W906_Pci1203ReopenPassed(); W906_Pci1203ReopenPassed(); }   //AI(W906-1203REOPEN-2) 20261007: review C2 -- no list to compare against yet = no mismatch: a pending re-open is done; same line
+         } else {
+             std::printf("[1203-mod] %s -> NOT written: %s\n", r.text.c_str(), err.c_str());
+             OpLine("LINK", "1203 模組清單沒有寫入（" + err + "） / " + r.text);
+@@ -9022,11 +9022,11 @@ void W906_Pci1203ModuleCheckTick()
+     }
+     case ht9045::Pci1203ModuleCheck::kWriteSkipped:
+         std::printf("[1203-mod] %s\n", r.text.c_str());
+-        OpLine("LINK", "1203 模組清單不寫（掃描不完整，下次連線再試） / " + r.text);
++        OpLine("LINK", "1203 模組清單不寫（掃描不完整，下次連線再試） / " + r.text);  { extern void W906_Pci1203ReopenPassed(); W906_Pci1203ReopenPassed(); }   //AI(W906-1203REOPEN-2) 20261007: review C2 -- no list, no mismatch verdict: the card is open, a pending re-open is done; same line
+         break;
+     case ht9045::Pci1203ModuleCheck::kIniBad:
+         std::printf("[1203-mod] %s\n", r.text.c_str());
+-        OpLine("LINK", "1203 模組清單讀不懂，這次不檢查（不會覆寫它） / " + r.text);
++        OpLine("LINK", "1203 模組清單讀不懂，這次不檢查（不會覆寫它） / " + r.text);  { extern void W906_Pci1203ReopenPassed(); W906_Pci1203ReopenPassed(); }   //AI(W906-1203REOPEN-2) 20261007: review C2 -- the list cannot be read, so no mismatch can be judged: re-opening again would not change that; same line
+         break;
+     case ht9045::Pci1203ModuleCheck::kPass:
+         std::printf("[1203-mod] %s\n", r.text.c_str());
+@@ -9437,6 +9437,7 @@ static bool W906_ReopenMachineStopped(std::string& why)
+ }
+ void W906_Pci1203ReopenOpenFailed(const std::string& why)
+ {
++    if (why.find("not linked") != std::string::npos) return;          // AI(W906-1203REOPEN-2) 20261007: review C4 -- a build without HAVE_PCI1203 (laptop) has no card to re-open: no WAR16150 / WAR16157 there
+     g_w906Reopen.Fault(ht9045::kRfOpenFail);
+     g_w906ReopenOpenAlarmPending = true;
+     g_w906ReopenOpenWhy = why;
+@@ -9513,6 +9514,14 @@ void W906_Pci1203ReopenTick()
+     OpLine("LINK", std::string("1203 重新開卡 ") + b);
+     const ht9045::Pci1203CmdResult r = ringReset ? W906_ReopenExecute(ht9045::kCmdRingReset, (double)rings)
+                                                  : W906_ReopenExecute(ht9045::kCmdCardRescan, 0.0);
++    if (!(r.accepted && r.issued)) {                                   // AI(W906-1203REOPEN-2) 20261007: review C5 -- nothing reached the card
++        std::snprintf(b, sizeof(b), "%s NOT issued: %s", ringReset ? "ring reset" : "card re-open", r.why.empty() ? "(no reason)" : r.why.c_str());
++        g_w906ReopenLast = b;
++        std::printf("[1203-reopen] %s\n", b);  std::fflush(stdout);
++        OpLine("LINK", std::string("1203 重新開卡沒有送出 ") + b);
++        g_w906Reopen.AttemptNotIssued((unsigned long)::GetTickCount());   // a failed try; no HOME lost, no new module-check generation
++        return;
++    }
+     fAllMotorHome = false;                                             // drives lost power / their handles: HOME again before running
+     ht9045::TPci1203Monitor* m = ht9045::Pci1203Monitor();
+     const bool open = (m != 0 && m->Open_());
+-- 
+2.55.0.windows.5
+
