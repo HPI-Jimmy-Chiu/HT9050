@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-07 22:53
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 21201bc WORKLOG: ?2 row 190 (CONASYNC 0c8cd92: the 103 s START stall and the EMG/Servo fal／web e94a028。
+HT9050 機台參數快照（machine_params\）—— 2026-10-07 23:06
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 430305b TRAYSAFE9050: the Tray Arm teach guard uses the HT9050 station order -- EastSun 10／web e94a028。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
