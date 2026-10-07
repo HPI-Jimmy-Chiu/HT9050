@@ -166,3 +166,4 @@
 | W-152 | St02（St02-M 指派，建議 St02-E） | 📋 ❗急件 AUTOHEIGHT-ENABLE：解開 HT9050 Contact 頁的自動測高（E-042 B5／B6）＋網頁接線＋Save／套用路徑＋ctest，急件 MR | 20261007 17:0x | TO_STEVEN §4 17:0x | FROM_STEVEN（`v906/steven-handoff`）／MR | — | 0 | ✅ 已認領（St02-M 1007 17:0x：St02-E 立刻做；W-149 在 MR 1＝!307 之後暫停） |
 | W-153 | 機台端（MC01／EastSun）＋St01 | ❗急件：E-10 量測＋`HT9050_INDEXZ_TORQUE_CONFIRMED`、EP 用哪一個；包到了實測 Auto High（找高度、存、套用、3 次重複、沒 socket 的負向） | 20261007 17:0x | TO_ES02 §4 17:0x＋TO_STEVEN §4（給 St01） | FROM_ES02／機台 README.txt／FROM_STEVEN | — | 0 | 等回覆（急件） |
 | W-154 | St02（St02-M／Steven） | W-152 最後那一行拆閘：Steven 在 St02-E 視窗核准，或回「讓筆電做」（Jimmy #143 同時在問） | 20261007 17:2x | TO_STEVEN §4 17:2x | FROM_STEVEN（`v906/steven-handoff`） | — | 0 | ⤷ Jimmy #143＝A（17:3x）：筆電在整合時加那一行，Steven 核准不再是前提（他先核准的話 St02-E 自己放也可以） |
+| W-155 | St02（St02-M 排序） | 📋 IOPANEL：IO 頁面板分頁照 golden 補齊（EastSun 透過機台 cpp 0292 派給 Jimmy） | 20261007 18:4x | TO_STEVEN §4 18:4x | FROM_STEVEN（`v906/steven-handoff`） | — | 0 | 等認領 |

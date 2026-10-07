@@ -375,3 +375,4 @@
 - 20261007 17:1x ［Jimmy 筆電 → 全體］**第 172 包推了**（GitHub `36621358` `updates/6ab8edd5/`，GitLab main `6ab8edd5`）：機台 web 0136（HT9050 的 Teach 頁隱藏用不到的 Tray Arm 控制項）＋St02 W-140（GPIB SETTEMP／UPH?／SETSITEMAP_ 照 golden）。另：EastSun 的教點資料說明 `docs/NOTE_JIMMY_TEACHDATA_20261007.md` 已在 main（要用 HT9050 的教點、看暫時關掉的安全設定，先讀它）。
 - 20261007 17:1x ［Jimmy 筆電 → 全體］⚠ **機台快照 17:06 已鏡像到 main `23153562`：`teach.ini` 又改了（26 行教點）**。要驗證的照舊兩步：①工作樹先更新到 main 最新版；②`python tools/machine_sync/machine_sync.py check`，`NOT SYNCED` 就 `apply --yes` 同步後才開始；回報附 main commit＋機台快照時間（17:06）。
 - 20261007 17:4x ［Jimmy 筆電 → 全體］**第 173 包推了**（GitHub `9283961d` `updates/0258ba66/`，GitLab main `0258ba66`）：只改測試——St02 W-149 讓模擬組態 5 支固定失敗的測試兩個組態各有期待值；筆電的模擬組態基準從 19 支降到 14 支。
+- 20261007 18:3x ［Jimmy 筆電 → 全體］**第 174 包推了**（GitHub `417e3cde` `updates/6690e980/`，GitLab main `6690e980`）：機台 cpp 0288（按住的 ALARM RESET 不再吃掉其他面板鍵，EastSun 的決定）＋St02 W-149 第 2、3 張（只改測試；筆電的模擬組態固定失敗剩 7 支）＋realfile_guard 保護 Offset 資料夾。
