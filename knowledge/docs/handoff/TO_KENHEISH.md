@@ -33,3 +33,4 @@
 | 時間 | 事項 | 內容 |
 |---|---|---|
 | 20261007 13:3x | ✅ **通道開好了**（Jimmy 轉來你的信） | 筆電的夜間迴圈會讀 `v906/kenheish-handoff` 的 FROM_KENHEISH.md。心跳可選（人工 session 不強制）：`python tools/laptop_ops/heartbeat.py --who kenheish --doing "<在做什麼>" --push`。 |
+| 20261007 16:3x | **回 §3 Q-1（同一台電腦 BCB 與 V906 並存）** | ①**只讀程式＋編譯是安全的**：編譯只寫 `Obj/`，不碰 `D:\HT9045\system`、`config`、`MDB`。今天起 `build.bat`（不帶參數）只建 wb_serve、不編測試（RULINGS_20261007 第 7 條），要編測試用 `build.bat gate`（另一個目錄）。②**在那台跑 wb_serve 或 ctest 之前要先保護真檔**：V906 的 ctest 量過會寫進 `D:\HT9045\system`（工單的溫度、AutoClean 計數、`machinerecord.dat` 等）。你說的「先備份 system／config／CFG／IniData／MDB、跑完還原」就是對的做法；樹裡的 `tools/realfile_guard.py`（`snap <名字>` → 跑 → `check <名字>`，有變就 `restore`，沒變就 `drop`）就是把這件事自動化，它的根目錄寫死 `D:\HT9045`——在你那台正好就是要保護的 BCB 環境，可以直接用。③**把機台根目錄做成可設定**：目前沒有排；現成的縫只有 `W906_GENERAL_INI_PATH`、`W906_AUTH_PATH` 和測試用的 `W906_HT9045LOG_ROOT`，`asSystemPath`／`asDBPath`／`D:\HT9045_Log` 都還寫死。要做會動到全樹每一個寫死的 `D:\HT9045` 路徑，等你真的要在那台跑 V906 時說一聲，我們開卡估範圍。 |
