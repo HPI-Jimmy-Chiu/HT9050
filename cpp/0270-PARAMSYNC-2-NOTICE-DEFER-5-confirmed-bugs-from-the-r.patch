@@ -1,0 +1,117 @@
+From 596804ef7f4e1e6572e8ff9e5eb4762db5ff20b3 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 11:14:00 +0800
+Subject: [PATCH] PARAMSYNC-2 / NOTICE-DEFER-5: confirmed bugs from the review
+ of 4e3f1bf / 0c22df0 (hourly bug loop).
+
+1a WebMotorAccessLive.cpp W906_BootInitMotorTick (same line): ONE axis per call. Since 4e3f1bf it also runs on the main loop, and all
+   18 InitMotors (~0.9 s of IO-thread round trips each) in one call froze the serve loop 16.5 s at 10:53 (oplog: RESET answered after
+   16063 ms, HOME after 6203 ms, heater job starved).
+1b same function (same line): an axis with no servo sample 20 s after motor power is skipped and logged, so the boot can finish;
+   W906_ParamSyncTick (same line): a page-open request (Motor Test / Teach) no longer waits for the boot InitMotor.
+1c EtherCAT/Pci1203MotorRoute.cpp SetSpeedParam (same line): a FRESH card read-back (newer than this route's last command and any other
+   caller's write) wins over the route's own last write when judging the acc/dec ceiling -- Motor Test's Test Range / Rate InitMotor
+   rewrites MaxAcc outside the route and the stale record skipped a needed raise (0x80000013).
+2a tests/test_note_auth.cpp: the D026 pin follows the main-loop lambda (skip + the unchanged gate), + a pin that the skip is keyed by id.
+2b tools/wb_serve.cpp (same lines): g_w906NoticeGatePassed is a set of COMMAND ids (unique, never reused), was the notice tag: a held ack
+   consumed by another wait (ForwardShowErrorMessage / YesNo answer carried notifyAcks themselves) left the tag behind and the next PAUSE
+   on the same notice skipped the auth gate; a second ack in the same wait overwrote the first.
+Debug: wb_serve linked; Pci1203MotorRoute, WebMotorAccess, NoticeAck, D026_NoteAuth passed. Scan 0. W906_ParamSyncTick / the boot tick
+have no unit test (live tick) -- check the op log at the next start: InitMotor (boot) lines one per pass, no SLOW pass > 2 s.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203MotorRoute.cpp | 2 +-
+ WebMotorAccessLive.cpp         | 6 +++---
+ tests/test_note_auth.cpp       | 3 ++-
+ tools/wb_serve.cpp             | 6 +++---
+ 4 files changed, 9 insertions(+), 8 deletions(-)
+
+diff --git a/EtherCAT/Pci1203MotorRoute.cpp b/EtherCAT/Pci1203MotorRoute.cpp
+index 8c5e2ab..dd23614 100644
+--- a/EtherCAT/Pci1203MotorRoute.cpp
++++ b/EtherCAT/Pci1203MotorRoute.cpp
+@@ -337,7 +337,7 @@ unsigned long SetSpeedParam(int board, int port, AxisRec& rec, int slot, int whi
+         ++s_stats.skippedSpeed;
+         return 0;
+     }
+-    { const int mw = (which == kEcSpdAcc || which == kEcSpdJogAcc) ? (int)kEcSpdMaxAcc : (which == kEcSpdDec || which == kEcSpdJogDec) ? (int)kEcSpdMaxDec : -1; const int ms = (mw == (int)kEcSpdMaxAcc) ? (int)kSpeedMaxAcc : (int)kSpeedMaxDec; if (mw >= 0 && v > 0 && ms < kSpd) { double cur = -1.0; if (rec.spdOk[ms]) cur = rec.spd[ms]; else if (a.valid && a.speedValid[ms]) cur = a.speed[ms]; if (cur >= 0 && cur < v) { char note[160]; std::snprintf(note, sizeof(note), "%s %.0f < %.0f -> raised first (AI(W906-PARAMSYNC))", mw == (int)kEcSpdMaxAcc ? "CFG_AxMaxAcc" : "CFG_AxMaxDec", cur, v); Say(board, port, "SetSpeed", "CEILING", note); const unsigned long mrc = SetSpeedParam(board, port, rec, slot, mw, v); if (mrc != 0) return mrc; } } }   //AI(W906-PARAMSYNC) 20261007: EastSun「有時候根本還沒寫進去」-- an Acc / Dec (PTP or jog) above the axis's KNOWN acc / dec ceiling is refused by the card (0x80000013/14); raise that ceiling to the value first, as HOME-MAXVEL does for the home (never lowered; unknown ceiling = written as before). Velocity ceilings are NOT raised here: InitSpeed > JogHighSpeed is a Mot_Table error EastSun fixes (ruling 1007), flagged by PARAMSYNC. Same line
++    { const int mw = (which == kEcSpdAcc || which == kEcSpdJogAcc) ? (int)kEcSpdMaxAcc : (which == kEcSpdDec || which == kEcSpdJogDec) ? (int)kEcSpdMaxDec : -1; const int ms = (mw == (int)kEcSpdMaxAcc) ? (int)kSpeedMaxAcc : (int)kSpeedMaxDec; if (mw >= 0 && v > 0 && ms < kSpd) { double cur = -1.0; const bool cardFresh = a.valid && a.speedValid[ms] && e.PollCount() > s_foreignPoll && (!rec.haveCmd || e.PollCount() > rec.lastCmdPoll); if (cardFresh) cur = a.speed[ms]; else if (rec.spdOk[ms]) cur = rec.spd[ms]; else if (a.valid && a.speedValid[ms]) cur = a.speed[ms]; if (cur >= 0 && cur < v) { char note[160]; std::snprintf(note, sizeof(note), "%s %.0f < %.0f -> raised first (AI(W906-PARAMSYNC))", mw == (int)kEcSpdMaxAcc ? "CFG_AxMaxAcc" : "CFG_AxMaxDec", cur, v); Say(board, port, "SetSpeed", "CEILING", note); const unsigned long mrc = SetSpeedParam(board, port, rec, slot, mw, v); if (mrc != 0) return mrc; } } }   //AI(W906-PARAMSYNC) 20261007: EastSun「有時候根本還沒寫進去」-- an Acc / Dec (PTP or jog) above the axis's KNOWN acc / dec ceiling is refused by the card (0x80000013/14); raise that ceiling to the value first, as HOME-MAXVEL does for the home (never lowered; unknown ceiling = written as before). AI(W906-PARAMSYNC-2) 20261007 review of 4e3f1bf: a FRESH card read-back (newer than this route's last command and than any other caller's write) wins over this route's own last write -- Motor Test's Test Range / Rate InitMotor rewrites MaxAcc outside the route, and the stale record skipped a needed raise. Velocity ceilings are NOT raised here: InitSpeed > JogHighSpeed is a Mot_Table error EastSun fixes (ruling 1007), flagged by PARAMSYNC. Same line
+     bool ok = false;
+     char what[64];
+     std::snprintf(what, sizeof(what), "SetSpeed[%d]=%.3f", sp, v);
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index 50449fc..8b7a269 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -1642,11 +1642,11 @@ void W906_BootInitMotorTick()
+         }
+         bool known = false;
+         (void)be.Pci1203ServoOn(a.axis, known);
+-        if (!known) continue;                                                   // no fresh sample yet: next Poll
++        if (!known) { if (now - powerSince < 20000) continue; done[i] = true; ht9045::BrakeLog(alias + " InitMotor (boot): skipped -- no servo sample from the card 20 s after motor power (slave offline / comm fault?)"); continue; }   //AI(W906-PARAMSYNC-2) 20261007: review of 4e3f1bf -- an axis that never reports state kept the boot "pending" for ever, so g_w906BootInitAllDone (and the boot PARAMSYNC) never came; give up on it after 20 s, logged. Same line.  // no fresh sample yet: next Poll
+         done[i] = true;
+         std::string report;
+         const bool ok = ht9045::MotorAccessBootInitMotor(be, alias, report);
+-        ht9045::BrakeLog(report + (ok ? "" : "  [NOT all ok]"));
++        ht9045::BrakeLog(report + (ok ? "" : "  [NOT all ok]"));  return;   //AI(W906-PARAMSYNC-2) 20261007: review of 4e3f1bf -- ONE axis per call: each InitMotor is ~0.9 s of IO-thread round trips, and since this tick also runs on the main loop (W906_MotorAccessPollTick) all 18 in one call froze the serve loop 16.5 s at 10:53 (RESET answered after 16063 ms, heater job starved). Same line
+     }
+ }
+ 
+@@ -1709,7 +1709,7 @@ void W906_ParamSyncTick()
+     if (te && !s_tePrev) { s_pending = true; s_reason = "開 Teach 頁"; }
+     s_mtPrev = mt; s_tePrev = te;
+     const DWORD now = ::GetTickCount();
+-    if (s_state == 0 && s_pending && s_bootDone) {
++    if (s_state == 0 && s_pending && (s_bootDone || s_reason != "開軟體（開機 InitMotor 都做完）")) {   //AI(W906-PARAMSYNC-2) 20261007: review of 4e3f1bf -- a page-open request no longer waits for the boot InitMotor (motor power off at start, or a slave that never reports, swallowed every Motor Test / Teach sync); same line
+         const bool busy = SystemStart || SoftStart || iHome != 0 || (fHome != 0 && fHome->fShow);
+         if (busy) {
+             if (!s_waitSaid) { ht9045::BrakeLog("PARAMSYNC " + s_reason + "：機台運轉／歸零中，先不寫，停下來再寫"); s_waitSaid = true; }
+diff --git a/tests/test_note_auth.cpp b/tests/test_note_auth.cpp
+index 6fdd6b8..fe4b121 100644
+--- a/tests/test_note_auth.cpp
++++ b/tests/test_note_auth.cpp
+@@ -809,7 +809,8 @@ int main(int argc, char** argv)
+         CHECK(Has(wb, "if (kio > 0 && (kio & kcode) != 0 && W906_NoteAuthIoGate(qidStr, kio, ioPressed)) {"));
+         CHECK(Has(wb, "extern bool W906_SpecialPanelLocked(); const bool spLocked = W906_SpecialPanelLocked() && Key != SnFKAlarmReset && Key != SnRKAlarmReset;"));   // AI(W906-D034) C1
+         CHECK(Has(wb, "bool blocked = spLocked;"));                              // AI(W906-D034) C2: golden ScanKey :2908-2913
+-        CHECK(Has(wb, "} else if (wc.cmd == \"dialog.notifyAck\" && [&]() -> bool { extern bool W906_NoteAuthNoticeGate(const std::string&, std::string*); std::string nw; if (W906_NoteAuthNoticeGate(wc.hasTag ? wc.tag : std::string(), &nw)) return false; server.CompleteCommand((unsigned long long)wc.id, false, nw); return true; }()) {"));
++        CHECK(Has(wb, "} else if (wc.cmd == \"dialog.notifyAck\" && [&]() -> bool { if (g_w906NoticeGatePassed.erase((unsigned long long)wc.id) != 0) return false;") && Has(wb, "extern bool W906_NoteAuthNoticeGate(const std::string&, std::string*); std::string nw; if (W906_NoteAuthNoticeGate(wc.hasTag ? wc.tag : std::string(), &nw)) return false; server.CompleteCommand((unsigned long long)wc.id, false, nw); return true; }()) {"));   // AI(W906-NOTICE-DEFER-5) 20261007: the main-loop gate is skipped ONLY for the command id MbWait already gated (wb_serve.cpp NOTICE-DEFER-4/5); the gate itself unchanged
++        CHECK(Has(wb, "g_w906NoticeGatePassed.insert((unsigned long long)wc.id);") && !Has(wb, "g_w906NoticeGatePassed = tg;"));   // AI(W906-NOTICE-DEFER-5) 20261007: keyed by command id, never by tag
+         CHECK(Has(wb, "} else if (wc.cmd == \"dialog.notifyAck\") { extern void W906_NoticeAckCommand(webbridge::WebBridgeServer&, const webbridge::WebCommand&); W906_NoticeAckCommand(server, wc);"));   // INBOX 119's pin still holds
+         CHECK(Has(wb, "const std::string naCurrent = (g_alarmSlot.kind == w906dlg::AlarmSlot::kNotice) ? g_alarmSlot.requestId : std::string();"));
+         CHECK(Has(wb, "naCurrent, false, &naReply);  server.CompleteCommand((unsigned long long)wc.id, naOk, naReply);"));
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 1cced7b..2fc01b4 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -342,7 +342,7 @@ static std::string g_dialogMailboxDir;
+ //   （前提：時鐘不倒退，且每毫秒不超過一則）。0 仍是這裡的初值，只給
+ //   「main() 還沒跑到那一行」的極短窗口與單元測試用。
+ static unsigned long long g_dialogSeq = 0;  static const char* g_w906MotorNoteUnit = 0;  static const char* g_w906MotorNoteMsg = 0;   //AI(W906-JAM-STOP) 20260930: non-null only while ForwardShowMotorErrorMessage (EOF) posts golden ShowMotorErrorMessage's note through ForwardShowErrorMessage's kcode==0 branch -- the note's unit alias / message (golden note.cpp:1102 ErrShowToForm), and "skip the ShowErrorMessage-only stop + record" (the motor body did its own, golden :1054-1092).  Tick thread only
+-static w906dlg::AlarmSlot g_alarmSlot;  static std::string g_w906NoticeGatePassed;   //AI(W906-NOTICE-DEFER-4) 20261007: + the id of a notifyAck whose auth gate MbWait already ran (the main-loop arm then skips it -- the gate spends the one-shot pass).  AI(W906-J5-ACK) 20260930: what the Alarm-dialog-request mailbox holds now (tools/wb_dialog_mailbox.h AlarmSlot: idle / notice / blocking) -- written only by DialogMailboxPostAlarm / DialogMailboxRetire (through w906dlg::AlarmPost / AlarmRetire), read by W906_NoticeAckCommand (EOF).  Tick thread only.  On the old blank line, so no line below moves
++static w906dlg::AlarmSlot g_alarmSlot;  static std::set<unsigned long long> g_w906NoticeGatePassed;   //AI(W906-NOTICE-DEFER-5) 20261007: review of 0c22df0 -- keyed by the COMMAND id (unique, never reused), was the tag: a held ack consumed by another wait (ForwardShowErrorMessage / YesNo answer a carried notifyAck themselves) left the tag behind and the operator's NEXT PAUSE on the same notice skipped the gate; a second ack in the same wait overwrote the first's tag.  AI(W906-NOTICE-DEFER-4) 20261007: + the id of a notifyAck whose auth gate MbWait already ran (the main-loop arm then skips it -- the gate spends the one-shot pass).  AI(W906-J5-ACK) 20260930: what the Alarm-dialog-request mailbox holds now (tools/wb_dialog_mailbox.h AlarmSlot: idle / notice / blocking) -- written only by DialogMailboxPostAlarm / DialogMailboxRetire (through w906dlg::AlarmPost / AlarmRetire), read by W906_NoticeAckCommand (EOF).  Tick thread only.  On the old blank line, so no line below moves
+ // AI(W906-Q30-8) 20260922: 寫一份 ShowErrorMessage 的請求進信箱。
+ //   欄位逐字對照 web/JSON/Alarm-dialog-request.json（那是最權威的樣本），
+ //   arguments 五個鍵對上 golden
+@@ -4912,7 +4912,7 @@ int main(int argc, char** argv)
+                 //   ⚠ 但如果這行**常常**出現，代表 DialogMailboxRetire() 沒生效，
+                 //     那是真缺陷（症狀：答完按 F5 同一個警報又跳出來）。
+                 { extern bool W906_MsgBoxModelessAnswer(const webbridge::WebCommand&); if (!W906_MsgBoxModelessAnswer(wc)) server.CompleteCommand((unsigned long long)wc.id, false, "no query pending"); }   // AI(W906-SMM) 20260925: 非阻塞 MyMessageBox（ShowUnloaderTrayMessage）的關框回答在這裡收（檔尾），其餘照舊
+-            } else if (wc.cmd == "dialog.notifyAck" && [&]() -> bool { if (wc.hasTag && !g_w906NoticeGatePassed.empty() && wc.tag == g_w906NoticeGatePassed) { g_w906NoticeGatePassed.clear(); return false; }  /*AI(W906-NOTICE-DEFER-4) 20261007: MbWait already ran this gate at the press (wb_serve.cpp MbWait notifyAck arm)*/  extern bool W906_NoteAuthNoticeGate(const std::string&, std::string*); std::string nw; if (W906_NoteAuthNoticeGate(wc.hasTag ? wc.tag : std::string(), &nw)) return false; server.CompleteCommand((unsigned long long)wc.id, false, nw); return true; }()) {   /*AI(W906-D026) 20261001 St01: golden TfNote::BtnPauseClick KeyCode==0 arm (note.cpp:4084-4095) -> DoPassword: a notice golden guards with a password is refused (auth-required) until dialog.auth passed; answered inside the lambda. Same line, no line moves*/ } else if (wc.cmd == "dialog.notifyAck") { extern void W906_NoticeAckCommand(webbridge::WebBridgeServer&, const webbridge::WebCommand&); W906_NoticeAckCommand(server, wc);   /*AI(W906-J5-ACK) 20260930: INBOX 119 -- the operator acknowledges a kCode==0 notice (body at EOF; never waits, never posts a query). Same line, so no line below moves*/ } else if (wc.cmd == "dialog.auth") {
++            } else if (wc.cmd == "dialog.notifyAck" && [&]() -> bool { if (g_w906NoticeGatePassed.erase((unsigned long long)wc.id) != 0) return false;  /*AI(W906-NOTICE-DEFER-4) 20261007: MbWait already ran this gate at the press (wb_serve.cpp MbWait notifyAck arm)*/  extern bool W906_NoteAuthNoticeGate(const std::string&, std::string*); std::string nw; if (W906_NoteAuthNoticeGate(wc.hasTag ? wc.tag : std::string(), &nw)) return false; server.CompleteCommand((unsigned long long)wc.id, false, nw); return true; }()) {   /*AI(W906-D026) 20261001 St01: golden TfNote::BtnPauseClick KeyCode==0 arm (note.cpp:4084-4095) -> DoPassword: a notice golden guards with a password is refused (auth-required) until dialog.auth passed; answered inside the lambda. Same line, no line moves*/ } else if (wc.cmd == "dialog.notifyAck") { extern void W906_NoticeAckCommand(webbridge::WebBridgeServer&, const webbridge::WebCommand&); W906_NoticeAckCommand(server, wc);   /*AI(W906-J5-ACK) 20260930: INBOX 119 -- the operator acknowledges a kCode==0 notice (body at EOF; never waits, never posts a query). Same line, so no line below moves*/ } else if (wc.cmd == "dialog.auth") {
+                 // AI(W906-Q30-8) 20260922: 密碼驗證 —— 契約 dialogAuth.verifier「C++ only. HTML never compares passwords or access levels.」。
+                 // AI(W906-D026) 20261001 St01: 接上了（原本在這裡誠實回 "dialog auth not wired"）。這一支是主迴圈的：
+                 //   現在沒有阻塞告警在等（等待迴圈自己收它那一則，ForwardShowErrorMessage 的 else 鏈同一條指令），只剩 kCode==0 的通知 ——
+@@ -6822,7 +6822,7 @@ std::string MbWait(const std::string& qid, const char* const* opts, int nOpts)
+                                                        (long long)wc.id, msAck, true);
+                 g_modalServer->CompleteCommand((unsigned long long)wc.id, msOk, msAck);
+             } else if (wc.cmd == "dialog.notifyAck") {   //AI(W906-NOTICE-DEFER) 20261003: EastSun「我歸原點後 有異常 排除後再按歸原點 就沒用了」-- 21:56:31 the PAUSE on the motor jam NOTICE came while the "Motor not home yet" box waited and was refused modal-pending: the notice stayed open (the page had closed it) and every later HOME key read "擋關：通知框開著" (golden ScanKey ignores keys while the note is up). Not refused any more: carried to the main loop, which runs it (and answers it) as soon as this box closes
+-                { const std::string tg = wc.hasTag ? wc.tag : std::string(); std::string nw; if (!::W906_NoteAuthNoticeGate(tg, &nw)) g_modalServer->CompleteCommand((unsigned long long)wc.id, false, nw); else { w906NoticeHeld.push_back(wc); g_w906NoticeGatePassed = tg; if (::W906_NoteNoticeAckRefusal(tg.c_str()) == 0 && w906dlg::NotifyAckDecide(g_alarmSlot, tg) == w906dlg::kNotifyAckRetire) g_modalServer->CompleteCommand((unsigned long long)wc.id, true, "{\"notice\":\"held\",\"requestId\":\"" + tg + "\",\"runsWhen\":\"" + qid + " closes\"}"); } }   //AI(W906-NOTICE-DEFER-4) 20261007: review of 45d4f4d -- the early ok only checked the BtnPauseClick refusal; the held run's auth gate (main loop :4915) could still refuse after the page closed the note (e.g. auto-logout while this box was up) -> the note lived on in C++ and keys read "通知框開著" again. Now the SAME gate runs here first, at the press as golden DoPassword does: refused -> answered refused (the note stays, press again after dialog.auth), not held; passed -> held, its id remembered so :4915 does not run the gate twice (it spends the one-shot pass); early ok only when the slot really holds this notice (NotifyAckDecide == retire) and BtnPauseClick would not refuse.  AI(W906-NOTICE-DEFER-3) 20261007: EastSun「這畫面我按pause 10秒後才有反應」/「我按reset 畫面很久alarm才會被清除」-- the page shows one stop box at a time and kept "Motor not home yet" queued behind the jam note until this ack was answered, while this wait held the ack until that box closed: a deadlock broken only by the page's 15 s timeout. Now the page gets ok at once (note closes, the box shows, as golden: note PAUSE -> MyMessageBox); the close work itself still runs after the box (held below; its later CompleteCommand on this id is a no-op). Not when golden BtnPauseClick would refuse (the note must stay).   //AI(W906-NOTICE-DEFER-2) 20261004: held, handed to g_carry when this wait returns (the w906NoticeHeld line at the top of MbWait); was g_carry.push_back + g_carryRunnable
++                { const std::string tg = wc.hasTag ? wc.tag : std::string(); std::string nw; if (!::W906_NoteAuthNoticeGate(tg, &nw)) g_modalServer->CompleteCommand((unsigned long long)wc.id, false, nw); else { w906NoticeHeld.push_back(wc); g_w906NoticeGatePassed.insert((unsigned long long)wc.id); if (::W906_NoteNoticeAckRefusal(tg.c_str()) == 0 && w906dlg::NotifyAckDecide(g_alarmSlot, tg) == w906dlg::kNotifyAckRetire) g_modalServer->CompleteCommand((unsigned long long)wc.id, true, "{\"notice\":\"held\",\"requestId\":\"" + tg + "\",\"runsWhen\":\"" + qid + " closes\"}"); } }   //AI(W906-NOTICE-DEFER-4) 20261007: review of 45d4f4d -- the early ok only checked the BtnPauseClick refusal; the held run's auth gate (main loop :4915) could still refuse after the page closed the note (e.g. auto-logout while this box was up) -> the note lived on in C++ and keys read "通知框開著" again. Now the SAME gate runs here first, at the press as golden DoPassword does: refused -> answered refused (the note stays, press again after dialog.auth), not held; passed -> held, its id remembered so :4915 does not run the gate twice (it spends the one-shot pass); early ok only when the slot really holds this notice (NotifyAckDecide == retire) and BtnPauseClick would not refuse.  AI(W906-NOTICE-DEFER-3) 20261007: EastSun「這畫面我按pause 10秒後才有反應」/「我按reset 畫面很久alarm才會被清除」-- the page shows one stop box at a time and kept "Motor not home yet" queued behind the jam note until this ack was answered, while this wait held the ack until that box closed: a deadlock broken only by the page's 15 s timeout. Now the page gets ok at once (note closes, the box shows, as golden: note PAUSE -> MyMessageBox); the close work itself still runs after the box (held below; its later CompleteCommand on this id is a no-op). Not when golden BtnPauseClick would refuse (the note must stay).   //AI(W906-NOTICE-DEFER-2) 20261004: held, handed to g_carry when this wait returns (the w906NoticeHeld line at the top of MbWait); was g_carry.push_back + g_carryRunnable
+                 std::printf("  [MyMessageBox] %s 等待中收到通知框的 PAUSE（dialog.notifyAck）-> 框關掉後由主迴圈處理\n", qid.c_str());
+             } else if (wc.cmd == "act.home.abort") { ::W906_HomeAbortCommand(*g_modalServer, wc);   /*AI(W906-HOMEMON) 20261001: Abort Home answered during the MyMessageBox wait too, like motor.stop above (JsonBridge/ChanHome.cpp; :: = the file-scope declaration at :439, this wait is in an anonymous namespace)*/ } else if (wc.cmd == "io.btnPanelClick" && ::W906_IoPageNoGuards()) { ::W906_DispatchIoClick(*g_modalServer, wc); } else if (::W906_StateRecordDuringDialog(*g_modalServer, wc)) { } else {   //AI(W906-IO-NOGUARD) 20260929: IO click served during the MyMessageBox wait too.  AI(W906-S24-Q93) 20261004 (St02-E; Steven Q93 = A): State Record during this box
+                 if (wc.cmd == "modal.answer" || wc.cmd == "dialog.response")   // 答錯對象（例如舊的一則）—— 印出來，現場查「按了沒反應」用
+-- 
+2.55.0.windows.5
+
