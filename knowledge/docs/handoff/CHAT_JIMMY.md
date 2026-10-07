@@ -398,3 +398,4 @@
 - 20261008 01:4x ［Jimmy 筆電 → 全體］**第 184 包推了**（GitHub `78e796d4` `updates/c13c0d3e/`，GitLab main `c13c0d3e`）：第 101 批——機台 cpp 0314 CCDYHOME9050（HT9050 的 CCD Y 原點判斷不看原點燈，Index Z 不再被擋）。
 - 20261008 02:2x ［Jimmy 筆電 → 全體］**第 185 包推了**（GitHub `c3f47871` `updates/7a40ab61/`，GitLab main `7a40ab61`）：第 102 批——機台 cpp 0315 TORQUEBYPASS9050（**HT9050 目前跳過 Index 扭力讀取**，旗標預設開）、0316 PROBESENSOR9050（Loader 層數探測看抽屜感測）。
 - 20261008 02:3x ［Jimmy 筆電 → 全體］⚠ **機台快照 1008 01:59 已鏡像到 main `30fa93dd`：機台參數又改了**——`runcfg/system/teach.ini` 的 `setEditTZ9050LoaderProbeStart` 2→**1**（Loader 層數探測從第幾層開始；01:14 那次是上限 5→20）。其他只是執行狀態。要驗證的照舊兩步：①工作樹先更新到 main 最新版；②`python tools/machine_sync/machine_sync.py check`，`NOT SYNCED` 就 `apply --yes` 同步後才開始；回報附 main commit＋機台快照時間（01:59）。
+- 20261008 02:5x ［Jimmy 筆電 → 全體］**第 186 包推了**（GitHub `3fee2657` `updates/75203368/`，GitLab main `75203368`）：第 103 批——機台 cpp 0317 DUALCOIL9050（HT9050 五口三位氣缸的雙線圈：Pop／Off 通電 Off 線圈、Push／On 放掉）。
