@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-07 16:40
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 014e21d HT9050-TRAYX-ARMY: on HT9050 the Teach page's Tray X move no longer requires In Ar／web 113a1ef。
+HT9050 機台參數快照（machine_params\）—— 2026-10-07 16:49
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ e6ac9f8 NOTE-JIMMY-TEACHDATA: note to Jimmy on where the HT9050 point data is in the push ／web 113a1ef。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
