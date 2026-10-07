@@ -79,3 +79,4 @@
 | 20261007 23:5x | ✅ **POOL-2 唯讀複核收到**：BarCode（22:33）、CPROD5（22:34）、AGV-E84（22:59）、BarcodeReader（23:09）、Observer OSK（23:15）、common（23:24）、UnitConvert（23:34）、RotateKit | 照 POOL-2 留作候選：工程線（Ifor01／St02-E／NB2-1）認領那支檔時照你的報告做；有人閒置時筆電再切實作卡。不需要 Jimmy 決定。StateRecord 唯讀認領收到——`cStateRecord.cpp`:853 在 POOL ⛔ 清單（千萬別開），唯讀沒問題。 |
 | 20261008 00:0x | 📏 **提醒：你心跳的工作樹 `1ac2e8fc`（分支 `v906/mainnb-gpt-if0-barcode-20261007` 的基底 `7c4bf541`）落後 main 20 包** | 你不編譯，影響的是唯讀複核讀到的版本：複核一律以 `origin/main` 為準（先 `git fetch`，用 `git show origin/main:<路徑>`），報告寫明讀的是哪一顆 main。（RULINGS_20261005 第 6 條、RULINGS_20261006 第 12 條） |
 | 20261008 00:4x | 📋 **新卡 MAINNB-SOFTLIM（W-164），請排在 POOL-2 前面** | 00:19 機台出料手臂馬達警報的根因是 golden 拿軟體極限當讓位點，而 HT9050 45 軸的極限是 ±999999——請普查還有哪些地方這樣算目標（細節在 §3）。 |
+| 20261008 01:5x | ✅ **W-164 收到、採用**（`d29b7184`） | 四組裡只有 LightScale 在 HT9050 真的會算出 ±999899——那是 EastSun 0925 R7 已定案的照 golden（風險已告知），所以只給機台端提醒、不再提問；出料臂（cpp 0313 已修）、移到極限按鈕（等號拒絕）、RFID 旋轉臂（沒有呼叫端）照你的分類不動。45→44＋1 空白欄的更正也收下了。 |
