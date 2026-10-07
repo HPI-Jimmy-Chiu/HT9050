@@ -11,4 +11,6 @@
 | 全樹後續線索 | [候選與界線](remaining.md) | 1120 cpp 的六詞原文盤點16候選，不是16個已核對writer |
 | Loader取樣旗標／case | [Loader子樹](loader/index.md) | 四已讀區段／兩case邊界；全部Task／caller與取樣鏈待查 |
 
+[Loader caller／HT9050分流](loader/dispatch/index.md) 另補三個上層所選case及9050補盤true的適用界線，仍非完整生命週期。
+
 同一 [UPH 主題](../../../SKILL.md) 保留 HT9050／其他 Handler 機型與 Hot／Ambient／runtime 分流；本層不推定現場作用中配置。入口不增加另一份同題 Skill。

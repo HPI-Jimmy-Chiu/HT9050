@@ -14,5 +14,6 @@
 | 配置InArm計數call／字面閘門 | [caller子樹](callers/index.md) | 七call區段／一短stub；完整caller／機型分派／每顆口徑仍待查 |
 | 全域初值、暫停累加與部分重置 | [狀態子樹](state/index.md) | 24定義／extern、22已讀區段；六完整body語意與所有writer未閉合 |
 | Loader記錄旗標／Task條件 | [Loader子樹](state/loader/index.md) | 兩版短入口／case 1300；全部派工、helper與取樣鏈仍待查 |
+| WebBridge表格到UPH tag／sentinel | [consumer子樹](consumers/index.md) | 三body文字／兩常數／一caller區段；完整transport／producer仍待查 |
 
 沒有執行C++、Profiler、Home、檔案寫入、API、build、runtime或機台；實際UPH誤差仍待查。

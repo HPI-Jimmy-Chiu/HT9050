@@ -50,3 +50,19 @@ portal 原稿的 Maurice 寄信／個人 Copilot 鏡像條款保留作 20260923 
 [配置InArm caller子樹](current-cpp/callers/index.md) 另釘pin `f2a1d78160e9f44f6bb351f0a3552ae36e87a031`：10source、七caller完整body保存hash／七指定call區段與一個已讀V906 2x8_32 return-false短stub，區分7call／3定義／3宣告、#if 0與Tray實參方向。全部caller／callee／機型分派、每顆口徑、consumer／容量仍未閉合；前層來源／歷史保存不變。
 
 Loader記錄旗標的短入口／case 1300與版本差異另見 [Loader子樹](current-cpp/state/loader/index.md)；完整函式僅保存hash，不稱全派工完成。
+
+[Loader caller／HT9050 dispatch子樹](current-cpp/state/loader/dispatch/index.md) 另釘pin `ac116483d8f4243339083fe438bda1cd81b96ef1`：三source／三完整caller body hash與六所選入口／case，三HT9050完整函式文字已讀及八本地區段；補標準DoLoad／AutoTeach與9050提前分流、補盤三條return-true界線。helper、設定、所有取樣writer／consumer／容量site與機台仍待查；原文／metadata／裁決／既有manifest保留。
+
+[WebBridge consumer子樹](current-cpp/consumers/webbridge/index.md)另釘pin `1147cefda898d438fe556bea43dbb9e1df292ca3`：一source／三完整body文字已讀、兩sentinel與一caller區段；全caller、cust來源、stage transport、頁面、producer與grid生命週期未閉合。原始片段註解行號只保存為來源歷史，活文件用function／變數／tag名；沒有程式／runtime／機台驗證。
+
+[HT9050取料caller子樹](current-cpp/state/loader/dispatch/catch/index.md)釘pin `1cdd21bef8a55ab06f415840ae5fdee4b1c16bd5`：一source／兩完整函式文字與三body hash、DoCatchTray短入口／case250；helper／設定／所有counter與機台未閉合，原始註解與既有metadata／原文保留。
+
+[V906／V912 Command consumer子樹](current-cpp/consumers/command/index.md)釘pin `1cdd21bef8a55ab06f415840ae5fdee4b1c16bd5`：兩source／四完整getter與wrapper文字、六body hash及四call區段；V906 active支路／V912token對照與WebBridge值口徑分開，transport／全caller未驗。原始byte／metadata／其他manifest保留，未改W-140程式。
+
+[Command轉送子樹](current-cpp/consumers/command/transport/index.md)pin `6690e980945e8ab5adf6708b1372c4fb1bf917bb`：六source、七完整函式文字／body hash、兩宣告，註冊／清除與本地出口分清；下游／送達未驗。ckernel整檔byte變更但原選定四body相同，舊manifest與metadata保留。
+
+## 目前保存裁決
+
+[RULINGS_20261007 第8條](https://gitlab.honprec.com/honprec/rd/rd5/ht9045/-/blob/1147cefda898d438fe556bea43dbb9e1df292ca3/HT9011UC_Cpp_V3.33.906.0/docs/RULINGS_20261007.md) 保存 Jerry 本人選擇修 ACL、`wb_serve` 不升權，以及他台靜默寫入失敗的回報。這是保存成功查證的裁決來源；本單元未量本機權限或改 ACL。該文件第7條則分開主程式／F5與開發 gate 的建置路徑，本次只做文件驗證。
+
+[mailbox子樹](current-cpp/consumers/command/transport/mailbox/index.md)pin `37cef908a42adaaa8df8a0d3fc5959e52446e802`保存四source、七body及七宣告；本地返回／pump／timeout與實際送達分清，完整engine／thread／生命週期未驗。

@@ -6,6 +6,8 @@
 
 仍待閉合：所有 writer／caller、counter／pause／reset、site helper 與機型分派、DB／SECS／UI／CSV consumer、檔案成功／回讀／錯誤呈現、編譯與連結版本、日期與文字平台等價、容量與量測校正。
 
+輸出成功也要核對執行帳號／ACL。[RULINGS_20261007 第8條指標](../../resources.md#目前保存裁決) 保存 Jerry 本人的裁決及他台靜默寫入失敗回報：裝機流程修目錄授權，`wb_serve` 不升權。本單元未檢查本機 ACL 或執行權限操作，不能據此判定本次 UPH 保存成功或失敗。
+
 HT9050 與其他 Handler 共同使用 [UPH 主題機型樹](../../machines/index.md)；本頁不把 V912 客戶 writer 認定為 HT9050 作用中功能，也不把歷史 Per-Tray、HTML 排程／動畫、Profiler 設計與目前原碼混成實機量測。
 
 原文、metadata、資源、舊入口與裁決正文照舊保存。沒有 C++ 建置／執行、API／LIVE、檔案寫入、機台動作或 runtime 修改；保存結果與完整 UPH 語意仍未驗證。

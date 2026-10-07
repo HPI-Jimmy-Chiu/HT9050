@@ -109,3 +109,22 @@ Steven 1007 12:0x：「把這些改成不顯示的 log，要註記起來，之�
 | L4 | `mmoVibrationMotor` | main.cpp:33976-33982（滿 1000 行先 **SaveToFile** 再清空） | 振動馬達紀錄 | 待查 | 待定——**注意：這個框本身就是落檔緩衝**，不顯示時要保留存檔，不能整段拿掉 |
 
 （`fMotorTest->mmo1`〔mymotor.cpp:2941、uMotorTest.cpp:2075〕是馬達測試頁自己的框，不是主畫面，不在此表。）
+
+## 9. W-150 第 1 批（20261007，St02-E，MR 見 FROM_STEVEN）
+
+照 §7 做了 6 個物件：`LogObjects.h:27` 加取用函式 `W906_TimeDataLogObj`／`W906_ProdRecordLogObj`／`W906_TestLogObj`／`W906_JamAlarmLogObj`／`W906_TorqueLogObj`／`W906_TorqueLogNewObj`（本體 `LogObjects.cpp` 檔尾；W906_CreateLogObjects 之前與 ctest 裡回 nullptr）。
+
+| 物件 | main.cpp 以外的呼叫（golden 0618 → 移植樹） | 這批做了什麼 |
+|---|---|---|
+| slTimeData | cMyDB.cpp:491-492 → cMyDB.cpp:650-653 | 同一行換成取用函式（行為不變） |
+| slProdRecordLog | cMyDB.cpp:559-560 → cMyDB.cpp:729-732 | 同上 |
+| slTestLog | cObserver.cpp:2228 → cObserver.cpp:3193；cprod.cpp:2905-2912 → cprod.cpp:3066-3075 | 兩個過期閘照 golden 打開（JSCK OEE，CC_SCK／[N28]）；cprod 的路徑加 W58 Q5 `W906_SimNetPathBlocked`——模擬版不套網路路徑（SimNet/SimNetMask.cpp:79「N28＝本機紀錄」的前提由這道守門補上） |
+| slTorqueLog | rs232.cpp:1783 → rs232.cpp:868 | 註解掉的那句照 golden 打開（國際牌 RS-232 >2000 位元組異常封包） |
+| slTorqueLog（其他）／slTorqueLogNew | BarCode.cpp:1780/1856/1927/2003、OCR.cpp:621/1365、rs232.cpp:3250/3899、:4513/:4599 | **呼叫端還沒翻**（Barcode_1..4ReceiveData、CommOcr*ReceiveData、Comm4／cmATC ReceiveData、TimerHPCardTimer）——只有取用函式，等那些函式翻進來直接用 |
+| slJamAlarmLog | note.cpp:6777（TfNote::SaveErrEventLog） | 呼叫端還閘著（forms/fNote_ShowError.cpp N-7）——只有取用函式 |
+| atester 的兩處 | atester | 留給 Frank01 那一批 |
+
+- 這 6 個在 golden 都只寫檔、不顯示在主畫面 ⇒ 沒有 §8 的 TODO(W906-LOGVIEW)。
+- include 省不掉：cMyDB 40、cObserver 14、cprod 12、rs232 53 處其他 fMain->（跟 §2 的判斷一樣）。
+- 坑：單獨編 cMyDB.cpp／cprod.cpp 的測試（test_ga1_cmydb、test_ga1_cprod）要在舊空行補取用函式的替身；cprod.cpp、rs232.cpp 要另外 include `Public/MyStringList.h`（設成員／呼叫方法需要完整型別）。
+- ctest `St02_W150LogSplit`：取用函式＝fMain 的物件、MyDBIProductionData 經取用函式寫進沙盒 ProductRecord、TestLog 寫檔、W58 判斷（模擬擋 UNC、出貨不擋）、cObserver／cprod／rs232 原始碼釘子＋全樹沒有活的 `fMain->sl<這 6 個>`。
