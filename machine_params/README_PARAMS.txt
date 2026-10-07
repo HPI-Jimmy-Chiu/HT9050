@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-07 22:07
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 5368dd0 REQUEST-MOTIONVIEW9050: work request to Jimmy / Steven -- HT9050 Motion View follo／web e94a028。
+HT9050 機台參數快照（machine_params\）—— 2026-10-07 22:15
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 4e58287 FLOWTRACE: the op log follows the IC data and every HT9050 engine cursor -- EastSu／web e94a028。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
