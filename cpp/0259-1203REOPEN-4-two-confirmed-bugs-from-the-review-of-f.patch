@@ -1,0 +1,75 @@
+From 18d8d1de84d6d7d0397afa4be85c38f516af99fb Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 09:23:36 +0800
+Subject: [PATCH] 1203REOPEN-4: two confirmed bugs from the review of f4808ec /
+ 1937c52 (hourly bug loop).
+
+(1) 1937c52: OpenIoLayout_ carries Open()'s WB_PUMP_1203_START_RING block, so every ring reset (RescanRing,
+    even a ring-1-only one) also called Acm_MasStartRing(dev, 0) on the live motion ring. RescanRing now raises
+    W906_Pci1203StartRingSkipSet(true) around its OpenIoLayout_ call (EtherCAT/Pci1203Monitor.cpp, same lines +
+    end of file); Open() never does, so the first open still starts ring 0 as before. A ring reset is back to
+    "no StartRing", as before 1937c52.
+(2) f4808ec: kWriteIni whose file write failed gave no verdict, so an open card waited 30 s per try and ended in
+    WAR16157. The else branch now calls W906_Pci1203ReopenPassed() too (tools/wb_serve.cpp, same line), as
+    kWriteSkipped / kIniBad do: no list to compare against = no mismatch.
+
+Debug: everything compiled; the wb_serve.exe link waits for EastSun's running program (exe locked).
+ctest -R Pci1203: 6/6 passed. scan_code_after_comment: 0 hits.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203Monitor.cpp | 13 +++++++++++--
+ tools/wb_serve.cpp          |  2 +-
+ 2 files changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/EtherCAT/Pci1203Monitor.cpp b/EtherCAT/Pci1203Monitor.cpp
+index 0d3b249..d662960 100644
+--- a/EtherCAT/Pci1203Monitor.cpp
++++ b/EtherCAT/Pci1203Monitor.cpp
+@@ -686,7 +686,7 @@ bool TPci1203Monitor::Open(unsigned maxAxes, unsigned diPorts, std::string& why,
+         //  a snapshot and not a guarantee for the next person, which is the
+         //  reason to narrow the call rather than to rely on the measurement.
+         //  Starting ring 1 is a separate decision and needs its own switch.
+-        {
++        extern bool W906_Pci1203StartRingSkip(); if (!W906_Pci1203StartRingSkip()) {   //AI(W906-1203REOPEN-4) 20261007: review 1937c52 #1 -- RescanRing (after a ring reset) runs this second half of Open() too; it must not start ring 0 (before 1937c52 a ring reset never did; ring 0 is the live motion ring). Open() unchanged (flag false); same line
+             const U16 ring = 0;                 // motion ring; IO ring untouched
+             const U32 sr = Acm_MasStartRing(impl_->dev, ring);
+             std::printf("  ring%u Acm_MasStartRing -> 0x%08lX%s\n"
+@@ -4703,7 +4703,7 @@ bool TPci1203Monitor::RescanRing(std::string& why)
+     //  A module that came back after the reset is in the IO map again (was: DI/DO left mapped as at the first open), and a monitor
+     //  that had auto-disabled itself is enabled again. Same widths as the original Open() (impl_->diPorts / doPorts, like Rescan()).
+ #if HAVE_PCI1203
+-    const bool ok = OpenIoLayout_(impl_->diPortsReq ? impl_->diPortsReq : impl_->diPorts, why, impl_->doPortsReq ? impl_->doPortsReq : impl_->doPorts);
++    extern void W906_Pci1203StartRingSkipSet(bool); W906_Pci1203StartRingSkipSet(true);  const bool ok = OpenIoLayout_(impl_->diPortsReq ? impl_->diPortsReq : impl_->diPorts, why, impl_->doPortsReq ? impl_->doPortsReq : impl_->doPorts);  W906_Pci1203StartRingSkipSet(false);   //AI(W906-1203REOPEN-4) 20261007: review 1937c52 #1 -- no Acm_MasStartRing from a ring reset (end of file); same line
+ #else
+     const bool ok = false;  why = "not linked: built without HAVE_PCI1203";
+ #endif
+@@ -4711,3 +4711,12 @@ bool TPci1203Monitor::RescanRing(std::string& why)
+     return ok;
+ }
+ }  // namespace ht9045
++//AI(W906-1203REOPEN-4) 20261007: review of 1937c52 (#1) -- OpenIoLayout_ carries Open()'s `#ifdef WB_PUMP_1203_START_RING` block, so a
++//  ring reset (RescanRing, even a ring-1-only one) also called Acm_MasStartRing(dev, 0) on the live motion ring. RescanRing raises
++//  this flag around its OpenIoLayout_ call; Open() never does, so the first open still starts ring 0 exactly as before. IO thread only
++//  (RescanRing runs through Pci1203IoThreadRunSync), so a plain bool.
++namespace ht9045 {
++static bool s_w906StartRingSkip = false;
++bool W906_Pci1203StartRingSkip() { return s_w906StartRingSkip; }
++void W906_Pci1203StartRingSkipSet(bool b) { s_w906StartRingSkip = b; }
++}  // namespace ht9045
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 70e843c..86e437c 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -9016,7 +9016,7 @@ void W906_Pci1203ModuleCheckTick()
+             OpLine("LINK", "1203 第一次連線，模組清單已建立（之後只讀不寫） " + path + " / " + r.text);  { extern void W906_Pci1203ReopenPassed(); W906_Pci1203ReopenPassed(); }   //AI(W906-1203REOPEN-2) 20261007: review C2 -- no list to compare against yet = no mismatch: a pending re-open is done; same line
+         } else {
+             std::printf("[1203-mod] %s -> NOT written: %s\n", r.text.c_str(), err.c_str());
+-            OpLine("LINK", "1203 模組清單沒有寫入（" + err + "） / " + r.text);
++            OpLine("LINK", "1203 模組清單沒有寫入（" + err + "） / " + r.text);  { extern void W906_Pci1203ReopenPassed(); W906_Pci1203ReopenPassed(); }   //AI(W906-1203REOPEN-4) 20261007: review f4808ec #2 -- an unwritable list is still "no list to compare against" = no mismatch (as kWriteSkipped / kIniBad); without this an open card waited 30 s per try and ended in WAR16157; same line
+         }
+         break;
+     }
+-- 
+2.55.0.windows.5
+

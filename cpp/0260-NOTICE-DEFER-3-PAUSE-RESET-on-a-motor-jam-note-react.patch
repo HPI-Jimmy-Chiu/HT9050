@@ -1,0 +1,59 @@
+From 45d4f4d6ee50883a12350fe112305f0c3fcd0aa6 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 09:25:05 +0800
+Subject: [PATCH] =?UTF-8?q?NOTICE-DEFER-3:=20PAUSE=20/=20RESET=20on=20a=20?=
+ =?UTF-8?q?motor=20jam=20note=20react=20at=20once=20--=20EastSun=201007=20?=
+ =?UTF-8?q?'=E9=80=99=E7=95=AB=E9=9D=A2=E6=88=91=E6=8C=89pause=2010?=
+ =?UTF-8?q?=E7=A7=92=E5=BE=8C=E6=89=8D=E6=9C=89=E5=8F=8D=E6=87=89=20?=
+ =?UTF-8?q?=E5=BE=88=E4=B8=8D=E6=AD=A3=E5=B8=B8'=20/=20'=E6=88=91=E6=8C=89?=
+ =?UTF-8?q?reset=20=E7=95=AB=E9=9D=A2=E5=BE=88=E4=B9=85alarm=E6=89=8D?=
+ =?UTF-8?q?=E6=9C=83=E8=A2=AB=E6=B8=85=E9=99=A4=20=E5=8F=8D=E6=87=89?=
+ =?UTF-8?q?=E9=81=8E=E6=85=A2'.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Measured (oplog 09:16:50-09:17:23 and again 09:20:00): HOME fails -> WAR240007 jam NOTICE (kcode 0), then the blocking
+ShowMyMessage "Motor not home yet!" (csystem.cpp DoHomeProcess). The HMI (dialog-bridge.js) shows one stop box at a time,
+so the message box sat QUEUED behind the note, while MbWait held the note's dialog.notifyAck until that box closed
+(NOTICE-DEFER-2): a deadlock, broken only by the page's 15 s ack timeout. Panel keys (RESET) wait in the same box.
+Golden is strictly sequential (note ShowModal -> PAUSE closes it -> MyMessageBox).
+
+Fix (tools/wb_serve.cpp, same lines): MbWait answers the notifyAck ok at once ({"notice":"held",...}) so the page
+closes the note and draws the message box; the close work still runs after the box exactly as before (held, later
+CompleteCommand on that id is a no-op -- WebBridgeServer::CompleteCommand returns when the ticket is gone). Not when
+golden BtnPauseClick would refuse (W906_NoteNoticeAckRefusal != 0): then the note stays, as before. The global-scope
+declaration goes on the existing :6554 declaration line (MbWait is in the unnamed namespace).
+
+Debug compiled (wb_serve.exe link waits for EastSun's running program). ctest NoticeAck: passed. Code-after-comment scan: 0.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ tools/wb_serve.cpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 86e437c..ce06f84 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -6551,7 +6551,7 @@ void ShowUnloaderTrayMessage(AnsiString S1, AnsiString S2);
+ std::string W906MbIoDismiss();
+ void W906_DialogCloseRequest(const char* channel, const std::string& requestId, unsigned long long requestSeq,
+                              const std::string& actionName, int actionCode, const char* inputName);
+-bool W906_SimDiCommand(const webbridge::WebCommand& wc);  bool W906_FastClockModalWait(webbridge::CommandQueue& q, unsigned long capMs);   // AI(W906-FASTCLK-MODAL) 20261003: FastClockWbServe.cpp -- declared at global scope HERE for MbWait's wait (:6760, inside the unnamed namespace: a block-scope extern there would bind to it, see :6518); same line
++bool W906_SimDiCommand(const webbridge::WebCommand& wc);  bool W906_FastClockModalWait(webbridge::CommandQueue& q, unsigned long capMs);  const char* W906_NoteNoticeAckRefusal(const char* requestId);   // AI(W906-NOTICE-DEFER-3) 20261007: + W906_NoteNoticeAckRefusal (forms/fNote_ShowError.cpp EOF) for MbWait's early notice answer, same reason.  AI(W906-FASTCLK-MODAL) 20261003: FastClockWbServe.cpp -- declared at global scope HERE for MbWait's wait (:6760, inside the unnamed namespace: a block-scope extern there would bind to it, see :6518); same line
+ unsigned long long g_mbBlockingSeq = 0;   // MbPost 記下的「目前阻塞框」信箱 seq（Dialog-close-request 的 target.requestSeq）
+ bool W906_IoPageNoGuards();   //AI(W906-IO-NOGUARD) 20260929: JsonBridge/IoBtnPanelClick.cpp; declared at global scope HERE (the MyMessageBox wait below is inside the unnamed namespace). Occupies a blank line
+ namespace {
+@@ -6822,7 +6822,7 @@ std::string MbWait(const std::string& qid, const char* const* opts, int nOpts)
+                                                        (long long)wc.id, msAck, true);
+                 g_modalServer->CompleteCommand((unsigned long long)wc.id, msOk, msAck);
+             } else if (wc.cmd == "dialog.notifyAck") {   //AI(W906-NOTICE-DEFER) 20261003: EastSun「我歸原點後 有異常 排除後再按歸原點 就沒用了」-- 21:56:31 the PAUSE on the motor jam NOTICE came while the "Motor not home yet" box waited and was refused modal-pending: the notice stayed open (the page had closed it) and every later HOME key read "擋關：通知框開著" (golden ScanKey ignores keys while the note is up). Not refused any more: carried to the main loop, which runs it (and answers it) as soon as this box closes
+-                w906NoticeHeld.push_back(wc);   //AI(W906-NOTICE-DEFER-2) 20261004: held, handed to g_carry when this wait returns (the w906NoticeHeld line at the top of MbWait); was g_carry.push_back + g_carryRunnable
++                w906NoticeHeld.push_back(wc);  if (wc.hasTag && ::W906_NoteNoticeAckRefusal(wc.tag.c_str()) == 0) g_modalServer->CompleteCommand((unsigned long long)wc.id, true, "{\"notice\":\"held\",\"requestId\":\"" + wc.tag + "\",\"runsWhen\":\"" + qid + " closes\"}");   //AI(W906-NOTICE-DEFER-3) 20261007: EastSun「這畫面我按pause 10秒後才有反應」/「我按reset 畫面很久alarm才會被清除」-- the page shows one stop box at a time and kept "Motor not home yet" queued behind the jam note until this ack was answered, while this wait held the ack until that box closed: a deadlock broken only by the page's 15 s timeout. Now the page gets ok at once (note closes, the box shows, as golden: note PAUSE -> MyMessageBox); the close work itself still runs after the box (held below; its later CompleteCommand on this id is a no-op). Not when golden BtnPauseClick would refuse (the note must stay).   //AI(W906-NOTICE-DEFER-2) 20261004: held, handed to g_carry when this wait returns (the w906NoticeHeld line at the top of MbWait); was g_carry.push_back + g_carryRunnable
+                 std::printf("  [MyMessageBox] %s 等待中收到通知框的 PAUSE（dialog.notifyAck）-> 框關掉後由主迴圈處理\n", qid.c_str());
+             } else if (wc.cmd == "act.home.abort") { ::W906_HomeAbortCommand(*g_modalServer, wc);   /*AI(W906-HOMEMON) 20261001: Abort Home answered during the MyMessageBox wait too, like motor.stop above (JsonBridge/ChanHome.cpp; :: = the file-scope declaration at :439, this wait is in an anonymous namespace)*/ } else if (wc.cmd == "io.btnPanelClick" && ::W906_IoPageNoGuards()) { ::W906_DispatchIoClick(*g_modalServer, wc); } else if (::W906_StateRecordDuringDialog(*g_modalServer, wc)) { } else {   //AI(W906-IO-NOGUARD) 20260929: IO click served during the MyMessageBox wait too.  AI(W906-S24-Q93) 20261004 (St02-E; Steven Q93 = A): State Record during this box
+                 if (wc.cmd == "modal.answer" || wc.cmd == "dialog.response")   // 答錯對象（例如舊的一則）—— 印出來，現場查「按了沒反應」用
+-- 
+2.55.0.windows.5
+
