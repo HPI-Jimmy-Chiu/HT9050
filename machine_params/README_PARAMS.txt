@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-07 12:26
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 36bca1e WORKLOG: ?2 rows 163-164 (JOGDEC-2, PARAMSYNC-4).／web 980e558。
+HT9050 機台參數快照（machine_params\）—— 2026-10-07 13:12
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 58eea67 JOGDEC-3 / PARAMSYNC-5: review of 618260d / 498d03d (hourly bug loop).／web 980e558。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置

@@ -1,0 +1,63 @@
+From 58eea6765b131ed4ef9a3d495ce3c42369060bd2 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 13:12:08 +0800
+Subject: [PATCH] JOGDEC-3 / PARAMSYNC-5: review of 618260d / 498d03d (hourly
+ bug loop).
+
+- EtherCAT/Pci1203Control.cpp kCmdAxStop (same line): when Acm_AxStopDecEx fails and the fallback Acm_AxStopDec runs, the op log's ISSUED line now reads 'Acm_AxStopDecEx(...) FAILED 0x.. -> fallback Acm_AxStopDec(...) [PAR_AxDec]' (was the DecEx text with the fallback's 0x0 -- a slide would have been logged as a Mot_Table-Dec stop). Confirmed (logging only).
+- WebMotorAccess.cpp DoJog / Teach jog (same lines): no one-shot stop dec for an axis whose jog family golden never writes (index axis / PJogHighSpeed 0, MotorSpeedFromPct skip) -- its ceiling was never raised. Plausible.
+- WebMotorAccess.cpp MotorAccessPageJobActive: + Light Scale (g_ls.timer; its legs run GoldenMove1203 without re-sending the speed). Plausible.
+WebMotorAccess, Pci1203Pure passed; wb_serve compiled (link waits for EastSun's running program). Scan 0.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203Control.cpp | 2 +-
+ WebMotorAccess.cpp          | 5 +++--
+ 2 files changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/EtherCAT/Pci1203Control.cpp b/EtherCAT/Pci1203Control.cpp
+index d554f27..b98a006 100644
+--- a/EtherCAT/Pci1203Control.cpp
++++ b/EtherCAT/Pci1203Control.cpp
+@@ -1728,7 +1728,7 @@ Pci1203CmdResult TPci1203Control::Run_(const Pci1203Cmd& c)
+             ret = Acm_AxJog(ax, (U16)WireDirToVendor(c.dir));
+             break;
+         case kCmdAxStop:
+-            ret = (c.value > 0) ? Acm_AxStopDecEx(ax, (F64)c.value) : Acm_AxStopDec(ax);  if (c.value > 0 && ret != SUCCESS) { std::printf("  Acm_AxStopDecEx(ax=%d, dec=%.1f) -> 0x%08lX -- falling back to Acm_AxStopDec\n", c.axis, c.value, (unsigned long)ret); ret = Acm_AxStopDec(ax); }   //AI(W906-JOGDEC-2) 20261007: review of 2275fce (C1, critical) -- a NewDec above the axis's CFG_AxMaxDec (lowered again by Test Range / Rate or the engine's InitMotor) can be refused, and the axis must ALWAYS get a stop: on any failure the plain Acm_AxStopDec follows at once.  AI(W906-JOGDEC) 20261007: see the validation above; same line
++            ret = (c.value > 0) ? Acm_AxStopDecEx(ax, (F64)c.value) : Acm_AxStopDec(ax);  if (c.value > 0 && ret != SUCCESS) { std::printf("  Acm_AxStopDecEx(ax=%d, dec=%.1f) -> 0x%08lX -- falling back to Acm_AxStopDec\n", c.axis, c.value, (unsigned long)ret); std::snprintf(call, sizeof(call), "Acm_AxStopDecEx(ax=%d, dec=%.1f) FAILED 0x%08lX -> fallback Acm_AxStopDec(ax=%d) [PAR_AxDec]", c.axis, c.value, (unsigned long)ret, c.axis); ret = Acm_AxStopDec(ax); }   //AI(W906-JOGDEC-3) 20261007: review of 618260d -- the op log's ISSUED line now says the Mot_Table-Dec stop failed and which call actually stopped the axis (was: "Acm_AxStopDecEx ... -> 0x0" with the fallback's code)   //AI(W906-JOGDEC-2) 20261007: review of 2275fce (C1, critical) -- a NewDec above the axis's CFG_AxMaxDec (lowered again by Test Range / Rate or the engine's InitMotor) can be refused, and the axis must ALWAYS get a stop: on any failure the plain Acm_AxStopDec follows at once.  AI(W906-JOGDEC) 20261007: see the validation above; same line
+             break;
+         case kCmdAxEmgStop:
+             ret = Acm_AxStopEmg(ax);
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index 58ed4ed..ec2f6c8 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -866,7 +866,7 @@ MotorAccessOutcome DoJog(const MotorAccessReq& r, long long wireId, IMotorAccess
+     c.kind = kCmdAxJogStart; c.wireId = wireId; c.axis = m.a.axis; c.dir = positive ? 1 : -1;   // Direction==0：JogP = DIRECTION_POS
+     const Pci1203CmdResult res = be.Pci1203Execute(c);
+     if (CmdFailed(res)) { Stop1203(be, m.a.axis, wireId); return Refuse(who + ": 1203 失敗 —— " + CmdWhy(res)); }   // leave jog mode again
+-    NoteIssued(be, m.a.axis);  if (m.g.decDb > 0) g_jogStopDec[m.a.axis] = m.g.decDb;   //AI(W906-JOGDEC-2) 20261007: this jog's release stops at Mot_Table Dec (Stop1203, one-shot); same line
++    NoteIssued(be, m.a.axis);  if (m.g.decDb > 0 && !m.g.indexMotor && m.g.jogHigh != 0) g_jogStopDec[m.a.axis] = m.g.decDb;   /*AI(W906-JOGDEC-3) 20261007: not for an axis whose jog family golden never writes (MotorSpeedFromPct skip: index axis / PJogHighSpeed 0) -- its CFG_AxMaxDec was never raised, every release would hit a refused DecEx first*/   //AI(W906-JOGDEC-2) 20261007: this jog's release stops at Mot_Table Dec (Stop1203, one-shot); same line
+     { JogRec j = { true, m.a.axis, m.a.motIndex, r.motors[0], r.source }; ForgetJog(true, m.a.axis, m.a.motIndex); g_jogs.push_back(j); }
+     return OkAck(r, "jogging", "pci1203",
+                  std::string(res.issued ? "sent: " : "accepted, NOT issued (dry): ") + res.wouldCall + "; " + note,
+@@ -3419,7 +3419,7 @@ MotorAccessOutcome DoTeachJog(const MotorAccessReq& r, long long wireId, IMotorA
+     Pci1203Cmd c; c.kind = kCmdAxJogStart; c.wireId = wireId; c.axis = m.a.axis; c.dir = positive ? 1 : -1;   // ruling 6B: JogP = wire +1 (DIRECTION_POS)
+     const Pci1203CmdResult res = be.Pci1203Execute(c);
+     if (CmdFailed(res)) { Stop1203(be, m.a.axis, wireId); return Refuse(who + ": 1203 失敗 —— " + CmdWhy(res)); }   // leave jog mode again (as DoJog)
+-    NoteIssued(be, m.a.axis);  if (m.g.decDb > 0) g_jogStopDec[m.a.axis] = m.g.decDb;   //AI(W906-JOGDEC-2) 20261007: this jog's release stops at Mot_Table Dec (Stop1203, one-shot); same line
++    NoteIssued(be, m.a.axis);  if (m.g.decDb > 0 && !m.g.indexMotor && m.g.jogHigh != 0) g_jogStopDec[m.a.axis] = m.g.decDb;   /*AI(W906-JOGDEC-3) 20261007: not for an axis whose jog family golden never writes (MotorSpeedFromPct skip: index axis / PJogHighSpeed 0) -- its CFG_AxMaxDec was never raised, every release would hit a refused DecEx first*/   //AI(W906-JOGDEC-2) 20261007: this jog's release stops at Mot_Table Dec (Stop1203, one-shot); same line
+     { JogRec j = { true, m.a.axis, m.a.motIndex, r.motors[0], r.source }; ForgetJog(true, m.a.axis, m.a.motIndex); g_jogs.push_back(j); }
+     return OkAck(r, "jogging", "pci1203", std::string(res.issued ? "sent: " : "accepted, NOT issued (dry): ") + res.wouldCall + "; " + note,
+                  m, 0, false, 0, false);
+@@ -9006,6 +9006,7 @@ bool MotorAccessPageJobActive(std::string& what)
+     if (g_loop.active)         { what = "Loop 測試"; return true; }
+     if (ArmCellActive())       { what = "Arm Cell"; return true; }
+     if (g_teachSet.active)     { what = "手動教導"; return true; }
++    if (g_ls.timer)            { what = "Light Scale"; return true; }   //AI(W906-PARAMSYNC-5) 20261007: review of 498d03d -- its legs run GoldenMove1203 without re-sending the speed
+     return false;
+ }
+ }  // namespace ht9045
+-- 
+2.55.0.windows.5
+
