@@ -1,0 +1,70 @@
+From 498d03d0be1a00c29a2cdb87c84a8429efa7b00e Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 12:25:48 +0800
+Subject: [PATCH] PARAMSYNC-4: the parameter sync waits while a manual page job
+ runs (review P1 of 4e3f1bf / 6559a5b).
+
+W906_ParamSyncTick pushed golden SetMotorSpeed (the PTP family of every axis) on a Teach / Motor Test page-open edge even while a page
+job ran: a single-axis home holds its home speed in the PTP family (golden uMotorTest.cpp:796 `if(bSingleHome==true) return;`), and a
+Motor Test loop / Teach move / Arm Cell run at the page's %, so later legs would run at the speed-table % instead.
+- WebMotorAccess.cpp EOF: MotorAccessPageJobActive(what) -- JOG (g_jogs), single-axis home (g_homes), loop (g_loop), Arm Cell,
+  hand teach (g_teachSet).
+- WebMotorAccessLive.cpp W906_ParamSyncTick (same line): busy also when a page job is active; the deferral log names it.
+WebMotorAccess passed; wb_serve compiled (link waits for EastSun's running program). Scan 0.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebMotorAccess.cpp     | 15 +++++++++++++++
+ WebMotorAccessLive.cpp |  5 +++--
+ 2 files changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index 9b5d282..58ed4ed 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -8994,3 +8994,18 @@ bool W906_TeachTypedOnly(const std::string& edit)
+     return false;
+ }
+ }  // namespace ht9045
++//AI(W906-PARAMSYNC-4) 20261007: review of 4e3f1bf / 6559a5b (P1) -- WebMotorAccessLive.cpp W906_ParamSyncTick must not push golden
++//  SetMotorSpeed (the PTP family of every axis) while a page job runs: a single-axis home holds its home speed in the PTP family (golden
++//  uMotorTest.cpp:796 `if(bSingleHome==true) return;`), a Motor Test loop / Teach move / Arm Cell runs at the page's %. True = some page
++//  job is active; what = which.
++namespace ht9045 {
++bool MotorAccessPageJobActive(std::string& what)
++{
++    if (!g_jogs.empty())       { what = "JOG"; return true; }
++    for (std::size_t i = 0; i < g_homes.size(); ++i) if (g_homes[i].active) { what = "單軸歸零"; return true; }
++    if (g_loop.active)         { what = "Loop 測試"; return true; }
++    if (ArmCellActive())       { what = "Arm Cell"; return true; }
++    if (g_teachSet.active)     { what = "手動教導"; return true; }
++    return false;
++}
++}  // namespace ht9045
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index f55e0bf..fa96098 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -1693,6 +1693,7 @@ bool W906_MotorAccessHomeBlocked(const char* func, std::string& why)
+ //  (Pci1203MotorRouteSpeedVerify: ok / mismatch / unverified) and every enabled PCI1203 row whose InitSpeed > JogHighSpeed (the card
+ //  refuses VelLow / VelHigh above CFG_AxMaxVel = JogHighSpeed -- fix it in Mot_Table).
+ #include "EtherCAT/Pci1203MotorRoute.h"         // Pci1203MotorRouteInstalled / Pci1203MotorRouteStatsNow
++namespace ht9045 { bool MotorAccessPageJobActive(std::string& what); }   // WebMotorAccess.cpp EOF (AI(W906-PARAMSYNC-4))
+ void SetMotorSpeed();                                                           // cinitial.cpp (golden)
+ namespace ht9045 { std::string Pci1203MotorRouteSpeedVerify(int* okN, int* badN, int* unverN); }   // EtherCAT/Pci1203MotorRoute.cpp EOF
+ void W906_ParamSyncTick()
+@@ -1710,9 +1711,9 @@ void W906_ParamSyncTick()
+     s_mtPrev = mt; s_tePrev = te;
+     const DWORD now = ::GetTickCount();
+     if (s_state == 0 && s_pending && (s_bootDone || s_reason != "開軟體（開機 InitMotor 都做完）")) {   //AI(W906-PARAMSYNC-2) 20261007: review of 4e3f1bf -- a page-open request no longer waits for the boot InitMotor (motor power off at start, or a slave that never reports, swallowed every Motor Test / Teach sync); same line
+-        const bool busy = SystemStart || SoftStart || (fHome != 0 && fHome->fShow);   //AI(W906-PARAMSYNC-3) 20261007: `iHome != 0` dropped -- iHome is 1 whenever the machine is NOT homed yet (csystem.cpp DoHomeProcess sets 0 only after CheckMotorHome), so an un-homed machine deferred every sync for ever (11:22:20 Teach request never ran; 12:10 snapshot: SystemStart 0, Home Monitor closed, fAllMotorHome 0). Homing in progress = the Home Monitor open (fHome->fShow), as ShowRunLabel's "Homing"; same line
++        std::string pageJob;  const bool busy = SystemStart || SoftStart || (fHome != 0 && fHome->fShow) || ht9045::MotorAccessPageJobActive(pageJob);   //AI(W906-PARAMSYNC-4) 20261007: + a page job (JOG / single-axis home / loop / Arm Cell / hand teach, WebMotorAccess.cpp EOF) -- review P1.   //AI(W906-PARAMSYNC-3) 20261007: `iHome != 0` dropped -- iHome is 1 whenever the machine is NOT homed yet (csystem.cpp DoHomeProcess sets 0 only after CheckMotorHome), so an un-homed machine deferred every sync for ever (11:22:20 Teach request never ran; 12:10 snapshot: SystemStart 0, Home Monitor closed, fAllMotorHome 0). Homing in progress = the Home Monitor open (fHome->fShow), as ShowRunLabel's "Homing"; same line
+         if (busy) {
+-            if (!s_waitSaid) { ht9045::BrakeLog("PARAMSYNC " + s_reason + "：機台運轉／歸零中，先不寫，停下來再寫"); s_waitSaid = true; }
++            if (!s_waitSaid) { ht9045::BrakeLog("PARAMSYNC " + s_reason + "：" + (pageJob.empty() ? std::string("機台運轉／歸零中") : "頁面工作進行中（" + pageJob + "）") + "，先不寫，停下來再寫"); s_waitSaid = true; }
+             return;
+         }
+         s_pending = false; s_waitSaid = false;
+-- 
+2.55.0.windows.5
+
