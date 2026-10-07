@@ -1,0 +1,187 @@
+From 0c8cd9228a848e8bf85e953f29f272454d2bb459 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 22:52:45 +0800
+Subject: [PATCH] =?UTF-8?q?CONASYNC:=20console=20output=20can=20no=20longe?=
+ =?UTF-8?q?r=20stop=20the=20machine=20--=20EastSun=201007=20'EMG/Servo=20s?=
+ =?UTF-8?q?ensor=20error=20...=20=E5=B9=AB=E6=88=91=E6=9F=A5=E8=A9=A2?=
+ =?UTF-8?q?=E4=BF=AE=E6=AD=A3'.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Root cause (oplog_20261007 22:27:31-22:29:23 + bootsample_20261007_222543_9828): after START one main-loop pass took
+102.9 s with 57 ms CPU; every thread was late (heater FastClock missed 5158 ticks, 1203 IO thread "no new poll"); the
+samples on both sides of every long gap tonight show the main thread in __mingw_printf -> __pformat_putc -> WriteFile.
+stdout is unbuffered and MinGW printf writes one character per WriteFile, so each character waited on the console
+(under F5 = VS Code's terminal, which stops reading when VS Code is busy). Then the 1203 link watch called the IO image
+lost and DoSystem's IsIndexMotorOutOfPower() raised "EMG/Servo sensor error". No EMG press, no motor power loss.
+
+Fix (tools/wb_serve.cpp, appended at the end + one same-line call after setvbuf, no line moves): fd 1 (and fd 2 when it
+is the console) write into an in-process pipe; a reader thread moves the bytes to memory at once, a writer thread feeds
+the real console. Over 8 MB the oldest output is dropped with a one-line note. W906_CONSOLE_ASYNC=0 = old behaviour.
+
+Probe (D:\HT9045\_probe_conasync, the block copied verbatim): stdout = a pipe nobody reads, 20000 lines:
+old -> still blocked after 15 s (control reproduces the incident); new -> printed in 1.9 s, exited in 2.9 s.
+Normal reader: old/new both deliver all 20000 lines. 150000 lines stuck then read late: 7.9 MB delivered + drop note.
+Two bugs found by the probe and fixed before commit: _dup2 closes fd 1's handle (now DuplicateHandle first); an exit
+drain that PeekNamedPipe'd the handle the reader was blocked on deadlocked (now closes the write end -> EOF).
+build_integ_dbg_x86 wb_serve.cpp.obj compiles; link waits for the running program to close.
+---
+ tools/wb_serve.cpp | 137 ++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 136 insertions(+), 1 deletion(-)
+
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index 37fae32..ee04b7f 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -3627,7 +3627,7 @@ int main(int argc, char** argv)
+     ::SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX |
+                    SEM_NOOPENFILEERRORBOX);  { extern void RotateBootLogIfNeeded(); extern void WriteBootLog(AnsiString); RotateBootLogIfNeeded(); WriteBootLog("WinMain Enter"); }   // AI(W906-BOOTLOG) 20260926: golden WinMain HT9045.cpp:130-131 (AI(ht9045-v899) 20260423: BootLog for crash diagnosis when 24V/hardware not ready) -- D:\HT9045\Error\BootLog.txt, rotated at 512 KB (Public/cBootLog.cpp). Right after ERRMODE, which the port keeps as the very first statement. golden :161 "ExePath OK" / :164 "Application Initialize Done" have no counterpart here (no ExePath check, no VCL Application); :292 / :298 are WinMain's catch blocks, and main() has none
+ 
+-    std::setvbuf(stdout, 0, _IONBF, 0);
++    std::setvbuf(stdout, 0, _IONBF, 0);  { extern void W906_ConsoleAsyncInstall(); W906_ConsoleAsyncInstall(); }   // AI(W906-CONASYNC) 20261007: EastSun 1007「EMG/Servo sensor error 幫我查詢修正」-- the console never stalls the machine again; see the end of this file
+ 
+     unsigned short port = 8045;
+     //AI(W906-F5WebRoot) 20260922: 預設 root 一度從 D:\HT9045\web 下移一層到
+@@ -9553,3 +9553,138 @@ void W906_Pci1203ReopenTick()
+     else { extern unsigned long g_w906Pci1203LinkRestoreGen; ++g_w906Pci1203LinkRestoreGen; }   // a new module-check generation decides recovery
+ #endif
+ }
++
++// AI(W906-CONASYNC) 20261007: EastSun 1007「EMG/Servo sensor error! Please Check IO module ... 幫我查詢修正」.
++//   What happened (oplog_20261007 22:27:31-22:29:23, bootsample_20261007_222543_9828): START, then ONE main-loop pass of
++//   102.9 s with 57 ms of CPU -- every thread late (heater FastClock missed 5158 ticks, the 1203 IO thread "no new poll"),
++//   the boot sampler silent for 100.5 s; the samples on both sides of every long gap tonight show the main thread inside
++//   __mingw_printf -> __pformat_putc -> msvcrt -> WriteFile.  stdout is unbuffered (the line above main's call), and
++//   MinGW's printf writes it one character at a time, so each character waited on the console -- under F5 that is VS Code's
++//   terminal, which stops reading when VS Code is busy (7.7 GB machine, VS Code 4.2 GB).  When the console stopped, every
++//   thread that printed stopped; the 1203 link watch then called the IO image lost and DoSystem saw
++//   IsIndexMotorOutOfPower() -> "EMG/Servo sensor error".  No EMG was pressed and motor power was never cut.
++//   Fix: fd 1 (and fd 2 when it is the same console) now write into an in-process pipe.  A reader thread moves the bytes
++//   into memory at once (never waits on the console); a writer thread hands them to the real console at its own pace.  If
++//   the console stays stuck past 8 MB the oldest output is dropped and a one-line note says how much -- the op log
++//   (OpLine) is a separate file and keeps the full record.  W906_CONSOLE_ASYNC=0 turns it off (the old, direct console).
++//   Trade-off: on a hard crash the last few lines still in memory may not reach the console; BootLog / the op log are files
++//   and are not affected.
++#include <io.h>
++#include <fcntl.h>
++namespace {
++HANDLE g_w906ConOut = INVALID_HANDLE_VALUE;   // the real console (or whatever stdout was)
++CRITICAL_SECTION g_w906ConCs;
++HANDLE g_w906ConEv = 0;                       // auto-reset: "the queue has data"
++HANDLE g_w906ConRead = 0;                     // the pipe's read end
++std::deque<std::string> g_w906ConQ;           // chunks of up to 64 KB, oldest first
++size_t g_w906ConBytes = 0;
++unsigned long long g_w906ConDropped = 0;
++volatile LONG g_w906ConWriting = 0;           // the writer is inside WriteFile
++const size_t kW906ConCap = 8u << 20;
++const size_t kW906ConChunk = 64u << 10;
++
++DWORD WINAPI W906ConReader(LPVOID)
++{
++    char buf[16384];
++    for (;;) {
++        DWORD got = 0;
++        if (!::ReadFile(g_w906ConRead, buf, sizeof buf, &got, 0) || got == 0) break;
++        ::EnterCriticalSection(&g_w906ConCs);
++        if (g_w906ConQ.empty() || g_w906ConQ.back().size() + got > kW906ConChunk) g_w906ConQ.push_back(std::string());
++        g_w906ConQ.back().append(buf, got);
++        g_w906ConBytes += got;
++        while (g_w906ConBytes > kW906ConCap && g_w906ConQ.size() > 1) {   // the console is not reading: drop the oldest
++            g_w906ConBytes -= g_w906ConQ.front().size();
++            g_w906ConDropped += g_w906ConQ.front().size();
++            g_w906ConQ.pop_front();
++        }
++        ::LeaveCriticalSection(&g_w906ConCs);
++        ::SetEvent(g_w906ConEv);
++    }
++    return 0;
++}
++
++DWORD WINAPI W906ConWriter(LPVOID)
++{
++    for (;;) {
++        ::WaitForSingleObject(g_w906ConEv, INFINITE);
++        for (;;) {
++            std::string s;
++            unsigned long long dropped = 0;
++            ::EnterCriticalSection(&g_w906ConCs);
++            if (!g_w906ConQ.empty()) { s.swap(g_w906ConQ.front()); g_w906ConQ.pop_front(); g_w906ConBytes -= s.size(); }
++            dropped = g_w906ConDropped;
++            g_w906ConDropped = 0;
++            if (!s.empty() || dropped) ::InterlockedExchange(&g_w906ConWriting, 1);
++            ::LeaveCriticalSection(&g_w906ConCs);
++            DWORD w = 0;
++            if (dropped) {
++                char note[200];
++                const int n = std::snprintf(note, sizeof note, "\r\n[wb_serve] %llu bytes of console output dropped -- the console was not "
++                                            "reading (the machine did not wait; the op log has the record)\r\n", dropped);
++                if (n > 0) ::WriteFile(g_w906ConOut, note, (DWORD)n, &w, 0);
++            }
++            if (!s.empty()) ::WriteFile(g_w906ConOut, s.data(), (DWORD)s.size(), &w, 0);
++            ::InterlockedExchange(&g_w906ConWriting, 0);
++            if (s.empty()) break;
++        }
++    }
++    return 0;
++}
++
++HANDLE g_w906ConReaderThread = 0;
++bool g_w906ConErrToo = false;
++
++void W906ConDrainAtExit()   // give the console up to 1 s to show the last lines (a normal exit only)
++{
++    // No PeekNamedPipe here: the reader thread is blocked in a synchronous ReadFile on the same pipe handle, and Windows
++    // serialises synchronous I/O on one handle -- a Peek would wait for that ReadFile, i.e. forever (measured: the probe
++    // hung at exit).  Closing the write end instead ends the reader's ReadFile with end-of-file once the pipe is empty.
++    std::fflush(stdout);
++    std::fflush(stderr);
++    _close(1);
++    if (g_w906ConErrToo) _close(2);
++    const DWORD t0 = ::GetTickCount();
++    if (g_w906ConReaderThread) ::WaitForSingleObject(g_w906ConReaderThread, 1000);
++    while (::GetTickCount() - t0 < 1000) {
++        ::EnterCriticalSection(&g_w906ConCs);
++        const bool idle = g_w906ConQ.empty() && g_w906ConWriting == 0;
++        ::LeaveCriticalSection(&g_w906ConCs);
++        if (idle) return;
++        ::Sleep(10);
++    }
++}
++} // namespace
++
++void W906_ConsoleAsyncInstall()
++{
++    if (const char* e = std::getenv("W906_CONSOLE_ASYNC")) if (e[0] == '0') return;
++    const HANDLE std1 = ::GetStdHandle(STD_OUTPUT_HANDLE);
++    if (std1 == 0 || std1 == INVALID_HANDLE_VALUE) return;             // no console, nothing can stall
++    const HANDLE err = ::GetStdHandle(STD_ERROR_HANDLE);
++    HANDLE out = 0;                                                    // our own copy: _dup2 below CLOSES fd 1's handle (std1)
++    if (!::DuplicateHandle(::GetCurrentProcess(), std1, ::GetCurrentProcess(), &out, 0, FALSE, DUPLICATE_SAME_ACCESS)) return;
++    HANDLE r = 0, w = 0;
++    if (!::CreatePipe(&r, &w, 0, 1u << 20)) { ::CloseHandle(out); return; }
++    const int fd = _open_osfhandle((intptr_t)w, _O_TEXT | _O_WRONLY);  // text mode, as the console fd was: \n -> \r\n
++    if (fd < 0) { ::CloseHandle(out); ::CloseHandle(r); ::CloseHandle(w); return; }
++    std::fflush(stdout);
++    std::fflush(stderr);
++    const bool errToo = (err == std1) || (err != 0 && err != INVALID_HANDLE_VALUE && ::GetFileType(err) == FILE_TYPE_CHAR);
++    if (_dup2(fd, 1) != 0) { _close(fd); ::CloseHandle(out); ::CloseHandle(r); return; }
++    if (errToo) _dup2(fd, 2);
++    _close(fd);
++    ::SetStdHandle(STD_OUTPUT_HANDLE, (HANDLE)_get_osfhandle(1));
++    if (errToo) ::SetStdHandle(STD_ERROR_HANDLE, (HANDLE)_get_osfhandle(2));
++    ::InitializeCriticalSection(&g_w906ConCs);
++    g_w906ConEv = ::CreateEventA(0, FALSE, FALSE, 0);
++    g_w906ConOut = out;
++    g_w906ConRead = r;
++    g_w906ConErrToo = errToo;
++    g_w906ConReaderThread = ::CreateThread(0, 0, &W906ConReader, 0, 0, 0);   // kept: the exit drain waits on it
++    HANDLE t2 = ::CreateThread(0, 0, &W906ConWriter, 0, 0, 0);
++    if (t2) ::CloseHandle(t2);
++    std::atexit(&W906ConDrainAtExit);
++    std::printf("[wb_serve] console output goes through a memory buffer (W906-CONASYNC): a slow or stuck console no longer stops the machine%s\n",
++                errToo ? " (stdout + stderr)" : " (stdout)");
++}
+-- 
+2.55.0.windows.5
+
