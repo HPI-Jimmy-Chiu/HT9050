@@ -347,3 +347,4 @@
 | 20261007 13:4x | ⏰ **追問（第 2 次；W-125、W-129）**——要人在機台旁看一眼的兩題 | **W-125**：HT9050 Index 的 4 個吸嘴實際接幾個真空產生器（Frank 說可能是 3 個）、4 個真空感測各對到哪個 IO？（決定「4 個都吸住才算有料」怎麼判斷）。**W-129**：機台現在跑的 teach.ini（runcfg）裡 `[MTestZ1] setEditIndex1ToOutSht1Z`（Index 放料到出料飛梭 1 的 Z 教點）是 0——是還沒教、還是本來就該是 0？沒回之前照現行（不改）。 |
 | 20261007 14:0x | 📦 **第 167 包推了（GitHub `updates/a4d5d4d5/`，接第 166 包）** | 你們的 cpp 0267～0277＋web 0134 收進 main（PARAMSYNC 那一行改經 `W906_FormShowing`，見上一列），加上 St02 W-142 告警說明、NB2-1 W-139、HTDESIGNER 0.228。你們 0278～0281（含 TEACHGO-SPD）在第 86 批，gate 14:03 起。 |
 | 20261007 14:4x | 📦 **第 168 包推了（GitHub `updates/463f57a1/`，接第 167 包）** | 你們的 cpp 0278／0281（TEACHGO-SPD）＋WORKLOG 收進 main，加上 HTDESIGNER 0.229～0.234。你們 0282（WORKLOG）在第 87 批。 |
+| 20261007 15:1x | 📦 **第 169 包推了（GitHub `updates/2fc72a86/`，接第 168 包）** | Ifor01 把 `cmydef.h` 拆成三個子標頭（純結構，目的檔比對 0 不同）＋你們的 0282。你們樹上的 `cmydef.h` 跟 main 拆之前完全一樣，套包會乾淨換新；**之後新加的定義請加到對應的子標頭**。你們的 web 0135（TEACH-SPDMEM）在第 88 批。 |
