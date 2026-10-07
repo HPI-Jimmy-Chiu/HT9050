@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-08 01:14
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ ff9bb85 PROBESENSOR9050: the HT9050 loader layer probe reads SnLoaderDrawerHasTray, Off = ／web e94a028。
+HT9050 機台參數快照（machine_params\）—— 2026-10-08 01:59
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ c32a71b DUALCOIL9050: HT9050 five-port three-position cylinders -- Pop / Off energise "<na／web e94a028。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置

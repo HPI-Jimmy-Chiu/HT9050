@@ -1,0 +1,354 @@
+From c32a71bb730e697868f56b3caeea64706dae4a7a Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 8 Oct 2026 01:59:10 +0800
+Subject: [PATCH] DUALCOIL9050: HT9050 five-port three-position cylinders --
+ Pop / Off energise "<name>Off", Push / On release it -- EastSun 1008
+ 'Cylinder[C_LoaderEdgePush].Pop() == Cylinder[C_LoaderEdgePush].Off() &&
+ Cylinder[C_LoaderEdgePushOff].On(), Push() the reverse'.
+
+mycylin.cpp: TMyCylinder::OnSwitch (On / Push output) calls g_W906PairedCoilHook(name, false) first, OffSwitch (Off / Pop output)
+  calls g_W906PairedCoilHook(name, true) last (same lines); the pointer is defined at the end of the file, 0 by default, so test
+  targets that compile mycylin.cpp alone (GA1_cprod) and other machines stay golden.
+JsonBridge/W906DualCoil9050.cpp (new, compiled into wb_serve directly, static registrar): only HT9050, only when the "<name>Off"
+  IO_Table row exists, is IOType Cylinder and Enable=1, and is not itself an engine Cylinder[] (golden C_DockXAxisOff style).
+  Writes the row with the io.btnPanelClick OutType rule, local iterator (not HSys.mapIOTableIter). The machine table has 27 pairs.
+  The IO page's manual click is unchanged (golden single-point write).
+JsonBridge/IoBtnPanelClick.cpp UPCYLOFF: the Off coil is held like every Pop, no longer released after 500 ms (same lines).
+tests: new test_dualcoil9050.cpp (HT9050_DualCoil 26/26: both coils for Pop / Push / On / Off, off-before-on order, non-HT9050
+  untouched, Enable=0 / non-Cylinder row / engine-owned name untouched, disabled cylinder untouched). W6_1_EmptyCanary, W6_Canary,
+  GA1_cprod passed. Release linked; Debug compiled (link waits for wb_serve to close).
+Backups D:\HT9045\_review\*.bak_dualcoil9050_20261008_015205. WORKLOG row 199.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ CMakeLists.txt                  |   2 +-
+ JsonBridge/IoBtnPanelClick.cpp  |   6 +-
+ JsonBridge/W906DualCoil9050.cpp |  64 +++++++++++++++
+ docs/WORKLOG_MACHINE.md         |   1 +
+ mycylin.cpp                     |  11 ++-
+ tests/CMakeLists.txt            |  12 +++
+ tests/test_dualcoil9050.cpp     | 138 ++++++++++++++++++++++++++++++++
+ 7 files changed, 228 insertions(+), 6 deletions(-)
+ create mode 100644 JsonBridge/W906DualCoil9050.cpp
+ create mode 100644 tests/test_dualcoil9050.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index fbd57d1..f736970 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -3356,7 +3356,7 @@ add_executable(wb_serve
+     #   same file with the flag on.
+     #   AI(W906-Q34-ARM) 20260923: 同上 —— 有 SDK 的機器上本 target 自己就會帶旗標，
+     #   不再需要同事那邊另外開；那台機器上網頁一次點擊就會真的送到卡片。
+-    EtherCAT/Pci1203Control.cpp EtherCAT/Pci1203IoRoute.cpp EtherCAT/Pci1203MotorRoute.cpp JsonBridge/IoBtnPanelClick.cpp JsonBridge/IoFormShow.cpp EtherCAT/Pci1203GaliRouteCore.cpp EtherCAT/Pci1203GaliRoute.cpp EtherCAT/Pci1203TorqueHook.cpp EtherCAT/Pci1203TorqueRead.cpp   #AI(W906-E038) 20261003: + Pci1203TorqueRead.cpp = the Index Z1 torque READ hook (installed by Pci1203TorqueHook.cpp:79).   #AI(W906-INDEXZ-1203) 20260930: + Pci1203TorqueHook.cpp = the D4 torque hook, moved out of Pci1203GaliRoute.cpp so tests/test_gali_route_live.cpp can link the route's binding without WebMotorAccessLive.cpp (no vendor call either, control gate 5d).   #AI(W906-INDEXZ) 20260930: + the Index Z1 Gali_* -> 1203 route (INBOX 113; MachineType.h EOF WB_ENGINE_INDEXZ_1203, OFF by default; no vendor call of its own, control gate 5d).   # AI(W906-IOWEB-P17) 20260925: A4-7 engine IO -> 1203 route (MachineType.h EOF WB_ENGINE_IO_1203) + HW.IoSetView's io.btnPanelClick (golden BtnPanelClick); no vendor call of their own -- Execute() above makes it. Same line, no line below moves   AI(W906-ECAT-ROUTE) 20260929: + EtherCAT/Pci1203MotorRoute.cpp = the engine motor -> 1203 route (Motor/EcatMotorRoute.h; MachineType.h EOF WB_ENGINE_MOTOR_1203, OFF by default); no vendor call of its own either (tools/pci1203_control_gate.ps1 check 5d)
++    EtherCAT/Pci1203Control.cpp EtherCAT/Pci1203IoRoute.cpp EtherCAT/Pci1203MotorRoute.cpp JsonBridge/IoBtnPanelClick.cpp JsonBridge/W906DualCoil9050.cpp JsonBridge/IoFormShow.cpp EtherCAT/Pci1203GaliRouteCore.cpp EtherCAT/Pci1203GaliRoute.cpp EtherCAT/Pci1203TorqueHook.cpp EtherCAT/Pci1203TorqueRead.cpp   #AI(W906-E038) 20261003: + Pci1203TorqueRead.cpp = the Index Z1 torque READ hook (installed by Pci1203TorqueHook.cpp:79).   #AI(W906-INDEXZ-1203) 20260930: + Pci1203TorqueHook.cpp = the D4 torque hook, moved out of Pci1203GaliRoute.cpp so tests/test_gali_route_live.cpp can link the route's binding without WebMotorAccessLive.cpp (no vendor call either, control gate 5d).   #AI(W906-INDEXZ) 20260930: + the Index Z1 Gali_* -> 1203 route (INBOX 113; MachineType.h EOF WB_ENGINE_INDEXZ_1203, OFF by default; no vendor call of its own, control gate 5d).   # AI(W906-IOWEB-P17) 20260925: A4-7 engine IO -> 1203 route (MachineType.h EOF WB_ENGINE_IO_1203) + HW.IoSetView's io.btnPanelClick (golden BtnPanelClick); no vendor call of their own -- Execute() above makes it. Same line, no line below moves   AI(W906-ECAT-ROUTE) 20260929: + EtherCAT/Pci1203MotorRoute.cpp = the engine motor -> 1203 route (Motor/EcatMotorRoute.h; MachineType.h EOF WB_ENGINE_MOTOR_1203, OFF by default); no vendor call of its own either (tools/pci1203_control_gate.ps1 check 5d)
+     WebAuth.cpp  WebModalWake.cpp  WebMainCtlButtons.cpp  WebMainScanKey.cpp   # AI(W906-SCANKEY) 20261003: WebMainScanKey.cpp = golden TfMain::ScanKey (physical panel keys) + TfHome::ScanKey, ticked from the main loop.  # AI(W906-FW-W2) 20260819: auth.login verification core.  AI(W906-MODAL-WAKE) 20260926: WebModalWake.cpp = RULINGS_20260926 #9 (blocking dialog with no web page -> open the browser)   AI(W906-FLOW-4) 20260930: WebMainCtlButtons.cpp = the tick consumer of the main-screen ctlButton events (golden BtnOneCycleClick / BtnTrayEndClick / BtnAlarmResetClick); wb_serve only because St01's queue (FileRW/MainClick.cpp) is wb_serve-only too; same line so nothing moves
+     WebLogin.cpp  # Steven 20260924: golden TfMain cbUserSelectChange / stOperatorClick / btLoginClick
+     WebSmartDiag.cpp  # Steven 20260925 (Data.SmartDiagnostic): WS smartdiag.op JSON wrapper
+diff --git a/JsonBridge/IoBtnPanelClick.cpp b/JsonBridge/IoBtnPanelClick.cpp
+index 41c6a85..a7991be 100644
+--- a/JsonBridge/IoBtnPanelClick.cpp
++++ b/JsonBridge/IoBtnPanelClick.cpp
+@@ -654,7 +654,7 @@ void W906_IoTestSuckTick()
+ //AI(W906-UPCYLOFF) 20261007: EastSun 1007 "C_Load_Up / C_Empty_Up / C_Auto1_Up / C_Auto2_Up / C_Auto3_Up: at Initial (= HOME start,
+ //  AskUserQuestion) trigger Off once". On HT9050 these are double-solenoid valves: the Cylinder[] object drives only the On coil
+ //  (C_xxx_Up); the Off coil (C_xxx_UpOff) is an IO_Table row with no engine object (header DEVIATION c). So "Off" = On coil off +
+-//  Off coil pulsed for kW906UpOffPulseMs, then released (a later On must not find both coils energised). uhome.cpp TfHome HOME
++//  Off coil on (20261008 DUALCOIL9050: held, no longer released after kW906UpOffPulseMs; every On / Push releases it, EOF). uhome.cpp TfHome HOME
+ //  calls the hook: phase 0 at step 1 (start), phase 1 on every HOME pass (ends the pulse). HT9050 (9050GPIB or Type_HT9050) only.
+ extern void (*g_W906UpCylOffHook)(int);   // uhome.cpp (global: a block-scope extern inside the unnamed namespace would name a different object)
+ extern AnsiString W906_GpibModel;
+@@ -687,9 +687,9 @@ void W906_UpCylOffHookFn(int phase)
+             W906_UpCylWrite(kOff[i], true);                                       // Off coil on
+         }
+         s_w906UpOffSince = ::GetTickCount(); if (s_w906UpOffSince == 0) s_w906UpOffSince = 1;
+-        std::printf("[UPCYLOFF] HOME start: C_Load/Empty/Auto1~3_Up Off (Off coil pulse %lu ms)\n", kW906UpOffPulseMs); std::fflush(stdout);
++        std::printf("[UPCYLOFF] HOME start: C_Load/Empty/Auto1~3_Up Off (Off coil on, held)\n"); std::fflush(stdout);
+     } else if (s_w906UpOffSince != 0 && (unsigned long)(::GetTickCount() - s_w906UpOffSince) >= kW906UpOffPulseMs) {
+-        for (int i = 0; i < 5; ++i) W906_UpCylWrite(kOff[i], false);            // Off coil released
++        /* AI(W906-DUALCOIL9050) 20261008: no release any more -- the Off coil stays on like every Pop (EOF), EastSun 1008 */
+         s_w906UpOffSince = 0;
+     }
+ }
+diff --git a/JsonBridge/W906DualCoil9050.cpp b/JsonBridge/W906DualCoil9050.cpp
+new file mode 100644
+index 0000000..1169303
+--- /dev/null
++++ b/JsonBridge/W906DualCoil9050.cpp
+@@ -0,0 +1,64 @@
++//==============================================================================
++//  JsonBridge/W906DualCoil9050.cpp -- HT9050 double-solenoid (five-port three-position) cylinders
++//
++//AI(W906-DUALCOIL9050) 20261008: EastSun 1008 "ht9050 的汽缸都是用五口三位的，所以 Pop() 以前只需要對單 I/O 下命令 Off 即可，五口三位的
++//  關係，需要把相對應的汽缸先關閉在打開，例如 Cylinder[C_LoaderEdgePush].Pop() 會等於 Cylinder[C_LoaderEdgePush].Off() &&
++//  Cylinder[C_LoaderEdgePushOff].On()，Push() 則與 Pop 相反，On() 變成 Off()，Off() 變成 On()".
++//
++//  mycylin.cpp TMyCylinder::OnSwitch / OffSwitch (every On / Off / Push / Pop output write, only while the cylinder is Enable) call
++//  g_W906PairedCoilHook(name, energise):
++//    On / Push  -> "<name>Off" coil OFF, before the On coil is energised
++//    Off / Pop  -> "<name>Off" coil ON,  after the On coil is released
++//  Only on HT9050 (W906_GpibModel "9050GPIB" or Type_HT9050); only when the "<name>Off" IO_Table row exists, is IOType "Cylinder" and
++//  Enable=1 (the machine table has 27 such pairs: C_LoaderEdgePush / C_LoaderEdgeClip / C_TrayZ_Selector / C_Load_Up / C_Empty_Up /
++//  C_Auto1~3_Up / ...EdgePush / ...EdgeClip / ...DrawerLock / ...LoaderZ_Select ...); never when "<name>Off" is itself an engine
++//  Cylinder[] (golden's C_DockXAxisOff style pairs drive their own coil). The Off coils have no engine object (IoBtnPanelClick.cpp
++//  header DEVIATION c), so they are written straight from their IO_Table row, with the same OutType rule as io.btnPanelClick.
++//  A local iterator, not HSys.mapIOTableIter: this runs inside the engine's cylinder calls and must not move an iterator a caller
++//  may be holding. Other machines: golden (the hook returns at once).
++//
++//  Its own file (not IoBtnPanelClick.cpp, which only wb_serve compiles) so tests/test_dualcoil9050.cpp can drive it.
++//==============================================================================
++#include <cstdlib>
++#include <map>
++#include <string>
++
++#include "cmydef.h"               // MachineTypeChoice
++#include "MachineType.h"          // Type_HT9050, ePCI1203
++#include "database.h"             // HSys.mapIOTable / HSys.IOTable / TIODATA, W906_GpibModel
++#include "MyLaneIo.h"             // MyLaneIO
++#include "mycylin.h"              // Cylinder[] / MaxCylinderItem
++
++extern AnsiString W906_GpibModel;                                 // database.cpp
++extern void (*g_W906PairedCoilHook)(const AnsiString&, bool);     // mycylin.cpp
++
++namespace {
++std::map<std::string, bool> s_w906PairOwnedByEngine;              // "<name>Off" -> is an engine Cylinder[] (names are fixed after init)
++
++void W906_PairedCoilHookFn(const AnsiString& name, bool energise)
++{
++    if (!(W906_GpibModel == "9050GPIB" || MachineTypeChoice == Type_HT9050)) return;
++    if (name == "") return;
++    const AnsiString off = name + "Off";
++    std::map<AnsiString, AnsiString>::iterator it = HSys.mapIOTable.find(off);
++    if (it == HSys.mapIOTable.end()) return;
++    const int idx = std::atoi(it->second.c_str());
++    if (idx < 0 || idx >= (int)HSys.IOTable.size() || HSys.IOTable[idx] == 0) return;
++    const TIODATA* r = HSys.IOTable[idx];
++    if (r->iEnable == 0 || r->Type != "Cylinder") return;
++    const std::string key(off.c_str());
++    std::map<std::string, bool>::iterator own = s_w906PairOwnedByEngine.find(key);
++    if (own == s_w906PairOwnedByEngine.end()) {
++        bool owned = false;
++        for (int j = 0; j < MaxCylinderItem && !owned; ++j) if (Cylinder[j].CylinderName == off) owned = true;
++        own = s_w906PairOwnedByEngine.insert(std::make_pair(key, owned)).first;
++    }
++    if (own->second) return;
++    const bool on = energise ? (r->iInType == 1) : (r->iInType == 0);   // the same OutType rule as io.btnPanelClick / W906_UpCylWrite
++    if (on) MyLaneIO.IOBitOn (r->iLane, r->iIP, r->iPort, r->iBit, r->iISABase, r->Alias);
++    else    MyLaneIO.IOBitOff(r->iLane, r->iIP, r->iPort, r->iBit, r->iISABase, r->Alias);
++}
++// Installed at static init by whoever compiles this file in directly (wb_serve, tests/test_dualcoil9050.cpp -- an executable's own
++// source, not an archive member, so the linker cannot drop it), same as IoBtnPanelClick.cpp's UPCYLOFF registrar.
++struct W906DualCoilReg { W906DualCoilReg() { g_W906PairedCoilHook = &W906_PairedCoilHookFn; } } s_w906DualCoilReg;
++}  // namespace
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index be83075..d25ef30 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -84,6 +84,7 @@
+ | 169 | **Out Shuttle Z 位置還原**（EastSun「剛剛說的teach 沒有indexZ 高度可以設定 我說錯了 可以不用改 在其他頁面已經可以設定了」）：revert web 113a1ef，控制項回到套件 149 的原位置；給 Jimmy 的說明同步更正 | web 4e68790；cpp（本列） | — |
+ | 170 | **只查：實體 HOME 鍵沒反應**（EastSun「我實體按鈕案home都沒反應」）：PadCommLog 今天實體按鍵封包（t05x400…）只到 09:15:57，最後一筆 HOME＝t050400002020（HOME 0x20＋ALARM RESET 0x2000 卡住，golden ScanPannelKey ALARM RESET 最後判斷蓋掉 HOME）；之後只有程式送出的燈號回音（0006/0016＝PAUSE 燈閃，Teach 頁訊息框開著時）。EventLog 10 筆 MES2112 全是網頁軟鍵。程式這條路與 golden 相同，不改碼；請查面板 ALARM RESET 鈕／按鍵線。17:00 release 補建 | — | — |
+ | 171 | **ALARM RESET 卡住時其他實體鍵照常**（EastSun「就算reset卡住其他按鈕不是也要可以用?」→ 選「改」）：ckernel.cpp ScanPannelKey 前／後面板共 4 處 ALARM RESET 判斷，按著不放（已鎖存）時不再蓋掉同時按的其他鍵；剛按下那一下照 golden 優先。備份 D:\HT9045\_review\ckernel.cpp.bak_rstheld_20261007_172605 | cpp（本列） | ScanKeyGolden（新增 4 項）、MainScanKey、W7_L2_CKernel、SysinitBoot、St02_N07Alarm、St02_PadInterface 全過；Debug 17:30／release 17:31 |
++| 199 | **HT9050 五口三位氣缸：Pop／Off 會開 Off 線圈，Push／On 會關 Off 線圈**（EastSun「ht9050的汽缸都是用五口三位的，所以Pop()->以前只需要對單I/O下命令Off即可，五口三位的關係，需要把相對應的汽缸先關閉在打開，例如Cylinder[C_LoaderEdgePush].Pop() 會等於 Cylinder[C_LoaderEdgePush].Off() && Cylinder[C_LoaderEdgePushOff].On() ，Push()則與Pop相反」）：mycylin.cpp TMyCylinder::OnSwitch（On／Push 的輸出）開頭、OffSwitch（Off／Pop 的輸出）結尾各呼叫 g_W906PairedCoilHook（檔尾定義，預設 0）；本體 JsonBridge/W906DualCoil9050.cpp（新檔，wb_serve 直接編入、靜態註冊）：只 HT9050，且 IO_Table 有「名稱＋Off」的 Cylinder 列、Enable=1，且該名稱不是引擎 Cylinder[]（golden 的 C_DockXAxisOff 那種自己管）⇒ On／Push 先關 Off 線圈再開 On 線圈；Off／Pop 先關 On 線圈再開 Off 線圈（保持通電）。機台表 27 對符合（C_LoaderEdgePush／EdgeClip／DrawerLock、C_TrayZ_Selector、C_Load_Up、C_Empty_Up、C_Auto1～3_Up、Auto1～3／Empty EdgePush／EdgeClip／DrawerLock、…LoaderZ_Select、C_CleanPanel、C_MobileTrayTableSelect）；IO 頁手動點按照 golden 單點寫，不連動。UPCYLOFF（193 列）的 Off 線圈不再 500 ms 後放掉，跟 Pop 一樣保持（JsonBridge/IoBtnPanelClick.cpp 檔尾，同行）（AI(W906-DUALCOIL9050)） | cpp（本列） | 新增 HT9050_DualCoil 26/26（Pop／Push／On／Off 兩線圈、先關後開的順序、非 HT9050 不動、Enable=0／非 Cylinder 列／引擎自有名稱不動、停用氣缸不動）、W6_1_EmptyCanary、W6_Canary、GA1_cprod 過；release 已連結；Debug 已編譯、等關程式 |
+ | 198 | **Loader 探層改看 SnLoaderDrawerHasTray（Off＝探到）**（01:03 MES0924 DoLoad_9050_1110：Z 17200／15300／13400（第 2～4 層）SnLoaderTrayHasTray 一路亮、撞上限 5；EastSun「這個是不是C_Loader_Up汽缸要打起來?」→「不動 C_Load_Up」→「C_TrayZ_Select應該是要打開的，並且SnLoaderDrawerHasTray在探層的時候，探到會Off沒探到會On」）：Selector 在探層第 1100 步本來就是 Push（程式註解「分離開」），沒改；asendic_Loader.cpp DoLoad_9050 第 1100／1115／1125 步改問 W906_LoaderProbeSeesTray（檔尾）：HT9050＝Sen[SnLoaderDrawerHasTray].IsOff()，其他機種＝Sen[SnLoaderTrayHasTray].IsOn()（910）（AI(W906-PROBESENSOR9050)）。層位置算法 cinitial.cpp W906_TrayZ9050＝基準－層×Pitch（Loader Up 21000／Pitch 1900／ProbeStart 2／ProbeLimit 5） | cpp（本列） | Flow9050_Tray 119/119（新增 [PS] 3 項）；Debug／release 已連結 |
+ | 197 | **暫時略過 Index 壓測的讀扭力（WAR0361）**（EastSun 截圖 WAR0361「HT9050 Index Z1 torque not read in 5 s (DoTestHeadMotor 12110, E-044)」→「先將此問題By Pass掉，目前讀取扭力值的動作還沒核對」）：atester_FinePitch.cpp FP case 12110（910 :2415）：HT9050 且 g_W906Ht9050TorqueReadBypass（檔尾，預設 true）⇒ 不讀／不比扭力，直接 InitWriteAndCheckMotorTorqueTask → 12200（扭力上限照樣寫回 300%）；讀值核對好後把 g_W906Ht9050TorqueReadBypass 改 false 或拿掉該行。其他機種照 910（AI(W906-TORQUEBYPASS9050)） | cpp（本列） | FP9050_Pure（忠實度清單加 :2415）、FP9050_Index（新增 bypass 開 ⇒ 12200 無 WAR0361；F6／F8 讀扭力測試改在 bypass 關下跑）、E044TorqueWait 過；Debug／release 已連結 |
+ | 196 | **HT9050 CCD Y（M108）在原點＝回過原點＋位置在 0 附近**（EastSun「CCD Y的原點確認會導致我的Index Z無法下降?」→「先用HT9050的Flag做區分，然後選擇回到原點+位置在0附近」）：00:31 MCCDY 回原點完成、位置 0，但原點燈在開關邊緣熄滅（DS402 回原點），910 MoveIndexZ 互鎖（位置剛好 0 且燈亮）擋住 Index Z 下降（00:31:28 訊息）。atester_FinePitch.cpp MoveIndexZ（910 mymotor :6631）與 acarry.cpp W906_ShtCcdYHome（Out Shuttle1／2 移動）：HT9050＝HomeFlag 1 且 |位置| ≤ 100，不看原點燈；其他機種照 910（AI(W906-CCDYHOME9050)） | cpp（本列） | FP9050_Pure（忠實度清單加 910 :6631）、FP9050_Index（[F5] 新增「燈滅但已回原點 ⇒ 下降」，Q4b 拒絕位置 5→500）、HT9050_ShtSafe（M108 改用 HomeFlag＋新增燈滅可動）、Flow9050_Shuttle、HT9050_DryRun 過；release 已建；Debug 已編譯、等關程式 |
+diff --git a/mycylin.cpp b/mycylin.cpp
+index c45fda8..3fb62e0 100644
+--- a/mycylin.cpp
++++ b/mycylin.cpp
+@@ -260,7 +260,7 @@ bool TMyCylinder::OffStatus()
+ void TMyCylinder::OnSwitch()                                                    //Steven 20230721 : unified On/Off switch control
+ {
+     if(Enable)
+-    {
++    {   { extern void (*g_W906PairedCoilHook)(const AnsiString&, bool); if(g_W906PairedCoilHook) g_W906PairedCoilHook(CylinderName, false); }   /* AI(W906-DUALCOIL9050) 20261008: HT9050 five-port three-position valve -- Push / On first releases the "<name>Off" coil (EOF) */
+         if(OutType==TYPE_A)
+         {
+             if(OutISABase==eMotionNet ||
+@@ -337,7 +337,7 @@ void TMyCylinder::OffSwitch()
+             fSmartDiagnostic->GetCyliderOffCount(CylinderName);
+ //AI(W906-W3-6b) 20260925: (end of lifted gate)
+         }
+-        AddOffCount();                                                          //Eastsun 20260521 integrate //Sam 20230516 : Pre Alarm Cylinder
++        AddOffCount();  { extern void (*g_W906PairedCoilHook)(const AnsiString&, bool); if(g_W906PairedCoilHook) g_W906PairedCoilHook(CylinderName, true); }   /* AI(W906-DUALCOIL9050) 20261008: HT9050 -- Pop / Off energises the "<name>Off" coil after the On coil is released (EOF) */  //Eastsun 20260521 integrate //Sam 20230516 : Pre Alarm Cylinder
+     }
+ }
+ //---------------------------------------------------------------------------
+@@ -888,3 +888,10 @@ int W906_CylinderRowsShown()
+     return (MachineTypeChoice==Type_HT9050) ? MaxCylinderItem : 295;
+ }
+ //---------------------------------------------------------------------------
++//AI(W906-DUALCOIL9050) 20261008: EastSun 1008 "ht9050 的汽缸都是用五口三位的 ... Cylinder[C_LoaderEdgePush].Pop() 會等於
++//  Cylinder[C_LoaderEdgePush].Off() && Cylinder[C_LoaderEdgePushOff].On()，Push() 則與 Pop 相反". OnSwitch (On / Push) calls this
++//  with false before it energises the On coil, OffSwitch (Off / Pop) with true after it releases the On coil. Set by
++//  JsonBridge/IoBtnPanelClick.cpp (wb_serve; it owns the IO_Table lookup, which test targets that compile this file alone lack);
++//  0 = nothing (ctests, other machines' builds without the bridge). The hook itself decides HT9050 and whether "<name>Off" exists.
++void (*g_W906PairedCoilHook)(const AnsiString&, bool) = 0;
++//---------------------------------------------------------------------------
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 41f4cda..90a5eb9 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -8799,3 +8799,15 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+ endif()
+ add_test(NAME St02_W140Command COMMAND test_st02_w140_command)
+ set_tests_properties(St02_W140Command PROPERTIES TIMEOUT 120)
++# AI(W906-DUALCOIL9050) 20261008: HT9050 five-port three-position cylinders -- the real TMyCylinder (ht9045_io) + the real hook
++#   JsonBridge/W906DualCoil9050.cpp (compiled in directly, as wb_serve does: its static registrar must not be an archive member).
++add_executable(test_dualcoil9050 test_dualcoil9050.cpp ${CMAKE_CURRENT_SOURCE_DIR}/../JsonBridge/W906DualCoil9050.cpp)
++target_include_directories(test_dualcoil9050 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
++target_link_libraries(test_dualcoil9050 PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_dualcoil9050 PRIVATE ws2_32)
++endif()
++add_test(NAME HT9050_DualCoil COMMAND test_dualcoil9050)
++set_tests_properties(HT9050_DualCoil PROPERTIES TIMEOUT 60)
+diff --git a/tests/test_dualcoil9050.cpp b/tests/test_dualcoil9050.cpp
+new file mode 100644
+index 0000000..198269c
+--- /dev/null
++++ b/tests/test_dualcoil9050.cpp
+@@ -0,0 +1,138 @@
++// =============================================================================
++//  test_dualcoil9050.cpp -- AI(W906-DUALCOIL9050) 20261008
++//
++//  EastSun 1008: "ht9050 的汽缸都是用五口三位的 ... Cylinder[C_LoaderEdgePush].Pop() 會等於 Cylinder[C_LoaderEdgePush].Off() &&
++//  Cylinder[C_LoaderEdgePushOff].On()，Push() 則與 Pop 相反". Drives the REAL TMyCylinder (mycylin.cpp) and the REAL hook
++//  (JsonBridge/W906DualCoil9050.cpp) and reads both coils back from MyLaneIO's output cache (1203 addresses, as on the machine:
++//  C_LoaderEdgePush = lane 1 / IP 178 / port 1 / bit 1, C_LoaderEdgePushOff = lane 1 / IP 178 / port 0 / bit 0, InType 1).
++//
++//  [1] HT9050: Pop / Off -> On coil off, Off coil on; Push / On -> On coil on, Off coil off
++//  [2] the Off coil is released BEFORE the On coil is energised (Push), and energised AFTER the On coil is released (Pop)
++//  [3] not HT9050 -> the Off coil is never written (golden)
++//  [4] no write when the "<name>Off" row is Enable=0, is not IOType "Cylinder", or is itself an engine Cylinder[]
++//  [5] a disabled cylinder writes neither coil
++// =============================================================================
++#include <cstdio>
++#include <string>
++#include <vector>
++
++#include "cmydef.h"
++#include "MachineType.h"
++#include "database.h"
++#include "MyLaneIo.h"
++#include "mycylin.h"
++
++extern AnsiString W906_GpibModel;
++extern void (*g_W906PairedCoilHook)(const AnsiString&, bool);
++
++static int g_pass = 0, g_fail = 0;
++#define CHECK(c) do { if (c) ++g_pass; else { ++g_fail; std::printf("  FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); } } while (0)
++
++namespace {
++const int kLane = 1, kIP = 178;
++
++void AddRow(const char* type, const char* alias, int port, int bit, int enable)
++{
++    TIODATA* row = new TIODATA(AnsiString(""));
++    row->Type = type; row->Alias = alias;
++    row->iEnable = enable; row->iISABase = ePCI1203; row->iLane = kLane; row->iIP = kIP;
++    row->iPort = port; row->iBit = bit; row->iInType = 1;
++    const int idx = (int)HSys.IOTable.size();
++    HSys.IOTable.push_back(row);
++    HSys.mapIOTable[AnsiString(alias)] = AnsiString(idx);
++}
++
++void SetupCyl(int c, const char* name, int port, int bit)
++{
++    TMyCylinder& y = Cylinder[c];
++    y.Enable = true; y.CylinderName = name;
++    y.OutRing = kLane; y.OutIP = kIP; y.OutPort = port; y.OutBit = bit; y.OutType = TYPE_A; y.OutISABase = ePCI1203;
++    y.OnSenEnable = false; y.OffSenEnable = false; y.OnDelayTime = 0; y.OffDelayTime = 0;
++    y.Reset();
++}
++
++bool Bit(int port, int bit) { return MyLaneIO.IOOutBitStatus(kLane, kIP, port, bit, ePCI1203, "t"); }
++void Clear(int port, int bit) { MyLaneIO.IOBitOff(kLane, kIP, port, bit, ePCI1203, "t"); }
++
++// [2]: wrap the installed hook and record the On coil's state at the moment the Off coil is written.
++void (*s_real)(const AnsiString&, bool) = 0;
++std::vector<std::string> s_log;
++int s_onPort = 1, s_onBit = 1;
++void Spy(const AnsiString& name, bool energise)
++{
++    s_log.push_back(std::string(energise ? "off-coil ON  with on-coil=" : "off-coil OFF with on-coil=") + (Bit(s_onPort, s_onBit) ? "1" : "0"));
++    s_real(name, energise);
++}
++}  // namespace
++
++int main()
++{
++    std::printf("test_dualcoil9050 -- HT9050 five-port three-position cylinders\n");
++    CHECK(g_W906PairedCoilHook != 0);                                   // W906DualCoil9050.cpp registered itself
++
++    // machine addresses (D:\HT9045\system\IO_Table.csv 20261008)
++    AddRow("Cylinder", "C_LoaderEdgePush",    1, 1, 1);
++    AddRow("Cylinder", "C_LoaderEdgePushOff", 0, 0, 1);
++    AddRow("Cylinder", "C_LoaderEdgeClip",    3, 3, 1);
++    AddRow("Cylinder", "C_LoaderEdgeClipOff", 2, 2, 0);                // [4] Enable=0
++    AddRow("Cylinder", "C_TrayZ_Selector",    5, 5, 1);
++    AddRow("Sensor",   "C_TrayZ_SelectorOff", 4, 4, 1);                // [4] not an output row
++    AddRow("Cylinder", "C_Load_Up",           7, 7, 1);
++    AddRow("Cylinder", "C_Load_UpOff",        6, 6, 1);                // [4] owned by an engine Cylinder[] below
++    SetupCyl(C_LoaderEdgePush, "C_LoaderEdgePush", 1, 1);
++    SetupCyl(C_LoaderEdgeClip, "C_LoaderEdgeClip", 3, 3);
++    SetupCyl(C_TrayZ_Selector, "C_TrayZ_Selector", 5, 5);
++    SetupCyl(C_Load_Up,        "C_Load_Up",        7, 7);
++    Cylinder[C_Empty_Up].CylinderName = "C_Load_UpOff";                // stand-in for golden's C_DockXAxisOff style engine pair
++
++    std::printf("[1] HT9050: Pop / Off energise <name>Off, Push / On release it\n");
++    W906_GpibModel = "9050GPIB";
++    CHECK(Cylinder[C_LoaderEdgePush].Pop());
++    CHECK(Bit(1, 1) == false); CHECK(Bit(0, 0) == true);
++    CHECK(Cylinder[C_LoaderEdgePush].Push());
++    CHECK(Bit(1, 1) == true);  CHECK(Bit(0, 0) == false);
++    Cylinder[C_LoaderEdgePush].Off();
++    CHECK(Bit(1, 1) == false); CHECK(Bit(0, 0) == true);
++    Cylinder[C_LoaderEdgePush].On();
++    CHECK(Bit(1, 1) == true);  CHECK(Bit(0, 0) == false);
++
++    std::printf("[2] order: Off coil released before the On coil goes on, energised after it goes off\n");
++    s_real = g_W906PairedCoilHook; g_W906PairedCoilHook = &Spy; s_log.clear();
++    Cylinder[C_LoaderEdgePush].Pop();                                   // On coil was on
++    Cylinder[C_LoaderEdgePush].Push();                                  // On coil was off
++    g_W906PairedCoilHook = s_real;
++    CHECK(s_log.size() == 2);
++    if (s_log.size() == 2) {
++        CHECK(s_log[0] == "off-coil ON  with on-coil=0");                // Pop: On coil already off
++        CHECK(s_log[1] == "off-coil OFF with on-coil=0");                // Push: On coil not yet on
++        for (size_t i = 0; i < s_log.size(); ++i) std::printf("    %s\n", s_log[i].c_str());
++    }
++
++    std::printf("[3] not HT9050: golden, the Off coil is not touched\n");
++    W906_GpibModel = "";
++    const int savedType = MachineTypeChoice;
++    if (MachineTypeChoice == Type_HT9050) MachineTypeChoice = 0;
++    Clear(0, 0);
++    Cylinder[C_LoaderEdgePush].Pop();
++    CHECK(Bit(1, 1) == false); CHECK(Bit(0, 0) == false);
++    MachineTypeChoice = savedType;
++    W906_GpibModel = "9050GPIB";
++
++    std::printf("[4] no write: Enable=0 row / non-Cylinder row / engine-owned name\n");
++    Clear(2, 2); Clear(4, 4); Clear(6, 6);
++    Cylinder[C_LoaderEdgeClip].Pop(); CHECK(Bit(2, 2) == false);
++    Cylinder[C_TrayZ_Selector].Pop(); CHECK(Bit(4, 4) == false);
++    Cylinder[C_Load_Up].Pop();        CHECK(Bit(6, 6) == false);
++    CHECK(Bit(3, 3) == false); CHECK(Bit(5, 5) == false); CHECK(Bit(7, 7) == false);   // the On coils still follow golden
++
++    std::printf("[5] a disabled cylinder writes neither coil\n");
++    Cylinder[C_LoaderEdgePush].Push();
++    CHECK(Bit(1, 1) == true); CHECK(Bit(0, 0) == false);
++    Cylinder[C_LoaderEdgePush].Enable = false;
++    Cylinder[C_LoaderEdgePush].Pop();
++    CHECK(Bit(1, 1) == true); CHECK(Bit(0, 0) == false);
++
++    std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
++    std::printf(g_fail ? "FAIL\n" : "ALL PASS\n");
++    return g_fail ? 1 : 0;
++}
+-- 
+2.55.0.windows.5
+
