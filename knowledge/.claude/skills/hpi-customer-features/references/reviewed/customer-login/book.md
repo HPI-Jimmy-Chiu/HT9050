@@ -17,3 +17,5 @@ bookOverride非空時選override，否則pwPath；FileExists失敗回WEBLOGIN_NO
 沒有合法命中則走末段Operator／AccessLevel=0／UI與登入旗標重設，再回WEBLOGIN_BAD_CREDENTIALS。NO_BOOK的兩個已讀早退位置未走此末段，不能把所有失敗都套同一個權限重設；此前的其他callee效果、throw／清理與全域寫者仍待查。MBox／Reauth caller在返回後另有門檻與登出，見[MBox](mbox.md)與[前層](../customer-reauth-callee/authentication.md)。
 
 本次只讀程式，沒有打開密碼本、讀取登入環境變數值或執行任何驗證／檔案寫入。
+
+20261007 續補[讀取／解碼／分欄與 V906 字串](../customer-login-readers/index.md)，局部核對此 caller 下層的指定 body；舊來源釘點與當時待查說明保留，完整 reader／認證／磁碟與現場結果仍未完成。

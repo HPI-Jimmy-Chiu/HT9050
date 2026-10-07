@@ -81,6 +81,21 @@
 - 跟 W-12（Carry kit／Index 吸嘴是不是 2×4）是同一件事，可以一起回。
 - 開工前在 FROM_FRANK §1 認領。**週一 1005 10:00 前還沒認領，筆電改派 NB2 先做 ①②**（你回來接 ③）。
 
+### F-04　📋 HT9050 防撞鐵律：Arm Z Home sensor 亮才准 XY、Index Z1 下壓前兩支飛梭已退出（Jimmy 1007；MainNB-GPT 複核；W-145）
+
+- **Jimmy 1007 的兩條鐵律**（MainNB-GPT 轉述；複核報告 `docs/handoff/RD5軟體_HT9050防撞鐵律唯讀複核_20261007_091000.md`，在 `origin/v906/mainnb-gpt-cli-handoff` `d84336e6`）：①In／Out Arm 的 X／Y 只在對應吸嘴 Z 的 **Home sensor 真的亮**時才准動（HomeFlag＝1、命令位置＝0 都不算）；②Index Z1 下壓測 IC 前，**In Shuttle1 已退到 Left、Out Shuttle1 已退到 Right**（送出退回命令不算退出）。
+- **複核列的缺口**（行號照 main `09a4b2fe`，是 MainNB-GPT 的唯讀結論、還沒人複驗——動手前重量）：S1 `Motor/mymotor.cpp` `PCIL112_InArmXYMove`／`PCIL112_OutArmXYMove` 的 Z 檢查受 `USE_ARM_PROTECTION` 開關與 ASE_KaohSiung 豁免影響，關掉時同一目標重叫會走到 move；S2 `InArmZSafe`／`OutArmZSafe` 在 Enable=false／Motor=NULL 時不查 sensor；S5 `atester_FinePitch.cpp` 的 W-44 與故障保護在 SOFT_SIMULTE 下略過（模擬跑通證明不了互鎖）；S6 `acarry.cpp` 飛梭側用 1000 安全區、不是 Left／Right 定位點；S8 `WebMotorAccess.cpp` `Move1203`（手動 1203 PTP）沒直接問 ArmZSafe。
+- **要做的**：①唯讀盤點：上面幾處在 `Type_HT9050` 實際走哪一條、機台快照（main `machines/HT9050/snapshot/`）裡 `USE_ARM_PROTECTION` 等開關現在是什麼值；②照兩條鐵律補互鎖（只在 `Type_HT9050`，不動別的機種）＋**反向測例**（Z sensor OFF 但 HomeFlag=1、位置=0；飛梭還在 Socket 區、或退回命令已送但還沒到；手動／Teach／Jog 路徑）；③一張 MR，附兩組態 ctest 與反向驗證。
+- **定之前保持現行行為**：(a)「退到 Left／Right」是停在教導的 Left／Right 點，還是離開 Socket 區、在那一側的安全區內（現行：位置與目標都在 1000 安全區才放行）——✅ Jimmy 1007 11:5x 回 **A（照現行）**，補充原話：「A，補充，Z1下壓測試動作，只要shuttle1 停在左側或者搖搖都可以接受，不能接受的是移動到right和停在Right」（RULINGS_20261007 第 3 條；Out Shuttle1 照對稱是筆電的推論，請在 FROM_FRANK §3 確認）；(b) DS402 替代判斷（`W906_DS402_ZSAFE_HOMEFLAG`，main 預設關）照鐵律①在 HT9050 維持關。Arm Z Home sensor 的極性（在原點時亮）要上機確認的，寫進 FROM_FRANK §3，筆電轉 ES02。
+- 先在 FROM_FRANK §1 認領行號；動到筆電或 St02 認領的檔先在 §4 問。
+
+### F-05　📋 ST02-A1a／A1b 改派給你：Contact 頁 16 個按鈕解除反灰＋HT9050 的 5 個 EP 閘照 golden 打開（Jimmy 1007 11:5x 第 140 項 (3)＝C；W-146）
+
+- **為什麼給你**：St02-E 做了 A1a 的改動後，它那邊的 Claude Code 權限檢查把下一步判成「Security Weaken」（拿掉網頁端對會啟動機台的按鈕的封鎖），只有 Steven 本人在 STEVEN-NB3 同意才過；Steven 出差 ⇒ Jimmy 改給你。內容 Jimmy 1006 12:2x 已回「照 golden 做」（RULINGS_20261001 第 0 條）。你的 session 若也被同一道檢查擋，請 Frank 本人在你那台同意（裁決在 RULINGS_20261007 第 4 條）。
+- **A1a**：`web/page/ht9045_golden_kb_unwired.js` 約 :190-217（St02-E 量的是 :193-200 那 16 列，行數不變）——把 Contact 頁 11 個模式鈕＋btnStart／btnPause／btnTStart／btnTStep／spbOneCycle 從反灰清單拿掉；C++ 已由 St01 CT-3a／CT-3b 接好（live wb_serve 回 operable:true）。**會讓機台動**：MR 寫明，第一次跑要 EastSun 在機台旁。node 測試＋反向檢查（放回清單 ⇒ 紅）。
+- **A1b**：`DeviceForm_File.gen.inc` :2797／:2954／:4186、`ContactForce.gen.inc` :998／:1459＋ContactForce 關閉尾段的 5 個 EP 閘照 golden 解開。「ADAM_* 在移植樹是空的」那個理由過期了（`Adam6024Comm_St02.cpp` :639 ADAM_WriteVoltage／:781 ADAM_DirectWriteData 已是真的），但它們在建置期開關 `W906_ADAM_EP_LIVE`（main `MachineType.h` :1811 預設關）沒開時直接返回 ⇒ 解開後只有開了 live 的建置才會真的出氣壓。**兩支 `.gen.inc` 若是 St01 產生器的產物，先問 St02-M 該改產生器輸入還是同行改**（St01 出差）。ctest＋反向檢查、兩組態。
+- 行號是 10/06 的 main，動手前重量；各一張 MR；先在 FROM_FRANK §1 認領。建議先做 F-04 的盤點（Jimmy 今天的防撞鐵律），再做這張。St02-E 那個沒推的乾淨分支 `v906/st02-a1a-contact` 不用接。
+
 ## 4. 回答
 
 | 時間 | 你的問題 | 回答 |
@@ -176,3 +191,7 @@
 | 20261006 21:3x | ✅ **MR !275（W-120 後側 CCD case 75）已在 main（第 81 批 `5820db2d`）、GitHub 第 163 包 `4f9459c`**；Frank 21:1x 的七題已記 RULINGS_20261006 第 23 條 | gate b81a 兩組態只剩基準（負載下的失敗單獨重跑都過）。F9050-FIX3、FR-OA1 照 Frank 的回答做，MR 好了排下一批；⑦的滿盤感測器是哪一點，等 Frank（或 EastSun）回了再接。 |
 | 20261006 21:5x | ⏰ **追問：W-114、W-118（第 1 次）**；W-128 改派 Roger、W-126 收到 | **W-114**：W-44 安全區寬度只留一個函式——第 80 批進 main 的是你的固定 1000；St01 的 ST01-C 1b（停在 `v906/st01-c-1b`）有 `W44SafeBand`＝max(1000, 抖動距離×100)。之後 1b 重新接上時用哪一個？請問 Frank（或你判斷照 Steven 1006 09:4x 的原話）。**W-118**：Jerry JK-02 §10 三題（`aTester_Front.cpp:10064` 在 HT9050 走不走得到；`bSuckOnDown` 永遠無效是不是預期；§7 迴圈上界是 Frank 改的還是 9046LS 原本就這樣）。**W-128**（28 個疊盤 Z 教點的來源）：你 21:2x 寫「等 Jimmy 定誰接」——派工是筆電的事，我先派給 RogerYang 做唯讀的第一步（找出這些點在 910-9050 與 golden 裡從哪裡賦值、Teach 頁有沒有對應欄位），結論出來再決定誰改；你照計畫做 F9050-FIX3／FR-OA1，不用等。**W-126**（飛梭保養）：看到你 21:1x 說先做不衝突的部分，帳本改成「認領中」。 |
 | 20261007 09:3x | ⏰ **追問（第 2 次；W-114、W-118）** | **W-114**：W-44 安全區寬度只留一個函式——St01 ST01-C 1b 的 `W44SafeBand`＝max(1000, 抖動距離×100) 與 Frank01 FR-NB2 ② 的飛梭那一側，用哪一個、寬度固定 1000 還是取大的？**W-118**：Jerry JK-02 §10 三題（HT9050 上 `aTester_Front.cpp:10064` 走得到嗎、`bSuckOnDown` 永遠無效是預期的嗎、§7 的迴圈）。再 4 小時沒回會列給 Jimmy 決定要不要打電話。 |
+| 20261007 11:3x | ✅ **W-114、W-118 收到**（FROM_FRANK §2 1007 10:5x） | W-114：安全區寬度用你的固定 1000，St01 的 1b 重接時改問 hook（已轉 TO_STEVEN）。W-118：①③ 收；② 等 Frank 本人確認，帳本先關。 |
+| 20261007 11:3x | 📋 **新卡 F-04（W-145）：HT9050 防撞鐵律** | Jimmy 今天要的兩條（Arm Z Home sensor 亮才准 XY；Index Z1 下壓前兩支飛梭已退出），MainNB-GPT 唯讀複核找到幾處缺口——細節在 §3 F-04。你是 Index／飛梭流程的負責人，也做過 FR-NB2 ② 的飛梭安全區。 |
+| 20261007 11:5x | ✅ **F-04（a）Jimmy 回了：A＝照現行的安全區做法** | 原話：「A，補充，Z1下壓測試動作，只要shuttle1 停在左側或者搖搖都可以接受，不能接受的是移動到right和停在Right」。照這條：In Shuttle1 停在左側或在區內抖料都可以，往 Right 移動或停在 Right 不行；Out Shuttle1 照對稱（我推論的，你實作前在 FROM_FRANK §3 確認）。RULINGS_20261007 第 3 條。 |
+| 20261007 11:5x | 📋 **新卡 F-05（W-146）：ST02-A1a／A1b 改派給你**（Jimmy 第 140 項 (3)＝C「給Frank處理」） | Contact 頁 16 個按鈕解除反灰＋HT9050 的 5 個 EP 閘照 golden 打開；St02-E 被它那邊的權限檢查卡住、Steven 出差。細節在 §3 F-05，建議排在 F-04 盤點之後。 |

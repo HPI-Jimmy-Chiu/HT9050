@@ -36,3 +36,7 @@ fenced／inline code 與 wiki 字串完整保留。舊入口及 reference 路徑
 
 portal 原稿的 Maurice 寄信／個人 Copilot 鏡像條款保留作 20260923 歷史，
 不自動擴大本對話通知授權或建立第二套 Skill；本次 Skill 批次仍依 Steven 最新指示合 main／pull 後通知 RD5_SW。
+
+## 20261007 C++ 局部續查
+
+[目前 C++ 樹](current-cpp/index.md) 另釘住8f213da4f五個blob、六body／四RUN_INFO宣告；補兩版CalculateUPH／AddLoadingCount、V906日期helper、輸出差異與2473檔的六Profiler符號盤點。上述原稿／HTML pin未覆寫；所有caller、pause／counter、機型容量／site／校正與Profiler實作仍待查，不以零命中、呼叫或舊設計推定完整功能／磁碟／實機結果。

@@ -13,7 +13,7 @@ description: "Handler UPH 模型與機型差異：HT9045／9046 的歷史 Per-Tr
 - 秒數、HP／Tray 容量、site／每批顆數、良率及暫停扣除的口徑要寫清楚；示意預設值不能當機台量測值。
 - HT9050 計算頁的事件排程與動畫序列不同；兩個 repo 的 Hot／Ambient 支援也不同，見機型分流。
 - MotorProfiler、掃描／Home、安全門與 CSV 範例保留為歷史設計；先核對實際版本與當次授權，不能照舊稿直接啟動機台。
-- 本次來源與靜態查證範圍見 [來源與驗證](references/resources.md)；V906／V912 C++ 的 UPH 本體及機台量測仍待補。
+- 本次來源與靜態查證範圍見 [來源與驗證](references/resources.md)；[目前 C++ 局部證據](references/current-cpp/index.md) 與歷史／HTML分開，完整caller、容量與機台量測仍待補。
 
 ## 按問題選路
 
@@ -27,6 +27,7 @@ description: "Handler UPH 模型與機型差異：HT9045／9046 的歷史 Per-Tr
 | HT9045 Per-Tray、完整／精簡模式 | [9045／9046 對照](references/machines/ht9045.md) |
 | 客戶分支與計數口徑 | [客戶查證](references/customers.md) |
 | 原公式、11 項時間、Profiler、歷史案例 | [原文樹](references/history/index.md) |
+| V906／V912計算、計數、輸出與Profiler符號 | [目前 C++ 局部查證](references/current-cpp/index.md) |
 | 來源版本、metadata、原稿、相容入口 | [來源與驗證](references/resources.md) |
 
 ## 查證與交付

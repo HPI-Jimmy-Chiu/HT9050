@@ -26,4 +26,4 @@ description: "Handler客戶功能跨主題索引；查CUSTOMER_CODE、CC_與FUNC
 | 重新產生候選或檢查未分類項 | [唯讀scanner](references/scanner.md)／[待補與孤兒](references/pending.md) |
 | 新增客戶、名稱／報告雙向同步 | [Config客戶流程](../hpi-config/references/customer/index.md)／[權威](references/authority.md) |
 
-來源更新：[22時main核對](references/main-integration-20261006-222x.md)／[20時保存核對](references/main-integration-20261006-2022.md)，原候選、人工日期與新掃描摘要分開。
+來源更新：[最新main盤點](references/main-integration-20261007-114x.md)／[前次保存核對](references/main-integration-20261006-222x.md)，原候選、人工日期與新掃描摘要分開。

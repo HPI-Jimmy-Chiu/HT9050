@@ -24,5 +24,6 @@
 | Config | [客戶樹](../../../hpi-config/references/customer/index.md) | CC碼、名字與報告權威分開 |
 | Web HMI | [入口](../../../hpi-web-hmi/SKILL.md) | 尚無獨立customers.md；按登入／橋接／頁面條件核對，不推論無客戶差異 |
 | MotionView | [入口](../../../hpi-motionview/SKILL.md) | 尚無獨立customers.md；機型／資料與客戶條件另核對 |
+| UPH | [hpi-uph-model](../../../hpi-uph-model/references/customers.md) | CalculateUPH指定body三客戶局部列；一般VTEST／P11不造客戶碼，完整caller／輸出仍待查 |
 
 Shuttle是先前人工樣板；ST02的GPIB／SECS／RS232表沿用不重做。部分表含tester／廠商／通訊裝置或一般旗標，不能把每列升格成CUSTOMER_CODE分支。來源候選按CC分層，尚未完成全樹人工topic歸屬與六欄行為驗證。

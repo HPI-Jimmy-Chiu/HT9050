@@ -9,3 +9,5 @@
 | [轉碼與 fallback](encoding.md) | pw::Acp 及前層 Typed caller 的分工 | 平台API／CP_ACP組態、其他caller、字串constructor與完整登入效果 |
 
 本層是 V906 靜態 helper；V912 的 UI／密碼本路徑仍讀前層已釘住的指定 body，不把這些 C++ helper 套給 BCB6。沒有讀實際環境、密碼本或帳密，未執行API、build、runtime或機台；原候選與人工客戶列不增加。
+
+20261007 後續局部證據見[讀取／解碼／分欄與字串](../customer-login-readers/index.md)：補 V906 名稱清單 reader、TStringList 與 narrow 字串操作，以及 V906／V912 兩個算法 body 對照。此處原來未閉合的完整 reader／consumer／認證與磁碟效果仍未宣稱完成。

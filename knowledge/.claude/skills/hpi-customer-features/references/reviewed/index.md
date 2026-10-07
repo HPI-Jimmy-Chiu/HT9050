@@ -32,3 +32,9 @@
 - [登入結果／I37／PTI與密碼本局部對照](customer-login/index.md)
 
 - [密碼本namespace／路徑／格式與轉碼helper（局部）](customer-login-helpers/index.md)
+
+- [密碼本讀取／解碼／分欄與 V906 字串（局部）](customer-login-readers/index.md)
+
+- [Binary 密碼本結構／slot／編輯與回讀還原（局部）](customer-book-storage/index.md)
+
+- [EncodeStr／文字密碼本編輯與存檔回傳（局部）](customer-book-text/index.md)
