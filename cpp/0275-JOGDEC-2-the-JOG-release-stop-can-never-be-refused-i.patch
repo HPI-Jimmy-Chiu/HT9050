@@ -1,0 +1,99 @@
+From 618260d5800185e19fc1e982c19ac786ca2aad6b Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Wed, 7 Oct 2026 12:22:22 +0800
+Subject: [PATCH] JOGDEC-2: the JOG-release stop can never be refused into "no
+ stop", and only the jog release uses the Mot_Table Dec -- confirmed bugs from
+ the review of 2275fce (hourly bug loop).
+
+C1 (critical) EtherCAT/Pci1203Control.cpp kCmdAxStop (same line): Acm_AxStopDecEx with a NewDec above the axis's CFG_AxMaxDec (lowered
+   again by Test Range / Rate's InitMotor or the engine's InitMotor before a home; the card accepts CFG_AxMaxDec=dDec (80), op log) can
+   be refused, and nothing followed: no stop at all on the dead-man / locked-move / loop-cancel / Arm Cell / gear paths. Now any
+   failure of Acm_AxStopDecEx is followed at once by the plain Acm_AxStopDec (both codes on the console).
+C2 WebMotorAccess.cpp: g_jogStopDec was set by every jog-family write (selecting a motor, the scroll bar, a cell edit, All-mode) and kept,
+   so later auto-run / alarm / STOP-all stops of that axis also used the Mot_Table Dec (golden DecStop = PAR_AxDec). Now it is set only by
+   a successful jog START (DoJog / the Teach jog, same lines) and Stop1203 uses it ONCE and erases it (same line).
+C3 the same one-shot erase leaves no stale per-axis entry across a Rescan / re-open.
+tests/test_web_motor_access.cpp test_jog_dec_100pct: + one-shot check (the second stop of the jogged axis gives value 0). 1103/0;
+Pci1203Pure passed. The Acm_AxStopDecEx fallback itself has no unit test (vendor call inside HAVE_PCI1203). Not changed (plausible P1):
+PARAMSYNC's busy test does not cover page jobs (Motor Test loop / single-axis home, Teach moves). wb_serve compiled; the link waits for
+EastSun's running program. Scan 0.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203Control.cpp     | 2 +-
+ WebMotorAccess.cpp              | 8 ++++----
+ tests/test_web_motor_access.cpp | 5 +++++
+ 3 files changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/EtherCAT/Pci1203Control.cpp b/EtherCAT/Pci1203Control.cpp
+index 7408b33..d554f27 100644
+--- a/EtherCAT/Pci1203Control.cpp
++++ b/EtherCAT/Pci1203Control.cpp
+@@ -1728,7 +1728,7 @@ Pci1203CmdResult TPci1203Control::Run_(const Pci1203Cmd& c)
+             ret = Acm_AxJog(ax, (U16)WireDirToVendor(c.dir));
+             break;
+         case kCmdAxStop:
+-            ret = (c.value > 0) ? Acm_AxStopDecEx(ax, (F64)c.value) : Acm_AxStopDec(ax);   //AI(W906-JOGDEC) 20261007: see the validation above; same line
++            ret = (c.value > 0) ? Acm_AxStopDecEx(ax, (F64)c.value) : Acm_AxStopDec(ax);  if (c.value > 0 && ret != SUCCESS) { std::printf("  Acm_AxStopDecEx(ax=%d, dec=%.1f) -> 0x%08lX -- falling back to Acm_AxStopDec\n", c.axis, c.value, (unsigned long)ret); ret = Acm_AxStopDec(ax); }   //AI(W906-JOGDEC-2) 20261007: review of 2275fce (C1, critical) -- a NewDec above the axis's CFG_AxMaxDec (lowered again by Test Range / Rate or the engine's InitMotor) can be refused, and the axis must ALWAYS get a stop: on any failure the plain Acm_AxStopDec follows at once.  AI(W906-JOGDEC) 20261007: see the validation above; same line
+             break;
+         case kCmdAxEmgStop:
+             ret = Acm_AxStopEmg(ax);
+diff --git a/WebMotorAccess.cpp b/WebMotorAccess.cpp
+index f7727ea..9b5d282 100644
+--- a/WebMotorAccess.cpp
++++ b/WebMotorAccess.cpp
+@@ -239,7 +239,7 @@ bool g_mtShown = false;  std::map<int, double> g_jogStopDec;   //AI(W906-JOGDEC)
+ Pci1203CmdResult Stop1203(IMotorAccessBackend& be, int axis, long long wireId)
+ {
+     Pci1203Cmd c;
+-    c.kind = kCmdAxStop; c.wireId = wireId; c.axis = axis;  { std::map<int, double>::const_iterator jd = g_jogStopDec.find(axis); if (jd != g_jogStopDec.end() && jd->second > 0) c.value = jd->second; }   //AI(W906-JOGDEC) 20261007: EastSun「JOG 放開後 沒有馬上停 一直過去」(ruling 1007: 「JOG 一律用 Mot_Table 加減速 100%」) -- an axis this page jogged stops at its Mot_Table Dec (Acm_AxStopDecEx), not at the speed table's % (11:41 MOutArmZA: dec 80 = 1 % of 8000, slid 2.6 s / ~7700 counts after release). Same line
++    c.kind = kCmdAxStop; c.wireId = wireId; c.axis = axis;  { std::map<int, double>::iterator jd = g_jogStopDec.find(axis); if (jd != g_jogStopDec.end()) { if (jd->second > 0) c.value = jd->second; g_jogStopDec.erase(jd); } }   //AI(W906-JOGDEC-2) 20261007: review of 2275fce (C2/C3) -- ONE-SHOT: only the first stop after a jog START carries the Mot_Table Dec, then the entry is gone (auto-run / alarm / STOP-all stops of a merely selected axis keep golden's PAR_AxDec; no stale entry survives a Rescan)   //AI(W906-JOGDEC) 20261007: EastSun「JOG 放開後 沒有馬上停 一直過去」(ruling 1007: 「JOG 一律用 Mot_Table 加減速 100%」) -- an axis this page jogged stops at its Mot_Table Dec (Acm_AxStopDecEx), not at the speed table's % (11:41 MOutArmZA: dec 80 = 1 % of 8000, slid 2.6 s / ~7700 counts after release). Same line
+     const Pci1203CmdResult res = be.Pci1203Execute(c);
+     Pci1203Cmd x;
+     x.kind = kCmdAxSetExtDrive; x.wireId = wireId; x.axis = axis; x.value = 0.0;
+@@ -661,7 +661,7 @@ bool Send1203SpeedValues(IMotorAccessBackend& be, long long wireId, const Motion
+         c.kind = kCmdAxSetSpeed; c.wireId = wireId; c.axis = m.a.axis; c.speed = seq[i].which; c.value = seq[i].v;
+         const Pci1203CmdResult res = be.Pci1203Execute(c);
+         if (CmdFailed(res)) { why = "1203 設定速度失敗 —— " + CmdWhy(res); return false; }
+-    }  if (families & kFamJog) g_jogStopDec[m.a.axis] = jDec;   //AI(W906-JOGDEC) 20261007: Stop1203 stops this axis at its Mot_Table Dec from now on; same line
++    }   //AI(W906-JOGDEC-2) 20261007: g_jogStopDec is no longer set here (selecting a motor / the scroll bar / a cell edit write the jog family too) -- only a successful jog START sets it (DoJog / the Teach jog), see Stop1203
+     //AI(W906-JOG-VLTIME) 20261003: EastSun「M35 加減速已經設定成超大 一樣沒有動 反而是 我按了有一段時間 他會突然動很快」.
+     //  Acm_AxJog runs at CFG_AxJogVelLow for CFG_AxJogVLTime, then jumps to CFG_AxJogVelHigh; on a stepper velLow = InitSpeed *
+     //  percent (golden SetSpeed :915-921) is nearly standstill. golden writes CFG_AxJogVLTime = 0 with the jog family
+@@ -866,7 +866,7 @@ MotorAccessOutcome DoJog(const MotorAccessReq& r, long long wireId, IMotorAccess
+     c.kind = kCmdAxJogStart; c.wireId = wireId; c.axis = m.a.axis; c.dir = positive ? 1 : -1;   // Direction==0：JogP = DIRECTION_POS
+     const Pci1203CmdResult res = be.Pci1203Execute(c);
+     if (CmdFailed(res)) { Stop1203(be, m.a.axis, wireId); return Refuse(who + ": 1203 失敗 —— " + CmdWhy(res)); }   // leave jog mode again
+-    NoteIssued(be, m.a.axis);
++    NoteIssued(be, m.a.axis);  if (m.g.decDb > 0) g_jogStopDec[m.a.axis] = m.g.decDb;   //AI(W906-JOGDEC-2) 20261007: this jog's release stops at Mot_Table Dec (Stop1203, one-shot); same line
+     { JogRec j = { true, m.a.axis, m.a.motIndex, r.motors[0], r.source }; ForgetJog(true, m.a.axis, m.a.motIndex); g_jogs.push_back(j); }
+     return OkAck(r, "jogging", "pci1203",
+                  std::string(res.issued ? "sent: " : "accepted, NOT issued (dry): ") + res.wouldCall + "; " + note,
+@@ -3419,7 +3419,7 @@ MotorAccessOutcome DoTeachJog(const MotorAccessReq& r, long long wireId, IMotorA
+     Pci1203Cmd c; c.kind = kCmdAxJogStart; c.wireId = wireId; c.axis = m.a.axis; c.dir = positive ? 1 : -1;   // ruling 6B: JogP = wire +1 (DIRECTION_POS)
+     const Pci1203CmdResult res = be.Pci1203Execute(c);
+     if (CmdFailed(res)) { Stop1203(be, m.a.axis, wireId); return Refuse(who + ": 1203 失敗 —— " + CmdWhy(res)); }   // leave jog mode again (as DoJog)
+-    NoteIssued(be, m.a.axis);
++    NoteIssued(be, m.a.axis);  if (m.g.decDb > 0) g_jogStopDec[m.a.axis] = m.g.decDb;   //AI(W906-JOGDEC-2) 20261007: this jog's release stops at Mot_Table Dec (Stop1203, one-shot); same line
+     { JogRec j = { true, m.a.axis, m.a.motIndex, r.motors[0], r.source }; ForgetJog(true, m.a.axis, m.a.motIndex); g_jogs.push_back(j); }
+     return OkAck(r, "jogging", "pci1203", std::string(res.issued ? "sent: " : "accepted, NOT issued (dry): ") + res.wouldCall + "; " + note,
+                  m, 0, false, 0, false);
+diff --git a/tests/test_web_motor_access.cpp b/tests/test_web_motor_access.cpp
+index 8a6d77d..2cd9c32 100644
+--- a/tests/test_web_motor_access.cpp
++++ b/tests/test_web_motor_access.cpp
+@@ -7050,6 +7050,11 @@ void test_jog_dec_100pct()
+     double stopDec = -1;
+     for (std::size_t i = 0; i < be.executed.size(); ++i) if (be.executed[i].kind == kCmdAxStop && be.executed[i].axis == 6) stopDec = be.executed[i].value;
+     CHECK(o.ok && stopDec == 8000.0, "the jog release stops the axis with Acm_AxStopDecEx at Mot_Table Dec 8000 (kCmdAxStop value)");
++    be.executed.clear();   // AI(W906-JOGDEC-2) 20261007: review of 2275fce (C2) -- one-shot: the next stop of the same axis (an alarm / STOP-all / auto stop) keeps golden's PAR_AxDec
++    (void)MotorAccessDispatch(rel, 41, be);
++    double stop2 = -1;
++    for (std::size_t i = 0; i < be.executed.size(); ++i) if (be.executed[i].kind == kCmdAxStop && be.executed[i].axis == 6) stop2 = be.executed[i].value;
++    CHECK(stop2 == 0.0, "one-shot: a second stop of the same axis after the jog release -> plain Acm_AxStopDec (value 0)");
+     be.executed.clear();
+     MotorAccessReq relB = Req("uMotorTest", "stop", "B"); relB.button = "sbMotorTest_JogN";
+     (void)MotorAccessDispatch(relB, 42, be);
+-- 
+2.55.0.windows.5
+
