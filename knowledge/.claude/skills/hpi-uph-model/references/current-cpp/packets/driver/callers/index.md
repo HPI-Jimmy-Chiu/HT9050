@@ -20,3 +20,19 @@
 ## 初始化前置與介面選擇
 
 [前置／連線規則／有效TestType](init-selection/index.md) 補查opt-out之前的hook安裝、socket建立及非ON_LINE介面選擇；仍分清callee未閉合與runtime未驗證。
+
+## 設定發布與Hub／thread
+
+[設定／Aux recipe／Hub啟停](settings-hub/index.md) 接續PublishSettings與GpibAux的callee，分清seed副作用、非同步Start、Stop出口及客戶INI分流；完整caller、容量／ABI／實機仍待續。
+
+## Tick 與 Aux 設定 consumer
+
+[Tick／bridge設定／Aux COM](tick-consumer/index.md) 補查設定發布次序、QA close guard、INI／recipe consumer 與 COM/SIM 啟停；等待結果、完整 caller 與機台量測仍分開查證。
+
+## Aux 表單與 transport 設定
+
+[Aux 所有權／表單保存／DCB](form-settings/index.md) 接續 consumer 的 constructor／destructor、欄位與 INI 映射及 ApplyCommState_，分清 timeout、歷史 header 與當前來源；完整 caller／driver／實機仍待續。
+
+## Callback 與接收佇列生命期
+
+[reader／SIM callback、Impl與QueueRx／DrainRx](callback-lifetime/index.md) 補查 buffer 複製、closeRequested派送次序及有限等待的證據界線；不把排入佇列當送達或完整shutdown已驗證。
