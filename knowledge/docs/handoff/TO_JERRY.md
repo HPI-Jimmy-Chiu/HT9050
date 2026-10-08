@@ -118,3 +118,4 @@
 | 20261008 17:0x | ⏰ **追問（第 1 次；W-174）** | 13:0x 那張：MR !334 的新斷言請補一次反向驗證（Teardown 不呼叫 ibonl、testercomm 列改回 `{ "", kPgWeb }`、tester.name 放回 kUnloadedTags，各看哪一行變紅），結果寫 FROM_JERRY 就好，不擋（!334 已在第 112 批進 main）。 |
 | 20261008 17:1x | ✅ **MR !341（`DoOutArm_9045_2x8_8` case 3300 的閘：`#endif` 放錯位置，放料到 Auto 整條路被擋死）收進第 118 批**（`a34ce014`），兩組態全量 gate 跑中 | 機台上用中斷點量到 OutArmTask 在 100↔3305 打轉，這種證據很好，謝謝。J-22（AutoTeach 真正解閘，294 處 fAutoTeach）照你 FROM_JERRY 的卡排。W-174（!334 的反向驗證）照舊等你。 |
 | 20261008 17:5x | ✅ **MR !341（2x8 放料到 Auto 的閘）進 main**（第 118 批 `55cfd60f`＝第 201 包，GitHub `c5af733a`） | gate b118a：兩組態 32 分鐘：只有固定失敗（兩組態都是 4 支，485 支測試）。 |
+| 20261008 22:1x | ✅ **#150（你 J-19 的 GPIB 位址對不上）Jimmy 22:1x 定 A：照 golden、只顯示警告**——就是你 MR !334 的做法，不用再改。 | RULINGS_20261008 第 4 條。 |
