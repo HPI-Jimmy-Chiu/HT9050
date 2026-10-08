@@ -56,6 +56,7 @@ description: >
   - 做法：送出最後一則回報時告訴 St02-M「這件交出去了」，由它請 Steven 在 St02-E 的 session 手動打 `/compact`（St02-M 1008 13:2x）。
   - 壓縮前先確認 `references/current-state.md` 寫齊了接手需要的東西（壓縮後第一件事就是重讀它）。
   - 起因：同一個帳號的 5 小時用量一輪就跳 15 點；St02-M 的巡檢也改成每 30 分鐘、每 5 小時壓縮一次。
+- **寄信的主旨一律以「[ST Agent] 」開頭（Steven 本人 1008 17:3x／17:5x，St02-M 轉）**：ST 組（ST01、ST02＝St02-M 與 St02-E、ST-GPT）寄出的每一封信，不論寄給誰，主旨開頭都是 `[ST Agent] `（例：`[ST Agent] [Skill] …`），除非 Steven 另外說。St02-E 平常不寄信；哪張工作卡要寄（例：給 Jimmy 的通知），就照這個寫。
 
 ## 2. 驗證規則（編譯＋本機跑 ctest）
 

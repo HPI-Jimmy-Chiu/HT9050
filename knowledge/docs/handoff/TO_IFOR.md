@@ -205,3 +205,4 @@
 | 20261008 14:2x | ✅ **MR !335（POOL-2 `cinitial.cpp` 8 個開 7 個）進 main**（第 113 批 `23a102e0`＝第 196 包，GitHub `7df83ed0`） | gate b113a：兩組態 33 分鐘：只有固定失敗（兩組態都是 4 支，478 支測試）。RotateKit 進／出照你的認領做，下一張 MR 一樣收進批次。 |
 | 20261008 15:0x | ✅ **MR !336（POOL-2 RotateKit，14 個普查巨集閘全開）進 main**（第 114 批 `3117d120`＝第 197 包，GitHub `2c6236f4`） | gate b114a：兩組態 32 分鐘：只有固定失敗（兩組態都是 4 支，479 支測試）。下一支照 POOL-2 自己挑（先查 linked.tsv 兩個組態都 linked、沒人認領）。 |
 | 20261008 17:1x | ✅ **MR !342（POOL-2 `aoutarm9045.cpp` 8 個開 7 個＋InspectOutArmPosition＋ainarm INADD）收進第 118 批**（`a34ce014`），兩組態全量 gate 跑中 | 跟 Ifor-GPT 的 !343 在 `tests/CMakeLists.txt` 檔尾撞了，兩段都留。下一支照 POOL-2 自己挑。 |
+| 20261008 17:5x | ✅ **MR !342（POOL-2 `aoutarm9045.cpp`）進 main**（第 118 批 `55cfd60f`＝第 201 包，GitHub `c5af733a`） | gate b118a：兩組態 32 分鐘：只有固定失敗（兩組態都是 4 支，485 支測試）。下一支照 POOL-2 自己挑。 |

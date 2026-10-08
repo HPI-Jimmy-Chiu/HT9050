@@ -1,5 +1,19 @@
 # St02 現況板（更新：2026-10-08 12:4x，壓縮前）
 
+## ★ 1008 16:2x（重置後）
+- W-175＝!337 ✅ 已進 main（第 115 批 aa0cf103＝包 198）。
+- **普查 v3＝MR !340**（`v906/st02-c12-v3` `cf1bfdbd`，從 main 4be2621b）：工具修正＋重新產生的普查表（golden 0618；手寫 §9-§11 保留、新加 §12）＋`docs/handoff/c12_raw_v3/`。每頁比較 `w150\c12_compare.txt`。
+- **17:5x W-178 第 1 部分（W-150 第 4 片）進行中**：分支 `v906/st02-w178-tri-lotinfo`（main 42323e80＝第 118 批），認領 FROM_STEVEN §1 bddf4c3a。改好 TriTemp.cpp :249／:268／:330／:342／:106／:120、fLotInfo.cpp :6631／:6633／:6639／:6642、LogObjects.h:27＋檔尾，新測試 St02_W150LogSplit4（開關門 log 用 DoorOpenAlarmForTriTemp、露點計用 fCheckDewPointStatus：DewPoint_Hardware_Install=1、Tri_Temp_Machine=1、dAdamValue_Degree=12.5，等 1.15 秒再叫一次）。接著：兩組態建置 → #6 → ctest → 反向 → 推。
+  第 2 部分（低良率告警一筆一筆）：照 S-17D 的 recent[] 模式——C++ `tools/wb_dialog_mailbox.h` AlarmPost 在請求檔帶最近 8 筆、`web/page/dialog-bridge.js` inspect() 逐筆入列；動到所有告警共用的契約（web/JSON/Dialog-bridge-contract.json 1.3.1）、tests/test_notice_ack.cpp 釘住請求 JSON 的位元組 ⇒ 認領稿先送 St02-M（St01 是 S-17 的擁有者）。
+- 新規則（SKILL.md §1，Steven 17:3x）：寄信主旨一律以「[ST Agent] 」開頭。
+- **下一步：W-178**（從最新 main 開）：(1) W-150 第 4 片——先在最新 main 重量 claim_s4.md 的行號送 St02-M、等 §1 登記；(2) 低良率告警一筆一筆顯示（S-17 那套信箱／網頁 FIFO）。
+
+## ★ 1008 14:2x 存檔點（5 小時用量 90%+；重置後從這裡接）
+- **W-175**：分支 `v906/st02-w175-lowyield`＝程式 `ec79500c`＋文件 `8627e936`，在 main 23a102e0（第 113 批）上；測試回合在 37a048f1 上全綠（新測試 22/22 兩組態各兩次、相關 17 支、反向 R1-R6 全紅、#6 完整、備份 0）。推之前在最終 tip 兩組態再建一次（背景，log `s09close\w175f_{sim,ship}.log`）；**已推，MR !337**（14:3x；最終 tip 兩組態建置 0 errors＋PE 檢查過）。commit 訊息裡有全部驗證與人工審查。
+- **W-178（下一張，W-175 之後）**：(1) W-150 第 4 片（TriTemp 替身→真物件、fLotInfo.cpp:6637→fMain->slLotInfolog／as9045LogPath），照 `w150\claim_s4.md`，開工時在當時最新 main 重量行號、等 St02-M 在 §1 登記；(2) 低良率告警一筆一筆顯示（S-17 那套信箱／網頁 FIFO 能不能直接用；W-175 沒做）。
+- **普查 v3**：工具修正在本機分支 `v906/st02-c12-tabfix` `727d5801`（還沒推）；整份重跑已完成，輸出 `C:\AI_TempFile\st02e-scratch\c12tree\HT9011UC_Cpp_V3.33.906.0\tools\webprobe\c12_click_v3.tsv`／`.log`，**還沒合併**：`python c12_button_census.py --merge c12_click_v3.tsv --out-tsv … --out-md …`（在 c12tree 跑，golden 0618），補回手寫 §9-§11，報每頁數字＋新 D 類給 St02-M，工具修正另開 MR（從最新 main 開，把 727d5801 cherry-pick 過去）。
+- 建置線 s39 停在 W-175 tip；c23 在 `v906/st02-w175-lowyield`。暫存腳本都在 `C:\AI_TempFile\st02e-scratch\w150\`。
+
 ## ★ 1008 12:4x 接手段（壓縮後從這裡接；下面 10:1x 那段是今天的細節）
 - 我＝**ht9045-46**（St02-E，STEVEN-NB3）；St02-M＝**ht9045-5b**（回訊息用它最新的 `from=`）。用 SendMessage 回報；不直接找 Jimmy。
 - **新規則（Steven 1008 12:4x，已寫進 SKILL.md §1）**：每交出一件工作（推／MR、紀錄、回報都做完）就用 CronCreate 排一次性 `/compact`（2 分鐘後），觸發後確認有壓縮，沒有就告訴 St02-M。
