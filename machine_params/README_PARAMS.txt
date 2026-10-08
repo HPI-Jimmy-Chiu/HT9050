@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-08 16:41
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 9a26b7d docs: WORKLOG row 209 -- CYLNOREDELAY (691374b, made in another session): HT9050 c／web e94a028。
+HT9050 機台參數快照（machine_params\）—— 2026-10-08 18:44
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ bcfdeba PROBECYL9050: the HT9050 Empty probe sets its cylinders once, then each layer only／web e94a028。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置

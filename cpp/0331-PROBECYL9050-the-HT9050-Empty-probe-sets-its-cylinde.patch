@@ -1,0 +1,155 @@
+From bcfdebac94fe4bd8c71e464f6bd9624a53abbff2 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 8 Oct 2026 18:44:43 +0800
+Subject: [PATCH] PROBECYL9050: the HT9050 Empty probe sets its cylinders once,
+ then each layer only moves Z -- EastSun 1008 'why is the Empty so slow' ->
+ 'continue'.
+
+15:57-16:00 each probe layer took 27-38 s: case 100 re-ran `EdgeClip.Pop() && EdgePush.Pop() && LoaderZ_Select.Pop() &&
+C_Empty_Up.Push()` every layer, and the sensorless EdgeClip / EdgePush (1.5 s delay, IO_Table, WORKLOG 207) restarted their delay
+on every call, the && chain restarting them in turn.
+acatchtray.cpp W906_ProbeEmpty9050: s_iEmptyProbeCylOk9050 (same-line declaration) is cleared when a probe starts (case 1, and
+  W906_InitProbeEmpty9050) and set when the chain is first satisfied; case 100 reads `s_iEmptyProbeCylOk9050 || <chain>` (&& binds
+  before ||), so later layers go straight to MotorMove + SenEmptySelectHasTray. Same lines, no line moves.
+This commit holds only these 5 lines on top of HEAD; EastSun's own uncommitted acatchtray.cpp edits (the chain he changed, DoCatchFromEmpty
+  conditions, :9817) stay in his working tree, as do cinitial.cpp and asendic_Loader.cpp.
+tests: test_flow9050_tray.cpp [PC] (4 checks, with a control: a cylinder not in place stops the probe before its first move; once
+  set, an EdgeClip that would never finish no longer stops layers 8..0). Flow9050_Tray 142/142. Debug and release linked.
+WORKLOG rows 210 (+ correction in 209) and section 3 tools 0172 (designer session, ca80d28 / 5df73910).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ acatchtray.cpp               | 10 +++----
+ docs/WORKLOG_MACHINE.md      |  4 ++-
+ tests/test_flow9050_tray.cpp | 56 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 64 insertions(+), 6 deletions(-)
+
+diff --git a/acatchtray.cpp b/acatchtray.cpp
+index a8f94b6..b7f4c72 100644
+--- a/acatchtray.cpp
++++ b/acatchtray.cpp
+@@ -9910,11 +9910,11 @@ bool DoCoverTray(int iAuto)
+ //  tray at Up[n-1]+lift and makes n-1. Type_HT9050 paths only; golden untouched.
+ //==============================================================================
+ int W906_TrayZ9050Home(int zone);
+-static int s_iEmptyProbeTask9050 = 1, s_iEmptyProbeLayer9050 = 0, s_iEmptyProbeFirst9050 = 0, s_iEmptyNoTray9050 = 0;
++static int s_iEmptyProbeTask9050 = 1, s_iEmptyProbeLayer9050 = 0, s_iEmptyProbeFirst9050 = 0, s_iEmptyNoTray9050 = 0, s_iEmptyProbeCylOk9050 = 0;   /* AI(W906-PROBECYL9050) 20261008: EastSun 1008 'Empty moves so slowly' -- the probe sets its cylinders ONCE (1 = done), then each layer only moves Z; the sensorless EdgeClip / EdgePush (1.5 s delay, IO_Table row 207) restarted their delay on every scan of the && chain, 27-38 s per layer */
+ void W906_InitProbeEmpty9050()
+ {
+     s_iEmptyProbeTask9050 = 1;
+-    s_iEmptyNoTray9050    = 0;
++    s_iEmptyNoTray9050    = 0;  s_iEmptyProbeCylOk9050 = 0;   /* AI(W906-PROBECYL9050) 20261008 */
+ }
+ //  Probe (MEmptyZ): Home, then Up[L] from the deepest layer not below Home, one layer up per step, until SenEmptySelectHasTray => L+1 trays.
+ int W906_ProbeEmpty9050()
+@@ -9937,16 +9937,16 @@ int W906_ProbeEmpty9050()
+                 L = MAX_LOADER_LAYER_9050 - 1;
+                 while(L > 0 && W906_TrayZ9050(1, 1, L) < W906_TrayZ9050Home(1))  // never below Home
+                     L--;
+-                s_iEmptyProbeFirst9050 = L;
++                s_iEmptyProbeFirst9050 = L;  s_iEmptyProbeCylOk9050 = 0;   /* AI(W906-PROBECYL9050) 20261008: a new probe sets the cylinders again */
+                 Task = 100;
+                 #endif
+             }
+             break;
+         case 100:
+-            if(Cylinder[C_EmptyEdgeClip].Pop() &&
++            if(s_iEmptyProbeCylOk9050 || Cylinder[C_EmptyEdgeClip].Pop() &&   /* AI(W906-PROBECYL9050) 20261008: set already -> skip the chain (&& binds before ||) */
+                Cylinder[C_EmptyEdgePush].Pop() &&
+                Cylinder[C_EmptyLoaderZ_Select].Push())
+-            {
++            {   s_iEmptyProbeCylOk9050 = 1;   /* AI(W906-PROBECYL9050) 20261008: cylinders in place -- the next layers only move Z */
+                 if(MOT[MEmptyZ].MotorMove(W906_TrayZ9050(1, 1, L)) == 1)
+                 {
+                     if(Sen[SenEmptySelectHasTray].IsOn())
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index d5c7d92..ff45e2e 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -84,7 +84,8 @@
+ | 169 | **Out Shuttle Z 位置還原**（EastSun「剛剛說的teach 沒有indexZ 高度可以設定 我說錯了 可以不用改 在其他頁面已經可以設定了」）：revert web 113a1ef，控制項回到套件 149 的原位置；給 Jimmy 的說明同步更正 | web 4e68790；cpp（本列） | — |
+ | 170 | **只查：實體 HOME 鍵沒反應**（EastSun「我實體按鈕案home都沒反應」）：PadCommLog 今天實體按鍵封包（t05x400…）只到 09:15:57，最後一筆 HOME＝t050400002020（HOME 0x20＋ALARM RESET 0x2000 卡住，golden ScanPannelKey ALARM RESET 最後判斷蓋掉 HOME）；之後只有程式送出的燈號回音（0006/0016＝PAUSE 燈閃，Teach 頁訊息框開著時）。EventLog 10 筆 MES2112 全是網頁軟鍵。程式這條路與 golden 相同，不改碼；請查面板 ALARM RESET 鈕／按鍵線。17:00 release 補建 | — | — |
+ | 171 | **ALARM RESET 卡住時其他實體鍵照常**（EastSun「就算reset卡住其他按鈕不是也要可以用?」→ 選「改」）：ckernel.cpp ScanPannelKey 前／後面板共 4 處 ALARM RESET 判斷，按著不放（已鎖存）時不再蓋掉同時按的其他鍵；剛按下那一下照 golden 優先。備份 D:\HT9045\_review\ckernel.cpp.bak_rstheld_20261007_172605 | cpp（本列） | ScanKeyGolden（新增 4 項）、MainScanKey、W7_L2_CKernel、SysinitBoot、St02_N07Alarm、St02_PadInterface 全過；Debug 17:30／release 17:31 |
+-| 209 | **HT9050 氣缸：已確認到位、感測仍在位就不再重等延遲**（另一個工作階段做、本工作階段推：EastSun 1008「目前的狀況是等待太久，若同一個判斷式導致每次呼叫都要等待確認的時間，有什麼辦法可以解決」→ 選 B（改氣缸、只 HT9050））：golden Push／Pop 完成後 Task=1，下一次呼叫又重跑一次 On／OffDelayTime；`A.Pop() && B.Pop() && Select.Pop() && C_Empty_Up.Push()` 每圈都重等。mycylin.cpp（同行附加＋檔尾，行號不動、class 佈局不變）：Push／Pop 完成時把該 Cylinder[] 記為「確認 on／off」，On／Push 與 Off／Pop 清掉反向的確認；確認中且該氣缸**有**那一側感測器、感測仍在位 ⇒ Push／Pop 立刻回 true。沒有感測器、感測掉了、raw On()、其他機種、ctest ＝ golden。由 JsonBridge/W906DualCoil9050.cpp 的 registrar 掛 g_W906CylNoReDelayHook（AI(W906-CYLNOREDELAY)，commit 691374b）。⚠ 限制：Empty／Loader／Auto 的 EdgeClip、EdgePush 沒有到位感測器（207 列設 1.5 秒延遲）⇒ 不受這個修正影響，Empty 探層每層仍會因這兩顆的 1.5 秒延遲在 `&&` 串裡輪流重計而變慢（15:57～16:00 每層 27～38 s）；要解得在探層開始時收一次氣缸、之後每層只動 Z，或補感測器 | cpp（691374b） | test_dualcoil9050 35/35（新增 [6]）；另一工作階段 ctest 24 項氣缸／HT9050 測試 21 過，MotorPoints_HT9050／MachineSuckers_HT9050／MachineMotors_HT9050 因今天改了 Mot_Table／IO_Table 的釘選值而失敗（與氣缸程式無關）；acatchtray.cpp:9817 EastSun 未提交修改中多出的「f」已由該工作階段移除 |
++| 210 | **Empty 探層：氣缸只收一次，之後每層只動 Z**（EastSun「empty 的部分怎麼動作那麼遲緩，是哪邊影響的」→ 15:57～16:00 每層 27～38 s：探層 case 100 每層重跑 `EdgeClip.Pop() && EdgePush.Pop() && LoaderZ_Select.Pop() && C_Empty_Up.Push()`，沒有到位感測器的 EdgeClip／EdgePush 每次呼叫重計 1.5 s（207 列）、`&&` 由左至右輪流重計 → 「繼續」）：acatchtray.cpp W906_ProbeEmpty9050 加 s_iEmptyProbeCylOk9050：探層開始（case 1 算出起始層時、W906_InitProbeEmpty9050）清 0；case 100 條件改成 `s_iEmptyProbeCylOk9050 || <EastSun 的四個條件>`（&& 先於 ||），條件成立進 `{` 時設 1 ⇒ 之後每層直接 MotorMove＋看 SenEmptySelectHasTray。EastSun 改過的四個條件原樣（AI(W906-PROBECYL9050)，同行＋同行宣告，行數不變）。提交只收這 5 行：index 放「HEAD＋本修改」，EastSun 未提交的 acatchtray.cpp（DoCatchFromEmpty 條件、探層條件、:9817）、cinitial.cpp、asendic_Loader.cpp 仍留在工作目錄。另：1008 晚更正 209 列「三支測試因今天改表而失敗」的說法（見 209 列） | cpp（本列） | Flow9050_Tray 142/142（新增 [PC] 4 項：對照「氣缸還沒到位 ⇒ 第一次就停住」、條件成立 ⇒ Up[9]=300、EdgeClip 再設成永遠不會完成 ⇒ 第 8～0 層照跑、盤數 0）；Debug 18:43:50、release 18:44:00 已連結 |
++| 209 | **HT9050 氣缸：已確認到位、感測仍在位就不再重等延遲**（另一個工作階段做、本工作階段推：EastSun 1008「目前的狀況是等待太久，若同一個判斷式導致每次呼叫都要等待確認的時間，有什麼辦法可以解決」→ 選 B（改氣缸、只 HT9050））：golden Push／Pop 完成後 Task=1，下一次呼叫又重跑一次 On／OffDelayTime；`A.Pop() && B.Pop() && Select.Pop() && C_Empty_Up.Push()` 每圈都重等。mycylin.cpp（同行附加＋檔尾，行號不動、class 佈局不變）：Push／Pop 完成時把該 Cylinder[] 記為「確認 on／off」，On／Push 與 Off／Pop 清掉反向的確認；確認中且該氣缸**有**那一側感測器、感測仍在位 ⇒ Push／Pop 立刻回 true。沒有感測器、感測掉了、raw On()、其他機種、ctest ＝ golden。由 JsonBridge/W906DualCoil9050.cpp 的 registrar 掛 g_W906CylNoReDelayHook（AI(W906-CYLNOREDELAY)，commit 691374b）。⚠ 限制：Empty／Loader／Auto 的 EdgeClip、EdgePush 沒有到位感測器（207 列設 1.5 秒延遲）⇒ 不受這個修正影響，Empty 探層每層仍會因這兩顆的 1.5 秒延遲在 `&&` 串裡輪流重計而變慢（15:57～16:00 每層 27～38 s）；要解得在探層開始時收一次氣缸、之後每層只動 Z，或補感測器 | cpp（691374b） | test_dualcoil9050 35/35（新增 [6]）；另一工作階段 ctest 24 項氣缸／HT9050 測試 21 過，MotorPoints_HT9050／MachineSuckers_HT9050／MachineMotors_HT9050 失敗（與氣缸程式無關；1008 晚更正：不是「今天改了 Mot_Table／IO_Table」——這三支讀 ../machines/HT9050/ 的表副本，最後修改 9/24、9/30，今天沒動；是 §3 包 163 起就記的已知失敗：筆電包的測試釘筆電那份 HT9050 表的值）；acatchtray.cpp:9817 EastSun 未提交修改中多出的「f」已由該工作階段移除 |
+ | 208 | **除錯中斷恢復後先等一筆新的 1203 IO，才判斷 IO 是否過時**（EastSun「請改中斷的時候 所有計數 暫停 直到中段再次啟動」→「你幫我用最合理的方式改」→「想辦法啊」；14:32 停在中斷點 21 s ⇒ 恢復時主執行緒先到 Pci1203IoThreadAdopt、IO 執行緒還沒讀完新的一輪 ⇒ 標成「卡沒開」⇒ LINK 斷線、路由拒絕、IsIndexMotorOutOfPower ⇒「EMG/Servo sensor error」）：先試 gdb non-stop（只停一條執行緒）——gdb 17.2 實測「The target does not support running in non-stop mode」，不可行，launch.json 沒改。改 EtherCAT/Pci1203Monitor.cpp：Pci1203IoThreadAdopt 開頭（同行）呼叫 W906IoAfterSuspendWait_（檔尾）：主執行緒自己上次呼叫 Adopt 距今 ≥ kW906IoStaleMs（3 s，＝整支程式被停住，不是 IO 執行緒自己卡死）⇒ 最多等 kW906IoStaleMs，等到恢復後完成的一筆新 poll 再照原本規則走；等不到 ⇒ 照舊標過時（WAR16152、EMG/Servo），偵測不放寬、也不拿舊值判斷。console 印「[IOTHREAD] resume: … waited N ms … got one / none came」（AI(W906-IORESUME)）。其他以牆鐘計時的逾時（氣缸、吸嘴等）沒有暫停：中斷時正在等的動作，恢復後仍可能逾時跳 JAM | cpp（本列） | Pci1203Seam／Pure／MotorRoute／LinkWatch／ModuleCheck／Reopen、Idx1203GaliBranch、IndexZTorque1203／AutoHeight1203 過（這些測試不啟動 IO 執行緒，新路徑沒有 ctest 覆蓋 → 機台實測：中斷再繼續看 console 那行、不再跳 EMG/Servo）；release 15:35、Debug 15:35:47 已連結（15:36 開的就是這版） |
+ | 207 | **Loader／Empty／Auto1～3 的 EdgePush、EdgeClip 延遲改 1.5 秒**（EastSun「幫我把loader 與 unloader 的 edgepush 和clip  IO_TABLE delay time 設成1.5秒」；前因：14:41 Empty 探層時 EdgeClip／EdgePush 沒有到位感測器，Pop() 只等 OffDelayTime 1＝0.1 秒就算收回，MEmptyZ 上升撞機）：氣缸延遲單位 0.1 秒（cinitial.cpp:5103-5104 直接取欄位值；mycylin.cpp:484／632 Set0_1SecAndOn）⇒ 1.5 秒＝15。D:\HT9045\system\IO_Table.csv 十列主氣缸（引擎物件）C_LoaderEdgePush／Clip、C_EmptyEdgePush／Clip、C_Auto1～3EdgePush／Clip 的 OnDelayTime、OffDelayTime 都改 15（原本多為 1／1，Auto1～3 EdgePush 為 5／1）；Off 線圈列（…Off，非引擎物件、延遲不被讀）不動。「unloader」照 HT9050 出料側含 Empty 與 Auto1～3。行尾 CRLF 1127／1127 不變。備份 D:\HT9045\_review\IO_Table.csv.bak_edgedelay_20261008_151728。重開生效；仍是「等時間」不是「確認到位」，有感測器時應填 _On／_Off 列 | 機台設定（本列） | 檔案比對（只差 10 列）、行尾比對 |
+ | 206 | **In Arm 吸真空等待改 2 秒：IO_Table InArmSuckA OnAlarmTime 5→20**（EastSun「可是剛剛掉 IC」→ 14:57:20 吸取 1000 → 14:57:21 1010：A／C／E 群組在時限內沒有全部 ON ⇒ Suck() 重試後 Normal()（關真空）＋Error ⇒ 1010 Z 上升 ⇒ IC 掉（mykitsuck.cpp:2304-2333）→ EastSun「我現在適用VC4 所以你要用VC4的偵測 不能用IO」→ 只讀代理＋本人複核：VC4「真空 OK」＝DI 64+VC（EtherCAT/Pci1203Vc8.h:40、:117），In Arm 感測列 InArmSuckA／C／E＝160／64、65、66 正是 VC4 站 0xA0 的 VC0～VC2 OK 位元（VacuUnitType=1，Gerneral.ini:199），引擎與 Vacuum Unit 頁讀同一個位元，不用改讀法 → 「改2秒」）：吸嘴時限＝Sucker 列 OnAlarmTime ×10（cinitial.cpp:593）再 ×10 ms（mykitsuck.cpp:2293 TOn.SetMSAndOn）⇒ 單位 100 ms；原本 5＝500 ms（先前對 EastSun 說成 50 ms，已更正）。D:\HT9045\system\IO_Table.csv 第 592 列 InArmSuckA（群組主吸嘴，整組用它的時限）OnAlarmTime 5→20（＝2 秒；一度誤寫 200＝20 秒，同一分鐘內改正）。備份 D:\HT9045\_review\IO_Table.csv.bak_inarmAalarm_20261008_150411。重開生效。另記一次：oplog 每分鐘一批「SDO 8040h～8070h 不在 ECAT-VC4 的清單 → REFUSED」＝照 VC8 寫 VC4 沒有的 VC4～VC7，被擋、不影響 VC0～VC3 | 機台設定（本列） | 檔案比對（只差第 592 列） |
+@@ -345,6 +346,7 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-06 | 158 | 31e2b21（GitLab bc2891cc） | 本 commit（只有文件），EastSun「一樣最佳化執行緒 更新版本」。程式部分＝機台自己的 IOTUNE-D（cpp 0232）收進 main，wb_serve.cpp 合併結果＝機台檔（不寫，避免觸發重編）；設計外掛照規定跳過；收 docs 三份＋MACHINE_PATCHES_20261006.md。README／RULINGS_20261006 第 8 條：**Jimmy 1006 #128＝A（機台先關 IO 執行緒，等審查 #1～#3 修好再開）、#127＝B（機台節拍改 500）**——EastSun 1006 裁決：**IO 執行緒照開、機台端現在修審查 #1～#6**；**節拍維持 100**，把今天量測（IO 執行緒＋IOTUNE-D 後主迴圈最慢一圈約 25 ms，照 Jerry「tick ≥ 3×最壞單趟」100 就夠；單執行緒約 125～141 ms 才需要 500）回報 Jimmy | 見推送紀錄 |
+ | 10-07 | 設計外掛 tools 0170 | — | 設計外掛工作階段自己推（分支 a6cadd2，GitHub dc7975ff）：依序合併筆電包 162、163、167、168 的設計外掛（0.197.0 → 0.234.0），164～166、169～172 沒帶設計外掛；無衝突，機台自己的設計外掛功能都保留；測試修正：建置視窗進度條在矮視窗不再塌掉、面板繪製測試固定 Edge 視窗大小；run_all 3/3、vscode_it 161/161，已安裝 0.234.0；只動 tools/vscode-htdesigner | tools 0170 |
+ | 10-08 | 設計外掛 tools 0171 | — | 設計外掛工作階段自己推（commit b453060，GitHub f42c142b）：EastSun 1008 方案總管的 Debug／Release 按鈕按不了（0.234 在 ▶＝F5 時把它變灰）→ 裁決「連動F5 release 和debug」：按鈕恢復可按，resolveDebugConfiguration 依按鈕把 F5／▶ 的啟動目標換成 build_integ_dbg_x86 或 build_integ_ship_x86 那一組；「模擬」仍是灰的。run_all 3/3；vscode_it 沒跑成（VS Code 自己的更新程式 CodeSetup 從 10/07 18:34 起佔住執行個體鎖）。vsix 已安裝，版本號沒變，要重新載入視窗才生效；只動 tools/vscode-htdesigner | tools 0171 |
++| 10-08 | 設計外掛 tools 0172 | — | 設計外掛工作階段自己推（commit ca80d28，GitHub 5df73910）：EastSun 1008「請更新版本」→ 合併筆電包 193、196～201 的設計外掛（0.234.0 → 0.293.0；194、195 沒帶設計外掛）。193 有 4 個衝突，都在 Debug／Release ↔ F5 連動，取筆電版；197 起的 ES02 在 run.simulation 沒明確設定時把機台的 pairedConfig（tools 0171）帶回來（機台優先），有設定時 F5 走筆電的模式建置（build_f5_<mode>__<folder>）。機台自己的功能都保留；機台資料夾切換與 9050 同步只在 hp9050Root 有設時動作（預設空、這台沒設；D:\HT9045\system 仍是實體資料夾）。run_all 3/3（lib 242、probe 7、extension 293、panels）；vscode_it 沒跑成（VS Code 更新程式 CodeSetup 仍佔住執行個體鎖）。0.293.0 已安裝；只動 tools/vscode-htdesigner（70 檔） | tools 0172 |
+ | 10-07 | 167～172 | 67bfee39…36621358（GitLab a4d5d4d5…6ab8edd5） | 本 commit（機台 C++＋web），EastSun「有新版嗎?」，依「之後的更新包都自動收」。備份分支 backup/pre-pkg172-20261007（cpp、web）＋ D:\HT9045\_pkg_172\backup_machine_*。六包疊成一份：直接換 23、新檔 15、兩邊都改 15（自動合併 8、衝突 2、設計外掛／WORKLOG 照規定留機台）、一樣 4。內容：main 收回機台 cpp 0267～0283／web 0133～0136（合併＝機台檔）；St02 W-142 警報說明檔查找＋AdvMotErrText_St02.h（1203 錯誤碼文字）、W-143 MNetLog 移出 myMN200motor、W-140 Command.cpp GPIB SETTEMP／UPH?；Ifor !302 cmydef.h 拆成 core／io／rt（逐字搬，機台 10 個 AI 標記都在新檔）；Jimmy !301 BUILD_TESTING 選項（預設 OFF）。**.vscode/tasks.json 留機台版**（筆電版沒有 AI(W906-F5-DBG)／AI(W906-T4-RETIRE)：F5 建 Debug 目錄）；build_integ_dbg_x86 設 BUILD_TESTING=ON 維持現狀（測試照建）。衝突：WebMotorAccessLive 取筆電（W906_FormShowing("fHome") 包裝，同義）、test_web_motor_access 取機台（筆電再加一份 test_boot_initmotor_100pct 會重複定義）。13 個直接換的檔行尾改回 CRLF |
+ | 10-07 | 166 | def246a6（GitLab 8180c317） | 本 commit 357bee5（只有機台 C++；web 沒有差異），定時版本檢查，依「之後的更新包都自動收」不另外發問。備份分支 backup/pre-pkg166-20261007＋ D:\HT9045\_pkg_166\backup_machine_*。內容：main 收回機台 cpp 0259～0265／web 0132（合併結果＝機台檔，不動）；St02 !295 SECS EC／level host 寫入照 golden 0618（uHGemHT9045.cpp 閘 E1／E5／L1 打開）＋新測試；Ifor !292 測試打包（W906_TEST_BUNDLES，只影響測試編排）；文件。直接換 4（機台獨有標記 0 缺）、新檔 2、乾淨合併 2；衝突 5 處都取機台（test_myplc_modbus 程式碼相同、wb_serve 機台的 NOTICE-DEFER-5 較新）。**保留機台**：test_note_auth.cpp（main 釘的是 0265 的 tag 版字串）、WORKLOG。行尾還原 1 檔。EastSun 13:15 按 F5 已重連結；St02_SecsEcFileWrites、SecsCatalogue、D026_NoteAuth 過 | 見推送紀錄 |
+ | 10-07 | 165 | 0ff4584c（GitLab 185ae2ab） | 本 commit 92eaf8b（機台 C++）＋ web f960a66，定時版本檢查，依「之後的更新包都自動收」不另外發問。備份分支 backup/pre-pkg165-20261007（cpp、web）＋ D:\HT9045\_pkg_165\backup_machine_*。內容：main 收回機台 cpp 0247～0258／web 0128～0131（機台版優先）、oracle 修正（wb_serve.cpp `_putenv` 宣告、test_myplc_modbus ::Sleep）、NB2 HT9050 只在 SOFT_SIMULTE 的流程修正、State Record Tray Arm 教導擋下診斷（mymotor.cpp）、離開關掉斷線操作視窗、MotionView 9050 軸狀態列、W-79(b) HOME 1310 說明（程式＝機台）、St02 W-132 ART 批次狀態。直接換 19（機台獨有 AI(W906-*) 標記全掃 0 缺）、新檔 9、乾淨合併 5、手解 8（IO 執行緒／今天的修正留機台；`_putenv`、診斷、2 個新測試、POOL-5 目錄比對收筆電）。**保留機台**：MyPLC_IO_Modbus.cpp（被分到 OLD 但 main 缺今天的 PLCDOOR-DEB——OLD 不安全的實例）、WORKLOG（規則）。合併後修：Pci1203Monitor.cpp 乾淨合併把 main 的 RescanRing 接在檔尾＝重複定義，刪掉；test_myplc_modbus.cpp main 附的 [6]/[7] 重複刪掉、::Sleep 套到機台 [7] 和今天的 [8]；test_web_motor_access.cpp 檔尾兩邊都留時少一個右大括號，補上。行尾還原 11 檔。Debug wb_serve＋10 支測試建好，相關 14 個測試全過。另：EastSun「擬新增的介面 都擋到了」——Teach 頁 9050 Tray Z 區塊蓋住 gbTrayArmZ／gbTrayZ，移到 top 795 並讓 Tray Arm 頁可捲動（web 980e558）。release 等 EastSun 關程式後建 | 見推送紀錄（cpp 0268；web 0133、0134） |
+diff --git a/tests/test_flow9050_tray.cpp b/tests/test_flow9050_tray.cpp
+index 6bf7891..3e2cac4 100644
+--- a/tests/test_flow9050_tray.cpp
++++ b/tests/test_flow9050_tray.cpp
+@@ -1146,4 +1146,60 @@ void FlowTraceTail()
+     iPickFromLoadStageTask = sPick; CatchTrayTask = sCatch; iCatchFromEmpty9050Task = sEmp;
+     for (int i = 0; i < MAX_ARM_Row; ++i) for (int j = 0; j < MAX_ARM_Col; ++j) InArmSuckUse[i][j] = sUse[i][j];
+     iLoaderLayerCount_9050 = -1; iEmptyLayerCount_9050 = -1; iAuto1LayerCount_9050 = 0; iAuto2LayerCount_9050 = 0; iAuto3LayerCount_9050 = 0;
++    { void ProbeCylOnce(); ProbeCylOnce(); }   // [PC] AI(W906-PROBECYL9050) 20261008, below
++}
++
++// ===========================================================================
++//  [PC] AI(W906-PROBECYL9050) 20261008: EastSun 1008「empty 的部分怎麼動作那麼遲緩」-- the Empty probe satisfies its cylinder chain
++//       (EdgeClip / EdgePush / LoaderZ_Select Pop, C_Empty_Up Push) ONCE, then each layer only moves MEmptyZ. A cylinder whose
++//       Pop can never finish (a huge delay) stops the probe before the first move (control), and no longer stops it once set.
++// ===========================================================================
++extern int W906_ProbeEmpty9050(); extern void W906_InitProbeEmpty9050();
++void ProbeCylOnce()
++{
++    printf("[PC] Empty probe: the cylinder chain once, then each layer only moves Z\n");
++    const int savedMt = MachineTypeChoice;  MachineTypeChoice = Type_HT9050;
++    const int cyl[4] = { C_EmptyEdgeClip, C_EmptyEdgePush, C_EmptyLoaderZ_Select, C_Empty_Up };
++    bool sEn[4], sOnS[4], sOffS[4]; int sOnD[4], sOffD[4];
++    for (int k = 0; k < 4; ++k) {
++        TMyCylinder& c = Cylinder[cyl[k]];
++        sEn[k] = c.Enable; sOnS[k] = c.OnSenEnable; sOffS[k] = c.OffSenEnable; sOnD[k] = c.OnDelayTime; sOffD[k] = c.OffDelayTime;
++        c.Enable = true; c.OnSenEnable = false; c.OffSenEnable = false; c.OnDelayTime = 1; c.OffDelayTime = 1; c.Reset();
++    }
++    double sDepth[4]; for (int k = 0; k < 4; ++k) { sDepth[k] = UserDefForm_File[k].ZDepth; UserDefForm_File[k].ZDepth = 0; }   // the taught pitch
++    const int sUp = Tech.iTrayZ9050UpBase[1], sPitch = Tech.iTrayZ9050Pitch[1], sHome = Tech.iTrayZ9050Home[1];
++    Tech.iTrayZ9050UpBase[1] = 21000; Tech.iTrayZ9050Pitch[1] = 2300; Tech.iTrayZ9050Home[1] = 0;
++    const bool sSelEn = Sen[SenEmptySelectHasTray].Enable, sDrwEn = Sen[SnEmptyDrawerHasTray].Enable;
++    const int  sSelTy = Sen[SenEmptySelectHasTray].Type,   sDrwTy = Sen[SnEmptyDrawerHasTray].Type;
++    Sen[SenEmptySelectHasTray].Enable = true; Sen[SenEmptySelectHasTray].Type = 1;   // reads OFF at the fixture's all-zero address: no tray
++    Sen[SnEmptyDrawerHasTray].Enable  = true; Sen[SnEmptyDrawerHasTray].Type  = 1;   // the drawer agrees: count 0 at the end
++    CHECK(Sen[SenEmptySelectHasTray].IsOff() && Sen[SnEmptyDrawerHasTray].IsOff(), "[PC] fixture: no tray seen anywhere");
++    FreeAxis(MEmptyZ);  SetMotPos(MEmptyZ, 0);
++    iEmptyLayerCount_9050 = -1;  W906_InitProbeEmpty9050();
++
++    // control: EdgeClip's Pop can never finish -> the probe never moves
++    Cylinder[C_EmptyEdgeClip].OffDelayTime = 100000;
++    for (int i = 0; i < 60; ++i) { W906_ProbeEmpty9050(); Sleep(2); }
++    CHECK(Pos(MEmptyZ) == 0 && iEmptyLayerCount_9050 == -1, "[PC] control: a cylinder not yet in place stops the probe before its first move");
++
++    // the chain completes once -> the first (deepest usable) layer, Up[9] = 21000 - 9*2300 = 300
++    Cylinder[C_EmptyEdgeClip].OffDelayTime = 1;  Cylinder[C_EmptyEdgeClip].Reset();
++    for (int i = 0; i < 600 && Pos(MEmptyZ) != W906_TrayZ9050(1, 1, 9); ++i) { W906_ProbeEmpty9050(); Sleep(5); }
++    CHECK(Pos(MEmptyZ) == W906_TrayZ9050(1, 1, 9), "[PC] chain satisfied: MEmptyZ at the first probe layer (Up[9] = 300)");
++
++    // now EdgeClip would wait forever again -- the next layers must not ask it
++    Cylinder[C_EmptyEdgeClip].OffDelayTime = 100000;  Cylinder[C_EmptyEdgeClip].Reset();
++    for (int i = 0; i < 3000 && iEmptyLayerCount_9050 < 0; ++i) W906_ProbeEmpty9050();
++    CHECK(iEmptyLayerCount_9050 == 0 && Pos(MEmptyZ) == W906_TrayZ9050(1, 1, 0),
++          "[PC] the remaining layers 8..0 ran without the cylinder chain: count 0 (no tray), MEmptyZ at Up[0] = 21000");
++
++    for (int k = 0; k < 4; ++k) {
++        TMyCylinder& c = Cylinder[cyl[k]];
++        c.Enable = sEn[k]; c.OnSenEnable = sOnS[k]; c.OffSenEnable = sOffS[k]; c.OnDelayTime = sOnD[k]; c.OffDelayTime = sOffD[k]; c.Reset();
++    }
++    for (int k = 0; k < 4; ++k) UserDefForm_File[k].ZDepth = sDepth[k];
++    Tech.iTrayZ9050UpBase[1] = sUp; Tech.iTrayZ9050Pitch[1] = sPitch; Tech.iTrayZ9050Home[1] = sHome;
++    Sen[SenEmptySelectHasTray].Enable = sSelEn; Sen[SenEmptySelectHasTray].Type = sSelTy;
++    Sen[SnEmptyDrawerHasTray].Enable = sDrwEn;  Sen[SnEmptyDrawerHasTray].Type = sDrwTy;
++    iEmptyLayerCount_9050 = -1;  W906_InitProbeEmpty9050();  MachineTypeChoice = savedMt;
+ }
+\ No newline at end of file
+-- 
+2.55.0.windows.5
+
