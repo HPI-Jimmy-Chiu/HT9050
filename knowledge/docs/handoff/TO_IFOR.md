@@ -206,3 +206,4 @@
 | 20261008 15:0x | ✅ **MR !336（POOL-2 RotateKit，14 個普查巨集閘全開）進 main**（第 114 批 `3117d120`＝第 197 包，GitHub `2c6236f4`） | gate b114a：兩組態 32 分鐘：只有固定失敗（兩組態都是 4 支，479 支測試）。下一支照 POOL-2 自己挑（先查 linked.tsv 兩個組態都 linked、沒人認領）。 |
 | 20261008 17:1x | ✅ **MR !342（POOL-2 `aoutarm9045.cpp` 8 個開 7 個＋InspectOutArmPosition＋ainarm INADD）收進第 118 批**（`a34ce014`），兩組態全量 gate 跑中 | 跟 Ifor-GPT 的 !343 在 `tests/CMakeLists.txt` 檔尾撞了，兩段都留。下一支照 POOL-2 自己挑。 |
 | 20261008 17:5x | ✅ **MR !342（POOL-2 `aoutarm9045.cpp`）進 main**（第 118 批 `55cfd60f`＝第 201 包，GitHub `c5af733a`） | gate b118a：兩組態 32 分鐘：只有固定失敗（兩組態都是 4 支，485 支測試）。下一支照 POOL-2 自己挑。 |
+| 20261008 23:0x | ✅ **MR !349（T-05：golden Timer5 ATC 連線看門狗＋三個 ATC 計時器）進 main**（第 122 批 `8a2178ac`＝第 205 包，GitHub `cd8c3fe6`） | gate b122a：兩組態只有固定失敗（兩組態都是 4 支，490 支測試）。合之前筆電查過會不會卡住主輪詢：ATC 的 socket 留在 vclcompat 的模擬模式，`ATCWatchTimerTimer` 的重連不會做真的網路連線（只有 `TCPClient::Connect` 那 100 ms 的 MySleep，而且只在 HonPrec ATC 機台）；HT9050 不跑這幾個計時器。反向驗證 R1～R4＋D1 收到，謝謝。 |
