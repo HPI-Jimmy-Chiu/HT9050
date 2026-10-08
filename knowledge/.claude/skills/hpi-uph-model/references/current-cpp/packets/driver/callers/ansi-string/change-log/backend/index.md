@@ -15,3 +15,7 @@
 本輪保存14完整cpp、2完整interface header、12歷史／編譯／接線region，共28原文、11來源。歷史 banner 的「stand-in／尚無 writer／所有測試物件皆 null」是當年敘述；現行函式與編譯開關須以本文保存正文判讀。沒有執行C++、build、tests、檔案寫入或機台。
 
 回 [Change Log數值／hook](../index.md)、[caller樹](../../../index.md)、[printf適配](../../numeric-format/printf-family.md)。
+
+## 檔案型MyStringList下層補充（20261009）
+
+[完整buffer／writer／filename與專用保存](my-string-list/index.md)：32完整cpp／1完整header／12region共45原文，4來源；前段「深層writer待續」保留為當時範圍，現在由此下層補充。GetText既有正文重核不重算，通訊／upload／helper／其餘caller及版本實機另續。
