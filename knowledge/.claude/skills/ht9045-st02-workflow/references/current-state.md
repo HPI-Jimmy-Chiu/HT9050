@@ -1,4 +1,62 @@
-# St02 現況板（更新：2026-10-03 12:3x，S-20 主迴圈接手中、N07 已疊上、建置中）
+# St02 現況板（更新：2026-10-08 00:xx，換帳號交接）
+
+## ★ 1008 10:1x 狀態（新帳號；新 session 從這段接，下面的換帳號交接是背景）
+- 新帳號後：我＝**ht9045-46**，St02-M＝**ht9045-5b**（以最新訊息的 `from=` 為準）。
+- **W-156 推了，MR !329**（`v906/st02-w156-flags` **788ff831**，一顆 commit、在 main 89f00bc1＝第 108 批之上；原本的 WIP 21c6245d 已用 force push 換成壓縮後的這一顆，那條分支原本沒有 MR）。St02_W156Flags 兩組態 19／19＋相關 21 支兩組態全過；反向 RA～RE 7 項全紅；機台快照 08:51，測完已還原、備份 0 個，真檔 42 個不變。
+  - 為了跟 NB2-1 的 W-169（Contact 頁關窗／F5／斷線，認領 FileRW/DeviceForm_File* 全家、_EditPage.cpp）錯開：拿掉了 DeviceForm_File.cpp :472／:474 的註解修改（離 :459-470 太近）；最後的修改點已交 St02-M 轉給 NB2-1。
+  - [5]（KYEC_CHEN＋A16 存檔）原本的寫法錯了：golden 存檔後 ReadFile 在 Direct 模式把 Drop 歸零（0618 cContact.cpp:509-514），畫面 0.00 是對的；要看的是**存進 Contact.Data 的值**（1.50／1.60）。頁面要送「伺服器目前的狀態」（測試的 ServerView），只改單一欄位會讓舊的單選按鈕被套回去、變成真的模式改變。
+- **W-150 LOG-SPLIT 第 2 片推了**（11:0x，分支 `v906/st02-w150-logsplit2` 程式那一顆 `350a9250`，在 main 21d163f0 上；MR 編號見給 St02-M 的回報／FROM_STEVEN §2）。盤點與認領全文 `C:\AI_TempFile\st02e-scratch\w150\claim_s2.md`；St02-M 登記 FROM_STEVEN §1（8466e5cf＋6d8eec2f，筆電點頭待補）。
+  - 做了：新檔 TTLLog.cpp（golden 0618 cpublic.cpp:489-512）、IndexPosLog.cpp/.h（LogIndexMaxMinPos 0618 cpublic.cpp:1582-1599＋W906_AddIndexPosLog＝main.cpp:33634-33664，§8 L5 TODO），放 ht9045_sm；取用函式 W906_TTLLogObj／W906_IndexYMaxMinShiftLogObj／W906_QtyLogObj；退役 cDIOStatus.cpp:71、MainTimer3.cpp G15、cStateRecord.cpp G9；MainClarnData.cpp:45 換取用函式；新 ctest St02_W150LogSplit2。
+  - **FileRW/MainClose.cpp 不動**（St01 出差、S95／S121 沒人能點頭）：12160 TTLLog("Close")、12446 LogIndexMaxMinPos("Program closed") 照舊 missing，之後的片再做。
+  - 驗證：兩組態完整建置 0 errors；#6 機台快照 10:26 → apply rc=0 → 測 → 真檔全部未變 → restore 448 → 備份 0；相關 20 支兩組態綠（SIM E023 第一次 [guard] 紅＝apply 剛寫過 D:\HT9045\system，重跑兩次綠）；反向 R1～R9 全紅。
+  - 沒做（別人那組）：Frank01 slAutoSiteMapLog×5（V906 是 TfMainSiteMapLog 替身）、atester T17；Ifor01 TriTemp W7TT 替身、fLotInfo.cpp:6637 自建 slLotInfolog（沒走沙盒）；機台端 mymotor.cpp:2646／:2845-2846、asendic_Loader.cpp:273／:303 ⇒ IndexMaxMin 的值暫時都是 0。
+  - 已知：開機那一次 TTLLog("InitDIOStstus") 在 V906 不寫——wb_serve 先跑 InitDIOStstus（wb_serve.cpp:4171 → :3608）才建 log 物件（:4178）；golden 是建構子先建（0618 main.cpp:1526）。已寫進 commit 的 Human review。
+
+## ★ 1008 換帳號交接（新 St02-E 從這裡開始，冷啟動也能接）——W-156 已在上面那段完成
+
+**角色與規則**（沒變）：我是 St02-E（STEVEN-NB3）；協調者 St02-M（新帳號後 session 名稱會換，以最新訊息的 `from=` 為準；它的交接在 `C:\Users\steven\.claude\skills\ops-st02-manager\references\account-switch-handoff-20261008.md`）。
+這台**可以跑測試**（Steven）；每一輪測試前照 RULINGS_20261005 #6：最新 main → `python tools/machine_sync/machine_sync.py check`（repo 根目錄跑）→ `apply --yes` → `cd HT9011UC_Cpp_V3.33.906.0 && python tools/realfile_guard.py snap <tag>` → 測 → `realfile_guard.py check <tag>`／`drop <tag>` → `machine_sync.py restore "<apply 印的備份資料夾>"`；回報寫 main commit 與快照時間，`D:\HT9045\backup\machine_sync_*` 結束要 0 個。
+
+### W-156（W152-FLAGS）—— 做到一半，**下一步就是它**
+- 分支 `v906/st02-w156-flags` @ **21c6245d**（WIP、已推、**沒開 MR**；從 main 573340b8，含第 96 批）。兩組態編譯 0 errors；**ctest 一支都還沒跑**。St02-M 已放行並在 FROM_STEVEN §1 認領。
+- 做好的（全部同一行或舊空行，產生檔除外）：
+  - (a) bContinueContact：`tools/editlist/DeviceForm_File.py:387` members 列改 `#define bContinueContact (fContactForm->bContinueContact)`；原本同一列的 MotorStatus／bOldRTCAutoTuning／brecordmsgLock 搬到 `:385`（bAutoHighFinish 那一列）；`forms/fContact.h:1340` 同一行 `public: bool bContinueContact; private:`（原本在 :1332 起的 private 區段）。
+  - (b) bSetHasIC：`.py:384` 改 `#define bSetHasIC (fContactForm->bSetHasIC)`；`.py` 檔尾加一個 replace 列：golden FormShow（V912 :1678＝0618 :1651）`bSetHasIC=false;` → `if(!filerw::PageShownNow("DeviceForm_File")) bSetHasIC=false;`——**NOT GOLDEN 接合碼**（網頁每次 editlist.get 都重跑 FormShow，W-152 的重讀也是；不然取料狀態機設的旗標會在 FormClose 之前被清掉）⇒ MR 說明的 HUMAN_REVIEW B 要寫這一條。
+  - (c) cbOneTouchAutoContactHight：`ckernel.cpp:237`／`:306` 改讀 `fContactForm->cbOneTouchAutoContactHight`（`fContact->fShow` 不動）、`:130`（舊空行）`#include "forms/fContact.h"`、`:223` 註解；`tests/test_w7_l2_ckernel.cpp:737／:1006／:1033／:1043／:1691` 改 fContactForm、`:410`（舊空行）include。ckernel.cpp 是機台的檔，St02-M 已請筆電轉告 EastSun。殘留（MR 要寫）：半途勾選要到下一次開始才生效（網頁替身每次重讀都被 FormShow 清，不能直接讀）。
+  - (b2) `FileRW/DeviceForm_File.cpp:1201` 同一行加 `if (rb0 != 0) ++g_w152Seq;`（MODE 重設時單選真的變了 ⇒ 開著的頁面經 tag contact.runResultSeq 重讀）；`:1111`／`:1184` 只改註解；`web/page/ht9045_contact_ev.js:426` 訊息改中性、保留「尚未存檔」（cjs 自測釘它）。
+  - (c2) 過期註解：`forms/fContact.h` :183、:199-202、:204-205（登記表標 TRANSLATED＋位置）、:1348、:1526；`FileRW/DeviceForm_File.cpp` :472、:474、:550、:641（主控台字串）；`.py:167-169`；`docs/gate-ledger/csystem.md:34-35`（手改、行數不變；本來由 tools/gate_ledger_emit.py 產生）。
+  - **不做（St02-M 排除）**：`forms/fContact_ContactSM.cpp:20`（ST-GPT 的 W-159 在同一支檔，一檔一個寫的人，由它順手改 cmydef.cpp:3346→:3457、csystem.cpp:31302→:31449）、St01 的 `tests/test_b8_ct3a_contactflags.cpp:42`。
+  - gen.inc：`cd HT9011UC_Cpp_V3.33.906.0 && W906_GOLDEN_ROOT='D:\HT9045\HT9011UC_Code_V3.33.906.0_20260618' python tools/gen_editlist.py --only DeviceForm_File`，再 `python C:\AI_TempFile\st02e-scratch\w142\to_crlf.py FileRW/DeviceForm_File.gen.inc`。**已驗**：在 main 上用 main 的 .py 重產＝main 的 gen.inc 一字不差（tree 乾淨）；我們的 gen.inc diff 只有那三列＋FormShow 的取代（+3 行）。MR 說明要寫這一點。
+  - 新測試 `tests/test_st02_w156_flags.cpp`（St02_W156Flags：[1] (a)、[2] (b)、[3] (c)、[4] (b2)、[5] (a2) KYEC_CHEN＋A16 存檔後 drop offset 還是 1.50／1.60）＋ `tests/CMakeLists.txt` 檔尾區塊（連結行同 St02_W152ContactData）。
+- **還沒做**：
+  1. #6（見上）。
+  2. 兩組態跑：St02_W156Flags＋St02_W152ContactData、W7_L2 ckernel 那支、B8_Ct3a 系列、IndexZ AutoHeight 1203（[B9] census 只算活的呼叫，不受註解影響）、ScanKeyGolden、MainScanKey、FShow_Audit、EvB10A_Edges（名稱一律 `grep -o "add_test(NAME [A-Za-z0-9_]*" tests/CMakeLists.txt | grep -i <關鍵字>`）。St02_W156Flags 第一次跑可能要修期待值（[3] 用 W906_FormFShowHook、[5] 存檔路徑都還沒實跑過）。
+  3. 反向：`python C:\AI_TempFile\st02e-scratch\w156\reverse_w156.py`（RA (a) 列改回 static、RB1 (b) 列改回 static、RB2 FormShow 列改回 golden、RC1／RC2 ckernel :237／:306 改回 fContact、RD 拿掉 seq bump、RE 拿掉 :1200 EvB3Merge；產生器列的反向會在 lane 重產 gen.inc，結束自動 git checkout 還原）。
+  4. merge-tree（origin/main、origin/v906/steven-cbridge-review6，各一行）→ squash（`git reset --soft origin/main` 前先 merge 最新 main）→ 開 MR（`-o merge_request.create …`，標題建議「St02 W-156：Contact 三個執行旗標只留一份（fContactForm）＋MODE 重讀＋A16 存檔」）。
+  5. MR 說明要寫：fContact.h:1340 同一行 public／private 不改成員順序（GCC 不跨存取區段重排；全樹沒有人用 sizeof(TfContact) 或成員偏移）；gen.inc 只有我們的列（重產驗證）；HUMAN_REVIEW B＝bSetHasIC 開窗期間保留（NOT GOLDEN）；HUMAN_REVIEW A＝機台上 KYEC 以外不受影響、ONE CYCLE 燈與網頁 LED 一致。
+- 調查報告（每一列的 golden／移植樹行號）：`C:\AI_TempFile\st02e-scratch\w156\survey.md`。腳本：`w156\patch_py.py`、`patch_py2.py`、`patch_w156.py`（`--with-pending` 不要用）、`install_test.py`、`reverse_w156.py`、`v912line.py`（讀 V912 cContact.cpp 某行）。
+
+### 其他狀態
+- W-149：15／15 完成；MR 4＝**!319**（`v906/st02-w149-simaware-4` 74b385b0）等筆電 gate。SIM-only 基準：W-149 的 15 支 0 支；這台另有 6 支兩組態都紅（config_db／ini_helpers／config_loaders 讀機台快照設定、dfm2rc×3 這台沒有 rc.exe），E023_StatusEvents 平行跑偶發。W6_4 是預設 A，等 Jimmy（§3 16:5x）。
+- W-155：全部在 main（!315 第 94 批、!316 第 95 批、心跳修正 5e3c464c 在第 96 批）；**!317 不要再推**（St02-M 請筆電關成重複）。
+- W-159：給 ST-GPT。W-157：等 Steven。
+- **筆電 22:2x 暫停換帳號**，!319 等它回來 gate。
+
+### 本機狀態（沒有東西只在本機）
+- 編輯工作樹 `C:\AI_TempFile\st02-c23`：分支 `v906/st02-w156-flags` @ 21c6245d，乾淨。其他本機分支都已推（w149-simaware-4 74b385b0、w155-beatfix b5ab691e、w155-padpage 0ca4c3cd、w155-iopanel d73de989）。
+- 建置線 `C:\AI_TempFile\st02-s39`（detached 535db4ff，跟 21c6245d 同一棵樹、只差 commit 訊息）＋ obj `C:\AI_TempFile\st02-s39-obj\build`（SIM）／`build_ship`（SHIP），**BUILD_TESTING 已設 ON**（MR !301 起預設 OFF）；兩個都已建到 W-156。增量建置：`bash C:\Users\steven\AppData\Local\Temp\claude\d---github\c8311755-ee3b-4c2b-9f5f-bc5682ac9613\scratchpad\s09close\lane_cmake.sh 'C:\AI_TempFile\st02-s39-obj\build' <tag> sim`（ship 同理，log 在同一個 s09close 資料夾）；要建別的 commit 先在 s39 `git checkout --detach <commit>`。
+- 機台快照備份 0 個；realfile_guard 沒有留下 snap。
+- `D:\HT9045` 主 checkout（分支 v906/steven-gpib-widget）：只有本檔與 techniques.md 是 St02-E 改的（本次交接一起推到 `v906/st02-handoff-docs-1008`，見 St02-M 回覆）。其餘未提交的東西（116 個 `.github/*` 刪除、config／backup 等未追蹤檔）是 session 開始前就在的，**不是 St02-E 的，不要提交也不要刪**。
+- scratch：`C:\AI_TempFile\st02e-scratch\`（w132 gshow.py、w149 gfind.py／gfunc.py、w142 to_crlf.py、w149 MR 1-4 腳本與報告、w155 W-155 腳本與 page_gen 產生器副本、w156 W-156）。
+
+### 還沒寫進 techniques §9 的小坑（本次一併補進去）
+- `tools/gen_editlist.py --only DeviceForm_File` 要設 `W906_GOLDEN_ROOT`（0618 樹）才跑得動；產生器寫出 LF，要再跑 to_crlf。
+- 腳本 print 中文到主控台（cp950）會 UnicodeEncodeError——跑之前設 `PYTHONIOENCODING=utf-8`，或不 print。
+- 反向腳本的錨點要先數次數：ckernel.cpp :237 與 :306 那一行一字不差，要分第一個／第二個處理。
+
+---
+
+# （以下是 1007 之前的現況板，仍可參考）
 
 > 新 session 先讀這份。我是 **St02-E**；派工的協調者是 **St02-M**（session 名稱會變，目前 **github-62**，uds `\\.\pipe\LOCAL\cc-msg-2e6f870585ba6e0d521e943f8e46a02b`（14:00 重啟後 St02-M＝github-62，我＝github-de），以最新訊息的 `from=` 為準）；St01 的協調者是 **ST01-M**，St01 的工程是 **ST01-E**。
 > 規則：每個 commit 兩組態編譯、不執行；St01 跑 ctest（§2 那一列要寫測試名＋「請 St01 代跑」，ST01-M 1002 起只代跑這種列）。每次 push 後都更新這份。⚠ 1002 07:4x Steven 對 St02-M 說「你如果能跑得起來的話, 可以做測試」——St02-E 這邊還沒生效（只是轉述，St02-E 的排程指令仍寫「編譯只編不跑」），已在 St02-E 的 session 直接問 Steven，等他回。
@@ -24,7 +82,127 @@
 - Q41：還沒 commit（A 段 TesterIF，4 檔），sim 0 errors。
 - 16:40：gpib-widget 推到 `bf2690aa`（文件）；本機 `00772497` 已 merge main 00f9a882（有程式）→ 兩組態編譯中，過了再推。st02-on-cbridge 下次推之前要 merge St01 head（現在 5b7fe37c）。
 
-### 10-06 14:1x 狀態（St02-E 寫；St02-M＝ht9045-32；新 session 從這段接）
+### 10-07 23:2x 停在存檔點（每週用量 90%，Steven 23:1x「先不接工作了」；10/13 09:00 重置）——新 session 從這段接
+- **W-156 WIP 已推（沒開 MR）**：`v906/st02-w156-flags` **21c6245dc**（從 main 573340b8；St02-M 已放行並認領 FROM_STEVEN §1）。兩組態編譯 0 errors，**ctest 還沒跑**。
+- 做好的：(a) 產生器 .py:387 #define bContinueContact → fContactForm、fContact.h:1340 同一行 public；(b) .py:384 #define bSetHasIC → fContactForm＋.py 檔尾 FormShow「同一次開窗的重讀不清」列（NOT GOLDEN 接合碼，人工審查 B）；(c) ckernel.cpp:237／:306 讀 fContactForm->cbOneTouchAutoContactHight（:130 include、:223 註解；機台的檔，St02-M 已請筆電轉告 EastSun）、test_w7_l2_ckernel.cpp 五行＋:410 include；(b2) DeviceForm_File.cpp:1201 `if (rb0 != 0) ++g_w152Seq;`、ht9045_contact_ev.js:426 訊息；(c2) 過期註解（fContact.h 登記表／:1348／:1526、DeviceForm_File.cpp :472／:474／:550／:641／:1111／:1184、.py:167-169、docs/gate-ledger/csystem.md:34-35）。**不做**：fContact_ContactSM.cpp:20（ST-GPT 的 W-159 一起改）、test_b8_ct3a:42。gen.inc 用 `W906_GOLDEN_ROOT=D:\HT9045\HT9011UC_Code_V3.33.906.0_20260618 python tools/gen_editlist.py --only DeviceForm_File` 重產（再跑 to_crlf）；main 的 .py 重產＝main 的 gen.inc 一字不差（已驗）。新測試 tests/test_st02_w156_flags.cpp（St02_W156Flags：[1] a、[2] b、[3] c、[4] b2、[5] a2）＋CMake 檔尾。
+- **還沒做**：①#6（machine_sync check／apply、realfile_guard snap）②兩組態跑 St02_W156Flags＋St02_W152ContactData、B8_Ct3a 系列、W7_L2_ckernel（名稱從 tests/CMakeLists.txt grep）、IndexZ AutoHeight 1203、ScanKeyGolden／MainScanKey、FShow_Audit ③反向 `python C:\AI_TempFile\st02e-scratch\w156\reverse_w156.py`（RA RB1 RB2 RC1 RC2 RD RE；產生器列的反向會在 lane 重產 gen.inc，結束 git checkout 還原）④還原／merge-tree（main、review6）／開 MR（標題「St02 W-156：Contact 三個執行旗標只留一份（fContactForm）＋MODE 重讀＋A16 存檔」）⑤MR 說明要寫：fContact.h:1340 public/private 同一行不改成員順序（GCC 不跨存取區段重排，沒有人用 sizeof／偏移量）、gen.inc 只有我們的列、bSetHasIC 列是 NOT GOLDEN 接合碼（人工審查 B）、一鍵測高半途勾選要到下一次開始才生效。調查報告 `C:\AI_TempFile\st02e-scratch\w156\survey.md`。
+- 其他：W-149 MR 4＝**!319** 等 gate（SIM-only 基準 0／15）；W-155 全部在 main（!317 由 St02-M 關成重複，不要再推）；W-159 給 ST-GPT。
+
+### 10-07 22:3x 狀態（下面仍有效）
+- **W-155 結案**（!315 第 94 批、!316 第 95 批＝第 178 包，四個同行點筆電都點頭）。心跳修正 2662cf87 沒趕上第 95 批 ⇒ 開了急件 **!317**（`v906/st02-w155-beatfix` b5ab691e，cherry-pick -x）；筆電已把 2662cf87 直接接在第 96 批上（第 179 包），!317 等第 96 批進 main 後由 St02-M 當重複關掉——**!317 不要再加東西**。
+- **W-149 MR 4 推了，!319**（`v906/st02-w149-simaware-4` 74b385b0，只改測試）：W6_4（SIM 種 ScanPort）、WB_SimPump O4b／O7、mainproc_guard（SIM START 留著＝golden csystem.cpp:4441-4493 #ifndef SOFT_SIMULTE、移植樹 :16792，反向 R13 證明；:4403 那段 PLC／門／EMG 在 SIM 編不過、不引用）、ScanKeyGolden [18]／[19] 還原面板感測器 sim 狀態（真正的漏洞＝SnRearPadActive 被設成讀不到；IdleHomed 已經會重設 InitialOK）。反向 R13～R17 全紅；腳本 `C:\AI_TempFile\st02e-scratch\w149\`（patch_mr4.py、patch_mr4b.py、reverse_mr4.py、probe_rstheld.py、probe_r13.py）。全部模擬版 ctest：W-149 的 15 支清完；這台另有 6 支兩組態都紅（config_db／ini_helpers／config_loaders 讀機台快照設定、dfm2rc×3 沒有 rc.exe），E023_StatusEvents 平行跑偶發。
+- 筆電 22:2x 暫停換帳號；gate 等它回來。
+- **下一張：W-156**（bContinueContact／bSetHasIC／cbOneTouchAutoContactHight 各一個 golden 擁有者＋筆電 20:4x 的 a/b/c）。**fContact_ContactSM.cpp :1232-1240／:1266-1274／:1631-1634 是 ST-GPT 的 W-159**，不要碰；要動那支檔先把行號給 St02-M。W-159 已移給 ST-GPT。
+
+### 10-07 21:3x 狀態（下面 21:0x 仍有效）
+- **第 94 批已進 main**（56b065d5：!313 W-150、!315 W-155 A、!314、!311）。**!316 新 tip `0ca4c3cd`**＝2662cf87（心跳只認開窗成功那個視窗的 `pad.get {"beat":true}`，St02-M 審查）＋合 main 56b065d5（CMake 檔尾照 main、只補 B 的兩塊）。nod-pending commit 07803f21 不再是最後一顆，但跟後面的檔不重疊，`git revert` 就能拿掉。
+- 機台派工文件 `HT9011UC_Cpp_V3.33.906.0/docs/REQUEST_JIMMY_IOPANEL_20261007.md` 已在 main；5 點都已涵蓋。
+- **現在：W-149 MR 4**（從 origin/main 開新分支）：test_w6_4_tester_core.cpp（jimmychiu）:246／:259 SIM 先種 ScanPort（ClearScanPort＋同一個視窗，期待值兩組態都 5／3／3；golden SIM 由 Sim_TTL_Single 填，atester.cpp:699-753 叫在 :2078-2080，移植樹 :12898-12902 閘住）、include 放 :70；test_wb_simpump.cpp（機台）:280／:283 O4b、:507-509 O7，include 放 :30；test_mainproc_guard.cpp（Steven）:174-177，include 放 :54；test_scankey_golden.cpp（jimmychiu）[19] 結尾還原 InitialOK／軟鍵（:1163 設 InitialOK=false、:1168 W906_SoftPanelKeyResetForTestSt02）。golden 0618 csystem.cpp:4403-4436／:4441-4493 已核對。行要先交 St02-M 認領。
+
+### 10-07 21:0x 狀態（W-155 B 推完；新 session 從這段接，下面 20:0x 仍有效）
+- **W-155 B 推了，MR !316**（`v906/st02-w155-padpage` `07803f21`，疊在 !315）：e3b8e4e7＝把 main 1091472b（W-152 已進 main，第 176 包）合進 !315 的 tip；5413f6e7＝網頁 Pad 視窗（PadInterface_St02.cpp 檔尾 `W906_PadWire`：pad.open／get／close／exit／button／send／bling＝golden FormShow／PadButtonClick／ManualSend／Exit／FormClose；DEVIATION W155-D2 只收燈號封包、W155-D3 bShow 心跳看門狗 :752；`HW.PadInterface.html` 由 0618 dfm 產生；`ht9045_padinterface_c.js`；wb_serve.cpp:5651 路由；background.html:504 視窗列；FShow_Audit 基準 +3）；07803f21＝**等筆電點頭、可單獨拿掉**：WebBridgeServer.cpp:1449（pad.get／close 免權杖）、WebCmdGuard.cpp:90（pad.get 純讀白名單，新認領）、HW.IoSetView.html:828（Pad 鈕開窗）、sync_web.py:282（OURS，新認領）。測試 St02_W155PadPage 39／39、St02_W155PadPageJs 21／21；腳本 `C:\AI_TempFile\st02e-scratch\w155\`（patch_mrb_*.py、install_mrb_web.py、reverse_w155b.py、resolve_cmake_eof.py、page_gen\ 產生器副本）。
+- W-152 已進 main（7edca0a1），DeviceForm_File.cpp 的暫停令解除。
+- 佇列：**W-149 MR 4**（W6_4 預設 A＋scankey [19] 還原 InitialOK）→ **W-156**（加筆電 20:4x 的 a/b/c：KYEC_CHEN＋A16 那一例、錯誤離開後網頁要被推一次、過期註解清單）→ W-159。W-157 等 Steven。
+- 請求文件 8789b74c 仍讀不到；已用 W-155 卡片的 5 點比對，全部涵蓋（回報 St02-M）。
+
+### 10-07 20:0x 狀態（W-155 A 推完；新 session 從這段接，下面 19:0x 仍有效）
+- **W-155 A 推了，MR !315**（`v906/st02-w155-iopanel` `d73de989`，origin/main ede228b7 上一顆）：IoBtnPanelClick.cpp :257 面板按鈕（mode 1 && IsPadButton）→ 檔尾 `W906_IoPadClick_St02`（只做 SendSwitchStatus 那一半＝新 DEVIATION (j)）；:429 每次 1203 點擊後真的 SendSwitchStatus(&pb)（D1 照 golden；(a) RETIRED）；ChanIoPoints.cpp :317 面板點的方塊從面板讀（source "pad"，按鍵照 InType 反相）；io_do.js :98／:138；wb_serve.cpp:7255 只改註解。PadInterface_St02 檔尾 golden SendSwitchStatus(Ptr) 與 W906_PadIoPoint。測試 St02_W155IoPanel（真的 IoBtnPanelClick＋ChanIoPoints、HT9050 IO 表唯讀、SIM 面板埠、1203 命令面是測試裡的 stub；ship 要 `MyLaneIO.SelectVendorBackends()` 才會走 1203 路由假物件）。腳本與反向 `C:\AI_TempFile\st02e-scratch\w155\`（patch_pad*.py、patch_mra.py、patch_cmake.py、reverse_w155.py、survey.md）。
+- 已回報 St02-M（含 MR B 認領清單：HW.PadInterface.html、PadWire_St02.cpp、CMakeLists.txt:2406、wb_serve.cpp:5651、WebBridgeServer.cpp:1449、web/background.html:504、HW.IoSetView.html 那顆 Pad 鈕＝筆電第 24 列）。D2＝A（手動送只收 t05 燈號封包）、D3＝A（HT_WIN 隱藏清 bShow＋C++ 心跳看門狗）＝RULINGS_20261007 #10。
+- 請求文件 `v906/jimmy-b94` 8789b74c 20:0x 還不在遠端；出來後跟 survey.md 比對回報 St02-M。
+- 佇列：W-155 B → W-149 MR 4 → W-156 → W-159（fContact_ContactSM.cpp :1234／:1268／:1633 葉節點後 Task= 覆寫，E042-LEAFTASK）。
+- 本機測試線：IoPoints_HT9050 在 s39 這個 configure 沒有註冊（ctest -N 找不到），回報裡請 gate 補跑。
+
+### 10-07 19:0x 狀態（新 session 從這段接；下面 18:2x、17:3x 仍有效）
+- **W-150 log 拆檔第 1 批推了，MR !313**（`v906/st02-w150-logsplit` `ceb95796`，main 2fb8d2c0）：LogObjects.h 6 個取用函式；cMyDB 改用；cObserver／cprod（JSCK OEE TestLog，cprod 加 W58 `W906_SimNetPathBlocked`）、rs232:868（扭力異常封包）照 golden 打開。測試 St02_W150LogSplit；腳本 `C:\AI_TempFile\st02e-scratch\w150\`。技能 hpi-mnetlog-split §9 寫了哪些物件還等呼叫端翻譯。
+- **W-152 急件 !312**：筆電在 `v906/jimmy-w152-urgent`（main＋!312＋閘那一行）跑急件通道。
+- **現在：W-155 IOPANEL**（EastSun 等，TO_STEVEN 1007 18:4x）：IO 頁 Panel 分頁（Front／Rear）照 golden 補齊——面板按鈕要經 `fPadInterface->SendSwitchStatus`（golden iosetview.cpp:1095）、SwFK*／SwRK* 是 pad 項目、SnFK*／SnRK* 顯示 PadItem mlEvent、Pad 鈕開 TfPadInterface、wb_serve.cpp:7256 過期註解。**基準是第 93 批**（`v906/jimmy-b93`，含機台 cpp 0291 PADNOTE：PadInterface_St02.cpp 在 `S=SubString(6,2)` 下一行與檔尾 `g_W906PadNote`，不要碰）；第 93 批進 main 之前只做唯讀盤點（小幫手在跑）。
+- 之後：W-149 MR 4（W6_4_TesterAnchor 用預設 A：測試自己種 ScanPort；WB_SimPump、mainproc_guard；順手修 test_scankey_golden [19] 沒還原 InitialOK／軟鍵狀態）——等 W-152 進 main。
+
+### 10-07 18:2x 狀態（W-152 推完時寫的）
+- **W-152 急件推了，MR !312**（`v906/st02-w152-autoheight` `cf493021`，main e06fb67b 上）：Contact 頁自動測高的資料路徑 (C) 配方→門面（單一入口）、(A) 結果→網頁（case 1800 掛勾）、(B) 開著時保留＋tag `contact.runResultSeq` 觸發網頁重讀、golden ClearIndexOffset（cOffSet.cpp 檔尾；產生器那一列）。**主流程閘那一行不在裡面**：Jimmy 裁決（RULINGS_20261007 #9）由筆電在 `v906/jimmy-w152-gate` 加在 !312 之上。測試 St02_W152ContactData／St02_W152ContactRereadPage；腳本與反向 `C:\AI_TempFile\st02e-scratch\w152\`（patch_w152_data.py、patch_w152_web.py、reverse_w152.py、report_height_path.md）。
+- 已回報 St02-M（HUMAN_REVIEW A／B 都寫了，B 是給 EastSun 的 W-153 上機步驟）。ChangeLog 第 12 列；techniques.md 新增 §9（今天的坑）。
+- W-149：!307 已進 main（第 91 批，SIM 基準 19→14）；!308／!309 排第 92 批；MR 4（WB_SimPump／mainproc_guard）等 St02-M 放行；W6_4_TesterAnchor 等 Jimmy。
+- 下一張：等 St02-M 派。
+
+### 10-07 17:3x 狀態（W-149 三張推完時寫的）
+- **W-149 SIM-AWARE**（只在模擬版失敗的 15 支測試）：三張 MR 疊在一起，要照順序合：**!307**（SimIO／HanaART／Automation／GA2_C1_cinitial／BarCodeHelpers，`fc403a13`）← **!308**（W6_Canary／AGV_E84／BarCode8CCDGlue，`c65aed07`）← **!309**（W7_L1 四支，`9e80635a`）。共用新標頭 `tests/w906_sim_build.h`：`W906_SIM_BUILD`（定義 SOFT_SIMULTE 時＝1）＋`W906_SIM_NOTE("…")`（只在模擬版印）；寫法 `CHECK(W906_SIM_BUILD ? (模擬值) : (出貨版原條件), "原訊息" W906_SIM_NOTE(" -- SIM: …, golden 0618 檔:行"))`，同一行、出貨版一字不差。腳本：`C:\AI_TempFile\st02e-scratch\w149\`（patch_mr1/2/3.py、reverse_w149.py mr1|mr2|mr3、report_A_w7.md、report_B_misc.md）。
+  - 還沒做：**W6_4_TesterAnchor** 等 Jimmy（FROM_STEVEN §3：A＝測試自己種 ScanPort（C1=6、C2=16、C3=16），B＝先補 `Sim_TTL_Single`（port atester.cpp:12898-12900 `#if 0`，golden atester.cpp:699-753））；**WB_SimPump／mainproc_guard** 等 St02-M 確認機台端沒人在改 `test_wb_simpump.cpp`（今天機台 AI 改過）。這兩支模擬版的原因：golden 在模擬版把 DoSystem 整段安全互鎖編掉（csystem.cpp:4403-4436／:4441-4493），START 不會被拉回；PumpInit 的 O7（WebBridgeTags.cpp:471-510，V906 才有）模擬版只印不拒絕。
+- **W-152（Contact 自動測高，急件）停著**：核心修改（csystem.cpp:31465-31467 MainProc 閘，HT9050 才開）被權限檢查判「Security Weaken」擋下，照規則 26 不繞、不轉手，等 Steven 本人在這個 session 同意。分支 `v906/st02-w152-autoheight`（乾淨、沒推）。事實整理 `C:\AI_TempFile\st02e-scratch\w152\report_height_path.md`：**流程讀的是 fContactForm 的輸入框，從來沒從配方填過（fContact.h:1497 GATE W-02）⇒ fDropPos 等於 0**；測到的高度不會回到網頁、存檔會寫回舊值；生產下壓用的是 Contact.Data [Test Arm1] Contact → Prod.TestZ1_Test。
+- **建置線注意**：第 89 批（MR !301）起 `BUILD_TESTING` 預設 OFF，既有 obj 重新設定後 `cmake --build` 不再重編測試（舊 exe 還在、照樣跑得動）。s39 兩個目錄已補 `cmake -DBUILD_TESTING=ON <obj>`。
+- W-140（!304）已進 main（第 90 批）。
+
+### 10-07 15:4x 狀態（W-140 推完時寫的）
+- **W-140 推了，MR !304**（`v906/st02-w140-command` `955aeb38`，在 main f6691973＝第 87 批＋15:11 機台快照上；推的樹跟測過的樹完全相同）。兩組態 0 錯；St02_W140Command 9／9＋相關 7 支兩組態全過；反向 R1～R4 全紅；機台快照 15:11 已還原、備份 0 個；真檔全部未變。已回報 St02-M（ht9045-32）、ChangeLog 第 7 列（入口網站的檔還沒 commit，等 St02-M 一起發）。
+- **等 Jimmy 裁決**（已請 St02-M 寫進 FROM_STEVEN §3）：golden 0618 Command.cpp:1590 的 TempMode 沒給值，I38 那一種 SETTEMP 回應、機台不是常溫時會把沒給值的模式寫進 LastSet.iTemperature；移植樹 :1886 先用「保持目前模式」當安全預設（建議 A）。
+- 第 87 批（cmydef.h 拆檔）讓幾乎所有檔都重編：建置線 s39 兩組態全編一次約 30 分。
+- 下一張：等 St02-M 派。
+
+### 10-07 15:0x 狀態（W-140 開工前寫的，已完成）
+- **W-143 推了，MR !303**（`v906/st02-w143-mnetlog` `75a932c9`，在 main f2a1d781 上；測試是在 4909f92d 上跑的，之後 main 的改動跟這張不重疊、補丁內容相同）。已回報 St02-M、ChangeLog 第 6 列。
+- 建置線 s39 的兩個目錄已加 `-DW906_STRIP_TEST_EXES=ON`（第 85 批起；測試 exe 第一次執行不再被防毒卡 15 秒）。
+- **模擬組態有 8 支在 main 上本來就紅**（SimIO、W6_Canary、W6_4_TesterAnchor、AGV_E84、W7_L1_Color／Loader／AutoRT、GA2_C1_cinitial；不套機台快照也紅）——已請筆電確認是我們這條線的設定問題還是它的 gate 也紅。之後碰到這幾支先跟 main 比，不要以為是自己弄壞的。
+- 反向檢查腳本的坑：會重建的項目還原後一定要再重建，否則後面「只改原始碼」的項目跑到的是被改壞的執行檔（W-143 R2～R6 第一次就是這樣，已修好 `reverse_w143.py`）。
+- 下一張：**W-140 Command.cpp**（SETTEMP 1931／1952、UPH? 3454、SETSITEMAP_ 14892；候選評估在 `C:\AI_TempFile\st02e-scratch\w140\`；分支 `v906/st02-w140-command`）。
+
+### 10-07 13:0x 狀態（W-143 做到一半時寫的，已完成）
+- **W-143 MNETLOG**：本機分支 `v906/st02-w143-mnetlog`（`C:\AI_TempFile\st02-c23`，WIP `8ba72e7b`，從 main 06fb64e5，**還沒推**）。已做：新 `MNetLog.h`／`MNetLog.cpp`（ht9045_sm；mmoMNet＝不顯示＋`TODO(W906-LOGVIEW)`）、`LogObjects.h`／`.cpp` 加 `W906_MNetLogObj()`、myMN200motor.cpp 舊本體改註解、5 處宣告換 `#include "MNetLog.h"`、AutoClean.cpp／TfFTP.cpp 空殼退役、cStateRecord.cpp G5 打開（改用 job.copies）、新 ctest St02_W143MNetLog。**cMyDB.cpp:186 的空殼保留**（tests/test_ga1_cmydb 單獨編 cMyDB.cpp、沒連 MNetLog，退役會連結失敗；已加同行說明）。兩組態建置 0 錯（建置線 s39 在 8ba72e7b 前一版，差一行測試註解）。
+- **還沒做**：#6 機台同步 → 跑 St02_W143MNetLog＋84 支相關測試（清單 `C:\AI_TempFile\st02e-scratch\w143\names.txt`）兩組態 → 反向 `reverse_w143.py`（R1～R6）→ 還原 → rebase main → merge-tree → 推 MR → 回報（HUMAN_REVIEW B：開機後 wb_serve 會寫 `D:\HT9045_Log\MNetLog\YYYY\MM\…`；FTP／IO 失敗會多出紀錄）。b85 合進 main 後建置線加 `-DW906_STRIP_TEST_EXES=ON`（測試 exe 第一次執行不再被防毒卡 15 s）。
+- 之後：W-140 Command.cpp（候選評估 `C:\AI_TempFile\st02e-scratch\w140\`）。W-142 已由筆電收進第 85 批。
+
+### 10-07 12:2x 狀態（St02-E 寫；St02-M＝ht9045-32）
+- **W-142 推了，MR !300**（`v906/st02-w142-alarmdesc` `5036e647`，**接在筆電 b84 上**——用到 b84 的 W906_AlarmMsgWithErrPart 與 RTFDESC；b84 合進 main 前 MR 會連 b84 的 commit 一起顯示）。工具與反向：`C:\AI_TempFile\st02e-scratch\w142\`（advmot\ 是 1203 錯誤碼表的產生器）。
+- 這張學到的：①`fNote_ShowError.cpp` 的 ErrShowToForm 在送告警框**之前**跑（wb_serve.cpp:442 先記錄、:497／:526 才送），所以「記錄一次、送出時取用」可行；②`sed -i` 會把 CRLF 吃掉（cMyDB.cpp 整檔變 LF），一律用 Python 腳本或 Edit 改；③JS 檔某一行行尾已有 `//` 註解時，往行尾附加程式碼會變成註解的一部分（W-142 的 w142MsgAsDesc 被測試抓到）；④原始碼釘子要釘「整行的樣子」，只找一個片段可能在別處也有（R5 一開始沒變紅）；⑤MinGW 6.3 沒有 C++17 inline 變數，header-only 的表要放在 inline 函式的 static 裡；⑥WebMotorAccess.cpp／Pci1203GaliRouteCore.cpp 直接編進十幾個測試目標，加新 .cpp 要改很多目標 ⇒ 用 header-only。
+- D026_NoteAuth 在 b84 上本來就紅 1 項（notifyAck 釘子，b84 的 AI(W906-NOTICE-DEFER-4) 改了 wb_serve.cpp:4914），不是我們的；已告訴 St02-M。
+- A1a／A1b 已改派 Frank01（RULINGS_20261007 #4）；本機 `v906/st02-a1a-contact` 是空的、已刪。
+- 排隊：**W-143 MNETLOG**（!296 提案 A；`mmoMNet` 改「不顯示」＋`// TODO(W906-LOGVIEW)` 註記，Steven 12:0x）→ **W-140 Command.cpp**（候選評估在 `C:\AI_TempFile\st02e-scratch\w140\`；我提 1931／1952／3454／14892 四個，St02-M 訊息寫「三個」，開工前確認）。
+- machine_sync 已 restore，backup 0 個。
+
+### 10-07 10:1x 教訓：測試的圍堵檢查要放過建置目錄（gate b83a）
+- !293／!295 的測試在筆電 gate ABORT：`UnderMachineTree` 擋所有 `d:\ht9045` 開頭的路徑，但 `tests/test_bootstrap.cpp` 給的 lastdata 沙盒（`<build>\tests\w906_ctest_lastdata_<pid>`）與 general ini 副本（`general_ini_scratch`）在**建置目錄**裡；筆電（worktree）與機台（`D:\HT9045\Obj\V906`）的建置目錄都在 D:\HT9045 底下。這台的建置線在 C:\AI_TempFile，所以本機看不出來。
+- 筆電已修（d74e577e 第 83 批、2b663dbd 第 84 批）：小寫後含 `\obj\v906\` 就算沙盒（`if (s.find("\\obj\\v906\\") != std::string::npos) return false;`）。**新測試一律照這條**；只檢查自己在 %TEMP% 建的路徑的不受影響。
+- 1007 10:1x 掃過 St02 其他測試：ELA_TimeData、MyDB_O19_Summary、TesterComm_TcpCmdServer、Jam_Rules、Security_LoginDatBook 的圍堵都只檢查 %TEMP% 路徑 ⇒ 沒有同樣的問題（掃描 `C:\AI_TempFile\st02e-scratch\teachscan\machinetree_scan.py`）。
+
+### 10-07 09:1x 狀態（St02-E 寫；St02-M＝ht9045-32；新 session 從這段接，下面 07:5x 那段仍有效）
+- **POOL-2 推了，MR !295**（`v906/st02-pool2-secs-ec` `efbad72c`，從 main a23e7ea6；工作樹 `C:\AI_TempFile\st02-c23`）：`SECSGEM/uHGemHT9045.cpp` [E1]／[E5]／[L1] 照 golden 0618 打開（ReadESDDataFile／fBinSel->Save／fSecurity->SetLevelSet 都有本體了）。新 ctest St02_SecsEcFileWrites（真的 S2F15／S125F3 封包：SecsWireCodec 編碼 → THGem 模擬 socket 解碼 → 直接叫 HT9045Gem 處理函式；寫法可以照抄）兩組態 10／10，反向 R1～R4 紅（`C:\AI_TempFile\st02e-scratch\pool2\`）。
+- 這張學到的：①叫到 TfBinSel::ReadFile 的測試要自己 `OpenGeneralIniFile()`（wb_serve 開機就開著，database.cpp:3161），不然 ReadTechData 的 CheckAndReadIniDataGeneral 會當掉；②`asTeachPath`（teach.ini）**沒有**被測試環境轉向，但 ReadTechData 只在 `fTeach!=NULL` 時才讀（cinitial.cpp:16211）；`fTeach` 只是全域指標（forms/fTeach.cpp:73），正式程式只有 wb_serve.cpp:3927 會 new，ctest 只有 GearTeachSave／TeachCheckRangeReload 會建（兩支都自己轉向）⇒ 一般 ctest 走 SetWorkParameter **碰不到** teach.ini（09:2x 用探針實測：哨兵檔沒被寫）。另：TfTeach::ReadFile 在 teach.ini 沒有 `[Teach INI] Update2` 時會讀寫死的 `d:\HT9045\system\tech.dat`（沒有轉向接縫），再整份寫回 teach.ini；③TfBinSel::Save 寫 Binasgn.Data 或 BinasgnOff.Data 看旗標，ReadFile 還會另建一個 ⇒ 兩個都要看。
+- POOL-7 已由 NB2 做（MR !287），不要重做。
+- 唯讀排除過的候選（已轉筆電）：Timer4～7／9、SV G13／G18（欄位不存在）、G17（零寫入者）、EC g6（要裁決）、G06／G47（客戶）、G41-43（會動機台）。
+- HT9050 機台：客戶碼 957 CC_PTI，config.ini [SECS GEM] Enable SECS GEM=0 ⇒ SECS 相關改動在 HT9050 上暫時走不到。
+- ctest 第一次跑常在 15～17 s 報 Timeout（TIMEOUT 明明是 60），單獨重跑就過——原因未查，已告訴 St02-M。
+
+### 10-07 07:5x 狀態（St02-E 寫；St02-M＝ht9045-32）
+- **W-132 推了，MR !293**（`v906/st02-w132-sckart` `4b491858`，從 main 76dd45f3；工作樹 `C:\AI_TempFile\st02-c23`）：TfSCKART 補 iCurrentStatus／iLOTSTATUS_A、建構子 R＝4／A＝6（iLOTSTATUS_R 以前沒設值）、SetLotStatus 寫 iCurrentStatus；HandlerGpibMsg G2／G4／G6 照 golden 0618 main.cpp:15443-15526 打開，G7／G10／G11 還缺 iLOTSTATUS_F／L 所以照留。新 ctest St02_W132SckArtLotRt 兩組態 15／15，反向 R1～R6 紅（`C:\AI_TempFile\st02e-scratch\w132\`）。已回報 St02-M、ChangeLog 1007 第 1 列。
+- 已知缺口（可當下一張卡）：移植樹沒有地方把狀態設成 A（golden note.cpp:5651 Break-ART、AccessFile 讀 Tester.Data 的 iCurrentStatus :203）⇒ G6 在機台上走不到。別人的檔的過期註解（Command.cpp:254／:15369-15371／:17543、csystem.cpp:2695）已列給 St02-M 轉筆電。
+- 測試的坑：建置線一邊建 ship 一邊跑 SIM ctest ⇒ 7 支逾時；新 exe 第一次執行防毒掃描 ⇒ ship 3 支約 15 s 逾時；單獨重跑都過。**ctest 要等兩組態都建完再跑、-j 1**。lane_cmake.sh 的 PE 檢查碰到防毒鎖檔每支等 30 s（W-29），要趕時間可以停掉它、改直接 `cmake --build`。
+- St02-M 1007 07:1x 說過「St02-M 沒回應時改寫 ST-HandOver chat/st02e.md」，07:3x 又取消（Steven：暫不接手）⇒ 照舊用 SendMessage 回報。
+- machine_sync：已 restore，backup 0 個。
+
+### 10-06 22:5x 狀態（St02-E 寫；St02-M＝ht9045-32；下面 20:0x 那段仍有效）
+- **W-135（POOL-5 #1＋#2）推了，MR !285**（`v906/st02-pool5-wma` `fa80ae01`，從 main 2db43115）：`tests/test_web_motor_access.cpp`（筆電的檔）:964／:965／:1045 三個釘死的數字改結構檢查（列欄位、目錄＝kActions、live＋ui＝全部），檔尾兩個輔助函式。兩組態 WebMotorAccess 1096／1096、反向 R1～R4 全紅（`C:\AI_TempFile\st02e-scratch\pool5\`）。已回報 St02-M、ChangeLog 第 15 列。machine_sync 已 restore、backup 0 個。
+- 工作樹 `C:\AI_TempFile\st02-c23` 現在在 `v906/st02-pool5-wma`（已推）；s39 建置線 detached 在 fb6e1bb0（同內容）。明早 W-132 從 origin/main 開新分支。
+
+### 10-06 20:0x 狀態（St02-E 寫；St02-M＝ht9045-32）
+- 今天推的 MR：!253 P1b、!274 2C-ST02、!277 W-121、!278 2C-ST01、!279 W-127、!285 W-135（都等 gate）。POOL-4 報告＋跟 Ifor01 交叉比對已交（St02-M 發布）。
+- **手上沒有排隊的卡**；A1a／A1b 仍暫停等 Steven 本人。St01 今晚起離線。
+- **候選卡（等筆電）**：HandlerGpibMsg G2／G4／G6（golden 0618 main.cpp:15443-15526 ART LOTRTCLEAR）不是單純解閘：global fSCKART（TfSCKART 外殼，筆電的 forms/fSCKART.h）沒有 iCurrentStatus／iLOTSTATUS_A，SetLotStatus 不做 golden SCK_ART.cpp:665 `iCurrentStatus=iStatus`；實際狀態在 SckArtState（Automation/SCK_ART.h:100）。要筆電同意改標頭（＋設計：外殼自己存還是讀 SckArtState）才能做。20:0x 已交 St02-M；St02-M 20:1x 已在 s3 問筆電／Jimmy（handoff 7fd0e696：A＝TfSCKART 照 golden 自己帶 iCurrentStatus／iLOTSTATUS_A（建議）、B＝讀 SckArtState、C＝先不做；並請准認領 forms/fSCKART.h／.cpp），答案在 TO_STEVEN §4，St02-M 明早轉。
+- **10-06 20:1x 起 idle**（St02-M 已記心跳）。
+- **10-07 早上第一張＝W-132**（筆電 21:0x 選 A，照 golden、不用 Jimmy 決定；St02-M 已在 s1 認領 forms/fSCKART.h／.cpp＋HandlerGpibMsg，handoff 2f33af74）：
+  ①fSCKART.h 加 `int iCurrentStatus; int iLOTSTATUS_A;`（golden SCK_ART.h:251 與 LOTSTATUS 那段）②fSCKART.cpp 建構子值照 golden SCK_ART.cpp:42-55、SetLotStatus 也做 golden :665 `iCurrentStatus=iStatus` ③HandlerGpibMsg.cpp G2（:363-367，有 #else ⇒ `#if 1`）＋G4（~:419）＋G6（:434）一起開，對 golden 0618 main.cpp:15443-15526 ④ctest 走 MSG_CMD_SCKART_LOTRTCLEAR 的 A／R／其他三條路＋反向。不改 Command.cpp／MessageDef；SckArtState 的債照留。一張 MR。開工先重量行號、照 #6（測完 backup 0 個）。
+- POOL-2 選檔之前先看 main 的 `docs/handoff/IF0_CENSUS_20261006_linked.tsv`（22 支普查檔根本沒連進 wb_serve.exe）。我 20:0x 回報的 7 個已寫進普查（cStateRecord.cpp:853 粗體）。
+- IF0 普查 §2 我這區 7 個「可解」不成立（cStateRecord.cpp:853 是 MOVED-BG，解開會跑兩次 7z／刪資料夾）——已交 St02-M 轉筆電／Ifor01（handoff fe21cadc）。
+- 工作樹：`C:\AI_TempFile\st02-c23`（目前在 `v906/st02-w127-lowtempdoor`，已推；之後新卡從 origin/main 開新分支即可）；s39 建置線＋`st02-s39-obj`（Ninja，build／build_ship）。
+- machine_sync：**這台目前是原本的設定，backup 資料夾 0 個**（每次測完看 `D:\HT9045\backup\machine_sync_*` 要是 0）。restore 用 PowerShell 跑（Git Bash 會把路徑的反斜線吃掉）。
+- 工具：WinLibs 16.2 在 `C:\AI_TempFile\toolchains\mingw32-16.2.0`；POOL-4 探針 `C:\AI_TempFile\st02e-scratch\pool4\`；2C／W-121／W-127 的反向腳本在各自的 scratch 資料夾。
+
+### 10-06 18:3x 狀態（St02-E 寫；St02-M＝ht9045-32）
+- **POOL-4 交了**（`C:\AI_TempFile\st02e-scratch\pool4\FP_EQ_CENSUS_20261006.md`，St02-M 發布；工具同資料夾：fpeq_candidates2.py、classify2.py、shape_probe.cpp／site_probe.cpp＋run_probe.py、gen_report.py；WinLibs 16.2 在 `C:\AI_TempFile\toolchains\mingw32-16.2.0`）。跟 Ifor01 的 670 處交叉比對也交了（§7）：A 組 6 處一致；B 組合起來 7 處（我漏 MyVacuumPanel:576、他漏 gen.inc 5＋Adam6024Integrate 1）。
+- **Ninja**：winget 裝了 ninja 1.13.2；s39 建置線 build／build_ship 已換 Ninja（舊目錄 `*.makefiles-20261006-1753xx` 留著，第一次 Ninja 建置過了就可刪）。
+- **2C-ST02**（W-107）：分支 `v906/st02-2c-tests`（`C:\AI_TempFile\st02-c23`，WIP `c602a4c0`，從 main b8ea3a51）。5 支測試改結構檢查；SIM 5／5 綠、反向 R1～R5 全紅（`C:\AI_TempFile\st02e-scratch\c2c\`）；SHIP 建置中 → SHIP ctest → restore → 推 MR。
+- **2C-ST01**（St01 的 #8／#9／#10／#16＋低 2 支）：等 Jimmy 同意（St02-M s3）；helper 只做唯讀草稿在 `C:\AI_TempFile\st02e-scratch\c2c_st01\`；**不動 tests/CMakeLists.txt、不碰 test_indexz_autoheight_1203.cpp**。
+- **W-121**（主畫面 Light／FAN 鈕 release 模式沒接上：theme.js stripTitles 先把 title 搬走）：2C-ST02 之後做；碰到權限檢查就停、告訴 St02-M。
+- Steven 18:1x：決策題一律給 Jimmy（經 St02-M 寫 FROM_STEVEN §3）。A1a／A1b 仍暫停。
+
+### 10-06 14:1x 狀態（St02-E 寫；St02-M＝ht9045-32）
 - **P1b 做完、推送中**：分支 `v906/st02-p1b-pad`（工作樹 `C:\AI_TempFile\st02-p1`），選 A＝回到 golden 逐 chunk（PadInterface_St02.cpp 佇列改成整塊、DrainRx 每拍全部取走、新接縫 `W906_PadRxQueuedBytesForTest`；測試 [8] 改 P1-8c～8g）。
   建置線 s39 在 `0486b48f`（合 main 55b590bd）兩組態 0 錯；14:06 apply 機台 13:52 快照 → SIM St02_PadInterface 57／57、ScanKeyGolden 139／139；SHIP 56／56、139／139（差 1 是 P1-3a 既有的 SIM／SHIP 分支）→ 反向 R1（舊的跨 chunk 暫存）紅 P1-8c／8d／8e／8f／8g、R2（同 chunk 逐幀分 unit）紅 P1-8c → 14:13 已 restore（7 檔 MD5 相符、備份已刪）。
   工具 `C:\AI_TempFile\st02e-scratch\p1b\`（reverse_p1b.py、mr_desc.md）。
@@ -33,7 +211,7 @@
 - 新的跨機聊天 repo：`https://gitlab.honprec.com/honprec/rd/rd5/ST-HandOver`（`chat/st02e.md`，只附加；短分支＋auto_merge）。跟 St02-M 照舊用 SendMessage。
 
 ### 10-06 13:0x 狀態（St02-E 寫；St02-M＝ht9045-32）
-- **A1 已交**（唯讀盤點，報告 `C:\AI_TempFile\st02e-scratch\a1\ST02_A1_DEAD_CONTROLS_20261006.md`，St02-M 發布；工具 `a1\a1_field_probe.py`（`--clicks`／`--evals`）、`unwired_lists.py`、`gate_by_func.py`）。09:1x 第 3 輪 apply 機台 10-06 09:00 快照 → 已 restore。
+- **A1 已交**（唯讀盤點，報告 `C:\AI_TempFile\st02e-scratch\a1\ST02_A1_DEAD_CONTROLS_20261006.md`，St02-M 發布；工具 `a1\a1_field_probe.py`（`--clicks`／`--evals`）、`unwired_lists.py`、`gate_by_func.py`）。09:1x 第 3 輪 apply 機台 10-06 09:00 快照 → **⛔ 更正 19:1x：那次沒有 restore**（之後 14:06／18:29／18:59 的 apply→restore 都只回到「09:00 快照」的狀態），19:1x 才把 `machine_sync_20261006_091054` 還原（447 檔 MD5 相符、備份已刪）；09:10～19:1x 這台的設定是機台 09:00 快照。教訓：每次測完馬上 restore，收尾看 `D:\HT9045\backup\machine_sync_*` 一個都不能剩。
 - 筆電 12:2x 回 A1 兩題「照 golden 都做」，St02-M 13:0x 派卡（handoff `0153df2d` §1 已認領）。**順序：P1b → A1a → A1b，各一張 MR**；先重量行號、把確切範圍給 St02-M 寫 §1。main＝`6b616f5e`，測試前照 #6。
   - **P1b**（Ifor01 審 !221）：`PadInterface_St02.cpp` 收資料 `pending` 沒上限＋最後一段沒 CR 要等下一個 CR。golden 0618 uPadInterface.cpp:708-746 是每個 chunk 自己處理（do…while 至少一次、刪到第一個 \r、沒 CR 的尾巴處理一次就丟）。選項 A＝回到 golden 逐 chunk；B＝保留累積但上限約 4 KB＋一次 [Recv Error]＋尾巴照 golden 處理一次。對照機台 com_probe_pad 擷取（GitHub 機台分支 dispatch/20261005_rs232pad_priority/）。
   - **A1a**：把 Contact 11 顆模式鈕＋btnStart／btnPause／btnTStart／btnTStep／spbOneCycle 從 `web/page/ht9045_golden_kb_unwired.js:190-217` 拿掉；機台會動 ⇒ MR 寫明、HUMAN_REVIEW 上機項、第一次上機 EastSun 在旁；node 測試＋反向。

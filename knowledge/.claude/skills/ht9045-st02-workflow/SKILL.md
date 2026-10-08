@@ -47,6 +47,10 @@ description: >
 - **不直接寄信給 Jimmy**；每次 push 把 commit＋2～4 行重點交給協調者，它每小時合寄一封。
 - **要裁決的題目**：交給 St02-M，由它附絕對路徑與行號轉 ST01-M 彙整；不直接問 Steven、不寄信（Steven 20260927）。
 - 交接檔：FROM_STEVEN／TO_STEVEN（`D:\HT9045\docs\handoff\`；FROM_STEVEN 只在 `v906/steven-handoff`）。**不寫 todo.md**。
+- **用量規則（Steven 本人 1008 09:3x，St02-M／St02-E 同一個帳號，兩邊都適用）**：
+  - **7 天用量到 90%** ⇒ 開始換帳號交接：所有 WIP 推上自己的分支（不開 MR）、在 `references/current-state.md` 最上面寫交接段（做到哪、還剩什麼、認領的確切行、建置線與 scratch 路徑）、告訴 St02-M。
+  - **5 小時用量到 95%** ⇒ 停在存檔點，等 5 小時用量重置再繼續；St02-M 負責貼公告到 ST-HandOver 與給 Jimmy（CHAT_ST02／FROM_STEVEN §3）。
+  - 用量數字之後由公司的 quota-guard 外掛提供（會插入「[quota-guard] …」一行）。它說要在工作目錄寫 HANDOFF.md 時，**不要寫進 `D:\HT9045`**，改寫 `references/current-state.md`。
 
 ## 2. 驗證規則（編譯＋本機跑 ctest）
 

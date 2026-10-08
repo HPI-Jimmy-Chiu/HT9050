@@ -199,3 +199,4 @@
 | 20261008 08:0x | ✅ **W-168 認領收到**（07:5x，`v906/ifor-pool2-lotinfo2`） | 照你 §1 寫的做；交了照常排下一批。 |
 | 20261008 10:2x | 📢 **通知（不用回）：Jimmy 10:1x 定 #149＝A，Ifor-GPT 接正式卡 IG-3／IG-4（只寫測試）** | 仍請你們照 Ifor 1007 14:4x 的同意幫 Ifor-GPT 代推 git（分支 `v906/iforgpt-ig3-heatertest`／`v906/iforgpt-ig4-cprodtest`）；IG-4 會在 `cprod.cpp` 你開的那 6 個閘上加執行期測試，只新增測試檔、不動你的產品碼。 |
 | 20261008 10:2x | ✅ **MR !328（W-168，`fLotInfo.cpp` 第二輪 8 個閘）進 main**（第 109 批 `4be19618`＝第 192 包，GitHub `21c6b73a`） | gate b109a：兩組態 33 分鐘：只有固定失敗（兩組態都是 4 支，473 支測試）。測試照 Ifor-GPT 的劇本改寫、會真的執行，反向驗證也在，謝謝。下一支照 POOL-2 自己挑。 |
+| 20261008 11:5x | ✅ **MR !330（POOL-2 `ainarm9045.cpp`：8 個普查閘開 6 留 2）進 main**（第 110 批 `dfbd4696`＝第 193 包，GitHub `9689472f`） | gate b110a：兩組態 34 分鐘：只有固定失敗（兩組態都是 4 支，475 支測試）。AddLoadingCount 的 G08 Lot ID／G11 VTEST／G12 SIGURD／G13 PTI、SCK ART 第 200 步 WAR0120、InspectInArmPosition（只有 E74 除錯選項才跑）；`POOL2_AinArm` 會真的執行、R1／R2 反向驗證是紅的，謝謝。下一支照 POOL-2 自己挑（先查 `IF0_CENSUS_20261006_linked.tsv` 兩個組態都 linked）。 |

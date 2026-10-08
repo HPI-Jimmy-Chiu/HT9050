@@ -200,3 +200,28 @@
   * **nm 要比對完整的符號**：demangle 後、而且不是 static。不能用子字串，`W7L1A_GetBundleInfo` 這種 TU 內的 static 替身不算本體。
   * **腳本標出來的欄位，挑列時一個都不能漏**：post.py 的「沒有本體」「停止用的關鍵字」「客戶」「空區塊」。
   * **說某段「只是重畫」之前，要把被呼叫的函式本體讀到結尾**。`ShowLoadingIC_ART` 其實會跑連續上料門檻，可能發 alarm 或 one cycle；閘的註解寫「display only」是錯的。
+
+## 9. 20261007 學到的（W-149 SIM-AWARE、W-152 急件）
+
+* **模擬版／出貨版各一個期待值，用同一行寫**（W-149，MR !307～!309）：`tests/w906_sim_build.h` 的 `W906_SIM_BUILD`（定義 `SOFT_SIMULTE` 時＝1）＋`W906_SIM_NOTE("…")`（只在模擬版印）。寫法 `CHECK(W906_SIM_BUILD ? (模擬值) : (出貨版原條件), "原訊息" W906_SIM_NOTE(" -- SIM: 值, golden 0618 檔:行"))`；模擬軌跡用第二個陣列宣告在原陣列同一行。別人的測試檔行號不動、出貨版輸出一字不差。模擬值一律從 golden 的 `#ifdef SOFT_SIMULTE` 分支推，反向＝把那個分支換成 `#ifdef W906_W149_REVERSE_NEVER`（`#ifndef` 的換了就變活的）。
+* **建置線的 `BUILD_TESTING`**：第 89 批（MR !301）起預設 OFF，既有 obj 重新設定後 `cmake --build` 只建應用程式、**不再重編測試**（舊 exe 還在、照樣跑得動，很容易誤以為測到新碼）。每個 obj 跑一次 `cmake -DBUILD_TESTING=ON <obj>`；建完看 log 的步數合不合理。
+* **`.gen.inc` 是產生器的輸出，不手改**：改 `tools/editlist/<結構>.py` 的那一列，跑 `W906_GOLDEN_ROOT=D:\HT9045\HT9011UC_Code_V3.33.906.0_20260618 python tools/gen_editlist.py --only <結構>`。先**不改設定**重跑一次確認位元組相同（產生器寫 LF，git 只會報行尾；`git checkout` 還原），改完再跑、`to_crlf.py`、`git diff -U0` 只能看到預期的那幾行。要保持行號：把「取代句」換成 golden 原句，不要刪列（刪列會少 3～4 行）。
+* **原始碼釘子會釘「同一行上相鄰的幾句」**：例 `B8_CtL2_TimerEP`／`B8_Ct3d_OtdDock` 釘 `DF_FormShow();  FileRW_Contact_TimerEPTick();  FileRW_Contact_OTDTimerTick();` 必須連在一起。在別人的行上插呼叫之前，先 `grep -rn "<那一行的片段>" tests/`（用 Grep 工具），新呼叫放在被釘的片段**之後**。
+* **TfContact 有兩份**：翻好的狀態機跑在門面 `fContactForm`（forms/fContact.h），網頁與存檔用 C 路替身 `EL<…>("TfContact", n)`（FileRW/DeviceForm_File.*）。golden 只有一個表單，所以兩邊之間的複製是「golden 等價」；門面的 `DoIniDataToForm` 是 GATE W-02，**門面的框從來沒從配方填過**——叫門面狀態機之前一定要先帶值（W-152 (C)）。門面的 private 成員（例 `bAutoHighFinish`）從 C 路碰不到：由門面的成員函式把值當參數傳出去、自己清掉。
+* **跨 library 的呼叫用掛勾指標**：ht9045_sm 的檔不能直接呼叫 wb_serve 那邊的 FileRW 函式——指標放 ht9045_sm（例 `IndexZTorque1203.cpp` 的 `W906_ContactModeSingleEntryHook`／`W906_ContactRunResultHook`），FileRW 的 TU 在 static 初始化時登記。
+* **新的串流 tag 一律用 `W906_PageStreamWanted("<webId>")` 包住**（RULINGS_20260930 #12）：webId 查 `WebPageTable.cpp`（例 fContact＝"contact"），宣告放 `tools/wb_serve.cpp:2680` 那一行（全域；`PublishExtraTags` 在匿名 namespace 裡，block-scope 宣告會連不到）。`test_c14_bindisp_pane` 釘那兩行。
+* **node 自測的假計時器**：只跑「這一刻排著的」計時器（`timers.splice(0)`），不要 `while (timers.length)`——忙的時候程式會自己再排一次，迴圈永遠跑不完（W-152 自測第一次就卡住）。
+* **權限檢查擋下的安全閘（W-152 第一次）**：解 MainProc 的閘被判 Security Weaken ⇒ 停、照實回報、不交給別的 session；之後 Jimmy 裁決由筆電自己在整合時加那一行（RULINGS_20261007 #9），我們只做不會讓機台多動的資料路徑。
+* **測試裡點 1203 輸出（W-155）**：SHIP 要先 `MyLaneIO.SelectVendorBackends()`（照 test_io_points [6]）IOBitOn 才會走到 `SetPci1203IoRoute` 的假物件；SIM 一律留在模擬後端，假物件收不到——「先寫卡、後送面板燈號」這種順序檢查只能在 SHIP 做，SIM 那一項寫成 `g_writes == 0`。另：要測 JsonBridge/IoBtnPanelClick.cpp 這種只編進 wb_serve 的檔，測試直接把它編進來，ht9045::Pci1203Route*（Installed／CanWriteBit／SetSource／LastWrite）在測試裡給 stub（tests/test_st02_w155_iopanel.cpp）。
+* **解 merge 衝突的步驟不要用 `;` 串 `git add`／`git commit`（W-155 B，20261007 20:4x）**：解衝突的腳本 assert 失敗了，但後面用 `;` 接的 `git add` + `git commit` 照跑，把含 `<<<<<<<` 的 tests/CMakeLists.txt 提交進本機的 merge commit（沒推；當場 amend 修好）。做法：解衝突腳本自己檢查結果沒有衝突標記、有疑問就非零結束；`git add` 之前單獨跑一次 `grep -c "^<<<<<<<\|^>>>>>>>"` 看到 0 才加。另：`git show <rev>:<檔>` 拿到的是 git 存的 LF，工作樹是 CRLF——用 `\n` 切、去掉行尾 `\r`，不要用 `\r\n` 切（腳本 `C:\AI_TempFile\st02e-scratch\w155\resolve_cmake_eof.py`：結果＝main 的檔＋我們在錨點之後的檔尾區塊）。
+* **產生器做的頁面（_gen_dfm_abs.py）**：`.btnpanel` 有內建的點擊切換 Down，要自己接線的頁面在 document 的 capture 階段 `stopPropagation`＋`preventDefault`，狀態只畫 C++ 快照；dfm 的 Alias 可能寫錯（uPadInterface.dfm:1198 Safe Lock 鈕寫成 SwRKManualStep），送 C++ 一律用元件名稱。每秒輪詢的讀指令要加進 WebCmdGuard.cpp 的純讀白名單（400 ms 防連點會擋掉碰在一起的兩次輪詢），不用權杖的讀指令加進 WebBridgeServer.cpp:1449（都要認領）。讀表單 bShow／fShow 的新程式要跑 `python tools/fshow_audit.py`。
+* **加 background.html WINDOWS 一列，就要在 WebPageTable.cpp 加雙胞胎列**（W-155 B，筆電 gate b95a）：!316 只加了 `padinterface` 的 WINDOWS 列，WebPageTable [14] 變紅（筆電 d9550882 補列、kWebRowCount 70→71）。加視窗列時一起跑 `WebPageTable`／`WebTeachLeave`／`EvB10A_Edges`。
+* **排進批次的 MR 再推修正顆，要確認批次合的是哪個 tip**（W-155 B，20261007 22:0x）：!316 在 21:22 被第 95 批照舊 tip 07803f21 合進 main，之後才推的心跳修正 2662cf87 沒進去（`git merge-base --is-ancestor 2662cf87 origin/main` 會回 1）——第 178 包帶著那個洞。修正要另開分支從最新 main `cherry-pick -x`、另開 MR 標急件。推修正之前先問協調者那張 MR 是不是已經在跑 gate／已排批。
+* **重產 DeviceForm_File.gen.inc**（W-156）：`W906_GOLDEN_ROOT=<0618 樹> python tools/gen_editlist.py --only DeviceForm_File`（沒設就停在 golden_root），產生器寫 LF ⇒ 再跑 to_crlf；證明「只有我們的列」：在 main 上用 main 的 .py 重產，tree 要乾淨。
+* **腳本 print 中文到這台主控台（cp950）會 UnicodeEncodeError**：設 `PYTHONIOENCODING=utf-8` 或不 print；寫檔前就出錯時檔案沒動，重跑即可。
+* **反向腳本的錨點先數次數**：一字不差的兩行（例 ckernel.cpp:237／:306）要分「第一個／第二個」各做一項，不要 replace 全部。
+* **machine_sync apply 會因為網路失敗**（W-156，1008 10:0x：連 GitHub 被重設，URLError 10054，rc=1、什麼都沒複製、沒有備份）：apply 之後一定看 rc 與「copied N, checked N / N」那一行，rc≠0 就**不能接著測**——那一輪不算 #6，重跑 apply 成功後再測。
+* **測「存檔沒有被誤判成操作員修改」時，要看存進去的檔，不是存檔後畫面的值**（W-156 [5]）：golden 存檔後會 ReadFile＋DoIniDataToForm，ReadFile 自己會把某些值正規化（例 Direct 模式 Drop 歸零，0618 cContact.cpp:509-514）。頁面送出的內容要是「伺服器目前的狀態」（整頁），只改單一欄位會把舊的單選／下拉套回去，變成真的修改。查不出原因時，在 lane 的副本加暫時的 printf（用完 git checkout 還原），量了再改測試。
+* **ctest 的沙盒每一輪要用自己的子資料夾**（W-150 第 2 片，1008 10:5x）：ctest 給的 log 根目錄（`<obj>\tests\machine_log_scratch`）**跨輪留著**。檢查「檔案還不存在」「沒有某一行」「第 N 行才存檔」的測試，第一次綠、第二次就紅（反向那一輪才抓到，前幾個突變的結果全被污染、要重跑）。做法：開頭把 as9045LogPath 改成 `<根>\w150b_<GetTickCount>` 並建資料夾（log 物件與自己組路徑的函式都從它取），全綠才刪；寫完新測試**同一組態連跑兩次**再交。
+* **解開會呼叫 `SW[...].Status()` 的程式，既有測試的 OutValue 可能被蓋掉**（W-150 第 2 片，test_init_dio_status）：Status() 會用 IOOutBitStatus（OutPortData 快取）重設 OutValue，ePCI1203 的 Ring 0 直接回 false（MyLaneIo.cpp:455-458）。只記錄寫入的假後端讀回永遠是 0；真機讀回就是剛寫的值，所以是夾具的假象，不是行為改變——在測試裡讓那段不走（例：TestIF.iTestType 設成非 TTL），並在同一行寫理由。
+* **machine_sync apply 完成之後才開始任何 ctest**（W-150 第 2 片）：E023_StatusEvents 的 [guard] 會比對 D:\HT9045\system，apply 剛寫過（10:50:56）就紅一次，重跑才綠。apply 與 snap 跑完、隔一下再開 ctest；回報寫一行。

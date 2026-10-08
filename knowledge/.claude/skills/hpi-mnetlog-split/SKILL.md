@@ -107,6 +107,7 @@ Steven 1007 12:0x：「把這些改成不顯示的 log，要註記起來，之�
 | L2 | `mmo1`（主畫面） | atester.cpp:2037-2077（TTL 測試資料）、main.cpp:17130-17135（超過 20 行清空） | 測試機 TTL 收發資料 | atester.cpp 有 5 處參照，狀態待查 | 待定 |
 | L3 | `mmoTrayStepMotor` | Motor/TrayStepMotor.cpp:546-550（收到的資料，超過 1024 行清空）；main.cpp:9405 接上、:11970-11972 解除 | 盤步進馬達通訊 | 待查 | 待定 |
 | L4 | `mmoVibrationMotor` | main.cpp:33976-33982（滿 1000 行先 **SaveToFile** 再清空） | 振動馬達紀錄 | 待查 | 待定——**注意：這個框本身就是落檔緩衝**，不顯示時要保留存檔，不能整段拿掉 |
+| L5 | `MemoIndexPosLog`（主畫面 IndexArmYPos 頁，golden 0618 main.dfm:15626） | main.cpp:33649-33662（TfMain::AddIndexPosLog；LogIndexMaxMinPos 與 mymotor 的 InitialMaxMinValue／RecordIndexPosition 都寫它） | Index Y 指令／編碼器／教導位置的最大最小值 | W-150 第 2 片：`IndexPosLog.cpp` 的 W906_AddIndexPosLog 改成不顯示＋TODO | 待定——**跟 L4 一樣，這個框本身就是落檔緩衝**（bSave 或超過 1024 行就 SaveToFile 到 IndexPos\YYYY\MM_IndexPosLog\Z1UpZ2Down_*.logs），緩衝與存檔照留 |
 
 （`fMotorTest->mmo1`〔mymotor.cpp:2941、uMotorTest.cpp:2075〕是馬達測試頁自己的框，不是主畫面，不在此表。）
 
@@ -128,3 +129,18 @@ Steven 1007 12:0x：「把這些改成不顯示的 log，要註記起來，之�
 - include 省不掉：cMyDB 40、cObserver 14、cprod 12、rs232 53 處其他 fMain->（跟 §2 的判斷一樣）。
 - 坑：單獨編 cMyDB.cpp／cprod.cpp 的測試（test_ga1_cmydb、test_ga1_cprod）要在舊空行補取用函式的替身；cprod.cpp、rs232.cpp 要另外 include `Public/MyStringList.h`（設成員／呼叫方法需要完整型別）。
 - ctest `St02_W150LogSplit`：取用函式＝fMain 的物件、MyDBIProductionData 經取用函式寫進沙盒 ProductRecord、TestLog 寫檔、W58 判斷（模擬擋 UNC、出貨不擋）、cObserver／cprod／rs232 原始碼釘子＋全樹沒有活的 `fMain->sl<這 6 個>`。
+
+## 10. W-150 第 2 片（20261008，St02-E，分支 `v906/st02-w150-logsplit2`）
+
+盤點（main.cpp 以外還碰 fMain 紀錄物件的地方，分組）與認領全文：St02-E 的 `C:\AI_TempFile\st02e-scratch\w150\claim_s2.md`；St02-M 在 FROM_STEVEN §1 登記（8466e5cf）。
+
+| 物件 | 這片做了什麼 |
+|---|---|
+| slTTLLog | golden `TTLLog`（0618 cpublic.cpp:489-512）搬成 `TTLLog.cpp`（ht9045_sm：它讀 SW[]，globals／db 看不到）；經 `W906_TTLLogObj()`。退役兩個閘：cDIOStatus.cpp:71（0618 main.cpp:24373，出貨組態才跑）、MainTimer3.cpp G15（:25493）。cpublic.cpp:669-692 的原文留著當對照（閘照舊）。golden 只寫檔 ⇒ 沒有 LOGVIEW |
+| slIndexYMaxMinShift | golden `LogIndexMaxMinPos`（0618 cpublic.cpp:1582-1599）＋`TfMain::AddIndexPosLog`（main.cpp:33634-33664）搬成 `IndexPosLog.cpp`（`W906_AddIndexPosLog`，§8 L5）；經 `W906_IndexYMaxMinShiftLogObj()`。退役 cStateRecord.cpp G9（0618 main.cpp:26675）。cpublic.cpp:1818-1835 的原文留著當對照 |
+| slQtyLog | MainClarnData.cpp:45 的 `fMain->slQtyLog` 換成 `W906_QtyLogObj()`（測試用的延遲建構照留） |
+
+- **還沒做（之後的片）**：FileRW/MainClose.cpp（St01 的檔）關站表的 12160 `TTLLog("Close")`（0618 main.cpp:11642-11644）與 12446 `LogIndexMaxMinPos("Program closed")`（:11929）照舊標 missing。
+- **最大／最小值暫時都是 0**：餵值的是機台端——`Motor/mymotor.cpp` 的 RecordIndexPosition（:2646 閘住）、InitialMaxMinValue／EncoderTeachingMaxMinCount（:2845-2846 空殼），只有 Galil（myGALILmotor.cpp:4395）會設；`asendic_Loader.cpp:273`／`:303` 還是 TU 內空殼。那幾支補上時直接用 `IndexPosLog.h` 的 W906_AddIndexPosLog 與 W906_IndexYMaxMinShiftLogObj。
+- **其他人那一組**：Frank01——ainarm_SearchPickPlate.cpp:247／:303／:381、ainarm_SearchPlacePlate.cpp:4809、uhome.cpp:1112 的 slAutoSiteMapLog（V906 是 `TfMainSiteMapLog` 替身 forms/fMain.h:191，沒有寫檔）、atester T17 的 TTLLog×8 與 §8 L2；Ifor01——TempCtrl/TriTemp.cpp:336-343 的 W7TT_FMain 替身（slDewPointLog[3]／slTriTempDoorlog，28 處，沒有寫檔）、forms/fLotInfo.cpp:6637 自己 new 的 slLotInfolog（寫死 D:\HT9045_Log\LotInfo，沒走 W906_HT9045LOG_ROOT 沙盒）。
+- ctest `St02_W150LogSplit2`：取用函式在建立前是 null、建立後＝fMain 的物件；TTLLog 只在 TTL_MODE（＝0，TestIF.iTestType 的預設值）或 "Close" 時記；LogIndexMaxMinPos 兩行進 IndexMaxMin 檔與緩衝；W906_AddIndexPosLog 的 bSave 與第 1026 行先存 1025 行；三個退役的閘是活的呼叫、cpublic 的對照原文還閘著、全樹沒有活的 `fMain->sl<這 3 個>`。
