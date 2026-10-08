@@ -1,16 +1,40 @@
-# St02 現況板（更新：2026-10-08 00:xx，換帳號交接）
+# St02 現況板（更新：2026-10-08 12:4x，壓縮前）
+
+## ★ 1008 12:4x 接手段（壓縮後從這裡接；下面 10:1x 那段是今天的細節）
+- 我＝**ht9045-46**（St02-E，STEVEN-NB3）；St02-M＝**ht9045-5b**（回訊息用它最新的 `from=`）。用 SendMessage 回報；不直接找 Jimmy。
+- **新規則（Steven 1008 12:4x，已寫進 SKILL.md §1）**：每交出一件工作（推／MR、紀錄、回報都做完）就用 CronCreate 排一次性 `/compact`（2 分鐘後），觸發後確認有壓縮，沒有就告訴 St02-M。
+- **今天交出的**：W-156＝!329 ✅ 已進 main（第 110 批 dfbd4696，包 193）；W-150 第 2 片＝**!331** ✅ 已進 main（第 111 批 214f680d＝包 194，13:2x；筆電同意了 4 支同一行修改的檔、收下 B63）。
+  W-150 第 3／4 片認領稿（唯讀＋編譯探測都乾淨）`C:\AI_TempFile\st02e-scratch\w150\claim_s3.md`／`claim_s4.md`，St02-M 已發布（bfbb7b56：`docs/handoff/ST02_W150_S3_FRANK01_20261008.md`、`ST02_W150_S4_IFOR01_20261008.md`），**等 Frank01／Ifor01 回覆才動手**。
+- **13:5x 進度**：W-175 程式＋測試寫好（`v906/st02-w175-lowyield`，從 main bdaf57b2＝第 112 批；認領 FROM_STEVEN §1 f280ae5b），兩組態建置中 → #6 → ctest → 反向 R1-R6 → 推。cCleanOut.cpp:315-321 其實在 **TfMain::BtnOneCycleClick**（golden 0618 main.cpp:4332-4380，讀清單在 :4349-4352），不是 CleanOut——認領稿第一版寫錯，已更正。One Cycle 結束時的 ShowErrorMessage(…,0,…)＝通知：wb_serve ForwardShowErrorMessage 的 kcode==0 分支停機（golden note.cpp:795-801）＋寫信箱＋立刻回，不在輪詢執行緒上等。測試要走到 DoOneCycleFinishCheck 的「完成」：MTestZ1／Z2／Y1 掛 Enable=false 的 HTMotor，CheckIndexIsNormal 才會過（Motor==NULL 時恆 false、停在第 9 段）。
+- **INBOX 155 做完**（St02-M 308d6897 已發布）：D 類 36 → 0 個待辦。普查工具修正（切到按鈕所在分頁、分頁本身藏起來另記 hidden(tab)）在本機分支 `v906/st02-c12-tabfix` `727d5801`，整份重跑在背景（匯出的 main 0b55e181 樹 `C:\AI_TempFile\st02e-scratch\c12tree`，輸出 c12_click_v3.tsv／.log），跑完合併 golden 0618、保留手寫 §9-§11，報每頁新數字＋新 D 類，工具修正另開一張 St02 MR。
+- **13:2x 新卡 W-175 LOWYIELD-ALARM**（TO_STEVEN §4 1008 13:1x；＝claim_s3.md (C) 的 C1，照 golden 接 slLowYieldAlarm）。筆電條件：One Cycle 結束時的告警要走既有的網頁對話框／通知掛鉤，**不能在輪詢執行緒上等**；測試＋反向＋MR；人工審查 B 號＋上機項目。St02-M 已在 FROM_STEVEN §1 認領（8b9d5b9b）。**等第 112 批（NB2-1 !332 W-170 改 csystem.cpp G01a/G01b 在 :4060 附近、Jerry !334、ST-GPT !333）進 main（約 13:5x）**，從它開 `v906/st02-w175-lowyield`，**重量每一行**（csystem :110/:4060/:4061/:4752/:4753/:5089/:5090、cCleanOut :60/:310-317/:321、atester_ProcessCount :116/:343-348）送 St02-M 更新認領後才改；認領稿要寫 DoOneCycleFinishCheck 裡的 ShowErrorMessage 在移植樹做什麼（丟進網頁對話框信箱就回，還是會擋）。Frank01 收到 s3 稿當 W-176 FYI。
+- **同時（筆電同意選項 3）**：在 STEVEN-NB3 自己跑 INBOX 155 的點擊探針，C12 D 類 36 顆按鈕（`docs/handoff/ST02_BUTTON_CENSUS_20261002.md`，填「sent」欄）。只用無頭瀏覽器＋假連線，絕不碰機台的 wb_serve；要 Edge 而跑不起來就停下告訴 St02-M。結果經 St02-M 寫 FROM_STEVEN §2。
+- **壓縮**：CronCreate 排 `/compact` 沒用（12:50 實測只送來一則文字）。每交出一件工作就告訴 St02-M，由它請 Steven 在這個 session 手動打 `/compact`。
+- **還在等**：Frank01／Ifor01 對 s3（W-176 FYI）／s4 的回覆。
+- **下一張 St02 MR 要順便帶的文件**（現在只在 `D:\HT9045` 的工作副本，沒 commit）：`.claude/skills/ht9045-st02-workflow/` 的 SKILL.md（§1 壓縮規則）、references/current-state.md、techniques.md；
+  以及 skill hpi-mnetlog-split §10 那句更正（「slAutoSiteMapLog 在 V906 是替身、沒有寫檔」錯了——LogObjects.cpp:200-208 在 wb_serve 換成真的 TMyStringList，as9045LogPath\ASM；這個檔不在 D:\HT9045 工作副本，開下一條分支時在分支上改）。
+  做法：新分支從最新 origin/main 開（c23 工作樹現在在 `v906/st02-w150-logsplit2`＝凍結），把 D:\HT9045 的三個檔複製進去 commit。
+- **工作樹／建置線**：編輯樹 `C:\AI_TempFile\st02-c23`；建置線 `C:\AI_TempFile\st02-s39`（detached，obj `C:\AI_TempFile\st02-s39-obj\{build,build_ship}`，BUILD_TESTING=ON），增量：`bash C:\Users\steven\AppData\Local\Temp\claude\d---github\c8311755-ee3b-4c2b-9f5f-bc5682ac9613\scratchpad\s09close\lane_cmake.sh '<obj>' <tag> sim|ship`。
+- **#6 每輪測試前**：最新 main → `python tools/machine_sync/machine_sync.py check`（c23 根目錄）→ `apply --yes`（看 rc 與 copied N／checked N）→ 確認 SYNCED → **apply 完成後才開 ctest** → `cd HT9011UC_Cpp_V3.33.906.0 && python tools/realfile_guard.py snap <名>` → 測 → `check <名>`／`drop <名>` → PowerShell 跑 `machine_sync.py restore "<備份>"` → `D:\HT9045\backup\machine_sync_*` 要 0 個。目前 0 個。
+- **ChangeLog**：`D:\RD5-portal\public\Docs\ChangeLog\Steven02\CHANGES_20261008_Steven02.md` 第 1～3 列（入口網站 repo，St02-M 那邊推）。日報段落附在給 St02-M 的回報裡。
+- 今天學到的（已寫進 techniques.md）：ctest 沙盒每輪自己的子資料夾、新測試同組態連跑兩次；解開會叫 `SW[...].Status()` 的程式時舊測試的 OutValue 會被讀回蓋掉；apply 完才開 ctest；時間標籤一律先跑 `date` 再寫（今天又估錯兩次）。
+
 
 ## ★ 1008 10:1x 狀態（新帳號；新 session 從這段接，下面的換帳號交接是背景）
 - 新帳號後：我＝**ht9045-46**，St02-M＝**ht9045-5b**（以最新訊息的 `from=` 為準）。
-- **W-156 推了，MR !329**（`v906/st02-w156-flags` **788ff831**，一顆 commit、在 main 89f00bc1＝第 108 批之上；原本的 WIP 21c6245d 已用 force push 換成壓縮後的這一顆，那條分支原本沒有 MR）。St02_W156Flags 兩組態 19／19＋相關 21 支兩組態全過；反向 RA～RE 7 項全紅；機台快照 08:51，測完已還原、備份 0 個，真檔 42 個不變。
+- **W-156 已進 main（第 110 批 dfbd4696＝包 193，12:0x；788ff831 是祖先）**。原本：**W-156 推了，MR !329**（`v906/st02-w156-flags` **788ff831**，一顆 commit、在 main 89f00bc1＝第 108 批之上；原本的 WIP 21c6245d 已用 force push 換成壓縮後的這一顆，那條分支原本沒有 MR）。St02_W156Flags 兩組態 19／19＋相關 21 支兩組態全過；反向 RA～RE 7 項全紅；機台快照 08:51，測完已還原、備份 0 個，真檔 42 個不變。
   - 為了跟 NB2-1 的 W-169（Contact 頁關窗／F5／斷線，認領 FileRW/DeviceForm_File* 全家、_EditPage.cpp）錯開：拿掉了 DeviceForm_File.cpp :472／:474 的註解修改（離 :459-470 太近）；最後的修改點已交 St02-M 轉給 NB2-1。
   - [5]（KYEC_CHEN＋A16 存檔）原本的寫法錯了：golden 存檔後 ReadFile 在 Direct 模式把 Drop 歸零（0618 cContact.cpp:509-514），畫面 0.00 是對的；要看的是**存進 Contact.Data 的值**（1.50／1.60）。頁面要送「伺服器目前的狀態」（測試的 ServerView），只改單一欄位會讓舊的單選按鈕被套回去、變成真的模式改變。
-- **W-150 LOG-SPLIT 第 2 片推了**（11:0x，分支 `v906/st02-w150-logsplit2` 程式那一顆 `350a9250`，在 main 21d163f0 上；MR 編號見給 St02-M 的回報／FROM_STEVEN §2）。盤點與認領全文 `C:\AI_TempFile\st02e-scratch\w150\claim_s2.md`；St02-M 登記 FROM_STEVEN §1（8466e5cf＋6d8eec2f，筆電點頭待補）。
+- **W-150 LOG-SPLIT 第 2 片推了**（11:0x，分支 `v906/st02-w150-logsplit2` 程式那一顆 `350a9250`，在 main 21d163f0 上；**MR !331**，推完 11:0x 已回報 St02-M；文件 commit `ce2bef9f` 同一條分支）。盤點與認領全文 `C:\AI_TempFile\st02e-scratch\w150\claim_s2.md`；St02-M 登記 FROM_STEVEN §1（8466e5cf＋6d8eec2f，筆電點頭待補）。
   - 做了：新檔 TTLLog.cpp（golden 0618 cpublic.cpp:489-512）、IndexPosLog.cpp/.h（LogIndexMaxMinPos 0618 cpublic.cpp:1582-1599＋W906_AddIndexPosLog＝main.cpp:33634-33664，§8 L5 TODO），放 ht9045_sm；取用函式 W906_TTLLogObj／W906_IndexYMaxMinShiftLogObj／W906_QtyLogObj；退役 cDIOStatus.cpp:71、MainTimer3.cpp G15、cStateRecord.cpp G9；MainClarnData.cpp:45 換取用函式；新 ctest St02_W150LogSplit2。
   - **FileRW/MainClose.cpp 不動**（St01 出差、S95／S121 沒人能點頭）：12160 TTLLog("Close")、12446 LogIndexMaxMinPos("Program closed") 照舊 missing，之後的片再做。
   - 驗證：兩組態完整建置 0 errors；#6 機台快照 10:26 → apply rc=0 → 測 → 真檔全部未變 → restore 448 → 備份 0；相關 20 支兩組態綠（SIM E023 第一次 [guard] 紅＝apply 剛寫過 D:\HT9045\system，重跑兩次綠）；反向 R1～R9 全紅。
   - 沒做（別人那組）：Frank01 slAutoSiteMapLog×5（V906 是 TfMainSiteMapLog 替身）、atester T17；Ifor01 TriTemp W7TT 替身、fLotInfo.cpp:6637 自建 slLotInfolog（沒走沙盒）；機台端 mymotor.cpp:2646／:2845-2846、asendic_Loader.cpp:273／:303 ⇒ IndexMaxMin 的值暫時都是 0。
   - 已知：開機那一次 TTLLog("InitDIOStstus") 在 V906 不寫——wb_serve 先跑 InitDIOStstus（wb_serve.cpp:4171 → :3608）才建 log 物件（:4178）；golden 是建構子先建（0618 main.cpp:1526）。已寫進 commit 的 Human review。
+- **W-150 第 3／4 片認領稿（唯讀，11:0x～11:1x，St02-M 交辦）**：`C:\AI_TempFile\st02e-scratch\w150\claim_s3.md`（Frank01：slAutoSiteMapLog×5 改走 W906_AutoSiteMapLog、atester T17 建議不動、slLowYieldAlarm 是流程行為〔One Cycle 結束時跳低良率告警〕建議另開卡）與 `claim_s4.md`（Ifor01：TriTemp 的 W7TT 空替身改兩行就讓 28 處真的寫 TriTemp／DewPoint log；fLotInfo.cpp:6637 自建的 LotInfo log 改用 fMain->slLotInfolog、路徑走沙盒）。St02-M 轉筆電再給 Frank01／Ifor01；**我不動這些檔**。
+  - 編譯探測（11:2x，只用副本 `w150\probe\`，腳本 probe_s34.py／probe_s34b.py）：s4 (A)(B)、s3 (A) 兩組態乾淨，警告數＝原檔；s3 (C) 的 csystem.cpp 要另加 4 行同一行轉型 `AnsiString(W7C2_FMAIN_SLLOWYIELD->Strings[i])`（:4752／:4753／:5089／:5090，vclcompat 的 Strings[i] 是代理、沒有 SubString）＋:110 include 才乾淨。St02-M 已更新發布版（bfbb7b56）。現在等：①筆電下一張卡；②Frank01／Ifor01 回覆 s3／s4；③!331 第 111 批的結果。
+  - ⚠ 待更正：skill hpi-mnetlog-split §10（!331）寫「slAutoSiteMapLog 在 V906 是替身、沒有寫檔」是錯的——LogObjects.cpp:200-208 在 wb_serve 已換成真的 TMyStringList（as9045LogPath\ASM）。下一顆 St02 文件 commit 一起改。
+  - **!331 在筆電第 111 批 gate 中（12:1x）——不要推合 main 的 tip**（St02-M：會在 gate 中途移動 tip；tests/CMakeLists.txt 檔尾由筆電自己解）。skill hpi-mnetlog-split §10 那句更正改跟**下一張 St02 MR** 一起推。
 
 ## ★ 1008 換帳號交接（新 St02-E 從這裡開始，冷啟動也能接）——W-156 已在上面那段完成
 

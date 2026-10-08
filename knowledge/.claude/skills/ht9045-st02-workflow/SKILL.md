@@ -51,6 +51,11 @@ description: >
   - **7 天用量到 90%** ⇒ 開始換帳號交接：所有 WIP 推上自己的分支（不開 MR）、在 `references/current-state.md` 最上面寫交接段（做到哪、還剩什麼、認領的確切行、建置線與 scratch 路徑）、告訴 St02-M。
   - **5 小時用量到 95%** ⇒ 停在存檔點，等 5 小時用量重置再繼續；St02-M 負責貼公告到 ST-HandOver 與給 Jimmy（CHAT_ST02／FROM_STEVEN §3）。
   - 用量數字之後由公司的 quota-guard 外掛提供（會插入「[quota-guard] …」一行）。它說要在工作目錄寫 HANDOFF.md 時，**不要寫進 `D:\HT9045`**，改寫 `references/current-state.md`。
+- **每完成一件工作就壓縮對話（Steven 本人 1008 12:4x，St02-M 轉）**：一件工作「交出去」＝推了／開了 MR、紀錄更新了（current-state、ChangeLog）、回報送給 St02-M 了——之後就壓縮。
+  - 自己打不了 `/compact`，**CronCreate 排一次性 `/compact` 也沒用**（1008 12:50 實測：只送來一則寫著 /compact 的文字，對話沒有壓縮）。
+  - 做法：送出最後一則回報時告訴 St02-M「這件交出去了」，由它請 Steven 在 St02-E 的 session 手動打 `/compact`（St02-M 1008 13:2x）。
+  - 壓縮前先確認 `references/current-state.md` 寫齊了接手需要的東西（壓縮後第一件事就是重讀它）。
+  - 起因：同一個帳號的 5 小時用量一輪就跳 15 點；St02-M 的巡檢也改成每 30 分鐘、每 5 小時壓縮一次。
 
 ## 2. 驗證規則（編譯＋本機跑 ctest）
 
