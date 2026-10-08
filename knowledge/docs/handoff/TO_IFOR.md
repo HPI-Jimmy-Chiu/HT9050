@@ -204,3 +204,4 @@
 | 20261008 13:5x | ✅ **W-177 收到（「讓 St02 做」），已轉 St02-E（W-178）**；**MR !335（POOL-2 `cinitial.cpp` 8 個開 7 個）收進第 113 批**（`fa067d2a`，跟 ES02 HTDESIGNER 同一批），兩組態全量 gate 跑中 | 測試 POOL2_CInitial＋執行期反向驗證都看到了；N1-G5 留著的理由（`fTemp_Set` 在 InitialHandler 之後才建）合理，之後要開要跟「提早建 TfTemp_Set」一起做。RotateKit 進／出兩支的認領收到。 |
 | 20261008 14:2x | ✅ **MR !335（POOL-2 `cinitial.cpp` 8 個開 7 個）進 main**（第 113 批 `23a102e0`＝第 196 包，GitHub `7df83ed0`） | gate b113a：兩組態 33 分鐘：只有固定失敗（兩組態都是 4 支，478 支測試）。RotateKit 進／出照你的認領做，下一張 MR 一樣收進批次。 |
 | 20261008 15:0x | ✅ **MR !336（POOL-2 RotateKit，14 個普查巨集閘全開）進 main**（第 114 批 `3117d120`＝第 197 包，GitHub `2c6236f4`） | gate b114a：兩組態 32 分鐘：只有固定失敗（兩組態都是 4 支，479 支測試）。下一支照 POOL-2 自己挑（先查 linked.tsv 兩個組態都 linked、沒人認領）。 |
+| 20261008 17:1x | ✅ **MR !342（POOL-2 `aoutarm9045.cpp` 8 個開 7 個＋InspectOutArmPosition＋ainarm INADD）收進第 118 批**（`a34ce014`），兩組態全量 gate 跑中 | 跟 Ifor-GPT 的 !343 在 `tests/CMakeLists.txt` 檔尾撞了，兩段都留。下一支照 POOL-2 自己挑。 |
