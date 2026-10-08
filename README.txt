@@ -2193,4 +2193,5 @@ tools 0170 (20261007): HTML designer merged with laptop packages 162/163/167/168
      操作紀錄 oplog_20261008.txt：新增 2427 行
      設定檔變動：machine_params/D_GPIB9045_system/general.ini、machine_params/D_HT9045_system/Gerneral.ini、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/lastdata_backup2.dat、machine_params/runcfg/system/teach.ini
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+tools 0171 (20261008): HTML designer -- the Solution Explorer's Debug / Release button drives F5 and the green start (a build_..._dbg_... / build_..._ship_... launch pair, swapped before the preLaunchTask). Install: tools/vscode-htdesigner pack.ps1 then code --install-extension.
 MD5 清單在 MANIFEST_MD5.tsv。
