@@ -1,0 +1,194 @@
+From 6fc07453c0c8f655e276e0762c7df3c9a5a998c7 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 8 Oct 2026 10:26:26 +0800
+Subject: [PATCH] BOOTCLEAR9050: HT9050 asks once after boot whether to clear
+ the machine data restored from machinerecord.dat -- EastSun 1008 'every
+ start, if the machine has material, ask whether to clear: Yes clears, No
+ carries on'.
+
+cinitial.cpp (end of file): W906_BootAskClearMachine9050. Runs once, on the first DoAllProcess pass after wb_serve installed the
+  YES / NO web hook (the boot sequence cannot ask). HT9050 only, idle only. "Has material" = SaveMachineRecord's own list (manual
+  trays, Tray Y, plates, Auto1-6 and cars) or HasICUnderMachine(). Yes = golden InitialMachine + Loader / Empty stack counts -1
+  (re-probe) + Auto1-3 counts 0 + SaveMachineRecord; No = keep; answer 3 (another box open) = ask again next pass. RecordProcess logs it.
+csystem.cpp DoAllProcess: the call, same line as FLOWTRACE / TRAYZTHICK.
+Why: after a restart golden restores Tray Y 'has tray' while iLoaderLayerCount_9050 starts at -1, so DoLoad_9050 case 1 parks
+  Loader Z at Down[-1] = 22300 instead of probing (10:14 oplog).
+tests: test_flow9050_tray.cpp [BC] (7 checks), Flow9050_Tray 137/137; W6_6_CSystemCycle, FP9050_Pure / Index, HT9050_ProdFlow /
+  DryRun passed. Debug and release linked.
+Not in this commit: EastSun's own acatchtray.cpp / asendic_Loader.cpp probe edits (09:48 / 09:56), left in his tree.
+Backups D:\HT9045\_review\*.bak_bootclear9050_20261008_102348. WORKLOG row 201.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ cinitial.cpp                 | 63 ++++++++++++++++++++++++++++++++++++
+ csystem.cpp                  |  2 +-
+ docs/WORKLOG_MACHINE.md      |  1 +
+ tests/test_flow9050_tray.cpp | 57 ++++++++++++++++++++++++++++++++
+ 4 files changed, 122 insertions(+), 1 deletion(-)
+
+diff --git a/cinitial.cpp b/cinitial.cpp
+index 3c0b690..41049f0 100644
+--- a/cinitial.cpp
++++ b/cinitial.cpp
+@@ -19482,3 +19482,66 @@ void W906_TrayZ9050PitchSync()
+     for(int z = 0; z < 5; z++)
+         Tech.iTrayZ9050Pitch[z] = W906_TrayZ9050Pitch(z);
+ }
++//==============================================================================
++//AI(W906-BOOTCLEAR9050) 20261008: EastSun 1008 (after「重新開啟後應該是MMTrayY上沒有資訊才對」-- golden restores the machine model from
++//  machinerecord.dat at boot, LoadMachineRecord :9717, whenever the last SaveMachineRecord saw material) 「請跳出可選擇的動作，每次開啟
++//  若是機台有料的話跳出是否要清除的畫面，以利後續驗證 若選擇Yes則清除 若選擇No則繼續」.
++//  csystem.cpp DoAllProcess calls this every pass; it runs ONCE, on the first pass after wb_serve has installed the YES / NO hook (at
++//  boot the browser cannot be asked yet -- ShowMyMessageBox_YES_NO would answer 0). HT9050 only. "Has material" = SaveMachineRecord's
++//  own list (:17166-17188, the one that makes the record restore at the next boot) or HasICUnderMachine(). Yes = golden InitialMachine
++//  (the same wipe LoadMachineRecord starts with) + the HT9050 stack counts (Loader / Empty unknown -1, Auto1-3 empty 0) + SaveMachineRecord,
++//  so the next boot starts empty too. No = keep everything, carry on. A box already open (3) asks again on the next pass.
++static bool s_W906BootClearAsked = false;
++void W906_BootAskClearMachineReset()                                            // tests
++{
++    s_W906BootClearAsked = false;
++}
++static bool W906_MachineHasMaterial9050()
++{
++    return MOT[MManualTray1].HasIC() || MOT[MManualTray2].HasIC() || MOT[MManualTray3].HasIC() ||
++           MOT[MManualTray4].HasIC() || MOT[MManualTray5].HasIC() || MOT[MManualTray6].HasIC() ||
++           MOT[MMTrayY].HasIC() || MOT[MMTrayY].fHasTray || MOT[MMTrayY_Car].fHasTray ||
++           MOT[MMPlate1].Tray.HasIC() || MOT[MMPlate2].HasIC() ||
++           MOT[MMAuto1].fHasTray || MOT[MMAuto2].fHasTray || MOT[MMAuto3].fHasTray ||
++           MOT[MMAuto4].fHasTray || MOT[MMAuto5].fHasTray || MOT[MMAuto6].fHasTray ||
++           MOT[MMAuto1_Car].fHasTray || MOT[MMAuto2_Car].fHasTray || MOT[MMAuto3_Car].fHasTray ||
++           MOT[MMAuto4_Car].fHasTray || MOT[MMAuto5_Car].fHasTray || MOT[MMAuto6_Car].fHasTray ||
++           HasICUnderMachine();
++}
++void W906_BootAskClearMachine9050()
++{
++    if(s_W906BootClearAsked)
++        return;
++    if(W906_ShowMyMessageBoxYesNo_Hook == 0)                                    // no browser to ask yet (boot sequence, ctests)
++        return;
++    s_W906BootClearAsked = true;
++    extern AnsiString W906_GpibModel;
++    if(!(W906_GpibModel == "9050GPIB" || MachineTypeChoice == Type_HT9050))
++        return;
++    if(SystemStart || !W906_MachineHasMaterial9050())
++        return;
++    const AnsiString where = sHasICUnderMachine();
++    RecordProcess(AnsiString("W906 boot: the machine model restored from machinerecord.dat has material (TrayY ") +
++                  (MOT[MMTrayY].fHasTray ? "tray" : "-") + ") " + where + " -- asking whether to clear");
++    const int r = ShowMyMessageBox_YES_NO("機台上有上次留下的料／盤資料，是否清除？ Yes＝清除，No＝保留並繼續 "
++                                          "(The machine still holds the last run's tray / IC data. Clear it? Yes = clear, No = keep)",
++                                          "機台有料，是否清除？");
++    if(r == 3)                                                                  // another box is open: ask on a later pass
++    {
++        s_W906BootClearAsked = false;
++        return;
++    }
++    if(r != 1)
++    {
++        RecordProcess("W906 boot: machine data kept (No)");
++        return;
++    }
++    InitialMachine();
++    iLoaderLayerCount_9050 = -1;
++    iEmptyLayerCount_9050  = -1;
++    iAuto1LayerCount_9050  = 0;
++    iAuto2LayerCount_9050  = 0;
++    iAuto3LayerCount_9050  = 0;
++    SaveMachineRecord();
++    RecordProcess("W906 boot: machine data cleared (Yes) -- InitialMachine + HT9050 stack counts + SaveMachineRecord");
++}
+diff --git a/csystem.cpp b/csystem.cpp
+index 41abe7b..881bb4c 100644
+--- a/csystem.cpp
++++ b/csystem.cpp
+@@ -1841,7 +1841,7 @@ void DoAllProcess()
+ {
+     int cmpt=MAX_AUTO_TRAY;                                                     //Frank 20170109 add
+     bool flag, flag2=true;                                                      //ChungHung  modify flag2--->flag2=true
+-    { extern void W906_FlowTraceTick(); W906_FlowTraceTick(); }  { extern void W906_TrayZ9050PitchSync(); W906_TrayZ9050PitchSync(); }   /* AI(W906-TRAYZTHICK9050) 20261008: HT9050 Tray Z pitch = Tray Form thickness, shown on the Teach page (cinitial.cpp EOF) */   //AI(W906-FLOWTRACE) 20261007: EastSun 1007「要由資料流來判斷是否能吸放料…看看哪邊會卡住」-- one op-log FLOW line whenever the IC data / engine cursors change (end of file; read only). Replaces a blank line
++    { extern void W906_FlowTraceTick(); W906_FlowTraceTick(); }  { extern void W906_TrayZ9050PitchSync(); W906_TrayZ9050PitchSync(); }  { extern void W906_BootAskClearMachine9050(); W906_BootAskClearMachine9050(); }   /* AI(W906-BOOTCLEAR9050) 20261008: HT9050, once after boot: machine has material -> ask Yes = clear / No = keep (cinitial.cpp EOF) */   /* AI(W906-TRAYZTHICK9050) 20261008: HT9050 Tray Z pitch = Tray Form thickness, shown on the Teach page (cinitial.cpp EOF) */   //AI(W906-FLOWTRACE) 20261007: EastSun 1007「要由資料流來判斷是否能吸放料…看看哪邊會卡住」-- one op-log FLOW line whenever the IC data / engine cursors change (end of file; read only). Replaces a blank line
+     static bool bDoProcess=true;                                                //Steven 20110608 : 降低CPU負載
+ 
+     fMain->ProcessSensorScan();                                                //ChungHung 20140815 測試用
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index b90324a..40ed79b 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -84,6 +84,7 @@
+ | 169 | **Out Shuttle Z 位置還原**（EastSun「剛剛說的teach 沒有indexZ 高度可以設定 我說錯了 可以不用改 在其他頁面已經可以設定了」）：revert web 113a1ef，控制項回到套件 149 的原位置；給 Jimmy 的說明同步更正 | web 4e68790；cpp（本列） | — |
+ | 170 | **只查：實體 HOME 鍵沒反應**（EastSun「我實體按鈕案home都沒反應」）：PadCommLog 今天實體按鍵封包（t05x400…）只到 09:15:57，最後一筆 HOME＝t050400002020（HOME 0x20＋ALARM RESET 0x2000 卡住，golden ScanPannelKey ALARM RESET 最後判斷蓋掉 HOME）；之後只有程式送出的燈號回音（0006/0016＝PAUSE 燈閃，Teach 頁訊息框開著時）。EventLog 10 筆 MES2112 全是網頁軟鍵。程式這條路與 golden 相同，不改碼；請查面板 ALARM RESET 鈕／按鍵線。17:00 release 補建 | — | — |
+ | 171 | **ALARM RESET 卡住時其他實體鍵照常**（EastSun「就算reset卡住其他按鈕不是也要可以用?」→ 選「改」）：ckernel.cpp ScanPannelKey 前／後面板共 4 處 ALARM RESET 判斷，按著不放（已鎖存）時不再蓋掉同時按的其他鍵；剛按下那一下照 golden 優先。備份 D:\HT9045\_review\ckernel.cpp.bak_rstheld_20261007_172605 | cpp（本列） | ScanKeyGolden（新增 4 項）、MainScanKey、W7_L2_CKernel、SysinitBoot、St02_N07Alarm、St02_PadInterface 全過；Debug 17:30／release 17:31 |
++| 201 | **開機時機台有料就問「是否清除」**（EastSun「iLoaderLayerCount_9050 現在是多少?」→ 由 Loader Z 停在 22300＝Down[-1] 推得 -1；Tray Y 從 machinerecord.dat 還原有盤 ⇒ DoLoad_9050 case 1 走 600 不探層 → EastSun「重新開啟後應該是MMTrayY上沒有資訊才對」→ 查證：golden LoadMachineRecord（cinitial.cpp:9717）開機照 machinerecord.dat 還原，SaveMachineRecord 只要有料就記 bInitialStart → EastSun「請跳出可選擇的動作，每次開啟若是機台有料的話跳出是否要清除的畫面，以利後續驗證 若選擇Yes則清除 若選擇No則繼續」）：cinitial.cpp 檔尾 W906_BootAskClearMachine9050，csystem.cpp DoAllProcess 每圈呼叫（同 FLOWTRACE 那一行）；只跑一次，要等 wb_serve 裝好 YES／NO 的網頁 hook 之後（開機序列裡問不到）；只 HT9050。「有料」＝SaveMachineRecord 自己那張清單（Manual 盤／Tray Y／加熱盤／Auto1～6 與 Car）或 HasICUnderMachine()。Yes ⇒ golden InitialMachine（LoadMachineRecord 開頭那個清空）＋ Loader／Empty 層數 -1（重探）、Auto1～3 層數 0 ＋ SaveMachineRecord（下次開機也是空的）；No ⇒ 全部保留繼續；回 3（已有別的框開著）⇒ 下一圈再問。oplog／RecordProcess 記「asking / kept (No) / cleared (Yes)」（AI(W906-BOOTCLEAR9050)） | cpp（本列） | Flow9050_Tray 137/137（新增 [BC] 7 項：沒 hook 不問也不用掉、No 保留且只問一次、回 3 下一圈再問、Yes 清空＋層數、清完沒料不問、非 HT9050 不問）、W6_6_CSystemCycle、FP9050_Pure／Index、HT9050_ProdFlow／DryRun 過；Debug／release 已連結。EastSun 自己的 acatchtray.cpp／asendic_Loader.cpp 探層修改（09:48／09:56）照舊留在工作目錄、未收 |
+ | 200 | **9050 Tray Z 的 pitch 改用 Tray Form 的 Thickness**（EastSun 截圖 Teach > Tray Arm「9050 Tray Z」pitch 欄（2300）＋Tray Form Type1 Thickness 7.62，「第一張圖紅框處的設定值請使用第二張圖黃框處的資訊帶入」）：cinitial.cpp W906_TrayZ9050 的層距改呼叫 W906_TrayZ9050Pitch（檔尾）＝該站 Tray 型別的厚度 ×100（golden dbTrayThick 同樣的換算，7.62 mm → 762）；站別對型別：Loader＝TrayForm.Loader、Empty＝TrayForm.Empty、Auto1～3＝TrayForm.Auto[0～2]；厚度 0 或型別不對 ⇒ 用原本教的 pitch。csystem.cpp DoAllProcess 每圈呼叫 W906_TrayZ9050PitchSync（只 HT9050）把用到的值寫回 Tech.iTrayZ9050Pitch[]，Teach 頁的 pitch 欄就顯示厚度帶入的值（設了厚度時手打的 pitch 會被蓋掉；存教導檔會存這個值）（AI(W906-TRAYZTHICK9050)，同行＋檔尾）。上次提醒的「探測極限 20 層會低於 Home」：pitch 762 時 20 層＝15240＜21000，不再超過 | cpp（本列） | Flow9050_Tray 130/130（新增 [TT] 11 項：厚度 0 用教的值、7.62→762、各站跟自己的型別、壞型別、同步到 Teach、改厚度下一圈更新、非 HT9050 不寫）、W6_3_CatchTray、W6_6_CSystemCycle、Flow9050_Shuttle、HT9050_ShtSafe／DryRun／ProdFlow／DualCoil、FP9050_Pure／Index 過；Debug／release 已連結。工作目錄另有 EastSun 08:46 自己加的 asendic_Loader.cpp 探層第 1100 步 `Cylinder[C_Load_Up].Push()`，未收進這個 commit。1008 10:1x 查證：配方 IOWEB_TEST_R003 Tray.Data [Type0]（Tray Form「Type1」分頁）Think=23.000（10-05 快照 7.62，08:51 快照已 23）、[Loader] 沒設 Tray Type＝0 ⇒ Loader pitch 2300，探層 21000→18700→16400 照此走；EastSun「請保持」23 mm |
+ | 199 | **HT9050 五口三位氣缸：Pop／Off 會開 Off 線圈，Push／On 會關 Off 線圈**（EastSun「ht9050的汽缸都是用五口三位的，所以Pop()->以前只需要對單I/O下命令Off即可，五口三位的關係，需要把相對應的汽缸先關閉在打開，例如Cylinder[C_LoaderEdgePush].Pop() 會等於 Cylinder[C_LoaderEdgePush].Off() && Cylinder[C_LoaderEdgePushOff].On() ，Push()則與Pop相反」）：mycylin.cpp TMyCylinder::OnSwitch（On／Push 的輸出）開頭、OffSwitch（Off／Pop 的輸出）結尾各呼叫 g_W906PairedCoilHook（檔尾定義，預設 0）；本體 JsonBridge/W906DualCoil9050.cpp（新檔，wb_serve 直接編入、靜態註冊）：只 HT9050，且 IO_Table 有「名稱＋Off」的 Cylinder 列、Enable=1，且該名稱不是引擎 Cylinder[]（golden 的 C_DockXAxisOff 那種自己管）⇒ On／Push 先關 Off 線圈再開 On 線圈；Off／Pop 先關 On 線圈再開 Off 線圈（保持通電）。機台表 27 對符合（C_LoaderEdgePush／EdgeClip／DrawerLock、C_TrayZ_Selector、C_Load_Up、C_Empty_Up、C_Auto1～3_Up、Auto1～3／Empty EdgePush／EdgeClip／DrawerLock、…LoaderZ_Select、C_CleanPanel、C_MobileTrayTableSelect）；IO 頁手動點按照 golden 單點寫，不連動。UPCYLOFF（193 列）的 Off 線圈不再 500 ms 後放掉，跟 Pop 一樣保持（JsonBridge/IoBtnPanelClick.cpp 檔尾，同行）（AI(W906-DUALCOIL9050)） | cpp（本列） | 新增 HT9050_DualCoil 26/26（Pop／Push／On／Off 兩線圈、先關後開的順序、非 HT9050 不動、Enable=0／非 Cylinder 列／引擎自有名稱不動、停用氣缸不動）、W6_1_EmptyCanary、W6_Canary、GA1_cprod 過；release 已連結；Debug 已編譯、等關程式 |
+ | 198 | **Loader 探層改看 SnLoaderDrawerHasTray（Off＝探到）**（01:03 MES0924 DoLoad_9050_1110：Z 17200／15300／13400（第 2～4 層）SnLoaderTrayHasTray 一路亮、撞上限 5；EastSun「這個是不是C_Loader_Up汽缸要打起來?」→「不動 C_Load_Up」→「C_TrayZ_Select應該是要打開的，並且SnLoaderDrawerHasTray在探層的時候，探到會Off沒探到會On」）：Selector 在探層第 1100 步本來就是 Push（程式註解「分離開」），沒改；asendic_Loader.cpp DoLoad_9050 第 1100／1115／1125 步改問 W906_LoaderProbeSeesTray（檔尾）：HT9050＝Sen[SnLoaderDrawerHasTray].IsOff()，其他機種＝Sen[SnLoaderTrayHasTray].IsOn()（910）（AI(W906-PROBESENSOR9050)）。層位置算法 cinitial.cpp W906_TrayZ9050＝基準－層×Pitch（Loader Up 21000／Pitch 1900／ProbeStart 2／ProbeLimit 5） | cpp（本列） | Flow9050_Tray 119/119（新增 [PS] 3 項）；Debug／release 已連結 |
+diff --git a/tests/test_flow9050_tray.cpp b/tests/test_flow9050_tray.cpp
+index b16e677..8bd55c0 100644
+--- a/tests/test_flow9050_tray.cpp
++++ b/tests/test_flow9050_tray.cpp
+@@ -1058,4 +1058,61 @@ void TrayZThicknessPitch()
+     for (int k = 0; k < 4; ++k) UserDefForm_File[k].ZDepth = savedDepth[k];
+     TrayForm.Loader.iTrayType = savedType[0]; TrayForm.Empty.iTrayType = savedType[1]; TrayForm.Auto[eAuto1].iTrayType = savedType[2];
+     TrayForm.Auto[eAuto1 + 1].iTrayType = savedType[3]; TrayForm.Auto[eAuto1 + 2].iTrayType = savedType[4];
++    { void TrayBootClearAsk(); TrayBootClearAsk(); }   // [BC] AI(W906-BOOTCLEAR9050) 20261008, below
++}
++
++// ===========================================================================
++//  [BC] AI(W906-BOOTCLEAR9050) 20261008: EastSun 1008「每次開啟若是機台有料的話跳出是否要清除的畫面 … Yes則清除 … No則繼續」
++//       (cinitial.cpp EOF, called from csystem.cpp DoAllProcess). Answers come from a fake YES / NO hook.
++// ===========================================================================
++void W906_BootAskClearMachine9050(); void W906_BootAskClearMachineReset();
++static int s_bcAnswer = 0, s_bcAsked = 0;
++static int BcFakeYesNo(const char*, const char*, const char*) { ++s_bcAsked; return s_bcAnswer; }
++void TrayBootClearAsk()
++{
++    printf("[BC] boot: machine has material -> Yes clears / No keeps, asked once, only with a browser, HT9050 only\n");
++    extern AnsiString W906_GpibModel;
++    const AnsiString savedModel = W906_GpibModel;
++    int (*savedHook)(const char*, const char*, const char*) = W906_ShowMyMessageBoxYesNo_Hook;
++    W906_GpibModel = "9050GPIB";
++
++    // no browser yet (boot sequence): nothing asked, and it is NOT used up
++    W906_BootAskClearMachineReset(); W906_ShowMyMessageBoxYesNo_Hook = 0; s_bcAsked = 0;
++    MOT[MMTrayY].fHasTray = true; iLoaderLayerCount_9050 = 3; iAuto1LayerCount_9050 = 2;
++    W906_BootAskClearMachine9050();
++    CHECK(s_bcAsked == 0 && MOT[MMTrayY].fHasTray, "before the YES / NO hook exists nothing is asked or cleared");
++
++    // No = keep, and it is asked only once
++    W906_ShowMyMessageBoxYesNo_Hook = &BcFakeYesNo; s_bcAnswer = 2;
++    W906_BootAskClearMachine9050();
++    CHECK(s_bcAsked == 1 && MOT[MMTrayY].fHasTray && iLoaderLayerCount_9050 == 3 && iAuto1LayerCount_9050 == 2,
++          "No: asked once, Tray Y tray and the stack counts kept");
++    W906_BootAskClearMachine9050();
++    CHECK(s_bcAsked == 1, "the next pass does not ask again");
++
++    // a box already open (3): asked again on a later pass
++    W906_BootAskClearMachineReset(); s_bcAsked = 0; s_bcAnswer = 3;
++    W906_BootAskClearMachine9050();
++    s_bcAnswer = 1;
++    W906_BootAskClearMachine9050();
++    CHECK(s_bcAsked == 2, "answer 3 (another box open) -> asked again on the next pass");
++    CHECK(MOT[MMTrayY].fHasTray == false && iLoaderLayerCount_9050 == -1 && iEmptyLayerCount_9050 == -1 &&
++          iAuto1LayerCount_9050 == 0 && iAuto2LayerCount_9050 == 0 && iAuto3LayerCount_9050 == 0 &&
++          MOT[MMAuto1].fHasTray == false,
++          "Yes: InitialMachine (Tray Y / Auto trays gone) + Loader / Empty -1 (re-probe) + Auto counts 0");
++
++    // nothing on the machine -> no box
++    W906_BootAskClearMachineReset(); s_bcAsked = 0;
++    W906_BootAskClearMachine9050();
++    CHECK(s_bcAsked == 0, "after the clear the machine is empty: no box");
++
++    // other machines: golden, never asked
++    W906_BootAskClearMachineReset(); s_bcAsked = 0; MOT[MMTrayY].fHasTray = true; W906_GpibModel = "";
++    const int savedMt = MachineTypeChoice; if (MachineTypeChoice == Type_HT9050) MachineTypeChoice = 0;
++    W906_BootAskClearMachine9050();
++    CHECK(s_bcAsked == 0 && MOT[MMTrayY].fHasTray, "not HT9050: no box, nothing cleared");
++    MachineTypeChoice = savedMt;
++
++    MOT[MMTrayY].fHasTray = false; iLoaderLayerCount_9050 = -1; iEmptyLayerCount_9050 = -1;
++    W906_ShowMyMessageBoxYesNo_Hook = savedHook; W906_GpibModel = savedModel; W906_BootAskClearMachineReset();
+ }
+\ No newline at end of file
+-- 
+2.55.0.windows.5
+
