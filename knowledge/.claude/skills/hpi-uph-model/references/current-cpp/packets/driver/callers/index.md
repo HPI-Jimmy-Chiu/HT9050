@@ -60,3 +60,9 @@
 ## AnsiString byte與比較續查
 
 [byte／搜尋編輯／比較與case-copy](ansi-string/bytes/index.md)：接續TStrings／INI的char*與NUL、1-based byte、比較callee；numeric／printf、locale／ABI／完整caller與runtime仍續查。
+
+- [AnsiString數值／printf／串接局部](ansi-string/numeric-format/index.md)：assignUInt／assignDouble、ToInt／ToDouble、formatString／conv與operator+；7cpp／29inline／3歷史裁決39原文，ABI／locale／caller與913 RTL仍待查。
+
+- [SysUtils數值與所選caller](ansi-string/sysutils-numeric/index.md)：free numeric／Format、picture與locale正文界線、UPH %s適配及Change Log numeric分類；13cpp／2inline／3interface18原文，完整caller／913／runtime續查。
+
+- [Change Log數值caller／單位與hook](ansi-string/change-log/index.md)：22cpp／1header／5region28原文；printf實參、double gate／MM int與static buffer、caption與TempChangeLog／wb_serve接線；完整儲存／ABI／913／runtime另續。
