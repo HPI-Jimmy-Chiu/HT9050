@@ -48,3 +48,7 @@
 ## INI typed API 與磁碟列舉
 
 [預設、數字日期與名稱清單](ini-typed-enumeration/index.md) 補磁碟／memory分流、NUL停止、16384-byte截斷與Exists差異；深層日期／字串轉換、容器及完整caller仍待續。
+
+## INI 日期與字串轉換
+
+[Trim／整數、日期解析、serial與格式精度](ini-conversion/index.md) 補查typed API的轉換callee；分開非空失敗回0與caller def、Word／floor、month/minute與秒精度。完整字串容器、caller、BCB6及實機仍待續。

@@ -24,3 +24,11 @@ Start讀取注入driver、未注入時嘗試NI，及Teardown的本地解除順�
 ## Factory與測試注入
 
 正式Init、兩個Sim注入fixture、IPC替身與建置宣告見 [呼叫端與測試界線](callers/index.md)；測試斷言與實際執行結果分開，完整機型／ABI／runtime仍待查。
+
+## 1008 main來源差異
+
+上列節點均保留其固定pin。新main新增board解除、成功設定位址觀測及bridge頁面通知，續讀 [1008版本差異](updates/20261008-online-pad/index.md)；該節點另核18項舊manifest來源變動，不把歷史註解或fixture文字當本輪runtime結果。
+
+## 1008快照與頁面消費
+
+GPIB快照走HTTP，程式頁面開關走ui.pages tag；來源、renderer未直接使用raw欄位及入列／執行界線見 [快照／頁面樹](updates/20261008-ui-page/index.md)。舊pin／正文不改，完整caller與runtime仍待驗。
