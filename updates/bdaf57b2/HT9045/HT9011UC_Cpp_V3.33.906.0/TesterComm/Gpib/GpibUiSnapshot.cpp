@@ -1,0 +1,453 @@
+// ===========================================================================
+//  TesterComm/Gpib/GpibUiSnapshot.cpp -- see GpibUiSnapshot.h.  AI(W906-GB-P7) 20260926.
+//
+//  Snapshot JSON (keys are the golden widget names so the page maps 1:1 to Main.dfm):
+//    { "up":bool, "driver":"...", "version":"...", "caption":"...", "closeReason":"...", "notice":"...",
+//      "ibsta":n, "iberr":n,                      AI(W906-GB-IBSTA) 20261007: raw NI status; the leds below are
+//                                                 golden's and their labels 8..13 do NOT match their bits
+//      "cardAddress":n,                           AI(W906-GB-PADSEEN) 20261007: the address ibpad() really set
+//                                                 (-1 = never). "status"'s "Address: n" is what was INTENDED.
+//      "leds":[{"label":"...","on":bool} x13], "status":["..." x8],
+//      "labels":{"lblGPIBWnd":"...", "lblTestTime":"...", "labStatus":"...", ...},
+//      "checks":{"chkUpperCase":{"checked":bool,"visible":bool}, ...},
+//      "combos":{"cbbGPIBTimo":{"index":n,"text":"...","items":[...]}, ...},
+//      "panels":{"palSCKART":bool, "pnlAMDCmd":bool, "pnlHanaART":bool, "tsRS232":bool},
+//      "sites":[{"caption":"Site 01","site":"01","color":n,"bin":n,"binText":"...","on":bool,"ocr":"..."} x32],
+//      "logs":{"Memo1":[...], "lstRecord":[...], "mmoBINON":[...], "memoAlarmCode":[...]},
+//      "rs232Aux":{"connected":bool, "fromRecipe":bool, "combos":{"cbDevice":{...}, "cbBaudRate":{...}, "cbByteSize":{...},
+//                  "cbStopBit":{...}, "cbParity":{...}}, "edReadIntervalTimeout":"...", "MemoLog":[...]} }
+//    rs232Aux (AI(W906-GB-P6) 20260926) = golden Main.dfm tsRS232 (Setup + COM Log), the extra RS232 port of RS232.cpp
+//    TfRS232Main.  fromRecipe: this bridge life took the framing from the Handler recipe (ruling 2A + Q2 (a)); the four
+//    framing boxes are then Enabled=false (GpibAux.cpp LoadSetupData).
+//
+//  Commands (one line of text, space separated; `text` = the rest of the line):
+//    click <button>                  btnManualStart btnSendTemp btnRunMode btnUpdate btnSaveLog btnDiagZip
+//                                    spbAutoRetest btnHANA_SendCB btnSend_ED btnHANA_SendCBTotester
+//                                    btnSend_EDToTester
+//    check <box> 0|1                 chkUpperCase chkStrLengthCheck cbBinonEcho cbFullSiteTimeOut
+//                                    cbGPIBWriteWithout_r_n chkTempReady chkCMDLog
+//    combo <combo> <index>           cbbGPIBTimo cbbFullsiteTimeOut cbbRunMode cbMode cbCmdHANAART cbCmdHANAARTtoTester
+//    radio rgController <index>
+//    edit <edit> <text>              edCmdHANAART edCmdHANAARTtoTester edReadIntervalTimeout, and the Text of the two
+//                                    csDropDown boxes cbDevice cbBaudRate (golden SetFormToData reads their Text)
+//    (P6: combo also takes cbByteSize cbStopBit cbParity cbDevice cbBaudRate; a disabled box refuses, as in VCL)
+//    site <0..31> on 0|1             MY_DUT_PAL[i]->cbSiteOn->Checked
+//    site <0..31> bin <index>        MY_DUT_PAL[i]->cbBin->ItemIndex (+Text), the simulate-bin choice
+//    reset flags                     TSerialPoll::ClearAllFlag() -- AI(W906-GB-CLEARFLAG) 20261007: clears IsTest
+//                                    and puts both task machines back to 1, so a manual start that got no Tester
+//                                    answer no longer needs a wb_serve restart
+//  The OnClick / OnChange wiring is golden Main.dfm's (cbbFullsiteTimeOut's OnChange is cbbGPIBTimoChange there).
+// ===========================================================================
+#include "TesterComm/Gpib/GpibUiSnapshot.h"
+#include "TesterComm/Gpib/GpibBridge.h"
+#include "TesterComm/UiChannel.h"
+#include "TesterComm/UiHome.h"   // AI(W906-TC-SHARED) 20261001 (St02-E)
+
+#include <cstdio>
+#include <cstdlib>
+#include <sstream>
+#include <string>
+#include <vector>
+
+namespace gpibbridge {
+
+namespace {
+
+using testercomm::JsonEscape;
+
+const int kLogTail = 200;
+
+std::string S(const AnsiString& a) { return std::string(a.c_str()); }
+std::string Q(const AnsiString& a) { return JsonEscape(S(a)); }
+const char* B(bool b) { return b ? "true" : "false"; }
+
+std::string Num(long v)
+{
+    char b[24];
+    std::snprintf(b, sizeof(b), "%ld", v);
+    return b;
+}
+
+std::string Lines(const TStringList* l, int tail)
+{
+    std::string o = "[";
+    if (l)
+    {
+        const int n = l->GetCount();
+        const int from = n > tail ? n - tail : 0;
+        for (int i = from; i < n; ++i)
+        {
+            if (i > from)
+                o += ',';
+            o += Q(l->GetString(i));
+        }
+    }
+    return o + "]";
+}
+
+std::string Combo(const TComboBox* c)
+{
+    if (!c)
+        return "null";
+    return "{\"index\":" + Num(c->ItemIndex) + ",\"text\":" + Q(c->Text) + ",\"visible\":" + B(c->Visible) +
+           ",\"enabled\":" + B(c->Enabled) + ",\"items\":" + Lines(c->Items, 300) + "}";
+}
+
+std::string Check(const TCheckBox* c)
+{
+    if (!c)
+        return "null";
+    return std::string("{\"checked\":") + B(c->Checked) + ",\"visible\":" + B(c->Visible) + ",\"enabled\":" +
+           B(c->Enabled) + ",\"caption\":" + Q(c->Caption) + "}";
+}
+
+// VCL csDropDownList: setting ItemIndex also shows Items[ItemIndex] (vclcompat keeps the two apart).
+void SetComboIndex(TComboBox* c, int idx)
+{
+    if (!c || !c->Items)
+        return;
+    if (idx < -1 || idx >= c->Items->GetCount())
+        return;
+    c->ItemIndex = idx;
+    c->Text = idx >= 0 ? c->Items->GetString(idx) : AnsiString("");
+}
+
+}  // namespace
+
+std::string BuildUiSnapshot(bool up, const char* driverName)
+{
+    TSerialPoll* sp = SerialPoll;
+    if (sp == 0)
+        return std::string();
+    std::string o;
+    o.reserve(16384);
+    o += "{\"up\":";
+    o += B(up);
+    o += ",\"driver\":" + JsonEscape(driverName ? driverName : "");
+    o += ",\"version\":" + Q(GPIBVersion);
+    o += ",\"caption\":" + Q(sp->Caption);
+    o += ",\"closeReason\":" + Q(sp->closeReason);
+    o += ",\"notice\":" + Q(sp->lastNotice);
+    //AI(W906-GB-IBSTA) 20261007 (Jerry, J-19): the raw NI status words.  The 13 "leds" below cannot be read as
+    //  ibsta -- golden UpdateLed() (GpibUi.cpp:1383-1398) assigns ALed8 and ALed11 twice and never assigns
+    //  ALed12/ALed13, so labels 8..13 do not match their bits (CIC and LACS are never shown at all).  That is
+    //  golden's bug and is kept; these two fields are the way to see the real bus state, and iberr is the only
+    //  way to find out WHY ERR is lit.  Pure addition: nothing existing changes.
+    //AI(W906-GB-PADSEEN) 20261007 (Jerry, J-19 "C"): cardAddress = what ibpad() actually put on the card
+    //  (-1 = never set this driver life); the "Address: n" in `status` below is LastSet.GpibAddress, i.e. what the
+    //  program MEANT.  The two disagreeing is the silent fault of 1007 -- one curl now shows it.
+    { char b[96]; std::snprintf(b, sizeof b, ",\"ibsta\":%d,\"iberr\":%d,\"cardAddress\":%d",
+                                ibsta, iberr, LastPrimaryAddress()); o += b; }
+
+    TALed* leds[13] = { sp->ALed1, sp->ALed2, sp->ALed3, sp->ALed4, sp->ALed5, sp->ALed6, sp->ALed7,
+                        sp->ALed8, sp->ALed9, sp->ALed10, sp->ALed11, sp->ALed12, sp->ALed13 };
+    TLabel* ledLabels[13] = { sp->Label11, sp->Label12, sp->Label13, sp->Label14, sp->Label15, sp->Label16,
+                              sp->Label17, sp->Label18, sp->Label19, sp->Label20, sp->Label21, sp->Label22,
+                              sp->Label23 };
+    o += ",\"leds\":[";
+    for (int i = 0; i < 13; ++i)
+    {
+        if (i)
+            o += ',';
+        o += "{\"label\":" + (ledLabels[i] ? Q(ledLabels[i]->Caption) : std::string("\"\"")) + ",\"on\":" +
+             B(leds[i] && leds[i]->Value) + "}";
+    }
+    o += "]";
+
+    o += ",\"status\":[";
+    for (int i = 0; i < TStatusPanels::kCount; ++i)
+    {
+        if (i)
+            o += ',';
+        o += (sp->StatusBar1 && sp->StatusBar1->Panels) ? Q(sp->StatusBar1->Panels->Items[i]->Text)
+                                                         : std::string("\"\"");
+    }
+    o += "]";
+
+    struct NamedLabel { const char* name; TLabel* l; };
+    NamedLabel labels[] = {
+        { "lblGPIBWnd", sp->lblGPIBWnd }, { "lblTestTime", sp->lblTestTime }, { "labDebugMode", sp->labDebugMode },
+        { "labStatus", sp->labStatus }, { "labLotID", sp->labLotID }, { "labLotCount", sp->labLotCount },
+        { "labTestCount", sp->labTestCount }, { "labPackageType", sp->labPackageType }, { "labOcr", sp->labOcr } };
+    o += ",\"labels\":{";
+    for (size_t i = 0; i < sizeof(labels) / sizeof(labels[0]); ++i)
+    {
+        if (i)
+            o += ',';
+        o += JsonEscape(labels[i].name) + ":{\"caption\":" +
+             (labels[i].l ? Q(labels[i].l->Caption) : std::string("\"\"")) + ",\"visible\":" +
+             B(labels[i].l && labels[i].l->Visible) + "}";
+    }
+    o += "}";
+
+    struct NamedCheck { const char* name; TCheckBox* c; };
+    NamedCheck checks[] = {
+        { "chkUpperCase", sp->chkUpperCase }, { "chkStrLengthCheck", sp->chkStrLengthCheck },
+        { "cbBinonEcho", sp->cbBinonEcho }, { "cbFullSiteTimeOut", sp->cbFullSiteTimeOut },
+        { "cbGPIBWriteWithout_r_n", sp->cbGPIBWriteWithout_r_n }, { "chkTempReady", sp->chkTempReady },
+        { "chkCMDLog", sp->chkCMDLog } };
+    o += ",\"checks\":{";
+    for (size_t i = 0; i < sizeof(checks) / sizeof(checks[0]); ++i)
+    {
+        if (i)
+            o += ',';
+        o += JsonEscape(checks[i].name) + ":" + Check(checks[i].c);
+    }
+    o += "}";
+
+    struct NamedCombo { const char* name; TComboBox* c; };
+    NamedCombo combos[] = {
+        { "cbbGPIBTimo", sp->cbbGPIBTimo }, { "cbbFullsiteTimeOut", sp->cbbFullsiteTimeOut },
+        { "cbbRunMode", sp->cbbRunMode }, { "cbMode", sp->cbMode }, { "cbCmdHANAART", sp->cbCmdHANAART },
+        { "cbCmdHANAARTtoTester", sp->cbCmdHANAARTtoTester } };
+    o += ",\"combos\":{";
+    for (size_t i = 0; i < sizeof(combos) / sizeof(combos[0]); ++i)
+    {
+        if (i)
+            o += ',';
+        o += JsonEscape(combos[i].name) + ":" + Combo(combos[i].c);
+    }
+    o += "}";
+    o += ",\"rgController\":" + Num(sp->rgController ? sp->rgController->ItemIndex : -1);
+    o += ",\"spbAutoRetest\":" + std::string(B(sp->spbAutoRetest && sp->spbAutoRetest->Down));
+
+    o += ",\"panels\":{\"palSCKART\":" + std::string(B(sp->palSCKART && sp->palSCKART->Visible)) +
+         ",\"pnlAMDCmd\":" + B(sp->pnlAMDCmd && sp->pnlAMDCmd->Visible) +
+         ",\"pnlHanaART\":" + B(sp->pnlHanaART && sp->pnlHanaART->Visible) +
+         ",\"tsRS232\":" + B(sp->tsRS232 && sp->tsRS232->TabVisible) + "}";
+
+    //AI(W906-GB-P6) 20260926: golden Main.dfm tsRS232 -- ts_STD_Setup (GroupBox1 + GroupBox14 + btnUpdate) and ts_STD_Log.
+    o += ",\"rs232Aux\":{\"connected\":" + std::string(B(fRS232Main && fRS232Main->bCommConnect)) +
+         ",\"fromRecipe\":" + B(GpibAuxFramingFromRecipe()) +
+         ",\"combos\":{\"cbDevice\":" + Combo(sp->cbDevice) + ",\"cbBaudRate\":" + Combo(sp->cbBaudRate) +
+         ",\"cbByteSize\":" + Combo(sp->cbByteSize) + ",\"cbStopBit\":" + Combo(sp->cbStopBit) +
+         ",\"cbParity\":" + Combo(sp->cbParity) + "}" +
+         ",\"edReadIntervalTimeout\":" +
+         (sp->edReadIntervalTimeout ? Q(sp->edReadIntervalTimeout->Text) : std::string("\"\"")) +
+         ",\"MemoLog\":" + Lines(sp->MemoLog ? sp->MemoLog->Lines : 0, kLogTail) + "}";
+
+    o += ",\"sites\":[";
+    for (size_t i = 0; i < sp->MY_DUT_PAL.size(); ++i)
+    {
+        TMyDutPanel* p = sp->MY_DUT_PAL[i];
+        if (i)
+            o += ',';
+        if (!p)
+        {
+            o += "null";
+            continue;
+        }
+        o += "{\"caption\":" + (p->gpSite ? Q(p->gpSite->Caption) : std::string("\"\"")) +
+             ",\"site\":" + (p->plSite ? Q(p->plSite->Caption) : std::string("\"\"")) +
+             ",\"color\":" + Num(p->plSite ? p->plSite->Color : 0) +
+             ",\"bin\":" + Num(p->cbBin ? p->cbBin->ItemIndex : -1) +
+             ",\"binText\":" + (p->cbBin ? Q(p->cbBin->Text) : std::string("\"\"")) +
+             ",\"on\":" + B(p->cbSiteOn && p->cbSiteOn->Checked) +
+             ",\"ocr\":" + (p->labOcr ? Q(p->labOcr->Caption) : std::string("\"\"")) + "}";
+    }
+    o += "]";
+
+    o += ",\"logs\":{\"Memo1\":" + Lines(sp->Memo1 ? sp->Memo1->Lines : 0, kLogTail) +
+         ",\"lstRecord\":" + Lines(sp->lstRecord ? sp->lstRecord->Items : 0, kLogTail) +
+         ",\"mmoBINON\":" + Lines(sp->mmoBINON ? sp->mmoBINON->Lines : 0, 100) +
+         ",\"memoAlarmCode\":" + Lines(sp->memoAlarmCode ? sp->memoAlarmCode->Lines : 0, 100) + "}";
+    o += "}";
+    return o;
+}
+
+// AI(W906-TC-SHARED) 20261001 (St02-E): golden Main.dfm:198 palSite (MY_DUT_PAL, MyDutPanel.cpp:46-95) + :818 lstRecord (WriteLog,
+//   Main.cpp:701-724), in the shape every engine uses (UiHome.h); the lines verbatim.  GPIB thread only (the seq tracker).
+//   cbBin: the 19 items of MyDutPanel.cpp:61-81 (GpibUi.cpp:135-155); golden quirk kept: index 15 ("15") gives bin 33 (Main.cpp:4042-4084).
+std::string BuildHomeFragment(bool up)
+{
+    TSerialPoll* sp = SerialPoll;
+    if (sp == 0)
+        return std::string();
+    std::vector<testercomm::HomeSite> sites(sp->MY_DUT_PAL.size());
+    std::vector<std::string> items;
+    for (size_t i = 0; i < sp->MY_DUT_PAL.size(); ++i)
+    {
+        TMyDutPanel* p = sp->MY_DUT_PAL[i];
+        if (!p)
+            continue;
+        testercomm::HomeSite& c = sites[i];
+        if (p->gpSite)
+            c.caption = S(p->gpSite->Caption);
+        if (p->plSite)
+        {
+            c.text = S(p->plSite->Caption);
+            c.color = p->plSite->Color;
+        }
+        c.enabled = p->cbSiteOn ? (p->cbSiteOn->Checked ? 1 : 0) : -1;
+        if (p->cbBin)
+        {
+            c.bin = p->cbBin->ItemIndex;
+            c.binText = S(p->cbBin->Text);
+            if (items.empty() && p->cbBin->Items)   // every cell has the same list
+                for (int k = 0; k < p->cbBin->Items->GetCount(); ++k)
+                    items.push_back(S(p->cbBin->Items->GetString(k)));
+        }
+        if (p->labOcr)
+            c.ocr = S(p->labOcr->Caption);
+    }
+    std::vector<std::string> lines;
+    const TStringList* l = sp->lstRecord ? sp->lstRecord->Items : 0;
+    if (l)
+    {
+        const int n = l->GetCount();
+        for (int i = n > kLogTail ? n - kLogTail : 0; i < n; ++i)
+            lines.push_back(S(l->GetString(i)));
+    }
+    static testercomm::HomeLogSeq seq;
+    return testercomm::HomeFragment("gpib", up, items, true, true, sites, "GPIB", seq.Advance(lines), lines);
+}
+
+bool ApplyUiCommand(const std::string& command)
+{
+    TSerialPoll* sp = SerialPoll;
+    if (sp == 0)
+        return false;
+    std::istringstream in(command);
+    std::string verb, name;
+    in >> verb >> name;
+    if (verb.empty() || name.empty())
+        return false;
+
+    //AI(W906-GB-CLEARFLAG) 20261007 (Jerry, J-19): `reset flags` -> golden's own TSerialPoll::ClearAllFlag()
+    //  (GpibUi.cpp:1400, "Steven 20170215 (wei) 清除所有flag").  That function had ZERO callers in the port, so
+    //  once a manual start left IsTest true with no Tester answer, btnManualStartClick returned at its first
+    //  line for ever and the only way out was restarting wb_serve.  This is wiring, not a change of behaviour:
+    //  the golden body runs unmodified, on the TesterComm thread, like every other command here.
+    if (verb == "reset" && name == "flags")
+    {
+        sp->ClearAllFlag();
+        return true;
+    }
+    if (verb == "click")
+    {
+        if (name == "btnManualStart")              sp->btnManualStartClick(sp->btnManualStart);
+        else if (name == "btnSendTemp")            sp->btnSendTempClick(sp->btnSendTemp);
+        else if (name == "btnRunMode")             sp->btnRunModeClick(sp->btnRunMode);
+        else if (name == "btnUpdate")              sp->btnUpdateClick(sp->btnUpdate);
+        else if (name == "btnSaveLog")             sp->btnSaveLogClick(sp->btnSaveLog);
+        else if (name == "btnDiagZip")             sp->btnDiagZipClick(sp->btnDiagZip);
+        else if (name == "spbAutoRetest")          sp->spbAutoRetestClick(sp->spbAutoRetest);
+        else if (name == "btnHANA_SendCB")         sp->btnHANA_SendCBClick(sp->btnHANA_SendCB);
+        else if (name == "btnSend_ED")             sp->btnSend_EDClick(sp->btnSend_ED);
+        else if (name == "btnHANA_SendCBTotester") sp->btnHANA_SendCBTotesterClick(sp->btnHANA_SendCBTotester);
+        else if (name == "btnSend_EDToTester")     sp->btnSend_EDToTesterClick(sp->btnSend_EDToTester);
+        else return false;
+        return true;
+    }
+    if (verb == "check")
+    {
+        int v = -1;
+        in >> v;
+        if (v != 0 && v != 1)
+            return false;
+        struct Entry { const char* n; TCheckBox* c; void (TSerialPoll::*h)(TObject*); };
+        Entry table[] = {
+            { "chkUpperCase", sp->chkUpperCase, &TSerialPoll::chkUpperCaseClick },
+            { "chkStrLengthCheck", sp->chkStrLengthCheck, &TSerialPoll::chkStrLengthCheckClick },
+            { "cbBinonEcho", sp->cbBinonEcho, &TSerialPoll::cbBinonEchoClick },
+            { "cbFullSiteTimeOut", sp->cbFullSiteTimeOut, &TSerialPoll::cbFullSiteTimeOutClick },
+            { "cbGPIBWriteWithout_r_n", sp->cbGPIBWriteWithout_r_n, &TSerialPoll::cbGPIBWriteWithout_r_nClick },
+            { "chkTempReady", sp->chkTempReady, 0 },   // no OnClick in Main.dfm: read by the AMD code
+            { "chkCMDLog", sp->chkCMDLog, 0 } };
+        for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i)
+        {
+            if (name != table[i].n || table[i].c == 0)
+                continue;
+            if (!table[i].c->Enabled)
+                return false;   // a disabled VCL check box cannot be clicked
+            table[i].c->Checked = (v == 1);
+            if (table[i].h)
+                (sp->*table[i].h)(table[i].c);   // VCL: toggling Checked fires OnClick
+            return true;
+        }
+        return false;
+    }
+    if (verb == "combo")
+    {
+        int idx = -2;
+        in >> idx;
+        struct Entry { const char* n; TComboBox* c; void (TSerialPoll::*h)(TObject*); };
+        Entry table[] = {
+            { "cbbGPIBTimo", sp->cbbGPIBTimo, &TSerialPoll::cbbGPIBTimoChange },
+            { "cbbFullsiteTimeOut", sp->cbbFullsiteTimeOut, &TSerialPoll::cbbGPIBTimoChange },   // Main.dfm quirk
+            { "cbbRunMode", sp->cbbRunMode, 0 },
+            { "cbMode", sp->cbMode, 0 },
+            { "cbCmdHANAART", sp->cbCmdHANAART, 0 },
+            { "cbCmdHANAARTtoTester", sp->cbCmdHANAARTtoTester, 0 },
+            { "cbDevice", sp->cbDevice, 0 },       // AI(W906-GB-P6) 20260926: tsRS232 -- no OnChange in Main.dfm;
+            { "cbBaudRate", sp->cbBaudRate, 0 },   //   btnUpdate (SetFormToData) applies them
+            { "cbByteSize", sp->cbByteSize, 0 },
+            { "cbStopBit", sp->cbStopBit, 0 },
+            { "cbParity", sp->cbParity, 0 } };
+        for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i)
+        {
+            if (name != table[i].n || table[i].c == 0)
+                continue;
+            if (!table[i].c->Enabled)
+                return false;   // AI(W906-GB-P6) 20260926: a disabled VCL combo box cannot be changed
+            SetComboIndex(table[i].c, idx);
+            if (table[i].h)
+                (sp->*table[i].h)(table[i].c);   // VCL: a user pick fires OnChange
+            return true;
+        }
+        return false;
+    }
+    if (verb == "radio" && name == "rgController")
+    {
+        int idx = -2;
+        in >> idx;
+        if (!sp->rgController || !sp->rgController->Items || idx < 0 || idx >= sp->rgController->Items->GetCount())
+            return false;
+        sp->rgController->ItemIndex = idx;
+        return true;
+    }
+    if (verb == "edit")
+    {
+        std::string text;
+        std::getline(in, text);
+        if (!text.empty() && text[0] == ' ')
+            text.erase(0, 1);
+        if (name == "edCmdHANAART" && sp->edCmdHANAART)
+            sp->edCmdHANAART->Text = text.c_str();
+        else if (name == "edCmdHANAARTtoTester" && sp->edCmdHANAARTtoTester)
+            sp->edCmdHANAARTtoTester->Text = text.c_str();
+        else if (name == "edReadIntervalTimeout" && sp->edReadIntervalTimeout)   // AI(W906-GB-P6) 20260926: tsRS232
+            sp->edReadIntervalTimeout->Text = text.c_str();
+        else if (name == "cbDevice" && sp->cbDevice && sp->cbDevice->Enabled)
+            sp->cbDevice->Text = text.c_str();
+        else if (name == "cbBaudRate" && sp->cbBaudRate && sp->cbBaudRate->Enabled)
+            sp->cbBaudRate->Text = text.c_str();
+        else
+            return false;
+        return true;
+    }
+    if (verb == "site")
+    {
+        const int site = std::atoi(name.c_str());
+        std::string what;
+        int v = -2;
+        in >> what >> v;
+        if (site < 0 || site >= (int)sp->MY_DUT_PAL.size() || sp->MY_DUT_PAL[site] == 0)
+            return false;
+        TMyDutPanel* p = sp->MY_DUT_PAL[site];
+        if (what == "on" && (v == 0 || v == 1) && p->cbSiteOn)
+        {
+            p->cbSiteOn->Checked = (v == 1);   // golden TMyDutPanel has no OnClick: bridge code reads it
+            return true;
+        }
+        if (what == "bin" && p->cbBin)
+        {
+            SetComboIndex(p->cbBin, v);
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+}  // namespace gpibbridge

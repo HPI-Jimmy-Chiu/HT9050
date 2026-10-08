@@ -36,3 +36,15 @@
 ## Callback 與接收佇列生命期
 
 [reader／SIM callback、Impl與QueueRx／DrainRx](callback-lifetime/index.md) 補查 buffer 複製、closeRequested派送次序及有限等待的證據界線；不把排入佇列當送達或完整shutdown已驗證。
+
+## Aux 設定的 INI 共用 callee
+
+[磁碟／memory 綁定、讀取／解析及寫入界線](ini-core/index.md) 接續 Aux SaveSetupData；分清 found、writeThrough_、歷史 header 與磁碟失敗未回傳，完整 Fast writer／store／caller 仍待續。
+
+## INI Fast writer 與 memory store
+
+[格式、重複名稱、記憶體與保存生命期](ini-writer-store/index.md) 接續INI共用callee；分開Fast／memory解析差異、第一個section/key、失敗不回傳與歷史destructor敘述，typed API及完整caller仍待續。
+
+## INI typed API 與磁碟列舉
+
+[預設、數字日期與名稱清單](ini-typed-enumeration/index.md) 補磁碟／memory分流、NUL停止、16384-byte截斷與Exists差異；深層日期／字串轉換、容器及完整caller仍待續。
