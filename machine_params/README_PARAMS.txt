@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-08 10:56
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 395f76b BOOTCLEAR9050 fix: the boot question and the Teach-page pitch sync are called from／web e94a028。
+HT9050 機台參數快照（machine_params\）—— 2026-10-08 11:31
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 8bad895 docs: WORKLOG row 203 -- IO_Table: the five _UpOff_On sensors aligned to _Up_Off (／web e94a028。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
