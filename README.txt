@@ -2330,4 +2330,5 @@ tools 0174 (20261008): HTML designer -- a build's -j from this PC's free memory 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 tools 0175-0176 (20261008): HTML designer -- a shipping F5 / play / Make / Rebuild uses the existing Debug / Release folders (no second whole compile in build_f5_*); the F5 mode build's wb_serve.rc fix (toolchain on PATH, CMAKE_RC_COMPILER). Install: tools/vscode-htdesigner pack.ps1 then code --install-extension.
 tools 0177 (20261008): HTML designer merged with laptop package 203 (0.297.0 -> 0.305.0). Install: tools/vscode-htdesigner pack.ps1 then code --install-extension.
+tools 0178 (20261008): HTML designer merged with laptop package 204 (0.305.0 -> 0.307.0). Install: tools/vscode-htdesigner pack.ps1 then code --install-extension.
 MD5 清單在 MANIFEST_MD5.tsv。
