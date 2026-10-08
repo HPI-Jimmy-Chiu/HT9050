@@ -2319,4 +2319,8 @@ tools 0172 (20261008): HTML designer merged with laptop packages 193/196-201 (0.
      workorder/README_WORKORDER.txt：1 個檔變動
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 tools 0173 (20261008): HTML designer merged with laptop package 202 (0.293.0 -> 0.297.0, the big run bar). Install: tools/vscode-htdesigner pack.ps1 then code --install-extension.
+  10-08 19:35 機台快照（EastSun 在機台上做的事，沒有程式修改）：
+     machine_params/README_PARAMS.txt：1 個檔變動
+     workorder/README_WORKORDER.txt：1 個檔變動
+  掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 MD5 清單在 MANIFEST_MD5.tsv。

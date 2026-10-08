@@ -1,0 +1,193 @@
+From 2024f60c406f279095bfdcf65b01eca7449e3bf8 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 8 Oct 2026 19:35:08 +0800
+Subject: [PATCH] =?UTF-8?q?IOWAIT:=20time=20every=20main-thread=20wait=20f?=
+ =?UTF-8?q?or=20the=201203=20IO=20thread=20and=20show=20it=20per=20phase?=
+ =?UTF-8?q?=20in=20the=20SLOW=20line;=20split=20PumpTick=20and=20MotorAcce?=
+ =?UTF-8?q?ssPollTick=20into=20phases=20--=20EastSun=201008=20'=E8=AB=8B?=
+ =?UTF-8?q?=E4=BD=A0=E7=B9=BC=E7=BA=8C=E5=84=AA=E5=8C=96=E5=9F=B7=E8=A1=8C?=
+ =?UTF-8?q?=E7=BA=8C'.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+oplog 1008: PumpTick (median 826 ms) and MotorAccessPollTick (median 702 ms) passes use about 20 ms tick-thread CPU -- waiting, not computing.
+Pci1203IoThreadRunSync now times its wait (QPC) and hands it to g_W906IoWaitHook (Pci1203Monitor.cpp EOF); wb_serve's pass profiler adds it
+to the phase it happened in: "<phase> N ms (io wait W ms/count)". New phases: Pump: heater/DTME08/TemperFrom, St02Timers,
+FlushFlag/DoorLock/Fan, MainProc, CounterRefresh; ServiceOutputs; MAPoll: core, Brake/BootInit/ParamSync, OverlaySnapshot, Hooks,
+TorqueFocus. Measurement only, no behaviour change. WORKLOG row 212 + section 3 row for designer tools 0173 (d646730).
+
+Debug + release wb_serve built; test_pci1203_pure 109/109, WB_SimPump passed.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ EtherCAT/Pci1203Monitor.cpp | 21 +++++++++++++++++++--
+ WebBridgeTags.cpp           | 10 +++++-----
+ WebMotorAccessLive.cpp      | 10 +++++-----
+ docs/WORKLOG_MACHINE.md     |  2 ++
+ tools/wb_serve.cpp          |  8 ++++----
+ 5 files changed, 35 insertions(+), 16 deletions(-)
+
+diff --git a/EtherCAT/Pci1203Monitor.cpp b/EtherCAT/Pci1203Monitor.cpp
+index 35402f6..1779b4a 100644
+--- a/EtherCAT/Pci1203Monitor.cpp
++++ b/EtherCAT/Pci1203Monitor.cpp
+@@ -4524,7 +4524,7 @@ void Pci1203IoThreadRunSync(void (*fn)(void*), void* arg, bool boundaryOnly)
+     //  frozen kW906IoStallMs = the thread is stuck (a vendor call that does not return): take the request back and refuse it, so
+     //  the caller fails visibly instead of freezing the tick loop. Already taken = the thread is running THIS request (its data is
+     //  on this stack frame), so keep waiting -- and say so every 5 s.
+-    const DWORD t0 = ::GetTickCount();
++    const DWORD t0 = ::GetTickCount();  LARGE_INTEGER w906Q0; ::QueryPerformanceCounter(&w906Q0);   //AI(W906-IOWAIT) 20261008: the wait is timed for the pass profiler (end of file)
+     long hb0 = g_w906IoHeart;
+     DWORD hbAt = t0, noteAt = t0;   //AI(W906-IOFIX-3) 20261007: back to the request time (IOFIX-2 started it at the last heartbeat; review 20261007: a long but alive Poll then refused queued STOPs)
+     for (;;) {
+@@ -4559,7 +4559,7 @@ void Pci1203IoThreadRunSync(void (*fn)(void*), void* arg, bool boundaryOnly)
+             std::fflush(stdout);
+         }
+     }
+-    ::CloseHandle(r.done);
++    ::CloseHandle(r.done);  { void W906IoWaitNote_(const LARGE_INTEGER&); W906IoWaitNote_(w906Q0); }   //AI(W906-IOWAIT) 20261008: every way out of the wait above ends here (end of file)
+ }
+ 
+ bool Pci1203IoThreadAdopt()
+@@ -4763,4 +4763,21 @@ void W906IoAfterSuspendWait_()
+                 (unsigned long)(now - last), (unsigned long)(t1 - t0), got ? "got one, carrying on" : "none came, the stale rule applies");
+     std::fflush(stdout);
+ }
++}  // namespace ht9045
++
++//AI(W906-IOWAIT) 20261008: EastSun 1008「請你繼續優化執行續」-- how long the main thread waits for the IO thread. oplog 1008: PumpTick
++//  (MainProc) 621.9 ms in a pass whose tick-thread CPU was 18.9 ms, MotorAccessPollTick 89.2 ms in another -- waiting, not computing.
++//  Every card request from the main thread (TPci1203Control::Execute -- DO writes, motion; Vc8SdoReadI16; SetTorqueFocusAxis) waits in
++//  Pci1203IoThreadRunSync until the IO thread has run it. Each such wait is timed (QPC) and handed to g_W906IoWaitHook, which
++//  wb_serve's pass profiler sets (tools/wb_serve.cpp W906PpIoWait): the SLOW line then shows per phase how much of it was this wait
++//  and how many requests. Nothing else changes; no hook (ctests, tools) = nothing is done.
++namespace ht9045 {
++void (*g_W906IoWaitHook)(long long qpcTicks) = 0;
++void W906IoWaitNote_(const LARGE_INTEGER& q0)
++{
++    if (g_W906IoWaitHook == 0) return;
++    LARGE_INTEGER q1;
++    ::QueryPerformanceCounter(&q1);
++    g_W906IoWaitHook((long long)(q1.QuadPart - q0.QuadPart));
++}
+ }  // namespace ht9045
+\ No newline at end of file
+diff --git a/WebBridgeTags.cpp b/WebBridgeTags.cpp
+index 8441152..2026261 100644
+--- a/WebBridgeTags.cpp
++++ b/WebBridgeTags.cpp
+@@ -597,11 +597,11 @@ bool PumpInit(std::string& whyNot)
+ 
+ void PumpTick()
+ {
+-    GetTimeInfo(); if (!g_pumpActive) return;   // AI(W906-CLOCK) 20260924: 掛鐘更新移到守衛之前。golden 在 TfMain ctor（main.cpp:1683）無條件呼叫一次、ProcessTimeUpdate（:7812）週期呼叫，都不看機台初始化成不成功；原本放在 g_pumpActive 之後，非模擬建置沒有硬體時 PumpInit 失敗 ⇒ 從來不更新 ⇒ lot.start 把 LotStartTime=9999-9999-00 9999:9999:9999 寫進真實 config.ini（20260924 非模擬探針實測）。放在同一行，不移動其後行號
++    extern void (*g_W906PhaseMark)(const char*);  GetTimeInfo(); if (!g_pumpActive) return;  if (g_W906PhaseMark) g_W906PhaseMark("Pump: heater/DTME08/TemperFrom");   /*AI(W906-IOWAIT) 20261008: PumpTick split into phases for the SLOW line (FastClockJobs.cpp)*/   // AI(W906-CLOCK) 20260924: 掛鐘更新移到守衛之前。golden 在 TfMain ctor（main.cpp:1683）無條件呼叫一次、ProcessTimeUpdate（:7812）週期呼叫，都不看機台初始化成不成功；原本放在 g_pumpActive 之後，非模擬建置沒有硬體時 PumpInit 失敗 ⇒ 從來不更新 ⇒ lot.start 把 LotStartTime=9999-9999-00 9999:9999:9999 寫進真實 config.ini（20260924 非模擬探針實測）。放在同一行，不移動其後行號
+     { extern void W906_Timer2HeaterTick(); W906_Timer2HeaterTick(); }  { extern void W906_DTME08TimerTick(); W906_DTME08TimerTick(); }  /* AI(W906-I03) 20261002 (Ifor01): golden TfrmDTME08 TimerUpdate (100 ms, fDTME08.dfm:725-729) -- fires only after golden FormShow's arm (W906_DTME08_FormShowArm, not called yet); body forms/fDTME08.cpp EOF */  { extern void W906_TemperFromTimer1Tick(); W906_TemperFromTimer1Tick(); }  /* AI(W906-TP1) 20261002 (Ifor01): golden TfTemperFrom Timer1 (100 ms, cTemperFrom.dfm:3285-3289) -- 71 channels ShowThermo, RunInfo.ShowTempComp (SECS), CCD cooling; body cTemperFrom.cpp EOF */   // AI(W906-I01) 20261001 (Ifor01): golden TfMain::Timer2Timer 的加熱段（main.cpp:21528-21643：HotplateHeatMode／IndexHeatMode，機台沒在跑時每秒一次；本體 forms/fMain_Heater.cpp，自己限速 1000 ms、SystemStart 時不跑、自己擋例外）。在 g_pumpActive 守衛之後＝golden Timer2 的 InitialOK 守衛。筆電保留給 I-01 的空行，行號不動
+     // Bounds g_csystemTrace. Not cosmetic: nothing else trims it, so skipping this
+     // is an unbounded leak for the life of the process (csystem.cpp:200).
+-    csystemTraceClear();
++    if (g_W906PhaseMark) g_W906PhaseMark("Pump: St02Timers");  csystemTraceClear();
+     { extern void W906_St02TimersTick(); W906_St02TimersTick(); }   //AI(W906-S15) 20261001 (St02-E, claim): golden TfMain TTimers that St02 ports, each at golden's 1000 ms (MainTimersSt02.cpp): Timer8Timer (906_0625_Steven main.cpp:32154-32246) + TimerTemperatureStorageMinuteTimer (:31175-31180); S-13 TimerESD / S-14 Timer3 join there, not on this line
+     //AI(W906-LOT-W1) 20260919: 每個 tick 更新掛鐘全域。
+     //
+@@ -623,17 +623,17 @@ void PumpTick()
+     //
+     // ⓘ 成本：一次 `Now()` 加兩次 Decode，每 500 ms 一次。
+     // GetTimeInfo();  已移到本函式第一行（AI(W906-CLOCK) 20260924），不在守衛之後重複呼叫   // golden main.cpp:7812（ProcessTimeUpdate）
+-    { extern void W906_FlushFlagTick(); W906_FlushFlagTick(); }  { extern void W906_SafeDoorLockTick(); W906_SafeDoorLockTick(); }  { extern void W906_Timer2FanTick(); W906_Timer2FanTick(); }  /* AI(W906-DOORLOCK) 20261001: golden Timer1Timer :3051-3064 safe-door lock + Timer2 :20964-20968 big fan (bodies MainTimerSegments.cpp) */     //AI(W906-P1) 20260923: golden Timer1Timer 的 FlushFlag 翻轉段（本體在檔尾；佔用原本的空行，不移動行號）
++    if (g_W906PhaseMark) g_W906PhaseMark("Pump: FlushFlag/DoorLock/Fan");  { extern void W906_FlushFlagTick(); W906_FlushFlagTick(); }  { extern void W906_SafeDoorLockTick(); W906_SafeDoorLockTick(); }  { extern void W906_Timer2FanTick(); W906_Timer2FanTick(); }  /* AI(W906-DOORLOCK) 20261001: golden Timer1Timer :3051-3064 safe-door lock + Timer2 :20964-20968 big fan (bodies MainTimerSegments.cpp) */     //AI(W906-P1) 20260923: golden Timer1Timer 的 FlushFlag 翻轉段（本體在檔尾；佔用原本的空行，不移動行號）
+     // The compiled MainProc path (csystem.cpp:3024-3026) has NO try/catch of its
+     // own -- its #ifdef DEBUG_TRY_CATCH pair is dead because DEBUG_TRY_CATCH is
+     // defined nowhere in the build. One escaping exception would otherwise take the
+     // whole publisher down and, without SetErrorMode, do it behind a modal box.
+     try {
+-        { extern void W906_HeaterSimTick(); extern bool W906_FastClockOwnsHeater(); if (!W906_FastClockOwnsHeater()) W906_HeaterSimTick(); }  MainProc();   // AI(W906-S12) 20260929 (St02-E, claim): golden THeaterThread::HeaterThreadProcess (906 uHeaterThread.cpp:56-66), SIM build only (body HeaterSimTick.cpp; RULINGS_20260929 #10 = A)   AI(W906-FASTCLK) 20261003: skipped while the serve loop's 20 ms fast clock owns the heater (MachineType.h W906_FASTCLK_HEATER; FastClockWbServe.cpp sets the flag, so every ctest that pumps keeps this call); same line
++        if (g_W906PhaseMark) g_W906PhaseMark("Pump: MainProc");  { extern void W906_HeaterSimTick(); extern bool W906_FastClockOwnsHeater(); if (!W906_FastClockOwnsHeater()) W906_HeaterSimTick(); }  MainProc();   // AI(W906-S12) 20260929 (St02-E, claim): golden THeaterThread::HeaterThreadProcess (906 uHeaterThread.cpp:56-66), SIM build only (body HeaterSimTick.cpp; RULINGS_20260929 #10 = A)   AI(W906-FASTCLK) 20261003: skipped while the serve loop's 20 ms fast clock owns the heater (MachineType.h W906_FASTCLK_HEATER; FastClockWbServe.cpp sets the flag, so every ctest that pumps keeps this call); same line
+     } catch (...) {
+         ++g_pumpExceptions;
+     }
+-    { extern void W906_CounterRefreshTick(); W906_CounterRefreshTick(); }   // AI(W906-PROD-S111) 20260926（Steven 團隊）：golden TfMain::Timer10Timer 的 bRefreshCount 收尾（main.cpp:35332-35351；本體在檔尾，自己擋例外；佔用原本的空行，不移動行號）
++    if (g_W906PhaseMark) g_W906PhaseMark("Pump: CounterRefresh");  { extern void W906_CounterRefreshTick(); W906_CounterRefreshTick(); }   // AI(W906-PROD-S111) 20260926（Steven 團隊）：golden TfMain::Timer10Timer 的 bRefreshCount 收尾（main.cpp:35332-35351；本體在檔尾，自己擋例外；佔用原本的空行，不移動行號）
+     ++g_pumpTicks;
+     g_lastTickKind = classifyTick(g_csystemTrace);
+ }
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index a9a1073..4a9aa9d 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -1523,11 +1523,11 @@ void W906_BootInitMotorTick(); void W906_ParamSyncTick(); bool g_w906BootInitAll
+ void W906_MotorAccessPollTick(bool operatorConnected)                           //AI(W906-MT-FIX1) 20260926: live ControlOwner()!=0 from wb_serve
+ {
+     W906_MotorAccessEngineHooks();                                              //AI(W906-MT-E3c) 20260925: idempotent
+-    ht9045::MotorAccessPollTick(ht9045::MotorAccessLiveBackend(), operatorConnected);
+-    ht9045::BrakeAxisTick();  W906_BootInitMotorTick();  W906_ParamSyncTick();   //AI(W906-PARAMSYNC) 20261007: + boot InitMotor and the parameter sync on the MAIN loop too -- W906_BootInitMotorTick was only reached from W906_BrakeAxisTick, which only wb_serve's modal wait calls (tools/wb_serve.cpp W906_ModalWaitTick): oplog 1007 shows the boot InitMotor at 09:01 / 09:36 only (a box was up), none for the 09:48 / 10:xx runs. Both are once-per-run / edge driven, so calling them from both loops is safe.  AI(W906-BRAKE-AXIS) 20260929: on the fresh sample (servo ON 0.5 s -> release; SVON gone -> hold)
+-    OverlaySnapshot();
+-    W906_MotorAccessHooks();
+-    W906_TorqueFocus(operatorConnected);                                        //AI(W906-MT-E3c) 20260925: every Poll while the page shows the axis
++    if (ht9045::g_W906PhaseMark) ht9045::g_W906PhaseMark("MAPoll: core");  ht9045::MotorAccessPollTick(ht9045::MotorAccessLiveBackend(), operatorConnected);
++    if (ht9045::g_W906PhaseMark) ht9045::g_W906PhaseMark("MAPoll: Brake/BootInit/ParamSync");  ht9045::BrakeAxisTick();  W906_BootInitMotorTick();  W906_ParamSyncTick();   //AI(W906-PARAMSYNC) 20261007: + boot InitMotor and the parameter sync on the MAIN loop too -- W906_BootInitMotorTick was only reached from W906_BrakeAxisTick, which only wb_serve's modal wait calls (tools/wb_serve.cpp W906_ModalWaitTick): oplog 1007 shows the boot InitMotor at 09:01 / 09:36 only (a box was up), none for the 09:48 / 10:xx runs. Both are once-per-run / edge driven, so calling them from both loops is safe.  AI(W906-BRAKE-AXIS) 20260929: on the fresh sample (servo ON 0.5 s -> release; SVON gone -> hold)
++    if (ht9045::g_W906PhaseMark) ht9045::g_W906PhaseMark("MAPoll: OverlaySnapshot");  OverlaySnapshot();   //AI(W906-IOWAIT) 20261008: W906_MotorAccessPollTick split into phases for the SLOW line (same lines)
++    if (ht9045::g_W906PhaseMark) ht9045::g_W906PhaseMark("MAPoll: Hooks");  W906_MotorAccessHooks();
++    if (ht9045::g_W906PhaseMark) ht9045::g_W906PhaseMark("MAPoll: TorqueFocus");  W906_TorqueFocus(operatorConnected);                                        //AI(W906-MT-E3c) 20260925: every Poll while the page shows the axis
+ }
+ 
+ //AI(W906-WSLINK-B) 20260929: St01 13:32 safety point (b): the page-table close edge of fMotorTest / fTeach
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 7d0b847..ce5b2c9 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -84,6 +84,7 @@
+ | 169 | **Out Shuttle Z 位置還原**（EastSun「剛剛說的teach 沒有indexZ 高度可以設定 我說錯了 可以不用改 在其他頁面已經可以設定了」）：revert web 113a1ef，控制項回到套件 149 的原位置；給 Jimmy 的說明同步更正 | web 4e68790；cpp（本列） | — |
+ | 170 | **只查：實體 HOME 鍵沒反應**（EastSun「我實體按鈕案home都沒反應」）：PadCommLog 今天實體按鍵封包（t05x400…）只到 09:15:57，最後一筆 HOME＝t050400002020（HOME 0x20＋ALARM RESET 0x2000 卡住，golden ScanPannelKey ALARM RESET 最後判斷蓋掉 HOME）；之後只有程式送出的燈號回音（0006/0016＝PAUSE 燈閃，Teach 頁訊息框開著時）。EventLog 10 筆 MES2112 全是網頁軟鍵。程式這條路與 golden 相同，不改碼；請查面板 ALARM RESET 鈕／按鍵線。17:00 release 補建 | — | — |
+ | 171 | **ALARM RESET 卡住時其他實體鍵照常**（EastSun「就算reset卡住其他按鈕不是也要可以用?」→ 選「改」）：ckernel.cpp ScanPannelKey 前／後面板共 4 處 ALARM RESET 判斷，按著不放（已鎖存）時不再蓋掉同時按的其他鍵；剛按下那一下照 golden 優先。備份 D:\HT9045\_review\ckernel.cpp.bak_rstheld_20261007_172605 | cpp（本列） | ScanKeyGolden（新增 4 項）、MainScanKey、W7_L2_CKernel、SysinitBoot、St02_N07Alarm、St02_PadInterface 全過；Debug 17:30／release 17:31 |
++| 212 | **執行緒優化第一步：量出主執行緒在等什麼**（EastSun「請你繼續優化執行續」）：oplog 1008 有 1570 筆 SLOW，最多的兩種 MotorAccessPollTick（中位 702 ms）與 PumpTick（中位 826 ms）tick 執行緒 CPU 都只有約 20 ms＝在等，不是在算。最可能的是主執行緒每一個 1203 命令（DO 寫入／馬達命令／SDO 讀／扭力焦點）都要排隊等 IO 執行緒執行（Pci1203IoThreadRunSync）。這次只加量測、不改行為：每次等待用 QPC 計時，掛到 SLOW 行對應的階段上，格式是「PumpTick 名稱 xxx ms (io wait yyy ms/n)」；PumpTick 拆成 Pump: heater/DTME08/TemperFrom、St02Timers、FlushFlag/DoorLock/Fan、MainProc、CounterRefresh，另有 ServiceOutputs；W906_MotorAccessPollTick 拆成 MAPoll: core／Brake/BootInit/ParamSync／OverlaySnapshot／Hooks／TorqueFocus。檔案：EtherCAT/Pci1203Monitor.cpp（RunSync 計時＋檔尾 g_W906IoWaitHook）、tools/wb_serve.cpp、WebBridgeTags.cpp、WebMotorAccessLive.cpp；備份 D:\HT9045\_review\iowait_20261008 | cpp（本 commit） | Debug＋release wb_serve 建置 OK；test_pci1203_pure 109/109、WB_SimPump 通過。IO 執行緒沒有 ctest，量測要等機台跑過一次、看 SLOW 行有沒有出現「io wait」才算驗證；下一步依數字決定要減哪一種等待 |
+ | 211 | **1203 頁加「卡片本機 DO0／DO1」ON／OFF 按鈕**（EastSun「你可以查一下1203 DO1 怎輸出?」→「沒有站號 是1203本身 有IO」→ 廠商範例 Examples\Windows\BCB\Device DIO：Acm_DevOpen → FT_DevFunctionMap bit 7（本機 DIO）→ Acm_DaqDoSetBit(device, 通道, 值) →「你能試著 輸出DO1嗎?」→ 獨立探針 D:\HT9045\_review\probe_do1（PCIE-1203-32AE (M0) 0x63000000，map 0x1FC1 bit7=1，DO0～7／DI0～7 原本都 0，DO1 設 1 讀回 1、3 秒後設 0 讀回 0；當時 Common Motion Utility 其實還開著、照樣開得到卡）→「你1203 頁面 可以幫我多加 DO0 DO1 按鈕嗎?」→「按鈕先寫上 我去測試就對了」）：EtherCAT/Pci1203Control.h／.cpp 新指令 kCmdDevDoSetBit（列舉尾端、在 kCmdRingReset 後；wire「pci1203.carddo.setBit」、target「pci1203.carddo.bit<0|1>」、值 0／1）：Run_ 只收通道 0／1、不需要軸 handle；Execute 呼叫 Acm_DaqDoSetBit(dev, 通道, 值)（已在允許清單，不加新的廠商呼叫、不讀回）。web js/pci1203/view.js 預設畫面 sectionDO 之後加 sectionCardDo：DO0／DO1 各一顆 ON、一顆 OFF（不做切換鈕：沒有讀回就不知道現在狀態）。⚠ 還沒確認這個通道號是卡片本身的 DO，還是 ring 平面編號的同一號通道（view.js 舊註解：Acm_DaqDoSetBit 平面通道寫過 530 個 ring 通道）—— EastSun 用按鈕實測（AI(W906-CARDDO)，同行＋換空白行＋檔尾，行號不動） | cpp＋web（本列） | Pci1203Pure 109/109（新增 carddo 4 項：拆解、名稱、缺通道拒絕、卡沒開拒絕不送出）、Pci1203Seam／MotorRoute／LinkWatch／ModuleCheck／Reopen、Idx1203GaliBranch、IndexZTorque1203／AutoHeight1203、I115B_Vacuum、VacuumVc8 過；web 沒有 node 可做語法檢查，只逐行審過；Debug 19:02:56、release 19:05:28 已連結 |
+ | 210 | **Empty 探層：氣缸只收一次，之後每層只動 Z**（EastSun「empty 的部分怎麼動作那麼遲緩，是哪邊影響的」→ 15:57～16:00 每層 27～38 s：探層 case 100 每層重跑 `EdgeClip.Pop() && EdgePush.Pop() && LoaderZ_Select.Pop() && C_Empty_Up.Push()`，沒有到位感測器的 EdgeClip／EdgePush 每次呼叫重計 1.5 s（207 列）、`&&` 由左至右輪流重計 → 「繼續」）：acatchtray.cpp W906_ProbeEmpty9050 加 s_iEmptyProbeCylOk9050：探層開始（case 1 算出起始層時、W906_InitProbeEmpty9050）清 0；case 100 條件改成 `s_iEmptyProbeCylOk9050 || <EastSun 的四個條件>`（&& 先於 ||），條件成立進 `{` 時設 1 ⇒ 之後每層直接 MotorMove＋看 SenEmptySelectHasTray。EastSun 改過的四個條件原樣（AI(W906-PROBECYL9050)，同行＋同行宣告，行數不變）。提交只收這 5 行：index 放「HEAD＋本修改」，EastSun 未提交的 acatchtray.cpp（DoCatchFromEmpty 條件、探層條件、:9817）、cinitial.cpp、asendic_Loader.cpp 仍留在工作目錄。另：1008 晚更正 209 列「三支測試因今天改表而失敗」的說法（見 209 列） | cpp（本列） | Flow9050_Tray 142/142（新增 [PC] 4 項：對照「氣缸還沒到位 ⇒ 第一次就停住」、條件成立 ⇒ Up[9]=300、EdgeClip 再設成永遠不會完成 ⇒ 第 8～0 層照跑、盤數 0）；Debug 18:43:50、release 18:44:00 已連結 |
+ | 209 | **HT9050 氣缸：已確認到位、感測仍在位就不再重等延遲**（另一個工作階段做、本工作階段推：EastSun 1008「目前的狀況是等待太久，若同一個判斷式導致每次呼叫都要等待確認的時間，有什麼辦法可以解決」→ 選 B（改氣缸、只 HT9050））：golden Push／Pop 完成後 Task=1，下一次呼叫又重跑一次 On／OffDelayTime；`A.Pop() && B.Pop() && Select.Pop() && C_Empty_Up.Push()` 每圈都重等。mycylin.cpp（同行附加＋檔尾，行號不動、class 佈局不變）：Push／Pop 完成時把該 Cylinder[] 記為「確認 on／off」，On／Push 與 Off／Pop 清掉反向的確認；確認中且該氣缸**有**那一側感測器、感測仍在位 ⇒ Push／Pop 立刻回 true。沒有感測器、感測掉了、raw On()、其他機種、ctest ＝ golden。由 JsonBridge/W906DualCoil9050.cpp 的 registrar 掛 g_W906CylNoReDelayHook（AI(W906-CYLNOREDELAY)，commit 691374b）。⚠ 限制：Empty／Loader／Auto 的 EdgeClip、EdgePush 沒有到位感測器（207 列設 1.5 秒延遲）⇒ 不受這個修正影響，Empty 探層每層仍會因這兩顆的 1.5 秒延遲在 `&&` 串裡輪流重計而變慢（15:57～16:00 每層 27～38 s）；要解得在探層開始時收一次氣缸、之後每層只動 Z，或補感測器 | cpp（691374b） | test_dualcoil9050 35/35（新增 [6]）；另一工作階段 ctest 24 項氣缸／HT9050 測試 21 過，MotorPoints_HT9050／MachineSuckers_HT9050／MachineMotors_HT9050 失敗（與氣缸程式無關；1008 晚更正：不是「今天改了 Mot_Table／IO_Table」——這三支讀 ../machines/HT9050/ 的表副本，最後修改 9/24、9/30，今天沒動；是 §3 包 163 起就記的已知失敗：筆電包的測試釘筆電那份 HT9050 表的值）；acatchtray.cpp:9817 EastSun 未提交修改中多出的「f」已由該工作階段移除 |
+@@ -347,6 +348,7 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-06 | 158 | 31e2b21（GitLab bc2891cc） | 本 commit（只有文件），EastSun「一樣最佳化執行緒 更新版本」。程式部分＝機台自己的 IOTUNE-D（cpp 0232）收進 main，wb_serve.cpp 合併結果＝機台檔（不寫，避免觸發重編）；設計外掛照規定跳過；收 docs 三份＋MACHINE_PATCHES_20261006.md。README／RULINGS_20261006 第 8 條：**Jimmy 1006 #128＝A（機台先關 IO 執行緒，等審查 #1～#3 修好再開）、#127＝B（機台節拍改 500）**——EastSun 1006 裁決：**IO 執行緒照開、機台端現在修審查 #1～#6**；**節拍維持 100**，把今天量測（IO 執行緒＋IOTUNE-D 後主迴圈最慢一圈約 25 ms，照 Jerry「tick ≥ 3×最壞單趟」100 就夠；單執行緒約 125～141 ms 才需要 500）回報 Jimmy | 見推送紀錄 |
+ | 10-07 | 設計外掛 tools 0170 | — | 設計外掛工作階段自己推（分支 a6cadd2，GitHub dc7975ff）：依序合併筆電包 162、163、167、168 的設計外掛（0.197.0 → 0.234.0），164～166、169～172 沒帶設計外掛；無衝突，機台自己的設計外掛功能都保留；測試修正：建置視窗進度條在矮視窗不再塌掉、面板繪製測試固定 Edge 視窗大小；run_all 3/3、vscode_it 161/161，已安裝 0.234.0；只動 tools/vscode-htdesigner | tools 0170 |
+ | 10-08 | 設計外掛 tools 0171 | — | 設計外掛工作階段自己推（commit b453060，GitHub f42c142b）：EastSun 1008 方案總管的 Debug／Release 按鈕按不了（0.234 在 ▶＝F5 時把它變灰）→ 裁決「連動F5 release 和debug」：按鈕恢復可按，resolveDebugConfiguration 依按鈕把 F5／▶ 的啟動目標換成 build_integ_dbg_x86 或 build_integ_ship_x86 那一組；「模擬」仍是灰的。run_all 3/3；vscode_it 沒跑成（VS Code 自己的更新程式 CodeSetup 從 10/07 18:34 起佔住執行個體鎖）。vsix 已安裝，版本號沒變，要重新載入視窗才生效；只動 tools/vscode-htdesigner | tools 0171 |
++| 10-08 | 設計外掛 tools 0173 | — | 設計外掛工作階段自己推（commit d646730，GitHub 1f67c7c1）：EastSun 1008「請一直持續偵測有沒有新版」定時檢查 → 合併筆電包 202 的設計外掛（0.293.0 → 0.297.0：開始／暫停／停止／重啟移到新的大工具列）。只有 test/panels_render.ps1 衝突（2 處）：取筆電的大工具列檢查，保留機台的 Debug／Release 按鈕檢查（EastSun 1006）。機台自己的功能都保留。run_all 3/3；vscode_it 沒跑成（VS Code 更新程式仍佔住執行個體鎖）。0.297.0 已安裝；只動 tools/vscode-htdesigner | tools 0173 |
+ | 10-08 | 設計外掛 tools 0172 | — | 設計外掛工作階段自己推（commit ca80d28，GitHub 5df73910）：EastSun 1008「請更新版本」→ 合併筆電包 193、196～201 的設計外掛（0.234.0 → 0.293.0；194、195 沒帶設計外掛）。193 有 4 個衝突，都在 Debug／Release ↔ F5 連動，取筆電版；197 起的 ES02 在 run.simulation 沒明確設定時把機台的 pairedConfig（tools 0171）帶回來（機台優先），有設定時 F5 走筆電的模式建置（build_f5_<mode>__<folder>）。機台自己的功能都保留；機台資料夾切換與 9050 同步只在 hp9050Root 有設時動作（預設空、這台沒設；D:\HT9045\system 仍是實體資料夾）。run_all 3/3（lib 242、probe 7、extension 293、panels）；vscode_it 沒跑成（VS Code 更新程式 CodeSetup 仍佔住執行個體鎖）。0.293.0 已安裝；只動 tools/vscode-htdesigner（70 檔） | tools 0172 |
+ | 10-07 | 167～172 | 67bfee39…36621358（GitLab a4d5d4d5…6ab8edd5） | 本 commit（機台 C++＋web），EastSun「有新版嗎?」，依「之後的更新包都自動收」。備份分支 backup/pre-pkg172-20261007（cpp、web）＋ D:\HT9045\_pkg_172\backup_machine_*。六包疊成一份：直接換 23、新檔 15、兩邊都改 15（自動合併 8、衝突 2、設計外掛／WORKLOG 照規定留機台）、一樣 4。內容：main 收回機台 cpp 0267～0283／web 0133～0136（合併＝機台檔）；St02 W-142 警報說明檔查找＋AdvMotErrText_St02.h（1203 錯誤碼文字）、W-143 MNetLog 移出 myMN200motor、W-140 Command.cpp GPIB SETTEMP／UPH?；Ifor !302 cmydef.h 拆成 core／io／rt（逐字搬，機台 10 個 AI 標記都在新檔）；Jimmy !301 BUILD_TESTING 選項（預設 OFF）。**.vscode/tasks.json 留機台版**（筆電版沒有 AI(W906-F5-DBG)／AI(W906-T4-RETIRE)：F5 建 Debug 目錄）；build_integ_dbg_x86 設 BUILD_TESTING=ON 維持現狀（測試照建）。衝突：WebMotorAccessLive 取筆電（W906_FormShowing("fHome") 包裝，同義）、test_web_motor_access 取機台（筆電再加一份 test_boot_initmotor_100pct 會重複定義）。13 個直接換的檔行尾改回 CRLF |
+ | 10-07 | 166 | def246a6（GitLab 8180c317） | 本 commit 357bee5（只有機台 C++；web 沒有差異），定時版本檢查，依「之後的更新包都自動收」不另外發問。備份分支 backup/pre-pkg166-20261007＋ D:\HT9045\_pkg_166\backup_machine_*。內容：main 收回機台 cpp 0259～0265／web 0132（合併結果＝機台檔，不動）；St02 !295 SECS EC／level host 寫入照 golden 0618（uHGemHT9045.cpp 閘 E1／E5／L1 打開）＋新測試；Ifor !292 測試打包（W906_TEST_BUNDLES，只影響測試編排）；文件。直接換 4（機台獨有標記 0 缺）、新檔 2、乾淨合併 2；衝突 5 處都取機台（test_myplc_modbus 程式碼相同、wb_serve 機台的 NOTICE-DEFER-5 較新）。**保留機台**：test_note_auth.cpp（main 釘的是 0265 的 tag 版字串）、WORKLOG。行尾還原 1 檔。EastSun 13:15 按 F5 已重連結；St02_SecsEcFileWrites、SecsCatalogue、D026_NoteAuth 過 | 見推送紀錄 |
+diff --git a/tools/wb_serve.cpp b/tools/wb_serve.cpp
+index ee04b7f..0a1c0dd 100644
+--- a/tools/wb_serve.cpp
++++ b/tools/wb_serve.cpp
+@@ -236,7 +236,7 @@ CRITICAL_SECTION   g_wdLock;
+ bool               g_wdReady = false;
+ char               g_wdPhase[192] = "boot";
+ DWORD              g_wdSince = 0;
+-BOOL W906_QTCT(HANDLE h, ULONG64* c) { typedef BOOL (WINAPI *Fn)(HANDLE, ULONG64*); static const Fn f = reinterpret_cast<Fn>(reinterpret_cast<void*>(::GetProcAddress(::GetModuleHandleA("kernel32.dll"), "QueryThreadCycleTime"))); return f ? f(h, c) : FALSE; }  /*AI(W906-PASSPROF-ORACLE) 20261006 (laptop, batch 79): MinGW.org GCC 6.3 (the oracle) has no QueryThreadCycleTime declaration (Vista+; the machine's WinLibs has it) -> resolved from kernel32 at run time, the same function on every Windows the port runs on; the two calls below use W906_QTCT. Same line, no line moves*/  unsigned long long g_wdSeq = 0;  struct W906PpSeg { char n[40]; long long q; };  W906PpSeg g_pp[64];  int g_ppN = 0;  long long g_ppT = 0, g_ppT0 = 0, g_ppF = 0;  char g_ppCur[40] = "loop";  bool g_ppOn = false;  DWORD g_ppTid = 0;  inline long long W906PpNow() { LARGE_INTEGER c; ::QueryPerformanceCounter(&c); return (long long)c.QuadPart; }  void W906PpAttr(long long now) { int i = 0; for (; i < g_ppN; ++i) if (std::strcmp(g_pp[i].n, g_ppCur) == 0) break; if (i == g_ppN) { if (g_ppN >= 64) { i = 63; std::strcpy(g_pp[63].n, "(more phases)"); } else { ++g_ppN; std::strncpy(g_pp[i].n, g_ppCur, sizeof(g_pp[i].n) - 1); g_pp[i].n[sizeof(g_pp[i].n) - 1] = '\0'; g_pp[i].q = 0; } } g_pp[i].q += now - g_ppT; g_ppT = now; }  void W906PpMark(const char* phase) { if (!g_ppOn || ::GetCurrentThreadId() != g_ppTid) return; W906PpAttr(W906PpNow()); std::strncpy(g_ppCur, phase ? phase : "?", sizeof(g_ppCur) - 1); g_ppCur[sizeof(g_ppCur) - 1] = '\0'; }  }  namespace ht9045 { extern void (*g_W906PhaseMark)(const char*); }  namespace {  void W906_PassProfBegin() { if (g_ppF == 0) { LARGE_INTEGER f; ::QueryPerformanceFrequency(&f); g_ppF = (long long)f.QuadPart; ht9045::g_W906PhaseMark = &W906PpMark; } g_ppTid = ::GetCurrentThreadId(); g_ppN = 0; g_ppT = g_ppT0 = W906PpNow(); std::strcpy(g_ppCur, "FastClock jobs"); g_ppOn = true;  { extern unsigned long long g_ppCyc0, g_ppTsc0; ULONG64 c = 0; W906_QTCT(::GetCurrentThread(), &c); g_ppCyc0 = c; g_ppTsc0 = __builtin_ia32_rdtsc(); } }   /*AI(W906-PASSPROF) 20261006: + the thread's own CPU cycles and the TSC at the pass start (W906_PassProfEnd: CPU ms vs wall ms = computing vs waiting)*/  void W906_PassProfEnd();   //AI(W906-PASSPROF) 20261006: EastSun 1006「請最佳化下去」-- per-pass phase timer on the WdMark phases (QPC, tick thread only): a pass over 100 ms writes one op-log SLOW line with its biggest phases (W906_PassProfEnd at the end of this file); same line
++BOOL W906_QTCT(HANDLE h, ULONG64* c) { typedef BOOL (WINAPI *Fn)(HANDLE, ULONG64*); static const Fn f = reinterpret_cast<Fn>(reinterpret_cast<void*>(::GetProcAddress(::GetModuleHandleA("kernel32.dll"), "QueryThreadCycleTime"))); return f ? f(h, c) : FALSE; }  /*AI(W906-PASSPROF-ORACLE) 20261006 (laptop, batch 79): MinGW.org GCC 6.3 (the oracle) has no QueryThreadCycleTime declaration (Vista+; the machine's WinLibs has it) -> resolved from kernel32 at run time, the same function on every Windows the port runs on; the two calls below use W906_QTCT. Same line, no line moves*/  unsigned long long g_wdSeq = 0;  struct W906PpSeg { char n[40]; long long q; long long w; int c; };  W906PpSeg g_pp[64];  int g_ppN = 0;  long long g_ppT = 0, g_ppT0 = 0, g_ppF = 0;  char g_ppCur[40] = "loop";  bool g_ppOn = false;  DWORD g_ppTid = 0;  inline long long W906PpNow() { LARGE_INTEGER c; ::QueryPerformanceCounter(&c); return (long long)c.QuadPart; }  void W906PpAttr(long long now) { int i = 0; for (; i < g_ppN; ++i) if (std::strcmp(g_pp[i].n, g_ppCur) == 0) break; if (i == g_ppN) { if (g_ppN >= 64) { i = 63; std::strcpy(g_pp[63].n, "(more phases)"); } else { ++g_ppN; std::strncpy(g_pp[i].n, g_ppCur, sizeof(g_pp[i].n) - 1); g_pp[i].n[sizeof(g_pp[i].n) - 1] = '\0'; g_pp[i].q = 0; g_pp[i].w = 0; g_pp[i].c = 0; } } g_pp[i].q += now - g_ppT; g_ppT = now; }  void W906PpMark(const char* phase) { if (!g_ppOn || ::GetCurrentThreadId() != g_ppTid) return; W906PpAttr(W906PpNow()); std::strncpy(g_ppCur, phase ? phase : "?", sizeof(g_ppCur) - 1); g_ppCur[sizeof(g_ppCur) - 1] = '\0'; }  void W906PpIoWait(long long q) { if (!g_ppOn || ::GetCurrentThreadId() != g_ppTid) return; W906PpAttr(W906PpNow()); for (int i = 0; i < g_ppN; ++i) if (std::strcmp(g_pp[i].n, g_ppCur) == 0) { g_pp[i].w += q; ++g_pp[i].c; break; } }  /*AI(W906-IOWAIT) 20261008: a main-thread wait for the IO thread (EtherCAT/Pci1203Monitor.cpp end of file), added to the phase it happened in*/  }  namespace ht9045 { extern void (*g_W906PhaseMark)(const char*); extern void (*g_W906IoWaitHook)(long long); }  namespace {  void W906_PassProfBegin() { if (g_ppF == 0) { LARGE_INTEGER f; ::QueryPerformanceFrequency(&f); g_ppF = (long long)f.QuadPart; ht9045::g_W906PhaseMark = &W906PpMark; ht9045::g_W906IoWaitHook = &W906PpIoWait; } g_ppTid = ::GetCurrentThreadId(); g_ppN = 0; g_ppT = g_ppT0 = W906PpNow(); std::strcpy(g_ppCur, "FastClock jobs"); g_ppOn = true;  { extern unsigned long long g_ppCyc0, g_ppTsc0; ULONG64 c = 0; W906_QTCT(::GetCurrentThread(), &c); g_ppCyc0 = c; g_ppTsc0 = __builtin_ia32_rdtsc(); } }   /*AI(W906-PASSPROF) 20261006: + the thread's own CPU cycles and the TSC at the pass start (W906_PassProfEnd: CPU ms vs wall ms = computing vs waiting)*/  void W906_PassProfEnd();   //AI(W906-PASSPROF) 20261006: EastSun 1006「請最佳化下去」-- per-pass phase timer on the WdMark phases (QPC, tick thread only): a pass over 100 ms writes one op-log SLOW line with its biggest phases (W906_PassProfEnd at the end of this file); same line
+ 
+ void WdMark(const char* phase)
+ {
+@@ -4620,7 +4620,7 @@ int main(int argc, char** argv)
+         //AI(W906-Q34-7) 20260923: 只在 500 ms 的拍子上跑 —— 見迴圈前的說明。
+         //  ⓘ rebase 到 bafb25e 之後：WdMark("tick") 放在 if 外面，**每一圈都執行**
+         //    （它只是停擺看門狗的心跳；雙時鐘之後一圈最長 50 ms，比 500 ms 更密，不會誤報）。
+-        WdMark("IoTestSuck+FormShow+NoticeKey");  { extern void W906_IoTestSuckTick(); W906_IoTestSuckTick(); }  { extern void W906_IoFormShowTick(); W906_IoFormShowTick(); }  { extern void W906_NoticePanelKeyTick(); W906_NoticePanelKeyTick(); }  /*AI(W906-I124) 20261003 (NB2, INBOX 124): every pass, as golden TfNote::Timer1Timer runs while a note is up; the panel PAUSE closes a notice (EOF)*/  /*AI(W906-IO-FORMSHOW-OUT) 20261002: the IO window's golden open steps on its closed->open edge (sbIOClick main.cpp:27946/:27954 + iosetview.cpp:306-329: Index brakes Off + positions record; JsonBridge/IoBtnPanelClick.cpp EOF). Main loop only: golden cannot open the IO form behind a modal note*/  /* AI(W906-IOWIDGET-3) 20261001: golden iosetview Timer1Timer :159-173 (Interval 50) -- the TestSuck Suck()/Destroy() sequence, every pass (JsonBridge/IoBtnPanelClick.cpp); idle = one compare. Same line */  { extern void W906_IoTiming(int); if (pumpBeat) { WdMark("PumpTick");  W906_IoTiming(1); ht9045::PumpTick(); W906_IoTiming(2); extern void W906_ServiceOutputs(int); W906_ServiceOutputs(0); }  if (pumpBeat) g_apiCacheDirty = true; }   // AI(W906-IOWEB-P6) 20260924: rebuild on the tick thread (covers builds without INSTALL_1203_MONITOR and IO_Table reloads)  // AI(W906-IOWEB-P21) 20260925: W906_IoTiming marks the phase for the click-latency log (JsonBridge/IoBtnPanelClick.cpp)  // AI(W906-IOWEB-P25) 20260925: outputs right after PumpTick, before INI/Poll; the api cache is only MARKED here and rebuilt after the drain
++        WdMark("IoTestSuck+FormShow+NoticeKey");  { extern void W906_IoTestSuckTick(); W906_IoTestSuckTick(); }  { extern void W906_IoFormShowTick(); W906_IoFormShowTick(); }  { extern void W906_NoticePanelKeyTick(); W906_NoticePanelKeyTick(); }  /*AI(W906-I124) 20261003 (NB2, INBOX 124): every pass, as golden TfNote::Timer1Timer runs while a note is up; the panel PAUSE closes a notice (EOF)*/  /*AI(W906-IO-FORMSHOW-OUT) 20261002: the IO window's golden open steps on its closed->open edge (sbIOClick main.cpp:27946/:27954 + iosetview.cpp:306-329: Index brakes Off + positions record; JsonBridge/IoBtnPanelClick.cpp EOF). Main loop only: golden cannot open the IO form behind a modal note*/  /* AI(W906-IOWIDGET-3) 20261001: golden iosetview Timer1Timer :159-173 (Interval 50) -- the TestSuck Suck()/Destroy() sequence, every pass (JsonBridge/IoBtnPanelClick.cpp); idle = one compare. Same line */  { extern void W906_IoTiming(int); if (pumpBeat) { WdMark("PumpTick");  W906_IoTiming(1); ht9045::PumpTick(); W906_IoTiming(2); extern void W906_ServiceOutputs(int); WdMark("ServiceOutputs"); W906_ServiceOutputs(0); }  if (pumpBeat) g_apiCacheDirty = true; }   // AI(W906-IOWEB-P6) 20260924: rebuild on the tick thread (covers builds without INSTALL_1203_MONITOR and IO_Table reloads)  // AI(W906-IOWEB-P21) 20260925: W906_IoTiming marks the phase for the click-latency log (JsonBridge/IoBtnPanelClick.cpp)  // AI(W906-IOWEB-P25) 20260925: outputs right after PumpTick, before INI/Poll; the api cache is only MARKED here and rebuilt after the drain
+         WdMark("HmiKeeper");  if (pumpBeat) { extern void W906_HmiKeeperTick(); W906_HmiKeeperTick(); }  /*AI(W906-HMI-KEEP) 20260929: reopen the HMI page when it is closed (end of file)*/  WdMark("StateRecordTimer2");  if (pumpBeat) { extern void W906_StateRecordTimer2Pump(); W906_StateRecordTimer2Pump(); }  WdMark("AdamTimer2");  if (pumpBeat) { extern void W906_AdamTimer2Pump(); W906_AdamTimer2Pump(); }  /*AI(W906-ST02-ADAM) 20261002 (St02-E helper H4): golden 912 Timer2Timer EP block main.cpp:21677-21803 + ADAM_ReturnValueCheck :22354-22355 (Adam6024Integrate_St02.cpp; 1 s limiter, InitialOK guard; EP live switch OFF = returns at once) -- the production set-point writer 3c348627 held back*/  WdMark("MotorAccessTick");  if (pumpBeat) { extern void W906_MotorAccessTick(bool); extern bool W906_OwnerHeldSince(unsigned long long, unsigned long long&); static unsigned long long s_w906OwnerTick = 0; W906_MotorAccessTick(W906_OwnerHeldSince(server.ControlOwner(), s_w906OwnerTick)); }  // AI(W906-STATEREC) 20260924: golden Timer2Timer 的 State Record 段（main.cpp:21142-21153，本體 cStateRecord.cpp，內部限每秒一次）—— 推 StateRecordImage 的格 1～6，格 6 發延後警報 JAM0316/JAM0317（會像其他警報一樣等瀏覽器回答）。佔用原本的空行，不移動行號
+ #ifdef WB_PUMP_1203_CONTROL
+         //AI(W906-Q34-5b) 20260923: 把 Pci1203Axis.ini 記下的卡片設定放回去（1203INI-1）
+@@ -9367,10 +9367,10 @@ void W906_PassProfEnd()
+         const double tscPerMs = (double)(tsc - g_ppTsc0) / totalMs;
+         if (tscPerMs > 0.0) cpuMs = (double)(c - g_ppCyc0) / tscPerMs;
+     }
+-    char b[512];
++    char b[768];   //AI(W906-IOWAIT) 20261008: was 512 -- a phase may now carry "(io wait ...)"
+     int k = std::snprintf(b, sizeof(b), "pass %.1f ms (tick thread CPU %.1f ms):", totalMs, cpuMs);
+     for (int i = 0; i < g_ppN && i < 10 && k > 0 && k < (int)sizeof(b); ++i)
+-        k += std::snprintf(b + k, sizeof(b) - (std::size_t)k, " %s %.1f ms;", g_pp[order[i]].n, (double)g_pp[order[i]].q * 1000.0 / (double)g_ppF);
++        { const W906PpSeg& s = g_pp[order[i]]; char io[48] = ""; if (s.c > 0) std::snprintf(io, sizeof(io), " (io wait %.1f ms/%d)", (double)s.w * 1000.0 / (double)g_ppF, s.c); k += std::snprintf(b + k, sizeof(b) - (std::size_t)k, " %s %.1f ms%s;", s.n, (double)s.q * 1000.0 / (double)g_ppF, io); }   //AI(W906-IOWAIT) 20261008: + how much of the phase was waiting for the IO thread, and for how many card requests
+     OpLine("SLOW", b);
+ }
+ }  // namespace
+-- 
+2.55.0.windows.5
+
