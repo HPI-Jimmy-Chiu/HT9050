@@ -17,6 +17,7 @@ description: >
 # St02 作業流程與現況（V906 移植）
 
 > 所有路徑都是絕對路徑。V906 樹＝`D:\HT9045\HT9011UC_Cpp_V3.33.906.0\`；網頁＝`D:\HT9045\web\`；
+> **⚠ 1008 19:2x 起（Steven 本人：「之後改項目都根據這個新的repo當golden」）：新的改動一律以 913 為 golden**——GitLab `honprec/rd/rd5/ht9045_913` 的 main（tag V3.33.913.0，團隊 10/07 整合版），本機唯讀 clone `D:\HT9045\HT9011UC_Code_V3.33.913.0_20261008_steven\`（BCB6／Big5，讀時用 cp950）。只認 main（ifor/、rogeryang/、jimmy/ 分支還沒合）。引用寫 `golden 913 <file>:<line>`；913 跟 0618 不同就照 913，commit 與 §2 回報寫明、兩邊都引。下面講 0618 的段落是 1008 之前的基準（舊工作、對照用）。
 > golden 906（St02 用）＝**0618**：`D:\HT9045\HT9011UC_Code_V3.33.906.0_20260618\`（RULINGS_20261003 第 2 條，1003 起；要從加密 7z 解開，密碼只在 GitLab main `docs/handoff/TO_STEVEN.md` §2，**永遠不抄進任何檔**）。1003 10:3x 在這台解 7z 被 Claude Code 權限檢查擋下（判定憑證外洩），**那條路不可重試或繞道**；10:5x 改成從共用區 `U:\共用區\HT-9050\K01_golden0618_HT9050snapshot_20260930\` **單純複製** St01 解好的 0618（886 檔；指紋跟 NB2 的 fp_0618.tsv 完全一樣），所以這台**有 0618 了**。`D:\HT9045\HT9011UC_Code_V3.33.906.0_20260625_Steven\` 只做對照（0927～1003 曾是基準）。912（`D:\HT9045\HT9011UC_Code_V3.33.912.0_20260908_Jimmy\`）：是修正或明顯比較好的就留 912 並兩邊註明（RULINGS_20261003 第 1 條），其他照 0618；20a 溫控／20b HANA／20c ADAM 照舊。
 
 ## 0. 先看這些
@@ -119,7 +120,8 @@ description: >
   原型的 SimNet glue 只有 wb_serve 會編，而把它加進 wb_serve 的正是 CMakeLists.txt 的認領行 ⇒ 從來沒編過；一套上就 `'byte' does not name a type`（techniques §5）。
   測試分支叫 `v906/st02-<批名>-claimtest`，commit 標「CLAIM LINES ... NEVER PUSH」；認領行用腳本套（先逐字核對 OLD），認領稿的 OLD／NEW 也從同一支腳本產生。
 - **解「缺 include」的閘一定要兩組態完整建置**（`build.bat quick`，會連所有測試執行檔）。`-fsyntax-only` 看不到連結方向（techniques §8）。
-- **golden 引用一律寫樹名**：`golden 0618 main.cpp:N`（1003 起的基準）；對照寫 `0625_Steven main.cpp:M`；912 寫 `V912 <file>:<line>`。0625 在 main.cpp :28427 之前起比 0618 多 78 行，ckernel ShowRunLed／ScanPannelKey、main Timer2Timer 也不同（W-17，`docs/handoff/W17/diff_0618_0625.tsv`）——**不能機械平移**，有 0618 原文才算數。版本基準：**0618 為主**（RULINGS_20261003 第 2 條），912 只在「是修正或明顯比較好」時保留（第 1 條：兩邊行號都註明＋`docs/ST02_GOLDEN906_AUDIT.md` 一列，自己判斷、不用等點頭），912 才有的客戶專屬功能或只是寫法不同 ⇒ 照 0618；20a／20b／20c 照舊。舊的「只用 906、沒有例外」（RULINGS_20261002 第 20 條）與「906 為底＋912 補的」（0926 14:3x）都已被取代。推之前問自己：每個 golden 引用是不是 0618 的號碼？保留 912 的地方有沒有寫理由？
+- **golden 913（1008 19:2x 起，Steven 本人）**：新的改動對 `D:\HT9045\HT9011UC_Code_V3.33.913.0_20261008_steven\`（ht9045_913 main）逐行核對，引用寫 `golden 913 <file>:<line>`；913 與 0618 相同時兩個都引（例：POOL-2 SV G13＝0618 :439-445＝913 :446-452），不同就照 913 並在 commit／§2 回報寫明。
+- **golden 引用一律寫樹名**：`golden 0618 main.cpp:N`（1003 起的基準；1008 起新改動改用 913，見上一條）；對照寫 `0625_Steven main.cpp:M`；912 寫 `V912 <file>:<line>`。0625 在 main.cpp :28427 之前起比 0618 多 78 行，ckernel ShowRunLed／ScanPannelKey、main Timer2Timer 也不同（W-17，`docs/handoff/W17/diff_0618_0625.tsv`）——**不能機械平移**，有 0618 原文才算數。版本基準：**0618 為主**（RULINGS_20261003 第 2 條），912 只在「是修正或明顯比較好」時保留（第 1 條：兩邊行號都註明＋`docs/ST02_GOLDEN906_AUDIT.md` 一列，自己判斷、不用等點頭），912 才有的客戶專屬功能或只是寫法不同 ⇒ 照 0618；20a／20b／20c 照舊。舊的「只用 906、沒有例外」（RULINGS_20261002 第 20 條）與「906 為底＋912 補的」（0926 14:3x）都已被取代。推之前問自己：每個 golden 引用是不是 0618 的號碼？保留 912 的地方有沒有寫理由？
 - **ctest 不可寫真檔**：沙盒放 `%TEMP%\ht9045_<名>_<tick>`；測試自己把路徑指過去，指到 `D:\HT9045` 底下就在呼叫任何東西之前中止；綠燈才刪沙盒。既有的轉向變數：W906_INIDATA_ROOT、W906_HT9045LOG_ROOT、W906_SAVEEVENTLOG_ROOT、W906_AUTH_PATH、W906_SETUPINF_PATH（不在 blanket）等；新接縫照 D5 做法（getenv、沒設＝golden 字面、tests/CMakeLists.txt 的 `_ht9045_env_extra` APPEND）。
 - 新 ctest 放在 St02 的區段（tests/CMakeLists.txt 自己那幾塊的後面），名稱照 `TesterComm_*`、`ELA_*`、`AOI_*`、`MyDB_*`。
 

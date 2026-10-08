@@ -52,3 +52,11 @@
 ## INI 日期與字串轉換
 
 [Trim／整數、日期解析、serial與格式精度](ini-conversion/index.md) 補查typed API的轉換callee；分開非空失敗回0與caller def、Word／floor、month/minute與秒精度。完整字串容器、caller、BCB6及實機仍待續。
+
+## TStrings／TStringList共用容器
+
+[字串清單樹](string-list/index.md) 接續INI／GPIB consumer，分開核心、Text／proxy與後續parser／IO；保存舊pin／正文，機型／客戶caller及runtime仍待查。
+
+## AnsiString byte與比較續查
+
+[byte／搜尋編輯／比較與case-copy](ansi-string/bytes/index.md)：接續TStrings／INI的char*與NUL、1-based byte、比較callee；numeric／printf、locale／ABI／完整caller與runtime仍續查。
