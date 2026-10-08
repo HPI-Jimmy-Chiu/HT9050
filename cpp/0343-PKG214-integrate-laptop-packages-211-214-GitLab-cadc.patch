@@ -1,0 +1,1619 @@
+From 504013f38efb9352c107533d47683fcb30ff46d8 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 9 Oct 2026 07:33:12 +0800
+Subject: [PATCH] PKG214: integrate laptop packages 211-214 (GitLab cadc0934,
+ 7f107cef, 1607b33a, 786bc76f) -- St02 POOL-9 SECS/GEM golden 913 updates +
+ NB2 W-188 clean-out watchdog. Auto-accepted.
+
+211: cSocket TEST_CATEGORY::UpdataCount counts by each arm's own row + THGem::DoSpoolSendLocalData linked + socket lock. 212: HTGem
+S9F1/F3/F5/F7/F9 reply the rejected header (golden 913 uHGemClass.cpp:2216-2235). 213: THGem EventReport_*.def read / write behind a
+ctest sandbox (W906_SECSSYSTEM_ROOT; production path unchanged) + SetReportIDContent / AddReprot save once as golden. 214: DoCleanOutFinishCheck
+as golden 913 -- a clean-out over 300 s writes one EventLog line (no alarm, no stop). 15 files: 7 replaced (each scanned for machine-only
+AI(W906-*) tags / W906_ identifiers: none lost), 6 new tests, 2 merged without conflicts (csystem.cpp -- MainProc's pitch sync / boot
+clear ask still there; tests/CMakeLists.txt). Debug wb_serve + the 6 new tests built, 20 related ctests pass (uHGemEquipment, which
+failed here for want of SECS files, now passes in 213's sandbox); release wb_serve built. WORKLOG: the 211-214 row + section 3 row for
+designer tools 0184. Backup branch backup/pre-pkg214-20261009.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ SECSGEM/uHGemClass.cpp                 |  71 ++++---
+ SECSGEM/uHGemEquipment.cpp             |  50 +++--
+ SECSGEM/uHGemEquipment.h               |   2 +-
+ SECSGEM/uHGemHT9045.cpp                |   2 +-
+ cSocket.cpp                            | 114 +++++------
+ csystem.cpp                            |  77 +++++++-
+ docs/MACHINE_PATCHES_20261009.md       |  15 ++
+ docs/NIGHT_REPORT.md                   |   9 +-
+ docs/WORKLOG_MACHINE.md                |   2 +
+ tests/CMakeLists.txt                   |  78 ++++++++
+ tests/test_nb2_w188_cleanoutfinish.cpp | 166 ++++++++++++++++
+ tests/test_st02_w187_s9fx.cpp          | 151 ++++++++++++++
+ tests/test_st02_w187_spoolsend.cpp     |  95 +++++++++
+ tests/test_st02_w187_updatacount.cpp   | 121 ++++++++++++
+ tests/test_st02_w189_eventreport.cpp   | 260 +++++++++++++++++++++++++
+ tests/test_uHGemEquipment.cpp          |   8 +-
+ 16 files changed, 1117 insertions(+), 104 deletions(-)
+ create mode 100644 tests/test_nb2_w188_cleanoutfinish.cpp
+ create mode 100644 tests/test_st02_w187_s9fx.cpp
+ create mode 100644 tests/test_st02_w187_spoolsend.cpp
+ create mode 100644 tests/test_st02_w187_updatacount.cpp
+ create mode 100644 tests/test_st02_w189_eventreport.cpp
+
+diff --git a/SECSGEM/uHGemClass.cpp b/SECSGEM/uHGemClass.cpp
+index 14ef986e..f13de01d 100644
+--- a/SECSGEM/uHGemClass.cpp
++++ b/SECSGEM/uHGemClass.cpp
+@@ -912,7 +912,7 @@ void HTGem::UpdateDataPath(AnsiString Path)
+ //  body text is intentionally NOT duplicated here.  Each ACTIVE stub matches
+ //  its declared signature and returns a conservative/no-op default.
+ //===========================================================================
+-
++static void SendS9FxEchoHeader(SecsWireCodec *p, int FCode, AnsiString LogMsg);  //AI(W906-W187) 20261009: golden 913 uHGemClass.cpp:2216 S9Fx sender (Ifor 20260625); body at the end of this file
+ //---------------------------------------------------------------------------
+ // [S1,F1] Are You There Request.
+ //---------------------------------------------------------------------------
+@@ -3386,14 +3386,14 @@ void HTGem::Process_S7F20_CurrentEPPIDData()
+ // AI(W906-uHGemClass-Unlock) 20260713 UN-GATED (golden SECSGEM/uHGemClass.cpp:2222-2228):
+ // this and its 4 S9Fx siblings below share an identical 4-call shape --
+ // StringOut+InitLocalHead+DataItemOut(ASCII,S)+SendLocalData -- all now
+-// WireCodec methods, nothing else needed.
++// WireCodec methods, nothing else needed.  [STALE 20261009 W-187: golden 913 replies <B[10]> = the received header, via SendS9FxEchoHeader]
+ //---------------------------------------------------------------------------
+ void HTGem::S9F1_UnrecognizedDeviceID(AnsiString S)
+ {
+-    ActiveWire->StringOut(S);
+-    ActiveWire->InitLocalHead(9, 1, 0);
+-    ActiveWire->DataItemOut(HType.ASCII_TYPE, S);
+-    ActiveWire->SendLocalData();
++    SendS9FxEchoHeader(ActiveWire, 1, S);                                       //AI(W906-W187) 20261009: golden 913 uHGemClass.cpp:2241 (Ifor 20260625: body <B[10]>, echo Remote.SystemByte)
++//  was (golden 0618 :2224-2227): StringOut(S); InitLocalHead(9, 1, 0);
++//      DataItemOut(HType.ASCII_TYPE, S) -- body <A "text">, which SEMI E5 S9Fx does not define;
++//      SendLocalData();  913 sends the same log line and header, body = the 10-byte header received.
+ }
+ //---------------------------------------------------------------------------
+ // [S9,F3] Unrecognized Stream Function Type.                    //KenHsieh 20221006
+@@ -3401,10 +3401,10 @@ void HTGem::S9F1_UnrecognizedDeviceID(AnsiString S)
+ //---------------------------------------------------------------------------
+ void HTGem::S9F3_Unrecognized_Stream_Function_Type(AnsiString S)
+ {
+-    ActiveWire->StringOut(S);
+-    ActiveWire->InitLocalHead(9, 3, 0);
+-    ActiveWire->DataItemOut(HType.ASCII_TYPE, S);
+-    ActiveWire->SendLocalData();
++    SendS9FxEchoHeader(ActiveWire, 3, S);                                       //AI(W906-W187) 20261009: golden 913 uHGemClass.cpp:2248 (Ifor 20260625: body <B[10]>, echo Remote.SystemByte)
++//  was (golden 0618 :2234-2237): StringOut(S); InitLocalHead(9, 3, 0);
++//      DataItemOut(HType.ASCII_TYPE, S) -- body <A "text">, which SEMI E5 S9Fx does not define;
++//      SendLocalData();  913 sends the same log line and header, body = the 10-byte header received.
+ }
+ //---------------------------------------------------------------------------
+ // [S9,F5] Unrecognized Function Type.                            //Ifor 20260402
+@@ -3412,10 +3412,10 @@ void HTGem::S9F3_Unrecognized_Stream_Function_Type(AnsiString S)
+ //---------------------------------------------------------------------------
+ void HTGem::S9F5_UnrecognizedFunctionType(AnsiString S)
+ {
+-    ActiveWire->StringOut(S);
+-    ActiveWire->InitLocalHead(9, 5, 0);
+-    ActiveWire->DataItemOut(HType.ASCII_TYPE, S);
+-    ActiveWire->SendLocalData();
++    SendS9FxEchoHeader(ActiveWire, 5, S);                                       //AI(W906-W187) 20261009: golden 913 uHGemClass.cpp:2255 (Ifor 20260625: body <B[10]>, echo Remote.SystemByte)
++//  was (golden 0618 :2244-2247): StringOut(S); InitLocalHead(9, 5, 0);
++//      DataItemOut(HType.ASCII_TYPE, S) -- body <A "text">, which SEMI E5 S9Fx does not define;
++//      SendLocalData();  913 sends the same log line and header, body = the 10-byte header received.
+ }
+ //---------------------------------------------------------------------------
+ // [S9,F7] Illegal Data.
+@@ -3427,10 +3427,10 @@ void HTGem::S9F5_UnrecognizedFunctionType(AnsiString S)
+ //---------------------------------------------------------------------------
+ void HTGem::S9F7_IllegalData(AnsiString S)
+ {
+-    ActiveWire->StringOut(S);
+-    ActiveWire->InitLocalHead(9, 7, 0);
+-    ActiveWire->DataItemOut(HType.ASCII_TYPE, S);
+-    ActiveWire->SendLocalData();
++    SendS9FxEchoHeader(ActiveWire, 7, S);                                       //AI(W906-W187) 20261009: golden 913 uHGemClass.cpp:2263 (Ifor 20260625: body <B[10]>, echo Remote.SystemByte)
++//  was (golden 0618 :2255-2258): StringOut(S); InitLocalHead(9, 7, 0);
++//      DataItemOut(HType.ASCII_TYPE, S) -- body <A "text">, which SEMI E5 S9Fx does not define;
++//      SendLocalData();  913 sends the same log line and header, body = the 10-byte header received.
+ }
+ //---------------------------------------------------------------------------
+ // [S9,F9] Transaction Timer Timeout.                             //Ifor 20260402
+@@ -3438,10 +3438,10 @@ void HTGem::S9F7_IllegalData(AnsiString S)
+ //---------------------------------------------------------------------------
+ void HTGem::S9F9_TransactionTimerTimeout(AnsiString S)
+ {
+-    ActiveWire->StringOut(S);
+-    ActiveWire->InitLocalHead(9, 9, 0);
+-    ActiveWire->DataItemOut(HType.ASCII_TYPE, S);
+-    ActiveWire->SendLocalData();
++    SendS9FxEchoHeader(ActiveWire, 9, S);                                       //AI(W906-W187) 20261009: golden 913 uHGemClass.cpp:2270 (Ifor 20260625: body <B[10]>, echo Remote.SystemByte)
++//  was (golden 0618 :2265-2268): StringOut(S); InitLocalHead(9, 9, 0);
++//      DataItemOut(HType.ASCII_TYPE, S) -- body <A "text">, which SEMI E5 S9Fx does not define;
++//      SendLocalData();  913 sends the same log line and header, body = the 10-byte header received.
+ }
+ //---------------------------------------------------------------------------
+ // [S10,F4] Terminal Display Single Acknowledge.
+@@ -5049,3 +5049,30 @@ void HTGem::S103F12_StatusVariableNamelistReply()
+         S9F7_IllegalData("S103,F11 data format error");
+     }
+ }
++//---------------------------------------------------------------------------
++// AI(W906-W187) 20261009: golden 913 SECSGEM/uHGemClass.cpp:2216-2235 (Ifor 20260625: SEMI E5 conformant
++// S9Fx sender), declared at :915, called by S9F1/S9F3/S9F5/S9F7/S9F9 above.  The S9Fx body is <B[10]> = the
++// 10-byte header of the message being rejected (DeviceID, S with the W-bit, F, PType, SType, SystemByte).
++// Golden takes `THGem *p` (HGemPtr); the port's handlers compose on ActiveWire (the codec that holds
++// Remote and Local), so p is that codec -- same calls, same order.
++//---------------------------------------------------------------------------
++static void SendS9FxEchoHeader(SecsWireCodec *p, int FCode, AnsiString LogMsg)
++{
++    if(p==NULL)
++        return;
++    p->StringOut(LogMsg);
++    p->InitLocalHead(9, FCode, 0);
++    unsigned char hdr[10];
++    hdr[0] = (unsigned char)((p->Remote.DeviceID >> 8) & 0xff);
++    hdr[1] = (unsigned char)( p->Remote.DeviceID       & 0xff);
++    hdr[2] = (unsigned char)(p->Remote.MessageID_S | (p->Remote.W_Bit ? 0x80 : 0));
++    hdr[3] = (unsigned char) p->Remote.MessageID_F;
++    hdr[4] = (unsigned char) p->Remote.PType;
++    hdr[5] = (unsigned char) p->Remote.SType;
++    hdr[6] = (unsigned char)((p->Remote.SystemByte >> 24) & 0xff);
++    hdr[7] = (unsigned char)((p->Remote.SystemByte >> 16) & 0xff);
++    hdr[8] = (unsigned char)((p->Remote.SystemByte >>  8) & 0xff);
++    hdr[9] = (unsigned char)( p->Remote.SystemByte        & 0xff);
++    p->DataItemOut(10, HType.BINARY_TYPE, hdr);
++    p->SendLocalData();
++}
+diff --git a/SECSGEM/uHGemEquipment.cpp b/SECSGEM/uHGemEquipment.cpp
+index 4ec26d02..ae6fc319 100644
+--- a/SECSGEM/uHGemEquipment.cpp
++++ b/SECSGEM/uHGemEquipment.cpp
+@@ -2375,7 +2375,7 @@ unsigned THGem::GetCEIDContent(unsigned iCeid, unsigned *iReportIDData, int Mode
+ }
+ //------------------------------------------------------------------------------
+ // mode=1 是Handler ,=0 是 Host 定義的
+-bool THGem::SetReportIDContent(unsigned iCeid, unsigned iReportCount, unsigned *iReportIDData, int Mode)
++bool THGem::SetReportIDContent(unsigned iCeid, unsigned iReportCount, unsigned *iReportIDData, int Mode, bool bSaveNow)   //AI(W906-W189) 20261009 (St02-E): golden 913 uHGemEquipment.cpp:7521 (RogerYang 20260812 ht9045-secs-sem: the startup batch does not save per call; the caller saves once)
+ {
+     // AI(W906-fire-verify) 20260716: same zero-init-vs-golden-uninitialized
+     // `pos` deviation as SetCEIDContent above (golden uHGemEquipment.cpp:7447)
+@@ -2420,7 +2420,7 @@ bool THGem::SetReportIDContent(unsigned iCeid, unsigned iReportCount, unsigned *
+         for (unsigned int i = 2; i < (iReportCount + 2); i++)
+             stdGridReportID->Cells[i][pos] = iReportIDData[i - 2];
+     }
+-    SaveEventReportData();
++    if (bSaveNow) SaveEventReportData();   //AI(W906-W189) 20261009 (St02-E): golden 913 uHGemEquipment.cpp:7561-7564 (RogerYang 20260812 ht9045-secs-sem: the startup batch does not save per call; the caller saves once)
+     return bSearchOK;
+ }
+ //------------------------------------------------------------------------------
+@@ -2924,7 +2924,7 @@ void THGem::EnableDisableEventReport(bool CEED, int slen, unsigned *CEID)
+     SaveEventReportData();
+     EnableDisableEventReportAcknowledgeError(0x00);   // AI(W906-AlarmReportAck) 20260721: no longer gated, now sends S2F38 for real (see definition above)
+ }
+-
++static AnsiString W906_SecsSystemDir();   //AI(W906-W189) 20261009 (St02-E): EventReport_*.def folder (golden literal; ctest sandbox), body at the end of this file
+ //===========================================================================
+ //  Generic StringGrid <-> TStringList tab-format (de)serialization
+ //  (golden uHGemEquipment.cpp:8059-8195)
+@@ -3018,7 +3018,7 @@ void THGem::ReadEventReportData()
+     // (uHGemEquipment.cpp:8202/8212) -- NOT derived from GemSystemPath,
+     // unlike ReadAlamData/WriteAlamData above. Preserved verbatim: the real
+     // production files exist at exactly this path on the reference dev
+-    // machine (D:\HT9045\SECS\SECS\SYSTEM\EventReport_CEID.def /
++    // machine (D:\HT9045\SECS\SECS\SYSTEM\EventReport_CEID.def /   [W-189 20261009: folder now W906_SecsSystemDir() -- the same literal unless ctest sets W906_SECSSYSTEM_ROOT]
+     // EventReport_ReportID.def) and this method only ever READS them
+     // (LoadFromFile) -- never writes -- so calling it is safe/non-destructive.
+     // SaveEventReportData below WRITES to this same path family and must
+@@ -3027,7 +3027,7 @@ void THGem::ReadEventReportData()
+     AnsiString Filename;
+ 
+     memoPtr = new TStringList;
+-    Filename = "D:\\HT9045\\SECS\\SECS\\SYSTEM\\EventReport_CEID.def";
++    Filename = W906_SecsSystemDir() + "EventReport_CEID.def";   //AI(W906-W189) 20261009 (St02-E): golden 0618 :8202 / 913 :8281 literal "D:\\HT9045\\SECS\\SECS\\SYSTEM\\" -- still that in production; ctest -> W906_SECSSYSTEM_ROOT (W906_SecsSystemDir, file end)
+     if (FileExists(Filename) == false)
+     {
+         delete memoPtr;
+@@ -3037,7 +3037,7 @@ void THGem::ReadEventReportData()
+     memoPtr->LoadFromFile(Filename);
+     PasteStringGridAsTabFormat(strGrdCEID, memoPtr);
+ 
+-    Filename = "D:\\HT9045\\SECS\\SECS\\SYSTEM\\EventReport_ReportID.def";
++    Filename = W906_SecsSystemDir() + "EventReport_ReportID.def";   //AI(W906-W189) 20261009 (St02-E): golden 0618 :8212 / 913 :8291 literal "D:\\HT9045\\SECS\\SECS\\SYSTEM\\" -- still that in production; ctest -> W906_SECSSYSTEM_ROOT (W906_SecsSystemDir, file end)
+     if (FileExists(Filename) == false)
+     {
+         delete memoPtr;
+@@ -3053,7 +3053,7 @@ void THGem::ReadEventReportData()
+ void THGem::SaveEventReportData()
+ {
+     // AI(W906-uHGemEquipment) 20260716: DANGEROUS IF EXECUTED AS-IS ON THIS
+-    // DEV MACHINE -- golden hardcodes the SAME absolute path family that
++    // DEV MACHINE -- golden hardcodes the SAME absolute path family that   [STALE 20261009 W-189: ctest now writes under W906_SECSSYSTEM_ROOT, see W906_SecsSystemDir]
+     // ReadEventReportData reads from (D-colon HT9045 SECS SECS SYSTEM
+     // EventReport_CEID.def / EventReport_ReportID.def, backslash-separated),
+     // and those files
+@@ -3072,11 +3072,11 @@ void THGem::SaveEventReportData()
+ 
+     memoPtr = new TStringList;
+     CopyStringGridAsTabFormat(strGrdCEID, memoPtr);
+-    Filename = "D:\\HT9045\\SECS\\SECS\\SYSTEM\\EventReport_CEID.def";
++    Filename = W906_SecsSystemDir() + "EventReport_CEID.def";   //AI(W906-W189) 20261009 (St02-E): golden 0618 :8657 / 913 :8736 literal "D:\\HT9045\\SECS\\SECS\\SYSTEM\\" -- still that in production; ctest -> W906_SECSSYSTEM_ROOT (W906_SecsSystemDir, file end)
+     memoPtr->SaveToFile(Filename);
+ 
+     CopyStringGridAsTabFormat(stdGridReportID, memoPtr);
+-    Filename = "D:\\HT9045\\SECS\\SECS\\SYSTEM\\EventReport_ReportID.def";
++    Filename = W906_SecsSystemDir() + "EventReport_ReportID.def";   //AI(W906-W189) 20261009 (St02-E): golden 0618 :8661 / 913 :8740 literal "D:\\HT9045\\SECS\\SECS\\SYSTEM\\" -- still that in production; ctest -> W906_SECSSYSTEM_ROOT (W906_SecsSystemDir, file end)
+     memoPtr->SaveToFile(Filename);
+ 
+     delete memoPtr;
+@@ -6984,10 +6984,10 @@ int THGem::DoSpoolSendLocalData(unsigned char *Ptr)
+     }
+ 
+     RunLength += 4;
+-    if (bUseClientSocket)
+-        clientGem->Socket->SendBuf(Ptr, RunLength);
+-    else
+-        srvGem->Socket->Connections[0]->SendBuf(Ptr, RunLength);
++    { ScopedAcquire lk(pLockOnSocketRecvice);   //AI(W906-W187) 20261009 (St02-E, claim): golden 913 uHGemEquipment.cpp:4062-4083 (RogerYang 20260715 ht9045-secs-sem: spool送信同樣加連線防護+鎖,擋ctBlocking worker thread race) -- try/__finally = ScopedAcquire (as :5907); the lock is a re-entrant CRITICAL_SECTION (vclcompat/SyncObjs.h)
++      if (bUseClientSocket) { if (clientGem != NULL && clientGem->Active == true && clientGem->Socket != NULL && clientGem->Socket->Connected == true) clientGem->Socket->SendBuf(Ptr, RunLength); }   // golden 913 :4066-4070 (0618 :4039-4040 sent without a check)
++      else { if (srvGem != NULL && srvGem->Active == true && bServoSocketConnect == true && srvGem->Socket->ActiveConnections > 0 && srvGem->Socket->Connections[0]->Connected == true)   // golden 913 :4072-4077 (補ActiveConnections防越界: 0618 :4041-4042 indexed Connections[0] with none)
++        srvGem->Socket->Connections[0]->SendBuf(Ptr, RunLength); } }
+ 
+     StringOut("---------------------------------------------------");
+     S = AnsiString("[Send]    ") + DateTimeToStr(Now());
+@@ -8678,3 +8678,27 @@ void THGem::edtT3TimeOutClick(TObject *Sender)
+ {
+     fQwertyKey->ShowQwertyKey((TEdit *)Sender, N_INTEGER, 0, true, 10, 2000);
+ }
++//---------------------------------------------------------------------------
++// AI(W906-W189) 20261009 (St02-E): the folder of EventReport_CEID.def / EventReport_ReportID.def for ReadEventReportData and
++// SaveEventReportData (declared at :2927).  Golden 0618 :8202/:8212/:8657/:8661 (913 :8281/:8291/:8736/:8740) hard-code
++// "D:\\HT9045\\SECS\\SECS\\SYSTEM\\"; that stays the path whenever W906_SECSSYSTEM_ROOT is unset or empty (production).
++// Only tests/CMakeLists.txt sets it (_ht9045_env_extra, every ctest) -- so no ctest can write the machine's real .def files
++// (laptop card W-189, TO_STEVEN s4 1009 04:3x).  W906_SecsSystemDirUses_St02: how many file names were built here (2 per
++// Read or Save) -- the St02_W189EventReport probe that counts saves.
++//---------------------------------------------------------------------------
++static int s_iW906SecsSystemDirUses = 0;
++int W906_SecsSystemDirUses_St02()
++{
++    return s_iW906SecsSystemDirUses;
++}
++static AnsiString W906_SecsSystemDir()
++{
++    ++s_iW906SecsSystemDirUses;
++    const char* pRoot = getenv("W906_SECSSYSTEM_ROOT");
++    if (pRoot != NULL && *pRoot != 0)
++    {
++        ForceDirectories(AnsiString(pRoot));
++        return AnsiString(pRoot) + "\\";
++    }
++    return "D:\\HT9045\\SECS\\SECS\\SYSTEM\\";
++}
+diff --git a/SECSGEM/uHGemEquipment.h b/SECSGEM/uHGemEquipment.h
+index 5d543394..26cf9189 100644
+--- a/SECSGEM/uHGemEquipment.h
++++ b/SECSGEM/uHGemEquipment.h
+@@ -1400,7 +1400,7 @@ public:
+     void SetCEIDContent(unsigned iCeid, AnsiString CeidAlias, unsigned iReportCount, unsigned *iReportIDData, int Mode);
+     void SetCEIDContent(unsigned iCeid, unsigned iReportCount, unsigned *iReportIDData, int Mode);
+     unsigned GetCEIDContent(unsigned iCeid, unsigned *iReportIDData, int Mode);
+-    bool SetReportIDContent(unsigned iCeid, unsigned iReportCount, unsigned *iReportIDData, int Mode);
++    bool SetReportIDContent(unsigned iCeid, unsigned iReportCount, unsigned *iReportIDData, int Mode, bool bSaveNow=true);   //AI(W906-W189) 20261009 (St02-E): golden 913 uHGemEquipment.h:546 (RogerYang 20260812 ht9045-secs-sem: the startup batch does not save per call; the caller saves once)
+     bool DeleteReportID(unsigned iCeid, int Type);
+     bool DeleteReportIDOfCeid(unsigned iCeid);
+     bool DeleteAllHostDefineReportID();
+diff --git a/SECSGEM/uHGemHT9045.cpp b/SECSGEM/uHGemHT9045.cpp
+index ccd334a0..d7a51dca 100644
+--- a/SECSGEM/uHGemHT9045.cpp
++++ b/SECSGEM/uHGemHT9045.cpp
+@@ -660,7 +660,7 @@ void HT9045Gem::AddReprot()
+ 
+         for(int i=SECS_EVENT.DoStart; i<SECS_EVENT.TotalEvent; i++)
+         {
+-            HGemPtr->SetReportIDContent(1, sizeof(ReportIDContent)/sizeof(unsigned), ReportIDContent, EquDefault);
++            HGemPtr->SetReportIDContent(1, sizeof(ReportIDContent)/sizeof(unsigned), ReportIDContent, EquDefault, false);   //AI(W906-W189) 20261009 (St02-E): golden 913 uHGemHT9045.cpp:460 (RogerYang 20260812 ht9045-secs-sem: the startup batch does not save per call; the caller saves once) -- no live caller: golden's only caller is the TFSECS ctor (913 UsecegemMainFrom.cpp:206), not translated
+         }
+ 
+         HGem->SaveEventReportData();
+diff --git a/cSocket.cpp b/cSocket.cpp
+index 3f23e5a1..1fd84eb2 100644
+--- a/cSocket.cpp
++++ b/cSocket.cpp
+@@ -1257,7 +1257,7 @@ void TEST_CATEGORY::ClearCount()
+ //==============================================================================
+ void TEST_CATEGORY::UpdataCount(bool bCheckYield)
+ {
+-    int iDut=0, iArm=0;
++    int iDut=0, iArm=0, iSrcRow=0;   //AI(W906-W187) 20261009 (St02-E, claim): + iSrcRow, golden 913 cSocket.cpp:1059
+     ClearCount();
+ 
+     if(bCheckYield==true)
+@@ -1302,24 +1302,24 @@ void TEST_CATEGORY::UpdataCount(bool bCheckYield)
+                 {
+                     if(TestIF.iSiteMap[iRow][iCol]>0)
+                     {
+-                        iArm=(iRow==0)?1:0;
++                        iArm=(iRow==0)?1:0;  iSrcRow=(iArm==0)?0:iRow;   //AI(W906-W187) 20261009 (St02-E, claim): golden 913 cSocket.cpp:1105 (Ifor 20260807: read ArmSKET by the arm-local row, as ProcessArmCount writes it -- atester_ProcessCount.cpp iRow32)
+                         iDut=TestIF.iSiteMap[iRow][iCol]-1;
+-                        iCountCategory[iArm][iRow][iCol][iTestBinCount]  =ArmData[iArm]->ArmSKET[iRow][iCol]->GetIFError();
+-                        iTotalCategory[iTestBinCount]                   +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetIFError();
++                        iCountCategory[iArm][iRow][iCol][iTestBinCount]  =ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetIFError();
++                        iTotalCategory[iTestBinCount]                   +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetIFError();
+                         for(int iCat=0; iCat<iTestBinCount; iCat++)
+                         {
+-                            iCountCategory[iArm][iRow][iCol][iCat]  =ArmData[iArm]->ArmSKET[iRow][iCol]->GetSelBinCT(iCat);
+-                            iTotalCategory[iCat]                   +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetSelBinCT(iCat);
+-                            iBySiteCate[iDut][iCat]                +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetSelBinCT(iCat);
++                            iCountCategory[iArm][iRow][iCol][iCat]  =ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetSelBinCT(iCat);
++                            iTotalCategory[iCat]                   +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetSelBinCT(iCat);
++                            iBySiteCate[iDut][iCat]                +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetSelBinCT(iCat);
+                         }
+-                        iCountSocketTotal[iRow][iCol]      +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetTotal();
+-                        iCountHeadTotal[iArm][iRow][iCol]  +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetTotal();
+-                        iTotalSocket                       +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetTotal();
+-                        iBySiteTotal[iDut]                 +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetTotal();
+-                        iCountPassSocket[iRow][iCol]       +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetPassCT();
+-                        iCountPassHead[iArm][iRow][iCol]   +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetPassCT();
+-                        iPassSocket                        +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetPassCT();
+-                        iBySitePass[iDut]                  +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetPassCT();
++                        iCountSocketTotal[iRow][iCol]      +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetTotal();
++                        iCountHeadTotal[iArm][iRow][iCol]  +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetTotal();
++                        iTotalSocket                       +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetTotal();
++                        iBySiteTotal[iDut]                 +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetTotal();
++                        iCountPassSocket[iRow][iCol]       +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetPassCT();
++                        iCountPassHead[iArm][iRow][iCol]   +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetPassCT();
++                        iPassSocket                        +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetPassCT();
++                        iBySitePass[iDut]                  +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetPassCT();
+                     }
+                 }
+             }
+@@ -1332,24 +1332,24 @@ void TEST_CATEGORY::UpdataCount(bool bCheckYield)
+                 {
+                     if(TestIF.iSiteMap[iRow][iCol]>0)
+                     {
+-                        iArm=(iRow==0 || iRow==1)?1:0;
++                        iArm=(iRow==0 || iRow==1)?1:0;  iSrcRow=(iArm==0)?(iRow-2):iRow;   //AI(W906-W187) 20261009 (St02-E, claim): golden 913 cSocket.cpp:1136 (Ifor 20260807: read ArmSKET by the arm-local row, as ProcessArmCount writes it -- atester_ProcessCount.cpp iRow32)
+                         iDut=TestIF.iSiteMap[iRow][iCol]-1;
+-                        iCountCategory[iArm][iRow][iCol][iTestBinCount]  =ArmData[iArm]->ArmSKET[iRow][iCol]->GetIFError();
+-                        iTotalCategory[iTestBinCount]                   +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetIFError();
++                        iCountCategory[iArm][iRow][iCol][iTestBinCount]  =ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetIFError();
++                        iTotalCategory[iTestBinCount]                   +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetIFError();
+                         for(int iCat=0; iCat<iTestBinCount; iCat++)
+                         {
+-                            iCountCategory[iArm][iRow][iCol][iCat]  =ArmData[iArm]->ArmSKET[iRow][iCol]->GetSelBinCT(iCat);
+-                            iTotalCategory[iCat]                   +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetSelBinCT(iCat);
+-                            iBySiteCate[iDut][iCat]                +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetSelBinCT(iCat);
++                            iCountCategory[iArm][iRow][iCol][iCat]  =ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetSelBinCT(iCat);
++                            iTotalCategory[iCat]                   +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetSelBinCT(iCat);
++                            iBySiteCate[iDut][iCat]                +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetSelBinCT(iCat);
+                         }
+-                        iCountSocketTotal[iRow][iCol]      +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetTotal();
+-                        iCountHeadTotal[iArm][iRow][iCol]  +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetTotal();
+-                        iTotalSocket                       +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetTotal();
+-                        iBySiteTotal[iDut]                 +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetTotal();
+-                        iCountPassSocket[iRow][iCol]       +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetPassCT();
+-                        iCountPassHead[iArm][iRow][iCol]   +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetPassCT();
+-                        iPassSocket                        +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetPassCT();
+-                        iBySitePass[iDut]                  +=ArmData[iArm]->ArmSKET[iRow][iCol]->GetPassCT();
++                        iCountSocketTotal[iRow][iCol]      +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetTotal();
++                        iCountHeadTotal[iArm][iRow][iCol]  +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetTotal();
++                        iTotalSocket                       +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetTotal();
++                        iBySiteTotal[iDut]                 +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetTotal();
++                        iCountPassSocket[iRow][iCol]       +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetPassCT();
++                        iCountPassHead[iArm][iRow][iCol]   +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetPassCT();
++                        iPassSocket                        +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetPassCT();
++                        iBySitePass[iDut]                  +=ArmData[iArm]->ArmSKET[iSrcRow][iCol]->GetPassCT();
+                     }
+                 }
+             }
+@@ -1397,24 +1397,24 @@ void TEST_CATEGORY::UpdataCount(bool bCheckYield)
+                 {
+                     if(TestIF.iSiteMap[iRow][iCol]>0)
+                     {
+-                        iArm=(iRow==0)?1:0;
++                        iArm=(iRow==0)?1:0;  iSrcRow=(iArm==0)?0:iRow;   //AI(W906-W187) 20261009 (St02-E, claim): golden 913 cSocket.cpp:1202 (Ifor 20260807: read ArmSKET by the arm-local row, as ProcessArmCount writes it -- atester_ProcessCount.cpp iRow32)
+                         iDut=TestIF.iSiteMap[iRow][iCol]-1;
+-                        iCountCategory[iArm][iRow][iCol][iTestBinCount]  =ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetIFError();
+-                        iTotalCategory[iTestBinCount]                   +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetIFError();
++                        iCountCategory[iArm][iRow][iCol][iTestBinCount]  =ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetIFError();
++                        iTotalCategory[iTestBinCount]                   +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetIFError();
+                         for(int iCat=0; iCat<iTestBinCount; iCat++)
+                         {
+-                            iCountCategory[iArm][iRow][iCol][iCat]  =ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetSelBinCT(iCat);
+-                            iTotalCategory[iCat]                   +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetSelBinCT(iCat);
+-                            iBySiteCate[iDut][iCat]                +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetSelBinCT(iCat);
++                            iCountCategory[iArm][iRow][iCol][iCat]  =ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetSelBinCT(iCat);
++                            iTotalCategory[iCat]                   +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetSelBinCT(iCat);
++                            iBySiteCate[iDut][iCat]                +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetSelBinCT(iCat);
+                         }
+-                        iCountSocketTotal[iRow][iCol]      +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetTotal();
+-                        iCountHeadTotal[iArm][iRow][iCol]  +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetTotal();
+-                        iTotalSocket                       +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetTotal();
+-                        iBySiteTotal[iDut]                 +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetTotal();
+-                        iCountPassSocket[iRow][iCol]       +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetPassCT();
+-                        iCountPassHead[iArm][iRow][iCol]   +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetPassCT();
+-                        iPassSocket                        +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetPassCT();
+-                        iBySitePass[iDut]                  +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetPassCT();
++                        iCountSocketTotal[iRow][iCol]      +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetTotal();
++                        iCountHeadTotal[iArm][iRow][iCol]  +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetTotal();
++                        iTotalSocket                       +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetTotal();
++                        iBySiteTotal[iDut]                 +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetTotal();
++                        iCountPassSocket[iRow][iCol]       +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetPassCT();
++                        iCountPassHead[iArm][iRow][iCol]   +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetPassCT();
++                        iPassSocket                        +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetPassCT();
++                        iBySitePass[iDut]                  +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetPassCT();
+                     }
+                 }
+             }
+@@ -1427,24 +1427,24 @@ void TEST_CATEGORY::UpdataCount(bool bCheckYield)
+                 {
+                     if(TestIF.iSiteMap[iRow][iCol]>0)
+                     {
+-                        iArm=(iRow==0 || iRow==1)?1:0;
++                        iArm=(iRow==0 || iRow==1)?1:0;  iSrcRow=(iArm==0)?(iRow-2):iRow;   //AI(W906-W187) 20261009 (St02-E, claim): golden 913 cSocket.cpp:1233 (Ifor 20260807: read ArmSKET by the arm-local row, as ProcessArmCount writes it -- atester_ProcessCount.cpp iRow32)
+                         iDut=TestIF.iSiteMap[iRow][iCol]-1;
+-                        iCountCategory[iArm][iRow][iCol][iTestBinCount]  =ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetIFError();
+-                        iTotalCategory[iTestBinCount]                   +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetIFError();
++                        iCountCategory[iArm][iRow][iCol][iTestBinCount]  =ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetIFError();
++                        iTotalCategory[iTestBinCount]                   +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetIFError();
+                         for(int iCat=0; iCat<iTestBinCount; iCat++)
+                         {
+-                            iCountCategory[iArm][iRow][iCol][iCat]  =ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetSelBinCT(iCat);
+-                            iTotalCategory[iCat]                   +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetSelBinCT(iCat);
+-                            iBySiteCate[iDut][iCat]                +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetSelBinCT(iCat);
++                            iCountCategory[iArm][iRow][iCol][iCat]  =ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetSelBinCT(iCat);
++                            iTotalCategory[iCat]                   +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetSelBinCT(iCat);
++                            iBySiteCate[iDut][iCat]                +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetSelBinCT(iCat);
+                         }
+-                        iCountSocketTotal[iRow][iCol]      +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetTotal();
+-                        iCountHeadTotal[iArm][iRow][iCol]  +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetTotal();
+-                        iTotalSocket                       +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetTotal();
+-                        iBySiteTotal[iDut]                 +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetTotal();
+-                        iCountPassSocket[iRow][iCol]       +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetPassCT();
+-                        iCountPassHead[iArm][iRow][iCol]   +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetPassCT();
+-                        iPassSocket                        +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetPassCT();
+-                        iBySitePass[iDut]                  +=ArmDataLot[iArm]->ArmSKET[iRow][iCol]->GetPassCT();
++                        iCountSocketTotal[iRow][iCol]      +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetTotal();
++                        iCountHeadTotal[iArm][iRow][iCol]  +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetTotal();
++                        iTotalSocket                       +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetTotal();
++                        iBySiteTotal[iDut]                 +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetTotal();
++                        iCountPassSocket[iRow][iCol]       +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetPassCT();
++                        iCountPassHead[iArm][iRow][iCol]   +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetPassCT();
++                        iPassSocket                        +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetPassCT();
++                        iBySitePass[iDut]                  +=ArmDataLot[iArm]->ArmSKET[iSrcRow][iCol]->GetPassCT();
+                     }
+                 }
+             }
+diff --git a/csystem.cpp b/csystem.cpp
+index e5b27b54..0dcef1c2 100644
+--- a/csystem.cpp
++++ b/csystem.cpp
+@@ -2847,7 +2847,7 @@ void DoCleanOutFinishCheck()
+ //    bool bRet=false;                                                            //kevin 20150717
+     AnsiString S1, S2;
+ 
+-//    bool bNeedRetest=false;                                                     //ChungHung 20141002 add for KYEC AutoRetest
++    { void W906_DoCleanOutWatchdog913(); W906_DoCleanOutWatchdog913(); }   //AI(W906-W188) 20261009 (NB2-1): W-188 -- golden 913 csystem.cpp:15600-15639 clean-out watchdog (diagnostic EventLog only; body at the end of this file), placed on this line ahead of the 0618 comment it follows:   //    bool bNeedRetest=false;                                                     //ChungHung 20141002 add for KYEC AutoRetest
+     if(iOneCycle)
+     {
+     }
+@@ -3053,8 +3053,8 @@ void DoCleanOutFinishCheck()
+ 
+         if(iCheckFinish_ByAutoClean==1)
+         {
+-            iCleanOutCycleTask=18;
+-            return;
++            if(bRunAutoClean==false) { iCheckFinish_ByAutoClean=0; } else { iCleanOutCycleTask=18;   //AI(W906-W188) 20261009 (NB2-1): W-188 -- golden 913 csystem.cpp:15847-15854 (RogerYang 20260708 : 殘留 latch：AutoClean 沒在跑 → 清掉，下圈重啟或收尾)
++            return; }
+         }
+ 
+         if(InSHT1InLF()==false)
+@@ -3174,7 +3174,7 @@ void DoCleanOutFinishCheck()
+         bBackupCleanOut=false;                                                  //jou 2010-12-07 : 防止index check oncyle與clean out funtion衝突
+         iHotCount=0;
+ 
+-        PickFromHPList->ResetFile(sHPPickRec);                                  //Jimmychiu 20250220 : 避免重新開機後Hotplate rec有殘留資料
++        { void W906_CleanOutResetPickHPRec913(); W906_CleanOutResetPickHPRec913(); }   //AI(W906-W188) 20261009 (NB2-1): W-188 -- golden 913 csystem.cpp:15975-15989 (RogerYang 20260831: keep PickHPRec while the hot plates still hold real IC); body at the end of this file
+         PlaceToCleanList->ResetFile(sCleanPlaceRec);                            //Jimmychiu 20250220 : 避免重新開機後Hotplate rec有殘留資料
+ 
+         for(int i=0; i<2; i++)
+@@ -34108,3 +34108,72 @@ void W906_FlowTraceTick()
+     static std::string s_last;
+     if(s_last!=b) { s_last=b; g_W906FlowNote(b); }
+ }
++
++//---------------------------------------------------------------------------
++//AI(W906-W188) 20261009 (NB2-1): W-188 #1 -- golden 913 (honprec/rd/rd5/ht9045_913 main e9908638) DoCleanOutFinishCheck, the two hunks that are
++//   more than a line or two.  Bodies verbatim from golden 913 csystem.cpp; called from DoCleanOutFinishCheck above on the
++//   same lines as the 0618 code they follow / replace, so no line of this file before here moves.
++//   W906_DoCleanOutWatchdog913  = golden 913 csystem.cpp:15600-15639 (RogerYang 20260811; the statics keep their golden lifetime).
++//   W906_CleanOutResetPickHPRec913 = golden 913 csystem.cpp:15975-15989 (RogerYang 20260831).
++void W906_DoCleanOutWatchdog913()
++{
++    //AI(ht9045-staterecord-analysis) 20260811 (RogerYang) : clean-out watchdog 只做診斷, 不報警/不停機/不存 state record
++    //  A: 用 gap 偵測, PAUSE/開門/alarm dialog 期間 MainProc 不會呼叫本函式, 那段時間不計入
++    //  B: 門檻改用 soak time 動態算, hot 模式最後一批 hotplate 料本來就要等滿 soak
++    //  C: 只寫 EventLog, 不再自動存 state record
++    static HTimer hCleanOutWD;
++    static HTimer hCleanOutWDGap;                                               //距上次進入本函式的間隔
++    static bool   bCleanOutWDArmed=false;
++
++    int iCleanOutWDSec=300;                                                     //常溫 5 分鐘
++    if(LastSet.iTemperature==Tempture_Hot)
++        iCleanOutWDSec=Prod.iHotTime+300;                                       //Hot: soak time + 5 分鐘邊際
++
++    if(iCleanOut!=1)
++    {
++        bCleanOutWDArmed=false;                                                 //不在 clean out -> 解除
++    }
++    else if(bCleanOutWDArmed==false)
++    {
++        hCleanOutWD.SetSecAndOn(iCleanOutWDSec);                                //clean out 開始 -> 開始計時
++        bCleanOutWDArmed=true;
++    }
++    else if(hCleanOutWDGap.Off())                                               //超過 5 秒沒進來過 = 機台沒在跑, 重新計時
++    {
++        hCleanOutWD.SetSecAndOn(iCleanOutWDSec);
++    }
++    else if(hCleanOutWD.Off())                                                  //機台持續在跑 但 clean out 一直沒完成
++    {
++        MOT[MTestZ1].ScanMotorStatus(); MOT[MTestZ2].ScanMotorStatus(); MOT[MOutArmY].ScanMotorStatus();
++        AnsiString sDiag;
++        sDiag.sprintf("CleanOut STUCK cyc=%d wd=%d | TZ1 enc=%d cmd=%d safe=%d inpos=%d alm=%d mov=%d | "
++                      "TZ2 enc=%d cmd=%d safe=%d inpos=%d alm=%d mov=%d | OutY enc=%d cmd=%d inpos=%d alm=%d mov=%d | EPflow=%d",
++            iCleanOutCycleTask, iCleanOutWDSec,
++            MOT[MTestZ1].ReadPos(),MOT[MTestZ1].Gali_ReadPos(),Prod.TestZ1_Safe,(int)MOT[MTestZ1].Led[iInposLed],(int)MOT[MTestZ1].Led[iAlarmLed],(int)MOT[MTestZ1].MovFlag,
++            MOT[MTestZ2].ReadPos(),MOT[MTestZ2].Gali_ReadPos(),Prod.TestZ2_Safe,(int)MOT[MTestZ2].Led[iInposLed],(int)MOT[MTestZ2].Led[iAlarmLed],(int)MOT[MTestZ2].MovFlag,
++            MOT[MOutArmY].ReadPos(),MOT[MOutArmY].Gali_ReadPos(),(int)MOT[MOutArmY].Led[iInposLed],(int)MOT[MOutArmY].Led[iAlarmLed],(int)MOT[MOutArmY].MovFlag,
++            (int)Sen[SnEPDetect].IsOn());
++        NewRecordProcess("", sDiag, "CleanOutWatchdog");                        //只寫 EventLog, 不存 state record
++        hCleanOutWD.SetSecAndOn(iCleanOutWDSec);
++    }
++    hCleanOutWDGap.SetSecAndOn(5);                                              //每次進來服務一次, 重設 gap 計時
++}
++
++void W906_CleanOutResetPickHPRec913()
++{
++        //AI(ht9045-inarm-flow) 20260831 (RogerYang) : 原本無條件 ResetFile -- 前提「Clean Out 完成=熱盤已空」在被 One Cycle/ASM 提前結束時不成立,
++        //AI : 盤上還有料卻把帳清光, 那些料就變孤兒 -> GetHPFirstTeamPlate 空轉500 -> No GetHPFirstTeamMotUse 停機(HHT-76)
++        if(MOT[MMPlate1].Tray.HasRealIC()==false &&
++           MOT[MMPlate2].Tray.HasRealIC()==false)                                   //AI : HasRealIC 排除 HAS_NULL_IC 佔位符, 不可用 HasIC()(它把佔位符當有料)
++        {
++            PickFromHPList->ResetFile(sHPPickRec);                                  //Jimmychiu 20250220 : 避免重新開機後Hotplate rec有殘留資料
++            RecordProcess("CleanOut finish : HP empty, ResetFile PickHPRec", "DoCleanOutFinishCheck");   //AI : if分支也要留痕, 否則看到0命中無法區分「沒執行到」與「執行了且盤是空的」
++        }
++        else
++        {
++            AnsiString StrHPKeep;                                                   //AI : 盤上還有真料 -> 清帳本會製造孤兒, 保留帳本並留痕
++            StrHPKeep.sprintf("CleanOut finish : HP still has real IC (P0=%d P1=%d), keep PickHPRec to avoid orphan",
++                              MOT[MMPlate1].Tray.HowManyIC(), MOT[MMPlate2].Tray.HowManyIC());
++            RecordProcess(StrHPKeep, "DoCleanOutFinishCheck");
++        }
++}
+diff --git a/docs/MACHINE_PATCHES_20261009.md b/docs/MACHINE_PATCHES_20261009.md
+index 7ea490da..60eb1b34 100644
+--- a/docs/MACHINE_PATCHES_20261009.md
++++ b/docs/MACHINE_PATCHES_20261009.md
+@@ -18,3 +18,18 @@
+ - **快照 02:28**（main `9d50397e`）：只有兩個 README 的時間戳變，機台參數與工單沒變（不叮嚀全體）。
+ - **鏈尾**：C++ `7251baf1`（0339）→ **`39d04020`**（0340）。下一次從 **cpp 0341／web 0142／tools 0183** 開始。
+ - 第 126 批（St02 MR !353）＝第 209 包，GitLab `2fb30fac`／GitHub `282accc8`。
++
++## 3. 03:00 交件（RULINGS_20261008 第 5 條）：只有 cpp 0341 WIP；04:00 目標＝第 210 包
++
++- 機台 `README.txt` 03:00：「03:00 交件完成：cpp 0335～0341（…0337～0340 PKG205～PKG208＝機台已套到第 208 包、0341 WIP＝EastSun 未 commit 的 acatchtray／asendic_Loader／cinitial，只保存不整合；PadInterface_St02.cpp 的 SafeLock 那行不交）；web 0141（PKG204 網頁半）。04:00 只需要套第 209 包以後。」
++- **cpp 0341 WIP**（`acatchtray.cpp`／`asendic_Loader.cpp`／`cinitial.cpp`，3 檔 +29／−11）：照講好的**只保存**（就在 GitHub `machine/integ-ioweb`），不 cherry-pick、不接鏈；EastSun commit 之後會以新編號再交。
++- GitHub README 03:0x 寫「04:00 目標＝第 209 包」（`73c010a2`）；第 210 包（第 127 批：St02 !354＋HTDESIGNER 0.317）03:4x 推出，GitLab `55f8238b`／GitHub `14df90a4`，03:48 推出後 README 改成「04:00 目標＝第 210 包」（`dbdce38a`）。
++- **鏈尾**照舊 C++ `39d04020`（0340）。下一次從 **cpp 0342／web 0142／tools 0183** 開始（0341 是 WIP，不接鏈）。
++
++## 4. 04:00 夜間更新完成：tools 0183、cpp 0342 PKG210（第 209～210 包）；快照 04:15
++
++- **03:59 tools 0183**：機台的 HTDESIGNER 合第 210 包（0.315 → 0.317），不收。
++- **04:15 cpp 0342 PKG210**：「integrate laptop packages 209-210（GitLab 2fb30fac, 55f8238b）-- the 04:00 night update」——照 GitHub README 的 04:00 目標（第 210 包）套完。包本身，不 cherry-pick。
++- **快照 04:15**（main `08a11607`）：只有兩個 README 的時間戳變。
++- **鏈尾**：C++ `39d04020`（0340）→ **`706de251`**（0342；0341 是 WIP，沒接鏈）。下一次從 **cpp 0343／web 0142／tools 0184** 開始。
++- 第 128 批（St02 POOL-9 !355／!356）＝第 211 包，GitLab `cadc0934`／GitHub `571535cd`（04:27 推，機台下一輪再套）。
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index 6c0d82a2..a1a30fe1 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -1,10 +1,10 @@
+-# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 02:5x）
++# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 06:3x）
+ 
+ ## ☀ 10/08 早上先看這裡（04:3x 起草；之後的進度往這張表加）
+ 
+ | 項目 | 一句話 |
+ |---|---|
+-| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～126 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate），出了**第 181～209 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
++| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～130 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate），出了**第 181～213 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
+ | **模擬組態** | St02 W-149 做完：模擬版的固定失敗從 7 支降到 4 支，跟出貨一樣——之後模擬版多紅一支就是真回歸。 |
+ | **機台修的事（重點）** | 0307 主控台非同步（START 卡 103 秒＋EMG 誤報的根因）、0309／0310／0312／0316 HT9050 Tray 流程（站序、Empty→Auto 補盤、位置不加 6800、Loader 探測看抽屜感測）、0311／0317 上升氣缸雙線圈、0313 出料手臂讓位點（00:19 MOutArmX 警報）、0314 CCD Y 原點判斷、**0315 HT9050 先跳過 Index 扭力讀取**（旗標預設開，扭力讀取驗證後要關）。 |
+ | **軟體極限** | 00:19 的警報是 golden 拿軟體極限（這台 ±999999）算目標。MainNB-GPT 普查（W-164）：只剩 Motor Test 頁的 LightScale 會算出 ±999899——EastSun 0925 R7 已定照 golden，只發提醒。 |
+@@ -66,6 +66,11 @@
+ | **出的包（1009 02:1x）：第 208 包＝第 125 批——機台被退回的 0321／0322／0331 收進 main** | GitLab `d379516c`／GitHub `bcd54543`。這三顆 10/08 因為模擬組態測試紅退回機台；01:2x～01:3x 筆電實際量出原因都在測試、不在機台的程式：①開機清料那顆（0321）紅，是**筆電自己 10/06 寫的一段測試**在模擬組態把 Auto1 留著一個盤（筆電 10/08 讀程式推的原因是錯的，已更正）；②Empty 探層那顆（0331）紅，是模擬組態本來就跳過探層。筆電只改測試，產品程式照機台的；機台不用再修。另有 HTDESIGNER 0.315。gate b125a：兩組態 34 分鐘：只有固定失敗（兩組態都是 4 支，492 支測試）；模擬組態的 W7_F2_SckArtState 一次 Not Run（新 exe 第一次開檔被防毒鎖住），單獨重跑通過。 |
+ | **1009 02:2x：golden 913 跟 0618 的差異清單出來了（NB2-1，POOL-8）** | 01:1x 派、01:26 認領、01:53 交完：913 比 0618 多 6 個單元、`.cpp`＋`.h` 多 27,891 行；START 那一段 1,875 → 2,028 行；函式層 1,153 個有改的函式裡，**172 個（不含客戶碼）移植樹還是 0618 的寫法**＝下一批要補的。三個檔已搬進 main（`docs/handoff/GOLDEN913_VS_0618_20261009.*`）。開了 POOL-9 照 913 補：St02-E 做 SECS／介面那部分（W-187）、NB2-1 做核心流程（W-188）。你 10/08 定的「量測工具等清單出來再一起換」排白天做（筆電要先 clone 913、重產對照資料，gate 數字會變）。 |
+ | **出的包（1009 02:5x）：第 209 包＝第 126 批** | GitLab `2fb30fac`／GitHub `282accc8`：St02 的 E-TM-011——SECS 遠端 START 後等主機回覆，逾時就照 golden 跳 WAR16110、結束等待（原本那兩處被標記擋著，等於永遠等下去）。筆電 01:0x 答 A 之後 St02 25 分鐘就交了，附反向驗證與「不卡輪詢」的測試。gate b126a：兩組態 35 分鐘：只有固定失敗（兩組態都是 4 支，493 支測試）；模擬組態的 cmake 探測檔被鎖一次，gate 腳本自動重試後通過。 |
++| **1009 03:4x：你的 04:00 安排——機台 03:00 交件了，04:00 目標＝第 210 包** | 機台 03:00 照約定交件：只有一顆 EastSun 還沒 commit 的半成品（照講好的只保存、不整合）；它 02:2x 已經自己套到第 208 包，所以 04:00 只要套第 209 包以後。GitHub README 03:0x 先寫「04:00 目標＝第 209 包」；第 210 包（第 127 批：St02 的 Setup 存檔紀錄＋設計工具 0.317）03:4x 推出、趕在 04:00 前，README 改成「第 210 包」。gate b127a：兩組態 34 分鐘：只有固定失敗（兩組態都是 4 支，493 支測試）；出貨組態的 cmake 探測檔被鎖兩次，gate 腳本自動重試後通過。W-184（St02 三段）全部完成。 |
++| **✅ 1009 04:3x：你的 04:00 機台全面更新完成** | 機台 04:15 推回 cpp 0342 PKG210＝第 209～210 包都套好了（03:00 交件、03:48 出第 210 包、README 04:00 目標＝第 210 包，照計畫走完）；早上請 EastSun 按 F5。另外第 211 包（第 128 批：St02 照 913 補的兩處——Tester 分類計數、SECS 暫存訊息只在連線時送）04:3x 推出，機台下一輪會套。gate b128a：兩組態 33 分鐘：只有固定失敗（兩組態都是 4 支，495 支測試）；模擬組態的 cmake 探測檔被鎖一次，gate 腳本自動重試後通過。St02 POOL-9 做完 3 個、其餘重新分給 St02（W-189）／Ifor01（W-190）／NB2-1（W-188）。 |
++| **出的包（1009 05:1x）：第 212 包＝第 129 批** | GitLab `7f107cef`／GitHub `8019451a`：St02 照 golden 913 補的 SECS S9 錯誤回覆（被拒的訊息回傳它的表頭；只有開 SECS／GEM 的機台會走到）。gate b129a：兩組態 33 分鐘：只有固定失敗（兩組態都是 4 支，496 支測試）。GitHub README 裡「今晚 04:00 的安排」那段標成「✅ 04:15 完成」移到「以前的說明」（原文照搬）。 |
++| **1009 05:1x：線 D 哨兵（在跟 main 同一版程式的 b19 量）** | 都沒有紅燈：網頁接線檢查自我測試正常、實跑 13 項＝基準 13 項；absence-claim 自我測試正常、所有宣稱都還成立；配方 66／65＝基準；控制字元 14 個檔都是已知的（產生的手冊、PDF 抽出的參考、golden 本來就有的字元、機台資料）。ST-GPT 的 MR !358（技能文件 29 個新檔）合進 main `0a565e60`。 |
++| **出的包（1009 06:3x）：第 213 包＝第 130 批** | GitLab `1607b33a`／GitHub `a6ca9b5d`：St02 讓 SECS 事件報告設定檔（`EventReport_*.def`）在跑測試時寫到測試自己的資料夾（機台上照舊讀寫 `D:\HT9045\SECS\SECS\SYSTEM\`）＋照 golden 913 一批設定完才存一次檔（這兩個函式目前沒有呼叫端，機台行為不變）。gate b130a：兩組態 35 分鐘：只有固定失敗（兩組態都是 4 支，497 支測試）。 |
+ | **要你決定的**（§0） | ✅ 你 10:1x 都回了：#148＝NB2 已完成（!306 收進第 110 批確認）、#149＝A（Ifor-GPT 專做執行期測試，IG-3／IG-4）、!310＝A（ES02 HTDESIGNER 0.235～0.257 收進第 110 批）＝RULINGS_20261008 第 2 條。**13:0x 新一題 #150**：GPIB 位址不一致要不要自動修正（Jerry 留給你；預設 A＝維持 golden、只留警告，可不回）。 |
+ 
+ 
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 43445654..831d5241 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -350,11 +350,13 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-07 | 設計外掛 tools 0170 | — | 設計外掛工作階段自己推（分支 a6cadd2，GitHub dc7975ff）：依序合併筆電包 162、163、167、168 的設計外掛（0.197.0 → 0.234.0），164～166、169～172 沒帶設計外掛；無衝突，機台自己的設計外掛功能都保留；測試修正：建置視窗進度條在矮視窗不再塌掉、面板繪製測試固定 Edge 視窗大小；run_all 3/3、vscode_it 161/161，已安裝 0.234.0；只動 tools/vscode-htdesigner | tools 0170 |
+ | 10-08 | 設計外掛 tools 0171 | — | 設計外掛工作階段自己推（commit b453060，GitHub f42c142b）：EastSun 1008 方案總管的 Debug／Release 按鈕按不了（0.234 在 ▶＝F5 時把它變灰）→ 裁決「連動F5 release 和debug」：按鈕恢復可按，resolveDebugConfiguration 依按鈕把 F5／▶ 的啟動目標換成 build_integ_dbg_x86 或 build_integ_ship_x86 那一組；「模擬」仍是灰的。run_all 3/3；vscode_it 沒跑成（VS Code 自己的更新程式 CodeSetup 從 10/07 18:34 起佔住執行個體鎖）。vsix 已安裝，版本號沒變，要重新載入視窗才生效；只動 tools/vscode-htdesigner | tools 0171 |
+ | 10-08 | 173～204 | 07dbeae3＋63b1aa25＋351291d5（GitLab 0258ba66…68fc0e65、39c6388c、e6c54331） | 本 commit（機台 C++＋web），EastSun「你確定有合完整?」→「快合」→「一直合下去 不要停拜託」（173～202 的 C++ 從 10-07 起都沒合，只有設計外掛跟上）。備份分支 backup/pre-pkg202-20261008（cpp、web）＋ D:\HT9045\_pkg_202\backup_machine_195843、D:\HT9045\_pkg_203\backup_machine_220733。202 疊三十包：直接換 108（換 105；tasks.json、acatchtray 留機台）、新檔 35、兩邊都改 22（合併 16、設計外掛／WORKLOG 照規定 6）、一樣 88；每個直接換的檔掃機台 AI 標記＋W906_ 識別字：WebBridgeServer（TOKEN-OFF／SOFTKEY panel.estop）改三方合併＋收筆電 pad.get／pad.close／observerSG 豁免、acatchtray 留機台（筆電版＝少 PROBECYL）、MotionView9050 換（機台＝基底）。衝突：cinitial／test_flow9050_tray／csystem 取機台（BOOTCLEAR、PROBECYL、pitch 同步在 MainProc）；test_scankey_golden、IoBtnPanelClick、tests/CMakeLists、WebBridgeTags（tester.name 依 Jerry 1008 裁決 A＝golden LoadTestModePicture）取筆電；wb_serve 第 239 行＝機台 IOWAIT＋筆電 g_ppCyc0 搬移。4 個新網頁檔改 CRLF。203：15 檔（直接換 9、新 4、合併 2，無衝突）；204：12 檔（直接換 9、新 1、合併 2，無衝突；SECS SV Auto1～6 料盤別名＋氣缸平均推拉時間、cSpeed）。合併後 test_scankey_golden 補回 PadInterface_St02.h include、[19]（筆電版軟體面板鍵 ST02-P2，機台保留自己的 SOFTKEY）在機台關掉。ctest Debug 426/441：15 個失敗都是第 381 列的已知清單（環境：dfm2rc×4 ctest 找不到 g++／rc.exe、E031、GearTeachSave、TeachCheckRangeReload；斷言筆電設定／repo 舊表：config_db、ini_helpers、config_loaders、MotorPoints／MachineMotors／MachineSuckers_HT9050；機台補丁：GA2_C1_cinitial、FShow_Audit）；204 之後相關 29 支全過。EastSun 未 commit 的 acatchtray／asendic_Loader／cinitial／PadInterface_St02（SafeLock）先拿開、合完三方套回，不進 commit。20:02 -j4 整包重編讓機台當機（Kernel-Power 41），留下 NUL 填滿的 .a／.obj／.d ⇒ clean 後 -j2 重編 | 本 commit |
++| 10-09 | 211～214 | 571535cd…e6fd1da7（GitLab cadc0934、7f107cef、1607b33a、786bc76f） | 本 commit（07:2x，wb_serve 沒開）：211＝St02 POOL-9 golden 913：cSocket TEST_CATEGORY::UpdataCount 依各臂自己的列計數＋THGem::DoSpoolSendLocalData 接上＋socket 鎖；212＝HTGem S9F1／F3／F5／F7／F9 回被拒訊息的 header（golden 913 uHGemClass.cpp:2216-2235）；213＝THGem EventReport_*.def 讀寫加 ctest 沙箱（W906_SECSSYSTEM_ROOT，生產路徑不變）＋SetReportIDContent／AddReprot 照 golden 存一次；214＝NB2 W-188 #1 DoCleanOutFinishCheck 照 golden 913：清料超過 300 s 只寫一行 EventLog（不跳警報、不停機）。15 檔：直接換 7（逐檔掃機台 AI 標記／W906_ 識別字：沒有會消失的）、新 6 支測試、合併 2（csystem、tests/CMakeLists，無衝突；MainProc 的 pitch 同步／開機清料詢問還在）。Debug wb_serve＋6 支新測試建好，相關 20 支 ctest 全過（uHGemEquipment 以前因為沒 SECS 檔失敗，213 的沙箱讓它在這台也過了）；release wb_serve 建好。備份分支 backup/pre-pkg214-20261009＋D:\HT9045\_pkg_214\backup_machine_072852 | 本 commit |
+ | 10-09 | 209～210 | 282accc8＋14df90a4（GitLab 2fb30fac、55f8238b） | 本 commit（04:00 夜間更新，Jimmy 1008 22:2x／22:5x；04:00 目標＝第 210 包）：209＝St02 E-TM-011 golden 913 Timer6——SECS／GEM 遠端 START 後等主機 run check 超過 [N07] Run Check Alarm Time 跳 WAR16110（通知，只讓等待逾時停止；HT9050 平常不會走到）；210＝St02 W-184 MR B Setup 存檔也照 golden 913 cSetUp.cpp:4129 把各站開關狀態追加到 D:\HT9045_Log\ChangeLog。12 檔：直接換 7（逐檔掃機台 AI 標記／W906_ 識別字：沒有會消失的）、新 3、合併 2（CMakeLists、tests/CMakeLists，無衝突）。EastSun 未 commit 的檔不在包內、沒動。Debug 整包建置＋ctest 431/446（15 個失敗＝第 381 列已知清單，跟 10-08 晚上完全一樣）；release wb_serve 建好。沒有啟動／重啟 wb_serve、沒按 F5、沒 HOME、沒動機台、沒改機台設定檔。備份分支 backup/pre-pkg210-20261009＋D:\HT9045\_pkg_210\backup_machine_040010 | 本 commit |
+ | 10-09 | 208 | bcd54543（GitLab d379516c） | 本 commit：筆電把機台 cpp 0331 PROBECYL9050、0321／0322 BOOTCLEAR9050 收進 main（之前只在 SIM 組態紅）。機台這邊：acatchtray 一樣、cinitial／csystem 合併結果＝機台版；tests/test_flow9050_tray 取筆電的 SIM 分支（[PC] 在 SOFT_SIMULTE 下探層被跳過）；.vscode/tasks.json 合併筆電的 stop_wb_serve.ps1 -Under（停止鈕只關這棵樹的 wb_serve＋..\Obj）＋ tools/stop_wb_serve.ps1 換新（掃過沒有機台標記會消失）；文件 3 份。EastSun 未 commit 的 acatchtray／cinitial 先拿開、包套完原樣放回（這兩檔包內容＝機台版），不進 commit。Flow9050 ctest 2/2 | 本 commit |
+ | 10-09 | 207 | 5cd7cd7e（GitLab 4270eedf） | 本 commit（只有機台 C++）：St02-E MR !350 ChangeTempMode 在 LastSet 之後照 golden 913 main.cpp:22756 重讀補償值（唯讀、記憶體內）＋MR !351 W-184 handlerlog.cpp 接上。10 檔：直接換 7（逐檔掃機台 AI 標記／W906_ 識別字：沒有會消失的）、新 2 支測試、tests/CMakeLists 合併無衝突。Debug 增量建置＋相關 6 支 ctest 全過；release wb_serve 建好（00:3x，EastSun 閒置 200 分鐘、wb_serve 沒開）。備份 D:\HT9045\_pkg_207\backup_machine_* | 本 commit |
+ | 10-08 | 206 | 6c604e44（GitLab d02fa0e9） | 本 commit（只有文件）：筆電收回機台 cpp 0335 SAYTHROTTLE＋WORKLOG（機台鏈尾）＋設計外掛 0.310。Pci1203MotorRoute.cpp 合併結果＝機台版（內容一樣）、test_pci1203_motor_route 一樣、WORKLOG 照規定留機台；只換 3 個文件（MACHINE_PATCHES_20261008、NIGHT_REPORT、RULINGS_20261008）。不用重建 | 本 commit |
+ | 10-08 | 205 | cd8c3fe6（GitLab 8a2178ac） | 本 commit（只有機台 C++）：Ifor01 T-05 golden TfMain::Timer5Timer ATC 連線看門狗＋三個 ATC 介面計時器（HT9050 不跑）。11 檔：直接換 7（逐檔掃機台 AI 標記／W906_ 識別字：沒有會消失的）、新 2（MainTimer5.cpp、test_t05_timer5.cpp）、合併 2（CMakeLists、tests/CMakeLists，無衝突）。Debug 增量建置＋相關 18 支 ctest 全過；release wb_serve 建好。備份 D:\HT9045\_pkg_205\backup_machine_* | 本 commit |
++| 10-09 | 設計外掛 tools 0184 | — | 設計外掛工作階段自己推（commit c95e921f，GitHub de9133ea）：定時版本檢查 → 合併筆電包 214 的設計外掛（0.317.0 → 0.325.0；211～213 沒帶設計外掛），沒有衝突；htd_machine_switch.ps1 更新，但只有 hp9050Root 有設時才動作（這台沒設，D:\HT9045\system 仍是實體資料夾）；run_all 3/3（沒有建置在跑） | tools 0184 |
+ | 10-09 | 設計外掛 tools 0183 | — | 設計外掛工作階段自己推（commit e10c92b，GitHub 16ab5d46）：定時版本檢查 → 合併筆電包 210 的設計外掛（0.315.0 → 0.317.0；209 沒帶設計外掛），沒有衝突，機台功能確認還在；run_all 3/3（沒有建置在跑） | tools 0183 |
+ | 10-09 | 設計外掛 tools 0182 | — | 設計外掛工作階段自己推（commit 4b1e2e7，GitHub 4f09ba3e）：定時版本檢查 → 合併筆電包 208 的設計外掛（0.312.0 → 0.315.0），沒有衝突；筆電的 htd_f5_mode.ps1 整檔取用，已含機台的 HTD_BUILD_JOBS／RC_COMPILER／pathHead，「htd_f5_mode (1008)」測試通過；run_all 3/3（沒有建置在跑） | tools 0182 |
+ | 10-09 | 設計外掛 tools 0181 | — | 設計外掛工作階段自己推（commit 5f22fb5，GitHub 0f70a938）：定時版本檢查 → 合併筆電包 207 的設計外掛（0.310.0 → 0.312.0），沒有衝突，機台功能確認還在；run_all 3/3（沒有建置在跑） | tools 0181 |
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index d1db5913..47fa9088 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -1609,6 +1609,20 @@ endif()
+ 
+ add_test(NAME W7_C1_CleanOutFinish COMMAND test_w7_c1_cleanout_finish)
+ 
++# --- test_nb2_w188_cleanoutfinish: AI(W906-W188) 20261009 (NB2-1) -- W-188 #1 DoCleanOutFinishCheck -> golden 913 ---
++#   [1] the golden 913 HasRealIC guard around PickFromHPList->ResetFile (sHPPickRec pointed at a ctest-cwd scratch file);
++#   [2] source ratchets on csystem.cpp for the watchdog call, the AutoClean latch line and the ResetFile guard.
++add_executable(test_nb2_w188_cleanoutfinish
++    test_nb2_w188_cleanoutfinish.cpp
++)
++target_link_libraries(test_nb2_w188_cleanoutfinish PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_nb2_w188_cleanoutfinish PRIVATE ws2_32)
++endif()
++add_test(NAME NB2_W188CleanOutFinish COMMAND test_nb2_w188_cleanoutfinish "${CMAKE_SOURCE_DIR}")
++
+ # ===========================================================================
+ #  W7-C2 VERIFY -- the end-of-lot ONE CYCLE finish-check (REAL body)
+ # ===========================================================================
+@@ -9322,3 +9336,67 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+ endif()
+ add_test(NAME St02_Timer6RunCheck COMMAND test_st02_etm011_timer6 "${CMAKE_SOURCE_DIR}")   # AI(W906-ETM011) 2/2: argv[1] = port root ([5])
+ set_tests_properties(St02_Timer6RunCheck PROPERTIES TIMEOUT 120)
++# --- AI(W906-W187) 20261009 (St02-E) -- W-187 #1 (POOL-9): TEST_CATEGORY::UpdataCount reads ArmSKET by the arm-local row as golden 913
++#   cSocket.cpp:1057-1286 (Ifor 20260807), matching the writer ProcessArmCount.  St02_W187UpdataCount: in memory (fresh TArm objects,
++#   counts through TArm::SetArmSKTData), NN_1Row and two-rows-per-arm, ArmData and ArmDataLot; argv[1] = port root (source pin).
++add_executable(test_st02_w187_updatacount test_st02_w187_updatacount.cpp)
++target_link_libraries(test_st02_w187_updatacount PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_st02_w187_updatacount PRIVATE ws2_32)
++endif()
++if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
++    set_source_files_properties(test_st02_w187_updatacount.cpp PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
++endif()
++add_test(NAME St02_W187UpdataCount COMMAND test_st02_w187_updatacount "${CMAKE_SOURCE_DIR}")
++set_tests_properties(St02_W187UpdataCount PROPERTIES TIMEOUT 120)
++# --- AI(W906-W187) 20261009 (St02-E) -- W-187 #2 (POOL-9): THGem::DoSpoolSendLocalData sends a spooled frame only over a live link,
++#   under pLockOnSocketRecvice (golden 913 SECSGEM/uHGemEquipment.cpp:4062-4083).  St02_W187SpoolSend: real THGem in memory, sim sockets
++#   (SimTxBuffer); client not connected / connected, server with no connection, re-entry with the lock held, lock free afterwards.
++add_executable(test_st02_w187_spoolsend test_st02_w187_spoolsend.cpp)
++target_link_libraries(test_st02_w187_spoolsend PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_st02_w187_spoolsend PRIVATE ws2_32)
++endif()
++if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
++    set_source_files_properties(test_st02_w187_spoolsend.cpp PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
++endif()
++add_test(NAME St02_W187SpoolSend COMMAND test_st02_w187_spoolsend)
++set_tests_properties(St02_W187SpoolSend PROPERTIES TIMEOUT 60)
++# --- AI(W906-W187) 20261009 (St02-E) -- W-187 #3 (POOL-9): HTGem S9F1/S9F3/S9F5/S9F7/S9F9 reply <B[10]> = the rejected message's
++#   header (golden 913 SECSGEM/uHGemClass.cpp:2216-2235 SendS9FxEchoHeader).  St02_W187S9Fx: standalone HTGem (all five, with and
++#   without the W-bit), end to end over a real THGem's codec and sim socket, ActiveWire NULL.  Containment first.
++add_executable(test_st02_w187_s9fx test_st02_w187_s9fx.cpp)
++target_link_libraries(test_st02_w187_s9fx PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_st02_w187_s9fx PRIVATE ws2_32)
++endif()
++if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
++    set_source_files_properties(test_st02_w187_s9fx.cpp PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
++endif()
++add_test(NAME St02_W187S9Fx COMMAND test_st02_w187_s9fx)
++set_tests_properties(St02_W187S9Fx PROPERTIES TIMEOUT 60)
++
++# --- AI(W906-W189) 20261009 (St02-E) -- W-189: THGem Read/SaveEventReportData use W906_SecsSystemDir() (SECSGEM/uHGemEquipment.cpp file
++#   end): golden hard-codes D:\HT9045\SECS\SECS\SYSTEM\EventReport_CEID.def / _ReportID.def (0618 :8202/:8212/:8657/:8661); every ctest
++#   now gets W906_SECSSYSTEM_ROOT (below, _ht9045_env_extra), so no test can write the machine's real .def files.  Unset = the golden
++#   literal (production).  St02_W189EventReport: containment, a READ probe before any Save, Save into the sandbox, round trip, the
++#   real files' size + mtime unchanged (stat only).
++list(APPEND _ht9045_env_extra "W906_SECSSYSTEM_ROOT=${CMAKE_CURRENT_BINARY_DIR}/machine_config_scratch/SECS_SYSTEM")
++add_executable(test_st02_w189_eventreport test_st02_w189_eventreport.cpp)
++target_link_libraries(test_st02_w189_eventreport PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_st02_w189_eventreport PRIVATE ws2_32)
++endif()
++if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
++    set_source_files_properties(test_st02_w189_eventreport.cpp PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
++endif()
++add_test(NAME St02_W189EventReport COMMAND test_st02_w189_eventreport)
++set_tests_properties(St02_W189EventReport PROPERTIES TIMEOUT 120)
+diff --git a/tests/test_nb2_w188_cleanoutfinish.cpp b/tests/test_nb2_w188_cleanoutfinish.cpp
+new file mode 100644
+index 00000000..23bf0239
+--- /dev/null
++++ b/tests/test_nb2_w188_cleanoutfinish.cpp
+@@ -0,0 +1,166 @@
++// =============================================================================
++//  AI(W906-W188) 20261009 (NB2-1): W-188 #1 -- DoCleanOutFinishCheck brought to golden 913
++//  (GitLab honprec/rd/rd5/ht9045_913 main e9908638, csystem.cpp:15591-16687; 0618 was :14713-15745).
++//  Three 913 hunks, all on the same lines as the 0618 code they follow / replace (csystem.cpp line count of
++//  DoCleanOutFinishCheck unchanged; the two longer bodies live at the end of csystem.cpp):
++//    H1  golden 913 :15600-15639  clean-out watchdog -- diagnostic EventLog line only (RogerYang 20260811)
++//    H2  golden 913 :15847-15854  AutoClean residual latch: AutoClean not running -> clear iCheckFinish_ByAutoClean
++//                                 instead of parking on cursor 18 (RogerYang 20260708)
++//    H3  golden 913 :15975-15989  Clean Out finish keeps PickHPRec while a hot plate still holds a REAL IC
++//                                 (HAS_NULL_IC placeholders do not count) (RogerYang 20260831)
++//
++//  [1] H3 behaviour: W906_CleanOutResetPickHPRec913() called directly; the golden 913 decision is read back from the
++//      RecordProcess line it writes (cMyDB.cpp RecordProcess keeps the last text in ExString):
++//        real IC on plate 1             -> "HP still has real IC ... keep PickHPRec"
++//        only a HAS_NULL_IC placeholder -> "HP empty, ResetFile PickHPRec"   (HasRealIC, not HasIC)
++//        both plates empty              -> "HP empty, ResetFile PickHPRec"   (the 0618 behaviour)
++//      NOTE: inside csystem.cpp `PickFromHPList` is still the W7C1 no-op seam (csystem.cpp:2498-2505, ResetFile does
++//      nothing), so today H3 decides + logs; the real PickHPRec.json reset waits for that seam to be retired.
++//  [2] source ratchets on csystem.cpp (argv[1] = port root): H1 call inside DoCleanOutFinishCheck ahead of
++//      `if(iOneCycle)`; H2 line shape inside `if(iCheckFinish_ByAutoClean==1)`; the bare 0618
++//      `PickFromHPList->ResetFile(sHPPickRec);` is gone from DoCleanOutFinishCheck and lives only in the H3 helper;
++//      H1 helper carries the golden statics and the "CleanOutWatchdog" EventLog tag.
++//  H2 is reached only after the cursor-1..17 gates of the clean-out drain (csystem.cpp DoCleanOutFinishCheck), which
++//  the offline HAL stops at cursor 5 (see W7_C1_CleanOutFinish) -- so H2 is pinned by source only.
++//  H1 fires after 300 s (hot: soak+300 s) of an unfinished clean-out on HTimer wall time -- source only as well.
++//  Use: only through ctest (NB2_W188CleanOutFinish).
++// =============================================================================
++#include "csystem.h"
++#include "MachineDefine.h"
++#include "MachineType.h"
++#include "cmydef.h"
++#include "Motor/mymotor.h"
++#include "cMyDB.h"                 // ExString (RecordProcess keeps the last line)
++#include "w906_ctest_guard.h"
++#include <cstdio>
++#include <fstream>
++#include <sstream>
++#include <string>
++#include <vector>
++
++void W906_CleanOutResetPickHPRec913();
++
++static int g_pass = 0, g_fail = 0;
++#define CHECK(cond, msg)                                                        \
++    do {                                                                        \
++        if (cond) { std::printf("  PASS: %s\n", msg); ++g_pass; }               \
++        else      { std::printf("  FAIL: %s  (line %d)\n", msg, __LINE__); ++g_fail; } \
++    } while (0)
++
++static std::vector<std::string> ReadLines(const std::string& path)
++{
++    std::vector<std::string> v;
++    std::ifstream f(path.c_str(), std::ios::binary);
++    std::string s;
++    while (std::getline(f, s)) {
++        if (!s.empty() && s[s.size() - 1] == '\r') s.erase(s.size() - 1);
++        v.push_back(s);
++    }
++    return v;
++}
++
++static std::string Trim(const std::string& s)
++{
++    size_t a = s.find_first_not_of(" \t");
++    return a == std::string::npos ? std::string() : s.substr(a);
++}
++
++// first line index whose trimmed text starts with `head`, from `from`; -1 if none
++static int FindStart(const std::vector<std::string>& L, const std::string& head, int from = 0)
++{
++    for (int i = from; i < (int)L.size(); ++i)
++        if (Trim(L[i]).compare(0, head.size(), head) == 0) return i;
++    return -1;
++}
++
++// end line (the closing brace at column 0) of a function whose signature line is `sig`
++static int FuncEnd(const std::vector<std::string>& L, int sig)
++{
++    for (int i = sig + 1; i < (int)L.size(); ++i)
++        if (L[i] == "}") return i;
++    return -1;
++}
++
++static int CountIn(const std::vector<std::string>& L, int a, int b, const std::string& needle)
++{
++    int n = 0;
++    for (int i = a; i <= b && i < (int)L.size(); ++i)
++        if (L[i].find(needle) != std::string::npos) ++n;
++    return n;
++}
++
++struct PlateSnap { int x, y, d00; };
++static PlateSnap SavePlate(int m) { PlateSnap s = { MOT[m].Tray.XItem, MOT[m].Tray.YItem, MOT[m].Tray.Data[0][0] }; return s; }
++static void RestorePlate(int m, const PlateSnap& s) { MOT[m].Tray.XItem = s.x; MOT[m].Tray.YItem = s.y; MOT[m].Tray.Data[0][0] = s.d00; }
++
++int main(int argc, char** argv)
++{
++    extern AnsiString DataPath;
++    const char* const rt[] = { "DataPath", DataPath.c_str(), 0 };
++    if (!W906TestRequireCtestRedirects("NB2_W188CleanOutFinish", rt)) return 2;
++    std::printf("==== W-188 #1 DoCleanOutFinishCheck -> golden 913 ====\n");
++
++    // ---------------------------------------------------------------- [1] H3
++    std::printf("-- [1] H3: Clean Out finish keeps PickHPRec while a hot plate holds a real IC --\n");
++    const PlateSnap p1 = SavePlate(MMPlate1), p2 = SavePlate(MMPlate2);
++    const AnsiString saveEx = ExString;
++    MOT[MMPlate2].Tray.XItem = 0; MOT[MMPlate2].Tray.YItem = 0;
++
++    MOT[MMPlate1].Tray.XItem = 1; MOT[MMPlate1].Tray.YItem = 1; MOT[MMPlate1].Tray.Data[0][0] = HAS_IC;
++    ExString = "";
++    W906_CleanOutResetPickHPRec913();
++    CHECK(std::string(ExString.c_str()).find("HP still has real IC") != std::string::npos &&
++          std::string(ExString.c_str()).find("keep PickHPRec") != std::string::npos,
++          "[1] real IC on plate 1 -> keep PickHPRec (golden 913 HasRealIC guard)");
++    std::printf("     (%s)\n", ExString.c_str());
++
++    MOT[MMPlate1].Tray.Data[0][0] = HAS_NULL_IC;
++    ExString = "";
++    W906_CleanOutResetPickHPRec913();
++    CHECK(std::string(ExString.c_str()).find("HP empty, ResetFile PickHPRec") != std::string::npos,
++          "[1] only a HAS_NULL_IC placeholder -> reset branch (HasRealIC, not HasIC)");
++
++    MOT[MMPlate1].Tray.Data[0][0] = 0;
++    ExString = "";
++    W906_CleanOutResetPickHPRec913();
++    CHECK(std::string(ExString.c_str()).find("HP empty, ResetFile PickHPRec") != std::string::npos,
++          "[1] both plates empty -> reset branch (the 0618 behaviour)");
++
++    RestorePlate(MMPlate1, p1); RestorePlate(MMPlate2, p2);
++    ExString = saveEx;
++
++    // ---------------------------------------------------------------- [2] source
++    std::printf("-- [2] source ratchets (csystem.cpp) --\n");
++    const std::string root = argc > 1 ? argv[1] : ".";
++    const std::vector<std::string> L = ReadLines(root + "/csystem.cpp");
++    CHECK(!L.empty(), "[2] csystem.cpp readable");
++    const int f0 = FindStart(L, "void DoCleanOutFinishCheck()");
++    const int f1 = f0 < 0 ? -1 : FuncEnd(L, f0);
++    CHECK(f0 >= 0 && f1 > f0, "[2] DoCleanOutFinishCheck found");
++    const int io = f0 < 0 ? -1 : FindStart(L, "if(iOneCycle)", f0);
++    const int h1 = f0 < 0 ? -1 : FindStart(L, "{ void W906_DoCleanOutWatchdog913(); W906_DoCleanOutWatchdog913(); }", f0);
++    CHECK(h1 > f0 && io > h1 && io - h1 <= 2, "[2] H1: watchdog call is the first statement, right ahead of if(iOneCycle) (golden 913 :15600-15639 order)");
++    const int lat = f0 < 0 ? -1 : FindStart(L, "if(iCheckFinish_ByAutoClean==1)", f0);
++    CHECK(lat > f0 && lat < f1 && lat + 3 < (int)L.size() &&
++          Trim(L[lat + 2]).find("if(bRunAutoClean==false) { iCheckFinish_ByAutoClean=0; } else { iCleanOutCycleTask=18;") == 0 &&
++          Trim(L[lat + 3]) == "return; }",
++          "[2] H2: latch -- AutoClean not running clears iCheckFinish_ByAutoClean, else park on 18 (golden 913 :15847-15854)");
++    CHECK(CountIn(L, f0, f1, "PickFromHPList->ResetFile(sHPPickRec);") == 0 &&
++          CountIn(L, f0, f1, "{ void W906_CleanOutResetPickHPRec913(); W906_CleanOutResetPickHPRec913(); }") == 1,
++          "[2] H3: DoCleanOutFinishCheck no longer resets PickHPRec unconditionally; calls the golden 913 guard once");
++    const int g3 = FindStart(L, "void W906_CleanOutResetPickHPRec913()");
++    const int g3e = g3 < 0 ? -1 : FuncEnd(L, g3);
++    CHECK(g3 > f1 && CountIn(L, g3, g3e, "MOT[MMPlate1].Tray.HasRealIC()==false") == 1 &&
++          CountIn(L, g3, g3e, "PickFromHPList->ResetFile(sHPPickRec);") == 1,
++          "[2] H3 helper: HasRealIC guard around the single ResetFile");
++    const int g1 = FindStart(L, "void W906_DoCleanOutWatchdog913()");
++    const int g1e = g1 < 0 ? -1 : FuncEnd(L, g1);
++    CHECK(g1 > f1 && CountIn(L, g1, g1e, "static HTimer hCleanOutWD;") == 1 &&
++          CountIn(L, g1, g1e, "static bool   bCleanOutWDArmed=false;") == 1 &&
++          CountIn(L, g1, g1e, "\"CleanOutWatchdog\"") == 1 &&
++          CountIn(L, g1, g1e, "Prod.iHotTime+300") == 1,
++          "[2] H1 helper: golden statics, soak-based threshold, EventLog-only tag");
++
++    std::printf("==== W-188 #1: %d passed, %d failed ====\n", g_pass, g_fail);
++    return g_fail == 0 ? 0 : 1;
++}
+diff --git a/tests/test_st02_w187_s9fx.cpp b/tests/test_st02_w187_s9fx.cpp
+new file mode 100644
+index 00000000..bd512f4e
+--- /dev/null
++++ b/tests/test_st02_w187_s9fx.cpp
+@@ -0,0 +1,151 @@
++// =============================================================================
++//  test_st02_w187_s9fx.cpp -- W-187 (POOL-9 GOLDEN913-UPDATE) #3: the S9F1/S9F3/S9F5/S9F7/S9F9 replies carry the 10-byte header
++//  of the rejected message as <B[10]> (golden 913 SECSGEM/uHGemClass.cpp:2216-2235 SendS9FxEchoHeader, Ifor 20260625), not the
++//  log text as <A> (golden 0618 :2222-2268).
++//
++//  AI(W906-W187) 20261009 (St02-E).  Suite name (add_test): St02_W187S9Fx.  No file of our own, no network (sim sockets).
++//    [1] a standalone HTGem (ActiveWire = its own WireCodec), Remote = S6F11 with the W-bit, device 0x0102, system bytes
++//        0x12345678: each of the five handlers -- Local = S9/Fn without the W-bit, the log line, the frame length 22, the body
++//        0x21 0x0A + the 10 header bytes (S byte 0x86 = S6 | W-bit).
++//    [2] Remote without the W-bit (S2F41, device 0): S byte 0x02.
++//    [3] end to end: the HTGem dispatches on a real THGem's codec (as the HT9045Gem shim binds it); client role, sim socket
++//        connected: the 26 bytes that go out (SendLocalDataHook -> THGem::SendLocalDataFrom -> SendBuf).
++//    [4] ActiveWire NULL: golden 913's `if(p==NULL) return;` -- nothing composed, no crash.
++//  Containment first (THGem's send logs through the machine log roots).
++// =============================================================================
++#include "SECSGEM/uHGemClass.h"
++#include "SECSGEM/uHGemEquipment.h"
++#include "st02_test_containment.h"
++#include <cstdio>
++#include <cstring>
++#include <string>
++
++static int g_pass = 0, g_fail = 0;
++static void Check(bool ok, const std::string& what)
++{
++    if (ok) { ++g_pass; std::printf("  PASS: %s\n", what.c_str()); return; }
++    ++g_fail;
++    std::printf("  FAIL: %s\n", what.c_str());
++}
++
++static std::string Hex(const unsigned char* p, size_t n)
++{
++    std::string s;
++    char b[4];
++    for (size_t i = 0; i < n; ++i) { std::snprintf(b, sizeof(b), "%02X ", p[i]); s += b; }
++    return s;
++}
++
++static void SeedRemote(SecsWireCodec& wc, unsigned short dev, unsigned char s, unsigned char f, unsigned w, unsigned int sb)
++{
++    wc.Remote.DeviceID = dev;
++    wc.Remote.MessageID_S = s;
++    wc.Remote.MessageID_F = f;
++    wc.Remote.W_Bit = w;
++    wc.Remote.PType = 0;
++    wc.Remote.SType = 0;
++    wc.Remote.SystemByte = sb;
++}
++
++typedef void (HTGem::*S9Fn)(AnsiString);
++
++int main()
++{
++    std::setvbuf(stdout, nullptr, _IONBF, 0);
++    std::printf("St02_W187S9Fx -- HTGem S9F1/F3/F5/F7/F9 (golden 913 uHGemClass.cpp:2216-2271)\n");
++    if (!W906TestInsideCtestRoots("St02_W187S9Fx"))
++        return 2;
++
++    const unsigned char echoW[10] = { 0x01, 0x02, 0x86, 0x0B, 0x00, 0x00, 0x12, 0x34, 0x56, 0x78 };
++
++    // ---------------------------------------------------------------- [1]
++    std::printf("[1] standalone HTGem, Remote = S6F11 W, device 0x0102, system bytes 0x12345678\n");
++    {
++        HTGem g;
++        SecsWireCodec& wc = g.WireCodec;
++        Check(g.ActiveWire == &wc, "[1] setup: ActiveWire is the HTGem's own codec");
++        const struct { int f; S9Fn fn; const char* name; } H[] = {
++            { 1, &HTGem::S9F1_UnrecognizedDeviceID, "S9F1" },
++            { 3, &HTGem::S9F3_Unrecognized_Stream_Function_Type, "S9F3" },
++            { 5, &HTGem::S9F5_UnrecognizedFunctionType, "S9F5" },
++            { 7, &HTGem::S9F7_IllegalData, "S9F7" },
++            { 9, &HTGem::S9F9_TransactionTimerTimeout, "S9F9" },
++        };
++        for (size_t i = 0; i < sizeof(H) / sizeof(H[0]); ++i)
++        {
++            SeedRemote(wc, 0x0102, 6, 11, 1, 0x12345678u);
++            const std::string msg = std::string(H[i].name) + " reject text";
++            (g.*H[i].fn)(AnsiString(msg.c_str()));
++            const std::string tag = std::string("[1] ") + H[i].name + ": ";
++            Check(wc.Local.MessageID_S == 9 && wc.Local.MessageID_F == H[i].f && wc.Local.W_Bit == 0,
++                  tag + "Local = S9/F" + std::to_string(H[i].f) + " without the W-bit (S " + std::to_string(wc.Local.MessageID_S) +
++                  ", F " + std::to_string(wc.Local.MessageID_F) + ", W " + std::to_string(wc.Local.W_Bit) + ")");
++            const int nlog = wc.LogDataString->Count;
++            Check(nlog > 0 && std::string(wc.LogDataString->GetString(nlog - 1).c_str()) == msg, tag + "the log line is the message");
++            const unsigned char* b = wc.LocalBuffer.data();
++            Check(wc.LocalLength_4 == 26, tag + "frame = 4 + 10-byte header + 12-byte body (LocalLength_4 " + std::to_string(wc.LocalLength_4) + ")");
++            Check(b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 22, tag + "length prefix 22 (" + Hex(b, 4) + ")");
++            Check(b[14] == 0x21 && b[15] == 10, tag + "body item = binary, 1 length byte, length 10 (" + Hex(b + 14, 2) + ")");
++            Check(std::memcmp(b + 16, echoW, 10) == 0, tag + "body = the received header 01 02 86 0B 00 00 12 34 56 78 (" + Hex(b + 16, 10) + ")");
++        }
++    }
++
++    // ---------------------------------------------------------------- [2]
++    std::printf("[2] Remote without the W-bit (S2F41, device 0)\n");
++    {
++        HTGem g;
++        SecsWireCodec& wc = g.WireCodec;
++        SeedRemote(wc, 0, 2, 41, 0, 0x00000105u);
++        g.S9F5_UnrecognizedFunctionType("no w-bit");
++        const unsigned char want[10] = { 0x00, 0x00, 0x02, 0x29, 0x00, 0x00, 0x00, 0x00, 0x01, 0x05 };
++        Check(wc.LocalLength_4 == 26 && std::memcmp(wc.LocalBuffer.data() + 16, want, 10) == 0,
++              "[2] S9F5 body = 00 00 02 29 00 00 00 00 01 05 (" + Hex(wc.LocalBuffer.data() + 16, 10) + ")");
++    }
++
++    // ---------------------------------------------------------------- [3]
++    std::printf("[3] end to end on a real THGem's codec, client role, sim socket\n");
++    {
++        THGem gem;
++        HTGem h;
++        h.ActiveWire = &gem.WireCodec;   // as the HT9045Gem shim / ProcessReceiceData bind it (uHGemHT9045.cpp:371, uHGemEquipment.cpp:5404)
++        gem.bUseClientSocket = true;
++        gem.clientGem->Active = true;
++        const bool connected = gem.clientGem->Socket->Connected;
++        const size_t before = gem.clientGem->Socket->SimTxBuffer().size();
++        SeedRemote(gem.WireCodec, 0x0102, 6, 11, 1, 0x12345678u);
++        h.S9F7_IllegalData("S6F11 data format error");
++        const std::vector<char>& tx = gem.clientGem->Socket->SimTxBuffer();
++        const size_t n = tx.size() - before;
++        Check(connected && n == 26, "[3] connected; one 26-byte frame sent (" + std::to_string(n) + " bytes)");
++        if (n == 26)
++        {
++            const unsigned char* t = reinterpret_cast<const unsigned char*>(tx.data()) + before;
++            const SecsWireCodec& wc = gem.WireCodec;
++            const unsigned int sb = wc.Local.SystemByte;
++            const unsigned char head[14] = { 0, 0, 0, 22,
++                (unsigned char)((wc.Local.DeviceID >> 8) & 0xff), (unsigned char)(wc.Local.DeviceID & 0xff), 0x09, 0x07, 0x00, 0x00,
++                (unsigned char)((sb >> 24) & 0xff), (unsigned char)((sb >> 16) & 0xff), (unsigned char)((sb >> 8) & 0xff), (unsigned char)(sb & 0xff) };
++            Check(std::memcmp(t, head, 14) == 0, "[3] length 22 + our header S9F7, no W-bit, our system bytes (" + Hex(t, 14) + ")");
++            Check(t[14] == 0x21 && t[15] == 10 && std::memcmp(t + 16, echoW, 10) == 0,
++                  "[3] body 21 0A + the S6F11 header received (" + Hex(t + 14, 12) + ")");
++        }
++    }
++
++    // ---------------------------------------------------------------- [4]
++    std::printf("[4] ActiveWire NULL\n");
++    {
++        HTGem g;
++        SeedRemote(g.WireCodec, 0x0102, 6, 11, 1, 0x12345678u);
++        g.S9F1_UnrecognizedDeviceID("before");
++        const unsigned len = g.WireCodec.LocalLength_4;
++        const int nlog = g.WireCodec.LogDataString->Count;
++        g.ActiveWire = nullptr;
++        g.S9F7_IllegalData("not sent");
++        Check(g.WireCodec.LocalLength_4 == len && g.WireCodec.LogDataString->Count == nlog && g.WireCodec.Local.MessageID_F == 1,
++              "[4] golden 913 `if(p==NULL) return;`: nothing logged or composed");
++        g.ActiveWire = &g.WireCodec;
++    }
++
++    std::printf("\nSt02_W187S9Fx: %d passed, %d failed\n", g_pass, g_fail);
++    return g_fail == 0 ? 0 : 1;
++}
+diff --git a/tests/test_st02_w187_spoolsend.cpp b/tests/test_st02_w187_spoolsend.cpp
+new file mode 100644
+index 00000000..eb4ad541
+--- /dev/null
++++ b/tests/test_st02_w187_spoolsend.cpp
+@@ -0,0 +1,95 @@
++// =============================================================================
++//  test_st02_w187_spoolsend.cpp -- W-187 (POOL-9 GOLDEN913-UPDATE) #2: THGem::DoSpoolSendLocalData sends a spooled frame only over a
++//  live link, under pLockOnSocketRecvice (golden 913 SECSGEM/uHGemEquipment.cpp:4062-4083, RogerYang 20260715 ht9045-secs-sem).
++//
++//  AI(W906-W187) 20261009 (St02-E).  Suite name (add_test): St02_W187SpoolSend.  A real THGem in memory (its ctor opens no port --
++//  SecsTagPublish.cpp:42-49); the vclcompat sockets are in sim mode, SendBuf captures into SimTxBuffer().  No file, no network.
++//    [1] client role, link not active / not connected: nothing is sent (golden 0618 sent anyway).
++//    [2] client role, Active = true (sim: connects): the frame goes out, RunLength bytes = 4-byte length + the message.
++//    [3] server role with no connection (ActiveConnections 0): returns without touching Connections[0] (0618 indexed it).
++//    [4] re-entry: the caller already holds pLockOnSocketRecvice on this thread -- the call does not block (re-entrant
++//        CRITICAL_SECTION, vclcompat/SyncObjs.h) and still sends.
++//    [5] the lock is free afterwards: another thread acquires and releases it within 2 s.
++// =============================================================================
++#include "SECSGEM/uHGemEquipment.h"
++#include <windows.h>
++#include <cstdio>
++#include <cstring>
++#include <string>
++
++static int g_pass = 0, g_fail = 0;
++static void Check(bool ok, const std::string& what)
++{
++    if (ok) { ++g_pass; std::printf("  PASS: %s\n", what.c_str()); return; }
++    ++g_fail;
++    std::printf("  FAIL: %s\n", what.c_str());
++}
++
++static THGem* g_gem = 0;
++static DWORD WINAPI LockProbe(LPVOID)
++{
++    g_gem->pLockOnSocketRecvice->Acquire();
++    g_gem->pLockOnSocketRecvice->Release();
++    return 0;
++}
++
++int main()
++{
++    std::setvbuf(stdout, nullptr, _IONBF, 0);
++    std::printf("St02_W187SpoolSend -- THGem::DoSpoolSendLocalData (golden 913 uHGemEquipment.cpp:4048-4114)\n");
++    THGem gem;
++    g_gem = &gem;
++    // an S1F1 header-only HSMS frame: 4-byte length (10), device id, S1 (W-bit), F1, ptype, stype, 4 system bytes
++    unsigned char frame[14] = { 0, 0, 0, 10, 0x00, 0x00, 0x81, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07 };
++    const size_t n = sizeof(frame);
++    Check(gem.clientGem != 0 && gem.srvGem != 0 && gem.pLockOnSocketRecvice != 0, "setup: the ctor built clientGem, srvGem and the lock");
++
++    // ---------------------------------------------------------------- [1]
++    std::printf("[1] client role, no live link\n");
++    gem.bUseClientSocket = true;
++    gem.DoSpoolSendLocalData(frame);
++    Check(gem.clientGem->Socket->SimTxBuffer().empty(), "[1] Active false: nothing sent (" + std::to_string(gem.clientGem->Socket->SimTxBuffer().size()) + " bytes)");
++
++    // ---------------------------------------------------------------- [2]
++    std::printf("[2] client role, connected\n");
++    gem.clientGem->Active = true;
++    const bool connected = gem.clientGem->Socket->Connected;
++    const int rl = gem.DoSpoolSendLocalData(frame);
++    const std::vector<char>& tx = gem.clientGem->Socket->SimTxBuffer();
++    Check(connected && rl == (int)n && tx.size() == n && std::memcmp(tx.data(), frame, n) == 0,
++          "[2] Active + Connected: the 14-byte frame is sent as is (RunLength " + std::to_string(rl) + ", sent " + std::to_string(tx.size()) + ")");
++    gem.clientGem->Socket->Connected = false;
++    const size_t before = tx.size();
++    gem.DoSpoolSendLocalData(frame);
++    Check(gem.clientGem->Socket->SimTxBuffer().size() == before, "[2] Active but the socket no longer Connected: nothing more sent");
++    gem.clientGem->Socket->Connected = true;
++
++    // ---------------------------------------------------------------- [3]
++    std::printf("[3] server role, no connection\n");
++    gem.bUseClientSocket = false;
++    gem.bServoSocketConnect = true;
++    gem.srvGem->Socket->ActiveConnections = 0;
++    gem.srvGem->Socket->Connections.clear();
++    gem.DoSpoolSendLocalData(frame);
++    Check(true, "[3] ActiveConnections 0: returned without touching Connections[0]");
++
++    // ---------------------------------------------------------------- [4]
++    std::printf("[4] the caller already holds the lock (re-entry)\n");
++    gem.bUseClientSocket = true;
++    const size_t b4 = gem.clientGem->Socket->SimTxBuffer().size();
++    gem.pLockOnSocketRecvice->Acquire();
++    gem.DoSpoolSendLocalData(frame);
++    gem.pLockOnSocketRecvice->Release();
++    Check(gem.clientGem->Socket->SimTxBuffer().size() == b4 + n, "[4] no self-deadlock on the same thread, the frame is sent");
++
++    // ---------------------------------------------------------------- [5]
++    std::printf("[5] the lock is free afterwards\n");
++    HANDLE th = ::CreateThread(0, 0, &LockProbe, 0, 0, 0);
++    const DWORD w = th ? ::WaitForSingleObject(th, 2000) : WAIT_FAILED;
++    if (th) ::CloseHandle(th);
++    Check(w == WAIT_OBJECT_0, "[5] another thread acquires and releases pLockOnSocketRecvice within 2 s");
++
++    gem.clientGem->Active = false;
++    std::printf("St02_W187SpoolSend: %d passed, %d failed\n", g_pass, g_fail);
++    return g_fail ? 1 : 0;
++}
+diff --git a/tests/test_st02_w187_updatacount.cpp b/tests/test_st02_w187_updatacount.cpp
+new file mode 100644
+index 00000000..98b20619
+--- /dev/null
++++ b/tests/test_st02_w187_updatacount.cpp
+@@ -0,0 +1,121 @@
++// =============================================================================
++//  test_st02_w187_updatacount.cpp -- W-187 (POOL-9 GOLDEN913-UPDATE) #1: TEST_CATEGORY::UpdataCount reads each arm's counts by
++//  its arm-local row (golden 913 cSocket.cpp:1057-1286, Ifor 20260807 "Fix TesterCate Arm1 show 0") -- the way the writer
++//  ProcessArmCount stores them (atester_ProcessCount.cpp: SetArmSKTData(iRow32, ...), iRow32 = i-2 / 0 / i).
++//
++//  AI(W906-W187) 20261009 (St02-E).  Suite name (add_test): St02_W187UpdataCount.  argv[1] = port root (source pin [3]).
++//  In memory only: fresh TArm objects stand in for ArmData[0..1] / ArmDataLot[0..1] (restored at the end), counts seeded through the
++//  real writer TArm::SetArmSKTData with arm-local rows, the real IsNNMode (cinitial.cpp) picks the branch from TestIF_File.iTestMode.
++//    [1] NN_1Row (QualSite2X2N, 2 x 2): row 0 = arm 1 local row 0, row 1 = arm 0 local row 0.  ArmData (UpdataCount(true)) and
++//        ArmDataLot (UpdataCount(false)): every site's total / bin / by-site counts come from its own arm's local row.
++//    [2] two rows per arm (_16Site4X4, 4 x 2): rows 0-1 = arm 1 local rows 0-1, rows 2-3 = arm 0 local rows 0-1 (iRow-2).
++//    [3] source: cSocket.cpp carries golden 913's four iSrcRow lines and 52 ArmSKET[iSrcRow][iCol].
++// =============================================================================
++#include "MachineType.h"
++#include "cprod.h"               // TestIF_File, TestIF
++#include "cmydef.h"              // iTestBinCount
++#include "cSocket.h"             // TEST_CATEGORY, TArm, ArmData, ArmDataLot
++#include "aHotPlateSubstrate.h"  // TestSocket
++#include <cstdio>
++#include <fstream>
++#include <sstream>
++#include <string>
++
++static int g_pass = 0, g_fail = 0;
++static void Check(bool ok, const std::string& what)
++{
++    if (ok) { ++g_pass; std::printf("  PASS: %s\n", what.c_str()); return; }
++    ++g_fail;
++    std::printf("  FAIL: %s\n", what.c_str());
++}
++static TEST_CATEGORY tc;   // big arrays: not on the stack
++static std::string N(int v) { return std::to_string(v); }
++
++// n test results of `bin` into arm `arm` at its local row/col, in ArmData and ArmDataLot (as ProcessArmCount :2110-2111)
++static void Seed(int arm, int localRow, int col, int bin, int n)
++{
++    for (int i = 0; i < n; ++i) {
++        ArmData[arm]->SetArmSKTData(localRow, col, bin);
++        ArmDataLot[arm]->SetArmSKTData(localRow, col, bin);
++    }
++}
++static void Fresh(const char* tag)
++{
++    ArmData[0] = new TArm((std::string("W187-") + tag + "-A0").c_str());
++    ArmData[1] = new TArm((std::string("W187-") + tag + "-A1").c_str());
++    ArmDataLot[0] = new TArm((std::string("W187-") + tag + "-L0").c_str());
++    ArmDataLot[1] = new TArm((std::string("W187-") + tag + "-L1").c_str());
++}
++
++int main(int argc, char** argv)
++{
++    std::setvbuf(stdout, nullptr, _IONBF, 0);
++    std::printf("St02_W187UpdataCount -- TEST_CATEGORY::UpdataCount reads by the arm-local row (golden 913 cSocket.cpp:1057-1286)\n");
++    TArm* const sv[4] = { ArmData[0], ArmData[1], ArmDataLot[0], ArmDataLot[1] };
++    const int svMode = TestIF_File.iTestMode, svRow = TestSocket.iShtRow, svCol = TestSocket.iShtCol, svBins = iTestBinCount;
++    int svMap[4][2];
++    for (int r = 0; r < 4; ++r) for (int c = 0; c < 2; ++c) svMap[r][c] = TestIF.iSiteMap[r][c];
++    iTestBinCount = 8;
++
++    // ---------------------------------------------------------------- [1]
++    std::printf("[1] NN_1Row (QualSite2X2N, 2 x 2)\n");
++    Fresh("1");
++    TestIF_File.iTestMode = QualSite2X2N;
++    TestSocket.iShtRow = 2; TestSocket.iShtCol = 2;
++    TestIF.iSiteMap[0][0] = 1; TestIF.iSiteMap[0][1] = 2; TestIF.iSiteMap[1][0] = 3; TestIF.iSiteMap[1][1] = 4;
++    Seed(1, 0, 0, 1, 3);   // row 0 col 0 (DUT 1): arm 1 local row 0
++    Seed(1, 0, 1, 2, 4);   // row 0 col 1 (DUT 2)
++    Seed(0, 0, 0, 3, 5);   // row 1 col 0 (DUT 3): arm 0 local row 0
++    Seed(0, 0, 1, 1, 6);   // row 1 col 1 (DUT 4)
++    for (int pass = 0; pass < 2; ++pass) {
++        const bool yield = pass == 0;
++        tc.UpdataCount(yield);
++        const std::string w = yield ? "[1] ArmData (UpdataCount(true)): " : "[1] ArmDataLot (UpdataCount(false)): ";
++        Check(tc.iCountSocketTotal[0][0] == 3 && tc.iCountSocketTotal[0][1] == 4 && tc.iCountSocketTotal[1][0] == 5 && tc.iCountSocketTotal[1][1] == 6,
++              w + "socket totals 3 / 4 / 5 / 6 (got " + N(tc.iCountSocketTotal[0][0]) + " / " + N(tc.iCountSocketTotal[0][1]) + " / " +
++              N(tc.iCountSocketTotal[1][0]) + " / " + N(tc.iCountSocketTotal[1][1]) + ")");
++        Check(tc.iCountCategory[0][1][0][3] == 5 && tc.iCountCategory[0][1][1][1] == 6 && tc.iCountHeadTotal[0][1][0] == 5,
++              w + "arm 0's sites (row 1) read from arm 0's local row 0: bin 3 = 5, bin 1 = 6");
++        Check(tc.iBySiteTotal[2] == 5 && tc.iBySiteTotal[3] == 6 && tc.iBySiteCate[2][3] == 5 && tc.iTotalSocket == 18 &&
++                  tc.iTotalCategory[1] == 9 && tc.iTotalCategory[2] == 4 && tc.iTotalCategory[3] == 5,
++              w + "by-site DUT 3 / 4 = 5 / 6, machine total 18, bin totals 9 / 4 / 5 (total " + N(tc.iTotalSocket) + ")");
++    }
++
++    // ---------------------------------------------------------------- [2]
++    std::printf("[2] two rows per arm (_16Site4X4, 4 x 2)\n");
++    Fresh("2");
++    TestIF_File.iTestMode = _16Site4X4;
++    TestSocket.iShtRow = 4; TestSocket.iShtCol = 2;
++    for (int r = 0; r < 4; ++r) for (int c = 0; c < 2; ++c) TestIF.iSiteMap[r][c] = r * 2 + c + 1;
++    Seed(1, 1, 0, 3, 1);   // row 1 col 0 (DUT 3): arm 1 local row 1
++    Seed(0, 0, 0, 1, 7);   // row 2 col 0 (DUT 5): arm 0 local row 0 (= iRow-2)
++    Seed(0, 1, 1, 2, 2);   // row 3 col 1 (DUT 8): arm 0 local row 1
++    for (int pass = 0; pass < 2; ++pass) {
++        const bool yield = pass == 0;
++        tc.UpdataCount(yield);
++        const std::string w = yield ? "[2] ArmData: " : "[2] ArmDataLot: ";
++        Check(tc.iCountSocketTotal[1][0] == 1 && tc.iCountSocketTotal[2][0] == 7 && tc.iCountSocketTotal[3][1] == 2 && tc.iTotalSocket == 10,
++              w + "socket totals row1/col0 = 1, row2/col0 = 7, row3/col1 = 2, total 10 (got " + N(tc.iCountSocketTotal[1][0]) + " / " +
++              N(tc.iCountSocketTotal[2][0]) + " / " + N(tc.iCountSocketTotal[3][1]) + ", " + N(tc.iTotalSocket) + ")");
++        Check(tc.iBySiteTotal[4] == 7 && tc.iBySiteTotal[7] == 2 && tc.iCountCategory[0][2][0][1] == 7 && tc.iCountCategory[0][3][1][2] == 2,
++              w + "arm 0's rows 2-3 read from its local rows 0-1 (iRow-2): DUT 5 = 7, DUT 8 = 2");
++    }
++
++    // ---------------------------------------------------------------- [3]
++    std::printf("[3] source pin\n");
++    {
++        std::ifstream f((std::string(argc > 1 ? argv[1] : "") + "/cSocket.cpp").c_str(), std::ios::binary);
++        std::ostringstream ss;
++        ss << f.rdbuf();
++        const std::string s = ss.str();
++        auto count = [&](const std::string& k) { int n = 0; for (size_t p = s.find(k); p != std::string::npos; p = s.find(k, p + 1)) ++n; return n; };
++        Check(count("iSrcRow=(iArm==0)?0:iRow;") == 2 && count("iSrcRow=(iArm==0)?(iRow-2):iRow;") == 2 && count("ArmSKET[iSrcRow][iCol]") == 52,
++              "[3] cSocket.cpp: golden 913's iSrcRow lines (2 + 2) and 52 ArmSKET[iSrcRow][iCol]");
++    }
++
++    ArmData[0] = sv[0]; ArmData[1] = sv[1]; ArmDataLot[0] = sv[2]; ArmDataLot[1] = sv[3];
++    TestIF_File.iTestMode = svMode; TestSocket.iShtRow = svRow; TestSocket.iShtCol = svCol; iTestBinCount = svBins;
++    for (int r = 0; r < 4; ++r) for (int c = 0; c < 2; ++c) TestIF.iSiteMap[r][c] = svMap[r][c];
++    std::printf("St02_W187UpdataCount: %d passed, %d failed\n", g_pass, g_fail);
++    return g_fail ? 1 : 0;
++}
+diff --git a/tests/test_st02_w189_eventreport.cpp b/tests/test_st02_w189_eventreport.cpp
+new file mode 100644
+index 00000000..4ef628e6
+--- /dev/null
++++ b/tests/test_st02_w189_eventreport.cpp
+@@ -0,0 +1,260 @@
++// =============================================================================
++//  test_st02_w189_eventreport.cpp -- W-189: THGem's EventReport_CEID.def / EventReport_ReportID.def go to a ctest sandbox
++//  (W906_SECSSYSTEM_ROOT, SECSGEM/uHGemEquipment.cpp W906_SecsSystemDir) instead of the golden literal
++//  D:\HT9045\SECS\SECS\SYSTEM\ (golden 0618 uHGemEquipment.cpp:8202/:8212/:8657/:8661, 913 :8281/:8291/:8736/:8740).
++//
++//  AI(W906-W189) 20261009 (St02-E).  Suite name (add_test): St02_W189EventReport.
++//    [0] containment: the ctest roots, W906_SECSSYSTEM_ROOT set and not under D:\HT9045\SECS; this test moves it to its own
++//        sub-folder (ctest -j: uHGemEquipment [7] copies into the shared one); size + mtime of the two real .def files.
++//    [1] READ probe first: known .def files in the sandbox -> ReadEventReportData shows THEIR rows.  If not, STOP before any
++//        Save -- a broken seam can never write the real files.
++//    [2] SaveEventReportData -> both files in the sandbox, line for line CopyStringGridAsTabFormat; the real files unchanged.
++//    [3] a fresh THGem reads them back (round trip).
++//    [4] golden 913 SetReportIDContent(.., bSaveNow=false) (uHGemEquipment.cpp:7521/:7561-7564, RogerYang 20260812): the row is
++//        set, nothing saved; the default (true) saves as before.
++//    [5] HT9045Gem::AddReprot (913 uHGemHT9045.cpp:460): exactly ONE save (0618: one per event + one).  No live caller in the
++//        port (golden's only caller is the TFSECS ctor, 913 UsecegemMainFrom.cpp:206); HT9045Gem is built directly on a THGem
++//        (no SystemModularInitial).
++//  The real files are only stat'ed (GetFileAttributesEx), never opened.
++// =============================================================================
++#include "SECSGEM/uHGemEquipment.h"
++#include "SECSGEM/uHGemHT9045.h"
++#include "SECSGEM/SecsEventType.h"
++#include "CosFunction.h"
++#include "st02_test_containment.h"
++#include <windows.h>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <string>
++#include <vector>
++
++#if defined(__MINGW32__) && !defined(__MINGW64_VERSION_MAJOR)
++extern "C" int _putenv(const char*);
++#define HT9045_TEST_PUTENV _putenv
++#else
++#define HT9045_TEST_PUTENV putenv
++#endif
++
++int W906_SecsSystemDirUses_St02();   // SECSGEM/uHGemEquipment.cpp file end
++
++static int g_pass = 0, g_fail = 0;
++static bool Check(bool ok, const std::string& what)
++{
++    if (ok) { ++g_pass; std::printf("  PASS: %s\n", what.c_str()); return true; }
++    ++g_fail;
++    std::printf("  FAIL: %s\n", what.c_str());
++    return false;
++}
++
++static const char* const kReal[2] = { "D:\\HT9045\\SECS\\SECS\\SYSTEM\\EventReport_CEID.def",
++                                       "D:\\HT9045\\SECS\\SECS\\SYSTEM\\EventReport_ReportID.def" };
++static const char* const kName[2] = { "EventReport_CEID.def", "EventReport_ReportID.def" };
++
++struct Stamp { bool exists; unsigned long long size; unsigned long long mtime; };
++static Stamp StampOf(const char* p)
++{
++    Stamp s = { false, 0, 0 };
++    WIN32_FILE_ATTRIBUTE_DATA d;
++    if (GetFileAttributesExA(p, GetFileExInfoStandard, &d))
++    {
++        s.exists = true;
++        s.size = ((unsigned long long)d.nFileSizeHigh << 32) | d.nFileSizeLow;
++        s.mtime = ((unsigned long long)d.ftLastWriteTime.dwHighDateTime << 32) | d.ftLastWriteTime.dwLowDateTime;
++    }
++    return s;
++}
++static std::string StampText(const Stamp& s)
++{
++    if (!s.exists) return "absent";
++    return std::to_string(s.size) + " bytes, mtime " + std::to_string(s.mtime);   // no %llu: MinGW.org's printf is msvcrt's
++}
++static bool SameStamp(const Stamp& a, const Stamp& b) { return a.exists == b.exists && a.size == b.size && a.mtime == b.mtime; }
++
++static bool WriteText(const std::string& path, const std::string& text)
++{
++    FILE* f = std::fopen(path.c_str(), "wb");
++    if (!f) return false;
++    const bool ok = std::fwrite(text.data(), 1, text.size(), f) == text.size();
++    std::fclose(f);
++    return ok;
++}
++static std::vector<std::string> ReadLines(const std::string& path)
++{
++    std::vector<std::string> out;
++    FILE* f = std::fopen(path.c_str(), "rb");
++    if (!f) return out;
++    std::string all;
++    char buf[4096];
++    size_t n;
++    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) all.append(buf, n);
++    std::fclose(f);
++    std::string cur;
++    for (size_t i = 0; i < all.size(); ++i)
++    {
++        if (all[i] == '\r') continue;
++        if (all[i] == '\n') { out.push_back(cur); cur.clear(); continue; }
++        cur += all[i];
++    }
++    if (!cur.empty()) out.push_back(cur);
++    return out;
++}
++static bool SameAsGrid(THGem& g, TStringGrid* grid, const std::string& path, std::string& why)
++{
++    TStringList want;
++    g.CopyStringGridAsTabFormat(grid, &want);
++    const std::vector<std::string> got = ReadLines(path);
++    if ((int)got.size() != want.Count) { why = "lines " + std::to_string(got.size()) + " vs grid " + std::to_string(want.Count); return false; }
++    for (int i = 0; i < want.Count; ++i)
++        if (got[i] != std::string(want.GetString(i).c_str())) { why = "line " + std::to_string(i) + " differs"; return false; }
++    why = std::to_string(got.size()) + " lines";
++    return true;
++}
++
++static char g_env[1024];
++
++int main()
++{
++    std::setvbuf(stdout, nullptr, _IONBF, 0);
++    std::printf("St02_W189EventReport -- THGem Read/SaveEventReportData follow W906_SECSSYSTEM_ROOT under ctest\n");
++    if (!W906TestInsideCtestRoots("St02_W189EventReport"))
++        return 2;
++
++    // ---------------------------------------------------------------- [0]
++    std::printf("[0] containment\n");
++    const char* base = std::getenv("W906_SECSSYSTEM_ROOT");
++    const std::string lbase = W906TestSafeLower(base);
++    std::printf("  W906_SECSSYSTEM_ROOT = %s\n", base ? base : "(unset)");
++    if (!Check(base != NULL && *base != 0 && lbase.find("machine_config_scratch") != std::string::npos &&
++               lbase.find("\\ht9045\\secs\\") == std::string::npos,
++               "[0] W906_SECSSYSTEM_ROOT is ctest's machine_config_scratch, not D:\\HT9045\\SECS"))
++        return 2;
++    const std::string own = std::string(base) + "\\St02_W189";
++    std::snprintf(g_env, sizeof(g_env), "W906_SECSSYSTEM_ROOT=%s", own.c_str());
++    HT9045_TEST_PUTENV(g_env);
++    const char* now = std::getenv("W906_SECSSYSTEM_ROOT");
++    if (!Check(now != NULL && own == now, "[0] moved to this test's own folder " + own))
++        return 2;
++    ForceDirectories(AnsiString(own.c_str()));
++    std::string ownFile[2];
++    for (int i = 0; i < 2; ++i) { ownFile[i] = own + "\\" + kName[i]; DeleteFileA(ownFile[i].c_str()); }
++    Stamp before[2];
++    for (int i = 0; i < 2; ++i)
++    {
++        before[i] = StampOf(kReal[i]);
++        std::printf("  real %s: %s\n", kName[i], StampText(before[i]).c_str());
++    }
++
++    // ---------------------------------------------------------------- [1]
++    std::printf("[1] READ probe (before any Save)\n");
++    THGem g;
++    Check(WriteText(ownFile[0], "CEID\tEnable\tAlias\tReportID\t\r\n77\t1\tW189Probe\t5\t\r\n") &&
++          WriteText(ownFile[1], "ReportID\tType\t\r\n5\t2\t1027\t\r\n"), "[1] probe files written in the sandbox");
++    int uses = W906_SecsSystemDirUses_St02();
++    g.ReadEventReportData();
++    const bool readOk = Check(g.strGrdCEID->Cells[0][1] == "77" && g.strGrdCEID->Cells[2][1] == "W189Probe" &&
++                              g.stdGridReportID->Cells[0][1] == "5" && g.stdGridReportID->Cells[2][1] == "1027",
++                              "[1] ReadEventReportData shows the sandbox rows (CEID row 1 = '" + std::string(g.strGrdCEID->Cells[0][1].c_str()) +
++                              "', ReportID row 1 = '" + std::string(g.stdGridReportID->Cells[0][1].c_str()) + "')");
++    Check(W906_SecsSystemDirUses_St02() == uses + 2, "[1] two file names built (" + std::to_string(W906_SecsSystemDirUses_St02() - uses) + ")");
++    if (!readOk)
++    {
++        std::printf("  STOP: the read did not follow W906_SECSSYSTEM_ROOT -- no Save is attempted\n");
++        std::printf("\nSt02_W189EventReport: %d passed, %d failed\n", g_pass, g_fail);
++        return 1;
++    }
++
++    // ---------------------------------------------------------------- [2]
++    std::printf("[2] SaveEventReportData\n");
++    for (int i = 0; i < 2; ++i) DeleteFileA(ownFile[i].c_str());
++    g.strGrdCEID->Cells[0][2] = 88;
++    g.strGrdCEID->Cells[1][2] = 0;
++    g.strGrdCEID->Cells[2][2] = "W189Saved";
++    g.strGrdCEID->Cells[3][2] = 6;
++    g.stdGridReportID->Cells[0][2] = 6;
++    g.stdGridReportID->Cells[1][2] = 1;
++    g.stdGridReportID->Cells[2][2] = 1028;
++    uses = W906_SecsSystemDirUses_St02();
++    g.SaveEventReportData();
++    Check(W906_SecsSystemDirUses_St02() == uses + 2, "[2] two file names built");
++    std::string why;
++    bool same = SameAsGrid(g, g.strGrdCEID, ownFile[0], why);   // first, then the message (argument order is unspecified)
++    Check(same, "[2] sandbox EventReport_CEID.def == the CEID grid (" + why + ")");
++    same = SameAsGrid(g, g.stdGridReportID, ownFile[1], why);
++    Check(same, "[2] sandbox EventReport_ReportID.def == the ReportID grid (" + why + ")");
++    for (int i = 0; i < 2; ++i)
++    {
++        const Stamp s = StampOf(kReal[i]);
++        Check(SameStamp(s, before[i]), std::string("[2] real ") + kName[i] + " unchanged (" + StampText(s) + ")");
++    }
++
++    // ---------------------------------------------------------------- [3]
++    std::printf("[3] a fresh THGem reads the saved files\n");
++    {
++        THGem g2;
++        g2.ReadEventReportData();
++        Check(g2.strGrdCEID->Cells[0][1] == "77" && g2.strGrdCEID->Cells[0][2] == "88" && g2.strGrdCEID->Cells[2][2] == "W189Saved" &&
++              g2.strGrdCEID->Cells[3][2] == "6", "[3] CEID rows 77 / 88 W189Saved -> 6 read back");
++        Check(g2.stdGridReportID->Cells[0][2] == "6" && g2.stdGridReportID->Cells[2][2] == "1028", "[3] ReportID row 6 -> 1028 read back");
++    }
++
++    // ---------------------------------------------------------------- [4]
++    std::printf("[4] SetReportIDContent(.., bSaveNow=false) -- golden 913 uHGemEquipment.cpp:7521 / :7561-7564\n");
++    for (int i = 0; i < 2; ++i) DeleteFileA(ownFile[i].c_str());
++    {
++        unsigned ids[1] = { 1029 };
++        uses = W906_SecsSystemDirUses_St02();
++        const bool r = g.SetReportIDContent(9, 1, ids, 1, false);
++        int row = -1;
++        for (int y = 1; y < g.stdGridReportID->RowCount; ++y)
++            if (g.stdGridReportID->Cells[0][y] == "9") { row = y; break; }
++        Check(r && row > 0 && g.stdGridReportID->Cells[2][row] == "1029", "[4] false: ReportID 9 -> 1029 set in the grid (row " + std::to_string(row) + ")");
++        Check(W906_SecsSystemDirUses_St02() == uses && !StampOf(ownFile[0].c_str()).exists && !StampOf(ownFile[1].c_str()).exists,
++              "[4] false: nothing saved (" + std::to_string(W906_SecsSystemDirUses_St02() - uses) + " file names built, files absent)");
++        ids[0] = 1030;
++        uses = W906_SecsSystemDirUses_St02();
++        g.SetReportIDContent(9, 1, ids, 1);
++        same = SameAsGrid(g, g.stdGridReportID, ownFile[1], why);
++        Check(W906_SecsSystemDirUses_St02() == uses + 2 && same,
++              "[4] default (true): saved, file == the grid (" + why + ")");
++    }
++
++    // ---------------------------------------------------------------- [5]
++    std::printf("[5] HT9045Gem::AddReprot -- golden 913 uHGemHT9045.cpp:451-464\n");
++    for (int i = 0; i < 2; ++i) DeleteFileA(ownFile[i].c_str());
++    {
++        const bool savedEnable = CosFunction.bEnable_SECS_GEM;
++        THGem* const savedHGem = HGem;
++        CosFunction.bEnable_SECS_GEM = true;
++        HGem = &g;
++        {
++            HT9045Gem mg("HT9045", &g);
++            const int n = SECS_EVENT.TotalEvent - SECS_EVENT.DoStart;
++            uses = W906_SecsSystemDirUses_St02();
++            mg.AddReprot();
++            const int built = W906_SecsSystemDirUses_St02() - uses;
++            Check(built == 2, "[5] exactly one save (" + std::to_string(built / 2) + " saves; 0618 would be " + std::to_string(n + 1) + " for " + std::to_string(n) + " events)");
++            int row = -1;
++            for (int y = 1; y < g.stdGridReportID->RowCount; ++y)
++                if (g.stdGridReportID->Cells[0][y] == "1") { row = y; break; }
++            Check(row > 0 && g.stdGridReportID->Cells[1][row] == "1" && g.stdGridReportID->Cells[2][row] == "1027" && g.stdGridReportID->Cells[3][row] == "",
++                  "[5] ReportID 1 = Mode 1, {1027} (System Time) (row " + std::to_string(row) + ")");
++            same = SameAsGrid(g, g.stdGridReportID, ownFile[1], why);
++            Check(same, "[5] the saved ReportID file == the grid (" + why + ")");
++        }
++        HGem = savedHGem;
++        CosFunction.bEnable_SECS_GEM = savedEnable;
++    }
++
++    // ---------------------------------------------------------------- end
++    std::printf("[end] the real files\n");
++    for (int i = 0; i < 2; ++i)
++    {
++        const Stamp s = StampOf(kReal[i]);
++        Check(SameStamp(s, before[i]), std::string("[end] real ") + kName[i] + " unchanged (" + StampText(s) + ")");
++    }
++    if (g_fail == 0)
++        for (int i = 0; i < 2; ++i) DeleteFileA(ownFile[i].c_str());
++    std::printf("\nSt02_W189EventReport: %d passed, %d failed\n", g_pass, g_fail);
++    return g_fail == 0 ? 0 : 1;
++}
+diff --git a/tests/test_uHGemEquipment.cpp b/tests/test_uHGemEquipment.cpp
+index 554444cb..bd483091 100644
+--- a/tests/test_uHGemEquipment.cpp
++++ b/tests/test_uHGemEquipment.cpp
+@@ -558,7 +558,7 @@ static void test_read_event_report_data_real_oracle()
+         return;
+     }
+ 
+-    THGem gem;
++    { const char* w189 = getenv("W906_SECSSYSTEM_ROOT"); if (w189 != NULL && *w189 != 0) { ForceDirectories(AnsiString(w189)); CopyFileA(kPath1.c_str(), (AnsiString(w189) + "\\EventReport_CEID.def").c_str(), FALSE); CopyFileA("D:\\HT9045\\SECS\\SECS\\SYSTEM\\EventReport_ReportID.def", (AnsiString(w189) + "\\EventReport_ReportID.def").c_str(), FALSE); } }   THGem gem;   //AI(W906-W189) 20261009 (St02-E): under ctest ReadEventReportData reads W906_SECSSYSTEM_ROOT -- copy the real files there (read-only source) so this oracle still compares the real headers
+     gem.ReadEventReportData();
+ 
+     // Real file's row 0 is the literal column-header text (confirmed via
+@@ -1732,7 +1732,7 @@ static void test_t3_timeout_s9f9_cross_class_seam()
+     if (tx.size() >= 14)
+         CHECK((unsigned char)tx[6] == 0x09 && (unsigned char)tx[7] == 0x09, "T7: reply header is S9F9 (Transaction Timer Timeout)");
+     std::string body(tx.begin() + 14, tx.end());
+-    CHECK(body.find("T3   time out") != std::string::npos, "T7: S9F9 payload carries the \"T3   time out\" text");
++    CHECK(tx.size() == 26 && (unsigned char)body[0] == 0x21 && (unsigned char)body[1] == 10 && hgem.WireCodec.LogDataString->IndexOf(expected + "    T3   time out") != -1, "T7: S9F9 body is <B[10]> (golden 913 SendS9FxEchoHeader, AI(W906-W187) 20261009; 0618 sent the text); the \"T3   time out\" text is a log line");
+ 
+     HSys.MyGem = NULL;
+ }
+@@ -2333,7 +2333,7 @@ static void test_w906_sysmodwire_w7_flag_latch_movecheckcallback()
+     // incoming S1,F3 frame below carries NO data-item body (10-byte HSMS
+     // header only), so real S1F4 hits its own `GetDataItemLenAndType(...)!=1`
+     // golden `else` branch and replies with a genuine S9F7 "S1,F3 data format
+-    // error" frame (verified byte-for-byte: 39 bytes = 4-byte length prefix +
++    // error" frame (verified byte-for-byte: 39 bytes = 4-byte length prefix +  [STALE 20261009 W-187: golden 913 S9Fx body is <B[10]> -> 26 bytes, see the CHECK below]
+     // 10-byte header (S,F=9,7) + 1-byte format/length (0x41,0x17=ASCII,len 23)
+     // + the 23-byte ASCII string "S1,F3 data format error") -- CheckSFCodeResponse
+     // (called unconditionally earlier in the tail, BEFORE S1F4 runs) still
+@@ -2356,7 +2356,7 @@ static void test_w906_sysmodwire_w7_flag_latch_movecheckcallback()
+         try { g.ProcessSocketReceiveData(); } catch (...) { threw = true; }
+         CHECK(threw == false, "W7: MoveCheckCallBack()==0 path does not throw");
+         const std::vector<char> &tx1f4 = conn->SimTxBuffer();
+-        CHECK(tx1f4.size() == 39, "W7: MoveCheckCallBack()==0 lets the chain through to now-real S1F4, which replies with a 39-byte S9F7 format-error frame (empty-body S1,F3 has no SVID list)");
++        CHECK(tx1f4.size() == 26 && (unsigned char)tx1f4[14] == 0x21 && (unsigned char)tx1f4[15] == 10 && std::memcmp(tx1f4.data() + 16, frame + 4, 10) == 0, "W7: MoveCheckCallBack()==0 lets the chain through to now-real S1F4, which replies with a 26-byte S9F7 frame, body <B[10]> = the S1,F3 header received (golden 913 SendS9FxEchoHeader, AI(W906-W187) 20261009; 0618: 39 bytes, <A> text) (empty-body S1,F3 has no SVID list)");
+         CHECK((unsigned char)tx1f4[6] == 9 && (unsigned char)tx1f4[7] == 7, "W7: reply S,F == 9,7 (S9F7, not S1F4 -- the empty-body request itself is malformed)");
+         CHECK(g.SFCodeResponseList->Items->Count == 0, "W7: CheckSFCodeResponse (called before S1F4 runs) consumed the pre-seeded \"1 3 7\" record -- the pump reached this message");
+ 
+-- 
+2.55.0.windows.5
+
