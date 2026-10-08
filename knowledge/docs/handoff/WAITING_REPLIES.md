@@ -193,3 +193,4 @@
 | W-179 | Ifor-GPT（經 Ifor01 代推） | 📋 MR !343（IG-3／IG-4）的新測試補反向驗證（RULINGS_20261003 第 15 條，不擋合併） | 20261008 17:1x | TO_IFORGPT §4 17:1x | `v906/iforgpt-handoff`（FROM_IFORGPT） | — | 0 | ✅ 關（16:33 交件時就附了反向驗證，筆電漏讀；18:4x） |
 | W-180 | Ifor-GPT（經 Ifor01 代推） | 📋 IG-5（`ainarm9045.cpp` AddLoadingCount 四個閘＋ProcessSCKARTLoadingCount 第 200 步）、IG-6（RotateKit `M_DoIn／OutArmRotateKIT_Motor`）執行期測試，附反向驗證 | 20261008 18:4x | TO_IFORGPT §4 18:4x | `v906/iforgpt-handoff`（FROM_IFORGPT） | — | 0 | 等認領 |
 | W-181 | ES02 | 📋 W-161 新的 `tools/webprobe/w161_wirebar_selftest.cjs` 補反向驗證（RULINGS_20261003 第 15 條，不擋合併） | 20261008 18:5x | TO_ES02 §4 18:5x | FROM_ES02（`v906/es02-handoff`） | — | 0 | 等回 |
+| W-182 | 機台端（MC01／EastSun）＋St01 | 📋 cpp 0331 PROBECYL9050：新的 `Flow9050_Tray` [PC] 3 項在模擬組態紅（第 1126／1131／1137 行），修好再送（同時抄 St01） | 20261008 20:5x | TO_ES02 §4 20:5x／TO_STEVEN §4 20:5x | GitHub `machine/integ-ioweb`（cpp 0333 起） | — | 0 | 等機台（0331 沒進 main） |
