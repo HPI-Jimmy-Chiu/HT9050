@@ -2362,4 +2362,5 @@ tools 0182 (20261009): HTML designer merged with laptop package 208 (0.312.0 -> 
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 - 03:00 交件完成：cpp 0335～0341（0335 SAYTHROTTLE、0336 PKG204＝第 173～204 包、0337～0340 PKG205～PKG208＝機台已套到第 208 包、0341 WIP＝EastSun 未 commit 的 acatchtray／asendic_Loader／cinitial，只保存不整合；PadInterface_St02.cpp 的 SafeLock 那行不交）；web 0141（PKG204 網頁半）。04:00 只需要套第 209 包以後。
 tools 0183 (20261009): HTML designer merged with laptop package 210 (0.315.0 -> 0.317.0). Install: tools/vscode-htdesigner pack.ps1 then code --install-extension.
+- 04:15 全面更新：第 173～210 包完成（173～204 在 10-08 22:4x＝cpp 0336、205～208＝cpp 0337～0340、209～210＝cpp 0342 PKG210）。Debug 整包＋ctest 431/446（15 個失敗＝已知清單，跟 10-08 晚上一樣）、release wb_serve 建好；沒有啟動／重啟 wb_serve、沒按 F5、沒 HOME、沒動機台、沒改機台設定檔。cpp 0341 WIP 只保存。
 MD5 清單在 MANIFEST_MD5.tsv。
