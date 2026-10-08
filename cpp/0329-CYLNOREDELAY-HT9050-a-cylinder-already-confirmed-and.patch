@@ -1,0 +1,257 @@
+From 691374b1f3fd707fae8c9631bec74dabab3b223b Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Thu, 8 Oct 2026 16:40:49 +0800
+Subject: [PATCH] =?UTF-8?q?CYLNOREDELAY:=20HT9050=20--=20a=20cylinder=20al?=
+ =?UTF-8?q?ready=20confirmed=20and=20still=20on=20its=20sensor=20answers?=
+ =?UTF-8?q?=20Push=20/=20Pop=20at=20once=20--=20EastSun=201008=20'?=
+ =?UTF-8?q?=E7=9B=AE=E5=89=8D=E7=9A=84=E7=8B=80=E6=B3=81=E6=98=AF=E7=AD=89?=
+ =?UTF-8?q?=E5=BE=85=E5=A4=AA=E4=B9=85=EF=BC=8C=E8=8B=A5=E5=90=8C=E4=B8=80?=
+ =?UTF-8?q?=E5=80=8B=E5=88=A4=E6=96=B7=E5=BC=8F=E5=B0=8E=E8=87=B4=E6=AF=8F?=
+ =?UTF-8?q?=E6=AC=A1=E5=91=BC=E5=8F=AB=E9=83=BD=E8=A6=81=E7=AD=89=E5=BE=85?=
+ =?UTF-8?q?=E7=A2=BA=E8=AA=8D=E7=9A=84=E6=99=82=E9=96=93=EF=BC=8C=E6=9C=89?=
+ =?UTF-8?q?=E4=BB=80=E9=BA=BC=E8=BE=A6=E6=B3=95=E5=8F=AF=E4=BB=A5=E8=A7=A3?=
+ =?UTF-8?q?=E6=B1=BA'=20->=20B=20(change=20the=20cylinder,=20HT9050=20only?=
+ =?UTF-8?q?).?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Measured (oplog_20261008): MEmptyZ stop -> next move, 78 gaps, min 1015 ms / median 1594 ms = C_Empty_Up OnDelayTime 10, served again on every scan of `A.Pop() && B.Pop() && Select.Pop() && C_Empty_Up.Push()` because golden Push / Pop end with Task=1.
+
+mycylin.cpp (same-line additions + an EOF block; no line moves, no class layout change): a completed Push / Pop marks the Cylinder[] slot confirmed on / off; OnSwitch / OffSwitch (On, Push / Off, Pop) clear the opposite mark; while marked and the cylinder HAS that sensor and it still reads in position, Push / Pop return true at once. No sensor, sensor dropped, raw On(), other machines = golden. Armed by g_W906CylNoReDelayHook, set in JsonBridge/W906DualCoil9050.cpp's registrar (HT9050 test as the paired coil hook).
+
+tests/test_dualcoil9050.cpp [6]: first Push 313 ms, again at once; sensor lost -> not in position; back -> settles once (312 ms) then at once; Pop the same; raw On waits; no On sensor waits; not HT9050 waits (control). 35/35.
+ctest (build_integ_dbg_x86, 24 cylinder / HT9050 tests): 21 pass; MotorPoints_HT9050 / MachineSuckers_HT9050 / MachineMotors_HT9050 fail on table values pinned before today's Mot_Table / IO_Table edits (home speeds, sucker addresses) -- no cylinder code involved.
+---
+ JsonBridge/W906DualCoil9050.cpp |  6 +++-
+ mycylin.cpp                     | 42 ++++++++++++++++------
+ tests/test_dualcoil9050.cpp     | 63 +++++++++++++++++++++++++++++++++
+ 3 files changed, 100 insertions(+), 11 deletions(-)
+
+diff --git a/JsonBridge/W906DualCoil9050.cpp b/JsonBridge/W906DualCoil9050.cpp
+index 1169303..41c0012 100644
+--- a/JsonBridge/W906DualCoil9050.cpp
++++ b/JsonBridge/W906DualCoil9050.cpp
+@@ -31,6 +31,7 @@
+ 
+ extern AnsiString W906_GpibModel;                                 // database.cpp
+ extern void (*g_W906PairedCoilHook)(const AnsiString&, bool);     // mycylin.cpp
++extern bool (*g_W906CylNoReDelayHook)();                          // mycylin.cpp (AI(W906-CYLNOREDELAY) 20261008)
+ 
+ namespace {
+ std::map<std::string, bool> s_w906PairOwnedByEngine;              // "<name>Off" -> is an engine Cylinder[] (names are fixed after init)
+@@ -60,5 +61,8 @@ void W906_PairedCoilHookFn(const AnsiString& name, bool energise)
+ }
+ // Installed at static init by whoever compiles this file in directly (wb_serve, tests/test_dualcoil9050.cpp -- an executable's own
+ // source, not an archive member, so the linker cannot drop it), same as IoBtnPanelClick.cpp's UPCYLOFF registrar.
+-struct W906DualCoilReg { W906DualCoilReg() { g_W906PairedCoilHook = &W906_PairedCoilHookFn; } } s_w906DualCoilReg;
++//AI(W906-CYLNOREDELAY) 20261008: the same registrar arms mycylin.cpp's "no second on / off delay for a cylinder already confirmed
++//  and still on its sensor" (EastSun 1008, B) -- HT9050 only, decided like the paired coil hook above.
++bool W906_CylNoReDelay9050() { return W906_GpibModel == "9050GPIB" || MachineTypeChoice == Type_HT9050; }
++struct W906DualCoilReg { W906DualCoilReg() { g_W906PairedCoilHook = &W906_PairedCoilHookFn; g_W906CylNoReDelayHook = &W906_CylNoReDelay9050; } } s_w906DualCoilReg;
+ }  // namespace
+diff --git a/mycylin.cpp b/mycylin.cpp
+index 3fb62e0..def1f24 100644
+--- a/mycylin.cpp
++++ b/mycylin.cpp
+@@ -258,7 +258,7 @@ bool TMyCylinder::OffStatus()
+ }
+ //---------------------------------------------------------------------------
+ void TMyCylinder::OnSwitch()                                                    //Steven 20230721 : unified On/Off switch control
+-{
++{   { extern void W906_CylUnmark(const TMyCylinder*, bool); W906_CylUnmark(this, false); }   /* AI(W906-CYLNOREDELAY) 20261008: On / Push -- no longer confirmed off (EOF) */
+     if(Enable)
+     {   { extern void (*g_W906PairedCoilHook)(const AnsiString&, bool); if(g_W906PairedCoilHook) g_W906PairedCoilHook(CylinderName, false); }   /* AI(W906-DUALCOIL9050) 20261008: HT9050 five-port three-position valve -- Push / On first releases the "<name>Off" coil (EOF) */
+         if(OutType==TYPE_A)
+@@ -300,7 +300,7 @@ void TMyCylinder::OnSwitch()
+ }
+ //---------------------------------------------------------------------------
+ void TMyCylinder::OffSwitch()                                                   //Steven 20230721 : unified On/Off switch control
+-{
++{   { extern void W906_CylUnmark(const TMyCylinder*, bool); W906_CylUnmark(this, true); }   /* AI(W906-CYLNOREDELAY) 20261008: Off / Pop -- no longer confirmed on (EOF) */
+     if(Enable)
+     {
+         if(OutType==TYPE_B)
+@@ -366,7 +366,7 @@ bool TMyCylinder::Push()
+     bool InRet;
+     Change=true;
+     int &Task=OnTask;
+-    OnSwitch();
++    OnSwitch();  { extern bool W906_CylConfirmed(TMyCylinder*, bool); if(Task==1 && W906_CylConfirmed(this, true)) { Status=true; bCylinderOn=true; OnTryTask=0; return true; } }   /* AI(W906-CYLNOREDELAY) 20261008: HT9050 -- already confirmed on, its On sensor still on: no second on delay (EOF) */
+ 
+     if(Task==1 || Task==2)
+     {
+@@ -475,7 +475,7 @@ bool TMyCylinder::Push()
+                     Status=true;
+                     ClearAlarm(OnAlarmCode);
+                     OnTryTask=0;
+-                    bCylinderOn=true;
++                    bCylinderOn=true;  { extern void W906_CylMark(const TMyCylinder*, bool); W906_CylMark(this, true); }   /* AI(W906-CYLNOREDELAY) 20261008: confirmed on (EOF) */
+                     AddOnCount(true);                                           //Eastsun 20260521 integrate //Sam 20230516 : Pre Alarm Cylinder
+                     return true;
+                 }
+@@ -491,7 +491,7 @@ bool TMyCylinder::Push()
+                     ClearAlarm(OnAlarmCode);
+                     Task=1;
+                     OnTryTask=0;
+-                    bCylinderOn=true;
++                    bCylinderOn=true;  { extern void W906_CylMark(const TMyCylinder*, bool); W906_CylMark(this, true); }   /* AI(W906-CYLNOREDELAY) 20261008: confirmed on (EOF) */
+                     AddOnCount(true);                                           //Eastsun 20260521 integrate //Sam 20230516 : Pre Alarm Cylinder
+                     UpdateSimulateCompomentPosition();
+                     return true;
+@@ -505,7 +505,7 @@ bool TMyCylinder::Push()
+     ClearAlarm(OnAlarmCode);
+     Task=1;
+     OnTryTask=0;
+-    bCylinderOn=true;
++    bCylinderOn=true;  { extern void W906_CylMark(const TMyCylinder*, bool); W906_CylMark(this, true); }   /* AI(W906-CYLNOREDELAY) 20261008: confirmed on (EOF) */
+     UpdateSimulateCompomentPosition();
+     return true;
+ }
+@@ -515,7 +515,7 @@ bool TMyCylinder::Pop()
+     bool InRet;
+     Change=false;
+     int &Task=OffTask;
+-    OffSwitch();
++    OffSwitch();  { extern bool W906_CylConfirmed(TMyCylinder*, bool); if(Task==1 && W906_CylConfirmed(this, false)) { Status=false; bCylinderOn=false; OffTryTask=0; return true; } }   /* AI(W906-CYLNOREDELAY) 20261008: HT9050 -- already confirmed off, its Off sensor still on: no second off delay (EOF) */
+ 
+     if(Task==1 || Task==2)
+     {
+@@ -624,7 +624,7 @@ bool TMyCylinder::Pop()
+                     ClearAlarm(OffAlarmCode);
+                     Task=1;
+                     OffTryTask=0;
+-                    bCylinderOn=false;
++                    bCylinderOn=false;  { extern void W906_CylMark(const TMyCylinder*, bool); W906_CylMark(this, false); }   /* AI(W906-CYLNOREDELAY) 20261008: confirmed off (EOF) */
+                     return true;
+                 }
+                 else
+@@ -638,7 +638,7 @@ bool TMyCylinder::Pop()
+                     Task=1;
+                     Status=false;
+                     ClearAlarm(OffAlarmCode);
+-                    bCylinderOn=false;
++                    bCylinderOn=false;  { extern void W906_CylMark(const TMyCylinder*, bool); W906_CylMark(this, false); }   /* AI(W906-CYLNOREDELAY) 20261008: confirmed off (EOF) */
+                     UpdateSimulateCompomentPosition();
+                     OffTryTask=0;
+                     return true;
+@@ -653,7 +653,7 @@ bool TMyCylinder::Pop()
+     ClearAlarm(OffAlarmCode);
+     Task=1;
+     OffTryTask=0;
+-    bCylinderOn=false;
++    bCylinderOn=false;  { extern void W906_CylMark(const TMyCylinder*, bool); W906_CylMark(this, false); }   /* AI(W906-CYLNOREDELAY) 20261008: confirmed off (EOF) */
+     UpdateSimulateCompomentPosition();
+     return true;
+ }
+@@ -895,3 +895,25 @@ int W906_CylinderRowsShown()
+ //  0 = nothing (ctests, other machines' builds without the bridge). The hook itself decides HT9050 and whether "<name>Off" exists.
+ void (*g_W906PairedCoilHook)(const AnsiString&, bool) = 0;
+ //---------------------------------------------------------------------------
++//AI(W906-CYLNOREDELAY) 20261008: EastSun 1008「目前的狀況是等待太久，若同一個判斷式導致每次呼叫都要等待確認的時間，有什麼辦法可以解決」
++//  -> B (AskUserQuestion: change the cylinder, HT9050 only). golden Push / Pop end with Task=1 after their on / off delay, so the
++//  next call -- every scan of a step like `A.Pop() && B.Pop() && C_Empty_Up.Push()` -- serves the whole delay again although
++//  nothing moved: measured 1008 MEmptyZ, 78 stop -> next move gaps, min 1015 ms / median 1594 ms (C_Empty_Up OnDelayTime 10).
++//  Here a Push / Pop that completed marks the cylinder "confirmed on / off"; the opposite command (OnSwitch / OffSwitch, i.e.
++//  On / Push / Off / Pop) clears the other mark. While marked, a Push / Pop returns true at once -- only when the cylinder HAS
++//  that sensor and it still reads in position (a cylinder that drifted or lost air takes golden's path: wait, alarm); a
++//  cylinder without the sensor keeps golden's delay (nothing proves it is still there). Only Cylinder[] members (an index,
++//  no class layout change -- mycylin.h is in ~every object); g_W906CylNoReDelayHook = 0 (other machines, ctests) = golden.
++bool (*g_W906CylNoReDelayHook)() = 0;
++static unsigned char s_w906CylOk[MaxCylinderItem];                              // bit 0 = confirmed on (Push), bit 1 = confirmed off (Pop)
++static int W906_CylIdx(const TMyCylinder* c) { const int i = (int)(c - &Cylinder[0]); return (i >= 0 && i < MaxCylinderItem) ? i : -1; }
++void W906_CylMark(const TMyCylinder* c, bool on)   { const int i = W906_CylIdx(c); if (i >= 0) s_w906CylOk[i] = (unsigned char)(s_w906CylOk[i] | (on ? 1 : 2)); }
++void W906_CylUnmark(const TMyCylinder* c, bool on) { const int i = W906_CylIdx(c); if (i >= 0) s_w906CylOk[i] = (unsigned char)(s_w906CylOk[i] & ~(on ? 1 : 2)); }
++bool W906_CylConfirmed(TMyCylinder* c, bool on)
++{
++    if (!g_W906CylNoReDelayHook || !g_W906CylNoReDelayHook()) return false;
++    const int i = W906_CylIdx(c);
++    if (i < 0 || !c->Enable || !(s_w906CylOk[i] & (on ? 1 : 2))) return false;
++    return on ? (c->OnSenEnable && c->OnStatus()) : (c->OffSenEnable && c->OffStatus());
++}
++//---------------------------------------------------------------------------
+diff --git a/tests/test_dualcoil9050.cpp b/tests/test_dualcoil9050.cpp
+index 198269c..c1b0038 100644
+--- a/tests/test_dualcoil9050.cpp
++++ b/tests/test_dualcoil9050.cpp
+@@ -11,7 +11,12 @@
+ //  [3] not HT9050 -> the Off coil is never written (golden)
+ //  [4] no write when the "<name>Off" row is Enable=0, is not IOType "Cylinder", or is itself an engine Cylinder[]
+ //  [5] a disabled cylinder writes neither coil
++//  [6] AI(W906-CYLNOREDELAY) 20261008 (EastSun 1008, B): HT9050 -- a Push / Pop already confirmed, its sensor still on, returns true
++//      at once (no second on / off delay); a dropped sensor, the opposite command, a raw On(), a cylinder without that sensor and
++//      other machines all keep golden's delay
+ // =============================================================================
++#include <windows.h>
++#include <map>
+ #include <cstdio>
+ #include <string>
+ #include <vector>
+@@ -132,6 +137,64 @@ int main()
+     Cylinder[C_LoaderEdgePush].Pop();
+     CHECK(Bit(1, 1) == true); CHECK(Bit(0, 0) == false);
+ 
++    std::printf("[6] HT9050: no second on / off delay for a cylinder already confirmed and still on its sensor\n");
++    {
++        extern bool (*g_W906CylNoReDelayHook)();
++        CHECK(g_W906CylNoReDelayHook != 0);                             // registered by W906DualCoil9050.cpp
++        struct InBackend : TIOBackend {                                 // the two sensor inputs, set by the test
++            std::map<int, int> in;
++            int ReadBit(int, int, int Port, int Bit, unsigned char* Value) override { if (Value) *Value = (unsigned char)in[Port * 100 + Bit]; return 0; }
++        };
++        InBackend& io = *new InBackend;                                 // kept to the end of the test (SetBackend(0) is ignored)
++        MyLaneIO.SetBackend(&io);
++        const int UP = 20 * 100 + 0, DOWN = 21 * 100 + 1;
++        TMyCylinder& y = Cylinder[C_Auto1_Up];
++        SetupCyl(C_Auto1_Up, "C_W906TestLift", 9, 1);                   // no "<name>Off" row: no paired coil
++        y.OnSenEnable = true;  y.OnSenISABase = ePCI1203;  y.OnSenRing = kLane;  y.OnSenIP = kIP;  y.OnSenPort = 20; y.OnSenBit = 0; y.OnSenType = TYPE_A;
++        y.OffSenEnable = true; y.OffSenISABase = ePCI1203; y.OffSenRing = kLane; y.OffSenIP = kIP; y.OffSenPort = 21; y.OffSenBit = 1; y.OffSenType = TYPE_A;
++        y.OnAlarmTime = 50; y.OffAlarmTime = 50; y.OnDelayTime = 3; y.OffDelayTime = 3;   // 0.3 s settle each way
++        auto ms = [](bool (TMyCylinder::*f)(), TMyCylinder& c) { const DWORD t0 = ::GetTickCount(); int n = 0; while (!(c.*f)() && n++ < 400) ::Sleep(5); return (int)(::GetTickCount() - t0); };
++        auto firstCall = [](bool (TMyCylinder::*f)(), TMyCylinder& c) { return (c.*f)(); };
++        W906_GpibModel = "9050GPIB";
++        io.in[UP] = 1; io.in[DOWN] = 0;
++        const int t1 = ms(&TMyCylinder::Push, y);                       // first Push: golden's 0.3 s
++        const bool f2 = firstCall(&TMyCylinder::Push, y);               // again: at once
++        const bool f3 = firstCall(&TMyCylinder::Push, y);
++        io.in[UP] = 0;
++        const bool fDrop = firstCall(&TMyCylinder::Push, y);            // sensor lost: golden's path (waits)
++        io.in[UP] = 1;
++        const int tBack = ms(&TMyCylinder::Push, y);                    // back on: the settle again
++        const bool fAfterBack = firstCall(&TMyCylinder::Push, y);
++        io.in[UP] = 0; io.in[DOWN] = 1;
++        const int tPop1 = ms(&TMyCylinder::Pop, y);                     // Pop: 0.3 s, and it clears "confirmed on"
++        const bool fPop2 = firstCall(&TMyCylinder::Pop, y);             // Pop again: at once
++        y.On();                                                         // raw On (no confirmation)
++        io.in[UP] = 1; io.in[DOWN] = 0;
++        const bool fAfterRawOn = firstCall(&TMyCylinder::Push, y);      // not confirmed: waits
++        const int tAfterRawOn = ms(&TMyCylinder::Push, y);
++        y.OnSenEnable = false;                                          // no On sensor: nothing proves it is still up
++        const int tNoSen1 = ms(&TMyCylinder::Push, y);
++        const bool fNoSen2 = firstCall(&TMyCylinder::Push, y);
++        y.OnSenEnable = true;
++        W906_GpibModel = "";                                            // other machines: golden
++        const int savedType2 = MachineTypeChoice;
++        if (MachineTypeChoice == Type_HT9050) MachineTypeChoice = 0;
++        ms(&TMyCylinder::Push, y);
++        const bool fGolden2 = firstCall(&TMyCylinder::Push, y);
++        MachineTypeChoice = savedType2;
++        W906_GpibModel = "9050GPIB";
++        std::printf("    first Push %d ms, again %d/%d, sensor lost %d, back %d ms then %d, Pop %d ms then %d, after raw On %d (%d ms), no sensor 2nd %d, golden 2nd %d\n",
++                    t1, f2, f3, fDrop, tBack, fAfterBack, tPop1, fPop2, fAfterRawOn, tAfterRawOn, fNoSen2, fGolden2);
++        CHECK(t1 >= 250);                   // the first settle is golden's
++        CHECK(f2 && f3);                    // confirmed + sensor on: no second delay
++        CHECK(!fDrop);                      // the sensor dropped: not "in position"
++        CHECK(tBack >= 250 && fAfterBack);  // back: settled again once, then at once
++        CHECK(tPop1 >= 250 && fPop2);       // the other way round, the same
++        CHECK(!fAfterRawOn && tAfterRawOn >= 200);   // a raw On() confirms nothing
++        CHECK(tNoSen1 >= 0 && !fNoSen2);    // without the On sensor every Push keeps the delay
++        CHECK(!fGolden2);                   // not HT9050: golden, the delay every time
++    }
++
+     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
+     std::printf(g_fail ? "FAIL\n" : "ALL PASS\n");
+     return g_fail ? 1 : 0;
+-- 
+2.55.0.windows.5
+
