@@ -183,3 +183,4 @@
 | W-169 | NB2-1 | 📋 W-157 定案的實作：執行中關 Contact 頁照 golden、F5／重整／斷線不呼叫 FormClose＋重載讀回狀態＋前端擋 F5，附測試＋反向驗證，MR | 20261008 08:1x | CHAT_JIMMY 08:1x | `v906/nb2-assist`（NOW.md） | — | 0 | 已認領（NB2-1 R266，`v906/nb2-w169-contactclose`）；跟 W-156 同家族檔 ⇒ W-156 先進 main，W-169 在其上重產 gen.inc（09:3x 轉告） |
 | W-170 | NB2-1 | 📋 R265＝A：ResetCleanCount 空殼轉呼叫 C 路本體（golden uCleaning.cpp:2095-2117）＋4 個呼叫點（csystem G01a／G01b、Command.cpp HTSR 469、cShowBinSelect B5），附測試＋反向驗證，MR；排在 W-169 之後 | 20261008 08:3x | CHAT_JIMMY 08:3x | `v906/nb2-assist`（NOW.md） | — | 0 | 等認領（W-169 之後） |
 | W-171 | ES02 | 📋 機台 tools 0171（Debug／Release 鈕跟 F5 連動）併進下一版 htdesigner（跟 !310 同一件事，行為以機台為準） | 20261008 08:5x | TO_ES02 §4 08:5x | `v906/es02-htdesigner`（FROM_ES02） | — | 0 | 等認領 |
+| W-172 | Ifor-GPT（經 Ifor01 代推） | 📋 正式卡 IG-3（IG-2 的加熱執行期測試搬到最新 main）、IG-4（`cprod.cpp` 6 個閘的執行期測試）；只新增測試，附反向驗證 | 20261008 10:2x | TO_IFORGPT §4 10:2x | `v906/iforgpt-handoff`（FROM_IFORGPT） | — | 0 | 等認領 |
