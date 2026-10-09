@@ -1,0 +1,690 @@
+From b743b632657b0d00e464a9c6d5e2370651748903 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 9 Oct 2026 18:25:20 +0800
+Subject: [PATCH] PKG227: integrate laptop package 227 (GitLab fb6cc6f7) --
+ St02 T08 HANA recipe check wired to HANARMSRunCheckOK(true) as golden 913 (MR
+ !387; HANA with A77 only) + K1 START-refusal reason no longer overwritten by
+ later N06 actions (MR !388; N06 switch only) + Ifor-GPT IG-6 RotateKit
+ runtime test (tests only). HT9050 behaviour unchanged. Auto-accepted
+ (scheduled check).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ Interface/TesterTCP_N06_St02.cpp         |  11 +-
+ atester.cpp                              |   4 +-
+ docs/MACHINE_PATCHES_20261009.md         |   8 +
+ docs/NIGHT_REPORT.md                     |   7 +-
+ docs/ST02_GOLDEN906_AUDIT.md             |   4 +-
+ docs/TESTERCOMM_PORT_LEDGER.md           |   6 +-
+ docs/WORKLOG_MACHINE.md                  |   1 +
+ tests/CMakeLists.txt                     |  15 +
+ tests/test_c10_hana_rms.cpp              |  35 +-
+ tests/test_iforgpt_rotatekit_runtime.cpp | 388 +++++++++++++++++++++++
+ tests/test_st02_w195_n06.cpp             |   6 +
+ 11 files changed, 468 insertions(+), 17 deletions(-)
+ create mode 100644 tests/test_iforgpt_rotatekit_runtime.cpp
+
+diff --git a/Interface/TesterTCP_N06_St02.cpp b/Interface/TesterTCP_N06_St02.cpp
+index 7618bdda..a7007f7b 100644
+--- a/Interface/TesterTCP_N06_St02.cpp
++++ b/Interface/TesterTCP_N06_St02.cpp
+@@ -410,8 +410,10 @@ bool TesterTCP_CopyRecipeFromTester(AnsiString FileName)
+ //  refused (W906_N06RecipeSyncBlocked) until a successful re-change, and a bilingual alarm (answer 6 = A, Steven's text) names
+ //  the reason (the N06000002 event-log line is LogN06Result's, unchanged).
+ //===========================================================================
+-// [W906] 4: the file of the failed change, for the START refusal's text
++// [W906] 4: the file and the reason of the failed change, for the START refusal's text.  The reason is kept here because
++//   s_sN06LastReason follows every later LogN06Result (e.g. a CopyRecipeFromTester upload) -- AI(W906-W195) 20261009 K1 fix.
+ static AnsiString s_sN06BlockedFile;
++static AnsiString s_sN06BlockedReason;
+ 
+ bool W906_N06SyncRecipeOrBlock(AnsiString FileName)
+ {
+@@ -429,8 +431,9 @@ bool W906_N06SyncRecipeOrBlock(AnsiString FileName)
+     }
+     s_bN06Blocked=true;
+     s_sN06BlockedFile=FileName;
++    s_sN06BlockedReason=s_sN06LastReason;
+     // Steven 1009 answer 6 = A (his text); "Append 7z's last error line when there is one"
+-    const AnsiString sCode = s_sN06LastReason;
++    const AnsiString sCode = s_sN06BlockedReason;
+     AnsiString sS1 = "N06 recipe sync to OS Tester FAILED: " + sCode + " -- " + FileName +
+                      ". Fix it and change the recipe again. START is blocked until then.";
+     AnsiString sS2 = "OS 測試機工作檔同步失敗：" + N06PlainReason(sCode) + "（" + sCode + "，" + FileName +
+@@ -456,9 +459,9 @@ bool W906_N06CheckStartAllowed()
+ {
+     if(W906_N06RecipeSyncBlocked()==false)
+         return true;
+-    ShowMyMessage("START refused: the last N06 recipe sync to OS Tester FAILED: " + s_sN06LastReason + " -- " + s_sN06BlockedFile +
++    ShowMyMessage("START refused: the last N06 recipe sync to OS Tester FAILED: " + s_sN06BlockedReason + " -- " + s_sN06BlockedFile +
+                   ". Fix it and change the recipe again.",
+-                  "不能按 START：上一次 OS 測試機工作檔同步失敗：" + N06PlainReason(s_sN06LastReason) + "（" + s_sN06LastReason + "，" +
++                  "不能按 START：上一次 OS 測試機工作檔同步失敗：" + N06PlainReason(s_sN06BlockedReason) + "（" + s_sN06BlockedReason + "，" +
+                   s_sN06BlockedFile + "）。請排除後重新換工作檔。",
+                   "W906_N06CheckStartAllowed");
+     return false;
+diff --git a/atester.cpp b/atester.cpp
+index d646dc8b..1e4ac778 100644
+--- a/atester.cpp
++++ b/atester.cpp
+@@ -1477,11 +1477,11 @@ bool GetTesterResult(int Type)
+                     break;
+             }
+ 
+-#if 0 // TODO(W906-GB-P2b): T08 TfAutomationShim (atester_shims.h:313-333) has no HANARMSRunCheckOK -- golden atester.cpp:1396
++#if 1 // was: #if 0 -- opened AI(W906-W202) 20261009 (St02-E): T08 -- the stated reason is STALE: TfAutomationShim : THanaRmsMembers has had HANARMSRunCheckOK since C10 / W-195 H3 (atester_shims.h:313, Automation/HanaRms_St02.cpp:978); golden 913 atester.cpp:1397
+             if(fAutomation && fAutomation->HANARMSRunCheckOK(true)==false)      //RogerYang 20260902 : A76 HANA RMS recipe 互鎖
+ #else
+             if(fAutomation && (CUSTOMER_CODE==CC_HANA_MICRON && IniConfig.bA77_EnableHanaRMSInterlock==true && LastSet.iRunStartMode!=rsmAutoSiteMap))   //AI(W906-GB-P2b) 20260926: golden 912 atester.cpp:1396-1398 (added in 912); T08 -- golden early-out (Automation/automation.cpp:3139-3142) kept: true on every non-A77-HANA machine; on an A77 HANA machine the recipe check cannot run -> FAIL (break)
+-#endif // T08
++#endif // T08 -- opened by W-202: the #else approximation above is dead (golden has none)
+                 break;
+ 
+             Task=50;
+diff --git a/docs/MACHINE_PATCHES_20261009.md b/docs/MACHINE_PATCHES_20261009.md
+index 4d7710fb..bd2e78e5 100644
+--- a/docs/MACHINE_PATCHES_20261009.md
++++ b/docs/MACHINE_PATCHES_20261009.md
+@@ -102,3 +102,11 @@
+ - **tools 0188**：機台的設計外掛線合第 224 包（0.345 → 0.347），筆電不收。
+ - **快照 16:02**（main `e72694be`）：只有兩個說明檔的拍照時間變了，沒有參數或工單變更。
+ - **鏈尾**：C++ `7a402f24`（0354）→ `110eb661`（0355）→ **`66b67a82`**（0356）。下一次從 **cpp 0357／web 0142／tools 0189** 開始。
++- （17:1x 補記）**cpp 0354／0356 進 main**：第 143 批 `1dd66de4`＝第 226 包（GitHub `762b3fb5`）。
++
++## 15. 17:0x cpp 0357 PKG225（只接鏈）、web 0142 IOFIT（機台自己的網頁改動，收）；快照 17:01／17:02
++
++- **cpp 0357 PKG225**：機台把筆電第 225 包合進去——只接鏈；`pkg_uptake.py`：機台套到第 225 包。
++- **web 0142 IOFIT**（17:00，EastSun 1009「這個畫面右邊的空位太大可否變成第二張圖這樣」）：IO 檢查／驗證的全螢幕層只跟頁面一樣寬（`MODAL_POLICY` io 加 fitWidth），只改 `web/background.html` 19 行——排第 145 批，照 web 0140 的慣例 `git am --directory=web`。
++- **快照 17:01／17:02**（main `72a594fd`）：`Gerneral.ini` [IndexDriver] 多了 **`HT9050_INDEXZ_TORQUE_CONFIRMED=1`**（EastSun E-10 量測後確認 1203 扭力來源）——真的參數變更 ⇒ 同一輪 CHAT_JIMMY 叮嚀全體；其餘是執行紀錄。
++- **鏈尾**：C++ `66b67a82`（0356）→ **`74457544`**（0357）。下一次從 **cpp 0358／web 0143／tools 0189** 開始。
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index 0678a1ec..292c63e8 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -1,10 +1,10 @@
+-# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 16:4x）
++# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 17:2x）
+ 
+ ## ☀ 10/08 早上先看這裡（04:3x 起草；之後的進度往這張表加）
+ 
+ | 項目 | 一句話 |
+ |---|---|
+-| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～142 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate；第 140 批拿掉當掉的 IG-6 後才綠），出了**第 181～225 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
++| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～143 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate；第 140 批拿掉當掉的 IG-6 後才綠），出了**第 181～226 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
+ | **模擬組態** | St02 W-149 做完：模擬版的固定失敗從 7 支降到 4 支，跟出貨一樣——之後模擬版多紅一支就是真回歸。 |
+ | **機台修的事（重點）** | 0307 主控台非同步（START 卡 103 秒＋EMG 誤報的根因）、0309／0310／0312／0316 HT9050 Tray 流程（站序、Empty→Auto 補盤、位置不加 6800、Loader 探測看抽屜感測）、0311／0317 上升氣缸雙線圈、0313 出料手臂讓位點（00:19 MOutArmX 警報）、0314 CCD Y 原點判斷、**0315 HT9050 先跳過 Index 扭力讀取**（旗標預設開，扭力讀取驗證後要關）。 |
+ | **軟體極限** | 00:19 的警報是 golden 拿軟體極限（這台 ±999999）算目標。MainNB-GPT 普查（W-164）：只剩 Motor Test 頁的 LightScale 會算出 ±999899——EastSun 0925 R7 已定照 golden，只發提醒。 |
+@@ -103,6 +103,9 @@
+ | **出的包（1009 16:3x）：第 225 包＝第 142 批** | GitLab `5d86796f`／GitHub `5b7f9f56`：St02 的 Qualcomm 低良率檢查改成「每多 N 顆才檢查一次」，照 913，順便修掉 912 那 5 個檢查在按數量模式永遠不跑的問題（只有 Qualcomm 客戶走得到，HT9050 不受影響）。gate b142a：兩組態只有固定 4 支。機台已套到第 224 包。 |
+ | **1009 16:3x：第 143 批開跑；W-192～194 第 2 次追問** | 第 143 批（b19 `784b76c9`）＝機台的兩顆 WORKLOG（0354、0356）＋NB2-1 的 W-188 #4（!386：前／後站等出料飛梭清空時加一個 30 秒看門狗，照 913，以前會無聲卡住），gate 中。Jerry／KenHeish／Roger 早上那三題（SVN 補檔、913 差異表裡可能的 bug）都不急，已第 2 次追問；再沒回就照規則列進 §0 讓你決定要不要直接問他們。 |
+ | **1009 16:4x：St02 的 KYEC FTP 上傳（LI-9 F2）四題** | 筆電照 golden 答了三題（兩種組態都用真的 FTP 引擎、抓工作檔失敗不擋上傳、順便補 912 那 6 段），記成 RULINGS_20261009 第 8 條。第四題「上傳照 golden 在主迴圈同步跑，而且 7z 沒有逾時」會讓機台卡住時停止更新，跟 #151 同一類，已轉 Steven（W-203）；他回之前只做不會真的觸發上傳的兩張，按鈕那張先等。Ifor-GPT 自己找到可寫的建置位置，把 IG-6 修好了（99／99），排第 144 批，接著做 IG-7。 |
++| **出的包（1009 17:1x）：第 226 包＝第 143 批** | GitLab `1dd66de4`／GitHub `762b3fb5`：NB2-1 的 W-188 #4——前／後站等出料飛梭清空時，以前會一直等、卡住也沒聲音，現在照 913 等 30 秒就報警（JAM0301／0302）；機台的兩顆 WORKLOG。gate b143a：兩組態只有固定 4 支。 |
++| **1009 17:1x：第 144 批開跑** | b18 `8c22a7f7`＝Ifor-GPT 修好的 IG-6（旋轉套件馬達流程的執行期測試，只加測試）＋St02 的 T08（HANA 的配方比對在機台流程裡真的接上，只有 HANA 客戶）＋KYEC 失敗原因顯示的小修正。gate 中。 |
++| **1009 17:2x：EastSun 確認了 Index Z 扭力來源（E-10）** | 機台快照 17:02（main `72a594fd`）：EastSun 在設定檔設了 `HT9050_INDEXZ_TORQUE_CONFIRMED=1`——表示他做完 E-10 量測、確認用 PCIE-1203 讀 Index Z 的扭力；從這版起自動測高等用到扭力的功能不再卡在「來源未確認」。這是 §0 裡急件 W-153 的一部分進展；剩下「EP 用哪一個、Auto High 實測結果」已請他回一行。CHAT_JIMMY 已叮嚀全體同步這份快照。另：機台 17:00 推了一顆網頁小改（IO 檢查畫面右邊空太多，改成跟頁面一樣寬），排第 145 批。 |
+ | **要你決定的**（§0） | ✅ 你 10:1x 都回了：#148＝NB2 已完成（!306 收進第 110 批確認）、#149＝A（Ifor-GPT 專做執行期測試，IG-3／IG-4）、!310＝A（ES02 HTDESIGNER 0.235～0.257 收進第 110 批）＝RULINGS_20261008 第 2 條。**13:0x 新一題 #150**：GPIB 位址不一致要不要自動修正（Jerry 留給你；預設 A＝維持 golden、只留警告，可不回）。<br>**🆕 1009 11:4x 新一題 #151：HANA 機台按 START 時，要不要照 golden 先等 RMS 伺服器連線（最多 3 秒）？** 白話：golden 913（RogerYang 0916）裡，HANA 客戶開了 A77 的機台按 START 前，會先確認 RMS 伺服器連得上，連不上就擋下 START，連線最多等 3 秒。問題在移植樹的輪詢是單執行緒——這 3 秒裡整台機台的狀態更新會停住（例：網頁上的數字 3 秒不動）。你 0923 定過「會擋住輪詢的整合要先問」，所以問你。只有「HANA 客戶＋開 A77＋線上模式＋RMS 還沒連上」才會等，HT9050 永遠走不到。選項：**A＝照 golden 收**（建議：只在按 START 那一刻、最多 3 秒，機台本來就停著；St02 已經把等待裡的訊息迴圈換成只推 HANA 連線）；**B＝先不收**，等改成不擋輪詢的寫法（例：連線放到背景，START 時只看結果）。**沒回之前照 B**：H4 先不合，HANA 其他幾張（!372～!374）照常進第 138 批。<br>**🆕 1009 12:3x 新一題 #152：EastSun 派給你的「在沒有 AI 的電腦上實測安裝與更新」，實測要誰來做？** 白話：EastSun 希望客戶端或沒有 AI 的電腦也能只靠文件和腳本裝好、更新 HT9050 的軟體（機台 cpp 0349）。手冊和腳本筆電已派 Ifor01 寫（W-197）；寫好之後要有一個「人」在一台沒有 Claude 的電腦上照著做三個情境：①從零安裝並啟動；②從某一包更新到最新一包，中間至少遇到一個「機台和筆電都改過」的檔；③故意讓建置失敗，照手冊退回。模擬組態就可以，不用機台。選項：**A＝你自己做**（建議：EastSun 指名你，你也最清楚客戶端要什麼；大約半天到一天）；**B＝指定一位同事**照手冊做、不用 AI（例：Kevin 或 Jerry）；**C＝先不排**，手冊寫好放著。**沒回之前照 C**：手冊照寫，不排實測。實測的人不能是寫手冊的 Ifor01。<br>（1009 13:4x 補：**#151 也請 Steven 一題決定**（W-199）——你 13:3x 說 Steven 的回覆最高優先，Steven 回了就照他的，這題你就不用回。Steven 13:0x 對同一類的 KYEC 換配方同步等 7z 已經裁定「功能打開才等」照 913 同步，可以參考。）<br>（1009 15:1x 補 #152：**手冊和腳本已經好了**——Ifor01 的 MR !379 進 main `7db6b913`：`tools/laptop_ops/pkg_template/` 的 `NO_AI_INSTALL.md`／`NO_AI_UPDATE.md`／`NO_AI_TROUBLESHOOTING.md`＋五支 PowerShell 腳本＋啟動 .bat，每份手冊都附實測紀錄表。你決定誰做實測就可以開始；新腳本等實測過了才換進每一包。） |
+ 
+ 
+diff --git a/docs/ST02_GOLDEN906_AUDIT.md b/docs/ST02_GOLDEN906_AUDIT.md
+index 93b2bd89..3662b4a0 100644
+--- a/docs/ST02_GOLDEN906_AUDIT.md
++++ b/docs/ST02_GOLDEN906_AUDIT.md
+@@ -21,7 +21,7 @@ St02 的清理是四張 MR，都在筆電第 50 批、**還沒進 main `577c41c5
+ | 6 | ChangeTesterConnect：「Silent run mode change」紀錄 | **保留 V912**（常設規則；只是追蹤紀錄），!136 加雙註記 | !136（`02fe28f0`） | C10 | — |
+ | 7 | WakeupGPIB：HANA `PrepareHANARMSConnect`（G9） | **第 20b 條（HANA 照 912）**：C10 HANA（MR !126，筆電第 49 批）解閘 | !126 | — | — |
+ | 8 | Timer2Timer P2f：Multi2D `iStatus[1]／[2]` | **拿掉**（沒人讀） | !134（`ef721c80`） | — | — |
+-| 9 | GetTesterResult | ① Murata NonTestToRBin 紀錄**拿掉**；② Barcode-CSV（含 WAR04217）**拿掉**＝906 :1038-1058；③ HANA RMS A76（T08）＝第 20b 條，維持 fail-safe | !136（`d7ee1d8b`） | B35 | ①：Steven (c) |
++| 9 | GetTesterResult | ① Murata NonTestToRBin 紀錄**拿掉**；② Barcode-CSV（含 WAR04217）**拿掉**＝906 :1038-1058；③ HANA RMS A76（T08）＝第 20b 條，維持 fail-safe | !136（`d7ee1d8b`） | B35 | ①：Steven (c) （→ W-202 20261009 St02-E：T08 已照 golden 913 atester.cpp:1397 打開，呼叫 fAutomation->HANARMSRunCheckOK(true)） |
+ | 10 | ProcessTesterTimeOut：Test Timeout Skip 時重設 P65 旗標 | 跟 3① 同一套：**保留 V912**（912 atester.cpp:3826-3835，移植樹 atester.cpp:4176） | !136（`1dbcd9f3`） | C9 | — |
+ | 11 | cMyDB `MyDBUpdateDB`：912 的 AlarmCode 目錄 | **還沒動**：R68-MYDB（NB2 R77 交 Jimmy）；St02-M 1003 06:14 排在給 Steven 的三題之後、先問再動 | — | — | R68-MYDB |
+ | 12、13 | ckernel ShowRunLed／ScanPannelKey：Pause 逾時才響 | **改回 906**（ckernel.cpp :1638／:3374／:3382＝906 :738／:2127／:2136） | !132（`660b1d32`） | B32 | Steven (a) |
+@@ -71,7 +71,7 @@ NB2 只量得到「註解寫了 `golden <檔>:<行>`＋函式名」的引用，S
+ | 6 | main.cpp `ChangeTesterConnect` | :12581-12778 / :12064-12257 | 多兩行 `RecordProcess("Silent run mode change …")`（CASE-FOREHOPE_NINGBO-20260920） | 照 912 live | 沒量到；日期在 0618 之後，0618 不可能有 | 版本基準（P2d 翻 912 本體） |
+ | 7 | main.cpp `WakeupGPIB` | :18499-18596 / :17878-17970 | :18535-18539 HANA `PrepareHANARMSConnect()` | gate G9 | 沒量到本體（R93 只對行號：906 :17878） | —（沒翻） |
+ | 8 | main.cpp `Timer2Timer`（P2f `SyncBridgeSettings`） | :22186-22194 / — | 送 2DID 格式時多帶 Multi2D `iStatus[1]／[2]` | 照 912 live（HandlerBridgeCtl.cpp:1174） | **不同**（工具 #27 對 0618 :21391-21525：Multi2D 是 912 新增，並註明照版本基準「是對的」）＝同本稿 | 版本基準 |
+-| 9 | atester.cpp `GetTesterResult` | :849-2573 / :849-2553 | ① :1048 多記 NonTestToRBin；② :1052-1067 Barcode CSV 比對（Ifor 20260511）；③ :1395-1397 HANA RMS A76 | ① live；② gate T03；③ gate T08 | 沒量到 | P2b「906 為底補 912」（`:210`） |
++| 9 | atester.cpp `GetTesterResult` | :849-2573 / :849-2553 | ① :1048 多記 NonTestToRBin；② :1052-1067 Barcode CSV 比對（Ifor 20260511）；③ :1395-1397 HANA RMS A76 | ① live；② gate T03；③ gate T08 | 沒量到 | P2b「906 為底補 912」（`:210`） （→ W-202 20261009 St02-E：T08 已照 golden 913 atester.cpp:1397 打開，呼叫 fAutomation->HANARMSRunCheckOK(true)） |
+ | 10 | atester.cpp `ProcessTesterTimeOut` | :3614-3879 / :3594-3849 | :3826-3835 Test Timeout Skip 時重設 P65 旗標 | 照 912 live | 沒量到 | P2b 同上；跟 #3① 同一套 P65 |
+ | 11 | cMyDB.cpp `MyDBUpdateDB` | :1812-2067 / :1812-2046 | 912 的 AlarmCode 目錄（MES0103、WAR0354→WAR0357＋WAR0359、JAM1014…） | 照 912 | **不同**（R77 工具 #27：對 0618 少 2 句、多 24 句）＝同本稿 | **既有待裁決 R68-MYDB**（NB2 R77 已交 Jimmy：A atester 也改 WAR0357／B 照 RULINGS Q2「底層照 906」改回／C 維持） |
+ | 12 | ckernel.cpp `ShowRunLed` | :744-748 | Pause 逾時才響（同 #1①，RogerYang 20260626） | 照 912 live | 沒量到；日期在 0618 之後 | 20260926 ② |
+diff --git a/docs/TESTERCOMM_PORT_LEDGER.md b/docs/TESTERCOMM_PORT_LEDGER.md
+index 08f9b0e2..6583180c 100644
+--- a/docs/TESTERCOMM_PORT_LEDGER.md
++++ b/docs/TESTERCOMM_PORT_LEDGER.md
+@@ -192,7 +192,7 @@ Handler 端三個檔已經是 912 的文字；要補的是它依賴、V906 還
+ | Qualcomm 遠端 START／STOP（JerryYang 20260828）：`MSG_CMD_RemoteStart`＝204、`MSG_CMD_RemoteStop`＝205 | golden 912 MessageDef.h:231-232；Handler 端的分支還要 `fiosetview->fShow`（V906 的 `TfiosetviewShim`，atester_shims.h:355，沒有這個成員） | 測試通訊（MessageDef 已請認領）；GPIB 橋接 905 還不會送這兩個 | G16。　⛔ **1003**：!130 拿掉（912 才有，906 沒有） |
+ | P65 QA 模式 `bP65QAING`（Ifor 20260407） | golden 912 cmydef.cpp:6017；設定它的在 atester.cpp:3830、aTester_Front／Rear、csystem.cpp:8778／12944 | 跟 P2b（atester 解閘）一起 | G12。　⛔ **1003**：!134 改回 906 → !136 依 Steven 1003 常設規則放回 V912（0x42，人工審核 C9） |
+ | Command.cpp 4 個方法：3 個加 `fSecsAlarm->Visible`、MachineStatus 改 `IsSafePLCIOInstall()` | golden 912 Command.cpp | ✅ 使用者 20260926 裁決 11＝B：**測試通訊這邊一起補，先不做（待辦）**。S10F3 SECS 警報視窗（TSecsAlarmForm，V906 沒有）、安全 PLC 型別 `IsSafePLCIOInstall`（筆電第 20 條） | 無（這段只呼叫 MachineStatus，差 2 行） |
+-| HANA RMS 互鎖 `PrepareHANARMSConnect` | golden 912 Automation/automation.cpp:3051 | ✅ 使用者 20260926 裁決 11＝B：**測試通訊這邊一起補，先不做（待辦）**。912 整套 HANA RMS（連線、設定、A77），V906 完全沒有。→ ST02-C10 20261002（Steven W64＝A：照 912.0，RogerYang 註解為準）：`THanaRmsMembers`（Automation/HanaRms*_St02.*）＝TfAutomationShim 的基底 | ✅ G9 拿掉（HandlerBridgeCtl.cpp :366／:372；3b 的掛點 Start／atester／HANA ART LOTON／State Record 等 HANA ART，T08 維持 fail-safe） |
++| HANA RMS 互鎖 `PrepareHANARMSConnect` | golden 912 Automation/automation.cpp:3051 | ✅ 使用者 20260926 裁決 11＝B：**測試通訊這邊一起補，先不做（待辦）**。912 整套 HANA RMS（連線、設定、A77），V906 完全沒有。→ ST02-C10 20261002（Steven W64＝A：照 912.0，RogerYang 註解為準）：`THanaRmsMembers`（Automation/HanaRms*_St02.*）＝TfAutomationShim 的基底 | ✅ G9 拿掉（HandlerBridgeCtl.cpp :366／:372；3b 的掛點 Start／atester／HANA ART LOTON／State Record 等 HANA ART，T08 維持 fail-safe） （→ W-202 20261009 St02-E：T08 已照 golden 913 atester.cpp:1397 打開，呼叫 fAutomation->HANARMSRunCheckOK(true)） |
+ 
+ ctest `TesterComm_Handler`（`tests/test_testercomm_handler.cpp`）：預設部分——整個 Handler 端連結（RESCAN 機台庫）、身分代號＝hub 信箱、沒有 bridge 時 golden 的防呆、Sink 在本執行緒跑 TesterMode／Version 封包不丟例外；端到端（`HT9045_TESTERCOMM_E2E=1`）——真的 GpibEngine（模擬 NI 驅動）＋Handler 端同一個 hub：bridge 找到 Handler 送 Version／TesterMode、ProcessHVisionConnect 找到 bridge、SendMSG_TestMode 通過 bridge 的身分檢查（bridge 沒自己關）、CloseGpibProgram 把它關掉。測試用一個 TfMain 子類別把 `fMain->SendMSG_CMD` 轉給 `fTesterSide`（就是 P2b 要在 fMain.cpp 做的事）。
+ 
+@@ -211,7 +211,7 @@ ctest `TesterComm_Handler`（`tests/test_testercomm_handler.cpp`）：預設部
+ 
+ | 函式 | 範圍（splice 前行號） | golden 912 | gate | 912 補的 |
+ |---|---|---|---|---|
+-| GetTesterResult | :806-2548 → 1961 行 | :849 起 | T01～T20（T10 已解，見下） | Murata record、Barcode CSV Compare、HANA RMS 互鎖（:1048／:1052-1067／:1396-1398）。　⛔ **1003**：前兩項 !136 拿掉（golden 906 :1038-1058；Murata 那筆等 Steven），HANA 互鎖（T08）照第 20b 條留 |
++| GetTesterResult | :806-2548 → 1961 行 | :849 起 | T01～T20（T10 已解，見下） | Murata record、Barcode CSV Compare、HANA RMS 互鎖（:1048／:1052-1067／:1396-1398）。　⛔ **1003**：前兩項 !136 拿掉（golden 906 :1038-1058；Murata 那筆等 Steven），HANA 互鎖（T08）照第 20b 條留 （→ W-202 20261009 St02-E：T08 已照 golden 913 atester.cpp:1397 打開，呼叫 fAutomation->HANARMSRunCheckOK(true)） |
+ | ProcessTestResult | :2596-3581 → 1107 行 | :2641-3599 | R01～R10 | 無（906＝912）；補 golden 全域 `ProcessTestResultDelay` |
+ | ProcessTesterTimeOut | :3583-3865 → 336 行 | :3614-3879 | O01～O08 | [P65] QA 旗標在 Skip 時清掉（:3826-3835） |
+ | DoIndexSocketCheck（連 InitialIndexSocketCheckTask） | :11050-11209 → 181 行 | :11330 起 | S01～S04（COM2 視覺四個呼叫） | 無；補 golden 全域 `ESCDelay`、`iESCError` |
+@@ -732,7 +732,7 @@ ctest `TesterComm_Handler`（`tests/test_testercomm_handler.cpp`）：預設部
+ | ChangeTesterConnect 的「Silent run mode change」紀錄（912 main.cpp:12741-12742／:12770-12771） | **保留 V912**（常設規則，同上標註） | !136（`02fe28f0` 只加註解） | C10 |
+ | Data.Observer 事件記錄拆欄 ParseEventLogLine（不在 TesterComm，同一批） | **保留 V912**（常設規則；W70＝A） | !136 | C11 |
+ | OnGpibProgramMsg 的 Dynamic PID 收 ATC 3.6、G23 `ResetHandlerArmCache`（閘著）、W9 溫度 offset 重載 | 不動：溫控＝第 20a 條（St02 912 自查表 `docs/handoff/ST02_912_AUDIT_20261002.md` §2.2，W9 是邊界案例） | — | — |
+-| HANA RMS `PrepareHANARMSConnect`（G9）、GetTesterResult 的 HANA 互鎖（T08） | 照 912＝第 20b 條：C10 HANA（MR !126，筆電第 49 批）解 G9、T08 維持 fail-safe；!126 自己會改本帳本 HANA 的那兩列（:195、:511） | !126 | — |
++| HANA RMS `PrepareHANARMSConnect`（G9）、GetTesterResult 的 HANA 互鎖（T08） | 照 912＝第 20b 條：C10 HANA（MR !126，筆電第 49 批）解 G9、T08 維持 fail-safe；!126 自己會改本帳本 HANA 的那兩列（:195、:511） | !126 | — （→ W-202 20261009 St02-E：T08 已照 golden 913 atester.cpp:1397 打開，呼叫 fAutomation->HANARMSRunCheckOK(true)） |
+ 
+ - Steven 1003 05:4x 的常設規則（「912 比較好就留 912、註明 906 與 912 的行號」）跟第 20 條不同，在 NIGHT_REPORT §0 第 78 項等 Jimmy；**他回之前不做新的 912 搬移**，上面三項「保留 V912」維持（跟 main 一樣）。
+ - **還在等 Steven**（客戶專屬，經 ST01-M）：Qorvo 蜂鳴延遲、AMD 執行期條件、Murata NonTestToRBin 要不要依常設規則回到 912——程式現在是 906。cMyDB 的 912 AlarmCode 目錄（R68-MYDB，不在 TesterComm）St02-M 1003 06:14 排在最後、先問。
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 13d116f2..93b0b4b3 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -353,6 +353,7 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-07 | 設計外掛 tools 0170 | — | 設計外掛工作階段自己推（分支 a6cadd2，GitHub dc7975ff）：依序合併筆電包 162、163、167、168 的設計外掛（0.197.0 → 0.234.0），164～166、169～172 沒帶設計外掛；無衝突，機台自己的設計外掛功能都保留；測試修正：建置視窗進度條在矮視窗不再塌掉、面板繪製測試固定 Edge 視窗大小；run_all 3/3、vscode_it 161/161，已安裝 0.234.0；只動 tools/vscode-htdesigner | tools 0170 |
+ | 10-08 | 設計外掛 tools 0171 | — | 設計外掛工作階段自己推（commit b453060，GitHub f42c142b）：EastSun 1008 方案總管的 Debug／Release 按鈕按不了（0.234 在 ▶＝F5 時把它變灰）→ 裁決「連動F5 release 和debug」：按鈕恢復可按，resolveDebugConfiguration 依按鈕把 F5／▶ 的啟動目標換成 build_integ_dbg_x86 或 build_integ_ship_x86 那一組；「模擬」仍是灰的。run_all 3/3；vscode_it 沒跑成（VS Code 自己的更新程式 CodeSetup 從 10/07 18:34 起佔住執行個體鎖）。vsix 已安裝，版本號沒變，要重新載入視窗才生效；只動 tools/vscode-htdesigner | tools 0171 |
+ | 10-08 | 173～204 | 07dbeae3＋63b1aa25＋351291d5（GitLab 0258ba66…68fc0e65、39c6388c、e6c54331） | 本 commit（機台 C++＋web），EastSun「你確定有合完整?」→「快合」→「一直合下去 不要停拜託」（173～202 的 C++ 從 10-07 起都沒合，只有設計外掛跟上）。備份分支 backup/pre-pkg202-20261008（cpp、web）＋ D:\HT9045\_pkg_202\backup_machine_195843、D:\HT9045\_pkg_203\backup_machine_220733。202 疊三十包：直接換 108（換 105；tasks.json、acatchtray 留機台）、新檔 35、兩邊都改 22（合併 16、設計外掛／WORKLOG 照規定 6）、一樣 88；每個直接換的檔掃機台 AI 標記＋W906_ 識別字：WebBridgeServer（TOKEN-OFF／SOFTKEY panel.estop）改三方合併＋收筆電 pad.get／pad.close／observerSG 豁免、acatchtray 留機台（筆電版＝少 PROBECYL）、MotionView9050 換（機台＝基底）。衝突：cinitial／test_flow9050_tray／csystem 取機台（BOOTCLEAR、PROBECYL、pitch 同步在 MainProc）；test_scankey_golden、IoBtnPanelClick、tests/CMakeLists、WebBridgeTags（tester.name 依 Jerry 1008 裁決 A＝golden LoadTestModePicture）取筆電；wb_serve 第 239 行＝機台 IOWAIT＋筆電 g_ppCyc0 搬移。4 個新網頁檔改 CRLF。203：15 檔（直接換 9、新 4、合併 2，無衝突）；204：12 檔（直接換 9、新 1、合併 2，無衝突；SECS SV Auto1～6 料盤別名＋氣缸平均推拉時間、cSpeed）。合併後 test_scankey_golden 補回 PadInterface_St02.h include、[19]（筆電版軟體面板鍵 ST02-P2，機台保留自己的 SOFTKEY）在機台關掉。ctest Debug 426/441：15 個失敗都是第 381 列的已知清單（環境：dfm2rc×4 ctest 找不到 g++／rc.exe、E031、GearTeachSave、TeachCheckRangeReload；斷言筆電設定／repo 舊表：config_db、ini_helpers、config_loaders、MotorPoints／MachineMotors／MachineSuckers_HT9050；機台補丁：GA2_C1_cinitial、FShow_Audit）；204 之後相關 29 支全過。EastSun 未 commit 的 acatchtray／asendic_Loader／cinitial／PadInterface_St02（SafeLock）先拿開、合完三方套回，不進 commit。20:02 -j4 整包重編讓機台當機（Kernel-Power 41），留下 NUL 填滿的 .a／.obj／.d ⇒ clean 後 -j2 重編 | 本 commit |
++| 10-09 | 227 | 13e97b39（GitLab fb6cc6f7） | 本 commit（定時檢查自動收）：①St02 T08（MR !387，golden 913 atester.cpp:1396-1397）：GetTesterResult 改呼叫真正的 HANARMSRunCheckOK(true)（最多每 5 秒重送查詢、不同步等），只有開 A77 的 HANA 機台走得到；②K1 修正（MR !388）：換配方失敗擋 START 時訊息寫出那次失敗的原因，之後的 N06 動作不會蓋掉，只有開 N06 的機台；③Ifor-GPT IG-6 RotateKit 進出手臂馬達流程測試（只有測試）。HT9050 行為不變。10 檔：直接換 8（atester.cpp、TesterTCP_N06_St02.cpp 等，掃過沒有機台標記會消失）、新測試 1、tests/CMakeLists 合併無衝突；設計外掛 0.348～0.356 照規定留機台。Debug wb_serve 建好（release 沒編：wb_serve 17:07 起在跑），C10_HanaRms、St02_W195N06、HanaART、START_SitesCensus 過，IforGPT_RotateKitRuntime 在 SHIP 組態照設計跳過。備份分支 backup/pre-pkg227-20261009＋D:\HT9045\_pkg_227\backup_machine_182251 | 本 commit |
+ | 10-09 | 226 | 762b3fb5（GitLab 1dd66de4） | 本 commit（定時檢查自動收）：NB2-1 W-188 #4 L02 case-306 看門狗（MR !386，golden 913 RogerYang 0908）：DoFront／RearTestSuckIC case 306 在 [D43] 開、出料梭車還有已測 IC 時原本無限等待，現在 30 秒後走 320→321 跳 JAM0301／0302，梭車已拉到左邊也可以繼續；只有 golden DoTestHeadMotor 路徑會叫到，HT9050 生產走 FinePitch（csystem.cpp:1956），推論不受影響。另收筆電 docs（含機台 cpp 0354／0356 的 WORKLOG 列，WORKLOG 照規定留機台）。7 檔：直接換 5（aTester_Front／Rear 等，掃過沒有機台標記會消失）、新測試 1、tests/CMakeLists 合併無衝突。Debug wb_serve 建好（release 沒編：wb_serve 17:07 起在跑 release exe），NB2_W188×3、W64b_Front／RearSuckIC 共 6 支全過。備份分支 backup/pre-pkg226-20261009＋D:\HT9045\_pkg_226\backup_machine_173458 | 本 commit |
+ | 10-09 | 225 | 5b7f9f56（GitLab 5d86796f） | 本 commit（定時檢查自動收）：St02-E W-195 Qualcomm MR-Q1（MR !385）照 golden 913（RogerYang rf360-yield-count 0814＋0916 else-if 修正）：低良率檢查在「依顆數」模式每到設定顆數就檢查、912 被 else-if 擋掉的五個檢查函式恢復執行；只有 CC_QUALCOMM 開關打開才走得到，HT9050（CC_PTI）永遠 false、行為不變。8 檔：直接換 6（CosFunction、MainTimer3、fYieldMonitoring.h、uYieldMonitoring 等，掃過沒有機台標記會消失）、新測試 1、tests/CMakeLists 合併無衝突。Debug wb_serve 建好（release 沒編：wb_serve 16:50 起在跑 release exe），St02_W195Qcom、St02_W175LowYield、YieldMonCore、START_SitesCensus 等 5 支全過。同一次推送帶上 EastSun 16:52 改的 Gerneral.ini（[IndexDriver] 加 HT9050_INDEXZ_TORQUE_CONFIRMED=1，開放 Auto Height）。備份分支 backup/pre-pkg225-20261009＋D:\HT9045\_pkg_225\backup_machine_165257 | 本 commit |
+ | 10-09 | 224 | 64d7d4e6（GitLab 9c95ecac） | 本 commit（定時檢查自動收）：①St02-E W-195 KYEC K1（MR !382，golden 913＋Steven 1009 本人裁決）：換配方時用 7z 把配方同步到 OS 測試機（CreateProcess、輸出每天一檔在 <log>\N06、10 秒逾時強制結束），失敗跳中英警報並擋 START 直到換配方成功——只有開 N06 開關的機台走得到，HT9050 沒開；②ATK（MR !383）：Final Lot End 每個 Auto1～3 送一筆 CEID 288＋一筆 Final Track-Out CEID 8，只有 ATK 機台；③Ifor01 W-190 #1（MR !384）：加熱器品牌表與輔助函式從 FileRW/HSys.cpp 原樣搬到 cmydef.cpp，行為不變；④Ifor01 W-197：沒有 AI 的安裝／更新手冊與腳本（tools/laptop_ops/pkg_template）＋ tools/start_wb_serve_ioweb.bat（只新增檔案，沒執行）。28 檔：直接換 16（掃過沒有機台標記會消失）、新 9、合併 3 無衝突（CMakeLists、tests/CMakeLists、csystem.cpp）。csystem.cpp 只 commit 包的 3 行（ATK include、:12077 SortingWrapUp、:32160 CEID 8）；EastSun 未 commit 的 WAR1603／1604 三行留在工作樹（另存 D:\HT9045\_pkg_224\eastsun）。Debug＋release wb_serve 建好，St02_W195N06／Atk、W190_HeaterIns、POOL2_LotInfo×3、START_SitesCensus、St02_SecsEcFileWrites、W195×3 共 11 支全過。備份分支 backup/pre-pkg224-20261009＋D:\HT9045\_pkg_224\backup_machine_155308 | 本 commit |
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 1ceb380f..999b8566 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -6561,6 +6561,21 @@ endif()
+ add_test(NAME RotateKitRetry COMMAND test_rotatekit_retry)
+ set_tests_properties(RotateKitRetry PROPERTIES TIMEOUT 60)
+ 
++# AI(W906-IFORGPT-IG6) 20261009: Real RotateKit motor flow, SIM-only runtime.
++add_executable(test_iforgpt_rotatekit_runtime test_iforgpt_rotatekit_runtime.cpp)
++target_link_libraries(test_iforgpt_rotatekit_runtime PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_iforgpt_rotatekit_runtime PRIVATE ws2_32)
++endif()
++if(MINGW)
++    target_compile_options(test_iforgpt_rotatekit_runtime PRIVATE -Wall -Wextra)
++endif()
++add_test(NAME IforGPT_RotateKitRuntime COMMAND test_iforgpt_rotatekit_runtime)
++set_tests_properties(IforGPT_RotateKitRuntime PROPERTIES
++    TIMEOUT 300 RUN_SERIAL TRUE SKIP_RETURN_CODE 77)
++
+ # --- test_flow9050_shuttle: AI(W906-FLOW9050-A) 20261001 (Frank01, F-01b batch A) -- the HT9050 single-pair In / Out Shuttle
+ #   state machines translated from Frank's 910 tree (ref/frank-910-9050 beba23ee): acarry.cpp CheckIndexStatusERRSH1 /
+ #   Do_Auto_InSH / Do_Auto_OutSH (910 acarry.cpp:8522-8804, ledger H063), csystem.cpp DoAllProcess' Type_HT9050 shuttle
+diff --git a/tests/test_c10_hana_rms.cpp b/tests/test_c10_hana_rms.cpp
+index 47df8d9e..0a93b9c2 100644
+--- a/tests/test_c10_hana_rms.cpp
++++ b/tests/test_c10_hana_rms.cpp
+@@ -42,7 +42,7 @@
+ // 10. RogerYang :3062 "connecting" half ([W906] 5): a pending connect is not restarted.
+ // 11. Button bodies that write files: Setting -> sandbox HANARMS.ini; Save -> sandbox .log; Clear; memo auto-trim at 1000.
+ // 12. Source pins: G9 is live in HandlerBridgeCtl.cpp (comment-stripped), the pump / policy calls in TesterCommWiring.cpp
+-//     are code (before the //), T08 in atester.cpp is still gated (plan Q5: 3b waits for HANA ART), atester_shims.h has
++//     are code (before the //), T08 in atester.cpp is opened (W-202, golden 913 :1397; was gated, plan Q5), atester_shims.h has
+ //     the THanaRmsMembers base (claim).
+ //  Every global it changes is saved and restored; the private folder is removed on a green run.
+ // =============================================================================
+@@ -816,15 +816,42 @@ int main()
+         }
+         CHECK(pump == 2 && policy == 1);                                         // Tick + Poll; Init
+         CHECK(ReadLines("atester.cpp", ate));
+-        bool t08 = false;
+-        for (size_t i = 0; i < ate.size(); ++i) if (ate[i].compare(0, 31, "#if 0 // TODO(W906-GB-P2b): T08") == 0) t08 = true;
+-        CHECK(t08);                                                              // plan Q5: the 3b hooks wait for HANA ART
++        // AI(W906-W202) 20261009: T08 opened (golden 913 atester.cpp:1397) -- `#if 1`, the golden call directly under it, the
++        //   #else approximation dead, then `break;` (was: the gate still closed, plan Q5)
++        int t08 = -1;
++        for (size_t i = 0; i < ate.size(); ++i) if (ate[i].find("#if 1 // was: #if 0 -- opened AI(W906-W202) 20261009 (St02-E): T08") == 0) t08 = (int)i;
++        CHECK(t08 > 0 && t08 + 5 < (int)ate.size() &&
++              Has(StripComments(ate[t08 + 1]), "if(fAutomation && fAutomation->HANARMSRunCheckOK(true)==false)") &&
++              ate[t08 + 2] == "#else" && ate[t08 + 4].compare(0, 13, "#endif // T08") == 0 && Has(StripComments(ate[t08 + 5]), "break;"));
+         CHECK(ReadLines("atester_shims.h", shim));
+         bool base = false;
+         for (size_t i = 0; i < shim.size(); ++i) if (StripComments(shim[i]).find("class TfAutomationShim : public THanaRmsMembers") == 0) base = true;
+         CHECK(base);
+     }
+ 
++    // ---- 13. W-202 T08: the GetTesterResult gate calls golden HANARMSRunCheckOK(true) on fAutomation (atester.cpp:1481) ----
++    //   AI(W906-W202) 20261009 (St02-E).  The old #else approximation broke on every HANA + A77 + not-AutoSiteMap pass; golden only
++    //   breaks while the recipe check fails.  HT9050 (CC_PTI) always passes.
++    std::printf("\n-- 13. W-202 T08 call site semantics --\n");
++    {
++        const int savCC = CUSTOMER_CODE; const bool savA77 = IniConfig.bA77_EnableHanaRMSInterlock; const int savRsm = LastSet.iRunStartMode;
++        const AnsiString savLine = H()->sHANARMSJobInfoLine, savLot = H()->sHANARMSLot;
++        const int m0 = W906_ShowMyMessage_Count;
++        CUSTOMER_CODE = CC_PTI; IniConfig.bA77_EnableHanaRMSInterlock = true; LastSet.iRunStartMode = 0; H()->bHANARMSNeedRunCheck = true;
++        CHECK(fAutomation->HANARMSRunCheckOK(true) == true && W906_ShowMyMessage_Count == m0);   // HT9050 / any non-HANA: pass, no dialog
++        CUSTOMER_CODE = CC_HANA_MICRON; LastSet.iRunStartMode = rsmAutoSiteMap;
++        CHECK(fAutomation->HANARMSRunCheckOK(true) == true && W906_ShowMyMessage_Count == m0);   // AutoSiteMap: pass
++        LastSet.iRunStartMode = 0; H()->bHANARMSNeedRunCheck = false;
++        CHECK(fAutomation->HANARMSRunCheckOK(true) == true && W906_ShowMyMessage_Count == m0);   // checked already: pass (the approximation broke here)
++        H()->bHANARMSNeedRunCheck = true; H()->sHANARMSJobInfoLine = ""; H()->sHANARMSLot = "";
++        CHECK(fAutomation->HANARMSRunCheckOK(true) == false && W906_ShowMyMessage_Count == m0 + 1);   // no baseline: break + one dialog
++        CHECK(H()->bHANARMSNeedRunCheck == true);                               // still to check at the next pass
++        IniConfig.bA77_EnableHanaRMSInterlock = false;
++        CHECK(fAutomation->HANARMSRunCheckOK(true) == true);                    // A77 off: pass
++        CUSTOMER_CODE = savCC; IniConfig.bA77_EnableHanaRMSInterlock = savA77; LastSet.iRunStartMode = savRsm;
++        H()->sHANARMSJobInfoLine = savLine; H()->sHANARMSLot = savLot; H()->bHANARMSNeedRunCheck = false;
++    }
++
+     // ---- restore, containment proof, cleanup ---------------------------------------------------------------------
+     if (H()->HANARMSClient != NULL) H()->HANARMSClient->Close();
+     CloseIniFile();
+diff --git a/tests/test_iforgpt_rotatekit_runtime.cpp b/tests/test_iforgpt_rotatekit_runtime.cpp
+new file mode 100644
+index 00000000..afb555b9
+--- /dev/null
++++ b/tests/test_iforgpt_rotatekit_runtime.cpp
+@@ -0,0 +1,388 @@
++//AI(W906-IFORGPT-IG6) 20261009: Drive the real in/out RotateKit motor SMs.
++// Only the HAL is simulated, as in RotateKitRetry. No source-text checks,
++// process replacements, worker threads, config loaders or hardware drivers.
++#if defined(__GNUC__)
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wunused-parameter"
++#endif
++#include "MachineType.h"
++#include "cmydef.h"
++#include "cprod.h"
++#include "LastSet.h"
++#include "Config.h"
++#include "mykitsuck.h"
++#include "Motor/mymotor.h"
++#include "RotateKit/aRotateKIT.h"
++#include "RotateKit/aRotateKIT_In.h"
++#include "RotateKit/aRotateKIT_Out.h"
++#include "forms/fRotate.h"
++#include "w906_test_motors.h"
++#include "w906_ctest_guard.h"
++#if defined(__GNUC__)
++#pragma GCC diagnostic pop
++#endif
++#include <cstdio>
++
++#ifdef SOFT_SIMULTE
++extern int InAngle45, InAngle90, OutAngle45, OutAngle90;
++static int checks = 0, failures = 0;
++static const char* scenario = "fixture";
++static void check(bool ok, const char* expression, int line)
++{
++    ++checks;
++    if (!ok)
++    {
++        ++failures;
++        std::printf("FAIL [%s] line %d: %s\n", scenario, line, expression);
++    }
++}
++#define CHECK(c) check((c), #c, __LINE__)
++
++static bool doorClosed()
++{
++    return false;
++}
++
++class ObservedSimMotor : public TMySimMotor
++{
++public:
++    int moves, target;
++    bool zSafeHome;
++    ObservedSimMotor() : moves(0), target(0), zSafeHome(false) {}
++    virtual bool MoveToPos(int value)
++    {
++        ++moves;
++        target = value;
++        return TMySimMotor::MoveToPos(value);
++    }
++    virtual void ScanMotorStatus(bool* leds)
++    {
++        TMySimMotor::ScanMotorStatus(leds);
++        if (leds && zSafeHome)
++        {
++            // Boot's Z-safe sensor window, the same fixture as RotateKitRetry.
++            leds[iHomeLed] = true;
++        }
++    }
++    void clearObservation()
++    {
++        moves = 0;
++        target = 0;
++    }
++};
++static ObservedSimMotor* observed[TOTAL_MOTOR];
++
++static void fixture()
++{
++    W906_TestEnsureSuckList();
++    for (int axis = 0; axis < TOTAL_MOTOR; ++axis)
++    {
++        observed[axis] = new ObservedSimMotor;
++        MOT[axis].Motor = observed[axis];
++        MOT[axis].Mot_Name = axis;
++        observed[axis]->zSafeHome = (axis == MInArmZA || axis == MOutArmZA);
++        observed[axis]->MotorIdleSafeDoorCheck = &doorClosed;
++        observed[axis]->PSoftLimitP = 1000000;
++        observed[axis]->PSoftLimitN = -1000000;
++        observed[axis]->GearRatio = 1;
++    }
++    InArmSuck.iMotRow = OutArmSuck.iMotRow = 1;
++    InArmSuck.iMotCol = OutArmSuck.iMotCol = 1;
++    InArmSuck.iPickRow = OutArmSuck.iPickRow = 1;
++    InArmSuck.iPickCol = OutArmSuck.iPickCol = 1;
++    InArmSuck.iMaxRow = OutArmSuck.iMaxRow = 2;
++    //AI(W906-IFORGPT-IG6) 20261009: XY helpers require boot-created offsets.
++    // Static storage gives the fixture zero offsets without loading machine files.
++    static ARM_OFFSET inRotateOffset;
++    static ARM_OFFSET outRotateOffset;
++    InArmOffSet[InOfsRotate_In] = &inRotateOffset;
++    OutArmOffSet[OutOfsRotate_Out] = &outRotateOffset;
++    IniConfig.bE34InOutArmPitchZOffsetSameOne = false;
++    InArmSuck.iMaxCol = OutArmSuck.iMaxCol = 4;
++    InArmSuck.Suck[0][0].iMotNo = MInArmZA;
++    OutArmSuck.Suck[0][0].iMotNo = MOutArmZA;
++    Prod.ZInArmSafe[0][0] = Prod.ZOutArmSafe[0][0] = 1500;
++    observed[MInArmZA]->SetPosition(1500);
++    observed[MOutArmZA]->SetPosition(1500);
++    for (int row = 0; row < MAX_ARM_Row; ++row)
++    {
++        for (int col = 0; col < MAX_ARM_Col; ++col)
++        {
++            InArmSuck.Item[row][col] = OutArmSuck.Item[row][col] = NULL_IC;
++            InArmSuck.bLed[row][col] = OutArmSuck.bLed[row][col] = false;
++            MOT[MInRotateKit].Tray.Data[col][row] = NULL_IC;
++            MOT[MOutRotateKit].Tray.Data[col][row] = NULL_IC;
++        }
++    }
++    if (!MOT[MOutRotateKit].Tray.PordRec[0][0])
++    {
++        MOT[MOutRotateKit].Tray.PordRec[0][0] = new TMyProductionRecord;
++    }
++    USE_ROTATE_KIT = 1;
++    USE_PICKER_COUNT = ep8Picker;
++    InOutArmPickerUseMotor = eptUseMot;
++    iInArmType = e9045_2x2_4_14;
++    iInArmXBase = iInArmYBase = iOutArmXBase = iOutArmYBase = 0;
++    bContinusRotate = false;
++    bRunAutoSiteMapping = false;
++    bAutoSiteMapHotplateSave = false;
++    IniConfig.bAlarmNeedServoOff = false;
++    IniConfig.bA27EnableLightScale = false;
++    IniConfig.bA22MagneticScale = false;
++    USE_IN_Y_IS_AUTO_PITCH = USE_OUT_Y_IS_AUTO_PITCH = false;
++    TestIF.iARM_Y_PITCH = 0;
++    Prod.iInArm_RotateX = 20000;
++    Prod.iInArm_RotateY = 30000;
++    Prod.iOutArm_RotateX = 40000;
++    Prod.iOutArm_RotateY = 50000;
++    Prod.iIn_iRotateA = 111;
++    Prod.iOut_iRotateA = 222;
++    Prod.iIn_iRotateA_Backlash = Prod.iOut_iRotateA_Backlash = 0;
++}
++
++// Initialize the function-local cursor/kit from its actual entry, rather than
++// assuming that the previous scenario left a particular static value.
++static void initialize(int dut, double pitchX, double pitchY)
++{
++    tRotate.DutNum = dut;
++    tRotate.RotateKit_PitchX = pitchX;
++    tRotate.RotateKit_PitchY = pitchY;
++    tRotate.bUseDifferentAngle = false;
++    tRotate.bPassBinNoRotate = false;
++    FrmRotate->bShowRotateBySite = false;
++    iRotate_Type = eInOutArm1Motor;
++    iRotato_In_Row = iRotato_Out_Row = 0;
++    TestIF.iTestMode = TestIF_File.iTestMode = _8Site2X4;
++    DeviceForm.XDimension = 1000;
++    TestIF_File.dSiteXPitch = 0;
++    iInArmRotateKit = 1;
++    M_DoInArmRotateKIT_Motor();
++    iOutArmRotateKit = 1;
++    M_DoOutArmRotateKIT_Motor();
++}
++
++static void xyCase(const char* label, int dut, double pitchX, double pitchY,
++                   bool largeDevice, int expectedInX, int expectedOutX,
++                   int expectedInY, int expectedOutY)
++{
++    scenario = label;
++    initialize(dut, pitchX, pitchY);
++    CHECK(iRotateKIT_Pitch_X_H == static_cast<int>(pitchX*100));
++    CHECK(iRotateKIT_Pitch_Y_H == static_cast<int>(pitchY*100));
++    iRotato_In_Row = iRotato_Out_Row = 1;
++    DeviceForm.XDimension = largeDevice ? ArmMaxPitch : 1000;
++    bIn_ICRotationCompleteOnKit = bOut_ICRotationCompleteOnKit = false;
++    //AI(W906-IFORGPT-IG6) 20261009: Each case must issue its own XY commands.
++    observed[MInArmX]->SetPosition(-9000);
++    observed[MInArmY]->SetPosition(-9000);
++    observed[MOutArmX]->SetPosition(-9000);
++    observed[MOutArmY]->SetPosition(-9000);
++    observed[MInArmX]->clearObservation();
++    observed[MInArmY]->clearObservation();
++    observed[MOutArmX]->clearObservation();
++    observed[MOutArmY]->clearObservation();
++    iInArmRotateKit = iOutArmRotateKit = 4000;
++    // Bound the actual multi-tick Z/pitch/XY flow; failed convergence is a
++    // fixture/test failure, never a reason to relax a product interlock.
++    for (int tick = 0; tick < 64 && iInArmRotateKit == 4000; ++tick)
++    {
++        M_DoInArmRotateKIT_Motor();
++        Sleep(5);
++    }
++    for (int tick = 0; tick < 64 && iOutArmRotateKit == 4000; ++tick)
++    {
++        M_DoOutArmRotateKIT_Motor();
++        Sleep(5);
++    }
++    CHECK(iInArmRotateKit != 4000);
++    CHECK(iOutArmRotateKit != 4000);
++    CHECK(observed[MInArmX]->moves > 0 && observed[MInArmX]->target == expectedInX);
++    CHECK(observed[MInArmY]->moves > 0 && observed[MInArmY]->target == expectedInY);
++    CHECK(observed[MOutArmX]->moves > 0 && observed[MOutArmX]->target == expectedOutX);
++    CHECK(observed[MOutArmY]->moves > 0 && observed[MOutArmY]->target == expectedOutY);
++    CHECK(MOT[MInArmX].ReadPos() == expectedInX && MOT[MInArmY].ReadPos() == expectedInY);
++    CHECK(MOT[MOutArmX].ReadPos() == expectedOutX && MOT[MOutArmY].ReadPos() == expectedOutY);
++}
++
++static void routeCases()
++{
++    scenario = "Dut8 routes through 2550";
++    initialize(tDutType_8, 40, 60);
++    Prod.RotationTimeIn = Prod.RotationTimeOut = 1;
++    Prod.RotationCount[0] = Prod.OutRotationCount[0] = 90;
++    iInArmRotateKit = iOutArmRotateKit = 2510;
++    M_DoInArmRotateKIT_Motor();
++    M_DoOutArmRotateKIT_Motor();
++    CHECK(iInArmRotateKit == 2550);
++    CHECK(iOutArmRotateKit == 2550);
++    scenario = "per-site bypasses 2550";
++    FrmRotate->bShowRotateBySite = true;
++    iInArmRotateKit = iOutArmRotateKit = 2510;
++    M_DoInArmRotateKIT_Motor();
++    M_DoOutArmRotateKIT_Motor();
++    CHECK(iInArmRotateKit == 2600);
++    CHECK(iOutArmRotateKit == 2600);
++}
++
++static void offsetCase(int degrees, bool offsetEnabled)
++{
++    scenario = offsetEnabled ? "in/out one-motor offset" : "other motor has no offset";
++    initialize(tDutType_4, 40, 60);
++    iRotate_Type = offsetEnabled ? eInOutArm1Motor : e1MotRotate;
++    SetMotorResolution(InAngle45, InAngle90, true);
++    SetMotorResolution(OutAngle45, OutAngle90, false);
++    Prod.RotationTimeIn = Prod.RotationTimeOut = 1;
++    Prod.RotationCount[0] = Prod.OutRotationCount[0] = degrees;
++    tRotate.iRotateOffset[0] = 137;
++    tRotate.iRotateOffset[1] = -249;
++    observed[MInRotateKit]->SetPosition(-9000);
++    observed[MOutRotateKit]->SetPosition(-9000);
++    observed[MInRotateKit]->clearObservation();
++    observed[MOutRotateKit]->clearObservation();
++    iInArmRotateKit = iOutArmRotateKit = 2510;
++    M_DoInArmRotateKIT_Motor();
++    M_DoOutArmRotateKIT_Motor();
++    int quarter = degrees/90;
++    if (quarter == 3)
++    {
++        quarter = -1;
++    }
++    else if (quarter == -3)
++    {
++        quarter = 1;
++    }
++    const int pulses = offsetEnabled ? 1250 : 2000;
++    const int inGoal = quarter*pulses+111+(offsetEnabled && quarter != 0 ? 137 : 0);
++    const int outGoal = quarter*pulses+222+(offsetEnabled && quarter != 0 ? -249 : 0);
++    for (int tick = 0; tick < 8 && iInArmRotateKit == 2600; ++tick)
++    {
++        M_DoInArmRotateKIT_Motor();
++    }
++    for (int tick = 0; tick < 8 && iOutArmRotateKit == 2600; ++tick)
++    {
++        M_DoOutArmRotateKIT_Motor();
++    }
++    CHECK(observed[MInRotateKit]->moves > 0 && observed[MInRotateKit]->target == inGoal);
++    CHECK(observed[MOutRotateKit]->moves > 0 && observed[MOutRotateKit]->target == outGoal);
++    CHECK(MOT[MInRotateKit].ReadPos() == inGoal);
++    CHECK(MOT[MOutRotateKit].ReadPos() == outGoal);
++}
++
++static void rotationCountCase(bool match)
++{
++    scenario = match ? "in per-site RotationCount match" : "in per-site RotationCount no match";
++    initialize(tDutType_8, 40, 60);
++    FrmRotate->bShowRotateBySite = true;
++    iRotate_Type = e1MotRotate;
++    SetMotorResolution(InAngle45, InAngle90, true);
++    Prod.RotationTimeIn = 2;
++    Prod.RotationCount[1] = 90;
++    tRotate.RotationCount[1] = 90;
++    tRotate.RotateDutDate[0][0][3] = match ? 90 : 180;
++    MOT[MInRotateKit].Tray.Data[3][0] = HAS_IC;
++    observed[MInRotateKit]->SetPosition(-9000);
++    observed[MInRotateKit]->clearObservation();
++    iInArmRotateKit = 2510;
++    M_DoInArmRotateKIT_Motor();
++    CHECK(iInArmRotateKit == 2600);
++    M_DoInArmRotateKIT_Motor();
++    if (match)
++    {
++        CHECK(observed[MInRotateKit]->moves > 0 && observed[MInRotateKit]->target == 2111);
++    }
++    else
++    {
++        CHECK(observed[MInRotateKit]->moves == 0);
++        CHECK(MOT[MInRotateKit].ReadPos() == -9000);
++    }
++    MOT[MInRotateKit].Tray.Data[3][0] = NULL_IC;
++}
++
++static void differentAngleCase(bool different)
++{
++    scenario = different ? "out different angle selects +90" : "out common angle selects -90";
++    initialize(tDutType_4, 40, 60);
++    tRotate.bUseDifferentAngle = different;
++    tRotate.iRotateOffset[1] = -249;
++    Prod.RotationTimeOut = 4;
++    Prod.RotateDutDate[0][0][1] = 90;
++    Prod.RotateDutDate[1][0][1] = 180;
++    Prod.OutRotationCount[3] = -90;
++    Prod.OutRotationCount[2] = 90;
++    observed[MOutRotateKit]->SetPosition(-9000);
++    observed[MOutRotateKit]->clearObservation();
++    iOutArmRotateKit = 2550;
++    M_DoOutArmRotateKIT_Motor();
++    CHECK(iOutArmRotateKit == 2600);
++    const int goal = (different ? 1250 : -1250)+222-249;
++    for (int tick = 0; tick < 8 && iOutArmRotateKit == 2600; ++tick)
++    {
++        M_DoOutArmRotateKIT_Motor();
++    }
++    CHECK(observed[MOutRotateKit]->moves > 0 && observed[MOutRotateKit]->target == goal);
++    CHECK(MOT[MOutRotateKit].ReadPos() == goal);
++}
++
++static void passBinCase(bool feature, bool configured, bool passed)
++{
++    scenario = "out pass-bin transfer condition";
++    initialize(tDutType_4, 40, 60);
++    iRotate_Type = e1MotRotate1Dut;
++    OutArmSuck.iMaxCol = OutArmSuck.iMaxRow = 1;
++    CosFunction.bPassBinNoRotate = feature;
++    tRotate.bPassBinNoRotate = configured;
++    OutArmSuck.bPass[0][0] = passed;
++    OutArmSuck.Item[0][0] = HAS_NULL_IC; // golden virtual filler: no vacuum I/O
++    MOT[MOutRotateKit].Tray.Data[0][0] = NULL_IC;
++    iOutArmRotateKit = 1300;
++    M_DoOutArmRotateKIT_Motor();
++    const bool skipped = feature && configured && passed;
++    CHECK(OutArmSuck.Item[0][0] == (skipped ? HAS_NULL_IC : NULL_IC));
++    CHECK(MOT[MOutRotateKit].Tray.Data[0][0] == (skipped ? NULL_IC : HAS_NULL_IC));
++    CHECK(iOutArmRotateKit == 2000);
++    OutArmSuck.Item[0][0] = NULL_IC;
++    OutArmSuck.iMaxCol = 4;
++    OutArmSuck.iMaxRow = 2;
++}
++#endif
++
++int main()
++{
++#ifndef SOFT_SIMULTE
++    std::puts("SKIP: IG-6 is a SOFT_SIMULTE motor-flow test; SHIP does not execute it.");
++    return 77;
++#else
++    if (!W906TestRequireCtestRedirects("IforGPT_RotateKitRuntime"))
++    {
++        return 2;
++    }
++    std::setvbuf(stdout, 0, _IONBF, 0);
++    fixture();
++    xyCase("Dut8 fractional taught pitch", tDutType_8, 41.25, 60.5, false,
++           24125, 44125, 36050, 56050);
++    xyCase("Dut4 large IC pitch40", tDutType_4, 40, 60, true,
++           17334, 37334, 30000, 50000);
++    xyCase("Dut4 large IC pitch80", tDutType_4, 80, 60, true,
++           17334, 37334, 30000, 50000);
++    xyCase("Dut4 small IC", tDutType_4, 40, 60, false,
++           20000, 40000, 30000, 50000);
++    routeCases();
++    const int degrees[] = {-270, -180, -90, 0, 90, 180, 270};
++    for (unsigned i = 0; i < sizeof(degrees)/sizeof(degrees[0]); ++i)
++    {
++        offsetCase(degrees[i], true);
++    }
++    offsetCase(90, false);
++    rotationCountCase(true);
++    rotationCountCase(false);
++    differentAngleCase(true);
++    differentAngleCase(false);
++    passBinCase(true, true, true);
++    passBinCase(false, true, true);
++    passBinCase(true, false, true);
++    passBinCase(true, true, false);
++    std::printf("IforGPT_RotateKitRuntime: %d/%d checks passed; %d failed\n",
++                checks-failures, checks, failures);
++    return failures ? 1 : 0;
++#endif
++}
+diff --git a/tests/test_st02_w195_n06.cpp b/tests/test_st02_w195_n06.cpp
+index 257e0f4a..6d81de7d 100644
+--- a/tests/test_st02_w195_n06.cpp
++++ b/tests/test_st02_w195_n06.cpp
+@@ -365,6 +365,12 @@ int main(int argc, char** argv)
+     CHECK(g_msgs == m0 + 2);
+     CHECK(g_msgS1 == "START refused: the last N06 recipe sync to OS Tester FAILED: 7Z_EXIT_3 -- RCP1. Fix it and change the recipe again.");
+     CHECK(g_msgS2.find("7z 回報錯誤（代碼 3）（7Z_EXIT_3，RCP1）") != std::string::npos);
++    g_hookExit = 0;                                        // AI(W906-W195) K1 fix: a later N06 call with another result (an OK upload)
++    CHECK(TesterTCP_CopyRecipeFromTester("RCP1") == true); //   must not change the reason the START refusal names
++    CHECK(W906_N06CheckStartAllowed() == false && g_msgS1.find("FAILED: 7Z_EXIT_3 -- RCP1") != std::string::npos &&
++          g_msgS2.find("（7Z_EXIT_3，RCP1）") != std::string::npos);
++    m0 = g_msgs - 2;                                       // one more START refusal than before: keep the "m0 + 2" counts below true
++    g_hookExit = 3;
+     IniConfig.bN06_CopyTesterFile = false;                 // the flag is read at START time: off -> no block, no message
+     CHECK(W906_N06RecipeSyncBlocked() == false);
+     CHECK(W906_N06CheckStartAllowed() == true);
+-- 
+2.55.0.windows.5
+
