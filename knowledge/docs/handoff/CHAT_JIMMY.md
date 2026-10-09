@@ -459,3 +459,5 @@
 - 20261009 22:3x ［Jimmy 筆電 → St02-M／St02-E］H6 筆電代 St01 點頭（TO_STEVEN §4 同時間那列）：IniConfig.py 只在檔尾附加、用 St01 的產生器重產；913 `cConfiguration.cpp`:992-999 對過。另外 ES02 的 HTDESIGNER 0.365～0.375 已合進 main `f9a7ab0e`（只動 tools/vscode-htdesigner）。
 - 20261009 22:4x ［Jimmy 筆電 → St02-M／ES02］✅ **第 148 批＝第 231 包**（GitLab main `b1bbe408`，GitHub `b4e17848`）：St02 的 !399（TESNA T1）、!400（TESNA T2）進 main；gate b148a 兩組態只有固定 4 支（518 支測試；出貨組態 FastClk_Jobs 一次負載下計時抖動，單獨重跑通過）。第 149 批（b18 `74f0ab28`＝W-205 L10 !402）gate b149a 跑中。
 - 20261009 22:5x ［Jimmy 筆電 → 全體］機台已套到**第 230 包**（cpp 0361～0363 PKG228～230、web 0143）；第 231 包 22:49 推出。機台快照 22:43（main `2b994a91`）只有執行紀錄，參數與工單沒變。
+- 20261009 23:2x ［Jimmy 筆電 → St02-M／St02-E／ES02］✅ **第 149 批＝第 232 包**（GitLab main `940346f8`，GitHub `aa900f67`）：St02 的 !402（L10 閘門 [C25] 規則）進 main；gate b149a 兩組態只有固定 4 支（518 支測試；出貨組態 St02_W195N06 的控制代碼探針誤報一次，單獨重跑通過）。第 150 批（b19 `855111f8`＝H6 !403＋機台 cpp 0365 WORKLOG）gate b150a 跑中（第一次 configure 撞到 EDR 鎖 ABI 探針檔，清掉建置資料夾重跑）。W-211 給 St02：H6 測試的反向驗證、N06 探針（TO_STEVEN §4 同時間兩列）。機台已套到第 231 包（cpp 0364）。
+- 20261009 23:3x ［Jimmy 筆電 → St02-M］K1 空路徑擋 START 那題收到（TO_STEVEN §4 同時間那列）：913 出處對過、HT9050 沒開 N06 複製（今天沒曝險）；先照 A 不改，等 Steven 明天決定。

@@ -1,4 +1,21 @@
-# St02 現況板（更新：2026-10-09 16:3x）
+# St02 現況板（更新：2026-10-09 22:4x）
+
+## ★ 1009 22:4x 存檔點（7 天額度 79%；St02-M 喊 85% 時照這段收尾，90% 停止新工作）
+- **今天已進 main**：!396 L05、!397 L03（第 146 批，含筆電修我測試防呆的 c59acf66／2583acfc）、!398 F2-3（第 147 批）。
+- **已推、等 gate**：!399 TESNA T1（MyStringList 按天重複檔＋D7）、!400 TESNA T2（疊在 !399；tip 50e02a39，:61 是 Ifor01 的原文）、
+  !402 L10（[C25] 防水閘門）。!399／!400 跟 main 只有 tests/CMakeLists.txt 檔尾衝突（三塊 St02 測試區塊都留，請筆電合）。
+- **H6 已推**（見 ChangeLog 第 34 列）。**C25 設定頁那一列**：WIP `v906/st02-c25row-wip`（疊在 L10 上），認領 22:4x 已登、等筆電點頭與 !402 進 main，H6 先進就重產。
+- **之後**：C25 設定頁那一列（!402 進 main 之後，同樣用產生器；RULINGS_20261009 #14）→ W-204 b（L07 產生檔＋網頁，等 Ifor01 的資料模型）
+  → K1 SIM 本機驗證（只做 K1；SIM 版 wb_serve；#6 包住）。F2-3 真上傳：St02-M 明天問 Steven（SimNetMask 不動）。
+- **1009 學到的**：
+  - 測試防呆一律「路徑含 `machine_log_scratch`／`machine_config_scratch` 才算轉向」，不要只看 `d:\ht9045` 開頭（筆電 gate 在 D:\HT9045\.claude\worktrees）。
+    驗證法：用 `D:\HT9045_st02probe\tests\machine_log_scratch`（D:\HT9045 的兄弟資料夾）當 log 根目錄跑一次，跑完刪掉（`c_items\probe_citems.py`）。
+  - 一行裡 `if(...) f();   g();` 會被 GCC -Wmisleading-indentation 警告 → 同一行加大括號 `{ f(); }`。
+  - 原始碼釘子找舊閘文字時要釘「行首」：解閘後的註解常引述舊閘原文（T2 的 `\n#if 0 // TODO(GA1-B2)`）。
+  - FileRW/*.cpp（例 IniConfig.cpp）只在 wb_serve 裡，ctest 連不到 → 產生檔的改動用「同一個巨集：字串比對產生行＋編譯執行」驗（test_st02_h6_a77.cpp）。
+  - 全套 ctest（-j 6）在 #6 期間：config_db／ini_helpers／config_loaders 讀真的 D:\HT9045\system（被換成 HT9050 快照）一定紅；dfm2rc ×3、
+    建置線沒建的 exe、偶發的 St02_W152ContactData／FastClk_Jobs（單獨跑會過）都不是回歸。
+  - index.lock 只有在 tasklist 沒有 git.exe 時才刪。
 
 ## ★ 1009 16:3x 存檔點（7 天額度 73%；St02-M 喊 85% 時照這段收尾，90% 停止新工作）
 - **開著的 MR**（都是 St02-E 今天推的）：
