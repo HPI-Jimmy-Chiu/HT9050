@@ -2525,4 +2525,5 @@ tools 0189 (20261009): HTML designer merged with laptop package 227 (0.347.0 -> 
      操作紀錄 oplog_20261009.txt：新增 2502 行
      設定檔變動：machine_params/D_GPIB9045_system/general.ini、machine_params/D_HT9045_system/IO_Table.csv、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/lastdata_backup2.dat、machine_params/D_HT9045_system/IO_Table.csv.bak_20261009_205732、machine_params/D_HT9045_system/IO_Table.csv.bak_20261009_205943、machine_params/D_HT9045_system/IO_Table.csv.bak_20261009_205956、machine_params/D_HT9045_system/IO_Table.csv.bak_20261009_211024、machine_params/D_HT9045_system/IO_Table.csv.bak_20261009_211038、machine_params/D_HT9045_system/IO_Table.csv.bak_20261009_211307、machine_params/D_HT9045_system/IO_Table.csv.bak_20261009_211705
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
+tools 0190 (20261009): HTML designer merged with laptop package 229 (0.356.0 -> 0.364.0). Install: tools/vscode-htdesigner pack.ps1 then code --install-extension.
 MD5 清單在 MANIFEST_MD5.tsv。
