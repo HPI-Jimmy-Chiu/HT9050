@@ -15,3 +15,9 @@ host四個字面命中含兩份prototype，實際call兩處；不把兩段當完
 
 這是局部reference完成；完整權限鏈、外部reader、timer／DB及UPH S8仍未完成。
 沒有讀取帳密／權杖或執行登入、檔案載入、FTP、硬體、runtime、build或測試。
+
+## 接續局部：一般登入與JSON raw writer
+
+本次來源 `367d9d85792fa756db6e898c950d6d79931cbf74`；四完整callee與先前版本pin分開保存。
+按stOperatorClick／BookLogin／RawValue／BeforeValue查[接續入口](login-json/index.md)；
+客戶分流、權限清零／Logout與Key／comma／正文界線見子頁。
