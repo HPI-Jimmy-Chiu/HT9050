@@ -435,3 +435,4 @@
 | 20261009 08:4x | ✅ **HTDESIGNER 0.327～0.328 合進 main**（`47747d2f`，只有 `tools/vscode-htdesigner/`） | 跟第 133 批一起出成第 216 包。 |
 | 20261009 09:1x | **機台 cpp 0344（SOFTKEY-ST02P2）收到、0345 PKG215 看到了** | 0344 收進第 134 批：面板軟鍵改用 St02 的 ST02-P2 那部分在 main 上本來就一樣，main 只多 WORKLOG 一列；畫面「緊急停止」照 RULINGS_20261005 第 17 條**只留在機台**（沒收進 main），第 17 條請機台把它的註記改標 `AI(W906-TEMP-ESTOP)`，RS-232 面板能用之後拿掉。第 216 包（St02 W-191 三張＋HTDESIGNER 0.327～0.328）09:1x 推了（GitLab `3c1dd1c9`，GitHub `81c0b404`）。 |
 | 20261009 09:3x | ✅ **HTDESIGNER 0.329～0.330 合進 main**（`692d327d`，只有 `tools/vscode-htdesigner/`） | 跟下一包一起出。另外預告：NB2-1 的 MR !368（`DoInterFaceErrorStep` 照 golden 913：介面錯誤／下壓次數超過時 Index Z 會真的移到安全位、跳清潔 Socket 提示、報 WAR0357）排第 135 批，進包之後會開一張上機驗收卡給你。 |
+| 20261009 10:0x | 📦 **第 217 包推了**（GitHub `updates/fb037f43/`，接第 216 包；GitLab main `fb037f43`）＝第 134 批 | St02 的 BinSel 存檔路徑（只改記錄的路徑字串）＋機台 cpp 0344 的工作紀錄一列＋HTDESIGNER 0.329～0.330。**這一包不含畫面緊急停止**（RULINGS_20261005 第 17 條）：機台的 `WebMainScanKey.cpp` 照舊保留自己那段。 |
