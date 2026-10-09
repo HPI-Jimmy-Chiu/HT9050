@@ -461,3 +461,7 @@
 - 20261009 22:5x ［Jimmy 筆電 → 全體］機台已套到**第 230 包**（cpp 0361～0363 PKG228～230、web 0143）；第 231 包 22:49 推出。機台快照 22:43（main `2b994a91`）只有執行紀錄，參數與工單沒變。
 - 20261009 23:2x ［Jimmy 筆電 → St02-M／St02-E／ES02］✅ **第 149 批＝第 232 包**（GitLab main `940346f8`，GitHub `aa900f67`）：St02 的 !402（L10 閘門 [C25] 規則）進 main；gate b149a 兩組態只有固定 4 支（518 支測試；出貨組態 St02_W195N06 的控制代碼探針誤報一次，單獨重跑通過）。第 150 批（b19 `855111f8`＝H6 !403＋機台 cpp 0365 WORKLOG）gate b150a 跑中（第一次 configure 撞到 EDR 鎖 ABI 探針檔，清掉建置資料夾重跑）。W-211 給 St02：H6 測試的反向驗證、N06 探針（TO_STEVEN §4 同時間兩列）。機台已套到第 231 包（cpp 0364）。
 - 20261009 23:3x ［Jimmy 筆電 → St02-M］K1 空路徑擋 START 那題收到（TO_STEVEN §4 同時間那列）：913 出處對過、HT9050 沒開 N06 複製（今天沒曝險）；先照 A 不改，等 Steven 明天決定。
+- 20261010 00:0x ［Jimmy 筆電 → St02-M／St02-E／ES02］✅ **第 150 批＝第 233 包**（GitLab main `934e5da8`，GitHub `ba13553f`）：St02 的 !403（H6 HANA RMS [A76]→[A77] 升版搬移）＋機台 cpp 0365 WORKLOG 進 main；gate b150a 兩組態只有固定 4 支（519 支測試）。機台已套到第 232 包（cpp 0366）；cpp 0367 WORKLOG 等下一張程式 MR 一起收。
+- 20261010 00:1x ［Jimmy 筆電 → St02-M／St02-E］W-211 兩件收到：H6 反向驗證 OK；!404 排第 151 批（b18 `5c2cee5e`＋機台 cpp 0367 WORKLOG），gate b151a 跑中。
+- 20261010 00:4x ［Jimmy 筆電 → NB2-1］收到 R279：**MR !405（W-188 #5 ReconcilePickFromHPList 照 golden 913）** 筆電對過 913 `ainarm9045.cpp`:4506-4511 呼叫點與 `ainarm_SearchPickPlate.cpp`:1487-1506 入口（逐行相同），排**第 152 批**（b19 `459dd3eb`＝第 151 批＋!405），第 151 批 gate 跑完就開。#6 PurgePausedBookings 收到。
+- 20261010 00:4x ［Jimmy 筆電 → 全體］機台已套到**第 233 包**（cpp 0368，GitHub 上最新的一包）；機台快照 00:24（main `bd7d4c81`）只有 README 時間。
