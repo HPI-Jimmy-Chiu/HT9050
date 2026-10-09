@@ -1,0 +1,355 @@
+From 0325b5f1e894c1f99a2ad1826fa1374fd208c1f1 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 10 Oct 2026 05:55:39 +0800
+Subject: [PATCH] PKG239: integrate laptop package 239 (GitLab 64a51c5f) --
+ NB2-1 W-188 #6: purge hot-plate paused (borrowed, never returned) bookings at
+ the Auto Site Mapping restart as golden 913 (MR !410). HT9050: only with ASM
+ on and an interrupted borrow; one event-log line when it purges.
+ Auto-accepted (scheduled check).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ Public/HTEditList.cpp               |  87 +++++++++++++++++
+ Public/HTEditList.h                 |   2 +-
+ docs/NIGHT_REPORT.md                |   6 +-
+ docs/WORKLOG_MACHINE.md             |   1 +
+ forms/fMain.cpp                     |   2 +-
+ tests/CMakeLists.txt                |  13 +++
+ tests/test_nb2_w188_purgepaused.cpp | 142 ++++++++++++++++++++++++++++
+ 7 files changed, 249 insertions(+), 4 deletions(-)
+ create mode 100644 tests/test_nb2_w188_purgepaused.cpp
+
+diff --git a/Public/HTEditList.cpp b/Public/HTEditList.cpp
+index 8c5fe8cc..fba9f15e 100644
+--- a/Public/HTEditList.cpp
++++ b/Public/HTEditList.cpp
+@@ -2995,3 +2995,90 @@ int W906_ReconcileHPLedger913(const char* szWho)
+     return iPhantom+iDup;
+ }
+ //---------------------------------------------------------------------------
++//AI(W906-W188) 20261010 (NB2-1): W-188 #6 -- golden 913 Public/HTEditList.cpp:2820-2878 verbatim.
++//---------------------------------------------------------------------------
++//AI(ht9045-inarm-flow) 20260831f (RogerYang) : 清掉「借了沒還」的暫停帳(bSuck=false但座標仍在) --
++//AI : 借料只是SetPlateSuck(false)暫停, 正常補回會復活成原本那個4格team;
++//AI : ASM被One Cycle/關站打斷就會留下暫停帳, 那些格的料實體上已不在盤上,
++//AI : 帳留著就是幽靈帳 -> 取料對不到料 -> Pattern #22 死結
++//AI : 只在ASM邊界(ReStartAutoSiteMapping)呼叫, 此時不會有in-flight借料
++//---------------------------------------------------------------------------
++int uPlateInfo::PurgePausedBookings()
++{
++    int iWiped=0;
++    for(int ig=HPSuckGroupList->Count-1; ig>=0; ig--)
++    {
++        uHPSuckGroup* HPGroup=ExtractSuckGroup(ig);
++        if(HPGroup==NULL)
++            continue;
++
++        for(int it=HPGroup->GetTeamCount()-1; it>=0; it--)
++        {
++            uHPSuckTeam* HPTeam=HPGroup->ExtractSuckTeam(it);
++            if(HPTeam==NULL)
++                continue;
++
++            bool bAnySuck=false;
++            for(int i=0; i<MAX_ARM_Row; i++)
++            {
++                for(int j=0; j<MAX_ARM_Col; j++)
++                {
++                    if(HPTeam->bSuck[i][j]==false &&
++                       HPTeam->iPlateR[i][j]>=0 &&
++                       HPTeam->iPlateC[i][j]>=0)                                //AI : 未使用的吸嘴座標=-1, 不會被誤清
++                    {
++                        HPTeam->iPlateR[i][j]=-1;
++                        HPTeam->iPlateC[i][j]=-1;
++                        HPTeam->iSite[i][j]  =-1;
++                        iWiped++;
++                    }
++
++                    if(HPTeam->bSuck[i][j]==true)
++                        bAnySuck=true;
++                }
++            }
++
++            if(bAnySuck==false)                                                 //AI : team全空 -> 刪除
++            {
++                uHPSuckTeam* HPDel=HPGroup->RemoveSuckTeam(it);
++                if(HPDel!=NULL)
++                    delete HPDel;
++            }
++        }
++
++        if(HPGroup->GetTeamCount()==0 &&
++           ig!=HPSuckGroupList->Count-1)                                        //AI : 隊尾open group要留
++        {
++            DelHPSuckGroup(ig);
++            delete HPGroup;
++        }
++    }
++    return iWiped;
++}
++//---------------------------------------------------------------------------
++//AI(W906-W188) 20261010 (NB2-1): W-188 #6 -- the purge block at the head of golden 913 main.cpp TfMain::ReStartAutoSiteMapping (:29258-29275,
++//   RogerYang 20260831f / 20260914), verbatim.  The port's TfMain::ReStartAutoSiteMapping (forms/fMain.cpp:248) is still the empty
++//   stub and calls this on the same line; forms/fMain.cpp cannot see the real uPlateInfo, this TU can.  The rest of the 913 body
++//   (ASM step / cursor reset, DoInArm_9045_SuckerMap, ASM-end orphan placeholder clear) is NOT ported here -- follow-up.
++void W906_ReStartASMPurge913()
++{
++    //AI(ht9045-inarm-flow) 20260831f (RogerYang) : ASM邊界清掉「借了沒還」的暫停帳 --
++    //AI : 借料=SetPlateSuck(false)暫停(座標保留,4格team不拆), 正常補回會復活;
++    //AI : 被One Cycle/關站打斷時暫停帳不會復活, 留著就是幽靈帳 -> 取料對不到料 -> Pattern #22 死結
++    //AI(ht9045-inarm-flow) 20260914 (RogerYang) : 20260831f 原註解「進入本函式不會有in-flight借料」已被 log 推翻(偉測 HHT-83) --
++    //AI : One Cycle 打斷借料時 csystem 會先設 iResetSiteMappingStep=1 再呼叫本函式, 補回還排在後面;
++    //AI : 這時清掉暫停帳, 補回會查無帳而補登成單格 group -> 該格脫離原 team -> 熱盤孤島 -> 找不到 2x4 落點 -> WAR0150
++    //AI : Home 不會設 iResetSiteMappingStep, 所以 Home 照清(借走那顆不會回熱盤), 一個旗標就分得乾淨
++    if(PickFromHPList!=NULL &&
++       iResetSiteMappingStep==0)                                                //AI : >0 = 補回還沒做, 這一輪不可清
++    {
++        int iPurged=PickFromHPList->PurgePausedBookings();
++        if(iPurged>0)
++        {
++            AnsiString StrPurge;
++            StrPurge.sprintf("ASM boundary : purge %d paused booking slot(s), grp=%d", iPurged, PickFromHPList->GetHPSuckGroupCount());
++            RecordProcess(StrPurge, "ReStartAutoSiteMapping");
++        }
++    }
++}
++//---------------------------------------------------------------------------
+diff --git a/Public/HTEditList.h b/Public/HTEditList.h
+index 6c8a2fa0..ed81ed68 100644
+--- a/Public/HTEditList.h
++++ b/Public/HTEditList.h
+@@ -347,7 +347,7 @@ public:
+     void ClearGroupList();
+     void DelHPSuckGroup(int iIndex);
+ 
+-    bool SetPlateSuck(int _iP, int _iRow, int _iCol, bool bSuck);               //編輯已儲存的資料
++    bool SetPlateSuck(int _iP, int _iRow, int _iCol, bool bSuck);   int  PurgePausedBookings();               //編輯已儲存的資料   //AI(W906-W188) 20261010 (NB2-1): golden 913 Public/HTEditList.h:214 (RogerYang 20260831f)
+     void SetArrPlateXY(int iSuckRow, int iSuckCol, int _iP, int iPlateR, int iPlateC, int _iSite=-1);
+ 
+     int  GetHPSuckGroupCount();
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index 6760ff3c..51c6cc06 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -1,10 +1,10 @@
+-# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1010 04:3x）
++# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1010 05:2x）
+ 
+ ## ☀ 10/08 早上先看這裡（04:3x 起草；之後的進度往這張表加）
+ 
+ | 項目 | 一句話 |
+ |---|---|
+-| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～154 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate；第 140 批拿掉當掉的 IG-6 後才綠），出了**第 181～237 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
++| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～155 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate；第 140 批拿掉當掉的 IG-6 後才綠），出了**第 181～238 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
+ | **模擬組態** | St02 W-149 做完：模擬版的固定失敗從 7 支降到 4 支，跟出貨一樣——之後模擬版多紅一支就是真回歸。 |
+ | **機台修的事（重點）** | 0307 主控台非同步（START 卡 103 秒＋EMG 誤報的根因）、0309／0310／0312／0316 HT9050 Tray 流程（站序、Empty→Auto 補盤、位置不加 6800、Loader 探測看抽屜感測）、0311／0317 上升氣缸雙線圈、0313 出料手臂讓位點（00:19 MOutArmX 警報）、0314 CCD Y 原點判斷、**0315 HT9050 先跳過 Index 扭力讀取**（旗標預設開，扭力讀取驗證後要關）。 |
+ | **軟體極限** | 00:19 的警報是 golden 拿軟體極限（這台 ±999999）算目標。MainNB-GPT 普查（W-164）：只剩 Motor Test 頁的 LightScale 會算出 ±999899——EastSun 0925 R7 已定照 golden，只發提醒。 |
+@@ -140,6 +140,8 @@
+ | **出的包（1010 02:5x）：第 236 包＝第 153 批** | GitLab `6f8cf55f`／GitHub `fff1c362`：St02 的出料飛梭閘門 [C25] 設定頁那一列（只有裝閘門的機台看得到）＋機台 WORKLOG；HT9050 行為不變。gate b153a 兩組態只有固定 4 支。第 154 批（關程式時寫 TTLLog，照 913；出貨組態關程式時 TTL_Signal_LOG 會多一行）gate 跑中。St02-E 派了下一張（W-213，`#if 0` 翻譯）。 |
+ | **出的包（1010 03:4x）：第 237 包＝第 154 批** | GitLab `b98e6151`／GitHub `6d272887`：St02 照 913 補上「關程式時寫一筆 TTLLog Close」（只有出貨組態）；HT9050 出貨組態關程式時 TTL_Signal_LOG 會多一行，其他不變。gate b154a 兩組態只有固定 4 支。**今晚 configure 常被防毒鎖住**（第 150、152、153、154 批都碰到，兩次重試 3 次全失敗）：每次重試本來就是全新資料夾，差在等得不夠久——筆電把 gate 腳本的重試從 3 次加到 6 次、等待從 15 秒×次數拉長到 30 秒×次數（最多約 10 分鐘；原檔備份 `gate_wt2.sh.bak_20261010_0340`）。 |
+ | **1010 04:3x：第 155 批開跑；W-209 第 2 次追問** | 第 155 批（b18 `cf283690`）＝St02 的 !409（W-213 第一步：SECS 主機可以讀 SVID 1191「Error Bin Count」，照 913；HT9050 沒開 SECS，看不到變化）＋機台 cpp 0373 WORKLOG，gate 中。St02-M 順手發現筆電的 `Command.cpp` HTSET,701（主機下命令清掉重測計數）關著的理由過期 → 併進 W-213 第 ④ 步給 St02-E。ES02 設計工具 0.389～0.397 合進 main（`61c98b38`）。機台已套到第 237 包。KenHeish 的 W-209 追第 2 次，加進 §0 #153（建議 B：不催）。筆電的閒置偵測把 ST-GPT 技術文件裡的「idle／控制權」誤判成閒置，已修正規則（11 個例子都對）。 |
++| **出的包（1010 05:0x）：第 238 包＝第 155 批** | GitLab `b708146d`／GitHub `26c9fc18`：St02 讓 SECS 主機讀得到 SVID 1191「Error Bin Count」（照 913；HT9050 沒開 SECS，行為不變）＋機台 WORKLOG。gate b155a 兩組態只有固定 4 支；模擬組態 configure 又被防毒鎖一次，04:3x 加長的重試第一次就等過了（30 秒）。第 156 批（NB2-1 的 W-188 第 6 步：Auto Site Mapping 重新開始時清掉「借了沒還」的暫停帳，照 913）gate 跑中。W-213 第二步暫緩（St02 查到移植樹的 ART 批次狀態有三份、golden 只有一份），根本解登記成 POOL-12（低優先，HT9050 沒用 ART）。 |
++| **1010 05:2x：線 D 哨兵（在 b18＝main `b708146d` 的程式上量）** | 都沒有紅燈：網頁接線檢查自我測試正常、實跑 13 項＝基準 13 項；absence-claim 自我測試正常、所有宣稱都還成立；配方 66／65＝基準；控制字元 14 個檔都是已知的；worktree 建置輸出 24 GB（門檻 50 GB）。MR 稽核：還開著 4 張——!410 在第 156 批 gate 中；!258／!265／!270 是 10/06 就知道的舊單；GitHub 機台 repo 開著的 PR 0。ES02 設計工具 0.399 合進 main（`eb3b37ed`）。 |
+ | **要你決定的**（§0） | ✅ 你 10:1x 都回了：#148＝NB2 已完成（!306 收進第 110 批確認）、#149＝A（Ifor-GPT 專做執行期測試，IG-3／IG-4）、!310＝A（ES02 HTDESIGNER 0.235～0.257 收進第 110 批）＝RULINGS_20261008 第 2 條。**13:0x 新一題 #150**：GPIB 位址不一致要不要自動修正（Jerry 留給你；預設 A＝維持 golden、只留警告，可不回）。<br>**🆕 1009 11:4x 新一題 #151：HANA 機台按 START 時，要不要照 golden 先等 RMS 伺服器連線（最多 3 秒）？** 白話：golden 913（RogerYang 0916）裡，HANA 客戶開了 A77 的機台按 START 前，會先確認 RMS 伺服器連得上，連不上就擋下 START，連線最多等 3 秒。問題在移植樹的輪詢是單執行緒——這 3 秒裡整台機台的狀態更新會停住（例：網頁上的數字 3 秒不動）。你 0923 定過「會擋住輪詢的整合要先問」，所以問你。只有「HANA 客戶＋開 A77＋線上模式＋RMS 還沒連上」才會等，HT9050 永遠走不到。選項：**A＝照 golden 收**（建議：只在按 START 那一刻、最多 3 秒，機台本來就停著；St02 已經把等待裡的訊息迴圈換成只推 HANA 連線）；**B＝先不收**，等改成不擋輪詢的寫法（例：連線放到背景，START 時只看結果）。**沒回之前照 B**：H4 先不合，HANA 其他幾張（!372～!374）照常進第 138 批。<br>**🆕 1009 12:3x 新一題 #152：EastSun 派給你的「在沒有 AI 的電腦上實測安裝與更新」，實測要誰來做？** 白話：EastSun 希望客戶端或沒有 AI 的電腦也能只靠文件和腳本裝好、更新 HT9050 的軟體（機台 cpp 0349）。手冊和腳本筆電已派 Ifor01 寫（W-197）；寫好之後要有一個「人」在一台沒有 Claude 的電腦上照著做三個情境：①從零安裝並啟動；②從某一包更新到最新一包，中間至少遇到一個「機台和筆電都改過」的檔；③故意讓建置失敗，照手冊退回。模擬組態就可以，不用機台。選項：**A＝你自己做**（建議：EastSun 指名你，你也最清楚客戶端要什麼；大約半天到一天）；**B＝指定一位同事**照手冊做、不用 AI（例：Kevin 或 Jerry）；**C＝先不排**，手冊寫好放著。**沒回之前照 C**：手冊照寫，不排實測。實測的人不能是寫手冊的 Ifor01。<br>（1009 13:4x 補：**#151 也請 Steven 一題決定**（W-199）——你 13:3x 說 Steven 的回覆最高優先，Steven 回了就照他的，這題你就不用回。Steven 13:0x 對同一類的 KYEC 換配方同步等 7z 已經裁定「功能打開才等」照 913 同步，可以參考。）<br>（1009 15:1x 補 #152：**手冊和腳本已經好了**——Ifor01 的 MR !379 進 main `7db6b913`：`tools/laptop_ops/pkg_template/` 的 `NO_AI_INSTALL.md`／`NO_AI_UPDATE.md`／`NO_AI_TROUBLESHOOTING.md`＋五支 PowerShell 腳本＋啟動 .bat，每份手冊都附實測紀錄表。你決定誰做實測就可以開始；新腳本等實測過了才換進每一包。） |
+ 
+ 
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 0fc0e7c8..3f640dbd 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -353,6 +353,7 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-07 | 設計外掛 tools 0170 | — | 設計外掛工作階段自己推（分支 a6cadd2，GitHub dc7975ff）：依序合併筆電包 162、163、167、168 的設計外掛（0.197.0 → 0.234.0），164～166、169～172 沒帶設計外掛；無衝突，機台自己的設計外掛功能都保留；測試修正：建置視窗進度條在矮視窗不再塌掉、面板繪製測試固定 Edge 視窗大小；run_all 3/3、vscode_it 161/161，已安裝 0.234.0；只動 tools/vscode-htdesigner | tools 0170 |
+ | 10-08 | 設計外掛 tools 0171 | — | 設計外掛工作階段自己推（commit b453060，GitHub f42c142b）：EastSun 1008 方案總管的 Debug／Release 按鈕按不了（0.234 在 ▶＝F5 時把它變灰）→ 裁決「連動F5 release 和debug」：按鈕恢復可按，resolveDebugConfiguration 依按鈕把 F5／▶ 的啟動目標換成 build_integ_dbg_x86 或 build_integ_ship_x86 那一組；「模擬」仍是灰的。run_all 3/3；vscode_it 沒跑成（VS Code 自己的更新程式 CodeSetup 從 10/07 18:34 起佔住執行個體鎖）。vsix 已安裝，版本號沒變，要重新載入視窗才生效；只動 tools/vscode-htdesigner | tools 0171 |
+ | 10-08 | 173～204 | 07dbeae3＋63b1aa25＋351291d5（GitLab 0258ba66…68fc0e65、39c6388c、e6c54331） | 本 commit（機台 C++＋web），EastSun「你確定有合完整?」→「快合」→「一直合下去 不要停拜託」（173～202 的 C++ 從 10-07 起都沒合，只有設計外掛跟上）。備份分支 backup/pre-pkg202-20261008（cpp、web）＋ D:\HT9045\_pkg_202\backup_machine_195843、D:\HT9045\_pkg_203\backup_machine_220733。202 疊三十包：直接換 108（換 105；tasks.json、acatchtray 留機台）、新檔 35、兩邊都改 22（合併 16、設計外掛／WORKLOG 照規定 6）、一樣 88；每個直接換的檔掃機台 AI 標記＋W906_ 識別字：WebBridgeServer（TOKEN-OFF／SOFTKEY panel.estop）改三方合併＋收筆電 pad.get／pad.close／observerSG 豁免、acatchtray 留機台（筆電版＝少 PROBECYL）、MotionView9050 換（機台＝基底）。衝突：cinitial／test_flow9050_tray／csystem 取機台（BOOTCLEAR、PROBECYL、pitch 同步在 MainProc）；test_scankey_golden、IoBtnPanelClick、tests/CMakeLists、WebBridgeTags（tester.name 依 Jerry 1008 裁決 A＝golden LoadTestModePicture）取筆電；wb_serve 第 239 行＝機台 IOWAIT＋筆電 g_ppCyc0 搬移。4 個新網頁檔改 CRLF。203：15 檔（直接換 9、新 4、合併 2，無衝突）；204：12 檔（直接換 9、新 1、合併 2，無衝突；SECS SV Auto1～6 料盤別名＋氣缸平均推拉時間、cSpeed）。合併後 test_scankey_golden 補回 PadInterface_St02.h include、[19]（筆電版軟體面板鍵 ST02-P2，機台保留自己的 SOFTKEY）在機台關掉。ctest Debug 426/441：15 個失敗都是第 381 列的已知清單（環境：dfm2rc×4 ctest 找不到 g++／rc.exe、E031、GearTeachSave、TeachCheckRangeReload；斷言筆電設定／repo 舊表：config_db、ini_helpers、config_loaders、MotorPoints／MachineMotors／MachineSuckers_HT9050；機台補丁：GA2_C1_cinitial、FShow_Audit）；204 之後相關 29 支全過。EastSun 未 commit 的 acatchtray／asendic_Loader／cinitial／PadInterface_St02（SafeLock）先拿開、合完三方套回，不進 commit。20:02 -j4 整包重編讓機台當機（Kernel-Power 41），留下 NUL 填滿的 .a／.obj／.d ⇒ clean 後 -j2 重編 | 本 commit |
++| 10-10 | 239 | 67d05f55（GitLab 64a51c5f） | 本 commit（定時檢查自動收）：NB2-1 W-188 #6（MR !410，golden 913 Public/HTEditList.cpp:2821-2878、main.cpp:29258-29275，RogerYang 0831f／0914）：uPlateInfo::PurgePausedBookings 清掉熱盤「借了沒還」的預約（bSuck false 但座標還留著）、刪空隊與非尾端空組；TfMain::ReStartAutoSiteMapping 開頭在 iResetSiteMappingStep==0（沒有排隊中的歸還）時呼叫，真的清了才寫一行 RecordProcess。913 ReStartAutoSiteMapping 其餘本體尚未移植（port 原本是空殼）。**HT9050**：只有開 Auto Site Mapping、而且熱盤借格曾被中斷（One Cycle／關 site）時，下次 ASM 重新開始會清掉並寫「ASM boundary : purge N paused booking slot(s)」；一般跑料不變。6 檔：直接換 4（HTEditList.h／.cpp、fMain.cpp 等，掃過沒有機台標記會消失）、新測試 1、tests/CMakeLists 合併無衝突。wb_serve 沒在跑：Debug＋release 都建好（05:55），NB2_W188PurgePaused／Reconcile、START_SitesCensus 過。備份 D:\HT9045\_pkg_239\backup_machine_055257 | 本 commit |
+ | 10-10 | 238 | 26c9fc18（GitLab b708146d） | 本 commit（定時檢查自動收）：St02 W-213 第 1 步（MR !409，golden 913 SECSGEM/uHGemHT9045_SV.cpp:235）：拿掉 SV 閘 [G21]——SVID 1191 INT_4「Error Bin Count」進主機的 SV 清單（S1F3／S1F11）；值本來就是活的（出料手臂拿到 bin 超出範圍的料 +1，aoutarm9045.cpp:5043；主機清計數命令歸 0）。docs/SECS_GATED_REGISTRATIONS.md 重產（閘住的 110 → 109）。HT9050 沒開 SECS（config.ini 沒有 [SECS GEM] Enable，讀 0），看不到差別。5 檔直接換（掃過沒有機台標記會消失）；包內 WORKLOG 照規定留機台。wb_serve 沒在跑：Debug＋release 都建好（05:24），St02_Pool2SecsSv、SecsCatalogue、START_SitesCensus 過。備份 D:\HT9045\_pkg_238\backup_machine_052319 | 本 commit |
+ | 10-10 | 237 | 6d272887（GitLab b98e6151） | 本 commit（定時檢查自動收）：St02 W-150 最後一段（MR !408，golden 913 main.cpp:12306-12309，Steven 20151123）：FormClose 在 HeaterLog("Close") 之後寫一行 TTLLog("Close")——只有 SHIP 組態（golden 在 #ifndef SOFT_SIMULTE 裡），SIM 不寫；St01 的 FileRW/MainClose.cpp 兩處同行改（筆電代 St01 點頭），寫入在 St02 的 TTLLog.cpp。**HT9050 看得到**：release 每次關 wb_serve，D:\HT9045_Log\TTL_Signal_LOG 多一行「Close, <12 個開關狀態>」（只記錄，不影響動作）；筆電建議關一次程式看 TTL_Signal_LOG 最後一行。5 檔：直接換 4、MainClose.cpp 合併無衝突（掃過沒有機台標記會消失）。wb_serve 沒在跑：Debug＋release 都建好（03:53），St02_W150LogSplit2、START_SitesCensus 過。備份 D:\HT9045\_pkg_237\backup_machine_035254 | 本 commit |
+ | 10-10 | 236 | fff1c362（GitLab 6f8cf55f） | 本 commit（定時檢查自動收）：St02 W-212（MR !407，golden 913 cConfiguration.cpp:1318-1322，JerryYang 0910）：232 包 Out-Shuttle 閘門設定 [C25] 的設定頁那一列——只有 SHUTTLE_FLOODGATE=1 的機台顯示並讀 config.ini [Function] bC25FloodGateCloseByATCEnable，其他機台隱藏、固定 0；tools/editlist/IniConfig.py 末尾加列、IniConfig.gen.inc 重產（+3 行）。HT9050 SHUTTLE_FLOODGATE=0，值固定 0、那列隱藏，行為不變。5 檔直接換（掃過沒有機台標記會消失）；包內 WORKLOG 與機台相同。wb_serve 沒在跑：Debug＋release 都建好（03:23），St02_W205CItems、START_SitesCensus 過。備份 D:\HT9045\_pkg_236\backup_machine_032249 | 本 commit |
+diff --git a/forms/fMain.cpp b/forms/fMain.cpp
+index 397a7efc..f878fefc 100644
+--- a/forms/fMain.cpp
++++ b/forms/fMain.cpp
+@@ -245,7 +245,7 @@ void TfMain::DebugOneCycleHotPlate(AnsiString /*sfunc*/) {}     // debug log sin
+ // absence of any real pause are untouched.   [SUPERSEDED 20261001 by AI(W906-PAUSE-FWD) on the next line: the return value and the pause now come from the W906_RemoteRun seat]
+ bool TfMain::Pause(AnsiString Func) { W906_PauseCallCount++; W906_PauseLastFunc = Func; return W906_RemoteRunPause(Func); }   //AI(W906-PAUSE-FWD) 20261001: golden TfMain::Pause (main.cpp:6325-6379) IS the machine pause -- SoftStop=true, StopAllMotor(), the SECS DoPause event, ESD_SYSTEM_STOP.  The ~40 state-machine sites (fMain->Pause("...")), the RemoteControl / RCMD:PAUSE paths and the offset position-check START all land in THIS base (Pause is not virtual), and "return false" left the machine running (St01 todo D-032; CHAT_ST02 1001 11:29).  Forward to the W906_RemoteRun seat (forms/fMain.h:1440-1447): wb_serve installs Pause -> TfMainWeb::PauseFromWeb, the translated golden body (WebStart.cpp:3810, it never calls fMain->Pause, so no recursion); not installed (ctest, other binaries) -> false and no pause, as before.  The two counters stay (tests count calls into this base).  RULINGS_20261001 #0
+ void TfMain::ShowTestHeadComp(bool /*bRefresh*/) {}
+-void TfMain::ReStartAutoSiteMapping(bool /*bStart*/) {}
++void TfMain::ReStartAutoSiteMapping(bool /*bStart*/) { void W906_ReStartASMPurge913(); W906_ReStartASMPurge913(); }   //AI(W906-W188) 20261010 (NB2-1): W-188 #6 -- golden 913 main.cpp:29258-29275 purge block only (Public/HTEditList.cpp EOF); rest of the 913 body not ported
+ // ---------------------------------------------------------------------------
+ // AI(W906-AutoSiteMapCleanOut) 20260727: TfMain::SetMainRunStartMode -- GAP-
+ // DOCUMENTED no-op stub, added solely so csystem.cpp's InitCleanOutFunction
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 7a26b623..4361493d 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -1409,6 +1409,19 @@ if(WIN32)
+ endif()
+ add_test(NAME NB2_W188Reconcile COMMAND test_nb2_w188_reconcile "${CMAKE_SOURCE_DIR}")
+ 
++# --- test_nb2_w188_purgepaused: AI(W906-W188) 20261010 (NB2-1) -- W-188 #6 PurgePausedBookings + ReStartAutoSiteMapping purge -> golden 913 ---
++#   [1] paused slots wiped, empty teams/groups deleted (tail open group kept), iResetSiteMappingStep gate, log line; [2] source ratchets.
++add_executable(test_nb2_w188_purgepaused
++    test_nb2_w188_purgepaused.cpp
++)
++target_link_libraries(test_nb2_w188_purgepaused PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_nb2_w188_purgepaused PRIVATE ws2_32)
++endif()
++add_test(NAME NB2_W188PurgePaused COMMAND test_nb2_w188_purgepaused "${CMAKE_SOURCE_DIR}")
++
+ # --- test_w6_5_shuttle: pump the SHUTTLE/CARRY engine over Sim HAL -----------
+ #   The task-mandated W6.5 verify TU (mirror of the in/out/tray-arm + tester
+ #   core TUs).  Proves acarry.cpp (the SHUTTLE/CARRY ENGINE, in ht9045_sm)
+diff --git a/tests/test_nb2_w188_purgepaused.cpp b/tests/test_nb2_w188_purgepaused.cpp
+new file mode 100644
+index 00000000..b90d69bc
+--- /dev/null
++++ b/tests/test_nb2_w188_purgepaused.cpp
+@@ -0,0 +1,142 @@
++// =============================================================================
++//  AI(W906-W188) 20261010 (NB2-1): W-188 #6 -- uPlateInfo::PurgePausedBookings = golden 913 (GitLab honprec/rd/rd5/ht9045_913
++//  main e9908638; RogerYang 20260831f) Public/HTEditList.cpp:2820-2878, and the purge block at the head of golden 913
++//  main.cpp TfMain::ReStartAutoSiteMapping (:29258-29275, 20260914 iResetSiteMappingStep gate), which the port's still-empty
++//  TfMain::ReStartAutoSiteMapping (forms/fMain.cpp:248) now calls via W906_ReStartASMPurge913() (Public/HTEditList.cpp EOF).
++//  A paused booking = bSuck false but coordinates still set (ASM borrowed the IC with SetPlateSuck(false) and never gave it
++//  back).  At the ASM boundary those slots are wiped to -1, teams left empty are deleted, empty groups are deleted except the
++//  tail open group; the purge is skipped while iResetSiteMappingStep>0 (One Cycle interrupted a borrow: the give-back is
++//  still pending).
++//  [1] behaviour on a real uPlateInfo ledger; [2] source ratchets (argv[1] = source root).
++//  Use: only through ctest (NB2_W188PurgePaused).
++// =============================================================================
++#include "Public/HTEditList.h"
++#include "Motor/mymotor.h"
++#include "cmydef.h"
++#include "w906_ctest_guard.h"
++#include <cstdio>
++#include <fstream>
++#include <string>
++#include <vector>
++
++extern AnsiString ExString;                 // cMyDB.cpp: RecordProcess keeps the last text
++extern int iResetSiteMappingStep;
++void W906_ReStartASMPurge913();             // Public/HTEditList.cpp EOF
++
++static int g_pass = 0, g_fail = 0;
++#define CHECK(cond, msg)                                                        \
++    do {                                                                        \
++        if (cond) { std::printf("  PASS: %s\n", msg); ++g_pass; }               \
++        else      { std::printf("  FAIL: %s  (line %d)\n", msg, __LINE__); ++g_fail; } \
++    } while (0)
++
++static std::vector<std::string> ReadLines(const std::string& path)
++{
++    std::vector<std::string> v;
++    std::ifstream f(path.c_str(), std::ios::binary);
++    std::string s;
++    while (std::getline(f, s)) {
++        if (!s.empty() && s[s.size() - 1] == '\r') s.erase(s.size() - 1);
++        v.push_back(s);
++    }
++    return v;
++}
++static int Count(const std::vector<std::string>& L, const std::string& n)
++{
++    int c = 0;
++    for (size_t i = 0; i < L.size(); ++i) if (L[i].find(n) != std::string::npos) ++c;
++    return c;
++}
++static bool Has(const AnsiString& s, const char* n) { return std::string(s.c_str()).find(n) != std::string::npos; }
++
++static uHPSuckTeam* Team()
++{
++    uHPSuckTeam* t = new uHPSuckTeam();
++    t->ClearHPSuckTeam();
++    t->iP = 0;
++    return t;
++}
++static void Slot(uHPSuckTeam* t, int i, int j, int c, int r, bool suck)
++{
++    t->bSuck[i][j] = suck; t->iPlateC[i][j] = c; t->iPlateR[i][j] = r; t->iSite[i][j] = 1;
++}
++// group 0: team A (one live slot + one paused slot) and team B (only paused); group 1: team C (only paused);
++// group 2: open tail group with no team.  -> 3 slots wiped, B and C deleted, group 1 deleted, groups 0 and 2 left.
++static uPlateInfo* Build(uHPSuckTeam** teamA)
++{
++    uPlateInfo* L = new uPlateInfo();
++    uHPSuckGroup* g0 = new uHPSuckGroup();
++    uHPSuckTeam* a = Team(); Slot(a, 0, 0, 1, 1, true); Slot(a, 0, 1, 2, 2, false);
++    uHPSuckTeam* b = Team(); Slot(b, 0, 0, 3, 3, false);
++    g0->AddHPSuckTeam(a); g0->AddHPSuckTeam(b);
++    uHPSuckGroup* g1 = new uHPSuckGroup();
++    uHPSuckTeam* c = Team(); Slot(c, 1, 0, 4, 4, false);
++    g1->AddHPSuckTeam(c);
++    uHPSuckGroup* g2 = new uHPSuckGroup();
++    L->AddHPSuckGroup(g0); L->AddHPSuckGroup(g1); L->AddHPSuckGroup(g2);
++    if (teamA) *teamA = a;
++    return L;
++}
++
++int main(int argc, char** argv)
++{
++    extern AnsiString DataPath;
++    const char* const rt[] = { "DataPath", DataPath.c_str(), 0 };
++    if (!W906TestRequireCtestRedirects("NB2_W188PurgePaused", rt)) return 2;
++    std::printf("==== W-188 #6 PurgePausedBookings -> golden 913 ====\n");
++
++    // ---------------------------------------------------------------- [1a] the method
++    std::printf("-- [1a] uPlateInfo::PurgePausedBookings --\n");
++    uHPSuckTeam* a = 0;
++    uPlateInfo* L = Build(&a);
++    const int n = L->PurgePausedBookings();
++    char msg[160];
++    std::snprintf(msg, sizeof msg, "returns 3 wiped paused slots (got %d)", n);
++    CHECK(n == 3, msg);
++    CHECK(L->GetHPSuckGroupCount() == 2, "middle group emptied -> deleted; tail open group kept even though empty");
++    uHPSuckGroup* g0 = L->ExtractSuckGroup(0);
++    CHECK(g0 && g0->GetTeamCount() == 1 && g0->ExtractSuckTeam(0) == a, "all-paused team deleted, team with a live slot kept");
++    CHECK(a->bSuck[0][0] && a->iPlateC[0][0] == 1 && a->iPlateR[0][0] == 1 && a->iSite[0][0] == 1, "live booking untouched");
++    CHECK(!a->bSuck[0][1] && a->iPlateC[0][1] == -1 && a->iPlateR[0][1] == -1 && a->iSite[0][1] == -1, "paused slot wiped to -1");
++    CHECK(L->PurgePausedBookings() == 0 && L->GetHPSuckGroupCount() == 2, "second call: nothing left to purge (unused -1 slots are not counted)");
++
++    // ---------------------------------------------------------------- [1b] the ReStartAutoSiteMapping purge block
++    std::printf("-- [1b] ReStartAutoSiteMapping purge block (iResetSiteMappingStep gate) --\n");
++    uPlateInfo* const saveList = PickFromHPList;
++    const int saveStep = iResetSiteMappingStep;
++    uPlateInfo* L2 = Build(0);
++    PickFromHPList = L2;
++    iResetSiteMappingStep = 1;
++    ExString = "";
++    W906_ReStartASMPurge913();
++    CHECK(L2->GetHPSuckGroupCount() == 3 && ExString.Length() == 0, "iResetSiteMappingStep>0 (give-back pending) -> ledger untouched, no log");
++    iResetSiteMappingStep = 0;
++    W906_ReStartASMPurge913();
++    CHECK(L2->GetHPSuckGroupCount() == 2, "iResetSiteMappingStep==0 -> purged");
++    CHECK(Has(ExString, "ASM boundary : purge 3 paused booking slot(s), grp=2"), "golden 913 RecordProcess line");
++    std::printf("     (%s)\n", ExString.c_str());
++    ExString = "";
++    W906_ReStartASMPurge913();
++    CHECK(ExString.Length() == 0, "nothing purged -> no log line");
++    PickFromHPList = 0;
++    W906_ReStartASMPurge913();
++    CHECK(true, "PickFromHPList==NULL -> no crash");
++    PickFromHPList = saveList;
++    iResetSiteMappingStep = saveStep;
++
++    // ---------------------------------------------------------------- [2] source ratchets
++    std::printf("-- [2] source ratchets --\n");
++    const std::string root = argc > 1 ? argv[1] : ".";
++    const std::vector<std::string> M = ReadLines(root + "/forms/fMain.cpp");
++    CHECK(Count(M, "void TfMain::ReStartAutoSiteMapping(bool /*bStart*/) { void W906_ReStartASMPurge913(); W906_ReStartASMPurge913(); }") == 1,
++          "forms/fMain.cpp ReStartAutoSiteMapping calls the 913 purge block");
++    const std::vector<std::string> H = ReadLines(root + "/Public/HTEditList.cpp");
++    CHECK(Count(H, "int uPlateInfo::PurgePausedBookings()") == 1 && Count(H, "void W906_ReStartASMPurge913()") == 1
++          && Count(H, "iResetSiteMappingStep==0)") == 1 && Count(H, "ig!=HPSuckGroupList->Count-1)") == 1,
++          "Public/HTEditList.cpp: method (tail open group kept) + purge block with the 20260914 gate");
++    const std::vector<std::string> D = ReadLines(root + "/Public/HTEditList.h");
++    CHECK(Count(D, "bool bSuck);   int  PurgePausedBookings();") == 1, "Public/HTEditList.h declaration in code, not after the // comment (golden 913 .h:214)");
++
++    std::printf("==== W-188 #6: %d passed, %d failed ====\n", g_pass, g_fail);
++    return g_fail == 0 ? 0 : 1;
++}
+-- 
+2.55.0.windows.5
+
