@@ -1,0 +1,544 @@
+From 0fef3d19c053644ab9a830a83fb37b6e1123e778 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 9 Oct 2026 10:37:06 +0800
+Subject: [PATCH] PKG217: integrate laptop packages 216-217 (GitLab 3c1dd1c9,
+ fb037f43) -- St02-E W-191 golden 913: ADAM6024 comm, BinDisplay, AOI laser
+ scan receive (MR !363-!365); TfBinSel::Save SavePath without the leading
+ backslash (MR !366). Auto-accepted.
+
+12 files: 9 replaced (each scanned for machine-only AI(W906-*) tags / W906_ identifiers: none lost), 1 new test, tests/CMakeLists.txt merged
+without conflicts, WORKLOG kept (rule). Debug wb_serve + ADAM6024_Comm / C14_BinDisp / St02_SecsEcFileWrites / St02_W191AoiRecv pass.
+Release not rebuilt: EastSun runs build_integ_ship_x86\wb_serve.exe. WORKLOG: the 216-217 row. Backup branch backup/pre-pkg217-20261009.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ Adam6024Comm_St02.cpp              | 21 ++++++++-
+ BinDisplay/MyBinDisp.cpp           | 16 +++----
+ TfAOILaserScan.cpp                 | 10 ++---
+ cBinSel.cpp                        | 22 +++++-----
+ docs/MACHINE_PATCHES_20261009.md   |  7 +++
+ docs/NIGHT_REPORT.md               |  7 ++-
+ docs/WORKLOG_MACHINE.md            |  1 +
+ tests/CMakeLists.txt               | 14 ++++++
+ tests/test_adam6024_comm.cpp       | 28 ++++++++++++
+ tests/test_c14_bindisp.cpp         | 69 ++++++++++++++++++++++++++++++
+ tests/test_st02_secs_ec_writes.cpp | 26 +++++++++++
+ tests/test_st02_w191_aoirecv.cpp   | 65 ++++++++++++++++++++++++++++
+ 12 files changed, 258 insertions(+), 28 deletions(-)
+ create mode 100644 tests/test_st02_w191_aoirecv.cpp
+
+diff --git a/Adam6024Comm_St02.cpp b/Adam6024Comm_St02.cpp
+index f959d378..2e61911f 100644
+--- a/Adam6024Comm_St02.cpp
++++ b/Adam6024Comm_St02.cpp
+@@ -81,6 +81,10 @@
+ //       failures fall through to `bADAM6420Install=true; return true;`; a success sets iCount=50 (the next failure
+ //       series alarms after 51).
+ //    Q5 ADAM_ReadVoltage :463-471 reconnects everything (Close_ADAM_6024 + Open_ADAM_6024()) on every failed read.
++//       AI(W906-W191) 20261009 (St02-E): golden 913 adam6024.cpp:467-482 (RogerYang 20260914) -- once Open_ADAM_6024() itself
++//       has failed, the next reconnects wait a 5 s cooldown (each try blocks up to connect / send / receive 2000 ms on the IO
++//       page's 50 ms timer); the first failure still reconnects at once.  Close still runs every time, so bADAM6420Install
++//       goes false and the :560 early return holds the reads until something reopens -- as in 0618 and 913.
+ //    Q6 ADAM_ReadAIValue :2145 keeps going when bADAM6420Install==false (only bEnter is cleared) and the dew-point
+ //       slopes `60/8` / `50/8` are INTEGER divisions (7 / 6), not 7.5 / 6.25.
+ //    Q7 GetModuleName keeps the address digit: "!016024-D" -> SubString(3, ..) = "16024-D", the string
+@@ -138,6 +142,8 @@ int iWritePA=0;
+ bool bConnectStatus[3]={false, false, false};;                                  //Hmy 20170120 add check Adam6024 Connect Status   (golden's ";;" kept)
+ bool bADAM6420CheckRange[4]={false, false, false, false};                       //ben 20230818 : ADAM check range
+ static bool bDoubleEPConnectGuideShown=false;                                   //AI(ht9045-v899) 20260505: show EP board setup guidance once per run when Num=2 cannot connect
++static bool bADAMReopenFailed=false;                                            //AI(W906-W191) 20261009 (St02-E): golden 913 adam6024.cpp:56 (RogerYang 20260914) -- only a CONSECUTIVE reopen failure is throttled
++static TQPF_Timer hADAMReopenCooldown;                                          //AI(W906-W191) 20261009 (St02-E): golden 913 adam6024.cpp:57 -- the 5 s reopen cooldown
+ typedef enum
+ {
+     Adam6024_AI_mA_4To20    = 7,
+@@ -573,8 +579,19 @@ double ADAM_ReadVoltage(int Num, int iCH)
+ 
+                 if(iRet!=0)                                                     //Ifor 20150709 ：透過ADAM陣列IP讀取資料   //Frank 20170206 (Steven) 確認ADAM連線正常
+                 {
+-                    Close_ADAM_6024();                                          // golden Q5
+-                    Open_ADAM_6024();                                           //Jimmychiu 20230804 : 整合全部連線檢查
++                    Close_ADAM_6024();                                          // golden Q5   //AI(W906-W191) 20261009 (St02-E): golden 913 adam6024.cpp:467-482 from here
++                    if(bADAMReopenFailed==false || hADAMReopenCooldown.Off())   //AI(ht9045-io-control) 20260914 (RogerYang) : a reopen blocks connect / send / receive 2000 ms each on the IO page's 50 ms timer
++                    {
++                        if(Open_ADAM_6024()==true)                              //Jimmychiu 20230804 : 整合全部連線檢查
++                        {
++                            bADAMReopenFailed=false;
++                        }
++                        else
++                        {
++                            bADAMReopenFailed=true;
++                            hADAMReopenCooldown.SetMSAndOn(5000);               //AI(ht9045-io-control) 20260914 (RogerYang) : consecutive failures retry once every 5 s
++                        }
++                    }
+                     bEnter=false;
+                     return 0;
+                 }
+diff --git a/BinDisplay/MyBinDisp.cpp b/BinDisplay/MyBinDisp.cpp
+index 6501ab7e..4c4ab2a3 100644
+--- a/BinDisplay/MyBinDisp.cpp
++++ b/BinDisplay/MyBinDisp.cpp
+@@ -961,7 +961,7 @@ void TMyBinDispHT9046::WriteBin_TFT(int index, int ivalue)
+     {
+         sWrite="Color";
+     }
+-    else if(ivalue==-1)
++    else if(ivalue==117) sWrite="  R"; else if(ivalue==-1)                     //AI(W906-W191) 20261009 (St02-E): golden 913 MyBinDisp.cpp:927-930 (Ifor 20260819 : CC_MAXIM_THAILAND letter R (bin code 117), same style as "  E"; no customer condition in code)
+     {
+         sWrite="---";
+     }
+@@ -981,7 +981,7 @@ void TMyBinDispHT9046::WriteBinWord_TFT(int index,int ivalue)
+ {
+     char cSendCommand[20]="";
+     AnsiString sWrite="";
+-    if(ivalue==999 || ivalue==104)
++    if(ivalue==999 || ivalue==104 || ivalue==117)   //AI(W906-W191) 20261009 (St02-E): golden 913 MyBinDisp.cpp:949 -- bin code 117 (only at CC_MAXIM_THAILAND, Ifor 20260819; no customer condition in code) shows empty like 999 / 104
+         sWrite="";
+     else if(ivalue==111)
+         sWrite="";
+@@ -1001,7 +1001,7 @@ void TMyBinDispHT9046::WriteEA_TFT(int index,int ivalue)
+ {
+     char cSendCommand[20]="";
+     AnsiString sWrite="";
+-    if(ivalue==999 || ivalue==104)
++    if(ivalue==999 || ivalue==104 || ivalue==117)   //AI(W906-W191) 20261009 (St02-E): golden 913 MyBinDisp.cpp:967 -- bin code 117 (only at CC_MAXIM_THAILAND, Ifor 20260819; no customer condition in code) shows empty like 999 / 104
+         sWrite="";
+     else if(ivalue==111)
+         sWrite="";
+@@ -1021,7 +1021,7 @@ void TMyBinDispHT9046::WriteCount_TFT(int index,int ivalue, int iCount)
+ {
+     char cSendCommand[20]="";
+     AnsiString sWrite="";
+-    if(ivalue==999 || ivalue==104)
++    if(ivalue==999 || ivalue==104 || ivalue==117)   //AI(W906-W191) 20261009 (St02-E): golden 913 MyBinDisp.cpp:985 -- bin code 117 (only at CC_MAXIM_THAILAND, Ifor 20260819; no customer condition in code) shows empty like 999 / 104
+         sWrite="";
+     else if(ivalue==111)
+         sWrite="";
+@@ -1043,7 +1043,7 @@ void TMyBinDispHT9046::SetFontBin_TFT(int index, int iColor, int iValue)
+ {
+     char cSendCommand[20]="";
+     unsigned char iXPos=0x00, iYPos=0x00, iWidth=0x00, iHeigh=0x00, iFontSize=0x00, iFill=0x00;
+-    if(iValue==999 || iValue==104)                                              //Empty
++    if(iValue==999 || iValue==104 || iValue==117)                              //Empty   //AI(W906-W191) 20261009 (St02-E): golden 913 MyBinDisp.cpp:1005 -- bin code 117 (only at CC_MAXIM_THAILAND, Ifor 20260819; no customer condition in code) shows empty like 999 / 104
+     {
+         iXPos=0x10;
+         iYPos=0x20;
+@@ -1091,7 +1091,7 @@ void TMyBinDispHT9046::SetFontBinWord_TFT(int index, int iColor, int iValue)
+     char cSendCommand[20]="";
+     unsigned char iXPos=0x00, iYPos=0x00, iWidth=0x00, iHeigh=0x00, iFontSize=0x00, iFill=0x00;
+ 
+-    if(iValue==999 || iValue==104)                                              //Empty
++    if(iValue==999 || iValue==104 || iValue==117)                              //Empty   //AI(W906-W191) 20261009 (St02-E): golden 913 MyBinDisp.cpp:1051 -- bin code 117 (only at CC_MAXIM_THAILAND, Ifor 20260819; no customer condition in code) shows empty like 999 / 104
+     {
+         //都不要填預設就不顯示
+     }
+@@ -1126,7 +1126,7 @@ void TMyBinDispHT9046::SetFontEA_TFT(int index, int iColor, int iValue)
+     char cSendCommand[20]="";
+     unsigned char iXPos=0x00, iYPos=0x00, iWidth=0x00, iHeigh=0x00, iFontSize=0x00, iFill=0x00;
+     iColor=4;
+-    if(iValue==999 || iValue==104)                                              //Empty
++    if(iValue==999 || iValue==104 || iValue==117)                              //Empty   //AI(W906-W191) 20261009 (St02-E): golden 913 MyBinDisp.cpp:1084 -- bin code 117 (only at CC_MAXIM_THAILAND, Ifor 20260819; no customer condition in code) shows empty like 999 / 104
+     {
+         //都不要填預設就不顯示
+     }
+@@ -1160,7 +1160,7 @@ void TMyBinDispHT9046::SetFontCount_TFT(int index, int iColor, int iValue)
+     unsigned char iXPos=0x00, iYPos=0x00, iWidth=0x00, iHeigh=0x00, iFontSize=0x00, iFill=0x00;
+     iColor=4;
+ 
+-    if(iValue==999 || iValue==104)                                              //Empty
++    if(iValue==999 || iValue==104 || iValue==117)                              //Empty   //AI(W906-W191) 20261009 (St02-E): golden 913 MyBinDisp.cpp:1116 -- bin code 117 (only at CC_MAXIM_THAILAND, Ifor 20260819; no customer condition in code) shows empty like 999 / 104
+     {
+         //都不要填預設就不顯示
+     }
+diff --git a/TfAOILaserScan.cpp b/TfAOILaserScan.cpp
+index 5e544ba3..d24822fa 100644
+--- a/TfAOILaserScan.cpp
++++ b/TfAOILaserScan.cpp
+@@ -224,11 +224,11 @@ TAOISocket::~TAOISocket()
+ //---------------------------------------------------------------------------
+ void TAOISocket::ReceiveData(char* cGet,int iLen)
+ {
+-    asReceiveMsg=AnsiString(cGet);
+-    if(asReceiveMsg.Length()>iLen)
+-        asReceiveMsg=asReceiveMsg.SubString(0,iLen);
+-    if(RecordMsg)
+-        RecordMsg("[Receive]"+asReceiveMsg);
++    AnsiString asChunk=AnsiString(cGet);                                        //AI(W906-W191) 20261009 (St02-E): golden 913 TfAOILaserScan.cpp:34-41 (Ifor 20260827), same 5 lines
++    if(asChunk.Length()>iLen)
++        asChunk=asChunk.SubString(0,iLen);
++    if(asReceiveMsg!="" && asReceiveMsg.Pos("@")==0) asReceiveMsg+=asChunk; else asReceiveMsg=asChunk;   if(RecordMsg)   //Ifor 20260827 : the previous TCP segment had no @ terminator yet (reply split by TCP, e.g. a long RECIPE_LIST), append
++        RecordMsg("[Receive]"+asChunk);
+ }
+ //---------------------------------------------------------------------------
+ AnsiString TAOISocket::DoSendCommand(bool bIsFirst,AnsiString asCommand)
+diff --git a/cBinSel.cpp b/cBinSel.cpp
+index 9d14172b..1dc8ffc6 100644
+--- a/cBinSel.cpp
++++ b/cBinSel.cpp
+@@ -888,30 +888,30 @@ void TfBinSel::Save(int iECIDCode, int iFileCode)
+     int tag=iFileCode;
+ 
+     ReadPrimeDara();
+-    AnsiString SavePath[]={"\\BinasgnOff.Data",
+-                           "\\Binasgn.Data",
+-                           "\\BinasgnOff_ART.Data",
+-                           "\\Binasgn_ART.Data",
+-                           "\\Binasgn_MRT_RT.Data",
+-                           "\\Binasgn_MRT.Data"};
++    AnsiString SavePath[]={"BinasgnOff.Data",   //AI(W906-W191) 20261009 (St02-E): golden 913 cBinSel.cpp:6355 -- no leading backslash: GetRecipePath() already ends with one (common.cpp:2041)
++                           "Binasgn.Data",   //AI(W906-W191) 20261009 (St02-E): golden 913 cBinSel.cpp:6356 -- no leading backslash: GetRecipePath() already ends with one (common.cpp:2041)
++                           "BinasgnOff_ART.Data",   //AI(W906-W191) 20261009 (St02-E): golden 913 cBinSel.cpp:6357 -- no leading backslash: GetRecipePath() already ends with one (common.cpp:2041)
++                           "Binasgn_ART.Data",   //AI(W906-W191) 20261009 (St02-E): golden 913 cBinSel.cpp:6358 -- no leading backslash: GetRecipePath() already ends with one (common.cpp:2041)
++                           "Binasgn_MRT_RT.Data",   //AI(W906-W191) 20261009 (St02-E): golden 913 cBinSel.cpp:6359 -- no leading backslash: GetRecipePath() already ends with one (common.cpp:2041)
++                           "Binasgn_MRT.Data"};   //AI(W906-W191) 20261009 (St02-E): golden 913 cBinSel.cpp:6360 -- no leading backslash: GetRecipePath() already ends with one (common.cpp:2041)
+ 
+     if (IniConfig.bA02BinModelPrime)
+     {
+         if (IniConfig.bFTBin2RTBin==true && (iBinModelPrime==0 || CosFunction.bDisableRTBinSet))
+-            SavePath[0]="\\Binasgn.Data";
++            SavePath[0]="Binasgn.Data";   //AI(W906-W191) 20261009 (St02-E): golden 913 cBinSel.cpp:6366 -- no leading backslash: GetRecipePath() already ends with one (common.cpp:2041)
+         else
+-            SavePath[0]="\\BinasgnOff.Data";
++            SavePath[0]="BinasgnOff.Data";   //AI(W906-W191) 20261009 (St02-E): golden 913 cBinSel.cpp:6370 -- no leading backslash: GetRecipePath() already ends with one (common.cpp:2041)
+     }
+     else
+     {
+         if (IniConfig.bFTBin2RTBin==true || CosFunction.bDisableRTBinSet)
+-            SavePath[0]="\\Binasgn.Data";
++            SavePath[0]="Binasgn.Data";   //AI(W906-W191) 20261009 (St02-E): golden 913 cBinSel.cpp:6377 -- no leading backslash: GetRecipePath() already ends with one (common.cpp:2041)
+         else
+-            SavePath[0]="\\BinasgnOff.Data";
++            SavePath[0]="BinasgnOff.Data";   //AI(W906-W191) 20261009 (St02-E): golden 913 cBinSel.cpp:6381 -- no leading backslash: GetRecipePath() already ends with one (common.cpp:2041)
+     }
+ 
+     AnsiString szDir=GetRecipePath()+SavePath[tag];
+-    (void)szDir;   // only feeds the gated writes below in this wave
++    (void)szDir;   // only feeds the gated writes below in this wave   [STALE 20261009 W-191: the gates below were retired in S09-B6 (20260929) -- these writes are live]
+ 
+     switch (iECIDCode)
+     {
+diff --git a/docs/MACHINE_PATCHES_20261009.md b/docs/MACHINE_PATCHES_20261009.md
+index 3fe9a05d..0accebae 100644
+--- a/docs/MACHINE_PATCHES_20261009.md
++++ b/docs/MACHINE_PATCHES_20261009.md
+@@ -45,3 +45,10 @@
+ - **cpp 0343 PKG214**（07:33）：「integrate laptop packages 211-214（GitLab cadc0934, 7f107cef, 1607b33a, 786bc76f）... Auto-accepted」——15 個檔：7 個整檔換（逐檔掃過機台專屬的 `AI(W906-*)` 標記／`W906_` 識別字，沒有掉）、6 支新測試、2 個無衝突合併（`csystem.cpp`：MainProc 的 pitch 同步／開機清除詢問都還在；`tests/CMakeLists.txt`）；Debug wb_serve＋6 支新測試編過、20 支相關 ctest 過（原本在機台上因為缺 SECS 檔而紅的 uHGemEquipment，靠第 213 包的沙盒轉綠）、Release wb_serve 編過；備份分支 `backup/pre-pkg214-20261009`。包本身，不 cherry-pick。第 5 節的 REMIND 因此解除。
+ - **快照 07:33**（main `1661c466`）：只有兩個 README 的時間戳變，機台參數與工單沒變 ⇒ 不用叮嚀全體。
+ - **鏈尾**：C++ `706de251`（0342）→ **`90e965bf`**（0343）。下一次從 **cpp 0344／web 0142／tools 0185** 開始。
++
++## 7. 08:50 cpp 0344 SOFTKEY-ST02P2（機台自己的）、09:04 cpp 0345 PKG215；快照 08:50／09:04
++
++- **cpp 0344 SOFTKEY-ST02P2**（08:50，EastSun 1009「174所以你能修正嗎？」）：機台的 `WebMainScanKey.cpp` 從自己的按鍵佇列改用 St02 的 ST02-P2 面板鍵（golden `bAse*` 旗標），第 174 包的 `tests/test_scankey_golden.cpp` [19] 照原樣跑；`tests/test_main_scankey.cpp` 跟著改。收進第 134 批（b18 `3cdf7fc0`，作者照 patch）：這些行在 main 上**本來就一樣**；只有兩段衝突——機台的畫面「緊急停止」`W906_SoftEmergencyStop` 與它的測試 [13]——照 **RULINGS_20261005 第 17 條**（軟體急停只留在機台、不收進 main）取 main（不收）。⇒ 對 main 的淨效果只有 `docs/WORKLOG_MACHINE.md` 多一列。（機台的急停註記寫的是 `AI(W906-SOFTKEY)`；第 17 條請機台改標 `AI(W906-TEMP-ESTOP)`，還沒改。）
++- **cpp 0345 PKG215**（09:04）：機台套了第 215 包（St02 W-159），5 個檔、相關 10 支 ctest 過；Release 沒重編（EastSun 08:57 起在跑 `build_integ_ship_x86\wb_serve.exe`，等他關了再編）。包本身，不 cherry-pick。
++- **快照 08:50／09:04**（09:04 那份＝main `5a642fa9`）：`Gerneral.ini` 只有 `Program Close=1→0`（wb_serve 開著的狀態旗標）、`machinerecord.dat` 是執行紀錄；設定與工單沒變 ⇒ 不用叮嚀全體。
++- **鏈尾**：C++ `90e965bf`（0343）→ `ac4df547`（0344）→ **`413485ba`**（0345）。下一次從 **cpp 0346／web 0142／tools 0185** 開始。
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index 20b1bb53..712284fb 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -1,10 +1,10 @@
+-# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 07:5x）
++# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 09:1x）
+ 
+ ## ☀ 10/08 早上先看這裡（04:3x 起草；之後的進度往這張表加）
+ 
+ | 項目 | 一句話 |
+ |---|---|
+-| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～131 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate），出了**第 181～214 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
++| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～133 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate），出了**第 181～216 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
+ | **模擬組態** | St02 W-149 做完：模擬版的固定失敗從 7 支降到 4 支，跟出貨一樣——之後模擬版多紅一支就是真回歸。 |
+ | **機台修的事（重點）** | 0307 主控台非同步（START 卡 103 秒＋EMG 誤報的根因）、0309／0310／0312／0316 HT9050 Tray 流程（站序、Empty→Auto 補盤、位置不加 6800、Loader 探測看抽屜感測）、0311／0317 上升氣缸雙線圈、0313 出料手臂讓位點（00:19 MOutArmX 警報）、0314 CCD Y 原點判斷、**0315 HT9050 先跳過 Index 扭力讀取**（旗標預設開，扭力讀取驗證後要關）。 |
+ | **軟體極限** | 00:19 的警報是 golden 拿軟體極限（這台 ±999999）算目標。MainNB-GPT 普查（W-164）：只剩 Motor Test 頁的 LightScale 會算出 ±999899——EastSun 0925 R7 已定照 golden，只發提醒。 |
+@@ -75,6 +75,9 @@
+ | **⏰ 1009 07:3x：機台的 C++ 還沒套第 211～214 包（第 211 包推出滿 3 小時）** | 機台 AI 07:27 有在跑（它把第 214 包的 HTDESIGNER 接上了，tools 0184），但 C++ 還停在第 210 包（04:15 那次）。照機台的規矩編好要請 EastSun 按 F5，可能在等他上班。**要機台先套的話，請你或 EastSun 跟機台說一聲**（筆電沒有管道叫醒它；不推第二份）。另：St02-E 的 MR !361（技能文件）合進 main `bface826`。<br>✅ **07:33 機台已經套了第 211～214 包（cpp 0343 PKG214），這列不用處理了。** |
+ | **1009 07:3x：St02 的 912↔913 差異表交了（Steven 本人交辦）** | 公司 912 → 913 改了 91 支檔＋新增 3 支、224 個函式；分類：客戶專屬 105、修 bug 65、新功能 36。表搬進 main（`docs/handoff/ST02_V912_VS_V913_20261009.md`）。「913 可能的 bug」照 Steven「有 bug 也要通知」轉給 Jerry（W-193）與 Roger（W-194），不用你決定。移植面：表裡 174 個函式本來就在 POOL-9 的清單裡，照現有的卡做。St02-E 下一張 W-159（Contact 頁殘留 IC 檢查三行，筆電代出差的 St01 點頭）。 |
+ | **1009 07:5x：機台套了第 211～214 包；第 132 批 gate 中** | 機台 07:33 自己把第 211～214 包整合進去（相關的 20 支測試都過；第 213 包的 SECS 沙盒讓機台上原本紅的 uHGemEquipment 轉綠），07:3x 那個提醒解除。第 132 批＝St02-E 的 MR !362（W-159：Contact 流程殘留 IC 檢查三行，只影響 GIGAS／JCET）＋HTDESIGNER 0.326，b18 `f64010ae`，gate b132a 07:5x 開跑。 |
++| **出的包（1009 08:3x）：第 215 包＝第 132 批** | GitLab `1ede424a`／GitHub `92df6d9a`：St02 的 W-159——Contact 流程的 socket 殘料檢查（GIGAS／JCET 才走到，HT9050 不走）停下之後不再往下跑，跟 golden 913 一樣停在原步驟；另帶 HTDESIGNER 0.326。gate b132a：兩組態 34 分鐘：只有固定失敗（兩組態都是 4 支，499 支測試）。**第 133 批**（St02 W-191 的三張：ADAM 重連冷卻、AOI 回覆接續、bin 碼 117）gate 中。 |
++| **出的包（1009 09:1x）：第 216 包＝第 133 批** | GitLab `3c1dd1c9`／GitHub `81c0b404`：St02 照 golden 913 補的三項——ADAM 重連失敗後等 5 秒再試、AOI 雷射掃描的回覆分段接起來、TFT 分類顯示的 bin 碼 117（只有 Maxim 泰國會送）；另帶 HTDESIGNER 0.327～0.328。gate b133a：兩組態 34 分鐘：只有固定失敗（兩組態都是 4 支，500 支測試）。 |
++| **1009 09:1x：機台 08:50 自己改了面板軟鍵（cpp 0344）、09:04 套了第 215 包** | 機台照 EastSun 的要求改用 St02 的螢幕面板鍵（main 上本來就是這版，所以 main 只多一列工作紀錄）；機台的「畫面緊急停止」照你 1005 的第 17 條**只留在機台**，沒收進 main。第 134 批＝這顆＋St02 的 !366（BinSel 存檔路徑），gate 中。 |
+ | **要你決定的**（§0） | ✅ 你 10:1x 都回了：#148＝NB2 已完成（!306 收進第 110 批確認）、#149＝A（Ifor-GPT 專做執行期測試，IG-3／IG-4）、!310＝A（ES02 HTDESIGNER 0.235～0.257 收進第 110 批）＝RULINGS_20261008 第 2 條。**13:0x 新一題 #150**：GPIB 位址不一致要不要自動修正（Jerry 留給你；預設 A＝維持 golden、只留警告，可不回）。 |
+ 
+ 
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 3253254a..f2186465 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -351,6 +351,7 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-07 | 設計外掛 tools 0170 | — | 設計外掛工作階段自己推（分支 a6cadd2，GitHub dc7975ff）：依序合併筆電包 162、163、167、168 的設計外掛（0.197.0 → 0.234.0），164～166、169～172 沒帶設計外掛；無衝突，機台自己的設計外掛功能都保留；測試修正：建置視窗進度條在矮視窗不再塌掉、面板繪製測試固定 Edge 視窗大小；run_all 3/3、vscode_it 161/161，已安裝 0.234.0；只動 tools/vscode-htdesigner | tools 0170 |
+ | 10-08 | 設計外掛 tools 0171 | — | 設計外掛工作階段自己推（commit b453060，GitHub f42c142b）：EastSun 1008 方案總管的 Debug／Release 按鈕按不了（0.234 在 ▶＝F5 時把它變灰）→ 裁決「連動F5 release 和debug」：按鈕恢復可按，resolveDebugConfiguration 依按鈕把 F5／▶ 的啟動目標換成 build_integ_dbg_x86 或 build_integ_ship_x86 那一組；「模擬」仍是灰的。run_all 3/3；vscode_it 沒跑成（VS Code 自己的更新程式 CodeSetup 從 10/07 18:34 起佔住執行個體鎖）。vsix 已安裝，版本號沒變，要重新載入視窗才生效；只動 tools/vscode-htdesigner | tools 0171 |
+ | 10-08 | 173～204 | 07dbeae3＋63b1aa25＋351291d5（GitLab 0258ba66…68fc0e65、39c6388c、e6c54331） | 本 commit（機台 C++＋web），EastSun「你確定有合完整?」→「快合」→「一直合下去 不要停拜託」（173～202 的 C++ 從 10-07 起都沒合，只有設計外掛跟上）。備份分支 backup/pre-pkg202-20261008（cpp、web）＋ D:\HT9045\_pkg_202\backup_machine_195843、D:\HT9045\_pkg_203\backup_machine_220733。202 疊三十包：直接換 108（換 105；tasks.json、acatchtray 留機台）、新檔 35、兩邊都改 22（合併 16、設計外掛／WORKLOG 照規定 6）、一樣 88；每個直接換的檔掃機台 AI 標記＋W906_ 識別字：WebBridgeServer（TOKEN-OFF／SOFTKEY panel.estop）改三方合併＋收筆電 pad.get／pad.close／observerSG 豁免、acatchtray 留機台（筆電版＝少 PROBECYL）、MotionView9050 換（機台＝基底）。衝突：cinitial／test_flow9050_tray／csystem 取機台（BOOTCLEAR、PROBECYL、pitch 同步在 MainProc）；test_scankey_golden、IoBtnPanelClick、tests/CMakeLists、WebBridgeTags（tester.name 依 Jerry 1008 裁決 A＝golden LoadTestModePicture）取筆電；wb_serve 第 239 行＝機台 IOWAIT＋筆電 g_ppCyc0 搬移。4 個新網頁檔改 CRLF。203：15 檔（直接換 9、新 4、合併 2，無衝突）；204：12 檔（直接換 9、新 1、合併 2，無衝突；SECS SV Auto1～6 料盤別名＋氣缸平均推拉時間、cSpeed）。合併後 test_scankey_golden 補回 PadInterface_St02.h include、[19]（筆電版軟體面板鍵 ST02-P2，機台保留自己的 SOFTKEY）在機台關掉。ctest Debug 426/441：15 個失敗都是第 381 列的已知清單（環境：dfm2rc×4 ctest 找不到 g++／rc.exe、E031、GearTeachSave、TeachCheckRangeReload；斷言筆電設定／repo 舊表：config_db、ini_helpers、config_loaders、MotorPoints／MachineMotors／MachineSuckers_HT9050；機台補丁：GA2_C1_cinitial、FShow_Audit）；204 之後相關 29 支全過。EastSun 未 commit 的 acatchtray／asendic_Loader／cinitial／PadInterface_St02（SafeLock）先拿開、合完三方套回，不進 commit。20:02 -j4 整包重編讓機台當機（Kernel-Power 41），留下 NUL 填滿的 .a／.obj／.d ⇒ clean 後 -j2 重編 | 本 commit |
++| 10-09 | 216～217 | 81c0b404＋35454dc0（GitLab 3c1dd1c9、fb037f43） | 本 commit：St02-E W-191 照 golden 913——216＝MR !363／!364／!365（ADAM6024 通訊、BinDisplay、AOI 雷射掃描收資料）；217＝MR !366 TfBinSel::Save 的 SavePath 不帶開頭反斜線。12 檔：直接換 9（逐檔掃機台 AI 標記／W906_ 識別字：沒有會消失的）、新 1 支測試、tests/CMakeLists 合併無衝突、WORKLOG 照規定留機台。Debug wb_serve＋4 支相關 ctest（ADAM6024_Comm、C14_BinDisp、St02_SecsEcFileWrites、St02_W191AoiRecv）全過；EastSun 開著 release wb_serve，release 等他關程式後再編。備份分支 backup/pre-pkg217-20261009 | 本 commit |
+ | 10-09 | 215 | 92df6d9a（GitLab 1ede424a） | 本 commit：St02-E MR !362 W-159——TfContact::DoTestContactFunction 的殘料葉停止會停住（只有 GIGAS／JCET）。5 檔：直接換 3（fContact_ContactSM.cpp＋2 文件；掃過沒有機台標記會消失）、新 1 支測試、tests/CMakeLists 合併無衝突。Debug wb_serve＋W159／Contact 相關 10 支 ctest 全過；EastSun 08:57 開著 release wb_serve（build_integ_ship_x86），release 等他關程式後再編 | 本 commit |
+ | 10-09 | 211～214 | 571535cd…e6fd1da7（GitLab cadc0934、7f107cef、1607b33a、786bc76f） | 本 commit（07:2x，wb_serve 沒開）：211＝St02 POOL-9 golden 913：cSocket TEST_CATEGORY::UpdataCount 依各臂自己的列計數＋THGem::DoSpoolSendLocalData 接上＋socket 鎖；212＝HTGem S9F1／F3／F5／F7／F9 回被拒訊息的 header（golden 913 uHGemClass.cpp:2216-2235）；213＝THGem EventReport_*.def 讀寫加 ctest 沙箱（W906_SECSSYSTEM_ROOT，生產路徑不變）＋SetReportIDContent／AddReprot 照 golden 存一次；214＝NB2 W-188 #1 DoCleanOutFinishCheck 照 golden 913：清料超過 300 s 只寫一行 EventLog（不跳警報、不停機）。15 檔：直接換 7（逐檔掃機台 AI 標記／W906_ 識別字：沒有會消失的）、新 6 支測試、合併 2（csystem、tests/CMakeLists，無衝突；MainProc 的 pitch 同步／開機清料詢問還在）。Debug wb_serve＋6 支新測試建好，相關 20 支 ctest 全過（uHGemEquipment 以前因為沒 SECS 檔失敗，213 的沙箱讓它在這台也過了）；release wb_serve 建好。備份分支 backup/pre-pkg214-20261009＋D:\HT9045\_pkg_214\backup_machine_072852 | 本 commit |
+ | 10-09 | 209～210 | 282accc8＋14df90a4（GitLab 2fb30fac、55f8238b） | 本 commit（04:00 夜間更新，Jimmy 1008 22:2x／22:5x；04:00 目標＝第 210 包）：209＝St02 E-TM-011 golden 913 Timer6——SECS／GEM 遠端 START 後等主機 run check 超過 [N07] Run Check Alarm Time 跳 WAR16110（通知，只讓等待逾時停止；HT9050 平常不會走到）；210＝St02 W-184 MR B Setup 存檔也照 golden 913 cSetUp.cpp:4129 把各站開關狀態追加到 D:\HT9045_Log\ChangeLog。12 檔：直接換 7（逐檔掃機台 AI 標記／W906_ 識別字：沒有會消失的）、新 3、合併 2（CMakeLists、tests/CMakeLists，無衝突）。EastSun 未 commit 的檔不在包內、沒動。Debug 整包建置＋ctest 431/446（15 個失敗＝第 381 列已知清單，跟 10-08 晚上完全一樣）；release wb_serve 建好。沒有啟動／重啟 wb_serve、沒按 F5、沒 HOME、沒動機台、沒改機台設定檔。備份分支 backup/pre-pkg210-20261009＋D:\HT9045\_pkg_210\backup_machine_040010 | 本 commit |
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 60e42202..d1c01bde 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -9417,3 +9417,17 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+ endif()
+ add_test(NAME St02_W159LeafTask COMMAND test_st02_w159_leaftask)
+ set_tests_properties(St02_W159LeafTask PROPERTIES TIMEOUT 60)
++# --- AI(W906-W191) 20261009 (St02-E) -- W-191 MR-2: TAOISocket::ReceiveData reassembles a reply split across TCP segments (golden 913
++#   TfAOILaserScan.cpp:32-43, Ifor 20260827).  St02_W191AoiRecv calls ReceiveData the way uSocketClient's receive callback does; no socket.
++add_executable(test_st02_w191_aoirecv test_st02_w191_aoirecv.cpp)
++target_link_libraries(test_st02_w191_aoirecv PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_st02_w191_aoirecv PRIVATE ws2_32)
++endif()
++if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
++    set_source_files_properties(test_st02_w191_aoirecv.cpp PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
++endif()
++add_test(NAME St02_W191AoiRecv COMMAND test_st02_w191_aoirecv)
++set_tests_properties(St02_W191AoiRecv PROPERTIES TIMEOUT 60)
+diff --git a/tests/test_adam6024_comm.cpp b/tests/test_adam6024_comm.cpp
+index 8f405b6d..db407f75 100644
+--- a/tests/test_adam6024_comm.cpp
++++ b/tests/test_adam6024_comm.cpp
+@@ -756,6 +756,34 @@ int main()
+     else
+         CHECK(g_f.log.size() > 2 && g_f.log[1] == "Disconnect" && Count("Connect 172.16.8.110") == 1 && bADAM6420Install,
+               "8m SHIP: golden Q5 -- Close_ADAM_6024 (Disconnect) + Open_ADAM_6024() (connect again) on every failed read");
++    // AI(W906-W191) 20261009 (St02-E): golden 913 adam6024.cpp:467-482 reopen cooldown (RogerYang 20260914).
++    if (sim)
++    {
++        bADAM6420Install = true;
++        g_f.log.clear();
++        CHECK(Near(ADAM_ReadVoltage(0, 5), 0.0) && Seq() == "Read6KAI 172.16.8.110 6017 1|", "8n SIM: Open_ADAM_6024() is golden true with no I/O, so no cooldown ever starts");
++    }
++    else
++    {
++        bADAM6420Install = true;
++        g_f.retOpen = -1;                                // ADAMTCP_Open fails -> Open_ADAM_6024(IP,0) false (golden :278-284)
++        g_f.log.clear();
++        CHECK(Near(ADAM_ReadVoltage(0, 5), 0.0) && Count("Disconnect") >= 1 && Count("Open") == 1 && bADAM6420Install == false,
++              "8n SHIP: a failed read whose reopen FAILS -> Close + one reopen try (Open logged once), install false");
++        bADAM6420Install = true;                          // something else marked it installed again (the :553 early return no longer holds)
++        g_f.log.clear();
++        CHECK(Near(ADAM_ReadVoltage(0, 5), 0.0) && Count("Disconnect") >= 1 && Count("Open") == 0 && Count("Connect") == 0,
++              "8o SHIP: the next failed read inside the 5 s cooldown -> Close only, NO reopen (golden 913; 0618 reopened every time)");
++        ::Sleep(5200);
++        g_f.retOpen = 0;
++        bADAM6420Install = true;
++        g_f.log.clear();
++        CHECK(Near(ADAM_ReadVoltage(0, 5), 0.0) && Count("Open") == 1 && bADAM6420Install == true,
++              "8p SHIP: after the cooldown a failed read reopens again; it succeeds -> installed");
++        g_f.log.clear();
++        CHECK(Near(ADAM_ReadVoltage(0, 5), 0.0) && Count("Open") == 1,
++              "8q SHIP: after a successful reopen the next failure reopens at once (no cooldown)");
++    }
+     g_f.retRead6KAI = 0;
+ 
+     // ---- 9. TfAdam6024 -----------------------------------------------------------------------------------------------
+diff --git a/tests/test_c14_bindisp.cpp b/tests/test_c14_bindisp.cpp
+index a5ab657c..e5b5428f 100644
+--- a/tests/test_c14_bindisp.cpp
++++ b/tests/test_c14_bindisp.cpp
+@@ -287,6 +287,21 @@ static bool BeforeComment(const std::string& line, const char* sub)            /
+     const size_t a = line.find(sub), c = line.find("//");
+     return a != std::string::npos && (c == std::string::npos || a < c);
+ }
++// ---- W-191 MR-3, AI(W906-W191) 20261009 (St02-E): the TFT writers are protected virtuals of TMyBinDispHT9046 (BinDisplay/MyBinDisp.h:496-529);
++//   a pointer to member named through a derived class is the standard way to call them on the controller the boot built.
++struct W191TftAccess : TMyBinDispHT9046
++{
++    typedef void (TMyBinDispHT9046::*Fn2)(int, int);
++    typedef void (TMyBinDispHT9046::*Fn3)(int, int, int);
++    static Fn2 WriteBin()       { return &W191TftAccess::WriteBin_TFT; }
++    static Fn2 WriteBinWord()   { return &W191TftAccess::WriteBinWord_TFT; }
++    static Fn2 WriteEA()        { return &W191TftAccess::WriteEA_TFT; }
++    static Fn3 WriteCount()     { return &W191TftAccess::WriteCount_TFT; }
++    static Fn3 SetFontBin()     { return &W191TftAccess::SetFontBin_TFT; }
++    static Fn3 SetFontBinWord() { return &W191TftAccess::SetFontBinWord_TFT; }
++    static Fn3 SetFontEA()      { return &W191TftAccess::SetFontEA_TFT; }
++    static Fn3 SetFontCount()   { return &W191TftAccess::SetFontCount_TFT; }
++};
+ static size_t Tx() { return DataModule3->BinDisp->SimTxBuffer().size(); }
+ static void Ticks(int n) { for (int i = 0; i < n; ++i) { g_now += 200; ht9045::W906_St02BinDispSlotAt(g_now); Respond3(); } }
+ 
+@@ -880,6 +895,60 @@ int main(int argc, char** argv)
+             CHECK(g_framesTFT[c0 + 1 + 16] == TftTextFrame(0x24, 0x04, "0"));      // Auto2 untouched
+         }
+     }
++    // ---- [14] W-191 MR-3, AI(W906-W191) 20261009 (St02-E): golden 913 MyBinDisp.cpp TFT bin code 117 ------------------------------------
++    //   Bin code 117 occurs only at CC_MAXIM_THAILAND (Ifor 20260819); golden 913 has no customer condition.  WriteBin_TFT shows "  R"
++    //   (:927-930); the seven other TFT writers treat it as empty like 999 / 104 (:949 / :967 / :985 / :1005 / :1051 / :1084 / :1116).
++    std::printf("-- [14] TFT bin code 117 (golden 913) --\n");
++    {
++        TMyBinDispHT9046* t = dynamic_cast<TMyBinDispHT9046*>(HSys.BinDisCtrl);
++        if (t == NULL)                                                          // independent of the sections above: boot a TFT controller if none is left
++        {
++            delete HSys.BinDisCtrl;
++            HSys.BinDisCtrl = NULL;
++            NUMBER_PANEL_TYPE = 4;
++            W906_BinDispSystemModularBoot_St02();
++            t = dynamic_cast<TMyBinDispHT9046*>(HSys.BinDisCtrl);
++        }
++        CHECK(t != NULL && DataModule3 != NULL);
++        if (t != NULL && DataModule3 != NULL)
++        {
++            if (kSim)
++                DataModule3->BinDisp->StartComm();
++            const int ix = 4;                                                   // an Auto unit (index != 1, so the empty text is "  E")
++            auto Sent2 = [&](W191TftAccess::Fn2 f, int v) { const size_t a = Tx(); (t->*f)(ix, v); const std::vector<char>& tx = DataModule3->BinDisp->SimTxBuffer(); return std::string(tx.begin() + a, tx.end()); };
++            auto Sent3 = [&](W191TftAccess::Fn3 f, int v) { const size_t a = Tx(); (t->*f)(ix, 2, v); const std::vector<char>& tx = DataModule3->BinDisp->SimTxBuffer(); return std::string(tx.begin() + a, tx.end()); };
++            const std::string r117 = Sent2(W191TftAccess::WriteBin(), 117), e104 = Sent2(W191TftAccess::WriteBin(), 104);
++            CHECK(r117.size() == 20 && TftText(r117) == "  R" && TftText(e104) == "  E");
++            std::printf("  WriteBin_TFT 117 -> '%s', 104 -> '%s'\n", TftText(r117).c_str(), TftText(e104).c_str());
++            const struct { const char* name; W191TftAccess::Fn2 f; } F2[] = {
++                { "WriteBinWord_TFT", W191TftAccess::WriteBinWord() }, { "WriteEA_TFT", W191TftAccess::WriteEA() } };
++            for (size_t i = 0; i < sizeof(F2) / sizeof(F2[0]); ++i)
++            {
++                const std::string a117 = Sent2(F2[i].f, 117), a104 = Sent2(F2[i].f, 104), a5 = Sent2(F2[i].f, 5);
++                const bool ok = !a117.empty() && a117 == a104 && a5 != a104;
++                if (!ok) std::printf("  %s: 117 '%s' / 104 '%s' / 5 '%s'\n", F2[i].name, TftText(a117).c_str(), TftText(a104).c_str(), TftText(a5).c_str());
++                CHECK(ok);
++            }
++            {
++                auto SentC = [&](int v) { const size_t a = Tx(); (t->*W191TftAccess::WriteCount())(ix, v, 7); const std::vector<char>& tx = DataModule3->BinDisp->SimTxBuffer(); return std::string(tx.begin() + a, tx.end()); };
++                const std::string a117 = SentC(117), a104 = SentC(104), a5 = SentC(5);   // WriteCount_TFT(index, ivalue = the bin, iCount)
++                const bool ok = !a117.empty() && a117 == a104 && a5 != a104;
++                if (!ok) std::printf("  WriteCount_TFT: 117 '%s' / 104 '%s' / 5 '%s'\n", TftText(a117).c_str(), TftText(a104).c_str(), TftText(a5).c_str());
++                CHECK(ok);
++            }
++            const struct { const char* name; W191TftAccess::Fn3 f; } F3[] = {
++                { "SetFontBin_TFT", W191TftAccess::SetFontBin() },
++                { "SetFontBinWord_TFT", W191TftAccess::SetFontBinWord() }, { "SetFontEA_TFT", W191TftAccess::SetFontEA() },
++                { "SetFontCount_TFT", W191TftAccess::SetFontCount() } };
++            for (size_t i = 0; i < sizeof(F3) / sizeof(F3[0]); ++i)
++            {
++                const std::string a117 = Sent3(F3[i].f, 117), a104 = Sent3(F3[i].f, 104), a5 = Sent3(F3[i].f, 5);
++                const bool ok = !a117.empty() && a117 == a104 && a5 != a104;
++                if (!ok) std::printf("  %s: 117 %u bytes / 104 %u bytes / 5 %u bytes, 117==104 %d\n", F3[i].name, (unsigned)a117.size(), (unsigned)a104.size(), (unsigned)a5.size(), (int)(a117 == a104));
++                CHECK(ok);
++            }
++        }
++    }
+     CHECK(W906_BinDispRealPortProbes_St02() == 0);
+ 
+     CloseGeneralIniFile();
+diff --git a/tests/test_st02_secs_ec_writes.cpp b/tests/test_st02_secs_ec_writes.cpp
+index c0e5f9ad..f41ab878 100644
+--- a/tests/test_st02_secs_ec_writes.cpp
++++ b/tests/test_st02_secs_ec_writes.cpp
+@@ -123,6 +123,16 @@ static std::string BinFile(int i)
+     return std::string(GetRecipePath().c_str()) + (i == 0 ? "\\Binasgn.Data" : "\\BinasgnOff.Data");
+ }
+ 
++// AI(W906-W191) 20261009 (St02-E): W-191 MR-5 -- the file name WriteIniData hands the change-log hook (common.cpp:1236) for the
++//   Binasgn*.Data writes of fBinSel->Save (golden 913 cBinSel.cpp:6355-6381: no doubled backslash after GetRecipePath()).
++static std::vector<std::string> g_w191Files;
++static W906_ChangeLogFn_Str g_w191Prev = 0;
++static void W191Capture(AnsiString F, AnsiString G, AnsiString N, AnsiString ret, AnsiString V, AnsiString& s1, AnsiString& s2, bool& b)
++{
++    if (G == "I/F Error")                                   // only fBinSel->Save(3616)'s own keys (cBinSel.cpp:921-922); ReadFile /
++        g_w191Files.push_back(F.c_str());                   //   SaveFunctionData write other Binasgn files with their own paths
++    if (g_w191Prev) g_w191Prev(F, G, N, ret, V, s1, s2, b);
++}
+ static void DeleteBinFiles()
+ {
+     ::DeleteFileA(BinFile(0).c_str());
+@@ -268,12 +278,28 @@ int main()
+     std::string seenBin, seenTray, seen;
+     BinSelect[eBinFT].IfErrorT3 = 1;
+     DeleteBinFiles();
++    g_w191Files.clear(); g_w191Prev = W906_ChangeLogHook_Str; W906_ChangeLogHook_Str = W191Capture;   // AI(W906-W191) MR-5
+     S2F15(host, 3616, 5);
+     r = h.S2F15_UpdateNewEquipmentConstant();
+     const bool bin5 = EitherHas("I/F Error", "Bin", "5", &seenBin);
+     const bool tray5 = EitherHas("I/F Error", "Tray", std::string(s3TrayName[5].c_str()), &seenTray);
+     GOT("update=%d IfErrorT3 after ReadFile=%d; Bin: %s; Tray: %s", r, BinSelect[eBinFT].IfErrorT3, seenBin.c_str(), seenTray.c_str());
+     CHECK(bin5 && tray5, "2. [E5] EC 3616 = 5 -> fBinSel->Save(3616, eBinFT) writes [I/F Error] Bin=5 / Tray=s3TrayName[5] (golden :1013-1015)");
++    W906_ChangeLogHook_Str = g_w191Prev;
++    {
++        int binasgn = 0, doubled = 0;
++        std::string last;
++        for (size_t i = 0; i < g_w191Files.size(); ++i)
++        {
++            const std::string& f = g_w191Files[i];
++            const size_t at = f.find("Binasgn");
++            if (at == std::string::npos) continue;
++            ++binasgn; last = f;
++            if (f.find("\\\\") != std::string::npos || at == 0 || f[at - 1] != '\\' || (at >= 2 && f[at - 2] == '\\')) ++doubled;
++        }
++        GOT("W-191 MR-5: %d Binasgn writes seen by the change-log hook, %d with a doubled backslash; last %s", binasgn, doubled, last.c_str());
++        CHECK(binasgn > 0 && doubled == 0, "2. W-191 MR-5 (golden 913 cBinSel.cpp:6355-6381): Save writes <recipe>\\Binasgn*.Data -- one backslash, not GetRecipePath()'s plus another");
++    }
+     DeleteBinFiles();
+     S2F15Ascii(host, 3617, "0,1");
+     r = h.S2F15_UpdateNewEquipmentConstant();
+diff --git a/tests/test_st02_w191_aoirecv.cpp b/tests/test_st02_w191_aoirecv.cpp
+new file mode 100644
+index 00000000..8324bed6
+--- /dev/null
++++ b/tests/test_st02_w191_aoirecv.cpp
+@@ -0,0 +1,65 @@
++// =============================================================================
++//  test_st02_w191_aoirecv.cpp -- W-191 MR-2: TAOISocket::ReceiveData reassembles a reply split across TCP segments
++//  (golden 913 TfAOILaserScan.cpp:32-43, Ifor 20260827; golden 0618 :30-37 overwrote the message with each segment).
++//
++//  AI(W906-W191) 20261009 (St02-E).  Suite name (add_test): St02_W191AoiRecv.  No socket is opened: ReceiveData is called the way
++//  uSocketClient's receive callback calls it (TfAOILaserScan.cpp:217).
++//    [1] "RECIPE_LIST,a,b" then "c,d@" -> asReceiveMsg == "RECIPE_LIST,a,bc,d@" (0618 kept only "c,d@");
++//    [2] after a complete reply (has '@') the next segment starts a new reply;
++//    [3] each segment is cut to iLen before it is joined;
++//    [4] the log callback sees each segment, not the joined reply.
++// =============================================================================
++#include "MachineDefine.h"
++#include "TfAOILaserScan.h"
++#include <cstdio>
++#include <cstring>
++#include <string>
++#include <vector>
++
++static int g_pass = 0, g_fail = 0;
++static void Check(bool ok, const std::string& what)
++{
++    if (ok) { ++g_pass; std::printf("  PASS: %s\n", what.c_str()); return; }
++    ++g_fail;
++    std::printf("  FAIL: %s\n", what.c_str());
++}
++
++static void Feed(TAOISocket& s, const char* text, int len)
++{
++    std::vector<char> buf(text, text + std::strlen(text) + 1);
++    s.ReceiveData(buf.data(), len);
++}
++
++int main()
++{
++    std::setvbuf(stdout, nullptr, _IONBF, 0);
++    std::printf("St02_W191AoiRecv -- TAOISocket::ReceiveData (golden 913 TfAOILaserScan.cpp:32-43)\n");
++    std::vector<std::string> logged;
++    TAOISocket s;
++    s.SetRecordMsg([&logged](AnsiString m) { logged.push_back(m.c_str()); });
++
++    std::printf("[1] a reply split in two TCP segments\n");
++    s.asReceiveMsg = "";
++    Feed(s, "RECIPE_LIST,a,b", 15);
++    Check(std::string(s.asReceiveMsg.c_str()) == "RECIPE_LIST,a,b", "[1] first segment kept (no '@' yet)");
++    Feed(s, "c,d@", 4);
++    Check(std::string(s.asReceiveMsg.c_str()) == "RECIPE_LIST,a,bc,d@",
++          "[1] second segment appended -> the whole reply (" + std::string(s.asReceiveMsg.c_str()) + ")");
++
++    std::printf("[2] the next reply after a complete one\n");
++    Feed(s, "OK@", 3);
++    Check(std::string(s.asReceiveMsg.c_str()) == "OK@", "[2] a complete reply ('@' seen) is replaced, not appended (" + std::string(s.asReceiveMsg.c_str()) + ")");
++
++    std::printf("[3] iLen cuts each segment before joining\n");
++    s.asReceiveMsg = "";
++    Feed(s, "ABCDEFxyz", 6);
++    Feed(s, "GH@zzz", 3);
++    Check(std::string(s.asReceiveMsg.c_str()) == "ABCDEFGH@", "[3] \"ABCDEF\" + \"GH@\" (" + std::string(s.asReceiveMsg.c_str()) + ")");
++
++    std::printf("[4] the log sees each segment\n");
++    const bool seg = logged.size() >= 2 && logged[0] == "[Receive]RECIPE_LIST,a,b" && logged[1] == "[Receive]c,d@";
++    Check(seg, "[4] log lines are the segments: '" + (logged.size() > 1 ? logged[1] : std::string("?")) + "'");
++
++    std::printf("\nSt02_W191AoiRecv: %d passed, %d failed\n", g_pass, g_fail);
++    return g_fail == 0 ? 0 : 1;
++}
+-- 
+2.55.0.windows.5
+
