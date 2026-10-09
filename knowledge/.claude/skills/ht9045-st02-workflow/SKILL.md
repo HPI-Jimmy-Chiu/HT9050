@@ -106,6 +106,7 @@ description: >
   - merge-tree 單獨一個指令跑，看到只印一行，才在下一個指令推。不要跟 push 串在同一行（0927 推錯過一次）。
 - **純文件的修改（現況板、techniques、SKILL.md）不要自己單獨推**（St02-M 20260930）。在 gw 本機 commit，等下一次程式推送一起推。筆電正在對 gw 的 tip 跑關卡時，純文件的 tip 只會讓 MR !6 多一次變動。
 - fetch 偶爾報「reference already exists / incorrect old value」＝別的行程同時 fetch，重試就好。
+- **D:\HT9045 要定期快轉**（Steven 1009 09:4x「但是還是要定期pull最新版本」，St02-M 轉）：每到卡片交界、以及沒在建置時至少每 30 分鐘，在 D:\HT9045 跑一次 `python scripts/ops/ff_main_checkout.py`（不在 main、有本機 commit、有建置從那裡在跑、git 拒絕時它自己會跳過）。新的認領一律從 origin/main 或剛開的樹讀行號。
 
 ## 4. 改檔規則
 
@@ -171,7 +172,7 @@ description: >
 28. **新增或改了 ctest 的 MR，交給筆電之前一定要先請 St01 代跑那幾支（兩組態）**（20261003 !150 C14b：第 9～13 段從沒跑過就推，筆電 gate b52a ship 紅 4 項、被踢出第 52 批）。這台只能編譯，三種錯它都看不出來：①期待寫錯（golden ProcessStopStart(true) 會立刻吃掉 bFirstInit，`bFirstInit == true` 本來就不會成立）；②組態差異（ship 的 Timer1Timer case 1 會重開 COM，SIM 擷取緩衝被 StartComm 清掉，測試的讀取位置沒歸零就再也收不到）；③全檔搜尋的釘子撞到同名的別的東西（csystem.cpp 有兩個「GATE G09」）。做法：推之前在回報裡寫明「請 St01 代跑：<ctest 名稱>，兩組態，紅的話附完整輸出」；測試裡在可能不到位的地方先印狀態（幀數、緩衝大小、呼叫次數），代跑一次就看得到原因。釘子要對準位置（例：只看呼叫那一行上面幾行），不要全檔找一個字串。
 29. **測試執行檔的名稱不能有 setup／install／update／patch**（20261003 NB2-1 R199：!155 的 `test_st02_s09_setup_temperfrom.exe` 被 Windows 的安裝程式偵測要求提升權限，ctest 兩組態都「Not Run (permission denied)」；筆電在第 53 批用 `set_target_properties(<target> PROPERTIES OUTPUT_NAME test_st02_s09_su_temperfrom)` 修，ctest 名稱不變）。新增測試目標時先看名稱；非用不可就加 OUTPUT_NAME。推之前查：`git diff <base> HEAD -- HT9011UC_Cpp_V3.33.906.0/tests/CMakeLists.txt | grep "^+add_executable" | grep -iE "setup|install|update|patch"` 要沒有輸出。
 30. **移植一個符號之後，樹裡寫「沒有移植／no port」的舊註解就過期了**（20261004 S-25：St02 1002 移植 IsMultiEPPressureRouteActive、G24 也解了，但 forms/fHS.h 三段還寫「全樹沒有」，筆電的 absence 哨兵才抓到）。移植／解閘時：`git grep -n <符號>` 把寫「no port／NO PORT／missing symbol／不存在」的註解一併列出，自己的檔順手改，別人的檔列給 St02-M 轉筆電（同行替換、行數不變）。改閘的理由要寫真正擋住的原因（例：golden 906 根本沒人呼叫 ⇒「NO LIVE CALLER IN GOLDEN 906」），不要只把舊理由刪掉。
-31. **時間標籤一律先跑 `date '+%H:%M'` 再寫，不要用估的**（20261004 St02-M：ChangeLog 第 6～8 列、現況板標題、給 St02-M 的訊息都比實際快約一小時）。已推的工作用 commit 時間（`git log -1 --format=%ci`）當依據；ChangeLog 的「時間」欄寫實際區間。
+31. **時間標籤一律先跑 `date '+%H:%M'` 再寫，不要用估的**（20261004 St02-M：ChangeLog 第 6～8 列、現況板標題、給 St02-M 的訊息都比實際快約一小時）。已推的工作用 commit 時間（`git log -1 --format=%ci`）當依據；ChangeLog 的「時間」欄寫實際區間。（1009 St02-M：MR-B 認領寫成 10:0x、實際 09:4x。寫「HH:Mx」時先跑 `date '+%H:%M'`，把分鐘的個位數換成 x，例 09:47→09:4x；不要心算。）
 32. **D 槽只剩 55 GB 時，不要每張 MR 開新的 obj 目錄**（20261004 MR-A／S-09）：把一個已設定好的工作樹 `git checkout --detach <要驗的 commit>`，再用 `scratchpad\s09close\lane_cmake.sh <那個 obj>\build|build_ship` 增量建置；commit 與推送在分支所在的工作樹做（同一個 commit）。改到 forms/fMain.h 這類大家都 include 的檔，增量也幾乎全編（sim 約 30 分、ship 約 20 分）。
 33. **移植樹的表單建構子不會把成員歸零，golden VCL 會**（20261004 S-09：TfTemperFrom 的 strShowYield[].OnOff 建構子沒設；golden 的 TObject::InitInstance 整塊清零）。寫「拿掉補丁就變紅」的反向檢查時，不要只靠新物件的預設值；要再加一個不同值的情況（S-09 的 [5] OCR=0）把數值來源釘住，並在 commit 寫明。
 34. **測試裡的原始碼釘子不要釘「兩個檔相鄰」，修測試時保持行數不變**（20261004 !165 NB2-1 R209）：合 main 之後共用清單（CMakeLists 的同一行）中間常會多出別人的檔，「`A  B` 相鄰」就紅了；改釘「同一行、B 在 A 之後、在 `#` 之前」。反向清單引用測試行號時，修測試一律同一行附加（R209 的 YPitch 種在既有的那一行），不然整份清單的行號都要重算。另：測試環境沒讀 Tray.Data 等設定檔時，被測函式後面的 W906 後備訊息（例 W906-PITCH0）會蓋掉 ExString——種值要種在被測函式真正讀的源頭（[[seed-tests-at-the-real-source]]）。
