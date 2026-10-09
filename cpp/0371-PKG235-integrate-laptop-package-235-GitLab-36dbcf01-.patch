@@ -1,0 +1,759 @@
+From ab053d62b61ef22f05b140a21c328e0a760e35e3 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 10 Oct 2026 01:56:15 +0800
+Subject: [PATCH] PKG235: integrate laptop package 235 (GitLab 36dbcf01) --
+ NB2-1 W-188 #5 HotPlate pick-ledger reconcile as golden 913 (MR !405): when
+ #3 flagged a phantom booking, DoInArm_9045 clears bookings to empty slots and
+ duplicates while the mechanism is idle (subtract only, no motion), saves the
+ ledger and writes one record line. Reached on HT9050 only when the ledger
+ really has a phantom booking. Auto-accepted (scheduled check).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ Public/HTEditList.cpp             | 154 +++++++++++++++++++++
+ Public/HTEditList.h               |   2 +-
+ ainarm9045.cpp                    |   2 +-
+ ainarm_SearchPickPlate.cpp        |  30 +++++
+ ainarm_SearchPickPlate.h          |   2 +-
+ docs/MACHINE_PATCHES_20261009.md  |   1 +
+ docs/NIGHT_REPORT.md              |   6 +-
+ docs/WORKLOG_MACHINE.md           |   1 +
+ docs/health/HEALTH_20261009.md    | 217 ++++++++++++++++++++++++++++++
+ tests/CMakeLists.txt              |  13 ++
+ tests/test_nb2_w188_reconcile.cpp | 187 +++++++++++++++++++++++++
+ 11 files changed, 610 insertions(+), 5 deletions(-)
+ create mode 100644 docs/health/HEALTH_20261009.md
+ create mode 100644 tests/test_nb2_w188_reconcile.cpp
+
+diff --git a/Public/HTEditList.cpp b/Public/HTEditList.cpp
+index 95c4fcbe..8c5fe8cc 100644
+--- a/Public/HTEditList.cpp
++++ b/Public/HTEditList.cpp
+@@ -2841,3 +2841,157 @@ void uPoint2D::Clear()
+     Y=0;
+ }
+ //---------------------------------------------------------------------------
++//AI(W906-W188) 20261009 (NB2-1): W-188 #5 -- golden 913 Public/HTEditList.cpp:2939-2946 verbatim (RogerYang 20260822).
++uHPSuckTeam* uHPSuckGroup::RemoveSuckTeam(int iIndex)                           //AI(ht9045-staterecord-analysis) 20260822 (RogerYang) : 取出指標不刪物件
++{
++    if(this==NULL || iIndex<0 || iIndex>=HPSuckTeamList->Count)
++        return NULL;
++    uHPSuckTeam* HPTeam=(uHPSuckTeam*)HPSuckTeamList->Items[iIndex];
++    HPSuckTeamList->Delete(iIndex);                                             //TList::Delete只移除指標, 物件由呼叫端接手
++    return HPTeam;
++}
++//---------------------------------------------------------------------------
++//AI(W906-W188) 20261009 (NB2-1): W-188 #5 -- the ledger passes of golden 913 ainarm_SearchPickPlate.cpp ReconcilePickFromHPList, verbatim:
++//   locals :1489-1492, Pass 1 / Pass 2 / save + log :1508-1635.  The entry point (NULL check + busy gate, :1494-1506) stays
++//   in ainarm_SearchPickPlate.cpp, whose TU only sees the zero-data uPlateInfo facade; this TU has the real class.
++#include "Motor/mymotor.h"   //AI(W906-W188) 20261009 (NB2-1): MOT[] (MMPlate1 Tray.Data) for Pass 1
++#ifndef __FUNC__
++#define __FUNC__ __func__   //AI(W906-W188) 20261009 (NB2-1): BCB __FUNC__ (canary_support.h:45 spelling)
++#endif
++int W906_ReconcileHPLedger913(const char* szWho)
++{
++    static bool bSeen[2][50][50];                                               //AI : 只在MainProc執行, 用static避免5KB堆疊框
++    AnsiString Str;
++    int iPhantom=0, iDup=0, iDelTeam=0, iDelGroup=0;
++    int ip=0, ic=0, ir=0, ig=0, it=0, i=0, j=0;
++
++    for(ip=0; ip<2; ip++)
++        for(ic=0; ic<50; ic++)
++            for(ir=0; ir<50; ir++)
++                bSeen[ip][ic][ir]=false;
++
++    //---- Pass 1 : 正向掃(只改bSuck不動索引), 清掉「指到空格」與「重複登記」的slot ----
++    for(ig=0; ig<PickFromHPList->GetHPSuckGroupCount(); ig++)
++    {
++        uHPSuckGroup* HPGroup=PickFromHPList->ExtractSuckGroup(ig);
++        if(HPGroup==NULL)
++            continue;
++
++        for(it=0; it<HPGroup->GetTeamCount(); it++)
++        {
++            uHPSuckTeam* HPTeam=HPGroup->ExtractSuckTeam(it);
++            if(HPTeam==NULL)
++                continue;
++
++            for(i=0; i<MAX_ARM_Row; i++)
++            {
++                for(j=0; j<MAX_ARM_Col; j++)
++                {
++                    if(HPTeam->bSuck[i][j]==false)
++                        continue;
++
++                    ip=HPTeam->iP;
++                    ic=HPTeam->iPlateC[i][j];
++                    ir=HPTeam->iPlateR[i][j];
++
++                    if(ip<0 || ip>=2 || ic<0 || ic>=50 || ir<0 || ir>=50)       //AI : 座標本身壞掉
++                    {
++                        HPTeam->bSuck[i][j]  =false;
++                        HPTeam->iPlateC[i][j]=-1;
++                        HPTeam->iPlateR[i][j]=-1;
++                        HPTeam->iSite[i][j]  =-1;
++                        iPhantom++;
++                        continue;
++                    }
++
++                    if(MOT[MMPlate1+ip].Tray.Data[ic][ir]==NULL_IC)             //AI : 帳本有、加熱盤沒有 = 幽靈帳
++                    {
++                        Str.sprintf("Reconcile phantom : G%d T%d Suck%d%d P%d C%d R%d Site%d",
++                                    ig, it, i+1, j+1, ip, ic, ir, HPTeam->iSite[i][j]);
++                        MyDBIProcess("Exception", Str);
++                        HPTeam->bSuck[i][j]  =false;
++                        HPTeam->iPlateC[i][j]=-1;
++                        HPTeam->iPlateR[i][j]=-1;
++                        HPTeam->iSite[i][j]  =-1;
++                        iPhantom++;
++                        continue;
++                    }
++
++                    if(bSeen[ip][ic][ir]==true)                                 //AI : 同格被登記兩次以上, 只留最靠隊首那筆
++                    {
++                        Str.sprintf("Reconcile duplicate : G%d T%d Suck%d%d P%d C%d R%d Site%d",
++                                    ig, it, i+1, j+1, ip, ic, ir, HPTeam->iSite[i][j]);
++                        MyDBIProcess("Exception", Str);
++                        HPTeam->bSuck[i][j]  =false;
++                        HPTeam->iPlateC[i][j]=-1;
++                        HPTeam->iPlateR[i][j]=-1;
++                        HPTeam->iSite[i][j]  =-1;
++                        iDup++;
++                        continue;
++                    }
++
++                    bSeen[ip][ic][ir]=true;
++                }
++            }
++        }
++    }
++
++    //---- Pass 2 : 由下往上刪掉「全空的team」與「被清空的group」 ----
++    for(ig=PickFromHPList->GetHPSuckGroupCount()-1; ig>=0; ig--)
++    {
++        uHPSuckGroup* HPGroup=PickFromHPList->ExtractSuckGroup(ig);
++        if(HPGroup==NULL)
++            continue;
++
++        for(it=HPGroup->GetTeamCount()-1; it>=0; it--)
++        {
++            uHPSuckTeam* HPTeam=HPGroup->ExtractSuckTeam(it);
++            if(HPTeam==NULL)
++                continue;
++
++            bool bAnySuck=false;
++            for(i=0; i<MAX_ARM_Row && bAnySuck==false; i++)
++            {
++                for(j=0; j<MAX_ARM_Col; j++)
++                {
++                    if(HPTeam->bSuck[i][j]==true)
++                    {
++                        bAnySuck=true;
++                        break;
++                    }
++                }
++            }
++
++            if(bAnySuck==false)
++            {
++                uHPSuckTeam* HPDel=HPGroup->RemoveSuckTeam(it);                 //AI : TList::Delete只移除指標, 物件由呼叫端接手
++                if(HPDel!=NULL)
++                {
++                    delete HPDel;
++                    iDelTeam++;
++                }
++            }
++        }
++
++        if(HPGroup->GetTeamCount()==0)                                          //AI : 空group留著會讓DataForwardAndNextTeam空轉(同20260823c)
++        {
++            PickFromHPList->DelHPSuckGroup(ig);
++            delete HPGroup;
++            iDelGroup++;
++        }
++    }
++
++    if(PickFromHPList->GetHPSuckGroupCount()==0)                                //AI : 補一個開放group給ExtractLastGroup/SetArrPlateXY寫入
++        PickFromHPList->AddHPSuckGroup();
++
++    if(iPhantom>0 || iDup>0 || iDelTeam>0 || iDelGroup>0)
++    {
++        PickFromHPList->SaveFile(sHPPickRec);                                   //AI : 一定要落地, 否則重開機又讀回爛帳
++        Str.sprintf("ReconcilePickFromHPList by %s : phantom=%d dup=%d delTeam=%d delGroup=%d groupLeft=%d",
++                    szWho, iPhantom, iDup, iDelTeam, iDelGroup, PickFromHPList->GetHPSuckGroupCount());
++        RecordProcess(Str, __FUNC__);
++    }
++
++    return iPhantom+iDup;
++}
++//---------------------------------------------------------------------------
+diff --git a/Public/HTEditList.h b/Public/HTEditList.h
+index eeff5b34..6c8a2fa0 100644
+--- a/Public/HTEditList.h
++++ b/Public/HTEditList.h
+@@ -322,7 +322,7 @@ public:     // User declarations
+ 
+     uHPSuckGroup*   Clone();
+     uHPSuckTeam* ExtractLastTeam();
+-    uHPSuckTeam* ExtractSuckTeam(int iIndex);
++    uHPSuckTeam* ExtractSuckTeam(int iIndex);   uHPSuckTeam* RemoveSuckTeam(int iIndex);   //AI(W906-W188) 20261009 (NB2-1): golden 913 Public/HTEditList.h:185 (RogerYang 20260822)
+ 
+     //To JSON
+     void SaveJSONFile(cJSON* root);
+diff --git a/ainarm9045.cpp b/ainarm9045.cpp
+index 8971e5ba..52ebf0a7 100644
+--- a/ainarm9045.cpp
++++ b/ainarm9045.cpp
+@@ -1003,7 +1003,7 @@ void DoInArm_9045()
+     {
+         bRunAutoSiteMapping=false;
+     }
+-
++    { extern bool bNeedReconcileHPList; extern int ReconcilePickFromHPList(const char* szWho);   if(bNeedReconcileHPList==true && bRunAutoSiteMapping==false) { if(ReconcilePickFromHPList("DoInArm_9045")>=0) bNeedReconcileHPList=false; } }   //AI(W906-W188) 20261009 (NB2-1): W-188 #5 -- golden 913 ainarm9045.cpp:4506-4511 (RogerYang 20260827): HasHotReadyIC found a phantom booking -> reconcile the HP pick ledger outside ASM; -1 = arm busy, keep the flag for the next pass
+     if(IniConfig.bEnableTestingNeedStopAllMotor==true &&
+        IniConfig.bI24TestingNeedStopAllMotor==true &&
+        bTestingStopAllMotor==true)                                              //jou 2013-09-25 Testing Need Stop All Motor
+diff --git a/ainarm_SearchPickPlate.cpp b/ainarm_SearchPickPlate.cpp
+index dd5dcba3..6ce03390 100644
+--- a/ainarm_SearchPickPlate.cpp
++++ b/ainarm_SearchPickPlate.cpp
+@@ -1322,6 +1322,36 @@ static void FreePoint2DList(TList* ls)
+ }
+ //------------------------------------------------------------------------------
+ bool bNeedReconcileHPList=false;                                                //AI(ht9045-inarm-flow) 20260827 (RogerYang)
++//AI(W906-W188) 20261009 (NB2-1): W-188 #5 -- ReconcilePickFromHPList = golden 913 ainarm_SearchPickPlate.cpp:1481-1636 (RogerYang 20260827).
++//   This TU sees only the zero-data uPlateInfo facade (aHotPlateSubstrate.h), so the entry point keeps golden :1487-1488
++//   and :1494-1506 (NULL check + busy gate) verbatim here, and the two ledger passes (golden :1489-1492 locals + :1508-1635)
++//   run verbatim in W906_ReconcileHPLedger913() at Public/HTEditList.cpp EOF, the TU of the real uPlateInfo/uHPSuckGroup.
++int W906_ReconcileHPLedger913(const char* szWho);                              //AI(W906-W188) 20261009 (NB2-1): Public/HTEditList.cpp EOF
++//------------------------------------------------------------------------------
++//AI(ht9045-inarm-flow) 20260827 (RogerYang) : HotPlate取料帳本對帳 - 只做減法(刪幽靈/去重複), 不重建
++//AI : 吸嘴綁定(哪支放的哪支取)保存在存活的那筆booking裡, 全程不重新推導slot -> 無資料丟失
++//AI : ASM取料走SearchPickPlateXItem_AutoSiteMap不消耗帳本, 結束後帳本會殘留指向空格的booking
++//AI : 回傳 修正筆數(>=0), -1=機構忙(旗標保留下個pass再試)
++//------------------------------------------------------------------------------
++int ReconcilePickFromHPList(const char* szWho)
++{
++
++    if(PickFromHPList==NULL)
++        return 0;
++
++    if(InArmSuck.HasIC()==true                   ||                             //AI : 手上有料 = 取放進行中
++       bPlaceToHotplate==true                    ||
++       bPickFromHotplate==true                   ||
++       iInArmPickFromHotPlateTask!=1             ||
++       iInArmTryPickFromHotPlateTask!=1          ||
++       bRunAutoSiteMapping==true                 ||                             //AI : ASM期間取料不經帳本
++       LastSet.iRunStartMode==rsmAutoSiteMap     )                              //AI : Site Mapping模式一律不對帳
++    {
++        return -1;
++    }
++
++    return W906_ReconcileHPLedger913(szWho);                                    //AI(W906-W188) 20261009 (NB2-1): golden :1508-1635 (Pass 1 / Pass 2 / save + log)
++}
+ //AI(W906-W188) 20261009 (NB2-1): W-188 #3 -- HasHotReadyIC_9045 = golden 913 ainarm_SearchPickPlate.cpp:1638-1840 verbatim (0618 :1248-1397,
+ //   which this port body was): HasRealIC gate + HAS_NULL_IC residue clear (RogerYang 20260831), bMixTeam ->
+ //   bNeedReconcileHPList (20260827), orphan-cell Exception log (20260831), FreePoint2DList on every return (20260801).
+diff --git a/ainarm_SearchPickPlate.h b/ainarm_SearchPickPlate.h
+index 35165f31..24ce597c 100644
+--- a/ainarm_SearchPickPlate.h
++++ b/ainarm_SearchPickPlate.h
+@@ -27,7 +27,7 @@ extern bool bPickFormHotplateRetry;
+ extern bool bInArmTryPickFromHotPlateFinish;                                    //ChungHung 20120206 Hotplate check
+ 
+ extern int  GetHeaterWaitTime();
+-extern bool HasHotReadyIC_9045();   extern bool bNeedReconcileHPList;   //AI(W906-W188) 20261009 (NB2-1): golden 913 ainarm_SearchPickPlate.h:18
++extern bool HasHotReadyIC_9045();   extern bool bNeedReconcileHPList;   extern int  ReconcilePickFromHPList(const char* szWho);   //AI(W906-W188) 20261009 (NB2-1): golden 913 ainarm_SearchPickPlate.h:18-19 (W-188 #3 / #5)
+ extern bool InArmNeedCheckHotPlateOffset(bool bPlace);                          //Steven 20230531 : 簡化判斷式
+ 
+ extern bool MoveInArmXYPickHotPlate_9045(bool bNeedDown);
+diff --git a/docs/MACHINE_PATCHES_20261009.md b/docs/MACHINE_PATCHES_20261009.md
+index f325513b..b4f6caaa 100644
+--- a/docs/MACHINE_PATCHES_20261009.md
++++ b/docs/MACHINE_PATCHES_20261009.md
+@@ -166,3 +166,4 @@
+ - **cpp 0367 WORKLOG** 收進第 151 批（b18 `5c2cee5e`，`cherry-pick -x 276ae779` 乾淨；另一顆把 `WORKLOG_MACHINE.md` 換成機台整份——補上機台在 PKG232 裡加的第 232 包那列，RULINGS_20260930 第 11 條）；gate b151a 跑中。
+ - **快照 00:24**（main `bd7d4c81`）：只有兩份 README 的時間——不叮嚀。
+ - **鏈尾**：C++ `276ae779`（0367）→ **`61ecf384`**（0368）。下一次從 **cpp 0369／web 0144／tools 0193** 開始。
++- （20261010 00:5x 補記）**cpp 0367 WORKLOG 進 main**：第 151 批 `c8057031`＝第 234 包（GitHub `84c06f33`）。
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index 42ceebd5..8adba03b 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -1,10 +1,10 @@
+-# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1010 00:4x）
++# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1010 01:2x）
+ 
+ ## ☀ 10/08 早上先看這裡（04:3x 起草；之後的進度往這張表加）
+ 
+ | 項目 | 一句話 |
+ |---|---|
+-| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～150 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate；第 140 批拿掉當掉的 IG-6 後才綠），出了**第 181～233 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
++| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～151 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate；第 140 批拿掉當掉的 IG-6 後才綠），出了**第 181～234 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
+ | **模擬組態** | St02 W-149 做完：模擬版的固定失敗從 7 支降到 4 支，跟出貨一樣——之後模擬版多紅一支就是真回歸。 |
+ | **機台修的事（重點）** | 0307 主控台非同步（START 卡 103 秒＋EMG 誤報的根因）、0309／0310／0312／0316 HT9050 Tray 流程（站序、Empty→Auto 補盤、位置不加 6800、Loader 探測看抽屜感測）、0311／0317 上升氣缸雙線圈、0313 出料手臂讓位點（00:19 MOutArmX 警報）、0314 CCD Y 原點判斷、**0315 HT9050 先跳過 Index 扭力讀取**（旗標預設開，扭力讀取驗證後要關）。 |
+ | **軟體極限** | 00:19 的警報是 golden 拿軟體極限（這台 ±999999）算目標。MainNB-GPT 普查（W-164）：只剩 Motor Test 頁的 LightScale 會算出 ±999899——EastSun 0925 R7 已定照 golden，只發提醒。 |
+@@ -134,6 +134,8 @@
+ | **1009 23:3x：K1「換配方同步失敗就擋 START」的一個死角（等 Steven，不用你決定）** | St02 在模擬組態驗證時發現：913 只有長電 JSCC OS 部門會讀「同步到測試機的目的地路徑」，其他客戶如果打開這個同步功能，路徑永遠是空的，每次換配方都失敗、START 一直被擋住解不開。**今天不會發生**：HT9050 沒開這個功能。這是改 Steven 自己定的規則，St02 明天問 Steven 本人；在那之前照現狀不改。 |
+ | **出的包（1010 00:0x）：第 233 包＝第 150 批** | GitLab `934e5da8`／GitHub `ba13553f`：St02 的 HANA 機台 RMS 互鎖設定升版搬移（只有 HANA 機台，照 913）＋機台的 WORKLOG。HT9050 行為不變。gate b150a 兩組態只有固定 4 支（519 支測試）。機台已套到第 232 包。KenHeish 的 LEADYO 四題（W-209）4 小時沒回，已在他的交接檔追問第 1 次（不急，沒回之前 LEADYO 不開工）。 |
+ | **1010 00:4x：機台追平第 233 包；NB2 交了 W-188 #5** | 機台已套到 GitHub 上最新的第 233 包。NB2-1 的熱盤取料帳本對帳（照 913，只修帳、不動馬達）排第 152 批，第 151 批（St02 測試探針＋機台 WORKLOG）gate 跑完就開。 |
++| **出的包（1010 00:5x）：第 234 包＝第 151 批** | GitLab `c8057031`／GitHub `84c06f33`：St02 把那支偶發誤報的測試探針改穩（只有測試）＋機台的 WORKLOG；沒有產品程式改動，HT9050 行為不變。gate b151a 兩組態只有固定 4 支。第 152 批（NB2 的熱盤取料帳本對帳）gate 跑中。 |
++| **每日健康檢查（01:2x）** | `docs/health/HEALTH_20261009.md`（只量不改，RULINGS_20261005 第 21 條）。紅燈 39：①晚讀 2 則（St02 修 W-198 時間、Ifor01 W-206 停放；兩則筆電都讀過，只是沒在 main 點名，1010 01:1x 補）②等回覆超過 8 小時 36 列（大多是機台端與 NB2-GPT 的舊列，另有幾列是同事進行中的工作卡）③第 211 包機台 3 小時才套。照規則只量不改，每週彙總時給你決定要改哪個流程。 |
+ | **要你決定的**（§0） | ✅ 你 10:1x 都回了：#148＝NB2 已完成（!306 收進第 110 批確認）、#149＝A（Ifor-GPT 專做執行期測試，IG-3／IG-4）、!310＝A（ES02 HTDESIGNER 0.235～0.257 收進第 110 批）＝RULINGS_20261008 第 2 條。**13:0x 新一題 #150**：GPIB 位址不一致要不要自動修正（Jerry 留給你；預設 A＝維持 golden、只留警告，可不回）。<br>**🆕 1009 11:4x 新一題 #151：HANA 機台按 START 時，要不要照 golden 先等 RMS 伺服器連線（最多 3 秒）？** 白話：golden 913（RogerYang 0916）裡，HANA 客戶開了 A77 的機台按 START 前，會先確認 RMS 伺服器連得上，連不上就擋下 START，連線最多等 3 秒。問題在移植樹的輪詢是單執行緒——這 3 秒裡整台機台的狀態更新會停住（例：網頁上的數字 3 秒不動）。你 0923 定過「會擋住輪詢的整合要先問」，所以問你。只有「HANA 客戶＋開 A77＋線上模式＋RMS 還沒連上」才會等，HT9050 永遠走不到。選項：**A＝照 golden 收**（建議：只在按 START 那一刻、最多 3 秒，機台本來就停著；St02 已經把等待裡的訊息迴圈換成只推 HANA 連線）；**B＝先不收**，等改成不擋輪詢的寫法（例：連線放到背景，START 時只看結果）。**沒回之前照 B**：H4 先不合，HANA 其他幾張（!372～!374）照常進第 138 批。<br>**🆕 1009 12:3x 新一題 #152：EastSun 派給你的「在沒有 AI 的電腦上實測安裝與更新」，實測要誰來做？** 白話：EastSun 希望客戶端或沒有 AI 的電腦也能只靠文件和腳本裝好、更新 HT9050 的軟體（機台 cpp 0349）。手冊和腳本筆電已派 Ifor01 寫（W-197）；寫好之後要有一個「人」在一台沒有 Claude 的電腦上照著做三個情境：①從零安裝並啟動；②從某一包更新到最新一包，中間至少遇到一個「機台和筆電都改過」的檔；③故意讓建置失敗，照手冊退回。模擬組態就可以，不用機台。選項：**A＝你自己做**（建議：EastSun 指名你，你也最清楚客戶端要什麼；大約半天到一天）；**B＝指定一位同事**照手冊做、不用 AI（例：Kevin 或 Jerry）；**C＝先不排**，手冊寫好放著。**沒回之前照 C**：手冊照寫，不排實測。實測的人不能是寫手冊的 Ifor01。<br>（1009 13:4x 補：**#151 也請 Steven 一題決定**（W-199）——你 13:3x 說 Steven 的回覆最高優先，Steven 回了就照他的，這題你就不用回。Steven 13:0x 對同一類的 KYEC 換配方同步等 7z 已經裁定「功能打開才等」照 913 同步，可以參考。）<br>（1009 15:1x 補 #152：**手冊和腳本已經好了**——Ifor01 的 MR !379 進 main `7db6b913`：`tools/laptop_ops/pkg_template/` 的 `NO_AI_INSTALL.md`／`NO_AI_UPDATE.md`／`NO_AI_TROUBLESHOOTING.md`＋五支 PowerShell 腳本＋啟動 .bat，每份手冊都附實測紀錄表。你決定誰做實測就可以開始；新腳本等實測過了才換進每一包。） |
+ 
+ 
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index f6379f45..11f39a36 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -353,6 +353,7 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-07 | 設計外掛 tools 0170 | — | 設計外掛工作階段自己推（分支 a6cadd2，GitHub dc7975ff）：依序合併筆電包 162、163、167、168 的設計外掛（0.197.0 → 0.234.0），164～166、169～172 沒帶設計外掛；無衝突，機台自己的設計外掛功能都保留；測試修正：建置視窗進度條在矮視窗不再塌掉、面板繪製測試固定 Edge 視窗大小；run_all 3/3、vscode_it 161/161，已安裝 0.234.0；只動 tools/vscode-htdesigner | tools 0170 |
+ | 10-08 | 設計外掛 tools 0171 | — | 設計外掛工作階段自己推（commit b453060，GitHub f42c142b）：EastSun 1008 方案總管的 Debug／Release 按鈕按不了（0.234 在 ▶＝F5 時把它變灰）→ 裁決「連動F5 release 和debug」：按鈕恢復可按，resolveDebugConfiguration 依按鈕把 F5／▶ 的啟動目標換成 build_integ_dbg_x86 或 build_integ_ship_x86 那一組；「模擬」仍是灰的。run_all 3/3；vscode_it 沒跑成（VS Code 自己的更新程式 CodeSetup 從 10/07 18:34 起佔住執行個體鎖）。vsix 已安裝，版本號沒變，要重新載入視窗才生效；只動 tools/vscode-htdesigner | tools 0171 |
+ | 10-08 | 173～204 | 07dbeae3＋63b1aa25＋351291d5（GitLab 0258ba66…68fc0e65、39c6388c、e6c54331） | 本 commit（機台 C++＋web），EastSun「你確定有合完整?」→「快合」→「一直合下去 不要停拜託」（173～202 的 C++ 從 10-07 起都沒合，只有設計外掛跟上）。備份分支 backup/pre-pkg202-20261008（cpp、web）＋ D:\HT9045\_pkg_202\backup_machine_195843、D:\HT9045\_pkg_203\backup_machine_220733。202 疊三十包：直接換 108（換 105；tasks.json、acatchtray 留機台）、新檔 35、兩邊都改 22（合併 16、設計外掛／WORKLOG 照規定 6）、一樣 88；每個直接換的檔掃機台 AI 標記＋W906_ 識別字：WebBridgeServer（TOKEN-OFF／SOFTKEY panel.estop）改三方合併＋收筆電 pad.get／pad.close／observerSG 豁免、acatchtray 留機台（筆電版＝少 PROBECYL）、MotionView9050 換（機台＝基底）。衝突：cinitial／test_flow9050_tray／csystem 取機台（BOOTCLEAR、PROBECYL、pitch 同步在 MainProc）；test_scankey_golden、IoBtnPanelClick、tests/CMakeLists、WebBridgeTags（tester.name 依 Jerry 1008 裁決 A＝golden LoadTestModePicture）取筆電；wb_serve 第 239 行＝機台 IOWAIT＋筆電 g_ppCyc0 搬移。4 個新網頁檔改 CRLF。203：15 檔（直接換 9、新 4、合併 2，無衝突）；204：12 檔（直接換 9、新 1、合併 2，無衝突；SECS SV Auto1～6 料盤別名＋氣缸平均推拉時間、cSpeed）。合併後 test_scankey_golden 補回 PadInterface_St02.h include、[19]（筆電版軟體面板鍵 ST02-P2，機台保留自己的 SOFTKEY）在機台關掉。ctest Debug 426/441：15 個失敗都是第 381 列的已知清單（環境：dfm2rc×4 ctest 找不到 g++／rc.exe、E031、GearTeachSave、TeachCheckRangeReload；斷言筆電設定／repo 舊表：config_db、ini_helpers、config_loaders、MotorPoints／MachineMotors／MachineSuckers_HT9050；機台補丁：GA2_C1_cinitial、FShow_Audit）；204 之後相關 29 支全過。EastSun 未 commit 的 acatchtray／asendic_Loader／cinitial／PadInterface_St02（SafeLock）先拿開、合完三方套回，不進 commit。20:02 -j4 整包重編讓機台當機（Kernel-Power 41），留下 NUL 填滿的 .a／.obj／.d ⇒ clean 後 -j2 重編 | 本 commit |
++| 10-10 | 235 | 22123139（GitLab 36dbcf01） | 本 commit（定時檢查自動收）：NB2-1 W-188 #5（MR !405，golden 913 ainarm_SearchPickPlate.cpp:1481-1636、ainarm9045.cpp:4506-4511、Public/HTEditList.cpp:2939-2946，RogerYang 0827）熱盤取料帳本對帳：#3（HasHotReadyIC_9045）發現幽靈預約時設的旗標，在 DoInArm_9045 的 ASM 判斷之後、機構閒置時消化——只減不加：清掉指向空格的預約和重複、刪空隊／空組、把開放組加回、存帳本、寫一行紀錄；手上有 IC／放取中／ASM 時回 -1 留到下一輪；不下任何馬達命令。**HT9050 會走到**（只有帳本真的有幽靈預約時才動作）；筆電建議跑一批經過熱盤，看事件紀錄有沒有對帳那一行。10 檔：直接換 7（HTEditList.h／.cpp、ainarm9045、ainarm_SearchPickPlate 等，掃過沒有機台標記會消失）、新 2、tests/CMakeLists 合併無衝突。wb_serve 沒在跑：Debug＋release 都建好（release 01:55），NB2_W188Reconcile／HotReady／CleanOutFinish、START_SitesCensus 4 支過。備份分支 backup/pre-pkg235-20261010＋D:\HT9045\_pkg_235\backup_machine_015251 | 本 commit |
+ | 10-10 | 234 | 84c06f33（GitLab c8057031） | 本 commit（定時檢查自動收）：St02 W-211 (2)（MR !404）只改 tests/test_st02_w195_n06.cpp——「7z 只拿到自己的管線」那項改成父行程建具名 event、子行程用 CompareObjectHandles 比是不是同一個核心物件（原本比 handle 數值，巧合同號會誤報）；沒有產品碼，HT9050 不變；包內 WORKLOG 照規定留機台。3 檔直接換（掃過沒有機台標記會消失）。St02_W195N06 過。同一輪：EastSun 10-10 00:5x「可以關掉軟體了」→ 用 HMI Exit 同一套 act.main.closeProgram 0→1→2 正常關站（00:52:59 關站完成），再補編 225～233 的 release（00:59:19，40 MB，6 分鐘，SafeLock 那行照例拿開）。**機台端失誤**：本包第一次只用 cmake --build 編這支測試、沒先拿開 SafeLock，ht9045_sm 的 PadInterface_St02.cpp.obj 被帶 SafeLock 略過的工作樹版重編（Debug wb_serve.exe 沒重連結、release 沒碰）；01:01 立刻用 set-aside 腳本重編 Debug／release 的 PadInterface 與 wb_serve＋測試，已換回不帶略過的版本 | 本 commit |
+ | 10-10 | 233 | ba13553f（GitLab 934e5da8） | 本 commit（定時檢查自動收）：St02 W-195 H6（MR !403，golden 913 cConfiguration.cpp:992-999，RogerYang 0916）：908.x 把 HANA RMS 互鎖開關放在 [A76]、912 起改 [A77]；從 908.x 升級上來、config.ini 只有 [A76] 的 HANA 機台，開機時把舊值抄到 [A77] 一次，互鎖不會悄悄關掉。tools/editlist/IniConfig.py 末尾加一列、FileRW/IniConfig.gen.inc 重產（+3 行，只在 HANA 區塊）。HT9050 不是 HANA 機台，行為不變。7 檔：直接換 5（掃過沒有機台標記會消失）、新測試 1、tests/CMakeLists 合併無衝突；包內的 WORKLOG（筆電整份收了機台的）照規定留機台。Debug wb_serve 建好（release 沒編：wb_serve 10-09 21:50 起在跑），St02_H6A77、C10_HanaRms、HanaART、START_SitesCensus 4 支過。備份分支 backup/pre-pkg233-20261010＋D:\HT9045\_pkg_233\backup_machine_002252 | 本 commit |
+ | 10-09 | 232 | aa900f67（GitLab 940346f8） | 本 commit（定時檢查自動收）：St02 W-205 L10（MR !402，golden 913 acarry.cpp:8788-8810、csystem.cpp:10986／:11325-11326、Config.h:436）Out-Shuttle 防水閘門：DoFloodGateClose 從 912「ATC 36 且冰水機設定 < −20 °C」改成 913「[C25] 開且 ATC 主動降溫」（原本 8 個關閉點不變）；新 DoFloodGateCloseAtShuttleLeft 在 HOME 完成和 Tray Feed 完成時，把 In Shuttle 命令位置在 Left ±2 內的那一側 Out-Shuttle 閘門關上；新設定 bC25FloodGateCloseByATCEnable（config.ini [Function]，預設 0）。HT9050 SHUTTLE_FLOODGATE=0、沒有 Out-Shuttle 閘門，兩個函式都不做事，行為不變。8 檔：直接換 7（Config.h、acarry.cpp／.h 等，掃過沒有機台標記會消失）、csystem.cpp 合併無衝突——commit 只放包的 2 行，EastSun 未 commit 的 WAR1603／1604 三行留在工作樹（另存 D:\HT9045\_pkg_232\eastsun）；設計外掛照規定留機台。Config.h 改動，Debug 重編約 13 分鐘（-j2）；release 沒編（wb_serve 21:50 起在跑）。St02_W205CItems、START_SitesCensus、Flow9050_Tray 3 支過。備份分支 backup/pre-pkg232-20261009＋D:\HT9045\_pkg_232\backup_machine_232259 | 本 commit |
+diff --git a/docs/health/HEALTH_20261009.md b/docs/health/HEALTH_20261009.md
+new file mode 100644
+index 00000000..6cd8be8f
+--- /dev/null
++++ b/docs/health/HEALTH_20261009.md
+@@ -0,0 +1,217 @@
++# 每日健檢 2026-10-09（量到 10/10 01:16；只量不改，RULINGS_20261005 第 21 條）
++
++## 紅燈（39）
++
++- 晚讀：St01／St02 13:56「Docs: fix the hand-typed time in the W-198 row (13:5x, n」→ 到 10/10 01:16 還沒點名（11:20）
++- 晚讀：Ifor01 22:33「Docs 1009 22:xx: Ifor01 W-206 parked on v906/ifor-w206-r」→ 到 10/10 01:16 還沒點名（2:43）
++- 等回覆超過 8 小時：W-23（Frank01／Ifor01／K）已 153:41
++- 等回覆超過 8 小時：W-65（機台端（MC01／EastSun）已 113:51
++- 等回覆超過 8 小時：W-75（機台端（MC01／EastSun）已 146:01
++- 等回覆超過 8 小時：W-90（Jerry）已 99:41
++- 等回覆超過 8 小時：W-93（機台端（MC01／EastSun）已 98:11
++- 等回覆超過 8 小時：W-94（機台端（MC01／EastSun）已 98:11
++- 等回覆超過 8 小時：W-98（機台端（MC01／EastSun）已 87:41
++- 等回覆超過 8 小時：W-99（機台端（MC01／EastSun）已 87:31
++- 等回覆超過 8 小時：W-102（機台端（MC01／EastSun）已 86:11
++- 等回覆超過 8 小時：W-105（機台端（MC01／EastSun）已 83:11
++- 等回覆超過 8 小時：W-112（St01）已 81:31
++- 等回覆超過 8 小時：W-113（Frank01）已 81:31
++- 等回覆超過 8 小時：W-117（Jerry）已 81:11
++- 等回覆超過 8 小時：W-119（機台端（MC01／EastSun）已 80:51
++- 等回覆超過 8 小時：W-122（NB2-GPT_CLI）已 79:11
++- 等回覆超過 8 小時：W-125（機台端（MC01／EastSun）已 78:51
++- 等回覆超過 8 小時：W-126（Frank01）已 78:51
++- 等回覆超過 8 小時：W-129（機台端（MC01／EastSun）已 78:31
++- 等回覆超過 8 小時：W-136（NB2-GPT_CLI）已 64:01
++- 等回覆超過 8 小時：W-137（NB2-GPT_CLI）已 64:01
++- 等回覆超過 8 小時：W-144（MainNB-GPT_CLI）已 62:01
++- 等回覆超過 8 小時：W-150（St02（St02-E））已 57:01
++- 等回覆超過 8 小時：W-151（機台端（MC01／EastSun）已 56:51
++- 等回覆超過 8 小時：W-153（機台端（MC01／EastSun）已 56:11
++- 等回覆超過 8 小時：W-154（St02（St02-M／Stev）已 55:51
++- 等回覆超過 8 小時：W-167（NB2-1）已 43:41
++- 等回覆超過 8 小時：W-174（Jerry）已 36:11
++- 等回覆超過 8 小時：W-176（Frank01）已 36:01
++- 等回覆超過 8 小時：W-181（ES02）已 30:21
++- 等回覆超過 8 小時：W-188（NB2-1）已 22:51
++- 等回覆超過 8 小時：W-190（Ifor01）已 20:41
++- 等回覆超過 8 小時：W-192（Jerry＋KenHeish）已 18:01
++- 等回覆超過 8 小時：W-193（Jerry）已 17:41
++- 等回覆超過 8 小時：W-194（Roger）已 17:41
++- 等回覆超過 8 小時：W-195（St02（St02-E））已 16:21
++- 等回覆超過 8 小時：W-196（EastSun（機台端））已 14:31
++- 第 211 包 04:27 推出，機台07:33 才套（3:06）
++
++## 1. 各管道推上來 → 筆電第一次在 main 點名
++
++| 來源 | 推送數 | 要筆電處理的 | 其中晚讀 | 點名時間中位數 | 最長 | 要處理但還沒點名 |
++|---|---|---|---|---|---|---|
++| 機台 | 46 | 46 | 0 | 0:16 | 1:23 | — |
++| NB2 | 9 | 0 | 0 | — | — | — |
++| St01／St02 | 167 | 86 | 1 | 0:12 | 1:00 | 07:06 ；07:12 ；08:52 ；13:56 W-198 |
++| Ifor01 | 19 | 15 | 1 | 0:16 | 0:38 | 22:33 W-206 |
++| ES02 | 77 | 0 | 0 | — | — | — |
++| MR | 52 | 52 | 0 | 0:16 | 1:47 | — |
++
++最晚點名的 5 件：
++
++- MR 14:44 !386,W-188「!386 W-188 #4 L02: DoFront/RearTestSuckIC case-306」→ 16:31（1:47）
++- 機台 11:16 tools 0185「machine/integ-ioweb: + tools 0185-0185 (HTDESIGNER」→ 12:40（1:23）
++- MR 15:23 !381「!381 Ifor-GPT: 修正 IG-6 runtime fixture 並驗證每案 XY 流程」→ 16:47（1:23）
++- 機台 21:55 tools 0190「machine/integ-ioweb: + tools 0190-0190 (HTDESIGNER」→ 23:14（1:18）
++- 機台 15:01 tools 0186「machine/integ-ioweb: + tools 0186-0186 (HTDESIGNER」→ 16:02（1:01）
++
++## 2. 等回覆（WAITING_REPLIES）
++
++- 當天問的 26 列：已回 16 列，回覆時間中位數 1:30、最長 5:50；還開著 10 列
++- 全部還開著的 39 列，依等待時間：W-23 153:41、W-75 146:01、W-65 113:51、W-90 99:41、W-93 98:11、W-94 98:11、W-98 87:41、W-99 87:31、W-102 86:11、W-105 83:11、W-112 81:31、W-113 81:31
++
++## 3. 當天推上來的 MR
++
++| MR | 推上來 | 進 main | 花了 |
++|---|---|---|---|
++| !352 Docs(ST-GPT): 核對數值與Change Log四單元最新m | 00:48 | 00:56 | 0:07 |
++| !353 St02 E-TM-011 (POOL-3) 2/2: the SEC | 01:30 | 02:48 | 1:18 |
++| !354 St02 W-184 MR B: the Setup save wri | 01:47 | 03:45 | 1:57 |
++| !355 St02 W-187 #1 (POOL-9): TEST_CATEGO | 03:07 | 03:49 | 0:42 |
++| !356 St02 W-187 #2 (POOL-9): THGem::DoSp | 03:27 | 03:50 | 0:22 |
++| !357 St02 W-187 #3 (POOL-9): HTGem S9F1/ | 04:03 | 04:34 | 0:31 |
++| !358 Docs(ST-GPT): 核對MyStringList三單元最新ma | 04:55 | 05:17 | 0:21 |
++| !359 St02 W-189 (2/2): THGem::SetReportI | 05:40 | 06:26 | 0:46 |
++| !360 W-188 #1: DoCleanOutFinishCheck ->  | 06:12 | 07:14 | 1:02 |
++| !361 Docs(St02-E): 1009 -- current-state | 07:11 | 07:21 | 0:09 |
++| !362 St02 W-159 E042-LEAFTASK: the resid | 07:33 | 08:28 | 0:55 |
++| !363 St02 W-191 MR-1: ADAM_ReadVoltage w | 07:53 | 09:12 | 1:18 |
++| !364 St02 W-191 MR-2: TAOISocket::Receiv | 08:09 | 09:12 | 1:02 |
++| !365 St02 W-191 MR-3: BinDisplay TFT sho | 08:26 | 09:12 | 0:46 |
++| !366 St02 W-191 MR-5: TfBinSel::Save bui | 08:44 | 09:54 | 1:09 |
++| !367 Docs(ST-GPT): 統一IO交付報告繁體用字 | 08:59 | 09:34 | 0:35 |
++| !368 W-188 #2: DoInterFaceErrorStep -> g | 09:29 | 10:35 | 1:05 |
++| !370 Docs(St02-E): 1009 09:5x -- current | 09:58 | 11:47 | 1:48 |
++| !371 W-195 MR-B: ReadFile builds the SEC | 10:20 | 11:47 | 1:27 |
++| !372 Docs(St02-E): 1009 10:4x -- current | 10:44 | 12:33 | 1:48 |
++| !373 W-195 HANA H2: HANA RMS connects on | 11:03 | 12:33 | 1:29 |
++| !374 Docs(St02-E): 1009 11:2x -- current | 11:18 | 12:33 | 1:14 |
++| !377 W-188 #3: HasHotReadyIC_9045 -> gol | 11:33 | 14:00 | 2:27 |
++| !378 W-190 C group: golden 913 MachineTy | 11:43 | 已關（沒合、已處理：mr_scan --ack） | — |
++| !375 W-195 HANA H5: the HANA TrayMap fil | 12:06 | 13:19 | 1:12 |
++| !376 Docs(St02-E): 1009 12:1x -- current | 12:23 | 21:21 | 8:58 |
++| !380 Ifor-GPT: add IG-5 loading count ru | 13:43 | 14:56 | 1:12 |
++| !379 W-197: install / update HT9050 with | 13:55 | 15:07 | 1:11 |
++| !382 St02 docs 14:2x: current-state (K1  | 14:22 | 15:43 | 1:21 |
++| !386 W-188 #4 L02: DoFront/RearTestSuckI | 14:44 | 17:07 | 2:23 |
++| !383 W-195 (3) ATK: CEID 288 x Auto1-3 a | 14:50 | 15:43 | 0:53 |
++| !384 W-190 (1): heater-brand table + hel | 14:50 | 15:43 | 0:53 |
++| !385 W-195 (3) Qualcomm MR-Q1: the by-co | 14:56 | 16:26 | 1:29 |
++| !381 Ifor-GPT: 修正 IG-6 runtime fixture 並 | 15:23 | 17:51 | 2:28 |
++| !387 W-202 (1) T08: GetTesterResult call | 16:08 | 17:51 | 1:43 |
++| !388 W-195 K1 fix: the START refusal nam | 16:15 | 17:51 | 1:35 |
++| !391 W-190 (2): TfTemp_Set::SaveRemoteTe | 16:32 | 18:30 | 1:57 |
++| !390 St02 docs 16:3x: current-state save | 16:33 | 16:45 | 0:12 |
++| !393 W-202 (2) LI-9 F2-1: Gate #4 opened | 17:20 | 18:30 | 1:09 |
++| !394 W-202 (2) LI-9 F2-2: KYEC FTP engin | 17:21 | 18:30 | 1:08 |
++| !392 W-190 (3): ConvertGetTempOffset amb | 17:23 | 18:30 | 1:06 |
++| !395 Docs(ST-GPT): record final Ready ma | 17:55 | 18:17 | 0:22 |
++| !405 W-188 #5: ReconcilePickFromHPList - | 18:21 | 還沒 | 6:54（等待中） |
++| !396 W-205 L05: the Shuttle Move Timeout | 19:10 | 21:21 | 2:10 |
++| !397 W-205 L03: the ASM hot-plate borrow | 19:36 | 21:21 | 1:44 |
++| !398 W-202 F2-3: KYEC FTP 'Upload to Ser | 20:46 | 21:59 | 1:12 |
++| !399 W-195 TESNA T1: TMyStringList bDupY | 21:17 | 22:37 | 1:19 |
++| !401 Merge remote-tracking branch 'origi | 21:39 | 21:56 | 0:16 |
++| !400 W-195 TESNA T2: test_pool2_cprod.cp | 21:48 | 22:37 | 0:48 |
++| !402 W-205 L10: [C25] floodgate close by | 22:03 | 23:17 | 1:13 |
++| !403 Docs(St02-E): 1009 22:4x current-st | 22:37 | 23:57 | 1:19 |
++| !404 W-211 (2): St02_W195N06 handle-inhe | 23:59 | 10/10 00:48 | 0:48 |
++
++## 4. gate
++
++| 批 | 開始 | 出貨結束 | 模擬結束 | 總長 |
++|---|---|---|---|---|
++| b125a | 01:34 | 01:52 | 02:08 | 0:33 |
++| b126a | 02:13 | 02:31 | 02:48 | 0:34 |
++| b127a | 03:10 | 03:27 | 03:44 | 0:34 |
++| b128a | 03:50 | 04:06 | 04:23 | 0:32 |
++| b129a | 04:34 | 04:51 | 05:08 | 0:33 |
++| b130a | 05:52 | 06:08 | 06:26 | 0:33 |
++| b131a | 06:38 | 06:57 | 07:13 | 0:35 |
++| b132a | 07:54 | 08:11 | 08:28 | 0:33 |
++| b133a | 08:35 | 08:53 | 09:09 | 0:34 |
++| b134a | 09:18 | 09:35 | 09:53 | 0:35 |
++| b135a | 09:59 | 10:16 | 10:34 | 0:35 |
++| b136a | 10:39 | 10:57 | 11:10 | 0:31 |
++| b136b | 11:12 | 11:29 | 11:47 | 0:34 |
++| b137a | 11:53 | 12:11 | 12:29 | 0:36 |
++| b138a | 12:41 | 12:59 | 13:17 | 0:36 |
++| b139a | 13:23 | 13:41 | 13:59 | 0:36 |
++| b140a | 14:13 | 14:30 | 14:47 | 0:34 |
++| b141a | 15:08 | 15:25 | 15:43 | 0:34 |
++| b142a | 15:48 | 16:06 | 16:25 | 0:37 |
++| b143a | 16:31 | 16:49 | 17:07 | 0:36 |
++| b144a | 17:12 | 17:31 | 17:50 | 0:38 |
++| b145a | 17:51 | 18:10 | 18:28 | 0:37 |
++| b146a | 19:30 | 19:47 | 20:06 | 0:36 |
++| b146b | 20:06 | 20:25 | 20:43 | 0:36 |
++| b146c | 20:43 | 21:01 | 21:19 | 0:35 |
++| b147a | 21:21 | 21:40 | 21:58 | 0:36 |
++| b148a | 21:58 | 22:17 | 22:36 | 0:37 |
++| b149a | 22:37 | 22:56 | 23:15 | 0:37 |
++| b150a | 23:21 | 23:39 | 23:57 | 0:36 |
++| b150a_abilock | 23:17 | — | 跑中 | — |
++| b151a | 10/10 00:11 | 10/10 00:29 | 10/10 00:47 | 0:35 |
++| b152a | 10/10 00:51 | 10/10 01:09 | 跑中 | 0:17 |
++
++## 5. 機台更新包 → 機台套上
++
++| 包 | 推出 | 機台套上 | 延遲 |
++|---|---|---|---|
++| 234 | 10/10 00:51 | 10/10 01:02 | 0:10 |
++| 233 | 10/10 00:01 | 10/10 00:24 | 0:23 |
++| 232 | 23:21 | 23:37 | 0:15 |
++| 231 | 22:49 | 22:57 | 0:08 |
++| 230 | 22:10 | 22:25 | 0:15 |
++| 229 | 21:29 | 21:59 | 0:29 |
++| 228 | 18:33 | 18:55 | 0:21 |
++| 227 | 18:04 | 18:25 | 0:21 |
++| 226 | 17:11 | 17:36 | 0:25 |
++| 225 | 16:29 | 17:01 | 0:31 |
++| 224 | 15:47 | 15:58 | 0:10 |
++| 223 | 15:00 | 15:33 | 0:33 |
++| 222 | 14:04 | 15:33 | 1:29 |
++| 221 | 13:23 | 13:27 | 0:04 |
++| 220 | 12:38 | 12:57 | 0:19 |
++| 219 | 11:51 | 12:28 | 0:37 |
++| 218 | 10:38 | 10:46 | 0:07 |
++| 217 | 09:57 | 10:37 | 0:39 |
++| 216 | 09:16 | 10:37 | 1:20 |
++| 215 | 08:32 | 09:04 | 0:31 |
++| 214 | 07:18 | 07:33 | 0:14 |
++| 213 | 06:30 | 07:33 | 1:02 |
++| 212 | 05:12 | 07:33 | 2:20 |
++| 211 | 04:27 | 07:33 | 3:06 |
++| 210 | 03:48 | 04:15 | 0:27 |
++| 209 | 02:53 | 04:15 | 1:22 |
++| 208 | 02:13 | 02:28 | 0:14 |
++| 207 | 00:18 | 00:36 | 0:17 |
++
++## 6. 筆電自己的更正（2）
++
++- 02:14 Docs 1009 02:1x: batch 125 = main d379516c, package 208 GitHub bcd54543 (machine cpp 0331 PROBECYL9050 + 0321 
++- 21:16 Docs 21:1x: snapshot 20:52 (1dc8b097) = third IO_Table change -- net vs 17:02 only SenEmptySelectHasTray InTyp
++
++## 7. 筆電產出
++
++- main：465 顆（文件 79、合併 184、其他 202）；GitHub：30 顆
++
++## 8. 同事活動（不含心跳；08:00～20:00 之間最長的空檔）
++
++| 來源 | 推送 | 最長空檔 | 最後一次 |
++|---|---|---|---|
++| St01／St02 | 440 | 0:14 | 10/10 01:05 |
++| Frank01 | 0 | — | — |
++| Jerry | 0 | — | — |
++| Ifor01 | 220 | 1:07 | 22:33 |
++| ES02 | 361 | 0:16 | 10/10 01:13 |
++| Kevin | 0 | — | — |
++| NB2 | 9 | 3:51 | 10/10 00:16 |
++
++> 量法限制：「點名」是看 main 的 commit 訊息或新增的文件行有沒有出現那筆推送的編號或短雜湊（MR 進 main、機台快照被鏡像也算）——提到不等於處理完；同事的推送只有指名筆電／Jimmy、回 W-編號、緊急事項才算要處理，沒編號的量不到、不算紅燈。
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index e79abc29..7a26b623 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -1396,6 +1396,19 @@ if(WIN32)
+ endif()
+ add_test(NAME NB2_W188L02Watchdog COMMAND test_nb2_w188_l02watchdog "${CMAKE_SOURCE_DIR}")
+ 
++# --- test_nb2_w188_reconcile: AI(W906-W188) 20261009 (NB2-1) -- W-188 #5 ReconcilePickFromHPList -> golden 913 ---
++#   [1] phantom / duplicate bookings removed, empty teams / groups deleted, open group re-added, busy gate -1; [2] source ratchets.
++add_executable(test_nb2_w188_reconcile
++    test_nb2_w188_reconcile.cpp
++)
++target_link_libraries(test_nb2_w188_reconcile PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_nb2_w188_reconcile PRIVATE ws2_32)
++endif()
++add_test(NAME NB2_W188Reconcile COMMAND test_nb2_w188_reconcile "${CMAKE_SOURCE_DIR}")
++
+ # --- test_w6_5_shuttle: pump the SHUTTLE/CARRY engine over Sim HAL -----------
+ #   The task-mandated W6.5 verify TU (mirror of the in/out/tray-arm + tester
+ #   core TUs).  Proves acarry.cpp (the SHUTTLE/CARRY ENGINE, in ht9045_sm)
+diff --git a/tests/test_nb2_w188_reconcile.cpp b/tests/test_nb2_w188_reconcile.cpp
+new file mode 100644
+index 00000000..99b42c9b
+--- /dev/null
++++ b/tests/test_nb2_w188_reconcile.cpp
+@@ -0,0 +1,187 @@
++// =============================================================================
++//  AI(W906-W188) 20261009 (NB2-1): W-188 #5 -- ReconcilePickFromHPList = golden 913 (GitLab honprec/rd/rd5/ht9045_913 main
++//  e9908638; RogerYang 20260827) ainarm_SearchPickPlate.cpp:1481-1636 + its call ainarm9045.cpp:4506-4511, and
++//  uHPSuckGroup::RemoveSuckTeam (golden 913 Public/HTEditList.cpp:2939-2946).
++//  The hot-plate pick ledger (PickFromHPList) is only ever reduced: bookings that point at an empty plate cell (phantom) or
++//  repeat a cell already booked (duplicate) are cleared, emptied teams / groups are deleted, an open group is re-added when
++//  nothing is left, the ledger is saved and one RecordProcess line is written.  -1 = arm busy (flag kept for the next pass).
++//  [1] behaviour through the real entry point (ainarm_SearchPickPlate.cpp; this TU sees only the real uPlateInfo):
++//      phantom + duplicate ledger -> 3 fixes, 2 teams + 1 group deleted, live booking kept, file written, log line;
++//      second call -> 0, nothing written; everything phantom -> open group re-added; bRunAutoSiteMapping -> -1, untouched.
++//  [2] source ratchets (argv[1] = source root).
++//  sHPPickRec is pointed at a %TEMP% file for the whole test (the real one is d:\HT9045\system\PickHPRec.json).
++//  Use: only through ctest (NB2_W188Reconcile).
++// =============================================================================
++#include "Public/HTEditList.h"
++#include "Motor/mymotor.h"
++#include "cmydef.h"
++#include "w906_ctest_guard.h"
++#include <windows.h>
++#include <cstdio>
++#include <fstream>
++#include <string>
++#include <vector>
++
++extern AnsiString ExString;                       // cMyDB.cpp: RecordProcess keeps the last text
++extern bool bRunAutoSiteMapping;
++int ReconcilePickFromHPList(const char* szWho);   // ainarm_SearchPickPlate.cpp (facade TU)
++
++static int g_pass = 0, g_fail = 0;
++#define CHECK(cond, msg)                                                        \
++    do {                                                                        \
++        if (cond) { std::printf("  PASS: %s\n", msg); ++g_pass; }               \
++        else      { std::printf("  FAIL: %s  (line %d)\n", msg, __LINE__); ++g_fail; } \
++    } while (0)
++
++static std::vector<std::string> ReadLines(const std::string& path)
++{
++    std::vector<std::string> v;
++    std::ifstream f(path.c_str(), std::ios::binary);
++    std::string s;
++    while (std::getline(f, s)) {
++        if (!s.empty() && s[s.size() - 1] == '\r') s.erase(s.size() - 1);
++        v.push_back(s);
++    }
++    return v;
++}
++static int Count(const std::vector<std::string>& L, const std::string& n)
++{
++    int c = 0;
++    for (size_t i = 0; i < L.size(); ++i) if (L[i].find(n) != std::string::npos) ++c;
++    return c;
++}
++static int FindLine(const std::vector<std::string>& L, const std::string& n)
++{
++    for (int i = 0; i < (int)L.size(); ++i) if (L[i].find(n) != std::string::npos) return i;
++    return -1;
++}
++static bool Has(const AnsiString& s, const char* n) { return std::string(s.c_str()).find(n) != std::string::npos; }
++
++static uHPSuckTeam* Team(int iP)
++{
++    uHPSuckTeam* t = new uHPSuckTeam();
++    t->ClearHPSuckTeam();
++    t->iP = iP;
++    return t;
++}
++static void Book(uHPSuckTeam* t, int i, int j, int c, int r, int site)
++{
++    t->bSuck[i][j] = true; t->iPlateC[i][j] = c; t->iPlateR[i][j] = r; t->iSite[i][j] = site;
++}
++
++int main(int argc, char** argv)
++{
++    extern AnsiString DataPath;
++    const char* const rt[] = { "DataPath", DataPath.c_str(), 0 };
++    if (!W906TestRequireCtestRedirects("NB2_W188Reconcile", rt)) return 2;
++    std::printf("==== W-188 #5 ReconcilePickFromHPList -> golden 913 ====\n");
++
++    char tmp[MAX_PATH] = { 0 };
++    ::GetTempPathA(MAX_PATH, tmp);
++    const std::string rec = std::string(tmp) + "nb2_w188e_PickHPRec.json";
++    ::DeleteFileA(rec.c_str());
++    const AnsiString saveRec = sHPPickRec;
++    sHPPickRec = AnsiString(rec.c_str());
++    uPlateInfo* const saveList = PickFromHPList;
++    const bool saveASM = bRunAutoSiteMapping;
++    bRunAutoSiteMapping = false;
++
++    const int saveX = MOT[MMPlate1].Tray.XItem, saveY = MOT[MMPlate1].Tray.YItem;
++    const int d11 = MOT[MMPlate1].Tray.Data[1][1], d22 = MOT[MMPlate1].Tray.Data[2][2];
++    MOT[MMPlate1].Tray.XItem = 4; MOT[MMPlate1].Tray.YItem = 4;
++    MOT[MMPlate1].Tray.Data[1][1] = HAS_IC;      // real IC at C1 R1
++    MOT[MMPlate1].Tray.Data[2][2] = NULL_IC;     // empty cell C2 R2
++
++    // ---------------------------------------------------------------- [1a] phantom + duplicate
++    std::printf("-- [1a] phantom + duplicate ledger --\n");
++    uPlateInfo* L = new uPlateInfo();
++    uHPSuckGroup* g0 = new uHPSuckGroup();
++    uHPSuckTeam* t00 = Team(0); Book(t00, 0, 0, 1, 1, 1); Book(t00, 0, 1, 2, 2, 2);   // live + phantom
++    uHPSuckTeam* t01 = Team(0); Book(t01, 0, 0, 1, 1, 3);                            // duplicate of C1 R1 only
++    g0->AddHPSuckTeam(t00); g0->AddHPSuckTeam(t01);
++    uHPSuckGroup* g1 = new uHPSuckGroup();
++    uHPSuckTeam* t10 = Team(0); Book(t10, 0, 0, 2, 2, 4);                            // phantom only
++    g1->AddHPSuckTeam(t10);
++    L->AddHPSuckGroup(g0); L->AddHPSuckGroup(g1);
++    PickFromHPList = L;
++
++    ExString = "";
++    int r = ReconcilePickFromHPList("NB2T");
++    char msg[200];
++    std::snprintf(msg, sizeof msg, "returns phantom+dup = 3 (got %d)", r);
++    CHECK(r == 3, msg);
++    CHECK(L->GetHPSuckGroupCount() == 1, "phantom-only group deleted, one group left");
++    uHPSuckGroup* left = L->ExtractSuckGroup(0);
++    CHECK(left == g0 && left->GetTeamCount() == 1, "duplicate-only team deleted, first team kept");
++    uHPSuckTeam* kept = left ? left->ExtractSuckTeam(0) : 0;
++    CHECK(kept && kept->bSuck[0][0] && kept->iPlateC[0][0] == 1 && kept->iPlateR[0][0] == 1 && kept->iSite[0][0] == 1,
++          "live booking (C1 R1, site 1) kept with its nozzle binding");
++    CHECK(kept && !kept->bSuck[0][1] && kept->iPlateC[0][1] == -1 && kept->iPlateR[0][1] == -1 && kept->iSite[0][1] == -1,
++          "phantom slot cleared to -1");
++    CHECK(Has(ExString, "ReconcilePickFromHPList by NB2T : phantom=2 dup=1 delTeam=2 delGroup=1 groupLeft=1"),
++          "golden 913 RecordProcess summary line");
++    std::printf("     (%s)\n", ExString.c_str());
++    CHECK(::GetFileAttributesA(rec.c_str()) != INVALID_FILE_ATTRIBUTES, "ledger saved to sHPPickRec");
++
++    ::DeleteFileA(rec.c_str());
++    ExString = "";
++    r = ReconcilePickFromHPList("NB2T");
++    CHECK(r == 0 && ExString.Length() == 0 && ::GetFileAttributesA(rec.c_str()) == INVALID_FILE_ATTRIBUTES,
++          "clean ledger -> 0, no log, no save");
++
++    // ---------------------------------------------------------------- [1b] everything phantom -> open group re-added
++    std::printf("-- [1b] all phantom --\n");
++    uPlateInfo* L2 = new uPlateInfo();
++    uHPSuckGroup* h0 = new uHPSuckGroup();
++    uHPSuckTeam* u0 = Team(0); Book(u0, 0, 0, 2, 2, 1);
++    h0->AddHPSuckTeam(u0);
++    L2->AddHPSuckGroup(h0);
++    PickFromHPList = L2;
++    r = ReconcilePickFromHPList("NB2T");
++    CHECK(r == 1 && L2->GetHPSuckGroupCount() == 1 && L2->ExtractSuckGroup(0) != 0 && L2->ExtractSuckGroup(0)->GetTeamCount() == 0,
++          "all bookings phantom -> group deleted and one open (empty) group re-added");
++
++    // ---------------------------------------------------------------- [1c] busy gate
++    std::printf("-- [1c] busy gate --\n");
++    uPlateInfo* L3 = new uPlateInfo();
++    uHPSuckGroup* k0 = new uHPSuckGroup();
++    uHPSuckTeam* v0 = Team(0); Book(v0, 0, 0, 2, 2, 1);
++    k0->AddHPSuckTeam(v0);
++    L3->AddHPSuckGroup(k0);
++    PickFromHPList = L3;
++    bRunAutoSiteMapping = true;
++    r = ReconcilePickFromHPList("NB2T");
++    bRunAutoSiteMapping = false;
++    CHECK(r == -1 && L3->GetHPSuckGroupCount() == 1 && v0->bSuck[0][0], "bRunAutoSiteMapping -> -1 and the ledger is untouched");
++    PickFromHPList = 0;
++    CHECK(ReconcilePickFromHPList("NB2T") == 0, "PickFromHPList==NULL -> 0");
++
++    PickFromHPList = saveList;
++    bRunAutoSiteMapping = saveASM;
++    MOT[MMPlate1].Tray.XItem = saveX; MOT[MMPlate1].Tray.YItem = saveY;
++    MOT[MMPlate1].Tray.Data[1][1] = d11; MOT[MMPlate1].Tray.Data[2][2] = d22;
++    sHPPickRec = saveRec;
++    ::DeleteFileA(rec.c_str());
++
++    // ---------------------------------------------------------------- [2] source ratchets
++    std::printf("-- [2] source ratchets --\n");
++    const std::string root = argc > 1 ? argv[1] : ".";
++    const std::vector<std::string> A = ReadLines(root + "/ainarm_SearchPickPlate.cpp");
++    const int e = FindLine(A, "int ReconcilePickFromHPList(const char* szWho)");
++    CHECK(e > 0 && FindLine(A, "bool bNeedReconcileHPList=false;") < e && e < FindLine(A, "bool HasHotReadyIC_9045()"),
++          "entry point sits between bNeedReconcileHPList and HasHotReadyIC_9045 (golden 913 order)");
++    CHECK(Count(A, "LastSet.iRunStartMode==rsmAutoSiteMap     )") == 1 && Count(A, "return W906_ReconcileHPLedger913(szWho);") == 1,
++          "busy gate verbatim + delegation to the ledger passes");
++    const std::vector<std::string> H = ReadLines(root + "/Public/HTEditList.cpp");
++    const int w = FindLine(H, "int W906_ReconcileHPLedger913(const char* szWho)");
++    CHECK(w > 0 && Count(H, "uHPSuckTeam* HPDel=HPGroup->RemoveSuckTeam(it);") >= 1 && Count(H, "PickFromHPList->SaveFile(sHPPickRec);") == 1
++          && Count(H, "uHPSuckTeam* uHPSuckGroup::RemoveSuckTeam(int iIndex)") == 1, "ledger passes + RemoveSuckTeam in Public/HTEditList.cpp");
++    const std::vector<std::string> I = ReadLines(root + "/ainarm9045.cpp");
++    CHECK(Count(I, "if(bNeedReconcileHPList==true && bRunAutoSiteMapping==false) { if(ReconcilePickFromHPList(\"DoInArm_9045\")>=0) bNeedReconcileHPList=false; }") == 1,
++          "DoInArm_9045 calls it after the ASM decision (golden 913 ainarm9045.cpp:4506-4511)");
++    const std::vector<std::string> P = ReadLines(root + "/ainarm_SearchPickPlate.h");
++    CHECK(Count(P, "extern int  ReconcilePickFromHPList(const char* szWho);") == 1, "header extern (golden 913 .h:19)");
++
++    std::printf("==== W-188 #5: %d passed, %d failed ====\n", g_pass, g_fail);
++    return g_fail == 0 ? 0 : 1;
++}
+-- 
+2.55.0.windows.5
+

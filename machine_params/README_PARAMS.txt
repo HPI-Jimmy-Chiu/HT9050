@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-10 01:25
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 12414f98 WORKLOG: section 3 row for designer tools 0193 (f2ee3bae, package 234, 0.378.0 ->／web eabef66。
+HT9050 機台參數快照（machine_params\）—— 2026-10-10 01:56
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ ab053d62 PKG235: integrate laptop package 235 (GitLab 36dbcf01) -- NB2-1 W-188 #5 HotPlate／web eabef66。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
