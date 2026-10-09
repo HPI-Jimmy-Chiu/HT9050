@@ -15,3 +15,7 @@
 common.cpp相鄰CheckFileIsEmpty／ReadDataFromFile、RS232自己的writer與EventLogAnalysis helper沒有在這個新單元完成；既有原文留在各自來源，不為擴大數量而算入本輪。
 
 本輪沒有建立測試檔、刪檔、執行writer或讀取機台log。所有失敗／併發情境是靜態界線，實際結果需另行授權與驗證。
+
+## Reader 與平台契約補充（20261009）
+
+[共用 reader／OS／CRT 契約](io-backend/index.md)：新增 CheckFileIsEmpty／ReadDataFromFile 2完整cpp與5region共7原文；5既有writer／probe僅context。前述相鄰reader待續在此補齊，Windows sharing／定位／寫入結果及Microsoft CRT條件式模式／緩衝規格已附官方來源；實際部署CRT、encoding／IO／持久性、RS232／upload及完整caller仍未驗證。

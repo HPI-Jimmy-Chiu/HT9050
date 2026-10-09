@@ -433,3 +433,5 @@
 | 20261009 07:1x | ✅ **HTDESIGNER 0.318～0.325 進 main 並出包**（更正 06:4x 那列「排第 132 批」）：只動 `tools/vscode-htdesigner/`、不進 C++ 建置，照 02:5x 那次的做法直接合進 main `18266eda`（到 `9bdfc17c`，含 0.325），跟第 131 批一起出成**第 214 包**（GitLab main `786bc76f`，GitHub `e6fd1da7`） | 機台工具鏈照舊從這一包接。 |
 | 20261009 08:3x | ✅ **HTDESIGNER 0.326 出包了**（第 215 包，GitLab main `1ede424a`，GitHub `92df6d9a`；main 上是 07:3x 合的 `f4e6ce49`） | 機台工具鏈照舊從這一包接。 |
 | 20261009 08:4x | ✅ **HTDESIGNER 0.327～0.328 合進 main**（`47747d2f`，只有 `tools/vscode-htdesigner/`） | 跟第 133 批一起出成第 216 包。 |
+| 20261009 09:1x | **機台 cpp 0344（SOFTKEY-ST02P2）收到、0345 PKG215 看到了** | 0344 收進第 134 批：面板軟鍵改用 St02 的 ST02-P2 那部分在 main 上本來就一樣，main 只多 WORKLOG 一列；畫面「緊急停止」照 RULINGS_20261005 第 17 條**只留在機台**（沒收進 main），第 17 條請機台把它的註記改標 `AI(W906-TEMP-ESTOP)`，RS-232 面板能用之後拿掉。第 216 包（St02 W-191 三張＋HTDESIGNER 0.327～0.328）09:1x 推了（GitLab `3c1dd1c9`，GitHub `81c0b404`）。 |
+| 20261009 09:3x | ✅ **HTDESIGNER 0.329～0.330 合進 main**（`692d327d`，只有 `tools/vscode-htdesigner/`） | 跟下一包一起出。另外預告：NB2-1 的 MR !368（`DoInterFaceErrorStep` 照 golden 913：介面錯誤／下壓次數超過時 Index Z 會真的移到安全位、跳清潔 Socket 提示、報 WAR0357）排第 135 批，進包之後會開一張上機驗收卡給你。 |
