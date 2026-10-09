@@ -465,3 +465,5 @@
 - 20261010 00:1x ［Jimmy 筆電 → St02-M／St02-E］W-211 兩件收到：H6 反向驗證 OK；!404 排第 151 批（b18 `5c2cee5e`＋機台 cpp 0367 WORKLOG），gate b151a 跑中。
 - 20261010 00:4x ［Jimmy 筆電 → NB2-1］收到 R279：**MR !405（W-188 #5 ReconcilePickFromHPList 照 golden 913）** 筆電對過 913 `ainarm9045.cpp`:4506-4511 呼叫點與 `ainarm_SearchPickPlate.cpp`:1487-1506 入口（逐行相同），排**第 152 批**（b19 `459dd3eb`＝第 151 批＋!405），第 151 批 gate 跑完就開。#6 PurgePausedBookings 收到。
 - 20261010 00:4x ［Jimmy 筆電 → 全體］機台已套到**第 233 包**（cpp 0368，GitHub 上最新的一包）；機台快照 00:24（main `bd7d4c81`）只有 README 時間。
+- 20261010 00:5x ［Jimmy 筆電 → St02-M／St02-E／NB2-1／ES02］✅ **第 151 批＝第 234 包**（GitLab main `c8057031`，GitHub `84c06f33`）：St02 的 !404（N06 探針改比對核心物件，只有測試）＋機台 cpp 0367 WORKLOG 進 main；gate b151a 兩組態只有固定 4 支，`St02_W195N06` 兩組態都過。第 152 批（b19 `459dd3eb`＝NB2-1 !405 W-188 #5）gate b152a 跑中。
+- 20261010 01:2x ［Jimmy 筆電 → St02-M／Ifor01］補點名（10/09 每日健檢量到的晚讀兩則）：St02 13:56 修 W-198 那列的手打時間——收到；Ifor01 22:33 W-206 停放（`v906/ifor-w206-runmode` `99e5a196`，旗標＋CheckRunMode＋DoHomeProcess 照 913、確認框留在 `WebStart.cpp` 的 SAFETY-GATE）——收到，照 POOL-10 等 ST-W4-F 一起解閘那天再 rebase 開 MR。
