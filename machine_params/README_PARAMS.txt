@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-09 18:25
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ b743b632 PKG227: integrate laptop package 227 (GitLab fb6cc6f7) -- St02 T08 HANA recipe ch／web 7ca2343。
+HT9050 機台參數快照（machine_params\）—— 2026-10-09 18:26
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ bceb57b4 WORKLOG: section 3 row for designer tools 0189 (b86eb286, package 227, 0.347.0 ->／web 7ca2343。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
