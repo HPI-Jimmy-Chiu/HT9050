@@ -1,0 +1,361 @@
+From a61dd0b88be929576beb480c3ee6f0eb0b313810 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 9 Oct 2026 17:36:44 +0800
+Subject: [PATCH] PKG226: integrate laptop package 226 (GitLab 1dd66de4) --
+ NB2-1 W-188 #4 L02 case-306 watchdog as golden 913 (MR !386):
+ DoFront/RearTestSuckIC case 306 no longer waits forever when [D43] is on and
+ the out shuttle still holds a tested IC (30 s -> JAM0301 / 0302); golden
+ DoTestHeadMotor path only, HT9050 production runs the FinePitch flow.
+ Auto-accepted (scheduled check).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ aTester_Front.cpp                   |   8 +-
+ aTester_Rear.cpp                    |   8 +-
+ docs/MACHINE_PATCHES_20261009.md    |   8 ++
+ docs/NIGHT_REPORT.md                |   7 +-
+ docs/RULINGS_20261009.md            |   9 ++
+ docs/WORKLOG_MACHINE.md             |   1 +
+ tests/CMakeLists.txt                |  13 +++
+ tests/test_nb2_w188_l02watchdog.cpp | 155 ++++++++++++++++++++++++++++
+ 8 files changed, 199 insertions(+), 10 deletions(-)
+ create mode 100644 tests/test_nb2_w188_l02watchdog.cpp
+
+diff --git a/aTester_Front.cpp b/aTester_Front.cpp
+index 4e9a85eb..2c18d1e3 100644
+--- a/aTester_Front.cpp
++++ b/aTester_Front.cpp
+@@ -1002,7 +1002,7 @@ extern void CheckShuttle1EncoderPos();
+ static bool bIndexZ1NeedUp=false;                                               //Ifor 20220906 add:ASEM要求Shuttle 吸料後上升設定高度再判斷是否有無吸到IC
+ 
+ TQPF_Timer hDoFrontTestSuckIC;                                                  //golden :867
+-TQPF_Timer hDoFrontTestSuckICdelay;                                             //golden :868 //JerryYang 20220805 : 下壓shuttle預熱功能initial第一次吸shuttle時需下壓等待Jam soak time
++TQPF_Timer hFrontPickErrWaitFR;   TQPF_Timer hDoFrontTestSuckICdelay;                                             //golden :868 //JerryYang 20220805 : 下壓shuttle預熱功能initial第一次吸shuttle時需下壓等待Jam soak time   //AI(W906-W188) 20261009 (NB2-1): W-188 #4 L02 -- golden 913 atester_front.cpp:932 (RogerYang 20260908: case 306 watchdog)
+ 
+ //------------------------------------------------------------------------------
+ void ResetInxedArm1Flag()                                                       //Steven 20241017 : 打包成function
+@@ -1918,14 +1918,14 @@ bool DoFrontTestSuckIC()
+             #endif
+             {
+                 bSuckingFlagZ1=false;
+-                Task=306;                                                       //Steven 20160718 : Index pick up error with [D43]
++                hFrontPickErrWaitFR.SetSecAndOn(30);   Task=306;                                                       //Steven 20160718 : Index pick up error with [D43]   //AI(W906-W188) 20261009 (NB2-1): W-188 #4 L02 -- golden 913 atester_front.cpp:1747
+             }
+             break;
+         case 306:
+             bZ1PickShuttle=false;                                               //Steven 20150407 : 修正[D45] Out Arm等Index Z功能, 避免Auto Homing
+             if(IniConfig.bD43IndexDropErrorCanRetryandSkip)
+             {
+-                if(FRCarryKit.UseSiteNoIC())                                    //ChungHung 20120717 add Index Drop Error Can Retry and Start
++                if(FRCarryKit.UseSiteNoIC() || InSHT1InLF())                                    //ChungHung 20120717 add Index Drop Error Can Retry and Start   //AI(W906-W188) 20261009 (NB2-1): W-188 #4 L02 -- golden 913 atester_front.cpp:1755-1756 (the shuttle was already pulled left by the Fix3 full-tray flow -> do not wait for FR)
+                 {
+                     MOT[MInShuttle1].fCanMoveM=true;
+                     bShuttle1MoveToLeft=true;
+@@ -1933,7 +1933,7 @@ bool DoFrontTestSuckIC()
+                     bIndexPickErrShtStayRight1=false;                           //JerryYang 20181206 (Steven) : fix 啟用D43功能時,index arm pick up error後按retry可能發生hang up
+                     bCheckNullIC1=false;                                        //JerryYang 20170623 (wei) 修正有裝out shuttle 前後對照的機台發生index arm吸取異常無法跳出alram造成hang up
+                     Task=320;
+-                }
++                } else if(hFrontPickErrWaitFR.Off()) { Task=320; }   //AI(W906-W188) 20261009 (NB2-1): W-188 #4 L02 -- golden 913 atester_front.cpp:1765-1768: FR still holds tested IC (waiting for the OutArm 2nd trip) -> after 30 s leave bShuttle1MoveToLeft false -> case 320 does not wait -> case 321 raises JAM0301 instead of a silent hang
+             }
+             else
+             {
+diff --git a/aTester_Rear.cpp b/aTester_Rear.cpp
+index 239b252b..fa4cc630 100644
+--- a/aTester_Rear.cpp
++++ b/aTester_Rear.cpp
+@@ -1152,7 +1152,7 @@ static bool bIndexZ2NeedUp=false;
+ extern bool CheckCFixTrayFullPlace();                                           // real body already lives in the translated acarry.cpp:225 (golden acarry.cpp:225); golden itself forward-declares this locally rather than via a header, mirrored verbatim
+ //------------------------------------------------------------------------------
+ TQPF_Timer hDoRearTestSuckIC;
+-TQPF_Timer hDoRearTestSuckICdelay;                                              //JerryYang 20220923 : add
++TQPF_Timer hRearPickErrWaitBR;   TQPF_Timer hDoRearTestSuckICdelay;                                              //JerryYang 20220923 : add   //AI(W906-W188) 20261009 (NB2-1): W-188 #4 L02 -- golden 913 atester_rear.cpp:952 (RogerYang 20260908: case 306 watchdog)
+ int iRearTestSuckICTask=1;
+ void InitRearTestSuckICTask()
+ {
+@@ -1936,14 +1936,14 @@ bool DoRearTestSuckIC()
+             #endif
+             {
+                 bSuckingFlagZ2=false;                                           //Steven 20240916 : index下降到shuttle吸放料
+-                Task=306;                                                       //Steven 20160718 : Index pick up error with [D43]
++                hRearPickErrWaitBR.SetSecAndOn(30);   Task=306;                                                       //Steven 20160718 : Index pick up error with [D43]   //AI(W906-W188) 20261009 (NB2-1): W-188 #4 L02 -- golden 913 atester_rear.cpp:1752
+             }
+             break;
+         case 306:
+             bZ2PickShuttle=false;                                               //Steven 20150407 : 修正[D45] Out Arm等Index Z功能, 避免Auto Homing
+             if(IniConfig.bD43IndexDropErrorCanRetryandSkip)
+             {
+-                if(BRCarryKit.UseSiteNoIC())                                    //ChungHung 20120717 add Index Drop Error Can Retry and Start
++                if(BRCarryKit.UseSiteNoIC() || InSHT2InLF())                                    //ChungHung 20120717 add Index Drop Error Can Retry and Start   //AI(W906-W188) 20261009 (NB2-1): W-188 #4 L02 -- golden 913 atester_rear.cpp:1760-1761 (the shuttle was already pulled left by the Fix3 full-tray flow -> do not wait for BR)
+                 {
+                     MOT[MInShuttle2].fCanMoveM=true;
+                     bShuttle2MoveToLeft=true;
+@@ -1951,7 +1951,7 @@ bool DoRearTestSuckIC()
+                     bIndexPickErrShtStayRight2=false;                           //JerryYang 20181206 (Steven) : fix 啟用D43功能時,index arm pick up error後按retry可能發生hang up
+                     bCheckNullIC2=false;                                        //JerryYang 20170623 (wei) 修正有裝out shuttle 前後對照的機台發生index arm吸取異常無法跳出alram造成hang up
+                     Task=320;
+-                }
++                } else if(hRearPickErrWaitBR.Off()) { Task=320; }   //AI(W906-W188) 20261009 (NB2-1): W-188 #4 L02 -- golden 913 atester_rear.cpp:1770-1773: BR still holds tested IC (waiting for the OutArm 2nd trip) -> after 30 s leave bShuttle2MoveToLeft false -> case 320 does not wait -> case 321 raises JAM0302 instead of a silent hang
+             }
+             else
+             {
+diff --git a/docs/MACHINE_PATCHES_20261009.md b/docs/MACHINE_PATCHES_20261009.md
+index 5e5e9e19..4d7710fb 100644
+--- a/docs/MACHINE_PATCHES_20261009.md
++++ b/docs/MACHINE_PATCHES_20261009.md
+@@ -94,3 +94,11 @@
+ - **tools 0186／0187**：機台的設計外掛工作階段合筆電包（0.330 → 0.341、→ 第 222～223 包的版本）——機台自己的設計外掛線，筆電不收。
+ - **快照 15:40**（main `f1dcb125`）：只有兩個說明檔的拍照時間變了，沒有參數或工單變更 ⇒ 不用叮嚀全體。
+ - **鏈尾**：C++ `913cfdec`（0352）→ `ca2c67fe`（0353）→ **`7a402f24`**（0354）。下一次從 **cpp 0355／web 0142／tools 0188** 開始。
++
++## 14. 16:0x cpp 0355 PKG224（只接鏈）、cpp 0356 WORKLOG（照收）、tools 0188（設計外掛，不收）；快照 16:02
++
++- **cpp 0355 PKG224**：機台把筆電第 224 包合進去——只接鏈；機台已套到第 224 包。
++- **cpp 0354＋0356 WORKLOG**：照收，進第 143 批（b19 `784b76c9`，cherry-pick 都沒有衝突）。
++- **tools 0188**：機台的設計外掛線合第 224 包（0.345 → 0.347），筆電不收。
++- **快照 16:02**（main `e72694be`）：只有兩個說明檔的拍照時間變了，沒有參數或工單變更。
++- **鏈尾**：C++ `7a402f24`（0354）→ `110eb661`（0355）→ **`66b67a82`**（0356）。下一次從 **cpp 0357／web 0142／tools 0189** 開始。
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index 663c0baf..0678a1ec 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -1,10 +1,10 @@
+-# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 16:0x）
++# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 16:4x）
+ 
+ ## ☀ 10/08 早上先看這裡（04:3x 起草；之後的進度往這張表加）
+ 
+ | 項目 | 一句話 |
+ |---|---|
+-| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～141 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate；第 140 批拿掉當掉的 IG-6 後才綠），出了**第 181～224 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
++| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～142 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate；第 140 批拿掉當掉的 IG-6 後才綠），出了**第 181～225 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
+ | **模擬組態** | St02 W-149 做完：模擬版的固定失敗從 7 支降到 4 支，跟出貨一樣——之後模擬版多紅一支就是真回歸。 |
+ | **機台修的事（重點）** | 0307 主控台非同步（START 卡 103 秒＋EMG 誤報的根因）、0309／0310／0312／0316 HT9050 Tray 流程（站序、Empty→Auto 補盤、位置不加 6800、Loader 探測看抽屜感測）、0311／0317 上升氣缸雙線圈、0313 出料手臂讓位點（00:19 MOutArmX 警報）、0314 CCD Y 原點判斷、**0315 HT9050 先跳過 Index 扭力讀取**（旗標預設開，扭力讀取驗證後要關）。 |
+ | **軟體極限** | 00:19 的警報是 golden 拿軟體極限（這台 ±999999）算目標。MainNB-GPT 普查（W-164）：只剩 Motor Test 頁的 LightScale 會算出 ±999899——EastSun 0925 R7 已定照 golden，只發提醒。 |
+@@ -100,6 +100,9 @@
+ | **1009 15:3x：St02 派下一張卡（W-202）** | St02-E 手上只剩 LEADYO 普查（TESNA、H4 等 Steven），請筆電選下一張。筆電派：**先把 T08 接上**——HANA 客戶的配方比對已經合進 main，但機台流程裡呼叫它的那一行還關著，接上才會真的跑（只有 HANA 客戶走得到）；如果那個檢查也會讓機台停著等，就先停下來問 Steven（跟 #151 同一類）。**再做 LI-9 F2**（KYEC FTP 上傳）。Qualcomm 的 MR !385 排第 142 批。 |
+ | **出的包（1009 15:4x）：第 224 包＝第 141 批** | GitLab `9c95ecac`／GitHub `64d7d4e6`：①St02 的 KYEC 換配方時把配方複製到測試機（照 913＋Steven 的裁決；只有開了這個功能的機台走得到，HT9050 沒開）；②ATK 批結束送給主機的事件照 913（只有 ATK 機台）；③Ifor01 把加熱器小工具搬進函式庫（行為不變，為之後的 913 溫控修正鋪路）；④Ifor01 的「沒有 AI 的安裝／更新」手冊與腳本（機台套包用的腳本還沒換）；⑤設計外掛 0.347。gate b141a：兩組態只有固定 4 支，三支新測試都過。**第 142 批**（Qualcomm 低良率檢查）gate 中。 |
+ | **1009 16:0x：機台套到第 224 包** | 機台 15:2x～15:4x 推了 cpp 0353（合第 222～223 包，只接鏈）、cpp 0354（WORKLOG，排第 143 批）、tools 0187（它自己的設計外掛線）；`pkg_uptake` 量到已套到第 224 包。快照 15:40 只有說明檔時間（main `f1dcb125`）。St02-E 認領了 W-202（先 T08、再 LI-9 F2）。第 142 批（Qualcomm）gate 中。 |
++| **出的包（1009 16:3x）：第 225 包＝第 142 批** | GitLab `5d86796f`／GitHub `5b7f9f56`：St02 的 Qualcomm 低良率檢查改成「每多 N 顆才檢查一次」，照 913，順便修掉 912 那 5 個檢查在按數量模式永遠不跑的問題（只有 Qualcomm 客戶走得到，HT9050 不受影響）。gate b142a：兩組態只有固定 4 支。機台已套到第 224 包。 |
++| **1009 16:3x：第 143 批開跑；W-192～194 第 2 次追問** | 第 143 批（b19 `784b76c9`）＝機台的兩顆 WORKLOG（0354、0356）＋NB2-1 的 W-188 #4（!386：前／後站等出料飛梭清空時加一個 30 秒看門狗，照 913，以前會無聲卡住），gate 中。Jerry／KenHeish／Roger 早上那三題（SVN 補檔、913 差異表裡可能的 bug）都不急，已第 2 次追問；再沒回就照規則列進 §0 讓你決定要不要直接問他們。 |
++| **1009 16:4x：St02 的 KYEC FTP 上傳（LI-9 F2）四題** | 筆電照 golden 答了三題（兩種組態都用真的 FTP 引擎、抓工作檔失敗不擋上傳、順便補 912 那 6 段），記成 RULINGS_20261009 第 8 條。第四題「上傳照 golden 在主迴圈同步跑，而且 7z 沒有逾時」會讓機台卡住時停止更新，跟 #151 同一類，已轉 Steven（W-203）；他回之前只做不會真的觸發上傳的兩張，按鈕那張先等。Ifor-GPT 自己找到可寫的建置位置，把 IG-6 修好了（99／99），排第 144 批，接著做 IG-7。 |
+ | **要你決定的**（§0） | ✅ 你 10:1x 都回了：#148＝NB2 已完成（!306 收進第 110 批確認）、#149＝A（Ifor-GPT 專做執行期測試，IG-3／IG-4）、!310＝A（ES02 HTDESIGNER 0.235～0.257 收進第 110 批）＝RULINGS_20261008 第 2 條。**13:0x 新一題 #150**：GPIB 位址不一致要不要自動修正（Jerry 留給你；預設 A＝維持 golden、只留警告，可不回）。<br>**🆕 1009 11:4x 新一題 #151：HANA 機台按 START 時，要不要照 golden 先等 RMS 伺服器連線（最多 3 秒）？** 白話：golden 913（RogerYang 0916）裡，HANA 客戶開了 A77 的機台按 START 前，會先確認 RMS 伺服器連得上，連不上就擋下 START，連線最多等 3 秒。問題在移植樹的輪詢是單執行緒——這 3 秒裡整台機台的狀態更新會停住（例：網頁上的數字 3 秒不動）。你 0923 定過「會擋住輪詢的整合要先問」，所以問你。只有「HANA 客戶＋開 A77＋線上模式＋RMS 還沒連上」才會等，HT9050 永遠走不到。選項：**A＝照 golden 收**（建議：只在按 START 那一刻、最多 3 秒，機台本來就停著；St02 已經把等待裡的訊息迴圈換成只推 HANA 連線）；**B＝先不收**，等改成不擋輪詢的寫法（例：連線放到背景，START 時只看結果）。**沒回之前照 B**：H4 先不合，HANA 其他幾張（!372～!374）照常進第 138 批。<br>**🆕 1009 12:3x 新一題 #152：EastSun 派給你的「在沒有 AI 的電腦上實測安裝與更新」，實測要誰來做？** 白話：EastSun 希望客戶端或沒有 AI 的電腦也能只靠文件和腳本裝好、更新 HT9050 的軟體（機台 cpp 0349）。手冊和腳本筆電已派 Ifor01 寫（W-197）；寫好之後要有一個「人」在一台沒有 Claude 的電腦上照著做三個情境：①從零安裝並啟動；②從某一包更新到最新一包，中間至少遇到一個「機台和筆電都改過」的檔；③故意讓建置失敗，照手冊退回。模擬組態就可以，不用機台。選項：**A＝你自己做**（建議：EastSun 指名你，你也最清楚客戶端要什麼；大約半天到一天）；**B＝指定一位同事**照手冊做、不用 AI（例：Kevin 或 Jerry）；**C＝先不排**，手冊寫好放著。**沒回之前照 C**：手冊照寫，不排實測。實測的人不能是寫手冊的 Ifor01。<br>（1009 13:4x 補：**#151 也請 Steven 一題決定**（W-199）——你 13:3x 說 Steven 的回覆最高優先，Steven 回了就照他的，這題你就不用回。Steven 13:0x 對同一類的 KYEC 換配方同步等 7z 已經裁定「功能打開才等」照 913 同步，可以參考。）<br>（1009 15:1x 補 #152：**手冊和腳本已經好了**——Ifor01 的 MR !379 進 main `7db6b913`：`tools/laptop_ops/pkg_template/` 的 `NO_AI_INSTALL.md`／`NO_AI_UPDATE.md`／`NO_AI_TROUBLESHOOTING.md`＋五支 PowerShell 腳本＋啟動 .bat，每份手冊都附實測紀錄表。你決定誰做實測就可以開始；新腳本等實測過了才換進每一包。） |
+ 
+ 
+diff --git a/docs/RULINGS_20261009.md b/docs/RULINGS_20261009.md
+index bd644a8d..c458b241 100644
+--- a/docs/RULINGS_20261009.md
++++ b/docs/RULINGS_20261009.md
+@@ -69,3 +69,12 @@
+   - St01 的 `uYieldMonitoring.cpp`:2810-2814 `AI(W906-TIF912)` 舊註解改寫，St01 離線，筆電代點頭。
+   - 只有 CC_QUALCOMM 走得到；HT9050（CC_PTI）開關永遠是 false。
+ - 兩張的合併條件照一般 MR：附測試＋反向驗證；不新增 `fMain->Start` 呼叫點（`START_SitesCensus` 數字不變）。
++
++## 8. W-202② LI-9 F2（KYEC FTP 上傳＋Gate #4）四題：筆電照 golden 答三題，同步那題問 Steven（筆電 1009 16:4x）
++
++- 出處：St02-M 1009 16:1x（FROM_STEVEN §3），St02-E 的唯讀普查 `li9f2_precensus.md`。St02-M 寫明「Steven 先回的話以他為準」。
++- **D-3 兩種組態都用真的 FTP 引擎：是**（只有 [FTP] 開關打開才走得到；HT9050 關著，模擬組態連 FTP 頁都藏起來；測試用夾具，不連真伺服器）。
++- **D-4 Gate #4（從測試機抓工作檔）失敗不擋上傳：照 golden**（Steven 1009 的「失敗就停」是對換配方說的，第 2 條）。
++- **D-9 `UploadFileToServer2` 一起補 912 那 6 段：是**（913 有、移植樹還是 0618；第 6 條「913 當參照、翻成 C++」）。
++- 技術預設照 St02-M：D-1 只做上傳（F2-up）、D-2 執行接縫寫在筆電檔案的同一行（筆電點頭）、D-5 兩個 bError 不合併、D-6 AMD 與 KYEC-ATC 連線先擋下回報不支援、D-8 `plUnloadClick` 放 St02 新檔。
++- **D-7 上傳照 golden 同步在主迴圈跑：轉給 Steven（W-203）**——7z 用 `system()` 沒有逾時、FTP 引擎沒對真伺服器跑過，卡住時整台機台的輪詢會停（Jimmy 0923「會擋住輪詢的整合要先問」；跟 W-199／#151 同一類）。筆電的建議：照 golden 同步，但 7z 比照 K1 加 10 秒強制結束（Steven 1009 對 K1 的做法），FTP 用引擎自己的逾時。**Steven 回之前**：F2-1（Gate #4，今天沒有執行期效果）與 F2-2（兩個接縫）照做；F2-3（真的會按下去的按鈕）等 Steven。
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index bbf06a68..13d116f2 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -353,6 +353,7 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-07 | 設計外掛 tools 0170 | — | 設計外掛工作階段自己推（分支 a6cadd2，GitHub dc7975ff）：依序合併筆電包 162、163、167、168 的設計外掛（0.197.0 → 0.234.0），164～166、169～172 沒帶設計外掛；無衝突，機台自己的設計外掛功能都保留；測試修正：建置視窗進度條在矮視窗不再塌掉、面板繪製測試固定 Edge 視窗大小；run_all 3/3、vscode_it 161/161，已安裝 0.234.0；只動 tools/vscode-htdesigner | tools 0170 |
+ | 10-08 | 設計外掛 tools 0171 | — | 設計外掛工作階段自己推（commit b453060，GitHub f42c142b）：EastSun 1008 方案總管的 Debug／Release 按鈕按不了（0.234 在 ▶＝F5 時把它變灰）→ 裁決「連動F5 release 和debug」：按鈕恢復可按，resolveDebugConfiguration 依按鈕把 F5／▶ 的啟動目標換成 build_integ_dbg_x86 或 build_integ_ship_x86 那一組；「模擬」仍是灰的。run_all 3/3；vscode_it 沒跑成（VS Code 自己的更新程式 CodeSetup 從 10/07 18:34 起佔住執行個體鎖）。vsix 已安裝，版本號沒變，要重新載入視窗才生效；只動 tools/vscode-htdesigner | tools 0171 |
+ | 10-08 | 173～204 | 07dbeae3＋63b1aa25＋351291d5（GitLab 0258ba66…68fc0e65、39c6388c、e6c54331） | 本 commit（機台 C++＋web），EastSun「你確定有合完整?」→「快合」→「一直合下去 不要停拜託」（173～202 的 C++ 從 10-07 起都沒合，只有設計外掛跟上）。備份分支 backup/pre-pkg202-20261008（cpp、web）＋ D:\HT9045\_pkg_202\backup_machine_195843、D:\HT9045\_pkg_203\backup_machine_220733。202 疊三十包：直接換 108（換 105；tasks.json、acatchtray 留機台）、新檔 35、兩邊都改 22（合併 16、設計外掛／WORKLOG 照規定 6）、一樣 88；每個直接換的檔掃機台 AI 標記＋W906_ 識別字：WebBridgeServer（TOKEN-OFF／SOFTKEY panel.estop）改三方合併＋收筆電 pad.get／pad.close／observerSG 豁免、acatchtray 留機台（筆電版＝少 PROBECYL）、MotionView9050 換（機台＝基底）。衝突：cinitial／test_flow9050_tray／csystem 取機台（BOOTCLEAR、PROBECYL、pitch 同步在 MainProc）；test_scankey_golden、IoBtnPanelClick、tests/CMakeLists、WebBridgeTags（tester.name 依 Jerry 1008 裁決 A＝golden LoadTestModePicture）取筆電；wb_serve 第 239 行＝機台 IOWAIT＋筆電 g_ppCyc0 搬移。4 個新網頁檔改 CRLF。203：15 檔（直接換 9、新 4、合併 2，無衝突）；204：12 檔（直接換 9、新 1、合併 2，無衝突；SECS SV Auto1～6 料盤別名＋氣缸平均推拉時間、cSpeed）。合併後 test_scankey_golden 補回 PadInterface_St02.h include、[19]（筆電版軟體面板鍵 ST02-P2，機台保留自己的 SOFTKEY）在機台關掉。ctest Debug 426/441：15 個失敗都是第 381 列的已知清單（環境：dfm2rc×4 ctest 找不到 g++／rc.exe、E031、GearTeachSave、TeachCheckRangeReload；斷言筆電設定／repo 舊表：config_db、ini_helpers、config_loaders、MotorPoints／MachineMotors／MachineSuckers_HT9050；機台補丁：GA2_C1_cinitial、FShow_Audit）；204 之後相關 29 支全過。EastSun 未 commit 的 acatchtray／asendic_Loader／cinitial／PadInterface_St02（SafeLock）先拿開、合完三方套回，不進 commit。20:02 -j4 整包重編讓機台當機（Kernel-Power 41），留下 NUL 填滿的 .a／.obj／.d ⇒ clean 後 -j2 重編 | 本 commit |
++| 10-09 | 226 | 762b3fb5（GitLab 1dd66de4） | 本 commit（定時檢查自動收）：NB2-1 W-188 #4 L02 case-306 看門狗（MR !386，golden 913 RogerYang 0908）：DoFront／RearTestSuckIC case 306 在 [D43] 開、出料梭車還有已測 IC 時原本無限等待，現在 30 秒後走 320→321 跳 JAM0301／0302，梭車已拉到左邊也可以繼續；只有 golden DoTestHeadMotor 路徑會叫到，HT9050 生產走 FinePitch（csystem.cpp:1956），推論不受影響。另收筆電 docs（含機台 cpp 0354／0356 的 WORKLOG 列，WORKLOG 照規定留機台）。7 檔：直接換 5（aTester_Front／Rear 等，掃過沒有機台標記會消失）、新測試 1、tests/CMakeLists 合併無衝突。Debug wb_serve 建好（release 沒編：wb_serve 17:07 起在跑 release exe），NB2_W188×3、W64b_Front／RearSuckIC 共 6 支全過。備份分支 backup/pre-pkg226-20261009＋D:\HT9045\_pkg_226\backup_machine_173458 | 本 commit |
+ | 10-09 | 225 | 5b7f9f56（GitLab 5d86796f） | 本 commit（定時檢查自動收）：St02-E W-195 Qualcomm MR-Q1（MR !385）照 golden 913（RogerYang rf360-yield-count 0814＋0916 else-if 修正）：低良率檢查在「依顆數」模式每到設定顆數就檢查、912 被 else-if 擋掉的五個檢查函式恢復執行；只有 CC_QUALCOMM 開關打開才走得到，HT9050（CC_PTI）永遠 false、行為不變。8 檔：直接換 6（CosFunction、MainTimer3、fYieldMonitoring.h、uYieldMonitoring 等，掃過沒有機台標記會消失）、新測試 1、tests/CMakeLists 合併無衝突。Debug wb_serve 建好（release 沒編：wb_serve 16:50 起在跑 release exe），St02_W195Qcom、St02_W175LowYield、YieldMonCore、START_SitesCensus 等 5 支全過。同一次推送帶上 EastSun 16:52 改的 Gerneral.ini（[IndexDriver] 加 HT9050_INDEXZ_TORQUE_CONFIRMED=1，開放 Auto Height）。備份分支 backup/pre-pkg225-20261009＋D:\HT9045\_pkg_225\backup_machine_165257 | 本 commit |
+ | 10-09 | 224 | 64d7d4e6（GitLab 9c95ecac） | 本 commit（定時檢查自動收）：①St02-E W-195 KYEC K1（MR !382，golden 913＋Steven 1009 本人裁決）：換配方時用 7z 把配方同步到 OS 測試機（CreateProcess、輸出每天一檔在 <log>\N06、10 秒逾時強制結束），失敗跳中英警報並擋 START 直到換配方成功——只有開 N06 開關的機台走得到，HT9050 沒開；②ATK（MR !383）：Final Lot End 每個 Auto1～3 送一筆 CEID 288＋一筆 Final Track-Out CEID 8，只有 ATK 機台；③Ifor01 W-190 #1（MR !384）：加熱器品牌表與輔助函式從 FileRW/HSys.cpp 原樣搬到 cmydef.cpp，行為不變；④Ifor01 W-197：沒有 AI 的安裝／更新手冊與腳本（tools/laptop_ops/pkg_template）＋ tools/start_wb_serve_ioweb.bat（只新增檔案，沒執行）。28 檔：直接換 16（掃過沒有機台標記會消失）、新 9、合併 3 無衝突（CMakeLists、tests/CMakeLists、csystem.cpp）。csystem.cpp 只 commit 包的 3 行（ATK include、:12077 SortingWrapUp、:32160 CEID 8）；EastSun 未 commit 的 WAR1603／1604 三行留在工作樹（另存 D:\HT9045\_pkg_224\eastsun）。Debug＋release wb_serve 建好，St02_W195N06／Atk、W190_HeaterIns、POOL2_LotInfo×3、START_SitesCensus、St02_SecsEcFileWrites、W195×3 共 11 支全過。備份分支 backup/pre-pkg224-20261009＋D:\HT9045\_pkg_224\backup_machine_155308 | 本 commit |
+ | 10-09 | 222～223 | 69c776fa＋0be7271b（GitLab 73069916、c40fbff9） | 本 commit（定時檢查自動收）：222＝NB2-1 W-188 #3 HasHotReadyIC_9045 照 golden 913（MR !377）——加熱盤只剩 HAS_NULL_IC 佔位時算空的、清掉並記一行（原本批末空轉 500 圈再報「No GetHPFirstTeamMotUse」），滿空混合時只設 bNeedReconcileHPList（golden 的消費端還沒移植），沒有頭組時最多 8 格孤兒寫 Exception log，暫存點表每個 return 都釋放；只有有加熱盤的機台走得到。223＝Ifor-GPT W-180 IG-5 只有測試（AddLoadingCount 四個閘＋ProcessSCKARTLoadingCount step 200），產品碼不變。另收 docs（RULINGS_20261009 新檔、MACHINE_PATCHES、NIGHT_REPORT）。9 檔：直接換 5（aHotPlateSubstrate.h 等，掃過沒有機台標記會消失）、新 3、tests/CMakeLists 合併無衝突；設計外掛 0.342～0.345 與 WORKLOG 照規定留機台。Debug＋release wb_serve 建好（aHotPlateSubstrate.h 改動，約 290 檔重編，-j2 共 8 分鐘），NB2_W188×3、IforGPT_LoadingCountRuntime、St02_W195×3 共 7 支全過。備份分支 backup/pre-pkg223-20261009＋D:\HT9045\_pkg_223\backup_machine_152259 | 本 commit |
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 20f9e86b..1ceb380f 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -1383,6 +1383,19 @@ if(WIN32)
+ endif()
+ add_test(NAME NB2_W188HotReady COMMAND test_nb2_w188_hotready "${CMAKE_SOURCE_DIR}")
+ 
++# --- test_nb2_w188_l02watchdog: AI(W906-W188) 20261009 (NB2-1) -- W-188 #4 L02 case-306 30 s watchdog -> golden 913 ---
++#   [1] Front/Rear: kit holds IC -> stays 306 until the watchdog expires -> 320 (JAM030x next); kit empty -> 0618 path; [2] source ratchets.
++add_executable(test_nb2_w188_l02watchdog
++    test_nb2_w188_l02watchdog.cpp
++)
++target_link_libraries(test_nb2_w188_l02watchdog PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_nb2_w188_l02watchdog PRIVATE ws2_32)
++endif()
++add_test(NAME NB2_W188L02Watchdog COMMAND test_nb2_w188_l02watchdog "${CMAKE_SOURCE_DIR}")
++
+ # --- test_w6_5_shuttle: pump the SHUTTLE/CARRY engine over Sim HAL -----------
+ #   The task-mandated W6.5 verify TU (mirror of the in/out/tray-arm + tester
+ #   core TUs).  Proves acarry.cpp (the SHUTTLE/CARRY ENGINE, in ht9045_sm)
+diff --git a/tests/test_nb2_w188_l02watchdog.cpp b/tests/test_nb2_w188_l02watchdog.cpp
+new file mode 100644
+index 00000000..411a5d47
+--- /dev/null
++++ b/tests/test_nb2_w188_l02watchdog.cpp
+@@ -0,0 +1,155 @@
++// =============================================================================
++//  AI(W906-W188) 20261009 (NB2-1): W-188 #4 L02 -- DoFrontTestSuckIC / DoRearTestSuckIC case 306 watchdog = golden 913
++//  (GitLab honprec/rd/rd5/ht9045_913 main e9908638; RogerYang 20260908):
++//    atester_front.cpp :932 TQPF_Timer hFrontPickErrWaitFR, :1747 SetSecAndOn(30) before Task=306,
++//    :1755-1756 `if(FRCarryKit.UseSiteNoIC() || InSHT1InLF())`, :1765-1768 `else if(hFrontPickErrWaitFR.Off()) Task=320`
++//    atester_rear.cpp  :952 / :1752 / :1760-1761 / :1770-1773 (BR, InSHT2InLF, hRearPickErrWaitBR).
++//  Before: with [D43] on and FR/BR still holding tested IC, case 306 waited forever (silent hang).
++//  Now: after 30 s it goes to case 320 with bShuttleXMoveToLeft false -> case 321 raises JAM0301/0302.
++//  [1] behaviour (one call per step, cursor parked again afterwards):
++//      FR has IC, shuttle not left, timer running -> stays 306; timer expired -> 320, bShuttle1MoveToLeft stays false;
++//      FR empty -> 320 with bShuttle1MoveToLeft=true (0618 path unchanged).  Same for Rear.
++//  [2] source ratchets on aTester_Front.cpp / aTester_Rear.cpp (argv[1] = source root).
++//  Use: only through ctest (NB2_W188L02Watchdog).
++// =============================================================================
++#include "aTester_Front.h"
++#include "aTester_Rear.h"
++#include "aHotPlateSubstrate.h"
++#include "Motor/mymotor.h"
++#include "cprod.h"
++#include "cpublic.h"
++#include "cmydef.h"
++#include "csystem.h"
++#include "acarry.h"
++#include "canary_support.h"
++#include "FormsFacade.h"
++#include "atester_shims.h"
++#include "myTimer.h"
++#include "w906_ctest_guard.h"
++#include <windows.h>
++#include <cstdio>
++#include <fstream>
++#include <string>
++#include <vector>
++
++extern TQPF_Timer hFrontPickErrWaitFR;
++extern TQPF_Timer hRearPickErrWaitBR;
++
++static int g_pass = 0, g_fail = 0;
++#define CHECK(cond, msg)                                                        \
++    do {                                                                        \
++        if (cond) { std::printf("  PASS: %s\n", msg); ++g_pass; }               \
++        else      { std::printf("  FAIL: %s  (line %d)\n", msg, __LINE__); ++g_fail; } \
++    } while (0)
++
++static std::vector<std::string> ReadLines(const std::string& path)
++{
++    std::vector<std::string> v;
++    std::ifstream f(path.c_str(), std::ios::binary);
++    std::string s;
++    while (std::getline(f, s)) {
++        if (!s.empty() && s[s.size() - 1] == '\r') s.erase(s.size() - 1);
++        v.push_back(s);
++    }
++    return v;
++}
++static int CountLines(const std::vector<std::string>& L, const std::string& n)
++{
++    int c = 0;
++    for (size_t i = 0; i < L.size(); ++i) if (L[i].find(n) != std::string::npos) ++c;
++    return c;
++}
++static int FindLine(const std::vector<std::string>& L, const std::string& n, int from = 0)
++{
++    for (int i = from; i < (int)L.size(); ++i) if (L[i].find(n) != std::string::npos) return i;
++    return -1;
++}
++
++struct Side {
++    const char* name;
++    int* task;
++    bool (*step)();
++    TMyKitSuck* outKit;     // FR / BR
++    bool* moveToLeft;       // bShuttle1MoveToLeft / bShuttle2MoveToLeft
++    bool* shtLeftFlag;      // b1ShuttleMoveToLeft / b2ShuttleMoveToLeft (InSHTxInLF returns false when this is false)
++    TQPF_Timer* wd;
++};
++
++static void RunSide(const Side& s)
++{
++    std::printf("-- [1] %s case 306 --\n", s.name);
++    const bool saveD43 = IniConfig.bD43IndexDropErrorCanRetryandSkip;
++    const bool saveMove = *s.moveToLeft, saveSht = *s.shtLeftFlag;
++    const int saveTask = *s.task;
++    IniConfig.bD43IndexDropErrorCanRetryandSkip = true;
++    *s.shtLeftFlag = false;                 // shuttle not pulled left -> InSHTxInLF() false
++    *s.moveToLeft = false;
++
++    s.outKit->SetAll(HAS_IC);
++    const bool pre = !s.outKit->UseSiteNoIC();
++    CHECK(pre, "precondition: the out-shuttle kit holds tested IC (UseSiteNoIC false)");
++
++    char msg[160];
++    s.wd->SetSecAndOn(30);
++    *s.task = 306;
++    s.step();
++    std::snprintf(msg, sizeof msg, "%s: kit still holds IC, watchdog running -> stays in 306 (Task=%d)", s.name, *s.task);
++    CHECK(*s.task == 306, msg);
++
++    s.wd->SetMSAndOn(1);
++    ::Sleep(20);
++    *s.task = 306;
++    s.step();
++    std::snprintf(msg, sizeof msg, "%s: 30 s watchdog expired -> 320 (Task=%d)", s.name, *s.task);
++    CHECK(*s.task == 320, msg);
++    CHECK(*s.moveToLeft == false, "watchdog path keeps bShuttleXMoveToLeft false (case 320 will not wait, case 321 raises JAM030x)");
++
++    s.outKit->SetAllToNullIC();
++    s.wd->SetSecAndOn(30);
++    *s.task = 306;
++    s.step();
++    CHECK(*s.task == 320 && *s.moveToLeft == true, "kit empty -> 320 with bShuttleXMoveToLeft=true (0618 [D43] path unchanged)");
++
++    *s.task = saveTask;
++    *s.moveToLeft = saveMove; *s.shtLeftFlag = saveSht;
++    IniConfig.bD43IndexDropErrorCanRetryandSkip = saveD43;
++    s.outKit->SetAllToNullIC();
++}
++
++static void Ratchet(const std::string& root, const char* file, const char* tm, const char* kit, const char* lf, const char* delay)
++{
++    const std::vector<std::string> L = ReadLines(root + "/" + file);
++    std::string decl = std::string("TQPF_Timer ") + tm + ";   TQPF_Timer " + delay + ";";
++    std::string set  = std::string(tm) + ".SetSecAndOn(30);   Task=306;";
++    std::string cond = std::string("if(") + kit + ".UseSiteNoIC() || " + lf + ")";
++    std::string els  = std::string("} else if(") + tm + ".Off()) { Task=320; }";
++    char msg[200];
++    std::snprintf(msg, sizeof msg, "[2] %s: timer declared once on the %s line", file, delay);
++    CHECK(CountLines(L, decl) == 1, msg);
++    std::snprintf(msg, sizeof msg, "[2] %s: SetSecAndOn(30) right before the only Task=306", file);
++    CHECK(CountLines(L, set) == 1 && CountLines(L, "Task=306;") == 1, msg);
++    const int c = FindLine(L, cond), e = FindLine(L, els);
++    std::snprintf(msg, sizeof msg, "[2] %s: case-306 condition has || %s and the watchdog else-if follows it", file, lf);
++    CHECK(c > 0 && e > c && e - c <= 9 && FindLine(L, "case 306:") < c, msg);
++}
++
++int main(int argc, char** argv)
++{
++    extern AnsiString DataPath;
++    const char* const rt[] = { "DataPath", DataPath.c_str(), 0 };
++    if (!W906TestRequireCtestRedirects("NB2_W188L02Watchdog", rt)) return 2;
++    std::printf("==== W-188 #4 L02 case-306 watchdog -> golden 913 ====\n");
++
++    Side front = { "Front", &iFrontTestSuckICTask, DoFrontTestSuckIC, &FRCarryKit, &bShuttle1MoveToLeft, &b1ShuttleMoveToLeft, &hFrontPickErrWaitFR };
++    Side rear  = { "Rear",  &iRearTestSuckICTask,  DoRearTestSuckIC,  &BRCarryKit, &bShuttle2MoveToLeft, &b2ShuttleMoveToLeft, &hRearPickErrWaitBR };
++    RunSide(front);
++    RunSide(rear);
++
++    std::printf("-- [2] source ratchets --\n");
++    const std::string root = argc > 1 ? argv[1] : ".";
++    Ratchet(root, "aTester_Front.cpp", "hFrontPickErrWaitFR", "FRCarryKit", "InSHT1InLF()", "hDoFrontTestSuckICdelay");
++    Ratchet(root, "aTester_Rear.cpp",  "hRearPickErrWaitBR",  "BRCarryKit", "InSHT2InLF()", "hDoRearTestSuckICdelay");
++
++    std::printf("==== W-188 #4: %d passed, %d failed ====\n", g_pass, g_fail);
++    return g_fail == 0 ? 0 : 1;
++}
+-- 
+2.55.0.windows.5
+
