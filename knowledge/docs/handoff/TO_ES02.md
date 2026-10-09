@@ -441,3 +441,4 @@
 | 20261009 11:5x | 📦 **第 219 包推了**（GitHub `updates/51f954bf/`，接第 218 包；GitLab main `51f954bf`）＝第 136 批 | St02 的 BinSel 讀檔路徑防護＋SECS bin 類型（只有開 SECS／GEM 的機台看得到差別）。機台 cpp 0348（開機清 M14 警報）在第 137 批 gate 中，綠了就出第 220 包。 |
 | 20261009 12:3x | 📦 **第 220 包推了**（GitHub `updates/9290fe38/`，接第 219 包；GitLab main `9290fe38`）＝第 137 批 | 機台 cpp 0348（開機時 MTestZ1 在警報就清一次，不動作）照收；St02 的 HANA RMS 照 golden 913（只有 HANA 客戶走得到，HT9050 不受影響）。 |
 | 20261009 12:3x | **cpp 0349（派工給 Jimmy：沒有 AI 的安裝／更新）收到** | 手冊＋腳本派給 Ifor01（W-197）；實測要誰做等 Jimmy（#152）。0349 排第 138 批。快照 11:49 的 IO 表改線已鏡像進 main（`de141e58`），CHAT_JIMMY 已叮嚀全體先同步再測。新增的 4 個點（`SwMobileAirSuck`／`SnMobileAirSuck`／`SnDieCleanSuck`／`SnHeatGunVacuum`）C++ 原始碼（.cpp／.h）還沒有引用；要接進流程時請開卡。 |
+| 20261009 13:2x | 📦 **第 221 包推了**（GitHub `updates/be3e7d75/`，接第 220 包；GitLab main `be3e7d75`）＝第 138 批 | St02 的 HANA TrayMap 檔名修正（只有 HANA 客戶）＋機台 cpp 0349 的派工文件＋設計外掛 0.331～0.341（只動 `tools/vscode-htdesigner/`，wb_serve 不受影響）。 |
