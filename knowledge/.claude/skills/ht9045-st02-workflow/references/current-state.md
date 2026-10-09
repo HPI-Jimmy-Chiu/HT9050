@@ -1,4 +1,20 @@
-# St02 現況板（更新：2026-10-09 14:2x）
+# St02 現況板（更新：2026-10-09 16:3x）
+
+## ★ 1009 16:3x 存檔點（7 天額度 73%；St02-M 喊 85% 時照這段收尾，90% 停止新工作）
+- **開著的 MR**（都是 St02-E 今天推的）：
+  - **!376 HANA H4**（`v906/st02-w195-hana-h4` `042fb8ed`＋文件 `e9367b1d`，疊在 !374 上）：開始前連不上 RMS 就拒絕 START（等 3 秒）。**等 Steven（W-199）**；他同意就撤 NIGHT_REPORT §0 #151、可合。
+  - **!385 Qualcomm MR-Q1**（`v906/st02-w195-qcom` `24d41327`）：by-count 良率檢查＋913 else-if 修正。排第 142 批；跟最新 main 只有 tests/CMakeLists.txt 檔尾衝突（筆電兩塊都留），**筆電沒要就不推新 tip**。
+  - **!387 W-202 ① T08**（`v906/st02-w202-t08` `b3782075`）：GetTesterResult 呼叫 golden HANARMSRunCheckOK(true)。gate 已申請（B85）。
+  - **!388 K1 修正**（`v906/st02-k1-reasonfix` `e728d389`）：START 拒絕訊息記住擋下那次的原因（s_sN06BlockedReason）。gate 已申請。
+  - 今天已進 main：!370 MR-A、!371 MR-B、!372-!374 HANA H1-H3、!375 H5、!382 KYEC K1、!383 ATK（第 141 批，Ifor01 W-201 已點頭）。
+- **等人回答的卡**（沒回答就不認領、不開工）：
+  - **TESNA**：Steven 的 D2（整段解 cprod.cpp:2524-2578 的閘或只加 TESNA 那一行）、D7（N10 開＋上傳方式 0＋期間 8 時每行事件記錄寫兩次、JAM 數加倍：照 golden 並告訴 RogerYang，或修掉）。St02-M 已定 D1（LogObjects.cpp:117 重套）、D3（as9045LogPath 接縫）、D4（行數不變）、D5（setter 放 :2572 空行）、D6（網頁順序 T3 交筆電另派）。T1 本身含寫兩次的路徑，所以等 D7。盤點：`C:\AI_TempFile\st02e-scratch\w195\tesna\tesna_census.md`。
+  - **LEADYO（利揚）**：Steven 的 D-1（現在做 C++ 側、下載先接測試接縫，或等 F2-down）、D-2（golden「下載被拒卻回報成功」在 V906 怎麼處理）、D-5（3 個 config.ini 鍵連 HT9050 也寫）、D-7（golden 時序與 KingPak 沒查權限）。St02-M 已定 D-3（St01 產生器加對照列，筆電派人）、D-4（成員進 fLotInfo.h，筆電代 St01 點頭）、D-6（同一行附加）。golden 的 4 個疑似錯誤已轉筆電通知 KenHsieh。盤點：`C:\AI_TempFile\st02e-scratch\w195\leadyo\leadyo_census.md`（"F2" 已改成 "F2-down"）。
+  - **LI-9 F2（＝F2-up：KYEC FTP 上傳按鈕＋Gate #4）**：Jimmy／筆電代答 D-3（兩組態都用真的 FTP 引擎）、D-4（Gate #4 失敗擋不擋上傳）、D-7（上傳照 golden 在主迴圈同步跑）、D-9（補 912 的 UploadFileToServer2 改動）；Steven 先回就以他為準。技術預設：D-1 只做 F2-up、D-2 筆電檔同一行加接縫、D-5 兩個 bError 先分開、D-6 AMD／KYEC-ATC 分支先拒絕、D-8 plUnloadClick 放新 St02 檔。預查：`C:\AI_TempFile\st02e-scratch\w195\li9f2\li9f2_precensus.md`。K1 已在 main，Gate #4 的相依已滿足。
+- **認領腳本（都會逐字核對 OLD，推之前在最新 main 再跑一次）**：`w195\kyec_claim.py`、`w195\atk\atk_claim.py`（23 行 9 檔，含 test_pool2_lotinfo.cpp:147）、`w195\qcom\qcom_claim.py`；反向檢查 `w195\mutate_k1.py`、`atk\mutate_atk.py`、`qcom\mutate_qcom.py`、`w202\mutate_t08.py`。
+- **工作樹**：c23＝`v906/st02-w195-atk`（!383 已進 main，可收）；c24＝`v906/st02-docs-1009`（本存檔點，本機）；c25＝`v906/st02-w195-qcom`（!385 等合）；建置線 s39（obj `C:\AI_TempFile\st02-s39-obj\{build,build_ship}`）停在 e728d389。c23／c24／c25 用完請 St02-M 收。
+- **本機 WIP 分支**：`v906/st02-w195-qcom-wip`（!385 進 main 後刪）。`-kyec-k1-claimtest`、`-atk-wip` 已刪（1009 16:3x，兩張都已進 main）。
+- **#6 小提醒**：機台快照在 ATK 與 Q1 兩輪之間從 377b7d26 換成 66acfb01（兩個都標 13:27），system 清單 795→794（少 userid.com.1.com）是機台端，不是測試寫的。
 
 ## ★ 1008 16:2x（重置後）
 - **1009 14:2x W-195 ③ KYEC K1 推**（`v906/st02-w195-kyec-k1`，一顆 commit 疊在 main 26a6dcf0；筆電 13:4x 點頭、RULINGS_20261009 #2-#4）：N06 工作檔同步照 golden 913（bool、同步等 10 秒、檢查 zip／共用資料夾／7z、事件記錄去重）＋Steven 的「失敗就擋」：雙語警報（他的原文）、換工作檔成功前 START 拒絕（WebStart.cpp:3170）、測試機 TCP 同步失敗不送 WORKFILE／GETOSSETUP／SET2DID；7z 輸出寫 <as9045LogPath>\N06 日檔、逾時強制結束、只繼承 pipe。新檔 Interface/TesterTCP_N06_St02.cpp／.h，ctest St02_W195N06（101 項，約 18 秒）。**ATK（c23 `v906/st02-w195-atk`）與 Qualcomm MR-Q1（c25 `v906/st02-w195-qcom`）已認領、本機做好，等點頭**；TESNA 等 Steven D2／D7；H4 !376 等 Steven（W-199）。暫存腳本 `C:\AI_TempFile\st02e-scratch\w195\`（kyec_claim.py／atk\atk_claim.py／qcom\qcom_claim.py 都會逐字核對 OLD）。
