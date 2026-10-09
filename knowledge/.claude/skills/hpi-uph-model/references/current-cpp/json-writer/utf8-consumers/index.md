@@ -27,3 +27,7 @@
 ## 獨立opening-handshake子樹
 
 [WsHandshake完整bytes層](handshake/index.md)保存parser／helpers／response與原header；socket owner另有解析路徑，不能混用驗證保證。
+
+## Socket owner處理子樹
+
+[WebBridgeServer六完整函式](network-owner/index.md)分清自有HTTP／Origin／ready交付與control處理；沿用既有handshake／encoder／decoder，實際flush／drop另追。

@@ -1,4 +1,31 @@
-# St02 現況板（更新：2026-10-09 22:4x）
+# St02 現況板（更新：2026-10-10 04:2x）
+
+## ★ 1010 04:2x 存檔點（7 天額度 84%；85% 起不實作新卡，只停在認領稿；90% 停止）
+- **今天已進 main**：!407 W-212（[C25] 設定頁那一列，第 153 批）、!408 W-150 最後一片（FormClose TTLLog("Close")，第 154 批）。W-150 全部做完。
+- **已推、等 gate**：**!409 W-213 SV G21**（`v906/st02-w213-sv-g21` `7ca401f1`，疊在 main 8cd0be50）：SVID 1191 "Error Bin Count" 照 golden 913
+  SECSGEM/uHGemHT9045_SV.cpp:235 登錄；筆電 03:3x 點頭（TO_STEVEN §4）；St01 不在，ctest 自己在合併後的樹跑（兩組態 13 支全過、反向檢查 [5] 紅→綠）。
+- **W-213（POOL-2 St02 領域的 `#if 0`）**：重量表 `docs/handoff/ST02_W213_REMEASURE_20261010.md`（腳本 `C:\AI_TempFile\st02e-scratch\w195\w213\`
+  `w213_measure.py`＋`w213_table.py`，依賴查法 `deps.py`）。剩下的順序（St02-M）：
+  1. **TfSCKART 族擱置**（St02-M 04:1x，FROM_STEVEN §3，交筆電選 A 擱置／B 從影子單向轉送／C 先做 SckArt 統一）：csystem.cpp 的 golden
+     `fSCKART->SetLotStatus` 走 W7C1／W7C2 影子（:2743／:3948）寫自己的 core（:3200／:3251 L、:5829／:5914 W），TfSCKART 看不到 →
+     打開 G8／G9 後 LOTSTATUS 回覆會漏掉 csystem 的轉換（例：批次結束 golden 回 LOTSTATUS_L）。G7～G11、G13 照關。
+     認領稿留著備用：`C:\AI_TempFile\st02e-scratch\w195\w213\sck_claim.md`（`sck_claim.py`）。另一個坑：TfSCKART 在 ht9045_forms（最底層），
+     SckArt_SetLotStatus 與 SckArtState 的建構子在 ht9045_sm → facade 不能呼叫它們（CMakeLists.txt:658 NO UNDECLARED BACK-EDGE）。
+  2. uHGemHT9045 G37（:7385 TEST_TIMES，cbTestTimes 只在 bVTESTFunction 有選項；HCACK 1 → 0／3＝人工審核；記錄照旁邊 :7375 用 ActiveWire）、
+     G41～G43（:7543／:7562／:7573，InitialLoaderTask 只設 iLoaderTask=1，golden 的消費者 LoaderAction 沒翻 → 現在沒有行為變化）、
+     G47（:7867，CheckActionFlag 只更新 10 個 LED；閘的 DELTA 寫「AMR 啟動卡住」是錯的）。St02-M 04:2x 決定一張 MR 五個一起開（G37 照 golden、
+     記錄用 ActiveWire＋一行註明 golden 是 HGemPtr）。**認領稿** `C:\AI_TempFile\st02e-scratch\w195\w213\hgem_claim.md`（`hgem_claim.py`，21 行，
+     筆電的檔）已交 St02-M 轉筆電點頭。**點頭後只有 7 天額度還在 85% 以下才實作**；到 85% 就停在認領稿，等重置（約 4 天 13 小時）或改派。
+     測試做法：照 tests/test_uHGemClass.cpp:513-525 往 gem.WireCodec.SReceiveData 種 S2F41 內容，呼叫 HT9045Gem::S2F42_Host_Command_Acknowledge。
+  3. 還沒逐一重驗的 25 個（uHGemHT9045 19、uHGemEquipment 6）輪到那支檔時再查。
+  - **不要開**：SV G17（fGroundMan 的 labValue_* 沒有寫入者；comGMReceiveData 未翻）。Rs232Log 的 4 個都是 BevelOuter 外框效果（保留）。
+- **1010 學到的**：
+  - 自己寫的稽核腳本要先讀那一行「現在」的理由全文：G17 的理由 10/08 已更新成「STAYS CLOSED」，腳本只看依賴在不在，差點報成可開。
+  - 原始碼普查（例 [6] 的 fMain->slTTLLog）不分字串與程式碼；新寫的理由字串不要拼出被普查的寫法。
+  - SecsCatalogue（POOL5-3 之後）是對原始碼的結構檢查，不再釘數字；只重建一支測試 exe 時，SecsCatalogue 會因為沒重連而假紅——反向檢查要把兩支一起重建再看。
+  - golden 913 樹在 `D:\HT9045\HT9011UC_Code_V3.33.913.0_20261008_steven`（Big5）。
+  - HT9050 的 config.ini 沒有 [SECS GEM] Enable SECS GEM（讀成 0）：SECS 相關改動在 HT9050 上看不到。
+
 
 ## ★ 1009 22:4x 存檔點（7 天額度 79%；St02-M 喊 85% 時照這段收尾，90% 停止新工作）
 - **今天已進 main**：!396 L05、!397 L03（第 146 批，含筆電修我測試防呆的 c59acf66／2583acfc）、!398 F2-3（第 147 批）。
