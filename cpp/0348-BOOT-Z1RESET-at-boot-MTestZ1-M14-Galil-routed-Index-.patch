@@ -1,0 +1,107 @@
+From d7d1a1791f1dd1844d90172199782451a75c1dfd Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 9 Oct 2026 10:47:58 +0800
+Subject: [PATCH] =?UTF-8?q?BOOT-Z1RESET:=20at=20boot,=20MTestZ1=20(M14,=20?=
+ =?UTF-8?q?Galil-routed=20Index=20Z1=20on=20PCI1203=20station=2014)=20gets?=
+ =?UTF-8?q?=20one=20Acm=5FAxResetError=20when=20its=20drive=20is=20in=20al?=
+ =?UTF-8?q?arm=20--=20EastSun=201009=20'M14=20=E7=8F=BE=E5=9C=A8=E8=B7=B3?=
+ =?UTF-8?q?=E7=A5=9E=E9=BA=BC=E7=95=B0=E5=B8=B8'=20->=20'=E8=AB=8B?=
+ =?UTF-8?q?=E6=8C=81=E7=BA=8C=E8=99=95=E7=90=86'.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+10:30:15 the card opened with MTestZ1 already in drive alarm A.A12 (EtherCAT Output Data Synchronization Error) / ERROR_STOP. The other
+18 axes get golden's boot InitMotor (with ResetError); MTestZ1 is left out of kBootInitAxes on purpose (golden's InitMotor on it is
+TMyGALILMotor::InitMotor = no-op; the Galil route servos it ON at HOME, "SH"), so nothing cleared it until EastSun pressed Reset on
+the 1203 page (10:32:34). Now, once per run after the same 1 s motor-power gate: an enabled, opened PCI1203 MTestZ1 whose sample
+shows an alarm (MotionIO ALM or ERROR_STOP) gets ONE Acm_AxResetError -- the same command as Motor Test / 1203 page Alarm Reset.
+No servo-on, no CFG write, no motion; logged as a BRAKE line. No ctest compiles WebMotorAccessLive.cpp; verify by the op log line
+"MTestZ1 boot alarm reset" on the next start. Debug wb_serve built. WORKLOG row 215.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebMotorAccessLive.cpp  | 49 ++++++++++++++++++++++++++++++++++++++++-
+ docs/WORKLOG_MACHINE.md |  1 +
+ 2 files changed, 49 insertions(+), 1 deletion(-)
+
+diff --git a/WebMotorAccessLive.cpp b/WebMotorAccessLive.cpp
+index 4a9aa9d4..fe83cb4e 100644
+--- a/WebMotorAccessLive.cpp
++++ b/WebMotorAccessLive.cpp
+@@ -1630,7 +1630,7 @@ void W906_BootInitMotorTick()
+     const DWORD now = ::GetTickCount();
+     if (!powerOn) { powerSeen = false; return; }
+     if (!powerSeen) { powerSeen = true; powerSince = now; return; }
+-    if (now - powerSince < 1000) return;
++    if (now - powerSince < 1000) return;  { void W906_BootResetIndexZ1_(ht9045::IMotorAccessBackend&, DWORD); W906_BootResetIndexZ1_(be, now - powerSince); }   //AI(W906-BOOT-Z1RESET) 20261009: MTestZ1 alarm reset only (end of file)
+     for (std::size_t i = 0; i < n; ++i) {
+         if (done[i]) continue;
+         const std::string alias = kBootInitAxes[i];
+@@ -1749,3 +1749,50 @@ void W906_ParamSyncTick()
+         ht9045::BrakeLog(line);
+     }
+ }
++
++//------------------------------------------------------------------------------
++//AI(W906-BOOT-Z1RESET) 20261009: EastSun 1009「M14 現在跳神麼異常」→「請持續處理」. MTestZ1 (M14, PCI1203 station 14, the Galil-routed
++//  Index Z1) is left out of kBootInitAxes above on purpose -- golden's InitMotor on it is TMyGALILMotor::InitMotor, which does nothing
++//  (Motor/myGALILmotor.cpp:130-133), and golden servos it ON through the Galil path (uhome case 5 "SH"). But on the HT9050 it is an
++//  EtherCAT drive: after a power cycle / a master that went away it comes up with drive alarm A.A12 (EtherCAT Output Data
++//  Synchronization Error, 10:30:15 today), ERROR_STOP, and nothing cleared it until EastSun pressed Reset on the 1203 page (10:32:34).
++//  Here, ONCE per run, after the same 1 s motor-power gate as the boot InitMotor: if MTestZ1 is an enabled, opened PCI1203 axis and its
++//  sample shows an alarm (MotionIO ALM bit or state ERROR_STOP), send ONE Acm_AxResetError -- the same command as the Motor Test /
++//  1203 page Alarm Reset (WebMotorAccess.cpp DoResetAlarm). No servo-ON, no CFG write, no motion: the Galil route still owns the servo
++//  ("SH" at HOME). The result goes to the op log (BRAKE line).
++void W906_BootResetIndexZ1_(ht9045::IMotorAccessBackend& be, DWORD sincePower)
++{
++    static bool s_done = false;
++    if (s_done) return;
++    ht9045::MotorAccessAxis a;
++    if (!be.Resolve("MTestZ1", a) || !a.Is1203() || a.axis < 0 || !a.tableEnable) {
++        s_done = true;
++        ht9045::BrakeLog("MTestZ1 boot alarm reset: skipped -- " + (a.why.empty() ? std::string("not an enabled PCI1203 axis the monitor opened") : a.why));
++        return;
++    }
++    unsigned st = 0;
++    unsigned long io = 0;
++    const bool hasSt = be.Pci1203AxisState(a.axis, st), hasIo = be.Pci1203MotionIO(a.axis, io);
++    if (!hasSt && !hasIo) {
++        if (sincePower < 20000) return;                                         // no sample yet: next Poll
++        s_done = true;
++        ht9045::BrakeLog("MTestZ1 boot alarm reset: skipped -- no sample from the card 20 s after motor power");
++        return;
++    }
++    s_done = true;
++    const bool alarm = (hasIo && (io & 0x00000002ul) != 0) || (hasSt && (st & 0xFFu) == 3u);
++    char b[240];
++    if (!alarm) {
++        std::snprintf(b, sizeof(b), "MTestZ1 boot alarm reset: not needed (state=%s ALM=%s)", hasSt ? std::to_string(st & 0xFFu).c_str() : "?",
++                      hasIo ? ((io & 0x00000002ul) ? "1" : "0") : "?");
++        ht9045::BrakeLog(b);
++        return;
++    }
++    ht9045::Pci1203Cmd c;
++    c.kind = ht9045::kCmdAxResetError; c.wireId = 0; c.axis = a.axis;
++    const ht9045::Pci1203CmdResult res = be.Pci1203Execute(c);
++    std::snprintf(b, sizeof(b), "MTestZ1 boot alarm reset: Acm_AxResetError(ax=%d) -> accepted=%d issued=%d ret=0x%08lX%s%s (before: state=%s ALM=%s)",
++                  a.axis, res.accepted ? 1 : 0, res.issued ? 1 : 0, (unsigned long)res.ret, res.why.empty() ? "" : " -- ", res.why.c_str(),
++                  hasSt ? std::to_string(st & 0xFFu).c_str() : "?", hasIo ? ((io & 0x00000002ul) ? "1" : "0") : "?");
++    ht9045::BrakeLog(b);
++}
+\ No newline at end of file
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index c044d5b4..00ffd5cf 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -84,6 +84,7 @@
+ | 169 | **Out Shuttle Z 位置還原**（EastSun「剛剛說的teach 沒有indexZ 高度可以設定 我說錯了 可以不用改 在其他頁面已經可以設定了」）：revert web 113a1ef，控制項回到套件 149 的原位置；給 Jimmy 的說明同步更正 | web 4e68790；cpp（本列） | — |
+ | 170 | **只查：實體 HOME 鍵沒反應**（EastSun「我實體按鈕案home都沒反應」）：PadCommLog 今天實體按鍵封包（t05x400…）只到 09:15:57，最後一筆 HOME＝t050400002020（HOME 0x20＋ALARM RESET 0x2000 卡住，golden ScanPannelKey ALARM RESET 最後判斷蓋掉 HOME）；之後只有程式送出的燈號回音（0006/0016＝PAUSE 燈閃，Teach 頁訊息框開著時）。EventLog 10 筆 MES2112 全是網頁軟鍵。程式這條路與 golden 相同，不改碼；請查面板 ALARM RESET 鈕／按鍵線。17:00 release 補建 | — | — |
+ | 171 | **ALARM RESET 卡住時其他實體鍵照常**（EastSun「就算reset卡住其他按鈕不是也要可以用?」→ 選「改」）：ckernel.cpp ScanPannelKey 前／後面板共 4 處 ALARM RESET 判斷，按著不放（已鎖存）時不再蓋掉同時按的其他鍵；剛按下那一下照 golden 優先。備份 D:\HT9045\_review\ckernel.cpp.bak_rstheld_20261007_172605 | cpp（本列） | ScanKeyGolden（新增 4 項）、MainScanKey、W7_L2_CKernel、SysinitBoot、St02_N07Alarm、St02_PadInterface 全過；Debug 17:30／release 17:31 |
++| 215 | **開機時 M14（MTestZ1）若有驅動器警報就自動清一次**（EastSun 1009「M14 現在跳神麼異常」→「請持續處理」）。10:30:15 開卡時 MTestZ1 已經是驅動器警報 A.A12（EtherCAT Output Data Synchronization Error，前面幾次斷電／主站消失留下的）、ERROR_STOP；其他 18 軸開機 InitMotor 都有 ResetError，但 MTestZ1 刻意不在 kBootInitAxes（WebMotorAccessLive.cpp:1614，Galil 路由的 Index Z1，golden 對它的 InitMotor 是空函式 myGALILmotor.cpp:130-133，伺服由 Galil 路徑 uhome case 5 "SH" 開），所以沒人清，要 EastSun 在 1203 頁按 Reset（10:32:34 清掉）。WebMotorAccessLive.cpp：開機同一個「馬達電 1 秒」閘之後，每次執行一次：MTestZ1 是已開的 PCI1203 軸且樣本顯示警報（MotionIO ALM 或 ERROR_STOP）就送一次 Acm_AxResetError（跟 Motor Test／1203 頁的 Alarm Reset 同一個命令）；不上伺服、不寫參數、不動；結果寫 oplog BRAKE 行。沒有 ctest 編這個檔（只有 wb_serve），下次開機看 oplog「MTestZ1 boot alarm reset」那一行驗證。備份 D:\HT9045\_review\WebMotorAccessLive.cpp.bak_20261009_z1reset | cpp（本 commit） | Debug wb_serve 建好；release 等 EastSun 關程式後編 |
+ | 214 | **第 174 包的 test_scankey_golden 照包裡的跑：機台換成 ST02-P2 軟體面板鍵（保留螢幕緊急停止）**（EastSun 1009「你有照github readmy 的指示 合code嗎?」→「174所以你能修正嗎？」）。第 174 包 README：「套包時那支測試以包裡的為準」；10-08 合併時它的 [19] 在機台關掉，因為 [19] 測的是筆電的 ST02-P2（第 155 包 WebMainScanKey.cpp：軟體鍵設 golden 自己的 bAse* 旗標，ScanPannelKey 照實體鍵處理——軟體 ALARM RESET 也會照 golden 關音樂／N07 蜂鳴、軟體 RESET 照 golden 的 bDisibleResetButton），機台還是 cpp 0153 的鍵號掛鉤（在按鍵區塊之前就回傳，跳過這些副作用）。這次：WebMainScanKey.cpp＝第 155 包的 ST02-P2 版＋檔尾補回機台獨有的 W906_SoftEmergencyStop（螢幕緊急停止，RULINGS_20261005 #17 本來就留機台；只把「丟掉未讀的軟體鍵」改成清 bAse 旗標，fHome 改用 W906_FormShowing）；tests/test_scankey_golden.cpp＝包裡的原檔（[19] 打開）；tests/test_main_scankey.cpp [13] 改驗 bAse 旗標。ckernel 的 W906_VirtualPanelKeyHook 不再有人設（null，不動作）。備份 D:\HT9045\_review\softkey_st02p2_20261009 | cpp（本 commit） | Debug wb_serve＋ScanKeyGolden／MainScanKey／FShow_Audit（原本在已知失敗清單，這次也過）等 6 支全過；release wb_serve 建好 |
+ | 213 | **1203 失敗訊息洪水降量＋點名 Common Motion Utility**（EastSun 截圖「這邊在做什麼 也太誇張」→「請一直優化執行續」）：20:51～20:59 主控台與 oplog 寫了 29690 行 `StopDec／ExtDrive FAILED ret=0x800000D3`——0x800000D3＝GetAuthorityFailed：20:03 當機重開後 Common Motion Utility 開著、佔住卡的權限，引擎每圈的停止命令全失敗，而失敗的停止是 force 行（30／500 預算不擋）且每行進 oplog。EtherCAT/Pci1203MotorRoute.cpp：同一站／軸／呼叫／結果／原因的 FAILED／REFUSED 行 5 秒內再出現只計數不寫（下一行附「+N identical lines suppressed」，計入 linesDropped）；命令照送、LatchFault／統計／golden WAR16122 不變；ret 0x800000D3 時原因前面直接寫「another program holds the 1203 (Common Motion Utility open?) -- close it」。tests/test_pci1203_motor_route.cpp +2 檢查（同一失敗停止 5 秒內兩次＝顯示 1、計數 1、兩次都 latched；換原因立刻顯示）。備份 D:\HT9045\_review\*.bak_20261008_saythrottle | cpp（同 PKG202 commit） | Debug wb_serve＋Pci1203MotorRoute 通過；拿掉修正會不會紅沒有實測（邏輯上第二行會被顯示⇒linesShown+2） |
+ | 212 | **執行緒優化第一步：量出主執行緒在等什麼**（EastSun「請你繼續優化執行續」）：oplog 1008 有 1570 筆 SLOW，最多的兩種 MotorAccessPollTick（中位 702 ms）與 PumpTick（中位 826 ms）tick 執行緒 CPU 都只有約 20 ms＝在等，不是在算。最可能的是主執行緒每一個 1203 命令（DO 寫入／馬達命令／SDO 讀／扭力焦點）都要排隊等 IO 執行緒執行（Pci1203IoThreadRunSync）。這次只加量測、不改行為：每次等待用 QPC 計時，掛到 SLOW 行對應的階段上，格式是「PumpTick 名稱 xxx ms (io wait yyy ms/n)」；PumpTick 拆成 Pump: heater/DTME08/TemperFrom、St02Timers、FlushFlag/DoorLock/Fan、MainProc、CounterRefresh，另有 ServiceOutputs；W906_MotorAccessPollTick 拆成 MAPoll: core／Brake/BootInit/ParamSync／OverlaySnapshot／Hooks／TorqueFocus。檔案：EtherCAT/Pci1203Monitor.cpp（RunSync 計時＋檔尾 g_W906IoWaitHook）、tools/wb_serve.cpp、WebBridgeTags.cpp、WebMotorAccessLive.cpp；備份 D:\HT9045\_review\iowait_20261008 | cpp（本 commit） | Debug＋release wb_serve 建置 OK；test_pci1203_pure 109/109、WB_SimPump 通過。IO 執行緒沒有 ctest，量測要等機台跑過一次、看 SLOW 行有沒有出現「io wait」才算驗證；下一步依數字決定要減哪一種等待 |
+-- 
+2.55.0.windows.5
+
