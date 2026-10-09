@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-09 23:42
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 557cac0d WORKLOG: section 3 row for designer tools 0192 (70ae470b, package 232, 0.375.0 ->／web eabef66。
+HT9050 機台參數快照（machine_params\）—— 2026-10-10 00:24
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ d5eedd91 PKG233: integrate laptop package 233 (GitLab 934e5da8) -- St02 W-195 H6 HANA RMS ／web eabef66。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
@@ -7,7 +7,7 @@ HT9050 機台參數快照（machine_params\）—— 2026-10-09 23:42
   D_HT9045_config\  (53 檔)  → D:\HT9045\config\
   runcfg\           (57 檔)  → D:\HT9045\_integ_ioweb\runcfg\   SetUp.inf（目前工單）、system\teach.ini（教導值）、config\（config.ini、LastSet.ini、Pci1203*.ini …）；logs\ 沒放
   D_GPIB9045_system\ (5 檔) → D:\GPIB9045\system\   只收 *.ini／*.dat；general.ini 的 [Version] Model＝機種（HT9050＝9050GPIB，程式靠它啟動 HT9050 分支）
-  ..\machine_log\   (11 檔)  ← D:\HT9045\_integ_ioweb\runcfg\logs\oplog_*.txt   操作紀錄（每個按鈕、命令、馬達動作、開機都有時間戳；只供查閱，不用放回）
+  ..\machine_log\   (12 檔)  ← D:\HT9045\_integ_ioweb\runcfg\logs\oplog_*.txt   操作紀錄（每個按鈕、命令、馬達動作、開機都有時間戳；只供查閱，不用放回）
 
 注意
   * 這是 HT9050 這一台的設定。別台機台不要整包覆蓋：IO 對照或馬達表錯了，程式會照錯的對照推線圈、動馬達。
