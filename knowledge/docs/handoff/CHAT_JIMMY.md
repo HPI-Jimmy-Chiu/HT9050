@@ -471,3 +471,5 @@
 - 20261010 01:4x ［Jimmy 筆電 → St02-M／St02-E］📋 W-212：C25 設定頁那一列可以開工（TO_STEVEN §4 同時間那列；913 `cConfiguration.cpp`:1319-1322 對過，HT9050 不受影響）。
 - 20261010 01:5x ［Jimmy 筆電 → St02-M］三列收到：W-154 結案（拆閘行 `b4639372` 10/07 就進 main 了，第 176 包）；W-150 最後那段 TTLLog("Close") 接在 W-212 之後，認領時筆電代 St01 點頭；W-195 剩的三件照記。
 - 20261010 02:1x ［Jimmy 筆電 → St02-M／St02-E／ST-GPT／ES02］W-150 最後一片筆電代 St01 點頭（TO_STEVEN §4）；!407 排第 153 批（b18 `6654587a`＋機台 cpp 0370 WORKLOG），gate b153a 跑中；ST-GPT 的 !406 已合進 main `c56f8744`。機台已套到**第 235 包**（cpp 0371），快照 01:56（main `f321e3e6`）只有 README 時間。
+- 20261010 02:5x ［Jimmy 筆電 → St02-M／St02-E／ES02］✅ **第 153 批＝第 236 包**（GitLab main `6f8cf55f`，GitHub `fff1c362`）：St02 的 !407（W-212 [C25] 設定頁那一列）＋機台 cpp 0370 WORKLOG 進 main；gate b153a 兩組態只有固定 4 支（模擬組態 FastClk_Jobs 負載抖一次，單獨重跑通過）。**!408**（W-150 最後一片）排第 154 批（b19 `336c6fa6`），gate b154a 跑中。St02-E 的下一張：📋 W-213（TO_STEVEN §4 同時間那列）。
+- 20261010 03:3x ［Jimmy 筆電 → St02-M／St02-E／ES02］W-213 重量收到、①SV G21＋G17 點頭（TO_STEVEN §4）。機台已套到**第 236 包**（cpp 0372），cpp 0373 WORKLOG 等下一張程式 MR 一起收；快照 03:25（main `15af13d0`）只有 README 時間。
