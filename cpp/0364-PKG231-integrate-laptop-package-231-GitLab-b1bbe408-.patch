@@ -1,0 +1,591 @@
+From c950f0934574144466a28044a85b9342adc3f20b Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 9 Oct 2026 22:57:14 +0800
+Subject: [PATCH] PKG231: integrate laptop package 231 (GitLab b1bbe408) --
+ St02 W-195 TESNA event log T1 (by-day copy when the log is monthly, MR !399)
+ + T2 (event log save settings applied per golden 913, MR !400). HT9050 runs
+ period 6 (by day): file name and split unchanged. Auto-accepted (scheduled
+ check).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ LogObjects.cpp                 |   2 +-
+ Public/MyStringList.cpp        |  39 ++++-
+ Public/MyStringList.h          |   4 +-
+ cprod.cpp                      |  12 +-
+ docs/NIGHT_REPORT.md           |   5 +-
+ docs/WORKLOG_MACHINE.md        |   1 +
+ tests/CMakeLists.txt           |  16 ++
+ tests/test_pool2_cprod.cpp     |  14 +-
+ tests/test_st02_w195_tesna.cpp | 293 +++++++++++++++++++++++++++++++++
+ 9 files changed, 365 insertions(+), 21 deletions(-)
+ create mode 100644 tests/test_st02_w195_tesna.cpp
+
+diff --git a/LogObjects.cpp b/LogObjects.cpp
+index 1cacbd53..7bf16810 100644
+--- a/LogObjects.cpp
++++ b/LogObjects.cpp
+@@ -114,7 +114,7 @@ void W906_CreateLogObjects()
+     self->slMNetLog =new TMyStringList(as9045LogPath+"\\MNetLog",               //Steven 20161115 : MNet Log改新版存檔
+                                  "MNetLog",
+                                  "");
+-
++    { extern void ProcessLastSetIni_EventLog(bool bRead); ProcessLastSetIni_EventLog(bReadFile); }   //[W906] AI(W906-W195) 20261009 (St02-E) TESNA T2 (D1 = A): golden's order -- the TfMain ctor makes slEventLog (913 main.cpp:1545-1554), FormShow's ReadLastSetIni (main.cpp:10143) applies [Event Log]; wb_serve reads config before this function, so the setter (cprod.cpp:2530-2577) is applied again here
+     self->slUploadFile=new TMyStringList(as9045LogPath+"\\UploadFile",          //Steven 20250716 : 整合上傳的功能
+                                  "UploadFile",
+                                    "SourcePath, TargetPath, SourceFile, TargetFile");
+diff --git a/Public/MyStringList.cpp b/Public/MyStringList.cpp
+index 8453e238..4bed0170 100644
+--- a/Public/MyStringList.cpp
++++ b/Public/MyStringList.cpp
+@@ -267,7 +267,7 @@ TMyStringList::TMyStringList()
+     HTSaveFixedFile     =false;
+     MyList              =new TStringList();
+     sPrevFileName       ="";                                                    //Steven 20250809 : 紀錄前一個的檔名
+-    bChangeFile         =false;
++    bChangeFile         =false;  bDupYMDFile = false;                          //AI(ht9045-general-ini) 20260707 (RogerYang) : 月存模式時,另存一份年/月/日檔給fObserver撈  AI(W906-W195) 20261009 (St02-E) TESNA T1: golden 913 MyStringList.cpp:34
+ //    MyList              =HonNew(MyList, __FILE__, __FUNC__, __LINE__);
+ }
+ //---------------------------------------------------------------------------
+@@ -292,7 +292,7 @@ TMyStringList::TMyStringList(AnsiString sPath, AnsiString sFileName, AnsiString
+     HTSaveFixedFile     =false;
+     MyList              =new TStringList();
+     sPrevFileName       ="";                                                    //Steven 20250809 : 紀錄前一個的檔名
+-    bChangeFile         =false;
++    bChangeFile         =false;  bDupYMDFile = false;                          //AI(ht9045-general-ini) 20260707 (RogerYang) : 月存模式時,另存一份年/月/日檔給fObserver撈  AI(W906-W195) 20261009 (St02-E) TESNA T1: golden 913 MyStringList.cpp:58
+ //    MyList              =HonNew(MyList, __FILE__, __FUNC__, __LINE__);
+ }
+ //---------------------------------------------------------------------------
+@@ -651,7 +651,7 @@ void TMyStringList::MySaveToFileShareMode()
+             }
+         }
+     }
+-    MyList->Clear();
++    if(bDupYMDFile==true && HTSaveFixedFile==false) { W906_SaveDupYMDFile(); }   MyList->Clear();   //AI(ht9045-config) 20260707 (RogerYang) : 月存時另存一份"按天"檔給fObserver  AI(W906-W195) 20261009 (St02-E) TESNA T1: golden 913 MyStringList.cpp:410 / :433 (the :411-431 body is W906_SaveDupYMDFile at the end of this file)
+ }
+ //------------------------------------------------------------------------------
+ void TMyStringList::MySaveFileByFileNameAndType(AnsiString asFileName, AnsiString asLotId, AnsiString asFileType) //RogerYang 20170406 (Steven)
+@@ -1286,3 +1286,36 @@ void TMyStringList::MyInsert2DMappingToFile(AnsiString s2DID, int iPlaceToUnload
+     delete list2D;
+ }
+ //------------------------------------------------------------------------------
++// AI(W906-W195) 20261009 (St02-E) TESNA T1: golden 913 MyStringList.cpp:410-431 (RogerYang 20260707, AI(ht9045-config)), the
++//   by-day duplicate of a "Per month" event log (iO15_SaveFilePeriod 8 -> TByMonth main file <Path>\YYYY\<FN>_YYYYMM.csv) for
++//   TfObserver::StatisticalJamCount, which reads only <Path>\YYYY\MM\<FN>_YYYYMMDD.csv.  Called from MySaveToFileShareMode (:654) when
++//   bDupYMDFile && !HTSaveFixedFile, after the main write and before MyList->Clear() -- golden's position.  Golden 913 :412-430 below,
++//   verbatim; the 0618 -> 912 change (912 == 913 byte for byte).
++//   [W906] D7 (Steven 20261009, RULINGS_20261009 #11 "每月跟每天不影響，各存一行"): when the duplicate is the main file itself (N10
++//   daily upload + period 8: SaveType TByDay while bDupYMDFile is still true), golden writes every block twice into that file; here
++//   it is skipped, so each file gets each row once.  The 913 quirk is reported to RogerYang (TO_ROGER, laptop 20:0x).
++void TMyStringList::W906_SaveDupYMDFile()
++{
++        AnsiString sDupPath, sDupFile, sDupStr;
++        sDupPath.sprintf("%s\\%04d\\%02d", HTPath, SystemYear, SystemMonth);         //年\月 資料夾
++        MyForceDirectories(sDupPath, "TMyStringList::DupYMD");
++        //按天分割(TByDay命名): FileName_YYYYMMDD.csv, 與StatisticalJamCount/fObserver讀取路徑一致
++        sDupFile.sprintf("%s\\%s_%04d%02d%02d.csv", sDupPath, HTFileName, SystemYear, SystemMonth, SystemDate);
++        if(sDupFile.LowerCase()==sLastFileName.LowerCase())                     //[W906] D7 (above): the main file already has this block
++            return;
++
++        if(FileExists(sDupFile)==false && HTFirstRow!="")
++            sDupStr = HTFirstRow + "\r\n" + MyList->Text;
++        else
++            sDupStr = MyList->Text;
++
++        HANDLE hDup = CreateFile(sDupFile.c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
++        if(hDup != INVALID_HANDLE_VALUE)
++        {
++            SetFilePointer(hDup, 0, NULL, FILE_END);
++            DWORD dwDup;
++            WriteFile(hDup, sDupStr.c_str(), sDupStr.Length(), &dwDup, NULL);
++            CloseHandle(hDup);
++        }
++}
++//------------------------------------------------------------------------------
+diff --git a/Public/MyStringList.h b/Public/MyStringList.h
+index 5ae84cb6..dc2d15dc 100644
+--- a/Public/MyStringList.h
++++ b/Public/MyStringList.h
+@@ -224,7 +224,7 @@ class TMyStringList : public TStringList
+         Word SystemHour, SystemMin, SystemSec, SystemMSec;
+         Word SystemYear, SystemMonth, SystemDate;
+         void GetTimeInfo();
+-
++        void W906_SaveDupYMDFile();                                             // [W906] AI(W906-W195) 20261009 (St02-E) TESNA T1: golden 913 MyStringList.cpp:410-431 as a member (body at the end of MyStringList.cpp; it reads HTPath / HTFileName / HTFirstRow / System* / sLastFileName)
+         //AI(W906-PT-MyStringList) 20260807: two ctor helpers with NO golden
+         //  counterpart -- they exist only to reproduce BCB6 semantics this port's
+         //  plain-C++ TStringList base does not provide.  Both are called as the
+@@ -262,7 +262,7 @@ class TMyStringList : public TStringList
+         void MySaveSGJamCountToFile(bool bDelete, bool bflag);                  //KaiChen 20200618 ：矽格，增加Jam統計頁面
+         void MyInsert2DMappingToFile(AnsiString s2DID, int iPlaceToUnload=-1);  //JerryYang 20230322 : add 2D mapping result
+         void SetLotData(AnsiString ID, AnsiString Time, AnsiString LotFileName="");
+-
++        bool bDupYMDFile;                                                       //AI(ht9045-general-ini) 20260707 (RogerYang) : 月存模式時,另存一份年/月/日檔給fObserver撈  AI(W906-W195) 20261009 (St02-E) TESNA T1: golden 913 MyStringList.h:76
+     //AI(W906-PT-MyStringList) 20260807: golden's `__published:` section (golden
+     //  :77-86).  __published is dropped (no RTTI streaming in this port); each
+     //  __property becomes a TMSLProperty proxy of the SAME NAME and SAME type,
+diff --git a/cprod.cpp b/cprod.cpp
+index 09aa8691..17c4a8cf 100644
+--- a/cprod.cpp
++++ b/cprod.cpp
+@@ -2521,13 +2521,13 @@ void ProcessLastSetIni_EventLog(bool bRead)
+         IniConfig.bO10UseEventLogSaver=IniConfig.bO06_EventLogAutoSave;
+     }
+ 
+-#if 0 // TODO(GA1-B2): blocked by TMyStringList@cmydef.h:15 (opaque forward declaration   [AI(W906-POOL2) 20261008: STALE -- TMyStringList is complete (Public/MyStringList.h) and slEventLog is created by LogObjects.cpp (W-150 LOG-SPLIT, St02-E 1007); left for that in-progress work]
++//AI(W906-W195) 20261009 (St02-E) TESNA T2 (RULINGS_20261009 #10, D2 = A): was `#if 0 // TODO(GA1-B2): blocked by TMyStringList@cmydef.h:15 ...` -- lifted, the reason expired (Public/MyStringList.h is complete, cprod.cpp:141; slEventLog is made by LogObjects.cpp); the block below = golden 913 cprod.cpp:2416-2465
+       // tree-wide, zero members defined anywhere -- confirmed also by GA-1-B4's cMyDB.cpp
+       // pass) -- slEventLog->FileName/SaveType/SaveSameFolder/SaveByLotID all need a
+       // complete type. TByDay/TBy12Hour/TByHour/TBy2Hour/TBy4Hour/TBy6Hour/TBy8Hour/
+       // TByMonth (the enum values assigned to ->SaveType) are likewise only meaningful
+       // once that type lands.
+-    if(fMain!=NULL)
++    if(fMain!=NULL && slEventLog!=NULL)                                       //[W906] AI(W906-W195) 20261009 (St02-E) TESNA T2: golden 913 :2416 `if(fMain!=NULL)`; slEventLog is NULL until W906_CreateLogObjects (LogObjects.cpp:91), which wb_serve runs after the boot ReadLastSetIni / LoadMachineConfig / FileRW_IniConfig_Boot (golden makes it in the TfMain ctor) -- re-applied at LogObjects.cpp:117
+     {
+         if(IniConfig.bN10_DailyUploadProdData)                                  //Steven 20180514 : JCET吳如春要求每日上傳Event Log, Jam統計表, MTBF, MUBF資料
+             str.sprintf("%s_%s_EventLogTxt", IniConfig.sMachineType, IniConfig.SocketHandlerID);
+@@ -2569,13 +2569,13 @@ void ProcessLastSetIni_EventLog(bool bRead)
+             else                                                                //if(IniConfig.iO15_SaveFilePeriod==6)                         //Steven 20230705 : Event log不可以by月份存檔, 檔案太大會打不開
+                 slEventLog->SaveType=TByDay;
+         }
+-
++        slEventLog->bDupYMDFile = (IniConfig.iO15_SaveFilePeriod==8);           //AI(ht9045-config) 20260707 (RogerYang) : 月存(8)時才另存按天檔  AI(W906-W195) 20261009 (St02-E) TESNA T2: golden 913 cprod.cpp:2464 (one statement before golden's place, D5)
+         slEventLog->SaveSameFolder=IniConfig.bO15_EventLogSaveSameFolder;       //KaiChen 20180322 ：矽格-湖口 新增 將 Event Log 放在同個資料夾
+         slEventLog->SaveByLotID=(CosFunction.bHiSiliconFunction ||
+                                  CosFunction.bSaveEventLogByLotID ||            //KaiChen 20181121 ：矽格-北興 Save Event Log by Lot ID
+                                  IniConfig.iO15_SaveFilePeriod==7);
+     }
+-#endif // TODO(GA1-B2): TMyStringList (slEventLog)
++//#endif // TODO(GA1-B2): TMyStringList (slEventLog) -- lifted, AI(W906-W195) 20261009 (St02-E) TESNA T2
+ 
+     if(IniConfig.iO15_SaveFilePeriod==8)                                        //Stevenhong 20260318 : TESNA 把Eventlog report summarize by month
+     {
+@@ -4211,7 +4211,7 @@ void __fastcall TAlarm1::SummarizeJAMreportbymonth()
+     Word y, m, d;
+     DecodeDate(Now(), y, m, d);
+     AnsiString sourcePath;
+-    sourcePath.sprintf("D:\\HT9045_Log\\EventLogTxt\\%04d\\EventLogTxt_%04d%02d.csv", y, y, m);
++    sourcePath.sprintf("%s\\EventLogTxt\\%04d\\EventLogTxt_%04d%02d.csv", as9045LogPath.c_str(), y, y, m);   //[W906] test seam, AI(W906-W195) 20261009 (St02-E) TESNA T2 (D3; H5 :505 precedent): golden 913 cprod.cpp:4002 hard-codes "D:\\HT9045_Log"; as9045LogPath is that same path in production and W906_HT9045LOG_ROOT in a ctest
+ 
+     if(!FileExists(sourcePath))
+         return;
+@@ -4242,7 +4242,7 @@ void __fastcall TAlarm1::SummarizeJAMreportbymonth()
+     }
+     delete rowDetail;
+     AnsiString dirPath;
+-    dirPath.sprintf("D:\\HT9045_Log\\EventLogTxt\\%4d\\JAM_Log\\%02d", y, m);
++    dirPath.sprintf("%s\\EventLogTxt\\%4d\\JAM_Log\\%02d", as9045LogPath.c_str(), y, m);   //[W906] test seam, AI(W906-W195) 20261009 (St02-E) TESNA T2 (D3): golden 913 cprod.cpp:4029 hard-codes "D:\\HT9045_Log" (as :4214)
+     ForceDirectories(dirPath);
+     AnsiString savePath = dirPath + "\\Processed_JAM.csv";
+     if (RowCount > 0)
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index 4d26d3d1..a0189372 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -1,10 +1,10 @@
+-# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 21:3x）
++# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 22:1x）
+ 
+ ## ☀ 10/08 早上先看這裡（04:3x 起草；之後的進度往這張表加）
+ 
+ | 項目 | 一句話 |
+ |---|---|
+-| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～146 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate；第 140 批拿掉當掉的 IG-6 後才綠），出了**第 181～229 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
++| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～147 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate；第 140 批拿掉當掉的 IG-6 後才綠），出了**第 181～230 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
+ | **模擬組態** | St02 W-149 做完：模擬版的固定失敗從 7 支降到 4 支，跟出貨一樣——之後模擬版多紅一支就是真回歸。 |
+ | **機台修的事（重點）** | 0307 主控台非同步（START 卡 103 秒＋EMG 誤報的根因）、0309／0310／0312／0316 HT9050 Tray 流程（站序、Empty→Auto 補盤、位置不加 6800、Loader 探測看抽屜感測）、0311／0317 上升氣缸雙線圈、0313 出料手臂讓位點（00:19 MOutArmX 警報）、0314 CCD Y 原點判斷、**0315 HT9050 先跳過 Index 扭力讀取**（旗標預設開，扭力讀取驗證後要關）。 |
+ | **軟體極限** | 00:19 的警報是 golden 拿軟體極限（這台 ±999999）算目標。MainNB-GPT 普查（W-164）：只剩 Motor Test 頁的 LightScale 會算出 ±999899——EastSun 0925 R7 已定照 golden，只發提醒。 |
+@@ -127,6 +127,7 @@
+ | **1009 21:1x：IO 表第三次修改（以這份為準）** | 機台 20:52 快照（main `1dc8b097`）：EastSun 今晚改了三次兩個空盤感測器的設定，最後跟傍晚比只動兩格——Empty 選擇區有盤的「輸入型態」0 → 1、Empty 抽屜有盤的接點 Bit 0 → 1；中間那次對調已改回。我前兩次的說明把欄位名稱講錯（把模組 IP 84 說成「埠」），已更正並再叮嚀全體一次。第 146 批第三次 gate（b146c）出貨組態只剩已知的計時抖動，模擬組態跑中；第 147 批（St02 的 FTP 上傳按鈕）已組好。 |
+ | **出的包（1009 21:3x）：第 229 包＝第 146 批** | GitLab `40b3b2b4`／GitHub `5068e928`：St02 的兩項 913 修正（飛梭移動逾時多寫一列互鎖狀態、提示框文字照 913；ASM 熱盤借料帳）、Steven 核准的 HANA START 前確認 RMS 連線、機台的 WORKLOG。gate 跑了三次（b146a／b146b 是被兩支測試的路徑保護擋下，筆電各補一行），最後一次兩組態只有固定 4 支。HT9050 的行為不變。第 147 批（St02 的 FTP 上傳按鈕）gate 跑中。 |
+ | **1009 21:3x：IO 表第四版；機台 3 小時沒套包** | 機台 21:22 快照（main `576fa7b9`）：EastSun 還在調進料盤／空盤的有盤感測器，今晚改了四次。跟傍晚比，現在是「Loader 盤有盤」和「Loader 抽屜有盤」兩個感測器的接點對調、兩個抽屜感測器的輸入型態都改成 0；Empty 選擇區那個已改回原樣。已叮嚀全體以這版為準。另外**機台還停在第 227 包**，第 228 包推出已過 3 小時（第 229 包也推了，兩包都不改 HT9050 的行為）——已在交接檔請 EastSun 有空叫機台端整合；他正在調 IO 表，可能等調完才套。 |
++| **出的包（1009 22:1x）：第 230 包＝第 147 批** | GitLab `8edc9bdb`／GitHub `5d8e96ad`：St02 的 KYEC FTP「Upload to Server」按鈕照 913 接上（Steven 決定完全照 golden 同步）；HT9050 的 FTP 關著，行為不變。gate b147a：兩組態只有固定 4 支。第 148 批（TESNA 事件紀錄兩段）gate 中，第 149 批（閘門 C25 規則）排在後面。 |
+ | **要你決定的**（§0） | ✅ 你 10:1x 都回了：#148＝NB2 已完成（!306 收進第 110 批確認）、#149＝A（Ifor-GPT 專做執行期測試，IG-3／IG-4）、!310＝A（ES02 HTDESIGNER 0.235～0.257 收進第 110 批）＝RULINGS_20261008 第 2 條。**13:0x 新一題 #150**：GPIB 位址不一致要不要自動修正（Jerry 留給你；預設 A＝維持 golden、只留警告，可不回）。<br>**🆕 1009 11:4x 新一題 #151：HANA 機台按 START 時，要不要照 golden 先等 RMS 伺服器連線（最多 3 秒）？** 白話：golden 913（RogerYang 0916）裡，HANA 客戶開了 A77 的機台按 START 前，會先確認 RMS 伺服器連得上，連不上就擋下 START，連線最多等 3 秒。問題在移植樹的輪詢是單執行緒——這 3 秒裡整台機台的狀態更新會停住（例：網頁上的數字 3 秒不動）。你 0923 定過「會擋住輪詢的整合要先問」，所以問你。只有「HANA 客戶＋開 A77＋線上模式＋RMS 還沒連上」才會等，HT9050 永遠走不到。選項：**A＝照 golden 收**（建議：只在按 START 那一刻、最多 3 秒，機台本來就停著；St02 已經把等待裡的訊息迴圈換成只推 HANA 連線）；**B＝先不收**，等改成不擋輪詢的寫法（例：連線放到背景，START 時只看結果）。**沒回之前照 B**：H4 先不合，HANA 其他幾張（!372～!374）照常進第 138 批。<br>**🆕 1009 12:3x 新一題 #152：EastSun 派給你的「在沒有 AI 的電腦上實測安裝與更新」，實測要誰來做？** 白話：EastSun 希望客戶端或沒有 AI 的電腦也能只靠文件和腳本裝好、更新 HT9050 的軟體（機台 cpp 0349）。手冊和腳本筆電已派 Ifor01 寫（W-197）；寫好之後要有一個「人」在一台沒有 Claude 的電腦上照著做三個情境：①從零安裝並啟動；②從某一包更新到最新一包，中間至少遇到一個「機台和筆電都改過」的檔；③故意讓建置失敗，照手冊退回。模擬組態就可以，不用機台。選項：**A＝你自己做**（建議：EastSun 指名你，你也最清楚客戶端要什麼；大約半天到一天）；**B＝指定一位同事**照手冊做、不用 AI（例：Kevin 或 Jerry）；**C＝先不排**，手冊寫好放著。**沒回之前照 C**：手冊照寫，不排實測。實測的人不能是寫手冊的 Ifor01。<br>（1009 13:4x 補：**#151 也請 Steven 一題決定**（W-199）——你 13:3x 說 Steven 的回覆最高優先，Steven 回了就照他的，這題你就不用回。Steven 13:0x 對同一類的 KYEC 換配方同步等 7z 已經裁定「功能打開才等」照 913 同步，可以參考。）<br>（1009 15:1x 補 #152：**手冊和腳本已經好了**——Ifor01 的 MR !379 進 main `7db6b913`：`tools/laptop_ops/pkg_template/` 的 `NO_AI_INSTALL.md`／`NO_AI_UPDATE.md`／`NO_AI_TROUBLESHOOTING.md`＋五支 PowerShell 腳本＋啟動 .bat，每份手冊都附實測紀錄表。你決定誰做實測就可以開始；新腳本等實測過了才換進每一包。） |
+ 
+ 
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index b6667094..91d9d630 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -353,6 +353,7 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-07 | 設計外掛 tools 0170 | — | 設計外掛工作階段自己推（分支 a6cadd2，GitHub dc7975ff）：依序合併筆電包 162、163、167、168 的設計外掛（0.197.0 → 0.234.0），164～166、169～172 沒帶設計外掛；無衝突，機台自己的設計外掛功能都保留；測試修正：建置視窗進度條在矮視窗不再塌掉、面板繪製測試固定 Edge 視窗大小；run_all 3/3、vscode_it 161/161，已安裝 0.234.0；只動 tools/vscode-htdesigner | tools 0170 |
+ | 10-08 | 設計外掛 tools 0171 | — | 設計外掛工作階段自己推（commit b453060，GitHub f42c142b）：EastSun 1008 方案總管的 Debug／Release 按鈕按不了（0.234 在 ▶＝F5 時把它變灰）→ 裁決「連動F5 release 和debug」：按鈕恢復可按，resolveDebugConfiguration 依按鈕把 F5／▶ 的啟動目標換成 build_integ_dbg_x86 或 build_integ_ship_x86 那一組；「模擬」仍是灰的。run_all 3/3；vscode_it 沒跑成（VS Code 自己的更新程式 CodeSetup 從 10/07 18:34 起佔住執行個體鎖）。vsix 已安裝，版本號沒變，要重新載入視窗才生效；只動 tools/vscode-htdesigner | tools 0171 |
+ | 10-08 | 173～204 | 07dbeae3＋63b1aa25＋351291d5（GitLab 0258ba66…68fc0e65、39c6388c、e6c54331） | 本 commit（機台 C++＋web），EastSun「你確定有合完整?」→「快合」→「一直合下去 不要停拜託」（173～202 的 C++ 從 10-07 起都沒合，只有設計外掛跟上）。備份分支 backup/pre-pkg202-20261008（cpp、web）＋ D:\HT9045\_pkg_202\backup_machine_195843、D:\HT9045\_pkg_203\backup_machine_220733。202 疊三十包：直接換 108（換 105；tasks.json、acatchtray 留機台）、新檔 35、兩邊都改 22（合併 16、設計外掛／WORKLOG 照規定 6）、一樣 88；每個直接換的檔掃機台 AI 標記＋W906_ 識別字：WebBridgeServer（TOKEN-OFF／SOFTKEY panel.estop）改三方合併＋收筆電 pad.get／pad.close／observerSG 豁免、acatchtray 留機台（筆電版＝少 PROBECYL）、MotionView9050 換（機台＝基底）。衝突：cinitial／test_flow9050_tray／csystem 取機台（BOOTCLEAR、PROBECYL、pitch 同步在 MainProc）；test_scankey_golden、IoBtnPanelClick、tests/CMakeLists、WebBridgeTags（tester.name 依 Jerry 1008 裁決 A＝golden LoadTestModePicture）取筆電；wb_serve 第 239 行＝機台 IOWAIT＋筆電 g_ppCyc0 搬移。4 個新網頁檔改 CRLF。203：15 檔（直接換 9、新 4、合併 2，無衝突）；204：12 檔（直接換 9、新 1、合併 2，無衝突；SECS SV Auto1～6 料盤別名＋氣缸平均推拉時間、cSpeed）。合併後 test_scankey_golden 補回 PadInterface_St02.h include、[19]（筆電版軟體面板鍵 ST02-P2，機台保留自己的 SOFTKEY）在機台關掉。ctest Debug 426/441：15 個失敗都是第 381 列的已知清單（環境：dfm2rc×4 ctest 找不到 g++／rc.exe、E031、GearTeachSave、TeachCheckRangeReload；斷言筆電設定／repo 舊表：config_db、ini_helpers、config_loaders、MotorPoints／MachineMotors／MachineSuckers_HT9050；機台補丁：GA2_C1_cinitial、FShow_Audit）；204 之後相關 29 支全過。EastSun 未 commit 的 acatchtray／asendic_Loader／cinitial／PadInterface_St02（SafeLock）先拿開、合完三方套回，不進 commit。20:02 -j4 整包重編讓機台當機（Kernel-Power 41），留下 NUL 填滿的 .a／.obj／.d ⇒ clean 後 -j2 重編 | 本 commit |
++| 10-09 | 231 | b4e17848（GitLab b1bbe408） | 本 commit（定時檢查自動收）：St02 W-195 TESNA 事件紀錄兩段照 golden 913——T1（MR !399，Public/MyStringList.cpp:34／:58／:410-433）事件紀錄設成每月一檔（iO15_SaveFilePeriod=8）時另寫一份按天的 EventLogTxt_YYYYMMDD.csv 給 JAM 統計（Steven D7：每列只寫一次，913 開每日上傳時會寫兩次，V906 不會）；T2（MR !400，Steven D2＝A）cprod.cpp ProcessLastSetIni_EventLog 的事件紀錄存檔設定（檔名、週期、同資料夾、按批）照 913 :2416-2465 生效，wb_serve 建好事件紀錄物件後再套一次（LogObjects.cpp:117）。HT9050 用週期 6（按天）、沒有每日上傳、檔名不含機台 ID，套用後的檔名與分檔跟原本預設一樣，行為不變。8 檔：直接換 6（MyStringList.h／.cpp、cprod、LogObjects 等，掃過沒有機台標記會消失）、新測試 1、tests/CMakeLists 合併無衝突；設計外掛照規定留機台。Debug wb_serve 建好（release 沒編：wb_serve 21:50 起在跑），St02_W195Tesna、POOL2_CProd、St02_W195HanaTrayMap、START_SitesCensus 4 支過。備份分支 backup/pre-pkg231-20261009＋D:\HT9045\_pkg_231\backup_machine_225251 | 本 commit |
+ | 10-09 | 230 | 5d8e96ad（GitLab 8edc9bdb） | 本 commit＋web commit（定時檢查自動收，**還沒推**：跟 228／229 一起等 EastSun 決定 228 的掃描命中）：St02 W-202 (2) F2-3（MR !398，golden 913 KYECFTP/FTPClient.cpp:1128-1229，Steven W-203＝B 主迴圈同步、不設逾時）Lot Info FTP 的「Upload to Server」真的上傳（打包工作檔＋Offset、STOR 到 [FTP] FTP Upload Path）；AMD 拒絕、Sigurd 與 KYEC＋ATC 仍閘住；網頁按鈕打開。HT9050 Enable FTP=0，行為不變；建議找機會對 W36 測試伺服器實傳一次。12 檔：直接換 9（含 web/page/Data.FTPClient.html、ht9045_ftpclient.js，CRLF 照機台；掃過沒有機台標記會消失）、新 1、CMakeLists／tests/CMakeLists 合併無衝突。Debug wb_serve 建好（release 沒編：wb_serve 21:50 起在跑），FTPClient_Transfer、LI9_FtpClient、St02_W202FtpSeams、START_SitesCensus 4 支過。備份分支 backup/pre-pkg230-20261009＋D:\HT9045\_pkg_230\backup_machine_222254 | 本 commit |
+ | 10-09 | 229 | 5068e928（GitLab 40b3b2b4） | 本 commit（定時檢查自動收，**還沒推**：要跟 228 一起推，228 被 push_stage 密碼掃描擋在測試檔的 127.0.0.1 假 FTP 帳密，等 EastSun 決定）：①St02 W-205 L05（MR !396，golden 913 acarry.cpp:3458-3520）梭車移動逾時跳框前先寫一列事件紀錄（互鎖旗標、流程步、Y1／Z1／Z2 命令／編碼器），框文字照 913；②L03（MR !397，golden 913 mykitsuck／uhome）ASM 加熱盤借格寫回與 HOME 中斷借格的釋放；③HANA H4（MR !376，Steven 1009 選 A）A77 開的 HANA 機台 START 前確認 RMS 連線（最多 3 秒）。HT9050 行為不變（L05／L03 不在 HT9050 路徑、H4 只有 HANA）。16 檔：直接換 9（acarry、mykitsuck、WebStart、HanaRms 等，掃過沒有機台標記會消失）、新 4、合併 3 無衝突（CMakeLists、tests/CMakeLists、uhome.cpp）。Debug wb_serve 建好（release 沒編：wb_serve 21:41 起在跑），St02_W205CItems／AsmBorrow、C10_HanaRms、HanaART、START_SitesCensus、Flow9050_Tray 共 6 支過。備份分支 backup/pre-pkg229-20261009＋D:\HT9045\_pkg_229\backup_machine_215305 | 本 commit |
+ | 10-09 | 228 | e3e54dae（GitLab af18d6ab） | 本 commit（定時檢查自動收）：①Ifor01 W-190 (2)（MR !391，golden 913 uTemp_Set.cpp:6119-6277）SaveRemoteTempOffset 換成 913 版，只有測試機送遠端溫度補償命令時才走；②W-190 (3)（MR !392，golden 913 bthermo.cpp:428-457）常溫模式下 VTEST 客戶也套溫度補償，其他客戶不變；③St02 W-202 (2) KYEC FTP 上傳前先打包 OS 測試機工作檔＋測試接縫（MR !393／!394），上傳按鈕還沒接、HT9050 FTP 關著；④機台 web 0142 IOFIT（機台已有，SAME）。HT9050 行為不變。13 檔：直接換 6（bthermo、uTemp_Set、FTPClient_Transfer 等，掃過沒有機台標記會消失）、新 5、CMakeLists／tests/CMakeLists 合併無衝突。Debug wb_serve 建好（release 沒編：wb_serve 17:07 起在跑），W190_NnRemoteOffset／AmbientOffset／HeaterIns、St02_W202FtpSeams、FTPClient_Transfer、START_SitesCensus 共 6 支全過。備份分支 backup/pre-pkg228-20261009＋D:\HT9045\_pkg_228\backup_machine_185249 | 本 commit |
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index be36dc67..c779c07d 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -9701,3 +9701,19 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+ endif()
+ add_test(NAME St02_W205AsmBorrow COMMAND test_st02_w205_asm "${CMAKE_SOURCE_DIR}")   # argv[1]: reads mykitsuck.cpp / uhome.cpp (read only)
+ set_tests_properties(St02_W205AsmBorrow PROPERTIES TIMEOUT 120)
++# --- AI(W906-W195) 20261009 (St02-E) -- W-195 (3) TESNA T1 (golden 913 RogerYang 20260707): TMyStringList bDupYMDFile + the by-day
++#   duplicate of a "Per month" event log (Public/MyStringList.*), with Steven's D7 (RULINGS_20261009 #11: no second write when the
++#   duplicate is the main file).  Objects built on a %TEMP% scratch path; argv[1] = the tree root, read only (source pins).
++add_executable(test_st02_w195_tesna test_st02_w195_tesna.cpp)
++target_include_directories(test_st02_w195_tesna PRIVATE ${CMAKE_SOURCE_DIR})
++target_link_libraries(test_st02_w195_tesna PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_st02_w195_tesna PRIVATE ws2_32)
++endif()
++if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
++    set_source_files_properties(test_st02_w195_tesna.cpp PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
++endif()
++add_test(NAME St02_W195Tesna COMMAND test_st02_w195_tesna "${CMAKE_SOURCE_DIR}")   # argv[1]: reads Public/MyStringList.cpp (read only)
++set_tests_properties(St02_W195Tesna PROPERTIES TIMEOUT 120)
+diff --git a/tests/test_pool2_cprod.cpp b/tests/test_pool2_cprod.cpp
+index 83baaf3f..a8a01584 100644
+--- a/tests/test_pool2_cprod.cpp
++++ b/tests/test_pool2_cprod.cpp
+@@ -5,11 +5,11 @@
+ //  6 個卡住的東西已經有了、照 golden 原行改開（`#if 1 // was: #if 0 -- opened AI(W906-POOL2) 20261008 (Ifor01): GA1-B2 reason expired`）：
+ //    VTEST jam-rate 檔名（fMesSystem，golden :1182）、Murata 2DID 三欄（golden :2321）、
+ //    coLevelMode 決定 RMS 路徑（golden :3263）、HSys.MyGem->UpdateDataPath ×3（golden :2165／:2364／:3001）；
+-//  11 個保持關著：FileInfo ×2（程式庫分割，已另用 hook 接）、fSpeed->ReadFile（本體有了，但 cprod.cpp 在 ht9045_globals，呼叫它會把
++//  11 個保持關著（1009 起 10 個，slEventLog 由 W-195 TESNA T2 打開，AI(W906-W195) 20261009 (St02-E) TESNA T2）：FileInfo ×2（程式庫分割，已另用 hook 接）、fSpeed->ReadFile（本體有了，但 cprod.cpp 在 ht9045_globals，呼叫它會把
+ //  cSpeed.obj 連同 FileRW/Ld_UldDelayTime.cpp 拉進每支連 Prod 的 exe——試開時 279 支測試連結失敗）、FormHS（全域是 SCK_ART 測試替身）、ASECL 頁籤（缺 grpManualSet2D／
+-//  grp2DLotInfo）、slEventLog（W-150 LOG-SPLIT 進行中）、ShowFunctions、GetColorSensor、pnlUnitSpeedDisplay（缺）、
++//  grp2DLotInfo）、slEventLog（1009 已開：W-195 TESNA T2）、ShowFunctions、GetColorSensor、pnlUnitSpeedDisplay（缺）、
+ //  HanaART SetHandlerWaitingData（未翻子系統的空樁）、fTemp_Set rgIndexHeatMode（vclcompat::TRadioGroup 沒有 Controls[]）。
+-//    [1] 讀原始碼（argv[1] = 移植樹根目錄）：6 個開閘註記各剛好一個、下一行是 golden 那一行；11 個關的仍是 `#if 0 // TODO(GA1-B2)`
++//    [1] 讀原始碼（argv[1] = 移植樹根目錄）：6 個開閘註記各剛好一個、下一行是 golden 那一行；10 個關的仍是（1009 TESNA T2 起） `#if 0 // TODO(GA1-B2)`
+ //  只讀原始碼，不連專案程式庫。反向驗證見 MR 說明：任一個改回 `#if 0` ⇒ [1] 紅。
+ // =============================================================================
+ #include <cstdio>
+@@ -58,7 +58,7 @@ static const char* const kKept[]={            // the blocker named on the gate l
+     "blocked by FileInfo@ProductionInfo/FileInfo.h+.cpp (golden class,",
+     "blocked by FormHS@HS_Function.h",
+     "blocked by TfLotInfo@forms/fLotInfo.h missing members tsASECLEventLog/",
+-    "blocked by TMyStringList@cmydef.h:15",
++    // "blocked by TMyStringList@cmydef.h:15" -- opened by W-195③ TESNA T2
+     "blocked by TfMain@forms/fMain.h missing member ShowFunctions",
+     "blocked by TfTrayForm@forms/fTrayForm.h missing method GetColorSensor",
+     "blocked by TfMain@forms/fMain.h missing member pnlUnitSpeedDisplay",
+@@ -72,7 +72,7 @@ int main(int argc, char** argv)
+     const std::string root=argc>1 ? argv[1] : "..";
+     const std::vector<std::string> L=Lines(root+"/cprod.cpp");
+     CHECK(L.size()>3000, "[1] cprod.cpp read (argv[1] = the port root)");
+-    std::printf("-- [1] source: 6 gates open as golden, 11 kept --\n");
++    std::printf("-- [1] source: 6 gates open as golden, 10 kept --\n");   // AI(W906-W195) 20261009 (St02-E) TESNA T2: 11 -> 10
+     int opened=0;
+     for(const Opened& o : kOpened)
+     {
+@@ -108,8 +108,8 @@ int main(int argc, char** argv)
+     for(const std::string& l : L)
+         if(Starts(l, "#if 0 // TODO(GA1-B2): ")) ga1++;
+     char m[120];
+-    std::snprintf(m, sizeof(m), "[1] 11 GA1-B2 gates still `#if 0` (found %d)", ga1);
+-    CHECK(ga1==11, m);
++    std::snprintf(m, sizeof(m), "[1] 10 GA1-B2 gates still `#if 0` (found %d)", ga1);   // AI(W906-W195) 20261009 (St02-E) TESNA T2: 11 -> 10
++    CHECK(ga1==10, m);   // AI(W906-W195) 20261009 (St02-E) TESNA T2: slEventLog's gate lifted (cprod.cpp:2524)
+     std::printf("test_pool2_cprod: %d passed, %d failed\n", g_pass, g_fail);
+     return g_fail==0 ? 0 : 1;
+ }
+diff --git a/tests/test_st02_w195_tesna.cpp b/tests/test_st02_w195_tesna.cpp
+new file mode 100644
+index 00000000..424a61ac
+--- /dev/null
++++ b/tests/test_st02_w195_tesna.cpp
+@@ -0,0 +1,293 @@
++// ===========================================================================
++//  tests/test_st02_w195_tesna.cpp -- W-195 (3) TESNA, golden 913 (RogerYang 20260707, the "Per month" event log).
++//  AI(W906-W195) 20261009 (St02-E).  T1: TMyStringList::bDupYMDFile + the by-day duplicate write (Public/MyStringList.h:265 /
++//  .cpp:270 / :295 / :654 + W906_SaveDupYMDFile at its end = golden 913 MyStringList.h:76, .cpp:34 / :58 / :409-432).
++//
++//  The objects are built with a %TEMP% scratch path, so nothing goes near D:\HT9045_Log; the test stops before any call when the
++//  scratch path is a machine path (D:\HT9045... or D:\rms, unless it is ctest's machine_log_scratch -- the c59acf66 rule).
++//    [1] TByMonth + bDupYMDFile: main <root>\YYYY\EventLogTxt_YYYYMM.csv and duplicate <root>\YYYY\MM\EventLogTxt_YYYYMMDD.csv
++//        both "HDR\r\nROW1\r\n" (golden :410-430; the duplicate keeps CRLF).
++//    [2] a second flush appends to both, the header written once.
++//    [3] both constructors leave bDupYMDFile false; a default TByMonth object writes no YYYY\MM duplicate.
++//    [4] FixedFile with the flag set: no duplicate (golden :410 HTSaveFixedFile==false).
++//    [5] [W906] D7 (Steven 20261009, RULINGS_20261009 #11): TByDay + bDupYMDFile (the N10 + period 8 case) -- the duplicate IS the
++//        main file; each row is in it once (golden 913 writes it twice).
++//    [6] source pins (argv[1] = the tree root, read only): the guard on :654 before MyList->Clear(), the EOF body's golden formats.
++//  T2 (same file): ProcessLastSetIni_EventLog with the GA1-B2 slEventLog gate lifted (golden 913 cprod.cpp:2416-2465 + :2464).
++//    [7] slEventLog NULL -> no crash ([W906] guard).  [8] period 8 / 6 / 7, N10, O15-2 -> SaveType / bDupYMDFile / ByLot / FileName.
++//    [9] period 8: SummarizeJAMreportbymonth under the log root (seam).  [10] source pins (cprod.cpp gate / guard / setter;
++//        LogObjects.cpp re-apply after slEventLog is made).  T2 runs only under ctest's machine_log_scratch log root.
++// ===========================================================================
++#include "MachineDefine.h"
++#include "Public/MyStringList.h"
++#include "forms/fTemp_Set.h"        // the W-195 rule: create fTemp_Set first (see main)
++#include "cmydef.h"                 // T2: slEventLog
++#include "cprod.h"                  // T2: bWriteFile
++#include "Config.h"                 // T2: IniConfig
++#include "CosFunction.h"            // T2: CosFunction
++#include "common.h"                 // T2: as9045LogPath
++
++#include <windows.h>
++#include <cstdio>
++#include <cstring>
++#include <fstream>
++#include <sstream>
++#include <string>
++
++void ProcessLastSetIni_EventLog(bool bRead);   // cprod.cpp:2501 (no header declares it)
++
++static int g_fail = 0, g_total = 0;
++static void check(bool ok, const char* what)
++{
++    ++g_total;
++    std::printf("%s %s\n", ok ? "PASS" : "FAIL", what);
++    if (!ok) ++g_fail;
++}
++static std::string Read(const std::string& p)
++{
++    std::ifstream f(p.c_str(), std::ios::binary);
++    std::stringstream ss;
++    ss << f.rdbuf();
++    return ss.str();
++}
++static bool Exists(const std::string& p) { return ::GetFileAttributesA(p.c_str()) != INVALID_FILE_ATTRIBUTES; }
++static std::string Lower(std::string s)
++{
++    for (size_t i = 0; i < s.size(); ++i) { if (s[i] >= 'A' && s[i] <= 'Z') s[i] = (char)(s[i] - 'A' + 'a'); if (s[i] == '/') s[i] = '\\'; }
++    return s;
++}
++static bool Forbidden(const std::string& p)                  // machine paths, except ctest's redirect scratch (the c59acf66 rule)
++{
++    const std::string s = Lower(p);
++    if (s.find("\\machine_log_scratch") != std::string::npos) return false;
++    return s.compare(0, 9, "d:\\ht9045") == 0 || s.compare(0, 6, "d:\\rms") == 0;
++}
++static void RemoveTree(const std::string& dir)
++{
++    WIN32_FIND_DATAA fd;
++    HANDLE h = ::FindFirstFileA((dir + "\\*").c_str(), &fd);
++    if (h != INVALID_HANDLE_VALUE) {
++        do {
++            if (std::strcmp(fd.cFileName, ".") == 0 || std::strcmp(fd.cFileName, "..") == 0) continue;
++            const std::string p = dir + "\\" + fd.cFileName;
++            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) RemoveTree(p); else ::DeleteFileA(p.c_str());
++        } while (::FindNextFileA(h, &fd));
++        ::FindClose(h);
++    }
++    ::RemoveDirectoryA(dir.c_str());
++}
++
++struct Names { std::string month, day, dayDir; };
++static Names NamesFor(const std::string& base, const SYSTEMTIME& t)
++{
++    char m[512], d[512], dd[512];
++    std::snprintf(m, sizeof(m), "%s\\%04d\\EventLogTxt_%04d%02d.csv", base.c_str(), t.wYear, t.wYear, t.wMonth);
++    std::snprintf(dd, sizeof(dd), "%s\\%04d\\%02d", base.c_str(), t.wYear, t.wMonth);
++    std::snprintf(d, sizeof(d), "%s\\EventLogTxt_%04d%02d%02d.csv", dd, t.wYear, t.wMonth, t.wDay);
++    Names n; n.month = m; n.day = d; n.dayDir = dd;
++    return n;
++}
++// one flush of `rows`; returns false if the date changed while it ran (the object uses its own SystemYear/Month/Date)
++static bool Flush(TMyStringList* sl, const char* row, Names& n, const std::string& base)
++{
++    SYSTEMTIME a, b;
++    ::GetLocalTime(&a);
++    sl->AddText(row);
++    sl->MySaveToFile();
++    ::GetLocalTime(&b);
++    n = NamesFor(base, b);
++    return a.wYear == b.wYear && a.wMonth == b.wMonth && a.wDay == b.wDay;
++}
++
++int main(int argc, char** argv)
++{
++    char tmp[MAX_PATH];
++    ::GetTempPathA(sizeof(tmp), tmp);
++    char tick[32];
++    std::snprintf(tick, sizeof(tick), "%lu", (unsigned long)::GetTickCount());
++    const std::string root = std::string(tmp) + "ht9045_w195t_" + tick;
++    if (Forbidden(root)) { std::printf("STOP: scratch %s is a machine path -- nothing called\n", root.c_str()); return 1; }
++    ::CreateDirectoryA(root.c_str(), 0);
++    if (fTemp_Set == 0) fTemp_Set = new TfTemp_Set();   // W-195 rule (laptop batch 136)
++
++    std::printf("-- [1]/[2] TByMonth + bDupYMDFile --\n");
++    {
++        const std::string base = root + "\\M1\\EventLogTxt";
++        Names n;
++        bool sameDay = false;
++        for (int tries = 0; tries < 3 && !sameDay; ++tries) {
++            RemoveTree(root + "\\M1");
++            TMyStringList* sl = new TMyStringList(AnsiString(base.c_str()), "EventLogTxt", "HDR");
++            sl->SaveType = TByMonth;
++            sl->bDupYMDFile = true;
++            sameDay = Flush(sl, "ROW1", n, base);
++            if (sameDay) {
++                const std::string m = Read(n.month), d = Read(n.day);
++                std::printf("     month %s = [%s]\n     day   %s = [%s]\n", n.month.c_str(), m.c_str(), n.day.c_str(), d.c_str());
++                check(m == "HDR\r\nROW1\r\n" && d == "HDR\r\nROW1\r\n",
++                      "[1] the month file and its by-day duplicate both hold the header + ROW1 (golden 913 MyStringList.cpp:410-430, CRLF kept)");
++                Names n2;
++                sameDay = Flush(sl, "ROW2", n2, base);
++                if (sameDay)
++                    check(Read(n.month) == "HDR\r\nROW1\r\nROW2\r\n" && Read(n.day) == "HDR\r\nROW1\r\nROW2\r\n",
++                          "[2] a second flush appends to both, the header once (golden :418-421)");
++            }
++            delete sl;
++        }
++        if (!sameDay) check(false, "[1]/[2] the date kept changing during the flush (3 tries)");
++    }
++
++    std::printf("-- [3] defaults --\n");
++    {
++        TMyStringList* a = new TMyStringList();
++        const std::string base = root + "\\M3\\EventLogTxt";
++        TMyStringList* b = new TMyStringList(AnsiString(base.c_str()), "EventLogTxt", "HDR");
++        check(a->bDupYMDFile == false && b->bDupYMDFile == false, "[3] both constructors: bDupYMDFile false (golden 913 :34 / :58)");
++        b->SaveType = TByMonth;
++        Names n;
++        const bool sameDay = Flush(b, "ROW1", n, base);
++        check(!sameDay || (Exists(n.month) && !Exists(n.dayDir)), "[3] TByMonth without the flag: the month file only, no YYYY\\MM duplicate");
++        delete a;
++        delete b;
++    }
++
++    std::printf("-- [4] FixedFile --\n");
++    {
++        const std::string base = root + "\\M4\\EventLogTxt";
++        TMyStringList* sl = new TMyStringList(AnsiString(base.c_str()), "EventLogTxt", "HDR");
++        sl->SaveType = TByMonth;
++        sl->FixedFile = true;
++        sl->bDupYMDFile = true;
++        Names n;
++        const bool sameDay = Flush(sl, "ROW1", n, base);
++        check(!sameDay || (Exists(base + "\\EventLogTxt.csv") && !Exists(n.dayDir)),
++              "[4] FixedFile + flag: the fixed file only, no duplicate (golden :410 HTSaveFixedFile==false)");
++        delete sl;
++    }
++
++    std::printf("-- [5] [W906] D7: the duplicate is the main file (N10 + period 8) --\n");
++    {
++        const std::string base = root + "\\M5\\EventLogTxt";
++        Names n;
++        bool sameDay = false;
++        for (int tries = 0; tries < 3 && !sameDay; ++tries) {
++            RemoveTree(root + "\\M5");
++            TMyStringList* sl = new TMyStringList(AnsiString(base.c_str()), "EventLogTxt", "HDR");
++            sl->SaveType = TByDay;
++            sl->bDupYMDFile = true;
++            sameDay = Flush(sl, "ROW1", n, base);
++            if (sameDay) {
++                const std::string d = Read(n.day);
++                std::printf("     day %s = [%s]\n", n.day.c_str(), d.c_str());
++                check(d == "HDR\r\nROW1\r\n", "[5] TByDay + flag: the day file (= the duplicate path) holds ROW1 once (Steven D7; golden 913 writes it twice)");
++            }
++            delete sl;
++        }
++        if (!sameDay) check(false, "[5] the date kept changing during the flush (3 tries)");
++    }
++
++    std::printf("-- [6] source pins --\n");
++    if (argc > 1) {
++        const std::string c = Read(std::string(argv[1]) + "/Public/MyStringList.cpp");
++        const size_t fn = c.find("\nvoid TMyStringList::MySaveToFileShareMode()");
++        const size_t end = fn == std::string::npos ? std::string::npos : c.find("\n}", fn);
++        const std::string body = (fn == std::string::npos || end == std::string::npos) ? "" : c.substr(fn, end - fn);
++        const size_t guard = body.find("if(bDupYMDFile==true && HTSaveFixedFile==false) { W906_SaveDupYMDFile(); }   MyList->Clear();");
++        check(guard != std::string::npos && body.find("MyList->Clear();", guard + 80) == std::string::npos,
++              "[6] MySaveToFileShareMode: the duplicate call right before its final MyList->Clear() (golden 913 :410 / :433)");
++        const size_t b0 = c.find("\nvoid TMyStringList::W906_SaveDupYMDFile()");
++        check(b0 != std::string::npos && c.find("sDupPath.sprintf(\"%s\\\\%04d\\\\%02d\", HTPath, SystemYear, SystemMonth);", b0) != std::string::npos &&
++              c.find("sDupFile.sprintf(\"%s\\\\%s_%04d%02d%02d.csv\", sDupPath, HTFileName, SystemYear, SystemMonth, SystemDate);", b0) != std::string::npos,
++              "[6] W906_SaveDupYMDFile carries golden 913 :413 / :416's formats");
++    } else
++        check(false, "argv[1] = the tree root");
++
++    // ---- T2 (AI(W906-W195) 20261009 (St02-E) TESNA T2): the lifted GA1-B2 slEventLog block of ProcessLastSetIni_EventLog
++    //   (golden 913 cprod.cpp:2416-2465 + the :2464 setter), its [W906] null guard, the SummarizeJAMreportbymonth log-root seam
++    //   (golden 913 :4002 / :4029) and LogObjects.cpp's boot re-apply.  [Event Log] ini I/O off (bEventLogAutoSaveFunction false);
++    //   the JAM summary writes under as9045LogPath, which must be ctest's machine_log_scratch.
++    std::printf("-- [7]-[10] T2: ProcessLastSetIni_EventLog --\n");
++    if (Lower(as9045LogPath.c_str()).find("machine_log_scratch") == std::string::npos) {
++        check(false, "[7] as9045LogPath is not ctest's machine_log_scratch -- T2 parts not run");
++    } else {
++        TMyStringList* const savSl = slEventLog;
++        const bool savAuto = IniConfig.bEventLogAutoSaveFunction, savN10 = IniConfig.bN10_DailyUploadProdData;
++        const bool savMid = IniConfig.bO15_EventLogFileNameWithMachineID, savSame = IniConfig.bO15_EventLogSaveSameFolder;
++        const bool savHi = CosFunction.bHiSiliconFunction, savByLot = CosFunction.bSaveEventLogByLotID;
++        const int savP = IniConfig.iO15_SaveFilePeriod, savMeth = IniConfig.iN10UploadProductMethod;
++        const AnsiString savMT = IniConfig.sMachineType, savID = IniConfig.SocketHandlerID;
++        IniConfig.bEventLogAutoSaveFunction = false; IniConfig.bN10_DailyUploadProdData = false; IniConfig.bO15_EventLogFileNameWithMachineID = false;
++        IniConfig.bO15_EventLogSaveSameFolder = false; CosFunction.bHiSiliconFunction = false; CosFunction.bSaveEventLogByLotID = false;
++        IniConfig.sMachineType = "HT9045"; IniConfig.SocketHandlerID = "H07";
++
++        slEventLog = NULL;
++        IniConfig.iO15_SaveFilePeriod = 6;
++        ProcessLastSetIni_EventLog(bWriteFile);
++        check(true, "[7] slEventLog NULL (wb_serve reads config before W906_CreateLogObjects): no crash ([W906] guard on golden 913 :2416)");
++
++        slEventLog = new TMyStringList(AnsiString((root + "\\T2\\EventLogTxt").c_str()), "EventLogTxt", "HDR");
++        IniConfig.iO15_SaveFilePeriod = 8;
++        ProcessLastSetIni_EventLog(bWriteFile);
++        const bool p8 = slEventLog->SaveType == TByMonth && slEventLog->bDupYMDFile && slEventLog->FileName == "EventLogTxt";
++        IniConfig.iO15_SaveFilePeriod = 6;
++        ProcessLastSetIni_EventLog(bWriteFile);
++        const bool p6 = slEventLog->SaveType == TByDay && !slEventLog->bDupYMDFile && !slEventLog->SaveByLotID;
++        IniConfig.iO15_SaveFilePeriod = 7;
++        ProcessLastSetIni_EventLog(bWriteFile);
++        const bool p7 = slEventLog->SaveType == TByDay && slEventLog->SaveByLotID && !slEventLog->bDupYMDFile;
++        check(p8 && p6 && p7, "[8] period 8 -> TByMonth + bDupYMDFile (golden 913 :2451-2452 / :2464); 6 -> TByDay, no duplicate; 7 -> ByLot (:2460-2462)");
++        IniConfig.iO15_SaveFilePeriod = 8; IniConfig.bN10_DailyUploadProdData = true; IniConfig.iN10UploadProductMethod = 0;
++        ProcessLastSetIni_EventLog(bWriteFile);
++        const bool n10 = slEventLog->FileName == "HT9045_H07_EventLogTxt" && slEventLog->SaveType == TByDay && slEventLog->bDupYMDFile;
++        IniConfig.bN10_DailyUploadProdData = false; IniConfig.bO15_EventLogFileNameWithMachineID = true; IniConfig.iO15_SaveFilePeriod = 6;
++        ProcessLastSetIni_EventLog(bWriteFile);
++        const bool mid = slEventLog->FileName == "EventLogTxt_H07";
++        check(n10 && mid, "[8] N10 -> <MT>_<ID>_EventLogTxt + TByDay (with period 8 still flagged: the D7 case, [5]); O15-2 -> EventLogTxt_<ID> (golden :2418-2424)");
++
++        // [9] the JAM month summary under the log root (seam)
++        SYSTEMTIME t;
++        ::GetLocalTime(&t);
++        char yd[32], mf[64], jd[64];
++        std::snprintf(yd, sizeof(yd), "%04d", t.wYear);
++        std::snprintf(mf, sizeof(mf), "EventLogTxt_%04d%02d.csv", t.wYear, t.wMonth);
++        std::snprintf(jd, sizeof(jd), "%4d\\JAM_Log\\%02d", t.wYear, t.wMonth);
++        const std::string elRoot = std::string(as9045LogPath.c_str()) + "\\EventLogTxt";
++        ::CreateDirectoryA(elRoot.c_str(), 0);
++        ::CreateDirectoryA((elRoot + "\\" + yd).c_str(), 0);
++        {
++            std::ofstream f((elRoot + "\\" + yd + "\\" + mf).c_str(), std::ios::binary);
++            f << "Date,Time,UnitName,AlarmCode\r\n2026/10/09,20:00:00,Index,JAM001\r\n2026/10/09,20:01:00,Index,WAR002\r\n";
++        }
++        IniConfig.bO15_EventLogFileNameWithMachineID = false; IniConfig.iO15_SaveFilePeriod = 8;
++        ProcessLastSetIni_EventLog(bWriteFile);
++        const std::string jam = Read(elRoot + "\\" + jd + "\\Processed_JAM.csv");
++        std::printf("     Processed_JAM.csv = [%s]\n", jam.c_str());
++        check(jam.find("Date,Time,UnitName,AlarmCode") == 0 && jam.find("JAM001") != std::string::npos && jam.find("WAR002") == std::string::npos,
++              "[9] period 8: SummarizeJAMreportbymonth writes header + JAM rows under the log root ([W906] seam on golden 913 :4002 / :4029)");
++
++        delete slEventLog;
++        slEventLog = savSl;
++        IniConfig.bEventLogAutoSaveFunction = savAuto; IniConfig.bN10_DailyUploadProdData = savN10; IniConfig.bO15_EventLogFileNameWithMachineID = savMid;
++        IniConfig.bO15_EventLogSaveSameFolder = savSame; CosFunction.bHiSiliconFunction = savHi; CosFunction.bSaveEventLogByLotID = savByLot;
++        IniConfig.iO15_SaveFilePeriod = savP; IniConfig.iN10UploadProductMethod = savMeth;
++        IniConfig.sMachineType = savMT; IniConfig.SocketHandlerID = savID;
++    }
++    if (argc > 1) {
++        const std::string c = Read(std::string(argv[1]) + "/cprod.cpp");
++        const std::string lo = Read(std::string(argv[1]) + "/LogObjects.cpp");
++        const size_t mk = lo.find("\nvoid W906_CreateLogObjects()");
++        const size_t el = lo.find("slEventLog=new TMyStringList(", mk == std::string::npos ? 0 : mk);
++        const size_t re = lo.find("ProcessLastSetIni_EventLog(bReadFile); }", mk == std::string::npos ? 0 : mk);
++        const size_t en = mk == std::string::npos ? std::string::npos : lo.find("\n}", mk);
++        check(c.find("\n#if 0 // TODO(GA1-B2): blocked by TMyStringList") == std::string::npos &&   // at a line start (:2524's comment quotes it)
++              c.find("    if(fMain!=NULL && slEventLog!=NULL)") != std::string::npos &&
++              c.find("        slEventLog->bDupYMDFile = (IniConfig.iO15_SaveFilePeriod==8);") != std::string::npos,
++              "[10] cprod.cpp: the GA1-B2 slEventLog gate lifted, the null guard, the golden 913 :2464 setter");
++        check(mk != std::string::npos && el != std::string::npos && re != std::string::npos && el < re && re < en,
++              "[10] LogObjects.cpp W906_CreateLogObjects: [Event Log] re-applied after slEventLog is made (golden: ctor, then FormShow's ReadLastSetIni)");
++    }
++
++    RemoveTree(root);
++    std::printf("test_st02_w195_tesna: %d/%d passed\n", g_total - g_fail, g_total);
++    return g_fail == 0 ? 0 : 1;
++}
+-- 
+2.55.0.windows.5
+
