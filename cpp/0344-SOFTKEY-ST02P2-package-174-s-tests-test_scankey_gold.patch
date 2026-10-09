@@ -1,0 +1,415 @@
+From 40219f6a92e73fd38fbe2df1ea5ee2bd17edd5de Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 9 Oct 2026 08:50:13 +0800
+Subject: [PATCH] =?UTF-8?q?SOFTKEY-ST02P2:=20package=20174's=20tests/test?=
+ =?UTF-8?q?=5Fscankey=5Fgolden.cpp=20runs=20as=20shipped=20--=20the=20mach?=
+ =?UTF-8?q?ine=20takes=20the=20ST02-P2=20soft=20panel=20keys=20(golden=20b?=
+ =?UTF-8?q?Ase*=20flags),=20keeping=20its=20screen=20EMERGENCY=20STOP=20--?=
+ =?UTF-8?q?=20EastSun=201009=20'174=E6=89=80=E4=BB=A5=E4=BD=A0=E8=83=BD?=
+ =?UTF-8?q?=E4=BF=AE=E6=AD=A3=E5=97=8E=EF=BC=9F'.?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Package 174's README: "套包時那支測試以包裡的為準". Its [19] was off here since the 10-08 merge because it tests the laptop's ST02-P2
+(package 155 WebMainScanKey.cpp: a soft key sets golden's own bAse* flag, so ScanPannelKey treats it as a physical press -- a soft ALARM
+RESET also silences the music / N07 buzzer as golden, a soft RESET honours bDisibleResetButton), while the machine still ran cpp 0153's
+key-id hook (returned before the key blocks, skipping those side effects). Now: WebMainScanKey.cpp = package 155's ST02-P2 version +
+the machine-local W906_SoftEmergencyStop at the end (RULINGS_20261005 #17; unread soft keys are dropped by clearing the bAse* flags,
+fHome read through W906_FormShowing); tests/test_scankey_golden.cpp = the package's file ([19] on); tests/test_main_scankey.cpp [13]
+checks the bAse* flags. ckernel.cpp's W906_VirtualPanelKeyHook is no longer set (stays null). WORKLOG row 214.
+Debug wb_serve + ScanKeyGolden / MainScanKey / FShow_Audit (on the known-failure list until now) + 3 more pass; release wb_serve built.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ WebMainScanKey.cpp            | 253 +++++++++++++++++++---------------
+ docs/WORKLOG_MACHINE.md       |   1 +
+ tests/test_main_scankey.cpp   |   8 +-
+ tests/test_scankey_golden.cpp |   8 +-
+ 4 files changed, 151 insertions(+), 119 deletions(-)
+
+diff --git a/WebMainScanKey.cpp b/WebMainScanKey.cpp
+index 72a6a01e..4efa40a8 100644
+--- a/WebMainScanKey.cpp
++++ b/WebMainScanKey.cpp
+@@ -44,7 +44,6 @@
+ #include "W906FormShowing.h"        // W906_FormShowing
+ #include "JsonBridge/FormJson.h"    // ht9045::formjson::FormLock / FormUnlock
+ #include <cstdio>
+-#include <string>
+ 
+ void NewRecordProcess(AnsiString AlarmCode, AnsiString S, AnsiString Debug);   // cMyDB.h:129 (not included: its defaults clash with canary_support.h's RecordProcess / MyDBIProcessNew)
+ int  ScanPannelKey();                                    // ckernel.h (local declaration, same convention as tools/wb_serve.cpp)
+@@ -419,56 +418,108 @@ void W906_MainScanKeyWith(int (*scan)(), bool noticeUp)
+     }
+ }
+ 
+-// AI(W906-SOFTKEY) 20261003: EastSun 「你可以幫我圖片上 紅框內做出按鈕嗎 因為我現在實體按鈕沒辦法通訊 需要在軟體上 按按鈕做動」.
+-// Screen panel keys: WS panel.key (tools/wb_serve.cpp) pushes one key id here; ScanPannelKey (ckernel.cpp, the W906_VirtualPanelKeyHook
+-// line after golden's SystemInitialOK / SafeLock / employee-ID refusals) hands it to whichever key reader asks first -- TfMain::ScanKey
+-// above, the Home hook (PAUSE aborts a home), the alarm / message waits (RETRY / SKIP / PAUSE / ALARM RESET) -- exactly like one
+-// physical press.  [W906] A key nobody reads within kSoftKeyLifeMs is dropped (a guard such as an open dialog kept every reader from
+-// scanning), so a press can never fire long after the operator made it; at most kSoftKeyMax are queued.  Front-pad ids (SnFK*).
+-#include <deque>
+-#include <windows.h>
+-extern int (*W906_VirtualPanelKeyHook)();                // ckernel.cpp EOF
++// golden TfHome::Timer1Timer uhome.cpp:4885-4889 -> TfHome::ScanKey :4874-4883 (Timer1 Enabled = W906_HomeTimer1Enabled, uhome.cpp)
++void W906_HomeScanKeyWith(int (*scan)())
++{
++    if(W906_HomeTimer1Enabled==false || fHome==0) return;                                  // TTimer Enabled (golden FormClose :4871)
++    if(fHome->fShow==false) return;                                                         // :4887   AI(W906-ST02-SKC) 20261004 (St02-E, FShow_Audit b59a): the member on purpose, as :289 (R142=A, NB2 R188 M1) -- TfHome::ScanKey and TfMain::ScanKey must read the same flag, or the page table's "any browser has Home Monitor open" would let both answer one key; baseline raised for these two reads
++    int Key;                                                                                // :4876
++    Key=scan();                                                                             // :4877
++    if(Key==SnFKPause)                                                                      // :4878
++    {
++        fHome->sbAbortHomeClick(fHome);                                                     // :4880
++        fHome->Close();                                                                     // :4881
++    }
++}
++
++// golden TfMain::TimerScanKeyTimer main.cpp:31994-32025 (Steven 20151022)
++void W906_MainScanKeyTickWith(int (*scan)(), bool noticeUp)
++{
++    MskContactFormShowEdge();  { void W906_SoftPanelKeyTickSt02(bool); W906_SoftPanelKeyTickSt02(noticeUp); }   // AI(W906-SOFTKEY) ST02-P2 20261006 (St02-E): soft panel keys -- read / expired bookkeeping + the DIAG noticeUp (EOF)
++    W906_HomeScanKeyWith(scan);                                                             // the 10 ms timer: first, as it usually wins in golden
++    static bool bRunTimer1=false;                                                           // :31996
++    if(InitialOK==false) { bRunTimer1=false; return; }                                      // :31997-32001
++    if(bEnableEmployeeIDCheck==true) return;                                                // :32003-32004
++    if(bSECSGEMAlarm && bSECSGEM_NoteAlarm==false)                                          // :32006-32007
++    {
++        // fNote->labSecsGemLock->Visible=true;   // golden :32009 -- no widget in the port
++        bRunTimer1=false;
++        return;
++    }
++    // else fNote->labSecsGemLock->Visible=false;   // golden :32015
++    if(bRunTimer1==true) return;                                                            // :32018
++    bRunTimer1=true;
++    W906_MainScanKeyWith(scan, noticeUp);                                                   // :32023
++    bRunTimer1=false;
++}
++void W906_MainScanKeyTick(bool noticeUp) { W906_MainScanKeyTickWith(&ScanPannelKey, noticeUp); }
++
++// =============================================================================
++//  AI(W906-SOFTKEY) 20261003 (machine cpp 0153 aeca37f9 / 0156 SOFTKEY-DIAG 4b1e62d6; ST02-P2 port 20261006 St02-E, card ST02-P2,
++//  RULINGS_20261005 #17: the SOFT E-STOP of cpp 0154 stays machine-local and is NOT here).  EastSun 1003 「你可以幫我圖片上 紅框內
++//  做出按鈕嗎 因為我現在實體按鈕沒辦法通訊 需要在軟體上 按按鈕做動」.  Screen panel keys: WS panel.key (tools/wb_serve.cpp) = one
++//  physical front-panel press, read by golden's own key readers (TfMain::ScanKey above, the Home hook, the alarm / message waits)
++//  through ScanPannelKey, so golden still decides what the key does.
++//
++//  ST02-P2 DESIGN CHANGE vs the machine (which returned a queued key id from a hook placed BEFORE ScanPannelKey's key blocks,
++//  ckernel.cpp W906_VirtualPanelKeyHook): that skipped every per-key side effect -- a soft ALARM RESET did not clear the music /
++//  N07 buzzer / tester-pause delay (ckernel.cpp ScanPannelKey's two ALARM RESET blocks), a soft RESET ignored golden's
++//  IniConfig.bDisibleResetButton -- and needed a ckernel.cpp change.  Here a soft key sets golden's OWN software-key flag, bAse*
++//  (cmydef.h:3691-3701; golden's ASE K-socket remote sets them, ASE_K Socket/aseTest.cpp:261-363, kevin 20150427).  ScanPannelKey
++//  already reads `Sen[SnFKx].IsOn() || bAsex` in every key block and clears the flag when it answers, so every gate and side effect
++//  runs as for a physical press; ckernel.cpp is unchanged.  Nothing else in the port sets bAse* (ASE is not ported; `git grep`
++//  writers = 0, ST02-P2 MR).  [W906] kept from the machine: a key nobody reads within kSoftKeyLifeMs is dropped (its flag cleared by
++//  the tick below, so a press never fires long after it was made), at most kSoftKeyMax unread keys, and the DIAG ack (the golden
++//  gates in front of the key readers, the previous key's fate).  A flag still unread is not set twice (one press per key until read).
++// =============================================================================
++#include <string>
++#include <windows.h>                // GetTickCount
+ namespace {
+ const unsigned long kSoftKeyLifeMs = 3000;
+-const std::size_t   kSoftKeyMax    = 4;
+-struct MskSoftKey { int id; unsigned long t; std::string name; };
+-std::deque<MskSoftKey> s_softKeys;
+-std::string s_softLast;            // AI(W906-SOFTKEY-DIAG) 20261003: what happened to the previous soft key (read / dropped), told in the next ack
+-bool        s_lastNoticeUp = false; // the tick's noticeUp (a kcode==0 note is up), for the ack's guard report
+-int MskSoftKeyPop()
++const int           kSoftKeyMax    = 4;
++struct MskSoftKeyRow { const char* name; bool* flag; const int* id; };
++const MskSoftKeyRow kSoftKeys[] = {
++    { "START", &bAseStart, &SnFKStart }, { "PAUSE", &bAsePause, &SnFKPause }, { "HOME", &bAseHome, &SnFKHome }, { "RESET", &bAseReset, &SnFKReset },
++    { "ONECYCLE", &bAseOneCycle, &SnFKOneCycle }, { "CLEANOUT", &bAseCleanOut, &SnFKCleanOut }, { "TRAYFEED", &bAseTrayFeed, &SnFKTrayFeed },
++    { "TRAYEND", &bAseTrayEnd, &SnFKTrayEnd }, { "ALARMRESET", &bAseAlarmReset, &SnFKAlarmReset }, { "RETRY", &bAseRetry, &SnFKRetry },
++    { "SKIP", &bAseSKIP, &SnFKSkip } };
++const int     kSoftKeyCount = (int)(sizeof(kSoftKeys) / sizeof(kSoftKeys[0]));
++bool          s_softMine[sizeof(kSoftKeys) / sizeof(kSoftKeys[0])] = {};   // we set this flag and have not seen it read / dropped yet
++unsigned long s_softT[sizeof(kSoftKeys) / sizeof(kSoftKeys[0])]    = {};   // GetTickCount() of that push
++std::string   s_softLast;            // AI(W906-SOFTKEY-DIAG): what happened to the previous soft key, told in the next ack
++bool          s_lastNoticeUp = false; // the tick's noticeUp (a kcode==0 note is up), for the ack's gate report
++
++void MskSoftKeySweep()               // read (flag cleared by ScanPannelKey) or expired (we clear it)
+ {
+     const unsigned long now = ::GetTickCount();
+-    while (!s_softKeys.empty()) {
+-        const MskSoftKey k = s_softKeys.front();
+-        s_softKeys.pop_front();
+-        if ((unsigned long)(now - k.t) <= kSoftKeyLifeMs) {
+-            std::printf("[SOFTKEY] %s read by the key scan\n", k.name.c_str());
+-            s_softLast = k.name + " 已被按鍵掃描讀走（" + std::to_string((unsigned long)(now - k.t)) + " ms）";
+-            return k.id;
++    for (int i = 0; i < kSoftKeyCount; ++i) {
++        if (!s_softMine[i]) continue;
++        const unsigned long age = (unsigned long)(now - s_softT[i]);
++        if (*kSoftKeys[i].flag == false) {
++            s_softMine[i] = false;
++            std::printf("[SOFTKEY] %s read by the key scan (%lu ms)\n", kSoftKeys[i].name, age);
++            s_softLast = std::string(kSoftKeys[i].name) + " 已被按鍵掃描讀走（" + std::to_string(age) + " ms）";
++        } else if (age > kSoftKeyLifeMs) {
++            *kSoftKeys[i].flag = false;
++            s_softMine[i] = false;
++            std::printf("[SOFTKEY] %s dropped: not read within %lu ms (a dialog / guard kept the key scan away)\n", kSoftKeys[i].name, kSoftKeyLifeMs);
++            s_softLast = std::string(kSoftKeys[i].name) + " 3 秒內沒被讀走、已丟掉（按鍵掃描沒有在讀，或 golden 的條件沒讓這顆鍵生效）";
+         }
+-        std::printf("[SOFTKEY] %s dropped: not read within %lu ms (a dialog / guard kept the key scan away)\n", k.name.c_str(), kSoftKeyLifeMs);
+-        s_softLast = k.name + " 3 秒內沒被讀走、已丟掉";
+     }
+-    return -1;
+ }
+ }  // namespace
++
++// the tick's bookkeeping, called first in W906_MainScanKeyTickWith (same line as MskContactFormShowEdge)
++void W906_SoftPanelKeyTickSt02(bool noticeUp)
++{
++    s_lastNoticeUp = noticeUp;
++    MskSoftKeySweep();
++}
++
+ bool W906_SoftPanelKeyPush(const std::string& name, std::string& why)
+ {
+-    static const struct { const char* n; const int* id; } kKeys[] = {
+-        { "START", &SnFKStart }, { "PAUSE", &SnFKPause }, { "HOME", &SnFKHome }, { "RESET", &SnFKReset },
+-        { "ONECYCLE", &SnFKOneCycle }, { "CLEANOUT", &SnFKCleanOut }, { "TRAYFEED", &SnFKTrayFeed }, { "TRAYEND", &SnFKTrayEnd },
+-        { "ALARMRESET", &SnFKAlarmReset }, { "RETRY", &SnFKRetry }, { "SKIP", &SnFKSkip } };
+-    // AI(W906-SOFTKEY-DIAG) 20261003: EastSun「一樣沒辦法按阿」-- 16:30:02 panel.key PAUSE reached wb_serve and was queued, but nothing
+-    //   showed whether a key reader took it.  Expired keys are noted here too (when no reader ever runs, the pop never sees them), and the
+-    //   ack carries every golden gate in front of the key readers, so the oplog line of the next press says which one held it.
+-    {
+-        const unsigned long now = ::GetTickCount();
+-        while (!s_softKeys.empty() && (unsigned long)(now - s_softKeys.front().t) > kSoftKeyLifeMs) {
+-            s_softLast = s_softKeys.front().name + " 3 秒內沒被讀走、已丟掉（按鍵掃描沒有在讀）";
+-            s_softKeys.pop_front();
+-        }
+-    }
+-    std::string gates;
++    MskSoftKeySweep();                                                                      // the tick may not have run (a blocking wait)
++    std::string gates;                                                                      // AI(W906-SOFTKEY-DIAG) 20261003 (cpp 0156)
+     if (SystemInitialOK == false)                                                      gates += " SystemInitialOK=0(ScanPannelKey 不讀)";
+     if (bEnableEmployeeIDCheck)                                                        gates += " 工號查驗中";
+     if (InitialOK == false)                                                            gates += " InitialOK=0(ScanKey 不跑)";
+@@ -479,50 +530,39 @@ bool W906_SoftPanelKeyPush(const std::string& name, std::string& why)
+     if (MyMessageBox && W906_FormShowing("MyMessageBox", MyMessageBox->fShow))         gates += " 訊息框開著";
+     if (SystemStart)                                                                   gates += " 運轉中(HOME 不收)";
+     const std::string diag = std::string("｜擋關：") + (gates.empty() ? "無" : gates) + (s_softLast.empty() ? std::string() : "｜上一鍵：" + s_softLast);
+-    for (std::size_t i = 0; i < sizeof(kKeys) / sizeof(kKeys[0]); ++i) {
+-        if (name != kKeys[i].n) continue;
+-        if (s_softKeys.size() >= kSoftKeyMax) { why = "panel.key " + name + ": 前面還有 " + std::to_string(s_softKeys.size()) + " 個按鍵沒被讀走，這一下不收"; return false; }
+-        W906_VirtualPanelKeyHook = &MskSoftKeyPop;
+-        MskSoftKey k; k.id = *kKeys[i].id; k.t = ::GetTickCount(); k.name = name;
+-        s_softKeys.push_back(k);
+-        std::printf("[SOFTKEY] %s pushed (key id %d)\n", name.c_str(), k.id);
+-        why = "panel.key " + name + "：已送出，等同按一下實體面板鍵（原版 TfMain::ScanKey 照樣判斷要不要動作）" + diag;
++    int pending = 0;
++    for (int i = 0; i < kSoftKeyCount; ++i) if (s_softMine[i]) ++pending;
++    for (int i = 0; i < kSoftKeyCount; ++i) {
++        if (name != kSoftKeys[i].name) continue;
++        if (*kSoftKeys[i].flag) { why = "panel.key " + name + "：前一下還沒被讀走，這一下不收（一顆鍵一次一下）" + diag; return false; }
++        if (pending >= kSoftKeyMax) { why = "panel.key " + name + "：前面還有 " + std::to_string(pending) + " 個按鍵沒被讀走，這一下不收" + diag; return false; }
++        *kSoftKeys[i].flag = true;                                                          // golden bAse*: ScanPannelKey answers it like a press
++        s_softMine[i] = true;
++        s_softT[i] = ::GetTickCount();
++        std::printf("[SOFTKEY] %s pushed (bAse flag, key id %d)\n", name.c_str(), *kSoftKeys[i].id);
++        why = "panel.key " + name + "：已送出，等同按一下實體面板鍵（golden ScanPannelKey 的軟體按鍵旗標；原版 TfMain::ScanKey 照樣判斷要不要動作）" + diag;
+         return true;
+     }
+     why = "panel.key: 不認得的按鍵 '" + name + "'（START／PAUSE／HOME／RESET／ONECYCLE／CLEANOUT／TRAYFEED／TRAYEND／ALARMRESET／RETRY／SKIP）";
+     return false;
+ }
+ 
+-// AI(W906-SOFTKEY) 20261003: EastSun 「按鈕裡面我也需要緊急停止按紐」-- the screen EMERGENCY STOP (WS panel.estop, token-exempt, also
+-// served inside the blocking-dialog wait).  NOT a golden key (the real E-stop is the hardware circuit); it does what golden does when an
+-// alarm stops the machine (note.cpp:795-801 StopAllMotor(true); SoftStop=SoftStart=SystemStart=false -- tools/wb_serve.cpp
+-// W906_AlarmStopLikeGolden) plus the 1203 half golden's StopAllMotor cannot reach (W906_MotorAccessOnAlarm: every opened 1203 axis gets
+-// the stop, every Teach / Motor Test job ends), and a running full HOME is aborted the way the panel PAUSE does it (golden
+-// TfHome::ScanKey uhome.cpp:4878-4882: sbAbortHomeClick + Close).  Queued soft keys are dropped (nothing may fire after a stop).
+-void W906_SoftEmergencyStop(std::string& why)
++// test seams (ctest only): forget the soft keys we set (their bAse flags are cleared too); age the unread ones by `ms`
++void W906_SoftPanelKeyResetForTestSt02()
+ {
+-    extern void StopAllMotor(bool bIndexCanStop);                               // Motor/myGALILmotor.cpp (golden :4712)
+-    extern void W906_MotorAccessOnAlarm(const char* code);                      // WebMotorAccessLive.cpp (1203 axes + jobs)
+-    s_softKeys.clear();
+-    StopAllMotor(true);                                                         // golden note.cpp:796
+-    W906_MotorAccessOnAlarm("SOFT-ESTOP");
+-    SoftStop    = false;                                                        // golden note.cpp:799
+-    SoftStart   = false;                                                        // golden note.cpp:800
+-    SystemStart = false;                                                        // golden note.cpp:801
+-    bool homeAborted = false;
+-    if (fHome && fHome->fShow) { fHome->sbAbortHomeClick(fHome); fHome->Close(); homeAborted = true; }   // golden uhome.cpp:4880-4881
+-    RecordProcess("W906 SOFTKEY: EMERGENCY STOP pressed on the screen", homeAborted ? "home aborted" : "");
+-    std::printf("[SOFTKEY] EMERGENCY STOP: StopAllMotor(true) + every 1203 axis stopped; SoftStop=SoftStart=SystemStart=0%s\n",
+-                homeAborted ? "; full HOME aborted" : "");
+-    why = std::string("緊急停止：所有馬達已送停止（含 1203 全軸）、運轉旗標已清") + (homeAborted ? "、回原點已中止" : "") +
+-          "。⚠ 這是軟體停止，不是硬體急停迴路";
++    for (int i = 0; i < kSoftKeyCount; ++i) { if (s_softMine[i]) *kSoftKeys[i].flag = false; s_softMine[i] = false; }
++    s_softLast.clear();
++}
++void W906_SoftPanelKeyAgeForTestSt02(unsigned long ms)
++{
++    for (int i = 0; i < kSoftKeyCount; ++i) if (s_softMine[i]) s_softT[i] -= ms;
+ }
+ 
+-// AI(W906-TEACH-HOMEALL) 20261003: EastSun 「請你先幫我在 teach 做一個全機回 home 的按鈕 我需要做測試 因為現在實體按鈕沒作用」.
+-// The panel HOME key's arm above (golden main.cpp:2545-2563), for a screen button (WebMotorAccessLive.cpp GoldenHomeAll ->
+-// motor.access uteach btnHomeAll / teachHomeAll). Same checks, same order, same TfMain::Home -- only the caller differs.
+-// Returns 0 = BtnHome disabled (SystemStart), 1 / 2 = a bin check refused (its message is shown), 3 = TfMain::Home refused,
+-// 4 = armed (SoftStart / iHome set; MainProc runs the home on the following beats).
++// AI(W906-TEACH-HOMEALL) 20261003 (machine cpp 0153 aeca37f9; ST02-P2 port 20261006 St02-E): EastSun 「請你先幫我在 teach 做一個全機回
++// home 的按鈕 我需要做測試 因為現在實體按鈕沒作用」.  The panel HOME key's arm (W906_MainScanKeyWith above, golden main.cpp:2545-2563), for a
++// screen button (WebMotorAccessLive.cpp GoldenHomeAll -> motor.access uteach btnHomeAll / teachHomeAll). Same checks, same order, same
++// TfMain::Home -- only the caller differs.  Returns 0 = BtnHome disabled (SystemStart), 1 / 2 = a bin check refused (its message is
++// shown), 3 = TfMain::Home refused, 4 = armed (SoftStart / iHome set; MainProc runs the home on the following beats).
+ int W906_PanelHomeKeyArm(const char* who, std::string& why)
+ {
+     if(!MskBtnHomeEnabled())
+@@ -552,39 +592,30 @@ int W906_PanelHomeKeyArm(const char* who, std::string& why)
+     return 4;
+ }
+ 
+-// golden TfHome::Timer1Timer uhome.cpp:4885-4889 -> TfHome::ScanKey :4874-4883 (Timer1 Enabled = W906_HomeTimer1Enabled, uhome.cpp)
+-void W906_HomeScanKeyWith(int (*scan)())
+-{
+-    if(W906_HomeTimer1Enabled==false || fHome==0) return;                                  // TTimer Enabled (golden FormClose :4871)
+-    if(fHome->fShow==false) return;                                                         // :4887   AI(W906-ST02-SKC) 20261004 (St02-E, FShow_Audit b59a): the member on purpose, as :289 (R142=A, NB2 R188 M1) -- TfHome::ScanKey and TfMain::ScanKey must read the same flag, or the page table's "any browser has Home Monitor open" would let both answer one key; baseline raised for these two reads
+-    int Key;                                                                                // :4876
+-    Key=scan();                                                                             // :4877
+-    if(Key==SnFKPause)                                                                      // :4878
+-    {
+-        fHome->sbAbortHomeClick(fHome);                                                     // :4880
+-        fHome->Close();                                                                     // :4881
+-    }
+-}
+-
+-// golden TfMain::TimerScanKeyTimer main.cpp:31994-32025 (Steven 20151022)
+-void W906_MainScanKeyTickWith(int (*scan)(), bool noticeUp)
++// AI(W906-SOFTKEY) 20261003 (machine-local, RULINGS_20261005 #17 -- the ST02-P2 port above leaves it out): EastSun 「按鈕裡面我也需要緊急停止
++// 按紐」-- the screen EMERGENCY STOP (WS panel.estop, token-exempt, also served inside the blocking-dialog wait).  NOT a golden key (the real
++// E-stop is the hardware circuit); it does what golden does when an alarm stops the machine (note.cpp:795-801 StopAllMotor(true);
++// SoftStop=SoftStart=SystemStart=false -- tools/wb_serve.cpp W906_AlarmStopLikeGolden) plus the 1203 half golden's StopAllMotor cannot
++// reach (W906_MotorAccessOnAlarm: every opened 1203 axis gets the stop, every Teach / Motor Test job ends), and a running full HOME is
++// aborted the way the panel PAUSE does it (golden TfHome::ScanKey uhome.cpp:4878-4882: sbAbortHomeClick + Close).
++// AI(W906-SOFTKEY-ST02P2) 20261009: EastSun 1009「174所以你能修正嗎？」-- the machine now runs the ST02-P2 soft keys (golden's bAse*
++// flags) so package 174's tests/test_scankey_golden.cpp runs as shipped ([19] included); this function is carried over unchanged except
++// that the unread soft keys are dropped by clearing the bAse* flags this file set (was: the machine's key-id queue).
++void W906_SoftEmergencyStop(std::string& why)
+ {
+-    s_lastNoticeUp = noticeUp;                                                              // AI(W906-SOFTKEY-DIAG) 20261003: for panel.key's guard report
+-    MskContactFormShowEdge();
+-    W906_HomeScanKeyWith(scan);                                                             // the 10 ms timer: first, as it usually wins in golden
+-    static bool bRunTimer1=false;                                                           // :31996
+-    if(InitialOK==false) { bRunTimer1=false; return; }                                      // :31997-32001
+-    if(bEnableEmployeeIDCheck==true) return;                                                // :32003-32004
+-    if(bSECSGEMAlarm && bSECSGEM_NoteAlarm==false)                                          // :32006-32007
+-    {
+-        // fNote->labSecsGemLock->Visible=true;   // golden :32009 -- no widget in the port
+-        bRunTimer1=false;
+-        return;
+-    }
+-    // else fNote->labSecsGemLock->Visible=false;   // golden :32015
+-    if(bRunTimer1==true) return;                                                            // :32018
+-    bRunTimer1=true;
+-    W906_MainScanKeyWith(scan, noticeUp);                                                   // :32023
+-    bRunTimer1=false;
+-}
+-void W906_MainScanKeyTick(bool noticeUp) { W906_MainScanKeyTickWith(&ScanPannelKey, noticeUp); }
++    extern void StopAllMotor(bool bIndexCanStop);                               // Motor/myGALILmotor.cpp (golden :4712)
++    extern void W906_MotorAccessOnAlarm(const char* code);                      // WebMotorAccessLive.cpp (1203 axes + jobs)
++    for (int i = 0; i < kSoftKeyCount; ++i) { if (s_softMine[i]) *kSoftKeys[i].flag = false; s_softMine[i] = false; }   // nothing may fire after a stop
++    StopAllMotor(true);                                                         // golden note.cpp:796
++    W906_MotorAccessOnAlarm("SOFT-ESTOP");
++    SoftStop    = false;                                                        // golden note.cpp:799
++    SoftStart   = false;                                                        // golden note.cpp:800
++    SystemStart = false;                                                        // golden note.cpp:801
++    bool homeAborted = false;
++    if (fHome && W906_FormShowing("fHome", fHome->fShow)) { fHome->sbAbortHomeClick(fHome); fHome->Close(); homeAborted = true; }   // golden uhome.cpp:4880-4881
++    RecordProcess("W906 SOFTKEY: EMERGENCY STOP pressed on the screen", homeAborted ? "home aborted" : "");
++    std::printf("[SOFTKEY] EMERGENCY STOP: StopAllMotor(true) + every 1203 axis stopped; SoftStop=SoftStart=SystemStart=0%s\n",
++                homeAborted ? "; full HOME aborted" : "");
++    why = std::string("緊急停止：所有馬達已送停止（含 1203 全軸）、運轉旗標已清") + (homeAborted ? "、回原點已中止" : "") +
++          "。⚠ 這是軟體停止，不是硬體急停迴路";
++}
+\ No newline at end of file
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 831d5241..b44579aa 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -84,6 +84,7 @@
+ | 169 | **Out Shuttle Z 位置還原**（EastSun「剛剛說的teach 沒有indexZ 高度可以設定 我說錯了 可以不用改 在其他頁面已經可以設定了」）：revert web 113a1ef，控制項回到套件 149 的原位置；給 Jimmy 的說明同步更正 | web 4e68790；cpp（本列） | — |
+ | 170 | **只查：實體 HOME 鍵沒反應**（EastSun「我實體按鈕案home都沒反應」）：PadCommLog 今天實體按鍵封包（t05x400…）只到 09:15:57，最後一筆 HOME＝t050400002020（HOME 0x20＋ALARM RESET 0x2000 卡住，golden ScanPannelKey ALARM RESET 最後判斷蓋掉 HOME）；之後只有程式送出的燈號回音（0006/0016＝PAUSE 燈閃，Teach 頁訊息框開著時）。EventLog 10 筆 MES2112 全是網頁軟鍵。程式這條路與 golden 相同，不改碼；請查面板 ALARM RESET 鈕／按鍵線。17:00 release 補建 | — | — |
+ | 171 | **ALARM RESET 卡住時其他實體鍵照常**（EastSun「就算reset卡住其他按鈕不是也要可以用?」→ 選「改」）：ckernel.cpp ScanPannelKey 前／後面板共 4 處 ALARM RESET 判斷，按著不放（已鎖存）時不再蓋掉同時按的其他鍵；剛按下那一下照 golden 優先。備份 D:\HT9045\_review\ckernel.cpp.bak_rstheld_20261007_172605 | cpp（本列） | ScanKeyGolden（新增 4 項）、MainScanKey、W7_L2_CKernel、SysinitBoot、St02_N07Alarm、St02_PadInterface 全過；Debug 17:30／release 17:31 |
++| 214 | **第 174 包的 test_scankey_golden 照包裡的跑：機台換成 ST02-P2 軟體面板鍵（保留螢幕緊急停止）**（EastSun 1009「你有照github readmy 的指示 合code嗎?」→「174所以你能修正嗎？」）。第 174 包 README：「套包時那支測試以包裡的為準」；10-08 合併時它的 [19] 在機台關掉，因為 [19] 測的是筆電的 ST02-P2（第 155 包 WebMainScanKey.cpp：軟體鍵設 golden 自己的 bAse* 旗標，ScanPannelKey 照實體鍵處理——軟體 ALARM RESET 也會照 golden 關音樂／N07 蜂鳴、軟體 RESET 照 golden 的 bDisibleResetButton），機台還是 cpp 0153 的鍵號掛鉤（在按鍵區塊之前就回傳，跳過這些副作用）。這次：WebMainScanKey.cpp＝第 155 包的 ST02-P2 版＋檔尾補回機台獨有的 W906_SoftEmergencyStop（螢幕緊急停止，RULINGS_20261005 #17 本來就留機台；只把「丟掉未讀的軟體鍵」改成清 bAse 旗標，fHome 改用 W906_FormShowing）；tests/test_scankey_golden.cpp＝包裡的原檔（[19] 打開）；tests/test_main_scankey.cpp [13] 改驗 bAse 旗標。ckernel 的 W906_VirtualPanelKeyHook 不再有人設（null，不動作）。備份 D:\HT9045\_review\softkey_st02p2_20261009 | cpp（本 commit） | Debug wb_serve＋ScanKeyGolden／MainScanKey／FShow_Audit（原本在已知失敗清單，這次也過）等 6 支全過；release wb_serve 建好 |
+ | 213 | **1203 失敗訊息洪水降量＋點名 Common Motion Utility**（EastSun 截圖「這邊在做什麼 也太誇張」→「請一直優化執行續」）：20:51～20:59 主控台與 oplog 寫了 29690 行 `StopDec／ExtDrive FAILED ret=0x800000D3`——0x800000D3＝GetAuthorityFailed：20:03 當機重開後 Common Motion Utility 開著、佔住卡的權限，引擎每圈的停止命令全失敗，而失敗的停止是 force 行（30／500 預算不擋）且每行進 oplog。EtherCAT/Pci1203MotorRoute.cpp：同一站／軸／呼叫／結果／原因的 FAILED／REFUSED 行 5 秒內再出現只計數不寫（下一行附「+N identical lines suppressed」，計入 linesDropped）；命令照送、LatchFault／統計／golden WAR16122 不變；ret 0x800000D3 時原因前面直接寫「another program holds the 1203 (Common Motion Utility open?) -- close it」。tests/test_pci1203_motor_route.cpp +2 檢查（同一失敗停止 5 秒內兩次＝顯示 1、計數 1、兩次都 latched；換原因立刻顯示）。備份 D:\HT9045\_review\*.bak_20261008_saythrottle | cpp（同 PKG202 commit） | Debug wb_serve＋Pci1203MotorRoute 通過；拿掉修正會不會紅沒有實測（邏輯上第二行會被顯示⇒linesShown+2） |
+ | 212 | **執行緒優化第一步：量出主執行緒在等什麼**（EastSun「請你繼續優化執行續」）：oplog 1008 有 1570 筆 SLOW，最多的兩種 MotorAccessPollTick（中位 702 ms）與 PumpTick（中位 826 ms）tick 執行緒 CPU 都只有約 20 ms＝在等，不是在算。最可能的是主執行緒每一個 1203 命令（DO 寫入／馬達命令／SDO 讀／扭力焦點）都要排隊等 IO 執行緒執行（Pci1203IoThreadRunSync）。這次只加量測、不改行為：每次等待用 QPC 計時，掛到 SLOW 行對應的階段上，格式是「PumpTick 名稱 xxx ms (io wait yyy ms/n)」；PumpTick 拆成 Pump: heater/DTME08/TemperFrom、St02Timers、FlushFlag/DoorLock/Fan、MainProc、CounterRefresh，另有 ServiceOutputs；W906_MotorAccessPollTick 拆成 MAPoll: core／Brake/BootInit/ParamSync／OverlaySnapshot／Hooks／TorqueFocus。檔案：EtherCAT/Pci1203Monitor.cpp（RunSync 計時＋檔尾 g_W906IoWaitHook）、tools/wb_serve.cpp、WebBridgeTags.cpp、WebMotorAccessLive.cpp；備份 D:\HT9045\_review\iowait_20261008 | cpp（本 commit） | Debug＋release wb_serve 建置 OK；test_pci1203_pure 109/109、WB_SimPump 通過。IO 執行緒沒有 ctest，量測要等機台跑過一次、看 SLOW 行有沒有出現「io wait」才算驗證；下一步依數字決定要減哪一種等待 |
+ | 211 | **1203 頁加「卡片本機 DO0／DO1」ON／OFF 按鈕**（EastSun「你可以查一下1203 DO1 怎輸出?」→「沒有站號 是1203本身 有IO」→ 廠商範例 Examples\Windows\BCB\Device DIO：Acm_DevOpen → FT_DevFunctionMap bit 7（本機 DIO）→ Acm_DaqDoSetBit(device, 通道, 值) →「你能試著 輸出DO1嗎?」→ 獨立探針 D:\HT9045\_review\probe_do1（PCIE-1203-32AE (M0) 0x63000000，map 0x1FC1 bit7=1，DO0～7／DI0～7 原本都 0，DO1 設 1 讀回 1、3 秒後設 0 讀回 0；當時 Common Motion Utility 其實還開著、照樣開得到卡）→「你1203 頁面 可以幫我多加 DO0 DO1 按鈕嗎?」→「按鈕先寫上 我去測試就對了」）：EtherCAT/Pci1203Control.h／.cpp 新指令 kCmdDevDoSetBit（列舉尾端、在 kCmdRingReset 後；wire「pci1203.carddo.setBit」、target「pci1203.carddo.bit<0|1>」、值 0／1）：Run_ 只收通道 0／1、不需要軸 handle；Execute 呼叫 Acm_DaqDoSetBit(dev, 通道, 值)（已在允許清單，不加新的廠商呼叫、不讀回）。web js/pci1203/view.js 預設畫面 sectionDO 之後加 sectionCardDo：DO0／DO1 各一顆 ON、一顆 OFF（不做切換鈕：沒有讀回就不知道現在狀態）。⚠ 還沒確認這個通道號是卡片本身的 DO，還是 ring 平面編號的同一號通道（view.js 舊註解：Acm_DaqDoSetBit 平面通道寫過 530 個 ring 通道）—— EastSun 用按鈕實測（AI(W906-CARDDO)，同行＋換空白行＋檔尾，行號不動） | cpp＋web（本列） | Pci1203Pure 109/109（新增 carddo 4 項：拆解、名稱、缺通道拒絕、卡沒開拒絕不送出）、Pci1203Seam／MotorRoute／LinkWatch／ModuleCheck／Reopen、Idx1203GaliBranch、IndexZTorque1203／AutoHeight1203、I115B_Vacuum、VacuumVc8 過；web 沒有 node 可做語法檢查，只逐行審過；Debug 19:02:56、release 19:05:28 已連結 |
+diff --git a/tests/test_main_scankey.cpp b/tests/test_main_scankey.cpp
+index 41f73552..0c2a8149 100644
+--- a/tests/test_main_scankey.cpp
++++ b/tests/test_main_scankey.cpp
+@@ -267,18 +267,18 @@ int main()
+     {
+         extern bool W906_SoftPanelKeyPush(const std::string&, std::string&);
+         extern void W906_SoftEmergencyStop(std::string&);
+-        extern int (*W906_VirtualPanelKeyHook)();
++        extern void W906_SoftPanelKeyResetForTestSt02();   // AI(W906-SOFTKEY-ST02P2) 20261009: the soft keys set golden's bAse* flags now (WebMainScanKey.cpp, package 155 ST02-P2), no key-id hook
+         extern int g_W906TestMotorAccessOnAlarmCalls;
+         std::string why;
+         CHECK(!W906_SoftPanelKeyPush("NOPE", why));
+-        CHECK(W906_SoftPanelKeyPush("START", why) && W906_VirtualPanelKeyHook != 0);
++        CHECK(W906_SoftPanelKeyPush("START", why) && bAseStart == true);
+         Idle(); SystemStart = true; SoftStart = true;
+         const int al0 = g_W906TestMotorAccessOnAlarmCalls;
+         W906_SoftEmergencyStop(why);
+         CHECK(SystemStart == false && SoftStart == false && SoftStop == false);
+         CHECK(g_W906TestMotorAccessOnAlarmCalls == al0 + 1);
+-        CHECK(W906_VirtualPanelKeyHook() == -1);              // the START queued before the stop was dropped
+-        CHECK(W906_SoftPanelKeyPush("PAUSE", why) && W906_VirtualPanelKeyHook() == SnFKPause && W906_VirtualPanelKeyHook() == -1);   // one id per press
++        CHECK(bAseStart == false);                             // the START pushed before the stop was dropped
++        CHECK(W906_SoftPanelKeyPush("PAUSE", why) && bAsePause == true && !W906_SoftPanelKeyPush("PAUSE", why));  W906_SoftPanelKeyResetForTestSt02();  CHECK(bAsePause == false);   // one press per key until read
+     }
+ 
+     W906_RemoteRun.Start = 0;
+diff --git a/tests/test_scankey_golden.cpp b/tests/test_scankey_golden.cpp
+index d892c99d..d4269439 100644
+--- a/tests/test_scankey_golden.cpp
++++ b/tests/test_scankey_golden.cpp
+@@ -47,7 +47,7 @@
+ //   [14] source pins, REWRITTEN for WebMainScanKey.cpp and the wb_serve hooks (argv[1] = tree root, read only)
+ //   [15] [W906] first-scan guard (W906_ScanKeyFirstScanRearm_St02, WebMainScanKey.cpp:145)
+ //   [16] a MyMessageBox up: the non-modal box's panel-key reader once per beat, the key stays; wb_serve's reader pinned
+-//   [17] panel HOME while START is blocked: TfMain::Home's W906_HomeBlockedHook (forms/fMain.cpp, !146) refuses first
++//   [17] panel HOME while START is blocked: TfMain::Home's W906_HomeBlockedHook (forms/fMain.cpp, !146) refuses first;  [18] [15] with the RS-232 pad (ST02-P1);  [19] screen panel keys via golden's bAse* (ST02-P2)
+ //
+ //  ADAPTED (MC01 differs on purpose -- the S-20 expectation changed, why):
+ //    [2] Home dialog: MC01 runs TfHome::ScanKey first in the tick (WebMainScanKey.cpp:439) while TfHome's Timer1 is on (boot
+@@ -110,7 +110,7 @@
+ #include "mymessbox_shim.h"             // MyMessageBox
+ #include "JsonBridge/FormJson.h"        // ht9045::formjson::FormLock / FormUnlock (stubbed below)
+ #include "w906_ctest_guard.h"
+-#include "PadInterface_St02.h"          // AI(W906-ST02-P1) 20261005 (St02-E): fPadInterface -- [18] the RS-232 pad (ControlPanelMode=1); back with the package 202 merge (the machine copy had dropped it with [18] / [19])
++#include "PadInterface_St02.h"          // AI(W906-ST02-P1) 20261005 (St02-E): fPadInterface -- [18] the RS-232 pad (ControlPanelMode=1)
+ #include <cstdio>
+ #include <cstdlib>
+ #include <fstream>
+@@ -1125,7 +1125,7 @@ int main(int argc, char** argv)
+         IdleHomed();
+         Beat();   CHECK(Sen[SnRearPadActive].Enable == savedEn18[3] && Sen[SnRearPadActive].Type == savedTy18[3] && Sen[SnFKStart].Enable == savedEn18[0]);   // AI(W906-W149) 20261007 (St02-E): handed back
+     }
+-#if 0   // AI(W906-PKG202) 20261008: [19] tests the laptop's ST02-P2 soft keys (WebMainScanKey.cpp bAse* flags, package 155); this machine kept its own SOFTKEY design (packages 153-157 not replaced: software EMG stop / TOKEN-OFF), so W906_SoftPanelKeyResetForTestSt02 / AgeForTestSt02 do not exist here -- [19] is off, [18] runs
++
+     // [19] AI(W906-SOFTKEY) ST02-P2 20261006 (St02-E): screen panel keys (WS panel.key -> W906_SoftPanelKeyPush, WebMainScanKey.cpp EOF) set
+     //   golden's own software-key flags bAse* (cmydef.h:3691-3701; golden's ASE remote sets them); ScanPannelKey answers them in its key
+     //   blocks, so the per-key side effects run (the machine's cpp 0153 hook returned BEFORE them: a soft ALARM RESET skipped the N07
+@@ -1171,7 +1171,7 @@ int main(int argc, char** argv)
+         AllKeysUnknown();
+         Beat();   for (int k = 0; k < 33; ++k) { const int id = k < 32 ? k : SnRearPadActive;  Sen[id].Enable = en19[k];  Sen[id].Type = ty19[k];  Sen[id].ISABase = isa19[k]; }   CHECK(Sen[SnRearPadActive].Enable == en19[32] && Sen[SnRearPadActive].Type == ty19[32] && Sen[SnFKAlarmReset].Enable == en19[SnFKAlarmReset]);   // AI(W906-W149) 20261007 (St02-E): handed back
+     }
+-#endif  // AI(W906-PKG202) 20261008: end of the [19] block that is off on this machine
++
+     IdleHomed();
+     InitialOK = false;  SystemInitialOK = false;
+     AllKeysUnknown();
+-- 
+2.55.0.windows.5
+
