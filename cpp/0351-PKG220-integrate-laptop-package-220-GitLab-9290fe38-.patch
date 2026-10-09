@@ -1,0 +1,1316 @@
+From 2a3477238fee2121b5a188f3f2c065cad811af14 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 9 Oct 2026 12:57:05 +0800
+Subject: [PATCH] PKG220: integrate laptop package 220 (GitLab 9290fe38) -- the
+ laptop took the machine's cpp 0348 BOOT-Z1RESET back + St02-E W-195 HANA RMS
+ H1-H3 as golden 913 (HANA customers only; HT9050 never reaches it).
+ Auto-accepted (scheduled check).
+
+WebMotorAccessLive.cpp merges to the machine's own content. HANA RMS: recipe compare per HANA 1002 rules, connect on demand with
+reconnect on send (W906_HANARMSClientCreate moved from Prepare to the send path -- the marker scan's "lost" is the laptop's move),
+port 14140, HDNAME = machine ID, graded interlock messages, re-query every 5 s; H4 (refuse START when RMS is unreachable) is not in it.
+6 files replaced, WORKLOG kept (rule). Debug + release wb_serve built; HanaART / C10_HanaRms pass. WORKLOG: the 220 row.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ Automation/HanaRmsMembers_St02.cpp  |   3 +
+ Automation/HanaRms_Prepare_St02.cpp |  27 +-
+ Automation/HanaRms_St02.cpp         | 504 +++++++++++++++++++++++-----
+ Automation/HanaRms_St02.h           |  13 +-
+ docs/MACHINE_PATCHES_20261009.md    |   1 +
+ docs/NIGHT_REPORT.md                |   5 +-
+ docs/WORKLOG_MACHINE.md             |   1 +
+ tests/test_c10_hana_rms.cpp         | 280 +++++++++++++---
+ 8 files changed, 671 insertions(+), 163 deletions(-)
+
+diff --git a/Automation/HanaRmsMembers_St02.cpp b/Automation/HanaRmsMembers_St02.cpp
+index 348c8619..fd13bbfa 100644
+--- a/Automation/HanaRmsMembers_St02.cpp
++++ b/Automation/HanaRmsMembers_St02.cpp
+@@ -40,6 +40,9 @@ THanaRmsMembers::THanaRmsMembers()
+     aSystemYear = aSystemMonth = aSystemDate = 0;
+ 
+     bHANARMSNeedRunCheck=false;                                             //RogerYang 20260902 : RMS 互鎖旗標初始化   (golden 912 automation.cpp:148)
++    sHANARMSPending="";                                                     //RogerYang 20260916 : 待送指令佇列   (AI(W906-W195) 20261009 H2: golden 913 automation.cpp:149-151)
++    sHANARMSLinkErr="";
++    dwHANARMSSentTick=0;
+ #if 0 // GATE(W906-ST02-C10) [W906] 2: fAutomation is made during static initialisation (atester_shims.cpp:370); an ini read here is the BA-SIOF1 hazard (Automation/automation.h:354-361).  PrepareHANARMSConnect loads it before use (golden :3057) -- golden 912 automation.cpp:149
+     LoadHANARMSSetting();     //RogerYang : 開機把 IP/Port 載入欄位
+ #endif
+diff --git a/Automation/HanaRms_Prepare_St02.cpp b/Automation/HanaRms_Prepare_St02.cpp
+index 94a33bfd..824798ff 100644
+--- a/Automation/HanaRms_Prepare_St02.cpp
++++ b/Automation/HanaRms_Prepare_St02.cpp
+@@ -4,6 +4,8 @@
+ //  TesterComm/Handler/HandlerBridgeCtl.cpp (gate G9, lifted by this card) -- the one THanaRmsMembers member another
+ //  library (ht9045_testercomm_handler) calls, so it has a file of its own (St02 1001 lesson: nm shows one definer).
+ //  AI(W906-ST02-C10) 20261002 (St02-E helper).  See Automation/HanaRms_St02.h.
++//  AI(W906-W195) 20261009 (St02-E) H2: the body is golden 913 automation.cpp:3237-3246 (RogerYang 20260916, connect on
++//  demand): it only calls HANARMSConnect (HanaRms_St02.cpp), which loads the ini, checks IP / Port and opens.
+ // ===========================================================================
+ #include "MachineDefine.h"      // the tree's include hub (golden automation.cpp:1)
+ #include "Automation/HanaRms_St02.h"
+@@ -24,25 +26,8 @@ void THanaRmsMembers::PrepareHANARMSConnect()
+     if(IniConfig.bA77_EnableHanaRMSInterlock==false)
+         return;
+     if(IniConfig.bA10_6_HANA_ART_TestMode_Enable==false)                       //RogerYang 20260902 : First Shot 互鎖靠 HANA ART SRQ,沒開先警告
+-        HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [WARN] ", "A76 on but A10-6(HANA ART) off : first-shot interlock inactive");   // [912 known defect] K7: "A76" text verbatim
+-    LoadHANARMSSetting();
+-
+-    if(edtHANARMSIP->Text=="127.0.0.1")
+-        return;   //still placeholder -> don't auto-connect yet
+-
+-    W906_HANARMSClientCreate();                                                 // [W906] 1: golden's dfm component, made on first use
+-    if(HANARMSClient->Active) return;            // 已連/連線中 -> 不重連
+-    if(bW906HANARMSConnecting) return;           // [W906] 5: RogerYang's comment above ("已連/連線中" = connected OR connecting) -- the polled socket's Active is false while a connect is pending
+-    try
+-    {
+-        HANARMSClient->Address = edtHANARMSIP->Text;
+-        HANARMSClient->Port    = atoi(edtHANARMSPort->Text.c_str());
+-        HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [INFO] ", "connecting to "+edtHANARMSIP->Text+":"+edtHANARMSPort->Text);
+-        bW906HANARMSConnecting = true;                                          // [W906] 5: before Open -- a Sim Open connects inside the call and OnConnect clears it
+-        HANARMSClient->Open();                                                  // [912 known defect] K1: the only connect (WakeupGPIB); the server drops an idle link after 30 s
+-    }
+-    catch(...)
+-    {
+-        HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [ERR] ", "connect exception");
+-    }
++        HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [WARN] ", "A76 on but A10-6(HANA ART) off : first-shot interlock inactive");   // K7: "A76" text verbatim (golden 913 :3242 still says A76)
++    //RogerYang 20260916 : 開機先連一次僅為驗證伺服器可達;
++    //  實際查詢一律隨需重連(伺服器 30 秒 idle 就會把連線關掉)
++    HANARMSConnect();                                                           // AI(W906-W195) 20261009 H2: golden 913 automation.cpp:3243-3245 (912's load + 127.0.0.1 placeholder test + Active test + Open moved into HANARMSConnect, HanaRms_St02.cpp; K1 retired)
+ }
+diff --git a/Automation/HanaRms_St02.cpp b/Automation/HanaRms_St02.cpp
+index 0cc1062a..3a73e76f 100644
+--- a/Automation/HanaRms_St02.cpp
++++ b/Automation/HanaRms_St02.cpp
+@@ -8,17 +8,25 @@
+ //
+ //  [912 known defect] kept as 912.0 (HUMAN_REVIEW C; ht9045-hana-rms-interlock skill sections 2.1 / 4 / 7.1 / 8 say what
+ //  RogerYang changed after 912.0 -- that tree is not in this repo, and no 912.0 RogerYang comment asks for it):
+-//    K1  one connect, at WakeupGPIB (G9) only; the HDServer closes an idle link after 30 s, nothing reconnects, later
+-//        commands log "[WARN] not connected, not sent" (HANARMSSendCmd).
+-//    K2  HDNAME = HANARMS.ini [Setting] HDName, default "HD_01" (not the machine ID) -- HANARMSClientRead's auto chain
+-//        and HANARMSQueryJobInfo; the button templates hard-code HD_01.
+-//    K3  LoadHANARMSSetting defaults 127.0.0.1 / 6670; 127.0.0.1 means "not configured" to PrepareHANARMSConnect.
+-//    K4  HANARMS_ContactMethod: index 9 (TMoveSlowContact) is RELEASE (912.0 code AND its RogerYang comment
+-//        {1,4,6,8,9,10}; the skill's 20260930 "9 -> DIRECT" is 912.2).
+-//    K5  HANARMSSendCmd logs [TX] before it knows whether the line can be sent.
++//    K1  retired 20261009 (W-195 H2): connect on demand -- HANARMSSendCmd queues and calls HANARMSConnect (golden 913).
++//    K2  retired 20261009 (W-195 H2 / H3): HDNAME = HANARMSGetHDName() -- HANARMS.ini HDName, else Gerneral.ini Machine ID
++//        (golden 913 :3349-3358).
++//    K3  retired 20261009 (W-195 H2): LoadHANARMSSetting defaults "" / 14140; an empty IP = "RMS server IP/Port not set".
++//    K4  retired 20261009 (W-195 H1): HANARMS_ContactMethod now sends the HANA 1002 mode names (golden 913).
++//  AI(W906-W195) 20261009 (St02-E) H1: the recipe compare follows golden 913 (HANA 1002 rules, RogerYang 20261005) --
++//    HANARMS_ContactMethod, HANARMS_IsLowSpeed, the 1002 helpers (AddFail .. CmpList), HANARMSCompare and the four
++//    HANARMSParseJobInfoRep notes; those cite "golden 913 :N" (Automation/automation.cpp of
++//    D:\HT9045\HT9011UC_Code_V3.33.913.0_20261008_steven).  Every other "golden :N" in this file is still a 912 line.
++//  AI(W906-W195) 20261009 (St02-E) H2: connect on demand (golden 913, RogerYang 20260916) -- HANARMSClientConnect /
++//    ClientRead's HDNAME / ClientError / the three button templates / LoadHANARMSSetting / HANARMSSendCmd /
++//    HANARMSIsConnected / HANARMSConnect / HANARMSFlushPending / HANARMSGetHDName / HANARMSQueryJobInfo, and
++//    PrepareHANARMSConnect (HanaRms_Prepare_St02.cpp) -- cite "golden 913 :N" too.
++//    K5  retired 20261009 (W-195 H2): [TX] only when really sent, [QUEUE] otherwise (golden 913 :3261, :3274).
+ //    K6  the CHECKSTR check also warns on EVENT_REPORT_REP (which has no CHECKSTR).
+ //    K7  the [WARN] text says "A76" although the flag is A77 (A76 went to SPIL in 912) -- text kept verbatim.
+-//    K8  btnRMS_GetLotClick only fills a template (912.1 made it the production query).
++//    K8  retired 20261009 (W-195 H3): btnRMS_GetLotClick runs the lot query (golden 913 :3137-3153).
++//  AI(W906-W195) 20261009 (St02-E) H3: HANARMSCut / HANARMSFailForDialog, btnRMS_GetLotClick, HANARMSCheckRecipe (graded
++//    "no baseline" reasons) and HANARMSRunCheckOK (re-query, the big dialog) follow golden 913 (RogerYang 20260916).
+ // ===========================================================================
+ #include "MachineDefine.h"      // the tree's include hub (golden automation.cpp:1)
+ #include "Automation/HanaRms_St02.h"
+@@ -138,35 +146,40 @@ static AnsiString HANARMSGetKV(AnsiString asLine, AnsiString asKey, bool &bFound
+     return "";
+ }
+ //---------------------------------------------------------------------------
+-//RogerYang 20260827 : CON_MTD - ContactMode 分組 (RELEASE=Drop系{1,4,6,8,9,10} / 其餘 DIRECT)
+-static AnsiString HANARMS_ContactMethod(int iContactMode)   // golden :2595-2609
++//AI(ht9045-hana-rms-interlock) 20261005 (RogerYang) : CON_MTD 改送 Contact mode 名稱(HANA 1002 對照表),RELEASE/DIRECT 停用
++static AnsiString HANARMS_ContactMethod(int iContactMode)   // golden 913 :2598-2616
+ {
+     switch(iContactMode)
+     {
+-        case DropContact:                   //1  Drop
+-        case TMoveDrop:                     //4  TMOVE Drop
+-        case DropContactSoftEP:             //6  Drop & Soft EP
+-        case DropContactModeDiffentSpeed:   //8  Drop & Slow
+-        case TMoveSlowContact:              //9  TMOVE Slow      [912 known defect] K4: 912.0 code and comment say RELEASE (kept)
+-        case TMoveDropSlowContact:          //10 TMOVE Drop & Slow
+-            return "RELEASE";
+-        default:                            //0,2,3,5,7
+-            return "DIRECT";
++        case DirectContactMode:             return "Direct Contact";
++        case DropContact:                   return "Drop Contact";
++        case DirectContactModeDiffentSpeed: return "Direct & Slow Contact";
++        case TMove:                         return "TMOVE Contact";
++        case TMoveDrop:                     return "TMOVE Drop Contact";
++        case DirectContactSoftEP:           return "Direct & Soft EP Contact";
++        case DropContactSoftEP:             return "Drop & Soft EP Contact";
++//        case DropPlaceShiftContact:         return "Shift Contact for 8Site 1x4";     //AI(ht9045-hana-rms-interlock) 20261005 (RogerYang) : HANA 1002 表未列,落 default=UNSUPPORTED
++        case DropContactModeDiffentSpeed:   return "Drop & Slow Contact";
++        case TMoveSlowContact:              return "TMOVE Slow Contact";
++        case TMoveDropSlowContact:          return "TMOVE Drop & Slow Contact";
++        default:                            return "UNSUPPORTED";
+     }
+ }
+ //---------------------------------------------------------------------------
+-//RogerYang 20260827 : LOW_SPD - 慢放模式回 "E",否則 "-"
+-static AnsiString HANARMS_LowSpeed(int iContactMode)   // golden :2612-2624
++//AI(ht9045-hana-rms-interlock) 20261005 (RogerYang) : LOW_SPD 依 HANA 1002 對照表(Slow 與 Soft EP 為 E)
++static bool HANARMS_IsLowSpeed(int iContactMode)   // golden 913 :2618-2633 (912 :2612-2624 HANARMS_LowSpeed returned "E"/"-")
+ {
+     switch(iContactMode)
+     {
+         case DirectContactModeDiffentSpeed: //2  Direct & Slow
++        case DirectContactSoftEP:           //5  Direct & Soft EP
++        case DropContactSoftEP:             //6  Drop & Soft EP
+         case DropContactModeDiffentSpeed:   //8  Drop & Slow
+         case TMoveSlowContact:              //9  TMOVE Slow
+         case TMoveDropSlowContact:          //10 TMOVE Drop & Slow
+-            return "E";
++            return true;
+         default:
+-            return "-";
++            return false;
+     }
+ }
+ //---------------------------------------------------------------------------
+@@ -205,6 +218,98 @@ static bool HANARMS_CmpNum(AnsiString asName, AnsiString asServer, bool bFound,
+     return false;
+ }
+ //---------------------------------------------------------------------------
++//AI(ht9045-hana-rms-interlock) 20261005 (RogerYang) : 以下為 HANA 1002 新規則用 helper
++static void HANARMS_AddFail(AnsiString &asFail, AnsiString asItem)   // golden 913 :2670-2675
++{
++    if(asFail.Length()) asFail += " ; ";
++    asFail += asItem;
++}
++//---------------------------------------------------------------------------
++//"-" 或 "D" 皆為停用(HANA 1002 : no use = disabled)
++static bool HANARMS_IsOff(AnsiString s)   // golden 913 :2677-2682
++{
++    s = s.Trim().UpperCase();
++    return (s == "-" || s == "D");
++}
++//---------------------------------------------------------------------------
++//轉大寫、去頭尾空白、連續空白併成一個底線("Drop & Slow Contact"="DROP_&_SLOW_CONTACT")
++static AnsiString HANARMS_Norm(AnsiString s)   // golden 913 :2684-2704
++{
++    s = s.Trim().UpperCase();
++    AnsiString r = "";
++    bool bSp = false;
++    for(int i=1; i<=s.Length(); i++)
++    {
++        if(s[i]==' ' || s[i]=='\t' || s[i]=='_')
++        {
++            if(!bSp) r += '_';
++            bSp = true;
++        }
++        else
++        {
++            r += s[i];
++            bSp = false;
++        }
++    }
++    return r;
++}
++//---------------------------------------------------------------------------
++//字串欄(CON_MTD):正規化後比對;未送或 "-" 跳過
++static bool HANARMS_CmpNorm(AnsiString asName, AnsiString asServer, bool bFound, AnsiString asHandler, AnsiString &asFail)   // golden 913 :2706-2715
++{
++    if(bFound==false || asServer=="-")
++        return true;
++    if(HANARMS_Norm(asServer) == HANARMS_Norm(asHandler))
++        return true;
++    HANARMS_AddFail(asFail, asName + "(S=" + asServer + "/H=" + asHandler + ")");
++    return false;
++}
++//---------------------------------------------------------------------------
++//開關欄(AT_OFF/LOW_SPD):伺服器 E=須啟用,"-"/D=須停用;Handler 回 E/D
++static bool HANARMS_CmpFlag(AnsiString asName, AnsiString asServer, bool bFound, bool bHandlerOn, AnsiString &asFail)   // golden 913 :2717-2728
++{
++    if(bFound==false)
++        return true;
++    bool bNeedOn = (asServer.Trim().UpperCase() == "E");
++    if(( bNeedOn &&  bHandlerOn) ||
++       (!bNeedOn && !bHandlerOn && HANARMS_IsOff(asServer)))
++        return true;
++    HANARMS_AddFail(asFail, asName + "(S=" + asServer + "/H=" + (bHandlerOn ? "E" : "D") + ")");
++    return false;
++}
++//---------------------------------------------------------------------------
++//數值欄:伺服器送數值=功能須啟用且數值相同;"-"/D=功能須停用。停用時 H 顯示 D
++static bool HANARMS_CmpFunc(AnsiString asName, AnsiString asServer, bool bFound, bool bOn, double dHandler, AnsiString &asFail)   // golden 913 :2730-2748
++{
++    if(bFound==false)
++        return true;
++    if(HANARMS_IsOff(asServer))
++    {
++        if(!bOn) return true;
++    }
++    else if(bOn)
++    {
++        double d = atof(asServer.c_str()) - dHandler;
++        if(d < 0) d = -d;
++        if(d < 0.0005) return true;
++    }
++    AnsiString asH = bOn ? AnsiString().sprintf("%g", dHandler) : AnsiString("D");
++    HANARMS_AddFail(asFail, asName + "(S=" + asServer + "/H=" + asH + ")");
++    return false;
++}
++//---------------------------------------------------------------------------
++//SB 逗號串:"-"/D=Handler 須無 Special Bin;其餘去空白後比對。Handler 無設定時 H 顯示 D
++static bool HANARMS_CmpList(AnsiString asName, AnsiString asServer, bool bFound, AnsiString asHandler, AnsiString &asFail)   // golden 913 :2750-2760
++{
++    if(bFound==false)
++        return true;
++    bool bHOff = (asHandler == "-");
++    if(HANARMS_IsOff(asServer) ? bHOff : (HANARMS_StripSpace(asServer) == asHandler))
++        return true;
++    HANARMS_AddFail(asFail, asName + "(S=" + asServer + "/H=" + (bHOff ? AnsiString("D") : asHandler) + ")");
++    return false;
++}
++//---------------------------------------------------------------------------
+ //RogerYang 20260827 : 取 Special Bin 逗號串(bin 與 count 各一串,遞增排序);未啟用回 "-"
+ static void HANARMS_GetSpecialBinStr(bool bByArm, int iBinIdx, AnsiString &asBin, AnsiString &asCnt)   // golden :2662-2679
+ {
+@@ -225,9 +330,72 @@ static void HANARMS_GetSpecialBinStr(bool bByArm, int iBinIdx, AnsiString &asBin
+     if(asBin == "") { asBin = "-"; asCnt = "-"; }
+ }
+ //---------------------------------------------------------------------------
++//---------------------------------------------------------------------------
++//RogerYang 20260916 : 依標籤寬度截斷,避免單欄自己折成兩行
++static AnsiString HANARMSCut(AnsiString asStr, int iMax)   // golden 913 :2783-2789 (AI(W906-W195) 20261009 H3)
++{
++    if(asStr.Length() <= iMax)
++        return asStr;
++    return asStr.SubString(1, iMax-3) + "...";
++}
++//---------------------------------------------------------------------------
++//RogerYang 20260916 : 組裝彈窗訊息。MyMessageBox 兩個 Label 固定大小且不捲動,
++//  搭配 bBigMyMessage(570px 寬/左對齊)與暫時加高後約 主3行 + 次8行,每行約 71 字。
++//  20 欄全列約 519 字會被無聲裁掉,故逐欄分行並限量;完整清單一律看 RMS 畫面與 log。
++//  訊息全用英文(HANA 為韓國客戶,中文對現場無用)。
++static void HANARMSFailForDialog(AnsiString asFail, AnsiString &asMain, AnsiString &asSub)   // golden 913 :2791-2844 (H3)
++{
++    const int iMainMax=2, iSubMax=6, iCutW=58;                              //實測 570px 約 8.8px/字 -> 每行 64 字,
++                                                                            //  截 58 保留餘裕(超過會 WordWrap 折行吃掉下一欄);
++                                                                            //  次標籤 150px/19px=7.9 行 -> 6 欄 + 1 總數行
++    AnsiString asShow[9];
++    int iTotal=0, iKeep=0;
++
++    AnsiString asWork = asFail;
++    while(asWork.Length())                                                  //以 " ; " 逐欄切開
++    {
++        int p = asWork.Pos(" ; ");
++        AnsiString asOne = (p > 0) ? asWork.SubString(1, p-1) : asWork;
++        if(p > 0)
++            asWork.Delete(1, p+2);
++        else
++            asWork = "";
++        asOne = asOne.Trim();
++        if(asOne.Length() == 0)
++            continue;
++        iTotal++;
++        if(iKeep < (iMainMax+iSubMax))
++            asShow[iKeep++] = asOne;
++    }
++
++    if(asFail.Pos("(S=") <= 0)                                              //連線類訊息(不含欄位格式)原樣帶出
++    {                                                                       //  不可用欄位數判斷:只錯一欄時也沒有 " ; ",會誤判成連線訊息而漏掉標題
++        asMain = asFail;
++        asSub  = "See RMS screen and log for details.";                      //此分支涵蓋「未開批」等非連線原因,
++                                                                            //  措辭不可寫死成查連線,主訊息本身已說明原因
++        return;
++    }
++
++    asMain.sprintf("HANA RMS recipe check FAIL!!  (%d item%s)", iTotal, (iTotal>1)?"s":"");
++    asSub = "";
++    for(int i=0; i<iKeep; i++)
++    {
++        if(i < iMainMax)
++            asMain += "\r\n" + HANARMSCut(asShow[i], iCutW);
++        else
++            asSub  += (asSub.Length()?AnsiString("\r\n"):AnsiString("")) + HANARMSCut(asShow[i], iCutW);
++    }
++
++    AnsiString asTail;                                                      //最後一行永遠可見
++    if(iTotal > iKeep)
++        asTail.sprintf("... +%d more, see RMS screen for the full list", iTotal-iKeep);
++    else
++        asTail = "Correct the item(s) above, then press START again.";       //全部列完了,給下一步指引比叫人去看 log 有用
++    asSub += (asSub.Length()?AnsiString("\r\n"):AnsiString("")) + asTail;
++}
+ //RogerYang 20260827 : GET_JOB_INFO_REP 與本機 recipe 逐欄比對。true=全過;asFail 列出所有不符
+-//  規則:數值完全相等、"-"跳過、AT_OFF 無 RT 變體故 FT/RT 比同一旗標。細節見 HANA RMS 技能
+-static bool HANARMSCompare(AnsiString asLine, AnsiString &asFail)   // golden :2683-2769
++//AI(ht9045-hana-rms-interlock) 20261005 (RogerYang) : 規則依 HANA 1002:"-"/D=功能須停用、數值欄須啟用且相等、RT_AT_OFF 固定 D。細節見 HANA RMS 技能
++static bool HANARMSCompare(AnsiString asLine, AnsiString &asFail)   // golden 913 :2845-2936 (912 :2683-2769)
+ {
+     bool bOK = true;
+     bool bF;
+@@ -249,14 +417,16 @@ static bool HANARMSCompare(AnsiString asLine, AnsiString &asFail)   // golden :2
+     {
+         if(LastSet.iTemperature==Tempture_Hot || LastSet.iTemperature==Tempture_AmbientHot)
+             bOK &= HANARMS_CmpNum("TEMP", sv, true, Temperature.fWorkTemperBase, asFail);
+-        else if(Temperature.bUseAbitCHK)
++        else                                                                    //AI(ht9045-hana-rms-interlock) 20261005 (RogerYang) : 室溫一律比 Ambient temp. 設定值,不看 Ambient check(HANA 1001)
+             bOK &= HANARMS_CmpNum("TEMP", sv, true, Temperature.fAbitTemp, asFail);
+-        else if(sv != "-")
+-        {
+-            bOK = false;
+-            if(asFail.Length()) asFail += " ; ";
+-            asFail += "TEMP(S=" + sv + "/H=RoomTemp)";
+-        }
++//        else if(Temperature.bUseAbitCHK)
++//            bOK &= HANARMS_CmpNum("TEMP", sv, true, Temperature.fAbitTemp, asFail);
++//        else if(sv != "-")
++//        {
++//            bOK = false;
++//            if(asFail.Length()) asFail += " ; ";
++//            asFail += "TEMP(S=" + sv + "/H=RoomTemp)";
++//        }
+     }
+ 
+     sv = HANARMSGetKV(asLine, "PIN_CNT", bF);
+@@ -265,56 +435,57 @@ static bool HANARMSCompare(AnsiString asLine, AnsiString &asFail)   // golden :2
+     sv = HANARMSGetKV(asLine, "PIN_FC", bF);                                    //單位 gf
+     bOK &= HANARMS_CmpNum("PIN_FC", sv, bF, DeviceForm_File.ForcePerPinG, asFail);
+ 
+-    sv = HANARMSGetKV(asLine, "CON_MTD", bF);
+-    bOK &= HANARMS_CmpEq("CON_MTD", sv, bF, HANARMS_ContactMethod(DeviceForm_File.ContactMode), asFail);
++    sv = HANARMSGetKV(asLine, "CON_MTD", bF);                                   //AI(ht9045-hana-rms-interlock) 20261005 (RogerYang) : Contact mode 名稱,大小寫/空白不拘
++    bOK &= HANARMS_CmpNorm("CON_MTD", sv, bF, HANARMS_ContactMethod(DeviceForm_File.ContactMode), asFail);
+ 
+-    sv = HANARMSGetKV(asLine, "WIN_CNT", bF);
+-    bOK &= HANARMS_CmpNum("WIN_CNT", sv, bF, (double)TestIF.iSlidingWindowSize, asFail);
++    sv = HANARMSGetKV(asLine, "WIN_CNT", bF);                                   //AI(ht9045-hana-rms-interlock) 20261005 (RogerYang) : 改比 Low Yields after test count(含 Enable)
++    bOK &= HANARMS_CmpFunc("WIN_CNT", sv, bF, TestIF.bFailAlarmLowYield, (double)TestIF.iLowYieldCount, asFail);
++//    bOK &= HANARMS_CmpNum("WIN_CNT", sv, bF, (double)TestIF.iSlidingWindowSize, asFail);
+ 
+     sv = HANARMSGetKV(asLine, "LOW_SPD", bF);
+-    bOK &= HANARMS_CmpEq("LOW_SPD", sv, bF, HANARMS_LowSpeed(DeviceForm_File.ContactMode), asFail);
++    bOK &= HANARMS_CmpFlag("LOW_SPD", sv, bF, HANARMS_IsLowSpeed(DeviceForm_File.ContactMode), asFail);
+ 
+-    //--- FT ---
++    //--- FT ---(數值欄一併檢查功能 Enable)
+     sv = HANARMSGetKV(asLine, "FT.C_FAIL_SCK", bF);
+-    bOK &= HANARMS_CmpNum("FT.C_FAIL_SCK", sv, bF, (double)TestIF.iContsFailSocketAlarmCT, asFail);
++    bOK &= HANARMS_CmpFunc("FT.C_FAIL_SCK", sv, bF, TestIF.bContsFailBySocket, (double)TestIF.iContsFailSocketAlarmCT, asFail);
+     sv = HANARMSGetKV(asLine, "FT.S_T_S", bF);
+-    bOK &= HANARMS_CmpNum("FT.S_T_S", sv, bF, TestIF.dFailAlarmSiteYield, asFail);
++    bOK &= HANARMS_CmpFunc("FT.S_T_S", sv, bF, TestIF.bFailAlarmSiteYieldDifferent, TestIF.dFailAlarmSiteYield, asFail);
+     sv = HANARMSGetKV(asLine, "FT.LOW_YD", bF);
+-    bOK &= HANARMS_CmpNum("FT.LOW_YD", sv, bF, TestIF.dLowYieldLimit, asFail);
+-    sv = HANARMSGetKV(asLine, "FT.AT_OFF", bF);
+-    bOK &= HANARMS_CmpEq("FT.AT_OFF", sv, bF, TestIF.bLowYieldAutoSiteOff ? AnsiString("E") : AnsiString("-"), asFail);
++    bOK &= HANARMS_CmpFunc("FT.LOW_YD", sv, bF, TestIF.bFailAlarmLowYield, TestIF.dLowYieldLimit, asFail);
++    sv = HANARMSGetKV(asLine, "FT.AT_OFF", bF);                                 //AI(ht9045-hana-rms-interlock) 20261005 (RogerYang) : 改比 Consecutive Failure(Socket) 的 Trigger
++    bOK &= HANARMS_CmpFlag("FT.AT_OFF", sv, bF, TestIF.bLowYieldAutoSiteOffByContiFail, asFail);
+ 
+     HANARMS_GetSpecialBinStr(true, eBinFT, hb, hc);
+     sv = HANARMSGetKV(asLine, "FT.SB_ARM", bF);
+-    bOK &= HANARMS_CmpEq("FT.SB_ARM", HANARMS_StripSpace(sv), bF, hb, asFail);
++    bOK &= HANARMS_CmpList("FT.SB_ARM", sv, bF, hb, asFail);
+     sv = HANARMSGetKV(asLine, "FT.SB_ARM_CNT", bF);
+-    bOK &= HANARMS_CmpEq("FT.SB_ARM_CNT", HANARMS_StripSpace(sv), bF, hc, asFail);
++    bOK &= HANARMS_CmpList("FT.SB_ARM_CNT", sv, bF, hc, asFail);
+     HANARMS_GetSpecialBinStr(false, eBinFT, hb, hc);
+     sv = HANARMSGetKV(asLine, "FT.SB_SCK", bF);
+-    bOK &= HANARMS_CmpEq("FT.SB_SCK", HANARMS_StripSpace(sv), bF, hb, asFail);
++    bOK &= HANARMS_CmpList("FT.SB_SCK", sv, bF, hb, asFail);
+     sv = HANARMSGetKV(asLine, "FT.SB_SCK_CNT", bF);
+-    bOK &= HANARMS_CmpEq("FT.SB_SCK_CNT", HANARMS_StripSpace(sv), bF, hc, asFail);
++    bOK &= HANARMS_CmpList("FT.SB_SCK_CNT", sv, bF, hc, asFail);
+ 
+     //--- RT ---
+     sv = HANARMSGetKV(asLine, "RT.C_FAIL_SCK", bF);
+-    bOK &= HANARMS_CmpNum("RT.C_FAIL_SCK", sv, bF, (double)TestIF.iContsFailSocketAlarmCT_RT, asFail);
++    bOK &= HANARMS_CmpFunc("RT.C_FAIL_SCK", sv, bF, TestIF.bContsFailBySocket_RT, (double)TestIF.iContsFailSocketAlarmCT_RT, asFail);
+     sv = HANARMSGetKV(asLine, "RT.S_T_S", bF);
+-    bOK &= HANARMS_CmpNum("RT.S_T_S", sv, bF, TestIF.dFailAlarmSiteYield_RT, asFail);
++    bOK &= HANARMS_CmpFunc("RT.S_T_S", sv, bF, TestIF.bFailAlarmSiteYieldDifferent_RT, TestIF.dFailAlarmSiteYield_RT, asFail);
+     sv = HANARMSGetKV(asLine, "RT.LOW_YD", bF);
+-    bOK &= HANARMS_CmpNum("RT.LOW_YD", sv, bF, TestIF.dLowYieldLimit_RT, asFail);
+-    sv = HANARMSGetKV(asLine, "RT.AT_OFF", bF);
+-    bOK &= HANARMS_CmpEq("RT.AT_OFF", sv, bF, TestIF.bLowYieldAutoSiteOff ? AnsiString("E") : AnsiString("-"), asFail);
++    bOK &= HANARMS_CmpFunc("RT.LOW_YD", sv, bF, TestIF.bFailAlarmLowYield_RT, TestIF.dLowYieldLimit_RT, asFail);
++    sv = HANARMSGetKV(asLine, "RT.AT_OFF", bF);                                 //AI(ht9045-hana-rms-interlock) 20261005 (RogerYang) : RT 無此功能(Auto Site Off 只在 FT 生效),固定回 D
++    bOK &= HANARMS_CmpFlag("RT.AT_OFF", sv, bF, false, asFail);
+ 
+     HANARMS_GetSpecialBinStr(true, eBinRT, hb, hc);
+     sv = HANARMSGetKV(asLine, "RT.SB_ARM", bF);
+-    bOK &= HANARMS_CmpEq("RT.SB_ARM", HANARMS_StripSpace(sv), bF, hb, asFail);
++    bOK &= HANARMS_CmpList("RT.SB_ARM", sv, bF, hb, asFail);
+     sv = HANARMSGetKV(asLine, "RT.SB_ARM_CNT", bF);
+-    bOK &= HANARMS_CmpEq("RT.SB_ARM_CNT", HANARMS_StripSpace(sv), bF, hc, asFail);
++    bOK &= HANARMS_CmpList("RT.SB_ARM_CNT", sv, bF, hc, asFail);
+     HANARMS_GetSpecialBinStr(false, eBinRT, hb, hc);
+     sv = HANARMSGetKV(asLine, "RT.SB_SCK", bF);
+-    bOK &= HANARMS_CmpEq("RT.SB_SCK", HANARMS_StripSpace(sv), bF, hb, asFail);
++    bOK &= HANARMS_CmpList("RT.SB_SCK", sv, bF, hb, asFail);
+     sv = HANARMSGetKV(asLine, "RT.SB_SCK_CNT", bF);
+-    bOK &= HANARMS_CmpEq("RT.SB_SCK_CNT", HANARMS_StripSpace(sv), bF, hc, asFail);
++    bOK &= HANARMS_CmpList("RT.SB_SCK_CNT", sv, bF, hc, asFail);
+ 
+     return bOK;
+ }
+@@ -352,13 +523,13 @@ static void HANARMSParseJobInfoRep(TMemo *mmo, AnsiString asLine)   // golden :2
+     HANARMSAddField(mmo, "TEMP",     asLine, "TEMP",     "(C ; -=room temp)");
+     HANARMSAddField(mmo, "PIN_CNT",  asLine, "PIN_CNT",  "");
+     HANARMSAddField(mmo, "PIN_FC",   asLine, "PIN_FC",   "(gf)");
+-    HANARMSAddField(mmo, "CON_MTD",  asLine, "CON_MTD",  "(RELEASE/DIRECT)");
++    HANARMSAddField(mmo, "CON_MTD",  asLine, "CON_MTD",  "(contact mode)");                         // golden 913 :2971
+     HANARMSAddField(mmo, "WIN_CNT",  asLine, "WIN_CNT",  "");
+     //FT group
+     HANARMSAddField(mmo, "FT.C_FAIL_SCK", asLine, "FT.C_FAIL_SCK", "");
+     HANARMSAddField(mmo, "FT.S_T_S",      asLine, "FT.S_T_S",      "");
+     HANARMSAddField(mmo, "FT.LOW_YD",     asLine, "FT.LOW_YD",     "");
+-    HANARMSAddField(mmo, "FT.AT_OFF",     asLine, "FT.AT_OFF",     "(E=enable)");
++    HANARMSAddField(mmo, "FT.AT_OFF",     asLine, "FT.AT_OFF",     "(E=enable/D=disable)");     // golden 913 :2977
+     HANARMSAddField(mmo, "FT.SB_ARM",     asLine, "FT.SB_ARM",     "");
+     HANARMSAddField(mmo, "FT.SB_ARM_CNT", asLine, "FT.SB_ARM_CNT", "");
+     HANARMSAddField(mmo, "FT.SB_SCK",     asLine, "FT.SB_SCK",     "");
+@@ -367,13 +538,13 @@ static void HANARMSParseJobInfoRep(TMemo *mmo, AnsiString asLine)   // golden :2
+     HANARMSAddField(mmo, "RT.C_FAIL_SCK", asLine, "RT.C_FAIL_SCK", "");
+     HANARMSAddField(mmo, "RT.S_T_S",      asLine, "RT.S_T_S",      "");
+     HANARMSAddField(mmo, "RT.LOW_YD",     asLine, "RT.LOW_YD",     "");
+-    HANARMSAddField(mmo, "RT.AT_OFF",     asLine, "RT.AT_OFF",     "(E=enable)");
++    HANARMSAddField(mmo, "RT.AT_OFF",     asLine, "RT.AT_OFF",     "(E=enable/D=disable)");     // golden 913 :2986
+     HANARMSAddField(mmo, "RT.SB_ARM",     asLine, "RT.SB_ARM",     "");
+     HANARMSAddField(mmo, "RT.SB_ARM_CNT", asLine, "RT.SB_ARM_CNT", "");
+     HANARMSAddField(mmo, "RT.SB_SCK",     asLine, "RT.SB_SCK",     "");
+     HANARMSAddField(mmo, "RT.SB_SCK_CNT", asLine, "RT.SB_SCK_CNT", "");
+     //0722 additions
+-    HANARMSAddField(mmo, "LOW_SPD",  asLine, "LOW_SPD",  "(E=enable)");
++    HANARMSAddField(mmo, "LOW_SPD",  asLine, "LOW_SPD",  "(E=enable/D=disable)");                   // golden 913 :2992
+     HANARMSAddField(mmo, "GET_RDY",  asLine, "GET_RDY",  "");
+ 
+     //RogerYang 20260827 : 收到 JOB 資訊即與本機 recipe 比對,結果寫 log
+@@ -414,13 +585,15 @@ void THanaRmsMembers::W906_HANARMSClientCreate()
+ }
+ //---------------------------------------------------------------------------
+ void THanaRmsMembers::HANARMSClientConnect(TObject * /*Sender*/,
+-      Scktcomp::TCustomWinSocket * /*Socket*/)                                 // golden :2838-2845
++      Scktcomp::TCustomWinSocket * /*Socket*/)                                 // golden 913 :3005-3014 (912 :2838-2845)
+ {
+     //RogerYang 20260727 : connected
+     bW906HANARMSConnecting = false;                                             // [W906] 5
+     g_asHANARMSRecvBuf = "";
+     if(lblRMS_Status) lblRMS_Status->Caption = "Connected";
+     HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [INFO] ", "connected");
++    sHANARMSLinkErr = "";                                                   //RogerYang 20260916 : 連上了,清掉舊錯誤
++    HANARMSFlushPending();                                                  //RogerYang 20260916 : 把排隊中的指令送出
+ }
+ //---------------------------------------------------------------------------
+ void THanaRmsMembers::HANARMSClientDisconnect(TObject * /*Sender*/,
+@@ -467,7 +640,7 @@ void THanaRmsMembers::HANARMSClientRead(TObject * /*Sender*/,
+         if(sHANARMSLot != "" && asLine.Pos("GET_LOT_INFO_REP") > 0)
+         {
+             bool bF;
+-            AnsiString asHD  = ReadIniData(w906hanarms::IniPath(), "Setting", "HDName", AnsiString("HD_01"));   // [W906] 3 path; [912 known defect] K2 HD_01
++            AnsiString asHD  = HANARMSGetHDName();                          //RogerYang 20260916 : 預設用機台 Machine ID   (golden 913 :3059; K2 retired)
+             AnsiString asJob = "CMD=\"GET_JOB_INFO\" LOT=\"" + sHANARMSLot + "\"";
+             asJob += " HDNAME=\""   + asHD + "\"";
+             asJob += " LOCATION=\"" + HANARMSGetKV(asLine, "LOCATION", bF) + "\"";
+@@ -487,11 +660,15 @@ void THanaRmsMembers::HANARMSClientRead(TObject * /*Sender*/,
+ }
+ //---------------------------------------------------------------------------
+ void THanaRmsMembers::HANARMSClientError(TObject * /*Sender*/,
+-      Scktcomp::TCustomWinSocket * /*Socket*/, Scktcomp::TErrorEvent /*ErrorEvent*/, int &ErrorCode)   // golden :2909-2916
++      Scktcomp::TCustomWinSocket * /*Socket*/, Scktcomp::TErrorEvent /*ErrorEvent*/, int &ErrorCode)   // golden 913 :3078-3089 (912 :2909-2916)
+ {
+     //RogerYang 20260727 : swallow error code (no system dialog), just log + reset status
++    //RogerYang 20260916 : 記下可讀的失敗原因,供互鎖訊息區分「連不上」與「參數不符」
+     bW906HANARMSConnecting = false;                                             // [W906] 5
+-    HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [ERR] ", "socket error "+IntToStr(ErrorCode));
++    sHANARMSLinkErr.sprintf("cannot connect to %s:%s (socket error %d)",
++                            edtHANARMSIP->Text.c_str(), edtHANARMSPort->Text.c_str(), ErrorCode);
++    HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [ERR] ", sHANARMSLinkErr);
++    sHANARMSPending = "";                                                   //連不上就不留著,避免稍後莫名送出
+     ErrorCode = 0;
+     if(lblRMS_Status) lblRMS_Status->Caption = "Disconnected";
+ }
+@@ -544,28 +721,40 @@ void THanaRmsMembers::btnRMS_ClearLogClick(TObject * /*Sender*/)              //
+         mmoHANARMS->Lines->Clear();
+ }
+ //---------------------------------------------------------------------------
+-void THanaRmsMembers::btnRMS_GetLotClick(TObject * /*Sender*/)                // golden :2964-2968   [912 known defect] K2 / K8
++void THanaRmsMembers::btnRMS_GetLotClick(TObject * /*Sender*/)                // golden 913 :3137-3153 (912 :2964-2968; AI(W906-W195) 20261009 H3: K8 retired)
+ {
+     //RogerYang 20260727 : fill GET_LOT_INFO request template (Handler -> Server)
+-    edtHANARMSManCmd->Text = "CMD=\"GET_LOT_INFO\" LOT=\"TLOTNO\" HDNAME=\"HD_01\" CHECKSTR=\"END\"";
++//    edtHANARMSManCmd->Text = "CMD=\"GET_LOT_INFO\" LOT=\"TLOTNO\" HDNAME=\"HD_01\" CHECKSTR=\"END\"";
++    //RogerYang 20260916 : 改為直接執行查詢(與開批 LOTON 同一路徑),兼作互鎖失敗後的手動重試
++    bool bF;
++    AnsiString asLot = sHANARMSLot.Trim();                                  //1.開批取得的批號
++    if(asLot == "")
++        asLot = HANARMSGetKV(edtHANARMSManCmd->Text, "LOT", bF).Trim();     //2.手動欄位的 LOT="..."
++    if(asLot == "")
++    {
++        edtHANARMSManCmd->Text = "CMD=\"GET_LOT_INFO\" LOT=\"TLOTNO\" HDNAME=\"" + HANARMSGetHDName() + "\" CHECKSTR=\"END\"";
++        HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [WARN] ", "no lot : start a lot first, or edit LOT= in the command box");
++        return;
++    }
++    HANARMSQueryJobInfo(asLot);
+ }
+ //---------------------------------------------------------------------------
+-void THanaRmsMembers::btnRMS_GetJobClick(TObject * /*Sender*/)                // golden :2970-2974
++void THanaRmsMembers::btnRMS_GetJobClick(TObject * /*Sender*/)                // golden 913 :3155-3159 (912 :2970-2974)
+ {
+     //RogerYang 20260727 : fill GET_JOB_INFO request template
+-    edtHANARMSManCmd->Text = "CMD=\"GET_JOB_INFO\" LOT=\"TLOTNO\" HDNAME=\"HD_01\" LOCATION=\"T9999\" CUSTCD=\"CS\" PARTNO=\"XXX_XXXX_XXX_XXX\" CHECKSTR=\"END\"";
++    edtHANARMSManCmd->Text = "CMD=\"GET_JOB_INFO\" LOT=\"TLOTNO\" HDNAME=\"" + HANARMSGetHDName() + "\" LOCATION=\"T9999\" CUSTCD=\"CS\" PARTNO=\"XXX_XXXX_XXX_XXX\" CHECKSTR=\"END\"";   //RogerYang 20260916 : HDNAME 用機號
+ }
+ //---------------------------------------------------------------------------
+-void THanaRmsMembers::btnRMS_EventClick(TObject * /*Sender*/)                 // golden :2976-2980
++void THanaRmsMembers::btnRMS_EventClick(TObject * /*Sender*/)                 // golden 913 :3161-3165 (912 :2976-2980)
+ {
+     //RogerYang 20260727 : fill EVENT_REPORT request template (PJ_FG=YES ok / NO fail ; PJ_CD=10 ok)
+-    edtHANARMSManCmd->Text = "CMD=\"EVENT_REPORT\" LOT=\"TLOTNO\" HDNAME=\"HD_01\" LOCATION=\"T9999\" CUSTCD=\"CS\" PARTNO=\"XXX_XXXX_XXX_XXX\" RCP_NAME=\"EXEC_RCPNAME_TEMPO\" PJ_FG=\"YES\" PJ_CD=\"10\" COMMENT=\"-\" CHECKSTR=\"END\"";
++    edtHANARMSManCmd->Text = "CMD=\"EVENT_REPORT\" LOT=\"TLOTNO\" HDNAME=\"" + HANARMSGetHDName() + "\" LOCATION=\"T9999\" CUSTCD=\"CS\" PARTNO=\"XXX_XXXX_XXX_XXX\" RCP_NAME=\"EXEC_RCPNAME_TEMPO\" PJ_FG=\"YES\" PJ_CD=\"10\" COMMENT=\"-\" CHECKSTR=\"END\"";   //RogerYang 20260916 : HDNAME 用機號
+ }
+ //---------------------------------------------------------------------------
+-void THanaRmsMembers::btnRMS_GetTimeClick(TObject * /*Sender*/)               // golden :2982-2986
++void THanaRmsMembers::btnRMS_GetTimeClick(TObject * /*Sender*/)               // golden 913 :3167-3171 (912 :2982-2986)
+ {
+     //RogerYang 20260727 : fill GET_TIME_INFO request template
+-    edtHANARMSManCmd->Text = "CMD=\"GET_TIME_INFO\" HDNAME=\"HD_01\" CHECKSTR=\"END\"";
++    edtHANARMSManCmd->Text = "CMD=\"GET_TIME_INFO\" HDNAME=\"" + HANARMSGetHDName() + "\" CHECKSTR=\"END\"";   //RogerYang 20260916 : HDNAME 用機號
+ }
+ //---------------------------------------------------------------------------
+ void THanaRmsMembers::btnRMS_AliveClick(TObject * /*Sender*/)                 // golden :2988-2992
+@@ -607,11 +796,12 @@ void THanaRmsMembers::btnHANARMSSettingClick(TObject * /*Sender*/)            //
+ //  (labAutomationDblClick, the OLP page) and cConfiguration.cpp:7933-7937 (btnA77RMSSettingClick).
+ //---------------------------------------------------------------------------
+ //RogerYang : load HANA RMS IP/Port from dedicated ini into the edit fields
+-void THanaRmsMembers::LoadHANARMSSetting()                                      // golden :3042-3047   [912 known defect] K3 defaults
++void THanaRmsMembers::LoadHANARMSSetting()                                      // golden 913 :3227-3233 (912 :3042-3047; K3 retired)
+ {
+     AnsiString ini = w906hanarms::IniPath();                                    // [W906] 3: golden AnsiString ini = "D:\\HT9045\\config\\HANARMS.ini";
+-    edtHANARMSIP->Text   = ReadIniData(ini, "Setting", "IP",   AnsiString("127.0.0.1"));
+-    edtHANARMSPort->Text = ReadIniData(ini, "Setting", "Port", AnsiString("6670"));
++    //RogerYang 20260916 : 預設留空(=未設定);原本的 127.0.0.1 佔位值會讓人誤以為已設定
++    edtHANARMSIP->Text   = ReadIniData(ini, "Setting", "IP",   AnsiString(""));
++    edtHANARMSPort->Text = ReadIniData(ini, "Setting", "Port", AnsiString("14140"));
+ }
+ 
+ //  golden :3049-3074 PrepareHANARMSConnect -> Automation/HanaRms_Prepare_St02.cpp
+@@ -619,51 +809,158 @@ void THanaRmsMembers::LoadHANARMSSetting()
+ //---------------------------------------------------------------------------
+ //---------------------------------------------------------------------------
+ //RogerYang 20260902 : 送一句 RMS 命令(自動補\n);未連線只記 log
+-void THanaRmsMembers::HANARMSSendCmd(AnsiString asCmd)                          // golden :3078-3101
++void THanaRmsMembers::HANARMSSendCmd(AnsiString asCmd)                          // golden 913 :3249-3276 (912 :3078-3101; K1 / K5 retired)
+ {
+     asCmd = asCmd.Trim();
+     if(asCmd.Length() == 0)
+         return;
+ 
+-    HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [TX] ", asCmd);                  // [912 known defect] K5: logged before the link is checked
+-
+-    if(HANARMSClient && HANARMSClient->Active && HANARMSClient->Socket->Connected)
++    if(HANARMSIsConnected())                                                //RogerYang 20260916 : 已連線直接送
+     {
+         try
+         {
+             HANARMSClient->Socket->SendText(asCmd + "\n");
++            HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [TX] ", asCmd);        //真的送出才記 TX
+         }
+         catch(...)
+         {
+             HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [ERR] ", "send exception");
+         }
++        return;
+     }
+-    else
++
++    //RogerYang 20260916 : 未連線 -> 排隊後發起連線,連上再送(不可同步等,會凍住 MainProc)
++    if(sHANARMSPending.Length())
++        sHANARMSPending += "\n";
++    sHANARMSPending += asCmd;
++    HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [QUEUE] ", asCmd);
++    HANARMSConnect();
++}
++//---------------------------------------------------------------------------
++//RogerYang 20260916 : 連線是否真的可用(Active 不等於連得上)
++bool THanaRmsMembers::HANARMSIsConnected()                                      // golden 913 :3278-3290
++{
++    try
++    {
++        return (HANARMSClient != NULL && HANARMSClient->Active &&
++                HANARMSClient->Socket != NULL && HANARMSClient->Socket->Connected);
++    }
++    catch(...)
++    {
++        return false;
++    }
++}
++//---------------------------------------------------------------------------
++//RogerYang 20260916 : 發起非阻塞連線;連上由 HANARMSClientConnect 沖出待送指令
++void THanaRmsMembers::HANARMSConnect()                                          // golden 913 :3292-3326
++{
++    // [W906] 1: golden `if(HANARMSClient == NULL) return;` (:3295-3296) -- the dfm component always exists there; here it
++    //   is made on first use, right before the first Open (below), so "IP/Port not set" makes no socket.
++    if(HANARMSIsConnected())
++        return;
++    if(bW906HANARMSConnecting)                                                  // [W906] 5: a polled connect is pending (Active stays false until it completes, so golden's Close below would not run and the polled socket ignores a second Open) -- skipping only saves a second "connecting to" line
++        return;
++
++    LoadHANARMSSetting();
++    AnsiString asIP = edtHANARMSIP->Text.Trim();
++    int iPort = atoi(edtHANARMSPort->Text.c_str());
++    if(asIP == "" || iPort <= 0)
+     {
+-        HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [WARN] ", "not connected, not sent");   // [912 known defect] K1: no reconnect here
++        sHANARMSLinkErr = "RMS server IP/Port not set";
++        sHANARMSPending = "";
++        HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [ERR] ", sHANARMSLinkErr);
++        return;
++    }
++
++    try
++    {
++        W906_HANARMSClientCreate();                                             // [W906] 1: see above
++        if(HANARMSClient->Active)                                            //清掉已斷的舊 socket 才能重連
++            HANARMSClient->Close();
++        HANARMSClient->Address = asIP;
++        HANARMSClient->Port    = iPort;
++        HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [INFO] ", "connecting to "+asIP+":"+edtHANARMSPort->Text);
++        bW906HANARMSConnecting = true;                                          // [W906] 5: before Open -- a Sim Open connects inside the call and OnConnect clears it
++        HANARMSClient->Open();
++    }
++    catch(...)
++    {
++        bW906HANARMSConnecting = false;                                         // [W906] 5
++        sHANARMSLinkErr = "connect exception";
++        sHANARMSPending = "";
++        HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [ERR] ", sHANARMSLinkErr);
+     }
+ }
+ //---------------------------------------------------------------------------
++//RogerYang 20260916 : 把連線期間排隊的指令依序送出
++void THanaRmsMembers::HANARMSFlushPending()                                     // golden 913 :3328-3347
++{
++    if(sHANARMSPending.Length() == 0)
++        return;
++
++    AnsiString asAll = sHANARMSPending;
++    sHANARMSPending  = "";                                                  //先清,避免重入時重送
++    while(asAll.Length())
++    {
++        int iPos = asAll.Pos("\n");
++        AnsiString asOne = (iPos > 0) ? asAll.SubString(1, iPos-1) : asAll;
++        if(iPos > 0)
++            asAll.Delete(1, iPos);
++        else
++            asAll = "";
++        if(asOne.Trim().Length())
++            HANARMSSendCmd(asOne);
++    }
++}
++//---------------------------------------------------------------------------
++//RogerYang 20260916 : HDNAME 預設=機台 Machine ID(Gerneral.ini [Version] Machine ID)
++//  HANARMS.ini 的 HDName 有填才覆寫(現場若 RMS 註冊名與機台不同時用)
++AnsiString THanaRmsMembers::HANARMSGetHDName()                                  // golden 913 :3349-3358
++{
++    AnsiString asHD = ReadIniData(w906hanarms::IniPath(), "Setting", "HDName", AnsiString(""));   // [W906] 3: golden "D:\\HT9045\\config\\HANARMS.ini"
++    asHD = asHD.Trim();
++    if(asHD == "")
++        asHD = AnsiString(IniConfig.sGPIBMachineID).Trim();                  //Gerneral.ini 的值常帶尾端空白
++    return asHD;
++}
++//---------------------------------------------------------------------------
+ //RogerYang 20260902 : 開批自動查詢。先送 GET_LOT_INFO,收到 REP 由 ClientRead 接送 GET_JOB_INFO
+-void THanaRmsMembers::HANARMSQueryJobInfo(AnsiString asLot)                     // golden :3104-3114
++void THanaRmsMembers::HANARMSQueryJobInfo(AnsiString asLot)                     // golden 913 :3360-3377 (912 :3104-3114)
+ {
+     if(IniConfig.bA77_EnableHanaRMSInterlock==false)
+         return;
+-    sHANARMSLot = asLot.Trim();                                                 // golden :3108
+-    sHANARMSJobInfoLine = "";                                                   //換批,舊基準作廢   golden :3109 verbatim (St02-M 1002 19:2x: RogerYang's comment and the code agree -- this is the lot-open query -- so the old [W906] 6 "same lot keeps it" is dropped)
+-    if(sHANARMSLot == "")
+-        return;
+-    AnsiString asHD = ReadIniData(w906hanarms::IniPath(), "Setting", "HDName", AnsiString("HD_01"));   // [W906] 3 path; [912 known defect] K2 HD_01
++    //RogerYang 20260916 : 只有換批才作廢舊基準;同批重查(手動 Get Lot/自動重試)失敗時保留原基準,
++    //  否則按一下 Get Lot 就可能把原本有效的基準弄丟,反而把機台擋住
++    AnsiString asNewLot = asLot.Trim();
++    if(asNewLot == "")
++        return;                                                             //無批號:不動基準也不查詢
++    if(sHANARMSLot.Trim() != asNewLot)
++        sHANARMSJobInfoLine = "";                                           //換批,舊基準作廢
++    sHANARMSLot = asNewLot;
++    sHANARMSPending   = "";                                                 //RogerYang 20260916 : 丟掉上一批沒送出的指令
++    dwHANARMSSentTick = GetTickCount();                                     //RogerYang 20260916 : 查詢起算時刻
++    AnsiString asHD = HANARMSGetHDName();
+     HANARMSSendCmd("CMD=\"GET_LOT_INFO\" LOT=\"" + sHANARMSLot + "\" HDNAME=\"" + asHD + "\" CHECKSTR=\"END\"");
+ }
+ //---------------------------------------------------------------------------
+ //RogerYang 20260902 : 以最後收到的 JOB 資訊基準重比本機 recipe。無基準=false
+-bool THanaRmsMembers::HANARMSCheckRecipe(AnsiString &asFail)                    // golden :3117-3134
++bool THanaRmsMembers::HANARMSCheckRecipe(AnsiString &asFail)                    // golden 913 :3380-3408 (912 :3117-3134; AI(W906-W195) 20261009 H3)
+ {
+     bool bRet;
+     if(sHANARMSJobInfoLine == "")
+     {
+-        asFail = "RMS JOB_INFO not received";
++        //RogerYang 20260916 : 依連線狀態分級,讓操作員看得出是通訊問題還是參數問題
++        if(sHANARMSLot.Trim() == "")
++            asFail = "RMS not queried : no lot started";
++        else if(sHANARMSLinkErr.Length())
++            asFail = "RMS link fail : " + sHANARMSLinkErr;
++        else if(HANARMSIsConnected() == false)
++            asFail = "RMS server not connected : " + edtHANARMSIP->Text + ":" + edtHANARMSPort->Text;
++        else if(dwHANARMSSentTick != 0)
++            asFail.sprintf("RMS no reply from server (%d sec, lot=%s)",
++                           (int)((GetTickCount()-dwHANARMSSentTick)/1000), sHANARMSLot.c_str());
++        else
++            asFail = "RMS JOB_INFO not received";
+         bRet = false;
+     }
+     else
+@@ -678,7 +975,7 @@ bool THanaRmsMembers::HANARMSCheckRecipe(AnsiString &asFail)
+ }
+ //---------------------------------------------------------------------------
+ //RogerYang 20260902 : 測試起點互鎖閘門(Stop/Start)。未啟用/非HANA/ASM一律放行
+-bool THanaRmsMembers::HANARMSRunCheckOK(bool bShowAlarm)                        // golden :3137-3158
++bool THanaRmsMembers::HANARMSRunCheckOK(bool bShowAlarm)                        // golden 913 :3410-3460 (912 :3137-3158; AI(W906-W195) 20261009 H3)
+ {
+     if(CUSTOMER_CODE != CC_HANA_MICRON ||
+        IniConfig.bA77_EnableHanaRMSInterlock == false ||
+@@ -696,8 +993,31 @@ bool THanaRmsMembers::HANARMSRunCheckOK(bool bShowAlarm)
+     }
+ 
+     HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [CMP] ", "RunCheck FAIL : " + asFail);
++
++    //RogerYang 20260916 : 沒基準就就地重發查詢,操作員再按 Start 即可重試,不必重開程式
++    if(sHANARMSJobInfoLine == "" && sHANARMSLot.Trim() != "" &&             //5 秒節流,避免連續循環送爆
++       (dwHANARMSSentTick == 0 || (GetTickCount()-dwHANARMSSentTick) > 5000))
++        HANARMSQueryJobInfo(sHANARMSLot);
++
+     if(bShowAlarm)
+-        ShowMyMessage("HANA RMS recipe check FAIL!!\r\n" + asFail, "HANA RMS recipe 比對失敗!!", "HANARMSRunCheckOK");
++    {
++        AnsiString asDlgMain, asDlgSub;                                     //RogerYang 20260916 : 依標籤容量逐欄分行
++        HANARMSFailForDialog(asFail, asDlgMain, asDlgSub);
++        bBigMyMessage = true;                                               //放大視窗(590x381)+左對齊,既有通用旗標
++        // [W906] golden :3440-3444 / :3451-3455 set and restore MyMessageBox->lblMainMsg / lblChineseMsg Height (60 / 150, then
++        //   49 / 62): the port's TMyMessageBoxShim (mymessbox_shim.h) has no labels -- the web page lays out the "bigLeft" box
++        //   by name (tools/wb_serve.cpp MbLayoutOnShow, which reads and clears bBigMyMessage inside ShowMyMessage).
++        try
++        {
++            ShowMyMessage(asDlgMain, asDlgSub, "HANARMSRunCheckOK");
++        }
++        catch(...)                                                          // [W906] golden __finally: reset, then rethrow
++        {
++            bBigMyMessage = false;
++            throw;
++        }
++        bBigMyMessage = false;                                              //ShowMyMessage 若因重入提早返回,旗標不可殘留
++    }
+     return false;
+ }
+ //---------------------------------------------------------------------------
+diff --git a/Automation/HanaRms_St02.h b/Automation/HanaRms_St02.h
+index d07dceb4..c6b1a502 100644
+--- a/Automation/HanaRms_St02.h
++++ b/Automation/HanaRms_St02.h
+@@ -51,7 +51,10 @@
+ //       GB_CT (golden's "-" / not sent = skipped as before).  Never passes silently.
+ //    5. bW906HANARMSConnecting: RogerYang's comment at golden :3062 "已連/連線中 -> 不重連" (connected OR connecting ->
+ //       do not reconnect); the polled socket's Active is false while a connect is pending (as VCL: Active is set on the
+-//       connect event), so the "connecting" half needs this flag.
++//       connect event), so the "connecting" half needs this flag.  W-195 H2 (20261009): golden 913 deleted that comment;
++//       HANARMSConnect (golden 913 :3292-3326) keeps the flag as a guard -- while a connect is pending golden's Close
++//       would not run (Active is false) and the polled socket ignores a second Open, so skipping only saves a second
++//       "connecting to" log line (deviation recorded, census section 2a).
+ //    6. (dropped 1002 19:2x, St02-M) HANARMSQueryJobInfo is golden :3108-3109 verbatim: RogerYang's comment
+ //       "換批,舊基準作廢" and golden's code agree (this is the lot-open query, so every call voids the baseline).
+ //    7. __fastcall dropped from the members; HANARMSClientError's TErrorEvent is Scktcomp's.
+@@ -108,6 +111,14 @@ public:
+     void HANARMSQueryJobInfo(AnsiString asLot);     // golden automation.h:201 //開批自動查詢(LOT_INFO→JOB_INFO) (body :3103-3114)
+     bool HANARMSCheckRecipe(AnsiString &asFail);    // golden automation.h:202 //以基準重比 recipe (body :3116-3134)
+     bool HANARMSRunCheckOK(bool bShowAlarm);        // golden automation.h:203 //測試起點互鎖閘門 (body :3136-3158)
++    //RogerYang 20260916 : RMS 連線改隨需建立(HANA 伺服器 30 秒 idle 斷線)        AI(W906-W195) 20261009 H2: golden 913 automation.h:204-211
++    AnsiString sHANARMSPending;                     //未連線時存放的待送指令(\n 分隔)
++    AnsiString sHANARMSLinkErr;                     //最後一次連線失敗原因(空=無)
++    unsigned long dwHANARMSSentTick;                //查詢開始時刻,供「無回應 N 秒」判讀
++    bool HANARMSIsConnected();                      //連線是否真的可用 (golden 913 automation.cpp:3278-3290)
++    void HANARMSConnect();                          //非阻塞連線,連上後沖出待送 (:3292-3326)
++    void HANARMSFlushPending();                     //把排隊指令送出 (:3328-3347)
++    AnsiString HANARMSGetHDName();                  //HDNAME 預設=機台 Machine ID (:3349-3358)
+ 
+     // ---- [W906] ---------------------------------------------------------------------------------------------------------
+     void W906_HANARMSClientCreate();                // [W906] 1: the dfm component, made on first use (HanaRms_St02.cpp)
+diff --git a/docs/MACHINE_PATCHES_20261009.md b/docs/MACHINE_PATCHES_20261009.md
+index e3b367de..6ecc8a16 100644
+--- a/docs/MACHINE_PATCHES_20261009.md
++++ b/docs/MACHINE_PATCHES_20261009.md
+@@ -59,3 +59,4 @@
+ - **cpp 0348 BOOT-Z1RESET**（10:47，EastSun 1009「M14 現在跳什麼異常」→「請持續處理」）：機台的 Index Z1（M14，1203 第 14 站，走 Galil 路線）開機時會帶著驅動器警報 A.A12（EtherCAT 輸出資料同步錯誤）起來，以前要 EastSun 在 1203 頁按 Reset 才清。現在開機過了馬達電源 1 秒的閘門之後，**如果 MTestZ1 在警報就送一次 `Acm_AxResetError`**（跟 Motor Test／1203 頁的 Alarm Reset 同一個命令）；不上伺服、不寫設定、不動作，只寫一行 BRAKE 紀錄。沒有 `AI(W906-TEMP-*)` 標記、不是暫時繞過 ⇒ 收進**第 137 批**（b19 `e2a4638c`，作者照 patch）；沒有 ctest 會編 `WebMotorAccessLive.cpp`，驗證看下次開機的 op log「MTestZ1 boot alarm reset」。
+ - **快照 10:47**（main `0ebbf6b2`）：**`IO_Table.csv` 的 `SnRKCoverOpen` 對應改了**（`1,2,32,1,0,1,0,0` → `1,1,2,29,5,1,3,1`）——真的參數變更 ⇒ 同一輪在 CHAT_JIMMY 叮嚀全體同步；其餘是執行紀錄（lastdata、machinerecord、Program Close、GPIB LastFile）。
+ - **鏈尾**：C++ `413485ba`（0345）→ `1cfa956a`（0346）→ `e94e8ef6`（0347）→ **`4cfaf8b2`**（0348）。下一次從 **cpp 0349／web 0142／tools 0185** 開始。
++- （11:5x 補記）第 137 批在第 136 批進 main 之後重開：cpp 0348 現在是 b19 `543f055d` 的前一顆（`8402f9b2`），同批另有 St02 的 HANA H1～H3（!372～!374）。
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index 9a936a2d..5cebc926 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -1,10 +1,10 @@
+-# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 11:4x）
++# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 11:5x）
+ 
+ ## ☀ 10/08 早上先看這裡（04:3x 起草；之後的進度往這張表加）
+ 
+ | 項目 | 一句話 |
+ |---|---|
+-| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～135 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate），出了**第 181～218 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
++| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～136 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate），出了**第 181～219 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
+ | **模擬組態** | St02 W-149 做完：模擬版的固定失敗從 7 支降到 4 支，跟出貨一樣——之後模擬版多紅一支就是真回歸。 |
+ | **機台修的事（重點）** | 0307 主控台非同步（START 卡 103 秒＋EMG 誤報的根因）、0309／0310／0312／0316 HT9050 Tray 流程（站序、Empty→Auto 補盤、位置不加 6800、Loader 探測看抽屜感測）、0311／0317 上升氣缸雙線圈、0313 出料手臂讓位點（00:19 MOutArmX 警報）、0314 CCD Y 原點判斷、**0315 HT9050 先跳過 Index 扭力讀取**（旗標預設開，扭力讀取驗證後要關）。 |
+ | **軟體極限** | 00:19 的警報是 golden 拿軟體極限（這台 ±999999）算目標。MainNB-GPT 普查（W-164）：只剩 Motor Test 頁的 LightScale 會算出 ±999899——EastSun 0925 R7 已定照 golden，只發提醒。 |
+@@ -82,6 +82,7 @@
+ | **出的包（1009 10:4x）：第 218 包＝第 135 批** | GitLab `0450a79e`／GitHub `0778c0f6`：①NB2-1 照 golden 913 打開 `DoInterFaceErrorStep`——介面錯誤／下壓次數超過時 **Index Z 會真的移到安全位**、跳清潔 Socket 提示、報 WAR0357（以前是空殼，那一步會一直等）；上機驗收卡給 EastSun（W-196，遇到再看）。②Ifor01 照 golden 的開機順序先建溫控畫面、換站先重建 ATC 對照。gate b135a：兩組態 35 分鐘：只有固定失敗（兩組態都是 4 支，501 支測試）。**第 136 批**（St02 W-195 的 !370 路徑組合防護＋!371 SECS bin 類型）gate 中。 |
+ | **1009 10:5x：機台套了第 216～218 包，又自己改了一顆（cpp 0348）；機台參數有一項變更** | 機台 10:37／10:46 把第 216～218 包都整合了（第 218 包推出不到 10 分鐘）。10:47 的 cpp 0348 是機台自己的：Index Z1（M14）開機時常帶著驅動器警報，現在開機自動送一次「清除警報」（不動作），收進第 137 批。同時機台快照的 `IO_Table.csv` 改了 `SnRKCoverOpen`（RK 蓋子感測器）的對應，已鏡像到 main `0ebbf6b2`、提醒大家驗證前先同步。 |
+ | **1009 11:1x：第 136 批第一次 gate 紅了兩支，原因找到、已修、重跑中** | St02 的兩支新測試在出貨組態當掉：它們會走到「換站（ChangeSite）」，而第 135 批（Ifor01）之後換站照 golden 要先有溫控畫面物件，測試沒先建。這是兩張 MR 先後進來才出現的交互問題，不是產品程式的錯；筆電照第 135 批同樣的寫法替兩支測試補一行（`c37eb0d0`），單獨跑都過了，完整 gate 重跑 b136b。被中途停掉的 gate 改寫了一份有進版控的報告檔，已還原成原樣。也在 CHAT_JIMMY 提醒大家以後寫測試要注意。 |
++| **出的包（1009 11:5x）：第 219 包＝第 136 批** | GitLab `51f954bf`／GitHub `a245f88e`：St02 W-195① 的讀檔路徑防護＋SECS 回報給主機的 bin 類型改從配方料盤算（跟 V912 量產版一樣，只有開 SECS／GEM 的機台看得到差別）；兩支新測試是筆電補好才過的。gate b136b：兩組態只有固定失敗（兩組態都是 4 支，503 支測試；出貨組態另有一支一次沒執行起來，重跑通過）。**第 137 批**＝機台 cpp 0348（開機清 M14 警報）＋St02 HANA H1～H3，gate 中。 |
+ | **要你決定的**（§0） | ✅ 你 10:1x 都回了：#148＝NB2 已完成（!306 收進第 110 批確認）、#149＝A（Ifor-GPT 專做執行期測試，IG-3／IG-4）、!310＝A（ES02 HTDESIGNER 0.235～0.257 收進第 110 批）＝RULINGS_20261008 第 2 條。**13:0x 新一題 #150**：GPIB 位址不一致要不要自動修正（Jerry 留給你；預設 A＝維持 golden、只留警告，可不回）。<br>**🆕 1009 11:4x 新一題 #151：HANA 機台按 START 時，要不要照 golden 先等 RMS 伺服器連線（最多 3 秒）？** 白話：golden 913（RogerYang 0916）裡，HANA 客戶開了 A77 的機台按 START 前，會先確認 RMS 伺服器連得上，連不上就擋下 START，連線最多等 3 秒。問題在移植樹的輪詢是單執行緒——這 3 秒裡整台機台的狀態更新會停住（例：網頁上的數字 3 秒不動）。你 0923 定過「會擋住輪詢的整合要先問」，所以問你。只有「HANA 客戶＋開 A77＋線上模式＋RMS 還沒連上」才會等，HT9050 永遠走不到。選項：**A＝照 golden 收**（建議：只在按 START 那一刻、最多 3 秒，機台本來就停著；St02 已經把等待裡的訊息迴圈換成只推 HANA 連線）；**B＝先不收**，等改成不擋輪詢的寫法（例：連線放到背景，START 時只看結果）。**沒回之前照 B**：H4 先不合，HANA 其他幾張（!372～!374）照常進第 138 批。 |
+ 
+ 
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 08053a84..0a10cca8 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -353,6 +353,7 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-07 | 設計外掛 tools 0170 | — | 設計外掛工作階段自己推（分支 a6cadd2，GitHub dc7975ff）：依序合併筆電包 162、163、167、168 的設計外掛（0.197.0 → 0.234.0），164～166、169～172 沒帶設計外掛；無衝突，機台自己的設計外掛功能都保留；測試修正：建置視窗進度條在矮視窗不再塌掉、面板繪製測試固定 Edge 視窗大小；run_all 3/3、vscode_it 161/161，已安裝 0.234.0；只動 tools/vscode-htdesigner | tools 0170 |
+ | 10-08 | 設計外掛 tools 0171 | — | 設計外掛工作階段自己推（commit b453060，GitHub f42c142b）：EastSun 1008 方案總管的 Debug／Release 按鈕按不了（0.234 在 ▶＝F5 時把它變灰）→ 裁決「連動F5 release 和debug」：按鈕恢復可按，resolveDebugConfiguration 依按鈕把 F5／▶ 的啟動目標換成 build_integ_dbg_x86 或 build_integ_ship_x86 那一組；「模擬」仍是灰的。run_all 3/3；vscode_it 沒跑成（VS Code 自己的更新程式 CodeSetup 從 10/07 18:34 起佔住執行個體鎖）。vsix 已安裝，版本號沒變，要重新載入視窗才生效；只動 tools/vscode-htdesigner | tools 0171 |
+ | 10-08 | 173～204 | 07dbeae3＋63b1aa25＋351291d5（GitLab 0258ba66…68fc0e65、39c6388c、e6c54331） | 本 commit（機台 C++＋web），EastSun「你確定有合完整?」→「快合」→「一直合下去 不要停拜託」（173～202 的 C++ 從 10-07 起都沒合，只有設計外掛跟上）。備份分支 backup/pre-pkg202-20261008（cpp、web）＋ D:\HT9045\_pkg_202\backup_machine_195843、D:\HT9045\_pkg_203\backup_machine_220733。202 疊三十包：直接換 108（換 105；tasks.json、acatchtray 留機台）、新檔 35、兩邊都改 22（合併 16、設計外掛／WORKLOG 照規定 6）、一樣 88；每個直接換的檔掃機台 AI 標記＋W906_ 識別字：WebBridgeServer（TOKEN-OFF／SOFTKEY panel.estop）改三方合併＋收筆電 pad.get／pad.close／observerSG 豁免、acatchtray 留機台（筆電版＝少 PROBECYL）、MotionView9050 換（機台＝基底）。衝突：cinitial／test_flow9050_tray／csystem 取機台（BOOTCLEAR、PROBECYL、pitch 同步在 MainProc）；test_scankey_golden、IoBtnPanelClick、tests/CMakeLists、WebBridgeTags（tester.name 依 Jerry 1008 裁決 A＝golden LoadTestModePicture）取筆電；wb_serve 第 239 行＝機台 IOWAIT＋筆電 g_ppCyc0 搬移。4 個新網頁檔改 CRLF。203：15 檔（直接換 9、新 4、合併 2，無衝突）；204：12 檔（直接換 9、新 1、合併 2，無衝突；SECS SV Auto1～6 料盤別名＋氣缸平均推拉時間、cSpeed）。合併後 test_scankey_golden 補回 PadInterface_St02.h include、[19]（筆電版軟體面板鍵 ST02-P2，機台保留自己的 SOFTKEY）在機台關掉。ctest Debug 426/441：15 個失敗都是第 381 列的已知清單（環境：dfm2rc×4 ctest 找不到 g++／rc.exe、E031、GearTeachSave、TeachCheckRangeReload；斷言筆電設定／repo 舊表：config_db、ini_helpers、config_loaders、MotorPoints／MachineMotors／MachineSuckers_HT9050；機台補丁：GA2_C1_cinitial、FShow_Audit）；204 之後相關 29 支全過。EastSun 未 commit 的 acatchtray／asendic_Loader／cinitial／PadInterface_St02（SafeLock）先拿開、合完三方套回，不進 commit。20:02 -j4 整包重編讓機台當機（Kernel-Power 41），留下 NUL 填滿的 .a／.obj／.d ⇒ clean 後 -j2 重編 | 本 commit |
++| 10-09 | 220 | 5bea18ae（GitLab 9290fe38） | 本 commit（定時檢查自動收）：①筆電收回機台 cpp 0348 BOOT-Z1RESET（WebMotorAccessLive.cpp 合併結果＝機台版，內容一樣）；②St02-E W-195③ HANA RMS H1～H3 照 golden 913（MR !372／!373／!374）：配方比對照 HANA 1002 規則、需要時才連線（送不出去重連；W906_HANARMSClientCreate 從 Prepare 搬到送出時，掃描看到的「消失」是筆電刻意搬移）、port 14140、HDNAME＝機台 ID、互鎖訊息分級、每 5 秒重查——只有 HANA 客戶會走到，HT9050 不受影響；H4（RMS 連不上就擋 START）不在這包，等 Jimmy。8 檔：直接換 6、合併 1（無變化）、WORKLOG 照規定留機台。Debug＋release wb_serve 建好，HanaART、C10_HanaRms 全過。備份分支 backup/pre-pkg220-20261009 | 本 commit |
+ | 10-09 | 219 | a245f88e（GitLab 51f954bf） | 本 commit（定時檢查自動收）：St02-E W-195 照 golden 913——MR !370 cBinSel ReadFile 的 SavePath 不帶開頭反斜線＋PathCombin 檔名已以反斜線開頭就不再補（讀寫同一個檔，只有路徑字串變乾淨）；MR !371 SECS「Bin 0～255 Type」改從各配方 Pass／Fail 料盤算（**主機讀到的 Bin Type，EC 3656 等，會跟以前不同**，只有開 SECS／GEM 的機台看得到）。10 檔：直接換 7（掃過沒有機台標記會消失）、新 2 支測試、tests/CMakeLists 合併無衝突。Debug＋release wb_serve 建好，W195×2、C14_BinDisp×2、St02_SecsEcFileWrites 5 支全過。同一次推送帶上 EastSun 改過的 Gerneral.ini 參數快照。備份分支 backup/pre-pkg219-20261009 | 本 commit |
+ | 10-09 | 218 | 0778c0f6（GitLab 0450a79e） | 本 commit：①NB2-1 MR !368 W-188 #2 atester.cpp DoInterFaceErrorStep 照 golden 913 打開（原本是永遠回 false 的空殼，TESTZ1UP／TESTZ2UP 會一直等）——**行為改變：介面錯誤或下壓次數超過時 Index Z 移到安全位置、跳清潔 Socket 提示、報 WAR0357，README 請 EastSun 在機台旁驗收**；②Ifor01 MR !369 N1-G5：wb_serve 在 InitialHandler 之前建溫控畫面（golden CreateForm 順序），ChangeSite 先重建 ATC 位址對照。14 檔：直接換 10（掃過沒有機台標記會消失；test_pool2_cinitial 只差註解）、新 1 支測試、合併 3（cinitial、tests/CMakeLists、wb_serve，無衝突）。EastSun 未 commit 的 cinitial 修改保留在工作區、不進 commit（以 HEAD＋包的改動提交）。Debug wb_serve＋9 支相關 ctest 全過（含 NB2_W188InterfaceErr）；release 等 EastSun 關程式後編。備份分支 backup/pre-pkg218-20261009 | 本 commit |
+ | 10-09 | 216～217 | 81c0b404＋35454dc0（GitLab 3c1dd1c9、fb037f43） | 本 commit：St02-E W-191 照 golden 913——216＝MR !363／!364／!365（ADAM6024 通訊、BinDisplay、AOI 雷射掃描收資料）；217＝MR !366 TfBinSel::Save 的 SavePath 不帶開頭反斜線。12 檔：直接換 9（逐檔掃機台 AI 標記／W906_ 識別字：沒有會消失的）、新 1 支測試、tests/CMakeLists 合併無衝突、WORKLOG 照規定留機台。Debug wb_serve＋4 支相關 ctest（ADAM6024_Comm、C14_BinDisp、St02_SecsEcFileWrites、St02_W191AoiRecv）全過；EastSun 開著 release wb_serve，release 等他關程式後再編。備份分支 backup/pre-pkg217-20261009 | 本 commit |
+diff --git a/tests/test_c10_hana_rms.cpp b/tests/test_c10_hana_rms.cpp
+index 1aa9feca..47df8d9e 100644
+--- a/tests/test_c10_hana_rms.cpp
++++ b/tests/test_c10_hana_rms.cpp
+@@ -20,18 +20,25 @@
+ //  1. Today unchanged: fresh object = dfm defaults, no socket; non-HANA machine: RunCheckOK passes with the latch set,
+ //     writes nothing; HANA with A77 off: PrepareHANARMSConnect reads no ini, makes no socket, writes no log;
+ //     HANARMSQueryJobInfo does nothing; the pump does nothing; rsmAutoSiteMap passes.
+-//  2. HANA + A77, A10-6 off: golden's [WARN] (K7 "A76" text); 127.0.0.1 = placeholder -> no connect (K3).
++//  2. HANA + A77, A10-6 off: golden's [WARN] (K7 "A76" text).  AI(W906-W195) 20261009 H2 (golden 913): no ini -> IP "" /
++//     Port 14140 -> "RMS server IP/Port not set", no socket; 127.0.0.1 is no placeholder any more -> it is dialled (Sim).
+ //  3. Connect: ini IP / Port -> "connecting to" + "connected", status label, Sim + polled socket; a second call does
+ //     nothing (golden :3062 "已連/連線中 -> 不重連"); the pump on a Sim socket adds nothing.
+ //  4. Send: trimmed + '\n'; empty -> nothing; the ManCmd button.
+ //  5. Receive: split by '\n', CR stripped, empty lines skipped, CHECKSTR warning (K6), 8192 garbage drop.
+-//  6. Auto chain: QueryJobInfo -> GET_LOT_INFO (HDNAME HD_01 = K2) -> REP -> GET_JOB_INFO with LOCATION / CUSTCD /
++//  6. Auto chain: QueryJobInfo -> GET_LOT_INFO (H2: HDNAME = the Machine ID, trimmed) -> REP -> GET_JOB_INFO with LOCATION / CUSTCD /
+ //     PARTNO -> REP -> indented fields + "[CMP] PASS", baseline stored; HDName from the ini when set.
+ //  7. Interlock: RunCheckOK latch / PASS clears it / FAIL keeps it + ShowMyMessage (bShowAlarm) / silent (false);
+-//     no baseline; GB_CT gated => FAIL ([W906] 4); CON_MTD index 9 = RELEASE (K4); TEMP room / Abit.
+-//  8. 912 defects as 912: server drop -> disconnected, [TX] then "not connected, not sent" (K1 / K5), the pump does not
+-//     reconnect; templates (K2 / K8); RogerYang :3109 applied: same lot keeps the baseline, a new lot voids it.
+-//  9. Error event: logged, ErrorCode cleared, status Disconnected.
++//     no baseline; GB_CT gated => FAIL ([W906] 4).  AI(W906-W195) 20261009 H1, the golden 913 HANA 1002 rules: CON_MTD mode
++//     names (normalised; RELEASE fails; index 7 = UNSUPPORTED), LOW_SPD E/D/- (Soft EP is low speed), WIN_CNT = iLowYieldCount
++//     with its enable, numbers need their function on, FT.AT_OFF = ContiFail trigger, RT.AT_OFF always D, SB "-"/D, TEMP room
++//     = fAbitTemp whatever bUseAbitCHK says.
++//  8. H2 (golden 913, RogerYang 20260916): same lot keeps the baseline, a new lot voids it, no lot changes nothing; a new
++//     query drops the old queue and stamps the tick; server drop -> the next command is [QUEUE]d, the link reopened,
++//     then [TX] (K1 / K5 retired); no IP -> queue dropped with "RMS server IP/Port not set"; templates use the HDNAME
++//     (K2 retired; Get Lot stays 912 until H3, K8); the ini HDName wins, trimmed.
++//  9. Error event: H2 "cannot connect to IP:Port (socket error N)" logged and kept in sHANARMSLinkErr, the queue dropped,
++//     ErrorCode cleared, status Disconnected.
+ // 10. RogerYang :3062 "connecting" half ([W906] 5): a pending connect is not restarted.
+ // 11. Button bodies that write files: Setting -> sandbox HANARMS.ini; Save -> sandbox .log; Clear; memo auto-trim at 1000.
+ // 12. Source pins: G9 is live in HandlerBridgeCtl.cpp (comment-stripped), the pump / policy calls in TesterCommWiring.cpp
+@@ -197,15 +204,35 @@ static bool ReadLines(const char* rel, std::vector<std::string>& out)
+     return true;
+ }
+ 
+-// the job-info reply that matches the Handler recipe set in part 6 (FT_S_T_S with golden's real-machine spacing quirk)
+-static std::string JobLine(const std::string& gbct = "-", const std::string& conmtd = "RELEASE", const std::string& pinfc = "25.5")
++// the job-info reply that matches the Handler recipe set in part 6 (FT_S_T_S with golden's real-machine spacing quirk).
++// AI(W906-W195) 20261009 H1 (golden 913, HANA 1002): CON_MTD is the mode name of index 9 ("TMOVE Slow Contact",
++// automation.cpp:2612) and RT_AT_OFF is "D" -- RT has no Auto Site Off, the Handler always answers D (:2921-2922).
++static std::string JobLine(const std::string& gbct = "-", const std::string& conmtd = "TMOVE Slow Contact", const std::string& pinfc = "25.5")
+ {
+     return "CMD=\"GET_JOB_INFO_REP\" LOT=\"LOT123\" RCP_NAME=\"C10_RECIPE\" GB_CT=\"" + gbct + "\" TEMP=\"85\" PIN_CNT=\"48\""
+            " PIN_FC=\"" + pinfc + "\" CON_MTD=\"" + conmtd + "\" WIN_CNT=\"100\" LOW_SPD=\"E\""
+            " FT_C_FAIL_SCK=\"3\" FT_S_T_S =\" 80\" FT_LOW_YD=\"70\" FT_AT_OFF=\"E\" FT_SB_ARM=\"3, 7\" FT_SB_ARM_CNT=\"2,5\""
+-           " FT_SB_SCK=\"-\" FT_SB_SCK_CNT=\"-\" RT_C_FAIL_SCK=\"4\" RT_S_T_S=\"75\" RT_LOW_YD=\"65\" RT_AT_OFF=\"E\""
++           " FT_SB_SCK=\"-\" FT_SB_SCK_CNT=\"-\" RT_C_FAIL_SCK=\"4\" RT_S_T_S=\"75\" RT_LOW_YD=\"65\" RT_AT_OFF=\"D\""
+            " RT_SB_ARM=\"-\" RT_SB_ARM_CNT=\"-\" RT_SB_SCK=\"-\" RT_SB_SCK_CNT=\"-\" GET_RDY=\"YES\" CHECKSTR=\"END\"";
+ }
++// one field of a reply line with another value: ` KEY="old"` -> ` KEY="v"` (only for keys written as KEY=" in JobLine)
++static std::string SetKV(std::string line, const std::string& key, const std::string& v)
++{
++    const std::string pat = " " + key + "=\"";
++    const size_t a = line.find(pat);
++    if (a == std::string::npos) return line + " <SetKV: no " + key + ">";
++    const size_t b = line.find('"', a + pat.size());
++    return line.substr(0, a + pat.size()) + v + line.substr(b);
++}
++// AI(W906-W195) 20261009 H3: what HANARMSRunCheckOK hands ShowMyMessage, and bBigMyMessage at that moment (golden 913 :3438-3446)
++static std::string g_dlgS1, g_dlgS2;
++static bool g_dlgBig = false;
++static void (*g_dlgPrev)(const char*, const char*) = 0;
++static void DlgCapture(const char* s1, const char* s2)
++{
++    g_dlgS1 = s1 ? s1 : "";  g_dlgS2 = s2 ? s2 : "";  g_dlgBig = bBigMyMessage;
++    if (g_dlgPrev) g_dlgPrev(s1, s2);
++}
+ static bool CheckLine(const std::string& line, std::string& fail)
+ {
+     H()->sHANARMSJobInfoLine = AnsiString(line.c_str());
+@@ -271,6 +298,12 @@ int main()
+     const unsigned int sav_CF = TestIF.iContsFailSocketAlarmCT, sav_CFRT = TestIF.iContsFailSocketAlarmCT_RT;
+     const double sav_STS = TestIF.dFailAlarmSiteYield, sav_STSRT = TestIF.dFailAlarmSiteYield_RT, sav_LY = TestIF.dLowYieldLimit, sav_LYRT = TestIF.dLowYieldLimit_RT;
+     const bool sav_AtOff = TestIF.bLowYieldAutoSiteOff;
++    // AI(W906-W195) 20261009 H1: the golden 913 compare also reads these (automation.cpp:2887-2922)
++    const bool sav_LYOn = TestIF.bFailAlarmLowYield, sav_LYOnRT = TestIF.bFailAlarmLowYield_RT, sav_CFOn = TestIF.bContsFailBySocket,
++               sav_CFOnRT = TestIF.bContsFailBySocket_RT, sav_STSOn = TestIF.bFailAlarmSiteYieldDifferent,
++               sav_STSOnRT = TestIF.bFailAlarmSiteYieldDifferent_RT, sav_AtOffCF = TestIF.bLowYieldAutoSiteOffByContiFail;
++    const int sav_LYCnt = TestIF.iLowYieldCount;
++    const AnsiString sav_MachineID = IniConfig.sGPIBMachineID;              // AI(W906-W195) H2: HANARMSGetHDName's default (golden 913 :3356)
+     std::vector<bool> sav_bArm[2], sav_bSck[2];
+     std::vector<unsigned int> sav_cArm[2], sav_cSck[2];
+     const int binIdx[2] = { eBinFT, eBinRT };
+@@ -293,6 +326,7 @@ int main()
+     LastDataPath = AnsiString((root + "\\SetUp.inf").c_str());
+     WriteAll(root + "\\SetUp.inf", "C10_RECIPE\r\n");                       // GetLastOpenFN -> RCP_NAME
+     SystemYear = 2099; SystemMonth = 12; SystemDate = 31; SystemHour = 23; SystemMin = 59; SystemSec = 58;
++    IniConfig.sGPIBMachineID = "HT9046-07  ";                                 // H2: Gerneral.ini's value often has trailing blanks (golden 913 :3356)
+     ::DeleteFileA(iniFile.c_str());
+     CloseIniFile();
+ 
+@@ -346,23 +380,32 @@ int main()
+     }
+ 
+     // ---- 2. HANA + A77: placeholder -------------------------------------------------------------------------------
+-    std::printf("\n-- 2. A77 on, A10-6 off, 127.0.0.1 --\n");
++    // AI(W906-W195) 20261009 H2 (golden 913 :3227-3233, :3237-3246, :3292-3326): no ini -> IP "" / Port 14140 -> "RMS server
++    // IP/Port not set", no socket; 127.0.0.1 is no longer a placeholder (912's K3 test is gone) -> it really dials it.
++    std::printf("\n-- 2. A77 on, A10-6 off, no IP / 127.0.0.1 --\n");
+     ::DeleteFileA(iniFile.c_str());
+     H()->PrepareHANARMSConnect();
+-    CHECK(MemoCount() == 1 && EndsWith(MemoLine(0), " [WARN] A76 on but A10-6(HANA ART) off : first-shot interlock inactive"));   // golden :3056 (K7)
+-    CHECK(S(H()->edtHANARMSIP->Text) == "127.0.0.1" && S(H()->edtHANARMSPort->Text) == "6670");   // golden :3045-3046 defaults (K3)
+-    CHECK(H()->HANARMSClient == NULL);                          // golden :3059-3060
++    CHECK(MemoCount() == 2 && EndsWith(MemoLine(0), " [WARN] A76 on but A10-6(HANA ART) off : first-shot interlock inactive"));   // golden 913 :3242 (K7)
++    CHECK(EndsWith(MemoLine(1), " [ERR] RMS server IP/Port not set"));                // golden 913 :3303-3308
++    CHECK(S(H()->edtHANARMSIP->Text) == "" && S(H()->edtHANARMSPort->Text) == "14140");   // golden 913 :3231-3232 defaults
++    CHECK(S(H()->sHANARMSLinkErr) == "RMS server IP/Port not set");
++    CHECK(H()->HANARMSClient == NULL);                          // [W906] 1: no Open, no socket
+     {
+         std::string day;
+         CHECK(ReadAll(dayFile, day) && Has(day, "[WARN] A76 on but A10-6(HANA ART) off"));   // golden :2527-2531 (day file in the sandbox)
+     }
+     IniConfig.bA10_6_HANA_ART_TestMode_Enable = true;
+     WriteAll(iniFile, "[Setting]\r\nIP=127.0.0.1\r\nPort=14140\r\n");
++    H()->W906_HANARMSClientCreate();                            // made here only to assert Sim BEFORE the first Open
++    CHECK(H()->HANARMSClient != NULL && H()->HANARMSClient->IsSimMode());   // never the network
++    if (H()->HANARMSClient == NULL || !H()->HANARMSClient->IsSimMode()) { std::printf("  ABORT: the socket is not Sim -- stop before anything is opened\n"); return 1; }
+     int m0 = MemoCount();
+     H()->PrepareHANARMSConnect();
+-    CHECK(MemoCount() == m0);                                   // no WARN, still placeholder
+-    CHECK(H()->HANARMSClient == NULL);
+-    CHECK(S(H()->edtHANARMSPort->Text) == "14140");
++    CHECK(!MemoHasSince(m0, "[WARN]"));                         // A10-6 on
++    CHECK(MemoHasSince(m0, " [INFO] connecting to 127.0.0.1:14140") && MemoHasSince(m0, " [INFO] connected"));   // golden 913: no placeholder test
++    CHECK(S(H()->sHANARMSLinkErr) == "");                       // golden 913 :3012
++    H()->HANARMSClient->Close();                                // the server side goes away
++    CHECK(!(bool)H()->HANARMSClient->Active);
+ 
+     // ---- 3. connect ------------------------------------------------------------------------------------------------
+     std::printf("\n-- 3. connect (Sim socket) --\n");
+@@ -426,6 +469,11 @@ int main()
+     DeviceForm_File.iPinCT = 48;  DeviceForm_File.ForcePerPinG = 25.5;  DeviceForm_File.ContactMode = TMoveSlowContact;   // index 9
+     TestIF.iSlidingWindowSize = 100;  TestIF.iContsFailSocketAlarmCT = 3;  TestIF.dFailAlarmSiteYield = 80;  TestIF.dLowYieldLimit = 70;
+     TestIF.bLowYieldAutoSiteOff = true;  TestIF.iContsFailSocketAlarmCT_RT = 4;  TestIF.dFailAlarmSiteYield_RT = 75;  TestIF.dLowYieldLimit_RT = 65;
++    // AI(W906-W195) 20261009 H1: golden 913 compares each number together with its enable flag (CmpFunc) and WIN_CNT with
++    // iLowYieldCount (automation.cpp:2886-2887); FT.AT_OFF follows the ContiFail trigger (:2900-2901)
++    TestIF.bFailAlarmLowYield = true;  TestIF.iLowYieldCount = 100;  TestIF.bContsFailBySocket = true;  TestIF.bFailAlarmSiteYieldDifferent = true;
++    TestIF.bFailAlarmLowYield_RT = true;  TestIF.bContsFailBySocket_RT = true;  TestIF.bFailAlarmSiteYieldDifferent_RT = true;
++    TestIF.bLowYieldAutoSiteOffByContiFail = true;
+     for (int k = 0; k < 2; ++k)
+         for (int i = 0; i < TEST_MAX_BIN; ++i) {
+             BinSelect[binIdx[k]].bSpecialBinByArm[i] = false;   BinSelect[binIdx[k]].bSpecialBinBySocket[i] = false;
+@@ -436,11 +484,12 @@ int main()
+     ClearTx();
+     H()->HANARMSQueryJobInfo("  LOT123 ");
+     CHECK(S(H()->sHANARMSLot) == "LOT123");
+-    CHECK(Tx() == "CMD=\"GET_LOT_INFO\" LOT=\"LOT123\" HDNAME=\"HD_01\" CHECKSTR=\"END\"\n");   // golden :3112-3113 (K2)
++    CHECK(Tx() == "CMD=\"GET_LOT_INFO\" LOT=\"LOT123\" HDNAME=\"HT9046-07\" CHECKSTR=\"END\"\n");   // H2: golden 913 :3375-3376, HDNAME = Machine ID trimmed (:3356)
++    CHECK(H()->dwHANARMSSentTick != 0);                                                          // golden 913 :3374
+     std::printf("    tx = %s", Tx().c_str());
+     ClearTx();
+     Push("CMD=\"GET_LOT_INFO_REP\" LOT=\"LOT123\" CMD_OK=\"YES\" LOCATION=\"T9999\" CUSTCD=\"CS\" PARTNO=\"PN_1\" CHECKSTR=\"END\"\n");
+-    CHECK(Tx() == "CMD=\"GET_JOB_INFO\" LOT=\"LOT123\" HDNAME=\"HD_01\" LOCATION=\"T9999\" CUSTCD=\"CS\" PARTNO=\"PN_1\" CHECKSTR=\"END\"\n");   // golden :2887-2897
++    CHECK(Tx() == "CMD=\"GET_JOB_INFO\" LOT=\"LOT123\" HDNAME=\"HT9046-07\" LOCATION=\"T9999\" CUSTCD=\"CS\" PARTNO=\"PN_1\" CHECKSTR=\"END\"\n");   // H2: golden 913 :3056-3066
+     std::printf("    tx = %s", Tx().c_str());
+     m0 = MemoCount();
+     Push(JobLine() + "\n");
+@@ -483,76 +532,206 @@ int main()
+         CHECK(MemoHasSince(m0, " [CHK] recipe check FAIL : PIN_FC(S=25.5/H=17)"));
+         CHECK(MemoHasSince(m0, " [CMP] RunCheck FAIL : PIN_FC(S=25.5/H=17)"));   // golden :3154
+         CHECK(W906_ShowMyMessage_Count == smm0 + 1);
+-        CHECK(S(W906_ShowMyMessage_LastS1) == "HANA RMS recipe check FAIL!!\r\nPIN_FC(S=25.5/H=17)");   // golden :3156
+-        if (S(W906_ShowMyMessage_LastS1) != "HANA RMS recipe check FAIL!!\r\nPIN_FC(S=25.5/H=17)") std::printf("    LastS1 = %s\n", W906_ShowMyMessage_LastS1.c_str());
++        // H3 (golden 913 :3436-3457): the big dialog -- title with the item count, items under it, a closing line; bBigMyMessage on
++        // during the call and off after it (wb_serve's MbLayoutOnShow reads it inside ShowMyMessage)
++        CHECK(S(W906_ShowMyMessage_LastS1) == "HANA RMS recipe check FAIL!!  (1 item)\r\nPIN_FC(S=25.5/H=17)");
++        if (S(W906_ShowMyMessage_LastS1) != "HANA RMS recipe check FAIL!!  (1 item)\r\nPIN_FC(S=25.5/H=17)") std::printf("    LastS1 = %s\n", W906_ShowMyMessage_LastS1.c_str());
+         CHECK(H()->HANARMSRunCheckOK(false) == false);                      // silent (golden :3155)
+         CHECK(W906_ShowMyMessage_Count == smm0 + 1);
++        g_dlgPrev = W906_ShowMyMessage_Hook;  W906_ShowMyMessage_Hook = DlgCapture;
++        CHECK(H()->HANARMSRunCheckOK(true) == false);
++        CHECK(g_dlgS1 == "HANA RMS recipe check FAIL!!  (1 item)\r\nPIN_FC(S=25.5/H=17)" && g_dlgS2 == "Correct the item(s) above, then press START again.");   // golden 913 :2828-2843
++        CHECK(g_dlgBig == true && bBigMyMessage == false);                  // golden 913 :3439 / :3451
+         DeviceForm_File.ForcePerPinG = 25.5;
+-        H()->bHANARMSNeedRunCheck = false;
++        // nine failing items: two under the title, six in the second label, then "... +1 more" (golden 913 :2797, :2830-2840)
++        {
++            std::string many = JobLine();
++            const char* keys[] = { "TEMP", "PIN_CNT", "PIN_FC", "WIN_CNT", "FT_C_FAIL_SCK", "FT_LOW_YD", "RT_C_FAIL_SCK", "RT_S_T_S", "RT_LOW_YD" };
++            for (size_t k = 0; k < sizeof(keys) / sizeof(keys[0]); ++k) many = SetKV(many, keys[k], "1");
++            H()->sHANARMSJobInfoLine = AnsiString(many.c_str());
++            H()->bHANARMSNeedRunCheck = true;
++            CHECK(H()->HANARMSRunCheckOK(true) == false);
++            CHECK(g_dlgS1 == "HANA RMS recipe check FAIL!!  (9 items)\r\nTEMP(S=1/H=85)\r\nPIN_CNT(S=1/H=48)");
++            CHECK(g_dlgS2 == "PIN_FC(S=1/H=25.5)\r\nWIN_CNT(S=1/H=100)\r\nFT.C_FAIL_SCK(S=1/H=3)\r\nFT.LOW_YD(S=1/H=70)\r\nRT.C_FAIL_SCK(S=1/H=4)\r\n"
++                            "RT.S_T_S(S=1/H=75)\r\n... +1 more, see RMS screen for the full list");
++            if (g_dlgS2.find("+1 more") == std::string::npos) std::printf("    S1 = %s\n    S2 = %s\n", g_dlgS1.c_str(), g_dlgS2.c_str());
++            // one item longer than 58 characters is cut to 55 + "..." (golden 913 :2783-2789)
++            H()->sHANARMSJobInfoLine = AnsiString(SetKV(JobLine(), "RCP_NAME", std::string(60, 'R')).c_str());
++            CHECK(H()->HANARMSRunCheckOK(true) == false);
++            const std::string item = "RCP_NAME(S=" + std::string(60, 'R') + "/H=C10_RECIPE)";
++            CHECK(g_dlgS1 == "HANA RMS recipe check FAIL!!  (1 item)\r\n" + item.substr(0, 55) + "...");
++        }
+ 
++        // H3 (golden 913 :3383-3398): no baseline -> the reason is graded
+         H()->sHANARMSJobInfoLine = "";
+         AnsiString asFail;
+-        CHECK(H()->HANARMSCheckRecipe(asFail) == false && S(asFail) == "RMS JOB_INFO not received");   // golden :3120-3124
++        const AnsiString savLot = H()->sHANARMSLot;
++        H()->sHANARMSLot = "";
++        CHECK(H()->HANARMSCheckRecipe(asFail) == false && S(asFail) == "RMS not queried : no lot started");
++        CHECK(H()->HANARMSRunCheckOK(true) == false);                                                   // a reason without "(S=": shown as is
++        CHECK(g_dlgS1 == "RMS not queried : no lot started" && g_dlgS2 == "See RMS screen and log for details.");   // golden 913 :2820-2826
++        H()->sHANARMSLot = savLot;                                                                       // "LOT123"
++        H()->sHANARMSLinkErr = "cannot connect to 10.20.30.40:14140 (socket error 10061)";
++        CHECK(H()->HANARMSCheckRecipe(asFail) == false && S(asFail) == "RMS link fail : cannot connect to 10.20.30.40:14140 (socket error 10061)");
++        H()->sHANARMSLinkErr = "";
++        H()->HANARMSClient->Close();
++        CHECK(H()->HANARMSCheckRecipe(asFail) == false && S(asFail) == "RMS server not connected : 10.20.30.40:14140");
++        H()->PrepareHANARMSConnect();                                                                    // back on line (Sim)
++        H()->dwHANARMSSentTick = ::GetTickCount();
++        CHECK(H()->HANARMSCheckRecipe(asFail) == false && Has(S(asFail), "RMS no reply from server (") && Has(S(asFail), " sec, lot=LOT123)"));
++        H()->dwHANARMSSentTick = 0;
++        CHECK(H()->HANARMSCheckRecipe(asFail) == false && S(asFail) == "RMS JOB_INFO not received");
++        // RunCheckOK asks the server again when there is no baseline, at most every 5 s (golden 913 :3430-3433)
++        ClearTx();
++        CHECK(H()->HANARMSRunCheckOK(false) == false);
++        CHECK(Has(Tx(), "CMD=\"GET_LOT_INFO\" LOT=\"LOT123\"") && H()->dwHANARMSSentTick != 0);
++        ClearTx();
++        CHECK(H()->HANARMSRunCheckOK(false) == false);
++        CHECK(Tx().empty());                                                                             // throttled
++        W906_ShowMyMessage_Hook = g_dlgPrev;
++        H()->bHANARMSNeedRunCheck = false;
+ 
+         CHECK(CheckLine(JobLine("CT05"), f) == false && f == "GB_CT(S=CT05/H=(N/A))");   // [W906] 4: GB_CT gated => FAIL
+         if (f != "GB_CT(S=CT05/H=(N/A))") std::printf("    fail = %s\n", f.c_str());
+         CHECK(CheckLine(JobLine(""), f) == false && f == "GB_CT(S=/H=(N/A))");           // even an empty value
+         CHECK(CheckLine(JobLine("-"), f) == true && f == "");                             // "-" = not used (golden :2638)
+-        CHECK(CheckLine(JobLine("-", "DIRECT"), f) == false && f == "CON_MTD(S=DIRECT/H=RELEASE)");   // index 9 = RELEASE (K4)
+-        DeviceForm_File.ContactMode = DirectContactMode;                                   // 0: DIRECT, LOW_SPD "-"
+-        CHECK(CheckLine(JobLine("-", "DIRECT"), f) == false && f == "LOW_SPD(S=E/H=-)");
++        // ---- AI(W906-W195) 20261009 H1: the HANA 1002 rules (golden 913 automation.cpp:2598-2760, :2845-2936) ----
++        // Fx: CheckLine and print what came back when it is not the expected result
++        struct Fx { static bool Is(const std::string& line, bool ok, const std::string& want) {
++            std::string ff; const bool r = CheckLine(line, ff);
++            if (r != ok || ff != want) std::printf("    got %s \"%s\", want %s \"%s\"\n", r ? "PASS" : "FAIL", ff.c_str(), ok ? "PASS" : "FAIL", want.c_str());
++            return r == ok && ff == want; } };
++        // CON_MTD: the mode name, case / spaces / '_' do not matter (CmpNorm :2706-2715); RELEASE / DIRECT are gone
++        CHECK(Fx::Is(JobLine("-", "tmove   slow_contact"), true, ""));
++        CHECK(Fx::Is(JobLine("-", "RELEASE"), false, "CON_MTD(S=RELEASE/H=TMOVE Slow Contact)"));
++        DeviceForm_File.ContactMode = DropPlaceShiftContact;                               // 7: not in the 1002 table -> UNSUPPORTED (:2610, :2614); not low speed
++        CHECK(Fx::Is(JobLine("-", "Drop Contact"), false, "CON_MTD(S=Drop Contact/H=UNSUPPORTED) ; LOW_SPD(S=E/H=D)"));
++        // LOW_SPD: E = must be on, "-" / D = must be off (CmpFlag :2717-2728); Soft EP counts as low speed now (:2624-2625)
++        DeviceForm_File.ContactMode = DirectContactSoftEP;                                 // 5: 912 sent "-" for it
++        CHECK(Fx::Is(JobLine("-", "Direct & Soft EP Contact"), true, ""));
++        DeviceForm_File.ContactMode = DirectContactMode;                                   // 0: not low speed
++        CHECK(Fx::Is(JobLine("-", "Direct Contact"), false, "LOW_SPD(S=E/H=D)"));
++        CHECK(Fx::Is(SetKV(JobLine("-", "Direct Contact"), "LOW_SPD", "D"), true, ""));
++        CHECK(Fx::Is(SetKV(JobLine("-", "Direct Contact"), "LOW_SPD", "-"), true, ""));
+         DeviceForm_File.ContactMode = TMoveSlowContact;
++        // WIN_CNT = Low Yields after test count with its enable (CmpFunc :2730-2748, :2886-2887); the sliding window no longer counts
++        TestIF.iSlidingWindowSize = 1;
++        CHECK(Fx::Is(JobLine(), true, ""));
++        TestIF.iLowYieldCount = 99;
++        CHECK(Fx::Is(JobLine(), false, "WIN_CNT(S=100/H=99)"));
++        TestIF.iLowYieldCount = 100;  TestIF.bFailAlarmLowYield = false;                   // the same flag enables FT.LOW_YD (:2899)
++        CHECK(Fx::Is(JobLine(), false, "WIN_CNT(S=100/H=D) ; FT.LOW_YD(S=70/H=D)"));
++        CHECK(Fx::Is(SetKV(SetKV(JobLine(), "WIN_CNT", "D"), "FT_LOW_YD", "-"), true, ""));
++        TestIF.bFailAlarmLowYield = true;  TestIF.iSlidingWindowSize = 100;
++        // numbers need their function on, "-" / D need it off
++        TestIF.bContsFailBySocket = false;
++        CHECK(Fx::Is(JobLine(), false, "FT.C_FAIL_SCK(S=3/H=D)"));
++        TestIF.bContsFailBySocket = true;
++        CHECK(Fx::Is(SetKV(JobLine(), "RT_S_T_S", "D"), false, "RT.S_T_S(S=D/H=75)"));
++        // FT.AT_OFF follows the ContiFail trigger, not bLowYieldAutoSiteOff (:2900-2901); RT.AT_OFF is always D (:2921-2922)
++        TestIF.bLowYieldAutoSiteOffByContiFail = false;                                    // bLowYieldAutoSiteOff stays true
++        CHECK(Fx::Is(JobLine(), false, "FT.AT_OFF(S=E/H=D)"));
++        TestIF.bLowYieldAutoSiteOffByContiFail = true;
++        CHECK(Fx::Is(SetKV(JobLine(), "RT_AT_OFF", "E"), false, "RT.AT_OFF(S=E/H=D)"));
++        CHECK(Fx::Is(SetKV(JobLine(), "RT_AT_OFF", "-"), true, ""));
++        // SB lists: "-" / D = the Handler has none (CmpList :2750-2760)
++        CHECK(Fx::Is(SetKV(JobLine(), "FT_SB_SCK", "D"), true, ""));
++        CHECK(Fx::Is(SetKV(JobLine(), "RT_SB_ARM", "2"), false, "RT.SB_ARM(S=2/H=D)"));
++        CHECK(Fx::Is(SetKV(JobLine(), "FT_SB_ARM", "D"), false, "FT.SB_ARM(S=D/H=3,7)"));
++        // TEMP at room temperature: always the Ambient set value, whatever Ambient check says (:2865-2874, HANA 1001)
+         const int room = (Tempture_Ambient != Tempture_Hot && Tempture_Ambient != Tempture_AmbientHot) ? Tempture_Ambient : 2;
+         LastSet.iTemperature = room;
+-        CHECK(CheckLine(JobLine(), f) == false && f == "TEMP(S=85/H=RoomTemp)");          // golden :2703-2708
+-        Temperature.bUseAbitCHK = true;  Temperature.fAbitTemp = 85;
+-        CHECK(CheckLine(JobLine(), f) == true);                                            // golden :2701-2702
++        Temperature.bUseAbitCHK = false;  Temperature.fAbitTemp = 85;
++        CHECK(Fx::Is(JobLine(), true, ""));
++        Temperature.fAbitTemp = 25;
++        CHECK(Fx::Is(JobLine(), false, "TEMP(S=85/H=25)"));
+         Temperature.bUseAbitCHK = false; Temperature.fAbitTemp = 0;
+         LastSet.iTemperature = Tempture_Hot;
+         CHECK(CheckLine("CMD=\"GET_JOB_INFO_REP\" RCP_NAME=\"C10_RECIPE\" CHECKSTR=\"END\"", f) == true);   // fields not sent = skipped
+         CHECK(CheckLine("RCP_NAME=\"OTHER\"", f) == false && f == "RCP_NAME(S=OTHER/H=C10_RECIPE)");
+     }
+ 
+-    // ---- 8. 912 known defects, as 912 ------------------------------------------------------------------------------
+-    std::printf("\n-- 8. 912 defects --\n");
++    // ---- 8. connect on demand (AI(W906-W195) 20261009 H2, golden 913 RogerYang 20260916; K1 / K2 / K5 retired) ---------
++    std::printf("\n-- 8. lot query / connect on demand / templates --\n");
+     {
+-        // golden :3108-3109 verbatim (RogerYang "換批,舊基準作廢"): every lot-open query voids the baseline, same lot too
++        // golden 913 :3365-3372: only a NEW lot voids the baseline; the same lot keeps it; no lot = no change, no query
+         H()->sHANARMSJobInfoLine = AnsiString(JobLine().c_str());
+         ClearTx();
+         H()->HANARMSQueryJobInfo("LOT123");                                    // same lot
+-        CHECK(S(H()->sHANARMSJobInfoLine) == "");                               // golden :3109 on every call (no [W906] 6)
++        CHECK(S(H()->sHANARMSJobInfoLine) == JobLine());                        // golden 913 :3370 (912 voided it on every call)
+         CHECK(Has(Tx(), "CMD=\"GET_LOT_INFO\" LOT=\"LOT123\""));              // asked again
+-        H()->sHANARMSJobInfoLine = AnsiString(JobLine().c_str());
+         H()->HANARMSQueryJobInfo("LOT999");                                    // new lot
+         CHECK(S(H()->sHANARMSJobInfoLine) == "" && S(H()->sHANARMSLot) == "LOT999");
+         ClearTx();
+         H()->HANARMSQueryJobInfo("");
+-        CHECK(S(H()->sHANARMSLot) == "" && Tx().empty());                     // golden :3110-3111
+-
+-        // K1 / K5: the server's 30 s idle close; nothing reconnects; [TX] is logged anyway
++        CHECK(S(H()->sHANARMSLot) == "LOT999" && Tx().empty());               // golden 913 :3368-3369
++        H()->sHANARMSPending = "CMD=\"STALE\"";                                 // left over from the last lot
++        H()->dwHANARMSSentTick = 0;
++        H()->HANARMSQueryJobInfo("LOT999");
++        CHECK(S(H()->sHANARMSPending) == "" && H()->dwHANARMSSentTick != 0);    // golden 913 :3373-3374
++        CHECK(!Has(Tx(), "STALE"));
++
++        // the server's 30 s idle close: the next command is queued, the link reopened, then sent (golden 913 :3249-3347)
+         m0 = MemoCount();
+         H()->HANARMSClient->Close();
+         CHECK(MemoHasSince(m0, " [INFO] disconnected"));                        // golden :2853
+         CHECK(S(H()->lblRMS_Status->Caption) == "Disconnected");
+         CHECK(!(bool)H()->HANARMSClient->Active);
+         m0 = MemoCount(); ClearTx();
+-        H()->HANARMSSendCmd("CMD=\"GET_LOT_INFO\" LOT=\"LOT7\" HDNAME=\"HD_01\" CHECKSTR=\"END\"");
+-        CHECK(MemoCount() == m0 + 2 && EndsWith(MemoLine(m0), " [TX] CMD=\"GET_LOT_INFO\" LOT=\"LOT7\" HDNAME=\"HD_01\" CHECKSTR=\"END\"")
+-              && EndsWith(MemoLine(m0 + 1), " [WARN] not connected, not sent"));   // golden :3084 / :3099
+-        CHECK(Tx().empty());
++        const std::string lot7 = "CMD=\"GET_LOT_INFO\" LOT=\"LOT7\" HDNAME=\"HT9046-07\" CHECKSTR=\"END\"";
++        H()->HANARMSSendCmd(lot7.c_str());
++        CHECK(MemoCount() == m0 + 4 && EndsWith(MemoLine(m0), " [QUEUE] " + lot7)                              // golden 913 :3274
++              && EndsWith(MemoLine(m0 + 1), " [INFO] connecting to 10.20.30.40:14140")                         // :3317
++              && EndsWith(MemoLine(m0 + 2), " [INFO] connected")                                               // :3011
++              && EndsWith(MemoLine(m0 + 3), " [TX] " + lot7));                                                 // :3013 -> :3261, [TX] only when sent
++        if (MemoCount() != m0 + 4) DumpMemoSince(m0);
++        CHECK(Tx() == lot7 + "\n" && S(H()->sHANARMSPending) == "" && (bool)H()->HANARMSClient->Active);
+         m0 = MemoCount();
+         W906_HanaRmsPumpTick(); W906_HanaRmsPumpTick(); W906_HanaRmsPumpTick();
+-        CHECK(!(bool)H()->HANARMSClient->Active && MemoCount() == m0);
++        CHECK(MemoCount() == m0);                                               // the pump adds nothing on a Sim socket
++
++        // no IP in HANARMS.ini: the queued command is dropped with the reason (golden 913 :3303-3308)
++        H()->HANARMSClient->Close();
++        WriteAll(iniFile, "[Setting]\r\nPort=14140\r\n");
++        CloseIniFile();
++        m0 = MemoCount(); ClearTx();
++        H()->HANARMSSendCmd("CMD=\"ALIVECHK\" LOOPBACK=\"TEST\" CHECKSTR=\"END\"");
++        CHECK(MemoHasSince(m0, " [QUEUE] CMD=\"ALIVECHK\"") && MemoHasSince(m0, " [ERR] RMS server IP/Port not set"));
++        CHECK(S(H()->sHANARMSPending) == "" && S(H()->sHANARMSLinkErr) == "RMS server IP/Port not set" && Tx().empty());
++        CHECK(!(bool)H()->HANARMSClient->Active);
++        WriteAll(iniFile, "[Setting]\r\nIP=10.20.30.40\r\nPort=14140\r\n");
++        CloseIniFile();
++        H()->LoadHANARMSSetting();                                              // the edit fields back to the server (part 9 prints them)
+ 
+-        // K2 / K8: the button templates, verbatim
++        // H3 (golden 913 :3137-3153, K8 retired): Get Lot runs the query -- the lot of the run, else LOT="..." in the command box,
++        // else the template (HDNAME = Machine ID) and a [WARN]
++        H()->sHANARMSLot = "";
++        H()->edtHANARMSManCmd->Text = "";
++        m0 = MemoCount(); ClearTx();
+         H()->btnRMS_GetLotClick(NULL);
+-        CHECK(S(H()->edtHANARMSManCmd->Text) == "CMD=\"GET_LOT_INFO\" LOT=\"TLOTNO\" HDNAME=\"HD_01\" CHECKSTR=\"END\"");   // golden :2967
++        CHECK(S(H()->edtHANARMSManCmd->Text) == "CMD=\"GET_LOT_INFO\" LOT=\"TLOTNO\" HDNAME=\"HT9046-07\" CHECKSTR=\"END\"");   // golden 913 :3148
++        CHECK(MemoHasSince(m0, " [WARN] no lot : start a lot first, or edit LOT= in the command box") && Tx().empty());
++        H()->edtHANARMSManCmd->Text = "CMD=\"GET_LOT_INFO\" LOT=\" MAN1 \" HDNAME=\"X\" CHECKSTR=\"END\"";
++        ClearTx();
++        H()->btnRMS_GetLotClick(NULL);                                          // link is down: queued, reopened, sent
++        CHECK(S(H()->sHANARMSLot) == "MAN1" && Tx() == "CMD=\"GET_LOT_INFO\" LOT=\"MAN1\" HDNAME=\"HT9046-07\" CHECKSTR=\"END\"\n");
++        ClearTx();
++        H()->btnRMS_GetLotClick(NULL);                                          // the run's lot wins over the box
++        CHECK(Has(Tx(), "LOT=\"MAN1\""));
++        H()->HANARMSClient->Close();                                            // parts 9-10 start with the link down
++
++        // the button templates: HDNAME = HANARMSGetHDName() (golden 913 :3158 / :3164 / :3170)
+         H()->btnRMS_GetJobClick(NULL);
+-        CHECK(S(H()->edtHANARMSManCmd->Text) == "CMD=\"GET_JOB_INFO\" LOT=\"TLOTNO\" HDNAME=\"HD_01\" LOCATION=\"T9999\" CUSTCD=\"CS\" PARTNO=\"XXX_XXXX_XXX_XXX\" CHECKSTR=\"END\"");
++        CHECK(S(H()->edtHANARMSManCmd->Text) == "CMD=\"GET_JOB_INFO\" LOT=\"TLOTNO\" HDNAME=\"HT9046-07\" LOCATION=\"T9999\" CUSTCD=\"CS\" PARTNO=\"XXX_XXXX_XXX_XXX\" CHECKSTR=\"END\"");
+         H()->btnRMS_EventClick(NULL);
+-        CHECK(Has(S(H()->edtHANARMSManCmd->Text), "PJ_FG=\"YES\" PJ_CD=\"10\" COMMENT=\"-\" CHECKSTR=\"END\""));
++        CHECK(Has(S(H()->edtHANARMSManCmd->Text), "HDNAME=\"HT9046-07\"") && Has(S(H()->edtHANARMSManCmd->Text), "PJ_FG=\"YES\" PJ_CD=\"10\" COMMENT=\"-\" CHECKSTR=\"END\""));
+         H()->btnRMS_GetTimeClick(NULL);
+-        CHECK(S(H()->edtHANARMSManCmd->Text) == "CMD=\"GET_TIME_INFO\" HDNAME=\"HD_01\" CHECKSTR=\"END\"");
++        CHECK(S(H()->edtHANARMSManCmd->Text) == "CMD=\"GET_TIME_INFO\" HDNAME=\"HT9046-07\" CHECKSTR=\"END\"");
++        WriteAll(iniFile, "[Setting]\r\nIP=10.20.30.40\r\nPort=14140\r\nHDName=  RMS-NAME \r\n");   // the ini HDName wins, trimmed (golden 913 :3353-3354)
++        CloseIniFile();
++        CHECK(S(H()->HANARMSGetHDName()) == "RMS-NAME");
++        WriteAll(iniFile, "[Setting]\r\nIP=10.20.30.40\r\nPort=14140\r\n");
++        CloseIniFile();
+     }
+ 
+     // ---- 9. error event ---------------------------------------------------------------------------------------------
+@@ -561,9 +740,12 @@ int main()
+         int code = 10061;
+         m0 = MemoCount();
+         H()->bW906HANARMSConnecting = true;
++        H()->sHANARMSPending = "CMD=\"QUEUED\"";
+         H()->HANARMSClient->OnError(H()->HANARMSClient, H()->HANARMSClient->Socket, Scktcomp::eeConnect, code);
+         CHECK(code == 0);                                                       // golden :2914
+-        CHECK(MemoHasSince(m0, " [ERR] socket error 10061"));
++        CHECK(MemoHasSince(m0, " [ERR] cannot connect to 10.20.30.40:14140 (socket error 10061)"));   // H2: golden 913 :3083-3085
++        CHECK(S(H()->sHANARMSLinkErr) == "cannot connect to 10.20.30.40:14140 (socket error 10061)");
++        CHECK(S(H()->sHANARMSPending) == "");                                   // golden 913 :3086
+         CHECK(S(H()->lblRMS_Status->Caption) == "Disconnected");
+         CHECK(H()->bW906HANARMSConnecting == false);
+     }
+@@ -656,6 +838,10 @@ int main()
+     TestIF.iSlidingWindowSize = sav_Win;  TestIF.iContsFailSocketAlarmCT = sav_CF;  TestIF.iContsFailSocketAlarmCT_RT = sav_CFRT;
+     TestIF.dFailAlarmSiteYield = sav_STS;  TestIF.dFailAlarmSiteYield_RT = sav_STSRT;  TestIF.dLowYieldLimit = sav_LY;  TestIF.dLowYieldLimit_RT = sav_LYRT;
+     TestIF.bLowYieldAutoSiteOff = sav_AtOff;
++    TestIF.bFailAlarmLowYield = sav_LYOn;  TestIF.bFailAlarmLowYield_RT = sav_LYOnRT;  TestIF.bContsFailBySocket = sav_CFOn;
++    TestIF.bContsFailBySocket_RT = sav_CFOnRT;  TestIF.bFailAlarmSiteYieldDifferent = sav_STSOn;
++    TestIF.bFailAlarmSiteYieldDifferent_RT = sav_STSOnRT;  TestIF.bLowYieldAutoSiteOffByContiFail = sav_AtOffCF;  TestIF.iLowYieldCount = sav_LYCnt;
++    IniConfig.sGPIBMachineID = sav_MachineID;
+     for (int k = 0; k < 2; ++k)
+         for (int i = 0; i < TEST_MAX_BIN; ++i) {
+             BinSelect[binIdx[k]].bSpecialBinByArm[i] = sav_bArm[k][i];   BinSelect[binIdx[k]].bSpecialBinBySocket[i] = sav_bSck[k][i];
+-- 
+2.55.0.windows.5
+
