@@ -2405,4 +2405,5 @@ tools 0184 (20261009): HTML designer merged with laptop package 214 (0.317.0 -> 
      設定檔變動：machine_params/D_GPIB9045_system/general.ini、machine_params/D_HT9045_system/Gerneral.ini、machine_params/D_HT9045_system/lastdata.dat、machine_params/D_HT9045_system/lastdata_backup.dat、machine_params/D_HT9045_system/lastdata_backup2.dat、machine_params/D_HT9045_system/machinerecord.dat
   掃描：權杖／私鑰／7z 密碼／部署金鑰 0 筆（設定檔照原樣、含密碼檔，EastSun 1002 裁決）。
 tools 0185 (20261009): HTML designer merged with laptop packages 215-217 (0.325.0 -> 0.330.0). Install: tools/vscode-htdesigner pack.ps1 then code --install-extension.
+- 1009 11:5x 派工給 Jimmy（EastSun）：**沒有 AI 的環境下，HT9050 機台軟體怎麼安裝、怎麼更新——請整理成手冊＋腳本，並在沒有 Claude 的電腦上實測**。內容見 cpp 0349 的 docs/TO_JIMMY_20261009_NO_AI_INSTALL_UPDATE.md（交付物、安裝／更新要寫清楚的項目、現場疑難排解、三個實測情境）。
 MD5 清單在 MANIFEST_MD5.tsv。
