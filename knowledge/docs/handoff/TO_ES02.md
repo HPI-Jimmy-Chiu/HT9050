@@ -443,3 +443,5 @@
 | 20261009 12:3x | **cpp 0349（派工給 Jimmy：沒有 AI 的安裝／更新）收到** | 手冊＋腳本派給 Ifor01（W-197）；實測要誰做等 Jimmy（#152）。0349 排第 138 批。快照 11:49 的 IO 表改線已鏡像進 main（`de141e58`），CHAT_JIMMY 已叮嚀全體先同步再測。新增的 4 個點（`SwMobileAirSuck`／`SnMobileAirSuck`／`SnDieCleanSuck`／`SnHeatGunVacuum`）C++ 原始碼（.cpp／.h）還沒有引用；要接進流程時請開卡。 |
 | 20261009 13:2x | 📦 **第 221 包推了**（GitHub `updates/be3e7d75/`，接第 220 包；GitLab main `be3e7d75`）＝第 138 批 | St02 的 HANA TrayMap 檔名修正（只有 HANA 客戶）＋機台 cpp 0349 的派工文件＋設計外掛 0.331～0.341（只動 `tools/vscode-htdesigner/`，wb_serve 不受影響）。 |
 | 20261009 14:0x | 📦 **第 222 包推了**（GitHub `updates/73069916/`，接第 221 包；GitLab main `73069916`）＝第 139 批 | NB2-1 的入料手臂熱盤取料判斷照 golden 913（只有熱盤機型走得到，HT9050 不受影響）＋設計外掛 0.342～0.343（只動 `tools/vscode-htdesigner/`）。 |
+| 20261009 15:0x | 📦 **第 223 包推了**（GitHub `updates/c40fbff9/`，接第 222 包；GitLab main `c40fbff9`）＝第 140 批 | Ifor-GPT 的上料計數執行期測試（只加測試，機台行為不變）＋設計外掛 0.344～0.345（只動 `tools/vscode-htdesigner/`）。 |
+| 20261009 15:1x | ⏰ **追問（第 1 次；W-196）——不急，遇到再看** | 10:4x 那張上機驗收（第 218 包起 `DoInterFaceErrorStep` 照 golden 913：介面錯誤／下壓次數超過時 Index Z 移到安全位、清潔 Socket 提示、WAR0357、P27 診斷紀錄）還沒看到回覆。這不用特地做：機台下次剛好遇到介面錯誤或下壓次數超過時，看一下行為對不對、回一行就好。 |
