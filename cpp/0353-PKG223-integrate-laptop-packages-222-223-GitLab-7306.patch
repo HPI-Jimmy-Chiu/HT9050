@@ -1,0 +1,830 @@
+From 2e00cbffc939cbe85b717209e1998c192d4422f4 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 9 Oct 2026 15:33:25 +0800
+Subject: [PATCH] PKG223: integrate laptop packages 222-223 (GitLab 73069916,
+ c40fbff9) -- NB2-1 W-188 #3 HasHotReadyIC_9045 as golden 913 (MR !377;
+ hot-plate machines only: a plate holding only HAS_NULL_IC placeholders counts
+ as empty instead of the end-of-lot spin) + Ifor-GPT W-180 IG-5 runtime test
+ (tests only) + laptop docs (RULINGS_20261009). Auto-accepted (scheduled
+ check).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ aHotPlateSubstrate.h                        |   2 +-
+ ainarm_SearchPickPlate.cpp                  |  89 ++++++-
+ ainarm_SearchPickPlate.h                    |   2 +-
+ docs/MACHINE_PATCHES_20261009.md            |  13 +
+ docs/NIGHT_REPORT.md                        |  14 +-
+ docs/RULINGS_20261009.md                    |  71 +++++
+ docs/WORKLOG_MACHINE.md                     |   1 +
+ tests/CMakeLists.txt                        |  33 +++
+ tests/test_iforgpt_loadingcount_runtime.cpp | 275 ++++++++++++++++++++
+ tests/test_nb2_w188_hotready.cpp            | 142 ++++++++++
+ 10 files changed, 631 insertions(+), 11 deletions(-)
+ create mode 100644 docs/RULINGS_20261009.md
+ create mode 100644 tests/test_iforgpt_loadingcount_runtime.cpp
+ create mode 100644 tests/test_nb2_w188_hotready.cpp
+
+diff --git a/aHotPlateSubstrate.h b/aHotPlateSubstrate.h
+index 36c7b5c5..324d55dc 100644
+--- a/aHotPlateSubstrate.h
++++ b/aHotPlateSubstrate.h
+@@ -736,7 +736,7 @@ public:
+     // AddHPSuckGroup/UpdateHPSuckGroup siblings -- see the GAP note on the
+     // class banner above: this is a no-op because nothing populates the list,
+     // not a settled offline invariant.
+-    void ClearGroupList();                                              // golden HTEditList.h
++    void ClearGroupList();   int GetHPSuckGroupCount();                 // golden HTEditList.h   //AI(W906-W188) 20261009 (NB2-1): golden HTEditList.h -- declaration only; the one definition is Public/HTEditList.cpp (W-188 #3 orphan log)
+ };
+ 
+ extern uPlateInfo *PickFromHPList;   // golden HTEditList.h:294
+diff --git a/ainarm_SearchPickPlate.cpp b/ainarm_SearchPickPlate.cpp
+index cc261044..dd5dcba3 100644
+--- a/ainarm_SearchPickPlate.cpp
++++ b/ainarm_SearchPickPlate.cpp
+@@ -1301,6 +1301,30 @@ bool SearchPlateToPick()
+     #endif
+     return true;
+ }
++//AI(W906-W188) 20261009 (NB2-1): W-188 #3 -- golden 913 (main e9908638) ainarm_SearchPickPlate.cpp:1463-1480 verbatim (RogerYang 20260801 /
++//   20260827): FreePoint2DList (the uPoint2D leak fix used below) and bNeedReconcileHPList (set below; its golden 913
++//   consumer, ainarm9045.cpp:4506, is a separate function -- not in this change, so the flag is only raised here).
++//------------------------------------------------------------------------------
++//AI(ht9045-inarm-flow) 20260801 (RogerYang) : TList::Clear()不會釋放item,GetHPFirstTeamToList是new出來的uPoint2D,必須逐一delete
++//------------------------------------------------------------------------------
++static void FreePoint2DList(TList* ls)
++{
++    if(ls==NULL)
++        return;
++    for(int i=0; i<ls->Count; i++)
++    {
++        uPoint2D* p2d=(uPoint2D*)ls->Items[i];
++        if(p2d!=NULL)
++            delete p2d;
++    }
++    ls->Clear();
++    delete ls;
++}
++//------------------------------------------------------------------------------
++bool bNeedReconcileHPList=false;                                                //AI(ht9045-inarm-flow) 20260827 (RogerYang)
++//AI(W906-W188) 20261009 (NB2-1): W-188 #3 -- HasHotReadyIC_9045 = golden 913 ainarm_SearchPickPlate.cpp:1638-1840 verbatim (0618 :1248-1397,
++//   which this port body was): HasRealIC gate + HAS_NULL_IC residue clear (RogerYang 20260831), bMixTeam ->
++//   bNeedReconcileHPList (20260827), orphan-cell Exception log (20260831), FreePoint2DList on every return (20260801).
+ //------------------------------------------------------------------------------
+ bool HasHotReadyIC_9045()
+ {
+@@ -1335,6 +1359,21 @@ bool HasHotReadyIC_9045()
+         }
+     }
+ 
++    //AI(ht9045-inarm-flow) 20260831 (RogerYang) : 閘門原本用 MOT[].HasIC() -> TMyTray::HasIC() 只判 Data 非0, 把 HAS_NULL_IC 佔位符也算成有料(mytray.cpp L183)
++    //AI : 「盤上只剩佔位符 + 帳本空(只有隊尾空group)」時會假性放行, 下游 SearchPlateToPick->GetHPFirstTeamPlate 對空group空轉500圈
++    //AI : (Exception "GetHPFirstTeamPlate iLimitcount>=500") 再落到 No GetHPFirstTeamMotUse 停機 = HHT-76「每次都是最後幾顆報」批尾簽章
++    if(MOT[MMPlate1].Tray.HasRealIC()==false &&
++       MOT[MMPlate2].Tray.HasRealIC()==false)
++    {
++        if(MOT[MMPlate1].Tray.HasIC() || MOT[MMPlate2].Tray.HasIC())            //AI : 只在真的有佔位符殘留時才清+落log, 避免每個pass洗版
++        {
++            MOT[MMPlate1].Tray.ClearNullIC();                                   //AI : 清掉佔位符讓 HasIC() 不再說謊 -> Clean Out 不會卡1001(§14.5)
++            MOT[MMPlate2].Tray.ClearNullIC();
++            RecordProcess("HasHotReadyIC : plate has no real IC, clear HAS_NULL_IC residue", __FUNC__);
++        }
++        return false;                                                           //AI : 熱盤視同空 -> 走正常放料補料 / Clean Out 正常收尾, 不進下游空轉
++    }
++
+     if(MOT[MMPlate2].HasIC() || MOT[MMPlate1].HasIC())
+         SearchPlateToPick();
+     else
+@@ -1348,6 +1387,7 @@ bool HasHotReadyIC_9045()
+     else
+     {
+         bool bReady=true;
++        bool bMixTeam=false;                                                    //AI(ht9045-inarm-flow) 20260827 (RogerYang) : 同一群裡有料格與空格混雜 = 帳本與實物不符
+         //不指定shuttle吸取
+         TList* lsPoint2D=new TList();
+         if(PickFromHPList->GetHPFirstTeamToList(&iP, lsPoint2D))
+@@ -1360,12 +1400,14 @@ bool HasHotReadyIC_9045()
+                 if(iP>=0 && iR>=0 && iC>=0 &&
+                    iP<2  && iR<50 && iC<50)
+                 {
+-                    if(MOT[MMPlate1+iP].Tray.Data[iC][iR]!=NULL_IC)
+-                    {
++                    //AI(ht9045-inarm-flow) 20260827 (RogerYang) : bHasIC原為累加式,前面有料會讓後面空格被當成有料,導致下方修復分支永遠進不去
++                    bool bCellHasIC=(MOT[MMPlate1+iP].Tray.Data[iC][iR]!=NULL_IC);
++                    if(bCellHasIC)
+                         bHasIC=true;
+-                    }
++                    else
++                        bMixTeam=true;
+ 
+-                    if(bHasIC &&
++                    if(bCellHasIC &&
+                        HotTime[iP][iC][iR]>=Prod.iHotTime)
+                     {
+                         //pass
+@@ -1378,11 +1420,16 @@ bool HasHotReadyIC_9045()
+                 else
+                 {
+                     bReady=false;
++                    bMixTeam=true;                                              //AI(ht9045-inarm-flow) 20260827 (RogerYang) : 座標壞掉也算爛帳
+                 }
+             }
+ 
++            if(bMixTeam==true)                                                  //AI(ht9045-inarm-flow) 20260827 (RogerYang) : 幽靈帳 -> 排程對帳, 不要卡在這裡永遠回false
++                bNeedReconcileHPList=true;
++
+             if(bReady==false && bHasIC==true)                                   //JimmyChiu 20250707 : try to fix hang up.
+             {
++                FreePoint2DList(lsPoint2D);                                     //AI(ht9045-inarm-flow) 20260801 (RogerYang) : soak等待期間每個pass都走這裡,原本TList與uPoint2D全漏
+                 return bReady;
+             }
+ 
+@@ -1392,7 +1439,38 @@ bool HasHotReadyIC_9045()
+                 PickFromHPList->SaveFile(sHPPickRec);
+                 if(PickFromHPList->GetHPFirstTeamMotUse(bZFlgToHP)==false)      //RogerYang 20250624 Add HotPlate ErrMessage
+                 {
++                    //AI(ht9045-inarm-flow) 20260831 (RogerYang) : 真孤兒(盤上有真料但帳本隊首無team) -> 列出孤兒格供追來源, 最多8筆避免洗版
++                    AnsiString StrOrphan;
++                    int iOrphanCnt=0;
++                    for(int ip2=0; ip2<2; ip2++)
++                    {
++                        for(int ic2=0; ic2<MOT[MMPlate1+ip2].Tray.XItem; ic2++)
++                        {
++                            for(int ir2=0; ir2<MOT[MMPlate1+ip2].Tray.YItem; ir2++)
++                            {
++                                if(MOT[MMPlate1+ip2].Tray.Data[ic2][ir2]!=NULL_IC &&
++                                   MOT[MMPlate1+ip2].Tray.Data[ic2][ir2]!=HAS_NULL_IC)
++                                {
++                                    iOrphanCnt++;
++                                    if(iOrphanCnt<=8)
++                                    {
++                                        StrOrphan.sprintf("HasHotReadyIC orphan cell : P%d C%d R%d Data%d Site%d Row%d Sht%d Kit%d",
++                                                          ip2, ic2, ir2,
++                                                          MOT[MMPlate1+ip2].Tray.Data[ic2][ir2],
++                                                          MOT[MMPlate1+ip2].Tray.iWhichSite[ic2][ir2],
++                                                          iRowOnHotPlate[ip2][ic2][ir2],
++                                                          iHotWhichShuttle[ip2][ic2][ir2],
++                                                          iHotWhichKit[ip2][ic2][ir2]);
++                                        MyDBIProcess("Exception", StrOrphan);
++                                    }
++                                }
++                            }
++                        }
++                    }
++                    StrOrphan.sprintf("HasHotReadyIC orphan total=%d (ledger group=%d)", iOrphanCnt, PickFromHPList->GetHPSuckGroupCount());
++                    RecordProcess(StrOrphan, __FUNC__);
+                     ShowMyMessage(AnsiString().sprintf("%s %s Task=%d", __FUNC__, "No GetHPFirstTeamMotUse", 0));
++                    FreePoint2DList(lsPoint2D);                                 //AI(ht9045-inarm-flow) 20260801 (RogerYang) : 原本直接return,TList與uPoint2D全漏
+                     return false;
+                 }
+                 bNeedSuck=false;
+@@ -1446,8 +1524,7 @@ bool HasHotReadyIC_9045()
+             ShowMyMessage(AnsiString().sprintf("%s %s", __FUNC__, "No PickFromHPList"));
+             bReady=false;
+         }
+-        lsPoint2D->Clear();
+-        delete lsPoint2D;
++        FreePoint2DList(lsPoint2D);                                                                                 //AI(ht9045-inarm-flow) 20260801 (RogerYang) : TList::Clear()不釋放item,原本uPoint2D全漏
+         return bReady;
+     }
+ //    return false;
+diff --git a/ainarm_SearchPickPlate.h b/ainarm_SearchPickPlate.h
+index 88c223a0..35165f31 100644
+--- a/ainarm_SearchPickPlate.h
++++ b/ainarm_SearchPickPlate.h
+@@ -27,7 +27,7 @@ extern bool bPickFormHotplateRetry;
+ extern bool bInArmTryPickFromHotPlateFinish;                                    //ChungHung 20120206 Hotplate check
+ 
+ extern int  GetHeaterWaitTime();
+-extern bool HasHotReadyIC_9045();
++extern bool HasHotReadyIC_9045();   extern bool bNeedReconcileHPList;   //AI(W906-W188) 20261009 (NB2-1): golden 913 ainarm_SearchPickPlate.h:18
+ extern bool InArmNeedCheckHotPlateOffset(bool bPlace);                          //Steven 20230531 : 簡化判斷式
+ 
+ extern bool MoveInArmXYPickHotPlate_9045(bool bNeedDown);
+diff --git a/docs/MACHINE_PATCHES_20261009.md b/docs/MACHINE_PATCHES_20261009.md
+index a311f6e1..696edebd 100644
+--- a/docs/MACHINE_PATCHES_20261009.md
++++ b/docs/MACHINE_PATCHES_20261009.md
+@@ -73,3 +73,16 @@
+ - **cpp 0350 PKG219**：機台把筆電第 219 包（GitLab `51f954bf`）合進去——機台合筆電的包，照規則不 cherry-pick，只接鏈。`pkg_uptake.py`（13:1x）：機台已經套到第 220 包。
+ - **快照 12:28**（main `c434dff3`）：只有執行紀錄（`Program Close`、lastdata、machinerecord、GPIB LastFile），沒有參數或工單變更 ⇒ 不用叮嚀全體。
+ - **鏈尾**：C++ `ff19f3b2`（0349）→ **`243458f7`**（0350）。下一次從 **cpp 0351／web 0142／tools 0186** 開始。
++- （13:2x 補記）**cpp 0349 進 main**：第 138 批 `be3e7d75`＝第 221 包（GitHub `741e482f`）；WORKLOG_MACHINE.md 的衝突（§3 表：機台有、main 沒有的包／設計外掛列）照第 11 條取機台那一邊。
++
++## 11. 12:5x cpp 0351 PKG220（機台合筆電第 220 包，只接鏈）；快照 12:57
++
++- **cpp 0351 PKG220**：機台把筆電第 220 包（GitLab `9290fe38`）合進去——照規則不 cherry-pick，只接鏈。`pkg_uptake.py`（13:4x）：機台已經套到第 221 包。
++- **快照 12:57**（main `e873ba6b`）：只有兩個說明檔的拍照時間變了，沒有參數或工單變更 ⇒ 不用叮嚀全體。
++- **鏈尾**：C++ `243458f7`（0350）→ **`f0e1b55a`**（0351）。下一次從 **cpp 0352／web 0142／tools 0186** 開始。
++
++## 12. 13:2x cpp 0352 PKG221（機台合筆電第 221 包，只接鏈）；快照 13:27
++
++- **cpp 0352 PKG221**：機台把筆電第 221 包（GitLab `be3e7d75`）合進去——只接鏈。`pkg_uptake.py`（13:5x）：機台套到第 221 包（當時最新）。
++- **快照 13:27**：`snap_push.py` 回 up to date（跟 main 那份一樣）。
++- **鏈尾**：C++ `f0e1b55a`（0351）→ **`913cfdec`**（0352）。下一次從 **cpp 0353／web 0142／tools 0186** 開始。第 222 包（第 139 批 `73069916`，GitHub `69c776fa`）14:0x 推出。
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index 7314cc6e..68614f11 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -1,10 +1,10 @@
+-# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 13:1x）
++# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 14:3x）
+ 
+ ## ☀ 10/08 早上先看這裡（04:3x 起草；之後的進度往這張表加）
+ 
+ | 項目 | 一句話 |
+ |---|---|
+-| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～137 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate），出了**第 181～220 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
++| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～139 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate），出了**第 181～222 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
+ | **模擬組態** | St02 W-149 做完：模擬版的固定失敗從 7 支降到 4 支，跟出貨一樣——之後模擬版多紅一支就是真回歸。 |
+ | **機台修的事（重點）** | 0307 主控台非同步（START 卡 103 秒＋EMG 誤報的根因）、0309／0310／0312／0316 HT9050 Tray 流程（站序、Empty→Auto 補盤、位置不加 6800、Loader 探測看抽屜感測）、0311／0317 上升氣缸雙線圈、0313 出料手臂讓位點（00:19 MOutArmX 警報）、0314 CCD Y 原點判斷、**0315 HT9050 先跳過 Index 扭力讀取**（旗標預設開，扭力讀取驗證後要關）。 |
+ | **軟體極限** | 00:19 的警報是 golden 拿軟體極限（這台 ±999999）算目標。MainNB-GPT 普查（W-164）：只剩 Motor Test 頁的 LightScale 會算出 ±999899——EastSun 0925 R7 已定照 golden，只發提醒。 |
+@@ -86,7 +86,15 @@
+ | **出的包（1009 12:3x）：第 220 包＝第 137 批** | GitLab `9290fe38`／GitHub `5bea18ae`：①機台 cpp 0348——Index Z1（M14）斷電重開後常帶著驅動器警報起來，現在開機時自動清一次（不上伺服、不動作，只記一行）；②St02 的 HANA RMS 照 golden 913（只有 HANA 客戶走得到，HT9050 不受影響；「RMS 連不上就擋 START」那一項 H4 不在這包，等你 #151）。gate b137a：兩組態只有固定 4 支；模擬組態另有一支計時測試在負載下慢了一次，單獨重跑 3 次都過。 |
+ | **1009 12:3x：機台 cpp 0349（EastSun 派給你一件事）＋快照 11:49 IO 表改線＋HANA H5** | ①機台 11:49 推了 cpp 0349，只有文件：EastSun 派給你「沒有 AI 的電腦怎麼安裝、更新」（手冊＋腳本＋實測）。手冊和腳本派給 Ifor01（W-197），實測要誰做列成 §0 #152；0349 排第 138 批。②機台快照 11:49 已鏡像到 main `de141e58`：EastSun 照現場接線改了 IO 表（風刀、Die 清潔、熱風槍幾個點換位或新增；一個撞位址的點停用）——真的參數變更，CHAT_JIMMY 已叮嚀全體先同步再測；新增的 4 個點程式裡還沒有人用。③St02 的 HANA H5（!375：HANA 的 TrayMap 檔名去掉時間裡的符號、建檔失敗記一行紀錄）收到，對過 golden 913，排第 138 批。④Jerry／KenHeish／Roger 的 W-192～194 滿 4 小時，第 1 次追問（也請 Roger 說明 #151 那段 golden 的原意）。 |
+ | **1009 13:1x：機台套到第 220 包；設計外掛 0.341；NB2 的 W-188 #3 排第 139 批** | ①機台 12:2x 推了 cpp 0350（機台合第 219 包，只接鏈不收），`pkg_uptake` 量到它已經套到第 220 包。②機台快照 12:28 鏡像到 main `c434dff3`：只有執行紀錄，沒有參數或工單變更。③ES02 的設計外掛 0.341（Main.* 頁的接線總覽只算自己那個分頁）合進 main `dc3f20fa`，跟 0.331～0.340 一起進第 221 包。④NB2-1 的 MR !377（入料手臂從熱盤取料前的判斷，照 golden 913：熱盤上只剩佔位符時當成空盤、清掉殘留並記一行，避免批尾空轉 500 圈後停機）對過 golden 913，逐 token 相同，排第 139 批。⑤第 138 批（cpp 0349＋St02 HANA H5）gate 中。 |
+-| **要你決定的**（§0） | ✅ 你 10:1x 都回了：#148＝NB2 已完成（!306 收進第 110 批確認）、#149＝A（Ifor-GPT 專做執行期測試，IG-3／IG-4）、!310＝A（ES02 HTDESIGNER 0.235～0.257 收進第 110 批）＝RULINGS_20261008 第 2 條。**13:0x 新一題 #150**：GPIB 位址不一致要不要自動修正（Jerry 留給你；預設 A＝維持 golden、只留警告，可不回）。<br>**🆕 1009 11:4x 新一題 #151：HANA 機台按 START 時，要不要照 golden 先等 RMS 伺服器連線（最多 3 秒）？** 白話：golden 913（RogerYang 0916）裡，HANA 客戶開了 A77 的機台按 START 前，會先確認 RMS 伺服器連得上，連不上就擋下 START，連線最多等 3 秒。問題在移植樹的輪詢是單執行緒——這 3 秒裡整台機台的狀態更新會停住（例：網頁上的數字 3 秒不動）。你 0923 定過「會擋住輪詢的整合要先問」，所以問你。只有「HANA 客戶＋開 A77＋線上模式＋RMS 還沒連上」才會等，HT9050 永遠走不到。選項：**A＝照 golden 收**（建議：只在按 START 那一刻、最多 3 秒，機台本來就停著；St02 已經把等待裡的訊息迴圈換成只推 HANA 連線）；**B＝先不收**，等改成不擋輪詢的寫法（例：連線放到背景，START 時只看結果）。**沒回之前照 B**：H4 先不合，HANA 其他幾張（!372～!374）照常進第 138 批。<br>**🆕 1009 12:3x 新一題 #152：EastSun 派給你的「在沒有 AI 的電腦上實測安裝與更新」，實測要誰來做？** 白話：EastSun 希望客戶端或沒有 AI 的電腦也能只靠文件和腳本裝好、更新 HT9050 的軟體（機台 cpp 0349）。手冊和腳本筆電已派 Ifor01 寫（W-197）；寫好之後要有一個「人」在一台沒有 Claude 的電腦上照著做三個情境：①從零安裝並啟動；②從某一包更新到最新一包，中間至少遇到一個「機台和筆電都改過」的檔；③故意讓建置失敗，照手冊退回。模擬組態就可以，不用機台。選項：**A＝你自己做**（建議：EastSun 指名你，你也最清楚客戶端要什麼；大約半天到一天）；**B＝指定一位同事**照手冊做、不用 AI（例：Kevin 或 Jerry）；**C＝先不排**，手冊寫好放著。**沒回之前照 C**：手冊照寫，不排實測。實測的人不能是寫手冊的 Ifor01。 |
++| **出的包（1009 13:2x）：第 221 包＝第 138 批** | GitLab `be3e7d75`／GitHub `741e482f`：①St02 的 HANA TrayMap 檔名修正（照 golden 913：檔名裡的時間去掉冒號等符號，以前建檔會靜默失敗；只有 HANA 客戶走得到）；②機台 cpp 0349（EastSun 派給你的「沒有 AI 怎麼安裝／更新」文件）；③ES02 的設計外掛 0.331～0.341。gate b138a：兩組態只有固定 4 支。 |
++| **1009 13:2x：Ifor 本人說「906 與 913 不同，不可以混用」** | Ifor01 12:4x 交了 W-190 的 MR !378（把 golden 913 的溫控小工具搬進移植樹），Ifor 本人看了說這句，Ifor01 就撤回 !378、停掉 W-190（913 溫控那一家）和 L07。同事本人的決定＝定案，筆電照做：!378 依作者要求關掉（沒合進任何一批）。**但 Steven 1008 定過「新改動以 913 為 golden」**（RULINGS_20261008 第 3 條），St02 的 W-195、NB2-1 的 W-188 都是照 913 在補。筆電已請 St02-M／Steven 判斷 Ifor 這句是只限溫控、還是全部都要停（W-198）；**沒回之前照 Steven 的第 3 條繼續**（第 139 批 NB2-1 的 !377 照跑）。如果 Steven 跟 Ifor 看法不同，會列成 §0 給你決定。 |
++| **1009 13:2x：第 139 批開跑** | b19 `58c08884`＝NB2-1 的 W-188 #3（!377，入料手臂從熱盤取料前的判斷照 golden 913，逐 token 對過相同），gate b139a 中。Ifor01 13:0x 認領了 W-197（沒有 AI 的安裝／更新手冊＋腳本）。 |
++| **1009 13:4x：你說「Steven的回覆為最高優先」——已寫成 RULINGS_20261009 第 1 條** | ①Ifor 那句「906 與 913 不可以混用」跟 Steven 的「913 為 golden」衝突 ⇒ 照 Steven：913 照舊，W-195／W-188 照走，W-198 結案；W-190（913 溫控那一家）不硬派回 Ifor01，退回 POOL-9 等人接（!378 的分支保留，跟 913 逐行相同）。CLAUDE.md 和夜間迴圈技能各補一句，CHAT_JIMMY 通知全體。②Steven 本人 12:2x～13:1x 一題一題回了 KYEC「換配方時把配方複製到 OS 測試機」的 7 題＋3 個細節：照 913 同步等（功能打開才等、最多 10 秒就強制結束）、失敗跳警報並擋 START 到重新換配方成功（Steven 新加）。記成第 2、3 條；筆電對要動的幾支檔點頭（第 4 條，代離線的 St01 點頭 1 支）。只有勾了開關的機台會走到，HT9050 沒勾。③#151 也請 Steven 決定（第 5 條）。 |
++| **1009 13:4x：機台套到第 221 包；設計外掛 0.342** | 機台 12:5x 推了 cpp 0351（合第 220 包，只接鏈），`pkg_uptake` 量到它已套到第 221 包；快照 12:57 只有說明檔時間（main `e873ba6b`）。ES02 的設計外掛 0.342 合進 main `3e6388d9`。第 139 批 gate 中。 |
++| **出的包（1009 14:0x）：第 222 包＝第 139 批** | GitLab `73069916`／GitHub `69c776fa`：①NB2-1 的 W-188 #3——入料手臂從熱盤取料前的判斷照 golden 913：熱盤上只剩佔位符時當成空盤、清掉殘留並記一行，不再在批尾對空的群組空轉 500 圈後停機；還修了一處記憶體洩漏（只有用熱盤的機型會走到）。②ES02 的設計外掛 0.342～0.343。gate b139a：兩組態只有固定 4 支。機台 13:2x 推了 cpp 0352（合第 221 包，只接鏈），已套到第 221 包。 |
++| **1009 14:1x：第 140 批開跑（Ifor-GPT 的兩支測試）；Ifor-GPT 派新卡** | ①Ifor-GPT 交了 W-180 的 IG-5／IG-6（入料手臂上料計數的四個閘、旋轉套件馬達流程的執行期測試，只加測試）；它那邊的沙箱不讓它跑建置，所以筆電把兩支放進第 140 批（b18 `7df92f07`）用 gate 跑，反向驗證也由筆電跑。②idle_scan 說 Ifor-GPT 閒著 ⇒ 派 IG-7（W-200）：POOL-6 還沒人接的 4 支「有編譯、沒連進 wb_serve」的檔，唯讀分析 golden 913 裡它們做什麼、移植樹有沒有別的路、有沒有漏接。 |
++| **1009 14:3x：Steven 本人把 Ifor 那句講清楚了；ATK、Qualcomm 點頭** | ①Steven 13:5x（經 St02-M）：Ifor 說的「906 與 913 不可以混用」是指 **913 是 BCB、906 是 C++，不能把 BCB 檔直接搬進來**；913 新增的 4 件溫控功能照 913 翻成 C++、放進現有結構補上，細節由 Ifor 決定。⇒ 兩人其實不衝突；W-190 回到 Ifor01（取代 13:4x「退回工作池」），!378 那種直接搬檔的做法維持關閉。記成 RULINGS_20261009 第 6 條。②St02 的 ATK（最後一批結束時送給主機的事件照 913）和 Qualcomm（低良率檢查改成「每多 N 顆失敗才檢查」，照 913）兩張認領，筆電點頭（只有 ATK／Qualcomm 機台走得到，HT9050 不受影響）；ATK 要動到 Ifor01 的幾行，已轉給他點頭（W-201）。第 7 條。 |
++| **要你決定的**（§0） | ✅ 你 10:1x 都回了：#148＝NB2 已完成（!306 收進第 110 批確認）、#149＝A（Ifor-GPT 專做執行期測試，IG-3／IG-4）、!310＝A（ES02 HTDESIGNER 0.235～0.257 收進第 110 批）＝RULINGS_20261008 第 2 條。**13:0x 新一題 #150**：GPIB 位址不一致要不要自動修正（Jerry 留給你；預設 A＝維持 golden、只留警告，可不回）。<br>**🆕 1009 11:4x 新一題 #151：HANA 機台按 START 時，要不要照 golden 先等 RMS 伺服器連線（最多 3 秒）？** 白話：golden 913（RogerYang 0916）裡，HANA 客戶開了 A77 的機台按 START 前，會先確認 RMS 伺服器連得上，連不上就擋下 START，連線最多等 3 秒。問題在移植樹的輪詢是單執行緒——這 3 秒裡整台機台的狀態更新會停住（例：網頁上的數字 3 秒不動）。你 0923 定過「會擋住輪詢的整合要先問」，所以問你。只有「HANA 客戶＋開 A77＋線上模式＋RMS 還沒連上」才會等，HT9050 永遠走不到。選項：**A＝照 golden 收**（建議：只在按 START 那一刻、最多 3 秒，機台本來就停著；St02 已經把等待裡的訊息迴圈換成只推 HANA 連線）；**B＝先不收**，等改成不擋輪詢的寫法（例：連線放到背景，START 時只看結果）。**沒回之前照 B**：H4 先不合，HANA 其他幾張（!372～!374）照常進第 138 批。<br>**🆕 1009 12:3x 新一題 #152：EastSun 派給你的「在沒有 AI 的電腦上實測安裝與更新」，實測要誰來做？** 白話：EastSun 希望客戶端或沒有 AI 的電腦也能只靠文件和腳本裝好、更新 HT9050 的軟體（機台 cpp 0349）。手冊和腳本筆電已派 Ifor01 寫（W-197）；寫好之後要有一個「人」在一台沒有 Claude 的電腦上照著做三個情境：①從零安裝並啟動；②從某一包更新到最新一包，中間至少遇到一個「機台和筆電都改過」的檔；③故意讓建置失敗，照手冊退回。模擬組態就可以，不用機台。選項：**A＝你自己做**（建議：EastSun 指名你，你也最清楚客戶端要什麼；大約半天到一天）；**B＝指定一位同事**照手冊做、不用 AI（例：Kevin 或 Jerry）；**C＝先不排**，手冊寫好放著。**沒回之前照 C**：手冊照寫，不排實測。實測的人不能是寫手冊的 Ifor01。<br>（1009 13:4x 補：**#151 也請 Steven 一題決定**（W-199）——你 13:3x 說 Steven 的回覆最高優先，Steven 回了就照他的，這題你就不用回。Steven 13:0x 對同一類的 KYEC 換配方同步等 7z 已經裁定「功能打開才等」照 913 同步，可以參考。） |
+ 
+ 
+ ## ☀ 10/07 早上（09:1x）
+diff --git a/docs/RULINGS_20261009.md b/docs/RULINGS_20261009.md
+new file mode 100644
+index 00000000..bd644a8d
+--- /dev/null
++++ b/docs/RULINGS_20261009.md
+@@ -0,0 +1,71 @@
++# 裁決紀錄 20261009
++
++> 夜間迴圈接續 10/08（同一個 session）。這一天之前的裁決見 `RULINGS_20261008.md`。
++
++## 1. Steven 的回覆為最高優先（Jimmy 本人 1009 13:3x）
++
++> 原話：「Steven的回覆為最高優先」
++
++- **起因**：Ifor 本人 1009 12:5x（經 Ifor01 轉，FROM_IFOR §2 20261009 12:5x）說「906與913不同不可以混用」，Ifor01 就撤回 MR !378（golden 913 的 `MachineTypeUtility.cpp` 進 906 函式庫）、停掉 W-190（913 溫控那一家）和 L07；但 Steven 本人 1008 19:2x 定的是「新改動以 913 repo 的 main 為 golden」（RULINGS_20261008 第 3 條）。筆電 13:2x 照「沒回之前照第 3 條」繼續，並發 W-198 請 St02-M／Steven 判斷；Jimmy 13:3x 回了這一句。
++- **做法**：同事之間的回覆互相衝突時，照 **Steven 本人**的回覆（含 St01／St02 引用的 Steven 原話；St01／St02 自己的工程判斷、AI 的推論都不算）。RULINGS_20261006 第 20 條（動作流程題 Steven 優先、其次 Frank）擴大到所有題目；第 21 條（同事本人回覆＝定案）照舊，只是互相衝突時 Steven 優先。
++- **這一次的結果**：
++  - RULINGS_20261008 第 3 條照舊：W-195（St02）、W-188（NB2-1）照 913 繼續；W-198 結案（Jimmy 已答）。
++  - W-190（913 溫控家族）不硬派回 Ifor01（Ifor 本人不想做，Ifor01 13:0x 已接 W-197）：改回 POOL-9 等人接。!378 已依作者要求在 13:2x 關閉；分支 `v906/ifor-w190-mtu`（`468d1ab8`，`MachineTypeUtility.cpp` :1-296 跟 golden 913 逐行相同）保留，接手的人可以直接重開 MR。
++  - Ifor 若有具體的技術理由（例：913 的加熱器架構跟 HT9050 用的 906 溫控不相容、混用會在哪裡出事），請 Ifor01 寫在 FROM_IFOR，筆電轉給 Steven 判斷。
++
++## 2. W-195③ KYEC「換配方時把配方複製到 OS 測試機」七題（Steven 本人 1009 12:2x～13:0x，經 St02-M 13:0x 轉）
++
++> Steven 12:0x：「需要我決定的問題，一題一題問我」。原文在 `v906/steven-handoff` 的 FROM_STEVEN §3 20261009 13:0x 那列。
++
++- **g（同步 7z）＝A，照 913 同步。** Steven：「要功能打開才要等」「換工作檔的時候，本來就是要等變更完成，才能再做新的事」。`bN06_CopyTesterFile` 沒勾就直接返回；HT9050 沒勾。
++  這一題屬於 Jimmy 0923「會擋住輪詢的整合要先問」那一類；Steven 本人已答（第 1 條），照做。
++- **a＝B**：913 的 5 個函式（LogN06Result、Get7zPath、RunSevenZipSync、bool CopyRecipeToTester／FromTester，913 `Interface/TesterTCP.cpp`:1057-1191）放 St02 新檔 `Interface/TesterTCP_N06_St02.cpp`；筆電的 `Interface/TesterTCP.cpp` 只把舊的 void 版收進 `#if 0`。
++- **b＝A**：加兩個測試接縫（執行 7z 前的 hook、7z 路徑）。
++- **c＝B**：改用 `CreateProcess`（[W906] 偏離 golden 的 ShellExecuteEx，不用連 shell32），把 7z 的輸出（-bsp1 -bb1）寫進紀錄；913 的 exit code 判斷與 N06 紀錄不變。
++  **新加（Steven 本人，golden 沒有）**：開關打開而且失敗時，跳中英文警報（含原因），換配方回報失敗，**重新換配方成功前擋住 START**；不自動重試。913 的兩個呼叫端（main.cpp:22267／:25955）不看回傳值，V906 的 `WebRecipeChange.cpp`:378、`HandlerBridgeCtl.cpp`:1130 要接。
++- **d＝不加 SimNet 遮罩**：驗證時把 `asN06_TesterPath`（913 `TesterTCP.cpp`:1116）指到 D:\rms 或暫存資料夾，模擬組態照設定走。
++- **e＝B**：Gate #4（KYEC FTP 上傳時一起傳測試機工作檔）併進 LI-9 F2。
++- **f＝A**：改歸一般項目（沒有客戶條件），MR 寫「勾了開關的機台都會走到；HT9050 沒勾」，順序不變。
++
++## 3. KYEC 三個細節（Steven 本人 1009 13:0x～13:1x，經 St02-M 13:1x 轉）
++
++- 7z 的過程輸出另開每天一份的專用檔：`<as9045LogPath>\N06\`（正式機＝`D:\HT9045_Log\N06\`；測試寫沙盒）。
++- 等滿 **10 秒**還沒做完就強制結束 7z，再跳警報（紀錄寫出停在哪個檔；重新換配方會整批覆蓋）。
++- 警報文字：「N06 recipe sync to OS Tester FAILED: <代碼> -- <檔名>. Fix it and change the recipe again. START is blocked until then.」／「OS 測試機工作檔同步失敗：<白話原因>（<代碼>，<檔名>）。請排除後重新換工作檔；完成前不能按 START。」（白話原因對照見 FROM_STEVEN §3 20261009 13:1x 那列）
++
++## 4. KYEC K1 要動到的檔：筆電點頭（筆電 1009 13:3x；St01 離線，筆電代點頭 `WebRecipeChange.cpp`）
++
++- 照第 2、3 條：
++  - 筆電的 `Interface/TesterTCP.cpp`：空行 :159／:258 改成 `#if 0`／`#endif`，收起 void 版。
++  - 筆電的 `TesterTCP.h`：:104／:112 的 void 改 bool。
++  - `CMakeLists.txt`:2259：同一行加 St02 新檔。
++  - 筆電的 `WebStart.cpp`：空行 :103／:3170，失敗時擋 START。
++  - St01 的 `WebRecipeChange.cpp`：空行 :64／:378。
++  - 以上都是同一行改，行數不變。
++- 合併條件照一般 MR：附測試與反向驗證；`START_SitesCensus` 數字不變（這次沒有新增 `fMain->Start` 呼叫點）。
++
++## 5. HANA H4（#151）也請 Steven 一題決定（筆電 1009 13:3x）
++
++- H4＝HANA 機台按 START 時，照 913 同步等 RMS 連線，最多 3 秒。它跟第 2 條 g 是同一類問題：都是「功能打開才等、在按鍵那一刻同步等」。
++- 照第 1 條，筆電經 St02-M 請 Steven 本人回答（W-199）。Steven 回了就照他的，Jimmy 的 §0 #151 同時撤掉；兩人都還沒回之前，照 #151 的預設 B：MR !376 先不合。
++
++## 6. 913 新增的溫控功能照 913 翻成 C++ 補進 cpp；Ifor 那句的意思（Steven 本人 1009 13:5x，經 St02-M 13:5x 轉）
++
++> 原話：「是新增功能，所以按照913的補進去，ok」「Steven本人同意的」；St02-M 轉述 Steven 對 Ifor 那句的說明：「913是bcb 906是cpp」。
++
++- **Ifor 1009 12:5x「906與913不同不可以混用」的意思**：913 是 BCB、906 是 C++，不能把 913 的 BCB 檔或檔案配置直接搬進來；照 913 的修正**翻成 C++** 繼續做（第 1 條的衝突因此不存在，RULINGS_20261008 第 3 條照舊）。
++- **W-190／L07 恢復**：913 在 912 之後才加的 4 件溫控功能——JerryYang 0917-0918 第二組預先補償（uTemp_Set／MyTempPanel，L07）、0922 NN 模式遠端溫度 offset 修正（SaveRemoteTempOffset）、0911 偉測常溫校正（bthermo ConvertGetTempOffset）、0914 RS232 誤導訊息（RS232Init）——照 913 的內容翻成 cpp 寫法、放進 cpp 現有的結構。
++- **細節由 Ifor 定**（例如 HeaterInsOpt 那幾個函式要放哪裡）。!378 的做法（把 913 的 `MachineTypeUtility.cpp` 原樣變成一支新檔）就是「搬檔案配置」，維持關閉；分支 `v906/ifor-w190-mtu` 留著給 Ifor 參考。
++- **取代第 1 條對 W-190 的處置**（「退回 POOL-9」）：W-190 回到 Ifor01，先做 W-197 或先做 W-190 由 Ifor01 自己排。
++
++## 7. St02 W-195③ ATK、Qualcomm 兩張認領：筆電點頭（筆電 1009 14:3x）
++
++- **ATK（MR-ATK-1＋1b）**：最後一批結束送 3 筆 CEID 288、CEID 8 搬到 golden 的位置，照 golden 913；8 個檔 22 行，都是同一行改。筆電的檔點頭：`CMakeLists.txt`:517／:2406（St02 那兩行）、`Automation/AGV_PortScan.h`:216、`forms/fMain_SetLotState.cpp`:42／:123／:126／:127、`SECSGEM/uHGemHT9045_SV.cpp`:550／:1266／:1267、`SECSGEM/uHGemHT9045_EC.cpp`:2116、`csystem.cpp`:7606／:12077／:32160。
++  - `csystem.cpp` 已對過機台最近改這支檔的 3 顆 commit：BOOTCLEAR9050 `68f36281`／`01d1842c` 改的是 :1841、:30404 附近，W-188 #1 `c9956205` 改的是 :2847-3174、:34108，都跟這三行不重疊。
++  - Ifor01 W-168 的行（`forms/fLotInfo.cpp`:70／:6714／:6720／:6723／:6726／:6727／:6732，以及 `tests/test_pool2_lotinfo2.cpp`:168 的 atk==2→1）由筆電轉給 Ifor01 點頭（W-201）。
++  - 只有 ATK 機台走得到；人工審核 B：CEID 288 送 3 次、CEID 8 只送一次、SV／EC 在 Amkor 韓國的意思改變。
++- **Qualcomm MR-Q1**：低良率檢查改成「每多 N 顆失敗才檢查」，照 golden 913（RogerYang `AI(rf360-yield-count)` 0814＋0916 的 else-if 修正）；4 個檔 22 行，都是同一行改。
++  - 筆電的檔點頭：`forms/fYieldMonitoring.h`:256／:300、`uYieldMonitoring.cpp`（:383／:616、5 組 D2 行、檔尾新函式）、`CosFunction.cpp`:2753／:4315。
++  - St01 的 `uYieldMonitoring.cpp`:2810-2814 `AI(W906-TIF912)` 舊註解改寫，St01 離線，筆電代點頭。
++  - 只有 CC_QUALCOMM 走得到；HT9050（CC_PTI）開關永遠是 false。
++- 兩張的合併條件照一般 MR：附測試＋反向驗證；不新增 `fMain->Start` 呼叫點（`START_SitesCensus` 數字不變）。
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 1a8c5244..ab743b7a 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -353,6 +353,7 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-07 | 設計外掛 tools 0170 | — | 設計外掛工作階段自己推（分支 a6cadd2，GitHub dc7975ff）：依序合併筆電包 162、163、167、168 的設計外掛（0.197.0 → 0.234.0），164～166、169～172 沒帶設計外掛；無衝突，機台自己的設計外掛功能都保留；測試修正：建置視窗進度條在矮視窗不再塌掉、面板繪製測試固定 Edge 視窗大小；run_all 3/3、vscode_it 161/161，已安裝 0.234.0；只動 tools/vscode-htdesigner | tools 0170 |
+ | 10-08 | 設計外掛 tools 0171 | — | 設計外掛工作階段自己推（commit b453060，GitHub f42c142b）：EastSun 1008 方案總管的 Debug／Release 按鈕按不了（0.234 在 ▶＝F5 時把它變灰）→ 裁決「連動F5 release 和debug」：按鈕恢復可按，resolveDebugConfiguration 依按鈕把 F5／▶ 的啟動目標換成 build_integ_dbg_x86 或 build_integ_ship_x86 那一組；「模擬」仍是灰的。run_all 3/3；vscode_it 沒跑成（VS Code 自己的更新程式 CodeSetup 從 10/07 18:34 起佔住執行個體鎖）。vsix 已安裝，版本號沒變，要重新載入視窗才生效；只動 tools/vscode-htdesigner | tools 0171 |
+ | 10-08 | 173～204 | 07dbeae3＋63b1aa25＋351291d5（GitLab 0258ba66…68fc0e65、39c6388c、e6c54331） | 本 commit（機台 C++＋web），EastSun「你確定有合完整?」→「快合」→「一直合下去 不要停拜託」（173～202 的 C++ 從 10-07 起都沒合，只有設計外掛跟上）。備份分支 backup/pre-pkg202-20261008（cpp、web）＋ D:\HT9045\_pkg_202\backup_machine_195843、D:\HT9045\_pkg_203\backup_machine_220733。202 疊三十包：直接換 108（換 105；tasks.json、acatchtray 留機台）、新檔 35、兩邊都改 22（合併 16、設計外掛／WORKLOG 照規定 6）、一樣 88；每個直接換的檔掃機台 AI 標記＋W906_ 識別字：WebBridgeServer（TOKEN-OFF／SOFTKEY panel.estop）改三方合併＋收筆電 pad.get／pad.close／observerSG 豁免、acatchtray 留機台（筆電版＝少 PROBECYL）、MotionView9050 換（機台＝基底）。衝突：cinitial／test_flow9050_tray／csystem 取機台（BOOTCLEAR、PROBECYL、pitch 同步在 MainProc）；test_scankey_golden、IoBtnPanelClick、tests/CMakeLists、WebBridgeTags（tester.name 依 Jerry 1008 裁決 A＝golden LoadTestModePicture）取筆電；wb_serve 第 239 行＝機台 IOWAIT＋筆電 g_ppCyc0 搬移。4 個新網頁檔改 CRLF。203：15 檔（直接換 9、新 4、合併 2，無衝突）；204：12 檔（直接換 9、新 1、合併 2，無衝突；SECS SV Auto1～6 料盤別名＋氣缸平均推拉時間、cSpeed）。合併後 test_scankey_golden 補回 PadInterface_St02.h include、[19]（筆電版軟體面板鍵 ST02-P2，機台保留自己的 SOFTKEY）在機台關掉。ctest Debug 426/441：15 個失敗都是第 381 列的已知清單（環境：dfm2rc×4 ctest 找不到 g++／rc.exe、E031、GearTeachSave、TeachCheckRangeReload；斷言筆電設定／repo 舊表：config_db、ini_helpers、config_loaders、MotorPoints／MachineMotors／MachineSuckers_HT9050；機台補丁：GA2_C1_cinitial、FShow_Audit）；204 之後相關 29 支全過。EastSun 未 commit 的 acatchtray／asendic_Loader／cinitial／PadInterface_St02（SafeLock）先拿開、合完三方套回，不進 commit。20:02 -j4 整包重編讓機台當機（Kernel-Power 41），留下 NUL 填滿的 .a／.obj／.d ⇒ clean 後 -j2 重編 | 本 commit |
++| 10-09 | 222～223 | 69c776fa＋0be7271b（GitLab 73069916、c40fbff9） | 本 commit（定時檢查自動收）：222＝NB2-1 W-188 #3 HasHotReadyIC_9045 照 golden 913（MR !377）——加熱盤只剩 HAS_NULL_IC 佔位時算空的、清掉並記一行（原本批末空轉 500 圈再報「No GetHPFirstTeamMotUse」），滿空混合時只設 bNeedReconcileHPList（golden 的消費端還沒移植），沒有頭組時最多 8 格孤兒寫 Exception log，暫存點表每個 return 都釋放；只有有加熱盤的機台走得到。223＝Ifor-GPT W-180 IG-5 只有測試（AddLoadingCount 四個閘＋ProcessSCKARTLoadingCount step 200），產品碼不變。另收 docs（RULINGS_20261009 新檔、MACHINE_PATCHES、NIGHT_REPORT）。9 檔：直接換 5（aHotPlateSubstrate.h 等，掃過沒有機台標記會消失）、新 3、tests/CMakeLists 合併無衝突；設計外掛 0.342～0.345 與 WORKLOG 照規定留機台。Debug＋release wb_serve 建好（aHotPlateSubstrate.h 改動，約 290 檔重編，-j2 共 8 分鐘），NB2_W188×3、IforGPT_LoadingCountRuntime、St02_W195×3 共 7 支全過。備份分支 backup/pre-pkg223-20261009＋D:\HT9045\_pkg_223\backup_machine_152259 | 本 commit |
+ | 10-09 | 221 | 741e482f（GitLab be3e7d75） | 本 commit（定時檢查自動收）：St02-E W-195 HANA H5 照 golden 913（MR !375，RogerYang 0904）——Public/MyStringList.cpp HANA TrayMap 檔名裡的開批時間去掉「-」「:」「 」（帶冒號時 CreateFile 靜默失敗、TrayMap 檔根本沒寫出來），建檔失敗改寫一行 MNetLog；路徑改用 as9045LogPath（正式機＝D:\HT9045_Log）。只有 HANA 客戶有 TrayMap，HT9050 走不到。另收筆電 docs（MACHINE_PATCHES_20261009、NIGHT_REPORT；TO_JIMMY 一樣）。5 檔：直接換 3（掃過沒有機台標記會消失）、新測試 1、tests/CMakeLists 合併無衝突；設計外掛 0.331～0.341 與 WORKLOG 照規定留機台。Debug＋release wb_serve 建好，St02_W195HanaTrayMap／W195PathCombin／W195SecsBinType／ScanKeyGolden／MainScanKey 5 支全過。備份分支 backup/pre-pkg221-20261009＋D:\HT9045\_pkg_221\backup_machine_132503 | 本 commit |
+ | 10-09 | 220 | 5bea18ae（GitLab 9290fe38） | 本 commit（定時檢查自動收）：①筆電收回機台 cpp 0348 BOOT-Z1RESET（WebMotorAccessLive.cpp 合併結果＝機台版，內容一樣）；②St02-E W-195③ HANA RMS H1～H3 照 golden 913（MR !372／!373／!374）：配方比對照 HANA 1002 規則、需要時才連線（送不出去重連；W906_HANARMSClientCreate 從 Prepare 搬到送出時，掃描看到的「消失」是筆電刻意搬移）、port 14140、HDNAME＝機台 ID、互鎖訊息分級、每 5 秒重查——只有 HANA 客戶會走到，HT9050 不受影響；H4（RMS 連不上就擋 START）不在這包，等 Jimmy。8 檔：直接換 6、合併 1（無變化）、WORKLOG 照規定留機台。Debug＋release wb_serve 建好，HanaART、C10_HanaRms 全過。備份分支 backup/pre-pkg220-20261009 | 本 commit |
+ | 10-09 | 219 | a245f88e（GitLab 51f954bf） | 本 commit（定時檢查自動收）：St02-E W-195 照 golden 913——MR !370 cBinSel ReadFile 的 SavePath 不帶開頭反斜線＋PathCombin 檔名已以反斜線開頭就不再補（讀寫同一個檔，只有路徑字串變乾淨）；MR !371 SECS「Bin 0～255 Type」改從各配方 Pass／Fail 料盤算（**主機讀到的 Bin Type，EC 3656 等，會跟以前不同**，只有開 SECS／GEM 的機台看得到）。10 檔：直接換 7（掃過沒有機台標記會消失）、新 2 支測試、tests/CMakeLists 合併無衝突。Debug＋release wb_serve 建好，W195×2、C14_BinDisp×2、St02_SecsEcFileWrites 5 支全過。同一次推送帶上 EastSun 改過的 Gerneral.ini 參數快照。備份分支 backup/pre-pkg219-20261009 | 本 commit |
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 110bb8e0..0b55b874 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -1370,6 +1370,19 @@ if(WIN32)
+ endif()
+ add_test(NAME NB2_W188InterfaceErr COMMAND test_nb2_w188_interfaceerr "${CMAKE_SOURCE_DIR}")
+ 
++# --- test_nb2_w188_hotready: AI(W906-W188) 20261009 (NB2-1) -- W-188 #3 HasHotReadyIC_9045 -> golden 913 ---
++#   [1] HAS_NULL_IC-only hot plate = empty (cleared + one log line); [2] source ratchets.
++add_executable(test_nb2_w188_hotready
++    test_nb2_w188_hotready.cpp
++)
++target_link_libraries(test_nb2_w188_hotready PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_nb2_w188_hotready PRIVATE ws2_32)
++endif()
++add_test(NAME NB2_W188HotReady COMMAND test_nb2_w188_hotready "${CMAKE_SOURCE_DIR}")
++
+ # --- test_w6_5_shuttle: pump the SHUTTLE/CARRY engine over Sim HAL -----------
+ #   The task-mandated W6.5 verify TU (mirror of the in/out/tray-arm + tester
+ #   core TUs).  Proves acarry.cpp (the SHUTTLE/CARRY ENGINE, in ht9045_sm)
+@@ -8820,6 +8833,26 @@ if(WIN32)
+ endif()
+ add_test(NAME POOL2_RotateKit COMMAND test_pool2_rotatekit "${CMAKE_SOURCE_DIR}")
+ set_tests_properties(POOL2_RotateKit PROPERTIES TIMEOUT 300)
++# AI(W906-IFORGPT-IG5) 20261009: Real loading-accounting and WAR0120 runtime.
++add_executable(test_iforgpt_loadingcount_runtime test_iforgpt_loadingcount_runtime.cpp)
++target_link_libraries(test_iforgpt_loadingcount_runtime PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_iforgpt_loadingcount_runtime PRIVATE ws2_32)
++endif()
++if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
++    target_compile_options(test_iforgpt_loadingcount_runtime PRIVATE -Wall -Wextra)
++endif()
++add_test(NAME IforGPT_LoadingCountRuntime COMMAND test_iforgpt_loadingcount_runtime)
++set_tests_properties(IforGPT_LoadingCountRuntime PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
++# ENV-ALL runs first. Keep the observer's real file isolated from other tests.
++function(_iforgpt_ig5_environment)
++    set_property(TEST IforGPT_LoadingCountRuntime APPEND PROPERTY ENVIRONMENT
++        "W906_EVENTLOG_ROOT=${CMAKE_CURRENT_BINARY_DIR}/machine_log_scratch/iforgpt_ig5")
++endfunction()
++cmake_language(DEFER CALL _iforgpt_ig5_environment)
++
+ # AI(W906-IFORGPT-IG-4) 20261008: Real product runtime regression, scratch-only fixtures.
+ add_executable(test_iforgpt_cprod_runtime test_iforgpt_cprod_runtime.cpp)
+ target_link_libraries(test_iforgpt_cprod_runtime PRIVATE
+diff --git a/tests/test_iforgpt_loadingcount_runtime.cpp b/tests/test_iforgpt_loadingcount_runtime.cpp
+new file mode 100644
+index 00000000..17fae358
+--- /dev/null
++++ b/tests/test_iforgpt_loadingcount_runtime.cpp
+@@ -0,0 +1,275 @@
++//AI(W906-IFORGPT-IG5) 20261009: Execute AddLoadingCount's G08/G11/G12/G13
++// and ProcessSCKARTLoadingCount case 200. Golden 0618 ainarm9045.cpp:
++// 2724-2728 / 2741-2759 / 2769-2770 / 2796-2799 / 7332-7333.
++#if defined(__GNUC__)
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wunused-parameter"
++#endif
++#include "MachineType.h"
++#include "cmydef.h"
++#include "cprod.h"
++#include "cSocket.h"
++#include "common.h"
++#include "Config.h"
++#include "LastSet.h"
++#include "ainarm9045.h"
++#include "mykitsuck.h"
++#include "Motor/mymotor.h"
++#include "forms/fLotInfo.h"
++#include "forms/fMesSystem.h"
++#include "forms/fObserver.h"
++#include "atester_shims.h"
++#include "w906_test_motors.h"
++#include "w906_ctest_guard.h"
++#if defined(__GNUC__)
++#pragma GCC diagnostic pop
++#endif
++#include <cstdio>
++#include <fstream>
++#include <sstream>
++#include <string>
++
++extern void AddLoadingCount(int, int, int, int);
++extern bool ProcessSCKARTLoadingCount(bool);
++extern bool bPickFromLoader;
++extern AnsiString W906_ShowErrorMessage_LastCode;
++extern AnsiString W906_ShowErrorMessage_LastErrPart;
++extern int W906_ShowErrorMessage_LastKCode;
++extern int W906_ShowErrorMessage_Count;
++extern bool W906_ShowErrorMessage_LastDuplicate;
++extern int (*W906_ShowErrorMessage_Hook)(const char*, int, int);
++extern void W906_ShowErrorMessage_Reset();
++
++static int checks = 0, failures = 0;
++static const char* scenario = "fixture";
++static void check(bool ok, const char* expression, int line)
++{
++    ++checks;
++    if (!ok)
++    {
++        ++failures;
++        std::printf("FAIL [%s] line %d: %s\n", scenario, line, expression);
++    }
++}
++#define CHECK(c) check((c), #c, __LINE__)
++
++static std::string readFile(const AnsiString& path)
++{
++    std::ifstream file(path.c_str(), std::ios::binary);
++    std::ostringstream data;
++    data << file.rdbuf();
++    return data.str();
++}
++
++// Satisfy the same tray-record invariant as boot. No LoadMachineConfig,
++// worker, socket or installed hardware driver is involved.
++static void fixture()
++{
++    W906_TestEnsureSimMotors();
++    static TRAY_TYPE_PARA trayForm;
++    trayForm.XDivision = 4;
++    trayForm.YDivision = 3;
++    LoadForm = &trayForm;
++    TestSocket.iShtRow = 2;
++    TestSocket.iShtCol = 4;
++    if (!MOT[MMTrayY].Tray.PordRec[3][2])
++    {
++        MOT[MMTrayY].Tray.PordRec[3][2] = new TMyProductionRecord;
++    }
++    InArmSuck.Suck[1][1].sName = "IG5-picker-B2";
++    InArmSuck.iWhichSht = 0;
++    InArmSuck.iWhichKit = 0;
++    ASET_ScheduleNAME = "IG5-schedule";
++    ASET_StartTimeNAME = "20261009_130000";
++    ASE_InTrayNum = 7;
++    bCanRunSCKART = false;
++    CosFunction.bART_SECSGEM_93K = false;
++    IniConfig.bP57LoaderAutoCleanOutByInputCT = false;
++    IniConfig.bI27_ManualSortMode = false;
++    IniConfig.bE74_InspectArmPosition = false;
++    IniConfig.bI37_EnableFIFOMode = false;
++    IniConfig.bVTESTFunction = false;
++    IniConfig.bSIGURDFunction = false;
++    IniConfig.bA10_AutoReTest = false;
++    CosFunction.bUseARTSortCount = false;
++    CosFunction.bPickerLifeAlmNeedOneCycle = false;
++    TestIF.bContinuousLoader = false;
++    TestIF_File.bContinuousLoader = false;
++    TestIF_File.bContinuousLoader_RT = false;
++    fContact->fShow = false;
++    fLotInfo->tsLotID->TabVisible = false;
++    fLotInfo->edtSysLotID->Text = "";
++    CUSTOMER_CODE = 0;
++    LastSet.iTester = ON_LINE;
++    LastSet.iRunStartMode = rsmInitialStart;
++    iRunStartMode = FT;
++    TestIF.iContinuousLoaderCount = 1000;
++    TestIF.iContinuousLoaderCount_RT = 1000;
++}
++
++static void pick()
++{
++    MOT[MMTrayY].Tray.PordRec[3][2]->InitialRecord();
++    MOT[MMTrayY].Tray.Data[3][2] = HAS_IC;
++    AddLoadingCount(1, 1, 2, 3);
++}
++
++static void lotCases()
++{
++    scenario = "G08 visible lot";
++    fLotInfo->tsLotID->TabVisible = true;
++    fLotInfo->edtSysLotID->Text = "IG5-LOT-unique";
++    MOT[MInArmX].Motor->SetPosition(1234);
++    MOT[MInArmY].Motor->SetPosition(-5678);
++    const int before = LastSet.SendCT[0];
++    pick();
++    TMyProductionRecord& rec = InArmSuck.PordRec[1][1];
++    CHECK(rec.asBuffer->Strings[eScheduleName] == "IG5-LOT-unique");
++    CHECK(rec.asBuffer->Strings[eStartTime] == "20261009_130000");
++    CHECK(rec.GetLoaderNum() == 7 && rec.GetLoaderX() == 3 && rec.GetLoaderY() == 2);
++    CHECK(rec.asBuffer->Strings[eLoadXPos] == "1234");
++    CHECK(rec.asBuffer->Strings[eLoadYPos] == "-5678");
++    CHECK(rec.bUse && InArmSuck.Item[1][1] == HAS_IC);
++    CHECK(MOT[MMTrayY].Tray.Data[3][2] == NULL_IC);
++    CHECK(LastSet.SendCT[0] == before + 1);
++
++    scenario = "G08 hidden lot fallback";
++    fLotInfo->tsLotID->TabVisible = false;
++    pick();
++    CHECK(rec.asBuffer->Strings[eScheduleName] == "IG5-schedule");
++    scenario = "G08 empty lot fallback";
++    fLotInfo->tsLotID->TabVisible = true;
++    fLotInfo->edtSysLotID->Text = "";
++    pick();
++    CHECK(rec.asBuffer->Strings[eScheduleName] == "IG5-schedule");
++}
++
++static void mesCase(const char* label, bool enabled, bool checkFile,
++                    int count, bool initialized, int tester)
++{
++    scenario = label;
++    IniConfig.bVTESTFunction = enabled;
++    IniConfig.bCheckFile = checkFile;
++    LastSet.SendCT[0] = count;
++    LastSet.iTester = tester;
++    fMesSystem->bFormShowJustInitial = initialized;
++    fMesSystem->iJamRateTotalForAlways = 901;
++    LastSet.iBinCTForAlways[0][eAuto1] = 902;
++    LastSet.iBinCTForAlways[1][iFixRightHalf] = 903;
++    LastSet.iBinCTForAlways[2][eAuto1] = 904;
++    LastSet.iSiteTotalCTForAlways[0][0] = 905;
++    LastSet.iSiteBinCTForAlways[MAX_SOCKET_ROW-1][MAX_SOCKET_COL-1][TEST_MAX_BIN-1] = 906;
++    bool resets = enabled && checkFile && count == 0 && !initialized;
++#ifndef SOFT_SIMULTE
++    resets = resets && tester == ON_LINE;
++#endif
++    pick();
++    CHECK(fMesSystem->bFormShowJustInitial == (initialized || resets));
++    CHECK(fMesSystem->iJamRateTotalForAlways == (resets ? 0 : 901));
++    CHECK(LastSet.iBinCTForAlways[0][eAuto1] == (resets ? 0 : 902));
++    CHECK(LastSet.iBinCTForAlways[1][iFixRightHalf] == (resets ? 0 : 903));
++    CHECK(LastSet.iBinCTForAlways[2][eAuto1] == 904); // golden skips rows 2/3
++    CHECK(LastSet.iSiteTotalCTForAlways[0][0] == (resets ? 0 : 905));
++    CHECK(LastSet.iSiteBinCTForAlways[MAX_SOCKET_ROW-1][MAX_SOCKET_COL-1][TEST_MAX_BIN-1] == (resets ? 0 : 906));
++    CHECK(LastSet.SendCT[0] == count + 1);
++}
++
++static void observerCases()
++{
++    IniConfig.bVTESTFunction = false;
++    IniConfig.bSIGURDFunction = true;
++    iOneDayLoaderCount = 41;
++    const AnsiString path = IncludeTrailingBackslash(AnsiString(std::getenv("W906_EVENTLOG_ROOT"))) +
++                            "SGJamCount\\LoaderCount.txt";
++    CHECK(W906CtestGuardInScratch(path.c_str()));
++    scenario = "G12 enabled persisted count";
++    pick();
++    CHECK(iOneDayLoaderCount == 42);
++    CHECK(readFile(path).find("Count=42") != std::string::npos);
++    pick();
++    CHECK(iOneDayLoaderCount == 43);
++    CHECK(readFile(path).find("Count=43") != std::string::npos);
++    scenario = "G12 disabled preserves file";
++    const std::string saved = readFile(path);
++    IniConfig.bSIGURDFunction = false;
++    pick();
++    CHECK(iOneDayLoaderCount == 43);
++    CHECK(readFile(path) == saved);
++}
++
++static void ptiCase(const char* label, int customer, bool continuous, int mode,
++                    bool fileContinuous, int alarm, bool refresh)
++{
++    scenario = label;
++    CUSTOMER_CODE = customer;
++    TestIF.bContinuousLoader = continuous;
++    iTestRunMode = mode;
++    TestIF_File.bContinuousLoader = fileContinuous;
++    TestIF_File.bContinuousLoader_RT = fileContinuous;
++    TestIF_File.iContinuousLoaderCount = alarm;
++    TestIF_File.iContinuousLoaderCount_RT = alarm;
++    LastSet.SendCT[2] = 19;
++    fLotInfo->edLoaderCountNow->Text = "sentinel-now";
++    fLotInfo->edLoaderCountAlarm->Text = "sentinel-alarm";
++    pick();
++    CHECK(LastSet.SendCT[2] == (continuous ? 20 : 19));
++    CHECK(fLotInfo->edLoaderCountNow->Text == (refresh ? AnsiString(20) : AnsiString("sentinel-now")));
++    CHECK(fLotInfo->edLoaderCountAlarm->Text == (refresh ? AnsiString(alarm) : AnsiString("sentinel-alarm")));
++}
++
++static int alarmPos = -1;
++static int observeAlarm(const char*, int, int pos)
++{
++    alarmPos = pos;
++    return 0; // retain the product's normal unattended answer
++}
++static void alarmCases()
++{
++    scenario = "case200 WAR0120";
++    W906_ShowErrorMessage_Reset();
++    W906_ShowErrorMessage_Hook = &observeAlarm;
++    iLoadPickX = 1;
++    iLoadPickY = 1;
++    iProcessSCKARTLoadingCountTask = 200;
++    bPickFromLoader = true;
++    CHECK(ProcessSCKARTLoadingCount(false));
++    CHECK(!bPickFromLoader);
++    CHECK(W906_ShowErrorMessage_Count == 1);
++    CHECK(W906_ShowErrorMessage_LastCode == "WAR0120");
++    CHECK(W906_ShowErrorMessage_LastErrPart == "IG5-picker-B2");
++    CHECK(W906_ShowErrorMessage_LastKCode == K_RETRY);
++    CHECK(!W906_ShowErrorMessage_LastDuplicate && alarmPos == MInArmX);
++    scenario = "case200 reset control";
++    W906_ShowErrorMessage_Reset();
++    CHECK(!ProcessSCKARTLoadingCount(true));
++    CHECK(iProcessSCKARTLoadingCountTask == 1);
++    CHECK(W906_ShowErrorMessage_Count == 0);
++    W906_ShowErrorMessage_Hook = 0;
++}
++
++int main()
++{
++    if (!W906TestRequireCtestRedirects("IforGPT_LoadingCountRuntime"))
++    {
++        return 2;
++    }
++    std::setvbuf(stdout, 0, _IONBF, 0);
++    fixture();
++    lotCases();
++    mesCase("G11 first online", true, true, 0, false, ON_LINE);
++    mesCase("G11 first offline", true, true, 0, false, OFF_LINE);
++    mesCase("G11 feature disabled", false, true, 0, false, ON_LINE);
++    mesCase("G11 file disabled", true, false, 0, false, ON_LINE);
++    mesCase("G11 subsequent load", true, true, 4, false, ON_LINE);
++    mesCase("G11 already initialized", true, true, 0, true, ON_LINE);
++    observerCases();
++    ptiCase("G13 PTI FT", CC_PTI, true, FT, true, 99, true);
++    ptiCase("G13 PTI RT", CC_PTI, true, RT, true, 77, true);
++    ptiCase("G13 other customer", 0, true, FT, true, 99, false);
++    ptiCase("G13 not continuous", CC_PTI, false, FT, true, 99, false);
++    ptiCase("G13 file disabled", CC_PTI, true, FT, false, 99, false);
++    alarmCases();
++    std::printf("IforGPT_LoadingCountRuntime: %d/%d checks passed; %d failed\n",
++                checks-failures, checks, failures);
++    return failures ? 1 : 0;
++}
+diff --git a/tests/test_nb2_w188_hotready.cpp b/tests/test_nb2_w188_hotready.cpp
+new file mode 100644
+index 00000000..c5d5490a
+--- /dev/null
++++ b/tests/test_nb2_w188_hotready.cpp
+@@ -0,0 +1,142 @@
++// =============================================================================
++//  AI(W906-W188) 20261009 (NB2-1): W-188 #3 -- HasHotReadyIC_9045 is golden 913 (GitLab honprec/rd/rd5/ht9045_913
++//  main e9908638, ainarm_SearchPickPlate.cpp:1638-1840; 0618 :1248-1397, which the port body was verbatim).
++//    H1  (RogerYang 20260831) the gate uses Tray.HasRealIC(): a hot plate holding only HAS_NULL_IC placeholders counts as
++//        empty -> the placeholders are cleared (ClearNullIC) with one RecordProcess line and the function returns false,
++//        instead of letting the downstream pick search spin 500 times and stop with "No GetHPFirstTeamMotUse" (HHT-76)
++//    H2  (20260827) a team with mixed IC / empty cells raises bNeedReconcileHPList (golden 913 consumer ainarm9045.cpp:4506
++//        is a separate function, not part of this change)
++//    H3  (20260831) orphan cells are listed to the Exception log before "No GetHPFirstTeamMotUse"
++//    H4  (20260801) FreePoint2DList on every return (TList::Clear() does not free the uPoint2D items)
++//  [1] behaviour: only a HAS_NULL_IC placeholder on plate 1 -> false, placeholder cleared, golden log line; truly empty
++//      plates -> false, no log; a real IC is left alone by the H1 gate.
++//  [2] source ratchets on ainarm_SearchPickPlate.cpp / ainarm_SearchPickPlate.h / aHotPlateSubstrate.h (argv[1] = root).
++//  Use: only through ctest (NB2_W188HotReady).
++// =============================================================================
++#include "ainarm_SearchPickPlate.h"
++#include "aHotPlateSubstrate.h"
++#include "Motor/mymotor.h"
++#include "cmydef.h"
++#include "canary_support.h"
++extern AnsiString ExString;          // cMyDB.cpp (RecordProcess keeps the last text); cMyDB.h clashes with canary_support.h defaults
++#include "w906_ctest_guard.h"
++#include <cstdio>
++#include <fstream>
++#include <string>
++#include <vector>
++
++static int g_pass = 0, g_fail = 0;
++#define CHECK(cond, msg)                                                        \
++    do {                                                                        \
++        if (cond) { std::printf("  PASS: %s\n", msg); ++g_pass; }               \
++        else      { std::printf("  FAIL: %s  (line %d)\n", msg, __LINE__); ++g_fail; } \
++    } while (0)
++
++static std::vector<std::string> ReadLines(const std::string& path)
++{
++    std::vector<std::string> v;
++    std::ifstream f(path.c_str(), std::ios::binary);
++    std::string s;
++    while (std::getline(f, s)) {
++        if (!s.empty() && s[s.size() - 1] == '\r') s.erase(s.size() - 1);
++        v.push_back(s);
++    }
++    return v;
++}
++static std::string Trim(const std::string& s)
++{
++    size_t a = s.find_first_not_of(" \t");
++    return a == std::string::npos ? std::string() : s.substr(a);
++}
++static int Find(const std::vector<std::string>& L, const std::string& head, int from = 0)
++{
++    for (int i = from; i < (int)L.size(); ++i) if (Trim(L[i]).compare(0, head.size(), head) == 0) return i;
++    return -1;
++}
++static int End(const std::vector<std::string>& L, int sig)
++{
++    for (int i = sig + 1; i < (int)L.size(); ++i) if (L[i] == "}") return i;
++    return -1;
++}
++static int CountIn(const std::vector<std::string>& L, int a, int b, const std::string& n)
++{
++    int c = 0;
++    for (int i = a; i >= 0 && i <= b && i < (int)L.size(); ++i) if (L[i].find(n) != std::string::npos) ++c;
++    return c;
++}
++static bool Has(const AnsiString& s, const char* n) { return std::string(s.c_str()).find(n) != std::string::npos; }
++
++struct PlateSnap { int x, y, d00; };
++static PlateSnap SavePlate(int m) { PlateSnap s = { MOT[m].Tray.XItem, MOT[m].Tray.YItem, MOT[m].Tray.Data[0][0] }; return s; }
++static void RestorePlate(int m, const PlateSnap& s) { MOT[m].Tray.XItem = s.x; MOT[m].Tray.YItem = s.y; MOT[m].Tray.Data[0][0] = s.d00; }
++
++int main(int argc, char** argv)
++{
++    extern AnsiString DataPath;
++    const char* const rt[] = { "DataPath", DataPath.c_str(), 0 };
++    if (!W906TestRequireCtestRedirects("NB2_W188HotReady", rt)) return 2;
++    std::printf("==== W-188 #3 HasHotReadyIC_9045 -> golden 913 ====\n");
++
++    // ---------------------------------------------------------------- [1] behaviour
++    std::printf("-- [1] H1: placeholders only = empty plate --\n");
++    const PlateSnap p1 = SavePlate(MMPlate1), p2 = SavePlate(MMPlate2);
++    const int savePP = iPickPlate[0], savePX = iPickPlateX[0], savePY = iPickPlateY[0];
++    const bool saveASM = bRunAutoSiteMapping;
++    const int saveRSM = LastSet.iRunStartMode;
++    const AnsiString saveEx = ExString;
++    iPickPlate[0] = 0; iPickPlateX[0] = 0; iPickPlateY[0] = 0;
++    bRunAutoSiteMapping = false;
++    LastSet.iRunStartMode = 0;
++    MOT[MMPlate2].Tray.XItem = 0; MOT[MMPlate2].Tray.YItem = 0;
++    MOT[MMPlate1].Tray.XItem = 1; MOT[MMPlate1].Tray.YItem = 1;
++
++    MOT[MMPlate1].Tray.Data[0][0] = HAS_NULL_IC;
++    ExString = "";
++    bool r = HasHotReadyIC_9045();
++    CHECK(!r, "[1] only a HAS_NULL_IC placeholder -> not ready (golden 913 HasRealIC gate)");
++    CHECK(MOT[MMPlate1].Tray.Data[0][0] == NULL_IC, "[1] the placeholder is cleared (ClearNullIC)");
++    CHECK(Has(ExString, "plate has no real IC, clear HAS_NULL_IC residue"), "[1] golden 913 RecordProcess line written once");
++    std::printf("     (%s)\n", ExString.c_str());
++
++    ExString = "";
++    r = HasHotReadyIC_9045();
++    CHECK(!r && ExString.Length() == 0, "[1] plates truly empty -> not ready, no log (the residue log only fires when there is residue)");
++
++    MOT[MMPlate1].Tray.Data[0][0] = HAS_IC;
++    ExString = "";
++    HasHotReadyIC_9045();
++    CHECK(MOT[MMPlate1].Tray.Data[0][0] == HAS_IC && !Has(ExString, "plate has no real IC"),
++          "[1] a real IC is left alone by the H1 gate (the 0618 path runs)");
++
++    RestorePlate(MMPlate1, p1); RestorePlate(MMPlate2, p2);
++    iPickPlate[0] = savePP; iPickPlateX[0] = savePX; iPickPlateY[0] = savePY;
++    bRunAutoSiteMapping = saveASM; LastSet.iRunStartMode = saveRSM;
++    ExString = saveEx;
++
++    // ---------------------------------------------------------------- [2] source
++    std::printf("-- [2] source ratchets --\n");
++    const std::string root = argc > 1 ? argv[1] : ".";
++    const std::vector<std::string> L = ReadLines(root + "/ainarm_SearchPickPlate.cpp");
++    const int f0 = Find(L, "bool HasHotReadyIC_9045()"), f1 = f0 < 0 ? -1 : End(L, f0);
++    CHECK(f0 >= 0 && f1 > f0, "[2] HasHotReadyIC_9045 found");
++    CHECK(CountIn(L, f0, f1, "if(MOT[MMPlate1].Tray.HasRealIC()==false &&") == 1 && CountIn(L, f0, f1, "MOT[MMPlate1].Tray.ClearNullIC();") == 1,
++          "[2] H1: HasRealIC gate + ClearNullIC");
++    CHECK(CountIn(L, f0, f1, "bNeedReconcileHPList=true;") == 1 && CountIn(L, f0, f1, "bool bMixTeam=false;") == 1,
++          "[2] H2: bMixTeam raises bNeedReconcileHPList");
++    CHECK(CountIn(L, f0, f1, "HasHotReadyIC orphan cell :") == 1 && CountIn(L, f0, f1, "PickFromHPList->GetHPSuckGroupCount()") == 1,
++          "[2] H3: orphan-cell Exception log + ledger group count");
++    CHECK(CountIn(L, f0, f1, "FreePoint2DList(lsPoint2D);") == 3 && CountIn(L, f0, f1, "delete lsPoint2D;") == 0,
++          "[2] H4: every return frees the uPoint2D list (no bare delete left)");
++    const int fp = Find(L, "static void FreePoint2DList(TList* ls)");
++    CHECK(fp >= 0 && fp < f0 && Find(L, "bool bNeedReconcileHPList=false;") >= 0 && Find(L, "bool bNeedReconcileHPList=false;") < f0,
++          "[2] golden 913 :1463-1480 helpers sit ahead of the function");
++    const std::vector<std::string> H = ReadLines(root + "/ainarm_SearchPickPlate.h");
++    CHECK(CountIn(H, 0, (int)H.size() - 1, "extern bool bNeedReconcileHPList;") == 1, "[2] header: extern bNeedReconcileHPList (golden 913 .h:18)");
++    const std::vector<std::string> F = ReadLines(root + "/aHotPlateSubstrate.h");
++    int fc = -1;
++    for (int i = 0; i < (int)F.size(); ++i) if (Trim(F[i]).find("void ClearGroupList();   int GetHPSuckGroupCount();") == 0) fc = i;
++    CHECK(fc >= 0, "[2] facade uPlateInfo declares GetHPSuckGroupCount (definition only in Public/HTEditList.cpp)");
++
++    std::printf("==== W-188 #3: %d passed, %d failed ====\n", g_pass, g_fail);
++    return g_fail == 0 ? 0 : 1;
++}
+-- 
+2.55.0.windows.5
+
