@@ -1,0 +1,1013 @@
+From fdf95f1e3035efdfa90fa2aa8191de9b06fc2540 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 9 Oct 2026 21:59:01 +0800
+Subject: [PATCH] PKG229: integrate laptop package 229 (GitLab 40b3b2b4) --
+ St02 W-205 L05 shuttle-timeout event row + 913 box text and L03 ASM borrow
+ write-back / HOME release as golden 913 (MR !396 / !397) + HANA H4 RMS link
+ check before START (MR !376, Steven chose A; HANA with A77 only) + WORKLOG
+ section 3 row for designer tools 0190. HT9050 behaviour unchanged. Not pushed
+ yet: waits with package 228 (push_stage password scan hit on a test file's
+ 127.0.0.1 FTP credentials; EastSun to decide). Auto-accepted (scheduled
+ check).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ AsmBorrow_W195_St02.cpp          |  73 ++++++++++
+ Automation/HanaRms_St02.cpp      |  44 ++++++
+ Automation/HanaRms_St02.h        |   1 +
+ CMakeLists.txt                   |   4 +-
+ WebStart.cpp                     |   4 +-
+ acarry.cpp                       |   4 +-
+ acarry_W195_St02.cpp             |  66 +++++++++
+ docs/MACHINE_PATCHES_20261009.md |  17 +++
+ docs/NIGHT_REPORT.md             |  23 +++-
+ docs/RULINGS_20261009.md         |  32 +++++
+ docs/WORKLOG_MACHINE.md          |   2 +
+ mykitsuck.cpp                    |  10 +-
+ tests/CMakeLists.txt             |  33 +++++
+ tests/test_c10_hana_rms.cpp      |  82 +++++++++++
+ tests/test_st02_w205_asm.cpp     | 224 +++++++++++++++++++++++++++++++
+ tests/test_st02_w205_citems.cpp  | 117 ++++++++++++++++
+ uhome.cpp                        |   2 +-
+ 17 files changed, 724 insertions(+), 14 deletions(-)
+ create mode 100644 AsmBorrow_W195_St02.cpp
+ create mode 100644 acarry_W195_St02.cpp
+ create mode 100644 tests/test_st02_w205_asm.cpp
+ create mode 100644 tests/test_st02_w205_citems.cpp
+
+diff --git a/AsmBorrow_W195_St02.cpp b/AsmBorrow_W195_St02.cpp
+new file mode 100644
+index 00000000..407d43cb
+--- /dev/null
++++ b/AsmBorrow_W195_St02.cpp
+@@ -0,0 +1,73 @@
++//---------------------------------------------------------------------------
++//  AsmBorrow_W195_St02.cpp -- golden 913 r913 log "L03 ASM 熱盤借料帳錯亂 (WAR0150)" (RogerYang 20260914, VTEST HHT-83), the pieces in
++//  mykitsuck.cpp and uhome.cpp, kept out of those shared files so their line numbers stay put (each host only gets same-line calls).
++//  AI(W906-W195) 20261009 (St02-E), laptop card W-205 (W-195 (2) C items).
++//
++//  L03a -- golden 913 mykitsuck.cpp:1638-1647: TMyKitSuck::CopyToTray (mykitsuck.cpp:1665) reads the Shuttle / Kit / hot-count backup
++//          of the nozzle that BORROWED the hot-plate cell (InArmSiteMapData: UpdateData at the borrow, ainarm_SearchPickPlate.cpp;
++//          ClearData when the write-back is done, ainarm_SearchPlacePlate.cpp DoPlaceToHPBackupData), not of the global cursor
++//          iAutoSiteMapInArmRow/Col that ReStartAutoSiteMapping() resets to (0,0) -- and only when the cell matches.
++//          [W906] golden reaches InArmSiteMapData through mykitsuck.cpp:12 #include "ainarm2.h"; its V906 home aHotPlateSubstrate.h
++//          cannot be included in mykitsuck.cpp (its global TList shim vs mykitsuck.cpp:200 using vclcompat::TList), so the read lives here.
++//  L03b -- golden 913 uhome.cpp:1410-1433: HOME (ProcessMotorHome case 1, uhome.cpp:1117) ends an ASM borrow it interrupted -- frees
++//          the HAS_NULL_IC placeholder of the borrowed cell, clears the borrow flags and InArmSiteMapData.  Outside #ifndef SOFT_SIMULTE
++//          as golden.  [W906] golden's comment on iResetSiteMappingStep=0 names PurgePausedBookings (913 main.cpp:29258-29275,
++//          Public/HTEditList.cpp:2827, RogerYang 20260831f), which V906 does not have yet; here the 0 means "no write-back pending" for
++//          DoPlaceToHPBackupData (ainarm_SearchPlacePlate.cpp:4811) and ainarm2.cpp:7064, as in golden.
++//  Memory only (no IO, motion, file or alarm).  Customer ASM only: L03a under bRunAutoSiteMapping (CosFunction.bAutoSiteMappingUseHotPlate,
++//  ainarm9045.cpp:993-1000), L03b under CosFunction.bUSEJCETSiteMapMode && IniConfig.bI21EnableASM.  HT9050 (CUSTOMER_CODE 957 = CC_PTI,
++//  FUNC_CC_PTI CosFunction.cpp:1652) sets neither -> never reached.
++//---------------------------------------------------------------------------
++#include "MachineDefine.h"
++#include "aHotPlateSubstrate.h"        // strAUTOSITEMAP + extern InArmSiteMapData (golden ainarm2.h:10 / :34); _MAX_SUCK_ROW_ITEM / _COL_ITEM
++#include "Motor/mymotor.h"             // MOT[] (TTrayMotor: Tray.Data / Tray.SiteMapData / SetTraySingleData)
++#include "cmydef.h"                    // NULL_IC / HAS_NULL_IC, MMPlate1, bAutoSiteMapHotplateSave / bAutoSiteMapHasPickHP / iResetSiteMappingStep
++#include "Config.h"                    // IniConfig.bI21EnableASM
++#include "CosFunction.h"               // CosFunction.bUSEJCETSiteMapMode
++#include "canary_support.h"            // RecordProcess(AnsiString, AnsiString="") as uhome.cpp uses it (do not include cMyDB.h)
++
++//---------------------------------------------------------------------------
++// L03a: golden 913 mykitsuck.cpp:1640-1647 (inside CopyToTray); iBkR / iBkC come in as golden :1638-1639 (= iSuckR / iSuckC)
++void W906_AsmBorrowSuckRC_St02(int TrayR, int TrayC, int &iBkR, int &iBkC)
++{
++    if(InArmSiteMapData.iSuckR>=0 && InArmSiteMapData.iSuckR<_MAX_SUCK_ROW_ITEM &&   //AI : ReStartAutoSiteMapping() 會把游標無條件歸零成 (0,0) --
++       InArmSiteMapData.iSuckC>=0 && InArmSiteMapData.iSuckC<_MAX_SUCK_COL_ITEM &&   //AI : 借料存在[D]、補回取在[A] -> Count/Sht/Kit 全讀到 0 (偉測 HHT-83 三顆孤島)
++       InArmSiteMapData.iPlateR==TrayR &&                                   //AI : InArmSiteMapData 在 ainarm_SearchPickPlate 借料時 UpdateData,
++       InArmSiteMapData.iPlateC==TrayC)                                     //AI : 在 DoPlaceToHPBackupData 補回完成時 ClearData -- 座標對得上才採用
++    {
++        iBkR=InArmSiteMapData.iSuckR;
++        iBkC=InArmSiteMapData.iSuckC;
++    }
++}
++
++//---------------------------------------------------------------------------
++// L03b: golden 913 uhome.cpp:1410-1433 (ProcessMotorHome case 1, after the ASM_Home log block), verbatim
++void W906_AsmHomeReleaseBorrow_St02()
++{
++    AnsiString Str;
++            //AI(ht9045-inarm-flow) 20260914 (RogerYang) : Home 中止 ASM 借還交易的收尾 --
++            //AI : “必須放在 #ifndef SOFT_SIMULTE 外面” : 20260914 模擬實證, 放在裡面會被模擬版編掉,
++            //AI : 導致 bAutoSiteMapHotplateSave 殘留 -> Home 後仍走 JCET write-back -> 跟沒修一樣。
++            //AI : 不收尾的後果 : 該格永久留 HAS_NULL_IC 占位(吃掉一個 2x4 落點) + 旗標殘留做錯的補回。
++            if(CosFunction.bUSEJCETSiteMapMode &&
++               IniConfig.bI21EnableASM==true &&
++               InArmSiteMapData.iP!=-1)
++            {
++                if(InArmSiteMapData.iP>=0 && InArmSiteMapData.iP<2 &&
++                   InArmSiteMapData.iPlateR>=0 && InArmSiteMapData.iPlateC>=0)
++                {
++                    if(MOT[MMPlate1+InArmSiteMapData.iP].Tray.Data[InArmSiteMapData.iPlateC][InArmSiteMapData.iPlateR]==HAS_NULL_IC)
++                    {
++                        MOT[MMPlate1+InArmSiteMapData.iP].SetTraySingleData(InArmSiteMapData.iPlateC, InArmSiteMapData.iPlateR, NULL_IC);
++                        MOT[MMPlate1+InArmSiteMapData.iP].Tray.SiteMapData[InArmSiteMapData.iPlateC][InArmSiteMapData.iPlateR]=0;
++                        Str.sprintf("ASM Home : release borrowed cell P%d R%d C%d", InArmSiteMapData.iP, InArmSiteMapData.iPlateR, InArmSiteMapData.iPlateC);
++                        RecordProcess(Str, "ProcessMotorHome");                 //AI : 留痕 -- 有這一行就代表這次 Home 打斷了 ASM 借料
++                    }
++                }
++                bAutoSiteMapHotplateSave=false;                                 //AI : 交易中止, 不可再補回
++                bAutoSiteMapHasPickHP  =false;                                  //AI : 否則下一次放料仍走 JCET write-back 分支
++                iResetSiteMappingStep  =0;                                      //AI : 補回已取消, 放行後面 ReStartAutoSiteMapping 內的 PurgePausedBookings 去清這筆暫停帳
++                InArmSiteMapData.ClearData();                                   //AI : 重入保護(case 1 若中途 return false 會重跑) + 不再重複寫 log
++            }
++}
++//---------------------------------------------------------------------------
+diff --git a/Automation/HanaRms_St02.cpp b/Automation/HanaRms_St02.cpp
+index 3a73e76f..f5345c47 100644
+--- a/Automation/HanaRms_St02.cpp
++++ b/Automation/HanaRms_St02.cpp
+@@ -73,6 +73,7 @@ AnsiString THanaRmsMembers::GetTimeInfo()
+ //  Isolation : own HANARMSClient socket + own parse ; does NOT reuse OLP (STX/ETX) path.
+ //  NOTE      : HANA server IP/Port are NOT given in HANA documents -> must be confirmed by HANA.
+ static AnsiString g_asHANARMSRecvBuf = "";   //RogerYang 20260727 : RMS receive accumulation, split by '\n'   (golden :2520)
++static const int HANARMS_START_WAIT_MS = 3000;   //RogerYang 20260916 : Start 前置連線等待上限   (AI(W906-W195) 20261009 H4: golden 913 :2524)
+ 
+ //RogerYang 20260727 : append one line to the RMS log memo (auto-trim when too long)
+ void w906hanarms::HANARMSAddLog(TMemo *mmo, AnsiString asTag, AnsiString asMsg)   // golden :2523-2540 (file-static there; [W906] shared, HanaRms_Internal_St02.h)
+@@ -1021,3 +1022,46 @@ bool THanaRmsMembers::HANARMSRunCheckOK(bool bShowAlarm)
+     return false;
+ }
+ //---------------------------------------------------------------------------
++//RogerYang 20260916 : Start 前置檢查(照偉測 fMesSystem->CheckLotInfor 樣式,擋在進料之前)
++//  A77 開啟時先確認 RMS 連線可用;連不上就拒絕 Start,料一顆都不會進機台。
++//  參數比對無法在此做(批號要等 Tester 送 LOTON),仍由測試位閘門負責。
++bool THanaRmsMembers::HANARMSCheckLinkBeforeStart()                             // golden 913 :3462-3503 (AI(W906-W195) 20261009 H4)
++{
++    if(IniConfig.bA77_EnableHanaRMSInterlock == false ||                     //CUSTOMER_CODE 判斷在 main.cpp 呼叫端
++       LastSet.iTester != ON_LINE ||                                        //離線不卡(同偉測 CheckLotInfor)
++       LastSet.iRunStartMode == rsmAutoSiteMap)                             //ASM 不卡(同 HANARMSRunCheckOK)
++        return true;
++
++    if(HANARMSIsConnected())
++        return true;
++
++    sHANARMSLinkErr = "";
++    HANARMSConnect();                                                       //非阻塞;連上與否由 socket 事件回報
++
++    unsigned long dwT0 = GetTickCount();                                    //有限時等待:Start 是按鍵觸發,不在主迴圈內
++    while(HANARMSIsConnected() == false &&
++          (GetTickCount() - dwT0) < (unsigned long)HANARMS_START_WAIT_MS)
++    {
++        W906_HanaRmsPumpTick();                                             // [W906] golden Application->ProcessMessages(): the port has no message loop; the polled socket finishes a connect only inside Poll() (HanaRmsPump_St02.cpp, re-entry guarded) -- without it a real link never connects here and every START is refused
++        Sleep(50);
++        if(sHANARMSLinkErr.Length())                                        //已明確失敗就不必等滿
++            break;
++    }
++
++    if(HANARMSIsConnected())
++    {
++        HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [CHK] ", "link OK before start");
++        return true;
++    }
++
++    AnsiString asMsg = "HANA RMS server not available, start refused!!\r\n";
++    if(sHANARMSLinkErr.Length())
++        asMsg += sHANARMSLinkErr;
++    else
++        asMsg += "no response from " + edtHANARMSIP->Text + ":" + edtHANARMSPort->Text;
++    HANARMSAddLog(mmoHANARMS, GetTimeInfo()+" [CHK] ", asMsg);
++    ShowMyMessage(asMsg, "Check the RMS server and network, then press START again.",
++                  "HANARMSCheckLinkBeforeStart");
++    return false;
++}
++//---------------------------------------------------------------------------
+diff --git a/Automation/HanaRms_St02.h b/Automation/HanaRms_St02.h
+index c6b1a502..5cb2c40a 100644
+--- a/Automation/HanaRms_St02.h
++++ b/Automation/HanaRms_St02.h
+@@ -119,6 +119,7 @@ public:
+     void HANARMSConnect();                          //非阻塞連線,連上後沖出待送 (:3292-3326)
+     void HANARMSFlushPending();                     //把排隊指令送出 (:3328-3347)
+     AnsiString HANARMSGetHDName();                  //HDNAME 預設=機台 Machine ID (:3349-3358)
++    bool HANARMSCheckLinkBeforeStart();             //Start 前置:連不上 RMS 就拒絕開始 (AI(W906-W195) 20261009 H4: golden 913 automation.h:212, body automation.cpp:3462-3503)
+ 
+     // ---- [W906] ---------------------------------------------------------------------------------------------------------
+     void W906_HANARMSClientCreate();                // [W906] 1: the dfm component, made on first use (HanaRms_St02.cpp)
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c2c4e1c0..6d00cb3b 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -2008,7 +2008,7 @@ add_library(ht9045_sm STATIC
+     #                                   in-arm engine helper stubs + tRotate/Laser)
+     ainarm_SearchPickPlate.cpp
+     ainarm_SearchPlacePlate.cpp
+-    aHotPlateSubstrate.cpp  mykitsuck.cpp  # AI(W906-A4-6) 20260924: 吸嘴類別合一 —— golden 佈局的 TMySucker／TMyKitSuck（mykitsuck.h／.cpp）取代 aHotPlateSubstrate 的精簡鏡像；見 :2723
++    aHotPlateSubstrate.cpp  mykitsuck.cpp  AsmBorrow_W195_St02.cpp  # AI(W906-W195) 20261009 (St02-E) L03: golden 913 mykitsuck.cpp:1638-1647 + uhome.cpp:1410-1433 (needs aHotPlateSubstrate.h).  AI(W906-A4-6) 20260924: 吸嘴類別合一 —— golden 佈局的 TMySucker／TMyKitSuck（mykitsuck.h／.cpp）取代 aHotPlateSubstrate 的精簡鏡像；見 :2723
+     # AI(W906-Reconcile) 20260721: Public/MyProductionRecord.cpp's real pure-logic
+     # bodies (ctor + ~28 leaves) supersede the offline no-op stand-ins
+     # aHotPlateSubstrate.cpp used to carry for the same 8 methods (removed there,
+@@ -2419,7 +2419,7 @@ add_library(ht9045_sm STATIC
+     #     thin offline driver).  Pumps the same Sim HAL + aHotPlateSubstrate
+     #     (FLCarryKit/BLCarryKit/FRCarryKit/BRCarryKit + AutoSHT1/2/3Task cursors).
+     #     NO #if 0 gates -- every golden case body is ACTIVE.  See the file head.
+-    acarry.cpp
++    acarry.cpp  acarry_W195_St02.cpp   # AI(W906-W195) 20261009 (St02-E) L05: golden 913 acarry.cpp pieces new since 912 (L05 Shuttle Move Timeout snapshot; L10 later) in their own TU so the shared acarry.cpp keeps its line numbers
+     Ht9050DryRun.cpp   # AI(W906-HT9050-DRYRUN) 20261005: HT9050 motor-only dry-run cycle (EastSun 1005 Step1..10; csystem.cpp DoAllProcess, W906_HT9050_DRYRUN)
+     # --- W6.5 SHUTTLE/CARRY cross-module offline shims (Tech / fLtcSensor /
+     #     OutSht3Kit / ATC_InterfaceForm+ATC_Data / CheckShtFloating /
+diff --git a/WebStart.cpp b/WebStart.cpp
+index bc0c1756..c218e2e2 100644
+--- a/WebStart.cpp
++++ b/WebStart.cpp
+@@ -1167,7 +1167,7 @@ bool TfMainWeb::StartFromWeb(AnsiString Func)
+     NewRecordProcess("MES2110", "START pressed", Func);                         // golden :4397
+     iStartIn = 1;                                                               // golden :4398
+     ResetShtMoveTimeoutWatchdog();                                              // golden :4399  AI(ht9045-staterecord-analysis) 20260525 (RogerYang) : 任何 Start 入口清 watchdog
+-
++    if (fAutomation && IniConfig.bA77_EnableHanaRMSInterlock) fAutomation->bHANARMSNeedRunCheck = true;   //AI(W906-W195) 20261009 H4: golden 913 main.cpp:4537-4539 (RogerYang 20260902 : HANA RMS 互鎖:功能開啟才掛 Start 檢查旗標) -- no reader until T08 (atester.cpp:1480-1484) is lifted
+     // golden :4401-4406 的區域變數。只保留已翻到的範圍用得到的，理由同上。
+     int ret = 0, iMode = 0, iFix = 0;                                                   // golden :4401（ret 在 ST-W2 :4699、iMode 在 ST-W4 :5451 用）
+     bool bFlag = false;                                                         // golden :4402（ST-W4 :5447 用）
+@@ -3158,7 +3158,7 @@ bool TfMainWeb::StartFromWeb(AnsiString Func)
+         iStartIn = 0;                                                           // golden :5867
+         return false;                                                           // golden :5868
+     }
+-
++    if (CUSTOMER_CODE == CC_HANA_MICRON && fAutomation && fAutomation->HANARMSCheckLinkBeforeStart() == false) { iStartIn = 0; return false; }   //AI(W906-W195) 20261009 H4: golden 913 main.cpp:6150-6155 (RogerYang 20260916 : HANA RMS 連不上就不讓開始,料不進機台) -- waits up to 3 s (HanaRms_St02.cpp HANARMSCheckLinkBeforeStart)
+     // ★ golden 在這裡**讀** SystemStart 當守門（已在跑就不再 Start）。
+     //   這是整個 Start() 裡唯一碰 SystemStart 的地方，而且是唯讀。
+     //   真正把它設成 true 的是 golden ckernel.cpp:517（移植樹 ckernel.cpp:1015），不在本函式內。
+diff --git a/acarry.cpp b/acarry.cpp
+index 40f620e0..d3698ef2 100644
+--- a/acarry.cpp
++++ b/acarry.cpp
+@@ -3574,11 +3574,11 @@ void DoShtMoveTimeoutHandle(int iSelSHT)
+                  fLtcSensor->LatchDataCnt1,
+                  fLtcSensor->LatchDataCnt5);
+     MyDBIProcess("Message", sLog);                                              //A寫入 EventLog
+-
++    { void W906_ShtMoveTimeoutDiag_St02(int iSelSHT); W906_ShtMoveTimeoutDiag_St02(iSelSHT); }   //AI(W906-W195) 20261009 (St02-E) L05: golden 913 acarry.cpp:3484-3515 interlock snapshot -> EventLog, before ShowMyMessage as golden (body acarry_W195_St02.cpp)
+     //AI(ht9045-staterecord-analysis) 20260525 (RogerYang) : 操作員提示訊息 (簡化英文)
+     sMsg.sprintf("Shuttle %d Move Timeout (>%d sec)\n"
+                  "Encoder=%d  Target=%d\n\n"
+-                 "Press OK to Home, then START to resume.",
++                 "Press OK to Home, then do STATE RECORD before START.",                  //AI(W906-W195) 20261009 (St02-E) L05: golden 913 acarry.cpp:3520 (912 / 0618: "then START to resume.")
+                  iSelSHT+1, (int)(SHUTTLE_MOVE_TIMEOUT_SEC),
+                  iEncoder, iTarget);
+ 
+diff --git a/acarry_W195_St02.cpp b/acarry_W195_St02.cpp
+new file mode 100644
+index 00000000..2031d6c5
+--- /dev/null
++++ b/acarry_W195_St02.cpp
+@@ -0,0 +1,66 @@
++//---------------------------------------------------------------------------
++//  acarry_W195_St02.cpp -- golden 913 acarry.cpp pieces that are new since 912, kept out of the shared acarry.cpp so its line
++//  numbers stay put (acarry.cpp only gets same-line calls).  AI(W906-W195) 20261009 (St02-E), laptop card W-205 (W-195 (2) C items).
++//
++//  L05 -- the Shuttle Move Timeout interlock snapshot (golden 913 acarry.cpp:3458-3460 externs + :3484-3515, RogerYang 20260915
++//         "ht9045-shuttle-flow", SCK HT9046LS 20260907 case).  Called from DoShtMoveTimeoutHandle (acarry.cpp:3577) after the latch
++//         dump and BEFORE the operator message, as golden ("必須在 ShowMyMessage 之前, 按 OK 後旗標就被清掉了").  Read-only: one
++//         EventLog row; no motion, no IO write, no alarm.  No customer or machine flag; HT9050 (Type_HT9050) runs Do_Auto_InSH /
++//         Do_Auto_OutSH (csystem.cpp:1916), never Do_Auto_SHT1/2, so it never reaches DoShtMoveTimeoutHandle.
++//         [W906] IndexZCanMove is {false,false} in V906 (ainarm9045_w7_shims.cpp:57, GATE W4G-1), so the row shows IdxZCanMove=0/0
++//         where golden shows 1/1 -- the V906 value, accepted (W-205).
++//---------------------------------------------------------------------------
++#include "MachineDefine.h"
++#include "acarry.h"
++#include "acarry_shims.h"          // the 2-arg MyDBIProcess adapter acarry.cpp binds to (do not include cMyDB.h)
++#include "Motor/mymotor.h"
++#include "cprod.h"
++#include "cmydef.h"
++#include "atester.h"               // iTestYTask (and iTestTask / iTestHeadMotorTask)
++#include "canary_support.h"
++
++extern bool IndexZCanMove[2];                                                   //AI(ht9045-shuttle-flow) 20260915 (RogerYang) : Shuttle Move Timeout 互鎖診斷用 (ainarm2.h)   golden 913 acarry.cpp:3458; V906 ainarm9045_w7_shims.cpp:57
++extern int  iTestTask;                                                          //AI(ht9045-shuttle-flow) 20260915 (RogerYang) : 同上   golden 913 :3459 (also atester.h)
++extern int  iTestHeadMotorTask;                                                 //AI(ht9045-shuttle-flow) 20260915 (RogerYang) : 同上   golden 913 :3460 (also atester.h)
++extern int  iPickFromShuttle1Task, iPickFromShuttle2Task;                       // [W906] golden reaches them through aArmHeader.h -> aoutarm.h:109-110 (V906 aoutarm.cpp:609-610)
++
++//---------------------------------------------------------------------------
++// golden 913 acarry.cpp:3484-3515 (inside DoShtMoveTimeoutHandle), verbatim; iMot as golden :3470
++void W906_ShtMoveTimeoutDiag_St02(int iSelSHT)
++{
++    int    iMot     = (iSelSHT==0) ? MInShuttle1 : MInShuttle2;                 //達索引   (golden 913 :3470)
++
++    //AI(ht9045-shuttle-flow) 20260915 (RogerYang) : SCK HT9046LS 20260907 19:36 Shuttle2 Move Timeout 互鎖快照
++    //   Enc 停在右位完全沒動 + 兩次 HOME 都清不掉 fRearNeedSuck, 需要 fCanMove 系列與 Index 旗標才能釘根因
++    //   唯讀 dump, 只在 timeout 觸發時跑一次 (頻率極低); 必須在 ShowMyMessage 之前, 按 OK 後旗標就被清掉了
++    AnsiString sDiag;
++    int iY1C=0, iY1E=0, iY2C=0, iY2E=0, iZ1C=0, iZ1E=0, iZ2C=0, iZ2E=0;
++    if(MOT[MTestY1].Motor!=NULL && MOT[MTestZ1].Motor!=NULL && MOT[MTestZ2].Motor!=NULL)   //AI(ht9045-shuttle-flow) 20260915 (RogerYang) : Gali_ReadEncoderPos 無 NULL 保護
++    {
++        iY1C=MOT[MTestY1].Gali_ReadPos();
++        iY1E=MOT[MTestY1].Gali_ReadEncoderPos();
++        iZ1C=MOT[MTestZ1].Gali_ReadPos();
++        iZ1E=MOT[MTestZ1].Gali_ReadEncoderPos();
++        iZ2C=MOT[MTestZ2].Gali_ReadPos();
++        iZ2E=MOT[MTestZ2].Gali_ReadEncoderPos();
++        if(USE_INDEX_ARM_AXES!=IndexArm_3_Axis && MOT[MTestY2].Motor!=NULL)
++        {
++            iY2C=MOT[MTestY2].Gali_ReadPos();
++            iY2E=MOT[MTestY2].Gali_ReadEncoderPos();
++        }
++    }
++    sDiag.sprintf("ShtMoveTimeout Diag SHT%d : CanMove=%d L=%d R=%d M=%d | IdxZCanMove=%d/%d | "
++                  "FrontNeedTest=%d FrontNeedSuck=%d FrontNeedSuckIC=%d RearNeedSuck=%d RearNeedSuckIC=%d RearNeedDestroy=%d | "
++                  "TestTask=%d HeadMotTask=%d TestYTask=%d SHT1Task=%d SHT2Task=%d PickSht1=%d PickSht2=%d | "
++                  "Y1 %d/%d Y2 %d/%d Z1 %d/%d Z2 %d/%d (cmd/enc)",
++                  iSelSHT+1,
++                  (int)MOT[iMot].fCanMove, (int)MOT[iMot].fCanMoveL, (int)MOT[iMot].fCanMoveR, (int)MOT[iMot].fCanMoveM,
++                  (int)IndexZCanMove[0], (int)IndexZCanMove[1],
++                  (int)fFrontNeedTest, (int)fFrontNeedSuck, (int)fFrontNeedSuckIC,
++                  (int)fRearNeedSuck,  (int)fRearNeedSuckIC, (int)fRearNeedDestroy,
++                  iTestTask, iTestHeadMotorTask, iTestYTask,
++                  AutoSHT1Task, AutoSHT2Task, iPickFromShuttle1Task, iPickFromShuttle2Task,
++                  iY1C, iY1E, iY2C, iY2E, iZ1C, iZ1E, iZ2C, iZ2E);
++    MyDBIProcess("Message", sDiag);                                             //AI(ht9045-shuttle-flow) 20260915 (RogerYang) : 互鎖快照寫入 EventLog
++}
++//---------------------------------------------------------------------------
+diff --git a/docs/MACHINE_PATCHES_20261009.md b/docs/MACHINE_PATCHES_20261009.md
+index dd52b157..d2faff41 100644
+--- a/docs/MACHINE_PATCHES_20261009.md
++++ b/docs/MACHINE_PATCHES_20261009.md
+@@ -117,3 +117,20 @@
+ - **cpp 0358 PKG226**：機台把筆電第 226 包合進去——只接鏈；`pkg_uptake.py`：機台套到第 226 包（第 227 包 18:04 推出）。
+ - **快照 17:36**（main `714a303b`）：只有 `Gerneral.ini` 的 `Program Close=1→0`（程式自己寫的執行狀態，開著＝0）、`machinerecord.dat`（運轉紀錄）與兩份 README 的時間——不是參數或工單變更，這輪不叮嚀全體。
+ - **鏈尾**：C++ `74457544`（0357）→ **`990775c4`**（0358）。下一次從 **cpp 0359／web 0143／tools 0189** 開始。
++- （18:3x 補記）**web 0142 進 main**：第 145 批 `af18d6ab`＝第 228 包（GitHub `e3e54dae`）。
++
++## 17. 18:2x cpp 0359 PKG227（只接鏈）、cpp 0360 WORKLOG（排第 146 批）；快照 18:26
++
++- **cpp 0359 PKG227**：機台把筆電第 227 包合進去——只接鏈；`pkg_uptake.py`：機台套到第 227 包（第 228 包 18:33 推出）。
++- **cpp 0360 WORKLOG**：機台 WORKLOG §3 補設計工具 tools 0189 一列（只有文件）——照慣例 cherry-pick，排**第 146 批**（跟下一張程式 MR 一起，不單獨出包）。tools 0189 HTDESIGNER 照舊不收。
++- **快照 18:26**（main `21e9d7ee`）：只有兩份 README 的時間——不是參數或工單變更，不叮嚀。
++- **鏈尾**：C++ `990775c4`（0358）→ **`93dfc1bb`**（0360）。下一次從 **cpp 0361／web 0143／tools 0190** 開始。
++- （19:3x 補記）**cpp 0360 WORKLOG** 收進第 146 批（b18 `b36d1d01`，`cherry-pick -x 93dfc1bb`，乾淨）；gate b146a 跑中。
++
++## 18. 19:5x 快照：IO_Table.csv 兩個空盤感測器對調（真的參數變更）
++
++- **快照 19:53**（main `a0acdb37`，781 檔）：`IO_Table.csv` `SenEmptySelectHasTray` 84 第 9 位 → 第 8 位（極性 1 → 0）、`SnEmptyDrawerHasTray` 84 第 8 位 → 第 9 位；另有 EastSun 改表時留的三份 `.bak`（19:46／19:47／19:52）、`lastdata*.dat`、GPIB 的 LastFile。
++- 真的參數變更 ⇒ 同一輪 CHAT_JIMMY 叮嚀全體；TO_ES02 §4 請 EastSun 回一行原因，同時給 St01。
++- 機台 patch 沒有新的（cpp 0360／web 0142／tools 0189）；機台套到第 227 包，第 228 包 18:33 推出。
++- （20:3x 補記）**快照 20:25**（main `d211caca`，782 檔）：IO_Table.csv 再改一處——`SnEmptyDrawerHasTray` 84,9,**0 → 1**（EastSun 20:09 留了 `.bak`）。跟 19:53 合起來，兩個空盤感測器的整組設定對調：`SenEmptySelectHasTray` 84,9,1 → 84,8,0；`SnEmptyDrawerHasTray` 84,8,0 → 84,9,1。再叮嚀一次全體。
++- （21:1x 補記）**快照 20:52**（main `1dc8b097`，783 檔）：IO_Table.csv 第三次修改（EastSun 20:43 留 `.bak`）。欄位是 `IP, Port, Bit, InType`——前兩則把 84（IP）寫成「埠」、把 Port 寫成「位」，更正。跟 17:02 的快照比，淨變化只有：`SenEmptySelectHasTray` IP 84／Port 9／Bit 1 的 **InType 0 → 1**；`SnEmptyDrawerHasTray` IP 84／Port 8 的 **Bit 0 → 1**。19:53／20:25 的 Port 對調已改回。
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index f2ca8d2f..239b2b6a 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -1,10 +1,10 @@
+-# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 18:2x）
++# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 21:1x）
+ 
+ ## ☀ 10/08 早上先看這裡（04:3x 起草；之後的進度往這張表加）
+ 
+ | 項目 | 一句話 |
+ |---|---|
+-| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～144 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate；第 140 批拿掉當掉的 IG-6 後才綠），出了**第 181～227 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
++| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～145 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate；第 140 批拿掉當掉的 IG-6 後才綠），出了**第 181～228 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
+ | **模擬組態** | St02 W-149 做完：模擬版的固定失敗從 7 支降到 4 支，跟出貨一樣——之後模擬版多紅一支就是真回歸。 |
+ | **機台修的事（重點）** | 0307 主控台非同步（START 卡 103 秒＋EMG 誤報的根因）、0309／0310／0312／0316 HT9050 Tray 流程（站序、Empty→Auto 補盤、位置不加 6800、Loader 探測看抽屜感測）、0311／0317 上升氣缸雙線圈、0313 出料手臂讓位點（00:19 MOutArmX 警報）、0314 CCD Y 原點判斷、**0315 HT9050 先跳過 Index 扭力讀取**（旗標預設開，扭力讀取驗證後要關）。 |
+ | **軟體極限** | 00:19 的警報是 golden 拿軟體極限（這台 ±999999）算目標。MainNB-GPT 普查（W-164）：只剩 Motor Test 頁的 LightScale 會算出 ±999899——EastSun 0925 R7 已定照 golden，只發提醒。 |
+@@ -111,6 +111,20 @@
+ | **1009 18:0x：同事的問題，筆電回了** | St02 要筆電點頭的兩張認領（同一行改、行數不變）已點頭；AMD 那一行照 Steven 0925 的前例保留客戶代碼判斷。Ifor01 的 L07（ATC 第二組預先補償，HT9050 走不到）要先定的三件分工轉給 St01／Steven／St02-M（W-204）。HANA H4（W-199）第 1 次追問。Ifor01 請關的多餘 MR !389 已關。 |
+ | **1009 18:2x：派工** | St02 問的三個 913 小項（L05 飛梭移動逾時寫狀態紀錄、L03 熱板借用格的吸嘴、L10 閘門 C25 規則）派給 St02-E（W-205；Frank01 兩天沒動靜、NB2-1 在做核心流程）。L10 會改變「有閘門的機台」的關閘時機（照 913），MR 會標人工審核；HT9050 沒有閘門，不受影響。St02 另外看到「HOME 之後按 START 先跳 Normal／FIFO 確認框」golden 有、移植樹沒有，開成 POOL-10 派給 Ifor01（W-206）——**這個 HT9050 會看到**：合進去之後，HOME 完第一次按 START 會多一個確認框。 |
+ | **1009 18:2x：機台與其他** | 機台 cpp 0358＝它合了第 226 包（只接鏈）；17:36 快照（main `714a303b`）只有程式的執行狀態變動，不是參數變更，不用叮嚀。ST-GPT 的技能文件 !395（114 檔，只有新增）合進 main `188363fe`。第 145 批 gate：出貨組態只有固定 4 支，模擬組態跑中。 |
++| **出的包（1009 18:3x）：第 228 包＝第 145 批** | GitLab `af18d6ab`／GitHub `e3e54dae`：Ifor01 的溫控兩段照 913（測試機下遠端溫度 offset 指令時的修正、VTEST 客戶常溫也吃校正值）、St02 的 KYEC FTP 上傳前置（上傳按鈕還沒接）、機台自己的網頁小改（IO 檢查畫面跟頁面一樣寬）。gate b145a：兩組態只有固定 4 支，三支新測試都過。HT9050 的行為不變。 |
++| **1009 18:4x：Ifor-GPT 的 IG-7 收了，派 IG-8** | IG-7（四支「有編譯、沒連進主程式」的檔逐支分析）合進 main `367d9d85`，筆電抽查 4 處引用都對；POOL-6 的 22 支到這裡全部分析完。它找到 HT9050 也會用到的缺口：**還沒開過 StartCondition 頁就開機或換配方時，接觸／Socket 計數不會照 golden 從配方讀進來**。這個和「PAUSE 時存吸嘴計數」派給 Ifor-GPT（IG-8，W-207）；氣缸壽命頁、FTP、Tray 色感測等其他「要接」的開成 POOL-11。 |
++| **1009 18:4x：其他** | St02 回 W-204 第 (c) 題（L07 的 6 行計數器由 Ifor01 同一行加），(a)(b) 等 Steven。機台 cpp 0359（合第 227 包，只接鏈）、cpp 0360（WORKLOG，排第 146 批）；18:26 快照只有 README 時間。ES02 的 HTDESIGNER 0.357～0.360 合進 main `8830725b`。 |
++| **1009 18:5x：更正我 18:2x 的一句話** | 18:2x 寫「HOME 之後按 START 的 Run Mode 確認框，HT9050 會看到」——**錯**。golden 913 那整段只對 KYEC_JCTHIU 客戶（客戶碼 922），HT9050 是 957，照 golden 不會跳。Ifor01 開工前查到、先停下來問。那張卡（W-206）改成擱置：客戶專屬，而且確認框會卡住主迴圈（跟「Sure To OffLine Running」同一個原因還閘著），等那個一起解。Ifor01 改接 HT9050 用得到的「氣缸壽命」（開機讀計數、清零、存檔；W-208）。 |
++| **1009 19:1x：W-196 不再追問** | 這張是請 EastSun「遇到再看」的上機提醒（介面錯誤／下壓次數超過時照 913 的處理，第 218 包起），沒有回覆期限；照規則再追一次、8 小時後就會進 §0 請你打電話，那只是雜訊。改成不追問，他遇到時再回。St02 的 L05 認領筆電也點頭了（只改既有提示框的文字＋寫一段狀態紀錄，HT9050 走不到）。 |
++| **1009 19:3x：第 146 批開跑** | b18 `b36d1d01`＝St02 的 L05（!396：飛梭移動逾時跳框前，先把互鎖狀態寫一列事件紀錄，框的文字改成 913 的「先做 STATE RECORD 再按 START」；HT9050 走不到）＋機台的 WORKLOG 一列。NB2-1 的 W-188 #5 還沒交，下一批再收。 |
++| **1009 19:3x：其他** | St02 的 L03（ASM 熱盤借料帳的兩段 913 修正，其中一段在 HOME 結束時放掉被打斷的借料格）認領筆電點頭；它問的 PurgePausedBookings 跟 NB2-1 正在做的是同一組借料帳，請 NB2-1 接。ES02 的 HTDESIGNER 0.361～0.364 合進 main `72b265c0`（那顆 commit 標題誤寫成 0.363，實際是 0.364）。 |
++| **1009 20:0x：§0 #151 撤掉——Steven 本人回了** | HANA 機台按 START 前要不要照 golden 先等 RMS 連線（最多 3 秒）：Steven 選 A（照 913 收）。照「Steven 的回覆最高優先」，這題不用你回了；!376 排進第 146 批。Steven 同時回了：KYEC FTP 上傳按鈕完全照 golden 同步跑、TESNA 事件紀錄那段整段打開、913 每天檔與每月檔重複寫入的毛病 V906 修掉（RULINGS_20261009 第 9～11 條）。LEADYO 三題他說要問 KenHsieh，已轉。 |
++| **1009 20:0x：第 146 批重組（gate 等一下開）** | 第一次 gate（b146a）出貨組態多一支失敗：St02 新的 L05 測試一行都沒跑就停——它把「D:\HT9045 底下的路徑」一律當真機路徑，而筆電的 gate 就在 D:\HT9045\.claude\worktrees 裡。不是程式錯，是測試的保護寫得太死；筆電照其他測試的判斷補了一行（`c59acf66`），並請 St02 之後照這個寫。順便把 St02 的 L03（!397）和 Steven 剛核准的 H4（!376）放進同一批，b19 `6eab7545` 重跑 gate。 |
++| **1009 20:2x：Steven 又回了一題** | Ifor01 L07（ATC 第二組預先補償）擴欄位後的產生檔：由產生器的主人重產、不手改（RULINGS_20261009 第 13 條）；產生器是 St01 的，他回來前那部分先等。LEADYO 再補一題給 KenHsieh：那 3 個新設定鍵要不要所有 FTP 機台都寫——HT9050 開著 FTP，照 golden 會在 config.ini 多 3 個鍵。第 146 批 gate（b146b）跑中。 |
++| **1009 20:2x：EastSun 改了 IO 表** | 機台 19:53 快照（main `a0acdb37`）：兩個空盤感測器（Empty 選擇區有盤、Empty 抽屜有盤）的接點位置對調，其中一個的極性也改了——像是現場兩條線跟表對不上而改表。已叮嚀全體驗證前先同步，也請 EastSun 回一行原因（同時給 St01）。 |
++| **1009 20:3x：IO 表第二次修改、第 146 批再補一行** | 機台 20:25 快照（main `d211caca`）：EastSun 把 IO 表裡兩個空盤感測器的設定改完——兩者整組對調（看起來是現場兩條線接反），已再叮嚀全體。第 146 批：L05 的測試修好後過了，但 L03 的新測試有同一段太死的保護，一樣沒跑就停；我第一次只修了一支，沒找第二份。補同樣一行後再跑一次（b146c）。 |
++| **1009 20:4x：Steven 的題目都回完了，今晚到明天下線** | 最後一題：Ifor01 L07 的產生檔與網頁，St01 出差中先交給 St02 做（RULINGS_20261009 第 14 條）；同樣在等 St01 產生器的 HANA H6、閘門 C25 設定頁那一列，筆電照同一個理由也交給 St02。之後的決策題照規則由筆電先定、需要你的才列 §0。St02 的 TESNA 兩段（T1、T2）認領已點頭；T2 有一處把寫死的紀錄路徑改成可替換的路徑（正式機值一樣），請他們註明這是 V906 的改動。 |
++| **1009 21:1x：IO 表第三次修改（以這份為準）** | 機台 20:52 快照（main `1dc8b097`）：EastSun 今晚改了三次兩個空盤感測器的設定，最後跟傍晚比只動兩格——Empty 選擇區有盤的「輸入型態」0 → 1、Empty 抽屜有盤的接點 Bit 0 → 1；中間那次對調已改回。我前兩次的說明把欄位名稱講錯（把模組 IP 84 說成「埠」），已更正並再叮嚀全體一次。第 146 批第三次 gate（b146c）出貨組態只剩已知的計時抖動，模擬組態跑中；第 147 批（St02 的 FTP 上傳按鈕）已組好。 |
+ | **要你決定的**（§0） | ✅ 你 10:1x 都回了：#148＝NB2 已完成（!306 收進第 110 批確認）、#149＝A（Ifor-GPT 專做執行期測試，IG-3／IG-4）、!310＝A（ES02 HTDESIGNER 0.235～0.257 收進第 110 批）＝RULINGS_20261008 第 2 條。**13:0x 新一題 #150**：GPIB 位址不一致要不要自動修正（Jerry 留給你；預設 A＝維持 golden、只留警告，可不回）。<br>**🆕 1009 11:4x 新一題 #151：HANA 機台按 START 時，要不要照 golden 先等 RMS 伺服器連線（最多 3 秒）？** 白話：golden 913（RogerYang 0916）裡，HANA 客戶開了 A77 的機台按 START 前，會先確認 RMS 伺服器連得上，連不上就擋下 START，連線最多等 3 秒。問題在移植樹的輪詢是單執行緒——這 3 秒裡整台機台的狀態更新會停住（例：網頁上的數字 3 秒不動）。你 0923 定過「會擋住輪詢的整合要先問」，所以問你。只有「HANA 客戶＋開 A77＋線上模式＋RMS 還沒連上」才會等，HT9050 永遠走不到。選項：**A＝照 golden 收**（建議：只在按 START 那一刻、最多 3 秒，機台本來就停著；St02 已經把等待裡的訊息迴圈換成只推 HANA 連線）；**B＝先不收**，等改成不擋輪詢的寫法（例：連線放到背景，START 時只看結果）。**沒回之前照 B**：H4 先不合，HANA 其他幾張（!372～!374）照常進第 138 批。<br>**🆕 1009 12:3x 新一題 #152：EastSun 派給你的「在沒有 AI 的電腦上實測安裝與更新」，實測要誰來做？** 白話：EastSun 希望客戶端或沒有 AI 的電腦也能只靠文件和腳本裝好、更新 HT9050 的軟體（機台 cpp 0349）。手冊和腳本筆電已派 Ifor01 寫（W-197）；寫好之後要有一個「人」在一台沒有 Claude 的電腦上照著做三個情境：①從零安裝並啟動；②從某一包更新到最新一包，中間至少遇到一個「機台和筆電都改過」的檔；③故意讓建置失敗，照手冊退回。模擬組態就可以，不用機台。選項：**A＝你自己做**（建議：EastSun 指名你，你也最清楚客戶端要什麼；大約半天到一天）；**B＝指定一位同事**照手冊做、不用 AI（例：Kevin 或 Jerry）；**C＝先不排**，手冊寫好放著。**沒回之前照 C**：手冊照寫，不排實測。實測的人不能是寫手冊的 Ifor01。<br>（1009 13:4x 補：**#151 也請 Steven 一題決定**（W-199）——你 13:3x 說 Steven 的回覆最高優先，Steven 回了就照他的，這題你就不用回。Steven 13:0x 對同一類的 KYEC 換配方同步等 7z 已經裁定「功能打開才等」照 913 同步，可以參考。）<br>（1009 15:1x 補 #152：**手冊和腳本已經好了**——Ifor01 的 MR !379 進 main `7db6b913`：`tools/laptop_ops/pkg_template/` 的 `NO_AI_INSTALL.md`／`NO_AI_UPDATE.md`／`NO_AI_TROUBLESHOOTING.md`＋五支 PowerShell 腳本＋啟動 .bat，每份手冊都附實測紀錄表。你決定誰做實測就可以開始；新腳本等實測過了才換進每一包。） |
+ 
+ 
+@@ -362,6 +376,8 @@
+ 
+ | # | 事項 | 白話＋例＋選項（建議） | 你回之前的預設 | 在哪 |
+ |---|---|---|---|---|
++| 153 | ⏳ **三位同事追兩次、8 小時沒回：要不要打電話或寄信？**（W-192／193／194，1009 20:5x 列） | 白話：早上 07:1x／07:3x 問了 Jerry、KenHeish、RogerYang「913 裡幾處看起來像 bug 的地方是不是刻意的」（例：UseFix3Cylinder 有兩個變數沒用到、HANA RMS 的 port 從 6670 改成 14140、SVN r913 少了 Barcode2SetupData 三支檔），12:3x、16:3x 各追一次都沒回。這些**不擋任何人的工作**（照 913 翻的照翻，疑點記在交接檔）。選項：**A** 你打電話或寄信催；**B 不催，照預設繼續，他們有空再回**（建議 B，跟 1007 第 11 條同一個做法）。 | B（不催；可以不回這題） | `docs/handoff/WAITING_REPLIES.md` W-192～194；TO_JERRY／TO_KENHEISH／TO_ROGER §4 |
++| ~~151~~ | ✅ **1009 19:3x Steven 本人回 A**——HANA 機台按 START 前照 913 先等 RMS 連線最多 3 秒（!376 收進第 146 批） | — | — | RULINGS_20261009 第 9 條 |
+ | ~~149~~ | ✅ **1008 10:1x 你回：照建議（A）**——Ifor-GPT 接正式卡，專做執行期測試（IG-3／IG-4，W-172） | — | — | RULINGS_20261008 第 2 條 |
+ | ~~148~~ | ✅ **1008 10:1x 你回：NB2 已完成，去確認**——MR !306 收進第 110 批跑 gate | — | — | RULINGS_20261008 第 2 條 |
+ | ~~147~~ | ✅ **1007 19:5x 你回：A**——ES02 的 HTDESIGNER 0.235～0.241 等你把 !310 轉 Ready 再一起合 | — | — | RULINGS_20261007 第 12 條 |
+@@ -793,6 +809,9 @@ N07 等 INBOX 86（第 3 條）；ADAM 總開關 `W906_ADAM_EP_LIVE` 關著（
+ 
+ ## §6 我自己犯的錯與更正
+ 
++- **1009 20:0x 修 W-205 測試的路徑保護只修了一支**：L05 那支修好後沒找同一批的第二份（L03 的 `test_st02_w205_asm.cpp` 是同一段複製），多跑了一次 gate（b146b → b146c）。以後修一個「複製來的寫法」先在同一批找所有出處。
++- **1009 19:5x／20:2x 叮嚀全體時把 IO_Table 的欄位講錯**：寫成「84 埠第 9 位 → 第 8 位」，實際欄位是 `IP, Port, Bit, InType`（84 是模組 IP、9／8 是 Port）。21:2x 對著表頭重寫、更正。以後描述 IO 表變更先讀表頭再寫。
++- **1009 18:2x 派 POOL-10 時寫「HT9050 走得到、會多一個確認框」**：我只讀了 golden 913 `main.cpp`:5046-5072，沒往上看到 :5040 的 `if(CUSTOMER_CODE==CC_KYEC_JCTHIU)`；HT9050 是 957，照 golden 根本不會跳。Ifor01 開工前查到、先停下來問（18:4x）。以後引用 golden 片段先找它外層的 `if`／`#if`，才寫「哪些機台會走到」。
+ - **1006 18:1x St02-M 替 Steven 轉給 Jimmy 的三題（!197、同步工具刪 7 支 SOP、A1a／A1b）漏讀 17 小時**：同一時段我讀了 St01 18:04 的交接列、回了 St02 18:13 的 2C-ST01（18:4x），偏偏跳過夾在中間的 18:09 那一列；它不是「問筆電」而是「問 Jimmy」，followup／idle 工具都不看這種列。1007 11:4x 補跑 10/06 健檢才抓到——健檢的「晚讀」紅燈就是為這種事做的，迴圈停掉那晚它也跟著沒跑。
+ - **1006 19:4x 收尾腳本直接叫 `cmake --build`，沒把 `C:\MinGW\bin` 加進 PATH**：`cc1plus.exe` 找不到它的 DLL，g++ 回 1、一行訊息都沒有（連 `int main(){}` 都編不過）——規則本來就寫「建置一律走 build.bat」（它會設 PATH），我為了只建一個測試目標繞過它。補上 PATH、修補腳本改成可重複執行後重跑，沒有推出任何東西。也順便發現我的「oracle 語法檢查 0 錯」只數輸出裡的 error、沒看回傳碼；第 81 批 14 支 C++ 檔用回傳碼重驗都是 0，以後改看回傳碼。
+ - **1006 18:5x 改了「正在執行」的 gate 腳本**：想在 `gate_wt2.sh` 註記「預讀有害」，插了兩行註解——但第 80 批的 gate 正用 bash 跑它，bash 是邊跑邊照位元組位置讀檔的，`run sim` 結束後會從錯的位置讀，可能把模擬組態整個重跑（先刪建置資料夾）。當場發現、在 bash 下次讀檔前把那兩行原樣拿掉，核對檔案沒有 CR、沒有 BOM、跟執行中的版本位元組一致，沒有造成影響。規則：改 `.sh`／`.bat` 之前先確認沒有東西在跑它（跟 memory 裡 `.bat` 的那條同一個坑）；註記等 gate 跑完再補。
+diff --git a/docs/RULINGS_20261009.md b/docs/RULINGS_20261009.md
+index c458b241..7c32e389 100644
+--- a/docs/RULINGS_20261009.md
++++ b/docs/RULINGS_20261009.md
+@@ -78,3 +78,35 @@
+ - **D-9 `UploadFileToServer2` 一起補 912 那 6 段：是**（913 有、移植樹還是 0618；第 6 條「913 當參照、翻成 C++」）。
+ - 技術預設照 St02-M：D-1 只做上傳（F2-up）、D-2 執行接縫寫在筆電檔案的同一行（筆電點頭）、D-5 兩個 bError 不合併、D-6 AMD 與 KYEC-ATC 連線先擋下回報不支援、D-8 `plUnloadClick` 放 St02 新檔。
+ - **D-7 上傳照 golden 同步在主迴圈跑：轉給 Steven（W-203）**——7z 用 `system()` 沒有逾時、FTP 引擎沒對真伺服器跑過，卡住時整台機台的輪詢會停（Jimmy 0923「會擋住輪詢的整合要先問」；跟 W-199／#151 同一類）。筆電的建議：照 golden 同步，但 7z 比照 K1 加 10 秒強制結束（Steven 1009 對 K1 的做法），FTP 用引擎自己的逾時。**Steven 回之前**：F2-1（Gate #4，今天沒有執行期效果）與 F2-2（兩個接縫）照做；F2-3（真的會按下去的按鈕）等 Steven。
++
++## 9. HANA H4（!376）照 913 收（Steven 本人 1009 19:3x，經 St02-M 19:3x 轉；W-199 的答案）
++
++- Steven 選 **A**：HANA 開 A77 的機台按 START 前，照 golden 913 同步確認 RMS 連線（最多 3 秒），連不上就拒絕開始。
++- 照第 1 條（Steven 的回覆最高優先）：**§0 #151 撤掉**；!376 合進第 146 批（b19 `6eab7545`）。人工審核 🟡 B81 照舊。
++- 這是會擋住輪詢的整合（Jimmy 0923「先問」）：問了，Steven 答了。只在 HANA 客戶開 A77 時走到；HT9050 不受影響。
++
++## 10. W-203（F2-3 上傳按鈕）＝B、TESNA D2＝A（Steven 本人 1009 19:3x，經 St02-M 轉）
++
++- **W-203＝B**：KYEC FTP 上傳完全照 golden 913 同步在主迴圈跑、不加逾時（沒採筆電建議的「7z 10 秒強制結束＋FTP 引擎逾時」）。F2-3 可以開工。HT9050 的 FTP 關著。
++- **TESNA D2＝A**：`cprod.cpp`:2524-2578 那一整段（依設定決定事件紀錄檔名與存檔週期）照 golden 整段打開；加 null 防護＋LogObjects 建好後再套一次（技術預設 D1）。HT9050 用預設、不變。
++
++## 11. TESNA D7：每月檔與每天檔各存一行，V906 修掉 913 的重複寫入（Steven 本人 1009 19:4x）
++
++- golden 913 的毛病：N10 開＋`iN10UploadProductMethod==0`＋`iO15_SaveFilePeriod==8` 時，「每天多存一份」的路徑跟主檔一樣 ⇒ 每列寫兩次、卡料統計變兩倍（913 `MyStringList.cpp`:409-432、GetFileName :527-529／:645）。
++- Steven：「每月跟每天不影響，各存一行」⇒ V906 修掉：每天那份路徑跟主檔相同時不再寫第二次；跟 golden 不同處標 [W906]＋Steven 本人裁決。913 的這個毛病已告知 RogerYang（TO_ROGER §4，不用回）。
++
++## 12. LEADYO 三題問 KenHsieh（Steven 本人 1009 19:4x：「這題要問ken,我答不出來」）
++
++- D-1（什麼時候做）／D-2（下載被拒絕卻回報成功，要不要修）／D-7（「必須下載」旗標時機、KingPak 按鈕不檢查權限）轉 TO_KENHEISH §4（W-209）；Ken 回之前 LEADYO 不開工。
++
++## 13. L07 擴欄位後的產生檔由產生器的主人重產（Steven 本人 1009 19:5x，經 St02-M 轉；W-204 (a)）
++
++- Steven 選 **A**：`JsonBridge/gen/sjson_SYSTEM_TEMPERATURE.gen.cpp`、`WebBridgeTags.cpp`:137、`FileRW/Temperature.gen.inc` 由產生器的主人用產生器重產，不讓 Ifor01 手改（手改的下次重產就被蓋掉）。
++- 產生器主要是 St01 的；St01 出差回來之前，L07 要重產產生檔的那部分先等。W-204 (b)（網頁欄位誰做）還在問；(c) St02 已同意 Ifor01 同一行加 6 行計數器（1009 18:1x）。
++
++## 14. L07 的產生檔與網頁交給 St02（Steven 本人 1009 20:1x：「St01出差中，交給st02處理吧」；W-204 (b)）
++
++- L07 擴欄位後要重產的產生檔（`JsonBridge/gen/sjson_SYSTEM_TEMPERATURE.gen.cpp`、`WebBridgeTags.cpp`:137、`FileRW/Temperature.gen.inc`）與網頁（每通道 6 欄＋設定頁 3 欄）由 **St02-E 用 St01 的產生器做**；Ifor01 只做 C++ 的資料模型與邏輯。
++- 順序：Ifor01 的資料模型（SYSTEM_TEMPERATURE 擴欄位）先進 main → St02-E 重產產生檔＋網頁（一張 MR，產生器設定改動同一張）→ Ifor01 的邏輯。St02 四支檔那 6 行計數器照 (c) 由 Ifor01 同一行加。
++- **筆電照同一個理由延伸**（筆電 1009 20:4x，不是 Steven 原話）：同樣在等 St01 產生器的 **H6（[A76]→[A77]）** 與 **L10 的 C25 設定頁那一列**，St01 回來前也交給 St02-E。
++- Steven 20:3x：今晚到明天下線，之後的決策題照規則交給筆電／Jimmy。
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 634c0187..18d83c2d 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -353,6 +353,7 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-07 | 設計外掛 tools 0170 | — | 設計外掛工作階段自己推（分支 a6cadd2，GitHub dc7975ff）：依序合併筆電包 162、163、167、168 的設計外掛（0.197.0 → 0.234.0），164～166、169～172 沒帶設計外掛；無衝突，機台自己的設計外掛功能都保留；測試修正：建置視窗進度條在矮視窗不再塌掉、面板繪製測試固定 Edge 視窗大小；run_all 3/3、vscode_it 161/161，已安裝 0.234.0；只動 tools/vscode-htdesigner | tools 0170 |
+ | 10-08 | 設計外掛 tools 0171 | — | 設計外掛工作階段自己推（commit b453060，GitHub f42c142b）：EastSun 1008 方案總管的 Debug／Release 按鈕按不了（0.234 在 ▶＝F5 時把它變灰）→ 裁決「連動F5 release 和debug」：按鈕恢復可按，resolveDebugConfiguration 依按鈕把 F5／▶ 的啟動目標換成 build_integ_dbg_x86 或 build_integ_ship_x86 那一組；「模擬」仍是灰的。run_all 3/3；vscode_it 沒跑成（VS Code 自己的更新程式 CodeSetup 從 10/07 18:34 起佔住執行個體鎖）。vsix 已安裝，版本號沒變，要重新載入視窗才生效；只動 tools/vscode-htdesigner | tools 0171 |
+ | 10-08 | 173～204 | 07dbeae3＋63b1aa25＋351291d5（GitLab 0258ba66…68fc0e65、39c6388c、e6c54331） | 本 commit（機台 C++＋web），EastSun「你確定有合完整?」→「快合」→「一直合下去 不要停拜託」（173～202 的 C++ 從 10-07 起都沒合，只有設計外掛跟上）。備份分支 backup/pre-pkg202-20261008（cpp、web）＋ D:\HT9045\_pkg_202\backup_machine_195843、D:\HT9045\_pkg_203\backup_machine_220733。202 疊三十包：直接換 108（換 105；tasks.json、acatchtray 留機台）、新檔 35、兩邊都改 22（合併 16、設計外掛／WORKLOG 照規定 6）、一樣 88；每個直接換的檔掃機台 AI 標記＋W906_ 識別字：WebBridgeServer（TOKEN-OFF／SOFTKEY panel.estop）改三方合併＋收筆電 pad.get／pad.close／observerSG 豁免、acatchtray 留機台（筆電版＝少 PROBECYL）、MotionView9050 換（機台＝基底）。衝突：cinitial／test_flow9050_tray／csystem 取機台（BOOTCLEAR、PROBECYL、pitch 同步在 MainProc）；test_scankey_golden、IoBtnPanelClick、tests/CMakeLists、WebBridgeTags（tester.name 依 Jerry 1008 裁決 A＝golden LoadTestModePicture）取筆電；wb_serve 第 239 行＝機台 IOWAIT＋筆電 g_ppCyc0 搬移。4 個新網頁檔改 CRLF。203：15 檔（直接換 9、新 4、合併 2，無衝突）；204：12 檔（直接換 9、新 1、合併 2，無衝突；SECS SV Auto1～6 料盤別名＋氣缸平均推拉時間、cSpeed）。合併後 test_scankey_golden 補回 PadInterface_St02.h include、[19]（筆電版軟體面板鍵 ST02-P2，機台保留自己的 SOFTKEY）在機台關掉。ctest Debug 426/441：15 個失敗都是第 381 列的已知清單（環境：dfm2rc×4 ctest 找不到 g++／rc.exe、E031、GearTeachSave、TeachCheckRangeReload；斷言筆電設定／repo 舊表：config_db、ini_helpers、config_loaders、MotorPoints／MachineMotors／MachineSuckers_HT9050；機台補丁：GA2_C1_cinitial、FShow_Audit）；204 之後相關 29 支全過。EastSun 未 commit 的 acatchtray／asendic_Loader／cinitial／PadInterface_St02（SafeLock）先拿開、合完三方套回，不進 commit。20:02 -j4 整包重編讓機台當機（Kernel-Power 41），留下 NUL 填滿的 .a／.obj／.d ⇒ clean 後 -j2 重編 | 本 commit |
++| 10-09 | 229 | 5068e928（GitLab 40b3b2b4） | 本 commit（定時檢查自動收，**還沒推**：要跟 228 一起推，228 被 push_stage 密碼掃描擋在測試檔的 127.0.0.1 假 FTP 帳密，等 EastSun 決定）：①St02 W-205 L05（MR !396，golden 913 acarry.cpp:3458-3520）梭車移動逾時跳框前先寫一列事件紀錄（互鎖旗標、流程步、Y1／Z1／Z2 命令／編碼器），框文字照 913；②L03（MR !397，golden 913 mykitsuck／uhome）ASM 加熱盤借格寫回與 HOME 中斷借格的釋放；③HANA H4（MR !376，Steven 1009 選 A）A77 開的 HANA 機台 START 前確認 RMS 連線（最多 3 秒）。HT9050 行為不變（L05／L03 不在 HT9050 路徑、H4 只有 HANA）。16 檔：直接換 9（acarry、mykitsuck、WebStart、HanaRms 等，掃過沒有機台標記會消失）、新 4、合併 3 無衝突（CMakeLists、tests/CMakeLists、uhome.cpp）。Debug wb_serve 建好（release 沒編：wb_serve 21:41 起在跑），St02_W205CItems／AsmBorrow、C10_HanaRms、HanaART、START_SitesCensus、Flow9050_Tray 共 6 支過。備份分支 backup/pre-pkg229-20261009＋D:\HT9045\_pkg_229\backup_machine_215305 | 本 commit |
+ | 10-09 | 228 | e3e54dae（GitLab af18d6ab） | 本 commit（定時檢查自動收）：①Ifor01 W-190 (2)（MR !391，golden 913 uTemp_Set.cpp:6119-6277）SaveRemoteTempOffset 換成 913 版，只有測試機送遠端溫度補償命令時才走；②W-190 (3)（MR !392，golden 913 bthermo.cpp:428-457）常溫模式下 VTEST 客戶也套溫度補償，其他客戶不變；③St02 W-202 (2) KYEC FTP 上傳前先打包 OS 測試機工作檔＋測試接縫（MR !393／!394），上傳按鈕還沒接、HT9050 FTP 關著；④機台 web 0142 IOFIT（機台已有，SAME）。HT9050 行為不變。13 檔：直接換 6（bthermo、uTemp_Set、FTPClient_Transfer 等，掃過沒有機台標記會消失）、新 5、CMakeLists／tests/CMakeLists 合併無衝突。Debug wb_serve 建好（release 沒編：wb_serve 17:07 起在跑），W190_NnRemoteOffset／AmbientOffset／HeaterIns、St02_W202FtpSeams、FTPClient_Transfer、START_SitesCensus 共 6 支全過。備份分支 backup/pre-pkg228-20261009＋D:\HT9045\_pkg_228\backup_machine_185249 | 本 commit |
+ | 10-09 | 227 | 13e97b39（GitLab fb6cc6f7） | 本 commit（定時檢查自動收）：①St02 T08（MR !387，golden 913 atester.cpp:1396-1397）：GetTesterResult 改呼叫真正的 HANARMSRunCheckOK(true)（最多每 5 秒重送查詢、不同步等），只有開 A77 的 HANA 機台走得到；②K1 修正（MR !388）：換配方失敗擋 START 時訊息寫出那次失敗的原因，之後的 N06 動作不會蓋掉，只有開 N06 的機台；③Ifor-GPT IG-6 RotateKit 進出手臂馬達流程測試（只有測試）。HT9050 行為不變。10 檔：直接換 8（atester.cpp、TesterTCP_N06_St02.cpp 等，掃過沒有機台標記會消失）、新測試 1、tests/CMakeLists 合併無衝突；設計外掛 0.348～0.356 照規定留機台。Debug wb_serve 建好（release 沒編：wb_serve 17:07 起在跑），C10_HanaRms、St02_W195N06、HanaART、START_SitesCensus 過，IforGPT_RotateKitRuntime 在 SHIP 組態照設計跳過。備份分支 backup/pre-pkg227-20261009＋D:\HT9045\_pkg_227\backup_machine_182251 | 本 commit |
+ | 10-09 | 226 | 762b3fb5（GitLab 1dd66de4） | 本 commit（定時檢查自動收）：NB2-1 W-188 #4 L02 case-306 看門狗（MR !386，golden 913 RogerYang 0908）：DoFront／RearTestSuckIC case 306 在 [D43] 開、出料梭車還有已測 IC 時原本無限等待，現在 30 秒後走 320→321 跳 JAM0301／0302，梭車已拉到左邊也可以繼續；只有 golden DoTestHeadMotor 路徑會叫到，HT9050 生產走 FinePitch（csystem.cpp:1956），推論不受影響。另收筆電 docs（含機台 cpp 0354／0356 的 WORKLOG 列，WORKLOG 照規定留機台）。7 檔：直接換 5（aTester_Front／Rear 等，掃過沒有機台標記會消失）、新測試 1、tests/CMakeLists 合併無衝突。Debug wb_serve 建好（release 沒編：wb_serve 17:07 起在跑 release exe），NB2_W188×3、W64b_Front／RearSuckIC 共 6 支全過。備份分支 backup/pre-pkg226-20261009＋D:\HT9045\_pkg_226\backup_machine_173458 | 本 commit |
+@@ -371,6 +372,7 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-09 | 207 | 5cd7cd7e（GitLab 4270eedf） | 本 commit（只有機台 C++）：St02-E MR !350 ChangeTempMode 在 LastSet 之後照 golden 913 main.cpp:22756 重讀補償值（唯讀、記憶體內）＋MR !351 W-184 handlerlog.cpp 接上。10 檔：直接換 7（逐檔掃機台 AI 標記／W906_ 識別字：沒有會消失的）、新 2 支測試、tests/CMakeLists 合併無衝突。Debug 增量建置＋相關 6 支 ctest 全過；release wb_serve 建好（00:3x，EastSun 閒置 200 分鐘、wb_serve 沒開）。備份 D:\HT9045\_pkg_207\backup_machine_* | 本 commit |
+ | 10-08 | 206 | 6c604e44（GitLab d02fa0e9） | 本 commit（只有文件）：筆電收回機台 cpp 0335 SAYTHROTTLE＋WORKLOG（機台鏈尾）＋設計外掛 0.310。Pci1203MotorRoute.cpp 合併結果＝機台版（內容一樣）、test_pci1203_motor_route 一樣、WORKLOG 照規定留機台；只換 3 個文件（MACHINE_PATCHES_20261008、NIGHT_REPORT、RULINGS_20261008）。不用重建 | 本 commit |
+ | 10-08 | 205 | cd8c3fe6（GitLab 8a2178ac） | 本 commit（只有機台 C++）：Ifor01 T-05 golden TfMain::Timer5Timer ATC 連線看門狗＋三個 ATC 介面計時器（HT9050 不跑）。11 檔：直接換 7（逐檔掃機台 AI 標記／W906_ 識別字：沒有會消失的）、新 2（MainTimer5.cpp、test_t05_timer5.cpp）、合併 2（CMakeLists、tests/CMakeLists，無衝突）。Debug 增量建置＋相關 18 支 ctest 全過；release wb_serve 建好。備份 D:\HT9045\_pkg_205\backup_machine_* | 本 commit |
++| 10-09 | 設計外掛 tools 0190 | — | 設計外掛工作階段自己推（commit 257c9d04，GitHub 50298064）：合併筆電包 229 的設計外掛（0.356.0 → 0.364.0；228 沒帶設計外掛），無衝突，機台功能都還在；syn 99 檔、run_all 3/3（lib 303＋1 SKIP、probe 7、extension 307、panels 全過），VSIX 0.364.0 已安裝；只動 tools/vscode-htdesigner | tools 0190 |
+ | 10-09 | 設計外掛 tools 0189 | — | 設計外掛工作階段自己推（commit b86eb286，GitHub 86e2a8ff）：合併筆電包 227 的設計外掛（0.347.0 → 0.356.0，base_1dd66de4 確認＝0.347.0），無衝突；syn 99 檔、run_all 3/3（lib 303＋1 SKIP、probe 7、extension 307、panels 全過），VSIX 0.356.0 已安裝；只動 tools/vscode-htdesigner | tools 0189 |
+ | 10-09 | 設計外掛 tools 0188 | — | 設計外掛工作階段自己推（commit 5ea34d65，GitHub cd5210b9）：定時版本檢查 → 合併筆電包 224 的設計外掛（0.345.0 → 0.347.0），無衝突，機台功能都還在；syn 99 檔、run_all 3/3（lib 300、probe 7、extension 307、panels 全過），VSIX 0.347.0 已安裝；只動 tools/vscode-htdesigner | tools 0188 |
+ | 10-09 | 設計外掛 tools 0187 | — | 設計外掛工作階段自己推（commit 9da3f5b6，GitHub b8d434ef）：定時版本檢查 → 合併筆電包 222、223 的設計外掛（0.341.0 → 0.345.0），無衝突；機台功能確認：Make／Rebuild 仍照 buildJobs 決定 -j；收新的 htd_cmake_locked.ps1（每個建置資料夾一把鎖）；htd_uninstall.js 解除安裝時只移除外掛自己的快捷鍵。run_all 3/3；只動 tools/vscode-htdesigner | tools 0187 |
+diff --git a/mykitsuck.cpp b/mykitsuck.cpp
+index f077792b..1bb2c75a 100644
+--- a/mykitsuck.cpp
++++ b/mykitsuck.cpp
+@@ -200,7 +200,7 @@
+ using vclcompat::TList; using vclcompat::clBlack; using vclcompat::clGreen; using vclcompat::clRed; using vclcompat::clBlue; using vclcompat::clLime; using vclcompat::clWhite; static const TColor clAqua = 0x00FFFF00;  // AI(W906-A4-6) 20260924: 從 mykitsuck.h 移來（只在本檔範圍）。原註：golden "mymessbox.h" NOT re-included: grepped this file's translated body
+ // for every ShowMyMessage-family call -- zero hits. Nothing here needs it.
+ #include "Motor/mymotor.h"          // golden "MyMotor.h" -- class TTrayMotor (CopyFromTray/CopyToTray's Mot parameter; TMyTray Tray member)
+-
++void W906_AsmBorrowSuckRC_St02(int TrayR, int TrayC, int &iBkR, int &iBkC);   //AI(W906-W195) 20261009 (St02-E) L03: golden 913 mykitsuck.cpp:12 #include "ainarm2.h" (InArmSiteMapData) -- its V906 home aHotPlateSubstrate.h cannot be included here (global TList vs :200 using vclcompat::TList); body AsmBorrow_W195_St02.cpp
+ //=====================================
+ TMyKitSuck InArmSuck;
+ TMyKitSuck FLCarryKit;
+@@ -1662,15 +1662,15 @@ void TMyKitSuck::CopyToTray(int iSuckR, int iSuckC, int iSuckData, class TTrayMo
+     if(bRunAutoSiteMapping==true &&                                             //Ifor 20180518 : add 簡化Site Mapping 旗標
+        bAutoSiteMapHotplateSave==true)                                          //Ifor 20170928 (Steven) : add Auto Site Mapping Use Hotplat Data Backup
+     {
+-        InArmSuck.iWhichShuttleBackup   =iWhichShuttleAutoSitemapping   [iSuckR][iSuckC];
+-        InArmSuck.iWhichKitBackup       =iWhichKitAutoSitemapping       [iSuckR][iSuckC];
+-        InArmSuck.HotCount              =iHotCountAutoSitemapping       [iSuckR][iSuckC];
++        int iBkR=iSuckR, iBkC=iSuckC;  W906_AsmBorrowSuckRC_St02(TrayR, TrayC, iBkR, iBkC);  InArmSuck.iWhichShuttleBackup   =iWhichShuttleAutoSitemapping   [iBkR][iBkC];   //AI(W906-W195) 20261009 (St02-E) L03: golden 913 mykitsuck.cpp:1638-1648 (RogerYang 20260914, the nozzle that borrowed, when the cell matches)
++        InArmSuck.iWhichKitBackup       =iWhichKitAutoSitemapping       [iBkR][iBkC];   //AI(W906-W195) 20261009 (St02-E) L03: golden 913 :1649
++        InArmSuck.HotCount              =iHotCountAutoSitemapping       [iBkR][iBkC];   //AI(W906-W195) 20261009 (St02-E) L03: golden 913 :1650
+         iAutoSiteMapHotplatePlateC      =TrayC;
+         iAutoSiteMapHotplatePlateR      =TrayR;
+         if(iTrayData==HAS_NULL_IC)
+         {
+             SetItemData(iSuckR, iSuckC, iSuckData, iTarget);
+-            return;
++            return;                                                             //AI : 此路徑不算補回完成, 借料紀錄保留   (golden 913 :1656; AI(W906-W195) 20261009 (St02-E) L03)
+         }
+     }
+ 
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 59812c66..8b7ca979 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -9668,3 +9668,36 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+ endif()
+ add_test(NAME St02_W202FtpSeams COMMAND test_st02_w202_ftpseams "${CMAKE_SOURCE_DIR}")   # argv[1]: reads KYECFTP/FTPClient_Transfer.cpp (read only)
+ set_tests_properties(St02_W202FtpSeams PROPERTIES TIMEOUT 120)
++# --- AI(W906-W195) 20261009 (St02-E) -- W-205 (W-195 (2) general items, golden 913): one part per item -- L05 the Shuttle Move
++#   Timeout interlock snapshot (acarry_W195_St02.cpp); L03 / L10 parts come with their MRs.  Memory only (no motor objects, the
++#   EventLog in the ctest log scratch); argv[1] = the tree root, read only (source pins).
++add_executable(test_st02_w205_citems test_st02_w205_citems.cpp)
++target_include_directories(test_st02_w205_citems PRIVATE ${CMAKE_SOURCE_DIR})
++target_link_libraries(test_st02_w205_citems PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_st02_w205_citems PRIVATE ws2_32)
++endif()
++if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
++    set_source_files_properties(test_st02_w205_citems.cpp PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
++endif()
++add_test(NAME St02_W205CItems COMMAND test_st02_w205_citems "${CMAKE_SOURCE_DIR}")   # argv[1]: reads acarry.cpp (read only)
++set_tests_properties(St02_W205CItems PROPERTIES TIMEOUT 120)
++# --- AI(W906-W195) 20261009 (St02-E) -- W-205 L03 (W-195 (2) general items, golden 913): the ASM hot-plate borrow pieces
++#   (AsmBorrow_W195_St02.cpp): CopyToTray reads the borrowing nozzle (golden 913 mykitsuck.cpp:1638-1650) and HOME ends an interrupted
++#   borrow (golden 913 uhome.cpp:1410-1433).  Memory only (no motor objects, the Process row in the ctest log scratch); argv[1] = the
++#   tree root, read only (source pins).
++add_executable(test_st02_w205_asm test_st02_w205_asm.cpp)
++target_include_directories(test_st02_w205_asm PRIVATE ${CMAKE_SOURCE_DIR})
++target_link_libraries(test_st02_w205_asm PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_st02_w205_asm PRIVATE ws2_32)
++endif()
++if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
++    set_source_files_properties(test_st02_w205_asm.cpp PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
++endif()
++add_test(NAME St02_W205AsmBorrow COMMAND test_st02_w205_asm "${CMAKE_SOURCE_DIR}")   # argv[1]: reads mykitsuck.cpp / uhome.cpp (read only)
++set_tests_properties(St02_W205AsmBorrow PROPERTIES TIMEOUT 120)
+diff --git a/tests/test_c10_hana_rms.cpp b/tests/test_c10_hana_rms.cpp
+index 0a93b9c2..b1ba6f50 100644
+--- a/tests/test_c10_hana_rms.cpp
++++ b/tests/test_c10_hana_rms.cpp
+@@ -40,6 +40,9 @@
+ //  9. Error event: H2 "cannot connect to IP:Port (socket error N)" logged and kept in sHANARMSLinkErr, the queue dropped,
+ //     ErrorCode cleared, status Disconnected.
+ // 10. RogerYang :3062 "connecting" half ([W906] 5): a pending connect is not restarted.
++// 10b. AI(W906-W195) 20261009 H4 (golden 913 :3462-3503): HANARMSCheckLinkBeforeStart -- connected / A77 off / off line / ASM pass
++//     without touching the socket; reachable -> "link OK before start"; no IP -> refused at once with the reason; a connect that
++//     never completes -> refused after the 3 s wait, "no response from IP:Port".  Part 12 pins the [W906] pump in its wait loop.
+ // 11. Button bodies that write files: Setting -> sandbox HANARMS.ini; Save -> sandbox .log; Clear; memo auto-trim at 1000.
+ // 12. Source pins: G9 is live in HandlerBridgeCtl.cpp (comment-stripped), the pump / policy calls in TesterCommWiring.cpp
+ //     are code (before the //), T08 in atester.cpp is opened (W-202, golden 913 :1397; was gated, plan Q5), atester_shims.h has
+@@ -762,6 +765,57 @@ int main()
+         CHECK((bool)H()->HANARMSClient->Active && MemoHasSince(m0, " [INFO] connecting to 10.20.30.40:14140") && MemoHasSince(m0, " [INFO] connected"));
+     }
+ 
++    // ---- 10b. AI(W906-W195) 20261009 H4: START refused when the RMS link cannot be made (golden 913 automation.cpp:3462-3503) ----
++    std::printf("\n-- 10b. HANARMSCheckLinkBeforeStart --\n");
++    {
++        const int savTester = LastSet.iTester;
++        g_dlgPrev = W906_ShowMyMessage_Hook;  W906_ShowMyMessage_Hook = DlgCapture;
++        LastSet.iTester = ON_LINE;  LastSet.iRunStartMode = 0;
++        const int smm = W906_ShowMyMessage_Count;
++        m0 = MemoCount();
++        CHECK(H()->HANARMSCheckLinkBeforeStart() == true && MemoCount() == m0);      // already connected (part 10)
++        H()->HANARMSClient->Close();
++        m0 = MemoCount();
++        IniConfig.bA77_EnableHanaRMSInterlock = false;
++        CHECK(H()->HANARMSCheckLinkBeforeStart() == true);                             // A77 off (:3464)
++        IniConfig.bA77_EnableHanaRMSInterlock = true;
++        LastSet.iTester = 0;
++        CHECK(H()->HANARMSCheckLinkBeforeStart() == true);                             // off line (:3465)
++        LastSet.iTester = ON_LINE;
++        LastSet.iRunStartMode = rsmAutoSiteMap;
++        CHECK(H()->HANARMSCheckLinkBeforeStart() == true);                             // ASM (:3466)
++        LastSet.iRunStartMode = 0;
++        CHECK(MemoCount() == m0 && !(bool)H()->HANARMSClient->Active);                  // none of them touched the socket
++        // reachable (Sim connects inside Open) -> START goes on
++        m0 = MemoCount();
++        CHECK(H()->HANARMSCheckLinkBeforeStart() == true);
++        CHECK(MemoHasSince(m0, " [INFO] connecting to 10.20.30.40:14140") && MemoHasSince(m0, " [CHK] link OK before start") && (bool)H()->HANARMSClient->Active);
++        // no IP -> refused at once, the reason in the dialog
++        H()->HANARMSClient->Close();
++        WriteAll(iniFile, "[Setting]\r\nPort=14140\r\n");
++        CloseIniFile();
++        DWORD t0 = ::GetTickCount();
++        CHECK(H()->HANARMSCheckLinkBeforeStart() == false);
++        CHECK(::GetTickCount() - t0 < 1500);                                             // :3484-3485 stops waiting on a known error
++        CHECK(g_dlgS1 == "HANA RMS server not available, start refused!!\r\nRMS server IP/Port not set" &&
++              g_dlgS2 == "Check the RMS server and network, then press START again.");    // :3494-3501
++        CHECK(W906_ShowMyMessage_Count == smm + 1);
++        WriteAll(iniFile, "[Setting]\r\nIP=10.20.30.40\r\nPort=14140\r\n");
++        CloseIniFile();
++        H()->LoadHANARMSSetting();
++        // a connect that never completes -> refused after the 3 s wait (HANARMS_START_WAIT_MS, :2524), "no response from"
++        H()->bW906HANARMSConnecting = true;                                              // as a real polled Open() the server never answers
++        t0 = ::GetTickCount();
++        CHECK(H()->HANARMSCheckLinkBeforeStart() == false);
++        const DWORD dt = ::GetTickCount() - t0;
++        CHECK(dt >= 2900 && dt < 6000);
++        if (dt < 2900 || dt >= 6000) std::printf("    waited %lu ms\n", (unsigned long)dt);
++        CHECK(g_dlgS1 == "HANA RMS server not available, start refused!!\r\nno response from 10.20.30.40:14140");
++        H()->bW906HANARMSConnecting = false;
++        W906_ShowMyMessage_Hook = g_dlgPrev;
++        LastSet.iTester = savTester;
++    }
++
+     // ---- 11. button bodies that write files; the memo trim ------------------------------------------------------------
+     std::printf("\n-- 11. Setting / Save / Clear / trim --\n");
+     {
+@@ -827,6 +881,34 @@ int main()
+         bool base = false;
+         for (size_t i = 0; i < shim.size(); ++i) if (StripComments(shim[i]).find("class TfAutomationShim : public THanaRmsMembers") == 0) base = true;
+         CHECK(base);
++        // AI(W906-W195) 20261009 H4: the wait loop pumps the polled socket ([W906], golden ProcessMessages), in code, not a comment
++        std::vector<std::string> rms;
++        CHECK(ReadLines("Automation/HanaRms_St02.cpp", rms));
++        int clbFn = -1, clbPump = -1, clbPmsg = -1;
++        for (size_t i = 0; i < rms.size(); ++i) if (rms[i].find("bool THanaRmsMembers::HANARMSCheckLinkBeforeStart()") == 0) { clbFn = (int)i; break; }
++        for (int i = clbFn; clbFn >= 0 && i < (int)rms.size() && rms[i] != "}"; ++i) {
++            if (StripComments(rms[i]).find("W906_HanaRmsPumpTick();") != std::string::npos) clbPump = i;
++            if (StripComments(rms[i]).find("ProcessMessages") != std::string::npos) clbPmsg = i;
++        }
++        CHECK(clbFn > 0 && clbPump > clbFn && clbPmsg < 0);
++        // H4: WebStart.cpp (StartFromWeb) refuses START through it after CheckLotInfor and before the SystemStart guard
++        // (golden 913 main.cpp:6144-6157), and sets the 912 latch after ResetShtMoveTimeoutWatchdog (main.cpp:4536-4539) -- code
++        std::vector<std::string> ws;
++        CHECK(ReadLines("WebStart.cpp", ws));
++        int wsLot = -1, wsHana = -1, wsSys = -1, wsReset = -1, wsLatch = -1;
++        for (size_t i = 0; i < ws.size(); ++i) {
++            const std::string c = StripComments(ws[i]);
++            if (wsLot < 0 && c.find("fMesSystem->CheckLotInfor() == false") != std::string::npos) wsLot = (int)i;
++            if (c.find("CUSTOMER_CODE == CC_HANA_MICRON && fAutomation && fAutomation->HANARMSCheckLinkBeforeStart() == false") != std::string::npos &&
++                c.find("iStartIn = 0; return false;") != std::string::npos) wsHana = (int)i;
++            if (wsHana > 0 && wsSys < 0 && c.find("if (SystemStart)") != std::string::npos) wsSys = (int)i;
++            if (wsReset < 0 && c.find("ResetShtMoveTimeoutWatchdog();") != std::string::npos) wsReset = (int)i;
++            if (c.find("if (fAutomation && IniConfig.bA77_EnableHanaRMSInterlock) fAutomation->bHANARMSNeedRunCheck = true;") != std::string::npos) wsLatch = (int)i;
++        }
++        CHECK(wsLot > 0 && wsHana > wsLot && wsSys > wsHana);
++        CHECK(wsReset > 0 && wsLatch == wsReset + 1);
++        if (!(wsLot > 0 && wsHana > wsLot && wsSys > wsHana && wsLatch == wsReset + 1))
++            std::printf("    WebStart.cpp: CheckLotInfor %d, HANA %d, SystemStart %d, Reset %d, latch %d\n", wsLot + 1, wsHana + 1, wsSys + 1, wsReset + 1, wsLatch + 1);
+     }
+ 
+     // ---- 13. W-202 T08: the GetTesterResult gate calls golden HANARMSRunCheckOK(true) on fAutomation (atester.cpp:1481) ----
+diff --git a/tests/test_st02_w205_asm.cpp b/tests/test_st02_w205_asm.cpp
+new file mode 100644
+index 00000000..88a77cf2
+--- /dev/null
++++ b/tests/test_st02_w205_asm.cpp
+@@ -0,0 +1,224 @@
++// ===========================================================================
++//  tests/test_st02_w205_asm.cpp -- W-205 L03 (W-195 (2) general items, golden 913): the ASM hot-plate borrow pieces of golden 913
++//  r913 log "L03 ASM 熱盤借料帳錯亂 (WAR0150)" (RogerYang 20260914, VTEST HHT-83).  AI(W906-W195) 20261009 (St02-E).
++//
++//  Memory only: the motors stay unconstructed (CopyToTray's ASM path returns before Mot.Tray.PordRec / IO; SetTraySingleData only sets
++//  Tray.Data / iTarget), the Process row of RecordProcess goes to the ctest log scratch (the W906_*_ROOT redirects of every ctest,
++//  re-checked below), argv[1] = the tree root (read only, source pins).
++//
++//    [A] L03a golden 913 mykitsuck.cpp:1638-1650 through the real TMyKitSuck::CopyToTray: the backups come from the nozzle that
++//        borrowed the cell (InArmSiteMapData) when the cell matches; otherwise from [iSuckR][iSuckC] (912 / V906 before).
++//    [B] L03b golden 913 uhome.cpp:1410-1433 W906_AsmHomeReleaseBorrow_St02: HOME frees the HAS_NULL_IC placeholder of the borrowed
++//        cell, clears the borrow flags / step / InArmSiteMapData, one Process row; guards as golden.
++//    [C] source pins: mykitsuck.cpp CopyToTray reads [iBkR][iBkC] three times after the helper call; uhome.cpp ProcessMotorHome calls
++//        the HOME helper after the ASM_Home log block's #endif (outside #ifndef SOFT_SIMULTE) and before SW[SwAirOff].
++// ===========================================================================
++#include "MachineDefine.h"
++#include "aHotPlateSubstrate.h"     // InArmSuck (TMyKitSuck), InArmSiteMapData
++#include "Motor/mymotor.h"
++#include "cmydef.h"
++#include "Config.h"
++#include "CosFunction.h"
++#include "common.h"
++#include "forms/fTemp_Set.h"        // the W-195 rule: create fTemp_Set first (see main)
++
++#include <cstdio>
++#include <cstring>
++#include <fstream>
++#include <sstream>
++#include <string>
++
++extern AnsiString ExString;        // cMyDB.h:143 (not included: its default-argument clash)
++void W906_AsmHomeReleaseBorrow_St02();
++
++static int g_fail = 0;
++static int g_total = 0;
++static void check(bool ok, const char* what)
++{
++    ++g_total;
++    std::printf("%s %s\n", ok ? "PASS" : "FAIL", what);
++    if (!ok) ++g_fail;
++}
++
++static std::string Read(const std::string& p)
++{
++    std::ifstream f(p.c_str(), std::ios::binary);
++    std::stringstream ss;
++    ss << f.rdbuf();
++    return ss.str();
++}
++
++static bool Forbidden(const char* p)
++{
++    std::string s = p ? p : "";
++    for (size_t i = 0; i < s.size(); ++i) if (s[i] >= 'A' && s[i] <= 'Z') s[i] = (char)(s[i] - 'A' + 'a');
++    for (size_t i = 0; i < s.size(); ++i) if (s[i] == '/') s[i] = '\\';
++    if (s.find("\\machine_log_scratch") != std::string::npos) return false;   // AI(W906-W205) 20261009 (laptop, batch 146 integration): the ctest redirect counts as contained wherever the build dir lives -- same one line as test_st02_w205_citems.cpp (c59acf66); the laptop's gate builds under D:\HT9045\.claude\worktrees\... (same containment rule as test_c10_hana_rms.cpp:254)
++    return s.compare(0, 9, "d:\\ht9045") == 0 || s.compare(0, 6, "d:\\rms") == 0;
++}
++
++static std::string Body(const std::string& src, const char* head)
++{
++    const size_t fn = src.find(head);
++    if (fn == std::string::npos) return "";
++    const size_t end = src.find("\n}", fn);
++    return end == std::string::npos ? "" : src.substr(fn, end - fn);
++}
++
++static void SeedSuck()
++{
++    for (int r = 0; r < _MAX_SUCK_ROW_ITEM; ++r)
++        for (int c = 0; c < _MAX_SUCK_COL_ITEM; ++c) {
++            InArmSuck.iWhichShuttleAutoSitemapping[r][c] = 0;
++            InArmSuck.iWhichKitAutoSitemapping[r][c]     = 0;
++            InArmSuck.iHotCountAutoSitemapping[r][c]     = 0;
++        }
++    InArmSuck.iWhichShuttleAutoSitemapping[0][0] = 21; InArmSuck.iWhichKitAutoSitemapping[0][0] = 22; InArmSuck.iHotCountAutoSitemapping[0][0] = 23;
++    InArmSuck.iWhichShuttleAutoSitemapping[2][5] = 7;  InArmSuck.iWhichKitAutoSitemapping[2][5] = 3;  InArmSuck.iHotCountAutoSitemapping[2][5] = 9;
++    InArmSuck.iWhichShuttleBackup = -5; InArmSuck.iWhichKitBackup = -5; InArmSuck.HotCount = -5;
++    InArmSuck.Item[0][0] = HAS_IC;
++}
++
++static bool Backups(int sht, int kit, int hot)
++{
++    std::printf("     backups: shuttle %d kit %d hot %d\n", InArmSuck.iWhichShuttleBackup, InArmSuck.iWhichKitBackup, InArmSuck.HotCount);
++    return InArmSuck.iWhichShuttleBackup == sht && InArmSuck.iWhichKitBackup == kit && InArmSuck.HotCount == hot;
++}
++
++static void PartA()
++{
++    std::printf("\n-- [A] L03a: CopyToTray reads the borrowing nozzle --\n");
++    check(InArmSuck.bLed[0][0] == false, "precondition: no LED proxy on nozzle [0][0] (SetItemData stays memory only)");
++    const bool savRun = bRunAutoSiteMapping, savSave = bAutoSiteMapHotplateSave;
++    const strAUTOSITEMAP savMap = InArmSiteMapData;
++    bRunAutoSiteMapping = true; bAutoSiteMapHotplateSave = true;
++    const int cellSentinel = MOT[MMPlate1].Tray.Data[4][1];
++
++    // cursor reset to (0,0) by ReStartAutoSiteMapping, borrow was made by nozzle [2][5] at plate cell R1 C4
++    SeedSuck();
++    InArmSiteMapData.UpdateData(0, 1, 4, 2, 5);
++    InArmSuck.CopyToTray(0, 0, NULL_IC, MOT[MMPlate1], 1, 4, HAS_NULL_IC);
++    check(Backups(7, 3, 9), "A1 cell matches -> Shuttle / Kit / hot count of the borrowing nozzle [2][5] (golden 913 :1640-1650)");
++    check(iAutoSiteMapHotplatePlateC == 4 && iAutoSiteMapHotplatePlateR == 1 && InArmSuck.Item[0][0] == NULL_IC &&
++          MOT[MMPlate1].Tray.Data[4][1] == cellSentinel,
++          "A1 rest of the ASM path unchanged: plate R/C kept, nozzle item set, early return before the tray write (golden :1651-1656)");
++
++    SeedSuck();
++    InArmSiteMapData.UpdateData(0, 1, 4, 2, 5);
++    InArmSuck.CopyToTray(0, 0, NULL_IC, MOT[MMPlate1], 1, 5, HAS_NULL_IC);
++    check(Backups(21, 22, 23), "A2 another cell (C5 vs C4) -> the cursor nozzle [0][0], as 912");
++
++    SeedSuck();
++    InArmSiteMapData.UpdateData(0, 1, 4, -1, 5);
++    InArmSuck.CopyToTray(0, 0, NULL_IC, MOT[MMPlate1], 1, 4, HAS_NULL_IC);
++    check(Backups(21, 22, 23), "A3 recorded nozzle row out of range (-1) -> the cursor nozzle [0][0]");
++
++    SeedSuck();
++    InArmSiteMapData.ClearData();
++    InArmSuck.CopyToTray(0, 0, NULL_IC, MOT[MMPlate1], 1, 4, HAS_NULL_IC);
++    check(Backups(21, 22, 23), "A4 no borrow recorded (ClearData) -> the cursor nozzle [0][0]");
++
++    bRunAutoSiteMapping = savRun; bAutoSiteMapHotplateSave = savSave; InArmSiteMapData = savMap;
++}
++
++static void PartB()
++{
++    std::printf("\n-- [B] L03b: HOME ends an interrupted ASM borrow --\n");
++    const bool savJcet = CosFunction.bUSEJCETSiteMapMode, savAsm = IniConfig.bI21EnableASM;
++    const bool savSave = bAutoSiteMapHotplateSave, savPick = bAutoSiteMapHasPickHP;
++    const int  savStep = iResetSiteMappingStep;
++    const strAUTOSITEMAP savMap = InArmSiteMapData;
++    const int  savData = MOT[MMPlate1 + 1].Tray.Data[3][2], savSite = MOT[MMPlate1 + 1].Tray.SiteMapData[3][2];
++
++    CosFunction.bUSEJCETSiteMapMode = true; IniConfig.bI21EnableASM = true;
++    MOT[MMPlate1 + 1].Tray.Data[3][2] = HAS_NULL_IC; MOT[MMPlate1 + 1].Tray.SiteMapData[3][2] = 5;
++    InArmSiteMapData.UpdateData(1, 2, 3, 0, 1);
++    bAutoSiteMapHotplateSave = true; bAutoSiteMapHasPickHP = true; iResetSiteMappingStep = 1; ExString = "";
++    W906_AsmHomeReleaseBorrow_St02();
++    std::printf("     cell %d sitemap %d | save %d pick %d step %d | iP %d | ExString \"%s\"\n",
++                MOT[MMPlate1 + 1].Tray.Data[3][2], MOT[MMPlate1 + 1].Tray.SiteMapData[3][2], (int)bAutoSiteMapHotplateSave,
++                (int)bAutoSiteMapHasPickHP, iResetSiteMappingStep, InArmSiteMapData.iP, ExString.c_str());
++    check(MOT[MMPlate1 + 1].Tray.Data[3][2] == NULL_IC && MOT[MMPlate1 + 1].Tray.SiteMapData[3][2] == 0,
++          "B1 placeholder HAS_NULL_IC of plate 2 R2 C3 -> NULL_IC, SiteMapData 0 (golden 913 :1421-1424; Data is [C][R])");
++    check(std::string(ExString.c_str()) == "ASM Home : release borrowed cell P1 R2 C3",
++          "B1 one Process row \"ASM Home : release borrowed cell P1 R2 C3\" (golden :1425-1426)");
++    check(!bAutoSiteMapHotplateSave && !bAutoSiteMapHasPickHP && iResetSiteMappingStep == 0 &&
++          InArmSiteMapData.iP == -1 && InArmSiteMapData.iSuckR == -1,
++          "B1 flags false, step 0, InArmSiteMapData cleared (golden :1429-1432)");
++
++    MOT[MMPlate1 + 1].Tray.Data[3][2] = HAS_IC; MOT[MMPlate1 + 1].Tray.SiteMapData[3][2] = 5;
++    InArmSiteMapData.UpdateData(1, 2, 3, 0, 1);
++    bAutoSiteMapHotplateSave = true; bAutoSiteMapHasPickHP = true; iResetSiteMappingStep = 1; ExString = "";
++    W906_AsmHomeReleaseBorrow_St02();
++    check(MOT[MMPlate1 + 1].Tray.Data[3][2] == HAS_IC && MOT[MMPlate1 + 1].Tray.SiteMapData[3][2] == 5 && std::string(ExString.c_str()).empty() &&
++          !bAutoSiteMapHotplateSave && !bAutoSiteMapHasPickHP && iResetSiteMappingStep == 0 && InArmSiteMapData.iP == -1,
++          "B2 cell already holds an IC -> cell and log untouched, the transaction is still ended (golden :1421 / :1429-1432)");
++
++    MOT[MMPlate1 + 1].Tray.Data[3][2] = HAS_NULL_IC;
++    InArmSiteMapData.UpdateData(1, 2, 3, 0, 1);
++    bAutoSiteMapHotplateSave = true; bAutoSiteMapHasPickHP = true; iResetSiteMappingStep = 1;
++    CosFunction.bUSEJCETSiteMapMode = false;
++    W906_AsmHomeReleaseBorrow_St02();
++    const bool offJcet = MOT[MMPlate1 + 1].Tray.Data[3][2] == HAS_NULL_IC && bAutoSiteMapHotplateSave && bAutoSiteMapHasPickHP &&
++                         iResetSiteMappingStep == 1 && InArmSiteMapData.iP == 1;
++    CosFunction.bUSEJCETSiteMapMode = true; IniConfig.bI21EnableASM = false;
++    W906_AsmHomeReleaseBorrow_St02();
++    const bool offAsm = MOT[MMPlate1 + 1].Tray.Data[3][2] == HAS_NULL_IC && bAutoSiteMapHotplateSave && iResetSiteMappingStep == 1 &&
++                        InArmSiteMapData.iP == 1;
++    check(offJcet && offAsm, "B3 not JCET site-map mode, or I21 ASM off -> nothing changes (golden :1414-1416)");
++
++    IniConfig.bI21EnableASM = true;
++    InArmSiteMapData.UpdateData(2, 2, 3, 0, 1);
++    W906_AsmHomeReleaseBorrow_St02();
++    check(MOT[MMPlate1 + 1].Tray.Data[3][2] == HAS_NULL_IC && !bAutoSiteMapHotplateSave && InArmSiteMapData.iP == -1,
++          "B4 plate index out of range (iP 2) -> no cell touched, transaction ended (golden :1418)");
++
++    CosFunction.bUSEJCETSiteMapMode = savJcet; IniConfig.bI21EnableASM = savAsm;
++    bAutoSiteMapHotplateSave = savSave; bAutoSiteMapHasPickHP = savPick; iResetSiteMappingStep = savStep; InArmSiteMapData = savMap;
++    MOT[MMPlate1 + 1].Tray.Data[3][2] = savData; MOT[MMPlate1 + 1].Tray.SiteMapData[3][2] = savSite;
++}
++
++static void PartC(const char* src)
++{
++    std::printf("\n-- [C] source pins --\n");
++    if (!src) { check(false, "argv[1] = the tree root"); return; }
++    const std::string k = Body(Read(std::string(src) + "/mykitsuck.cpp"), "\nvoid TMyKitSuck::CopyToTray(");
++    const size_t call = k.find("W906_AsmBorrowSuckRC_St02(TrayR, TrayC, iBkR, iBkC);");
++    const size_t s1 = k.find("=iWhichShuttleAutoSitemapping   [iBkR][iBkC];");
++    const size_t s2 = k.find("=iWhichKitAutoSitemapping       [iBkR][iBkC];");
++    const size_t s3 = k.find("=iHotCountAutoSitemapping       [iBkR][iBkC];");
++    check(call != std::string::npos && s1 != std::string::npos && s2 != std::string::npos && s3 != std::string::npos &&
++          call < s1 && s1 < s2 && s2 < s3 && k.find("AutoSitemapping       [iSuckR][iSuckC]") == std::string::npos &&
++          k.find("AutoSitemapping   [iSuckR][iSuckC]") == std::string::npos,
++          "C1 mykitsuck.cpp CopyToTray: helper call, then the three backups read [iBkR][iBkC] (golden 913 :1638-1650)");
++
++    const std::string h = Body(Read(std::string(src) + "/uhome.cpp"), "\nbool ProcessMotorHome(");
++    const size_t asmLog = h.find("ASM_Home\"");
++    const size_t endif  = asmLog == std::string::npos ? std::string::npos : h.find("#endif", asmLog);
++    const size_t hcall  = h.find("{ void W906_AsmHomeReleaseBorrow_St02(); W906_AsmHomeReleaseBorrow_St02(); }");
++    const size_t air    = asmLog == std::string::npos ? std::string::npos : h.find("if(SW[SwAirOff].Enable==true)", asmLog);
++    const size_t ifndef = (endif == std::string::npos || hcall == std::string::npos) ? std::string::npos : h.find("#if", endif);
++    check(asmLog != std::string::npos && endif != std::string::npos && hcall != std::string::npos && air != std::string::npos &&
++          endif < hcall && hcall < air && (ifndef == std::string::npos || ifndef > hcall) &&
++          h.find("W906_AsmHomeReleaseBorrow_St02()", hcall + std::strlen("{ void W906_AsmHomeReleaseBorrow_St02(); W906_AsmHomeReleaseBorrow_St02(); }")) == std::string::npos,
++          "C2 uhome.cpp ProcessMotorHome: one call after the ASM_Home block's #endif (outside #ifndef SOFT_SIMULTE) and before SwAirOff (golden 913 :1408-1435)");
++}
++
++int main(int argc, char** argv)
++{
++    const char* roots[] = { as9045LogPath.c_str(), asSaveEventLogPath.c_str() };
++    for (size_t i = 0; i < sizeof(roots) / sizeof(roots[0]); ++i)
++        if (Forbidden(roots[i])) {
++            std::printf("STOP: log root %s is a machine path -- the ctest W906_*_ROOT redirect is missing; nothing called\n", roots[i]);
++            return 1;
++        }
++    if (fTemp_Set == 0) fTemp_Set = new TfTemp_Set();   // W-195 rule (laptop batch 136)
++    GetTimeInfo();
++
++    PartA();
++    PartB();
++    PartC(argc > 1 ? argv[1] : 0);
++
++    std::printf("test_st02_w205_asm: %d/%d passed\n", g_total - g_fail, g_total);
++    return g_fail == 0 ? 0 : 1;
++}
+diff --git a/tests/test_st02_w205_citems.cpp b/tests/test_st02_w205_citems.cpp
+new file mode 100644
+index 00000000..73aa4bd0
+--- /dev/null
++++ b/tests/test_st02_w205_citems.cpp
+@@ -0,0 +1,117 @@
++// ===========================================================================
++//  tests/test_st02_w205_citems.cpp -- W-205 (W-195 (2) general items of the 37 file-scope rows, golden 913).
++//  AI(W906-W195) 20261009 (St02-E).  One part per item (one MR per item): L05 now; L03 / L10 are added by their MRs.
++//
++//  Memory only: the motors stay unconstructed (MOT[].Motor == NULL, so the golden NULL guard skips every card read), the EventLog
++//  goes to the ctest log scratch (the W906_*_ROOT redirects of every ctest, re-checked below), argv[1] = the tree root (read only).
++//
++//    L05  golden 913 acarry.cpp:3484-3515 W906_ShtMoveTimeoutDiag_St02: the exact golden-format interlock snapshot row
++//         ("ShtMoveTimeout Diag SHT<n> : ...") through the 2-arg MyDBIProcess adapter; source pins: in DoShtMoveTimeoutHandle the
++//         call sits after the latch-dump MyDBIProcess and before the first ShowMyMessage (golden: "必須在 ShowMyMessage 之前"),
++//         and the operator text is golden 913 :3520.
++// ===========================================================================
++#include "MachineDefine.h"
++#include "acarry.h"
++#include "aHotPlateSubstrate.h"     // W906_MyDBIProcess_LastS1 / _LastS2 / _Reset
++#include "Motor/mymotor.h"
++#include "cmydef.h"
++#include "atester.h"
++#include "common.h"
++#include "forms/fTemp_Set.h"        // the W-195 rule: create fTemp_Set first (see main)
++
++#include <cstdio>
++#include <cstring>
++#include <fstream>
++#include <sstream>
++#include <string>
++
++extern bool IndexZCanMove[2];
++extern int  iPickFromShuttle1Task, iPickFromShuttle2Task;
++void W906_ShtMoveTimeoutDiag_St02(int iSelSHT);
++
++static int g_fail = 0;
++static int g_total = 0;
++static void check(bool ok, const char* what)
++{
++    ++g_total;
++    std::printf("%s %s\n", ok ? "PASS" : "FAIL", what);
++    if (!ok) ++g_fail;
++}
++
++static std::string Read(const std::string& p)
++{
++    std::ifstream f(p.c_str(), std::ios::binary);
++    std::stringstream ss;
++    ss << f.rdbuf();
++    return ss.str();
++}
++
++static bool Forbidden(const char* p)
++{
++    std::string s = p ? p : "";
++    for (size_t i = 0; i < s.size(); ++i) if (s[i] >= 'A' && s[i] <= 'Z') s[i] = (char)(s[i] - 'A' + 'a');
++    for (size_t i = 0; i < s.size(); ++i) if (s[i] == '/') s[i] = '\\';
++    if (s.find("\\machine_log_scratch") != std::string::npos) return false;   // AI(W906-W205) 20261009 (laptop, batch 146 integration): the ctest redirect counts as contained wherever the build dir lives -- the laptop's gate builds under D:\HT9045\.claude\worktrees\..., so the bare d:\ht9045 prefix test below refused to run (same containment rule as test_c10_hana_rms.cpp:254)
++    return s.compare(0, 9, "d:\\ht9045") == 0 || s.compare(0, 6, "d:\\rms") == 0;
++}
++
++static void PartL05(const char* src)
++{
++    std::printf("\n-- L05: Shuttle Move Timeout interlock snapshot --\n");
++    check(MOT[MTestY1].Motor == NULL && MOT[MTestZ1].Motor == NULL && MOT[MTestZ2].Motor == NULL && MOT[MTestY2].Motor == NULL,
++          "precondition: no motor objects (the golden NULL guard skips every card read)");
++    const bool savZ0 = IndexZCanMove[0], savZ1 = IndexZCanMove[1];
++    IndexZCanMove[0] = true; IndexZCanMove[1] = false;
++    iTestTask = 1234; iTestHeadMotorTask = 567; iTestYTask = 89;
++    fFrontNeedTest = true; fFrontNeedSuck = false; fFrontNeedSuckIC = false;
++    fRearNeedSuck = true; fRearNeedSuckIC = false; fRearNeedDestroy = false;
++    AutoSHT1Task = 11; AutoSHT2Task = 120; iPickFromShuttle1Task = 7; iPickFromShuttle2Task = 42;
++    MOT[MInShuttle2].fCanMove = false; MOT[MInShuttle2].fCanMoveL = true; MOT[MInShuttle2].fCanMoveR = false; MOT[MInShuttle2].fCanMoveM = false;
++
++    W906_MyDBIProcess_Reset();
++    W906_ShtMoveTimeoutDiag_St02(1);
++    const std::string want =
++        "ShtMoveTimeout Diag SHT2 : CanMove=0 L=1 R=0 M=0 | IdxZCanMove=1/0 | "
++        "FrontNeedTest=1 FrontNeedSuck=0 FrontNeedSuckIC=0 RearNeedSuck=1 RearNeedSuckIC=0 RearNeedDestroy=0 | "
++        "TestTask=1234 HeadMotTask=567 TestYTask=89 SHT1Task=11 SHT2Task=120 PickSht1=7 PickSht2=42 | "
++        "Y1 0/0 Y2 0/0 Z1 0/0 Z2 0/0 (cmd/enc)";
++    const std::string got = W906_MyDBIProcess_LastS2.c_str();
++    std::printf("     row: %s\n", got.c_str());
++    check(std::string(W906_MyDBIProcess_LastS1.c_str()) == "Message" && got == want,
++          "L05: one EventLog row \"Message\", exactly golden 913 :3503-3514's format with the seeded flags / tasks / positions");
++    IndexZCanMove[0] = savZ0; IndexZCanMove[1] = savZ1;
++    check(savZ0 == false && savZ1 == false, "L05: V906 IndexZCanMove is {false,false} (GATE W4G-1) -> a real row logs 0/0 (accepted, W-205)");
++
++    if (src) {
++        const std::string a = Read(std::string(src) + "/acarry.cpp");
++        const size_t fn = a.find("\nvoid DoShtMoveTimeoutHandle(int iSelSHT)");
++        const size_t end = a.find("\n}", fn == std::string::npos ? 0 : fn);
++        const std::string body = (fn == std::string::npos || end == std::string::npos) ? "" : a.substr(fn, end - fn);
++        const size_t dump = body.find("MyDBIProcess(\"Message\", sLog);");
++        const size_t diag = body.find("{ void W906_ShtMoveTimeoutDiag_St02(int iSelSHT); W906_ShtMoveTimeoutDiag_St02(iSelSHT); }");
++        const size_t msg = body.find("ShowMyMessage(");
++        check(dump != std::string::npos && diag != std::string::npos && msg != std::string::npos && dump < diag && diag < msg,
++              "L05 source: the snapshot call is after the latch dump and before the operator message (golden 913 :3482 < :3484-3515 < :3524)");
++        check(body.find("\"Press OK to Home, then do STATE RECORD before START.\",") != std::string::npos &&
++              body.find("then START to resume.\",") == std::string::npos,
++              "L05 source: the operator text is golden 913 :3520");
++    } else
++        check(false, "argv[1] = the tree root");
++}
++
++int main(int argc, char** argv)
++{
++    const char* roots[] = { as9045LogPath.c_str(), asSaveEventLogPath.c_str() };
++    for (size_t i = 0; i < sizeof(roots) / sizeof(roots[0]); ++i)
++        if (Forbidden(roots[i])) {
++            std::printf("STOP: log root %s is a machine path -- the ctest W906_*_ROOT redirect is missing; nothing called\n", roots[i]);
++            return 1;
++        }
++    if (fTemp_Set == 0) fTemp_Set = new TfTemp_Set();   // W-195 rule (laptop batch 136)
++    GetTimeInfo();
++
++    PartL05(argc > 1 ? argv[1] : 0);
++
++    std::printf("test_st02_w205_citems: %d/%d passed\n", g_total - g_fail, g_total);
++    return g_fail == 0 ? 0 : 1;
++}
+diff --git a/uhome.cpp b/uhome.cpp
+index 3afe0819..27649970 100644
+--- a/uhome.cpp
++++ b/uhome.cpp
+@@ -1102,7 +1102,7 @@ bool ProcessMotorHome(bool Flag2)
+                 fMain->DoStateRecord(0, false);                                 //KenHsieh 20230116 : 區分手動或自動(sbclick -> Function)
+             }
+             #endif
+-
++            { void W906_AsmHomeReleaseBorrow_St02(); W906_AsmHomeReleaseBorrow_St02(); }   //AI(W906-W195) 20261009 (St02-E) L03: golden 913 uhome.cpp:1410-1433 HOME ends an ASM borrow it interrupted (outside #ifndef SOFT_SIMULTE as golden; body AsmBorrow_W195_St02.cpp)
+             if(SW[SwAirOff].Enable==true)                                       //Steven 20221215 : Power saving for vacuum pump
+                 SW[SwAirOff].On();
+ 
+-- 
+2.55.0.windows.5
+
