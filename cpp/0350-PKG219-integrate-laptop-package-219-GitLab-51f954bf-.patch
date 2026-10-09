@@ -1,0 +1,729 @@
+From d86afd1b8baca0b4e128bcfaa4b376d0b77dbc93 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Fri, 9 Oct 2026 12:28:43 +0800
+Subject: [PATCH] PKG219: integrate laptop package 219 (GitLab 51f954bf) --
+ St02-E W-195 golden 913: cBinSel ReadFile SavePath + PathCombin guard (MR
+ !370); SECS Bin 0-255 Type from each recipe's pass / fail trays (MR !371, the
+ host reads different Bin Type values -- SECS/GEM machines only).
+ Auto-accepted (scheduled check).
+
+10 files: 7 replaced (no machine marker lost), 2 new tests, tests/CMakeLists.txt merged without conflicts. Debug + release wb_serve
+built; St02_W195PathCombin / St02_W195SecsBinType / C14_BinDisp / C14_BinDispPane / St02_SecsEcFileWrites pass. This push also carries
+the parameter snapshot (Gerneral.ini changed on the machine). WORKLOG: the 219 row. Backup branch backup/pre-pkg219-20261009.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ FileRW/BinSelect.cpp                 |   2 +-
+ ProductionInfo/FileInfo.cpp          |   2 +-
+ Public/MyStringList.cpp              |   2 +-
+ cBinSel.cpp                          |  18 +-
+ common.cpp                           |   4 +-
+ docs/MACHINE_PATCHES_20261009.md     |   7 +
+ docs/NIGHT_REPORT.md                 |   9 +-
+ docs/WORKLOG_MACHINE.md              |   1 +
+ tests/CMakeLists.txt                 |  32 ++++
+ tests/test_st02_w195_pathcombin.cpp  | 275 +++++++++++++++++++++++++++
+ tests/test_st02_w195_secsbintype.cpp | 204 ++++++++++++++++++++
+ 11 files changed, 539 insertions(+), 17 deletions(-)
+ create mode 100644 tests/test_st02_w195_pathcombin.cpp
+ create mode 100644 tests/test_st02_w195_secsbintype.cpp
+
+diff --git a/FileRW/BinSelect.cpp b/FileRW/BinSelect.cpp
+index d958bb92..893ea848 100644
+--- a/FileRW/BinSelect.cpp
++++ b/FileRW/BinSelect.cpp
+@@ -150,7 +150,7 @@ const ListDesc kLists[] = {
+     {"sBinTraySetT3Pos",        BS_LIST(sBinTraySetT3Pos),        LK_Derived,     "InitDataToEdit :4733 <- BackT6PosTray"},
+     {"sBinTraySetT3PosName",    BS_LIST(sBinTraySetT3PosName),    LK_Computed,    "SaveFunctionData TransferBinTrayStrToName(tag) <- sBinTraySetT3Pos"},
+     {"sBinDoubleContact",       BS_LIST(sBinDoubleContact),       LK_Derived,     "InitDataToEdit :4734 <- i2Contact"},
+-    {"sBinType",                BS_LIST(sBinType),                LK_Computed,    "ReadFile :1586-1596 <- BinSelect[tag]（移植樹 ReadFile 仍是 906 的 Prod.bIsPassBin 算法，見報告）"},
++    {"sBinType",                BS_LIST(sBinType),                LK_Computed,    "ReadFile :1586-1596 <- BinSelect[tag]（移植樹 ReadFile 自 W-195 MR-B 起同 912／913：cBinSel.cpp:1816-1821）"},
+     {"sBinConsFail",            BS_LIST(sBinConsFail),            LK_Derived,     "InitDataToEdit :4735 <- bConFail"},
+     {"sBinEnableFail",          BS_LIST(sBinEnableFail),          LK_Derived,     "InitDataToEdit :4736 <- bPersentEnable"},
+     {"sBinFailPercent",         BS_LIST(sBinFailPercent),         LK_Derived,     "InitDataToEdit :4737 <- dPersentNumber"},
+diff --git a/ProductionInfo/FileInfo.cpp b/ProductionInfo/FileInfo.cpp
+index 21b4b906..0ec7419c 100644
+--- a/ProductionInfo/FileInfo.cpp
++++ b/ProductionInfo/FileInfo.cpp
+@@ -468,7 +468,7 @@ AnsiString FileInfo::PathCombin(const AnsiString& sPath, const AnsiString& sFile
+         }
+         else                                                                    // Local path
+         {
+-            if(combinedPath[combinedPath.Length()] != '\\')
++            if(combinedPath[combinedPath.Length()] != '\\' && sFile.AnsiPos("\\")!=1) //AI(W906-W195) 20261009: golden 913 ProductionInfo/FileInfo.cpp:304-305 (Steven 20260708 : Add protection) -- file part already starts with "\\": add no second one
+             {
+                 combinedPath+="\\";
+             }
+diff --git a/Public/MyStringList.cpp b/Public/MyStringList.cpp
+index 110356fe..5dc71678 100644
+--- a/Public/MyStringList.cpp
++++ b/Public/MyStringList.cpp
+@@ -192,7 +192,7 @@ static AnsiString MySL_PathCombin(const AnsiString& sPath, const AnsiString& sFi
+         }
+         else                                                                    // Local path
+         {
+-            if(combinedPath[combinedPath.Length()] != '\\')
++            if(combinedPath[combinedPath.Length()] != '\\' && sFile.AnsiPos("\\")!=1) //AI(W906-W195) 20261009: golden 913 ProductionInfo/FileInfo.cpp:304-305 (Steven 20260708 : Add protection) -- golden 913 MyStringList.cpp:267 calls the guarded FileInfo().PathCombin
+             {
+                 combinedPath+="\\";
+             }
+diff --git a/cBinSel.cpp b/cBinSel.cpp
+index 1dc8ffc6..b5f3c8a7 100644
+--- a/cBinSel.cpp
++++ b/cBinSel.cpp
+@@ -1421,21 +1421,21 @@ void TfBinSel::ReadFile(bool bDelOffline, bool bChangeNeme, AnsiString /*sFileNa
+     //    本 gate 仍為 #if 0；解閘要先確認 ReadFile 的寫入語意是否可接受。
+     // --include=*.h .` -- 0 hits (20260819).
+     ReadPrimeDara();
+-    AnsiString SavePath[]={"\\BinasgnOff.Data", "\\Binasgn.Data", "\\BinasgnOff-Line.Data", "\\BinasgnOff_ART.Data", "\\Binasgn_ART.Data", "\\Binasgn_MRT_RT.Data", "\\Binasgn_MRT.Data"};
++    AnsiString SavePath[]={"BinasgnOff.Data", "Binasgn.Data", "BinasgnOff-Line.Data", "BinasgnOff_ART.Data", "Binasgn_ART.Data", "Binasgn_MRT_RT.Data", "Binasgn_MRT.Data"};  //AI(W906-W195) 20261009: golden 913 cBinSel.cpp:1128 -- no leading "\\" (GetRecipeFileName adds the separator; was <recipe>\\\\Binasgn*.Data)
+ 
+     if (IniConfig.bA02BinModelPrime)
+     {
+         if (IniConfig.bFTBin2RTBin==true && (iBinModelPrime==0 || CosFunction.bDisableRTBinSet))
+-            SavePath[0]="\\Binasgn.Data";
++            SavePath[0]="Binasgn.Data";                                         //AI(W906-W195) 20261009: golden 913 :1135
+         else
+-            SavePath[0]="\\BinasgnOff.Data";
++            SavePath[0]="BinasgnOff.Data";                                      //AI(W906-W195) 20261009: golden 913 :1139
+     }
+     else
+     {
+         if (IniConfig.bFTBin2RTBin==true || CosFunction.bDisableRTBinSet)
+-            SavePath[0]="\\Binasgn.Data";
++            SavePath[0]="Binasgn.Data";                                         //AI(W906-W195) 20261009: golden 913 :1146
+         else
+-            SavePath[0]="\\BinasgnOff.Data";
++            SavePath[0]="BinasgnOff.Data";                                      //AI(W906-W195) 20261009: golden 913 :1150
+     }
+ 
+     for (int i = 0; i < eTrayCount; i++)
+@@ -1813,12 +1813,12 @@ void TfBinSel::ReadFile(bool bDelOffline, bool bChangeNeme, AnsiString /*sFileNa
+ 
+     for (int tag = 0; tag < eBinTypeTotal; tag++)
+     {
+-        for (int i = 0; i < iTestBinCount; i++)
+-        {
++        for (int i = 0; i < iTestBinCount; i++)                                 //AI(W906-W195) 20261009: golden 913 cBinSel.cpp:1585-1596 (AI(ht9045-secs-sem) 20260720 RogerYang) -- sBinType from BinSelect[tag] (the recipe, per tag), no longer the run mode's Prod.bIsPassBin (all "1" before InitialOK); golden :1578-1584 keeps the old loop as comments, not repeated here (line count)
++        {   int iT3ForSecsType=BinSelect[tag].iCatDataT3Pos[i]-1; AnsiString asSecsType=(iT3ForSecsType>=0 && iT3ForSecsType<eTrayCount && BinSelect[tag].iStackDefFailCate[iT3ForSecsType]>0) ? "1" : "0";   //0:Pass; 1:Fail (golden 913 :1587-1591)
+             if (sBinType[tag]->Count<=i)
+-                sBinType[tag]->Add(AnsiString(Prod.bIsPassBin[i]?"0":"1"));
++                sBinType[tag]->Add(asSecsType);                                 //AI(W906-W195) 20261009: golden 913 :1593
+             else
+-                sBinType[tag]->Strings[i]=AnsiString(Prod.bIsPassBin[i]?"0":"1");
++                sBinType[tag]->Strings[i]=asSecsType;                           //AI(W906-W195) 20261009: golden 913 :1595
+         }
+ 
+         for (int i = 0; i < eTrayCount; i++)
+diff --git a/common.cpp b/common.cpp
+index b775006d..5c3df8df 100644
+--- a/common.cpp
++++ b/common.cpp
+@@ -2486,7 +2486,7 @@ AnsiString __fastcall TempChangeLog(AnsiString Group, AnsiString Name)       //
+ //  (see that file's own Gate #1 comment block). Faithful copy of golden
+ //  FileInfo::PathCombin's body verbatim: append '/' for FTP-style paths
+ //  (already containing a '/', or already ending in '/'), else '\\' for local
+-//  paths, unless the base path already ends with the right separator; then
++//  paths, unless the base path already ends with the right separator (local: or the file part starts with '\\', golden 913 :304-305, W-195); then
+ //  append the filename.
+ // ===========================================================================
+ static AnsiString Common_PathCombin(const AnsiString &sPath, const AnsiString &sFile)
+@@ -2503,7 +2503,7 @@ static AnsiString Common_PathCombin(const AnsiString &sPath, const AnsiString &s
+         }
+         else                                                                    // Local path
+         {
+-            if(combinedPath[combinedPath.Length()]!='\\')
++            if(combinedPath[combinedPath.Length()]!='\\' && sFile.AnsiPos("\\")!=1)   //AI(W906-W195) 20261009: golden 913 ProductionInfo/FileInfo.cpp:304-305 (Steven 20260708 : Add protection) -- file part already starts with "\\": add no second one
+             {
+                 combinedPath+="\\";
+             }
+diff --git a/docs/MACHINE_PATCHES_20261009.md b/docs/MACHINE_PATCHES_20261009.md
+index 0accebae..e3b367de 100644
+--- a/docs/MACHINE_PATCHES_20261009.md
++++ b/docs/MACHINE_PATCHES_20261009.md
+@@ -52,3 +52,10 @@
+ - **cpp 0345 PKG215**（09:04）：機台套了第 215 包（St02 W-159），5 個檔、相關 10 支 ctest 過；Release 沒重編（EastSun 08:57 起在跑 `build_integ_ship_x86\wb_serve.exe`，等他關了再編）。包本身，不 cherry-pick。
+ - **快照 08:50／09:04**（09:04 那份＝main `5a642fa9`）：`Gerneral.ini` 只有 `Program Close=1→0`（wb_serve 開著的狀態旗標）、`machinerecord.dat` 是執行紀錄；設定與工單沒變 ⇒ 不用叮嚀全體。
+ - **鏈尾**：C++ `90e965bf`（0343）→ `ac4df547`（0344）→ **`413485ba`**（0345）。下一次從 **cpp 0346／web 0142／tools 0185** 開始。
++
++## 8. 10:37 cpp 0346 PKG217、10:46 cpp 0347 PKG218、10:47 cpp 0348 BOOT-Z1RESET（機台自己的）；快照 10:37／10:46／10:47
++
++- **cpp 0346 PKG217**（10:37）／**cpp 0347 PKG218**（10:46）：機台套了第 216～218 包（12＋14 個檔，逐檔掃過機台標記沒有掉；相關 ctest 過；EastSun 開著 release wb_serve，release 等他關了再編）。包本身，不 cherry-pick。0347 註明：EastSun 沒 commit 的 `cinitial.cpp` 改動留在機台工作樹，沒進 commit。
++- **cpp 0348 BOOT-Z1RESET**（10:47，EastSun 1009「M14 現在跳什麼異常」→「請持續處理」）：機台的 Index Z1（M14，1203 第 14 站，走 Galil 路線）開機時會帶著驅動器警報 A.A12（EtherCAT 輸出資料同步錯誤）起來，以前要 EastSun 在 1203 頁按 Reset 才清。現在開機過了馬達電源 1 秒的閘門之後，**如果 MTestZ1 在警報就送一次 `Acm_AxResetError`**（跟 Motor Test／1203 頁的 Alarm Reset 同一個命令）；不上伺服、不寫設定、不動作，只寫一行 BRAKE 紀錄。沒有 `AI(W906-TEMP-*)` 標記、不是暫時繞過 ⇒ 收進**第 137 批**（b19 `e2a4638c`，作者照 patch）；沒有 ctest 會編 `WebMotorAccessLive.cpp`，驗證看下次開機的 op log「MTestZ1 boot alarm reset」。
++- **快照 10:47**（main `0ebbf6b2`）：**`IO_Table.csv` 的 `SnRKCoverOpen` 對應改了**（`1,2,32,1,0,1,0,0` → `1,1,2,29,5,1,3,1`）——真的參數變更 ⇒ 同一輪在 CHAT_JIMMY 叮嚀全體同步；其餘是執行紀錄（lastdata、machinerecord、Program Close、GPIB LastFile）。
++- **鏈尾**：C++ `413485ba`（0345）→ `1cfa956a`（0346）→ `e94e8ef6`（0347）→ **`4cfaf8b2`**（0348）。下一次從 **cpp 0349／web 0142／tools 0185** 開始。
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index 6fdcec86..9a936a2d 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -1,10 +1,10 @@
+-# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 10:0x）
++# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1009 11:4x）
+ 
+ ## ☀ 10/08 早上先看這裡（04:3x 起草；之後的進度往這張表加）
+ 
+ | 項目 | 一句話 |
+ |---|---|
+-| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～134 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate），出了**第 181～217 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
++| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～135 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate），出了**第 181～218 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
+ | **模擬組態** | St02 W-149 做完：模擬版的固定失敗從 7 支降到 4 支，跟出貨一樣——之後模擬版多紅一支就是真回歸。 |
+ | **機台修的事（重點）** | 0307 主控台非同步（START 卡 103 秒＋EMG 誤報的根因）、0309／0310／0312／0316 HT9050 Tray 流程（站序、Empty→Auto 補盤、位置不加 6800、Loader 探測看抽屜感測）、0311／0317 上升氣缸雙線圈、0313 出料手臂讓位點（00:19 MOutArmX 警報）、0314 CCD Y 原點判斷、**0315 HT9050 先跳過 Index 扭力讀取**（旗標預設開，扭力讀取驗證後要關）。 |
+ | **軟體極限** | 00:19 的警報是 golden 拿軟體極限（這台 ±999999）算目標。MainNB-GPT 普查（W-164）：只剩 Motor Test 頁的 LightScale 會算出 ±999899——EastSun 0925 R7 已定照 golden，只發提醒。 |
+@@ -79,7 +79,10 @@
+ | **出的包（1009 09:1x）：第 216 包＝第 133 批** | GitLab `3c1dd1c9`／GitHub `81c0b404`：St02 照 golden 913 補的三項——ADAM 重連失敗後等 5 秒再試、AOI 雷射掃描的回覆分段接起來、TFT 分類顯示的 bin 碼 117（只有 Maxim 泰國會送）；另帶 HTDESIGNER 0.327～0.328。gate b133a：兩組態 34 分鐘：只有固定失敗（兩組態都是 4 支，500 支測試）。 |
+ | **1009 09:1x：機台 08:50 自己改了面板軟鍵（cpp 0344）、09:04 套了第 215 包** | 機台照 EastSun 的要求改用 St02 的螢幕面板鍵（main 上本來就是這版，所以 main 只多一列工作紀錄）；機台的「畫面緊急停止」照你 1005 的第 17 條**只留在機台**，沒收進 main。第 134 批＝這顆＋St02 的 !366（BinSel 存檔路徑），gate 中。 |
+ | **出的包（1009 10:0x）：第 217 包＝第 134 批** | GitLab `fb037f43`／GitHub `35454dc0`：St02 的 BinSel 存檔路徑少一個反斜線（存的是同一個檔，只有記錄的路徑變乾淨）＋機台 cpp 0344 的工作紀錄＋HTDESIGNER 0.329～0.330；畫面緊急停止照第 17 條不在包裡。gate b134a：兩組態 35 分鐘：只有固定失敗（兩組態都是 4 支，500 支測試）。**第 135 批**＝NB2-1 的 !368（介面錯誤處理照 913 打開，Index Z 會動，之後請 EastSun 上機驗收）＋Ifor01 的 !369（開機先建溫控畫面，照 golden 順序），gate 中。Ifor01 09:45 說卡住沒事做：他問的前置題（加熱器選項小函式照 golden 搬到 `MachineTypeUtility.cpp`）筆電答 A、代出差的 St01 點頭，W-190 可以繼續。 |
+-| **要你決定的**（§0） | ✅ 你 10:1x 都回了：#148＝NB2 已完成（!306 收進第 110 批確認）、#149＝A（Ifor-GPT 專做執行期測試，IG-3／IG-4）、!310＝A（ES02 HTDESIGNER 0.235～0.257 收進第 110 批）＝RULINGS_20261008 第 2 條。**13:0x 新一題 #150**：GPIB 位址不一致要不要自動修正（Jerry 留給你；預設 A＝維持 golden、只留警告，可不回）。 |
++| **出的包（1009 10:4x）：第 218 包＝第 135 批** | GitLab `0450a79e`／GitHub `0778c0f6`：①NB2-1 照 golden 913 打開 `DoInterFaceErrorStep`——介面錯誤／下壓次數超過時 **Index Z 會真的移到安全位**、跳清潔 Socket 提示、報 WAR0357（以前是空殼，那一步會一直等）；上機驗收卡給 EastSun（W-196，遇到再看）。②Ifor01 照 golden 的開機順序先建溫控畫面、換站先重建 ATC 對照。gate b135a：兩組態 35 分鐘：只有固定失敗（兩組態都是 4 支，501 支測試）。**第 136 批**（St02 W-195 的 !370 路徑組合防護＋!371 SECS bin 類型）gate 中。 |
++| **1009 10:5x：機台套了第 216～218 包，又自己改了一顆（cpp 0348）；機台參數有一項變更** | 機台 10:37／10:46 把第 216～218 包都整合了（第 218 包推出不到 10 分鐘）。10:47 的 cpp 0348 是機台自己的：Index Z1（M14）開機時常帶著驅動器警報，現在開機自動送一次「清除警報」（不動作），收進第 137 批。同時機台快照的 `IO_Table.csv` 改了 `SnRKCoverOpen`（RK 蓋子感測器）的對應，已鏡像到 main `0ebbf6b2`、提醒大家驗證前先同步。 |
++| **1009 11:1x：第 136 批第一次 gate 紅了兩支，原因找到、已修、重跑中** | St02 的兩支新測試在出貨組態當掉：它們會走到「換站（ChangeSite）」，而第 135 批（Ifor01）之後換站照 golden 要先有溫控畫面物件，測試沒先建。這是兩張 MR 先後進來才出現的交互問題，不是產品程式的錯；筆電照第 135 批同樣的寫法替兩支測試補一行（`c37eb0d0`），單獨跑都過了，完整 gate 重跑 b136b。被中途停掉的 gate 改寫了一份有進版控的報告檔，已還原成原樣。也在 CHAT_JIMMY 提醒大家以後寫測試要注意。 |
++| **要你決定的**（§0） | ✅ 你 10:1x 都回了：#148＝NB2 已完成（!306 收進第 110 批確認）、#149＝A（Ifor-GPT 專做執行期測試，IG-3／IG-4）、!310＝A（ES02 HTDESIGNER 0.235～0.257 收進第 110 批）＝RULINGS_20261008 第 2 條。**13:0x 新一題 #150**：GPIB 位址不一致要不要自動修正（Jerry 留給你；預設 A＝維持 golden、只留警告，可不回）。<br>**🆕 1009 11:4x 新一題 #151：HANA 機台按 START 時，要不要照 golden 先等 RMS 伺服器連線（最多 3 秒）？** 白話：golden 913（RogerYang 0916）裡，HANA 客戶開了 A77 的機台按 START 前，會先確認 RMS 伺服器連得上，連不上就擋下 START，連線最多等 3 秒。問題在移植樹的輪詢是單執行緒——這 3 秒裡整台機台的狀態更新會停住（例：網頁上的數字 3 秒不動）。你 0923 定過「會擋住輪詢的整合要先問」，所以問你。只有「HANA 客戶＋開 A77＋線上模式＋RMS 還沒連上」才會等，HT9050 永遠走不到。選項：**A＝照 golden 收**（建議：只在按 START 那一刻、最多 3 秒，機台本來就停著；St02 已經把等待裡的訊息迴圈換成只推 HANA 連線）；**B＝先不收**，等改成不擋輪詢的寫法（例：連線放到背景，START 時只看結果）。**沒回之前照 B**：H4 先不合，HANA 其他幾張（!372～!374）照常進第 138 批。 |
+ 
+ 
+ ## ☀ 10/07 早上（09:1x）
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 5542e12c..08053a84 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -353,6 +353,7 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-07 | 設計外掛 tools 0170 | — | 設計外掛工作階段自己推（分支 a6cadd2，GitHub dc7975ff）：依序合併筆電包 162、163、167、168 的設計外掛（0.197.0 → 0.234.0），164～166、169～172 沒帶設計外掛；無衝突，機台自己的設計外掛功能都保留；測試修正：建置視窗進度條在矮視窗不再塌掉、面板繪製測試固定 Edge 視窗大小；run_all 3/3、vscode_it 161/161，已安裝 0.234.0；只動 tools/vscode-htdesigner | tools 0170 |
+ | 10-08 | 設計外掛 tools 0171 | — | 設計外掛工作階段自己推（commit b453060，GitHub f42c142b）：EastSun 1008 方案總管的 Debug／Release 按鈕按不了（0.234 在 ▶＝F5 時把它變灰）→ 裁決「連動F5 release 和debug」：按鈕恢復可按，resolveDebugConfiguration 依按鈕把 F5／▶ 的啟動目標換成 build_integ_dbg_x86 或 build_integ_ship_x86 那一組；「模擬」仍是灰的。run_all 3/3；vscode_it 沒跑成（VS Code 自己的更新程式 CodeSetup 從 10/07 18:34 起佔住執行個體鎖）。vsix 已安裝，版本號沒變，要重新載入視窗才生效；只動 tools/vscode-htdesigner | tools 0171 |
+ | 10-08 | 173～204 | 07dbeae3＋63b1aa25＋351291d5（GitLab 0258ba66…68fc0e65、39c6388c、e6c54331） | 本 commit（機台 C++＋web），EastSun「你確定有合完整?」→「快合」→「一直合下去 不要停拜託」（173～202 的 C++ 從 10-07 起都沒合，只有設計外掛跟上）。備份分支 backup/pre-pkg202-20261008（cpp、web）＋ D:\HT9045\_pkg_202\backup_machine_195843、D:\HT9045\_pkg_203\backup_machine_220733。202 疊三十包：直接換 108（換 105；tasks.json、acatchtray 留機台）、新檔 35、兩邊都改 22（合併 16、設計外掛／WORKLOG 照規定 6）、一樣 88；每個直接換的檔掃機台 AI 標記＋W906_ 識別字：WebBridgeServer（TOKEN-OFF／SOFTKEY panel.estop）改三方合併＋收筆電 pad.get／pad.close／observerSG 豁免、acatchtray 留機台（筆電版＝少 PROBECYL）、MotionView9050 換（機台＝基底）。衝突：cinitial／test_flow9050_tray／csystem 取機台（BOOTCLEAR、PROBECYL、pitch 同步在 MainProc）；test_scankey_golden、IoBtnPanelClick、tests/CMakeLists、WebBridgeTags（tester.name 依 Jerry 1008 裁決 A＝golden LoadTestModePicture）取筆電；wb_serve 第 239 行＝機台 IOWAIT＋筆電 g_ppCyc0 搬移。4 個新網頁檔改 CRLF。203：15 檔（直接換 9、新 4、合併 2，無衝突）；204：12 檔（直接換 9、新 1、合併 2，無衝突；SECS SV Auto1～6 料盤別名＋氣缸平均推拉時間、cSpeed）。合併後 test_scankey_golden 補回 PadInterface_St02.h include、[19]（筆電版軟體面板鍵 ST02-P2，機台保留自己的 SOFTKEY）在機台關掉。ctest Debug 426/441：15 個失敗都是第 381 列的已知清單（環境：dfm2rc×4 ctest 找不到 g++／rc.exe、E031、GearTeachSave、TeachCheckRangeReload；斷言筆電設定／repo 舊表：config_db、ini_helpers、config_loaders、MotorPoints／MachineMotors／MachineSuckers_HT9050；機台補丁：GA2_C1_cinitial、FShow_Audit）；204 之後相關 29 支全過。EastSun 未 commit 的 acatchtray／asendic_Loader／cinitial／PadInterface_St02（SafeLock）先拿開、合完三方套回，不進 commit。20:02 -j4 整包重編讓機台當機（Kernel-Power 41），留下 NUL 填滿的 .a／.obj／.d ⇒ clean 後 -j2 重編 | 本 commit |
++| 10-09 | 219 | a245f88e（GitLab 51f954bf） | 本 commit（定時檢查自動收）：St02-E W-195 照 golden 913——MR !370 cBinSel ReadFile 的 SavePath 不帶開頭反斜線＋PathCombin 檔名已以反斜線開頭就不再補（讀寫同一個檔，只有路徑字串變乾淨）；MR !371 SECS「Bin 0～255 Type」改從各配方 Pass／Fail 料盤算（**主機讀到的 Bin Type，EC 3656 等，會跟以前不同**，只有開 SECS／GEM 的機台看得到）。10 檔：直接換 7（掃過沒有機台標記會消失）、新 2 支測試、tests/CMakeLists 合併無衝突。Debug＋release wb_serve 建好，W195×2、C14_BinDisp×2、St02_SecsEcFileWrites 5 支全過。同一次推送帶上 EastSun 改過的 Gerneral.ini 參數快照。備份分支 backup/pre-pkg219-20261009 | 本 commit |
+ | 10-09 | 218 | 0778c0f6（GitLab 0450a79e） | 本 commit：①NB2-1 MR !368 W-188 #2 atester.cpp DoInterFaceErrorStep 照 golden 913 打開（原本是永遠回 false 的空殼，TESTZ1UP／TESTZ2UP 會一直等）——**行為改變：介面錯誤或下壓次數超過時 Index Z 移到安全位置、跳清潔 Socket 提示、報 WAR0357，README 請 EastSun 在機台旁驗收**；②Ifor01 MR !369 N1-G5：wb_serve 在 InitialHandler 之前建溫控畫面（golden CreateForm 順序），ChangeSite 先重建 ATC 位址對照。14 檔：直接換 10（掃過沒有機台標記會消失；test_pool2_cinitial 只差註解）、新 1 支測試、合併 3（cinitial、tests/CMakeLists、wb_serve，無衝突）。EastSun 未 commit 的 cinitial 修改保留在工作區、不進 commit（以 HEAD＋包的改動提交）。Debug wb_serve＋9 支相關 ctest 全過（含 NB2_W188InterfaceErr）；release 等 EastSun 關程式後編。備份分支 backup/pre-pkg218-20261009 | 本 commit |
+ | 10-09 | 216～217 | 81c0b404＋35454dc0（GitLab 3c1dd1c9、fb037f43） | 本 commit：St02-E W-191 照 golden 913——216＝MR !363／!364／!365（ADAM6024 通訊、BinDisplay、AOI 雷射掃描收資料）；217＝MR !366 TfBinSel::Save 的 SavePath 不帶開頭反斜線。12 檔：直接換 9（逐檔掃機台 AI 標記／W906_ 識別字：沒有會消失的）、新 1 支測試、tests/CMakeLists 合併無衝突、WORKLOG 照規定留機台。Debug wb_serve＋4 支相關 ctest（ADAM6024_Comm、C14_BinDisp、St02_SecsEcFileWrites、St02_W191AoiRecv）全過；EastSun 開著 release wb_serve，release 等他關程式後再編。備份分支 backup/pre-pkg217-20261009 | 本 commit |
+ | 10-09 | 215 | 92df6d9a（GitLab 1ede424a） | 本 commit：St02-E MR !362 W-159——TfContact::DoTestContactFunction 的殘料葉停止會停住（只有 GIGAS／JCET）。5 檔：直接換 3（fContact_ContactSM.cpp＋2 文件；掃過沒有機台標記會消失）、新 1 支測試、tests/CMakeLists 合併無衝突。Debug wb_serve＋W159／Contact 相關 10 支 ctest 全過；EastSun 08:57 開著 release wb_serve（build_integ_ship_x86），release 等他關程式後再編 | 本 commit |
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 163cfa5b..0b335286 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -9445,3 +9445,35 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+ endif()
+ add_test(NAME St02_W191AoiRecv COMMAND test_st02_w191_aoirecv)
+ set_tests_properties(St02_W191AoiRecv PROPERTIES TIMEOUT 60)
++# --- AI(W906-W195) 20261009 (St02-E) -- W-195 MR-A: the PathCombin guard (golden 913 ProductionInfo/FileInfo.cpp:304-305, Steven
++#   20260708) in FileInfo / Common_PathCombin / MySL_PathCombin, and TfBinSel::ReadFile's SavePath names without the leading "\"
++#   (golden 913 cBinSel.cpp:1128-1150).  ReadFile runs in %TEMP%\ht9045_w195_<tick> (DataPath / LastDataPath / asTeachPath set by
++#   the test, which aborts if one is under D:\HT9045); argv[1] = the tree root, read only.  Link line as St02_SecsEcFileWrites.
++add_executable(test_st02_w195_pathcombin test_st02_w195_pathcombin.cpp)
++target_link_libraries(test_st02_w195_pathcombin PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_st02_w195_pathcombin PRIVATE ws2_32)
++endif()
++if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
++    set_source_files_properties(test_st02_w195_pathcombin.cpp PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
++endif()
++add_test(NAME St02_W195PathCombin COMMAND test_st02_w195_pathcombin "${CMAKE_SOURCE_DIR}")   # argv[1]: reads four source files (read only)
++set_tests_properties(St02_W195PathCombin PROPERTIES TIMEOUT 120)
++# --- AI(W906-W195) 20261009 (St02-E) -- W-195 MR-B: TfBinSel::ReadFile builds sBinType[tag] (SECS EC 3656 / 3719 / 3724 / 3803 /
++#   3903 / 4003 / 4103 "Bin 0-255 Type") from each tag's recipe (golden 913 cBinSel.cpp:1585-1596, RogerYang 20260720).  ReadFile
++#   runs in %TEMP%\ht9045_w195b_<tick> on a seeded recipe (the test aborts if a path is under D:\HT9045); argv[1] = the tree root,
++#   read only.  Link line as St02_SecsEcFileWrites.
++add_executable(test_st02_w195_secsbintype test_st02_w195_secsbintype.cpp)
++target_link_libraries(test_st02_w195_secsbintype PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_st02_w195_secsbintype PRIVATE ws2_32)
++endif()
++if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
++    set_source_files_properties(test_st02_w195_secsbintype.cpp PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
++endif()
++add_test(NAME St02_W195SecsBinType COMMAND test_st02_w195_secsbintype "${CMAKE_SOURCE_DIR}")   # argv[1]: reads SECSGEM/uHGemHT9045_EC.cpp (read only)
++set_tests_properties(St02_W195SecsBinType PROPERTIES TIMEOUT 120)
+diff --git a/tests/test_st02_w195_pathcombin.cpp b/tests/test_st02_w195_pathcombin.cpp
+new file mode 100644
+index 00000000..b0c1b995
+--- /dev/null
++++ b/tests/test_st02_w195_pathcombin.cpp
+@@ -0,0 +1,275 @@
++// =============================================================================
++//  test_st02_w195_pathcombin.cpp -- W-195 MR-A: a file part that already starts with "\" gets no second separator, and
++//                                    TfBinSel::ReadFile's SavePath names carry no leading "\" (golden 913).
++//
++//  AI(W906-W195) 20261009 (St02-E).  Suite name (add_test): St02_W195PathCombin.  argv[1] = the tree root (read only).
++//    golden 913 ProductionInfo/FileInfo.cpp:304-305 (Steven 20260708 : Add protection): the local-path branch of
++//      FileInfo::PathCombin adds "\" only when the path does not end with one AND sFile.AnsiPos("\\")!=1.  The port has the
++//      golden function three times: FileInfo::PathCombin (ProductionInfo/FileInfo.cpp:471), Common_PathCombin (common.cpp:2506,
++//      behind GetRecipeFileName / CopyAndCompressFile) and MySL_PathCombin (Public/MyStringList.cpp:195).
++//    golden 913 cBinSel.cpp:1128 / :1135 / :1139 / :1146 / :1150: ReadFile's SavePath names without the leading "\".
++//    [1] FileInfo().PathCombin, the six cases (only the first one changes);
++//    [2] GetRecipeFileName("\Binasgn.Data") = GetRecipePath() + "Binasgn.Data" (Common_PathCombin);
++//    [3] fBinSel->ReadFile(false, false, "") in a sandbox: every Binasgn*.Data path its ReadFunctionData -> SaveFunctionData
++//        writes hand the change-log hooks (common.cpp :1100 int, :1234 string) has one backslash before the name;
++//    [4] source: the five SavePath lines in cBinSel.cpp and the three guards carry the golden 913 text.
++//  Reverse checks (recorded in the MR): drop the second condition in FileInfo.cpp -> [1] red; in common.cpp -> [2] red; put
++//  "\\" back on one SavePath line -> [4] red; revert both cBinSel.cpp and common.cpp -> [3] red.  Either change alone keeps
++//  [3] green -- each already gives ReadFile one backslash; golden 913 has both, so [4] pins the names.
++//  Every path is under %TEMP%\ht9045_w195_<tick> (DataPath / LastDataPath / asTeachPath set here; asGeneralPath is this test's
++//  scratch copy, tests/test_bootstrap.cpp); the test aborts before ReadFile if one of them is under D:\HT9045.  The sandbox
++//  is removed on a green run.
++// =============================================================================
++#include "ProductionInfo/FileInfo.h"
++#include "database.h"
++#include "csystem.h"
++#include "cprod.h"
++#include "common.h"
++#include "cmydef.h"
++#include "CosFunction.h"
++#include "MachineType.h"
++#include "forms/fBinSel.h"
++#include <windows.h>
++#include <cstdio>
++#include <cstring>
++#include <string>
++#include <vector>
++#include "forms/fTemp_Set.h"   // AI(W906-N1G5) 20261009 (laptop, batch 136 integration): fTemp_Set before ReadFile reaches ChangeSite (see main)
++
++static int g_pass = 0, g_fail = 0;
++static char g_got[700];
++#define GOT(...) std::snprintf(g_got, sizeof(g_got), __VA_ARGS__)
++#define CHECK(cond, msg)                                                                                   \
++    do {                                                                                                   \
++        if (cond) { printf("  PASS: %s   [%s]\n", msg, g_got); ++g_pass; }                                 \
++        else      { printf("  FAIL: %s   [got %s]  (line %d)\n", msg, g_got, __LINE__); ++g_fail; }        \
++        g_got[0] = 0;                                                                                      \
++    } while (0)
++
++static std::string g_root;
++
++static std::string Slurp(const std::string& p)
++{
++    FILE* f = std::fopen(p.c_str(), "rb");
++    if (!f) return std::string();
++    std::string s;
++    char buf[4096];
++    size_t n;
++    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) s.append(buf, n);
++    std::fclose(f);
++    return s;
++}
++
++static void WriteText(const std::string& p, const char* text)
++{
++    FILE* f = std::fopen(p.c_str(), "wb");
++    if (f) { std::fputs(text, f); std::fclose(f); }
++}
++
++static void RemoveTree(const std::string& dir)
++{
++    WIN32_FIND_DATAA fd;
++    HANDLE h = ::FindFirstFileA((dir + "\\*").c_str(), &fd);
++    if (h != INVALID_HANDLE_VALUE)
++    {
++        do
++        {
++            if (std::strcmp(fd.cFileName, ".") == 0 || std::strcmp(fd.cFileName, "..") == 0) continue;
++            const std::string p = dir + "\\" + fd.cFileName;
++            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) RemoveTree(p);
++            else ::DeleteFileA(p.c_str());
++        } while (::FindNextFileA(h, &fd));
++        ::FindClose(h);
++    }
++    ::RemoveDirectoryA(dir.c_str());
++}
++
++static bool UnderMachineTree(const std::string& p)
++{
++    std::string s = p;
++    for (size_t i = 0; i < s.size(); ++i) if (s[i] >= 'A' && s[i] <= 'Z') s[i] = (char)(s[i] - 'A' + 'a');
++    for (size_t i = 0; i < s.size(); ++i) if (s[i] == '/') s[i] = '\\';
++    if (s.find("\\obj\\v906\\") != std::string::npos) return false;   // a build dir under D:\HT9045 is a sandbox (as St02_SecsEcFileWrites)
++    return s.compare(0, 9, "d:\\ht9045") == 0;
++}
++
++// the line of `text` that contains `anchor` (first match), or "" -- source pins look at that one line only
++static std::string LineWith(const std::string& text, const std::string& anchor)
++{
++    const size_t at = text.find(anchor);
++    if (at == std::string::npos) return std::string();
++    const size_t a = text.rfind('\n', at), b = text.find('\n', at);
++    return text.substr(a == std::string::npos ? 0 : a + 1, (b == std::string::npos ? text.size() : b) - (a == std::string::npos ? 0 : a + 1));
++}
++
++// one backslash right before "Binasgn" and no "\\" pair anywhere (a UNC path never reaches here: the sandbox is %TEMP%)
++static bool OneBackslash(const std::string& f)
++{
++    const size_t at = f.find("Binasgn");
++    return at != std::string::npos && at >= 1 && f[at - 1] == '\\' && f.find("\\\\") == std::string::npos;
++}
++
++// every WriteIniData overload hands its file name to its change-log hook (common.cpp :1057 bool, :1100 int, :1146 double,
++// :1234 string); the capture chains to whatever was installed before
++static std::vector<std::string> g_files;
++static W906_ChangeLogFn_Str g_prevStr = 0;
++static W906_ChangeLogFn_Int g_prevInt = 0;
++static W906_ChangeLogFn_Bool g_prevBool = 0;
++static W906_ChangeLogFn_Double g_prevDouble = 0;
++static void CaptureStr(AnsiString F, AnsiString G, AnsiString N, AnsiString ret, AnsiString V, AnsiString& s1, AnsiString& s2, bool& b)
++{
++    g_files.push_back(F.c_str());
++    if (g_prevStr) g_prevStr(F, G, N, ret, V, s1, s2, b);
++}
++static void CaptureInt(AnsiString F, AnsiString G, AnsiString N, int ret, int V, AnsiString& s1, AnsiString& s2, bool& b)
++{
++    g_files.push_back(F.c_str());
++    if (g_prevInt) g_prevInt(F, G, N, ret, V, s1, s2, b);
++}
++static void CaptureBool(AnsiString F, AnsiString G, AnsiString N, bool ret, bool V, AnsiString& s1, AnsiString& s2, bool& b)
++{
++    g_files.push_back(F.c_str());
++    if (g_prevBool) g_prevBool(F, G, N, ret, V, s1, s2, b);
++}
++static void CaptureDouble(AnsiString F, AnsiString G, AnsiString N, double ret, double V, AnsiString S, AnsiString& s1, AnsiString& s2, bool& b)
++{
++    g_files.push_back(F.c_str());
++    if (g_prevDouble) g_prevDouble(F, G, N, ret, V, S, s1, s2, b);
++}
++
++int main(int argc, char** argv)
++{
++    printf("St02_W195PathCombin\n");
++    if (argc < 2) { printf("  ABORT: argv[1] (the tree root) missing\n"); return 2; }
++    const std::string src = std::string(argv[1]) + "/";
++
++    // ---- [1] FileInfo::PathCombin (golden 913 ProductionInfo/FileInfo.cpp:290-313) ---------------------------------------
++    {
++        struct Case { const char* path; const char* file; const char* want; const char* why; };
++        const Case cs[] = {
++            { "C:\\a",   "\\b", "C:\\a\\b",   "file part starts with \\ -> no second one (W-195, the only changed case)" },
++            { "C:\\a",   "b",   "C:\\a\\b",   "plain name -> one separator added" },
++            { "C:\\a\\", "b",   "C:\\a\\b",   "path ends with \\ -> nothing added" },
++            { "C:\\a\\", "\\b", "C:\\a\\\\b", "path ends with \\ and file starts with \\ -> both kept, as golden 913" },
++            { "",        "\\b", "\\b",        "empty path -> the file part alone" },
++            { "x/y",     "\\b", "x/y/\\b",    "FTP path ('/') -> '/' added; golden 913 guards only the local branch" },
++        };
++        for (size_t i = 0; i < sizeof(cs) / sizeof(cs[0]); ++i)
++        {
++            const std::string got = FileInfo().PathCombin(AnsiString(cs[i].path), AnsiString(cs[i].file)).c_str();
++            GOT("PathCombin(\"%s\", \"%s\") = \"%s\", want \"%s\"", cs[i].path, cs[i].file, got.c_str(), cs[i].want);
++            char msg[200];
++            std::snprintf(msg, sizeof(msg), "1. FileInfo::PathCombin: %s", cs[i].why);
++            CHECK(got == cs[i].want, msg);
++        }
++    }
++
++    // ---- sandbox -------------------------------------------------------------------------------------------------------
++    char tmp[MAX_PATH];
++    ::GetTempPathA(sizeof(tmp), tmp);
++    char stamp[32];
++    std::snprintf(stamp, sizeof(stamp), "%lu", (unsigned long)::GetTickCount());
++    g_root = std::string(tmp) + "ht9045_w195_" + stamp;
++    ::CreateDirectoryA(g_root.c_str(), 0);
++    ::CreateDirectoryA((g_root + "\\Data").c_str(), 0);
++    ::CreateDirectoryA((g_root + "\\Data\\W195R").c_str(), 0);
++    WriteText(g_root + "\\SetUp.inf", "W195R\r\n");
++    DataPath     = AnsiString((g_root + "\\Data\\").c_str());
++    LastDataPath = AnsiString((g_root + "\\SetUp.inf").c_str());
++    // ReadFile -> SetWorkParameter -> ReadTechData reads teach.ini and the general ini (as St02_SecsEcFileWrites)
++    asTeachPath  = AnsiString((g_root + "\\teach.ini").c_str());
++    const std::string recipe = std::string(GetRecipePath().c_str());
++    if (UnderMachineTree(std::string(DataPath.c_str())) || UnderMachineTree(recipe) || UnderMachineTree(std::string(asTeachPath.c_str())) ||
++        UnderMachineTree(std::string(asGeneralPath.c_str())) || recipe.compare(0, g_root.size(), g_root) != 0)
++    {
++        printf("  ABORT: a path is not in the sandbox (DataPath=%s recipe=%s teach=%s general=%s) -- ReadFile was not called\n",
++               DataPath.c_str(), recipe.c_str(), asTeachPath.c_str(), asGeneralPath.c_str());
++        return 2;
++    }
++    GOT("recipe=%s teach=%s general=%s", recipe.c_str(), asTeachPath.c_str(), asGeneralPath.c_str());
++    CHECK(true, "0. recipe dir, teach.ini and the general ini are all outside the machine tree");
++
++    // ---- [2] GetRecipeFileName -> Common_PathCombin (golden 913 common.cpp:2044-2048) ------------------------------------
++    {
++        const std::string want = recipe + "Binasgn.Data";   // GetRecipePath() ends with "\" (common.cpp:2536)
++        const std::string lead = GetRecipeFileName(AnsiString("\\Binasgn.Data")).c_str();
++        const std::string plain = GetRecipeFileName(AnsiString("Binasgn.Data")).c_str();
++        GOT("GetRecipeFileName(\"\\Binasgn.Data\")=%s; (\"Binasgn.Data\")=%s; want %s", lead.c_str(), plain.c_str(), want.c_str());
++        CHECK(lead == want && plain == want, "2. GetRecipeFileName: a name with or without a leading \\ gives <recipe>\\Binasgn.Data (Common_PathCombin guard)");
++    }
++
++    // ---- [3] TfBinSel::ReadFile in the sandbox ---------------------------------------------------------------------------
++    OpenGeneralIniFile();
++    GOT("fBinSel=%p", (void*)fBinSel);
++    CHECK(fBinSel != 0, "0. the fBinSel object exists (cBinSel.cpp:159)");
++    if (fBinSel != 0)
++    {
++        g_files.clear();
++        g_prevStr = W906_ChangeLogHook_Str; W906_ChangeLogHook_Str = CaptureStr;
++        g_prevInt = W906_ChangeLogHook_Int; W906_ChangeLogHook_Int = CaptureInt;
++        g_prevBool = W906_ChangeLogHook_Bool; W906_ChangeLogHook_Bool = CaptureBool;
++        g_prevDouble = W906_ChangeLogHook_Double; W906_ChangeLogHook_Double = CaptureDouble;
++        if (fTemp_Set == 0) fTemp_Set = new TfTemp_Set();   // AI(W906-N1G5) 20261009 (laptop, batch 136 integration): golden boot creates TfTemp_Set (CreateForm HT9045.cpp:186) before anything reaches ChangeSite; since !369 ChangeSite calls fTemp_Set->InitialAddrToATC() and this ReadFile goes SetWorkParameter -> ChangeSite -- the same line !369 added to St02_SecsEcFileWrites and the other ChangeSite tests
++        fBinSel->ReadFile(false, false, "");
++        W906_ChangeLogHook_Str = g_prevStr;
++        W906_ChangeLogHook_Int = g_prevInt;
++        W906_ChangeLogHook_Bool = g_prevBool;
++        W906_ChangeLogHook_Double = g_prevDouble;
++        CloseIniFile();
++
++        int binasgn = 0, bad = 0;
++        std::string firstBad, last;
++        for (size_t i = 0; i < g_files.size(); ++i)
++        {
++            const std::string& f = g_files[i];
++            if (f.find("Binasgn") == std::string::npos) continue;
++            ++binasgn; last = f;
++            if (!OneBackslash(f)) { ++bad; if (firstBad.empty()) firstBad = f; }
++        }
++        GOT("%d writes seen, %d to Binasgn*.Data, %d of them not <recipe>\\Binasgn*; first bad %s; last %s", (int)g_files.size(), binasgn, bad,
++            firstBad.empty() ? "-" : firstBad.c_str(), last.c_str());
++        CHECK(binasgn > 0 && bad == 0, "3. ReadFile -> ReadFunctionData -> SaveFunctionData writes <recipe>\\Binasgn*.Data with one backslash (golden 913)");
++    }
++
++    // ---- [4] source: golden 913 text in the four port lines --------------------------------------------------------------
++    {
++        const std::string bin = Slurp(src + "cBinSel.cpp");
++        // ReadFile's SavePath block only: from its signature to its first use of the names (GetRecipeFileName(SavePath[2])).
++        // Save's own SavePath lines (cBinSel.cpp :891-910) are W-191 MR-5's, not this MR's.
++        const size_t a = bin.find("void TfBinSel::ReadFile(");
++        const size_t b = a == std::string::npos ? std::string::npos : bin.find("GetRecipeFileName(SavePath[2])", a);
++        const std::string body = (a == std::string::npos || b == std::string::npos) ? std::string() : bin.substr(a, b - a);
++        const std::string arrLine = LineWith(body, "AnsiString SavePath[]={");
++        const std::string arr = arrLine.substr(0, arrLine.find("//"));   // code only: the note after // quotes the old "\\" names
++        int names = 0, lead = 0;
++        for (size_t at = body.find("SavePath[0]=\""); at != std::string::npos; at = body.find("SavePath[0]=\"", at + 1))
++        {
++            ++names;
++            if (body.compare(at + 13, 2, "\\\\") == 0) ++lead;
++        }
++        const bool arrOk = !arr.empty() && arr.find("\"\\\\") == std::string::npos && arr.find("\"BinasgnOff.Data\", \"Binasgn.Data\"") != std::string::npos;
++        GOT("ReadFile body %s; array line %s; SavePath[0]= lines %d, with a leading \\\\: %d", body.empty() ? "<not found>" : "found",
++            arr.empty() ? "<not found>" : arr.c_str(), names, lead);
++        CHECK(arrOk && names == 4 && lead == 0, "4. cBinSel.cpp ReadFile: SavePath names without a leading \\ (golden 913 :1128 / :1135 / :1139 / :1146 / :1150)");
++
++        const char* files[3] = { "ProductionInfo/FileInfo.cpp", "common.cpp", "Public/MyStringList.cpp" };
++        for (int i = 0; i < 3; ++i)
++        {
++            const std::string t = Slurp(src + files[i]);
++            const std::string g = LineWith(t, "sFile.AnsiPos(\"\\\\\")!=1)");
++            const size_t cut = g.find("//");
++            const std::string code = g.substr(0, cut == std::string::npos ? g.size() : cut);
++            const bool ok = !g.empty() && code.find("combinedPath[combinedPath.Length()]") != std::string::npos && code.find("'\\\\'") != std::string::npos &&
++                            code.find("&& sFile.AnsiPos(\"\\\\\")!=1)") != std::string::npos;
++            GOT("%s guard line %s", files[i], g.empty() ? "<not found>" : "found, both conditions before //");
++            char msg[200];
++            std::snprintf(msg, sizeof(msg), "4. %s: the local-path guard has golden 913's second condition on the same line (FileInfo.cpp:304-305)", files[i]);
++            CHECK(ok, msg);
++        }
++    }
++
++    printf("St02_W195PathCombin: %d passed, %d failed\n", g_pass, g_fail);
++    if (g_fail == 0) RemoveTree(g_root);
++    else printf("  sandbox kept: %s\n", g_root.c_str());
++    return g_fail == 0 ? 0 : 1;
++}
+diff --git a/tests/test_st02_w195_secsbintype.cpp b/tests/test_st02_w195_secsbintype.cpp
+new file mode 100644
+index 00000000..5f1a289c
+--- /dev/null
++++ b/tests/test_st02_w195_secsbintype.cpp
+@@ -0,0 +1,204 @@
++// =============================================================================
++//  test_st02_w195_secsbintype.cpp -- W-195 MR-B: TfBinSel::ReadFile builds the SECS "Bin 0-255 Type" lists (sBinType[tag],
++//                                    EC 3656 / 3719 / 3724 / 3803 / 3903 / 4003 / 4103) from each tag's recipe (golden 913).
++//
++//  AI(W906-W195) 20261009 (St02-E).  Suite name (add_test): St02_W195SecsBinType.  argv[1] = the tree root (read only).
++//    golden 913 cBinSel.cpp:1585-1596 (AI(ht9045-secs-sem) 20260720 RogerYang; V912 identical): bin i is "1" (Fail) when the
++//    T3 tray it goes to (BinSelect[tag].iCatDataT3Pos[i]-1) is a fail category (iStackDefFailCate>0), else "0" -- per tag,
++//    instead of the run mode's Prod.bIsPassBin[i] (one list for every tag; all "1" before InitialOK).
++//    The recipe is seeded where ReadFile reads it (seed at the real source): a fresh <recipe>\Binasgn.Data (FT) and
++//    BinasgnOff.Data (RT) in the old format ReadFunctionData takes when no "Bin Func" section exists -- [Category0] Bin /
++//    [Category1] Bin = the T3 positions of Auto1 / Auto2 (cBinSel.cpp:2455-2459), and [Auto1] / [Auto2] Pass/Fail
++//    (cBinSel.cpp:1679-1683) -- pass / fail in the FT file, the other way round in the RT file.  Prod.bIsPassBin is set the
++//    opposite way to the FT expectation, so the old lines give a different answer.
++//    [1] the seeds landed (BinSelect[eBinFT] / [eBinRT] tables printed);
++//    [2] sBinType[eBinFT] = 0,1 and sBinType[eBinRT] = 1,0 (each tag from its own recipe);
++//    [3] a bin with no tray (Bin = NoUse) is "0" whatever Prod.bIsPassBin says;
++//    [4] source: EC 3656 / 3719 still register fBinSel->sBinType[eBinFT] / [eBinRT] (the lists checked above).
++//  Reverse check (recorded in the MR): put the two old Prod.bIsPassBin lines back -> [2] and [3] red.
++//  Every path is under %TEMP%\ht9045_w195b_<tick>; the test aborts before ReadFile if one is under D:\HT9045.  The sandbox is
++//  removed on a green run.
++// =============================================================================
++#include "database.h"
++#include "csystem.h"
++#include "cprod.h"
++#include "common.h"
++#include "cmydef.h"
++#include "CosFunction.h"
++#include "MachineType.h"
++#include "forms/fBinSel.h"
++#include <windows.h>
++#include <cstdio>
++#include <cstring>
++#include <string>
++#include "forms/fTemp_Set.h"   // AI(W906-N1G5) 20261009 (laptop, batch 136 integration): fTemp_Set before ReadFile reaches ChangeSite (see main)
++
++static int g_pass = 0, g_fail = 0;
++static char g_got[700];
++#define GOT(...) std::snprintf(g_got, sizeof(g_got), __VA_ARGS__)
++#define CHECK(cond, msg)                                                                                   \
++    do {                                                                                                   \
++        if (cond) { printf("  PASS: %s   [%s]\n", msg, g_got); ++g_pass; }                                 \
++        else      { printf("  FAIL: %s   [got %s]  (line %d)\n", msg, g_got, __LINE__); ++g_fail; }        \
++        g_got[0] = 0;                                                                                      \
++    } while (0)
++
++static std::string g_root;
++
++static std::string Slurp(const std::string& p)
++{
++    FILE* f = std::fopen(p.c_str(), "rb");
++    if (!f) return std::string();
++    std::string s;
++    char buf[4096];
++    size_t n;
++    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) s.append(buf, n);
++    std::fclose(f);
++    return s;
++}
++
++static void WriteText(const std::string& p, const char* text)
++{
++    FILE* f = std::fopen(p.c_str(), "wb");
++    if (f) { std::fputs(text, f); std::fclose(f); }
++}
++
++static void RemoveTree(const std::string& dir)
++{
++    WIN32_FIND_DATAA fd;
++    HANDLE h = ::FindFirstFileA((dir + "\\*").c_str(), &fd);
++    if (h != INVALID_HANDLE_VALUE)
++    {
++        do
++        {
++            if (std::strcmp(fd.cFileName, ".") == 0 || std::strcmp(fd.cFileName, "..") == 0) continue;
++            const std::string p = dir + "\\" + fd.cFileName;
++            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) RemoveTree(p);
++            else ::DeleteFileA(p.c_str());
++        } while (::FindNextFileA(h, &fd));
++        ::FindClose(h);
++    }
++    ::RemoveDirectoryA(dir.c_str());
++}
++
++static bool UnderMachineTree(const std::string& p)
++{
++    std::string s = p;
++    for (size_t i = 0; i < s.size(); ++i) if (s[i] >= 'A' && s[i] <= 'Z') s[i] = (char)(s[i] - 'A' + 'a');
++    for (size_t i = 0; i < s.size(); ++i) if (s[i] == '/') s[i] = '\\';
++    if (s.find("\\obj\\v906\\") != std::string::npos) return false;   // a build dir under D:\HT9045 is a sandbox (as St02_SecsEcFileWrites)
++    return s.compare(0, 9, "d:\\ht9045") == 0;
++}
++
++static void Ini(const std::string& file, const char* sec, const char* key, int v)
++{
++    char buf[32];
++    std::snprintf(buf, sizeof(buf), "%d", v);
++    ::WritePrivateProfileStringA(sec, key, buf, file.c_str());
++}
++
++static std::string Item(TStringList* l, int i)
++{
++    return (l != 0 && i < l->Count) ? std::string(l->Strings[i].c_str()) : std::string("<none>");
++}
++
++static std::string LineWith(const std::string& text, const std::string& anchor)
++{
++    const size_t at = text.find(anchor);
++    if (at == std::string::npos) return std::string();
++    const size_t a = text.rfind('\n', at), b = text.find('\n', at);
++    return text.substr(a == std::string::npos ? 0 : a + 1, (b == std::string::npos ? text.size() : b) - (a == std::string::npos ? 0 : a + 1));
++}
++
++int main(int argc, char** argv)
++{
++    printf("St02_W195SecsBinType\n");
++    if (argc < 2) { printf("  ABORT: argv[1] (the tree root) missing\n"); return 2; }
++    const std::string src = std::string(argv[1]) + "/";
++
++    char tmp[MAX_PATH];
++    ::GetTempPathA(sizeof(tmp), tmp);
++    char stamp[32];
++    std::snprintf(stamp, sizeof(stamp), "%lu", (unsigned long)::GetTickCount());
++    g_root = std::string(tmp) + "ht9045_w195b_" + stamp;
++    ::CreateDirectoryA(g_root.c_str(), 0);
++    ::CreateDirectoryA((g_root + "\\Data").c_str(), 0);
++    ::CreateDirectoryA((g_root + "\\Data\\W195B").c_str(), 0);
++    WriteText(g_root + "\\SetUp.inf", "W195B\r\n");
++    DataPath     = AnsiString((g_root + "\\Data\\").c_str());
++    LastDataPath = AnsiString((g_root + "\\SetUp.inf").c_str());
++    asTeachPath  = AnsiString((g_root + "\\teach.ini").c_str());   // ReadFile -> SetWorkParameter -> ReadTechData (as St02_SecsEcFileWrites)
++    const std::string recipe = std::string(GetRecipePath().c_str());
++    if (UnderMachineTree(std::string(DataPath.c_str())) || UnderMachineTree(recipe) || UnderMachineTree(std::string(asTeachPath.c_str())) ||
++        UnderMachineTree(std::string(asGeneralPath.c_str())) || recipe.compare(0, g_root.size(), g_root) != 0)
++    {
++        printf("  ABORT: a path is not in the sandbox (DataPath=%s recipe=%s teach=%s general=%s) -- ReadFile was not called\n",
++               DataPath.c_str(), recipe.c_str(), asTeachPath.c_str(), asGeneralPath.c_str());
++        return 2;
++    }
++    GOT("recipe=%s teach=%s general=%s", recipe.c_str(), asTeachPath.c_str(), asGeneralPath.c_str());
++    CHECK(true, "0. recipe dir, teach.ini and the general ini are all outside the machine tree");
++    OpenGeneralIniFile();
++    GOT("fBinSel=%p iTestBinCount=%d", (void*)fBinSel, iTestBinCount);
++    CHECK(fBinSel != 0 && iTestBinCount >= 3, "0. the fBinSel object exists and has at least three bins");
++    if (fBinSel == 0 || iTestBinCount < 3) { printf("St02_W195SecsBinType: %d passed, %d failed\n", g_pass, g_fail); return 1; }
++
++    // ReadFile's file per tag (cBinSel.cpp:1424-1439): with these three flags off, RT (tag 0) reads BinasgnOff.Data and FT
++    // (tag 1) reads Binasgn.Data -- the leading "\" some of those names carry lands on the same file (W-195 MR-A).
++    IniConfig.bA02BinModelPrime = false;
++    IniConfig.bFTBin2RTBin = false;
++    CosFunction.bDisableRTBinSet = false;
++    const std::string ft = recipe + "Binasgn.Data", rt = recipe + "BinasgnOff.Data";
++    const int t1 = iTo3Unload[eAuto1], t2 = iTo3Unload[eAuto2];
++    const char* n1 = s6TrayName[eAuto1].c_str();
++    const char* n2 = s6TrayName[eAuto2].c_str();
++    Ini(ft, "Category0", "Bin", t1 + 1); Ini(ft, "Category1", "Bin", t2 + 1); Ini(ft, "Category2", "Bin", e3PosNoUse);
++    Ini(ft, n1, "Pass/Fail", 0);         Ini(ft, n2, "Pass/Fail", 1);
++    Ini(rt, "Category0", "Bin", t1 + 1); Ini(rt, "Category1", "Bin", t2 + 1); Ini(rt, "Category2", "Bin", e3PosNoUse);
++    Ini(rt, n1, "Pass/Fail", 1);         Ini(rt, n2, "Pass/Fail", 0);
++    // the run mode's pass flags, opposite to the FT recipe: the old lines (Prod.bIsPassBin) would give 1,0,1
++    Prod.bIsPassBin[0] = false; Prod.bIsPassBin[1] = true; Prod.bIsPassBin[2] = false;
++
++    if (fTemp_Set == 0) fTemp_Set = new TfTemp_Set();   // AI(W906-N1G5) 20261009 (laptop, batch 136 integration): golden boot creates TfTemp_Set (CreateForm HT9045.cpp:186) before anything reaches ChangeSite; since !369 ChangeSite calls fTemp_Set->InitialAddrToATC() and this ReadFile goes SetWorkParameter -> ChangeSite -- the same line !369 added to St02_SecsEcFileWrites and the other ChangeSite tests
++    fBinSel->ReadFile(false, false, "");
++    CloseIniFile();
++
++    // ---- [1] the seeds landed ---------------------------------------------------------------------------------------------
++    {
++        const SYSTEM_BIN_SELECT& F = BinSelect[eBinFT];
++        const SYSTEM_BIN_SELECT& R = BinSelect[eBinRT];
++        GOT("Auto1/Auto2 T3 %d/%d (%s/%s); FT pos %d,%d,%d fail(t1,t2)=%d,%d; RT pos %d,%d,%d fail(t1,t2)=%d,%d; IfErrorT3 FT %d RT %d",
++            t1, t2, n1, n2, F.iCatDataT3Pos[0], F.iCatDataT3Pos[1], F.iCatDataT3Pos[2], F.iStackDefFailCate[t1], F.iStackDefFailCate[t2],
++            R.iCatDataT3Pos[0], R.iCatDataT3Pos[1], R.iCatDataT3Pos[2], R.iStackDefFailCate[t1], R.iStackDefFailCate[t2], F.IfErrorT3, R.IfErrorT3);
++        const bool ok = t1 != t2 && F.iCatDataT3Pos[0] == t1 + 1 && F.iCatDataT3Pos[1] == t2 + 1 && F.iCatDataT3Pos[2] == e3PosNoUse &&
++                        F.iStackDefFailCate[t1] == 0 && F.iStackDefFailCate[t2] > 0 &&
++                        R.iCatDataT3Pos[0] == t1 + 1 && R.iCatDataT3Pos[1] == t2 + 1 &&
++                        R.iStackDefFailCate[t1] > 0 && R.iStackDefFailCate[t2] == 0;
++        CHECK(ok, "1. ReadFile read the seeded recipes: bins 0/1 -> Auto1/Auto2; FT Auto1 pass, Auto2 fail; RT the other way round");
++    }
++
++    // ---- [2] / [3] sBinType per tag ------------------------------------------------------------------------------------
++    {
++        const std::string f0 = Item(fBinSel->sBinType[eBinFT], 0), f1 = Item(fBinSel->sBinType[eBinFT], 1), f2 = Item(fBinSel->sBinType[eBinFT], 2);
++        const std::string r0 = Item(fBinSel->sBinType[eBinRT], 0), r1 = Item(fBinSel->sBinType[eBinRT], 1), r2 = Item(fBinSel->sBinType[eBinRT], 2);
++        GOT("FT %s,%s,%s  RT %s,%s,%s  (Prod.bIsPassBin 0,1,0 would give 1,0,1 for both)", f0.c_str(), f1.c_str(), f2.c_str(), r0.c_str(), r1.c_str(), r2.c_str());
++        CHECK(f0 == "0" && f1 == "1" && r0 == "1" && r1 == "0",
++              "2. sBinType[eBinFT] = 0,1 and sBinType[eBinRT] = 1,0: each tag from its own recipe's pass / fail trays (golden 913 :1585-1596)");
++        GOT("bin 2 (no tray): FT %s RT %s", f2.c_str(), r2.c_str());
++        CHECK(f2 == "0" && r2 == "0", "3. a bin with no tray (Bin = NoUse) is 0 (Pass) whatever Prod.bIsPassBin says (golden :1589 iT3ForSecsType>=0)");
++    }
++
++    // ---- [4] source: the ECs read these lists ----------------------------------------------------------------------------
++    {
++        const std::string ec = Slurp(src + "SECSGEM/uHGemHT9045_EC.cpp");
++        const std::string l3656 = LineWith(ec, "SetECDataPointer(3656 ,"), l3719 = LineWith(ec, "SetECDataPointer(3719 ,");
++        GOT("3656 %s; 3719 %s", l3656.empty() ? "<not found>" : "found", l3719.empty() ? "<not found>" : "found");
++        CHECK(l3656.find("fBinSel->sBinType[eBinFT]") != std::string::npos && l3719.find("fBinSel->sBinType[eBinRT]") != std::string::npos,
++              "4. SECSGEM/uHGemHT9045_EC.cpp: EC 3656 / 3719 point at fBinSel->sBinType[eBinFT] / [eBinRT] (the lists checked in [2])");
++    }
++
++    printf("St02_W195SecsBinType: %d passed, %d failed\n", g_pass, g_fail);
++    if (g_fail == 0) RemoveTree(g_root);
++    else printf("  sandbox kept: %s\n", g_root.c_str());
++    return g_fail == 0 ? 0 : 1;
++}
+-- 
+2.55.0.windows.5
+
