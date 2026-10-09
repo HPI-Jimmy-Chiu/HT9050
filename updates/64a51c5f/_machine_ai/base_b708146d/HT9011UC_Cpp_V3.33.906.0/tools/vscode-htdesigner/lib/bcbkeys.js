@@ -1,0 +1,226 @@
+'use strict';
+// AI(W906-HTDESIGNER) 20261008 (EastSun「我需要保證debug 模式下中斷後 按F8 F7 F9 功能都跟BCB一樣」): C++ Builder 6's debugger
+// keys while the program is stopped at a breakpoint -- written into the USER keybindings.json, because only that level
+// always wins: an extension's own keybindings tie with other extensions' (CMake Tools binds F7 to cmake.build whenever a
+// CMake project is open -- measured on ES02), and which one VS Code picks then depends on load order.
+// AI(W906-HTDESIGNER) 20261008 (full test, audit B1-B4): the designer's entries are found by STRUCTURE -- a single-pass
+// JSONC scan (strings and comments together), every object of the top array whose "when" names
+// config.ht9045Designer.bcbDebugKeys is ours, removed whole with its comma -- not by "a line with the marker": a formatted
+// file (one object over several lines) or an entry VS Code's UI appended after ours used to be cut in half or deleted.
+// Plain Node (no vscode).
+
+const MARK = '// ht9045Designer.bcbDebugKeys';
+const OWN = 'config.ht9045Designer.bcbDebugKeys';
+const WHEN = "inDebugMode && debugState == 'stopped' && " + OWN;
+const KEYS = [
+  { key: 'f8', command: 'workbench.action.debug.stepOver', when: WHEN },                               // Step Over
+  { key: 'f7', command: 'workbench.action.debug.stepInto', when: WHEN },                               // Trace Into
+  { key: 'f9', command: 'workbench.action.debug.continue', when: WHEN },                               // Run
+  { key: 'f4', command: 'editor.debug.action.runToCursor', when: WHEN + ' && editorTextFocus' },        // Run to Cursor
+  // (1009 review (keys #4): Program Reset = the run strip's / title bar's ⏹ -- every session AND the tree's wb_* exes (one of
+  //  wb_publish + wb_gateway used to be left running), also during a build; debug.stop ended the focused session only)
+  // (1009 second review (debug #5): typing in an editor while a no-debugger machine program runs -- VS Code's Ctrl+F2
+  //  (Change All Occurrences), not ⏹: debugging, building, or the focus not in an editor only)
+  { key: 'ctrl+f2', command: 'ht9045Designer.run.stopAll', when: "(inDebugMode || ht9045Designer.runState == 'building' || !editorTextFocus) && ht9045Designer.runCanStop && ht9045Designer.portTree && " + OWN },   // Program Reset (1010 debug walkthrough #1: in the tree's window only)
+  // (1008 review, EastSun「不用等我決定一律選最合理」: BCB6's F5 = Toggle Breakpoint -- while stopped VS Code's F5 is Continue,
+  //  so a BCB hand setting a breakpoint ran the machine program on. While stopped only: not debugging, F5 still builds
+  //  and starts, as every day)
+  { key: 'f5', command: 'editor.debug.action.toggleBreakpoint', when: WHEN + ' && editorTextFocus' },   // Toggle Breakpoint
+  // (1008 gap list #3-#5: the rest of BCB6's Run menu while stopped)
+  { key: 'shift+f8', command: 'workbench.action.debug.stepOut', when: WHEN },                          // Run Until Return
+  { key: 'shift+f7', command: 'workbench.action.debug.stepInto', when: WHEN },                         // Trace to Next Source Line
+  { key: 'ctrl+f7', command: 'editor.debug.action.selectionToRepl', when: 'inDebugMode && editorTextFocus && ' + OWN },   // Evaluate/Modify
+  { key: 'ctrl+f5', command: 'editor.debug.action.selectionToWatch', when: 'inDebugMode && editorTextFocus && ' + OWN },  // Add Watch
+  { key: 'alt+f5', command: 'editor.debug.action.showDebugHover', when: 'inDebugMode && editorTextFocus && ' + OWN },     // Inspect
+  // (gap list #1: Make -- BCB Ctrl+F9; Visual Studio's Ctrl+Shift+B in the C++ tree, whose default build task needs
+  //  C:\MinGW, absent on a PC without the oracle compiler)
+  { key: 'ctrl+f9', command: 'ht9045Designer.run.make', when: '!inDebugMode && ht9045Designer.portTree && ' + OWN },   // (1009 review (keys #9): the C++ tree's windows only -- the file is every window's)
+  { key: 'ctrl+shift+b', command: 'ht9045Designer.run.make', when: '!inDebugMode && ht9045Designer.portTree && ' + OWN },
+  // (gap list #8: BCB6's View > Debug Windows -- not in the designer, whose Ctrl+Alt+V / T are its own)
+  { key: 'ctrl+alt+b', command: 'workbench.debug.action.focusBreakpointsView', when: "activeCustomEditorId != 'ht9045Designer.editor' && " + OWN },
+  { key: 'ctrl+alt+s', command: 'workbench.debug.action.focusCallStackView', when: "activeCustomEditorId != 'ht9045Designer.editor' && " + OWN },
+  { key: 'ctrl+alt+w', command: 'workbench.debug.action.focusWatchView', when: "activeCustomEditorId != 'ht9045Designer.editor' && " + OWN },
+  { key: 'ctrl+alt+l', command: 'workbench.debug.action.focusVariablesView', when: "activeCustomEditorId != 'ht9045Designer.editor' && " + OWN },
+  { key: 'ctrl+alt+c', command: 'debug.action.openDisassemblyView', when: 'inDebugMode && editorTextFocus && ' + OWN },
+  // (gap list #20: the rest of BCB6's Debug Windows that VS Code has -- FPU = the Registers of the Variables view, Threads =
+  //  the Call Stack (threads listed), Event Log = the Debug Console; while debugging, not in the designer (its own Ctrl+Alt+T
+  //  / V). Modules: no such view in VS Code; Memory: needs a hex editor extension -- not mapped)
+  { key: 'ctrl+alt+f', command: 'workbench.debug.action.focusVariablesView', when: "inDebugMode && activeCustomEditorId != 'ht9045Designer.editor' && " + OWN },
+  { key: 'ctrl+alt+t', command: 'workbench.debug.action.focusCallStackView', when: "inDebugMode && activeCustomEditorId != 'ht9045Designer.editor' && " + OWN },
+  { key: 'ctrl+alt+v', command: 'workbench.panel.repl.view.focus', when: "inDebugMode && activeCustomEditorId != 'ht9045Designer.editor' && " + OWN },
+  // (gap list #23: Code Templates -- BCB6's Ctrl+J, the snippets of this tree)
+  { key: 'ctrl+j', command: 'editor.action.insertSnippet', when: "editorTextFocus && !editorReadonly && (editorLangId == 'cpp' || editorLangId == 'c') && " + OWN },
+  // (gap list #10: Compile Unit -- the real compiler on this file, BCB6's Alt+F9)
+  { key: 'alt+f9', command: 'ht9045Designer.cpp.compileUnit', when: "editorTextFocus && (editorLangId == 'cpp' || editorLangId == 'c') && " + OWN },
+  // (gap list #9: the .h <-> .cpp of this file, BCB6's Ctrl+F6)
+  { key: 'ctrl+f6', command: 'C_Cpp.SwitchHeaderSource', when: "editorTextFocus && (editorLangId == 'cpp' || editorLangId == 'c') && " + OWN },
+  // (gap list #15 / #24: BCB6's editor keys in a C / C++ editor -- Alt+G Go to Line Number, Ctrl+E Incremental Search,
+  //  Ctrl+R Replace, Ctrl+Shift+I / U Indent / Unindent Block; VS Code's own Ctrl+E / Ctrl+R / Ctrl+Shift+U stay elsewhere)
+  { key: 'alt+g', command: 'workbench.action.gotoLine', when: "editorTextFocus && (editorLangId == 'cpp' || editorLangId == 'c') && " + OWN },
+  { key: 'ctrl+e', command: 'actions.find', when: "editorTextFocus && (editorLangId == 'cpp' || editorLangId == 'c') && " + OWN },
+  { key: 'ctrl+r', command: 'editor.action.startFindReplaceAction', when: "editorTextFocus && !editorReadonly && (editorLangId == 'cpp' || editorLangId == 'c') && " + OWN },
+  { key: 'ctrl+shift+i', command: 'editor.action.indentLines', when: "editorTextFocus && !editorReadonly && (editorLangId == 'cpp' || editorLangId == 'c') && " + OWN },
+  { key: 'ctrl+shift+u', command: 'editor.action.outdentLines', when: "editorTextFocus && !editorReadonly && (editorLangId == 'cpp' || editorLangId == 'c') && " + OWN },
+  // (gap list #18: To-Do -- Ctrl+Shift+T adds "// TODO: " above the line, as BCB6's Add To-Do Item)
+  { key: 'ctrl+shift+t', command: 'ht9045Designer.todo.add', when: "editorTextFocus && !editorReadonly && (editorLangId == 'cpp' || editorLangId == 'c') && " + OWN },
+  // (gap list #11: BCB6's bookmarks in a C / C++ editor -- Ctrl+Shift+0..9 set / clear, Ctrl+0..9 go)
+  ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => ({ key: 'ctrl+shift+' + n, command: 'ht9045Designer.bookmark.toggle', args: n, when: "editorTextFocus && (editorLangId == 'cpp' || editorLangId == 'c') && " + OWN })),
+  ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => ({ key: 'ctrl+' + n, command: 'ht9045Designer.bookmark.goto', args: n, when: "editorTextFocus && (editorLangId == 'cpp' || editorLangId == 'c') && " + OWN })),
+  // (gap list #2, safety: CMake Tools' keys -- F7 builds the build\ folder (CLAUDE.md: never touched), Shift+F7 a target of
+  //  it, Shift+F5 / Ctrl+Shift+F5 start wb_serve without the W906_* settings (the machine's own files written). Removed.)
+  { key: 'f7', command: '-cmake.build' },
+  { key: 'shift+f7', command: '-cmake.buildWithTarget' },
+  { key: 'shift+f5', command: '-cmake.debugTarget' },
+  { key: 'ctrl+shift+f5', command: '-cmake.launchTarget' },
+];
+
+const line = k => '  { "key": ' + JSON.stringify(k.key) + ', "command": ' + JSON.stringify(k.command) + (k.args !== undefined ? ', "args": ' + JSON.stringify(k.args) : '') + (k.when ? ', "when": ' + JSON.stringify(k.when) : '') + ' }';
+// (a removal rule cannot carry our when -- it would then remove nothing: ours by its exact key + command)
+const NEG = new Set(KEYS.filter(k => !k.when).map(k => k.key + '|' + k.command));
+/** an entry's identity: its key + command (1008 review) */
+const sig = k => String(k && k.key) + '|' + String(k && k.command);
+const SIGS = new Set(KEYS.map(sig));
+const KEYSET = new Set(KEYS.map(k => String(k.key)));
+
+/**
+ * One pass over JSONC text: the top-level array's [start, end] and each top-level object in it { s, e, text } -- strings
+ * (with escapes) and // / block comments skipped together, so a quote in a comment or a bracket in a string misleads
+ * nothing. -> { open, close, objs } or null when there is no top array.
+ */
+function scan(text) {
+  const t = String(text || '');
+  let i = 0, depth = 0, open = -1, close = -1, objStart = -1;
+  const objs = [];
+  const commas = [];   // (1010 keys walkthrough #1: the array's own commas -- a comma ending a // comment is none)
+  while (i < t.length) {
+    const c = t[i];
+    if (c === '"') { i++; while (i < t.length && t[i] !== '"') { if (t[i] === '\\') i++; i++; } i++; continue; }
+    if (c === '/' && t[i + 1] === '/') { while (i < t.length && t[i] !== '\n') i++; continue; }
+    if (c === '/' && t[i + 1] === '*') { const e = t.indexOf('*/', i + 2); i = e < 0 ? t.length : e + 2; continue; }
+    if (c === '[' || c === '{') {
+      if (depth === 0 && c === '[' && open < 0) open = i;
+      else if (depth === 1 && c === '{' && open >= 0 && close < 0) objStart = i;
+      depth++;
+    } else if (c === ',' && depth === 1 && open >= 0 && close < 0) {
+      commas.push(i);
+    } else if (c === ']' || c === '}') {
+      depth--;
+      if (depth === 1 && c === '}' && objStart >= 0) { objs.push({ s: objStart, e: i + 1, text: t.slice(objStart, i + 1) }); objStart = -1; }
+      if (depth === 0 && c === ']' && open >= 0 && close < 0) close = i;
+    }
+    i++;
+  }
+  if (open < 0 || close < 0) return null;
+  return { open, close, objs, commas };
+}
+
+// (1009 review (keys #1): ours = exactly a line this extension writes (or wrote: opts.known, the texts written before) --
+//  by key + command alone a user's own { "key": "f7", "command": "-cmake.build" } was taken in and then deleted with ours,
+//  an entry of ours the user edited (its when) was rewritten back, and one with a trailing comma (JSONC) that JSON.parse
+//  refused was deleted)
+const norm = s => String(s).replace(/\s+/g, ' ').trim();
+const CUR = new Set(KEYS.map(k => norm(line(k))));
+// (the lines earlier versions wrote that differ from today's -- brought up to date, not left as the user's)
+const PREV = new Set([
+  { key: 'ctrl+f2', command: 'workbench.action.debug.stop', when: 'inDebugMode && ' + OWN },
+  { key: 'ctrl+f2', command: 'ht9045Designer.run.stopAll', when: 'ht9045Designer.runCanStop && ' + OWN },
+  { key: 'ctrl+f9', command: 'ht9045Designer.run.make', when: '!inDebugMode && ' + OWN },
+].map(k => norm(line(k))));
+const isOursIn = known => o => { const n = norm(o.text); return CUR.has(n) || PREV.has(n) || !!(known && known.has(n)); };
+const isOurs = isOursIn(null);
+
+/** keybindings.json text without the designer's entries (each removed whole, with the comma after / before it). */
+function remove(text, opts) {
+  let t = String(text || '');
+  const sc = scan(t);
+  if (!sc) return t.split(/\r?\n/).filter(l => l.indexOf(MARK) < 0).join(/\r\n/.test(t) ? '\r\n' : '\n');
+  const mine0 = isOursIn(opts && opts.known);
+  // (1010 keys walkthrough #4: the user's own copies of a line of ours (written by hand before this extension) stay)
+  const keep = (opts && opts.keep) || null;
+  const mine = o => mine0(o) && !(keep && keep.has(norm(o.text)));
+  const t0 = t;
+  const objs = sc.objs;
+  for (let k = objs.length - 1; k >= 0; k--) {
+    const o = objs[k];
+    if (!mine(o)) continue;
+    let s = o.s, e = o.e;
+    // (its comma: the array's comma right after it, else the array's comma before it (after the previous entry) -- found by
+    //  the scan, so a comma ending a // comment is never taken: the "]" went into that comment and the file was broken)
+    const prevEnd = k > 0 ? objs[k - 1].e : sc.open + 1;
+    const nextS = k < objs.length - 1 ? objs[k + 1].s : sc.close;
+    const cAfter = sc.commas.find(c => c >= e && c < nextS);
+    let cBefore = -1;
+    if (cAfter === undefined) { for (const c of sc.commas) if (c >= prevEnd && c < s) cBefore = c; }
+    if (cAfter !== undefined && /^\s*$/.test(t.slice(e, cAfter))) e = cAfter + 1;
+    const rest = /^[ \t]*(\/\/ ht9045Designer\.bcbDebugKeys)?[ \t]*(\r?\n)?/.exec(t.slice(e));
+    if (rest) e += rest[0].length;
+    const lead = /(^|\n)[ \t]*$/.exec(t.slice(0, s));
+    if (lead && rest && rest[2]) s -= lead[0].length - lead[1].length;
+    if (cAfter !== undefined && cAfter >= e) { t = t.slice(0, cAfter) + t.slice(cAfter + 1); }   // (a comment between: only the comma)
+    t = t.slice(0, s) + t.slice(e);
+    if (cBefore >= 0) t = t.slice(0, cBefore) + t.slice(cBefore + 1);
+  }
+  // (… never a broken file: the array read before must still read)
+  if (!scan(t)) return t0;
+  return t;
+}
+
+/**
+ * keybindings.json text -> the text with the designer's the KEYS entries (54: the stopped-in-the-debugger ones, the C++ editor ones, the CMake Tools removals) (replacing older ones), or null when it already has
+ * exactly them. No file / no array (comments only) = an array added after what is there. -> string | null | { error }
+ */
+function ensure(text, opts) {
+  const t0 = String(text || '').replace(/^﻿/, '');
+  const eol = /\r\n/.test(t0) ? '\r\n' : '\n';
+  // (1008 review: opts.declined = key + command pairs the user deleted from the file -- not put back)
+  const declined = (opts && opts.declined) || new Set();
+  const want = KEYS.filter(k => !declined.has(sig(k))).map(line);
+  const mine = isOursIn(opts && opts.known);
+  const sc0 = scan(t0);
+  if (sc0) {
+    const have = sc0.objs.filter(mine).map(o => o.text.replace(/\s+/g, ' ').trim());
+    // (1010 keys walkthrough #5: the same entries in another order are no change -- the user's order is kept; each start
+    //  moved them back)
+    const wantN = want.map(w => w.trim().replace(/\s+/g, ' ')).sort();
+    const haveS = have.slice().sort();
+    if (haveS.length === wantN.length && wantN.every((w, i) => haveS[i] === w)) return null;
+  }
+  const t = remove(t0, opts);
+  const sc = scan(t);
+  if (!sc) {
+    if (/[[{]/.test(t.replace(/"(?:[^"\\]|\\.)*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, ''))) return { error: 'keybindings.json 的格式認不得（找不到 [ ... ]）' };
+    // (comments only -- old bindings kept commented out stay as they are)
+    return (t.trim() ? t.replace(/\s*$/, '') + eol : '// Place your key bindings in this file to override the defaults' + eol) + '[' + eol + want.join(',' + eol) + eol + ']' + eol;
+  }
+  // (1008 review: ours FIRST in the array -- keybindings.json is "the later one wins", and an entry the user put after ours
+  //  to win over it (Ctrl+E back to Quick Open) was moved before ours by every rewrite at the end, and lost)
+  if (!want.length) return t === t0 ? null : t;
+  const rest = t.slice(sc.open + 1);
+  const out = t.slice(0, sc.open + 1) + eol + want.join(',' + eol) + (sc.objs.length ? ',' : '') + (/^[ \t]*\r?\n/.test(rest) ? '' : eol) + rest;
+  if (!scan(out)) return { error: '寫入後的 keybindings.json 會讀不出來，沒有寫' };   // (1010 keys walkthrough #1: never a broken file)
+  return out;
+}
+/** the key + command pairs of ours in this text (1008 review: what the user deleted is told apart from what is new) */
+function present(text, opts) {
+  const sc = scan(String(text || '').replace(/^﻿/, ''));
+  if (!sc) return [];
+  const out = [];
+  for (const o of sc.objs.filter(isOursIn(opts && opts.known))) { try { out.push(sig(JSON.parse(o.text))); } catch (e) { /* skip */ } }
+  return out;
+}
+
+/** the texts of our lines now (normalised) -- kept by the extension as "known" for the next version's upgrade */
+function lines() { return KEYS.map(k => norm(line(k))); }
+/** 1010 keys walkthrough #4: entries in this text that are exactly lines of ours (normalised) -- before our first write they are the user's own */
+function oursPresent(text) {
+  const sc = scan(String(text || '').replace(/^\uFEFF/, ''));
+  return sc ? sc.objs.map(o => norm(o.text)).filter(n => CUR.has(n)) : [];
+}
+/** 1010 keys walkthrough #6: a file written whole -- a temporary then a rename (a window reading it meanwhile never sees it empty) */
+function writeAtomic(fs, path, f, text) {
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  const tmp = f + '.htd-' + process.pid + '.tmp';
+  fs.writeFileSync(tmp, text, 'utf8');
+  try { fs.renameSync(tmp, f); } catch (e) { try { fs.writeFileSync(f, text, 'utf8'); } finally { try { fs.unlinkSync(tmp); } catch (x) { /* gone */ } } }
+}
+module.exports = { MARK, OWN, KEYS, ensure, remove, scan, sig, present, lines, norm, oursPresent, writeAtomic };
