@@ -19,3 +19,8 @@
 沒有執行C++、Profiler、Home、檔案寫入、API、build、runtime或機台；實際UPH誤差仍待查。
 
 [封包宣告子樹](packets/index.md)補四份 MessageDef 的 VM／MV、MSG_CMD_UPH 與 V906／V912 版本對照；ABI、driver、機型／客戶部署仍待查。
+
+## JSON編碼與數值底層
+
+[八函式primitive子樹](json-writer/primitives/index.md)以function／變數定位UTF-8／CP950、JsonNumber及locale界線。
+來源 `8edc9bdb86d2ece2a83244d9b71f9dfe5837ce86`；歷史註解與assert不代表本輪實機測試。

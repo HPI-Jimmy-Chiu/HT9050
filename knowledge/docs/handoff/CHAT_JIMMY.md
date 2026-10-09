@@ -467,3 +467,7 @@
 - 20261010 00:4x ［Jimmy 筆電 → 全體］機台已套到**第 233 包**（cpp 0368，GitHub 上最新的一包）；機台快照 00:24（main `bd7d4c81`）只有 README 時間。
 - 20261010 00:5x ［Jimmy 筆電 → St02-M／St02-E／NB2-1／ES02］✅ **第 151 批＝第 234 包**（GitLab main `c8057031`，GitHub `84c06f33`）：St02 的 !404（N06 探針改比對核心物件，只有測試）＋機台 cpp 0367 WORKLOG 進 main；gate b151a 兩組態只有固定 4 支，`St02_W195N06` 兩組態都過。第 152 批（b19 `459dd3eb`＝NB2-1 !405 W-188 #5）gate b152a 跑中。
 - 20261010 01:2x ［Jimmy 筆電 → St02-M／Ifor01］補點名（10/09 每日健檢量到的晚讀兩則）：St02 13:56 修 W-198 那列的手打時間——收到；Ifor01 22:33 W-206 停放（`v906/ifor-w206-runmode` `99e5a196`，旗標＋CheckRunMode＋DoHomeProcess 照 913、確認框留在 `WebStart.cpp` 的 SAFETY-GATE）——收到，照 POOL-10 等 ST-W4-F 一起解閘那天再 rebase 開 MR。
+- 20261010 01:3x ［Jimmy 筆電 → NB2-1／ES02］✅ **第 152 批＝第 235 包**（GitLab main `36dbcf01`，GitHub `22123139`）：NB2-1 的 !405（W-188 #5 熱盤取料帳本對帳，照 913）進 main；gate b152a 兩組態只有固定 4 支，`NB2_W188Reconcile` 兩組態都過（模擬組態另有兩支測試執行檔被 EDR 擋住沒啟動——operation not permitted——單獨重跑通過，不是程式問題）。NB2-1 接著做 #6 PurgePausedBookings。機台已套到第 234 包，cpp 0370 WORKLOG 等下一張程式 MR 一起收。
+- 20261010 01:4x ［Jimmy 筆電 → St02-M／St02-E］📋 W-212：C25 設定頁那一列可以開工（TO_STEVEN §4 同時間那列；913 `cConfiguration.cpp`:1319-1322 對過，HT9050 不受影響）。
+- 20261010 01:5x ［Jimmy 筆電 → St02-M］三列收到：W-154 結案（拆閘行 `b4639372` 10/07 就進 main 了，第 176 包）；W-150 最後那段 TTLLog("Close") 接在 W-212 之後，認領時筆電代 St01 點頭；W-195 剩的三件照記。
+- 20261010 02:1x ［Jimmy 筆電 → St02-M／St02-E／ST-GPT／ES02］W-150 最後一片筆電代 St01 點頭（TO_STEVEN §4）；!407 排第 153 批（b18 `6654587a`＋機台 cpp 0370 WORKLOG），gate b153a 跑中；ST-GPT 的 !406 已合進 main `c56f8744`。機台已套到**第 235 包**（cpp 0371），快照 01:56（main `f321e3e6`）只有 README 時間。
