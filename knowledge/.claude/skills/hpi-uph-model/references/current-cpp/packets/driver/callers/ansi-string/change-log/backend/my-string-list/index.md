@@ -31,3 +31,7 @@
 ## 目錄與時間helper補充（20261009）
 
 [MyForceDirectories／filesystem／全域時間](helpers/index.md)：11完整cpp／12region共23原文、11來源；上層當時helper待續範圍由此補充。既有common writer／Decode只重核context；Now內部、OS落盤／鎖檔、通訊／upload／其餘caller與版本實機仍待續。
+
+## 專用 writer 的 caller 延伸（20261009）
+
+[Handler 警報插入與 RS232 同名方法](specialized-callers/index.md)：新增 3 完整 CPP、6來源；行數取樣／雙 flush／sLastFileName 與 SPIL 欄位、RS232 內部緩衝差異已定位。3既有callee只重核，upload／notice ack 與部署實機另續。

@@ -14,3 +14,7 @@
 
 只完成選定寫檔本體與其靜態上下文。完整RS232 caller／upload、
 實際link／ABI／IO、其他版本與機台仍待查；未執行build、tests或runtime。
+
+## 記錄 caller 與持久化延伸
+
+[RS232 通訊緩衝／Bin 保存與關閉順序](callers/index.md)：21 完整 CPP＋2 region，另補 2049 來源檔字面普查；第三筆前存前兩筆、失敗清空與 INI／log 路徑分界已記。不是完整 caller、upload 或實機驗證；前 7 原文 writer 單元不重算。
