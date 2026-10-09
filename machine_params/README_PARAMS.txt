@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-10 03:54
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 313d23bd PKG237: integrate laptop package 237 (GitLab b98e6151) -- St02 W-150 last part: T／web eabef66。
+HT9050 機台參數快照（machine_params\）—— 2026-10-10 05:24
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 1cef3e04 PKG238: integrate laptop package 238 (GitLab b708146d) -- St02 W-213 step 1: SECS／web eabef66。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
