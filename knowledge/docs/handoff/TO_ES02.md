@@ -442,3 +442,4 @@
 | 20261009 12:3x | 📦 **第 220 包推了**（GitHub `updates/9290fe38/`，接第 219 包；GitLab main `9290fe38`）＝第 137 批 | 機台 cpp 0348（開機時 MTestZ1 在警報就清一次，不動作）照收；St02 的 HANA RMS 照 golden 913（只有 HANA 客戶走得到，HT9050 不受影響）。 |
 | 20261009 12:3x | **cpp 0349（派工給 Jimmy：沒有 AI 的安裝／更新）收到** | 手冊＋腳本派給 Ifor01（W-197）；實測要誰做等 Jimmy（#152）。0349 排第 138 批。快照 11:49 的 IO 表改線已鏡像進 main（`de141e58`），CHAT_JIMMY 已叮嚀全體先同步再測。新增的 4 個點（`SwMobileAirSuck`／`SnMobileAirSuck`／`SnDieCleanSuck`／`SnHeatGunVacuum`）C++ 原始碼（.cpp／.h）還沒有引用；要接進流程時請開卡。 |
 | 20261009 13:2x | 📦 **第 221 包推了**（GitHub `updates/be3e7d75/`，接第 220 包；GitLab main `be3e7d75`）＝第 138 批 | St02 的 HANA TrayMap 檔名修正（只有 HANA 客戶）＋機台 cpp 0349 的派工文件＋設計外掛 0.331～0.341（只動 `tools/vscode-htdesigner/`，wb_serve 不受影響）。 |
+| 20261009 14:0x | 📦 **第 222 包推了**（GitHub `updates/73069916/`，接第 221 包；GitLab main `73069916`）＝第 139 批 | NB2-1 的入料手臂熱盤取料判斷照 golden 913（只有熱盤機型走得到，HT9050 不受影響）＋設計外掛 0.342～0.343（只動 `tools/vscode-htdesigner/`）。 |
