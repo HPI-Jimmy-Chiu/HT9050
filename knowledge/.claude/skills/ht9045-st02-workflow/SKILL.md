@@ -146,6 +146,7 @@ description: >
    - SV／EC：`tests/test_secs_catalogue.cpp` 的總數；
    - 啟動路徑：`tools/start_sites_census.py --check a b c`（`tests/CMakeLists.txt` 的 START_SitesCensus、`WebStart.h:36`、`docs/DUET3D_REFERENCE_ANALYSIS.md`、`CLAUDE.md`）；
    - 回覆字串／指令清單：grep 釘住清單的 ctest。
+   - **重產 sjson（`gen_sjson.py`）或改到任何 SYSTEM_* 結構的欄位**：`JsonBridgeS7` 釘死每個結構的欄位數和總數（例：SYSTEM_TEMPERATURE 223／總數 1135），一定列進相關測試、同一張 MR 改它的期待值（20261010 W-219 !426 重產後變 226／1138，出貨版 JsonBridgeS7 紅，筆電 e9622762 同一行補；St02-M 轉筆電）。
 10. **新的全域符號放自己的檔、用 nm 和 DLL 匯入檢查**（20261001 三例，都是只編譯看不出來）：
    - 別的 library 會呼叫的新全域符號（含後備）放進只有它的 .cpp（St02 的 CMake 那一行），不要加進既有的大檔或共用的後備檔（S-13 放 `FileRW/_fallback.cpp` 撞名；W58 的 `ela::IniBoolOverride` 放 ElaService.cpp，連帶拉進 WININET，ELA_Ftp 失敗，筆電 c9cc2aaa 搬到 ElaIniOverride.cpp）；
    - 呼叫別支檔的「真函式」之前，nm 確認它是全域 `T`；是 `t`（匿名 namespace／static）時，那支檔要加一個不同名字的全域入口（認領）（S-13：MainClose.cpp:497（現在 :500）在匿名 namespace，wb_serve 會悄悄用到後備）；
@@ -199,6 +200,10 @@ description: >
 
 **每做完一件（推送或 helper 交件）也要**（使用者 20260927 19:2x）：
 - 更新對應的 skill／reference 與現況板 `D:\HT9045\.claude\skills\ht9045-st02-workflow\references\current-state.md`；
+- **寫「HT9050 受不受影響」之前先看對的檔**（20261010 筆電 11:2x 更正）：wb_serve 讀的是 `machines/HT9050/snapshot/machine_params/D_HT9045_system/Gerneral.ini`
+  （HT9050＝`[System] CUSTOMER_CODE=957`＝CC_PTI、`USE_AUTO_RETEST=0`），**不是** `D_GPIB9045_system/general.ini`（GPIB 程式的，沒有 CUSTOMER_CODE）。
+  FUNC_CC_PTI（CosFunction.cpp:1652-1691）打開 bUseSCKART／bAutoRetestGPIBmode、不開 7016（bEnableHandlerResultServer）。所以 SCK ART：只看 bUseSCKART
+  的路徑（HandlerGpibMsg 的 SCKART 指令、BridgeCtl G13）HT9050 會走到；還要 USE_AUTO_RETEST==eartInstall 的（csystem 的 ART 路徑）走不到。
 - ChangeLog：**St02-E 自己維護** `C:\AI_TempFile\st02e-scratch\changelog\CHANGES_<YYYYMMDD>_Steven02.md`（**20261010 起**：Steven 決定入口網站 ChangeLog 改成每天一個 Steven 檔、St01／St02／ST-GPT 分節（入口網站 MR !253），入口網站的 Steven02 資料夾已移除——**不要再寫 `D:\RD5-portal\public\Docs\ChangeLog\Steven02\`**，St02-M 從 scratch 這份抄進 Steven 檔；0927～1010 的 14 個舊檔已原樣搬到 scratch）（舊規則 Steven 20261005 17:0x：ChangeLog 改放入口網站；`D:\docs\ChangeLog\` 不再寫新檔，舊檔留著；入口網站的 commit／MR 與 .html 由 St02-M 做；規則見 make-report-skill references/change-log/change-log.md §輸出路徑與命名）（摘要表一列＋一節＋待 Steven 表＋§12 目前狀態；繁體中文、絕對路徑、UTF-8 無 BOM、CRLF，用 Write 工具寫），每次推送後更新；St02-M 原樣抄進交接分支 `docs/handoff/ST02_CHANGELOG_<日期>.md` 給 ST01-M（使用者 20260927「Change log也推過去」；St01 那台讀不到我們的 D:）。
 - 日報：每次回報附一段繁體中文日報給 St02-M，它加進 `docs/handoff/ST02_DAILY_<日期>.md`；ST01-E 寫進 repo 的 `docs/ops/daily/<yyyy-mm-dd>.md`（使用者 20260927「日報可以推給st01-m幫你寫」）。不再寫 `D:\docs\ops\daily\`。
 

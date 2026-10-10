@@ -1,4 +1,80 @@
-# St02 現況板（更新：2026-10-10 06:5x）
+# St02 現況板（更新：2026-10-10 22:0x）
+
+## ★ 1010 22:0x 存檔點（5 小時 15%、7 天 27%）
+- **POOL-14（LI-9 F2-down）推完 5 張，全部等 gate**（RULINGS_20261010 #8：Q1 拆分、Q2 LEADYO 照 913 預設關、Q3 FindClose 防呆、Q4 ShowTestHeadComp
+  照呼叫／LookForFile 走 St02 掛鉤、Q5 客戶碼本體照閘）：
+  - !435 MR-A 伺服器列表（`38c70963`）✅ 已進 main（批次 169＝套件 252）。
+  - !439 MR-B1 DownloadFromServer＋Gate #2 接縫（`3a3174da`；筆電點頭的 FTPClient_Transfer.cpp:264／:266）。
+  - !440 MR-B2 DoBackupSetupFile／DoOverWriteSetupFile（`fbc5306b`，疊 !439）。**golden 913 :3679／:3777 註解尾反斜線吃掉下一行**
+    （HotPlate 備份跑到 D:\CH71、ArmCondition 沒備份）照 golden 保留；St02-M 21:1x 建議筆電選 B（修），**筆電若答 B：在 !444 補一顆同一行修正**。
+  - !442 MR-B3 btSaveSetupFileClick／ClearAllSetupFile＋Q3 防呆（`939ae2ee`，疊 !440）。台帳 4 列給筆電：handoff `ST02_POOL14_LEDGER_ROWS_20261010.md`。
+  - !444 MR-C「Download to Handler」plSLoadClick＋DownloadPasswordFormServer＋SECS／GPIB／LEADYO 分支（`38e1b6a9`，疊 !442；**下載真的會動，要人工審核**）。
+  - 合併順序 !439 → !440 → !442 → !444。下一步 MR-D＝G12 MR-2（WebLotInfoFtpInstall_St02.cpp 裝 W906_SecsFtpBusyHook／DownloadHook），可能給 St02-M 子代理。
+  - 程式在 St02 新檔 `forms/fLotInfo_Download_St02.{h,cpp}`（DownloadFromServer／Backup／OverWrite／btSave／ClearAll）與 `KYECFTP/FTPClientForm_St02.cpp`
+    （列檔、plSLoadClick、密碼本）；測試全在 `tests/test_li9_ftpclient.cpp` [8]～[12]（127 項）；腳本 `C:\AI_TempFile\st02e-scratch\p14\`
+    （gen_p14b2.py 由 golden 產生 Backup／OverWrite、mutate_p14*.py 反向）。
+  - 坑：測試沙盒路徑有 '/'，SHFileOperation 只吃 '\'（[11]／[12] 把 DataPath 換成反斜線）；同時有兩個 FTP 引擎時假伺服器要綁對引擎（Prepare8）；
+    `sed -i` 會把 CRLF 吃成 LF（用 tocrlf.py 轉回）；含反斜線的 python 不能 heredoc。
+- **W-226 還在等筆電點頭**（14 行＋Ifor01 的 test_w217_safeplc.cpp :10／:93-:95 補遺），本分支已測完（13/14 綠、補遺後 W217 9/9）。
+- ChangeLog 1010 寫到第 25 列。
+
+## ★ 1010 17:3x 存檔點（5 小時 62%、7 天 19%）
+- **W-219 ✅ 已進 main**（批次 166＝套件 249，main 973a142c）。筆電整合時補了 JsonBridgeS7 的欄位數釘子（SYSTEM_TEMPERATURE 223→226、
+  總數 1135→1138，e9622762）——那是我漏改的數量釘子；SKILL 規則 9 已補「重產 sjson 要列 JsonBridgeS7」。
+- **W-226（筆電 TO_STEVEN §4 16:3x，SAFEPLC-913 第二段）進行中，優先**：分支 `v906/st02-w226-safeplc`（工作樹 C:\AI_TempFile\st02-c24，
+  從 main e22b9f34）。認領稿 `docs/handoff/ST02_W226_CLAIM_20261010.md`（handoff 71784d58，St02-M 已貼 §1、§3 請筆電點頭 14 行）。
+  - 已 commit（本機）：`b2298978` = St02 自己的檔：新測試 St02_W226SafePlcSites（source pins）＋H013_Terms K1 改釘 913 形式
+    （**沒套 14 行之前這兩支會紅，故意的**）。後面接著 5 顆現況板／技能文件 commit（從 v906/st02-docs-1010c 搬過來）。
+  - 等筆電點頭後：`python C:\AI_TempFile\st02e-scratch\p14\w226_claim.py C:\AI_TempFile\st02-c24 check` 再 `apply`（csystem.cpp 13 行＋
+    Command.cpp:15146），commit 2/2，兩組態建置、#6、推 MR。scratch 驗過：套上 15/15、改之前 13 紅、單點退回 :21216／:16780／Command 各紅。
+  - golden 913 note.cpp（5）／mymessbox.cpp:555／iosetview.cpp:283 在移植樹沒有對應行（只註明）。
+- **POOL-14 MR-A 停在本機**（St02-M：W-226 優先）：分支 `v906/st02-p14a-ftplist`（`71fa9a36`＋`b159ad8c`，從 main 397af1b2），
+  兩組態完整建置 0 errors（建置線 s39 在 71fa9a36），**還沒跑 ctest、沒做反向、沒推**。反向腳本 `C:\AI_TempFile\st02e-scratch\p14\mutate_p14a.py`
+  （r1 不列檔／r2 tmpList 拆回／r3 不 Abort／r4 Panel15 空），測 LI9_FtpClient [3]／[4]／[8]＋node li9_ftpclient_selftest（65/65 已綠）。
+  認領稿 `docs/handoff/ST02_POOL14_CLAIM_20261010.md`（handoff 6d359dd1）；MR-B 等筆電點頭 FTPClient_Transfer.cpp:264／:266，Q1～Q5 未答。
+- ChangeLog 1010 寫到第 17 列（16＝!428、17＝!429 代記）。
+
+## ★ 1010 15:5x 存檔點（5 小時 21%、7 天 12%）
+- **W-219 完成，MR !426**（`v906/st02-w219-temp913` `91fd1adf`，從 main a5b072aa 開、不依賴別張 MR；認領稿 `docs/handoff/ST02_W219_CLAIM_20261010.md`，
+  38 行同一行修改，筆電 14:1x 點頭並代 St01 同意 golden_root.py／gen_editlist.py）：golden_root 多一棵 '913' 樹（PINS_913 釘 5 支檔的雜湊、
+  env W906_G913_ROOT），KEEP_913＝{Temperature, SYSTEM_TEMPERATURE}；Temperature.py 經 golden_root 讀 913、E030-Q78 釘 913 :4364／:4368／:4369；
+  MyTempPanel.h:154／.cpp:99 加 ed2nd*（**程式要放在既有 `//` 註解之前**，放後面會被註解掉，這次又踩一次）；重產 Temperature.gen.inc（MD5 91ea1579…）
+  與 sjson_SYSTEM_TEMPERATURE。St02_W219Temp913 兩組態 9/9，相關 18 支綠；ship 的 SjsonAlarm 兩次都被防毒擋（Not Run），SIM 綠，請 gate 重跑。
+  腳本在 `C:\AI_TempFile\st02e-scratch\w195\w213\`（w219_claim.py、mutate_w219.py r1～r4、classify_gen.py）。
+- 重產溫控檔的方法：在 `HT9011UC_Cpp_V3.33.906.0` 底下 `python tools/gen_editlist.py --only Temperature`（W906_GOLDEN_ROOT 指 0618）；
+  gen_sjson.py 會重產全部 sjson，只有 SYSTEM_TEMPERATURE 內容有變，其他只差換行，要還原。
+- machine_sync.py 在 repo 根 `D:\HT9045\tools\machine_sync\`，不在 V906 樹裡（從 V906 樹跑會找不到檔）。
+- **不要開 W-224／POOL-13**（改派 St02-M 的子代理）。ChangeLog 1010 寫到第 15 列（14＝!425 代記、15＝W-219）。等筆電的下一張卡。
+
+## ★ 1010 11:5x 存檔點（5 小時 10%、7 天 2%）
+- **疊起來的三張，要依序合 !417 → !418 → !419**：
+  - !417 W-214（`18043bed`）：筆電審過 OK，第 162 批（b18 19803a28），第 161 批進 main 後才開始 gate。
+  - !418（`v906/st02-w213-sckart-gpib`，新 tip `ee3ec5c0`）＝W-213 ②（`303ac96c`）＋**W-216**（`ee3ec5c0`：csystem W7C2 的 iWaitGPIBLotR
+    :5830／:5915／:5997／:6002 與 AccessFile :5741／:5832／:5917 改 fSCKART，golden 913 :15104／:15193／:15195／:15278／:15280／:15360／:15365）。
+  - !419（`v906/st02-w213-htset701` `e4ba09b4`）＝W-213 ④ HTSET,701（Command.cpp :17556／:17607／:17616＋:270 include）。
+- **W7C2 替身上還分開的欄位**（W-216 ③，只列不改；golden 每處都讀寫 fSCKART）：iOutputJamCnt（:5667／:5825／:5910）、iNeedRT＋CheckNeedRT
+  （替身 core＋SckArt_CheckNeedRT）、SaveTestSummary（空）、UpdateCount（空）、iLotCount、palOutputCnt／palRejectCnt（:5739-:5740）。
+- **HT9050 更正（筆電 11:2x）**：HT9050＝CUSTOMER_CODE 957 CC_PTI（machines/HT9050/snapshot/machine_params/D_HT9045_system/Gerneral.ini:9，
+  wb_serve 讀這份；別看 D_GPIB9045_system/general.ini），FUNC_CC_PTI 打開 bUseSCKART／bAutoRetestGPIBmode（CosFunction.cpp:1683-1684），
+  USE_AUTO_RETEST=0（同檔 :38）、不開 7016（bEnableHandlerResultServer 只有 Greatek／TeraPower／TeraProbe）。所以：csystem 的 ART 路徑
+  （要 USE_AUTO_RETEST==eartInstall）在 HT9050 走不到；HandlerGpibMsg 的 SCKART 指令與 BridgeCtl G13（只看 bUseSCKART）在 HT9050 會走到。
+- **L07**：① Ifor01 的 5 個 iATCRemoteChangeTempCnt 位置已核（uhome.cpp:1149 行尾有註解，建議放 :1150）；② 等 Ifor01 的 L07 資料模型 MR 進 main
+  後，由我用 913 重產 tools/editlist/Temperature.py（RULINGS_20261009 #6），跟 912 版的差只能是 913 自己的改動（ed2nd* 等）。
+  **② 已成卡 W-219**（筆電 TO_STEVEN §4 11:5x；**Ifor01 的 L07 資料模型 MR 進 main 之後才開工**）：Temperature.py:23 `_GOLDEN` 與
+  golden_root KEEP_V912（Temperature／SYSTEM_TEMPERATURE）改指 913；E030-Q78 釘的 912 行號（4240／4244／4245）改成 913 的；PANEL_EDITS 加 ed2nd*
+  （MyTempPanel.h 要有那三個成員，TS_TMyTempPanel 轉接才編得過）；重產 Temperature.gen.inc 與 sjson；跟 912 產出的差只能是 913 自己的 L07 欄位，
+  其他的先列進 FROM_STEVEN §3 再合；一張 MR、ctest＋反向檢查；HT9050 USE_ATC_MODE=0 不受影響。
+- 測試時的 lastdata：machine_sync apply／restore 會把 D:\HT9045\system\lastdata.dat 換成機台版（179928）／換回本機版（178896），
+  所以「測試前後」要在同一輪裡比，不要跨輪比。
+
+## ★ 1010 10:5x 存檔點（Steven 換帳號後額度歸零：5 小時 4%、7 天 1%）
+- **W-214 完成，MR !417**（`v906/st02-w214-sckart-unify` `18043bed`，含 6 顆文件 commit）：TfSCKART 是唯一 lot 狀態，csystem 替身轉送／改讀 fSCKART，
+  替身欄位放 golden 值（筆電 07:1x）；St02_W214SckartUnify 9/9、W7_F2 50/50；St02-M 已寫請 gate（B97）。
+- **W-213 ② 完成，MR !418**（`v906/st02-w213-sckart-gpib` `303ac96c`，**疊在 !417 上，要先合 !417**）：HandlerGpibMsg G8～G11、BridgeCtl G13 開，G7 照關；
+  St02_W213SckartGpib 12/12（批次結束→LOTSTATUS 回「0,0,LOTSTATUS_L」）；DoCleanOutFinishCheck 要整條清料流程才到 :3200，沒直接跑，用原始碼釘子＋直接呼叫。
+- W-213 ④（HTSET,701，Command.cpp，筆電的檔）還沒做：筆電提醒 (a) golden 913 :13811 會 WriteLastDataFile，要包 realfile_guard；(b) fSortCT 的
+  ShowLoadingIC／ShowSortIC 與 btClearBarcodeList->Click() 有 C++ 就呼叫、沒有就關著寫理由；(c) 查移植樹有沒有 AMR.ARTReset()；回覆從空變 HTSR,701,OK／NG＝人工審核。
+- ChangeLog 新位置 `C:\AI_TempFile\st02e-scratch\changelog\`（1010 寫到第 11 列）。
 
 ## ★ 1010 06:5x 存檔點——7 天額度到 85%，停在這裡（額度約 4 天 11 小時後重置；筆電說 W-214 低優先、不改派）
 - **ChangeLog 搬家（Steven 1010，入口網站 MR !253）**：之後寫 `C:\AI_TempFile\st02e-scratch\changelog\CHANGES_<日期>_Steven02.md`，**不要再寫 D:\RD5-portal\public\Docs\ChangeLog\Steven02\**（資料夾已移除；入口網站改成每天一個 Steven 檔，St02-M 抄進去）。

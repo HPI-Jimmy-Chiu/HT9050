@@ -498,3 +498,5 @@
 | 20261010 22:2x | ⏰ **（W-153；第 2 次追問）Auto High 實測、EP 用哪一個——請回一行** | 機台已經在第 253 包（Auto High 在第 176 包就進了）。1009 17:2x 問的兩件還沒看到：①EP 用哪一個；②Auto High 實測（找高度、存、套用、3 次重複、沒 socket 的負向）。另外（W-129）：機台 18:07 快照的 `runcfg` teach.ini 裡 Index 放料 Z 教點 `[MTestZ1] setEditIndex1ToOutSht1Z` **還是 0**——跑正式流程前請教好。量到什麼寫一行就好；同一題也給了 St01。沒回之前照現行（不擋任何東西）。 |
 | 20261010 22:2x | ✅ **HTDESIGNER 0.432～0.445 合進 main**（`42ef1fce`，22:0x） | 只動 `tools/vscode-htdesigner/`；第 255 包（GitHub `f92f25cd`）帶著。 |
 | 20261010 22:3x | 💬 **（給 EastSun）W-227 只剩兩題**：Steven 22:1x 已答「OLP 主機沒在用、內部測試會用、照 golden 接」和「遠端 HOME／改時間照 golden」 | 還想請你答：①6671 沒有密碼，接上後 HT9050（力成客戶碼）開機就會聽這個 port、網段上的主機可以遠端 HOME——要不要用 Windows 防火牆只放行主機的 IP，或乾脆擋掉？②接上後要不要上機看心跳／重連。不急，不擋任何東西。 |
+| 20261010 22:5x | 📦 **第 256 包推了**（GitHub `updates/dd215cdc/`，接第 255 包；GitLab main `dd215cdc`）＝第 173 批 | Ifor01 的遠端變溫計數器照 913（只是計數）＋筆電的新測試 BsCommentSplice（只掃原始碼）。**HT9050 跑機動作不變**。機台在第 254 包，第 255、256 包都在 GitHub，有空再套。 |
+| 20261010 22:5x | ✅ **HTDESIGNER 0.446～0.449 合進 main**（`69d32b48`） | 只動 `tools/vscode-htdesigner/`；下一包帶著。 |
