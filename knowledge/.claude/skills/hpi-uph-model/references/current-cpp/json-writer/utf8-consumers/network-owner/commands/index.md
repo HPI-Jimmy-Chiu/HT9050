@@ -34,3 +34,11 @@ Context：[CommandQueue.h全文](raw/source-04.md)、[名稱與local timestamp h
 ## browser dialog host與overlay續篇
 
 [十三個JavaScript函式與兩份完整原文](browser-host/index.md)分清query／notice／auth／cancel與窄adapter差異；13JS302行與CPP數分開，現場載入／完整client和bridge待續。
+
+## Recipe Client連線／ACK與token續篇
+
+[兩版本Recipe Client](recipe-client/index.md)接續12選定完整JS／196函式行及兩全文1597行；opening、pending、有限retry／idle與API差異分清，完整bridge／page／部署待續。
+
+## Dialog bridge送答與關閉回覆續篇
+
+[頁面bridge](dialog-bridge/index.md)接續七完整JS175行及全文835行；iframe來源／requestId、傳輸fallback、close佇列與失敗界線分清，完整page／caller及部署待續。
