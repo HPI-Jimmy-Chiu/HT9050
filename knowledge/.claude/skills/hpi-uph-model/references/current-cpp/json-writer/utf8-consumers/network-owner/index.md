@@ -27,3 +27,7 @@ socket owner自行解析HTTP，不能沿用獨立parser／checker的全部保證
 ## Snapshot／outgoing與ACK子樹
 
 [Pumps與ACK 5完整函式](pumps/index.md)追generation／baseline、ticket／connId與queue移交；原header／metadata／歷史效能說明保留，送出與peer收到分清。
+
+## 命令驗證與告警query子樹
+
+[Commands 3完整函式](commands/index.md)追JSON／owner gate、browser id與ticket、QueuePush presence旗標、alarm／query與保留狀態；原header與歷史理由完整保存，端到端重播仍待續。
