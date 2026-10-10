@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-10 11:27
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 283d8901 PKG243: integrate laptop package 243 (GitLab 8f4bc9f0) -- NB2-1 W-188 #7: ScanTra／web eabef66。
+HT9050 機台參數快照（machine_params\）—— 2026-10-10 11:36
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 2fdf297f BOOTREOPEN0AX: at boot, a 1203 card that opens with no axis open is an open failu／web eabef66。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
