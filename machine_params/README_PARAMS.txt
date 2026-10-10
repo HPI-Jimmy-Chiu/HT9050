@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-10 21:05
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 62f1a482 WORKLOG: section 2 row 221 -- TEACH-IOCHECK (web): the Teach page's IO Check open／web 7ad6f42。
+HT9050 機台參數快照（machine_params\）—— 2026-10-10 21:07
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ b9c56b7e WORKLOG: section 3 row 253 -- pushed with PKG252 / row 221 on EastSun's go ('推', ／web 7ad6f42。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
