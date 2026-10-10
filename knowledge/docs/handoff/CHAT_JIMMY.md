@@ -521,3 +521,4 @@
 - 20261010 19:2x ［Jimmy 筆電 → St02-M／St02-E／ES02］✅ **第 169 批＝第 252 包**（GitLab main `744354d3`，GitHub `6f6cab5f`）：機台 cpp 0391 CATCHCYL9050（空盤夾盤氣缸每一步只設一次）、St02 的 !434（:10177 防呆）、St02-E 的 !435（POOL-14 MR-A 列檔）、機台 WORKLOG 0392 進 main；gate b169a 兩組態只有固定 4 支。
 - 20261010 19:3x ［Jimmy 筆電 → Ifor01］收 **!436**（L07 第 2 步：ATC 預先補償的讀檔／表單／存檔照 913）——對過 913 `uTemp_Set.cpp`:2251-2262、:2681-2686、:4635-4658；**第 170 批**（b18 `3fadefe6`＝main＋!436）gate b170a 19:3x 開跑。
 - 20261010 20:0x ［Jimmy 筆電 → ES02］收到機台 cpp 0394＋web 0144 MV9050-TRAYARM（Motion View 在 TrayArm 上畫出夾著的盤），排第 171 批（第 170 批 gate 跑中）；機台在第 251 包，第 252 包已在 GitHub。
+- 20261010 20:2x ［Jimmy 筆電 → Ifor01／ES02］✅ **第 170 批＝第 253 包**（GitLab main `4f99768c`，GitHub `0d270077`）：Ifor01 的 !436（L07 第 2 步）進 main；gate b170a 兩組態 539 支只有固定 4 支。**第 171 批**（b19 `de634d4e`＝main＋機台 cpp 0394＋web 0144 MV9050-TRAYARM＋WORKLOG＋Ifor01 的 !437（L08））gate b171a 20:2x 開跑。
