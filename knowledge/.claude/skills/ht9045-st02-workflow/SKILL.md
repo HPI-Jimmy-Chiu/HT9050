@@ -199,7 +199,7 @@ description: >
 
 **每做完一件（推送或 helper 交件）也要**（使用者 20260927 19:2x）：
 - 更新對應的 skill／reference 與現況板 `D:\HT9045\.claude\skills\ht9045-st02-workflow\references\current-state.md`；
-- ChangeLog：**St02-E 自己維護** `D:\RD5-portal\public\Docs\ChangeLog\Steven02\CHANGES_<YYYYMMDD>_Steven02.md`（Steven 20261005 17:0x：ChangeLog 改放入口網站；`D:\docs\ChangeLog\` 不再寫新檔，舊檔留著；入口網站的 commit／MR 與 .html 由 St02-M 做；規則見 make-report-skill references/change-log/change-log.md §輸出路徑與命名）（摘要表一列＋一節＋待 Steven 表＋§12 目前狀態；繁體中文、絕對路徑、UTF-8 無 BOM、CRLF，用 Write 工具寫），每次推送後更新；St02-M 原樣抄進交接分支 `docs/handoff/ST02_CHANGELOG_<日期>.md` 給 ST01-M（使用者 20260927「Change log也推過去」；St01 那台讀不到我們的 D:）。
+- ChangeLog：**St02-E 自己維護** `C:\AI_TempFile\st02e-scratch\changelog\CHANGES_<YYYYMMDD>_Steven02.md`（**20261010 起**：Steven 決定入口網站 ChangeLog 改成每天一個 Steven 檔、St01／St02／ST-GPT 分節（入口網站 MR !253），入口網站的 Steven02 資料夾已移除——**不要再寫 `D:\RD5-portal\public\Docs\ChangeLog\Steven02\`**，St02-M 從 scratch 這份抄進 Steven 檔；0927～1010 的 14 個舊檔已原樣搬到 scratch）（舊規則 Steven 20261005 17:0x：ChangeLog 改放入口網站；`D:\docs\ChangeLog\` 不再寫新檔，舊檔留著；入口網站的 commit／MR 與 .html 由 St02-M 做；規則見 make-report-skill references/change-log/change-log.md §輸出路徑與命名）（摘要表一列＋一節＋待 Steven 表＋§12 目前狀態；繁體中文、絕對路徑、UTF-8 無 BOM、CRLF，用 Write 工具寫），每次推送後更新；St02-M 原樣抄進交接分支 `docs/handoff/ST02_CHANGELOG_<日期>.md` 給 ST01-M（使用者 20260927「Change log也推過去」；St01 那台讀不到我們的 D:）。
 - 日報：每次回報附一段繁體中文日報給 St02-M，它加進 `docs/handoff/ST02_DAILY_<日期>.md`；ST01-E 寫進 repo 的 `docs/ops/daily/<yyyy-mm-dd>.md`（使用者 20260927「日報可以推給st01-m幫你寫」）。不再寫 `D:\docs\ops\daily\`。
 
 ## 6. 回報與文件的語言

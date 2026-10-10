@@ -1,6 +1,32 @@
-# St02 現況板（更新：2026-10-10 04:2x）
+# St02 現況板（更新：2026-10-10 06:5x）
 
-## ★ 1010 04:2x 存檔點（7 天額度 84%；85% 起不實作新卡，只停在認領稿；90% 停止）
+## ★ 1010 06:5x 存檔點——7 天額度到 85%，停在這裡（額度約 4 天 11 小時後重置；筆電說 W-214 低優先、不改派）
+- **ChangeLog 搬家（Steven 1010，入口網站 MR !253）**：之後寫 `C:\AI_TempFile\st02e-scratch\changelog\CHANGES_<日期>_Steven02.md`，**不要再寫 D:\RD5-portal\public\Docs\ChangeLog\Steven02\**（資料夾已移除；入口網站改成每天一個 Steven 檔，St02-M 抄進去）。
+- **W-214（POOL-12 SCKART-UNIFY）做到一半，只在本機**：分支 `v906/st02-w214-sckart-unify`（工作樹 C:\AI_TempFile\st02-c24，
+  從 main 34c8e2e1＋本板三顆文件 commit），WIP commit `fd5254a3`：認領行已套（`w213\w214_claim.py`，42 行 4 檔，St02-M 06:5x 修過：
+  **不改替身建構子**（:2781／:3984 不動）、test_w7_f2 PART C 的 C1～C4 換成一行「removed」註解、加 C9（8 個呼叫點讀 fSCKART-> 等）與
+  C10（fSCKART.cpp 建構子常數是 golden）；認領稿 `w213\w214_claim.md` 給 St02-M 貼 §1）＋新測試 tests/test_st02_w214_sckart_unify.cpp＋CMake 區塊。
+  **還沒建置、沒跑測試、沒做反向檢查、沒推**。
+- **重置後接著做**：(1) 先 `git fetch`，若 main 動了 csystem.cpp／fSCKART.*／test_w7_f2 就 `w214_claim.py . check` 重核；(2) 建置線 s39
+  `git checkout --detach v906/st02-w214-sckart-unify`，兩組態完整建置；(3) #6 裡跑 St02_W214SckartUnify、W7_F2 那支（名字從
+  tests/CMakeLists.txt grep `test_w7_f2_sckart_state`）、St02_W132Sckart、清料／ART 相關（grep `cleanout\|W7_C1\|W7_C2`）、FShow_Audit、START_SitesCensus；
+  (4) 反向：TfSCKART 的 switch 改壞一個 case → [2] 紅；:5784 改回 W7C2 影子 → C9 與 [3] 紅；:3202 改回 W7C1 → [4] 紅；fSCKART.cpp 的 L=3 改 0 → [1]／C10 紅；
+  (5) 壓成一顆程式 commit（文件三顆照留）、merge-tree、推 MR、回報；之後才是 W-213 ②（G8～G11、G13＋批次結束→LOTSTATUS_L 的端到端測試）。
+  **(1b) 筆電 07:1x 加的（同一張 W-214 MR，FROM_STEVEN §1 W-214 列，handoff 9fb88b8d）**：csystem.cpp :2781／:3984 替身建構子改 golden 值
+  （W7C1 iLOTSTATUS_L(3)；W7C2 iLOTSTATUS_W(1)、R(4)、A(6)）＋測試加一個斷言釘這 4 個值＝golden（理由：死欄位放錯的值會誤導下一個讀的人）。
+  做法：在 `w213\w214_claim.py` 加回兩個 `sub` 行（:2781 `iLOTSTATUS_L(0)`→`(3)`、:3984 `W(0),R(0),A(0)`→`W(1),R(4),A(6)`），:2672／:3959 的 RESOLVED 註記改說
+  「欄位不再被讀、值已是 golden」；斷言放在 test_w7_f2 PART C（例：C1 那行的註解換成 `PIN_SEAM(... "iLOTSTATUS_L", 3, ...)` 要兩行，行數不變就要另找空間，
+  或放進 St02_W214SckartUnify 用原始碼釘子），重產認領稿交 St02-M 更新 §1 再實作。
+- **W-214（POOL-12 SCKART-UNIFY）設計說明** `C:\AI_TempFile\st02e-scratch\w195\w213\sckart_unify_design.md` 交 St02-M 轉筆電審（06:0x）。
+  建議 A：TfSCKART 當唯一 lot 狀態，csystem 的 W7C1／W7C2 在呼叫點改讀寫 fSCKART（:2743／:3948／:3200／:3251／:3202／:3253／:5784／:5827／:5829／
+  :5869／:5912／:5914），SCK_ART.* 不動；test_w7_f2_sckart_state PART C（筆電）要改釘。點頭＋額度允許才實作；之後才是 W-213 ②（G8～G11、G13）與 ④。
+- !411 在第 157 批 gate（b157a）。
+- **W-213 在 St02 領域收尾**：剩下 25 個未重驗的閘 05:4x 全查完，沒有可以照 913 開的。E7／E8（本體在 ht9045_sm，secsgem 不連 sm）、
+  G12（fFTPClient 只在 wb_serve；要 hook，遠端 FTP 下載配方＝人工審核，建議另開卡）理由文字過期但仍擋。表在 w213\W213_REMEASURE.md。
+- 等：!411 的 gate（St02-M B96）。之後沒有派卡就待命。
+- **05:36 推 MR !411**（`v906/st02-w213-hgem` `84fecde4`，連同本板 04:0x～04:2x 三顆文件 commit）：W-213 ③ uHGemHT9045 G37／G41～G43／G47 照 913 開，
+  測試 St02_W213HgemS2F41（HCACK 要從 S2F42 回覆緩衝讀：解析成功時函式固定回 1，uHGemHT9045.cpp:8010-8016）。等 St02-M 寫「請 gate」。
+- W-213 ②（TfSCKART）與 ④（HTSET,701）擱置，根本解是 POOL-12「SCKART-UNIFY」（docs/handoff/POOL.md，低優先、先寫設計說明）。
 - **今天已進 main**：!407 W-212（[C25] 設定頁那一列，第 153 批）、!408 W-150 最後一片（FormClose TTLLog("Close")，第 154 批）。W-150 全部做完。
 - **已推、等 gate**：**!409 W-213 SV G21**（`v906/st02-w213-sv-g21` `7ca401f1`，疊在 main 8cd0be50）：SVID 1191 "Error Bin Count" 照 golden 913
   SECSGEM/uHGemHT9045_SV.cpp:235 登錄；筆電 03:3x 點頭（TO_STEVEN §4）；St01 不在，ctest 自己在合併後的樹跑（兩組態 13 支全過、反向檢查 [5] 紅→綠）。
