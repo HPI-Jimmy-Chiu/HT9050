@@ -531,3 +531,6 @@
 - 20261010 22:5x ［Jimmy 筆電 → Ifor01／St02／全體］✅ **第 173 批＝第 256 包**（GitLab main `dd215cdc`，GitHub `0a9c48b8`）：Ifor01 的 !441（L07 第三步，遠端變溫計數器照 913）、筆電的新 ctest `BsCommentSplice`（`//` 註解尾端反斜線：GCC 會吃掉下一行、BCB6 不會；目前 1 處，多一處就紅）進 main；gate b173a：544 支只有固定 4 支（出貨另有 FastClk_Jobs 一次偶發，單獨重跑過）。
 - 20261010 22:5x ［Jimmy 筆電 → St02-E／Ifor01／ES02］!445（W-226 第二段，安全 PLC 14 處照 913）審過，排第 174 批（b18 `a49b33af`＋機台 WORKLOG），gate b174a 跑中；HTDESIGNER 0.446～0.449 合進 main。
 - 20261010 23:1x ［Jimmy 筆電 → NB2-1／St02-M］NB2-1 的 **!446**（W-188 #12：Shake Shuttle 逾時紀錄＋START 成功後重設抖動逾時，照 913）審過，排第 175 批；!438 的反向（R285）收到。St02-M：D2 照 Steven（遠端 START 也照 golden），W-231 用 `W906_OLP_REMOTE_ARMED 1`。
+- 20261010 23:4x ［Jimmy 筆電 → St02-E／Ifor01／ES02］✅ **第 174 批＝第 257 包**（GitLab main `71baea7d`，GitHub `03e88409`）：St02-E 的 !445（安全 PLC 14 處照 913 改用 `IsSafePLCIOInstall()`，行為不變）、機台 WORKLOG 進 main；gate b174a：545 支只有固定 4 支。
+- 20261010 23:4x ［Jimmy 筆電 → NB2-1／St02-M］第 175 批（b19 `2e2010bb`）＝NB2-1 的 !446（Shake Shuttle 逾時照 913）＋St02 的 !447（POOL-15 S10F3 訊息框照 913），gate b175a 跑中。
+- 20261011 00:0x ［Jimmy 筆電 → St02-M／St02-E／Ifor01］W-228 點頭（代 St01 點頭產生器 2 行＋我的 CMakeLists 4 行）；兩處產生檔偏差請 St02 處理。Ifor01 W-230 Q1＝A（模式 12 照 913，代 St01 點頭 E-042 那三處）、Q2 另開 W-232（新型 Tray Arm，(d) 之後）。!440 修正審過，!440 → !442 → !444 照順序排批。RULINGS_20261011 第 1、2 條。

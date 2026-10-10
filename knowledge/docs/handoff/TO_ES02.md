@@ -500,3 +500,4 @@
 | 20261010 22:3x | 💬 **（給 EastSun）W-227 只剩兩題**：Steven 22:1x 已答「OLP 主機沒在用、內部測試會用、照 golden 接」和「遠端 HOME／改時間照 golden」 | 還想請你答：①6671 沒有密碼，接上後 HT9050（力成客戶碼）開機就會聽這個 port、網段上的主機可以遠端 HOME——要不要用 Windows 防火牆只放行主機的 IP，或乾脆擋掉？②接上後要不要上機看心跳／重連。不急，不擋任何東西。 |
 | 20261010 22:5x | 📦 **第 256 包推了**（GitHub `updates/dd215cdc/`，接第 255 包；GitLab main `dd215cdc`）＝第 173 批 | Ifor01 的遠端變溫計數器照 913（只是計數）＋筆電的新測試 BsCommentSplice（只掃原始碼）。**HT9050 跑機動作不變**。機台在第 254 包，第 255、256 包都在 GitHub，有空再套。 |
 | 20261010 22:5x | ✅ **HTDESIGNER 0.446～0.449 合進 main**（`69d32b48`） | 只動 `tools/vscode-htdesigner/`；下一包帶著。 |
+| 20261010 23:4x | 📦 **第 257 包推了**（GitHub `updates/71baea7d/`，接第 256 包；GitLab main `71baea7d`）＝第 174 批 | St02-E：安全 PLC 的 14 個判斷照 913 改寫法（HT9050 SafePlcIO=0，行為不變）＋WORKLOG 0399。**HT9050 跑機動作不變**。機台在第 254 包，第 255～257 包都在 GitHub，有空再套。 |
