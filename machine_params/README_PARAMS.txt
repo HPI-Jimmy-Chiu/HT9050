@@ -1,5 +1,5 @@
-HT9050 機台參數快照（machine_params\）—— 2026-10-10 15:58
-來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ 25716375 PKG248: integrate laptop packages 247-248 (GitLab c2c58b23, 8798c1e1) -- NB2-1 W-／web eabef66。
+HT9050 機台參數快照（machine_params\）—— 2026-10-10 16:21
+來源：HT9050 實機（裝 PCIE-1203 的那台）。程式版本：C++ ec938910 PAUSESTOP1203: on PAUSE, StopAllMotor stops every PCIE-1203 axis at once (deceler／web eabef66。
 每次機台端推 GitHub 都會重拍一次（整個資料夾鏡像），所以這個分支的 git 歷史就是機台設定的歷史。
 
 資料夾 → 放回機台的位置
