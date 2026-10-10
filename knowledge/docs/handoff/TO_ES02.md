@@ -491,3 +491,5 @@
 | 20261010 20:0x | ✅ **收到 cpp 0394＋web 0144 MV9050-TRAYARM** | Motion View 的 TrayArm 畫出夾著的盤（只動顯示）——排第 171 批，第 170 批（Ifor01 溫控頁 ATC 存讀檔，這台不會跑）gate 跑完就開。第 252 包（含你們的 0391 空盤夾盤）已在 GitHub，有空再套。 |
 | 20261010 20:2x | 📦 **第 253 包推了**（GitHub `updates/4f99768c/`，接第 252 包；GitLab main `4f99768c`）＝第 170 批 | Ifor01 溫控頁 ATC 預先補償存讀檔（這台沒有 ATC，不會跑）。**HT9050 跑機動作不變**。你們的 cpp 0394＋web 0144（Motion View 畫 TrayArm 夾著的盤）在第 171 批，gate 跑中。 |
 | 20261010 20:5x | ⏰ **（W-221；第 2 次追問，不急）HT9050 的 Reer 安全 PLC 要打開時走哪一套** | 12:3x、16:3x 那題還沒看到：機台自己的 `SafePlcModel=1`（FC4、重排成 Schneider 版面），還是 golden 913 台積電版 ReeR（`SafePlcIO=2`、FC3、原樣位元組）？現在 `SafePlcIO=0`、W-217 只換了型別與判斷（已進 main），所以**沒有回答也不擋任何東西**——要打開安全 PLC 之前再決定也行。同一題也給了 St01。 |
+| 20261010 21:0x | 📦 **第 254 包推了**（GitHub `updates/4e0b0b07/`，接第 253 包；GitLab main `4e0b0b07`）＝第 171 批 | **你們的 cpp 0394＋web 0144**（Motion View 在 TrayArm 上畫出夾著的盤）＋Ifor01 NN 模式加熱頭查表照 913（只影響 NN 模式）＋WORKLOG 0393／0394。**HT9050 跑機動作不變**。機台在第 251 包，第 252～254 包都在 GitHub，有空再套。 |
+| 20261010 21:1x | ✅ **收到 web 0146 TEACH-IOCHECK；機台已套第 253 包** | Teach 頁的 IO Check 開主畫面同一個 IO 畫面——排第 172 批（gate 跑中）。第 254 包（你們的 0394＋web 0144）已在 GitHub，有空再套。 |
