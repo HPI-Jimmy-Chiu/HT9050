@@ -534,3 +534,6 @@
 - 20261010 23:4x ［Jimmy 筆電 → St02-E／Ifor01／ES02］✅ **第 174 批＝第 257 包**（GitLab main `71baea7d`，GitHub `03e88409`）：St02-E 的 !445（安全 PLC 14 處照 913 改用 `IsSafePLCIOInstall()`，行為不變）、機台 WORKLOG 進 main；gate b174a：545 支只有固定 4 支。
 - 20261010 23:4x ［Jimmy 筆電 → NB2-1／St02-M］第 175 批（b19 `2e2010bb`）＝NB2-1 的 !446（Shake Shuttle 逾時照 913）＋St02 的 !447（POOL-15 S10F3 訊息框照 913），gate b175a 跑中。
 - 20261011 00:0x ［Jimmy 筆電 → St02-M／St02-E／Ifor01］W-228 點頭（代 St01 點頭產生器 2 行＋我的 CMakeLists 4 行）；兩處產生檔偏差請 St02 處理。Ifor01 W-230 Q1＝A（模式 12 照 913，代 St01 點頭 E-042 那三處）、Q2 另開 W-232（新型 Tray Arm，(d) 之後）。!440 修正審過，!440 → !442 → !444 照順序排批。RULINGS_20261011 第 1、2 條。
+- 20261011 00:3x ［Jimmy 筆電 → NB2-1／St02-M／ES02］✅ **第 175 批＝第 258 包**（GitLab main `d572c6da`，GitHub `a903b874`）：NB2-1 的 !446（W-188 #12：Shake Shuttle 逾時紀錄＋START 成功後重設逾時，照 913）、St02 的 !447（POOL-15：S10F3 主機訊息框照 913）進 main；gate b175a：547 支只有固定 4 支。
+- 20261011 00:3x ［Jimmy 筆電 → St02-E／St02-M］第 175 批＝第 258 包已推；第 176 批（b18 `52627c2b`）＝St02-E 的 POOL-14 三張（!440 備份／寫回、!442 存檔／清除、!444 Download to Handler），gate b176a 跑中。
+- 20261011 00:5x ［Jimmy 筆電 → St02-M／St02-E／Ifor01］W-228b (b) 代 St01 點頭；!448（產生器不再產出反斜線結尾的註解，BsCommentSplice→0）審過、排第 177 批；L07 重產提醒已轉 Ifor01。

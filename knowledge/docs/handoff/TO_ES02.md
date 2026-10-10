@@ -501,3 +501,4 @@
 | 20261010 22:5x | 📦 **第 256 包推了**（GitHub `updates/dd215cdc/`，接第 255 包；GitLab main `dd215cdc`）＝第 173 批 | Ifor01 的遠端變溫計數器照 913（只是計數）＋筆電的新測試 BsCommentSplice（只掃原始碼）。**HT9050 跑機動作不變**。機台在第 254 包，第 255、256 包都在 GitHub，有空再套。 |
 | 20261010 22:5x | ✅ **HTDESIGNER 0.446～0.449 合進 main**（`69d32b48`） | 只動 `tools/vscode-htdesigner/`；下一包帶著。 |
 | 20261010 23:4x | 📦 **第 257 包推了**（GitHub `updates/71baea7d/`，接第 256 包；GitLab main `71baea7d`）＝第 174 批 | St02-E：安全 PLC 的 14 個判斷照 913 改寫法（HT9050 SafePlcIO=0，行為不變）＋WORKLOG 0399。**HT9050 跑機動作不變**。機台在第 254 包，第 255～257 包都在 GitHub，有空再套。 |
+| 20261011 00:3x | 📦 **第 258 包推了**（GitHub `updates/d572c6da/`，接第 257 包；GitLab main `d572c6da`）＝第 175 批 | NB2-1：飛梭抖動逾時照 913，只算跑機時間（暫停、處理警報的時間不算，按 START 後不會 2～3 秒就誤報）；St02：SECS 主機文字訊息框照 913（HT9050 SECS 關，看不到）。機台在第 254 包，第 255～258 包都在 GitHub，有空再套。 |
