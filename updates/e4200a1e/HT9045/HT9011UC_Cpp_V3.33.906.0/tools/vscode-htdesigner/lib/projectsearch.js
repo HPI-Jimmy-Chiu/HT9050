@@ -1,0 +1,421 @@
+'use strict';
+// AI(W906-HTDESIGNER) 20261001 (0.137, EastSun: "我沒辦法整個專案查詢關鍵字並列出來"): 專案搜尋 -- one keyword over the
+// whole project: the C++ port tree, the web tree and the BCB6 golden tree, every hit listed (area -> file -> line).
+// VS Code's own Find in Files reads every file as UTF-8, so the golden tree (Big5: 186 of its 194 .cpp are not valid
+// UTF-8) comes out garbled and a Chinese keyword never matches there. Here each file is decoded the way it is written:
+// the golden tree as Big5, the others as UTF-8 -- and a file of them that is not valid UTF-8 as Big5 too.
+// Plain Node (tests run it without VS Code).
+const fsp = require('fs/promises');
+const path = require('path');
+const { mask } = require('./cppstub');
+
+// AI(W906-HTDESIGNER) 20261008 (EastSun「我希望多加篩選 被註解掉的不要搜尋」): 不含註解 -- a hit in a // or /* */ comment, or
+// on a line an #if 0 block never compiles (this tree's way of keeping golden code it does not run), is left out; one in
+// a string stays. C / C++ / JS files only (.dfm / .md / .json have no such comments).
+const CODE_EXT = /\.(cpp|cc|cxx|c|h|hpp|hxx|inc|inl|js|mjs|cjs)$/i;
+const CPP_EXT = /\.(cpp|cc|cxx|c|h|hpp|hxx|inc|inl)$/i;
+/** the comments of a C / C++ / JS text: [[start, end)] -- strings and character literals skipped */
+function commentRanges(t, js) {
+  const out = [];
+  let i = 0;
+  while (i < t.length) {
+    const c = t[i], d = t[i + 1];
+    if (c === '/' && d === '/') { const e = t.indexOf('\n', i); const j = e < 0 ? t.length : e; out.push([i, j]); i = j; continue; }
+    if (c === '/' && d === '*') { const e = t.indexOf('*/', i + 2); const j = e < 0 ? t.length : e + 2; out.push([i, j]); i = j; continue; }
+    // (1008 review #9: a JS regex literal -- /\/\/x/ read as a // comment to the end of the line. A "/" where a value is
+    //  expected (after ( , = : [ ! & | ? { } ; + - * % < > ~ ^, return / typeof, or at the start) begins one: skipped to
+    //  its closing "/", [...] classes and \ escapes kept)
+    if (js && c === '/') {
+      let k = i - 1;
+      while (k >= 0 && (t[k] === ' ' || t[k] === '\t')) k--;
+      const before = k < 0 ? '' : t[k];
+      const word = /(?:^|[^\w$])(return|typeof|case|in|of|void|delete|new)$/.test(t.slice(Math.max(0, k - 8), k + 1));
+      if (k < 0 || '(,=:[!&|?{};+-*%<>~^\n\r'.includes(before) || word) {
+        let j = i + 1, cls = false;
+        while (j < t.length && t[j] !== '\n') {
+          if (t[j] === '\\') { j += 2; continue; }
+          if (t[j] === '[') cls = true; else if (t[j] === ']') cls = false; else if (t[j] === '/' && !cls) break;
+          j++;
+        }
+        if (j < t.length && t[j] === '/') { i = j + 1; continue; }
+      }
+    }
+    if (c === '"' || c === "'" || c === '`') { let j = i + 1; while (j < t.length && t[j] !== c && (c === '`' || t[j] !== '\n')) j += t[j] === '\\' ? 2 : 1; i = j + 1; continue; }
+    i++;
+  }
+  return out;
+}
+/** the hits of `file` not in a comment / an #if 0 block (text = the file's text, hits from hitsIn) */
+function dropCommented(file, text, hits) {
+  if (!CODE_EXT.test(file) || !hits.length) return hits;
+  const cm = commentRanges(text, /\.(js|mjs|cjs)$/i.test(file));
+  let dead = [];
+  if (CPP_EXT.test(file)) { try { dead = require('./deadcode').deadRanges(text); } catch (e) { dead = []; } }
+  const inC = at => { let lo = 0, hi = cm.length - 1; while (lo <= hi) { const m = (lo + hi) >> 1; if (cm[m][1] <= at) lo = m + 1; else if (cm[m][0] > at) hi = m - 1; else return true; } return false; };
+  return hits.filter(h => !inC(h.at) && !dead.some(r => h.line - 1 >= r.from && h.line - 1 <= r.to));
+}
+
+// what is text worth searching (sources, pages, forms, settings, notes)
+const EXT = new Set(['.cpp', '.h', '.hpp', '.c', '.cc', '.cxx', '.inc', '.inl', '.dfm', '.bpr', '.rc', '.js', '.mjs', '.cjs',
+  '.html', '.htm', '.css', '.json', '.ini', '.csv', '.txt', '.md', '.ps1', '.bat', '.cmd', '.cmake', '.xml', '.def', '.tsv',
+  // (1009 review: the tree's Python (census / dfm2rc / webprobe, 251), the golden's .pas, shell scripts (dualgate.sh) were
+  //  never searched -- and nothing said so)
+  '.py', '.pas', '.sh', '.ts', '.yml', '.yaml', '.gdb']);
+const NAMES = new Set(['CMakeLists.txt', 'Makefile']);
+// build output, other people's code, archives, version control, generated IR
+// AI(W906-HTDESIGNER) 20261002 (machine): .claude too -- agents' git worktrees in <tree>\.claude\worktrees\ are whole
+// copies of the tree (every hit found again in them; the Solution Explorer listed them)
+const SKIP_DIR = /^(build.*|third_party|\.git|\.svn|\.vs|\.vscode|\.claude|node_modules|__pycache__|_archive.*|_backup.*|ir_out|scratchpad|dist|out|obj|Debug|Release|\.npm-cache)$/i;
+// (1009 review: the search goes into .vscode too -- tasks.json / launch.json name the exes and the scripts; the Solution
+//  Explorer's listing keeps SKIP_DIR)
+const SEARCH_SKIP = new RegExp(SKIP_DIR.source.replace('\\.vscode|', ''), 'i');
+const MAX_FILE = 8 * 1024 * 1024;
+
+const utf8 = new TextDecoder('utf-8', { fatal: true });
+let big5 = null;
+/** -> { text, enc: 'utf8' | 'big5' } -- golden = Big5; else UTF-8, or Big5 when the bytes are not valid UTF-8. */
+function decode(buf, kind) {
+  if (!big5) big5 = new TextDecoder('big5');
+  // (1009 review: a golden file that IS valid UTF-8 (V912 cSiteUseManager.cpp: → —) is read as UTF-8 -- as the golden
+  //  viewer reads it; its columns were one off and "→" was never found. enc stays 'big5': never replaced in)
+  if (kind === 'golden') { try { return { text: utf8.decode(buf).replace(/^﻿/, ''), enc: 'big5' }; } catch (e) { return { text: big5.decode(buf), enc: 'big5' }; } }
+  try { return { text: utf8.decode(buf).replace(/^﻿/, ''), enc: 'utf8' }; } catch (e) { return { text: big5.decode(buf), enc: 'big5' }; }
+}
+
+function escRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+/**
+ * The search as a RegExp: plain text by default (VS Code's Find in Files: case-insensitive, any part of a word);
+ * opts { caseSensitive, wholeWord, regex }. -> { re } | { error }
+ */
+const WW_A = '(?<![A-Za-z0-9_])(?:', WW_B = ')(?![A-Za-z0-9_])';
+const WORDC = /[A-Za-z0-9_]/;
+function makeRe(q, opts) {
+  const o = opts || {};
+  const s = String(q || '');
+  if (!s.trim()) return { error: '沒有輸入要找的字' };
+  let src = o.regex ? s : escRe(s);
+  // (a whole word: not inside a longer identifier -- \b does not know CJK, so letters / digits / _ on each side)
+  // (1009 review: only where the keyword itself starts / ends with a letter, digit or _ -- as Visual Studio / VS Code:
+  //  "->Run" in p->Run() and ".Caption" in lb1.Caption were never found)
+  const core = src;
+  if (o.wholeWord) {
+    const lead = o.regex || WORDC.test(s[0]), trail = o.regex || WORDC.test(s[s.length - 1]);
+    src = (lead ? '(?<![A-Za-z0-9_])' : '') + '(?:' + src + ')' + (trail ? '(?![A-Za-z0-9_])' : '');
+  }
+  // (1006 audit: 正規式 ^ / $ = the start / end of a LINE, as in Visual Studio -- without m they meant the whole file)
+  try { return { re: new RegExp(src, (o.caseSensitive ? 'g' : 'gi') + (o.regex ? 'm' : '')), core: o.regex ? null : core }; } catch (e) { return { error: '正規式寫錯了：' + e.message }; }
+}
+
+// AI(W906-HTDESIGNER) 20261003 (machine, EastSun: "你搜尋關鍵字 是用並列運算 去搜檔案嗎 怎感覺很慢"): it was one file at a
+// time -- 4,364 files / 217 MB took 12 s, nearly all of it waiting for the disk (decoding + matching them all: 0.3 s).
+// Now this many reads / directory listings are in flight at once (32 at once: 2.9 s here).
+const PARALLEL = 32;
+/** Run fn(item, i) over items, `n` at a time; stops taking new ones once stop() says so. */
+async function pool(items, n, fn, stop) {
+  let next = 0;
+  const worker = async () => { while (next < items.length && !(stop && stop())) { const i = next++; await fn(items[i], i); } };
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
+}
+
+/** The files to search under one root (sorted, so a run is repeatable). */
+async function listFiles(root, stop) {
+  const out = [];
+  let level = [root];
+  // (one directory level at a time, its directories listed together)
+  while (level.length && !(stop && stop())) {
+    const nextLevel = [];
+    await pool(level, PARALLEL, async d => {
+      let ents;
+      try { ents = await fsp.readdir(d, { withFileTypes: true }); } catch (e) { return; }
+      for (const e of ents) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) { if (!SEARCH_SKIP.test(e.name)) nextLevel.push(p); } else if (e.isFile() && (EXT.has(path.extname(e.name).toLowerCase()) || NAMES.has(e.name))) out.push(p);
+      }
+    }, stop);
+    level = nextLevel;
+  }
+  return out.sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * The hits in one text: [{ line, col, len, text, at, lc }] (line / col 1-based; text = the line, trimmed to 300 chars
+ * around; at = the offset in the text; lc = the column in the whole line, 0-based). More than max: out.more = true.
+ * 1006 audit: a lone CR ends a line too (the editor counts it -- the line numbers were off after one).
+ */
+function hitsIn(text, re, max) {
+  const out = [];
+  re.lastIndex = 0;
+  let m, ls = 0, ln = 1;
+  let nl = text.indexOf('\n'), cr = text.indexOf('\r');
+  // (the next line break at / after from: [its start, the start of the next line] or null)
+  const brk = from => {
+    if (nl >= 0 && nl < from) nl = text.indexOf('\n', from);
+    if (cr >= 0 && cr < from) cr = text.indexOf('\r', from);
+    const b = nl < 0 ? cr : cr < 0 ? nl : Math.min(nl, cr);
+    if (b < 0) return null;
+    return [b, b === cr && text[b + 1] === '\n' ? b + 2 : b + 1];
+  };
+  while ((m = re.exec(text))) {
+    if (m[0].length === 0) { re.lastIndex++; continue; }
+    // (review of 0.409 find #1: with the m flag JS's ^ also matches between \r and \n -- ^\s*X in a CRLF file began on the
+    //  line before's \n (column -1: the hit did not open and 全部取代 failed for every file). Tried again from the \n on)
+    if (m.index > 0 && text[m.index - 1] === '\r' && text[m.index] === '\n') { re.lastIndex = m.index + 1; continue; }
+    if (out.length >= max) { out.more = true; break; }
+    // (the line of the hit: counted forward from the last one)
+    for (let b = brk(ls); b && b[0] < m.index; b = brk(ls)) { ln++; ls = b[1]; }
+    const e = brk(m.index);
+    let line = text.slice(ls, e ? e[0] : text.length);
+    let col = m.index - ls;
+    const lc = col;
+    // a long line (generated files): the part around the hit
+    if (line.length > 300) { const a = Math.max(0, col - 120); line = (a ? '…' : '') + line.slice(a, a + 300); col = col - a + (a ? 1 : 0); }
+    out.push({ line: ln, col: col + 1, len: m[0].length, text: line, at: m.index, lc });
+  }
+  return out;
+}
+
+/**
+ * Search the roots. roots: [{ area, label, root, kind }] (kind 'golden' = Big5). opts { limit, perFile, cancelled(),
+ * progress(done, total) }. -> { hits: [{ area, file, rel, enc, line, col, len, text }], files, scanned, truncated, ms }
+ */
+async function search(roots, re, opts) {
+  const o = Object.assign({ limit: 5000, perFile: 500 }, opts || {});
+  const t0 = Date.now();
+  const lists = [];
+  // (a root with files: only those -- the "current file" scope)
+  // (1006 audit: listing a big tree can be cancelled too)
+  const stopList = () => !!(o.cancelled && o.cancelled());
+  for (const r of roots) if (r && r.root) lists.push({ r, files: Array.isArray(r.files) ? r.files.slice() : await listFiles(r.root, stopList) });
+  const total = lists.reduce((n, l) => n + l.files.length, 0);
+  // (read PARALLEL files at once; each file's hits kept in its own slot, put together in file order at the end, so the
+  //  list is the same as one-at-a-time -- the order of the roots, then of the files)
+  const jobs = [];
+  // (EastSun 1009: o.onlyCpp = the C / C++ sources only -- .cpp / .h and their kin)
+  const CPPX = /\.(c|cc|cpp|cxx|h|hh|hpp|hxx|inl)$/i;
+  for (const { r, files } of lists) for (const f of files) if (!o.onlyCpp || CPPX.test(f)) jobs.push({ r, f });
+  const slots = new Array(jobs.length);
+  let scanned = 0, found = 0, cancelled = stopList(), capped = 0;
+  // (each match is its own RegExp: lastIndex is per search)
+  const reOf = () => new RegExp(re.source, re.flags);
+  // (1008, EastSun「搜尋速度可以在快點」: decoding every file was a third of the time and most files have no hit. Plain text /
+  //  whole word with an ASCII keyword: its bytes are the same in UTF-8 and Big5 files, so the file's bytes read as latin1
+  //  are tested first and only a file that has it is decoded. Not for 正規式: "." / [^…] count a byte there, a character in
+  //  the text -- a hit could be missed)
+  // (1008 review #2: the keyword alone, without the whole-word edges -- a Big5 character's second byte can be a letter
+  //  (0x40-0x7e), so in the latin1 bytes a hit right after a Chinese character looked inside a word and was missed)
+  let preSrc = typeof o.core === 'string' ? o.core : re.source;
+  if (preSrc.startsWith(WW_A) && preSrc.endsWith(WW_B)) preSrc = preSrc.slice(WW_A.length, -WW_B.length);
+  const pre = o.plain && /^[\x00-\x7f]*$/.test(preSrc) ? new RegExp(preSrc, re.flags.replace(/[gym]/g, '')) : null;
+  // (1009 review: o.overlay { lower-case path: text } -- the documents open and not saved: searched as the editor has them.
+  //  After 全部取代 (not saved yet) a search again found every replaced hit again, from the disk, and replaced them twice)
+  const ov = o.overlay && typeof o.overlay === 'object' ? o.overlay : null;
+  await pool(jobs, PARALLEL, async ({ r, f }, i) => {
+    if (o.cancelled && o.cancelled()) { cancelled = true; return; }
+    const ovt = ov && r.kind !== 'golden' ? ov[path.resolve(f).toLowerCase()] : undefined;
+    if (typeof ovt === 'string') { scanned++; found += take(r, f, i, ovt, 'utf8'); return; }
+    let buf;
+    try {
+      const st = await fsp.stat(f);
+      if (st.size > MAX_FILE) { scanned++; return; }
+      buf = await fsp.readFile(f);
+    } catch (e) { scanned++; return; }
+    scanned++;
+    if (o.progress && scanned % 200 === 0) o.progress(scanned, total);
+    if (buf.indexOf(0) >= 0 && buf.indexOf(0) < 4096) return;   // binary
+    if (pre && !pre.test(buf.toString('latin1'))) return;
+    const { text, enc } = decode(buf, r.kind);
+    found += take(r, f, i, text, enc);
+  }, () => cancelled || found >= o.limit || !!(o.cancelled && o.cancelled() && (cancelled = true)));
+  // (one file's text -> its hits in slots[i]; the number taken)
+  function take(r, f, i, text, enc) {
+    let hs = hitsIn(text, reOf(), o.perFile);
+    // (1006 audit: a file with more than perFile hits said nothing -- the list now says "+")
+    if (hs.more) capped++;
+    if (o.noComment) hs = dropCommented(f, text, hs);
+    if (!hs.length) return 0;
+    // (the filters -- assigned / a condition / a function: any one checked = those uses only, comments and strings out;
+    //  each hit says which it is)
+    const kinds = o.kinds && (o.kinds.assign || o.kinds.cond || o.kinds.func) ? o.kinds : null;
+    if (kinds) {
+      const masked = mask(text);
+      hs = hs.filter(h => {
+        const c = classify(masked, text, h.at, h.len);
+        if (!c.code) return false;
+        h.kinds = ['assign', 'cond', 'func'].filter(k => c[k]);
+        return h.kinds.some(k => kinds[k]);
+      });
+      if (!hs.length) return 0;
+    }
+    slots[i] = { r, f, enc, hs };
+    // (1008, EastSun「可以先把搜尋到的列上去? 不用等到全部搜尋完成」: each file's hits as soon as that file is done -- in the
+    //  order the files finish; the final list is in file order as before)
+    if (o.onHits) { const rel = path.relative(r.root, f); try { o.onHits(hs.map(h => Object.assign({ area: r.area, file: f, rel, enc }, h))); } catch (e) { /* the listener's own */ } }
+    return hs.length;
+  }
+  const hits = [];
+  let withHits = 0, truncated = cancelled || capped > 0;
+  for (const s of slots) {
+    if (!s) continue;
+    if (hits.length >= o.limit) { truncated = true; break; }
+    withHits++;
+    const rel = path.relative(s.r.root, s.f);
+    for (const h of s.hs) {
+      if (hits.length >= o.limit) { truncated = true; break; }
+      hits.push(Object.assign({ area: s.r.area, file: s.f, rel, enc: s.enc }, h));
+    }
+  }
+  // (the limit reached while files were still unread: more may be there)
+  if (found >= o.limit && scanned < jobs.length) truncated = true;
+  const res = { hits, files: withHits, scanned, total, truncated, ms: Date.now() - t0 };
+  if (capped) res.capped = capped;
+  if (cancelled) res.cancelled = true;
+  return res;
+}
+
+/**
+ * AI(W906-HTDESIGNER) 20261003 (machine, EastSun: "可以加入讓我勾選篩選條件嗎? 我想加入 被賦予值 或是被當成判斷式 或是是函式 的篩選"):
+ * how the name at offset `at` (length `len`) is used, from the text with comments / strings blanked (`masked`, same
+ * offsets -- cppstub.mask) -> { code: false } in a comment / string, else { code: true, assign, cond, func }:
+ *   assign: `x = …` (not ==), `x += …` (any compound), `x++` / `++x` / `x--` / `--x` -- an index / member after the
+ *           name is skipped first (x[i] = …, x.y = …);
+ *   cond:   inside the ( ) of if / while / for / switch, or next to == != <= >= < > && || or a ! before it, or a ? after;
+ *   func:   a ( right after the name (a call, a definition, a declaration).
+ */
+/**
+ * 1007 audit (search #14): the "<" at j opens a template argument list (vector<int> v, TList<TObject*> *p, map<a, b>)
+ * -- only names, ::, *, &, commas, spaces and nested <> up to its ">", and a name / ( / * / & / : / > / , / ; / ) after.
+ */
+function templateAt(m, j) {
+  let depth = 0;
+  for (let i = j; i < m.length && i < j + 300; i++) {
+    const c = m[i];
+    if (c === '<') depth++;
+    else if (c === '>') {
+      if (--depth) continue;
+      let k = i + 1;
+      while (k < m.length && /\s/.test(m[k])) k++;
+      // (a < b && c > d: an && inside is a condition, not template arguments)
+      return /^[\w\s:*&,<>]*$/.test(m.slice(j + 1, i)) && !/&&/.test(m.slice(j + 1, i)) && /[A-Za-z_*&(:>,;)]/.test(m[k] || '');
+    } else if (!/[\w\s:*&,]/.test(c)) return false;
+  }
+  return false;
+}
+
+function classify(masked, text, at, len) {
+  const m = masked, n = m.length;
+  if (m[at] !== text[at]) return { code: false };
+  const isSp = c => c === ' ' || c === '\t' || c === '\r' || c === '\n';
+  let e = at + len;
+  // (the name may go on past the hit: "iHome" found inside "iHomeLed" is not iHome)
+  while (e < n && /[A-Za-z0-9_]/.test(m[e])) e++;
+  let j = e;
+  while (j < n && isSp(m[j])) j++;
+  const func = m[j] === '(';
+  // past an index / member: x[i] = ..., x.y = ..., x->y = ...
+  let k = j;
+  for (let guard = 0; guard < 20; guard++) {
+    if (m[k] === '[') { let d = 0; for (; k < n; k++) { if (m[k] === '[') d++; else if (m[k] === ']') { d--; if (!d) { k++; break; } } } }
+    else if (m[k] === '.' || (m[k] === '-' && m[k + 1] === '>')) { k += m[k] === '.' ? 1 : 2; while (k < n && /[A-Za-z0-9_]/.test(m[k])) k++; }
+    else break;
+    while (k < n && isSp(m[k])) k++;
+  }
+  // (a template's "<": vector<int> v is no comparison -- and vector<int>(3) is a call)
+  if (m[j] === '<' && templateAt(m, j)) {
+    let d = 0, i = j;
+    for (; i < n; i++) { if (m[i] === '<') d++; else if (m[i] === '>' && !--d) break; }
+    let q = i + 1;
+    while (q < n && isSp(m[q])) q++;
+    return { code: true, assign: false, cond: false, func: m[q] === '(' };
+  }
+  // (the name inside one: the int of vector<int>)
+  {
+    let p = at - 1;
+    while (p >= 0 && /[\w\s:*&,]/.test(m[p]) && at - p < 300) p--;
+    if (p >= 0 && m[p] === '<' && templateAt(m, p)) return { code: true, assign: false, cond: false, func: false };
+  }
+  const after2 = m.slice(k, k + 3);
+  let b = at - 1;
+  while (b >= 0 && isSp(m[b])) b--;
+  const before2 = m.slice(Math.max(0, b - 1), b + 1);
+  const assign = (/^=[^=]/.test(after2) || /^(\+|-|\*|\/|%|&|\||\^)=/.test(after2) || /^(<<|>>)=/.test(after2) || /^(\+\+|--)/.test(after2) ||
+    before2 === '++' || before2 === '--');
+  let cond = /^(==|!=|<=|>=|&&|\|\|)/.test(after2) || (/^[<>][^<>=]/.test(after2) && !func) || /^\?/.test(after2) ||
+    /(==|!=|<=|>=|&&|\|\|)$/.test(before2) || (m[b] === '!' && m[b + 1] !== '=') || ((m[b] === '<' || m[b] === '>') && m[b - 1] !== m[b] && m[b - 1] !== '-');
+  if (!cond) {
+    // the ( ) it sits in, back to the start of its statement: if / while / for / switch before it
+    let d = 0;
+    for (let i = at - 1; i >= 0 && at - i < 4000; i--) {
+      const c = m[i];
+      if (c === ')') d++;
+      else if (c === '(') {
+        if (d) { d--; continue; }
+        let w = i - 1;
+        while (w >= 0 && isSp(m[w])) w--;
+        let s = w;
+        while (s >= 0 && /[A-Za-z0-9_]/.test(m[s])) s--;
+        const word = m.slice(s + 1, w + 1);
+        if (/^(if|while|for|switch)$/.test(word)) { cond = true; break; }
+      } else if ((c === '{' || c === '}') && !d) break;   // (not at ';': for (a; b; c) has them inside)
+    }
+  }
+  return { code: true, assign: !!assign, cond: !!cond, func: !!func };
+}
+
+/** The results as plain text (one line per hit), for the clipboard / the output panel. */
+function asText(q, res, roots) {
+  const L = ['專案搜尋「' + q + '」：' + res.hits.length + (res.truncated ? '+' : '') + ' 筆，' + res.files + ' 個檔（掃了 ' + res.scanned + ' 個，' + res.ms + ' ms）'];
+  for (const r of roots) {
+    const hs = res.hits.filter(h => h.area === r.area);
+    if (!hs.length) continue;
+    L.push('', '== ' + r.label + '（' + r.root + '）' + hs.length + ' 筆');
+    for (const h of hs) L.push(h.rel + ':' + h.line + ':' + h.col + '  ' + h.text.trim());
+  }
+  return L.join('\n');
+}
+
+/** Which of the roots holds `file` (the deepest one: the port tree's tools\ are not the web tree's). -> root entry | null */
+function areaOf(roots, file) {
+  const f = path.resolve(String(file || '')).toLowerCase();
+  let best = null;
+  for (const r of roots) {
+    if (!r || !r.root) continue;
+    const rr = path.resolve(r.root).toLowerCase();
+    if ((f === rr || f.startsWith(rr + path.sep)) && (!best || rr.length > path.resolve(best.root).length)) best = r;
+  }
+  return best;
+}
+
+/**
+ * The roots for a scope (Visual Studio's Find in Files "Look in"): 'solution' = all, 'project' = the one holding
+ * `file`, 'file' = only `file` (in its root, so it is decoded the way that root is). -> { roots, label } | { error }
+ */
+function scopeRoots(roots, scope, file) {
+  if (scope === 'solution' || !scope) return { roots, label: '整個方案' };
+  const a = file ? areaOf(roots, file) : null;
+  if (scope === 'project') return a ? { roots: [a], label: a.label } : { error: '目前的檔案不在任何一個專案（C++ 移植樹、網頁、BCB6 原始碼）裡' };
+  // (a folder of a project -- the Solution Explorer's folder: decoded as its project)
+  if (scope === 'folder') return a ? { roots: [Object.assign({}, a, { root: file })], label: a.label + ' ' + path.basename(file) + '\\' } : { error: '這個資料夾不在任何一個專案裡' };
+  if (scope === 'file') {
+    if (!file) return { error: '沒有開著的檔案' };
+    const r = a || { area: 'other', label: '其他', root: path.dirname(file), kind: /\.(cpp|h|dfm|bpr)$/i.test(file) ? 'port' : 'web' };
+    return { roots: [Object.assign({}, r, { files: [file] })], label: path.basename(file) };
+  }
+  return { error: '不認得的範圍：' + scope };
+}
+
+/** 1006 audit: a file of a BCB6 source tree (HT9011UC_Code_*, the Big5 golden / 899 / 912 ones) -- never replaced in. */
+function isBcb6(file) { return /[\\/]HT9011UC_Code_[^\\/]*[\\/]/i.test(String(file || '')); }
+/** 1006 audit: a replacement text with $1 / $<name> / $& / $$ filled from one match (as String.replace does). */
+function expand(text, mm) {
+  return String(text).replace(/\$(\$|&|<([^>]*)>|(\d{1,2}))/g, (all, k, name, num) => {
+    if (k === '$') return '$';
+    if (k === '&') return mm[0];
+    if (name !== undefined) return mm.groups && mm.groups[name] != null ? mm.groups[name] : (mm.groups ? '' : all);
+    let n = +num;
+    if (n >= mm.length && num.length === 2 && +num[0] < mm.length) return (mm[+num[0]] || '') + num[1];
+    return n > 0 && n < mm.length ? (mm[n] == null ? '' : mm[n]) : all;
+  });
+}
+
+module.exports = { decode, makeRe, listFiles, hitsIn, search, classify, asText, areaOf, scopeRoots, isBcb6, expand, commentRanges, dropCommented, EXT, SKIP_DIR, SEARCH_SKIP };
