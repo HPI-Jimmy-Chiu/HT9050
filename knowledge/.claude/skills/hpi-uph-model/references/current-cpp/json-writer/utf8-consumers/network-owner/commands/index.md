@@ -18,3 +18,19 @@ Context：[CommandQueue.h全文](raw/source-04.md)、[名稱與local timestamp h
 未完成：DoWebSocketUpgrade／ClearQuery／PostQueryOptions與完整query重播／browser／dispatch、crypto、UPH容量／客戶版本／S8／846及legacy退役。
 
 定位更正：先前待辦的SendSnapshot／ClearPendingQuery是在這三個固定來源檔未定位到的暫稱；現以DoWebSocketUpgrade／ClearQuery為準，不作全repo不存在的推論。
+
+## 自訂query與qid清除續篇
+
+[Query兩完整函式](query/index.md)保存PostQueryOptions與ClearQuery、原YESNO／REPLAY理由及queue／保留槽界線；既有Upgrade沿用不重計。上文待續候選現由此入口接續。
+
+## CommandQueue實作續篇
+
+[十二函式與完整原文](queue-implementation/index.md)接續tryPush／drain、event／生命期與觀察計數；header／Sync沿用。
+
+## 宿主modal與output-first續篇
+
+[十一完整函式及原文](host-modal/index.md)接續alarm／YESNO答案、carry餘項、output前綴／barrier與macro責任；保留歷史理由並以現行body辨識例外，非實機驗證。
+
+## browser dialog host與overlay續篇
+
+[十三個JavaScript函式與兩份完整原文](browser-host/index.md)分清query／notice／auth／cancel與窄adapter差異；13JS302行與CPP數分開，現場載入／完整client和bridge待續。

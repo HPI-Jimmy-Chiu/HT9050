@@ -31,3 +31,7 @@ socket owner自行解析HTTP，不能沿用獨立parser／checker的全部保證
 ## 命令驗證與告警query子樹
 
 [Commands 3完整函式](commands/index.md)追JSON／owner gate、browser id與ticket、QueuePush presence旗標、alarm／query與保留狀態；原header與歷史理由完整保存，端到端重播仍待續。
+
+## 握手用digest與Base64子樹
+
+[Crypto helpers十三函式](crypto-helpers/index.md)續Sha1狀態／raw digest與Base64／padding／out保留；既有key checker與Accept caller沿用，非實機或RFC完整符合性驗證。
