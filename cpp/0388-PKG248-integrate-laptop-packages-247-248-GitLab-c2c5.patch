@@ -1,0 +1,849 @@
+From 25716375ea30ee33d6a492b1d6ebb5ce1a48653d Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 10 Oct 2026 15:58:44 +0800
+Subject: [PATCH] PKG248: integrate laptop packages 247-248 (GitLab c2c58b23,
+ 8798c1e1) -- NB2-1 W-188 #8 CheckBin predict-only flag + a trace every 8
+ no-valid-bin pieces sent to the Error tray (MR !421); W-188 #9
+ InspectOutArmPosition as golden 913 (debug flag only, MR !423); St02 L13 busy
+ S14F3 -> S14F4 HCACK 2 (MR !424); docs/RULINGS_20261010.md (W-221 Safe PLC
+ choice waits for EastSun). HT9050: motion unchanged; one log line after 8
+ consecutive no-valid-bin pieces. Auto-accepted (scheduled check).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ SECSGEM/uHGemHT9045.cpp            |   2 +-
+ aoutarm.cpp                        |   6 +-
+ aoutarm.h                          |   2 +-
+ aoutarm9045.cpp                    |  32 ++---
+ aoutarm9045.h                      |   2 +-
+ docs/MACHINE_PATCHES_20261009.md   |  14 ++
+ docs/NIGHT_REPORT.md               |   6 +-
+ docs/RULINGS_20261010.md           |  30 +++++
+ docs/WORKLOG_MACHINE.md            |   1 +
+ tests/CMakeLists.txt               |  44 +++++++
+ tests/test_nb2_w188_checkbin.cpp   | 130 +++++++++++++++++++
+ tests/test_nb2_w188_inspectout.cpp | 136 ++++++++++++++++++++
+ tests/test_pool2_aoutarm.cpp       |   2 +-
+ tests/test_st02_l13_hgem_s14f4.cpp | 199 +++++++++++++++++++++++++++++
+ 14 files changed, 581 insertions(+), 25 deletions(-)
+ create mode 100644 docs/RULINGS_20261010.md
+ create mode 100644 tests/test_nb2_w188_checkbin.cpp
+ create mode 100644 tests/test_nb2_w188_inspectout.cpp
+ create mode 100644 tests/test_st02_l13_hgem_s14f4.cpp
+
+diff --git a/SECSGEM/uHGemHT9045.cpp b/SECSGEM/uHGemHT9045.cpp
+index 2f53cfb8..495dcdee 100644
+--- a/SECSGEM/uHGemHT9045.cpp
++++ b/SECSGEM/uHGemHT9045.cpp
+@@ -4012,7 +4012,7 @@ void HT9045Gem::S14F4_Get2DID_BinCode()
+ // ungated at S7F24_FormattedProcessProgramSendAcknowledge.
+     if(HasICUnderMachine()==true || SystemStart==true)
+     {
+-        HCACK=4;
++        HCACK=2; delete[] CommandStr; CommandStr=NULL; ActiveWire->InitLocalHead(14, 4, 0); ActiveWire->DataItemOut(2, HType.LIST_TYPE, NULL); ActiveWire->DataItemOut(1, HType.BINARY_TYPE, &HCACK); ActiveWire->DataItemOut(0, HType.LIST_TYPE, NULL); ActiveWire->SendLocalData(); return;   //AI(W906-L13) 20261010 (St02): golden 913 SECSGEM/uHGemHT9045.cpp:6396-6407 (L13, RogerYang 0922) -- HCACK 2 (was 4), CommandStr freed, S14F4 <L[2] <B HCACK> <L[0]>> really sent (HGemPtr -> ActiveWire as :4103 / :4118)
+     }
+     else
+     {
+diff --git a/aoutarm.cpp b/aoutarm.cpp
+index 1c8feb51..b1ec90ea 100644
+--- a/aoutarm.cpp
++++ b/aoutarm.cpp
+@@ -1198,7 +1198,7 @@ bool CheckOutArmInitState()
+ //==============================================================================
+ //CheckBin用來把IC根據BIN放到對應的Tray盤，不可以亂改
+ //==============================================================================
+-int CheckBin(int &ct, int iShuttle)                                             //kevin 20160826 add shuttle //Steven 20110527 : 整合成只叫一次
++int CheckBin(int &ct, int iShuttle, bool bPredictOnly)                          //kevin 20160826 add shuttle //Steven 20110527 : 整合成只叫一次 //AI(W906-W188) 20261010 (NB2-1): + bPredictOnly = golden 913 aoutarm.cpp:654 (RogerYang 20260823i: true = only return the target tray; no iNoBinToErrCT, no WAR07356)
+ {
+     bool bShowMess=false;
+     bool bAlarm=true;                                                           //kevin 20160906
+@@ -1249,7 +1249,7 @@ int CheckBin(int &ct, int iShuttle)
+             }
+         }
+     }
+-
++    static int iNoBinToErrCT=0; if(bPredictOnly==false) { if(ct>iTestBinCount-1) { iNoBinToErrCT++; if(iNoBinToErrCT%8==0) { AnsiString sNoBin; sNoBin.sprintf("No valid bin to Error tray : bin=%d, Sht=%d, consecutive=%d pcs", ct, iShuttle, iNoBinToErrCT); MyDBIProcess("Message", sNoBin); } } else { iNoBinToErrCT=0; } }   //AI(W906-W188) 20261010 (NB2-1): golden 913 aoutarm.cpp:706-726 (RogerYang 20260804): a bin with no valid target goes to the Error tray silently -- trace only, no action change; one Message line per 8 consecutive pieces (one pick group)
+     ct=(ct>iTestBinCount-1)?Prod.iIfErrorT6:Prod.iT6CatData[ct];                //Steven 20121112 : RS232支援32Bin 14->iTestBinCount-1
+ 
+     if(ct!=Prod.iIfErrorT6)                                                     //從不是Error Bin變成Error Bin就是式有問題
+@@ -1309,7 +1309,7 @@ int CheckBin(int &ct, int iShuttle)
+              bAlarm=false;
+     }
+ 
+-    if(bShowMess && bAlarm)                                                     //kevin 20160906
++    if(bShowMess && bAlarm && bPredictOnly==false)                              //kevin 20160906 //AI(W906-W188) 20261010 (NB2-1): golden 913 aoutarm.cpp:787 no WAR07356 in predict mode
+     {
+         if(bCancelErrorBin==1)                                                  //kevin 20160826
+         {
+diff --git a/aoutarm.h b/aoutarm.h
+index 34459d99..c70c85c4 100644
+--- a/aoutarm.h
++++ b/aoutarm.h
+@@ -119,7 +119,7 @@ void SetFixTrayMiddleDtata();
+ bool CheckTesterZ(int WhichShuttle);
+ bool CheckShuttleICPos(int WhichShuttle);
+ int  CheckOutArmCleanOut(int Task=50);
+-int  CheckBin(int &ct, int iShuttle);                                           //kevin 20160906 void->int
++int  CheckBin(int &ct, int iShuttle, bool bPredictOnly=false);                  //kevin 20160906 void->int //AI(W906-W188) 20261010 (NB2-1): + bPredictOnly = golden 913 aoutarm.h:59 (RogerYang 20260823i; default false keeps every caller)
+ bool MoveOutArmZ_Shuttle_Place();
+ bool CheckOutArmInitState();
+ void InitOutArmPickFromAuto1Task();
+diff --git a/aoutarm9045.cpp b/aoutarm9045.cpp
+index 4ad6e4bd..e14ee38b 100644
+--- a/aoutarm9045.cpp
++++ b/aoutarm9045.cpp
+@@ -94,7 +94,7 @@ bool bDoFixAI;
+ int  iOutArmAdditionalFunctionTask;                                             // golden :2136
+ 
+ int  iOutPickFromSht=0;                                                         // golden :3862
+-int  iOutPlaceToAuto=1;                                                         // golden :3863
++int  iOutPlaceToAuto=1;   int  iOutPlaceToRotate=2;   // golden :3863 //AI(W906-W188) 20261010 (NB2-1): golden 913 aoutarm9045.cpp:4169 (ht9045-v899 20260811: place-to-rotator; iOutPlaceToAuto would index s6TrayName[MOutRotateKit=42] past eTrayCount)
+ 
+ int  iOutArmIonFanGiveWayTask;                                                  // golden :4607
+ 
+@@ -2227,8 +2227,8 @@ void InspectOutArmPosition(int iTarget, int iSuckRow, int iSuckCol, int iTargetR
+     }
+     else
+     {
+-        return;                                                                 //Steven 20241220 : 暫時跳過
+-        sPlace="Pick from";
++//        return;                                                                 //Steven 20241220 : 暫時跳過   //AI(W906-W188) 20261010 (NB2-1): golden 913 aoutarm9045.cpp:4199 (commented out)
++        sPlace=(iAction==iOutPlaceToRotate)?"Place to":"Pick from";   //AI(W906-W188) 20261010 (NB2-1): golden 913 aoutarm9045.cpp:4200-4201
+         if(iTarget==MOutShuttle1)
+         {
+             sPos="Shuttle 1";
+@@ -2242,26 +2242,26 @@ void InspectOutArmPosition(int iTarget, int iSuckRow, int iSuckCol, int iTargetR
+             sPos="Out Rotator";
+         }
+     }
+-
++    if(iAction==iOutPlaceToAuto && iTarget==eBulkBox) return;   //AI(W906-W188) 20261010 (NB2-1): golden 913 aoutarm9045.cpp:4216-4224 (eFix12==MOutShuttle1==17, eBulkBox==MOutShuttle2==18: a place to BulkBox is not checked)
+     int XEncoder=0, YEncoder=0, HardwarePosX=0, HardwarePosY=0;
+ 
+     if(OutArmSuck.Item[iSuckRow][iSuckCol]!=HAS_NULL_IC &&
+        OutArmSuck.Item[iSuckRow][iSuckCol]!=HAS_NULL_CLEAN_IC)
+     {
+-        if(iTarget==MOutShuttle1 ||
+-           iTarget==MOutShuttle2)
++        if(iAction!=iOutPlaceToAuto && (iTarget==MOutShuttle1 ||   //AI(W906-W188) 20261010 (NB2-1): golden 913 aoutarm9045.cpp:4231-4233 (a place to Fix12 / BulkBox must not take the shuttle formula)
++           iTarget==MOutShuttle2))
+             GetOutArmToShtCellPos(iSuckRow, iSuckCol, YEncoder, XEncoder);
+         else
+             GetOutArmCellPos(iSuckRow, iSuckCol, YEncoder, XEncoder);
+ 
+         if(iAction==iOutPlaceToAuto)
+         {
+-            if(iTarget==eBulkBox)
+-            {
+-                HardwarePosX=Prod.iOutArmBinBoxX+dOutArmXPitch_1Step*iTargetCol;
+-                HardwarePosY=Prod.iOutArmBinBoxY-Prod.iOutArmBinBoxY*200;       //待確認
+-            }
+-            else                                                                //Jimmychiu 20240731 : remove offset value
++//            if(iTarget==eBulkBox)   //AI(W906-W188) 20261010 (NB2-1): golden 913 aoutarm9045.cpp:4240-4248 (BulkBox returned above; block commented out)
++//            {
++//                HardwarePosX=Prod.iOutArmBinBoxX+dOutArmXPitch_1Step*iTargetCol;
++//                HardwarePosY=Prod.iOutArmBinBoxY-Prod.iOutArmBinBoxY*200;       //待確認
++//            }
++//            else                                                                //Jimmychiu 20240731 : remove offset value
+             {
+                 HardwarePosX=Prod.XStart[iOutPutTray][iOutArmYBase][iOutArmXBase]+AutoForm[iOutPutTray]->XPitch*iTargetCol;                                     //Jimmy 20240826 : fixed for E74
+                 HardwarePosY=Prod.YStart[iOutPutTray][iOutArmYBase][iOutArmXBase]-AutoForm[iOutPutTray]->YPitch*iTargetRow;
+@@ -2297,7 +2297,7 @@ void InspectOutArmPosition(int iTarget, int iSuckRow, int iSuckCol, int iTargetR
+                 if(USE_PICKER_COUNT==ep1Picker)
+                     HardwarePosX=HardwarePosX;
+                 else
+-                    HardwarePosX+=(iXoffset/3)*(iSuckCol-iOutArmXBase);
++                    HardwarePosX+=(iXoffset/3)*(iSuckCol*OutArmSuck.iPickStep-iOutArmXBase);   //AI(W906-W188) 20261010 (NB2-1): golden 913 aoutarm9045.cpp:4284-4288 (same column step as GetOutArmToShtCellPos)
+ 
+                 HardwarePosY-=iYoffset*(iSuckRow-iOutArmYBase);
+                 if(TestIF.bNS7000kit)                                           //jou 981208 start : NS7000 bias kit
+@@ -2310,9 +2310,9 @@ void InspectOutArmPosition(int iTarget, int iSuckRow, int iSuckCol, int iTargetR
+                 }
+             }
+             else if(iTarget==MOutRotateKit)                                     //待確認
+-            {
+-                HardwarePosX=Prod.iOutArmRotateToUnloaderX;
+-                HardwarePosY=Prod.iOutArmRotateToUnloaderY;
++            {   extern int iRotateKIT_Start_X_H; extern int iRotateKIT_Start_Y_H; extern int iRotateKIT_Pitch_X_H; extern int iRotateKIT_Pitch_Y_H;   // golden reaches these through aRotateKIT.h:89-92
++                int iRotColMax=(tRotate.ColCount>1)?(tRotate.ColCount-1):1; HardwarePosX=Prod.iOutArm_RotateX+iRotateKIT_Start_X_H-iRotateKIT_Pitch_X_H*(iRotColMax-iTargetCol);   //AI(W906-W188) 20261010 (NB2-1): golden 913 aoutarm9045.cpp:4300-4313 (each rotator hole, not one fixed point)
++                HardwarePosY=Prod.iOutArm_RotateY-iRotateKIT_Start_Y_H-iRotateKIT_Pitch_Y_H*(iTargetRow-iOutArmYBase);
+             }
+         }
+ 
+diff --git a/aoutarm9045.h b/aoutarm9045.h
+index f2400a7b..12e011e3 100644
+--- a/aoutarm9045.h
++++ b/aoutarm9045.h
+@@ -92,7 +92,7 @@ bool OutArmNeedCheckOffset(bool bPlace, int iPos);                             /
+ bool Check_QA_ModeUnloadCount();                                                //JerryYang 20221004 : Maxim版本QA mode
+ 
+ extern int iOutPickFromSht;
+-extern int iOutPlaceToAuto;
++extern int iOutPlaceToAuto;   extern int iOutPlaceToRotate;   //AI(W906-W188) 20261010 (NB2-1): golden 913 aoutarm9045.h:76 (third action: place to the out rotator)
+ void InspectOutArmPosition(int iTarget, int iSuckRow, int iSuckCol, int iTargetRow, int iTargetCol, int iAction);
+ int GetOutOffsetFromWhichAuto(int iWhichAuto);                                  //Jimmychiu 20240731 : for out arm offset value  //AI(W906-POOL2) 20261008 (Ifor01): golden aoutarm9045.h:98; InspectOutArmPosition (translated) calls it before its definition
+ 
+diff --git a/docs/MACHINE_PATCHES_20261009.md b/docs/MACHINE_PATCHES_20261009.md
+index 4c65c770..f35f6a74 100644
+--- a/docs/MACHINE_PATCHES_20261009.md
++++ b/docs/MACHINE_PATCHES_20261009.md
+@@ -267,3 +267,17 @@
+ - **快照 13:04**（main `78d5bc03`）：只有兩份 README 的時間——不叮嚀。
+ - **WORKLOG**：第 164 批整份對齊到鏈尾 `e8509123`（PKG245 那列）。
+ - **鏈尾**：C++ `423bfa36`（0384）→ **`e8509123`**（0385）。下一次從 **cpp 0386／web 0144／tools 0198** 開始。
++
++## 38. （20261010 13:3x）cpp 0386 WORKLOG（只接鏈）、tools 0198 HTDESIGNER（不收）；快照 13:28
++
++- **cpp 0386**：只有 `WORKLOG_MACHINE.md` 一列（設計外掛 tools 0198，0.405.0→0.419.0）——只接鏈；第 164 批已在 gate，這份 WORKLOG 等**下一個程式批次**整份收。
++- **tools 0198 HTDESIGNER**：機台合筆電第 244／245 包的設計外掛——照規矩不收（HTDESIGNER 走 ES02 的 `v906/es02-htdesigner`）。
++- **快照 13:28**（main `07e95150`）：只有 `lastdata.dat`／`lastdata_backup.dat`（執行期資料）與兩份 README——不叮嚀。
++- **鏈尾**：C++ `e8509123`（0385）→ **`6609b2a1`**（0386）。下一次從 **cpp 0387／web 0144／tools 0199** 開始。
++
++## 39. （20261010 14:3x）cpp 0387 PKG246（只接鏈）；快照 14:08
++
++- **cpp 0387 PKG246**：機台把筆電第 246 包（St02 W-213 ②④＋W-216、Ifor01 L07 資料模型）合進去——只接鏈；`pkg_uptake.py`：機台在**第 246 包**，第 247 包推出 0.5 小時。
++- **快照 14:08**（main `a4c39521`）：只有兩份 README 的時間——不叮嚀。
++- **WORKLOG**：0386＋0387 兩列等下一個程式批次整份收（鏈尾 `7b1ec790`）。
++- **鏈尾**：C++ `6609b2a1`（0386）→ **`7b1ec790`**（0387）。下一次從 **cpp 0388／web 0144／tools 0199** 開始。
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index add1688e..e29a2e47 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -1,10 +1,10 @@
+-# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1010 12:5x）
++# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1010 13:5x）
+ 
+ ## ☀ 10/08 早上先看這裡（04:3x 起草；之後的進度往這張表加）
+ 
+ | 項目 | 一句話 |
+ |---|---|
+-| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～162 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate；第 140 批拿掉當掉的 IG-6 後才綠），出了**第 181～245 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
++| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～164 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate；第 140 批拿掉當掉的 IG-6 後才綠），出了**第 181～247 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
+ | **模擬組態** | St02 W-149 做完：模擬版的固定失敗從 7 支降到 4 支，跟出貨一樣——之後模擬版多紅一支就是真回歸。 |
+ | **機台修的事（重點）** | 0307 主控台非同步（START 卡 103 秒＋EMG 誤報的根因）、0309／0310／0312／0316 HT9050 Tray 流程（站序、Empty→Auto 補盤、位置不加 6800、Loader 探測看抽屜感測）、0311／0317 上升氣缸雙線圈、0313 出料手臂讓位點（00:19 MOutArmX 警報）、0314 CCD Y 原點判斷、**0315 HT9050 先跳過 Index 扭力讀取**（旗標預設開，扭力讀取驗證後要關）。 |
+ | **軟體極限** | 00:19 的警報是 golden 拿軟體極限（這台 ±999999）算目標。MainNB-GPT 普查（W-164）：只剩 Motor Test 頁的 LightScale 會算出 ±999899——EastSun 0925 R7 已定照 golden，只發提醒。 |
+@@ -151,6 +151,8 @@
+ | **出的包（1010 11:0x）：第 243 包＝第 160 批** | GitLab `8f4bc9f0`／GitHub `cc48e376`：NB2-1 照 golden 913：46LA 手動鈕機種按住手動鈕時整個 Fix 區不掃盤（HT9050 沒有這個鈕，跑機不變）。gate b160a 兩組態只有固定 4 支。接著：第 161 批（Ifor-GPT：PAUSE 時存吸嘴計數）gate 跑中。St02 換了帳號、額度歸零，W-214（ART 批次狀態三份合一）提前做完開 MR !417，筆電審過排第 162 批；審的時候找到的尾巴（W7C2 替身的 `iWaitGPIBLotR`）開成 W-216 給 St02-E。W-215 由 ES02 答「照 golden 不修」結案，記進 golden 缺陷台帳。 |
+ | **出的包（1010 12:0x）：第 244 包＝第 161 批** | GitLab `e4200a1e`／GitHub `d7ef0de6`：Ifor-GPT 照 golden 913：網頁 PAUSE 時多存一次吸嘴計數檔（跟 BCB 版一樣，跑機動作不變）。gate：出貨組態固定 4 支；模擬組態第一次是我開背景時漏設時間上限、30 分鐘被系統砍掉（沒有編譯錯誤），重跑後固定 4 支＋FastClk_Jobs（單獨重跑通過）——多花約 25 分鐘。接著：第 162 批（St02 的 ART 批次狀態合一＋機台 0383 開機 1203 卡沒有軸就自動重開）gate 跑中；機台 11:27 已套第 243 包。 |
+ | **出的包（1010 12:5x）：第 245 包＝第 162 批** | GitLab `79c7a622`／GitHub `57fee7ee`：St02 照 golden 913 把 ART 批次狀態三份合成一份（HT9050 走不到：雖然客戶碼 CC_PTI 讓 SCK ART 旗標是開的，但 ART 沒裝）；機台自己的修正 0383：開機時 1203 卡開了卻一軸都沒開成，改成自動重開（以前要人按重開卡）。gate 兩組態只有固定 4 支。接著：第 163 批（St02：測試機問批次狀態照 913 回覆、HTSET,701；Ifor01：L07 資料模型）gate 跑中。機台已套到第 244 包。 |
++| **出的包（1010 13:2x）：第 246 包＝第 163 批** | GitLab `b7529912`／GitHub `07a55f56`：St02 照 golden 913——測試機問批次狀態照 913 回覆、ART 等待旗標統一、HTSET,701；Ifor01 的 L07 第二組 ATC 預先補償資料欄位（還沒有讀者）。HT9050 跑機動作不變。gate 兩組態只有固定 4 支。接著：第 164 批（NB2-1：CheckBin 照 913，沒有有效 bin 時記一筆）gate 跑中；機台已套到第 245 包。 |
++| **出的包（1010 13:5x）：第 247 包＝第 164 批** | GitLab `c2c58b23`／GitHub `eef3f3f3`：NB2-1 照 golden 913——`CheckBin` 加預測參數；沒有有效 bin、改送 Error 盤時每 8 顆記一筆（以前整批進 ER 沒有紀錄）。HT9050 跑機動作不變。gate 兩組態只有固定 4 支。接著：等 Ifor01 的 W-217（SafePLC 判斷式照 913）開 MR；St02-E 有 W-219（產生器改讀 913）、W-223（G12 MR-1）、W-224（POOL-13）可接。今天筆電的決定都記在 `RULINGS_20261010.md`（含一處核准的 golden 偏離：POOL-13 越界防呆，還沒實作）。 |
+ | **要你決定的**（§0） | ✅ 你 10:1x 都回了：#148＝NB2 已完成（!306 收進第 110 批確認）、#149＝A（Ifor-GPT 專做執行期測試，IG-3／IG-4）、!310＝A（ES02 HTDESIGNER 0.235～0.257 收進第 110 批）＝RULINGS_20261008 第 2 條。**13:0x 新一題 #150**：GPIB 位址不一致要不要自動修正（Jerry 留給你；預設 A＝維持 golden、只留警告，可不回）。<br>**🆕 1009 11:4x 新一題 #151：HANA 機台按 START 時，要不要照 golden 先等 RMS 伺服器連線（最多 3 秒）？** 白話：golden 913（RogerYang 0916）裡，HANA 客戶開了 A77 的機台按 START 前，會先確認 RMS 伺服器連得上，連不上就擋下 START，連線最多等 3 秒。問題在移植樹的輪詢是單執行緒——這 3 秒裡整台機台的狀態更新會停住（例：網頁上的數字 3 秒不動）。你 0923 定過「會擋住輪詢的整合要先問」，所以問你。只有「HANA 客戶＋開 A77＋線上模式＋RMS 還沒連上」才會等，HT9050 永遠走不到。選項：**A＝照 golden 收**（建議：只在按 START 那一刻、最多 3 秒，機台本來就停著；St02 已經把等待裡的訊息迴圈換成只推 HANA 連線）；**B＝先不收**，等改成不擋輪詢的寫法（例：連線放到背景，START 時只看結果）。**沒回之前照 B**：H4 先不合，HANA 其他幾張（!372～!374）照常進第 138 批。<br>**🆕 1009 12:3x 新一題 #152：EastSun 派給你的「在沒有 AI 的電腦上實測安裝與更新」，實測要誰來做？** 白話：EastSun 希望客戶端或沒有 AI 的電腦也能只靠文件和腳本裝好、更新 HT9050 的軟體（機台 cpp 0349）。手冊和腳本筆電已派 Ifor01 寫（W-197）；寫好之後要有一個「人」在一台沒有 Claude 的電腦上照著做三個情境：①從零安裝並啟動；②從某一包更新到最新一包，中間至少遇到一個「機台和筆電都改過」的檔；③故意讓建置失敗，照手冊退回。模擬組態就可以，不用機台。選項：**A＝你自己做**（建議：EastSun 指名你，你也最清楚客戶端要什麼；大約半天到一天）；**B＝指定一位同事**照手冊做、不用 AI（例：Kevin 或 Jerry）；**C＝先不排**，手冊寫好放著。**沒回之前照 C**：手冊照寫，不排實測。實測的人不能是寫手冊的 Ifor01。<br>（1009 13:4x 補：**#151 也請 Steven 一題決定**（W-199）——你 13:3x 說 Steven 的回覆最高優先，Steven 回了就照他的，這題你就不用回。Steven 13:0x 對同一類的 KYEC 換配方同步等 7z 已經裁定「功能打開才等」照 913 同步，可以參考。）<br>（1009 15:1x 補 #152：**手冊和腳本已經好了**——Ifor01 的 MR !379 進 main `7db6b913`：`tools/laptop_ops/pkg_template/` 的 `NO_AI_INSTALL.md`／`NO_AI_UPDATE.md`／`NO_AI_TROUBLESHOOTING.md`＋五支 PowerShell 腳本＋啟動 .bat，每份手冊都附實測紀錄表。你決定誰做實測就可以開始；新腳本等實測過了才換進每一包。） |
+ 
+ 
+diff --git a/docs/RULINGS_20261010.md b/docs/RULINGS_20261010.md
+new file mode 100644
+index 00000000..5e9d9869
+--- /dev/null
++++ b/docs/RULINGS_20261010.md
+@@ -0,0 +1,30 @@
++# 裁決紀錄 20261010
++
++> 夜間迴圈接續 10/09（同一個 session，週六）。這一天之前的裁決見 `RULINGS_20261009.md`。本日沒有 Jimmy 本人的新裁決；以下是筆電照既有規則做的決定與同事的答覆，記下來讓之後查得到。
++
++## 1. HT9050 的 SCK ART 前提更正（筆電 1010 11:2x）
++
++- HT9050 的 `Gerneral.ini`（機台 `D:\HT9045\system\`）是 `CUSTOMER_CODE=957`＝CC_PTI；`FUNC_CC_PTI()`（`CosFunction.cpp`:1652，分派在 :3939）無條件設 `bUseSCKART=true`、`bAutoRetestGPIBmode=true`。「HT9050 沒用 SCK ART」不對。
++- 但 HT9050 的 `USE_AUTO_RETEST=0`（`eartUninstall`）：csystem 的 ART 流程（`DoART_AfterCleanOut` 的呼叫在 `csystem.cpp`:3441、結批的 SCK ART 分支＝913 `csystem.cpp`:16006）都要 `eartInstall`，所以 W-214／W-216 不改 HT9050 行為。
++- GPIB 測試機指令的處理（`HandlerGpibMsg.cpp` G7～G11）**沒有** `USE_AUTO_RETEST` 保護：測試機送那些指令就會跑。之後的 MR 寫 HT9050 影響時照這個寫。
++
++## 2. W-215：913 讀氣缸門檻參數錯一格——照 golden 不修（ES02 1010 09:41 答，Steven 經 St02-M 轉知）
++
++- golden 913 `cStartCondition.cpp`:1783／:1789 的 `true` 落在預設值那一格，缺鍵讀成 1 並寫回。只影響氣缸壽命頁顯示，不觸發警報；照 golden，記進 `GOLDEN_DEFECT_LEDGER.md`。HT9050 快照 11:36 量到套第 241 包後寫回了 42 個 `=1` 鍵＝預期。
++
++## 3. W-217（Ifor01 SAFEPLC-913）＝B（筆電 1010 12:4x；Ifor01 12:2x 建議）
++
++- 只做型別與判斷：`g_eSafePLCIOType`＋`IsSafePLCIOType_*`＋`IsSafePLCIOInstall()`，非 csystem／Command 的呼叫點同一行換，`Enable_PLCSafety_IO` 留著加一致性斷言；**ReeR 通訊與 `InitPLCIO_All` 不做**。
++- 依據：RULINGS_20261008 第 3 條（Steven 本人：新改動以 913 為 golden）比 RULINGS_20261002 第 20 條晚，所以 913 的判斷寫法可以進來；H013 的 SafePLC 釘子由 St02-E 1010 12:4x 點頭改（W-220，附三點）。
++- HT9050 是 Reer 機（`SafePlcModel=1`，機台自己那套 FC4），913 另有台積電 ReeR（`SafePlcIO=2`、FC3）：走哪一套等 EastSun（W-221，同時給 St01），沒回之前照現行。
++
++## 4. G12（S2F41 DOWNLOAD_RECIPE_BY_FTP）＝A（筆電 1010 14:0x；St02-M 13:3x 建議）
++
++- MR-1 現在做：照 golden 913 `SECSGEM/uHGemHT9045.cpp`:2172-2298（913 的新解析，Eastsun 20260710）打開，但掛在 `W906_SecsFtpDownloadHook`／`W906_SecsFtpBusyHook` 後面（`uHGemHT9045.cpp`:4472），hook 是空的就照舊回 HCACK 1——**行為不變**；golden 的怪處照抄記台帳；不另外限制機台。
++- MR-2（真的下載）等 LI-9 F2-down（FTP Server 列檔＋下載，約 5 天）——F2-down 開成 POOL-14（低優先，HT9050 的 FTP 關著）；MR-2 要人工審核；「同步不加逾時」到 MR-2 再定（預設照 golden）。
++
++## 5. POOL-13（ATC-THERMO-913）：St02-E 接；Q4 核准一處偏離 golden（筆電 1010 14:0x）
++
++- Q1＝B（告警那半照抄閘住，RULINGS_20260927 第 6 條）；Q2 MR-C 另開卡、排在 Ifor01 計數器與存檔之後；Q3「算出來、記下來、不送出」；Q5 照設計稿；Q6 `forms/fLotInfo.h`:1690、`CMakeLists.txt`:2501 是 St01 的行——St01 出差，筆電代點頭（只加不改，St01 回來可以再看）；Q8 Ifor01 選了 B，不做這張。
++- **Q4＝B（偏離 golden）**：golden 913 那兩處陣列越界（H4）在 C++ 是未定義行為；加防呆（索引 <0 或超出就跳過）＋`GOLDEN BUG` 註記＋記進 `GOLDEN_DEFECT_LEDGER.md`。判準照使用者 20260917「確認是問題＋知道怎麼解才修」：越界確定是問題、跳過越界存取是明確解法、Ifor01 先前同類作法有前例；MR-A／B 的呼叫點都還閘著，現在任何機台都不受影響。MR 落地那天的夜間報告要列在「沒有忠於 golden 而修了的項目」。
++
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 9d5ba60a..3e835607 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -354,6 +354,7 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-07 | 設計外掛 tools 0170 | — | 設計外掛工作階段自己推（分支 a6cadd2，GitHub dc7975ff）：依序合併筆電包 162、163、167、168 的設計外掛（0.197.0 → 0.234.0），164～166、169～172 沒帶設計外掛；無衝突，機台自己的設計外掛功能都保留；測試修正：建置視窗進度條在矮視窗不再塌掉、面板繪製測試固定 Edge 視窗大小；run_all 3/3、vscode_it 161/161，已安裝 0.234.0；只動 tools/vscode-htdesigner | tools 0170 |
+ | 10-08 | 設計外掛 tools 0171 | — | 設計外掛工作階段自己推（commit b453060，GitHub f42c142b）：EastSun 1008 方案總管的 Debug／Release 按鈕按不了（0.234 在 ▶＝F5 時把它變灰）→ 裁決「連動F5 release 和debug」：按鈕恢復可按，resolveDebugConfiguration 依按鈕把 F5／▶ 的啟動目標換成 build_integ_dbg_x86 或 build_integ_ship_x86 那一組；「模擬」仍是灰的。run_all 3/3；vscode_it 沒跑成（VS Code 自己的更新程式 CodeSetup 從 10/07 18:34 起佔住執行個體鎖）。vsix 已安裝，版本號沒變，要重新載入視窗才生效；只動 tools/vscode-htdesigner | tools 0171 |
+ | 10-08 | 173～204 | 07dbeae3＋63b1aa25＋351291d5（GitLab 0258ba66…68fc0e65、39c6388c、e6c54331） | 本 commit（機台 C++＋web），EastSun「你確定有合完整?」→「快合」→「一直合下去 不要停拜託」（173～202 的 C++ 從 10-07 起都沒合，只有設計外掛跟上）。備份分支 backup/pre-pkg202-20261008（cpp、web）＋ D:\HT9045\_pkg_202\backup_machine_195843、D:\HT9045\_pkg_203\backup_machine_220733。202 疊三十包：直接換 108（換 105；tasks.json、acatchtray 留機台）、新檔 35、兩邊都改 22（合併 16、設計外掛／WORKLOG 照規定 6）、一樣 88；每個直接換的檔掃機台 AI 標記＋W906_ 識別字：WebBridgeServer（TOKEN-OFF／SOFTKEY panel.estop）改三方合併＋收筆電 pad.get／pad.close／observerSG 豁免、acatchtray 留機台（筆電版＝少 PROBECYL）、MotionView9050 換（機台＝基底）。衝突：cinitial／test_flow9050_tray／csystem 取機台（BOOTCLEAR、PROBECYL、pitch 同步在 MainProc）；test_scankey_golden、IoBtnPanelClick、tests/CMakeLists、WebBridgeTags（tester.name 依 Jerry 1008 裁決 A＝golden LoadTestModePicture）取筆電；wb_serve 第 239 行＝機台 IOWAIT＋筆電 g_ppCyc0 搬移。4 個新網頁檔改 CRLF。203：15 檔（直接換 9、新 4、合併 2，無衝突）；204：12 檔（直接換 9、新 1、合併 2，無衝突；SECS SV Auto1～6 料盤別名＋氣缸平均推拉時間、cSpeed）。合併後 test_scankey_golden 補回 PadInterface_St02.h include、[19]（筆電版軟體面板鍵 ST02-P2，機台保留自己的 SOFTKEY）在機台關掉。ctest Debug 426/441：15 個失敗都是第 381 列的已知清單（環境：dfm2rc×4 ctest 找不到 g++／rc.exe、E031、GearTeachSave、TeachCheckRangeReload；斷言筆電設定／repo 舊表：config_db、ini_helpers、config_loaders、MotorPoints／MachineMotors／MachineSuckers_HT9050；機台補丁：GA2_C1_cinitial、FShow_Audit）；204 之後相關 29 支全過。EastSun 未 commit 的 acatchtray／asendic_Loader／cinitial／PadInterface_St02（SafeLock）先拿開、合完三方套回，不進 commit。20:02 -j4 整包重編讓機台當機（Kernel-Power 41），留下 NUL 填滿的 .a／.obj／.d ⇒ clean 後 -j2 重編 | 本 commit |
++| 10-10 | 247～248 | eef3f3f3＋5bd1b575（GitLab c2c58b23、8798c1e1） | 本 commit（定時檢查自動收）：247＝NB2-1 W-188 #8（MR !421，golden 913 aoutarm.h:59、aoutarm.cpp:654／:709-726／:787）CheckBin 加第三個參數 bPredictOnly（預設 false，兩個呼叫端不變）；沒有有效 bin 的料送 Error 盤時每連續 8 顆記一行 Message（原本整批進 ER 也不出聲），預測模式不跳 WAR07356。**HT9050**：動作不變，連續 8 顆無效 bin 多一行紀錄。248＝W-188 #9（MR !423）InspectOutArmPosition 照 913（只在除錯旗標 bE74_InspectArmPosition 開時跑、只顯示訊息不動）＋St02 L13（MR !424）忙碌時收到 S14F3 回 S14F4 HCACK 2 並釋放 10 MB 緩衝（HT9050 沒開 SECS）。新收 docs/RULINGS_20261010.md：第 1 條更正 HT9050 SCK ART 前提（CC_PTI 開 bUseSCKART 但 USE_AUTO_RETEST=0；GPIB G7～G11 沒有 USE_AUTO_RETEST 保護），第 2 條 MachineLife.ini 缺鍵寫回 =1 照 golden（11:36 快照量到寫回 42 個鍵＝預期），**W-221 等 EastSun：HT9050 是 Reer（SafePlcModel=1、機台自己的 FC4），913 另有台積電 ReeR（SafePlcIO=2、FC3），走哪一套**。13 檔：直接換 8（aoutarm.h／.cpp、aoutarm9045.h／.cpp、uHGemHT9045.cpp 等，掃過沒有機台標記會消失）、新 4、tests/CMakeLists 合併無衝突。W906-DOASYNC 照例暫時移出。Debug wb_serve 建好（15:58；release 沒編：wb_serve 15:35 起在跑 release exe），NB2_W188CheckBin／InspectOut、POOL2_AOutArm、St02_L13HgemS14F4、START_SitesCensus 5 支過。備份 D:\HT9045\_pkg_248\backup_machine_155335 | 本 commit |
+ | 10-10 | 246 | 07a55f56（GitLab b7529912） | 本 commit（定時檢查自動收）：①St02 W-213 第 2 步（MR !418，golden 913 main.cpp:16278／:16282／:16294-16307／:16354-16359／:19209-19214）GPIB LOTSTATUS 回覆帶批次狀態（原本空的），LOTEND／INITIAL 照 913 更新，開始測試設成 T；W-216 併入：csystem ART 流程與 GPIB 共用 iWaitGPIBLotR，存檔走真的 fSCKART->AccessFile。②W-213 第 4 步（MR !419，913 Command.cpp:13780-13838）TCP 7016 HTSET,701（ART 批重測清除）照 913 開，2DID 清單清除呼叫 btClearBarcodeListClick()。③Ifor01 L07 第 1 步（MR !420）913 ATC 第二組預先補償的資料欄位（fTempOffSet 19→23 列等），還沒有人讀。**HT9050 看得到**：機台動作不變；CC_PTI 開 bUseSCKART，所以開始測試時記憶體裡的批次狀態設成 T（ART 沒裝、沒人讀），測試機問 LOTSTATUS 會拿到 913 的回覆；TCP 7016 沒開（CC_PTI 沒開 bEnableHandlerResultServer）；沒有 ATC。17 檔：直接換 13（Command.cpp、HandlerGpibMsg、cprod.h、cmydef_rt.h、uTemp_Set 等，掃過沒有機台標記會消失）、新測試 2、合併 2 無衝突（csystem.cpp 只 commit 包的 8 行，EastSun 未 commit 的 WAR1603／1604 留在工作樹，另存 D:\HT9045\_pkg_246\eastsun）。W906-DOASYNC 照例暫時移出。cprod.h 改動，Debug 重編約 13 分鐘；release 沒編（wb_serve 11:49 起在跑）。St02_W213SckartGpib／W214SckartUnify、W7_F2_SckArtState、TesterComm_TcpCmdServer、L07_AtcPreOffsetDataModel、START_SitesCensus 6 支過。備份 D:\HT9045\_pkg_246\backup_machine_135417 | 本 commit |
+ | 10-10 | 245 | 57fee7ee（GitLab 79c7a622） | 本 commit（定時檢查自動收）：①St02 W-214（MR !417，golden 913 SCK_ART.cpp:43-51／:642-664／:670-673、csystem.cpp:16012-16065／:15147-15277）：TfSCKART 成為唯一的 ART 批次狀態（原本 facade 和 csystem 兩個接縫各留一份）；批結束記 LOTSTATUS_L，ART 流程用 golden 常數（W1 T2 L3 R4 F5 A6）比較與設定 fSCKART 的狀態，iWaitGPIBLotR 與 GPIB 處理共用。HT9050 是 CC_PTI 但沒裝 ART（USE_AUTO_RETEST=0），兩條改動路徑都要 eartInstall，看不到差別。②筆電收回機台 cpp 0383 BOOTREOPEN0AX（tools/wb_serve.cpp 合併結果＝機台版，只差行尾）。9 檔：直接換 5（fSCKART.h／.cpp 等，掃過沒有機台標記會消失）、新測試 1、合併 3 無衝突（csystem.cpp 只 commit 包的 16 行，EastSun 未 commit 的 WAR1603／1604 留在工作樹，另存 D:\HT9045\_pkg_245\eastsun）。W906-DOASYNC 照例暫時移出。Debug wb_serve 建好（13:03；release 沒編：wb_serve 11:49 起在跑），St02_W214SckartUnify、W7_F2_SckArtState、HanaART、START_SitesCensus 過。備份 D:\HT9045\_pkg_245\backup_machine_125302 | 本 commit |
+ | 10-10 | 244 | d7ef0de6（GitLab e4200a1e） | 本 commit（定時檢查自動收）：Ifor-GPT IG-8 第 2 項（MR !416，golden 913 main.cpp:6637-6641）：網頁 PAUSE（PauseFromWeb）在 SoftStop／StopAllMotor／fSCKART->AccessFile 之後照 golden 順序呼叫 FileRW_StartCondition_WritePickerCount()。**HT9050 看得到**：按 PAUSE 時也會寫吸嘴計數檔（跟 BCB 版一樣），機台動作不變。6 檔：直接換 4（WebStart.cpp 等，掃過沒有機台標記會消失）、新測試 1、tests/CMakeLists 合併無衝突。W906-DOASYNC 照例暫時移出。Debug wb_serve 建好（release 沒編：wb_serve 11:49 起在跑 release exe），IforGPT_StartConditionPauseRuntime、START_SitesCensus 過。同一次推送帶上 Gerneral.ini（Program Close 1→0，程式開著時自己寫的）。備份 D:\HT9045\_pkg_244\backup_machine_122309 | 本 commit |
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index e379f78b..d1d7282b 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -1383,6 +1383,20 @@ if(WIN32)
+ endif()
+ add_test(NAME NB2_W188HotReady COMMAND test_nb2_w188_hotready "${CMAKE_SOURCE_DIR}")
+ 
++# --- test_nb2_w188_checkbin: AI(W906-W188) 20261010 (NB2-1) -- W-188 #8 CheckBin (bPredictOnly + no-bin trace) -> golden 913 ---
++#   [1] one Message line per 8 consecutive no-bin pieces, predict-only calls neither count nor reset; [2] WAR07356 not in predict mode;
++#   [3] source ratchets.
++add_executable(test_nb2_w188_checkbin
++    test_nb2_w188_checkbin.cpp
++)
++target_link_libraries(test_nb2_w188_checkbin PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_nb2_w188_checkbin PRIVATE ws2_32)
++endif()
++add_test(NAME NB2_W188CheckBin COMMAND test_nb2_w188_checkbin "${CMAKE_SOURCE_DIR}")
++
+ # --- test_nb2_w188_l02watchdog: AI(W906-W188) 20261009 (NB2-1) -- W-188 #4 L02 case-306 30 s watchdog -> golden 913 ---
+ #   [1] Front/Rear: kit holds IC -> stays 306 until the watchdog expires -> 320 (JAM030x next); kit empty -> 0618 path; [2] source ratchets.
+ add_executable(test_nb2_w188_l02watchdog
+@@ -1396,6 +1410,20 @@ if(WIN32)
+ endif()
+ add_test(NAME NB2_W188L02Watchdog COMMAND test_nb2_w188_l02watchdog "${CMAKE_SOURCE_DIR}")
+ 
++# --- test_nb2_w188_inspectout: AI(W906-W188) 20261010 (NB2-1) -- W-188 #9 InspectOutArmPosition (E74) -> golden 913 ---
++#   [1] rotator holes, [2] BulkBox not checked, [3] shuttle picks checked again;
++#   [4] source ratchets.
++add_executable(test_nb2_w188_inspectout
++    test_nb2_w188_inspectout.cpp
++)
++target_link_libraries(test_nb2_w188_inspectout PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_nb2_w188_inspectout PRIVATE ws2_32)
++endif()
++add_test(NAME NB2_W188InspectOut COMMAND test_nb2_w188_inspectout "${CMAKE_SOURCE_DIR}")
++
+ # --- test_nb2_w188_reconcile: AI(W906-W188) 20261009 (NB2-1) -- W-188 #5 ReconcilePickFromHPList -> golden 913 ---
+ #   [1] phantom / duplicate bookings removed, empty teams / groups deleted, open group re-added, busy gate -1; [2] source ratchets.
+ add_executable(test_nb2_w188_reconcile
+@@ -9790,6 +9818,22 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+ endif()
+ add_test(NAME St02_W213HgemS2F41 COMMAND test_st02_w213_hgem_s2f41 "${CMAKE_SOURCE_DIR}")
+ set_tests_properties(St02_W213HgemS2F41 PROPERTIES TIMEOUT 120)
++# --- AI(W906-L13) 20261010 (St02) -- L13: S14F3 while there is IC in the machine / the machine runs -> HCACK 2 and S14F4 really sent
++#   (golden 913 SECSGEM/uHGemHT9045.cpp:6396-6407, RogerYang 0922; port SECSGEM/uHGemHT9045.cpp:4015).  St02_L13HgemS14F4: drives
++#   HT9045Gem::S14F4_Get2DID_BinCode through a seeded THGem codec, frames captured by a SendLocalDataHook recorder.  In memory, no
++#   arguments, no file opened; refuses (exit 2) when a log root resolves under D:\HT9045* outside a build dir.  Link as St02_W213HgemS2F41.
++add_executable(test_st02_l13_hgem_s14f4 test_st02_l13_hgem_s14f4.cpp)
++target_link_libraries(test_st02_l13_hgem_s14f4 PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_st02_l13_hgem_s14f4 PRIVATE ws2_32)
++endif()
++if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
++    set_source_files_properties(test_st02_l13_hgem_s14f4.cpp PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
++endif()
++add_test(NAME St02_L13HgemS14F4 COMMAND test_st02_l13_hgem_s14f4)
++set_tests_properties(St02_L13HgemS14F4 PROPERTIES TIMEOUT 120)
+ # --- test_w208_cyl_load: AI(W906-W208) 20261009 (Ifor01) -- W-208 / POOL-11 (TO_IFOR 1009 18:5x): Pre-Alarm Cylinder read side per golden 913 --
+ #   the live fStartCondition, LoadCylinderLife on a %TEMP% MachineLife.ini (asMachineLifePath swapped before any read; the machine's
+ #   D:\HT9045\system\MachineLife.ini is checked untouched) and W906_StartConditionTimer1Tick (golden main.cpp:3278).
+diff --git a/tests/test_nb2_w188_checkbin.cpp b/tests/test_nb2_w188_checkbin.cpp
+new file mode 100644
+index 00000000..47312cd0
+--- /dev/null
++++ b/tests/test_nb2_w188_checkbin.cpp
+@@ -0,0 +1,130 @@
++// =============================================================================
++//  AI(W906-W188) 20261010 (NB2-1): W-188 #8 -- CheckBin = golden 913 (GitLab honprec/rd/rd5/ht9045_913 main e9908638)
++//  aoutarm.h:59 / aoutarm.cpp:654 (+ bool bPredictOnly, default false; RogerYang 20260823i), :706-726 (iNoBinToErrCT:
++//  one "Message" line per 8 consecutive pieces whose bin has no valid target and silently go to the Error tray;
++//  RogerYang 20260804), :787 (no WAR07356 in predict mode).
++//  [1] trace: 7 no-bin pieces -> no line; the 8th -> one line "No valid bin to Error tray : bin=16, Sht=1, consecutive=8 pcs";
++//      a valid bin resets the run; predict-only calls neither count nor reset.
++//  [2] WAR07356: raised by a normal call, not by a predict-only call; both return the same target tray.
++//  [3] source ratchets (argv[1] = source root).
++//  Use: only through ctest (NB2_W188CheckBin).
++// =============================================================================
++#include "aoutarm.h"
++#include "cmydef.h"
++#include "cprod.h"
++#include "cpublic.h"
++#include "canary_support.h"
++#include "st02_test_containment.h"
++#include <cstdio>
++#include <fstream>
++#include <string>
++#include <vector>
++
++extern int        W906_MyDBIProcess_Count;
++extern AnsiString W906_MyDBIProcess_LastS1;
++extern AnsiString W906_MyDBIProcess_LastS2;
++void W906_MyDBIProcess_Reset();
++
++static int g_pass = 0, g_fail = 0;
++#define CHECK(cond, msg)                                                        \
++    do {                                                                        \
++        if (cond) { std::printf("  PASS: %s\n", msg); ++g_pass; }               \
++        else      { std::printf("  FAIL: %s  (line %d)\n", msg, __LINE__); ++g_fail; } \
++    } while (0)
++
++static std::vector<std::string> ReadLines(const std::string& path)
++{
++    std::vector<std::string> v;
++    std::ifstream f(path.c_str(), std::ios::binary);
++    std::string s;
++    while (std::getline(f, s)) {
++        if (!s.empty() && s[s.size() - 1] == '\r') s.erase(s.size() - 1);
++        v.push_back(s);
++    }
++    return v;
++}
++static int Count(const std::vector<std::string>& L, const std::string& n)
++{
++    int c = 0;
++    for (size_t i = 0; i < L.size(); ++i) if (L[i].find(n) != std::string::npos) ++c;
++    return c;
++}
++
++static int Bad(int iSht, bool bPredict = false) { int ct = iTestBinCount; return CheckBin(ct, iSht, bPredict); }
++static int Good(bool bPredict = false)          { int ct = 0;             return CheckBin(ct, 1, bPredict); }
++
++int main(int argc, char** argv)
++{
++    std::setvbuf(stdout, 0, _IONBF, 0);
++    if (!W906TestInsideCtestRoots("NB2_W188CheckBin"))
++        return 2;
++    std::printf("==== W-188 #8 CheckBin -> golden 913 ====\n");
++
++    char msg[200];
++    Prod.iIfErrorT6   = eAuto6;
++    Prod.iT6CatData[0] = eAuto1;
++    iHWFix_BinBox     = 0;
++    bCancelErrorBin   = false;
++
++    // ---------------------------------------------------------------- [1] trace every 8 consecutive no-bin pieces
++    std::printf("-- [1] no-bin trace --\n");
++    LastSet.iRealDummy = DUMMY;                                  // no WAR07356 path in this block
++    Good();
++    W906_MyDBIProcess_Reset();
++    for (int i = 0; i < 7; i++) Bad(1);
++    std::snprintf(msg, sizeof msg, "7 consecutive no-bin pieces: no line (%d)", W906_MyDBIProcess_Count);
++    CHECK(W906_MyDBIProcess_Count == 0, msg);
++    const int r8 = Bad(1);
++    CHECK(W906_MyDBIProcess_Count == 1 && W906_MyDBIProcess_LastS1 == AnsiString("Message") &&
++          W906_MyDBIProcess_LastS2 == AnsiString("No valid bin to Error tray : bin=16, Sht=1, consecutive=8 pcs"),
++          "the 8th: one Message line with bin / shuttle / consecutive count");
++    CHECK(r8 == eAuto6, "no-bin piece still goes to the Error tray (Prod.iIfErrorT6)");
++    for (int i = 0; i < 8; i++) Bad(0);
++    CHECK(W906_MyDBIProcess_Count == 2 && W906_MyDBIProcess_LastS2 == AnsiString("No valid bin to Error tray : bin=16, Sht=0, consecutive=16 pcs"),
++          "the 16th: second line, consecutive=16");
++
++    Good();                                                      // valid bin resets the run
++    for (int i = 0; i < 7; i++) Bad(1);
++    CHECK(W906_MyDBIProcess_Count == 2, "after a valid bin the run restarts: 7 more -> no line");
++    Bad(1);
++    CHECK(W906_MyDBIProcess_Count == 3 && W906_MyDBIProcess_LastS2 == AnsiString("No valid bin to Error tray : bin=16, Sht=1, consecutive=8 pcs"),
++          "8 after the reset -> consecutive=8 again");
++
++    Good();
++    for (int i = 0; i < 4; i++) Bad(1);
++    for (int i = 0; i < 8; i++) Bad(1, true);                    // predict-only: not counted
++    Good(true);                                                  // predict-only valid bin: does not reset
++    CHECK(W906_MyDBIProcess_Count == 3, "predict-only calls neither count nor log");
++    for (int i = 0; i < 4; i++) Bad(1);
++    CHECK(W906_MyDBIProcess_Count == 4 && W906_MyDBIProcess_LastS2 == AnsiString("No valid bin to Error tray : bin=16, Sht=1, consecutive=8 pcs"),
++          "predict-only calls do not reset: 4 + 4 normal pieces -> consecutive=8");
++
++    // ---------------------------------------------------------------- [2] WAR07356 only outside predict mode
++    std::printf("-- [2] WAR07356 --\n");
++    LastSet.iRealDummy = REALLY;
++    LastSet.iTester    = ON_LINE;
++    iHWFix_BinBox      = 1;                                      // Prod.iIfErrorT6 != eBulkBox -> bShowMess
++    const int a0 = W906_ShowErrorMessage_Count;
++    const int rp = Bad(1, true);
++    std::snprintf(msg, sizeof msg, "predict-only: no WAR07356 (%d calls)", W906_ShowErrorMessage_Count - a0);
++    CHECK(W906_ShowErrorMessage_Count == a0, msg);
++    const int rn = Bad(1);
++    CHECK(W906_ShowErrorMessage_Count == a0 + 1 && W906_ShowErrorMessage_LastCode == AnsiString("WAR07356"),
++          "normal call: WAR07356 raised");
++    CHECK(rp == rn && rn == eAuto6, "predict and normal return the same target tray");
++    LastSet.iRealDummy = DUMMY; iHWFix_BinBox = 0;
++
++    // ---------------------------------------------------------------- [3] source ratchets
++    std::printf("-- [3] source ratchets --\n");
++    const std::string root = argc > 1 ? argv[1] : ".";
++    const std::vector<std::string> H = ReadLines(root + "/aoutarm.h");
++    const std::vector<std::string> C = ReadLines(root + "/aoutarm.cpp");
++    CHECK(Count(H, "int  CheckBin(int &ct, int iShuttle, bool bPredictOnly=false);") == 1, "header: bPredictOnly defaults to false");
++    CHECK(Count(C, "int CheckBin(int &ct, int iShuttle, bool bPredictOnly)") == 1, "definition takes bPredictOnly");
++    CHECK(Count(C, "    static int iNoBinToErrCT=0; if(bPredictOnly==false) { if(ct>iTestBinCount-1) { iNoBinToErrCT++; if(iNoBinToErrCT%8==0)") == 1,
++          "no-bin counter in code (not after a comment)");
++    CHECK(Count(C, "    if(bShowMess && bAlarm && bPredictOnly==false)") == 1, "WAR07356 gated by bPredictOnly");
++
++    std::printf("==== W-188 #8: %d passed, %d failed ====\n", g_pass, g_fail);
++    return g_fail == 0 ? 0 : 1;
++}
+diff --git a/tests/test_nb2_w188_inspectout.cpp b/tests/test_nb2_w188_inspectout.cpp
+new file mode 100644
+index 00000000..cd2cc00f
+--- /dev/null
++++ b/tests/test_nb2_w188_inspectout.cpp
+@@ -0,0 +1,136 @@
++// =============================================================================
++//  AI(W906-W188) 20261010 (NB2-1): W-188 #9 -- InspectOutArmPosition (E74 debug position check) = golden 913
++//  (GitLab honprec/rd/rd5/ht9045_913 main e9908638) aoutarm9045.cpp:4169 (iOutPlaceToRotate=2), :4171-4328, aoutarm9045.h:76.
++//  913 (ht9045-v899 20260811) vs the port's 0618 body:
++//    * picks / rotator places are checked again (0618 `return;  //Steven 20241220` commented out, :4199);
++//    * a place to BulkBox is not checked (:4223-4224) -- eBulkBox == MOutShuttle2 == 18, eFix12 == MOutShuttle1 == 17;
++//    * the shuttle encoder formula only for picks (:4231-4233); the BulkBox position block commented out (:4243-4248);
++//    * the shuttle X offset uses the same column step as GetOutArmToShtCellPos (:4288);
++//    * the rotator target is each hole, from iOutArm_RotateX/Y and the rotate-kit pitches (:4309-4313).
++//  [1] rotator place: the hole under the arm passes, another hole reports "Place to Out Rotator [r, c]" with 913's numbers.
++//  [2] place to BulkBox: no check.   [3] a pick from shuttle 1 is checked ("Pick from Shuttle 1").   [4] source ratchets.
++//  Use: only through ctest (NB2_W188InspectOut).
++// =============================================================================
++#include "aoutarm9045.h"
++#include "aHotPlateSubstrate.h"
++#include "cmydef.h"
++#include "cprod.h"
++#include "Config.h"
++#include "canary_support.h"
++#include "mykitsuck.h"
++#include "Motor/mymotor.h"
++#include "forms/fRotate.h"
++#include "RotateKit/aRotateKIT.h"
++#include "w906_test_motors.h"
++#include "w906_ctest_guard.h"
++#include <cstdio>
++#include <fstream>
++#include <string>
++#include <vector>
++
++void SetMyKitSuckItemAmount();
++void EnsureArmOffsetObjects();
++
++static int g_pass = 0, g_fail = 0;
++#define CHECK(cond, msg)                                                        \
++    do {                                                                        \
++        if (cond) { std::printf("  PASS: %s\n", msg); ++g_pass; }               \
++        else      { std::printf("  FAIL: %s  (line %d)\n", msg, __LINE__); ++g_fail; } \
++    } while (0)
++
++static std::vector<std::string> ReadLines(const std::string& path)
++{
++    std::vector<std::string> v;
++    std::ifstream f(path.c_str(), std::ios::binary);
++    std::string s;
++    while (std::getline(f, s)) {
++        if (!s.empty() && s[s.size() - 1] == '\r') s.erase(s.size() - 1);
++        v.push_back(s);
++    }
++    return v;
++}
++static int Count(const std::vector<std::string>& L, const std::string& n)
++{
++    int c = 0;
++    for (size_t i = 0; i < L.size(); ++i) if (L[i].find(n) != std::string::npos) ++c;
++    return c;
++}
++
++int main(int argc, char** argv)
++{
++    std::setvbuf(stdout, 0, _IONBF, 0);
++    if (!W906TestRequireCtestRedirects("NB2_W188InspectOut"))
++        return 2;
++    std::printf("==== W-188 #9 InspectOutArmPosition -> golden 913 ====\n");
++
++    char msg[300];
++    W906_TestEnsureSimMotors();
++    SetMyKitSuckItemAmount();
++    EnsureArmOffsetObjects();
++    for (int i = 0; i < eTrayCount; ++i) AutoForm[i] = &TrayForm.Auto[i];
++    OutArmSuck.iPickStep = 1;
++    OutArmSuck.Item[iOutArmYBase][iOutArmXBase] = HAS_IC;
++    InputLimit.iOffsetXYHigh = 1;                     // +-100 pulses
++    AUTO3_IS_MAGAZINE = 0;
++    IniConfig.bE74_InspectArmPosition = true;
++
++    // ---------------------------------------------------------------- [1] place to the out rotator
++    std::printf("-- [1] place to rotator --\n");
++    tRotate.ColCount = 2;
++    iRotateKIT_Start_X_H = 1000;  iRotateKIT_Pitch_X_H = 2000;
++    iRotateKIT_Start_Y_H = 3000;  iRotateKIT_Pitch_Y_H = 4000;
++    Prod.iOutArm_RotateX = 500000; Prod.iOutArm_RotateY = 600000;
++    Prod.iOutArmRotateToUnloaderX = 0; Prod.iOutArmRotateToUnloaderY = 0;   // the 0618 single point
++    // hole [0, 0]: X = 500000 + 1000 - 2000*(1-0) = 499000; Y = 600000 - 3000 - 4000*(0-iOutArmYBase)
++    const int y00 = 600000 - 3000 - 4000 * (0 - iOutArmYBase);
++    MOT[MOutArmX].Motor->SetPosition(499000);
++    MOT[MOutArmY].Motor->SetPosition(y00);
++    W906_ShowMyMessage_Reset();
++    InspectOutArmPosition(MOutRotateKit, iOutArmYBase, iOutArmXBase, 0, 0, iOutPlaceToRotate);
++    std::snprintf(msg, sizeof msg, "arm over hole [0, 0]: within tolerance, no message (%d)", W906_ShowMyMessage_Count);
++    CHECK(W906_ShowMyMessage_Count == 0, msg);
++    W906_ShowMyMessage_Reset();
++    InspectOutArmPosition(MOutRotateKit, iOutArmYBase, iOutArmXBase, 1, 1, iOutPlaceToRotate);
++    const int y11 = 600000 - 3000 - 4000 * (1 - iOutArmYBase);
++    char want[120];
++    std::snprintf(want, sizeof want, "Place to Out Rotator [1, 1] Pos(Y=%d, X=%d)", y11, 501000);
++    const std::string got1 = W906_ShowMyMessage_LastS1.c_str();
++    std::snprintf(msg, sizeof msg, "arm over [0, 0], target hole [1, 1]: one message \"%s\" (count %d: %.120s)", want, W906_ShowMyMessage_Count, got1.c_str());
++    CHECK(W906_ShowMyMessage_Count == 1 && got1.find(want) != std::string::npos, msg);
++
++    // ---------------------------------------------------------------- [2] place to BulkBox: not checked
++    std::printf("-- [2] place to BulkBox --\n");
++    Prod.iOutArmBinBoxX = 0; Prod.iOutArmBinBoxY = 5000;          // 0618 target Y = 5000 - 5000*200: far from the arm
++    W906_ShowMyMessage_Reset();
++    InspectOutArmPosition(eBulkBox, iOutArmYBase, iOutArmXBase, 0, 0, iOutPlaceToAuto);
++    std::snprintf(msg, sizeof msg, "place to BulkBox: no check, no message (%d)", W906_ShowMyMessage_Count);
++    CHECK(W906_ShowMyMessage_Count == 0, msg);
++
++    // ---------------------------------------------------------------- [3] a pick from shuttle 1 is checked again
++    std::printf("-- [3] pick from shuttle 1 --\n");
++    MOT[MOutArmX].Motor->SetPosition(7000000);
++    MOT[MOutArmY].Motor->SetPosition(7000000);
++    W906_ShowMyMessage_Reset();
++    InspectOutArmPosition(MOutShuttle1, iOutArmYBase, iOutArmXBase, 0, 0, iOutPickFromSht);
++    const std::string got3 = W906_ShowMyMessage_LastS1.c_str();
++    std::snprintf(msg, sizeof msg, "arm far from shuttle 1: one \"Pick from Shuttle 1\" message (count %d: %.120s)", W906_ShowMyMessage_Count, got3.c_str());
++    CHECK(W906_ShowMyMessage_Count == 1 && got3.find("Pick from Shuttle 1 [0, 0]") != std::string::npos, msg);
++    IniConfig.bE74_InspectArmPosition = false;
++
++    // ---------------------------------------------------------------- [4] source ratchets
++    std::printf("-- [4] source ratchets --\n");
++    const std::string root = argc > 1 ? argv[1] : ".";
++    const std::vector<std::string> C = ReadLines(root + "/aoutarm9045.cpp");
++    const std::vector<std::string> H = ReadLines(root + "/aoutarm9045.h");
++    CHECK(Count(C, "int  iOutPlaceToAuto=1;   int  iOutPlaceToRotate=2;") == 1 && Count(H, "extern int iOutPlaceToAuto;   extern int iOutPlaceToRotate;") == 1,
++          "iOutPlaceToRotate defined in code and declared in the header");
++    CHECK(Count(C, "        if(iAction!=iOutPlaceToAuto && (iTarget==MOutShuttle1 ||") == 1 && Count(C, "           iTarget==MOutShuttle2))") >= 1,
++          "a place to Fix12 / BulkBox does not take the shuttle encoder formula");
++    CHECK(Count(C, "                    HardwarePosX+=(iXoffset/3)*(iSuckCol*OutArmSuck.iPickStep-iOutArmXBase);") == 1,
++          "shuttle X offset uses the GetOutArmToShtCellPos column step");
++    CHECK(Count(C, "//            if(iTarget==eBulkBox)") == 1 && Count(C, "    if(iAction==iOutPlaceToAuto && iTarget==eBulkBox) return;") == 1,
++          "BulkBox: early return, the position block commented out");
++
++    std::printf("==== W-188 #9: %d passed, %d failed ====\n", g_pass, g_fail);
++    return g_fail == 0 ? 0 : 1;
++}
+diff --git a/tests/test_pool2_aoutarm.cpp b/tests/test_pool2_aoutarm.cpp
+index e5e8e174..6f069f0a 100644
+--- a/tests/test_pool2_aoutarm.cpp
++++ b/tests/test_pool2_aoutarm.cpp
+@@ -226,7 +226,7 @@ int main(int argc, char** argv)
+     check(W906_ShowMyMessage_Count == 1 && msg.find("OutArm Suck[0, 0] Pos(") == 0 && msg.find("Place to") != std::string::npos, m);
+     W906_ShowMyMessage_Reset();
+     InspectOutArmPosition(MOutShuttle1, 0, 0, 0, 0, iOutPlaceToAuto + 1);
+-    check(W906_ShowMyMessage_Count == 0, "R6 E74 on, a pick (not iOutPlaceToAuto): golden skips it for now (:3893 `return;`)");
++    check(W906_ShowMyMessage_Count == 1 && std::string(W906_ShowMyMessage_LastS1.c_str()).find("Shuttle 1 [0, 0]") != std::string::npos, "R6 E74 on, not iOutPlaceToAuto: checked again per golden 913 aoutarm9045.cpp:4199 (0618 :3893 `return;` commented out)");   //AI(W906-W188) 20261010 (NB2-1): W-188 #9 -- was `== 0` (0618 skipped every non-auto action)
+     OutArmSuck.Item[0][0] = HAS_NULL_IC;
+     W906_ShowMyMessage_Reset();
+     InspectOutArmPosition(0, 0, 0, 0, 0, iOutPlaceToAuto);
+diff --git a/tests/test_st02_l13_hgem_s14f4.cpp b/tests/test_st02_l13_hgem_s14f4.cpp
+new file mode 100644
+index 00000000..3bd6a082
+--- /dev/null
++++ b/tests/test_st02_l13_hgem_s14f4.cpp
+@@ -0,0 +1,199 @@
++// =============================================================================
++//  test_st02_l13_hgem_s14f4.cpp -- L13: S14F3 (2DID bin code) while there is IC in the machine or the machine is running answers
++//  HCACK 2 and really sends S14F4 (golden 913 SECSGEM/uHGemHT9045.cpp:6396-6407, RogerYang 0922, AI(ht9045-vtest-secs)).
++//
++//  AI(W906-L13) 20261010 (St02).  Suite name (add_test): St02_L13HgemS14F4.  No arguments; no file is opened.
++//  golden 0618 set HCACK=4 and returned WITHOUT any S14F4 (the host waits for T3) and leaked the 10 MB CommandStr; golden 913 sets
++//  HCACK=2 (SEMI E5 "cannot perform now"), frees the buffer and sends <L[2] <B HCACK> <L[0]>>.  The port line is
++//  SECSGEM/uHGemHT9045.cpp:4015 (HGemPtr -> ActiveWire, as the same function's normal send path :4103 / :4118).
++//  Frames are captured by replacing the codec's SendLocalDataHook (SecsWireCodec.h:424) with a recorder, so THGem::SendLocalDataFrom
++//  (sockets) is not reached.
++//    [1] SystemStart true, no IC: exactly one S14F4 frame (S14 F4, W bit 0), body 01 02 21 01 02 01 00 = <L[2] <B 2> <L[0]>>.
++//    [2] SystemStart false, HasICUnderMachine() true (MOT[MMTrayZ].fHasTray, csystem.cpp:13468): the same single frame, HCACK 2.
++//    [3] Normal path unchanged (SystemStart false, no IC): an empty body -> one frame, HCACK 1; a well-formed SUBSTRATETYPE body ->
++//        one frame, HCACK 3 (GATE [D2] default, uHGemHT9045.cpp:4077) and the inbound tokens are consumed.
++//  Reverse: put `HCACK=4;` back on :4015 -> [1] / [2] see no frame -> red.
++//
++//  Containment: every runtime log root the Handler could write through (common.h) is checked first; if one resolves under
++//  D:\HT9045* (that includes D:\HT9045_Log) and is not inside a build dir (\obj\v906\), the test returns 2 before any Handler code.
++// =============================================================================
++#include "SECSGEM/uHGemEquipment.h"     // THGem, extern THGem *HGem
++#include "SECSGEM/uHGemHT9045.h"        // HT9045Gem
++#include "SECSGEM/SecsWireCodec.h"      // SecsWireCodec::SendLocalDataHook, LocalBuffer, LocalLength_4
++#include "csystem.h"                    // HasICUnderMachine
++#include "cmydef.h"                     // SystemStart (cmydef_core.h:220)
++#include "MachineType.h"
++#include "common.h"                     // as9045LogPath, asSaveEventLogPath, asProductionLogPath, sProductionInfoFilePath, asGeneralPath
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wunused-parameter"   // Motor/HTMotor.h virtual defaults (not this file's code; mymotor.h pulls it in)
++#include "Motor/mymotor.h"              // MOT[], MMTrayZ
++#pragma GCC diagnostic pop
++
++#include <cstdio>
++#include <string>
++#include <vector>
++
++#ifdef _WIN32
++extern "C" char* _fullpath(char* absPath, const char* relPath, size_t maxLength);   // msvcrt; <stdlib.h> hides it under -std=c++17
++#endif
++
++namespace {
++int g_pass = 0, g_fail = 0;
++void Check(bool ok, const std::string& what)
++{
++    if (ok) { ++g_pass; std::printf("  PASS: %s\n", what.c_str()); return; }
++    ++g_fail;
++    std::printf("  FAIL: %s\n", what.c_str());
++}
++
++// true = the path may be used: not under D:\HT9045* (D:\HT9045, D:\HT9045_Log, ...), or inside a build dir (\obj\v906\).
++bool PathAllowed(const char* p)
++{
++    std::string s(p ? p : "");
++#ifdef _WIN32
++    char full[1024];
++    if (!s.empty() && _fullpath(full, s.c_str(), sizeof full) != NULL)   // "resolves under": relative paths against the cwd
++        s = full;
++#endif
++    for (size_t i = 0; i < s.size(); ++i)
++    {
++        if (s[i] >= 'A' && s[i] <= 'Z')
++            s[i] = (char)(s[i] - 'A' + 'a');
++        if (s[i] == '/')
++            s[i] = '\\';
++    }
++    if (s.compare(0, 9, "d:\\ht9045") != 0)
++        return true;
++    return s.find("\\obj\\v906\\") != std::string::npos;
++}
++
++bool Contained()
++{
++    const AnsiString* const roots[] = { &as9045LogPath, &asSaveEventLogPath, &asProductionLogPath, &sProductionInfoFilePath,
++                                        &asGeneralPath };
++    const char* const names[] = { "as9045LogPath", "asSaveEventLogPath", "asProductionLogPath", "sProductionInfoFilePath",
++                                  "asGeneralPath" };
++    bool okAll = true;
++    for (int i = 0; i < 5; ++i)
++    {
++        const bool ok = PathAllowed(roots[i]->c_str());
++        std::printf("  %s = %s%s\n", names[i], roots[i]->c_str(), ok ? "" : "   <-- under D:\\HT9045*, not a build dir");
++        if (!ok)
++            okAll = false;
++    }
++    if (!okAll)
++        std::printf("  REFUSED (exit 2) -- nothing was called.  Run it through ctest: ctest --test-dir <build dir> -R \"^St02_L13HgemS14F4$\"\n");
++    return okAll;
++}
++
++std::vector<std::vector<unsigned char> > g_frames;
++
++void L(THGem& g, int n) { g.WireCodec.SReceiveData->Add(AnsiString((int)HType.LIST_TYPE)); g.WireCodec.SReceiveData->Add(AnsiString(n)); }
++void A(THGem& g, const char* s)
++{
++    g.WireCodec.SReceiveData->Add(AnsiString((int)HType.ASCII_TYPE));
++    g.WireCodec.SReceiveData->Add(AnsiString((int)std::string(s).size()));
++    g.WireCodec.SReceiveData->Add(AnsiString(s));
++}
++
++// One S14F3 call; returns the number of frames sent.  Frame layout (SecsWireCodec::CreateLocalHead): [0..3] length, [4..5] device,
++// [6] S | W bit, [7] F, [8] PType, [9] SType, [10..13] system bytes, [14..] body.
++size_t Call(HT9045Gem& h)
++{
++    g_frames.clear();
++    h.S14F4_Get2DID_BinCode();
++    return g_frames.size();
++}
++
++std::string Hex(const std::vector<unsigned char>& b, size_t from)
++{
++    std::string s;
++    char t[4];
++    for (size_t i = from; i < b.size(); ++i) { std::snprintf(t, sizeof t, "%02X ", b[i]); s += t; }
++    return s;
++}
++
++// true = the one captured frame is S14F4 (W bit 0) with body <L[2] <B hcack> <L[0]>>.
++bool IsS14F4(int hcack, std::string& got)
++{
++    if (g_frames.size() != 1) { got = std::to_string(g_frames.size()) + " frames"; return false; }
++    const std::vector<unsigned char>& f = g_frames[0];
++    if (f.size() < 14) { got = "short frame"; return false; }
++    got = "S" + std::to_string(f[6] & 0x7f) + " F" + std::to_string(f[7]) + " W" + std::to_string((f[6] & 0x80) ? 1 : 0) +
++          " body " + Hex(f, 14);
++    const unsigned char body[] = { 0x01, 0x02, 0x21, 0x01, (unsigned char)hcack, 0x01, 0x00 };
++    if ((f[6] & 0x7f) != 14 || f[7] != 4 || (f[6] & 0x80) != 0 || f.size() != 14 + sizeof body)
++        return false;
++    for (size_t i = 0; i < sizeof body; ++i)
++        if (f[14 + i] != body[i])
++            return false;
++    return true;
++}
++
++void CheckFrame(int hcack, const std::string& what)
++{
++    std::string got;
++    const bool ok = IsS14F4(hcack, got);   // before the message is built (argument order is unspecified)
++    Check(ok, what + " (got " + got + ")");
++}
++}  // namespace
++
++int main()
++{
++    std::setvbuf(stdout, nullptr, _IONBF, 0);
++    std::printf("St02_L13HgemS14F4 -- S14F3 with IC in machine / running -> HCACK 2 + S14F4 (golden 913 uHGemHT9045.cpp:6396-6407)\n");
++    if (!Contained())
++        return 2;
++
++    THGem gem;
++    HGem = &gem;
++    HT9045Gem h(AnsiString(""), &gem);
++    h.ActiveWire = &gem.WireCodec;
++    gem.WireCodec.SendLocalDataHook = [](SecsWireCodec& wc) {
++        g_frames.push_back(std::vector<unsigned char>(wc.LocalBuffer.begin(), wc.LocalBuffer.begin() + wc.LocalLength_4));
++    };
++
++    const bool savedStart = SystemStart;
++    const bool savedTrayZ = MOT[MMTrayZ].fHasTray;
++    SystemStart = false;
++    MOT[MMTrayZ].fHasTray = false;
++    Check(HasICUnderMachine() == false, "setup: HasICUnderMachine() false on the empty offline grid");
++
++    // ---------------------------------------------------------------- [1]
++    std::printf("[1] SystemStart true -- golden 913 :6396-6406\n");
++    SystemStart = true;
++    gem.WireCodec.SReceiveData->Clear();
++    Call(h);
++    CheckFrame(2, "[1] exactly one S14F4 <L[2] <B 2> <L[0]>>");
++    SystemStart = false;
++
++    // ---------------------------------------------------------------- [2]
++    std::printf("[2] HasICUnderMachine() true (Tray Z has a tray) -- golden 913 :6396-6406\n");
++    MOT[MMTrayZ].fHasTray = true;
++    Check(HasICUnderMachine() == true, "[2] setup: MOT[MMTrayZ].fHasTray -> HasICUnderMachine() true");
++    gem.WireCodec.SReceiveData->Clear();
++    L(gem, 1); L(gem, 2); A(gem, "PPID1"); L(gem, 1); L(gem, 2); A(gem, "SUBSTRATETYPE"); A(gem, "<xml/>");
++    Call(h);
++    CheckFrame(2, "[2] exactly one S14F4 <L[2] <B 2> <L[0]>>");
++    MOT[MMTrayZ].fHasTray = false;
++
++    // ---------------------------------------------------------------- [3]
++    std::printf("[3] normal path unchanged (SystemStart false, no IC) -- golden 913 :6408-6501\n");
++    Check(HasICUnderMachine() == false && SystemStart == false, "[3] setup: no IC, not running");
++    gem.WireCodec.SReceiveData->Clear();
++    Call(h);
++    CheckFrame(1, "[3] empty body -> one S14F4, HCACK 1");
++    gem.WireCodec.SReceiveData->Clear();
++    L(gem, 1); L(gem, 2); A(gem, "PPID1"); L(gem, 1); L(gem, 2); A(gem, "SUBSTRATETYPE"); A(gem, "<xml/>");
++    Call(h);
++    CheckFrame(3, "[3] SUBSTRATETYPE body -> one S14F4, HCACK 3 (GATE [D2] default)");
++    Check(gem.WireCodec.SReceiveData->Count == 0,
++          "[3] the inbound tokens are consumed (left " + std::to_string(gem.WireCodec.SReceiveData->Count) + ")");
++
++    SystemStart = savedStart;
++    MOT[MMTrayZ].fHasTray = savedTrayZ;
++    gem.WireCodec.SendLocalDataHook = nullptr;
++    HGem = NULL;
++    std::printf("St02_L13HgemS14F4: %d passed, %d failed\n", g_pass, g_fail);
++    return g_fail ? 1 : 0;
++}
+-- 
+2.55.0.windows.5
+
