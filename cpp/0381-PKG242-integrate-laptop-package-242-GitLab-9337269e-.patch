@@ -1,0 +1,686 @@
+From 97011ce82de2ac719fe320ec920198b3fbd85807 Mon Sep 17 00:00:00 2001
+From: "HT9045 Machine (V906)" <Claude_RDBC_02@honprec.com>
+Date: Sat, 10 Oct 2026 10:28:38 +0800
+Subject: [PATCH] PKG242: integrate laptop package 242 (GitLab 9337269e) --
+ Ifor01 W-208 step 2: cylinder-life save and reset side as golden 913 (MR
+ !414): SaveCylinderLife writes MachineLife.ini, the cylinder page menu
+ (select / reset / set alarm) with the YES/NO split into probe and answer
+ steps, GATE SC4 opened. The web cylinder page is not wired yet: no visible
+ change on HT9050. Auto-accepted (scheduled check).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ cStartCondition.cpp              | 353 ++++++++++++++++++++++++++++++-
+ docs/MACHINE_PATCHES_20261009.md |   7 +
+ docs/NIGHT_REPORT.md             |   6 +-
+ docs/WORKLOG_MACHINE.md          |   1 +
+ forms/fStartCondition.h          |  25 ++-
+ tests/CMakeLists.txt             |  15 ++
+ tests/test_w208_cyl_save.cpp     | 149 +++++++++++++
+ 7 files changed, 549 insertions(+), 7 deletions(-)
+ create mode 100644 tests/test_w208_cyl_save.cpp
+
+diff --git a/cStartCondition.cpp b/cStartCondition.cpp
+index 27e4ae06..2c77ca0d 100644
+--- a/cStartCondition.cpp
++++ b/cStartCondition.cpp
+@@ -104,7 +104,7 @@
+ // =============================================================================
+ #include "MachineDefine.h"     // de-VCL'd include hub: vclcompat umbrella + portable STL
+ #pragma hdrstop
+-
++#include "cMyDB.h"                 // AI(W906-W208) 20261009 (Ifor01): NewRecordProcess (GATE (SC4) opened, mniResetOnOffCountClick)；佔用原本的空行，不移動行號
+ #include "forms/fStartCondition.h"
+ #include "forms/fSetup.h"           // AI(W906-SETUP-READFILE) 20260922: fSetup for the un-gated ReadFile() at golden :167
+ 
+@@ -810,7 +810,7 @@ void TfStartCondition::UpdateCylinderScreen(bool bRefrash)
+         {
+             sCylinderData[eCylName][iRow]           =Cylinder[i].CylinderName;
+             // GATE (SC4): self-healing negative-count clamp + persist.
+-            #if 0
++            #if 1 // was: #if 0 -- opened AI(W906-W208) 20261009 (Ifor01): GATE (SC4) reason gone -- SaveCylinderLife is translated now (end of this file, golden 913 :1829); golden 913 :1739-1746 as is (W-208, TO_IFOR 1009 18:5x: the full backend, IG-7 §3 ④-3)
+             if(Cylinder[i].iOnOffCount<0)   //超出變數極限變負值
+             {
+                 s1.sprintf("%s clear PreAlarm count by over",Cylinder[i].CylinderName);
+@@ -976,3 +976,352 @@ void W906_StartConditionTimer1Tick()
+         return;
+     fStartCondition->UpdateCylinderScreen();   //Eastsun 20260521 整合//Sam 20230516 : Pre Alrm Cylinder   // golden 913 main.cpp:3278
+ }
++
++//---------------------------------------------------------------------------
++// AI(W906-W208) 20261009 (Ifor01; W-208 part 2, TO_IFOR 1009 18:5x): the write side of Pre-Alarm Cylinder per golden 913
++//   cStartCondition.cpp -- SaveCylinderLife (:1829-1888), strngrdCylinderViewSelectCell (:1626-1651), mniResetOnOffCountClick
++//   (:1495-1590).  Word for word except three spots, each marked: ShowMyMessageBox_YES_NO -> W906CylYesNo, fQwertyKey->ShowQwertyKey ->
++//   W906CylQwertyKey (the step-wise stand-ins below), Now().FormatString -> FormatDateTime (same DEVIATION as LoadCylinderLife above);
++//   pmCylinder->Items->Items[l]->Visible -> pmCylinderItemVisible[l] (no TPopupMenu in vclcompat).
++//---------------------------------------------------------------------------
++int ShowMyMessageBox_YES_NO(AnsiString S1, AnsiString S2, AnsiString S3="");   // canary_support.h:209 (golden mymessbox.h:55) -- declared here, not included: canary_support.h's RecordProcess / MyDBIProcessNew default arguments clash with cMyDB.h's (included above)
++#include <stdexcept>
++#include <string>
++
++void TfStartCondition::SaveCylinderLife()
++{
++    AnsiString s="";
++    for(int i=0; i<MaxCylinderItem; i++)
++    {
++        if(Cylinder[i].Enable)
++        {
++            //Life
++            s.sprintf("%s_OnOffCount",Cylinder[i].CylinderName);
++            WriteIniData(asMachineLifePath, "CylinderLife", s, Cylinder[i].iOnOffCount);
++            s.sprintf("%s_TimeOutCount",Cylinder[i].CylinderName);
++            WriteIniData(asMachineLifePath, "CylinderLife", s, Cylinder[i].iTimeOutCount);
++
++            //Alarm
++            s.sprintf("%s_OnOffCountAlarm",Cylinder[i].CylinderName);
++            WriteIniData(asMachineLifePath, "CylinderAlarm",s,Cylinder[i].iOnOffCountAlarm);
++            s.sprintf("%s_TimeOutCountAlarm",Cylinder[i].CylinderName);
++            WriteIniData(asMachineLifePath, "CylinderAlarm",s,Cylinder[i].iTimeOutCountAlarm);
++
++            if(Cylinder[i].OnSenEnable)
++            {
++                s.sprintf("%s_OnTimeAlarm",Cylinder[i].CylinderName);
++                WriteIniData(asMachineLifePath, "CylinderAlarm",s,Cylinder[i].dOnTimeAlarm);
++            }
++
++            if(Cylinder[i].OffSenEnable)
++            {
++                s.sprintf("%s_OffTimeAlarm",Cylinder[i].CylinderName);
++                WriteIniData(asMachineLifePath, "CylinderAlarm",s,Cylinder[i].dOffTimeAlarm);
++            }
++
++            //Reset Time
++            s.sprintf("%s_ResetCount",Cylinder[i].CylinderName);
++            WriteIniData(asMachineLifePath, "CylinderResetCount",s,Cylinder[i].iResetCount);
++
++            s.sprintf("%s_ResetTime",Cylinder[i].CylinderName);
++            WriteIniData(asMachineLifePath, "CylinderResetTime",s,Cylinder[i].sResetTime);
++
++            //OnTime Record
++            for(int j=0; j<Cylinder[i].sListOnTime->Count ;j++)
++            {
++                if(Cylinder[i].OnSenEnable)
++                {
++                    s.sprintf("%s_OnTime_%d",Cylinder[i].CylinderName,j);
++                    WriteIniData(asMachineLifePath, "OnTimeRecord",s,atof(Cylinder[i].sListOnTime->Strings[j].c_str()));
++                }
++            }
++
++            //OffTime Record
++            for(int j=0; j<Cylinder[i].sListOffTime->Count ;j++)
++            {
++                if(Cylinder[i].OffSenEnable)
++                {
++                    s.sprintf("%s_OffTime_%d",Cylinder[i].CylinderName,j);
++                    WriteIniData(asMachineLifePath, "OffTimeRecord",s,atof(Cylinder[i].sListOffTime->Strings[j].c_str()));
++                }
++            }
++        }
++    }
++}
++//---------------------------------------------------------------------------
++void TfStartCondition::strngrdCylinderViewSelectCell(int ACol, int ARow, bool &CanSelect)
++{
++    (void)CanSelect;   // golden never writes it either
++    iSelRow=ARow;
++    iSelCol=ACol;
++
++    int i=GetCylinderIndexByName(sCylinderData[0][iSelRow]);
++
++    for(int l=0;l<7;l++)                                                         // golden pmCylinder->Items->Count (7 items, dfm :4473-4508)
++        pmCylinderItemVisible[l]=false;                                          // golden pmCylinder->Items->Items[l]->Visible=false;
++
++    if(iSelCol==eCylOnOffCnt || iSelCol==eCylTimeOutCnt || iSelCol==eCylResetCount)
++        pmCylinderItemVisible[0]=true;      //Reset On Off Count
++    else if(iSelCol==eCylOnOffCntAlarm)
++        pmCylinderItemVisible[1]=true;      //Set on/off count alarm
++    else if(iSelCol==eCylOnTimeAlarm && Cylinder[i].OnSenEnable && Cylinder[i].bCylPreAlarmByPassT==false)
++        pmCylinderItemVisible[2]=true;      //Set on time alarm
++    else if(iSelCol==eCylOffTimeAlarm && Cylinder[i].OffSenEnable && Cylinder[i].bCylPreAlarmByPassT==false)
++        pmCylinderItemVisible[3]=true;      //Set off time alarm
++    else if(iSelCol==eCylTimeOutCntAlarm)
++        pmCylinderItemVisible[4]=true;      //Set timeout count alarm
++    else if((iSelCol==eCylAvgOnTime || iSelCol==eCylOnTime) && Cylinder[i].OnSenEnable && Cylinder[i].bCylPreAlarmByPassT==false)
++        pmCylinderItemVisible[5]=true;      //Set on time alarm by on time avg.
++    else if((iSelCol==eCylAvgOffTime || iSelCol==eCylOffTime) && Cylinder[i].OffSenEnable && Cylinder[i].bCylPreAlarmByPassT==false)
++        pmCylinderItemVisible[6]=true;      //Set off time alarm by of time avg.
++}
++//---------------------------------------------------------------------------
++//==> Eastsun 20260521 整合   //Sam 20230516 : Pre Alrm Cylinder
++void TfStartCondition::mniResetOnOffCountClick()
++{
++    int i=0,iRet=0;
++    double dRet=0.0;
++    AnsiString s1="",s2="",sEn="",sCh="";
++    bool bChange=false;
++    i=GetCylinderIndexByName(sCylinderData[0][iSelRow]);
++    if(i==-1)
++        return;
++    if(Cylinder[i].Enable==false)
++        return;
++
++    if(iSelCol==eCylOnOffCnt || iSelCol==eCylTimeOutCnt || iSelCol==eCylResetCount)                            //清除 On/Off、On、Off、TimeOut count 累積數值
++    {
++        sEn.sprintf("%s Sure To reset count?",Cylinder[i].CylinderName);
++        sCh.sprintf("%s 確定要歸零次數？",Cylinder[i].CylinderName);
++        iRet=W906CylYesNo(sEn, sCh);                                            // golden :1511 ShowMyMessageBox_YES_NO(sEn, sCh) -- W906 step-wise stand-in
++        if(iRet==1)
++        {
++            if(iSelCol==eCylOnOffCnt || iSelCol==eCylTimeOutCnt)
++            {
++                s1.sprintf("%s clear PreAlarm count by manually",Cylinder[i].CylinderName);
++                s2.sprintf("OnOff=%d TimeOut=%d",Cylinder[i].iOnOffCount,Cylinder[i].iTimeOutCount);
++                NewRecordProcess("", s1, s2);
++                Cylinder[i].iOnOffCount=0;
++                Cylinder[i].iTimeOutCount=0;
++                Cylinder[i].iResetCount++;
++                Cylinder[i].sResetTime=FormatDateTime("yyyy-mm-dd hh:nn:ss", Now());   // golden :1522 Now().FormatString(...) -- same DEVIATION as LoadCylinderLife
++                bChange=true;
++            }
++            else if(iSelCol==eCylResetCount)
++            {
++                s1.sprintf("%s clear reset count by manually",Cylinder[i].CylinderName);
++                s2.sprintf("Reset Count=%d ",Cylinder[i].iResetCount);
++                NewRecordProcess("", s1, s2);
++                Cylinder[i].iResetCount=0;
++                bChange=true;
++            }
++        }
++    }
++    else if(iSelCol==eCylOnOffCntAlarm)             //手動輸入 On/Off Count Alarm 值
++    {
++        edCylinderView->Text=sCylinderData[iSelCol][iSelRow];
++        W906CylQwertyKey(edCylinderView, N_INTEGER, 0, true, 0, 6000000);       // golden :1538 fQwertyKey->ShowQwertyKey(...) -- W906 step-wise stand-in
++        iRet=atoi(edCylinderView->Text.c_str());
++        Cylinder[i].iOnOffCountAlarm=iRet;
++        bChange=true;
++    }
++    else if(Cylinder[i].OnSenEnable && iSelCol==eCylOnTimeAlarm)                //手動輸入 On time Alarm 標準值
++    {
++        edCylinderView->Text=sCylinderData[iSelCol][iSelRow];
++        W906CylQwertyKey(edCylinderView, N_DOUBLE, 0, true, 0.000, 999999.999); // golden :1546
++        dRet=atof(edCylinderView->Text.c_str());
++        Cylinder[i].dOnTimeAlarm=dRet;
++        bChange=true;
++    }
++    else if(Cylinder[i].OffSenEnable && iSelCol==eCylOffTimeAlarm)              //手動輸入 Off time Alarm 標準值
++    {
++        edCylinderView->Text=sCylinderData[iSelCol][iSelRow];
++        W906CylQwertyKey(edCylinderView, N_DOUBLE, 0, true, 0.000, 999999.999); // golden :1554
++        dRet=atof(edCylinderView->Text.c_str());
++        Cylinder[i].dOffTimeAlarm=dRet;
++        bChange=true;
++    }
++    else if(Cylinder[i].OnSenEnable && iSelCol==eCylOnTime)                     //以目前的 On time 來當 On time Alarm 標準值
++    {
++        Cylinder[i].dOnTimeAlarm=atof(Cylinder[i].GetOnTime().c_str());
++        bChange=true;
++    }
++    else if(Cylinder[i].OnSenEnable && iSelCol==eCylAvgOnTime)                  //以目前的 On time Avg.來當 On time Alarm 標準值
++    {
++        Cylinder[i].dOnTimeAlarm=atof(Cylinder[i].GetOnTimeAvg().c_str());
++        bChange=true;
++    }
++    else if(Cylinder[i].OffSenEnable && iSelCol==eCylOffTime)                   //以目前的 Off time 來當 Off time Alarm 標準值
++    {
++        Cylinder[i].dOffTimeAlarm=atof(Cylinder[i].GetOffTime().c_str());
++        bChange=true;
++    }
++    else if(Cylinder[i].OffSenEnable && iSelCol==eCylAvgOffTime)                //以目前的 Off time Avg.來當 Off time Alarm 標準值
++    {
++        Cylinder[i].dOffTimeAlarm=atof(Cylinder[i].GetOffTimeAvg().c_str());
++        bChange=true;
++    }
++    else if(iSelCol==eCylTimeOutCntAlarm)             //手動輸入 On/Off Count Alarm 值
++    {
++        edCylinderView->Text=sCylinderData[iSelCol][iSelRow];
++        W906CylQwertyKey(edCylinderView, N_INTEGER, 0, true, 0, 10000);         // golden :1582
++        iRet=atoi(edCylinderView->Text.c_str());
++        Cylinder[i].iTimeOutCountAlarm=iRet;
++        bChange=true;
++    }
++
++    if(bChange)
++        SaveCylinderLife();
++}
++//<== Eastsun 20260521 整合   //Sam 20230516 : Pre Alrm Cylinder
++
++//---------------------------------------------------------------------------
++// [W906] the two dialog stand-ins and the page backend (step-wise, FileRW/CfgTrayPlate.cpp:349 shape).
++//   golden's click runs ShowModal (YES/NO box or keypad) inside the handler; the port's ShowMyMessageBox_YES_NO waits on the web hook
++//   holding the only tick thread (the reason ST-W4-F / W-206 stay gated), so the page asks first (step 0) and then runs the click once
++//   with the answer (step 1).  Step 0 stops the handler AT its question (an exception, before any state is touched); items 5/6 ask
++//   nothing in golden (:1559-1578 act at once), so step 0 does not run the handler for them.
++//---------------------------------------------------------------------------
++namespace {
++enum W208Mode { kW208None, kW208Probe, kW208Answer };
++struct W208State
++{
++    W208Mode    mode = kW208None;
++    int         kind = 0;
++    AnsiString  sEn, sCh, current;
++    int         iFunction = 0, iDP = 0;
++    bool        bCheckRange = false;
++    double      min = 0, max = 0;
++    bool        yes = false, cancel = false;
++    std::string text;
++};
++W208State g_w208;
++struct W208Stop {};   // step 0 reached the question / step 1 keypad text refused
++
++// characters the golden keypad can type into a numeric box (N_INTEGER / N_DOUBLE): digits, sign, point
++bool W208Typable(int iFunction, const std::string& s)
++{
++    if(s.empty())
++        return false;
++    for(size_t k=0; k<s.size(); k++)
++    {
++        const char ch=s[k];
++        if(ch>='0' && ch<='9') continue;
++        if(ch=='-' && k==0) continue;
++        if(ch=='.' && (iFunction&N_DOUBLE)) continue;
++        return false;
++    }
++    return true;
++}
++}  // namespace
++
++int TfStartCondition::W906CylYesNo(AnsiString sEn, AnsiString sCh)
++{
++    g_w208.kind=1;
++    g_w208.sEn=sEn;
++    g_w208.sCh=sCh;
++    if(g_w208.mode==kW208Probe)
++        throw W208Stop();
++    if(g_w208.mode==kW208Answer)
++        return g_w208.yes ? 1 : 2;                                              // golden mymessbox: 1 = YES, 2 = NO (golden :1512 iRet==1)
++    return ShowMyMessageBox_YES_NO(sEn, sCh);                                   // no page operator: golden's own box
++}
++
++// golden fQwertyKey->ShowQwertyKey(Ptr, ...)'s net effect on the box (myQwertyKeyBoard.cpp :238-239 backup, :283 ShowModal, :285-292
++//   numeric CheckRange, :298-299 write back) -- the same as FileRW/CfgTrayPlate.cpp:585 W906ShowQwertyKey.  Cancel and "no page
++//   operator" both give the box text back (:364; forms/fQwertyKey.h offline behaviour), and golden then still uses it (:1539 atoi ...).
++void TfStartCondition::W906CylQwertyKey(TEdit *Ptr, int iFunction, int iDP, bool bCheckRange, double min, double max)
++{
++    g_w208.kind=2;
++    g_w208.iFunction=iFunction;
++    g_w208.iDP=iDP;
++    g_w208.bCheckRange=bCheckRange;
++    g_w208.min=min;
++    g_w208.max=max;
++    g_w208.current=Ptr->Text;
++    if(g_w208.mode==kW208Probe)
++        throw W208Stop();
++
++    AnsiString content=Ptr->Text;                                               // :238-239
++    if(g_w208.mode==kW208Answer && !g_w208.cancel)
++    {
++        if(!W208Typable(iFunction, g_w208.text))
++            throw W208Stop();                                                   // not something the keypad can type: nothing changes
++        content=AnsiString(g_w208.text.c_str());                                // Summit / Enter
++    }
++    if(iFunction&N_INTEGER || iFunction&N_DOUBLE)                               // :285-292
++    {
++        double d=atof(content.c_str());
++        if(bCheckRange)
++        {
++            content=AnsiString(CheckRange(d, min, max));
++        }
++    }
++    Ptr->Text=content;                                                          // :298-299
++}
++
++namespace {
++// golden OnSelectCell for (ACol, ARow).  VCL never selects the fixed row / column 0 or a cell outside the grid; [W906] a row whose
++//   name is not a cylinder (the grid not refreshed yet) is refused here -- golden would index Cylinder[-1] in OnSelectCell (:1632).
++bool W208Select(int ACol, int ARow)
++{
++    TfStartCondition *f=fStartCondition;
++    if(ACol<1 || ARow<1 || ACol>=f->strngrdCylinderView->ColCount || ARow>=f->strngrdCylinderView->RowCount)
++        return false;
++    if(f->GetCylinderIndexByName(f->sCylinderData[0][ARow])==-1)
++        return false;
++    bool CanSelect=true;
++    f->strngrdCylinderViewSelectCell(ACol, ARow, CanSelect);
++    return true;
++}
++int W208VisibleItem()
++{
++    for(int l=0; l<7; l++)
++        if(fStartCondition->pmCylinderItemVisible[l])
++            return l;
++    return -1;
++}
++}  // namespace
++
++bool W906_SC_CylinderMenuProbe(int ACol, int ARow, W906CylPrompt *out)
++{
++    W906CylPrompt p;
++    p.item=-1; p.kind=0; p.iFunction=0; p.iDP=0; p.bCheckRange=false; p.min=0; p.max=0;
++    if(out) *out=p;
++    if(!W208Select(ACol, ARow))
++        return false;
++    p.item=W208VisibleItem();
++    if(p.item<0)                                                                // golden: an empty popup -- nothing to click
++    {
++        if(out) *out=p;
++        return false;
++    }
++    if(p.item<=4)                                                               // 0 asks YES/NO, 1-4 open the keypad; 5/6 ask nothing
++    {
++        g_w208=W208State();
++        g_w208.mode=kW208Probe;
++        try { fStartCondition->mniResetOnOffCountClick(); } catch(const W208Stop&) {}
++        g_w208.mode=kW208None;
++        p.kind=g_w208.kind;
++        p.sEn=g_w208.sEn; p.sCh=g_w208.sCh;
++        p.iFunction=g_w208.iFunction; p.iDP=g_w208.iDP; p.bCheckRange=g_w208.bCheckRange; p.min=g_w208.min; p.max=g_w208.max;
++        p.current=g_w208.current;
++    }
++    if(out) *out=p;
++    return true;
++}
++
++bool W906_SC_CylinderMenuAnswer(int ACol, int ARow, bool yes, const char *text, bool cancel)
++{
++    if(!W208Select(ACol, ARow) || W208VisibleItem()<0)
++        return false;
++    g_w208=W208State();
++    g_w208.mode=kW208Answer;
++    g_w208.yes=yes;
++    g_w208.cancel=cancel;
++    g_w208.text=text ? text : "";
++    bool ok=true;
++    try { fStartCondition->mniResetOnOffCountClick(); } catch(const W208Stop&) { ok=false; }
++    g_w208.mode=kW208None;
++    return ok;
++}
+diff --git a/docs/MACHINE_PATCHES_20261009.md b/docs/MACHINE_PATCHES_20261009.md
+index 5faef0c5..7ab25b08 100644
+--- a/docs/MACHINE_PATCHES_20261009.md
++++ b/docs/MACHINE_PATCHES_20261009.md
+@@ -232,3 +232,10 @@
+ 
+ - **cpp 0378 WORKLOG**：cherry-pick 進第 158 批（b18 `ac2aa6f4`，同批 Ifor01 的 !413）；之後 `WORKLOG_MACHINE.md` 照機台 cpp 0379（`2f517b9d`）整份收（補 0377／0379 PKG commit 寫的第 239／240 包兩列），跟機台那份逐位元組相同（diff 0 行）。
+ - **鏈尾**仍是 C++ `2f517b9d`（0379）。下一次從 **cpp 0380／web 0144／tools 0197** 開始。
++
++## 33. （20261010 09:1x）cpp 0380 PKG241（只接鏈）；tools 0197 不收；快照 08:54
++
++- **cpp 0380 PKG241**：機台把筆電第 241 包（Ifor01 W-208 ①，氣缸壽命讀檔）合進去——只接鏈；`pkg_uptake.py`：機台套到**第 241 包**（＝GitHub main 最新）。
++- **tools 0197 HTDESIGNER**：照慣例不收。
++- **快照 08:54**（main `35cbda50`）：只有兩份 README 的時間——不叮嚀；`MachineLife.ini` 在快照裡沒有變動。
++- **鏈尾**：C++ `2f517b9d`（0379）→ **`ffefd4ab`**（0380）。下一次從 **cpp 0381／web 0144／tools 0198** 開始。PKG241 寫的 WORKLOG 列等下一張程式批次整份收。
+diff --git a/docs/NIGHT_REPORT.md b/docs/NIGHT_REPORT.md
+index 2c659b8c..2c6491e8 100644
+--- a/docs/NIGHT_REPORT.md
++++ b/docs/NIGHT_REPORT.md
+@@ -1,10 +1,10 @@
+-# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1010 07:1x）
++# 夜間報告 2026-10-02（五）晚 → 10-08（四）—— 進行中版本（最後更新 1010 08:3x）
+ 
+ ## ☀ 10/08 早上先看這裡（04:3x 起草；之後的進度往這張表加）
+ 
+ | 項目 | 一句話 |
+ |---|---|
+-| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～157 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate；第 140 批拿掉當掉的 IG-6 後才綠），出了**第 181～240 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
++| **迴圈** | 10/07 23:2x 換帳號後接回，整晚沒停：第 98～158 批全部 gate 綠（兩組態都只剩固定 4 支；第 116 批只有文件與工具、沒跑 gate；第 140 批拿掉當掉的 IG-6 後才綠），出了**第 181～241 包**；機台 23:00～02:00 推的 cpp 0307～0317 全收進 main。 |
+ | **模擬組態** | St02 W-149 做完：模擬版的固定失敗從 7 支降到 4 支，跟出貨一樣——之後模擬版多紅一支就是真回歸。 |
+ | **機台修的事（重點）** | 0307 主控台非同步（START 卡 103 秒＋EMG 誤報的根因）、0309／0310／0312／0316 HT9050 Tray 流程（站序、Empty→Auto 補盤、位置不加 6800、Loader 探測看抽屜感測）、0311／0317 上升氣缸雙線圈、0313 出料手臂讓位點（00:19 MOutArmX 警報）、0314 CCD Y 原點判斷、**0315 HT9050 先跳過 Index 扭力讀取**（旗標預設開，扭力讀取驗證後要關）。 |
+ | **軟體極限** | 00:19 的警報是 golden 拿軟體極限（這台 ±999999）算目標。MainNB-GPT 普查（W-164）：只剩 Motor Test 頁的 LightScale 會算出 ±999899——EastSun 0925 R7 已定照 golden，只發提醒。 |
+@@ -145,6 +145,8 @@
+ | **出的包（1010 05:4x）：第 239 包＝第 156 批** | GitLab `64a51c5f`／GitHub `67d05f55`：NB2-1 照 golden 913 做 Auto Site Mapping 重新開始時清熱盤「借了沒還」的暫停帳（只有開 ASM、熱盤借料被打斷時才清，清到時事件紀錄多一行；平常跑料不變）。gate b156a 兩組態只有固定 4 支（521 支測試）。機台已套到第 238 包（05:2x），快照 05:24 只有 README 時間。 |
+ | **出的包（1010 06:4x）：第 240 包＝第 157 批** | GitLab `68513ac6`／GitHub `42c6f822`：St02 照 913 打開 SECS 遠端命令 S2F41 的五個閘（HT9050 沒開 SECS，行為不變）＋機台 WORKLOG。gate b157a 兩組態只有固定 4 支（522 支測試）。St02-E 交了 W-214 設計稿（ART 批次狀態三份合一），筆電選 A 並點頭，週額度允許才實作；ST-GPT 的技能文件 !412 合進 main。機台已套到第 239 包。 |
+ | **1010 07:1x：機台已套第 240 包；St02 額度用完** | 機台 06:5x 套了第 240 包（＝最新）。St02 的 7 天額度 06:5x 到 85%：St02-E 把 W-214（ART 批次狀態三份合一，低優先）停在本機，約 10/14 傍晚重置後續做；在那之前 St02 只巡檢、交接，筆電不派新卡給它。目前沒有程式 MR 在等 gate；NB2-1 在做 W-188 第 7 步。 |
++| **出的包（1010 08:3x）：第 241 包＝第 158 批** | GitLab `0297122d`／GitHub `07eb35a7`：Ifor01 照 golden 913 接上氣缸壽命的開機讀檔與週期刷新（開機讀 MachineLife.ini；頁面沒開時不做事；沒有新警報）＋機台 WORKLOG。gate b158a：出貨組態只有固定 4 支；模擬組態多一支 FastClk_Jobs（負載抖動，單獨重跑通過）。 |
++| **☀ 10/10 早上一眼看完（08:3x）** | 昨晚到今早出了**第 231～241 包（11 包）**，每包 gate 兩組態都只有固定 4 支；機台已套到第 240 包（第 241 包剛推）。內容：TESNA（!399／!400）、L10 閘門（!402）、HANA H6（!403）、測試修正（!404）、NB2-1 的 W-188 #5／#6（!405／!410）、[C25] 設定列（!407）、TTLLog Close（!408）、SECS SVID 1191（!409）、S2F41 五個閘（!411）、氣缸壽命讀檔（!413）＋機台 WORKLOG。同事：St02 週額度用完（W-214 停在本機，約 10/14 續做）；NB2-1 在做 W-188 #7；Ifor01 接著做 W-208 ②。**要你決定的仍是 #152、#153（都可以不回，照預設繼續）**。 |
+ | **要你決定的**（§0） | ✅ 你 10:1x 都回了：#148＝NB2 已完成（!306 收進第 110 批確認）、#149＝A（Ifor-GPT 專做執行期測試，IG-3／IG-4）、!310＝A（ES02 HTDESIGNER 0.235～0.257 收進第 110 批）＝RULINGS_20261008 第 2 條。**13:0x 新一題 #150**：GPIB 位址不一致要不要自動修正（Jerry 留給你；預設 A＝維持 golden、只留警告，可不回）。<br>**🆕 1009 11:4x 新一題 #151：HANA 機台按 START 時，要不要照 golden 先等 RMS 伺服器連線（最多 3 秒）？** 白話：golden 913（RogerYang 0916）裡，HANA 客戶開了 A77 的機台按 START 前，會先確認 RMS 伺服器連得上，連不上就擋下 START，連線最多等 3 秒。問題在移植樹的輪詢是單執行緒——這 3 秒裡整台機台的狀態更新會停住（例：網頁上的數字 3 秒不動）。你 0923 定過「會擋住輪詢的整合要先問」，所以問你。只有「HANA 客戶＋開 A77＋線上模式＋RMS 還沒連上」才會等，HT9050 永遠走不到。選項：**A＝照 golden 收**（建議：只在按 START 那一刻、最多 3 秒，機台本來就停著；St02 已經把等待裡的訊息迴圈換成只推 HANA 連線）；**B＝先不收**，等改成不擋輪詢的寫法（例：連線放到背景，START 時只看結果）。**沒回之前照 B**：H4 先不合，HANA 其他幾張（!372～!374）照常進第 138 批。<br>**🆕 1009 12:3x 新一題 #152：EastSun 派給你的「在沒有 AI 的電腦上實測安裝與更新」，實測要誰來做？** 白話：EastSun 希望客戶端或沒有 AI 的電腦也能只靠文件和腳本裝好、更新 HT9050 的軟體（機台 cpp 0349）。手冊和腳本筆電已派 Ifor01 寫（W-197）；寫好之後要有一個「人」在一台沒有 Claude 的電腦上照著做三個情境：①從零安裝並啟動；②從某一包更新到最新一包，中間至少遇到一個「機台和筆電都改過」的檔；③故意讓建置失敗，照手冊退回。模擬組態就可以，不用機台。選項：**A＝你自己做**（建議：EastSun 指名你，你也最清楚客戶端要什麼；大約半天到一天）；**B＝指定一位同事**照手冊做、不用 AI（例：Kevin 或 Jerry）；**C＝先不排**，手冊寫好放著。**沒回之前照 C**：手冊照寫，不排實測。實測的人不能是寫手冊的 Ifor01。<br>（1009 13:4x 補：**#151 也請 Steven 一題決定**（W-199）——你 13:3x 說 Steven 的回覆最高優先，Steven 回了就照他的，這題你就不用回。Steven 13:0x 對同一類的 KYEC 換配方同步等 7z 已經裁定「功能打開才等」照 913 同步，可以參考。）<br>（1009 15:1x 補 #152：**手冊和腳本已經好了**——Ifor01 的 MR !379 進 main `7db6b913`：`tools/laptop_ops/pkg_template/` 的 `NO_AI_INSTALL.md`／`NO_AI_UPDATE.md`／`NO_AI_TROUBLESHOOTING.md`＋五支 PowerShell 腳本＋啟動 .bat，每份手冊都附實測紀錄表。你決定誰做實測就可以開始；新腳本等實測過了才換進每一包。） |
+ 
+ 
+diff --git a/docs/WORKLOG_MACHINE.md b/docs/WORKLOG_MACHINE.md
+index 3b999dff..f7a306c6 100644
+--- a/docs/WORKLOG_MACHINE.md
++++ b/docs/WORKLOG_MACHINE.md
+@@ -353,6 +353,7 @@ commit → 推 GitHub。設計外掛的檔（`tools/vscode-htdesigner`）一律
+ | 10-07 | 設計外掛 tools 0170 | — | 設計外掛工作階段自己推（分支 a6cadd2，GitHub dc7975ff）：依序合併筆電包 162、163、167、168 的設計外掛（0.197.0 → 0.234.0），164～166、169～172 沒帶設計外掛；無衝突，機台自己的設計外掛功能都保留；測試修正：建置視窗進度條在矮視窗不再塌掉、面板繪製測試固定 Edge 視窗大小；run_all 3/3、vscode_it 161/161，已安裝 0.234.0；只動 tools/vscode-htdesigner | tools 0170 |
+ | 10-08 | 設計外掛 tools 0171 | — | 設計外掛工作階段自己推（commit b453060，GitHub f42c142b）：EastSun 1008 方案總管的 Debug／Release 按鈕按不了（0.234 在 ▶＝F5 時把它變灰）→ 裁決「連動F5 release 和debug」：按鈕恢復可按，resolveDebugConfiguration 依按鈕把 F5／▶ 的啟動目標換成 build_integ_dbg_x86 或 build_integ_ship_x86 那一組；「模擬」仍是灰的。run_all 3/3；vscode_it 沒跑成（VS Code 自己的更新程式 CodeSetup 從 10/07 18:34 起佔住執行個體鎖）。vsix 已安裝，版本號沒變，要重新載入視窗才生效；只動 tools/vscode-htdesigner | tools 0171 |
+ | 10-08 | 173～204 | 07dbeae3＋63b1aa25＋351291d5（GitLab 0258ba66…68fc0e65、39c6388c、e6c54331） | 本 commit（機台 C++＋web），EastSun「你確定有合完整?」→「快合」→「一直合下去 不要停拜託」（173～202 的 C++ 從 10-07 起都沒合，只有設計外掛跟上）。備份分支 backup/pre-pkg202-20261008（cpp、web）＋ D:\HT9045\_pkg_202\backup_machine_195843、D:\HT9045\_pkg_203\backup_machine_220733。202 疊三十包：直接換 108（換 105；tasks.json、acatchtray 留機台）、新檔 35、兩邊都改 22（合併 16、設計外掛／WORKLOG 照規定 6）、一樣 88；每個直接換的檔掃機台 AI 標記＋W906_ 識別字：WebBridgeServer（TOKEN-OFF／SOFTKEY panel.estop）改三方合併＋收筆電 pad.get／pad.close／observerSG 豁免、acatchtray 留機台（筆電版＝少 PROBECYL）、MotionView9050 換（機台＝基底）。衝突：cinitial／test_flow9050_tray／csystem 取機台（BOOTCLEAR、PROBECYL、pitch 同步在 MainProc）；test_scankey_golden、IoBtnPanelClick、tests/CMakeLists、WebBridgeTags（tester.name 依 Jerry 1008 裁決 A＝golden LoadTestModePicture）取筆電；wb_serve 第 239 行＝機台 IOWAIT＋筆電 g_ppCyc0 搬移。4 個新網頁檔改 CRLF。203：15 檔（直接換 9、新 4、合併 2，無衝突）；204：12 檔（直接換 9、新 1、合併 2，無衝突；SECS SV Auto1～6 料盤別名＋氣缸平均推拉時間、cSpeed）。合併後 test_scankey_golden 補回 PadInterface_St02.h include、[19]（筆電版軟體面板鍵 ST02-P2，機台保留自己的 SOFTKEY）在機台關掉。ctest Debug 426/441：15 個失敗都是第 381 列的已知清單（環境：dfm2rc×4 ctest 找不到 g++／rc.exe、E031、GearTeachSave、TeachCheckRangeReload；斷言筆電設定／repo 舊表：config_db、ini_helpers、config_loaders、MotorPoints／MachineMotors／MachineSuckers_HT9050；機台補丁：GA2_C1_cinitial、FShow_Audit）；204 之後相關 29 支全過。EastSun 未 commit 的 acatchtray／asendic_Loader／cinitial／PadInterface_St02（SafeLock）先拿開、合完三方套回，不進 commit。20:02 -j4 整包重編讓機台當機（Kernel-Power 41），留下 NUL 填滿的 .a／.obj／.d ⇒ clean 後 -j2 重編 | 本 commit |
++| 10-10 | 242 | 8921b0ae（GitLab 9337269e） | 本 commit（定時檢查自動收）：Ifor01 W-208 第 2 步（MR !414，golden 913 cStartCondition.cpp）汽缸壽命的存檔與歸零端：SaveCylinderLife（:1829-1888）寫 MachineLife.ini；汽缸頁選單（選格 :1626-1651、歸零／設警報 :1495-1590）逐字照搬，只有 YES/NO 框、鍵盤、日期格式不同；開 GATE SC4（:1739-1746：頁面刷新時把負的次數清掉、記錄、存檔）。YES/NO 拆成「探詢」和「回答」兩步，不會在 tick 執行緒上等 modal；網頁汽缸頁是另一張卡，還沒做。HT9050 目前看不到差別（網頁沒接，沒人按得到歸零／存檔，SC4 只在頁面開著刷新時跑）。6 檔：直接換 4、新測試 1、tests/CMakeLists 合併無衝突。W906-DOASYNC 照上一包的做法暫時移出、建置與 commit 不含它。工作階段中斷又接上，同一份套用跑了兩次（內容一樣）；原檔備份在 D:\HT9045\_pkg_242\backup_machine_102256。wb_serve 沒在跑：Debug＋release 都建好（10:28），W208_CylinderLifeSave／Load、START_SitesCensus 過 | 本 commit |
+ | 10-10 | 241 | 07eb35a7（GitLab 0297122d） | 本 commit（定時檢查自動收）：Ifor01 W-208 第 1 步（MR !413，golden 913）汽缸壽命的讀取端接上：fStartCondition 改成活的（HT9045.cpp:206）；開機 LoadCylinderLife 讀 **D:\HT9045\system\MachineLife.ini**（cStartCondition.cpp:1765-1827；缺的 key 照 golden 用預設值寫回該檔）；Timer1 在 InitialOK 後呼叫 UpdateCylinderScreen（兩個 wb_serve Timer1 位置）。**HT9050 看得到**：開機會讀 MachineLife.ini（31 行 `_OnOffCountAlarm=1` 照讀），汽缸壽命頁關著時定時刷新不做事；次數門檻在 golden 也只是顯示，不會新增警報；清除與存檔是第 2 步。9 檔：直接換 4、新測試 1、合併 4 無衝突（CMakeLists、tests/CMakeLists、tools/wb_serve.cpp、cinitial.cpp——cinitial 只 commit 包的 2 行，EastSun 未 commit 的 13 行留在工作樹，另存 D:\HT9045\_pkg_241\eastsun）。合併前先把機台尚未上機驗證的 W906-DOASYNC 修改（5 個 EtherCAT 檔）存成 D:\HT9045\_review\doasync_20261010\doasync.patch 暫時移出工作樹，建置與 commit 都不含它，之後再套回。wb_serve 沒在跑：Debug＋release 都建好（08:54），W208_CylinderLifeLoad、St02_ModalTimer1、START_SitesCensus 過。備份 D:\HT9045\_pkg_241\backup_machine_085213 | 本 commit |
+ | 10-10 | 240 | 42c6f822（GitLab 68513ac6） | 本 commit（定時檢查自動收）：St02 W-213 第 3 步（MR !411，golden 913 SECSGEM/uHGemHT9045.cpp）S2F41 遠端命令開五個閘：G37 START_LOT 帶 CP TEST_TIMES 時設 Lot Info 的 Test Times（在清單內回 HCACK 0，否則 3；原本整個 START_LOT 回 1）；G41-G43 START_AGV 設 Loader／Empty／Color 動作旗標（讀它的 AGV 氣缸 LoaderAction 還沒移植，什麼都不會動）；G47 AMR 自動 START 刷新 AMR 燈號。HT9050 沒開 SECS，看不到差別。5 檔：直接換 3（掃過沒有機台標記會消失）、新測試 1、tests/CMakeLists 合併無衝突；包內 WORKLOG 照規定留機台。wb_serve 沒在跑：Debug＋release 都建好（06:54），St02_W213HgemS2F41、START_SitesCensus 過。備份 D:\HT9045\_pkg_240\backup_machine_065313 | 本 commit |
+ | 10-10 | 239 | 67d05f55（GitLab 64a51c5f） | 本 commit（定時檢查自動收）：NB2-1 W-188 #6（MR !410，golden 913 Public/HTEditList.cpp:2821-2878、main.cpp:29258-29275，RogerYang 0831f／0914）：uPlateInfo::PurgePausedBookings 清掉熱盤「借了沒還」的預約（bSuck false 但座標還留著）、刪空隊與非尾端空組；TfMain::ReStartAutoSiteMapping 開頭在 iResetSiteMappingStep==0（沒有排隊中的歸還）時呼叫，真的清了才寫一行 RecordProcess。913 ReStartAutoSiteMapping 其餘本體尚未移植（port 原本是空殼）。**HT9050**：只有開 Auto Site Mapping、而且熱盤借格曾被中斷（One Cycle／關 site）時，下次 ASM 重新開始會清掉並寫「ASM boundary : purge N paused booking slot(s)」；一般跑料不變。6 檔：直接換 4（HTEditList.h／.cpp、fMain.cpp 等，掃過沒有機台標記會消失）、新測試 1、tests/CMakeLists 合併無衝突。wb_serve 沒在跑：Debug＋release 都建好（05:55），NB2_W188PurgePaused／Reconcile、START_SitesCensus 過。備份 D:\HT9045\_pkg_239\backup_machine_055257 | 本 commit |
+diff --git a/forms/fStartCondition.h b/forms/fStartCondition.h
+index c29d83af..eb961a04 100644
+--- a/forms/fStartCondition.h
++++ b/forms/fStartCondition.h
+@@ -330,7 +330,7 @@ public:
+     // (a) method assigns them this wave (strngrdCylinderViewSelectCell,
+     // their only writer, is bucket (b), not translated).
+     int iSelRow = 0;
+-    int iSelCol = 0;
++    int iSelCol = 0;   bool pmCylinderItemVisible[7] = {false, false, false, false, false, false, false};   /* AI(W906-W208) 20261009 (Ifor01): golden pmCylinder->Items->Items[0..6]->Visible (cStartCondition.h:381, dfm :4473-4508; vclcompat has no TPopupMenu) -- written by strngrdCylinderViewSelectCell */
+ 
+     // -- golden :440 (Pre-Alarm Cylinder screen-text cache) ------------------
+     // golden AnsiString sCylinderData[eCylPrAlarmItemTotal][MaxCylinderItem];
+@@ -447,7 +447,7 @@ public:
+ 
+     // -- Pre-Alarm Cylinder tab (golden :379-389) ----------------------------
+     TTabSheet            *tsCylinderView       = new TTabSheet();
+-    TfStartConditionGrid *strngrdCylinderView  = new TfStartConditionGrid(4, 10);
++    TfStartConditionGrid *strngrdCylinderView  = new TfStartConditionGrid(4, 10);   TEdit *edCylinderView = new TEdit();   // AI(W906-W208) 20261009 (Ifor01): golden cStartCondition.h:389 (dfm :4153, Visible=False) -- the keypad target in mniResetOnOffCountClick
+ 
+     // -----------------------------------------------------------------------
+     //  Wave A translated methods (bodies: cStartCondition.cpp, this wave)
+@@ -457,7 +457,7 @@ public:
+     void pgLifeTimeChange();                             // golden :1029-1047 (Sender dropped)
+     int  GetCylinderIndexByName(AnsiString sCylinderName); // golden :1479-1487
+     void UpdateCylinderScreen(bool bRefrash = false);    // golden :1489-1589
+-    void LoadCylinderLife();                             // golden :1591-1653
++    void LoadCylinderLife();   void SaveCylinderLife(); void mniResetOnOffCountClick(); void strngrdCylinderViewSelectCell(int ACol, int ARow, bool &CanSelect); int W906CylYesNo(AnsiString sEn, AnsiString sCh); void W906CylQwertyKey(TEdit *Ptr, int iFunction, int iDP=0, bool bCheckRange=false, double min=0, double max=0);   // golden :1591-1653 (LoadCylinderLife); AI(W906-W208) 20261009 (Ifor01): golden 913 :1829 / :1495 / :1626 (Sender dropped); the last two stand in for ShowMyMessageBox_YES_NO / fQwertyKey->ShowQwertyKey (bodies and the step-wise page backend at the end of cStartCondition.cpp)
+     void strngrdCylinderViewDrawCell(int ACol, int ARow); // golden :1418-1450 (Sender/Rect/State dropped, GATE (SC5) -- entire body #if 0)
+ };
+ 
+@@ -470,4 +470,23 @@ extern TfStartCondition *fStartCondition;   // AI(W906-W208) 20261009 (Ifor01);
+ void W906_StartConditionTimer1Tick();       // AI(W906-W208) 20261009 (Ifor01): golden 913 main.cpp:3278 `fStartCondition->UpdateCylinderScreen();` -- called from tools/wb_serve.cpp: main loop right after W906_MainRecordTimer1Tick, W906_ModalWaitTick right after W906_ModalTimer1Segments
+ // (these two lines were: "integration-pending -- NO extern here", AI(W906-FW3-StartCond-WA) 20260819; retired by W-208)
+ 
++// AI(W906-W208) 20261009 (Ifor01) -- the Cylinder page backend, step-wise like FileRW/CfgTrayPlate.cpp:349 (no modal wait on the tick thread).
++//   golden: click a cell (OnSelectCell :1626 decides which of the 7 pmCylinder items shows), right-click, pick the item: all 7 run
++//   mniResetOnOffCountClick (:1495), which asks YES/NO (Reset Count) or opens the keypad (the four "Set ... alarm"), or acts at once
++//   (the two "Set ... standard").  Here: step 0 = W906_SC_CylinderMenuProbe (what the click would ask; changes nothing),
++//   step 1 = W906_SC_CylinderMenuAnswer (the same click with the operator's answer).  The web page itself is a separate card.
++struct W906CylPrompt
++{
++    int        item;          // the pmCylinder item OnSelectCell made visible: 0 Reset Count, 1 on/off count alarm, 2 on time alarm,
++                             //   3 off time alarm, 4 time out count alarm, 5 on time standard, 6 off time standard; -1 = none
++    int        kind;          // 0 = no question (the click acts at once), 1 = YES/NO, 2 = keypad
++    AnsiString sEn, sCh;      // kind 1: golden's two texts
++    int        iFunction, iDP;   // kind 2: golden's ShowQwertyKey arguments ...
++    bool       bCheckRange;
++    double     min, max;
++    AnsiString current;       // ... and the box text the keypad opens with
++};
++bool W906_SC_CylinderMenuProbe(int ACol, int ARow, W906CylPrompt *out);   // step 0: false = no item for that cell
++bool W906_SC_CylinderMenuAnswer(int ACol, int ARow, bool yes, const char *text, bool cancel);   // step 1: false = no item / keypad text refused
++
+ #endif // FORMS_FSTARTCONDITION_H
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index dcbf7f6f..9b9d4656 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -9793,3 +9793,18 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+ endif()
+ add_test(NAME W208_CylinderLifeLoad COMMAND test_w208_cyl_load "${CMAKE_SOURCE_DIR}")
+ set_tests_properties(W208_CylinderLifeLoad PROPERTIES TIMEOUT 120)
++# --- test_w208_cyl_save: AI(W906-W208) 20261009 (Ifor01) -- W-208 part 2: SaveCylinderLife, GATE (SC4) opened, mniResetOnOffCountClick /
++#   strngrdCylinderViewSelectCell per golden 913 and the step-wise page backend (W906_SC_CylinderMenuProbe / ...Answer), on a
++#   %TEMP% MachineLife.ini (the machine's file is checked untouched; the NewRecordProcess logs go to ctest's machine_log_scratch).
++add_executable(test_w208_cyl_save test_w208_cyl_save.cpp)
++target_link_libraries(test_w208_cyl_save PRIVATE
++    "$<LINK_GROUP:RESCAN,ht9045_sm,ht9045_secsgem,ht9045_forms,ht9045_automation,ht9045_comms,ht9045_io,ht9045_motor,ht9045_db,ht9045_core,ht9045_globals,ht9045_public,vclcompat>"
++)
++if(WIN32)
++    target_link_libraries(test_w208_cyl_save PRIVATE ws2_32)
++endif()
++if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
++    set_source_files_properties(test_w208_cyl_save.cpp PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
++endif()
++add_test(NAME W208_CylinderLifeSave COMMAND test_w208_cyl_save)
++set_tests_properties(W208_CylinderLifeSave PROPERTIES TIMEOUT 120)
+diff --git a/tests/test_w208_cyl_save.cpp b/tests/test_w208_cyl_save.cpp
+new file mode 100644
+index 00000000..a936df60
+--- /dev/null
++++ b/tests/test_w208_cyl_save.cpp
+@@ -0,0 +1,149 @@
++// =============================================================================
++//  test_w208_cyl_save.cpp -- AI(W906-W208) 20261009 (Ifor01)
++//
++//  W-208 part 2 (POOL-11 ①後半, TO_IFOR 1009 18:5x): Pre-Alarm Cylinder write side per golden 913 cStartCondition.cpp.
++//    [1] SaveCylinderLife (:1829-1888) writes MachineLife.ini -- the time alarms / time records only for a cylinder with that sensor
++//    [2] step 0, W906_SC_CylinderMenuProbe: OnSelectCell (:1626-1651) picks the pmCylinder item; Reset Count asks golden's YES/NO
++//        texts, the four "Set ... alarm" open the keypad with golden's ranges; a by-passed / sensor-less cylinder gets no item; the
++//        fixed row/column gets nothing; nothing is changed or written by step 0
++//    [3] step 1, W906_SC_CylinderMenuAnswer (mniResetOnOffCountClick :1495-1590): NO does nothing; YES clears the counts, bumps the
++//        reset count/time, records it (NewRecordProcess) and saves; keypad text is range-checked like golden's keypad; Cancel keeps
++//        the box text (and golden still saves it); text the keypad cannot type is refused; "Set ... standard" acts at once
++//    [4] GATE (SC4) opened: UpdateCylinderScreen (:1739-1746) clears a negative count, records it and saves
++//    [5] the machine's D:\HT9045\system\MachineLife.ini is not touched (asMachineLifePath points at %TEMP% before any read)
++// =============================================================================
++#include "MachineDefine.h"            // the include hub first, as cStartCondition.cpp does (forms/fStartCondition.h needs AnsiString)
++#include "forms/fStartCondition.h"
++#include "cmydef.h"
++#include "cMyDB.h"
++#include "common.h"
++#include "LastSet.h"
++#include "MachineType.h"
++#include "mycylin.h"
++#include "w906_ctest_guard.h"   // W906TestRequireCtestRedirects: NewRecordProcess writes the cMyDB logs -- only into ctest's scratch
++#include <windows.h>
++#include <cstdio>
++#include <cstring>
++#include <fstream>
++#include <sstream>
++#include <string>
++
++static int g_pass = 0, g_fail = 0;
++static void Check(bool ok, const char* msg) { if (ok) { std::printf("  PASS: %s\n", msg); ++g_pass; } else { std::printf("  FAIL: %s\n", msg); ++g_fail; } }
++static std::string Slurp(const std::string& p) { std::ifstream f(p.c_str(), std::ios::binary); std::stringstream s; s << f.rdbuf(); return s.str(); }
++static bool Near(double a, double b) { return a - b < 1e-6 && b - a < 1e-6; }
++static bool Stamp(const char* p, WIN32_FILE_ATTRIBUTE_DATA* d) { return ::GetFileAttributesExA(p, GetFileExInfoStandard, d) != 0; }
++static void Refresh() { for (int k = 0; k < 11; k++) fStartCondition->UpdateCylinderScreen(); }   // golden: every 11th call (:1728-1731)
++static int RdI(const char* grp, const char* key, int def) { return ReadIniData(asMachineLifePath, grp, key, def); }
++static double RdD(const char* grp, const char* key, double def) { return ReadIniData(asMachineLifePath, grp, key, def); }
++
++int main()
++{
++    const char* const rt[] = { "as9045LogPath", as9045LogPath.c_str(), "asSaveEventLogPath", asSaveEventLogPath.c_str(),
++                               "asProductionLogPath", asProductionLogPath.c_str(), 0 };
++    if (!W906TestRequireCtestRedirects("W208_CylinderLifeSave", rt))
++        return 2;
++    std::printf("W208_CylinderLifeSave\n");
++    const char* real = "D:\\HT9045\\system\\MachineLife.ini";
++    WIN32_FILE_ATTRIBUTE_DATA before; std::memset(&before, 0, sizeof(before));
++    const bool realExisted = Stamp(real, &before);
++
++    char tmp[MAX_PATH]; ::GetTempPathA(sizeof(tmp), tmp);
++    char stamp[32]; std::snprintf(stamp, sizeof(stamp), "%lu", (unsigned long)::GetTickCount());
++    const std::string dir = std::string(tmp) + "ht9045_w208b_" + stamp;
++    ::CreateDirectoryA(dir.c_str(), 0);
++    const std::string ini = dir + "\\MachineLife.ini";
++    asMachineLifePath = AnsiString(ini.c_str());
++    { std::ofstream f(ini.c_str(), std::ios::binary); f << "[CylinderLife]\r\n"; }
++
++    // three cylinders: A both sensors, B no On sensor, C both sensors but Pre-Alarm by-passed for times
++    for (int i = 0; i < MaxCylinderItem; i++) Cylinder[i].Enable = false;
++    const char* names[3] = {"W208_A", "W208_B", "W208_C"};
++    for (int i = 0; i < 3; i++) { Cylinder[i].CylinderName = names[i]; Cylinder[i].Enable = true; Cylinder[i].OnSenEnable = true; Cylinder[i].OffSenEnable = true; Cylinder[i].bCylPreAlarmByPassT = false; }
++    TMyCylinder &A = Cylinder[0], &B = Cylinder[1], &C = Cylinder[2];
++    B.OnSenEnable = false;
++    C.bCylPreAlarmByPassT = true;
++    fStartCondition->LoadCylinderLife();                                       // sizes the grid (rows 1..3), seeds the alarm keys
++    A.iOnOffCount = 10; A.iTimeOutCount = 2; A.iOnOffCountAlarm = 300; A.iTimeOutCountAlarm = 40; A.dOnTimeAlarm = 1.5; A.dOffTimeAlarm = 2.5;
++    A.iResetCount = 4; A.sResetTime = "2026-10-01 08:00:00"; A.AddOnTime(0.25); A.AddOnTime(0.75); A.AddOffTime(0.5);
++    B.dOnTimeAlarm = 9.0; B.AddOnTime(0.3);
++
++    // [1]
++    fStartCondition->SaveCylinderLife();
++    Check(RdI("CylinderLife", "W208_A_OnOffCount", -1) == 10 && RdI("CylinderLife", "W208_A_TimeOutCount", -1) == 2
++          && RdI("CylinderAlarm", "W208_A_OnOffCountAlarm", -1) == 300 && RdI("CylinderAlarm", "W208_A_TimeOutCountAlarm", -1) == 40,
++          "1a. SaveCylinderLife: counts and count alarms (golden :1836-1845)");
++    Check(Near(RdD("CylinderAlarm", "W208_A_OnTimeAlarm", -1), 1.5) && Near(RdD("CylinderAlarm", "W208_A_OffTimeAlarm", -1), 2.5)
++          && RdI("CylinderResetCount", "W208_A_ResetCount", -1) == 4 && ReadIniData(asMachineLifePath, "CylinderResetTime", "W208_A_ResetTime", AnsiString("")) == "2026-10-01 08:00:00",
++          "1b. time alarms, reset count / time (golden :1847-1863)");
++    Check(Near(RdD("OnTimeRecord", "W208_A_OnTime_0", -1), 0.75) && Near(RdD("OnTimeRecord", "W208_A_OnTime_1", -1), 0.25)
++          && Near(RdD("OffTimeRecord", "W208_A_OffTime_0", -1), 0.5), "1c. the On/Off time records, newest first (golden :1865-1884)");
++    Check(Near(RdD("CylinderAlarm", "W208_B_OnTimeAlarm", -7), -7) && Near(RdD("OnTimeRecord", "W208_B_OnTime_0", -7), -7)
++          && Near(RdD("CylinderAlarm", "W208_B_OffTimeAlarm", -7), 999.99),
++          "1d. no On sensor: no On time alarm / record written (golden :1847／:1869), the Off ones are");
++
++    // the grid text the menu works on (golden: the page is showing)
++    LastSet.iLanguageCountry = 0; SystemInitialOK = true; fStartCondition->fShow = true;
++    Refresh();
++    Check(fStartCondition->sCylinderData[eCylName][1] == "W208_A" && fStartCondition->sCylinderData[eCylName][3] == "W208_C", "2. the grid shows the three cylinders");
++
++    // [2] step 0
++    const std::string file0 = Slurp(ini);
++    W906CylPrompt p;
++    Check(W906_SC_CylinderMenuProbe(eCylOnOffCnt, 1, &p) && p.item == 0 && p.kind == 1 && p.sEn == "W208_A Sure To reset count?"
++          && p.sCh == "W208_A 確定要歸零次數？", "2a. OnOff Cnt.: item 0 Reset Count asks golden's YES/NO (:1509-1511)");
++    Check(W906_SC_CylinderMenuProbe(eCylResetCount, 1, &p) && p.item == 0 && p.kind == 1, "2b. Reset Count column: the same item 0");
++    Check(W906_SC_CylinderMenuProbe(eCylOnOffCntAlarm, 1, &p) && p.item == 1 && p.kind == 2 && (p.iFunction & N_INTEGER) && p.bCheckRange
++          && Near(p.min, 0) && Near(p.max, 6000000) && p.current == "300", "2c. on/off count alarm: keypad N_INTEGER 0..6000000, opens with the cell text (:1537-1538)");
++    Check(W906_SC_CylinderMenuProbe(eCylOffTimeAlarm, 1, &p) && p.item == 3 && p.kind == 2 && (p.iFunction & N_DOUBLE) && Near(p.max, 999999.999),
++          "2d. off time alarm: keypad N_DOUBLE 0..999999.999 (:1554)");
++    Check(W906_SC_CylinderMenuProbe(eCylTimeOutCntAlarm, 1, &p) && p.item == 4 && p.kind == 2 && Near(p.max, 10000), "2e. time out count alarm: keypad 0..10000 (:1582)");
++    Check(W906_SC_CylinderMenuProbe(eCylAvgOnTime, 1, &p) && p.item == 5 && p.kind == 0, "2f. Avg. On T.: item 5 asks nothing (:1564-1568)");
++    Check(!W906_SC_CylinderMenuProbe(eCylOnTimeAlarm, 2, &p) && p.item == -1, "2g. no On sensor: no item on On T. alarm (:1641)");
++    Check(!W906_SC_CylinderMenuProbe(eCylOnTimeAlarm, 3, &p) && !W906_SC_CylinderMenuProbe(eCylAvgOffTime, 3, &p)
++          && W906_SC_CylinderMenuProbe(eCylOnOffCnt, 3, &p) && p.item == 0, "2h. by-passed cylinder: no time items, Reset Count still there (:1641-1649)");
++    Check(!W906_SC_CylinderMenuProbe(eCylOnOffCnt, 0, &p) && !W906_SC_CylinderMenuProbe(eCylName, 1, &p) && !W906_SC_CylinderMenuProbe(eCylOnOffCnt, 4, &p),
++          "2i. the fixed row / column and a row past the grid select nothing (VCL)");
++    Check(Slurp(ini) == file0 && A.iOnOffCount == 10 && Near(A.dOnTimeAlarm, 1.5) && A.iOnOffCountAlarm == 300,
++          "2j. step 0 changed nothing and wrote nothing");
++
++    // [3] step 1
++    Check(W906_SC_CylinderMenuAnswer(eCylOnOffCnt, 1, false, "", false) && A.iOnOffCount == 10 && A.iResetCount == 4 && Slurp(ini) == file0,
++          "3a. Reset Count, NO: nothing (:1512)");
++    Check(W906_SC_CylinderMenuAnswer(eCylOnOffCnt, 1, true, "", false) && A.iOnOffCount == 0 && A.iTimeOutCount == 0 && A.iResetCount == 5
++          && A.sResetTime.Length() == 19 && A.sResetTime != "2026-10-01 08:00:00", "3b. Reset Count, YES: counts 0, reset count +1, reset time now (:1514-1523)");
++    Check(ExString == "W208_A clear PreAlarm count by manually", "3c. ...recorded through NewRecordProcess (:1516-1518)");
++    Check(RdI("CylinderLife", "W208_A_OnOffCount", -1) == 0 && RdI("CylinderResetCount", "W208_A_ResetCount", -1) == 5, "3d. ...and saved (:1588-1589)");
++    Check(W906_SC_CylinderMenuAnswer(eCylResetCount, 1, true, "", false) && A.iResetCount == 0 && RdI("CylinderResetCount", "W208_A_ResetCount", -1) == 0
++          && ExString == "W208_A clear reset count by manually", "3e. Reset Count column, YES: reset count 0, recorded, saved (:1525-1531)");
++    Check(W906_SC_CylinderMenuAnswer(eCylOnOffCntAlarm, 1, false, "123456", false) && A.iOnOffCountAlarm == 123456
++          && RdI("CylinderAlarm", "W208_A_OnOffCountAlarm", -1) == 123456, "3f. on/off count alarm typed 123456: set and saved (:1536-1541)");
++    Check(W906_SC_CylinderMenuAnswer(eCylOnOffCntAlarm, 1, false, "9999999", false) && A.iOnOffCountAlarm == 6000000,
++          "3g. 9999999 is clamped to the keypad's 6000000 (myQwertyKeyBoard :285-292)");
++    Refresh();
++    Check(W906_SC_CylinderMenuAnswer(eCylTimeOutCntAlarm, 1, false, "", true) && A.iTimeOutCountAlarm == 40 && RdI("CylinderAlarm", "W208_A_TimeOutCountAlarm", -1) == 40,
++          "3h. Cancel: the box text (the cell) goes back and golden still uses and saves it (:1583-1586)");
++    Check(!W906_SC_CylinderMenuAnswer(eCylTimeOutCntAlarm, 1, false, "12a", false) && A.iTimeOutCountAlarm == 40, "3i. text the keypad cannot type is refused, nothing changes");
++    Check(W906_SC_CylinderMenuAnswer(eCylOnTimeAlarm, 1, false, "0.125", false) && Near(A.dOnTimeAlarm, 0.125)
++          && Near(RdD("CylinderAlarm", "W208_A_OnTimeAlarm", -1), 0.125), "3j. on time alarm typed 0.125 (:1544-1549)");
++    Check(W906_SC_CylinderMenuAnswer(eCylAvgOffTime, 1, false, "", false) && Near(A.dOffTimeAlarm, 0.5)
++          && Near(RdD("CylinderAlarm", "W208_A_OffTimeAlarm", -1), 0.5), "3k. Avg. Off T.: off time alarm = the average at once, saved (:1574-1578)");
++    Check(!W906_SC_CylinderMenuAnswer(eCylOnTimeAlarm, 2, false, "5", false) && Near(B.dOnTimeAlarm, 9.0), "3l. no item, no click (B has no On sensor)");
++
++    // [4] GATE (SC4)
++    A.iOnOffCount = -5;
++    Refresh();
++    Check(A.iOnOffCount == 0 && RdI("CylinderLife", "W208_A_OnOffCount", -1) == 0 && ExString == "W208_A clear PreAlarm count by over"
++          && fStartCondition->sCylinderData[eCylOnOffCnt][1] == "0", "4. a negative count is cleared, recorded and saved on refresh (golden :1739-1746, SC4 opened)");
++
++    WIN32_FILE_ATTRIBUTE_DATA now; std::memset(&now, 0, sizeof(now));
++    const bool realExists = Stamp(real, &now);
++    Check(realExists == realExisted && (!realExists || (std::memcmp(&before.ftLastWriteTime, &now.ftLastWriteTime, sizeof(FILETIME)) == 0
++                                                       && before.nFileSizeLow == now.nFileSizeLow)),
++          "5. the machine's D:\\HT9045\\system\\MachineLife.ini is untouched");
++
++    CloseIniFile();
++    ::DeleteFileA(ini.c_str()); ::RemoveDirectoryA(dir.c_str());
++    std::printf("W208_CylinderLifeSave: %d passed, %d failed\n", g_pass, g_fail);
++    return g_fail ? 1 : 0;
++}
+-- 
+2.55.0.windows.5
+
